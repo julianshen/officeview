@@ -401,14 +401,15 @@ const BORDER_WIDTH: Record<string, number> = {
   dotted: 1,
 }
 
-/** Paint table cell fills and borders (beneath text). */
+/** Paint table cell fills and borders (beneath text). Cell coords are
+ * table-relative; box carries the page position. */
 function paintTables(tables: TableBox[], ctx: CanvasRenderingContext2D): void {
   for (const table of tables) {
     for (const row of table.rows) {
       for (const cell of row.cells) {
         if (cell.fill) {
           ctx.fillStyle = resolveColor(cell.fill)
-          ctx.fillRect(cell.xPx, cell.yPx, cell.widthPx, cell.heightPx)
+          ctx.fillRect(table.xPx + cell.xPx, table.yPx + cell.yPx, cell.widthPx, cell.heightPx)
         }
       }
     }
@@ -418,6 +419,8 @@ function paintTables(tables: TableBox[], ctx: CanvasRenderingContext2D): void {
         const b = cell.borders
         if (!b) continue
         ctx.strokeStyle = '#000000'
+        const cx = table.xPx + cell.xPx
+        const cy = table.yPx + cell.yPx
         const draw = (w: number, x1: number, y1: number, x2: number, y2: number) => {
           ctx.lineWidth = w
           ctx.beginPath()
@@ -426,10 +429,10 @@ function paintTables(tables: TableBox[], ctx: CanvasRenderingContext2D): void {
           ctx.stroke()
         }
         const lw = (s: string | undefined) => Math.max(1, BORDER_WIDTH[s ?? 'thin'] ?? 1)
-        if (b.left) draw(lw(b.left), cell.xPx, cell.yPx, cell.xPx, cell.yPx + cell.heightPx)
-        if (b.right) draw(lw(b.right), cell.xPx + cell.widthPx, cell.yPx, cell.xPx + cell.widthPx, cell.yPx + cell.heightPx)
-        if (b.top) draw(lw(b.top), cell.xPx, cell.yPx, cell.xPx + cell.widthPx, cell.yPx)
-        if (b.bottom) draw(lw(b.bottom), cell.xPx, cell.yPx + cell.heightPx, cell.xPx + cell.widthPx, cell.yPx + cell.heightPx)
+        if (b.left) draw(lw(b.left), cx, cy, cx, cy + cell.heightPx)
+        if (b.right) draw(lw(b.right), cx + cell.widthPx, cy, cx + cell.widthPx, cy + cell.heightPx)
+        if (b.top) draw(lw(b.top), cx, cy, cx + cell.widthPx, cy)
+        if (b.bottom) draw(lw(b.bottom), cx, cy + cell.heightPx, cx + cell.widthPx, cy + cell.heightPx)
       }
     }
   }
@@ -493,7 +496,7 @@ function layoutTable(
       const innerW = twipsToPx(cellW) - margins.left - margins.right
       if (innerW <= 0) continue
       let cellLines: LineBox[] = []
-      let cy = margins.top
+      let cy = yRel + margins.top
       for (const para of cell.paragraphs) {
         const laid = layoutParagraph(para, measure, {
           contentX: cellXPx + margins.left,
@@ -505,7 +508,7 @@ function layoutTable(
         cy = laid.endY + twipsToPx(para.spacingAfterTwips ?? 0)
       }
       const contentH = cellLines.length > 0
-        ? cellLines[cellLines.length - 1].yPx - margins.top + cellLines[cellLines.length - 1].heightPx + margins.bottom
+        ? cellLines[cellLines.length - 1].yPx - yRel - margins.top + cellLines[cellLines.length - 1].heightPx + margins.bottom
         : margins.top + margins.bottom + defaults.fontSizePt * LINE_HEIGHT_FACTOR * (96 / 72) * 0.5
       rowContentH = Math.max(rowContentH, contentH)
       for (const line of cellLines) lines.push(line)

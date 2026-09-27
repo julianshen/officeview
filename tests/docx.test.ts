@@ -2,7 +2,7 @@ import { describe, test, expect } from 'vitest'
 import { OfficePackage } from '../src/core/zip'
 import { parseDocx } from '../src/docx/parse'
 import { layoutDocx, renderPages, type MeasureFn } from '../src/docx/layout'
-import { buildDocx, type DocxParaSpec } from './ooxml-fixtures'
+import { buildDocx, type DocxParaSpec } from '../src/testdata/ooxml-builders'
 
 async function parseFixture(paras: DocxParaSpec[]) {
   const pkg = await OfficePackage.load(await buildDocx(paras))

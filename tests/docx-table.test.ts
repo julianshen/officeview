@@ -2,7 +2,7 @@ import { describe, test, expect } from 'vitest'
 import { OfficePackage } from '../src/core/zip'
 import { parseDocx } from '../src/docx/parse'
 import { layoutDocx, renderPages, type MeasureFn } from '../src/docx/layout'
-import { buildDocx, type DocxParaSpec, type DocxTableSpec } from './ooxml-fixtures'
+import { buildDocx, type DocxParaSpec, type DocxTableSpec } from '../src/testdata/ooxml-builders'
 
 const measureFixed: MeasureFn = (text, style) =>
   text.length * style.fontSizePt * 0.6 * (96 / 72)
@@ -116,9 +116,9 @@ describe('docx table render', () => {
 
     const box = page.tables[0]
     const c0 = box.rows[0].cells[0]
-    // center of first cell must be the yellow fill
-    const cx = Math.round(c0.xPx + c0.widthPx / 2)
-    const cy = Math.round(c0.yPx + c0.heightPx / 2)
+    // center of first cell must be the yellow fill (cell coords are table-relative)
+    const cx = Math.round(box.xPx + c0.xPx + c0.widthPx / 2)
+    const cy = Math.round(box.yPx + c0.yPx + c0.heightPx / 2)
     const px = ctx.getImageData(cx, cy, 1, 1).data
     expect([px[0], px[1], px[2]]).toEqual([255, 204, 0])
     // border line exists along the table's top edge (1px line straddles two
@@ -128,7 +128,7 @@ describe('docx table render', () => {
     for (let i = 0; i < row.data.length; i += 4) if (row.data[i] < 200) dark++
     expect(dark).toBeGreaterThan(30)
     // header text ink inside first cell
-    const region = ctx.getImageData(Math.round(c0.xPx), Math.round(c0.yPx), Math.round(c0.widthPx), Math.round(c0.heightPx))
+    const region = ctx.getImageData(Math.round(box.xPx + c0.xPx), Math.round(box.yPx + c0.yPx), Math.round(c0.widthPx), Math.round(c0.heightPx))
     let ink = 0
     for (let i = 0; i < region.data.length; i += 4) if (region.data[i] < 100) ink++
     expect(ink).toBeGreaterThan(50)

@@ -2,7 +2,7 @@ import { describe, test, expect } from 'vitest'
 import { OfficePackage } from '../src/core/zip'
 import { parseXlsx, parseRef } from '../src/xlsx/parse'
 import { computeMetrics, formatValue, renderSheet } from '../src/xlsx/render'
-import { buildXlsx } from './ooxml-fixtures'
+import { buildXlsx } from '../src/testdata/ooxml-builders'
 
 describe('xlsx parse', () => {
   test('parses refs', () => {

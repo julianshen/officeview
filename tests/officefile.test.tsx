@@ -1,7 +1,7 @@
 import { describe, test, expect } from 'vitest'
 import { render, waitFor } from '@testing-library/react'
 import { OfficeFile, loadOfficeFile } from '../src/components/OfficeFile'
-import { buildDocx, buildXlsx, buildPptx } from './ooxml-fixtures'
+import { buildDocx, buildXlsx, buildPptx } from '../src/testdata/ooxml-builders'
 
 describe('loadOfficeFile', () => {
   test('detects docx by content type', async () => {

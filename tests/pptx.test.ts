@@ -2,7 +2,7 @@ import { describe, test, expect } from 'vitest'
 import { OfficePackage } from '../src/core/zip'
 import { parsePptx } from '../src/pptx/parse'
 import { slideMetrics, renderSlide } from '../src/pptx/render'
-import { buildPptx } from './ooxml-fixtures'
+import { buildPptx } from '../src/testdata/ooxml-builders'
 
 describe('pptx parse', () => {
   test('parses slide size, shapes, text runs', async () => {

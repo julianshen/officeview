@@ -3,7 +3,7 @@ import { render, waitFor } from '@testing-library/react'
 import { OfficeDoc } from '../src/components/OfficeDoc'
 import { OfficePackage } from '../src/core/zip'
 import { parseDocx } from '../src/docx/parse'
-import { buildDocx } from './ooxml-fixtures'
+import { buildDocx } from '../src/testdata/ooxml-builders'
 
 describe('<OfficeDoc>', () => {
   test('renders one canvas per page for a docx', async () => {
@@ -21,7 +21,7 @@ describe('<OfficeDoc>', () => {
 
   test('renders canvas per sheet and per slide', async () => {
     const { parseXlsx } = await import('../src/xlsx/parse')
-    const { buildXlsx } = await import('./ooxml-fixtures')
+    const { buildXlsx } = await import('../src/testdata/ooxml-builders')
     const xlsx = await parseXlsx(await OfficePackage.load(await buildXlsx([
       { name: 'S1', rows: [{ r: 1, cells: [{ ref: 'A1', v: 5 }] }] },
     ])))
@@ -29,7 +29,7 @@ describe('<OfficeDoc>', () => {
     await waitFor(() => expect(x.container.querySelectorAll('canvas')).toHaveLength(1))
 
     const { parsePptx } = await import('../src/pptx/parse')
-    const { buildPptx } = await import('./ooxml-fixtures')
+    const { buildPptx } = await import('../src/testdata/ooxml-builders')
     const pptx = await parsePptx(await OfficePackage.load(await buildPptx([
       { prst: 'rect', off: ['0', '0'], ext: ['9144000', '6858000'] },
     ])))
