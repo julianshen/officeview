@@ -162,3 +162,74 @@ export async function buildXlsx(sheets: XlsxSheetSpec[], sharedStrings: string[]
 </styleSheet>`)
   return zip.generateAsync({ type: 'uint8array' })
 }
+
+const PPTX_CT =
+  `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
+  <Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>
+  <Default Extension="xml" ContentType="application/xml"/>
+  <Override PartName="/ppt/presentation.xml" ContentType="application/vnd.openxmlformats-officedocument.presentationml.presentation.main+xml"/>
+  <Override PartName="/ppt/slides/slide1.xml" ContentType="application/vnd.openxmlformats-officedocument.presentationml.slide+xml"/>
+</Types>`
+
+const PPTX_ROOT_RELS =
+  `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="ppt/presentation.xml"/>
+</Relationships>`
+
+const PPTX_PRES_RELS =
+  `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/slide" Target="slides/slide1.xml"/>
+</Relationships>`
+
+export interface PptxShapeSpec {
+  prst?: string
+  off?: [string, string]
+  ext?: [string, string]
+  fill?: string
+  lineW?: string
+  rot?: string
+  paragraphs?: Array<{ align?: string; runs: Array<{ text: string; b?: boolean; i?: boolean; sz?: string; color?: string }> }>
+}
+
+/** Build a minimal pptx with one or more slides (single slide file reused). */
+export async function buildPptx(shapes: PptxShapeSpec[]): Promise<Uint8Array> {
+  const zip = new JSZip()
+  zip.file('[Content_Types].xml', PPTX_CT)
+  zip.file('_rels/.rels', PPTX_ROOT_RELS)
+  zip.file('ppt/_rels/presentation.xml.rels', PPTX_PRES_RELS)
+  zip.file('ppt/presentation.xml',
+    `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<p:presentation xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
+  <p:sldIdLst><p:sldId id="256" r:id="rId1"/></p:sldIdLst>
+  <p:sldSz cx="9144000" cy="6858000"/>
+</p:presentation>`)
+  const shapeXml = (s: PptxShapeSpec) => {
+    const spPr =
+      `<p:spPr><a:xfrm${s.rot ? ` rot="${s.rot}"` : ''}><a:off x="${s.off?.[0] ?? '0'}" y="${s.off?.[1] ?? '0'}"/><a:ext cx="${s.ext?.[0] ?? '100000'}" cy="${s.ext?.[1] ?? '100000'}"/></a:xfrm>` +
+      `<a:prstGeom prst="${s.prst ?? 'rect'}"><a:avLst/></a:prstGeom>` +
+      (s.fill ? `<a:solidFill><a:srgbClr val="${s.fill}"/></a:solidFill>` : '') +
+      `<a:ln w="${s.lineW ?? '12700'}"><a:solidFill><a:srgbClr val="000000"/></a:solidFill></a:ln></p:spPr>`
+    const txBody = s.paragraphs
+      ? `<p:txBody><a:bodyPr/><a:lstStyle/>${s.paragraphs.map((p) =>
+          `<a:p>${p.align ? `<a:pPr algn="${p.align}"/>` : ''}${p.runs.map((r) => {
+            const attrs = `${r.b ? ' b="1"' : ''}${r.i ? ' i="1"' : ''}${r.sz ? ` sz="${r.sz}"` : ''}`
+            const inner = r.color ? `<a:solidFill><a:srgbClr val="${r.color}"/></a:solidFill>` : ''
+            return `<a:r><a:rPr${attrs}>${inner}</a:rPr><a:t>${r.text}</a:t></a:r>`
+          }).join('')}</a:p>`).join('')}</p:txBody>`
+      : '<p:txBody><a:bodyPr/><a:lstStyle/><a:p/></p:txBody>'
+    return `<p:sp><p:nvSpPr><p:cNvPr id="2" name="Shape"/><p:cNvSpPr/><p:nvPr/></p:nvSpPr>${spPr}${txBody}</p:sp>`
+  }
+  zip.file('ppt/slides/slide1.xml',
+    `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<p:sld xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main">
+  <p:cSld><p:spTree>
+    <p:nvGrpSpPr><p:cNvPr id="1" name=""/><p:cNvGrpSpPr/><p:nvPr/></p:nvGrpSpPr>
+    <p:grpSpPr/>
+    ${shapes.map(shapeXml).join('\n    ')}
+  </p:spTree></p:cSld>
+</p:sld>`)
+  return zip.generateAsync({ type: 'uint8array' })
+}

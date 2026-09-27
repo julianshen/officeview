@@ -3,10 +3,10 @@
  * theme references, or auto (system foreground). We resolve to CSS strings.
  */
 
-/** Parse a 6-digit hex RGB string to a CSS color. Returns undefined for invalid input. */
+/** Parse a 6-digit hex RGB string (with or without leading '#') to a CSS color. */
 export function hexRgbToCss(hex: string | undefined): string | undefined {
   if (!hex) return undefined
-  const v = hex.trim().toUpperCase()
+  const v = hex.trim().replace(/^#/, '').toUpperCase()
   if (/^[0-9A-F]{6}$/.test(v)) return `#${v}`
   if (/^[0-9A-F]{8}$/.test(v)) {
     // ARGB — OOXML often prefixes alpha; treat high byte as alpha but clamped opaque
