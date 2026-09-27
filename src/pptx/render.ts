@@ -91,7 +91,9 @@ function paintTextBody(body: PptxTextBody, ctx: CanvasRenderingContext2D, x: num
       }
       const sizePt = run.fontSizePt ?? 12
       ctx.font = `${run.italic ? 'italic ' : ''}${run.bold ? 'bold ' : ''}${sizePt}pt "${run.fontFamily ?? 'Calibri'}"`
-      const words = run.text.split(/(\s+)/).filter((s) => s !== '')
+      // After an explicit a:br the next run often starts with a source-format
+      // space — trim it so the new line doesn't carry a stray leading gap.
+      const words = run.text.replace(/^\s+/, '').split(/(\s+)/).filter((s) => s !== '')
       let line = ''
       let lineW = 0
       for (const word of words) {
