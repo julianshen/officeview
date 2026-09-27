@@ -1,5 +1,5 @@
 import { describe, test, expect } from 'vitest'
-import { render } from '@testing-library/react'
+import { render, waitFor } from '@testing-library/react'
 import { OfficeFile, loadOfficeFile } from '../src/components/OfficeFile'
 import { buildDocx, buildXlsx, buildPptx } from './ooxml-fixtures'
 
@@ -24,8 +24,7 @@ describe('<OfficeFile>', () => {
   test('renders async from raw bytes', async () => {
     const data = await buildDocx([{ runs: [{ text: 'async render' }] }])
     const { container } = render(<OfficeFile data={data} />)
-    await new Promise((r) => setTimeout(r, 50))
-    expect(container.querySelectorAll('canvas').length).toBeGreaterThanOrEqual(1)
+    await waitFor(() => expect(container.querySelectorAll('canvas').length).toBeGreaterThanOrEqual(1))
   })
 
   test('shows error element on garbage input after promise settles', async () => {

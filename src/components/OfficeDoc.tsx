@@ -6,15 +6,10 @@
  *  - IntersectionObserver-based lazy rendering (only visible pages paint)
  *  - touch scrolling is native (overflow scroll), no custom gesture code needed
  */
-import { useEffect, useMemo, useRef, useState, type CSSProperties, type ReactElement } from 'react'
-import { createMeasurer, layoutDocx, renderPages, type PageLayout, type MeasureFn } from '../docx/layout'
-import type { DocxDocument } from '../docx/types'
-import { computeMetrics, renderSheet } from '../xlsx/render'
-import type { XlsxDocument } from '../xlsx/types'
-import { renderSlide, slideMetrics } from '../pptx/render'
-import type { PptxDocument } from '../pptx/types'
+import { useEffect, useRef, useState, type CSSProperties, type ReactElement } from 'react'
+import { getPaintables, type PageSpec, type Paintable } from '../render/paint'
 
-export type OfficeDocSource = DocxDocument | XlsxDocument | PptxDocument
+export type OfficeDocSource = import('../docx/types').DocxDocument | import('../xlsx/types').XlsxDocument | import('../pptx/types').PptxDocument
 
 export interface OfficeDocProps {
   document: OfficeDocSource
@@ -24,69 +19,6 @@ export interface OfficeDocProps {
   pageGapPx?: number
   className?: string
   style?: CSSProperties
-}
-
-interface PageSpec {
-  widthPx: number
-  heightPx: number
-}
-
-function pageSpecs(doc: OfficeDocSource): PageSpec[] {
-  if ('sections' in doc) {
-    return []
-  }
-  if ('sheets' in doc) {
-    return doc.sheets.map((sheet) => {
-      const m = computeMetrics(sheet)
-      return { widthPx: m.widthPx, heightPx: m.heightPx }
-    })
-  }
-  const sm = slideMetrics(doc as PptxDocument)
-  return (doc as PptxDocument).slides.map(() => ({ widthPx: sm.widthPx, heightPx: sm.heightPx }))
-}
-
-/** Collect the canvas-paintable units of a document: pages / sheets / slides. */
-function usePages(doc: OfficeDocSource): Array<{ spec: PageSpec; paint: (ctx: CanvasRenderingContext2D) => void }> {
-  return useMemo(() => {
-    if ('sections' in doc) {
-      const measure = createMeasurer(defaultCtx())
-      const pages = layoutDocx(doc, measure as MeasureFn)
-      return pages.map((page: PageLayout) => ({
-        spec: { widthPx: Math.ceil(page.widthPx), heightPx: Math.ceil(page.heightPx) },
-        paint: (ctx: CanvasRenderingContext2D) => {
-          ctx.fillStyle = '#ffffff'
-          ctx.fillRect(0, 0, page.widthPx, page.heightPx)
-          renderPages([page], ctx)
-        },
-      }))
-    }
-    if ('sheets' in doc) {
-      return doc.sheets.map((sheet) => {
-        const m = computeMetrics(sheet)
-        return {
-          spec: { widthPx: m.widthPx, heightPx: m.heightPx },
-          paint: (ctx: CanvasRenderingContext2D) => renderSheet(sheet, ctx, m),
-        }
-      })
-    }
-    const pptx = doc as PptxDocument
-    const sm = slideMetrics(pptx)
-    return pptx.slides.map((slide) => ({
-      spec: { widthPx: sm.widthPx, heightPx: sm.heightPx },
-      paint: (ctx: CanvasRenderingContext2D) => renderSlide(slide, ctx, sm),
-    }))
-  }, [doc])
-}
-
-// Shared 1x1 offscreen ctx for text measurement before render.
-let sharedCtx: CanvasRenderingContext2D | null = null
-function defaultCtx(): CanvasRenderingContext2D {
-  if (sharedCtx) return sharedCtx
-  const c = document.createElement('canvas')
-  c.width = 4
-  c.height = 4
-  sharedCtx = c.getContext('2d')!
-  return sharedCtx
 }
 
 function PageCanvas({
@@ -137,7 +69,17 @@ function PageCanvas({
 }
 
 export function OfficeDoc({ document, background = '#888888', pageGapPx = 16, className, style }: OfficeDocProps): ReactElement {
-  const pages = usePages(document)
+  // getPaintables is async (docx measurement resolves a 2D ctx); hold in state.
+  const [pages, setPages] = useState<Paintable[]>([])
+  useEffect(() => {
+    let cancelled = false
+    getPaintables(document).then((p) => {
+      if (!cancelled) setPages(p)
+    })
+    return () => {
+      cancelled = true
+    }
+  }, [document])
   const containerRef = useRef<HTMLDivElement | null>(null)
   const [containerWidth, setContainerWidth] = useState(0)
 
@@ -156,11 +98,7 @@ export function OfficeDoc({ document, background = '#888888', pageGapPx = 16, cl
     return () => window.removeEventListener('resize', update)
   }, [])
 
-  // Compute the list once specs are known (pages may be empty on first pass)
-  const specs = useMemo(() => {
-    const s = pageSpecs(document)
-    return s.length > 0 ? s : pages.map((p) => p.spec)
-  }, [document, pages])
+  const specs = pages.map((p) => p.spec)
 
   // Reserve: page width = min(container inner width, natural width)
   const padding = 16
