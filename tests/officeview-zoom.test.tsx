@@ -121,3 +121,58 @@ describe('<OfficeDoc> zoom', () => {
     void act
   })
 })
+
+describe('<OfficeDoc> hi-dpi re-render when zoomed', () => {
+  test('backing store grows with zoom and returns to base on reset', async () => {
+    const utils = await mount()
+    const canvasOf = () => utils.container.querySelector('canvas') as HTMLCanvasElement
+    const base = canvasOf().width
+
+    fireEvent.click(utils.container.querySelector('[aria-label="Zoom in"]') as HTMLButtonElement)
+    await waitFor(() => expect(canvasOf().width).toBeGreaterThan(base))
+    const zoomed = canvasOf().width
+    // 1.5x zoom with devicePixelRatio 1 => 1.5x the backing width
+    expect(zoomed / base).toBeCloseTo(1.5, 2)
+
+    fireEvent.click(utils.container.querySelector('[aria-label="Reset zoom"]') as HTMLButtonElement)
+    await waitFor(() => expect(canvasOf().width).toBe(base))
+  })
+
+  test('effective scale is capped at 3x to bound memory', async () => {
+    const utils = await mount()
+    const canvasOf = () => utils.container.querySelector('canvas') as HTMLCanvasElement
+    const base = canvasOf().width
+    // 1.5 -> 2.25 -> 3.375 (capped to 3)
+    const plus = utils.container.querySelector('[aria-label="Zoom in"]') as HTMLButtonElement
+    fireEvent.click(plus)
+    fireEvent.click(plus)
+    fireEvent.click(plus)
+    await waitFor(() => expect(canvasOf().width).toBe(base * 3))
+  })
+
+  test('off-screen pages stay at base scale while zoomed (memory bound)', async () => {
+    // stub an IntersectionObserver that reports nothing as intersecting
+    const original = (globalThis as { IntersectionObserver?: unknown }).IntersectionObserver
+    class NeverIntersecting {
+      observe(): void {}
+      unobserve(): void {}
+      disconnect(): void {}
+      takeRecords(): [] { return [] }
+      root = null
+      rootMargin = ''
+      thresholds: number[] = []
+    }
+    ;(globalThis as { IntersectionObserver?: unknown }).IntersectionObserver = NeverIntersecting
+    try {
+      const utils = await mount()
+      const canvasOf = () => utils.container.querySelector('canvas') as HTMLCanvasElement
+      const base = canvasOf().width
+      fireEvent.click(utils.container.querySelector('[aria-label="Zoom in"]') as HTMLButtonElement)
+      await waitFor(() => expect(content(utils).style.transform).toContain('scale(1.5)'))
+      // backing store unchanged because no page is considered visible
+      expect(canvasOf().width).toBe(base)
+    } finally {
+      ;(globalThis as { IntersectionObserver?: unknown }).IntersectionObserver = original
+    }
+  })
+})

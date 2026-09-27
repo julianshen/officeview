@@ -35,24 +35,68 @@ export interface OfficeDocProps {
   showZoomControls?: boolean
 }
 
+/** Cap the effective device scale so a 6x zoom can't allocate absurd canvases. */
+const MAX_EFFECTIVE_SCALE = 3
+
 function PageCanvas({
   spec,
   paint,
   displayWidth,
   gap,
+  baseScale,
+  boostedScale,
+  boosted,
+  rootRef,
 }: {
   spec: PageSpec
   paint: (ctx: CanvasRenderingContext2D) => void
   displayWidth: number
   gap: number
+  /** device scale at fit (devicePixelRatio, capped). */
+  baseScale: number
+  /** device scale to use while zoomed and visible. */
+  boostedScale: number
+  /** whether the viewer is currently zoomed. */
+  boosted: boolean
+  /** scroll container used as the IntersectionObserver root. */
+  rootRef?: React.RefObject<HTMLElement | null>
 }): ReactElement {
   const ref = useRef<HTMLCanvasElement | null>(null)
+  const [visible, setVisible] = useState(true)
+
+  // Only pages the user can actually see get the high-resolution backing
+  // store; off-screen pages stay cheap so long documents remain affordable.
+  useEffect(() => {
+    if (!boosted) {
+      setVisible(true) // no need to observe while at fit
+      return
+    }
+    const el = ref.current
+    if (!el || typeof IntersectionObserver === 'undefined') {
+      setVisible(true)
+      return
+    }
+    // start pessimistic: the observer's first callback decides
+    setVisible(false)
+    const root = rootRef?.current ?? null
+    const io = new IntersectionObserver(
+      (entries) => {
+        for (const entry of entries) setVisible(entry.isIntersecting)
+      },
+      { root, rootMargin: '50% 0px' },
+    )
+    io.observe(el)
+    return () => io.disconnect()
+  }, [boosted, rootRef])
+
   const scale = displayWidth / spec.widthPx
-  const dpr = Math.min(typeof window !== 'undefined' ? window.devicePixelRatio || 1 : 1, 3)
+  // at fit (or off-screen while zoomed) use the base scale; zoomed + visible
+  // pages render at the zoom-aware scale so CSS upscaling stays sharp
+  const effective = boosted && visible ? Math.min(boostedScale, MAX_EFFECTIVE_SCALE) : baseScale
   const cssW = displayWidth
   const cssH = spec.heightPx * scale
-  const backingW = Math.ceil(cssW * dpr)
-  const backingH = Math.ceil(cssH * dpr)
+  const backingW = Math.ceil(cssW * effective)
+  const backingH = Math.ceil(cssH * effective)
 
   useEffect(() => {
     const canvas = ref.current
@@ -228,6 +272,7 @@ export function OfficeDoc({
   }
 
   const zoomed = transform.zoom > 1
+  const dpr = Math.min(typeof window !== 'undefined' ? window.devicePixelRatio || 1 : 1, 3)
 
   return (
     <div style={{ position: 'relative', display: 'flex', flexDirection: 'column', minHeight: 0 }}>
@@ -270,7 +315,17 @@ export function OfficeDoc({
           }}
         >
           {pages.map((p, i) => (
-            <PageCanvas key={i} spec={p.spec} paint={p.paint} displayWidth={displayWidth} gap={pageGapPx} />
+            <PageCanvas
+              key={i}
+              spec={p.spec}
+              paint={p.paint}
+              displayWidth={displayWidth}
+              gap={pageGapPx}
+              baseScale={dpr}
+              boostedScale={dpr * transform.zoom}
+              boosted={zoomed}
+              rootRef={containerRef}
+            />
           ))}
         </div>
       </div>
