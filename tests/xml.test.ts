@@ -31,3 +31,12 @@ describe('xml normalize', () => {
     expect(attrs(getChildren(rPr, 'sz')[0]).val).toBe('28')
   })
 })
+
+describe('real-world XML edge cases', () => {
+  test('prolog and trailing whitespace do not break root selection', () => {
+    // PowerPoint emits a BOM, a prolog, and trailing newline after </Types>
+    const xml = '\uFEFF<?xml version="1.0" encoding="utf-8"?>\n<Types xmlns="urn:x">\n  <Default a="1"/>\n</Types>\n'
+    const doc = parseXml(xml)
+    expect(attrs(getChildren(doc as never, 'Default')[0]).a).toBe('1')
+  })
+})

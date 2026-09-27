@@ -63,15 +63,20 @@ function normalize(node: unknown): XmlNode | XmlNode[] | XmlValue | undefined {
 
 /** Parse an XML string into a normalized node tree. Throws on malformed input. */
 export function parseXml(xml: string): XmlNode {
+  // strip UTF-8 BOM if present (some generators emit it)
+  if (xml.charCodeAt(0) === 0xfeff) xml = xml.slice(1)
   // fast-xml-parser can leave entity garbage in some edge documents — validate first
   const check = XMLValidator.validate(xml)
   if (check !== true) {
     throw new Error(`XML validation failed: ${JSON.stringify(check)}`)
   }
   const parsed = parser.parse(xml) as Record<string, unknown>
-  // Drop the synthetic root wrapper when there's exactly one key
-  const keys = Object.keys(parsed)
-  const rootKey = keys.length === 1 ? keys[0] : keys[keys.length - 1]
+  // The parser adds a "?xml" key for the prolog and a "#text" key for
+  // trailing whitespace — neither is the root element.
+  const rootKey = Object.keys(parsed).find((k) => k !== '?xml' && k !== '#text')
+  if (rootKey === undefined) {
+    throw new Error('Unexpected XML root shape')
+  }
   const normalized = normalize(parsed[rootKey])
   if (normalized === undefined || Array.isArray(normalized) || typeof normalized !== 'object') {
     throw new Error('Unexpected XML root shape')
