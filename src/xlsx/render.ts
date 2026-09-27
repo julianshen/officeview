@@ -3,7 +3,7 @@
  * Layout mimics Excel defaults: default col width 8.43 chars (~64px), row
  * height 15pt (20px). Cell geometry is fixed; no reflow needed.
  */
-import type { XlsxSheet } from './types'
+import type { XlsxMergeRange, XlsxSheet } from './types'
 import { resolveColor } from '../core/color'
 
 export interface GridMetrics {
@@ -86,6 +86,20 @@ export function renderSheet(sheet: XlsxSheet, ctx: CanvasRenderingContext2D, met
   const { colWidthsPx, rowHeightsPx } = m
   const colX = prefixSums(colWidthsPx)
   const rowY = prefixSums(rowHeightsPx)
+  const ranges = sheet.mergeRanges ?? []
+
+  // map "row:col" -> range for every covered (non-anchor) cell
+  const covered = new Map<string, XlsxMergeRange>()
+  const anchor = new Map<string, XlsxMergeRange>()
+  for (const r of ranges) {
+    for (let row = r.minRow; row <= r.maxRow; row++) {
+      for (let col = r.minCol; col <= r.maxCol; col++) {
+        const key = `${row}:${col}`
+        if (row === r.minRow && col === r.minCol) anchor.set(key, r)
+        else covered.set(key, r)
+      }
+    }
+  }
 
   ctx.fillStyle = '#ffffff'
   ctx.fillRect(0, 0, m.widthPx, m.heightPx)
@@ -94,15 +108,20 @@ export function renderSheet(sheet: XlsxSheet, ctx: CanvasRenderingContext2D, met
     const y = rowY[row.index] ?? 0
     const h = rowHeightsPx[row.index] ?? DEFAULT_ROW_PX
     for (const cell of row.cells) {
+      const cov = covered.get(`${cell.row}:${cell.col}`)
+      if (cov) continue // inside a merge, not its anchor — nothing to paint
+      const rng = anchor.get(`${cell.row}:${cell.col}`)
+      // geometry: anchor cells expand across their merge range
       const x = colX[cell.col] ?? 0
-      const w = colWidthsPx[cell.col] ?? DEFAULT_COL_PX
+      const w = rng ? (colX[rng.maxCol + 1] ?? m.widthPx) - x : (colWidthsPx[cell.col] ?? DEFAULT_COL_PX)
+      const hh = rng ? (rowY[rng.maxRow + 1] ?? m.heightPx) - y : h
       // fill
       const fill = cell.style?.fillColor
       if (fill) {
         ctx.fillStyle = resolveColor(fill)
-        ctx.fillRect(x, y, w, h)
+        ctx.fillRect(x, y, w, hh)
       }
-      // text (right-align numbers, left-align strings)
+      // text (right-align numbers, left-align strings; alignment spans the merge)
       const text = formatValue(cell.value, cell.style?.numFmtId ?? 0)
       if (text !== '') {
         ctx.fillStyle = cell.style?.color ? resolveColor(cell.style.color) : '#000000'
@@ -110,11 +129,11 @@ export function renderSheet(sheet: XlsxSheet, ctx: CanvasRenderingContext2D, met
         const numeric = typeof cell.value === 'number'
         const textW = ctx.measureText(text).width
         const tx = numeric ? x + w - PADDING_R - textW : x + PADDING_L
-        const ty = y + h - (h - (cell.style?.fontSizePt ?? 10) * (96 / 72)) / 2
+        const ty = y + hh - (hh - (cell.style?.fontSizePt ?? 10) * (96 / 72)) / 2
         ctx.textBaseline = 'alphabetic'
         ctx.fillText(text, tx, ty)
       }
-      // borders
+      // borders (anchor draws the merged rect's outline)
       const b = cell.style?.borders
       if (b) {
         ctx.lineWidth = 1
@@ -126,34 +145,77 @@ export function renderSheet(sheet: XlsxSheet, ctx: CanvasRenderingContext2D, met
           ctx.lineTo(x2 + 0.5, yy2 + 0.5)
           ctx.stroke()
         }
-        draw(b.left, x, y, x, y + h)
-        draw(b.right, x + w, y, x + w, y + h)
+        draw(b.left, x, y, x, y + hh)
+        draw(b.right, x + w, y, x + w, y + hh)
         draw(b.top, x, y, x + w, y)
-        draw(b.bottom, x, y + h, x + w, y + h)
+        draw(b.bottom, x, y + hh, x + w, y + hh)
       }
     }
   }
 
-  // grid lines under text? Excel draws them beneath values but above fills —
-  // we draw above fills but text was already painted; acceptable baseline.
+  // grid lines, with merged interiors masked out. A vertical boundary at
+  // column index c (left edge of column c) is hidden for the rows of a merge
+  // when c is strictly inside the merge's column span; same for horizontal.
   ctx.strokeStyle = '#d0d0d0'
   ctx.lineWidth = 1
   ctx.beginPath()
-  for (let c = 0; c < colWidthsPx.length; c++) {
-    const x = colX[c]
-    ctx.moveTo(x + 0.5, 0)
-    ctx.lineTo(x + 0.5, m.heightPx)
+  for (let c = 0; c <= colWidthsPx.length; c++) {
+    const x = c === colWidthsPx.length ? m.widthPx : colX[c]
+    for (const [y1, y2] of visibleSegments(c, ranges, rowY, m.heightPx, true)) {
+      ctx.moveTo(x + 0.5, y1 + 0.5)
+      ctx.lineTo(x + 0.5, y2 + 0.5)
+    }
   }
-  ctx.moveTo(m.widthPx + 0.5, 0)
-  ctx.lineTo(m.widthPx + 0.5, m.heightPx)
-  for (let r = 0; r < rowHeightsPx.length; r++) {
-    const y = rowY[r]
-    ctx.moveTo(0, y + 0.5)
-    ctx.lineTo(m.widthPx, y + 0.5)
+  for (let r = 0; r <= rowHeightsPx.length; r++) {
+    const y = r === rowHeightsPx.length ? m.heightPx : rowY[r]
+    for (const [x1, x2] of visibleSegments(r, ranges, colX, m.widthPx, false)) {
+      ctx.moveTo(x1 + 0.5, y + 0.5)
+      ctx.lineTo(x2 + 0.5, y + 0.5)
+    }
   }
-  ctx.moveTo(0, m.heightPx + 0.5)
-  ctx.lineTo(m.widthPx, m.heightPx + 0.5)
   ctx.stroke()
+}
+
+/**
+ * Visible segments of one grid boundary. For vertical boundaries, `index` is
+ * the column index and hidden intervals come from merges whose row span
+ * covers this boundary's column-crossing. `vertical=true` → x fixed at
+ * boundary `index`, hidden y intervals derived from row spans.
+ */
+function visibleSegments(
+  index: number,
+  ranges: XlsxMergeRange[],
+  starts: number[],
+  total: number,
+  vertical: boolean,
+): Array<[number, number]> {
+  // hidden intervals along the boundary's axis
+  const hidden: Array<[number, number]> = []
+  for (const r of ranges) {
+    const interior = vertical
+      ? index > r.minCol && index <= r.maxCol
+      : index > r.minRow && index <= r.maxRow
+    if (!interior) continue
+    if (vertical) {
+      const y1 = starts[r.minRow] ?? 0
+      const y2 = starts[r.maxRow + 1] ?? total
+      hidden.push([y1, y2])
+    } else {
+      const x1 = starts[r.minCol] ?? 0
+      const x2 = starts[r.maxCol + 1] ?? total
+      hidden.push([x1, x2])
+    }
+  }
+  if (hidden.length === 0) return [[0, total]]
+  hidden.sort((a, b) => a[0] - b[0])
+  const segs: Array<[number, number]> = []
+  let pos = 0
+  for (const [h1, h2] of hidden) {
+    if (h1 > pos) segs.push([pos, h1])
+    pos = Math.max(pos, h2)
+  }
+  if (pos < total) segs.push([pos, total])
+  return segs
 }
 
 const PADDING_L = 3

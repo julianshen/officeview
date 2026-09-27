@@ -36,11 +36,20 @@ export interface XlsxColumnSpec {
   hidden?: boolean
 }
 
+export interface XlsxMergeRange {
+  minRow: number
+  minCol: number
+  maxRow: number
+  maxCol: number
+}
+
 export interface XlsxSheet {
   name: string
   rows: XlsxRow[]
   cols: XlsxColumnSpec[]
   merges: string[]
+  /** Parsed merge ranges (same info as merges, structured). */
+  mergeRanges: XlsxMergeRange[]
 }
 
 export interface XlsxDocument {

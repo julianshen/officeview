@@ -1,7 +1,7 @@
 /** Parse XLSX parts into the XlsxDocument model. */
 import type { OfficePackage } from '../core/zip'
 import { attrs, getChildren, textOf, type XmlNode } from '../core/xml'
-import type { XlsxCell, XlsxDocument, XlsxRow, XlsxSheet } from './types'
+import type { XlsxCell, XlsxDocument, XlsxMergeRange, XlsxRow, XlsxSheet } from './types'
 
 /** Convert "A1" / "BC23" to 0-based [row, col]. */
 export function parseRef(ref: string): [number, number] {
@@ -10,6 +10,14 @@ export function parseRef(ref: string): [number, number] {
   let col = 0
   for (const ch of m[1]) col = col * 26 + (ch.charCodeAt(0) - 64)
   return [parseInt(m[2], 10) - 1, col - 1]
+}
+
+/** "A1:B3" -> 0-based inclusive range. */
+export function parseMergeRange(ref: string): XlsxMergeRange {
+  const [a, b] = ref.split(':')
+  const [r1, c1] = parseRef(a)
+  const [r2, c2] = b ? parseRef(b) : [r1, c1]
+  return { minRow: Math.min(r1, r2), minCol: Math.min(c1, c2), maxRow: Math.max(r1, r2), maxCol: Math.max(c1, c2) }
 }
 
 async function sharedStrings(pkg: OfficePackage): Promise<string[]> {
@@ -122,7 +130,7 @@ async function parseSheet(
   styles: Styles,
 ): Promise<XlsxSheet> {
   const root = await pkg.xml(path)
-  const sheet: XlsxSheet = { name, rows: [], cols: [], merges: [] }
+  const sheet: XlsxSheet = { name, rows: [], cols: [], merges: [], mergeRanges: [] }
   if (!root) return sheet
   const data = getChildren(root, 'worksheet')[0] ?? root
   const colsNode = getChildren(data, 'cols')[0]
@@ -143,6 +151,7 @@ async function parseSheet(
       const ref = attrs(mc).ref as string
       if (ref) sheet.merges.push(ref)
     }
+    sheet.mergeRanges = sheet.merges.map(parseMergeRange)
   }
   const sheetData = getChildren(data, 'sheetData')[0]
   for (const rowNode of getChildren(sheetData, 'row')) {
