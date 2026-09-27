@@ -36,6 +36,31 @@ export interface PptxImageRef {
   srcRect?: { l: number; t: number; r: number; b: number }
 }
 
+/** A table cell inside a:p:graphicFrame -> a:tbl. */
+export interface PptxTableCell {
+  paragraphs: PptxParagraph[]
+  /** Columns spanned (a:tc@gridSpan, default 1). */
+  gridSpan: number
+  /** Rows spanned (a:tc@rowSpan, default 1). */
+  rowSpan: number
+  /** Cells absorbed by a merge (a:tc@hMerge/@vMerge) carry no content. */
+  merged?: boolean
+  /** Solid fill color from a:tcPr/a:solidFill. */
+  fill?: string
+}
+
+export interface PptxTableRow {
+  cells: PptxTableCell[]
+  /** a:tr@h in EMU (optional; rows auto-size otherwise). */
+  heightEmu?: number
+}
+
+export interface PptxTable {
+  /** a:tblGrid/a:gridCol@w in EMU. */
+  colWidthsEmu: number[]
+  rows: PptxTableRow[]
+}
+
 export interface PptxShape {
   /** Geometry in EMU, relative to slide origin. */
   xEmu: number
@@ -49,6 +74,8 @@ export interface PptxShape {
   rotationDeg?: number
   /** Picture content, when this shape is a p:pic. */
   image?: PptxImageRef
+  /** Table content, when this shape is a p:graphicFrame wrapping an a:tbl. */
+  table?: PptxTable
   /** Index into the document-wide image list (PptxDocument.images). */
   imageIndex?: number
 }

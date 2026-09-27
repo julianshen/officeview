@@ -2,7 +2,7 @@
  * PPTX rendering: paint slides onto a canvas 2D context. 1 unit = 1 px;
  * EMU geometry converted with emuToPx at 96dpi default.
  */
-import type { PptxDocument, PptxShape, PptxSlide, PptxTextBody } from './types'
+import type { PptxDocument, PptxShape, PptxSlide, PptxTable, PptxTextBody } from './types'
 import { emuToPx } from '../core/geometry'
 import { resolveColor } from '../core/color'
 
@@ -67,6 +67,10 @@ function paintShape(shape: PptxShape, ctx: CanvasRenderingContext2D, images?: Ar
     ctx.lineWidth = Math.max(1, emuToPx(shape.line.widthEmu ?? 12700))
     ctx.stroke()
   }
+  // table (p:graphicFrame/a:tbl): fills, grid, then cell text
+  if (shape.table) {
+    paintTable(shape.table, ctx, x, y, w, h)
+  }
   // picture (p:pic): drawn over the fill, beneath text
   if (images && shape.imageIndex !== undefined) {
     const img = images[shape.imageIndex]
@@ -118,6 +122,120 @@ function naturalHeight(img: CanvasImageSource): number {
   return anyImg.naturalHeight ?? anyImg.height ?? 0
 }
 
+const CELL_PAD_EMU = 91440 // 0.1" default PowerPoint cell inset
+const CELL_VPAD_EMU = 45720
+
+/**
+ * Paint an a:tbl inside the frame's rect. Column widths come from the grid;
+ * row heights come from a:tr@h when present, otherwise the remaining height
+ * is divided evenly (PowerPoint auto-grows rows).
+ */
+function paintTable(
+  table: PptxTable,
+  ctx: CanvasRenderingContext2D,
+  x: number,
+  y: number,
+  w: number,
+  h: number,
+): void {
+  const cols = table.colWidthsEmu.length > 0 ? table.colWidthsEmu : [w / 96]
+  const colWidthsPx = cols.map((c) => emuToPx(c))
+  const totalW = colWidthsPx.reduce((a, b) => a + b, 0) || w
+  // scale the grid to the frame if the declared widths disagree
+  const colScale = totalW > 0 ? w / totalW : 1
+  const widths = colWidthsPx.map((c) => c * colScale)
+
+  // row heights: explicit h, else split what is left evenly
+  const explicitHeights = table.rows.map((r) => (r.heightEmu !== undefined ? emuToPx(r.heightEmu) : 0))
+  const explicitTotal = explicitHeights.reduce((a, b) => a + b, 0)
+  const autoCount = explicitHeights.filter((v) => v === 0).length
+  const fallbackRowH = autoCount > 0 ? Math.max(8, (h - explicitTotal) / autoCount) : 0
+  const heights = explicitHeights.map((v) => (v === 0 ? fallbackRowH : v))
+
+  const colX: number[] = [0]
+  for (const cw of widths) colX.push(colX[colX.length - 1] + cw)
+  const rowY: number[] = [0]
+  for (const rh of heights) rowY.push(rowY[rowY.length - 1] + rh)
+
+  ctx.save()
+  ctx.translate(x, y)
+  ctx.beginPath()
+  ctx.rect(0, 0, w, h)
+  ctx.clip()
+
+  // fills + text per cell; merged cells are painted by their anchor
+  const covered = new Set<string>()
+  table.rows.forEach((row, ri) => {
+    let ci = 0
+    for (const cell of row.cells) {
+      if (cell.merged) {
+        // skip: an absorbed cell has no content of its own
+        ci += Math.max(1, cell.gridSpan)
+        continue
+      }
+      const colSpan = Math.max(1, cell.gridSpan)
+      const rowSpan = Math.max(1, cell.rowSpan)
+      const cx = colX[ci] ?? 0
+      const cy = rowY[ri] ?? 0
+      const cw = (colX[ci + colSpan] ?? w) - cx
+      const ch = (rowY[ri + rowSpan] ?? h) - cy
+      if (cell.fill) {
+        ctx.fillStyle = resolveColor(cell.fill)
+        ctx.fillRect(cx, cy, cw, ch)
+      }
+      if (cell.paragraphs.length > 0) {
+        paintTextBody(
+          {
+            paragraphs: cell.paragraphs,
+            anchor: 'ctr',
+            insetLeftEmu: CELL_PAD_EMU,
+            insetRightEmu: CELL_PAD_EMU,
+            insetTopEmu: CELL_VPAD_EMU,
+            insetBottomEmu: CELL_VPAD_EMU,
+            wrap: true,
+          },
+          ctx,
+          cx,
+          cy,
+          cw,
+          ch,
+        )
+      }
+      for (let dr = 0; dr < rowSpan; dr++) {
+        for (let dc = 0; dc < colSpan; dc++) covered.add(`${ri + dr}:${ci + dc}`)
+      }
+      ci += colSpan
+    }
+  })
+
+  // grid: thin lines on every boundary, skipping interiors of merged cells
+  ctx.strokeStyle = 'rgba(0,0,0,0.35)'
+  ctx.lineWidth = 1
+  ctx.beginPath()
+  for (let c = 0; c <= widths.length; c++) {
+    const gx = colX[c] ?? w
+    for (let r = 0; r < heights.length; r++) {
+      if (c > 0 && c < widths.length && covered.has(`${r}:${c}`)) continue
+      const y1 = rowY[r] ?? 0
+      const y2 = rowY[r + 1] ?? h
+      ctx.moveTo(gx + 0.5, y1)
+      ctx.lineTo(gx + 0.5, y2)
+    }
+  }
+  for (let r = 0; r <= heights.length; r++) {
+    const gy = rowY[r] ?? h
+    for (let c = 0; c < widths.length; c++) {
+      if (r > 0 && r < heights.length && covered.has(`${r}:${c}`)) continue
+      const x1 = colX[c] ?? 0
+      const x2 = colX[c + 1] ?? w
+      ctx.moveTo(x1, gy + 0.5)
+      ctx.lineTo(x2, gy + 0.5)
+    }
+  }
+  ctx.stroke()
+  ctx.restore()
+}
+
 function paintTextBody(body: PptxTextBody, ctx: CanvasRenderingContext2D, x: number, y: number, w: number, h: number): void {
   const padL = emuToPx(body.insetLeftEmu)
   const padR = emuToPx(body.insetRightEmu)
@@ -128,7 +246,7 @@ function paintTextBody(body: PptxTextBody, ctx: CanvasRenderingContext2D, x: num
   if (textW <= 0 || textH <= 0) return
 
   // measure paragraphs into wrapped lines first (for vertical anchoring)
-  interface LaidLine { text: string; fontSizePt: number; heightPx: number; x: number; align: string; bullet: boolean }
+  interface LaidLine { text: string; fontSizePt: number; heightPx: number; x: number; align: string; bullet: boolean; color?: string; bold?: boolean; italic?: boolean; fontFamily?: string }
   const laid: LaidLine[] = []
   for (const para of body.paragraphs) {
     if (para.runs.length === 0) {
@@ -150,7 +268,7 @@ function paintTextBody(body: PptxTextBody, ctx: CanvasRenderingContext2D, x: num
       for (const word of words) {
         const ww = ctx.measureText(word).width
         if (lineW + ww > textW && line !== '') {
-          laid.push({ text: line, fontSizePt: sizePt, heightPx: sizePt * (96 / 72) * 1.2, x: padL, align: para.align, bullet: !!para.bullet })
+          laid.push({ text: line, fontSizePt: sizePt, heightPx: sizePt * (96 / 72) * 1.2, x: padL, align: para.align, bullet: !!para.bullet, color: run.color, bold: run.bold, italic: run.italic, fontFamily: run.fontFamily })
           line = ''
           lineW = 0
         }
@@ -158,7 +276,7 @@ function paintTextBody(body: PptxTextBody, ctx: CanvasRenderingContext2D, x: num
         lineW += ww
       }
       if (line) {
-        laid.push({ text: line, fontSizePt: sizePt, heightPx: sizePt * (96 / 72) * 1.2, x: padL, align: para.align, bullet: !!para.bullet })
+        laid.push({ text: line, fontSizePt: sizePt, heightPx: sizePt * (96 / 72) * 1.2, x: padL, align: para.align, bullet: !!para.bullet, color: run.color, bold: run.bold, italic: run.italic, fontFamily: run.fontFamily })
       }
       // measure once more for alignment widths
       void run
@@ -177,12 +295,13 @@ function paintTextBody(body: PptxTextBody, ctx: CanvasRenderingContext2D, x: num
   for (const line of laid) {
     const lineH = line.heightPx
     if (line.text) {
-      ctx.font = `${line.fontSizePt}pt "Calibri"`
+      ctx.font = `${line.italic ? 'italic ' : ''}${line.bold ? 'bold ' : ''}${line.fontSizePt}pt "${line.fontFamily ?? 'Calibri'}"`
       const tw = ctx.measureText(line.text).width
       let px = x + padL
       if (line.align === 'center') px = x + padL + (textW - tw) / 2
       else if (line.align === 'right') px = x + padL + textW - tw
-      ctx.fillStyle = '#000000'
+      // honor the run color (white text on a dark cell fill is common)
+      ctx.fillStyle = line.color ? resolveColor(line.color) : '#000000'
       ctx.fillText(line.text, px, ty + lineH * 0.8)
     }
     ty += lineH

@@ -86,6 +86,25 @@ async function samplePptx(): Promise<Uint8Array> {
     },
     { prst: 'ellipse', off: ['5943600', '3200400'], ext: ['1828800', '1828800'], fill: '4472C4' },
     { image: { data: png }, off: ['1600200', '5486400'], ext: ['1828800', '1828800'] },
+    {
+      off: ['5029200', '5486400'],
+      ext: ['4114800', '1143000'],
+      table: {
+        colWidths: ['2057400', '1028700', '1028700'],
+        rows: [
+          {
+            h: '342900',
+            cells: [
+              { paragraphs: [{ align: 'ctr', runs: [{ text: 'Quarter', b: true, sz: '1400', color: 'FFFFFF' }] }], fill: '4472C4' },
+              { paragraphs: [{ align: 'ctr', runs: [{ text: 'Revenue', b: true, sz: '1400', color: 'FFFFFF' }] }], fill: '4472C4' },
+              { paragraphs: [{ align: 'ctr', runs: [{ text: 'Share', b: true, sz: '1400', color: 'FFFFFF' }] }], fill: '4472C4' },
+            ],
+          },
+          { cells: [{ paragraphs: [{ runs: [{ text: 'Q1', sz: '1400' }] }] }, { paragraphs: [{ runs: [{ text: '$1,204', sz: '1400' }] }] }, { paragraphs: [{ runs: [{ text: '29%', sz: '1400' }] }] }] },
+          { cells: [{ paragraphs: [{ runs: [{ text: 'Q2', sz: '1400' }] }] }, { paragraphs: [{ runs: [{ text: '$2,918', sz: '1400' }] }] }, { paragraphs: [{ runs: [{ text: '71%', sz: '1400' }] }] }] },
+        ],
+      },
+    },
   ])
 }
 

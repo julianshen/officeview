@@ -275,6 +275,28 @@ const PPTX_PRES_RELS =
   <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/slide" Target="slides/slide1.xml"/>
 </Relationships>`
 
+export interface PptxTableCellSpec {
+  paragraphs?: Array<{
+    align?: string
+    runs: Array<{ text: string; b?: boolean; i?: boolean; sz?: string; color?: string }>
+  }>
+  gridSpan?: number
+  rowSpan?: number
+  /** Emitted as hMerge/vMerge (a merged-away cell). */
+  merged?: boolean
+  fill?: string
+}
+
+export interface PptxTableSpec {
+  /** Column widths in EMU. */
+  colWidths: string[]
+  rows: Array<{
+    /** a:tr@h in EMU (optional). */
+    h?: string
+    cells: PptxTableCellSpec[]
+  }>
+}
+
 export interface PptxShapeSpec {
   prst?: string
   off?: [string, string]
@@ -283,6 +305,8 @@ export interface PptxShapeSpec {
   lineW?: string
   rot?: string
   paragraphs?: Array<{ align?: string; runs: Array<{ text: string; b?: boolean; i?: boolean; sz?: string; color?: string }> }>
+  /** Emit as a p:graphicFrame wrapping an a:tbl. */
+  table?: PptxTableSpec
   /** Embed an image part; the shape is emitted as p:pic. */
   image?: {
     data: Uint8Array
@@ -290,6 +314,17 @@ export interface PptxShapeSpec {
     /** a:srcRect crop, in 1/1000 of a percent */
     srcRect?: { l?: number; t?: number; r?: number; b?: number }
   }
+}
+
+/** Shared a:r builder for pptx fixtures (runs appear in shapes and table cells). */
+function pptxRunXml(r: { text: string; b?: boolean; i?: boolean; sz?: string; color?: string }): string {
+  const attrs = `${r.b ? ' b="1"' : ''}${r.i ? ' i="1"' : ''}${r.sz ? ` sz="${r.sz}"` : ''}`
+  const inner = r.color ? `<a:solidFill><a:srgbClr val="${r.color}"/></a:solidFill>` : ''
+  return `<a:r><a:rPr${attrs}>${inner}</a:rPr><a:t>${r.text}</a:t></a:r>`
+}
+
+function pptxParaXml(p: { align?: string; runs: Array<{ text: string; b?: boolean; i?: boolean; sz?: string; color?: string }> }): string {
+  return `<a:p>${p.align ? `<a:pPr algn="${p.align}"/>` : ''}${p.runs.map(pptxRunXml).join('')}</a:p>`
 }
 
 /** Build a minimal pptx with one or more slides (single slide file reused). */
@@ -310,6 +345,25 @@ export async function buildPptx(shapes: PptxShapeSpec[]): Promise<Uint8Array> {
   <p:sldSz cx="9144000" cy="6858000"/>
 </p:presentation>`)
   const shapeXml = (s: PptxShapeSpec) => {
+    if (s.table) {
+      const cellXml = (c: PptxTableCellSpec) => {
+        const attrs: string[] = []
+        if (c.gridSpan) attrs.push(`gridSpan="${c.gridSpan}"`)
+        if (c.rowSpan) attrs.push(`rowSpan="${c.rowSpan}"`)
+        if (c.merged) attrs.push('hMerge="1"')
+        const tcPr = c.fill ? `<a:tcPr><a:solidFill><a:srgbClr val="${c.fill}"/></a:solidFill></a:tcPr>` : '<a:tcPr/>'
+        const ps = (c.paragraphs ?? []).map(pptxParaXml).join('')
+        return `<a:tc ${attrs.join(' ')}>${tcPr}<a:txBody><a:bodyPr/><a:lstStyle/>${ps || '<a:p/>'}</a:txBody></a:tc>`
+      }
+      const tbl =
+        `<a:tbl><a:tblPr/><a:tblGrid>${s.table.colWidths.map((w) => `<a:gridCol w="${w}"/>`).join('')}</a:tblGrid>` +
+        s.table.rows.map((r) => `<a:tr${r.h ? ` h="${r.h}"` : ''}>${r.cells.map(cellXml).join('')}</a:tr>`).join('') +
+        `</a:tbl>`
+      return `<p:graphicFrame><p:nvGraphicFramePr><p:cNvPr id="200" name="Table"/><p:cNvGraphicFramePr/><p:nvPr/></p:nvGraphicFramePr>` +
+        `<p:xfrm><a:off x="${s.off?.[0] ?? '0'}" y="${s.off?.[1] ?? '0'}"/><a:ext cx="${s.ext?.[0] ?? '100000'}" cy="${s.ext?.[1] ?? '100000'}"/></p:xfrm>` +
+        `<a:graphic><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/table">${tbl}</a:graphicData></a:graphic>` +
+        `</p:graphicFrame>`
+    }
     if (s.image) {
       let rid = ridsByData.get(s.image.data)
       if (rid === undefined) {
@@ -336,12 +390,7 @@ export async function buildPptx(shapes: PptxShapeSpec[]): Promise<Uint8Array> {
       (s.fill ? `<a:solidFill><a:srgbClr val="${s.fill}"/></a:solidFill>` : '') +
       `<a:ln w="${s.lineW ?? '12700'}"><a:solidFill><a:srgbClr val="000000"/></a:solidFill></a:ln></p:spPr>`
     const txBody = s.paragraphs
-      ? `<p:txBody><a:bodyPr/><a:lstStyle/>${s.paragraphs.map((p) =>
-          `<a:p>${p.align ? `<a:pPr algn="${p.align}"/>` : ''}${p.runs.map((r) => {
-            const attrs = `${r.b ? ' b="1"' : ''}${r.i ? ' i="1"' : ''}${r.sz ? ` sz="${r.sz}"` : ''}`
-            const inner = r.color ? `<a:solidFill><a:srgbClr val="${r.color}"/></a:solidFill>` : ''
-            return `<a:r><a:rPr${attrs}>${inner}</a:rPr><a:t>${r.text}</a:t></a:r>`
-          }).join('')}</a:p>`).join('')}</p:txBody>`
+      ? `<p:txBody><a:bodyPr/><a:lstStyle/>${s.paragraphs.map(pptxParaXml).join('')}</p:txBody>`
       : '<p:txBody><a:bodyPr/><a:lstStyle/><a:p/></p:txBody>'
     return `<p:sp><p:nvSpPr><p:cNvPr id="2" name="Shape"/><p:cNvSpPr/><p:nvPr/></p:nvSpPr>${spPr}${txBody}</p:sp>`
   }

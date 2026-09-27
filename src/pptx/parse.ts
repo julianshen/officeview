@@ -2,7 +2,7 @@
 import type { OfficePackage } from '../core/zip'
 import { attrs, elementChildren, getChildren, textOf, type XmlNode } from '../core/xml'
 import { hexRgbToCss } from '../core/color'
-import type { PptxDocument, PptxImageRef, PptxParagraph, PptxShape, PptxSlide, PptxTextBody, PptxTextRun } from './types'
+import type { PptxDocument, PptxImageRef, PptxParagraph, PptxShape, PptxSlide, PptxTable, PptxTableCell, PptxTableRow, PptxTextBody, PptxTextRun } from './types'
 import { sniffImageMime } from '../core/images'
 
 const DEFAULT_INSET_LR = 91440
@@ -176,6 +176,61 @@ async function loadSlideImages(pkg: OfficePackage, partPath: string): Promise<Ma
   return out
 }
 
+/** p:graphicFrame -> a:graphic/a:graphicData/a:tbl */
+function parseGraphicFrame(frame: XmlNode): PptxShape | undefined {
+  const xfrm = getChildren(frame, 'xfrm')[0]
+  const off = xfrm ? getChildren(xfrm, 'off')[0] : undefined
+  const ext = xfrm ? getChildren(xfrm, 'ext')[0] : undefined
+  const oa = attrs(off)
+  const ea = attrs(ext)
+  const graphic = getChildren(frame, 'graphic')[0]
+  const graphicData = graphic ? getChildren(graphic, 'graphicData')[0] : undefined
+  const tbl = graphicData ? getChildren(graphicData, 'tbl')[0] : undefined
+  if (!tbl) return undefined
+
+  const table: PptxTable = { colWidthsEmu: [], rows: [] }
+  const grid = getChildren(tbl, 'tblGrid')[0]
+  if (grid) {
+    for (const col of getChildren(grid, 'gridCol')) {
+      table.colWidthsEmu.push(num(attrs(col).w as string))
+    }
+  }
+  for (const tr of getChildren(tbl, 'tr')) {
+    const ta = attrs(tr)
+    const row: PptxTableRow = { cells: [], heightEmu: ta.h !== undefined ? num(ta.h as string) : undefined }
+    for (const tc of getChildren(tr, 'tc')) {
+      const ca = attrs(tc)
+      const cell: PptxTableCell = {
+        paragraphs: [],
+        gridSpan: ca.gridSpan !== undefined ? num(ca.gridSpan as string) : 1,
+        rowSpan: ca.rowSpan !== undefined ? num(ca.rowSpan as string) : 1,
+        // hMerge/vMerge without a value marks a cell absorbed by a merge
+        merged: ca.hMerge !== undefined || ca.vMerge !== undefined,
+      }
+      const tcPr = getChildren(tc, 'tcPr')[0]
+      if (tcPr) {
+        const solid = getChildren(tcPr, 'solidFill')[0]
+        const color = colorOf(solid ? getChildren(solid, 'srgbClr')[0] : undefined)
+        if (color) cell.fill = color
+      }
+      const txBody = getChildren(tc, 'txBody')[0]
+      if (txBody) cell.paragraphs = parseTextBody(txBody).paragraphs
+      row.cells.push(cell)
+    }
+    table.rows.push(row)
+  }
+
+  return {
+    xEmu: num(oa.x as string),
+    yEmu: num(oa.y as string),
+    widthEmu: num(ea.cx as string),
+    heightEmu: num(ea.cy as string),
+    geometry: 'rect',
+    rotationDeg: xfrm ? num(attrs(xfrm).rot as string, 0) / 60000 : 0,
+    table,
+  }
+}
+
 export async function parsePptx(pkg: OfficePackage): Promise<PptxDocument> {
   const presentation = await pkg.xml('ppt/presentation.xml')
   if (!presentation) throw new Error('ppt/presentation.xml missing — not a valid pptx?')
@@ -214,6 +269,9 @@ export async function parsePptx(pkg: OfficePackage): Promise<PptxDocument> {
           if (name === 'sp' || name === 'pic') {
             const shape = parseShape(node, slideImages)
             if (shape) slide.shapes.push(shape)
+          } else if (name === 'graphicFrame') {
+            const frame = parseGraphicFrame(node)
+            if (frame) slide.shapes.push(frame)
           }
         }
       }
