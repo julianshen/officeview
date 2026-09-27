@@ -3,7 +3,7 @@
  * Text measurement uses a real Canvas2D measureText (via a provided measure
  * function) so widths match what we paint.
  */
-import type { DocxDocument, DocxImage, DocxParagraph, DocxSection, DocxTable, DocxTextRun } from './types'
+import type { DocxDocument, DocxImage, DocxParagraph, DocxSection, DocxTable, DocxTableRow, DocxTextRun } from './types'
 import { emuToPx } from '../core/geometry'
 import { twipsToPx } from '../core/geometry'
 import { resolveColor } from '../core/color'
@@ -352,21 +352,40 @@ export function layoutDocx(document: DocxDocument, measure: MeasureFn): PageLayo
         }
         continue
       }
-      // Table block: whole-table page placement (a table taller than a page
-      // overflows the bottom — acceptable baseline).
+      // Table block: split at row boundaries across pages, repeating header
+      // rows (w:tblHeader) on each continuation page.
       const table = block.table
-      const laid = layoutTable(table, measure, defaults)
-      let tableY = y
-      if (tableY + laid.heightPx > contentBottom && (page.lines.length > 0 || page.tables.length > 0)) {
-        commitPage()
-        tableY = y
-      }
       const tableX = m.left
-      for (const line of laid.lines) {
-        page.lines.push({ ...line, xPx: line.xPx + tableX, yPx: line.yPx + tableY })
+      const hasHeader = table.rows.some((r) => r.isHeader)
+      const pageHasContent = () => page.lines.length > 0 || page.tables.length > 0 || page.images.length > 0
+      let fromRow = 0
+      let firstChunk = true
+      while (fromRow < table.rows.length) {
+        let chunk = layoutTableRows(table, measure, defaults, {
+          fromRow,
+          repeatHeader: !firstChunk && hasHeader,
+          maxHeightPx: contentBottom - y,
+          allowFirstRowOverflow: !pageHasContent(),
+        })
+        if (chunk.consumedRows === 0 && pageHasContent()) {
+          // not even one row fits in the remaining space — start a new page
+          commitPage()
+          chunk = layoutTableRows(table, measure, defaults, {
+            fromRow,
+            repeatHeader: !firstChunk && hasHeader,
+            maxHeightPx: contentBottom - y,
+            allowFirstRowOverflow: true,
+          })
+        }
+        for (const line of chunk.lines) {
+          page.lines.push({ ...line, xPx: line.xPx + tableX, yPx: line.yPx + y })
+        }
+        page.tables.push({ xPx: tableX, yPx: y, widthPx: chunk.widthPx, rows: chunk.rows })
+        y += chunk.heightPx
+        fromRow += chunk.consumedRows
+        firstChunk = false
+        if (fromRow < table.rows.length) commitPage()
       }
-      page.tables.push({ ...laid.box, xPx: tableX, yPx: tableY })
-      y = tableY + laid.heightPx
     }
     if (page.lines.length > 0 || page.tables.length > 0 || page.images.length > 0 || pages.length === 0) pages.push(page)
   }
@@ -514,19 +533,21 @@ function borderCss(b: CellBorderCss | undefined): string | undefined {
 }
 
 /**
- * Lay out a table into cell rects + text lines relative to (0,0) at the
- * table origin; caller rebases y onto the page.
+ * Lay out a horizontal slice of a table — cell rects + text lines relative to
+ * (0,0) at the table origin. Starts at row `fromRow`, optionally repeats the
+ * header rows, and stops before exceeding `maxHeightPx` so the caller can
+ * split the table across pages. `consumedRows` counts source rows placed.
  */
-function layoutTable(
+function layoutTableRows(
   table: DocxTable,
   measure: MeasureFn,
   defaults: { fontFamily: string; fontSizePt: number },
-): { lines: LineBox[]; box: TableBox; heightPx: number } {
+  opts: { fromRow: number; repeatHeader: boolean; maxHeightPx: number; allowFirstRowOverflow: boolean },
+): { lines: LineBox[]; rows: TableRowBox[]; widthPx: number; heightPx: number; consumedRows: number } {
   const lines: LineBox[] = []
-  const gridWidthPx = table.gridColsTwips.reduce((a, b) => a + b, 0)
   const colOffsets = prefixSum(table.gridColsTwips)
-  const colWidths = table.gridColsTwips.map((t) => t) // twips; convert at use
-  const box: TableBox = { xPx: 0, yPx: 0, widthPx: twipsToPx(gridWidthPx), rows: [] }
+  const colWidths = table.gridColsTwips
+  const widthPx = twipsToPx(colOffsets[colOffsets.length - 1] ?? 0)
   const margins = {
     top: twipsToPx(table.cellMargins.topTwips),
     bottom: twipsToPx(table.cellMargins.bottomTwips),
@@ -534,9 +555,20 @@ function layoutTable(
     right: twipsToPx(table.cellMargins.rightTwips),
   }
 
+  const committedRows: TableRowBox[] = []
+  const headerRows = opts.repeatHeader ? table.rows.filter((r) => r.isHeader) : []
+  const queue: Array<{ row: DocxTableRow; counts: boolean }> = [
+    ...headerRows.map((row) => ({ row, counts: false })),
+    ...table.rows.slice(opts.fromRow).map((row) => ({ row, counts: true })),
+  ]
+
   let yRel = 0
-  for (const row of table.rows) {
-    const rowCells: TableCellBox[] = []
+  let consumedRows = 0
+  let contentPlaced = 0
+
+  for (const { row, counts } of queue) {
+    // lay the row into temporary coordinates (relative to its own top)
+    const entries: Array<{ cellBox: TableCellBox; lines: LineBox[]; contentH: number; vAlign: 'top' | 'center' | 'bottom' }> = []
     let rowContentH = 0
     let col = 0
     for (const cell of row.cells) {
@@ -552,7 +584,7 @@ function layoutTable(
       const innerW = twipsToPx(cellW) - margins.left - margins.right
       if (innerW <= 0) continue
       let cellLines: LineBox[] = []
-      let cy = yRel + margins.top
+      let cy = margins.top
       for (const para of cell.paragraphs) {
         const laid = layoutParagraph(para, measure, {
           contentX: cellXPx + margins.left,
@@ -564,12 +596,11 @@ function layoutTable(
         cy = laid.endY + twipsToPx(para.spacingAfterTwips ?? 0)
       }
       const contentH = cellLines.length > 0
-        ? cellLines[cellLines.length - 1].yPx - yRel - margins.top + cellLines[cellLines.length - 1].heightPx + margins.bottom
+        ? cellLines[cellLines.length - 1].yPx - margins.top + cellLines[cellLines.length - 1].heightPx + margins.bottom
         : margins.top + margins.bottom + defaults.fontSizePt * LINE_HEIGHT_FACTOR * (96 / 72) * 0.5
       rowContentH = Math.max(rowContentH, contentH)
-      for (const line of cellLines) lines.push(line)
-      // borders: cell overrides, falling back to the table's outside/
-      // inside border definitions
+      // borders: cell overrides, falling back to the table's outside/inside
+      // border definitions
       const cb = cell.borders
       const tb = table.borders
       const pick = (side: 'left' | 'right' | 'top' | 'bottom'): string | undefined => {
@@ -577,18 +608,23 @@ function layoutTable(
         if (tb) return borderCss(tb[side] ?? (side === 'top' || side === 'bottom' ? tb.insideH : tb.insideV))
         return undefined
       }
-      rowCells.push({
-        xPx: cellXPx,
-        yPx: yRel,
-        widthPx: twipsToPx(cellW),
-        heightPx: 0, // filled after row height known
-        fill: cell.fill ?? table.fill,
-        borders: {
-          left: pick('left'),
-          right: pick('right'),
-          top: pick('top'),
-          bottom: pick('bottom'),
+      entries.push({
+        cellBox: {
+          xPx: cellXPx,
+          yPx: yRel, // replaced when the row is committed
+          widthPx: twipsToPx(cellW),
+          heightPx: 0,
+          fill: cell.fill ?? table.fill,
+          borders: {
+            left: pick('left'),
+            right: pick('right'),
+            top: pick('top'),
+            bottom: pick('bottom'),
+          },
         },
+        lines: cellLines,
+        contentH,
+        vAlign: cell.vAlign ?? 'top',
       })
     }
     // explicit row height (atLeast semantics)
@@ -599,11 +635,36 @@ function layoutTable(
       else rowH = Math.max(rowH, hPx)
     }
     rowH = Math.max(rowH, defaults.fontSizePt * LINE_HEIGHT_FACTOR * (96 / 72))
-    for (const cellBox of rowCells) cellBox.heightPx = rowH
-    box.rows.push({ yPx: yRel, heightPx: rowH, cells: rowCells })
+
+    // stop before overflowing the available height, unless this is the first
+    // content row of the chunk and the caller allows it
+    const isFirstContent = counts && contentPlaced === 0
+    if (!isFirstContent && yRel + rowH > opts.maxHeightPx) break
+    if (isFirstContent && !opts.allowFirstRowOverflow && yRel + rowH > opts.maxHeightPx) break
+
+    // commit the row: vertical alignment shifts text within the final height
+    const rowCells: TableCellBox[] = []
+    for (const entry of entries) {
+      const slack = rowH - entry.contentH
+      let entryLines = entry.lines
+      if (slack > 0 && entry.vAlign !== 'top') {
+        const shift = entry.vAlign === 'center' ? slack / 2 : slack
+        entryLines = entryLines.map((l) => ({ ...l, yPx: l.yPx + shift }))
+      }
+      for (const line of entryLines) lines.push({ ...line, yPx: line.yPx + yRel })
+      entry.cellBox.yPx = yRel
+      entry.cellBox.heightPx = rowH
+      rowCells.push(entry.cellBox)
+    }
+    committedRows.push({ yPx: yRel, heightPx: rowH, cells: rowCells })
     yRel += rowH
+    if (counts) {
+      consumedRows++
+      contentPlaced++
+    }
   }
-  return { lines, box, heightPx: yRel }
+
+  return { lines, rows: committedRows, widthPx, heightPx: yRel, consumedRows }
 }
 
 function prefixSum(widths: number[]): number[] {

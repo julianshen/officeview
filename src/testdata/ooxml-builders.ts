@@ -35,12 +35,16 @@ export interface DocxCellSpec {
   vMerge?: 'restart' | 'continue'
   fill?: string
   borders?: string // xml fragment for tcBorders
+  /** w:vAlign val */
+  vAlign?: 'top' | 'center' | 'bottom'
 }
 
 export interface DocxRowSpec {
   cells: DocxCellSpec[]
   heightTwips?: string
   heightRule?: string
+  /** w:trPr/w:tblHeader — repeat on continuation pages. */
+  isHeader?: boolean
 }
 
 export interface DocxTableSpec {
@@ -72,6 +76,7 @@ export async function buildDocx(paras: DocxParaSpec[], tables: DocxTableSpec[] =
     else if (c.vMerge === 'continue') tcpr.push(`<w:vMerge/>`)
     if (c.fill) tcpr.push(`<w:shd w:val="clear" w:fill="${c.fill}"/>`)
     if (c.borders) tcpr.push(`<w:tcBorders>${c.borders}</w:tcBorders>`)
+    if (c.vAlign) tcpr.push(`<w:vAlign w:val="${c.vAlign}"/>`)
     tcpr.push(`</w:tcPr>`)
     const ps = c.paragraphs ? c.paragraphs.map(paraXml).join('') : '<w:p/>'
     return `<w:tc>${tcpr.join('')}${ps}</w:tc>`
@@ -79,7 +84,12 @@ export async function buildDocx(paras: DocxParaSpec[], tables: DocxTableSpec[] =
   const tableXml = (t: DocxTableSpec) =>
     `<w:tbl><w:tblPr>${t.fill ? `<w:shd w:val="clear" w:fill="${t.fill}"/>` : ''}${t.borders ? `<w:tblBorders>${t.borders}</w:tblBorders>` : ''}${t.cellMargins ? `<w:tblCellMar>${t.cellMargins}</w:tblCellMar>` : ''}</w:tblPr>` +
     `<w:tblGrid>${t.gridCols.map((w) => `<w:gridCol w:w="${w}"/>`).join('')}</w:tblGrid>` +
-    t.rows.map((r) => `<w:tr>${r.heightTwips ? `<w:trPr><w:trHeight w:val="${r.heightTwips}"${r.heightRule ? ` w:hRule="${r.heightRule}"` : ''}/></w:trPr>` : ''}${r.cells.map(cellXml).join('')}</w:tr>`).join('') +
+    t.rows.map((r) => {
+      const trpr: string[] = []
+      if (r.heightTwips) trpr.push(`<w:trHeight w:val="${r.heightTwips}"${r.heightRule ? ` w:hRule="${r.heightRule}"` : ''}/>`)
+      if (r.isHeader) trpr.push('<w:tblHeader/>')
+      return `<w:tr>${trpr.length ? `<w:trPr>${trpr.join('')}</w:trPr>` : ''}${r.cells.map(cellXml).join('')}</w:tr>`
+    }).join('') +
     `</w:tbl>`
   const document =
     `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>

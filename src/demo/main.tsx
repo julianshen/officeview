@@ -90,8 +90,29 @@ async function samplePptx(): Promise<Uint8Array> {
 }
 
 type Sample = { label: string; emoji: string; load: () => Promise<Uint8Array> }
+async function sampleDocxLongTable(): Promise<Uint8Array> {
+  const table: DocxTableSpec = {
+    gridCols: ['4320', '4320'],
+    borders: '<w:top w:val="single"/><w:left w:val="single"/><w:bottom w:val="single"/><w:right w:val="single"/><w:insideH w:val="single"/><w:insideV w:val="single"/>',
+    rows: [
+      { isHeader: true, cells: [{ paragraphs: [{ align: 'center', runs: [{ text: 'Item', bold: true }] }], fill: 'D9D9D9' }, { paragraphs: [{ align: 'center', runs: [{ text: 'Status', bold: true }] }], fill: 'D9D9D9' }] },
+      ...Array.from({ length: 60 }, (_, i) => ({
+        cells: [
+          { paragraphs: [p(`Row ${i + 1}`)] },
+          { paragraphs: [{ runs: [{ text: i % 3 === 0 ? 'at risk' : 'on track', color: i % 3 === 0 ? 'C00000' : '0070C0' }] }] },
+        ],
+      })),
+    ],
+  }
+  return buildDocx(
+    [{ align: 'center', runs: [{ text: 'Multi-page table', bold: true, size: 44 }] }, p('This table spans pages; the gray header row repeats on each page.')],
+    [table],
+  )
+}
+
 const SAMPLES: Sample[] = [
   { label: 'Word (.docx)', emoji: '📄', load: sampleDocx },
+  { label: 'Word long table', emoji: '🧾', load: sampleDocxLongTable },
   { label: 'Excel (.xlsx)', emoji: '📊', load: sampleXlsx },
   { label: 'PowerPoint (.pptx)', emoji: '📽️', load: samplePptx },
 ]

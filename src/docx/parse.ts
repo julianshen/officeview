@@ -291,6 +291,8 @@ function parseTableCell(tc: XmlNode): DocxTableCell {
     const shdAttrs = attrs(shd)
     if (shd && shdAttrs.val !== 'nil') cell.fill = shdAttrs.fill as string | undefined
     cell.borders = parseBorders(tcPr)
+    const vAlign = attrs(tcPr['vAlign'] as XmlNode | undefined).val as string | undefined
+    if (vAlign === 'center' || vAlign === 'bottom' || vAlign === 'top') cell.vAlign = vAlign
   }
   for (const [name, node] of elementChildren(tc)) {
     if (name === 'p') cell.paragraphs.push(parseParagraph(node))
@@ -329,6 +331,7 @@ export function parseTable(tbl: XmlNode): DocxTable {
         const rule = a.hRule as string | undefined
         if (rule === 'exact' || rule === 'atLeast' || rule === 'auto') row.heightRule = rule
       }
+      if (trPr['tblHeader'] !== undefined) row.isHeader = true
     }
     for (const child of elementChildren(node)) {
       if (child[0] === 'tc' && child[1]) row.cells.push(parseTableCell(child[1]))

@@ -96,12 +96,16 @@ export interface DocxTableCell {
   fill?: string
   /** Borders override for this cell. */
   borders?: DocxTableBorders
+  /** w:vAlign — vertical text placement within the cell. */
+  vAlign?: 'top' | 'center' | 'bottom'
 }
 
 export interface DocxTableRow {
   cells: DocxTableCell[]
   heightTwips?: number
   heightRule?: 'atLeast' | 'exact' | 'auto'
+  /** w:trPr/w:tblHeader — repeat this row at the top of each continuation page. */
+  isHeader?: boolean
 }
 
 export interface DocxTable {
