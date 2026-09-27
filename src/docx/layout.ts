@@ -3,7 +3,7 @@
  * Text measurement uses a real Canvas2D measureText (via a provided measure
  * function) so widths match what we paint.
  */
-import type { DocxDocument, DocxParagraph, DocxSection, DocxTextRun } from './types'
+import type { DocxDocument, DocxParagraph, DocxSection, DocxTable, DocxTextRun } from './types'
 import { twipsToPx } from '../core/geometry'
 import { resolveColor } from '../core/color'
 
@@ -38,6 +38,31 @@ export interface PageLayout {
   widthPx: number
   heightPx: number
   lines: LineBox[]
+  /** Tables painted beneath the text lines. */
+  tables: TableBox[]
+}
+
+/** Rect geometry for one table cell (page-relative, after layout). */
+export interface TableCellBox {
+  xPx: number
+  yPx: number
+  widthPx: number
+  heightPx: number
+  fill?: string
+  borders?: { left?: string; right?: string; top?: string; bottom?: string }
+}
+
+export interface TableRowBox {
+  yPx: number
+  heightPx: number
+  cells: TableCellBox[]
+}
+
+export interface TableBox {
+  xPx: number
+  yPx: number
+  widthPx: number
+  rows: TableRowBox[]
 }
 
 const LINE_HEIGHT_FACTOR = 1.35
@@ -247,38 +272,58 @@ export function layoutDocx(document: DocxDocument, measure: MeasureFn): PageLayo
     const contentX = m.left
     const contentWidth = widthPx - m.left - m.right
     const contentBottom = heightPx - m.bottom
-    let page: PageLayout = { widthPx, heightPx, lines: [] }
+    let page: PageLayout = { widthPx, heightPx, lines: [], tables: [] }
     let y = m.top
 
     const commitPage = () => {
-      if (page.lines.length > 0) pages.push(page)
-      page = { widthPx, heightPx, lines: [] }
+      if (page.lines.length > 0 || page.tables.length > 0) pages.push(page)
+      page = { widthPx, heightPx, lines: [], tables: [] }
       y = m.top
     }
 
-    for (const para of section.paragraphs) {
-      y += twipsToPx(para.spacingBeforeTwips ?? 0)
-      const { lines, endY } = layoutParagraph(para, measure, {
-        contentX,
-        contentWidth,
-        startY: y,
-        defaults,
-      })
-      // Lines carry absolute y measured from the section start. Any line
-      // past contentBottom rolls onto a fresh page, rebased to the top
-      // margin; the same shift applies to the paragraph's remaining lines
-      // and to the running flow position.
-      let shift = 0
-      for (const line of lines) {
-        if (line.yPx + shift > contentBottom && page.lines.length > 0) {
-          commitPage()
-          shift = m.top - line.yPx
+    const blocks = section.blocks ?? section.paragraphs.map((paragraph) => ({ kind: 'p' as const, paragraph }))
+    for (const block of blocks) {
+      if (block.kind === 'p') {
+        const para = block.paragraph
+        y += twipsToPx(para.spacingBeforeTwips ?? 0)
+        const { lines, endY } = layoutParagraph(para, measure, {
+          contentX,
+          contentWidth,
+          startY: y,
+          defaults,
+        })
+        // Lines carry absolute y measured from the section start. Any line
+        // past contentBottom rolls onto a fresh page, rebased to the top
+        // margin; the same shift applies to the paragraph's remaining lines
+        // and to the running flow position.
+        let shift = 0
+        for (const line of lines) {
+          if (line.yPx + shift > contentBottom && page.lines.length > 0) {
+            commitPage()
+            shift = m.top - line.yPx
+          }
+          page.lines.push({ ...line, yPx: line.yPx + shift })
         }
-        page.lines.push({ ...line, yPx: line.yPx + shift })
+        y = endY + shift + twipsToPx(para.spacingAfterTwips ?? 0)
+        continue
       }
-      y = endY + shift + twipsToPx(para.spacingAfterTwips ?? 0)
+      // Table block: whole-table page placement (a table taller than a page
+      // overflows the bottom — acceptable baseline).
+      const table = block.table
+      const laid = layoutTable(table, measure, defaults)
+      let tableY = y
+      if (tableY + laid.heightPx > contentBottom && (page.lines.length > 0 || page.tables.length > 0)) {
+        commitPage()
+        tableY = y
+      }
+      const tableX = m.left
+      for (const line of laid.lines) {
+        page.lines.push({ ...line, xPx: line.xPx + tableX, yPx: line.yPx + tableY })
+      }
+      page.tables.push({ ...laid.box, xPx: tableX, yPx: tableY })
+      y = tableY + laid.heightPx
     }
-    if (page.lines.length > 0 || pages.length === 0) pages.push(page)
+    if (page.lines.length > 0 || page.tables.length > 0 || pages.length === 0) pages.push(page)
   }
   return pages
 }
@@ -298,6 +343,7 @@ export function renderPages(pages: PageLayout[], ctx: CanvasRenderingContext2D, 
   ctx.fillStyle = '#000000'
   let lastFont = ''
   for (const page of pages) {
+    paintTables(page.tables, ctx)
     for (const line of page.lines) {
       let extraSpacePerGap = 0
       if (line.align === 'justify' && !line.isParagraphEnd && line.segs.length > 1) {
@@ -346,6 +392,49 @@ function countGaps(segs: Segment[]): number {
   return n
 }
 
+const BORDER_WIDTH: Record<string, number> = {
+  thin: 1,
+  thick: 2.5,
+  double: 1,
+  single: 1,
+  dashed: 1,
+  dotted: 1,
+}
+
+/** Paint table cell fills and borders (beneath text). */
+function paintTables(tables: TableBox[], ctx: CanvasRenderingContext2D): void {
+  for (const table of tables) {
+    for (const row of table.rows) {
+      for (const cell of row.cells) {
+        if (cell.fill) {
+          ctx.fillStyle = resolveColor(cell.fill)
+          ctx.fillRect(cell.xPx, cell.yPx, cell.widthPx, cell.heightPx)
+        }
+      }
+    }
+    // borders after fills so they sit on top of shading
+    for (const row of table.rows) {
+      for (const cell of row.cells) {
+        const b = cell.borders
+        if (!b) continue
+        ctx.strokeStyle = '#000000'
+        const draw = (w: number, x1: number, y1: number, x2: number, y2: number) => {
+          ctx.lineWidth = w
+          ctx.beginPath()
+          ctx.moveTo(x1 + 0.5, y1 + 0.5)
+          ctx.lineTo(x2 + 0.5, y2 + 0.5)
+          ctx.stroke()
+        }
+        const lw = (s: string | undefined) => Math.max(1, BORDER_WIDTH[s ?? 'thin'] ?? 1)
+        if (b.left) draw(lw(b.left), cell.xPx, cell.yPx, cell.xPx, cell.yPx + cell.heightPx)
+        if (b.right) draw(lw(b.right), cell.xPx + cell.widthPx, cell.yPx, cell.xPx + cell.widthPx, cell.yPx + cell.heightPx)
+        if (b.top) draw(lw(b.top), cell.xPx, cell.yPx, cell.xPx + cell.widthPx, cell.yPx)
+        if (b.bottom) draw(lw(b.bottom), cell.xPx, cell.yPx + cell.heightPx, cell.xPx + cell.widthPx, cell.yPx + cell.heightPx)
+      }
+    }
+  }
+}
+
 function marginsApprox(line: LineBox): number {
   // x offset within the page (left margin)
   return line.xPx
@@ -353,4 +442,114 @@ function marginsApprox(line: LineBox): number {
 
 function usableWidth(page: PageLayout, line: LineBox): number {
   return page.widthPx - line.xPx - twipsToPx(1440)
+}
+
+// ---------- table layout ----------
+
+interface CellBorderCss { style?: string; color?: string }
+
+function borderCss(b: CellBorderCss | undefined): string | undefined {
+  if (!b || !b.style) return undefined
+  if (b.style === 'single' || b.style === 'thin') return 'thin'
+  return b.style
+}
+
+/**
+ * Lay out a table into cell rects + text lines relative to (0,0) at the
+ * table origin; caller rebases y onto the page.
+ */
+function layoutTable(
+  table: DocxTable,
+  measure: MeasureFn,
+  defaults: { fontFamily: string; fontSizePt: number },
+): { lines: LineBox[]; box: TableBox; heightPx: number } {
+  const lines: LineBox[] = []
+  const gridWidthPx = table.gridColsTwips.reduce((a, b) => a + b, 0)
+  const colOffsets = prefixSum(table.gridColsTwips)
+  const colWidths = table.gridColsTwips.map((t) => t) // twips; convert at use
+  const box: TableBox = { xPx: 0, yPx: 0, widthPx: twipsToPx(gridWidthPx), rows: [] }
+  const margins = {
+    top: twipsToPx(table.cellMargins.topTwips),
+    bottom: twipsToPx(table.cellMargins.bottomTwips),
+    left: twipsToPx(table.cellMargins.leftTwips),
+    right: twipsToPx(table.cellMargins.rightTwips),
+  }
+
+  let yRel = 0
+  for (const row of table.rows) {
+    const rowCells: TableCellBox[] = []
+    let rowContentH = 0
+    let col = 0
+    for (const cell of row.cells) {
+      if (cell.vMerge === 'continue') {
+        col += cell.gridSpan
+        continue
+      }
+      const span = Math.max(1, cell.gridSpan)
+      let cellW = 0
+      for (let i = col; i < col + span && i < colWidths.length; i++) cellW += colWidths[i]
+      col += span
+      const cellXPx = twipsToPx(colOffsets[Math.max(0, col - span)] ?? 0)
+      const innerW = twipsToPx(cellW) - margins.left - margins.right
+      if (innerW <= 0) continue
+      let cellLines: LineBox[] = []
+      let cy = margins.top
+      for (const para of cell.paragraphs) {
+        const laid = layoutParagraph(para, measure, {
+          contentX: cellXPx + margins.left,
+          contentWidth: innerW,
+          startY: cy,
+          defaults,
+        })
+        cellLines = cellLines.concat(laid.lines)
+        cy = laid.endY + twipsToPx(para.spacingAfterTwips ?? 0)
+      }
+      const contentH = cellLines.length > 0
+        ? cellLines[cellLines.length - 1].yPx - margins.top + cellLines[cellLines.length - 1].heightPx + margins.bottom
+        : margins.top + margins.bottom + defaults.fontSizePt * LINE_HEIGHT_FACTOR * (96 / 72) * 0.5
+      rowContentH = Math.max(rowContentH, contentH)
+      for (const line of cellLines) lines.push(line)
+      // borders: cell overrides, falling back to the table's outside/
+      // inside border definitions
+      const cb = cell.borders
+      const tb = table.borders
+      const pick = (side: 'left' | 'right' | 'top' | 'bottom'): string | undefined => {
+        if (cb && side in cb) return borderCss(cb[side])
+        if (tb) return borderCss(tb[side] ?? (side === 'top' || side === 'bottom' ? tb.insideH : tb.insideV))
+        return undefined
+      }
+      rowCells.push({
+        xPx: cellXPx,
+        yPx: yRel,
+        widthPx: twipsToPx(cellW),
+        heightPx: 0, // filled after row height known
+        fill: cell.fill ?? table.fill,
+        borders: {
+          left: pick('left'),
+          right: pick('right'),
+          top: pick('top'),
+          bottom: pick('bottom'),
+        },
+      })
+    }
+    // explicit row height (atLeast semantics)
+    let rowH = rowContentH
+    if (row.heightTwips !== undefined) {
+      const hPx = twipsToPx(row.heightTwips)
+      if (row.heightRule === 'exact') rowH = hPx
+      else rowH = Math.max(rowH, hPx)
+    }
+    rowH = Math.max(rowH, defaults.fontSizePt * LINE_HEIGHT_FACTOR * (96 / 72))
+    for (const cellBox of rowCells) cellBox.heightPx = rowH
+    box.rows.push({ yPx: yRel, heightPx: rowH, cells: rowCells })
+    yRel += rowH
+  }
+  return { lines, box, heightPx: yRel }
+}
+
+function prefixSum(widths: number[]): number[] {
+  const out = new Array<number>(widths.length + 1)
+  out[0] = 0
+  for (let i = 0; i < widths.length; i++) out[i + 1] = out[i] + widths[i]
+  return out
 }

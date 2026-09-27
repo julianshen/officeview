@@ -40,9 +40,9 @@ describe('docx layout', () => {
     const allLines = pages.flatMap((p) => p.lines)
     // 100 chars * 0.6 * 11pt * 4/3 = ~880px wide > content width (~9360twips=599px) — must wrap
     expect(allLines.length).toBeGreaterThan(1)
-    // every line stays inside content width
+    // every line stays inside the content region: left margin 96px + 624px content width
     for (const line of allLines) {
-      expect(line.xPx + line.widthPx).toBeLessThanOrEqual(620)
+      expect(line.xPx + line.widthPx).toBeLessThanOrEqual(720)
     }
   })
 

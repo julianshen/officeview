@@ -35,12 +35,14 @@ export const POINTS_PER_INCH = 72
 export const EMU_PER_INCH = 914400
 export const TWIPS_PER_INCH = 1440
 export const TWIPS_PER_POINT = 20
+/** CSS px per inch — the canonical render space for DOCX/PPTX layout. */
+export const CSS_PX_PER_INCH = 96
 
-export function emuToPx(emu: number, dpi = POINTS_PER_INCH): number {
+export function emuToPx(emu: number, dpi = CSS_PX_PER_INCH): number {
   return (emu / EMU_PER_INCH) * dpi
 }
 
-export function twipsToPx(twips: number, dpi = POINTS_PER_INCH): number {
+export function twipsToPx(twips: number, dpi = CSS_PX_PER_INCH): number {
   return (twips / TWIPS_PER_INCH) * dpi
 }
 

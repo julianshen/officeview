@@ -3,7 +3,7 @@
  */
 import type { OfficePackage } from '../core/zip'
 import { attrs, elementChildren, getChildren, textOf, type XmlNode } from '../core/xml'
-import type { DocxDocument, DocxParagraph, DocxSection, DocxTextRun, ParagraphAlign } from './types'
+import type { DocxBlock, DocxDocument, DocxParagraph, DocxSection, DocxTable, DocxTableCell, DocxTableCellMargins, DocxTableBorders, DocxTableRow, DocxTextRun, ParagraphAlign } from './types'
 
 function alignOf(pPr: XmlNode | undefined): ParagraphAlign {
   const jc = pPr ? getChildren(pPr, 'jc')[0] : undefined
@@ -137,11 +137,18 @@ export async function parseDocx(pkg: OfficePackage): Promise<DocxDocument> {
     margins: { topTwips: 1440, rightTwips: 1440, bottomTwips: 1440, leftTwips: 1440, headerTwips: 720, footerTwips: 720, gutterTwips: 0 },
     pageSize: { widthTwips: 12240, heightTwips: 15840, orientation: 'portrait' },
     paragraphs: [],
+    blocks: [],
   }
   const push = () => { if (current.paragraphs.length > 0 || sections.length === 0) sections.push(current) }
   for (const [name, node] of elementChildren(body as XmlNode)) {
     if (name === 'p') {
-      current.paragraphs.push(parseParagraph(node))
+      const para = parseParagraph(node)
+      current.paragraphs.push(para)
+      current.blocks.push({ kind: 'p', paragraph: para })
+    } else if (name === 'tbl' && node) {
+      const table = parseTable(node)
+      const block: DocxBlock = { kind: 'table', table }
+      current.blocks.push(block)
     } else if (name === 'sectPr') {
       // section properties at body level — finalize current section
       const pgMar = getChildren(node, 'pgMar')[0]
@@ -170,6 +177,7 @@ export async function parseDocx(pkg: OfficePackage): Promise<DocxDocument> {
         margins: current.margins,
         pageSize: current.pageSize,
         paragraphs: [],
+        blocks: [],
       }
     }
   }
@@ -181,3 +189,104 @@ export async function parseDocx(pkg: OfficePackage): Promise<DocxDocument> {
     styleDefaults,
   }
 }
+
+type TableCellBorder = DocxTableBorders['top']
+
+function parseSideBorder(node: XmlNode | undefined): TableCellBorder {
+  if (!node) return undefined
+  const a = attrs(node)
+  if (a.val === 'nil' || a.val === 'none') return undefined
+  return { style: a.val as string, color: a.color as string | undefined }
+}
+
+function parseBorders(parent: XmlNode): DocxTableBorders {
+  const el = getChildren(parent, 'tblBorders')[0] ?? getChildren(parent, 'tcBorders')[0]
+  if (!el) return {}
+  return {
+    top: parseSideBorder(getChildren(el, 'top')[0]),
+    bottom: parseSideBorder(getChildren(el, 'bottom')[0]),
+    left: parseSideBorder(getChildren(el, 'left')[0]),
+    right: parseSideBorder(getChildren(el, 'right')[0]),
+    insideH: parseSideBorder(getChildren(el, 'insideH')[0]),
+    insideV: parseSideBorder(getChildren(el, 'insideV')[0]),
+  }
+}
+
+const DEFAULT_CELL_MARGINS: DocxTableCellMargins = { topTwips: 0, rightTwips: 108, bottomTwips: 0, leftTwips: 108 }
+
+function parseCellMargins(tblPr: XmlNode): DocxTableCellMargins {
+  const mar = getChildren(tblPr, 'tblCellMar')[0]
+  if (!mar) return DEFAULT_CELL_MARGINS
+  const side = (n: string, dflt: number): number => {
+    const node = getChildren(mar, n)[0]
+    return node ? (twips(attrs(node).w) ?? dflt) : dflt
+  }
+  return {
+    topTwips: side('top', 0),
+    rightTwips: side('right', 108),
+    bottomTwips: side('bottom', 0),
+    leftTwips: side('left', 108),
+  }
+}
+
+function parseTableCell(tc: XmlNode): DocxTableCell {
+  const tcPr = getChildren(tc, 'tcPr')[0]
+  const cell: DocxTableCell = { paragraphs: [], gridSpan: 1 }
+  if (tcPr) {
+    const a = attrs(tcPr['gridSpan'] as XmlNode | undefined)
+    if (a.val !== undefined) cell.gridSpan = parseInt(a.val as string, 10) || 1
+    const vMerge = attrs(tcPr['vMerge'] as XmlNode | undefined).val as string | undefined
+    if (vMerge === 'restart') cell.vMerge = 'restart'
+    else if (vMerge !== undefined || tcPr['vMerge'] !== undefined) cell.vMerge = 'continue'
+    const shd = getChildren(tcPr, 'shd')[0]
+    const shdAttrs = attrs(shd)
+    if (shd && shdAttrs.val !== 'nil') cell.fill = shdAttrs.fill as string | undefined
+    cell.borders = parseBorders(tcPr)
+  }
+  for (const [name, node] of elementChildren(tc)) {
+    if (name === 'p') cell.paragraphs.push(parseParagraph(node))
+  }
+  return cell
+}
+
+export function parseTable(tbl: XmlNode): DocxTable {
+  const tblPr = getChildren(tbl, 'tblPr')[0]
+  const table: DocxTable = {
+    gridColsTwips: [],
+    rows: [],
+    cellMargins: tblPr ? parseCellMargins(tblPr) : DEFAULT_CELL_MARGINS,
+    borders: tblPr ? parseBorders(tblPr) : undefined,
+  }
+  if (tblPr) {
+    const shd = getChildren(tblPr, 'shd')[0]
+    const shdAttrs = attrs(shd)
+    if (shd && shdAttrs.val !== 'nil') table.fill = shdAttrs.fill as string | undefined
+  }
+  const grid = getChildren(tbl, 'tblGrid')[0]
+  if (grid) {
+    for (const col of getChildren(grid, 'gridCol')) {
+      table.gridColsTwips.push(twips(attrs(col).w) ?? 0)
+    }
+  }
+  for (const [name, node] of elementChildren(tbl)) {
+    if (name !== 'tr' || !node) continue
+    const trPr = getChildren(node, 'trPr')[0]
+    const row: DocxTableRow = { cells: [] }
+    if (trPr) {
+      const trHeight = getChildren(trPr, 'trHeight')[0]
+      if (trHeight) {
+        const a = attrs(trHeight)
+        row.heightTwips = twips(a.val)
+        const rule = a.hRule as string | undefined
+        if (rule === 'exact' || rule === 'atLeast' || rule === 'auto') row.heightRule = rule
+      }
+    }
+    for (const child of elementChildren(node)) {
+      if (child[0] === 'tc' && child[1]) row.cells.push(parseTableCell(child[1]))
+    }
+    table.rows.push(row)
+  }
+  return table
+}
+
+export type { TableCellBorder }

@@ -29,8 +29,30 @@ export interface DocxParaSpec {
   runs: DocxTextSpec[]
 }
 
-/** Build a minimal docx buffer with the given paragraphs. */
-export async function buildDocx(paras: DocxParaSpec[]): Promise<Uint8Array> {
+export interface DocxCellSpec {
+  paragraphs?: DocxParaSpec[]
+  gridSpan?: number
+  vMerge?: 'restart' | 'continue'
+  fill?: string
+  borders?: string // xml fragment for tcBorders
+}
+
+export interface DocxRowSpec {
+  cells: DocxCellSpec[]
+  heightTwips?: string
+  heightRule?: string
+}
+
+export interface DocxTableSpec {
+  gridCols: string[]
+  rows: DocxRowSpec[]
+  fill?: string
+  borders?: string // xml fragment for tblBorders
+  cellMargins?: string // xml fragment for tblCellMar
+}
+
+/** Build a minimal docx buffer with the given paragraphs and tables (tables appended after paragraphs). */
+export async function buildDocx(paras: DocxParaSpec[], tables: DocxTableSpec[] = []): Promise<Uint8Array> {
   const zip = new JSZip()
   zip.file('[Content_Types].xml', CT_TYPES)
   zip.file('_rels/.rels', ROOT_RELS)
@@ -43,11 +65,28 @@ export async function buildDocx(paras: DocxParaSpec[]): Promise<Uint8Array> {
     const ppr = p.align ? `<w:pPr><w:jc w:val="${p.align}"/></w:pPr>` : ''
     return `<w:p>${ppr}${p.runs.map(runXml).join('')}</w:p>`
   }
+  const cellXml = (c: DocxCellSpec) => {
+    const tcpr = [`<w:tcPr>`]
+    if (c.gridSpan) tcpr.push(`<w:gridSpan w:val="${c.gridSpan}"/>`)
+    if (c.vMerge === 'restart') tcpr.push(`<w:vMerge w:val="restart"/>`)
+    else if (c.vMerge === 'continue') tcpr.push(`<w:vMerge/>`)
+    if (c.fill) tcpr.push(`<w:shd w:val="clear" w:fill="${c.fill}"/>`)
+    if (c.borders) tcpr.push(`<w:tcBorders>${c.borders}</w:tcBorders>`)
+    tcpr.push(`</w:tcPr>`)
+    const ps = c.paragraphs ? c.paragraphs.map(paraXml).join('') : '<w:p/>'
+    return `<w:tc>${tcpr.join('')}${ps}</w:tc>`
+  }
+  const tableXml = (t: DocxTableSpec) =>
+    `<w:tbl><w:tblPr>${t.fill ? `<w:shd w:val="clear" w:fill="${t.fill}"/>` : ''}${t.borders ? `<w:tblBorders>${t.borders}</w:tblBorders>` : ''}${t.cellMargins ? `<w:tblCellMar>${t.cellMargins}</w:tblCellMar>` : ''}</w:tblPr>` +
+    `<w:tblGrid>${t.gridCols.map((w) => `<w:gridCol w:w="${w}"/>`).join('')}</w:tblGrid>` +
+    t.rows.map((r) => `<w:tr>${r.heightTwips ? `<w:trPr><w:trHeight w:val="${r.heightTwips}"${r.heightRule ? ` w:hRule="${r.heightRule}"` : ''}/></w:trPr>` : ''}${r.cells.map(cellXml).join('')}</w:tr>`).join('') +
+    `</w:tbl>`
   const document =
     `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
   <w:body>
     ${paras.map(paraXml).join('\n    ')}
+    ${tables.map(tableXml).join('\n    ')}
     <w:sectPr>
       <w:pgSz w:w="12240" w:h="15840"/>
       <w:pgMar w:top="1440" w:right="1440" w:bottom="1440" w:left="1440" w:header="720" w:footer="720" w:gutter="0"/>
