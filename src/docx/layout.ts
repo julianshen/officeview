@@ -45,6 +45,17 @@ export interface PageLayout {
   tables: TableBox[]
   /** Inline images in flow order. */
   images: ImageBox[]
+  header?: HFBlock
+  footer?: HFBlock
+}
+
+/** Page header or footer content, positioned in page-relative px. */
+export interface HFBlock {
+  paragraphs: DocxParagraph[]
+  yPx: number
+  xPx: number
+  widthPx: number
+  defaults: { fontFamily: string; fontSizePt: number }
 }
 
 /** Image placed on a page. Coordinates are page-relative px. */
@@ -302,6 +313,7 @@ export function layoutDocx(document: DocxDocument, measure: MeasureFn): PageLayo
   const docImages = collectDocImages(document)
   const imageIndex = new Map(docImages.map((img, i) => [img, i]))
   for (const section of document.sections) {
+    const pagesBefore = pages.length
     const widthPx = twipsToPx(section.pageSize.widthTwips)
     const heightPx = twipsToPx(section.pageSize.heightTwips)
     const m = sectionMargins(section)
@@ -388,6 +400,30 @@ export function layoutDocx(document: DocxDocument, measure: MeasureFn): PageLayo
       }
     }
     if (page.lines.length > 0 || page.tables.length > 0 || page.images.length > 0 || pages.length === 0) pages.push(page)
+
+    // attach this section's header/footer to every page it produced
+    if (section.header || section.footer) {
+      const hf: Pick<PageLayout, 'header' | 'footer'> = {}
+      if (section.header) {
+        hf.header = {
+          paragraphs: section.header,
+          yPx: twipsToPx(section.margins.headerTwips),
+          xPx: m.left,
+          widthPx: contentWidth,
+          defaults,
+        }
+      }
+      if (section.footer) {
+        hf.footer = {
+          paragraphs: section.footer,
+          yPx: heightPx - twipsToPx(section.margins.footerTwips),
+          xPx: m.left,
+          widthPx: contentWidth,
+          defaults,
+        }
+      }
+      for (let i = pagesBefore; i < pages.length; i++) Object.assign(pages[i], hf)
+    }
   }
   return pages
 }
@@ -401,20 +437,32 @@ const HIGHLIGHT_CSS: Record<string, string> = {
 }
 
 /** Paint laid pages onto a 2D context already scaled so 1 unit = 1 px. */
+export interface RenderPagesOptions {
+  /** First page's number for PAGE field substitution (default 1). */
+  pageNumberStart?: number
+  /** Total for NUMPAGES substitution (default pages.length). */
+  totalPages?: number
+}
+
 export function renderPages(
   pages: PageLayout[],
   ctx: CanvasRenderingContext2D,
   images?: Array<CanvasImageSource | undefined>,
-  _defaults?: { fontFamily: string },
+  options?: RenderPagesOptions,
 ): void {
   ctx.save()
   ctx.textBaseline = 'alphabetic'
   ctx.fillStyle = '#000000'
   let lastFont = ''
-  for (const page of pages) {
+  const measure = createMeasurer(ctx)
+  const firstNumber = options?.pageNumberStart ?? 1
+  const totalPages = options?.totalPages ?? pages.length
+  pages.forEach((page, pageIndex) => {
     paintTables(page.tables, ctx)
     paintImages(page.images, ctx, images)
-    for (const line of page.lines) {
+    const hfLines = layoutHeaderFooter(page, firstNumber + pageIndex, totalPages, measure)
+    const allLines = hfLines.length > 0 ? [...hfLines, ...page.lines] : page.lines
+    for (const line of allLines) {
       let extraSpacePerGap = 0
       if (line.align === 'justify' && !line.isParagraphEnd && line.segs.length > 1) {
         const gaps = countGaps(line.segs)
@@ -452,8 +500,51 @@ export function renderPages(
         x += seg.widthPx + (seg.text === ' ' ? extraSpacePerGap : 0)
       }
     }
-  }
+  })
   ctx.restore()
+}
+
+/** Replace field runs (PAGE, NUMPAGES) with this page's values. */
+function substituteFields(paragraphs: DocxParagraph[], pageNumber: number, totalPages: number): DocxParagraph[] {
+  let needsSub = false
+  for (const p of paragraphs) {
+    for (const r of p.runs) if (r.field) { needsSub = true; break }
+    if (needsSub) break
+  }
+  if (!needsSub) return paragraphs
+  return paragraphs.map((p) => ({
+    ...p,
+    runs: p.runs.map((r) => {
+      if (!r.field) return r
+      const value = r.field === 'PAGE' ? String(pageNumber) : r.field === 'NUMPAGES' ? String(totalPages) : ''
+      return { ...r, text: value }
+    }),
+  }))
+}
+
+/** Lay out a page's header and footer into positioned lines. */
+function layoutHeaderFooter(
+  page: PageLayout,
+  pageNumber: number,
+  totalPages: number,
+  measure: MeasureFn,
+): LineBox[] {
+  const out: LineBox[] = []
+  for (const block of [page.header, page.footer]) {
+    if (!block) continue
+    let y = block.yPx
+    for (const para of substituteFields(block.paragraphs, pageNumber, totalPages)) {
+      const laid = layoutParagraph(para, measure, {
+        contentX: block.xPx,
+        contentWidth: block.widthPx,
+        startY: y,
+        defaults: block.defaults,
+      })
+      out.push(...laid.lines)
+      y = laid.endY + twipsToPx(para.spacingAfterTwips ?? 0)
+    }
+  }
+  return out
 }
 
 function countGaps(segs: Segment[]): number {

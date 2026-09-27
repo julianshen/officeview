@@ -33,9 +33,18 @@ function boolAttr(v: string | undefined): boolean {
   return v === '1' || v === 'true'
 }
 
-function parseRun(r: XmlNode, inherited?: Partial<DocxTextRun>): DocxTextRun {
+interface FieldAwareRun extends DocxTextRun {
+  _fldChar?: string
+  _instr?: string
+}
+
+function parseRun(r: XmlNode, inherited?: Partial<DocxTextRun>): FieldAwareRun {
   const rPr = getChildren(r, 'rPr')[0]
-  let run: DocxTextRun = { text: '', ...inherited }
+  let run: FieldAwareRun = { text: '', ...inherited }
+  const fld = getChildren(r, 'fldChar')[0]
+  if (fld) run._fldChar = attrs(fld).fldCharType as string
+  const instr = getChildren(r, 'instrText')[0]
+  if (instr) run._instr = textOf(instr).trim()
   if (rPr) {
     const rFonts = rPr['rFonts'] ? getChildren(rPr, 'rFonts')[0] : undefined
     const fam = attrs(rFonts).ascii as string | undefined
@@ -114,7 +123,59 @@ export function parseParagraph(p: XmlNode, images?: DocxImage[]): DocxParagraph 
     }
     // other children (bookmarks, proofErr, etc.) ignored
   }
+  resolveFields(paragraph)
   return paragraph
+}
+
+/**
+ * Collapse w:fldChar/w:instrText field sequences into runs tagged with
+ * `field` (e.g. PAGE, NUMPAGES), keeping the cached result text.
+ *   begin -> instrText " PAGE " -> separate -> "1" -> end
+ */
+function resolveFields(paragraph: DocxParagraph): void {
+  const runs = paragraph.runs as FieldAwareRun[]
+  let pendingInstr: string | null = null
+  let inField = false
+  let inResult = false
+  const out: DocxTextRun[] = []
+  for (const run of runs) {
+    if (run._fldChar === 'begin') {
+      inField = true
+      inResult = false
+      pendingInstr = null
+      continue
+    }
+    if (inField && run._instr !== undefined) {
+      pendingInstr = run._instr.toUpperCase().split(/\s+/)[0]
+      continue
+    }
+    if (run._fldChar === 'separate') {
+      inResult = true
+      continue
+    }
+    if (run._fldChar === 'end') {
+      inField = false
+      inResult = false
+      pendingInstr = null
+      continue
+    }
+    if (inField) {
+      if (inResult && pendingInstr) {
+        // cached field result: mark the run so paint can substitute the value
+        const { _fldChar, _instr, ...rest } = run
+        void _fldChar
+        void _instr
+        out.push({ ...rest, field: pendingInstr })
+        pendingInstr = null
+      }
+      continue
+    }
+    const { _fldChar, _instr, ...rest } = run
+    void _fldChar
+    void _instr
+    out.push(rest)
+  }
+  paragraph.runs = out
 }
 
 /** w:drawing -> wp:inline|wp:anchor -> a:graphic -> pic:pic -> a:blip r:embed */
@@ -139,6 +200,48 @@ function parseDrawing(drawing: XmlNode, images: DocxImage[] | undefined): DocxIm
 }
 
 /** Resolve word/_rels/document.xml.rels into embedded image bytes keyed by rId. */
+/** rId -> part path for word/document.xml.rels. */
+async function loadDocRels(pkg: OfficePackage): Promise<Map<string, { type: string; target: string }>> {
+  const out = new Map<string, { type: string; target: string }>()
+  const rels = await pkg.xml('word/_rels/document.xml.rels')
+  if (!rels) return out
+  for (const rel of getChildren(rels, 'Relationship')) {
+    const a = attrs(rel)
+    if (a.Id && a.Target) {
+      out.set(a.Id, { type: (a.Type as string) ?? '', target: a.Target })
+    }
+  }
+  return out
+}
+
+/** Resolve a sectPr's header/footer references to paragraph lists. */
+async function loadHeaderFooter(
+  sectPr: XmlNode,
+  rels: Map<string, { type: string; target: string }>,
+  pkg: OfficePackage,
+): Promise<{ header?: DocxParagraph[]; footer?: DocxParagraph[] }> {
+  const out: { header?: DocxParagraph[]; footer?: DocxParagraph[] } = {}
+  for (const [kind, tag] of [['header', 'headerReference'], ['footer', 'footerReference']] as const) {
+    const refs = getChildren(sectPr, tag)
+    if (refs.length === 0) continue
+    // prefer the default type, else the first reference
+    const chosen = refs.find((r) => attrs(r).type === 'default') ?? refs[0]
+    const rid = (attrs(chosen)['r:id'] ?? attrs(chosen).id) as string | undefined
+    if (!rid) continue
+    const rel = rels.get(rid)
+    if (!rel) continue
+    const path = rel.target.startsWith('/') ? rel.target.slice(1) : `word/${rel.target.replace(/^\.\.\//, '')}`
+    const part = await pkg.xml(path)
+    if (!part) continue
+    const paragraphs: DocxParagraph[] = []
+    for (const [name, node] of elementChildren(part)) {
+      if (name === 'p') paragraphs.push(parseParagraph(node))
+    }
+    if (paragraphs.length > 0) out[kind] = paragraphs
+  }
+  return out
+}
+
 async function loadDocImages(pkg: OfficePackage): Promise<DocxImage[]> {
   const rels = await pkg.xml('word/_rels/document.xml.rels')
   if (!rels) return []
@@ -181,6 +284,7 @@ export async function parseDocx(pkg: OfficePackage): Promise<DocxDocument> {
   }
   const body = doc?.['body'] as XmlNode | undefined
   const docImages = (await loadDocImages(pkg)) as DocxImage[]
+  const docRels = await loadDocRels(pkg)
   const sections: DocxSection[] = []
   let current: DocxSection = {
     margins: { topTwips: 1440, rightTwips: 1440, bottomTwips: 1440, leftTwips: 1440, headerTwips: 720, footerTwips: 720, gutterTwips: 0 },
@@ -200,6 +304,9 @@ export async function parseDocx(pkg: OfficePackage): Promise<DocxDocument> {
       current.blocks.push(block)
     } else if (name === 'sectPr') {
       // section properties at body level — finalize current section
+      const hf = await loadHeaderFooter(node, docRels, pkg)
+      if (hf.header) current.header = hf.header
+      if (hf.footer) current.footer = hf.footer
       const pgMar = getChildren(node, 'pgMar')[0]
       const pgSz = getChildren(node, 'pgSz')[0]
       if (pgMar) {
@@ -221,12 +328,17 @@ export async function parseDocx(pkg: OfficePackage): Promise<DocxDocument> {
         const orient = (a.orient as 'landscape' | 'portrait') ?? 'portrait'
         current.pageSize = { widthTwips: w, heightTwips: h, orientation: orient }
       }
+      const carried = {
+        header: current.header,
+        footer: current.footer,
+      }
       push()
       current = {
         margins: current.margins,
         pageSize: current.pageSize,
         paragraphs: [],
         blocks: [],
+        ...carried,
       }
     }
   }

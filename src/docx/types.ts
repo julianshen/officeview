@@ -15,6 +15,8 @@ export interface DocxTextRun {
   highlight?: string
   tabWidths?: number[]
   breakBefore?: boolean
+  /** Field instruction (e.g. 'PAGE', 'NUMPAGES') resolved at paint time. */
+  field?: string
 }
 
 export type ParagraphAlign = 'left' | 'center' | 'right' | 'justify'
@@ -59,6 +61,10 @@ export interface DocxSection {
   paragraphs: DocxParagraph[]
   /** All flow content in document order (paragraphs and tables). */
   blocks: DocxBlock[]
+  /** Header paragraphs (w:headerReference), painted on every page. */
+  header?: DocxParagraph[]
+  /** Footer paragraphs (w:footerReference), painted on every page. */
+  footer?: DocxParagraph[]
 }
 
 export interface DocxDocument {

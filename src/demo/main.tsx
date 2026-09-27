@@ -110,8 +110,34 @@ async function sampleDocxLongTable(): Promise<Uint8Array> {
   )
 }
 
+async function sampleDocxHeaderFooter(): Promise<Uint8Array> {
+  return buildDocx(
+    [
+      { align: 'center', runs: [{ text: 'Quarterly Summary', bold: true, size: 40 }] },
+      p('Every page below carries the same header and a footer with live page numbers (PAGE / NUMPAGES fields), substituted at paint time.'),
+      ...Array.from({ length: 46 }, (_, i) => p(`Section ${Math.floor(i / 12) + 1} detail line ${i + 1}.`)),
+    ],
+    [],
+    {
+      header: [{ align: 'right', runs: [{ text: 'ACME Confidential', italic: true, color: '808080', size: 18 }] }],
+      footer: [
+        {
+          align: 'center',
+          runs: [
+            { text: 'Page ' },
+            { text: '1', field: 'PAGE' },
+            { text: ' of ' },
+            { text: '1', field: 'NUMPAGES' },
+          ],
+        },
+      ],
+    },
+  )
+}
+
 const SAMPLES: Sample[] = [
   { label: 'Word (.docx)', emoji: '📄', load: sampleDocx },
+  { label: 'Word header/footer', emoji: '📄', load: sampleDocxHeaderFooter },
   { label: 'Word long table', emoji: '🧾', load: sampleDocxLongTable },
   { label: 'Excel (.xlsx)', emoji: '📊', load: sampleXlsx },
   { label: 'PowerPoint (.pptx)', emoji: '📽️', load: samplePptx },

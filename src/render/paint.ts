@@ -52,12 +52,15 @@ export function getPaintables(doc: DocxDocument | XlsxDocument | PptxDocument): 
       const decoded = await Promise.all(
         collectDocImages(doc).map((img) => decodeImage(img.data, img.mime).catch(() => undefined)),
       )
-      return pages.map((page) => ({
+      // Each page paints on its own canvas, so PAGE/NUMPAGES fields must be
+      // resolved against the whole document, not the single-page array.
+      const total = pages.length
+      return pages.map((page, index) => ({
         spec: { widthPx: Math.ceil(page.widthPx), heightPx: Math.ceil(page.heightPx) },
         paint: (ctx) => {
           ctx.fillStyle = '#ffffff'
           ctx.fillRect(0, 0, page.widthPx, page.heightPx)
-          renderPages([page], ctx, decoded)
+          renderPages([page], ctx, decoded, { pageNumberStart: index + 1, totalPages: total })
         },
       }))
     })

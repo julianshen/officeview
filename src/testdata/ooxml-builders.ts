@@ -8,6 +8,8 @@ export const CT_TYPES =
   <Default Extension="xml" ContentType="application/xml"/>
   <Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/>
   <Override PartName="/word/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.styles+xml"/>
+  <Override PartName="/word/header1.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.header+xml"/>
+  <Override PartName="/word/footer1.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.footer+xml"/>
 </Types>`
 
 export const ROOT_RELS =
@@ -22,6 +24,8 @@ export interface DocxTextSpec {
   italic?: boolean
   size?: number // half-points
   color?: string
+  /** Emit as a field (e.g. 'PAGE'); `text` becomes the cached result. */
+  field?: 'PAGE' | 'NUMPAGES' | string
 }
 
 export interface DocxParaSpec {
@@ -56,19 +60,40 @@ export interface DocxTableSpec {
 }
 
 /** Build a minimal docx buffer with the given paragraphs and tables (tables appended after paragraphs). */
-export async function buildDocx(paras: DocxParaSpec[], tables: DocxTableSpec[] = []): Promise<Uint8Array> {
+export interface DocxHeaderFooterSpec {
+  header?: DocxParaSpec[]
+  footer?: DocxParaSpec[]
+  /** w:header/w:footer margin distance from the page edge, in twips. */
+  marginTwips?: number
+}
+
+export async function buildDocx(
+  paras: DocxParaSpec[],
+  tables: DocxTableSpec[] = [],
+  hf: DocxHeaderFooterSpec = {},
+): Promise<Uint8Array> {
   const zip = new JSZip()
   zip.file('[Content_Types].xml', CT_TYPES)
   zip.file('_rels/.rels', ROOT_RELS)
   const runXml = (r: DocxTextSpec) => {
     const rpr = `<w:rPr>${r.bold ? '<w:b/>' : ''}${r.italic ? '<w:i/>' : ''}${r.size ? `<w:sz w:val="${r.size}"/>` : ''}${r.color ? `<w:color w:val="${r.color}"/>` : ''}</w:rPr>`
     const text = r.text.replace(/&/g, '&amp;').replace(/</g, '&lt;')
+    if (r.field) {
+      return `<w:r>${rpr}<w:fldChar w:fldCharType="begin"/></w:r>` +
+        `<w:r>${rpr}<w:instrText xml:space="preserve"> ${r.field} </w:instrText></w:r>` +
+        `<w:r>${rpr}<w:fldChar w:fldCharType="separate"/></w:r>` +
+        `<w:r>${rpr}<w:t>${text}</w:t></w:r>` +
+        `<w:r>${rpr}<w:fldChar w:fldCharType="end"/></w:r>`
+    }
     return `<w:r>${rpr}<w:t xml:space="preserve">${text}</w:t></w:r>`
   }
   const paraXml = (p: DocxParaSpec) => {
     const ppr = p.align ? `<w:pPr><w:jc w:val="${p.align}"/></w:pPr>` : ''
     return `<w:p>${ppr}${p.runs.map(runXml).join('')}</w:p>`
   }
+  const hfPart = (tag: 'hdr' | 'ftr', paragraphs: DocxParaSpec[]): string =>
+    `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w:${tag} xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">${paragraphs.map(paraXml).join('')}</w:${tag}>`
   const cellXml = (c: DocxCellSpec) => {
     const tcpr = [`<w:tcPr>`]
     if (c.gridSpan) tcpr.push(`<w:gridSpan w:val="${c.gridSpan}"/>`)
@@ -91,9 +116,9 @@ export async function buildDocx(paras: DocxParaSpec[], tables: DocxTableSpec[] =
       return `<w:tr>${trpr.length ? `<w:trPr>${trpr.join('')}</w:trPr>` : ''}${r.cells.map(cellXml).join('')}</w:tr>`
     }).join('') +
     `</w:tbl>`
-  const document =
+  let document =
     `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
   <w:body>
     ${paras.map(paraXml).join('\n    ')}
     ${tables.map(tableXml).join('\n    ')}
@@ -103,6 +128,23 @@ export async function buildDocx(paras: DocxParaSpec[], tables: DocxTableSpec[] =
     </w:sectPr>
   </w:body>
 </w:document>`
+  // header/footer parts + relationships
+  let sectRefs = ''
+  if (hf.header) {
+    zip.file('word/header1.xml', hfPart('hdr', hf.header))
+    sectRefs += '<w:headerReference w:type="default" r:id="rIdHdr"/>'
+  }
+  if (hf.footer) {
+    zip.file('word/footer1.xml', hfPart('ftr', hf.footer))
+    sectRefs += '<w:footerReference w:type="default" r:id="rIdFtr"/>'
+  }
+  zip.file('word/_rels/document.xml.rels',
+    `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  ${hf.header ? '<Relationship Id="rIdHdr" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/header" Target="header1.xml"/>' : ''}
+  ${hf.footer ? '<Relationship Id="rIdFtr" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/footer" Target="footer1.xml"/>' : ''}
+</Relationships>`)
+  if (sectRefs) document = document.replace('<w:sectPr>', `<w:sectPr>${sectRefs}`)
   zip.file('word/document.xml', document)
   zip.file('word/styles.xml',
     `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
