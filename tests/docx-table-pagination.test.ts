@@ -153,3 +153,75 @@ describe('docx table cell vertical alignment', () => {
     expect(bottomLine.yPx + bottomLine.heightPx).toBeLessThanOrEqual(table0.yPx + row3.yPx + row3.heightPx + 0.5)
   })
 })
+
+describe('docx vertical merge regions', () => {
+  const fillSample = (ctx: { getImageData: (x: number, y: number, w: number, h: number) => { data: Uint8ClampedArray } }, x: number, y: number): number[] => {
+    const d = ctx.getImageData(Math.round(x), Math.round(y), 1, 1).data
+    return [d[0], d[1], d[2]]
+  }
+
+  test('a merge spanning rows is one box covering every row', async () => {
+    const table: DocxTableSpec = {
+      gridCols: ['4320', '4320'],
+      borders: BORDERS,
+      rows: [
+        { cells: [{ paragraphs: [p('merged')], vMerge: 'restart', fill: 'D9D9D9' }, { paragraphs: [p('r1')] }] },
+        { cells: [{ vMerge: 'continue' }, { paragraphs: [p('r2')] }] },
+        { cells: [{ vMerge: 'continue' }, { paragraphs: [p('r3')] }] },
+        { cells: [{ vMerge: 'continue' }, { paragraphs: [p('r4')] }] },
+      ],
+    }
+    const pages = await layoutTableSpec(table)
+    const box = pages[0].tables[0]
+    const colA = box.rows.flatMap((r) => r.cells.filter((c) => c.xPx === 0))
+    expect(colA).toHaveLength(1) // exactly one box for the whole region
+    const totalHeight = box.rows.reduce((a, r) => a + r.heightPx, 0)
+    expect(colA[0].heightPx).toBeCloseTo(totalHeight, 1)
+    expect(colA[0].fill).toBe('D9D9D9')
+
+    // the fill is painted continuously down the merged cell
+    const { createCanvas } = await import('canvas')
+    const page = pages[0]
+    const canvas = createCanvas(Math.ceil(page.widthPx), Math.ceil(page.heightPx))
+    const ctx = canvas.getContext('2d')!
+    ctx.fillStyle = '#fff'
+    ctx.fillRect(0, 0, canvas.width, canvas.height)
+    const { renderPages } = await import('../src/docx/layout')
+    renderPages(pages, ctx as unknown as CanvasRenderingContext2D)
+    for (const row of box.rows) {
+      const px = fillSample(ctx, box.xPx + 260, box.yPx + row.yPx + row.heightPx / 2)
+      expect(px).toEqual([217, 217, 217]) // D9D9D9
+    }
+  })
+
+  test('a merge crossing a page break continues on the next page', async () => {
+    // column A is a single merge spanning every row, so it must be cut by the
+    // page boundary: page 1 reaches the content bottom, page 2 continues
+    const rows = Array.from({ length: 70 }, (_, i) => ({
+      cells: [
+        i === 0 ? { paragraphs: [p('group')], vMerge: 'restart' as const, fill: 'F2F2F2' } : { vMerge: 'continue' as const },
+        { paragraphs: [p(`row ${i}`)] },
+      ],
+    }))
+    const table: DocxTableSpec = { gridCols: ['2880', '5760'], borders: BORDERS, rows }
+    const pages = await layoutTableSpec(table)
+    expect(pages.length).toBeGreaterThan(1)
+
+    const first = pages[0].tables[0]
+    const last = pages[pages.length - 1].tables[0]
+    // page 1: the anchor box reaches the bottom of its last row
+    const anchor = first.rows.flatMap((r) => r.cells.filter((c) => c.xPx === 0))
+    expect(anchor).toHaveLength(1)
+    const lastRowBottom = first.rows[first.rows.length - 1].yPx + first.rows[first.rows.length - 1].heightPx
+    expect(anchor[0].yPx + anchor[0].heightPx).toBeCloseTo(lastRowBottom, 1)
+    // page 2: a continuation box carries the same fill, with no text
+    const cont = last.rows.flatMap((r) => r.cells.filter((c) => c.xPx === 0))
+    expect(cont.length).toBeGreaterThan(0)
+    expect(cont[0].fill).toBe('F2F2F2')
+    const contTexts = pages[pages.length - 1].lines
+      .filter((l) => l.xPx < last.xPx + 10)
+      .flatMap((l) => l.segs.map((s) => s.text))
+      .join('')
+    expect(contTexts).not.toContain('group')
+  })
+})

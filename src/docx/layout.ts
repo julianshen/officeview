@@ -3,7 +3,7 @@
  * Text measurement uses a real Canvas2D measureText (via a provided measure
  * function) so widths match what we paint.
  */
-import type { DocxDocument, DocxImage, DocxParagraph, DocxSection, DocxTable, DocxTableRow, DocxTextRun } from './types'
+import type { DocxDocument, DocxImage, DocxParagraph, DocxSection, DocxTable, DocxTableCell, DocxTableRow, DocxTextRun } from './types'
 import { emuToPx } from '../core/geometry'
 import { twipsToPx } from '../core/geometry'
 import { resolveColor } from '../core/color'
@@ -617,6 +617,73 @@ function paintTables(tables: TableBox[], ctx: CanvasRenderingContext2D): void {
 
 interface CellBorderCss { style?: string; color?: string }
 
+/** A vertical merge: one cell spanning rows startRow..endRow in a column. */
+interface MergeRegion {
+  startRow: number
+  endRow: number
+  startCol: number
+  colSpan: number
+  fill?: string
+  borders?: { left?: string; right?: string; top?: string; bottom?: string }
+}
+
+interface CellPosition {
+  cell: DocxTableCell
+  col: number
+  span: number
+}
+
+/** Column index of every cell, mirroring the layout loop's grid accounting. */
+function rowCellPositions(table: DocxTable): CellPosition[][] {
+  return table.rows.map((row) => {
+    const out: CellPosition[] = []
+    let col = 0
+    for (const cell of row.cells) {
+      out.push({ cell, col, span: Math.max(1, cell.gridSpan) })
+      col += Math.max(1, cell.gridSpan)
+    }
+    return out
+  })
+}
+
+/**
+ * Resolve vertical merges into regions keyed by `${row}:${col}`. A
+ * `vMerge` restart opens a region; following `continue` cells close it.
+ */
+function computeMergeRegions(table: DocxTable, positions: CellPosition[][]): Map<string, MergeRegion> {
+  const regions = new Map<string, MergeRegion>()
+  const key = (r: number, c: number) => `${r}:${c}`
+  for (let r = 0; r < table.rows.length; r++) {
+    for (const { cell, col, span } of positions[r]) {
+      if (cell.vMerge !== 'restart') continue
+      const tb = table.borders
+      const pick = (side: 'left' | 'right' | 'top' | 'bottom'): string | undefined => {
+        const cb = cell.borders
+        if (cb && side in cb) return borderCss(cb[side])
+        if (tb) return borderCss(tb[side] ?? (side === 'top' || side === 'bottom' ? tb.insideH : tb.insideV))
+        return undefined
+      }
+      const region: MergeRegion = {
+        startRow: r,
+        endRow: r,
+        startCol: col,
+        colSpan: span,
+        fill: cell.fill ?? table.fill,
+        borders: { left: pick('left'), right: pick('right'), top: pick('top'), bottom: pick('bottom') },
+      }
+      // extend over following continue cells
+      for (let rr = r + 1; rr < table.rows.length; rr++) {
+        const cont = positions[rr].find((p) => p.col === col)
+        if (!cont || cont.cell.vMerge !== 'continue') break
+        region.endRow = rr
+        regions.set(key(rr, col), region)
+      }
+      regions.set(key(r, col), region)
+    }
+  }
+  return regions
+}
+
 function borderCss(b: CellBorderCss | undefined): string | undefined {
   if (!b || !b.style) return undefined
   if (b.style === 'single' || b.style === 'thin') return 'thin'
@@ -647,31 +714,43 @@ function layoutTableRows(
   }
 
   const committedRows: TableRowBox[] = []
+  const positions = rowCellPositions(table)
+  const regions = computeMergeRegions(table, positions)
+  const regionKey = (r: number, c: number) => `${r}:${c}`
+  // smallest source row this chunk lays out; merges starting before it were
+  // opened on an earlier page and must be continued as plain boxes here
+  const minRowIndex = Math.min(
+    opts.fromRow,
+    ...(opts.repeatHeader ? table.rows.map((r, i) => (r.isHeader ? i : Infinity)) : [Infinity]),
+  )
+
   const headerRows = opts.repeatHeader ? table.rows.filter((r) => r.isHeader) : []
-  const queue: Array<{ row: DocxTableRow; counts: boolean }> = [
-    ...headerRows.map((row) => ({ row, counts: false })),
-    ...table.rows.slice(opts.fromRow).map((row) => ({ row, counts: true })),
+  const headerIndices = table.rows.map((r, i) => (r.isHeader ? i : -1)).filter((i) => i >= 0)
+  const queue: Array<{ row: DocxTableRow; rowIndex: number; counts: boolean }> = [
+    ...headerRows.map((row, i) => ({ row, rowIndex: headerIndices[i] ?? 0, counts: false })),
+    ...table.rows
+      .map((row, i) => ({ row, rowIndex: i, counts: true }))
+      .slice(opts.fromRow),
   ]
 
   let yRel = 0
   let consumedRows = 0
   let contentPlaced = 0
 
-  for (const { row, counts } of queue) {
+  /** merge regions whose box is still open in this chunk */
+  const openMerges = new Map<string, TableCellBox>()
+
+  for (const { row, rowIndex, counts } of queue) {
     // lay the row into temporary coordinates (relative to its own top)
-    const entries: Array<{ cellBox: TableCellBox; lines: LineBox[]; contentH: number; vAlign: 'top' | 'center' | 'bottom' }> = []
+    const entries: Array<{ cellBox: TableCellBox; lines: LineBox[]; contentH: number; vAlign: 'top' | 'center' | 'bottom'; col: number }> = []
     let rowContentH = 0
-    let col = 0
-    for (const cell of row.cells) {
+    for (const { cell, col, span } of positions[rowIndex]) {
       if (cell.vMerge === 'continue') {
-        col += cell.gridSpan
         continue
       }
-      const span = Math.max(1, cell.gridSpan)
       let cellW = 0
       for (let i = col; i < col + span && i < colWidths.length; i++) cellW += colWidths[i]
-      col += span
-      const cellXPx = twipsToPx(colOffsets[Math.max(0, col - span)] ?? 0)
+      const cellXPx = twipsToPx(colOffsets[col] ?? 0)
       const innerW = twipsToPx(cellW) - margins.left - margins.right
       if (innerW <= 0) continue
       let cellLines: LineBox[] = []
@@ -716,6 +795,7 @@ function layoutTableRows(
         lines: cellLines,
         contentH,
         vAlign: cell.vAlign ?? 'top',
+        col,
       })
     }
     // explicit row height (atLeast semantics)
@@ -735,6 +815,35 @@ function layoutTableRows(
 
     // commit the row: vertical alignment shifts text within the final height
     const rowCells: TableCellBox[] = []
+
+    // merge cells: an anchor owns a box that grows over its region; a region
+    // that started on an earlier page is continued here as a plain box
+    for (const { col, span } of positions[rowIndex]) {
+      const region = regions.get(regionKey(rowIndex, col))
+      if (!region) continue
+      const key = regionKey(region.startRow, region.startCol)
+      if (rowIndex === region.startRow) {
+        const entry = entries.find((e) => e.col === col)
+        if (entry) openMerges.set(key, entry.cellBox)
+        continue
+      }
+      if (openMerges.has(key)) continue // covered by the anchor's tall box
+      if (region.startRow >= minRowIndex) continue // shouldn't happen
+      // opened on a previous page: draw the continuation without text
+      let cellW = 0
+      for (let i = col; i < col + span && i < colWidths.length; i++) cellW += colWidths[i]
+      const cont: TableCellBox = {
+        xPx: twipsToPx(colOffsets[col] ?? 0),
+        yPx: yRel,
+        widthPx: twipsToPx(cellW),
+        heightPx: 0, // finalized when the region ends (or the chunk does)
+        fill: region.fill,
+        borders: region.borders,
+      }
+      rowCells.push(cont)
+      openMerges.set(key, cont)
+    }
+
     for (const entry of entries) {
       const slack = rowH - entry.contentH
       let entryLines = entry.lines
@@ -749,10 +858,23 @@ function layoutTableRows(
     }
     committedRows.push({ yPx: yRel, heightPx: rowH, cells: rowCells })
     yRel += rowH
+    // close merge regions whose last row this was
+    for (const [key, box] of [...openMerges]) {
+      const region = [...regions.values()].find((r) => regionKey(r.startRow, r.startCol) === key)
+      if (region && region.endRow === rowIndex) {
+        box.heightPx = yRel - box.yPx
+        openMerges.delete(key)
+      }
+    }
     if (counts) {
       consumedRows++
       contentPlaced++
     }
+  }
+  // regions still open reach the bottom of this chunk (they continue on the
+  // next page, where a continuation box is emitted for them)
+  for (const box of openMerges.values()) {
+    box.heightPx = yRel - box.yPx
   }
 
   return { lines, rows: committedRows, widthPx, heightPx: yRel, consumedRows }

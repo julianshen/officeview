@@ -5,7 +5,7 @@
 import { useState, type ChangeEvent } from 'react'
 import { createRoot } from 'react-dom/client'
 import { OfficeFile } from '../components/OfficeFile'
-import { buildDocx, buildXlsx, buildPptx, type DocxParaSpec, type DocxTableSpec } from '../testdata/ooxml-builders'
+import { buildDocx, buildXlsx, buildPptx, type DocxCellSpec, type DocxParaSpec, type DocxTableSpec } from '../testdata/ooxml-builders'
 
 const p = (text: string): DocxParaSpec => ({ runs: [{ text }] })
 
@@ -110,13 +110,33 @@ async function samplePptx(): Promise<Uint8Array> {
 
 type Sample = { label: string; emoji: string; load: () => Promise<Uint8Array> }
 async function sampleDocxLongTable(): Promise<Uint8Array> {
+  // 3 merged "group" cells in column A, sized so a group crosses the page break
+  const GROUPS = [22, 25, 13]
+  const groupCells: DocxCellSpec[] = []
+  GROUPS.forEach((size, g) => {
+    for (let i = 0; i < size; i++) {
+      groupCells.push(
+        i === 0
+          ? { paragraphs: [p(`Group ${g + 1}`)], vMerge: 'restart', fill: 'F2F2F2' }
+          : { vMerge: 'continue' },
+      )
+    }
+  })
   const table: DocxTableSpec = {
-    gridCols: ['4320', '4320'],
+    gridCols: ['2880', '3600', '2880'],
     borders: '<w:top w:val="single"/><w:left w:val="single"/><w:bottom w:val="single"/><w:right w:val="single"/><w:insideH w:val="single"/><w:insideV w:val="single"/>',
     rows: [
-      { isHeader: true, cells: [{ paragraphs: [{ align: 'center', runs: [{ text: 'Item', bold: true }] }], fill: 'D9D9D9' }, { paragraphs: [{ align: 'center', runs: [{ text: 'Status', bold: true }] }], fill: 'D9D9D9' }] },
-      ...Array.from({ length: 60 }, (_, i) => ({
+      {
+        isHeader: true,
         cells: [
+          { paragraphs: [{ align: 'center', runs: [{ text: 'Group', bold: true }] }], fill: 'D9D9D9' },
+          { paragraphs: [{ align: 'center', runs: [{ text: 'Item', bold: true }] }], fill: 'D9D9D9' },
+          { paragraphs: [{ align: 'center', runs: [{ text: 'Status', bold: true }] }], fill: 'D9D9D9' },
+        ],
+      },
+      ...groupCells.map((groupCell, i) => ({
+        cells: [
+          groupCell,
           { paragraphs: [p(`Row ${i + 1}`)] },
           { paragraphs: [{ runs: [{ text: i % 3 === 0 ? 'at risk' : 'on track', color: i % 3 === 0 ? 'C00000' : '0070C0' }] }] },
         ],
@@ -124,7 +144,10 @@ async function sampleDocxLongTable(): Promise<Uint8Array> {
     ],
   }
   return buildDocx(
-    [{ align: 'center', runs: [{ text: 'Multi-page table', bold: true, size: 44 }] }, p('This table spans pages; the gray header row repeats on each page.')],
+    [
+      { align: 'center', runs: [{ text: 'Multi-page table', bold: true, size: 44 }] },
+      p('The header row repeats on each page, and merged group cells (column A) continue across the page break.'),
+    ],
     [table],
   )
 }
