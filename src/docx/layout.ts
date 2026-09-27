@@ -35,6 +35,8 @@ export interface LineBox {
   heightPx: number
   /** Width of the content area this line flows in (page column or table cell). */
   contentWidthPx: number
+  /** List marker drawn in the left gutter (first line only). */
+  marker?: { text: string; widthPx: number }
 }
 
 export interface PageLayout {
@@ -167,7 +169,16 @@ function layoutParagraph(
   const indentLeft = twipsToPx(para.indentLeftTwips ?? 0)
   const indentRight = twipsToPx(para.indentRightTwips ?? 0)
   const firstLineIndent = twipsToPx(para.indentFirstLineTwips ?? 0)
-  const usable = contentWidth - indentLeft - indentRight
+  // A list marker sits in the gutter: reserve its width and shift the text so
+  // wrapped lines align with the first line (Word's hanging indent).
+  const markerStyle: RunStyle = {
+    fontFamily: para.runs[0]?.fontFamily ?? defaults.fontFamily,
+    fontSizePt: para.runs[0]?.fontSizePt ?? defaults.fontSizePt,
+    bold: !!para.runs[0]?.bold,
+    italic: !!para.runs[0]?.italic,
+  }
+  const markerGutter = para.listMarker ? measure(`${para.listMarker} `, markerStyle) : 0
+  const usable = contentWidth - indentLeft - indentRight - markerGutter
   if (usable <= 0) return { lines, endY: startY }
 
   let y = startY
@@ -185,11 +196,12 @@ function layoutParagraph(
 
   const flush = (isParagraphEnd: boolean) => {
     const h = para.lineSpacing?.rule === 'exact' ? twipsToPx(para.lineSpacing.value) : Math.max(lineHeight, paragraphLineHeight() * 0.9)
-    const lineIndent = indentLeft + (firstLine ? firstLineIndent : 0)
+    const lineIndent = indentLeft + (firstLine ? firstLineIndent : 0) + markerGutter
+    const marker = firstLine && para.listMarker ? { text: para.listMarker, widthPx: markerGutter } : undefined
     if (segs.length === 0) {
-      lines.push({ yPx: y, xPx: contentX + lineIndent, widthPx: 0, segs: [], align: para.align, isParagraphEnd, heightPx: h, contentWidthPx: usable })
+      lines.push({ yPx: y, xPx: contentX + lineIndent, widthPx: 0, segs: [], align: para.align, isParagraphEnd, heightPx: h, contentWidthPx: usable, marker })
     } else {
-      lines.push({ yPx: y, xPx: contentX + lineIndent, widthPx: width, segs, align: para.align, isParagraphEnd, heightPx: h, contentWidthPx: usable })
+      lines.push({ yPx: y, xPx: contentX + lineIndent, widthPx: width, segs, align: para.align, isParagraphEnd, heightPx: h, contentWidthPx: usable, marker })
     }
     y += h
     if (para.lineSpacing?.rule === 'atLeast') {
@@ -475,6 +487,22 @@ export function renderPages(
       let maxAscent = 0
       for (const seg of line.segs) maxAscent = Math.max(maxAscent, seg.style.fontSizePt * LINE_HEIGHT_FACTOR * 0.8)
       const baseline = line.yPx + maxAscent
+      // list marker sits left of the (indented) text
+      if (line.marker) {
+        const markerStyle: RunStyle = {
+          fontFamily: seg0Font(line),
+          fontSizePt: seg0Size(line),
+          bold: !!line.segs[0]?.run.bold,
+          italic: !!line.segs[0]?.run.italic,
+        }
+        const font = fontCss(markerStyle)
+        if (font !== lastFont) {
+          ctx.font = font
+          lastFont = font
+        }
+        ctx.fillStyle = line.segs[0]?.run.color ? resolveColor(line.segs[0].run.color) : '#000000'
+        ctx.fillText(line.marker.text.trimEnd(), line.xPx - line.marker.widthPx, baseline)
+      }
       for (const seg of line.segs) {
         const fontCssStr = fontCss(seg.style)
         if (fontCssStr !== lastFont) {
@@ -545,6 +573,14 @@ function layoutHeaderFooter(
     }
   }
   return out
+}
+
+function seg0Font(line: LineBox): string {
+  return line.segs[0]?.style.fontFamily ?? 'Calibri'
+}
+
+function seg0Size(line: LineBox): number {
+  return line.segs[0]?.style.fontSizePt ?? 11
 }
 
 function countGaps(segs: Segment[]): number {

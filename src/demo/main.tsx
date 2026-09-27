@@ -177,8 +177,30 @@ async function sampleDocxHeaderFooter(): Promise<Uint8Array> {
   )
 }
 
+async function sampleDocxLists(): Promise<Uint8Array> {
+  return buildDocx(
+    [
+      { runs: [{ text: 'Numbered list (decimal)', bold: true }] },
+      { runs: [{ text: 'Resolve document parts' }], numId: 1 },
+      { runs: [{ text: 'Lay out and paginate' }], numId: 1 },
+      { runs: [{ text: 'Paint onto the canvas' }], numId: 1 },
+      { runs: [{ text: 'Bullets' }], numId: 2 },
+      { runs: [{ text: 'First bullet' }], numId: 2 },
+      { runs: [{ text: 'Second bullet, long enough to wrap onto a second line so the hanging indent is visible' }], numId: 2 },
+      { runs: [{ text: 'Nested list' }], numId: 2 },
+      { runs: [{ text: 'Nested item' }], numId: 2, ilvl: 1 },
+      { runs: [{ text: 'Nested item two' }], numId: 2, ilvl: 1 },
+      { runs: [{ text: 'Alphabetical and roman', bold: true }] },
+      { runs: [{ text: 'alpha' }], numId: 3 },
+      { runs: [{ text: 'beta' }], numId: 3 },
+      { runs: [{ text: 'roman' }], numId: 4 },
+    ],
+  )
+}
+
 const SAMPLES: Sample[] = [
   { label: 'Word (.docx)', emoji: '📄', load: sampleDocx },
+  { label: 'Word lists', emoji: '🔢', load: sampleDocxLists },
   { label: 'Word header/footer', emoji: '📄', load: sampleDocxHeaderFooter },
   { label: 'Word long table', emoji: '🧾', load: sampleDocxLongTable },
   { label: 'Excel (.xlsx)', emoji: '📊', load: sampleXlsx },

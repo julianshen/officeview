@@ -77,16 +77,146 @@ function parseRun(r: XmlNode, inherited?: Partial<DocxTextRun>): FieldAwareRun {
   return run
 }
 
-export function parseParagraph(p: XmlNode, images?: DocxImage[]): DocxParagraph {
+/** One w:lvl definition from numbering.xml. */
+interface NumberingLevel {
+  numFmt: string
+  /** e.g. "%1." or "\u2022" */
+  lvlText: string
+  start: number
+  indentLeftTwips?: number
+  hangingTwips?: number
+}
+
+interface NumberingState {
+  /** numId -> abstractNumId */
+  numToAbstract: Map<string, string>
+  /** abstractNumId -> level index -> level */
+  abstracts: Map<string, NumberingLevel[]>
+  /** numId -> level index -> current counter */
+  counters: Map<string, number[]>
+}
+
+function parseNumbering(root: XmlNode): NumberingState {
+  const abstracts = new Map<string, NumberingLevel[]>()
+  for (const abs of getChildren(root, 'abstractNum')) {
+    const a = attrs(abs)
+    const id = a.abstractNumId as string | undefined
+    if (!id) continue
+    const levels: NumberingLevel[] = []
+    for (const lvl of getChildren(abs, 'lvl')) {
+      const la = attrs(lvl)
+      const lvlText = attrs(getChildren(lvl, 'lvlText')[0]).val as string | undefined
+      const startVal = attrs(getChildren(lvl, 'start')[0]).val
+      const ind = attrs(getChildren(getChildren(lvl, 'pPr')[0], 'ind')[0])
+      levels[Number(la.ilvl ?? levels.length)] = {
+        numFmt: (attrs(getChildren(lvl, 'numFmt')[0]).val as string) ?? 'decimal',
+        lvlText: lvlText ?? '%1.',
+        start: startVal !== undefined ? parseInt(startVal, 10) || 1 : 1,
+        indentLeftTwips: twips(ind.left ?? ind.start),
+        hangingTwips: twips(ind.hanging),
+      }
+    }
+    abstracts.set(id, levels)
+  }
+  const numToAbstract = new Map<string, string>()
+  for (const num of getChildren(root, 'num')) {
+    const a = attrs(num)
+    const numId = a.numId as string | undefined
+    const absId = attrs(getChildren(num, 'abstractNumId')[0]).val as string | undefined
+    if (numId && absId) numToAbstract.set(numId, absId)
+  }
+  return { numToAbstract, abstracts, counters: new Map() }
+}
+
+const ROMAN: [number, string][] = [
+  [1000, 'm'], [900, 'cm'], [500, 'd'], [400, 'cd'], [100, 'c'], [90, 'xc'],
+  [50, 'l'], [40, 'xl'], [10, 'x'], [9, 'ix'], [5, 'v'], [4, 'iv'], [1, 'i'],
+]
+
+function toRoman(n: number): string {
+  let out = ''
+  for (const [value, sym] of ROMAN) {
+    while (n >= value) {
+      out += sym
+      n -= value
+    }
+  }
+  return out
+}
+
+function formatCounter(n: number, numFmt: string): string {
+  switch (numFmt) {
+    case 'decimal': return String(n)
+    case 'lowerLetter': return String.fromCharCode(96 + ((n - 1) % 26) + 1)
+    case 'upperLetter': return String.fromCharCode(64 + ((n - 1) % 26) + 1)
+    case 'lowerRoman': return toRoman(n)
+    case 'upperRoman': return toRoman(n).toUpperCase()
+    case 'none': return ''
+    default: return String(n)
+  }
+}
+
+/** Fill %1..%9 in lvlText using each referenced level's own numFmt. */
+function renderLvlText(lvlText: string, counters: number[], levels: NumberingLevel[] | undefined): string {
+  return lvlText.replace(/%([1-9])/g, (_, d: string) => {
+    const idx = Number(d) - 1
+    const fmt = levels?.[idx]?.numFmt ?? 'decimal'
+    return formatCounter(counters[idx] ?? 1, fmt)
+  })
+}
+
+/**
+ * Resolve a paragraph's w:numPr into a marker string, advancing the list
+ * counters. Counters live on the parse-time state so a marker is stable even
+ * if layout re-runs (e.g. table chunking).
+ */
+function resolveListMarker(pPr: XmlNode | undefined, state: NumberingState | undefined): { marker?: string; level?: number; indentTwips?: number } {
+  if (!pPr || !state) return {}
+  const numPr = getChildren(pPr, 'numPr')[0]
+  if (!numPr) return {}
+  const numId = attrs(getChildren(numPr, 'numId')[0]).val as string | undefined
+  if (!numId) return {}
+  const level = Number(attrs(getChildren(numPr, 'ilvl')[0]).val ?? 0) || 0
+  const abstractId = state.numToAbstract.get(numId)
+  const levels = abstractId ? state.abstracts.get(abstractId) : undefined
+  const lvl = levels?.[level]
+  if (!lvl) return {}
+  let counters = state.counters.get(numId)
+  if (!counters) {
+    counters = []
+    state.counters.set(numId, counters)
+  }
+  // deeper levels restart whenever this level ticks
+  counters[level] = (counters[level] ?? lvl.start - 1) + 1
+  for (let deeper = level + 1; deeper < (levels?.length ?? 0); deeper++) counters[deeper] = undefined as unknown as number
+  const marker = lvl.numFmt === 'bullet' ? lvl.lvlText : renderLvlText(lvl.lvlText, counters, levels)
+  return {
+    marker: marker || undefined,
+    level,
+    indentTwips: lvl.indentLeftTwips,
+  }
+}
+
+export function parseParagraph(p: XmlNode, images?: DocxImage[], numbering?: NumberingState): DocxParagraph {
   const pPr = getChildren(p, 'pPr')[0]
   const paragraph: DocxParagraph = {
     runs: [],
     images: [],
     align: alignOf(pPr),
   }
+  const list = resolveListMarker(pPr, numbering)
+  if (list.marker) {
+    paragraph.listMarker = list.marker
+    paragraph.listLevel = list.level
+    // numbering levels carry their own indent; it wins over the paragraph's
+    if (list.indentTwips !== undefined && paragraph.indentLeftTwips === undefined) {
+      paragraph.indentLeftTwips = list.indentTwips
+    }
+  }
   if (pPr) {
     const ind = attrs(pPr['ind'] as XmlNode | undefined)
-    paragraph.indentLeftTwips = twips(ind.left) ?? twips(ind.start)
+    // fall back to whatever the numbering level already supplied
+    paragraph.indentLeftTwips = twips(ind.left) ?? twips(ind.start) ?? paragraph.indentLeftTwips
     paragraph.indentRightTwips = twips(ind.right) ?? twips(ind.end)
     paragraph.indentFirstLineTwips = twips(ind.firstLine)
     const spacing = attrs(pPr['spacing'] as XmlNode | undefined)
@@ -234,8 +364,10 @@ async function loadHeaderFooter(
     const part = await pkg.xml(path)
     if (!part) continue
     const paragraphs: DocxParagraph[] = []
+    const partNumbering = await pkg.xml('word/numbering.xml')
+    const partState = partNumbering ? parseNumbering(partNumbering) : undefined
     for (const [name, node] of elementChildren(part)) {
-      if (name === 'p') paragraphs.push(parseParagraph(node))
+      if (name === 'p') paragraphs.push(parseParagraph(node, undefined, partState))
     }
     if (paragraphs.length > 0) out[kind] = paragraphs
   }
@@ -285,6 +417,8 @@ export async function parseDocx(pkg: OfficePackage): Promise<DocxDocument> {
   const body = doc?.['body'] as XmlNode | undefined
   const docImages = (await loadDocImages(pkg)) as DocxImage[]
   const docRels = await loadDocRels(pkg)
+  const numberingRoot = await pkg.xml('word/numbering.xml')
+  const numbering = numberingRoot ? parseNumbering(numberingRoot) : undefined
   const sections: DocxSection[] = []
   let current: DocxSection = {
     margins: { topTwips: 1440, rightTwips: 1440, bottomTwips: 1440, leftTwips: 1440, headerTwips: 720, footerTwips: 720, gutterTwips: 0 },
@@ -295,11 +429,11 @@ export async function parseDocx(pkg: OfficePackage): Promise<DocxDocument> {
   const push = () => { if (current.paragraphs.length > 0 || sections.length === 0) sections.push(current) }
   for (const [name, node] of elementChildren(body as XmlNode)) {
     if (name === 'p') {
-      const para = parseParagraph(node, docImages)
+      const para = parseParagraph(node, docImages, numbering)
       current.paragraphs.push(para)
       current.blocks.push({ kind: 'p', paragraph: para })
     } else if (name === 'tbl' && node) {
-      const table = parseTable(node)
+      const table = parseTable(node, numbering)
       const block: DocxBlock = { kind: 'table', table }
       current.blocks.push(block)
     } else if (name === 'sectPr') {
@@ -390,7 +524,7 @@ function parseCellMargins(tblPr: XmlNode): DocxTableCellMargins {
   }
 }
 
-function parseTableCell(tc: XmlNode): DocxTableCell {
+function parseTableCell(tc: XmlNode, cellNumbering?: NumberingState): DocxTableCell {
   const tcPr = getChildren(tc, 'tcPr')[0]
   const cell: DocxTableCell = { paragraphs: [], gridSpan: 1 }
   if (tcPr) {
@@ -407,12 +541,12 @@ function parseTableCell(tc: XmlNode): DocxTableCell {
     if (vAlign === 'center' || vAlign === 'bottom' || vAlign === 'top') cell.vAlign = vAlign
   }
   for (const [name, node] of elementChildren(tc)) {
-    if (name === 'p') cell.paragraphs.push(parseParagraph(node))
+    if (name === 'p') cell.paragraphs.push(parseParagraph(node, undefined, cellNumbering))
   }
   return cell
 }
 
-export function parseTable(tbl: XmlNode): DocxTable {
+export function parseTable(tbl: XmlNode, tableNumbering?: NumberingState): DocxTable {
   const tblPr = getChildren(tbl, 'tblPr')[0]
   const table: DocxTable = {
     gridColsTwips: [],
@@ -446,7 +580,7 @@ export function parseTable(tbl: XmlNode): DocxTable {
       if (trPr['tblHeader'] !== undefined) row.isHeader = true
     }
     for (const child of elementChildren(node)) {
-      if (child[0] === 'tc' && child[1]) row.cells.push(parseTableCell(child[1]))
+      if (child[0] === 'tc' && child[1]) row.cells.push(parseTableCell(child[1], tableNumbering))
     }
     table.rows.push(row)
   }

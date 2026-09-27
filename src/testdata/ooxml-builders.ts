@@ -10,6 +10,7 @@ export const CT_TYPES =
   <Override PartName="/word/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.styles+xml"/>
   <Override PartName="/word/header1.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.header+xml"/>
   <Override PartName="/word/footer1.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.footer+xml"/>
+  <Override PartName="/word/numbering.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.numbering+xml"/>
 </Types>`
 
 export const ROOT_RELS =
@@ -31,6 +32,9 @@ export interface DocxTextSpec {
 export interface DocxParaSpec {
   align?: 'left' | 'center' | 'right' | 'both'
   runs: DocxTextSpec[]
+  /** w:numPr: list level 0-based. */
+  numId?: number
+  ilvl?: number
 }
 
 export interface DocxCellSpec {
@@ -73,6 +77,30 @@ export async function buildDocx(
   hf: DocxHeaderFooterSpec = {},
 ): Promise<Uint8Array> {
   const zip = new JSZip()
+  // list definitions: numId 1 = decimal, 2 = bullet, 3 = alpha, 4 = roman
+  const usesNumbering =
+    paras.some((p) => p.numId !== undefined) ||
+    tables.some((t) => t.rows.some((r) => r.cells.some((c) => (c.paragraphs ?? []).some((p) => p.numId !== undefined)))) ||
+    (hf.header ?? []).some((p) => p.numId !== undefined) ||
+    (hf.footer ?? []).some((p) => p.numId !== undefined)
+  const numberingXml = (): string => {
+    const lvl = (ilvl: number, numFmt: string, lvlText: string, left: number) =>
+      `<w:lvl w:ilvl="${ilvl}"><w:start w:val="1"/><w:numFmt w:val="${numFmt}"/><w:lvlText w:val="${lvlText}"/>` +
+      `<w:lvlJc w:val="left"/><w:pPr><w:ind w:left="${left}" w:hanging="360"/></w:pPr></w:lvl>`
+    const abstract = (id: string, fmt: string, text: string) =>
+      `<w:abstractNum w:abstractNumId="${id}">${lvl(0, fmt, text, 720)}${lvl(1, fmt, text.replace('%1', '%2'), 1440)}</w:abstractNum>`
+    return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w:numbering xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+  ${abstract('0', 'decimal', '%1.')}
+  ${abstract('1', 'bullet', '\u2022')}
+  ${abstract('2', 'lowerLetter', '%1)')}
+  ${abstract('3', 'lowerRoman', '%1.')}
+  <w:num w:numId="1"><w:abstractNumId w:val="0"/></w:num>
+  <w:num w:numId="2"><w:abstractNumId w:val="1"/></w:num>
+  <w:num w:numId="3"><w:abstractNumId w:val="2"/></w:num>
+  <w:num w:numId="4"><w:abstractNumId w:val="3"/></w:num>
+</w:numbering>`
+  }
   zip.file('[Content_Types].xml', CT_TYPES)
   zip.file('_rels/.rels', ROOT_RELS)
   const runXml = (r: DocxTextSpec) => {
@@ -88,7 +116,10 @@ export async function buildDocx(
     return `<w:r>${rpr}<w:t xml:space="preserve">${text}</w:t></w:r>`
   }
   const paraXml = (p: DocxParaSpec) => {
-    const ppr = p.align ? `<w:pPr><w:jc w:val="${p.align}"/></w:pPr>` : ''
+    const bits: string[] = []
+    if (p.align) bits.push(`<w:jc w:val="${p.align}"/>`)
+    if (p.numId !== undefined) bits.push(`<w:numPr><w:ilvl w:val="${p.ilvl ?? 0}"/><w:numId w:val="${p.numId}"/></w:numPr>`)
+    const ppr = bits.length ? `<w:pPr>${bits.join('')}</w:pPr>` : ''
     return `<w:p>${ppr}${p.runs.map(runXml).join('')}</w:p>`
   }
   const hfPart = (tag: 'hdr' | 'ftr', paragraphs: DocxParaSpec[]): string =>
@@ -146,6 +177,9 @@ export async function buildDocx(
 </Relationships>`)
   if (sectRefs) document = document.replace('<w:sectPr>', `<w:sectPr>${sectRefs}`)
   zip.file('word/document.xml', document)
+  if (usesNumbering) {
+    zip.file('word/numbering.xml', numberingXml())
+  }
   zip.file('word/styles.xml',
     `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <w:styles xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">

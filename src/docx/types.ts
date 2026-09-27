@@ -43,6 +43,10 @@ export interface DocxParagraph {
   spacingAfterTwips?: number
   lineSpacing?: { rule: 'auto' | 'exact' | 'atLeast'; value: number }
   outlineLevel?: number
+  /** Resolved list marker (e.g. "1.", "a)", "•") from w:numPr. */
+  listMarker?: string
+  /** List level (0-based) from w:numPr/w:ilvl. */
+  listLevel?: number
 }
 
 export interface DocxPageMargins {
