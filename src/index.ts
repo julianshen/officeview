@@ -11,6 +11,9 @@ export type { OfficeDocProps, OfficeDocSource } from './components/OfficeDoc'
 
 // Low-level access
 export { OfficePackage } from './core/zip'
+// Text search (also used internally by <OfficeDoc>)
+export { buildTextIndex, findMatches, stepMatch } from './core/search'
+export type { TextIndex, TextIndexPage, IndexLine, TextSpan, SearchMatch, SearchOptions } from './core/search'
 export { parseDocx } from './docx/parse'
 export { layoutDocx, renderPages, createMeasurer } from './docx/layout'
 export { parseXlsx } from './xlsx/parse'

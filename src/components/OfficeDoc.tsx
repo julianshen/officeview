@@ -8,6 +8,7 @@
  */
 import { useEffect, useMemo, useRef, useState, type CSSProperties, type ReactElement } from 'react'
 import { getPaintables, type PageSpec, type Paintable } from '../render/paint'
+import { buildTextIndex, findMatches, stepMatch, type SearchMatch, type TextIndex } from '../core/search'
 import {
   distance,
   midpoint,
@@ -33,10 +34,42 @@ export interface OfficeDocProps {
   style?: CSSProperties
   /** Show the zoom control cluster (default true). */
   showZoomControls?: boolean
+  /** Show the in-viewer search bar (default true). */
+  showSearch?: boolean
 }
 
 /** Cap the effective device scale so a 6x zoom can't allocate absurd canvases. */
 const MAX_EFFECTIVE_SCALE = 3
+
+export interface HighlightRect {
+  x: number
+  y: number
+  width: number
+  height: number
+}
+
+interface SearchOverlay {
+  /** All match rectangles on this page, in page coordinates. */
+  rects: HighlightRect[]
+  /** Rectangles of the match currently being navigated to. */
+  active: HighlightRect[]
+  /** Changes whenever the matches or the active match change. */
+  key: string
+}
+
+/**
+ * Draw search highlights over the page content. Called while the ctx still
+ * carries the page transform, so rectangles are in page coordinates.
+ */
+function paintHighlights(ctx: CanvasRenderingContext2D, overlay: SearchOverlay): void {
+  ctx.save()
+  ctx.fillStyle = 'rgba(255, 214, 0, 0.45)'
+  for (const r of overlay.rects) ctx.fillRect(r.x, r.y, r.width, r.height)
+  ctx.strokeStyle = '#ff8c00'
+  ctx.lineWidth = 1.5
+  for (const r of overlay.active) ctx.strokeRect(r.x, r.y, r.width, r.height)
+  ctx.restore()
+}
 
 function PageCanvas({
   spec,
@@ -47,6 +80,7 @@ function PageCanvas({
   boostedScale,
   boosted,
   rootRef,
+  overlay,
 }: {
   spec: PageSpec
   paint: (ctx: CanvasRenderingContext2D) => void
@@ -60,6 +94,8 @@ function PageCanvas({
   boosted: boolean
   /** scroll container used as the IntersectionObserver root. */
   rootRef?: React.RefObject<HTMLElement | null>
+  /** search highlights drawn on top of the page content. */
+  overlay?: SearchOverlay
 }): ReactElement {
   const ref = useRef<HTMLCanvasElement | null>(null)
   const [visible, setVisible] = useState(true)
@@ -107,7 +143,9 @@ function PageCanvas({
     if (!ctx) return
     ctx.setTransform(backingW / spec.widthPx, 0, 0, backingW / spec.widthPx, 0, 0)
     paint(ctx)
-  }, [paint, backingW, backingH, spec.widthPx])
+    if (overlay) paintHighlights(ctx, overlay)
+    // overlay.key changes whenever the match set or active match changes
+  }, [paint, backingW, backingH, spec.widthPx, overlay?.key])
 
   return (
     <canvas
@@ -133,6 +171,7 @@ export function OfficeDoc({
   className,
   style,
   showZoomControls = true,
+  showSearch = true,
 }: OfficeDocProps): ReactElement {
   // getPaintables is async (docx measurement resolves a 2D ctx); hold in state.
   const [pages, setPages] = useState<Paintable[]>([])
@@ -266,6 +305,12 @@ export function OfficeDoc({
   const reset = () => setTransform({ zoom: 1, panX: 0, panY: 0 })
 
   const onKeyDown = (e: React.KeyboardEvent) => {
+    if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'f') {
+      e.preventDefault()
+      inputRef.current?.focus()
+      inputRef.current?.select()
+      return
+    }
     if (e.key === '+' || e.key === '=') { e.preventDefault(); zoomBy(1) }
     else if (e.key === '-') { e.preventDefault(); zoomBy(-1) }
     else if (e.key === '0') { e.preventDefault(); reset() }
@@ -273,6 +318,101 @@ export function OfficeDoc({
 
   const zoomed = transform.zoom > 1
   const dpr = Math.min(typeof window !== 'undefined' ? window.devicePixelRatio || 1 : 1, 3)
+
+  // ---- search ----
+  const [query, setQuery] = useState('')
+  const [matches, setMatches] = useState<SearchMatch[]>([])
+  const [active, setActive] = useState(-1)
+  const [indexing, setIndexing] = useState(false)
+  const indexRef = useRef<TextIndex | null>(null)
+  const inputRef = useRef<HTMLInputElement | null>(null)
+
+  // The index replays each page's paint once; built lazily on first search.
+  const ensureIndex = async (): Promise<TextIndex> => {
+    if (indexRef.current) return indexRef.current
+    setIndexing(true)
+    try {
+      const paintables = pages.length > 0 ? pages : await getPaintables(document)
+      const built = await buildTextIndex(paintables as Paintable[])
+      indexRef.current = built
+      return built
+    } finally {
+      setIndexing(false)
+    }
+  }
+
+  useEffect(() => {
+    indexRef.current = null // a new document needs a fresh index
+    setMatches([])
+    setActive(-1)
+  }, [document])
+
+  useEffect(() => {
+    if (query.trim().length === 0) {
+      setMatches([])
+      setActive(-1)
+      return
+    }
+    let cancelled = false
+    ensureIndex().then((index) => {
+      if (cancelled) return
+      const found = findMatches(index, query)
+      setMatches(found)
+      setActive(found.length > 0 ? 0 : -1)
+    })
+    return () => {
+      cancelled = true
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [query, pages])
+
+  const goTo = (direction: 1 | -1) => {
+    setActive((current) => stepMatch(matches, current, direction))
+  }
+
+  // bring the active match's page into view
+  useEffect(() => {
+    const match = matches[active]
+    if (!match) return
+    const container = containerRef.current
+    if (!container) return
+    const canvas = container.querySelectorAll('canvas')[match.pageIndex] as HTMLElement | undefined
+    if (!canvas) return
+
+    // "visible" means inside the region's box *and* the viewport — the region
+    // itself may not be the scrolling element (it can grow to fit all pages).
+    const regionRect = container.getBoundingClientRect?.()
+    const canvasRect = canvas.getBoundingClientRect?.()
+    const viewportHeight = typeof window !== 'undefined' ? window.innerHeight : Infinity
+    const viewTop = Math.max(regionRect?.top ?? 0, 0)
+    const viewBottom = Math.min(regionRect?.bottom ?? viewportHeight, viewportHeight)
+    const pageVisible =
+      !!canvasRect && canvasRect.height > 0 && canvasRect.top >= viewTop && canvasRect.bottom <= viewBottom
+
+    if (!pageVisible) {
+      if (typeof canvas.scrollIntoView === 'function') {
+        // scrolls whichever ancestor actually scrolls
+        canvas.scrollIntoView({ block: 'start' })
+      } else {
+        const target = Math.max(0, canvas.offsetTop - padding)
+        if (typeof container.scrollTo === 'function') {
+          container.scrollTo({ top: target, behavior: 'smooth' })
+        } else {
+          container.scrollTop = target
+        }
+      }
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [active, matches])
+
+  const overlayFor = (pageIndex: number): SearchOverlay | undefined => {
+    if (matches.length === 0) return undefined
+    const onPage = matches.filter((m) => m.pageIndex === pageIndex)
+    if (onPage.length === 0) return undefined
+    const activeMatch = active >= 0 ? matches[active] : undefined
+    const activeOnPage = activeMatch && activeMatch.pageIndex === pageIndex ? activeMatch.rects : []
+    return { rects: onPage.flatMap((m) => m.rects), active: activeOnPage, key: `${onPage.length}:${active}:${query}` }
+  }
 
   return (
     <div style={{ position: 'relative', display: 'flex', flexDirection: 'column', minHeight: 0 }}>
@@ -325,10 +465,23 @@ export function OfficeDoc({
               boostedScale={dpr * transform.zoom}
               boosted={zoomed}
               rootRef={containerRef}
+              overlay={overlayFor(i)}
             />
           ))}
         </div>
       </div>
+      {showSearch && (
+        <SearchBar
+          inputRef={inputRef}
+          query={query}
+          onQuery={(q) => setQuery(q)}
+          count={matches.length}
+          active={active}
+          indexing={indexing}
+          onPrev={() => goTo(-1)}
+          onNext={() => goTo(1)}
+        />
+      )}
       {showZoomControls && (
         <ZoomControls
           zoom={transform.zoom}
@@ -338,6 +491,87 @@ export function OfficeDoc({
           atFit={!zoomed}
         />
       )}
+    </div>
+  )
+}
+
+function SearchBar({
+  inputRef,
+  query,
+  onQuery,
+  count,
+  active,
+  indexing,
+  onPrev,
+  onNext,
+}: {
+  inputRef: React.RefObject<HTMLInputElement | null>
+  query: string
+  onQuery: (q: string) => void
+  count: number
+  active: number
+  indexing: boolean
+  onPrev: () => void
+  onNext: () => void
+}): ReactElement {
+  const status = indexing ? 'indexing…' : count === 0 ? (query ? 'no matches' : '') : `${active + 1} of ${count}`
+  const btn: CSSProperties = {
+    height: 28,
+    minWidth: 28,
+    padding: '0 8px',
+    borderRadius: 6,
+    border: '1px solid rgba(0,0,0,0.2)',
+    background: count > 0 ? '#f0f0f0' : 'rgba(0,0,0,0.06)',
+    color: count > 0 ? '#111' : '#888',
+    fontSize: 14,
+    cursor: count > 0 ? 'pointer' : 'default',
+  }
+  return (
+    <div
+      data-testid="officeview-search"
+      style={{
+        position: 'absolute',
+        top: 'calc(env(safe-area-inset-top) + 8px)',
+        right: 12,
+        display: 'flex',
+        alignItems: 'center',
+        gap: 6,
+        padding: 6,
+        borderRadius: 10,
+        background: 'rgba(255,255,255,0.95)',
+        boxShadow: '0 2px 8px rgba(0,0,0,0.3)',
+        zIndex: 6,
+      }}
+    >
+      <input
+        ref={inputRef}
+        type="search"
+        value={query}
+        placeholder="Search…"
+        aria-label="Search document"
+        onChange={(e) => onQuery(e.target.value)}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter') { e.preventDefault(); if (e.shiftKey) onPrev(); else onNext() }
+          else if (e.key === 'Escape') { e.preventDefault(); onQuery('') }
+        }}
+        style={{
+          height: 28,
+          width: 148,
+          padding: '0 8px',
+          borderRadius: 6,
+          border: '1px solid rgba(0,0,0,0.2)',
+          fontSize: 14,
+          outline: 'none',
+        }}
+      />
+      <span
+        data-testid="officeview-search-status"
+        style={{ minWidth: 64, fontSize: 12, color: '#555', textAlign: 'center' }}
+      >
+        {status}
+      </span>
+      <button type="button" onClick={onPrev} disabled={count === 0} aria-label="Previous match" style={btn}>↑</button>
+      <button type="button" onClick={onNext} disabled={count === 0} aria-label="Next match" style={btn}>↓</button>
     </div>
   )
 }
