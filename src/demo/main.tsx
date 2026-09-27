@@ -91,6 +91,9 @@ async function samplePptx(): Promise<Uint8Array> {
       ext: ['4114800', '1143000'],
       table: {
         colWidths: ['2057400', '1028700', '1028700'],
+        firstRow: true,
+        bandRow: true,
+        styleId: 'DemoTableStyle',
         rows: [
           {
             h: '342900',

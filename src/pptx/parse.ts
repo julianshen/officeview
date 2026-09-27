@@ -176,8 +176,62 @@ async function loadSlideImages(pkg: OfficePackage, partPath: string): Promise<Ma
   return out
 }
 
+/** Depth-first search for the first a:srgbClr under a node. */
+function firstSrgb(node: XmlNode | undefined): string | undefined {
+  if (!node) return undefined
+  for (const [name, child] of elementChildren(node)) {
+    if (name === 'srgbClr') return colorOf(child)
+    const found = firstSrgb(child)
+    if (found) return found
+  }
+  return undefined
+}
+
+interface TableStyleEntry {
+  fills: { firstRow?: string; band1?: string; band2?: string; wholeTable?: string; lastRow?: string; firstCol?: string }
+  firstRowTextColor?: string
+}
+
+async function readTableStyles(pkg: OfficePackage): Promise<Map<string, TableStyleEntry>> {
+  const out = new Map<string, TableStyleEntry>()
+  const root = await pkg.xml('ppt/tableStyles.xml')
+  if (!root) return out
+  // the part root is a:tblStyleLst itself, but tolerate a wrapper
+  const list = getChildren(root, 'tblStyleLst')[0] ?? root
+  for (const style of getChildren(list, 'tblStyle')) {
+    const id = attrs(style).styleId as string | undefined
+    if (!id) continue
+    const entry: TableStyleEntry = { fills: {} }
+    // whole-table fill lives directly on the style
+    const tableFill = getChildren(getChildren(style, 'tblPr')[0], 'solidFill')[0]
+    const whole = tableFill ? colorOf(getChildren(tableFill, 'srgbClr')[0]) : undefined
+    if (whole) entry.fills.wholeTable = whole
+    for (const region of getChildren(style, 'tblStylePr')) {
+      const kind = attrs(region).type as string | undefined
+      if (!kind) continue
+      const tcPr = getChildren(region, 'tcPr')[0]
+      const solid = tcPr ? getChildren(tcPr, 'solidFill')[0] : undefined
+      const fill = solid ? colorOf(getChildren(solid, 'srgbClr')[0]) : undefined
+      switch (kind) {
+        case 'firstRow':
+          if (fill) entry.fills.firstRow = fill
+          // a:txStyles is a sibling of a:tcPr under a:tblStylePr
+          entry.firstRowTextColor = firstSrgb(getChildren(region, 'txStyles')[0])
+          break
+        case 'band1Horz': if (fill) entry.fills.band1 = fill; break
+        case 'band2Horz': if (fill) entry.fills.band2 = fill; break
+        case 'lastRow': if (fill) entry.fills.lastRow = fill; break
+        case 'firstCol': if (fill) entry.fills.firstCol = fill; break
+        default: break
+      }
+    }
+    out.set(id, entry)
+  }
+  return out
+}
+
 /** p:graphicFrame -> a:graphic/a:graphicData/a:tbl */
-function parseGraphicFrame(frame: XmlNode): PptxShape | undefined {
+function parseGraphicFrame(frame: XmlNode, tableStyles?: Map<string, TableStyleEntry>): PptxShape | undefined {
   const xfrm = getChildren(frame, 'xfrm')[0]
   const off = xfrm ? getChildren(xfrm, 'off')[0] : undefined
   const ext = xfrm ? getChildren(xfrm, 'ext')[0] : undefined
@@ -189,6 +243,23 @@ function parseGraphicFrame(frame: XmlNode): PptxShape | undefined {
   if (!tbl) return undefined
 
   const table: PptxTable = { colWidthsEmu: [], rows: [] }
+  const tblPr = getChildren(tbl, 'tblPr')[0]
+  if (tblPr) {
+    const ta = attrs(tblPr)
+    table.firstRow = ta.firstRow === '1' || ta.firstRow === 'true'
+    table.bandRow = ta.bandRow === '1' || ta.bandRow === 'true'
+    const styleId = getChildren(tblPr, 'tableStyleId')[0]
+      ? textOf(getChildren(tblPr, 'tableStyleId')[0]).trim() || undefined
+      : undefined
+    if (styleId) {
+      table.styleId = styleId
+      const entry = tableStyles?.get(styleId)
+      if (entry) {
+        table.styleFills = entry.fills
+        table.firstRowTextColor = entry.firstRowTextColor
+      }
+    }
+  }
   const grid = getChildren(tbl, 'tblGrid')[0]
   if (grid) {
     for (const col of getChildren(grid, 'gridCol')) {
@@ -251,6 +322,7 @@ export async function parsePptx(pkg: OfficePackage): Promise<PptxDocument> {
       if (a.Id) relMap.set(a.Id, a.Target as string)
     }
   }
+  let tableStyles: Map<string, TableStyleEntry> | undefined
   const sldIdLst = getChildren(presentation, 'sldIdLst')[0]
   const slideIds = sldIdLst ? getChildren(sldIdLst, 'sldId') : []
   for (let i = 0; i < slideIds.length; i++) {
@@ -260,6 +332,7 @@ export async function parsePptx(pkg: OfficePackage): Promise<PptxDocument> {
     const path = target.startsWith('/') ? target.slice(1) : `ppt/${target.replace(/^\.\.\//, '')}`
     const slideRoot = await pkg.xml(path)
     const slideImages = await loadSlideImages(pkg, path)
+    if (!tableStyles) tableStyles = await readTableStyles(pkg)
     const slide: PptxSlide = { index: i, widthEmu: doc.slideWidthEmu, heightEmu: doc.slideHeightEmu, shapes: [] }
     if (slideRoot) {
       const cSld = getChildren(slideRoot, 'cSld')[0]
@@ -270,7 +343,7 @@ export async function parsePptx(pkg: OfficePackage): Promise<PptxDocument> {
             const shape = parseShape(node, slideImages)
             if (shape) slide.shapes.push(shape)
           } else if (name === 'graphicFrame') {
-            const frame = parseGraphicFrame(node)
+            const frame = parseGraphicFrame(node, tableStyles)
             if (frame) slide.shapes.push(frame)
           }
         }

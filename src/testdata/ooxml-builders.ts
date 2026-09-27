@@ -313,6 +313,7 @@ const PPTX_CT =
   <Default Extension="xml" ContentType="application/xml"/>
   <Override PartName="/ppt/presentation.xml" ContentType="application/vnd.openxmlformats-officedocument.presentationml.presentation.main+xml"/>
   <Override PartName="/ppt/slides/slide1.xml" ContentType="application/vnd.openxmlformats-officedocument.presentationml.slide+xml"/>
+  <Override PartName="/ppt/tableStyles.xml" ContentType="application/vnd.openxmlformats-officedocument.presentationml.tableStyles+xml"/>
 </Types>`
 
 const PPTX_ROOT_RELS =
@@ -321,11 +322,6 @@ const PPTX_ROOT_RELS =
   <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="ppt/presentation.xml"/>
 </Relationships>`
 
-const PPTX_PRES_RELS =
-  `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
-  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/slide" Target="slides/slide1.xml"/>
-</Relationships>`
 
 export interface PptxTableCellSpec {
   paragraphs?: Array<{
@@ -347,6 +343,10 @@ export interface PptxTableSpec {
     h?: string
     cells: PptxTableCellSpec[]
   }>
+  /** a:tblPr/a:tableStyleId (must exist in the fixture tableStyles.xml). */
+  styleId?: string
+  firstRow?: boolean
+  bandRow?: boolean
 }
 
 export interface PptxShapeSpec {
@@ -366,6 +366,20 @@ export interface PptxShapeSpec {
     /** a:srcRect crop, in 1/1000 of a percent */
     srcRect?: { l?: number; t?: number; r?: number; b?: number }
   }
+}
+
+/** A table style with the canonical banded palette, emitted per styleId. */
+function tableStyleXml(styleId: string): string {
+  return `<a:tblStyle styleId="${styleId}" styleName="${styleId}">
+    <a:tblPr/>
+    <a:tblStylePr type="wholeTable"><a:tcPr><a:solidFill><a:srgbClr val="FFFFFF"/></a:solidFill></a:tcPr></a:tblStylePr>
+    <a:tblStylePr type="firstRow">
+      <a:tcPr><a:solidFill><a:srgbClr val="1F4E79"/></a:solidFill></a:tcPr>
+      <a:txStyles><a:tcStyle><a:fontRef idx="minor"><a:solidFill><a:srgbClr val="FFFFFF"/></a:solidFill></a:fontRef></a:tcStyle></a:txStyles>
+    </a:tblStylePr>
+    <a:tblStylePr type="band1Horz"><a:tcPr><a:solidFill><a:srgbClr val="DDEBF7"/></a:solidFill></a:tcPr></a:tblStylePr>
+    <a:tblStylePr type="band2Horz"><a:tcPr><a:solidFill><a:srgbClr val="FFFFFF"/></a:solidFill></a:tcPr></a:tblStylePr>
+  </a:tblStyle>`
 }
 
 /** Shared a:r builder for pptx fixtures (runs appear in shapes and table cells). */
@@ -389,13 +403,24 @@ export async function buildPptx(shapes: PptxShapeSpec[]): Promise<Uint8Array> {
   const ridsByData = new Map<Uint8Array, string>()
   zip.file('[Content_Types].xml', PPTX_CT)
   zip.file('_rels/.rels', PPTX_ROOT_RELS)
-  zip.file('ppt/_rels/presentation.xml.rels', PPTX_PRES_RELS)
+  zip.file('ppt/_rels/presentation.xml.rels',
+    `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/slide" Target="slides/slide1.xml"/>
+  <Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/tableStyles" Target="tableStyles.xml"/>
+</Relationships>`)
   zip.file('ppt/presentation.xml',
     `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <p:presentation xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
   <p:sldIdLst><p:sldId id="256" r:id="rId1"/></p:sldIdLst>
   <p:sldSz cx="9144000" cy="6858000"/>
 </p:presentation>`)
+  const styleIds = [...new Set(shapes.map((s) => s.table?.styleId).filter((v): v is string => !!v))]
+  if (styleIds.length > 0) {
+    zip.file('ppt/tableStyles.xml',
+      `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<a:tblStyleLst xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" def="{5C22544A-7EE6-4342-B048-85BDC9FD1C3A}">${styleIds.map((id) => tableStyleXml(id)).join('')}</a:tblStyleLst>`)
+  }
   const shapeXml = (s: PptxShapeSpec) => {
     if (s.table) {
       const cellXml = (c: PptxTableCellSpec) => {
@@ -407,8 +432,12 @@ export async function buildPptx(shapes: PptxShapeSpec[]): Promise<Uint8Array> {
         const ps = (c.paragraphs ?? []).map(pptxParaXml).join('')
         return `<a:tc ${attrs.join(' ')}>${tcPr}<a:txBody><a:bodyPr/><a:lstStyle/>${ps || '<a:p/>'}</a:txBody></a:tc>`
       }
+      const tblPr =
+        `<a:tblPr${s.table.firstRow ? ' firstRow="1"' : ''}${s.table.bandRow ? ' bandRow="1"' : ''}>` +
+        (s.table.styleId ? `<a:tableStyleId>${s.table.styleId}</a:tableStyleId>` : '') +
+        `</a:tblPr>`
       const tbl =
-        `<a:tbl><a:tblPr/><a:tblGrid>${s.table.colWidths.map((w) => `<a:gridCol w="${w}"/>`).join('')}</a:tblGrid>` +
+        `<a:tbl>${tblPr}<a:tblGrid>${s.table.colWidths.map((w) => `<a:gridCol w="${w}"/>`).join('')}</a:tblGrid>` +
         s.table.rows.map((r) => `<a:tr${r.h ? ` h="${r.h}"` : ''}>${r.cells.map(cellXml).join('')}</a:tr>`).join('') +
         `</a:tbl>`
       return `<p:graphicFrame><p:nvGraphicFramePr><p:cNvPr id="200" name="Table"/><p:cNvGraphicFramePr/><p:nvPr/></p:nvGraphicFramePr>` +

@@ -141,3 +141,80 @@ describe('pptx table render', () => {
     expect([outside[0], outside[1], outside[2]]).toEqual([255, 255, 255])
   })
 })
+
+describe('pptx table style resolution', () => {
+  const styled = {
+    colWidths: ['2286000', '2286000'],
+    firstRow: true,
+    bandRow: true,
+    styleId: 'FixtureTableStyle',
+    rows: [
+      { cells: [{ paragraphs: [{ align: 'ctr', runs: [{ text: 'Item' }] }] }, { paragraphs: [{ align: 'ctr', runs: [{ text: 'Qty' }] }] }] },
+      { cells: [{ paragraphs: [{ runs: [{ text: 'a' }] }] }, { paragraphs: [{ runs: [{ text: '1' }] }] }] },
+      { cells: [{ paragraphs: [{ runs: [{ text: 'b' }] }] }, { paragraphs: [{ runs: [{ text: '2' }] }] }] },
+      { cells: [{ paragraphs: [{ runs: [{ text: 'c' }] }] }, { paragraphs: [{ runs: [{ text: '3' }] }] }] },
+    ],
+  }
+
+  test('resolves styleId, flags and per-region fills from tableStyles.xml', async () => {
+    const doc = await parseFixture([tableFrame(styled)])
+    const table = doc.slides[0].shapes[0].table!
+    expect(table.styleId).toBe('FixtureTableStyle')
+    expect(table.firstRow).toBe(true)
+    expect(table.bandRow).toBe(true)
+    expect(table.styleFills?.firstRow).toBe('#1F4E79')
+    expect(table.styleFills?.band1).toBe('#DDEBF7')
+    expect(table.styleFills?.band2).toBe('#FFFFFF')
+    // header text switches to the style's font color
+    expect(table.firstRowTextColor).toBe('#FFFFFF')
+  })
+
+  test('paints the header fill from the style', async () => {
+    const doc = await parseFixture([tableFrame(styled)])
+    const m = slideMetrics(doc)
+    const { createCanvas } = await import('canvas')
+    const canvas = createCanvas(m.widthPx, m.heightPx)
+    const ctx = canvas.getContext('2d')!
+    renderSlide(doc.slides[0], ctx as unknown as CanvasRenderingContext2D, m)
+    // frame at (96,96) 480x192; 4 rows -> 48px each; sample inside row 0
+    const header = ctx.getImageData(110, 140, 1, 1).data
+    expect([header[0], header[1], header[2]]).toEqual([31, 78, 121]) // 1F4E79
+  })
+
+  test('bands alternate below the header row', async () => {
+    const doc = await parseFixture([tableFrame(styled)])
+    const m = slideMetrics(doc)
+    const { createCanvas } = await import('canvas')
+    const canvas = createCanvas(m.widthPx, m.heightPx)
+    const ctx = canvas.getContext('2d')!
+    renderSlide(doc.slides[0], ctx as unknown as CanvasRenderingContext2D, m)
+    const at = (rowIndex: number) => {
+      const y = 96 + rowIndex * 48 + 44
+      const px = ctx.getImageData(110, y, 1, 1).data
+      return [px[0], px[1], px[2]]
+    }
+    expect(at(1)).toEqual([221, 235, 247]) // DDEBF7 (band1)
+    expect(at(2)).toEqual([255, 255, 255]) // band2
+    expect(at(3)).toEqual([221, 235, 247]) // band1 again
+  })
+
+  test('an explicit cell fill overrides the style banding', async () => {
+    const doc = await parseFixture([
+      tableFrame({
+        ...styled,
+        rows: [
+          ...styled.rows.slice(0, 1),
+          { cells: [{ paragraphs: [{ runs: [{ text: 'override' }] }], fill: 'FF0000' }, { paragraphs: [{ runs: [{ text: 'x' }] }] }] },
+        ],
+      }),
+    ])
+    const m = slideMetrics(doc)
+    const { createCanvas } = await import('canvas')
+    const canvas = createCanvas(m.widthPx, m.heightPx)
+    const ctx = canvas.getContext('2d')!
+    renderSlide(doc.slides[0], ctx as unknown as CanvasRenderingContext2D, m)
+    // this table has 2 rows -> 96px each; sample the overridden cell
+    const px = ctx.getImageData(110, 96 + 96 + 80, 1, 1).data
+    expect([px[0], px[1], px[2]]).toEqual([255, 0, 0])
+  })
+})

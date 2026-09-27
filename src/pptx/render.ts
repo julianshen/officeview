@@ -165,6 +165,20 @@ function paintTable(
 
   // fills + text per cell; merged cells are painted by their anchor
   const covered = new Set<string>()
+  const styleFills = table.styleFills
+  // resolve the style-provided fill for a cell, lowest priority last
+  const styleFillFor = (ri: number, ci: number): string | undefined => {
+    if (!styleFills) return undefined
+    if (table.firstRow && styleFills.firstRow && ri === 0) return styleFills.firstRow
+    if (table.bandRow) {
+      // banding counts data rows only (row 0 is the header when firstRow)
+      const band = table.firstRow ? ri - 1 : ri
+      if (band >= 0) return band % 2 === 0 ? styleFills.band1 : styleFills.band2
+    }
+    if (styleFills.wholeTable) return styleFills.wholeTable
+    void ci
+    return undefined
+  }
   table.rows.forEach((row, ri) => {
     let ci = 0
     for (const cell of row.cells) {
@@ -179,14 +193,24 @@ function paintTable(
       const cy = rowY[ri] ?? 0
       const cw = (colX[ci + colSpan] ?? w) - cx
       const ch = (rowY[ri + rowSpan] ?? h) - cy
-      if (cell.fill) {
-        ctx.fillStyle = resolveColor(cell.fill)
+      // explicit cell fill wins over the table style's banding
+      const fill = cell.fill ?? styleFillFor(ri, ci)
+      if (fill) {
+        ctx.fillStyle = resolveColor(fill)
         ctx.fillRect(cx, cy, cw, ch)
       }
       if (cell.paragraphs.length > 0) {
+        // header rows in a styled table often switch to light text
+        const textColor = table.firstRow && ri === 0 ? table.firstRowTextColor : undefined
+        const paragraphs = textColor
+          ? cell.paragraphs.map((p) => ({
+              ...p,
+              runs: p.runs.map((r) => ({ ...r, color: r.color ?? textColor })),
+            }))
+          : cell.paragraphs
         paintTextBody(
           {
-            paragraphs: cell.paragraphs,
+            paragraphs,
             anchor: 'ctr',
             insetLeftEmu: CELL_PAD_EMU,
             insetRightEmu: CELL_PAD_EMU,

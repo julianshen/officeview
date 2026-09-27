@@ -59,6 +59,23 @@ export interface PptxTable {
   /** a:tblGrid/a:gridCol@w in EMU. */
   colWidthsEmu: number[]
   rows: PptxTableRow[]
+  /** a:tblPr/a:tableStyleId, resolved against ppt/tableStyles.xml. */
+  styleId?: string
+  /** a:tblPr@firstRow — apply the style's firstRow banding. */
+  firstRow?: boolean
+  /** a:tblPr@bandRow — apply the style's horizontal row banding. */
+  bandRow?: boolean
+  /** Resolved per-region fills from the table style. */
+  styleFills?: {
+    firstRow?: string
+    band1?: string
+    band2?: string
+    wholeTable?: string
+    lastRow?: string
+    firstCol?: string
+  }
+  /** Text color the style applies to the first row (headers are often white). */
+  firstRowTextColor?: string
 }
 
 export interface PptxShape {
