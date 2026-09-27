@@ -1,0 +1,160 @@
+/**
+ * XLSX rendering: paint sheets as a grid onto a canvas 2D context.
+ * Layout mimics Excel defaults: default col width 8.43 chars (~64px), row
+ * height 15pt (20px). Cell geometry is fixed; no reflow needed.
+ */
+import type { XlsxSheet } from './types'
+import { resolveColor } from '../core/color'
+
+export interface GridMetrics {
+  colWidthsPx: number[]
+  rowHeightsPx: number[]
+  widthPx: number
+  heightPx: number
+}
+
+const DEFAULT_COL_PX = 64
+const DEFAULT_ROW_PX = 20
+const CHAR_PX = 7
+
+export function computeMetrics(sheet: XlsxSheet): GridMetrics {
+  let maxCol = 0
+  for (const row of sheet.rows) for (const c of row.cells) maxCol = Math.max(maxCol, c.col)
+  for (const col of sheet.cols) maxCol = Math.max(maxCol, col.max)
+  const nCols = Math.max(maxCol + 1, 1)
+  const colWidthsPx = new Array<number>(nCols).fill(DEFAULT_COL_PX)
+  for (const spec of sheet.cols) {
+    if (spec.widthChars !== undefined && !spec.hidden) {
+      const w = Math.round(spec.widthChars * CHAR_PX + 5)
+      for (let c = spec.min; c <= spec.max && c < nCols; c++) colWidthsPx[c] = w
+    }
+  }
+  let maxRow = 0
+  for (const row of sheet.rows) maxRow = Math.max(maxRow, row.index)
+  const nRows = maxRow + 1
+  const rowHeightsPx = new Array<number>(nRows).fill(DEFAULT_ROW_PX)
+  for (const row of sheet.rows) {
+    if (row.heightPt !== undefined && row.customHeight) {
+      rowHeightsPx[row.index] = Math.round(row.heightPt * (96 / 72))
+    }
+  }
+  return {
+    colWidthsPx,
+    rowHeightsPx,
+    widthPx: colWidthsPx.reduce((a, b) => a + b, 0),
+    heightPx: rowHeightsPx.reduce((a, b) => a + b, 0),
+  }
+}
+
+/** Format a numeric value for common built-in number formats. */
+export function formatValue(value: string | number | boolean | null, numFmtId: number): string {
+  if (value === null) return ''
+  if (typeof value === 'string') return value
+  if (typeof value === 'boolean') return value ? 'TRUE' : 'FALSE'
+  switch (numFmtId) {
+    case 2: // 0.00
+      return value.toFixed(2)
+    case 9: return `${Math.round(value * 100)}%`
+    case 10: return `${(value * 100).toFixed(2)}%`
+    case 3: return Math.round(value).toLocaleString('en-US')
+    case 4: return value.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+    default:
+      if (numFmtId >= 14 && numFmtId <= 22) return formatDateSerial(value)
+      return String(Math.round(value * 100) / 100)
+  }
+}
+
+const EXCEL_EPOCH = Date.UTC(1899, 11, 30)
+
+export function formatDateSerial(serial: number): string {
+  const d = new Date(EXCEL_EPOCH + serial * 86400000)
+  const mm = String(d.getUTCMonth() + 1).padStart(2, '0')
+  const dd = String(d.getUTCDate()).padStart(2, '0')
+  return `${d.getUTCFullYear()}-${mm}-${dd}`
+}
+
+function prefixSums(widths: number[]): number[] {
+  const out = new Array<number>(widths.length + 1)
+  out[0] = 0
+  for (let i = 0; i < widths.length; i++) out[i + 1] = out[i] + widths[i]
+  return out
+}
+
+/** Render a sheet grid. ctx state: 1 unit = 1 px, (0,0) top-left of sheet. */
+export function renderSheet(sheet: XlsxSheet, ctx: CanvasRenderingContext2D, metrics?: GridMetrics): void {
+  const m = metrics ?? computeMetrics(sheet)
+  const { colWidthsPx, rowHeightsPx } = m
+  const colX = prefixSums(colWidthsPx)
+  const rowY = prefixSums(rowHeightsPx)
+
+  ctx.fillStyle = '#ffffff'
+  ctx.fillRect(0, 0, m.widthPx, m.heightPx)
+
+  for (const row of sheet.rows) {
+    const y = rowY[row.index] ?? 0
+    const h = rowHeightsPx[row.index] ?? DEFAULT_ROW_PX
+    for (const cell of row.cells) {
+      const x = colX[cell.col] ?? 0
+      const w = colWidthsPx[cell.col] ?? DEFAULT_COL_PX
+      // fill
+      const fill = cell.style?.fillColor
+      if (fill) {
+        ctx.fillStyle = resolveColor(fill)
+        ctx.fillRect(x, y, w, h)
+      }
+      // text (right-align numbers, left-align strings)
+      const text = formatValue(cell.value, cell.style?.numFmtId ?? 0)
+      if (text !== '') {
+        ctx.fillStyle = cell.style?.color ? resolveColor(cell.style.color) : '#000000'
+        ctx.font = `${cell.style?.italic ? 'italic ' : ''}${cell.style?.bold ? 'bold ' : ''}${cell.style?.fontSizePt ?? 10}pt "Calibri"`
+        const numeric = typeof cell.value === 'number'
+        const textW = ctx.measureText(text).width
+        const tx = numeric ? x + w - PADDING_R - textW : x + PADDING_L
+        const ty = y + h - (h - (cell.style?.fontSizePt ?? 10) * (96 / 72)) / 2
+        ctx.textBaseline = 'alphabetic'
+        ctx.fillText(text, tx, ty)
+      }
+      // borders
+      const b = cell.style?.borders
+      if (b) {
+        ctx.lineWidth = 1
+        const draw = (side: string | undefined, x1: number, yy1: number, x2: number, yy2: number) => {
+          if (!side) return
+          ctx.strokeStyle = '#000000'
+          ctx.beginPath()
+          ctx.moveTo(x1 + 0.5, yy1 + 0.5)
+          ctx.lineTo(x2 + 0.5, yy2 + 0.5)
+          ctx.stroke()
+        }
+        draw(b.left, x, y, x, y + h)
+        draw(b.right, x + w, y, x + w, y + h)
+        draw(b.top, x, y, x + w, y)
+        draw(b.bottom, x, y + h, x + w, y + h)
+      }
+    }
+  }
+
+  // grid lines under text? Excel draws them beneath values but above fills —
+  // we draw above fills but text was already painted; acceptable baseline.
+  ctx.strokeStyle = '#d0d0d0'
+  ctx.lineWidth = 1
+  ctx.beginPath()
+  for (let c = 0; c < colWidthsPx.length; c++) {
+    const x = colX[c]
+    ctx.moveTo(x + 0.5, 0)
+    ctx.lineTo(x + 0.5, m.heightPx)
+  }
+  ctx.moveTo(m.widthPx + 0.5, 0)
+  ctx.lineTo(m.widthPx + 0.5, m.heightPx)
+  for (let r = 0; r < rowHeightsPx.length; r++) {
+    const y = rowY[r]
+    ctx.moveTo(0, y + 0.5)
+    ctx.lineTo(m.widthPx, y + 0.5)
+  }
+  ctx.moveTo(0, m.heightPx + 0.5)
+  ctx.lineTo(m.widthPx, m.heightPx + 0.5)
+  ctx.stroke()
+}
+
+const PADDING_L = 3
+const PADDING_R = 3

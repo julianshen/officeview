@@ -62,3 +62,103 @@ export async function buildDocx(paras: DocxParaSpec[]): Promise<Uint8Array> {
 </w:styles>`)
   return zip.generateAsync({ type: 'uint8array' })
 }
+
+const XLSX_CT =
+  `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
+  <Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>
+  <Default Extension="xml" ContentType="application/xml"/>
+  <Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>
+  <Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>
+  <Override PartName="/xl/sharedStrings.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sharedStrings+xml"/>
+  <Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/>
+</Types>`
+
+const XLSX_ROOT_RELS =
+  `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/>
+</Relationships>`
+
+const XLSX_WORKBOOK_RELS =
+  `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/>
+  <Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/sharedStrings" Target="sharedStrings.xml"/>
+  <Relationship Id="rId3" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/>
+</Relationships>`
+
+export interface XlsxCellSpec {
+  ref: string
+  /** shared string index */
+  s?: number
+  v?: string | number
+  t?: 's' | 'n' | 'b' | 'str'
+  style?: number
+}
+
+export interface XlsxSheetSpec {
+  name: string
+  rows: Array<{ r: number; cells: XlsxCellSpec[] }>
+  cols?: string
+  merges?: string[]
+}
+
+/** Build a minimal xlsx buffer. */
+export async function buildXlsx(sheets: XlsxSheetSpec[], sharedStrings: string[] = []): Promise<Uint8Array> {
+  const zip = new JSZip()
+  zip.file('[Content_Types].xml', XLSX_CT)
+  zip.file('_rels/.rels', XLSX_ROOT_RELS)
+  zip.file('xl/_rels/workbook.xml.rels', XLSX_WORKBOOK_RELS)
+  const sheetXml = (sheet: XlsxSheetSpec) =>
+    `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+  ${sheet.cols ? `<cols>${sheet.cols}</cols>` : ''}
+  <sheetData>
+    ${sheet.rows.map((row) => `<row r="${row.r}">${row.cells.map((c) => `<c r="${c.ref}"${c.t ? ` t="${c.t}"` : ''}${c.style !== undefined ? ` s="${c.style}"` : ''}>${c.v !== undefined ? `<v>${c.v}</v>` : ''}</c>`).join('')}</row>`).join('\n    ')}
+  </sheetData>
+  ${sheet.merges ? `<mergeCells count="${sheet.merges.length}">${sheet.merges.map((m) => `<mergeCell ref="${m}"/>`).join('')}</mergeCells>` : ''}
+</worksheet>`
+  const workbookXml =
+    `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
+  <sheets>
+    ${sheets.map((s, i) => `<sheet name="${s.name}" sheetId="${i + 1}" r:id="rId${i + 1}"/>`).join('\n    ')}
+  </sheets>
+</workbook>`
+  zip.file('xl/workbook.xml', workbookXml)
+  for (let i = 0; i < sheets.length; i++) {
+    zip.file(`xl/worksheets/sheet${i + 1}.xml`, sheetXml(sheets[i]))
+  }
+  if (sharedStrings.length > 0) {
+    zip.file('xl/sharedStrings.xml',
+      `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<sst xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" count="${sharedStrings.length}" uniqueCount="${sharedStrings.length}">
+  ${sharedStrings.map((s) => `<si><t>${s.replace(/&/g, '&amp;')}</t></si>`).join('\n  ')}
+</sst>`)
+  }
+  zip.file('xl/styles.xml',
+    `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+  <fonts count="2">
+    <font><sz val="11"/><name val="Calibri"/></font>
+    <font><b/><sz val="14"/><name val="Calibri"/><color rgb="FF0000FF"/></font>
+  </fonts>
+  <fills count="3">
+    <fill><patternFill patternType="none"/></fill>
+    <fill><patternFill patternType="gray125"/></fill>
+    <fill><patternFill patternType="solid"><fgColor rgb="FFFFFF00"/></patternFill></fill>
+  </fills>
+  <borders count="2">
+    <border><left/><right/><top/><bottom/><diagonal/></border>
+    <border><left style="thin"><color auto="1"/></left><right style="thin"><color auto="1"/></right><top style="thin"><color auto="1"/></top><bottom style="thin"><color auto="1"/></bottom><diagonal/></border>
+  </borders>
+  <cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs>
+  <cellXfs count="3">
+    <xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/>
+    <xf numFmtId="0" fontId="1" fillId="2" borderId="1" xfId="0" applyFont="1" applyFill="1" applyBorder="1"/>
+    <xf numFmtId="2" fontId="0" fillId="0" borderId="0" xfId="0" applyNumberFormat="1"/>
+  </cellXfs>
+</styleSheet>`)
+  return zip.generateAsync({ type: 'uint8array' })
+}
