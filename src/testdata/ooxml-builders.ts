@@ -11,6 +11,8 @@ export const CT_TYPES =
   <Override PartName="/word/header1.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.header+xml"/>
   <Override PartName="/word/footer1.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.footer+xml"/>
   <Override PartName="/word/numbering.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.numbering+xml"/>
+  <Override PartName="/word/header2.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.header+xml"/>
+  <Override PartName="/word/footer2.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.footer+xml"/>
 </Types>`
 
 export const ROOT_RELS =
@@ -67,6 +69,11 @@ export interface DocxTableSpec {
 export interface DocxHeaderFooterSpec {
   header?: DocxParaSpec[]
   footer?: DocxParaSpec[]
+  /** w:type="first" variants, rendered only when titlePg is set. */
+  firstHeader?: DocxParaSpec[]
+  firstFooter?: DocxParaSpec[]
+  /** Emit <w:titlePg/> so the section uses a distinct first page. */
+  titlePg?: boolean
   /** w:header/w:footer margin distance from the page edge, in twips. */
   marginTwips?: number
 }
@@ -169,11 +176,22 @@ export async function buildDocx(
     zip.file('word/footer1.xml', hfPart('ftr', hf.footer))
     sectRefs += '<w:footerReference w:type="default" r:id="rIdFtr"/>'
   }
+  if (hf.firstHeader) {
+    zip.file('word/header2.xml', hfPart('hdr', hf.firstHeader))
+    sectRefs += '<w:headerReference w:type="first" r:id="rIdHdrFirst"/>'
+  }
+  if (hf.firstFooter) {
+    zip.file('word/footer2.xml', hfPart('ftr', hf.firstFooter))
+    sectRefs += '<w:footerReference w:type="first" r:id="rIdFtrFirst"/>'
+  }
+  if (hf.titlePg) sectRefs += '<w:titlePg/>'
   zip.file('word/_rels/document.xml.rels',
     `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
   ${hf.header ? '<Relationship Id="rIdHdr" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/header" Target="header1.xml"/>' : ''}
   ${hf.footer ? '<Relationship Id="rIdFtr" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/footer" Target="footer1.xml"/>' : ''}
+  ${hf.firstHeader ? '<Relationship Id="rIdHdrFirst" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/header" Target="header2.xml"/>' : ''}
+  ${hf.firstFooter ? '<Relationship Id="rIdFtrFirst" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/footer" Target="footer2.xml"/>' : ''}
 </Relationships>`)
   if (sectRefs) document = document.replace('<w:sectPr>', `<w:sectPr>${sectRefs}`)
   zip.file('word/document.xml', document)

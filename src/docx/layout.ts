@@ -413,28 +413,33 @@ export function layoutDocx(document: DocxDocument, measure: MeasureFn): PageLayo
     }
     if (page.lines.length > 0 || page.tables.length > 0 || page.images.length > 0 || pages.length === 0) pages.push(page)
 
-    // attach this section's header/footer to every page it produced
-    if (section.header || section.footer) {
-      const hf: Pick<PageLayout, 'header' | 'footer'> = {}
-      if (section.header) {
-        hf.header = {
-          paragraphs: section.header,
-          yPx: twipsToPx(section.margins.headerTwips),
-          xPx: m.left,
-          widthPx: contentWidth,
-          defaults,
-        }
-      }
-      if (section.footer) {
-        hf.footer = {
-          paragraphs: section.footer,
-          yPx: heightPx - twipsToPx(section.margins.footerTwips),
-          xPx: m.left,
-          widthPx: contentWidth,
-          defaults,
-        }
-      }
-      for (let i = pagesBefore; i < pages.length; i++) Object.assign(pages[i], hf)
+    // attach this section's header/footer to every page it produced; with
+    // w:titlePg the first page gets the type="first" variants instead
+    if (section.header || section.footer || section.firstHeader || section.firstFooter) {
+      const block = (
+        paragraphs: DocxParagraph[] | undefined,
+        yPx: number,
+      ): HFBlock | undefined =>
+        paragraphs
+          ? { paragraphs, yPx, xPx: m.left, widthPx: contentWidth, defaults }
+          : undefined
+      const headerY = twipsToPx(section.margins.headerTwips)
+      const footerY = heightPx - twipsToPx(section.margins.footerTwips)
+      const make = (firstPage: boolean) => ({
+        header: block(
+          firstPage && section.titlePg ? (section.firstHeader ?? section.header) : section.header,
+          headerY,
+        ),
+        footer: block(
+          firstPage && section.titlePg ? (section.firstFooter ?? section.footer) : section.footer,
+          footerY,
+        ),
+      })
+      pages.slice(pagesBefore).forEach((p, i) => {
+        const { header, footer } = make(i === 0)
+        if (header) p.header = header
+        if (footer) p.footer = footer
+      })
     }
   }
   return pages

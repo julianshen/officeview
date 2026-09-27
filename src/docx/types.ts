@@ -69,6 +69,10 @@ export interface DocxSection {
   header?: DocxParagraph[]
   /** Footer paragraphs (w:footerReference), painted on every page. */
   footer?: DocxParagraph[]
+  /** w:titlePg — the first page uses these instead. */
+  titlePg?: boolean
+  firstHeader?: DocxParagraph[]
+  firstFooter?: DocxParagraph[]
 }
 
 export interface DocxDocument {

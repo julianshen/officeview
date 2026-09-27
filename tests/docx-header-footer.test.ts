@@ -154,3 +154,77 @@ describe('per-page canvas field numbering', () => {
     for (let i = 0; i < total; i++) expect(paintText(i)).toContain(String(total))
   })
 })
+
+describe('docx w:titlePg first-page header/footer', () => {
+  const MANY: DocxParaSpec[] = Array.from({ length: 90 }, (_, i) => p(`body ${i}`))
+
+  test('parses the first-page variants and the titlePg flag', async () => {
+    const doc = await parseWithHf([p('body')], {
+      header: [p('default header')],
+      firstHeader: [p('first page header')],
+      titlePg: true,
+    })
+    const section = doc.sections[0]
+    expect(section.titlePg).toBe(true)
+    expect(section.header![0].runs[0].text).toBe('default header')
+    expect(section.firstHeader![0].runs[0].text).toBe('first page header')
+  })
+
+  test('first page uses the first-page header, later pages the default', async () => {
+    const doc = await parseWithHf(MANY, {
+      header: [p('default header')],
+      firstHeader: [p('first page header')],
+      footer: [p('default footer')],
+      firstFooter: [p('first page footer')],
+      titlePg: true,
+    })
+    const pages = layoutDocx(doc, measureFixed)
+    expect(pages.length).toBeGreaterThan(1)
+    expect(pages[0].header!.paragraphs[0].runs[0].text).toBe('first page header')
+    expect(pages[0].footer!.paragraphs[0].runs[0].text).toBe('first page footer')
+    for (const page of pages.slice(1)) {
+      expect(page.header!.paragraphs[0].runs[0].text).toBe('default header')
+      expect(page.footer!.paragraphs[0].runs[0].text).toBe('default footer')
+    }
+  })
+
+  test('without titlePg the first-page header is ignored', async () => {
+    const doc = await parseWithHf(MANY, {
+      header: [p('default header')],
+      firstHeader: [p('first page header')],
+    })
+    const pages = layoutDocx(doc, measureFixed)
+    expect(pages[0].header!.paragraphs[0].runs[0].text).toBe('default header')
+  })
+
+  test('paints the first-page header text on page one only', async () => {
+    const doc = await parseWithHf(MANY, {
+      header: [p('DEFAULT')],
+      firstHeader: [p('FIRSTPAGE')],
+      titlePg: true,
+    })
+    const pages = layoutDocx(doc, measureFixed)
+    const { createCanvas } = await import('canvas')
+    const paintText = (page: typeof pages[number]): string => {
+      const canvas = createCanvas(Math.ceil(page.widthPx), Math.ceil(page.heightPx))
+      const ctx = canvas.getContext('2d')!
+      const calls: string[] = []
+      const spy = new Proxy(ctx as unknown as object, {
+        get(target, prop) {
+          if (prop === 'fillText') return (t: string) => { calls.push(String(t)) }
+          const value = (target as Record<string | symbol, unknown>)[prop]
+          return typeof value === 'function' ? value.bind(target) : value
+        },
+        set(target, prop, value) {
+          ;(target as Record<string | symbol, unknown>)[prop] = value
+          return true
+        },
+      }) as unknown as CanvasRenderingContext2D
+      renderPages([page], spy)
+      return calls.join('')
+    }
+    expect(paintText(pages[0])).toContain('FIRSTPAGE')
+    expect(paintText(pages[0])).not.toContain('DEFAULT')
+    expect(paintText(pages[1])).toContain('DEFAULT')
+  })
+})

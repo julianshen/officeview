@@ -349,29 +349,58 @@ async function loadHeaderFooter(
   sectPr: XmlNode,
   rels: Map<string, { type: string; target: string }>,
   pkg: OfficePackage,
-): Promise<{ header?: DocxParagraph[]; footer?: DocxParagraph[] }> {
-  const out: { header?: DocxParagraph[]; footer?: DocxParagraph[] } = {}
+): Promise<{
+  header?: DocxParagraph[]
+  footer?: DocxParagraph[]
+  firstHeader?: DocxParagraph[]
+  firstFooter?: DocxParagraph[]
+}> {
+  const out: { header?: DocxParagraph[]; footer?: DocxParagraph[]; firstHeader?: DocxParagraph[]; firstFooter?: DocxParagraph[] } = {}
   for (const [kind, tag] of [['header', 'headerReference'], ['footer', 'footerReference']] as const) {
     const refs = getChildren(sectPr, tag)
     if (refs.length === 0) continue
-    // prefer the default type, else the first reference
-    const chosen = refs.find((r) => attrs(r).type === 'default') ?? refs[0]
-    const rid = (attrs(chosen)['r:id'] ?? attrs(chosen).id) as string | undefined
-    if (!rid) continue
-    const rel = rels.get(rid)
-    if (!rel) continue
-    const path = rel.target.startsWith('/') ? rel.target.slice(1) : `word/${rel.target.replace(/^\.\.\//, '')}`
-    const part = await pkg.xml(path)
-    if (!part) continue
-    const paragraphs: DocxParagraph[] = []
-    const partNumbering = await pkg.xml('word/numbering.xml')
-    const partState = partNumbering ? parseNumbering(partNumbering) : undefined
-    for (const [name, node] of elementChildren(part)) {
-      if (name === 'p') paragraphs.push(parseParagraph(node, undefined, partState))
+    // w:type="first" overrides only the section's first page
+    const firstRef = refs.find((r) => attrs(r).type === 'first')
+    if (firstRef) {
+      const first = await loadPart(firstRef, rels, pkg)
+      if (first) out[kind === 'header' ? 'firstHeader' : 'firstFooter'] = first
     }
-    if (paragraphs.length > 0) out[kind] = paragraphs
+    // prefer the default type, else the first non-first reference
+    const chosen = refs.find((r) => attrs(r).type === 'default') ?? refs.find((r) => attrs(r).type !== 'first') ?? refs[0]
+    if (!chosen || attrs(chosen).type === 'first') {
+      // only a first-page reference exists
+      if (!firstRef) continue
+      const only = await loadPart(firstRef, rels, pkg)
+      if (only) out[kind] = only
+      continue
+    }
+    const paragraphs = await loadPart(chosen, rels, pkg)
+    if (paragraphs) out[kind] = paragraphs
   }
   return out
+}
+
+/** Read a header/footer part referenced by rId into paragraphs. */
+async function loadPart(
+  ref: XmlNode,
+  rels: Map<string, { type: string; target: string }>,
+  pkg: OfficePackage,
+): Promise<DocxParagraph[] | undefined> {
+  const rid = (attrs(ref)['r:id'] ?? attrs(ref).id) as string | undefined
+  if (!rid) return undefined
+  const rel = rels.get(rid)
+  if (!rel) return undefined
+  const path = rel.target.startsWith('/') ? rel.target.slice(1) : `word/${rel.target.replace(/^\.\.\//, '')}`
+  const part = await pkg.xml(path)
+  if (!part) return undefined
+  const paragraphs: DocxParagraph[] = []
+  // lists in a header/footer start from their own counters
+  const partNumbering = await pkg.xml('word/numbering.xml')
+  const partState = partNumbering ? parseNumbering(partNumbering) : undefined
+  for (const [name, node] of elementChildren(part)) {
+    if (name === 'p') paragraphs.push(parseParagraph(node, undefined, partState))
+  }
+  return paragraphs.length > 0 ? paragraphs : undefined
 }
 
 async function loadDocImages(pkg: OfficePackage): Promise<DocxImage[]> {
@@ -441,6 +470,9 @@ export async function parseDocx(pkg: OfficePackage): Promise<DocxDocument> {
       const hf = await loadHeaderFooter(node, docRels, pkg)
       if (hf.header) current.header = hf.header
       if (hf.footer) current.footer = hf.footer
+      if (hf.firstHeader) current.firstHeader = hf.firstHeader
+      if (hf.firstFooter) current.firstFooter = hf.firstFooter
+      if (node['titlePg'] !== undefined) current.titlePg = true
       const pgMar = getChildren(node, 'pgMar')[0]
       const pgSz = getChildren(node, 'pgSz')[0]
       if (pgMar) {
