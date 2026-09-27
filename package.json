@@ -27,7 +27,10 @@
   "peerDependencies": {
     "react": ">=18"
   },
-  "dependencies": {},
+  "dependencies": {
+    "fast-xml-parser": "^5.11.1",
+    "jszip": "^3.10.2"
+  },
   "devDependencies": {
     "@types/node": "^22.0.0",
     "@types/react": "^19.2.7",
