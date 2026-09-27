@@ -32,6 +32,8 @@ export interface LineBox {
   /** true for the last line of its paragraph (no justification stretch). */
   isParagraphEnd: boolean
   heightPx: number
+  /** Width of the content area this line flows in (page column or table cell). */
+  contentWidthPx: number
 }
 
 export interface PageLayout {
@@ -161,9 +163,9 @@ function layoutParagraph(
     const h = para.lineSpacing?.rule === 'exact' ? twipsToPx(para.lineSpacing.value) : Math.max(lineHeight, paragraphLineHeight() * 0.9)
     const lineIndent = indentLeft + (firstLine ? firstLineIndent : 0)
     if (segs.length === 0) {
-      lines.push({ yPx: y, xPx: contentX + lineIndent, widthPx: 0, segs: [], align: para.align, isParagraphEnd, heightPx: h })
+      lines.push({ yPx: y, xPx: contentX + lineIndent, widthPx: 0, segs: [], align: para.align, isParagraphEnd, heightPx: h, contentWidthPx: usable })
     } else {
-      lines.push({ yPx: y, xPx: contentX + lineIndent, widthPx: width, segs, align: para.align, isParagraphEnd, heightPx: h })
+      lines.push({ yPx: y, xPx: contentX + lineIndent, widthPx: width, segs, align: para.align, isParagraphEnd, heightPx: h, contentWidthPx: usable })
     }
     y += h
     if (para.lineSpacing?.rule === 'atLeast') {
@@ -348,11 +350,11 @@ export function renderPages(pages: PageLayout[], ctx: CanvasRenderingContext2D, 
       let extraSpacePerGap = 0
       if (line.align === 'justify' && !line.isParagraphEnd && line.segs.length > 1) {
         const gaps = countGaps(line.segs)
-        if (gaps > 0) extraSpacePerGap = (page.widthPx - marginsApprox(line) - line.widthPx) / gaps
+        if (gaps > 0) extraSpacePerGap = (line.contentWidthPx - line.widthPx) / gaps
       }
       let offset = 0
-      if (line.align === 'center') offset = (usableWidth(page, line) - line.widthPx) / 2
-      else if (line.align === 'right') offset = usableWidth(page, line) - line.widthPx
+      if (line.align === 'center') offset = (line.contentWidthPx - line.widthPx) / 2
+      else if (line.align === 'right') offset = line.contentWidthPx - line.widthPx
       let x = line.xPx + offset
       let maxAscent = 0
       for (const seg of line.segs) maxAscent = Math.max(maxAscent, seg.style.fontSizePt * LINE_HEIGHT_FACTOR * 0.8)
@@ -436,15 +438,6 @@ function paintTables(tables: TableBox[], ctx: CanvasRenderingContext2D): void {
       }
     }
   }
-}
-
-function marginsApprox(line: LineBox): number {
-  // x offset within the page (left margin)
-  return line.xPx
-}
-
-function usableWidth(page: PageLayout, line: LineBox): number {
-  return page.widthPx - line.xPx - twipsToPx(1440)
 }
 
 // ---------- table layout ----------
