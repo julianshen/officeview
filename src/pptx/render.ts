@@ -19,16 +19,21 @@ export function slideMetrics(doc: PptxDocument): SlideMetrics {
 }
 
 /** Render one slide. ctx: 1 unit = 1 px, slide fills the given size. */
-export function renderSlide(slide: PptxSlide, ctx: CanvasRenderingContext2D, metrics?: SlideMetrics): void {
+export function renderSlide(
+  slide: PptxSlide,
+  ctx: CanvasRenderingContext2D,
+  metrics?: SlideMetrics,
+  images?: Array<CanvasImageSource | undefined>,
+): void {
   const m = metrics ?? { widthPx: Math.round(emuToPx(slide.widthEmu)), heightPx: Math.round(emuToPx(slide.heightEmu)) }
   ctx.fillStyle = '#ffffff'
   ctx.fillRect(0, 0, m.widthPx, m.heightPx)
   for (const shape of slide.shapes) {
-    paintShape(shape, ctx)
+    paintShape(shape, ctx, images)
   }
 }
 
-function paintShape(shape: PptxShape, ctx: CanvasRenderingContext2D): void {
+function paintShape(shape: PptxShape, ctx: CanvasRenderingContext2D, images?: Array<CanvasImageSource | undefined>): void {
   const x = emuToPx(shape.xEmu)
   const y = emuToPx(shape.yEmu)
   const w = emuToPx(shape.widthEmu)
@@ -62,9 +67,55 @@ function paintShape(shape: PptxShape, ctx: CanvasRenderingContext2D): void {
     ctx.lineWidth = Math.max(1, emuToPx(shape.line.widthEmu ?? 12700))
     ctx.stroke()
   }
+  // picture (p:pic): drawn over the fill, beneath text
+  if (images && shape.imageIndex !== undefined) {
+    const img = images[shape.imageIndex]
+    if (img) {
+      drawImageFitted(img as CanvasImageSource, shape, ctx, x, y, w, h)
+    }
+  }
   // text
   if (shape.textBody) paintTextBody(shape.textBody, ctx, x, y, w, h)
   ctx.restore()
+}
+
+/** Draw a picture into the shape rect, honoring a:srcRect crop. */
+function drawImageFitted(
+  img: CanvasImageSource,
+  shape: PptxShape,
+  ctx: CanvasRenderingContext2D,
+  x: number,
+  y: number,
+  w: number,
+  h: number,
+): void {
+  const src = shape.image?.srcRect
+  if (!src) {
+    ctx.drawImage(img, x, y, w, h)
+    return
+  }
+  const iw = naturalWidth(img)
+  const ih = naturalHeight(img)
+  if (iw <= 0 || ih <= 0) {
+    ctx.drawImage(img, x, y, w, h)
+    return
+  }
+  const sx = iw * src.l
+  const sy = ih * src.t
+  const sw = iw * (1 - src.l - src.r)
+  const sh = ih * (1 - src.t - src.b)
+  if (sw <= 0 || sh <= 0) return
+  ctx.drawImage(img, sx, sy, sw, sh, x, y, w, h)
+}
+
+function naturalWidth(img: CanvasImageSource): number {
+  const anyImg = img as { width?: number; naturalWidth?: number }
+  return anyImg.naturalWidth ?? anyImg.width ?? 0
+}
+
+function naturalHeight(img: CanvasImageSource): number {
+  const anyImg = img as { height?: number; naturalHeight?: number }
+  return anyImg.naturalHeight ?? anyImg.height ?? 0
 }
 
 function paintTextBody(body: PptxTextBody, ctx: CanvasRenderingContext2D, x: number, y: number, w: number, h: number): void {

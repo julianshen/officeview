@@ -2,7 +2,8 @@
 import type { OfficePackage } from '../core/zip'
 import { attrs, elementChildren, getChildren, textOf, type XmlNode } from '../core/xml'
 import { hexRgbToCss } from '../core/color'
-import type { PptxDocument, PptxParagraph, PptxShape, PptxSlide, PptxTextBody, PptxTextRun } from './types'
+import type { PptxDocument, PptxImageRef, PptxParagraph, PptxShape, PptxSlide, PptxTextBody, PptxTextRun } from './types'
+import { sniffImageMime } from '../core/images'
 
 const DEFAULT_INSET_LR = 91440
 const DEFAULT_INSET_TB = 45720
@@ -76,7 +77,7 @@ function parseTextBody(txBody: XmlNode): PptxTextBody {
   return body
 }
 
-function parseShape(sp: XmlNode): PptxShape | undefined {
+function parseShape(sp: XmlNode, slideImages?: Map<string, PptxImageRef>): PptxShape | undefined {
   const spPr = getChildren(sp, 'spPr')[0]
   if (!spPr) return undefined
   const xfrm = getChildren(spPr, 'xfrm')[0]
@@ -107,7 +108,72 @@ function parseShape(sp: XmlNode): PptxShape | undefined {
   }
   const txBody = getChildren(sp, 'txBody')[0]
   if (txBody) shape.textBody = parseTextBody(txBody)
+  // p:pic: <p:blipFill><a:blip r:embed="rIdN"/><a:srcRect/></p:blipFill>
+  if (slideImages) {
+    const blipFill = getChildren(sp, 'blipFill')[0]
+    if (blipFill) {
+      const blip = getChildren(blipFill, 'blip')[0]
+      const rid = attrs(blip).embed as string | undefined
+      const image = rid ? slideImages.get(rid) : undefined
+      if (image) {
+        const srcRect = getChildren(blipFill, 'srcRect')[0]
+        shape.image = image
+        if (srcRect) {
+          const sa = attrs(srcRect)
+          // srcRect units are 1/1000 of a percent
+          const frac = (v: string | undefined): number => (v !== undefined ? parseFloat(v) / 100000 : 0)
+          shape.image = {
+            ...image,
+            srcRect: {
+              l: frac(sa.l as string | undefined),
+              t: frac(sa.t as string | undefined),
+              r: frac(sa.r as string | undefined),
+              b: frac(sa.b as string | undefined),
+            },
+          }
+        }
+      }
+    }
+  }
   return shape
+}
+
+/** Resolve a relationship Target against the part's directory. */
+function resolveTarget(partPath: string, target: string): string {
+  if (target.startsWith('/')) return target.slice(1)
+  const base = partPath.includes('/') ? partPath.slice(0, partPath.lastIndexOf('/')) : ''
+  const segs = base ? base.split('/') : []
+  for (const seg of target.split('/')) {
+    if (seg === '.' || seg === '') continue
+    if (seg === '..') segs.pop()
+    else segs.push(seg)
+  }
+  return segs.join('/')
+}
+
+/** Load image parts referenced by a part's .rels file, keyed by rId. */
+async function loadSlideImages(pkg: OfficePackage, partPath: string): Promise<Map<string, PptxImageRef>> {
+  const out = new Map<string, PptxImageRef>()
+  const relsPath = `${partPath.slice(0, partPath.lastIndexOf('/'))}/_rels/${partPath.slice(partPath.lastIndexOf('/') + 1)}.rels`
+  const rels = await pkg.xml(relsPath)
+  if (!rels) return out
+  // one PptxImageRef per media part, so multiple rIds for the same part dedupe
+  const byPath = new Map<string, PptxImageRef>()
+  for (const rel of getChildren(rels, 'Relationship')) {
+    const a = attrs(rel)
+    const type = a.Type as string | undefined
+    if (!type || !type.includes('/image')) continue
+    const path = resolveTarget(partPath, (a.Target as string) ?? '')
+    let ref = byPath.get(path)
+    if (!ref) {
+      const data = await pkg.bytes(path)
+      if (!data) continue
+      ref = { data, mime: sniffImageMime(data) }
+      byPath.set(path, ref)
+    }
+    if (a.Id) out.set(a.Id, ref)
+  }
+  return out
 }
 
 export async function parsePptx(pkg: OfficePackage): Promise<PptxDocument> {
@@ -119,6 +185,7 @@ export async function parsePptx(pkg: OfficePackage): Promise<PptxDocument> {
     slideWidthEmu: num(sa.cx as string, 9144000),
     slideHeightEmu: num(sa.cy as string, 6858000),
     slides: [],
+    images: [],
   }
   // slide order from presentation rels
   const rels = await pkg.xml('ppt/_rels/presentation.xml.rels')
@@ -137,6 +204,7 @@ export async function parsePptx(pkg: OfficePackage): Promise<PptxDocument> {
     const target = relMap.get(rid) ?? ''
     const path = target.startsWith('/') ? target.slice(1) : `ppt/${target.replace(/^\.\.\//, '')}`
     const slideRoot = await pkg.xml(path)
+    const slideImages = await loadSlideImages(pkg, path)
     const slide: PptxSlide = { index: i, widthEmu: doc.slideWidthEmu, heightEmu: doc.slideHeightEmu, shapes: [] }
     if (slideRoot) {
       const cSld = getChildren(slideRoot, 'cSld')[0]
@@ -144,13 +212,25 @@ export async function parsePptx(pkg: OfficePackage): Promise<PptxDocument> {
       if (spTree) {
         for (const [name, node] of elementChildren(spTree)) {
           if (name === 'sp' || name === 'pic') {
-            const shape = parseShape(node)
+            const shape = parseShape(node, slideImages)
             if (shape) slide.shapes.push(shape)
           }
         }
       }
     }
     doc.slides.push(slide)
+  }
+  // assign document-wide image indices in first-use order
+  for (const slide of doc.slides) {
+    for (const shape of slide.shapes) {
+      if (!shape.image) continue
+      let idx = doc.images.indexOf(shape.image)
+      if (idx < 0) {
+        idx = doc.images.length
+        doc.images.push(shape.image)
+      }
+      shape.imageIndex = idx
+    }
   }
   return doc
 }

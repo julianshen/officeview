@@ -27,6 +27,15 @@ export interface PptxTextBody {
   wrap: boolean
 }
 
+/** An image part referenced by a shape (p:blipFill -> a:blip r:embed). */
+export interface PptxImageRef {
+  /** Raw encoded bytes (png/jpeg/gif/webp). */
+  data: Uint8Array
+  mime?: string
+  /** a:srcRect crop, as 0..1 fractions. */
+  srcRect?: { l: number; t: number; r: number; b: number }
+}
+
 export interface PptxShape {
   /** Geometry in EMU, relative to slide origin. */
   xEmu: number
@@ -38,6 +47,10 @@ export interface PptxShape {
   line?: { color: string; widthEmu?: number }
   textBody?: PptxTextBody
   rotationDeg?: number
+  /** Picture content, when this shape is a p:pic. */
+  image?: PptxImageRef
+  /** Index into the document-wide image list (PptxDocument.images). */
+  imageIndex?: number
 }
 
 export interface PptxSlide {
@@ -51,4 +64,6 @@ export interface PptxDocument {
   slideWidthEmu: number
   slideHeightEmu: number
   slides: PptxSlide[]
+  /** Unique images across all slides, in first-use order (matches shape.imageIndex). */
+  images: PptxImageRef[]
 }

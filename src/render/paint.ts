@@ -72,8 +72,10 @@ export function getPaintables(doc: DocxDocument | XlsxDocument | PptxDocument): 
     }))
   }
   const sm = slideMetrics(doc)
-  return Promise.resolve(doc.slides.map((slide) => ({
-    spec: { widthPx: sm.widthPx, heightPx: sm.heightPx },
-    paint: (ctx) => renderSlide(slide, ctx, sm),
-  })))
+  return Promise.all(doc.images.map((img) => decodeImage(img.data, img.mime).catch(() => undefined))).then((images) =>
+    doc.slides.map((slide) => ({
+      spec: { widthPx: sm.widthPx, heightPx: sm.heightPx },
+      paint: (ctx) => renderSlide(slide, ctx, sm, images),
+    })),
+  )
 }

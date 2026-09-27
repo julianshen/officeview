@@ -231,11 +231,23 @@ export interface PptxShapeSpec {
   lineW?: string
   rot?: string
   paragraphs?: Array<{ align?: string; runs: Array<{ text: string; b?: boolean; i?: boolean; sz?: string; color?: string }> }>
+  /** Embed an image part; the shape is emitted as p:pic. */
+  image?: {
+    data: Uint8Array
+    name?: string
+    /** a:srcRect crop, in 1/1000 of a percent */
+    srcRect?: { l?: number; t?: number; r?: number; b?: number }
+  }
 }
 
 /** Build a minimal pptx with one or more slides (single slide file reused). */
 export async function buildPptx(shapes: PptxShapeSpec[]): Promise<Uint8Array> {
   const zip = new JSZip()
+  // embedded images become ppt/media/imageN.* referenced by rIdImgN.
+  // Identical bytes are written once, like real PowerPoint media dedupe.
+  const imageRels: string[] = []
+  const mediaOf: Uint8Array[] = []
+  const ridsByData = new Map<Uint8Array, string>()
   zip.file('[Content_Types].xml', PPTX_CT)
   zip.file('_rels/.rels', PPTX_ROOT_RELS)
   zip.file('ppt/_rels/presentation.xml.rels', PPTX_PRES_RELS)
@@ -246,6 +258,26 @@ export async function buildPptx(shapes: PptxShapeSpec[]): Promise<Uint8Array> {
   <p:sldSz cx="9144000" cy="6858000"/>
 </p:presentation>`)
   const shapeXml = (s: PptxShapeSpec) => {
+    if (s.image) {
+      let rid = ridsByData.get(s.image.data)
+      if (rid === undefined) {
+        const idx = imageRels.length + 1
+        const name = s.image.name ?? `image${idx}.png`
+        imageRels.push(name)
+        mediaOf.push(s.image.data)
+        rid = `rIdImg${idx}`
+        ridsByData.set(s.image.data, rid)
+      }
+      const picId = 100 + imageRels.indexOf(rid.replace('rIdImg', '')) + 1
+      const sr = s.image.srcRect
+      const srcRectXml = sr
+        ? `<a:srcRect${sr.l !== undefined ? ` l="${sr.l}"` : ''}${sr.t !== undefined ? ` t="${sr.t}"` : ''}${sr.r !== undefined ? ` r="${sr.r}"` : ''}${sr.b !== undefined ? ` b="${sr.b}"` : ''}/>`
+        : ''
+      return `<p:pic><p:nvPicPr><p:cNvPr id="${picId}" name="Picture ${picId}"/><p:cNvPicPr/><p:nvPr/></p:nvPicPr>` +
+        `<p:blipFill><a:blip r:embed="${rid}"/>${srcRectXml}<a:stretch><a:fillRect/></a:stretch></p:blipFill>` +
+        `<p:spPr><a:xfrm${s.rot ? ` rot="${s.rot}"` : ''}><a:off x="${s.off?.[0] ?? '0'}" y="${s.off?.[1] ?? '0'}"/><a:ext cx="${s.ext?.[0] ?? '100000'}" cy="${s.ext?.[1] ?? '100000'}"/></a:xfrm>` +
+        `<a:prstGeom prst="rect"><a:avLst/></a:prstGeom></p:spPr></p:pic>`
+    }
     const spPr =
       `<p:spPr><a:xfrm${s.rot ? ` rot="${s.rot}"` : ''}><a:off x="${s.off?.[0] ?? '0'}" y="${s.off?.[1] ?? '0'}"/><a:ext cx="${s.ext?.[0] ?? '100000'}" cy="${s.ext?.[1] ?? '100000'}"/></a:xfrm>` +
       `<a:prstGeom prst="${s.prst ?? 'rect'}"><a:avLst/></a:prstGeom>` +
@@ -270,5 +302,12 @@ export async function buildPptx(shapes: PptxShapeSpec[]): Promise<Uint8Array> {
     ${shapes.map(shapeXml).join('\n    ')}
   </p:spTree></p:cSld>
 </p:sld>`)
+  imageRels.forEach((name, i) => {
+    zip.file(`ppt/media/${name}`, mediaOf[i])
+  })
+  zip.file('ppt/slides/_rels/slide1.xml.rels',
+    `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">${imageRels.map((n, i) =>
+      `<Relationship Id="rIdImg${i + 1}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="../media/${n}"/>`).join('')}</Relationships>`)
   return zip.generateAsync({ type: 'uint8array' })
 }

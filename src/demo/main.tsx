@@ -44,7 +44,28 @@ async function sampleXlsx(): Promise<Uint8Array> {
   ], ['Category', 'Amount', 'Share', 'Date', 'Hardware', 'Marketing', 'Total'])
 }
 
+/** A small checkerboard PNG for the picture sample. */
+async function samplePng(): Promise<Uint8Array> {
+  const c = document.createElement('canvas')
+  c.width = 96
+  c.height = 96
+  const ctx = c.getContext('2d')!
+  for (let y = 0; y < 6; y++) {
+    for (let x = 0; x < 6; x++) {
+      ctx.fillStyle = (x + y) % 2 === 0 ? '#2f6fed' : '#ffffff'
+      ctx.fillRect(x * 16, y * 16, 16, 16)
+    }
+  }
+  ctx.fillStyle = '#ff3b30'
+  ctx.beginPath()
+  ctx.arc(48, 48, 16, 0, Math.PI * 2)
+  ctx.fill()
+  const blob = await new Promise<Blob | null>((resolve) => c.toBlob(resolve, 'image/png'))
+  return new Uint8Array(await blob!.arrayBuffer())
+}
+
 async function samplePptx(): Promise<Uint8Array> {
+  const png = await samplePng()
   return buildPptx([
     {
       prst: 'rect',
@@ -64,6 +85,7 @@ async function samplePptx(): Promise<Uint8Array> {
       ],
     },
     { prst: 'ellipse', off: ['5943600', '3200400'], ext: ['1828800', '1828800'], fill: '4472C4' },
+    { image: { data: png }, off: ['1600200', '5486400'], ext: ['1828800', '1828800'] },
   ])
 }
 
