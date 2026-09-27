@@ -3,7 +3,8 @@
  * Text measurement uses a real Canvas2D measureText (via a provided measure
  * function) so widths match what we paint.
  */
-import type { DocxDocument, DocxParagraph, DocxSection, DocxTable, DocxTextRun } from './types'
+import type { DocxDocument, DocxImage, DocxParagraph, DocxSection, DocxTable, DocxTextRun } from './types'
+import { emuToPx } from '../core/geometry'
 import { twipsToPx } from '../core/geometry'
 import { resolveColor } from '../core/color'
 
@@ -42,6 +43,18 @@ export interface PageLayout {
   lines: LineBox[]
   /** Tables painted beneath the text lines. */
   tables: TableBox[]
+  /** Inline images in flow order. */
+  images: ImageBox[]
+}
+
+/** Image placed on a page. Coordinates are page-relative px. */
+export interface ImageBox {
+  xPx: number
+  yPx: number
+  widthPx: number
+  heightPx: number
+  /** Index into the document's decoded image list (set by the caller). */
+  imageIndex: number
 }
 
 /** Rect geometry for one table cell (page-relative, after layout). */
@@ -264,9 +277,30 @@ function sectionMargins(section: DocxSection) {
 }
 
 /** Lay out a whole document into page boxes. */
+/** Unique images in document order — also the index order used by ImageBox. */
+export function collectDocImages(document: DocxDocument): DocxImage[] {
+  const out: DocxImage[] = []
+  const seen = new Set<DocxImage>()
+  for (const section of document.sections) {
+    for (const block of section.blocks ?? []) {
+      if (block.kind === 'p') {
+        for (const image of block.paragraph.images ?? []) {
+          if (!seen.has(image)) {
+            seen.add(image)
+            out.push(image)
+          }
+        }
+      }
+    }
+  }
+  return out
+}
+
 export function layoutDocx(document: DocxDocument, measure: MeasureFn): PageLayout[] {
   const pages: PageLayout[] = []
   const defaults = { fontFamily: document.defaultFontFamily, fontSizePt: document.defaultFontSizePt }
+  const docImages = collectDocImages(document)
+  const imageIndex = new Map(docImages.map((img, i) => [img, i]))
   for (const section of document.sections) {
     const widthPx = twipsToPx(section.pageSize.widthTwips)
     const heightPx = twipsToPx(section.pageSize.heightTwips)
@@ -274,12 +308,12 @@ export function layoutDocx(document: DocxDocument, measure: MeasureFn): PageLayo
     const contentX = m.left
     const contentWidth = widthPx - m.left - m.right
     const contentBottom = heightPx - m.bottom
-    let page: PageLayout = { widthPx, heightPx, lines: [], tables: [] }
+    let page: PageLayout = { widthPx, heightPx, lines: [], tables: [], images: [] }
     let y = m.top
 
     const commitPage = () => {
-      if (page.lines.length > 0 || page.tables.length > 0) pages.push(page)
-      page = { widthPx, heightPx, lines: [], tables: [] }
+      if (page.lines.length > 0 || page.tables.length > 0 || page.images.length > 0) pages.push(page)
+      page = { widthPx, heightPx, lines: [], tables: [], images: [] }
       y = m.top
     }
 
@@ -307,6 +341,15 @@ export function layoutDocx(document: DocxDocument, measure: MeasureFn): PageLayo
           page.lines.push({ ...line, yPx: line.yPx + shift })
         }
         y = endY + shift + twipsToPx(para.spacingAfterTwips ?? 0)
+        // inline images after the paragraph's text
+        for (const image of para.images ?? []) {
+          const w = emuToPx(image.widthEmu)
+          const h = emuToPx(image.heightEmu)
+          if (w <= 0 || h <= 0) continue
+          if (y + h > contentBottom && (page.lines.length > 0 || page.images.length > 0)) commitPage()
+          page.images.push({ xPx: contentX, yPx: y, widthPx: w, heightPx: h, imageIndex: imageIndex.get(image) ?? -1 })
+          y += h
+        }
         continue
       }
       // Table block: whole-table page placement (a table taller than a page
@@ -325,7 +368,7 @@ export function layoutDocx(document: DocxDocument, measure: MeasureFn): PageLayo
       page.tables.push({ ...laid.box, xPx: tableX, yPx: tableY })
       y = tableY + laid.heightPx
     }
-    if (page.lines.length > 0 || page.tables.length > 0 || pages.length === 0) pages.push(page)
+    if (page.lines.length > 0 || page.tables.length > 0 || page.images.length > 0 || pages.length === 0) pages.push(page)
   }
   return pages
 }
@@ -339,13 +382,19 @@ const HIGHLIGHT_CSS: Record<string, string> = {
 }
 
 /** Paint laid pages onto a 2D context already scaled so 1 unit = 1 px. */
-export function renderPages(pages: PageLayout[], ctx: CanvasRenderingContext2D, _defaults?: { fontFamily: string }): void {
+export function renderPages(
+  pages: PageLayout[],
+  ctx: CanvasRenderingContext2D,
+  images?: Array<CanvasImageSource | undefined>,
+  _defaults?: { fontFamily: string },
+): void {
   ctx.save()
   ctx.textBaseline = 'alphabetic'
   ctx.fillStyle = '#000000'
   let lastFont = ''
   for (const page of pages) {
     paintTables(page.tables, ctx)
+    paintImages(page.images, ctx, images)
     for (const line of page.lines) {
       let extraSpacePerGap = 0
       if (line.align === 'justify' && !line.isParagraphEnd && line.segs.length > 1) {
@@ -401,6 +450,20 @@ const BORDER_WIDTH: Record<string, number> = {
   single: 1,
   dashed: 1,
   dotted: 1,
+}
+
+/** Draw inline images (after tables, beneath text). */
+function paintImages(
+  boxes: ImageBox[],
+  ctx: CanvasRenderingContext2D,
+  images: Array<CanvasImageSource | undefined> | undefined,
+): void {
+  if (!images) return
+  for (const box of boxes) {
+    const img = images[box.imageIndex]
+    if (!img) continue
+    ctx.drawImage(img as CanvasImageSource, box.xPx, box.yPx, box.widthPx, box.heightPx)
+  }
 }
 
 /** Paint table cell fills and borders (beneath text). Cell coords are

@@ -19,8 +19,18 @@ export interface DocxTextRun {
 
 export type ParagraphAlign = 'left' | 'center' | 'right' | 'justify'
 
+export interface DocxImage {
+  /** Raw encoded bytes (png/jpeg/gif/webp). */
+  data: Uint8Array
+  mime?: string
+  /** Display size in EMU from wp:extent. */
+  widthEmu: number
+  heightEmu: number
+}
+
 export interface DocxParagraph {
   runs: DocxTextRun[]
+  images: DocxImage[]
   align: ParagraphAlign
   /** Indents in twips. */
   indentLeftTwips?: number

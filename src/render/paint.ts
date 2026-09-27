@@ -2,7 +2,8 @@
  * Shared "document → canvas paintables" extraction. Single source of truth
  * used by <OfficeDoc> (React) and the pixel-diff/golden harness.
  */
-import { createMeasurer, layoutDocx, renderPages } from '../docx/layout'
+import { collectDocImages, createMeasurer, layoutDocx, renderPages } from '../docx/layout'
+import { decodeImage } from '../core/images'
 import { computeMetrics, renderSheet } from '../xlsx/render'
 import { renderSlide, slideMetrics } from '../pptx/render'
 import type { DocxDocument } from '../docx/types'
@@ -45,14 +46,18 @@ async function measurerFromDoc(): Promise<ReturnType<typeof createMeasurer>> {
 /** Collect the canvas-paintable units of a parsed document: pages/sheets/slides. */
 export function getPaintables(doc: DocxDocument | XlsxDocument | PptxDocument): Promise<Paintable[]> {
   if ('sections' in doc) {
-    return measurerFromDoc().then((measure) => {
+    return measurerFromDoc().then(async (measure) => {
       const pages = layoutDocx(doc, measure)
+      // decode embedded images once; failures degrade to a blank slot
+      const decoded = await Promise.all(
+        collectDocImages(doc).map((img) => decodeImage(img.data, img.mime).catch(() => undefined)),
+      )
       return pages.map((page) => ({
         spec: { widthPx: Math.ceil(page.widthPx), heightPx: Math.ceil(page.heightPx) },
         paint: (ctx) => {
           ctx.fillStyle = '#ffffff'
           ctx.fillRect(0, 0, page.widthPx, page.heightPx)
-          renderPages([page], ctx)
+          renderPages([page], ctx, decoded)
         },
       }))
     })

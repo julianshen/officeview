@@ -2,8 +2,9 @@
  * Parse DOCX parts (document.xml, styles.xml) into the DocxDocument model.
  */
 import type { OfficePackage } from '../core/zip'
+import { sniffImageMime } from '../core/images'
 import { attrs, elementChildren, getChildren, textOf, type XmlNode } from '../core/xml'
-import type { DocxBlock, DocxDocument, DocxParagraph, DocxSection, DocxTable, DocxTableCell, DocxTableCellMargins, DocxTableBorders, DocxTableRow, DocxTextRun, ParagraphAlign } from './types'
+import type { DocxBlock, DocxDocument, DocxImage, DocxParagraph, DocxSection, DocxTable, DocxTableCell, DocxTableCellMargins, DocxTableBorders, DocxTableRow, DocxTextRun, ParagraphAlign } from './types'
 
 function alignOf(pPr: XmlNode | undefined): ParagraphAlign {
   const jc = pPr ? getChildren(pPr, 'jc')[0] : undefined
@@ -67,10 +68,11 @@ function parseRun(r: XmlNode, inherited?: Partial<DocxTextRun>): DocxTextRun {
   return run
 }
 
-export function parseParagraph(p: XmlNode): DocxParagraph {
+export function parseParagraph(p: XmlNode, images?: DocxImage[]): DocxParagraph {
   const pPr = getChildren(p, 'pPr')[0]
   const paragraph: DocxParagraph = {
     runs: [],
+    images: [],
     align: alignOf(pPr),
   }
   if (pPr) {
@@ -94,18 +96,64 @@ export function parseParagraph(p: XmlNode): DocxParagraph {
     const [name, node] = child
     if (name === 'r') {
       paragraph.runs.push(parseRun(node))
+      for (const [iname, inode] of elementChildren(node)) {
+        if (iname === 'drawing' && inode) {
+          const image = parseDrawing(inode, images)
+          if (image) paragraph.images.push(image)
+        }
+      }
     } else if (name === 'hyperlink') {
       for (const [iname, inode] of elementChildren(node)) {
         if (iname === 'r' && inode) {
           paragraph.runs.push(parseRun(inode))
         }
       }
+    } else if (name === 'drawing' && node) {
+      const image = parseDrawing(node, images)
+      if (image) paragraph.images.push(image)
     }
     // other children (bookmarks, proofErr, etc.) ignored
-    void name
-    void node
   }
   return paragraph
+}
+
+/** w:drawing -> wp:inline|wp:anchor -> a:graphic -> pic:pic -> a:blip r:embed */
+function parseDrawing(drawing: XmlNode, images: DocxImage[] | undefined): DocxImage | undefined {
+  const wp = getChildren(drawing, 'inline')[0] ?? getChildren(drawing, 'anchor')[0]
+  if (!wp) return undefined
+  const extent = getChildren(wp, 'extent')[0]
+  const ea = attrs(extent)
+  const widthEmu = parseFloat(ea.cx as string) || 0
+  const heightEmu = parseFloat(ea.cy as string) || 0
+  const graphic = getChildren(wp, 'graphic')[0]
+  // pic:pic lives inside a:graphicData, not directly under a:graphic
+  const graphicData = graphic ? getChildren(graphic, 'graphicData')[0] : undefined
+  const pic = graphicData ? getChildren(graphicData, 'pic')[0] : undefined
+  const blip = pic ? getChildren(getChildren(pic, 'blipFill')[0], 'blip')[0] : undefined
+  const rid = (attrs(blip)['r:embed'] ?? attrs(blip).embed) as string | undefined
+  if (!rid) return undefined
+  if (!images) return undefined
+  const data = images.find((img) => img && (img as DocxImage & { relId?: string }).relId === rid)
+  if (!data) return undefined
+  return { data: data.data, mime: data.mime, widthEmu, heightEmu }
+}
+
+/** Resolve word/_rels/document.xml.rels into embedded image bytes keyed by rId. */
+async function loadDocImages(pkg: OfficePackage): Promise<DocxImage[]> {
+  const rels = await pkg.xml('word/_rels/document.xml.rels')
+  if (!rels) return []
+  const images: Array<DocxImage & { relId?: string }> = []
+  for (const rel of getChildren(rels, 'Relationship')) {
+    const a = attrs(rel)
+    const type = a.Type as string | undefined
+    const target = (a.Target as string | undefined) ?? ''
+    if (!type || !type.includes('/image') || !target) continue
+    const path = target.startsWith('/') ? target.slice(1) : `word/${target.replace(/^\.\.\//, '')}`
+    const data = await pkg.bytes(path)
+    if (!data) continue
+    images.push({ data, mime: sniffImageMime(data), widthEmu: 0, heightEmu: 0, relId: a.Id })
+  }
+  return images
 }
 
 export async function parseDocx(pkg: OfficePackage): Promise<DocxDocument> {
@@ -132,6 +180,7 @@ export async function parseDocx(pkg: OfficePackage): Promise<DocxDocument> {
     }
   }
   const body = doc?.['body'] as XmlNode | undefined
+  const docImages = (await loadDocImages(pkg)) as DocxImage[]
   const sections: DocxSection[] = []
   let current: DocxSection = {
     margins: { topTwips: 1440, rightTwips: 1440, bottomTwips: 1440, leftTwips: 1440, headerTwips: 720, footerTwips: 720, gutterTwips: 0 },
@@ -142,7 +191,7 @@ export async function parseDocx(pkg: OfficePackage): Promise<DocxDocument> {
   const push = () => { if (current.paragraphs.length > 0 || sections.length === 0) sections.push(current) }
   for (const [name, node] of elementChildren(body as XmlNode)) {
     if (name === 'p') {
-      const para = parseParagraph(node)
+      const para = parseParagraph(node, docImages)
       current.paragraphs.push(para)
       current.blocks.push({ kind: 'p', paragraph: para })
     } else if (name === 'tbl' && node) {
