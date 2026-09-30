@@ -110,6 +110,8 @@ export interface DocxTableCell {
   fill?: string
   /** Borders override for this cell. */
   borders?: DocxTableBorders
+  /** w:tcW (type=dxa) — used to derive column widths when tblGrid is absent. */
+  widthTwips?: number
   /** w:vAlign — vertical text placement within the cell. */
   vAlign?: 'top' | 'center' | 'bottom'
 }

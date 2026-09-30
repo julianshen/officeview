@@ -420,6 +420,25 @@ async function loadDocImages(pkg: OfficePackage): Promise<DocxImage[]> {
   return images
 }
 
+/**
+ * Word wraps content in structured document tags (`w:sdt`) far more often than
+ * fixtures suggest — around whole table rows, individual cells, and body-level
+ * paragraphs/tables. Content inside `w:sdtContent` must still be collected, so
+ * these loops descend through the wrapper.
+ */
+function unwrapContentControls(node: XmlNode | undefined): Array<[string, XmlNode]> {
+  const out: Array<[string, XmlNode]> = []
+  if (!node) return out
+  for (const [name, child] of elementChildren(node)) {
+    if (name === 'sdt') {
+      out.push(...unwrapContentControls(getChildren(child, 'sdtContent')[0]))
+    } else {
+      out.push([name, child])
+    }
+  }
+  return out
+}
+
 export async function parseDocx(pkg: OfficePackage): Promise<DocxDocument> {
   const doc = await pkg.xml('word/document.xml')
   if (!doc) throw new Error('word/document.xml missing — not a valid docx?')
@@ -456,7 +475,7 @@ export async function parseDocx(pkg: OfficePackage): Promise<DocxDocument> {
     blocks: [],
   }
   const push = () => { if (current.paragraphs.length > 0 || sections.length === 0) sections.push(current) }
-  for (const [name, node] of elementChildren(body as XmlNode)) {
+  for (const [name, node] of unwrapContentControls(body as XmlNode)) {
     if (name === 'p') {
       const para = parseParagraph(node, docImages, numbering)
       current.paragraphs.push(para)
@@ -508,7 +527,8 @@ export async function parseDocx(pkg: OfficePackage): Promise<DocxDocument> {
       }
     }
   }
-  if (current.paragraphs.length > 0) sections.push(current)
+  // a body containing only a table (or only images) is still real content
+  if (current.blocks.length > 0 || current.paragraphs.length > 0) sections.push(current)
   return {
     sections,
     defaultFontFamily,
@@ -569,10 +589,18 @@ function parseTableCell(tc: XmlNode, cellNumbering?: NumberingState): DocxTableC
     const shdAttrs = attrs(shd)
     if (shd && shdAttrs.val !== 'nil') cell.fill = shdAttrs.fill as string | undefined
     cell.borders = parseBorders(tcPr)
+    const tcW = getChildren(tcPr, 'tcW')[0]
+    if (tcW) {
+      const wa = attrs(tcW)
+      // only dxa carries a usable width (pct/auto need the page width)
+      if ((wa.type as string | undefined) === 'dxa' || wa.type === undefined) {
+        cell.widthTwips = twips(wa.w)
+      }
+    }
     const vAlign = attrs(tcPr['vAlign'] as XmlNode | undefined).val as string | undefined
     if (vAlign === 'center' || vAlign === 'bottom' || vAlign === 'top') cell.vAlign = vAlign
   }
-  for (const [name, node] of elementChildren(tc)) {
+  for (const [name, node] of unwrapContentControls(tc)) {
     if (name === 'p') cell.paragraphs.push(parseParagraph(node, undefined, cellNumbering))
   }
   return cell
@@ -597,7 +625,7 @@ export function parseTable(tbl: XmlNode, tableNumbering?: NumberingState): DocxT
       table.gridColsTwips.push(twips(attrs(col).w) ?? 0)
     }
   }
-  for (const [name, node] of elementChildren(tbl)) {
+  for (const [name, node] of unwrapContentControls(tbl)) {
     if (name !== 'tr' || !node) continue
     const trPr = getChildren(node, 'trPr')[0]
     const row: DocxTableRow = { cells: [] }
@@ -611,10 +639,45 @@ export function parseTable(tbl: XmlNode, tableNumbering?: NumberingState): DocxT
       }
       if (trPr['tblHeader'] !== undefined) row.isHeader = true
     }
-    for (const child of elementChildren(node)) {
+    for (const child of unwrapContentControls(node)) {
       if (child[0] === 'tc' && child[1]) row.cells.push(parseTableCell(child[1], tableNumbering))
     }
     table.rows.push(row)
+  }
+  // Word may omit w:tblGrid entirely (tblW type=auto). Fall back to the cells'
+  // own w:tcW values, then to an even split, so those tables still lay out.
+  if (table.gridColsTwips.length === 0) {
+    const maxCols = table.rows.reduce((max, r) => {
+      let n = 0
+      for (const c of r.cells) n += Math.max(1, c.gridSpan)
+      return Math.max(max, n)
+    }, 0)
+    if (maxCols > 0) {
+      const widths = new Array<number>(maxCols).fill(0)
+      const seen = new Array<boolean>(maxCols).fill(false)
+      for (const row of table.rows) {
+        let ci = 0
+        for (const cell of row.cells) {
+          const span = Math.max(1, cell.gridSpan)
+          if (cell.widthTwips !== undefined) {
+            // spread the declared width across the spanned columns
+            const each = cell.widthTwips / span
+            for (let k = 0; k < span && ci + k < maxCols; k++) {
+              widths[ci + k] = Math.max(widths[ci + k], each)
+              seen[ci + k] = true
+            }
+          }
+          ci += span
+        }
+      }
+      const anyDeclared = seen.some(Boolean)
+      if (anyDeclared) {
+        for (let i = 0; i < maxCols; i++) if (!seen[i]) widths[i] = 2880 // 2in default
+      } else {
+        for (let i = 0; i < maxCols; i++) widths[i] = Math.floor(9360 / maxCols)
+      }
+      table.gridColsTwips = widths.map((w) => Math.round(w))
+    }
   }
   return table
 }

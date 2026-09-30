@@ -84,6 +84,8 @@ export interface PptxShape {
   yEmu: number
   widthEmu: number
   heightEmu: number
+  /** Inherited from a slide layout when the shape carries no explicit xfrm. */
+  placeholder?: { type?: string; idx?: number }
   geometry: 'rect' | 'ellipse' | 'roundRect' | 'other'
   fill?: string
   line?: { color: string; widthEmu?: number }
