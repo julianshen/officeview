@@ -3,7 +3,9 @@ dist/
 coverage/
 *.log
 .DS_Store
-corpus/
-# …but the SHA lockfile is the integrity record of what we actually tested,
-# so it is tracked even though the binaries themselves are not.
+# ignore the corpus binaries (they are fetched, not vendored) …
+# …but keep the SHA lockfile, the integrity record of what we actually tested.
+# Note: must be `corpus/*`, not `corpus/` — git cannot re-include a file whose
+# parent directory is itself excluded.
+corpus/*
 !corpus/corpus.lock.json
