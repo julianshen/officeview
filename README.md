@@ -77,29 +77,50 @@ hit-testing both run off the same text index, so they work identically for Word,
 Excel and PowerPoint. Copying uses the async Clipboard API and falls back to a hidden
 textarea; if the browser blocks both, the button says so instead of pretending.
 
+A selection may span pages: drag past the bottom of one page and it continues on the
+next, with each page painting only its own part of the range.
+
 ## Not implemented
 
 Floating (anchored) images are drawn inline; text layout uses browser `measureText`, so line
-breaks can differ slightly from Word's exact metrics. Selection is limited to a single
-page at a time — dragging across a page boundary does not extend the selection — and
-triple-click selects the visual line rather than the source paragraph.
+breaks can differ slightly from Word's exact metrics. Triple-click selects the visual
+line rather than the source paragraph.
 
 ## Development
 
 ```bash
 bun run dev     # browser demo at http://localhost:5173 (file picker + generated samples)
-bun run test    # 117 tests: jsdom + `canvas` for real 2D rendering, pixel-sampled assertions
+bun run test    # 194 tests: jsdom + `canvas` for real 2D rendering, pixel-sampled assertions
 bun run build   # type-check + lib build
 ```
 
-A golden-image harness guards layout changes:
+### Real-file corpus
+
+Layout is checked against 30 real-world documents from Apache POI, python-docx and
+python-pptx, fetched on demand rather than vendored:
 
 ```bash
-bun scripts/golden.ts record <file.docx> --name my-doc   # write tests/goldens/my-doc.*.png
-bun scripts/golden.ts compare <file.docx> --name my-doc   # diff; exits 1 past --max-ratio
+bun scripts/fetch-corpus.ts    # download + verify (pinned to upstream commits)
+bun scripts/corpus-report.ts   # every corpus file through the real pipeline
 ```
 
-On mismatch it writes `actual` and red-mask `diff` PNGs to `/tmp/officeview-diff/`.
+The corpus is where most renderer bugs have surfaced — SDT-wrapped table rows,
+table-only documents, tables with no `tblGrid`, PPTX placeholder geometry, and
+spreadsheets declaring thousands of columns.
+
+### Golden images
+
+Two golden suites guard rendering. Both write `actual` and red-mask `diff` PNGs to
+`/tmp/officeview-diff/` on mismatch:
+
+```bash
+bun scripts/golden.ts record <file.docx> --name my-doc        # synthetic fixtures
+bun scripts/golden.ts compare <file.docx> --name my-doc
+
+bun scripts/golden-corpus.ts record                          # real corpus files
+bun scripts/golden-corpus.ts compare
+```
+
 Goldens depend on the host's font rasterizer, so they are deterministic per machine.
 
 
