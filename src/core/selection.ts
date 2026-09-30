@@ -169,18 +169,22 @@ export function lineRangeAt(line: IndexLine, _charIndex: number): { start: numbe
  * an empty band.
  */
 export function selectionSlices(index: TextIndex, range: SelectionRange): SelectionLineSlice[] {
+  // Defensive: the documented precondition is that `start` is the earlier end,
+  // but this is a public export, so normalize rather than silently returning
+  // nothing for a denormalized range.
+  const ordered = posLess(range.start, range.end) || samePos(range.start, range.end) ? range : { start: range.end, end: range.start }
   const slices: SelectionLineSlice[] = []
   const pages = [...index.pages].sort((a, b) => a.index - b.index)
   for (const page of pages) {
-    if (page.index < range.start.pageIndex || page.index > range.end.pageIndex) continue
-    const from = page.index === range.start.pageIndex ? range.start.lineIndex : 0
-    const to = page.index === range.end.pageIndex ? range.end.lineIndex : page.lines.length - 1
-    const isStart = (li: number): boolean => page.index === range.start.pageIndex && li === range.start.lineIndex
-    const isEnd = (li: number): boolean => page.index === range.end.pageIndex && li === range.end.lineIndex
+    if (page.index < ordered.start.pageIndex || page.index > ordered.end.pageIndex) continue
+    const from = page.index === ordered.start.pageIndex ? ordered.start.lineIndex : 0
+    const to = page.index === ordered.end.pageIndex ? ordered.end.lineIndex : page.lines.length - 1
+    const isStart = (li: number): boolean => page.index === ordered.start.pageIndex && li === ordered.start.lineIndex
+    const isEnd = (li: number): boolean => page.index === ordered.end.pageIndex && li === ordered.end.lineIndex
     for (let li = from; li <= to && li < page.lines.length; li++) {
       const line = page.lines[li]
-      const charFrom = isStart(li) ? range.start.charIndex : 0
-      const charTo = isEnd(li) ? range.end.charIndex : line.text.length
+      const charFrom = isStart(li) ? ordered.start.charIndex : 0
+      const charTo = isEnd(li) ? ordered.end.charIndex : line.text.length
       // zero-length touch points (page end -> next page start) paint nothing
       if (charTo > charFrom) slices.push({ pageIndex: page.index, lineIndex: li, from: charFrom, to: charTo })
     }
@@ -207,26 +211,18 @@ export function rectsForSelectionOnPage(index: TextIndex, pageIndex: number, ran
  * breaks the line, so copied text reads as continuous prose.
  */
 export function textForRange(index: TextIndex, range: SelectionRange): string {
+  const slices = selectionSlices(index, range)
   const parts: string[] = []
-  for (const slice of selectionSlices(index, range)) {
+  for (let i = 0; i < slices.length; i++) {
+    const slice = slices[i]
     const page = pageOf(index, slice.pageIndex)
     const line = page?.lines[slice.lineIndex]
     if (!line) continue
     const piece = line.text.slice(slice.from, slice.to)
-    // trim trailing whitespace on every line but the last of a page run
-    const next = selectionSlicesCachedNext(index, range, slice)
-    parts.push(next ? piece.replace(/\s+$/, '') : piece)
+    // trim trailing whitespace on every line except the last, the way a
+    // browser trims a dragged selection
+    const isLast = i === slices.length - 1
+    parts.push(isLast ? piece : piece.replace(/\s+$/, ''))
   }
   return parts.join('\n')
-}
-
-// small memo so textForRange does not re-walk the index per line
-let sliceCache: { key: string; slices: SelectionLineSlice[] } | null = null
-function selectionSlicesCachedNext(index: TextIndex, range: SelectionRange, current: SelectionLineSlice): boolean {
-  const key = `${range.start.pageIndex}:${range.start.lineIndex}:${range.start.charIndex}-${range.end.pageIndex}:${range.end.lineIndex}:${range.end.charIndex}`
-  if (!sliceCache || sliceCache.key !== key) {
-    sliceCache = { key, slices: selectionSlices(index, range) }
-  }
-  const i = sliceCache.slices.indexOf(current)
-  return i >= 0 && i < sliceCache.slices.length - 1
 }
