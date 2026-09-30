@@ -26,3 +26,7 @@ export type { DocxDocument, DocxParagraph, DocxSection, DocxTextRun } from './do
 export type { PageLayout, LineBox, MeasureFn } from './docx/layout'
 export type { XlsxDocument, XlsxSheet, XlsxCell, XlsxCellStyle } from './xlsx/types'
 export type { PptxDocument, PptxSlide, PptxShape } from './pptx/types'
+
+// Text selection helpers (used internally by <OfficeDoc>)
+export { hitTest, normalizeRange, rectsForSelection, textForRange, wordRangeAt } from './core/selection'
+export type { CaretPos, SelectionRange } from './core/selection'

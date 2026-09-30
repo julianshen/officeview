@@ -66,13 +66,23 @@ formats without a separate text model.
 
 **PowerPoint (.pptx)** — slides, shapes (rect/roundRect/ellipse) with fills, outlines and rotation, text bodies (runs with color/bold/italic/typeface, alignment, insets, vertical anchor, wrapping), embedded pictures with `a:srcRect` cropping, and tables (`a:tbl` grid, `gridSpan`/`rowSpan`/merges, cell fills, banding and first-row styling resolved from `tableStyles.xml`).
 
-**Viewer** — stacked per-page canvases, DPR-aware and hi-dpi when zoomed, pinch/drag/wheel/double-tap zoom with clamped panning, in-document text search with match navigation and highlighting.
+**Viewer** — stacked per-page canvases, DPR-aware and hi-dpi when zoomed, pinch/drag/wheel/double-tap zoom with clamped panning, in-document text search with match navigation and highlighting, and text selection (drag, double-click for a word, triple-click for a line) with copy via `Cmd/Ctrl+C` or an on-screen button.
+
+## Selecting and copying
+
+Drag across text to select it; double-click selects a word, triple-click a line, and
+`Escape` clears. Copy with `Cmd/Ctrl+C`, or tap the **Copy selection** button that
+appears (useful on touch, where there is no keyboard shortcut). Selection and search
+hit-testing both run off the same text index, so they work identically for Word,
+Excel and PowerPoint. Copying uses the async Clipboard API and falls back to a hidden
+textarea; if the browser blocks both, the button says so instead of pretending.
 
 ## Not implemented
 
 Floating (anchored) images are drawn inline; text layout uses browser `measureText`, so line
-breaks can differ slightly from Word's exact metrics; there is no text selection or copy
-layer over the canvas yet.
+breaks can differ slightly from Word's exact metrics. Selection is limited to a single
+page at a time — dragging across a page boundary does not extend the selection — and
+triple-click selects the visual line rather than the source paragraph.
 
 ## Development
 

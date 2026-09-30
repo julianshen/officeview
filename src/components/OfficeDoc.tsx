@@ -10,6 +10,19 @@ import { useEffect, useMemo, useRef, useState, type CSSProperties, type ReactEle
 import { getPaintables, type PageSpec, type Paintable } from '../render/paint'
 import { buildTextIndex, findMatches, stepMatch, type SearchMatch, type TextIndex } from '../core/search'
 import {
+  hitTest,
+  isEmptyRange,
+  lineRangeAt,
+  normalizeRange,
+  rectsForSelection,
+  textForRange,
+  wordRangeAt,
+  type CaretPos,
+  type SelectionRange,
+} from '../core/selection'
+import type { PageOverlay } from '../core/overlay'
+import { copyText } from '../core/clipboard'
+import {
   distance,
   midpoint,
   panTransform,
@@ -48,23 +61,24 @@ export interface HighlightRect {
   height: number
 }
 
-interface SearchOverlay {
-  /** All match rectangles on this page, in page coordinates. */
+interface SearchOverlay extends PageOverlay {
+  /** Alias kept for the paint call sites. */
   rects: HighlightRect[]
-  /** Rectangles of the match currently being navigated to. */
   active: HighlightRect[]
-  /** Changes whenever the matches or the active match change. */
-  key: string
 }
 
 /**
- * Draw search highlights over the page content. Called while the ctx still
- * carries the page transform, so rectangles are in page coordinates.
+ * Draw search highlights and the text selection over the page content. Called
+ * while the ctx still carries the page transform, so rectangles are in page
+ * coordinates.
  */
 function paintHighlights(ctx: CanvasRenderingContext2D, overlay: SearchOverlay): void {
   ctx.save()
   ctx.fillStyle = 'rgba(255, 214, 0, 0.45)'
   for (const r of overlay.rects) ctx.fillRect(r.x, r.y, r.width, r.height)
+  // selection sits on top of the search wash, as it does in a browser
+  ctx.fillStyle = 'rgba(64, 128, 255, 0.35)'
+  for (const r of overlay.selection) ctx.fillRect(r.x, r.y, r.width, r.height)
   ctx.strokeStyle = '#ff8c00'
   ctx.lineWidth = 1.5
   for (const r of overlay.active) ctx.strokeRect(r.x, r.y, r.width, r.height)
@@ -243,7 +257,8 @@ export function OfficeDoc({
 
   const onPointerDown = (e: React.PointerEvent) => {
     if (e.pointerType === 'mouse' && e.button !== 0) return
-    pointers.current.set(e.pointerId, localPoint(e))
+    const point = localPoint(e)
+    pointers.current.set(e.pointerId, point)
     const pts = [...pointers.current.values()]
     if (pts.length === 2) {
       // start a pinch from the current transform
@@ -253,32 +268,71 @@ export function OfficeDoc({
         center: midpoint(pts[0], pts[1]),
       }
       panStart.current = null
+      selectionDrag.current = null
     } else if (transform.zoom > 1) {
       // only capture drags once zoomed; at fit the container scrolls natively
-      panStart.current = { transform, point: localPoint(e) }
+      panStart.current = { transform, point }
+      dragStart.current = point
+      selectionDrag.current = null
+    } else {
+      // at fit, dragging is text selection
+      selectionDrag.current = { origin: point, moved: false }
+      selectionStartRef.current = { clientX: e.clientX, clientY: e.clientY, target: e.target }
+      void caretFromEvent(e).then((caret) => {
+        selectionAnchor.current = caret ?? null
+        if (caret) {
+          // a plain click clears any existing selection
+          setSelection({
+            pageIndex: caret.pageIndex,
+            startLine: caret.lineIndex,
+            startChar: caret.charIndex,
+            endLine: caret.lineIndex,
+            endChar: caret.charIndex,
+          })
+        }
+      })
     }
   }
 
   const onPointerMove = (e: React.PointerEvent) => {
     if (!pointers.current.has(e.pointerId)) return
-    pointers.current.set(e.pointerId, localPoint(e))
+    const point = localPoint(e)
+    pointers.current.set(e.pointerId, point)
     const pts = [...pointers.current.values()]
     if (pts.length >= 2 && gestureStart.current) {
       const g = gestureStart.current
       setTransform(
         pinchTransform(g.transform, g.distance, Math.max(1, distance(pts[0], pts[1])), midpoint(pts[0], pts[1]), viewportRef.current),
       )
-    } else if (pts.length === 1 && panStart.current) {
+      return
+    }
+    // a drag past the threshold while zoomed pans instead of selecting
+    if (pts.length === 1 && panStart.current) {
+      if (dragStart.current && Math.hypot(point.x - dragStart.current.x, point.y - dragStart.current.y) > 6) {
+        selectionDrag.current = null
+      }
       const start = panStart.current
-      const now = pts[0]
-      setTransform(panTransform(start.transform, { x: now.x - start.point.x, y: now.y - start.point.y }, viewportRef.current))
+      setTransform(panTransform(start.transform, { x: point.x - start.point.x, y: point.y - start.point.y }, viewportRef.current))
+      return
+    }
+    if (pts.length === 1 && selectionDrag.current && !selectionDrag.current.moved) {
+      if (Math.hypot(point.x - selectionDrag.current.origin.x, point.y - selectionDrag.current.origin.y) > 3) {
+        selectionDrag.current.moved = true
+      }
+    }
+    if (selectionDrag.current?.moved) {
+      extendSelectionTo(e)
     }
   }
 
   const endPointer = (e: React.PointerEvent) => {
     pointers.current.delete(e.pointerId)
     if (pointers.current.size < 2) gestureStart.current = null
-    if (pointers.current.size === 0) panStart.current = null
+    if (pointers.current.size === 0) {
+      panStart.current = null
+      selectionDrag.current = null
+      dragStart.current = null
+    }
   }
 
   const onWheel = (e: React.WheelEvent) => {
@@ -291,7 +345,20 @@ export function OfficeDoc({
 
   const onDoubleClick = (e: React.MouseEvent) => {
     const at = localPoint(e)
-    setTransform((t) => (t.zoom > 1 ? { zoom: 1, panX: 0, panY: 0 } : zoomAt(t, 2, at, viewportRef.current)))
+    // double-click on text selects a word; on blank space it zooms, so both
+    // behaviours stay available
+    void caretFromEvent(e, true).then((caret) => {
+      if (caret) {
+        selectWordAt(caret)
+        return
+      }
+      setTransform((t) => (t.zoom > 1 ? { zoom: 1, panX: 0, panY: 0 } : zoomAt(t, 2, at, viewportRef.current)))
+    })
+  }
+
+  const onClick = (e: React.MouseEvent) => {
+    if (e.detail < 3) return // double-click already handled words
+    void caretFromEvent(e).then((caret) => caret && selectLineAt(caret))
   }
 
   const zoomBy = (direction: 1 | -1) => {
@@ -309,6 +376,16 @@ export function OfficeDoc({
       e.preventDefault()
       inputRef.current?.focus()
       inputRef.current?.select()
+      return
+    }
+    if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'c' && selection && !isEmptyRange(selection)) {
+      e.preventDefault()
+      void doCopy()
+      return
+    }
+    if (e.key === 'Escape' && selection) {
+      setSelection(undefined)
+      selectionAnchor.current = null
       return
     }
     if (e.key === '+' || e.key === '=') { e.preventDefault(); zoomBy(1) }
@@ -405,13 +482,102 @@ export function OfficeDoc({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [active, matches])
 
+  // ---- text selection ----
+  const [selection, setSelection] = useState<SelectionRange | undefined>(undefined)
+  const selectionKey = selection
+    ? `${selection.pageIndex}:${selection.startLine}:${selection.startChar}:${selection.endLine}:${selection.endChar}`
+    : ''
+  const [copied, setCopied] = useState<'idle' | 'done' | 'failed'>('idle')
+  const selectionAnchor = useRef<CaretPos | null>(null)
+  const selectionStartRef = useRef<{ clientX: number; clientY: number; target: EventTarget | null } | null>(null)
+  const selectionDrag = useRef<{ origin: { x: number; y: number }; moved: boolean } | null>(null)
+  const dragStart = useRef<{ x: number; y: number } | null>(null)
+
+  /** Resolve a pointer/mouse event to a caret, mapping page pixels into the
+   * document coordinate space (the canvas is displayed scaled to fit). */
+  const caretFromEvent = async (e: { clientX: number; clientY: number; target: EventTarget | null }, strict = false): Promise<CaretPos | undefined> => {
+    const container = containerRef.current
+    const target = e.target
+    if (!container || !(target instanceof HTMLCanvasElement)) return undefined
+    const pageIndex = Array.from(container.querySelectorAll('canvas')).indexOf(target)
+    if (pageIndex < 0) return undefined
+    const index = await ensureIndex()
+    const rect = target.getBoundingClientRect()
+    const natural = pages[pageIndex]?.spec.widthPx ?? rect.width
+    const scale = rect.width > 0 ? natural / rect.width : 1
+    return hitTest(index, pageIndex, (e.clientX - rect.left) * scale, (e.clientY - rect.top) * scale, { strict })
+  }
+
+  const extendSelectionTo = async (e: React.PointerEvent) => {
+    // the anchor resolves asynchronously (the index may still be building), so
+    // resolve it here too if a fast drag got ahead of it
+    let anchor = selectionAnchor.current
+    if (!anchor && selectionStartRef.current) {
+      anchor = (await caretFromEvent(selectionStartRef.current)) ?? null
+      selectionAnchor.current = anchor
+    }
+    const caret = await caretFromEvent(e)
+    if (!caret || !anchor || anchor.pageIndex !== caret.pageIndex) return
+    setSelection(normalizeRange(anchor, caret))
+  }
+
+  const selectWordAt = (caret: CaretPos) => {
+    const index = indexRef.current
+    const line = index?.pages.find((p) => p.index === caret.pageIndex)?.lines[caret.lineIndex]
+    if (!index || !line) return
+    const { start, end } = wordRangeAt(line, caret.charIndex)
+    selectionAnchor.current = caret
+    setSelection({
+      pageIndex: caret.pageIndex,
+      startLine: caret.lineIndex,
+      startChar: start,
+      endLine: caret.lineIndex,
+      endChar: end,
+    })
+  }
+
+  const selectLineAt = (caret: CaretPos) => {
+    const index = indexRef.current
+    const line = index?.pages.find((p) => p.index === caret.pageIndex)?.lines[caret.lineIndex]
+    if (!index || !line) return
+    const { start, end } = lineRangeAt(line, caret.charIndex)
+    selectionAnchor.current = caret
+    setSelection({
+      pageIndex: caret.pageIndex,
+      startLine: caret.lineIndex,
+      startChar: start,
+      endLine: caret.lineIndex,
+      endChar: end,
+    })
+  }
+
+  const doCopy = async () => {
+    const index = indexRef.current
+    if (!index || !selection) return
+    const text = textForRange(index, selection)
+    if (text.length === 0) return
+    const outcome = await copyText(text)
+    // be honest about failure: the selection stays visible so the reader can
+    // still press the platform copy shortcut themselves
+    setCopied(outcome === 'failed' ? 'failed' : 'done')
+    setTimeout(() => setCopied('idle'), 1600)
+  }
+
   const overlayFor = (pageIndex: number): SearchOverlay | undefined => {
-    if (matches.length === 0) return undefined
-    const onPage = matches.filter((m) => m.pageIndex === pageIndex)
-    if (onPage.length === 0) return undefined
+    const searchRects =
+      matches.length === 0 ? [] : matches.filter((m) => m.pageIndex === pageIndex).flatMap((m) => m.rects)
     const activeMatch = active >= 0 ? matches[active] : undefined
-    const activeOnPage = activeMatch && activeMatch.pageIndex === pageIndex ? activeMatch.rects : []
-    return { rects: onPage.flatMap((m) => m.rects), active: activeOnPage, key: `${onPage.length}:${active}:${query}` }
+    const activeRects = activeMatch && activeMatch.pageIndex === pageIndex ? activeMatch.rects : []
+    const selRects = selection && indexRef.current ? rectsForSelection(indexRef.current, selection) : []
+    if (searchRects.length === 0 && activeRects.length === 0 && selRects.length === 0) return undefined
+    return {
+      rects: searchRects,
+      active: activeRects,
+      selection: selRects,
+      highlights: searchRects,
+      activeMatch: activeRects,
+      key: `${searchRects.length}:${active}:${selectionKey}:${query}`,
+    }
   }
 
   return (
@@ -424,6 +590,7 @@ export function OfficeDoc({
         tabIndex={0}
         onKeyDown={onKeyDown}
         onDoubleClick={onDoubleClick}
+        onClick={onClick}
         onWheel={onWheel}
         onPointerDown={onPointerDown}
         onPointerMove={onPointerMove}
@@ -481,6 +648,30 @@ export function OfficeDoc({
           onPrev={() => goTo(-1)}
           onNext={() => goTo(1)}
         />
+      )}
+      {selection && !isEmptyRange(selection) && (
+        <button
+          type="button"
+          data-testid="officeview-copy-selection"
+          onClick={() => void doCopy()}
+          style={{
+            position: 'absolute',
+            bottom: 'calc(env(safe-area-inset-bottom) + 16px)',
+            left: '50%',
+            transform: 'translateX(-50%)',
+            padding: '8px 16px',
+            borderRadius: 18,
+            border: 'none',
+            background: copied === 'failed' ? '#8a1f11' : copied === 'done' ? '#1a7f37' : 'rgba(20,22,28,0.92)',
+            color: '#fff',
+            fontSize: 14,
+            cursor: 'pointer',
+            boxShadow: '0 2px 10px rgba(0,0,0,0.35)',
+            zIndex: 6,
+          }}
+        >
+          {copied === 'done' ? 'Copied ✓' : copied === 'failed' ? 'Copy blocked — press ⌘C' : 'Copy selection'}
+        </button>
       )}
       {showZoomControls && (
         <ZoomControls

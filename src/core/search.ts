@@ -8,6 +8,8 @@
  * (4x4) — we capture text, not pixels — so indexing is cheap.
  */
 
+import type { HighlightRect } from './overlay'
+
 export interface TextSpan {
   text: string
   /** Left edge of the span, in page (document) coordinates. */
@@ -43,7 +45,7 @@ export interface SearchMatch {
   start: number
   end: number
   /** Highlight rectangles in page coordinates (one per spanned segment). */
-  rects: Array<{ x: number; y: number; width: number; height: number }>
+  rects: HighlightRect[]
 }
 
 export interface SearchOptions {
@@ -159,9 +161,9 @@ export async function buildTextIndex(paintables: PaintableLike[]): Promise<TextI
  * proportionally within each span — an approximation that is exact for
  * single-span matches and close for text spanning several runs.
  */
-function rectsForRange(line: IndexLine, start: number, end: number): Array<{ x: number; y: number; width: number; height: number }> {
+export function rectsForRange(line: IndexLine, start: number, end: number): HighlightRect[] {
   const height = Math.max(2, line.bottom - line.top)
-  const out: Array<{ x: number; y: number; width: number; height: number }> = []
+  const out: HighlightRect[] = []
   let offset = 0
   for (const span of line.spans) {
     const spanStart = offset
