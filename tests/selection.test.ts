@@ -340,3 +340,81 @@ describe('textForRange robustness', () => {
     ))).toBe('x')
   })
 })
+
+describe('selection across three pages', () => {
+  /** three pages, two lines each — the middle page is the one that matters */
+  function threePageIndex() {
+    const line = (text: string, y: number) => ({
+      spans: [{ text, x: 50, y, width: text.length * 10, fontSize: 12 }],
+      text,
+      y,
+      top: y - 12,
+      bottom: y + 3,
+    })
+    return {
+      pages: [
+        { index: 0, lines: [line('p0a', 100), line('p0b', 120)] },
+        { index: 1, lines: [line('p1a', 100), line('p1b', 120)] },
+        { index: 2, lines: [line('p2a', 100), line('p2b', 120)] },
+      ],
+    } as never
+  }
+
+  const index = threePageIndex()
+
+  test('a middle page contributes full lines, not the boundary char bounds', () => {
+    // start on page 0 line 1 at char 2, end on page 2 line 0 at char 2
+    const slices = selectionSlices(
+      index,
+      normalizeRange(
+        { pageIndex: 0, lineIndex: 1, charIndex: 2 },
+        { pageIndex: 2, lineIndex: 0, charIndex: 2 },
+      ),
+    )
+    // the middle page must take BOTH lines in full — a page-blind
+    // implementation would clip it to char 2 on every line
+    expect(slices).toEqual([
+      { pageIndex: 0, lineIndex: 1, from: 2, to: 3 },
+      { pageIndex: 1, lineIndex: 0, from: 0, to: 3 },
+      { pageIndex: 1, lineIndex: 1, from: 0, to: 3 },
+      { pageIndex: 2, lineIndex: 0, from: 0, to: 2 },
+    ])
+  })
+
+  test('the middle page paints its own coordinates only', () => {
+    const range = normalizeRange(
+      { pageIndex: 0, lineIndex: 1, charIndex: 0 },
+      { pageIndex: 2, lineIndex: 0, charIndex: 3 },
+    )
+    const middle = rectsForSelectionOnPage(index, 1, range)
+    expect(middle).toHaveLength(2)
+    expect(middle[0].y).toBeCloseTo(88, 0)
+    expect(middle[1].y).toBeCloseTo(108, 0)
+    // the first page contributes only its last line, the last only its first
+    expect(rectsForSelectionOnPage(index, 0, range)).toHaveLength(1)
+    expect(rectsForSelectionOnPage(index, 2, range)).toHaveLength(1)
+  })
+
+  test('text spans all three pages in order', () => {
+    const text = textForRange(
+      index,
+      normalizeRange(
+        { pageIndex: 0, lineIndex: 0, charIndex: 0 },
+        { pageIndex: 2, lineIndex: 1, charIndex: 3 },
+      ),
+    )
+    expect(text).toBe('p0a\np0b\np1a\np1b\np2a\np2b')
+  })
+
+  test('a denormalized range still yields the forward selection', () => {
+    const forward = selectionSlices(
+      index,
+      normalizeRange({ pageIndex: 1, lineIndex: 0, charIndex: 0 }, { pageIndex: 1, lineIndex: 1, charIndex: 2 }),
+    )
+    const reversed = selectionSlices(index, {
+      start: { pageIndex: 1, lineIndex: 1, charIndex: 2 },
+      end: { pageIndex: 1, lineIndex: 0, charIndex: 0 },
+    })
+    expect(reversed).toEqual(forward)
+  })
+})

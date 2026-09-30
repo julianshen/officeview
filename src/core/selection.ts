@@ -169,18 +169,22 @@ export function lineRangeAt(line: IndexLine, _charIndex: number): { start: numbe
  * an empty band.
  */
 export function selectionSlices(index: TextIndex, range: SelectionRange): SelectionLineSlice[] {
+  // Defensive: the documented precondition is that `start` is the earlier end,
+  // but this is a public export, so normalize rather than silently returning
+  // nothing for a denormalized range.
+  const ordered = posLess(range.start, range.end) || samePos(range.start, range.end) ? range : { start: range.end, end: range.start }
   const slices: SelectionLineSlice[] = []
   const pages = [...index.pages].sort((a, b) => a.index - b.index)
   for (const page of pages) {
-    if (page.index < range.start.pageIndex || page.index > range.end.pageIndex) continue
-    const from = page.index === range.start.pageIndex ? range.start.lineIndex : 0
-    const to = page.index === range.end.pageIndex ? range.end.lineIndex : page.lines.length - 1
-    const isStart = (li: number): boolean => page.index === range.start.pageIndex && li === range.start.lineIndex
-    const isEnd = (li: number): boolean => page.index === range.end.pageIndex && li === range.end.lineIndex
+    if (page.index < ordered.start.pageIndex || page.index > ordered.end.pageIndex) continue
+    const from = page.index === ordered.start.pageIndex ? ordered.start.lineIndex : 0
+    const to = page.index === ordered.end.pageIndex ? ordered.end.lineIndex : page.lines.length - 1
+    const isStart = (li: number): boolean => page.index === ordered.start.pageIndex && li === ordered.start.lineIndex
+    const isEnd = (li: number): boolean => page.index === ordered.end.pageIndex && li === ordered.end.lineIndex
     for (let li = from; li <= to && li < page.lines.length; li++) {
       const line = page.lines[li]
-      const charFrom = isStart(li) ? range.start.charIndex : 0
-      const charTo = isEnd(li) ? range.end.charIndex : line.text.length
+      const charFrom = isStart(li) ? ordered.start.charIndex : 0
+      const charTo = isEnd(li) ? ordered.end.charIndex : line.text.length
       // zero-length touch points (page end -> next page start) paint nothing
       if (charTo > charFrom) slices.push({ pageIndex: page.index, lineIndex: li, from: charFrom, to: charTo })
     }
