@@ -3,7 +3,9 @@
  *
  * Everything here is pure and works off the text index (see `search.ts`), which
  * already carries per-span geometry for every format — so hit-testing, word
- * expansion and copy-text assembly need no DOM and no per-format knowledge.
+ * expansion, range math and copy-text assembly need no DOM and no per-format
+ * knowledge. A selection may span pages: a range is just an ordered pair of
+ * carets, and the helpers slice it per page.
  */
 
 import type { HighlightRect } from './overlay'
@@ -19,13 +21,20 @@ export interface CaretPos {
   charIndex: number
 }
 
-/** An ordered selection within one page. */
+/** An ordered selection; `start` is always the earlier end. */
 export interface SelectionRange {
+  start: CaretPos
+  end: CaretPos
+}
+
+/** One line's worth of a selection, on a particular page. */
+export interface SelectionLineSlice {
   pageIndex: number
-  startLine: number
-  startChar: number
-  endLine: number
-  endChar: number
+  lineIndex: number
+  /** inclusive start character */
+  from: number
+  /** exclusive end character */
+  to: number
 }
 
 function pageOf(index: TextIndex, pageIndex: number): TextIndexPage | undefined {
@@ -113,21 +122,18 @@ function posLess(a: CaretPos, b: CaretPos): boolean {
   return a.charIndex < b.charIndex
 }
 
-/** Order two carets into a forward range. */
+/** Order two carets into a forward range (works across pages). */
 export function normalizeRange(a: CaretPos, b: CaretPos): SelectionRange {
-  const [start, end] = posLess(a, b) ? [a, b] : [b, a]
-  return {
-    pageIndex: start.pageIndex,
-    startLine: start.lineIndex,
-    startChar: start.charIndex,
-    endLine: end.lineIndex,
-    endChar: end.charIndex,
-  }
+  return posLess(a, b) || samePos(a, b) ? { start: a, end: b } : { start: b, end: a }
+}
+
+function samePos(a: CaretPos, b: CaretPos): boolean {
+  return a.pageIndex === b.pageIndex && a.lineIndex === b.lineIndex && a.charIndex === b.charIndex
 }
 
 export function isEmptyRange(range: SelectionRange | undefined): boolean {
   if (!range) return true
-  return range.startLine === range.endLine && range.startChar === range.endChar
+  return samePos(range.start, range.end)
 }
 
 const WORD_CHARS = /[\p{L}\p{N}_'-]/u
@@ -156,49 +162,71 @@ export function lineRangeAt(line: IndexLine, _charIndex: number): { start: numbe
   return { start: 0, end: line.text.length }
 }
 
-/** Highlight rectangles for a selection, in page coordinates. */
-export function rectsForSelection(index: TextIndex, range: SelectionRange): HighlightRect[] {
-  const page = pageOf(index, range.pageIndex)
+/**
+ * Split a range into per-line character slices, ordered by page then line.
+ * Lines that are only *touched* (zero characters on them) are dropped, so
+ * dragging from the end of one page to the start of the next does not paint
+ * an empty band.
+ */
+export function selectionSlices(index: TextIndex, range: SelectionRange): SelectionLineSlice[] {
+  const slices: SelectionLineSlice[] = []
+  const pages = [...index.pages].sort((a, b) => a.index - b.index)
+  for (const page of pages) {
+    if (page.index < range.start.pageIndex || page.index > range.end.pageIndex) continue
+    const from = page.index === range.start.pageIndex ? range.start.lineIndex : 0
+    const to = page.index === range.end.pageIndex ? range.end.lineIndex : page.lines.length - 1
+    const isStart = (li: number): boolean => page.index === range.start.pageIndex && li === range.start.lineIndex
+    const isEnd = (li: number): boolean => page.index === range.end.pageIndex && li === range.end.lineIndex
+    for (let li = from; li <= to && li < page.lines.length; li++) {
+      const line = page.lines[li]
+      const charFrom = isStart(li) ? range.start.charIndex : 0
+      const charTo = isEnd(li) ? range.end.charIndex : line.text.length
+      // zero-length touch points (page end -> next page start) paint nothing
+      if (charTo > charFrom) slices.push({ pageIndex: page.index, lineIndex: li, from: charFrom, to: charTo })
+    }
+  }
+  return slices
+}
+
+/** Highlight rectangles for the part of a selection that lands on one page. */
+export function rectsForSelectionOnPage(index: TextIndex, pageIndex: number, range: SelectionRange): HighlightRect[] {
+  const page = pageOf(index, pageIndex)
   if (!page) return []
   const out: HighlightRect[] = []
-  for (let li = range.startLine; li <= range.endLine && li < page.lines.length; li++) {
-    const line = page.lines[li]
-    const from = li === range.startLine ? range.startChar : 0
-    const to = li === range.endLine ? range.endChar : line.text.length
-    if (to <= from) continue
-    out.push(...rectsForRange(line, from, to))
+  for (const slice of selectionSlices(index, range)) {
+    if (slice.pageIndex !== pageIndex) continue
+    const line = page.lines[slice.lineIndex]
+    if (!line) continue
+    out.push(...rectsForRange(line, slice.from, slice.to))
   }
   return out
 }
 
 /**
- * Text for a selection: one line per visual line, with trailing spaces trimmed
- * (what a browser puts on the clipboard for a dragged selection).
+ * Text for a selection. Lines join with a newline; a page boundary also
+ * breaks the line, so copied text reads as continuous prose.
  */
 export function textForRange(index: TextIndex, range: SelectionRange): string {
-  const page = pageOf(index, range.pageIndex)
-  if (!page) return ''
   const parts: string[] = []
-  for (let li = range.startLine; li <= range.endLine && li < page.lines.length; li++) {
-    const line = page.lines[li]
-    const from = li === range.startLine ? range.startChar : 0
-    const to = li === range.endLine ? range.endChar : line.text.length
-    if (to < from) continue
-    const lastLine = li === range.endLine
-    parts.push((lastLine ? line.text.slice(from, to) : line.text.slice(from)).replace(/\s+$/, ''))
+  for (const slice of selectionSlices(index, range)) {
+    const page = pageOf(index, slice.pageIndex)
+    const line = page?.lines[slice.lineIndex]
+    if (!line) continue
+    const piece = line.text.slice(slice.from, slice.to)
+    // trim trailing whitespace on every line but the last of a page run
+    const next = selectionSlicesCachedNext(index, range, slice)
+    parts.push(next ? piece.replace(/\s+$/, '') : piece)
   }
   return parts.join('\n')
 }
 
-/** Per-line char ranges covered by a selection (used for drag feedback). */
-export function lineRangesForSelection(range: SelectionRange, lineCount: number): Array<{ lineIndex: number; from: number; to: number }> {
-  const out: Array<{ lineIndex: number; from: number; to: number }> = []
-  for (let li = range.startLine; li <= range.endLine && li < lineCount; li++) {
-    out.push({
-      lineIndex: li,
-      from: li === range.startLine ? range.startChar : 0,
-      to: li === range.endLine ? range.endChar : Number.MAX_SAFE_INTEGER,
-    })
+// small memo so textForRange does not re-walk the index per line
+let sliceCache: { key: string; slices: SelectionLineSlice[] } | null = null
+function selectionSlicesCachedNext(index: TextIndex, range: SelectionRange, current: SelectionLineSlice): boolean {
+  const key = `${range.start.pageIndex}:${range.start.lineIndex}:${range.start.charIndex}-${range.end.pageIndex}:${range.end.lineIndex}:${range.end.charIndex}`
+  if (!sliceCache || sliceCache.key !== key) {
+    sliceCache = { key, slices: selectionSlices(index, range) }
   }
-  return out
+  const i = sliceCache.slices.indexOf(current)
+  return i >= 0 && i < sliceCache.slices.length - 1
 }

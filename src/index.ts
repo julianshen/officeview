@@ -28,5 +28,12 @@ export type { XlsxDocument, XlsxSheet, XlsxCell, XlsxCellStyle } from './xlsx/ty
 export type { PptxDocument, PptxSlide, PptxShape } from './pptx/types'
 
 // Text selection helpers (used internally by <OfficeDoc>)
-export { hitTest, normalizeRange, rectsForSelection, textForRange, wordRangeAt } from './core/selection'
+export {
+  hitTest,
+  normalizeRange,
+  rectsForSelectionOnPage,
+  selectionSlices,
+  textForRange,
+  wordRangeAt,
+} from './core/selection'
 export type { CaretPos, SelectionRange } from './core/selection'
