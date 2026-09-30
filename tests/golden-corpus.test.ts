@@ -39,13 +39,11 @@ const EXPECTED_REJECTS = ['poi-crash-']
  * Files that hit a known renderer bug and cannot go through the golden
  * harness until src/ is fixed — kept as visible skipped tests (do NOT
  * "fix" by clamping here; that would hide the bug from the goldens).
- * - poi-56295.xlsx: sheet "pets" declares <col min=0 max=1024>, so sheet
- *   metrics size to 66625px wide; node-canvas caps at 32767px and
- *   renderPaintables throws "Canvas width cannot exceed 32767".
- *   scripts/corpus-report.ts survives only via its 4000px clamp. The
- *   renderer should size to the used cell range, not the full <cols> span.
+ * Currently empty: poi-56295.xlsx (66625px canvas from a <col max="1025">
+ * declaration on A1:C10 data) was covered here until it was fixed by
+ * bounding the XLSX grid to the used range (main commit 933d883).
  */
-const SKIP_RENDERER_BUGS = ['poi-56295.xlsx']
+const SKIP_RENDERER_BUGS: string[] = []
 
 const corpusAvailable = existsSync(join(CORPUS_DIR, PROBE_FIXTURE))
 

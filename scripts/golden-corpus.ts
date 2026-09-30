@@ -17,8 +17,14 @@
  *   - Files that fail to parse (e.g. poi-crash-* minimized fuzzer cases,
  *     malformed on purpose) are SKIPPED with a warning.
  *   - Files listed in SKIP_RENDERER_BUGS (known src/ bugs that throw in the
- *     harness, e.g. poi-56295.xlsx oversizing its canvas) are SKIPPED with
- *     a warning — see the constant for the root cause.
+ *     harness) are SKIPPED with a warning — see the constant. The list is
+ *     currently empty: poi-56295.xlsx used to oversize its canvas and was
+ *     covered here until main's XLSX grid-bounding fix (933d883).
+ *   - Units whose natural size exceeds MAX_HARNESS_SIDE are rendered
+ *     downscaled by the harness (see renderPaintables) — deterministic, but
+ *     lower fidelity, so record/compare print a NOTE rather than passing
+ *     silently. A NOTE here means a metrics blowup is being hidden by the
+ *     clamp: investigate instead of re-recording blindly.
  *   - Idempotent: goldens whose pixels are exactly identical are left
  *     untouched (mtime/hash preserved); only new or pixel-changed goldens
  *     are written. Stale goldens (unit index >= current unit count, or
@@ -55,13 +61,14 @@ const EXPECTED_REJECTS = ['poi-crash-']
  * Files that hit a known renderer bug and cannot go through the golden
  * harness until src/ is fixed — skipped in record/compare/test (do NOT
  * "fix" by clamping here; that would hide the bug from the goldens).
- * - poi-56295.xlsx: sheet "pets" declares <col min=0 max=1024>, so sheet
- *   metrics size to 66625px wide; node-canvas caps at 32767px and
- *   renderPaintables throws "Canvas width cannot exceed 32767".
- *   scripts/corpus-report.ts survives only via its 4000px clamp. The
- *   renderer should size to the used cell range, not the full <cols> span.
+ * Currently empty: poi-56295.xlsx (sheet "pets" declared
+ * <col min="1" max="1025"> while its data is A1:C10, so metrics sized a
+ * 66625px canvas and renderPaintables threw) was covered here until it was
+ * fixed by bounding the XLSX grid to the used range (main commit 933d883),
+ * which now renders it at 195x200. Re-add entries here if a new
+ * throw-in-harness renderer bug appears.
  */
-const SKIP_RENDERER_BUGS = ['poi-56295.xlsx']
+const SKIP_RENDERER_BUGS: string[] = []
 
 function parseArgs(argv: string[]): { cmd: string | undefined; only: string | undefined; threshold: number; maxRatio: number } {
   const [cmd, ...rest] = argv
@@ -94,11 +101,25 @@ function existingGoldenUnits(file: string): number[] {
   return units
 }
 
+/** Must match MAX_CANVAS_SIDE in src/test/pixel-diff.ts: larger units render downscaled. */
+const MAX_HARNESS_SIDE = 8192
+
 async function renderFile(absPath: string) {
   const doc = await loadOfficeFile(readFileSync(absPath))
   const paintables = await getPaintables(doc)
   const bitmaps = await renderPaintables(paintables)
-  return bitmaps
+  return { bitmaps, specs: paintables.map((p) => p.spec) }
+}
+
+/** Warn when a unit's golden is a downscaled render, not full fidelity. */
+function noteScaledUnits(file: string, specs: Array<{ widthPx: number; heightPx: number }>): void {
+  specs.forEach((s, i) => {
+    if (s.widthPx > MAX_HARNESS_SIDE || s.heightPx > MAX_HARNESS_SIDE) {
+      console.log(
+        `NOTE ${file}.${i}: natural size ${Math.ceil(s.widthPx)}x${Math.ceil(s.heightPx)} exceeds harness clamp ${MAX_HARNESS_SIDE}px — golden is a downscaled render, investigate a metrics blowup before re-recording`,
+      )
+    }
+  })
 }
 
 async function record(only: string | undefined, threshold: number): Promise<number> {
@@ -125,9 +146,10 @@ async function record(only: string | undefined, threshold: number): Promise<numb
       skipped++
       continue
     }
-    let bitmaps
+    let bitmaps: Awaited<ReturnType<typeof renderFile>>['bitmaps']
+    let specs: Awaited<ReturnType<typeof renderFile>>['specs'] = []
     try {
-      bitmaps = await renderFile(join(CORPUS_DIR, file))
+      ;({ bitmaps, specs } = await renderFile(join(CORPUS_DIR, file)))
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e)
       if (isExpectedReject(file)) {
@@ -149,6 +171,7 @@ async function record(only: string | undefined, threshold: number): Promise<numb
       skipped++
       continue
     }
+    noteScaledUnits(file, specs)
     for (let i = 0; i < bitmaps.length; i++) {
       const path = goldenPath(file, i)
       const bm = bitmaps[i]
@@ -218,9 +241,10 @@ async function compare(only: string | undefined, threshold: number, maxRatio: nu
       skipped++
       continue
     }
-    let bitmaps
+    let bitmaps: Awaited<ReturnType<typeof renderFile>>['bitmaps']
+    let specs: Awaited<ReturnType<typeof renderFile>>['specs'] = []
     try {
-      bitmaps = await renderFile(join(CORPUS_DIR, file))
+      ;({ bitmaps, specs } = await renderFile(join(CORPUS_DIR, file)))
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e)
       if (isExpectedReject(file)) {
@@ -253,6 +277,7 @@ async function compare(only: string | undefined, threshold: number, maxRatio: nu
       failures++
       continue
     }
+    noteScaledUnits(file, specs)
     for (let i = 0; i < bitmaps.length; i++) {
       const golden = await loadPng(goldenPath(file, i))
       const d = diffBitmaps(golden, bitmaps[i], threshold)
