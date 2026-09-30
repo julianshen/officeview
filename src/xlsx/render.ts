@@ -16,12 +16,24 @@ export interface GridMetrics {
 const DEFAULT_COL_PX = 64
 const DEFAULT_ROW_PX = 20
 const CHAR_PX = 7
+/** Hard caps so a pathological sheet can never allocate an impossible canvas. */
+const MAX_GRID_COLS = 4096
+const MAX_GRID_ROWS = 16384
+/** How much wider than the used range a <col> declaration may be and still
+ * count as real formatting rather than noise. */
+const MAX_DECLARED_COL_SLACK = 64
 
 export function computeMetrics(sheet: XlsxSheet): GridMetrics {
   let maxCol = 0
   for (const row of sheet.rows) for (const c of row.cells) maxCol = Math.max(maxCol, c.col)
-  for (const col of sheet.cols) maxCol = Math.max(maxCol, col.max)
-  const nCols = Math.max(maxCol + 1, 1)
+  // Real spreadsheets declare column formatting far wider than the used range
+  // (a sheet with data in A1:C10 may carry <col max="1025"/>). Sizing the grid
+  // from such a declared range alone produced a 66,000px canvas and threw, so
+  // trust the used range when the declared one is implausibly wider. A modestly
+  // wider declaration is real formatting (a styled but empty column) and stays.
+  const declaredMax = sheet.cols.reduce((m, c) => Math.max(m, c.max), maxCol)
+  const gridMax = declaredMax > maxCol + MAX_DECLARED_COL_SLACK ? maxCol : declaredMax
+  const nCols = Math.min(Math.max(gridMax + 1, 1), MAX_GRID_COLS)
   const colWidthsPx = new Array<number>(nCols).fill(DEFAULT_COL_PX)
   for (const spec of sheet.cols) {
     if (spec.widthChars !== undefined && !spec.hidden) {
@@ -30,11 +42,11 @@ export function computeMetrics(sheet: XlsxSheet): GridMetrics {
     }
   }
   let maxRow = 0
-  for (const row of sheet.rows) maxRow = Math.max(maxRow, row.index)
-  const nRows = maxRow + 1
+  for (const row of sheet.rows) maxRow = Math.max(row.index, maxRow)
+  const nRows = Math.min(maxRow + 1, MAX_GRID_ROWS)
   const rowHeightsPx = new Array<number>(nRows).fill(DEFAULT_ROW_PX)
   for (const row of sheet.rows) {
-    if (row.heightPt !== undefined && row.customHeight) {
+    if (row.heightPt !== undefined && row.customHeight && row.index < nRows) {
       rowHeightsPx[row.index] = Math.round(row.heightPt * (96 / 72))
     }
   }

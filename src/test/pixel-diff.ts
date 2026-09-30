@@ -90,14 +90,26 @@ export async function loadPng(path: string): Promise<Bitmap> {
 }
 
 /** Render paintables (all units) stacked? No — returns one bitmap per unit. */
+/**
+ * Browsers and node-canvas refuse canvases beyond ~32767px on a side.
+ */
+const MAX_CANVAS_SIDE = 8192
+
 export async function renderPaintables(
   paintables: Array<{ spec: { widthPx: number; heightPx: number }; paint: (ctx: CanvasRenderingContext2D) => void }>,
 ): Promise<Bitmap[]> {
   const { createCanvas } = await import('canvas')
   return paintables.map(({ spec, paint }) => {
-    const canvas = createCanvas(Math.ceil(spec.widthPx), Math.ceil(spec.heightPx))
+    const naturalW = Math.max(1, Math.ceil(spec.widthPx))
+    const naturalH = Math.max(1, Math.ceil(spec.heightPx))
+    // clamp+scale instead of throwing on an impossible canvas
+    const scale = Math.min(1, MAX_CANVAS_SIDE / naturalW, MAX_CANVAS_SIDE / naturalH)
+    const canvas = createCanvas(Math.max(1, Math.floor(naturalW * scale)), Math.max(1, Math.floor(naturalH * scale)))
     const ctx = canvas.getContext('2d')!
+    ctx.save()
+    ctx.scale(canvas.width / naturalW, canvas.height / naturalH)
     paint(ctx as never)
+    ctx.restore()
     return { width: canvas.width, height: canvas.height, data: ctx.getImageData(0, 0, canvas.width, canvas.height).data }
   })
 }

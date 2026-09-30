@@ -90,3 +90,32 @@ describe('xlsx render', () => {
     expect(blue).toBeGreaterThan(10)
   })
 })
+
+describe('xlsx grid sizing limits', () => {
+  test('ignores an implausibly wide <col> declaration (found via corpus poi-56295.xlsx)', async () => {
+    // declares 1025 columns but only holds data in A1:C1
+    const buf = await buildXlsx([
+      { name: 'S', rows: [{ r: 1, cells: [{ ref: 'A1', v: 1 }, { ref: 'C1', v: 2 }] }] },
+    ])
+    // patch the fixture: widen the declared column range
+    const JSZip = (await import('jszip')).default
+    const zip = await JSZip.loadAsync(buf)
+    let xml = await zip.file('xl/worksheets/sheet1.xml')!.async('string')
+    xml = xml.replace('<cols>', '<cols>').replace('</cols>', '<col min="1" max="1025" width="8.5"/></cols>')
+    zip.file('xl/worksheets/sheet1.xml', xml)
+    const patched = await zip.generateAsync({ type: 'uint8array' })
+
+    const doc = await parseXlsx(await OfficePackage.load(patched))
+    const m = computeMetrics(doc.sheets[0])
+    // sized to the used range (C), not 1025 declared columns
+    expect(m.colWidthsPx.length).toBeLessThanOrEqual(4)
+    expect(m.widthPx).toBeLessThan(2000)
+  })
+
+  test('keeps a modestly wider declared range (real empty-column formatting)', async () => {
+    const buf = await buildXlsx([{ name: 'S', rows: [{ r: 1, cells: [{ ref: 'A1', v: 1 }] }], cols: '<col min="1" max="2" width="10"/>' }])
+    const doc = await parseXlsx(await OfficePackage.load(buf))
+    const m = computeMetrics(doc.sheets[0])
+    expect(m.colWidthsPx).toHaveLength(2)
+  })
+})
