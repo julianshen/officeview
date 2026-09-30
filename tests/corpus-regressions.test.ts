@@ -15,13 +15,23 @@ import { getPaintables } from '../src/render/paint'
 import { buildTextIndex } from '../src/core/search'
 
 const CORPUS_DIR = join(__dirname, '..', 'corpus')
-const corpusAvailable = existsSync(CORPUS_DIR)
+// The directory always exists once corpus.lock.json is tracked — the binaries
+// are the thing that may be absent, so probe for a real fixture, not the dir.
+const PROBE_FIXTURE = 'poi-Bug66263-table.docx'
+const corpusAvailable = existsSync(join(CORPUS_DIR, PROBE_FIXTURE))
 const corpus = (name: string): Uint8Array => readFileSync(join(CORPUS_DIR, name))
 
 const measureFixed = (text: string, style: { fontSizePt: number }): number =>
   text.length * style.fontSizePt * 0.6 * (96 / 72)
 
-describe.skipIf(!corpusAvailable)('corpus regressions', () => {
+describe('corpus regressions', () => {
+  // The corpus is fetched, not vendored: `bun scripts/fetch-corpus.ts`. These
+  // cover bugs that only real-world files exposed.
+  if (!corpusAvailable) {
+    test.skip('corpus fixtures not fetched — run: bun scripts/fetch-corpus.ts', () => {})
+    return
+  }
+
   test('SDT-wrapped table rows are unwrapped (Bug66263-table.docx)', async () => {
     const doc = await parseDocx(await OfficePackage.load(corpus('poi-Bug66263-table.docx')))
     // the bug: a body whose only content is a table produced zero sections
