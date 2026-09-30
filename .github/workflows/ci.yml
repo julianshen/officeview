@@ -1,0 +1,68 @@
+# Continuous integration for officeview.
+#
+# NOTE ON GOLDENS (please read before "fixing" this file by adding a golden
+# step): scripts/golden-corpus.ts compare and scripts/golden.ts compare are
+# deliberately NOT run here. The goldens are pixel-exact PNGs recorded on a
+# developer Mac; font rasterization differs between macOS and the Linux CI
+# runner, so every golden would fail for reasons unrelated to the code.
+# The machine-independent coverage is the corpus report below: it asserts
+# that real documents parse and actually paint their text, never that pixels
+# match. Run the golden compare locally, on the machine that recorded them:
+#   bun scripts/golden-corpus.ts compare
+
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# Superseded runs on the same branch cancel; only the latest commit is tested.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    name: typecheck, test, build, corpus
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@v4
+
+      - name: Install system libraries for node-canvas
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libcairo2-dev libpango1.0-dev libjpeg-dev libgif-dev librsvg2-dev
+
+      - name: Set up bun (pinned, do not float)
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.10
+
+      - name: Restore bun dependency cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.bun/install/cache
+          key: ${{ runner.os }}-bun-${{ hashFiles('bun.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-bun-
+
+      - name: Install dependencies (frozen lockfile)
+        run: bun install --frozen-lockfile
+
+      - name: Typecheck
+        run: bunx tsc --noEmit
+
+      - name: Run the test suite
+        run: bun run test
+
+      - name: Build the library
+        run: bun run build
+
+      - name: Fetch the real-file corpus
+        run: bun scripts/fetch-corpus.ts
+
+      - name: Corpus report (fails on degraded or unexpected failures)
+        run: bun scripts/corpus-report.ts
