@@ -286,3 +286,57 @@ describe('selection across pages', () => {
     expect(text.split('\n')).toHaveLength(2)
   })
 })
+
+describe('textForRange robustness', () => {
+  test('two different documents with identical ranges do not interfere', () => {
+    // guards the old module-level slice memo, which keyed only on range
+    // coordinates and could return a stale slice list for a second document
+    const mk = (lines: string[]) => ({
+      pages: lines.map((text, i) => ({
+        index: 0,
+        lines: [{
+          spans: [{ text, x: 0, y: 100 + i * 20, width: text.length * 10, fontSize: 12 }],
+          text,
+          y: 100 + i * 20,
+          top: 88 + i * 20,
+          bottom: 103 + i * 20,
+        }],
+      })),
+    })
+    const a = mk(['first doc line']) as never
+    const b = mk(['second doc!!']) as never
+    const range = normalizeRange({ pageIndex: 0, lineIndex: 0, charIndex: 0 }, { pageIndex: 0, lineIndex: 0, charIndex: 5 })
+    expect(textForRange(a, range)).toBe('first')
+    expect(textForRange(b, range)).toBe('secon')
+  })
+
+  test('trailing whitespace is trimmed on all but the last line', () => {
+    const index = {
+      pages: [
+        { index: 0, lines: [
+          { spans: [{ text: 'aaa   ', x: 0, y: 100, width: 60, fontSize: 12 }], text: 'aaa   ', y: 100, top: 88, bottom: 103 },
+          { spans: [{ text: 'bbb   ', x: 0, y: 120, width: 60, fontSize: 12 }], text: 'bbb   ', y: 120, top: 108, bottom: 123 },
+        ] },
+      ],
+    } as never
+    const text = textForRange(index, normalizeRange(
+      { pageIndex: 0, lineIndex: 0, charIndex: 0 },
+      { pageIndex: 0, lineIndex: 1, charIndex: 6 },
+    ))
+    expect(text).toBe('aaa\nbbb   ')
+  })
+
+  test('a collapsed caret range selects no text', () => {
+    const index = {
+      pages: [{ index: 0, lines: [{ spans: [{ text: 'x', x: 0, y: 100, width: 10, fontSize: 12 }], text: 'x', y: 100, top: 88, bottom: 103 }] }],
+    } as never
+    // start == end is a caret, not a selection: nothing to copy
+    const collapsed = normalizeRange({ pageIndex: 0, lineIndex: 0, charIndex: 1 }, { pageIndex: 0, lineIndex: 0, charIndex: 1 })
+    expect(textForRange(index, collapsed)).toBe('')
+    // a reversed drag still normalizes to a forward one-character selection
+    expect(textForRange(index, normalizeRange(
+      { pageIndex: 0, lineIndex: 0, charIndex: 1 },
+      { pageIndex: 0, lineIndex: 0, charIndex: 0 },
+    ))).toBe('x')
+  })
+})

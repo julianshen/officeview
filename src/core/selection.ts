@@ -207,26 +207,18 @@ export function rectsForSelectionOnPage(index: TextIndex, pageIndex: number, ran
  * breaks the line, so copied text reads as continuous prose.
  */
 export function textForRange(index: TextIndex, range: SelectionRange): string {
+  const slices = selectionSlices(index, range)
   const parts: string[] = []
-  for (const slice of selectionSlices(index, range)) {
+  for (let i = 0; i < slices.length; i++) {
+    const slice = slices[i]
     const page = pageOf(index, slice.pageIndex)
     const line = page?.lines[slice.lineIndex]
     if (!line) continue
     const piece = line.text.slice(slice.from, slice.to)
-    // trim trailing whitespace on every line but the last of a page run
-    const next = selectionSlicesCachedNext(index, range, slice)
-    parts.push(next ? piece.replace(/\s+$/, '') : piece)
+    // trim trailing whitespace on every line except the last, the way a
+    // browser trims a dragged selection
+    const isLast = i === slices.length - 1
+    parts.push(isLast ? piece : piece.replace(/\s+$/, ''))
   }
   return parts.join('\n')
-}
-
-// small memo so textForRange does not re-walk the index per line
-let sliceCache: { key: string; slices: SelectionLineSlice[] } | null = null
-function selectionSlicesCachedNext(index: TextIndex, range: SelectionRange, current: SelectionLineSlice): boolean {
-  const key = `${range.start.pageIndex}:${range.start.lineIndex}:${range.start.charIndex}-${range.end.pageIndex}:${range.end.lineIndex}:${range.end.charIndex}`
-  if (!sliceCache || sliceCache.key !== key) {
-    sliceCache = { key, slices: selectionSlices(index, range) }
-  }
-  const i = sliceCache.slices.indexOf(current)
-  return i >= 0 && i < sliceCache.slices.length - 1
 }
