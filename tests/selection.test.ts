@@ -9,7 +9,8 @@ import {
   isEmptyRange,
   lineRangeAt,
   normalizeRange,
-  rectsForSelection,
+  rectsForSelectionOnPage,
+  selectionSlices,
   textForRange,
   wordRangeAt,
   type CaretPos,
@@ -78,10 +79,8 @@ describe('range normalization', () => {
     const a: CaretPos = { pageIndex: 0, lineIndex: 2, charIndex: 5 }
     const b: CaretPos = { pageIndex: 0, lineIndex: 1, charIndex: 2 }
     const range = normalizeRange(a, b)
-    expect(range.startLine).toBe(1)
-    expect(range.startChar).toBe(2)
-    expect(range.endLine).toBe(2)
-    expect(range.endChar).toBe(5)
+    expect(range.start).toEqual({ pageIndex: 0, lineIndex: 1, charIndex: 2 })
+    expect(range.end).toEqual({ pageIndex: 0, lineIndex: 2, charIndex: 5 })
     expect(isEmptyRange(range)).toBe(false)
   })
 
@@ -117,13 +116,7 @@ describe('word and line expansion', () => {
 describe('selection text and rects', () => {
   test('copies the selected substring', async () => {
     const index = await indexDocx([{ runs: [{ text: 'hello world again' }] }])
-    const text = textForRange(index, {
-      pageIndex: 0,
-      startLine: 0,
-      startChar: 6,
-      endLine: 0,
-      endChar: 11,
-    })
+    const text = textForRange(index, { start: { pageIndex: 0, lineIndex: 0, charIndex: 6 }, end: { pageIndex: 0, lineIndex: 0, charIndex: 11 } })
     expect(text).toBe('world')
   })
 
@@ -134,13 +127,7 @@ describe('selection text and rects', () => {
       { runs: [{ text: 'third line' }] },
     ])
     expect(index.pages[0].lines.length).toBe(3)
-    const text = textForRange(index, {
-      pageIndex: 0,
-      startLine: 0,
-      startChar: 0,
-      endLine: 2,
-      endChar: 10,
-    })
+    const text = textForRange(index, { start: { pageIndex: 0, lineIndex: 0, charIndex: 0 }, end: { pageIndex: 0, lineIndex: 2, charIndex: 10 } })
     expect(text.split('\n')).toHaveLength(3)
     expect(text.startsWith('first line')).toBe(true)
     expect(text.endsWith('third line')).toBe(true)
@@ -151,13 +138,7 @@ describe('selection text and rects', () => {
       { runs: [{ text: 'aaaa bbbb cccc' }] },
       { runs: [{ text: 'dddd eeee ffff' }] },
     ])
-    const text = textForRange(index, {
-      pageIndex: 0,
-      startLine: 0,
-      startChar: 5,
-      endLine: 1,
-      endChar: 4,
-    })
+    const text = textForRange(index, { start: { pageIndex: 0, lineIndex: 0, charIndex: 5 }, end: { pageIndex: 0, lineIndex: 1, charIndex: 4 } })
     expect(text).toBe('bbbb cccc\ndddd')
   })
 
@@ -166,13 +147,7 @@ describe('selection text and rects', () => {
       { runs: [{ text: 'aaaa bbbb cccc' }] },
       { runs: [{ text: 'dddd eeee ffff' }] },
     ])
-    const rects = rectsForSelection(index, {
-      pageIndex: 0,
-      startLine: 0,
-      startChar: 5,
-      endLine: 1,
-      endChar: 4,
-    })
+    const rects = rectsForSelectionOnPage(index, 0, { start: { pageIndex: 0, lineIndex: 0, charIndex: 5 }, end: { pageIndex: 0, lineIndex: 1, charIndex: 4 } })
     expect(rects.length).toBeGreaterThanOrEqual(2)
     // rects are top-to-bottom
     const ys = rects.map((r) => r.y).sort((a, b) => a - b)
@@ -186,15 +161,128 @@ describe('selection text and rects', () => {
   test('a whole-line selection covers the full line width', async () => {
     const index = await indexDocx([{ runs: [{ text: 'measure me' }] }])
     const line = index.pages[0].lines[0]
-    const rects = rectsForSelection(index, {
-      pageIndex: 0,
-      startLine: 0,
-      startChar: 0,
-      endLine: 0,
-      endChar: line.text.length,
+    const rects = rectsForSelectionOnPage(index, 0, {
+      start: { pageIndex: 0, lineIndex: 0, charIndex: 0 },
+      end: { pageIndex: 0, lineIndex: 0, charIndex: line.text.length },
     })
     const covered = rects.reduce((a, r) => a + r.width, 0)
     const total = line.spans.reduce((a, s) => a + s.width, 0)
     expect(covered).toBeCloseTo(total, 0)
+  })
+})
+
+describe('selection across pages', () => {
+  /**
+   * A hand-built index so the geometry assertions are exact and do not depend
+   * on how a real document happens to paginate.
+   * Page 0 and page 1 each have two lines 20px apart.
+   */
+  function fakeIndex(): import('../src/core/search').TextIndex {
+    const CHAR_W = 10
+    const line = (text: string, y: number) => ({
+      spans: [{ text, x: 50, y, width: text.length * CHAR_W, fontSize: 12 }],
+      text,
+      y,
+      top: y - 12,
+      bottom: y + 3,
+    })
+    return {
+      pages: [
+        { index: 0, lines: [line('alpha one', 100), line('bravo two', 120)] },
+        { index: 1, lines: [line('delta four', 100), line('echo five', 120)] },
+      ],
+    }
+  }
+
+  const index = fakeIndex()
+
+  test('normalizeRange orders a backwards cross-page drag', () => {
+    const range = normalizeRange(
+      { pageIndex: 1, lineIndex: 0, charIndex: 8 },
+      { pageIndex: 0, lineIndex: 1, charIndex: 3 },
+    )
+    expect(range.start).toEqual({ pageIndex: 0, lineIndex: 1, charIndex: 3 })
+    expect(range.end).toEqual({ pageIndex: 1, lineIndex: 0, charIndex: 8 })
+    expect(isEmptyRange(range)).toBe(false)
+  })
+
+  test('slices cover only the touched lines, in page then line order', () => {
+    const slices = selectionSlices(
+      index,
+      normalizeRange(
+        { pageIndex: 0, lineIndex: 0, charIndex: 6 },
+        { pageIndex: 1, lineIndex: 1, charIndex: 4 },
+      ),
+    )
+    expect(slices).toEqual([
+      { pageIndex: 0, lineIndex: 0, from: 6, to: 9 },
+      { pageIndex: 0, lineIndex: 1, from: 0, to: 9 },
+      { pageIndex: 1, lineIndex: 0, from: 0, to: 10 },
+      { pageIndex: 1, lineIndex: 1, from: 0, to: 4 },
+    ])
+  })
+
+  test('each page paints only its own rectangles, in its own coordinates', () => {
+    const range = normalizeRange(
+      { pageIndex: 0, lineIndex: 1, charIndex: 0 },
+      { pageIndex: 1, lineIndex: 0, charIndex: 5 },
+    )
+    const onPage0 = rectsForSelectionOnPage(index, 0, range)
+    const onPage1 = rectsForSelectionOnPage(index, 1, range)
+    // page 0 contributes only its second line (y around 120)
+    expect(onPage0).toHaveLength(1)
+    expect(onPage0[0].y).toBeCloseTo(108, 0)
+    // page 1 contributes only its first line (y around 100)
+    expect(onPage1).toHaveLength(1)
+    expect(onPage1[0].y).toBeCloseTo(88, 0)
+    // a page outside the selection paints nothing
+    expect(rectsForSelectionOnPage(index, 2, range)).toHaveLength(0)
+  })
+
+  test('copied text spans the page break, one line per visual line', () => {
+    const text = textForRange(
+      index,
+      normalizeRange(
+        { pageIndex: 0, lineIndex: 0, charIndex: 6 },
+        { pageIndex: 1, lineIndex: 1, charIndex: 4 },
+      ),
+    )
+    expect(text).toBe('one\nbravo two\ndelta four\necho')
+  })
+
+  test('a drag from a page end to the next page start paints no empty band', () => {
+    const slices = selectionSlices(
+      index,
+      normalizeRange(
+        { pageIndex: 0, lineIndex: 1, charIndex: 9 },
+        { pageIndex: 1, lineIndex: 0, charIndex: 0 },
+      ),
+    )
+    // both touch points are zero-length, so nothing is selected or painted
+    expect(slices).toEqual([])
+    expect(rectsForSelectionOnPage(index, 0, normalizeRange(
+      { pageIndex: 0, lineIndex: 1, charIndex: 9 },
+      { pageIndex: 1, lineIndex: 0, charIndex: 0 },
+    ))).toHaveLength(0)
+  })
+
+  test('a selection inside one page is unaffected', () => {
+    const range = normalizeRange(
+      { pageIndex: 0, lineIndex: 0, charIndex: 0 },
+      { pageIndex: 0, lineIndex: 0, charIndex: 4 },
+    )
+    expect(textForRange(index, range)).toBe('alph')
+    expect(rectsForSelectionOnPage(index, 1, range)).toHaveLength(0)
+  })
+
+  test('a range spanning pages yields text from both pages', () => {
+    const range = normalizeRange(
+      { pageIndex: 0, lineIndex: 1, charIndex: 6 },
+      { pageIndex: 1, lineIndex: 0, charIndex: 5 },
+    )
+    const text = textForRange(index, range)
+    expect(text.startsWith('two')).toBe(true)
+    expect(text.endsWith('delta')).toBe(true)
+    expect(text.split('\n')).toHaveLength(2)
   })
 })

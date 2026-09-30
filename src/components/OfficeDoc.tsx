@@ -14,7 +14,7 @@ import {
   isEmptyRange,
   lineRangeAt,
   normalizeRange,
-  rectsForSelection,
+  rectsForSelectionOnPage,
   textForRange,
   wordRangeAt,
   type CaretPos,
@@ -283,11 +283,8 @@ export function OfficeDoc({
         if (caret) {
           // a plain click clears any existing selection
           setSelection({
-            pageIndex: caret.pageIndex,
-            startLine: caret.lineIndex,
-            startChar: caret.charIndex,
-            endLine: caret.lineIndex,
-            endChar: caret.charIndex,
+            start: caret,
+            end: caret,
           })
         }
       })
@@ -485,7 +482,8 @@ export function OfficeDoc({
   // ---- text selection ----
   const [selection, setSelection] = useState<SelectionRange | undefined>(undefined)
   const selectionKey = selection
-    ? `${selection.pageIndex}:${selection.startLine}:${selection.startChar}:${selection.endLine}:${selection.endChar}`
+    ? `${selection.start.pageIndex}:${selection.start.lineIndex}:${selection.start.charIndex}` +
+      `-${selection.end.pageIndex}:${selection.end.lineIndex}:${selection.end.charIndex}`
     : ''
   const [copied, setCopied] = useState<'idle' | 'done' | 'failed'>('idle')
   const selectionAnchor = useRef<CaretPos | null>(null)
@@ -517,7 +515,8 @@ export function OfficeDoc({
       selectionAnchor.current = anchor
     }
     const caret = await caretFromEvent(e)
-    if (!caret || !anchor || anchor.pageIndex !== caret.pageIndex) return
+    // a drag may cross a page boundary — normalizeRange orders by page
+    if (!caret || !anchor) return
     setSelection(normalizeRange(anchor, caret))
   }
 
@@ -528,11 +527,8 @@ export function OfficeDoc({
     const { start, end } = wordRangeAt(line, caret.charIndex)
     selectionAnchor.current = caret
     setSelection({
-      pageIndex: caret.pageIndex,
-      startLine: caret.lineIndex,
-      startChar: start,
-      endLine: caret.lineIndex,
-      endChar: end,
+      start: { pageIndex: caret.pageIndex, lineIndex: caret.lineIndex, charIndex: start },
+      end: { pageIndex: caret.pageIndex, lineIndex: caret.lineIndex, charIndex: end },
     })
   }
 
@@ -543,11 +539,8 @@ export function OfficeDoc({
     const { start, end } = lineRangeAt(line, caret.charIndex)
     selectionAnchor.current = caret
     setSelection({
-      pageIndex: caret.pageIndex,
-      startLine: caret.lineIndex,
-      startChar: start,
-      endLine: caret.lineIndex,
-      endChar: end,
+      start: { pageIndex: caret.pageIndex, lineIndex: caret.lineIndex, charIndex: start },
+      end: { pageIndex: caret.pageIndex, lineIndex: caret.lineIndex, charIndex: end },
     })
   }
 
@@ -568,7 +561,8 @@ export function OfficeDoc({
       matches.length === 0 ? [] : matches.filter((m) => m.pageIndex === pageIndex).flatMap((m) => m.rects)
     const activeMatch = active >= 0 ? matches[active] : undefined
     const activeRects = activeMatch && activeMatch.pageIndex === pageIndex ? activeMatch.rects : []
-    const selRects = selection && indexRef.current ? rectsForSelection(indexRef.current, selection) : []
+    const selRects =
+      selection && indexRef.current ? rectsForSelectionOnPage(indexRef.current, pageIndex, selection) : []
     if (searchRects.length === 0 && activeRects.length === 0 && selRects.length === 0) return undefined
     return {
       rects: searchRects,
