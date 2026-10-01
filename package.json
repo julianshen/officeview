@@ -1,11 +1,24 @@
 {
   "name": "officeview",
-  "version": "0.1.0",
-  "description": "React components that render Office documents (Word, PowerPoint, Excel) on <canvas> — pixel-faithful, not HTML translation. Works on desktop and mobile.",
-  "keywords": ["react", "canvas", "docx", "xlsx", "pptx", "office-documents", "ooxml"],
+  "version": "0.2.0",
+  "description": "React components that render Office documents (Word, PowerPoint, Excel) on <canvas> \u2014 pixel-faithful, not HTML translation. Works on desktop and mobile.",
+  "keywords": [
+    "react",
+    "canvas",
+    "docx",
+    "xlsx",
+    "pptx",
+    "office-documents",
+    "ooxml"
+  ],
   "homepage": "https://github.com/julianshen/officeview",
-  "bugs": { "url": "https://github.com/julianshen/officeview/issues" },
-  "repository": { "type": "git", "url": "git+https://github.com/julianshen/officeview.git" },
+  "bugs": {
+    "url": "https://github.com/julianshen/officeview/issues"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/julianshen/officeview.git"
+  },
   "type": "module",
   "license": "MIT",
   "sideEffects": false,
