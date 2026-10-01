@@ -217,8 +217,13 @@ async function sampleDocxStreamed(): Promise<ReadableStream<Uint8Array>> {
   })
 }
 
+async function sampleDocxProtected(): Promise<Uint8Array> {
+  return sampleDocx()
+}
+
 const SAMPLES: Sample[] = [
   { label: 'Word (.docx)', emoji: '📄', load: sampleDocx },
+  { label: 'Protected', emoji: '🔒', load: sampleDocxProtected },
   { label: 'Streamed', emoji: '🌊', load: sampleDocxStreamed },
   { label: 'Word lists', emoji: '🔢', load: sampleDocxLists },
   { label: 'Word header/footer', emoji: '📄', load: sampleDocxHeaderFooter },
@@ -229,6 +234,7 @@ const SAMPLES: Sample[] = [
 
 function App() {
   const [data, setData] = useState<Uint8Array | ReadableStream<Uint8Array> | null>(null)
+  const [protectedMode, setProtectedMode] = useState(false)
   const [label, setLabel] = useState('')
   const [busy, setBusy] = useState(false)
 
@@ -236,6 +242,7 @@ function App() {
     setBusy(true)
     try {
       setLabel(`sample ${s.label}`)
+      setProtectedMode(s.label === 'Protected')
       setData(await s.load())
     } finally {
       setBusy(false)
@@ -249,6 +256,7 @@ function App() {
     setLabel(f.name)
     const reader = new FileReader()
     reader.onload = () => {
+      setProtectedMode(false)
       setData(new Uint8Array(reader.result as ArrayBuffer))
       setBusy(false)
     }
@@ -287,6 +295,8 @@ function App() {
               </p>
             )}
             error={(msg) => <p style={{ textAlign: 'center', color: '#ff6b6b' }}>⚠️ {msg}</p>}
+            allowCopy={!protectedMode}
+            allowPrint={!protectedMode}
             background="#22252d"
             style={{ minHeight: '60dvh' }}
           />

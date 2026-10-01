@@ -104,6 +104,38 @@ page-by-page rendering would require either a format that streams (ODF, or
 SpreadsheetML/WordprocessingML delivered over a non-zip transport) or a full incremental
 zip parser that reads local file headers as they go.
 
+### Copy and print prevention
+
+Two props close the deliberate affordances for extracting content. Both default to `true`,
+so existing usage is unchanged:
+
+```tsx
+<OfficeDoc document={doc} allowCopy={false} allowPrint={false} />
+```
+
+`allowCopy={false}` removes drag text selection, the copy button, and the `Cmd/Ctrl+C`
+handler; it also swallows native copy and context-menu events inside the viewer and opts
+the container out of browser text selection. Search, zoom and pan are untouched.
+
+`allowPrint={false}` installs a `@media print` rule that hides the viewer and swallows
+`Cmd/Ctrl+P` while it has focus. The rule is scoped to this component, is installed only
+while such a viewer is mounted, and is removed on unmount — so the rest of the host page
+still prints normally. `<OfficeFile>` accepts both props too (they come through the
+underlying `OfficeDocProps`).
+
+**Be clear about what this is.** These are deterrents, not DRM, and it is worth saying so
+before you rely on them:
+
+- Rendering to a canvas already means the browser holds no selectable text for the
+  document, so there is nothing for a reader to `Cmd+A`-copy in the first place. What
+  `allowCopy` removes is *our own* extraction path.
+- Preventing print removes the document from the browser's print pipeline — a real
+  `Ctrl+P`, and "Save as PDF" from the print dialog, produce a page without the document
+  in it. It does not stop a reader taking a screenshot, opening devtools, or removing the
+  stylesheet.
+- Neither prop is a security boundary. If you need actual confidentiality, serve the
+  document to an authorised user and treat the rendering as a preview.
+
 ## Current coverage
 
 **Word (.docx)** — paragraphs and runs (bold/italic/underline/strike/size/color/highlight), alignment incl. justify, indents, spacing, line spacing, page size and margins, section breaks, pagination, hyperlinks, embedded images (inline **and** floating/anchored, incl. `behindDoc`), tables (spans, vertical merges across rows *and* page breaks, shading, borders, per-row heights, `w:vAlign`, repeating header rows), headers/footers on every page with live `PAGE`/`NUMPAGES` fields, `w:titlePg` first-page variants, and list numbering (decimal, bullet, alphabetic, roman, nested levels) with hanging indents.
