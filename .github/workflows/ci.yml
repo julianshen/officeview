@@ -5,9 +5,15 @@
 # deliberately NOT run here. The goldens are pixel-exact PNGs recorded on a
 # developer Mac; font rasterization differs between macOS and the Linux CI
 # runner, so every golden would fail for reasons unrelated to the code.
-# The machine-independent coverage is the corpus report below: it asserts
-# that real documents parse and actually paint their text, never that pixels
-# match. Run the golden compare locally, on the machine that recorded them:
+# This exclusion is enforced at RUN time, not just by omitting a step: the
+# test step below fetches the corpus first (so corpus-regressions.test.ts
+# actually runs) and then invokes vitest with the pixel-golden suites
+# excluded. Do NOT "simplify" it back to `bun run test` — that would
+# re-enable tests/golden.test.ts and tests/golden-corpus.test.ts on Linux
+# and turn the suite red for font reasons. The machine-independent coverage
+# is the corpus report at the end: it asserts that real documents parse and
+# actually paint their text, never that pixels match. Run the golden compare
+# locally, on the machine that recorded them:
 #   bun scripts/golden-corpus.ts compare
 
 name: ci
@@ -55,14 +61,15 @@ jobs:
       - name: Typecheck
         run: bunx tsc --noEmit
 
-      - name: Run the test suite
-        run: bun run test
+      # Before the suite, so corpus-regressions.test.ts runs instead of skipping.
+      - name: Fetch the real-file corpus
+        run: bun scripts/fetch-corpus.ts
+
+      - name: Run the test suite (pixel-golden suites excluded — see note above)
+        run: bunx vitest run --exclude 'tests/golden*.test.ts'
 
       - name: Build the library
         run: bun run build
-
-      - name: Fetch the real-file corpus
-        run: bun scripts/fetch-corpus.ts
 
       - name: Corpus report (fails on degraded or unexpected failures)
         run: bun scripts/corpus-report.ts
