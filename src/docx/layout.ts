@@ -69,7 +69,7 @@ export interface ImageBox {
   /** Index into the document's decoded image list (set by the caller). */
   imageIndex: number
   /** Set for floating (wp:anchor) images: drawn behind text and out of flow. */
-  floating?: { behindDoc: boolean; relativeHeight: number }
+  floating?: { behindDoc: boolean; relativeHeight: number; wrap: 'none' | 'square' | 'tight' | 'through' | 'topAndBottom' }
 }
 
 /** Rect geometry for one table cell (page-relative, after layout). */
@@ -164,6 +164,11 @@ function layoutParagraph(
     contentWidth: number
     startY: number
     defaults: { fontFamily: string; fontSizePt: number }
+    /**
+     * Free horizontal bands at a given y range, after subtracting floating
+     * objects. Undefined/empty means "no float here, use the full column".
+     */
+    floatBands?: (yTop: number, yBottom: number) => Array<{ x: number; width: number }> | undefined
   },
 ): { lines: LineBox[]; endY: number } {
   const lines: LineBox[] = []
@@ -180,8 +185,39 @@ function layoutParagraph(
     italic: !!para.runs[0]?.italic,
   }
   const markerGutter = para.listMarker ? measure(`${para.listMarker} `, markerStyle) : 0
-  const usable = contentWidth - indentLeft - indentRight - markerGutter
-  if (usable <= 0) return { lines, endY: startY }
+  const fullUsable = contentWidth - indentLeft - indentRight - markerGutter
+  if (fullUsable <= 0) return { lines, endY: startY }
+
+  // Per-line band: a floating image narrows the column on the lines it spans.
+  // Recomputed at each line start (Word snaps wrapping to line granularity).
+  const lineHeightEstimate = (): number => {
+    if (para.lineSpacing?.rule === 'exact' || para.lineSpacing?.rule === 'atLeast') return twipsToPx(para.lineSpacing.value)
+    const mult = para.lineSpacing?.rule === 'auto' ? para.lineSpacing.value / 240 : 1
+    return (maxRunFontSize(para, defaults) || defaults.fontSizePt) * LINE_HEIGHT_FACTOR * mult
+  }
+  let lineX = contentX
+  let lineUsable = fullUsable
+  const refreshBand = (): void => {
+    if (segs.length > 0) return // this line is already positioned
+    const bands = opts.floatBands?.(y, y + lineHeightEstimate())
+    let best: { x: number; width: number } | undefined
+    if (bands) {
+      for (const b of bands) if (!best || b.width > best.width) best = b
+    }
+    // no bands at all, or nothing left to write into: fall back to the column
+    // rather than dropping the paragraph's text
+    if (!best || best.width <= 0) {
+      lineX = contentX
+      lineUsable = fullUsable
+      return
+    }
+    lineX = best.x
+    lineUsable = Math.min(fullUsable, best.width - indentLeft - indentRight - markerGutter)
+    if (lineUsable <= 0) {
+      lineX = contentX
+      lineUsable = fullUsable
+    }
+  }
 
   let y = startY
   let segs: Segment[] = []
@@ -201,9 +237,9 @@ function layoutParagraph(
     const lineIndent = indentLeft + (firstLine ? firstLineIndent : 0) + markerGutter
     const marker = firstLine && para.listMarker ? { text: para.listMarker, widthPx: markerGutter } : undefined
     if (segs.length === 0) {
-      lines.push({ yPx: y, xPx: contentX + lineIndent, widthPx: 0, segs: [], align: para.align, isParagraphEnd, heightPx: h, contentWidthPx: usable, marker })
+      lines.push({ yPx: y, xPx: lineX + lineIndent, widthPx: 0, segs: [], align: para.align, isParagraphEnd, heightPx: h, contentWidthPx: lineUsable, marker })
     } else {
-      lines.push({ yPx: y, xPx: contentX + lineIndent, widthPx: width, segs, align: para.align, isParagraphEnd, heightPx: h, contentWidthPx: usable, marker })
+      lines.push({ yPx: y, xPx: lineX + lineIndent, widthPx: width, segs, align: para.align, isParagraphEnd, heightPx: h, contentWidthPx: lineUsable, marker })
     }
     y += h
     if (para.lineSpacing?.rule === 'atLeast') {
@@ -212,6 +248,8 @@ function layoutParagraph(
     segs = []
     width = 0
     lineHeight = 0
+    lineX = contentX
+    lineUsable = fullUsable
   }
 
   const pushSeg = (text: string, run: DocxTextRun, style: RunStyle, w: number) => {
@@ -222,7 +260,8 @@ function layoutParagraph(
 
   const pushWord = (word: string, run: DocxTextRun, style: RunStyle): boolean => {
     const w = measure(word, style)
-    if (width > 0 && width + w > usable) return false // needs new line
+    refreshBand()
+    if (width > 0 && width + w > lineUsable) return false // needs new line
     pushSeg(word, run, style, w)
     return true
   }
@@ -240,7 +279,7 @@ function layoutParagraph(
     if (token.kind === 'tab') {
       // advance to next 0.5in tab stop relative to indent
       const tabWidth = TAB_STOP_PX
-      const cur = (firstLine ? indentLeft + twipsToPx(para.indentFirstLineTwips ?? 0) : indentLeft) + width
+      const cur = (lineX - contentX) + (firstLine ? indentLeft + twipsToPx(para.indentFirstLineTwips ?? 0) : indentLeft) + width
       const next = Math.floor(cur / tabWidth) * tabWidth + tabWidth
       const w = Math.max(0, next - cur)
       segs.push({ text: ' ', run: token.run, style: token.style, widthPx: w })
@@ -263,7 +302,7 @@ function layoutParagraph(
         // spaces collapse at line start; measured inside line
         if (width > 0) {
           const w = measure(' ', token.style)
-          if (width + w <= usable) {
+          if (width + w <= lineUsable) {
             segs.push({ text: ' ', run: token.run, style: token.style, widthPx: w })
             width += w
           }
@@ -348,11 +387,36 @@ export function layoutDocx(document: DocxDocument, measure: MeasureFn): PageLayo
       if (block.kind === 'p') {
         const para = block.paragraph
         y += twipsToPx(para.spacingBeforeTwips ?? 0)
+        // Floating images anchor to this paragraph: place them first so the
+        // paragraph's own text (and everything after it) can wrap around them.
+        // They stay on the page where the anchor starts, even if the text
+        // itself flows onward; paragraph/line-relative anchors use this y.
+        for (const image of para.images ?? []) {
+          if (!image.floating) continue
+          const w = emuToPx(image.widthEmu)
+          const h = emuToPx(image.heightEmu)
+          if (w <= 0 || h <= 0) continue
+          const place = resolveFloating(image, { pageWidthPx: widthPx, contentX, contentWidth, flowY: y, m })
+          page.images.push({
+            xPx: place.x,
+            yPx: place.y,
+            widthPx: w,
+            heightPx: h,
+            imageIndex: imageIndex.get(image) ?? -1,
+            floating: {
+              behindDoc: image.floating.behindDoc,
+              relativeHeight: image.floating.relativeHeight,
+              wrap: image.floating.wrap,
+            },
+          })
+        }
         const { lines, endY } = layoutParagraph(para, measure, {
           contentX,
           contentWidth,
           startY: y,
           defaults,
+          // body text flows beside floating objects that wrap square/tight
+          floatBands: (top, bottom) => freeBandsFor(page.images, top, bottom, contentX, contentWidth),
         })
         // Lines carry absolute y measured from the section start. Any line
         // past contentBottom rolls onto a fresh page, rebased to the top
@@ -367,27 +431,14 @@ export function layoutDocx(document: DocxDocument, measure: MeasureFn): PageLayo
           page.lines.push({ ...line, yPx: line.yPx + shift })
         }
         y = endY + shift + twipsToPx(para.spacingAfterTwips ?? 0)
-        // images: inline ones take flow space, floating ones (wp:anchor) are
-        // positioned against the page/margin/paragraph and never push text
+        // inline images take flow space below the paragraph's text
         for (const image of para.images ?? []) {
+          if (image.floating) continue
           const w = emuToPx(image.widthEmu)
           const h = emuToPx(image.heightEmu)
           if (w <= 0 || h <= 0) continue
-          const idx = imageIndex.get(image) ?? -1
-          if (image.floating) {
-            const place = resolveFloating(image, { pageWidthPx: widthPx, contentX, contentWidth, flowY: y, m })
-            page.images.push({
-              xPx: place.x,
-              yPx: place.y,
-              widthPx: w,
-              heightPx: h,
-              imageIndex: idx,
-              floating: { behindDoc: image.floating.behindDoc, relativeHeight: image.floating.relativeHeight },
-            })
-            continue
-          }
           if (y + h > contentBottom && (page.lines.length > 0 || page.images.length > 0)) commitPage()
-          page.images.push({ xPx: contentX, yPx: y, widthPx: w, heightPx: h, imageIndex: idx })
+          page.images.push({ xPx: contentX, yPx: y, widthPx: w, heightPx: h, imageIndex: imageIndex.get(image) ?? -1 })
           y += h
         }
         continue
@@ -700,6 +751,52 @@ function floatingOrigin(
       return { x: ctx.contentX, y: ctx.flowY, width: ctx.contentWidth, height: 0 }
   }
   void contentRight
+}
+
+/** Gap left around a wrapped float (Word's square-wrap default is ~0.13in). */
+const WRAP_GAP_PX = 12
+
+/**
+ * Free horizontal bands on a page between `yTop` and `yBottom` after
+ * subtracting every floating object that overlaps that band and declares a
+ * wrap mode that excludes text from its side.
+ *
+ * `wrapTopAndBottom` is parsed but deliberately not narrowed here: pushing a
+ * whole block above/below a float is a layout decision we do not make yet.
+ */
+export function freeBandsFor(
+  floats: ImageBox[],
+  yTop: number,
+  yBottom: number,
+  contentX: number,
+  contentWidth: number,
+): Array<{ x: number; width: number }> | undefined {
+  const blocking = floats.filter(
+    (f) =>
+      f.floating &&
+      (f.floating.wrap === 'square' || f.floating.wrap === 'tight') &&
+      f.yPx < yBottom &&
+      f.yPx + f.heightPx > yTop,
+  )
+  if (blocking.length === 0) return undefined
+  let bands: Array<{ x: number; width: number }> = [{ x: contentX, width: contentWidth }]
+  for (const f of blocking) {
+    const rx1 = f.xPx - WRAP_GAP_PX
+    const rx2 = f.xPx + f.widthPx + WRAP_GAP_PX
+    const next: Array<{ x: number; width: number }> = []
+    for (const b of bands) {
+      const bx1 = b.x
+      const bx2 = b.x + b.width
+      if (rx2 <= bx1 || rx1 >= bx2) {
+        next.push(b) // no overlap
+        continue
+      }
+      if (rx1 > bx1) next.push({ x: bx1, width: rx1 - bx1 }) // left remainder
+      if (rx2 < bx2) next.push({ x: rx2, width: bx2 - rx2 }) // right remainder
+    }
+    bands = next
+  }
+  return bands.filter((b) => b.width > 0)
 }
 
 /** Resolve a floating image's page position from its anchor. */
