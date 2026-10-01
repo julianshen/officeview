@@ -60,7 +60,7 @@ formats without a separate text model.
 
 ## Current coverage
 
-**Word (.docx)** — paragraphs and runs (bold/italic/underline/strike/size/color/highlight), alignment incl. justify, indents, spacing, line spacing, page size and margins, section breaks, pagination, hyperlinks, embedded images, tables (spans, vertical merges across rows *and* page breaks, shading, borders, per-row heights, `w:vAlign`, repeating header rows), headers/footers on every page with live `PAGE`/`NUMPAGES` fields, `w:titlePg` first-page variants, and list numbering (decimal, bullet, alphabetic, roman, nested levels) with hanging indents.
+**Word (.docx)** — paragraphs and runs (bold/italic/underline/strike/size/color/highlight), alignment incl. justify, indents, spacing, line spacing, page size and margins, section breaks, pagination, hyperlinks, embedded images (inline **and** floating/anchored, incl. `behindDoc`), tables (spans, vertical merges across rows *and* page breaks, shading, borders, per-row heights, `w:vAlign`, repeating header rows), headers/footers on every page with live `PAGE`/`NUMPAGES` fields, `w:titlePg` first-page variants, and list numbering (decimal, bullet, alphabetic, roman, nested levels) with hanging indents.
 
 **Excel (.xlsx)** — sheets, shared and inline strings, numbers/booleans, styles (fonts, fills, borders, number formats incl. percent, thousands, date serials), custom column widths and row heights, and merged cells painted across their full range with interior gridlines masked out.
 
@@ -82,17 +82,28 @@ next, with each page painting only its own part of the range.
 
 ## Not implemented
 
-Floating (anchored) images are drawn inline; text layout uses browser `measureText`, so line
-breaks can differ slightly from Word's exact metrics. Triple-click selects the visual
-line rather than the source paragraph.
+Text layout uses browser `measureText` with no font shaping, so line breaks can
+differ slightly from Word's exact metrics. Floating images are positioned from
+their anchor but do not yet reflow surrounding text around them (wrap modes are
+parsed and preserved, not applied), and triple-click selects the visual line
+rather than the source paragraph.
 
 ## Development
 
 ```bash
 bun run dev     # browser demo at http://localhost:5173 (file picker + generated samples)
-bun run test    # 194 tests: jsdom + `canvas` for real 2D rendering, pixel-sampled assertions
+bun run test    # 198 tests: jsdom + `canvas` for real 2D rendering, pixel-sampled assertions
 bun run build   # type-check + lib build
 ```
+
+### Continuous integration
+
+`.github/workflows/ci.yml` runs the typecheck, the test suite, the build and the
+corpus report on every push and pull request. It fetches the corpus *before*
+testing so the real-file regressions are enforced, and excludes the pixel-golden
+suites from the CI run: those goldens are recorded on one machine and font
+rasterization differs on a Linux runner. Run `bun scripts/golden-corpus.ts compare`
+locally instead.
 
 ### Real-file corpus
 
