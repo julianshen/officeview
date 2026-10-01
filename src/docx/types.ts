@@ -21,6 +21,18 @@ export interface DocxTextRun {
 
 export type ParagraphAlign = 'left' | 'center' | 'right' | 'justify'
 
+/** Positioning of a floating (wp:anchor) drawing. */
+export interface DocxFloating {
+  /** w:behindDoc — drawn beneath the text layer instead of over it. */
+  behindDoc: boolean
+  /** w:relativeHeight — z-order among floating images on a page. */
+  relativeHeight: number
+  /** Text wrapping mode declared on the anchor. */
+  wrap: 'none' | 'square' | 'tight' | 'through' | 'topAndBottom'
+  posH: { relativeFrom: string; offsetEmu: number; align?: string }
+  posV: { relativeFrom: string; offsetEmu: number; align?: string }
+}
+
 export interface DocxImage {
   /** Raw encoded bytes (png/jpeg/gif/webp). */
   data: Uint8Array
@@ -28,6 +40,8 @@ export interface DocxImage {
   /** Display size in EMU from wp:extent. */
   widthEmu: number
   heightEmu: number
+  /** Present for wp:anchor drawings; absent means inline (in the text flow). */
+  floating?: DocxFloating
 }
 
 export interface DocxParagraph {

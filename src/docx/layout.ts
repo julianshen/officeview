@@ -68,6 +68,8 @@ export interface ImageBox {
   heightPx: number
   /** Index into the document's decoded image list (set by the caller). */
   imageIndex: number
+  /** Set for floating (wp:anchor) images: drawn behind text and out of flow. */
+  floating?: { behindDoc: boolean; relativeHeight: number }
 }
 
 /** Rect geometry for one table cell (page-relative, after layout). */
@@ -365,13 +367,27 @@ export function layoutDocx(document: DocxDocument, measure: MeasureFn): PageLayo
           page.lines.push({ ...line, yPx: line.yPx + shift })
         }
         y = endY + shift + twipsToPx(para.spacingAfterTwips ?? 0)
-        // inline images after the paragraph's text
+        // images: inline ones take flow space, floating ones (wp:anchor) are
+        // positioned against the page/margin/paragraph and never push text
         for (const image of para.images ?? []) {
           const w = emuToPx(image.widthEmu)
           const h = emuToPx(image.heightEmu)
           if (w <= 0 || h <= 0) continue
+          const idx = imageIndex.get(image) ?? -1
+          if (image.floating) {
+            const place = resolveFloating(image, { pageWidthPx: widthPx, contentX, contentWidth, flowY: y, m })
+            page.images.push({
+              xPx: place.x,
+              yPx: place.y,
+              widthPx: w,
+              heightPx: h,
+              imageIndex: idx,
+              floating: { behindDoc: image.floating.behindDoc, relativeHeight: image.floating.relativeHeight },
+            })
+            continue
+          }
           if (y + h > contentBottom && (page.lines.length > 0 || page.images.length > 0)) commitPage()
-          page.images.push({ xPx: contentX, yPx: y, widthPx: w, heightPx: h, imageIndex: imageIndex.get(image) ?? -1 })
+          page.images.push({ xPx: contentX, yPx: y, widthPx: w, heightPx: h, imageIndex: idx })
           y += h
         }
         continue
@@ -476,7 +492,8 @@ export function renderPages(
   const totalPages = options?.totalPages ?? pages.length
   pages.forEach((page, pageIndex) => {
     paintTables(page.tables, ctx)
-    paintImages(page.images, ctx, images)
+    paintImages(page.images, ctx, images, 'behind')
+    paintImages(page.images, ctx, images, 'front')
     const hfLines = layoutHeaderFooter(page, firstNumber + pageIndex, totalPages, measure)
     const allLines = hfLines.length > 0 ? [...hfLines, ...page.lines] : page.lines
     for (const line of allLines) {
@@ -604,13 +621,20 @@ const BORDER_WIDTH: Record<string, number> = {
 }
 
 /** Draw inline images (after tables, beneath text). */
+/**
+ * Draw images. `pass` selects behind-document anchors (drawn before the text
+ * layer) or everything else; the two calls bracket the text paint so a
+ * w:behindDoc image sits under it.
+ */
 function paintImages(
   boxes: ImageBox[],
   ctx: CanvasRenderingContext2D,
   images: Array<CanvasImageSource | undefined> | undefined,
+  pass: 'behind' | 'front',
 ): void {
   if (!images) return
   for (const box of boxes) {
+    if (pass === 'behind' ? !box.floating?.behindDoc : box.floating?.behindDoc) continue
     const img = images[box.imageIndex]
     if (!img) continue
     ctx.drawImage(img as CanvasImageSource, box.xPx, box.yPx, box.widthPx, box.heightPx)
@@ -652,6 +676,60 @@ function paintTables(tables: TableBox[], ctx: CanvasRenderingContext2D): void {
       }
     }
   }
+}
+
+/** Origin/size reference for a floating image, in page coordinates. */
+function floatingOrigin(
+  relativeFrom: string,
+  ctx: { pageWidthPx: number; contentX: number; contentWidth: number; flowY: number; m: { top: number; left: number; right: number; bottom: number } },
+): { x: number; y: number; width: number; height: number } {
+  const pageWidth = ctx.pageWidthPx
+  const pageHeight = pageWidth === 0 ? 0 : ctx.pageWidthPx
+  void pageHeight
+  const contentRight = ctx.contentX + ctx.contentWidth
+  switch (relativeFrom) {
+    case 'page':
+      return { x: 0, y: 0, width: pageWidth, height: 0 }
+    case 'margin':
+      return { x: ctx.m.left, y: ctx.m.top, width: ctx.contentWidth, height: 0 }
+    case 'paragraph':
+    case 'line':
+      return { x: ctx.contentX, y: ctx.flowY, width: ctx.contentWidth, height: 0 }
+    default:
+      // 'column' and anything else behave like the text column
+      return { x: ctx.contentX, y: ctx.flowY, width: ctx.contentWidth, height: 0 }
+  }
+  void contentRight
+}
+
+/** Resolve a floating image's page position from its anchor. */
+function resolveFloating(
+  image: {
+    widthEmu: number
+    heightEmu: number
+    floating?: {
+      posH: { relativeFrom: string; offsetEmu: number; align?: string }
+      posV: { relativeFrom: string; offsetEmu: number; align?: string }
+    }
+  },
+  ctx: { pageWidthPx: number; contentX: number; contentWidth: number; flowY: number; m: { top: number; left: number; right: number; bottom: number } },
+): { x: number; y: number } {
+  const w = emuToPx(image.widthEmu)
+  const h = emuToPx(image.heightEmu)
+  const f = image.floating
+  if (!f) return { x: ctx.contentX, y: ctx.flowY }
+  const ox = floatingOrigin(f.posH.relativeFrom, ctx)
+  const oy = floatingOrigin(f.posV.relativeFrom, ctx)
+  let x = ox.x + emuToPx(f.posH.offsetEmu)
+  let y = oy.y + emuToPx(f.posV.offsetEmu)
+  const alignH = f.posH.align
+  if (alignH === 'center') x = ox.x + Math.max(0, (ox.width - w) / 2)
+  else if (alignH === 'right') x = ox.x + Math.max(0, ox.width - w)
+  const alignV = f.posV.align
+  if (alignV === 'center') y = oy.y
+  else if (alignV === 'bottom') y = oy.y
+  void h
+  return { x, y }
 }
 
 // ---------- table layout ----------

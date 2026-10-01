@@ -4,7 +4,7 @@
 import type { OfficePackage } from '../core/zip'
 import { sniffImageMime } from '../core/images'
 import { attrs, elementChildren, getChildren, textOf, type XmlNode } from '../core/xml'
-import type { DocxBlock, DocxDocument, DocxImage, DocxParagraph, DocxSection, DocxTable, DocxTableCell, DocxTableCellMargins, DocxTableBorders, DocxTableRow, DocxTextRun, ParagraphAlign } from './types'
+import type { DocxBlock, DocxDocument, DocxFloating, DocxImage, DocxParagraph, DocxSection, DocxTable, DocxTableCell, DocxTableCellMargins, DocxTableBorders, DocxTableRow, DocxTextRun, ParagraphAlign } from './types'
 
 function alignOf(pPr: XmlNode | undefined): ParagraphAlign {
   const jc = pPr ? getChildren(pPr, 'jc')[0] : undefined
@@ -310,7 +310,8 @@ function resolveFields(paragraph: DocxParagraph): void {
 
 /** w:drawing -> wp:inline|wp:anchor -> a:graphic -> pic:pic -> a:blip r:embed */
 function parseDrawing(drawing: XmlNode, images: DocxImage[] | undefined): DocxImage | undefined {
-  const wp = getChildren(drawing, 'inline')[0] ?? getChildren(drawing, 'anchor')[0]
+  const anchor = getChildren(drawing, 'anchor')[0]
+  const wp = anchor ?? getChildren(drawing, 'inline')[0]
   if (!wp) return undefined
   const extent = getChildren(wp, 'extent')[0]
   const ea = attrs(extent)
@@ -326,7 +327,44 @@ function parseDrawing(drawing: XmlNode, images: DocxImage[] | undefined): DocxIm
   if (!images) return undefined
   const data = images.find((img) => img && (img as DocxImage & { relId?: string }).relId === rid)
   if (!data) return undefined
-  return { data: data.data, mime: data.mime, widthEmu, heightEmu }
+  return { data: data.data, mime: data.mime, widthEmu, heightEmu, floating: anchor ? parseAnchor(anchor) : undefined }
+}
+
+/** wp:positionH / wp:positionV -> a from/offset pair. */
+function parsePosition(node: XmlNode | undefined): { relativeFrom: string; offsetEmu: number; align?: string } | undefined {
+  if (!node) return undefined
+  const relativeFrom = (attrs(node).relativeFrom as string) ?? 'column'
+  const posOffset = getChildren(node, 'posOffset')[0]
+  if (posOffset) {
+    const value = textOf(posOffset).trim()
+    const parsed = parseFloat(value)
+    return { relativeFrom, offsetEmu: Number.isFinite(parsed) ? parsed : 0 }
+  }
+  const align = getChildren(node, 'align')[0]
+  if (align) return { relativeFrom, offsetEmu: 0, align: textOf(align).trim() }
+  return { relativeFrom, offsetEmu: 0 }
+}
+
+/** Floating positioning from a wp:anchor. */
+function parseAnchor(anchor: XmlNode): DocxFloating {
+  const a = attrs(anchor)
+  const wrap =
+    getChildren(anchor, 'wrapNone')[0] !== undefined
+      ? 'none'
+      : getChildren(anchor, 'wrapSquare')[0] !== undefined
+        ? 'square'
+        : getChildren(anchor, 'wrapTight')[0] !== undefined
+          ? 'tight'
+          : getChildren(anchor, 'wrapThrough')[0] !== undefined
+            ? 'through'
+            : 'topAndBottom'
+  return {
+    behindDoc: a.behindDoc === '1' || a.behindDoc === 'true',
+    relativeHeight: parseInt(a.relativeHeight as string, 10) || 0,
+    wrap,
+    posH: parsePosition(getChildren(anchor, 'positionH')[0]) ?? { relativeFrom: 'column', offsetEmu: 0 },
+    posV: parsePosition(getChildren(anchor, 'positionV')[0]) ?? { relativeFrom: 'paragraph', offsetEmu: 0 },
+  }
 }
 
 /** Resolve word/_rels/document.xml.rels into embedded image bytes keyed by rId. */
