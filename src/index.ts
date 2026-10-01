@@ -11,6 +11,9 @@ export type { OfficeDocProps, OfficeDocSource } from './components/OfficeDoc'
 
 // Low-level access
 export { OfficePackage } from './core/zip'
+// Streaming byte ingestion (used by <OfficeFile> for fetch/Response/Blob/streams)
+export { readByteStream, readSource } from './core/stream'
+export type { ByteSource, Progress, ProgressListener } from './core/stream'
 // Text search (also used internally by <OfficeDoc>)
 export { buildTextIndex, findMatches, stepMatch } from './core/search'
 export type { TextIndex, TextIndexPage, IndexLine, TextSpan, SearchMatch, SearchOptions } from './core/search'

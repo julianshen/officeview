@@ -3,7 +3,7 @@
  * detects the format from [Content_Types].xml, parses it, and hands the
  * document model to <OfficeDoc>. Accepts a promise for async usage.
  */
-import { useEffect, useState, type CSSProperties, type ReactElement } from 'react'
+import { useEffect, useRef, useState, type CSSProperties, type ReactElement } from 'react'
 import { OfficePackage } from '../core/zip'
 import { parseDocx } from '../docx/parse'
 import type { DocxDocument } from '../docx/types'
@@ -12,8 +12,14 @@ import type { XlsxDocument } from '../xlsx/types'
 import { parsePptx } from '../pptx/parse'
 import type { PptxDocument } from '../pptx/types'
 import { OfficeDoc, type OfficeDocProps } from './OfficeDoc'
+import { readSource, type ByteSource, type Progress } from '../core/stream'
 
 export type AnyDoc = DocxDocument | XlsxDocument | PptxDocument
+
+export interface LoadProgress extends Progress {
+  status: 'loading' | 'done' | 'error'
+  message?: string
+}
 
 export type OfficeFileState =
   | { status: 'loading' }
@@ -33,17 +39,31 @@ async function detectAndParse(pkg: OfficePackage): Promise<AnyDoc> {
   throw new Error('Unrecognized office file: no word/xl/ppt content detected')
 }
 
-export function loadOfficeFile(data: ArrayBuffer | Uint8Array): Promise<AnyDoc> {
+/**
+ * Load an office file from any byte source — bytes in memory, a Blob, a
+ * fetch() Response, or a ReadableStream. `onProgress` reports incremental
+ * byte counts while the source is still arriving.
+ */
+export async function loadOfficeFile(
+  source: ByteSource,
+  options: { onProgress?: (p: Progress) => void } = {},
+): Promise<AnyDoc> {
+  const data = await readSource(source, options.onProgress)
   return OfficePackage.load(data).then(detectAndParse)
 }
 
-export function useOfficeFile(data: ArrayBuffer | Uint8Array | null | undefined): OfficeFileState {
+export function useOfficeFile(
+  source: ByteSource | null | undefined,
+  options: { onProgress?: (p: Progress) => void } = {},
+): OfficeFileState {
   const [state, setState] = useState<OfficeFileState>({ status: 'loading' })
+  const progressRef = useRef(options.onProgress)
+  progressRef.current = options.onProgress
   useEffect(() => {
     let cancelled = false
-    if (!data) return
+    if (!source) return
     setState({ status: 'loading' })
-    loadOfficeFile(data)
+    loadOfficeFile(source, { onProgress: (p) => progressRef.current?.(p) })
       .then((document) => {
         if (!cancelled) setState({ status: 'ready', document })
       })
@@ -53,15 +73,18 @@ export function useOfficeFile(data: ArrayBuffer | Uint8Array | null | undefined)
     return () => {
       cancelled = true
     }
-  }, [data])
+  }, [source])
   return state
 }
 
 export interface OfficeFileProps extends Omit<OfficeDocProps, 'document'> {
-  /** Raw bytes of the office file. */
-  data: ArrayBuffer | Uint8Array | null | undefined
-  /** Rendered while loading. */
-  loading?: ReactElement | null
+  /** The office file: bytes, a Blob, a fetch() Response, or a ReadableStream. */
+  data: ByteSource | null | undefined
+  /**
+   * Rendered while loading. A function form receives live progress so the
+   * host can show a real bar: loading={({ loaded, total }) => <Bar pct={...} />}.
+   */
+  loading?: ReactElement | ((progress: Progress) => ReactElement) | null
   /** Rendered on parse error. */
   error?: (message: string) => ReactElement
   style?: CSSProperties
@@ -69,8 +92,14 @@ export interface OfficeFileProps extends Omit<OfficeDocProps, 'document'> {
 }
 
 export function OfficeFile({ data, loading, error, ...rest }: OfficeFileProps): ReactElement {
-  const state = useOfficeFile(data)
-  if (state.status === 'loading') return <>{loading}</>
+  const [progress, setProgress] = useState<Progress | undefined>(undefined)
+  const state = useOfficeFile(data, {
+    onProgress: (p) => setProgress(p),
+  })
+  if (state.status === 'loading') {
+    if (typeof loading === 'function') return loading(progress ?? { loaded: 0 })
+    return <>{loading}</>
+  }
   if (state.status === 'error') return error ? error(state.message) : <div role="alert">{state.message}</div>
   return <OfficeDoc document={state.document} {...rest} />
 }

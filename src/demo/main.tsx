@@ -111,7 +111,7 @@ async function samplePptx(): Promise<Uint8Array> {
   ])
 }
 
-type Sample = { label: string; emoji: string; load: () => Promise<Uint8Array> }
+type Sample = { label: string; emoji: string; load: () => Promise<Uint8Array | ReadableStream<Uint8Array>> }
 async function sampleDocxLongTable(): Promise<Uint8Array> {
   // 3 merged "group" cells in column A, sized so a group crosses the page break
   const GROUPS = [22, 25, 13]
@@ -201,8 +201,25 @@ async function sampleDocxLists(): Promise<Uint8Array> {
   )
 }
 
+async function sampleDocxStreamed(): Promise<ReadableStream<Uint8Array>> {
+  const bytes = await sampleDocx()
+  let at = 0
+  return new ReadableStream<Uint8Array>({
+    async pull(controller) {
+      await new Promise((r) => setTimeout(r, 40))
+      if (at >= bytes.length) {
+        controller.close()
+        return
+      }
+      controller.enqueue(bytes.subarray(at, at + 96))
+      at += 96
+    },
+  })
+}
+
 const SAMPLES: Sample[] = [
   { label: 'Word (.docx)', emoji: '📄', load: sampleDocx },
+  { label: 'Streamed', emoji: '🌊', load: sampleDocxStreamed },
   { label: 'Word lists', emoji: '🔢', load: sampleDocxLists },
   { label: 'Word header/footer', emoji: '📄', load: sampleDocxHeaderFooter },
   { label: 'Word long table', emoji: '🧾', load: sampleDocxLongTable },
@@ -211,7 +228,7 @@ const SAMPLES: Sample[] = [
 ]
 
 function App() {
-  const [data, setData] = useState<Uint8Array | null>(null)
+  const [data, setData] = useState<Uint8Array | ReadableStream<Uint8Array> | null>(null)
   const [label, setLabel] = useState('')
   const [busy, setBusy] = useState(false)
 
@@ -264,7 +281,11 @@ function App() {
         ) : (
           <OfficeFile
             data={data}
-            loading={<p style={{ textAlign: 'center', color: '#8b93a7' }}>Rendering…</p>}
+            loading={(p) => (
+              <p style={{ textAlign: 'center', color: '#8b93a7' }}>
+                {p.total ? `Streaming… ${Math.round((p.loaded / p.total) * 100)}%` : `Received ${p.loaded.toLocaleString()} bytes…`}
+              </p>
+            )}
             error={(msg) => <p style={{ textAlign: 'center', color: '#ff6b6b' }}>⚠️ {msg}</p>}
             background="#22252d"
             style={{ minHeight: '60dvh' }}

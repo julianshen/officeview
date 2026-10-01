@@ -58,6 +58,52 @@ and the active match is scrolled into view. The text index is built lazily on th
 search by replaying each page's paint into a recording context, so it covers all three
 formats without a separate text model.
 
+### Streaming files
+
+`<OfficeFile>` accepts anything byte-shaped, so you can hand it a download instead of
+waiting for the whole file to land in memory:
+
+```tsx
+<OfficeFile data={fetch('/deck.pptx')} loading={<Spinner />} />
+<OfficeFile data={await response.blob()} />
+<OfficeFile data={response.body!} />          // a ReadableStream
+```
+
+`data` accepts `ArrayBuffer | Uint8Array | Blob | Response | ReadableStream<Uint8Array>`.
+To show real progress, pass a *function* instead of an element:
+
+```tsx
+<OfficeFile
+  data={fetch('/report.docx')}
+  loading={({ loaded, total }) =>
+    total ? <Progress value={loaded / total} /> : <Spinner label={`${loaded} bytes`} />
+  }
+/>
+```
+
+`total` is present when the source declares a size (a `Response` with `Content-Length`, or
+a `Blob`); a bare `ReadableStream` has no known total, so `loaded` counts up and `total`
+is `undefined`. `loading` may still be a plain element — it just won't receive progress.
+
+The same options work headlessly:
+
+```ts
+import { loadOfficeFile } from 'officeview'
+const doc = await loadOfficeFile(fetch('/report.docx'), {
+  onProgress: (p) => console.log(p.loaded, p.total),
+})
+```
+
+**What streaming does and does not buy.** Ingestion is genuinely streamed: chunks are
+read incrementally, progress is reported as they arrive, and a large download shows a real
+bar rather than an indefinite spinner. But **rendering still starts only after the final
+byte arrives** — an OOXML file is a zip, and its central directory (the index of what is
+inside) lives at the *end* of the file, so nothing can be located until the download
+completes. This is a property of the format, not of this implementation; progressive
+page-by-page rendering would require either a format that streams (ODF, or
+SpreadsheetML/WordprocessingML delivered over a non-zip transport) or a full incremental
+zip parser that reads local file headers as they go.
+
 ## Current coverage
 
 **Word (.docx)** — paragraphs and runs (bold/italic/underline/strike/size/color/highlight), alignment incl. justify, indents, spacing, line spacing, page size and margins, section breaks, pagination, hyperlinks, embedded images (inline **and** floating/anchored, incl. `behindDoc`), tables (spans, vertical merges across rows *and* page breaks, shading, borders, per-row heights, `w:vAlign`, repeating header rows), headers/footers on every page with live `PAGE`/`NUMPAGES` fields, `w:titlePg` first-page variants, and list numbering (decimal, bullet, alphabetic, roman, nested levels) with hanging indents.
