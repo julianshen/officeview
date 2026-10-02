@@ -656,3 +656,250 @@ describe('review fixes render correctly', () => {
     expect(pages[0].heightPx).toBeGreaterThan(pages[0].widthPx)
   })
 })
+
+/**
+ * Regression tests for the second independent review of c2ec19f.
+ * Every case below fails against c2ec19f and passes after the fixes.
+ */
+import { CP1251_TABLE, hasEncodingSupport } from '../src/rtf/parse'
+
+/**
+ * The authoritative windows-1251 mapping, generated from Python's cp1251 codec.
+ * `null` marks byte 0x98, which is genuinely undefined in the encoding.
+ */
+const EXPECTED_CP1251: (number | null)[] = [
+  0x0000, 0x0001, 0x0002, 0x0003, 0x0004, 0x0005, 0x0006, 0x0007, 0x0008, 0x0009, 0x000A,
+  0x000B, 0x000C, 0x000D, 0x000E, 0x000F, 0x0010, 0x0011, 0x0012, 0x0013, 0x0014, 0x0015,
+  0x0016, 0x0017, 0x0018, 0x0019, 0x001A, 0x001B, 0x001C, 0x001D, 0x001E, 0x001F, 0x0020,
+  0x0021, 0x0022, 0x0023, 0x0024, 0x0025, 0x0026, 0x0027, 0x0028, 0x0029, 0x002A, 0x002B,
+  0x002C, 0x002D, 0x002E, 0x002F, 0x0030, 0x0031, 0x0032, 0x0033, 0x0034, 0x0035, 0x0036,
+  0x0037, 0x0038, 0x0039, 0x003A, 0x003B, 0x003C, 0x003D, 0x003E, 0x003F, 0x0040, 0x0041,
+  0x0042, 0x0043, 0x0044, 0x0045, 0x0046, 0x0047, 0x0048, 0x0049, 0x004A, 0x004B, 0x004C,
+  0x004D, 0x004E, 0x004F, 0x0050, 0x0051, 0x0052, 0x0053, 0x0054, 0x0055, 0x0056, 0x0057,
+  0x0058, 0x0059, 0x005A, 0x005B, 0x005C, 0x005D, 0x005E, 0x005F, 0x0060, 0x0061, 0x0062,
+  0x0063, 0x0064, 0x0065, 0x0066, 0x0067, 0x0068, 0x0069, 0x006A, 0x006B, 0x006C, 0x006D,
+  0x006E, 0x006F, 0x0070, 0x0071, 0x0072, 0x0073, 0x0074, 0x0075, 0x0076, 0x0077, 0x0078,
+  0x0079, 0x007A, 0x007B, 0x007C, 0x007D, 0x007E, 0x007F, 0x0402, 0x0403, 0x201A, 0x0453,
+  0x201E, 0x2026, 0x2020, 0x2021, 0x20AC, 0x2030, 0x0409, 0x2039, 0x040A, 0x040C, 0x040B,
+  0x040F, 0x0452, 0x2018, 0x2019, 0x201C, 0x201D, 0x2022, 0x2013, 0x2014, null, 0x2122, 0x0459,
+  0x203A, 0x045A, 0x045C, 0x045B, 0x045F, 0x00A0, 0x040E, 0x045E, 0x0408, 0x00A4, 0x0490,
+  0x00A6, 0x00A7, 0x0401, 0x00A9, 0x0404, 0x00AB, 0x00AC, 0x00AD, 0x00AE, 0x0407, 0x00B0,
+  0x00B1, 0x0406, 0x0456, 0x0491, 0x00B5, 0x00B6, 0x00B7, 0x0451, 0x2116, 0x0454, 0x00BB,
+  0x0458, 0x0405, 0x0455, 0x0457, 0x0410, 0x0411, 0x0412, 0x0413, 0x0414, 0x0415, 0x0416,
+  0x0417, 0x0418, 0x0419, 0x041A, 0x041B, 0x041C, 0x041D, 0x041E, 0x041F, 0x0420, 0x0421,
+  0x0422, 0x0423, 0x0424, 0x0425, 0x0426, 0x0427, 0x0428, 0x0429, 0x042A, 0x042B, 0x042C,
+  0x042D, 0x042E, 0x042F, 0x0430, 0x0431, 0x0432, 0x0433, 0x0434, 0x0435, 0x0436, 0x0437,
+  0x0438, 0x0439, 0x043A, 0x043B, 0x043C, 0x043D, 0x043E, 0x043F, 0x0440, 0x0441, 0x0442,
+  0x0443, 0x0444, 0x0445, 0x0446, 0x0447, 0x0448, 0x0449, 0x044A, 0x044B, 0x044C, 0x044D,
+  0x044E, 0x044F,
+]
+
+const hex2 = (b: number) => b.toString(16).padStart(2, '0')
+
+describe('review 1: buffered hex at end of document', () => {
+  test('a document ending in hex with no \\par still yields text', () => {
+    const doc = parseRtf(String.raw`{\rtf1 \'e9}`)
+    const paras = doc.sections[0].paragraphs
+    expect(paras).toHaveLength(1)
+    expect(textOf(paras[0])).toBe('\u00e9')
+  })
+
+  test('a longer trailing hex run survives', () => {
+    const [p] = paragraphs(String.raw`{\rtf1 \'cf\'f0\'e8}`)
+    expect(textOf(p)).toBe('\u00cf\u00f0\u00e8')
+  })
+})
+
+describe('review 2: buffered hex must not cross formatting boundaries', () => {
+  test('hex before \\b stays unbold', () => {
+    const rtf = String.raw`{\rtf1 \'e9\b bold\par}`
+    const runs = paragraphs(rtf)[0].runs
+    expect(runs[0]).toMatchObject({ text: '\u00e9' })
+    expect(runs[0].bold).toBeUndefined()
+    expect(runs.find((r) => r.text === 'bold')?.bold).toBe(true)
+  })
+
+  test('hex before \\cf is not painted in the new colour', () => {
+    const rtf = String.raw`{\rtf1{\colortbl ;\red255\green0\blue0;}\'e9\cf1 red\cf0 \par}`
+    const runs = paragraphs(rtf)[0].runs
+    expect(runs[0].color).toBeUndefined()
+    expect(runs.find((r) => r.text === 'red')?.color).toBe('#ff0000')
+  })
+
+  test('hex before \\f is not attributed to the new font', () => {
+    const rtf = '{\\rtf1{\\fonttbl{\\f0\\froman Calibri;}{\\f1\\fswiss Arial;}}\\\'e9\\f1 later\\par}'
+    const runs = paragraphs(rtf)[0].runs
+    expect(runs[0].fontFamily).toBe('Calibri')
+    expect(runs.find((r) => r.text === 'later')?.fontFamily).toBe('Arial')
+  })
+
+  test('hex at the end of a nested bold group keeps its bold', () => {
+    const rtf = String.raw`{\rtf1 {\b x\'e9}\par}`
+    const runs = paragraphs(rtf)[0].runs
+    expect(runs).toHaveLength(1)
+    expect(runs[0]).toMatchObject({ text: 'x\u00e9', bold: true })
+  })
+
+  test('hex at the start of a nested group does not inherit the outer style', () => {
+    const rtf = String.raw`{\rtf1 \b {\i \'e9}\par}`
+    const runs = paragraphs(rtf)[0].runs
+    expect(runs[0].text).toBe('\u00e9')
+    expect(runs[0].italic).toBe(true)
+  })
+
+  test('a complete multibyte character survives a style boundary', () => {
+    // Two adjacent escapes form one Shift-JIS character: neither byte may be
+    // flushed on its own.
+    if (!hasEncodingSupport('shift_jis')) return
+    const rtf = String.raw`{\rtf1\ansicpg932 \'82\'a0\par}`
+    expect(textOf(paragraphs(rtf)[0])).toBe('\u3042')
+  })
+
+  test('adjacent escapes are decoded together, not per byte', () => {
+    const rtf = String.raw`{\rtf1\ansicpg932 \'82\'a0\'82\'a2\par}`
+    expect(textOf(paragraphs(rtf)[0])).toBe('\u3042\u3044')
+  })
+})
+
+describe('review 3: marker inside a grouped \\pntext', () => {
+  test('a numbered legacy list keeps its number', () => {
+    const rtf = String.raw`{\rtf1\li720\fi-360{\pntext\f2 1.\tab}\ls1\ilvl0 Item\par}`
+    const p = paragraphs(rtf)[0]
+    expect(p.listMarker).toBe('1.')
+    expect(textOf(p)).toBe('Item')
+  })
+
+  test('a marker nested in pntxtb is captured', () => {
+    const rtf = String.raw`{\rtf1\li720\fi-360{\pntext\f2\pnindent0{\pntxtb 1.}}\ls1\ilvl0 Item\par}`
+    const p = paragraphs(rtf)[0]
+    expect(p.listMarker).toBe('1.')
+    expect(textOf(p)).toBe('Item')
+  })
+
+  test('a bulleted legacy list renders a bullet', () => {
+    const rtf = String.raw`{\rtf1\li720\fi-360{\pntext\f2\pnindent0{\pntxtb\u-3913 ?}}\ls1\ilvl0 Item\par}`
+    const p = paragraphs(rtf)[0]
+    expect(p.listMarker).toBe('\u2022')
+    expect(textOf(p)).toBe('Item')
+  })
+
+  test('a multi-character marker is preserved', () => {
+    const rtf = String.raw`{\rtf1{\pntext\f2 1.a.\tab}\ls1\ilvl0 Item\par}`
+    expect(paragraphs(rtf)[0].listMarker).toBe('1.a.')
+  })
+
+  test('the marker never leaks into the paragraph text', () => {
+    const rtf = String.raw`{\rtf1{\pntext\f2 1.\tab}\ls1\ilvl0 Item\par}`
+    expect(textOf(paragraphs(rtf)[0])).toBe('Item')
+  })
+})
+
+describe('review 4: windows-1251 decoding', () => {
+  test('the fallback table matches the authoritative mapping exactly', () => {
+    expect(CP1251_TABLE).toHaveLength(256)
+    const mismatches: string[] = []
+    for (let b = 0; b < 256; b++) {
+      const expected = EXPECTED_CP1251[b]
+      const got = CP1251_TABLE[b]
+      if (expected === null) {
+        if (got !== undefined) mismatches.push(`${hex2(b)}: expected undefined, got ${JSON.stringify(got)}`)
+      } else if (got === undefined || got.codePointAt(0) !== expected) {
+        mismatches.push(`${hex2(b)}: expected U+${(expected as number).toString(16)}, got ${JSON.stringify(got)}`)
+      }
+    }
+    expect(mismatches).toEqual([])
+  })
+
+  test('every byte round-trips through the parser', () => {
+    const mismatches: string[] = []
+    for (let b = 0; b < 256; b++) {
+      const expected = EXPECTED_CP1251[b]
+      const rtf = String.raw`{\rtf1\ansi\ansicpg1251 \'` + hex2(b) + String.raw`\par}`
+      const got = textOf(paragraphs(rtf)[0])
+      const want = expected === null ? '\ufffd' : String.fromCodePoint(expected)
+      if (got !== want) mismatches.push(`${hex2(b)}: want ${JSON.stringify(want)}, got ${JSON.stringify(got)}`)
+    }
+    expect(mismatches).toEqual([])
+  })
+
+  test("the review's specific bytes decode correctly", () => {
+    // a0 aa af -> NBSP, Є, Ї (the old table read past its bounds and produced
+    // a literal "undefined"); 8b/8c were swapped; 9a and b2 were wrong.
+    const rtf = String.raw`{\rtf1\ansi\ansicpg1251 \'a0\'aa\'af\'8b\'8c\'9a\'b2\par}`
+    expect(textOf(paragraphs(rtf)[0])).toBe('\u00a0\u0404\u0407\u2039\u040a\u0459\u0406')
+  })
+
+  test('TextDecoder and the table agree on every defined byte', () => {
+    if (!hasEncodingSupport('windows-1251')) return
+    const dec = new TextDecoder('windows-1251')
+    const mismatches: string[] = []
+    for (let b = 0; b < 256; b++) {
+      const expected = EXPECTED_CP1251[b]
+      if (expected === null) continue
+      if (dec.decode(new Uint8Array([b])).codePointAt(0) !== expected) mismatches.push(hex2(b))
+    }
+    expect(mismatches).toEqual([])
+  })
+
+  test('0x98 is the only byte where Node disagrees with the standard', () => {
+    // Documented divergence: Node maps the undefined byte to U+0098; the
+    // encoding standard and Python treat it as undefined. The parser always
+    // uses the table so output does not vary by runtime.
+    if (!hasEncodingSupport('windows-1251')) return
+    const dec = new TextDecoder('windows-1251')
+    expect(dec.decode(new Uint8Array([0x98])).codePointAt(0)).toBe(0x0098)
+    expect(CP1251_TABLE[0x98]).toBeUndefined()
+    expect(textOf(paragraphs(String.raw`{\rtf1\ansi\ansicpg1251 \'98\par}`)[0])).toBe('\ufffd')
+  })
+
+  test('the fallback table is what runs when TextDecoder is unavailable', () => {
+    // Guards the assumption behind the table: if this runtime gained cp1251
+    // support, the table would silently stop being exercised.
+    if (hasEncodingSupport('windows-1251')) return
+    const rtf = String.raw`{\rtf1\ansi\ansicpg1251 \'cf\'f0\'e8\'e2\'e5\'f2\par}`
+    expect(textOf(paragraphs(rtf)[0])).toBe('\u041f\u0440\u0438\u0432\u0435\u0442')
+  })
+})
+
+describe('review 5: the \\deff default font', () => {
+  const deffRtf =
+    '{\\rtf1\\ansi\\ansicpg1252\\deff0{\\fonttbl{\\f0\\froman\\fcharset204 Arial;}}\\\'c0\\par}'
+
+  test('the default font family applies with no explicit \\fN', () => {
+    const [p] = paragraphs(deffRtf)
+    expect(p.runs[0].fontFamily).toBe('Arial')
+  })
+
+  test("the default font's charset governs hex decoding", () => {
+    const [p] = paragraphs(deffRtf)
+    expect(textOf(p)).toBe('\u0410')
+  })
+
+  test('an explicit \\fN still overrides the default', () => {
+    const rtf =
+      '{\\rtf1\\ansi\\ansicpg1252\\deff0{\\fonttbl{\\f0\\froman\\fcharset204 Arial;}{\\f1\\froman\\fcharset0 Calibri;}}\\f1 x\\f0 \\\'c0\\par}'
+    const runs = paragraphs(rtf)[0].runs
+    expect(runs.find((r) => r.text === 'x')?.fontFamily).toBe('Calibri')
+    expect(runs.find((r) => r.text === '\u0410')?.fontFamily).toBe('Arial')
+  })
+
+  test('\\plain restores the default font and its charset', () => {
+    const rtf =
+      '{\\rtf1\\ansi\\ansicpg1252\\deff0{\\fonttbl{\\f0\\froman\\fcharset204 Arial;}}\\f0 \\\'c0\\plain \\\'c1\\par}'
+    const runs = paragraphs(rtf)[0].runs
+    // 0xc1 is U+0411 (CYRILLIC CAPITAL LETTER BE) in windows-1251. The runs
+    // merge because the restored formatting matches what preceded it, so
+    // assert on the run that carries the post-\plain character.
+    const afterPlain = runs.find((r) => r.text.includes('\u0411'))
+    expect(afterPlain).toBeDefined()
+    expect(afterPlain?.fontFamily).toBe('Arial')
+    // and the byte decoded via that font's charset, not the document code page
+    expect(afterPlain?.text).toContain('\u0411')
+  })
+
+  test('an explicit \\ansicpg is not overridden by a charset-0 default font', () => {
+    const rtf =
+      '{\\rtf1\\ansi\\ansicpg1251\\deff0{\\fonttbl{\\f0\\froman\\fcharset0 Calibri;}}\\\'c0\\par}'
+    expect(textOf(paragraphs(rtf)[0])).toBe('\u0410')
+  })
+})

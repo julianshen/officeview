@@ -88,6 +88,11 @@ function codePageLabel(cp: number): string {
 
 const decoderCache = new Map<string, TextDecoder | null>()
 
+/** Exported for tests: which encoding a label resolves to, or null if unsupported. */
+export function hasEncodingSupport(label: string): boolean {
+  return decoderFor(label) !== null
+}
+
 /**
  * Built-in single-byte fallback for windows-1251.
  *
@@ -96,33 +101,55 @@ const decoderCache = new Map<string, TextDecoder | null>()
  * and silently falling back to cp1252 would turn Russian into mojibake instead
  * of surfacing the gap. So the Cyrillic block is encoded directly here.
  */
-function buildCp1251(): string[] {
-  const table: string[] = new Array(256)
-  for (let b = 0; b < 0x80; b++) table[b] = String.fromCharCode(b)
-  // 0x80-0xBF matches the cp1252 high block.
-  for (let b = 0x80; b < 0xc0; b++) table[b] = CP1252_HIGH[b - 0x80]
-  // The main Cyrillic run is contiguous.
-  for (let b = 0xc0; b <= 0xff; b++) table[b] = String.fromCharCode(0x0410 + (b - 0xc0))
-  const special: Record<number, number> = {
-    0x80: 0x0402, 0x81: 0x0403, 0x82: 0x201a, 0x83: 0x0453, 0x84: 0x201e,
-    0x85: 0x2026, 0x86: 0x2020, 0x87: 0x2021, 0x88: 0x20ac, 0x89: 0x2030,
-    0x8a: 0x0409, 0x8b: 0x040a, 0x8c: 0x040d, 0x8e: 0x040e, 0x91: 0x2018,
-    0x92: 0x2019, 0x93: 0x201c, 0x94: 0x201d, 0x95: 0x2022, 0x96: 0x2013,
-    0x97: 0x2014, 0x98: 0x98, 0x99: 0x2122, 0x9a: 0x0161, 0x9b: 0x203a,
-    0x9c: 0x0153, 0x9d: 0x017e, 0x9e: 0x0178, 0x9f: 0x017d,
-    0xa8: 0x0401, 0xaa: 0x0402, 0xaf: 0x0403, 0xb2: 0x040b, 0xb3: 0x040c,
-    0xb8: 0x0451, 0xb9: 0x2116,
-  }
-  for (const [b, cp] of Object.entries(special)) table[Number(b)] = String.fromCharCode(cp)
-  return table
-}
+export const CP1251_TABLE: readonly (string | undefined)[] = [
+  '\u0000', '\u0001', '\u0002', '\u0003', '\u0004', '\u0005', '\u0006', '\u0007',
+  '\u0008', '\u0009', '\u000A', '\u000B', '\u000C', '\u000D', '\u000E', '\u000F',
+  '\u0010', '\u0011', '\u0012', '\u0013', '\u0014', '\u0015', '\u0016', '\u0017',
+  '\u0018', '\u0019', '\u001A', '\u001B', '\u001C', '\u001D', '\u001E', '\u001F',
+  '\u0020', '\u0021', '\u0022', '\u0023', '\u0024', '\u0025', '\u0026', '\u0027',
+  '\u0028', '\u0029', '\u002A', '\u002B', '\u002C', '\u002D', '\u002E', '\u002F',
+  '\u0030', '\u0031', '\u0032', '\u0033', '\u0034', '\u0035', '\u0036', '\u0037',
+  '\u0038', '\u0039', '\u003A', '\u003B', '\u003C', '\u003D', '\u003E', '\u003F',
+  '\u0040', '\u0041', '\u0042', '\u0043', '\u0044', '\u0045', '\u0046', '\u0047',
+  '\u0048', '\u0049', '\u004A', '\u004B', '\u004C', '\u004D', '\u004E', '\u004F',
+  '\u0050', '\u0051', '\u0052', '\u0053', '\u0054', '\u0055', '\u0056', '\u0057',
+  '\u0058', '\u0059', '\u005A', '\u005B', '\u005C', '\u005D', '\u005E', '\u005F',
+  '\u0060', '\u0061', '\u0062', '\u0063', '\u0064', '\u0065', '\u0066', '\u0067',
+  '\u0068', '\u0069', '\u006A', '\u006B', '\u006C', '\u006D', '\u006E', '\u006F',
+  '\u0070', '\u0071', '\u0072', '\u0073', '\u0074', '\u0075', '\u0076', '\u0077',
+  '\u0078', '\u0079', '\u007A', '\u007B', '\u007C', '\u007D', '\u007E', '\u007F',
+  '\u0402', '\u0403', '\u201A', '\u0453', '\u201E', '\u2026', '\u2020', '\u2021',
+  '\u20AC', '\u2030', '\u0409', '\u2039', '\u040A', '\u040C', '\u040B', '\u040F',
+  '\u0452', '\u2018', '\u2019', '\u201C', '\u201D', '\u2022', '\u2013', '\u2014',
+  undefined,           '\u2122', '\u0459', '\u203A', '\u045A', '\u045C', '\u045B', '\u045F',
+  '\u00A0', '\u040E', '\u045E', '\u0408', '\u00A4', '\u0490', '\u00A6', '\u00A7',
+  '\u0401', '\u00A9', '\u0404', '\u00AB', '\u00AC', '\u00AD', '\u00AE', '\u0407',
+  '\u00B0', '\u00B1', '\u0406', '\u0456', '\u0491', '\u00B5', '\u00B6', '\u00B7',
+  '\u0451', '\u2116', '\u0454', '\u00BB', '\u0458', '\u0405', '\u0455', '\u0457',
+  '\u0410', '\u0411', '\u0412', '\u0413', '\u0414', '\u0415', '\u0416', '\u0417',
+  '\u0418', '\u0419', '\u041A', '\u041B', '\u041C', '\u041D', '\u041E', '\u041F',
+  '\u0420', '\u0421', '\u0422', '\u0423', '\u0424', '\u0425', '\u0426', '\u0427',
+  '\u0428', '\u0429', '\u042A', '\u042B', '\u042C', '\u042D', '\u042E', '\u042F',
+  '\u0430', '\u0431', '\u0432', '\u0433', '\u0434', '\u0435', '\u0436', '\u0437',
+  '\u0438', '\u0439', '\u043A', '\u043B', '\u043C', '\u043D', '\u043E', '\u043F',
+  '\u0440', '\u0441', '\u0442', '\u0443', '\u0444', '\u0445', '\u0446', '\u0447',
+  '\u0448', '\u0449', '\u044A', '\u044B', '\u044C', '\u044D', '\u044E', '\u044F',
+]
 
-let cp1251Table: string[] | null = null
-
+/**
+ * Decode windows-1251 from the complete table above, generated from Python's
+ * cp1251 codec so it matches the standard exactly (byte 0x98 is genuinely
+ * undefined there). The earlier hand-written approximation read past the end of
+ * a 32-entry table and had several entries wrong -- 0x8b/0x8c swapped,
+ * 0xaa/0xaf/0xb2/0x9a incorrect -- which is what produced literal "undefined".
+ */
 function decodeWithCp1251(bytes: number[]): string {
-  if (!cp1251Table) cp1251Table = buildCp1251()
   let out = ''
-  for (const b of bytes) out += cp1251Table[b]
+  for (const b of bytes) {
+    const mapped = CP1251_TABLE[b]
+    // 0x98 is undefined in windows-1251; U+FFFD is the honest rendering.
+    out += mapped ?? '\ufffd'
+  }
   return out
 }
 
@@ -146,11 +173,15 @@ function decoderFor(label: string): TextDecoder | null {
  * lead byte + trail byte pair rather than two independent single-byte decodes.
  */
 function decodeBytesIn(bytes: number[], label: string): string {
+  // windows-1251 always uses the table, even where TextDecoder supports it.
+  // Node decodes the genuinely-undefined byte 0x98 as U+0098 while the WHATWG
+  // encoding standard and Python's cp1251 codec treat it as undefined; using
+  // the table everywhere keeps output identical across runtimes.
+  if (label === 'windows-1251') return decodeWithCp1251(bytes)
   const dec = decoderFor(label)
   if (!dec) {
     // Runtime lacks this encoding. Fall back to a built-in table where we have
     // one, otherwise to cp1252 rather than dropping the characters.
-    if (label === 'windows-1251') return decodeWithCp1251(bytes)
     let out = ''
     for (const b of bytes) out += decodeCp1252(b)
     return out
@@ -158,7 +189,6 @@ function decodeBytesIn(bytes: number[], label: string): string {
   try {
     return dec.decode(new Uint8Array(bytes))
   } catch {
-    if (label === 'windows-1251') return decodeWithCp1251(bytes)
     let out = ''
     for (const b of bytes) out += decodeCp1252(b)
     return out
@@ -296,7 +326,7 @@ const IGNORABLE = new Set([
   'do', 'shp', 'shpinst', 'shptxt', 'nonshppict', 'shppict', 'field',
   'header', 'footer', 'headerl', 'headerr', 'headerf', 'footerl', 'footerr',
   'footerf', 'ftnsep', 'ftnsepc', 'ftncn', 'aftnsep', 'aftnsepc', 'aftncn',
-  'listpicture', 'xmlopen', 'datafield', 'private',
+  'listpicture', 'xmlopen', 'datafield', 'private', 'pntxtb', 'pnf', 'pnindent',
 ])
 
 /**
@@ -406,6 +436,9 @@ class RtfParser {
     if (start < 0) return this.emptyDocument()
     this.i = start
     this.parseGroup()
+    // Hex bytes may still be buffered: a document can end with `\'e9` and no
+    // \par at all. Detect content only after they become text.
+    this.flushHex()
     // Only flush if something is actually pending: `text\par` ends a paragraph,
     // and emitting a trailing empty one would add a phantom blank line.
     if (this.textBuffer.length > 0 || this.runs.length > 0 || this.images.length > 0) {
@@ -506,7 +539,10 @@ class RtfParser {
    * charset when it declares one, otherwise the document code page.
  */
   private activeEncodingLabel(): string {
-    const fontIndex = this.char.fontIndex
+    // Fall back to the \deff font when no \fN has been applied yet (or a group
+    // exit restored that state), so the document's declared default charset
+    // governs \'hh bytes from the very first character.
+    const fontIndex = this.char.fontIndex ?? (this.fonts[this.defaultFontIndex] ? this.defaultFontIndex : undefined)
     if (fontIndex !== undefined) {
       const charset = this.fontCharsets[fontIndex]
       // charset 0 (ANSI) and 1 (Default) defer to \ansicpg; 2 is Symbol, whose
@@ -518,6 +554,19 @@ class RtfParser {
       }
     }
     return codePageLabel(this.codePage)
+  }
+
+  /**
+   * Adopt the \deff default font unless an explicit \fN has already been seen.
+   * Called once the font table is readable, because \deff normally appears
+   * BEFORE it in the header.
+   */
+  private applyDefaultFont(): void {
+    if (this.char.fontIndex !== undefined) return
+    const name = this.fonts[this.defaultFontIndex]
+    if (name === undefined) return
+    this.char.fontIndex = this.defaultFontIndex
+    this.char.fontFamily = name
   }
 
   /** Decode and emit any buffered `\'hh` bytes. */
@@ -828,11 +877,14 @@ private emitLiteral(text: string): void {
             continue
           }
           if (w.name === 'pntext') {
-            // Grouped {\pntext\f2\pnindent0{\pntxtb\'B7}} is the form Word
-            // actually writes. It marks the paragraph as a list item; the
-            // nested marker definition is not drawn, so skip the rest.
+            // Grouped {\pntext\f2\pnindent0{\pntxtb 1.}} is the form Word
+            // actually writes, and it carries the marker itself. Capture it
+            // rather than skipping the group, or a numbered legacy list falls
+            // back to a bullet. Unicode/Symbol glyphs are translated the same
+            // way \listtext markers are.
             this.para.isListPara = true
-            this.skipRestOfGroup()
+            const marker = this.captureGroupText()
+            if (marker) this.para.listMarker = marker
             continue
           }
           if (w.name === 'listtext') {
@@ -854,6 +906,9 @@ private emitLiteral(text: string): void {
         const savedPara = { ...this.para }
         const savedSkipCount = this.unicodeSkipCount
         this.parseGroup()
+        // Inner-group bytes belong to the inner formatting: decode them before
+        // restoring the enclosing scope.
+        this.flushHex()
         this.char = savedChar
         this.para = savedPara
         // \uc is document-scoped but overridden within a group, so it must be
@@ -1013,6 +1068,11 @@ private emitLiteral(text: string): void {
   }
 
   private applyControlWord(name: string, param: number | undefined, char: CharProps, para: ParaProps): void {
+    // Buffered \'hh bytes were read under the CURRENT formatting, so they must
+    // become text before any control word can change that formatting. Without
+    // this, `\'e9\b bold` folded the accent into the following bold run, and a
+    // nested group ending in hex lost its style when the group exited.
+    this.flushHex()
     switch (name) {
       // ---- character formatting ----
       case 'b': char.bold = param !== 0; return
@@ -1033,9 +1093,8 @@ private emitLiteral(text: string): void {
         char.fontSizePt = defaults.fontSizePt
         char.color = undefined
         char.highlight = undefined
-        const defFont = this.fonts[this.defaultFontIndex]
-        char.fontFamily = defFont
-        char.fontIndex = defFont ? this.defaultFontIndex : undefined
+        char.fontIndex = undefined
+        this.applyDefaultFont()
         return
       }
       case 'fs':
@@ -1052,6 +1111,7 @@ private emitLiteral(text: string): void {
         return
       case 'deff':
         this.defaultFontIndex = param ?? 0
+        this.applyDefaultFont()
         return
       case 'cf':
         char.color = param !== undefined ? this.colors[param] : undefined
@@ -1231,6 +1291,8 @@ private emitLiteral(text: string): void {
       this.i++
     }
     commit()
+    // Now that font names are known, adopt \deff if no \fN has been applied.
+    this.applyDefaultFont()
   }
 
   private parseColorTable(): void {
