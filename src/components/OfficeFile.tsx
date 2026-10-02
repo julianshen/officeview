@@ -15,6 +15,7 @@ import { OfficeDoc, type OfficeDocProps } from './OfficeDoc'
 import { odfKind } from '../odf/container'
 import { parseOdt } from '../odt/parse'
 import { readSource, type ByteSource, type Progress, type ProtectionListener, type ProtectionPolicy } from '../core/stream'
+import { parseRtf, isRtf } from '../rtf/parse'
 
 export type AnyDoc = DocxDocument | XlsxDocument | PptxDocument
 
@@ -55,7 +56,10 @@ export async function loadOfficeFile(
   source: ByteSource,
   options: { onProgress?: (p: Progress) => void; onProtection?: ProtectionListener } = {},
 ): Promise<AnyDoc> {
-  const data = await readSource(source, options.onProgress, options.onProtection)
+const data = await readSource(source, options.onProgress, options.onProtection)
+  // RTF is plain text, not a zip, so it must be recognised before the bytes
+  // reach OfficePackage.load, which would throw on them.
+  if (isRtf(data)) return parseRtf(data)
   return OfficePackage.load(data).then(detectAndParse)
 }
 

@@ -42,6 +42,15 @@ const doc = await loadOfficeFile(bytes)
 <OfficeDoc document={doc} />
 ```
 
+The format is detected from the bytes, so `.docx`, `.xlsx`, `.pptx` **and `.rtf`
+all go through the same `loadOfficeFile`**. To parse RTF directly, use
+`parseRtf(bytes)`, or `isRtf(bytes)` to test the magic without loading:
+
+```tsx
+import { parseRtf } from 'officeview'
+const doc = parseRtf(rtfBytes)
+```
+
 ### Props worth knowing
 
 ```tsx
@@ -208,6 +217,8 @@ before you rely on them:
 
 **Writer (.odt)** — paragraphs and runs (bold/italic/underline/strike/size/color/background), alignment, indents, spacing, line spacing, headings with outline levels and outline numbering, lists (bullets, decimal/alpha/roman with `display-levels`, continue/start control) with hanging indents, tables (spans, covered cells, shading, borders, per-row heights, `vertical-align`, repeating header rows), inline and floating/anchored images (wrap modes, `behindDoc`, z-order), page layouts and master pages with headers/footers, and live page-number/page-count fields. Rendered through the same layout engine as Word, so search, selection and zoom work unchanged. Known gaps: text boxes and vector shapes, change tracking and annotations (accepted/ignored), multi-column text, nested tables, and per-cell padding beyond the table default.
 
+**Rich Text (.rtf)** — parsed directly from the byte stream (RTF is plain text, not a zip, so it never goes through `OfficePackage`) and mapped onto the same intermediate model as `.docx`, which means pagination, painting, search and selection come from the existing pipeline rather than a second renderer. Supported: runs (bold/italic/underline/strike/size/font/colour/highlight), the font and colour tables, paragraph alignment incl. justify, indents, spacing and line spacing, `\par`/`\line`/`\tab`, page size/margins/`\sect` sections incl. landscape (writers store landscape pages in their final orientation, so explicit `\paperw`/`\paperh` are honoured rather than rotated again), `\uN` unicode (with `\ucN` fallback skipping, group-scoped `\uc`, and negative/surrogate-pair recovery), `\'hh` code-page escapes decoded through `\ansicpgN` or the active font's `\fcharsetN` (using a complete built-in windows-1251 table for runtimes whose `TextDecoder` lacks it -- and, for consistency, on every runtime, because Node decodes the encoding's undefined byte `0x98` differently from the standard. `\deff` supplies the default font and its charset before any explicit `\fN`, and Symbol/Wingdings `\'hh` bytes are resolved through a Symbol glyph table (`\'b7` is a bullet), falling back to the raw byte for codes outside the table; list markers in `{\pntext}` and `{\listtext}` decode through the same code-page logic as body text), tables (`\trowd`/`\cellx`/`\intbl`/`\cell`/`\row` with borders, shading and vertical alignment), inline pictures (`\pict` with `\pngblip`/`\jpegblip` hex payloads), and list paragraphs (`\pntext`/`\listtext`/`\ilvl`). Deliberately not rendered: `\emfblip`/`\wmetafile` vector metafiles, drawing shapes, fields and embedded objects — these are skipped rather than mis-rendered. Nested tables (`\itap` > 1) are flattened into the outer table.
+
 **Viewer** — stacked per-page canvases, DPR-aware and hi-dpi when zoomed, pinch/drag/wheel/double-tap zoom with clamped panning, in-document text search with match navigation and highlighting, and text selection (drag, double-click for a word, triple-click for a line) with copy via `Cmd/Ctrl+C` or an on-screen button.
 
 ## Selecting and copying
@@ -229,6 +240,12 @@ differ slightly from Word's exact metrics. Floating images are positioned from
 their anchor but do not yet reflow surrounding text around them (wrap modes are
 parsed and preserved, not applied), and triple-click selects the visual line
 rather than the source paragraph.
+
+RTF support stops short of the format's long tail: vector metafiles
+(`\emfblip`, `\wmetafile`), drawing shapes, fields, embedded objects and nested
+tables are skipped rather than drawn. RTF is also the one supported format with
+no real-file corpus yet — the coverage above rests on hand-written fixtures that
+imitate Word's output shape, not on `.rtf` files pulled from a real corpus.
 
 ## Development
 

@@ -237,10 +237,51 @@ async function sampleOdt(): Promise<Uint8Array> {
     }],
   })
 }
+  
+  async function sampleRtf(): Promise<Uint8Array> {
+  // A hand-written RTF exercising the paths the parser supports: run formatting,
+  // a colour table, alignment, a table, a list and a picture.
+  // Reuse the real checkerboard PNG: RTF stores pictures as a hex payload, so
+  // this also proves a genuine (not hand-faked) PNG survives the encode/decode.
+  const hex = Array.from(await samplePng())
+    .map((b) => b.toString(16).padStart(2, '0'))
+    .join('')
+  // \pict payloads are conventionally wrapped; whitespace is ignored on read.
+  const onePixelPng = hex.replace(/(.{64})/g, '$1\n')
+  const rtf = [
+    '{\\rtf1\\ansi\\ansicpg1252\\deff0',
+    '{\\fonttbl{\\f0\\froman\\fcharset204 Times New Roman;}{\\f1\\fswiss\\fcharset0 Calibri;}{\\f2\\fnil\\fcharset2 Symbol;}}',
+    '{\\colortbl ;\\red220\\green38\\blue38;\\red0\\green112\\blue192;\\red242\\green242\\blue242;}',
+    '\\paperw12240\\paperh15840\\margl1440\\margr1440\\margt1440\\margb1440',
+    '\\qc\\b\\fs36\\cf1 RTF via canvas\\b0\\fs24\\cf0\\par',
+    '\\pard\\qc\\i Rendered straight from the RTF byte stream \\u8212 ?no HTML in between.\\i0\\par',
+    '\\pard\\sa240 Formatting runs: \\b bold\\b0 , \\i italic\\i0 , \\ul underline\\ulnone , \\strike struck\\strike0 , \\fs32 larger\\fs24 .\\par',
+    '\\pard\\b Colour table:\\b0 \\cf1 red\\cf0 , \\cf2 blue\\cf0 .\\par',
+    // \\ansicpg1251 + a charset-204 default font: the hex bytes below decode as
+    // Cyrillic (Привет), and this exercises the browser's own TextDecoder path.
+    String.raw`\pard\b Code page 1251:\b0 \'cf\'f0\'e8\'e2\'e5\'f2 \u8212 ? not mojibake.\par`,
+    '\\pard\\b A table:\\b0\\par',
+    '\\trowd\\trgaph108\\trleft0',
+    '\\clbrdrt\\brdrs\\clbrdrl\\brdrs\\clbrdrb\\brdrs\\clbrdrr\\brdrs\\cellx3600',
+    '\\clbrdrt\\brdrs\\clbrdrl\\brdrs\\clbrdrb\\brdrs\\clbrdrr\\brdrs\\cellx7200',
+    '\\clcbpat3\\intbl \\b Shaded cell\\b0\\par',
+    '\\intbl Plain cell\\par \\cell',
+    '\\intbl Third column\\par \\cell\\row',
+    '\\pard\\b An inline picture:\\b0 {\\pict\\pngblip\\picw16\\pich16\\picwgoal576\\pichgoal576',
+    onePixelPng,
+    '}\\par',
+    '\\pard\\b A list:\\b0\\par',
+    '\\li720\\fi-360{\\*\\pn\\pnf2\\pnindent720\\pnstart1\\pndec}{\\listtext\\f2 1.\\tab}\\ilvl0\\pntext First numbered item\\par',
+    '\\li720\\fi-360{\\*\\pn\\pnf2\\pnindent720\\pnstart1\\pndec}{\\listtext\\f2 2.\\tab}\\ilvl0\\pntext Second numbered item\\par',
+    '}',
+  ].join('\n')
+  return new TextEncoder().encode(rtf)
+}
 
 const SAMPLES: Sample[] = [
   { label: 'Word (.docx)', emoji: '📄', load: sampleDocx },
   { label: 'Writer (.odt)', emoji: '📝', load: sampleOdt },
+  { label: 'RTF (.rtf)', emoji: '📃', load: sampleRtf },
   { label: 'Protected', emoji: '🔒', load: sampleDocxProtected },
   { label: 'Streamed', emoji: '🌊', load: sampleDocxStreamed },
   { label: 'Word lists', emoji: '🔢', load: sampleDocxLists },
