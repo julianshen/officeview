@@ -13,6 +13,7 @@ import { parsePptx } from '../pptx/parse'
 import type { PptxDocument } from '../pptx/types'
 import { OfficeDoc, type OfficeDocProps } from './OfficeDoc'
 import { readSource, type ByteSource, type Progress } from '../core/stream'
+import { parseRtf, isRtf } from '../rtf/parse'
 
 export type AnyDoc = DocxDocument | XlsxDocument | PptxDocument
 
@@ -49,6 +50,7 @@ export async function loadOfficeFile(
   options: { onProgress?: (p: Progress) => void } = {},
 ): Promise<AnyDoc> {
   const data = await readSource(source, options.onProgress)
+  if (isRtf(data)) return parseRtf(data)
   return OfficePackage.load(data).then(detectAndParse)
 }
 
