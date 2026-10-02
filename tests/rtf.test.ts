@@ -903,3 +903,135 @@ describe('review 5: the \\deff default font', () => {
     expect(textOf(paragraphs(rtf)[0])).toBe('\u0410')
   })
 })
+
+/**
+ * Regression tests for the marker-capture finding in the review of da46bc3:
+ * `\'hh` escapes inside {\pntext} / {\listtext} were consumed as the two
+ * literal hex digits, so a Symbol bullet rendered as the text "b7".
+ */
+describe('marker capture: hex escapes', () => {
+  test('the review\'s Symbol bullet repro resolves to a bullet', () => {
+    const rtf = String.raw`{\rtf1{\fonttbl{\f2\fnil\fcharset2 Symbol;}}{\pntext\f2 \'b7\tab}Item\par}`
+    const p = paragraphs(rtf)[0]
+    expect(p.listMarker).toBe('\u2022')
+    expect(textOf(p)).toBe('Item')
+  })
+
+  test('a Symbol bullet in a listtext group resolves too', () => {
+    const rtf = String.raw`{\rtf1{\fonttbl{\f2\fnil\fcharset2 Symbol;}}{\listtext\f2\'b7\tab}\ls1 Item\par}`
+    const p = paragraphs(rtf)[0]
+    expect(p.listMarker).toBe('\u2022')
+    expect(textOf(p)).toBe('Item')
+  })
+
+  test('the marker never contains the literal hex digits', () => {
+    const rtf = String.raw`{\rtf1{\fonttbl{\f2\fnil\fcharset2 Symbol;}}{\pntext\f2 \'b7\tab}Item\par}`
+    expect(paragraphs(rtf)[0].listMarker).not.toContain('b7')
+  })
+
+  test('a Symbol bullet nested inside pntxtb resolves', () => {
+    const rtf = String.raw`{\rtf1\li720\fi-360{\fonttbl{\f2\fnil\fcharset2 Symbol;}}{\pntext\f2\pnindent0{\pntxtb \'b7}}\ls1\ilvl0 Item\par}`
+    const p = paragraphs(rtf)[0]
+    expect(p.listMarker).toBe('\u2022')
+    expect(textOf(p)).toBe('Item')
+  })
+
+  test('a non-Symbol code page decodes marker hex', () => {
+    const rtf = String.raw`{\rtf1\ansi\ansicpg1251{\listtext\f0\'c4\'c9\tab}\ls1 Item\par}`
+    expect(paragraphs(rtf)[0].listMarker).toBe('\u0414\u0419')
+  })
+
+  test('a hex marker mixes with literal text in order', () => {
+    const rtf = String.raw`{\rtf1\ansicpg1251{\listtext\'c41.\tab}\ls1 Item\par}`
+    expect(paragraphs(rtf)[0].listMarker).toBe('\u04141.')
+  })
+
+  test('adjacent multibyte escapes in a marker decode as one character', () => {
+    if (!hasEncodingSupport('shift_jis')) return
+    const rtf = String.raw`{\rtf1\ansi\ansicpg932{\listtext\'82\'a0\tab}\ls1 Item\par}`
+    expect(paragraphs(rtf)[0].listMarker).toBe('\u3042')
+  })
+
+  test('two multibyte characters in a marker both survive', () => {
+    if (!hasEncodingSupport('shift_jis')) return
+    const rtf = String.raw`{\rtf1\ansi\ansicpg932{\listtext\'82\'a0\'82\'a2\tab}\ls1 Item\par}`
+    expect(paragraphs(rtf)[0].listMarker).toBe('\u3042\u3044')
+  })
+
+  test('a codepage change inside the marker group re-decodes correctly', () => {
+    // Bytes before \ansicpg belong to cp1252, bytes after it to cp1251.
+    const rtf = String.raw`{\rtf1\ansi\ansicpg1252{\listtext\'e9\ansicpg1251\'c4\tab}\ls1 Item\par}`
+    expect(paragraphs(rtf)[0].listMarker).toBe('\u00e9\u0414')
+  })
+})
+
+describe('marker capture: \\uc and tab termination', () => {
+  test('\\uc0 inside a marker group suppresses the fallback', () => {
+    // \uc0 means there is NO fallback character, so nothing is skipped.
+    const rtf = String.raw`{\rtf1{\listtext\uc0\u945\tab}\ls1 Item\par}`
+    expect(paragraphs(rtf)[0].listMarker).toBe('\u03b1')
+  })
+
+  test('\\uc1 inside a marker group skips the fallback character', () => {
+    const rtf = String.raw`{\rtf1{\listtext\uc1\u945 ?\tab}\ls1 Item\par}`
+    expect(paragraphs(rtf)[0].listMarker).toBe('\u03b1')
+  })
+
+  test('with \\uc0 a literal question mark is kept', () => {
+    const rtf = String.raw`{\rtf1{\listtext\uc0\u945 ?\tab}\ls1 Item\par}`
+    expect(paragraphs(rtf)[0].listMarker).toBe('\u03b1?')
+  })
+
+  test('a \\uc inside the marker group does not leak to the document', () => {
+    const rtf = String.raw`{\rtf1\uc1{\listtext\uc0\u945 ?\tab}\ls1 Item\par}\u946 ?X\par}`
+    const paras = paragraphs(rtf)
+    // \uc0 inside the group means no fallback is skipped, so the '?' is literal.
+    expect(paras[0].listMarker).toBe('\u03b1?')
+    // back outside the group \uc is 1 again, so X must not pick up a stray "?"
+    expect(textOf(paras[1])).toBe('\u03b2X')
+  })
+
+  test('a marker ends at the tab and the group is still consumed', () => {
+    const rtf = String.raw`{\rtf1{\listtext\f2 1.\tab}\ls1 Item\par}`
+    const paras = paragraphs(rtf)
+    expect(paras[0].listMarker).toBe('1.')
+    expect(textOf(paras[0])).toBe('Item')
+  })
+
+  test('text after the marker group is not swallowed', () => {
+    const rtf = String.raw`{\rtf1{\listtext\f2 1.\tab}\ls1 first\par second\par}`
+    const paras = paragraphs(rtf)
+    expect(paras[0].listMarker).toBe('1.')
+    expect(paras.map(textOf)).toEqual(['first', 'second'])
+  })
+
+  test('hex before the tab is kept, content after it is not', () => {
+    const rtf = String.raw`{\rtf1{\fonttbl{\f2\fnil\fcharset2 Symbol;}}{\listtext\f2\'b7x\tab}\ls1 Item\par}`
+    expect(paragraphs(rtf)[0].listMarker).toBe('\u2022x')
+  })
+})
+
+describe('marker without list membership', () => {
+  test('a marker group alone does not make the paragraph a list item', () => {
+    // \\ls / \\pntext is what marks list membership; \\listtext only supplies
+    // marker text, so without one of those the paragraph stays ordinary text.
+    const p = paragraphs(String.raw`{\rtf1{\listtext\f2 1.\tab}Item\par}`)[0]
+    expect(p.listMarker).toBeUndefined()
+    expect(textOf(p)).toBe('Item')
+  })
+})
+
+describe('marker text stays out of paragraph content', () => {
+  const cases: [string, string][] = [
+    ['symbol hex bullet', String.raw`{\rtf1{\fonttbl{\f2\fnil\fcharset2 Symbol;}}{\pntext\f2 \'b7\tab}Item\par}`],
+    ['symbol pntxtb bullet', String.raw`{\rtf1\li720{\pntext\f2\pnindent0{\pntxtb \'b7}}\ls1 Item\par}`],
+    ['numbered listtext', String.raw`{\rtf1{\listtext\f2 1.\tab}\ls1 Item\par}`],
+    ['unicode marker', String.raw`{\rtf1{\listtext\uc0\u945\tab}\ls1 Item\par}`],
+  ]
+  for (const [name, rtf] of cases) {
+    test(`${name} contributes only the marker`, () => {
+      const p = paragraphs(rtf)[0]
+      expect(textOf(p)).toBe('Item')
+    })
+  }
+})

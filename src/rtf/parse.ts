@@ -543,6 +543,15 @@ class RtfParser {
     // exit restored that state), so the document's declared default charset
     // governs \'hh bytes from the very first character.
     const fontIndex = this.char.fontIndex ?? (this.fonts[this.defaultFontIndex] ? this.defaultFontIndex : undefined)
+    return this.encodingLabelFor(fontIndex)
+  }
+
+  /**
+   * The encoding that `\'hh` escapes in the given font decode with. Shared with
+   * marker capture so a hex bullet inside {\pntext} or {\listtext} resolves the
+   * same way as hex in ordinary body text.
+   */
+  private encodingLabelFor(fontIndex: number | undefined, codePage: number = this.codePage): string {
     if (fontIndex !== undefined) {
       const charset = this.fontCharsets[fontIndex]
       // charset 0 (ANSI) and 1 (Default) defer to \ansicpg; 2 is Symbol, whose
@@ -553,7 +562,7 @@ class RtfParser {
         if (label) return label
       }
     }
-    return codePageLabel(this.codePage)
+    return codePageLabel(codePage)
   }
 
   /**
@@ -569,20 +578,26 @@ class RtfParser {
     this.char.fontFamily = name
   }
 
+  /**
+   * Decode a run of `\'hh` bytes. Multibyte encodings need the whole run so a
+   * lead byte meets its trail byte; Symbol charset bytes are glyph indices, so
+   * they go through the Symbol table (0xB7 is a bullet, not a middot).
+   */
+  private static decodeHexBytes(bytes: number[], label: string): string {
+    if (label === 'symbol') {
+      let out = ''
+      for (const b of bytes) out += SYMBOL_MAP[b] ?? String.fromCharCode(b)
+      return out
+    }
+    return decodeBytesIn(bytes, label)
+  }
+
   /** Decode and emit any buffered `\'hh` bytes. */
   private flushHex(): void {
     if (this.hexBuf.length === 0) return
     const bytes = this.hexBuf
     this.hexBuf = []
-    const label = this.hexLabel
-    if (label === 'symbol') {
-      // Symbol glyphs are codepage-relative, not text: keep the raw bytes.
-      let out = ''
-      for (const b of bytes) out += String.fromCharCode(b)
-      this.emit(out)
-      return
-    }
-    this.emit(decodeBytesIn(bytes, label))
+    this.emit(RtfParser.decodeHexBytes(bytes, this.hexLabel))
   }
 
   /** Emit a literal, flushing any buffered hex bytes first so order is kept. */
@@ -944,6 +959,30 @@ private emitLiteral(text: string): void {
     let depth = 1
     let skipChars = 0
     let done = false
+    // Marker groups carry their own \fN and \uc, and \'hh escapes must decode
+    // through the same code-page logic as body text -- a Symbol bullet written
+    // as \'b7 previously fell through as the literal text "b7".
+    let fontIndex: number | undefined
+    let uc = this.unicodeSkipCount
+    // A marker group may switch code page; keep it local so bytes decode the
+    // same way they would in body text, without leaking back out.
+    let codePage = this.codePage
+    let hex: number[] = []
+    let hexLabel = this.encodingLabelFor(this.char.fontIndex, codePage)
+
+    const flushHex = (): void => {
+      if (hex.length === 0) return
+      const bytes = hex
+      hex = []
+      if (!done) out += RtfParser.decodeHexBytes(bytes, hexLabel)
+    }
+    const pushByte = (byte: number): void => {
+      const label = this.encodingLabelFor(fontIndex ?? this.char.fontIndex, codePage)
+      if (hex.length > 0 && hexLabel !== label) flushHex()
+      if (hex.length === 0) hexLabel = label
+      hex.push(byte)
+    }
+
     while (this.i < this.s.length && depth > 0) {
       const c = this.s[this.i]
       if (c === '{') {
@@ -957,19 +996,36 @@ private emitLiteral(text: string): void {
         continue
       }
       if (c === '\\') {
+        // 'hh must be recognised before readControlWord, which would otherwise
+        // decline it and leave the two hex digits as literal marker text.
+        if (this.s[this.i + 1] === "'") {
+          const byte = parseInt(this.s.substr(this.i + 2, 2), 16)
+          this.i += 4
+          if (!Number.isNaN(byte)) pushByte(byte)
+          continue
+        }
         const w = this.readControlWord()
         if (w) {
           if (w.name === 'u' && w.param !== undefined) {
+            flushHex()
             const code = w.param < 0 ? w.param + 65536 : w.param
             if (code >= 0 && code <= 0x10ffff && !done) {
-              const ch = String.fromCodePoint(code)
-              out += mapSymbolText(ch)
+              out += mapSymbolText(String.fromCodePoint(code))
             }
-            skipChars = this.unicodeSkipCount
-          } else if (w.name === "tab" || w.name === 'cell') {
+            skipChars = uc
+          } else if (w.name === 'uc') {
+            // \uc is group scoped: honour it here without leaking it back out.
+            uc = w.param ?? 1
+          } else if (w.name === 'f') {
+            fontIndex = w.param
+          } else if (w.name === 'ansicpg' && w.param !== undefined) {
+            flushHex()
+            codePage = w.param
+          } else if (w.name === 'tab' || w.name === 'cell') {
             // The marker ends at the tab, but we must keep consuming through the
             // group's closing brace -- bailing out here would leave the `}` to be
             // read as the end of the *enclosing* group.
+            flushHex()
             done = true
           }
           continue
@@ -977,6 +1033,7 @@ private emitLiteral(text: string): void {
         this.i++
         const sym = this.s[this.i]
         this.i++
+        flushHex()
         if (sym === '\\' || sym === '{' || sym === '}') out += sym
         continue
       }
@@ -993,9 +1050,12 @@ private emitLiteral(text: string): void {
         this.i++
         continue
       }
+      // Plain text must not jump ahead of buffered hex bytes.
+      flushHex()
       out += mapSymbolText(c)
       this.i++
     }
+    flushHex()
     return out.replace(/\s+$/, '').replace(/^[ \t]+/, '')
   }
 
