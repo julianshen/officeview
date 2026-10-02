@@ -49,6 +49,25 @@ export interface OfficeDocProps {
   showZoomControls?: boolean
   /** Show the in-viewer search bar (default true). */
   showSearch?: boolean
+  /**
+   * Allow the reader to select document text and copy it (default true).
+   * Setting this to false removes text selection, the copy button and the
+   * Cmd/Ctrl+C handler, and suppresses native copy of the container.
+   *
+   * This is a deterrent, not DRM: the document is drawn to a canvas, so the
+   * browser holds no selectable text for it, but a reader can still capture
+   * pixels via screenshots or devtools.
+   */
+  allowCopy?: boolean
+  /**
+   * Allow the document to appear in the browser's print output (default true).
+   * Setting this to false hides the viewer with a print-only stylesheet and
+   * suppresses the Cmd/Ctrl+P shortcut while the viewer has focus.
+   *
+   * This is likewise a deterrent: it stops the browser's own print pipeline
+   * and a careless Cmd+P, not a determined user with a screenshot.
+   */
+  allowPrint?: boolean
 }
 
 /** Cap the effective device scale so a 6x zoom can't allocate absurd canvases. */
@@ -186,6 +205,8 @@ export function OfficeDoc({
   style,
   showZoomControls = true,
   showSearch = true,
+  allowCopy = true,
+  allowPrint = true,
 }: OfficeDocProps): ReactElement {
   // getPaintables is async (docx measurement resolves a 2D ctx); hold in state.
   const [pages, setPages] = useState<Paintable[]>([])
@@ -255,6 +276,13 @@ export function OfficeDoc({
     return { x: e.clientX - (rect?.left ?? 0), y: e.clientY - (rect?.top ?? 0) }
   }
 
+  // Swallow a native copy / context-menu gesture while copy prevention is on.
+  // The canvas has no selectable text of its own, so this only stops the
+  // browser from copying whatever page chrome happens to sit around it.
+  const preventNativeCopy = (e: React.ClipboardEvent | React.MouseEvent): void => {
+    e.preventDefault()
+  }
+
   const onPointerDown = (e: React.PointerEvent) => {
     if (e.pointerType === 'mouse' && e.button !== 0) return
     const point = localPoint(e)
@@ -276,6 +304,7 @@ export function OfficeDoc({
       selectionDrag.current = null
     } else {
       // at fit, dragging is text selection
+      if (!allowCopy) return
       selectionDrag.current = { origin: point, moved: false }
       selectionStartRef.current = { clientX: e.clientX, clientY: e.clientY, target: e.target }
       void caretFromEvent(e).then((caret) => {
@@ -375,9 +404,21 @@ export function OfficeDoc({
       inputRef.current?.select()
       return
     }
-    if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'c' && selection && !isEmptyRange(selection)) {
+    if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'c') {
+      // when copying is off, swallow the shortcut rather than letting the
+      // browser act on whatever happens to be selected around the canvas
+      if (!allowCopy) {
+        e.preventDefault()
+        return
+      }
+      if (selection && !isEmptyRange(selection)) {
+        e.preventDefault()
+        void doCopy()
+        return
+      }
+    }
+    if (!allowPrint && (e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'p') {
       e.preventDefault()
-      void doCopy()
       return
     }
     if (e.key === 'Escape' && selection) {
@@ -420,6 +461,25 @@ export function OfficeDoc({
     setMatches([])
     setActive(-1)
   }, [document])
+
+  // Print suppression. The document is drawn to canvases, so it reaches the
+  // print pipeline as pixels; hiding the viewer with a print-only rule is what
+  // actually removes it from a printout. The rule is installed only while a
+  // viewer with allowPrint={false} is mounted, and removed on unmount so a
+  // later print of the host page is unaffected. `document` is shadowed by the
+  // prop of the same name, hence globalThis.
+  useEffect(() => {
+    if (allowPrint) return
+    const doc = globalThis.document
+    if (!doc) return
+    const style = doc.createElement('style')
+    style.setAttribute('data-officeview-print-guard', '')
+    style.textContent = '@media print { [data-officeview-root] { display: none !important; } }'
+    doc.head.appendChild(style)
+    return () => {
+      style.remove()
+    }
+  }, [allowPrint])
 
   useEffect(() => {
     if (query.trim().length === 0) {
@@ -545,6 +605,7 @@ export function OfficeDoc({
   }
 
   const doCopy = async () => {
+    if (!allowCopy) return
     const index = indexRef.current
     if (!index || !selection) return
     const text = textForRange(index, selection)
@@ -581,6 +642,7 @@ export function OfficeDoc({
         className={className}
         role="region"
         aria-label="Document viewer"
+        data-officeview-root=""
         tabIndex={0}
         onKeyDown={onKeyDown}
         onDoubleClick={onDoubleClick}
@@ -590,6 +652,8 @@ export function OfficeDoc({
         onPointerMove={onPointerMove}
         onPointerUp={endPointer}
         onPointerCancel={endPointer}
+        onCopyCapture={allowCopy ? undefined : preventNativeCopy}
+        onContextMenu={allowCopy ? undefined : preventNativeCopy}
         style={{
           background,
           // at fit we let the browser do momentum scrolling; when zoomed we
@@ -603,6 +667,10 @@ export function OfficeDoc({
           position: 'relative',
           boxSizing: 'border-box',
           cursor: zoomed ? 'grab' : 'auto',
+          // there is no DOM text to select, but block the browser's own
+          // selection gesture so drag-selecting the page chrome is not possible
+          WebkitUserSelect: allowCopy ? undefined : 'none',
+          userSelect: allowCopy ? undefined : 'none',
           ...style,
         }}
       >
@@ -643,7 +711,7 @@ export function OfficeDoc({
           onNext={() => goTo(1)}
         />
       )}
-      {selection && !isEmptyRange(selection) && (
+      {selection && allowCopy && !isEmptyRange(selection) && (
         <button
           type="button"
           data-testid="officeview-copy-selection"
