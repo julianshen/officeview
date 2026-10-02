@@ -4,7 +4,7 @@
  * renderers can lazily grab parts without re-unzipping.
  */
 import JSZip from 'jszip'
-import { parseXml, type XmlNode } from './xml'
+import { parseXml, parseXmlOrdered, type XmlNode } from './xml'
 
 export class OfficePackage {
   private zip: JSZip
@@ -51,6 +51,17 @@ export class OfficePackage {
     const s = await this.text(path)
     if (s === undefined) return undefined
     const node = parseXml(s)
+    this.cache.set(cacheKey, node)
+    return node
+  }
+
+  /** Read a part and parse it as XML, keeping document order. Cached. */
+  async xmlOrdered(path: string): Promise<XmlNode | undefined> {
+    const cacheKey = `xml-ordered:${path}`
+    if (this.cache.has(cacheKey)) return this.cache.get(cacheKey) as XmlNode | undefined
+    const s = await this.text(path)
+    if (s === undefined) return undefined
+    const node = parseXmlOrdered(s)
     this.cache.set(cacheKey, node)
     return node
   }

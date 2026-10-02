@@ -1,12 +1,13 @@
 # officeview
 
-React components that render Office documents (Word `.docx`, Excel `.xlsx`, PowerPoint `.pptx`) on an HTML `<canvas>` — pixel-faithful rendering, **not** translation into DOM/HTML. Works on desktop and mobile browsers.
+React components that render Office documents (Word `.docx`, Excel `.xlsx`, PowerPoint `.pptx`, Writer `.odt`) on an HTML `<canvas>` — pixel-faithful rendering, **not** translation into DOM/HTML. Works on desktop and mobile browsers.
 
 ## Architecture
 
 ```
-OOXML bytes (zip) ──▶ OfficePackage (cached part reader)
+OOXML/ODF bytes (zip) ──▶ OfficePackage (cached part reader)
                       ├─▶ parseDocx  ──▶ layoutDocx (line-breaking, pagination) ─▶ renderPages
+                      ├─▶ parseOdt ──▶┘  (Writer maps onto the same flow model)
                       ├─▶ parseXlsx  ──▶ computeMetrics (fixed grid)           ─▶ renderSheet
                       └─▶ parsePptx  ──▶ slideMetrics (EMU geometry)           ─▶ renderSlide
                                                       │
@@ -18,7 +19,7 @@ OOXML bytes (zip) ──▶ OfficePackage (cached part reader)
                                                                           in-viewer text search
 ```
 
-- **OOXML/zip parsed directly** (JSZip + fast-xml-parser) — no HTML intermediate
+- **OOXML/ODF parsed directly** (JSZip + fast-xml-parser) — no HTML intermediate
 - Coordinates: DOCX in twips→px (96dpi), PPTX in EMU→px, XLSX in px
 - Per-page `<canvas>` stacked in a native scroll container; native momentum scroll at fit, transform-pan while zoomed
 - `devicePixelRatio`-aware backing store (capped 3x); when zoomed, only *visible* pages re-render at the zoom-aware scale
@@ -204,6 +205,8 @@ before you rely on them:
 **Excel (.xlsx)** — sheets, shared and inline strings, numbers/booleans, styles (fonts, fills, borders, number formats incl. percent, thousands, date serials), custom column widths and row heights, and merged cells painted across their full range with interior gridlines masked out.
 
 **PowerPoint (.pptx)** — slides, shapes (rect/roundRect/ellipse) with fills, outlines and rotation, text bodies (runs with color/bold/italic/typeface, alignment, insets, vertical anchor, wrapping), embedded pictures with `a:srcRect` cropping, and tables (`a:tbl` grid, `gridSpan`/`rowSpan`/merges, cell fills, banding and first-row styling resolved from `tableStyles.xml`).
+
+**Writer (.odt)** — paragraphs and runs (bold/italic/underline/strike/size/color/background), alignment, indents, spacing, line spacing, headings with outline levels and outline numbering, lists (bullets, decimal/alpha/roman with `display-levels`, continue/start control) with hanging indents, tables (spans, covered cells, shading, borders, per-row heights, `vertical-align`, repeating header rows), inline and floating/anchored images (wrap modes, `behindDoc`, z-order), page layouts and master pages with headers/footers, and live page-number/page-count fields. Rendered through the same layout engine as Word, so search, selection and zoom work unchanged. Known gaps: text boxes and vector shapes, change tracking and annotations (accepted/ignored), multi-column text, nested tables, and per-cell padding beyond the table default.
 
 **Viewer** — stacked per-page canvases, DPR-aware and hi-dpi when zoomed, pinch/drag/wheel/double-tap zoom with clamped panning, in-document text search with match navigation and highlighting, and text selection (drag, double-click for a word, triple-click for a line) with copy via `Cmd/Ctrl+C` or an on-screen button.
 

@@ -18,6 +18,7 @@ export type { ByteSource, HttpSource, Progress, ProgressListener, ProtectionPoli
 export { buildTextIndex, findMatches, stepMatch } from './core/search'
 export type { TextIndex, TextIndexPage, IndexLine, TextSpan, SearchMatch, SearchOptions } from './core/search'
 export { parseDocx } from './docx/parse'
+export { parseOdt } from './odt/parse'
 export { layoutDocx, renderPages, createMeasurer } from './docx/layout'
 export { parseXlsx } from './xlsx/parse'
 export { computeMetrics, renderSheet, formatValue } from './xlsx/render'

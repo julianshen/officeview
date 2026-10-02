@@ -1,11 +1,12 @@
 /**
- * Browser demo for officeview: open any .docx/.xlsx/.pptx, or click a
+ * Browser demo for officeview: open any .docx/.xlsx/.pptx/.odt, or click a
  * generated sample. Mobile-first: touch scroll, responsive width, safe areas.
  */
 import { useState, type ChangeEvent } from 'react'
 import { createRoot } from 'react-dom/client'
 import { OfficeFile } from '../components/OfficeFile'
 import { buildDocx, buildXlsx, buildPptx, type DocxCellSpec, type DocxParaSpec, type DocxTableSpec } from '../testdata/ooxml-builders'
+import { buildOdt, odfDecimalListStyle } from '../testdata/odf-builders'
 
 const p = (text: string): DocxParaSpec => ({ runs: [{ text }] })
 
@@ -221,8 +222,25 @@ async function sampleDocxProtected(): Promise<Uint8Array> {
   return sampleDocx()
 }
 
+async function sampleOdt(): Promise<Uint8Array> {
+  return buildOdt({
+    extraAutoStyles: odfDecimalListStyle('DemoList'),
+    paras: [
+      { text: 'Writer document (ODF)', heading: 1 },
+      { runs: [{ text: 'This .odt renders through the same layout engine as Word files: ' }, { text: 'styles cascade', bold: true }, { text: ' from ODF automatic styles.' }] },
+    ],
+    lists: [{ styleName: 'DemoList', items: [{ text: 'first item' }, { text: 'second item' }] }],
+    tables: [{
+      colWidths: ['5cm', '5cm'],
+      tableBorders: 'fo:border-top="0.5pt solid #000000" fo:border-bottom="0.5pt solid #000000"',
+      rows: [{ cells: [{ text: 'Writer' }, { text: 'renders here' }] }],
+    }],
+  })
+}
+
 const SAMPLES: Sample[] = [
   { label: 'Word (.docx)', emoji: '📄', load: sampleDocx },
+  { label: 'Writer (.odt)', emoji: '📝', load: sampleOdt },
   { label: 'Protected', emoji: '🔒', load: sampleDocxProtected },
   { label: 'Streamed', emoji: '🌊', load: sampleDocxStreamed },
   { label: 'Word lists', emoji: '🔢', load: sampleDocxLists },
@@ -270,7 +288,7 @@ function App() {
         <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
           <label style={{ background: '#2f6fed', color: '#fff', padding: '8px 14px', borderRadius: 8, fontSize: 14, cursor: 'pointer' }}>
             Open file…
-            <input type="file" accept=".docx,.xlsx,.pptx" onChange={onFile} style={{ display: 'none' }} />
+            <input type="file" accept=".docx,.xlsx,.pptx,.odt" onChange={onFile} style={{ display: 'none' }} />
           </label>
           {SAMPLES.map((s) => (
             <button key={s.label} onClick={() => void openSample(s)} disabled={busy}
@@ -284,7 +302,7 @@ function App() {
       <main style={{ padding: '12px 0' }}>
         {data === null ? (
           <p style={{ textAlign: 'center', color: '#8b93a7', padding: '40px 24px' }}>
-            Open a .docx / .xlsx / .pptx — or tap a sample above.
+            Open a .docx / .xlsx / .pptx / .odt — or tap a sample above.
           </p>
         ) : (
           <OfficeFile

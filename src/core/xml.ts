@@ -25,7 +25,124 @@ const parser = new XMLParser({
   parseTagValue: false,
   trimValues: false,
   processEntities: true,
+});
+
+// Same options, but siblings (including text segments) stay in document
+// order. ODF mixes bare text with inline elements (<p>hello <span>bold</span>
+// world</p>), and the default parser joins those segments into one string,
+// destroying run order. ODF content is parsed with this; OOXML keeps the
+// default parser (w:t elements already carry order).
+// Quirk: in preserveOrder mode fast-xml-parser groups attributes under ':@'
+// instead of the configured attributesGroupName.
+const orderedParser = new XMLParser({
+  ignoreAttributes: false,
+  attributeNamePrefix: '',
+  attributesGroupName: '@attrs',
+  parseAttributeValue: false,
+  parseTagValue: false,
+  trimValues: false,
+  processEntities: true,
+  preserveOrder: true,
 })
+
+/** Document-order children per node, populated only by parseXmlOrdered. */
+const orderMap = new WeakMap<XmlNode, Array<[string, XmlNode]>>()
+
+function stripPrefix(k: string): string {
+  return k.includes(':') ? k.slice(k.indexOf(':') + 1) : k
+}
+
+function collectOrderedAttrs(out: Record<string, string>, v: unknown): void {
+  if (!v || typeof v !== 'object') return
+  for (const [ak, av] of Object.entries(v as Record<string, unknown>)) {
+    const stripped = stripPrefix(ak)
+    if (stripped === 'xmlns' || ak.startsWith('xmlns')) continue
+    out[stripped] = String(av as XmlValue)
+  }
+}
+
+/**
+ * Normalize one preserveOrder value (always an array of single-key entries
+ * for elements) into the shared XmlNode shape, recording sibling order.
+ */
+function buildOrdered(entries: unknown[]): XmlNode {
+  const node: Record<string, unknown> = {}
+  const attrs: Record<string, string> = {}
+  const ordered: Array<[string, XmlNode]> = []
+  const grouped = new Map<string, XmlNode[]>()
+  const push = (name: string, child: XmlNode): void => {
+    const list = grouped.get(name) ?? []
+    list.push(child)
+    grouped.set(name, list)
+    ordered.push([name, child])
+  }
+  // In preserveOrder mode each tag and its ':@' attributes arrive paired in
+  // one entry ({tag: [...], ':@': {...}}), so ':@' always belongs to the most
+  // recently pushed sibling — never to the accumulating parent.
+  let last: XmlNode | undefined
+  for (const entry of entries) {
+    if (!entry || typeof entry !== 'object' || Array.isArray(entry)) continue
+    for (const [k, v] of Object.entries(entry as Record<string, unknown>)) {
+      if (k === ':@') {
+        collectOrderedAttrs((last?.[ATTRS] as Record<string, string> | undefined) ?? attrs, v)
+        continue
+      }
+      if (k.startsWith('?')) continue // ?xml prolog
+      const nk = stripPrefix(k)
+      if (nk === '#text') {
+        const text = String(v ?? '')
+        node[TEXT] = ((node[TEXT] as string) ?? '') + text
+        // segments stay out of `grouped` so the merged string above survives
+        if (text.length > 0) ordered.push(['#text', { [ATTRS]: {}, [TEXT]: text }])
+        continue
+      }
+      if (!Array.isArray(v)) continue
+      const child = buildOrdered(v as unknown[])
+      push(nk, child)
+      last = child
+    }
+  }
+  for (const [name, list] of grouped) node[name] = list.length === 1 ? list[0] : list
+  node[ATTRS] = attrs
+  const result = node as XmlNode
+  orderMap.set(result, ordered)
+  return result
+}
+
+/** Parse XML keeping document order (see orderedParser). Throws on malformed input. */
+export function parseXmlOrdered(xml: string): XmlNode {
+  if (xml.charCodeAt(0) === 0xfeff) xml = xml.slice(1)
+  const check = XMLValidator.validate(xml)
+  if (check !== true) {
+    throw new Error(`XML validation failed: ${JSON.stringify(check)}`)
+  }
+  const parsed = orderedParser.parse(xml) as Array<Record<string, unknown>>
+  if (!Array.isArray(parsed)) throw new Error('Unexpected XML root shape')
+  for (const entry of parsed) {
+    for (const [k, v] of Object.entries(entry)) {
+      if (k.startsWith('?')) continue
+      if (!Array.isArray(v)) continue
+      return buildOrdered(v as unknown[])
+    }
+  }
+  throw new Error('Unexpected XML root shape')
+}
+
+/**
+ * Document-order [name, child] pairs for a node parsed with parseXmlOrdered
+ * (whitespace-only text segments included — callers filter). Falls back to
+ * elementChildren order for nodes from the default parser.
+ */
+export function orderedChildren(node: XmlNode | undefined): Array<[string, XmlNode]> {
+  if (!node) return []
+  const ordered = orderMap.get(node)
+  if (ordered) return ordered
+  const out: Array<[string, XmlNode]> = []
+  const direct = node[TEXT]
+  if (typeof direct === 'string' && direct.length > 0) out.push(['#text', { [ATTRS]: {}, [TEXT]: direct }])
+  out.push(...elementChildren(node))
+  return out
+}
 
 /**
  * Normalize:

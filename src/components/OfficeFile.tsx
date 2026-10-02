@@ -12,6 +12,8 @@ import type { XlsxDocument } from '../xlsx/types'
 import { parsePptx } from '../pptx/parse'
 import type { PptxDocument } from '../pptx/types'
 import { OfficeDoc, type OfficeDocProps } from './OfficeDoc'
+import { odfKind } from '../odf/container'
+import { parseOdt } from '../odt/parse'
 import { readSource, type ByteSource, type Progress, type ProtectionListener, type ProtectionPolicy } from '../core/stream'
 
 export type AnyDoc = DocxDocument | XlsxDocument | PptxDocument
@@ -36,6 +38,10 @@ async function detectAndParse(pkg: OfficePackage): Promise<AnyDoc> {
   if (pkg.has('word/document.xml')) return parseDocx(pkg)
   if (pkg.has('xl/workbook.xml')) return parseXlsx(pkg)
   if (pkg.has('ppt/presentation.xml')) return parsePptx(pkg)
+  // OpenDocument (Writer first — Calc/Impress route here when they land)
+  const kind = await odfKind(pkg)
+  if (kind === 'text') return parseOdt(pkg)
+  if (kind) throw new Error(`Unsupported OpenDocument type '${kind}' — only word-processing (.odt) documents render for now`)
   throw new Error('Unrecognized office file: no word/xl/ppt content detected')
 }
 
