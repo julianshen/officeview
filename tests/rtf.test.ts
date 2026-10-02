@@ -1035,3 +1035,97 @@ describe('marker text stays out of paragraph content', () => {
     })
   }
 })
+
+/**
+ * Regression tests for the two P2 marker findings in the review of 577dd69:
+ * fallback characters were not consumed from decoded hex, and nested marker
+ * groups leaked their decoding state.
+ */
+describe('marker capture: unicode fallback boundaries', () => {
+  test('the review\'s hex-fallback repro drops the fallback character', () => {
+    const rtf = String.raw`{\rtf1{\listtext\u8226\'3f\tab}\ls1 Item\par}`
+    expect(paragraphs(rtf)[0].listMarker).toBe('\u2022')
+  })
+
+  test('a fallback written as a hex escape in a pntext group is dropped', () => {
+    const rtf = String.raw`{\rtf1{\listtext\u8226\'3f\tab}\ls1 Item\par}`
+    const p = paragraphs(rtf)[0]
+    expect(p.listMarker).toBe('\u2022')
+    expect(textOf(p)).toBe('Item')
+  })
+
+  test('a literal fallback after a unicode escape is dropped', () => {
+    const rtf = String.raw`{\rtf1{\listtext\uc1\u945 ?\tab}\ls1 Item\par}`
+    expect(paragraphs(rtf)[0].listMarker).toBe('\u03b1')
+  })
+
+  test('with zero skip count a hex escape is literal text, not a fallback', () => {
+    const rtf = String.raw`{\rtf1{\listtext\uc0\u945 \'3f\tab}\ls1 Item\par}`
+    expect(paragraphs(rtf)[0].listMarker).toBe('\u03b1?')
+  })
+
+  test('a multibyte fallback is dropped as one character', () => {
+    // \u12354 is U+3042. The \uc1 fallback is the Shift-JIS pair \'82\'a0,
+    // which decodes to a single character and must be dropped whole -- the skip
+    // count is in characters, so dropping happens after decoding.
+    if (!hasEncodingSupport('shift_jis')) return
+    const rtf = String.raw`{\rtf1\ansi\ansicpg932{\listtext\uc1\u12354 \'82\'a0\tab}\ls1 Item\par}`
+    expect(paragraphs(rtf)[0].listMarker).toBe('\u3042')
+  })
+
+  test('several unicode escapes each consume their own fallback', () => {
+    const rtf = String.raw`{\rtf1{\listtext\uc1\u945 ?\u946 ?\tab}\ls1 Item\par}`
+    expect(paragraphs(rtf)[0].listMarker).toBe('\u03b1\u03b2')
+  })
+})
+
+describe('marker capture: nested group scoping', () => {
+  const fonts = String.raw`{\rtf1{\fonttbl{\f0\fcharset0 Arial;}{\f1\fcharset204 Arial Cyr;}}`
+
+  test('the review\'s nested-font repro restores the outer charset', () => {
+    const rtf = fonts + String.raw`{\listtext\f0 {\f1\'c0}\'e9\tab}\ls1 Item\par}`
+    expect(paragraphs(rtf)[0].listMarker).toBe('\u0410\u00e9')
+  })
+
+  test('a nested \fN does not leak to later bytes', () => {
+    const rtf = fonts + String.raw`{\listtext\f0 \'e9{\f1\'c0}\'e9\tab}\ls1 Item\par}`
+    expect(paragraphs(rtf)[0].listMarker).toBe('\u00e9\u0410\u00e9')
+  })
+
+  test('a nested \ansicpg does not leak', () => {
+    const rtf = String.raw`{\rtf1\ansi\ansicpg1252{\listtext\'e9{\ansicpg1251\'c4}\'e9\tab}\ls1 Item\par}`
+    expect(paragraphs(rtf)[0].listMarker).toBe('\u00e9\u0414\u00e9')
+  })
+
+  test('an inner skip count applies inside the group only', () => {
+    // Outer \uc1: the '?' after the first escape is the fallback and is dropped.
+    // Inner \uc0: no fallback there, so the second escape survives intact.
+    const rtf = String.raw`{\rtf1{\listtext\uc1\u945 ?{\uc0\u946}\tab}\ls1 Item\par}`
+    expect(paragraphs(rtf)[0].listMarker).toBe('\u03b1\u03b2')
+  })
+
+  test('a pending fallback survives a nested group and is consumed after it', () => {
+    // The inner group contributes its literal '?' (\uc0), and the outer pending
+    // fallback is still pending once the group closes, so the trailing '?' goes.
+    const rtf = String.raw`{\rtf1{\listtext\uc1\u945 {\uc0\u946 ?}?\tab}\ls1 Item\par}`
+    expect(paragraphs(rtf)[0].listMarker).toBe('\u03b1?')
+  })
+
+  test('two levels of nesting restore in order', () => {
+    // The final byte returns to the OUTER \f0 (charset 0), so \'c4 is cp1252 'Ä'.
+    const rtf =
+      fonts + String.raw`{\listtext\f0 {\f1\'c0{\f0\'e9}}\'c4\tab}\ls1 Item\par}`
+    expect(paragraphs(rtf)[0].listMarker).toBe('\u0410\u00e9\u00c4')
+  })
+
+  test('a nested group ending in hex decodes under the inner font', () => {
+    const rtf = fonts + String.raw`{\listtext\f0{\f1\'c4\'e9}\tab}\ls1 Item\par}`
+    expect(paragraphs(rtf)[0].listMarker).toBe('\u0414\u0439')
+  })
+
+  test('nested scope does not swallow the following paragraph text', () => {
+    const rtf = fonts + String.raw`{\listtext\f0 {\f1\'c0}\'e9\tab}\ls1 Item\par second\par}`
+    const paras = paragraphs(rtf)
+    expect(paras.map(textOf)).toEqual(['Item', 'second'])
+  })
+})

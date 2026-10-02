@@ -959,22 +959,47 @@ private emitLiteral(text: string): void {
     let depth = 1
     let skipChars = 0
     let done = false
-    // Marker groups carry their own \fN and \uc, and \'hh escapes must decode
-    // through the same code-page logic as body text -- a Symbol bullet written
-    // as \'b7 previously fell through as the literal text "b7".
+    // Marker groups carry their own \fN, \ansicpg and \uc, and \'hh escapes must
+    // decode through the same code-page logic as body text -- a Symbol bullet
+    // written as \'b7 previously fell through as the literal text "b7".
     let fontIndex: number | undefined
     let uc = this.unicodeSkipCount
-    // A marker group may switch code page; keep it local so bytes decode the
-    // same way they would in body text, without leaking back out.
+    // A marker group may switch code page; keep it scoped to this group so it
+    // neither leaks out nor persists past a nested group.
     let codePage = this.codePage
     let hex: number[] = []
     let hexLabel = this.encodingLabelFor(this.char.fontIndex, codePage)
+    const scopes: { fontIndex: number | undefined; codePage: number; uc: number; skipChars: number }[] = []
 
+    /**
+     * Append marker text, consuming the \ucN fallback characters that follow a
+     * \uN. Every path funnels through here -- plain text, control-symbol
+     * literals and decoded \'hh alike -- because a fallback written as a hex
+     * escape (e.g. \u8226 \'3f) is otherwise appended as a stray "?".
+     */
+    const push = (text: string): void => {
+      if (text.length === 0 || done) return
+      if (skipChars > 0) {
+        let drop = skipChars
+        let kept = ''
+        for (const ch of text) {
+          if (drop > 0) {
+            drop--
+            continue
+          }
+          kept += ch
+        }
+        skipChars = drop
+        if (kept.length === 0) return
+        text = kept
+      }
+      out += text
+    }
     const flushHex = (): void => {
       if (hex.length === 0) return
       const bytes = hex
       hex = []
-      if (!done) out += RtfParser.decodeHexBytes(bytes, hexLabel)
+      push(RtfParser.decodeHexBytes(bytes, hexLabel))
     }
     const pushByte = (byte: number): void => {
       const label = this.encodingLabelFor(fontIndex ?? this.char.fontIndex, codePage)
@@ -986,17 +1011,31 @@ private emitLiteral(text: string): void {
     while (this.i < this.s.length && depth > 0) {
       const c = this.s[this.i]
       if (c === '{') {
+        // Decode what belongs to the outer state before entering the nested one,
+        // and remember the decoding state so group exit can restore it.
+        flushHex()
+        scopes.push({ fontIndex, codePage, uc, skipChars })
         depth++
         this.i++
         continue
       }
       if (c === '}') {
+        // Same in reverse: inner bytes decode under the inner state, then the
+        // enclosing \fN / \ansicpg / \uc take effect again.
+        flushHex()
         depth--
         this.i++
+        const saved = scopes.pop()
+        if (saved) {
+          fontIndex = saved.fontIndex
+          codePage = saved.codePage
+          uc = saved.uc
+          skipChars = saved.skipChars
+        }
         continue
       }
       if (c === '\\') {
-        // 'hh must be recognised before readControlWord, which would otherwise
+        // \'hh must be recognised before readControlWord, which would otherwise
         // decline it and leave the two hex digits as literal marker text.
         if (this.s[this.i + 1] === "'") {
           const byte = parseInt(this.s.substr(this.i + 2, 2), 16)
@@ -1009,14 +1048,13 @@ private emitLiteral(text: string): void {
           if (w.name === 'u' && w.param !== undefined) {
             flushHex()
             const code = w.param < 0 ? w.param + 65536 : w.param
-            if (code >= 0 && code <= 0x10ffff && !done) {
-              out += mapSymbolText(String.fromCodePoint(code))
-            }
+            if (code >= 0 && code <= 0x10ffff) push(mapSymbolText(String.fromCodePoint(code)))
             skipChars = uc
           } else if (w.name === 'uc') {
             // \uc is group scoped: honour it here without leaking it back out.
             uc = w.param ?? 1
           } else if (w.name === 'f') {
+            flushHex()
             fontIndex = w.param
           } else if (w.name === 'ansicpg' && w.param !== undefined) {
             flushHex()
@@ -1034,7 +1072,7 @@ private emitLiteral(text: string): void {
         const sym = this.s[this.i]
         this.i++
         flushHex()
-        if (sym === '\\' || sym === '{' || sym === '}') out += sym
+        if (sym === '\\' || sym === '{' || sym === '}') push(sym)
         continue
       }
       if (c === '\r' || c === '\n') {
@@ -1045,16 +1083,12 @@ private emitLiteral(text: string): void {
         this.i++
         continue
       }
-      if (skipChars > 0) {
-        skipChars--
-        this.i++
-        continue
-      }
       // Plain text must not jump ahead of buffered hex bytes.
       flushHex()
-      out += mapSymbolText(c)
+      push(mapSymbolText(c))
       this.i++
     }
+    flushHex()
     flushHex()
     return out.replace(/\s+$/, '').replace(/^[ \t]+/, '')
   }
