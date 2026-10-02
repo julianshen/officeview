@@ -56,13 +56,29 @@ describe('readByteStream', () => {
 
 describe('readSource', () => {
   test('accepts a Node Buffer cross-realm (jsdom makes instanceof lie)', async () => {
-    // readFileSync returns a Buffer; under vitest's jsdom environment
-    // `Buffer instanceof Uint8Array` is false, which is why readSource must
-    // use ArrayBuffer.isView instead of instanceof chains
-    const { readFileSync } = await import('fs')
-    const buf = readFileSync('corpus/poi-47889.xlsx')
+    // A Buffer produced by Node's fs is created in Node's realm, so under
+    // vitest's jsdom environment `buf instanceof Uint8Array` is false — which
+    // is why readSource must use ArrayBuffer.isView instead of instanceof
+    // chains. The bytes are written to a temp file rather than read from
+    // corpus/, so this suite needs no fetched fixture.
+    const { writeFileSync, readFileSync, unlinkSync } = await import('fs')
+    const { tmpdir } = await import('os')
+    const { join } = await import('path')
+    const path = join(tmpdir(), `officeview-bytes-${process.pid}.bin`)
+    const payload = [0x50, 0x4b, 0x03, 0x04, 1, 2, 3, 250, 251, 252]
+    writeFileSync(path, Buffer.from(payload))
+    let buf: Buffer
+    try {
+      buf = readFileSync(path)
+    } finally {
+      unlinkSync(path)
+    }
+    // guard the premise: if this environment ever made fs Buffers plain
+    // Uint8Arrays, the test would pass trivially and prove nothing
+    expect(buf instanceof Uint8Array).toBe(false)
     const out = await readSource(buf as never)
-    expect(Array.from(out.subarray(0, 2))).toEqual(Array.from(buf.subarray(0, 2)))
+    expect(Array.from(out)).toEqual(payload)
+    expect(out.length).toBe(payload.length)
   })
 
   test('accepts a Response with content-length progress', async () => {
