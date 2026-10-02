@@ -57,6 +57,114 @@ const CP1252_HIGH = [
   '˜', '™', 'š', '›', 'œ', '', 'ž', 'Ÿ',
 ]
 
+/**
+ * Charset (`\fcharsetN`) to encoding label. RTF declares the document code page
+ * with `\ansicpgN` and each font may override it with `\fcharsetN`; `\'hh`
+ * escapes are bytes in *that* encoding, not always windows-1252.
+ */
+const CHARSET_LABELS: Record<number, string> = {
+  77: 'macintosh', 128: 'shift_jis', 129: 'euc-kr', 130: 'euc-kr',
+  134: 'gbk', 136: 'big5', 161: 'iso-8859-7', 162: 'iso-8859-9',
+  163: 'windows-1255', 177: 'windows-1255', 178: 'windows-1256',
+  186: 'iso-8859-4', 204: 'windows-1251', 222: 'windows-874',
+  238: 'windows-1250', 254: 'ibm866',
+}
+
+/** Code page number (`\ansicpgN`) to encoding label. */
+function codePageLabel(cp: number): string {
+  if (cp >= 1250 && cp <= 1258) return `windows-${cp}`
+  switch (cp) {
+    case 874: return 'windows-874'
+    case 932: return 'shift_jis'
+    case 936: return 'gbk'
+    case 949: return 'euc-kr'
+    case 950: return 'big5'
+    case 10000: return 'macintosh'
+    case 65000: return 'utf-7'
+    case 65001: return 'utf-8'
+    default: return 'windows-1252'
+  }
+}
+
+const decoderCache = new Map<string, TextDecoder | null>()
+
+/**
+ * Built-in single-byte fallback for windows-1251.
+ *
+ * The TextDecoder path is the real one — every browser supports windows-1251.
+ * But lean server runtimes (bun, or a small-ICU node build) reject the label,
+ * and silently falling back to cp1252 would turn Russian into mojibake instead
+ * of surfacing the gap. So the Cyrillic block is encoded directly here.
+ */
+function buildCp1251(): string[] {
+  const table: string[] = new Array(256)
+  for (let b = 0; b < 0x80; b++) table[b] = String.fromCharCode(b)
+  // 0x80-0xBF matches the cp1252 high block.
+  for (let b = 0x80; b < 0xc0; b++) table[b] = CP1252_HIGH[b - 0x80]
+  // The main Cyrillic run is contiguous.
+  for (let b = 0xc0; b <= 0xff; b++) table[b] = String.fromCharCode(0x0410 + (b - 0xc0))
+  const special: Record<number, number> = {
+    0x80: 0x0402, 0x81: 0x0403, 0x82: 0x201a, 0x83: 0x0453, 0x84: 0x201e,
+    0x85: 0x2026, 0x86: 0x2020, 0x87: 0x2021, 0x88: 0x20ac, 0x89: 0x2030,
+    0x8a: 0x0409, 0x8b: 0x040a, 0x8c: 0x040d, 0x8e: 0x040e, 0x91: 0x2018,
+    0x92: 0x2019, 0x93: 0x201c, 0x94: 0x201d, 0x95: 0x2022, 0x96: 0x2013,
+    0x97: 0x2014, 0x98: 0x98, 0x99: 0x2122, 0x9a: 0x0161, 0x9b: 0x203a,
+    0x9c: 0x0153, 0x9d: 0x017e, 0x9e: 0x0178, 0x9f: 0x017d,
+    0xa8: 0x0401, 0xaa: 0x0402, 0xaf: 0x0403, 0xb2: 0x040b, 0xb3: 0x040c,
+    0xb8: 0x0451, 0xb9: 0x2116,
+  }
+  for (const [b, cp] of Object.entries(special)) table[Number(b)] = String.fromCharCode(cp)
+  return table
+}
+
+let cp1251Table: string[] | null = null
+
+function decodeWithCp1251(bytes: number[]): string {
+  if (!cp1251Table) cp1251Table = buildCp1251()
+  let out = ''
+  for (const b of bytes) out += cp1251Table[b]
+  return out
+}
+
+/** A cached TextDecoder, or null when the runtime lacks that encoding. */
+function decoderFor(label: string): TextDecoder | null {
+  const hit = decoderCache.get(label)
+  if (hit !== undefined) return hit
+  let made: TextDecoder | null = null
+  try {
+    made = new TextDecoder(label)
+  } catch {
+    made = null
+  }
+  decoderCache.set(label, made)
+  return made
+}
+
+/**
+ * Decode a run of `\'hh` bytes in the given encoding. The whole run is decoded
+ * at once so multibyte encodings (Shift-JIS, GBK, Big5, EUC-KR) see a complete
+ * lead byte + trail byte pair rather than two independent single-byte decodes.
+ */
+function decodeBytesIn(bytes: number[], label: string): string {
+  const dec = decoderFor(label)
+  if (!dec) {
+    // Runtime lacks this encoding. Fall back to a built-in table where we have
+    // one, otherwise to cp1252 rather than dropping the characters.
+    if (label === 'windows-1251') return decodeWithCp1251(bytes)
+    let out = ''
+    for (const b of bytes) out += decodeCp1252(b)
+    return out
+  }
+  try {
+    return dec.decode(new Uint8Array(bytes))
+  } catch {
+    if (label === 'windows-1251') return decodeWithCp1251(bytes)
+    let out = ''
+    for (const b of bytes) out += decodeCp1252(b)
+    return out
+  }
+}
+
 let cpDecoder: TextDecoder | null | undefined
 
 function decodeCp1252(byte: number): string {
@@ -90,6 +198,8 @@ interface CharProps {
   underline: boolean
   strike: boolean
   fontFamily?: string
+  /** Font table index from \fN, used to pick the encoding for \'hh escapes. */
+  fontIndex?: number
   fontSizePt: number
   color?: string
   highlight?: string
@@ -120,6 +230,8 @@ interface SectionProps {
   footerTwips: number
   gutterTwips: number
   landscape: boolean
+  /** True once \paperw/\paperh were supplied for this section. */
+  explicitPageSize: boolean
 }
 
 interface CellDef {
@@ -166,6 +278,7 @@ function defaultSection(): SectionProps {
     footerTwips: 720,
     gutterTwips: 0,
     landscape: false,
+    explicitPageSize: false,
   }
 }
 
@@ -183,7 +296,7 @@ const IGNORABLE = new Set([
   'do', 'shp', 'shpinst', 'shptxt', 'nonshppict', 'shppict', 'field',
   'header', 'footer', 'headerl', 'headerr', 'headerf', 'footerl', 'footerr',
   'footerf', 'ftnsep', 'ftnsepc', 'ftncn', 'aftnsep', 'aftnsepc', 'aftncn',
-  'listpicture', 'pntext', 'xmlopen', 'datafield', 'private', 'themedata',
+  'listpicture', 'xmlopen', 'datafield', 'private',
 ])
 
 /**
@@ -236,6 +349,23 @@ class RtfParser {
 
   private fonts: (string | undefined)[] = []
   private colors: (string | undefined)[] = []
+  /** Per-font `\fcharsetN`, used to pick the encoding for `\'hh` escapes. */
+  private fontCharsets: (number | undefined)[] = []
+  /** `\ansicpgN`, the document code page (default windows-1252). */
+  private codePage = 1252
+  /** `\deffN`, the default font index applied by `\plain`. */
+  private defaultFontIndex = 0
+  /**
+   * Pending `\'hh` bytes. Buffered rather than decoded one at a time so
+   * multibyte encodings receive a complete character.
+   */
+  private hexBuf: number[] = []
+  /**
+   * Encoding in force when the buffered bytes were read. Captured eagerly:
+   * bytes are decoded at flush time, by which point a later `\fN` may have
+   * changed the font, which would decode them with the wrong code page.
+   */
+  private hexLabel = 'windows-1252'
   /** Fallback characters to drop after \uN -- the \ucN count. */
   private skipChars = 0
   private unicodeSkipCount = 1
@@ -319,8 +449,12 @@ class RtfParser {
     return {
       margins,
       pageSize: {
-        widthTwips: s.landscape ? s.paperHeightTwips : s.paperWidthTwips,
-        heightTwips: s.landscape ? s.paperWidthTwips : s.paperHeightTwips,
+        // Writers that set \landscape already store the page in its FINAL
+        // orientation (\paperw15840 \paperh12240), so swapping again would
+        // render portrait. Honour explicit dimensions as given; only rotate the
+        // built-in portrait default when the section never declared a size.
+        widthTwips: s.landscape && !s.explicitPageSize ? s.paperHeightTwips : s.paperWidthTwips,
+        heightTwips: s.landscape && !s.explicitPageSize ? s.paperWidthTwips : s.paperHeightTwips,
         orientation: s.landscape ? 'landscape' : 'portrait',
       },
       paragraphs,
@@ -367,6 +501,47 @@ class RtfParser {
     this.bufferStyleKey = ''
   }
 
+  /**
+   * The encoding label for the bytes currently being read: the active font's
+   * charset when it declares one, otherwise the document code page.
+ */
+  private activeEncodingLabel(): string {
+    const fontIndex = this.char.fontIndex
+    if (fontIndex !== undefined) {
+      const charset = this.fontCharsets[fontIndex]
+      // charset 0 (ANSI) and 1 (Default) defer to \ansicpg; 2 is Symbol, whose
+      // private-use glyphs must not be run through a text decoder at all.
+      if (charset === 2) return 'symbol'
+      if (charset !== undefined && charset !== 0 && charset !== 1) {
+        const label = CHARSET_LABELS[charset]
+        if (label) return label
+      }
+    }
+    return codePageLabel(this.codePage)
+  }
+
+  /** Decode and emit any buffered `\'hh` bytes. */
+  private flushHex(): void {
+    if (this.hexBuf.length === 0) return
+    const bytes = this.hexBuf
+    this.hexBuf = []
+    const label = this.hexLabel
+    if (label === 'symbol') {
+      // Symbol glyphs are codepage-relative, not text: keep the raw bytes.
+      let out = ''
+      for (const b of bytes) out += String.fromCharCode(b)
+      this.emit(out)
+      return
+    }
+    this.emit(decodeBytesIn(bytes, label))
+  }
+
+  /** Emit a literal, flushing any buffered hex bytes first so order is kept. */
+private emitLiteral(text: string): void {
+    this.flushHex()
+    this.emit(text)
+  }
+
   private emit(text: string): void {
     if (text.length === 0) return
     if (this.skipChars > 0) {
@@ -401,6 +576,7 @@ class RtfParser {
 
   /** End the current paragraph, routing it into a table cell or the body. */
   private flushParagraph(): void {
+    this.flushHex()
     this.flushRun()
     const hadContent = this.runs.length > 0 || this.images.length > 0
     const p: DocxParagraph = hadContent ? this.currentParagraph() : {
@@ -420,9 +596,15 @@ class RtfParser {
     this.images = []
     this.textBuffer = ''
     this.pendingBreak = false
-    // \pard resets paragraph properties; table membership and list flags are
-    // re-established by the control words that follow it.
-    this.para = defaultPara()
+    // Per the RTF spec paragraph properties (alignment, indents, spacing) PERSIST
+    // until \pard or an explicit override -- resetting them here made
+    // \qc A\par B\par centre only the first paragraph. Keep the visual
+    // properties; only per-paragraph list membership is cleared, since that is
+    // re-declared on every list paragraph. \intbl is kept so a multi-paragraph
+    // cell stays in the cell (it is cleared at \row).
+    this.para.isListPara = false
+    this.para.listMarker = undefined
+    this.para.listLevel = 0
     void isListPara
   }
 
@@ -504,6 +686,9 @@ class RtfParser {
     table.rows.push({ cells: this.rowCells } as DocxTableRow)
     this.rowCells = []
     this.cellParas = []
+    // Leaving table context: paragraph properties now persist across \par, so
+    // without this the next body paragraph would still be treated as in-cell.
+    this.para.inTable = false
     // Row definitions persist: a following row may omit \trowd and \cellx.
   }
 
@@ -642,6 +827,14 @@ class RtfParser {
             if (img) this.images.push(img)
             continue
           }
+          if (w.name === 'pntext') {
+            // Grouped {\pntext\f2\pnindent0{\pntxtb\'B7}} is the form Word
+            // actually writes. It marks the paragraph as a list item; the
+            // nested marker definition is not drawn, so skip the rest.
+            this.para.isListPara = true
+            this.skipRestOfGroup()
+            continue
+          }
           if (w.name === 'listtext') {
             const marker = this.captureGroupText()
             if (marker) this.para.listMarker = marker
@@ -659,9 +852,14 @@ class RtfParser {
         // text, runs and blocks deliberately do not.
         const savedChar = { ...this.char }
         const savedPara = { ...this.para }
+        const savedSkipCount = this.unicodeSkipCount
         this.parseGroup()
         this.char = savedChar
         this.para = savedPara
+        // \uc is document-scoped but overridden within a group, so it must be
+        // restored too or an inner \uc0 leaks out and desynchronises the
+        // fallback skipping for every later \uN.
+        this.unicodeSkipCount = savedSkipCount
         continue
       }
 
@@ -675,7 +873,7 @@ class RtfParser {
         this.i++
         continue
       }
-      this.emit(c)
+      this.emitLiteral(c)
       this.i++
     }
     this.depth--
@@ -776,11 +974,19 @@ class RtfParser {
     if (c === "'") {
       const byte = parseInt(this.s.substr(this.i + 2, 2), 16)
       this.i += 4
-      if (!Number.isNaN(byte)) this.emit(decodeCp1252(byte))
+      if (!Number.isNaN(byte)) {
+        const label = this.activeEncodingLabel()
+        // If the code page changed since the previous byte, decode what we have
+        // rather than mixing encodings inside one character.
+        if (this.hexBuf.length > 0 && this.hexLabel !== label) this.flushHex()
+        if (this.hexBuf.length === 0) this.hexLabel = label
+        this.hexBuf.push(byte)
+      }
       return
     }
     if (!/[A-Za-z]/.test(c)) {
       this.i += 2
+      this.flushHex()
       switch (c) {
         case '\\':
           this.emit('\\')
@@ -815,14 +1021,37 @@ class RtfParser {
       case 'ulnone': char.underline = false; return
       case 'uldb': char.underline = true; return
       case 'strike': char.strike = param !== 0; return
-      case 'plain':
-        Object.assign(char, defaultChar())
+      case 'plain': {
+        // Object.assign against defaultChar() would NOT clear these: the default
+        // object simply has no such keys, so the old values survive. Reset them
+        // explicitly and fall back to the document's default font (\deff).
+        const defaults = defaultChar()
+        char.bold = defaults.bold
+        char.italic = defaults.italic
+        char.underline = defaults.underline
+        char.strike = defaults.strike
+        char.fontSizePt = defaults.fontSizePt
+        char.color = undefined
+        char.highlight = undefined
+        const defFont = this.fonts[this.defaultFontIndex]
+        char.fontFamily = defFont
+        char.fontIndex = defFont ? this.defaultFontIndex : undefined
         return
+      }
       case 'fs':
         if (param !== undefined) char.fontSizePt = param / 2
         return
       case 'f':
+        this.flushHex()
+        char.fontIndex = param
         char.fontFamily = param !== undefined ? this.fonts[param] : undefined
+        return
+      case 'ansicpg':
+        this.flushHex()
+        this.codePage = param ?? this.codePage
+        return
+      case 'deff':
+        this.defaultFontIndex = param ?? 0
         return
       case 'cf':
         char.color = param !== undefined ? this.colors[param] : undefined
@@ -838,14 +1067,15 @@ class RtfParser {
         if (param === undefined) return
         // Negative parameters are 16-bit signed; recover the BMP code point.
         const code = param < 0 ? param + 65536 : param
-        if (code >= 0 && code <= 0x10ffff) this.emit(String.fromCodePoint(code))
+        if (code >= 0 && code <= 0x10ffff) this.emitLiteral(String.fromCodePoint(code))
         this.skipChars = this.unicodeSkipCount
         return
       }
 
       // ---- paragraph structure ----
-      case 'par': this.flushParagraph(); return
+      case 'par': this.flushHex(); this.flushParagraph(); return
       case 'line':
+        this.flushHex()
         this.flushRun()
         this.pendingBreak = true
         return
@@ -878,7 +1108,7 @@ class RtfParser {
         return
       }
       case 'intbl': para.inTable = true; return
-      case 'cell': this.endCell(); return
+      case 'cell': this.flushHex(); this.endCell(); return
       case 'row': this.endRow(); return
       case 'clvertalc': this.cellDef().vAlign = 'center'; return
       case 'clvertalb': this.cellDef().vAlign = 'bottom'; return
@@ -894,7 +1124,11 @@ class RtfParser {
       // ---- lists ----
       case 'pntext': para.isListPara = true; return
       case 'ilvl': para.listLevel = param ?? 0; return
-      case 'ls': return
+      case 'ls':
+        // \lsN is the list identifier. Word usually repeats it on every list
+        // paragraph, so treat a non-zero id as list membership on its own.
+        if (param !== undefined && param !== 0) this.para.isListPara = true
+        return
 
       // ---- section / page setup ----
       case 'sectd': this.section = defaultSection(); return
@@ -906,8 +1140,14 @@ class RtfParser {
           this.blocks = []
         }
         return
-      case 'paperw': this.section.paperWidthTwips = param ?? this.section.paperWidthTwips; return
-      case 'paperh': this.section.paperHeightTwips = param ?? this.section.paperHeightTwips; return
+      case 'paperw':
+        this.section.paperWidthTwips = param ?? this.section.paperWidthTwips
+        this.section.explicitPageSize = true
+        return
+      case 'paperh':
+        this.section.paperHeightTwips = param ?? this.section.paperHeightTwips
+        this.section.explicitPageSize = true
+        return
       case 'margl': this.section.leftTwips = param ?? this.section.leftTwips; return
       case 'margr': this.section.rightTwips = param ?? this.section.rightTwips; return
       case 'margt': this.section.topTwips = param ?? this.section.topTwips; return
@@ -919,17 +1159,17 @@ class RtfParser {
       case 'lndscpsxn': this.section.landscape = true; return
 
       // ---- literal characters ----
-      case 'tab': this.emit('\t'); return
-      case 'emdash': this.emit('\u2014'); return
-      case 'endash': this.emit('\u2013'); return
-      case 'lquote': this.emit('\u2018'); return
-      case 'rquote': this.emit('\u2019'); return
-      case 'ldblquote': this.emit('\u201c'); return
-      case 'rdblquote': this.emit('\u201d'); return
-      case 'bullet': this.emit('\u2022'); return
+      case 'tab': this.emitLiteral('\t'); return
+      case 'emdash': this.emitLiteral('\u2014'); return
+      case 'endash': this.emitLiteral('\u2013'); return
+      case 'lquote': this.emitLiteral('\u2018'); return
+      case 'rquote': this.emitLiteral('\u2019'); return
+      case 'ldblquote': this.emitLiteral('\u201c'); return
+      case 'rdblquote': this.emitLiteral('\u201d'); return
+      case 'bullet': this.emitLiteral('\u2022'); return
       case 'enspace':
       case 'emspace':
-      case 'qmspace': this.emit(' '); return
+      case 'qmspace': this.emitLiteral(' '); return
       default:
         return
     }
@@ -939,12 +1179,18 @@ class RtfParser {
 
   private parseFontTable(): void {
     let index = 0
+    let charset: number | undefined
     let name = ''
     let depth = 1
     const commit = (): void => {
       const trimmed = name.trim()
       if (trimmed.length > 0 || this.fonts[index] === undefined) this.fonts[index] = trimmed
+      // Only write when a charset was actually seen. The unconditional write
+      // clobbered a charset recorded by the preceding entry, because the final
+      // commit() below runs with charset already reset to undefined.
+      if (charset !== undefined) this.fontCharsets[index] = charset
       name = ''
+      charset = undefined
     }
     while (this.i < this.s.length && depth > 0) {
       const c = this.s[this.i]
@@ -965,6 +1211,8 @@ class RtfParser {
           if (w.name === 'f' && w.param !== undefined) {
             commit()
             index = w.param
+          } else if (w.name === 'fcharset' && w.param !== undefined) {
+            charset = w.param
           }
           continue
         }

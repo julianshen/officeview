@@ -143,10 +143,27 @@ describe('RTF paragraphs and page setup', () => {
     expect(section.margins.bottomTwips).toBe(1134)
   })
 
-  test('\\landscape swaps the page dimensions', () => {
-    const section = parseRtf('{\\rtf1\\ansi\\paperw12240\\paperh15840\\lndscpsxn\\sectdscpsxn x\\par}').sections[0]
+  test('\\landscape does not re-swap explicitly declared dimensions', () => {
+    // Writers store the page in its final orientation, so \paperw/\paperh are
+    // already the landscape dimensions and must be used as given.
+    const section = parseRtf('{\\rtf1\\ansi\\paperw15840\\paperh12240\\lndscpsxn x\\par}').sections[0]
     expect(section.pageSize.orientation).toBe('landscape')
     expect(section.pageSize.widthTwips).toBe(15840)
+    expect(section.pageSize.heightTwips).toBe(12240)
+  })
+
+  test('\\landscape rotates the built-in default when no size was declared', () => {
+    // With no \paperw/\paperh the default is portrait Letter, so landscape
+    // should present the wider page.
+    const section = parseRtf('{\\rtf1\\ansi\\lndscpsxn x\\par}').sections[0]
+    expect(section.pageSize.orientation).toBe('landscape')
+    expect(section.pageSize.widthTwips).toBeGreaterThan(section.pageSize.heightTwips)
+  })
+
+  test('portrait is unaffected', () => {
+    const section = parseRtf('{\\rtf1\\ansi\\paperw12240\\paperh15840 x\\par}').sections[0]
+    expect(section.pageSize.orientation).toBe('portrait')
+    expect(section.pageSize.widthTwips).toBe(12240)
   })
 
   test('\\sect starts a new section', () => {
@@ -383,5 +400,259 @@ describe('RTF through loadOfficeFile', () => {
     const doc = await loadOfficeFile(stream)
     const paras = (doc as { sections: Array<{ paragraphs: DocxParagraph[] }> }).sections[0].paragraphs
     expect(textOf(paras[0])).toBe('streamed')
+  })
+})
+/**
+ * Regression tests for the six review findings against commit 72bb78a.
+ * Each uses the exact input from the finding so the fix is pinned.
+ */
+describe('review finding 1: declared code pages', () => {
+  test('ansicpg1251 decodes Cyrillic hex escapes', () => {
+    const [p] = paragraphs("{\\rtf1\\ansi\\ansicpg1251 \\'cf\\'f0\\'e8\\'e2\\'e5\\'f2\\par}")
+    expect(textOf(p)).toBe('\u041f\u0440\u0438\u0432\u0435\u0442')
+  })
+
+  test('the default is still windows-1252', () => {
+    const [p] = paragraphs("{\\rtf1\\ansi it\\'92s\\par}")
+    expect(textOf(p)).toBe('it\u2019s')
+  })
+
+  test('a font charset overrides the document code page', () => {
+    const [p] = paragraphs(
+      '{\\rtf1\\ansi\\ansicpg1252' +
+        '{\\fonttbl{\\f0\\froman\\fcharset204 Arial Cyr;}}' +
+        "\\f0 \\'c0\\'e1\\'e2\\par}",
+    )
+    expect(textOf(p)).toBe('\u0410\u0431\u0432')
+  })
+
+  test('hex escapes and \\uN coexist without losing bytes', () => {
+    // the space between the hex run and \uN is literal document text
+    const [p] = paragraphs("{\\rtf1\\ansi\\ansicpg1251 \\'cf\\'f0 \\u945 ?\\par}")
+    expect(textOf(p)).toBe('\u041f\u0440 \u03b1')
+  })
+
+  test('a Symbol font keeps its codepage-relative bytes unmangled', () => {
+    // charset 2 is Symbol: the byte is a glyph index, not text. \'92 must NOT
+    // become the cp1252 right-quote that a text decoder would produce.
+    const rtf = String.raw`{\rtf1\ansi{\fonttbl{\f0\froman\fcharset0 Arial;}{\f2\fnil\fcharset2 Symbol;}}\f2 \'92\f0 \par}`
+    const [p] = paragraphs(rtf)
+    expect(textOf(p)).not.toContain('\u2019')
+    expect(textOf(p)).toContain('\u0092')
+  })
+})
+
+describe('review finding 2: list paragraphs', () => {
+  test('grouped {\\pntext} (the form Word writes) marks a list item', () => {
+    const [p] = paragraphs(
+      '{\\rtf1\\ansi\\li720\\fi-360{\\pntext\\f2\\pnindent0{\\pntxtb\\u-3913 ?}}\\ls1\\ilvl0 Item\\par}',
+    )
+    expect(p.listMarker).toBe('\u2022')
+    expect(p.listLevel).toBe(0)
+  })
+
+  test('\\lsN alone marks list membership, without any \\pntext', () => {
+    const [p] = paragraphs('{\\rtf1\\ansi{\\listtext\\f2 1.\\tab}\\ls1\\ilvl0 Item\\par}')
+    expect(p.listMarker).toBe('1.')
+  })
+
+  test('\\ls0 is not a list', () => {
+    const [p] = paragraphs('{\\rtf1\\ansi\\ls0 plain\\par}')
+    expect(p.listMarker).toBeUndefined()
+  })
+
+  test('nested list levels are preserved', () => {
+    const [p] = paragraphs('{\\rtf1\\ansi{\\listtext\\f2 a.\\tab}\\ls1\\ilvl2 Item\\par}')
+    expect(p.listMarker).toBe('a.')
+    expect(p.listLevel).toBe(2)
+  })
+
+  test('the grouped pntext marker definition never leaks as text', () => {
+    const [p] = paragraphs(
+      '{\\rtf1\\ansi{\\pntext\\f2\\pnindent0{\\pntxtb\\u-3913 ?}}\\ls1 Item\\par}',
+    )
+    expect(textOf(p)).toBe('Item')
+  })
+})
+
+describe('review finding 3: \\plain', () => {
+  test('\\plain clears colour, highlight and font', () => {
+    const p = paragraphs(
+      '{\\rtf1\\ansi{\\colortbl ;\\red255\\green0\\blue0;\\red0\\green255\\blue0;}' +
+        "{\\fonttbl{\\f0\\froman Calibri;}{\\f1\\fswiss Arial;}}\\cf1 \\cb2 \\f1 red\\plain normal\\par}",
+    )[0]
+    const red = p.runs.find((r) => r.text.includes('red'))
+    const normal = p.runs.find((r) => r.text.includes('normal'))
+    expect(red?.color).toBe('#ff0000')
+    expect(red?.highlight).toBe('#00ff00')
+    expect(normal?.color).toBeUndefined()
+    expect(normal?.highlight).toBeUndefined()
+    // \plain restores the document default font rather than leaving none.
+    expect(normal?.fontFamily).toBe('Calibri')
+  })
+
+  test('\\plain restores the document default font from \\deff', () => {
+    const [p] = paragraphs(
+      '{\\rtf1\\ansi\\deff1{\\fonttbl{\\f0\\froman Calibri;}{\\f1\\fswiss Arial;}}\\f0 body\\f1 \\plain after\\par}',
+    )
+    expect(p.runs.find((r) => r.text === 'after')?.fontFamily).toBe('Arial')
+  })
+
+  test('\\plain resets bold, italic and size too', () => {
+    const [p] = paragraphs('{\\rtf1\\ansi\\b\\i\\fs40 loud\\plain quiet\\par}')
+    expect(p.runs.find((r) => r.text === 'loud')?.bold).toBe(true)
+    const quiet = p.runs.find((r) => r.text === 'quiet')
+    expect(quiet?.bold).toBeUndefined()
+    expect(quiet?.italic).toBeUndefined()
+    expect(quiet?.fontSizePt).toBeUndefined()
+  })
+})
+
+describe('review finding 4: paragraph properties persist across \\par', () => {
+  test('alignment persists until \\pard', () => {
+    const paras = paragraphs('{\\rtf1\\ansi\\qc A\\par B\\par\\pard C\\par}')
+    expect(paras.map((p) => p.align)).toEqual(['center', 'center', 'left'])
+  })
+
+  test('an explicit override still wins', () => {
+    const paras = paragraphs('{\\rtf1\\ansi\\qc A\\par\\qr B\\par}')
+    expect(paras.map((p) => p.align)).toEqual(['center', 'right'])
+  })
+
+  test('indents and spacing persist across \\par', () => {
+    const paras = paragraphs('{\\rtf1\\ansi\\li720\\sb200 A\\par B\\par\\pard C\\par}')
+    expect(paras[0].indentLeftTwips).toBe(720)
+    expect(paras[1].indentLeftTwips).toBe(720)
+    expect(paras[1].spacingBeforeTwips).toBe(200)
+    expect(paras[2].indentLeftTwips).toBe(0)
+  })
+
+  test('table routing survives the persistence change', () => {
+    const table = firstTable(
+      '{\\rtf1\\ansi\\qc\\trowd\\cellx2000\\intbl \\b Shaded\\b0\\cell\\row}',
+    )!
+    expect(table.rows[0].cells[0].paragraphs[0].runs[0].text).toContain('Shaded')
+  })
+
+  test('text after a table still returns to the body', () => {
+    const paras = paragraphs('{\\rtf1\\ansi\\qc before\\par\\trowd\\cellx2000\\intbl cell\\cell\\row after\\par}')
+    expect(paras.map(textOf)).toEqual(['before', 'after'])
+  })
+
+  test('a multi-paragraph cell keeps every paragraph', () => {
+    const table = firstTable('{\\rtf1\\ansi\\trowd\\cellx4000\\intbl one\\par\\intbl two\\par\\cell\\row}')!
+    const texts = table.rows[0].cells[0].paragraphs.map(textOf).filter((t) => t.length > 0)
+    expect(texts).toEqual(['one', 'two'])
+  })
+
+  test('list membership does not leak to the following paragraph', () => {
+    const paras = paragraphs('{\\rtf1\\ansi{\\listtext\\f2 1.\\tab}\\ls1 Item\\par Not a list\\par}')
+    expect(paras[0].listMarker).toBe('1.')
+    expect(paras[1].listMarker).toBeUndefined()
+  })
+})
+
+describe('review finding 5: \\uc is group scoped', () => {
+  test('an inner \\uc is restored at group exit', () => {
+    const [p] = paragraphs('{\\rtf1\\ansi\\uc1 \\u945 ?{\\uc0 \\u946 }\\u946 ?X\\par}')
+    // Without restoration the final \u946 would skip 0 characters and leak "?".
+    expect(textOf(p)).toBe('\u03b1\u03b2\u03b2X')
+  })
+
+  test('with \\uc0 a fallback character is literal, not skipped', () => {
+    const [p] = paragraphs('{\\rtf1\\ansi\\uc1 \\u945 ?{\\uc0 \\u946 ?}X\\par}')
+    expect(textOf(p)).toBe('\u03b1\u03b2?X')
+  })
+
+  test('fallback skipping stays correct across many \\uN', () => {
+    const [p] = paragraphs('{\\rtf1\\ansi\\uc1 \\u945 ?\\u946 ?\\u947 ?\\par}')
+    expect(textOf(p)).toBe('\u03b1\u03b2\u03b3')
+  })
+})
+
+describe('review finding 6: landscape geometry', () => {
+  test('explicit landscape dimensions are honoured as written', () => {
+    const s = parseRtf('{\\rtf1\\ansi\\paperw15840\\paperh12240\\lndscpsxn x\\par}').sections[0]
+    expect(s.pageSize.widthTwips).toBe(15840)
+    expect(s.pageSize.heightTwips).toBe(12240)
+    expect(s.pageSize.orientation).toBe('landscape')
+  })
+
+  test("A4 landscape keeps the writer's own dimensions", () => {
+    const s = parseRtf('{\\rtf1\\ansi\\paperw16838\\paperh11906\\lndscpsxn x\\par}').sections[0]
+    expect(s.pageSize.widthTwips).toBe(16838)
+    expect(s.pageSize.heightTwips).toBe(11906)
+  })
+
+  test('with no declared size the portrait default is rotated', () => {
+    const s = parseRtf('{\\rtf1\\ansi\\landscape x\\par}').sections[0]
+    expect(s.pageSize.orientation).toBe('landscape')
+    expect(s.pageSize.widthTwips).toBeGreaterThan(s.pageSize.heightTwips)
+  })
+
+  test('portrait with explicit dimensions is untouched', () => {
+    const s = parseRtf('{\\rtf1\\ansi\\paperw12240\\paperh15840 x\\par}').sections[0]
+    expect(s.pageSize.widthTwips).toBe(12240)
+    expect(s.pageSize.heightTwips).toBe(15840)
+  })
+})
+
+describe('review fixes render correctly', () => {
+  const measureFor = async () => {
+    const { createCanvas } = await import('canvas')
+    const { createMeasurer } = await import('../src/docx/layout')
+    return createMeasurer(createCanvas(10, 10).getContext('2d') as unknown as CanvasRenderingContext2D)
+  }
+
+  test('code-page text paints real ink onto the page', async () => {
+    const { layoutDocx, renderPages } = await import('../src/docx/layout')
+    const rtf = [
+      String.raw`{\rtf1\ansi\ansicpg1251\deff0`,
+      String.raw`{\fonttbl{\f0\froman Times New Roman;}}`,
+      String.raw`\paperw12240\paperh15840\margl1440\margr1440\margt1440\margb1440`,
+      String.raw`\qc \'cf\'f0\'e8\'e2\'e5\'f2\par`,
+      String.raw`\pard trailing paragraph\par}`,
+    ].join('\n')
+    const pages = layoutDocx(parseRtf(rtf), await measureFor())
+    const text = pages[0].lines.map((l) => l.segs.map((s) => s.text).join('')).join(' ')
+    expect(text).toContain('\u041f\u0440\u0438\u0432\u0435\u0442')
+
+    const { createCanvas } = await import('canvas')
+    const c = createCanvas(Math.ceil(pages[0].widthPx), Math.ceil(pages[0].heightPx))
+    const ctx = c.getContext('2d') as unknown as CanvasRenderingContext2D
+    ctx.fillStyle = '#fff'
+    ctx.fillRect(0, 0, c.width, c.height)
+    renderPages(pages, ctx)
+    const data = (ctx as unknown as { getImageData: (a: number, b: number, w: number, h: number) => { data: Uint8ClampedArray } })
+      .getImageData(0, 0, c.width, c.height).data
+    let dark = 0
+    for (let i = 0; i < data.length; i += 4) if (data[i] < 240 || data[i + 1] < 240 || data[i + 2] < 240) dark++
+    expect(dark).toBeGreaterThan(100)
+  })
+
+  test('bold set before \\par carries into the following paragraphs', async () => {
+    const { layoutDocx } = await import('../src/docx/layout')
+    // \pard resets paragraph properties but is not a paragraph break; \par is.
+    const pages = layoutDocx(
+      parseRtf('{\\rtf1\\ansi\\b first\\par second\\par\\b0 third\\par}'),
+      await measureFor(),
+    )
+    const boldFlags = pages[0].lines.map((l) => l.segs.some((s) => s.style.bold))
+    expect(boldFlags).toEqual([true, true, false])
+  })
+
+  test('explicit landscape renders a wide page', async () => {
+    const { layoutDocx } = await import('../src/docx/layout')
+    const pages = layoutDocx(
+      parseRtf('{\\rtf1\\ansi\\paperw15840\\paperh12240\\margl1440\\margr1440\\margt1440\\margb1440 x\\par}'),
+      await measureFor(),
+    )
+    expect(pages[0].widthPx).toBeGreaterThan(pages[0].heightPx)
+  })
+
+  test('a default portrait page is still taller than wide', async () => {
+    const { layoutDocx } = await import('../src/docx/layout')
+    const pages = layoutDocx(parseRtf('{\\rtf1\\ansi x\\par}'), await measureFor())
+    expect(pages[0].heightPx).toBeGreaterThan(pages[0].widthPx)
   })
 })
