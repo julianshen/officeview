@@ -1,5 +1,5 @@
-import { describe, test, expect } from 'vitest'
-import { readSource, readByteStream, type Progress } from '../src/core/stream'
+import { describe, test, expect, vi, afterEach } from 'vitest'
+import { readSource, readByteStream, protectionFromHeaders, PROTECTION_HEADER, type Progress } from '../src/core/stream'
 import { loadOfficeFile } from '../src/components/OfficeFile'
 import { buildDocx, buildXlsx, buildPptx } from '../src/testdata/ooxml-builders'
 
@@ -122,5 +122,141 @@ describe('loadOfficeFile with streaming sources', () => {
     const bytes = await buildDocx([{ runs: [{ text: 'will be cut' }] }])
     const cut = bytes.subarray(0, Math.floor(bytes.length * 0.4))
     await expect(loadOfficeFile(chunkedStream(cut, 100))).rejects.toThrow()
+  })
+})
+
+describe('protected http downloads', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals()
+  })
+
+  test('{ url, headers } downloads with the headers attached', async () => {
+    const bytes = await buildDocx([{ runs: [{ text: 'authed doc' }] }])
+    let gotUrl = ''
+    let gotInit: RequestInit | undefined
+    vi.stubGlobal(
+      'fetch',
+      async (input: unknown, init?: RequestInit): Promise<Response> => {
+        gotUrl = String(input)
+        gotInit = init
+        return new Response(chunkedStream(bytes, 64), { headers: { 'content-length': String(bytes.length) } })
+      },
+    )
+    const seen: Progress[] = []
+    const doc = await loadOfficeFile(
+      {
+        url: 'https://files.example.com/report.docx',
+        headers: { Authorization: 'Bearer s3cret' },
+        credentials: 'include',
+      },
+      { onProgress: (p) => seen.push({ ...p }) },
+    )
+    expect(gotUrl).toBe('https://files.example.com/report.docx')
+    expect(new Headers(gotInit?.headers).get('authorization')).toBe('Bearer s3cret')
+    expect(gotInit?.credentials).toBe('include')
+    expect('sections' in doc).toBe(true)
+    expect(seen[seen.length - 1]).toMatchObject({ loaded: bytes.length, total: bytes.length })
+  })
+
+  test('a Request carries its own headers through fetch', async () => {
+    const bytes = await buildDocx([{ runs: [{ text: 'request doc' }] }])
+    let gotInput: unknown
+    vi.stubGlobal('fetch', async (input: unknown): Promise<Response> => {
+      gotInput = input
+      return new Response(chunkedStream(bytes, 64))
+    })
+    const doc = await loadOfficeFile(
+      new Request('https://files.example.com/r.docx', {
+        headers: { Authorization: 'Bearer xyz' },
+        credentials: 'include',
+      }),
+    )
+    // the Request goes to fetch untouched, so method/headers/credentials survive
+    expect(gotInput).toBeInstanceOf(Request)
+    expect((gotInput as Request).headers.get('authorization')).toBe('Bearer xyz')
+    expect('sections' in doc).toBe(true)
+  })
+
+  test('a fetch() promise resolves into the pipeline', async () => {
+    const bytes = await buildDocx([{ runs: [{ text: 'promised doc' }] }])
+    vi.stubGlobal(
+      'fetch',
+      async (): Promise<Response> => new Response(chunkedStream(bytes, 64)),
+    )
+    const doc = await loadOfficeFile(fetch('https://files.example.com/r.docx'))
+    expect('sections' in doc).toBe(true)
+  })
+
+  test('an auth failure surfaces as an HTTP error, not a zip error', async () => {
+    vi.stubGlobal('fetch', async (): Promise<Response> => new Response('denied', { status: 403 }))
+    await expect(
+      loadOfficeFile({ url: 'https://files.example.com/r.docx', headers: { Authorization: 'Bearer wrong' } }),
+    ).rejects.toThrow('HTTP 403')
+    // same for a caller-supplied Response carrying a failure status
+    await expect(readSource(new Response('nope', { status: 500 }))).rejects.toThrow('HTTP 500')
+  })
+})
+
+describe('protectionFromHeaders', () => {
+  const headers = (value?: string): Headers => new Headers(value === undefined ? {} : { [PROTECTION_HEADER]: value })
+
+  test('an absent header allows everything', () => {
+    expect(protectionFromHeaders(headers())).toEqual({ allowCopy: true, allowPrint: true })
+  })
+
+  test('deny tokens switch off one capability at a time', () => {
+    expect(protectionFromHeaders(headers('no-copy'))).toEqual({ allowCopy: false, allowPrint: true })
+    expect(protectionFromHeaders(headers('no-print'))).toEqual({ allowCopy: true, allowPrint: false })
+    expect(protectionFromHeaders(headers('no-copy, no-print'))).toEqual({ allowCopy: false, allowPrint: false })
+  })
+
+  test('tokens are case- and space-tolerant; unknown tokens are ignored', () => {
+    expect(protectionFromHeaders(headers('  NO-COPY , future-token '))).toEqual({ allowCopy: false, allowPrint: true })
+    expect(protectionFromHeaders(headers(''))).toEqual({ allowCopy: true, allowPrint: true })
+  })
+})
+
+describe('server protection policy', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals()
+  })
+
+  test('onProtection fires with the parsed policy while the download streams', async () => {
+    const bytes = await buildDocx([{ runs: [{ text: 'guarded doc' }] }])
+    vi.stubGlobal(
+      'fetch',
+      async (): Promise<Response> =>
+        new Response(chunkedStream(bytes, 64), {
+          headers: { 'content-length': String(bytes.length), [PROTECTION_HEADER]: 'no-copy, no-print' },
+        }),
+    )
+    const policies: Array<{ allowCopy: boolean; allowPrint: boolean }> = []
+    const doc = await loadOfficeFile(
+      { url: 'https://files.example.com/guarded.docx' },
+      { onProtection: (p) => policies.push(p) },
+    )
+    expect('sections' in doc).toBe(true)
+    expect(policies).toEqual([{ allowCopy: false, allowPrint: false }])
+  })
+
+  test('a download without the header reports allow-all', async () => {
+    const bytes = await buildDocx([{ runs: [{ text: 'open doc' }] }])
+    vi.stubGlobal('fetch', async (): Promise<Response> => new Response(chunkedStream(bytes, 64)))
+    const policies: Array<{ allowCopy: boolean; allowPrint: boolean }> = []
+    await loadOfficeFile({ url: 'https://files.example.com/open.docx' }, { onProtection: (p) => policies.push(p) })
+    expect(policies).toEqual([{ allowCopy: true, allowPrint: true }])
+  })
+
+  test('onProtection fires for a promised protected Response', async () => {
+    // regression: the promise branch used to recurse without onProtection, so
+    // data={fetch(...)} silently ignored no-copy/no-print response headers
+    const bytes = await buildDocx([{ runs: [{ text: 'promised guarded doc' }] }])
+    const response = new Response(chunkedStream(bytes, 64), {
+      headers: { 'content-length': String(bytes.length), [PROTECTION_HEADER]: 'no-copy' },
+    })
+    const policies: Array<{ allowCopy: boolean; allowPrint: boolean }> = []
+    const doc = await loadOfficeFile(Promise.resolve(response), { onProtection: (p) => policies.push(p) })
+    expect('sections' in doc).toBe(true)
+    expect(policies).toEqual([{ allowCopy: false, allowPrint: true }])
   })
 })

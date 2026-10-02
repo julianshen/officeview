@@ -67,10 +67,12 @@ waiting for the whole file to land in memory:
 <OfficeFile data={fetch('/deck.pptx')} loading={<Spinner />} />
 <OfficeFile data={await response.blob()} />
 <OfficeFile data={response.body!} />          // a ReadableStream
+<OfficeFile data={{ url: '/report.docx', headers: { Authorization: 'Bearer …' } }} />
 ```
 
-`data` accepts `ArrayBuffer | Uint8Array | Blob | Response | ReadableStream<Uint8Array>`.
-To show real progress, pass a *function* instead of an element:
+`data` accepts `ArrayBuffer | Uint8Array | Blob | Response | ReadableStream<Uint8Array>`,
+a `{ url, headers?, credentials? }` descriptor, a `Request`, or a promise of any of
+these. To show real progress, pass a *function* instead of an element:
 
 ```tsx
 <OfficeFile
@@ -93,6 +95,65 @@ const doc = await loadOfficeFile(fetch('/report.docx'), {
   onProgress: (p) => console.log(p.loaded, p.total),
 })
 ```
+
+### Protected downloads (headers and auth)
+
+When officeview downloads the file itself, attach the headers that protect it:
+
+```tsx
+<OfficeFile
+  data={{ url: '/report.docx', headers: { Authorization: `Bearer ${token}` } }}
+/>
+```
+
+```ts
+// headless, with cookies forwarded
+const doc = await loadOfficeFile({
+  url: 'https://files.example.com/report.docx',
+  headers: { Authorization: `Bearer ${token}` },
+  credentials: 'include',
+})
+```
+
+A `Request` works too, and carries method/mode/cache control with it:
+
+```ts
+await loadOfficeFile(new Request(url, { headers: { Authorization: `Bearer ${token}` } }))
+```
+
+Alternatively, do your own authenticated fetch and hand over the promise:
+
+```ts
+await loadOfficeFile(fetch(url, { headers: { Authorization: `Bearer ${token}` } }))
+```
+
+Non-2xx responses fail fast as `HTTP <status> while downloading the document`
+instead of a confusing zip error downstream — and headers are never copied
+into error messages. (A bare `fetch()` promise reports no progress while the
+request is in flight; progress starts once it resolves to a `Response`.)
+
+### Server-driven copy/print protection
+
+Copy/print prevention (`allowCopy`/`allowPrint`, default on) can also come from
+the server instead of the embedder's props. When the document is downloaded
+over HTTP, the response may carry:
+
+```http
+X-OfficeView-Protection: no-copy, no-print
+```
+
+Each token denies one capability; unknown tokens are ignored and a missing
+header allows everything, so old servers need no changes. The viewer merges
+the header policy with its props most-restrictive-wins: a server denial stays
+denied even with `allowCopy` set, so there is no prop for devtools to flip
+back on — the policy is sealed in component state from the already-consumed
+response headers, and it resets whenever `data` changes.
+
+Be clear-eyed about what this buys: it stops casual copying (shortcuts, context
+menu, selection, print stylesheets and the print dialog path) under control of
+the document owner rather than page markup. It is not DRM — pixels on a screen
+can be screenshotted and client JavaScript can be patched by a determined
+attacker. It raises the bar from "toggle a boolean" to "intercept the traffic".
 
 **What streaming does and does not buy.** Ingestion is genuinely streamed: chunks are
 read incrementally, progress is reported as they arrive, and a large download shows a real

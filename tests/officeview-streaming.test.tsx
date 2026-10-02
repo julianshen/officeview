@@ -1,6 +1,7 @@
-import { describe, test, expect } from 'vitest'
-import { render, waitFor, act } from '@testing-library/react'
+import { describe, test, expect, vi, afterEach } from 'vitest'
+import { render, waitFor, act, fireEvent } from '@testing-library/react'
 import { OfficeFile } from '../src/components/OfficeFile'
+import { PROTECTION_HEADER } from '../src/core/stream'
 import { buildDocx } from '../src/testdata/ooxml-builders'
 
 function chunkedStream(bytes: Uint8Array, chunkSize: number, delayMs = 0): ReadableStream<Uint8Array> {
@@ -67,5 +68,105 @@ describe('<OfficeFile> streaming', () => {
     const bytes = await buildDocx([{ runs: [{ text: 'bytes path' }] }])
     const { container } = render(<OfficeFile data={bytes.slice().buffer} />)
     await waitFor(() => expect(container.querySelectorAll('canvas').length).toBeGreaterThan(0))
+  })
+})
+
+describe('<OfficeFile> server-driven protection', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals()
+  })
+
+  function stubDownload(bytes: Uint8Array, protection?: string): void {
+    vi.stubGlobal('fetch', async (): Promise<Response> => {
+      const headers: Record<string, string> = { 'content-length': String(bytes.length) }
+      if (protection !== undefined) headers[PROTECTION_HEADER] = protection
+      return new Response(chunkedStream(bytes, 128), { headers })
+    })
+  }
+
+  const rootOf = (container: HTMLElement): HTMLElement => {
+    const root = container.querySelector('[data-officeview-root]')
+    expect(root).not.toBeNull()
+    return root as HTMLElement
+  }
+
+  test('a no-copy, no-print header disables copy and print even with permissive props', async () => {
+    const bytes = await buildDocx([{ runs: [{ text: 'guarded content here' }] }])
+    stubDownload(bytes, 'no-copy, no-print')
+    const { container } = render(
+      <OfficeFile data={{ url: 'https://files.example.com/guarded.docx' }} allowCopy={true} allowPrint={true} />,
+    )
+    await waitFor(() => expect(container.querySelectorAll('canvas').length).toBeGreaterThan(0), { timeout: 30_000 })
+    // copy is off despite the explicit prop: the server denial wins, so there
+    // is no prop for devtools to flip back on
+    expect(rootOf(container).style.userSelect).toBe('none')
+    // print is off: the print guard hides the viewer from printouts…
+    expect(document.head.querySelector('[data-officeview-print-guard]')).not.toBeNull()
+    // …and the print shortcut is swallowed
+    expect(fireEvent.keyDown(rootOf(container), { key: 'p', ctrlKey: true })).toBe(false)
+  })
+
+  test('props alone still disable copy/print when the server says nothing', async () => {
+    const bytes = await buildDocx([{ runs: [{ text: 'prop-guarded content' }] }])
+    stubDownload(bytes)
+    const { container } = render(<OfficeFile data={{ url: 'https://files.example.com/open.docx' }} allowCopy={false} allowPrint={false} />)
+    await waitFor(() => expect(container.querySelectorAll('canvas').length).toBeGreaterThan(0), { timeout: 30_000 })
+    expect(rootOf(container).style.userSelect).toBe('none')
+    expect(document.head.querySelector('[data-officeview-print-guard]')).not.toBeNull()
+  })
+
+  test('switching to an unprotected source lifts the server policy', async () => {
+    const guarded = await buildDocx([{ runs: [{ text: 'guarded first' }] }])
+    const open = await buildDocx([{ runs: [{ text: 'open second' }] }])
+    stubDownload(guarded, 'no-copy')
+    const { container, rerender } = render(
+      <OfficeFile data={{ url: 'https://files.example.com/guarded.docx' }} />,
+    )
+    await waitFor(() => expect(container.querySelectorAll('canvas').length).toBeGreaterThan(0), { timeout: 30_000 })
+    expect(rootOf(container).style.userSelect).toBe('none')
+    // a stale fetch resolving late must not re-apply the old policy either:
+    // the stored policy is tagged with its source
+    stubDownload(open)
+    rerender(<OfficeFile data={open} />)
+    await waitFor(() => expect(rootOf(container).style.userSelect).not.toBe('none'), { timeout: 30_000 })
+    expect(document.head.querySelector('[data-officeview-print-guard]')).toBeNull()
+  })
+
+  test('a stale permissive download resolving late cannot re-enable copy/print', async () => {
+    // regression: protection events from a cancelled load were forwarded
+    // through the latest callback, which tagged the old permissive policy
+    // with the current data — re-enabling copy/print on the live document
+    const permissive = await buildDocx([{ runs: [{ text: 'permissive first' }] }])
+    const guarded = await buildDocx([{ runs: [{ text: 'guarded second' }] }])
+    let resolveSlow!: (response: Response) => void
+    const slowGate = new Promise<Response>((resolve) => {
+      resolveSlow = resolve
+    })
+    vi.stubGlobal('fetch', (input: unknown): Promise<Response> => {
+      if (String(input).includes('slow-permissive')) return slowGate
+      return Promise.resolve(
+        new Response(chunkedStream(guarded, 64), {
+          headers: { 'content-length': String(guarded.length), [PROTECTION_HEADER]: 'no-copy, no-print' },
+        }),
+      )
+    })
+    const { container, rerender } = render(
+      <OfficeFile data={{ url: 'https://files.example.com/slow-permissive.docx' }} />,
+    )
+    // switch before the slow download resolves; the guarded doc loads first
+    rerender(<OfficeFile data={{ url: 'https://files.example.com/guarded.docx' }} />)
+    await waitFor(() => expect(container.querySelectorAll('canvas').length).toBeGreaterThan(0), { timeout: 30_000 })
+    expect(rootOf(container).style.userSelect).toBe('none')
+    expect(document.head.querySelector('[data-officeview-print-guard]')).not.toBeNull()
+    // now let the old permissive download finish: the live policy must not budge
+    await act(async () => {
+      resolveSlow(
+        new Response(chunkedStream(permissive, 64), { headers: { 'content-length': String(permissive.length) } }),
+      )
+      await new Promise((r) => setTimeout(r, 100))
+    })
+    expect(rootOf(container).style.userSelect).toBe('none')
+    expect(document.head.querySelector('[data-officeview-print-guard]')).not.toBeNull()
+    expect(fireEvent.keyDown(rootOf(container), { key: 'p', ctrlKey: true })).toBe(false)
   })
 })

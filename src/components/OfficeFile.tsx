@@ -12,7 +12,7 @@ import type { XlsxDocument } from '../xlsx/types'
 import { parsePptx } from '../pptx/parse'
 import type { PptxDocument } from '../pptx/types'
 import { OfficeDoc, type OfficeDocProps } from './OfficeDoc'
-import { readSource, type ByteSource, type Progress } from '../core/stream'
+import { readSource, type ByteSource, type Progress, type ProtectionListener, type ProtectionPolicy } from '../core/stream'
 
 export type AnyDoc = DocxDocument | XlsxDocument | PptxDocument
 
@@ -41,29 +41,39 @@ async function detectAndParse(pkg: OfficePackage): Promise<AnyDoc> {
 
 /**
  * Load an office file from any byte source — bytes in memory, a Blob, a
- * fetch() Response, or a ReadableStream. `onProgress` reports incremental
- * byte counts while the source is still arriving.
+ * fetch() Response, a ReadableStream, a protected URL ({ url, headers }), a
+ * Request, or a promise of any of these (e.g. fetch() itself). `onProgress`
+ * reports incremental byte counts while the source is still arriving.
  */
 export async function loadOfficeFile(
   source: ByteSource,
-  options: { onProgress?: (p: Progress) => void } = {},
+  options: { onProgress?: (p: Progress) => void; onProtection?: ProtectionListener } = {},
 ): Promise<AnyDoc> {
-  const data = await readSource(source, options.onProgress)
+  const data = await readSource(source, options.onProgress, options.onProtection)
   return OfficePackage.load(data).then(detectAndParse)
 }
 
 export function useOfficeFile(
   source: ByteSource | null | undefined,
-  options: { onProgress?: (p: Progress) => void } = {},
+  options: { onProgress?: (p: Progress) => void; onProtection?: ProtectionListener } = {},
 ): OfficeFileState {
   const [state, setState] = useState<OfficeFileState>({ status: 'loading' })
   const progressRef = useRef(options.onProgress)
   progressRef.current = options.onProgress
+  const protectionRef = useRef(options.onProtection)
+  protectionRef.current = options.onProtection
   useEffect(() => {
     let cancelled = false
     if (!source) return
     setState({ status: 'loading' })
-    loadOfficeFile(source, { onProgress: (p) => progressRef.current?.(p) })
+    loadOfficeFile(source, {
+      onProgress: (p) => progressRef.current?.(p),
+      // protection events from a cancelled load are dropped: the ref below
+      // always points at the latest render's callback, which would otherwise
+      // tag the old policy with the current data (see the source-tagged state
+      // in <OfficeFile>) and let a stale download overwrite the live policy.
+      onProtection: (p) => { if (!cancelled) protectionRef.current?.(p) },
+    })
       .then((document) => {
         if (!cancelled) setState({ status: 'ready', document })
       })
@@ -78,7 +88,7 @@ export function useOfficeFile(
 }
 
 export interface OfficeFileProps extends Omit<OfficeDocProps, 'document'> {
-  /** The office file: bytes, a Blob, a fetch() Response, or a ReadableStream. */
+  /** The office file: bytes, a Blob, a fetch() Response, a ReadableStream, a URL ({ url, headers }), a Request, or a promise of any of these. */
   data: ByteSource | null | undefined
   /**
    * Rendered while loading. A function form receives live progress so the
@@ -91,17 +101,35 @@ export interface OfficeFileProps extends Omit<OfficeDocProps, 'document'> {
   className?: string
 }
 
-export function OfficeFile({ data, loading, error, ...rest }: OfficeFileProps): ReactElement {
+export function OfficeFile({
+  data,
+  loading,
+  error,
+  allowCopy = true,
+  allowPrint = true,
+  ...rest
+}: OfficeFileProps): ReactElement {
   const [progress, setProgress] = useState<Progress | undefined>(undefined)
+  // Server policy, sealed at download time. Stale loads are dropped at the
+  // source (useOfficeFile ignores protection events after cleanup); the tag
+  // below is a second line of defence so a policy can only ever apply to the
+  // source it arrived with. Policy lives in state — not props — so there is
+  // no boolean for devtools to flip. The merge below is deliberately
+  // most-restrictive-wins: a server denial cannot be re-enabled from props.
+  const [headerPolicy, setHeaderPolicy] = useState<{ source: ByteSource | null | undefined; policy: ProtectionPolicy }>()
   const state = useOfficeFile(data, {
     onProgress: (p) => setProgress(p),
+    onProtection: (policy) => setHeaderPolicy({ source: data, policy }),
   })
+  const serverPolicy = headerPolicy && headerPolicy.source === data ? headerPolicy.policy : undefined
+  const effectiveAllowCopy = allowCopy && (serverPolicy?.allowCopy ?? true)
+  const effectiveAllowPrint = allowPrint && (serverPolicy?.allowPrint ?? true)
   if (state.status === 'loading') {
     if (typeof loading === 'function') return loading(progress ?? { loaded: 0 })
     return <>{loading}</>
   }
   if (state.status === 'error') return error ? error(state.message) : <div role="alert">{state.message}</div>
-  return <OfficeDoc document={state.document} {...rest} />
+  return <OfficeDoc document={state.document} allowCopy={effectiveAllowCopy} allowPrint={effectiveAllowPrint} {...rest} />
 }
 
 export default OfficeFile
