@@ -1,6 +1,7 @@
 import { describe, test, expect } from 'vitest'
 import { OfficePackage } from '../src/core/zip'
-import { parseDocx } from '../src/docx/parse'
+import { parseDocx, parseTable } from '../src/docx/parse'
+import { parseXml } from '../src/core/xml'
 import { layoutDocx, renderPages, type MeasureFn } from '../src/docx/layout'
 import { buildDocx, type DocxParaSpec, type DocxTableSpec } from '../src/testdata/ooxml-builders'
 
@@ -10,6 +11,16 @@ const measureFixed: MeasureFn = (text, style) =>
 const p = (text: string): DocxParaSpec => ({ runs: [{ text }] })
 
 describe('docx table parse', () => {
+  test('a zero preferred cell width falls back when another column declares a positive width', () => {
+    const table = parseTable(parseXml('<w:tbl xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:tr><w:tc><w:tcPr><w:tcW w:type="dxa" w:w="0"/></w:tcPr><w:p/></w:tc><w:tc><w:tcPr><w:tcW w:type="dxa" w:w="1440"/></w:tcPr><w:p/></w:tc></w:tr></w:tbl>'))
+    expect(table.gridColsTwips).toEqual([2880, 1440])
+    expect(table.autoWidth).toBeFalsy()
+  })
+  test('an explicit table width remains fixed when the column grid is omitted', () => {
+    const table = parseTable(parseXml('<w:tbl xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:tblPr><w:tblW w:type="dxa" w:w="2400"/></w:tblPr><w:tr><w:tc><w:p/></w:tc><w:tc><w:p/></w:tc></w:tr></w:tbl>'))
+    expect(table.gridColsTwips).toEqual([1200, 1200])
+    expect(table.autoWidth).toBeFalsy()
+  })
   test('parses grid, spans, merges, shading, borders, margins', async () => {
     const table: DocxTableSpec = {
       gridCols: ['4320', '4320', '3600'],
@@ -51,6 +62,39 @@ describe('docx table parse', () => {
 })
 
 describe('docx table layout', () => {
+  test('gridless image-only cells reserve the images intrinsic widths', async () => {
+    const doc = await parseDocx(await OfficePackage.load(await buildDocx([], [{
+      gridCols: [], rows: [{ cells: [{}, {}] }],
+    }])))
+    const block = doc.sections[0].blocks[0]
+    if (block.kind !== 'table') throw new Error('expected a table')
+    const imageWidths = [914400, 1828800]
+    block.table.rows[0].cells.forEach((cell, index) => {
+      cell.paragraphs[0].images = [{ data: new Uint8Array(), widthEmu: imageWidths[index], heightEmu: 914400 }]
+    })
+    const cells = layoutDocx(doc, measureFixed)[0].tables[0].rows[0].cells
+    const padding = (block.table.cellMargins.leftTwips + block.table.cellMargins.rightTwips) / 15
+    expect(cells).toHaveLength(2)
+    expect(cells[0].widthPx - padding).toBeGreaterThanOrEqual(96)
+    expect(cells[1].widthPx - padding).toBeGreaterThanOrEqual(192)
+    expect(cells[1].xPx).toBeCloseTo(cells[0].widthPx)
+  })
+  test('gridless automatic tables use intrinsic text widths and fit the page', async () => {
+    const doc = await parseDocx(await OfficePackage.load(await buildDocx([], [{
+      gridCols: [],
+      rows: [{ cells: [{ paragraphs: [p('short')] }, { paragraphs: [p('cell')] }] }],
+    }])))
+    const page = layoutDocx(doc, measureFixed)[0]
+    expect(page.tables[0].widthPx).toBeLessThan(160)
+    expect(page.lines).toHaveLength(2)
+    const block = doc.sections[0].blocks[0]
+    if (block.kind !== 'table') throw new Error('expected a table')
+    block.table.rows[0].cells[1].paragraphs[0].runs[0].text = 'wide content '.repeat(100)
+    const wide = layoutDocx(doc, measureFixed)[0].tables[0]
+    expect(wide.rows[0].cells).toHaveLength(2)
+    expect(wide.widthPx).toBeCloseTo(page.widthPx - 192)
+    expect(wide.rows[0].cells[0].widthPx).toBeGreaterThan(15)
+  })
   test('lays cells into boxes; text lines carry absolute positions', async () => {
     const table: DocxTableSpec = {
       gridCols: ['2880', '5760'],

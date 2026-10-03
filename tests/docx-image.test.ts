@@ -10,13 +10,13 @@ import { CT_TYPES, ROOT_RELS } from '../src/testdata/ooxml-builders'
 const measureFixed: MeasureFn = (text, style) => text.length * style.fontSizePt * 0.6 * (96 / 72)
 
 /** 24x16 red-over-blue PNG via node-canvas. */
-async function tinyPng(): Promise<Uint8Array> {
+async function tinyPng(topColor = '#ff0000'): Promise<Uint8Array> {
   const { createCanvas } = await import('canvas')
   const canvas = createCanvas(24, 16)
   const ctx = canvas.getContext('2d')!
   ctx.fillStyle = '#0000ff'
   ctx.fillRect(0, 0, 24, 16)
-  ctx.fillStyle = '#ff0000'
+  ctx.fillStyle = topColor
   ctx.fillRect(0, 0, 24, 8)
   return new Uint8Array(canvas.toBuffer('image/png'))
 }
@@ -71,6 +71,56 @@ async function docxWithImage(): Promise<Uint8Array> {
 }
 
 describe('docx embedded images', () => {
+  test('paragraph spacing follows the drawing and its effect bounds', async () => {
+    const zip = await JSZip.loadAsync(await docxWithImage())
+    const source = await zip.file('word/document.xml')!.async('string')
+    zip.file('word/document.xml', source
+      .replace('<w:p>\n      <w:r>', '<w:p><w:pPr><w:spacing w:after="300"/></w:pPr>\n      <w:r>')
+      .replace('<wp:extent cx="914400" cy="609600"/>',
+        '<wp:extent cx="914400" cy="609600"/><wp:effectExtent t="19050" b="38100" l="0" r="0"/>'))
+    const doc = await parseDocx(await OfficePackage.load(await zip.generateAsync({ type: 'uint8array' })))
+    const page = layoutDocx(doc, measureFixed)[0]
+    const image = page.images[0]
+    const before = page.lines[0]
+    const after = page.lines.find(line => line.segs.some(seg => seg.text.includes('After')))!
+    expect(image.yPx).toBeCloseTo(before.yPx + before.heightPx + 2)
+    expect(after.yPx).toBeCloseTo(image.yPx + image.heightPx + 4 + 20)
+  })
+
+  test('header and footer images use local relationships and repeat on later pages', async () => {
+    const zip = await JSZip.loadAsync(await docxWithImage())
+    const source = await zip.file('word/document.xml')!.async('string')
+    const drawing = source.match(/<w:drawing>[\s\S]*?<\/w:drawing>/)![0]
+    const namespaces = 'xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:pic="http://schemas.openxmlformats.org/drawingml/2006/picture" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"'
+    zip.file('word/document.xml', source.replace('<w:sectPr>',
+      '<w:sectPr><w:headerReference w:type="default" r:id="hdr"/><w:footerReference w:type="default" r:id="ftr"/>')
+      .replace('<w:p><w:r><w:t>After image</w:t></w:r></w:p>',
+        Array.from({ length: 90 }, () => '<w:p><w:r><w:t>Body</w:t></w:r></w:p>').join('')))
+    const rels = await zip.file('word/_rels/document.xml.rels')!.async('string')
+    zip.file('word/_rels/document.xml.rels', rels.replace('</Relationships>',
+      '<Relationship Id="hdr" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/header" Target="headers/header1.xml"/><Relationship Id="ftr" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/footer" Target="headers/footer1.xml"/></Relationships>'))
+    zip.file('word/media/header.png', await tinyPng('#00ff00'))
+    for (const [part, root] of [['header1', 'hdr'], ['footer1', 'ftr']]) {
+      zip.file(`word/headers/${part}.xml`, `<w:${root} ${namespaces}><w:p><w:r>${drawing}</w:r></w:p></w:${root}>`)
+      zip.file(`word/headers/_rels/${part}.xml.rels`,
+        '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rIdImg1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="../media/header.png"/></Relationships>')
+    }
+    const doc = await parseDocx(await OfficePackage.load(await zip.generateAsync({ type: 'uint8array' })))
+    const images = collectDocImages(doc)
+    expect(images).toHaveLength(3)
+    const decoded = await Promise.all(images.map(image => decodeImage(image.data, image.mime)))
+    const pages = layoutDocx(doc, measureFixed)
+    expect(pages.length).toBeGreaterThan(1)
+    for (const page of pages) {
+      expect(page.images.filter(image => image.imageIndex > 0)).toHaveLength(2)
+      const { createCanvas } = await import('canvas')
+      const ctx = createCanvas(page.widthPx, page.heightPx).getContext('2d')
+      renderPages([page], ctx as unknown as CanvasRenderingContext2D, decoded)
+      expect([...ctx.getImageData(100, 52, 1, 1).data].slice(0, 3)).toEqual([0, 255, 0])
+      expect([...ctx.getImageData(100, 1012, 1, 1).data].slice(0, 3)).toEqual([0, 255, 0])
+    }
+  })
+
   test('parses image with EMU extents from w:drawing + rels', async () => {
     const doc = await parseDocx(await OfficePackage.load(await docxWithImage()))
     const paras = doc.sections[0].paragraphs

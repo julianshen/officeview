@@ -55,6 +55,13 @@ export interface PptxTableRow {
   heightEmu?: number
 }
 
+export interface PptxTableBorder {
+  color: string
+  widthEmu?: number
+}
+
+export type PptxTableBorders = Partial<Record<'left' | 'right' | 'top' | 'bottom' | 'insideH' | 'insideV', PptxTableBorder>>
+
 export interface PptxTable {
   /** a:tblGrid/a:gridCol@w in EMU. */
   colWidthsEmu: number[]
@@ -76,6 +83,9 @@ export interface PptxTable {
   }
   /** Text color the style applies to the first row (headers are often white). */
   firstRowTextColor?: string
+  firstRowBold?: boolean
+  styleBorders?: PptxTableBorders
+  firstRowBorders?: PptxTableBorders
 }
 
 export interface PptxShape {

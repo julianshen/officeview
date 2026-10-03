@@ -2,7 +2,7 @@
 import type { OfficePackage } from '../core/zip'
 import { attrs, elementChildren, getChildren, textOf, type XmlNode } from '../core/xml'
 import { hexRgbToCss } from '../core/color'
-import type { PptxDocument, PptxImageRef, PptxParagraph, PptxShape, PptxSlide, PptxTable, PptxTableCell, PptxTableRow, PptxTextBody, PptxTextRun } from './types'
+import type { PptxDocument, PptxImageRef, PptxParagraph, PptxShape, PptxSlide, PptxTable, PptxTableBorders, PptxTableCell, PptxTableRow, PptxTextBody, PptxTextRun } from './types'
 import { sniffImageMime } from '../core/images'
 
 const DEFAULT_INSET_LR = 91440
@@ -266,9 +266,88 @@ function firstSrgb(node: XmlNode | undefined): string | undefined {
 interface TableStyleEntry {
   fills: { firstRow?: string; band1?: string; band2?: string; wholeTable?: string; lastRow?: string; firstCol?: string }
   firstRowTextColor?: string
+  firstRowBold?: boolean
+  borders?: PptxTableBorders
+  firstRowBorders?: PptxTableBorders
 }
 
-async function readTableStyles(pkg: OfficePackage): Promise<Map<string, TableStyleEntry>> {
+/** Table scheme colors come from this slide's master theme, not theme1 by name. */
+async function slideTheme(pkg: OfficePackage, slidePath: string): Promise<Map<string, string>> {
+  const colors = new Map<string, string>()
+  const mappings = new Map<string, string>()
+  let path: string | undefined = slidePath
+  const visited = new Set<string>()
+  while (path && !visited.has(path)) {
+    visited.add(path)
+    const root = await pkg.xml(path)
+    const map = getChildren(root, 'clrMap')[0] ??
+      getChildren(getChildren(root, 'clrMapOvr')[0], 'overrideClrMapping')[0]
+    for (const [key, value] of Object.entries(attrs(map))) {
+      if (!mappings.has(key)) mappings.set(key, String(value))
+    }
+    const scheme = getChildren(getChildren(root, 'themeElements')[0], 'clrScheme')[0]
+    if (scheme) {
+      for (const [name, color] of elementChildren(scheme)) {
+        const rgb = getChildren(color, 'srgbClr')[0]
+        const system = getChildren(color, 'sysClr')[0]
+        const value = attrs(rgb).val ?? attrs(system).lastClr
+        if (value) colors.set(name, String(value))
+      }
+      break
+    }
+    const slash = path.lastIndexOf('/')
+    const rels = await pkg.xml(`${path.slice(0, slash)}/_rels/${path.slice(slash + 1)}.rels`)
+    const relationships = getChildren(rels, 'Relationship')
+    const next = ['theme', 'slideMaster', 'slideLayout'].map(type =>
+      relationships.find(rel => String(attrs(rel).Type).endsWith(`/${type}`))).find(Boolean)
+    path = next ? resolveTarget(path, String(attrs(next).Target)) : undefined
+  }
+  for (const [alias, key] of [['tx1', 'dk1'], ['bg1', 'lt1'], ['tx2', 'dk2'], ['bg2', 'lt2']]) {
+    if (!mappings.has(alias)) mappings.set(alias, key)
+  }
+  const palette = new Map(colors)
+  for (const [alias, key] of mappings) {
+    const color = palette.get(key)
+    if (color) colors.set(alias, color)
+  }
+  return colors
+}
+
+function tableColor(node: XmlNode | undefined, theme: Map<string, string>): string | undefined {
+  if (!node) return undefined
+  const rgb = getChildren(node, 'srgbClr')[0]
+  const scheme = getChildren(node, 'schemeClr')[0]
+  const color = rgb ?? scheme
+  const value = rgb ? attrs(rgb).val as string : theme.get(String(attrs(scheme).val))
+  if (!color || !value || !/^[\da-f]{6}$/i.test(value)) return undefined
+  let channels = [0, 2, 4].map(index => parseInt(value.slice(index, index + 2), 16) / 255)
+  // DrawingML tints/shades operate in linear RGB. A tint's
+  // percentage is the retained input color; the remainder is white.
+  for (const [name, transform] of elementChildren(color)) {
+    const factor = Math.max(0, Math.min(1, num(attrs(transform).val as string) / 100000))
+    if (name === 'tint' || name === 'shade') {
+      channels = channels.map(channel => {
+        const linear = channel <= 0.04045 ? channel / 12.92 : Math.pow((channel + 0.055) / 1.055, 2.4)
+        const mixed = linear * factor + (name === 'tint' ? 1 - factor : 0)
+        return mixed <= 0.0031308 ? mixed * 12.92 : 1.055 * Math.pow(mixed, 1 / 2.4) - 0.055
+      })
+    }
+  }
+  return `#${channels.map(channel => Math.round(channel * 255).toString(16).padStart(2, '0')).join('').toUpperCase()}`
+}
+
+function tableBorders(tcStyle: XmlNode | undefined, theme: Map<string, string>): PptxTableBorders {
+  const out: PptxTableBorders = {}
+  const borders = getChildren(tcStyle, 'tcBdr')[0]
+  for (const side of ['left', 'right', 'top', 'bottom', 'insideH', 'insideV'] as const) {
+    const line = getChildren(getChildren(borders, side)[0], 'ln')[0]
+    const color = tableColor(getChildren(line, 'solidFill')[0], theme)
+    if (color) out[side] = { color, widthEmu: num(attrs(line).w as string, 12700) }
+  }
+  return out
+}
+
+async function readTableStyles(pkg: OfficePackage, theme: Map<string, string>): Promise<Map<string, TableStyleEntry>> {
   const out = new Map<string, TableStyleEntry>()
   const root = await pkg.xml('ppt/tableStyles.xml')
   if (!root) return out
@@ -278,6 +357,25 @@ async function readTableStyles(pkg: OfficePackage): Promise<Map<string, TableSty
     const id = attrs(style).styleId as string | undefined
     if (!id) continue
     const entry: TableStyleEntry = { fills: {} }
+    // Native DrawingML styles use direct regions, with tcStyle/fill nesting.
+    for (const [regionName, fillName] of [
+      ['wholeTbl', 'wholeTable'], ['band1H', 'band1'], ['band2H', 'band2'],
+      ['firstRow', 'firstRow'], ['lastRow', 'lastRow'], ['firstCol', 'firstCol'],
+    ] as const) {
+      const region = getChildren(style, regionName)[0]
+      if (!region) continue
+      const tcStyle = getChildren(region, 'tcStyle')[0]
+      const fill = tableColor(getChildren(getChildren(tcStyle, 'fill')[0], 'solidFill')[0], theme)
+      if (fill) entry.fills[fillName] = fill
+      if (regionName === 'wholeTbl') entry.borders = tableBorders(tcStyle, theme)
+      if (regionName === 'firstRow') {
+        const tx = getChildren(region, 'tcTxStyle')[0]
+        entry.firstRowTextColor = tableColor(tx, theme)
+        const bold = attrs(tx).b
+        if (bold !== undefined) entry.firstRowBold = bold === 'on' || bold === '1' || bold === 'true'
+        entry.firstRowBorders = tableBorders(tcStyle, theme)
+      }
+    }
     // whole-table fill lives directly on the style
     const tableFill = getChildren(getChildren(style, 'tblPr')[0], 'solidFill')[0]
     const whole = tableFill ? colorOf(getChildren(tableFill, 'srgbClr')[0]) : undefined
@@ -333,6 +431,9 @@ function parseGraphicFrame(frame: XmlNode, tableStyles?: Map<string, TableStyleE
       if (entry) {
         table.styleFills = entry.fills
         table.firstRowTextColor = entry.firstRowTextColor
+        table.firstRowBold = entry.firstRowBold
+        table.styleBorders = entry.borders
+        table.firstRowBorders = entry.firstRowBorders
       }
     }
   }
@@ -398,7 +499,6 @@ export async function parsePptx(pkg: OfficePackage): Promise<PptxDocument> {
       if (a.Id) relMap.set(a.Id, a.Target as string)
     }
   }
-  let tableStyles: Map<string, TableStyleEntry> | undefined
   const sldIdLst = getChildren(presentation, 'sldIdLst')[0]
   const slideIds = sldIdLst ? getChildren(sldIdLst, 'sldId') : []
   for (let i = 0; i < slideIds.length; i++) {
@@ -408,7 +508,7 @@ export async function parsePptx(pkg: OfficePackage): Promise<PptxDocument> {
     const path = target.startsWith('/') ? target.slice(1) : `ppt/${target.replace(/^\.\.\//, '')}`
     const slideRoot = await pkg.xml(path)
     const slideImages = await loadSlideImages(pkg, path)
-    if (!tableStyles) tableStyles = await readTableStyles(pkg)
+    const tableStyles = await readTableStyles(pkg, await slideTheme(pkg, path))
     const slide: PptxSlide = { index: i, widthEmu: doc.slideWidthEmu, heightEmu: doc.slideHeightEmu, shapes: [] }
     if (slideRoot) {
       const cSld = getChildren(slideRoot, 'cSld')[0]

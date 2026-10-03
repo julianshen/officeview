@@ -47,6 +47,7 @@
 import { loadOfficeFile } from '../src/components/OfficeFile'
 import { getPaintables } from '../src/render/paint'
 import { diffBitmaps, savePng, loadPng, renderPaintables } from '../src/test/pixel-diff'
+import { isOfficeCorpusFile } from '../src/test/corpus'
 import { readFileSync, existsSync, mkdirSync, readdirSync, unlinkSync } from 'node:fs'
 import { join } from 'node:path'
 
@@ -129,7 +130,7 @@ async function record(only: string | undefined, threshold: number): Promise<numb
   }
   mkdirSync(GOLDEN_CORPUS_DIR, { recursive: true })
   const files = readdirSync(CORPUS_DIR)
-    .filter((f) => /\.(docx|xlsx|pptx)$/i.test(f))
+    .filter(isOfficeCorpusFile)
     .filter((f) => (only ? f.includes(only) : true))
     .sort()
 
@@ -226,7 +227,7 @@ async function compare(only: string | undefined, threshold: number, maxRatio: nu
     return 2
   }
   const files = readdirSync(CORPUS_DIR)
-    .filter((f) => /\.(docx|xlsx|pptx)$/i.test(f))
+    .filter(isOfficeCorpusFile)
     .filter((f) => (only ? f.includes(only) : true))
     .sort()
 

@@ -13,6 +13,7 @@ import { layoutDocx } from '../src/docx/layout'
 import { parsePptx } from '../src/pptx/parse'
 import { getPaintables } from '../src/render/paint'
 import { buildTextIndex } from '../src/core/search'
+import { isOfficeCorpusFile } from '../src/test/corpus'
 
 const CORPUS_DIR = join(__dirname, '..', 'corpus')
 // The directory always exists once corpus.lock.json is tracked — the binaries
@@ -78,7 +79,7 @@ describe('corpus regressions', () => {
   test('every corpus file paints all of its model text', async () => {
     // guards the class of bug "parsed fine, rendered nothing"
     const { readdirSync } = await import('node:fs')
-    const files = readdirSync(CORPUS_DIR).filter((f) => /\.(docx|xlsx|pptx)$/i.test(f))
+    const files = readdirSync(CORPUS_DIR).filter(isOfficeCorpusFile)
     const problems: string[] = []
     for (const file of files) {
       // malformed-on-purpose fixtures must be refused, not rendered

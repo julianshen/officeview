@@ -327,7 +327,16 @@ function parseDrawing(drawing: XmlNode, images: DocxImage[] | undefined): DocxIm
   if (!images) return undefined
   const data = images.find((img) => img && (img as DocxImage & { relId?: string }).relId === rid)
   if (!data) return undefined
-  return { data: data.data, mime: data.mime, widthEmu, heightEmu, floating: anchor ? parseAnchor(anchor) : undefined }
+  const effect = getChildren(wp, 'effectExtent')[0]
+  const effectAttrs = attrs(effect)
+  return {
+    data: data.data, mime: data.mime, widthEmu, heightEmu,
+    effectExtentEmu: effect ? {
+      top: parseFloat(effectAttrs.t as string) || 0,
+      bottom: parseFloat(effectAttrs.b as string) || 0,
+    } : undefined,
+    floating: anchor ? parseAnchor(anchor) : undefined,
+  }
 }
 
 /** wp:positionH / wp:positionV -> a from/offset pair. */
@@ -435,22 +444,30 @@ async function loadPart(
   // lists in a header/footer start from their own counters
   const partNumbering = await pkg.xml('word/numbering.xml')
   const partState = partNumbering ? parseNumbering(partNumbering) : undefined
+  const images = await loadDocImages(pkg, path)
   for (const [name, node] of elementChildren(part)) {
-    if (name === 'p') paragraphs.push(parseParagraph(node, undefined, partState))
+    if (name === 'p') paragraphs.push(parseParagraph(node, images, partState))
   }
   return paragraphs.length > 0 ? paragraphs : undefined
 }
 
-async function loadDocImages(pkg: OfficePackage): Promise<DocxImage[]> {
-  const rels = await pkg.xml('word/_rels/document.xml.rels')
+async function loadDocImages(pkg: OfficePackage, partPath = 'word/document.xml'): Promise<DocxImage[]> {
+  const slash = partPath.lastIndexOf('/')
+  const directory = partPath.slice(0, slash)
+  const rels = await pkg.xml(`${directory}/_rels/${partPath.slice(slash + 1)}.rels`)
   if (!rels) return []
   const images: Array<DocxImage & { relId?: string }> = []
   for (const rel of getChildren(rels, 'Relationship')) {
     const a = attrs(rel)
     const type = a.Type as string | undefined
     const target = (a.Target as string | undefined) ?? ''
-    if (!type || !type.includes('/image') || !target) continue
-    const path = target.startsWith('/') ? target.slice(1) : `word/${target.replace(/^\.\.\//, '')}`
+    if (!type || !type.includes('/image') || !target || a.TargetMode === 'External') continue
+    const segments = target.startsWith('/') ? [] : directory.split('/')
+    for (const segment of target.split('/')) {
+      if (segment === '..') segments.pop()
+      else if (segment && segment !== '.') segments.push(segment)
+    }
+    const path = segments.join('/')
     const data = await pkg.bytes(path)
     if (!data) continue
     images.push({ data, mime: sniffImageMime(data), widthEmu: 0, heightEmu: 0, relId: a.Id })
@@ -697,7 +714,7 @@ export function parseTable(tbl: XmlNode, tableNumbering?: NumberingState): DocxT
         let ci = 0
         for (const cell of row.cells) {
           const span = Math.max(1, cell.gridSpan)
-          if (cell.widthTwips !== undefined) {
+          if (cell.widthTwips !== undefined && cell.widthTwips > 0) {
             // spread the declared width across the spanned columns
             const each = cell.widthTwips / span
             for (let k = 0; k < span && ci + k < maxCols; k++) {
@@ -712,7 +729,11 @@ export function parseTable(tbl: XmlNode, tableNumbering?: NumberingState): DocxT
       if (anyDeclared) {
         for (let i = 0; i < maxCols; i++) if (!seen[i]) widths[i] = 2880 // 2in default
       } else {
-        for (let i = 0; i < maxCols; i++) widths[i] = Math.floor(9360 / maxCols)
+        const preferred = attrs(getChildren(tblPr, 'tblW')[0])
+        const preferredWidth = preferred.type === 'dxa' ? twips(preferred.w) : undefined
+        const fixed = attrs(getChildren(tblPr, 'tblLayout')[0]).type === 'fixed'
+        table.autoWidth = !fixed && !(preferredWidth && preferredWidth > 0)
+        for (let i = 0; i < maxCols; i++) widths[i] = Math.floor((preferredWidth || 9360) / maxCols)
       }
       table.gridColsTwips = widths.map((w) => Math.round(w))
     }

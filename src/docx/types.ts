@@ -40,6 +40,8 @@ export interface DocxImage {
   /** Display size in EMU from wp:extent. */
   widthEmu: number
   heightEmu: number
+  /** Vertical space reserved by wp:effectExtent, outside the image. */
+  effectExtentEmu?: { top: number; bottom: number }
   /** Present for wp:anchor drawings; absent means inline (in the text flow). */
   floating?: DocxFloating
 }
@@ -140,6 +142,8 @@ export interface DocxTableRow {
 
 export interface DocxTable {
   gridColsTwips: number[]
+  /** No grid or cell widths: size columns from their content during layout. */
+  autoWidth?: boolean
   rows: DocxTableRow[]
   fill?: string
   borders?: DocxTableBorders

@@ -23,6 +23,7 @@ import { fileURLToPath } from 'node:url'
 import { loadOfficeFile } from '../src/components/OfficeFile'
 import { getPaintables } from '../src/render/paint'
 import { diffBitmaps, loadPng, renderPaintables } from '../src/test/pixel-diff'
+import { isOfficeCorpusFile } from '../src/test/corpus'
 
 const GOLDEN_DIR = join(dirname(fileURLToPath(import.meta.url)), 'goldens', 'corpus')
 const CORPUS_DIR = join(dirname(fileURLToPath(import.meta.url)), '..', 'corpus')
@@ -49,7 +50,7 @@ const corpusAvailable = existsSync(join(CORPUS_DIR, PROBE_FIXTURE))
 
 function corpusFiles(): string[] {
   return readdirSync(CORPUS_DIR)
-    .filter((f) => /\.(docx|xlsx|pptx)$/i.test(f))
+    .filter(isOfficeCorpusFile)
     .filter((f) => !EXPECTED_REJECTS.some((n) => f.includes(n)))
     .sort()
 }

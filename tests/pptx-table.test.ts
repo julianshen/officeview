@@ -140,6 +140,48 @@ describe('pptx table render', () => {
     const outside = ctx.getImageData(800, 650, 1, 1).data
     expect([outside[0], outside[1], outside[2]]).toEqual([255, 255, 255])
   })
+
+  test('only merged interiors hide the grid, while other cell boundaries remain visible', async () => {
+    const { ctx } = await renderTable({
+      colWidths: ['2286000', '2286000'],
+      rows: [
+        { cells: [{ gridSpan: 2 }] },
+        { cells: [{}, {}] },
+      ],
+    })
+    expect(ctx.getImageData(336, 140, 1, 1).data[0]).toBe(255)
+    expect(ctx.getImageData(336, 230, 1, 1).data[0]).toBeLessThan(220)
+    expect(ctx.getImageData(200, 192, 1, 1).data[0]).toBeLessThan(220)
+  })
+
+  test('physical placeholders and compact merged rows preserve downstream cell positions', async () => {
+    const doc = await parseFixture([tableFrame({
+      colWidths: ['914400', '1371600', '2286000'],
+      rows: [
+        { cells: [{ gridSpan: 2, fill: 'FF0000' }, { merged: true, gridSpan: 2 }, { fill: '00FF00' }] },
+        { cells: [{ gridSpan: 2, fill: '0000FF' }, { fill: 'FFFF00' }] },
+      ],
+    })])
+    const metrics = slideMetrics(doc)
+    const { createCanvas } = await import('canvas')
+    const ctx = createCanvas(metrics.widthPx, metrics.heightPx).getContext('2d')
+    const rectangles: Array<{ xPx: number; yPx: number; widthPx: number }> = []
+    const fillRect = ctx.fillRect.bind(ctx)
+    ctx.fillRect = (x, y, width, height) => {
+      if (ctx.fillStyle !== '#ffffff') rectangles.push({ xPx: x, yPx: y, widthPx: width })
+      fillRect(x, y, width, height)
+    }
+    renderSlide(doc.slides[0], ctx as unknown as CanvasRenderingContext2D, metrics)
+    expect(rectangles).toEqual([
+      { xPx: 0, yPx: 0, widthPx: 240 }, { xPx: 240, yPx: 0, widthPx: 240 },
+      { xPx: 0, yPx: 96, widthPx: 240 }, { xPx: 240, yPx: 96, widthPx: 240 },
+    ])
+    // The owners map masks only the merged boundary (x=192), not the tail cell's (x=336).
+    expect([...ctx.getImageData(192, 140, 1, 1).data].slice(0, 3)).toEqual([255, 0, 0])
+    expect(ctx.getImageData(336, 140, 1, 1).data[1]).toBeLessThan(220)
+    expect([...ctx.getImageData(192, 230, 1, 1).data].slice(0, 3)).toEqual([0, 0, 255])
+    expect(ctx.getImageData(336, 230, 1, 1).data[0]).toBeLessThan(220)
+  })
 })
 
 describe('pptx table style resolution', () => {

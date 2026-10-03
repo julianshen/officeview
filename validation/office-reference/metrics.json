@@ -1,0 +1,22 @@
+[
+  {
+    "reference": "pydocx-having-images.word.pdf.0.png",
+    "actual": "pydocx-having-images.docx.officeview.0.png",
+    "width": 816,
+    "height": 1056,
+    "threshold": 8,
+    "changedPixels": 35264,
+    "totalPixels": 861696,
+    "ratio": 0.04092394533571004
+  },
+  {
+    "reference": "poi-table_test.powerpoint.pdf.0.png",
+    "actual": "poi-table_test.pptx.officeview.0.png",
+    "width": 1280,
+    "height": 720,
+    "threshold": 8,
+    "changedPixels": 1111,
+    "totalPixels": 921600,
+    "ratio": 0.0012055121527777778
+  }
+]

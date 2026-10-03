@@ -16,6 +16,7 @@ import { createCanvas } from 'canvas'
 import { loadOfficeFile } from '../src/components/OfficeFile'
 import { getPaintables } from '../src/render/paint'
 import { buildTextIndex } from '../src/core/search'
+import { isOfficeCorpusFile } from '../src/test/corpus'
 
 const CORPUS_DIR = join(import.meta.dir, '..', 'corpus')
 
@@ -171,7 +172,7 @@ if (!existsSync(CORPUS_DIR)) {
 }
 
 const files = readdirSync(CORPUS_DIR)
-  .filter((f) => /\.(docx|xlsx|pptx)$/i.test(f))
+  .filter(isOfficeCorpusFile)
   .filter((f) => (only ? f.toLowerCase().endsWith(only.toLowerCase()) : true))
   .sort()
 

@@ -173,6 +173,12 @@ function layoutParagraph(
 ): { lines: LineBox[]; endY: number } {
   const lines: LineBox[] = []
   const { contentX, contentWidth, startY, defaults } = opts
+  // An inline drawing supplies the line's height itself. Empty drawing runs
+  // must not create a second, blank text line above it.
+  if (para.images.some(image => !image.floating) && !para.listMarker &&
+      !para.runs.some(run => run.text || run.breakBefore || run.field)) {
+    return { lines, endY: startY }
+  }
   const indentLeft = twipsToPx(para.indentLeftTwips ?? 0)
   const indentRight = twipsToPx(para.indentRightTwips ?? 0)
   const firstLineIndent = twipsToPx(para.indentFirstLineTwips ?? 0)
@@ -357,6 +363,18 @@ export function collectDocImages(document: DocxDocument): DocxImage[] {
       }
     }
   }
+  for (const section of document.sections) {
+    for (const paragraphs of [section.header, section.footer, section.firstHeader, section.firstFooter]) {
+      for (const paragraph of paragraphs ?? []) {
+        for (const image of paragraph.images) {
+          if (!seen.has(image)) {
+            seen.add(image)
+            out.push(image)
+          }
+        }
+      }
+    }
+  }
   return out
 }
 
@@ -430,22 +448,26 @@ export function layoutDocx(document: DocxDocument, measure: MeasureFn): PageLayo
           }
           page.lines.push({ ...line, yPx: line.yPx + shift })
         }
-        y = endY + shift + twipsToPx(para.spacingAfterTwips ?? 0)
+        y = endY + shift
         // inline images take flow space below the paragraph's text
         for (const image of para.images ?? []) {
           if (image.floating) continue
           const w = emuToPx(image.widthEmu)
           const h = emuToPx(image.heightEmu)
           if (w <= 0 || h <= 0) continue
-          if (y + h > contentBottom && (page.lines.length > 0 || page.images.length > 0)) commitPage()
+          const effectTop = emuToPx(image.effectExtentEmu?.top ?? 0)
+          const effectBottom = emuToPx(image.effectExtentEmu?.bottom ?? 0)
+          if (y + effectTop + h + effectBottom > contentBottom && (page.lines.length > 0 || page.images.length > 0)) commitPage()
+          y += effectTop
           page.images.push({ xPx: contentX, yPx: y, widthPx: w, heightPx: h, imageIndex: imageIndex.get(image) ?? -1 })
-          y += h
+          y += h + effectBottom
         }
+        y += twipsToPx(para.spacingAfterTwips ?? 0)
         continue
       }
       // Table block: split at row boundaries across pages, repeating header
       // rows (w:tblHeader) on each continuation page.
-      const table = block.table
+      const table = autoWidthTable(block.table, measure, defaults, contentWidth)
       const tableX = m.left
       const hasHeader = table.rows.some((r) => r.isHeader)
       const pageHasContent = () => page.lines.length > 0 || page.tables.length > 0 || page.images.length > 0
@@ -506,6 +528,38 @@ export function layoutDocx(document: DocxDocument, measure: MeasureFn): PageLayo
         const { header, footer } = make(i === 0)
         if (header) p.header = header
         if (footer) p.footer = footer
+        for (const hf of [header, footer]) {
+          if (!hf) continue
+          let imageY = hf.yPx
+          for (const paragraph of hf.paragraphs) {
+            imageY += twipsToPx(paragraph.spacingBeforeTwips ?? 0)
+            const laid = layoutParagraph(paragraph, measure, {
+              contentX: hf.xPx, contentWidth: hf.widthPx, startY: imageY, defaults,
+            })
+            imageY = laid.endY
+            for (const image of paragraph.images) {
+              const width = emuToPx(image.widthEmu)
+              const height = emuToPx(image.heightEmu)
+              if (width <= 0 || height <= 0) continue
+              if (image.floating) {
+                const place = resolveFloating(image, {
+                  pageWidthPx: widthPx, contentX, contentWidth, flowY: imageY, m,
+                })
+                p.images.push({ xPx: place.x, yPx: place.y, widthPx: width, heightPx: height,
+                  imageIndex: imageIndex.get(image) ?? -1, floating: { ...image.floating } })
+              } else {
+                imageY += emuToPx(image.effectExtentEmu?.top ?? 0)
+                let imageX = hf.xPx + twipsToPx(paragraph.indentLeftTwips ?? 0)
+                if (paragraph.align === 'center') imageX += (hf.widthPx - width) / 2
+                else if (paragraph.align === 'right') imageX += hf.widthPx - width
+                p.images.push({ xPx: imageX, yPx: imageY, widthPx: width, heightPx: height,
+                  imageIndex: imageIndex.get(image) ?? -1 })
+                imageY += height + emuToPx(image.effectExtentEmu?.bottom ?? 0)
+              }
+            }
+            imageY += twipsToPx(paragraph.spacingAfterTwips ?? 0)
+          }
+        }
       })
     }
   }
@@ -635,6 +689,7 @@ function layoutHeaderFooter(
     if (!block) continue
     let y = block.yPx
     for (const para of substituteFields(block.paragraphs, pageNumber, totalPages)) {
+      y += twipsToPx(para.spacingBeforeTwips ?? 0)
       const laid = layoutParagraph(para, measure, {
         contentX: block.xPx,
         contentWidth: block.widthPx,
@@ -642,7 +697,10 @@ function layoutHeaderFooter(
         defaults: block.defaults,
       })
       out.push(...laid.lines)
-      y = laid.endY + twipsToPx(para.spacingAfterTwips ?? 0)
+      y = laid.endY + para.images.filter(image => !image.floating)
+        .reduce((height, image) => height + emuToPx(image.heightEmu +
+          (image.effectExtentEmu?.top ?? 0) + (image.effectExtentEmu?.bottom ?? 0)), 0)
+        + twipsToPx(para.spacingAfterTwips ?? 0)
     }
   }
   return out
@@ -904,6 +962,52 @@ function borderCss(b: CellBorderCss | undefined): string | undefined {
   if (!b || !b.style) return undefined
   if (b.style === 'single' || b.style === 'thin') return 'thin'
   return b.style
+}
+
+/** Derive preferred widths and shrink wrappable columns to the page width. */
+function autoWidthTable(
+  table: DocxTable,
+  measure: MeasureFn,
+  defaults: { fontFamily: string; fontSizePt: number },
+  availableWidth: number,
+): DocxTable {
+  if (!table.autoWidth) return table
+  const padding = twipsToPx(table.cellMargins.leftTwips + table.cellMargins.rightTwips)
+  const widths = table.gridColsTwips.map(() => Math.max(padding + 1, 1))
+  const minimums = [...widths]
+  const expand = (columns: number[], column: number, span: number, needed: number) => {
+    const current = columns.slice(column, column + span).reduce((a, b) => a + b, 0)
+    const extra = Math.max(0, needed - current) / span
+    for (let c = column; c < column + span && c < columns.length; c++) columns[c] += extra
+  }
+  for (const row of table.rows) {
+    let column = 0
+    for (const cell of row.cells) {
+      const span = Math.max(1, cell.gridSpan)
+      const textWidth = Math.max(0, ...cell.paragraphs.map(paragraph =>
+        // Match pushWord's measurements, including spaces. Kerning across a
+        // whole string can otherwise make an intrinsically sized cell wrap.
+        paragraph.runs.reduce((width, run) => width + run.text.split(/( )/)
+          .reduce((sum, chunk) => sum + measure(chunk, runStyleOf(run, defaults)), 0), 0)
+          + twipsToPx((paragraph.indentLeftTwips ?? 0) + (paragraph.indentRightTwips ?? 0))))
+      const wordWidth = Math.max(0, ...cell.paragraphs.flatMap(paragraph =>
+        paragraph.runs.flatMap(run => run.text.split(/\s+/).map(word => measure(word, runStyleOf(run, defaults))))))
+      const imageWidth = Math.max(0, ...cell.paragraphs.flatMap(paragraph =>
+        paragraph.images.filter(image => !image.floating).map(image => emuToPx(image.widthEmu))))
+      expand(widths, column, span, Math.max(textWidth, imageWidth) + padding + 0.01)
+      expand(minimums, column, span, Math.max(wordWidth, imageWidth) + padding)
+      column += span
+    }
+  }
+  const total = widths.reduce((a, b) => a + b, 0)
+  if (total > availableWidth) {
+    const minimum = minimums.reduce((a, b) => a + b, 0)
+    for (let i = 0; i < widths.length; i++) {
+      widths[i] = minimum >= availableWidth ? minimums[i] * availableWidth / minimum
+        : minimums[i] + (widths[i] - minimums[i]) * (availableWidth - minimum) / (total - minimum)
+    }
+  }
+  return { ...table, gridColsTwips: widths.map(width => width * 15) }
 }
 
 /**

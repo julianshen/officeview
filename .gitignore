@@ -9,3 +9,6 @@ coverage/
 # parent directory is itself excluded.
 corpus/*
 !corpus/corpus.lock.json
+# Native Office captures and rendered images stay local; scripts/reports are versioned.
+validation/office-reference/*.pdf
+validation/office-reference/*.png

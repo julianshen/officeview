@@ -164,7 +164,7 @@ function paintTable(
   ctx.clip()
 
   // fills + text per cell; merged cells are painted by their anchor
-  const covered = new Set<string>()
+  const owners = new Map<string, string>()
   const styleFills = table.styleFills
   // resolve the style-provided fill for a cell, lowest priority last
   const styleFillFor = (ri: number, ci: number): string | undefined => {
@@ -173,7 +173,7 @@ function paintTable(
     if (table.bandRow) {
       // banding counts data rows only (row 0 is the header when firstRow)
       const band = table.firstRow ? ri - 1 : ri
-      if (band >= 0) return band % 2 === 0 ? styleFills.band1 : styleFills.band2
+      if (band >= 0) return (band % 2 === 0 ? styleFills.band1 : styleFills.band2) ?? styleFills.wholeTable
     }
     if (styleFills.wholeTable) return styleFills.wholeTable
     void ci
@@ -181,10 +181,13 @@ function paintTable(
   }
   table.rows.forEach((row, ri) => {
     let ci = 0
+    // A physical row has one XML cell per grid column, including placeholders.
+    // Its gridSpan controls anchor coverage, never the slot's column advance.
+    const physicalColumns = row.cells.length === widths.length
     for (const cell of row.cells) {
       if (cell.merged) {
         // skip: an absorbed cell has no content of its own
-        ci += Math.max(1, cell.gridSpan)
+        ci += physicalColumns ? 1 : Math.max(1, cell.gridSpan)
         continue
       }
       const colSpan = Math.max(1, cell.gridSpan)
@@ -202,10 +205,11 @@ function paintTable(
       if (cell.paragraphs.length > 0) {
         // header rows in a styled table often switch to light text
         const textColor = table.firstRow && ri === 0 ? table.firstRowTextColor : undefined
-        const paragraphs = textColor
+        const headerBold = table.firstRow && ri === 0 ? table.firstRowBold : undefined
+        const paragraphs = textColor || headerBold !== undefined
           ? cell.paragraphs.map((p) => ({
               ...p,
-              runs: p.runs.map((r) => ({ ...r, color: r.color ?? textColor })),
+              runs: p.runs.map((r) => ({ ...r, color: r.color ?? textColor, bold: r.bold ?? headerBold })),
             }))
           : cell.paragraphs
         paintTextBody(
@@ -226,37 +230,46 @@ function paintTable(
         )
       }
       for (let dr = 0; dr < rowSpan; dr++) {
-        for (let dc = 0; dc < colSpan; dc++) covered.add(`${ri + dr}:${ci + dc}`)
+        for (let dc = 0; dc < colSpan; dc++) owners.set(`${ri + dr}:${ci + dc}`, `${ri}:${ci}`)
       }
-      ci += colSpan
+      ci += physicalColumns ? 1 : colSpan
     }
   })
 
   // grid: thin lines on every boundary, skipping interiors of merged cells
-  ctx.strokeStyle = 'rgba(0,0,0,0.35)'
-  ctx.lineWidth = 1
-  ctx.beginPath()
+  const sameOwner = (a: string, b: string) => owners.has(a) && owners.get(a) === owners.get(b)
+  const draw = (side: 'left' | 'right' | 'top' | 'bottom' | 'insideH' | 'insideV',
+    row: number, x1: number, y1: number, x2: number, y2: number) => {
+    const headerSide = side === 'insideH' && row === 1 ? 'bottom' : side
+    const headerBoundary = row === 0 || (side === 'insideH' && row === 1)
+    const border = table.firstRow && headerBoundary ? table.firstRowBorders?.[headerSide] ?? table.styleBorders?.[side]
+      : table.styleBorders?.[side]
+    ctx.strokeStyle = border?.color ?? 'rgba(0,0,0,0.35)'
+    ctx.lineWidth = border ? emuToPx(border.widthEmu ?? 12700) : 1
+    ctx.beginPath()
+    ctx.moveTo(x1, y1)
+    ctx.lineTo(x2, y2)
+    ctx.stroke()
+  }
+  const gridOffset = table.styleBorders ? 0 : 0.5
   for (let c = 0; c <= widths.length; c++) {
     const gx = colX[c] ?? w
     for (let r = 0; r < heights.length; r++) {
-      if (c > 0 && c < widths.length && covered.has(`${r}:${c}`)) continue
+      if (c > 0 && c < widths.length && sameOwner(`${r}:${c - 1}`, `${r}:${c}`)) continue
       const y1 = rowY[r] ?? 0
       const y2 = rowY[r + 1] ?? h
-      ctx.moveTo(gx + 0.5, y1)
-      ctx.lineTo(gx + 0.5, y2)
+      draw(c === 0 ? 'left' : c === widths.length ? 'right' : 'insideV', r, gx + gridOffset, y1, gx + gridOffset, y2)
     }
   }
   for (let r = 0; r <= heights.length; r++) {
     const gy = rowY[r] ?? h
     for (let c = 0; c < widths.length; c++) {
-      if (r > 0 && r < heights.length && covered.has(`${r}:${c}`)) continue
+      if (r > 0 && r < heights.length && sameOwner(`${r - 1}:${c}`, `${r}:${c}`)) continue
       const x1 = colX[c] ?? 0
       const x2 = colX[c + 1] ?? w
-      ctx.moveTo(x1, gy + 0.5)
-      ctx.lineTo(x2, gy + 0.5)
+      draw(r === 0 ? 'top' : r === heights.length ? 'bottom' : 'insideH', r, x1, gy + gridOffset, x2, gy + gridOffset)
     }
   }
-  ctx.stroke()
   ctx.restore()
 }
 

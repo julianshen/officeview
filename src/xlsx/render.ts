@@ -116,6 +116,7 @@ export function renderSheet(sheet: XlsxSheet, ctx: CanvasRenderingContext2D, met
   ctx.fillStyle = '#ffffff'
   ctx.fillRect(0, 0, m.widthPx, m.heightPx)
 
+  const paintBorders: Array<() => void> = []
   for (const row of sheet.rows) {
     const y = rowY[row.index] ?? 0
     const h = rowHeightsPx[row.index] ?? DEFAULT_ROW_PX
@@ -147,21 +148,23 @@ export function renderSheet(sheet: XlsxSheet, ctx: CanvasRenderingContext2D, met
       }
       // borders (anchor draws the merged rect's outline)
       const b = cell.style?.borders
-      if (b) {
+      if (b) paintBorders.push(() => {
         ctx.lineWidth = 1
         const draw = (side: string | undefined, x1: number, yy1: number, x2: number, yy2: number) => {
           if (!side) return
           ctx.strokeStyle = '#000000'
           ctx.beginPath()
-          ctx.moveTo(x1 + 0.5, yy1 + 0.5)
-          ctx.lineTo(x2 + 0.5, yy2 + 0.5)
+          // Keep outer borders within the worksheet bitmap instead of
+          // clipping the right/bottom stroke completely off the canvas.
+          ctx.moveTo(Math.min(x1 + 0.5, m.widthPx - 0.5), Math.min(yy1 + 0.5, m.heightPx - 0.5))
+          ctx.lineTo(Math.min(x2 + 0.5, m.widthPx - 0.5), Math.min(yy2 + 0.5, m.heightPx - 0.5))
           ctx.stroke()
         }
         draw(b.left, x, y, x, y + hh)
         draw(b.right, x + w, y, x + w, y + hh)
         draw(b.top, x, y, x + w, y)
         draw(b.bottom, x, y + hh, x + w, y + hh)
-      }
+      })
     }
   }
 
@@ -186,6 +189,8 @@ export function renderSheet(sheet: XlsxSheet, ctx: CanvasRenderingContext2D, met
     }
   }
   ctx.stroke()
+  // Explicit formatting wins over both gridlines and neighboring cell fills.
+  for (const paint of paintBorders) paint()
 }
 
 /**
