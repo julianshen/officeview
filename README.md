@@ -59,6 +59,7 @@ const doc = parseRtf(rtfBytes)
   showZoomControls={false}  // hide the +/- cluster
   showSearch={false}        // hide the search bar (Cmd/Ctrl+F opens it otherwise)
   pageGapPx={16}
+  watermark={{ text: 'CONFIDENTIAL', placement: 'tile' }}
 />
 ```
 
@@ -206,6 +207,45 @@ before you rely on them:
   stylesheet.
 - Neither prop is a security boundary. If you need actual confidentiality, serve the
   document to an authorised user and treat the rendering as a preview.
+
+### Watermarks
+
+Stamp text on every page, either from a prop or from the HTTP response header:
+
+```tsx
+<OfficeFile
+  data={fetch('/report.docx')}
+  watermark={{ text: 'CONFIDENTIAL', placement: 'tile', rotate: -45, opacity: 0.18 }}
+/>
+```
+
+```http
+X-OfficeView-Watermark: text=CONFIDENTIAL; placement=tile; rotate=-45; opacity=0.15
+```
+
+| Field | Values | Default |
+| --- | --- | --- |
+| `text` | any string (percent-encode non-ASCII) | required; empty disables |
+| `placement` | `center`, `tile`, `header`, `footer` | `tile` |
+| `rotate` | degrees clockwise | `-45` |
+| `opacity` | `0`..`1`, clamped | `0.15` |
+| `color` | any CSS colour | `#000000` |
+| `fontSize` | points; omit to scale with page width | 7% of page width |
+
+Pairs are separated by `;` (or `,`, matching the protection header). Values are
+percent-decoded, and a malformed header is ignored rather than allowed to break
+the load.
+
+Two deliberate choices:
+
+- **The header wins over the prop.** The server is the authority on what a document
+  is stamped with, so a client cannot quietly downgrade a `CONFIDENTIAL` mark.
+- **It is painted into the page bitmap**, before the content, so it travels with
+  the document instead of being removable by hiding an element, and the document's
+  own text sits on top of the mark rather than being washed out by it.
+
+Like copy/print prevention this is a deterrent, not DRM: it marks a page, it does
+not protect a secret inside it.
 
 ## Current coverage
 

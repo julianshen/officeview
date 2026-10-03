@@ -12,6 +12,8 @@
  * accumulation — not partial rendering (see README).
  */
 
+import { watermarkFromHeaders, type WatermarkOptions } from './watermark'
+
 export interface Progress {
   /** Bytes received so far. */
   loaded: number
@@ -73,6 +75,9 @@ export function protectionFromHeaders(headers: Headers): ProtectionPolicy {
 
 export type ProtectionListener = (policy: ProtectionPolicy) => void
 
+/** Fires once with the watermark the response header asked for, if any. */
+export type WatermarkListener = (mark: WatermarkOptions | undefined) => void
+
 /** Read a byte stream to completion, reporting progress as chunks arrive. */
 export async function readByteStream(
   stream: ReadableStream<Uint8Array>,
@@ -127,6 +132,7 @@ async function readResponse(
   response: Response,
   onProgress?: ProgressListener,
   onProtection?: ProtectionListener,
+  onWatermark?: WatermarkListener,
 ): Promise<Uint8Array> {
   // An auth failure (or any non-2xx) must surface as itself, not as a
   // confusing zip-parse error three layers down.
@@ -137,6 +143,9 @@ async function readResponse(
   // Server policy arrives before the first byte: protection engages while the
   // download is still in flight, never after the render.
   onProtection?.(protectionFromHeaders(response.headers))
+  // Same timing as protection: the watermark is known before the first byte, so
+  // the page paints already stamped and never flashes unstamped.
+  onWatermark?.(watermarkFromHeaders(response.headers))
   const totalHeader = response.headers.get('content-length')
   const total = totalHeader ? parseInt(totalHeader, 10) : undefined
   if (response.body) return readByteStream(response.body, onProgress, Number.isFinite(total) ? total : undefined)
@@ -153,12 +162,13 @@ async function fetchInput(
   init: RequestInit | undefined,
   onProgress?: ProgressListener,
   onProtection?: ProtectionListener,
+  onWatermark?: WatermarkListener,
 ): Promise<Uint8Array> {
   if (typeof fetch !== 'function') {
     const url = typeof input === 'string' ? input : input.url
     throw new Error(`Cannot download ${url}: fetch is not available in this environment`)
   }
-  return readResponse(await fetch(input, init), onProgress, onProtection)
+  return readResponse(await fetch(input, init), onProgress, onProtection, onWatermark)
 }
 
 /** Normalize any accepted byte source into a single Uint8Array buffer. */
@@ -166,28 +176,29 @@ export async function readSource(
   source: ByteSource,
   onProgress?: ProgressListener,
   onProtection?: ProtectionListener,
+  onWatermark?: WatermarkListener,
 ): Promise<Uint8Array> {
   // A promise of a source (e.g. the promise fetch() returns): wait for it,
   // then handle what it resolves to. Progress callbacks only start once the
   // inner source exists — a bare fetch promise reports nothing while the
   // request is still in flight.
   if (typeof (source as Promise<DirectByteSource> | null)?.then === 'function') {
-    return readSource(await (source as Promise<DirectByteSource>), onProgress, onProtection)
+    return readSource(await (source as Promise<DirectByteSource>), onProgress, onProtection, onWatermark)
   }
   // A Request already bundles url + headers + credentials (+ method/mode),
   // so fetch it as-is. Realm note: a cross-realm Request fails instanceof
   // and falls through to the { url } branch below, which still forwards its
   // url, headers and credentials (but not method/body).
   if (typeof Request !== 'undefined' && source instanceof Request) {
-    return fetchInput(source, undefined, onProgress, onProtection)
+    return fetchInput(source, undefined, onProgress, onProtection, onWatermark)
   }
-  if (source instanceof Response) return readResponse(source, onProgress, onProtection)
+  if (source instanceof Response) return readResponse(source, onProgress, onProtection, onWatermark)
   if (source instanceof Blob) return readBlob(source, onProgress)
   // A { url, headers? } descriptor. Checked after Response/Blob: a Response
   // also carries a (possibly empty) .url, and must keep its own branch.
   if (typeof source === 'object' && source !== null && typeof (source as HttpSource).url === 'string') {
     const { url, headers, credentials } = source as HttpSource
-    return fetchInput(url, { headers, credentials }, onProgress, onProtection)
+    return fetchInput(url, { headers, credentials }, onProgress, onProtection, onWatermark)
   }
   if (typeof ReadableStream !== 'undefined' && source instanceof ReadableStream) {
     return readByteStream(source as ReadableStream<Uint8Array>, onProgress)

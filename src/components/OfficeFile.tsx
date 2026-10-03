@@ -14,7 +14,8 @@ import type { PptxDocument } from '../pptx/types'
 import { OfficeDoc, type OfficeDocProps } from './OfficeDoc'
 import { odfKind } from '../odf/container'
 import { parseOdt } from '../odt/parse'
-import { readSource, type ByteSource, type Progress, type ProtectionListener, type ProtectionPolicy } from '../core/stream'
+import { readSource, type ByteSource, type Progress, type ProtectionListener, type ProtectionPolicy, type WatermarkListener } from '../core/stream'
+import { mergeWatermark, type WatermarkOptions } from '../core/watermark'
 import { parseRtf, isRtf } from '../rtf/parse'
 
 export type AnyDoc = DocxDocument | XlsxDocument | PptxDocument
@@ -54,9 +55,13 @@ async function detectAndParse(pkg: OfficePackage): Promise<AnyDoc> {
  */
 export async function loadOfficeFile(
   source: ByteSource,
-  options: { onProgress?: (p: Progress) => void; onProtection?: ProtectionListener } = {},
+  options: {
+    onProgress?: (p: Progress) => void
+    onProtection?: ProtectionListener
+    onWatermark?: WatermarkListener
+  } = {},
 ): Promise<AnyDoc> {
-const data = await readSource(source, options.onProgress, options.onProtection)
+  const data = await readSource(source, options.onProgress, options.onProtection, options.onWatermark)
   // RTF is plain text, not a zip, so it must be recognised before the bytes
   // reach OfficePackage.load, which would throw on them.
   if (isRtf(data)) return parseRtf(data)
@@ -65,13 +70,19 @@ const data = await readSource(source, options.onProgress, options.onProtection)
 
 export function useOfficeFile(
   source: ByteSource | null | undefined,
-  options: { onProgress?: (p: Progress) => void; onProtection?: ProtectionListener } = {},
+  options: {
+    onProgress?: (p: Progress) => void
+    onProtection?: ProtectionListener
+    onWatermark?: WatermarkListener
+  } = {},
 ): OfficeFileState {
   const [state, setState] = useState<OfficeFileState>({ status: 'loading' })
   const progressRef = useRef(options.onProgress)
   progressRef.current = options.onProgress
   const protectionRef = useRef(options.onProtection)
   protectionRef.current = options.onProtection
+  const watermarkRef = useRef(options.onWatermark)
+  watermarkRef.current = options.onWatermark
   useEffect(() => {
     let cancelled = false
     if (!source) return
@@ -83,6 +94,7 @@ export function useOfficeFile(
       // tag the old policy with the current data (see the source-tagged state
       // in <OfficeFile>) and let a stale download overwrite the live policy.
       onProtection: (p) => { if (!cancelled) protectionRef.current?.(p) },
+      onWatermark: (m) => { if (!cancelled) watermarkRef.current?.(m) },
     })
       .then((document) => {
         if (!cancelled) setState({ status: 'ready', document })
@@ -117,6 +129,7 @@ export function OfficeFile({
   error,
   allowCopy = true,
   allowPrint = true,
+  watermark,
   ...rest
 }: OfficeFileProps): ReactElement {
   const [progress, setProgress] = useState<Progress | undefined>(undefined)
@@ -127,19 +140,38 @@ export function OfficeFile({
   // no boolean for devtools to flip. The merge below is deliberately
   // most-restrictive-wins: a server denial cannot be re-enabled from props.
   const [headerPolicy, setHeaderPolicy] = useState<{ source: ByteSource | null | undefined; policy: ProtectionPolicy }>()
+  // Same sealing rule for the watermark: it belongs to the source it arrived
+  // with, so a stale download can never stamp the next document.
+  const [headerMark, setHeaderMark] = useState<{
+    source: ByteSource | null | undefined
+    mark: WatermarkOptions | undefined
+  }>()
   const state = useOfficeFile(data, {
     onProgress: (p) => setProgress(p),
     onProtection: (policy) => setHeaderPolicy({ source: data, policy }),
+    onWatermark: (mark) => setHeaderMark({ source: data, mark }),
   })
   const serverPolicy = headerPolicy && headerPolicy.source === data ? headerPolicy.policy : undefined
   const effectiveAllowCopy = allowCopy && (serverPolicy?.allowCopy ?? true)
   const effectiveAllowPrint = allowPrint && (serverPolicy?.allowPrint ?? true)
+  // A watermark sent by the server wins over the prop: the server is the
+  // authority on what a document is stamped with.
+  const serverMark = headerMark && headerMark.source === data ? headerMark.mark : undefined
+  const effectiveWatermark = mergeWatermark(watermark, serverMark)
   if (state.status === 'loading') {
     if (typeof loading === 'function') return loading(progress ?? { loaded: 0 })
     return <>{loading}</>
   }
   if (state.status === 'error') return error ? error(state.message) : <div role="alert">{state.message}</div>
-  return <OfficeDoc document={state.document} allowCopy={effectiveAllowCopy} allowPrint={effectiveAllowPrint} {...rest} />
+  return (
+    <OfficeDoc
+      document={state.document}
+      allowCopy={effectiveAllowCopy}
+      allowPrint={effectiveAllowPrint}
+      {...(effectiveWatermark ? { watermark: effectiveWatermark } : {})}
+      {...rest}
+    />
+  )
 }
 
 export default OfficeFile

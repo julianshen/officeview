@@ -218,6 +218,10 @@ async function sampleDocxStreamed(): Promise<ReadableStream<Uint8Array>> {
   })
 }
 
+async function sampleDocxWatermarked(): Promise<Uint8Array> {
+  return sampleDocx()
+}
+
 async function sampleDocxProtected(): Promise<Uint8Array> {
   return sampleDocx()
 }
@@ -282,6 +286,7 @@ const SAMPLES: Sample[] = [
   { label: 'Word (.docx)', emoji: '📄', load: sampleDocx },
   { label: 'Writer (.odt)', emoji: '📝', load: sampleOdt },
   { label: 'RTF (.rtf)', emoji: '📃', load: sampleRtf },
+  { label: 'Watermarked', emoji: '💧', load: sampleDocxWatermarked },
   { label: 'Protected', emoji: '🔒', load: sampleDocxProtected },
   { label: 'Streamed', emoji: '🌊', load: sampleDocxStreamed },
   { label: 'Word lists', emoji: '🔢', load: sampleDocxLists },
@@ -294,6 +299,7 @@ const SAMPLES: Sample[] = [
 function App() {
   const [data, setData] = useState<Uint8Array | ReadableStream<Uint8Array> | null>(null)
   const [protectedMode, setProtectedMode] = useState(false)
+  const [watermarkMode, setWatermarkMode] = useState(false)
   const [label, setLabel] = useState('')
   const [busy, setBusy] = useState(false)
 
@@ -302,6 +308,7 @@ function App() {
     try {
       setLabel(`sample ${s.label}`)
       setProtectedMode(s.label === 'Protected')
+      setWatermarkMode(s.label === 'Watermarked')
       setData(await s.load())
     } finally {
       setBusy(false)
@@ -316,6 +323,7 @@ function App() {
     const reader = new FileReader()
     reader.onload = () => {
       setProtectedMode(false)
+      setWatermarkMode(false)
       setData(new Uint8Array(reader.result as ArrayBuffer))
       setBusy(false)
     }
@@ -356,6 +364,9 @@ function App() {
             error={(msg) => <p style={{ textAlign: 'center', color: '#ff6b6b' }}>⚠️ {msg}</p>}
             allowCopy={!protectedMode}
             allowPrint={!protectedMode}
+            {...(watermarkMode
+              ? { watermark: { text: 'CONFIDENTIAL', placement: 'tile' as const, rotate: -45, opacity: 0.18 } }
+              : {})}
             background="#22252d"
             style={{ minHeight: '60dvh' }}
           />

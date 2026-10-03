@@ -8,6 +8,7 @@
  */
 import { useEffect, useMemo, useRef, useState, type CSSProperties, type ReactElement } from 'react'
 import { getPaintables, type PageSpec, type Paintable } from '../render/paint'
+import type { WatermarkOptions } from '../core/watermark'
 import { buildTextIndex, findMatches, stepMatch, type SearchMatch, type TextIndex } from '../core/search'
 import {
   hitTest,
@@ -68,6 +69,17 @@ export interface OfficeDocProps {
    * and a careless Cmd+P, not a determined user with a screenshot.
    */
   allowPrint?: boolean
+  /**
+   * Stamp a watermark on every page (default none).
+   *
+   * Painted into the page bitmap rather than laid over it, so it travels with
+   * the document instead of being removable by hiding an element. See
+   * <WatermarkOptions> for placement, rotation and opacity.
+   *
+   * This is a deterrent, not DRM: it marks a page, it does not protect a
+   * secret inside it.
+   */
+  watermark?: WatermarkOptions
 }
 
 /** Cap the effective device scale so a 6x zoom can't allocate absurd canvases. */
@@ -207,20 +219,25 @@ export function OfficeDoc({
   showSearch = true,
   allowCopy = true,
   allowPrint = true,
+  watermark,
 }: OfficeDocProps): ReactElement {
   // getPaintables is async (docx measurement resolves a 2D ctx); hold in state.
   const [pages, setPages] = useState<Paintable[]>([])
+  // The watermark is painted into the page bitmap, so changing it has to repaint.
+  // A stable string key keeps the effect from re-running on a fresh object
+  // identity every render (and from looping).
+  const markKey = watermark ? JSON.stringify(watermark) : ''
   useEffect(() => {
     let cancelled = false
     // a new document starts at fit
     setTransform({ zoom: 1, panX: 0, panY: 0 })
-    getPaintables(document).then((p) => {
+    getPaintables(document, markKey ? { watermark } : undefined).then((p) => {
       if (!cancelled) setPages(p)
     })
     return () => {
       cancelled = true
     }
-  }, [document])
+  }, [document, markKey])
   const containerRef = useRef<HTMLDivElement | null>(null)
   const [containerWidth, setContainerWidth] = useState(0)
   const [viewportHeight, setViewportHeight] = useState(0)
@@ -447,7 +464,7 @@ export function OfficeDoc({
     if (indexRef.current) return indexRef.current
     setIndexing(true)
     try {
-      const paintables = pages.length > 0 ? pages : await getPaintables(document)
+      const paintables = pages.length > 0 ? pages : await getPaintables(document, markKey ? { watermark } : undefined)
       const built = await buildTextIndex(paintables as Paintable[])
       indexRef.current = built
       return built

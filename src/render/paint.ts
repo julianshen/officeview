@@ -4,6 +4,7 @@
  */
 import { collectDocImages, createMeasurer, layoutDocx, renderPages } from '../docx/layout'
 import { decodeImage } from '../core/images'
+import { normalizeWatermark, type ResolvedWatermark, type WatermarkOptions } from '../core/watermark'
 import { computeMetrics, renderSheet } from '../xlsx/render'
 import { renderSlide, slideMetrics } from '../pptx/render'
 import type { DocxDocument } from '../docx/types'
@@ -43,8 +44,21 @@ async function measurerFromDoc(): Promise<ReturnType<typeof createMeasurer>> {
   return createMeasurer(ctx)
 }
 
+/** Options for stamping a watermark across every painted unit. */
+export interface PaintOptions {
+  /**
+   * Applied to every page/sheet/slide. Resolved once here rather than per
+   * canvas, so a bad watermark is rejected before any painting happens.
+   */
+  watermark?: WatermarkOptions | ResolvedWatermark
+}
+
 /** Collect the canvas-paintable units of a parsed document: pages/sheets/slides. */
-export function getPaintables(doc: DocxDocument | XlsxDocument | PptxDocument): Promise<Paintable[]> {
+export function getPaintables(
+  doc: DocxDocument | XlsxDocument | PptxDocument,
+  options?: PaintOptions,
+): Promise<Paintable[]> {
+  const watermark = normalizeWatermark(options?.watermark as WatermarkOptions | undefined)
   if ('sections' in doc) {
     return measurerFromDoc().then(async (measure) => {
       const pages = layoutDocx(doc, measure)
@@ -60,7 +74,11 @@ export function getPaintables(doc: DocxDocument | XlsxDocument | PptxDocument): 
         paint: (ctx) => {
           ctx.fillStyle = '#ffffff'
           ctx.fillRect(0, 0, page.widthPx, page.heightPx)
-          renderPages([page], ctx, decoded, { pageNumberStart: index + 1, totalPages: total })
+          renderPages([page], ctx, decoded, {
+            pageNumberStart: index + 1,
+            totalPages: total,
+            ...(watermark ? { watermark } : {}),
+          })
         },
       }))
     })

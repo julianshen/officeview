@@ -13,7 +13,25 @@ export type { OfficeDocProps, OfficeDocSource } from './components/OfficeDoc'
 export { OfficePackage } from './core/zip'
 // Streaming byte ingestion (used by <OfficeFile> for fetch/Response/Blob/streams)
 export { readByteStream, readSource, protectionFromHeaders, PROTECTION_HEADER } from './core/stream'
-export type { ByteSource, HttpSource, Progress, ProgressListener, ProtectionPolicy, ProtectionListener } from './core/stream'
+export type { ByteSource, HttpSource, Progress, ProgressListener, ProtectionPolicy, ProtectionListener, WatermarkListener } from './core/stream'
+// Watermarks (prop or X-OfficeView-Watermark response header)
+export {
+  WATERMARK_HEADER,
+  WATERMARK_DEFAULTS,
+  normalizeWatermark,
+  mergeWatermark,
+  watermarkFromHeaders,
+  watermarkStamps,
+  fontSizePx,
+  paintWatermark,
+} from './core/watermark'
+export type {
+  WatermarkOptions,
+  ResolvedWatermark,
+  WatermarkPlacement,
+  WatermarkPage,
+  WatermarkStamp,
+} from './core/watermark'
 // Text search (also used internally by <OfficeDoc>)
 export { buildTextIndex, findMatches, stepMatch } from './core/search'
 export type { TextIndex, TextIndexPage, IndexLine, TextSpan, SearchMatch, SearchOptions } from './core/search'

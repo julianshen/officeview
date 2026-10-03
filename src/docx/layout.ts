@@ -7,6 +7,7 @@ import type { DocxDocument, DocxImage, DocxParagraph, DocxSection, DocxTable, Do
 import { emuToPx } from '../core/geometry'
 import { twipsToPx } from '../core/geometry'
 import { resolveColor } from '../core/color'
+import { paintWatermark, type ResolvedWatermark, type WatermarkOptions } from '../core/watermark'
 
 export interface RunStyle {
   fontFamily: string
@@ -580,6 +581,8 @@ export interface RenderPagesOptions {
   pageNumberStart?: number
   /** Total for NUMPAGES substitution (default pages.length). */
   totalPages?: number
+  /** Watermark stamped onto every page. Drawn under the content, not over it. */
+  watermark?: WatermarkOptions | ResolvedWatermark
 }
 
 export function renderPages(
@@ -596,6 +599,11 @@ export function renderPages(
   const firstNumber = options?.pageNumberStart ?? 1
   const totalPages = options?.totalPages ?? pages.length
   pages.forEach((page, pageIndex) => {
+    // The watermark goes down first, straight onto the page background, so the
+    // document's own text is drawn on top of it rather than being washed out.
+    if (options?.watermark) {
+      paintWatermark(ctx, { widthPx: page.widthPx, heightPx: page.heightPx }, options.watermark)
+    }
     paintTables(page.tables, ctx)
     paintImages(page.images, ctx, images, 'behind')
     paintImages(page.images, ctx, images, 'front')
