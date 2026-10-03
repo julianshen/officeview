@@ -5,6 +5,8 @@
 import { describe, test, expect } from 'vitest'
 import { loadOfficeFile } from '../src/components/OfficeFile'
 import { parseOdt } from '../src/odt/parse'
+import { layoutDocx } from '../src/docx/layout'
+import type { MeasureFn } from '../src/docx/layout'
 import { OfficePackage } from '../src/core/zip'
 import { buildOdt, odfBulletListStyle, odfDecimalListStyle } from '../src/testdata/odf-builders'
 import type { DocxDocument } from '../src/docx/types'
@@ -315,5 +317,249 @@ describe('odt end-to-end render', () => {
       pixels += bm.width * bm.height
     }
     expect(ink / pixels).toBeGreaterThan(0.001)
+  })
+})
+
+describe('odt master persistence', () => {
+  test('a custom first master survives ordinary paragraphs', async () => {
+    const doc = await odtDoc({
+      pageLayouts: { L1: { widthCm: 15, heightCm: 20, marginCm: 1 } },
+      masters: { M1: { layout: 'L1', header: [{ text: 'HD' }] } },
+      paras: [{ text: 'first', masterPage: 'M1' }, { text: 'second' }, { text: 'third' }],
+    })
+    // one section, not three: undefined masters inherit the active one
+    expect(doc.sections).toHaveLength(1)
+    const [section] = doc.sections
+    expect(section.pageSize.widthTwips).toBeCloseTo(8504, 0)
+    expect(section.header?.map((p) => p.runs.map((r) => r.text).join(''))).toEqual(['HD'])
+    expect(section.paragraphs.map((p) => p.runs.map((r) => r.text).join(''))).toEqual(['first', 'second', 'third'])
+  })
+
+  test('an explicit later master still seals a new section', async () => {
+    const doc = await odtDoc({
+      pageLayouts: { L1: { widthCm: 15, heightCm: 20 } },
+      masters: { M1: { layout: 'L1' } },
+      paras: [{ text: 'first' }, { text: 'second', masterPage: 'M1' }],
+    })
+    expect(doc.sections).toHaveLength(2)
+    expect(doc.sections[0].pageSize.widthTwips).toBeCloseTo(11906, 0)
+    expect(doc.sections[1].pageSize.widthTwips).toBeCloseTo(8504, 0)
+  })
+})
+
+describe('odt covered cells', () => {
+  test('a horizontally covered cell is consumed by its span', async () => {
+    const doc = await odtDoc({
+      tables: [{
+        colWidths: ['2cm', '2cm', '2cm'],
+        rows: [{ cells: [{ text: 'merged', gridSpan: 2 }, { covered: true }, { text: 'last' }] }],
+      }],
+    })
+    const block = doc.sections[0].blocks[0]
+    if (block.kind !== 'table') throw new Error('expected a table')
+    // 3 grid columns, 2 model cells — the covered placeholder adds no column
+    expect(block.table.gridColsTwips).toHaveLength(3)
+    expect(block.table.rows[0].cells.map((c) => c.gridSpan)).toEqual([2, 1])
+  })
+
+  test('merged spans land on the grid when laid out', async () => {
+    const measureFixed: MeasureFn = (text, style) => text.length * style.fontSizePt * 0.6 * (96 / 72)
+    const doc = await odtDoc({
+      tables: [{
+        colWidths: ['2cm', '2cm', '2cm'],
+        rows: [{ cells: [{ text: 'merged', gridSpan: 2 }, { covered: true }, { text: 'last' }] }],
+      }],
+    })
+    const pages = layoutDocx(doc, measureFixed)
+    expect(pages.length).toBeGreaterThan(0)
+    const table = pages[0].tables[0]
+    const colPx = 2 * 1440 / 2.54 / 15 // 2cm column at 96dpi
+    expect(table.rows[0].cells).toHaveLength(2)
+    expect(table.rows[0].cells[0].widthPx).toBeCloseTo(2 * colPx, 0)
+    expect(table.rows[0].cells[1].xPx).toBeCloseTo(2 * colPx, 0)
+  })
+
+  test('combined row+column spans keep vertical leftovers', async () => {
+    const doc = await odtDoc({
+      extraBlocks: [
+        '<table:table>'
+        + '<table:table-column table:number-columns-repeated="2"/>'
+        + '<table:table-row><table:table-cell table:number-columns-spanned="2" table:number-rows-spanned="2"><text:p>block</text:p></table:table-cell><table:covered-table-cell/></table:table-row>'
+        + '<table:table-row><table:covered-table-cell/><table:covered-table-cell/></table:table-row>'
+        + '</table:table>',
+      ],
+    })
+    const block = doc.sections[0].blocks[0]
+    if (block.kind !== 'table') throw new Error('expected a table')
+    expect(block.table.rows[0].cells.map((c) => [c.gridSpan, c.vMerge])).toEqual([[2, 'restart']])
+    expect(block.table.rows[1].cells.map((c) => [c.gridSpan, c.vMerge])).toEqual([[1, 'continue'], [1, 'continue']])
+  })
+})
+
+describe('odt repetition', () => {
+  test('content rows repeat faithfully', async () => {
+    const doc = await odtDoc({
+      tables: [{ colWidths: ['3cm'], rows: [{ cells: [{ text: 'again' }], repeat: 2 }] }],
+    })
+    const block = doc.sections[0].blocks[0]
+    if (block.kind !== 'table') throw new Error('expected a table')
+    expect(block.table.rows).toHaveLength(2)
+    expect(block.table.rows.map((r) => r.cells[0].paragraphs[0].runs[0].text)).toEqual(['again', 'again'])
+  })
+
+  test('content cells repeat faithfully', async () => {
+    const doc = await odtDoc({
+      tables: [{ colWidths: ['2cm', '2cm', '2cm'], rows: [{ cells: [{ text: 'x', repeat: 3 }] }] }],
+    })
+    const block = doc.sections[0].blocks[0]
+    if (block.kind !== 'table') throw new Error('expected a table')
+    const cells = block.table.rows[0].cells
+    expect(cells).toHaveLength(3)
+    expect(cells.map((c) => c.paragraphs[0].runs[0].text)).toEqual(['x', 'x', 'x'])
+  })
+
+  test('absurd repetition counts are capped', async () => {
+    const doc = await odtDoc({
+      tables: [{ colWidths: ['2cm'], rows: [{ cells: [{ text: 'x' }], repeat: 5000 }] }],
+    })
+    const block = doc.sections[0].blocks[0]
+    if (block.kind !== 'table') throw new Error('expected a table')
+    expect(block.table.rows.length).toBeLessThanOrEqual(1024)
+    expect(block.table.rows.length).toBeGreaterThan(1)
+  })
+})
+
+describe('odt fonts', () => {
+  test('font-name resolves through font-face-decls on paras and spans', async () => {
+    const doc = await odtDoc({
+      paras: [{ style: 'P', runs: [{ text: 'hello', spanStyle: 'T' }] }],
+      extraAutoStyles:
+        '<style:style style:name="P" style:family="paragraph"><style:text-properties style:font-name="Arial"/></style:style>'
+        + '<style:style style:name="T" style:family="text"><style:text-properties style:font-name="Courier New"/></style:style>',
+    })
+    const run = (doc.sections[0].blocks[0] as { kind: 'p'; paragraph: { runs: Array<{ fontFamily?: string }> } }).paragraph.runs[0]
+    expect(run.fontFamily).toBe('Courier New')
+  })
+
+  test('fo:font-family works and the resolved font reaches layout', async () => {
+    const measureFixed: MeasureFn = (text, style) => text.length * style.fontSizePt * 0.6 * (96 / 72)
+    const doc = await odtDoc({
+      paras: [{ style: 'P', runs: [{ text: 'sized' }] }],
+      extraAutoStyles:
+        '<style:style style:name="P" style:family="paragraph"><style:text-properties fo:font-family="Georgia" fo:font-size="14pt"/></style:style>',
+    })
+    const para = (doc.sections[0].blocks[0] as { kind: 'p'; paragraph: { runs: Array<{ fontFamily?: string; fontSizePt?: number }> } }).paragraph
+    expect(para.runs[0].fontFamily).toBe('Georgia')
+    expect(para.runs[0].fontSizePt).toBe(14)
+    const pages = layoutDocx(doc, measureFixed)
+    expect(pages[0].lines[0].segs[0].style.fontFamily).toBe('Georgia')
+  })
+})
+
+describe('odt nested lists', () => {
+  test('a nested list preserves the parent counter', async () => {
+    const doc = await odtDoc({
+      extraAutoStyles: odfDecimalListStyle('DL'),
+      lists: [{
+        styleName: 'DL',
+        items: [{ text: 'one' }, { text: 'two', nested: { styleName: 'DL', items: [{ text: 'sub' }] } }, { text: 'three' }],
+      }],
+    })
+    expect(doc.sections[0].paragraphs.map((p) => p.listMarker)).toEqual(['1.', '2.', 'a)', '3.'])
+  })
+
+  test('a nested list without a style inherits the surrounding one', async () => {
+    const doc = await odtDoc({
+      extraAutoStyles: odfDecimalListStyle('DL'),
+      lists: [{ styleName: 'DL', items: [{ text: 'one', nested: { items: [{ text: 'sub' }] } }] }],
+    })
+    expect(doc.sections[0].paragraphs.map((p) => p.listMarker)).toEqual(['1.', 'a)'])
+  })
+})
+
+describe('odt uppercase numbering', () => {
+  const STYLES =
+    '<text:list-style style:name="U"><text:list-level-style-number text:level="1" style:num-format="A" style:num-suffix="."/></text:list-style>'
+    + '<text:list-style style:name="R"><text:list-level-style-number text:level="1" style:num-format="I" style:num-suffix="."/></text:list-style>'
+  test('uppercase alpha and Roman markers render', async () => {
+    const doc = await odtDoc({
+      extraCommonStyles: STYLES,
+      lists: [
+        { styleName: 'U', items: [{ text: 'a' }, { text: 'b' }] },
+        { styleName: 'R', items: [{ text: 'i' }, { text: 'ii' }] },
+      ],
+    })
+    expect(doc.sections[0].paragraphs.map((p) => p.listMarker)).toEqual(['A.', 'B.', 'I.', 'II.'])
+  })
+})
+
+describe('odt nested display-level joins', () => {
+  const JOINED =
+    '<text:list-style style:name="DJ">'
+    + '<text:list-level-style-number text:level="1" style:num-format="1" style:num-suffix="."><style:list-level-properties fo:margin-left="1.2cm" fo:text-indent="-0.6cm"/></text:list-level-style-number>'
+    + '<text:list-level-style-number text:level="2" style:num-format="1" style:num-suffix="." style:display-levels="2"><style:list-level-properties fo:margin-left="1.8cm" fo:text-indent="-0.6cm"/></text:list-level-style-number>'
+    + '</text:list-style>'
+
+  test('a style-less nested sequence joins ancestor counters', async () => {
+    const doc = await odtDoc({
+      extraCommonStyles: JOINED,
+      lists: [{ styleName: 'DJ', items: [{ text: 'one' }, { text: 'two', nested: { items: [{ text: 'sub' }] } }] }],
+    })
+    expect(doc.sections[0].paragraphs.map((p) => p.listMarker)).toEqual(['1.', '2.', '2.1.'])
+  })
+
+  test('an explicitly same-styled nested sequence joins too', async () => {
+    const doc = await odtDoc({
+      extraCommonStyles: JOINED,
+      lists: [{ styleName: 'DJ', items: [{ text: 'one' }, { text: 'two', nested: { styleName: 'DJ', items: [{ text: 'sub' }] } }] }],
+    })
+    expect(doc.sections[0].paragraphs.map((p) => p.listMarker)).toEqual(['1.', '2.', '2.1.'])
+  })
+})
+
+describe('odt repeated covered cells', () => {
+  test('repeated row-span leftovers stay vertical without shifting the row', async () => {
+    const doc = await odtDoc({
+      tables: [{
+        colWidths: ['2cm', '2cm', '2cm'],
+        rows: [
+          { cells: [{ text: 'merged', rowSpan: 2, repeat: 2 }, { text: 'last' }] },
+          { cells: [{ covered: true, repeat: 2 }, { text: 'last' }] },
+        ],
+      }],
+    })
+    const block = doc.sections[0].blocks[0]
+    if (block.kind !== 'table') throw new Error('expected a table')
+    expect(block.table.rows[0].cells.map((c) => [c.gridSpan, c.vMerge])).toEqual([[1, 'restart'], [1, 'restart'], [1, undefined]])
+    expect(block.table.rows[1].cells.map((c) => [c.gridSpan, c.vMerge])).toEqual([[1, 'continue'], [1, 'continue'], [1, undefined]])
+    expect(block.table.rows[1].cells.map((c) => c.paragraphs[0].runs.map((r) => r.text).join(''))).toEqual(['', '', 'last'])
+  })
+
+  test('a gridSpan=3 consumes both repeated placeholders', async () => {
+    const doc = await odtDoc({
+      tables: [{
+        colWidths: ['2cm', '2cm', '2cm', '2cm'],
+        rows: [{ cells: [{ text: 'wide', gridSpan: 3 }, { covered: true, repeat: 2 }, { text: 'last' }] }],
+      }],
+    })
+    const block = doc.sections[0].blocks[0]
+    if (block.kind !== 'table') throw new Error('expected a table')
+    expect(block.table.rows[0].cells.map((c) => c.gridSpan)).toEqual([3, 1])
+  })
+
+  test('combined horizontal and vertical spans keep both axes', async () => {
+    const doc = await odtDoc({
+      tables: [{
+        colWidths: ['2cm', '2cm', '2cm'],
+        rows: [
+          { cells: [{ text: 'block', gridSpan: 2, rowSpan: 2 }, { covered: true }, { text: 'side' }] },
+          { cells: [{ covered: true, repeat: 2 }, { text: 'below' }] },
+        ],
+      }],
+    })
+    const block = doc.sections[0].blocks[0]
+    if (block.kind !== 'table') throw new Error('expected a table')
+    expect(block.table.rows[0].cells.map((c) => [c.gridSpan, c.vMerge])).toEqual([[2, 'restart'], [1, undefined]])
+    expect(block.table.rows[1].cells.map((c) => [c.gridSpan, c.vMerge])).toEqual([[1, 'continue'], [1, 'continue'], [1, undefined]])
   })
 })

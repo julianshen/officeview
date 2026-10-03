@@ -50,7 +50,8 @@ export interface OdfListItem {
 }
 
 export interface OdfListSpec {
-  styleName: string
+  /** Omitted for a nested list inheriting the surrounding style. */
+  styleName?: string
   items: OdfListItem[]
   continueNumbering?: boolean
   startValue?: number
@@ -60,8 +61,12 @@ export interface OdfCellSpec {
   text?: string
   paras?: OdfParaSpec[]
   gridSpan?: number
-  /** Emits a covered placeholder cell (row-span leftover). */
+  /** table:number-rows-spanned — opens a vertical merge. */
+  rowSpan?: number
+  /** Emits a covered placeholder cell (span leftover). */
   covered?: boolean
+  /** table:number-columns-repeated — stamps identical cells (or placeholders). */
+  repeat?: number
   fill?: string
   vAlign?: 'top' | 'middle' | 'bottom'
 }
@@ -70,6 +75,8 @@ export interface OdfRowSpec {
   cells: OdfCellSpec[]
   heightCm?: number
   exactHeight?: boolean
+  /** table:number-rows-repeated — stamps identical rows. */
+  repeat?: number
 }
 
 export interface OdfTableSpec {
@@ -214,7 +221,7 @@ class Ctx {
   }
 
   listXml(list: OdfListSpec): string {
-    const attrs = `text:style-name="${list.styleName}"`
+    const attrs = (list.styleName ? `text:style-name="${list.styleName}"` : '')
       + (list.continueNumbering ? ' text:continue-numbering="true"' : '')
       + (list.startValue !== undefined ? ` text:start-value="${list.startValue}"` : '')
     const items = list.items.map((item) => {
@@ -263,7 +270,10 @@ class Ctx {
     }).join('')
     const rowXml = (row: OdfRowSpec): string => {
       const cells = row.cells.map((cell) => {
-        if (cell.covered) return '<table:covered-table-cell/>'
+        if (cell.covered) {
+          const coverRepeat = cell.repeat && cell.repeat > 1 ? ` table:number-columns-repeated="${cell.repeat}"` : ''
+          return `<table:covered-table-cell${coverRepeat}/>`
+        }
         const cellProps: string[] = []
         if (cell.fill) cellProps.push(`fo:background-color="#${cell.fill}"`)
         if (cell.vAlign && cell.vAlign !== 'top') {
@@ -274,14 +284,17 @@ class Ctx {
           ? ` table:style-name="${this.mintCellStyle(cellProps.join(' '))}"`
           : ''
         const spanAttr = cell.gridSpan && cell.gridSpan > 1 ? ` table:number-columns-spanned="${cell.gridSpan}"` : ''
+        const rowSpanAttr = cell.rowSpan && cell.rowSpan > 1 ? ` table:number-rows-spanned="${cell.rowSpan}"` : ''
+        const repeatAttr = cell.repeat && cell.repeat > 1 ? ` table:number-columns-repeated="${cell.repeat}"` : ''
         const paras = (cell.paras ?? (cell.text !== undefined ? [{ text: cell.text }] : [{}]))
           .map((p) => this.paraXml(p)).join('')
-        return `<table:table-cell${styleAttr}${spanAttr}>${paras}</table:table-cell>`
+        return `<table:table-cell${styleAttr}${spanAttr}${rowSpanAttr}${repeatAttr}>${paras}</table:table-cell>`
       }).join('')
       const heightAttr = row.heightCm !== undefined
         ? ` table:style-name="${this.mintRowStyle(row.heightCm, row.exactHeight)}"`
         : ''
-      return `<table:table-row${heightAttr}>${cells}</table:table-row>`
+      const rowRepeatAttr = row.repeat && row.repeat > 1 ? ` table:number-rows-repeated="${row.repeat}"` : ''
+      return `<table:table-row${heightAttr}${rowRepeatAttr}>${cells}</table:table-row>`
     }
     const rows = table.rows.map(rowXml).join('')
     const headerRows = (table.headerRows ?? []).map(rowXml).join('')

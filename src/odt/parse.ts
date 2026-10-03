@@ -47,7 +47,10 @@ function formatOdtCounter(n: number, numFormat: string): string {
 interface OdtContext {
   styles: OdfStyles
   images: OdtImageEntry[]
-  counters: OdtListCounters
+  /** Numbering snapshots per list style, for continue-numbering resume. */
+  listStates: OdtListCounters
+  /** Outline (heading) numbering never restarts within a document. */
+  outlineCounters: number[]
 }
 
 /** LibreOffice-ish fallback page: A4 with 2cm-class margins (twips). */
@@ -245,18 +248,19 @@ function markerFor(style: OdfListStyle, level: number, counters: number[]): stri
   return `${lvl.prefix}${parts.join('.')}${lvl.suffix}`
 }
 
-/** Advance counters for (style, level); deeper levels restart. Returns the marker. */
-function nextMarker(ctx: OdtContext, key: string, style: OdfListStyle, level: number, startValue?: number): string | undefined {
-  let counters = ctx.counters.get(key)
-  if (!counters) {
-    counters = []
-    ctx.counters.set(key, counters)
-  }
+/** Advance counters for one list item; deeper levels restart. Returns the marker. */
+function nextMarker(style: OdfListStyle, level: number, counters: number[], startValue?: number): string | undefined {
   const lvl = style.levels[level]
   const start = startValue ?? lvl?.start ?? 1
   counters[level] = (counters[level] ?? start - 1) + 1
   for (let deeper = level + 1; deeper < 10; deeper++) counters[deeper] = undefined as unknown as number
   return markerFor(style, level, counters)
+}
+
+interface InheritedList {
+  styleName?: string
+  /** The enclosing list's live counters, for continue-numbering into the same style. */
+  active?: { key: string; counters: number[] }
 }
 
 function parseOdtParagraph(node: XmlNode, ctx: OdtContext, opts?: { outlineLevel?: number }): DocxParagraph {
@@ -283,14 +287,49 @@ function parseOdtParagraph(node: XmlNode, ctx: OdtContext, opts?: { outlineLevel
   return paragraph
 }
 
-/** A text:list / text:continue-list → marked paragraphs (nested lists deepen). */
-function parseOdtList(node: XmlNode, ctx: OdtContext, level: number, blocks: DocxBlock[], paragraphs: DocxParagraph[]): void {
+/** A text:list / text:continue-list → marked paragraphs (nested lists deepen).
+ *
+ * Each list element owns its numbering sequence: entering a nested list must
+ * not disturb the parent's counters, so sequences live in per-element arrays
+ * (snapshotted for later continue-numbering) rather than one shared entry
+ * per style. A nested list without its own style inherits the surrounding one.
+ */
+function parseOdtList(
+  node: XmlNode,
+  ctx: OdtContext,
+  level: number,
+  blocks: DocxBlock[],
+  paragraphs: DocxParagraph[],
+  inherited?: InheritedList,
+): void {
   const a = attrs(node)
-  const styleName = a['style-name'] as string | undefined
+  const ownStyle = a['style-name'] as string | undefined
+  const styleName = ownStyle ?? inherited?.styleName
   const style = ctx.styles.listStyle(styleName)
-  const key = styleName ?? `\0anonymous-${level}`
   const continuing = (a['continue-numbering'] as string | undefined)?.toLowerCase() === 'true'
-  if (!continuing) ctx.counters.delete(key)
+  let counters: number[]
+  let key: string | undefined
+  if (styleName) {
+    key = styleName
+    if (continuing && inherited?.active?.key === styleName) {
+      counters = inherited.active.counters
+    } else if (continuing) {
+      const saved = ctx.listStates.get(styleName)
+      counters = saved ? [...saved] : []
+    } else if (inherited?.active) {
+      // Fresh nested sequence: preserve the ancestors' counters so
+      // display-level joins (e.g. "2.1.") see their context, but reset our
+      // own level and deeper so numbering restarts here. The copy keeps the
+      // parent's live array untouched.
+      counters = [...inherited.active.counters]
+      for (let i = level; i < 10; i++) counters[i] = undefined as unknown as number
+    } else {
+      counters = []
+    }
+  } else {
+    counters = []
+  }
+  const active = key ? { key, counters } : inherited?.active
   const startValue = parseInt((a['start-value'] as string | undefined) ?? '', 10)
   const start = Number.isFinite(startValue) ? startValue : undefined
   for (const [name, child] of orderedChildren(node)) {
@@ -301,7 +340,7 @@ function parseOdtList(node: XmlNode, ctx: OdtContext, level: number, blocks: Doc
         const outline = itemName === 'h' ? parseInt((attrs(itemNode)['outline-level'] as string | undefined) ?? '', 10) : undefined
         const para = parseOdtParagraph(itemNode, ctx, outline !== undefined && Number.isFinite(outline) ? { outlineLevel: outline } : undefined)
         if (!marked && style) {
-          const marker = nextMarker(ctx, key, style, Math.min(level, 9), marked ? undefined : start)
+          const marker = nextMarker(style, Math.min(level, 9), counters, marked ? undefined : start)
           if (marker) {
             para.listMarker = marker
             para.listLevel = Math.min(level, 9)
@@ -317,10 +356,11 @@ function parseOdtList(node: XmlNode, ctx: OdtContext, level: number, blocks: Doc
         paragraphs.push(para)
         blocks.push({ kind: 'p', paragraph: para })
       } else if (itemName === 'list' || itemName === 'continue-list') {
-        parseOdtList(itemNode, ctx, level + 1, blocks, paragraphs)
+        parseOdtList(itemNode, ctx, level + 1, blocks, paragraphs, { styleName, active })
       }
     }
   }
+  if (key) ctx.listStates.set(key, counters)
 }
 
 /** Flow blocks (paragraphs, headings, lists, tables) in document order. */
@@ -335,7 +375,7 @@ function parseBlocks(nodes: Array<[string, XmlNode]>, ctx: OdtContext, blocks: D
       const para = parseOdtParagraph(node, ctx, Number.isFinite(outline) ? { outlineLevel: outline } : undefined)
       const outlineStyle = ctx.styles.listStyle('\0outline')
       if (outlineStyle && Number.isFinite(outline)) {
-        const marker = nextMarker(ctx, '\0outline', outlineStyle, Math.min(Math.max(outline - 1, 0), 9))
+        const marker = nextMarker(outlineStyle, Math.min(Math.max(outline - 1, 0), 9), ctx.outlineCounters)
         if (marker) {
           para.listMarker = marker
           para.listLevel = Math.min(Math.max(outline - 1, 0), 9)
@@ -370,6 +410,18 @@ function emptyCell(vMerge?: 'restart' | 'continue'): DocxTableCell {
   }
 }
 
+/**
+ * Bounds for table:number-*-repeated. Repetition is faithful content, so it
+ * expands — but an unbounded count is a memory-exhaustion vector in a hostile
+ * file, hence the cap (documented, generous: real templates repeat dozens).
+ */
+const MAX_TABLE_REPEAT = 1024
+
+function cappedRepeat(raw: number): number {
+  if (!Number.isFinite(raw) || raw < 1) return 1
+  return Math.min(Math.floor(raw), MAX_TABLE_REPEAT)
+}
+
 /** table:table → grid model (spans, covered cells, fills, borders, heights). */
 function parseOdtTable(node: XmlNode, ctx: OdtContext): DocxTable | undefined {
   const a = attrs(node)
@@ -384,7 +436,7 @@ function parseOdtTable(node: XmlNode, ctx: OdtContext): DocxTable | undefined {
       }
       if (name !== 'table-column') continue
       const ca = attrs(child)
-      const repeat = Math.max(1, parseInt((ca['number-columns-repeated'] as string | undefined) ?? '1', 10) || 1)
+      const repeat = cappedRepeat(parseInt((ca['number-columns-repeated'] as string | undefined) ?? '1', 10))
       const props = ctx.styles.columnProps(ca['style-name'] as string | undefined)
       for (let i = 0; i < repeat; i++) colAbs.push(props.widthTwips)
     }
@@ -395,6 +447,65 @@ function parseOdtTable(node: XmlNode, ctx: OdtContext): DocxTable | undefined {
   let gridColsTwips = colAbs.map((w) => Math.round(w ?? absMean))
   const rows: DocxTableRow[] = []
   let firstCellPadding: { top?: number; right?: number; bottom?: number; left?: number } | undefined
+  const parseCellContent = (cellNode: XmlNode): DocxParagraph[] => {
+    const paras: DocxParagraph[] = []
+    for (const [contentName, contentNode] of orderedChildren(cellNode)) {
+      if (contentName === 'p' || contentName === 'h') paras.push(parseOdtParagraph(contentNode, ctx))
+      else if (contentName === 'list' || contentName === 'continue-list') {
+        const cellBlocks: DocxBlock[] = []
+        parseOdtList(contentNode, ctx, 0, cellBlocks, paras)
+        void cellBlocks
+      }
+      // nested tables: out of scope, skipped
+    }
+    if (paras.length === 0) paras.push({ runs: [], images: [], align: 'left' })
+    return paras
+  }
+  const parseRowCells = (rowNode: XmlNode): DocxTableCell[] => {
+    const cells: DocxTableCell[] = []
+    // Positions already covered by a horizontal span in this row: a covered
+    // placeholder there extends the span, it is not a grid column of its
+    // own. Covered cells outside such spans are vertical leftovers and keep
+    // their vMerge-continue entry (including combined row+column spans,
+    // whose lower rows arrive as their own covered cells).
+    let hCover = 0
+    for (const [cellName, cellNode] of orderedChildren(rowNode)) {
+      if (cellName === 'covered-table-cell') {
+        // Covered placeholders repeat like cells; each logical placeholder
+        // consumes one horizontal span position before counting as vertical.
+        const coverRepeat = cappedRepeat(parseInt((attrs(cellNode)['number-columns-repeated'] as string | undefined) ?? '1', 10))
+        for (let i = 0; i < coverRepeat; i++) {
+          if (hCover > 0) {
+            hCover -= 1
+            continue
+          }
+          cells.push(emptyCell('continue'))
+        }
+        continue
+      }
+      if (cellName !== 'table-cell') continue
+      const cellA = attrs(cellNode)
+      // number-columns-repeated stamps identical cells; content re-parses per
+      // copy so list counters advance exactly as if written out
+      const cellRepeat = cappedRepeat(parseInt((cellA['number-columns-repeated'] as string | undefined) ?? '1', 10))
+      for (let c = 0; c < cellRepeat; c++) {
+        const cprops = ctx.styles.cellProps(cellA['style-name'] as string | undefined)
+        if (!firstCellPadding && cprops.paddingTwips) firstCellPadding = cprops.paddingTwips
+        const span = Math.max(1, parseInt((cellA['number-columns-spanned'] as string | undefined) ?? '1', 10) || 1)
+        const rowSpan = Math.max(1, parseInt((cellA['number-rows-spanned'] as string | undefined) ?? '1', 10) || 1)
+        cells.push({
+          paragraphs: parseCellContent(cellNode),
+          gridSpan: span,
+          vMerge: rowSpan > 1 ? 'restart' : undefined,
+          fill: cprops.fill,
+          borders: cprops.borders,
+          vAlign: cprops.vAlign,
+        })
+        if (span > 1) hCover += span - 1
+      }
+    }
+    return cells
+  }
   const readRows = (parent: XmlNode, header: boolean): void => {
     for (const [name, child] of orderedChildren(parent)) {
       if (name === 'table-row-group' || name === 'table-header-rows' || name === 'table-rows') {
@@ -403,47 +514,13 @@ function parseOdtTable(node: XmlNode, ctx: OdtContext): DocxTable | undefined {
       }
       if (name !== 'table-row') continue
       const ra = attrs(child)
-      const repeatRaw = parseInt((ra['number-rows-repeated'] as string | undefined) ?? '1', 10)
+      const repeat = cappedRepeat(parseInt((ra['number-rows-repeated'] as string | undefined) ?? '1', 10))
       const rprops = ctx.styles.rowProps(ra['style-name'] as string | undefined)
-      const cells: DocxTableCell[] = []
-      for (const [cellName, cellNode] of orderedChildren(child)) {
-        if (cellName === 'covered-table-cell') {
-          cells.push(emptyCell('continue'))
-          continue
-        }
-        if (cellName !== 'table-cell') continue
-        const cellA = attrs(cellNode)
-        const cprops = ctx.styles.cellProps(cellA['style-name'] as string | undefined)
-        if (!firstCellPadding && cprops.paddingTwips) firstCellPadding = cprops.paddingTwips
-        const span = Math.max(1, parseInt((cellA['number-columns-spanned'] as string | undefined) ?? '1', 10) || 1)
-        const rowSpan = Math.max(1, parseInt((cellA['number-rows-spanned'] as string | undefined) ?? '1', 10) || 1)
-        const paras: DocxParagraph[] = []
-        for (const [contentName, contentNode] of orderedChildren(cellNode)) {
-          if (contentName === 'p' || contentName === 'h') paras.push(parseOdtParagraph(contentNode, ctx))
-          else if (contentName === 'list' || contentName === 'continue-list') {
-            const cellBlocks: DocxBlock[] = []
-            parseOdtList(contentNode, ctx, 0, cellBlocks, paras)
-            void cellBlocks
-          }
-          // nested tables: out of scope, skipped
-        }
-        if (paras.length === 0) paras.push({ runs: [], images: [], align: 'left' })
-        cells.push({
-          paragraphs: paras,
-          gridSpan: span,
-          vMerge: rowSpan > 1 ? 'restart' : undefined,
-          fill: cprops.fill,
-          borders: cprops.borders,
-          vAlign: cprops.vAlign,
-        })
-      }
-      // number-rows-repeated marks identical rows; only repeat provably empty
-      // ones — repeating content rows would duplicate visible text
-      const empty = cells.every((c) => c.paragraphs.every((p) => p.runs.length === 0))
-      const repeat = Number.isFinite(repeatRaw) && repeatRaw > 1 && empty ? repeatRaw : 1
-      for (let i = 0; i < repeat; i++) {
+      // Repeated rows re-parse from the element, so list counters and fields
+      // advance per copy exactly as if the rows were written out.
+      for (let r = 0; r < repeat; r++) {
         rows.push({
-          cells: i === 0 ? cells : cells.map((c) => ({ ...c, paragraphs: c.paragraphs.map((p) => ({ ...p })) })),
+          cells: parseRowCells(child),
           heightTwips: rprops.heightTwips,
           heightRule: rprops.heightRule,
           isHeader: header || undefined,
@@ -490,7 +567,7 @@ export async function parseOdt(pkg: OfficePackage): Promise<DocxDocument> {
   const styles = await OdfStyles.load(pkg)
   const content = await pkg.xmlOrdered('content.xml')
   if (!content) throw new Error('content.xml missing — not a valid ODT?')
-  const ctx: OdtContext = { styles, images: await loadOdtImages(pkg), counters: new Map() }
+  const ctx: OdtContext = { styles, images: await loadOdtImages(pkg), listStates: new Map(), outlineCounters: [] }
   const body = getChildren(content, 'body')[0]
   const text = body ? getChildren(body, 'text')[0] : undefined
   const sections: DocxSection[] = []
@@ -502,7 +579,11 @@ export async function parseOdt(pkg: OfficePackage): Promise<DocxDocument> {
     }
   }
   const applyMaster = (masterName: string | undefined): void => {
-    if (masterName === currentMaster) return
+    // An ordinary paragraph carries no master: it inherits the active one
+    // rather than resetting to the fallback layout. Only an explicit change
+    // seals the current section — this keeps a custom first master (plus its
+    // header and geometry) across the paragraphs that follow it.
+    if (masterName === undefined || masterName === currentMaster) return
     if (current.paragraphs.length > 0 || current.blocks.length > 0) {
       // content accumulated under another master: seal it and start fresh.
       // An empty current section is reused instead so a leading master does

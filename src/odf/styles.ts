@@ -185,6 +185,13 @@ function readTextProps(node: XmlNode | undefined, basePt?: number): OdfTextProps
   else if ((a.color as string | undefined)?.toLowerCase() === 'transparent') out.color = undefined
   const bg = hexColor(a['background-color'] as string | undefined)
   if (bg) out.background = bg
+  // ODF names the face two ways: style:font-name references font-face-decls,
+  // fo:font-family is usually literal. Both resolve through faces later, so
+  // the raw value is kept here and mapped in textProps()/paraProps().
+  const fontName = a['font-name'] as string | undefined
+  const fontFamilyAttr = a['font-family'] as string | undefined
+  if (fontName !== undefined) out.fontFamily = fontName
+  else if (fontFamilyAttr !== undefined) out.fontFamily = fontFamilyAttr
   return out
 }
 
@@ -377,6 +384,8 @@ export class OdfStyles {
       const list = a['list-style-name'] as string | undefined
       if (list) listStyleName = list
     }
+    // resolve font names through font-face-decls last (faces are global)
+    if (text.fontFamily) text = { ...text, fontFamily: this.fontFamily(text.fontFamily) }
     return { ...merged, text, masterPageName, listStyleName }
   }
 
@@ -591,7 +600,9 @@ function stylesOf(root: XmlNode): Array<[string, XmlNode]> {
 }
 
 function mapNumFormat(v: string | undefined): OdfNumFormat {
-  switch ((v ?? '').trim().toLowerCase()) {
+  // ODF num-format is case-sensitive: 'A'/'I' are distinct uppercase formats,
+  // so match the raw value (whitespace-tolerant) instead of lowercasing it.
+  switch ((v ?? '').trim()) {
     case 'a': return 'lowerLetter'
     case 'A': return 'upperLetter'
     case 'i': return 'lowerRoman'
