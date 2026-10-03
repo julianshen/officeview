@@ -10,10 +10,73 @@ async function docWithPages() {
   return parseDocx(await OfficePackage.load(await buildDocx(paras)))
 }
 
+/**
+ * An IntersectionObserver whose reports the test drives by hand. `visible` is
+ * what every observed canvas is reported as; `null` means "never report",
+ * which is how an off-screen page looks to the viewer.
+ */
+class ControllableObserver {
+  static visible: boolean | null = null
+  static instances: ControllableObserver[] = []
+  private targets: Element[] = []
+  constructor(private readonly callback: IntersectionObserverCallback) {
+    ControllableObserver.instances.push(this)
+  }
+  observe(el: Element): void {
+    this.targets.push(el)
+  }
+  unobserve(): void {}
+  disconnect(): void {
+    this.targets = []
+  }
+  takeRecords(): [] {
+    return []
+  }
+  root = null
+  rootMargin = ''
+  thresholds: number[] = []
+  /** Deliver a report to every registered target, as a real observer would. */
+  static report(visible: boolean): void {
+    ControllableObserver.visible = visible
+    for (const io of ControllableObserver.instances) {
+      io.callback(
+        io.targets.map((target) => ({ target, isIntersecting: visible } as IntersectionObserverEntry)),
+        io as unknown as IntersectionObserver,
+      )
+    }
+  }
+  static reset(): void {
+    ControllableObserver.instances = []
+    ControllableObserver.visible = null
+  }
+}
+
+/** Install the controllable observer for the duration of `fn`. */
+async function withObserver<T>(fn: () => Promise<T>): Promise<T> {
+  const original = (globalThis as { IntersectionObserver?: unknown }).IntersectionObserver
+  ControllableObserver.reset()
+  ;(globalThis as { IntersectionObserver?: unknown }).IntersectionObserver = ControllableObserver
+  try {
+    return await fn()
+  } finally {
+    ControllableObserver.reset()
+    ;(globalThis as { IntersectionObserver?: unknown }).IntersectionObserver = original
+  }
+}
+
 async function mount() {
   const doc = await docWithPages()
   const utils = render(<OfficeDoc document={doc} />)
   await waitFor(() => expect(utils.container.querySelectorAll('canvas').length).toBeGreaterThan(1))
+  // The canvas backing store is assigned in an effect AFTER the element exists.
+  // Waiting on existence alone can capture the pre-layout state, which made
+  // later width assertions depend on when the effect had run.
+  await waitFor(() => {
+    for (const c of Array.from(utils.container.querySelectorAll('canvas'))) {
+      expect((c as HTMLCanvasElement).width).toBeGreaterThan(0)
+      expect((c as HTMLCanvasElement).height).toBeGreaterThan(0)
+    }
+  })
   return utils
 }
 
@@ -151,28 +214,66 @@ describe('<OfficeDoc> hi-dpi re-render when zoomed', () => {
   })
 
   test('off-screen pages stay at base scale while zoomed (memory bound)', async () => {
-    // stub an IntersectionObserver that reports nothing as intersecting
-    const original = (globalThis as { IntersectionObserver?: unknown }).IntersectionObserver
-    class NeverIntersecting {
-      observe(): void {}
-      unobserve(): void {}
-      disconnect(): void {}
-      takeRecords(): [] { return [] }
-      root = null
-      rootMargin = ''
-      thresholds: number[] = []
-    }
-    ;(globalThis as { IntersectionObserver?: unknown }).IntersectionObserver = NeverIntersecting
-    try {
+    await withObserver(async () => {
       const utils = await mount()
       const canvasOf = () => utils.container.querySelector('canvas') as HTMLCanvasElement
       const base = canvasOf().width
+      const plus = utils.container.querySelector('[aria-label="Zoom in"]') as HTMLButtonElement
+
+      // Zoom, and wait for the INVARIANT this test claims rather than for an
+      // unrelated signal. The previous version waited for the CSS transform and
+      // then asserted the backing store immediately, which raced the effect that
+      // applies the visibility decision and made this test intermittently fail.
+      fireEvent.click(plus)
+      await waitFor(() => expect(canvasOf().width).toBe(base))
+      expect(content(utils).style.transform).toContain('scale(1.5)')
+
+      // Zooming further must not allocate a bigger backing store either.
+      fireEvent.click(plus)
+      await waitFor(() => expect(canvasOf().width).toBe(base))
+    })
+  })
+
+  test('a page reported visible DOES get the zoomed backing store', async () => {
+    // The discriminating counterpart to the test above: without it, "stays at
+    // base scale" could pass simply because boosting is broken entirely.
+    await withObserver(async () => {
+      const utils = await mount()
+      const canvasOf = () => utils.container.querySelector('canvas') as HTMLCanvasElement
+      const base = canvasOf().width
+
       fireEvent.click(utils.container.querySelector('[aria-label="Zoom in"]') as HTMLButtonElement)
-      await waitFor(() => expect(content(utils).style.transform).toContain('scale(1.5)'))
-      // backing store unchanged because no page is considered visible
-      expect(canvasOf().width).toBe(base)
-    } finally {
-      ;(globalThis as { IntersectionObserver?: unknown }).IntersectionObserver = original
-    }
+      // still pessimistic: no report has arrived yet
+      await waitFor(() => expect(canvasOf().width).toBe(base))
+
+      // now the observer says the page is on screen
+      await act(async () => {
+        ControllableObserver.report(true)
+      })
+      await waitFor(() => expect(canvasOf().width).toBeGreaterThan(base))
+    })
+  })
+
+  test('a page reported off-screen drops back to base scale', async () => {
+    // And the reverse transition, so the memory bound is proven in both
+    // directions rather than only at the moment of zooming in.
+    await withObserver(async () => {
+      const utils = await mount()
+      const canvasOf = () => utils.container.querySelector('canvas') as HTMLCanvasElement
+      const base = canvasOf().width
+
+      fireEvent.click(utils.container.querySelector('[aria-label="Zoom in"]') as HTMLButtonElement)
+      await act(async () => {
+        ControllableObserver.report(true)
+      })
+      await waitFor(() => expect(canvasOf().width).toBeGreaterThan(base))
+      const boosted = canvasOf().width
+
+      await act(async () => {
+        ControllableObserver.report(false)
+      })
+      await waitFor(() => expect(canvasOf().width).toBe(base))
+      expect(boosted).toBeGreaterThan(base)
+    })
   })
 })
