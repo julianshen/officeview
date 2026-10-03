@@ -8,6 +8,7 @@
  * (4x4) — we capture text, not pixels — so indexing is cheap.
  */
 
+import { setWatermarkMuted } from './watermark'
 import type { HighlightRect } from './overlay'
 
 export interface TextSpan {
@@ -148,12 +149,22 @@ export interface PaintableLike {
 /** Build the text index for a document by replaying its paint functions. */
 export async function buildTextIndex(paintables: PaintableLike[]): Promise<TextIndex> {
   const ctx = await createTinyContext()
-  const pages: TextIndexPage[] = paintables.map((p, index) => {
-    const spans: TextSpan[] = []
-    p.paint(createRecordingContext(ctx, spans))
-    return { index, lines: spansToLines(spans) }
-  })
-  return { pages }
+  // The watermark is painted into the same bitmaps the reader sees, so replaying
+  // them would capture its text too: searching the mark would match every page,
+  // and mark baselines that round-collide with text lines would merge into the
+  // indexed line text, corrupting hits, highlight rects and copy. The replay is
+  // synchronous, so set/unset around it in a finally is safe.
+  setWatermarkMuted(true)
+  try {
+    const pages: TextIndexPage[] = paintables.map((p, index) => {
+      const spans: TextSpan[] = []
+      p.paint(createRecordingContext(ctx, spans))
+      return { index, lines: spansToLines(spans) }
+    })
+    return { pages }
+  } finally {
+    setWatermarkMuted(false)
+  }
 }
 
 /**

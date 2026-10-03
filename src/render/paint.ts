@@ -88,7 +88,9 @@ export function getPaintables(
       const m = computeMetrics(sheet)
       return {
         spec: { widthPx: m.widthPx, heightPx: m.heightPx },
-        paint: (ctx) => renderSheet(sheet, ctx, m),
+        // the mark is drawn INSIDE renderSheet, after its white background
+        // fill — painting it here would just be erased by that fill
+        paint: (ctx) => renderSheet(sheet, ctx, m, watermark),
       }
     }))
   }
@@ -96,7 +98,8 @@ export function getPaintables(
   return Promise.all(doc.images.map((img) => decodeImage(img.data, img.mime).catch(() => undefined))).then((images) =>
     doc.slides.map((slide) => ({
       spec: { widthPx: sm.widthPx, heightPx: sm.heightPx },
-      paint: (ctx) => renderSlide(slide, ctx, sm, images),
+        // likewise drawn inside renderSlide, after its background fill
+        paint: (ctx) => renderSlide(slide, ctx, sm, images, watermark),
     })),
   )
 }

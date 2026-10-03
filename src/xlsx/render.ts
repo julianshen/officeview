@@ -5,6 +5,7 @@
  */
 import type { XlsxMergeRange, XlsxSheet } from './types'
 import { resolveColor } from '../core/color'
+import { paintWatermark, type ResolvedWatermark, type WatermarkOptions } from '../core/watermark'
 
 export interface GridMetrics {
   colWidthsPx: number[]
@@ -93,7 +94,12 @@ function prefixSums(widths: number[]): number[] {
 }
 
 /** Render a sheet grid. ctx state: 1 unit = 1 px, (0,0) top-left of sheet. */
-export function renderSheet(sheet: XlsxSheet, ctx: CanvasRenderingContext2D, metrics?: GridMetrics): void {
+export function renderSheet(
+  sheet: XlsxSheet,
+  ctx: CanvasRenderingContext2D,
+  metrics?: GridMetrics,
+  watermark?: WatermarkOptions | ResolvedWatermark,
+): void {
   const m = metrics ?? computeMetrics(sheet)
   const { colWidthsPx, rowHeightsPx } = m
   const colX = prefixSums(colWidthsPx)
@@ -115,6 +121,9 @@ export function renderSheet(sheet: XlsxSheet, ctx: CanvasRenderingContext2D, met
 
   ctx.fillStyle = '#ffffff'
   ctx.fillRect(0, 0, m.widthPx, m.heightPx)
+  // The watermark goes on straight after this fill — drawing it before would be
+  // erased here — and under the cells, matching how the Word path does it.
+  if (watermark) paintWatermark(ctx, { widthPx: m.widthPx, heightPx: m.heightPx }, watermark)
 
   const paintBorders: Array<() => void> = []
   for (const row of sheet.rows) {

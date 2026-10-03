@@ -232,14 +232,20 @@ X-OfficeView-Watermark: text=CONFIDENTIAL; placement=tile; rotate=-45; opacity=0
 | `color` | any CSS colour | `#000000` |
 | `fontSize` | points; omit to scale with page width | 7% of page width |
 
-Pairs are separated by `;` (or `,`, matching the protection header). Values are
+Pairs are separated by `;` only, so a comma in the text stays data (`text=DRAFT,
+DO NOT COPY` round-trips intact; encode a literal `;` as `%3B`). Values are
 percent-decoded, and a malformed header is ignored rather than allowed to break
-the load.
+the load. An unusable colour falls back to the default instead of silently
+painting nothing.
 
 Two deliberate choices:
 
 - **The header wins over the prop.** The server is the authority on what a document
   is stamped with, so a client cannot quietly downgrade a `CONFIDENTIAL` mark.
+- **The mark is excluded from search.** It is painted into the page bitmap, which
+  is also what the text index replays, so the replay mutes the watermark —
+  otherwise searching the mark matched every page and its baselines merged into
+  the indexed line text.
 - **It is painted into the page bitmap**, before the content, so it travels with
   the document instead of being removable by hiding an element, and the document's
   own text sits on top of the mark rather than being washed out by it.

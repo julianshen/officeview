@@ -2,6 +2,7 @@
  * PPTX rendering: paint slides onto a canvas 2D context. 1 unit = 1 px;
  * EMU geometry converted with emuToPx at 96dpi default.
  */
+import { paintWatermark, type ResolvedWatermark, type WatermarkOptions } from '../core/watermark'
 import type { PptxDocument, PptxShape, PptxSlide, PptxTable, PptxTextBody } from './types'
 import { emuToPx } from '../core/geometry'
 import { resolveColor } from '../core/color'
@@ -24,10 +25,13 @@ export function renderSlide(
   ctx: CanvasRenderingContext2D,
   metrics?: SlideMetrics,
   images?: Array<CanvasImageSource | undefined>,
+  watermark?: WatermarkOptions | ResolvedWatermark,
 ): void {
   const m = metrics ?? { widthPx: Math.round(emuToPx(slide.widthEmu)), heightPx: Math.round(emuToPx(slide.heightEmu)) }
   ctx.fillStyle = '#ffffff'
   ctx.fillRect(0, 0, m.widthPx, m.heightPx)
+  // after the fill so it is not erased, before the shapes so it sits under them
+  if (watermark) paintWatermark(ctx, { widthPx: m.widthPx, heightPx: m.heightPx }, watermark)
   for (const shape of slide.shapes) {
     paintShape(shape, ctx, images)
   }

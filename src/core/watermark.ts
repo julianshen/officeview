@@ -141,8 +141,12 @@ function parseNumber(value: string | undefined): number | undefined {
 
 /**
  * Parse `X-OfficeView-Watermark: text=DRAFT; rotate=-45; opacity=0.15`.
- * Pairs are separated by `;` (or `,`, for symmetry with the protection
- * header) and values are percent-decoded so non-ASCII survives a header.
+ * Pairs are separated by `;` and values are percent-decoded so non-ASCII
+ * survives a header.
+ *
+ * Only `;` separates pairs: treating `,` as one too silently truncated real
+ * watermark text ("text=DRAFT, DO NOT COPY" became "DRAFT"). A literal comma
+ * still works by encoding it as %2C, because decoding happens after splitting.
  *
  * Returns undefined when the header is absent or carries no text — the common
  * case, and the one that must never affect an existing render.
@@ -151,7 +155,7 @@ export function watermarkFromHeaders(headers: Headers): WatermarkOptions | undef
   const raw = headers.get(WATERMARK_HEADER)
   if (!raw) return undefined
   const fields: Record<string, string> = {}
-  for (const part of raw.split(/[;,]/)) {
+  for (const part of raw.split(';')) {
     const eq = part.indexOf('=')
     if (eq <= 0) continue
     const key = part.slice(0, eq).trim().toLowerCase()
@@ -199,11 +203,14 @@ export function watermarkStamps(page: WatermarkPage, mark: ResolvedWatermark): W
       return [{ xPx: w / 2, yPx: h - fontPx * 1.2 }]
     case 'tile':
     default: {
-      // Spacing is derived from the mark's own height so tiles neither overlap
-      // nor leave a gap that looks accidental; rotated marks need extra room,
-      // hence the tileGap multiplier on both axes.
+      // Step by the mark's OWN measured width, not a guess from the font size.
+      // A fixed multiplier overlaps as soon as the text is long enough
+      // (CONFIDENTIAL measured ~419px against a ~263px step).
+      const textW = markTextWidth(mark, fontPx)
       const stepY = fontPx * (1 + WATERMARK_DEFAULTS.tileGap)
-      const stepX = fontPx * (3 + WATERMARK_DEFAULTS.tileGap)
+      // +1 so neighbouring marks never share an edge; rotation is accounted for
+      // by widening both steps rather than by letting them clip.
+      const stepX = Math.max(textW, fontPx) + fontPx * WATERMARK_DEFAULTS.tileGap
       const stamps: WatermarkStamp[] = []
       // start off the top-left corner and step until past the far edges
       for (let y = -stepY; y <= h + stepY; y += stepY) {
@@ -216,6 +223,52 @@ export function watermarkStamps(page: WatermarkPage, mark: ResolvedWatermark): W
       return stamps
     }
   }
+}
+
+/**
+ * Set by the search-index replay so the watermark does not pollute the text
+ * index. A module flag rather than a ctx property because the recorder is a
+ * Proxy with no notion of intent, and the replay is synchronous so set/unset
+ * around it in a `finally` is safe.
+ */
+let muted = false
+
+/** Mute/unmute watermark painting. Intended for the search-index replay. */
+export function setWatermarkMuted(value: boolean): void {
+  muted = value
+}
+
+/** True while painting is muted for text-index capture. */
+export function isWatermarkMuted(): boolean {
+  return muted
+}
+
+/** Measured width of a mark's text in CSS px, cached per text+font. */
+const textWidthCache = new Map<string, number>()
+let measurerCtx: CanvasRenderingContext2D | null = null
+
+/** Registered by the renderer so geometry can measure real text. */
+export function setWatermarkMeasurer(ctx: CanvasRenderingContext2D | null): void {
+  measurerCtx = ctx
+  textWidthCache.clear()
+}
+
+function markTextWidth(mark: ResolvedWatermark, fontPx: number): number {
+  // fontPx must be the size the CALLER is using: measuring with a different one
+  // (a placeholder page) silently under-estimates the width and the tiles overlap.
+  const pt = mark.fontSizePt ?? fontPxToPt(fontPx)
+  const key = `${pt}|${mark.fontFamily}|${mark.text}`
+  const hit = textWidthCache.get(key)
+  if (hit !== undefined) return hit
+  let w = mark.text.length * fontPx * 0.6 // reasonable fallback without a ctx
+  if (measurerCtx) {
+    const prev = measurerCtx.font
+    measurerCtx.font = `${pt}pt ${quoteFamily(mark.fontFamily)}`
+    w = measurerCtx.measureText(mark.text).width
+    measurerCtx.font = prev
+  }
+  textWidthCache.set(key, w)
+  return w
 }
 
 /** Font size in CSS px: points convert at 96/72, or scales with page width. */
@@ -238,11 +291,12 @@ export function paintWatermark(
   options: WatermarkOptions | ResolvedWatermark | undefined,
 ): void {
   const mark = normalizeWatermark(options as WatermarkOptions | undefined)
-  if (!mark) return
+  if (!mark || muted) return
   const fontPx = fontSizePx(page, mark)
+  const color = validColor(ctx, mark.color)
   ctx.save()
   ctx.globalAlpha = mark.opacity
-  ctx.fillStyle = mark.color
+  ctx.fillStyle = color
   ctx.font = `${mark.fontSizePt ?? fontPxToPt(fontPx)}pt ${quoteFamily(mark.fontFamily)}`
   ctx.textAlign = 'center'
   ctx.textBaseline = 'middle'
@@ -251,11 +305,37 @@ export function paintWatermark(
     ctx.save()
     ctx.translate(stamp.xPx, stamp.yPx)
     if (rad !== 0) ctx.rotate(rad)
-    const w = ctx.measureText(mark.text).width
-    ctx.fillText(mark.text, -w / 2, 0)
+    // textAlign is 'center', so x=0 centres the mark ON the stamp. Offsetting by
+    // -width/2 as well would shift it half a text-width to the left and rotate
+    // about the text's right edge instead of its centre.
+    ctx.fillText(mark.text, 0, 0)
     ctx.restore()
   }
   ctx.restore()
+}
+
+/**
+ * A canvas silently IGNORES an invalid fillStyle and keeps the previous value,
+ * which in the page flow is white — so a bad colour would paint an invisible
+ * mark with no error at all. Assign a sentinel first: if the colour is rejected,
+ * fillStyle is still the sentinel and we know to fall back.
+ */
+const PROBE_COLOR = 'rgb(1, 2, 3)'
+
+function validColor(ctx: CanvasRenderingContext2D, color: string): string {
+  const prev = ctx.fillStyle
+  // Assign a KNOWN-GOOD colour first. An invalid assignment is silently ignored
+  // and leaves the previous value in place, so that previous value is the tell.
+  // (Assigning an invalid sentinel instead would be ignored too, leaving us
+  // unable to distinguish "rejected" from "still the old colour".)
+  ctx.fillStyle = PROBE_COLOR
+  // read the probe back NORMALISED: node-canvas rewrites 'rgb(1, 2, 3)' as
+  // '#010203', so comparing raw strings would never match
+  const probe = String(ctx.fillStyle)
+  ctx.fillStyle = color
+  const applied = String(ctx.fillStyle)
+  ctx.fillStyle = prev
+  return applied === probe && probe !== color ? WATERMARK_DEFAULTS.color : color
 }
 
 function fontPxToPt(px: number): number {

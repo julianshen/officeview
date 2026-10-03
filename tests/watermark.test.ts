@@ -8,11 +8,14 @@ import {
   watermarkStamps,
   fontSizePx,
   paintWatermark,
+  setWatermarkMeasurer,
   type ResolvedWatermark,
   type WatermarkOptions,
 } from '../src/core/watermark'
 import { createCanvas } from 'canvas'
 import { createMeasurer, layoutDocx, renderPages } from '../src/docx/layout'
+import { buildTextIndex } from '../src/core/search'
+import { getPaintables } from '../src/render/paint'
 import { OfficePackage } from '../src/core/zip'
 import { parseDocx } from '../src/docx/parse'
 import { buildDocx } from '../src/testdata/ooxml-builders'
@@ -84,8 +87,9 @@ describe('watermarkFromHeaders', () => {
     expect(mark!.placement).toBeUndefined()
   })
 
-  test('accepts a comma separator, like the protection header', () => {
-    expect(watermarkFromHeaders(headers({ [WATERMARK_HEADER]: 'text=A, text=B' }))?.text).toBe('B')
+  test('a comma is data, not a pair separator', () => {
+    // The review's finding: splitting on ',' truncated real watermark text.
+    expect(watermarkFromHeaders(headers({ [WATERMARK_HEADER]: 'text=A, B' }))?.text).toBe('A, B')
   })
 
   test('percent-decodes non-ASCII text', () => {
@@ -252,5 +256,212 @@ describe('paintWatermark', () => {
     const { ctx } = ctxOf()
     expect(() => paintWatermark(ctx, LETTER, undefined)).not.toThrow()
     expect(() => paintWatermark(ctx, LETTER, { text: '' })).not.toThrow()
+  })
+})
+/**
+ * Geometry and isolation tests added after an independent review found that
+ * ink-counting tests cannot see placement errors: a mark painted in the wrong
+ * place, or overlapping its neighbours, still adds ink.
+ */
+describe('watermark placement geometry', () => {
+  /** x-range of ink on a page, to check where a mark actually landed. */
+  function inkSpan(ctx: CanvasRenderingContext2D, w: number, h: number): { minX: number; maxX: number; centre: number } {
+    const d = ctx.getImageData(0, 0, w, h).data
+    let minX = Infinity
+    let maxX = -Infinity
+    for (let y = 0; y < h; y++) {
+      for (let x = 0; x < w; x++) {
+        if (d[(y * w + x) * 4] < 200) {
+          if (x < minX) minX = x
+          if (x > maxX) maxX = x
+        }
+      }
+    }
+    return { minX, maxX, centre: (minX + maxX) / 2 }
+  }
+
+  const blankPage = (w: number, h: number) => {
+    const c = createCanvas(w, h)
+    const ctx = c.getContext('2d') as unknown as CanvasRenderingContext2D
+    ctx.fillStyle = '#fff'
+    ctx.fillRect(0, 0, w, h)
+    return ctx
+  }
+
+  test('center placement is symmetric about the page centre', () => {
+    for (const rotate of [0, -45, 45]) {
+      const ctx = blankPage(816, 1056)
+      paintWatermark(ctx, LETTER, { text: 'CONFIDENTIAL', placement: 'center', rotate, opacity: 1 })
+      const { centre } = inkSpan(ctx, 816, 1056)
+      expect(Math.abs(centre - 816 / 2), `rotation ${rotate}`).toBeLessThan(20)
+    }
+  })
+
+  test('header and footer placement land in their halves', () => {
+    const head = blankPage(816, 1056)
+    paintWatermark(head, LETTER, { text: 'MARK', placement: 'header', rotate: 0, opacity: 1 })
+    const dHead = head.getImageData(0, 0, 816, 1056).data
+    let topHalf = 0
+    let bottomHalf = 0
+    for (let y = 0; y < 1056; y++) {
+      for (let x = 0; x < 816; x++) {
+        if (dHead[(y * 816 + x) * 4] < 200) (y < 528 ? topHalf++ : bottomHalf++)
+      }
+    }
+    expect(topHalf).toBeGreaterThan(bottomHalf)
+  })
+
+  test('long watermark text does not overlap its neighbours', () => {
+    // The review's finding: stepX came from the font size alone, so a long mark
+    // was wider than the gap between tiles.
+    const c = createCanvas(816, 1056)
+    const ctx = c.getContext('2d') as unknown as CanvasRenderingContext2D
+    const mark = normalizeWatermark({ text: 'CONFIDENTIAL', placement: 'tile', rotate: 0 })!
+    setWatermarkMeasurer(ctx)
+    const textWidth = (() => {
+      ctx.font = `${mark.fontSizePt ?? 40}pt ${mark.fontFamily}`
+      const w = ctx.measureText(mark.text).width
+      ctx.font = '10px sans-serif'
+      return w
+    })()
+    const stamps = watermarkStamps(LETTER, mark)
+    // horizontal spacing between stamps in the same row
+    const rowY = stamps[0].yPx
+    const row = stamps.filter((s) => Math.abs(s.yPx - rowY) < 1).map((s) => s.xPx).sort((a, b) => a - b)
+    const gap = row[1] - row[0]
+    expect(gap, `step ${gap} vs text width ${textWidth}`).toBeGreaterThanOrEqual(textWidth)
+    setWatermarkMeasurer(null)
+  })
+})
+
+describe('watermark does not pollute the text index', () => {
+  test('searching the watermark text finds nothing, and line text is unchanged', async () => {
+    const doc = await parseDocx(await OfficePackage.load(await buildDocx([{ runs: [{ text: 'alpha beta' }] }])))
+    const plain = await getPaintables(doc)
+    const marked = await getPaintables(doc, { watermark: { text: 'ZEBRAFISH', placement: 'tile', opacity: 0.4 } })
+
+    const indexPlain = await buildTextIndex(plain)
+    const indexMarked = await buildTextIndex(marked)
+
+    // the mark must not appear in any indexed line
+    for (const page of indexMarked.pages) {
+      for (const line of page.lines) expect(line.text).not.toContain('ZEBRAFISH')
+    }
+    // and the document's own text must be byte-identical with and without a mark
+    expect(indexMarked.pages[0].lines[0].text).toBe(indexPlain.pages[0].lines[0].text)
+    expect(indexMarked.pages[0].lines[0].text).toContain('alpha beta')
+  })
+
+  test('the mute flag is cleared even if a paint throws', async () => {
+    const { isWatermarkMuted } = await import('../src/core/watermark')
+    expect(isWatermarkMuted()).toBe(false)
+    await buildTextIndex([
+      {
+        spec: { widthPx: 10, heightPx: 10 },
+        paint: () => {
+          throw new Error('boom')
+        },
+      },
+    ] as never).catch(() => undefined)
+    // the flag must not be left set, or every later render would lose its mark
+    expect(isWatermarkMuted()).toBe(false)
+  })
+})
+
+describe('watermark header text with punctuation', () => {
+  test('a comma in the text survives (it is not a separator)', () => {
+    const mark = watermarkFromHeaders(headers({ [WATERMARK_HEADER]: 'text=DRAFT, DO NOT COPY' }))
+    expect(mark?.text).toBe('DRAFT, DO NOT COPY')
+  })
+
+  test('a comma still works when percent-encoded', () => {
+    const mark = watermarkFromHeaders(headers({ [WATERMARK_HEADER]: 'text=a%2Cb' }))
+    expect(mark?.text).toBe('a,b')
+  })
+
+  test('pairs are still split on semicolons', () => {
+    const mark = watermarkFromHeaders(headers({ [WATERMARK_HEADER]: 'text=DRAFT; rotate=-30' }))
+    expect(mark?.text).toBe('DRAFT')
+    expect(mark?.rotate).toBe(-30)
+  })
+})
+
+describe('watermark covers every format', () => {
+  test('a spreadsheet sheet gets the mark', async () => {
+    const { buildXlsx } = await import('../src/testdata/ooxml-builders')
+    const bytes = await buildXlsx(
+      [
+        {
+          name: 'Sheet1',
+          rows: [
+            { r: 1, cells: [{ ref: 'A1', v: 'alpha' }, { ref: 'B1', v: 'beta' }] },
+            { r: 2, cells: [{ ref: 'A2', v: 1250.5 }, { ref: 'B2', v: 0.185 }] },
+          ],
+        },
+      ],
+      [],
+    )
+    const { OfficePackage } = await import('../src/core/zip')
+    const { parseXlsx } = await import('../src/xlsx/parse')
+    const doc = await parseXlsx(await OfficePackage.load(bytes))
+    const plain = await getPaintables(doc)
+    const marked = await getPaintables(doc, { watermark: { text: 'CONFIDENTIAL', opacity: 0.5 } })
+    const inkOf = (units: Awaited<ReturnType<typeof getPaintables>>) => {
+      const c = createCanvas(Math.ceil(units[0].spec.widthPx), Math.ceil(units[0].spec.heightPx))
+      const ctx = c.getContext('2d') as unknown as CanvasRenderingContext2D
+      ctx.fillStyle = '#fff'
+      ctx.fillRect(0, 0, c.width, c.height)
+      units[0].paint(ctx)
+      const d = ctx.getImageData(0, 0, c.width, c.height).data
+      let dark = 0
+      for (let i = 0; i < d.length; i += 4) if (d[i] < 250 || d[i + 1] < 250 || d[i + 2] < 250) dark++
+      return dark
+    }
+    expect(inkOf(marked)).toBeGreaterThan(inkOf(plain))
+  })
+
+  test('a slide gets the mark', async () => {
+    const { buildPptx } = await import('../src/testdata/ooxml-builders')
+    const bytes = await buildPptx([
+      {
+        prst: 'rect',
+        off: ['914400', '914400'],
+        ext: ['3657600', '1828800'],
+        paragraphs: [{ runs: [{ text: 'slide one' }] }],
+      },
+    ])
+    const { OfficePackage } = await import('../src/core/zip')
+    const { parsePptx } = await import('../src/pptx/parse')
+    const doc = await parsePptx(await OfficePackage.load(bytes))
+    const plain = await getPaintables(doc)
+    const marked = await getPaintables(doc, { watermark: { text: 'CONFIDENTIAL', opacity: 0.5 } })
+    const inkOf = (units: Awaited<ReturnType<typeof getPaintables>>) => {
+      const c = createCanvas(Math.ceil(units[0].spec.widthPx), Math.ceil(units[0].spec.heightPx))
+      const ctx = c.getContext('2d') as unknown as CanvasRenderingContext2D
+      ctx.fillStyle = '#fff'
+      ctx.fillRect(0, 0, c.width, c.height)
+      units[0].paint(ctx)
+      const d = ctx.getImageData(0, 0, c.width, c.height).data
+      let dark = 0
+      for (let i = 0; i < d.length; i += 4) if (d[i] < 250 || d[i + 1] < 250 || d[i + 2] < 250) dark++
+      return dark
+    }
+    expect(inkOf(marked)).toBeGreaterThan(inkOf(plain))
+  })
+})
+
+describe('invalid watermark colour', () => {
+  test('falls back to the default instead of painting nothing', () => {
+    const c = createCanvas(816, 1056)
+    const ctx = c.getContext('2d') as unknown as CanvasRenderingContext2D
+    ctx.fillStyle = '#fff'
+    ctx.fillRect(0, 0, 816, 1056)
+    // A canvas ignores an invalid fillStyle and keeps the previous value, which
+    // here is white — an invisible mark with no error at all.
+    paintWatermark(ctx, LETTER, { text: 'MARK', placement: 'center', color: 'not-a-colour', opacity: 1 })
+    const d = ctx.getImageData(0, 0, 816, 1056).data
+    let dark = 0
+    for (let i = 0; i < d.length; i += 4) if (d[i] < 200) dark++
+    expect(dark).toBeGreaterThan(0)
   })
 })
