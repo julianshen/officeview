@@ -252,6 +252,92 @@ async function loadSlideImages(pkg: OfficePackage, partPath: string): Promise<Ma
   return out
 }
 
+/** Follow one relationship (theme/slideMaster/slideLayout) to a part path. */
+async function relatedPath(pkg: OfficePackage, fromPath: string, relType: string): Promise<string | undefined> {
+  const dir = fromPath.slice(0, fromPath.lastIndexOf('/'))
+  const base = fromPath.slice(fromPath.lastIndexOf('/') + 1)
+  const rels = await pkg.xml(`${dir}/_rels/${base}.rels`)
+  if (!rels) return undefined
+  const rel = getChildren(rels, 'Relationship').find((r) => String(attrs(r).Type).endsWith(`/${relType}`))
+  if (!rel) return undefined
+  return resolveTarget(fromPath, String(attrs(rel).Target))
+}
+
+/** fmtScheme of the theme behind a slide (for p:bgRef style references). */
+async function themeFmtScheme(pkg: OfficePackage, slidePath: string): Promise<XmlNode | undefined> {
+  let path: string | undefined = slidePath
+  const visited = new Set<string>()
+  while (path && !visited.has(path)) {
+    visited.add(path)
+    const root = await pkg.xml(path)
+    const fmt = getChildren(getChildren(root, 'themeElements')[0], 'fmtScheme')[0]
+    if (fmt) return fmt
+    let next: string | undefined
+    for (const type of ['theme', 'slideMaster', 'slideLayout']) {
+      next = await relatedPath(pkg, path, type)
+      if (next) break
+    }
+    path = next
+  }
+  return undefined
+}
+
+/**
+ * Resolve one p:bg element to CSS. Direct properties win; a bgRef addresses
+ * the theme's bgFillStyleLst (ST_StyleMatrixColumnIndex: 1001..1003). Only
+ * solid fills resolve — gradients/pictures fall through to the caller, which
+ * keeps walking up the chain rather than committing to white.
+ */
+function bgNodeColor(
+  bg: XmlNode | undefined,
+  theme: Map<string, string>,
+  fmtScheme: XmlNode | undefined,
+): string | undefined {
+  if (!bg) return undefined
+  const pr = getChildren(bg, 'bgPr')[0]
+  if (pr) {
+    const solid = getChildren(pr, 'solidFill')[0]
+    const color = solid ? tableColor(solid, theme) : undefined
+    if (color) return color
+  }
+  const ref = getChildren(bg, 'bgRef')[0]
+  if (ref && fmtScheme) {
+    const fills = elementChildren(getChildren(fmtScheme, 'bgFillStyleLst')[0])
+    const idx = num(attrs(ref).idx as string, 0) - 1001
+    const entry = idx >= 0 ? fills[idx] : undefined
+    if (entry && entry[0] === 'solidFill') {
+      const color = tableColor(entry[1], theme)
+      if (color) return color
+    }
+  }
+  return undefined
+}
+
+/**
+ * Slide background fill: the slide's own p:bg, else the layout's, else the
+ * master's (nearest definition wins). Absent everywhere means white.
+ */
+async function slideBackground(
+  pkg: OfficePackage,
+  slidePath: string,
+  theme: Map<string, string>,
+  slideCsld: XmlNode | undefined,
+): Promise<string | undefined> {
+  const fmtScheme = await themeFmtScheme(pkg, slidePath)
+  const direct = bgNodeColor(getChildren(slideCsld, 'bg')[0], theme, fmtScheme)
+  if (direct) return direct
+  const layoutPath = await relatedPath(pkg, slidePath, 'slideLayout')
+  const layoutBg = layoutPath
+    ? bgNodeColor(getChildren(getChildren(await pkg.xml(layoutPath), 'cSld')[0], 'bg')[0], theme, fmtScheme)
+    : undefined
+  if (layoutBg) return layoutBg
+  const masterPath = layoutPath ? await relatedPath(pkg, layoutPath, 'slideMaster') : undefined
+  const masterBg = masterPath
+    ? bgNodeColor(getChildren(getChildren(await pkg.xml(masterPath), 'cSld')[0], 'bg')[0], theme, fmtScheme)
+    : undefined
+  return masterBg
+}
+
 /** Depth-first search for the first a:srgbClr under a node. */
 function firstSrgb(node: XmlNode | undefined): string | undefined {
   if (!node) return undefined
@@ -508,10 +594,12 @@ export async function parsePptx(pkg: OfficePackage): Promise<PptxDocument> {
     const path = target.startsWith('/') ? target.slice(1) : `ppt/${target.replace(/^\.\.\//, '')}`
     const slideRoot = await pkg.xml(path)
     const slideImages = await loadSlideImages(pkg, path)
-    const tableStyles = await readTableStyles(pkg, await slideTheme(pkg, path))
+    const theme = await slideTheme(pkg, path)
+    const tableStyles = await readTableStyles(pkg, theme)
     const slide: PptxSlide = { index: i, widthEmu: doc.slideWidthEmu, heightEmu: doc.slideHeightEmu, shapes: [] }
     if (slideRoot) {
       const cSld = getChildren(slideRoot, 'cSld')[0]
+      slide.background = await slideBackground(pkg, path, theme, cSld)
       const spTree = cSld ? getChildren(cSld, 'spTree')[0] : undefined
       if (spTree) {
         for (const [name, node] of elementChildren(spTree)) {

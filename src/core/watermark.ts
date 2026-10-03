@@ -29,7 +29,11 @@ export interface WatermarkOptions {
   rotate?: number
   /** 0..1, clamped. default 0.15 */
   opacity?: number
-  /** default '#000000' */
+  /**
+   * When set, always wins — including an explicit '#000000' on a dark page.
+   * When unset, a colour is derived from the page background at paint time
+   * (a light mark on dark pages) so the default stays visible everywhere.
+   */
   color?: string
   /**
    * Size in points, matching the font convention used everywhere else here.
@@ -55,13 +59,19 @@ export const WATERMARK_DEFAULTS = {
 
 const PLACEMENTS: readonly WatermarkPlacement[] = ['center', 'tile', 'header', 'footer']
 
-/** A resolved watermark: every field present and sane. */
+/** A resolved watermark: every field present and sane, except colour. */
 export interface ResolvedWatermark {
   text: string
   placement: WatermarkPlacement
   rotate: number
   opacity: number
-  color: string
+  /**
+   * Present only when the caller specified one. An unset colour is resolved at
+   * paint time against the page background (see defaultMarkColor) — baking a
+   * default in here would make "unset" and "explicitly black" indistinguishable
+   * and break black marks on dark slides.
+   */
+  color?: string
   fontSizePt?: number
   fontFamily: string
 }
@@ -88,7 +98,7 @@ export function normalizeWatermark(options: WatermarkOptions | undefined | null)
     placement,
     rotate: Number.isFinite(options.rotate) ? Number(options.rotate) : WATERMARK_DEFAULTS.rotate,
     opacity: clampNumber(options.opacity ?? WATERMARK_DEFAULTS.opacity, 0, 1, WATERMARK_DEFAULTS.opacity),
-    color: options.color && options.color.trim().length > 0 ? options.color.trim() : WATERMARK_DEFAULTS.color,
+    color: options.color && options.color.trim().length > 0 ? options.color.trim() : undefined,
     fontSizePt: options.fontSizePt !== undefined && options.fontSizePt > 0 ? options.fontSizePt : undefined,
     fontFamily: options.fontFamily && options.fontFamily.trim().length > 0
       ? options.fontFamily.trim()
@@ -179,6 +189,8 @@ export function watermarkFromHeaders(headers: Headers): WatermarkOptions | undef
 export interface WatermarkPage {
   widthPx: number
   heightPx: number
+  /** Page background for contrast derivation; absent means white. */
+  background?: string
 }
 
 /** One placed mark, in page coordinates, before rotation about its own centre. */
@@ -278,6 +290,57 @@ export function fontSizePx(page: WatermarkPage, mark: ResolvedWatermark): number
   return Math.min(120, Math.max(12, scaled))
 }
 
+type Rgb = [number, number, number]
+
+/** Parse #rgb / #rrggbb (with or without the hash); anything else is undefined. */
+function parseHexColor(value: string | undefined): Rgb | undefined {
+  if (!value) return undefined
+  const hex = value.trim().replace(/^#/, '')
+  const full = hex.length === 3 ? hex.split('').map((c) => c + c).join('') : hex
+  if (!/^[0-9A-Fa-f]{6}$/.test(full)) return undefined
+  return [parseInt(full.slice(0, 2), 16), parseInt(full.slice(2, 4), 16), parseInt(full.slice(4, 6), 16)]
+}
+
+function linearChannel(v: number): number {
+  const c = v / 255
+  return c <= 0.04045 ? c / 12.92 : Math.pow((c + 0.055) / 1.055, 2.4)
+}
+
+/** WCAG relative luminance of an sRGB colour, 0 (black) to 1 (white). */
+export function relativeLuminance(rgb: Rgb): number {
+  return 0.2126 * linearChannel(rgb[0]) + 0.7152 * linearChannel(rgb[1]) + 0.0722 * linearChannel(rgb[2])
+}
+
+/**
+ * WCAG contrast ratio between two CSS hex colours, 1 (identical) to 21
+ * (black on white). Unparseable inputs fall back to the maximum, so callers
+ * comparing against a threshold only ever see "no information", never a
+ * spurious failure.
+ */
+export function contrastRatio(a: string, b: string): number {
+  const ra = parseHexColor(a)
+  const rb = parseHexColor(b)
+  if (!ra || !rb) return 21
+  const la = relativeLuminance(ra)
+  const lb = relativeLuminance(rb)
+  const [hi, lo] = la >= lb ? [la, lb] : [lb, la]
+  return (hi + 0.05) / (lo + 0.05)
+}
+
+/**
+ * The default mark colour for a page background: whichever of black and
+ * white contrasts more. Dark decks get a light mark, light pages keep black.
+ * An absent or unparseable background keeps the black default, so call sites
+ * that pass no background (docx/xlsx are always white) behave exactly as
+ * before this derivation existed.
+ */
+export function defaultMarkColor(background?: string): string {
+  if (!background || !parseHexColor(background)) return WATERMARK_DEFAULTS.color
+  return contrastRatio('#FFFFFF', background) >= contrastRatio(WATERMARK_DEFAULTS.color, background)
+    ? '#FFFFFF'
+    : WATERMARK_DEFAULTS.color
+}
+
 /**
  * Draw the watermark onto a page. Safe to call with an unnormalized options
  * object; anything unusable is simply not drawn.
@@ -293,7 +356,9 @@ export function paintWatermark(
   const mark = normalizeWatermark(options as WatermarkOptions | undefined)
   if (!mark || muted) return
   const fontPx = fontSizePx(page, mark)
-  const color = validColor(ctx, mark.color)
+  // An explicit colour always wins (even black on a dark page); otherwise the
+  // mark is derived from the background so the default stays visible.
+  const color = validColor(ctx, mark.color, defaultMarkColor(page.background))
   ctx.save()
   ctx.globalAlpha = mark.opacity
   ctx.fillStyle = color
@@ -322,7 +387,9 @@ export function paintWatermark(
  */
 const PROBE_COLOR = 'rgb(1, 2, 3)'
 
-function validColor(ctx: CanvasRenderingContext2D, color: string): string {
+function validColor(ctx: CanvasRenderingContext2D, color: string | undefined, fallback: string): string {
+  // No colour specified: the caller already chose the fallback.
+  if (!color) return fallback
   const prev = ctx.fillStyle
   // Assign a KNOWN-GOOD colour first. An invalid assignment is silently ignored
   // and leaves the previous value in place, so that previous value is the tell.
@@ -335,7 +402,7 @@ function validColor(ctx: CanvasRenderingContext2D, color: string): string {
   ctx.fillStyle = color
   const applied = String(ctx.fillStyle)
   ctx.fillStyle = prev
-  return applied === probe && probe !== color ? WATERMARK_DEFAULTS.color : color
+  return applied === probe && probe !== color ? fallback : color
 }
 
 function fontPxToPt(px: number): number {

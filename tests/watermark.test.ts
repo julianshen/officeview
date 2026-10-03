@@ -9,6 +9,8 @@ import {
   fontSizePx,
   paintWatermark,
   setWatermarkMeasurer,
+  contrastRatio,
+  defaultMarkColor,
   type ResolvedWatermark,
   type WatermarkOptions,
 } from '../src/core/watermark'
@@ -24,14 +26,17 @@ const LETTER = { widthPx: 816, heightPx: 1056 }
 const headers = (init: Record<string, string>) => new Headers(init)
 
 describe('normalizeWatermark', () => {
-  test('fills in defaults for a bare text', () => {
+  test('fills in defaults for a bare text, leaving colour unset', () => {
     const mark = normalizeWatermark({ text: 'DRAFT' })
     expect(mark).toBeDefined()
     expect(mark!.text).toBe('DRAFT')
     expect(mark!.placement).toBe(WATERMARK_DEFAULTS.placement)
     expect(mark!.rotate).toBe(WATERMARK_DEFAULTS.rotate)
     expect(mark!.opacity).toBe(WATERMARK_DEFAULTS.opacity)
-    expect(mark!.color).toBe(WATERMARK_DEFAULTS.color)
+    // Unset stays unset so paint time can derive it from the background;
+    // baking black in here would erase "explicitly black" as a choice.
+    expect(mark!.color).toBeUndefined()
+    expect(normalizeWatermark({ text: 'x', color: '  #123456  ' })?.color).toBe('#123456')
   })
 
   test('trims the text and disables a blank watermark', () => {
@@ -463,5 +468,73 @@ describe('invalid watermark colour', () => {
     let dark = 0
     for (let i = 0; i < d.length; i += 4) if (d[i] < 200) dark++
     expect(dark).toBeGreaterThan(0)
+  })
+})
+
+describe('watermark contrast on dark backgrounds', () => {
+  const DARK_BG = '#0E0E1A'
+
+  /** Mean colour of pixels that differ from the background, plus their count. */
+  function markPixels(bg: string, options: WatermarkOptions): { mean: [number, number, number]; count: number } {
+    const c = createCanvas(400, 300)
+    const ctx = c.getContext('2d') as unknown as CanvasRenderingContext2D
+    ctx.fillStyle = bg
+    ctx.fillRect(0, 0, 400, 300)
+    const base = ctx.getImageData(0, 0, 1, 1).data
+    paintWatermark(
+      ctx,
+      { widthPx: 400, heightPx: 300, background: bg },
+      { placement: 'center', fontSizePt: 72, opacity: 1, ...options },
+    )
+    const d = ctx.getImageData(0, 0, 400, 300).data
+    let r = 0
+    let g = 0
+    let b = 0
+    let n = 0
+    for (let i = 0; i < d.length; i += 4) {
+      if (Math.abs(d[i] - base[0]) > 12 || Math.abs(d[i + 1] - base[1]) > 12 || Math.abs(d[i + 2] - base[2]) > 12) {
+        r += d[i]
+        g += d[i + 1]
+        b += d[i + 2]
+        n++
+      }
+    }
+    return { mean: n === 0 ? [base[0], base[1], base[2]] : [r / n, g / n, b / n], count: n }
+  }
+
+  function toHex([r, g, b]: [number, number, number]): string {
+    const h = (v: number): string => Math.round(v).toString(16).padStart(2, '0')
+    return `#${h(r)}${h(g)}${h(b)}`
+  }
+
+  test('an unset colour paints a contrasting light mark, not invisible black', () => {
+    // Black on #0E0E1A measures ~1.10:1 — treat anything under ~1.2 as absent.
+    expect(contrastRatio('#000000', DARK_BG)).toBeLessThan(1.2)
+    const { mean, count } = markPixels(DARK_BG, { text: 'MARK' })
+    expect(count).toBeGreaterThan(0)
+    expect(contrastRatio(toHex(mean), DARK_BG)).toBeGreaterThanOrEqual(2)
+  })
+
+  test('an explicit black on a dark background stays black', () => {
+    const { mean, count } = markPixels(DARK_BG, { text: 'MARK', color: '#000000' })
+    expect(count).toBeGreaterThan(0)
+    const [r, g, b] = mean
+    const luminance = (0.2126 * r + 0.7152 * g + 0.0722 * b) / 255
+    expect(luminance).toBeLessThan(0.08)
+  })
+
+  test('an explicit colour on white is used as given', () => {
+    const { mean, count } = markPixels('#FFFFFF', { text: 'MARK', color: '#FF0000' })
+    expect(count).toBeGreaterThan(0)
+    const [r, g, b] = mean
+    expect(r - g).toBeGreaterThan(100)
+    expect(r - b).toBeGreaterThan(100)
+  })
+
+  test('defaultMarkColor picks the higher-contrast of black and white', () => {
+    expect(defaultMarkColor('#0E0E1A')).toBe('#FFFFFF')
+    expect(defaultMarkColor('#FFFFFF')).toBe('#000000')
+    expect(defaultMarkColor(undefined)).toBe('#000000')
+    expect(defaultMarkColor('not-a-colour')).toBe('#000000')
   })
 })

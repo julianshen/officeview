@@ -3,7 +3,9 @@
  */
 import type { OfficePackage } from '../core/zip'
 import { sniffImageMime } from '../core/images'
-import { attrs, elementChildren, getChildren, textOf, type XmlNode } from '../core/xml'
+import { attrs, elementChildren, getChildren, orderedChildren, textOf, type XmlNode } from '../core/xml'
+import { applyParagraphDefaults, paragraphRunDefaults, readRunProperties, readTheme, styleChain, styleContext, type DocxStyleContext } from './styles'
+import { loadDrawingParts } from './drawing'
 import type { DocxBlock, DocxDocument, DocxFloating, DocxImage, DocxParagraph, DocxSection, DocxTable, DocxTableCell, DocxTableCellMargins, DocxTableBorders, DocxTableRow, DocxTextRun, ParagraphAlign } from './types'
 
 function alignOf(pPr: XmlNode | undefined): ParagraphAlign {
@@ -29,43 +31,23 @@ export function halfPointToPt(v: string | number | undefined): number | undefine
   return Number.isFinite(n) ? n / 2 : undefined
 }
 
-function boolAttr(v: string | undefined): boolean {
-  return v === '1' || v === 'true'
-}
+interface ParagraphContext { styles: DocxStyleContext; drawings: Map<XmlNode, DocxImage> }
 
 interface FieldAwareRun extends DocxTextRun {
   _fldChar?: string
   _instr?: string
 }
 
-function parseRun(r: XmlNode, inherited?: Partial<DocxTextRun>): FieldAwareRun {
+function parseRun(r: XmlNode, inherited?: Partial<DocxTextRun>, context?: ParagraphContext): FieldAwareRun {
   const rPr = getChildren(r, 'rPr')[0]
   let run: FieldAwareRun = { text: '', ...inherited }
   const fld = getChildren(r, 'fldChar')[0]
   if (fld) run._fldChar = attrs(fld).fldCharType as string
   const instr = getChildren(r, 'instrText')[0]
   if (instr) run._instr = textOf(instr).trim()
-  if (rPr) {
-    const rFonts = rPr['rFonts'] ? getChildren(rPr, 'rFonts')[0] : undefined
-    const fam = attrs(rFonts).ascii as string | undefined
-    if (fam) run.fontFamily = fam
-    const sz = attrs(rPr['sz'] as XmlNode | undefined).val
-    const szPt = halfPointToPt(sz)
-    if (szPt !== undefined) run.fontSizePt = szPt
-    if (rPr['b'] !== undefined) run.bold = !boolAttr(attrs(rPr['b'] as XmlNode).val)
-    if (rPr['i'] !== undefined) run.italic = !boolAttr(attrs(rPr['i'] as XmlNode).val)
-    if (rPr['u'] !== undefined) {
-      const uv = attrs(rPr['u'] as XmlNode).val
-      run.underline = uv !== 'none'
-    }
-    if (rPr['strike'] !== undefined) run.strike = !boolAttr(attrs(rPr['strike'] as XmlNode).val)
-    const color = attrs(rPr['color'] as XmlNode | undefined).val as string | undefined
-    if (color) run.color = color === 'auto' ? undefined : color
-    const highlight = attrs(rPr['highlight'] as XmlNode | undefined).val as string | undefined
-    if (highlight) run.highlight = highlight
-  }
+  Object.assign(run, readRunProperties(rPr, context?.styles.theme))
   // Runs may contain text fragments plus tabs/breaks
-  for (const [name, child] of elementChildren(r)) {
+  for (const [name, child] of orderedChildren(r)) {
     if (name === 't') {
       run.text += textOf(child)
     } else if (name === 'tab') {
@@ -197,12 +179,17 @@ function resolveListMarker(pPr: XmlNode | undefined, state: NumberingState | und
   }
 }
 
-export function parseParagraph(p: XmlNode, images?: DocxImage[], numbering?: NumberingState): DocxParagraph {
+export function parseParagraph(
+  p: XmlNode,
+  images?: DocxImage[],
+  numbering?: NumberingState,
+  context?: ParagraphContext
+): DocxParagraph {
   const pPr = getChildren(p, 'pPr')[0]
   const paragraph: DocxParagraph = {
     runs: [],
     images: [],
-    align: alignOf(pPr),
+    align: alignOf(pPr)
   }
   const list = resolveListMarker(pPr, numbering)
   if (list.marker) {
@@ -230,31 +217,81 @@ export function parseParagraph(p: XmlNode, images?: DocxImage[], numbering?: Num
     const outline = attrs(pPr['outlineLvl'] as XmlNode | undefined).val
     if (outline !== undefined) paragraph.outlineLevel = parseInt(outline, 10)
   }
-  // Runs and hyperlinks (treat hyperlink content as runs too)
-  for (const child of elementChildren(p)) {
-    const [name, node] = child
-    if (name === 'r') {
-      paragraph.runs.push(parseRun(node))
-      for (const [iname, inode] of elementChildren(node)) {
-        if (iname === 'drawing' && inode) {
-          const image = parseDrawing(inode, images)
-          if (image) paragraph.images.push(image)
-        }
-      }
-    } else if (name === 'hyperlink') {
-      for (const [iname, inode] of elementChildren(node)) {
-        if (iname === 'r' && inode) {
-          paragraph.runs.push(parseRun(inode))
-        }
-      }
-    } else if (name === 'drawing' && node) {
-      const image = parseDrawing(node, images)
-      if (image) paragraph.images.push(image)
-    }
-    // other children (bookmarks, proofErr, etc.) ignored
+  const inline: NonNullable<DocxParagraph['inline']> = []
+  const inherited = paragraphRunDefaults(p, context?.styles)
+  const addRun = (run: FieldAwareRun) => {
+    paragraph.runs.push(run)
+    inline.push({ kind: 'text', run })
   }
+  const addImage = (image: DocxImage | undefined) => {
+    if (image) {
+      paragraph.images.push(image)
+      inline.push({ kind: 'image', image })
+    }
+  }
+  const walk = (parent: XmlNode): void => {
+    for (const [name, node] of orderedChildren(parent)) {
+      if (name === 'r') {
+        const run = parseRun(node, inherited, context)
+        if (!node.drawing && !node.AlternateContent && !node.pict) addRun(run)
+        else {
+          // Split a mixed run at drawing boundaries without losing the styles.
+          for (const [tag, child] of orderedChildren(node)) {
+            if (tag === 't') addRun({ ...run, text: textOf(child), breakBefore: undefined })
+            else if (tag === 'tab') addRun({ ...run, text: '\t', breakBefore: undefined })
+            else if (tag === 'br') addRun({ ...run, text: '', breakBefore: true })
+            else if (tag === 'drawing') addImage(parseDrawing(child, images, context))
+            else if (tag === 'AlternateContent') alternate(child)
+          }
+        }
+      } else if (name === 'hyperlink' || name === 'sdtContent') walk(node)
+      else if (name === 'drawing') addImage(parseDrawing(node, images, context))
+      else if (name === 'AlternateContent') alternate(node)
+      else if (name === 'sdt') {
+        const content = getChildren(node, 'sdtContent')[0]
+        if (content) walk(content)
+      }
+    }
+  }
+  const alternate = (node: XmlNode): void => {
+    for (const choice of getChildren(node, 'Choice')) {
+      const before = inline.length
+      walk(choice)
+      if (inline.length > before) return
+    }
+    const fallback = getChildren(node, 'Fallback')[0]
+    const fallbackImage = findDescendant(fallback, 'imagedata')
+    const rid = attrs(fallbackImage).id
+    const data = images?.find((img) => (img as DocxImage & { relId?: string }).relId === rid)
+    const drawing = findDescendant(getChildren(node, 'Choice')[0], 'drawing')
+    const wp = getChildren(drawing, 'anchor')[0]
+    if (data && wp) {
+      const extent = attrs(getChildren(wp, 'extent')[0])
+      addImage({
+        ...data,
+        widthEmu: Number(extent.cx) || 0,
+        heightEmu: Number(extent.cy) || 0,
+        floating: parseAnchor(wp)
+      })
+    } else if (fallback) walk(fallback)
+  }
+  walk(p)
   resolveFields(paragraph)
+  if (paragraph.images.length > 0) {
+    const retained = new Set(paragraph.runs)
+    paragraph.inline = inline.filter((item) => item.kind === 'image' || retained.has(item.run))
+  }
+  applyParagraphDefaults(paragraph, p, context?.styles)
   return paragraph
+}
+
+function findDescendant(node: XmlNode | undefined, tag: string): XmlNode | undefined {
+  for (const [name, child] of elementChildren(node)) {
+    if (name === tag) return child
+    const found = findDescendant(child,tag)
+    if (found) return found
+  }
+  return undefined
 }
 
 /**
@@ -292,24 +329,27 @@ function resolveFields(paragraph: DocxParagraph): void {
     if (inField) {
       if (inResult && pendingInstr) {
         // cached field result: mark the run so paint can substitute the value
-        const { _fldChar, _instr, ...rest } = run
-        void _fldChar
-        void _instr
-        out.push({ ...rest, field: pendingInstr })
+        delete run._fldChar
+        delete run._instr
+        run.field = pendingInstr
+        out.push(run)
         pendingInstr = null
       }
       continue
     }
-    const { _fldChar, _instr, ...rest } = run
-    void _fldChar
-    void _instr
-    out.push(rest)
+    delete run._fldChar
+    delete run._instr
+    out.push(run)
   }
   paragraph.runs = out
 }
 
 /** w:drawing -> wp:inline|wp:anchor -> a:graphic -> pic:pic -> a:blip r:embed */
-function parseDrawing(drawing: XmlNode, images: DocxImage[] | undefined): DocxImage | undefined {
+function parseDrawing(
+  drawing: XmlNode,
+  images: DocxImage[] | undefined,
+  context?: ParagraphContext
+): DocxImage | undefined {
   const anchor = getChildren(drawing, 'anchor')[0]
   const wp = anchor ?? getChildren(drawing, 'inline')[0]
   if (!wp) return undefined
@@ -317,6 +357,19 @@ function parseDrawing(drawing: XmlNode, images: DocxImage[] | undefined): DocxIm
   const ea = attrs(extent)
   const widthEmu = parseFloat(ea.cx as string) || 0
   const heightEmu = parseFloat(ea.cy as string) || 0
+  const effect = getChildren(wp, 'effectExtent')[0]
+  const effectAttrs = attrs(effect)
+  const placement = {
+    effectExtentEmu: effect
+      ? {
+          top: parseFloat(effectAttrs.t as string) || 0,
+          bottom: parseFloat(effectAttrs.b as string) || 0
+        }
+      : undefined,
+    floating: anchor ? parseAnchor(anchor) : undefined
+  }
+  const vector = context?.drawings.get(drawing)
+  if (vector) return { ...vector, ...placement }
   const graphic = getChildren(wp, 'graphic')[0]
   // pic:pic lives inside a:graphicData, not directly under a:graphic
   const graphicData = graphic ? getChildren(graphic, 'graphicData')[0] : undefined
@@ -327,15 +380,12 @@ function parseDrawing(drawing: XmlNode, images: DocxImage[] | undefined): DocxIm
   if (!images) return undefined
   const data = images.find((img) => img && (img as DocxImage & { relId?: string }).relId === rid)
   if (!data) return undefined
-  const effect = getChildren(wp, 'effectExtent')[0]
-  const effectAttrs = attrs(effect)
   return {
-    data: data.data, mime: data.mime, widthEmu, heightEmu,
-    effectExtentEmu: effect ? {
-      top: parseFloat(effectAttrs.t as string) || 0,
-      bottom: parseFloat(effectAttrs.b as string) || 0,
-    } : undefined,
-    floating: anchor ? parseAnchor(anchor) : undefined,
+    data: data.data,
+    mime: data.mime,
+    widthEmu,
+    heightEmu,
+    ...placement
   }
 }
 
@@ -396,6 +446,7 @@ async function loadHeaderFooter(
   sectPr: XmlNode,
   rels: Map<string, { type: string; target: string }>,
   pkg: OfficePackage,
+  styles: DocxStyleContext,
 ): Promise<{
   header?: DocxParagraph[]
   footer?: DocxParagraph[]
@@ -409,7 +460,7 @@ async function loadHeaderFooter(
     // w:type="first" overrides only the section's first page
     const firstRef = refs.find((r) => attrs(r).type === 'first')
     if (firstRef) {
-      const first = await loadPart(firstRef, rels, pkg)
+      const first = await loadPart(firstRef, rels, pkg, styles)
       if (first) out[kind === 'header' ? 'firstHeader' : 'firstFooter'] = first
     }
     // prefer the default type, else the first non-first reference
@@ -417,11 +468,11 @@ async function loadHeaderFooter(
     if (!chosen || attrs(chosen).type === 'first') {
       // only a first-page reference exists
       if (!firstRef) continue
-      const only = await loadPart(firstRef, rels, pkg)
+      const only = await loadPart(firstRef, rels, pkg, styles)
       if (only) out[kind] = only
       continue
     }
-    const paragraphs = await loadPart(chosen, rels, pkg)
+    const paragraphs = await loadPart(chosen, rels, pkg, styles)
     if (paragraphs) out[kind] = paragraphs
   }
   return out
@@ -432,21 +483,28 @@ async function loadPart(
   ref: XmlNode,
   rels: Map<string, { type: string; target: string }>,
   pkg: OfficePackage,
+  styles: DocxStyleContext
 ): Promise<DocxParagraph[] | undefined> {
   const rid = (attrs(ref)['r:id'] ?? attrs(ref).id) as string | undefined
   if (!rid) return undefined
   const rel = rels.get(rid)
   if (!rel) return undefined
   const path = rel.target.startsWith('/') ? rel.target.slice(1) : `word/${rel.target.replace(/^\.\.\//, '')}`
-  const part = await pkg.xml(path)
+  const part = await pkg.xmlOrdered(path)
   if (!part) return undefined
   const paragraphs: DocxParagraph[] = []
   // lists in a header/footer start from their own counters
   const partNumbering = await pkg.xml('word/numbering.xml')
   const partState = partNumbering ? parseNumbering(partNumbering) : undefined
   const images = await loadDocImages(pkg, path)
-  for (const [name, node] of elementChildren(part)) {
-    if (name === 'p') paragraphs.push(parseParagraph(node, images, partState))
+  const context: ParagraphContext = {
+    styles,
+    drawings: await loadDrawingParts(pkg, part, path, styles.theme, (p) =>
+      parseParagraph(p, images, partState, { styles, drawings: new Map() })
+    )
+  }
+  for (const [name, node] of orderedChildren(part)) {
+    if (name === 'p') paragraphs.push(parseParagraph(node, images, partState, context))
   }
   return paragraphs.length > 0 ? paragraphs : undefined
 }
@@ -484,7 +542,7 @@ async function loadDocImages(pkg: OfficePackage, partPath = 'word/document.xml')
 function unwrapContentControls(node: XmlNode | undefined): Array<[string, XmlNode]> {
   const out: Array<[string, XmlNode]> = []
   if (!node) return out
-  for (const [name, child] of elementChildren(node)) {
+  for (const [name, child] of orderedChildren(node)) {
     if (name === 'sdt') {
       out.push(...unwrapContentControls(getChildren(child, 'sdtContent')[0]))
     } else {
@@ -495,9 +553,13 @@ function unwrapContentControls(node: XmlNode | undefined): Array<[string, XmlNod
 }
 
 export async function parseDocx(pkg: OfficePackage): Promise<DocxDocument> {
-  const doc = await pkg.xml('word/document.xml')
+  const doc = await pkg.xmlOrdered('word/document.xml')
   if (!doc) throw new Error('word/document.xml missing — not a valid docx?')
   const stylesXml = await pkg.xml('word/styles.xml')
+  const docRels = await loadDocRels(pkg)
+  const themeRel = [...docRels.values()].find(rel => rel.type.endsWith('/theme'))
+  const themePath = themeRel?.target.startsWith('/') ? themeRel.target.slice(1) : themeRel ? `word/${themeRel.target}` : undefined
+  const styles = styleContext(stylesXml,readTheme(themePath ? await pkg.xml(themePath) : undefined))
   let defaultFontFamily = 'Calibri'
   let defaultFontSizePt = 11
   const styleDefaults = new Map<string, { fontFamily?: string; fontSizePt?: number }>()
@@ -506,8 +568,7 @@ export async function parseDocx(pkg: OfficePackage): Promise<DocxDocument> {
     if (docDefaults && typeof docDefaults === 'object') {
       const rPrDefault = getChildren(docDefaults as XmlNode, 'rPrDefault')[0]
       const rPr = rPrDefault ? getChildren(rPrDefault, 'rPr')[0] : undefined
-      const rFonts = rPr ? getChildren(rPr, 'rFonts')[0] : undefined
-      const fam = attrs(rFonts).ascii as string | undefined
+      const fam = readRunProperties(rPr,styles.theme).fontFamily
       const sz = attrs(rPr?.['sz'] as XmlNode | undefined).val
       const szPt = halfPointToPt(sz)
       if (fam) {
@@ -519,9 +580,9 @@ export async function parseDocx(pkg: OfficePackage): Promise<DocxDocument> {
   }
   const body = doc?.['body'] as XmlNode | undefined
   const docImages = (await loadDocImages(pkg)) as DocxImage[]
-  const docRels = await loadDocRels(pkg)
   const numberingRoot = await pkg.xml('word/numbering.xml')
   const numbering = numberingRoot ? parseNumbering(numberingRoot) : undefined
+  const context: ParagraphContext = {styles,drawings:await loadDrawingParts(pkg,doc,'word/document.xml',styles.theme,p => parseParagraph(p,docImages,numbering,{styles,drawings:new Map()}))}
   const sections: DocxSection[] = []
   let current: DocxSection = {
     margins: { topTwips: 1440, rightTwips: 1440, bottomTwips: 1440, leftTwips: 1440, headerTwips: 720, footerTwips: 720, gutterTwips: 0 },
@@ -532,16 +593,16 @@ export async function parseDocx(pkg: OfficePackage): Promise<DocxDocument> {
   const push = () => { if (current.paragraphs.length > 0 || sections.length === 0) sections.push(current) }
   for (const [name, node] of unwrapContentControls(body as XmlNode)) {
     if (name === 'p') {
-      const para = parseParagraph(node, docImages, numbering)
+      const para = parseParagraph(node, docImages, numbering,context)
       current.paragraphs.push(para)
       current.blocks.push({ kind: 'p', paragraph: para })
     } else if (name === 'tbl' && node) {
-      const table = parseTable(node, numbering)
+      const table = parseTable(node, numbering,context,docImages)
       const block: DocxBlock = { kind: 'table', table }
       current.blocks.push(block)
     } else if (name === 'sectPr') {
       // section properties at body level — finalize current section
-      const hf = await loadHeaderFooter(node, docRels, pkg)
+      const hf = await loadHeaderFooter(node, docRels, pkg,styles)
       if (hf.header) current.header = hf.header
       if (hf.footer) current.footer = hf.footer
       if (hf.firstHeader) current.firstHeader = hf.firstHeader
@@ -598,20 +659,18 @@ function parseSideBorder(node: XmlNode | undefined): TableCellBorder {
   if (!node) return undefined
   const a = attrs(node)
   if (a.val === 'nil' || a.val === 'none') return undefined
-  return { style: a.val as string, color: a.color as string | undefined }
+  return { style: a.val as string, color: a.color as string | undefined, ...(a.sz !== undefined ? {widthPt:Number(a.sz)/8} : {}) }
 }
 
 function parseBorders(parent: XmlNode): DocxTableBorders {
   const el = getChildren(parent, 'tblBorders')[0] ?? getChildren(parent, 'tcBorders')[0]
   if (!el) return {}
-  return {
-    top: parseSideBorder(getChildren(el, 'top')[0]),
-    bottom: parseSideBorder(getChildren(el, 'bottom')[0]),
-    left: parseSideBorder(getChildren(el, 'left')[0]),
-    right: parseSideBorder(getChildren(el, 'right')[0]),
-    insideH: parseSideBorder(getChildren(el, 'insideH')[0]),
-    insideV: parseSideBorder(getChildren(el, 'insideV')[0]),
+  const out: DocxTableBorders = {}
+  for (const side of ['top','bottom','left','right','insideH','insideV'] as const) {
+    const node = getChildren(el,side)[0]
+    if (node) out[side] = parseSideBorder(node)
   }
+  return out
 }
 
 const DEFAULT_CELL_MARGINS: DocxTableCellMargins = { topTwips: 0, rightTwips: 108, bottomTwips: 0, leftTwips: 108 }
@@ -631,7 +690,7 @@ function parseCellMargins(tblPr: XmlNode): DocxTableCellMargins {
   }
 }
 
-function parseTableCell(tc: XmlNode, cellNumbering?: NumberingState): DocxTableCell {
+function parseTableCell(tc: XmlNode, cellNumbering?: NumberingState, context?: ParagraphContext, images?: DocxImage[]): DocxTableCell {
   const tcPr = getChildren(tc, 'tcPr')[0]
   const cell: DocxTableCell = { paragraphs: [], gridSpan: 1 }
   if (tcPr) {
@@ -656,12 +715,12 @@ function parseTableCell(tc: XmlNode, cellNumbering?: NumberingState): DocxTableC
     if (vAlign === 'center' || vAlign === 'bottom' || vAlign === 'top') cell.vAlign = vAlign
   }
   for (const [name, node] of unwrapContentControls(tc)) {
-    if (name === 'p') cell.paragraphs.push(parseParagraph(node, undefined, cellNumbering))
+    if (name === 'p') cell.paragraphs.push(parseParagraph(node, images, cellNumbering,context))
   }
   return cell
 }
 
-export function parseTable(tbl: XmlNode, tableNumbering?: NumberingState): DocxTable {
+export function parseTable(tbl: XmlNode, tableNumbering?: NumberingState, context?: ParagraphContext, images?: DocxImage[]): DocxTable {
   const tblPr = getChildren(tbl, 'tblPr')[0]
   const table: DocxTable = {
     gridColsTwips: [],
@@ -695,10 +754,11 @@ export function parseTable(tbl: XmlNode, tableNumbering?: NumberingState): DocxT
       if (trPr['tblHeader'] !== undefined) row.isHeader = true
     }
     for (const child of unwrapContentControls(node)) {
-      if (child[0] === 'tc' && child[1]) row.cells.push(parseTableCell(child[1], tableNumbering))
+      if (child[0] === 'tc' && child[1]) row.cells.push(parseTableCell(child[1], tableNumbering,context,images))
     }
     table.rows.push(row)
   }
+  if (context) applyTableStyle(table,tblPr,context.styles)
   // Word may omit w:tblGrid entirely (tblW type=auto). Fall back to the cells'
   // own w:tcW values, then to an even split, so those tables still lay out.
   if (table.gridColsTwips.length === 0) {
@@ -739,6 +799,54 @@ export function parseTable(tbl: XmlNode, tableNumbering?: NumberingState): DocxT
     }
   }
   return table
+}
+
+function applyTableStyle(table: DocxTable, tblPr: XmlNode | undefined, context: DocxStyleContext): void {
+  const chain = styleChain(attrs(getChildren(tblPr, 'tblStyle')[0]).val, context)
+  let borders: DocxTableBorders = {}
+  for (const style of chain) borders = { ...borders, ...parseBorders(getChildren(style, 'tblPr')[0] ?? {}) }
+  table.borders = { ...borders, ...table.borders }
+  const look = attrs(getChildren(tblPr, 'tblLook')[0]),
+    bits = parseInt(look.val ?? '0', 16)
+  const enabled = (name: string, bit: number) =>
+    look[name] !== undefined ? look[name] === '1' || look[name] === 'true' : !!(bits & bit)
+  const firstRow = enabled('firstRow', 0x20),
+    lastRow = enabled('lastRow', 0x40),
+    firstCol = enabled('firstColumn', 0x80),
+    lastCol = enabled('lastColumn', 0x100)
+  const regions = chain.flatMap((style) => getChildren(style, 'tblStylePr'))
+  table.rows.forEach((row, ri) => {
+    row.cells.forEach((cell, ci) => {
+      const active = new Set<string>()
+      if (!enabled('noHBand', 0x200)) active.add((ri - (firstRow ? 1 : 0)) % 2 === 0 ? 'band1Horz' : 'band2Horz')
+      if (!enabled('noVBand', 0x400)) active.add(ci % 2 === 0 ? 'band1Vert' : 'band2Vert')
+      if (firstRow && ri === 0) active.add('firstRow')
+      if (lastRow && ri === table.rows.length - 1) active.add('lastRow')
+      if (firstCol && ci === 0) active.add('firstCol')
+      if (lastCol && ci === row.cells.length - 1) active.add('lastCol')
+      let defaults: Partial<DocxTextRun> = {},
+        inheritedBorders: DocxTableBorders = {}
+      for (const style of chain) Object.assign(defaults, readRunProperties(getChildren(style, 'rPr')[0], context.theme))
+      for (const region of regions) {
+        if (!active.has(attrs(region).type)) continue
+        Object.assign(defaults, readRunProperties(getChildren(region, 'rPr')[0], context.theme))
+        inheritedBorders = { ...inheritedBorders, ...parseBorders(getChildren(region, 'tcPr')[0] ?? {}) }
+      }
+      cell.borders = { ...inheritedBorders, ...cell.borders }
+      // Automatic foreground color contrasts with a directly shaded dark cell.
+      if (cell.fill && /^[\da-f]{6}$/i.test(cell.fill)) {
+        const rgb = [0, 2, 4].map((i) => parseInt(cell.fill!.slice(i, i + 2), 16))
+        if (rgb[0] * 0.299 + rgb[1] * 0.587 + rgb[2] * 0.114 < 128) defaults.color ??= 'FFFFFF'
+      }
+      for (const paragraph of cell.paragraphs) {
+        for (const run of paragraph.runs)
+          for (const [key, value] of Object.entries(defaults)) {
+            const k = key as keyof DocxTextRun
+            if (run[k] === undefined) Object.assign(run, { [k]: value })
+          }
+      }
+    })
+  })
 }
 
 export type { TableCellBorder }

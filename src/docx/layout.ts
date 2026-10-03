@@ -3,7 +3,9 @@
  * Text measurement uses a real Canvas2D measureText (via a provided measure
  * function) so widths match what we paint.
  */
-import type { DocxDocument, DocxImage, DocxParagraph, DocxSection, DocxTable, DocxTableCell, DocxTableRow, DocxTextRun } from './types'
+import type { DocxDocument, DocxImage, DocxParagraph, DocxSection, DocxTable, DocxTableCell, DocxTableRow, DocxTextRun, TableCellBorder } from './types'
+import { paintDrawing } from './drawing'
+import { fontFamilyCss } from './styles'
 import { emuToPx } from '../core/geometry'
 import { twipsToPx } from '../core/geometry'
 import { resolveColor } from '../core/color'
@@ -38,6 +40,8 @@ export interface LineBox {
   contentWidthPx: number
   /** List marker drawn in the left gutter (first line only). */
   marker?: { text: string; widthPx: number }
+  inlineImages?: Array<{ image: DocxImage; xPx: number; yPx: number; widthPx: number; heightPx: number }>
+  baselinePx?: number
 }
 
 export interface PageLayout {
@@ -69,6 +73,7 @@ export interface ImageBox {
   heightPx: number
   /** Index into the document's decoded image list (set by the caller). */
   imageIndex: number
+  drawing?: DocxImage['drawing']
   /** Set for floating (wp:anchor) images: drawn behind text and out of flow. */
   floating?: { behindDoc: boolean; relativeHeight: number; wrap: 'none' | 'square' | 'tight' | 'through' | 'topAndBottom' }
 }
@@ -81,6 +86,7 @@ export interface TableCellBox {
   heightPx: number
   fill?: string
   borders?: { left?: string; right?: string; top?: string; bottom?: string }
+  borderSpecs?: Partial<Record<'left' | 'right' | 'top' | 'bottom', TableCellBorder>>
 }
 
 export interface TableRowBox {
@@ -118,7 +124,7 @@ export function fontCss(s: RunStyle): string {
   if (s.italic) parts.push('italic')
   if (s.bold) parts.push('bold')
   parts.push(`${s.fontSizePt}pt`)
-  parts.push(`"${s.fontFamily}"`)
+  parts.push(fontFamilyCss(s.fontFamily))
   return parts.join(' ')
 }
 
@@ -132,15 +138,32 @@ function runStyleOf(run: DocxTextRun, defaults: { fontFamily: string; fontSizePt
 }
 
 interface Token {
-  kind: 'text' | 'break' | 'tab'
+  kind: 'text' | 'break' | 'tab' | 'image'
   text: string
   run: DocxTextRun
   style: RunStyle
+  image?: DocxImage
 }
 
 function tokenize(para: DocxParagraph, defaults: { fontFamily: string; fontSizePt: number }): Token[] {
   const tokens: Token[] = []
-  for (const run of para.runs) {
+  const inline = para.inline ?? [
+    ...para.runs.map((run) => ({ kind: 'text' as const, run })),
+    ...para.images.map((image) => ({ kind: 'image' as const, image }))
+  ]
+  for (const item of inline) {
+    if (item.kind === 'image') {
+      if (!item.image.floating)
+        tokens.push({
+          kind: 'image',
+          image: item.image,
+          text: '',
+          run: { text: '' },
+          style: runStyleOf({ text: '' }, defaults)
+        })
+      continue
+    }
+    const run = item.run
     const style = runStyleOf(run, defaults)
     if (run.breakBefore) tokens.push({ kind: 'break', text: '', run, style })
     if (run.text.length === 0) continue
@@ -170,16 +193,10 @@ function layoutParagraph(
      * objects. Undefined/empty means "no float here, use the full column".
      */
     floatBands?: (yTop: number, yBottom: number) => Array<{ x: number; width: number }> | undefined
-  },
+  }
 ): { lines: LineBox[]; endY: number } {
   const lines: LineBox[] = []
   const { contentX, contentWidth, startY, defaults } = opts
-  // An inline drawing supplies the line's height itself. Empty drawing runs
-  // must not create a second, blank text line above it.
-  if (para.images.some(image => !image.floating) && !para.listMarker &&
-      !para.runs.some(run => run.text || run.breakBefore || run.field)) {
-    return { lines, endY: startY }
-  }
   const indentLeft = twipsToPx(para.indentLeftTwips ?? 0)
   const indentRight = twipsToPx(para.indentRightTwips ?? 0)
   const firstLineIndent = twipsToPx(para.indentFirstLineTwips ?? 0)
@@ -189,7 +206,7 @@ function layoutParagraph(
     fontFamily: para.runs[0]?.fontFamily ?? defaults.fontFamily,
     fontSizePt: para.runs[0]?.fontSizePt ?? defaults.fontSizePt,
     bold: !!para.runs[0]?.bold,
-    italic: !!para.runs[0]?.italic,
+    italic: !!para.runs[0]?.italic
   }
   const markerGutter = para.listMarker ? measure(`${para.listMarker} `, markerStyle) : 0
   const fullUsable = contentWidth - indentLeft - indentRight - markerGutter
@@ -198,14 +215,15 @@ function layoutParagraph(
   // Per-line band: a floating image narrows the column on the lines it spans.
   // Recomputed at each line start (Word snaps wrapping to line granularity).
   const lineHeightEstimate = (): number => {
-    if (para.lineSpacing?.rule === 'exact' || para.lineSpacing?.rule === 'atLeast') return twipsToPx(para.lineSpacing.value)
+    if (para.lineSpacing?.rule === 'exact' || para.lineSpacing?.rule === 'atLeast')
+      return twipsToPx(para.lineSpacing.value)
     const mult = para.lineSpacing?.rule === 'auto' ? para.lineSpacing.value / 240 : 1
     return (maxRunFontSize(para, defaults) || defaults.fontSizePt) * LINE_HEIGHT_FACTOR * mult
   }
   let lineX = contentX
   let lineUsable = fullUsable
   const refreshBand = (): void => {
-    if (segs.length > 0) return // this line is already positioned
+    if (segs.length > 0 || inlineImages.length > 0) return // this line is already positioned
     const bands = opts.floatBands?.(y, y + lineHeightEstimate())
     let best: { x: number; width: number } | undefined
     if (bands) {
@@ -230,24 +248,51 @@ function layoutParagraph(
   let segs: Segment[] = []
   let width = 0
   let lineHeight = 0
+  let inlineImages: Array<{
+    image: DocxImage
+    offset: number
+    width: number
+    height: number
+    top: number
+    bottom: number
+  }> = []
 
   const paragraphLineHeight = (): number => {
     if (para.lineSpacing?.rule === 'exact') return twipsToPx(para.lineSpacing.value)
     if (para.lineSpacing?.rule === 'atLeast') return twipsToPx(para.lineSpacing.value)
     const mult = para.lineSpacing?.rule === 'auto' ? para.lineSpacing.value / 240 : 1
-    const base = (maxRunFontSize(para, defaults) || defaults.fontSizePt) * LINE_HEIGHT_FACTOR
+    const base = (maxRunFontSize(para, defaults) || defaults.fontSizePt) * (96 / 72) * LINE_HEIGHT_FACTOR
     return base * mult
   }
 
   const flush = (isParagraphEnd: boolean) => {
-    const h = para.lineSpacing?.rule === 'exact' ? twipsToPx(para.lineSpacing.value) : Math.max(lineHeight, paragraphLineHeight() * 0.9)
+    const h =
+      para.lineSpacing?.rule === 'exact'
+        ? twipsToPx(para.lineSpacing.value)
+        : Math.max(lineHeight, inlineImages.length && !segs.length ? 0 : paragraphLineHeight() * 0.9)
     const lineIndent = indentLeft + (firstLine ? firstLineIndent : 0) + markerGutter
     const marker = firstLine && para.listMarker ? { text: para.listMarker, widthPx: markerGutter } : undefined
-    if (segs.length === 0) {
-      lines.push({ yPx: y, xPx: lineX + lineIndent, widthPx: 0, segs: [], align: para.align, isParagraphEnd, heightPx: h, contentWidthPx: lineUsable, marker })
-    } else {
-      lines.push({ yPx: y, xPx: lineX + lineIndent, widthPx: width, segs, align: para.align, isParagraphEnd, heightPx: h, contentWidthPx: lineUsable, marker })
-    }
+    const alignOffset =
+      para.align === 'center' ? (lineUsable - width) / 2 : para.align === 'right' ? lineUsable - width : 0
+    const boxes = inlineImages.map((i) => ({
+      image: i.image,
+      xPx: lineX + lineIndent + alignOffset + i.offset,
+      yPx: y + (h - (i.height + i.bottom)),
+      widthPx: i.width,
+      heightPx: i.height
+    }))
+    lines.push({
+      yPx: y,
+      xPx: lineX + lineIndent,
+      widthPx: width,
+      segs,
+      align: para.align,
+      isParagraphEnd,
+      heightPx: h,
+      contentWidthPx: lineUsable,
+      marker,
+      ...(boxes.length ? { inlineImages: boxes, baselinePx: y + h } : {})
+    })
     y += h
     if (para.lineSpacing?.rule === 'atLeast') {
       y = Math.max(y, startY + twipsToPx(para.lineSpacing.value))
@@ -255,6 +300,7 @@ function layoutParagraph(
     segs = []
     width = 0
     lineHeight = 0
+    inlineImages = []
     lineX = contentX
     lineUsable = fullUsable
   }
@@ -278,6 +324,24 @@ function layoutParagraph(
 
   for (let i = 0; i < tokens.length; i++) {
     const token = tokens[i]
+    if (token.kind === 'image' && token.image) {
+      const image = token.image,
+        w = emuToPx(image.widthEmu),
+        h = emuToPx(image.heightEmu)
+      if (w <= 0 || h <= 0) continue
+      refreshBand()
+      if (width > 0 && width + w > lineUsable + 0.01) {
+        flush(false)
+        firstLine = false
+        refreshBand()
+      }
+      const top = emuToPx(image.effectExtentEmu?.top ?? 0),
+        bottom = emuToPx(image.effectExtentEmu?.bottom ?? 0)
+      inlineImages.push({ image, offset: width, width: w, height: h, top, bottom })
+      width += w
+      lineHeight = Math.max(lineHeight, top + h + bottom)
+      continue
+    }
     if (token.kind === 'break') {
       flush(false)
       firstLine = false
@@ -286,7 +350,8 @@ function layoutParagraph(
     if (token.kind === 'tab') {
       // advance to next 0.5in tab stop relative to indent
       const tabWidth = TAB_STOP_PX
-      const cur = (lineX - contentX) + (firstLine ? indentLeft + twipsToPx(para.indentFirstLineTwips ?? 0) : indentLeft) + width
+      const cur =
+        lineX - contentX + (firstLine ? indentLeft + twipsToPx(para.indentFirstLineTwips ?? 0) : indentLeft) + width
       const next = Math.floor(cur / tabWidth) * tabWidth + tabWidth
       const w = Math.max(0, next - cur)
       segs.push({ text: ' ', run: token.run, style: token.style, widthPx: w })
@@ -354,8 +419,12 @@ export function collectDocImages(document: DocxDocument): DocxImage[] {
   const seen = new Set<DocxImage>()
   for (const section of document.sections) {
     for (const block of section.blocks ?? []) {
-      if (block.kind === 'p') {
-        for (const image of block.paragraph.images ?? []) {
+      const paragraphs =
+        block.kind === 'p'
+          ? [block.paragraph]
+          : block.table.rows.flatMap((row) => row.cells.flatMap((cell) => cell.paragraphs))
+      for (const paragraph of paragraphs) {
+        for (const image of paragraph.images ?? []) {
           if (!seen.has(image)) {
             seen.add(image)
             out.push(image)
@@ -422,11 +491,12 @@ export function layoutDocx(document: DocxDocument, measure: MeasureFn): PageLayo
             widthPx: w,
             heightPx: h,
             imageIndex: imageIndex.get(image) ?? -1,
+            drawing: image.drawing,
             floating: {
               behindDoc: image.floating.behindDoc,
               relativeHeight: image.floating.relativeHeight,
-              wrap: image.floating.wrap,
-            },
+              wrap: image.floating.wrap
+            }
           })
         }
         const { lines, endY } = layoutParagraph(para, measure, {
@@ -435,7 +505,7 @@ export function layoutDocx(document: DocxDocument, measure: MeasureFn): PageLayo
           startY: y,
           defaults,
           // body text flows beside floating objects that wrap square/tight
-          floatBands: (top, bottom) => freeBandsFor(page.images, top, bottom, contentX, contentWidth),
+          floatBands: (top, bottom) => freeBandsFor(page.images, top, bottom, contentX, contentWidth)
         })
         // Lines carry absolute y measured from the section start. Any line
         // past contentBottom rolls onto a fresh page, rebased to the top
@@ -443,26 +513,28 @@ export function layoutDocx(document: DocxDocument, measure: MeasureFn): PageLayo
         // and to the running flow position.
         let shift = 0
         for (const line of lines) {
-          if (line.yPx + shift > contentBottom && page.lines.length > 0) {
+          if (
+            line.yPx + shift + line.heightPx > contentBottom &&
+            (page.lines.length > 0 || page.tables.length > 0 || page.images.length > 0)
+          ) {
             commitPage()
             shift = m.top - line.yPx
           }
-          page.lines.push({ ...line, yPx: line.yPx + shift })
+          for (const box of line.inlineImages ?? [])
+            page.images.push({
+              ...box,
+              yPx: box.yPx + shift,
+              imageIndex: imageIndex.get(box.image) ?? -1,
+              drawing: box.image.drawing
+            })
+          if (line.segs.length || !line.inlineImages?.length)
+            page.lines.push({
+              ...line,
+              yPx: line.yPx + shift,
+              baselinePx: line.baselinePx === undefined ? undefined : line.baselinePx + shift
+            })
         }
         y = endY + shift
-        // inline images take flow space below the paragraph's text
-        for (const image of para.images ?? []) {
-          if (image.floating) continue
-          const w = emuToPx(image.widthEmu)
-          const h = emuToPx(image.heightEmu)
-          if (w <= 0 || h <= 0) continue
-          const effectTop = emuToPx(image.effectExtentEmu?.top ?? 0)
-          const effectBottom = emuToPx(image.effectExtentEmu?.bottom ?? 0)
-          if (y + effectTop + h + effectBottom > contentBottom && (page.lines.length > 0 || page.images.length > 0)) commitPage()
-          y += effectTop
-          page.images.push({ xPx: contentX, yPx: y, widthPx: w, heightPx: h, imageIndex: imageIndex.get(image) ?? -1 })
-          y += h + effectBottom
-        }
         y += twipsToPx(para.spacingAfterTwips ?? 0)
         continue
       }
@@ -479,7 +551,7 @@ export function layoutDocx(document: DocxDocument, measure: MeasureFn): PageLayo
           fromRow,
           repeatHeader: !firstChunk && hasHeader,
           maxHeightPx: contentBottom - y,
-          allowFirstRowOverflow: !pageHasContent(),
+          allowFirstRowOverflow: !pageHasContent()
         })
         if (chunk.consumedRows === 0 && pageHasContent()) {
           // not even one row fits in the remaining space — start a new page
@@ -488,11 +560,25 @@ export function layoutDocx(document: DocxDocument, measure: MeasureFn): PageLayo
             fromRow,
             repeatHeader: !firstChunk && hasHeader,
             maxHeightPx: contentBottom - y,
-            allowFirstRowOverflow: true,
+            allowFirstRowOverflow: true
           })
         }
         for (const line of chunk.lines) {
-          page.lines.push({ ...line, xPx: line.xPx + tableX, yPx: line.yPx + y })
+          for (const box of line.inlineImages ?? [])
+            page.images.push({
+              ...box,
+              xPx: box.xPx + tableX,
+              yPx: box.yPx + y,
+              imageIndex: imageIndex.get(box.image) ?? -1,
+              drawing: box.image.drawing
+            })
+          if (line.segs.length || !line.inlineImages?.length)
+            page.lines.push({
+              ...line,
+              xPx: line.xPx + tableX,
+              yPx: line.yPx + y,
+              baselinePx: line.baselinePx === undefined ? undefined : line.baselinePx + y
+            })
         }
         page.tables.push({ xPx: tableX, yPx: y, widthPx: chunk.widthPx, rows: chunk.rows })
         y += chunk.heightPx
@@ -501,29 +587,19 @@ export function layoutDocx(document: DocxDocument, measure: MeasureFn): PageLayo
         if (fromRow < table.rows.length) commitPage()
       }
     }
-    if (page.lines.length > 0 || page.tables.length > 0 || page.images.length > 0 || pages.length === 0) pages.push(page)
+    if (page.lines.length > 0 || page.tables.length > 0 || page.images.length > 0 || pages.length === 0)
+      pages.push(page)
 
     // attach this section's header/footer to every page it produced; with
     // w:titlePg the first page gets the type="first" variants instead
     if (section.header || section.footer || section.firstHeader || section.firstFooter) {
-      const block = (
-        paragraphs: DocxParagraph[] | undefined,
-        yPx: number,
-      ): HFBlock | undefined =>
-        paragraphs
-          ? { paragraphs, yPx, xPx: m.left, widthPx: contentWidth, defaults }
-          : undefined
+      const block = (paragraphs: DocxParagraph[] | undefined, yPx: number): HFBlock | undefined =>
+        paragraphs ? { paragraphs, yPx, xPx: m.left, widthPx: contentWidth, defaults } : undefined
       const headerY = twipsToPx(section.margins.headerTwips)
       const footerY = heightPx - twipsToPx(section.margins.footerTwips)
       const make = (firstPage: boolean) => ({
-        header: block(
-          firstPage && section.titlePg ? (section.firstHeader ?? section.header) : section.header,
-          headerY,
-        ),
-        footer: block(
-          firstPage && section.titlePg ? (section.firstFooter ?? section.footer) : section.footer,
-          footerY,
-        ),
+        header: block(firstPage && section.titlePg ? (section.firstHeader ?? section.header) : section.header, headerY),
+        footer: block(firstPage && section.titlePg ? (section.firstFooter ?? section.footer) : section.footer, footerY)
       })
       pages.slice(pagesBefore).forEach((p, i) => {
         const { header, footer } = make(i === 0)
@@ -535,27 +611,36 @@ export function layoutDocx(document: DocxDocument, measure: MeasureFn): PageLayo
           for (const paragraph of hf.paragraphs) {
             imageY += twipsToPx(paragraph.spacingBeforeTwips ?? 0)
             const laid = layoutParagraph(paragraph, measure, {
-              contentX: hf.xPx, contentWidth: hf.widthPx, startY: imageY, defaults,
+              contentX: hf.xPx,
+              contentWidth: hf.widthPx,
+              startY: imageY,
+              defaults
             })
             imageY = laid.endY
+            for (const line of laid.lines)
+              for (const box of line.inlineImages ?? [])
+                p.images.push({ ...box, imageIndex: imageIndex.get(box.image) ?? -1, drawing: box.image.drawing })
             for (const image of paragraph.images) {
               const width = emuToPx(image.widthEmu)
               const height = emuToPx(image.heightEmu)
               if (width <= 0 || height <= 0) continue
               if (image.floating) {
                 const place = resolveFloating(image, {
-                  pageWidthPx: widthPx, contentX, contentWidth, flowY: imageY, m,
+                  pageWidthPx: widthPx,
+                  contentX,
+                  contentWidth,
+                  flowY: imageY,
+                  m
                 })
-                p.images.push({ xPx: place.x, yPx: place.y, widthPx: width, heightPx: height,
-                  imageIndex: imageIndex.get(image) ?? -1, floating: { ...image.floating } })
-              } else {
-                imageY += emuToPx(image.effectExtentEmu?.top ?? 0)
-                let imageX = hf.xPx + twipsToPx(paragraph.indentLeftTwips ?? 0)
-                if (paragraph.align === 'center') imageX += (hf.widthPx - width) / 2
-                else if (paragraph.align === 'right') imageX += hf.widthPx - width
-                p.images.push({ xPx: imageX, yPx: imageY, widthPx: width, heightPx: height,
-                  imageIndex: imageIndex.get(image) ?? -1 })
-                imageY += height + emuToPx(image.effectExtentEmu?.bottom ?? 0)
+                p.images.push({
+                  xPx: place.x,
+                  yPx: place.y,
+                  widthPx: width,
+                  heightPx: height,
+                  imageIndex: imageIndex.get(image) ?? -1,
+                  drawing: image.drawing,
+                  floating: { ...image.floating }
+                })
               }
             }
             imageY += twipsToPx(paragraph.spacingAfterTwips ?? 0)
@@ -608,6 +693,7 @@ export function renderPages(
     paintImages(page.images, ctx, images, 'behind')
     paintImages(page.images, ctx, images, 'front')
     const hfLines = layoutHeaderFooter(page, firstNumber + pageIndex, totalPages, measure)
+    lastFont = '' // header measurement can change ctx.font independently of the paint cache
     const allLines = hfLines.length > 0 ? [...hfLines, ...page.lines] : page.lines
     for (const line of allLines) {
       let extraSpacePerGap = 0
@@ -621,7 +707,7 @@ export function renderPages(
       let x = line.xPx + offset
       let maxAscent = 0
       for (const seg of line.segs) maxAscent = Math.max(maxAscent, seg.style.fontSizePt * LINE_HEIGHT_FACTOR * 0.8)
-      const baseline = line.yPx + maxAscent
+      const baseline = line.baselinePx ?? line.yPx + maxAscent
       // list marker sits left of the (indented) text
       if (line.marker) {
         const markerStyle: RunStyle = {
@@ -671,18 +757,31 @@ export function renderPages(
 function substituteFields(paragraphs: DocxParagraph[], pageNumber: number, totalPages: number): DocxParagraph[] {
   let needsSub = false
   for (const p of paragraphs) {
-    for (const r of p.runs) if (r.field) { needsSub = true; break }
+    for (const r of p.runs)
+      if (r.field) {
+        needsSub = true
+        break
+      }
     if (needsSub) break
   }
   if (!needsSub) return paragraphs
-  return paragraphs.map((p) => ({
-    ...p,
-    runs: p.runs.map((r) => {
+  return paragraphs.map((p) => {
+    const substituted = new Map<DocxTextRun, DocxTextRun>()
+    const runs = p.runs.map((r) => {
       if (!r.field) return r
       const value = r.field === 'PAGE' ? String(pageNumber) : r.field === 'NUMPAGES' ? String(totalPages) : ''
-      return { ...r, text: value }
-    }),
-  }))
+      const run = { ...r, text: value }
+      substituted.set(r, run)
+      return run
+    })
+    return {
+      ...p,
+      runs,
+      inline: p.inline?.map((item) =>
+        item.kind === 'text' ? { ...item, run: substituted.get(item.run) ?? item.run } : item
+      )
+    }
+  })
 }
 
 /** Lay out a page's header and footer into positioned lines. */
@@ -705,10 +804,7 @@ function layoutHeaderFooter(
         defaults: block.defaults,
       })
       out.push(...laid.lines)
-      y = laid.endY + para.images.filter(image => !image.floating)
-        .reduce((height, image) => height + emuToPx(image.heightEmu +
-          (image.effectExtentEmu?.top ?? 0) + (image.effectExtentEmu?.bottom ?? 0)), 0)
-        + twipsToPx(para.spacingAfterTwips ?? 0)
+      y = laid.endY + twipsToPx(para.spacingAfterTwips ?? 0)
     }
   }
   return out
@@ -747,12 +843,18 @@ function paintImages(
   boxes: ImageBox[],
   ctx: CanvasRenderingContext2D,
   images: Array<CanvasImageSource | undefined> | undefined,
-  pass: 'behind' | 'front',
+  pass: 'behind' | 'front'
 ): void {
-  if (!images) return
   for (const box of boxes) {
     if (pass === 'behind' ? !box.floating?.behindDoc : box.floating?.behindDoc) continue
-    const img = images[box.imageIndex]
+    if (box.drawing) {
+      ctx.save()
+      ctx.translate(box.xPx, box.yPx)
+      paintDrawing(box.drawing, ctx, box.widthPx, box.heightPx)
+      ctx.restore()
+      continue
+    }
+    const img = images?.[box.imageIndex]
     if (!img) continue
     ctx.drawImage(img as CanvasImageSource, box.xPx, box.yPx, box.widthPx, box.heightPx)
   }
@@ -775,21 +877,23 @@ function paintTables(tables: TableBox[], ctx: CanvasRenderingContext2D): void {
       for (const cell of row.cells) {
         const b = cell.borders
         if (!b) continue
-        ctx.strokeStyle = '#000000'
         const cx = table.xPx + cell.xPx
         const cy = table.yPx + cell.yPx
-        const draw = (w: number, x1: number, y1: number, x2: number, y2: number) => {
-          ctx.lineWidth = w
+        const draw = (side: 'left' | 'right' | 'top' | 'bottom', x1: number, y1: number, x2: number, y2: number) => {
+          const spec = cell.borderSpecs?.[side]
+          ctx.strokeStyle = spec?.color && spec.color !== 'auto' ? resolveColor(spec.color) : '#000000'
+          ctx.lineWidth =
+            spec?.widthPt !== undefined ? (spec.widthPt * 4) / 3 : Math.max(1, BORDER_WIDTH[b[side] ?? 'thin'] ?? 1)
+          const offset = spec?.widthPt !== undefined ? 0 : 0.5
           ctx.beginPath()
-          ctx.moveTo(x1 + 0.5, y1 + 0.5)
-          ctx.lineTo(x2 + 0.5, y2 + 0.5)
+          ctx.moveTo(x1 + offset, y1 + offset)
+          ctx.lineTo(x2 + offset, y2 + offset)
           ctx.stroke()
         }
-        const lw = (s: string | undefined) => Math.max(1, BORDER_WIDTH[s ?? 'thin'] ?? 1)
-        if (b.left) draw(lw(b.left), cx, cy, cx, cy + cell.heightPx)
-        if (b.right) draw(lw(b.right), cx + cell.widthPx, cy, cx + cell.widthPx, cy + cell.heightPx)
-        if (b.top) draw(lw(b.top), cx, cy, cx + cell.widthPx, cy)
-        if (b.bottom) draw(lw(b.bottom), cx, cy + cell.heightPx, cx + cell.widthPx, cy + cell.heightPx)
+        if (b.left) draw('left', cx, cy, cx, cy + cell.heightPx)
+        if (b.right) draw('right', cx + cell.widthPx, cy, cx + cell.widthPx, cy + cell.heightPx)
+        if (b.top) draw('top', cx, cy, cx + cell.widthPx, cy)
+        if (b.bottom) draw('bottom', cx, cy + cell.heightPx, cx + cell.widthPx, cy + cell.heightPx)
       }
     }
   }
@@ -907,6 +1011,7 @@ interface MergeRegion {
   colSpan: number
   fill?: string
   borders?: { left?: string; right?: string; top?: string; bottom?: string }
+  borderSpecs?: TableCellBox['borderSpecs']
 }
 
 interface CellPosition {
@@ -939,10 +1044,10 @@ function computeMergeRegions(table: DocxTable, positions: CellPosition[][]): Map
     for (const { cell, col, span } of positions[r]) {
       if (cell.vMerge !== 'restart') continue
       const tb = table.borders
-      const pick = (side: 'left' | 'right' | 'top' | 'bottom'): string | undefined => {
+      const spec = (side: 'left' | 'right' | 'top' | 'bottom'): TableCellBorder | undefined => {
         const cb = cell.borders
-        if (cb && side in cb) return borderCss(cb[side])
-        if (tb) return borderCss(tb[side] ?? (side === 'top' || side === 'bottom' ? tb.insideH : tb.insideV))
+        if (cb && side in cb) return cb[side]
+        if (tb) return tb[side] ?? (side === 'top' || side === 'bottom' ? tb.insideH : tb.insideV)
         return undefined
       }
       const region: MergeRegion = {
@@ -951,7 +1056,13 @@ function computeMergeRegions(table: DocxTable, positions: CellPosition[][]): Map
         startCol: col,
         colSpan: span,
         fill: cell.fill ?? table.fill,
-        borders: { left: pick('left'), right: pick('right'), top: pick('top'), bottom: pick('bottom') },
+        borders: {
+          left: borderCss(spec('left')),
+          right: borderCss(spec('right')),
+          top: borderCss(spec('top')),
+          bottom: borderCss(spec('bottom'))
+        },
+        borderSpecs: { left: spec('left'), right: spec('right'), top: spec('top'), bottom: spec('bottom') }
       }
       // extend over following continue cells
       for (let rr = r + 1; rr < table.rows.length; rr++) {
@@ -1028,7 +1139,7 @@ function layoutTableRows(
   table: DocxTable,
   measure: MeasureFn,
   defaults: { fontFamily: string; fontSizePt: number },
-  opts: { fromRow: number; repeatHeader: boolean; maxHeightPx: number; allowFirstRowOverflow: boolean },
+  opts: { fromRow: number; repeatHeader: boolean; maxHeightPx: number; allowFirstRowOverflow: boolean }
 ): { lines: LineBox[]; rows: TableRowBox[]; widthPx: number; heightPx: number; consumedRows: number } {
   const lines: LineBox[] = []
   const colOffsets = prefixSum(table.gridColsTwips)
@@ -1038,7 +1149,7 @@ function layoutTableRows(
     top: twipsToPx(table.cellMargins.topTwips),
     bottom: twipsToPx(table.cellMargins.bottomTwips),
     left: twipsToPx(table.cellMargins.leftTwips),
-    right: twipsToPx(table.cellMargins.rightTwips),
+    right: twipsToPx(table.cellMargins.rightTwips)
   }
 
   const committedRows: TableRowBox[] = []
@@ -1049,16 +1160,14 @@ function layoutTableRows(
   // opened on an earlier page and must be continued as plain boxes here
   const minRowIndex = Math.min(
     opts.fromRow,
-    ...(opts.repeatHeader ? table.rows.map((r, i) => (r.isHeader ? i : Infinity)) : [Infinity]),
+    ...(opts.repeatHeader ? table.rows.map((r, i) => (r.isHeader ? i : Infinity)) : [Infinity])
   )
 
   const headerRows = opts.repeatHeader ? table.rows.filter((r) => r.isHeader) : []
   const headerIndices = table.rows.map((r, i) => (r.isHeader ? i : -1)).filter((i) => i >= 0)
   const queue: Array<{ row: DocxTableRow; rowIndex: number; counts: boolean }> = [
     ...headerRows.map((row, i) => ({ row, rowIndex: headerIndices[i] ?? 0, counts: false })),
-    ...table.rows
-      .map((row, i) => ({ row, rowIndex: i, counts: true }))
-      .slice(opts.fromRow),
+    ...table.rows.map((row, i) => ({ row, rowIndex: i, counts: true })).slice(opts.fromRow)
   ]
 
   let yRel = 0
@@ -1067,10 +1176,17 @@ function layoutTableRows(
 
   /** merge regions whose box is still open in this chunk */
   const openMerges = new Map<string, TableCellBox>()
+  const mergedAlignments: Array<{ box: TableCellBox; lines: LineBox[]; initialHeight: number; factor: number }> = []
 
   for (const { row, rowIndex, counts } of queue) {
     // lay the row into temporary coordinates (relative to its own top)
-    const entries: Array<{ cellBox: TableCellBox; lines: LineBox[]; contentH: number; vAlign: 'top' | 'center' | 'bottom'; col: number }> = []
+    const entries: Array<{
+      cellBox: TableCellBox
+      lines: LineBox[]
+      contentH: number
+      vAlign: 'top' | 'center' | 'bottom'
+      col: number
+    }> = []
     let rowContentH = 0
     for (const { cell, col, span } of positions[rowIndex]) {
       if (cell.vMerge === 'continue') {
@@ -1088,22 +1204,31 @@ function layoutTableRows(
           contentX: cellXPx + margins.left,
           contentWidth: innerW,
           startY: cy,
-          defaults,
+          defaults
         })
         cellLines = cellLines.concat(laid.lines)
         cy = laid.endY + twipsToPx(para.spacingAfterTwips ?? 0)
       }
-      const contentH = cellLines.length > 0
-        ? cellLines[cellLines.length - 1].yPx - margins.top + cellLines[cellLines.length - 1].heightPx + margins.bottom
-        : margins.top + margins.bottom + defaults.fontSizePt * LINE_HEIGHT_FACTOR * (96 / 72) * 0.5
+      const contentH =
+        cellLines.length > 0
+          ? cellLines[cellLines.length - 1].yPx + cellLines[cellLines.length - 1].heightPx + margins.bottom
+          : margins.top + margins.bottom + defaults.fontSizePt * LINE_HEIGHT_FACTOR * (96 / 72) * 0.5
       rowContentH = Math.max(rowContentH, contentH)
       // borders: cell overrides, falling back to the table's outside/inside
       // border definitions
       const cb = cell.borders
       const tb = table.borders
-      const pick = (side: 'left' | 'right' | 'top' | 'bottom'): string | undefined => {
-        if (cb && side in cb) return borderCss(cb[side])
-        if (tb) return borderCss(tb[side] ?? (side === 'top' || side === 'bottom' ? tb.insideH : tb.insideV))
+      const spec = (side: 'left' | 'right' | 'top' | 'bottom'): TableCellBorder | undefined => {
+        if (cb && side in cb) return cb[side]
+        const exterior =
+          side === 'left'
+            ? col === 0
+            : side === 'right'
+              ? col + span === colWidths.length
+              : side === 'top'
+                ? rowIndex === 0
+                : rowIndex === table.rows.length - 1
+        if (tb) return exterior ? tb[side] : tb[side === 'left' || side === 'right' ? 'insideV' : 'insideH']
         return undefined
       }
       entries.push({
@@ -1114,16 +1239,17 @@ function layoutTableRows(
           heightPx: 0,
           fill: cell.fill ?? table.fill,
           borders: {
-            left: pick('left'),
-            right: pick('right'),
-            top: pick('top'),
-            bottom: pick('bottom'),
+            left: borderCss(spec('left')),
+            right: borderCss(spec('right')),
+            top: borderCss(spec('top')),
+            bottom: borderCss(spec('bottom'))
           },
+          borderSpecs: { left: spec('left'), right: spec('right'), top: spec('top'), bottom: spec('bottom') }
         },
         lines: cellLines,
         contentH,
         vAlign: cell.vAlign ?? 'top',
-        col,
+        col
       })
     }
     // explicit row height (atLeast semantics)
@@ -1167,6 +1293,7 @@ function layoutTableRows(
         heightPx: 0, // finalized when the region ends (or the chunk does)
         fill: region.fill,
         borders: region.borders,
+        borderSpecs: region.borderSpecs
       }
       rowCells.push(cont)
       openMerges.set(key, cont)
@@ -1177,12 +1304,32 @@ function layoutTableRows(
       let entryLines = entry.lines
       if (slack > 0 && entry.vAlign !== 'top') {
         const shift = entry.vAlign === 'center' ? slack / 2 : slack
-        entryLines = entryLines.map((l) => ({ ...l, yPx: l.yPx + shift }))
+        entryLines = entryLines.map((l) => ({
+          ...l,
+          yPx: l.yPx + shift,
+          baselinePx: l.baselinePx === undefined ? undefined : l.baselinePx + shift,
+          inlineImages: l.inlineImages?.map((box) => ({ ...box, yPx: box.yPx + shift }))
+        }))
       }
-      for (const line of entryLines) lines.push({ ...line, yPx: line.yPx + yRel })
+      const placedLines = entryLines.map((line) => ({
+        ...line,
+        yPx: line.yPx + yRel,
+        baselinePx: line.baselinePx === undefined ? undefined : line.baselinePx + yRel,
+        inlineImages: line.inlineImages?.map((box) => ({ ...box, yPx: box.yPx + yRel }))
+      }))
+      lines.push(...placedLines)
       entry.cellBox.yPx = yRel
       entry.cellBox.heightPx = rowH
       rowCells.push(entry.cellBox)
+      const region = regions.get(regionKey(rowIndex, entry.col))
+      if (region && region.endRow > rowIndex && entry.vAlign !== 'top') {
+        mergedAlignments.push({
+          box: entry.cellBox,
+          lines: placedLines,
+          initialHeight: rowH,
+          factor: entry.vAlign === 'center' ? 0.5 : 1
+        })
+      }
     }
     committedRows.push({ yPx: yRel, heightPx: rowH, cells: rowCells })
     yRel += rowH
@@ -1203,6 +1350,16 @@ function layoutTableRows(
   // next page, where a continuation box is emitted for them)
   for (const box of openMerges.values()) {
     box.heightPx = yRel - box.yPx
+  }
+  // A merge grows after its anchor row is placed. Align content against the
+  // final height of this page's merged box, including its inline pictures.
+  for (const entry of mergedAlignments) {
+    const shift = (entry.box.heightPx - entry.initialHeight) * entry.factor
+    for (const line of entry.lines) {
+      line.yPx += shift
+      if (line.baselinePx !== undefined) line.baselinePx += shift
+      for (const image of line.inlineImages ?? []) image.yPx += shift
+    }
   }
 
   return { lines, rows: committedRows, widthPx, heightPx: yRel, consumedRows }

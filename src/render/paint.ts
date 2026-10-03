@@ -64,7 +64,7 @@ export function getPaintables(
       const pages = layoutDocx(doc, measure)
       // decode embedded images once; failures degrade to a blank slot
       const decoded = await Promise.all(
-        collectDocImages(doc).map((img) => decodeImage(img.data, img.mime).catch(() => undefined)),
+        collectDocImages(doc).map((img) => img.drawing ? undefined : decodeImage(img.data, img.mime).catch(() => undefined)),
       )
       // Each page paints on its own canvas, so PAGE/NUMPAGES fields must be
       // resolved against the whole document, not the single-page array.

@@ -114,6 +114,8 @@ export interface PptxSlide {
   widthEmu: number
   heightEmu: number
   shapes: PptxShape[]
+  /** Slide background fill as CSS hex (p:bg solid fill, else layout/master fallback). Absent means white. */
+  background?: string
 }
 
 export interface PptxDocument {

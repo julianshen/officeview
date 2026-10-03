@@ -44,11 +44,64 @@ export interface DocxImage {
   effectExtentEmu?: { top: number; bottom: number }
   /** Present for wp:anchor drawings; absent means inline (in the text flow). */
   floating?: DocxFloating
+  /** Vector content stored in the package rather than an encoded picture. */
+  drawing?: DocxDrawing
 }
+
+export interface DocxDrawingShape {
+  xEmu: number
+  yEmu: number
+  widthEmu: number
+  heightEmu: number
+  geometry: string
+  rotationDeg?: number
+  fill?: string
+  line?: { color: string; widthEmu: number }
+  paragraphs: Array<{ runs: DocxTextRun[]; align: ParagraphAlign }>
+  fontFamily: string
+  textColor?: string
+}
+
+export type DocxDrawing =
+  | { kind: 'diagram'; shapes: DocxDrawingShape[] }
+  | {
+      kind: 'ink'
+      strokes: Array<{ points: Array<[number, number]>; widthEmu: number; color: string }>
+      widthEmu: number
+      heightEmu: number
+    }
+  | {
+      kind: 'chart'
+      title?: string
+      categories: string[]
+      series: Array<{ name: string; values: Array<number | undefined>; color: string }>
+      min?: number
+      max?: number
+      majorUnit?: number
+      gapWidth: number
+      overlap: number
+      legend: boolean
+      fontFamily: string
+      fontSizePt: number
+    }
+  | {
+      kind: 'textbox'
+      paragraphs: DocxParagraph[]
+      vertical: boolean
+      fontFamily: string
+      fontSizePt: number
+      insets: { left: number; top: number; right: number; bottom: number }
+      fill?: string
+      line?: { color: string; widthEmu: number }
+    }
+
+export type DocxInline = { kind: 'text'; run: DocxTextRun } | { kind: 'image'; image: DocxImage }
 
 export interface DocxParagraph {
   runs: DocxTextRun[]
   images: DocxImage[]
+  /** Text and drawings in source order, when the paragraph contains drawings. */
+  inline?: DocxInline[]
   align: ParagraphAlign
   /** Indents in twips. */
   indentLeftTwips?: number
@@ -98,7 +151,7 @@ export interface DocxDocument {
   styleDefaults: Map<string, { fontFamily?: string; fontSizePt?: number }>
 }
 
-export type TableCellBorder = { style?: string; color?: string }
+export type TableCellBorder = { style?: string; color?: string; widthPt?: number }
 
 export interface DocxTableBorders {
   top?: TableCellBorder
@@ -151,6 +204,4 @@ export interface DocxTable {
 }
 
 /** A flow content block: paragraph or table, in document order. */
-export type DocxBlock =
-  | { kind: 'p'; paragraph: DocxParagraph }
-  | { kind: 'table'; table: DocxTable }
+export type DocxBlock = { kind: 'p'; paragraph: DocxParagraph } | { kind: 'table'; table: DocxTable }

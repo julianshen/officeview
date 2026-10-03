@@ -28,10 +28,12 @@ export function renderSlide(
   watermark?: WatermarkOptions | ResolvedWatermark,
 ): void {
   const m = metrics ?? { widthPx: Math.round(emuToPx(slide.widthEmu)), heightPx: Math.round(emuToPx(slide.heightEmu)) }
-  ctx.fillStyle = '#ffffff'
+  // Slide background (p:bg) replaces the default white base; shapes and the
+  // watermark paint over it, so dark decks keep readable contrast.
+  ctx.fillStyle = slide.background ?? '#ffffff'
   ctx.fillRect(0, 0, m.widthPx, m.heightPx)
   // after the fill so it is not erased, before the shapes so it sits under them
-  if (watermark) paintWatermark(ctx, { widthPx: m.widthPx, heightPx: m.heightPx }, watermark)
+  if (watermark) paintWatermark(ctx, { widthPx: m.widthPx, heightPx: m.heightPx, background: slide.background }, watermark)
   for (const shape of slide.shapes) {
     paintShape(shape, ctx, images)
   }

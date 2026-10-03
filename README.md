@@ -229,7 +229,7 @@ X-OfficeView-Watermark: text=CONFIDENTIAL; placement=tile; rotate=-45; opacity=0
 | `placement` | `center`, `tile`, `header`, `footer` | `tile` |
 | `rotate` | degrees clockwise | `-45` |
 | `opacity` | `0`..`1`, clamped | `0.15` |
-| `color` | any CSS colour | `#000000` |
+| `color` | any CSS colour | derived from the page background (a light mark on dark pages); an explicit colour always wins, including explicit black |
 | `fontSize` | points; omit to scale with page width | 7% of page width |
 
 Pairs are separated by `;` only, so a comma in the text stays data (`text=DRAFT,
@@ -249,6 +249,8 @@ Two deliberate choices:
 - **It is painted into the page bitmap**, before the content, so it travels with
   the document instead of being removable by hiding an element, and the document's
   own text sits on top of the mark rather than being washed out by it.
+- **Slide backgrounds without a resolvable solid fill** (gradients, pictures) fall
+  back through layout/master to white rather than guessing a colour.
 
 Like copy/print prevention this is a deterrent, not DRM: it marks a page, it does
 not protect a secret inside it.
