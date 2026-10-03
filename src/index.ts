@@ -32,6 +32,11 @@ export type { PageLayout, LineBox, MeasureFn } from './docx/layout'
 export type { XlsxDocument, XlsxSheet, XlsxCell, XlsxCellStyle } from './xlsx/types'
 export type { PptxDocument, PptxSlide, PptxShape } from './pptx/types'
 
+// Zoom maths (used internally by <OfficeDoc>; exported so a host can drive the
+// same transform for its own chrome — e.g. a "fit width" button or a minimap)
+export { MIN_ZOOM, MAX_ZOOM, clampZoom, clampPan, stepZoom, transformCss, zoomAt, panTransform, pinchTransform, distance, midpoint } from './core/zoom'
+export type { Point, Viewport, Transform } from './core/zoom'
+
 // Text selection helpers (used internally by <OfficeDoc>)
 export {
   hitTest,
