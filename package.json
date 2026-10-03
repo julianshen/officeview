@@ -1,6 +1,6 @@
 {
   "name": "officeview",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "description": "React components that render Office documents (Word, PowerPoint, Excel) on <canvas> \u2014 pixel-faithful, not HTML translation. Works on desktop and mobile.",
   "keywords": [
     "react",
