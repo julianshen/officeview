@@ -276,12 +276,20 @@ function prefixSums(widths: number[]): number[] {
 }
 
 /** Render a sheet grid. ctx state: 1 unit = 1 px, (0,0) top-left of sheet. */
+export interface SheetViewport {
+  /** Sheet-coordinate rectangle rendered at the output origin (canvas clips the rest). */
+  x: number
+  y: number
+  width: number
+  height: number
+}
 export function renderSheet(
   sheet: XlsxSheet,
   ctx: CanvasRenderingContext2D,
   metrics?: GridMetrics,
   watermark?: WatermarkOptions | ResolvedWatermark,
   prepared?: { images?: ReadonlyArray<CanvasImageSource | undefined>; resolveFont?: (family: string) => string },
+  viewport?: SheetViewport,
 ): void {
   ctx.save()
   try {
@@ -292,6 +300,26 @@ export function renderSheet(
   const gridWidth = colX[colWidthsPx.length]
   const gridHeight = rowY[rowHeightsPx.length]
   const ranges = sheet.mergeRanges ?? []
+  // Viewport culling: paint only intersecting cells/boundaries, translated to
+  // the output origin. Absent viewport paints the whole sheet exactly as
+  // before (byte-identical: metrics extent, not just the cell grid, because
+  // drawings may expand the bitmap beyond the cells). Per-frame text
+  // measurement is cached by face+text.
+  const vp = viewport ?? { x: 0, y: 0, width: m.widthPx, height: m.heightPx }
+  const measureCache = new Map<string, number>()
+  const measured = (font: string, text: string): number => {
+    const key = `${font}\n${text}`
+    let w = measureCache.get(key)
+    if (w === undefined) {
+      ctx.font = font
+      w = ctx.measureText(text).width
+      measureCache.set(key, w)
+    }
+    return w
+  }
+  if (viewport) ctx.translate(-vp.x, -vp.y)
+  const intersects = (x: number, y: number, w: number, h: number): boolean =>
+    x < vp.x + vp.width && x + w > vp.x && y < vp.y + vp.height && y + h > vp.y
 
   // map "row:col" -> range for every covered (non-anchor) cell
   const covered = new Map<string, XlsxMergeRange>()
@@ -307,7 +335,7 @@ export function renderSheet(
   }
 
   ctx.fillStyle = '#ffffff'
-  ctx.fillRect(0, 0, m.widthPx, m.heightPx)
+  ctx.fillRect(vp.x, vp.y, vp.width, vp.height)
   // The watermark goes on straight after this fill — drawing it before would be
   // erased here — and under the cells, matching how the Word path does it.
   if (watermark) paintWatermark(ctx, { widthPx: m.widthPx, heightPx: m.heightPx }, watermark)
@@ -316,6 +344,7 @@ export function renderSheet(
   for (const row of sheet.rows) {
     const y = rowY[row.index] ?? 0
     const h = rowHeightsPx[row.index] ?? DEFAULT_ROW_PX
+    if (y + h <= vp.y || y >= vp.y + vp.height) continue
     for (const cell of row.cells) {
       const cov = covered.get(`${cell.row}:${cell.col}`)
       if (cov) continue // inside a merge, not its anchor — nothing to paint
@@ -324,6 +353,7 @@ export function renderSheet(
       const x = colX[cell.col] ?? 0
       const w = rng ? (colX[rng.maxCol + 1] ?? m.widthPx) - x : (colWidthsPx[cell.col] ?? DEFAULT_COL_PX)
       const hh = rng ? (rowY[rng.maxRow + 1] ?? m.heightPx) - y : h
+      if (!intersects(x, y, w, hh)) continue
       // fill
       const fill = cell.style?.fillColor
       if (fill) {
@@ -345,7 +375,7 @@ export function renderSheet(
         if (explicit) paintCellText(ctx, text, cell.style, typeof cell.value === 'number', x, y, w, hh, color)
         else {
           // Preserve accepted ordinary default horizontal layout exactly.
-          const textW = ctx.measureText(text).width
+          const textW = measured(ctx.font, text)
           const tx = typeof cell.value === 'number' ? x + w - PADDING_R - textW : x + PADDING_L
           const ty = y + hh - (hh - (cell.style?.fontSizePt ?? 10) * (96 / 72)) / 2
           ctx.textBaseline = 'alphabetic'; ctx.fillText(text, tx, ty)
@@ -379,16 +409,24 @@ export function renderSheet(
   ctx.strokeStyle = '#d0d0d0'
   ctx.lineWidth = 1
   ctx.beginPath()
-  for (let c = 0; c <= colWidthsPx.length; c++) {
+  const firstCol = Math.max(0, colX.findIndex((x, i) => x + (colWidthsPx[i] ?? 0) > vp.x))
+  const lastCol = colX.findIndex(x => x >= vp.x + vp.width)
+  const c0 = firstCol < 0 ? 0 : firstCol, c1 = lastCol < 0 ? colWidthsPx.length : lastCol
+  for (let c = c0; c <= c1; c++) {
     const x = colX[c]
     for (const [y1, y2] of visibleSegments(c, ranges, rowY, gridHeight, true)) {
+      if (y2 <= vp.y || y1 >= vp.y + vp.height) continue
       ctx.moveTo(x + 0.5, y1 + 0.5)
       ctx.lineTo(x + 0.5, y2 + 0.5)
     }
   }
-  for (let r = 0; r <= rowHeightsPx.length; r++) {
+  const firstRow = Math.max(0, rowY.findIndex((y, i) => y + (rowHeightsPx[i] ?? 0) > vp.y))
+  const lastRow = rowY.findIndex(y => y >= vp.y + vp.height)
+  const r0 = firstRow < 0 ? 0 : firstRow, r1 = lastRow < 0 ? rowHeightsPx.length : lastRow
+  for (let r = r0; r <= r1; r++) {
     const y = rowY[r]
     for (const [x1, x2] of visibleSegments(r, ranges, colX, gridWidth, false)) {
+      if (x2 <= vp.x || x1 >= vp.x + vp.width) continue
       ctx.moveTo(x1 + 0.5, y + 0.5)
       ctx.lineTo(x2 + 0.5, y + 0.5)
     }
