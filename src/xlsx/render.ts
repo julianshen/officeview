@@ -241,6 +241,90 @@ export function computeMetrics(sheet: XlsxSheet): GridMetrics {
   }
 }
 
+/** OOXML paper size ids to portrait width/height in inches (Letter default). */
+export const PAPER_SIZES_IN: Record<number, [number, number]> = {
+  1: [8.5, 11], 2: [8.5, 11], 3: [11, 17], 4: [17, 11], 5: [8.5, 14],
+  6: [5.5, 8.5], 7: [7.25, 10.5], 8: [11.69, 16.54], 9: [8.27, 11.69],
+  10: [8.27, 11.69], 11: [8.27, 11.69], 12: [8.27, 11.69], 13: [8.5, 13],
+  14: [8.27, 11.69], 15: [8.27, 11.69],
+}
+export interface PrintMetrics {
+  paperPx: { width: number; height: number }
+  printable: { x: number; y: number; width: number; height: number }
+  /** Effective content scale (explicit scale, possibly reduced by fit-to-page). */
+  scale: number
+  pagesWide: number
+  pagesTall: number
+}
+/**
+ * Print geometry for one sheet: paper rect, printable rect inside the
+ * margins, effective scale and page counts. Excel defaults (Letter, portrait,
+ * 100%, 0.7/0.75in margins) apply wherever the sheet authors nothing.
+ */
+export function computePrintMetrics(sheet: XlsxSheet, grid: GridMetrics, dpi = 96): PrintMetrics {
+  const setup = sheet.pageSetup
+  const [pwIn, phIn] = PAPER_SIZES_IN[setup?.paperSizeId ?? 1] ?? PAPER_SIZES_IN[1]
+  const landscape = setup?.orientation === 'landscape'
+  const paperPx = {
+    width: (landscape ? phIn : pwIn) * dpi,
+    height: (landscape ? pwIn : phIn) * dpi,
+  }
+  const margins = sheet.pageMargins ?? { left: 0.7, right: 0.7, top: 0.75, bottom: 0.75, header: 0.3, footer: 0.3 }
+  const printable = {
+    x: margins.left * dpi,
+    y: margins.top * dpi,
+    width: Math.max(0, paperPx.width - (margins.left + margins.right) * dpi),
+    height: Math.max(0, paperPx.height - (margins.top + margins.bottom) * dpi),
+  }
+  const base = Math.min(4, Math.max(0.1, (setup?.scale ?? 100) / 100))
+  let scale = base
+  if (setup?.fitToPage) {
+    const fw = setup.fitToWidth ?? 0, fh = setup.fitToHeight ?? 0
+    const sx = fw > 0 && grid.widthPx > 0 ? (printable.width * fw) / grid.widthPx : Infinity
+    const sy = fh > 0 && grid.heightPx > 0 ? (printable.height * fh) / grid.heightPx : Infinity
+    scale = Math.min(base, sx, sy)
+    if (!Number.isFinite(scale) || scale <= 0) scale = base
+  }
+  const pagesWide = Math.max(1, Math.ceil((grid.widthPx * scale) / Math.max(1, printable.width)))
+  const pagesTall = Math.max(1, Math.ceil((grid.heightPx * scale) / Math.max(1, printable.height)))
+  return { paperPx, printable, scale, pagesWide, pagesTall }
+}
+/**
+ * Paint one print page: paper-white sheet, content scaled into the printable
+ * area, clipped. Page (pageCol, pageRow) selects its sheet-coordinate window;
+ * content beyond one page clips (multi-page paintables are a follow-up).
+ */
+export function renderPrintPage(
+  sheet: XlsxSheet,
+  ctx: CanvasRenderingContext2D,
+  metrics: GridMetrics,
+  print: PrintMetrics,
+  pageCol = 0,
+  pageRow = 0,
+  watermark?: WatermarkOptions | ResolvedWatermark,
+  prepared?: { images?: ReadonlyArray<CanvasImageSource | undefined>; resolveFont?: (family: string) => string },
+): void {
+  ctx.save()
+  try {
+    ctx.fillStyle = '#ffffff'
+    ctx.fillRect(0, 0, print.paperPx.width, print.paperPx.height)
+    const { printable, scale } = print
+    ctx.beginPath()
+    ctx.rect(printable.x, printable.y, printable.width, printable.height)
+    ctx.clip()
+    ctx.translate(printable.x, printable.y)
+    ctx.scale(scale, scale)
+    renderSheet(sheet, ctx, metrics, watermark, prepared, {
+      x: (pageCol * printable.width) / scale,
+      y: (pageRow * printable.height) / scale,
+      width: printable.width / scale,
+      height: printable.height / scale,
+    })
+  } finally {
+    ctx.restore()
+  }
+}
+
 /** Format a numeric value for common built-in number formats. */
 export function formatValue(value: string | number | boolean | null, numFmtId: number): string {
   if (value === null) return ''

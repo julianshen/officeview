@@ -245,6 +245,8 @@ export interface XlsxSheetSpec {
   rows: Array<{ r: number; cells: XlsxCellSpec[] }>
   cols?: string
   merges?: string[]
+  pageSetup?: { paperSize?: number; orientation?: string; scale?: number; fitToWidth?: number; fitToHeight?: number; fitToPage?: boolean }
+  pageMargins?: { left?: number; right?: number; top?: number; bottom?: number; header?: number; footer?: number }
 }
 
 /** Build a minimal xlsx buffer. */
@@ -253,15 +255,20 @@ export async function buildXlsx(sheets: XlsxSheetSpec[], sharedStrings: string[]
   zip.file('[Content_Types].xml', XLSX_CT)
   zip.file('_rels/.rels', XLSX_ROOT_RELS)
   zip.file('xl/_rels/workbook.xml.rels', XLSX_WORKBOOK_RELS)
-  const sheetXml = (sheet: XlsxSheetSpec) =>
-    `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+  const sheetXml = (sheet: XlsxSheetSpec) => {
+    const setup = sheet.pageSetup ? `<pageSetup${sheet.pageSetup.paperSize !== undefined ? ` paperSize="${sheet.pageSetup.paperSize}"` : ''}${sheet.pageSetup.orientation ? ` orientation="${sheet.pageSetup.orientation}"` : ''}${sheet.pageSetup.scale !== undefined ? ` scale="${sheet.pageSetup.scale}"` : ''}${sheet.pageSetup.fitToWidth !== undefined ? ` fitToWidth="${sheet.pageSetup.fitToWidth}"` : ''}${sheet.pageSetup.fitToHeight !== undefined ? ` fitToHeight="${sheet.pageSetup.fitToHeight}"` : ''}/>` : ''
+    const setupPr = sheet.pageSetup?.fitToPage !== undefined ? `<sheetPr><pageSetUpPr fitToPage="${sheet.pageSetup.fitToPage ? '1' : '0'}"/></sheetPr>` : ''
+    const margins = sheet.pageMargins ? `<pageMargins${['left', 'right', 'top', 'bottom', 'header', 'footer'].map(k => ` ${k}="${(sheet.pageMargins as Record<string, number | undefined>)[k] ?? (k === 'header' || k === 'footer' ? 0.3 : 0.7)}"`).join('')}/>` : ''
+    return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+  ${setupPr}${setup}${margins}
   ${sheet.cols ? `<cols>${sheet.cols}</cols>` : ''}
   <sheetData>
     ${sheet.rows.map((row) => `<row r="${row.r}">${row.cells.map((c) => `<c r="${c.ref}"${c.t ? ` t="${c.t}"` : ''}${c.style !== undefined ? ` s="${c.style}"` : ''}>${c.v !== undefined ? `<v>${c.v}</v>` : ''}</c>`).join('')}</row>`).join('\n    ')}
   </sheetData>
   ${sheet.merges ? `<mergeCells count="${sheet.merges.length}">${sheet.merges.map((m) => `<mergeCell ref="${m}"/>`).join('')}</mergeCells>` : ''}
 </worksheet>`
+  }
   const workbookXml =
     `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">

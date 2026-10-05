@@ -65,6 +65,27 @@ export interface XlsxMergeRange {
   maxRow: number
   maxCol: number
 }
+/** Print page setup as authored (all optional; Excel defaults apply downstream). */
+export interface XlsxPageSetup {
+  paperSizeId?: number
+  orientation?: 'portrait' | 'landscape'
+  /** Explicit print scale percent (10-400). Absent means 100. */
+  scale?: number
+  /** Fit-to-page targets (0/undefined = unbounded in that axis). */
+  fitToWidth?: number
+  fitToHeight?: number
+  /** sheetPr/pageSetUpPr fitToPage flag. */
+  fitToPage?: boolean
+}
+/** Page margins in inches (Excel defaults when the element is absent). */
+export interface XlsxPageMargins {
+  left: number
+  right: number
+  top: number
+  bottom: number
+  header: number
+  footer: number
+}
 
 export interface XlsxSheet {
   drawingCoverage?: DrawingCoverageEntry[]
@@ -79,6 +100,8 @@ export interface XlsxSheet {
   drawingMarkers?: { maxCol: number; maxRow: number }
   drawingDiagnostics?: ContentDiagnostic[]
   drawingTheme?: ThemeContext
+  pageSetup?: XlsxPageSetup
+  pageMargins?: XlsxPageMargins
 }
 
 export interface XlsxDocument {

@@ -187,6 +187,36 @@ async function parseSheet(
     }
     sheet.mergeRanges = sheet.merges.map(parseMergeRange)
   }
+  const setupPr = getChildren(getChildren(data, 'sheetPr')[0], 'pageSetUpPr')[0]
+  const setupNode = getChildren(data, 'pageSetup')[0]
+  if (setupNode || setupPr) {
+    const a = attrs(setupNode)
+    const num = (v: unknown): number | undefined => {
+      const n = typeof v === 'string' ? parseFloat(v) : NaN
+      return Number.isFinite(n) ? n : undefined
+    }
+    const fitToPageAttr = setupPr ? attrs(setupPr).fitToPage : undefined
+    sheet.pageSetup = {
+      ...(num(a.paperSize) !== undefined ? { paperSizeId: num(a.paperSize) } : {}),
+      ...(a.orientation === 'landscape' || a.orientation === 'portrait' ? { orientation: a.orientation } : {}),
+      ...(num(a.scale) !== undefined ? { scale: num(a.scale) } : {}),
+      ...(num(a.fitToWidth) !== undefined ? { fitToWidth: num(a.fitToWidth) } : {}),
+      ...(num(a.fitToHeight) !== undefined ? { fitToHeight: num(a.fitToHeight) } : {}),
+      ...(fitToPageAttr === '1' || fitToPageAttr === 'true' ? { fitToPage: true } : fitToPageAttr !== undefined ? { fitToPage: false } : {}),
+    }
+  }
+  // Excel defaults (inches) when the element is absent.
+  const marginsNode = getChildren(data, 'pageMargins')[0]
+  const inches = (v: unknown, fallback: number): number => {
+    const n = typeof v === 'string' ? parseFloat(v) : NaN
+    return Number.isFinite(n) && n >= 0 ? n : fallback
+  }
+  const ma = attrs(marginsNode)
+  sheet.pageMargins = {
+    left: inches(ma.left, 0.7), right: inches(ma.right, 0.7),
+    top: inches(ma.top, 0.75), bottom: inches(ma.bottom, 0.75),
+    header: inches(ma.header, 0.3), footer: inches(ma.footer, 0.3),
+  }
   const sheetData = getChildren(data, 'sheetData')[0]
   for (const rowNode of getChildren(sheetData, 'row')) {
     const ra = attrs(rowNode)
