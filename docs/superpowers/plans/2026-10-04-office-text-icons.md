@@ -43,7 +43,9 @@ Task 2 complete: independent SPEC and QUALITY repair reviews approved the exact 
 - [x] Route drawing text boxes in these adapters through shared text layout while retaining their format-specific paragraphs and anchor placement. Preserve Word mixed image/text order and existing chart/ink/diagram payloads.
 - [x] Verify search/selection geometry with actual adapter paints. Run Word complex/layout/table suites and Excel style/render/border suites plus TypeScript. Complete both reviews.
 
-Acceptance: R16 freeze `d06c64fc7a43a4e5e15371100066aa9a994dee322abef3cf8bf3e85a6fcf9c0d` passed independent SPEC and Pi QUALITY, 1465 strict tests and all required gates. Dia preserved 13/13 fixture PNGs and 21/21 NATS PNGs. Native complex textbox column-pitch convergence remains explicit Task 6 work. Integrated to main as `be8ba76` (2026-10-05): reconstructed 271/271 inventory hashes, tsc + strict 1465/1465 re-verified, zero foreign files.
+Acceptance: R16 freeze `d06c64fc7a43a4e5e15371100066aa9a994dee322abef3cf8bf3e85a6fcf9c0d` passed independent SPEC and Pi QUALITY, 1465 strict tests and all required gates. Dia preserved 13/13 fixture PNGs and 21/21 NATS PNGs.[^dia-ua] Native complex textbox column-pitch convergence remains explicit Task 6 work. Integrated to main as `be8ba76` (2026-10-05): reconstructed 271/271 inventory hashes, tsc + strict 1465/1465 re-verified, zero foreign files.
+
+[^dia-ua]: The retained audit records UA Chrome/153.0.0.0; Dia is Chromium-based so the UA alone cannot distinguish Dia from plain Chrome 153. The artifact name and the accepted R16 SPEC report both call it a Dia audit.
 
 ## Task 4: SVG selection and horizontal inline icons
 
@@ -75,14 +77,14 @@ Acceptance: R5 freeze `0e2fe0a32b81e984a3980c4ffcc3921653effef689a8a490c86385613
 - [x] Run `bunx tsc --noEmit`, `OFFICEVIEW_STRICT_GOLDEN=1 bun run test`, `bun run build`, `bun scripts/corpus-report.ts`, `git diff --check`. Inspect changed goldens individually before any intentional update; re-run affected checks.
 - [x] Complete final review and copy reviewed files back with fingerprint checks. Continue charts, ink and uncached SmartArt; do not report full program completion at this stage.
 
-Task 6 outcome: native comparison executed via headless-Chrome fallback (Dia had no capturable window; recorded as the concrete unavailable-native check). R5 per-unit matrix in `task4-svg/r5-browser-run-note-20261005T1245.md`: blanks match, near-identical units ≤3.75%, font-metric territory ≤7.6%, one explained large delta (a11-open-3 unsupported fallbacks). Both merges verified byte-exact to their freezes by two independent reviewers; main integration complete (`be8ba76`, `53dd08b`). Charts, ink and uncached SmartArt continue as later stages.
+Task 6 outcome: native comparison executed via headless-Chrome fallback (Dia had no capturable window; recorded as the concrete unavailable-native check). R5 per-unit matrix in `task4-svg/r5-browser-run-note-20261005T1245.md`: blanks match, near-identical units ≤3.75%, font-metric territory ≤7.6%, one explained large delta (a11-open-3 unsupported fallbacks). Both merges verified byte-exact to their freezes (Pi review plus independent gate re-runs); main integration complete (`be8ba76`, `53dd08b`). Charts, ink and uncached SmartArt continue as later stages.
 
 ## Post-integration hardening (main, 2026-10-05)
 
-Four follow-up features landed on main after the merges, each RED-tested and gated with zero golden movement; Pi reviewed the batch (F1–F9, all fixed) plus residuals R1/R2 (fixed), and an independent verifier re-ran gates. Task 5 WordArt above remains open.
+Four follow-up features landed on main after the merges, each tested and gated with zero golden movement (RED discipline followed in-session; no RED logs retained for these); Pi reviewed the batch (F1–F9, all fixed) plus residuals R1/R2 (fixed), and an independent verifier re-ran gates. Task 5 WordArt above remains open.
 
-- Fallback fonts (`3be68a7`): `withFallbackFonts` + CJK regions, threaded through all adapters and the `OfficeDoc` prop; default byte-identical.
-- Worker render-to-bitmap (`05ea1d8`): request/response protocol + `dist/worker.js` entry (`./worker` export); worker FontFaceSet adapter; main thread presents bitmaps.
+- Fallback fonts (`3be68a7`, body-text threading completed in `e4a6b45`): `withFallbackFonts` + CJK regions, threaded through xlsx/pptx resolvers, docx adapters/body text and the `OfficeDoc` prop; default byte-identical.
+- Worker render-to-bitmap (`05ea1d8`, `./worker` export landed in `e4a6b45` with types fixed in `9d2e9f2`): request/response protocol + `dist/worker.js` entry; worker FontFaceSet adapter; main thread presents bitmaps.
 - Viewport culling (`c992dde`, fixup `e4a6b45` + `9d2e9f2`): optional sheet-coordinate viewport on `renderSheet` plus per-call measure cache; 60k-cell pan 5465ms → 45ms. Pi caught one real bug (merge-anchor culling) with a proven-discriminating regression test.
 - Print geometry (`d614e7c`): pageSetup/margins/fit parse, paper table, `computePrintMetrics`, `renderPrintPage`. Multi-page paintables are the explicit follow-up.
 
