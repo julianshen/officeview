@@ -8,6 +8,7 @@ import { hexRgbToCss } from '../core/color'
 import type { PptxDiagnostic, PptxDocument, PptxImageRef, PptxShape, PptxSlide, PptxSource, PptxTable, PptxTableBorders, PptxTableCell, PptxTableRow, PptxTextBody, PptxParagraph } from './types'
 import { pptxCoverage, supportedChoiceRequirements } from '../drawing/coverage'
 import { sniffImageMime } from '../core/images'
+import { findSvgBlip, looksLikeSvg, scanSelfContainedSvg, svgCandidate, svgStateCandidate, type ImageSelection, type SvgCandidate, type SvgVerdict } from '../core/svg'
 import { emuToPx } from '../core/geometry'
 import { parseGeometry, resolveGeometry } from '../drawing/geometry'
 import { parseDrawingColor, parseFillDefinition, parseThemeContext, resolveDrawingColor, resolveDrawingStyle, resolveFill, type DrawingColor, type DrawingIssue, type ThemeContext } from '../drawing/style'
@@ -110,7 +111,17 @@ interface SlideTextInheritance {
   layers(type: string, idx: number, placeholder: boolean): InheritedTextLayer[]
 }
 
-function parseShape(sp: XmlNode, slideImages: Map<string, PptxImageRef>, theme: ThemeContext, source: PptxSource, textDefaults?: XmlNode, inheritance?: SlideTextInheritance): PptxShape | undefined {
+interface PptxImageContext { external: Set<string>; selections: Map<string, ImageSelection> }
+/** Share one selection record per candidate pair so aliases and coverage agree. */
+function selectionFor(context: PptxImageContext | undefined, key: string): ImageSelection {
+  const map = context?.selections
+  if (!map) return { phase: 'pending', representation: 'none' }
+  let selection = map.get(key)
+  if (!selection) { selection = { phase: 'pending', representation: 'none' }; map.set(key, selection) }
+  return selection
+}
+
+function parseShape(sp: XmlNode, slideImages: Map<string, PptxImageRef>, theme: ThemeContext, source: PptxSource, textDefaults?: XmlNode, inheritance?: SlideTextInheritance, imageContext?: PptxImageContext): PptxShape | undefined {
   const spPr = getChildren(sp, 'spPr')[0]
   if (!spPr) return undefined
   const xfrm = getChildren(spPr, 'xfrm')[0]
@@ -145,6 +156,8 @@ function parseShape(sp: XmlNode, slideImages: Map<string, PptxImageRef>, theme: 
   if (blipFill) {
     const blip = getChildren(blipFill, 'blip')[0]
     const rid = attrs(blip).embed
+    const svgBlip = findSvgBlip(blip)
+    const svgRid = svgBlip?.embed
     let opacity: number | undefined
     for (const [name, effect] of orderedChildren(blip)) {
       if (name === '#text') continue
@@ -160,22 +173,53 @@ function parseShape(sp: XmlNode, slideImages: Map<string, PptxImageRef>, theme: 
       } else shape.diagnostics!.push({ kind: 'unsupported-effect', message: `Image effect ${name} is deferred`, feature: name, source })
     }
     const image = rid ? slideImages.get(rid) : undefined
-    if (image) {
+    const svgRef = svgRid ? slideImages.get(svgRid) : undefined
+    if (image || svgRef) {
       const relativeRect = (node: XmlNode): { l: number; t: number; r: number; b: number } => {
         const a = attrs(node)
         return { l: num(a.l) / 100000, t: num(a.t) / 100000, r: num(a.r) / 100000, b: num(a.b) / 100000 }
       }
       const srcRect = getChildren(blipFill, 'srcRect')[0]
       const fillRect = getChildren(getChildren(blipFill, 'stretch')[0], 'fillRect')[0]
-      shape.image = { ...image,
+      const svgStateKey = svgRef ? 'bytes' : svgBlip?.link ? 'link-only' : svgRid ? (imageContext?.external.has(svgRid) ? 'external' : 'unresolved') : 'none'
+      const selection = selectionFor(imageContext, `${image?.partPath ?? ''}\u0000${svgRef?.partPath ?? ''}\u0000${svgStateKey}\u0000${image ? 'raster' : 'svg-only'}`)
+      let svg: SvgCandidate | undefined
+      let primarySvgVerdict: SvgVerdict | undefined
+      if (svgRef) {
+        // Retain the candidate even when rejected (complete-pair keys, truthful reasons).
+        const candidate = svgCandidate(svgRef.data, svgRef.partPath, svgRid)
+        svg = candidate
+        selection.representation = candidate.verdict.ok ? 'svg' : (image ? 'raster' : 'none')
+        selection.reason = candidate.verdict.ok ? undefined : candidate.verdict.reason
+      } else if (svgBlip?.link) {
+        selection.representation = image ? 'raster' : 'none'; selection.reason = 'svg:link-only'
+        svg = svgStateCandidate('svg:link-only')
+      } else if (svgRid) {
+        const reason = imageContext?.external.has(svgRid) ? 'svg:external' : 'svg:unresolved'
+        selection.representation = image ? 'raster' : 'none'; selection.reason = reason
+        svg = svgStateCandidate(reason, undefined, svgRid)
+      } else if (image && looksLikeSvg(image.data, image.mime, image.partPath)) {
+        const verdict = scanSelfContainedSvg(image.data)
+        primarySvgVerdict = verdict
+        selection.representation = verdict.ok ? 'svg' : 'none'
+        selection.reason = verdict.ok ? undefined : verdict.reason
+      } else {
+        selection.representation = 'raster'
+      }
+      shape.image = { ...(image ?? svgRef!),
         ...(opacity !== undefined ? { opacity } : {}),
         ...(srcRect ? { srcRect: relativeRect(srcRect) } : {}),
         ...(fillRect ? { fillRect: relativeRect(fillRect) } : {}),
+        hasRaster: !!image,
+        pathHint: image?.partPath ?? svgRef?.partPath,
+        ...(svg ? { svg } : {}),
+        ...(primarySvgVerdict ? { primarySvgVerdict } : {}),
+        imageSelection: selection,
       }
       // The adapter paints blipFill natively; shared paint's deferred-fill issue does not apply.
       drawingStyle.issues = drawingStyle.issues.filter(issue => !(issue.kind === 'unsupported-fill' && issue.feature === 'blipFill'))
     } else {
-      shape.diagnostics!.push({ kind: 'missing-image', message: `No usable embedded image for ${rid ?? 'blipFill'}`, feature: 'blipFill', source })
+      shape.diagnostics!.push({ kind: 'missing-image', message: `No usable embedded image for ${rid ?? svgRid ?? 'blipFill'}`, feature: 'blipFill', source })
     }
   }
   return shape
@@ -195,15 +239,17 @@ function resolveTarget(partPath: string, target: string): string {
 }
 
 /** Load image parts referenced by a part's .rels file, keyed by rId. */
-async function loadSlideImages(pkg: OfficePackage, partPath: string): Promise<Map<string, PptxImageRef>> {
+async function loadSlideImages(pkg: OfficePackage, partPath: string): Promise<{ images: Map<string, PptxImageRef>; external: Set<string> }> {
   const out = new Map<string, PptxImageRef>()
+  const external = new Set<string>()
   const rels = await partRelationshipNodes(pkg, partPath)
   // one PptxImageRef per media part, so multiple rIds for the same part dedupe
   const byPath = new Map<string, PptxImageRef>()
   for (const rel of rels) {
     const a = attrs(rel)
     const type = a.Type as string | undefined
-    if (!type || !type.includes('/image') || a.TargetMode === 'External' || !a.Target) continue
+    if (!type || !type.includes('/image') || !a.Target) continue
+    if (a.TargetMode === 'External') { if (a.Id) external.add(a.Id); continue }
     const path = resolveTarget(partPath, (a.Target as string) ?? '')
     let ref = byPath.get(path)
     if (!ref) {
@@ -214,7 +260,7 @@ async function loadSlideImages(pkg: OfficePackage, partPath: string): Promise<Ma
     }
     if (a.Id) out.set(a.Id, ref)
   }
-  return out
+  return { images: out, external }
 }
 
 /** Follow a local slide/layout relationship. An absent or external part cannot inherit a background. */
@@ -711,7 +757,7 @@ function retainChoiceText(choice: XmlNode | undefined, selectedShapes: PptxShape
 function parseShapeTree(
   pkg: OfficePackage, contents: Map<XmlNode, DrawingContent<PptxParagraph, PptxTextBody>>, parent: XmlNode | undefined, partPath: string, slideImages: Map<string, PptxImageRef>, theme: ThemeContext,
   tableStyles: Map<string, TableStyleEntry>, diagnostics: PptxDiagnostic[], compatibility: DrawingCompatibility, treePath = 'spTree',
-  representation?: Omit<Representation, 'node'>, depth = 0, textDefaults?: XmlNode, groupDepth = 0, inheritance?: SlideTextInheritance,
+  representation?: Omit<Representation, 'node'>, depth = 0, textDefaults?: XmlNode, groupDepth = 0, inheritance?: SlideTextInheritance, imageContext?: PptxImageContext,
 ): PptxShape[] {
   const shapes: PptxShape[] = []
   if (depth >= MAX_DRAWING_DEPTH) {
@@ -724,7 +770,7 @@ function parseShapeTree(
       const selected = compatibility.selectRepresentation(original)
       if (selected) {
         const { node, ...selection } = selected
-        const selectedShapes = parseShapeTree(pkg, contents, node, partPath, slideImages, theme, tableStyles, diagnostics, compatibility, `${path}/${selected.representation}`, selection, depth + 1, textDefaults, groupDepth, inheritance)
+        const selectedShapes = parseShapeTree(pkg, contents, node, partPath, slideImages, theme, tableStyles, diagnostics, compatibility, `${path}/${selected.representation}`, selection, depth + 1, textDefaults, groupDepth, inheritance, imageContext)
         if (selected.representation === 'fallback') retainChoiceText(getChildren(original, 'Choice')[0], selectedShapes)
         if (!selectedShapes.length) diagnostics.push({ kind: 'missing-representation', message: 'Selected AlternateContent representation contains no usable drawing', feature: selected.feature, source: sourceOf(original, name, partPath, path, selection) })
         shapes.push(...selectedShapes)
@@ -749,7 +795,7 @@ function parseShapeTree(
       const validChildren = [ca.x, ca.y, ce.cx, ce.cy].every(value => value !== undefined && value.trim() !== '' && Number.isFinite(Number(value))) && num(ce.cx) > 0 && num(ce.cy) > 0
       shape = { ...transform, geometry: 'other', source, transformValid: transform.transformValid && validChildren,
         group: { off: { x: transform.xEmu, y: transform.yEmu }, ext: { width: transform.widthEmu, height: transform.heightEmu }, chOff: { x: num(ca.x), y: num(ca.y) }, chExt: { width: num(ce.cx), height: num(ce.cy) } },
-        children: parseShapeTree(pkg, contents, original, partPath, slideImages, theme, tableStyles, diagnostics, compatibility, path, representation, depth + 1, textDefaults, groupDepth + 1, inheritance), diagnostics: [],
+        children: parseShapeTree(pkg, contents, original, partPath, slideImages, theme, tableStyles, diagnostics, compatibility, path, representation, depth + 1, textDefaults, groupDepth + 1, inheritance, imageContext), diagnostics: [],
       }
     } else {
       const node = selectNestedAlternates(original, source, shapeIssues, compatibility)
@@ -758,7 +804,7 @@ function parseShapeTree(
       if (content && (name === 'graphicFrame' || name === 'contentPart')) {
         reserveDrawingContent(pkg, content, partPath, false)
         shape = { ...parseTransform(getChildren(node, 'xfrm')[0]), geometry: 'other', content }
-      } else shape = name === 'graphicFrame' ? parseGraphicFrame(node, tableStyles, theme, textDefaults) : parseShape(node, slideImages, theme, source, textDefaults, inheritance)
+      } else shape = name === 'graphicFrame' ? parseGraphicFrame(node, tableStyles, theme, textDefaults) : parseShape(node, slideImages, theme, source, textDefaults, inheritance, imageContext)
     }
     if (!shape) {
       diagnostics.push({ kind: 'unsupported-object', message: `No static renderer for ${name}`, feature: compatibility.unsupportedFeature(original) ?? name, source })
@@ -800,6 +846,8 @@ export async function parsePptx(pkg: OfficePackage): Promise<PptxDocument> {
   }
   const sldIdLst = getChildren(presentation, 'sldIdLst')[0]
   const slideIds = sldIdLst ? getChildren(sldIdLst, 'sldId') : []
+  // One shared selection map across slides so identical candidate pairs stay aliased.
+  const imageSelections = new Map<string, ImageSelection>()
   for (let i = 0; i < slideIds.length; i++) {
     const a = attrs(slideIds[i])
     const rid = (a['r:id'] ?? a.id) as string
@@ -807,7 +855,8 @@ export async function parsePptx(pkg: OfficePackage): Promise<PptxDocument> {
     if (!target) continue
     const path = resolveTarget('ppt/presentation.xml', target)
     const slideRoot = await pkg.xmlOrdered(path)
-    const slideImages = await loadSlideImages(pkg, path)
+    const { images: slideImages, external: externalImages } = await loadSlideImages(pkg, path)
+    const imageContext: PptxImageContext = { external: externalImages, selections: imageSelections }
     const preloadedRelationships = drawingPartContext(pkg).diagnostics.filter(issue =>
       issue.kind === 'malformed-part' && issue.reason === 'invalid-relationship-xml' && issue.identity === path && !issue.sourceReferenceId)
     const theme = await slideTheme(pkg, path)
@@ -845,7 +894,7 @@ export async function parsePptx(pkg: OfficePackage): Promise<PptxDocument> {
       }
     }
     const inheritance = await slideTextInheritance(pkg, path)
-    slide.shapes = parseShapeTree(pkg, contents, spTree, path, slideImages, theme.context, tableStyles, slide.diagnostics!, compatibility, 'spTree', undefined, 0, defaults, 0, inheritance)
+    slide.shapes = parseShapeTree(pkg, contents, spTree, path, slideImages, theme.context, tableStyles, slide.diagnostics!, compatibility, 'spTree', undefined, 0, defaults, 0, inheritance, imageContext)
     slide.diagnostics!.push(...preloadedRelationships, ...drawingPartContext(pkg).diagnostics.slice(diagnosticStart))
     if (getChildren(slideRoot, 'timing').length) slide.diagnostics!.push({ kind: 'deferred-animation', message: 'Slide animation/timing is outside static drawing rendering', feature: 'timing' })
     // fill in placeholder geometry from the layout/master
@@ -887,17 +936,21 @@ export async function parsePptx(pkg: OfficePackage): Promise<PptxDocument> {
     doc.drawingCoverage!.push(...pptxCoverage(slide, spTree, path, selectedBranch))
     doc.slides.push(slide)
   }
-  // Recursive first-use source order, deduplicated by media part while preserving use-specific crop.
-  const imageIndices = new Map<string | PptxImageRef, number>()
+  // Recursive first-use source order, deduplicated by complete candidate pair while preserving use-specific crop.
+  const imageIndices = new Map<string, number>()
   for (const slide of doc.slides) walkShapes(slide.shapes, shape => {
     if (!shape.image) return
-    const key = shape.image.partPath ?? shape.image
+    const svgState = shape.image.svg ? (shape.image.svg.verdict.ok ? 'ok' : `rej:${(shape.image.svg.verdict as { reason: string }).reason}`) : 'none'
+    const key = `${shape.image.partPath ?? ''}\u0000${shape.image.svg?.partPath ?? ''}\u0000${svgState}\u0000${shape.image.hasRaster === false ? 'svg-only' : 'raster'}`
     let index = imageIndices.get(key)
     if (index === undefined) {
       index = doc.images.length
       const { opacity: _opacity, srcRect: _srcRect, fillRect: _fillRect, ...part } = shape.image
       doc.images.push(part)
       imageIndices.set(key, index)
+    } else if (shape.image.imageSelection && doc.images[index].imageSelection !== shape.image.imageSelection) {
+      // Aliased pair: share the retained selection so decode propagates everywhere.
+      shape.image.imageSelection = doc.images[index].imageSelection
     }
     shape.imageIndex = index
   })

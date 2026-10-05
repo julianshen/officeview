@@ -38,10 +38,12 @@ Task 2 complete: independent SPEC and QUALITY repair reviews approved the exact 
 
 **Files:** Modify `src/docx/types.ts`, `src/docx/parse.ts`, `src/docx/layout.ts`, the shared content text adapter, `src/xlsx/types.ts`, `src/xlsx/parse.ts`, `src/xlsx/render.ts`; create `tests/docx-text-direction.test.ts`, `tests/xlsx-text-rotation.test.ts`.
 
-- [ ] Write fixed-measure Word tests for `lrTb`, `tbRl`, `btLr`, `lrTbV`, `tbRlV`, `tbLrV`, including cell margins, vertical alignment, wrapping, merged height and following document flow. Write Excel tests for 0, 45, 90, 135, 180, 255, merged cells, wrap/alignment and clipping.
-- [ ] Establish failing assertions. Measure text in its direction's local bounds and project placements into the existing cell/paragraph flow. Preserve horizontal default behavior and ordinary worksheet dimensions.
-- [ ] Route drawing text boxes in these adapters through shared text layout while retaining their format-specific paragraphs and anchor placement. Preserve Word mixed image/text order and existing chart/ink/diagram payloads.
-- [ ] Verify search/selection geometry with actual adapter paints. Run Word complex/layout/table suites and Excel style/render/border suites plus TypeScript. Complete both reviews.
+- [x] Write fixed-measure Word tests for `lrTb`, `tbRl`, `btLr`, `lrTbV`, `tbRlV`, `tbLrV`, including cell margins, vertical alignment, wrapping, merged height and following document flow. Write Excel tests for 0, 45, 90, 135, 180, 255, merged cells, wrap/alignment and clipping.
+- [x] Establish failing assertions. Measure text in its direction's local bounds and project placements into the existing cell/paragraph flow. Preserve horizontal default behavior and ordinary worksheet dimensions.
+- [x] Route drawing text boxes in these adapters through shared text layout while retaining their format-specific paragraphs and anchor placement. Preserve Word mixed image/text order and existing chart/ink/diagram payloads.
+- [x] Verify search/selection geometry with actual adapter paints. Run Word complex/layout/table suites and Excel style/render/border suites plus TypeScript. Complete both reviews.
+
+Acceptance: R16 freeze `d06c64fc7a43a4e5e15371100066aa9a994dee322abef3cf8bf3e85a6fcf9c0d` passed independent SPEC and Pi QUALITY, 1465 strict tests and all required gates. Dia preserved 13/13 fixture PNGs and 21/21 NATS PNGs. Native complex textbox column-pitch convergence remains explicit Task 6 work. No commits or main integration.
 
 ## Task 4: SVG selection and horizontal inline icons
 

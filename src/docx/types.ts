@@ -4,6 +4,7 @@
  */
 import type { DrawingContent, DrawingContentShape } from '../drawing/content'
 import type { ParsedDrawingTextBody } from '../drawing/text-parse'
+import type { ImageSelection, SvgCandidate, SvgVerdict } from '../core/svg'
 import type { DrawingCoverageEntry } from '../drawing/coverage'
 
 export interface DocxTextRun {
@@ -51,6 +52,16 @@ export interface DocxImage {
   drawing?: DocxDrawing
   /** Selected vector payload relationship, when this image carries one. */
   referenceId?: string
+  /** svgBlip candidate preferred over the raster `data` when preflight allows. */
+  svg?: SvgCandidate
+  /** Preflight verdict when the primary `data` bytes are themselves SVG. */
+  primarySvgVerdict?: SvgVerdict
+  /** Explicitly false when an SVG candidate exists but no raster fallback does. */
+  hasRaster?: boolean
+  /** Owner-part media path hint for reliable SVG detection. */
+  pathHint?: string
+  /** Parse/decode selection record shared with the drawing coverage entry. */
+  imageSelection?: ImageSelection
 }
 
 /** Compatibility aliases: Word owns its paragraph/text layout. */

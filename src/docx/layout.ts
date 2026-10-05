@@ -32,6 +32,12 @@ export interface Segment {
   run: DocxTextRun
   style: RunStyle
   widthPx: number
+  /**
+   * Pen advance (px) accumulated before this segment, including any inline
+   * image widths. Relative to `line.xPx + alignOffset`; lets the painter place
+   * text after inline images correctly.
+   */
+  penOffset?: number
   /** Absolute page-space affine for direction-rotated glyphs. Absent means ordinary horizontal flow paint at the accumulated pen. */
   transform?: LocalAffine
   logical?: LogicalTextRange
@@ -323,17 +329,33 @@ function layoutParagraph(
     const marker = firstLine && para.listMarker ? { text: para.listMarker, widthPx: markerGutter } : undefined
     const alignOffset =
       para.align === 'center' ? (lineUsable - width) / 2 : para.align === 'right' ? lineUsable - width : 0
+    // Non-final justified lines expand EVERY gap. Images and text must resolve to
+    // the SAME expanded pen, so neither can overlap the other.
+    const gaps = segs.reduce((n, s) => n + (s.text === ' ' ? 1 : 0), 0)
+    const extra = para.align === 'justify' && !isParagraphEnd && gaps > 0 ? (lineUsable - width) / gaps : 0
+    const gapsBefore = (offset: number): number => {
+      let n = 0
+      for (const s of segs) if (s.text === ' ' && (s.penOffset ?? 0) < offset) n++
+      return n
+    }
     const boxes = inlineImages.map((i) => ({
       image: i.image,
-      xPx: lineX + lineIndent + alignOffset + i.offset,
+      xPx: lineX + lineIndent + alignOffset + i.offset + extra * gapsBefore(i.offset),
       yPx: y + (h - (i.height + i.bottom)),
       widthPx: i.width,
       heightPx: i.height
     }))
+    if (extra !== 0) {
+      let gapsSoFar = 0
+      for (const seg of segs) {
+        if (seg.penOffset !== undefined) seg.penOffset += extra * gapsSoFar
+        if (seg.text === ' ') gapsSoFar++
+      }
+    }
     lines.push({
       yPx: y,
       xPx: lineX + lineIndent,
-      widthPx: width,
+      widthPx: extra > 0 ? lineUsable : width,
       segs,
       align: para.align,
       isParagraphEnd,
@@ -355,7 +377,7 @@ function layoutParagraph(
   }
 
   const pushSeg = (text: string, run: DocxTextRun, style: RunStyle, w: number) => {
-    segs.push({ text, run, style, widthPx: w })
+    segs.push({ text, run, style, widthPx: w, penOffset: width })
     width += w
     lineHeight = Math.max(lineHeight, style.fontSizePt * LINE_HEIGHT_FACTOR * (96 / 72))
   }
@@ -403,7 +425,7 @@ function layoutParagraph(
         lineX - contentX + (firstLine ? indentLeft + twipsToPx(para.indentFirstLineTwips ?? 0) : indentLeft) + width
       const next = Math.floor(cur / tabWidth) * tabWidth + tabWidth
       const w = Math.max(0, next - cur)
-      segs.push({ text: ' ', run: token.run, style: token.style, widthPx: w })
+      segs.push({ text: ' ', run: token.run, style: token.style, widthPx: w, penOffset: width })
       width += w
       continue
     }
@@ -424,7 +446,7 @@ function layoutParagraph(
         if (width > 0) {
           const w = measure(' ', token.style)
           if (width + w <= lineUsable) {
-            segs.push({ text: ' ', run: token.run, style: token.style, widthPx: w })
+            segs.push({ text: ' ', run: token.run, style: token.style, widthPx: w, penOffset: width })
             width += w
           }
           // else drop trailing space at wrap point
@@ -735,11 +757,6 @@ export function renderPages(
     }
     const paintLines = (allLines: LineBox[]) => {
       for (const line of allLines) {
-        let extraSpacePerGap = 0
-        if (line.align === 'justify' && !line.isParagraphEnd && line.segs.length > 1) {
-          const gaps = countGaps(line.segs)
-          if (gaps > 0) extraSpacePerGap = (line.contentWidthPx - line.widthPx) / gaps
-        }
         let offset = 0
         if (line.align === 'center') offset = (line.contentWidthPx - line.widthPx) / 2
         else if (line.align === 'right') offset = line.contentWidthPx - line.widthPx
@@ -804,23 +821,24 @@ export function renderPages(
             }
             continue
           }
+          const segX = seg.penOffset !== undefined ? line.xPx + offset + seg.penOffset : x
           if (seg.run.highlight) {
             const hl = HIGHLIGHT_CSS[seg.run.highlight] ?? seg.run.highlight
             ctx.fillStyle = hl
-            ctx.fillRect(x, line.yPx, seg.widthPx, line.heightPx)
+            ctx.fillRect(segX, line.yPx, seg.widthPx, line.heightPx)
           }
           ctx.fillStyle = seg.run.color ? resolveColor(seg.run.color) : '#000000'
-          ctx.fillText(seg.text, x, baseline)
+          ctx.fillText(seg.text, segX, baseline)
           if (seg.run.underline || seg.run.strike) {
             ctx.strokeStyle = ctx.fillStyle
             ctx.lineWidth = Math.max(1, seg.style.fontSizePt * 0.06)
             ctx.beginPath()
             const yy = seg.run.underline ? baseline + seg.style.fontSizePt * 0.15 : baseline - seg.style.fontSizePt * 0.3
-            ctx.moveTo(x, yy)
-            ctx.lineTo(x + seg.widthPx, yy)
+            ctx.moveTo(segX, yy)
+            ctx.lineTo(segX + seg.widthPx, yy)
             ctx.stroke()
           }
-          x += seg.widthPx + (seg.text === ' ' ? extraSpacePerGap : 0)
+          x = segX + seg.widthPx
         }
       }
     }
@@ -939,12 +957,6 @@ function seg0Font(line: LineBox): string {
 
 function seg0Size(line: LineBox): number {
   return line.segs[0]?.style.fontSizePt ?? 11
-}
-
-function countGaps(segs: Segment[]): number {
-  let n = 0
-  for (const s of segs) if (s.text === ' ') n++
-  return n
 }
 
 const BORDER_WIDTH: Record<string, number> = {

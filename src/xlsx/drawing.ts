@@ -2,6 +2,7 @@
 import type { OfficePackage } from '../core/zip'
 import { attrs, getChildren, orderedChildren, textOf, type XmlNode } from '../core/xml'
 import { sniffImageMime } from '../core/images'
+import { findSvgBlip, looksLikeSvg, scanSelfContainedSvg, svgCandidate, svgStateCandidate, type ImageSelection, type SvgCandidate, type SvgVerdict } from '../core/svg'
 import { parseGeometry } from '../drawing/geometry'
 import { coverageIssueMatchesEntry, supportedChoiceRequirements, xlsxNodeCoverage } from '../drawing/coverage'
 import { attemptedMalformedRelationshipIssue, malformedRelationshipAttempt, prepareCompatibleDrawingContent, prepareDrawingContent, reserveDrawingContent } from '../drawing/content'
@@ -124,25 +125,67 @@ function rectFractions(node: XmlNode | undefined): { l: number; t: number; r: nu
   return { l: values[0]! / 100000, t: values[1]! / 100000, r: values[2]! / 100000, b: values[3]! / 100000 }
 }
 
-async function imageFor(pkg: OfficePackage, owner: string, node: XmlNode, shape: XlsxDrawing): Promise<void> {
+async function imageFor(pkg: OfficePackage, owner: string, node: XmlNode, shape: XlsxDrawing, selections: Map<string, ImageSelection>): Promise<void> {
   const fill = child(node, 'blipFill') ?? child(child(node, 'spPr'), 'blipFill')
   const blip = child(fill, 'blip'), rid = attrs(blip).embed
-  if (!rid) return
-  shape.source.referenceId = rid
+  const svgBlip = findSvgBlip(blip)
+  const svgRid = svgBlip?.embed
+  if (!rid && !svgRid) return
+  if (rid) shape.source.referenceId = rid
   const diagnosticStart = drawingPartContext(pkg).diagnostics.length
-  const path = await referencedPart(pkg, owner, rid)
-  if (!path) malformedRelationshipAttempt(pkg, owner, rid, 'image', diagnosticStart)
-  if (!path) return
+  let path: string | undefined
+  if (rid) {
+    path = await referencedPart(pkg, owner, rid)
+    if (!path) malformedRelationshipAttempt(pkg, owner, rid, 'image', diagnosticStart)
+  }
   let data: Uint8Array | undefined
-  try { data = await pkg.bytes(path) }
-  catch { contentDiagnostic(drawingPartContext(pkg), 'malformed-part', path, 'image', { identity: path, reason: 'unreadable-media' }); return }
-  if (!data) return
+  if (path) {
+    try { data = await pkg.bytes(path) }
+    catch { contentDiagnostic(drawingPartContext(pkg), 'malformed-part', path, 'image', { identity: path, reason: 'unreadable-media' }) }
+  }
+  let svgPath: string | undefined, svgData: Uint8Array | undefined
+  if (svgRid) {
+    svgPath = await referencedPart(pkg, owner, svgRid)
+    if (svgPath) { try { svgData = await pkg.bytes(svgPath) } catch { svgData = undefined } }
+  }
+  if (!data && !svgData) return
   let opacity = 1
   for (const effect of getChildren(blip, 'alphaModFix')) {
     const amount = finite(attrs(effect).amt)
     if (amount !== undefined && amount >= 0 && amount <= 100000) opacity *= amount / 100000
   }
-  shape.image = { data, mime: sniffImageMime(data), partPath: path, opacity,
+  const svgStateKey = svgData ? 'bytes' : svgBlip?.link ? 'link-only' : svgRid ? ((await partRelationships(pkg, owner)).get(svgRid)?.external ? 'external' : 'unresolved') : 'none'
+  const key = `${path ?? ''}\u0000${svgPath ?? ''}\u0000${svgStateKey}\u0000${data ? 'raster' : 'svg-only'}`
+  let selection = selections.get(key)
+  if (!selection) { selection = { phase: 'pending', representation: 'none' }; selections.set(key, selection) }
+  let svg: SvgCandidate | undefined
+  let primarySvgVerdict: SvgVerdict | undefined
+  if (svgData) {
+    // Retain the candidate even when rejected (complete-pair keys, truthful reasons).
+    const candidate = svgCandidate(svgData, svgPath, svgRid)
+    svg = candidate
+    selection.representation = candidate.verdict.ok ? 'svg' : (data ? 'raster' : 'none')
+    selection.reason = candidate.verdict.ok ? undefined : candidate.verdict.reason
+  } else if (svgBlip?.link) {
+    selection.representation = data ? 'raster' : 'none'; selection.reason = 'svg:link-only'
+    svg = svgStateCandidate('svg:link-only')
+  } else if (svgRid) {
+    const rel = (await partRelationships(pkg, owner)).get(svgRid)
+    const reason = rel?.external ? 'svg:external' : 'svg:unresolved'
+    selection.representation = data ? 'raster' : 'none'; selection.reason = reason
+    svg = svgStateCandidate(reason, undefined, svgRid)
+  } else if (data && looksLikeSvg(data, sniffImageMime(data), path)) {
+    const verdict = scanSelfContainedSvg(data)
+    primarySvgVerdict = verdict
+    selection.representation = verdict.ok ? 'svg' : 'none'
+    selection.reason = verdict.ok ? undefined : verdict.reason
+  } else {
+    selection.representation = data ? 'raster' : 'none'
+  }
+  shape.image = { data: data ?? svgData!, mime: sniffImageMime(data ?? svgData!), partPath: path ?? svgPath, pathHint: path ?? svgPath, opacity, hasRaster: !!data,
+    ...(svg ? { svg } : {}),
+    ...(primarySvgVerdict ? { primarySvgVerdict } : {}),
+    imageSelection: selection,
     srcRect: rectFractions(child(fill, 'srcRect')),
     fillRect: rectFractions(child(child(fill, 'stretch'), 'fillRect')) }
 }
@@ -153,7 +196,7 @@ function source(owner: string, path: string, name: string, node: XmlNode, repres
   return { partPath: owner, treePath: path, element: name, id: a.id ?? (name === 'contentPart' ? attrs(node).id : undefined), name: a.name, representation }
 }
 
-async function parseObject(pkg: OfficePackage, owner: string, name: string, node: XmlNode, theme: ThemeContext, path: string, depth: number, representation: 'native' | 'choice' | 'fallback' = 'native', parentCarrier?: XmlNode, anchorTopLevel = false): Promise<XlsxDrawing | undefined> {
+async function parseObject(pkg: OfficePackage, owner: string, name: string, node: XmlNode, theme: ThemeContext, path: string, depth: number, representation: 'native' | 'choice' | 'fallback' = 'native', parentCarrier?: XmlNode, anchorTopLevel = false, selections: Map<string, ImageSelection> = new Map()): Promise<XlsxDrawing | undefined> {
   const context = drawingPartContext(pkg)
   if (name === 'grpSp' && depth >= DRAWING_GROUP_DEPTH) {
     contentDiagnostic(context, 'group-depth', owner, path, { identity: attrs(child(child(node, 'nvGrpSpPr'), 'cNvPr')).id, reason: 'group-depth', limit: DRAWING_GROUP_DEPTH })
@@ -172,14 +215,14 @@ async function parseObject(pkg: OfficePackage, owner: string, name: string, node
     const cx = finite(ca.x), cy = finite(ca.y), cw = finite(ce.cx), ch = finite(ce.cy)
     if (cx === undefined || cy === undefined || cw === undefined || ch === undefined || cw <= 0 || ch <= 0) { result.transformValid = false; return result }
     result.group = { off: { x: t.xEmu, y: t.yEmu }, ext: { width: t.widthEmu, height: t.heightEmu }, chOff: { x: cx, y: cy }, chExt: { width: cw, height: ch } }
-    result.children = await parseObjects(pkg, owner, node, theme, path, depth + 1, representation, parentCarrier)
+    result.children = await parseObjects(pkg, owner, node, theme, path, depth + 1, representation, parentCarrier, false, selections)
   } else if (name === 'sp' || name === 'cxnSp') {
     result.drawingGeometry = parseGeometry(spPr)
     result.drawingStyle = resolveDrawingStyle(spPr, child(node, 'style'), theme, name === 'cxnSp' ? { fill: { kind: 'none' } } : {})
     const body = child(node, 'txBody')
     if (body) result.textBody = parseTextBody(body, theme, undefined, textFontDefaults(child(node, 'style'), theme))
-    await imageFor(pkg, owner, node, result)
-  } else if (name === 'pic') await imageFor(pkg, owner, node, result)
+    await imageFor(pkg, owner, node, result, selections)
+  } else if (name === 'pic') await imageFor(pkg, owner, node, result, selections)
   else if (name === 'graphicFrame' || name === 'contentPart') {
     const palette = contentTheme(theme), adapters = contentAdapters(theme)
     const graphic = child(child(node, 'graphic'), 'graphicData')
@@ -200,7 +243,7 @@ async function parseObject(pkg: OfficePackage, owner: string, name: string, node
         result.content = prepared
       }
       else if (t.widthEmu > 0 && t.heightEmu > 0) {
-        const native = await parseObjects(pkg, owner, node, theme, `${path}/native`, depth)
+        const native = await parseObjects(pkg, owner, node, theme, `${path}/native`, depth, 'native', undefined, false, selections)
         if (native.length) {
           result.group = { off: { x: t.xEmu, y: t.yEmu }, ext: { width: t.widthEmu, height: t.heightEmu }, chOff: { x: 0, y: 0 }, chExt: { width: t.widthEmu, height: t.heightEmu } }
           result.children = native
@@ -211,7 +254,7 @@ async function parseObject(pkg: OfficePackage, owner: string, name: string, node
   return result
 }
 
-async function parseObjects(pkg: OfficePackage, owner: string, container: XmlNode, theme: ThemeContext, path: string, depth = 0, representation: 'native' | 'choice' | 'fallback' = 'native', carrier?: XmlNode, anchorTopLevel = false): Promise<XlsxDrawing[]> {
+async function parseObjects(pkg: OfficePackage, owner: string, container: XmlNode, theme: ThemeContext, path: string, depth = 0, representation: 'native' | 'choice' | 'fallback' = 'native', carrier?: XmlNode, anchorTopLevel = false, selections: Map<string, ImageSelection> = new Map()): Promise<XlsxDrawing[]> {
   const out: XlsxDrawing[] = []
   let index = 0
   for (const [name, node] of orderedChildren(container)) {
@@ -220,11 +263,11 @@ async function parseObjects(pkg: OfficePackage, owner: string, container: XmlNod
     const treePath = `${path}/${name}[${index++}]`
     if (name === 'AlternateContent') {
       const selected = await selectedAlternative(pkg, owner, node, theme, 0, carrier)
-      if (selected) out.push(...await parseObjects(pkg, owner, selected.branch, theme, treePath, depth, selected.mode, carrier, anchorTopLevel))
+      if (selected) out.push(...await parseObjects(pkg, owner, selected.branch, theme, treePath, depth, selected.mode, carrier, anchorTopLevel, selections))
     } else if (name === 'graphic' || name === 'graphicData') {
-      out.push(...await parseObjects(pkg, owner, node, theme, treePath, depth, representation, name === 'graphicData' ? node : carrier, anchorTopLevel))
+      out.push(...await parseObjects(pkg, owner, node, theme, treePath, depth, representation, name === 'graphicData' ? node : carrier, anchorTopLevel, selections))
     } else if (['sp', 'cxnSp', 'pic', 'grpSp', 'graphicFrame', 'contentPart'].includes(name)) {
-      const drawing = await parseObject(pkg, owner, name, node, theme, treePath, depth, representation, carrier, anchorTopLevel)
+      const drawing = await parseObject(pkg, owner, name, node, theme, treePath, depth, representation, carrier, anchorTopLevel, selections)
       if (drawing) out.push(drawing)
     }
   }
@@ -234,6 +277,7 @@ async function parseObjects(pkg: OfficePackage, owner: string, container: XmlNod
 /** Resolve each worksheet-owned drawing relationship and retain anchor order. */
 export async function parseWorksheetDrawings(pkg: OfficePackage, sheet: XlsxSheet, worksheetPath: string, root: XmlNode, theme: ThemeContext): Promise<void> {
   const context = drawingPartContext(pkg), start = context.diagnostics.length
+  const imageSelections = new Map<string, ImageSelection>()
   sheet.drawingCoverage = []
   for (const drawingRef of getChildren(root, 'drawing')) {
     const id = attrs(drawingRef).id
@@ -256,7 +300,7 @@ export async function parseWorksheetDrawings(pkg: OfficePackage, sheet: XlsxShee
         sheet.drawingCoverage.push({ partPath: owner, treePath: anchorPath, element: name, feature: 'anchor', status: 'malformed', selectedRepresentation: 'none', representation: 'native', reason: 'invalid-anchor', scope: 'original', unit: 0 })
         continue
       }
-      const objects = await parseObjects(pkg, owner, anchor, theme, anchorPath, 0, 'native', undefined, true)
+      const objects = await parseObjects(pkg, owner, anchor, theme, anchorPath, 0, 'native', undefined, true, imageSelections)
       if (!objects.length) {
         const exhausted = context.nodes >= DOCUMENT_DRAWING_NODE_LIMIT && context.diagnostics.some(issue => issue.kind === 'node-budget' && issue.reason === 'document-budget')
         const selected = await Promise.all(getChildren(anchor, 'AlternateContent').map(alternate => selectedAlternative(pkg, owner, alternate, theme, 0)))
@@ -312,9 +356,21 @@ export function collectXlsxImages(sheets: XlsxSheet[]): XlsxImage[] {
   const images: XlsxImage[] = [], indices = new Map<string, number>()
   const walk = (nodes: XlsxDrawing[]) => {
     for (const node of nodes) {
-      if (node.image?.data && node.image.partPath) {
-        let index = indices.get(node.image.partPath)
-        if (index === undefined) { index = images.length; indices.set(node.image.partPath, index); images.push({ data: node.image.data, mime: node.image.mime, partPath: node.image.partPath }) }
+      if (node.image && (node.image.data || node.image.svg) && node.image.partPath) {
+        const svgState = node.image.svg ? (node.image.svg.verdict.ok ? 'ok' : `rej:${(node.image.svg.verdict as { reason: string }).reason}`) : 'none'
+        const key = `${node.image.partPath}\u0000${node.image.svg?.partPath ?? ''}\u0000${svgState}\u0000${node.image.hasRaster === false ? 'svg-only' : 'raster'}`
+        let index = indices.get(key)
+        if (index === undefined) {
+          index = images.length
+          indices.set(key, index)
+          images.push({ data: node.image.data ?? node.image.svg!.bytes, mime: node.image.mime, partPath: node.image.partPath, pathHint: node.image.pathHint ?? node.image.partPath,
+            ...(node.image.svg ? { svg: node.image.svg } : {}),
+            ...(node.image.primarySvgVerdict ? { primarySvgVerdict: node.image.primarySvgVerdict } : {}),
+            hasRaster: node.image.hasRaster,
+            ...(node.image.imageSelection ? { imageSelection: node.image.imageSelection } : {}) })
+        } else if (node.image.imageSelection && images[index].imageSelection !== node.image.imageSelection) {
+          node.image.imageSelection = images[index].imageSelection
+        }
         node.imageIndex = index
       }
       if (node.children) walk(node.children)

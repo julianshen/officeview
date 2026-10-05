@@ -5,7 +5,7 @@ import type { FontDiagnostic } from '../core/fonts/types'
  * used by <OfficeDoc> (React) and the pixel-diff/golden harness.
  */
 import { collectDocImages, createMeasurer, layoutDocx, renderPages } from '../docx/layout'
-import { decodeImage } from '../core/images'
+import { decodeImageAsset, releaseDecodedImage, type ImageCandidates, type ImageDecodeFn } from '../core/images'
 import { normalizeWatermark, type ResolvedWatermark, type WatermarkOptions } from '../core/watermark'
 import { computeMetrics, renderSheet } from '../xlsx/render'
 import { renderSlide, slideMetrics } from '../pptx/render'
@@ -24,9 +24,14 @@ export interface PaintableArray extends Array<Paintable> {
   dispose: () => void
   fontDiagnostics: FontDiagnostic[]
 }
-function withLease(pages: Paintable[], dispose: () => void = () => {}, fontDiagnostics: FontDiagnostic[] = []): PaintableArray {
+function withLease(pages: Paintable[], dispose: () => void = () => {}, fontDiagnostics: FontDiagnostic[] = [], decoded: Array<CanvasImageSource | undefined> = []): PaintableArray {
   let released = false
-  return Object.assign(pages, { fontDiagnostics, dispose: () => { if (!released) { released = true; dispose() } } })
+  return Object.assign(pages, { fontDiagnostics, dispose: () => {
+    if (released) return
+    released = true
+    dispose()
+    for (const image of new Set(decoded)) releaseDecodedImage(image)
+  } })
 }
 export interface Paintable {
   spec: PageSpec
@@ -66,12 +71,59 @@ export interface PaintOptions {
    */
   watermark?: WatermarkOptions | ResolvedWatermark
   /** Optional image decoder override (tests count decodes). Defaults to decodeImage. */
-  decodeImage?: (bytes: Uint8Array, mime?: string) => Promise<CanvasImageSource | undefined>
+  decodeImage?: ImageDecodeFn
 }
 
 /** Byte equality for shared-asset decode reuse (length pre-checked by callers). */
-function bytesEqual(a: Uint8Array, b: Uint8Array): boolean {
-  return a.length === b.length && a.every((value, index) => value === b[index])
+function bytesEqual(a: Uint8Array | undefined, b: Uint8Array | undefined): boolean {
+  if (a === b) return true
+  if (!a || !b || a.length !== b.length) return false
+  for (let i = 0; i < a.length; i++) if (a[i] !== b[i]) return false
+  return true
+}
+
+/**
+ * Decode one bitmap per COMPLETE candidate pair (raster bytes + SVG bytes).
+ * Same PNG with a different SVG is a distinct asset; identical pairs decode
+ * once. The selected representation/reason is propagated to every alias's
+ * selection record so coverage stays consistent.
+ */
+async function decodeImageAssets(assets: Array<ImageCandidates & { drawing?: unknown }>, decode?: ImageDecodeFn): Promise<Array<CanvasImageSource | undefined>> {
+  // Complete-pair identity: raster bytes + SVG bytes + SVG verdict state +
+  // primary-SVG verdict state + fallback availability. Missing/external
+  // candidates (byte-less) and ordinary rasters therefore never collapse.
+  const svgState = (svg: ImageCandidates['svg']): string => svg ? (svg.verdict.ok ? 'ok' : `rej:${(svg.verdict as { reason: string }).reason}`) : 'none'
+  const primaryState = (verdict: ImageCandidates['primarySvgVerdict']): string => verdict ? (verdict.ok ? 'ok' : `rej:${(verdict as { reason: string }).reason}`) : 'none'
+  const canonical: Array<{ data?: Uint8Array; svg?: Uint8Array; svgState: string; primaryState: string; svgOnly: boolean; decoded: Promise<CanvasImageSource | undefined> }> = []
+  const representative: number[] = []
+  for (const asset of assets) {
+    if (asset.drawing || (!asset.data && !asset.svg)) { representative.push(-1); continue }
+    const state = svgState(asset.svg), primary = primaryState(asset.primarySvgVerdict), svgOnly = asset.hasRaster === false
+    const found = canonical.findIndex(entry => entry.svgState === state && entry.primaryState === primary && entry.svgOnly === svgOnly && bytesEqual(entry.data, asset.data) && bytesEqual(entry.svg, asset.svg?.bytes))
+    if (found >= 0) { representative.push(found); continue }
+    canonical.push({ data: asset.data, svg: asset.svg?.bytes, svgState: state, primaryState: primary, svgOnly, decoded: decodeImageAsset(asset, decode) })
+    representative.push(canonical.length - 1)
+  }
+  const decoded = await Promise.all(assets.map((_, index) => representative[index] < 0 ? undefined : canonical[representative[index]].decoded))
+  // Propagate the decoded outcome from each group's representative (the asset
+  // whose selection decodeImageAsset mutated) to every alias's selection.
+  const groups = new Map<number, number[]>()
+  for (let index = 0; index < representative.length; index++) {
+    const rep = representative[index]
+    if (rep < 0) continue
+    const list = groups.get(rep) ?? []
+    list.push(index)
+    groups.set(rep, list)
+  }
+  for (const members of groups.values()) {
+    const lead = assets[members[0]].imageSelection
+    if (!lead) continue
+    for (const index of members) {
+      const selection = assets[index].imageSelection
+      if (selection && selection !== lead) { selection.phase = lead.phase; selection.representation = lead.representation; selection.reason = lead.reason }
+    }
+  }
+  return decoded
 }
 
 /** Prepare embedded fonts before measurement/painting. Low-level renderSlide stays synchronous. */
@@ -83,22 +135,9 @@ export function getPaintables(
   if ('sections' in doc) {
     return measurerFromDoc().then(async (measure) => {
       const pages = layoutDocx(doc, measure)
-      // decode embedded images once per unique asset; failures degrade to a blank slot.
-      // Distinct wrappers may reference identical bytes (reused raster part):
-      // they keep stable per-object indices while sharing one decode.
-      const decode = options?.decodeImage ?? decodeImage
+      // One decode per unique candidate pair; failures degrade to a blank slot.
       const docImages = collectDocImages(doc)
-      const canonical: Array<{ data: Uint8Array; decoded: Promise<CanvasImageSource | undefined> }> = []
-      const decoded = await Promise.all(
-        docImages.map((img) => {
-          if (img.drawing) return undefined
-          const found = canonical.find((entry) => entry.data.byteLength === img.data.byteLength && bytesEqual(entry.data, img.data))
-          if (found) return found.decoded
-          const decoded = decode(img.data, img.mime).catch(() => undefined)
-          canonical.push({ data: img.data, decoded })
-          return decoded
-        })
-      )
+      const decoded = await decodeImageAssets(docImages, options?.decodeImage)
       const decodedByObject = new Map<ContentImageAsset, CanvasImageSource | undefined>(docImages.map((img, index) => [img, decoded[index]]))
       // Each page paints on its own canvas, so PAGE/NUMPAGES fields must be
       // resolved against the whole document, not the single-page array.
@@ -115,31 +154,31 @@ export function getPaintables(
             assets: { imageFor: (image) => decodedByObject.get(image) },
           })
         },
-      })))
+      })), () => {}, [], decoded)
     })
   }
   if ('sheets' in doc) {
     return acquireFonts(doc, options?.registerFont).then(async lease => {
       try {
-        const images = await Promise.all((doc.images ?? []).map(img => decodeImage(img.data, img.mime).catch(() => undefined)))
+        const decoded = await decodeImageAssets(doc.images ?? [], options?.decodeImage)
         return withLease(doc.sheets.map((sheet) => {
           const m = computeMetrics(sheet)
           return {
             spec: { widthPx: m.widthPx, heightPx: m.heightPx },
-            paint: (ctx) => renderSheet(sheet, ctx, m, watermark, { images, resolveFont: lease.resolve }),
+            paint: (ctx) => renderSheet(sheet, ctx, m, watermark, { images: decoded, resolveFont: lease.resolve }),
           }
-        }), lease.dispose, lease.diagnostics)
+        }), lease.dispose, lease.diagnostics, decoded)
       } catch (error) { lease.dispose(); throw error }
     })
   }
   return acquireFonts(doc, options?.registerFont).then(async lease => {
     try {
       const sm = slideMetrics(doc)
-      const images = await Promise.all(doc.images.map(img => decodeImage(img.data, img.mime).catch(() => undefined)))
+      const decoded = await decodeImageAssets(doc.images, options?.decodeImage)
       return withLease(doc.slides.map(slide => ({
         spec: { widthPx: sm.widthPx, heightPx: sm.heightPx },
-        paint: ctx => renderSlide(slide, ctx, sm, images, watermark, lease.resolve),
-      })), lease.dispose, lease.diagnostics)
+        paint: ctx => renderSlide(slide, ctx, sm, decoded, watermark, lease.resolve),
+      })), lease.dispose, lease.diagnostics, decoded)
     } catch (error) { lease.dispose(); throw error }
   })
 }

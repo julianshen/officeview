@@ -6,6 +6,7 @@ import { sniffImageMime } from '../core/images'
 import { attrs, elementChildren, getChildren, orderedChildren, textOf, type XmlNode } from '../core/xml'
 import { applyParagraphDefaults, paragraphRunDefaults, readRunProperties, readTheme, styleChain, styleContext, type DocxStyleContext, type ParagraphStyleLayers } from './styles'
 import { loadDrawingParts, wordDrawingSelections } from './drawing'
+import { findSvgBlip, looksLikeSvg, scanSelfContainedSvg, svgCandidate, svgStateCandidate, type ImageSelection, type SvgCandidate, type SvgVerdict } from '../core/svg'
 import { attemptedMalformedRelationshipIssue, malformedRelationshipAttempt, reserveDrawingContent } from '../drawing/content'
 import { contentRepresentation, coverageIssueMatchesEntry, supportedChoiceRequirements, type DrawingCoverageEntry } from '../drawing/coverage'
 import { DOCUMENT_DRAWING_NODE_LIMIT, drawingPartContext, partRelationshipNodes, reserveDrawingNode } from '../drawing/parts'
@@ -34,7 +35,15 @@ export function halfPointToPt(v: string | number | undefined): number | undefine
   return Number.isFinite(n) ? n / 2 : undefined
 }
 
-interface ParagraphContext { styles: DocxStyleContext; drawings: Map<XmlNode, DocxImage>; tableLayers?: ParagraphStyleLayers; reserveDrawing?: (drawing?: DocxDrawing) => boolean; drawingCoverage?: DrawingCoverageEntry[]; drawingPaths?: WeakMap<XmlNode, string>; unselectedReferenceIds?: Set<string>; partPath?: string; pkg?: OfficePackage; representation?: DrawingCoverageEntry['representation'] }
+interface ParagraphContext { styles: DocxStyleContext; drawings: Map<XmlNode, DocxImage>; tableLayers?: ParagraphStyleLayers; reserveDrawing?: (drawing?: DocxDrawing) => boolean; drawingCoverage?: DrawingCoverageEntry[]; drawingPaths?: WeakMap<XmlNode, string>; unselectedReferenceIds?: Set<string>; partPath?: string; pkg?: OfficePackage; representation?: DrawingCoverageEntry['representation']; imageSelections?: Map<string, ImageSelection>; imageExternal?: Set<string> }
+/** Share one selection record per candidate pair so aliases and coverage agree. */
+function selectionFor(context: ParagraphContext | undefined, key: string): ImageSelection {
+  const map = context?.imageSelections
+  if (!map) return { phase: 'pending', representation: 'none' }
+  let selection = map.get(key)
+  if (!selection) { selection = { phase: 'pending', representation: 'none' }; map.set(key, selection) }
+  return selection
+}
 function drawingReferenceIds(root: XmlNode): string[] {
   const ids: string[] = []
   const walk = (node: XmlNode, depth: number) => {
@@ -480,12 +489,12 @@ function parseDrawing(
   const graphicData = getChildren(getChildren(wp, 'graphic')[0], 'graphicData')[0]
   const graphicUri = attrs(graphicData).uri?.toLowerCase() ?? ''
   const feature = vector?.drawing?.kind ?? (getChildren(graphicData, 'pic').length ? 'picture' : getChildren(graphicData, 'chart').length ? 'chart' : getChildren(graphicData, 'relIds').length ? 'diagram' : getChildren(graphicData, 'contentPart').length ? 'ink' : graphicUri.includes('chartex') ? 'ChartEx' : graphicData ? 'graphicData' : 'drawing')
-  const audit = (status: DrawingCoverageEntry['status'], reason?: string, referenceId?: string, consumed = true, limit?: number) => {
+  const audit = (status: DrawingCoverageEntry['status'], reason?: string, referenceId?: string, consumed = true, limit?: number, imageSelection?: ImageSelection) => {
     if (!context?.reserveDrawing || !context.drawingCoverage) return
     context.drawingCoverage.push({ partPath: context.partPath ?? 'word/document.xml', treePath: context.drawingPaths?.get(drawing) ?? `drawing[${context.drawingCoverage.length}]`, element: 'drawing', id: docPr.id, name: docPr.name,
       referenceId, feature, status: status === 'native' && selectedRepresentation === 'fallback' ? 'fallback' : status,
       selectedRepresentation: !consumed ? 'none' : vector?.drawing ? contentRepresentation(vector.drawing.kind) : status === 'native' ? selectedRepresentation === 'fallback' ? 'raster-fallback' : 'picture' : 'none',
-      representation: selectedRepresentation, reason: reason ?? nestedSelection?.reason, scope: 'original', limit })
+      representation: selectedRepresentation, reason: reason ?? nestedSelection?.reason, scope: 'original', limit, ...(imageSelection ? { imageSelection } : {}) })
   }
   if (!allowed) { audit('unsupported', 'drawing node budget exceeded', undefined, false, DOCUMENT_DRAWING_NODE_LIMIT); return undefined }
   if (!wp) { audit('malformed', 'missing inline or anchor placement'); return undefined }
@@ -518,18 +527,54 @@ function parseDrawing(
   const pic = graphicData ? getChildren(graphicData, 'pic')[0] : undefined
   const blip = pic ? getChildren(getChildren(pic, 'blipFill')[0], 'blip')[0] : undefined
   const rid = (attrs(blip)['r:embed'] ?? attrs(blip).embed) as string | undefined
-  if (!rid) { audit(feature === 'picture' || feature === 'chart' || feature === 'diagram' || feature === 'ink' ? 'malformed' : graphicData ? 'unsupported' : 'malformed', feature === 'picture' ? 'missing image relationship' : feature === 'graphicData' ? 'No supported selected payload' : 'missing selected payload part', attrs(getChildren(graphicData, 'chart')[0]).id ?? attrs(getChildren(graphicData, 'relIds')[0]).dm ?? attrs(getChildren(graphicData, 'contentPart')[0]).id); return undefined }
-  if (context?.pkg && context.partPath) malformedRelationshipAttempt(context.pkg, context.partPath, rid, 'image')
-  if (!images) { audit('malformed', 'missing image collection', rid); return undefined }
-  const data = images.find((img) => img && (img as DocxImage & { relId?: string }).relId === rid)
-  if (!data) { audit('malformed', 'missing image part', rid); return undefined }
-  audit('native', undefined, rid)
+  const svgBlip = findSvgBlip(blip)
+  const svgRid = svgBlip?.embed
+  if (!rid && !svgRid) { audit(feature === 'picture' || feature === 'chart' || feature === 'diagram' || feature === 'ink' ? 'malformed' : graphicData ? 'unsupported' : 'malformed', feature === 'picture' ? 'missing image relationship' : feature === 'graphicData' ? 'No supported selected payload' : 'missing selected payload part', attrs(getChildren(graphicData, 'chart')[0]).id ?? attrs(getChildren(graphicData, 'relIds')[0]).dm ?? attrs(getChildren(graphicData, 'contentPart')[0]).id); return undefined }
+  if (context?.pkg && context.partPath) {
+    if (rid) malformedRelationshipAttempt(context.pkg, context.partPath, rid, 'image')
+    if (svgRid) malformedRelationshipAttempt(context.pkg, context.partPath, svgRid, 'image')
+  }
+  if (!images) { audit('malformed', 'missing image collection', rid ?? svgRid); return undefined }
+  const raster = rid ? images.find((img) => img && (img as DocxImage & { relId?: string }).relId === rid) : undefined
+  const svgEntry = svgRid ? images.find((img) => img && (img as DocxImage & { relId?: string }).relId === svgRid) : undefined
+  if (!raster && !svgEntry) { audit('malformed', 'missing image part', rid ?? svgRid); return undefined }
+  const selection = selectionFor(context, `${context?.partPath ?? ''}\u0000${rid ?? ''}\u0000${svgRid ?? ''}`)
+  let svg: SvgCandidate | undefined
+  let primarySvgVerdict: SvgVerdict | undefined
+  if (svgEntry) {
+    // Retain the candidate even when rejected, so distinct pairs never collapse
+    // and an ordinary raster never inherits this source's rejection reason.
+    const candidate = svgCandidate(svgEntry.data, (svgEntry as DocxImage & { partPath?: string }).partPath, svgRid)
+    svg = candidate
+    selection.representation = candidate.verdict.ok ? 'svg' : (raster ? 'raster' : 'none')
+    selection.reason = candidate.verdict.ok ? undefined : candidate.verdict.reason
+  } else if (svgBlip?.link) {
+    selection.representation = raster ? 'raster' : 'none'; selection.reason = 'svg:link-only'
+    svg = svgStateCandidate('svg:link-only')
+  } else if (svgRid) {
+    const reason = context?.imageExternal?.has(svgRid) ? 'svg:external' : 'svg:unresolved'
+    selection.representation = raster ? 'raster' : 'none'; selection.reason = reason
+    svg = svgStateCandidate(reason, undefined, svgRid)
+  } else if (raster && looksLikeSvg(raster.data, raster.mime, (raster as DocxImage & { partPath?: string }).partPath)) {
+    const verdict = scanSelfContainedSvg(raster.data)
+    primarySvgVerdict = verdict
+    selection.representation = verdict.ok ? 'svg' : 'none'
+    selection.reason = verdict.ok ? undefined : verdict.reason
+  } else {
+    selection.representation = 'raster'
+  }
+  audit('native', undefined, rid ?? svgRid, true, undefined, selection)
   return {
-    data: data.data,
-    mime: data.mime,
+    data: raster?.data ?? svgEntry!.data,
+    mime: raster?.mime ?? svgEntry?.mime,
+    pathHint: (raster as DocxImage & { partPath?: string } | undefined)?.partPath ?? (svgEntry as DocxImage & { partPath?: string } | undefined)?.partPath,
     widthEmu,
     heightEmu,
-    ...placement
+    ...placement,
+    hasRaster: !!raster,
+    ...(svg ? { svg } : {}),
+    ...(primarySvgVerdict ? { primarySvgVerdict } : {}),
+    imageSelection: selection
   }
 }
 
@@ -613,20 +658,23 @@ async function loadPart(ref: XmlNode, rels: Map<string, { type: string; target: 
   if (!part) return undefined
   const numbering = await pkg.xml('word/numbering.xml')
   const state = numbering ? parseNumbering(numbering) : undefined
-  const images = await loadDocImages(pkg, path)
-  const context: ParagraphContext = { styles, drawings: await loadDrawingParts(pkg, part, path, styles.theme, p => parseParagraph(p, images, state, { styles, drawings: new Map() }), false), reserveDrawing: drawingReservation(pkg, path), drawingCoverage: coverage, drawingPaths: sourceDrawingPaths(part, path.includes('/header') ? 'header' : 'footer'), unselectedReferenceIds, partPath: path, pkg }
+  const { images, external: imageExternal } = await loadDocImages(pkg, path)
+  const imageSelections = new Map<string, ImageSelection>()
+  const context: ParagraphContext = { styles, drawings: await loadDrawingParts(pkg, part, path, styles.theme, p => parseParagraph(p, images, state, { styles, drawings: new Map(), imageSelections, imageExternal }), false), reserveDrawing: drawingReservation(pkg, path), drawingCoverage: coverage, drawingPaths: sourceDrawingPaths(part, path.includes('/header') ? 'header' : 'footer'), unselectedReferenceIds, partPath: path, pkg, imageSelections, imageExternal }
   return unwrapContentControls(part).flatMap(([name, node]): DocxBlock[] => name === 'p' ? [{ kind: 'p', paragraph: parseParagraph(node, images, state, context) }] : name === 'tbl' ? [{ kind: 'table', table: parseTable(node, state, context, images) }] : [])
 }
 
-async function loadDocImages(pkg: OfficePackage, partPath = 'word/document.xml'): Promise<DocxImage[]> {
+async function loadDocImages(pkg: OfficePackage, partPath = 'word/document.xml'): Promise<{ images: DocxImage[]; external: Set<string> }> {
   const slash = partPath.lastIndexOf('/')
   const directory = partPath.slice(0, slash)
-  const images: Array<DocxImage & { relId?: string }> = []
+  const images: Array<DocxImage & { relId?: string; partPath?: string }> = []
+  const external = new Set<string>()
   for (const rel of await partRelationshipNodes(pkg, partPath)) {
     const a = attrs(rel)
     const type = a.Type as string | undefined
     const target = (a.Target as string | undefined) ?? ''
-    if (!type || !type.includes('/image') || !target || a.TargetMode === 'External') continue
+    if (!type || !type.includes('/image') || !target) continue
+    if (a.TargetMode === 'External') { if (a.Id) external.add(a.Id); continue }
     const segments = target.startsWith('/') ? [] : directory.split('/')
     for (const segment of target.split('/')) {
       if (segment === '..') segments.pop()
@@ -635,9 +683,9 @@ async function loadDocImages(pkg: OfficePackage, partPath = 'word/document.xml')
     const path = segments.join('/')
     const data = await pkg.bytes(path)
     if (!data) continue
-    images.push({ data, mime: sniffImageMime(data), widthEmu: 0, heightEmu: 0, relId: a.Id })
+    images.push({ data, mime: sniffImageMime(data), widthEmu: 0, heightEmu: 0, relId: a.Id, partPath: path })
   }
-  return images
+  return { images, external }
 }
 
 /**
@@ -688,12 +736,13 @@ export async function parseDocx(pkg: OfficePackage): Promise<DocxDocument> {
     }
   }
   const body = doc?.['body'] as XmlNode | undefined
-  const docImages = (await loadDocImages(pkg)) as DocxImage[]
+  const { images: docImages, external: imageExternal } = await loadDocImages(pkg)
   const numberingRoot = await pkg.xml('word/numbering.xml')
   const numbering = numberingRoot ? parseNumbering(numberingRoot) : undefined
   const drawingCoverage: DrawingCoverageEntry[] = []
   const unselectedReferenceIds = new Set<string>()
-  const context: ParagraphContext = {styles,drawings:await loadDrawingParts(pkg,doc,'word/document.xml',styles.theme,p => parseParagraph(p,docImages,numbering,{styles,drawings:new Map()}),false),reserveDrawing:drawingReservation(pkg,'word/document.xml'),drawingCoverage,drawingPaths:sourceDrawingPaths(doc),unselectedReferenceIds,partPath:'word/document.xml',pkg}
+  const imageSelections = new Map<string, ImageSelection>()
+  const context: ParagraphContext = {styles,drawings:await loadDrawingParts(pkg,doc,'word/document.xml',styles.theme,p => parseParagraph(p,docImages,numbering,{styles,drawings:new Map(),imageSelections,imageExternal}),false),reserveDrawing:drawingReservation(pkg,'word/document.xml'),drawingCoverage,drawingPaths:sourceDrawingPaths(doc),unselectedReferenceIds,partPath:'word/document.xml',pkg,imageSelections,imageExternal}
   const sections: DocxSection[] = []
   let current: DocxSection = {
     margins: { topTwips: 1440, rightTwips: 1440, bottomTwips: 1440, leftTwips: 1440, headerTwips: 720, footerTwips: 720, gutterTwips: 0 },

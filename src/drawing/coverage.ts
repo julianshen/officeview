@@ -15,6 +15,8 @@ export interface DrawingCoverageEntry {
   reason?: string
   /** Why the retained paint assessment is inconclusive; source failure remains in reason. */
   assessmentReason?: 'winding-analysis-limit' | 'curve-paint-inconclusive' | 'dash-paint-inconclusive'
+  /** Selected SVG/raster representation and phase for a picture placement. */
+  imageSelection?: ImageSelection
   /** Maximum distinct straight edges analyzed for completed nonzero winding. */
   analysisLimit?: number
   /** Original placements/containers, selected nested nodes, and failures without a placement. */
@@ -32,6 +34,7 @@ export function contentRepresentation(kind: string): DrawingCoverageEntry['selec
 }
 
 import { attrs, getChildren, namespaceUri, orderedChildren, type XmlNode } from '../core/xml'
+import type { ImageSelection } from '../core/svg'
 import type { PptxShape, PptxSlide } from '../pptx/types'
 import type { XlsxDrawing } from '../xlsx/types'
 import { resolveGeometry, type ResolvedPath } from './geometry'
@@ -441,6 +444,7 @@ export function pptxCoverage(slide: PptxSlide, spTree: XmlNode | undefined, part
     entries.push({ partPath, treePath: path, element: name, id: multipleSelectedObjects ? undefined : name === 'AlternateContent' ? own.id ?? source?.id : source?.id ?? own.id, name: multipleSelectedObjects ? undefined : name === 'AlternateContent' ? own.name ?? source?.name : source?.name ?? own.name,
       referenceId: referenced.values().next().value,
       feature, status, selectedRepresentation, representation: source?.representation !== 'native' && source?.representation ? source.representation : nested?.representation ?? inheritedRepresentation ?? (chosen ? getChildren(node, 'Fallback').includes(chosen) ? 'fallback' : 'choice' : 'native'), reason, scope, unit: slide.index,
+      ...(shape?.image?.imageSelection ? { imageSelection: shape.image.imageSelection } : {}),
       ...(geometryAssessment.kind === 'unverified' && (status === 'unsupported' || status === 'malformed') ? { assessmentReason: geometryAssessment.reason, analysisLimit: geometryAssessment.limit } : {}) })
   }
   const walk = (parent: XmlNode | undefined, prefix: string, scope: DrawingCoverageEntry['scope'], depth = 0, inheritedRepresentation?: 'choice' | 'fallback') => {
@@ -525,7 +529,8 @@ export function xlsxNodeCoverage(node: XlsxDrawing, unit: number, scope: Drawing
     : source.emptySelection ? 'blank' : status === 'fallback' && node.image ? 'raster-fallback' : status === 'unsupported' || status === 'malformed' ? node.textBody ? 'text-only' : 'none'
     : node.image ? 'picture' : node.group ? 'group' : 'native-shape'
   return [{ partPath: source.partPath, treePath: source.treePath, element: source.element, id: source.id, name: source.name, referenceId: source.referenceId,
-    feature, status, selectedRepresentation, representation: source.representation, reason, scope, unit }, ...(node.children ?? []).flatMap(child => xlsxNodeCoverage(child, unit, 'descendant'))]
+    feature, status, selectedRepresentation, representation: source.representation, reason, scope, unit,
+    ...(node.image?.imageSelection ? { imageSelection: node.image.imageSelection } : {}) }, ...(node.children ?? []).flatMap(child => xlsxNodeCoverage(child, unit, 'descendant'))]
 }
 
 export function drawingReport(document: DrawingCoverageDocument) {
