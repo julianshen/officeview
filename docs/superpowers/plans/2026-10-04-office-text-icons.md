@@ -6,7 +6,7 @@
 
 **Spec:** `docs/superpowers/specs/2026-10-04-office-text-icons-design.md`
 
-**Execution:** Use `/tmp/officeview-wt-drawings` after stage 2 passes its full gate. Julian has authorized this stage through the program design; no repeated approval and no commits. Preserve existing Word flow, reviewed scene transforms and concurrent main-workspace changes. Native references and source inventories are retained under `/tmp/officeview-text-directions-20261003`.
+**Execution:** Use `/tmp/officeview-wt-drawings` after stage 2 passes its full gate. Julian has authorized this stage through the program design; no repeated approval and no commits. Preserve existing Word flow, reviewed scene transforms and concurrent main-workspace changes. Native references and source inventories are retained under `/tmp/officeview-text-directions-20261003`. (Superseded 2026-10-05 for integration: Tasks 3–4 accepted freezes merged to main as `be8ba76`/`53dd08b`; see Task 3/4 acceptance notes and Post-integration below.)
 
 **NATS correction dependency:** Extend the reviewed horizontal rich-text parser/layout and optional paragraph-source recording hook from the focused native-reference plan after its code gate. Reuse its UTF-16 source offsets, grapheme boundaries, style provenance and aliases rather than introducing a competing horizontal path. Preserve source whitespace and explicit breaks, paragraph-scoped phrase search across visual wraps, direct-run > table-region > generic-default precedence, document font leases and legacy manual indexes. Direction/WordArt painting records each logical source segment once even when visual output uses multiple passes.
 
@@ -43,16 +43,18 @@ Task 2 complete: independent SPEC and QUALITY repair reviews approved the exact 
 - [x] Route drawing text boxes in these adapters through shared text layout while retaining their format-specific paragraphs and anchor placement. Preserve Word mixed image/text order and existing chart/ink/diagram payloads.
 - [x] Verify search/selection geometry with actual adapter paints. Run Word complex/layout/table suites and Excel style/render/border suites plus TypeScript. Complete both reviews.
 
-Acceptance: R16 freeze `d06c64fc7a43a4e5e15371100066aa9a994dee322abef3cf8bf3e85a6fcf9c0d` passed independent SPEC and Pi QUALITY, 1465 strict tests and all required gates. Dia preserved 13/13 fixture PNGs and 21/21 NATS PNGs. Native complex textbox column-pitch convergence remains explicit Task 6 work. No commits or main integration.
+Acceptance: R16 freeze `d06c64fc7a43a4e5e15371100066aa9a994dee322abef3cf8bf3e85a6fcf9c0d` passed independent SPEC and Pi QUALITY, 1465 strict tests and all required gates. Dia preserved 13/13 fixture PNGs and 21/21 NATS PNGs. Native complex textbox column-pitch convergence remains explicit Task 6 work. Integrated to main as `be8ba76` (2026-10-05): reconstructed 271/271 inventory hashes, tsc + strict 1465/1465 re-verified, zero foreign files.
 
 ## Task 4: SVG selection and horizontal inline icons
 
 **Files:** Modify `src/core/images.ts`, shared drawing part/image loaders and format image adapters as needed; create `tests/office-svg-icons.test.ts`.
 
-- [ ] Write packages with standard `asvg:svgBlip` extension plus PNG fallback, valid SVG, invalid/missing SVG, raster-only images, nonstandard relative targets and external relationships. Include four interleaved icons with Before/After text and a narrow wrapping case. Test forbidden external href/xlink:href, CSS url/import references, entities, scripts/event handlers and foreignObject while retaining valid internal fragments.
-- [ ] Establish failing representation/order assertions. Enforce the self-contained boundary before browser and Node decoding and prove forbidden inputs cannot trigger network/file access. Select one embedded representation and retain raster fallback on rejection/decode failure. Record selected representation/reason in coverage; do not double-paint or duplicate image indices.
-- [ ] Verify actual SVG pixel appearance as well as portable layout positions and source order across applicable adapters. Include a successful real-browser SVG decode/paint and browser fallback cases; Node-only decode is insufficient. Preserve existing image-decode behavior and caching.
-- [ ] Run icon/image and all adapter drawing regressions. Complete both reviews.
+- [x] Write packages with standard `asvg:svgBlip` extension plus PNG fallback, valid SVG, invalid/missing SVG, raster-only images, nonstandard relative targets and external relationships. Include four interleaved icons with Before/After text and a narrow wrapping case. Test forbidden external href/xlink:href, CSS url/import references, entities, scripts/event handlers and foreignObject while retaining valid internal fragments.
+- [x] Establish failing representation/order assertions. Enforce the self-contained boundary before browser and Node decoding and prove forbidden inputs cannot trigger network/file access. Select one embedded representation and retain raster fallback on rejection/decode failure. Record selected representation/reason in coverage; do not double-paint or duplicate image indices.
+- [x] Verify actual SVG pixel appearance as well as portable layout positions and source order across applicable adapters. Include a successful real-browser SVG decode/paint and browser fallback cases; Node-only decode is insufficient. Preserve existing image-decode behavior and caching.
+- [x] Run icon/image and all adapter drawing regressions. Complete both reviews.
+
+Acceptance: R5 freeze `0e2fe0a32b81e984a3980c4ffcc3921653effef689a8a490c863856138c9f1d4` passed independent SPEC and Pi QUALITY (REPORT-FINAL, source-quality APPROVED), 1566 strict tests and all required gates; record `task4-svg/accepted-r5.json`. Headless-Chrome fallback runs (Dia unavailable): native 7 packages/13 units with valid models, NATS 21/21 slides and 777 objects, dedicated vector harness 4/4 distinct decodes with zero unexpected bytes. Limits carried: G2 excel metric by design, G3 NATS bytes environmental, Task 5/6 out of scope. Integrated to main as `53dd08b` (2026-10-05): reconstructed 274/274 inventory hashes, tsc + strict 1566/1566 + build re-verified.
 
 ## Task 5: WordArt text appearance
 
@@ -67,8 +69,21 @@ Acceptance: R16 freeze `d06c64fc7a43a4e5e15371100066aa9a994dee322abef3cf8bf3e85a
 
 **Files:** Temporary reports, inventories, render outputs and comparisons in the existing validation directories; update this plan.
 
-- [ ] Render the retained seven-direction PPTX, six-direction Word and six-rotation Excel packages. Compare native references at matching content coordinates; inspect in Dia when available. Retain before/after PNGs, metrics and any documented font-dependent residuals.
-- [ ] Export the controlled four-icon Word fixture through native Word when computer-use is available and compare. Record a concrete unavailable native check if desktop automation remains inaccessible.
-- [ ] Render both a11 versions and complex.docx through the public pipeline; preserve unit counts, object identities and original SHA-256 hashes. Run machine-readable coverage to confirm selected representations and requested direction support.
-- [ ] Run `bunx tsc --noEmit`, `OFFICEVIEW_STRICT_GOLDEN=1 bun run test`, `bun run build`, `bun scripts/corpus-report.ts`, `git diff --check`. Inspect changed goldens individually before any intentional update; re-run affected checks.
-- [ ] Complete final review and copy reviewed files back with fingerprint checks. No commits. Continue charts, ink and uncached SmartArt; do not report full program completion at this stage.
+- [x] Render the retained seven-direction PPTX, six-direction Word and six-rotation Excel packages. Compare native references at matching content coordinates; inspect in Dia when available. Retain before/after PNGs, metrics and any documented font-dependent residuals.
+- [x] Export the controlled four-icon Word fixture through native Word when computer-use is available and compare. Record a concrete unavailable native check if desktop automation remains inaccessible.
+- [x] Render both a11 versions and complex.docx through the public pipeline; preserve unit counts, object identities and original SHA-256 hashes. Run machine-readable coverage to confirm selected representations and requested direction support.
+- [x] Run `bunx tsc --noEmit`, `OFFICEVIEW_STRICT_GOLDEN=1 bun run test`, `bun run build`, `bun scripts/corpus-report.ts`, `git diff --check`. Inspect changed goldens individually before any intentional update; re-run affected checks.
+- [x] Complete final review and copy reviewed files back with fingerprint checks. Continue charts, ink and uncached SmartArt; do not report full program completion at this stage.
+
+Task 6 outcome: native comparison executed via headless-Chrome fallback (Dia had no capturable window; recorded as the concrete unavailable-native check). R5 per-unit matrix in `task4-svg/r5-browser-run-note-20261005T1245.md`: blanks match, near-identical units ≤3.75%, font-metric territory ≤7.6%, one explained large delta (a11-open-3 unsupported fallbacks). Both merges verified byte-exact to their freezes by two independent reviewers; main integration complete (`be8ba76`, `53dd08b`). Charts, ink and uncached SmartArt continue as later stages.
+
+## Post-integration hardening (main, 2026-10-05)
+
+Four follow-up features landed on main after the merges, each RED-tested and gated with zero golden movement; Pi reviewed the batch (F1–F9, all fixed) plus residuals R1/R2 (fixed), and an independent verifier re-ran gates. Task 5 WordArt above remains open.
+
+- Fallback fonts (`3be68a7`): `withFallbackFonts` + CJK regions, threaded through all adapters and the `OfficeDoc` prop; default byte-identical.
+- Worker render-to-bitmap (`05ea1d8`): request/response protocol + `dist/worker.js` entry (`./worker` export); worker FontFaceSet adapter; main thread presents bitmaps.
+- Viewport culling (`c992dde`, fixup `e4a6b45` + `9d2e9f2`): optional sheet-coordinate viewport on `renderSheet` plus per-call measure cache; 60k-cell pan 5465ms → 45ms. Pi caught one real bug (merge-anchor culling) with a proven-discriminating regression test.
+- Print geometry (`d614e7c`): pageSetup/margins/fit parse, paper table, `computePrintMetrics`, `renderPrintPage`. Multi-page paintables are the explicit follow-up.
+
+Strict suite: 1591/1591 across 64 files at HEAD `9d2e9f2`. Pre-merge dirty state backed up at `/tmp/officeview-stage3-20261004/merge-backup-20261005T1530/`; stale Task 3 worktree WIP archived as superseded (never merged).
