@@ -37,7 +37,7 @@ export { withFallbackFonts, REGIONAL_FALLBACKS } from './core/fonts/fallback'
 export type { FallbackFontsOptions, CjkFallbackRegion } from './core/fonts/fallback'
 // Worker render-to-bitmap protocol + client (worker bundle at dist/worker.js)
 export { handleWorkerRequest, renderPageBitmap, isWorkerRenderSupported } from './worker/office-worker'
-export type { WorkerRenderRequest, WorkerRenderResponse, WorkerRenderKind, WorkerRenderFormat } from './worker/office-worker'
+export type { WorkerRenderRequest, WorkerRenderResponse, WorkerRenderKind, WorkerRenderFormat, WorkerRenderOptions } from './worker/office-worker'
 export { workerRegister } from './core/fonts/register'
 // Text search (also used internally by <OfficeDoc>)
 export { buildTextIndex, findMatches, stepMatch } from './core/search'

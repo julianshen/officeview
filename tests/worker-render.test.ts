@@ -46,6 +46,11 @@ describe('worker render protocol', () => {
     const data = canvas.getContext('2d').getImageData(0, 0, res.width, res.height).data
     expect(Array.from(data).some(v => v < 250)).toBe(true)
   })
+  test('render options survive structured clone (no function fields)', () => {
+    const options = { fallbackFonts: { fallbackChain: ['Inter'] }, watermark: { text: 'draft' } }
+    const clone = structuredClone(options)
+    expect(clone).toEqual(options)
+  })
   test('unknown kind fails closed with an error', async () => {
     const res = await handleWorkerRequest({ id: 2, kind: 'nope', format: 'docx', source: new ArrayBuffer(0), index: 0 } as never, nodeEnv as never)
     expect(res.ok).toBe(false)

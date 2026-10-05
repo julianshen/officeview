@@ -261,12 +261,13 @@ export async function buildXlsx(sheets: XlsxSheetSpec[], sharedStrings: string[]
     const margins = sheet.pageMargins ? `<pageMargins${['left', 'right', 'top', 'bottom', 'header', 'footer'].map(k => ` ${k}="${(sheet.pageMargins as Record<string, number | undefined>)[k] ?? (k === 'header' || k === 'footer' ? 0.3 : 0.7)}"`).join('')}/>` : ''
     return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
-  ${setupPr}${setup}${margins}
+  ${setupPr}
   ${sheet.cols ? `<cols>${sheet.cols}</cols>` : ''}
   <sheetData>
     ${sheet.rows.map((row) => `<row r="${row.r}">${row.cells.map((c) => `<c r="${c.ref}"${c.t ? ` t="${c.t}"` : ''}${c.style !== undefined ? ` s="${c.style}"` : ''}>${c.v !== undefined ? `<v>${c.v}</v>` : ''}</c>`).join('')}</row>`).join('\n    ')}
   </sheetData>
   ${sheet.merges ? `<mergeCells count="${sheet.merges.length}">${sheet.merges.map((m) => `<mergeCell ref="${m}"/>`).join('')}</mergeCells>` : ''}
+  ${margins}${setup}
 </worksheet>`
   }
   const workbookXml =

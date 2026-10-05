@@ -241,12 +241,15 @@ export function computeMetrics(sheet: XlsxSheet): GridMetrics {
   }
 }
 
-/** OOXML paper size ids to portrait width/height in inches (Letter default). */
+/** OOXML paper size ids to portrait width/height in inches (Letter default).
+ * A/B sizes are JIS (B4 257x364mm, B5 182x257mm); Folio/Quarto are US
+ * 8.5x13in and 215x275mm. ECMA-376 names ids only, so dimensions follow
+ * printer convention; ids beyond 15 fall back to Letter. */
 export const PAPER_SIZES_IN: Record<number, [number, number]> = {
   1: [8.5, 11], 2: [8.5, 11], 3: [11, 17], 4: [17, 11], 5: [8.5, 14],
   6: [5.5, 8.5], 7: [7.25, 10.5], 8: [11.69, 16.54], 9: [8.27, 11.69],
-  10: [8.27, 11.69], 11: [8.27, 11.69], 12: [8.27, 11.69], 13: [8.5, 13],
-  14: [8.27, 11.69], 15: [8.27, 11.69],
+  10: [8.27, 11.69], 11: [5.83, 8.27], 12: [10.12, 14.33], 13: [7.17, 10.12],
+  14: [8.5, 13], 15: [8.47, 10.83],
 }
 export interface PrintMetrics {
   paperPx: { width: number; height: number }
@@ -308,13 +311,17 @@ export function renderPrintPage(
   try {
     ctx.fillStyle = '#ffffff'
     ctx.fillRect(0, 0, print.paperPx.width, print.paperPx.height)
+    // Watermark belongs to the paper, not the sheet: paint it here in paper
+    // coordinates (under the cells) instead of forwarding it into sheet space,
+    // where the viewport translation would anchor it to the sheet.
+    if (watermark) paintWatermark(ctx, { widthPx: print.paperPx.width, heightPx: print.paperPx.height }, watermark)
     const { printable, scale } = print
     ctx.beginPath()
     ctx.rect(printable.x, printable.y, printable.width, printable.height)
     ctx.clip()
     ctx.translate(printable.x, printable.y)
     ctx.scale(scale, scale)
-    renderSheet(sheet, ctx, metrics, watermark, prepared, {
+    renderSheet(sheet, ctx, metrics, undefined, prepared, {
       x: (pageCol * printable.width) / scale,
       y: (pageRow * printable.height) / scale,
       width: printable.width / scale,
@@ -425,10 +432,18 @@ export function renderSheet(
   if (watermark) paintWatermark(ctx, { widthPx: m.widthPx, heightPx: m.heightPx }, watermark)
 
   const paintBorders: Array<() => void> = []
+  // Row bottoms extended by merge ranges anchored in the row: a row whose own
+  // box sits above the viewport still paints when its merged range reaches in.
+  const rowBottom = new Map<number, number>()
+  for (const r of ranges) {
+    const bottom = rowY[r.maxRow + 1] ?? m.heightPx
+    if (bottom > (rowBottom.get(r.minRow) ?? Number.NEGATIVE_INFINITY)) rowBottom.set(r.minRow, bottom)
+  }
   for (const row of sheet.rows) {
     const y = rowY[row.index] ?? 0
     const h = rowHeightsPx[row.index] ?? DEFAULT_ROW_PX
-    if (y + h <= vp.y || y >= vp.y + vp.height) continue
+    const bottom = Math.max(y + h, rowBottom.get(row.index) ?? Number.NEGATIVE_INFINITY)
+    if (bottom <= vp.y || y >= vp.y + vp.height) continue
     for (const cell of row.cells) {
       const cov = covered.get(`${cell.row}:${cell.col}`)
       if (cov) continue // inside a merge, not its anchor — nothing to paint

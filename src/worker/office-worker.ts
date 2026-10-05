@@ -7,9 +7,20 @@
  * (PNG encoding is a pure function of pixels).
  */
 import type { PaintableArray, PaintOptions } from '../render/paint'
+import type { FallbackFontsOptions } from '../core/fonts/fallback'
+import type { WatermarkOptions } from '../core/watermark'
 
 export type WorkerRenderKind = 'render-page' | 'render-sheet' | 'render-slide'
 export type WorkerRenderFormat = 'docx' | 'xlsx' | 'pptx'
+/**
+ * Structured-cloneable render options only: postMessage cannot transfer
+ * functions, so registerFont/decodeImage stay main-side (callers paint those
+ * pages on the main thread instead).
+ */
+export interface WorkerRenderOptions {
+  fallbackFonts?: FallbackFontsOptions
+  watermark?: WatermarkOptions
+}
 export interface WorkerRenderRequest {
   id: number
   kind: WorkerRenderKind
@@ -17,7 +28,7 @@ export interface WorkerRenderRequest {
   /** Transferred (zero-copy) on postMessage; read here as a view, never copied. */
   source: ArrayBuffer
   index: number
-  options?: PaintOptions
+  options?: WorkerRenderOptions
 }
 export type WorkerRenderResponse =
   | { id: number; ok: true; bitmap: ImageBitmap; width: number; height: number }

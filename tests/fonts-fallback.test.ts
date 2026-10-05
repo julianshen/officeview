@@ -31,6 +31,11 @@ describe('fallback font resolver composition', () => {
     expect(out.endsWith('sans-serif')).toBe(true)
     expect(REGIONAL_FALLBACKS.jp[0]).toBe('Hiragino Kaku Gothic ProN')
   })
+  test('unquoted third-party stacks splice without quoting the head', () => {
+    const stack = (family: string): string => `${family}, sans-serif`
+    const resolve = withFallbackFonts(stack, { fallbackChain: ['Inter'] })
+    expect(resolve('Arial')).toBe('Arial, "Inter", sans-serif')
+  })
   test('explicit chain wins over regional defaults when both given', () => {
     const resolve = withFallbackFonts(identity, { cjkFallback: 'sc', fallbackChain: ['MyCJK'] })
     expect(resolve('微軟正黑體')).toBe('"微軟正黑體", "MyCJK", sans-serif')
@@ -65,10 +70,11 @@ describe('fallback font resolver composition', () => {
     const WNS = 'xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:wps="http://schemas.microsoft.com/office/word/2010/wordprocessingShape"'
     const inner = `<w:p><w:r><w:rPr><w:rFonts w:ascii="Liter" w:hAnsi="Liter"/><w:sz w:val="24"/></w:rPr><w:t>Hi</w:t></w:r></w:p>`
     const box = `<wps:wsp><wps:txbx><w:txbxContent>${inner}</w:txbxContent></wps:txbx><wps:bodyPr/></wps:wsp>`
+    const bodyPara = `<w:p><w:r><w:rPr><w:rFonts w:ascii="Liter" w:hAnsi="Liter"/><w:sz w:val="24"/></w:rPr><w:t>Body</w:t></w:r></w:p>`
     const zip = new JSZip()
     zip.file('[Content_Types].xml', CT_TYPES)
     zip.file('_rels/.rels', ROOT_RELS)
-    zip.file('word/document.xml', `<w:document ${WNS}><w:body><w:p><w:r><w:drawing><wp:inline><wp:extent cx="${200 * 9525}" cy="${100 * 9525}"/><wp:docPr id="1" name="b1"/><a:graphic><a:graphicData>${box}</a:graphicData></a:graphic></wp:inline></w:drawing></w:r></w:p></w:body></w:document>`)
+    zip.file('word/document.xml', `<w:document ${WNS}><w:body>${bodyPara}<w:p><w:r><w:drawing><wp:inline><wp:extent cx="${200 * 9525}" cy="${100 * 9525}"/><wp:docPr id="1" name="b1"/><a:graphic><a:graphicData>${box}</a:graphicData></a:graphic></wp:inline></w:drawing></w:r></w:p></w:body></w:document>`)
     zip.file('word/_rels/document.xml.rels', '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"></Relationships>')
     const doc = await parseDocx(await OfficePackage.load(await zip.generateAsync({ type: 'uint8array' })))
     const { createCanvas } = await import('canvas')

@@ -12,7 +12,7 @@ async function bigSheet() {
     for (let c = 0; c < 20; c++) cells.push({ ref: `${String.fromCharCode(65 + c)}${r}`, v: `R${r}C${c}` })
     rows.push({ r, cells })
   }
-  const bytes = await buildXlsx([{ name: 'Big', rows, merges: ['B50:D52'] }])
+  const bytes = await buildXlsx([{ name: 'Big', rows, merges: ['B50:D60'] }])
   const doc = await parseXlsx(await OfficePackage.load(bytes))
   const sheet = doc.sheets[0]
   return { sheet, m: computeMetrics(sheet) }
@@ -44,14 +44,27 @@ describe('xlsx viewport culling', () => {
     }
     expect(diff).toBe(0)
   })
-  test('merged range paints when its anchor sits outside the viewport', async () => {
+  test('merged range paints when its anchor sits above the viewport', async () => {
     const { sheet, m } = await bigSheet()
-    // B50:D52 merge anchor (row 50) is above a viewport starting at row 53.
-    const vy = 53 * 15
-    const view = createCanvas(m.widthPx, 120)
-    renderSheet(sheet, view.getContext('2d') as never, m, undefined, {}, { x: 0, y: vy, width: m.widthPx, height: 120 })
-    const { data } = pixels(view)
-    expect(Array.from(data).some(v => v < 250)).toBe(true)
+    // B50:D52 merge anchor (row 50, y~735) sits above a viewport starting at
+    // row 53 (y 795): the range reaches in and must paint identically.
+    const vx = 0, vy = 53 * 15, vw = m.widthPx, vh = 120
+    const full = createCanvas(m.widthPx, m.heightPx)
+    renderSheet(sheet, full.getContext('2d') as never, m, undefined, {})
+    const view = createCanvas(vw, vh)
+    renderSheet(sheet, view.getContext('2d') as never, m, undefined, {}, { x: vx, y: vy, width: vw, height: vh })
+    const a = pixels(full)
+    const b = pixels(view)
+    let diff = 0
+    for (let y = 0; y < vh; y++) {
+      for (let x = 0; x < vw; x++) {
+        const i = (y * vw + x) * 4, j = ((vy + y) * a.width + (vx + x)) * 4
+        for (let k = 0; k < 3; k++) if (Math.abs(b.data[i + k] - a.data[j + k]) > 0) { diff++; break }
+      }
+    }
+    expect(diff).toBe(0)
+    // And the merged text is really in the window (not vacuously white).
+    expect(Array.from(b.data).some(v => v < 250)).toBe(true)
   })
   test('omitted viewport paints the whole sheet as before', async () => {
     const { sheet, m } = await bigSheet()

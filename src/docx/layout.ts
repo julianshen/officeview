@@ -7,6 +7,7 @@ import type { DocxBlock, DocxDocument, DocxImage, DocxParagraph, DocxSection, Do
 import { paintDrawing } from './drawing'
 import type { ContentPaintAssets } from '../drawing/content'
 import { fontFamilyCss } from './styles'
+import { withFallbackFonts } from '../core/fonts/fallback'
 import { emuToPx } from '../core/geometry'
 import { twipsToPx } from '../core/geometry'
 import { resolveColor } from '../core/color'
@@ -154,19 +155,19 @@ const LINE_HEIGHT_FACTOR = 1.35
 const TAB_STOP_PX = twipsToPx(720) // 0.5 inch
 
 /** Build a measure function on any 2D context, memoized by style key. */
-export function createMeasurer(ctx: CanvasRenderingContext2D): MeasureFn {
+export function createMeasurer(ctx: CanvasRenderingContext2D, familyCss: (family: string) => string = fontFamilyCss): MeasureFn {
   const cache = new Map<string, number>()
   const measure: MeasureFn = (text, style) => {
     const key = `${text}\u0000${style.fontFamily}|${style.fontSizePt}|${style.bold ? 1 : 0}|${style.italic ? 1 : 0}`
     const hit = cache.get(key)
     if (hit !== undefined) return hit
-    ctx.font = fontCss(style)
+    ctx.font = fontCss(style, familyCss)
     const w = ctx.measureText(text).width
     cache.set(key, w)
     return w
   }
   measure.metrics = (style, text = 'Mg') => {
-    ctx.font = fontCss(style)
+    ctx.font = fontCss(style, familyCss)
     const m = ctx.measureText(text)
     return { ascent: m.actualBoundingBoxAscent, descent: m.actualBoundingBoxDescent,
       normalHeight: (m.fontBoundingBoxAscent ?? (m as TextMetrics & { emHeightAscent?: number }).emHeightAscent ?? m.actualBoundingBoxAscent) + (m.fontBoundingBoxDescent ?? (m as TextMetrics & { emHeightDescent?: number }).emHeightDescent ?? m.actualBoundingBoxDescent) }
@@ -174,12 +175,12 @@ export function createMeasurer(ctx: CanvasRenderingContext2D): MeasureFn {
   return measure
 }
 
-export function fontCss(s: RunStyle): string {
+export function fontCss(s: RunStyle, familyCss: (family: string) => string = fontFamilyCss): string {
   const parts: string[] = []
   if (s.italic) parts.push('italic')
   if (s.bold) parts.push('bold')
   parts.push(`${s.fontSizePt}pt`)
-  parts.push(fontFamilyCss(s.fontFamily))
+  parts.push(familyCss(s.fontFamily))
   return parts.join(' ')
 }
 
@@ -746,7 +747,8 @@ export function renderPages(
   ctx.textBaseline = 'alphabetic'
   ctx.fillStyle = '#000000'
   let lastFont = ''
-  const measure = createMeasurer(ctx)
+  const resolveFamily = withFallbackFonts(fontFamilyCss, options?.assets?.fallbackFonts)
+  const measure = createMeasurer(ctx, resolveFamily)
   const firstNumber = options?.pageNumberStart ?? 1
   const totalPages = options?.totalPages ?? pages.length
   pages.forEach((page, pageIndex) => {
@@ -766,7 +768,7 @@ export function renderPages(
         const baseline = line.baselinePx ?? line.yPx + maxAscent
         const record = (ctx as TextRecordingContext)[RECORD_TEXT]
         if (!line.segs.length && line.logical && record) {
-          if (line.defaultStyle) { ctx.font = fontCss(line.defaultStyle); lastFont = ctx.font }
+          if (line.defaultStyle) { ctx.font = fontCss(line.defaultStyle, resolveFamily); lastFont = ctx.font }
           record('', line.xPx, baseline, 0, line.logical)
         }
         // list marker sits left of the (indented) text
@@ -777,7 +779,7 @@ export function renderPages(
             bold: !!line.segs[0]?.run.bold,
             italic: !!line.segs[0]?.run.italic,
           }
-          const font = fontCss(markerStyle)
+          const font = fontCss(markerStyle, resolveFamily)
           if (font !== lastFont) {
             ctx.font = font
             lastFont = font
@@ -786,7 +788,7 @@ export function renderPages(
           ctx.fillText(line.marker.text.trimEnd(), line.xPx - line.marker.widthPx, baseline)
         }
         for (const seg of line.segs) {
-          const fontCssStr = fontCss(seg.style)
+          const fontCssStr = fontCss(seg.style, resolveFamily)
           if (fontCssStr !== lastFont) {
             ctx.font = fontCssStr
             lastFont = fontCssStr

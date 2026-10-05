@@ -6,6 +6,7 @@ import type { FontDiagnostic } from '../core/fonts/types'
  * used by <OfficeDoc> (React) and the pixel-diff/golden harness.
  */
 import { collectDocImages, createMeasurer, layoutDocx, renderPages } from '../docx/layout'
+import { fontFamilyCss as fontFamilyCssDocx } from '../docx/styles'
 import { decodeImageAsset, releaseDecodedImage, type ImageCandidates, type ImageDecodeFn } from '../core/images'
 import { normalizeWatermark, type ResolvedWatermark, type WatermarkOptions } from '../core/watermark'
 import { computeMetrics, renderSheet } from '../xlsx/render'
@@ -40,7 +41,7 @@ export interface Paintable {
   paint: (ctx: CanvasRenderingContext2D) => void
 }
 
-async function measurerFromDoc(): Promise<ReturnType<typeof createMeasurer>> {
+async function measurerFromDoc(resolve: (family: string) => string): Promise<ReturnType<typeof createMeasurer>> {
   // headless-safe: DOM canvas when available (browser/jsdom), node-canvas fallback
   let ctx: CanvasRenderingContext2D | null = null
   try {
@@ -59,7 +60,7 @@ async function measurerFromDoc(): Promise<ReturnType<typeof createMeasurer>> {
     ctx = createCanvas(4, 4).getContext('2d')
   }
   if (!ctx) throw new Error('no 2d context available for measurement')
-  return createMeasurer(ctx)
+  return createMeasurer(ctx, resolve)
 }
 
 /** Options for stamping a watermark across every painted unit. */
@@ -140,7 +141,7 @@ export function getPaintables(
 ): Promise<PaintableArray> {
   const watermark = normalizeWatermark(options?.watermark as WatermarkOptions | undefined)
   if ('sections' in doc) {
-    return measurerFromDoc().then(async (measure) => {
+    return measurerFromDoc(withFallbackFonts(fontFamilyCssDocx, options?.fallbackFonts)).then(async (measure) => {
       const pages = layoutDocx(doc, measure)
       // One decode per unique candidate pair; failures degrade to a blank slot.
       const docImages = collectDocImages(doc)

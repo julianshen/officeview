@@ -36,12 +36,11 @@ export function withFallbackFonts(resolve: FontResolver, options?: FallbackFonts
   if (!chain.length) return resolve
   return (family: string): string => {
     const raw = resolve(family)
-    if (/^".*",/.test(raw)) {
-      const tail = /,\s*([A-Za-z-]+)\s*$/.exec(raw)
-      if (tail && GENERICS.has(tail[1].toLowerCase())) {
-        return `${raw.slice(0, raw.length - tail[0].length)}, ${chain.join(', ')}, ${tail[1]}`
-      }
-      return `${raw}, ${chain.join(', ')}`
+    // A trailing generic marks a full stack (quoted or not): splice the chain
+    // before it and leave the head exactly as the resolver authored it.
+    const tail = /,\s*([A-Za-z-]+)\s*$/.exec(raw)
+    if (tail && GENERICS.has(tail[1].toLowerCase())) {
+      return `${raw.slice(0, raw.length - tail[0].length)}, ${chain.join(', ')}, ${tail[1]}`
     }
     return `${quote(raw)}, ${chain.join(', ')}, ${SERIF.test(raw) ? 'serif' : 'sans-serif'}`
   }
