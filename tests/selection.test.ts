@@ -16,6 +16,31 @@ import {
   type CaretPos,
 } from '../src/core/selection'
 import { buildDocx, buildXlsx } from '../src/testdata/ooxml-builders'
+import { RECORD_TEXT, type TextRecordingContext } from '../src/core/text-recording'
+
+test('optional cell clip retains full source while bounding rectangles and strict/non-strict carets', async () => {
+  const index = await buildTextIndex([{ spec: { widthPx: 200, heightPx: 200 }, paint: ctx => {
+    ctx.font = '20px sans-serif'; ctx.save(); ctx.transform(2, .3, .5, 1, 30, 40)
+    const m = ctx.getTransform()
+    const clip = { x: 0, y: 0, width: 30, height: 40, transform: { a: m.a, b: m.b, c: m.c, d: m.d, e: m.e, f: m.f } }
+    const source = { text: 'ABCDE' }
+    ;(ctx as TextRecordingContext)[RECORD_TEXT]!('ABCDE', 0, 20, 100, { source, start: 0, end: 5, clip })
+    ctx.restore()
+    expect([ctx.getTransform().e, ctx.getTransform().f]).toEqual([0, 0])
+  } }])
+  const line = index.pages[0].lines[0]
+  const range = { start: { pageIndex: 0, lineIndex: 0, charIndex: 0 }, end: { pageIndex: 0, lineIndex: 0, charIndex: 5 } }
+  expect(textForRange(index, range)).toBe('ABCDE')
+  const rect = rectsForSelectionOnPage(index, 0, range)[0]
+  expect(rect.x + rect.width).toBeLessThanOrEqual(110)
+  expect(rect.y + rect.height).toBeLessThanOrEqual(89)
+  // Local (15,20) is visible; local (80,20) is clipped past the cell edge.
+  for (const strict of [true, false]) {
+    expect(hitTest(index, 0, 70, 64.5, { strict })).toEqual({ pageIndex: 0, lineIndex: 0, charIndex: 1 })
+    expect(hitTest(index, 0, 200, 84, { strict })).toBeUndefined()
+  }
+  expect(line.text).toBe('ABCDE')
+})
 
 async function indexDocx(paras: Parameters<typeof buildDocx>[0]) {
   const doc = await parseDocx(await OfficePackage.load(await buildDocx(paras)))
@@ -417,4 +442,199 @@ describe('selection across three pages', () => {
     })
     expect(reversed).toEqual(forward)
   })
+})
+
+describe('selection of transformed text', () => {
+  async function affineIndex() {
+    return buildTextIndex([{ spec: { widthPx: 500, heightPx: 300 }, paint: ctx => {
+      ctx.font = '20px sans-serif'; ctx.setTransform(2, 1, .5, 3, 100, 50); ctx.fillText('ABCD', 10, 20)
+    } }])
+  }
+
+  test('whole and partial highlights bound all four transformed text-band corners', async () => {
+    const index = await affineIndex()
+    const { createCanvas } = await import('canvas')
+    const c = createCanvas(4, 4).getContext('2d'); c.font = '20px sans-serif'
+    const width = c.measureText('ABCD').width
+    const whole = rectsForSelectionOnPage(index, 0, { start: { pageIndex: 0, lineIndex: 0, charIndex: 0 }, end: { pageIndex: 0, lineIndex: 0, charIndex: 4 } })[0]
+    expect(whole.x).toBeCloseTo(121.5)
+    expect(whole.y).toBeCloseTo(69)
+    expect(whole.width).toBeCloseTo(2 * width + 11)
+    expect(whole.height).toBeCloseTo(width + 66)
+    const partial = rectsForSelectionOnPage(index, 0, { start: { pageIndex: 0, lineIndex: 0, charIndex: 1 }, end: { pageIndex: 0, lineIndex: 0, charIndex: 3 } })[0]
+    expect(partial.x).toBeCloseTo(121.5 + width / 2)
+    expect(partial.y).toBeCloseTo(69 + width / 4)
+    expect(partial.width).toBeCloseTo(width + 11)
+    expect(partial.height).toBeCloseTo(width / 2 + 66)
+    expect(textForRange(index, { start: { pageIndex: 0, lineIndex: 0, charIndex: 1 }, end: { pageIndex: 0, lineIndex: 0, charIndex: 3 } })).toBe('BC')
+  })
+
+  test('strict hit testing inverse-maps the visible band rather than accepting its bounding box', async () => {
+    const index = await affineIndex()
+    const { createCanvas } = await import('canvas')
+    const c = createCanvas(4, 4).getContext('2d'); c.font = '20px sans-serif'
+    const width = c.measureText('ABCD').width
+    expect(hitTest(index, 0, 127 + 1.5 * width, 102 + .75 * width, { strict: true })).toEqual({ pageIndex: 0, lineIndex: 0, charIndex: 3 })
+    // This point is inside the axis-aligned highlight but outside the sheared text band.
+    expect(hitTest(index, 0, 122.5, 134 + width, { strict: true })).toBeUndefined()
+  })
+
+  test('rotation and horizontal/vertical flips preserve character progression across runs', async () => {
+    const index = await buildTextIndex([{ spec: { widthPx: 600, heightPx: 400 }, paint: ctx => {
+      ctx.font = '20px sans-serif'; ctx.translate(500, 200); ctx.rotate(Math.PI / 2); ctx.scale(-1, -1)
+      ctx.fillText('AB', 10, 20); ctx.fillText('CD', 10 + ctx.measureText('AB').width, 20)
+    } }])
+    const { createCanvas } = await import('canvas')
+    const c = createCanvas(4, 4).getContext('2d'); c.font = '20px sans-serif'
+    const first = c.measureText('AB').width, second = c.measureText('CD').width
+    expect(index.pages[0].lines[0].text).toBe('ABCD')
+    expect(hitTest(index, 0, 514, 190 - first * .5, { strict: true })).toEqual({ pageIndex: 0, lineIndex: 0, charIndex: 1 })
+    expect(hitTest(index, 0, 514, 190 - first - second * .5, { strict: true })).toEqual({ pageIndex: 0, lineIndex: 0, charIndex: 3 })
+    expect(hitTest(index, 0, 550, 190 - first, { strict: true })).toBeUndefined()
+  })
+
+  test('visible text in separated PPTX shapes receives strict hits on the correct line', async () => {
+    const { parsePptx } = await import('../src/pptx/parse')
+    const { buildPptx } = await import('../src/testdata/ooxml-builders')
+    const doc = await parsePptx(await OfficePackage.load(await buildPptx([
+      { off: ['914400', '914400'], ext: ['4572000', '1828800'], paragraphs: [{ runs: [{ text: 'needle-one' }] }] },
+      { off: ['914400', '3657600'], ext: ['4572000', '1828800'], paragraphs: [{ runs: [{ text: 'needle-two' }] }] },
+    ])))
+    const index = await buildTextIndex(await getPaintables(doc))
+    expect(hitTest(index, 0, 110, 110, { strict: true })?.lineIndex).toBe(0)
+    expect(hitTest(index, 0, 110, 398, { strict: true })?.lineIndex).toBe(1)
+    expect(hitTest(index, 0, 110, 250, { strict: true })).toBeUndefined()
+  })
+})
+
+
+test('a mixed index retains strict hits on handwritten spans without affine metadata', async () => {
+  const index = await buildTextIndex([{ spec: { widthPx: 500, heightPx: 300 }, paint: ctx => { ctx.font = '20px sans-serif'; ctx.translate(100, 50); ctx.fillText('transformed', 0, 20) } }])
+  index.pages[0].lines.push({ text: 'manual', y: 200, top: 188, bottom: 203, spans: [{ text: 'manual', x: 50, y: 200, width: 60, fontSize: 12 }] })
+  expect(hitTest(index, 0, 80, 195, { strict: true })).toEqual({ pageIndex: 0, lineIndex: 1, charIndex: 3 })
+})
+
+describe('ordinary line drag compatibility on transformed indexes', () => {
+  test.each([
+    { name: 'identity', a: 1, d: 1, e: 0, f: 0, mixed: false },
+    { name: 'translated and scaled', a: 2, d: 3, e: 100, f: 50, mixed: false },
+    { name: 'mixed rotated and plain', a: 1, d: 1, e: 0, f: 0, mixed: true },
+  ])('$name rightward and leftward drags stay on the containing short line', async ({ a, d, e, f, mixed }) => {
+    const index = await buildTextIndex([{ spec: { widthPx: 1000, heightPx: 600 }, paint: ctx => {
+      ctx.font = '20px sans-serif'; ctx.setTransform(a, 0, 0, d, e, f)
+      ctx.fillText('short', 10, 30)
+      ctx.fillText('a much longer line of text stretching to the right', 10, 60)
+      if (mixed) { ctx.setTransform(0, 1, -1, 0, 450, 5); ctx.fillText('rotated', 10, 30) }
+    } }])
+    const shortLine = index.pages[0].lines.findIndex(line => line.text === 'short')
+    const pointerY = f + d * 25
+    expect(hitTest(index, 0, e + a * 400, pointerY)).toEqual({ pageIndex: 0, lineIndex: shortLine, charIndex: 5 })
+    expect(hitTest(index, 0, e - a * 400, pointerY)).toEqual({ pageIndex: 0, lineIndex: shortLine, charIndex: 0 })
+    // Drag snapping does not turn a blank click beyond the line into a strict text hit.
+    expect(hitTest(index, 0, e + a * 400, pointerY, { strict: true })).toBeUndefined()
+    expect(hitTest(index, 0, e - a * 400, pointerY, { strict: true })).toBeUndefined()
+  })
+})
+
+describe('nearest ordinary line between text bands', () => {
+  test.each([
+    { name: 'identity', a: 1, d: 1, e: 0, f: 0, handwritten: false },
+    { name: 'translated and scaled', a: 2, d: 3, e: 100, f: 50, handwritten: false },
+    { name: 'mixed recorded and handwritten metadata', a: 1, d: 1, e: 0, f: 0, handwritten: true },
+  ])('$name inter-line drags follow nearest y even far beyond the short line', async ({ a, d, e, f, handwritten }) => {
+    const index = await buildTextIndex([{ spec: { widthPx: 1000, heightPx: 600 }, paint: ctx => {
+      ctx.font = '20px sans-serif'; ctx.setTransform(a, 0, 0, d, e, f)
+      ctx.fillText('short', 10, 30)
+      ctx.fillText('a much longer line of text stretching to the right', 10, 60)
+    } }])
+    if (handwritten) delete index.pages[0].lines[1].spans[0].placement
+    for (const localY of [36, 37, 38, 39]) {
+      expect(hitTest(index, 0, e + a * 400, f + d * localY)).toEqual({ pageIndex: 0, lineIndex: 0, charIndex: 5 })
+      expect(hitTest(index, 0, e - a * 400, f + d * localY)).toEqual({ pageIndex: 0, lineIndex: 0, charIndex: 0 })
+      expect(hitTest(index, 0, e + a * 400, f + d * localY, { strict: true })).toBeUndefined()
+    }
+    expect(hitTest(index, 0, e + a * 400, f + d * 40)?.lineIndex).toBe(1)
+  })
+})
+
+
+test('ordinary recorded pages retain y-first drag carets on legacy empty manual lines', async () => {
+  const index = await buildTextIndex([{ spec: { widthPx: 200, heightPx: 120 }, paint: ctx => { ctx.font = '20px sans-serif'; ctx.fillText('ordinary', 0, 80) } }])
+  index.pages[0].lines.unshift({ text: '', spans: [], y: 20, top: 10, bottom: 30 })
+  expect(hitTest(index, 0, 150, 20)).toEqual({ pageIndex: 0, lineIndex: 0, charIndex: 0 })
+  expect(hitTest(index, 0, 150, 35)).toEqual({ pageIndex: 0, lineIndex: 0, charIndex: 0 })
+})
+
+test('handwritten same-band lines use horizontal distance while gap drags keep nearest y', () => {
+  const line = (text: string, x: number, y: number) => ({ text, y, top: y - 10, bottom: y + 4, spans: [{ text, x, y, width: 40, fontSize: 12 }] })
+  const index = { pages: [{ index: 0, lines: [line('left', 0, 20), line('right', 200, 20), line('lower', 400, 60)] }] }
+  expect(hitTest(index, 0, 245, 20)).toEqual({ pageIndex: 0, lineIndex: 1, charIndex: 5 })
+  expect(hitTest(index, 0, 190, 20)).toEqual({ pageIndex: 0, lineIndex: 1, charIndex: 0 })
+  expect(hitTest(index, 0, -100, 20)).toEqual({ pageIndex: 0, lineIndex: 0, charIndex: 0 })
+  expect(hitTest(index, 0, 500, 30)).toEqual({ pageIndex: 0, lineIndex: 0, charIndex: 4 })
+})
+
+test('stacked actual-paint carets snap to complete combining and emoji clusters', async () => {
+  const { paintTextBody } = await import('../src/drawing/text-paint')
+  const source = 'Ae\u0301👩🏽‍💻B'
+  const body = { direction: 'wordArtVert' as const, paragraphs: [{ runs: [{ text: source, fontSizePt: 16 }], align: 'left' as const, level: 0 }],
+    anchor: 't' as const, wrap: true, insetLeftEmu: 0, insetRightEmu: 0, insetTopEmu: 0, insetBottomEmu: 0 }
+  const index = await buildTextIndex([{ spec: { widthPx: 150, heightPx: 250 }, paint: ctx => paintTextBody(body, ctx, 0, 0, 150, 250, face => face) }])
+  const line = index.pages[0].lines[0]
+  expect(line.text).toBe(source)
+  const boundaries = [0, 1, 3, 10, 11]
+  for (const span of line.spans) {
+    const placement = span.placement!
+    const x = placement.transform.e + placement.x + placement.width * .43
+    const y = placement.transform.f + placement.y
+    const hit = hitTest(index, 0, x, y, { strict: true })
+    expect(hit).toBeDefined()
+    expect(boundaries).toContain(hit!.charIndex)
+  }
+  expect(textForRange(index, { start: { pageIndex: 0, lineIndex: 0, charIndex: 2 }, end: { pageIndex: 0, lineIndex: 0, charIndex: 5 } })).toBe('e\u0301👩🏽‍💻')
+  expect(hitTest(index, 0, 149, 249, { strict: true })).toBeUndefined()
+})
+
+test.each([
+  ['wordArtVert', 'STACK'], ['wordArtVertRtl', 'STACK'], ['eaVert', '中文'],
+] as const)('default %s hits follow each upright glyph while ordinary horizontal drags keep y-first behavior', async (direction, text) => {
+  const { paintTextBody } = await import('../src/drawing/text-paint')
+  const stacked = { direction, paragraphs: [{ runs: [{ text, fontSizePt: 12 }], align: 'left' as const, level: 0 }],
+    anchor: 't' as const, wrap: true, insetLeftEmu: 0, insetRightEmu: 0, insetTopEmu: 0, insetBottomEmu: 0 }
+  const index = await buildTextIndex([{ spec: { widthPx: 200, heightPx: 200 }, paint: ctx => paintTextBody(stacked, ctx, 0, 0, 200, 200, face => face) }])
+  expect(index.pages[0].lines[0].spans.map((span, i) => {
+    const p = span.placement!, x = p.transform.e + p.x + p.width * .8, y = p.transform.f + p.y
+    expect(hitTest(index, 0, x, y, { strict: true })?.charIndex).toBe(i + 1)
+    return hitTest(index, 0, x, y)?.charIndex
+  })).toEqual([...text].map((_, i) => i + 1))
+  expect(hitTest(index, 0, 199, 199, { strict: true })).toBeUndefined()
+})
+
+// Whole-line clockwise 'vert' (DrawingML vert / Word tbRl) rotates CJK too. Probe
+// each glyph centre via the affine and assert the caret resolves per-grapheme.
+test.each([['vert', '中文'], ['vert270', '中文']] as const)('whole-line %s rotates CJK and resolves per-glyph carets', async (direction, text) => {
+  const { paintTextBody } = await import('../src/drawing/text-paint')
+  const stacked = { direction, paragraphs: [{ runs: [{ text, fontSizePt: 12 }], align: 'left' as const, level: 0 }],
+    anchor: 't' as const, wrap: true, insetLeftEmu: 0, insetRightEmu: 0, insetTopEmu: 0, insetBottomEmu: 0 }
+  const index = await buildTextIndex([{ spec: { widthPx: 200, heightPx: 200 }, paint: ctx => paintTextBody(stacked, ctx, 0, 0, 200, 200, face => face) }])
+  const line = index.pages[0].lines[0]
+  const span = line.spans[0]
+  const p = span.placement!, m = p.transform
+  // Whole-line rotation: CJK transform is a rotation, never identity.
+  expect(m.a === 1 && m.b === 0 && m.c === 0 && m.d === 1).toBe(false)
+  // Probe each glyph centre and assert the caret resolves per-grapheme.
+  const n = [...text].length
+  for (let i = 0; i < n; i++) {
+    const localX = p.x + (i + .5) * (p.width / n)
+    const localY = p.y
+    const pageX = m.e + m.a * localX + m.c * localY
+    const pageY = m.f + m.b * localX + m.d * localY
+    expect(hitTest(index, 0, pageX, pageY, { strict: true })?.charIndex).toBe(i + 1)
+  }
+})
+
+test('word expansion respects complete source graphemes', () => {
+  const line = { text: 'e\u0301 👩🏽‍💻', y: 20, top: 10, bottom: 25, spans: [{ text: 'e\u0301 👩🏽‍💻', x: 0, y: 20, width: 100, fontSize: 16 }] }
+  expect(wordRangeAt(line, 1)).toEqual({ start: 0, end: 2 })
+  expect(wordRangeAt(line, 5)).toEqual({ start: 3, end: 10 })
 })

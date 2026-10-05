@@ -1,12 +1,18 @@
+import { attemptedMalformedRelationshipIssue, malformedRelationshipAttempt, prepareCompatibleDrawingContent, prepareDrawingContent, reserveDrawingContent, type DrawingContent } from '../drawing/content'
+import { drawingPartContext, partRelationshipNodes, reserveDrawingNode, DRAWING_GROUP_DEPTH, contentDiagnostic, type ContentDiagnostic } from '../drawing/parts'
+import { parseEmbeddedFonts } from '../core/fonts/parts'
 /** Parse PPTX parts (presentation.xml, slides/slideN.xml) into PptxDocument. */
 import type { OfficePackage } from '../core/zip'
-import { attrs, elementChildren, getChildren, textOf, type XmlNode } from '../core/xml'
+import { attrs, elementChildren, getChildren, orderedChildren, parseXmlOrdered, textOf, type XmlNode } from '../core/xml'
 import { hexRgbToCss } from '../core/color'
-import type { PptxDocument, PptxImageRef, PptxParagraph, PptxShape, PptxSlide, PptxTable, PptxTableBorders, PptxTableCell, PptxTableRow, PptxTextBody, PptxTextRun } from './types'
+import type { PptxDiagnostic, PptxDocument, PptxImageRef, PptxShape, PptxSlide, PptxSource, PptxTable, PptxTableBorders, PptxTableCell, PptxTableRow, PptxTextBody, PptxParagraph } from './types'
+import { pptxCoverage, supportedChoiceRequirements } from '../drawing/coverage'
 import { sniffImageMime } from '../core/images'
+import { emuToPx } from '../core/geometry'
+import { parseGeometry, resolveGeometry } from '../drawing/geometry'
+import { parseDrawingColor, parseFillDefinition, parseThemeContext, resolveDrawingColor, resolveDrawingStyle, resolveFill, type DrawingColor, type DrawingIssue, type ThemeContext } from '../drawing/style'
 
-const DEFAULT_INSET_LR = 91440
-const DEFAULT_INSET_TB = 45720
+import { parseTextBody, textFontDefaults, type InheritedTextLayer } from './text-parse'
 
 function num(v: string | undefined, dflt = 0): number {
   const n = v === undefined ? NaN : parseFloat(v)
@@ -16,65 +22,6 @@ function num(v: string | undefined, dflt = 0): number {
 function colorOf(srgbClr: XmlNode | undefined): string | undefined {
   if (!srgbClr) return undefined
   return hexRgbToCss(attrs(srgbClr).val as string)
-}
-
-function parseAlign(v: string | undefined): PptxParagraph['align'] {
-  switch (v) {
-    case 'ctr': return 'center'
-    case 'r': return 'right'
-    case 'just': return 'justify'
-    default: return 'left'
-  }
-}
-
-function parseRun(r: XmlNode, inherited?: Partial<PptxTextRun>): PptxTextRun {
-  const rPr = getChildren(r, 'rPr')[0]
-  const run: PptxTextRun = { text: textOf(getChildren(r, 't')[0]), ...inherited }
-  if (rPr) {
-    const a = attrs(rPr)
-    if (a.b !== undefined) run.bold = a.b === '1' || a.b === 'true'
-    if (a.i !== undefined) run.italic = a.i === '1' || a.i === 'true'
-    if (a.sz !== undefined) run.fontSizePt = num(a.sz as string) / 100
-    if (a.typeface !== undefined) run.fontFamily = a.typeface as string
-    run.color = colorOf(getChildren(getChildren(rPr, 'solidFill')[0], 'srgbClr')[0])
-  }
-  return run
-}
-
-function parseTextBody(txBody: XmlNode): PptxTextBody {
-  const bodyPr = getChildren(txBody, 'bodyPr')[0]
-  const ba = attrs(bodyPr)
-  const body: PptxTextBody = {
-    paragraphs: [],
-    anchor: (ba.anchor as 't' | 'ctr' | 'b') ?? 't',
-    insetLeftEmu: num(ba.lIns as string, DEFAULT_INSET_LR),
-    insetRightEmu: num(ba.rIns as string, DEFAULT_INSET_LR),
-    insetTopEmu: num(ba.tIns as string, DEFAULT_INSET_TB),
-    insetBottomEmu: num(ba.bIns as string, DEFAULT_INSET_TB),
-    wrap: ba.wrap !== 'none',
-  }
-  for (const p of getChildren(txBody, 'p')) {
-    const pPr = getChildren(p, 'pPr')[0]
-    const para: PptxParagraph = {
-      runs: [],
-      align: parseAlign(attrs(pPr).algn as string | undefined),
-      bullet: pPr ? getChildren(pPr, 'buChar').length > 0 : false,
-      level: num(attrs(pPr).lvl as string, 0),
-    }
-    let prevEnd: Partial<PptxTextRun> = {}
-    for (const [name, node] of elementChildren(p)) {
-      if (name === 'r') {
-        para.runs.push(parseRun(node, prevEnd))
-        const run = para.runs[para.runs.length - 1]
-        prevEnd = { fontSizePt: run.fontSizePt, color: run.color, bold: run.bold, fontFamily: run.fontFamily }
-      } else if (name === 'br') {
-        para.runs.push({ text: '\n', ...prevEnd })
-      }
-    }
-    // paragraph with no runs but a pPr still takes vertical space — keep it
-    body.paragraphs.push(para)
-  }
-  return body
 }
 
 /**
@@ -87,14 +34,11 @@ async function layoutPlaceholderGeometry(
   slidePath: string,
 ): Promise<Map<string, { x: number; y: number; w: number; h: number }>> {
   const out = new Map<string, { x: number; y: number; w: number; h: number }>()
-  const dir = slidePath.slice(0, slidePath.lastIndexOf('/'))
-  const base = slidePath.slice(slidePath.lastIndexOf('/') + 1)
-  const rels = await pkg.xml(`${dir}/_rels/${base}.rels`)
-  if (!rels) return out
+  const rels = await partRelationshipNodes(pkg, slidePath)
   let layoutPath: string | undefined
-  for (const rel of getChildren(rels, 'Relationship')) {
+  for (const rel of rels) {
     const a = attrs(rel)
-    if ((a.Type as string | undefined)?.endsWith('/slideLayout') && a.Target) {
+    if (a.TargetMode !== 'External' && (a.Type as string | undefined)?.endsWith('/slideLayout') && a.Target) {
       layoutPath = resolveTarget(slidePath, a.Target)
       break
     }
@@ -114,9 +58,12 @@ async function layoutPlaceholderGeometry(
       const ea = attrs(getChildren(xfrm, 'ext')[0])
       const nvSpPr = getChildren(node, 'nvSpPr')[0]
       const ph = nvSpPr ? getChildren(getChildren(nvSpPr, 'nvPr')[0], 'ph')[0] : undefined
+      if (!ph) continue
       const pa = attrs(ph)
       const type = (pa.type as string | undefined) ?? 'body'
       const idx = pa.idx !== undefined ? parseInt(pa.idx as string, 10) || 0 : 0
+      // Collect the closest layout first; the master only fills missing slots.
+      if (out.has(`${type}|${idx}`)) continue
       out.set(`${type}|${idx}`, {
         x: num(oa.x as string),
         y: num(oa.y as string),
@@ -128,13 +75,11 @@ async function layoutPlaceholderGeometry(
 
   collect(await pkg.xml(layoutPath))
   // a layout may itself defer geometry to the master
-  const layoutDir = layoutPath.slice(0, layoutPath.lastIndexOf('/'))
-  const layoutBase = layoutPath.slice(layoutPath.lastIndexOf('/') + 1)
-  const layoutRels = await pkg.xml(`${layoutDir}/_rels/${layoutBase}.rels`)
-  if (layoutRels) {
-    for (const rel of getChildren(layoutRels, 'Relationship')) {
+  const layoutRels = await partRelationshipNodes(pkg, layoutPath)
+  if (layoutRels.length) {
+    for (const rel of layoutRels) {
       const a = attrs(rel)
-      if ((a.Type as string | undefined)?.endsWith('/slideMaster') && a.Target) {
+      if (a.TargetMode !== 'External' && (a.Type as string | undefined)?.endsWith('/slideMaster') && a.Target) {
         collect(await pkg.xml(resolveTarget(layoutPath, a.Target)))
         break
       }
@@ -143,72 +88,94 @@ async function layoutPlaceholderGeometry(
   return out
 }
 
-function parseShape(sp: XmlNode, slideImages?: Map<string, PptxImageRef>): PptxShape | undefined {
+/** Reject malformed transforms instead of coercing their numbers into a painted shape. */
+function parseTransform(xfrm: XmlNode | undefined): Pick<PptxShape, 'xEmu' | 'yEmu' | 'widthEmu' | 'heightEmu' | 'rotationDeg' | 'flipH' | 'flipV' | 'transformValid'> {
+  const oa = attrs(getChildren(xfrm, 'off')[0]), ea = attrs(getChildren(xfrm, 'ext')[0]), xa = attrs(xfrm)
+  const values = [oa.x, oa.y, ea.cx, ea.cy, xa.rot]
+  const valid = values.every(value => value === undefined || value.trim() !== '' && Number.isFinite(Number(value))) &&
+    num(ea.cx) >= 0 && num(ea.cy) >= 0
+  return {
+    xEmu: num(oa.x), yEmu: num(oa.y), widthEmu: num(ea.cx), heightEmu: num(ea.cy),
+    rotationDeg: num(xa.rot) / 60000,
+    flipH: xa.flipH === '1' || xa.flipH === 'true', flipV: xa.flipV === '1' || xa.flipV === 'true',
+    transformValid: valid,
+  }
+}
+
+function cssColor(color: DrawingColor): string {
+  return `#${[color.r, color.g, color.b].map(v => v.toString(16).padStart(2, '0')).join('').toUpperCase()}`
+}
+
+interface SlideTextInheritance {
+  layers(type: string, idx: number, placeholder: boolean): InheritedTextLayer[]
+}
+
+function parseShape(sp: XmlNode, slideImages: Map<string, PptxImageRef>, theme: ThemeContext, source: PptxSource, textDefaults?: XmlNode, inheritance?: SlideTextInheritance): PptxShape | undefined {
   const spPr = getChildren(sp, 'spPr')[0]
   if (!spPr) return undefined
   const xfrm = getChildren(spPr, 'xfrm')[0]
-  const off = xfrm ? getChildren(xfrm, 'off')[0] : undefined
-  const ext = xfrm ? getChildren(xfrm, 'ext')[0] : undefined
-  const oa = attrs(off)
-  const ea = attrs(ext)
-  const prstGeom = getChildren(spPr, 'prstGeom')[0]
-  const prst = attrs(prstGeom).prst as string | undefined
-  const geometry: PptxShape['geometry'] =
-    prst === 'ellipse' ? 'ellipse'
-    : prst === 'roundRect' ? 'roundRect'
-    : prst === 'rect' || prst === undefined ? 'rect'
-    : 'other'
-  const solidFill = getChildren(spPr, 'solidFill')[0]
-  const fill = colorOf(solidFill ? getChildren(solidFill, 'srgbClr')[0] : undefined)
-  const ln = getChildren(spPr, 'ln')[0]
-  const lineColor = colorOf(ln ? getChildren(ln, 'solidFill').flatMap((sf) => getChildren(sf, 'srgbClr'))[0] : undefined)
+  const drawingGeometry = parseGeometry(spPr)
+  const prst = drawingGeometry.preset
+  const drawingStyle = resolveDrawingStyle(spPr, getChildren(sp, 'style')[0], theme,
+    source.element === 'cxnSp' ? { fill: { kind: 'none' } } : {})
   const shape: PptxShape = {
-    xEmu: num(oa.x as string),
-    yEmu: num(oa.y as string),
-    widthEmu: num(ea.cx as string),
-    heightEmu: num(ea.cy as string),
-    geometry,
-    fill,
-    line: lineColor ? { color: lineColor, widthEmu: ln ? num(attrs(ln).w as string, 12700) : undefined } : undefined,
-    rotationDeg: xfrm ? (num(attrs(xfrm).rot as string, 0) / 60000) : 0,
+    ...parseTransform(xfrm),
+    geometry: prst === 'ellipse' ? 'ellipse' : prst === 'roundRect' ? 'roundRect' : prst === 'rect' ? 'rect' : 'other',
+    drawingGeometry, drawingStyle, presetName: prst, source, diagnostics: [],
+    // Retain the simple color fields consumed by existing clients.
+    fill: drawingStyle.fill?.kind === 'solid' ? cssColor(drawingStyle.fill.color) : undefined,
+    line: drawingStyle.line?.fill?.kind === 'solid' ? { color: cssColor(drawingStyle.line.fill.color), widthEmu: (drawingStyle.line.width ?? 1) * 9525 } : undefined,
   }
   const txBody = getChildren(sp, 'txBody')[0]
-  if (txBody) shape.textBody = parseTextBody(txBody)
-  // p:ph marks a placeholder; its geometry usually comes from the layout
+  if (txBody) {
+    const ph = getChildren(getChildren(getChildren(sp, 'nvSpPr')[0], 'nvPr')[0], 'ph')[0]
+    const pa = attrs(ph)
+    const inherited = inheritance?.layers(pa.type ?? 'body', pa.idx === undefined ? 0 : num(pa.idx), !!ph)
+    shape.textBody = parseTextBody(txBody, theme, textDefaults, textFontDefaults(getChildren(sp, 'style')[0], theme), inherited)
+    shape.diagnostics!.push(...(shape.textBody.diagnostics ?? []))
+  }
   const nvSpPr = getChildren(sp, 'nvSpPr')[0]
-  const ph = nvSpPr ? getChildren(getChildren(nvSpPr, 'nvPr')[0], 'ph')[0] : undefined
+  const ph = getChildren(getChildren(nvSpPr, 'nvPr')[0], 'ph')[0]
   if (ph) {
     const pa = attrs(ph)
-    shape.placeholder = {
-      type: (pa.type as string | undefined) ?? 'body',
-      idx: pa.idx !== undefined ? parseInt(pa.idx as string, 10) || 0 : 0,
-    }
+    shape.placeholder = { type: pa.type ?? 'body', idx: pa.idx !== undefined ? parseInt(pa.idx, 10) || 0 : 0 }
   }
-  // p:pic: <p:blipFill><a:blip r:embed="rIdN"/><a:srcRect/></p:blipFill>
-  if (slideImages) {
-    const blipFill = getChildren(sp, 'blipFill')[0]
-    if (blipFill) {
-      const blip = getChildren(blipFill, 'blip')[0]
-      const rid = attrs(blip).embed as string | undefined
-      const image = rid ? slideImages.get(rid) : undefined
-      if (image) {
-        const srcRect = getChildren(blipFill, 'srcRect')[0]
-        shape.image = image
-        if (srcRect) {
-          const sa = attrs(srcRect)
-          // srcRect units are 1/1000 of a percent
-          const frac = (v: string | undefined): number => (v !== undefined ? parseFloat(v) / 100000 : 0)
-          shape.image = {
-            ...image,
-            srcRect: {
-              l: frac(sa.l as string | undefined),
-              t: frac(sa.t as string | undefined),
-              r: frac(sa.r as string | undefined),
-              b: frac(sa.b as string | undefined),
-            },
-          }
-        }
+  // Native fallbacks may be p:sp with a:blipFill inside spPr, even alongside noFill.
+  const blipFill = getChildren(sp, 'blipFill')[0] ?? getChildren(spPr, 'blipFill')[0]
+  if (blipFill) {
+    const blip = getChildren(blipFill, 'blip')[0]
+    const rid = attrs(blip).embed
+    let opacity: number | undefined
+    for (const [name, effect] of orderedChildren(blip)) {
+      if (name === '#text') continue
+      if (name === 'alphaModFix') {
+        const amount = attrs(effect).amt
+        const value = amount === undefined ? 100000 : /^[+-]?\d+$/.test(amount.trim()) ? Number(amount) : NaN
+        if (!Number.isInteger(value) || value < 0 || value > 2147483647) {
+          shape.diagnostics!.push({ kind: 'invalid-paint', message: `Invalid fixed alpha amount ${amount ?? ''}`, feature: name, source })
+        } else if (value > 100000) {
+          // Canvas globalAlpha can attenuate, but cannot amplify source pixel alpha.
+          shape.diagnostics!.push({ kind: 'unsupported-effect', message: 'Image alpha amplification is deferred', feature: name, source })
+        } else opacity = (opacity ?? 1) * value / 100000
+      } else shape.diagnostics!.push({ kind: 'unsupported-effect', message: `Image effect ${name} is deferred`, feature: name, source })
+    }
+    const image = rid ? slideImages.get(rid) : undefined
+    if (image) {
+      const relativeRect = (node: XmlNode): { l: number; t: number; r: number; b: number } => {
+        const a = attrs(node)
+        return { l: num(a.l) / 100000, t: num(a.t) / 100000, r: num(a.r) / 100000, b: num(a.b) / 100000 }
       }
+      const srcRect = getChildren(blipFill, 'srcRect')[0]
+      const fillRect = getChildren(getChildren(blipFill, 'stretch')[0], 'fillRect')[0]
+      shape.image = { ...image,
+        ...(opacity !== undefined ? { opacity } : {}),
+        ...(srcRect ? { srcRect: relativeRect(srcRect) } : {}),
+        ...(fillRect ? { fillRect: relativeRect(fillRect) } : {}),
+      }
+      // The adapter paints blipFill natively; shared paint's deferred-fill issue does not apply.
+      drawingStyle.issues = drawingStyle.issues.filter(issue => !(issue.kind === 'unsupported-fill' && issue.feature === 'blipFill'))
+    } else {
+      shape.diagnostics!.push({ kind: 'missing-image', message: `No usable embedded image for ${rid ?? 'blipFill'}`, feature: 'blipFill', source })
     }
   }
   return shape
@@ -230,21 +197,19 @@ function resolveTarget(partPath: string, target: string): string {
 /** Load image parts referenced by a part's .rels file, keyed by rId. */
 async function loadSlideImages(pkg: OfficePackage, partPath: string): Promise<Map<string, PptxImageRef>> {
   const out = new Map<string, PptxImageRef>()
-  const relsPath = `${partPath.slice(0, partPath.lastIndexOf('/'))}/_rels/${partPath.slice(partPath.lastIndexOf('/') + 1)}.rels`
-  const rels = await pkg.xml(relsPath)
-  if (!rels) return out
+  const rels = await partRelationshipNodes(pkg, partPath)
   // one PptxImageRef per media part, so multiple rIds for the same part dedupe
   const byPath = new Map<string, PptxImageRef>()
-  for (const rel of getChildren(rels, 'Relationship')) {
+  for (const rel of rels) {
     const a = attrs(rel)
     const type = a.Type as string | undefined
-    if (!type || !type.includes('/image')) continue
+    if (!type || !type.includes('/image') || a.TargetMode === 'External' || !a.Target) continue
     const path = resolveTarget(partPath, (a.Target as string) ?? '')
     let ref = byPath.get(path)
     if (!ref) {
       const data = await pkg.bytes(path)
       if (!data) continue
-      ref = { data, mime: sniffImageMime(data) }
+      ref = { data, mime: sniffImageMime(data), partPath: path }
       byPath.set(path, ref)
     }
     if (a.Id) out.set(a.Id, ref)
@@ -252,90 +217,94 @@ async function loadSlideImages(pkg: OfficePackage, partPath: string): Promise<Ma
   return out
 }
 
-/** Follow one relationship (theme/slideMaster/slideLayout) to a part path. */
-async function relatedPath(pkg: OfficePackage, fromPath: string, relType: string): Promise<string | undefined> {
-  const dir = fromPath.slice(0, fromPath.lastIndexOf('/'))
-  const base = fromPath.slice(fromPath.lastIndexOf('/') + 1)
-  const rels = await pkg.xml(`${dir}/_rels/${base}.rels`)
-  if (!rels) return undefined
-  const rel = getChildren(rels, 'Relationship').find((r) => String(attrs(r).Type).endsWith(`/${relType}`))
-  if (!rel) return undefined
-  return resolveTarget(fromPath, String(attrs(rel).Target))
-}
-
-/** fmtScheme of the theme behind a slide (for p:bgRef style references). */
-async function themeFmtScheme(pkg: OfficePackage, slidePath: string): Promise<XmlNode | undefined> {
-  let path: string | undefined = slidePath
-  const visited = new Set<string>()
-  while (path && !visited.has(path)) {
-    visited.add(path)
-    const root = await pkg.xml(path)
-    const fmt = getChildren(getChildren(root, 'themeElements')[0], 'fmtScheme')[0]
-    if (fmt) return fmt
-    let next: string | undefined
-    for (const type of ['theme', 'slideMaster', 'slideLayout']) {
-      next = await relatedPath(pkg, path, type)
-      if (next) break
-    }
-    path = next
+/** Follow a local slide/layout relationship. An absent or external part cannot inherit a background. */
+async function relatedPath(pkg: OfficePackage, partPath: string, kind: 'slideLayout' | 'slideMaster'): Promise<string | undefined> {
+  for (const rel of await partRelationshipNodes(pkg, partPath)) {
+    const a = attrs(rel)
+    if (a.TargetMode !== 'External' && a.Target && a.Type?.endsWith(`/${kind}`)) return resolveTarget(partPath, a.Target)
   }
   return undefined
 }
 
-/**
- * Resolve one p:bg element to CSS. Direct properties win; a bgRef addresses
- * the theme's bgFillStyleLst (ST_StyleMatrixColumnIndex: 1001..1003). Only
- * solid fills resolve — gradients/pictures fall through to the caller, which
- * keeps walking up the chain rather than committing to white.
- */
-function bgNodeColor(
-  bg: XmlNode | undefined,
-  theme: Map<string, string>,
-  fmtScheme: XmlNode | undefined,
-): string | undefined {
-  if (!bg) return undefined
-  const pr = getChildren(bg, 'bgPr')[0]
-  if (pr) {
-    const solid = getChildren(pr, 'solidFill')[0]
-    const color = solid ? tableColor(solid, theme) : undefined
-    if (color) return color
+/** Only placeholder metadata is inherited; content and source shape identity stay on the slide. */
+async function slideTextInheritance(pkg: OfficePackage, slidePath: string): Promise<SlideTextInheritance> {
+  const layoutPath = await relatedPath(pkg, slidePath, 'slideLayout')
+  const layout = layoutPath ? await pkg.xmlOrdered(layoutPath) : undefined
+  const masterPath = layoutPath ? await relatedPath(pkg, layoutPath, 'slideMaster') : await relatedPath(pkg, slidePath, 'slideMaster')
+  const master = masterPath ? await pkg.xmlOrdered(masterPath) : undefined
+  interface PlaceholderBody { type: string; idx: number; body: XmlNode }
+  const placeholderBodies = (root: XmlNode | undefined): PlaceholderBody[] => {
+    const result: PlaceholderBody[] = []
+    const tree = getChildren(getChildren(root, 'cSld')[0], 'spTree')[0]
+    for (const sp of getChildren(tree, 'sp')) {
+      const ph = getChildren(getChildren(getChildren(sp, 'nvSpPr')[0], 'nvPr')[0], 'ph')[0]
+      const body = getChildren(sp, 'txBody')[0]
+      if (!ph || !body) continue
+      const pa = attrs(ph)
+      result.push({ type: pa.type ?? 'body', idx: pa.idx === undefined ? 0 : num(pa.idx), body })
+    }
+    return result
   }
-  const ref = getChildren(bg, 'bgRef')[0]
-  if (ref && fmtScheme) {
-    const fills = elementChildren(getChildren(fmtScheme, 'bgFillStyleLst')[0])
-    const idx = num(attrs(ref).idx as string, 0) - 1001
-    const entry = idx >= 0 ? fills[idx] : undefined
-    if (entry && entry[0] === 'solidFill') {
-      const color = tableColor(entry[1], theme)
-      if (color) return color
+  const masterBodies = placeholderBodies(master), layoutBodies = placeholderBodies(layout)
+  const txStyles = getChildren(master, 'txStyles')[0]
+  const contentRoles = new Set(['body', 'subTitle', 'obj', 'pic', 'chart', 'clipArt', 'dgm', 'media', 'tbl'])
+  const category = (type: string) => type === 'title' || type === 'ctrTitle' ? 'title'
+    : contentRoles.has(type) ? 'body' : type
+  return { layers(type, idx, placeholder) {
+    const result: InheritedTextLayer[] = []
+    // Slide placeholders bind to the layout primarily by index. The master
+    // has its own indices: bind that hop by placeholder role, then use its text style.
+    const layoutBody = placeholder ? layoutBodies.find(item => item.idx === idx && item.type === type)
+      ?? layoutBodies.find(item => item.idx === idx)
+      ?? layoutBodies.find(item => category(item.type) === category(type)) : undefined
+    const role = category(layoutBody?.type ?? type)
+    const styleName = placeholder && role === 'title' ? 'titleStyle' : placeholder && role === 'body' ? 'bodyStyle' : 'otherStyle'
+    const style = getChildren(txStyles, styleName)[0]
+    if (style) result.push({ style, origin: 'master' })
+    const masterBody = placeholder ? masterBodies.find(item => category(item.type) === role && item.idx === (layoutBody?.idx ?? idx))
+      ?? masterBodies.find(item => category(item.type) === role) : undefined
+    if (masterBody) result.push({ body: masterBody.body, origin: 'master' })
+    if (layoutBody) result.push({ body: layoutBody.body, origin: 'layout' })
+    return result
+  } }
+}
+
+function backgroundColor(root: XmlNode | undefined, theme: ThemeContext): string | undefined {
+  const bg = getChildren(getChildren(root, 'cSld')[0], 'bg')[0]
+  const bgPr = getChildren(bg, 'bgPr')[0]
+  if (bgPr) {
+    const definition = parseFillDefinition(bgPr)
+    if (definition?.kind === 'solid') {
+      const fill = resolveFill(definition, theme)
+      if (fill?.kind === 'solid') return cssColor(fill.color)
+    }
+  }
+  const bgRef = getChildren(bg, 'bgRef')[0]
+  if (bgRef) {
+    const idx = Number(attrs(bgRef).idx)
+    const definition = Number.isInteger(idx) && idx >= 1001 ? theme.bgFillStyles[idx - 1001] : undefined
+    if (definition?.kind === 'solid') {
+      const placeholder = resolveDrawingColor(parseDrawingColor(bgRef), theme)
+      const fill = resolveFill(definition, theme, placeholder)
+      if (fill?.kind === 'solid') return cssColor(fill.color)
     }
   }
   return undefined
 }
 
-/**
- * Slide background fill: the slide's own p:bg, else the layout's, else the
- * master's (nearest definition wins). Absent everywhere means white.
- */
-async function slideBackground(
-  pkg: OfficePackage,
-  slidePath: string,
-  theme: Map<string, string>,
-  slideCsld: XmlNode | undefined,
-): Promise<string | undefined> {
-  const fmtScheme = await themeFmtScheme(pkg, slidePath)
-  const direct = bgNodeColor(getChildren(slideCsld, 'bg')[0], theme, fmtScheme)
+/** Nearest resolvable solid definition wins. Unsupported fills leave the prior solid available. */
+async function slideBackground(pkg: OfficePackage, slidePath: string, slideRoot: XmlNode | undefined, theme: ThemeContext): Promise<string | undefined> {
+  const direct = backgroundColor(slideRoot, theme)
   if (direct) return direct
   const layoutPath = await relatedPath(pkg, slidePath, 'slideLayout')
-  const layoutBg = layoutPath
-    ? bgNodeColor(getChildren(getChildren(await pkg.xml(layoutPath), 'cSld')[0], 'bg')[0], theme, fmtScheme)
-    : undefined
-  if (layoutBg) return layoutBg
-  const masterPath = layoutPath ? await relatedPath(pkg, layoutPath, 'slideMaster') : undefined
-  const masterBg = masterPath
-    ? bgNodeColor(getChildren(getChildren(await pkg.xml(masterPath), 'cSld')[0], 'bg')[0], theme, fmtScheme)
-    : undefined
-  return masterBg
+  if (!layoutPath) return undefined
+  const layoutRoot = await pkg.xmlOrdered(layoutPath)
+  if (!layoutRoot) return undefined
+  const layout = backgroundColor(layoutRoot, theme)
+  if (layout) return layout
+  const masterPath = await relatedPath(pkg, layoutPath, 'slideMaster')
+  if (!masterPath) return undefined
+  return backgroundColor(await pkg.xmlOrdered(masterPath), theme)
 }
 
 /** Depth-first search for the first a:srgbClr under a node. */
@@ -358,45 +327,42 @@ interface TableStyleEntry {
 }
 
 /** Table scheme colors come from this slide's master theme, not theme1 by name. */
-async function slideTheme(pkg: OfficePackage, slidePath: string): Promise<Map<string, string>> {
-  const colors = new Map<string, string>()
-  const mappings = new Map<string, string>()
+async function slideTheme(pkg: OfficePackage, slidePath: string): Promise<{ context: ThemeContext; palette: Map<string, string> }> {
+  const mappings: Record<string, string> = {}
+  let mappingSelected = false
   let path: string | undefined = slidePath
+  let relationshipKind = 'slide'
+  let themeRoot: XmlNode | undefined
   const visited = new Set<string>()
   while (path && !visited.has(path)) {
     visited.add(path)
-    const root = await pkg.xml(path)
-    const map = getChildren(root, 'clrMap')[0] ??
-      getChildren(getChildren(root, 'clrMapOvr')[0], 'overrideClrMapping')[0]
-    for (const [key, value] of Object.entries(attrs(map))) {
-      if (!mappings.has(key)) mappings.set(key, String(value))
-    }
-    const scheme = getChildren(getChildren(root, 'themeElements')[0], 'clrScheme')[0]
-    if (scheme) {
-      for (const [name, color] of elementChildren(scheme)) {
-        const rgb = getChildren(color, 'srgbClr')[0]
-        const system = getChildren(color, 'sysClr')[0]
-        const value = attrs(rgb).val ?? attrs(system).lastClr
-        if (value) colors.set(name, String(value))
+    const root = await pkg.xmlOrdered(path)
+    const override = getChildren(root, 'clrMapOvr')[0]
+    if (!mappingSelected && override) {
+      const customMap = getChildren(override, 'overrideClrMapping')[0]
+      if (getChildren(override, 'masterClrMapping').length || customMap) {
+        // The closest declaration chooses either its own map or the master's map.
+        // An explicit masterClrMapping must bypass intervening layout overrides.
+        mappingSelected = true
+        Object.assign(mappings, attrs(customMap))
       }
-      break
     }
-    const slash = path.lastIndexOf('/')
-    const rels = await pkg.xml(`${path.slice(0, slash)}/_rels/${path.slice(slash + 1)}.rels`)
-    const relationships = getChildren(rels, 'Relationship')
-    const next = ['theme', 'slideMaster', 'slideLayout'].map(type =>
-      relationships.find(rel => String(attrs(rel).Type).endsWith(`/${type}`))).find(Boolean)
-    path = next ? resolveTarget(path, String(attrs(next).Target)) : undefined
+    for (const [key, value] of Object.entries(attrs(getChildren(root, 'clrMap')[0]))) if (!(key in mappings)) mappings[key] = value
+    if (getChildren(root, 'themeElements')[0]) { themeRoot = root; break }
+    const relationships: XmlNode[] = (await partRelationshipNodes(pkg, path)).filter(rel => attrs(rel).TargetMode !== 'External' && attrs(rel).Target)
+    // Follow slide -> layout -> master -> theme; tolerate direct theme links on any part.
+    const types = relationshipKind === 'slide' ? ['slideLayout', 'theme'] : relationshipKind === 'slideLayout' ? ['slideMaster', 'theme'] : ['theme']
+    const next: { type: string; rel: XmlNode | undefined } | undefined = types.map(type => ({ type, rel: relationships.find(rel => String(attrs(rel).Type).endsWith(`/${type}`)) })).find(entry => entry.rel)
+    relationshipKind = next?.type ?? ''
+    path = next?.rel ? resolveTarget(path, attrs(next.rel).Target) : undefined
   }
-  for (const [alias, key] of [['tx1', 'dk1'], ['bg1', 'lt1'], ['tx2', 'dk2'], ['bg2', 'lt2']]) {
-    if (!mappings.has(alias)) mappings.set(alias, key)
+  const context = parseThemeContext(themeRoot, mappings)
+  const palette = new Map(Object.entries(context.palette).map(([key, value]) => [key, value.replace(/^#/, '')]))
+  for (const [alias, key] of Object.entries(context.colorMap)) {
+    const color = context.palette[key]
+    if (color) palette.set(alias, color.replace(/^#/, ''))
   }
-  const palette = new Map(colors)
-  for (const [alias, key] of mappings) {
-    const color = palette.get(key)
-    if (color) colors.set(alias, color)
-  }
-  return colors
+  return { context, palette }
 }
 
 function tableColor(node: XmlNode | undefined, theme: Map<string, string>): string | undefined {
@@ -491,18 +457,16 @@ async function readTableStyles(pkg: OfficePackage, theme: Map<string, string>): 
 }
 
 /** p:graphicFrame -> a:graphic/a:graphicData/a:tbl */
-function parseGraphicFrame(frame: XmlNode, tableStyles?: Map<string, TableStyleEntry>): PptxShape | undefined {
+function parseGraphicFrame(frame: XmlNode, tableStyles: Map<string, TableStyleEntry>, theme: ThemeContext, textDefaults?: XmlNode): PptxShape | undefined {
   const xfrm = getChildren(frame, 'xfrm')[0]
-  const off = xfrm ? getChildren(xfrm, 'off')[0] : undefined
-  const ext = xfrm ? getChildren(xfrm, 'ext')[0] : undefined
-  const oa = attrs(off)
-  const ea = attrs(ext)
   const graphic = getChildren(frame, 'graphic')[0]
   const graphicData = graphic ? getChildren(graphic, 'graphicData')[0] : undefined
   const tbl = graphicData ? getChildren(graphicData, 'tbl')[0] : undefined
   if (!tbl) return undefined
 
+  const textIssues: PptxDiagnostic[] = []
   const table: PptxTable = { colWidthsEmu: [], rows: [] }
+  const issues: DrawingIssue[] = []
   const tblPr = getChildren(tbl, 'tblPr')[0]
   if (tblPr) {
     const ta = attrs(tblPr)
@@ -543,26 +507,273 @@ function parseGraphicFrame(frame: XmlNode, tableStyles?: Map<string, TableStyleE
       }
       const tcPr = getChildren(tc, 'tcPr')[0]
       if (tcPr) {
-        const solid = getChildren(tcPr, 'solidFill')[0]
-        const color = colorOf(solid ? getChildren(solid, 'srgbClr')[0] : undefined)
-        if (color) cell.fill = color
+        cell.drawingFill = resolveFill(parseFillDefinition(tcPr, issues), theme, undefined, issues)
+        if (cell.drawingFill?.kind === 'solid') cell.fill = cssColor(cell.drawingFill.color)
+        for (const [name, side] of [['lnL', 'left'], ['lnR', 'right'], ['lnT', 'top'], ['lnB', 'bottom']] as const) {
+          const borderNode = getChildren(tcPr, name)[0]
+          if (!borderNode) continue
+          const border = resolveDrawingStyle({ ln: borderNode }, undefined, theme)
+          issues.push(...border.issues)
+          if (border.line) {
+            // Omitted width remains inheritable from the selected table style.
+            if (attrs(borderNode).w === undefined) delete border.line.width
+            cell.drawingBorders ??= {}
+            cell.drawingBorders[side] = border.line
+          }
+        }
+        const ca = attrs(tcPr)
+        for (const [name, key] of [['marL', 'leftEmu'], ['marR', 'rightEmu'], ['marT', 'topEmu'], ['marB', 'bottomEmu']] as const) {
+          if (ca[name] === undefined) continue
+          const value = ca[name].trim() === '' ? NaN : Number(ca[name])
+          if (Number.isFinite(value) && value >= 0) { cell.margins ??= {}; cell.margins[key] = value }
+          else issues.push({ kind: 'invalid-paint', message: `Invalid table margin ${name}`, feature: name })
+        }
+        if (['t', 'ctr', 'b'].includes(ca.anchor)) cell.anchor = ca.anchor as PptxTextBody['anchor']
       }
       const txBody = getChildren(tc, 'txBody')[0]
-      if (txBody) cell.paragraphs = parseTextBody(txBody).paragraphs
+      if (txBody) {
+        const body = parseTextBody(txBody, theme, textDefaults)
+        cell.paragraphs = body.paragraphs
+        textIssues.push(...(body.diagnostics ?? []))
+      }
       row.cells.push(cell)
     }
     table.rows.push(row)
   }
 
   return {
-    xEmu: num(oa.x as string),
-    yEmu: num(oa.y as string),
-    widthEmu: num(ea.cx as string),
-    heightEmu: num(ea.cy as string),
+    ...parseTransform(xfrm),
     geometry: 'rect',
-    rotationDeg: xfrm ? num(attrs(xfrm).rot as string, 0) / 60000 : 0,
     table,
+    diagnostics: [...issues, ...textIssues],
   }
+}
+
+interface Representation {
+  node: XmlNode
+  representation: 'choice' | 'fallback'
+  reason?: string
+  feature?: string
+}
+
+const MAX_DRAWING_DEPTH = 128
+const SUPPORTED_DRAWING_REQUIREMENTS = ['a', 'p', 'c', 'dgm', 'dsp', 'ink']
+
+/** Per-slide decisions avoid rescanning a selected subtree at every enclosing Choice. */
+class DrawingCompatibility {
+  constructor(private contents: Map<XmlNode, DrawingContent<PptxParagraph, PptxTextBody>>) {}
+  private features = new WeakMap<XmlNode, string | null>()
+  private selections = new WeakMap<XmlNode, Representation | undefined>()
+  private failures = new WeakMap<XmlNode, string>()
+
+  failure(node: XmlNode): string { return this.failures.get(node) ?? 'AlternateContent' }
+  useRepresentation(node: XmlNode, selected: Representation): void { this.selections.set(node, selected); this.features = new WeakMap() }
+
+  /** Only the selected branch can veto an enclosing native Choice. */
+  unsupportedFeature(node: XmlNode, depth = 0): string | undefined {
+    if (depth >= MAX_DRAWING_DEPTH) return 'drawing-depth'
+    if (this.features.has(node)) return this.features.get(node) ?? undefined
+    const feature = this.inspect(node, depth)
+    this.features.set(node, feature ?? null)
+    return feature
+  }
+
+  private inspect(node: XmlNode, depth: number): string | undefined {
+    for (const [name, child] of orderedChildren(node)) {
+      if (name === '#text') continue
+      if (name === 'AlternateContent') {
+        const selected = this.selectRepresentation(child, depth + 1)
+        if (!selected) return this.failure(child)
+        const feature = this.unsupportedFeature(selected.node, depth + 2)
+        if (feature) return feature
+        continue
+      }
+      if (name === 'm' || name === 'oMath' || name === 'oMathPara') return 'OMML'
+      if (name.toLowerCase() === 'model3d') return 'model3D'
+      if (name === 'graphicData') {
+        const uri = attrs(child).uri?.toLowerCase() ?? ''
+        if (uri.includes('model3d')) return 'model3D'
+        if (uri.includes('chartex')) return 'ChartEx'
+        if (['chart', 'relIds', 'contentPart', 'wsp'].some(tag => getChildren(child, tag).length) && !this.contents.has(child)) return 'drawing-content'
+      }
+      if (name === 'contentPart') { if (!this.contents.has(child) && !this.contents.has(node)) return 'drawing-content'; continue }
+      const feature = this.unsupportedFeature(child, depth + 1)
+      if (feature) return feature
+    }
+    return undefined
+  }
+
+  selectRepresentation(node: XmlNode, depth = 0): Representation | undefined {
+    if (depth >= MAX_DRAWING_DEPTH) { this.failures.set(node, 'drawing-depth'); return undefined }
+    if (this.selections.has(node)) return this.selections.get(node)
+    let feature: string | undefined
+    for (const choice of getChildren(node, 'Choice')) {
+      const unsupported = this.unsupportedFeature(choice, depth + 1)
+      // Requires is resolved through the Choice's in-scope namespace bindings.
+      const unknownRequirement = supportedChoiceRequirements(choice, SUPPORTED_DRAWING_REQUIREMENTS).unknown
+      if (!unsupported && !unknownRequirement) {
+        const selected: Representation = { node: choice, representation: 'choice' }
+        this.selections.set(node, selected)
+        return selected
+      }
+      feature ??= unsupported ?? unknownRequirement
+    }
+    this.failures.set(node, feature ?? 'AlternateContent')
+    const fallback = getChildren(node, 'Fallback')[0]
+    const selected: Representation | undefined = fallback ? { node: fallback, representation: 'fallback', feature: feature ?? 'AlternateContent', reason: `Native fallback selected for unsupported ${feature ?? 'AlternateContent'}` } : undefined
+    this.selections.set(node, selected)
+    return selected
+  }
+}
+
+function sourceOf(node: XmlNode, element: string, partPath: string, treePath: string, representation?: Omit<Representation, 'node'>): PptxSource {
+  const nonvisual = getChildren(node, 'nvSpPr')[0] ?? getChildren(node, 'nvCxnSpPr')[0] ?? getChildren(node, 'nvPicPr')[0] ?? getChildren(node, 'nvGraphicFramePr')[0] ?? getChildren(node, 'nvGrpSpPr')[0]
+  const a = attrs(getChildren(nonvisual, 'cNvPr')[0])
+  return { partPath, treePath, element, ...(a.id !== undefined ? { id: a.id } : {}), ...(a.name !== undefined ? { name: a.name } : {}), representation: 'native', ...representation }
+}
+
+const xmlEscape = (value: string): string => value.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;')
+
+/** Reparse only when nested compatibility nodes need selection, preserving shared XML ordering. */
+function selectNestedAlternates(node: XmlNode, source: PptxSource, diagnostics: PptxDiagnostic[], compatibility: DrawingCompatibility): XmlNode {
+  const pending = [node]
+  let containsAlternate = false
+  while (pending.length && !containsAlternate) {
+    for (const [name, child] of orderedChildren(pending.pop())) {
+      if (name === 'AlternateContent') { containsAlternate = true; break }
+      if (name !== '#text') pending.push(child)
+    }
+  }
+  if (!containsAlternate) return node
+  const serialize = (parent: XmlNode, depth = 0): string => {
+    if (depth >= MAX_DRAWING_DEPTH) {
+      diagnostics.push({ kind: 'missing-representation', message: 'Drawing nesting exceeds the static renderer limit', feature: 'drawing-depth', source })
+      return ''
+    }
+    return orderedChildren(parent).map(([name, child]) => {
+      if (name === '#text') return xmlEscape(textOf(child))
+      if (name === 'AlternateContent') {
+        const selected = compatibility.selectRepresentation(child, depth + 1)
+        if (!selected) {
+          diagnostics.push({ kind: 'missing-representation', message: 'AlternateContent has no supported Choice or native fallback', feature: compatibility.failure(child), source })
+          return ''
+        }
+        if (selected.representation === 'fallback') diagnostics.push({ kind: 'fallback-representation', message: selected.reason!, feature: selected.feature, source })
+        return serialize(selected.node, depth + 2)
+      }
+      const attributes = Object.entries(attrs(child)).map(([key, value]) => ` ${key}="${xmlEscape(value)}"`).join('')
+      return `<${name}${attributes}>${serialize(child, depth + 1)}</${name}>`
+    }).join('')
+  }
+  return parseXmlOrdered(`<root>${serialize(node)}</root>`)
+}
+
+/** Find the selected payload on the original XML tree; reparsed shapes have different node identities. */
+function selectedGraphicData(frame: XmlNode, compatibility: DrawingCompatibility): XmlNode | undefined {
+  const find = (parent: XmlNode | undefined, depth: number): XmlNode | undefined => {
+    if (!parent || depth >= MAX_DRAWING_DEPTH) return undefined
+    for (const [name, node] of orderedChildren(parent)) {
+      if (name === 'graphicData') return node
+      if (name === '#text') continue
+      const branch = name === 'AlternateContent' ? compatibility.selectRepresentation(node, depth + 1)?.node : node
+      const found = find(branch, depth + 1)
+      if (found) return found
+    }
+    return undefined
+  }
+  return find(frame, 0)
+}
+
+/** Retain ordinary source text without painting the unselected mathematical representation. */
+function retainChoiceText(choice: XmlNode | undefined, selectedShapes: PptxShape[]): void {
+  const bodies = new Map<string, PptxTextBody>()
+  const pending = [{ name: 'Choice', parent: choice, depth: 0 }]
+  while (pending.length) {
+    const { name, parent, depth } = pending.pop()!
+    if (depth >= MAX_DRAWING_DEPTH) continue
+    if (name === 'sp') {
+      const id = attrs(getChildren(getChildren(parent, 'nvSpPr')[0], 'cNvPr')[0]).id
+      const text = getChildren(parent, 'txBody')[0]
+      if (id && text && !bodies.has(id)) bodies.set(id, parseTextBody(text))
+    }
+    // Process nodes on pop, pushing later siblings first to retain source-order DFS.
+    const children = orderedChildren(parent)
+    for (let i = children.length - 1; i >= 0; i--) {
+      const [childName, child] = children[i]
+      if (childName !== '#text') pending.push({ name: childName, parent: child, depth: depth + 1 })
+    }
+  }
+  walkShapes(selectedShapes, shape => {
+    if (shape.source?.id) shape.sourceTextBody = bodies.get(shape.source.id)
+  })
+}
+
+function parseShapeTree(
+  pkg: OfficePackage, contents: Map<XmlNode, DrawingContent<PptxParagraph, PptxTextBody>>, parent: XmlNode | undefined, partPath: string, slideImages: Map<string, PptxImageRef>, theme: ThemeContext,
+  tableStyles: Map<string, TableStyleEntry>, diagnostics: PptxDiagnostic[], compatibility: DrawingCompatibility, treePath = 'spTree',
+  representation?: Omit<Representation, 'node'>, depth = 0, textDefaults?: XmlNode, groupDepth = 0, inheritance?: SlideTextInheritance,
+): PptxShape[] {
+  const shapes: PptxShape[] = []
+  if (depth >= MAX_DRAWING_DEPTH) {
+    diagnostics.push({ kind: 'missing-representation', message: 'Drawing nesting exceeds the static renderer limit', feature: 'drawing-depth', source: sourceOf(parent ?? {}, 'spTree', partPath, treePath, representation) })
+    return shapes
+  }
+  for (const [index, [name, original]] of orderedChildren(parent).filter(([name]) => name !== '#text').entries()) {
+    const path = `${treePath}/${name}[${index}]`
+    if (name === 'AlternateContent') {
+      const selected = compatibility.selectRepresentation(original)
+      if (selected) {
+        const { node, ...selection } = selected
+        const selectedShapes = parseShapeTree(pkg, contents, node, partPath, slideImages, theme, tableStyles, diagnostics, compatibility, `${path}/${selected.representation}`, selection, depth + 1, textDefaults, groupDepth, inheritance)
+        if (selected.representation === 'fallback') retainChoiceText(getChildren(original, 'Choice')[0], selectedShapes)
+        if (!selectedShapes.length) diagnostics.push({ kind: 'missing-representation', message: 'Selected AlternateContent representation contains no usable drawing', feature: selected.feature, source: sourceOf(original, name, partPath, path, selection) })
+        shapes.push(...selectedShapes)
+      } else diagnostics.push({ kind: 'missing-representation', message: 'AlternateContent has no supported Choice or native fallback', feature: compatibility.failure(original), source: sourceOf(original, name, partPath, path) })
+      continue
+    }
+    if (!['sp', 'cxnSp', 'pic', 'graphicFrame', 'grpSp', 'contentPart'].includes(name)) continue
+    if (name === 'grpSp' && groupDepth >= DRAWING_GROUP_DEPTH) {
+      const source = sourceOf(original, name, partPath, path, representation)
+      contentDiagnostic(drawingPartContext(pkg), 'group-depth', partPath, undefined, { identity: source.id ?? path, reason: 'group-depth', limit: DRAWING_GROUP_DEPTH })
+      continue
+    }
+    if (!reserveDrawingNode(drawingPartContext(pkg), partPath)) break
+    const source = sourceOf(original, name, partPath, path, representation)
+    const shapeIssues: PptxDiagnostic[] = []
+    if (representation?.representation === 'fallback') shapeIssues.push({ kind: 'fallback-representation', message: representation.reason!, feature: representation.feature, source })
+    let shape: PptxShape | undefined
+    if (name === 'grpSp') {
+      const xfrm = getChildren(getChildren(original, 'grpSpPr')[0], 'xfrm')[0]
+      const transform = parseTransform(xfrm)
+      const ca = attrs(getChildren(xfrm, 'chOff')[0]), ce = attrs(getChildren(xfrm, 'chExt')[0])
+      const validChildren = [ca.x, ca.y, ce.cx, ce.cy].every(value => value !== undefined && value.trim() !== '' && Number.isFinite(Number(value))) && num(ce.cx) > 0 && num(ce.cy) > 0
+      shape = { ...transform, geometry: 'other', source, transformValid: transform.transformValid && validChildren,
+        group: { off: { x: transform.xEmu, y: transform.yEmu }, ext: { width: transform.widthEmu, height: transform.heightEmu }, chOff: { x: num(ca.x), y: num(ca.y) }, chExt: { width: num(ce.cx), height: num(ce.cy) } },
+        children: parseShapeTree(pkg, contents, original, partPath, slideImages, theme, tableStyles, diagnostics, compatibility, path, representation, depth + 1, textDefaults, groupDepth + 1, inheritance), diagnostics: [],
+      }
+    } else {
+      const node = selectNestedAlternates(original, source, shapeIssues, compatibility)
+      const graphic = name === 'graphicFrame' ? selectedGraphicData(original, compatibility) : undefined
+      const content = name === 'contentPart' ? contents.get(original) : graphic ? contents.get(graphic) : undefined
+      if (content && (name === 'graphicFrame' || name === 'contentPart')) {
+        reserveDrawingContent(pkg, content, partPath, false)
+        shape = { ...parseTransform(getChildren(node, 'xfrm')[0]), geometry: 'other', content }
+      } else shape = name === 'graphicFrame' ? parseGraphicFrame(node, tableStyles, theme, textDefaults) : parseShape(node, slideImages, theme, source, textDefaults, inheritance)
+    }
+    if (!shape) {
+      diagnostics.push({ kind: 'unsupported-object', message: `No static renderer for ${name}`, feature: compatibility.unsupportedFeature(original) ?? name, source })
+      continue
+    }
+    shape.source = source
+    shape.diagnostics = [...shapeIssues, ...(shape.diagnostics ?? [])].map(issue => ({ ...issue, source: issue.source ?? source }))
+    if (shape.transformValid === false) shape.diagnostics.push({ kind: 'invalid-transform', message: 'Malformed shape/group transform; painting skipped', source })
+    shapes.push(shape)
+  }
+  return shapes
+}
+
+function walkShapes(shapes: PptxShape[], visit: (shape: PptxShape) => void): void {
+  for (const shape of shapes) { visit(shape); if (shape.children) walkShapes(shape.children, visit) }
 }
 
 export async function parsePptx(pkg: OfficePackage): Promise<PptxDocument> {
@@ -571,6 +782,7 @@ export async function parsePptx(pkg: OfficePackage): Promise<PptxDocument> {
   const sldSz = getChildren(presentation, 'sldSz')[0]
   const sa = attrs(sldSz)
   const doc: PptxDocument = {
+    drawingCoverage: [],
     slideWidthEmu: num(sa.cx as string, 9144000),
     slideHeightEmu: num(sa.cy as string, 6858000),
     slides: [],
@@ -578,11 +790,12 @@ export async function parsePptx(pkg: OfficePackage): Promise<PptxDocument> {
   }
   // slide order from presentation rels
   const rels = await pkg.xml('ppt/_rels/presentation.xml.rels')
+  Object.assign(doc, await parseEmbeddedFonts(pkg, presentation, rels))
   const relMap = new Map<string, string>()
   if (rels) {
     for (const rel of getChildren(rels, 'Relationship')) {
       const a = attrs(rel)
-      if (a.Id) relMap.set(a.Id, a.Target as string)
+      if (a.Id && a.Target && a.TargetMode !== 'External') relMap.set(a.Id, a.Target)
     }
   }
   const sldIdLst = getChildren(presentation, 'sldIdLst')[0]
@@ -590,35 +803,58 @@ export async function parsePptx(pkg: OfficePackage): Promise<PptxDocument> {
   for (let i = 0; i < slideIds.length; i++) {
     const a = attrs(slideIds[i])
     const rid = (a['r:id'] ?? a.id) as string
-    const target = relMap.get(rid) ?? ''
-    const path = target.startsWith('/') ? target.slice(1) : `ppt/${target.replace(/^\.\.\//, '')}`
-    const slideRoot = await pkg.xml(path)
+    const target = relMap.get(rid)
+    if (!target) continue
+    const path = resolveTarget('ppt/presentation.xml', target)
+    const slideRoot = await pkg.xmlOrdered(path)
     const slideImages = await loadSlideImages(pkg, path)
+    const preloadedRelationships = drawingPartContext(pkg).diagnostics.filter(issue =>
+      issue.kind === 'malformed-part' && issue.reason === 'invalid-relationship-xml' && issue.identity === path && !issue.sourceReferenceId)
     const theme = await slideTheme(pkg, path)
-    const tableStyles = await readTableStyles(pkg, theme)
-    const slide: PptxSlide = { index: i, widthEmu: doc.slideWidthEmu, heightEmu: doc.slideHeightEmu, shapes: [] }
-    if (slideRoot) {
-      const cSld = getChildren(slideRoot, 'cSld')[0]
-      slide.background = await slideBackground(pkg, path, theme, cSld)
-      const spTree = cSld ? getChildren(cSld, 'spTree')[0] : undefined
-      if (spTree) {
-        for (const [name, node] of elementChildren(spTree)) {
-          if (name === 'sp' || name === 'pic') {
-            const shape = parseShape(node, slideImages)
-            if (shape) slide.shapes.push(shape)
-          } else if (name === 'graphicFrame') {
-            const frame = parseGraphicFrame(node, tableStyles)
-            if (frame) slide.shapes.push(frame)
+    const tableStyles = await readTableStyles(pkg, theme.palette)
+    const slide: PptxSlide = { index: i, widthEmu: doc.slideWidthEmu, heightEmu: doc.slideHeightEmu, shapes: [], theme: theme.context, diagnostics: [] }
+    slide.background = await slideBackground(pkg, path, slideRoot, theme.context)
+    const spTree = getChildren(getChildren(slideRoot, 'cSld')[0], 'spTree')[0]
+    const contents = new Map<XmlNode, DrawingContent<PptxParagraph, PptxTextBody>>()
+    const compatibility = new DrawingCompatibility(contents)
+    const defaults = getChildren(presentation, 'defaultTextStyle')[0]
+    const contentTheme = { colors: theme.palette, fonts: new Map([['minorHAnsi', theme.context.fonts.minor.latin ?? 'Calibri']]) }
+    const pending = [slideRoot]
+    const diagnosticStart = drawingPartContext(pkg).diagnostics.length
+    while (pending.length) {
+      const parent = pending.pop()
+      for (const [name, node] of orderedChildren(parent)) {
+        if (name === '#text') continue
+        if (name === 'graphicData' || name === 'contentPart') {
+          const adapters = {
+            parseDiagramText: (body: XmlNode, shape: XmlNode) => parseTextBody(body, theme.context, defaults, textFontDefaults(getChildren(shape, 'style')[0], theme.context)),
+            parseParagraph: (p: XmlNode) => parseTextBody({ p }, theme.context, defaults).paragraphs[0],
           }
+          let payload = await prepareDrawingContent(pkg, name === 'contentPart' ? { contentPart: node } : node, path, contentTheme, theme.context, adapters)
+          if (!payload && name === 'graphicData' && getChildren(node, 'AlternateContent').length) {
+            const selected = await prepareCompatibleDrawingContent(pkg, node, path, contentTheme, theme.context, adapters)
+            if (selected) {
+              payload = selected.content
+              if (payload && selected.reference) contents.set(selected.reference, payload)
+              for (const choice of selected.selections) compatibility.useRepresentation(choice.alternate, { node: choice.node, representation: choice.representation, feature: choice.feature, reason: choice.reason })
+            }
+          }
+          if (payload) contents.set(node, payload)
         }
+        if (name !== 'graphicData') pending.push(node)
       }
     }
+    const inheritance = await slideTextInheritance(pkg, path)
+    slide.shapes = parseShapeTree(pkg, contents, spTree, path, slideImages, theme.context, tableStyles, slide.diagnostics!, compatibility, 'spTree', undefined, 0, defaults, 0, inheritance)
+    slide.diagnostics!.push(...preloadedRelationships, ...drawingPartContext(pkg).diagnostics.slice(diagnosticStart))
+    if (getChildren(slideRoot, 'timing').length) slide.diagnostics!.push({ kind: 'deferred-animation', message: 'Slide animation/timing is outside static drawing rendering', feature: 'timing' })
     // fill in placeholder geometry from the layout/master
-    const needsGeometry = slide.shapes.some((s) => s.placeholder && (s.widthEmu === 0 || s.heightEmu === 0))
+    let needsGeometry = false
+    walkShapes(slide.shapes, shape => { if (shape.placeholder && (shape.widthEmu === 0 || shape.heightEmu === 0)) needsGeometry = true })
     if (needsGeometry) {
       const inherited = await layoutPlaceholderGeometry(pkg, path)
-      for (const shape of slide.shapes) {
-        if (!shape.placeholder || (shape.widthEmu !== 0 && shape.heightEmu !== 0)) continue
+      walkShapes(slide.shapes, shape => {
+        if (!shape.placeholder || (shape.widthEmu !== 0 && shape.heightEmu !== 0)) return
         const geom = inherited.get(`${shape.placeholder.type}|${shape.placeholder.idx}`)
         if (geom) {
           shape.xEmu = geom.x
@@ -626,21 +862,44 @@ export async function parsePptx(pkg: OfficePackage): Promise<PptxDocument> {
           shape.widthEmu = geom.w
           shape.heightEmu = geom.h
         }
-      }
+      })
     }
+    walkShapes(slide.shapes, shape => {
+      const issues = shape.drawingGeometry ? resolveGeometry(shape.drawingGeometry, emuToPx(shape.widthEmu), emuToPx(shape.heightEmu)).issues : []
+      shape.diagnostics = [...(shape.diagnostics ?? []), ...issues.map(issue => ({ ...issue, source: shape.source })), ...(shape.drawingStyle?.issues ?? []).map(issue => ({ ...issue, source: shape.source }))]
+      slide.diagnostics!.push(...shape.diagnostics)
+    })
+    const selectedBranch = (alternate: XmlNode) => compatibility.selectRepresentation(alternate)?.node
+    if (preloadedRelationships.length) {
+      // Inventory selected source pictures before attributing the cached .rels
+      // error; a discarded Choice must not become a painted source object.
+      const inventory = pptxCoverage(slide, spTree, path, selectedBranch)
+      const pictureRefs = new Set(inventory.filter(entry => (entry.element === 'pic' || entry.feature === 'image') && entry.referenceId).map(entry => entry.referenceId!))
+      const selectedRefs = new Set(inventory.filter(entry => entry.referenceId).map(entry => entry.referenceId!))
+      for (const referenceId of pictureRefs) malformedRelationshipAttempt(pkg, path, referenceId, 'image')
+      // A slide part may occur in multiple presentation units. Cache-level
+      // failures are reused, but each unit needs its own selected-source audit.
+      for (const issue of drawingPartContext(pkg).diagnostics) if (issue.reason === 'invalid-relationship-xml' &&
+        issue.ownerPartPath === path && issue.sourceReferenceId && selectedRefs.has(issue.sourceReferenceId) &&
+        !slide.diagnostics!.includes(issue)) slide.diagnostics!.push(issue)
+      slide.diagnostics = slide.diagnostics!.filter(issue => !attemptedMalformedRelationshipIssue(pkg, issue as ContentDiagnostic))
+    }
+    doc.drawingCoverage!.push(...pptxCoverage(slide, spTree, path, selectedBranch))
     doc.slides.push(slide)
   }
-  // assign document-wide image indices in first-use order
-  for (const slide of doc.slides) {
-    for (const shape of slide.shapes) {
-      if (!shape.image) continue
-      let idx = doc.images.indexOf(shape.image)
-      if (idx < 0) {
-        idx = doc.images.length
-        doc.images.push(shape.image)
-      }
-      shape.imageIndex = idx
+  // Recursive first-use source order, deduplicated by media part while preserving use-specific crop.
+  const imageIndices = new Map<string | PptxImageRef, number>()
+  for (const slide of doc.slides) walkShapes(slide.shapes, shape => {
+    if (!shape.image) return
+    const key = shape.image.partPath ?? shape.image
+    let index = imageIndices.get(key)
+    if (index === undefined) {
+      index = doc.images.length
+      const { opacity: _opacity, srcRect: _srcRect, fillRect: _fillRect, ...part } = shape.image
+      doc.images.push(part)
+      imageIndices.set(key, index)
     }
-  }
+    shape.imageIndex = index
+  })
   return doc
 }

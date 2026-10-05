@@ -1,283 +1,137 @@
-/** Embedded DrawingML objects use their cached geometry/data, not a screenshot. */
-import { attrs, elementChildren, getChildren, textOf, type XmlNode } from '../core/xml'
+/** Word adapters retain legacy paragraph layout and inline/anchor flow. */
+import { attrs, getChildren, orderedChildren, type XmlNode } from '../core/xml'
 import type { OfficePackage } from '../core/zip'
 import { emuToPx } from '../core/geometry'
 import type { DocxDrawing, DocxDrawingShape, DocxImage, DocxParagraph, DocxTextRun } from './types'
 import { fontFamilyCss, type DocxTheme } from './styles'
-import { parseInk, paintInk } from './ink'
-
-const num = (v: string | undefined, fallback = 0): number =>
-  v !== undefined && Number.isFinite(Number(v)) ? Number(v) : fallback
+import { parseThemeContext, type ThemeContext } from '../drawing/style'
+import { parseTextBody, textFontDefaults } from '../drawing/text-parse'
+import { partRelationshipNodes, resolvePartTarget as target } from '../drawing/parts'
+import { prepareCompatibleDrawingContent, reserveDrawingContent } from '../drawing/content'
+import type { ContentSelection } from '../drawing/content'
+import { supportedChoiceRequirements } from '../drawing/coverage'
+import { paintDrawingContent } from '../drawing/content-paint'
+import type { ContentPaintAssets } from '../drawing/content'
+import { paintTextBody, createTextBodyMeasurer } from '../drawing/text-paint'
+import { layoutTextBody } from '../drawing/text-layout'
+import type { PptxParagraph, PptxTextBody } from '../pptx/types'
+const num = (v: string | undefined, fallback = 0): number => v !== undefined && Number.isFinite(Number(v)) ? Number(v) : fallback
 const child = (n: XmlNode | undefined, name: string) => getChildren(n, name)[0]
-function descendants(n: XmlNode | undefined, name: string): XmlNode[] {
-  if (!n) return []
-  return elementChildren(n).flatMap(([tag, node]) => [...(tag === name ? [node] : []), ...descendants(node, name)])
+const preparedSelections = new WeakMap<Map<XmlNode, DocxImage>, WeakMap<XmlNode, ContentSelection[]>>()
+export function wordDrawingSelections(drawings: Map<XmlNode, DocxImage> | undefined, drawing: XmlNode): ContentSelection[] {
+  return drawings ? preparedSelections.get(drawings)?.get(drawing) ?? [] : []
 }
-function target(part: string, path: string): string {
-  const bits = path.startsWith('/') ? [] : part.split('/').slice(0, -1)
-  for (const bit of path.split('/')) {
-    if (bit === '..') bits.pop()
-    else if (bit && bit !== '.') bits.push(bit)
-  }
-  return bits.join('/')
-}
-
-function color(fill: XmlNode | undefined, theme: DocxTheme): string | undefined {
-  const c = child(fill, 'srgbClr') ?? child(fill, 'schemeClr') ?? child(fill, 'sysClr') ?? child(fill, 'prstClr')
-  if (!c) return undefined
-  const a = attrs(c)
-  const preset: Record<string, string> = {
-    black: '000000',
-    white: 'FFFFFF',
-    red: 'FF0000',
-    blue: '0000FF',
-    green: '008000'
-  }
-  const value = child(fill, 'schemeClr')
-    ? theme.colors.get(a.val)
-    : child(fill, 'prstClr')
-      ? preset[a.val]
-      : child(fill, 'sysClr')
-        ? a.lastClr
-        : a.val
-  if (!value || !/^[\da-f]{6}$/i.test(value)) return undefined
-  let channels = [0, 2, 4].map((i) => parseInt(value.slice(i, i + 2), 16) / 255)
-  for (const [name, transform] of elementChildren(c)) {
-    const amount = Math.min(1, Math.max(0, num(attrs(transform).val) / 100000))
-    if (name === 'tint' || name === 'shade')
-      channels = channels.map((channel) => {
-        const linear = channel <= 0.04045 ? channel / 12.92 : ((channel + 0.055) / 1.055) ** 2.4
-        const adjusted = name === 'tint' ? linear * amount + 1 - amount : linear * amount
-        return adjusted <= 0.0031308 ? adjusted * 12.92 : 1.055 * adjusted ** (1 / 2.4) - 0.055
-      })
-    else if (name === 'lumMod') channels = channels.map((channel) => channel * amount)
-    else if (name === 'lumOff') channels = channels.map((channel) => Math.min(1, channel + amount))
-  }
-  return channels
-    .map((c) =>
-      Math.round(c * 255)
-        .toString(16)
-        .padStart(2, '0')
-    )
-    .join('')
-    .toUpperCase()
-}
-
-function shape(node: XmlNode, theme: DocxTheme): DocxDrawingShape {
-  const pr = child(node, 'spPr'),
-    transform = child(pr, 'xfrm')
-  const offset = attrs(child(transform, 'off')),
-    extent = attrs(child(transform, 'ext'))
-  const ln = child(pr, 'ln'),
-    lineColor = color(child(ln, 'solidFill'), theme)
-  const textColor = color(child(child(node, 'style'), 'fontRef'), theme)
-  const fontFamily = theme.fonts.get('minorHAnsi') ?? 'Calibri'
-  const paragraphs = getChildren(child(node, 'txBody'), 'p').map((p) => ({
-    align:
-      ({ ctr: 'center', r: 'right', just: 'justify' } as const)[attrs(child(p, 'pPr')).algn as 'ctr' | 'r' | 'just'] ??
-      ('left' as const),
-    runs: getChildren(p, 'r').map((r) => {
-      const pr = child(r, 'rPr'),
-        a = attrs(pr)
-      const family = attrs(child(pr, 'latin')).typeface
-      return {
-        text: textOf(child(r, 't')),
-        fontFamily: theme.fonts.get(family) ?? family ?? fontFamily,
-        fontSizePt: num(a.sz, 2400) / 100,
-        color: color(child(pr, 'solidFill'), theme) ?? textColor,
-        bold: a.b === '1',
-        italic: a.i === '1'
-      }
-    })
-  }))
-  return {
-    xEmu: num(offset.x),
-    yEmu: num(offset.y),
-    widthEmu: num(extent.cx),
-    heightEmu: num(extent.cy),
-    geometry: attrs(child(pr, 'prstGeom')).prst ?? 'rect',
-    rotationDeg: num(attrs(transform).rot) / 60000,
-    fill: color(child(pr, 'solidFill'), theme),
-    line: lineColor ? { color: lineColor, widthEmu: num(attrs(ln).w, 12700) } : undefined,
-    paragraphs,
-    fontFamily,
-    textColor
-  }
-}
-
-/** Cache points are indexed; missing points must retain their category slot. */
-function cacheValues(node: XmlNode | undefined): Array<string | undefined> {
-  const cache =
-    child(child(node, 'strRef'), 'strCache') ??
-    child(child(node, 'numRef'), 'numCache') ??
-    child(node, 'strLit') ??
-    child(node, 'numLit')
-  const out: Array<string | undefined> = []
-  for (const p of getChildren(cache, 'pt')) out[num(attrs(p).idx)] = textOf(child(p, 'v'))
-  return Array.from({ length: out.length }, (_, index) => out[index])
-}
-
-function chart(root: XmlNode, theme: DocxTheme): DocxDrawing | undefined {
-  const chart = child(root, 'chart'),
-    plot = child(chart, 'plotArea'),
-    bars = child(plot, 'barChart')
-  if (
-    !bars ||
-    attrs(child(bars, 'barDir')).val === 'bar' ||
-    !['clustered', undefined].includes(attrs(child(bars, 'grouping')).val)
-  )
-    return undefined
-  const series = getChildren(bars, 'ser').map((s, index) => {
-    const tx = child(s, 'tx')
-    return {
-      name: textOf(child(tx, 'v')) || cacheValues(tx)[0] || `Series ${index + 1}`,
-      values: cacheValues(child(s, 'val')).map((v) =>
-        v === undefined || !Number.isFinite(Number(v)) ? undefined : Number(v)
-      ),
-      color:
-        color(child(child(s, 'spPr'), 'solidFill'), theme) ?? theme.colors.get(`accent${(index % 6) + 1}`) ?? '4F81BD'
-    }
-  })
-  const categories = cacheValues(child(getChildren(bars, 'ser')[0], 'cat')).map((v) => v ?? '')
-  const title = child(chart, 'title')
-  const titleText = descendants(child(title, 'tx'), 't').map(textOf).join('') || cacheValues(child(title, 'tx'))[0]
-  const locale = attrs(child(root, 'lang')).val ?? ''
-  const axis = child(plot, 'valAx'),
-    scaling = child(axis, 'scaling')
-  const optional = (n: XmlNode | undefined) => (n ? num(attrs(n).val) : undefined)
-  return {
-    kind: 'chart',
-    categories,
-    series,
-    title: title ? titleText || (locale.startsWith('zh') ? '圖表標題' : 'Chart Title') : undefined,
-    min: optional(child(scaling, 'min')),
-    max: optional(child(scaling, 'max')),
-    majorUnit: optional(child(axis, 'majorUnit')),
-    gapWidth: Math.max(0, num(attrs(child(bars, 'gapWidth')).val, 150)),
-    overlap: Math.max(-100, Math.min(100, num(attrs(child(bars, 'overlap')).val))),
-    legend: !!child(chart, 'legend'),
-    fontFamily: theme.fonts.get('minorHAnsi') ?? 'Calibri',
-    fontSizePt: num(attrs(descendants(child(axis, 'txPr'), 'defRPr')[0]).sz, 900) / 100
-  }
-}
-
 export async function loadDrawingParts(
   pkg: OfficePackage,
   root: XmlNode,
   part: string,
   theme: DocxTheme,
-  parseParagraph: (p: XmlNode) => DocxParagraph
+  parseParagraph: (p: XmlNode) => DocxParagraph,
+  reserve = true,
 ): Promise<Map<XmlNode, DocxImage>> {
-  const out = new Map<XmlNode, DocxImage>(),
-    rels = new Map<string, string>()
-  const dir = part.slice(0, part.lastIndexOf('/')),
-    base = part.slice(part.lastIndexOf('/') + 1)
-  for (const rel of getChildren(await pkg.xml(`${dir}/_rels/${base}.rels`), 'Relationship')) {
-    const a = attrs(rel)
-    if (a.TargetMode !== 'External' && a.Id && a.Target) rels.set(a.Id, target(part, a.Target))
+  const out = new Map<XmlNode, DocxImage>()
+  const selections = new WeakMap<XmlNode, ContentSelection[]>()
+  preparedSelections.set(out, selections)
+  const relationships = await partRelationshipNodes(pkg, part)
+  const themeRel = relationships.find(rel => attrs(rel).Type?.endsWith('/theme') && attrs(rel).TargetMode !== 'External' && attrs(rel).Target)
+  const themePath = themeRel ? target(part, attrs(themeRel).Target) : undefined
+  // parseThemeContext reads ordered XML and tolerates malformed optional parts.
+  const localTheme = parseThemeContext(themePath ? await pkg.text(themePath) : undefined)
+  let documentTheme: ThemeContext | undefined
+  if (part !== 'word/document.xml') {
+    const documentPart = 'word/document.xml'
+    const documentRels = await partRelationshipNodes(pkg, 'word/document.xml')
+    const documentThemeRel = documentRels.find(rel => attrs(rel).Type?.endsWith('/theme') && attrs(rel).TargetMode !== 'External' && attrs(rel).Target)
+    const documentPath = documentThemeRel ? target(documentPart, attrs(documentThemeRel).Target) : undefined
+    documentTheme = parseThemeContext(documentPath ? await pkg.text(documentPath) : undefined)
   }
-  for (const drawing of descendants(root, 'drawing')) {
-    const wp = child(drawing, 'inline') ?? child(drawing, 'anchor'),
-      graphic = child(child(wp, 'graphic'), 'graphicData')
-    if (!wp || !graphic) continue
-    let vector: DocxDrawing | undefined
-    const ids = child(graphic, 'relIds')
-    if (ids) {
-      const path = rels.get(attrs(ids).dm)
-      const data = path ? await pkg.xml(path) : undefined
-      const cachedId = attrs(descendants(data, 'dataModelExt')[0]).relId
-      let cachedPath = rels.get(cachedId)
-      // Some producers put the cached drawing relationship on the diagram data part.
-      if (!cachedPath && path && cachedId) {
-        const slash = path.lastIndexOf('/')
-        for (const rel of getChildren(
-          await pkg.xml(`${path.slice(0, slash)}/_rels/${path.slice(slash + 1)}.rels`),
-          'Relationship'
-        )) {
-          const a = attrs(rel)
-          if (a.Id === cachedId && a.TargetMode !== 'External') cachedPath = target(path, a.Target)
-        }
-      }
-      const cached = cachedPath ? await pkg.xml(cachedPath) : undefined
-      if (cached)
-        vector = { kind: 'diagram', shapes: getChildren(child(cached, 'spTree'), 'sp').map((s) => shape(s, theme)) }
-    }
-    const chartRef = child(graphic, 'chart')
-    if (chartRef) {
-      const path = rels.get(attrs(chartRef).id),
-        root = path ? await pkg.xml(path) : undefined
-      if (root) vector = chart(root, theme)
-    }
-    const content = child(graphic, 'contentPart')
-    if (content && attrs(graphic).uri?.endsWith('/wordprocessingInk')) {
-      const path = rels.get(attrs(content).id)
-      const root = path ? await pkg.xml(path) : undefined
-      if (root) vector = parseInk(root)
-    }
-    const wsp = child(graphic, 'wsp')
-    if (wsp) {
-      const body = attrs(child(wsp, 'bodyPr')),
-        pr = child(wsp, 'spPr'),
-        ln = child(pr, 'ln'),
-        lineColor = color(child(ln, 'solidFill'), theme)
-      vector = {
-        kind: 'textbox',
-        paragraphs: getChildren(child(child(wsp, 'txbx'), 'txbxContent'), 'p').map(parseParagraph),
-        vertical: body.vert === 'eaVert' || body.vert === 'vert',
-        fontFamily: theme.fonts.get('minorHAnsi') ?? 'Calibri',
-        fontSizePt: 12,
-        insets: {
-          left: num(body.lIns, 91440),
-          top: num(body.tIns, 45720),
-          right: num(body.rIns, 91440),
-          bottom: num(body.bIns, 45720)
-        },
-        fill: color(child(pr, 'solidFill'), theme),
-        line: lineColor ? { color: lineColor, widthEmu: num(attrs(ln).w, 6350) } : undefined
-      }
-    }
-    if (vector) {
+  const mergeStyles = <T>(base: T[], local: T[]): T[] => [
+    ...base.map((item, index) => local[index] ?? item),
+    ...local.slice(base.length)
+  ]
+  const baseTheme = documentTheme ?? parseThemeContext()
+  const drawingTheme: ThemeContext = {
+    ...baseTheme,
+    colors: { ...baseTheme.colors, ...localTheme.colors },
+    palette: { ...baseTheme.palette, ...localTheme.palette },
+    colorMap: { ...baseTheme.colorMap, ...localTheme.colorMap },
+    fonts: {
+      major: { ...baseTheme.fonts.major, ...localTheme.fonts.major, supplemental: { ...baseTheme.fonts.major.supplemental, ...localTheme.fonts.major.supplemental } },
+      minor: { ...baseTheme.fonts.minor, ...localTheme.fonts.minor, supplemental: { ...baseTheme.fonts.minor.supplemental, ...localTheme.fonts.minor.supplemental } }
+    },
+    fillStyles: mergeStyles(baseTheme.fillStyles, localTheme.fillStyles),
+    bgFillStyles: mergeStyles(baseTheme.bgFillStyles, localTheme.bgFillStyles),
+    lineStyles: mergeStyles(baseTheme.lineStyles, localTheme.lineStyles),
+    effectStyles: mergeStyles(baseTheme.effectStyles, localTheme.effectStyles),
+    issues: [...baseTheme.issues, ...localTheme.issues]
+  }
+  // The caller's document theme also supplies palette colors when no usable
+  // theme part is present; keep the ordered XML definitions and style matrix.
+  for (const [name, value] of theme.colors) {
+    if (!drawingTheme.colors[name] && /^[\da-f]{6}$/i.test(value))
+      drawingTheme.colors[name] = { kind: 'srgb', value, transforms: [] }
+  }
+  const load = async (drawing: XmlNode): Promise<void> => {
+    const wp = child(drawing, 'inline') ?? child(drawing, 'anchor')
+    if (!wp) return
+    const compatible = await prepareCompatibleDrawingContent(pkg, wp, part, theme, drawingTheme, { parseParagraph, parseDiagramText: (node, shape) => parseTextBody(node, drawingTheme, undefined, textFontDefaults(child(shape, 'style'), drawingTheme)) })
+    if (compatible?.selections.length) selections.set(drawing, compatible.selections)
+    const vector = compatible?.content
+    if (vector && (!reserve || reserveDrawingContent(pkg, vector, part))) {
       const extent = attrs(child(wp, 'extent'))
-      out.set(drawing, { data: new Uint8Array(), widthEmu: num(extent.cx), heightEmu: num(extent.cy), drawing: vector })
+      const reference = attrs(compatible?.reference)
+      out.set(drawing, { data: new Uint8Array(), widthEmu: num(extent.cx), heightEmu: num(extent.cy), drawing: vector,
+        referenceId: reference.id ?? reference.dm })
     }
   }
+  const hasSelectedBlank = (parent: XmlNode | undefined, depth = 0): boolean => {
+    if (!parent || depth >= 128) return false
+    for (const [name, node] of orderedChildren(parent)) {
+      if (name === 'drawing' && !out.get(node)?.drawing && selections.get(node)?.some(selection => orderedChildren(selection.node).every(([childName]) => childName === '#text'))) return true
+      if (name !== '#text' && hasSelectedBlank(node, depth + 1)) return true
+    }
+    return false
+  }
+  const visit = async (parent: XmlNode): Promise<void> => {
+    for (const [name, node] of orderedChildren(parent)) {
+      if (name === 'AlternateContent') {
+        let selected = false
+        for (const choice of getChildren(node, 'Choice')) {
+          if (!supportedChoiceRequirements(choice, ['w', 'a', 'c', 'dgm', 'dsp', 'ink', 'wpi', 'wps', 'wpg', 'wpc', 'wp', 'pic']).supported) continue
+          if (orderedChildren(choice).every(([name]) => name === '#text')) { selected = true; break }
+          const before = out.size
+          await visit(choice)
+          if (out.size > before || hasSelectedBlank(choice)) { selected = true; break }
+        }
+        if (!selected) {
+          const fallback = child(node, 'Fallback')
+          if (fallback) await visit(fallback)
+        }
+      } else if (name === 'drawing') await load(node)
+      else if (name !== '#text') await visit(node)
+    }
+  }
+  await visit(root)
   return out
 }
-
-export function paintDrawing(drawing: DocxDrawing, ctx: CanvasRenderingContext2D, width: number, height: number): void {
-  if (drawing.kind === 'ink') paintInk(drawing, ctx, width, height)
-  else if (drawing.kind === 'diagram') {
-    for (const s of drawing.shapes) {
-      const x = emuToPx(s.xEmu),
-        y = emuToPx(s.yEmu),
-        w = emuToPx(s.widthEmu),
-        h = emuToPx(s.heightEmu)
-      ctx.save()
-      ctx.translate(x + w / 2, y + h / 2)
-      ctx.rotate(((s.rotationDeg ?? 0) * Math.PI) / 180)
-      ctx.translate(-w / 2, -h / 2)
-      ctx.beginPath()
-      if (s.geometry === 'ellipse') ctx.ellipse(w / 2, h / 2, w / 2, h / 2, 0, 0, Math.PI * 2)
-      else if (s.geometry === 'rightArrow') {
-        ctx.moveTo(0, h * 0.2)
-        ctx.lineTo(w * 0.5, h * 0.2)
-        ctx.lineTo(w * 0.5, 0)
-        ctx.lineTo(w, h / 2)
-        ctx.lineTo(w * 0.5, h)
-        ctx.lineTo(w * 0.5, h * 0.8)
-        ctx.lineTo(0, h * 0.8)
-        ctx.closePath()
-      } else ctx.rect(0, 0, w, h)
-      if (s.fill) {
-        ctx.fillStyle = `#${s.fill}`
-        ctx.fill()
-      }
-      if (s.line) {
-        ctx.strokeStyle = `#${s.line.color}`
-        ctx.lineWidth = emuToPx(s.line.widthEmu)
-        ctx.stroke()
-      }
-      const rows = s.paragraphs.filter((p) => p.runs.some((r) => r.text))
+export function paintDrawing(drawing: DocxDrawing, ctx: CanvasRenderingContext2D, width: number, height: number, assets?: ContentPaintAssets): void {
+  paintDrawingContent(drawing, ctx, width, height, { fontFamilyCss, paintDiagramText, paintTextbox, assets })
+}
+// Cached DrawingML text can carry alpha as a CSS color; older Word text runs
+// carry six-digit RGB without a leading #.
+function textColor(value: string): string {
+  return /^rgba?\(/i.test(value) ? value : `#${value.replace(/^#/, '')}`
+}
+function paintDiagramText(s: DocxDrawingShape, ctx: CanvasRenderingContext2D, w: number, h: number): void {
+  // Parsed DrawingML labels (Task2 body/list/defRPr/fontRef/script/theme/
+  // noFill/alpha inheritance baked at parse) paint through the shared engine
+  // with exact bodyPr direction/insets/anchor. Manually constructed legacy
+  // models without a parsed body keep the historical rows loop below.
+  if (s.textBody) {
+    paintTextBody(s.textBody, ctx, 0, 0, w, h, fontFamilyCss)
+    return
+  }
+  const rows = s.paragraphs.filter((p) => p.runs.some((r) => r.text))
       let ty =
         h / 2 -
         rows.reduce((sum, p) => sum + Math.max(0, ...p.runs.map((r) => ((r.fontSizePt ?? 24) * 4) / 3)) * 1.2, 0) / 2
@@ -290,145 +144,131 @@ export function paintDrawing(drawing: DocxDrawing, ctx: CanvasRenderingContext2D
         let tx = p.align === 'center' ? (w - textWidth) / 2 : p.align === 'right' ? w - textWidth : 0
         for (const r of p.runs) {
           ctx.font = font(r, s.fontFamily, 24)
-          ctx.fillStyle = `#${r.color ?? s.textColor ?? '000000'}`
+          ctx.fillStyle = textColor(r.color ?? s.textColor ?? '000000')
           ctx.textBaseline = 'alphabetic'
           ctx.fillText(r.text, tx, ty + fontSize * 0.9)
           tx += ctx.measureText(r.text).width
         }
         ty += fontSize * 1.2
       }
-      ctx.restore()
-    }
-  } else if (drawing.kind === 'chart') paintChart(drawing, ctx, width, height)
-  else {
-    if (drawing.fill) {
-      ctx.fillStyle = `#${drawing.fill}`
-      ctx.fillRect(0, 0, width, height)
-    }
-    if (drawing.line) {
-      ctx.strokeStyle = `#${drawing.line.color}`
-      ctx.lineWidth = emuToPx(drawing.line.widthEmu)
-      ctx.strokeRect(0, 0, width, height)
-    }
-    let x = width - emuToPx(drawing.insets.right),
-      y = emuToPx(drawing.insets.top)
-    for (const p of drawing.paragraphs) {
-      const size = ((p.runs[0]?.fontSizePt ?? drawing.fontSizePt) * 4) / 3
-      if (drawing.vertical) {
-        x -= size
-        y = emuToPx(drawing.insets.top)
-      } else {
-        x = emuToPx(drawing.insets.left)
-      }
-      for (const r of p.runs) {
-        ctx.font = font(r, drawing.fontFamily, drawing.fontSizePt)
-        ctx.fillStyle = `#${r.color ?? '000000'}`
-        ctx.textBaseline = 'top'
-        if (!drawing.vertical) {
-          ctx.fillText(r.text, x, y)
-          x += ctx.measureText(r.text).width
-          continue
+}
+function paintTextbox(drawing: Extract<DocxDrawing, { kind: 'textbox' }>, ctx: CanvasRenderingContext2D, width: number, height: number, assets?: ContentPaintAssets): void {
+  ctx.save()
+  try {
+    const sources: DocxTextRun[][] = []
+    const images: DocxImage[] = []
+    const paragraphs: PptxParagraph[] = drawing.paragraphs.map(p => {
+      const runs: PptxParagraph['runs'] = []
+      const inlineSlots: NonNullable<PptxParagraph['inlineSlots']> = []
+      const own: DocxTextRun[] = []
+      let sourceOffset = 0
+      const items = p.inline ?? [...p.runs.map(run => ({ kind: 'text' as const, run })), ...(p.images ?? []).map(image => ({ kind: 'image' as const, image }))]
+      for (const item of items) {
+        if (item.kind === 'image') {
+          if (item.image.floating) continue
+          const width = emuToPx(item.image.widthEmu), height = emuToPx(item.image.heightEmu)
+          if (!(width > 0 && height > 0 && Number.isFinite(width + height))) continue
+          const id = images.push(item.image) - 1
+          inlineSlots.push({ id, sourceOffset, width, height })
+        } else {
+          const run = item.run
+          const family = run.fontFamily ?? drawing.fontFamily
+          // Keep authored shaped runs intact. Only actual physical slot/run
+          // boundaries split text; an image never becomes a source character.
+          runs.push({ text: run.text, fontSizePt: run.fontSizePt ?? drawing.fontSizePt, fontFamily: family,
+            fontFamilyEastAsia: family, fontFamilyComplexScript: family,
+            color: run.color ? textColor(run.color) : undefined, bold: run.bold, italic: run.italic })
+          own.push(run); sourceOffset += run.text.length
         }
-        for (const token of r.text.match(/[\x20-\x7e]+|[^\x20-\x7e]/gu) ?? []) {
-          if (/^[\x20-\x7e]+$/.test(token)) {
+      }
+      sources.push(own)
+      return { runs, inlineSlots, align: p.align, level: 0,
+        defaultProperties: { fontFamily: drawing.fontFamily, fontSizePt: drawing.fontSizePt },
+        wordLineSpacing: p.lineSpacing ?? { rule: 'auto', value: 240 },
+        spaceBefore: { kind: 'points', value: (p.spacingBeforeTwips ?? 0) / 20 },
+        spaceAfter: { kind: 'points', value: (p.spacingAfterTwips ?? 0) / 20 },
+        marginLeftEmu: (p.indentLeftTwips ?? 0) * 635,
+        marginRightEmu: (p.indentRightTwips ?? 0) * 635,
+        indentEmu: (p.indentFirstLineTwips ?? 0) * 635 }
+    })
+    const body: PptxTextBody = {
+      direction: drawing.direction ?? (drawing.vertical ? 'eaVert' : 'horz'), paragraphs,
+      anchor: 't', wrap: true,
+      insetLeftEmu: drawing.insets.left, insetRightEmu: drawing.insets.right,
+      insetTopEmu: drawing.insets.top, insetBottomEmu: drawing.insets.bottom
+    }
+    const laid = layoutTextBody(body, width, height, createTextBodyMeasurer(ctx, fontFamilyCss))
+    ctx.save()
+    try {
+      // Oversized inline objects keep their authored size on a separate flow
+      // line and clip to the textbox. Fitting objects allocate complete width,
+      // height and paragraph advance, in source order in every writing frame.
+      ctx.beginPath(); ctx.rect(0, 0, width, height); ctx.clip()
+      for (const line of laid.lines) for (const slot of line.inlineSlots ?? []) {
+        const decoded = assets?.imageFor?.(images[slot.id])
+        if (decoded) ctx.drawImage(decoded, slot.x, slot.y, slot.width, slot.height)
+      }
+      for (const line of laid.lines) {
+        for (const segment of line.segments) {
+          const origin = sources[line.paragraphIndex]?.[segment.runIndex]
+          if (!origin || (!origin.underline && !origin.strike && !origin.highlight)) continue
+          const size = (segment.style.fontSizePt ?? 12) * 96 / 72
+          const paint = (x: number, y: number, horizontal: boolean): void => {
+            if (origin.highlight) {
+              const hl = TEXTBOX_HIGHLIGHT_CSS[origin.highlight] ?? origin.highlight
+              ctx.fillStyle = hl.startsWith('#') ? hl : `#${hl}`
+              if (horizontal) ctx.fillRect(x, y - size * 0.8, segment.width, size)
+              else ctx.fillRect(x - size * 0.8, y, size, segment.width)
+            }
+            if (origin.underline || origin.strike) {
+              ctx.strokeStyle = origin.color ? textColor(origin.color) : '#000000'
+              ctx.lineWidth = Math.max(1, size * 0.06)
+              ctx.beginPath()
+              if (horizontal) {
+                const yy = y + (origin.underline ? size * 0.15 : -size * 0.3)
+                ctx.moveTo(x, yy)
+                ctx.lineTo(x + segment.width, yy)
+              } else {
+                const xx = x + (origin.underline ? size * 0.15 : -size * 0.3)
+                ctx.moveTo(xx, y)
+                ctx.lineTo(xx, y + segment.width)
+              }
+              ctx.stroke()
+            }
+          }
+          if (segment.transform) {
+            const t = segment.transform
+            // In the rotated frame glyphs advance along +x: horizontal metrics
+            // map to (origin, width) and vertical metrics to (origin, height).
             ctx.save()
-            ctx.translate(x + size, y)
-            ctx.rotate(Math.PI / 2)
-            ctx.fillText(token, 0, 0)
-            ctx.restore()
-            y += ctx.measureText(token).width
+            try {
+              ctx.transform(t.a, t.b, t.c, t.d, t.e, t.f)
+              paint(0, 0, true)
+            } finally {
+              ctx.restore()
+            }
           } else {
-            ctx.fillText(token, x, y)
-            y += size
+            paint(segment.x, line.baseline, true)
           }
         }
       }
-      if (!drawing.vertical) y += size * 1.2
-      else x -= size * 0.2
+    } finally {
+      ctx.restore()
     }
+    paintTextBody(body, ctx, 0, 0, width, height, fontFamilyCss, undefined, { layout: laid, clip: { x: 0, y: 0, width, height } })
+  } finally {
+    ctx.restore()
   }
 }
-
+/** Highlight names shared with layout.ts highlight rendering (kept in sync
+ * manually; no import cycle between drawing and layout). */
+const TEXTBOX_HIGHLIGHT_CSS: Record<string, string> = {
+  yellow: '#ffff00', green: '#00ff00', cyan: '#00ffff', magenta: '#ff00ff',
+  blue: '#0000ff', red: '#ff0000', darkBlue: '#00008b', darkCyan: '#008b8b',
+  darkGreen: '#006400', darkMagenta: '#8b008b', darkRed: '#8b0000',
+  darkYellow: '#808000', darkGray: '#a9a9a9', lightGray: '#d3d3d3',
+  black: '#000000', white: '#ffffff'
+}
 function font(run: DocxTextRun, family: string, size: number): string {
   return `${run.italic ? 'italic ' : ''}${run.bold ? 'bold ' : ''}${run.fontSizePt ?? size}pt ${fontFamilyCss(run.fontFamily ?? family)}`
-}
-function paintChart(
-  chart: Extract<DocxDrawing, { kind: 'chart' }>,
-  ctx: CanvasRenderingContext2D,
-  w: number,
-  h: number
-): void {
-  ctx.fillStyle = '#ffffff'
-  ctx.fillRect(0, 0, w, h)
-  ctx.strokeStyle = '#D9D9D9'
-  ctx.lineWidth = 1
-  ctx.strokeRect(0, 0, w, h)
-  const left = w * 0.046,
-    right = w * 0.026,
-    top = h * (chart.title?.length ? 0.152 : 0.09),
-    bottom = h * (chart.legend ? 0.185 : 0.14)
-  const pw = w - left - right,
-    ph = h - top - bottom
-  const values = chart.series.flatMap((s) => s.values).filter((v): v is number => v !== undefined)
-  const min = chart.min ?? Math.min(0, ...values),
-    maximum = Math.max(1, ...values)
-  const raw = ((maximum - min) * 1.1) / 6,
-    base = 10 ** Math.floor(Math.log10(raw)),
-    step =
-      chart.majorUnit && chart.majorUnit > 0
-        ? chart.majorUnit
-        : ([1, 2, 5, 10].map((v) => v * base).find((v) => v >= raw) ?? base * 10)
-  const max = chart.max ?? Math.ceil(((maximum - min) * 1.1) / step) * step + min,
-    range = Math.max(1, max - min)
-  ctx.font = font({ text: '' }, chart.fontFamily, chart.fontSizePt)
-  ctx.fillStyle = '#595959'
-  ctx.textAlign = 'right'
-  ctx.textBaseline = 'middle'
-  for (let value = min, count = 0; value <= max + step / 1000 && count < 100; value += step, count++) {
-    const y = top + ph - ((value - min) / range) * ph
-    ctx.strokeStyle = '#D9D9D9'
-    ctx.beginPath()
-    ctx.moveTo(left, y)
-    ctx.lineTo(w - right, y)
-    ctx.stroke()
-    ctx.fillText(String(Number(value.toPrecision(8))), left - 8, y)
-  }
-  const categories = Math.max(chart.categories.length, ...chart.series.map((s) => s.values.length), 1),
-    group = pw / categories
-  const stride = 1 - chart.overlap / 100,
-    span = 1 + (Math.max(1, chart.series.length) - 1) * stride
-  const bar = group / (span + chart.gapWidth / 100),
-    zero = top + ph - ((0 - min) / range) * ph
-  chart.series.forEach((s, si) =>
-    s.values.forEach((value, ci) => {
-      if (value === undefined) return
-      const x = left + group * ci + (group - bar * span) / 2 + bar * si * stride,
-        y = top + ph - ((value - min) / range) * ph
-      ctx.fillStyle = `#${s.color}`
-      ctx.fillRect(x, Math.min(y, zero), bar, Math.abs(zero - y))
-    })
-  )
-  ctx.fillStyle = '#595959'
-  ctx.textAlign = 'center'
-  ctx.textBaseline = 'top'
-  chart.categories.forEach((label, i) => ctx.fillText(label, left + group * (i + 0.5), top + ph + 10))
-  if (chart.title) {
-    ctx.font = font({ text: '' }, chart.fontFamily, 14)
-    ctx.fillText(chart.title, w / 2, 14)
-  }
-  if (chart.legend) {
-    ctx.font = font({ text: '' }, chart.fontFamily, chart.fontSizePt)
-    const sizes = chart.series.map((s) => ctx.measureText(s.name).width + 17),
-      total = sizes.reduce((a, b) => a + b, 0)
-    let x = (w - total) / 2
-    const y = h - 24
-    chart.series.forEach((s, i) => {
-      ctx.fillStyle = `#${s.color}`
-      ctx.fillRect(x, y + 3, 6, 6)
-      ctx.fillStyle = '#595959'
-      ctx.textAlign = 'left'
-      ctx.fillText(s.name, x + 9, y)
-      x += sizes[i]
-    })
-  }
 }

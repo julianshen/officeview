@@ -2,6 +2,9 @@
  * DOCX document model — a flattened, renderer-friendly view of the OOXML
  * document part. Layout (line breaking, page flow) operates on this.
  */
+import type { DrawingContent, DrawingContentShape } from '../drawing/content'
+import type { ParsedDrawingTextBody } from '../drawing/text-parse'
+import type { DrawingCoverageEntry } from '../drawing/coverage'
 
 export interface DocxTextRun {
   text: string
@@ -46,58 +49,19 @@ export interface DocxImage {
   floating?: DocxFloating
   /** Vector content stored in the package rather than an encoded picture. */
   drawing?: DocxDrawing
+  /** Selected vector payload relationship, when this image carries one. */
+  referenceId?: string
 }
 
-export interface DocxDrawingShape {
-  xEmu: number
-  yEmu: number
-  widthEmu: number
-  heightEmu: number
-  geometry: string
-  rotationDeg?: number
-  fill?: string
-  line?: { color: string; widthEmu: number }
-  paragraphs: Array<{ runs: DocxTextRun[]; align: ParagraphAlign }>
-  fontFamily: string
-  textColor?: string
-}
-
-export type DocxDrawing =
-  | { kind: 'diagram'; shapes: DocxDrawingShape[] }
-  | {
-      kind: 'ink'
-      strokes: Array<{ points: Array<[number, number]>; widthEmu: number; color: string }>
-      widthEmu: number
-      heightEmu: number
-    }
-  | {
-      kind: 'chart'
-      title?: string
-      categories: string[]
-      series: Array<{ name: string; values: Array<number | undefined>; color: string }>
-      min?: number
-      max?: number
-      majorUnit?: number
-      gapWidth: number
-      overlap: number
-      legend: boolean
-      fontFamily: string
-      fontSizePt: number
-    }
-  | {
-      kind: 'textbox'
-      paragraphs: DocxParagraph[]
-      vertical: boolean
-      fontFamily: string
-      fontSizePt: number
-      insets: { left: number; top: number; right: number; bottom: number }
-      fill?: string
-      line?: { color: string; widthEmu: number }
-    }
+/** Compatibility aliases: Word owns its paragraph/text layout. */
+export type DocxDrawingShape = DrawingContentShape<ParsedDrawingTextBody>
+export type DocxDrawing = DrawingContent<DocxParagraph, ParsedDrawingTextBody>
 
 export type DocxInline = { kind: 'text'; run: DocxTextRun } | { kind: 'image'; image: DocxImage }
 
 export interface DocxParagraph {
+  /** Formatting of the paragraph mark, used for an empty line. */
+  paragraphMark?: Partial<DocxTextRun>
   runs: DocxTextRun[]
   images: DocxImage[]
   /** Text and drawings in source order, when the paragraph contains drawings. */
@@ -129,6 +93,8 @@ export interface DocxPageMargins {
 }
 
 export interface DocxSection {
+  /** This section's start relative to the previous section (default nextPage). */
+  type?: 'nextPage' | 'continuous' | 'evenPage' | 'oddPage' | 'nextColumn'
   margins: DocxPageMargins
   pageSize: { widthTwips: number; heightTwips: number; orientation: 'portrait' | 'landscape' }
   paragraphs: DocxParagraph[]
@@ -139,12 +105,18 @@ export interface DocxSection {
   /** Footer paragraphs (w:footerReference), painted on every page. */
   footer?: DocxParagraph[]
   /** w:titlePg — the first page uses these instead. */
+  /** Ordered repeated content; provided lists (even empty) override paragraph arrays. */
+  headerBlocks?: DocxBlock[]
+  footerBlocks?: DocxBlock[]
+  firstHeaderBlocks?: DocxBlock[]
+  firstFooterBlocks?: DocxBlock[]
   titlePg?: boolean
   firstHeader?: DocxParagraph[]
   firstFooter?: DocxParagraph[]
 }
 
 export interface DocxDocument {
+  drawingCoverage?: DrawingCoverageEntry[]
   sections: DocxSection[]
   defaultFontFamily: string
   defaultFontSizePt: number
@@ -173,6 +145,8 @@ export interface DocxTableCell {
   paragraphs: DocxParagraph[]
   /** Number of grid columns this cell spans (default 1). */
   gridSpan: number
+  /** Resolved cell-specific padding, inherited field by field. */
+  margins?: DocxTableCellMargins
   /** Vertical merge state: 'restart' starts a merged region, 'continue' extends it. */
   vMerge?: 'restart' | 'continue'
   /** Shading fill color (hex RGB). */
@@ -183,9 +157,14 @@ export interface DocxTableCell {
   widthTwips?: number
   /** w:vAlign — vertical text placement within the cell. */
   vAlign?: 'top' | 'center' | 'bottom'
+  /** w:textDirection — vertical cell text flow. Absent/invalid means lrTb (ordinary horizontal). */
+  textDirection?: 'lrTb' | 'tbRl' | 'btLr' | 'lrTbV' | 'tbRlV' | 'tbLrV'
 }
 
 export interface DocxTableRow {
+  /** Grid columns omitted before/after a ragged row. */
+  gridBefore?: number
+  gridAfter?: number
   cells: DocxTableCell[]
   heightTwips?: number
   heightRule?: 'atLeast' | 'exact' | 'auto'

@@ -1,0 +1,14 @@
+[
+  {
+    "name": "Liter-Regular.ttf",
+    "bytes": 77008,
+    "sha256": "379fe197584f098a0318278c5e1b453a1ef8f017925041e3e51e18efb025822d",
+    "source": "https://raw.githubusercontent.com/google/fonts/main/ofl/liter/Liter-Regular.ttf"
+  },
+  {
+    "name": "OFL.txt",
+    "bytes": 4378,
+    "sha256": "3e12fb44d6ae7f513c44d182db1bbd0fa075408cda1b7cbdb2b74556be804af2",
+    "source": "https://raw.githubusercontent.com/google/fonts/main/ofl/liter/OFL.txt"
+  }
+]

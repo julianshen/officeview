@@ -6,6 +6,7 @@ import { collectDocImages, layoutDocx, renderPages, type MeasureFn } from '../sr
 import { decodeImage } from '../src/core/images'
 import { CT_TYPES, ROOT_RELS } from '../src/testdata/ooxml-builders'
 import { fontFamilyCss } from '../src/docx/styles'
+import { paintDrawing } from '../src/docx/drawing'
 
 const measure: MeasureFn = (text, style) => text.length * style.fontSizePt * 0.8
 const ns =
@@ -14,13 +15,13 @@ const picture = (id = 'img', w = 914400) =>
   `<w:drawing><wp:inline><wp:extent cx="${w}" cy="914400"/><a:graphic><a:graphicData><pic:pic><pic:blipFill><a:blip r:embed="${id}"/></pic:blipFill></pic:pic></a:graphicData></a:graphic></wp:inline></w:drawing>`
 const theme =
   '<a:theme xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><a:themeElements><a:clrScheme><a:accent1><a:srgbClr val="4F81BD"/></a:accent1><a:accent2><a:srgbClr val="C0504D"/></a:accent2><a:lt1><a:srgbClr val="FFFFFF"/></a:lt1></a:clrScheme><a:fontScheme><a:minorFont><a:latin typeface="Cambria"/></a:minorFont></a:fontScheme></a:themeElements></a:theme>'
-async function fixture(body: string, parts: Record<string, string> = {}) {
+async function fixture(body: string, parts: Record<string, string> = {}, sectionRefs = '') {
   const zip = new JSZip()
   zip.file('[Content_Types].xml', CT_TYPES)
   zip.file('_rels/.rels', ROOT_RELS)
   zip.file(
     'word/document.xml',
-    `<w:document ${ns}><w:body>${body}<w:sectPr><w:pgSz w:w="12240" w:h="15840"/><w:pgMar w:top="1440" w:left="1440" w:right="1440" w:bottom="1440"/></w:sectPr></w:body></w:document>`
+    `<w:document ${ns}><w:body>${body}<w:sectPr>${sectionRefs}<w:pgSz w:w="12240" w:h="15840"/><w:pgMar w:top="1440" w:left="1440" w:right="1440" w:bottom="1440"/></w:sectPr></w:body></w:document>`
   )
   zip.file('word/theme/theme1.xml', theme)
   const { createCanvas } = await import('canvas')
@@ -173,6 +174,109 @@ describe('DOCX complex drawing and style regressions', () => {
     renderPages(layoutDocx(doc, measure), ctx as never)
     expect([...ctx.getImageData(144, 120, 1, 1).data].slice(0, 3)).toEqual([79, 129, 189])
   })
+  test('renders adjusted cached presets and ordered custom paths without fabricating unknown outlines', async () => {
+    const drawing = `<dsp:drawing xmlns:dsp="http://schemas.microsoft.com/office/drawing/2008/diagram" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><dsp:spTree>
+      <dsp:sp><dsp:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="914400" cy="914400"/></a:xfrm><a:prstGeom prst="rightArrow"><a:avLst><a:gd name="adj1" fmla="val 60000"/><a:gd name="adj2" fmla="val 50000"/></a:avLst></a:prstGeom><a:solidFill><a:srgbClr val="FF0000"/></a:solidFill></dsp:spPr></dsp:sp>
+      <dsp:sp><dsp:spPr><a:xfrm><a:off x="914400" y="0"/><a:ext cx="914400" cy="914400"/></a:xfrm><a:custGeom><a:pathLst><a:path w="100" h="100"><a:moveTo><a:pt x="0" y="0"/></a:moveTo><a:lnTo><a:pt x="100" y="0"/></a:lnTo><a:quadBezTo><a:pt x="100" y="100"/><a:pt x="50" y="100"/></a:quadBezTo><a:lnTo><a:pt x="0" y="0"/></a:lnTo><a:close/></a:path></a:pathLst></a:custGeom><a:solidFill><a:srgbClr val="0000FF"/></a:solidFill></dsp:spPr></dsp:sp>
+      <dsp:sp><dsp:spPr><a:xfrm><a:off x="1828800" y="0"/><a:ext cx="914400" cy="914400"/></a:xfrm><a:prstGeom prst="unknownOfficeShape"/><a:solidFill><a:srgbClr val="FF00FF"/></a:solidFill></dsp:spPr><dsp:txBody><a:p><a:r><a:t>Unknown</a:t></a:r></a:p></dsp:txBody></dsp:sp>
+      <dsp:cxnSp><dsp:spPr><a:xfrm><a:off x="2743200" y="0"/><a:ext cx="914400" cy="914400"/></a:xfrm><a:prstGeom prst="rect"/><a:solidFill><a:srgbClr val="00FF00"/></a:solidFill></dsp:spPr></dsp:cxnSp>
+    </dsp:spTree></dsp:drawing>`
+    const doc = await fixture('<w:p><w:r><w:drawing><wp:inline><wp:extent cx="3657600" cy="914400"/><a:graphic><a:graphicData><dgm:relIds r:dm="dm"/></a:graphicData></a:graphic></wp:inline></w:drawing></w:r></w:p>', {
+      'word/diagrams/data.xml': '<dgm:dataModel xmlns:dgm="http://schemas.openxmlformats.org/drawingml/2006/diagram"><dgm:extLst><dgm:ext><dsp:dataModelExt xmlns:dsp="http://schemas.microsoft.com/office/drawing/2008/diagram" relId="dg"/></dgm:ext></dgm:extLst></dgm:dataModel>',
+      'word/diagrams/drawing.xml': drawing
+    })
+    const image = collectDocImages(doc)[0]
+    expect(image.drawing?.kind).toBe('diagram')
+    if (image.drawing?.kind !== 'diagram') throw Error('diagram missing')
+    expect(image.drawing.shapes.map(s => s.geometry)).toEqual(['rightArrow', 'custom', 'unknownOfficeShape', 'rect'])
+    expect(image.drawing.shapes[1].drawingGeometry?.paths[0].commands.map(command => command[0])).toEqual(['moveTo', 'lnTo', 'quadBezTo', 'lnTo', 'close'])
+    expect(image.drawing.shapes[2].geometryIssues?.map(issue => issue.kind)).toContain('unknown-preset')
+    const { createCanvas } = await import('canvas')
+    const ctx = createCanvas(400, 100).getContext('2d')
+    paintDrawing(image.drawing, ctx as never, 400, 100)
+    const rgb = (x: number, y: number) => [...ctx.getImageData(x, y, 1, 1).data].slice(0, 3)
+    expect(rgb(20, 22)).toEqual([255, 0, 0]) // adjusted shaft reaches y=20; default starts at y=25
+    expect(rgb(110, 75)).toEqual([0, 0, 0]) // outside the custom triangle, no rectangle fallback
+    expect(rgb(150, 25)).toEqual([0, 0, 255])
+    expect(rgb(225, 50)).toEqual([0, 0, 0]) // unknown preset has no invented outline
+    expect(rgb(325, 50)).toEqual([0, 255, 0]) // valid neighbor after unknown still paints
+  })
+  test('keeps valid cached paths when a sibling path is corrupt and resolves theme styles', async () => {
+    const styledTheme = theme.replace('</a:themeElements>', '<a:fmtScheme><a:fillStyleLst><a:solidFill><a:schemeClr val="phClr"/></a:solidFill></a:fillStyleLst></a:fmtScheme></a:themeElements>')
+    const shapeXml = (x: number, directFill: string) => `<dsp:sp><dsp:spPr><a:xfrm><a:off x="${x}" y="0"/><a:ext cx="914400" cy="914400"/></a:xfrm><a:custGeom><a:pathLst><a:path w="100" h="100"><a:moveTo><a:pt x="missingGuide" y="0"/></a:moveTo><a:lnTo><a:pt x="100" y="100"/></a:lnTo></a:path><a:path w="100" h="100"><a:moveTo><a:pt x="0" y="0"/></a:moveTo><a:lnTo><a:pt x="100" y="0"/></a:lnTo><a:lnTo><a:pt x="100" y="100"/></a:lnTo><a:lnTo><a:pt x="0" y="100"/></a:lnTo><a:close/></a:path></a:pathLst></a:custGeom>${directFill}</dsp:spPr><dsp:style><a:fillRef idx="1"><a:schemeClr val="accent2"/></a:fillRef></dsp:style></dsp:sp>`
+    const doc = await fixture('<w:p><w:r><w:drawing><wp:inline><wp:extent cx="1828800" cy="914400"/><a:graphic><a:graphicData><dgm:relIds r:dm="dm"/></a:graphicData></a:graphic></wp:inline></w:drawing></w:r></w:p>', {
+      'word/theme/theme1.xml': styledTheme,
+      'word/diagrams/data.xml': '<dgm:dataModel xmlns:dgm="http://schemas.openxmlformats.org/drawingml/2006/diagram"><dgm:extLst><dgm:ext><dsp:dataModelExt xmlns:dsp="http://schemas.microsoft.com/office/drawing/2008/diagram" relId="dg"/></dgm:ext></dgm:extLst></dgm:dataModel>',
+      'word/diagrams/drawing.xml': `<dsp:drawing xmlns:dsp="http://schemas.microsoft.com/office/drawing/2008/diagram" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><dsp:spTree>${shapeXml(0, '')}${shapeXml(914400, '<a:solidFill><a:srgbClr val="0000FF"/></a:solidFill>')}</dsp:spTree></dsp:drawing>`
+    })
+    const image = collectDocImages(doc)[0]
+    if (image.drawing?.kind !== 'diagram') throw Error('diagram missing')
+    expect(image.drawing.shapes[0].geometryIssues?.map(issue => issue.kind)).toContain('invalid-path')
+    const { createCanvas } = await import('canvas')
+    const ctx = createCanvas(200, 100).getContext('2d')
+    paintDrawing(image.drawing, ctx as never, 200, 100)
+    expect([...ctx.getImageData(50, 50, 1, 1).data].slice(0, 3)).toEqual([192, 80, 77])
+    expect([...ctx.getImageData(150, 50, 1, 1).data].slice(0, 3)).toEqual([0, 0, 255])
+  })
+  test('body, header, and footer cached diagrams share the document theme palette and style matrix', async () => {
+    const styledTheme = theme.replace('</a:themeElements>', '<a:fmtScheme><a:fillStyleLst><a:solidFill><a:schemeClr val="phClr"/></a:solidFill></a:fillStyleLst></a:fmtScheme></a:themeElements>')
+    const inline = '<w:p><w:r><w:drawing><wp:inline><wp:extent cx="1828800" cy="914400"/><a:graphic><a:graphicData><dgm:relIds r:dm="dm"/></a:graphicData></a:graphic></wp:inline></w:drawing></w:r></w:p>'
+    const cache = '<dsp:drawing xmlns:dsp="http://schemas.microsoft.com/office/drawing/2008/diagram" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><dsp:spTree><dsp:sp><dsp:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="914400" cy="914400"/></a:xfrm><a:prstGeom prst="rect"/><a:solidFill><a:schemeClr val="accent1"/></a:solidFill></dsp:spPr></dsp:sp><dsp:sp><dsp:spPr><a:xfrm><a:off x="914400" y="0"/><a:ext cx="914400" cy="914400"/></a:xfrm><a:prstGeom prst="rect"/></dsp:spPr><dsp:style><a:fillRef idx="1"><a:schemeClr val="accent2"/></a:fillRef></dsp:style></dsp:sp></dsp:spTree></dsp:drawing>'
+    const data = '<dgm:dataModel xmlns:dgm="http://schemas.openxmlformats.org/drawingml/2006/diagram"><dgm:extLst><dgm:ext><dsp:dataModelExt xmlns:dsp="http://schemas.microsoft.com/office/drawing/2008/diagram" relId="dg"/></dgm:ext></dgm:extLst></dgm:dataModel>'
+    const rels = (extra = '') => `<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="dm" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/diagramData" Target="diagrams/data.xml"/><Relationship Id="dg" Type="http://schemas.microsoft.com/office/2007/relationships/diagramDrawing" Target="diagrams/drawing.xml"/>${extra}</Relationships>`
+    const doc = await fixture(inline, {
+      'word/theme/theme1.xml': styledTheme,
+      'word/diagrams/data.xml': data,
+      'word/diagrams/drawing.xml': cache,
+      'word/header1.xml': `<w:hdr ${ns}>${inline}</w:hdr>`,
+      'word/footer1.xml': `<w:ftr ${ns}>${inline}</w:ftr>`,
+      'word/_rels/document.xml.rels': rels('<Relationship Id="theme" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/theme" Target="theme/theme1.xml"/><Relationship Id="hdr" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/header" Target="header1.xml"/><Relationship Id="ftr" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/footer" Target="footer1.xml"/>'),
+      'word/_rels/header1.xml.rels': rels('<Relationship Id="badTheme" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/theme"/>'),
+      'word/_rels/footer1.xml.rels': rels('<Relationship Id="missingTheme" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/theme" Target="theme/missing.xml"/>')
+    }, '<w:headerReference w:type="default" r:id="hdr"/><w:footerReference w:type="default" r:id="ftr"/>')
+    const parts = [doc.sections[0].paragraphs[0], doc.sections[0].header?.[0], doc.sections[0].footer?.[0]]
+    const { createCanvas } = await import('canvas')
+    for (const part of parts) {
+      const drawing = part?.images[0]?.drawing
+      expect(drawing?.kind).toBe('diagram')
+      if (drawing?.kind !== 'diagram') continue
+      const ctx = createCanvas(200, 100).getContext('2d')
+      paintDrawing(drawing, ctx as never, 200, 100)
+      expect([...ctx.getImageData(50, 50, 1, 1).data]).toEqual([79, 129, 189, 255])
+      expect([...ctx.getImageData(150, 50, 1, 1).data]).toEqual([192, 80, 77, 255])
+    }
+  })
+  test('empty, partial, and malformed local themes inherit document diagram styles', async () => {
+    const styledTheme = theme.replace('</a:themeElements>', '<a:fmtScheme><a:fillStyleLst><a:solidFill><a:schemeClr val="phClr"/></a:solidFill></a:fillStyleLst></a:fmtScheme></a:themeElements>')
+    const inline = '<w:p><w:r><w:drawing><wp:inline><wp:extent cx="1828800" cy="914400"/><a:graphic><a:graphicData><dgm:relIds r:dm="dm"/></a:graphicData></a:graphic></wp:inline></w:drawing></w:r></w:p>'
+    const cache = '<dsp:drawing xmlns:dsp="http://schemas.microsoft.com/office/drawing/2008/diagram" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><dsp:spTree><dsp:sp><dsp:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="914400" cy="914400"/></a:xfrm><a:prstGeom prst="rect"/><a:solidFill><a:schemeClr val="accent1"/></a:solidFill></dsp:spPr></dsp:sp><dsp:sp><dsp:spPr><a:xfrm><a:off x="914400" y="0"/><a:ext cx="914400" cy="914400"/></a:xfrm><a:prstGeom prst="rect"/></dsp:spPr><dsp:style><a:fillRef idx="1"><a:schemeClr val="accent2"/></a:fillRef></dsp:style></dsp:sp></dsp:spTree></dsp:drawing>'
+    const data = '<dgm:dataModel xmlns:dgm="http://schemas.openxmlformats.org/drawingml/2006/diagram"><dgm:extLst><dgm:ext><dsp:dataModelExt xmlns:dsp="http://schemas.microsoft.com/office/drawing/2008/diagram" relId="dg"/></dgm:ext></dgm:extLst></dgm:dataModel>'
+    const rels = (extra = '') => `<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="dm" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/diagramData" Target="diagrams/data.xml"/><Relationship Id="dg" Type="http://schemas.microsoft.com/office/2007/relationships/diagramDrawing" Target="diagrams/drawing.xml"/>${extra}</Relationships>`
+    for (const [localTheme, directColor, referenceColor] of [
+      ['<a:theme xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"/>', [79, 129, 189], [192, 80, 77]],
+      ['<a:theme xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><a:themeElements><a:clrScheme><a:accent1><a:srgbClr val="00FF00"/></a:accent1></a:clrScheme></a:themeElements></a:theme>', [0, 255, 0], [192, 80, 77]],
+      ['<a:theme xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><a:themeElements><a:fmtScheme><a:fillStyleLst><a:solidFill><a:srgbClr val="FFFF00"/></a:solidFill></a:fillStyleLst></a:fmtScheme></a:themeElements></a:theme>', [79, 129, 189], [255, 255, 0]],
+      ['<a:theme>', [79, 129, 189], [192, 80, 77]]
+    ] as const) {
+      const doc = await fixture('', {
+        'word/theme/theme1.xml': styledTheme,
+        'word/theme/local.xml': localTheme,
+        'word/diagrams/data.xml': data,
+        'word/diagrams/drawing.xml': cache,
+        'word/header1.xml': `<w:hdr ${ns}>${inline}</w:hdr>`,
+        'word/_rels/document.xml.rels': rels('<Relationship Id="theme" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/theme" Target="theme/theme1.xml"/><Relationship Id="hdr" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/header" Target="header1.xml"/>'),
+        'word/_rels/header1.xml.rels': rels('<Relationship Id="localTheme" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/theme" Target="theme/local.xml"/>')
+      }, '<w:headerReference w:type="default" r:id="hdr"/>')
+      const drawing = doc.sections[0].header?.[0].images[0]?.drawing
+      expect(drawing?.kind).toBe('diagram')
+      if (drawing?.kind !== 'diagram') continue
+      const { createCanvas } = await import('canvas')
+      const ctx = createCanvas(200, 100).getContext('2d')
+      paintDrawing(drawing, ctx as never, 200, 100)
+      expect([...ctx.getImageData(50, 50, 1, 1).data]).toEqual([...directColor, 255])
+      expect([...ctx.getImageData(150, 50, 1, 1).data]).toEqual([...referenceColor, 255])
+    }
+  })
   test('renders chart cached values with its categories and series', async () => {
     const doc = await fixture(
       '<w:p><w:r><w:drawing><wp:inline><wp:extent cx="5486400" cy="3200400"/><a:graphic><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/chart"><c:chart r:id="chart"/></a:graphicData></a:graphic></wp:inline></w:drawing></w:r></w:p>',
@@ -198,6 +302,7 @@ describe('DOCX complex drawing and style regressions', () => {
     expect(collectDocImages(doc)[0]).toMatchObject({
       drawing: {
         kind: 'textbox',
+        direction: 'eaVert',
         vertical: true,
         paragraphs: [{ runs: [{ text: '你好' }] }, { runs: [{ text: '123' }] }]
       }

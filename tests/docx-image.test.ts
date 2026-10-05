@@ -117,7 +117,10 @@ describe('docx embedded images', () => {
       const ctx = createCanvas(page.widthPx, page.heightPx).getContext('2d')
       renderPages([page], ctx as unknown as CanvasRenderingContext2D, decoded)
       expect([...ctx.getImageData(100, 52, 1, 1).data].slice(0, 3)).toEqual([0, 255, 0])
-      expect([...ctx.getImageData(100, 1012, 1, 1).data].slice(0, 3)).toEqual([0, 255, 0])
+      // The footer distance anchors the occupied bottom; image flow grows upward.
+      const footerImage = page.images.find(image => image.repeated === 'footer')!
+      expect(footerImage.yPx + footerImage.heightPx).toBeCloseTo(page.heightPx - 48)
+      expect([...ctx.getImageData(100, footerImage.yPx + 4, 1, 1).data].slice(0, 3)).toEqual([0, 255, 0])
     }
   })
 

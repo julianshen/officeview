@@ -9,6 +9,9 @@ export interface DocxStyleContext {
   theme: DocxTheme
   styles: Map<string, XmlNode>
   defaultParagraph?: string
+  defaultTable?: string
+  paragraphDefaults?: XmlNode
+  runDefaults?: XmlNode
 }
 
 /** Preserve the font's generic family when Office fonts are not installed. */
@@ -52,10 +55,16 @@ export function readTheme(root: XmlNode | undefined): DocxTheme {
 
 export function styleContext(root: XmlNode | undefined, theme: DocxTheme): DocxStyleContext {
   const out: DocxStyleContext = { theme, styles: new Map() }
+  const defaults = getChildren(root, 'docDefaults')[0]
+  out.paragraphDefaults = getChildren(getChildren(defaults, 'pPrDefault')[0], 'pPr')[0]
+  out.runDefaults = getChildren(getChildren(defaults, 'rPrDefault')[0], 'rPr')[0]
   for (const style of getChildren(root, 'style')) {
     const a = attrs(style)
     if (a.styleId) out.styles.set(a.styleId, style)
-    if (a.type === 'paragraph' && (a.default === '1' || a.default === 'true')) out.defaultParagraph = a.styleId
+    if (a.default === '1' || a.default === 'true') {
+      if (a.type === 'paragraph') out.defaultParagraph = a.styleId
+      if (a.type === 'table') out.defaultTable = a.styleId
+    }
   }
   return out
 }
@@ -100,26 +109,34 @@ export function readRunProperties(rPr: XmlNode | undefined, theme?: DocxTheme): 
   return out
 }
 
-export function paragraphRunDefaults(p: XmlNode, context?: DocxStyleContext): Partial<DocxTextRun> {
+/** Table layers sit below paragraph styles and above document defaults. */
+export interface ParagraphStyleLayers { pPr: Array<XmlNode | undefined>; rPr: Array<XmlNode | undefined> }
+export function paragraphRunDefaults(p: XmlNode, context?: DocxStyleContext, table?: ParagraphStyleLayers): Partial<DocxTextRun> {
   if (!context) return {}
   const id = attrs(getChildren(getChildren(p, 'pPr')[0], 'pStyle')[0]).val ?? context.defaultParagraph
-  return Object.assign(
-    {},
-    ...styleChain(id, context).map((style) => readRunProperties(getChildren(style, 'rPr')[0], context.theme))
-  )
+  return Object.assign({}, readRunProperties(context.runDefaults, context.theme),
+    ...(table?.rPr ?? []).map(node => readRunProperties(node, context.theme)),
+    ...styleChain(id, context).map(style => readRunProperties(getChildren(style, 'rPr')[0], context.theme)))
 }
 
-export function applyParagraphDefaults(paragraph: DocxParagraph, p: XmlNode, context?: DocxStyleContext): void {
+export function applyParagraphDefaults(paragraph: DocxParagraph, p: XmlNode, context?: DocxStyleContext, table?: ParagraphStyleLayers): void {
   if (!context) return
-  const id = attrs(getChildren(getChildren(p, 'pPr')[0], 'pStyle')[0]).val ?? context.defaultParagraph
-  for (const style of styleChain(id, context).reverse()) {
-    const spacing = attrs(getChildren(getChildren(style, 'pPr')[0], 'spacing')[0])
-    if (spacing.before !== undefined) paragraph.spacingBeforeTwips ??= Number(spacing.before)
-    if (spacing.after !== undefined) paragraph.spacingAfterTwips ??= Number(spacing.after)
-    if (spacing.line !== undefined)
-      paragraph.lineSpacing ??= {
-        rule: (spacing.lineRule as 'auto' | 'exact' | 'atLeast') ?? 'auto',
-        value: Number(spacing.line)
-      }
+  const direct = getChildren(p, 'pPr')[0]
+  const id = attrs(getChildren(direct, 'pStyle')[0]).val ?? context.defaultParagraph
+  let lineValue: number | undefined, lineRule: 'auto' | 'exact' | 'atLeast' = 'auto'
+  for (const pPr of [context.paragraphDefaults, ...(table?.pPr ?? []), ...styleChain(id, context).map(style => getChildren(style, 'pPr')[0]), direct]) {
+    const spacing = attrs(getChildren(pPr, 'spacing')[0])
+    if (spacing.before !== undefined) paragraph.spacingBeforeTwips = Number(spacing.before)
+    if (spacing.after !== undefined) paragraph.spacingAfterTwips = Number(spacing.after)
+    if (spacing.line !== undefined) lineValue = Number(spacing.line)
+    if (spacing.lineRule !== undefined) lineRule = spacing.lineRule as typeof lineRule
+    const jc = attrs(getChildren(pPr, 'jc')[0]).val
+    if (jc !== undefined) paragraph.align = jc === 'both' ? 'justify' : jc === 'center' || jc === 'right' ? jc : 'left'
+    const ind = attrs(getChildren(pPr, 'ind')[0])
+    for (const [key, value] of [['indentLeftTwips', ind.left ?? ind.start], ['indentRightTwips', ind.right ?? ind.end], ['indentFirstLineTwips', ind.firstLine ?? (ind.hanging !== undefined ? -Number(ind.hanging) : undefined)]] as const)
+      if (value !== undefined) paragraph[key] = Number(value)
+    const outline = attrs(getChildren(pPr, 'outlineLvl')[0]).val
+    if (outline !== undefined) paragraph.outlineLevel = Number(outline)
   }
+  if (lineValue !== undefined) paragraph.lineSpacing = { value: lineValue, rule: lineRule }
 }

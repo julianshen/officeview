@@ -47,6 +47,24 @@ const orderedParser = new XMLParser({
 
 /** Document-order children per node, populated only by parseXmlOrdered. */
 const orderMap = new WeakMap<XmlNode, Array<[string, XmlNode]>>()
+/** In-scope namespace bindings, kept out of the normalized/serialized node. */
+const namespaceMap = new WeakMap<XmlNode, ReadonlyMap<string, string>>()
+
+function withNamespaces(parent: ReadonlyMap<string, string>, raw: unknown): ReadonlyMap<string, string> {
+  if (!raw || typeof raw !== 'object') return parent
+  let local: Map<string, string> | undefined
+  for (const [key, value] of Object.entries(raw as Record<string, unknown>)) {
+    if (key !== 'xmlns' && !key.startsWith('xmlns:')) continue
+    local ??= new Map(parent)
+    local.set(key === 'xmlns' ? '' : key.slice(6), String(value))
+  }
+  return local ?? parent
+}
+
+/** Resolve a prefix used by MC Requires at this node, honoring local shadowing. */
+export function namespaceUri(node: XmlNode | undefined, prefix: string): string | undefined {
+  return node ? namespaceMap.get(node)?.get(prefix) : undefined
+}
 
 function stripPrefix(k: string): string {
   return k.includes(':') ? k.slice(k.indexOf(':') + 1) : k
@@ -65,7 +83,7 @@ function collectOrderedAttrs(out: Record<string, string>, v: unknown): void {
  * Normalize one preserveOrder value (always an array of single-key entries
  * for elements) into the shared XmlNode shape, recording sibling order.
  */
-function buildOrdered(entries: unknown[]): XmlNode {
+function buildOrdered(entries: unknown[], inherited: ReadonlyMap<string, string> = new Map()): XmlNode {
   const node: Record<string, unknown> = {}
   const attrs: Record<string, string> = {}
   const ordered: Array<[string, XmlNode]> = []
@@ -97,7 +115,7 @@ function buildOrdered(entries: unknown[]): XmlNode {
         continue
       }
       if (!Array.isArray(v)) continue
-      const child = buildOrdered(v as unknown[])
+      const child = buildOrdered(v as unknown[], withNamespaces(inherited, (entry as Record<string, unknown>)[':@']))
       push(nk, child)
       last = child
     }
@@ -106,6 +124,7 @@ function buildOrdered(entries: unknown[]): XmlNode {
   node[ATTRS] = attrs
   const result = node as XmlNode
   orderMap.set(result, ordered)
+  namespaceMap.set(result, inherited)
   return result
 }
 
@@ -122,7 +141,7 @@ export function parseXmlOrdered(xml: string): XmlNode {
     for (const [k, v] of Object.entries(entry)) {
       if (k.startsWith('?')) continue
       if (!Array.isArray(v)) continue
-      return buildOrdered(v as unknown[])
+      return buildOrdered(v as unknown[], withNamespaces(new Map(), entry[':@']))
     }
   }
   throw new Error('Unexpected XML root shape')
@@ -150,11 +169,12 @@ export function orderedChildren(node: XmlNode | undefined): Array<[string, XmlNo
  *    namespace prefixes from attribute names
  *  - strip namespace prefixes from element names ("w:p" -> "p")
  */
-function normalize(node: unknown): XmlNode | XmlNode[] | XmlValue | undefined {
-  if (Array.isArray(node)) return node.map(normalize) as XmlNode[]
+function normalize(node: unknown, inherited: ReadonlyMap<string, string> = new Map()): XmlNode | XmlNode[] | XmlValue | undefined {
+  if (Array.isArray(node)) return node.map(value => normalize(value, inherited)) as XmlNode[]
   if (node === null || node === undefined) return undefined
   if (typeof node !== 'object') return node as XmlValue
   const src = node as Record<string, unknown>
+  const local = withNamespaces(inherited, src['@attrs'])
   const out: Record<string, unknown> = {}
   const attrs: Record<string, string> = {}
   for (const [k, v] of Object.entries(src)) {
@@ -172,9 +192,10 @@ function normalize(node: unknown): XmlNode | XmlNode[] | XmlValue | undefined {
       continue
     }
     const nk = k.includes(':') ? k.slice(k.indexOf(':') + 1) : k
-    out[nk] = normalize(v)
+    out[nk] = normalize(v, local)
   }
   out[ATTRS] = attrs
+  namespaceMap.set(out as XmlNode, local)
   return out as XmlNode
 }
 

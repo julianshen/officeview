@@ -10,7 +10,8 @@
 
 import type { HighlightRect } from './overlay'
 import type { IndexLine, TextIndex, TextIndexPage } from './search'
-import { rectsForRange } from './search'
+import { pointInTextClip, projectTextPoint, rectsForRange, visibleTextPolygon } from './search'
+import { snapGrapheme, type LogicalTextSource } from './text-recording'
 
 export type { HighlightRect }
 
@@ -41,17 +42,24 @@ function pageOf(index: TextIndex, pageIndex: number): TextIndexPage | undefined 
   return index.pages.find((p) => p.index === pageIndex)
 }
 
-/** Nearest line to a y coordinate, preferring ones that contain it. */
-function lineAtY(page: TextIndexPage, y: number): { line: IndexLine; lineIndex: number } | undefined {
+/** Among containing vertical bands, prefer the text extent nearest x. */
+function containingLineAt(page: TextIndexPage, x: number, y: number, accepts: (line: IndexLine) => boolean = () => true): { line: IndexLine; lineIndex: number } | undefined {
+  let best: { line: IndexLine; lineIndex: number } | undefined
+  let bestDistance = Infinity
+  page.lines.forEach((line, lineIndex) => {
+    if (y < line.top || y > line.bottom || !accepts(line)) return
+    const left = Math.min(...line.spans.map(span => span.x))
+    const right = Math.max(...line.spans.map(span => span.x + span.width))
+    const distance = Math.max(left - x, x - right, 0)
+    if (distance < bestDistance) { best = { line, lineIndex }; bestDistance = distance }
+  })
+  return best
+}
+
+/** Nearest vertical band; horizontal distance disambiguates overlapping bands. */
+function lineAtY(page: TextIndexPage, y: number, x: number): { line: IndexLine; lineIndex: number } | undefined {
   if (page.lines.length === 0) return undefined
-  let containing: { line: IndexLine; lineIndex: number } | undefined
-  for (let i = 0; i < page.lines.length; i++) {
-    const line = page.lines[i]
-    if (y >= line.top && y <= line.bottom) {
-      containing = { line, lineIndex: i }
-      break
-    }
-  }
+  const containing = containingLineAt(page, x, y)
   if (containing) return containing
   // no line contains y: snap to the vertically closest one
   let best = 0
@@ -82,11 +90,52 @@ function charAtX(line: IndexLine, x: number): number {
       const ratio = span.width > 0 ? (x - span.x) / span.width : 0
       // snap to the nearer edge, like every text editor
       const raw = spanStart + Math.round(ratio * span.text.length)
-      return Math.min(spanEnd, Math.max(spanStart, raw))
+      return snapGrapheme(line.text, Math.min(spanEnd, Math.max(spanStart, raw)))
     }
     lastEnd = spanEnd
   }
   return lastEnd
+}
+
+/** Inverse-map a hit to each span's local band so rotation/flips keep their character progression. */
+function transformedHit(page: TextIndexPage, pageIndex: number, x: number, y: number, strict: boolean): CaretPos | undefined {
+  let best: CaretPos | undefined
+  let distance = Infinity
+  for (const [lineIndex, line] of page.lines.entries()) {
+    let offset = 0
+    for (const span of line.spans) {
+      const spanStart = offset
+      offset += span.text.length
+      if (!span.text.length) continue
+      const p = span.placement ?? { x: span.x, y: span.y, width: span.width, top: line.top, bottom: line.bottom, transform: { a: 1, b: 0, c: 0, d: 1, e: 0, f: 0 } }
+      if (p.clip && (!pointInTextClip(p.clip, x, y) || !visibleTextPolygon(p).length)) continue
+      const m = p.transform, determinant = m.a * m.d - m.b * m.c
+      if (!Number.isFinite(determinant) || determinant === 0) continue
+      const dx = x - m.e, dy = y - m.f
+      const localX = (m.d * dx - m.c * dy) / determinant
+      const localY = (m.a * dy - m.b * dx) / determinant
+      const tolerance = 2 / Math.hypot(m.a, m.b)
+      const inside = localX >= p.x - tolerance && localX <= p.x + p.width + tolerance && localY >= p.top && localY <= p.bottom
+      if (strict && !inside) continue
+      const clampedX = Math.max(p.x, Math.min(p.x + p.width, localX))
+      const clampedY = Math.max(p.top, Math.min(p.bottom, localY))
+      const closest = projectTextPoint(m, clampedX, clampedY)
+      const dist = inside ? 0 : Math.hypot(closest.x - x, closest.y - y)
+      if (!Number.isFinite(dist) || dist >= distance) continue
+      const ratio = p.width > 0 ? (clampedX - p.x) / p.width : 0
+      best = { pageIndex, lineIndex, charIndex: snapGrapheme(line.text, spanStart + Math.round(ratio * span.text.length)) }
+      distance = dist
+    }
+  }
+  return best
+}
+
+function positiveAxisAligned(line: IndexLine): boolean {
+  if (line.spans.some(span => span.logical?.flow === 'vertical')) return false
+  return line.spans.every(span => {
+    const m = span.placement?.transform
+    return !m || m.a > 0 && m.d > 0 && Math.abs(m.b) <= 1e-10 && Math.abs(m.c) <= 1e-10
+  })
 }
 
 /**
@@ -105,7 +154,26 @@ export function hitTest(
 ): CaretPos | undefined {
   const page = pageOf(index, pageIndex)
   if (!page) return undefined
-  const hit = lineAtY(page, y)
+  if (page.lines.some(line => line.spans.some(span => span.placement))) {
+    // Ordinary drags stay on a containing line's vertical band even past its text edges.
+    // An unrelated rotated span elsewhere on the page must not change that behavior.
+    if (!options.strict) {
+      // Ordinary pages preserve the original y-first drag policy, including gaps between bands.
+      if (page.lines.every(positiveAxisAligned)) {
+        const eligible = page.lines.filter(line => !line.spans.length || line.spans.some(span => !span.placement?.clip || pointInTextClip(span.placement.clip, x, y) && visibleTextPolygon(span.placement).length > 0))
+        const hit = lineAtY({ ...page, lines: eligible }, y, x)
+        return hit ? { pageIndex, lineIndex: page.lines.indexOf(hit.line), charIndex: charAtX(hit.line, x) } : undefined
+      }
+      // A visible rotated/reflected scope can share an ordinary line's page-y
+      // band. Actual local-band containment wins before off-edge drag snapping.
+      const contained = transformedHit(page, pageIndex, x, y, true)
+      if (contained) return contained
+      const hit = containingLineAt(page, x, y, line => positiveAxisAligned(line) && (!line.spans.length || line.spans.some(span => !span.placement?.clip || pointInTextClip(span.placement.clip, x, y) && visibleTextPolygon(span.placement).length > 0)))
+      if (hit) return { pageIndex, lineIndex: hit.lineIndex, charIndex: charAtX(hit.line, x) }
+    }
+    return transformedHit(page, pageIndex, x, y, options.strict ?? false)
+  }
+  const hit = lineAtY(page, y, x)
   if (!hit) return undefined
   if (options.strict) {
     const { line } = hit
@@ -143,7 +211,7 @@ export function wordRangeAt(line: IndexLine, charIndex: number): { start: number
   const text = line.text
   if (text.length === 0) return { start: 0, end: 0 }
   const isWord = (i: number) => i >= 0 && i < text.length && WORD_CHARS.test(text[i])
-  let start = Math.min(Math.max(0, charIndex), text.length)
+  let start = snapGrapheme(text, Math.min(Math.max(0, charIndex), text.length), 'floor')
   let end = start
   if (start > 0 && !isWord(start - 1) && isWord(start)) start -= 1
   if (!isWord(start) && isWord(start - 1)) start -= 1
@@ -154,7 +222,7 @@ export function wordRangeAt(line: IndexLine, charIndex: number): { start: number
     end = start + 1
     while (end < text.length && !WORD_CHARS.test(text[end]) && text[end] !== ' ') end++
   }
-  return { start, end }
+  return { start: snapGrapheme(text, start, 'floor'), end: snapGrapheme(text, end, 'ceil') }
 }
 
 /** The whole line a caret sits on (triple-click behaviour). */
@@ -186,7 +254,7 @@ export function selectionSlices(index: TextIndex, range: SelectionRange): Select
       const charFrom = isStart(li) ? ordered.start.charIndex : 0
       const charTo = isEnd(li) ? ordered.end.charIndex : line.text.length
       // zero-length touch points (page end -> next page start) paint nothing
-      if (charTo > charFrom) slices.push({ pageIndex: page.index, lineIndex: li, from: charFrom, to: charTo })
+      if (charTo > charFrom || line.text.length === 0 && line.spans[0]?.logical && !isEnd(li)) slices.push({ pageIndex: page.index, lineIndex: li, from: charFrom, to: charTo })
     }
   }
   return slices
@@ -212,17 +280,28 @@ export function rectsForSelectionOnPage(index: TextIndex, pageIndex: number, ran
  */
 export function textForRange(index: TextIndex, range: SelectionRange): string {
   const slices = selectionSlices(index, range)
-  const parts: string[] = []
+  const parts: Array<{ text: string; source?: LogicalTextSource; start?: number; end?: number }> = []
   for (let i = 0; i < slices.length; i++) {
-    const slice = slices[i]
-    const page = pageOf(index, slice.pageIndex)
-    const line = page?.lines[slice.lineIndex]
+    const slice = slices[i], page = pageOf(index, slice.pageIndex), line = page?.lines[slice.lineIndex]
     if (!line) continue
-    const piece = line.text.slice(slice.from, slice.to)
-    // trim trailing whitespace on every line except the last, the way a
-    // browser trims a dragged selection
-    const isLast = i === slices.length - 1
-    parts.push(isLast ? piece : piece.replace(/\s+$/, ''))
+    const from = snapGrapheme(line.text, slice.from, 'floor'), to = snapGrapheme(line.text, slice.to, 'ceil')
+    const logical = line.spans[0]?.logical
+    if (logical && line.spans.every(span => span.logical?.source === logical.source)) {
+      let offset = 0
+      let sourceFrom = logical.start, sourceTo = logical.start
+      for (const span of line.spans) {
+        const spanStart = offset; offset += span.text.length
+        if (from >= spanStart && from <= offset) sourceFrom = span.logical!.start + from - spanStart
+        if (to >= spanStart && to <= offset) sourceTo = span.logical!.start + to - spanStart
+      }
+      const previous = parts[parts.length - 1]
+      if (previous?.source === logical.source) {
+        previous.end = sourceTo; previous.text = logical.source.text.slice(previous.start, sourceTo)
+      } else parts.push({ source: logical.source, start: sourceFrom, end: sourceTo, text: logical.source.text.slice(sourceFrom, sourceTo) })
+    } else {
+      const piece = line.text.slice(from, to)
+      parts.push({ text: i === slices.length - 1 ? piece : piece.replace(/\s+$/, '') })
+    }
   }
-  return parts.join('\n')
+  return parts.map(part => part.text).join('\n')
 }

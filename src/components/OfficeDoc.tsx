@@ -7,7 +7,7 @@
  *  - touch scrolling is native (overflow scroll), no custom gesture code needed
  */
 import { useEffect, useMemo, useRef, useState, type CSSProperties, type ReactElement } from 'react'
-import { getPaintables, type PageSpec, type Paintable } from '../render/paint'
+import { getPaintables, type PageSpec, type Paintable, type PaintableArray } from '../render/paint'
 import type { WatermarkOptions } from '../core/watermark'
 import { buildTextIndex, findMatches, stepMatch, type SearchMatch, type TextIndex } from '../core/search'
 import {
@@ -227,17 +227,26 @@ export function OfficeDoc({
   // A stable string key keeps the effect from re-running on a fresh object
   // identity every render (and from looping).
   const markKey = watermark ? JSON.stringify(watermark) : ''
+  const owner = useMemo(() => ({ document, markKey }), [document, markKey])
+  const ownerRef = useRef<typeof owner | null>(owner)
+  ownerRef.current = owner
   useEffect(() => {
     let cancelled = false
-    // a new document starts at fit
+    let lease: PaintableArray | undefined
+    ownerRef.current = owner
+    setPages([])
     setTransform({ zoom: 1, panX: 0, panY: 0 })
-    getPaintables(document, markKey ? { watermark } : undefined).then((p) => {
-      if (!cancelled) setPages(p)
+    getPaintables(document, markKey ? { watermark } : undefined).then(p => {
+      if (cancelled) { p.dispose(); return }
+      lease = p
+      setPages(p)
     })
     return () => {
       cancelled = true
+      lease?.dispose()
+      if (ownerRef.current === owner) ownerRef.current = null
     }
-  }, [document, markKey])
+  }, [owner])
   const containerRef = useRef<HTMLDivElement | null>(null)
   const [containerWidth, setContainerWidth] = useState(0)
   const [viewportHeight, setViewportHeight] = useState(0)
@@ -459,25 +468,40 @@ export function OfficeDoc({
   const indexRef = useRef<TextIndex | null>(null)
   const inputRef = useRef<HTMLInputElement | null>(null)
 
-  // The index replays each page's paint once; built lazily on first search.
-  const ensureIndex = async (): Promise<TextIndex> => {
-    if (indexRef.current) return indexRef.current
+  const indexOwnerRef = useRef<typeof owner | null>(null)
+  const indexPendingRef = useRef<{ owner: typeof owner; promise: Promise<TextIndex> } | null>(null)
+  // Indexing can race initial font loading. Its fallback extraction owns a
+  // separate lease, and an obsolete build must never publish into the new doc.
+  const ensureIndex = (): Promise<TextIndex> => {
+    if (indexRef.current && indexOwnerRef.current === owner) return Promise.resolve(indexRef.current)
+    if (indexPendingRef.current?.owner === owner) return indexPendingRef.current.promise
     setIndexing(true)
-    try {
-      const paintables = pages.length > 0 ? pages : await getPaintables(document, markKey ? { watermark } : undefined)
-      const built = await buildTextIndex(paintables as Paintable[])
-      indexRef.current = built
-      return built
-    } finally {
-      setIndexing(false)
-    }
+    const promise = (async () => {
+      let fallback: PaintableArray | undefined
+      try {
+        // Own a consumer even when pages already exist: recording awaits its
+        // canvas and may outlive the viewer that owns those page closures.
+        const paintables = fallback = await getPaintables(document, markKey ? { watermark } : undefined)
+        const built = await buildTextIndex(paintables)
+        if (ownerRef.current === owner) { indexRef.current = built; indexOwnerRef.current = owner }
+        return built
+      } finally {
+        fallback?.dispose()
+        if (indexPendingRef.current?.owner === owner) indexPendingRef.current = null
+        if (ownerRef.current === owner) setIndexing(false)
+      }
+    })()
+    indexPendingRef.current = { owner, promise }
+    return promise
   }
 
   useEffect(() => {
-    indexRef.current = null // a new document needs a fresh index
+    indexRef.current = null
+    indexOwnerRef.current = null
+    setIndexing(false)
     setMatches([])
     setActive(-1)
-  }, [document])
+  }, [owner])
 
   // Print suppression. The document is drawn to canvases, so it reaches the
   // print pipeline as pixels; hiding the viewer with a print-only rule is what
@@ -515,7 +539,7 @@ export function OfficeDoc({
       cancelled = true
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [query, pages])
+  }, [query, pages, owner])
 
   const goTo = (direction: 1 | -1) => {
     setActive((current) => stepMatch(matches, current, direction))

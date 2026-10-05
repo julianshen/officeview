@@ -95,6 +95,29 @@ async function withSlideBg(bgXml: string): Promise<Uint8Array> {
   })
 }
 
+async function withInheritedSolid(slideBg: string, themeFill?: string): Promise<Uint8Array> {
+  return pptxPatched([], async (zip) => {
+    const slidePath = 'ppt/slides/slide1.xml'
+    const slide = await zip.file(slidePath)!.async('string')
+    zip.file(slidePath, slide.replace('<p:cSld>', `<p:cSld>${slideBg}`))
+    const relsPath = 'ppt/slides/_rels/slide1.xml.rels'
+    const rels = await zip.file(relsPath)!.async('string')
+    zip.file(relsPath, rels.replace('</Relationships>',
+      `<Relationship Id="rIdLayout" Type="${REL}/slideLayout" Target="../slideLayouts/slideLayout1.xml"/></Relationships>`))
+    zip.file('ppt/slideLayouts/slideLayout1.xml',
+      `<?xml version="1.0"?><p:sldLayout ${PPTX_NS}><p:cSld><p:bg><p:bgPr><a:solidFill><a:srgbClr val="123456"/></a:solidFill></p:bgPr></p:bg></p:cSld></p:sldLayout>`)
+    if (themeFill) {
+      zip.file('ppt/slideLayouts/_rels/slideLayout1.xml.rels',
+        `<?xml version="1.0"?><Relationships ${RELS_NS}><Relationship Id="rIdMaster" Type="${REL}/slideMaster" Target="../slideMasters/slideMaster1.xml"/></Relationships>`)
+      zip.file('ppt/slideMasters/slideMaster1.xml', `<?xml version="1.0"?><p:sldMaster ${PPTX_NS}><p:cSld/></p:sldMaster>`)
+      zip.file('ppt/slideMasters/_rels/slideMaster1.xml.rels',
+        `<?xml version="1.0"?><Relationships ${RELS_NS}><Relationship Id="rIdTheme" Type="${REL}/theme" Target="../theme/theme1.xml"/></Relationships>`)
+      zip.file('ppt/theme/theme1.xml',
+        `<?xml version="1.0"?><a:theme ${PPTX_NS}><a:themeElements><a:fmtScheme name="Office"><a:bgFillStyleLst>${themeFill}</a:bgFillStyleLst></a:fmtScheme></a:themeElements></a:theme>`)
+    }
+  })
+}
+
 describe('pptx slide background', () => {
   test('a direct bgPr solid fill resolves to the model', async () => {
     const buf = await withSlideBg('<p:bg><p:bgPr><a:solidFill><a:srgbClr val="0E0E1A"/></a:solidFill></p:bgPr></p:bg>')
@@ -113,6 +136,26 @@ describe('pptx slide background', () => {
     )
     const doc = await parsePptx(await OfficePackage.load(buf))
     expect(doc.slides[0].background).toBeUndefined()
+  })
+
+  test.each(['rect', 'shape'])('a %s path gradient without inheritance remains undefined', async (path) => {
+    const gradient = `<a:gradFill><a:gsLst><a:gs pos="0"><a:srgbClr val="FF0000"/></a:gs><a:gs pos="100000"><a:srgbClr val="0000FF"/></a:gs></a:gsLst><a:path path="${path}"/></a:gradFill>`
+    const doc = await parsePptx(await OfficePackage.load(await withSlideBg(`<p:bg><p:bgPr>${gradient}</p:bgPr></p:bg>`)))
+    expect(doc.slides[0].background).toBeUndefined()
+  })
+
+  test.each(['rect', 'shape'])('a %s path gradient bgPr preserves the inherited solid', async (path) => {
+    const gradient = `<a:gradFill><a:gsLst><a:gs pos="0"><a:srgbClr val="FF0000"/></a:gs><a:gs pos="100000"><a:srgbClr val="0000FF"/></a:gs></a:gsLst><a:path path="${path}"/></a:gradFill>`
+    const buf = await withInheritedSolid(`<p:bg><p:bgPr>${gradient}</p:bgPr></p:bg>`)
+    const doc = await parsePptx(await OfficePackage.load(buf))
+    expect(doc.slides[0].background).toBe('#123456')
+  })
+
+  test('a bgRef path gradient preserves the inherited layout solid', async () => {
+    const gradient = '<a:gradFill><a:gsLst><a:gs pos="0"><a:srgbClr val="FF0000"/></a:gs><a:gs pos="100000"><a:srgbClr val="0000FF"/></a:gs></a:gsLst><a:path path="rect"/></a:gradFill>'
+    const buf = await withInheritedSolid('<p:bg><p:bgRef idx="1001"><a:srgbClr val="445566"/></p:bgRef></p:bg>', gradient)
+    const doc = await parsePptx(await OfficePackage.load(buf))
+    expect(doc.slides[0].background).toBe('#123456')
   })
 
   test('a slide without bg inherits the master background', async () => {
@@ -155,6 +198,31 @@ describe('pptx slide background', () => {
     expect(doc.slides[0].background).toBe('#445566')
   })
 
+  test('bgRef phClr uses the reference color and a slide solid wins over its layout', async () => {
+    const buf = await pptxPatched([], async (zip) => {
+      const slidePath = 'ppt/slides/slide1.xml'
+      const slide = await zip.file(slidePath)!.async('string')
+      zip.file(slidePath, slide.replace('<p:cSld>',
+        '<p:cSld><p:bg><p:bgRef idx="1001"><a:srgbClr val="224466"/></p:bgRef></p:bg>'))
+      const relsPath = 'ppt/slides/_rels/slide1.xml.rels'
+      const rels = await zip.file(relsPath)!.async('string')
+      zip.file(relsPath, rels.replace('</Relationships>',
+        `<Relationship Id="rIdLayout" Type="${REL}/slideLayout" Target="../slideLayouts/slideLayout1.xml"/></Relationships>`))
+      zip.file('ppt/slideLayouts/slideLayout1.xml',
+        `<?xml version="1.0"?><p:sldLayout ${PPTX_NS}><p:cSld><p:bg><p:bgPr><a:solidFill><a:srgbClr val="778899"/></a:solidFill></p:bgPr></p:bg></p:cSld></p:sldLayout>`)
+      zip.file('ppt/slideLayouts/_rels/slideLayout1.xml.rels',
+        `<?xml version="1.0"?><Relationships ${RELS_NS}><Relationship Id="rIdMaster" Type="${REL}/slideMaster" Target="../slideMasters/slideMaster1.xml"/></Relationships>`)
+      zip.file('ppt/slideMasters/slideMaster1.xml',
+        `<?xml version="1.0"?><p:sldMaster ${PPTX_NS}><p:cSld><p:bg><p:bgPr><a:solidFill><a:srgbClr val="AABBCC"/></a:solidFill></p:bgPr></p:bg></p:cSld></p:sldMaster>`)
+      zip.file('ppt/slideMasters/_rels/slideMaster1.xml.rels',
+        `<?xml version="1.0"?><Relationships ${RELS_NS}><Relationship Id="rIdTheme" Type="${REL}/theme" Target="../theme/theme1.xml"/></Relationships>`)
+      zip.file('ppt/theme/theme1.xml',
+        `<?xml version="1.0"?><a:theme ${PPTX_NS}><a:themeElements><a:fmtScheme name="Office"><a:bgFillStyleLst><a:solidFill><a:schemeClr val="phClr"/></a:solidFill></a:bgFillStyleLst></a:fmtScheme></a:themeElements></a:theme>`)
+    })
+    const doc = await parsePptx(await OfficePackage.load(buf))
+    expect(doc.slides[0].background).toBe('#224466')
+  })
+
   test('a dark background paints under light text', async () => {
     const buf = await pptxPatched(
       [{
@@ -185,5 +253,28 @@ describe('pptx slide background', () => {
       if (region.data[i] > 200 && region.data[i + 1] > 200 && region.data[i + 2] > 200) ink++
     }
     expect(ink).toBeGreaterThan(50)
+  })
+
+  test('default watermark is light on a dark slide, while explicit black and white slide defaults remain dark', async () => {
+    const dark = await parsePptx(await OfficePackage.load(await withSlideBg(
+      '<p:bg><p:bgPr><a:solidFill><a:srgbClr val="101010"/></a:solidFill></p:bgPr></p:bg>',
+    )))
+    const white = await parsePptx(await OfficePackage.load(await buildPptx([])))
+    const { createCanvas } = await import('canvas')
+    const render = (slide: typeof dark.slides[number], color?: string): Uint8ClampedArray => {
+      const canvas = createCanvas(960, 720)
+      const ctx = canvas.getContext('2d')!
+      renderSlide(slide, ctx as never, { widthPx: 960, heightPx: 720 }, undefined,
+        { text: 'DRAFT', placement: 'center', rotate: 0, opacity: 1, fontSizePt: 48, ...(color ? { color } : {}) })
+      return ctx.getImageData(0, 0, 960, 720).data
+    }
+    const count = (data: Uint8ClampedArray, matches: (red: number) => boolean): number => {
+      let pixels = 0
+      for (let i = 0; i < data.length; i += 4) if (matches(data[i])) pixels++
+      return pixels
+    }
+    expect(count(render(dark.slides[0]), red => red > 100)).toBeGreaterThan(500)
+    expect(count(render(dark.slides[0], '#000000'), red => red < 8)).toBeGreaterThan(500)
+    expect(count(render(white.slides[0]), red => red < 100)).toBeGreaterThan(500)
   })
 })

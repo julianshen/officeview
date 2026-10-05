@@ -1,0 +1,15 @@
+{
+  "package": "mtx-decompressor",
+  "version": "1.8.0",
+  "license": "MPL-2.0",
+  "repository": "https://github.com/ChristopherVR/mtx-decompressor",
+  "upstreamFiles": {
+    "dist/index.mjs": "cac9cfed06484c4bf77a97aed556c028a5df0d897e95d437db00daaf8aafe9cd",
+    "dist/index.d.ts": "089f7f08709418daf4b1bb18c8aeb813393aee5dbd3e6ffa194a03ff320e7cb7",
+    "LICENSE": "1f256ecad192880510e84ad60474eab7589218784b9a50bc7ceee34c2b91f1d5"
+  },
+  "modifiedFiles": [
+    "mtx.mjs",
+    "mtx.d.mts"
+  ]
+}

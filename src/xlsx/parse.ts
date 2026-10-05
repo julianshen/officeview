@@ -2,6 +2,10 @@
 import type { OfficePackage } from '../core/zip'
 import { attrs, getChildren, textOf, type XmlNode } from '../core/xml'
 import type { XlsxCell, XlsxDocument, XlsxMergeRange, XlsxRow, XlsxSheet } from './types'
+import { parseWorksheetDrawings, collectXlsxImages } from './drawing'
+import { computeMetrics } from './render'
+import { resolvePartTarget } from '../drawing/parts'
+import { parseThemeContext, type ThemeContext } from '../drawing/style'
 
 /** Convert "A1" / "BC23" to 0-based [row, col]. */
 export function parseRef(ref: string): [number, number] {
@@ -49,7 +53,7 @@ interface Styles {
   fonts: Array<{ bold: boolean; italic: boolean; sizePt?: number; color?: string }>
   fills: Array<{ rgb?: string; pattern?: string }>
   borders: Array<{ left?: string; right?: string; top?: string; bottom?: string }>
-  xfs: Array<{ numFmtId: number; fontId: number; fillId: number; borderId: number }>
+  xfs: Array<{ numFmtId: number; fontId: number; fillId: number; borderId: number; textRotation?: number; horizontal?: string; vertical?: string; wrapText?: boolean }>
 }
 
 async function parseStyles(pkg: OfficePackage): Promise<Styles> {
@@ -84,11 +88,21 @@ async function parseStyles(pkg: OfficePackage): Promise<Styles> {
   for (const cellXfsN of getChildren(root, 'cellXfs')) {
     for (const xf of getChildren(cellXfsN, 'xf')) {
       const a = attrs(xf)
+      const rotation = Number(attrs(getChildren(xf, 'alignment')[0]).textRotation)
+      const textRotation = Number.isInteger(rotation) && (rotation === 255 || (rotation >= 1 && rotation <= 180)) ? rotation : undefined
+      const align = attrs(getChildren(xf, 'alignment')[0])
+      const horizontal = typeof align.horizontal === 'string' && align.horizontal !== '' ? align.horizontal : undefined
+      const vertical = typeof align.vertical === 'string' && align.vertical !== '' ? align.vertical : undefined
+      const wrapText = align.wrapText === '1' || align.wrapText === 'true' ? true : align.wrapText === '0' || align.wrapText === 'false' ? false : undefined
       styles.xfs.push({
         numFmtId: parseInt(a.numFmtId ?? '0', 10),
         fontId: parseInt(a.fontId ?? '0', 10),
         fillId: parseInt(a.fillId ?? '0', 10),
         borderId: parseInt(a.borderId ?? '0', 10),
+        textRotation,
+        horizontal,
+        vertical,
+        wrapText,
       })
     }
   }
@@ -100,14 +114,21 @@ export async function parseXlsx(pkg: OfficePackage): Promise<XlsxDocument> {
   if (!workbook) throw new Error('xl/workbook.xml missing — not a valid xlsx?')
   const rels = await pkg.xml('xl/_rels/workbook.xml.rels')
   const relMap = new Map<string, string>()
+  let themePath: string | undefined
   if (rels) {
     for (const rel of getChildren(rels, 'Relationship')) {
       const a = attrs(rel)
-      if (a.Id) relMap.set(a.Id, a.Target as string)
+      if (a.Id && a.Target && a.TargetMode !== 'External') relMap.set(a.Id, a.Target as string)
+      if (a.Type?.endsWith('/theme') && a.TargetMode !== 'External' && a.Target) themePath = resolvePartTarget('xl/workbook.xml', a.Target)
     }
   }
   const strings = await sharedStrings(pkg)
   const styles = await parseStyles(pkg)
+  let theme: ThemeContext = parseThemeContext()
+  if (themePath) {
+    try { theme = parseThemeContext(await pkg.xmlOrdered(themePath)) }
+    catch { /* optional theme cannot invalidate usable cells */ }
+  }
 
   const sheets: XlsxSheet[] = []
   const sheetsNode = getChildren(workbook, 'sheets')[0]
@@ -116,10 +137,22 @@ export async function parseXlsx(pkg: OfficePackage): Promise<XlsxDocument> {
     const name = (a.name as string) ?? 'Sheet'
     const target = relMap.get(a['r:id'] ?? a.id ?? '') ?? ''
     const path = target.startsWith('/') ? target.slice(1) : `xl/${target.replace(/^\.\.\//, '')}`
-    const sheet = await parseSheet(pkg, path, name, strings, styles)
+    const sheet = await parseSheet(pkg, path, name, strings, styles, theme)
     sheets.push(sheet)
   }
-  return { sheets }
+  const drawingCoverage = sheets.flatMap((sheet, unit) => {
+    const entries = (sheet.drawingCoverage ?? []).map(entry => ({ ...entry, unit }))
+    const metrics = sheet.drawings?.length ? computeMetrics(sheet) : undefined
+    const requested = metrics?.requestedDrawingBounds, retained = metrics?.retainedDrawingBounds
+    if (requested && retained && (requested.right > retained.right || requested.bottom > retained.bottom)) entries.push({
+      partPath: sheet.sourcePartPath ?? 'xl/worksheets/unknown.xml', treePath: sheet.name, element: 'viewport', feature: 'viewport',
+      status: 'unsupported' as const, selectedRepresentation: 'none' as const, representation: 'native' as const, reason: 'drawing viewport limit', scope: 'diagnostic' as const, unit,
+      limit: requested.right > 16384 || requested.bottom > 16384 ? 16384 : 16777216,
+      requestedExtent: { width: requested.right, height: requested.bottom }, retainedExtent: { width: retained.right, height: retained.bottom },
+    })
+    return entries
+  })
+  return { sheets, images: collectXlsxImages(sheets), drawingCoverage }
 }
 
 async function parseSheet(
@@ -128,9 +161,10 @@ async function parseSheet(
   name: string,
   strings: string[],
   styles: Styles,
+  theme: ThemeContext,
 ): Promise<XlsxSheet> {
   const root = await pkg.xml(path)
-  const sheet: XlsxSheet = { name, rows: [], cols: [], merges: [], mergeRanges: [] }
+  const sheet: XlsxSheet = { name, sourcePartPath: path, rows: [], cols: [], merges: [], mergeRanges: [] }
   if (!root) return sheet
   const data = getChildren(root, 'worksheet')[0] ?? root
   const colsNode = getChildren(data, 'cols')[0]
@@ -160,6 +194,7 @@ async function parseSheet(
       index: parseInt(ra.r ?? '1', 10) - 1,
       heightPt: ra.ht !== undefined ? parseFloat(ra.ht as string) : undefined,
       customHeight: ra.customHeight === '1',
+      hidden: ra.hidden === '1' || ra.hidden === 'true',
       cells: [],
     }
     for (const cNode of getChildren(rowNode, 'c')) {
@@ -204,12 +239,17 @@ async function parseSheet(
           color: font?.color,
           fillColor: fill?.pattern === 'solid' ? fill.rgb : undefined,
           borders: border ? { left: border.left, right: border.right, top: border.top, bottom: border.bottom } : undefined,
+          textRotation: xf.textRotation,
+          horizontal: xf.horizontal,
+          vertical: xf.vertical,
+          wrapText: xf.wrapText,
         }
       }
       row.cells.push(cell)
     }
     sheet.rows.push(row)
   }
+  await parseWorksheetDrawings(pkg, sheet, path, data, theme)
   return sheet
 }
 

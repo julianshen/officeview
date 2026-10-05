@@ -3,15 +3,25 @@
  * Layout mimics Excel defaults: default col width 8.43 chars (~64px), row
  * height 15pt (20px). Cell geometry is fixed; no reflow needed.
  */
-import type { XlsxMergeRange, XlsxSheet } from './types'
+import type { XlsxCellStyle, XlsxDrawing, XlsxMergeRange, XlsxSheet } from './types'
+import type { PptxTextBody } from '../pptx/types'
+import { layoutTextBody, type MeasureText, type TextLayout } from '../drawing/text-layout'
 import { resolveColor } from '../core/color'
 import { paintWatermark, type ResolvedWatermark, type WatermarkOptions } from '../core/watermark'
+import { paintScene } from '../drawing/scene-paint'
+import { paintDrawingContent } from '../drawing/content-paint'
+import { createTextBodyMeasurer, paintTextBody } from '../drawing/text-paint'
+import { graphemes } from '../core/text-recording'
+import { resolveGeometry } from '../drawing/geometry'
+import type { DrawingContentShape } from '../drawing/content'
 
 export interface GridMetrics {
   colWidthsPx: number[]
   rowHeightsPx: number[]
   widthPx: number
   heightPx: number
+  requestedDrawingBounds?: { right: number; bottom: number }
+  retainedDrawingBounds?: { right: number; bottom: number }
 }
 
 const DEFAULT_COL_PX = 64
@@ -20,9 +30,170 @@ const CHAR_PX = 7
 /** Hard caps so a pathological sheet can never allocate an impossible canvas. */
 const MAX_GRID_COLS = 4096
 const MAX_GRID_ROWS = 16384
+/** Map an OOXML alignment textRotation to canvas paint behavior. Values 1-90 are
+ * counterclockwise degrees; 91-180 encode clockwise 1-90 (180 is 90 degrees
+ * clockwise, not a half turn); 255 stacks glyphs with RTL column progression.
+ * Absent, 0 and invalid values stay undefined (horizontal). */
+export function cellTextRotation(rotation: number | undefined): { radians: number } | { stacked: true } | undefined {
+  if (rotation === undefined || rotation === 0) return undefined
+  if (rotation === 255) return { stacked: true }
+  if (!Number.isInteger(rotation) || rotation < 1 || rotation > 180) return undefined
+  return { radians: rotation <= 90 ? (-rotation * Math.PI) / 180 : ((rotation - 90) * Math.PI) / 180 }
+}
+
+/** Measured glyph bands also cover the canonical recording band, so fitting
+ * cell text has the same physical and selectable bounds on every Canvas host. */
+function cellTextMeasurer(ctx: CanvasRenderingContext2D): MeasureText {
+  const native = createTextBodyMeasurer(ctx, family => family)
+  return (text, style) => {
+    const m = native(text, style), size = (style.fontSizePt ?? 10) * 96 / 72
+    const ascent = Math.max(m.ascent ?? 0, size * .85), descent = Math.max(m.descent ?? 0, size * .25)
+    return { width: m.width, ascent, descent, normalHeight: Math.max(m.normalHeight ?? 0, ascent + descent) }
+  }
+}
+function rotatedLayout(layout: TextLayout, radians: number): TextLayout {
+  const a = Math.cos(radians), b = Math.sin(radians)
+  return { ...layout, lines: layout.lines.map(line => ({ ...line, segments: line.segments.map(segment => {
+    const t = segment.transform ?? { a: 1, b: 0, c: 0, d: 1, e: segment.x, f: line.baseline }
+    return { ...segment, transform: { a: a * t.a - b * t.b, b: b * t.a + a * t.b,
+      c: a * t.c - b * t.d, d: b * t.c + a * t.d, e: a * t.e - b * t.f, f: b * t.e + a * t.f } }
+  }) })) }
+}
+function textLayoutBounds(layout: TextLayout, measure: MeasureText): { x: number; y: number; width: number; height: number } {
+  const points: Array<{ x: number; y: number }> = []
+  for (const line of layout.lines) for (const segment of line.segments) {
+    if (segment.text === '\n') continue
+    const t = segment.transform ?? { a: 1, b: 0, c: 0, d: 1, e: segment.x, f: line.baseline }
+    const m = measure('Mg', segment.style), ascent = m.ascent ?? 0, descent = m.descent ?? 0
+    for (const [x, y] of [[0, -ascent], [segment.width, -ascent], [segment.width, descent], [0, descent]])
+      points.push({ x: t.a * x + t.c * y + t.e, y: t.b * x + t.d * y + t.f })
+  }
+  if (!points.length) return { x: 0, y: 0, width: 0, height: 0 }
+  const x = Math.min(...points.map(p => p.x)), y = Math.min(...points.map(p => p.y))
+  return { x, y, width: Math.max(...points.map(p => p.x)) - x, height: Math.max(...points.map(p => p.y)) - y }
+}
+function alignedLayout(layout: TextLayout, bounds: ReturnType<typeof textLayoutBounds>, box: { x: number; y: number; w: number; h: number }, horizontal: string, vertical: string): TextLayout {
+  // Preserve font size. If a block fits, relax only nominal padding where the
+  // em-cell capacity fits but its measured glyph band uses the last fraction.
+  const px = Math.min(PADDING_L, Math.max(0, (box.w - bounds.width) / 2))
+  const py = Math.min(PADDING_L, Math.max(0, (box.h - bounds.height) / 2))
+  const x = horizontal === 'right' ? box.x + box.w - px - bounds.width : horizontal === 'center' ? box.x + (box.w - bounds.width) / 2 : box.x + px
+  const y = vertical === 'bottom' ? box.y + box.h - py - bounds.height : vertical === 'center' || vertical === 'middle' ? box.y + (box.h - bounds.height) / 2 : box.y + py
+  const dx = x - bounds.x, dy = y - bounds.y
+  return { ...layout, lines: layout.lines.map(line => ({ ...line, segments: line.segments.map(segment => ({ ...segment,
+    transform: segment.transform ? { ...segment.transform, e: segment.transform.e + dx, f: segment.transform.f + dy } : { a: 1, b: 0, c: 0, d: 1, e: segment.x + dx, f: line.baseline + dy } })) })) }
+}
+/** Wrapped text chooses a measured local multiline box that fits its rotated
+ * cell interior. No-wrap or physically oversized text keeps authored font size
+ * and clips to the cell; source remains complete, with clip-aware indexing. */
+function paintCellText(ctx: CanvasRenderingContext2D, text: string, style: XlsxCellStyle | undefined, numeric: boolean, x: number, y: number, w: number, h: number, color: string): void {
+  const mapped = cellTextRotation(style?.textRotation), stacked = mapped && 'stacked' in mapped
+  const radians = mapped && 'radians' in mapped ? mapped.radians : 0
+  const horizontal = style?.horizontal === undefined || style.horizontal === 'general' ? (numeric ? 'right' : 'left') : style.horizontal
+  const vertical = style?.vertical ?? 'center'
+  const wrap = style?.wrapText ?? !!stacked
+  const body: PptxTextBody = { direction: stacked ? 'wordArtVertRtl' : 'horz', anchor: 't', wrap,
+    insetLeftEmu: 0, insetRightEmu: 0, insetTopEmu: 0, insetBottomEmu: 0,
+    paragraphs: [{ runs: [{ text, fontSizePt: style?.fontSizePt ?? 10, fontFamily: 'Calibri', bold: style?.bold, italic: style?.italic, color }], align: 'left', level: 0,
+      defaultProperties: { fontSizePt: style?.fontSizePt ?? 10, fontFamily: 'Calibri', bold: style?.bold, italic: style?.italic, color }, wrapWhitespace: true,
+      ...(stacked ? {} : { wordLineSpacing: { rule: 'auto', value: 240 } }) }] }
+  ctx.save()
+  try {
+    const measure = cellTextMeasurer(ctx)
+    let layout: TextLayout
+    if (stacked) {
+      const run = body.paragraphs[0].runs[0]
+      const metrics = measure('Mg', run)
+      const pitch = Math.max((run.fontSizePt ?? 10) * 96 / 72, metrics.normalHeight ?? 0, ...graphemes(text).map(g => measure(g.text, run).width))
+      body.paragraphs[0].lineSpacing = { kind: 'points', value: pitch * 72 / 96 }
+      layout = layoutTextBody(body, w, h, measure)
+    } else {
+      const cosine = Math.abs(Math.cos(radians)), sine = Math.abs(Math.sin(radians))
+      const innerW = Math.max(1, w - PADDING_L - PADDING_R), innerH = Math.max(1, h - 2 * PADDING_L)
+      const maxFlow = Math.min(cosine > 1e-10 ? innerW / cosine : Infinity, sine > 1e-10 ? innerH / sine : Infinity)
+      const advance = measure(text, body.paragraphs[0].runs[0]).width
+      const metrics = measure('Mg', body.paragraphs[0].runs[0])
+      const bandHeight = (metrics.ascent ?? 0) + (metrics.descent ?? 0), lineHeight = metrics.normalHeight ?? bandHeight
+      const maxLocalHeight = Math.min(sine > 1e-10 ? innerW / sine : Infinity, cosine > 1e-10 ? innerH / cosine : Infinity)
+      const count = Math.max(1, Math.min(graphemes(text).length, 1 + Math.floor(Math.max(0, maxLocalHeight - bandHeight) / Math.max(1, lineHeight))))
+      // Finite candidates derived from source length/advance, not a giant flow
+      // cap or calibrated font-size adjustment. Select the largest fitting box.
+      const widths = wrap ? [...new Set([maxFlow, ...Array.from({ length: count }, (_, i) => {
+        const localHeight = i * lineHeight + bandHeight
+        return Math.min(cosine > 1e-10 ? (innerW - sine * localHeight) / cosine : maxFlow,
+          sine > 1e-10 ? (innerH - cosine * localHeight) / sine : maxFlow)
+      }), ...Array.from({ length: count }, (_, i) => Math.min(maxFlow, advance / (i + 1)))])].filter(width => width > 0).sort((a, b) => b - a) : [Math.max(1, advance)]
+      layout = rotatedLayout(layoutTextBody(body, widths[0], h, measure), radians)
+      for (const width of widths) {
+        const candidate = rotatedLayout(layoutTextBody(body, width, h, measure), radians)
+        const bounds = textLayoutBounds(candidate, measure)
+        if (bounds.width <= innerW + 1e-8 && bounds.height <= innerH + 1e-8) { layout = candidate; break }
+      }
+    }
+    const bounds = textLayoutBounds(layout, measure)
+    const placed = alignedLayout(layout, bounds, { x, y, w, h }, horizontal, vertical)
+    // Coordinates in the placed layout are worksheet-local and already include
+    // the final merged bounds. Paint and recording replay this exact geometry.
+    paintTextBody(body, ctx, 0, 0, w, h, family => family, undefined, { layout: placed, clip: { x, y, width: w, height: h } })
+  } finally { ctx.restore() }
+}
 /** How much wider than the used range a <col> declaration may be and still
  * count as real formatting rather than noise. */
 const MAX_DECLARED_COL_SLACK = 64
+const MAX_DRAWING_SIDE = 16384
+const MAX_DRAWING_AREA = 16777216
+
+type Matrix = [number, number, number, number, number, number]
+const identity: Matrix = [1, 0, 0, 1, 0, 0]
+function multiply(a: Matrix, b: Matrix): Matrix {
+  return [a[0] * b[0] + a[2] * b[1], a[1] * b[0] + a[3] * b[1], a[0] * b[2] + a[2] * b[3], a[1] * b[2] + a[3] * b[3], a[0] * b[4] + a[2] * b[5] + a[4], a[1] * b[4] + a[3] * b[5] + a[5]]
+}
+function transformedDrawingBounds(nodes: XlsxDrawing[]): { right: number; bottom: number } {
+  const bounds = { right: 0, bottom: 0 }
+  type BoundsNode = XlsxDrawing | DrawingContentShape
+  const walk = (items: BoundsNode[], parent: Matrix): void => {
+    for (const node of items) {
+      const x = node.xEmu / 9525, y = node.yEmu / 9525, w = node.widthEmu / 9525, h = node.heightEmu / 9525
+      const deg = node.rotationDeg ?? 0
+      if ('transformValid' in node && node.transformValid === false || ![x, y, w, h, deg].every(Number.isFinite) || w < 0 || h < 0) continue
+      const rad = deg * Math.PI / 180, cos = Math.cos(rad), sin = Math.sin(rad)
+      const fx = node.flipH ? -1 : 1, fy = node.flipV ? -1 : 1
+      const cx = x + w / 2, cy = y + h / 2
+      const local: Matrix = [cos * fx, sin * fx, -sin * fy, cos * fy, cx - cos * fx * w / 2 + sin * fy * h / 2, cy - sin * fx * w / 2 - cos * fy * h / 2]
+      const matrix = multiply(parent, local)
+      const include = (px: number, py: number) => {
+        const tx = matrix[0] * px + matrix[2] * py + matrix[4]
+        const ty = matrix[1] * px + matrix[3] * py + matrix[5]
+        if (Number.isFinite(tx) && Number.isFinite(ty)) { bounds.right = Math.max(bounds.right, tx); bounds.bottom = Math.max(bounds.bottom, ty) }
+      }
+      if (node.group) {
+        const g = node.group, sx = g.ext.width / g.chExt.width, sy = g.ext.height / g.chExt.height
+        if (![sx, sy, g.chOff.x, g.chOff.y].every(Number.isFinite) || sx < 0 || sy < 0) continue
+        const childMatrix = multiply(matrix, [sx, 0, 0, sy, -sx * g.chOff.x / 9525, -sy * g.chOff.y / 9525])
+        walk((node.children ?? []) as BoundsNode[], childMatrix)
+      } else {
+        include(0, 0); include(w, 0); include(w, h); include(0, h)
+        if (node.drawingGeometry && !node.drawingGeometry.preset) {
+          for (const path of resolveGeometry(node.drawingGeometry, w, h).paths) {
+            for (const command of path.commands) {
+              if (command[0] === 'moveTo' || command[0] === 'lnTo') include(command[1], command[2])
+              else if (command[0] === 'quadBezTo') { include(command[1], command[2]); include(command[3], command[4]) }
+              else if (command[0] === 'cubicBezTo') { include(command[1], command[2]); include(command[3], command[4]); include(command[5], command[6]) }
+              else if (command[0] === 'arcTo') {
+                const [, cx, cy, rx, ry] = command
+                include(cx - rx, cy - ry); include(cx + rx, cy - ry)
+                include(cx - rx, cy + ry); include(cx + rx, cy + ry)
+              }
+            }
+          }
+        }
+        if ('content' in node && node.content?.kind === 'diagram') walk(node.content.shapes as BoundsNode[], matrix)
+      }
+    }
+  }
+  walk(nodes, identity)
+  return bounds
+}
 
 export function computeMetrics(sheet: XlsxSheet): GridMetrics {
   let maxCol = 0
@@ -32,30 +203,41 @@ export function computeMetrics(sheet: XlsxSheet): GridMetrics {
   // from such a declared range alone produced a 66,000px canvas and threw, so
   // trust the used range when the declared one is implausibly wider. A modestly
   // wider declaration is real formatting (a styled but empty column) and stays.
-  const declaredMax = sheet.cols.reduce((m, c) => Math.max(m, c.max), maxCol)
+  const drawing = !!sheet.drawings?.length
+  const declaredMax = sheet.cols.reduce((m, c) => drawing && !Number.isSafeInteger(c.max) ? m : Math.max(m, c.max), maxCol)
   const gridMax = declaredMax > maxCol + MAX_DECLARED_COL_SLACK ? maxCol : declaredMax
-  const nCols = Math.min(Math.max(gridMax + 1, 1), MAX_GRID_COLS)
+  const nCols = Math.min(Math.max(gridMax + 1, (drawing ? (sheet.drawingMarkers?.maxCol ?? 0) + 1 : 1), 1), MAX_GRID_COLS)
   const colWidthsPx = new Array<number>(nCols).fill(DEFAULT_COL_PX)
   for (const spec of sheet.cols) {
-    if (spec.widthChars !== undefined && !spec.hidden) {
-      const w = Math.round(spec.widthChars * CHAR_PX + 5)
-      for (let c = spec.min; c <= spec.max && c < nCols; c++) colWidthsPx[c] = w
+    if (drawing ? spec.widthChars !== undefined || spec.hidden : spec.widthChars !== undefined && !spec.hidden) {
+      const w = drawing && spec.hidden ? 0 : drawing && (spec.widthChars === undefined || !Number.isFinite(spec.widthChars) || spec.widthChars < 0) ? DEFAULT_COL_PX : Math.round(spec.widthChars! * CHAR_PX + 5)
+      for (let c = Math.max(0, spec.min); c <= spec.max && c < nCols; c++) colWidthsPx[c] = w
     }
   }
   let maxRow = 0
-  for (const row of sheet.rows) maxRow = Math.max(row.index, maxRow)
-  const nRows = Math.min(maxRow + 1, MAX_GRID_ROWS)
+  for (const row of sheet.rows) if (!drawing || Number.isSafeInteger(row.index) && row.index >= 0) maxRow = Math.max(row.index, maxRow)
+  const nRows = Math.min(Math.max(maxRow + 1, drawing ? (sheet.drawingMarkers?.maxRow ?? 0) + 1 : 1), MAX_GRID_ROWS)
   const rowHeightsPx = new Array<number>(nRows).fill(DEFAULT_ROW_PX)
   for (const row of sheet.rows) {
-    if (row.heightPt !== undefined && row.customHeight && row.index < nRows) {
-      rowHeightsPx[row.index] = Math.round(row.heightPt * (96 / 72))
+    if (row.index >= 0 && row.index < nRows) {
+      if (drawing && row.hidden) rowHeightsPx[row.index] = 0
+      else if (row.heightPt !== undefined && row.customHeight) rowHeightsPx[row.index] = drawing && (!Number.isFinite(row.heightPt) || row.heightPt < 0) ? DEFAULT_ROW_PX : Math.round(row.heightPt * (96 / 72))
     }
   }
+  const gridWidth = colWidthsPx.reduce((a, b) => a + b, 0), gridHeight = rowHeightsPx.reduce((a, b) => a + b, 0)
+  if (!drawing) return { colWidthsPx, rowHeightsPx, widthPx: gridWidth, heightPx: gridHeight }
+  const visual = transformedDrawingBounds(sheet.drawings!)
+  const requested = { right: Math.max(gridWidth, visual.right), bottom: Math.max(gridHeight, visual.bottom) }
+  let width = Math.max(1, Math.min(MAX_DRAWING_SIDE, Math.ceil(requested.right)))
+  let height = Math.max(1, Math.min(MAX_DRAWING_SIDE, Math.ceil(requested.bottom)))
+  if (width * height > MAX_DRAWING_AREA) height = Math.max(1, Math.floor(MAX_DRAWING_AREA / width))
   return {
     colWidthsPx,
     rowHeightsPx,
-    widthPx: colWidthsPx.reduce((a, b) => a + b, 0),
-    heightPx: rowHeightsPx.reduce((a, b) => a + b, 0),
+    widthPx: width,
+    heightPx: height,
+    requestedDrawingBounds: requested,
+    retainedDrawingBounds: { right: width, bottom: height },
   }
 }
 
@@ -99,11 +281,16 @@ export function renderSheet(
   ctx: CanvasRenderingContext2D,
   metrics?: GridMetrics,
   watermark?: WatermarkOptions | ResolvedWatermark,
+  prepared?: { images?: ReadonlyArray<CanvasImageSource | undefined>; resolveFont?: (family: string) => string },
 ): void {
+  ctx.save()
+  try {
   const m = metrics ?? computeMetrics(sheet)
   const { colWidthsPx, rowHeightsPx } = m
   const colX = prefixSums(colWidthsPx)
   const rowY = prefixSums(rowHeightsPx)
+  const gridWidth = colX[colWidthsPx.length]
+  const gridHeight = rowY[rowHeightsPx.length]
   const ranges = sheet.mergeRanges ?? []
 
   // map "row:col" -> range for every covered (non-anchor) cell
@@ -146,14 +333,23 @@ export function renderSheet(
       // text (right-align numbers, left-align strings; alignment spans the merge)
       const text = formatValue(cell.value, cell.style?.numFmtId ?? 0)
       if (text !== '') {
-        ctx.fillStyle = cell.style?.color ? resolveColor(cell.style.color) : '#000000'
+        const color = cell.style?.color ? resolveColor(cell.style.color) : '#000000'
+        ctx.fillStyle = color
         ctx.font = `${cell.style?.italic ? 'italic ' : ''}${cell.style?.bold ? 'bold ' : ''}${cell.style?.fontSizePt ?? 10}pt "Calibri"`
-        const numeric = typeof cell.value === 'number'
-        const textW = ctx.measureText(text).width
-        const tx = numeric ? x + w - PADDING_R - textW : x + PADDING_L
-        const ty = y + hh - (hh - (cell.style?.fontSizePt ?? 10) * (96 / 72)) / 2
-        ctx.textBaseline = 'alphabetic'
-        ctx.fillText(text, tx, ty)
+        // OOXML often authors default alignment fields on every cell. Those
+        // retain ordinary placement; real alignment/wrapping/rotation needs
+        // the measured local layout (including explicit no-wrap for255).
+        const explicit = (cell.style?.horizontal !== undefined && cell.style.horizontal !== 'general')
+          || (cell.style?.vertical !== undefined && cell.style.vertical !== 'bottom')
+          || cell.style?.wrapText === true || cellTextRotation(cell.style?.textRotation) !== undefined
+        if (explicit) paintCellText(ctx, text, cell.style, typeof cell.value === 'number', x, y, w, hh, color)
+        else {
+          // Preserve accepted ordinary default horizontal layout exactly.
+          const textW = ctx.measureText(text).width
+          const tx = typeof cell.value === 'number' ? x + w - PADDING_R - textW : x + PADDING_L
+          const ty = y + hh - (hh - (cell.style?.fontSizePt ?? 10) * (96 / 72)) / 2
+          ctx.textBaseline = 'alphabetic'; ctx.fillText(text, tx, ty)
+        }
       }
       // borders (anchor draws the merged rect's outline)
       const b = cell.style?.borders
@@ -184,15 +380,15 @@ export function renderSheet(
   ctx.lineWidth = 1
   ctx.beginPath()
   for (let c = 0; c <= colWidthsPx.length; c++) {
-    const x = c === colWidthsPx.length ? m.widthPx : colX[c]
-    for (const [y1, y2] of visibleSegments(c, ranges, rowY, m.heightPx, true)) {
+    const x = colX[c]
+    for (const [y1, y2] of visibleSegments(c, ranges, rowY, gridHeight, true)) {
       ctx.moveTo(x + 0.5, y1 + 0.5)
       ctx.lineTo(x + 0.5, y2 + 0.5)
     }
   }
   for (let r = 0; r <= rowHeightsPx.length; r++) {
-    const y = r === rowHeightsPx.length ? m.heightPx : rowY[r]
-    for (const [x1, x2] of visibleSegments(r, ranges, colX, m.widthPx, false)) {
+    const y = rowY[r]
+    for (const [x1, x2] of visibleSegments(r, ranges, colX, gridWidth, false)) {
       ctx.moveTo(x1 + 0.5, y + 0.5)
       ctx.lineTo(x2 + 0.5, y + 0.5)
     }
@@ -200,6 +396,19 @@ export function renderSheet(
   ctx.stroke()
   // Explicit formatting wins over both gridlines and neighboring cell fills.
   for (const paint of paintBorders) paint()
+  if (sheet.drawings?.length) paintScene(sheet.drawings, ctx, {
+    images: prepared?.images,
+    paintContent(node, context, w, h) {
+      if (!node.content) return
+      paintDrawingContent(node.content, context, w, h, {
+        fontFamilyCss: family => JSON.stringify(prepared?.resolveFont?.(family) ?? family),
+        paintDiagramText(shape, c, width, height) { if (shape.textBody) paintTextBody(shape.textBody, c, 0, 0, width, height, prepared?.resolveFont ?? (f => f), sheet.drawingTheme) },
+        paintTextbox(content, c, width, height) { paintTextBody({ paragraphs: content.paragraphs, anchor: 't', wrap: true, insetLeftEmu: content.insets.left, insetTopEmu: content.insets.top, insetRightEmu: content.insets.right, insetBottomEmu: content.insets.bottom }, c, 0, 0, width, height, prepared?.resolveFont ?? (f => f), sheet.drawingTheme) },
+      })
+    },
+    paintText(node, context, w, h) { if (node.textBody) paintTextBody(node.textBody, context, 0, 0, w, h, prepared?.resolveFont ?? (f => f), sheet.drawingTheme) },
+  })
+  } finally { ctx.restore() }
 }
 
 /**

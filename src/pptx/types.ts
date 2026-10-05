@@ -1,40 +1,55 @@
-/** PPTX document model. All geometry in EMU (rendered via emuToPx). */
-export interface PptxTextRun {
-  text: string
-  bold?: boolean
-  italic?: boolean
-  fontSizePt?: number
-  color?: string
-  fontFamily?: string
+import type { EmbeddedFontFace, FontDiagnostic } from '../core/fonts/types'
+import type { ContentDiagnostic } from '../drawing/parts'
+import type { DrawingCoverageEntry } from '../drawing/coverage'
+import type { DrawingContent } from '../drawing/content'
+import type { GeometryIssue } from '../drawing/geometry'
+import type { SceneGroupTransform, SceneImage, SceneNode } from '../drawing/scene'
+import type { DrawingFill, DrawingIssue, DrawingLine, ThemeContext } from '../drawing/style'
+import type { DrawingTextBody, DrawingTextParagraph, DrawingTextRun, DrawingTextSpacing, DrawingTextStyle, DrawingTabStop } from '../drawing/text'
+
+/** PPTX document model. All placement geometry in EMU (rendered via emuToPx). */
+export interface PptxTextStyle extends DrawingTextStyle {}
+
+export interface PptxTextRun extends DrawingTextRun {
+  /** Source rPr only; absent properties must remain inheritable by table regions. */
+  directProperties?: PptxTextStyle
+  propertySources?: Partial<Record<keyof PptxTextStyle, 'default' | 'master' | 'layout' | 'placeholder' | 'list' | 'paragraph' | 'end' | 'run'>>
 }
 
-export interface PptxParagraph {
-  runs: PptxTextRun[]
-  align: 'left' | 'center' | 'right' | 'justify'
-  bullet?: boolean
-  level: number
-}
+export interface PptxTextSpacing extends DrawingTextSpacing {}
+export interface PptxTabStop extends DrawingTabStop {}
 
-export interface PptxTextBody {
+export interface PptxParagraph extends DrawingTextParagraph { runs: PptxTextRun[] }
+
+export interface PptxTextBody extends DrawingTextBody {
+  diagnostics?: PptxDiagnostic[]
   paragraphs: PptxParagraph[]
-  /** Anchor text vertically within shape: t/ctr/b. */
-  anchor: 't' | 'ctr' | 'b'
-  /** Inset in EMU (defaults 91440 l/r, 45720 t/b). */
-  insetLeftEmu: number
-  insetRightEmu: number
-  insetTopEmu: number
-  insetBottomEmu: number
-  wrap: boolean
 }
 
 /** An image part referenced by a shape (p:blipFill -> a:blip r:embed). */
-export interface PptxImageRef {
-  /** Raw encoded bytes (png/jpeg/gif/webp). */
+export interface PptxImageRef extends SceneImage {
+  /** Raw encoded bytes (png/jpeg/gif/webp); required for PPTX package assets. */
   data: Uint8Array
-  mime?: string
-  /** a:srcRect crop, as 0..1 fractions. */
-  srcRect?: { l: number; t: number; r: number; b: number }
 }
+
+export interface PptxSource {
+  partPath: string
+  treePath: string
+  element: string
+  id?: string
+  name?: string
+  representation: 'native' | 'choice' | 'fallback'
+  reason?: string
+  feature?: string
+}
+
+export type PptxDiagnostic = (GeometryIssue | DrawingIssue | ContentDiagnostic | {
+  kind: 'invalid-transform' | 'missing-representation' | 'fallback-representation' | 'missing-image' | 'unsupported-object' | 'deferred-animation' | 'unsupported-text-alignment'
+  message: string
+  feature?: string
+}) & { source?: PptxSource }
+
+export interface PptxGroupTransform extends SceneGroupTransform {}
 
 /** A table cell inside a:p:graphicFrame -> a:tbl. */
 export interface PptxTableCell {
@@ -47,6 +62,11 @@ export interface PptxTableCell {
   merged?: boolean
   /** Solid fill color from a:tcPr/a:solidFill. */
   fill?: string
+  /** Direct DrawingML paint; explicit none/transparent paint overrides style fill. */
+  drawingFill?: DrawingFill
+  drawingBorders?: Partial<Record<'left' | 'right' | 'top' | 'bottom', DrawingLine>>
+  margins?: { leftEmu?: number; rightEmu?: number; topEmu?: number; bottomEmu?: number }
+  anchor?: PptxTextBody['anchor']
 }
 
 export interface PptxTableRow {
@@ -88,25 +108,21 @@ export interface PptxTable {
   firstRowBorders?: PptxTableBorders
 }
 
-export interface PptxShape {
-  /** Geometry in EMU, relative to slide origin. */
-  xEmu: number
-  yEmu: number
-  widthEmu: number
-  heightEmu: number
+export interface PptxShape extends SceneNode<PptxTextBody, PptxImageRef> {
   /** Inherited from a slide layout when the shape carries no explicit xfrm. */
   placeholder?: { type?: string; idx?: number }
   geometry: 'rect' | 'ellipse' | 'roundRect' | 'other'
-  fill?: string
-  line?: { color: string; widthEmu?: number }
-  textBody?: PptxTextBody
-  rotationDeg?: number
-  /** Picture content, when this shape is a p:pic. */
-  image?: PptxImageRef
-  /** Table content, when this shape is a p:graphicFrame wrapping an a:tbl. */
+  /** Original preset name, including names the engine does not recognize. */
+  presetName?: string
+  /** Plain text from an unpainted compatibility Choice, retained for later audit/search. */
+  sourceTextBody?: PptxTextBody
+  children?: PptxShape[]
+  group?: PptxGroupTransform
+  source?: PptxSource
+  diagnostics?: PptxDiagnostic[]
+  /** Table content remains owned and painted by the PPTX adapter. */
+  content?: DrawingContent<PptxParagraph, PptxTextBody>
   table?: PptxTable
-  /** Index into the document-wide image list (PptxDocument.images). */
-  imageIndex?: number
 }
 
 export interface PptxSlide {
@@ -114,11 +130,16 @@ export interface PptxSlide {
   widthEmu: number
   heightEmu: number
   shapes: PptxShape[]
-  /** Slide background fill as CSS hex (p:bg solid fill, else layout/master fallback). Absent means white. */
+  /** Resolved solid background from the slide, layout, or master. Absent means white. */
   background?: string
+  theme?: ThemeContext
+  diagnostics?: PptxDiagnostic[]
 }
 
 export interface PptxDocument {
+  drawingCoverage?: DrawingCoverageEntry[]
+  embeddedFonts?: EmbeddedFontFace[]
+  fontDiagnostics?: FontDiagnostic[]
   slideWidthEmu: number
   slideHeightEmu: number
   slides: PptxSlide[]
