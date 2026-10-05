@@ -26,6 +26,15 @@ const browserRegister: RegisterFont = async ({ bytes, alias, descriptors }) => {
   set.add(face)
   return () => { set.delete(face) }
 }
+/** Worker equivalent: document.fonts does not exist in workers; self.fonts does. */
+export const workerRegister: RegisterFont = async ({ bytes, alias, descriptors }) => {
+  const set = (globalThis as unknown as { fonts?: FontFaceSet }).fonts
+  if (typeof FontFace === 'undefined' || !set) throw new Error('FontFace registration unavailable in this worker; text falls back to system faces')
+  const face = new FontFace(alias, bytes.slice().buffer, descriptors)
+  await face.load()
+  set.add(face)
+  return () => { try { set.delete(face) } catch { /* worker teardown already dropped it */ } }
+}
 export interface FontLease { resolve: FontResolver; diagnostics: FontDiagnostic[]; dispose: () => void }
 /** A pending extraction holds a reference too, so another consumer cannot delete its fonts. */
 export async function acquireFonts(doc: FontDocument, adapter: RegisterFont = browserRegister): Promise<FontLease> {
