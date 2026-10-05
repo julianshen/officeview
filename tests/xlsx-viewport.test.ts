@@ -46,9 +46,10 @@ describe('xlsx viewport culling', () => {
   })
   test('merged range paints when its anchor sits above the viewport', async () => {
     const { sheet, m } = await bigSheet()
-    // B50:D52 merge anchor (row 50, y~735) sits above a viewport starting at
-    // row 53 (y 795): the range reaches in and must paint identically.
-    const vx = 0, vy = 53 * 15, vw = m.widthPx, vh = 120
+    // B50:D60 merge anchor (row 50) sits above a viewport starting one row
+    // later while the range reaches in. Rows are 20px: derive from metrics.
+    const anchorTop = m.rowHeightsPx.slice(0, 49).reduce((a, b) => a + b, 0)
+    const vx = 0, vy = anchorTop + m.rowHeightsPx[49], vw = m.widthPx, vh = 120
     const full = createCanvas(m.widthPx, m.heightPx)
     renderSheet(sheet, full.getContext('2d') as never, m, undefined, {})
     const view = createCanvas(vw, vh)
