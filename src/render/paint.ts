@@ -1,4 +1,5 @@
 import { acquireFonts, type RegisterFont } from '../core/fonts/register'
+import { withFallbackFonts, type FallbackFontsOptions } from '../core/fonts/fallback'
 import type { FontDiagnostic } from '../core/fonts/types'
 /**
  * Shared "document → canvas paintables" extraction. Single source of truth
@@ -72,6 +73,12 @@ export interface PaintOptions {
   watermark?: WatermarkOptions | ResolvedWatermark
   /** Optional image decoder override (tests count decodes). Defaults to decodeImage. */
   decodeImage?: ImageDecodeFn
+  /**
+   * Optional explicit fallback chain/region, composed onto every resolver.
+   * Absent by default: resolvers pass through byte-identical, so default
+   * rendering (and goldens) never move; pinned chains are host-deterministic.
+   */
+  fallbackFonts?: FallbackFontsOptions
 }
 
 /** Byte equality for shared-asset decode reuse (length pre-checked by callers). */
@@ -151,7 +158,7 @@ export function getPaintables(
             pageNumberStart: index + 1,
             totalPages: total,
             ...(watermark ? { watermark } : {}),
-            assets: { imageFor: (image) => decodedByObject.get(image) },
+            assets: { imageFor: (image) => decodedByObject.get(image), ...(options?.fallbackFonts ? { fallbackFonts: options.fallbackFonts } : {}) },
           })
         },
       })), () => {}, [], decoded)
@@ -165,7 +172,7 @@ export function getPaintables(
           const m = computeMetrics(sheet)
           return {
             spec: { widthPx: m.widthPx, heightPx: m.heightPx },
-            paint: (ctx) => renderSheet(sheet, ctx, m, watermark, { images: decoded, resolveFont: lease.resolve }),
+            paint: (ctx) => renderSheet(sheet, ctx, m, watermark, { images: decoded, resolveFont: withFallbackFonts(lease.resolve, options?.fallbackFonts) }),
           }
         }), lease.dispose, lease.diagnostics, decoded)
       } catch (error) { lease.dispose(); throw error }
@@ -177,7 +184,7 @@ export function getPaintables(
       const decoded = await decodeImageAssets(doc.images, options?.decodeImage)
       return withLease(doc.slides.map(slide => ({
         spec: { widthPx: sm.widthPx, heightPx: sm.heightPx },
-        paint: ctx => renderSlide(slide, ctx, sm, decoded, watermark, lease.resolve),
+        paint: ctx => renderSlide(slide, ctx, sm, decoded, watermark, withFallbackFonts(lease.resolve, options?.fallbackFonts)),
       })), lease.dispose, lease.diagnostics, decoded)
     } catch (error) { lease.dispose(); throw error }
   })

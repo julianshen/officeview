@@ -9,6 +9,7 @@
 import { useEffect, useMemo, useRef, useState, type CSSProperties, type ReactElement } from 'react'
 import { getPaintables, type PageSpec, type Paintable, type PaintableArray } from '../render/paint'
 import type { WatermarkOptions } from '../core/watermark'
+import type { FallbackFontsOptions } from '../core/fonts/fallback'
 import { buildTextIndex, findMatches, stepMatch, type SearchMatch, type TextIndex } from '../core/search'
 import {
   hitTest,
@@ -80,6 +81,15 @@ export interface OfficeDocProps {
    * secret inside it.
    */
   watermark?: WatermarkOptions
+  /**
+   * Pin explicit font fallback chains/regions (default none).
+   *
+   * Absent, resolvers pass through byte-identical and rendering never moves.
+   * Pinned, every resolved face carries the ordered chain before its generic,
+   * so hosts with those faces installed paint deterministically. See
+   * <FallbackFontsOptions>.
+   */
+  fallbackFonts?: FallbackFontsOptions
 }
 
 /** Cap the effective device scale so a 6x zoom can't allocate absurd canvases. */
@@ -220,6 +230,7 @@ export function OfficeDoc({
   allowCopy = true,
   allowPrint = true,
   watermark,
+  fallbackFonts,
 }: OfficeDocProps): ReactElement {
   // getPaintables is async (docx measurement resolves a 2D ctx); hold in state.
   const [pages, setPages] = useState<Paintable[]>([])
@@ -227,7 +238,8 @@ export function OfficeDoc({
   // A stable string key keeps the effect from re-running on a fresh object
   // identity every render (and from looping).
   const markKey = watermark ? JSON.stringify(watermark) : ''
-  const owner = useMemo(() => ({ document, markKey }), [document, markKey])
+  const fontKey = fallbackFonts ? JSON.stringify(fallbackFonts) : ''
+  const owner = useMemo(() => ({ document, markKey, fontKey }), [document, markKey, fontKey])
   const ownerRef = useRef<typeof owner | null>(owner)
   ownerRef.current = owner
   useEffect(() => {
@@ -236,7 +248,7 @@ export function OfficeDoc({
     ownerRef.current = owner
     setPages([])
     setTransform({ zoom: 1, panX: 0, panY: 0 })
-    getPaintables(document, markKey ? { watermark } : undefined).then(p => {
+    getPaintables(document, { ...(markKey ? { watermark } : {}), ...(fontKey ? { fallbackFonts } : {}) }).then(p => {
       if (cancelled) { p.dispose(); return }
       lease = p
       setPages(p)
@@ -481,7 +493,7 @@ export function OfficeDoc({
       try {
         // Own a consumer even when pages already exist: recording awaits its
         // canvas and may outlive the viewer that owns those page closures.
-        const paintables = fallback = await getPaintables(document, markKey ? { watermark } : undefined)
+        const paintables = fallback = await getPaintables(document, { ...(markKey ? { watermark } : {}), ...(fontKey ? { fallbackFonts } : {}) })
         const built = await buildTextIndex(paintables)
         if (ownerRef.current === owner) { indexRef.current = built; indexOwnerRef.current = owner }
         return built

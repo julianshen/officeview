@@ -4,6 +4,8 @@ import type { OfficePackage } from '../core/zip'
 import { emuToPx } from '../core/geometry'
 import type { DocxDrawing, DocxDrawingShape, DocxImage, DocxParagraph, DocxTextRun } from './types'
 import { fontFamilyCss, type DocxTheme } from './styles'
+import { withFallbackFonts } from '../core/fonts/fallback'
+import type { FontResolver } from '../core/fonts/register'
 import { parseThemeContext, type ThemeContext } from '../drawing/style'
 import { parseTextBody, textFontDefaults } from '../drawing/text-parse'
 import { partRelationshipNodes, resolvePartTarget as target } from '../drawing/parts'
@@ -115,20 +117,21 @@ export async function loadDrawingParts(
   return out
 }
 export function paintDrawing(drawing: DocxDrawing, ctx: CanvasRenderingContext2D, width: number, height: number, assets?: ContentPaintAssets): void {
-  paintDrawingContent(drawing, ctx, width, height, { fontFamilyCss, paintDiagramText, paintTextbox, assets })
+  const resolve = withFallbackFonts(fontFamilyCss, assets?.fallbackFonts)
+  paintDrawingContent(drawing, ctx, width, height, { fontFamilyCss: resolve, paintDiagramText: (s, c, w, h) => paintDiagramText(s, c, w, h, resolve), paintTextbox, assets })
 }
 // Cached DrawingML text can carry alpha as a CSS color; older Word text runs
 // carry six-digit RGB without a leading #.
 function textColor(value: string): string {
   return /^rgba?\(/i.test(value) ? value : `#${value.replace(/^#/, '')}`
 }
-function paintDiagramText(s: DocxDrawingShape, ctx: CanvasRenderingContext2D, w: number, h: number): void {
+function paintDiagramText(s: DocxDrawingShape, ctx: CanvasRenderingContext2D, w: number, h: number, resolve: FontResolver = fontFamilyCss): void {
   // Parsed DrawingML labels (Task2 body/list/defRPr/fontRef/script/theme/
   // noFill/alpha inheritance baked at parse) paint through the shared engine
   // with exact bodyPr direction/insets/anchor. Manually constructed legacy
   // models without a parsed body keep the historical rows loop below.
   if (s.textBody) {
-    paintTextBody(s.textBody, ctx, 0, 0, w, h, fontFamilyCss)
+    paintTextBody(s.textBody, ctx, 0, 0, w, h, resolve)
     return
   }
   const rows = s.paragraphs.filter((p) => p.runs.some((r) => r.text))
@@ -153,6 +156,7 @@ function paintDiagramText(s: DocxDrawingShape, ctx: CanvasRenderingContext2D, w:
       }
 }
 function paintTextbox(drawing: Extract<DocxDrawing, { kind: 'textbox' }>, ctx: CanvasRenderingContext2D, width: number, height: number, assets?: ContentPaintAssets): void {
+  const resolve = withFallbackFonts(fontFamilyCss, assets?.fallbackFonts)
   ctx.save()
   try {
     const sources: DocxTextRun[][] = []
@@ -197,7 +201,7 @@ function paintTextbox(drawing: Extract<DocxDrawing, { kind: 'textbox' }>, ctx: C
       insetLeftEmu: drawing.insets.left, insetRightEmu: drawing.insets.right,
       insetTopEmu: drawing.insets.top, insetBottomEmu: drawing.insets.bottom
     }
-    const laid = layoutTextBody(body, width, height, createTextBodyMeasurer(ctx, fontFamilyCss))
+    const laid = layoutTextBody(body, width, height, createTextBodyMeasurer(ctx, resolve))
     ctx.save()
     try {
       // Oversized inline objects keep their authored size on a separate flow
@@ -255,7 +259,7 @@ function paintTextbox(drawing: Extract<DocxDrawing, { kind: 'textbox' }>, ctx: C
     } finally {
       ctx.restore()
     }
-    paintTextBody(body, ctx, 0, 0, width, height, fontFamilyCss, undefined, { layout: laid, clip: { x: 0, y: 0, width, height } })
+    paintTextBody(body, ctx, 0, 0, width, height, resolve, undefined, { layout: laid, clip: { x: 0, y: 0, width, height } })
   } finally {
     ctx.restore()
   }

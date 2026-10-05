@@ -32,6 +32,9 @@ export type {
   WatermarkPage,
   WatermarkStamp,
 } from './core/watermark'
+// Explicit font fallback chains/regions (also used internally by <OfficeDoc>)
+export { withFallbackFonts, REGIONAL_FALLBACKS } from './core/fonts/fallback'
+export type { FallbackFontsOptions, CjkFallbackRegion } from './core/fonts/fallback'
 // Text search (also used internally by <OfficeDoc>)
 export { buildTextIndex, findMatches, stepMatch } from './core/search'
 export type { TextIndex, TextIndexPage, IndexLine, TextSpan, SearchMatch, SearchOptions } from './core/search'

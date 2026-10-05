@@ -26,6 +26,8 @@ export interface ContentImageAsset {
 /** Optional decoded-asset handoff for nested picture paint, added compatibly. */
 export interface ContentPaintAssets {
   imageFor?: (image: ContentImageAsset) => CanvasImageSource | undefined
+  /** Optional explicit fallback chain/region, threaded into adapter resolvers. */
+  fallbackFonts?: import('../core/fonts/fallback').FallbackFontsOptions
 }
 const num = (v: string | undefined, fallback = 0): number => v !== undefined && Number.isFinite(Number(v)) ? Number(v) : fallback
 const child = (n: XmlNode | undefined, name: string) => getChildren(n, name)[0]
