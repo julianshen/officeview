@@ -5,6 +5,7 @@ import { buildXlsx } from '../src/testdata/ooxml-builders'
 import { tokenize } from '../src/xlsx/formula/lexer'
 import { parseFormula } from '../src/xlsx/formula/parser'
 import { evaluateFormula } from '../src/xlsx/formula/evaluator'
+import type { EvaluationContext, FormulaValue } from '../src/xlsx/formula/types'
 
 describe('xlsx formula fixture enablement', () => {
   test('XlsxCellSpec and buildXlsx support formula <f> and omitting <v>', async () => {
@@ -1026,6 +1027,99 @@ describe('xlsx formula evaluator', () => {
     // 6. UPPER and LOWER
     expect(evaluateFormula('UPPER("excel spreadsheet")')).toBe('EXCEL SPREADSHEET')
     expect(evaluateFormula('LOWER("EXCEL SPREADSHEET")')).toBe('excel spreadsheet')
+  })
+
+  test('Handles blank cells correctly (0 in math, "" in concat, ignored in SUM)', () => {
+    // Context with blank cells (A1 has value 10, B1 is blank/null, C1 is 0, D1 is "")
+    const ctx: EvaluationContext = {
+      getCellValue: (_sheet, col, row) => {
+        if (col === 0 && row === 0) return 10 // A1 = 10
+        if (col === 1 && row === 0) return null // B1 = blank
+        if (col === 2 && row === 0) return 0 // C1 = 0
+        if (col === 3 && row === 0) return '' // D1 = ""
+        return null // any other cell is blank
+      },
+      getRangeValues: (_sheet, from, to) => {
+        const minRow = Math.min(from.row, to.row)
+        const maxRow = Math.max(from.row, to.row)
+        const minCol = Math.min(from.col, to.col)
+        const maxCol = Math.max(from.col, to.col)
+        const rows: FormulaValue[][] = []
+        for (let r = minRow; r <= maxRow; r++) {
+          const rowVals: FormulaValue[] = []
+          for (let c = minCol; c <= maxCol; c++) {
+            if (c === 0 && r === 0) rowVals.push(10)
+            else if (c === 2 && r === 0) rowVals.push(0)
+            else if (c === 3 && r === 0) rowVals.push('')
+            else rowVals.push(null)
+          }
+          rows.push(rowVals)
+        }
+        return rows
+      },
+    }
+
+    // 1. Math operations: blank cell treated as 0
+    expect(evaluateFormula('B1 + 5', ctx)).toBe(5)
+    expect(evaluateFormula('5 + B1', ctx)).toBe(5)
+    expect(evaluateFormula('B1 - 5', ctx)).toBe(-5)
+    expect(evaluateFormula('5 - B1', ctx)).toBe(5)
+    expect(evaluateFormula('B1 * 10', ctx)).toBe(0)
+    expect(evaluateFormula('B1 / 2', ctx)).toBe(0)
+    expect(evaluateFormula('2 / B1', ctx)).toBe('#DIV/0!')
+    expect(evaluateFormula('-B1', ctx)).toBe(0)
+    expect(evaluateFormula('+B1', ctx)).toBe(0)
+
+    // 2. String concatenation: blank cell treated as ""
+    expect(evaluateFormula('B1 & "hello"', ctx)).toBe('hello')
+    expect(evaluateFormula('"world" & B1', ctx)).toBe('world')
+    expect(evaluateFormula('B1 & B1', ctx)).toBe('')
+    expect(evaluateFormula('A1 & B1 & "!"', ctx)).toBe('10!')
+
+    // 3. Comparison operations: blank cell equals 0 and equals ""
+    expect(evaluateFormula('B1 = 0', ctx)).toBe(true)
+    expect(evaluateFormula('B1 = ""', ctx)).toBe(true)
+    expect(evaluateFormula('B1 = C1', ctx)).toBe(true) // B1 (blank) = C1 (0)
+    expect(evaluateFormula('B1 = D1', ctx)).toBe(true) // B1 (blank) = D1 ("")
+    expect(evaluateFormula('B1 <> 1', ctx)).toBe(true)
+    expect(evaluateFormula('B1 = 1', ctx)).toBe(false)
+    expect(evaluateFormula('B1 > -1', ctx)).toBe(true)
+    expect(evaluateFormula('B1 < 1', ctx)).toBe(true)
+
+    // 4. Function aggregation: blank cells are ignored
+    // SUM: blank cells ignored, returns 0 if all blank
+    expect(evaluateFormula('SUM(A1, B1)', ctx)).toBe(10)
+    expect(evaluateFormula('SUM(B1)', ctx)).toBe(0)
+    expect(evaluateFormula('SUM(B1:B5)', ctx)).toBe(0)
+    expect(evaluateFormula('SUM(A1:B1)', ctx)).toBe(10)
+
+    // AVERAGE: blank cells ignored from count
+    expect(evaluateFormula('AVERAGE(A1, B1)', ctx)).toBe(10)
+    expect(evaluateFormula('AVERAGE(B1)', ctx)).toBe('#DIV/0!')
+
+    // COUNT: blank cells not counted
+    expect(evaluateFormula('COUNT(A1, B1)', ctx)).toBe(1)
+    expect(evaluateFormula('COUNT(B1)', ctx)).toBe(0)
+    expect(evaluateFormula('COUNT(B1:B5)', ctx)).toBe(0)
+
+    // COUNTA: blank cells not counted
+    expect(evaluateFormula('COUNTA(A1, B1)', ctx)).toBe(1)
+    expect(evaluateFormula('COUNTA(B1)', ctx)).toBe(0)
+
+    // MIN / MAX: blank cells ignored
+    expect(evaluateFormula('MIN(A1, B1)', ctx)).toBe(10)
+    expect(evaluateFormula('MAX(A1, B1)', ctx)).toBe(10)
+    expect(evaluateFormula('MIN(B1)', ctx)).toBe(0)
+
+    // PRODUCT: blank cells ignored
+    expect(evaluateFormula('PRODUCT(A1, B1)', ctx)).toBe(10)
+    expect(evaluateFormula('PRODUCT(B1)', ctx)).toBe(0)
+
+    // 5. Direct blank evaluation and unbound cells without context
+    expect(evaluateFormula('B1', ctx)).toBeNull()
+    expect(evaluateFormula('Z99')).toBeNull()
+    expect(evaluateFormula('Z99 + 5')).toBe(5)
+    expect(evaluateFormula('Z99 & "abc"')).toBe('abc')
   })
 })
 

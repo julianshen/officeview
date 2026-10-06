@@ -22,7 +22,8 @@ export function isFormulaError(val: unknown): val is FormulaError {
  */
 export function round15(val: number): number {
   if (!Number.isFinite(val)) return val
-  return parseFloat(val.toPrecision(15))
+  const rounded = parseFloat(val.toPrecision(15))
+  return rounded === 0 ? 0 : rounded
 }
 
 function coerceToNumber(val: FormulaValue): number | FormulaError {
@@ -124,9 +125,10 @@ export function evaluateNode(node: AstNode, ctx?: EvaluationContext): FormulaVal
 
     case 'cell': {
       if (!ctx || !ctx.getCellValue) {
-        return 0
+        return null
       }
-      return ctx.getCellValue(node.ref.sheet, node.ref.col, node.ref.row)
+      const val = ctx.getCellValue(node.ref.sheet, node.ref.col, node.ref.row)
+      return val === undefined ? null : val
     }
 
     case 'range': {
