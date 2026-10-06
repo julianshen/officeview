@@ -6,6 +6,7 @@ import { parseWorksheetDrawings, collectXlsxImages } from './drawing'
 import { computeMetrics } from './render'
 import { resolvePartTarget } from '../drawing/parts'
 import { parseThemeContext, type ThemeContext } from '../drawing/style'
+import { evaluateWorkbookFormulas } from './formula/workbook'
 
 /** Convert "A1" / "BC23" to 0-based [row, col]. */
 export function parseRef(ref: string): [number, number] {
@@ -152,7 +153,13 @@ export async function parseXlsx(pkg: OfficePackage): Promise<XlsxDocument> {
     })
     return entries
   })
-  return { sheets, images: collectXlsxImages(sheets), drawingCoverage }
+  const calcPrNode = getChildren(workbook, 'calcPr')[0]
+  const calcPrAttrs = calcPrNode ? attrs(calcPrNode) : {}
+  const fullCalcOnLoad = calcPrAttrs.fullCalcOnLoad === '1' || calcPrAttrs.fullCalcOnLoad === 'true'
+
+  const doc: XlsxDocument = { sheets, images: collectXlsxImages(sheets), drawingCoverage }
+  evaluateWorkbookFormulas(doc, { fullCalcOnLoad })
+  return doc
 }
 
 async function parseSheet(

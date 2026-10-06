@@ -35,7 +35,7 @@ describe('xlsx formula fixture enablement', () => {
     const b1 = sheet.rows[0].cells[1]
     expect(b1.ref).toBe('B1')
     expect(b1.formula).toBe('A1+1')
-    expect(b1.value).toBeNull()
+    expect(b1.value).toBe(43)
   })
 
   test('XlsxCellSpec escapes XML entities in formula text (< and &)', async () => {
@@ -91,7 +91,8 @@ describe('xlsx formula fixture enablement', () => {
     expect(b1.sharedFormula).toEqual({ si: 0, ref: 'B1:B2' })
 
     const b2 = sheet.rows[1].cells[1]
-    expect(b2.formula).toBeUndefined()
+    expect(b2.formula).toBe('A2*2')
+    expect(b2.value).toBe(40)
     expect(b2.sharedFormula).toEqual({ si: 0, ref: undefined })
   })
 
@@ -1580,6 +1581,40 @@ describe('xlsx shared formula & workbook context', () => {
     expect(cjkRes.formula).toBe('工作表1!B1')
   })
 })
+
+describe('xlsx formula integration & canvas rendering', () => {
+  test('parseXlsx evaluates formula cells when <v> is absent or ca="1"', async () => {
+    const buf = await buildXlsx([
+      {
+        name: 'Sheet1',
+        rows: [
+          {
+            r: 1,
+            cells: [
+              // Formula with missing <v>
+              { ref: 'A1', formula: '10 + 20' },
+              // Dependent formula with missing <v>
+              { ref: 'B1', formula: 'A1 * 2' },
+              // Formula with cached <v> preserved
+              { ref: 'C1', formula: '99 * 2', v: 5 },
+              // Formula with cached <v> but ca="1" recalculated
+              { ref: 'D1', formula: '100 * 2', v: 5, ca: true },
+            ],
+          },
+        ],
+      },
+    ])
+
+    const pkg = await OfficePackage.load(buf)
+    const doc = await parseXlsx(pkg)
+
+    expect(doc.sheets[0].rows[0].cells[0].value).toBe(30)
+    expect(doc.sheets[0].rows[0].cells[1].value).toBe(60)
+    expect(doc.sheets[0].rows[0].cells[2].value).toBe(5)
+    expect(doc.sheets[0].rows[0].cells[3].value).toBe(200)
+  })
+})
+
 
 
 

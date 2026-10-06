@@ -92,7 +92,7 @@ src/xlsx/formula/
 - [x] Test: Preserves cached `<v>` unless missing, `ca="1"`, or `fullCalcOnLoad="1"`
 
 ### Phase 5: Integration & Canvas Rendering
-- [ ] Test: `parseXlsx` evaluates formula cells when `<v>` is absent
+- [x] Test: `parseXlsx` evaluates formula cells when `<v>` is absent
 - [ ] Test: Viewport culling does not break off-screen formula dependencies
 - [ ] Test: `renderSheet` renders calculated formula cell values onto canvas with correct alignment and styling
 - [ ] Test: `renderSheet` applies number format (`numFmtId`) to formula results
