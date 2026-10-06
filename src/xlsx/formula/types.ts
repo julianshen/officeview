@@ -42,3 +42,25 @@ export interface Token {
   rangeRef?: RangeRef
 }
 
+export type FormulaError =
+  | '#DIV/0!'
+  | '#VALUE!'
+  | '#REF!'
+  | '#NAME?'
+  | '#NUM!'
+  | '#N/A'
+  | '#NULL!'
+
+export type AstNode =
+  | { type: 'number'; value: number }
+  | { type: 'string'; value: string }
+  | { type: 'boolean'; value: boolean }
+  | { type: 'cell'; ref: CellRef }
+  | { type: 'range'; ref: RangeRef }
+  | { type: 'unary'; op: '+' | '-' | '%'; expr: AstNode }
+  | { type: 'binary'; op: string; left: AstNode; right: AstNode }
+  | { type: 'call'; name: string; args: AstNode[] }
+  | { type: 'empty' }
+  | { type: 'error'; error: string }
+
+

@@ -62,7 +62,7 @@ src/xlsx/formula/
 - [x] Test: Fixture and parser avoid non-standard `#ERROR` and escape XML in `<v>`
 
 ### Phase 2: Formula Parser (AST)
-- [ ] Test: Parser parses literals and respects Excel unary precedence (`-2^2` parses as `(-2)^2`)
+- [x] Test: Parser parses literals and respects Excel unary precedence (`-2^2` parses as `(-2)^2`)
 - [ ] Test: Parser respects operator precedence (`^` > `*`, `/` > `+`, `-` > `&` > comparisons)
 - [ ] Test: Parser parses function calls with multiple arguments and empty arguments
 - [ ] Test: Parser parses nested expressions and parenthesized sub-expressions

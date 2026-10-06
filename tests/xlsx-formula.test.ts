@@ -3,6 +3,7 @@ import { OfficePackage } from '../src/core/zip'
 import { parseXlsx } from '../src/xlsx/parse'
 import { buildXlsx } from '../src/testdata/ooxml-builders'
 import { tokenize } from '../src/xlsx/formula/lexer'
+import { parseFormula } from '../src/xlsx/formula/parser'
 
 describe('xlsx formula fixture enablement', () => {
   test('XlsxCellSpec and buildXlsx support formula <f> and omitting <v>', async () => {
@@ -354,6 +355,88 @@ describe('formula lexer', () => {
       value: '销售!B2:C10',
       sheet: '销售',
       rangeRef: { sheet: '销售', from: { col: 1, row: 1 }, to: { col: 2, row: 9 } },
+    })
+  })
+})
+
+describe('xlsx formula parser (AST)', () => {
+  test('Parser parses literals and respects Excel unary precedence (-2^2 parses as (-2)^2)', () => {
+    // 1. Numbers, strings, booleans
+    expect(parseFormula('42')).toEqual({ type: 'number', value: 42 })
+    expect(parseFormula('3.14159')).toEqual({ type: 'number', value: 3.14159 })
+    expect(parseFormula('"hello world"')).toEqual({ type: 'string', value: 'hello world' })
+    expect(parseFormula('TRUE')).toEqual({ type: 'boolean', value: true })
+    expect(parseFormula('FALSE')).toEqual({ type: 'boolean', value: false })
+
+    // 2. Cell and range references
+    expect(parseFormula('A1')).toEqual({
+      type: 'cell',
+      ref: { col: 0, row: 0, absCol: false, absRow: false },
+    })
+    expect(parseFormula('A1:B10')).toEqual({
+      type: 'range',
+      ref: {
+        from: { col: 0, row: 0, absCol: false, absRow: false },
+        to: { col: 1, row: 9, absCol: false, absRow: false },
+      },
+    })
+
+    // 3. Unary minus and plus
+    expect(parseFormula('-5')).toEqual({
+      type: 'unary',
+      op: '-',
+      expr: { type: 'number', value: 5 },
+    })
+    expect(parseFormula('+5')).toEqual({
+      type: 'unary',
+      op: '+',
+      expr: { type: 'number', value: 5 },
+    })
+
+    // 4. Postfix percent
+    expect(parseFormula('50%')).toEqual({
+      type: 'unary',
+      op: '%',
+      expr: { type: 'number', value: 50 },
+    })
+
+    // 5. Critical Excel Invariant: Unary minus binds tighter than exponentiation (-2^2 parses as (-2)^2)
+    expect(parseFormula('=-2^2')).toEqual({
+      type: 'binary',
+      op: '^',
+      left: {
+        type: 'unary',
+        op: '-',
+        expr: { type: 'number', value: 2 },
+      },
+      right: {
+        type: 'number',
+        value: 2,
+      },
+    })
+
+    // 6. Explicit parentheses override: -(2^2)
+    expect(parseFormula('=-(2^2)')).toEqual({
+      type: 'unary',
+      op: '-',
+      expr: {
+        type: 'binary',
+        op: '^',
+        left: { type: 'number', value: 2 },
+        right: { type: 'number', value: 2 },
+      },
+    })
+
+    // 7. Right-hand unary minus in exponent: 2^-2 parses as 2 ^ (-2)
+    expect(parseFormula('=2^-2')).toEqual({
+      type: 'binary',
+      op: '^',
+      left: { type: 'number', value: 2 },
+      right: {
+        type: 'unary',
+        op: '-',
+        expr: { type: 'number', value: 2 },
+      },
     })
   })
 })
