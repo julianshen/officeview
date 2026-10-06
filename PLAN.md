@@ -41,7 +41,7 @@ This encompasses:
   - Parse `<a:bodyPr/a:prstTxWarp>` and `<a:avLst>` adjustments.
   - Apply most-specific-wins fill resolution over `<a:defRPr>` and paragraph defaults.
   - Color resolution via `ThemeContext`.
-  - Emit structured diagnostics (`unsupported-text-appearance`, `unsupported-text-warp`).
+  - Single diagnostic channel: `ParsedDrawingTextBody.diagnostics` carries all `unsupported-text-appearance` and `unsupported-text-warp` entries without double-counting across adapters.
 - `src/drawing/text-paint.ts`:
   - Linear gradient mapping across run/glyph bounding boxes.
   - Tiled 2-color pattern generation and bounded LRU cache (capped at `MAX_PATTERN_TILES = 64`) for supported pattern presets.
@@ -51,7 +51,7 @@ This encompasses:
   - Single logical record preservation for search hooks.
 - `src/drawing/text-warp.ts` (new):
   - Pure geometry transformation engine for preset text warps (`textArchUp`, `textArchDown`, `textCircle`, `textWave1`, `textWave2`, `textInflate`, `textDeflate`, `textSlantUp`, `textSlantDown`).
-  - Adjustment unit tables:
+  - Adjustment unit tables (initial values, validated against ECMA-376 Part 1 §20.1.9.22 presetShapeDefinitions during Phase 4):
     - Arch / slant presets: angle in 60000ths of a degree (default `textArchUp` = 10800000 = 180°).
     - Wave / envelope presets: percentage in 1/100000 (default 50000 = 50%).
   - Fallback default adjustment lookup table when `<a:avLst>` is omitted.
@@ -60,6 +60,7 @@ This encompasses:
   - Add `unsupported-text-appearance` and `unsupported-text-warp` to the shared `DrawingIssue` union (in `style.ts`) and to `PptxDiagnostic`.
 - `src/drawing/vml.ts` (new):
   - Unified VML `<v:textpath>` parser producing `DrawingTextBody` shared across DOCX, XLSX, and PPTX.
+  - Explicit field mapping: `@string` → run text, `@style` font-family/size/weight/italic → run style, `v-text-align` → paragraph alignment, `@fillcolor`/`<v:fill>` → color, `@strokecolor`/`<v:stroke>` → outline.
 - `src/docx/drawing.ts`:
   - Route WordprocessingML drawing shapes with `<a:txBody>` through shared WordArt appearance and warp engine.
   - Route legacy VML shapes with `<v:textpath>` through the shared VML parser.
@@ -69,7 +70,7 @@ This encompasses:
 - `tests/drawing-wordart.test.ts`:
   - Unit tests for WordArt text appearance parsing, canvas rendering, theme resolution, search invariance, and layout advance invariance.
 - `tests/drawing-wordart-warp.test.ts` (new):
-  - Unit tests for preset text warp parsing, geometry computation, canvas warping, and search hit mapping.
+  - Unit tests for preset text warp parsing, geometry computation, canvas warping, seam continuity, clipping, and search hit mapping.
 - `tests/office-wordart-integration.test.ts` (new):
   - Integration tests verifying WordArt across PPTX, DOCX, and XLSX format fixtures.
 
@@ -100,6 +101,8 @@ src/drawing/
    Unsupported pattern presets (beyond the 6 tiled presets), path gradients (`<a:path>`), picture fills (`<a:blipFill>`), 3D extrusion (`<a:sp3d>`), or unknown warp presets must log a structured diagnostic (`unsupported-text-appearance` / `unsupported-text-warp`) and fall back gracefully to legible standard text, never throwing unhandled errors or crashing the canvas pipeline.
 6. **Golden Strategy & Probes**:
    Use metric/layout assertions and sampled-ink pixel probes (rather than fragile full-canvas raster goldens) to assert visual appearance and avoid cross-platform font metric variance. Full golden suite (`OFFICEVIEW_STRICT_GOLDEN=1`) is preserved with zero regressions.
+7. **Warp × Vertical Direction Composition**:
+   When text warp is combined with vertical text orientations (`vert`, `eaVert`, `wordArtVert`, `wordArtVertRtl`), the warp deformation applies strictly within the local rotated coordinate frame of each line/segment. Column progression and logical reading flow remain unaffected.
 
 ---
 
@@ -140,7 +143,7 @@ src/drawing/
 - [ ] Test: PPTX shapes parse and render WordArt text runs inheriting theme colors
 - [ ] Test: DOCX DrawingML shapes (`<wps:wsp>`) parse and render WordArt gradient and outline text
 - [ ] Test: XLSX DrawingML shapes (`<xdr:sp>`) parse and render WordArt styled text runs
-- [ ] Test: WordArt diagnostics flow into shared `DrawingIssue` and `PptxDiagnostic` across all three formats
+- [ ] Test: WordArt diagnostics flow into single body diagnostic channel across all three formats
 - [ ] Test: End-to-end multi-format fixture test parsing and painting WordArt shapes
 
 ### Phase 4: Preset Text Warp Parsing & Modeling (`<a:prstTxWarp>`)
@@ -153,13 +156,17 @@ src/drawing/
 ### Phase 5: Text Warp Geometry Engine & Canvas Deformation
 - [ ] Test: Warp geometry computes arc curve transformation for `textArchUp` and `textArchDown`
 - [ ] Test: Warp geometry computes circular envelope transformation for `textCircle`
+- [ ] Test: Circular text warp (`textCircle`) maintains seam continuity where start meets end
 - [ ] Test: Warp geometry computes vertical sine wave baseline displacement for `textWave1` and `textWave2`
 - [ ] Test: Warp geometry computes envelope height scaling for `textInflate` and `textDeflate`
 - [ ] Test: Warp geometry computes affine shear transformation for `textSlantUp` and `textSlantDown`
 - [ ] Test: Text layout advances and line boxes remain strictly invariant under text warp
 - [ ] Test: Canvas paints warped text along transform curves while maintaining stroke and fill styling
 - [ ] Test: Warped text transforms gradient and pattern fill coordinate spaces with glyph bounds
+- [ ] Test: Text warp on vertical text (`vert`/`wordArtVert`) applies in local rotated frame preserving column progression
+- [ ] Test: Warped glyphs exceeding line bounding boxes clip deterministically
 - [ ] Test: Search indexing emits unwarped layout coordinates preserving logical reading order and selection stability
+- [ ] Test: Text hit-testing along warped curves produces monotonically non-decreasing character offsets
 
 ### Phase 6: Extended Effects, Legacy VML Fallback & Quality Gates
 - [ ] Test: Emits diagnostic and falls back gracefully for text `<a:glow>` and `<a:reflection>`
