@@ -137,5 +137,22 @@ describe('formula lexer', () => {
       { type: 'eof', value: '' },
     ])
   })
+
+  test('Tokenizer handles cell references (relative A1, absolute $A$1, mixed A$1, $A1)', async () => {
+    const { tokenize } = await import('../src/xlsx/formula/lexer')
+    const tokens = tokenize('=A1 + $B$2 * C$3 / $D4 + aa10')
+    expect(tokens.map(t => ({ type: t.type, value: t.value, cellRef: t.cellRef }))).toEqual([
+      { type: 'cell', value: 'A1', cellRef: { col: 0, row: 0, absCol: false, absRow: false } },
+      { type: 'op', value: '+', cellRef: undefined },
+      { type: 'cell', value: '$B$2', cellRef: { col: 1, row: 1, absCol: true, absRow: true } },
+      { type: 'op', value: '*', cellRef: undefined },
+      { type: 'cell', value: 'C$3', cellRef: { col: 2, row: 2, absCol: false, absRow: true } },
+      { type: 'op', value: '/', cellRef: undefined },
+      { type: 'cell', value: '$D4', cellRef: { col: 3, row: 3, absCol: true, absRow: false } },
+      { type: 'op', value: '+', cellRef: undefined },
+      { type: 'cell', value: 'AA10', cellRef: { col: 26, row: 9, absCol: false, absRow: false } },
+      { type: 'eof', value: '', cellRef: undefined },
+    ])
+  })
 })
 

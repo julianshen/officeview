@@ -142,6 +142,50 @@ export function tokenize(input: string): Token[] {
       continue
     }
 
+    // Cell references ($A$1, A1, etc.) or Identifiers
+    if (ch === '$' || /[A-Za-z_]/.test(ch)) {
+      const rest = str.slice(i)
+      const cellMatch = /^(\$?)([A-Za-z]{1,3})(\$?)(\d+)(?![A-Za-z0-9_])/.exec(rest)
+      if (cellMatch) {
+        const full = cellMatch[0]
+        const hasAbsCol = cellMatch[1] === '$'
+        const colLetters = cellMatch[2].toUpperCase()
+        const hasAbsRow = cellMatch[3] === '$'
+        const rowNum = parseInt(cellMatch[4], 10)
+
+        let col = 0
+        for (let cIdx = 0; cIdx < colLetters.length; cIdx++) {
+          col = col * 26 + (colLetters.charCodeAt(cIdx) - 64)
+        }
+        col -= 1
+        const row = rowNum - 1
+
+        if (col >= 0 && col <= 16383 && row >= 0 && row <= 1048575) {
+          tokens.push({
+            type: 'cell',
+            value: (hasAbsCol ? '$' : '') + colLetters + (hasAbsRow ? '$' : '') + cellMatch[4],
+            cellRef: { col, row, absCol: hasAbsCol, absRow: hasAbsRow },
+          })
+          i += full.length
+          continue
+        }
+      }
+
+      const identMatch = /^([A-Za-z_][A-Za-z0-9_.]*)/.exec(rest)
+      if (identMatch) {
+        const ident = identMatch[1]
+        if (ident.toUpperCase() === 'TRUE') {
+          tokens.push({ type: 'boolean', value: 'TRUE' })
+        } else if (ident.toUpperCase() === 'FALSE') {
+          tokens.push({ type: 'boolean', value: 'FALSE' })
+        } else {
+          tokens.push({ type: 'ident', value: ident })
+        }
+        i += ident.length
+        continue
+      }
+    }
+
     // Unknown single char fallback
     tokens.push({ type: 'op', value: ch })
     i++
