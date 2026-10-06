@@ -25,7 +25,7 @@ This encompasses:
 3. **Pattern Tile Host Fallback**: In environments where canvas tile creation is unsupported, pattern fills fall back cleanly to solid foreground color.
 4. **Rotated-Shadow CTM Parity**: Shadow offsets follow canvas CTM semantics in rotated coordinate frames.
 5. **Pattern Preset Bounds**: Exactly 6 tiled presets (`dkUpDiag`, `dkDnDiag`, `ltUpDiag`, `ltDnDiag`, `smGrid`, `lgGrid`) are supported; the remaining 48 ECMA-376 presets diagnose via `unsupported-text-appearance` and fall back to solid foreground color.
-6. **Deferred Shadow / Outline Attributes**: Shadow attributes `algn`, `rotWithShape`, `sx`/`sy`, `kx`/`ky` and line dash/compound properties (`prstDash`, `cmpd`, `cap`, child gradients) are diagnosed and fall back to standard solid appearance. Path gradients (`<a:gradFill><a:path>`) diagnose and fall back to stop-0 solid color.
+6. **Deferred Shadow / Outline Attributes**: Shadow attributes `algn`, `rotWithShape`, `sx`/`sy`, `kx`/`ky` and line dash/compound properties (`prstDash`, `cmpd`, `cap`, child gradients) are diagnosed and fall back to standard solid appearance. Path gradients (`<a:gradFill><a:path>`) diagnose and fall back to stop-0 solid color. Linear gradient scaling attribute (`<a:lin scaled="...">`) is ignored (angles evaluate uniformly without non-square box aspect distortion).
 
 ---
 
