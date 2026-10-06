@@ -24,6 +24,20 @@ export function coerceToNumber(val: FormulaValue): number | FormulaError {
   return '#VALUE!'
 }
 
+export function coerceToBoolean(val: FormulaValue): boolean | FormulaError {
+  if (isFormulaError(val)) return val
+  if (val === null) return false
+  if (typeof val === 'boolean') return val
+  if (typeof val === 'number') return val !== 0
+  if (typeof val === 'string') {
+    const upper = val.trim().toUpperCase()
+    if (upper === 'TRUE') return true
+    if (upper === 'FALSE') return false
+    return '#VALUE!'
+  }
+  return '#VALUE!'
+}
+
 export function flattenArgs(
   args: AstNode[],
   ctx: EvaluationContext | undefined,
@@ -200,5 +214,64 @@ export const FUNCTIONS: Record<string, FunctionHandler> = {
       }
     }
     return prod === undefined ? 0 : round15(prod)
+  },
+
+  IF: (args, ctx, evalNode) => {
+    if (args.length < 2 || args.length > 3) return '#VALUE!'
+    const condVal = evalNode(args[0], ctx)
+    if (isFormulaError(condVal)) return condVal
+    const bool = coerceToBoolean(condVal)
+    if (isFormulaError(bool)) return bool
+
+    if (bool) {
+      return evalNode(args[1], ctx)
+    } else {
+      if (args.length === 3) {
+        return evalNode(args[2], ctx)
+      }
+      return false
+    }
+  },
+
+  IFERROR: (args, ctx, evalNode) => {
+    if (args.length !== 2) return '#VALUE!'
+    const val = evalNode(args[0], ctx)
+    if (isFormulaError(val)) {
+      return evalNode(args[1], ctx)
+    }
+    return val
+  },
+
+  AND: (args, ctx, evalNode) => {
+    if (args.length === 0) return '#VALUE!'
+    for (const arg of args) {
+      const v = evalNode(arg, ctx)
+      if (isFormulaError(v)) return v
+      const b = coerceToBoolean(v)
+      if (isFormulaError(b)) return b
+      if (!b) return false
+    }
+    return true
+  },
+
+  OR: (args, ctx, evalNode) => {
+    if (args.length === 0) return '#VALUE!'
+    for (const arg of args) {
+      const v = evalNode(arg, ctx)
+      if (isFormulaError(v)) return v
+      const b = coerceToBoolean(v)
+      if (isFormulaError(b)) return b
+      if (b) return true
+    }
+    return false
+  },
+
+  NOT: (args, ctx, evalNode) => {
+    if (args.length !== 1) return '#VALUE!'
+    const v = evalNode(args[0], ctx)
+    if (isFormulaError(v)) return v
+    const b = coerceToBoolean(v)
+    if (isFormulaError(b)) return b
+    return !b
   },
 }

@@ -964,6 +964,37 @@ describe('xlsx formula evaluator', () => {
     expect(evaluateFormula('SUM(A1, A2, A3)', ctx)).toBe(60)
     expect(evaluateFormula('AVERAGE(A1, A2, A3)', ctx)).toBe(20)
   })
+
+  test('Evaluates Logic functions with short-circuiting (IF, AND, OR, NOT, IFERROR)', () => {
+    // 1. IF basic
+    expect(evaluateFormula('IF(1 > 0, "yes", "no")')).toBe('yes')
+    expect(evaluateFormula('IF(1 < 0, "yes", "no")')).toBe('no')
+    expect(evaluateFormula('IF(FALSE, "yes")')).toBe(false) // omitted false branch returns false
+
+    // 2. IF short-circuiting: unchosen branch with error is never evaluated
+    expect(evaluateFormula('IF(TRUE, 42, 1/0)')).toBe(42)
+    expect(evaluateFormula('IF(FALSE, 1/0, 99)')).toBe(99)
+
+    // 3. IFERROR
+    expect(evaluateFormula('IFERROR(10 / 2, "err")')).toBe(5)
+    expect(evaluateFormula('IFERROR(10 / 0, "caught")')).toBe('caught')
+    expect(evaluateFormula('IFERROR(#DIV/0!, "fallback")')).toBe('fallback')
+    expect(evaluateFormula('IFERROR(#REF!, "fallback")')).toBe('fallback')
+    expect(evaluateFormula('IFERROR(42, 1/0)')).toBe(42) // short-circuits error in fallback
+
+    // 4. AND, OR, NOT
+    expect(evaluateFormula('AND(TRUE, TRUE, TRUE)')).toBe(true)
+    expect(evaluateFormula('AND(TRUE, FALSE, TRUE)')).toBe(false)
+    expect(evaluateFormula('AND(1 > 0, 2 < 5)')).toBe(true)
+
+    expect(evaluateFormula('OR(FALSE, FALSE, TRUE)')).toBe(true)
+    expect(evaluateFormula('OR(FALSE, FALSE, FALSE)')).toBe(false)
+
+    expect(evaluateFormula('NOT(TRUE)')).toBe(false)
+    expect(evaluateFormula('NOT(FALSE)')).toBe(true)
+    expect(evaluateFormula('NOT(0)')).toBe(true)
+    expect(evaluateFormula('NOT(1)')).toBe(false)
+  })
 })
 
 
