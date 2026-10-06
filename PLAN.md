@@ -79,6 +79,7 @@ src/xlsx/formula/
 - [x] Test: Evaluates Text functions (CONCAT, LEFT, RIGHT, MID, LEN, TRIM, UPPER, LOWER)
 - [x] Test: Handles blank cells correctly (0 in math, "" in concat, ignored in SUM)
 - [x] Test: Detects circular references and returns 0 without stack overflow
+- Note on deferred functions: Complex / specialized functions (TEXT, SQRT, SUMIF, COUNTIF, VLOOKUP, HLOOKUP, XLOOKUP, INDEX, MATCH) are deliberately deferred and safely evaluate to `#NAME?` per the fail-safe function dispatch mechanism.
 
 ### Phase 4: Shared Formulas & Workbook Context
 - Architecture Contract:

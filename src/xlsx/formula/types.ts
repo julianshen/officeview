@@ -66,6 +66,7 @@ export interface EvaluationContext {
   getRangeValues?(sheet: string | undefined, from: CellRef, to: CellRef): FormulaValue[][]
   currentSheet?: string
   currentCell?: CellRef
+  /** In-flight evaluation path for cycle detection. Note: short-circuit-hidden cycles (e.g. IF-skipped branches) are dynamically avoided and not statically traversed. */
   visited?: Set<string>
   evalDepth?: number
   hasCycle?: boolean
