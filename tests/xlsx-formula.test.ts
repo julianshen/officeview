@@ -1214,7 +1214,12 @@ describe('xlsx formula evaluator', () => {
     expect(evaluateFormula('SUM(TRUE, 2)')).toBe(3)
     expect(evaluateFormula('SUM("abc", 2)')).toBe('#VALUE!')
     expect(evaluateFormula('AVERAGE("3")')).toBe(3)
-    expect(evaluateFormula('COUNT(TRUE, 42, "10", "text")')).toBe(3) // TRUE, 42, "10" counted; "text" not
+    // Per Microsoft Excel specification for COUNT:
+    // "Arguments that are error values or text that cannot be translated into numbers are not counted."
+    // Hence direct text that cannot be converted to number is not counted (0), whereas numeric strings ("10")
+    // and booleans (TRUE) are counted. In contrast, SUM/AVERAGE attempt coercion and raise #VALUE!.
+    expect(evaluateFormula('COUNT(TRUE, 42, "10", "text")')).toBe(3)
+    expect(evaluateFormula('COUNT("abc")')).toBe(0)
 
     // In cell/range references, text and booleans are ignored in SUM
     const cellCtx: EvaluationContext = {
@@ -1251,6 +1256,15 @@ describe('xlsx formula evaluator', () => {
     // 6. INT precision guard
     expect(evaluateFormula('INT(1.999999999999999)')).toBe(2)
     expect(evaluateFormula('INT(2.1)')).toBe(2)
+
+    // 7. Direct empty/null arguments in aggregate functions (Excel parity)
+    // Direct empty args (e.g. MIN(5,)) are ignored rather than coerced to 0
+    expect(evaluateFormula('MIN(5, )')).toBe(5)
+    expect(evaluateFormula('MAX(-5, )')).toBe(-5)
+    expect(evaluateFormula('AVERAGE(, )')).toBe('#DIV/0!')
+    expect(evaluateFormula('PRODUCT(5, )')).toBe(5)
+    expect(evaluateFormula('COUNT(, )')).toBe(0)
+    expect(evaluateFormula('SUM(, )')).toBe(0)
   })
 })
 

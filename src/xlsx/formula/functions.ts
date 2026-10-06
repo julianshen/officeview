@@ -89,6 +89,7 @@ export const FUNCTIONS: Record<string, FunctionHandler> = {
           sum += v
         }
       } else {
+        if (v === null || v === undefined) continue
         const n = coerceToNumber(v)
         if (isFormulaError(n)) return n
         sum += n
@@ -110,6 +111,7 @@ export const FUNCTIONS: Record<string, FunctionHandler> = {
           count++
         }
       } else {
+        if (v === null || v === undefined) continue
         const n = coerceToNumber(v)
         if (isFormulaError(n)) return n
         sum += n
@@ -130,6 +132,7 @@ export const FUNCTIONS: Record<string, FunctionHandler> = {
       if (item.fromRef) {
         if (typeof v === 'number') num = v
       } else {
+        if (v === null || v === undefined) continue
         const n = coerceToNumber(v)
         if (isFormulaError(n)) return n
         num = n
@@ -151,6 +154,7 @@ export const FUNCTIONS: Record<string, FunctionHandler> = {
       if (item.fromRef) {
         if (typeof v === 'number') num = v
       } else {
+        if (v === null || v === undefined) continue
         const n = coerceToNumber(v)
         if (isFormulaError(n)) return n
         num = n
@@ -173,6 +177,7 @@ export const FUNCTIONS: Record<string, FunctionHandler> = {
           count++
         }
       } else {
+        if (v === null || v === undefined) continue
         if (typeof v === 'number') {
           count++
         } else if (typeof v === 'boolean') {
@@ -276,6 +281,7 @@ export const FUNCTIONS: Record<string, FunctionHandler> = {
       if (item.fromRef) {
         if (typeof v === 'number') num = v
       } else {
+        if (v === null || v === undefined) continue
         const n = coerceToNumber(v)
         if (isFormulaError(n)) return n
         num = n
