@@ -76,7 +76,7 @@ src/xlsx/formula/
 - [x] Test: Propagates error values through operations (`1 + #DIV/0! = #DIV/0!`)
 - [x] Test: Evaluates Math functions (SUM, AVERAGE, MIN, MAX, COUNT, COUNTA, ABS, ROUND, INT, MOD, PRODUCT)
 - [x] Test: Evaluates Logic functions with short-circuiting (IF, AND, OR, NOT, IFERROR)
-- [ ] Test: Evaluates Text functions (CONCAT, LEFT, RIGHT, MID, LEN, TRIM, UPPER, LOWER)
+- [x] Test: Evaluates Text functions (CONCAT, LEFT, RIGHT, MID, LEN, TRIM, UPPER, LOWER)
 - [ ] Test: Handles blank cells correctly (0 in math, "" in concat, ignored in SUM)
 - [ ] Test: Detects circular references and returns 0 without stack overflow
 
