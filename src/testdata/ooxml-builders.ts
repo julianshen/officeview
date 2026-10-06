@@ -236,7 +236,7 @@ export interface XlsxCellSpec {
   /** shared string index */
   s?: number
   v?: string | number
-  t?: 's' | 'n' | 'b' | 'str'
+  t?: 's' | 'n' | 'b' | 'str' | 'e'
   formula?: string
   sharedFormula?: { si: number; ref?: string }
   style?: number

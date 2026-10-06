@@ -49,7 +49,7 @@ src/xlsx/formula/
 ### Phase 0: Test Fixture & Model Enablement
 - [x] Test: `XlsxCellSpec` and `buildXlsx` support formula `<f>` and omitting `<v>`
 - [x] Test: `XlsxCellSpec` supports shared formula attributes (`t="shared"`, `si`, `ref`)
-- [ ] Test: `XlsxCellSpec` supports error cells (`t="e"`)
+- [x] Test: `XlsxCellSpec` supports error cells (`t="e"`)
 
 ### Phase 1: Formula Tokenizer (Lexer)
 - [ ] Test: Tokenizer handles arithmetic operators, unary minus, and percent (`+`, `-`, `*`, `/`, `^`, `%`)
