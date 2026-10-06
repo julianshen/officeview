@@ -132,6 +132,10 @@ function resolveTextFill(
  * CTM semantics in rotated frames; Word-parity of shadow direction there is a
  * validation item, not asserted here.
  */
+export const MAX_SHADOW_BLUR_PX = 100
+export const MAX_SHADOW_OFFSET_PX = 200
+export const MAX_OUTLINE_WIDTH_PX = 100
+
 function applyTextShadow(ctx: CanvasRenderingContext2D, style: PptxTextStyle): void {
   const sh = style.textShadow
   if (!sh) {
@@ -142,9 +146,9 @@ function applyTextShadow(ctx: CanvasRenderingContext2D, style: PptxTextStyle): v
     return
   }
   ctx.shadowColor = sh.color
-  ctx.shadowBlur = sh.blurPx
-  ctx.shadowOffsetX = sh.offsetX
-  ctx.shadowOffsetY = sh.offsetY
+  ctx.shadowBlur = Math.min(Math.max(0, sh.blurPx), MAX_SHADOW_BLUR_PX)
+  ctx.shadowOffsetX = Math.min(Math.max(-MAX_SHADOW_OFFSET_PX, sh.offsetX), MAX_SHADOW_OFFSET_PX)
+  ctx.shadowOffsetY = Math.min(Math.max(-MAX_SHADOW_OFFSET_PX, sh.offsetY), MAX_SHADOW_OFFSET_PX)
 }
 
 /** The same resolved face and tracking settings are used for measuring and painting.
@@ -256,7 +260,7 @@ export function paintTextBody(body: PptxTextBody, ctx: CanvasRenderingContext2D,
             }
             if (outline) {
               ctx.strokeStyle = outline.color
-              ctx.lineWidth = Math.max(0.5, outline.widthPx)
+              ctx.lineWidth = Math.min(Math.max(0.5, outline.widthPx), MAX_OUTLINE_WIDTH_PX)
               ctx.lineJoin = 'round'
               ctx.strokeText(text, px, py)
             }

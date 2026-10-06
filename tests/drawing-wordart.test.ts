@@ -205,14 +205,15 @@ describe('wordart paint', () => {
     const canvas = createCanvas(300, 100)
     const ctx = canvas.getContext('2d')
     const shadows: string[] = []
-    const proxy = new Proxy(ctx, {
-      get(t, p) {
-        const v = Reflect.get(t, p, t)
-        return typeof v === 'function' ? (v as (...a: never[]) => unknown).bind(t) : v
+    const proxy = new Proxy(ctx as unknown as object, {
+      get(target, prop) {
+        const value = (target as Record<string | symbol, unknown>)[prop]
+        return typeof value === 'function' ? value.bind(target) : value
       },
-      set(t, p, v) {
-        if (p === 'shadowColor') shadows.push(String(v))
-        return Reflect.set(t, p, v)
+      set(target, prop, value) {
+        if (prop === 'shadowColor') shadows.push(String(value))
+        ;(target as Record<string | symbol, unknown>)[prop] = value
+        return true
       },
     })
     ctx.fillStyle = '#ffffff'
@@ -233,14 +234,15 @@ describe('wordart paint', () => {
     const canvas = createCanvas(300, 100)
     const ctx = canvas.getContext('2d')
     const shadows: string[] = []
-    const proxy = new Proxy(ctx, {
-      get(t, p) {
-        const v = Reflect.get(t, p, t)
-        return typeof v === 'function' ? (v as (...a: never[]) => unknown).bind(t) : v
+    const proxy = new Proxy(ctx as unknown as object, {
+      get(target, prop) {
+        const value = (target as Record<string | symbol, unknown>)[prop]
+        return typeof value === 'function' ? value.bind(target) : value
       },
-      set(t, p, v) {
-        if (p === 'shadowColor') shadows.push(String(v))
-        return Reflect.set(t, p, v)
+      set(target, prop, value) {
+        if (prop === 'shadowColor') shadows.push(String(value))
+        ;(target as Record<string | symbol, unknown>)[prop] = value
+        return true
       },
     })
     ctx.fillStyle = '#ffffff'
@@ -255,6 +257,12 @@ describe('wordart paint', () => {
     paintTextBody(bulletBody, proxy as never, 0, 0, 300, 100, identity)
     expect(shadows).toContain('#000000')
     expect(shadows[shadows.length - 1]).not.toBe('#000000')
+  })
+  test('hostile outline width and shadow blur radius are clamped to sane bounds', () => {
+    const rpr = `<a:rPr><a:ln w="127000000"><a:solidFill><a:srgbClr val="00FF00"/></a:solidFill></a:ln><a:effectLst><a:outerShdw dist="0" dir="0" bluRad="95250000"><a:srgbClr val="000000"/></a:outerShdw></a:effectLst></a:rPr>`
+    const run = parseTextBody(txBody(rpr, 'H')).paragraphs[0].runs[0]
+    expect(run.textOutline?.widthPx).toBe(100)
+    expect(run.textShadow?.blurPx).toBe(100)
   })
   test('diagonal pattern tile draws both colors', async () => {
     const { paintPatternTile } = await import('../src/drawing/text-paint')
