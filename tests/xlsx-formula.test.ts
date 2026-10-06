@@ -707,6 +707,50 @@ describe('xlsx formula parser (AST)', () => {
       ],
     })
   })
+
+  test('Parser returns #NAME? or syntax error node on malformed input without throwing', () => {
+    // 1. Literal error constants (#DIV/0!, #REF!, #VALUE!, #NAME?, #NUM!, #N/A, #NULL!)
+    expect(parseFormula('#DIV/0!')).toEqual({ type: 'error', error: '#DIV/0!' })
+    expect(parseFormula('=#REF!')).toEqual({ type: 'error', error: '#REF!' })
+    expect(parseFormula('=#VALUE!')).toEqual({ type: 'error', error: '#VALUE!' })
+
+    // 2. Empty formulas
+    expect(parseFormula('')).toEqual({ type: 'empty' })
+    expect(parseFormula('=')).toEqual({ type: 'empty' })
+
+    // 3. Unknown identifiers without parentheses
+    const errIdent = parseFormula('=UNKNOWN')
+    expect(errIdent.type).toBe('error')
+    expect((errIdent as any).error).toMatch(/#NAME\?/)
+
+    // 4. Unclosed parentheses
+    const errParen = parseFormula('=(1 + 2')
+    expect(errParen.type).toBe('error')
+    expect((errParen as any).error).toMatch(/#NAME\?/)
+
+    const errFnParen = parseFormula('=SUM(A1, B1')
+    expect(errFnParen.type).toBe('error')
+    expect((errFnParen as any).error).toMatch(/#NAME\?/)
+
+    // 5. Trailing junk / unexpected token
+    const errJunk = parseFormula('=1 + 2 3')
+    expect(errJunk.type).toBe('error')
+    expect((errJunk as any).error).toMatch(/#NAME\?/)
+
+    // 6. Incomplete operators
+    const errOp = parseFormula('=1 + ')
+    expect(errOp.type).toBe('error')
+    expect((errOp as any).error).toMatch(/#NAME\?/)
+
+    const errUnary = parseFormula('=+')
+    expect(errUnary.type).toBe('error')
+    expect((errUnary as any).error).toMatch(/#NAME\?/)
+
+    // 7. Malformed inputs that must never throw unhandled exceptions
+    expect(() => parseFormula(')(*&^%$#@!')).not.toThrow()
+    expect(() => parseFormula('=,,')).not.toThrow()
+    expect(() => parseFormula('====')).not.toThrow()
+  })
 })
 
 

@@ -57,10 +57,18 @@ class Parser {
   // Precedence level 1: Comparisons (=, <>, <, <=, >, >=)
   private parseExpression(): AstNode {
     let left = this.parseConcat()
+    if (left.type === 'error') return left
 
     while (this.matchOp('=', '<>', '<', '<=', '>', '>=')) {
       const op = this.advance().value
+      if (this.isEof()) {
+        return { type: 'error', error: '#NAME? Unexpected end of expression after operator' }
+      }
       const right = this.parseConcat()
+      if (right.type === 'empty') {
+        return { type: 'error', error: '#NAME? Unexpected end of expression after operator' }
+      }
+      if (right.type === 'error') return right
       left = { type: 'binary', op, left, right }
     }
 
@@ -70,10 +78,18 @@ class Parser {
   // Precedence level 2: String concatenation (&)
   private parseConcat(): AstNode {
     let left = this.parseAdditive()
+    if (left.type === 'error') return left
 
     while (this.matchOp('&')) {
       const op = this.advance().value
+      if (this.isEof()) {
+        return { type: 'error', error: '#NAME? Unexpected end of expression after operator' }
+      }
       const right = this.parseAdditive()
+      if (right.type === 'empty') {
+        return { type: 'error', error: '#NAME? Unexpected end of expression after operator' }
+      }
+      if (right.type === 'error') return right
       left = { type: 'binary', op, left, right }
     }
 
@@ -83,10 +99,18 @@ class Parser {
   // Precedence level 3: Addition and subtraction (+, -)
   private parseAdditive(): AstNode {
     let left = this.parseMultiplicative()
+    if (left.type === 'error') return left
 
     while (this.matchOp('+', '-')) {
       const op = this.advance().value
+      if (this.isEof()) {
+        return { type: 'error', error: '#NAME? Unexpected end of expression after operator' }
+      }
       const right = this.parseMultiplicative()
+      if (right.type === 'empty') {
+        return { type: 'error', error: '#NAME? Unexpected end of expression after operator' }
+      }
+      if (right.type === 'error') return right
       left = { type: 'binary', op, left, right }
     }
 
@@ -96,10 +120,18 @@ class Parser {
   // Precedence level 4: Multiplication and division (*, /)
   private parseMultiplicative(): AstNode {
     let left = this.parseExponent()
+    if (left.type === 'error') return left
 
     while (this.matchOp('*', '/')) {
       const op = this.advance().value
+      if (this.isEof()) {
+        return { type: 'error', error: '#NAME? Unexpected end of expression after operator' }
+      }
       const right = this.parseExponent()
+      if (right.type === 'empty') {
+        return { type: 'error', error: '#NAME? Unexpected end of expression after operator' }
+      }
+      if (right.type === 'error') return right
       left = { type: 'binary', op, left, right }
     }
 
@@ -110,10 +142,18 @@ class Parser {
   // Note: in Excel, left-associative, and unary binds tighter than ^ (-2^2 = 4)
   private parseExponent(): AstNode {
     let left = this.parseUnary()
+    if (left.type === 'error') return left
 
     while (this.matchOp('^')) {
       const op = this.advance().value
+      if (this.isEof()) {
+        return { type: 'error', error: '#NAME? Unexpected end of expression after operator' }
+      }
       const right = this.parseUnary()
+      if (right.type === 'empty') {
+        return { type: 'error', error: '#NAME? Unexpected end of expression after operator' }
+      }
+      if (right.type === 'error') return right
       left = { type: 'binary', op, left, right }
     }
 
@@ -124,7 +164,14 @@ class Parser {
   private parseUnary(): AstNode {
     if (this.matchOp('+', '-')) {
       const op = this.advance().value as '+' | '-'
+      if (this.isEof()) {
+        return { type: 'error', error: '#NAME? Unexpected end of expression after unary operator' }
+      }
       const expr = this.parseUnary()
+      if (expr.type === 'empty') {
+        return { type: 'error', error: '#NAME? Unexpected end of expression after unary operator' }
+      }
+      if (expr.type === 'error') return expr
       return { type: 'unary', op, expr }
     }
 
@@ -134,6 +181,7 @@ class Parser {
   // Precedence level 7: Postfix percent (%)
   private parsePostfix(): AstNode {
     let expr = this.parsePrimary()
+    if (expr.type === 'error') return expr
 
     while (this.matchOp('%')) {
       this.advance()

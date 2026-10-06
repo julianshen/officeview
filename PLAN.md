@@ -66,7 +66,7 @@ src/xlsx/formula/
 - [x] Test: Parser respects operator precedence (`^` > `*`, `/` > `+`, `-` > `&` > comparisons)
 - [x] Test: Parser parses function calls with multiple arguments and empty arguments
 - [x] Test: Parser parses nested expressions and parenthesized sub-expressions
-- [ ] Test: Parser returns `#NAME?` or syntax error node on malformed input without throwing
+- [x] Test: Parser returns `#NAME?` or syntax error node on malformed input without throwing
 
 ### Phase 3: Evaluator & Standard Functions
 - [ ] Test: Evaluates arithmetic operations with 15-digit rounding and percent (`10 + 50% = 10.5`)
