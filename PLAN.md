@@ -78,7 +78,7 @@ src/xlsx/formula/
 - [x] Test: Evaluates Logic functions with short-circuiting (IF, AND, OR, NOT, IFERROR)
 - [x] Test: Evaluates Text functions (CONCAT, LEFT, RIGHT, MID, LEN, TRIM, UPPER, LOWER)
 - [x] Test: Handles blank cells correctly (0 in math, "" in concat, ignored in SUM)
-- [ ] Test: Detects circular references and returns 0 without stack overflow
+- [x] Test: Detects circular references and returns 0 without stack overflow
 
 ### Phase 4: Shared Formulas & Workbook Context
 - [ ] Test: Translates shared formula relative references by row/col offset (`si` master to dependent cells)
