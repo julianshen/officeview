@@ -473,7 +473,7 @@ export function renderSheet(
         const explicit = (cell.style?.horizontal !== undefined && cell.style.horizontal !== 'general')
           || (cell.style?.vertical !== undefined && cell.style.vertical !== 'bottom')
           || cell.style?.wrapText === true || cellTextRotation(cell.style?.textRotation) !== undefined
-        const isCenter = isFormulaError(cell.value)
+        const isCenter = cell.formula !== undefined && isFormulaError(cell.value)
         if (explicit) paintCellText(ctx, text, cell.style, typeof cell.value === 'number', x, y, w, hh, color, isCenter)
         else {
           // Preserve accepted ordinary default horizontal layout exactly.

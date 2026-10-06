@@ -49,6 +49,22 @@ export function evaluateWorkbookFormulas(
   doc: XlsxDocument,
   options?: WorkbookEvaluationOptions
 ): void {
+  // Cheap early-exit: skip evaluation work entirely when no cell has a formula.
+  let hasFormulas = false
+  for (const sheet of doc.sheets) {
+    for (const row of sheet.rows) {
+      for (const cell of row.cells) {
+        if (cell.formula !== undefined || cell.sharedFormula !== undefined) {
+          hasFormulas = true
+          break
+        }
+      }
+      if (hasFormulas) break
+    }
+    if (hasFormulas) break
+  }
+  if (!hasFormulas) return
+
   const sheetsByName = new Map<string, XlsxSheet>()
   const cellMap = new Map<string, XlsxCell>()
   const sheetMaxCols = new Map<string, number>()

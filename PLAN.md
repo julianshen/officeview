@@ -96,6 +96,6 @@ src/xlsx/formula/
 - [x] Test: Viewport culling does not break off-screen formula dependencies
 - [x] Test: `renderSheet` renders calculated formula cell values onto canvas with correct alignment and styling
 - [x] Test: `renderSheet` applies number format (`numFmtId`) to formula results
-- [x] Test: `renderSheet` renders formula error strings (#DIV/0!) with alignment per native convention (to be verified against Excel / default center or left)
+- [x] Test: `renderSheet` renders formula error strings (#DIV/0!) with centered alignment for formula errors while preserving left-alignment for plain text
 - [x] Test: End-to-end fixture test parsing and rendering an XLSX file with missing `<v>` formulas
 

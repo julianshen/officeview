@@ -1835,7 +1835,7 @@ describe('xlsx formula integration & canvas rendering', () => {
     expect(paintedTexts).toContain('12,345.68')
   })
 
-  test('renderSheet renders formula error strings (#DIV/0!) with alignment per native Excel center convention', async () => {
+  test('renderSheet renders formula error strings (#DIV/0!) with centered alignment for formula errors', async () => {
     const doc: XlsxDocument = {
       sheets: [
         {
@@ -1897,6 +1897,124 @@ describe('xlsx formula integration & canvas rendering', () => {
     const colWidth = Math.round(12 * 7 + 5)
     const expectedCenterX = (colWidth - textWidth) / 2
     expect(call?.x).toBe(expectedCenterX)
+  })
+
+  test('renderSheet preserves left-alignment for literal error-like text strings (#DIV/0!) without formula', async () => {
+    const doc: XlsxDocument = {
+      sheets: [
+        {
+          name: 'Sheet1',
+          merges: [],
+          mergeRanges: [],
+          cols: [{ min: 0, max: 0, widthChars: 12 }],
+          rows: [
+            {
+              index: 0,
+              cells: [
+                {
+                  ref: 'A1',
+                  col: 0,
+                  row: 0,
+                  value: '#DIV/0!',
+                  // literal text, no formula
+                  styleIndex: 0,
+                  style: { numFmtId: 0 },
+                },
+              ],
+            },
+          ],
+        },
+      ],
+    }
+
+    const paintedCalls: Array<{ text: string; x: number }> = []
+    const textWidth = 7 * 7
+    const fakeCtx = {
+      save: () => {},
+      restore: () => {},
+      beginPath: () => {},
+      rect: () => {},
+      clip: () => {},
+      fillRect: () => {},
+      stroke: () => {},
+      moveTo: () => {},
+      lineTo: () => {},
+      translate: () => {},
+      measureText: () => ({ width: textWidth }),
+      fillText: (text: string, x: number) => {
+        paintedCalls.push({ text, x })
+      },
+      font: '',
+      fillStyle: '',
+      strokeStyle: '',
+      lineWidth: 1,
+      textBaseline: 'alphabetic',
+    }
+
+    renderSheet(doc.sheets[0], fakeCtx as unknown as CanvasRenderingContext2D)
+
+    const call = paintedCalls.find(c => c.text === '#DIV/0!')
+    expect(call).toBeDefined()
+    // Preserves default left alignment: x = colX + PADDING_L = 3px
+    expect(call?.x).toBe(3)
+  })
+
+  test('evaluateWorkbookFormulas is idempotent when called multiple times', async () => {
+    const doc: XlsxDocument = {
+      sheets: [
+        {
+          name: 'Sheet1',
+          merges: [],
+          mergeRanges: [],
+          cols: [],
+          rows: [
+            {
+              index: 0,
+              cells: [
+                { ref: 'A1', col: 0, row: 0, value: 10, styleIndex: 0 },
+                { ref: 'B1', col: 1, row: 0, value: null, formula: 'A1 * 2', styleIndex: 0 },
+                { ref: 'C1', col: 2, row: 0, value: null, formula: 'B1 + 5', styleIndex: 0 },
+              ],
+            },
+          ],
+        },
+      ],
+    }
+
+    evaluateWorkbookFormulas(doc)
+    expect(doc.sheets[0].rows[0].cells[1].value).toBe(20)
+    expect(doc.sheets[0].rows[0].cells[2].value).toBe(25)
+
+    // Second evaluation pass is a no-op that preserves evaluated values
+    evaluateWorkbookFormulas(doc)
+    expect(doc.sheets[0].rows[0].cells[1].value).toBe(20)
+    expect(doc.sheets[0].rows[0].cells[2].value).toBe(25)
+  })
+
+  test('evaluateWorkbookFormulas early-exits without mutating when workbook has no formulas', async () => {
+    const doc: XlsxDocument = {
+      sheets: [
+        {
+          name: 'Sheet1',
+          merges: [],
+          mergeRanges: [],
+          cols: [],
+          rows: [
+            {
+              index: 0,
+              cells: [
+                { ref: 'A1', col: 0, row: 0, value: 'hello', styleIndex: 0 },
+                { ref: 'B1', col: 1, row: 0, value: 42, styleIndex: 0 },
+              ],
+            },
+          ],
+        },
+      ],
+    }
+
+    evaluateWorkbookFormulas(doc)
+    expect(doc.sheets[0].rows[0].cells[0].value).toBe('hello')
+    expect(doc.sheets[0].rows[0].cells[1].value).toBe(42)
   })
 
   test('End-to-end fixture test parsing and rendering an XLSX file with missing <v> formulas', async () => {
