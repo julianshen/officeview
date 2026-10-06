@@ -439,6 +439,111 @@ describe('xlsx formula parser (AST)', () => {
       },
     })
   })
+
+  test('Parser respects operator precedence (^ > *, / > +, - > & > comparisons)', () => {
+    // 1. ^ over * and /
+    expect(parseFormula('2 * 3 ^ 2')).toEqual({
+      type: 'binary',
+      op: '*',
+      left: { type: 'number', value: 2 },
+      right: {
+        type: 'binary',
+        op: '^',
+        left: { type: 'number', value: 3 },
+        right: { type: 'number', value: 2 },
+      },
+    })
+    expect(parseFormula('16 / 2 ^ 3')).toEqual({
+      type: 'binary',
+      op: '/',
+      left: { type: 'number', value: 16 },
+      right: {
+        type: 'binary',
+        op: '^',
+        left: { type: 'number', value: 2 },
+        right: { type: 'number', value: 3 },
+      },
+    })
+
+    // 2. * and / over + and -
+    expect(parseFormula('1 + 2 * 3')).toEqual({
+      type: 'binary',
+      op: '+',
+      left: { type: 'number', value: 1 },
+      right: {
+        type: 'binary',
+        op: '*',
+        left: { type: 'number', value: 2 },
+        right: { type: 'number', value: 3 },
+      },
+    })
+    expect(parseFormula('10 - 6 / 2')).toEqual({
+      type: 'binary',
+      op: '-',
+      left: { type: 'number', value: 10 },
+      right: {
+        type: 'binary',
+        op: '/',
+        left: { type: 'number', value: 6 },
+        right: { type: 'number', value: 2 },
+      },
+    })
+
+    // 3. + and - over &
+    expect(parseFormula('"A" & 1 + 2')).toEqual({
+      type: 'binary',
+      op: '&',
+      left: { type: 'string', value: 'A' },
+      right: {
+        type: 'binary',
+        op: '+',
+        left: { type: 'number', value: 1 },
+        right: { type: 'number', value: 2 },
+      },
+    })
+
+    // 4. & over comparisons
+    expect(parseFormula('"a" & "b" = "ab"')).toEqual({
+      type: 'binary',
+      op: '=',
+      left: {
+        type: 'binary',
+        op: '&',
+        left: { type: 'string', value: 'a' },
+        right: { type: 'string', value: 'b' },
+      },
+      right: { type: 'string', value: 'ab' },
+    })
+    expect(parseFormula('A1 + B1 <> C1 & D1')).toEqual({
+      type: 'binary',
+      op: '<>',
+      left: {
+        type: 'binary',
+        op: '+',
+        left: { type: 'cell', ref: { col: 0, row: 0, absCol: false, absRow: false } },
+        right: { type: 'cell', ref: { col: 1, row: 0, absCol: false, absRow: false } },
+      },
+      right: {
+        type: 'binary',
+        op: '&',
+        left: { type: 'cell', ref: { col: 2, row: 0, absCol: false, absRow: false } },
+        right: { type: 'cell', ref: { col: 3, row: 0, absCol: false, absRow: false } },
+      },
+    })
+
+    // 5. Left-associativity of same precedence
+    expect(parseFormula('10 - 5 - 2')).toEqual({
+      type: 'binary',
+      op: '-',
+      left: {
+        type: 'binary',
+        op: '-',
+        left: { type: 'number', value: 10 },
+        right: { type: 'number', value: 5 },
+      },
+      right: { type: 'number', value: 2 },
+    })
+  })
 })
 
 
