@@ -1898,6 +1898,135 @@ describe('xlsx formula integration & canvas rendering', () => {
     const expectedCenterX = (colWidth - textWidth) / 2
     expect(call?.x).toBe(expectedCenterX)
   })
+
+  test('End-to-end fixture test parsing and rendering an XLSX file with missing <v> formulas', async () => {
+    // 1. Build a multi-sheet XLSX workbook with:
+    //    - Sheet 1 ("Summary"): cross-sheet formulas referencing Sheet 2 with missing <v>
+    //    - Sheet 2 ("Sales"): shared formulas with omitted <v>
+    const buf = await buildXlsx([
+      {
+        name: 'Summary',
+        rows: [
+          {
+            r: 1,
+            cells: [
+              { ref: 'A1', v: 'Total Revenue' },
+              { ref: 'B1', formula: 'SUM(Sales!C2:C4)' }, // missing <v>
+            ],
+          },
+          {
+            r: 2,
+            cells: [
+              { ref: 'A2', v: 'Average Sale' },
+              { ref: 'B2', formula: 'AVERAGE(Sales!C2:C4)' }, // missing <v>
+            ],
+          },
+          {
+            r: 3,
+            cells: [
+              { ref: 'A3', v: 'Target Status' },
+              { ref: 'B3', formula: 'IF(B1 > 500, "EXCEEDED", "BELOW")' }, // missing <v>
+            ],
+          },
+          {
+            r: 4,
+            cells: [
+              { ref: 'A4', v: 'Error Check' },
+              { ref: 'B4', formula: '10 / 0' }, // missing <v>, evaluates to #DIV/0!
+            ],
+          },
+        ],
+      },
+      {
+        name: 'Sales',
+        rows: [
+          {
+            r: 1,
+            cells: [
+              { ref: 'A1', v: 'Item' },
+              { ref: 'B1', v: 'Qty' },
+              { ref: 'C1', v: 'Total' },
+            ],
+          },
+          {
+            r: 2,
+            cells: [
+              { ref: 'A2', v: 'Apples' },
+              { ref: 'B2', v: 10 },
+              // Shared master: Total = Qty * 20
+              { ref: 'C2', formula: 'B2 * 20', sharedFormula: { si: 0, ref: 'C2:C4' } },
+            ],
+          },
+          {
+            r: 3,
+            cells: [
+              { ref: 'A3', v: 'Oranges' },
+              { ref: 'B3', v: 15 },
+              // Shared dependent: Total = Qty * 20 (omits formula and v)
+              { ref: 'C3', sharedFormula: { si: 0 } },
+            ],
+          },
+          {
+            r: 4,
+            cells: [
+              { ref: 'A4', v: 'Bananas' },
+              { ref: 'B4', v: 20 },
+              // Shared dependent: Total = Qty * 20 (omits formula and v)
+              { ref: 'C4', sharedFormula: { si: 0 } },
+            ],
+          },
+        ],
+      },
+    ])
+
+    // 2. Parse workbook package
+    const pkg = await OfficePackage.load(buf)
+    const doc = await parseXlsx(pkg)
+
+    expect(doc.sheets).toHaveLength(2)
+
+    // 3. Verify Sheet 2 ("Sales") evaluated shared formulas:
+    //    Apples: 10 * 20 = 200
+    //    Oranges: 15 * 20 = 300
+    //    Bananas: 20 * 20 = 400
+    const salesSheet = doc.sheets[1]
+    expect(salesSheet.rows[1].cells[2].value).toBe(200)
+    expect(salesSheet.rows[2].cells[2].value).toBe(300)
+    expect(salesSheet.rows[3].cells[2].value).toBe(400)
+
+    // 4. Verify Sheet 1 ("Summary") cross-sheet aggregations:
+    //    B1: SUM(200, 300, 400) = 900
+    //    B2: AVERAGE(200, 300, 400) = 300
+    //    B3: IF(900 > 500, "EXCEEDED", "BELOW") = "EXCEEDED"
+    //    B4: 10 / 0 = "#DIV/0!"
+    const summarySheet = doc.sheets[0]
+    expect(summarySheet.rows[0].cells[1].value).toBe(900)
+    expect(summarySheet.rows[1].cells[1].value).toBe(300)
+    expect(summarySheet.rows[2].cells[1].value).toBe('EXCEEDED')
+    expect(summarySheet.rows[3].cells[1].value).toBe('#DIV/0!')
+
+    // 5. Render Sheet 1 onto real canvas and assert ink
+    const { createCanvas } = await import('canvas')
+    const { computeMetrics } = await import('../src/xlsx/render')
+    const metrics = computeMetrics(summarySheet)
+    const canvas = createCanvas(metrics.widthPx, metrics.heightPx)
+    const ctx = canvas.getContext('2d')
+
+    renderSheet(summarySheet, ctx as unknown as CanvasRenderingContext2D, metrics)
+
+    // Assert canvas is drawn (has non-white ink)
+    const imgData = ctx.getImageData(0, 0, metrics.widthPx, metrics.heightPx)
+    let nonWhitePixels = 0
+    for (let i = 0; i < imgData.data.length; i += 4) {
+      const r = imgData.data[i]
+      const g = imgData.data[i + 1]
+      const b = imgData.data[i + 2]
+      if (r < 250 || g < 250 || b < 250) {
+        nonWhitePixels++
+      }
+    }
+    expect(nonWhitePixels).toBeGreaterThan(100)
+  })
 })
 
 
