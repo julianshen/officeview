@@ -7,6 +7,7 @@ import { parseFormula } from '../src/xlsx/formula/parser'
 import { evaluateFormula } from '../src/xlsx/formula/evaluator'
 import { translateSharedFormula } from '../src/xlsx/formula/shared'
 import { evaluateWorkbookFormulas } from '../src/xlsx/formula/workbook'
+import { renderSheet } from '../src/xlsx/render'
 import type { EvaluationContext, FormulaValue } from '../src/xlsx/formula/types'
 import type { XlsxCell, XlsxDocument } from '../src/xlsx/types'
 
@@ -1612,6 +1613,72 @@ describe('xlsx formula integration & canvas rendering', () => {
     expect(doc.sheets[0].rows[0].cells[1].value).toBe(60)
     expect(doc.sheets[0].rows[0].cells[2].value).toBe(5)
     expect(doc.sheets[0].rows[0].cells[3].value).toBe(200)
+  })
+
+  test('Viewport culling does not break off-screen formula dependencies', async () => {
+    // A1 depends on Z100 which is far off-screen
+    const buf = await buildXlsx([
+      {
+        name: 'Sheet1',
+        rows: [
+          {
+            r: 1,
+            cells: [
+              { ref: 'A1', formula: 'Z100 * 2' },
+            ],
+          },
+          {
+            r: 100,
+            cells: [
+              { ref: 'Z100', v: 50 },
+            ],
+          },
+        ],
+      },
+    ])
+
+    const pkg = await OfficePackage.load(buf)
+    const doc = await parseXlsx(pkg)
+    const sheet = doc.sheets[0]
+
+    // Verify parsed and calculated value
+    expect(sheet.rows[0].cells[0].value).toBe(100)
+
+    // Render with viewport covering only top-left region (A1 inside, Z100 far outside)
+    const paintedTexts: Array<{ text: string; x: number; y: number }> = []
+    const fakeCtx = {
+      save: () => {},
+      restore: () => {},
+      beginPath: () => {},
+      rect: () => {},
+      clip: () => {},
+      fillRect: () => {},
+      stroke: () => {},
+      moveTo: () => {},
+      lineTo: () => {},
+      translate: () => {},
+      measureText: (text: string) => ({ width: text.length * 8 }),
+      fillText: (text: string, x: number, y: number) => {
+        paintedTexts.push({ text, x, y })
+      },
+      font: '',
+      fillStyle: '',
+      strokeStyle: '',
+      lineWidth: 1,
+      textBaseline: 'alphabetic',
+    }
+
+    renderSheet(sheet, fakeCtx as unknown as CanvasRenderingContext2D, undefined, undefined, undefined, {
+      x: 0,
+      y: 0,
+      width: 150,
+      height: 50,
+    })
+
+    // On-screen cell A1 is painted with computed formula value "100"
+    expect(paintedTexts.some(p => p.text === '100')).toBe(true)
+    // Off-screen cell Z100 ("50") is culled and NOT painted
+    expect(paintedTexts.some(p => p.text === '50')).toBe(false)
   })
 })
 
