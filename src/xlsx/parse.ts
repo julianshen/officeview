@@ -6,6 +6,7 @@ import { parseWorksheetDrawings, collectXlsxImages } from './drawing'
 import { computeMetrics } from './render'
 import { resolvePartTarget } from '../drawing/parts'
 import { parseThemeContext, type ThemeContext } from '../drawing/style'
+import { evaluateWorkbookFormulas } from './formula/workbook'
 
 /** Convert "A1" / "BC23" to 0-based [row, col]. */
 export function parseRef(ref: string): [number, number] {
@@ -152,7 +153,13 @@ export async function parseXlsx(pkg: OfficePackage): Promise<XlsxDocument> {
     })
     return entries
   })
-  return { sheets, images: collectXlsxImages(sheets), drawingCoverage }
+  const calcPrNode = getChildren(workbook, 'calcPr')[0]
+  const calcPrAttrs = calcPrNode ? attrs(calcPrNode) : {}
+  const fullCalcOnLoad = calcPrAttrs.fullCalcOnLoad === '1' || calcPrAttrs.fullCalcOnLoad === 'true'
+
+  const doc: XlsxDocument = { sheets, images: collectXlsxImages(sheets), drawingCoverage }
+  evaluateWorkbookFormulas(doc, { fullCalcOnLoad })
+  return doc
 }
 
 async function parseSheet(
@@ -235,10 +242,27 @@ async function parseSheet(
       const sIdx = parseInt(ca.s ?? '0', 10)
       let value: string | number | boolean | null = null
       let formula: string | undefined
+      let sharedFormula: { si: number; ref?: string } | undefined
       const vNode = getChildren(cNode, 'v')[0]
       const isNode = getChildren(cNode, 'is')[0]
+      let calcAlways = ca.ca === '1' || ca.ca === 'true'
       const fNode = getChildren(cNode, 'f')[0]
-      if (fNode) formula = textOf(fNode)
+      if (fNode) {
+        const rawF = textOf(fNode)
+        if (rawF !== '') formula = rawF
+        const fa = attrs(fNode)
+        // ECMA-376 Part 1 §18.3.1.40: ca attribute on <f>
+        if (fa.ca === '1' || fa.ca === 'true') {
+          calcAlways = true
+        }
+        if (fa.t === 'shared') {
+          const si = parseInt(fa.si ?? '0', 10)
+          sharedFormula = {
+            si: Number.isFinite(si) ? si : 0,
+            ref: (fa.ref as string) || undefined,
+          }
+        }
+      }
       if (t === 's') {
         const idx = vNode ? parseInt(textOf(vNode), 10) : NaN
         value = Number.isFinite(idx) ? (strings[idx] ?? '') : ''
@@ -249,13 +273,22 @@ async function parseSheet(
       } else if (t === 'str') {
         value = vNode ? textOf(vNode) : ''
       } else if (t === 'e') {
-        value = vNode ? textOf(vNode) : '#ERROR'
+        value = vNode ? textOf(vNode) : null
       } else {
         // numeric
         const raw = vNode ? textOf(vNode) : ''
         value = raw !== '' && Number.isFinite(parseFloat(raw)) ? parseFloat(raw) : raw === '' ? null : raw
       }
-      const cell: XlsxCell = { ref, row: rowIdx, col: colIdx, value, styleIndex: Number.isFinite(sIdx) ? sIdx : 0, formula }
+      const cell: XlsxCell = {
+        ref,
+        row: rowIdx,
+        col: colIdx,
+        value,
+        styleIndex: Number.isFinite(sIdx) ? sIdx : 0,
+        formula,
+        sharedFormula,
+        ca: calcAlways ? true : undefined,
+      }
       const xf = styles.xfs[cell.styleIndex]
       if (xf) {
         const font = styles.fonts[xf.fontId]

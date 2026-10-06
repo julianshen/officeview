@@ -14,6 +14,7 @@ import { createTextBodyMeasurer, paintTextBody } from '../drawing/text-paint'
 import { graphemes } from '../core/text-recording'
 import { resolveGeometry } from '../drawing/geometry'
 import type { DrawingContentShape } from '../drawing/content'
+import { isFormulaError } from './formula/evaluator'
 
 export interface GridMetrics {
   colWidthsPx: number[]
@@ -86,10 +87,11 @@ function alignedLayout(layout: TextLayout, bounds: ReturnType<typeof textLayoutB
 /** Wrapped text chooses a measured local multiline box that fits its rotated
  * cell interior. No-wrap or physically oversized text keeps authored font size
  * and clips to the cell; source remains complete, with clip-aware indexing. */
-function paintCellText(ctx: CanvasRenderingContext2D, text: string, style: XlsxCellStyle | undefined, numeric: boolean, x: number, y: number, w: number, h: number, color: string): void {
+function paintCellText(ctx: CanvasRenderingContext2D, text: string, style: XlsxCellStyle | undefined, numeric: boolean, x: number, y: number, w: number, h: number, color: string, center = false): void {
   const mapped = cellTextRotation(style?.textRotation), stacked = mapped && 'stacked' in mapped
   const radians = mapped && 'radians' in mapped ? mapped.radians : 0
-  const horizontal = style?.horizontal === undefined || style.horizontal === 'general' ? (numeric ? 'right' : 'left') : style.horizontal
+  const defaultHorizontal = numeric ? 'right' : center ? 'center' : 'left'
+  const horizontal = style?.horizontal === undefined || style.horizontal === 'general' ? defaultHorizontal : style.horizontal
   const vertical = style?.vertical ?? 'center'
   const wrap = style?.wrapText ?? !!stacked
   const body: PptxTextBody = { direction: stacked ? 'wordArtVertRtl' : 'horz', anchor: 't', wrap,
@@ -471,11 +473,16 @@ export function renderSheet(
         const explicit = (cell.style?.horizontal !== undefined && cell.style.horizontal !== 'general')
           || (cell.style?.vertical !== undefined && cell.style.vertical !== 'bottom')
           || cell.style?.wrapText === true || cellTextRotation(cell.style?.textRotation) !== undefined
-        if (explicit) paintCellText(ctx, text, cell.style, typeof cell.value === 'number', x, y, w, hh, color)
+        const isCenter = cell.formula !== undefined && isFormulaError(cell.value)
+        if (explicit) paintCellText(ctx, text, cell.style, typeof cell.value === 'number', x, y, w, hh, color, isCenter)
         else {
           // Preserve accepted ordinary default horizontal layout exactly.
           const textW = measured(ctx.font, text)
-          const tx = typeof cell.value === 'number' ? x + w - PADDING_R - textW : x + PADDING_L
+          const tx = typeof cell.value === 'number'
+            ? x + w - PADDING_R - textW
+            : isCenter
+              ? x + (w - textW) / 2
+              : x + PADDING_L
           const ty = y + hh - (hh - (cell.style?.fontSizePt ?? 10) * (96 / 72)) / 2
           ctx.textBaseline = 'alphabetic'; ctx.fillText(text, tx, ty)
         }

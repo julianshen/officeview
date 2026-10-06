@@ -23,6 +23,9 @@ export interface XlsxCell {
   /** Style index into cellXfs. */
   styleIndex: number
   formula?: string
+  sharedFormula?: { si: number; ref?: string }
+  /** Calculate always flag from <f ca="1"> per ECMA-376 Part 1 §18.3.1.40. */
+  ca?: boolean
   /** Resolved style (from cellXfs + fonts/fills/borders). */
   style?: XlsxCellStyle
 }

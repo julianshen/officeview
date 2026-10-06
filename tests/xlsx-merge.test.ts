@@ -36,13 +36,15 @@ describe('merged cell rendering', () => {
     renderSheet(sheet, ctx as unknown as CanvasRenderingContext2D, m)
 
     // yellow fill spans BOTH columns of row 1 (A1's fill)
-    const midB = Math.round((m.colWidthsPx[0]) + 10) // inside column B
+    // Sample inside column B, safely clear of the anchor cell's text glyphs across font fallbacks
+    const midB = Math.round(m.colWidthsPx[0] + m.colWidthsPx[1] - 15) // inside column B
     const px = ctx.getImageData(midB, 8, 1, 1).data
     expect([px[0], px[1], px[2]]).toEqual([255, 255, 0])
 
     // gridline between A and B is hidden in row 1 but visible in row 2
+    // Sample in row 1's top padding (y=2) well above text ascenders
     const xb = m.colWidthsPx[0]
-    const lineRow1 = ctx.getImageData(xb, 8, 1, 1).data
+    const lineRow1 = ctx.getImageData(xb, 2, 1, 1).data
     expect(lineRow1[0]).toBe(255) // no gray line inside merge
     const lineRow2 = ctx.getImageData(xb, 24, 1, 1).data
     expect(lineRow2[0]).toBeLessThan(230) // gridline present below merge
