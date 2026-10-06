@@ -73,7 +73,7 @@ src/xlsx/formula/
 ### Phase 3: Evaluator & Standard Functions
 - [x] Test: Evaluates arithmetic operations with 15-digit rounding and percent (`10 + 50% = 10.5`)
 - [x] Test: Evaluates string concatenation (`&`) and Excel comparison ordering (number < text < FALSE < TRUE)
-- [ ] Test: Propagates error values through operations (`1 + #DIV/0! = #DIV/0!`)
+- [x] Test: Propagates error values through operations (`1 + #DIV/0! = #DIV/0!`)
 - [ ] Test: Evaluates Math functions (SUM, AVERAGE, MIN, MAX, COUNT, COUNTA, ABS, ROUND, INT, MOD, PRODUCT)
 - [ ] Test: Evaluates Logic functions with short-circuiting (IF, AND, OR, NOT, IFERROR)
 - [ ] Test: Evaluates Text functions (CONCAT, LEFT, RIGHT, MID, LEN, TRIM, UPPER, LOWER)

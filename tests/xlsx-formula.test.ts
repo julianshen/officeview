@@ -883,6 +883,34 @@ describe('xlsx formula evaluator', () => {
     expect(evaluateFormula('"10" = 10')).toBe(false)
     expect(evaluateFormula('"10" <> 10')).toBe(true)
   })
+
+  test('Propagates error values through operations (1 + #DIV/0! = #DIV/0!)', () => {
+    // 1. Unary error propagation
+    expect(evaluateFormula('-#DIV/0!')).toBe('#DIV/0!')
+    expect(evaluateFormula('+#VALUE!')).toBe('#VALUE!')
+    expect(evaluateFormula('#REF!%')).toBe('#REF!')
+
+    // 2. Binary arithmetic error propagation
+    expect(evaluateFormula('1 + #DIV/0!')).toBe('#DIV/0!')
+    expect(evaluateFormula('=#REF! * 5')).toBe('#REF!')
+    expect(evaluateFormula('10 - #NUM!')).toBe('#NUM!')
+    expect(evaluateFormula('#N/A / 2')).toBe('#N/A')
+    expect(evaluateFormula('2 ^ #VALUE!')).toBe('#VALUE!')
+
+    // 3. String concatenation and comparison error propagation
+    expect(evaluateFormula('"Prefix: " & #REF!')).toBe('#REF!')
+    expect(evaluateFormula('=#DIV/0! & " Suffix"')).toBe('#DIV/0!')
+    expect(evaluateFormula('#NULL! = 0')).toBe('#NULL!')
+    expect(evaluateFormula('100 < #NAME?')).toBe('#NAME?')
+
+    // 4. First-error-wins in binary operations
+    expect(evaluateFormula('#DIV/0! + #REF!')).toBe('#DIV/0!')
+    expect(evaluateFormula('#REF! * #VALUE!')).toBe('#REF!')
+
+    // 5. Deeply nested error propagation
+    expect(evaluateFormula('((1 + 2) * #NUM!) / 4')).toBe('#NUM!')
+    expect(evaluateFormula('1 + (2 * (3 + #DIV/0!))')).toBe('#DIV/0!')
+  })
 })
 
 
