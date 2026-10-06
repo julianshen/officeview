@@ -129,15 +129,15 @@ src/drawing/
 - [x] Test: Emits diagnostic for width-less or malformed `<a:ln>` width and clears outline without throwing
 
 ### Phase 2: WordArt Canvas Rendering & State Isolation
-- [ ] Test: Canvas paints linear gradient across run bounds from start stop to end stop
-- [ ] Test: Canvas paints outline-only text with stroked outline and zero fill
-- [ ] Test: Canvas drop shadow displaces ink according to distance and direction angles
-- [ ] Test: Canvas shadow state is strictly isolated and does not leak into subsequent plain runs
-- [ ] Test: Canvas shadow state does not leak into paragraph bullet glyphs
-- [ ] Test: Generates and tiles 2-color pattern for supported diagonal presets (`dkUpDiag`, etc.) with bounded LRU cache
-- [ ] Test: Falls back to solid foreground color when pattern tile cannot be created
-- [ ] Test: Search indexing emits exactly one logical record per run regardless of fill, outline, or shadow passes
-- [ ] Test: WordArt appearance styling does not alter layout advances or line break positions
+- [x] Test: Canvas paints linear gradient across run bounds from start stop to end stop
+- [x] Test: Canvas paints outline-only text with stroked outline and zero fill
+- [x] Test: Canvas drop shadow displaces ink according to distance and direction angles
+- [x] Test: Canvas shadow state is strictly isolated and does not leak into subsequent plain runs
+- [x] Test: Canvas shadow state does not leak into paragraph bullet glyphs
+- [x] Test: Generates and tiles 2-color pattern for supported diagonal presets (`dkUpDiag`, etc.) with bounded LRU cache
+- [x] Test: Falls back to solid foreground color when pattern tile cannot be created
+- [x] Test: Search indexing emits exactly one logical record per run regardless of fill, outline, or shadow passes
+- [x] Test: WordArt appearance styling does not alter layout advances or line break positions
 
 ### Phase 3: Format Adapters Integration (PPTX, DOCX, XLSX)
 - [ ] Test: PPTX shapes parse and render WordArt text runs inheriting theme colors
