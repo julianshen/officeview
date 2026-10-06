@@ -544,6 +544,96 @@ describe('xlsx formula parser (AST)', () => {
       right: { type: 'number', value: 2 },
     })
   })
+
+  test('Parser parses function calls with multiple arguments and empty arguments', () => {
+    // 1. Zero arguments
+    expect(parseFormula('NOW()')).toEqual({
+      type: 'call',
+      name: 'NOW',
+      args: [],
+    })
+
+    // 2. Single argument
+    expect(parseFormula('ABS(-10)')).toEqual({
+      type: 'call',
+      name: 'ABS',
+      args: [
+        {
+          type: 'unary',
+          op: '-',
+          expr: { type: 'number', value: 10 },
+        },
+      ],
+    })
+
+    // 3. Multiple arguments
+    expect(parseFormula('ROUND(3.14159, 2)')).toEqual({
+      type: 'call',
+      name: 'ROUND',
+      args: [
+        { type: 'number', value: 3.14159 },
+        { type: 'number', value: 2 },
+      ],
+    })
+
+    // 4. Empty arguments: middle, leading, trailing, and consecutive
+    expect(parseFormula('IF(A1,,1)')).toEqual({
+      type: 'call',
+      name: 'IF',
+      args: [
+        { type: 'cell', ref: { col: 0, row: 0, absCol: false, absRow: false } },
+        { type: 'empty' },
+        { type: 'number', value: 1 },
+      ],
+    })
+
+    expect(parseFormula('IF(, 1, 2)')).toEqual({
+      type: 'call',
+      name: 'IF',
+      args: [
+        { type: 'empty' },
+        { type: 'number', value: 1 },
+        { type: 'number', value: 2 },
+      ],
+    })
+
+    expect(parseFormula('IF(A1, 1, )')).toEqual({
+      type: 'call',
+      name: 'IF',
+      args: [
+        { type: 'cell', ref: { col: 0, row: 0, absCol: false, absRow: false } },
+        { type: 'number', value: 1 },
+        { type: 'empty' },
+      ],
+    })
+
+    expect(parseFormula('TEST(,,)')).toEqual({
+      type: 'call',
+      name: 'TEST',
+      args: [
+        { type: 'empty' },
+        { type: 'empty' },
+        { type: 'empty' },
+      ],
+    })
+
+    // 5. Nested calls
+    expect(parseFormula('SUM(A1, MAX(B1, C1))')).toEqual({
+      type: 'call',
+      name: 'SUM',
+      args: [
+        { type: 'cell', ref: { col: 0, row: 0, absCol: false, absRow: false } },
+        {
+          type: 'call',
+          name: 'MAX',
+          args: [
+            { type: 'cell', ref: { col: 1, row: 0, absCol: false, absRow: false } },
+            { type: 'cell', ref: { col: 2, row: 0, absCol: false, absRow: false } },
+          ],
+        },
+      ],
+    })
+  })
 })
 
 

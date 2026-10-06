@@ -64,7 +64,7 @@ src/xlsx/formula/
 ### Phase 2: Formula Parser (AST)
 - [x] Test: Parser parses literals and respects Excel unary precedence (`-2^2` parses as `(-2)^2`)
 - [x] Test: Parser respects operator precedence (`^` > `*`, `/` > `+`, `-` > `&` > comparisons)
-- [ ] Test: Parser parses function calls with multiple arguments and empty arguments
+- [x] Test: Parser parses function calls with multiple arguments and empty arguments
 - [ ] Test: Parser parses nested expressions and parenthesized sub-expressions
 - [ ] Test: Parser returns `#NAME?` or syntax error node on malformed input without throwing
 
