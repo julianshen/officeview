@@ -158,7 +158,7 @@ export function evaluateNode(node?: AstNode, ctx?: EvaluationContext): FormulaVa
       }
       const sheet = node.ref.sheet ?? ctx.currentSheet
       const key = makeCellKey(sheet, node.ref.col, node.ref.row)
-      if (ctx.visited?.has(key)) {
+      if (!ctx.currentCell && ctx.visited?.has(key)) {
         ctx.hasCycle = true
         return 0
       }
@@ -298,31 +298,16 @@ export function evaluateFormula(input: string | AstNode | undefined | null, ctx?
   }
   ctx.evalDepth = currentDepth + 1
 
-  let currentKey: string | undefined
-  let addedCurrent = false
-  if (ctx.currentCell) {
-    currentKey = makeCellKey(
-      ctx.currentCell.sheet ?? ctx.currentSheet,
-      ctx.currentCell.col,
-      ctx.currentCell.row,
-    )
-    if (!ctx.visited.has(currentKey)) {
-      ctx.visited.add(currentKey)
-      addedCurrent = true
-    }
-  }
-
   try {
     const res = evaluateNode(node, ctx)
     if (currentDepth === 0 && ctx.hasCycle) {
-      return 0
+      if (!ctx.currentCell) {
+        return 0
+      }
     }
     return res
   } finally {
     ctx.evalDepth = currentDepth
-    if (currentKey && addedCurrent) {
-      ctx.visited.delete(currentKey)
-    }
     if (currentDepth === 0) {
       ctx.hasCycle = false
     }

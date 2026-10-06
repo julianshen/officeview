@@ -238,11 +238,16 @@ async function parseSheet(
       let sharedFormula: { si: number; ref?: string } | undefined
       const vNode = getChildren(cNode, 'v')[0]
       const isNode = getChildren(cNode, 'is')[0]
+      let calcAlways = ca.ca === '1' || ca.ca === 'true'
       const fNode = getChildren(cNode, 'f')[0]
       if (fNode) {
         const rawF = textOf(fNode)
         if (rawF !== '') formula = rawF
         const fa = attrs(fNode)
+        // ECMA-376 Part 1 §18.3.1.40: ca attribute on <f>
+        if (fa.ca === '1' || fa.ca === 'true') {
+          calcAlways = true
+        }
         if (fa.t === 'shared') {
           const si = parseInt(fa.si ?? '0', 10)
           sharedFormula = {
@@ -267,7 +272,6 @@ async function parseSheet(
         const raw = vNode ? textOf(vNode) : ''
         value = raw !== '' && Number.isFinite(parseFloat(raw)) ? parseFloat(raw) : raw === '' ? null : raw
       }
-      const calcAlways = ca.ca === '1' || ca.ca === 'true'
       const cell: XlsxCell = {
         ref,
         row: rowIdx,

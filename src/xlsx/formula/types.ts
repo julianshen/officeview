@@ -55,6 +55,14 @@ export type FormulaValue = number | string | boolean | null | FormulaError
 
 export interface EvaluationContext {
   getCellValue?(sheet: string | undefined, col: number, row: number): FormulaValue
+  /**
+   * Evaluates a range of cells into a row-major 2D matrix of values.
+   * Contract:
+   * - Coordinates are 0-based.
+   * - Returns empty/blank cells as null.
+   * - Bounded to populated sheet dimensions to avoid unbounded memory allocation.
+   * - Must cooperate with cycle detection by delegating or tracking visited cells.
+   */
   getRangeValues?(sheet: string | undefined, from: CellRef, to: CellRef): FormulaValue[][]
   currentSheet?: string
   currentCell?: CellRef

@@ -65,6 +65,7 @@ export function evaluateWorkbookFormulas(
       if (row.index > maxRow) maxRow = row.index
       for (const cell of row.cells) {
         if (cell.col > maxCol) maxCol = cell.col
+        if (cell.row > maxRow) maxRow = cell.row
         cellMap.set(makeCellKey(sheet.name, cell.col, cell.row), cell)
       }
     }
@@ -75,7 +76,8 @@ export function evaluateWorkbookFormulas(
   // 2. Shared context, memoization, and cycle-tracking structures
   const memo = new Map<string, FormulaValue>()
   const visited = new Set<string>()
-  const activePath = new Set<string>()
+  const activeStack: string[] = []
+  const activeSet = new Set<string>()
   const cycleMembers = new Set<string>()
 
   const ctx: EvaluationContext = {
@@ -89,9 +91,15 @@ export function evaluateWorkbookFormulas(
 
       const key = makeCellKey(resolvedSheet.name, col, row)
 
-      // Cycle pre-check: if cell is currently on the active evaluation path, cycle detected
-      if (activePath.has(key)) {
+      // Cycle pre-check: if cell is currently on the active evaluation stack, mark full cycle suffix
+      if (activeSet.has(key)) {
         ctx.hasCycle = true
+        const idx = activeStack.indexOf(key)
+        if (idx >= 0) {
+          for (let i = idx; i < activeStack.length; i++) {
+            cycleMembers.add(activeStack[i])
+          }
+        }
         cycleMembers.add(key)
         return 0
       }
@@ -121,7 +129,8 @@ export function evaluateWorkbookFormulas(
         return cell.value
       }
 
-      activePath.add(key)
+      activeStack.push(key)
+      activeSet.add(key)
       const prevSheet = ctx.currentSheet
       const prevCell = ctx.currentCell
       ctx.currentSheet = resolvedSheet.name
@@ -139,12 +148,12 @@ export function evaluateWorkbookFormulas(
       } finally {
         ctx.currentSheet = prevSheet
         ctx.currentCell = prevCell
-        activePath.delete(key)
+        activeStack.pop()
+        activeSet.delete(key)
       }
 
-      // If a cycle occurred, poison the result and all cycle members to 0
-      if (ctx.hasCycle || cycleMembers.has(key)) {
-        cycleMembers.add(key)
+      // Suffix membership post-check: only actual cycle members are zeroed
+      if (cycleMembers.has(key)) {
         val = 0
       }
 
@@ -152,13 +161,15 @@ export function evaluateWorkbookFormulas(
       memo.set(key, val)
 
       // Once the root of the active chain unwinds, overwrite any partial memo values for all cycle members
-      if (activePath.size === 0 && cycleMembers.size > 0) {
-        for (const memberKey of cycleMembers) {
-          const mCell = cellMap.get(memberKey)
-          if (mCell) mCell.value = 0
-          memo.set(memberKey, 0)
+      if (activeStack.length === 0) {
+        if (cycleMembers.size > 0) {
+          for (const memberKey of cycleMembers) {
+            const mCell = cellMap.get(memberKey)
+            if (mCell) mCell.value = 0
+            memo.set(memberKey, 0)
+          }
+          cycleMembers.clear()
         }
-        cycleMembers.clear()
         ctx.hasCycle = false
       }
 
@@ -180,9 +191,13 @@ export function evaluateWorkbookFormulas(
       const usedMaxCol = sheetMaxCols.get(resolvedSheet.name.toLowerCase()) ?? 0
       const usedMaxRow = sheetMaxRows.get(resolvedSheet.name.toLowerCase()) ?? 0
 
-      // Clamp range to used sheet bounds (empty/blank cells contribute null/0)
-      const clampedMaxCol = Math.min(maxCol, Math.max(minCol, usedMaxCol))
-      const clampedMaxRow = Math.min(maxRow, Math.max(minRow, usedMaxRow))
+      // Only clamp large/unbounded ranges (> 10k cells) to used bounds
+      let clampedMaxCol = maxCol
+      let clampedMaxRow = maxRow
+      if ((maxCol - minCol + 1) * (maxRow - minRow + 1) > 10000) {
+        clampedMaxCol = Math.min(maxCol, Math.max(minCol, usedMaxCol))
+        clampedMaxRow = Math.min(maxRow, Math.max(minRow, usedMaxRow))
+      }
 
       const totalCells = (clampedMaxCol - minCol + 1) * (clampedMaxRow - minRow + 1)
       if (totalCells > 100000) {

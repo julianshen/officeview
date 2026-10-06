@@ -1461,6 +1461,35 @@ describe('xlsx shared formula & workbook context', () => {
     expect(cycleDoc.sheets[0].rows[0].cells[1].value).toBe(0)
     expect(cycleDoc.sheets[0].rows[0].cells[2].value).toBe(100)
 
+    // Dependent-first evaluation order: D1=B1+C1 evaluated before B1/A1
+    // Suffix marking ensures only B1/A1 are zeroed, preserving D1=0+100=100
+    const depFirstDoc: XlsxDocument = {
+      sheets: [
+        {
+          name: 'DepFirst',
+          merges: [],
+          mergeRanges: [],
+          cols: [],
+          rows: [
+            {
+              index: 0,
+              cells: [
+                { ref: 'D1', col: 3, row: 0, value: null, formula: 'B1 + C1', styleIndex: 0 },
+                { ref: 'A1', col: 0, row: 0, value: null, formula: 'B1 + 1', styleIndex: 0 },
+                { ref: 'B1', col: 1, row: 0, value: null, formula: 'A1 + 1', styleIndex: 0 },
+                { ref: 'C1', col: 2, row: 0, value: 100, styleIndex: 0 },
+              ],
+            },
+          ],
+        },
+      ],
+    }
+    evaluateWorkbookFormulas(depFirstDoc)
+    expect(depFirstDoc.sheets[0].rows[0].cells[0].value).toBe(100) // D1 = 0 + 100 = 100
+    expect(depFirstDoc.sheets[0].rows[0].cells[1].value).toBe(0) // A1 in cycle -> 0
+    expect(depFirstDoc.sheets[0].rows[0].cells[2].value).toBe(0) // B1 in cycle -> 0
+    expect(depFirstDoc.sheets[0].rows[0].cells[3].value).toBe(100) // C1 = 100
+
     // 2. Range clamping: SUM(A1:XFD1) clamps to used area and executes in milliseconds
     const largeRangeDoc: XlsxDocument = {
       sheets: [
