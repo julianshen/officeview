@@ -71,7 +71,7 @@ src/xlsx/formula/
 - [x] Test: Parser returns `#NAME?` or syntax error node on malformed input without throwing
 
 ### Phase 3: Evaluator & Standard Functions
-- [ ] Test: Evaluates arithmetic operations with 15-digit rounding and percent (`10 + 50% = 10.5`)
+- [x] Test: Evaluates arithmetic operations with 15-digit rounding and percent (`10 + 50% = 10.5`)
 - [ ] Test: Evaluates string concatenation (`&`) and Excel comparison ordering (number < text < FALSE < TRUE)
 - [ ] Test: Propagates error values through operations (`1 + #DIV/0! = #DIV/0!`)
 - [ ] Test: Evaluates Math functions (SUM, AVERAGE, MIN, MAX, COUNT, COUNTA, ABS, ROUND, INT, MOD, PRODUCT)

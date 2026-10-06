@@ -4,6 +4,7 @@ import { parseXlsx } from '../src/xlsx/parse'
 import { buildXlsx } from '../src/testdata/ooxml-builders'
 import { tokenize } from '../src/xlsx/formula/lexer'
 import { parseFormula } from '../src/xlsx/formula/parser'
+import { evaluateFormula } from '../src/xlsx/formula/evaluator'
 
 describe('xlsx formula fixture enablement', () => {
   test('XlsxCellSpec and buildXlsx support formula <f> and omitting <v>', async () => {
@@ -813,6 +814,40 @@ describe('xlsx formula parser (AST)', () => {
     expect(() => parseFormula(unaryChain8000)).not.toThrow()
   })
 })
+
+describe('xlsx formula evaluator', () => {
+  test('Evaluates arithmetic operations with 15-digit rounding and percent (10 + 50% = 10.5)', () => {
+    // 1. Basic arithmetic
+    expect(evaluateFormula('1 + 2')).toBe(3)
+    expect(evaluateFormula('10 - 4')).toBe(6)
+    expect(evaluateFormula('6 * 7')).toBe(42)
+    expect(evaluateFormula('20 / 4')).toBe(5)
+
+    // 2. 15-digit floating-point precision rounding (avoiding 0.30000000000000004)
+    expect(evaluateFormula('0.1 + 0.2')).toBe(0.3)
+    expect(evaluateFormula('1 - 0.9')).toBe(0.1)
+    expect(evaluateFormula('10 * 0.1')).toBe(1)
+
+    // 3. Percent postfix
+    expect(evaluateFormula('50%')).toBe(0.5)
+    expect(evaluateFormula('10 + 50%')).toBe(10.5)
+    expect(evaluateFormula('50% ^ 2')).toBe(0.25)
+    expect(evaluateFormula('-50%')).toBe(-0.5)
+
+    // 4. Excel unary precedence with exponentiation (-2^2 = 4)
+    expect(evaluateFormula('-2^2')).toBe(4)
+    expect(evaluateFormula('-(2^2)')).toBe(-4)
+    expect(evaluateFormula('2^-2')).toBe(0.25)
+    expect(evaluateFormula('-2^-2')).toBe(0.25)
+    expect(evaluateFormula('2^3^2')).toBe(64) // left-associative in Excel: (2^3)^2 = 8^2 = 64
+
+    // 5. Division by zero and invalid powers
+    expect(evaluateFormula('10 / 0')).toBe('#DIV/0!')
+    expect(evaluateFormula('0 / 0')).toBe('#DIV/0!')
+    expect(evaluateFormula('0 ^ 0')).toBe('#NUM!')
+  })
+})
+
 
 
 

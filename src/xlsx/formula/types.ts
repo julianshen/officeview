@@ -51,6 +51,15 @@ export type FormulaError =
   | '#N/A'
   | '#NULL!'
 
+export type FormulaValue = number | string | boolean | null | FormulaError
+
+export interface EvaluationContext {
+  getCellValue?(sheet: string | undefined, col: number, row: number): FormulaValue
+  getRangeValues?(sheet: string | undefined, from: CellRef, to: CellRef): FormulaValue[][]
+  currentSheet?: string
+  visited?: Set<string>
+}
+
 export type BinaryOp =
   | '+'
   | '-'
