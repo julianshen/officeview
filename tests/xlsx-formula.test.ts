@@ -285,6 +285,25 @@ describe('formula lexer', () => {
       { type: 'eof', value: '' },
     ])
   })
+
+  test('Tokenizer strips _xlfn. function prefix and normalizes function names case-insensitively', () => {
+    const t1 = tokenize('=_xlfn.CONCAT(A1, "test")')
+    expect(t1[0]).toEqual({ type: 'ident', value: 'CONCAT' })
+
+    const t2 = tokenize('=_xlfn.concat(A1, B1)')
+    expect(t2[0]).toEqual({ type: 'ident', value: 'CONCAT' })
+
+    const t3 = tokenize('=_xlfn.STDEV.S(A1:B10)')
+    expect(t3[0]).toEqual({ type: 'ident', value: 'STDEV.S' })
+
+    const t4 = tokenize('=_xlfn._xlws.FILTER(A1:B10, A1:A10>0)')
+    expect(t4[0]).toEqual({ type: 'ident', value: 'FILTER' })
+
+    const t5 = tokenize('=sum(A1:B10) + Average(C1:C10)')
+    expect(t5[0]).toEqual({ type: 'ident', value: 'SUM' })
+    expect(t5[5]).toEqual({ type: 'ident', value: 'AVERAGE' })
+  })
 })
+
 
 

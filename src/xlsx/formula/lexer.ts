@@ -350,15 +350,17 @@ export function tokenize(input: string): Token[] {
 
       const identMatch = /^([A-Za-z_][A-Za-z0-9_.]*)/.exec(rest)
       if (identMatch) {
-        const ident = identMatch[1]
-        if (ident.toUpperCase() === 'TRUE') {
+        const fullIdent = identMatch[1]
+        const cleanIdent = fullIdent.replace(/^_xlfn\.(_xlws\.)?/i, '')
+        const upper = cleanIdent.toUpperCase()
+        if (upper === 'TRUE') {
           tokens.push({ type: 'boolean', value: 'TRUE' })
-        } else if (ident.toUpperCase() === 'FALSE') {
+        } else if (upper === 'FALSE') {
           tokens.push({ type: 'boolean', value: 'FALSE' })
         } else {
-          tokens.push({ type: 'ident', value: ident })
+          tokens.push({ type: 'ident', value: upper })
         }
-        i += ident.length
+        i += fullIdent.length
         continue
       }
     }
