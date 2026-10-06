@@ -7,12 +7,36 @@ export interface DrawingTextStyle {
   color?: string
   /** Explicit DrawingML a:noFill suppresses glyph paint while retaining logical text. */
   noFill?: boolean
+  /**
+   * WordArt fill. Absent means the flat `color` above. Gradient/pattern never
+   * affect advances or recording — paint-only.
+   */
+  textFill?: { kind: 'gradient'; stops: Array<{ position: number; color: string }>; angle: number }
+    | { kind: 'pattern'; preset: PatternPreset; fg: string; bg: string }
+  /** WordArt outline: stroked centered on the glyph edge after the fill. */
+  textOutline?: { color: string; widthPx: number }
+  /**
+   * WordArt outer shadow. Offsets follow canvas CTM semantics in rotated
+   * frames; Word-parity of shadow direction there is a validation item.
+   */
+  textShadow?: { color: string; blurPx: number; offsetX: number; offsetY: number }
   fontFamily?: string
   fontFamilyEastAsia?: string
   fontFamilyComplexScript?: string
   characterSpacingPt?: number
   language?: string
 }
+/**
+ * WordArt pattern presets paint can tile (diagonal families and grids).
+ * Parse accepts exactly this set and defers the rest with a diagnostic;
+ * keep both sides on this list.
+ */
+export const SUPPORTED_PATTERN_PRESETS: ReadonlySet<string> = new Set([
+  'dkUpDiag', 'dkDnDiag', 'ltUpDiag', 'ltDnDiag', 'smGrid', 'lgGrid',
+])
+/** Type-enforced twin of the set above: adding a preset here without
+ * extending paintPatternTile is a compile error, not a silent grid. */
+export type PatternPreset = 'dkUpDiag' | 'dkDnDiag' | 'ltUpDiag' | 'ltDnDiag' | 'smGrid' | 'lgGrid'
 export interface DrawingTextRun extends DrawingTextStyle {
   text: string
   directProperties?: DrawingTextStyle

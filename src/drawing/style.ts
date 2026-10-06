@@ -1,7 +1,7 @@
 /** Serializable DrawingML color, theme and paint models shared by Office adapters. */
 import { attrs, getChild, getChildren, orderedChildren, parseXmlOrdered, type XmlNode } from '../core/xml'
 export interface DrawingIssue {
-  kind: 'invalid-color' | 'invalid-color-transform' | 'unsupported-color-transform' | 'invalid-fill' | 'unsupported-fill' | 'unsupported-gradient' | 'invalid-line' | 'unsupported-line' | 'missing-theme-style' | 'unsupported-effect' | 'unsupported-3d' | 'invalid-theme' | 'invalid-paint'
+  kind: 'invalid-color' | 'invalid-color-transform' | 'unsupported-color-transform' | 'invalid-fill' | 'unsupported-fill' | 'unsupported-gradient' | 'invalid-line' | 'unsupported-line' | 'missing-theme-style' | 'unsupported-effect' | 'unsupported-3d' | 'invalid-theme' | 'invalid-paint' | 'unsupported-text-appearance' | 'unsupported-text-warp'
   message: string
   feature?: string
   pathIndex?: number

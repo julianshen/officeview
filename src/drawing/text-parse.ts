@@ -1,7 +1,8 @@
 /** DrawingML text metadata shared by slides, cached diagrams, and sheet drawings. */
 import { attrs, getChildren, orderedChildren, textOf, type XmlNode } from '../core/xml'
 import { parseDrawingColor, resolveDrawingColor, type DrawingColor, type ThemeContext } from './style'
-import type { DrawingTextParagraph as PptxParagraph, DrawingTextBody as PptxTextBody, DrawingTextRun as PptxTextRun, DrawingTextSpacing as PptxTextSpacing, DrawingTextStyle as PptxTextStyle, DrawingTabStop as PptxTabStop, TextDirection } from './text'
+import type { DrawingTextParagraph as PptxParagraph, DrawingTextBody as PptxTextBody, DrawingTextRun as PptxTextRun, DrawingTextSpacing as PptxTextSpacing, DrawingTextStyle as PptxTextStyle, DrawingTabStop as PptxTabStop, TextDirection, PatternPreset } from './text'
+import { SUPPORTED_PATTERN_PRESETS } from './text'
 
 const number = (v: string | undefined, fallback = 0): number => v !== undefined && Number.isFinite(Number(v)) ? Number(v) : fallback
 function align(v: string | undefined): PptxParagraph['align'] {
@@ -11,7 +12,8 @@ function textCssColor(color: DrawingColor): string {
   const rgb = [color.r, color.g, color.b]
   return color.a < 1 ? `rgba(${rgb.join(',')},${color.a})` : `#${rgb.map(v => v.toString(16).padStart(2, '0')).join('').toUpperCase()}`
 }
-function style(node: XmlNode | undefined, theme?: ThemeContext): PptxTextStyle {
+export interface TextAppearanceIssue { kind: 'unsupported-text-appearance'; feature: string; message: string }
+function style(node: XmlNode | undefined, theme?: ThemeContext, issues: TextAppearanceIssue[] = []): PptxTextStyle {
   const a = attrs(node), out: PptxTextStyle = {}
   if (a.b !== undefined) out.bold = a.b === '1' || a.b === 'true'
   if (a.i !== undefined) out.italic = a.i === '1' || a.i === 'true'
@@ -27,6 +29,94 @@ function style(node: XmlNode | undefined, theme?: ThemeContext): PptxTextStyle {
   else if (getChildren(node, 'solidFill').length) out.noFill = false
   const color = resolveDrawingColor(parseDrawingColor(getChildren(node, 'solidFill')[0]), theme)
   if (color) out.color = textCssColor(color)
+  // WordArt gradient fill: linear stops resolve like solid colors. Other
+  // gradient forms fall back to the flat color with a diagnostic.
+  const grad = getChildren(node, 'gradFill')[0]
+  if (grad) {
+    const stops = getChildren(getChildren(grad, 'gsLst')[0], 'gs')
+      .map(g => {
+        const c = resolveDrawingColor(parseDrawingColor(g), theme)
+        const pos = attrs(g).pos
+        return c && pos !== undefined ? { position: number(pos) / 100000, color: textCssColor(c) } : undefined
+      })
+      .filter((s): s is { position: number; color: string } => !!s)
+    const lin = getChildren(grad, 'lin')[0]
+    const pathGrad = getChildren(grad, 'path')[0]
+    if (pathGrad) {
+      issues.push({ kind: 'unsupported-text-appearance', feature: 'gradFill:path', message: 'WordArt path gradient is deferred; using first stop color' })
+      if (stops.length > 0 && !out.color) out.color = stops[0].color
+    } else if (stops.length >= 2 && lin) {
+      const ang = attrs(lin).ang
+      out.textFill = { kind: 'gradient', stops, angle: ang !== undefined ? (number(ang) * Math.PI) / 10800000 : 0 }
+    } else {
+      issues.push({ kind: 'unsupported-text-appearance', feature: lin ? 'gradFill' : 'gradFill:no-linear', message: 'WordArt gradient needs 2+ stops and a linear vector; using flat color' })
+    }
+  }
+  // WordArt picture/pattern fill: supported presets tile in paint; anything
+  // else (including blip picture fills) falls back to the flat color.
+  const patt = getChildren(node, 'pattFill')[0]
+  if (patt) {
+    const preset = attrs(patt).prst ?? ''
+    const fg = resolveDrawingColor(parseDrawingColor(getChildren(patt, 'fgClr')[0]), theme)
+    const bg = resolveDrawingColor(parseDrawingColor(getChildren(patt, 'bgClr')[0]), theme)
+    if (SUPPORTED_PATTERN_PRESETS.has(preset) && fg && bg) {
+      out.textFill = { kind: 'pattern', preset: preset as PatternPreset, fg: textCssColor(fg), bg: textCssColor(bg) }
+    } else {
+      issues.push({ kind: 'unsupported-text-appearance', feature: `pattFill:${preset || 'missing'}`,
+        message: 'WordArt pattern preset is deferred; using flat color' })
+    }
+  } else if (getChildren(node, 'blipFill').length) {
+    issues.push({ kind: 'unsupported-text-appearance', feature: 'blipFill', message: 'WordArt picture fill is deferred; using flat color' })
+  }
+  // An explicit solid fill on this element clears any inherited gradient or
+  // pattern (spread merge would otherwise keep the parent's textFill).
+  if (getChildren(node, 'solidFill').length && !grad && !patt && !getChildren(node, 'blipFill').length) {
+    out.textFill = undefined
+  }
+  // A direct fill of any kind clears an inherited noFill (most specific wins);
+  // a same-element noFill still suppresses.
+  if (!getChildren(node, 'noFill').length &&
+    (grad || patt || getChildren(node, 'solidFill').length || getChildren(node, 'blipFill').length)) {
+    out.noFill = false
+  }
+  // WordArt outline: solid-color stroke centered on the glyph edge. An
+  // explicit ln replaces any inherited outline: noFill clears it silently,
+  // malformed widths diagnose and clear, anything else unresolvable
+  // diagnoses and clears.
+  const ln = getChildren(node, 'ln')[0]
+  if (ln) {
+    const wRaw = attrs(ln).w
+    const wNum = wRaw !== undefined ? number(wRaw, NaN) : undefined
+    const lineColor = resolveDrawingColor(parseDrawingColor(getChildren(ln, 'solidFill')[0]), theme)
+    if (lineColor && wNum !== undefined && Number.isFinite(wNum) && wNum > 0) {
+      out.textOutline = { color: textCssColor(lineColor), widthPx: (wNum * 96) / (12700 * 72) }
+    } else if (!getChildren(ln, 'noFill').length) {
+      issues.push({ kind: 'unsupported-text-appearance', feature: 'ln', message: 'WordArt outline needs a finite positive width and solid color; skipped' })
+    }
+    if (!out.textOutline) out.textOutline = undefined
+  }
+  // WordArt outer shadow: dist/dir offset, optional blur radius. Alignment,
+  // rotate-with-shape, scale (@sx/@sy) and skew (@kx/@ky) are deferred
+  // (documented limitations).
+  const shadow = getChildren(getChildren(node, 'effectLst')[0], 'outerShdw')[0]
+  if (shadow) {
+    const sa = attrs(shadow)
+    const shadowColor = resolveDrawingColor(parseDrawingColor(shadow), theme)
+    if (shadowColor) {
+      const distPx = number(sa.dist) / 9525
+      const dir = sa.dir !== undefined ? (number(sa.dir) * Math.PI) / 10800000 : 0
+      out.textShadow = {
+        color: textCssColor(shadowColor),
+        // Negative radii are invalid: clamp to a hard shadow. Huge radii
+        // pass through; the canvas clamps them (documented limitation).
+        blurPx: sa.bluRad !== undefined ? Math.max(0, number(sa.bluRad) / 9525) : 0,
+        offsetX: Math.cos(dir) * distPx,
+        offsetY: Math.sin(dir) * distPx,
+      }
+    } else {
+      issues.push({ kind: 'unsupported-text-appearance', feature: 'outerShdw', message: 'WordArt shadow needs a resolvable color; skipped' })
+    }
+  }
   return out
 }
 function spacing(node: XmlNode | undefined): PptxTextSpacing | undefined {
@@ -67,7 +157,7 @@ export interface InheritedTextLayer {
 const directions = new Set<TextDirection>(['horz', 'vert', 'vert270', 'wordArtVert', 'eaVert', 'mongolianVert', 'wordArtVertRtl'])
 
 export interface ParsedDrawingTextBody extends PptxTextBody {
-  diagnostics?: Array<{ kind: 'unsupported-text-alignment'; feature: string; message: string }>
+  diagnostics?: Array<{ kind: 'unsupported-text-alignment'; feature: string; message: string } | TextAppearanceIssue>
 }
 
 export function parseTextBody(txBody: XmlNode, theme?: ThemeContext, defaults?: XmlNode, fontDefaults: PptxTextStyle = {}, inheritedLayers: readonly InheritedTextLayer[] = []): ParsedDrawingTextBody {
@@ -90,12 +180,13 @@ export function parseTextBody(txBody: XmlNode, theme?: ThemeContext, defaults?: 
     }
     propertyLayers.push(...listNodes(list).map(node => [node, 'list'] as [XmlNode | undefined, 'list']), [pPr, 'paragraph'])
     let inherited = { ...fontDefaults }
+    const appearanceIssues: TextAppearanceIssue[] = []
     const propertySources: NonNullable<PptxTextRun['propertySources']> = {}
     for (const key of Object.keys(fontDefaults) as Array<keyof PptxTextStyle>) propertySources[key] = 'default'
     const para: PptxParagraph = { runs: [], align: 'left', level }
     for (const [node, origin] of propertyLayers) {
       Object.assign(para, paragraphProperties(node))
-      const values = style(getChildren(node, 'defRPr')[0], theme)
+      const values = style(getChildren(node, 'defRPr')[0], theme, appearanceIssues)
       inherited = { ...inherited, ...values }
       for (const key of Object.keys(values) as Array<keyof PptxTextStyle>) propertySources[key] = origin
     }
@@ -104,16 +195,17 @@ export function parseTextBody(txBody: XmlNode, theme?: ThemeContext, defaults?: 
       body.diagnostics.push({ kind: 'unsupported-text-alignment', feature: para.sourceAlign, message: `DrawingML alignment ${para.sourceAlign} is deferred; using left alignment` })
     }
     para.defaultProperties = inherited
-    para.endProperties = style(getChildren(p, 'endParaRPr')[0], theme)
+    para.endProperties = style(getChildren(p, 'endParaRPr')[0], theme, appearanceIssues)
     for (const [name, node] of orderedChildren(p)) {
       if (name !== 'r' && name !== 'br' && name !== 'fld') continue
-      const directProperties = style(getChildren(node, 'rPr')[0], theme)
+      const directProperties = style(getChildren(node, 'rPr')[0], theme, appearanceIssues)
       const end = name === 'br' ? para.endProperties : {}
       const origins = { ...propertySources }
       for (const key of Object.keys(end) as Array<keyof PptxTextStyle>) origins[key] = 'end'
       for (const key of Object.keys(directProperties) as Array<keyof PptxTextStyle>) origins[key] = 'run'
       para.runs.push({ ...inherited, ...end, ...directProperties, text: name === 'br' ? '\n' : textOf(getChildren(node, 't')[0]), directProperties, propertySources: origins })
     }
+    if (appearanceIssues.length) body.diagnostics = [...(body.diagnostics ?? []), ...appearanceIssues]
     body.paragraphs.push(para)
   }
   return body
