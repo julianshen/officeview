@@ -22,6 +22,131 @@ export function trackingEligible(cluster: string): boolean {
 // Keep this paint string separate from the source recorded for search/copy.
 const canvasText = (text: string): string => text.replace(/[\t\n\f\r]/g, ' ')
 
+export interface AppearanceBox { x: number; y: number; width: number; height: number }
+/**
+ * Paint one pattern tile (tile-sized ctx). Diagonal families draw 45-degree
+ * fg lines over bg; grids draw fg rules. Deterministic geometry so tiles
+ * repeat seamlessly.
+ */
+export function paintPatternTile(ctx: CanvasRenderingContext2D, preset: string, fg: string, bg: string, size: number): void {
+  ctx.save()
+  try {
+    ctx.fillStyle = bg
+    ctx.fillRect(0, 0, size, size)
+    ctx.strokeStyle = fg
+    if (preset.endsWith('UpDiag') || preset.endsWith('DnDiag')) {
+      const up = preset.endsWith('UpDiag')
+      ctx.lineWidth = preset.startsWith('dk') ? Math.max(2, size / 3) : Math.max(1, size / 8)
+      ctx.beginPath()
+      for (const o of [-size, 0, size]) {
+        if (up) { ctx.moveTo(o, size); ctx.lineTo(o + size, 0) }
+        else { ctx.moveTo(o, 0); ctx.lineTo(o + size, size) }
+      }
+      ctx.stroke()
+    } else {
+      const cell = preset === 'smGrid' ? size / 2 : size
+      ctx.lineWidth = Math.max(1, size / 8)
+      ctx.beginPath()
+      for (let k = 0; k <= size + 0.5; k += cell) {
+        ctx.moveTo(k, 0); ctx.lineTo(k, size)
+        ctx.moveTo(0, k); ctx.lineTo(size, k)
+      }
+      ctx.stroke()
+    }
+  } finally {
+    ctx.restore()
+  }
+}
+function makePatternTile(size: number): { image: CanvasImageSource; ctx: CanvasRenderingContext2D } | undefined {
+  if (typeof OffscreenCanvas !== 'undefined') {
+    const canvas = new OffscreenCanvas(size, size)
+    const ctx = canvas.getContext('2d')
+    if (ctx) return { image: canvas, ctx: ctx as unknown as CanvasRenderingContext2D }
+  }
+  if (typeof document !== 'undefined') {
+    const canvas = document.createElement('canvas')
+    canvas.width = canvas.height = size
+    const ctx = canvas.getContext('2d')
+    if (ctx) return { image: canvas, ctx }
+  }
+  // No tile surface (e.g. node-canvas): callers fall back to the fg solid.
+  return undefined
+}
+/** Tile canvases are ctx-independent and shared across paints, bounded so
+ * file-controlled colours cannot grow the process cache without limit. */
+const patternTiles = new Map<string, CanvasImageSource>()
+const MAX_PATTERN_TILES = 64
+function patternTile(preset: string, fg: string, bg: string): CanvasImageSource | undefined {
+  const key = `${preset}\n${fg}\n${bg}`
+  let tile = patternTiles.get(key)
+  if (tile) return tile
+  const made = makePatternTile(8)
+  if (!made) return undefined
+  paintPatternTile(made.ctx, preset, fg, bg, 8)
+  if (patternTiles.size >= MAX_PATTERN_TILES) {
+    const oldest = patternTiles.keys().next()
+    if (!oldest.done) patternTiles.delete(oldest.value)
+  }
+  patternTiles.set(key, made.image)
+  return made.image
+}
+function resolveTextFill(
+  ctx: CanvasRenderingContext2D,
+  style: PptxTextStyle,
+  box: AppearanceBox,
+  patternCache: Map<string, CanvasPattern | null>,
+): string | CanvasGradient | CanvasPattern {
+  const fill = style.textFill
+  if (fill?.kind === 'gradient' && fill.stops.length >= 2) {
+    const dx = Math.cos(fill.angle), dy = Math.sin(fill.angle)
+    const cx = box.x + box.width / 2, cy = box.y + box.height / 2
+    const center = cx * dx + cy * dy
+    const dots = [box.x, box.x + box.width].flatMap(px => [box.y, box.y + box.height].map(py => px * dx + py * dy))
+    const lo = Math.min(...dots) - center, hi = Math.max(...dots) - center
+    const g = ctx.createLinearGradient(cx + dx * lo, cy + dy * lo, cx + dx * hi, cy + dy * hi)
+    for (const s of fill.stops) g.addColorStop(Math.min(1, Math.max(0, s.position)), s.color)
+    return g
+  }
+  if (fill?.kind === 'pattern') {
+    const key = `${fill.preset}\n${fill.fg}\n${fill.bg}`
+    let pat = patternCache.get(key)
+    if (pat === undefined) {
+      const tile = patternTile(fill.preset, fill.fg, fill.bg)
+      // Defensive: some hosts hand out canvas elements their own
+      // createPattern rejects (e.g. jsdom stubs) — fall back to fg solid.
+      try {
+        pat = tile ? ctx.createPattern(tile, 'repeat') : null
+      } catch {
+        pat = null
+      }
+      patternCache.set(key, pat)
+    }
+    if (pat) return pat
+    return fill.fg
+  }
+  return style.color ?? '#000000'
+}
+/**
+ * Shadow state is assigned on every painted segment (transparent default),
+ * so a shadowed run can never leak into its neighbors. Offsets follow canvas
+ * CTM semantics in rotated frames; Word-parity of shadow direction there is a
+ * validation item, not asserted here.
+ */
+function applyTextShadow(ctx: CanvasRenderingContext2D, style: PptxTextStyle): void {
+  const sh = style.textShadow
+  if (!sh) {
+    ctx.shadowColor = 'rgba(0,0,0,0)'
+    ctx.shadowBlur = 0
+    ctx.shadowOffsetX = 0
+    ctx.shadowOffsetY = 0
+    return
+  }
+  ctx.shadowColor = sh.color
+  ctx.shadowBlur = sh.blurPx
+  ctx.shadowOffsetX = sh.offsetX
+  ctx.shadowOffsetY = sh.offsetY
+}
+
 /** The same resolved face and tracking settings are used for measuring and painting.
  * Resolvers return either a bare family (quoted here) or a full CSS stack such
  * as `"Liter", sans-serif` (used verbatim, never quoted as one family). */
@@ -66,6 +191,7 @@ export function paintTextBody(body: PptxTextBody, ctx: CanvasRenderingContext2D,
     }
     const measureLocal = createLocalTextMeasurer(ctx)
     const measure = createTextBodyMeasurer(ctx, resolveFont)
+    const patternCache = new Map<string, CanvasPattern | null>()
     const layout = options?.layout ?? layoutTextBody(body, w, h, measure, theme)
     // A fresh identity for each invocation prevents reused legacy paragraphs or
     // equal-height table cells from merging into one source text scope.
@@ -80,6 +206,9 @@ export function paintTextBody(body: PptxTextBody, ctx: CanvasRenderingContext2D,
       if (line.bullet && !bulletStyle.noFill && (visibleSegment || !line.segments.length)) {
         const style = bulletStyle
         settings(ctx, style, resolveFont); ctx.fillStyle = style.color ?? '#000000'
+        // Bullets carry no shadow model: reset state so a shadowed run on an
+        // earlier line can never leak into them.
+        applyTextShadow(ctx, {})
         // Bullet glyphs are presentation, not part of the source text string.
         if (!record) ctx.fillText(line.bullet, x + line.x - measureLocal(line.bullet).width - 4, y + line.baseline)
       }
@@ -95,7 +224,6 @@ export function paintTextBody(body: PptxTextBody, ctx: CanvasRenderingContext2D,
         // follows visible text, so endParaRPr cannot enlarge hit/selection bands.
         const recordedStyle = segment.text === '\n' ? line.segments.find(s => s.text !== '\n')?.style ?? segment.style : segment.style
         const nativeTracking = settings(ctx, recordedStyle, resolveFont)
-        ctx.fillStyle = segment.style.color ?? '#000000'
         if (segment.transform) {
           const t = segment.transform
           ctx.save()
@@ -108,19 +236,48 @@ export function paintTextBody(body: PptxTextBody, ctx: CanvasRenderingContext2D,
             run: segment.runIndex, graphemeBoundaries: segment.graphemeBoundaries,
             ...(line.logicalLineIndex === undefined ? {} : { line: line.logicalLineIndex, flow: 'vertical' as const }) }
           if (record) { record(segment.text, sx, sy, segment.width, logical); continue }
-          if (segment.style.noFill) continue
+          // WordArt appearance never adds records: one logical record per run
+          // regardless of fill/outline/shadow passes. Outline-only (noFill)
+          // runs still stroke.
+          const fillIt = !segment.style.noFill
+          const outline = segment.style.textOutline
+          if (!fillIt && !outline) continue
           if (/^[\n\t]$/.test(segment.text)) continue
+          applyTextShadow(ctx, segment.style)
+          const size = segment.style.fontSizePt ?? 12
+          // Gradient boxes use measured glyph metrics (Q1); spaces and null
+          // metrics fall back to the 0.8/0.2 em box.
+          const paintOne = (text: string, px: number, py: number, wdt: number, ascent: number, descent: number): void => {
+            const asc = ascent > 0 ? ascent : size * 0.8, desc = descent > 0 ? descent : size * 0.2
+            if (fillIt) {
+              ctx.fillStyle = resolveTextFill(ctx, segment.style,
+                { x: px, y: py - asc, width: Math.max(wdt, 0.5), height: asc + desc }, patternCache)
+              ctx.fillText(text, px, py)
+            }
+            if (outline) {
+              ctx.strokeStyle = outline.color
+              ctx.lineWidth = Math.max(0.5, outline.widthPx)
+              ctx.lineJoin = 'round'
+              ctx.strokeText(text, px, py)
+            }
+          }
           const tracking = !nativeTracking && needsContextualShaping(segment.text) ? 0 : (segment.style.characterSpacingPt ?? 0) * 96 / 72
-          if (nativeTracking || tracking === 0) ctx.fillText(canvasText(segment.text), sx, sy)
-          else {
+          // Per-glyph gradients in the tracking path are inherent: each glyph
+          // owns its box (P1). The path is rare (no native letterSpacing plus
+          // contextual shaping); the common path gradients once per segment.
+          if (nativeTracking || tracking === 0) {
+            const gm = measureLocal(canvasText(segment.text))
+            paintOne(canvasText(segment.text), sx, sy, segment.width, gm.actualBoundingBoxAscent, gm.actualBoundingBoxDescent)
+          } else {
             let prefix = '', index = 0
             for (const g of graphemes(segment.text)) {
               const glyph = canvasText(g.text), through = prefix + glyph
               // Include pair kerning with the preceding prefix in this glyph's
               // origin, matching the whole-string metrics used during layout.
-              const advance = measureLocal(through).width - measureLocal(glyph).width
+              const gm = measureLocal(through), gw = measureLocal(glyph)
+              const advance = gm.width - gw.width
               if (trackingEligible(g.text)) {
-                ctx.fillText(glyph, sx + advance + index * tracking, sy)
+                paintOne(glyph, sx + advance + index * tracking, sy, gw.width, gw.actualBoundingBoxAscent, gw.actualBoundingBoxDescent)
                 index++
               }
               prefix = through
