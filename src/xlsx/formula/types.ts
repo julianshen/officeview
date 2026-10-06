@@ -51,6 +51,20 @@ export type FormulaError =
   | '#N/A'
   | '#NULL!'
 
+export type BinaryOp =
+  | '+'
+  | '-'
+  | '*'
+  | '/'
+  | '^'
+  | '&'
+  | '='
+  | '<>'
+  | '<'
+  | '<='
+  | '>'
+  | '>='
+
 export type AstNode =
   | { type: 'number'; value: number }
   | { type: 'string'; value: string }
@@ -58,7 +72,7 @@ export type AstNode =
   | { type: 'cell'; ref: CellRef }
   | { type: 'range'; ref: RangeRef }
   | { type: 'unary'; op: '+' | '-' | '%'; expr: AstNode }
-  | { type: 'binary'; op: string; left: AstNode; right: AstNode }
+  | { type: 'binary'; op: BinaryOp; left: AstNode; right: AstNode }
   | { type: 'call'; name: string; args: AstNode[] }
   | { type: 'empty' }
   | { type: 'error'; error: string }

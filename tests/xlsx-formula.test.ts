@@ -751,6 +751,59 @@ describe('xlsx formula parser (AST)', () => {
     expect(() => parseFormula('=,,')).not.toThrow()
     expect(() => parseFormula('====')).not.toThrow()
   })
+
+  test('Parser addresses peer review hardening (recursion depth limit, error offsets, token validation, error operand preservation)', () => {
+    // 1. Recursion depth guard against stack overflow (RangeError)
+    const deepParens4000 = '=' + '('.repeat(4000) + '1' + ')'.repeat(4000)
+    let deepErr: any
+    expect(() => {
+      deepErr = parseFormula(deepParens4000)
+    }).not.toThrow()
+    expect(deepErr.type).toBe('error')
+    expect(deepErr.error).toMatch(/#NAME\? Formula exceeds maximum nesting depth/)
+
+    // Deep legal nesting (50 levels) parses cleanly
+    const legalParens50 = '=' + '('.repeat(50) + '42' + ')'.repeat(50)
+    expect(parseFormula(legalParens50)).toEqual({ type: 'number', value: 42 })
+
+    // 2. Token start offsets wired into error messages
+    const errUnknown = parseFormula('=FOOBAR')
+    expect((errUnknown as any).error).toBe('#NAME? Unknown identifier "FOOBAR" at position 0')
+
+    const errMissingParen = parseFormula('=(1 + 2')
+    expect((errMissingParen as any).error).toBe('#NAME? Missing closing parenthesis for "(" at position 0')
+
+    const errFnMissingParen = parseFormula('=SUM(A1, B1')
+    expect((errFnMissingParen as any).error).toBe('#NAME? Missing closing parenthesis for function SUM at position 10')
+
+    const errFnMissingComma = parseFormula('=SUM(A1 B1)')
+    expect((errFnMissingComma as any).error).toBe('#NAME? Expected comma or closing parenthesis in function SUM at position 7')
+
+    const errUnexpected = parseFormula('=1 + 2 3')
+    expect((errUnexpected as any).error).toBe('#NAME? Unexpected token "3" at position 6')
+
+    // 3. Hand-made raw token validation for cellRef/rangeRef
+    const strippedCell = parseFormula([{ type: 'cell', value: 'A1', start: 0 }])
+    expect(strippedCell).toEqual({ type: 'error', error: '#REF! Invalid cell reference at position 0' })
+
+    const strippedRange = parseFormula([{ type: 'range', value: 'A1:B2', start: 0 }])
+    expect(strippedRange).toEqual({ type: 'error', error: '#REF! Invalid range reference at position 0' })
+
+    // 4. Error literals as operands in binary expressions preserve AST tree
+    expect(parseFormula('1 + #DIV/0!')).toEqual({
+      type: 'binary',
+      op: '+',
+      left: { type: 'number', value: 1 },
+      right: { type: 'error', error: '#DIV/0!' },
+    })
+
+    expect(parseFormula('=#DIV/0! + 1')).toEqual({
+      type: 'binary',
+      op: '+',
+      left: { type: 'error', error: '#DIV/0!' },
+      right: { type: 'number', value: 1 },
+    })
+  })
 })
 
 

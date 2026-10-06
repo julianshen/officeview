@@ -41,6 +41,7 @@ src/xlsx/formula/
 4. **Excel Operator Precedence**: Unary minus binds tighter than exponentiation (`-2^2 = 4`).
 5. **15-Digit Floating Precision**: Numerical results are rounded to 15 significant digits to avoid floating-point artifacts like `0.1 + 0.2 = 0.30000000000000004`.
 6. **Deliberately Out of Scope**: `xl/calcChain.xml` (recalc-order hint), dynamic array spilling/`LAMBDA`, nondeterministic functions (`RAND`, `NOW`, `TODAY` return `#NAME?`), external workbook links (`[1]Sheet1!A1` return `#REF!`).
+7. **Reversed Range Normalization**: Reversed ranges (e.g. `B10:A1`) are parsed faithfully as authored and normalized to standard bounding boxes (`minCol..maxCol`, `minRow..maxRow`) during range resolution and evaluation in Phase 3.
 
 ---
 
