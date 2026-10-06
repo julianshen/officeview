@@ -114,5 +114,28 @@ describe('formula lexer', () => {
     ])
     expect(tokens[0].numValue).toBe(10)
   })
+
+  test('Tokenizer handles string literals with escaped quotes and comparison operators (=, <>, <, <=, >, >=, &)', async () => {
+    const { tokenize } = await import('../src/xlsx/formula/lexer')
+    const tokens = tokenize('="Hello ""World""" & "!" = "foo" <> "bar" <= 10 >= 5 < 20 > 1')
+    expect(tokens.map(t => ({ type: t.type, value: t.value }))).toEqual([
+      { type: 'string', value: 'Hello "World"' },
+      { type: 'op', value: '&' },
+      { type: 'string', value: '!' },
+      { type: 'op', value: '=' },
+      { type: 'string', value: 'foo' },
+      { type: 'op', value: '<>' },
+      { type: 'string', value: 'bar' },
+      { type: 'op', value: '<=' },
+      { type: 'number', value: '10' },
+      { type: 'op', value: '>=' },
+      { type: 'number', value: '5' },
+      { type: 'op', value: '<' },
+      { type: 'number', value: '20' },
+      { type: 'op', value: '>' },
+      { type: 'number', value: '1' },
+      { type: 'eof', value: '' },
+    ])
+  })
 })
 

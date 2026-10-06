@@ -83,6 +83,65 @@ export function tokenize(input: string): Token[] {
       continue
     }
 
+    // String literal: double-quoted, "" is escaped double quote
+    if (ch === '"') {
+      i++ // skip opening quote
+      let val = ''
+      while (i < len) {
+        if (str[i] === '"') {
+          if (i + 1 < len && str[i + 1] === '"') {
+            val += '"'
+            i += 2
+          } else {
+            i++ // skip closing quote
+            break
+          }
+        } else {
+          val += str[i]
+          i++
+        }
+      }
+      tokens.push({ type: 'string', value: val })
+      continue
+    }
+
+    // Comparison operators and concat
+    if (ch === '<') {
+      if (i + 1 < len && str[i + 1] === '>') {
+        tokens.push({ type: 'op', value: '<>' })
+        i += 2
+        continue
+      }
+      if (i + 1 < len && str[i + 1] === '=') {
+        tokens.push({ type: 'op', value: '<=' })
+        i += 2
+        continue
+      }
+      tokens.push({ type: 'op', value: '<' })
+      i++
+      continue
+    }
+    if (ch === '>') {
+      if (i + 1 < len && str[i + 1] === '=') {
+        tokens.push({ type: 'op', value: '>=' })
+        i += 2
+        continue
+      }
+      tokens.push({ type: 'op', value: '>' })
+      i++
+      continue
+    }
+    if (ch === '=') {
+      tokens.push({ type: 'op', value: '=' })
+      i++
+      continue
+    }
+    if (ch === '&') {
+      tokens.push({ type: 'op', value: '&' })
+      i++
+      continue
+    }
+
     // Unknown single char fallback
     tokens.push({ type: 'op', value: ch })
     i++
