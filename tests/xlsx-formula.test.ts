@@ -995,6 +995,38 @@ describe('xlsx formula evaluator', () => {
     expect(evaluateFormula('NOT(0)')).toBe(true)
     expect(evaluateFormula('NOT(1)')).toBe(false)
   })
+
+  test('Evaluates Text functions (CONCAT, LEFT, RIGHT, MID, LEN, TRIM, UPPER, LOWER)', () => {
+    // 1. CONCAT
+    expect(evaluateFormula('CONCAT("A", "B", "C")')).toBe('ABC')
+    expect(evaluateFormula('CONCAT("Val: ", 42, " ", TRUE)')).toBe('Val: 42 TRUE')
+
+    // 2. LEFT and RIGHT
+    expect(evaluateFormula('LEFT("Spreadsheet", 6)')).toBe('Spread')
+    expect(evaluateFormula('LEFT("Hello")')).toBe('H') // default num_chars = 1
+    expect(evaluateFormula('RIGHT("Spreadsheet", 5)')).toBe('sheet')
+    expect(evaluateFormula('RIGHT("Hello")')).toBe('o') // default num_chars = 1
+    expect(evaluateFormula('LEFT("ABC", 10)')).toBe('ABC')
+    expect(evaluateFormula('RIGHT("ABC", 10)')).toBe('ABC')
+
+    // 3. MID (1-based index)
+    expect(evaluateFormula('MID("Spreadsheet", 7, 5)')).toBe('sheet')
+    expect(evaluateFormula('MID("Spreadsheet", 8, 4)')).toBe('heet')
+    expect(evaluateFormula('MID("Hello", 2, 3)')).toBe('ell')
+    expect(evaluateFormula('MID("Hello", 10, 2)')).toBe('')
+
+    // 4. LEN
+    expect(evaluateFormula('LEN("Hello World")')).toBe(11)
+    expect(evaluateFormula('LEN(12345)')).toBe(5)
+    expect(evaluateFormula('LEN("")')).toBe(0)
+
+    // 5. TRIM (collapses internal consecutive spaces)
+    expect(evaluateFormula('TRIM("  Hello   World  ")')).toBe('Hello World')
+
+    // 6. UPPER and LOWER
+    expect(evaluateFormula('UPPER("excel spreadsheet")')).toBe('EXCEL SPREADSHEET')
+    expect(evaluateFormula('LOWER("EXCEL SPREADSHEET")')).toBe('excel spreadsheet')
+  })
 })
 
 

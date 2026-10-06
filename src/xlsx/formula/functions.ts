@@ -38,6 +38,13 @@ export function coerceToBoolean(val: FormulaValue): boolean | FormulaError {
   return '#VALUE!'
 }
 
+export function coerceToString(val: FormulaValue): string {
+  if (val === null) return ''
+  if (typeof val === 'boolean') return val ? 'TRUE' : 'FALSE'
+  if (typeof val === 'number') return String(round15(val))
+  return String(val)
+}
+
 export function flattenArgs(
   args: AstNode[],
   ctx: EvaluationContext | undefined,
@@ -273,5 +280,104 @@ export const FUNCTIONS: Record<string, FunctionHandler> = {
     const b = coerceToBoolean(v)
     if (isFormulaError(b)) return b
     return !b
+  },
+
+  CONCAT: (args, ctx, evalNode) => {
+    const vals = flattenArgs(args, ctx, evalNode)
+    let res = ''
+    for (const v of vals) {
+      if (isFormulaError(v)) return v
+      res += coerceToString(v)
+    }
+    return res
+  },
+
+  LEFT: (args, ctx, evalNode) => {
+    if (args.length < 1 || args.length > 2) return '#VALUE!'
+    const val = evalNode(args[0], ctx)
+    if (isFormulaError(val)) return val
+    const str = coerceToString(val)
+
+    let num = 1
+    if (args.length === 2) {
+      const numVal = evalNode(args[1], ctx)
+      if (isFormulaError(numVal)) return numVal
+      const n = coerceToNumber(numVal)
+      if (isFormulaError(n)) return n
+      num = Math.floor(n)
+    }
+    if (num < 0) return '#VALUE!'
+    return str.slice(0, num)
+  },
+
+  RIGHT: (args, ctx, evalNode) => {
+    if (args.length < 1 || args.length > 2) return '#VALUE!'
+    const val = evalNode(args[0], ctx)
+    if (isFormulaError(val)) return val
+    const str = coerceToString(val)
+
+    let num = 1
+    if (args.length === 2) {
+      const numVal = evalNode(args[1], ctx)
+      if (isFormulaError(numVal)) return numVal
+      const n = coerceToNumber(numVal)
+      if (isFormulaError(n)) return n
+      num = Math.floor(n)
+    }
+    if (num < 0) return '#VALUE!'
+    if (num === 0) return ''
+    return str.slice(-num)
+  },
+
+  MID: (args, ctx, evalNode) => {
+    if (args.length !== 3) return '#VALUE!'
+    const val = evalNode(args[0], ctx)
+    if (isFormulaError(val)) return val
+    const str = coerceToString(val)
+
+    const startVal = evalNode(args[1], ctx)
+    if (isFormulaError(startVal)) return startVal
+    const startNum = coerceToNumber(startVal)
+    if (isFormulaError(startNum)) return startNum
+
+    const numVal = evalNode(args[2], ctx)
+    if (isFormulaError(numVal)) return numVal
+    const numChars = coerceToNumber(numVal)
+    if (isFormulaError(numChars)) return numChars
+
+    const start = Math.floor(startNum)
+    const len = Math.floor(numChars)
+    if (start < 1 || len < 0) return '#VALUE!'
+    return str.slice(start - 1, start - 1 + len)
+  },
+
+  LEN: (args, ctx, evalNode) => {
+    if (args.length !== 1) return '#VALUE!'
+    const val = evalNode(args[0], ctx)
+    if (isFormulaError(val)) return val
+    const str = coerceToString(val)
+    return str.length
+  },
+
+  TRIM: (args, ctx, evalNode) => {
+    if (args.length !== 1) return '#VALUE!'
+    const val = evalNode(args[0], ctx)
+    if (isFormulaError(val)) return val
+    const str = coerceToString(val)
+    return str.trim().replace(/\s+/g, ' ')
+  },
+
+  UPPER: (args, ctx, evalNode) => {
+    if (args.length !== 1) return '#VALUE!'
+    const val = evalNode(args[0], ctx)
+    if (isFormulaError(val)) return val
+    return coerceToString(val).toUpperCase()
+  },
+
+  LOWER: (args, ctx, evalNode) => {
+    if (args.length !== 1) return '#VALUE!'
+    const val = evalNode(args[0], ctx)
+    if (isFormulaError(val)) return val
+    return coerceToString(val).toLowerCase()
   },
 }
