@@ -634,6 +634,79 @@ describe('xlsx formula parser (AST)', () => {
       ],
     })
   })
+
+  test('Parser parses nested expressions and parenthesized sub-expressions', () => {
+    // 1. Parenthesized arithmetic grouping overriding natural precedence
+    expect(parseFormula('(1 + 2) * (3 + 4)')).toEqual({
+      type: 'binary',
+      op: '*',
+      left: {
+        type: 'binary',
+        op: '+',
+        left: { type: 'number', value: 1 },
+        right: { type: 'number', value: 2 },
+      },
+      right: {
+        type: 'binary',
+        op: '+',
+        left: { type: 'number', value: 3 },
+        right: { type: 'number', value: 4 },
+      },
+    })
+
+    // 2. Deep nesting
+    expect(parseFormula('(((A1)))')).toEqual({
+      type: 'cell',
+      ref: { col: 0, row: 0, absCol: false, absRow: false },
+    })
+
+    // 3. Nested double unaries
+    expect(parseFormula('-(-(A1 + 1))')).toEqual({
+      type: 'unary',
+      op: '-',
+      expr: {
+        type: 'unary',
+        op: '-',
+        expr: {
+          type: 'binary',
+          op: '+',
+          left: { type: 'cell', ref: { col: 0, row: 0, absCol: false, absRow: false } },
+          right: { type: 'number', value: 1 },
+        },
+      },
+    })
+
+    // 4. Function containing expressions and parenthesized subexpressions
+    expect(parseFormula('IF(A1 + B1 > 10, (C1 - D1) * 2, 0)')).toEqual({
+      type: 'call',
+      name: 'IF',
+      args: [
+        {
+          type: 'binary',
+          op: '>',
+          left: {
+            type: 'binary',
+            op: '+',
+            left: { type: 'cell', ref: { col: 0, row: 0, absCol: false, absRow: false } },
+            right: { type: 'cell', ref: { col: 1, row: 0, absCol: false, absRow: false } },
+          },
+          right: { type: 'number', value: 10 },
+        },
+        {
+          type: 'binary',
+          op: '*',
+          left: {
+            type: 'binary',
+            op: '-',
+            left: { type: 'cell', ref: { col: 2, row: 0, absCol: false, absRow: false } },
+            right: { type: 'cell', ref: { col: 3, row: 0, absCol: false, absRow: false } },
+          },
+          right: { type: 'number', value: 2 },
+        },
+        { type: 'number', value: 0 },
+      ],
+    })
+  })
 })
 
 
