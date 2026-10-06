@@ -92,3 +92,27 @@ describe('xlsx formula fixture enablement', () => {
     expect(sheet.rows[0].cells[2].value).toBe('#ERROR')
   })
 })
+
+describe('formula lexer', () => {
+  test('Tokenizer handles arithmetic operators, unary minus, and percent (+, -, *, /, ^, %)', async () => {
+    // Dynamic import or direct import from src/xlsx/formula/lexer
+    const { tokenize } = await import('../src/xlsx/formula/lexer')
+    const tokens = tokenize('=10 + 20 * -3 / 4 ^ 2%')
+    expect(tokens.map(t => ({ type: t.type, value: t.value }))).toEqual([
+      { type: 'number', value: '10' },
+      { type: 'op', value: '+' },
+      { type: 'number', value: '20' },
+      { type: 'op', value: '*' },
+      { type: 'op', value: '-' },
+      { type: 'number', value: '3' },
+      { type: 'op', value: '/' },
+      { type: 'number', value: '4' },
+      { type: 'op', value: '^' },
+      { type: 'number', value: '2' },
+      { type: 'op', value: '%' },
+      { type: 'eof', value: '' },
+    ])
+    expect(tokens[0].numValue).toBe(10)
+  })
+})
+

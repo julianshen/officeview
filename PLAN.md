@@ -52,7 +52,7 @@ src/xlsx/formula/
 - [x] Test: `XlsxCellSpec` supports error cells (`t="e"`)
 
 ### Phase 1: Formula Tokenizer (Lexer)
-- [ ] Test: Tokenizer handles arithmetic operators, unary minus, and percent (`+`, `-`, `*`, `/`, `^`, `%`)
+- [x] Test: Tokenizer handles arithmetic operators, unary minus, and percent (`+`, `-`, `*`, `/`, `^`, `%`)
 - [ ] Test: Tokenizer handles string literals with escaped quotes and comparison operators (`=`, `<>`, `<`, `<=`, `>`, `>=`)
 - [ ] Test: Tokenizer handles cell references (relative `A1`, absolute `$A$1`, mixed `A$1`, `$A1`)
 - [ ] Test: Tokenizer handles range references (`A1:B10`) and cross-sheet references (`Sheet2!A1`, `'My Sheet'!A1:B2`)
