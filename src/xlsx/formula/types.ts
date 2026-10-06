@@ -15,6 +15,7 @@ export type TokenType =
   | 'lparen'
   | 'rparen'
   | 'colon'
+  | 'error'
   | 'eof'
 
 export interface CellRef {

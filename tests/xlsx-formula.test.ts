@@ -173,5 +173,35 @@ describe('formula lexer', () => {
       { type: 'eof', value: '', cellRef: undefined },
     ])
   })
+
+  test('Tokenizer distinguishes function calls ending in digits (LOG10) from cell references and handles error literals / fail-closed errors', () => {
+    // 1. Disambiguation: LOG10( is ident followed by lparen, not cell LOG10
+    const logTokens = tokenize('=LOG10(100)')
+    expect(logTokens[0]).toEqual({ type: 'ident', value: 'LOG10' })
+    expect(logTokens[1]).toEqual({ type: 'lparen', value: '(' })
+
+    // 2. Error literals: #DIV/0!, #REF!, #N/A, #VALUE!, #NAME?, #NUM!, #NULL!
+    const errTokens = tokenize('=#DIV/0! + #REF! + #N/A')
+    expect(errTokens.map(t => ({ type: t.type, value: t.value }))).toEqual([
+      { type: 'error', value: '#DIV/0!' },
+      { type: 'op', value: '+' },
+      { type: 'error', value: '#REF!' },
+      { type: 'op', value: '+' },
+      { type: 'error', value: '#N/A' },
+      { type: 'eof', value: '' },
+    ])
+
+    // 3. Unterminated string fails closed with error token
+    const unterminated = tokenize('="hello world')
+    expect(unterminated.some(t => t.type === 'error')).toBe(true)
+
+    // 4. Unknown character emits error token instead of op
+    const unknown = tokenize('=@;')
+    expect(unknown[0]).toEqual({ type: 'error', value: '@' })
+
+    // 5. Overlong formula emits error token
+    const overlong = tokenize('=' + 'A'.repeat(8200))
+    expect(overlong[0]).toEqual({ type: 'error', value: 'Formula exceeds maximum length of 8192 characters' })
+  })
 })
 

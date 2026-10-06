@@ -13,7 +13,10 @@ export function tokenize(input: string): Token[] {
   }
 
   if (str.length > MAX_FORMULA_LENGTH) {
-    str = str.slice(0, MAX_FORMULA_LENGTH)
+    return [
+      { type: 'error', value: `Formula exceeds maximum length of ${MAX_FORMULA_LENGTH} characters` },
+      { type: 'eof', value: '' },
+    ]
   }
 
   const tokens: Token[] = []
@@ -25,6 +28,20 @@ export function tokenize(input: string): Token[] {
 
     // Skip whitespace
     if (/\s/.test(ch)) {
+      i++
+      continue
+    }
+
+    // Excel error literals (#DIV/0!, #REF!, #N/A, #VALUE!, #NAME?, #NUM!, #NULL!, #ERROR)
+    if (ch === '#') {
+      const rest = str.slice(i)
+      const errMatch = /^#(DIV\/0!|REF!|N\/A|VALUE!|NAME\?|NUM!|NULL!|ERROR)/i.exec(rest)
+      if (errMatch) {
+        tokens.push({ type: 'error', value: errMatch[0].toUpperCase() })
+        i += errMatch[0].length
+        continue
+      }
+      tokens.push({ type: 'error', value: ch })
       i++
       continue
     }
@@ -87,6 +104,7 @@ export function tokenize(input: string): Token[] {
     if (ch === '"') {
       i++ // skip opening quote
       let val = ''
+      let closed = false
       while (i < len) {
         if (str[i] === '"') {
           if (i + 1 < len && str[i + 1] === '"') {
@@ -94,6 +112,7 @@ export function tokenize(input: string): Token[] {
             i += 2
           } else {
             i++ // skip closing quote
+            closed = true
             break
           }
         } else {
@@ -101,7 +120,11 @@ export function tokenize(input: string): Token[] {
           i++
         }
       }
-      tokens.push({ type: 'string', value: val })
+      if (!closed) {
+        tokens.push({ type: 'error', value: `Unterminated string literal: "${val}` })
+      } else {
+        tokens.push({ type: 'string', value: val })
+      }
       continue
     }
 
@@ -143,9 +166,10 @@ export function tokenize(input: string): Token[] {
     }
 
     // Cell references ($A$1, A1, etc.) or Identifiers
+    // Note: (?!\s*\() ensures function names ending in digits (e.g. LOG10(...) fall through to ident)
     if (ch === '$' || /[A-Za-z_]/.test(ch)) {
       const rest = str.slice(i)
-      const cellMatch = /^(\$?)([A-Za-z]{1,3})(\$?)(\d+)(?![A-Za-z0-9_])/.exec(rest)
+      const cellMatch = /^(\$?)([A-Za-z]{1,3})(\$?)(\d+)(?![A-Za-z0-9_])(?!\s*\()/.exec(rest)
       if (cellMatch) {
         const full = cellMatch[0]
         const hasAbsCol = cellMatch[1] === '$'
@@ -186,8 +210,8 @@ export function tokenize(input: string): Token[] {
       }
     }
 
-    // Unknown single char fallback
-    tokens.push({ type: 'op', value: ch })
+    // Unknown single char fallback - fail closed
+    tokens.push({ type: 'error', value: ch })
     i++
   }
 
