@@ -1,5 +1,6 @@
 import type { AstNode, EvaluationContext, FormulaError, FormulaValue } from './types'
 import { parseFormula } from './parser'
+import { FUNCTIONS } from './functions'
 
 export const CANONICAL_ERRORS = new Set<FormulaError>([
   '#DIV/0!',
@@ -222,7 +223,11 @@ export function evaluateNode(node: AstNode, ctx?: EvaluationContext): FormulaVal
     }
 
     case 'call': {
-      return '#NAME?'
+      const handler = FUNCTIONS[node.name.toUpperCase()]
+      if (!handler) {
+        return '#NAME?'
+      }
+      return handler(node.args, ctx, evaluateNode)
     }
 
     default:

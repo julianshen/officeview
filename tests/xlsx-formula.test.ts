@@ -911,6 +911,59 @@ describe('xlsx formula evaluator', () => {
     expect(evaluateFormula('((1 + 2) * #NUM!) / 4')).toBe('#NUM!')
     expect(evaluateFormula('1 + (2 * (3 + #DIV/0!))')).toBe('#DIV/0!')
   })
+
+  test('Evaluates Math functions (SUM, AVERAGE, MIN, MAX, COUNT, COUNTA, ABS, ROUND, INT, MOD, PRODUCT)', () => {
+    // 1. SUM
+    expect(evaluateFormula('SUM(1, 2, 3, 4)')).toBe(10)
+    expect(evaluateFormula('SUM(10, -5, 2.5)')).toBe(7.5)
+
+    // 2. AVERAGE
+    expect(evaluateFormula('AVERAGE(10, 20, 30)')).toBe(20)
+    expect(evaluateFormula('AVERAGE(1, 2)')).toBe(1.5)
+
+    // 3. MIN and MAX
+    expect(evaluateFormula('MIN(5, 2, 9, -1, 4)')).toBe(-1)
+    expect(evaluateFormula('MAX(5, 2, 9, -1, 4)')).toBe(9)
+
+    // 4. COUNT and COUNTA
+    expect(evaluateFormula('COUNT(1, "hello", TRUE, 42)')).toBe(2) // only numbers
+    expect(evaluateFormula('COUNTA(1, "hello", TRUE, 42)')).toBe(4) // all non-empty
+
+    // 5. ABS
+    expect(evaluateFormula('ABS(-42.5)')).toBe(42.5)
+    expect(evaluateFormula('ABS(42.5)')).toBe(42.5)
+
+    // 6. ROUND
+    expect(evaluateFormula('ROUND(3.14159, 2)')).toBe(3.14)
+    expect(evaluateFormula('ROUND(3.14159, 0)')).toBe(3)
+    expect(evaluateFormula('ROUND(125.4, -1)')).toBe(130)
+
+    // 7. INT
+    expect(evaluateFormula('INT(3.7)')).toBe(3)
+    expect(evaluateFormula('INT(-3.7)')).toBe(-4)
+
+    // 8. MOD (Excel floor-division modulo)
+    expect(evaluateFormula('MOD(7, 3)')).toBe(1)
+    expect(evaluateFormula('MOD(-7, 3)')).toBe(2)
+    expect(evaluateFormula('MOD(7, -3)')).toBe(-2)
+    expect(evaluateFormula('MOD(7, 0)')).toBe('#DIV/0!')
+
+    // 9. PRODUCT
+    expect(evaluateFormula('PRODUCT(2, 3, 4)')).toBe(24)
+    expect(evaluateFormula('PRODUCT(2.5, 4)')).toBe(10)
+
+    // 10. Evaluation with cell references in context
+    const ctx = {
+      getCellValue: (_s: any, col: number, row: number) => {
+        if (col === 0 && row === 0) return 10 // A1
+        if (col === 0 && row === 1) return 20 // A2
+        if (col === 0 && row === 2) return 30 // A3
+        return null
+      },
+    }
+    expect(evaluateFormula('SUM(A1, A2, A3)', ctx)).toBe(60)
+    expect(evaluateFormula('AVERAGE(A1, A2, A3)', ctx)).toBe(20)
+  })
 })
 
 
