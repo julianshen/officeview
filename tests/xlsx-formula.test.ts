@@ -6,7 +6,9 @@ import { tokenize } from '../src/xlsx/formula/lexer'
 import { parseFormula } from '../src/xlsx/formula/parser'
 import { evaluateFormula } from '../src/xlsx/formula/evaluator'
 import { translateSharedFormula } from '../src/xlsx/formula/shared'
+import { evaluateWorkbookFormulas } from '../src/xlsx/formula/workbook'
 import type { EvaluationContext, FormulaValue } from '../src/xlsx/formula/types'
+import type { XlsxCell, XlsxDocument } from '../src/xlsx/types'
 
 describe('xlsx formula fixture enablement', () => {
   test('XlsxCellSpec and buildXlsx support formula <f> and omitting <v>', async () => {
@@ -1290,6 +1292,136 @@ describe('xlsx shared formula & workbook context', () => {
     // 5. Out of bounds translation produces #REF!
     const res5 = translateSharedFormula('A1', -1, 0)
     expect(res5.formula).toBe('#REF!')
+  })
+
+  test('Resolves cross-sheet references (Sheet2!A1) using workbook-level context', () => {
+    const doc: XlsxDocument = {
+      sheets: [
+        {
+          name: 'Summary',
+          merges: [],
+          mergeRanges: [],
+          cols: [],
+          rows: [
+            {
+              index: 0,
+              cells: [
+                { ref: 'A1', col: 0, row: 0, value: null, formula: 'Sheet2!A1 + Data!B1', styleIndex: 0 },
+                { ref: 'A2', col: 0, row: 1, value: null, formula: 'SUM(Data!A1:B2)', styleIndex: 0 },
+              ],
+            },
+          ],
+        },
+        {
+          name: 'Sheet2',
+          merges: [],
+          mergeRanges: [],
+          cols: [],
+          rows: [
+            {
+              index: 0,
+              cells: [
+                { ref: 'A1', col: 0, row: 0, value: 100, styleIndex: 0 },
+              ],
+            },
+          ],
+        },
+        {
+          name: 'Data',
+          merges: [],
+          mergeRanges: [],
+          cols: [],
+          rows: [
+            {
+              index: 0,
+              cells: [
+                { ref: 'A1', col: 0, row: 0, value: 10, styleIndex: 0 },
+                { ref: 'B1', col: 1, row: 0, value: 20, styleIndex: 0 },
+              ],
+            },
+            {
+              index: 1,
+              cells: [
+                { ref: 'A2', col: 0, row: 1, value: 30, styleIndex: 0 },
+                { ref: 'B2', col: 1, row: 1, value: 40, styleIndex: 0 },
+              ],
+            },
+          ],
+        },
+      ],
+    }
+
+    evaluateWorkbookFormulas(doc)
+    expect(doc.sheets[0].rows[0].cells[0].value).toBe(120) // 100 + 20
+    expect(doc.sheets[0].rows[0].cells[1].value).toBe(100) // 10 + 20 + 30 + 40
+  })
+
+  test('Evaluates multi-cell dependency chains across rows and sheets in correct order with per-cell memoization', () => {
+    // 600-cell dependency chain: A1 = 1, A2 = A1 + 1, A3 = A2 + 1, ..., A600 = A599 + 1
+    const cells: XlsxCell[] = [
+      { ref: 'A1', col: 0, row: 0, value: 1, styleIndex: 0 },
+    ]
+    for (let i = 1; i < 600; i++) {
+      cells.push({
+        ref: `A${i + 1}`,
+        col: 0,
+        row: i,
+        value: null,
+        formula: `A${i} + 1`,
+        styleIndex: 0,
+      })
+    }
+
+    const doc: XlsxDocument = {
+      sheets: [
+        {
+          name: 'Chain',
+          merges: [],
+          mergeRanges: [],
+          cols: [],
+          rows: cells.map((cell, idx) => ({ index: idx, cells: [cell] })),
+        },
+      ],
+    }
+
+    evaluateWorkbookFormulas(doc)
+    expect(doc.sheets[0].rows[0].cells[0].value).toBe(1)
+    expect(doc.sheets[0].rows[1].cells[0].value).toBe(2)
+    expect(doc.sheets[0].rows[599].cells[0].value).toBe(600)
+  })
+
+  test('Preserves cached <v> unless missing, ca="1", or fullCalcOnLoad="1"', () => {
+    const doc: XlsxDocument = {
+      sheets: [
+        {
+          name: 'Cache',
+          merges: [],
+          mergeRanges: [],
+          cols: [],
+          rows: [
+            {
+              index: 0,
+              cells: [
+                // Cell with cached value 999
+                { ref: 'A1', col: 0, row: 0, value: 999, formula: '10 + 20', styleIndex: 0 },
+                // Cell with missing value (null)
+                { ref: 'B1', col: 1, row: 0, value: null, formula: '10 + 20', styleIndex: 0 },
+              ],
+            },
+          ],
+        },
+      ],
+    }
+
+    // Default: preserves cached <v>, calculates missing <v>
+    evaluateWorkbookFormulas(doc)
+    expect(doc.sheets[0].rows[0].cells[0].value).toBe(999) // preserved
+    expect(doc.sheets[0].rows[0].cells[1].value).toBe(30) // calculated
+
+    // With fullCalcOnLoad: recalculates all
+    evaluateWorkbookFormulas(doc, { fullCalcOnLoad: true })
+    expect(doc.sheets[0].rows[0].cells[0].value).toBe(30) // recalculated
+    expect(doc.sheets[0].rows[0].cells[1].value).toBe(30)
   })
 })
 
