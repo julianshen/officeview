@@ -233,8 +233,6 @@ const XLSX_WORKBOOK_RELS =
 
 export interface XlsxCellSpec {
   ref: string
-  /** shared string index */
-  s?: number
   v?: string | number
   t?: 's' | 'n' | 'b' | 'str' | 'e'
   formula?: string

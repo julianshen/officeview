@@ -2,6 +2,7 @@ import { describe, test, expect } from 'vitest'
 import { OfficePackage } from '../src/core/zip'
 import { parseXlsx } from '../src/xlsx/parse'
 import { buildXlsx } from '../src/testdata/ooxml-builders'
+import { tokenize } from '../src/xlsx/formula/lexer'
 
 describe('xlsx formula fixture enablement', () => {
   test('XlsxCellSpec and buildXlsx support formula <f> and omitting <v>', async () => {
@@ -63,6 +64,7 @@ describe('xlsx formula fixture enablement', () => {
     expect(b1.sharedFormula).toEqual({ si: 0, ref: 'B1:B2' })
 
     const b2 = sheet.rows[1].cells[1]
+    expect(b2.formula).toBeUndefined()
     expect(b2.sharedFormula).toEqual({ si: 0, ref: undefined })
   })
 
@@ -94,9 +96,7 @@ describe('xlsx formula fixture enablement', () => {
 })
 
 describe('formula lexer', () => {
-  test('Tokenizer handles arithmetic operators, unary minus, and percent (+, -, *, /, ^, %)', async () => {
-    // Dynamic import or direct import from src/xlsx/formula/lexer
-    const { tokenize } = await import('../src/xlsx/formula/lexer')
+  test('Tokenizer handles arithmetic operators, unary minus, and percent (+, -, *, /, ^, %)', () => {
     const tokens = tokenize('=10 + 20 * -3 / 4 ^ 2%')
     expect(tokens.map(t => ({ type: t.type, value: t.value }))).toEqual([
       { type: 'number', value: '10' },
@@ -115,8 +115,7 @@ describe('formula lexer', () => {
     expect(tokens[0].numValue).toBe(10)
   })
 
-  test('Tokenizer handles string literals with escaped quotes and comparison operators (=, <>, <, <=, >, >=, &)', async () => {
-    const { tokenize } = await import('../src/xlsx/formula/lexer')
+  test('Tokenizer handles string literals with escaped quotes and comparison operators (=, <>, <, <=, >, >=, &)', () => {
     const tokens = tokenize('="Hello ""World""" & "!" = "foo" <> "bar" <= 10 >= 5 < 20 > 1')
     expect(tokens.map(t => ({ type: t.type, value: t.value }))).toEqual([
       { type: 'string', value: 'Hello "World"' },
@@ -138,8 +137,7 @@ describe('formula lexer', () => {
     ])
   })
 
-  test('Tokenizer handles cell references (relative A1, absolute $A$1, mixed A$1, $A1)', async () => {
-    const { tokenize } = await import('../src/xlsx/formula/lexer')
+  test('Tokenizer handles cell references (relative A1, absolute $A$1, mixed A$1, $A1)', () => {
     const tokens = tokenize('=A1 + $B$2 * C$3 / $D4 + aa10')
     expect(tokens.map(t => ({ type: t.type, value: t.value, cellRef: t.cellRef }))).toEqual([
       { type: 'cell', value: 'A1', cellRef: { col: 0, row: 0, absCol: false, absRow: false } },
