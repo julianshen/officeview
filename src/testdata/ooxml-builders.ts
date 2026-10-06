@@ -238,6 +238,7 @@ export interface XlsxCellSpec {
   v?: string | number
   t?: 's' | 'n' | 'b' | 'str'
   formula?: string
+  sharedFormula?: { si: number; ref?: string }
   style?: number
 }
 
@@ -265,7 +266,14 @@ export async function buildXlsx(sheets: XlsxSheetSpec[], sharedStrings: string[]
   ${setupPr}
   ${sheet.cols ? `<cols>${sheet.cols}</cols>` : ''}
   <sheetData>
-    ${sheet.rows.map((row) => `<row r="${row.r}">${row.cells.map((c) => `<c r="${c.ref}"${c.t ? ` t="${c.t}"` : ''}${c.style !== undefined ? ` s="${c.style}"` : ''}>${c.formula !== undefined ? `<f>${c.formula}</f>` : ''}${c.v !== undefined ? `<v>${c.v}</v>` : ''}</c>`).join('')}</row>`).join('\n    ')}
+    ${sheet.rows.map((row) => `<row r="${row.r}">${row.cells.map((c) => {
+      const fXml = c.sharedFormula !== undefined
+        ? `<f t="shared"${c.sharedFormula.ref ? ` ref="${c.sharedFormula.ref}"` : ''} si="${c.sharedFormula.si}">${c.formula ?? ''}</f>`
+        : c.formula !== undefined
+          ? `<f>${c.formula}</f>`
+          : ''
+      return `<c r="${c.ref}"${c.t ? ` t="${c.t}"` : ''}${c.style !== undefined ? ` s="${c.style}"` : ''}>${fXml}${c.v !== undefined ? `<v>${c.v}</v>` : ''}</c>`
+    }).join('')}</row>`).join('\n    ')}
   </sheetData>
   ${sheet.merges ? `<mergeCells count="${sheet.merges.length}">${sheet.merges.map((m) => `<mergeCell ref="${m}"/>`).join('')}</mergeCells>` : ''}
   ${margins}${setup}

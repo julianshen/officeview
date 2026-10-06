@@ -30,4 +30,39 @@ describe('xlsx formula fixture enablement', () => {
     expect(b1.formula).toBe('A1+1')
     expect(b1.value).toBeNull()
   })
+
+  test('XlsxCellSpec supports shared formula attributes (t="shared", si, ref)', async () => {
+    const buf = await buildXlsx([
+      {
+        name: 'Sheet1',
+        rows: [
+          {
+            r: 1,
+            cells: [
+              { ref: 'A1', v: 10 },
+              { ref: 'B1', formula: 'A1*2', sharedFormula: { si: 0, ref: 'B1:B2' } },
+            ],
+          },
+          {
+            r: 2,
+            cells: [
+              { ref: 'A2', v: 20 },
+              { ref: 'B2', sharedFormula: { si: 0 } },
+            ],
+          },
+        ],
+      },
+    ])
+
+    const pkg = await OfficePackage.load(buf)
+    const doc = await parseXlsx(pkg)
+    const sheet = doc.sheets[0]
+
+    const b1 = sheet.rows[0].cells[1]
+    expect(b1.formula).toBe('A1*2')
+    expect(b1.sharedFormula).toEqual({ si: 0, ref: 'B1:B2' })
+
+    const b2 = sheet.rows[1].cells[1]
+    expect(b2.sharedFormula).toEqual({ si: 0, ref: undefined })
+  })
 })

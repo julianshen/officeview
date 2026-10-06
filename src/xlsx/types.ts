@@ -23,6 +23,7 @@ export interface XlsxCell {
   /** Style index into cellXfs. */
   styleIndex: number
   formula?: string
+  sharedFormula?: { si: number; ref?: string }
   /** Resolved style (from cellXfs + fonts/fills/borders). */
   style?: XlsxCellStyle
 }

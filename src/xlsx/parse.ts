@@ -235,10 +235,22 @@ async function parseSheet(
       const sIdx = parseInt(ca.s ?? '0', 10)
       let value: string | number | boolean | null = null
       let formula: string | undefined
+      let sharedFormula: { si: number; ref?: string } | undefined
       const vNode = getChildren(cNode, 'v')[0]
       const isNode = getChildren(cNode, 'is')[0]
       const fNode = getChildren(cNode, 'f')[0]
-      if (fNode) formula = textOf(fNode)
+      if (fNode) {
+        const rawF = textOf(fNode)
+        if (rawF !== '') formula = rawF
+        const fa = attrs(fNode)
+        if (fa.t === 'shared') {
+          const si = parseInt(fa.si ?? '0', 10)
+          sharedFormula = {
+            si: Number.isFinite(si) ? si : 0,
+            ref: (fa.ref as string) || undefined,
+          }
+        }
+      }
       if (t === 's') {
         const idx = vNode ? parseInt(textOf(vNode), 10) : NaN
         value = Number.isFinite(idx) ? (strings[idx] ?? '') : ''
@@ -255,7 +267,7 @@ async function parseSheet(
         const raw = vNode ? textOf(vNode) : ''
         value = raw !== '' && Number.isFinite(parseFloat(raw)) ? parseFloat(raw) : raw === '' ? null : raw
       }
-      const cell: XlsxCell = { ref, row: rowIdx, col: colIdx, value, styleIndex: Number.isFinite(sIdx) ? sIdx : 0, formula }
+      const cell: XlsxCell = { ref, row: rowIdx, col: colIdx, value, styleIndex: Number.isFinite(sIdx) ? sIdx : 0, formula, sharedFormula }
       const xf = styles.xfs[cell.styleIndex]
       if (xf) {
         const font = styles.fonts[xf.fontId]
