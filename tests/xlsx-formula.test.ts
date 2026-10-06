@@ -845,7 +845,7 @@ describe('xlsx formula evaluator', () => {
     // 5. Division by zero and invalid powers
     expect(evaluateFormula('10 / 0')).toBe('#DIV/0!')
     expect(evaluateFormula('0 / 0')).toBe('#DIV/0!')
-    expect(evaluateFormula('0 ^ 0')).toBe('#NUM!')
+    expect(evaluateFormula('0 ^ 0')).toBe(1) // in Excel, 0^0 evaluates to 1
   })
 
   test('Evaluates string concatenation (&) and Excel comparison ordering (number < text < FALSE < TRUE)', () => {
@@ -927,7 +927,7 @@ describe('xlsx formula evaluator', () => {
     expect(evaluateFormula('MAX(5, 2, 9, -1, 4)')).toBe(9)
 
     // 4. COUNT and COUNTA
-    expect(evaluateFormula('COUNT(1, "hello", TRUE, 42)')).toBe(2) // only numbers
+    expect(evaluateFormula('COUNT(1, "hello", TRUE, 42)')).toBe(3) // direct args count numbers and booleans
     expect(evaluateFormula('COUNTA(1, "hello", TRUE, 42)')).toBe(4) // all non-empty
 
     // 5. ABS
@@ -1141,8 +1141,9 @@ describe('xlsx formula evaluator', () => {
       },
     }
 
+    // In Excel, any cell involved in a circular reference evaluates to 0
     expect(evaluateFormula('A1', ctx)).toBe(0)
-    expect(evaluateFormula('A2', ctx)).toBe(10)
+    expect(evaluateFormula('A2', ctx)).toBe(0)
 
     // 2. Mutual circular reference: A1 = B1 + 1, B1 = A1 + 1
     const mutualCells: Record<string, string> = {
@@ -1162,7 +1163,9 @@ describe('xlsx formula evaluator', () => {
       },
     }
 
-    expect(evaluateFormula('A1', mutualCtx)).toBe(2)
+    // In Excel, mutual circular references evaluate to 0
+    expect(evaluateFormula('A1', mutualCtx)).toBe(0)
+    expect(evaluateFormula('B1', mutualCtx)).toBe(0)
 
     // 3. 3-node cycle: A1 = B1, B1 = C1, C1 = A1
     const cycle3: Record<string, string> = {
@@ -1202,7 +1205,52 @@ describe('xlsx formula evaluator', () => {
         return val ?? null
       },
     }
-    expect(evaluateFormula('A1', rangeCycleCtx)).toBe(30)
+    expect(evaluateFormula('A1', rangeCycleCtx)).toBe(0)
+  })
+
+  test('Evaluator addresses peer review hardening (poisoned cycle 0, direct arg coercion, half-away ROUND, 0^0, overflow #NUM!, space-32 TRIM)', () => {
+    // 1. Direct argument coercion in aggregates (Excel parity)
+    expect(evaluateFormula('SUM("5", 2)')).toBe(7)
+    expect(evaluateFormula('SUM(TRUE, 2)')).toBe(3)
+    expect(evaluateFormula('SUM("abc", 2)')).toBe('#VALUE!')
+    expect(evaluateFormula('AVERAGE("3")')).toBe(3)
+    expect(evaluateFormula('COUNT(TRUE, 42, "10", "text")')).toBe(3) // TRUE, 42, "10" counted; "text" not
+
+    // In cell/range references, text and booleans are ignored in SUM
+    const cellCtx: EvaluationContext = {
+      getCellValue: (_sheet, col, row) => {
+        if (col === 0 && row === 0) return '5' // A1 text "5"
+        if (col === 0 && row === 1) return true // A2 boolean true
+        if (col === 0 && row === 2) return 10 // A3 number 10
+        return null
+      },
+    }
+    expect(evaluateFormula('SUM(A1, A2, A3)', cellCtx)).toBe(10)
+    expect(evaluateFormula('COUNT(A1, A2, A3)', cellCtx)).toBe(1)
+
+    // 2. 0^0 = 1 in Excel
+    expect(evaluateFormula('0^0')).toBe(1)
+    expect(evaluateFormula('0^-1')).toBe('#NUM!')
+    expect(evaluateFormula('(-1)^0.5')).toBe('#NUM!')
+
+    // 3. Half-away-from-zero ROUND
+    expect(evaluateFormula('ROUND(-1.5, 0)')).toBe(-2)
+    expect(evaluateFormula('ROUND(-2.5, 0)')).toBe(-3)
+    expect(evaluateFormula('ROUND(2.5, 0)')).toBe(3)
+    expect(evaluateFormula('ROUND(1, 309)')).toBe('#NUM!')
+
+    // 4. Arithmetic overflow guard returning #NUM!
+    expect(evaluateFormula('1e308 * 10')).toBe('#NUM!')
+    expect(evaluateFormula('1e308 + 1e308')).toBe('#NUM!')
+
+    // 5. Space-32 TRIM (preserves tabs and NBSP per Excel spec)
+    expect(evaluateFormula('TRIM("  Hello   World  ")')).toBe('Hello World')
+    expect(evaluateFormula('TRIM("a\tb")')).toBe('a\tb')
+    expect(evaluateFormula('TRIM("a\u00A0b")')).toBe('a\u00A0b')
+
+    // 6. INT precision guard
+    expect(evaluateFormula('INT(1.999999999999999)')).toBe(2)
+    expect(evaluateFormula('INT(2.1)')).toBe(2)
   })
 })
 

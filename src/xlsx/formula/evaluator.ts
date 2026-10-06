@@ -33,7 +33,14 @@ export function round15(val: number): number {
   return rounded === 0 ? 0 : rounded
 }
 
-function coerceToNumber(val: FormulaValue): number | FormulaError {
+export function finiteOrNum(res: number): number | FormulaError {
+  if (!Number.isFinite(res) || Number.isNaN(res)) {
+    return '#NUM!'
+  }
+  return round15(res)
+}
+
+export function coerceToNumber(val: FormulaValue): number | FormulaError {
   if (isFormulaError(val)) return val
   if (val === null) return 0
   if (typeof val === 'boolean') return val ? 1 : 0
@@ -48,11 +55,25 @@ function coerceToNumber(val: FormulaValue): number | FormulaError {
   return '#VALUE!'
 }
 
-function coerceToString(val: FormulaValue): string {
+export function coerceToString(val: FormulaValue): string {
   if (val === null) return ''
   if (typeof val === 'boolean') return val ? 'TRUE' : 'FALSE'
   if (typeof val === 'number') return String(round15(val))
   return String(val)
+}
+
+export function coerceToBoolean(val: FormulaValue): boolean | FormulaError {
+  if (isFormulaError(val)) return val
+  if (val === null) return false
+  if (typeof val === 'boolean') return val
+  if (typeof val === 'number') return val !== 0
+  if (typeof val === 'string') {
+    const upper = val.trim().toUpperCase()
+    if (upper === 'TRUE') return true
+    if (upper === 'FALSE') return false
+    return '#VALUE!'
+  }
+  return '#VALUE!'
 }
 
 function getTypeRank(val: FormulaValue): number {
@@ -109,7 +130,8 @@ function compareValues(v1: FormulaValue, v2: FormulaValue): number {
   return 0
 }
 
-export function evaluateNode(node: AstNode, ctx?: EvaluationContext): FormulaValue {
+export function evaluateNode(node?: AstNode, ctx?: EvaluationContext): FormulaValue {
+  if (!node) return null
   switch (node.type) {
     case 'number':
       return round15(node.value)
@@ -137,12 +159,13 @@ export function evaluateNode(node: AstNode, ctx?: EvaluationContext): FormulaVal
       const sheet = node.ref.sheet ?? ctx.currentSheet
       const key = makeCellKey(sheet, node.ref.col, node.ref.row)
       if (ctx.visited?.has(key)) {
+        ctx.hasCycle = true
         return 0
       }
 
       ctx.visited?.add(key)
       try {
-        const val = ctx.getCellValue(node.ref.sheet, node.ref.col, node.ref.row)
+        const val = ctx.getCellValue(sheet, node.ref.col, node.ref.row)
         return val === undefined ? null : val
       } finally {
         ctx.visited?.delete(key)
@@ -161,13 +184,13 @@ export function evaluateNode(node: AstNode, ctx?: EvaluationContext): FormulaVal
       if (isFormulaError(num)) return num
 
       if (node.op === '+') {
-        return round15(num)
+        return finiteOrNum(num)
       }
       if (node.op === '-') {
-        return round15(-num)
+        return finiteOrNum(-num)
       }
       if (node.op === '%') {
-        return round15(num / 100)
+        return finiteOrNum(num / 100)
       }
       return '#VALUE!'
     }
@@ -216,25 +239,23 @@ export function evaluateNode(node: AstNode, ctx?: EvaluationContext): FormulaVal
 
       switch (node.op) {
         case '+':
-          return round15(n1 + n2)
+          return finiteOrNum(n1 + n2)
 
         case '-':
-          return round15(n1 - n2)
+          return finiteOrNum(n1 - n2)
 
         case '*':
-          return round15(n1 * n2)
+          return finiteOrNum(n1 * n2)
 
         case '/': {
           if (n2 === 0) return '#DIV/0!'
-          return round15(n1 / n2)
+          return finiteOrNum(n1 / n2)
         }
 
         case '^': {
-          if (n1 === 0 && n2 === 0) return '#NUM!'
           if (n1 < 0 && !Number.isInteger(n2)) return '#NUM!'
           const res = Math.pow(n1, n2)
-          if (!Number.isFinite(res) || Number.isNaN(res)) return '#NUM!'
-          return round15(res)
+          return finiteOrNum(res)
         }
 
         default:
@@ -258,8 +279,10 @@ export function evaluateNode(node: AstNode, ctx?: EvaluationContext): FormulaVal
 /**
  * Parses (if string) and evaluates an Excel formula, returning a computed FormulaValue.
  */
-export function evaluateFormula(input: string | AstNode, ctx?: EvaluationContext): FormulaValue {
+export function evaluateFormula(input: string | AstNode | undefined | null, ctx?: EvaluationContext): FormulaValue {
+  if (input == null) return null
   const node = typeof input === 'string' ? parseFormula(input) : input
+  if (!node) return null
   if (!ctx) {
     return evaluateNode(node)
   }
@@ -270,6 +293,7 @@ export function evaluateFormula(input: string | AstNode, ctx?: EvaluationContext
 
   const currentDepth = ctx.evalDepth ?? 0
   if (currentDepth >= MAX_EVAL_DEPTH) {
+    ctx.hasCycle = true
     return 0
   }
   ctx.evalDepth = currentDepth + 1
@@ -289,11 +313,18 @@ export function evaluateFormula(input: string | AstNode, ctx?: EvaluationContext
   }
 
   try {
-    return evaluateNode(node, ctx)
+    const res = evaluateNode(node, ctx)
+    if (currentDepth === 0 && ctx.hasCycle) {
+      return 0
+    }
+    return res
   } finally {
     ctx.evalDepth = currentDepth
     if (currentKey && addedCurrent) {
       ctx.visited.delete(currentKey)
+    }
+    if (currentDepth === 0) {
+      ctx.hasCycle = false
     }
   }
 }

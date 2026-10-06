@@ -1,5 +1,15 @@
-import type { AstNode, EvaluationContext, FormulaError, FormulaValue } from './types'
-import { isFormulaError, makeCellKey, round15 } from './evaluator'
+import type { AstNode, EvaluationContext, FormulaValue } from './types'
+import {
+  coerceToBoolean,
+  coerceToNumber,
+  coerceToString,
+  finiteOrNum,
+  isFormulaError,
+  makeCellKey,
+  round15,
+} from './evaluator'
+
+export { coerceToBoolean, coerceToNumber, coerceToString }
 
 export type EvaluatorFn = (node: AstNode, ctx?: EvaluationContext) => FormulaValue
 
@@ -9,48 +19,17 @@ export type FunctionHandler = (
   evalNode: EvaluatorFn,
 ) => FormulaValue
 
-export function coerceToNumber(val: FormulaValue): number | FormulaError {
-  if (isFormulaError(val)) return val
-  if (val === null) return 0
-  if (typeof val === 'boolean') return val ? 1 : 0
-  if (typeof val === 'number') return val
-  if (typeof val === 'string') {
-    const trimmed = val.trim()
-    if (trimmed === '') return 0
-    const num = Number(trimmed)
-    if (Number.isNaN(num)) return '#VALUE!'
-    return num
-  }
-  return '#VALUE!'
-}
-
-export function coerceToBoolean(val: FormulaValue): boolean | FormulaError {
-  if (isFormulaError(val)) return val
-  if (val === null) return false
-  if (typeof val === 'boolean') return val
-  if (typeof val === 'number') return val !== 0
-  if (typeof val === 'string') {
-    const upper = val.trim().toUpperCase()
-    if (upper === 'TRUE') return true
-    if (upper === 'FALSE') return false
-    return '#VALUE!'
-  }
-  return '#VALUE!'
-}
-
-export function coerceToString(val: FormulaValue): string {
-  if (val === null) return ''
-  if (typeof val === 'boolean') return val ? 'TRUE' : 'FALSE'
-  if (typeof val === 'number') return String(round15(val))
-  return String(val)
+export interface FlatArgItem {
+  value: FormulaValue
+  fromRef: boolean
 }
 
 export function flattenArgs(
   args: AstNode[],
   ctx: EvaluationContext | undefined,
   evalNode: EvaluatorFn,
-): FormulaValue[] {
-  const values: FormulaValue[] = []
+): FlatArgItem[] {
+  const items: FlatArgItem[] = []
 
   for (const arg of args) {
     if (arg.type === 'range') {
@@ -63,7 +42,7 @@ export function flattenArgs(
         const grid = ctx.getRangeValues(arg.ref.sheet, arg.ref.from, arg.ref.to)
         for (const row of grid) {
           for (const cellVal of row) {
-            values.push(cellVal)
+            items.push({ value: cellVal === undefined ? null : cellVal, fromRef: true })
           }
         }
       } else if (ctx?.getCellValue) {
@@ -72,95 +51,148 @@ export function flattenArgs(
             const sheet = arg.ref.sheet ?? ctx.currentSheet
             const key = makeCellKey(sheet, c, r)
             if (ctx.visited?.has(key)) {
-              values.push(0)
+              if (ctx) ctx.hasCycle = true
+              items.push({ value: 0, fromRef: true })
               continue
             }
             ctx.visited?.add(key)
             try {
-              const cellVal = ctx.getCellValue(arg.ref.sheet, c, r)
-              values.push(cellVal === undefined ? null : cellVal)
+              const cellVal = ctx.getCellValue(sheet, c, r)
+              items.push({ value: cellVal === undefined ? null : cellVal, fromRef: true })
             } finally {
               ctx.visited?.delete(key)
             }
           }
         }
       }
+    } else if (arg.type === 'cell') {
+      const val = evalNode(arg, ctx)
+      items.push({ value: val, fromRef: true })
     } else {
-      values.push(evalNode(arg, ctx))
+      const val = evalNode(arg, ctx)
+      items.push({ value: val, fromRef: false })
     }
   }
 
-  return values
+  return items
 }
 
 export const FUNCTIONS: Record<string, FunctionHandler> = {
   SUM: (args, ctx, evalNode) => {
-    const vals = flattenArgs(args, ctx, evalNode)
+    const items = flattenArgs(args, ctx, evalNode)
     let sum = 0
-    for (const v of vals) {
+    for (const item of items) {
+      const v = item.value
       if (isFormulaError(v)) return v
-      if (typeof v === 'number') {
-        sum += v
+      if (item.fromRef) {
+        if (typeof v === 'number') {
+          sum += v
+        }
+      } else {
+        const n = coerceToNumber(v)
+        if (isFormulaError(n)) return n
+        sum += n
       }
     }
-    return round15(sum)
+    return finiteOrNum(sum)
   },
 
   AVERAGE: (args, ctx, evalNode) => {
-    const vals = flattenArgs(args, ctx, evalNode)
+    const items = flattenArgs(args, ctx, evalNode)
     let sum = 0
     let count = 0
-    for (const v of vals) {
+    for (const item of items) {
+      const v = item.value
       if (isFormulaError(v)) return v
-      if (typeof v === 'number') {
-        sum += v
+      if (item.fromRef) {
+        if (typeof v === 'number') {
+          sum += v
+          count++
+        }
+      } else {
+        const n = coerceToNumber(v)
+        if (isFormulaError(n)) return n
+        sum += n
         count++
       }
     }
     if (count === 0) return '#DIV/0!'
-    return round15(sum / count)
+    return finiteOrNum(sum / count)
   },
 
   MIN: (args, ctx, evalNode) => {
-    const vals = flattenArgs(args, ctx, evalNode)
+    const items = flattenArgs(args, ctx, evalNode)
     let min: number | undefined
-    for (const v of vals) {
+    for (const item of items) {
+      const v = item.value
       if (isFormulaError(v)) return v
-      if (typeof v === 'number') {
-        min = min === undefined ? v : Math.min(min, v)
+      let num: number | undefined
+      if (item.fromRef) {
+        if (typeof v === 'number') num = v
+      } else {
+        const n = coerceToNumber(v)
+        if (isFormulaError(n)) return n
+        num = n
+      }
+      if (num !== undefined) {
+        min = min === undefined ? num : Math.min(min, num)
       }
     }
-    return min === undefined ? 0 : round15(min)
+    return min === undefined ? 0 : finiteOrNum(min)
   },
 
   MAX: (args, ctx, evalNode) => {
-    const vals = flattenArgs(args, ctx, evalNode)
+    const items = flattenArgs(args, ctx, evalNode)
     let max: number | undefined
-    for (const v of vals) {
+    for (const item of items) {
+      const v = item.value
       if (isFormulaError(v)) return v
-      if (typeof v === 'number') {
-        max = max === undefined ? v : Math.max(max, v)
+      let num: number | undefined
+      if (item.fromRef) {
+        if (typeof v === 'number') num = v
+      } else {
+        const n = coerceToNumber(v)
+        if (isFormulaError(n)) return n
+        num = n
+      }
+      if (num !== undefined) {
+        max = max === undefined ? num : Math.max(max, num)
       }
     }
-    return max === undefined ? 0 : round15(max)
+    return max === undefined ? 0 : finiteOrNum(max)
   },
 
   COUNT: (args, ctx, evalNode) => {
-    const vals = flattenArgs(args, ctx, evalNode)
+    const items = flattenArgs(args, ctx, evalNode)
     let count = 0
-    for (const v of vals) {
+    for (const item of items) {
+      const v = item.value
       if (isFormulaError(v)) return v
-      if (typeof v === 'number') {
-        count++
+      if (item.fromRef) {
+        if (typeof v === 'number') {
+          count++
+        }
+      } else {
+        if (typeof v === 'number') {
+          count++
+        } else if (typeof v === 'boolean') {
+          count++
+        } else if (typeof v === 'string') {
+          const n = coerceToNumber(v)
+          if (!isFormulaError(n)) {
+            count++
+          }
+        }
       }
     }
     return count
   },
 
   COUNTA: (args, ctx, evalNode) => {
-    const vals = flattenArgs(args, ctx, evalNode)
+    const items = flattenArgs(args, ctx, evalNode)
     let count = 0
-    for (const v of vals) {
+    for (const item of items) {
+      const v = item.value
       if (isFormulaError(v)) {
         count++
         continue
@@ -178,7 +210,7 @@ export const FUNCTIONS: Record<string, FunctionHandler> = {
     if (isFormulaError(val)) return val
     const num = coerceToNumber(val)
     if (isFormulaError(num)) return num
-    return round15(Math.abs(num))
+    return finiteOrNum(Math.abs(num))
   },
 
   ROUND: (args, ctx, evalNode) => {
@@ -190,11 +222,22 @@ export const FUNCTIONS: Record<string, FunctionHandler> = {
 
     const digitsVal = evalNode(args[1], ctx)
     if (isFormulaError(digitsVal)) return digitsVal
-    const digits = coerceToNumber(digitsVal)
-    if (isFormulaError(digits)) return digits
+    const digitsNum = coerceToNumber(digitsVal)
+    if (isFormulaError(digitsNum)) return digitsNum
+
+    if (!Number.isFinite(num) || !Number.isFinite(digitsNum)) return '#NUM!'
+
+    const digits = Math.trunc(digitsNum)
+    if (digits > 308 || digits < -308) return '#NUM!'
 
     const factor = Math.pow(10, digits)
-    return round15(Math.round(num * factor) / factor)
+    if (!Number.isFinite(factor) || factor === 0) return '#NUM!'
+
+    const sign = num < 0 ? -1 : 1
+    const absRounded = Math.round(Math.abs(num) * factor) / factor
+    const res = sign * absRounded
+    if (!Number.isFinite(res)) return '#NUM!'
+    return round15(res)
   },
 
   INT: (args, ctx, evalNode) => {
@@ -203,7 +246,7 @@ export const FUNCTIONS: Record<string, FunctionHandler> = {
     if (isFormulaError(val)) return val
     const num = coerceToNumber(val)
     if (isFormulaError(num)) return num
-    return Math.floor(num)
+    return finiteOrNum(Math.floor(round15(num)))
   },
 
   MOD: (args, ctx, evalNode) => {
@@ -220,19 +263,28 @@ export const FUNCTIONS: Record<string, FunctionHandler> = {
 
     if (div === 0) return '#DIV/0!'
     const res = num - div * Math.floor(num / div)
-    return round15(res)
+    return finiteOrNum(res)
   },
 
   PRODUCT: (args, ctx, evalNode) => {
-    const vals = flattenArgs(args, ctx, evalNode)
+    const items = flattenArgs(args, ctx, evalNode)
     let prod: number | undefined
-    for (const v of vals) {
+    for (const item of items) {
+      const v = item.value
       if (isFormulaError(v)) return v
-      if (typeof v === 'number') {
-        prod = prod === undefined ? v : prod * v
+      let num: number | undefined
+      if (item.fromRef) {
+        if (typeof v === 'number') num = v
+      } else {
+        const n = coerceToNumber(v)
+        if (isFormulaError(n)) return n
+        num = n
+      }
+      if (num !== undefined) {
+        prod = prod === undefined ? num : prod * num
       }
     }
-    return prod === undefined ? 0 : round15(prod)
+    return prod === undefined ? 0 : finiteOrNum(prod)
   },
 
   IF: (args, ctx, evalNode) => {
@@ -295,9 +347,10 @@ export const FUNCTIONS: Record<string, FunctionHandler> = {
   },
 
   CONCAT: (args, ctx, evalNode) => {
-    const vals = flattenArgs(args, ctx, evalNode)
+    const items = flattenArgs(args, ctx, evalNode)
     let res = ''
-    for (const v of vals) {
+    for (const item of items) {
+      const v = item.value
       if (isFormulaError(v)) return v
       res += coerceToString(v)
     }
@@ -376,7 +429,7 @@ export const FUNCTIONS: Record<string, FunctionHandler> = {
     const val = evalNode(args[0], ctx)
     if (isFormulaError(val)) return val
     const str = coerceToString(val)
-    return str.trim().replace(/\s+/g, ' ')
+    return str.replace(/ +/g, ' ').replace(/^ +| +$/g, '')
   },
 
   UPPER: (args, ctx, evalNode) => {

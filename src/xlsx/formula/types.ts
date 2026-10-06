@@ -60,6 +60,7 @@ export interface EvaluationContext {
   currentCell?: CellRef
   visited?: Set<string>
   evalDepth?: number
+  hasCycle?: boolean
 }
 
 export type BinaryOp =
