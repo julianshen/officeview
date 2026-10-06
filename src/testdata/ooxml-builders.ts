@@ -265,10 +265,11 @@ export async function buildXlsx(sheets: XlsxSheetSpec[], sharedStrings: string[]
   ${sheet.cols ? `<cols>${sheet.cols}</cols>` : ''}
   <sheetData>
     ${sheet.rows.map((row) => `<row r="${row.r}">${row.cells.map((c) => {
+      const escF = (f: string) => f.replace(/&/g, '&amp;').replace(/</g, '&lt;')
       const fXml = c.sharedFormula !== undefined
-        ? `<f t="shared"${c.sharedFormula.ref ? ` ref="${c.sharedFormula.ref}"` : ''} si="${c.sharedFormula.si}">${c.formula ?? ''}</f>`
+        ? `<f t="shared"${c.sharedFormula.ref ? ` ref="${c.sharedFormula.ref}"` : ''} si="${c.sharedFormula.si}">${c.formula !== undefined ? escF(c.formula) : ''}</f>`
         : c.formula !== undefined
-          ? `<f>${c.formula}</f>`
+          ? `<f>${escF(c.formula)}</f>`
           : ''
       return `<c r="${c.ref}"${c.t ? ` t="${c.t}"` : ''}${c.style !== undefined ? ` s="${c.style}"` : ''}>${fXml}${c.v !== undefined ? `<v>${c.v}</v>` : ''}</c>`
     }).join('')}</row>`).join('\n    ')}

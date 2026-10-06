@@ -32,6 +32,27 @@ describe('xlsx formula fixture enablement', () => {
     expect(b1.value).toBeNull()
   })
 
+  test('XlsxCellSpec escapes XML entities in formula text (< and &)', async () => {
+    const buf = await buildXlsx([
+      {
+        name: 'Sheet1',
+        rows: [
+          {
+            r: 1,
+            cells: [
+              { ref: 'A1', formula: 'IF(B1<5,1,0)&"x"' },
+            ],
+          },
+        ],
+      },
+    ])
+
+    const pkg = await OfficePackage.load(buf)
+    const doc = await parseXlsx(pkg)
+    const sheet = doc.sheets[0]
+    expect(sheet.rows[0].cells[0].formula).toBe('IF(B1<5,1,0)&"x"')
+  })
+
   test('XlsxCellSpec supports shared formula attributes (t="shared", si, ref)', async () => {
     const buf = await buildXlsx([
       {
