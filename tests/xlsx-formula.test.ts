@@ -1121,6 +1121,89 @@ describe('xlsx formula evaluator', () => {
     expect(evaluateFormula('Z99 + 5')).toBe(5)
     expect(evaluateFormula('Z99 & "abc"')).toBe('abc')
   })
+
+  test('Detects circular references and returns 0 without stack overflow', () => {
+    // 1. Direct self-reference: A1 = A1, A2 = A2 + 10
+    const cells: Record<string, string> = {
+      'A1': 'A1',
+      'A2': 'A2 + 10',
+    }
+    const ctx: EvaluationContext = {
+      currentSheet: 'Sheet1',
+      getCellValue: (_sheet, col, row) => {
+        const colLetter = String.fromCharCode(65 + col)
+        const ref = `${colLetter}${row + 1}`
+        const formula = cells[ref]
+        if (formula) {
+          return evaluateFormula(formula, ctx)
+        }
+        return null
+      },
+    }
+
+    expect(evaluateFormula('A1', ctx)).toBe(0)
+    expect(evaluateFormula('A2', ctx)).toBe(10)
+
+    // 2. Mutual circular reference: A1 = B1 + 1, B1 = A1 + 1
+    const mutualCells: Record<string, string> = {
+      'A1': 'B1 + 1',
+      'B1': 'A1 + 1',
+    }
+    const mutualCtx: EvaluationContext = {
+      currentSheet: 'Sheet1',
+      getCellValue: (_sheet, col, row) => {
+        const colLetter = String.fromCharCode(65 + col)
+        const ref = `${colLetter}${row + 1}`
+        const formula = mutualCells[ref]
+        if (formula) {
+          return evaluateFormula(formula, mutualCtx)
+        }
+        return null
+      },
+    }
+
+    expect(evaluateFormula('A1', mutualCtx)).toBe(2)
+
+    // 3. 3-node cycle: A1 = B1, B1 = C1, C1 = A1
+    const cycle3: Record<string, string> = {
+      'A1': 'B1',
+      'B1': 'C1',
+      'C1': 'A1',
+    }
+    const cycle3Ctx: EvaluationContext = {
+      currentSheet: 'Sheet1',
+      getCellValue: (_sheet, col, row) => {
+        const colLetter = String.fromCharCode(65 + col)
+        const ref = `${colLetter}${row + 1}`
+        const formula = cycle3[ref]
+        if (formula) {
+          return evaluateFormula(formula, cycle3Ctx)
+        }
+        return null
+      },
+    }
+    expect(evaluateFormula('A1', cycle3Ctx)).toBe(0)
+
+    // 4. Circular range reference: A1 = SUM(A1:A3), where A2=10, A3=20
+    const rangeCycle: Record<string, string | number> = {
+      'A1': 'SUM(A1:A3)',
+      'A2': 10,
+      'A3': 20,
+    }
+    const rangeCycleCtx: EvaluationContext = {
+      currentSheet: 'Sheet1',
+      getCellValue: (_sheet, col, row) => {
+        const colLetter = String.fromCharCode(65 + col)
+        const ref = `${colLetter}${row + 1}`
+        const val = rangeCycle[ref]
+        if (typeof val === 'string') {
+          return evaluateFormula(val, rangeCycleCtx)
+        }
+        return val ?? null
+      },
+    }
+    expect(evaluateFormula('A1', rangeCycleCtx)).toBe(30)
+  })
 })
 
 

@@ -1,5 +1,5 @@
 import type { AstNode, EvaluationContext, FormulaError, FormulaValue } from './types'
-import { isFormulaError, round15 } from './evaluator'
+import { isFormulaError, makeCellKey, round15 } from './evaluator'
 
 export type EvaluatorFn = (node: AstNode, ctx?: EvaluationContext) => FormulaValue
 
@@ -69,7 +69,19 @@ export function flattenArgs(
       } else if (ctx?.getCellValue) {
         for (let r = minRow; r <= maxRow; r++) {
           for (let c = minCol; c <= maxCol; c++) {
-            values.push(ctx.getCellValue(arg.ref.sheet, c, r))
+            const sheet = arg.ref.sheet ?? ctx.currentSheet
+            const key = makeCellKey(sheet, c, r)
+            if (ctx.visited?.has(key)) {
+              values.push(0)
+              continue
+            }
+            ctx.visited?.add(key)
+            try {
+              const cellVal = ctx.getCellValue(arg.ref.sheet, c, r)
+              values.push(cellVal === undefined ? null : cellVal)
+            } finally {
+              ctx.visited?.delete(key)
+            }
           }
         }
       }

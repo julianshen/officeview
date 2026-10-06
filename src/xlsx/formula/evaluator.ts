@@ -16,6 +16,13 @@ export function isFormulaError(val: unknown): val is FormulaError {
   return typeof val === 'string' && CANONICAL_ERRORS.has(val as FormulaError)
 }
 
+export const MAX_EVAL_DEPTH = 512
+
+export function makeCellKey(sheet: string | undefined, col: number, row: number): string {
+  const s = (sheet ?? '').trim().toLowerCase()
+  return `${s}!${col}:${row}`
+}
+
 /**
  * Rounds a floating-point number to 15 significant digits (Excel standard precision)
  * to eliminate floating-point artifacts like 0.1 + 0.2 = 0.30000000000000004.
@@ -127,8 +134,19 @@ export function evaluateNode(node: AstNode, ctx?: EvaluationContext): FormulaVal
       if (!ctx || !ctx.getCellValue) {
         return null
       }
-      const val = ctx.getCellValue(node.ref.sheet, node.ref.col, node.ref.row)
-      return val === undefined ? null : val
+      const sheet = node.ref.sheet ?? ctx.currentSheet
+      const key = makeCellKey(sheet, node.ref.col, node.ref.row)
+      if (ctx.visited?.has(key)) {
+        return 0
+      }
+
+      ctx.visited?.add(key)
+      try {
+        const val = ctx.getCellValue(node.ref.sheet, node.ref.col, node.ref.row)
+        return val === undefined ? null : val
+      } finally {
+        ctx.visited?.delete(key)
+      }
     }
 
     case 'range': {
@@ -242,5 +260,40 @@ export function evaluateNode(node: AstNode, ctx?: EvaluationContext): FormulaVal
  */
 export function evaluateFormula(input: string | AstNode, ctx?: EvaluationContext): FormulaValue {
   const node = typeof input === 'string' ? parseFormula(input) : input
-  return evaluateNode(node, ctx)
+  if (!ctx) {
+    return evaluateNode(node)
+  }
+
+  if (!ctx.visited) {
+    ctx.visited = new Set<string>()
+  }
+
+  const currentDepth = ctx.evalDepth ?? 0
+  if (currentDepth >= MAX_EVAL_DEPTH) {
+    return 0
+  }
+  ctx.evalDepth = currentDepth + 1
+
+  let currentKey: string | undefined
+  let addedCurrent = false
+  if (ctx.currentCell) {
+    currentKey = makeCellKey(
+      ctx.currentCell.sheet ?? ctx.currentSheet,
+      ctx.currentCell.col,
+      ctx.currentCell.row,
+    )
+    if (!ctx.visited.has(currentKey)) {
+      ctx.visited.add(currentKey)
+      addedCurrent = true
+    }
+  }
+
+  try {
+    return evaluateNode(node, ctx)
+  } finally {
+    ctx.evalDepth = currentDepth
+    if (currentKey && addedCurrent) {
+      ctx.visited.delete(currentKey)
+    }
+  }
 }

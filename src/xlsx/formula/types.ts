@@ -57,7 +57,9 @@ export interface EvaluationContext {
   getCellValue?(sheet: string | undefined, col: number, row: number): FormulaValue
   getRangeValues?(sheet: string | undefined, from: CellRef, to: CellRef): FormulaValue[][]
   currentSheet?: string
+  currentCell?: CellRef
   visited?: Set<string>
+  evalDepth?: number
 }
 
 export type BinaryOp =
