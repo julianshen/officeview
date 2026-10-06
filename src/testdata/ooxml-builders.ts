@@ -255,6 +255,7 @@ export async function buildXlsx(sheets: XlsxSheetSpec[], sharedStrings: string[]
   zip.file('[Content_Types].xml', XLSX_CT)
   zip.file('_rels/.rels', XLSX_ROOT_RELS)
   zip.file('xl/_rels/workbook.xml.rels', XLSX_WORKBOOK_RELS)
+  const escXml = (f: string) => f.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
   const sheetXml = (sheet: XlsxSheetSpec) => {
     const setup = sheet.pageSetup ? `<pageSetup${sheet.pageSetup.paperSize !== undefined ? ` paperSize="${sheet.pageSetup.paperSize}"` : ''}${sheet.pageSetup.orientation ? ` orientation="${sheet.pageSetup.orientation}"` : ''}${sheet.pageSetup.scale !== undefined ? ` scale="${sheet.pageSetup.scale}"` : ''}${sheet.pageSetup.fitToWidth !== undefined ? ` fitToWidth="${sheet.pageSetup.fitToWidth}"` : ''}${sheet.pageSetup.fitToHeight !== undefined ? ` fitToHeight="${sheet.pageSetup.fitToHeight}"` : ''}/>` : ''
     const setupPr = sheet.pageSetup?.fitToPage !== undefined ? `<sheetPr><pageSetUpPr fitToPage="${sheet.pageSetup.fitToPage ? '1' : '0'}"/></sheetPr>` : ''
@@ -265,13 +266,12 @@ export async function buildXlsx(sheets: XlsxSheetSpec[], sharedStrings: string[]
   ${sheet.cols ? `<cols>${sheet.cols}</cols>` : ''}
   <sheetData>
     ${sheet.rows.map((row) => `<row r="${row.r}">${row.cells.map((c) => {
-      const escF = (f: string) => f.replace(/&/g, '&amp;').replace(/</g, '&lt;')
       const fXml = c.sharedFormula !== undefined
-        ? `<f t="shared"${c.sharedFormula.ref ? ` ref="${c.sharedFormula.ref}"` : ''} si="${c.sharedFormula.si}">${c.formula !== undefined ? escF(c.formula) : ''}</f>`
+        ? `<f t="shared"${c.sharedFormula.ref ? ` ref="${c.sharedFormula.ref}"` : ''} si="${c.sharedFormula.si}">${c.formula !== undefined ? escXml(c.formula) : ''}</f>`
         : c.formula !== undefined
-          ? `<f>${escF(c.formula)}</f>`
+          ? `<f>${escXml(c.formula)}</f>`
           : ''
-      return `<c r="${c.ref}"${c.t ? ` t="${c.t}"` : ''}${c.style !== undefined ? ` s="${c.style}"` : ''}>${fXml}${c.v !== undefined ? `<v>${typeof c.v === 'string' ? escF(c.v) : c.v}</v>` : ''}</c>`
+      return `<c r="${c.ref}"${c.t ? ` t="${c.t}"` : ''}${c.style !== undefined ? ` s="${c.style}"` : ''}>${fXml}${c.v !== undefined ? `<v>${typeof c.v === 'string' ? escXml(c.v) : c.v}</v>` : ''}</c>`
     }).join('')}</row>`).join('\n    ')}
   </sheetData>
   ${sheet.merges ? `<mergeCells count="${sheet.merges.length}">${sheet.merges.map((m) => `<mergeCell ref="${m}"/>`).join('')}</mergeCells>` : ''}
