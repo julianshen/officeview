@@ -77,7 +77,7 @@ src/xlsx/formula/
 - [x] Test: Evaluates Math functions (SUM, AVERAGE, MIN, MAX, COUNT, COUNTA, ABS, ROUND, INT, MOD, PRODUCT)
 - [x] Test: Evaluates Logic functions with short-circuiting (IF, AND, OR, NOT, IFERROR)
 - [x] Test: Evaluates Text functions (CONCAT, LEFT, RIGHT, MID, LEN, TRIM, UPPER, LOWER)
-- [ ] Test: Handles blank cells correctly (0 in math, "" in concat, ignored in SUM)
+- [x] Test: Handles blank cells correctly (0 in math, "" in concat, ignored in SUM)
 - [ ] Test: Detects circular references and returns 0 without stack overflow
 
 ### Phase 4: Shared Formulas & Workbook Context
