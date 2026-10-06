@@ -846,6 +846,43 @@ describe('xlsx formula evaluator', () => {
     expect(evaluateFormula('0 / 0')).toBe('#DIV/0!')
     expect(evaluateFormula('0 ^ 0')).toBe('#NUM!')
   })
+
+  test('Evaluates string concatenation (&) and Excel comparison ordering (number < text < FALSE < TRUE)', () => {
+    // 1. String concatenation
+    expect(evaluateFormula('"Hello " & "World"')).toBe('Hello World')
+    expect(evaluateFormula('"Value: " & 42')).toBe('Value: 42')
+    expect(evaluateFormula('TRUE & " is truth"')).toBe('TRUE is truth')
+    expect(evaluateFormula('1 & 2 & 3')).toBe('123')
+
+    // 2. Intra-type comparisons
+    expect(evaluateFormula('1 < 2')).toBe(true)
+    expect(evaluateFormula('2 <= 2')).toBe(true)
+    expect(evaluateFormula('5 > 3')).toBe(true)
+    expect(evaluateFormula('5 >= 5')).toBe(true)
+    expect(evaluateFormula('5 = 5')).toBe(true)
+    expect(evaluateFormula('5 <> 6')).toBe(true)
+
+    // Case-insensitive string comparison in Excel
+    expect(evaluateFormula('"apple" = "APPLE"')).toBe(true)
+    expect(evaluateFormula('"apple" <> "APPLE"')).toBe(false)
+    expect(evaluateFormula('"abc" < "def"')).toBe(true)
+
+    // Boolean comparisons
+    expect(evaluateFormula('FALSE < TRUE')).toBe(true)
+    expect(evaluateFormula('TRUE = TRUE')).toBe(true)
+    expect(evaluateFormula('FALSE = FALSE')).toBe(true)
+
+    // 3. Cross-type Excel comparison hierarchy: Number < Text < FALSE < TRUE
+    expect(evaluateFormula('1000000 < "a"')).toBe(true)
+    expect(evaluateFormula('"z" > 999999')).toBe(true)
+    expect(evaluateFormula('"text" < FALSE')).toBe(true)
+    expect(evaluateFormula('"text" < TRUE')).toBe(true)
+    expect(evaluateFormula('100 < FALSE')).toBe(true)
+    expect(evaluateFormula('TRUE > "anything"')).toBe(true)
+    expect(evaluateFormula('TRUE > 9999999')).toBe(true)
+    expect(evaluateFormula('"10" = 10')).toBe(false)
+    expect(evaluateFormula('"10" <> 10')).toBe(true)
+  })
 })
 
 

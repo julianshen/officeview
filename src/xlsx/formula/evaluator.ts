@@ -39,6 +39,67 @@ function coerceToNumber(val: FormulaValue): number | FormulaError {
   return '#VALUE!'
 }
 
+function coerceToString(val: FormulaValue): string {
+  if (val === null) return ''
+  if (typeof val === 'boolean') return val ? 'TRUE' : 'FALSE'
+  if (typeof val === 'number') return String(round15(val))
+  return String(val)
+}
+
+function getTypeRank(val: FormulaValue): number {
+  if (typeof val === 'number') return 1
+  if (typeof val === 'string') return 2
+  if (typeof val === 'boolean') return 3
+  return 0 // null
+}
+
+function compareValues(v1: FormulaValue, v2: FormulaValue): number {
+  if (v1 === null && v2 === null) return 0
+
+  let a = v1
+  let b = v2
+  if (a === null) {
+    if (typeof b === 'number') a = 0
+    else if (typeof b === 'string') a = ''
+    else if (typeof b === 'boolean') a = 0
+  }
+  if (b === null) {
+    if (typeof a === 'number') b = 0
+    else if (typeof a === 'string') b = ''
+    else if (typeof a === 'boolean') b = 0
+  }
+
+  const rankA = getTypeRank(a)
+  const rankB = getTypeRank(b)
+
+  if (rankA !== rankB) {
+    return rankA < rankB ? -1 : 1
+  }
+
+  if (typeof a === 'number' && typeof b === 'number') {
+    const rA = round15(a)
+    const rB = round15(b)
+    if (rA < rB) return -1
+    if (rA > rB) return 1
+    return 0
+  }
+
+  if (typeof a === 'string' && typeof b === 'string') {
+    const sA = a.toUpperCase()
+    const sB = b.toUpperCase()
+    if (sA < sB) return -1
+    if (sA > sB) return 1
+    return 0
+  }
+
+  if (typeof a === 'boolean' && typeof b === 'boolean') {
+    if (a === b) return 0
+    return a ? 1 : -1
+  }
+
+  return 0
+}
+
 export function evaluateNode(node: AstNode, ctx?: EvaluationContext): FormulaValue {
   switch (node.type) {
     case 'number':
@@ -98,9 +159,32 @@ export function evaluateNode(node: AstNode, ctx?: EvaluationContext): FormulaVal
       if (isFormulaError(rightVal)) return rightVal
 
       if (node.op === '&') {
-        const leftStr = leftVal === null ? '' : String(leftVal)
-        const rightStr = rightVal === null ? '' : String(rightVal)
-        return leftStr + rightStr
+        return coerceToString(leftVal) + coerceToString(rightVal)
+      }
+
+      if (
+        node.op === '=' ||
+        node.op === '<>' ||
+        node.op === '<' ||
+        node.op === '<=' ||
+        node.op === '>' ||
+        node.op === '>='
+      ) {
+        const cmp = compareValues(leftVal, rightVal)
+        switch (node.op) {
+          case '=':
+            return cmp === 0
+          case '<>':
+            return cmp !== 0
+          case '<':
+            return cmp < 0
+          case '<=':
+            return cmp <= 0
+          case '>':
+            return cmp > 0
+          case '>=':
+            return cmp >= 0
+        }
       }
 
       // Arithmetic operations
