@@ -5,6 +5,7 @@ import { buildXlsx } from '../src/testdata/ooxml-builders'
 import { tokenize } from '../src/xlsx/formula/lexer'
 import { parseFormula } from '../src/xlsx/formula/parser'
 import { evaluateFormula } from '../src/xlsx/formula/evaluator'
+import { translateSharedFormula } from '../src/xlsx/formula/shared'
 import type { EvaluationContext, FormulaValue } from '../src/xlsx/formula/types'
 
 describe('xlsx formula fixture enablement', () => {
@@ -1265,6 +1266,30 @@ describe('xlsx formula evaluator', () => {
     expect(evaluateFormula('PRODUCT(5, )')).toBe(5)
     expect(evaluateFormula('COUNT(, )')).toBe(0)
     expect(evaluateFormula('SUM(, )')).toBe(0)
+  })
+})
+
+describe('xlsx shared formula & workbook context', () => {
+  test('Translates shared formula relative references by row/col offset (si master to dependent cells)', () => {
+    // 1. Relative translation: A1 + B1 shifted by (dCol=0, dRow=1) -> A2 + B2
+    const res1 = translateSharedFormula('A1 + B1', 0, 1)
+    expect(res1.formula).toBe('A2+B2')
+
+    // 2. Absolute and mixed references: $A$1 + A$1 + $A1 + A1 shifted by (dCol=2, dRow=3)
+    const res2 = translateSharedFormula('$A$1 + A$1 + $A1 + A1', 2, 3)
+    expect(res2.formula).toBe('$A$1+C$1+$A4+C4')
+
+    // 3. Range references: SUM(A1:B2) shifted by (dCol=1, dRow=2) -> SUM(B3:C4)
+    const res3 = translateSharedFormula('SUM(A1:B2)', 1, 2)
+    expect(res3.formula).toBe('SUM(B3:C4)')
+
+    // 4. Cross-sheet references: Sheet2!A1 shifted by (dCol=1, dRow=1) -> Sheet2!B2
+    const res4 = translateSharedFormula('Sheet2!A1', 1, 1)
+    expect(res4.formula).toBe('Sheet2!B2')
+
+    // 5. Out of bounds translation produces #REF!
+    const res5 = translateSharedFormula('A1', -1, 0)
+    expect(res5.formula).toBe('#REF!')
   })
 })
 
