@@ -1680,7 +1680,226 @@ describe('xlsx formula integration & canvas rendering', () => {
     // Off-screen cell Z100 ("50") is culled and NOT painted
     expect(paintedTexts.some(p => p.text === '50')).toBe(false)
   })
+
+  test('renderSheet renders calculated formula cell values onto canvas with correct alignment and styling', async () => {
+    const doc: XlsxDocument = {
+      sheets: [
+        {
+          name: 'Sheet1',
+          merges: [],
+          mergeRanges: [],
+          cols: [{ min: 0, max: 0, widthChars: 10 }], // col 0 width ~75px
+          rows: [
+            {
+              index: 0,
+              cells: [
+                // A1: computed number, bold
+                {
+                  ref: 'A1',
+                  col: 0,
+                  row: 0,
+                  value: 30,
+                  formula: '10 + 20',
+                  styleIndex: 0,
+                  style: { bold: true, fontSizePt: 11, numFmtId: 0 },
+                },
+                // B1: computed text, italic
+                {
+                  ref: 'B1',
+                  col: 1,
+                  row: 0,
+                  value: 'Hello World',
+                  formula: '"Hello" & " World"',
+                  styleIndex: 1,
+                  style: { italic: true, fontSizePt: 11, numFmtId: 0 },
+                },
+              ],
+            },
+          ],
+        },
+      ],
+    }
+
+    const paintedCalls: Array<{ text: string; x: number; y: number; font: string }> = []
+    const fakeCtx = {
+      save: () => {},
+      restore: () => {},
+      beginPath: () => {},
+      rect: () => {},
+      clip: () => {},
+      fillRect: () => {},
+      stroke: () => {},
+      moveTo: () => {},
+      lineTo: () => {},
+      translate: () => {},
+      measureText: (text: string) => ({ width: text.length * 7 }),
+      fillText: (text: string, x: number, y: number) => {
+        paintedCalls.push({ text, x, y, font: fakeCtx.font })
+      },
+      font: '',
+      fillStyle: '',
+      strokeStyle: '',
+      lineWidth: 1,
+      textBaseline: 'alphabetic',
+    }
+
+    renderSheet(doc.sheets[0], fakeCtx as unknown as CanvasRenderingContext2D)
+
+    const a1Call = paintedCalls.find(c => c.text === '30')
+    expect(a1Call).toBeDefined()
+    expect(a1Call?.font).toContain('bold')
+    // Numbers are right-aligned (x > 0)
+    expect(a1Call?.x).toBeGreaterThan(40)
+
+    const b1Call = paintedCalls.find(c => c.text === 'Hello World')
+    expect(b1Call).toBeDefined()
+    expect(b1Call?.font).toContain('italic')
+    // Text strings are left-aligned (x starts at col 1 start + padding 3)
+    const col0Width = Math.round(10 * 7 + 5)
+    expect(b1Call?.x).toBe(col0Width + 3)
+  })
+
+  test('renderSheet applies number format (numFmtId) to formula results', async () => {
+    const doc: XlsxDocument = {
+      sheets: [
+        {
+          name: 'Sheet1',
+          merges: [],
+          mergeRanges: [],
+          cols: [],
+          rows: [
+            {
+              index: 0,
+              cells: [
+                {
+                  ref: 'A1',
+                  col: 0,
+                  row: 0,
+                  value: 3.3333333333333335,
+                  formula: '10 / 3',
+                  styleIndex: 0,
+                  style: { numFmtId: 2 }, // 0.00
+                },
+                {
+                  ref: 'B1',
+                  col: 1,
+                  row: 0,
+                  value: 0.42,
+                  formula: '42 / 100',
+                  styleIndex: 1,
+                  style: { numFmtId: 9 }, // 0%
+                },
+                {
+                  ref: 'C1',
+                  col: 2,
+                  row: 0,
+                  value: 12345.678,
+                  formula: '12345.678',
+                  styleIndex: 2,
+                  style: { numFmtId: 4 }, // #,##0.00
+                },
+              ],
+            },
+          ],
+        },
+      ],
+    }
+
+    const paintedTexts: string[] = []
+    const fakeCtx = {
+      save: () => {},
+      restore: () => {},
+      beginPath: () => {},
+      rect: () => {},
+      clip: () => {},
+      fillRect: () => {},
+      stroke: () => {},
+      moveTo: () => {},
+      lineTo: () => {},
+      translate: () => {},
+      measureText: (text: string) => ({ width: text.length * 7 }),
+      fillText: (text: string) => {
+        paintedTexts.push(text)
+      },
+      font: '',
+      fillStyle: '',
+      strokeStyle: '',
+      lineWidth: 1,
+      textBaseline: 'alphabetic',
+    }
+
+    renderSheet(doc.sheets[0], fakeCtx as unknown as CanvasRenderingContext2D)
+
+    expect(paintedTexts).toContain('3.33')
+    expect(paintedTexts).toContain('42%')
+    expect(paintedTexts).toContain('12,345.68')
+  })
+
+  test('renderSheet renders formula error strings (#DIV/0!) with alignment per native Excel center convention', async () => {
+    const doc: XlsxDocument = {
+      sheets: [
+        {
+          name: 'Sheet1',
+          merges: [],
+          mergeRanges: [],
+          cols: [{ min: 0, max: 0, widthChars: 12 }], // ~89px wide
+          rows: [
+            {
+              index: 0,
+              cells: [
+                {
+                  ref: 'A1',
+                  col: 0,
+                  row: 0,
+                  value: '#DIV/0!',
+                  formula: '10 / 0',
+                  styleIndex: 0,
+                  style: { numFmtId: 0 },
+                },
+              ],
+            },
+          ],
+        },
+      ],
+    }
+
+    const paintedCalls: Array<{ text: string; x: number }> = []
+    const textWidth = 7 * 7 // 49px for '#DIV/0!' with 7px/char
+    const fakeCtx = {
+      save: () => {},
+      restore: () => {},
+      beginPath: () => {},
+      rect: () => {},
+      clip: () => {},
+      fillRect: () => {},
+      stroke: () => {},
+      moveTo: () => {},
+      lineTo: () => {},
+      translate: () => {},
+      measureText: () => ({ width: textWidth }),
+      fillText: (text: string, x: number) => {
+        paintedCalls.push({ text, x })
+      },
+      font: '',
+      fillStyle: '',
+      strokeStyle: '',
+      lineWidth: 1,
+      textBaseline: 'alphabetic',
+    }
+
+    renderSheet(doc.sheets[0], fakeCtx as unknown as CanvasRenderingContext2D)
+
+    const call = paintedCalls.find(c => c.text === '#DIV/0!')
+    expect(call).toBeDefined()
+    // Col width is Math.round(12 * 7 + 5) = 89px.
+    // Center alignment: x = (89 - 49) / 2 = 20px.
+    // Left alignment would have been x = 3px.
+    const colWidth = Math.round(12 * 7 + 5)
+    const expectedCenterX = (colWidth - textWidth) / 2
+    expect(call?.x).toBe(expectedCenterX)
+  })
 })
+
 
 
 
