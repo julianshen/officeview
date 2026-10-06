@@ -81,9 +81,13 @@ src/xlsx/formula/
 - [x] Test: Detects circular references and returns 0 without stack overflow
 
 ### Phase 4: Shared Formulas & Workbook Context
+- Architecture Contract:
+  - Workbook-level evaluation uses a single shared `EvaluationContext` with shared `visited: Set<string>` for cycle detection and cycle poisoning (`hasCycle = true` -> 0).
+  - Per-cell memoization (`Map<string, FormulaValue>`) ensures each cell in a dependency graph is evaluated at most once, supporting arbitrarily long dependency chains (e.g. 2,000+ rows) in O(N) time without stack overflow.
+  - `MAX_EVAL_DEPTH` (512) serves strictly as an emergency backstop against infinite recursion, not a semantic truncation.
 - [ ] Test: Translates shared formula relative references by row/col offset (`si` master to dependent cells)
 - [ ] Test: Resolves cross-sheet references (`Sheet2!A1`) using workbook-level context
-- [ ] Test: Evaluates multi-cell dependency chains across rows and sheets in correct order
+- [ ] Test: Evaluates multi-cell dependency chains across rows and sheets in correct order with per-cell memoization
 - [ ] Test: Preserves cached `<v>` unless missing, `ca="1"`, or `fullCalcOnLoad="1"`
 
 ### Phase 5: Integration & Canvas Rendering
@@ -91,5 +95,6 @@ src/xlsx/formula/
 - [ ] Test: Viewport culling does not break off-screen formula dependencies
 - [ ] Test: `renderSheet` renders calculated formula cell values onto canvas with correct alignment and styling
 - [ ] Test: `renderSheet` applies number format (`numFmtId`) to formula results
-- [ ] Test: `renderSheet` renders formula error strings (#DIV/0!) centered per Excel convention
+- [ ] Test: `renderSheet` renders formula error strings (#DIV/0!) with alignment per native convention (to be verified against Excel / default center or left)
 - [ ] Test: End-to-end fixture test parsing and rendering an XLSX file with missing `<v>` formulas
+
