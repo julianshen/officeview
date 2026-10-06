@@ -261,7 +261,7 @@ async function parseSheet(
       } else if (t === 'str') {
         value = vNode ? textOf(vNode) : ''
       } else if (t === 'e') {
-        value = vNode ? textOf(vNode) : '#ERROR'
+        value = vNode ? textOf(vNode) : null
       } else {
         // numeric
         const raw = vNode ? textOf(vNode) : ''

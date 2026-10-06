@@ -271,7 +271,7 @@ export async function buildXlsx(sheets: XlsxSheetSpec[], sharedStrings: string[]
         : c.formula !== undefined
           ? `<f>${escF(c.formula)}</f>`
           : ''
-      return `<c r="${c.ref}"${c.t ? ` t="${c.t}"` : ''}${c.style !== undefined ? ` s="${c.style}"` : ''}>${fXml}${c.v !== undefined ? `<v>${c.v}</v>` : ''}</c>`
+      return `<c r="${c.ref}"${c.t ? ` t="${c.t}"` : ''}${c.style !== undefined ? ` s="${c.style}"` : ''}>${fXml}${c.v !== undefined ? `<v>${typeof c.v === 'string' ? escF(c.v) : c.v}</v>` : ''}</c>`
     }).join('')}</row>`).join('\n    ')}
   </sheetData>
   ${sheet.merges ? `<mergeCells count="${sheet.merges.length}">${sheet.merges.map((m) => `<mergeCell ref="${m}"/>`).join('')}</mergeCells>` : ''}
