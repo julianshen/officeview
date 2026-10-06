@@ -86,9 +86,9 @@ src/xlsx/formula/
   - Per-cell memoization (`Map<string, FormulaValue>`) ensures each cell in a dependency graph is evaluated at most once, supporting arbitrarily long dependency chains (e.g. 2,000+ rows) in O(N) time without stack overflow.
   - `MAX_EVAL_DEPTH` (512) serves strictly as an emergency backstop against infinite recursion, not a semantic truncation.
 - [x] Test: Translates shared formula relative references by row/col offset (`si` master to dependent cells)
-- [ ] Test: Resolves cross-sheet references (`Sheet2!A1`) using workbook-level context
-- [ ] Test: Evaluates multi-cell dependency chains across rows and sheets in correct order with per-cell memoization
-- [ ] Test: Preserves cached `<v>` unless missing, `ca="1"`, or `fullCalcOnLoad="1"`
+- [x] Test: Resolves cross-sheet references (`Sheet2!A1`) using workbook-level context
+- [x] Test: Evaluates multi-cell dependency chains across rows and sheets in correct order with per-cell memoization
+- [x] Test: Preserves cached `<v>` unless missing, `ca="1"`, or `fullCalcOnLoad="1"`
 
 ### Phase 5: Integration & Canvas Rendering
 - [ ] Test: `parseXlsx` evaluates formula cells when `<v>` is absent
