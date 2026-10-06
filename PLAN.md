@@ -114,19 +114,19 @@ src/drawing/
 - [x] Test: Record initial golden image hashes before WordArt changes
 
 ### Phase 1: WordArt Text Appearance Foundation & Parsing
-- [ ] Test: Parses pattern fill preset, foreground color, and background color from `<a:pattFill>`
-- [ ] Test: Parses linear gradient fill angle and stops pos/color from `<a:gradFill>`
-- [ ] Test: Parses solid outline width in EMU and stroke color from `<a:ln>`
-- [ ] Test: Parses outer shadow distance, direction, blur radius, and color from `<a:outerShdw>`
-- [ ] Test: Preserves outline-only run with `<a:noFill>` and `<a:ln>`
-- [ ] Test: Most-specific fill wins: run-level `<a:gradFill>` clears inherited `<a:noFill>`
-- [ ] Test: Most-specific fill wins: run-level `<a:solidFill>` clears inherited `<a:noFill>`
-- [ ] Test: Run-level `<a:ln><a:noFill/></a:ln>` clears inherited outline silently
-- [ ] Test: Resolves WordArt appearance colors (pattern, outline, shadow) through theme scheme colors and luminance modifiers
-- [ ] Test: Emits diagnostic for unsupported pattern presets and falls back gracefully to solid foreground
-- [ ] Test: Emits diagnostic for unsupported path gradients (`<a:path>`) and falls back to first stop
-- [ ] Test: Emits diagnostic for unsupported `<a:blipFill>` on text and falls back gracefully
-- [ ] Test: Emits diagnostic for width-less or malformed `<a:ln>` width and clears outline without throwing
+- [x] Test: Parses pattern fill preset, foreground color, and background color from `<a:pattFill>`
+- [x] Test: Parses linear gradient fill angle and stops pos/color from `<a:gradFill>`
+- [x] Test: Parses solid outline width in EMU and stroke color from `<a:ln>`
+- [x] Test: Parses outer shadow distance, direction, blur radius, and color from `<a:outerShdw>`
+- [x] Test: Preserves outline-only run with `<a:noFill>` and `<a:ln>`
+- [x] Test: Most-specific fill wins: run-level `<a:gradFill>` clears inherited `<a:noFill>`
+- [x] Test: Most-specific fill wins: run-level `<a:solidFill>` clears inherited `<a:noFill>`
+- [x] Test: Run-level `<a:ln><a:noFill/></a:ln>` clears inherited outline silently
+- [x] Test: Resolves WordArt appearance colors (pattern, outline, shadow) through theme scheme colors and luminance modifiers
+- [x] Test: Emits diagnostic for unsupported pattern presets and falls back gracefully to solid foreground
+- [x] Test: Emits diagnostic for unsupported path gradients (`<a:path>`) and falls back to first stop
+- [x] Test: Emits diagnostic for unsupported `<a:blipFill>` on text and falls back gracefully
+- [x] Test: Emits diagnostic for width-less or malformed `<a:ln>` width and clears outline without throwing
 
 ### Phase 2: WordArt Canvas Rendering & State Isolation
 - [ ] Test: Canvas paints linear gradient across run bounds from start stop to end stop

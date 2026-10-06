@@ -44,7 +44,7 @@ export interface PptxSource {
 }
 
 export type PptxDiagnostic = (GeometryIssue | DrawingIssue | ContentDiagnostic | {
-  kind: 'invalid-transform' | 'missing-representation' | 'fallback-representation' | 'missing-image' | 'unsupported-object' | 'deferred-animation' | 'unsupported-text-alignment'
+  kind: 'invalid-transform' | 'missing-representation' | 'fallback-representation' | 'missing-image' | 'unsupported-object' | 'deferred-animation' | 'unsupported-text-alignment' | 'unsupported-text-appearance' | 'unsupported-text-warp'
   message: string
   feature?: string
 }) & { source?: PptxSource }
