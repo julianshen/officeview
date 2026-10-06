@@ -803,6 +803,14 @@ describe('xlsx formula parser (AST)', () => {
       left: { type: 'error', error: '#DIV/0!' },
       right: { type: 'number', value: 1 },
     })
+
+    // 5. TRUE() and FALSE() zero-argument functions
+    expect(parseFormula('=TRUE()')).toEqual({ type: 'boolean', value: true })
+    expect(parseFormula('=FALSE()')).toEqual({ type: 'boolean', value: false })
+
+    // 6. Long unary chain within 8192-char cap parses without throwing
+    const unaryChain8000 = '-'.repeat(8000) + '1'
+    expect(() => parseFormula(unaryChain8000)).not.toThrow()
   })
 })
 

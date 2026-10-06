@@ -42,6 +42,7 @@ src/xlsx/formula/
 5. **15-Digit Floating Precision**: Numerical results are rounded to 15 significant digits to avoid floating-point artifacts like `0.1 + 0.2 = 0.30000000000000004`.
 6. **Deliberately Out of Scope**: `xl/calcChain.xml` (recalc-order hint), dynamic array spilling/`LAMBDA`, nondeterministic functions (`RAND`, `NOW`, `TODAY` return `#NAME?`), external workbook links (`[1]Sheet1!A1` return `#REF!`).
 7. **Reversed Range Normalization**: Reversed ranges (e.g. `B10:A1`) are parsed faithfully as authored and normalized to standard bounding boxes (`minCol..maxCol`, `minRow..maxRow`) during range resolution and evaluation in Phase 3.
+8. **Evaluator Contract for Error Operands**: Error nodes containing canonical Excel error codes (`#DIV/0!`, `#VALUE!`, `#REF!`, `#NAME?`, `#NUM!`, `#N/A`, `#NULL!`) propagate that exact code during evaluation (first-error-wins in binary operations). Error nodes containing syntax error messages (e.g. unexpected token, unclosed parenthesis) coerce to `#NAME?`.
 
 ---
 

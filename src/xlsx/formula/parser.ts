@@ -211,27 +211,38 @@ class Parser {
 
   // Precedence level 6: Unary prefix (+, -)
   private parseUnary(): AstNode {
-    if (this.matchOp('+', '-')) {
+    const unaries: Array<{ op: '+' | '-'; start: number }> = []
+
+    while (this.matchOp('+', '-')) {
       const opTok = this.advance()
-      const op = opTok.value as '+' | '-'
+      unaries.push({ op: opTok.value as '+' | '-', start: opTok.start })
       if (this.isEof()) {
         return {
           type: 'error',
           error: `#NAME? Unexpected end of expression after unary operator at position ${opTok.start}`,
         }
       }
-      const expr = this.parseUnary()
-      if (expr.type === 'empty') {
-        return {
-          type: 'error',
-          error: `#NAME? Unexpected end of expression after unary operator at position ${opTok.start}`,
-        }
-      }
-      if (expr.type === 'error' && expr.error.startsWith('#NAME?')) return expr
-      return { type: 'unary', op, expr }
     }
 
-    return this.parsePostfix()
+    if (unaries.length === 0) {
+      return this.parsePostfix()
+    }
+
+    let expr = this.parsePostfix()
+    if (expr.type === 'empty') {
+      const lastOp = unaries[unaries.length - 1]
+      return {
+        type: 'error',
+        error: `#NAME? Unexpected end of expression after unary operator at position ${lastOp.start}`,
+      }
+    }
+    if (expr.type === 'error' && expr.error.startsWith('#NAME?')) return expr
+
+    for (let i = unaries.length - 1; i >= 0; i--) {
+      expr = { type: 'unary', op: unaries[i].op, expr }
+    }
+
+    return expr
   }
 
   // Precedence level 7: Postfix percent (%)
@@ -267,6 +278,17 @@ class Parser {
 
     if (tok.type === 'boolean') {
       this.advance()
+      if (this.peek().type === 'lparen') {
+        this.advance() // consume '('
+        if (this.peek().type === 'rparen') {
+          this.advance() // consume ')'
+        } else {
+          return {
+            type: 'error',
+            error: `#NAME? Expected 0 arguments for ${tok.value}() at position ${this.peek().start}`,
+          }
+        }
+      }
       return { type: 'boolean', value: tok.value.toUpperCase() === 'TRUE' }
     }
 
