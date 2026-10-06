@@ -24,6 +24,8 @@ export interface XlsxCell {
   styleIndex: number
   formula?: string
   sharedFormula?: { si: number; ref?: string }
+  /** Calculate always flag (ca="1") */
+  ca?: boolean
   /** Resolved style (from cellXfs + fonts/fills/borders). */
   style?: XlsxCellStyle
 }

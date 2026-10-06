@@ -1423,6 +1423,133 @@ describe('xlsx shared formula & workbook context', () => {
     expect(doc.sheets[0].rows[0].cells[0].value).toBe(30) // recalculated
     expect(doc.sheets[0].rows[0].cells[1].value).toBe(30)
   })
+
+  test('Addresses Phase 4 peer review hardening (workbook cycle poisoning rollback, range clamp, ca flag, multi-sheet package roundtrip)', async () => {
+    // 1. Workbook cycle poisoning: mutual cycle A1=B1+1, B1=A1+1 both evaluate to 0
+    // Sibling C1=A1+100 evaluates to 100, D1=20 is completely uncontaminated
+    const cycleDoc: XlsxDocument = {
+      sheets: [
+        {
+          name: 'CycleSheet',
+          merges: [],
+          mergeRanges: [],
+          cols: [],
+          rows: [
+            {
+              index: 0,
+              cells: [
+                { ref: 'A1', col: 0, row: 0, value: null, formula: 'B1 + 1', styleIndex: 0 },
+                { ref: 'B1', col: 1, row: 0, value: null, formula: 'A1 + 1', styleIndex: 0 },
+                { ref: 'C1', col: 2, row: 0, value: null, formula: 'A1 + 100', styleIndex: 0 },
+                { ref: 'D1', col: 3, row: 0, value: null, formula: '10 * 2', styleIndex: 0 },
+              ],
+            },
+          ],
+        },
+      ],
+    }
+
+    evaluateWorkbookFormulas(cycleDoc)
+    expect(cycleDoc.sheets[0].rows[0].cells[0].value).toBe(0) // A1 poisoned to 0
+    expect(cycleDoc.sheets[0].rows[0].cells[1].value).toBe(0) // B1 poisoned to 0
+    expect(cycleDoc.sheets[0].rows[0].cells[2].value).toBe(100) // C1 = 0 + 100
+    expect(cycleDoc.sheets[0].rows[0].cells[3].value).toBe(20) // D1 unaffected
+
+    // Evaluate-twice stability
+    evaluateWorkbookFormulas(cycleDoc, { forceRecalc: true })
+    expect(cycleDoc.sheets[0].rows[0].cells[0].value).toBe(0)
+    expect(cycleDoc.sheets[0].rows[0].cells[1].value).toBe(0)
+    expect(cycleDoc.sheets[0].rows[0].cells[2].value).toBe(100)
+
+    // 2. Range clamping: SUM(A1:XFD1) clamps to used area and executes in milliseconds
+    const largeRangeDoc: XlsxDocument = {
+      sheets: [
+        {
+          name: 'BigRange',
+          merges: [],
+          mergeRanges: [],
+          cols: [],
+          rows: [
+            {
+              index: 0,
+              cells: [
+                { ref: 'A1', col: 0, row: 0, value: 5, styleIndex: 0 },
+                { ref: 'B1', col: 1, row: 0, value: 10, styleIndex: 0 },
+              ],
+            },
+            {
+              index: 1,
+              cells: [
+                { ref: 'A2', col: 0, row: 1, value: null, formula: 'SUM(A1:XFD1)', styleIndex: 0 },
+              ],
+            },
+          ],
+        },
+      ],
+    }
+    evaluateWorkbookFormulas(largeRangeDoc)
+    expect(largeRangeDoc.sheets[0].rows[1].cells[0].value).toBe(15)
+
+    // 3. ca="1" forces recalculation even when cached <v> is present
+    const caDoc: XlsxDocument = {
+      sheets: [
+        {
+          name: 'CaSheet',
+          merges: [],
+          mergeRanges: [],
+          cols: [],
+          rows: [
+            {
+              index: 0,
+              cells: [
+                { ref: 'A1', col: 0, row: 0, value: 888, formula: '5 + 5', ca: true, styleIndex: 0 },
+              ],
+            },
+          ],
+        },
+      ],
+    }
+    evaluateWorkbookFormulas(caDoc)
+    expect(caDoc.sheets[0].rows[0].cells[0].value).toBe(10) // recalculated because ca=true
+
+    // 4. Multi-sheet round-trip with buildXlsx and parseXlsx
+    const multiBuf = await buildXlsx([
+      {
+        name: 'Sheet1',
+        rows: [
+          {
+            r: 1,
+            cells: [
+              { ref: 'A1', formula: 'Sheet2!A1 * 3', v: 999, ca: true },
+            ],
+          },
+        ],
+      },
+      {
+        name: 'Sheet2',
+        rows: [
+          {
+            r: 1,
+            cells: [
+              { ref: 'A1', v: 42 },
+            ],
+          },
+        ],
+      },
+    ])
+
+    const pkg = await OfficePackage.load(multiBuf)
+    const parsedDoc = await parseXlsx(pkg)
+    expect(parsedDoc.sheets.length).toBe(2)
+    expect(parsedDoc.sheets[0].rows[0].cells[0].ca).toBe(true)
+
+    evaluateWorkbookFormulas(parsedDoc)
+    expect(parsedDoc.sheets[0].rows[0].cells[0].value).toBe(126) // 42 * 3
+
+    // 5. CJK unquoted sheet names in formatCellRef
+    const cjkRes = translateSharedFormula('工作表1!A1', 1, 0)
+    expect(cjkRes.formula).toBe('工作表1!B1')
+  })
 })
 
 

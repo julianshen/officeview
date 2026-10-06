@@ -38,6 +38,12 @@ export function flattenArgs(
       const minCol = Math.min(arg.ref.from.col, arg.ref.to.col)
       const maxCol = Math.max(arg.ref.from.col, arg.ref.to.col)
 
+      const cellCount = (maxRow - minRow + 1) * (maxCol - minCol + 1)
+      if (cellCount > 100000 && !ctx?.getRangeValues) {
+        items.push({ value: '#NUM!', fromRef: true })
+        continue
+      }
+
       if (ctx?.getRangeValues) {
         const grid = ctx.getRangeValues(arg.ref.sheet, arg.ref.from, arg.ref.to)
         for (const row of grid) {

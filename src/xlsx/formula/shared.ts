@@ -21,7 +21,7 @@ export function formatCellRef(ref: CellRef): string {
   const colStr = (ref.absCol ? '$' : '') + colToName(ref.col)
   const rowStr = (ref.absRow ? '$' : '') + (ref.row + 1)
   const sheetStr = ref.sheet
-    ? /^[A-Za-z0-9_]+$/.test(ref.sheet)
+    ? /^[A-Za-z0-9_\p{L}\p{N}]+$/u.test(ref.sheet)
       ? `${ref.sheet}!`
       : `'${ref.sheet.replace(/'/g, "''")}'!`
     : ''
@@ -68,7 +68,7 @@ export function formatFormula(node: AstNode): string {
       return formatCellRef(node.ref)
     case 'range': {
       const sheetStr = node.ref.sheet
-        ? /^[A-Za-z0-9_]+$/.test(node.ref.sheet)
+        ? /^[A-Za-z0-9_\p{L}\p{N}]+$/u.test(node.ref.sheet)
           ? `${node.ref.sheet}!`
           : `'${node.ref.sheet.replace(/'/g, "''")}'!`
         : ''

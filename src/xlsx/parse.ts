@@ -267,7 +267,17 @@ async function parseSheet(
         const raw = vNode ? textOf(vNode) : ''
         value = raw !== '' && Number.isFinite(parseFloat(raw)) ? parseFloat(raw) : raw === '' ? null : raw
       }
-      const cell: XlsxCell = { ref, row: rowIdx, col: colIdx, value, styleIndex: Number.isFinite(sIdx) ? sIdx : 0, formula, sharedFormula }
+      const calcAlways = ca.ca === '1' || ca.ca === 'true'
+      const cell: XlsxCell = {
+        ref,
+        row: rowIdx,
+        col: colIdx,
+        value,
+        styleIndex: Number.isFinite(sIdx) ? sIdx : 0,
+        formula,
+        sharedFormula,
+        ca: calcAlways ? true : undefined,
+      }
       const xf = styles.xfs[cell.styleIndex]
       if (xf) {
         const font = styles.fonts[xf.fontId]
