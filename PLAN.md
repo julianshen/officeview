@@ -109,9 +109,9 @@ src/drawing/
 ## TDD Implementation Phases
 
 ### Phase 0: Baseline Verification & Environment Sanity
-- [ ] Test: Baseline strict test suite passes with zero regressions (65 test files / 1,632 tests passing)
-- [ ] Test: Baseline TypeScript type check (`bunx tsc --noEmit`) and build (`bun run build`) pass cleanly
-- [ ] Test: Record initial golden image hashes before WordArt changes
+- [x] Test: Baseline strict test suite passes with zero regressions (65 test files / 1,632 tests passing)
+- [x] Test: Baseline TypeScript type check (`bunx tsc --noEmit`) and build (`bun run build`) pass cleanly
+- [x] Test: Record initial golden image hashes before WordArt changes
 
 ### Phase 1: WordArt Text Appearance Foundation & Parsing
 - [ ] Test: Parses pattern fill preset, foreground color, and background color from `<a:pattFill>`
