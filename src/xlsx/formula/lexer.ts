@@ -36,7 +36,7 @@ function parseCellCoord(s: string): ParsedCellCoord | null {
     absCol: hasAbsCol,
     absRow: hasAbsRow,
     length: m[0].length,
-    text: (hasAbsCol ? '$' : '') + colLetters + (hasAbsRow ? '$' : '') + m[4],
+    text: m[0],
   }
 }
 
@@ -52,8 +52,8 @@ export function tokenize(input: string): Token[] {
 
   if (str.length > MAX_FORMULA_LENGTH) {
     return [
-      { type: 'error', value: `Formula exceeds maximum length of ${MAX_FORMULA_LENGTH} characters` },
-      { type: 'eof', value: '' },
+      { type: 'error', value: `Formula exceeds maximum length of ${MAX_FORMULA_LENGTH} characters`, start: 0 },
+      { type: 'eof', value: '', start: str.length },
     ]
   }
 
@@ -70,16 +70,18 @@ export function tokenize(input: string): Token[] {
       continue
     }
 
-    // Excel error literals (#DIV/0!, #REF!, #N/A, #VALUE!, #NAME?, #NUM!, #NULL!, #ERROR)
+    const tokenStart = i
+
+    // Excel error literals (#DIV/0!, #REF!, #N/A, #VALUE!, #NAME?, #NUM!, #NULL!)
     if (ch === '#') {
       const rest = str.slice(i)
-      const errMatch = /^#(DIV\/0!|REF!|N\/A|VALUE!|NAME\?|NUM!|NULL!|ERROR)/i.exec(rest)
+      const errMatch = /^#(DIV\/0!|REF!|N\/A|VALUE!|NAME\?|NUM!|NULL!)/i.exec(rest)
       if (errMatch) {
-        tokens.push({ type: 'error', value: errMatch[0].toUpperCase() })
+        tokens.push({ type: 'error', value: errMatch[0].toUpperCase(), start: tokenStart })
         i += errMatch[0].length
         continue
       }
-      tokens.push({ type: 'error', value: ch })
+      tokens.push({ type: 'error', value: ch, start: tokenStart })
       i++
       continue
     }
@@ -105,35 +107,35 @@ export function tokenize(input: string): Token[] {
       }
       const numStr = str.slice(start, i)
       const numVal = parseFloat(numStr)
-      tokens.push({ type: 'number', value: numStr, numValue: numVal })
+      tokens.push({ type: 'number', value: numStr, start: tokenStart, numValue: numVal })
       continue
     }
 
     // Operators and delimiters
     if (ch === '(') {
-      tokens.push({ type: 'lparen', value: '(' })
+      tokens.push({ type: 'lparen', value: '(', start: tokenStart })
       i++
       continue
     }
     if (ch === ')') {
-      tokens.push({ type: 'rparen', value: ')' })
+      tokens.push({ type: 'rparen', value: ')', start: tokenStart })
       i++
       continue
     }
     if (ch === ',') {
-      tokens.push({ type: 'comma', value: ',' })
+      tokens.push({ type: 'comma', value: ',', start: tokenStart })
       i++
       continue
     }
     if (ch === ':') {
-      tokens.push({ type: 'colon', value: ':' })
+      tokens.push({ type: 'colon', value: ':', start: tokenStart })
       i++
       continue
     }
 
     // Arithmetic operators & percent
     if (ch === '+' || ch === '-' || ch === '*' || ch === '/' || ch === '^' || ch === '%') {
-      tokens.push({ type: 'op', value: ch })
+      tokens.push({ type: 'op', value: ch, start: tokenStart })
       i++
       continue
     }
@@ -159,9 +161,10 @@ export function tokenize(input: string): Token[] {
         }
       }
       if (!closed) {
-        tokens.push({ type: 'error', value: `Unterminated string literal: "${val}` })
+        const preview = val.length > 32 ? val.slice(0, 32) + '...' : val
+        tokens.push({ type: 'error', value: `Unterminated string literal: "${preview}`, start: tokenStart })
       } else {
-        tokens.push({ type: 'string', value: val })
+        tokens.push({ type: 'string', value: val, start: tokenStart })
       }
       continue
     }
@@ -199,6 +202,7 @@ export function tokenize(input: string): Token[] {
               tokens.push({
                 type: 'range',
                 value: fullText,
+                start: tokenStart,
                 sheet: sheetName,
                 rangeRef: {
                   sheet: sheetName,
@@ -214,6 +218,7 @@ export function tokenize(input: string): Token[] {
           tokens.push({
             type: 'cell',
             value: fullText,
+            start: tokenStart,
             sheet: sheetName,
             cellRef: {
               sheet: sheetName,
@@ -227,7 +232,7 @@ export function tokenize(input: string): Token[] {
           continue
         }
       }
-      tokens.push({ type: 'error', value: str.slice(i, sIdx) })
+      tokens.push({ type: 'error', value: str.slice(i, sIdx), start: tokenStart })
       i = sIdx
       continue
     }
@@ -235,46 +240,47 @@ export function tokenize(input: string): Token[] {
     // Comparison operators and concat
     if (ch === '<') {
       if (i + 1 < len && str[i + 1] === '>') {
-        tokens.push({ type: 'op', value: '<>' })
+        tokens.push({ type: 'op', value: '<>', start: tokenStart })
         i += 2
         continue
       }
       if (i + 1 < len && str[i + 1] === '=') {
-        tokens.push({ type: 'op', value: '<=' })
+        tokens.push({ type: 'op', value: '<=', start: tokenStart })
         i += 2
         continue
       }
-      tokens.push({ type: 'op', value: '<' })
+      tokens.push({ type: 'op', value: '<', start: tokenStart })
       i++
       continue
     }
     if (ch === '>') {
       if (i + 1 < len && str[i + 1] === '=') {
-        tokens.push({ type: 'op', value: '>=' })
+        tokens.push({ type: 'op', value: '>=', start: tokenStart })
         i += 2
         continue
       }
-      tokens.push({ type: 'op', value: '>' })
+      tokens.push({ type: 'op', value: '>', start: tokenStart })
       i++
       continue
     }
     if (ch === '=') {
-      tokens.push({ type: 'op', value: '=' })
+      tokens.push({ type: 'op', value: '=', start: tokenStart })
       i++
       continue
     }
     if (ch === '&') {
-      tokens.push({ type: 'op', value: '&' })
+      tokens.push({ type: 'op', value: '&', start: tokenStart })
       i++
       continue
     }
 
     // Cell references, Range references, Cross-sheet references, or Identifiers
-    if (ch === '$' || /[A-Za-z_]/.test(ch)) {
+    // Note: [\p{L}_] matches Unicode letters including CJK for sheet names and identifiers
+    if (ch === '$' || /[\p{L}_]/u.test(ch)) {
       const rest = str.slice(i)
 
-      // Unquoted cross-sheet reference: Sheet2!A1 or Sheet2!A1:B10
-      const sheetMatch = /^([A-Za-z_][A-Za-z0-9_.]*)!/.exec(rest)
+      // Unquoted cross-sheet reference: Sheet2!A1 or 工作表1!A1:B10
+      const sheetMatch = /^([\p{L}_][\p{L}\p{N}_.]*)!/u.exec(rest)
       if (sheetMatch) {
         const sheetName = sheetMatch[1]
         const afterBang = rest.slice(sheetMatch[0].length)
@@ -289,6 +295,7 @@ export function tokenize(input: string): Token[] {
               tokens.push({
                 type: 'range',
                 value: fullText,
+                start: tokenStart,
                 sheet: sheetName,
                 rangeRef: {
                   sheet: sheetName,
@@ -304,6 +311,7 @@ export function tokenize(input: string): Token[] {
           tokens.push({
             type: 'cell',
             value: fullText,
+            start: tokenStart,
             sheet: sheetName,
             cellRef: {
               sheet: sheetName,
@@ -318,7 +326,7 @@ export function tokenize(input: string): Token[] {
         }
       }
 
-      // Local cell or range reference: A1 or A1:B10
+      // Local cell or range reference: A1 or A1:B10 (columns are strictly ASCII A-Z)
       const c1 = parseCellCoord(rest)
       if (c1) {
         let consumed = c1.length
@@ -330,6 +338,7 @@ export function tokenize(input: string): Token[] {
             tokens.push({
               type: 'range',
               value: fullText,
+              start: tokenStart,
               rangeRef: {
                 from: { col: c1.col, row: c1.row, absCol: c1.absCol, absRow: c1.absRow },
                 to: { col: c2.col, row: c2.row, absCol: c2.absCol, absRow: c2.absRow },
@@ -342,23 +351,24 @@ export function tokenize(input: string): Token[] {
         tokens.push({
           type: 'cell',
           value: c1.text,
+          start: tokenStart,
           cellRef: { col: c1.col, row: c1.row, absCol: c1.absCol, absRow: c1.absRow },
         })
         i += c1.length
         continue
       }
 
-      const identMatch = /^([A-Za-z_][A-Za-z0-9_.]*)/.exec(rest)
+      const identMatch = /^([\p{L}_][\p{L}\p{N}_.]*)/u.exec(rest)
       if (identMatch) {
         const fullIdent = identMatch[1]
         const cleanIdent = fullIdent.replace(/^_xlfn\.(_xlws\.)?/i, '')
         const upper = cleanIdent.toUpperCase()
         if (upper === 'TRUE') {
-          tokens.push({ type: 'boolean', value: 'TRUE' })
+          tokens.push({ type: 'boolean', value: 'TRUE', start: tokenStart })
         } else if (upper === 'FALSE') {
-          tokens.push({ type: 'boolean', value: 'FALSE' })
+          tokens.push({ type: 'boolean', value: 'FALSE', start: tokenStart })
         } else {
-          tokens.push({ type: 'ident', value: upper })
+          tokens.push({ type: 'ident', value: upper, start: tokenStart })
         }
         i += fullIdent.length
         continue
@@ -366,10 +376,10 @@ export function tokenize(input: string): Token[] {
     }
 
     // Unknown single char fallback - fail closed
-    tokens.push({ type: 'error', value: ch })
+    tokens.push({ type: 'error', value: ch, start: tokenStart })
     i++
   }
 
-  tokens.push({ type: 'eof', value: '' })
+  tokens.push({ type: 'eof', value: '', start: len })
   return tokens
 }

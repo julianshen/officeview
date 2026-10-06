@@ -58,6 +58,8 @@ src/xlsx/formula/
 - [x] Test: Tokenizer distinguishes function calls ending in digits (`LOG10(`) from cell references and handles error literals / fail-closed errors
 - [x] Test: Tokenizer handles range references (`A1:B10`) and cross-sheet references (`Sheet2!A1`, `'My Sheet'!A1:B2`)
 - [x] Test: Tokenizer strips `_xlfn.` function prefix and normalizes function names case-insensitively
+- [x] Test: Lexer tracks token start offsets, preserves authored cell case, and supports CJK sheet names
+- [ ] Test: Fixture and parser avoid non-standard `#ERROR` and escape XML in `<v>`
 
 ### Phase 2: Formula Parser (AST)
 - [ ] Test: Parser parses literals and respects Excel unary precedence (`-2^2` parses as `(-2)^2`)

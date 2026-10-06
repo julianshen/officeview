@@ -35,6 +35,7 @@ export interface RangeRef {
 export interface Token {
   type: TokenType
   value: string
+  start: number
   numValue?: number
   sheet?: string
   cellRef?: CellRef

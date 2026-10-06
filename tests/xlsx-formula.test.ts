@@ -169,7 +169,7 @@ describe('formula lexer', () => {
       { type: 'op', value: '/', cellRef: undefined },
       { type: 'cell', value: '$D4', cellRef: { col: 3, row: 3, absCol: true, absRow: false } },
       { type: 'op', value: '+', cellRef: undefined },
-      { type: 'cell', value: 'AA10', cellRef: { col: 26, row: 9, absCol: false, absRow: false } },
+      { type: 'cell', value: 'aa10', cellRef: { col: 26, row: 9, absCol: false, absRow: false } },
       { type: 'eof', value: '', cellRef: undefined },
     ])
   })
@@ -177,8 +177,8 @@ describe('formula lexer', () => {
   test('Tokenizer distinguishes function calls ending in digits (LOG10) from cell references and handles error literals / fail-closed errors', () => {
     // 1. Disambiguation: LOG10( is ident followed by lparen, not cell LOG10
     const logTokens = tokenize('=LOG10(100)')
-    expect(logTokens[0]).toEqual({ type: 'ident', value: 'LOG10' })
-    expect(logTokens[1]).toEqual({ type: 'lparen', value: '(' })
+    expect(logTokens[0]).toMatchObject({ type: 'ident', value: 'LOG10' })
+    expect(logTokens[1]).toMatchObject({ type: 'lparen', value: '(' })
 
     // 2. Error literals: #DIV/0!, #REF!, #N/A, #VALUE!, #NAME?, #NUM!, #NULL!
     const errTokens = tokenize('=#DIV/0! + #REF! + #N/A')
@@ -197,17 +197,17 @@ describe('formula lexer', () => {
 
     // 4. Unknown character emits error token instead of op
     const unknown = tokenize('=@;')
-    expect(unknown[0]).toEqual({ type: 'error', value: '@' })
+    expect(unknown[0]).toMatchObject({ type: 'error', value: '@' })
 
     // 5. Overlong formula emits error token
     const overlong = tokenize('=' + 'A'.repeat(8200))
-    expect(overlong[0]).toEqual({ type: 'error', value: 'Formula exceeds maximum length of 8192 characters' })
+    expect(overlong[0]).toMatchObject({ type: 'error', value: 'Formula exceeds maximum length of 8192 characters' })
   })
 
   test('Tokenizer handles range references (A1:B10) and cross-sheet references (Sheet2!A1, \'My Sheet\'!A1:B2)', () => {
     // 1. Simple unquoted range
     const r1 = tokenize('=A1:B10')
-    expect(r1).toEqual([
+    expect(r1).toMatchObject([
       {
         type: 'range',
         value: 'A1:B10',
@@ -221,7 +221,7 @@ describe('formula lexer', () => {
 
     // 2. Absolute range
     const r2 = tokenize('=$A$1:$C$5')
-    expect(r2).toEqual([
+    expect(r2).toMatchObject([
       {
         type: 'range',
         value: '$A$1:$C$5',
@@ -235,7 +235,7 @@ describe('formula lexer', () => {
 
     // 3. Unquoted cross-sheet cell reference
     const c1 = tokenize('=Sheet2!A1')
-    expect(c1).toEqual([
+    expect(c1).toMatchObject([
       {
         type: 'cell',
         value: 'Sheet2!A1',
@@ -253,7 +253,7 @@ describe('formula lexer', () => {
 
     // 4. Quoted cross-sheet range reference
     const r3 = tokenize("='My Sheet'!A1:B2")
-    expect(r3).toEqual([
+    expect(r3).toMatchObject([
       {
         type: 'range',
         value: "'My Sheet'!A1:B2",
@@ -269,7 +269,7 @@ describe('formula lexer', () => {
 
     // 5. Escaped quote in cross-sheet cell reference
     const c2 = tokenize("='Bob''s Data'!$D$10")
-    expect(c2).toEqual([
+    expect(c2).toMatchObject([
       {
         type: 'cell',
         value: "'Bob''s Data'!$D$10",
@@ -288,20 +288,53 @@ describe('formula lexer', () => {
 
   test('Tokenizer strips _xlfn. function prefix and normalizes function names case-insensitively', () => {
     const t1 = tokenize('=_xlfn.CONCAT(A1, "test")')
-    expect(t1[0]).toEqual({ type: 'ident', value: 'CONCAT' })
+    expect(t1[0]).toMatchObject({ type: 'ident', value: 'CONCAT' })
 
     const t2 = tokenize('=_xlfn.concat(A1, B1)')
-    expect(t2[0]).toEqual({ type: 'ident', value: 'CONCAT' })
+    expect(t2[0]).toMatchObject({ type: 'ident', value: 'CONCAT' })
 
     const t3 = tokenize('=_xlfn.STDEV.S(A1:B10)')
-    expect(t3[0]).toEqual({ type: 'ident', value: 'STDEV.S' })
+    expect(t3[0]).toMatchObject({ type: 'ident', value: 'STDEV.S' })
 
     const t4 = tokenize('=_xlfn._xlws.FILTER(A1:B10, A1:A10>0)')
-    expect(t4[0]).toEqual({ type: 'ident', value: 'FILTER' })
+    expect(t4[0]).toMatchObject({ type: 'ident', value: 'FILTER' })
 
     const t5 = tokenize('=sum(A1:B10) + Average(C1:C10)')
-    expect(t5[0]).toEqual({ type: 'ident', value: 'SUM' })
-    expect(t5[5]).toEqual({ type: 'ident', value: 'AVERAGE' })
+    expect(t5[0]).toMatchObject({ type: 'ident', value: 'SUM' })
+    expect(t5[5]).toMatchObject({ type: 'ident', value: 'AVERAGE' })
+  })
+
+  test('Lexer tracks token start offsets, preserves authored cell case, and supports CJK sheet names', () => {
+    // 1. Offsets
+    const tOffsets = tokenize('=A1 + 20')
+    expect(tOffsets.map(t => ({ type: t.type, value: t.value, start: t.start }))).toEqual([
+      { type: 'cell', value: 'A1', start: 0 },
+      { type: 'op', value: '+', start: 3 },
+      { type: 'number', value: '20', start: 5 },
+      { type: 'eof', value: '', start: 7 },
+    ])
+
+    // 2. Authored cell case preserved
+    const tCase = tokenize('=aa10 + $b$2')
+    expect(tCase[0].value).toBe('aa10')
+    expect(tCase[0].cellRef).toEqual({ col: 26, row: 9, absCol: false, absRow: false })
+    expect(tCase[2].value).toBe('$b$2')
+    expect(tCase[2].cellRef).toEqual({ col: 1, row: 1, absCol: true, absRow: true })
+
+    // 3. CJK unquoted and quoted sheet names
+    const tCjk = tokenize('=工作表1!A1 + 销售!B2:C10')
+    expect(tCjk[0]).toMatchObject({
+      type: 'cell',
+      value: '工作表1!A1',
+      sheet: '工作表1',
+      cellRef: { sheet: '工作表1', col: 0, row: 0 },
+    })
+    expect(tCjk[2]).toMatchObject({
+      type: 'range',
+      value: '销售!B2:C10',
+      sheet: '销售',
+      rangeRef: { sheet: '销售', from: { col: 1, row: 1 }, to: { col: 2, row: 9 } },
+    })
   })
 })
 
