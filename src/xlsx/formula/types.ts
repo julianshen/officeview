@@ -19,15 +19,25 @@ export type TokenType =
   | 'eof'
 
 export interface CellRef {
+  sheet?: string
   col: number // 0-based
   row: number // 0-based
   absCol: boolean
   absRow: boolean
 }
 
+export interface RangeRef {
+  sheet?: string
+  from: CellRef
+  to: CellRef
+}
+
 export interface Token {
   type: TokenType
   value: string
   numValue?: number
+  sheet?: string
   cellRef?: CellRef
+  rangeRef?: RangeRef
 }
+

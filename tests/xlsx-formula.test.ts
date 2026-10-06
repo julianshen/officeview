@@ -203,5 +203,88 @@ describe('formula lexer', () => {
     const overlong = tokenize('=' + 'A'.repeat(8200))
     expect(overlong[0]).toEqual({ type: 'error', value: 'Formula exceeds maximum length of 8192 characters' })
   })
+
+  test('Tokenizer handles range references (A1:B10) and cross-sheet references (Sheet2!A1, \'My Sheet\'!A1:B2)', () => {
+    // 1. Simple unquoted range
+    const r1 = tokenize('=A1:B10')
+    expect(r1).toEqual([
+      {
+        type: 'range',
+        value: 'A1:B10',
+        rangeRef: {
+          from: { col: 0, row: 0, absCol: false, absRow: false },
+          to: { col: 1, row: 9, absCol: false, absRow: false },
+        },
+      },
+      { type: 'eof', value: '' },
+    ])
+
+    // 2. Absolute range
+    const r2 = tokenize('=$A$1:$C$5')
+    expect(r2).toEqual([
+      {
+        type: 'range',
+        value: '$A$1:$C$5',
+        rangeRef: {
+          from: { col: 0, row: 0, absCol: true, absRow: true },
+          to: { col: 2, row: 4, absCol: true, absRow: true },
+        },
+      },
+      { type: 'eof', value: '' },
+    ])
+
+    // 3. Unquoted cross-sheet cell reference
+    const c1 = tokenize('=Sheet2!A1')
+    expect(c1).toEqual([
+      {
+        type: 'cell',
+        value: 'Sheet2!A1',
+        sheet: 'Sheet2',
+        cellRef: {
+          sheet: 'Sheet2',
+          col: 0,
+          row: 0,
+          absCol: false,
+          absRow: false,
+        },
+      },
+      { type: 'eof', value: '' },
+    ])
+
+    // 4. Quoted cross-sheet range reference
+    const r3 = tokenize("='My Sheet'!A1:B2")
+    expect(r3).toEqual([
+      {
+        type: 'range',
+        value: "'My Sheet'!A1:B2",
+        sheet: 'My Sheet',
+        rangeRef: {
+          sheet: 'My Sheet',
+          from: { sheet: 'My Sheet', col: 0, row: 0, absCol: false, absRow: false },
+          to: { sheet: 'My Sheet', col: 1, row: 1, absCol: false, absRow: false },
+        },
+      },
+      { type: 'eof', value: '' },
+    ])
+
+    // 5. Escaped quote in cross-sheet cell reference
+    const c2 = tokenize("='Bob''s Data'!$D$10")
+    expect(c2).toEqual([
+      {
+        type: 'cell',
+        value: "'Bob''s Data'!$D$10",
+        sheet: "Bob's Data",
+        cellRef: {
+          sheet: "Bob's Data",
+          col: 3,
+          row: 9,
+          absCol: true,
+          absRow: true,
+        },
+      },
+      { type: 'eof', value: '' },
+    ])
+  })
 })
+
 
