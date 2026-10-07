@@ -141,11 +141,11 @@ src/drawing/
 - [x] Test: WordArt appearance styling does not alter layout advances or line break positions
 
 ### Phase 3: Format Adapters Integration (PPTX, DOCX, XLSX)
-- [ ] Test: PPTX shapes parse and render WordArt text runs inheriting theme colors
-- [ ] Test: DOCX DrawingML shapes (`<wps:wsp>`) parse and render WordArt gradient and outline text
-- [ ] Test: XLSX DrawingML shapes (`<xdr:sp>`) parse and render WordArt styled text runs
-- [ ] Test: WordArt diagnostics flow into single body diagnostic channel across all three formats
-- [ ] Test: End-to-end multi-format fixture test parsing and painting WordArt shapes
+- [x] Test: PPTX shapes parse and render WordArt text runs inheriting theme colors
+- [x] Test: DOCX DrawingML shapes (`<wps:wsp>`) parse and render WordArt gradient and outline text
+- [x] Test: XLSX DrawingML shapes (`<xdr:sp>`) parse and render WordArt styled text runs
+- [x] Test: WordArt diagnostics flow into single body diagnostic channel across all three formats
+- [x] Test: End-to-end multi-format fixture test parsing and painting WordArt shapes
 
 ### Phase 4: Preset Text Warp Parsing & Modeling (`<a:prstTxWarp>`)
 - [ ] Test: Parses preset text warp type (`prst`) from `<a:bodyPr><a:prstTxWarp>` into `DrawingTextBody`
