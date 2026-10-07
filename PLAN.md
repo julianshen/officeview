@@ -171,8 +171,8 @@ src/drawing/
 - [x] Test: Text hit-testing along warped curves produces monotonically non-decreasing character offsets
 
 ### Phase 6: Extended Effects, Legacy VML Fallback & Quality Gates
-- [ ] Test: Emits diagnostic and falls back gracefully for text `<a:glow>` and `<a:reflection>`
-- [ ] Test: Unified VML parser parses `<v:shape><v:textpath>` with string, font-family, font-size, alignment, fill, and stroke into `DrawingTextBody`
-- [ ] Test: DOCX drawing routes legacy VML WordArt through unified VML parser into canvas rendering
-- [ ] Test: XLSX drawing routes legacy VML WordArt through unified VML parser into canvas rendering
-- [ ] Test: Full golden test suite passes with zero regressions under `OFFICEVIEW_STRICT_GOLDEN=1`
+- [x] Test: Emits diagnostic and falls back gracefully for text `<a:glow>` and `<a:reflection>`
+- [x] Test: Unified VML parser parses `<v:shape><v:textpath>` with string, font-family, font-size, alignment, fill, and stroke into `DrawingTextBody`
+- [x] Test: DOCX drawing routes legacy VML WordArt through unified VML parser into canvas rendering
+- [x] Test: XLSX drawing routes legacy VML WordArt through unified VML parser into canvas rendering
+- [x] Test: Full golden test suite passes with zero regressions under `OFFICEVIEW_STRICT_GOLDEN=1`
