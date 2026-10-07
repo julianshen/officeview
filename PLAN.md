@@ -53,8 +53,9 @@ This encompasses:
 - `src/drawing/text-warp.ts` (new):
   - Pure geometry transformation engine for preset text warps (`textArchUp`, `textArchDown`, `textCircle`, `textWave1`, `textWave2`, `textInflate`, `textDeflate`, `textSlantUp`, `textSlantDown`).
   - Adjustment unit tables (initial values, validated against ECMA-376 Part 1 §20.1.9.22 presetShapeDefinitions during Phase 4):
-    - Arch / slant presets: angle in 60000ths of a degree (default `textArchUp` = 10800000 = 180°).
-    - Wave / envelope presets: percentage in 1/100000 (default 50000 = 50%).
+    - Arch presets: angle in 60000ths of a degree (default `textArchUp` = 10800000 = 180°).
+    - Slant / curve / wave / envelope presets: percentage in 1/100000 (default `textWave1`/`textInflate` = 50000 = 50%, `textSlantUp`/`textCurveUp` = 25000 = 25%).
+    - Guide bounds clamping: Angle guides clamped to [0, 21600000], percentage guides clamped to [0, 100000].
   - Fallback default adjustment lookup table when `<a:avLst>` is omitted.
   - Glyph/segment coordinate deformation and local transformation matrices in paint space.
 - `src/drawing/style.ts` & `src/pptx/types.ts`:
