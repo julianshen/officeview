@@ -148,11 +148,11 @@ src/drawing/
 - [x] Test: End-to-end multi-format fixture test parsing and painting WordArt shapes
 
 ### Phase 4: Preset Text Warp Parsing & Modeling (`<a:prstTxWarp>`)
-- [ ] Test: Parses preset text warp type (`prst`) from `<a:bodyPr><a:prstTxWarp>` into `DrawingTextBody`
-- [ ] Test: Parses adjustment values (`<a:avLst><a:gd>`) for preset text warps with appropriate units (angles vs percentage)
-- [ ] Test: Applies default adjustment table for presets when `<a:avLst>` is omitted
-- [ ] Test: Handles `textNoShape` and `textPlain` as unwarped standard text
-- [ ] Test: Emits diagnostic for unknown warp presets and falls back to unwarped text rendering without throwing
+- [x] Test: Parses preset text warp type (`prst`) from `<a:bodyPr><a:prstTxWarp>` into `DrawingTextBody`
+- [x] Test: Parses adjustment values (`<a:avLst><a:gd>`) for preset text warps with appropriate units (angles vs percentage)
+- [x] Test: Applies default adjustment table for presets when `<a:avLst>` is omitted
+- [x] Test: Handles `textNoShape` and `textPlain` as unwarped standard text
+- [x] Test: Emits diagnostic for unknown warp presets and falls back to unwarped text rendering without throwing
 
 ### Phase 5: Text Warp Geometry Engine & Canvas Deformation
 - [ ] Test: Warp geometry computes arc curve transformation for `textArchUp` and `textArchDown`
