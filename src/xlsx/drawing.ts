@@ -9,6 +9,7 @@ import { attemptedMalformedRelationshipIssue, malformedRelationshipAttempt, prep
 import { contentDiagnostic, drawingPartContext, DOCUMENT_DRAWING_NODE_LIMIT, DRAWING_GROUP_DEPTH, partRelationships, referencedPart, reserveDrawingNode } from '../drawing/parts'
 import { resolveDrawingStyle, type ThemeContext } from '../drawing/style'
 import { parseTextBody, textFontDefaults } from '../drawing/text-parse'
+import { parseVmlWordArt } from '../drawing/vml'
 import type { XlsxDrawing, XlsxImage, XlsxSheet } from './types'
 
 const EMU = 9525
@@ -316,6 +317,54 @@ export async function parseWorksheetDrawings(pkg: OfficePackage, sheet: XlsxShee
         if (object.group) { object.group.off = { x: placement.xEmu, y: placement.yEmu }; object.group.ext = { width: placement.widthEmu, height: placement.heightEmu } }
         ;(sheet.drawings ??= []).push(object)
         sheet.drawingCoverage.push(...xlsxNodeCoverage(object, 0, objectIndex === 0 ? 'original' : 'descendant'))
+      }
+    }
+  }
+  for (const legacyRef of getChildren(root, 'legacyDrawing')) {
+    const id = attrs(legacyRef)['r:id'] ?? attrs(legacyRef).id
+    if (!id) continue
+    const owner = await referencedPart(pkg, worksheetPath, id)
+    if (!owner) continue
+    let vmlRoot: XmlNode | undefined
+    try { vmlRoot = await pkg.xmlOrdered(owner) }
+    catch { continue }
+    if (!vmlRoot) continue
+    const shapes = getChildren(vmlRoot, 'shape')
+    for (const shape of shapes) {
+      const vml = parseVmlWordArt(shape)
+      if (vml) {
+        if (vml.diagnostics && vml.diagnostics.length > 0) {
+          for (const d of vml.diagnostics) {
+            context.diagnostics.push({
+              kind: d.kind,
+              partPath: owner,
+              feature: 'vml-wordart',
+              identity: vml.shapeId,
+              message: d.message,
+            })
+          }
+        }
+        const widthPt = vml.widthPt ?? 200
+        const heightPt = vml.heightPt ?? 50
+        const leftPt = vml.leftPt ?? 0
+        const topPt = vml.topPt ?? 0
+        const widthEmu = Math.round(widthPt * 12700)
+        const heightEmu = Math.round(heightPt * 12700)
+        const object: XlsxDrawing = {
+          xEmu: Math.round(leftPt * 12700),
+          yEmu: Math.round(topPt * 12700),
+          widthEmu,
+          heightEmu,
+          textBody: vml.textBody,
+          transformValid: true,
+          source: {
+            partPath: owner,
+            treePath: `legacyDrawing/${vml.shapeId ?? 'wordArt'}`,
+            element: 'shape',
+            representation: 'native',
+          },
+        }
+        ;(sheet.drawings ??= []).push(object)
       }
     }
   }
