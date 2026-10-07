@@ -205,6 +205,7 @@ function shape(node: XmlNode, theme: ContentTheme, drawingTheme: ThemeContext): 
     rotationDeg: num(attrs(transform).rot) / 60000,
     fill: color(child(pr, 'solidFill'), theme),
     line: lineColor ? { color: lineColor, widthEmu: num(attrs(ln).w, 12700) } : undefined,
+    textBody: parsedText as unknown as any,
     paragraphs,
     fontFamily,
     textColor
@@ -540,16 +541,24 @@ export async function prepareDrawingContent<Paragraph = ContentParagraph, Text =
   const content = child(graphic, 'contentPart')
   if (content) return follow(attrs(content).id, owner, 'contentPart')
   const wsp = child(graphic, 'wsp')
-  if (wsp && adapters.parseParagraph) {
-    const body = attrs(child(wsp, 'bodyPr')), pr = child(wsp, 'spPr'), ln = child(pr, 'ln')
-    const lineColor = color(child(ln, 'solidFill'), theme)
-    const direction = (body.vert ?? undefined) as TextDirection | undefined
-    return { kind: 'textbox', paragraphs: getChildren(child(child(wsp, 'txbx'), 'txbxContent'), 'p').map(adapters.parseParagraph),
-      vertical: direction !== undefined && direction !== 'horz' && ['vert', 'vert270', 'wordArtVert', 'eaVert', 'mongolianVert', 'wordArtVertRtl'].includes(direction),
-      ...(direction === 'horz' || direction === 'vert' || direction === 'vert270' || direction === 'wordArtVert' || direction === 'eaVert' || direction === 'mongolianVert' || direction === 'wordArtVertRtl' ? { direction } : {}),
-      fontFamily: theme.fonts.get('minorHAnsi') ?? 'Calibri', fontSizePt: 12,
-      insets: { left: num(body.lIns, 91440), top: num(body.tIns, 45720), right: num(body.rIns, 91440), bottom: num(body.bIns, 45720) },
-      fill: color(child(pr, 'solidFill'), theme), line: lineColor ? { color: lineColor, widthEmu: num(attrs(ln).w, 6350) } : undefined }
+  if (wsp) {
+    const txBody = child(wsp, 'txBody')
+    if (txBody) {
+      const model = shape(wsp, theme, drawingTheme) as DrawingContentShape<Text>
+      if (adapters.parseDiagramText) model.textBody = adapters.parseDiagramText(txBody, wsp)
+      return { kind: 'diagram', shapes: [model] }
+    }
+    if (adapters.parseParagraph) {
+      const body = attrs(child(wsp, 'bodyPr')), pr = child(wsp, 'spPr'), ln = child(pr, 'ln')
+      const lineColor = color(child(ln, 'solidFill'), theme)
+      const direction = (body.vert ?? undefined) as TextDirection | undefined
+      return { kind: 'textbox', paragraphs: getChildren(child(child(wsp, 'txbx'), 'txbxContent'), 'p').map(adapters.parseParagraph),
+        vertical: direction !== undefined && direction !== 'horz' && ['vert', 'vert270', 'wordArtVert', 'eaVert', 'mongolianVert', 'wordArtVertRtl'].includes(direction),
+        ...(direction === 'horz' || direction === 'vert' || direction === 'vert270' || direction === 'wordArtVert' || direction === 'eaVert' || direction === 'mongolianVert' || direction === 'wordArtVertRtl' ? { direction } : {}),
+        fontFamily: theme.fonts.get('minorHAnsi') ?? 'Calibri', fontSizePt: 12,
+        insets: { left: num(body.lIns, 91440), top: num(body.tIns, 45720), right: num(body.rIns, 91440), bottom: num(body.bIns, 45720) },
+        fill: color(child(pr, 'solidFill'), theme), line: lineColor ? { color: lineColor, widthEmu: num(attrs(ln).w, 6350) } : undefined }
+    }
   }
   return undefined
 }
