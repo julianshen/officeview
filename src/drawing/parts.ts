@@ -6,7 +6,7 @@ export const CONTENT_REFERENCE_DEPTH = 32
 export const DRAWING_GROUP_DEPTH = 64
 export const DOCUMENT_DRAWING_NODE_LIMIT = 10000
 export interface ContentDiagnostic {
-  kind: 'missing-part' | 'malformed-part' | 'external-reference' | 'content-cycle' | 'content-depth' | 'group-depth' | 'node-budget' | 'unsupported-content'
+  kind: 'missing-part' | 'malformed-part' | 'external-reference' | 'content-cycle' | 'content-depth' | 'group-depth' | 'node-budget' | 'unsupported-content' | 'unsupported-fill' | 'unsupported-effect' | 'unsupported-line'
   message: string
   partPath: string
   feature?: string

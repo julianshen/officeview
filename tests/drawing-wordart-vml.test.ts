@@ -149,4 +149,111 @@ describe('WordArt Extended Effects & Legacy VML Fallback - Phase 6', () => {
     const ctx = canvas.getContext('2d')
     expect(() => renderSheet(sheet, ctx as any)).not.toThrow()
   })
+
+  test('VML parser handles ST_TrueFalse shorthand, margin positioning, font unquoting, and stroke outline wiring', async () => {
+    const { parseXml } = await import('../src/core/xml')
+    const { parseVmlWordArt } = await import('../src/drawing/vml')
+
+    // 1. Textpath with on="f" should return undefined
+    const disabledXml = `<v:shape id="s_off"><v:textpath on="f" string="Ignored"/></v:shape>`
+    expect(parseVmlWordArt(parseXml(disabledXml))).toBeUndefined()
+
+    // 2. Margin positioning, font unquoting, numeric weight 800, stroke outline with default 1pt
+    const xml = `<v:shape id="s_pos" style="position:absolute;margin-left:120pt;margin-top:60pt;width:240pt;height:45pt;" strokecolor="#FF0000" filled="f">
+      <v:fill on="f"/>
+      <v:textpath on="t" style="font-family:'Arial Black', sans-serif;font-size:24pt;font-weight:800;" string="Outlined Heading"/>
+    </v:shape>`
+    const res = parseVmlWordArt(parseXml(xml))
+    expect(res).toBeDefined()
+    expect(res?.leftPt).toBe(120)
+    expect(res?.topPt).toBe(60)
+    expect(res?.widthPt).toBe(240)
+    expect(res?.heightPt).toBe(45)
+
+    const run = res!.textBody.paragraphs[0].runs[0]
+    expect(run.text).toBe('Outlined Heading')
+    expect(run.fontFamily).toBe('Arial Black')
+    expect(run.bold).toBe(true)
+    expect(run.noFill).toBe(true)
+    expect(run.textOutline).toBeDefined()
+    expect(run.textOutline?.color).toBe('#FF0000')
+    expect(run.textOutline?.widthPx).toBeCloseTo(1 * (96 / 72), 2)
+
+    // 3. Stroked="f" should suppress textOutline even if strokecolor is specified
+    const strokedFalseXml = `<v:shape id="s_nostroke" strokecolor="#0000FF" stroked="f">
+      <v:textpath on="true" string="No Outline"/>
+    </v:shape>`
+    const resNoStroke = parseVmlWordArt(parseXml(strokedFalseXml))
+    expect(resNoStroke).toBeDefined()
+    expect(resNoStroke!.textBody.paragraphs[0].runs[0].textOutline).toBeUndefined()
+
+    // 4. Unsupported fill type (gradient) emits diagnostic
+    const gradientXml = `<v:shape id="s_grad">
+      <v:fill type="gradient"/>
+      <v:textpath on="true" string="Gradient WordArt"/>
+    </v:shape>`
+    const resGrad = parseVmlWordArt(parseXml(gradientXml))
+    expect(resGrad).toBeDefined()
+    expect(resGrad?.diagnostics?.length).toBeGreaterThan(0)
+    expect(resGrad?.diagnostics?.[0].kind).toBe('unsupported-fill')
+  })
+
+  test('DOCX pict and XLSX legacyDrawing map VML positions to xEmu / yEmu and preserve diagnostics', async () => {
+    const JSZip = (await import('jszip')).default
+    const { OfficePackage } = await import('../src/core/zip')
+    const { parseDocx } = await import('../src/docx/parse')
+    const { parseXlsx } = await import('../src/xlsx/parse')
+
+    // DOCX positioning and multi-shape in pict
+    const docxZip = new JSZip()
+    docxZip.file('[Content_Types].xml', `<?xml version="1.0"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/></Types>`)
+    docxZip.file('_rels/.rels', `<?xml version="1.0"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/></Relationships>`)
+    docxZip.file('word/document.xml', `<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:v="urn:schemas-microsoft-com:vml">
+      <w:body>
+        <w:p>
+          <w:r>
+            <w:pict>
+              <v:shape id="Shape1" style="position:absolute;margin-left:72pt;margin-top:36pt;width:150pt;height:40pt;">
+                <v:textpath on="true" string="Shape One"/>
+              </v:shape>
+              <v:shape id="Shape2" style="position:absolute;margin-left:144pt;margin-top:72pt;width:150pt;height:40pt;">
+                <v:textpath on="true" string="Shape Two"/>
+              </v:shape>
+            </w:pict>
+          </w:r>
+        </w:p>
+      </w:body>
+    </w:document>`)
+    const docxPkg = await OfficePackage.load(await docxZip.generateAsync({ type: 'uint8array' }))
+    const docxDoc = await parseDocx(docxPkg)
+    const shapes = (docxDoc.sections[0].paragraphs[0].images[0] as any).drawing.shapes
+    expect(shapes.length).toBe(2)
+    expect(shapes[0].xEmu).toBe(Math.round(72 * 12700))
+    expect(shapes[0].yEmu).toBe(Math.round(36 * 12700))
+    expect(shapes[1].xEmu).toBe(Math.round(144 * 12700))
+    expect(shapes[1].yEmu).toBe(Math.round(72 * 12700))
+
+    // XLSX positioning and diagnostics
+    const xlsxZip = new JSZip()
+    xlsxZip.file('[Content_Types].xml', `<?xml version="1.0"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Default Extension="vml" ContentType="application/vnd.openxmlformats-officedocument.vmlDrawing"/></Types>`)
+    xlsxZip.file('_rels/.rels', `<?xml version="1.0"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/></Relationships>`)
+    xlsxZip.file('xl/workbook.xml', `<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets><sheet name="Sheet1" sheetId="1" r:id="rId1"/></sheets></workbook>`)
+    xlsxZip.file('xl/_rels/workbook.xml.rels', `<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/></Relationships>`)
+    xlsxZip.file('xl/worksheets/sheet1.xml', `<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheetData><row r="1"><c r="A1"><v>100</v></c></row></sheetData><legacyDrawing r:id="rIdVml"/></worksheet>`)
+    xlsxZip.file('xl/worksheets/_rels/sheet1.xml.rels', `<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rIdVml" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/vmlDrawing" Target="../drawings/vmlDrawing1.vml"/></Relationships>`)
+    xlsxZip.file('xl/drawings/vmlDrawing1.vml', `<xml xmlns:v="urn:schemas-microsoft-com:vml">
+      <v:shape id="WordArt_Positioned" style="position:absolute;margin-left:50pt;margin-top:25pt;width:200pt;height:40pt;">
+        <v:fill type="gradient"/>
+        <v:textpath on="True" string="Positioned WordArt"/>
+      </v:shape>
+    </xml>`)
+    const xlsxPkg = await OfficePackage.load(await xlsxZip.generateAsync({ type: 'uint8array' }))
+    const xlsxDoc = await parseXlsx(xlsxPkg)
+    const xlsxSheet = xlsxDoc.sheets[0]
+    const posDrawing = xlsxSheet.drawings?.find(d => d.textBody?.paragraphs[0].runs[0].text === 'Positioned WordArt')
+    expect(posDrawing).toBeDefined()
+    expect(posDrawing?.xEmu).toBe(Math.round(50 * 12700))
+    expect(posDrawing?.yEmu).toBe(Math.round(25 * 12700))
+    expect(xlsxSheet.drawingDiagnostics?.some(d => d.kind === 'unsupported-fill')).toBe(true)
+  })
 })

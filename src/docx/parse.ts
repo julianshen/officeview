@@ -10,7 +10,7 @@ import { findSvgBlip, looksLikeSvg, scanSelfContainedSvg, svgCandidate, svgState
 import { attemptedMalformedRelationshipIssue, malformedRelationshipAttempt, reserveDrawingContent } from '../drawing/content'
 import { contentRepresentation, coverageIssueMatchesEntry, supportedChoiceRequirements, type DrawingCoverageEntry } from '../drawing/coverage'
 import { DOCUMENT_DRAWING_NODE_LIMIT, drawingPartContext, partRelationshipNodes, reserveDrawingNode } from '../drawing/parts'
-import { parseVmlWordArt } from '../drawing/vml'
+import { parseAllVmlWordArt } from '../drawing/vml'
 import type { DocxBlock, DocxDocument, DocxDrawing, DocxDrawingShape, DocxFloating, DocxImage, DocxParagraph, DocxSection, DocxTable, DocxTableCell, DocxTableCellMargins, DocxTableBorders, DocxTableRow, DocxTextRun, ParagraphAlign } from './types'
 
 function alignOf(pPr: XmlNode | undefined): ParagraphAlign {
@@ -582,33 +582,46 @@ function parseDrawing(
 }
 
 function parsePict(node: XmlNode): DocxImage | undefined {
-  const vml = parseVmlWordArt(node)
-  if (!vml) return undefined
-  const widthPt = vml.widthPt ?? 200
-  const heightPt = vml.heightPt ?? 50
-  const widthEmu = Math.round(widthPt * 12700)
-  const heightEmu = Math.round(heightPt * 12700)
+  const vmlList = parseAllVmlWordArt(node)
+  if (vmlList.length === 0) return undefined
+  let maxWidthPt = 0
+  let maxHeightPt = 0
+  const shapes: DocxDrawingShape[] = []
 
-  const shape: DocxDrawingShape = {
-    xEmu: 0,
-    yEmu: 0,
-    widthEmu,
-    heightEmu,
-    geometry: 'rect',
-    fontFamily: vml.textBody.paragraphs[0]?.runs[0]?.fontFamily ?? 'Calibri',
-    textBody: vml.textBody,
-    paragraphs: [],
+  for (const vml of vmlList) {
+    const widthPt = vml.widthPt ?? 200
+    const heightPt = vml.heightPt ?? 50
+    const leftPt = vml.leftPt ?? 0
+    const topPt = vml.topPt ?? 0
+    const widthEmu = Math.round(widthPt * 12700)
+    const heightEmu = Math.round(heightPt * 12700)
+    const xEmu = Math.round(leftPt * 12700)
+    const yEmu = Math.round(topPt * 12700)
+
+    if (leftPt + widthPt > maxWidthPt) maxWidthPt = leftPt + widthPt
+    if (topPt + heightPt > maxHeightPt) maxHeightPt = topPt + heightPt
+
+    shapes.push({
+      xEmu,
+      yEmu,
+      widthEmu,
+      heightEmu,
+      geometry: 'rect',
+      fontFamily: vml.textBody.paragraphs[0]?.runs[0]?.fontFamily ?? 'Calibri',
+      textBody: vml.textBody,
+      paragraphs: [],
+    })
   }
 
   const drawing: DocxDrawing = {
     kind: 'diagram',
-    shapes: [shape],
+    shapes,
   }
 
   return {
     data: new Uint8Array(),
-    widthEmu,
-    heightEmu,
+    widthEmu: Math.round(maxWidthPt * 12700),
+    heightEmu: Math.round(maxHeightPt * 12700),
     drawing,
   }
 }

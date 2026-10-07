@@ -1,11 +1,19 @@
 import { attrs, getChildren, type XmlNode } from '../core/xml'
 import type { DrawingTextBody, DrawingTextRun } from './text'
 
+export interface VmlWordArtDiagnostic {
+  kind: 'unsupported-fill' | 'unsupported-effect' | 'unsupported-line'
+  message: string
+}
+
 export interface VmlWordArtResult {
   textBody: DrawingTextBody
   widthPt?: number
   heightPt?: number
+  leftPt?: number
+  topPt?: number
   shapeId?: string
+  diagnostics?: VmlWordArtDiagnostic[]
 }
 
 function parseCssStyle(styleStr: string | undefined): Record<string, string> {
@@ -54,6 +62,18 @@ function normalizeColor(val: string | undefined): string | undefined {
   return val
 }
 
+function isVmlFalse(val: string | undefined): boolean {
+  if (!val) return false
+  const v = val.trim().toLowerCase()
+  return v === 'f' || v === 'false' || v === '0'
+}
+
+function isVmlTrue(val: string | undefined): boolean {
+  if (!val) return false
+  const v = val.trim().toLowerCase()
+  return v === 't' || v === 'true' || v === '1'
+}
+
 /**
  * Unified legacy VML parser for WordArt shapes (<v:shape><v:textpath>).
  * Extracts text, typography, fill, outline, alignment, and bounds into a standard DrawingTextBody.
@@ -79,8 +99,7 @@ export function parseVmlWordArt(node: XmlNode): VmlWordArtResult | undefined {
   if (!textpathNode) return undefined
 
   const tpAttrs = attrs(textpathNode)
-  const on = tpAttrs.on?.toLowerCase()
-  if (on === 'false' || on === '0') return undefined
+  if (isVmlFalse(tpAttrs.on)) return undefined
 
   const text = tpAttrs.string ?? ''
   if (!text) return undefined
@@ -89,17 +108,22 @@ export function parseVmlWordArt(node: XmlNode): VmlWordArtResult | undefined {
   const shapeAttrs = attrs(shapeNode)
   const shapeStyle = parseCssStyle(shapeAttrs.style)
 
-  // Dimensions
+  // Dimensions & Positions
   const widthPt = parsePt(shapeStyle.width)
   const heightPt = parsePt(shapeStyle.height)
+  const leftPt = parsePt(shapeStyle['margin-left'] ?? shapeStyle.left)
+  const topPt = parsePt(shapeStyle['margin-top'] ?? shapeStyle.top)
 
   // Font styling
   let fontFamily = tpStyle['font-family']
   if (fontFamily) {
-    fontFamily = fontFamily.replace(/^['"]|['"]$/g, '').trim()
+    const firstFam = fontFamily.split(',')[0].trim()
+    fontFamily = firstFam.replace(/^['"]|['"]$/g, '').trim()
   }
   const fontSizePt = parsePt(tpStyle['font-size'])
-  const bold = tpStyle['font-weight']?.toLowerCase() === 'bold' || tpStyle['font-weight'] === '700'
+  const fw = tpStyle['font-weight']?.toLowerCase()
+  const fwNum = fw ? parseInt(fw, 10) : NaN
+  const bold = fw === 'bold' || (!isNaN(fwNum) && fwNum >= 700)
   const italic = tpStyle['font-style']?.toLowerCase() === 'italic'
 
   // Alignment
@@ -111,16 +135,24 @@ export function parseVmlWordArt(node: XmlNode): VmlWordArtResult | undefined {
 
   // Fill
   const fillNode = getChildren(shapeNode, 'fill')[0]
-  let noFill = false
+  let noFill = isVmlFalse(shapeAttrs.filled)
   let fillColor = normalizeColor(shapeAttrs.fillcolor)
+  const diagnostics: VmlWordArtDiagnostic[] = []
   if (fillNode) {
     const fa = attrs(fillNode)
-    const fillOn = fa.on?.toLowerCase()
-    if (fillOn === 'false' || fillOn === '0' || fa.type === 'none') {
+    if (isVmlFalse(fa.on) || fa.type === 'none') {
       noFill = true
+    } else if (isVmlTrue(fa.on)) {
+      noFill = false
     }
     if (fa.color) {
       fillColor = normalizeColor(fa.color)
+    }
+    if (fa.type === 'gradient' || fa.type === 'pattern') {
+      diagnostics.push({
+        kind: 'unsupported-fill',
+        message: `VML ${fa.type} fill is unsupported for WordArt text`,
+      })
     }
   }
 
@@ -128,15 +160,19 @@ export function parseVmlWordArt(node: XmlNode): VmlWordArtResult | undefined {
   const strokeNode = getChildren(shapeNode, 'stroke')[0]
   let strokeColor = normalizeColor(shapeAttrs.strokecolor)
   let strokeWidthPt = parsePt(shapeAttrs.strokeweight)
-  let strokeOn = true
+  let strokeOn = !isVmlFalse(shapeAttrs.stroked)
   if (strokeNode) {
     const sa = attrs(strokeNode)
-    const sOn = sa.on?.toLowerCase()
-    if (sOn === 'false' || sOn === '0') {
+    if (isVmlFalse(sa.on)) {
       strokeOn = false
+    } else if (isVmlTrue(sa.on)) {
+      strokeOn = true
     }
     if (sa.color) strokeColor = normalizeColor(sa.color)
     if (sa.weight) strokeWidthPt = parsePt(sa.weight)
+  }
+  if (strokeOn && strokeColor && strokeWidthPt === undefined) {
+    strokeWidthPt = 1
   }
 
   const run: DrawingTextRun = {
@@ -174,6 +210,27 @@ export function parseVmlWordArt(node: XmlNode): VmlWordArtResult | undefined {
     textBody,
     widthPt,
     heightPt,
-    shapeId: shapeAttrs.id,
+    leftPt,
+    topPt,
+    shapeId: shapeAttrs.id ?? shapeAttrs['o:spid'],
+    diagnostics: diagnostics.length > 0 ? diagnostics : undefined,
   }
 }
+
+/**
+ * Parse all WordArt shapes from a VML node or container.
+ */
+export function parseAllVmlWordArt(node: XmlNode): VmlWordArtResult[] {
+  const childShapes = getChildren(node, 'shape')
+  if (childShapes.length > 0) {
+    const results: VmlWordArtResult[] = []
+    for (const shape of childShapes) {
+      const parsed = parseVmlWordArt(shape)
+      if (parsed) results.push(parsed)
+    }
+    return results
+  }
+  const single = parseVmlWordArt(node)
+  return single ? [single] : []
+}
+

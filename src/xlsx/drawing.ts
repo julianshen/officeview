@@ -333,13 +333,26 @@ export async function parseWorksheetDrawings(pkg: OfficePackage, sheet: XlsxShee
     for (const shape of shapes) {
       const vml = parseVmlWordArt(shape)
       if (vml) {
+        if (vml.diagnostics && vml.diagnostics.length > 0) {
+          for (const d of vml.diagnostics) {
+            context.diagnostics.push({
+              kind: d.kind,
+              partPath: owner,
+              feature: 'vml-wordart',
+              identity: vml.shapeId,
+              message: d.message,
+            })
+          }
+        }
         const widthPt = vml.widthPt ?? 200
         const heightPt = vml.heightPt ?? 50
+        const leftPt = vml.leftPt ?? 0
+        const topPt = vml.topPt ?? 0
         const widthEmu = Math.round(widthPt * 12700)
         const heightEmu = Math.round(heightPt * 12700)
         const object: XlsxDrawing = {
-          xEmu: 0,
-          yEmu: 0,
+          xEmu: Math.round(leftPt * 12700),
+          yEmu: Math.round(topPt * 12700),
           widthEmu,
           heightEmu,
           textBody: vml.textBody,
