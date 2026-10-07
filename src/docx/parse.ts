@@ -10,7 +10,8 @@ import { findSvgBlip, looksLikeSvg, scanSelfContainedSvg, svgCandidate, svgState
 import { attemptedMalformedRelationshipIssue, malformedRelationshipAttempt, reserveDrawingContent } from '../drawing/content'
 import { contentRepresentation, coverageIssueMatchesEntry, supportedChoiceRequirements, type DrawingCoverageEntry } from '../drawing/coverage'
 import { DOCUMENT_DRAWING_NODE_LIMIT, drawingPartContext, partRelationshipNodes, reserveDrawingNode } from '../drawing/parts'
-import type { DocxBlock, DocxDocument, DocxDrawing, DocxFloating, DocxImage, DocxParagraph, DocxSection, DocxTable, DocxTableCell, DocxTableCellMargins, DocxTableBorders, DocxTableRow, DocxTextRun, ParagraphAlign } from './types'
+import { parseVmlWordArt } from '../drawing/vml'
+import type { DocxBlock, DocxDocument, DocxDrawing, DocxDrawingShape, DocxFloating, DocxImage, DocxParagraph, DocxSection, DocxTable, DocxTableCell, DocxTableCellMargins, DocxTableBorders, DocxTableRow, DocxTextRun, ParagraphAlign } from './types'
 
 function alignOf(pPr: XmlNode | undefined): ParagraphAlign {
   const jc = pPr ? getChildren(pPr, 'jc')[0] : undefined
@@ -286,11 +287,13 @@ export function parseParagraph(
             else if (tag === 'tab') addRun({ ...run, text: '\t', breakBefore: undefined })
             else if (tag === 'br') addRun({ ...run, text: '', breakBefore: true })
             else if (tag === 'drawing') addImage(parseDrawing(child, images, context))
+            else if (tag === 'pict') addImage(parsePict(child))
             else if (tag === 'AlternateContent') alternate(child)
           }
         }
       } else if (name === 'hyperlink' || name === 'sdtContent') walk(node)
       else if (name === 'drawing') addImage(parseDrawing(node, images, context))
+      else if (name === 'pict') addImage(parsePict(node))
       else if (name === 'AlternateContent') alternate(node)
       else if (name === 'sdt') {
         const content = getChildren(node, 'sdtContent')[0]
@@ -575,6 +578,38 @@ function parseDrawing(
     ...(svg ? { svg } : {}),
     ...(primarySvgVerdict ? { primarySvgVerdict } : {}),
     imageSelection: selection
+  }
+}
+
+function parsePict(node: XmlNode): DocxImage | undefined {
+  const vml = parseVmlWordArt(node)
+  if (!vml) return undefined
+  const widthPt = vml.widthPt ?? 200
+  const heightPt = vml.heightPt ?? 50
+  const widthEmu = Math.round(widthPt * 12700)
+  const heightEmu = Math.round(heightPt * 12700)
+
+  const shape: DocxDrawingShape = {
+    xEmu: 0,
+    yEmu: 0,
+    widthEmu,
+    heightEmu,
+    geometry: 'rect',
+    fontFamily: vml.textBody.paragraphs[0]?.runs[0]?.fontFamily ?? 'Calibri',
+    textBody: vml.textBody,
+    paragraphs: [],
+  }
+
+  const drawing: DocxDrawing = {
+    kind: 'diagram',
+    shapes: [shape],
+  }
+
+  return {
+    data: new Uint8Array(),
+    widthEmu,
+    heightEmu,
+    drawing,
   }
 }
 

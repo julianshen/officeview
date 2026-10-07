@@ -98,7 +98,8 @@ function style(node: XmlNode | undefined, theme?: ThemeContext, issues: TextAppe
   // WordArt outer shadow: dist/dir offset, optional blur radius. Alignment,
   // rotate-with-shape, scale (@sx/@sy) and skew (@kx/@ky) are deferred
   // (documented limitations).
-  const shadow = getChildren(getChildren(node, 'effectLst')[0], 'outerShdw')[0]
+  const effectLst = getChildren(node, 'effectLst')[0]
+  const shadow = getChildren(effectLst, 'outerShdw')[0]
   if (shadow) {
     const sa = attrs(shadow)
     const shadowColor = resolveDrawingColor(parseDrawingColor(shadow), theme)
@@ -117,6 +118,17 @@ function style(node: XmlNode | undefined, theme?: ThemeContext, issues: TextAppe
       issues.push({ kind: 'unsupported-text-appearance', feature: 'outerShdw', message: 'WordArt shadow needs a resolvable color; skipped' })
     }
   }
+
+  // Extended text appearance effects: glow and reflection
+  const glow = getChildren(effectLst, 'glow')[0] ?? getChildren(node, 'glow')[0]
+  if (glow) {
+    issues.push({ kind: 'unsupported-text-appearance', feature: 'glow', message: 'WordArt text glow effect is unsupported; falling back to plain run' })
+  }
+  const reflection = getChildren(effectLst, 'reflection')[0] ?? getChildren(effectLst, 'refl')[0] ?? getChildren(node, 'reflection')[0] ?? getChildren(node, 'refl')[0]
+  if (reflection) {
+    issues.push({ kind: 'unsupported-text-appearance', feature: 'reflection', message: 'WordArt text reflection effect is unsupported; falling back to plain run' })
+  }
+
   return out
 }
 function spacing(node: XmlNode | undefined): PptxTextSpacing | undefined {
