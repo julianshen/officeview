@@ -141,6 +141,17 @@ describe('WordArt Preset Text Warp Parsing & Modeling (<a:prstTxWarp>) - Phase 4
       feature: 'textSuperUnknownPreset',
       message: expect.stringContaining('textSuperUnknownPreset'),
     })
+
+    // Unmodeled preset (such as textTriangle) must also emit unsupported-text-warp diagnostic
+    const triangleXml = txBodyXml('<a:prstTxWarp prst="textTriangle"/>', 'Triangle Text')
+    const parsedTriangle = parseTextBody(parseXmlOrdered(triangleXml))
+    expect(parsedTriangle.textWarp).toBeUndefined()
+    expect(parsedTriangle.diagnostics).toContainEqual(
+      expect.objectContaining({
+        kind: 'unsupported-text-warp',
+        feature: 'textTriangle',
+      })
+    )
   })
 })
 
