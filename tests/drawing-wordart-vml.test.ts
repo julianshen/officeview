@@ -104,6 +104,13 @@ describe('WordArt Extended Effects & Legacy VML Fallback - Phase 6', () => {
     const shape = (img.drawing as any).shapes[0]
     expect(shape.textBody).toBeDefined()
     expect(shape.textBody.paragraphs[0].runs[0].text).toBe('DOCX WordArt')
+
+    // Canvas rendering integration
+    const { paintDrawing } = await import('../src/docx/drawing')
+    const { createCanvas } = await import('canvas')
+    const canvas = createCanvas(300, 100)
+    const ctx = canvas.getContext('2d')
+    expect(() => paintDrawing(img.drawing!, ctx as any, 300, 100)).not.toThrow()
   })
 
   test('XLSX drawing routes legacy VML WordArt through unified VML parser into canvas rendering', async () => {
@@ -134,5 +141,12 @@ describe('WordArt Extended Effects & Legacy VML Fallback - Phase 6', () => {
     const drawing = sheet.drawings!.find(d => d.textBody?.paragraphs[0].runs[0].text === 'XLSX WordArt')
     expect(drawing).toBeDefined()
     expect(drawing?.textBody?.paragraphs[0].runs[0].fontFamily).toBe('Calibri')
+
+    // Canvas rendering integration
+    const { renderSheet } = await import('../src/xlsx/render')
+    const { createCanvas } = await import('canvas')
+    const canvas = createCanvas(400, 200)
+    const ctx = canvas.getContext('2d')
+    expect(() => renderSheet(sheet, ctx as any)).not.toThrow()
   })
 })
