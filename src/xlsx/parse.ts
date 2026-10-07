@@ -284,6 +284,8 @@ async function parseSheet(
         row: rowIdx,
         col: colIdx,
         value,
+        hasCachedValue: vNode !== undefined || isNode !== undefined,
+        valueIsError: t === 'e',
         styleIndex: Number.isFinite(sIdx) ? sIdx : 0,
         formula,
         sharedFormula,

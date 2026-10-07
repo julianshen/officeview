@@ -1,4 +1,4 @@
-import type { AstNode, EvaluationContext, FormulaError, FormulaValue } from './types'
+import type { AstNode, EvaluationContext, FormulaError, FormulaValue, EvaluationError, EvaluationValue } from './types'
 import { parseFormula } from './parser'
 import { FUNCTIONS } from './functions'
 
@@ -14,6 +14,23 @@ export const CANONICAL_ERRORS = new Set<FormulaError>([
 
 export function isFormulaError(val: unknown): val is FormulaError {
   return typeof val === 'string' && CANONICAL_ERRORS.has(val as FormulaError)
+}
+
+export function formulaError(code: FormulaError): EvaluationError {
+  return { kind: 'formula-error', code }
+}
+
+export function isEvaluationError(value: unknown): value is EvaluationError {
+  return typeof value === 'object' && value !== null && 'kind' in value && value.kind === 'formula-error'
+}
+
+export function publicFormulaValue(value: EvaluationValue): FormulaValue {
+  return isEvaluationError(value) ? value.code : value
+}
+
+/** Normalize callback boundaries only; formula strings always remain ordinary text. */
+export function contextValue(value: EvaluationValue, ctx?: EvaluationContext): EvaluationValue {
+  return !ctx?.typedValues && isFormulaError(value) ? formulaError(value) : value
 }
 
 export const MAX_EVAL_DEPTH = 512
@@ -33,15 +50,15 @@ export function round15(val: number): number {
   return rounded === 0 ? 0 : rounded
 }
 
-export function finiteOrNum(res: number): number | FormulaError {
+export function finiteOrNum(res: number): number | EvaluationError {
   if (!Number.isFinite(res) || Number.isNaN(res)) {
-    return '#NUM!'
+    return formulaError('#NUM!')
   }
   return round15(res)
 }
 
-export function coerceToNumber(val: FormulaValue): number | FormulaError {
-  if (isFormulaError(val)) return val
+export function coerceToNumber(val: EvaluationValue): number | EvaluationError {
+  if (isEvaluationError(val)) return val
   if (val === null) return 0
   if (typeof val === 'boolean') return val ? 1 : 0
   if (typeof val === 'number') return val
@@ -49,21 +66,21 @@ export function coerceToNumber(val: FormulaValue): number | FormulaError {
     const trimmed = val.trim()
     if (trimmed === '') return 0
     const num = Number(trimmed)
-    if (Number.isNaN(num)) return '#VALUE!'
+    if (Number.isNaN(num)) return formulaError('#VALUE!')
     return num
   }
-  return '#VALUE!'
+  return formulaError('#VALUE!')
 }
 
-export function coerceToString(val: FormulaValue): string {
+export function coerceToString(val: EvaluationValue): string {
   if (val === null) return ''
   if (typeof val === 'boolean') return val ? 'TRUE' : 'FALSE'
   if (typeof val === 'number') return String(round15(val))
-  return String(val)
+  return isEvaluationError(val) ? val.code : String(val)
 }
 
-export function coerceToBoolean(val: FormulaValue): boolean | FormulaError {
-  if (isFormulaError(val)) return val
+export function coerceToBoolean(val: EvaluationValue): boolean | EvaluationError {
+  if (isEvaluationError(val)) return val
   if (val === null) return false
   if (typeof val === 'boolean') return val
   if (typeof val === 'number') return val !== 0
@@ -71,19 +88,19 @@ export function coerceToBoolean(val: FormulaValue): boolean | FormulaError {
     const upper = val.trim().toUpperCase()
     if (upper === 'TRUE') return true
     if (upper === 'FALSE') return false
-    return '#VALUE!'
+    return formulaError('#VALUE!')
   }
-  return '#VALUE!'
+  return formulaError('#VALUE!')
 }
 
-function getTypeRank(val: FormulaValue): number {
+function getTypeRank(val: EvaluationValue): number {
   if (typeof val === 'number') return 1
   if (typeof val === 'string') return 2
   if (typeof val === 'boolean') return 3
   return 0 // null
 }
 
-function compareValues(v1: FormulaValue, v2: FormulaValue): number {
+function compareValues(v1: EvaluationValue, v2: EvaluationValue): number {
   if (v1 === null && v2 === null) return 0
 
   let a = v1
@@ -130,7 +147,14 @@ function compareValues(v1: FormulaValue, v2: FormulaValue): number {
   return 0
 }
 
-export function evaluateNode(node?: AstNode, ctx?: EvaluationContext): FormulaValue {
+export function evaluateNode(node?: AstNode, ctx?: EvaluationContext): EvaluationValue {
+  if (node && ctx?.nodeValues?.has(node)) return ctx.nodeValues.get(node)!
+  const value = evaluateUncachedNode(node, ctx)
+  if (node) ctx?.nodeValues?.set(node, value)
+  return value
+}
+
+function evaluateUncachedNode(node?: AstNode, ctx?: EvaluationContext): EvaluationValue {
   if (!node) return null
   switch (node.type) {
     case 'number':
@@ -147,9 +171,9 @@ export function evaluateNode(node?: AstNode, ctx?: EvaluationContext): FormulaVa
 
     case 'error': {
       if (isFormulaError(node.error)) {
-        return node.error
+        return formulaError(node.error)
       }
-      return '#NAME?'
+      return formulaError('#NAME?')
     }
 
     case 'cell': {
@@ -166,22 +190,22 @@ export function evaluateNode(node?: AstNode, ctx?: EvaluationContext): FormulaVa
       ctx.visited?.add(key)
       try {
         const val = ctx.getCellValue(sheet, node.ref.col, node.ref.row)
-        return val === undefined ? null : val
+        return val === undefined ? null : contextValue(val, ctx)
       } finally {
         ctx.visited?.delete(key)
       }
     }
 
     case 'range': {
-      return '#VALUE!'
+      return formulaError('#VALUE!')
     }
 
     case 'unary': {
       const inner = evaluateNode(node.expr, ctx)
-      if (isFormulaError(inner)) return inner
+      if (isEvaluationError(inner)) return inner
 
       const num = coerceToNumber(inner)
-      if (isFormulaError(num)) return num
+      if (isEvaluationError(num)) return num
 
       if (node.op === '+') {
         return finiteOrNum(num)
@@ -192,15 +216,15 @@ export function evaluateNode(node?: AstNode, ctx?: EvaluationContext): FormulaVa
       if (node.op === '%') {
         return finiteOrNum(num / 100)
       }
-      return '#VALUE!'
+      return formulaError('#VALUE!')
     }
 
     case 'binary': {
       const leftVal = evaluateNode(node.left, ctx)
-      if (isFormulaError(leftVal)) return leftVal
+      if (isEvaluationError(leftVal)) return leftVal
 
       const rightVal = evaluateNode(node.right, ctx)
-      if (isFormulaError(rightVal)) return rightVal
+      if (isEvaluationError(rightVal)) return rightVal
 
       if (node.op === '&') {
         return coerceToString(leftVal) + coerceToString(rightVal)
@@ -233,9 +257,9 @@ export function evaluateNode(node?: AstNode, ctx?: EvaluationContext): FormulaVa
 
       // Arithmetic operations
       const n1 = coerceToNumber(leftVal)
-      if (isFormulaError(n1)) return n1
+      if (isEvaluationError(n1)) return n1
       const n2 = coerceToNumber(rightVal)
-      if (isFormulaError(n2)) return n2
+      if (isEvaluationError(n2)) return n2
 
       switch (node.op) {
         case '+':
@@ -248,38 +272,38 @@ export function evaluateNode(node?: AstNode, ctx?: EvaluationContext): FormulaVa
           return finiteOrNum(n1 * n2)
 
         case '/': {
-          if (n2 === 0) return '#DIV/0!'
+          if (n2 === 0) return formulaError('#DIV/0!')
           return finiteOrNum(n1 / n2)
         }
 
         case '^': {
-          if (n1 < 0 && !Number.isInteger(n2)) return '#NUM!'
+          if (n1 < 0 && !Number.isInteger(n2)) return formulaError('#NUM!')
           const res = Math.pow(n1, n2)
           return finiteOrNum(res)
         }
 
         default:
-          return '#VALUE!'
+          return formulaError('#VALUE!')
       }
     }
 
     case 'call': {
       const handler = FUNCTIONS[node.name.toUpperCase()]
       if (!handler) {
-        return '#NAME?'
+        return formulaError('#NAME?')
       }
       return handler(node.args, ctx, evaluateNode)
     }
 
     default:
-      return '#VALUE!'
+      return formulaError('#VALUE!')
   }
 }
 
 /**
- * Parses (if string) and evaluates an Excel formula, returning a computed FormulaValue.
+ * Parses (if string) and evaluates an Excel formula, returning a computed EvaluationValue.
  */
-export function evaluateFormula(input: string | AstNode | undefined | null, ctx?: EvaluationContext): FormulaValue {
+export function evaluateFormulaInternal(input: string | AstNode | undefined | null, ctx?: EvaluationContext): EvaluationValue {
   if (input == null) return null
   const node = typeof input === 'string' ? parseFormula(input) : input
   if (!node) return null
@@ -293,8 +317,7 @@ export function evaluateFormula(input: string | AstNode | undefined | null, ctx?
 
   const currentDepth = ctx.evalDepth ?? 0
   if (currentDepth >= MAX_EVAL_DEPTH) {
-    ctx.hasCycle = true
-    return 0
+    return formulaError('#NUM!')
   }
   ctx.evalDepth = currentDepth + 1
 
@@ -312,4 +335,9 @@ export function evaluateFormula(input: string | AstNode | undefined | null, ctx?
       ctx.hasCycle = false
     }
   }
+}
+
+/** Public compatibility boundary: never returns an internal error object. */
+export function evaluateFormula(input: string | AstNode | undefined | null, ctx?: EvaluationContext): FormulaValue {
+  return publicFormulaValue(evaluateFormulaInternal(input, ctx))
 }

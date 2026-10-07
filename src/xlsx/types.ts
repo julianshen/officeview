@@ -22,6 +22,10 @@ export interface XlsxCell {
   value: string | number | boolean | null
   /** Style index into cellXfs. */
   styleIndex: number
+  /** Whether a cached or calculated value is available. Undefined retains legacy null-based behavior. */
+  hasCachedValue?: boolean
+  /** Distinguishes real cached/calculated errors from identical-looking text; false is explicit text. */
+  valueIsError?: boolean
   formula?: string
   sharedFormula?: { si: number; ref?: string }
   /** Calculate always flag from <f ca="1"> per ECMA-376 Part 1 §18.3.1.40. */

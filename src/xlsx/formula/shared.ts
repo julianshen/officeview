@@ -99,7 +99,7 @@ export function formatFormula(node: AstNode): string {
 
       const leftStr = leftPrec < parentPrec ? `(${formatFormula(node.left)})` : formatFormula(node.left)
       const rightStr =
-        rightPrec < parentPrec || (rightPrec === parentPrec && (node.op === '-' || node.op === '/' || node.op === '^'))
+        rightPrec < parentPrec || (rightPrec === parentPrec)
           ? `(${formatFormula(node.right)})`
           : formatFormula(node.right)
 

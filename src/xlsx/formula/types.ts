@@ -53,8 +53,24 @@ export type FormulaError =
 
 export type FormulaValue = number | string | boolean | null | FormulaError
 
+/** Tagged errors are used only during evaluation; public/model values stay primitive. */
+export interface EvaluationError { readonly kind: 'formula-error'; readonly code: FormulaError }
+export type EvaluationValue = FormulaValue | EvaluationError
+
 export interface EvaluationContext {
-  getCellValue?(sheet: string | undefined, col: number, row: number): FormulaValue
+  /** Typed callbacks return tagged errors and ordinary strings as text. Legacy callbacks
+   * may return canonical error strings, which are interpreted as errors for compatibility.
+   * Recursive typed callbacks should use evaluateFormulaInternal to preserve tags. */
+  typedValues?: boolean
+  /** Per-cell completed AST nodes, retained while an iterative dependency frame resumes. */
+  nodeValues?: WeakMap<AstNode, EvaluationValue>
+  /** Completed function arguments and next argument, owned by one suspended cell frame. */
+  flatArgs?: WeakMap<AstNode[], {
+    next: number
+    items: Array<{ value: EvaluationValue; fromRef: boolean }>
+  }>
+
+  getCellValue?(sheet: string | undefined, col: number, row: number): EvaluationValue
   /**
    * Evaluates a range of cells into a row-major 2D matrix of values.
    * Contract:
@@ -63,7 +79,7 @@ export interface EvaluationContext {
    * - Bounded to populated sheet dimensions to avoid unbounded memory allocation.
    * - Must cooperate with cycle detection by delegating or tracking visited cells.
    */
-  getRangeValues?(sheet: string | undefined, from: CellRef, to: CellRef): FormulaValue[][]
+  getRangeValues?(sheet: string | undefined, from: CellRef, to: CellRef): EvaluationValue[][]
   currentSheet?: string
   currentCell?: CellRef
   /** In-flight evaluation path for cycle detection. Note: short-circuit-hidden cycles (e.g. IF-skipped branches) are dynamically avoided and not statically traversed. */

@@ -1,6 +1,7 @@
-import { evaluateFormula, makeCellKey } from './evaluator'
+import { evaluateFormulaInternal, makeCellKey, formulaError, isFormulaError, isEvaluationError, publicFormulaValue } from './evaluator'
+import { parseFormula } from './parser'
 import { translateSharedFormula } from './shared'
-import type { EvaluationContext, FormulaValue } from './types'
+import type { AstNode, EvaluationContext, EvaluationValue } from './types'
 import type { XlsxCell, XlsxDocument, XlsxSheet } from '../types'
 
 export interface WorkbookEvaluationOptions {
@@ -67,6 +68,7 @@ export function evaluateWorkbookFormulas(
 
   const sheetsByName = new Map<string, XlsxSheet>()
   const cellMap = new Map<string, XlsxCell>()
+  const cellSheets = new Map<string, string>()
   const sheetMaxCols = new Map<string, number>()
   const sheetMaxRows = new Map<string, number>()
 
@@ -82,122 +84,75 @@ export function evaluateWorkbookFormulas(
       for (const cell of row.cells) {
         if (cell.col > maxCol) maxCol = cell.col
         if (cell.row > maxRow) maxRow = cell.row
-        cellMap.set(makeCellKey(sheet.name, cell.col, cell.row), cell)
+        const key = makeCellKey(sheet.name, cell.col, cell.row)
+        cellMap.set(key, cell)
+        cellSheets.set(key, sheet.name)
       }
     }
     sheetMaxCols.set(sheet.name.toLowerCase(), Math.max(0, maxCol))
     sheetMaxRows.set(sheet.name.toLowerCase(), Math.max(0, maxRow))
   }
 
-  // 2. Shared context, memoization, and cycle-tracking structures
-  const memo = new Map<string, FormulaValue>()
-  const visited = new Set<string>()
+  // Evaluation frames suspend only when a dynamically requested dependency is
+  // unresolved. No recursive cell calls or static traversal of lazy branches.
+  const memo = new Map<string, EvaluationValue>()
   const activeStack: string[] = []
   const activeSet = new Set<string>()
   const cycleMembers = new Set<string>()
+  const formulas = new Map<string, AstNode>()
+  for (const [key, cell] of cellMap) {
+    const shouldCalc = options?.fullCalcOnLoad || options?.forceRecalc || cell.ca ||
+      (cell.hasCachedValue === undefined ? cell.value == null : !cell.hasCachedValue)
+    if (cell.formula && shouldCalc) formulas.set(key, parseFormula(cell.formula))
+  }
+
+  class PendingDependency {
+    constructor(readonly key: string) {}
+  }
+
+  interface RangeProgress { matrix: EvaluationValue[][]; next: number }
+  interface Frame {
+    key: string
+    nodeValues: WeakMap<AstNode, EvaluationValue>
+    flatArgs: NonNullable<EvaluationContext['flatArgs']>
+    ranges: Map<string, RangeProgress>
+  }
+  let currentFrame: Frame | undefined
 
   const ctx: EvaluationContext = {
-    visited,
+    typedValues: true,
     getCellValue: (sheetName, col, row) => {
       const targetSheetName = sheetName ?? ctx.currentSheet
-      if (!targetSheetName) return '#REF!'
-
+      if (!targetSheetName) return formulaError('#REF!')
       const resolvedSheet = sheetsByName.get(targetSheetName.toLowerCase())
-      if (!resolvedSheet) return '#REF!'
-
+      if (!resolvedSheet) return formulaError('#REF!')
       const key = makeCellKey(resolvedSheet.name, col, row)
-
-      // Cycle pre-check: if cell is currently on the active evaluation stack, mark full cycle suffix
       if (activeSet.has(key)) {
-        ctx.hasCycle = true
-        const idx = activeStack.indexOf(key)
-        if (idx >= 0) {
-          for (let i = idx; i < activeStack.length; i++) {
-            cycleMembers.add(activeStack[i])
-          }
-        }
-        cycleMembers.add(key)
+        const index = activeStack.indexOf(key)
+        for (let i = index; i < activeStack.length; i++) cycleMembers.add(activeStack[i])
         return 0
       }
-
       if (memo.has(key)) return memo.get(key)!
-
       const cell = cellMap.get(key)
       if (!cell) {
         memo.set(key, null)
         return null
       }
-
-      if (!cell.formula) {
-        memo.set(key, cell.value)
-        return cell.value
-      }
-
-      const shouldCalc =
-        options?.fullCalcOnLoad ||
-        options?.forceRecalc ||
-        cell.ca ||
-        cell.value === null ||
-        cell.value === undefined
-
-      if (!shouldCalc) {
-        memo.set(key, cell.value)
-        return cell.value
-      }
-
-      activeStack.push(key)
-      activeSet.add(key)
-      const prevSheet = ctx.currentSheet
-      const prevCell = ctx.currentCell
-      ctx.currentSheet = resolvedSheet.name
-      ctx.currentCell = {
-        sheet: resolvedSheet.name,
-        col,
-        row,
-        absCol: false,
-        absRow: false,
-      }
-
-      let val: FormulaValue
-      try {
-        val = evaluateFormula(cell.formula, ctx)
-      } finally {
-        ctx.currentSheet = prevSheet
-        ctx.currentCell = prevCell
-        activeStack.pop()
-        activeSet.delete(key)
-      }
-
-      // Suffix membership post-check: only actual cycle members are zeroed
-      if (cycleMembers.has(key)) {
-        val = 0
-      }
-
-      cell.value = val
-      memo.set(key, val)
-
-      // Once the root of the active chain unwinds, overwrite any partial memo values for all cycle members
-      if (activeStack.length === 0) {
-        if (cycleMembers.size > 0) {
-          for (const memberKey of cycleMembers) {
-            const mCell = cellMap.get(memberKey)
-            if (mCell) mCell.value = 0
-            memo.set(memberKey, 0)
-          }
-          cycleMembers.clear()
-        }
-        ctx.hasCycle = false
-      }
-
-      return val
+      if (formulas.has(key)) throw new PendingDependency(key)
+      // Parsed cells explicitly distinguish errors and strings. Legacy hand-built
+      // models retain their previous canonical-error-string convention for all cells.
+      const error = cell.valueIsError ?? isFormulaError(cell.value)
+      const value = error && isFormulaError(cell.value) ? formulaError(cell.value) : cell.value
+      memo.set(key, value)
+      return value
     },
 
     getRangeValues: (sheetName, from, to) => {
       const targetSheetName = sheetName ?? ctx.currentSheet
-      if (!targetSheetName) return [['#REF!']]
+      if (!targetSheetName) return [[formulaError('#REF!')]]
 
       const resolvedSheet = sheetsByName.get(targetSheetName.toLowerCase())
-      if (!resolvedSheet) return [['#REF!']]
+      if (!resolvedSheet) return [[formulaError('#REF!')]]
 
       const minCol = Math.min(from.col, to.col)
       const maxCol = Math.max(from.col, to.col)
@@ -217,30 +172,70 @@ export function evaluateWorkbookFormulas(
 
       const totalCells = (clampedMaxCol - minCol + 1) * (clampedMaxRow - minRow + 1)
       if (totalCells > 100000) {
-        return [['#NUM!']]
+        return [[formulaError('#NUM!')]]
       }
 
-      const matrix: FormulaValue[][] = []
-      for (let r = minRow; r <= clampedMaxRow; r++) {
-        const rowVals: FormulaValue[] = []
-        for (let c = minCol; c <= clampedMaxCol; c++) {
-          rowVals.push(ctx.getCellValue!(resolvedSheet.name, c, r))
-        }
-        matrix.push(rowVals)
+      // Retain only completed range cells when a dependency suspends this frame.
+      // Resuming SUM over N uncached cells needs O(N) reads, not O(N squared).
+      const rangeKey = `${resolvedSheet.name}!${minCol}:${minRow}:${clampedMaxCol}:${clampedMaxRow}`
+      let progress = currentFrame?.ranges.get(rangeKey)
+      if (!progress) {
+        progress = { matrix: [], next: 0 }
+        currentFrame?.ranges.set(rangeKey, progress)
       }
-      return matrix
+      const width = clampedMaxCol - minCol + 1
+      while (progress.next < totalCells) {
+        const rowIndex = Math.floor(progress.next / width)
+        const colIndex = progress.next % width
+        const value = ctx.getCellValue!(resolvedSheet.name, minCol + colIndex, minRow + rowIndex)
+        const row = progress.matrix[rowIndex] ?? (progress.matrix[rowIndex] = [])
+        row.push(value)
+        progress.next++
+      }
+      return progress.matrix
     },
   }
 
-  // 3. Evaluate each formula cell across all sheets
-  for (const sheet of doc.sheets) {
-    ctx.currentSheet = sheet.name
-    for (const row of sheet.rows) {
-      for (const cell of row.cells) {
-        if (cell.formula) {
-          ctx.getCellValue!(sheet.name, cell.col, cell.row)
-        }
-      }
+  function evaluateCell(rootKey: string): void {
+    if (memo.has(rootKey) || !formulas.has(rootKey)) return
+    const frames: Frame[] = []
+    const push = (key: string) => {
+      frames.push({ key, nodeValues: new WeakMap(), flatArgs: new WeakMap(), ranges: new Map() })
+      activeStack.push(key)
+      activeSet.add(key)
     }
+    push(rootKey)
+    while (frames.length > 0) {
+      const frame = frames[frames.length - 1]
+      currentFrame = frame
+      const cell = cellMap.get(frame.key)!
+      ctx.currentSheet = cellSheets.get(frame.key)!
+      ctx.currentCell = { col: cell.col, row: cell.row, absCol: false, absRow: false }
+      ctx.nodeValues = frame.nodeValues
+      ctx.flatArgs = frame.flatArgs
+      let value: EvaluationValue
+      try {
+        value = evaluateFormulaInternal(formulas.get(frame.key)!, ctx)
+      } catch (error) {
+        if (!(error instanceof PendingDependency)) throw error
+        push(error.key)
+        continue
+      }
+      if (cycleMembers.has(frame.key)) value = 0
+      cell.value = publicFormulaValue(value)
+      cell.valueIsError = isEvaluationError(value)
+      cell.hasCachedValue = true
+      memo.set(frame.key, value)
+      frames.pop()
+      activeStack.pop()
+      activeSet.delete(frame.key)
+    }
+    cycleMembers.clear()
+    currentFrame = undefined
+    ctx.nodeValues = undefined
+    ctx.flatArgs = undefined
+    ctx.currentCell = undefined
   }
+
+  for (const key of formulas.keys()) evaluateCell(key)
 }
