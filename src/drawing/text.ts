@@ -82,5 +82,142 @@ export interface DrawingTextBody {
   insetTopEmu: number
   insetBottomEmu: number
   wrap: boolean
+  textWarp?: TextWarp
 }
 export interface LocalAffine { a: number; b: number; c: number; d: number; e: number; f: number }
+
+export type TextWarpPreset =
+  | 'textNoShape'
+  | 'textPlain'
+  | 'textStop'
+  | 'textTriangle'
+  | 'textTriangleInverted'
+  | 'textChevron'
+  | 'textChevronInverted'
+  | 'textRingInside'
+  | 'textRingOutside'
+  | 'textArchUp'
+  | 'textArchDown'
+  | 'textCircle'
+  | 'textButton'
+  | 'textArchUpPour'
+  | 'textArchDownPour'
+  | 'textCirclePour'
+  | 'textButtonPour'
+  | 'textCurveUp'
+  | 'textCurveDown'
+  | 'textCanUp'
+  | 'textCanDown'
+  | 'textWave1'
+  | 'textWave2'
+  | 'textDoubleWave1'
+  | 'textWave4'
+  | 'textInflate'
+  | 'textDeflate'
+  | 'textInflateBottom'
+  | 'textDeflateBottom'
+  | 'textInflateTop'
+  | 'textDeflateTop'
+  | 'textDeflateInflate'
+  | 'textDeflateInflateDeflate'
+  | 'textFadeRight'
+  | 'textFadeLeft'
+  | 'textFadeUp'
+  | 'textFadeDown'
+  | 'textSlantUp'
+  | 'textSlantDown'
+  | 'textCascadeUp'
+  | 'textCascadeDown'
+
+export const SUPPORTED_TEXT_WARP_PRESETS: ReadonlySet<string> = new Set<TextWarpPreset>([
+  'textNoShape',
+  'textPlain',
+  'textStop',
+  'textTriangle',
+  'textTriangleInverted',
+  'textChevron',
+  'textChevronInverted',
+  'textRingInside',
+  'textRingOutside',
+  'textArchUp',
+  'textArchDown',
+  'textCircle',
+  'textButton',
+  'textArchUpPour',
+  'textArchDownPour',
+  'textCirclePour',
+  'textButtonPour',
+  'textCurveUp',
+  'textCurveDown',
+  'textCanUp',
+  'textCanDown',
+  'textWave1',
+  'textWave2',
+  'textDoubleWave1',
+  'textWave4',
+  'textInflate',
+  'textDeflate',
+  'textInflateBottom',
+  'textDeflateBottom',
+  'textInflateTop',
+  'textDeflateTop',
+  'textDeflateInflate',
+  'textDeflateInflateDeflate',
+  'textFadeRight',
+  'textFadeLeft',
+  'textFadeUp',
+  'textFadeDown',
+  'textSlantUp',
+  'textSlantDown',
+  'textCascadeUp',
+  'textCascadeDown',
+])
+
+export interface TextWarp {
+  preset: TextWarpPreset
+  adjustments?: Record<string, number>
+}
+
+/** ECMA-376 Part 1 §20.1.9.22 default adjust values for preset text warps */
+export const DEFAULT_WARP_ADJUSTMENTS: Readonly<Record<string, Record<string, number>>> = {
+  textArchUp: { adj: 10800000 },
+  textArchDown: { adj: 10800000 },
+  textCircle: { adj: 10800000 },
+  textButton: { adj: 10800000 },
+  textArchUpPour: { adj: 10800000 },
+  textArchDownPour: { adj: 10800000 },
+  textCirclePour: { adj: 10800000 },
+  textButtonPour: { adj: 10800000 },
+  textRingInside: { adj: 10800000 },
+  textRingOutside: { adj: 10800000 },
+  textCurveUp: { adj: 25000 },
+  textCurveDown: { adj: 25000 },
+  textCanUp: { adj: 25000 },
+  textCanDown: { adj: 25000 },
+  textWave1: { adj1: 0, adj2: 50000 },
+  textWave2: { adj1: 0, adj2: 50000 },
+  textDoubleWave1: { adj1: 0, adj2: 50000 },
+  textWave4: { adj1: 0, adj2: 50000 },
+  textInflate: { adj: 50000 },
+  textDeflate: { adj: 50000 },
+  textInflateBottom: { adj: 50000 },
+  textDeflateBottom: { adj: 50000 },
+  textInflateTop: { adj: 50000 },
+  textDeflateTop: { adj: 50000 },
+  textDeflateInflate: { adj: 50000 },
+  textDeflateInflateDeflate: { adj: 50000 },
+  textSlantUp: { adj: 25000 },
+  textSlantDown: { adj: 25000 },
+  textFadeRight: { adj: 50000 },
+  textFadeLeft: { adj: 50000 },
+  textFadeUp: { adj: 50000 },
+  textFadeDown: { adj: 50000 },
+  textCascadeUp: { adj: 25000 },
+  textCascadeDown: { adj: 25000 },
+  textStop: { adj: 0 },
+  textTriangle: { adj: 50000 },
+  textTriangleInverted: { adj: 50000 },
+  textChevron: { adj: 50000 },
+  textChevronInverted: { adj: 50000 },
+}
+
