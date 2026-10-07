@@ -264,6 +264,36 @@ describe('wordart paint', () => {
     expect(run.textOutline?.widthPx).toBe(100)
     expect(run.textShadow?.blurPx).toBe(100)
   })
+  test('paint-level clamps bound hostile outline width and shadow blur', () => {
+    const canvas = createCanvas(300, 100)
+    const ctx = canvas.getContext('2d')
+    const lineWidths: number[] = []
+    const shadowBlurs: number[] = []
+    const proxy = new Proxy(ctx as unknown as object, {
+      get(target, prop) {
+        const value = (target as Record<string | symbol, unknown>)[prop]
+        return typeof value === 'function' ? value.bind(target) : value
+      },
+      set(target, prop, value) {
+        if (prop === 'lineWidth') lineWidths.push(Number(value))
+        if (prop === 'shadowBlur') shadowBlurs.push(Number(value))
+        ;(target as Record<string | symbol, unknown>)[prop] = value
+        return true
+      },
+    })
+    ctx.fillStyle = '#ffffff'
+    ctx.fillRect(0, 0, 300, 100)
+    paintTextBody(
+      bodyOf([{
+        text: 'H',
+        textOutline: { color: '#00FF00', widthPx: 1000000 },
+        textShadow: { color: '#000000', blurPx: 1000000, offsetX: 5000, offsetY: -5000 },
+      }]),
+      proxy as never, 0, 0, 300, 100, identity,
+    )
+    expect(lineWidths).toEqual([100])
+    expect(shadowBlurs).toEqual([100])
+  })
   test('diagonal pattern tile draws both colors', async () => {
     const { paintPatternTile } = await import('../src/drawing/text-paint')
     const canvas = createCanvas(16, 16)

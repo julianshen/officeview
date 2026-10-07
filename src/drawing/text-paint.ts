@@ -63,7 +63,9 @@ function makePatternTile(size: number): { image: CanvasImageSource; ctx: CanvasR
     const ctx = canvas.getContext('2d')
     if (ctx) return { image: canvas, ctx: ctx as unknown as CanvasRenderingContext2D }
   }
-  if (typeof document !== 'undefined') {
+  // In a real browser DOM, use a detached <canvas>. Under Node/jsdom, avoid
+  // passing mock DOM elements to native canvas bindings.
+  if (typeof document !== 'undefined' && (typeof process === 'undefined' || !process.versions?.node)) {
     const canvas = document.createElement('canvas')
     canvas.width = canvas.height = size
     const ctx = canvas.getContext('2d')
