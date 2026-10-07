@@ -89,7 +89,7 @@ function style(node: XmlNode | undefined, theme?: ThemeContext, issues: TextAppe
     const wNum = wRaw !== undefined ? number(wRaw, NaN) : undefined
     const lineColor = resolveDrawingColor(parseDrawingColor(getChildren(ln, 'solidFill')[0]), theme)
     if (lineColor && wNum !== undefined && Number.isFinite(wNum) && wNum > 0) {
-      out.textOutline = { color: textCssColor(lineColor), widthPx: (wNum * 96) / (12700 * 72) }
+      out.textOutline = { color: textCssColor(lineColor), widthPx: Math.min((wNum * 96) / (12700 * 72), 100) }
     } else if (!getChildren(ln, 'noFill').length) {
       issues.push({ kind: 'unsupported-text-appearance', feature: 'ln', message: 'WordArt outline needs a finite positive width and solid color; skipped' })
     }
@@ -107,9 +107,9 @@ function style(node: XmlNode | undefined, theme?: ThemeContext, issues: TextAppe
       const dir = sa.dir !== undefined ? (number(sa.dir) * Math.PI) / 10800000 : 0
       out.textShadow = {
         color: textCssColor(shadowColor),
-        // Negative radii are invalid: clamp to a hard shadow. Huge radii
-        // pass through; the canvas clamps them (documented limitation).
-        blurPx: sa.bluRad !== undefined ? Math.max(0, number(sa.bluRad) / 9525) : 0,
+        // Negative radii are invalid: clamp to a hard shadow. Hostile huge radii
+        // are capped to 100px to prevent browser rasterization hangs.
+        blurPx: sa.bluRad !== undefined ? Math.min(Math.max(0, number(sa.bluRad) / 9525), 100) : 0,
         offsetX: Math.cos(dir) * distPx,
         offsetY: Math.sin(dir) * distPx,
       }
