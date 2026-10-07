@@ -53,8 +53,9 @@ This encompasses:
 - `src/drawing/text-warp.ts` (new):
   - Pure geometry transformation engine for preset text warps (`textArchUp`, `textArchDown`, `textCircle`, `textWave1`, `textWave2`, `textInflate`, `textDeflate`, `textSlantUp`, `textSlantDown`).
   - Adjustment unit tables (initial values, validated against ECMA-376 Part 1 §20.1.9.22 presetShapeDefinitions during Phase 4):
-    - Arch / slant presets: angle in 60000ths of a degree (default `textArchUp` = 10800000 = 180°).
-    - Wave / envelope presets: percentage in 1/100000 (default 50000 = 50%).
+    - Arch presets: angle in 60000ths of a degree (default `textArchUp` = 10800000 = 180°).
+    - Slant / curve / wave / envelope presets: percentage in 1/100000 (default `textWave1`/`textInflate` = 50000 = 50%, `textSlantUp`/`textCurveUp` = 25000 = 25%).
+    - Guide bounds clamping: Angle guides clamped to [0, 21600000], percentage guides clamped to [0, 100000].
   - Fallback default adjustment lookup table when `<a:avLst>` is omitted.
   - Glyph/segment coordinate deformation and local transformation matrices in paint space.
 - `src/drawing/style.ts` & `src/pptx/types.ts`:
@@ -155,19 +156,19 @@ src/drawing/
 - [x] Test: Emits diagnostic for unknown warp presets and falls back to unwarped text rendering without throwing
 
 ### Phase 5: Text Warp Geometry Engine & Canvas Deformation
-- [ ] Test: Warp geometry computes arc curve transformation for `textArchUp` and `textArchDown`
-- [ ] Test: Warp geometry computes circular envelope transformation for `textCircle`
-- [ ] Test: Circular text warp (`textCircle`) maintains seam continuity where start meets end
-- [ ] Test: Warp geometry computes vertical sine wave baseline displacement for `textWave1` and `textWave2`
-- [ ] Test: Warp geometry computes envelope height scaling for `textInflate` and `textDeflate`
-- [ ] Test: Warp geometry computes affine shear transformation for `textSlantUp` and `textSlantDown`
-- [ ] Test: Text layout advances and line boxes remain strictly invariant under text warp
-- [ ] Test: Canvas paints warped text along transform curves while maintaining stroke and fill styling
-- [ ] Test: Warped text transforms gradient and pattern fill coordinate spaces with glyph bounds
-- [ ] Test: Text warp on vertical text (`vert`/`wordArtVert`) applies in local rotated frame preserving column progression
-- [ ] Test: Warped glyphs exceeding line bounding boxes clip deterministically
-- [ ] Test: Search indexing emits unwarped layout coordinates preserving logical reading order and selection stability
-- [ ] Test: Text hit-testing along warped curves produces monotonically non-decreasing character offsets
+- [x] Test: Warp geometry computes arc curve transformation for `textArchUp` and `textArchDown`
+- [x] Test: Warp geometry computes circular envelope transformation for `textCircle`
+- [x] Test: Circular text warp (`textCircle`) maintains seam continuity where start meets end
+- [x] Test: Warp geometry computes vertical sine wave baseline displacement for `textWave1` and `textWave2`
+- [x] Test: Warp geometry computes envelope height scaling for `textInflate` and `textDeflate`
+- [x] Test: Warp geometry computes affine shear transformation for `textSlantUp` and `textSlantDown`
+- [x] Test: Text layout advances and line boxes remain strictly invariant under text warp
+- [x] Test: Canvas paints warped text along transform curves while maintaining stroke and fill styling
+- [x] Test: Warped text transforms gradient and pattern fill coordinate spaces with glyph bounds
+- [x] Test: Text warp on vertical text (`vert`/`wordArtVert`) applies in local rotated frame preserving column progression
+- [x] Test: Warped glyphs exceeding line bounding boxes clip deterministically
+- [x] Test: Search indexing emits unwarped layout coordinates preserving logical reading order and selection stability
+- [x] Test: Text hit-testing along warped curves produces monotonically non-decreasing character offsets
 
 ### Phase 6: Extended Effects, Legacy VML Fallback & Quality Gates
 - [ ] Test: Emits diagnostic and falls back gracefully for text `<a:glow>` and `<a:reflection>`

@@ -129,48 +129,23 @@ export type TextWarpPreset =
   | 'textCascadeUp'
   | 'textCascadeDown'
 
+/**
+ * WordArt preset text warps with complete geometry implementations.
+ * Presets outside this set emit an 'unsupported-text-warp' diagnostic
+ * and fall back gracefully to unwarped text rendering.
+ */
 export const SUPPORTED_TEXT_WARP_PRESETS: ReadonlySet<string> = new Set<TextWarpPreset>([
-  'textNoShape',
-  'textPlain',
-  'textStop',
-  'textTriangle',
-  'textTriangleInverted',
-  'textChevron',
-  'textChevronInverted',
-  'textRingInside',
-  'textRingOutside',
   'textArchUp',
   'textArchDown',
   'textCircle',
-  'textButton',
-  'textArchUpPour',
-  'textArchDownPour',
-  'textCirclePour',
-  'textButtonPour',
-  'textCurveUp',
-  'textCurveDown',
-  'textCanUp',
-  'textCanDown',
   'textWave1',
   'textWave2',
-  'textDoubleWave1',
-  'textWave4',
   'textInflate',
   'textDeflate',
-  'textInflateBottom',
-  'textDeflateBottom',
-  'textInflateTop',
-  'textDeflateTop',
-  'textDeflateInflate',
-  'textDeflateInflateDeflate',
-  'textFadeRight',
-  'textFadeLeft',
-  'textFadeUp',
-  'textFadeDown',
   'textSlantUp',
   'textSlantDown',
-  'textCascadeUp',
-  'textCascadeDown',
+  'textCurveUp',
+  'textCurveDown',
 ])
 
 export interface TextWarp {

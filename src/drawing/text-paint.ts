@@ -4,6 +4,7 @@ import { graphemes, RECORD_TEXT, type LogicalTextRange, type LogicalTextSource, 
 import type { ThemeContext } from './style'
 import { layoutTextBody, resolveTextFamily, type MeasureText, type TextLayout } from './text-layout'
 import type { DrawingTextBody as PptxTextBody, DrawingTextStyle as PptxTextStyle } from './text'
+import { computeWarpTransform, applyWarpTransform } from './text-warp'
 
 /** Without native spacing, preserve contextual shaping rather than drawing
  * isolated Arabic/Indic clusters. Requested source tracking remains in the model. */
@@ -185,7 +186,7 @@ export function createTextBodyMeasurer(ctx: CanvasRenderingContext2D, resolveFon
     }
 }
 export function paintTextBody(body: PptxTextBody, ctx: CanvasRenderingContext2D, x: number, y: number, w: number, h: number, resolveFont: FontResolver, theme?: ThemeContext,
-  options?: { layout?: TextLayout; clip?: LogicalTextRange['clip'] }): void {
+  options?: { layout?: TextLayout; clip?: LogicalTextRange['clip']; clipToLineBox?: boolean }): void {
   if (w - (body.insetLeftEmu + body.insetRightEmu) / 9525 <= 0 || h - (body.insetTopEmu + body.insetBottomEmu) / 9525 <= 0) return
   ctx.save()
   try {
@@ -205,92 +206,151 @@ export function paintTextBody(body: PptxTextBody, ctx: CanvasRenderingContext2D,
     const sources: LogicalTextSource[] = body.paragraphs.map((p, order) => ({ text: p.runs.map(r => r.text).join(''), scope, order }))
     ctx.textAlign = 'left'; ctx.textBaseline = 'alphabetic'
     const record = (ctx as TextRecordingContext)[RECORD_TEXT]
+    const warp = body.textWarp && body.textWarp.preset !== 'textNoShape' && body.textWarp.preset !== 'textPlain' ? body.textWarp : undefined
     for (const line of layout.lines) {
-      const visibleSegment = line.segments.find(segment => !segment.style.noFill && segment.text !== '\n')
-      const paragraph = body.paragraphs[line.paragraphIndex]
-      const bulletStyle = visibleSegment?.style ?? { ...paragraph.defaultProperties, ...paragraph.endProperties }
-      if (line.bullet && !bulletStyle.noFill && (visibleSegment || !line.segments.length)) {
-        const style = bulletStyle
-        settings(ctx, style, resolveFont); ctx.fillStyle = style.color ?? '#000000'
-        // Bullets carry no shadow model: reset state so a shadowed run on an
-        // earlier line can never leak into them.
-        applyTextShadow(ctx, {})
-        // Bullet glyphs are presentation, not part of the source text string.
-        if (!record) ctx.fillText(line.bullet, x + line.x - measureLocal(line.bullet).width - 4, y + line.baseline)
+      if (options?.clipToLineBox) {
+        const lineWidth = line.segments.reduce((acc, s) => Math.max(acc, s.x + s.width - line.x), 0)
+        ctx.save()
+        ctx.beginPath()
+        ctx.rect(x + line.x, y + line.y, Math.max(lineWidth, 1), Math.max(line.height, 1))
+        ctx.clip()
       }
-      if (!line.segments.length && record) {
-        const style = { ...body.paragraphs[line.paragraphIndex].defaultProperties, ...body.paragraphs[line.paragraphIndex].endProperties }
-        settings(ctx, { ...style, fontFamily: resolveTextFamily({ ...style, text: '' }, theme) }, resolveFont)
-        const sourceOffset = line.inlineSlots?.[0]?.sourceOffset ?? sources[line.paragraphIndex].text.length
-        record('', x + line.x, y + line.baseline, 0, { source: sources[line.paragraphIndex], start: sourceOffset,
-          end: sourceOffset, clip, ...(line.logicalLineIndex === undefined ? {} : { line: line.logicalLineIndex, flow: 'vertical' }) })
-      }
-      for (const segment of line.segments) {
-        // A source break has no glyph. On a nonempty line its recording band
-        // follows visible text, so endParaRPr cannot enlarge hit/selection bands.
-        const recordedStyle = segment.text === '\n' ? line.segments.find(s => s.text !== '\n')?.style ?? segment.style : segment.style
-        const nativeTracking = settings(ctx, recordedStyle, resolveFont)
-        if (segment.transform) {
-          const t = segment.transform
-          ctx.save()
-          ctx.transform(t.a, t.b, t.c, t.d, x + t.e, y + t.f)
+      try {
+        const visibleSegment = line.segments.find(segment => !segment.style.noFill && segment.text !== '\n')
+        const paragraph = body.paragraphs[line.paragraphIndex]
+        const bulletStyle = visibleSegment?.style ?? { ...paragraph.defaultProperties, ...paragraph.endProperties }
+        if (line.bullet && !bulletStyle.noFill && (visibleSegment || !line.segments.length)) {
+          const style = bulletStyle
+          settings(ctx, style, resolveFont); ctx.fillStyle = style.color ?? '#000000'
+          // Bullets carry no shadow model: reset state so a shadowed run on an
+          // earlier line can never leak into them.
+          applyTextShadow(ctx, {})
+          // Bullet glyphs are presentation, not part of the source text string.
+          if (!record) ctx.fillText(line.bullet, x + line.x - measureLocal(line.bullet).width - 4, y + line.baseline)
         }
-        try {
-          const sx = segment.transform ? 0 : x + segment.x, sy = segment.transform ? 0 : y + line.baseline
-          const logical = { source: sources[line.paragraphIndex], start: segment.sourceStart, end: segment.sourceEnd,
-            clip,
-            run: segment.runIndex, graphemeBoundaries: segment.graphemeBoundaries,
-            ...(line.logicalLineIndex === undefined ? {} : { line: line.logicalLineIndex, flow: 'vertical' as const }) }
-          if (record) { record(segment.text, sx, sy, segment.width, logical); continue }
-          // WordArt appearance never adds records: one logical record per run
-          // regardless of fill/outline/shadow passes. Outline-only (noFill)
-          // runs still stroke.
-          const fillIt = !segment.style.noFill
-          const outline = segment.style.textOutline
-          if (!fillIt && !outline) continue
-          if (/^[\n\t]$/.test(segment.text)) continue
-          applyTextShadow(ctx, segment.style)
-          const size = segment.style.fontSizePt ?? 12
-          // Gradient boxes use measured glyph metrics (Q1); spaces and null
-          // metrics fall back to the 0.8/0.2 em box.
-          const paintOne = (text: string, px: number, py: number, wdt: number, ascent: number, descent: number): void => {
-            const asc = ascent > 0 ? ascent : size * 0.8, desc = descent > 0 ? descent : size * 0.2
-            if (fillIt) {
-              ctx.fillStyle = resolveTextFill(ctx, segment.style,
-                { x: px, y: py - asc, width: Math.max(wdt, 0.5), height: asc + desc }, patternCache)
-              ctx.fillText(text, px, py)
-            }
-            if (outline) {
-              ctx.strokeStyle = outline.color
-              ctx.lineWidth = Math.min(Math.max(0.5, outline.widthPx), MAX_OUTLINE_WIDTH_PX)
-              ctx.lineJoin = 'round'
-              ctx.strokeText(text, px, py)
-            }
+        if (!line.segments.length && record) {
+          const style = { ...body.paragraphs[line.paragraphIndex].defaultProperties, ...body.paragraphs[line.paragraphIndex].endProperties }
+          settings(ctx, { ...style, fontFamily: resolveTextFamily({ ...style, text: '' }, theme) }, resolveFont)
+          const sourceOffset = line.inlineSlots?.[0]?.sourceOffset ?? sources[line.paragraphIndex].text.length
+          record('', x + line.x, y + line.baseline, 0, { source: sources[line.paragraphIndex], start: sourceOffset,
+            end: sourceOffset, clip, ...(line.logicalLineIndex === undefined ? {} : { line: line.logicalLineIndex, flow: 'vertical' }) })
+        }
+        for (const segment of line.segments) {
+          // A source break has no glyph. On a nonempty line its recording band
+          // follows visible text, so endParaRPr cannot enlarge hit/selection bands.
+          const recordedStyle = segment.text === '\n' ? line.segments.find(s => s.text !== '\n')?.style ?? segment.style : segment.style
+          const nativeTracking = settings(ctx, recordedStyle, resolveFont)
+          if (segment.transform) {
+            const t = segment.transform
+            ctx.save()
+            ctx.transform(t.a, t.b, t.c, t.d, x + t.e, y + t.f)
           }
-          const tracking = !nativeTracking && needsContextualShaping(segment.text) ? 0 : (segment.style.characterSpacingPt ?? 0) * 96 / 72
-          // Per-glyph gradients in the tracking path are inherent: each glyph
-          // owns its box (P1). The path is rare (no native letterSpacing plus
-          // contextual shaping); the common path gradients once per segment.
-          if (nativeTracking || tracking === 0) {
-            const gm = measureLocal(canvasText(segment.text))
-            paintOne(canvasText(segment.text), sx, sy, segment.width, gm.actualBoundingBoxAscent, gm.actualBoundingBoxDescent)
-          } else {
-            let prefix = '', index = 0
-            for (const g of graphemes(segment.text)) {
-              const glyph = canvasText(g.text), through = prefix + glyph
-              // Include pair kerning with the preceding prefix in this glyph's
-              // origin, matching the whole-string metrics used during layout.
-              const gm = measureLocal(through), gw = measureLocal(glyph)
-              const advance = gm.width - gw.width
-              if (trackingEligible(g.text)) {
-                paintOne(glyph, sx + advance + index * tracking, sy, gw.width, gw.actualBoundingBoxAscent, gw.actualBoundingBoxDescent)
-                index++
+          try {
+            const sx = segment.transform ? 0 : x + segment.x, sy = segment.transform ? 0 : y + line.baseline
+            const logical = { source: sources[line.paragraphIndex], start: segment.sourceStart, end: segment.sourceEnd,
+              clip,
+              run: segment.runIndex, graphemeBoundaries: segment.graphemeBoundaries,
+              ...(line.logicalLineIndex === undefined ? {} : { line: line.logicalLineIndex, flow: 'vertical' as const }) }
+            if (record) { record(segment.text, sx, sy, segment.width, logical); continue }
+            // WordArt appearance never adds records: one logical record per run
+            // regardless of fill/outline/shadow passes. Outline-only (noFill)
+            // runs still stroke.
+            const fillIt = !segment.style.noFill
+            const outline = segment.style.textOutline
+            if (!fillIt && !outline) continue
+            if (/^[\n\t]$/.test(segment.text)) continue
+            applyTextShadow(ctx, segment.style)
+            const size = segment.style.fontSizePt ?? 12
+            // Gradient boxes use measured glyph metrics (Q1); spaces and null
+            // metrics fall back to the 0.8/0.2 em box.
+            const paintOne = (text: string, px: number, py: number, wdt: number, ascent: number, descent: number): void => {
+              const asc = ascent > 0 ? ascent : size * 0.8, desc = descent > 0 ? descent : size * 0.2
+              if (fillIt) {
+                ctx.fillStyle = resolveTextFill(ctx, segment.style,
+                  { x: px, y: py - asc, width: Math.max(wdt, 0.5), height: asc + desc }, patternCache)
+                ctx.fillText(text, px, py)
               }
-              prefix = through
+              if (outline) {
+                ctx.strokeStyle = outline.color
+                ctx.lineWidth = Math.min(Math.max(0.5, outline.widthPx), MAX_OUTLINE_WIDTH_PX)
+                ctx.lineJoin = 'round'
+                ctx.strokeText(text, px, py)
+              }
             }
-          }
-        } finally { if (segment.transform) ctx.restore() }
+            const tracking = !nativeTracking && needsContextualShaping(segment.text) ? 0 : (segment.style.characterSpacingPt ?? 0) * 96 / 72
+            // Per-glyph gradients in the tracking path are inherent: each glyph
+            // owns its box (P1). The path is rare (no native letterSpacing plus
+            // contextual shaping); the common path gradients once per segment.
+            if (warp) {
+              let prefix = '', index = 0
+              for (const g of graphemes(segment.text)) {
+                const glyph = canvasText(g.text), through = prefix + glyph
+                const gm = measureLocal(through), gw = measureLocal(glyph)
+                const advance = gm.width - gw.width
+                const unwarpedX = sx + advance + index * tracking
+                const unwarpedY = sy
+                const glyphW = Math.max(gw.width, 0.5)
+
+                if (segment.transform) {
+                  // In rotated vertical frames, the writing flow progresses along height h
+                  const flowLength = Math.max(h, 1)
+                  const transverseH = Math.max(w, 1)
+                  const flowPos = segment.x + advance + glyphW / 2
+                  const warpBox = { x: 0, y: 0, width: flowLength, height: transverseH }
+                  const t = computeWarpTransform(warp, warpBox, { x: flowPos, y: transverseH / 2 })
+                  const dx = t.x - flowPos
+                  const dy = t.y - transverseH / 2
+                  const localX = advance + glyphW / 2 + dx
+                  const localY = dy
+
+                  ctx.save()
+                  try {
+                    ctx.translate(localX, localY)
+                    if (t.rotation !== 0) ctx.rotate(t.rotation)
+                    if (t.scaleX !== 1 || t.scaleY !== 1) ctx.scale(t.scaleX, t.scaleY)
+                    paintOne(glyph, -glyphW / 2, 0, glyphW, gw.actualBoundingBoxAscent, gw.actualBoundingBoxDescent)
+                  } finally {
+                    ctx.restore()
+                  }
+                } else {
+                  const warpBox = { x, y, width: w, height: h }
+                  const t = computeWarpTransform(warp, warpBox, { x: unwarpedX + glyphW / 2, y: unwarpedY })
+                  ctx.save()
+                  try {
+                    applyWarpTransform(ctx, t)
+                    paintOne(glyph, -glyphW / 2, 0, glyphW, gw.actualBoundingBoxAscent, gw.actualBoundingBoxDescent)
+                  } finally {
+                    ctx.restore()
+                  }
+                }
+
+                if (trackingEligible(g.text)) index++
+                prefix = through
+              }
+            } else if (nativeTracking || tracking === 0) {
+              const gm = measureLocal(canvasText(segment.text))
+              paintOne(canvasText(segment.text), sx, sy, segment.width, gm.actualBoundingBoxAscent, gm.actualBoundingBoxDescent)
+            } else {
+              let prefix = '', index = 0
+              for (const g of graphemes(segment.text)) {
+                const glyph = canvasText(g.text), through = prefix + glyph
+                // Include pair kerning with the preceding prefix in this glyph's
+                // origin, matching the whole-string metrics used during layout.
+                const gm = measureLocal(through), gw = measureLocal(glyph)
+                const advance = gm.width - gw.width
+                if (trackingEligible(g.text)) {
+                  paintOne(glyph, sx + advance + index * tracking, sy, gw.width, gw.actualBoundingBoxAscent, gw.actualBoundingBoxDescent)
+                  index++
+                }
+                prefix = through
+              }
+            }
+          } finally { if (segment.transform) ctx.restore() }
+        }
+      } finally {
+        if (options?.clipToLineBox) ctx.restore()
       }
     }
   } finally { ctx.restore() }
 }
+
