@@ -212,7 +212,7 @@ export function parseVmlWordArt(node: XmlNode): VmlWordArtResult | undefined {
     heightPt,
     leftPt,
     topPt,
-    shapeId: shapeAttrs.id ?? shapeAttrs['o:spid'],
+    shapeId: shapeAttrs.id ?? shapeAttrs.spid ?? shapeAttrs['o:spid'],
     diagnostics: diagnostics.length > 0 ? diagnostics : undefined,
   }
 }
