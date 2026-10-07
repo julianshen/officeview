@@ -282,7 +282,6 @@ export function paintTextBody(body: PptxTextBody, ctx: CanvasRenderingContext2D,
             // owns its box (P1). The path is rare (no native letterSpacing plus
             // contextual shaping); the common path gradients once per segment.
             if (warp) {
-              const warpBox = segment.transform ? { x: 0, y: 0, width: w, height: h } : { x, y, width: w, height: h }
               let prefix = '', index = 0
               for (const g of graphemes(segment.text)) {
                 const glyph = canvasText(g.text), through = prefix + glyph
@@ -292,13 +291,37 @@ export function paintTextBody(body: PptxTextBody, ctx: CanvasRenderingContext2D,
                 const unwarpedY = sy
                 const glyphW = Math.max(gw.width, 0.5)
 
-                const t = computeWarpTransform(warp, warpBox, { x: unwarpedX + glyphW / 2, y: unwarpedY })
-                ctx.save()
-                try {
-                  applyWarpTransform(ctx, t)
-                  paintOne(glyph, -glyphW / 2, 0, glyphW, gw.actualBoundingBoxAscent, gw.actualBoundingBoxDescent)
-                } finally {
-                  ctx.restore()
+                if (segment.transform) {
+                  // In rotated vertical frames, the writing flow progresses along height h
+                  const flowLength = Math.max(h, 1)
+                  const transverseH = Math.max(w, 1)
+                  const flowPos = segment.x + advance + glyphW / 2
+                  const warpBox = { x: 0, y: 0, width: flowLength, height: transverseH }
+                  const t = computeWarpTransform(warp, warpBox, { x: flowPos, y: transverseH / 2 })
+                  const dx = t.x - flowPos
+                  const dy = t.y - transverseH / 2
+                  const localX = advance + glyphW / 2 + dx
+                  const localY = dy
+
+                  ctx.save()
+                  try {
+                    ctx.translate(localX, localY)
+                    if (t.rotation !== 0) ctx.rotate(t.rotation)
+                    if (t.scaleX !== 1 || t.scaleY !== 1) ctx.scale(t.scaleX, t.scaleY)
+                    paintOne(glyph, -glyphW / 2, 0, glyphW, gw.actualBoundingBoxAscent, gw.actualBoundingBoxDescent)
+                  } finally {
+                    ctx.restore()
+                  }
+                } else {
+                  const warpBox = { x, y, width: w, height: h }
+                  const t = computeWarpTransform(warp, warpBox, { x: unwarpedX + glyphW / 2, y: unwarpedY })
+                  ctx.save()
+                  try {
+                    applyWarpTransform(ctx, t)
+                    paintOne(glyph, -glyphW / 2, 0, glyphW, gw.actualBoundingBoxAscent, gw.actualBoundingBoxDescent)
+                  } finally {
+                    ctx.restore()
+                  }
                 }
 
                 if (trackingEligible(g.text)) index++

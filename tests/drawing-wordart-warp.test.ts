@@ -432,10 +432,14 @@ describe('WordArt Text Warp Geometry Engine & Canvas Deformation - Phase 5', () 
 
     const paintedGlyphs: string[] = []
     const transforms: number[][] = []
+    const translates: number[][] = []
 
     const mockCtx = createSpyContext(100, 200, {
       transform: (a: number, b: number, c: number, d: number, e: number, f: number) => {
         transforms.push([a, b, c, d, e, f])
+      },
+      translate: (x: number, y: number) => {
+        translates.push([x, y])
       },
       fillText: (text: string) => { paintedGlyphs.push(text) },
     })
@@ -461,7 +465,55 @@ describe('WordArt Text Warp Geometry Engine & Canvas Deformation - Phase 5', () 
     expect(paintedGlyphs).toEqual(['A', 'B'])
     // Vertical text segment transforms establish rotated frame
     expect(transforms.length).toBeGreaterThan(0)
+    // Per-glyph warp translations follow reading flow order down the column with positive deflection
+    expect(translates.length).toBe(2)
+    expect(translates[1][0]).toBeGreaterThan(translates[0][0])
+    expect(translates[1][0] - translates[0][0]).toBeGreaterThan(0)
   })
+
+  it('clampAdjustment clamps angle, percentage, and handles NaN defensively', async () => {
+    const { clampAdjustment } = await import('../src/drawing/text-warp')
+    // Angle family [0, 21600000]
+    expect(clampAdjustment('textArchUp', 'adj', 99999999)).toBe(21600000)
+    expect(clampAdjustment('textCircle', 'adj', -500)).toBe(0)
+    expect(clampAdjustment('textCircle', 'adj', 10800000)).toBe(10800000)
+
+    // Percentage family [0, 100000]
+    expect(clampAdjustment('textSlantUp', 'adj', 500000)).toBe(100000)
+    expect(clampAdjustment('textWave1', 'adj2', -100)).toBe(0)
+    expect(clampAdjustment('textInflate', 'adj', 25000)).toBe(25000)
+
+    // NaN defensive guard
+    expect(clampAdjustment('textArchUp', 'adj', NaN)).toBe(0)
+    expect(clampAdjustment('textWave1', 'adj2', NaN)).toBe(0)
+  })
+
+  it('modeled but ungeometrized presets safely fall back to unwarped rendering', async () => {
+    const { paintTextBody } = await import('../src/drawing/text-paint')
+    const painted: string[] = []
+    const mockCtx = createSpyContext(200, 100, {
+      fillText: (text: string) => { painted.push(text) },
+    })
+    const body = {
+      paragraphs: [{
+        runs: [{ text: 'FALLBACK', fontSizePt: 16 }],
+        align: 'left' as const,
+        level: 0,
+      }],
+      anchor: 't' as const,
+      insetLeftEmu: 0,
+      insetRightEmu: 0,
+      insetTopEmu: 0,
+      insetBottomEmu: 0,
+      wrap: true,
+      textWarp: { preset: 'textWave4' as const, adjustments: {} },
+    }
+
+    paintTextBody(body, mockCtx, 0, 0, 200, 100, f => f)
+    expect(painted.length).toBeGreaterThan(0)
+    expect(painted.join('')).toBe('FALLBACK')
+  })
+
 
   it('warped glyphs exceeding line bounding boxes clip deterministically', async () => {
     const { paintTextBody } = await import('../src/drawing/text-paint')

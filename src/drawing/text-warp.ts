@@ -33,6 +33,7 @@ const ANGLE_PRESETS: ReadonlySet<TextWarpPreset> = new Set<TextWarpPreset>([
 ])
 
 export function clampAdjustment(preset: TextWarpPreset, name: string, value: number): number {
+  if (!Number.isFinite(value)) return 0
   if (ANGLE_PRESETS.has(preset) && name.startsWith('adj')) {
     return Math.max(0, Math.min(21600000, value))
   }
@@ -97,6 +98,8 @@ export function computeWarpTransform(
     case 'textCircle': {
       const adj = resolveAdjustment(warp, 'adj', 10800000)
       const theta = (adj / 60000) * (Math.PI / 180)
+      // Radius model: rBase = min(w, h) / 2 fits the circular envelope within
+      // the bounding box to keep ink bounded while preserving 360-degree seam continuity.
       const rBase = Math.min(w, h) / 2
       const r = Math.max(1, rBase - v)
       const xc = box.x + w / 2
@@ -109,6 +112,8 @@ export function computeWarpTransform(
     }
 
     case 'textWave1': {
+      // Primary wave amplitude is governed by adj2 (default 50%).
+      // adj1 (phase/bias) is preserved in the model for ECMA compatibility.
       const adj2 = resolveAdjustment(warp, 'adj2', 50000)
       const amp = (adj2 / 100000) * (h / 4)
       const dy = amp * Math.sin(2 * Math.PI * u)
