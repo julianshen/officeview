@@ -109,7 +109,7 @@ function style(node: XmlNode | undefined, theme?: ThemeContext, issues: TextAppe
         color: textCssColor(shadowColor),
         // Negative radii are invalid: clamp to a hard shadow. Hostile huge radii
         // are capped to 100px to prevent browser rasterization hangs.
-        blurPx: sa.bluRad !== undefined ? Math.min(Math.max(0, number(sa.bluRad) / 9525), 100) : 0,
+        blurPx: (sa.blurRad ?? sa.bluRad) !== undefined ? Math.min(Math.max(0, number(sa.blurRad ?? sa.bluRad) / 9525), 100) : 0,
         offsetX: Math.cos(dir) * distPx,
         offsetY: Math.sin(dir) * distPx,
       }
