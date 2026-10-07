@@ -476,10 +476,44 @@ describe('WordArt Text Warp Geometry Engine & Canvas Deformation - Phase 5', () 
     expect(paintedGlyphs).toEqual(['A', 'B'])
     // Vertical text segment transforms establish rotated frame
     expect(transforms.length).toBeGreaterThan(0)
-    // Per-glyph warp translations follow reading flow order down the column with positive deflection
+    // Per-glyph warp translations follow reading flow order down the column
     expect(translates.length).toBe(2)
+    // Discriminator: bounded transverse displacement (old broken code had negative x ~ -94 and inflated y ~ 218)
+    expect(translates[0][0]).toBeGreaterThan(0)
+    expect(translates[0][1]).toBeLessThan(100)
     expect(translates[1][0]).toBeGreaterThan(translates[0][0])
-    expect(translates[1][0] - translates[0][0]).toBeGreaterThan(0)
+    expect(translates[0][1] - translates[1][1]).toBeGreaterThan(10)
+
+    // Multi-segment flow offset discriminator: two spaced runs down the column must incorporate
+    // their flow offset into warp coordinates, whereas buggy code dropping segment.x produced near-identical offsets
+    const spacedTranslates: number[][] = []
+    const spacedCtx = createSpyContext(100, 200, {
+      translate: (x: number, y: number) => { spacedTranslates.push([x, y]) },
+    })
+    const spacedBody = {
+      paragraphs: [{
+        runs: [
+          { text: 'A', fontSizePt: 16, color: '#000000' },
+          { text: '     ', fontSizePt: 16, color: '#000000' },
+          { text: 'B', fontSizePt: 16, color: '#000000' },
+        ],
+        align: 'left' as const,
+        level: 0,
+      }],
+      direction: 'vert' as const,
+      anchor: 't' as const,
+      insetLeftEmu: 0,
+      insetRightEmu: 0,
+      insetTopEmu: 0,
+      insetBottomEmu: 0,
+      wrap: true,
+      textWarp: { preset: 'textArchUp' as const, adjustments: { adj: 10800000 } },
+    }
+    paintTextBody(spacedBody, spacedCtx, 0, 0, 100, 200, f => f)
+    expect(spacedTranslates.length).toBe(7)
+    // Flow offset between A (glyph 0) and B (glyph 6) across spaces must reflect transverse progression (>20px shift)
+    expect(Math.abs(spacedTranslates[6][0] - spacedTranslates[0][0])).toBeGreaterThan(20)
+    expect(Math.abs(spacedTranslates[6][1] - spacedTranslates[0][1])).toBeGreaterThan(30)
   })
 
   it('clampAdjustment clamps angle, percentage, and handles NaN defensively', async () => {
