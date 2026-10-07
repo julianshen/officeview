@@ -1,8 +1,8 @@
 /** DrawingML text metadata shared by slides, cached diagrams, and sheet drawings. */
 import { attrs, getChildren, orderedChildren, textOf, type XmlNode } from '../core/xml'
 import { parseDrawingColor, resolveDrawingColor, type DrawingColor, type ThemeContext } from './style'
-import type { DrawingTextParagraph as PptxParagraph, DrawingTextBody as PptxTextBody, DrawingTextRun as PptxTextRun, DrawingTextSpacing as PptxTextSpacing, DrawingTextStyle as PptxTextStyle, DrawingTabStop as PptxTabStop, TextDirection, PatternPreset } from './text'
-import { SUPPORTED_PATTERN_PRESETS } from './text'
+import type { DrawingTextParagraph as PptxParagraph, DrawingTextBody as PptxTextBody, DrawingTextRun as PptxTextRun, DrawingTextSpacing as PptxTextSpacing, DrawingTextStyle as PptxTextStyle, DrawingTabStop as PptxTabStop, TextDirection, PatternPreset, TextWarpPreset } from './text'
+import { SUPPORTED_PATTERN_PRESETS, SUPPORTED_TEXT_WARP_PRESETS, DEFAULT_WARP_ADJUSTMENTS } from './text'
 
 const number = (v: string | undefined, fallback = 0): number => v !== undefined && Number.isFinite(Number(v)) ? Number(v) : fallback
 function align(v: string | undefined): PptxParagraph['align'] {
@@ -156,8 +156,9 @@ export interface InheritedTextLayer {
 
 const directions = new Set<TextDirection>(['horz', 'vert', 'vert270', 'wordArtVert', 'eaVert', 'mongolianVert', 'wordArtVertRtl'])
 
+export interface TextWarpIssue { kind: 'unsupported-text-warp'; feature: string; message: string }
 export interface ParsedDrawingTextBody extends PptxTextBody {
-  diagnostics?: Array<{ kind: 'unsupported-text-alignment'; feature: string; message: string } | TextAppearanceIssue>
+  diagnostics?: Array<{ kind: 'unsupported-text-alignment'; feature: string; message: string } | TextAppearanceIssue | TextWarpIssue>
 }
 
 export function parseTextBody(txBody: XmlNode, theme?: ThemeContext, defaults?: XmlNode, fontDefaults: PptxTextStyle = {}, inheritedLayers: readonly InheritedTextLayer[] = []): ParsedDrawingTextBody {
@@ -165,6 +166,46 @@ export function parseTextBody(txBody: XmlNode, theme?: ThemeContext, defaults?: 
   const body: ParsedDrawingTextBody = { paragraphs: [], anchor: a.anchor === 'ctr' ? 'ctr' : a.anchor === 'b' ? 'b' : 't',
     insetLeftEmu: number(a.lIns, 91440), insetRightEmu: number(a.rIns, 91440), insetTopEmu: number(a.tIns, 45720), insetBottomEmu: number(a.bIns, 45720), wrap: a.wrap !== 'none',
     ...(directions.has(a.vert as TextDirection) ? { direction: a.vert as TextDirection } : {}) }
+  const bodyPrNodes = [...inheritedLayers.map(layer => getChildren(layer.body, 'bodyPr')[0]), getChildren(txBody, 'bodyPr')[0]].filter((n): n is XmlNode => !!n)
+  let prstWarpNode: XmlNode | undefined
+  for (let i = bodyPrNodes.length - 1; i >= 0; i--) {
+    const warp = getChildren(bodyPrNodes[i], 'prstTxWarp')[0]
+    if (warp) { prstWarpNode = warp; break }
+  }
+  if (prstWarpNode) {
+    const warpPrst = attrs(prstWarpNode).prst
+    if (warpPrst) {
+      if (warpPrst === 'textNoShape' || warpPrst === 'textPlain') {
+        // Handled as unwarped standard text
+      } else if (SUPPORTED_TEXT_WARP_PRESETS.has(warpPrst)) {
+        const avLst = getChildren(prstWarpNode, 'avLst')[0]
+        const adjustments: Record<string, number> = { ...(DEFAULT_WARP_ADJUSTMENTS[warpPrst] ?? {}) }
+        if (avLst) {
+          for (const gd of getChildren(avLst, 'gd')) {
+            const ga = attrs(gd)
+            if (ga.name && ga.fmla) {
+              const rawVal = ga.fmla.startsWith('val ') ? ga.fmla.slice(4).trim() : ga.fmla.trim()
+              const valNum = Number(rawVal)
+              if (Number.isFinite(valNum)) {
+                adjustments[ga.name] = valNum
+              }
+            }
+          }
+        }
+        body.textWarp = {
+          preset: warpPrst as TextWarpPreset,
+          adjustments: Object.keys(adjustments).length > 0 ? adjustments : undefined,
+        }
+      } else {
+        body.diagnostics ??= []
+        body.diagnostics.push({
+          kind: 'unsupported-text-warp',
+          feature: warpPrst,
+          message: `WordArt warp preset ${warpPrst} is unsupported; using unwarped text`,
+        })
+      }
+    }
+  }
   const list = getChildren(txBody, 'lstStyle')[0]
   for (const p of getChildren(txBody, 'p')) {
     const pPr = getChildren(p, 'pPr')[0], level = number(attrs(pPr).lvl)
