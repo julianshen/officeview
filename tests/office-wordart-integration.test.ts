@@ -71,9 +71,9 @@ function pixelPaint(paint: PaintDrawingFn, drawing: any, width: number, height: 
   return paintStats({ data: c.getImageData(0, 0, width, height).data, width, height })
 }
 
-function paintStats(img: PaintPixels): { ink: number; red: number; green: number; blue: number; strokeGreen: number; redMeanY: number; greenMeanY: number; bbox: { x0: number; y0: number; x1: number; y1: number }; rows: Array<{ r: number; b: number }> } {
+function paintStats(img: PaintPixels): { ink: number; red: number; green: number; blue: number; strokeGreen: number; redMeanY: number; greenMeanY: number; blueMeanY: number; bbox: { x0: number; y0: number; x1: number; y1: number }; rows: Array<{ r: number; b: number }> } {
   let ink = 0, red = 0, green = 0, blue = 0, strokeGreen = 0
-  let redY = 0, greenY = 0
+  let redY = 0, greenY = 0, blueY = 0
   let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity
   for (let y = 0; y < img.height; y++) {
     for (let x = 0; x < img.width; x++) {
@@ -90,7 +90,7 @@ function paintStats(img: PaintPixels): { ink: number; red: number; green: number
       const kind = pixelDominator({ r, g, b, a })
       if (kind === 'red') { red++; redY += y }
       else if (kind === 'green') { green++; greenY += y }
-      else if (kind === 'blue') { blue++ }
+      else if (kind === 'blue') { blue++; blueY += y }
       else if (kind === 'strokeGreen') { strokeGreen++ }
     }
   }
@@ -115,7 +115,7 @@ function paintStats(img: PaintPixels): { ink: number; red: number; green: number
   }
   return {
     ink, red, green, blue, strokeGreen,
-    redMeanY: red ? redY / red : -1, greenMeanY: green ? greenY / green : -1,
+    redMeanY: red ? redY / red : -1, greenMeanY: green ? greenY / green : -1, blueMeanY: blue ? blueY / blue : -1,
     bbox: { x0: x0 === Infinity ? 0 : x0, y0: y0 === Infinity ? 0 : y0, x1, y1 },
     rows,
   }
@@ -495,7 +495,11 @@ describe('Phase 3: Format Adapters Integration', () => {
     const NodeCanvas = realCreate(1, 1).constructor as unknown as { prototype: { getContext: (...args: unknown[]) => unknown } }
     const originalGetContext = NodeCanvas.prototype.getContext
     const seen = new WeakSet<object>()
-    const stops: Array<{ at: number; color: string }> = []
+    // Gradient instance tags: each created gradient gets its own sequence id
+    // shared across all hooked contexts, so stops validate per creation over
+    // all classified stop calls.
+    let gradSeq = 0
+    const stops: Array<{ grad: number; at: number; color: string }> = []
     let warm = 0, sourceGreen = 0, sourceRed = 0
     ;(NodeCanvas.prototype as any).getContext = function (kind: string, ...args: unknown[]) {
       const target = originalGetContext.call(this, kind, ...args) as any
@@ -504,9 +508,10 @@ describe('Phase 3: Format Adapters Integration', () => {
       const createGradient = target.createLinearGradient.bind(target)
       target.createLinearGradient = (...gargs: unknown[]) => {
         const grad = createGradient(...(gargs as [number, number, number, number]))
+        const gradId = gradSeq++
         const add = grad.addColorStop.bind(grad)
         grad.addColorStop = (at: number, color: string) => {
-          stops.push({ at, color })
+          stops.push({ grad: gradId, at, color })
           return add(at, String(color).toUpperCase() === '#00FF00' ? '#FF0000' : color)
         }
         return grad
@@ -543,8 +548,21 @@ describe('Phase 3: Format Adapters Integration', () => {
         if (dd[i + 2] > 30 && dd[i + 2] > dd[i] * 1.12 && dd[i + 2] > dd[i + 1] * 1.12) finalBlue++
         if (dd[i + 1] > 30 && dd[i + 1] > dd[i] * 1.12 && dd[i + 1] > dd[i + 2] * 1.12) finalGreen++
       }
-      // Authored model and stop-call trace are preserved by the fault.
-      expect(stops.map(s => s.color)).toEqual(['#FF0000', '#00FF00'])
+      // Authored model and stop-call trace are preserved by the fault. Every
+      // created gradient is validated: each must carry exactly the authored
+      // stop pair, so a dropped/redirected stop fails every affected creation
+      // and a stop-less creation cannot hide outside the grouping.
+      const byGrad = new Map<number, Array<{ at: number; color: string }>>()
+      for (const s of stops) {
+        const list = byGrad.get(s.grad) ?? []
+        list.push({ at: s.at, color: s.color })
+        byGrad.set(s.grad, list)
+      }
+      expect(byGrad.size).toBeGreaterThanOrEqual(1)
+      expect(byGrad.size, 'every created gradient received stop calls').toBe(gradSeq)
+      for (const [id, list] of byGrad) {
+        expect(list, `gradient ${id} carries the exact authored stop pair`).toEqual([{ at: 0, color: '#FF0000' }, { at: 1, color: '#00FF00' }])
+      }
       // Old aggregate + outline gates still pass under the fault (the gap).
       expect(warm, 'fault keeps warm aggregate passing').toBeGreaterThan(500)
       expect(finalBlue, 'fault keeps blue outline passing').toBeGreaterThan(500)
@@ -613,7 +631,7 @@ describe('Phase 3: Format Adapters Integration', () => {
     // Authored XML pair: identical 12pt vert270 textWave1 packages differing
     // only by <w:b/>. Both go through real parsing (no model mutation), so
     // paired fill/outline evidence reflects the actual pipeline.
-    const buildVertDocx = (bold: boolean): string => `<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing" xmlns:wps="http://schemas.microsoft.com/office/word/2010/wordprocessingShape" xmlns:w14="http://schemas.microsoft.com/office/word/2010/wordml">
+    const buildVertDocx = (bold: boolean, swapped = false): string => `<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing" xmlns:wps="http://schemas.microsoft.com/office/word/2010/wordprocessingShape" xmlns:w14="http://schemas.microsoft.com/office/word/2010/wordml">
       <w:body><w:p><w:r><w:drawing><wp:inline>
         <wp:extent cx="${emu(200)}" cy="${emu(100)}"/>
         <wp:docPr id="3" name="Vertical Box"/>
@@ -621,7 +639,7 @@ describe('Phase 3: Format Adapters Integration', () => {
           <wps:wsp>
             <wps:cNvSpPr txBox="1"/>
             <wps:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="${emu(200)}" cy="${emu(100)}"/></a:xfrm></wps:spPr>
-            <wps:txbx><w:txbxContent><w:p><w:r><w:rPr>${bold ? '<w:b/>' : ''}<w14:textFill><w14:gradFill><w14:gsLst><w14:gs w14:pos="0"><w14:srgbClr w14:val="FF0000"/></w14:gs><w14:gs w14:pos="100000"><w14:srgbClr w14:val="0000FF"/></w14:gs></w14:gsLst><w14:lin w14:ang="0"/></w14:gradFill></w14:textFill><w14:textOutline w14:w="12700"><w14:solidFill><w14:srgbClr w14:val="008800"/></w14:solidFill></w14:textOutline></w:rPr><w:t>Vertical Art</w:t></w:r></w:p></w:txbxContent></wps:txbx>
+            <wps:txbx><w:txbxContent><w:p><w:r><w:rPr>${bold ? '<w:b/>' : ''}<w14:textFill><w14:gradFill><w14:gsLst>${swapped ? '<w14:gs w14:pos="0"><w14:srgbClr w14:val="0000FF"/></w14:gs><w14:gs w14:pos="100000"><w14:srgbClr w14:val="FF0000"/></w14:gs>' : '<w14:gs w14:pos="0"><w14:srgbClr w14:val="FF0000"/></w14:gs><w14:gs w14:pos="100000"><w14:srgbClr w14:val="0000FF"/></w14:gs>'}</w14:gsLst><w14:lin w14:ang="0"/></w14:gradFill></w14:textFill><w14:textOutline w14:w="12700"><w14:solidFill><w14:srgbClr w14:val="008800"/></w14:solidFill></w14:textOutline></w:rPr><w:t>Vertical Art</w:t></w:r></w:p></w:txbxContent></wps:txbx>
             <wps:bodyPr vert="vert270" wrap="none" anchor="ctr">
               <a:prstTxWarp prst="textWave1"/>
             </wps:bodyPr>
@@ -629,9 +647,9 @@ describe('Phase 3: Format Adapters Integration', () => {
         </a:graphicData></a:graphic>
       </wp:inline></w:drawing></w:r></w:p></w:body>
     </w:document>`
-    const loadVertDrawing = async (bold: boolean) => {
+    const loadVertDrawing = async (bold: boolean, swapped = false) => {
       const zip = new JSZip()
-      zip.file('word/document.xml', buildVertDocx(bold))
+      zip.file('word/document.xml', buildVertDocx(bold, swapped))
       zip.file('word/_rels/document.xml.rels', '<Relationships/>')
       const { parseDocx } = await import('../src/docx/parse')
       const doc = await parseDocx(await OfficePackage.load(await zip.generateAsync({ type: 'uint8array' })))
@@ -690,13 +708,28 @@ describe('Phase 3: Format Adapters Integration', () => {
     expect(bold.blue, 'BOLD: painted blue gradient-stop ink exists').toBeGreaterThan(40)
     expect(bold.green, 'BOLD: #008800 outline still displays').toBeGreaterThan(100)
     expect(bold.ink, 'BOLD pixels painted').toBeGreaterThan(400)
-    // Directional gradient walk under the outer vert270 affine — the run
-    // advance maps onto page ROWS: red weight wins at the mapped START
-    // (page bottom), blue weight at the mapped tail (page top).
+    // Directional gradient under the outer vert270 affine — the run advance
+    // maps onto page ROWS: red weight sits at the mapped START (page bottom,
+    // high y) and blue at the mapped tail (page top, low y). Validated via
+    // the red/blue ink centroids over all classified colored ink, not the
+    // first and last qualifying rows: extreme rows sample antialiased edges
+    // while the centroid separation follows the fixed gradient axis.
+    // Separation margin 15px holds with 2x headroom under the tightest
+    // measured separation (32.6).
+    expect(bold.redMeanY - bold.blueMeanY, 'red centroid below blue centroid along mapped rows').toBeGreaterThanOrEqual(15)
     const rows = bold.rows
     expect(rows.length, 'gradient samples across mapped ink rows').toBeGreaterThanOrEqual(3)
-    expect(rows[rows.length - 1].r, 'run-advance start carries more red').toBeGreaterThanOrEqual(rows[0].r - 40)
-    expect(rows[0].b, 'run-advance tail carries more blue').toBeGreaterThanOrEqual(rows[rows.length - 1].b - 40)
+
+    // Reversed-gradient control: swapping the authored stops must flip the
+    // measured direction, proving the gate detects real orientation rather
+    // than any separation.
+    const swappedDrawing = await loadVertDrawing(true, true)
+    expect(swappedDrawing.kind).toBe('textbox')
+    if (swappedDrawing.kind !== 'textbox') throw new Error('Expected textbox drawing')
+    const swapped = pixelPaint(paint, swappedDrawing, 200, 100)
+    expect(swapped.red, 'reversed: red stop ink exists').toBeGreaterThan(40)
+    expect(swapped.blue, 'reversed: blue stop ink exists').toBeGreaterThan(40)
+    expect(swapped.blueMeanY - swapped.redMeanY, 'reversed gradient flips centroid direction').toBeGreaterThanOrEqual(15)
 
     // RECORD_TEXT observation: once-only source text recording
     const recCanvas = createCanvas(200, 100)
