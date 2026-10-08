@@ -6,12 +6,14 @@ export const CONTENT_REFERENCE_DEPTH = 32
 export const DRAWING_GROUP_DEPTH = 64
 export const DOCUMENT_DRAWING_NODE_LIMIT = 10000
 export interface ContentDiagnostic {
-  kind: 'missing-part' | 'malformed-part' | 'external-reference' | 'content-cycle' | 'content-depth' | 'group-depth' | 'node-budget' | 'unsupported-content' | 'unsupported-fill' | 'unsupported-effect' | 'unsupported-line'
+  kind: 'missing-part' | 'malformed-part' | 'external-reference' | 'content-cycle' | 'content-depth' | 'group-depth' | 'node-budget' | 'unsupported-content' | 'unsupported-fill' | 'unsupported-effect' | 'unsupported-line' | 'malformed-vml-container' | 'unsupported-geometry'
   message: string
   partPath: string
   feature?: string
   /** Relationship ID or resolved part which led to this branch. */
   identity?: string
+  /** Structural VML source path (distinct per node/group/pict occurrence); authored ID stays in identity. */
+  sourcePath?: string
   /** Source part whose relationship selected this target, when partPath names the target. */
   ownerPartPath?: string
   /** Relationship on the original drawing owner that selected this content chain. */
@@ -36,7 +38,7 @@ export function drawingPartContext(pkg: OfficePackage): DrawingPartContext {
   }
   return context
 }
-export function contentDiagnostic(context: DrawingPartContext, kind: ContentDiagnostic['kind'], partPath: string, feature?: string, details: Pick<ContentDiagnostic, 'identity' | 'reason' | 'limit' | 'ownerPartPath' | 'sourceReferenceId'> = {}): void {
+export function contentDiagnostic(context: DrawingPartContext, kind: ContentDiagnostic['kind'], partPath: string, feature?: string, details: Pick<ContentDiagnostic, 'identity' | 'reason' | 'limit' | 'ownerPartPath' | 'sourceReferenceId' | 'sourcePath'> = {}): void {
   context.diagnostics.push({ kind, partPath, feature, ...details, message: `Drawing content ${kind}${feature ? `: ${feature}` : ''}` })
 }
 export function reserveDrawingNode(context: DrawingPartContext, partPath: string): boolean {

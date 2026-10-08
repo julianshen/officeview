@@ -332,3 +332,117 @@ describe('wordart paint', () => {
     expect(inked(data)).toBe(0)
   })
 })
+
+describe('wordart appearance review regressions', () => {
+  const inheritedBody = (inherited: string, direct: string, text = 'MMMM') =>
+    parseTextBody(parseXmlOrdered(
+      `<a:txBody xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><a:bodyPr/><a:lstStyle><a:lvl1pPr><a:defRPr sz="3600">${inherited}</a:defRPr></a:lvl1pPr></a:lstStyle><a:p><a:r><a:rPr>${direct}</a:rPr><a:t>${text}</a:t></a:r></a:p></a:txBody>`
+    ))
+
+  test('direct path gradient clears inherited gradient fill and paints stop-0 solid color', () => {
+    const gradLinear = `<a:gradFill><a:gsLst><a:gs pos="0"><a:srgbClr val="FF0000"/></a:gs><a:gs pos="100000"><a:srgbClr val="0000FF"/></a:gs></a:gsLst><a:lin ang="0"/></a:gradFill>`
+    const gradPath = `<a:gradFill><a:gsLst><a:gs pos="0"><a:srgbClr val="FF0000"/></a:gs><a:gs pos="100000"><a:srgbClr val="0000FF"/></a:gs></a:gsLst><a:path path="circle"/></a:gradFill>`
+    const b = inheritedBody(gradLinear, gradPath)
+    const run = b.paragraphs[0].runs[0]
+    expect(run.textFill).toBeUndefined()
+    expect(run.color).toBe('#FF0000')
+
+    const strokeOrFillCalls: any[] = []
+    const canvas = createCanvas(200, 100)
+    const ctx = canvas.getContext('2d')
+    const origFill = ctx.fillText.bind(ctx)
+    ctx.fillText = (t, x, y) => {
+      strokeOrFillCalls.push({ op: 'fill', fill: ctx.fillStyle })
+      origFill(t, x, y)
+    }
+    paintTextBody(b, ctx as never, 0, 0, 200, 100, identity)
+    expect(strokeOrFillCalls[0]?.fill).toBe('#ff0000')
+  })
+
+  test('direct unsupported pattern preset clears inherited gradient and paints fg solid color', () => {
+    const gradLinear = `<a:gradFill><a:gsLst><a:gs pos="0"><a:srgbClr val="FF0000"/></a:gs><a:gs pos="100000"><a:srgbClr val="0000FF"/></a:gs></a:gsLst><a:lin ang="0"/></a:gradFill>`
+    const patt = `<a:pattFill prst="wave"><a:fgClr><a:srgbClr val="FF0000"/></a:fgClr><a:bgClr><a:srgbClr val="00FF00"/></a:bgClr></a:pattFill>`
+    const b = inheritedBody(gradLinear, patt)
+    const run = b.paragraphs[0].runs[0]
+    expect(run.textFill).toBeUndefined()
+    expect(run.color).toBe('#FF0000')
+
+    const strokeOrFillCalls: any[] = []
+    const canvas = createCanvas(200, 100)
+    const ctx = canvas.getContext('2d')
+    const origFill = ctx.fillText.bind(ctx)
+    ctx.fillText = (t, x, y) => {
+      strokeOrFillCalls.push({ op: 'fill', fill: ctx.fillStyle })
+      origFill(t, x, y)
+    }
+    paintTextBody(b, ctx as never, 0, 0, 200, 100, identity)
+    expect(strokeOrFillCalls[0]?.fill).toBe('#ff0000')
+  })
+
+  test('direct unsupported pattern preset without inherited fill retains solid fg color', () => {
+    const patt = `<a:pattFill prst="wave"><a:fgClr><a:srgbClr val="FF0000"/></a:fgClr><a:bgClr><a:srgbClr val="00FF00"/></a:bgClr></a:pattFill>`
+    const b = inheritedBody('', patt)
+    const run = b.paragraphs[0].runs[0]
+    expect(run.textFill).toBeUndefined()
+    expect(run.color).toBe('#FF0000')
+
+    const strokeOrFillCalls: any[] = []
+    const canvas = createCanvas(200, 100)
+    const ctx = canvas.getContext('2d')
+    const origFill = ctx.fillText.bind(ctx)
+    ctx.fillText = (t, x, y) => {
+      strokeOrFillCalls.push({ op: 'fill', fill: ctx.fillStyle })
+      origFill(t, x, y)
+    }
+    paintTextBody(b, ctx as never, 0, 0, 200, 100, identity)
+    expect(strokeOrFillCalls[0]?.fill).toBe('#ff0000')
+  })
+
+  test('explicit empty effectLst preserves inherited outer shadow per native PowerPoint behavior', () => {
+    const shadow = `<a:effectLst><a:outerShdw dist="95250" dir="0"><a:srgbClr val="00FF00"/></a:outerShdw></a:effectLst>`
+    const b = inheritedBody(shadow, '<a:effectLst/>')
+    expect(b.paragraphs[0].runs[0].textShadow).toMatchObject({
+      color: '#00FF00',
+      offsetX: 10,
+    })
+  })
+
+  test('malformed direct shadow color uses established diagnosed fallback and retains inherited shadow', () => {
+    const shadow = `<a:effectLst><a:outerShdw dist="95250" dir="0"><a:srgbClr val="00FF00"/></a:outerShdw></a:effectLst>`
+    const badShadow = `<a:effectLst><a:outerShdw><a:srgbClr val="INVALID"/></a:outerShdw></a:effectLst>`
+    const b = inheritedBody(shadow, badShadow)
+    expect(b.paragraphs[0].runs[0].textShadow).toMatchObject({
+      color: '#00FF00',
+      offsetX: 10,
+    })
+    expect(b.diagnostics?.some(d => d.kind === 'unsupported-text-appearance' && d.feature === 'outerShdw')).toBe(true)
+  })
+
+  test('direct glow-only effectLst diagnoses and retains inherited shadow per native fallback', () => {
+    const shadow = `<a:effectLst><a:outerShdw dist="95250" dir="0"><a:srgbClr val="00FF00"/></a:outerShdw></a:effectLst>`
+    const glow = `<a:effectLst><a:glow rad="9525"><a:srgbClr val="FF0000"/></a:glow></a:effectLst>`
+    const b = inheritedBody(shadow, glow)
+    expect(b.paragraphs[0].runs[0].textShadow).toMatchObject({
+      color: '#00FF00',
+      offsetX: 10,
+    })
+    expect(b.diagnostics?.some(d => d.kind === 'unsupported-text-appearance' && d.feature === 'glow')).toBe(true)
+  })
+
+  test('thin outline preserves 0.2px source width on strokeText call', () => {
+    const thin = `<a:noFill/><a:ln w="1905"><a:solidFill><a:srgbClr val="0000FF"/></a:solidFill></a:ln>`
+    const b = inheritedBody('', thin)
+    expect(b.paragraphs[0].runs[0].textOutline?.widthPx).toBeCloseTo(0.2, 5)
+
+    let actualLineWidth: number | undefined
+    const canvas = createCanvas(200, 100)
+    const ctx = canvas.getContext('2d')
+    const origStroke = ctx.strokeText.bind(ctx)
+    ctx.strokeText = (t, x, y) => {
+      actualLineWidth = ctx.lineWidth
+      origStroke(t, x, y)
+    }
+    paintTextBody(b, ctx as never, 0, 0, 200, 100, identity)
+    expect(actualLineWidth).toBeCloseTo(0.2, 5)
+  })
+})

@@ -135,6 +135,145 @@ function ellipseParameter(angle: number, rx: number, ry: number): number {
   return base + Math.round((angle - base) / TAU) * TAU
 }
 
+/** Text-warp seed guide set, per ECMA-376 presetTextWarpDefinitions context.
+ * Shape geometry uses a different seed set (ls, cd) — routing a text-warp
+ * definition through the shape catalog evaluates the wrong values. */
+export function textWarpSeedValues(width: number, height: number): Map<string, number> {
+  const values = new Map<string, number>(Object.entries({
+    l: 0, t: 0, r: width, b: height, w: width, h: height, hc: width / 2, vc: height / 2,
+    wd2: width / 2, hd2: height / 2, wd3: width / 3, ss: Math.min(width, height), cd2: CIRCLE / 2,
+  }))
+  return values
+}
+
+/** Evaluate an ordered guide list (optionally honoring overrides for adjustment
+ * guides) into the given seed map. Reuses the shared evaluator so text warps and
+ * shape geometry agree on every operation and token. */
+export function evaluateGuides(
+  adjustments: ReadonlyArray<Guide>, guides: ReadonlyArray<Guide>, seed: Map<string, number>,
+  overrides: Record<string, number>, issues: Array<{ kind: string; guide?: string; message: string }>,
+): Map<string, number> {
+  const values = seed
+  for (const [guides_, applyOverrides] of [[adjustments, true], [guides, false]] as const) {
+    for (const [name, formula] of guides_) {
+      try {
+        if (!name) throw new Error('Missing guide name')
+        const value = applyOverrides && Object.prototype.hasOwnProperty.call(overrides, name)
+          ? finite(overrides[name], `adjustment ${name}`)
+          : formulaValue(formula, values)
+        values.set(name, value)
+      } catch (error) {
+        values.delete(name)
+        issues.push({ kind: 'invalid-guide', guide: name, message: messageOf(error) })
+      }
+    }
+  }
+  return values
+}
+
+/** Official resolved command form for TEXT-warp boundary paths: point commands
+ * carry numeric pixel values; arcTo keeps its DrawingML angle attributes. */
+export type WarpResolvedCommand =
+  | { kind: 'moveTo' | 'lnTo' | 'quadBezTo' | 'cubicBezTo'; values: number[] }
+  | { kind: 'arcTo'; attrs: { wR: number; hR: number; stAng: number; swAng: number } }
+  | { kind: 'close' }
+export interface WarpResolvedPath { commands: WarpResolvedCommand[] }
+export interface WarpResolvedGeometry { values: Record<string, number>; paths: WarpResolvedPath[]; issues: GeometryIssue[] }
+
+function resolveWarpPath(path: GeometryPath, values: Map<string, number>): WarpResolvedPath {
+  // Text-warp catalog commands arrive as {kind, values|attrs} objects (from the
+  // pinned catalog), NOT the tuple form geometry-xml produces. Normalize here.
+  const catalogLike = path.commands as unknown as ReadonlyArray<{ kind: string; values?: readonly (string | number)[]; attrs?: Partial<Record<'wR' | 'hR' | 'stAng' | 'swAng', string | number>> }>
+  const sx = 1
+  const sy = 1
+  const commands: WarpResolvedCommand[] = []
+  let current: [number, number] | undefined
+  let subpath: [number, number] | undefined
+  for (const catalogCommand of catalogLike) {
+    const kind = catalogCommand.kind
+    if (kind === 'moveTo') {
+      const raw = [tokenValue(String(catalogCommand.values?.[0] ?? '0'), values), tokenValue(String(catalogCommand.values?.[1] ?? '0'), values)]
+      current = [raw[0], raw[1]]; subpath = current
+      commands.push({ kind: 'moveTo', values: [finite(current[0] * sx, 'x'), finite(current[1] * sy, 'y')] })
+      continue
+    }
+    if (!current) throw new Error(`${kind} without a current point`)
+    if (kind === 'close') {
+      commands.push({ kind: 'close' })
+      current = subpath
+    } else if (kind === 'arcTo') {
+      // Official form: keep DrawingML angle attrs, trace the arc endpoint.
+      const attrs = (catalogCommand.attrs ?? {}) as Partial<Record<string, string | number>>
+      if (attrs.wR === undefined || attrs.hR === undefined || attrs.stAng === undefined || attrs.swAng === undefined) throw new Error('arcTo needs wR/hR/stAng/swAng')
+      const raw = [tokenValue(String(attrs.wR), values), tokenValue(String(attrs.hR), values), tokenValue(String(attrs.stAng), values), tokenValue(String(attrs.swAng), values)]
+      const [rx, ry, stAng, swAng] = raw as [number, number, number, number]
+      if (rx < 0 || ry < 0) throw new Error('Arc radii must be nonnegative')
+      commands.push({ kind: 'arcTo', attrs: { wR: finite(rx * sx, 'wR'), hR: finite(ry * sy, 'hR'), stAng: finite(stAng, 'stAng'), swAng: finite(swAng, 'swAng') } })
+      current = continueWarpArc(current, rx, ry, stAng, swAng)
+    } else {
+      const valuesList = catalogCommand.values ?? []
+      const raw = [tokenValue(String(valuesList[0] ?? '0'), values), tokenValue(String(valuesList[1] ?? '0'), values), tokenValue(String(valuesList[2] ?? '0'), values), tokenValue(String(valuesList[3] ?? '0'), values), tokenValue(String(valuesList[4] ?? '0'), values), tokenValue(String(valuesList[5] ?? '0'), values)]
+      const degreesToTokens: Record<string, number> = { lnTo: 2, quadBezTo: 4, cubicBezTo: 6 }
+      if (!Object.prototype.hasOwnProperty.call(degreesToTokens, kind)) throw new Error(`Invalid path command ${kind}`)
+      const n = degreesToTokens[kind]
+      const scaled = raw.slice(0, n).map((value, index) => finite(value * (index % 2 === 0 ? sx : sy), 'path coordinate'))
+      commands.push({ kind: kind as 'moveTo' | 'lnTo' | 'quadBezTo' | 'cubicBezTo', values: scaled as unknown as number[] })
+      current = [raw[n - 2], raw[n - 1]]
+    }
+  }
+  if (!commands.length) throw new Error('Empty geometry path')
+  return { commands }
+}
+
+/** Trace the implicit arc endpoint the official arcTo semantics imply so the
+ * path cursor continues exactly as the DrawingML engine would. */
+function continueWarpArc(
+  current: [number, number],
+  rx: number, ry: number, stAng: number, swAng: number,
+): [number, number] {
+  const start = ellipseParameter(stAng * TO_RADIANS, rx, ry)
+  const cx = current[0] - rx * Math.cos(start)
+  const cy = current[1] - ry * Math.sin(start)
+  const end = swAng % CIRCLE === 0 ? start + swAng / CIRCLE * TAU : ellipseParameter((stAng + swAng) * TO_RADIANS, rx, ry)
+  return [finite(cx + rx * Math.cos(end), 'arc endpoint x'), finite(cy + ry * Math.sin(end), 'arc endpoint y')]
+}
+
+
+/** Resolve an official TEXT-warp definition (avLst/gdLst/pathLst, guide-reference
+ * tokens intact) against a body-local box. Adjustment overrides replace avLst
+ * values by name; everything evaluates through the shared guide evaluator with
+ * the TEXT-WARP seed set (never the shape seed, never the shape catalog).
+ * Handles (official adjustment bounds) also evaluate so callers can state
+ * clamp policies in OFFICIAL units. */
+export function resolveTextWarpPaths(
+  definition: { adjustments: ReadonlyArray<Guide>; guides: ReadonlyArray<Guide>; paths: ReadonlyArray<GeometryPath>; handles?: ReadonlyArray<{ guide: string; min: string | number; max: string | number }> },
+  width: number, height: number,
+  overrides: Record<string, number> = {},
+  issues: GeometryIssue[] = [],
+): WarpResolvedGeometry {
+  const paths: WarpResolvedPath[] = []
+  const pushIssue = (issue: GeometryIssue) => { issues.push({ ...issue, ...(issue.pathIndex !== undefined ? { pathIndex: issue.pathIndex } : {}) }) }
+  if (!Number.isFinite(width) || !Number.isFinite(height) || width <= 0 || height <= 0) {
+    pushIssue({ kind: 'invalid-extents', message: 'Text-warp extents must be finite and positive' })
+    return { values: {}, paths, issues }
+  }
+  // The seed map carries the seed values themselves (l/t/r/b/w/h/hc/vc/wd2/hd2/
+  // wd3/ss/cd2) as evaluated guides; the caller reads the FULL table back.
+  const values = textWarpSeedValues(width, height)
+  try {
+    evaluateGuides(definition.adjustments, definition.guides, values, overrides, issues as GeometryIssue[])
+    definition.paths.forEach((path, pathIndex) => {
+      try { paths.push(resolveWarpPath(path, values)) }
+      catch (error) { pushIssue({ kind: 'invalid-path', pathIndex, message: messageOf(error) }) }
+    })
+  } catch (error) {
+    pushIssue({ kind: 'invalid-path', message: messageOf(error) })
+  }
+  const flat: Record<string, number> = {}
+  for (const [name, value] of values) flat[name] = value
+  return { values: flat, paths, issues }
+}
+
 function resolvePath(path: GeometryPath, width: number, height: number, pathWidth: number, pathHeight: number, values: Map<string, number>): ResolvedPath {
   const sx = path.width === undefined ? 1 : width / pathWidth
   const sy = path.height === undefined ? 1 : height / pathHeight

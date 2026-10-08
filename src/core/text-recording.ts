@@ -28,6 +28,27 @@ export interface LogicalTextRange {
     x: number; y: number; width: number
     transform?: { a: number; b: number; c: number; d: number; e: number; f: number }
   }
+  /** Optional mapped visual geometry for curved ink (warp): the ink's mapped
+   * polygon plus per-grapheme-cluster mapped centers, both in the recording
+   * transform's coordinate space. Same logical record — never extra records;
+   * search/highlights/hits may use it while copy stays canonical. */
+  visual?: {
+    polygon: ReadonlyArray<[number, number]>
+    clusters?: ReadonlyArray<[number, number]>
+    /** Small convex mesh cells covering the mapped band. Hit testing uses
+     * this cell union (robust to global polygon winding on folded bands). */
+    cells?: ReadonlyArray<readonly [[number, number], [number, number], [number, number], [number, number]]>
+    /** Mesh triangles covering the mapped band (authoritative for containment;
+     * triangles stay convex even when quads twist). */
+    tris?: ReadonlyArray<readonly [[number, number], [number, number], [number, number]]>
+    /** Per-grapheme-cluster mapped band bounds [x, y, width, height] in the
+     * same order as `clusters`: the axis-aligned bound of the mapped mesh
+     * cells for that cluster's own source interval. Highlights union these
+     * (intersected with the viewport) instead of centering nominal font bands
+     * on the cluster centers. Minimal type extension for the highlight
+     * coverage fix: paint computes it where glyph advances are known. */
+    bands?: ReadonlyArray<readonly [number, number, number, number]>
+  }
 }
 export type RecordText = (text: string, x: number, y: number, width: number, logical: LogicalTextRange) => void
 export type TextRecordingContext = CanvasRenderingContext2D & { [RECORD_TEXT]?: RecordText }

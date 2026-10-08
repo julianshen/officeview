@@ -9,7 +9,7 @@
  */
 
 import type { HighlightRect } from './overlay'
-import type { IndexLine, TextIndex, TextIndexPage } from './search'
+import type { IndexLine, TextIndex, TextIndexPage, TextPlacement } from './search'
 import { pointInTextClip, projectTextPoint, rectsForRange, visibleTextPolygon } from './search'
 import { snapGrapheme, type LogicalTextSource } from './text-recording'
 
@@ -97,6 +97,60 @@ function charAtX(line: IndexLine, x: number): number {
   return lastEnd
 }
 
+/** Containment in a small convex mesh quad (same-side cross-product test). */
+function pointInConvexQuad(
+  quad: readonly [{ x: number; y: number }, { x: number; y: number }, { x: number; y: number }, { x: number; y: number }],
+  x: number,
+  y: number,
+): boolean {
+  if (!Number.isFinite(x) || !Number.isFinite(y)) return false
+  if (!quad.every(p => Number.isFinite(p.x) && Number.isFinite(p.y))) return false
+  const doubleArea = Math.abs(
+    (quad[0].x * quad[1].y - quad[1].x * quad[0].y) +
+    (quad[1].x * quad[2].y - quad[2].x * quad[1].y) +
+    (quad[2].x * quad[3].y - quad[3].x * quad[2].y) +
+    (quad[3].x * quad[0].y - quad[0].x * quad[3].y)
+  )
+  if (doubleArea <= 1e-9) return false
+  let sign = 0
+  for (let i = 0; i < 4; i++) {
+    const p = quad[i], q = quad[(i + 1) % 4]
+    const cross = (q.x - p.x) * (y - p.y) - (q.y - p.y) * (x - p.x)
+    if (Math.abs(cross) <= 1e-9) continue
+    const s = Math.sign(cross)
+    if (sign !== 0 && s !== sign) return false
+    sign = s
+  }
+  return sign !== 0
+}
+
+/** Union containment over mapped mesh cells (robust to global band winding). */
+function pointInWarpCells(
+  cells: ReadonlyArray<readonly [{ x: number; y: number }, { x: number; y: number }, { x: number; y: number }, { x: number; y: number }]>,
+  x: number,
+  y: number,
+): boolean {
+  return cells.some(cell => pointInConvexQuad(cell, x, y))
+}
+
+/** Union containment over mapped mesh triangles (authoritative: triangles stay
+ * convex even when envelope bands twist and quads bowtie). */
+function pointInWarpTris(
+  tris: ReadonlyArray<readonly [{ x: number; y: number }, { x: number; y: number }, { x: number; y: number }]>,
+  x: number,
+  y: number,
+): boolean {
+  return tris.some(tri => pointInConvexQuad([tri[0], tri[1], tri[2], tri[2]], x, y))
+}
+
+function pointInSpanVisual(visual: NonNullable<TextPlacement['visual']>, x: number, y: number): boolean {
+  return visual.tris?.length
+    ? pointInWarpTris(visual.tris, x, y)
+    : visual.cells?.length
+      ? pointInWarpCells(visual.cells, x, y)
+      : pointInTextClip(visual.polygon, x, y)
+}
+
 /** Inverse-map a hit to each span's local band so rotation/flips keep their character progression. */
 function transformedHit(page: TextIndexPage, pageIndex: number, x: number, y: number, strict: boolean): CaretPos | undefined {
   let best: CaretPos | undefined
@@ -109,6 +163,75 @@ function transformedHit(page: TextIndexPage, pageIndex: number, x: number, y: nu
       if (!span.text.length) continue
       const p = span.placement ?? { x: span.x, y: span.y, width: span.width, top: line.top, bottom: line.bottom, transform: { a: 1, b: 0, c: 0, d: 1, e: 0, f: 0 } }
       if (p.clip && (!pointInTextClip(p.clip, x, y) || !visibleTextPolygon(p).length)) continue
+      if (p.visual) {
+        // Curved ink: containment on the mapped mesh-cell union (page space),
+        // falling back to the mapped polygon; the caret resolves to the nearest
+        // mapped cluster center snapped into the canonical grapheme grid.
+        const contained = pointInSpanVisual(p.visual, x, y)
+        if (strict && !contained) continue
+        const logical = span.logical
+        const boundaries = logical?.graphemeBoundaries
+        if (p.visual.clusters?.length && boundaries?.length && logical) {
+          let bestCluster = 0, bestDelta = Infinity
+          p.visual.clusters.forEach((c, ci) => {
+            const d = (c.x - x) ** 2 + (c.y - y) ** 2
+            if (d < bestDelta) { bestDelta = d; bestCluster = ci }
+          })
+          const effDistance = Math.sqrt(bestDelta)
+          if (effDistance >= distance) continue
+          // Signed progression along the reading direction (works for vertical
+          // frames too): project the hit onto the reading axis through the
+          // selected cluster. The before/after split is at the cluster's OWN
+          // center — matching the ordinary nearest-caret policy — not at a
+          // neighbor Voronoi border: nearest-center selection already places
+          // the query inside that cluster's region, so the sign alone
+          // decides. The terminal cluster has no next center, so its axis
+          // continues from the previous center; a single cluster uses the
+          // whole-band cap axis (orientation-agnostic). Boundaries are
+          // ABSOLUTE paragraph-source offsets; the span's absolute start maps
+          // them onto this line exactly once.
+          const spanSourceStart = logical.start
+          const clusterCenter = p.visual.clusters[bestCluster]
+          const hasNext = bestCluster + 1 < p.visual.clusters.length
+          const hasPrev = bestCluster > 0
+          const axisEnd = hasNext ? p.visual.clusters[bestCluster + 1] : clusterCenter
+          const axisStart = hasNext ? clusterCenter : hasPrev ? p.visual.clusters[bestCluster - 1] : undefined
+          let axisX: number, axisY: number
+          if (axisStart) {
+            axisX = axisEnd.x - axisStart.x; axisY = axisEnd.y - axisStart.y
+          } else if (p.visual.cells && p.visual.cells.length > 0) {
+            // Single cluster: whole-band reading axis from the start cap to
+            // the end cap, recovered from the first/last mesh cells. This is
+            // orientation-agnostic (vertical columns progress along the
+            // column, not along the replay context's +x), unlike the span's
+            // recording-time transform.
+            const first = p.visual.cells[0], last = p.visual.cells[p.visual.cells.length - 1]
+            const sx = (first[0].x + first[3].x) / 2, sy = (first[0].y + first[3].y) / 2
+            const ex = (last[1].x + last[2].x) / 2, ey = (last[1].y + last[2].y) / 2
+            axisX = ex - sx; axisY = ey - sy
+          } else {
+            // No neighbor and no cells: the span's baseline tangent is the
+            // reading axis.
+            const m = p.transform
+            const len = Math.hypot(m.a, m.b) || 1
+            axisX = m.a / len; axisY = m.b / len
+          }
+          const axisLen2 = axisX * axisX + axisY * axisY
+          const signed = axisLen2 > 1e-12
+            ? ((x - clusterCenter.x) * axisX + (y - clusterCenter.y) * axisY) / Math.sqrt(axisLen2)
+            : 0
+          const afterCenter = signed > 1e-9
+          const boundary = boundaries[Math.min(bestCluster, boundaries.length - 1)]
+          const nextBoundary = boundaries[Math.min(bestCluster + 1, boundaries.length - 1)]
+          const chosen = afterCenter && nextBoundary > boundary ? nextBoundary : boundary
+          const charIndex = spanStart + (chosen - spanSourceStart)
+          best = { pageIndex, lineIndex, charIndex: snapGrapheme(line.text, charIndex) }
+          distance = effDistance
+          continue
+        }
+        if (strict) continue
+        // fall through to the inverse-affine estimate when strict is off
+      }
       const m = p.transform, determinant = m.a * m.d - m.b * m.c
       if (!Number.isFinite(determinant) || determinant === 0) continue
       const dx = x - m.e, dy = y - m.f
@@ -131,7 +254,7 @@ function transformedHit(page: TextIndexPage, pageIndex: number, x: number, y: nu
 }
 
 function positiveAxisAligned(line: IndexLine): boolean {
-  if (line.spans.some(span => span.logical?.flow === 'vertical')) return false
+  if (line.spans.some(span => span.logical?.flow === 'vertical' || span.placement?.visual)) return false
   return line.spans.every(span => {
     const m = span.placement?.transform
     return !m || m.a > 0 && m.d > 0 && Math.abs(m.b) <= 1e-10 && Math.abs(m.c) <= 1e-10

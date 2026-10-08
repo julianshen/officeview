@@ -19,9 +19,27 @@ export function hexRgbToCss(hex: string | undefined): string | undefined {
   return undefined
 }
 
+/** Pass through a narrowly validated CSS rgb()/rgba() string (as produced for
+ * w14 alpha fills), clamping channels into range. Anything else is rejected so
+ * arbitrary style strings can never reach a canvas fillStyle unchecked. */
+function cssRgbToCss(raw: string): string | undefined {
+  const m = /^\s*rgba?\(\s*(\d{1,3})\s*,\s*(\d{1,3})\s*,\s*(\d{1,3})\s*(?:,\s*(\d+(?:\.\d+)?|\.\d+)\s*)?\)\s*$/.exec(raw)
+  if (!m) return undefined
+  const clampByte = (n: number): number => Math.min(255, Math.max(0, Math.floor(n)))
+  const r = clampByte(Number(m[1])), g = clampByte(Number(m[2])), b = clampByte(Number(m[3]))
+  if (m[0].toLowerCase().startsWith('rgba(') || m[4] !== undefined) {
+    const a = Number(m[4] ?? 1)
+    if (!Number.isFinite(a)) return undefined
+    return `rgba(${r},${g},${b},${Math.min(1, Math.max(0, a))})`
+  }
+  return `rgb(${r},${g},${b})`
+}
+
 /** Resolve a color that may be "auto" (black by convention on light backgrounds). */
 export function resolveColor(raw: string | undefined, fallback = '#000000'): string {
   if (!raw) return fallback
   if (raw === 'auto') return fallback
-  return hexRgbToCss(raw) ?? fallback
+  // Validated CSS rgb()/rgba() (as produced for w14 alpha fills) passes
+  // through; hexRgbToCss keeps its hex/ARGB-only contract.
+  return hexRgbToCss(raw) ?? cssRgbToCss(raw) ?? fallback
 }

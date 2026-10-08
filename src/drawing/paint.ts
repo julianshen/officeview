@@ -90,8 +90,10 @@ function interpolateGradientColor(a: DrawingColor, b: DrawingColor, weight: numb
   const channel = (key: 'r' | 'g' | 'b'): number => alpha > 0 ? (a[key] * a.a * (1 - weight) + b[key] * b.a * weight) / alpha : 0
   return { r: channel('r'), g: channel('g'), b: channel('b'), a: alpha }
 }
-interface PaintSurface { width: number; height: number; getContext(kind: '2d'): unknown }
-function scratchSurface(ctx: CanvasRenderingContext2D, width: number, height: number): PaintSurface | undefined {
+export interface PaintSurface { width: number; height: number; getContext(kind: '2d'): unknown }
+/** Shared host-neutral offscreen-surface strategy (OffscreenCanvas, owning document,
+ * or a node-canvas owner). Used by radial shading and the warp raster painter. */
+export function scratchSurface(ctx: CanvasRenderingContext2D, width: number, height: number): PaintSurface | undefined {
   // OffscreenCanvas needs no document. node-canvas exposes its own Canvas constructor.
   if (typeof OffscreenCanvas !== 'undefined') return new OffscreenCanvas(width, height)
   const owner = ctx.canvas.ownerDocument

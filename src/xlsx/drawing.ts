@@ -9,8 +9,136 @@ import { attemptedMalformedRelationshipIssue, malformedRelationshipAttempt, prep
 import { contentDiagnostic, drawingPartContext, DOCUMENT_DRAWING_NODE_LIMIT, DRAWING_GROUP_DEPTH, partRelationships, referencedPart, reserveDrawingNode } from '../drawing/parts'
 import { resolveDrawingStyle, type ThemeContext } from '../drawing/style'
 import { parseTextBody, textFontDefaults } from '../drawing/text-parse'
-import { parseVmlWordArt } from '../drawing/vml'
+import { parseVmlContainer, type VmlNode } from '../drawing/vml'
 import type { XlsxDrawing, XlsxImage, XlsxSheet } from './types'
+
+function vmlNodeToXlsx(node: VmlNode, owner: string): XlsxDrawing | undefined {
+  if (node.kind === 'shape') {
+    const vml = node.result
+    const widthPt = Number.isFinite(vml.widthPt) ? (vml.widthPt as number) : 200
+    const heightPt = Number.isFinite(vml.heightPt) ? (vml.heightPt as number) : 50
+    const leftPt = Number.isFinite(vml.leftPt) ? (vml.leftPt as number) : 0
+    const topPt = Number.isFinite(vml.topPt) ? (vml.topPt as number) : 0
+    const xEmu = Math.round(leftPt * 12700)
+    const yEmu = Math.round(topPt * 12700)
+    const widthEmu = Math.round(widthPt * 12700)
+    const heightEmu = Math.round(heightPt * 12700)
+    if (![xEmu, yEmu, widthEmu, heightEmu].every(Number.isFinite)) return undefined
+    const treePath = `legacyDrawing/${node.sourcePath}`
+    const drawing: XlsxDrawing = {
+      xEmu,
+      yEmu,
+      widthEmu,
+      heightEmu,
+      textBody: vml.textBody,
+      transformValid: true,
+      ...(vml.rotationDeg !== undefined && Number.isFinite(vml.rotationDeg) ? { rotationDeg: vml.rotationDeg } : {}),
+      ...(vml.flipH ? { flipH: true } : {}),
+      ...(vml.flipV ? { flipV: true } : {}),
+      source: {
+        partPath: owner,
+        treePath,
+        element: 'shape',
+        ...(vml.shapeId ? { id: vml.shapeId, name: vml.shapeId } : {}),
+        representation: 'native',
+      },
+    }
+    return drawing
+  }
+  const children: XlsxDrawing[] = []
+  for (const c of node.children) {
+    const d = vmlNodeToXlsx(c, owner)
+    if (d && [d.xEmu, d.yEmu, d.widthEmu, d.heightEmu].every(Number.isFinite)) children.push(d)
+  }
+  if (![node.xEmu, node.yEmu, node.widthEmu, node.heightEmu].every(Number.isFinite)) return undefined
+  const group = {
+    off: { x: node.xEmu, y: node.yEmu },
+    ext: { width: node.widthEmu, height: node.heightEmu },
+    chOff: { x: Math.round(node.coordorigin.x * 12700), y: Math.round(node.coordorigin.y * 12700) },
+    chExt: { width: Math.round(node.coordsize.width * 12700), height: Math.round(node.coordsize.height * 12700) },
+  }
+  const treePath = `legacyDrawing/${node.sourcePath}`
+  const drawing: XlsxDrawing = {
+    xEmu: node.xEmu,
+    yEmu: node.yEmu,
+    widthEmu: node.widthEmu,
+    heightEmu: node.heightEmu,
+    group,
+    children,
+    transformValid: true,
+    ...(node.rotationDeg !== undefined && Number.isFinite(node.rotationDeg) ? { rotationDeg: node.rotationDeg } : {}),
+    ...(node.flipH ? { flipH: true } : {}),
+    ...(node.flipV ? { flipV: true } : {}),
+    source: {
+      partPath: owner,
+      treePath,
+      element: 'group',
+      ...(node.groupId ? { id: node.groupId, name: node.groupId } : {}),
+      representation: 'native',
+    },
+  }
+  return drawing
+}
+
+function pushVmlXlsxDiagnostics(
+  nodes: VmlNode[],
+  containerDiagnostics: import('../drawing/vml').VmlWordArtDiagnostic[] | undefined,
+  context: {
+    diagnostics: Array<{
+      kind: 'unsupported-fill' | 'unsupported-effect' | 'unsupported-line' | 'missing-part' | 'malformed-part' | 'external-reference' | 'content-cycle' | 'content-depth' | 'group-depth' | 'node-budget' | 'unsupported-content' | 'malformed-vml-container' | 'unsupported-geometry'
+      partPath: string
+      feature?: string
+      identity?: string
+      sourcePath?: string
+      message: string
+    }>
+  },
+  owner: string,
+): void {
+  const hasOne = (candidate: { kind: string; partPath: string; feature?: string; identity?: string; sourcePath?: string; message: string }): boolean =>
+    context.diagnostics.some(
+      e =>
+        e.kind === candidate.kind &&
+        e.partPath === candidate.partPath &&
+        (e.feature ?? '') === (candidate.feature ?? '') &&
+        (e.identity ?? '') === (candidate.identity ?? '') &&
+        (e.sourcePath ?? '') === (candidate.sourcePath ?? '') &&
+        e.message === candidate.message,
+    )
+  const pushOne = (d: import('../drawing/vml').VmlWordArtDiagnostic, sourcePath: string, authoredId: string | undefined): void => {
+    const fullPath = `legacyDrawing/${sourcePath}`
+    const candidate = {
+      kind: d.kind,
+      partPath: owner,
+      feature: d.feature ?? 'vml-wordart',
+      identity: authoredId ?? fullPath,
+      sourcePath: fullPath,
+      message: authoredId ? `${d.message} (shape ${authoredId})` : d.message,
+    }
+    if (!hasOne(candidate)) context.diagnostics.push(candidate)
+  }
+  const walk = (n: VmlNode): void => {
+    if (n.kind === 'shape') {
+      for (const d of n.result.diagnostics ?? []) pushOne(d, n.sourcePath, n.result.shapeId)
+    } else {
+      for (const d of n.diagnostics ?? []) pushOne(d, n.sourcePath, n.groupId)
+      for (const c of n.children) walk(c)
+    }
+  }
+  for (const n of nodes) walk(n)
+  for (const d of containerDiagnostics ?? []) {
+    const fullPath = d.sourcePath ? `legacyDrawing/${d.sourcePath}` : 'legacyDrawing'
+    const candidate = {
+      kind: d.kind,
+      partPath: owner,
+      feature: d.feature ?? 'vml-wordart',
+      identity: d.identity ?? fullPath,
+      sourcePath: fullPath,
+      message: d.message,
+    }
+    if (!hasOne(candidate)) context.diagnostics.push(candidate)
+  }
+}
 
 const EMU = 9525
 const MAX_COLS = 4096
@@ -329,42 +457,35 @@ export async function parseWorksheetDrawings(pkg: OfficePackage, sheet: XlsxShee
     try { vmlRoot = await pkg.xmlOrdered(owner) }
     catch { continue }
     if (!vmlRoot) continue
-    const shapes = getChildren(vmlRoot, 'shape')
-    for (const shape of shapes) {
-      const vml = parseVmlWordArt(shape)
-      if (vml) {
-        if (vml.diagnostics && vml.diagnostics.length > 0) {
-          for (const d of vml.diagnostics) {
-            context.diagnostics.push({
-              kind: d.kind,
-              partPath: owner,
-              feature: 'vml-wordart',
-              identity: vml.shapeId,
-              message: d.message,
-            })
-          }
+    let container
+    try {
+      container = parseVmlContainer(vmlRoot)
+    } catch (err) {
+      const candidate = {
+        kind: 'malformed-vml-container' as const,
+        partPath: owner,
+        feature: 'vml-wordart',
+        identity: 'legacyDrawing',
+        sourcePath: 'legacyDrawing',
+        message: err instanceof Error ? err.message : String(err),
+      }
+      if (!context.diagnostics.some(e => e.kind === candidate.kind && e.partPath === candidate.partPath && e.sourcePath === candidate.sourcePath)) {
+        context.diagnostics.push(candidate)
+      }
+      continue
+    }
+    if (container.nodes.length > 0 || (container.diagnostics && container.diagnostics.length > 0)) {
+      pushVmlXlsxDiagnostics(container.nodes, container.diagnostics, context, owner)
+    }
+    for (const vmlNode of container.nodes) {
+      const object = vmlNodeToXlsx(vmlNode, owner)
+      if (object) {
+        const pushWithDescendants = (n: XlsxDrawing): void => {
+          ;(sheet.drawings ??= []).push(n)
+          // Children are retained hierarchically; drawings list holds top-level nodes only.
         }
-        const widthPt = vml.widthPt ?? 200
-        const heightPt = vml.heightPt ?? 50
-        const leftPt = vml.leftPt ?? 0
-        const topPt = vml.topPt ?? 0
-        const widthEmu = Math.round(widthPt * 12700)
-        const heightEmu = Math.round(heightPt * 12700)
-        const object: XlsxDrawing = {
-          xEmu: Math.round(leftPt * 12700),
-          yEmu: Math.round(topPt * 12700),
-          widthEmu,
-          heightEmu,
-          textBody: vml.textBody,
-          transformValid: true,
-          source: {
-            partPath: owner,
-            treePath: `legacyDrawing/${vml.shapeId ?? 'wordArt'}`,
-            element: 'shape',
-            representation: 'native',
-          },
-        }
-        ;(sheet.drawings ??= []).push(object)
+        // Top-level nodes only; children stay hierarchical for composed paint.
+        pushWithDescendants(object)
       }
     }
   }
@@ -392,8 +513,8 @@ export async function parseWorksheetDrawings(pkg: OfficePackage, sheet: XlsxShee
     }
     if (!sheet.drawingDiagnostics.includes(issue)) continue
     if (issue.kind === 'node-budget' && issue.reason === 'document-budget' && sheet.drawingCoverage.some(entry => entry.partPath === issue.partPath && entry.reason === 'document-budget' && entry.limit === issue.limit)) continue
-    if (sheet.drawingCoverage.some(entry => entry.treePath === issue.identity && entry.reason === issue.reason)) continue
-    sheet.drawingCoverage.push({ partPath: issue.partPath, treePath: issue.identity ?? issue.partPath, element: issue.kind,
+    if (sheet.drawingCoverage.some(entry => entry.partPath === issue.partPath && entry.treePath === (issue.sourcePath ?? issue.identity) && (entry.feature ?? entry.element) === (issue.feature ?? issue.kind) && entry.reason === (issue.reason ?? issue.message))) continue
+    sheet.drawingCoverage.push({ partPath: issue.partPath, treePath: issue.sourcePath ?? issue.identity ?? issue.partPath, element: issue.kind,
       id: issue.identity, feature: issue.feature ?? issue.kind, status: issue.kind === 'missing-part' || issue.kind === 'malformed-part' ? 'malformed' : 'unsupported', selectedRepresentation: 'none',
       representation: 'native', reason: issue.reason ?? issue.message, scope: 'diagnostic', unit: 0, limit: issue.limit })
   }

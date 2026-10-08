@@ -8,6 +8,27 @@ const number = (v: string | undefined, fallback = 0): number => v !== undefined 
 function align(v: string | undefined): PptxParagraph['align'] {
   return v === 'ctr' ? 'center' : v === 'r' ? 'right' : v === 'just' ? 'justify' : 'left'
 }
+function parseAngleAttribute(
+  raw: string | undefined,
+  issues?: TextAppearanceIssue[],
+  feature?: string
+): number | undefined {
+  if (raw === undefined) return 0
+  const n = Number(raw)
+  if (!Number.isFinite(n) || n < -21600000 || n > 21600000) {
+    if (issues && feature) {
+      issues.push({
+        kind: 'unsupported-text-appearance',
+        feature,
+        message: `WordArt angle ${raw} is out of range; using fallback`,
+      })
+    }
+    return undefined
+  }
+  const rad = (n / 10800000) * Math.PI
+  return Number.isFinite(rad) ? rad : 0
+}
+
 function textCssColor(color: DrawingColor): string {
   const rgb = [color.r, color.g, color.b]
   return color.a < 1 ? `rgba(${rgb.join(',')},${color.a})` : `#${rgb.map(v => v.toString(16).padStart(2, '0')).join('').toUpperCase()}`
@@ -45,11 +66,20 @@ function style(node: XmlNode | undefined, theme?: ThemeContext, issues: TextAppe
     if (pathGrad) {
       issues.push({ kind: 'unsupported-text-appearance', feature: 'gradFill:path', message: 'WordArt path gradient is deferred; using first stop color' })
       if (stops.length > 0 && !out.color) out.color = stops[0].color
+      out.textFill = undefined
     } else if (stops.length >= 2 && lin) {
       const ang = attrs(lin).ang
-      out.textFill = { kind: 'gradient', stops, angle: ang !== undefined ? (number(ang) * Math.PI) / 10800000 : 0 }
+      const angle = parseAngleAttribute(ang, issues, 'gradFill:ang')
+      if (angle !== undefined) {
+        out.textFill = { kind: 'gradient', stops, angle }
+      } else {
+        if (stops.length > 0 && !out.color) out.color = stops[0].color
+        out.textFill = undefined
+      }
     } else {
       issues.push({ kind: 'unsupported-text-appearance', feature: lin ? 'gradFill' : 'gradFill:no-linear', message: 'WordArt gradient needs 2+ stops and a linear vector; using flat color' })
+      if (stops.length > 0 && !out.color) out.color = stops[0].color
+      out.textFill = undefined
     }
   }
   // WordArt picture/pattern fill: supported presets tile in paint; anything
@@ -64,9 +94,12 @@ function style(node: XmlNode | undefined, theme?: ThemeContext, issues: TextAppe
     } else {
       issues.push({ kind: 'unsupported-text-appearance', feature: `pattFill:${preset || 'missing'}`,
         message: 'WordArt pattern preset is deferred; using flat color' })
+      if (fg && !out.color) out.color = textCssColor(fg)
+      out.textFill = undefined
     }
   } else if (getChildren(node, 'blipFill').length) {
     issues.push({ kind: 'unsupported-text-appearance', feature: 'blipFill', message: 'WordArt picture fill is deferred; using flat color' })
+    out.textFill = undefined
   }
   // An explicit solid fill on this element clears any inherited gradient or
   // pattern (spread merge would otherwise keep the parent's textFill).
@@ -104,15 +137,28 @@ function style(node: XmlNode | undefined, theme?: ThemeContext, issues: TextAppe
     const sa = attrs(shadow)
     const shadowColor = resolveDrawingColor(parseDrawingColor(shadow), theme)
     if (shadowColor) {
-      const distPx = number(sa.dist) / 9525
-      const dir = sa.dir !== undefined ? (number(sa.dir) * Math.PI) / 10800000 : 0
-      out.textShadow = {
-        color: textCssColor(shadowColor),
-        // Negative radii are invalid: clamp to a hard shadow. Hostile huge radii
-        // are capped to 100px to prevent browser rasterization hangs.
-        blurPx: (sa.blurRad ?? sa.bluRad) !== undefined ? Math.min(Math.max(0, number(sa.blurRad ?? sa.bluRad) / 9525), 100) : 0,
-        offsetX: Math.cos(dir) * distPx,
-        offsetY: Math.sin(dir) * distPx,
+      const distNum = number(sa.dist, 0)
+      const dirAngle = parseAngleAttribute(sa.dir, issues, 'outerShdw:dir')
+      if (dirAngle === undefined || !Number.isFinite(distNum) || distNum < -100000000 || distNum > 100000000) {
+        if (issues && dirAngle !== undefined) {
+          issues.push({ kind: 'unsupported-text-appearance', feature: 'outerShdw:dist', message: 'WordArt shadow distance is out of range; skipped' })
+        }
+        out.textShadow = undefined
+      } else {
+        const distPx = distNum / 9525
+        const blurRaw = sa.blurRad ?? sa.bluRad
+        const blurNum = blurRaw !== undefined ? number(blurRaw) : undefined
+        const blurPx = blurNum !== undefined && Number.isFinite(blurNum) ? Math.min(Math.max(0, blurNum / 9525), 100) : 0
+        const cos = Math.cos(dirAngle)
+        const sin = Math.sin(dirAngle)
+        const offsetX = Number.isFinite(cos * distPx) ? cos * distPx : 0
+        const offsetY = Number.isFinite(sin * distPx) ? sin * distPx : 0
+        out.textShadow = {
+          color: textCssColor(shadowColor),
+          blurPx,
+          offsetX,
+          offsetY,
+        }
       }
     } else {
       issues.push({ kind: 'unsupported-text-appearance', feature: 'outerShdw', message: 'WordArt shadow needs a resolvable color; skipped' })

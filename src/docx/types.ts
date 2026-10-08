@@ -6,6 +6,7 @@ import type { DrawingContent, DrawingContentShape } from '../drawing/content'
 import type { ParsedDrawingTextBody } from '../drawing/text-parse'
 import type { ImageSelection, SvgCandidate, SvgVerdict } from '../core/svg'
 import type { DrawingCoverageEntry } from '../drawing/coverage'
+import type { TextWarp } from '../drawing/text'
 
 export interface DocxTextRun {
   text: string
@@ -21,6 +22,14 @@ export interface DocxTextRun {
   breakBefore?: boolean
   /** Field instruction (e.g. 'PAGE', 'NUMPAGES') resolved at paint time. */
   field?: string
+  /** Explicit DrawingML / w14:noFill suppresses glyph paint while retaining logical text. */
+  noFill?: boolean
+  /** WordArt fill: gradient */
+  textFill?: { kind: 'gradient'; stops: Array<{ position: number; color: string }>; angle: number }
+  /** WordArt outline: stroked centered on glyph edge */
+  textOutline?: { color: string; widthPx: number }
+  /** WordArt outer shadow */
+  textShadow?: { color: string; blurPx: number; offsetX: number; offsetY: number }
 }
 
 export type ParagraphAlign = 'left' | 'center' | 'right' | 'justify'
@@ -91,6 +100,10 @@ export interface DocxParagraph {
   listMarker?: string
   /** List level (0-based) from w:numPr/w:ilvl. */
   listLevel?: number
+  /** Preset WordArt warp configuration for text routed through this paragraph */
+  textWarp?: TextWarp
+  /** Unsupported appearance or warp diagnostics associated with this paragraph */
+  diagnostics?: Array<{ kind: 'unsupported-text-alignment' | 'unsupported-text-appearance' | 'unsupported-text-warp'; feature: string; message: string }>
 }
 
 export interface DocxPageMargins {

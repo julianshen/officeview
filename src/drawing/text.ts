@@ -1,4 +1,6 @@
 /** Source-preserving DrawingML text model shared by document adapters. */
+import { TEXT_WARP_CATALOG } from './text-warp-catalog'
+import { textWarpSeedValues, evaluateGuides } from './geometry'
 export type TextDirection = 'horz' | 'vert' | 'vert270' | 'wordArtVert' | 'eaVert' | 'mongolianVert' | 'wordArtVertRtl'
 export interface DrawingTextStyle {
   bold?: boolean
@@ -153,8 +155,61 @@ export interface TextWarp {
   adjustments?: Record<string, number>
 }
 
-/** ECMA-376 Part 1 §20.1.9.22 default adjust values for preset text warps */
+/** ECMA-376 Part 1 §20.1.9.22 default adjust values for preset text warps.
+ *
+ * Supported (regulated) presets take their defaults from the pinned official
+ * catalog — avLst DEFAULT FORMULAS evaluated at a nominal box — so parse-side
+ * models and resolve-side geometry can never disagree (matrix G-case parity).
+ * Unsupported legacy presets keep their previous table entries (documented;
+ * not routed through geometry, so their values are display-only). */
+const OFFICIAL_SUPPORTED_DEFAULTS: Readonly<Record<string, Record<string, number>>> = Object.fromEntries(
+  Object.entries(TEXT_WARP_CATALOG).map(([preset, definition]) => {
+    // Official avLst defaults evaluate through the SAME shared guide resolver
+    // the warp engine uses (plain vals and seeded formulas both); never the
+    // shape preset catalog.
+    const values = evaluateGuides(
+      definition.adjustments as unknown as ReadonlyArray<[string, string]>,
+      definition.guides as unknown as ReadonlyArray<[string, string]>,
+      textWarpSeedValues(100, 100),
+      {},
+      [],
+    )
+    const out: Record<string, number> = {}
+    for (const [name] of definition.adjustments) {
+      const value = values.get(name)
+      if (value !== undefined) out[name] = value
+    }
+    return [preset, out]
+  }),
+)
+
+const LEGACY_DEFAULTS: Readonly<Record<string, Record<string, number>>> = {
+  textDoubleWave1: { adj1: 0, adj2: 50000 },
+  textWave4: { adj1: 0, adj2: 50000 },
+  textInflateBottom: { adj: 50000 },
+  textDeflateBottom: { adj: 50000 },
+  textInflateTop: { adj: 50000 },
+  textDeflateTop: { adj: 50000 },
+  textDeflateInflate: { adj: 50000 },
+  textDeflateInflateDeflate: { adj: 50000 },
+  textFadeRight: { adj: 50000 },
+  textFadeLeft: { adj: 50000 },
+  textFadeUp: { adj: 50000 },
+  textFadeDown: { adj: 50000 },
+  textCascadeUp: { adj: 25000 },
+  textCascadeDown: { adj: 25000 },
+  textStop: { adj: 0 },
+  textTriangle: { adj: 50000 },
+  textTriangleInverted: { adj: 50000 },
+  textChevron: { adj: 50000 },
+  textChevronInverted: { adj: 50000 },
+}
+
+/** Parse-side default table. Regulated (official-geometry) presets are
+ * overridden from the pinned catalog below, so this hand table can never
+ * shadow the authoritative values. */
 export const DEFAULT_WARP_ADJUSTMENTS: Readonly<Record<string, Record<string, number>>> = {
+  ...LEGACY_DEFAULTS,
   textArchUp: { adj: 10800000 },
   textArchDown: { adj: 10800000 },
   textCircle: { adj: 10800000 },
@@ -195,4 +250,8 @@ export const DEFAULT_WARP_ADJUSTMENTS: Readonly<Record<string, Record<string, nu
   textChevron: { adj: 50000 },
   textChevronInverted: { adj: 50000 },
 }
+
+/** Regulated presets ALWAYS take catalog defaults (single source of truth for
+ * geometry and parse-like callers): the hand entries above are display-only. */
+Object.assign(DEFAULT_WARP_ADJUSTMENTS as Record<string, Record<string, number>>, OFFICIAL_SUPPORTED_DEFAULTS)
 

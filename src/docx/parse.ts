@@ -4,13 +4,13 @@
 import type { OfficePackage } from '../core/zip'
 import { sniffImageMime } from '../core/images'
 import { attrs, elementChildren, getChildren, orderedChildren, textOf, type XmlNode } from '../core/xml'
-import { applyParagraphDefaults, paragraphRunDefaults, readRunProperties, readTheme, styleChain, styleContext, type DocxStyleContext, type ParagraphStyleLayers } from './styles'
+import { applyParagraphDefaults, authoredCategories, issueCategory, paragraphRunDefaults, readRunProperties, readTheme, styleChain, styleContext, type DocxStyleContext, type ParagraphStyleLayers } from './styles'
 import { loadDrawingParts, wordDrawingSelections } from './drawing'
 import { findSvgBlip, looksLikeSvg, scanSelfContainedSvg, svgCandidate, svgStateCandidate, type ImageSelection, type SvgCandidate, type SvgVerdict } from '../core/svg'
 import { attemptedMalformedRelationshipIssue, malformedRelationshipAttempt, reserveDrawingContent } from '../drawing/content'
 import { contentRepresentation, coverageIssueMatchesEntry, supportedChoiceRequirements, type DrawingCoverageEntry } from '../drawing/coverage'
 import { DOCUMENT_DRAWING_NODE_LIMIT, drawingPartContext, partRelationshipNodes, reserveDrawingNode } from '../drawing/parts'
-import { parseAllVmlWordArt } from '../drawing/vml'
+import { parseVmlContainer, type VmlNode } from '../drawing/vml'
 import type { DocxBlock, DocxDocument, DocxDrawing, DocxDrawingShape, DocxFloating, DocxImage, DocxParagraph, DocxSection, DocxTable, DocxTableCell, DocxTableCellMargins, DocxTableBorders, DocxTableRow, DocxTextRun, ParagraphAlign } from './types'
 
 function alignOf(pPr: XmlNode | undefined): ParagraphAlign {
@@ -36,7 +36,8 @@ export function halfPointToPt(v: string | number | undefined): number | undefine
   return Number.isFinite(n) ? n / 2 : undefined
 }
 
-interface ParagraphContext { styles: DocxStyleContext; drawings: Map<XmlNode, DocxImage>; tableLayers?: ParagraphStyleLayers; reserveDrawing?: (drawing?: DocxDrawing) => boolean; drawingCoverage?: DrawingCoverageEntry[]; drawingPaths?: WeakMap<XmlNode, string>; unselectedReferenceIds?: Set<string>; partPath?: string; pkg?: OfficePackage; representation?: DrawingCoverageEntry['representation']; imageSelections?: Map<string, ImageSelection>; imageExternal?: Set<string> }
+export interface VmlProvenance { nextPict: number }
+interface ParagraphContext { styles: DocxStyleContext; drawings: Map<XmlNode, DocxImage>; tableLayers?: ParagraphStyleLayers; reserveDrawing?: (drawing?: DocxDrawing) => boolean; drawingCoverage?: DrawingCoverageEntry[]; drawingPaths?: WeakMap<XmlNode, string>; unselectedReferenceIds?: Set<string>; partPath?: string; pkg?: OfficePackage; representation?: DrawingCoverageEntry['representation']; imageSelections?: Map<string, ImageSelection>; imageExternal?: Set<string>; vmlProvenance?: VmlProvenance }
 /** Share one selection record per candidate pair so aliases and coverage agree. */
 function selectionFor(context: ParagraphContext | undefined, key: string): ImageSelection {
   const map = context?.imageSelections
@@ -83,14 +84,14 @@ interface FieldAwareRun extends DocxTextRun {
   _instr?: string
 }
 
-function parseRun(r: XmlNode, inherited?: Partial<DocxTextRun>, context?: ParagraphContext): FieldAwareRun {
+function parseRun(r: XmlNode, inherited?: Partial<DocxTextRun>, context?: ParagraphContext, issues?: import('../drawing/text-parse').TextAppearanceIssue[]): FieldAwareRun {
   const rPr = getChildren(r, 'rPr')[0]
   let run: FieldAwareRun = { text: '', ...inherited }
   const fld = getChildren(r, 'fldChar')[0]
   if (fld) run._fldChar = attrs(fld).fldCharType as string
   const instr = getChildren(r, 'instrText')[0]
   if (instr) run._instr = textOf(instr).trim()
-  Object.assign(run, readRunProperties(rPr, context?.styles.theme))
+  Object.assign(run, readRunProperties(rPr, context?.styles.theme, issues))
   // Runs may contain text fragments plus tabs/breaks
   for (const [name, child] of orderedChildren(r)) {
     if (name === 't') {
@@ -98,7 +99,7 @@ function parseRun(r: XmlNode, inherited?: Partial<DocxTextRun>, context?: Paragr
     } else if (name === 'tab') {
       run.text += '\t'
     } else if (name === 'br') {
-      run.breakBefore = true
+      run.text += '\n'
     }
   }
   return run
@@ -262,9 +263,12 @@ export function parseParagraph(
     const outline = attrs(pPr['outlineLvl'] as XmlNode | undefined).val
     if (outline !== undefined) paragraph.outlineLevel = parseInt(outline, 10)
   }
+  const appearanceIssues: import('../drawing/text-parse').TextAppearanceIssue[] = []
   const inline: NonNullable<DocxParagraph['inline']> = []
-  const inherited = paragraphRunDefaults(p, context?.styles, context?.tableLayers)
-  paragraph.paragraphMark = { ...inherited, ...readRunProperties(getChildren(pPr, 'rPr')[0], context?.styles.theme) }
+  const textRunAuthored: Array<Set<import('./styles').AppearanceCategory>> = []
+  const inheritedIssues: import('../drawing/text-parse').TextAppearanceIssue[] = []
+  const inherited = paragraphRunDefaults(p, context?.styles, context?.tableLayers, inheritedIssues)
+  paragraph.paragraphMark = { ...inherited, ...readRunProperties(getChildren(pPr, 'rPr')[0], context?.styles.theme, appearanceIssues) }
   const addRun = (run: FieldAwareRun) => {
     paragraph.runs.push(run)
     inline.push({ kind: 'text', run })
@@ -278,22 +282,27 @@ export function parseParagraph(
   const walk = (parent: XmlNode): void => {
     for (const [name, node] of orderedChildren(parent)) {
       if (name === 'r') {
-        const run = parseRun(node, inherited, context)
+        const rPr = getChildren(node, 'rPr')[0]
+        const hasText = getChildren(node, 't').length > 0 || getChildren(node, 'tab').length > 0 || getChildren(node, 'br').length > 0
+        if (hasText) {
+          textRunAuthored.push(authoredCategories(rPr))
+        }
+        const run = parseRun(node, inherited, context, appearanceIssues)
         if (!node.drawing && !node.AlternateContent && !node.pict) addRun(run)
         else {
           // Split a mixed run at drawing boundaries without losing the styles.
           for (const [tag, child] of orderedChildren(node)) {
             if (tag === 't') addRun({ ...run, text: textOf(child), breakBefore: undefined })
             else if (tag === 'tab') addRun({ ...run, text: '\t', breakBefore: undefined })
-            else if (tag === 'br') addRun({ ...run, text: '', breakBefore: true })
+            else if (tag === 'br') addRun({ ...run, text: '\n', breakBefore: undefined })
             else if (tag === 'drawing') addImage(parseDrawing(child, images, context))
-            else if (tag === 'pict') addImage(parsePict(child))
+            else if (tag === 'pict') addImage(parsePict(child, context))
             else if (tag === 'AlternateContent') alternate(child)
           }
         }
       } else if (name === 'hyperlink' || name === 'sdtContent') walk(node)
       else if (name === 'drawing') addImage(parseDrawing(node, images, context))
-      else if (name === 'pict') addImage(parsePict(node))
+      else if (name === 'pict') addImage(parsePict(node, context))
       else if (name === 'AlternateContent') alternate(node)
       else if (name === 'sdt') {
         const content = getChildren(node, 'sdtContent')[0]
@@ -339,12 +348,31 @@ export function parseParagraph(
       if (context?.reserveDrawing) {
         const reserve = context.reserveDrawing
         const inlineBefore = inline.length, runsBefore = paragraph.runs.length, imagesBefore = paragraph.images.length
+        const hadProvenance = context ? 'vmlProvenance' in context && context.vmlProvenance !== undefined : false
+        const nextPictBefore = context?.vmlProvenance?.nextPict
+        const pkgDiagnostics = context.pkg ? drawingPartContext(context.pkg).diagnostics : undefined
+        const pkgDiagBefore = pkgDiagnostics ? pkgDiagnostics.length : 0
         context.reserveDrawing = undefined
-        try { walk(choice) } finally { context.reserveDrawing = reserve }
-        const usable = inline.length > inlineBefore || hasSelectedBlank(choice)
-        inline.length = inlineBefore
-        paragraph.runs.length = runsBefore
-        paragraph.images.length = imagesBefore
+        let usable = false
+        try {
+          walk(choice)
+          usable = inline.length > inlineBefore || hasSelectedBlank(choice)
+        } finally {
+          context.reserveDrawing = reserve
+          inline.length = inlineBefore
+          paragraph.runs.length = runsBefore
+          paragraph.images.length = imagesBefore
+          if (context) {
+            if (!hadProvenance) {
+              delete context.vmlProvenance
+            } else if (context.vmlProvenance && nextPictBefore !== undefined) {
+              context.vmlProvenance.nextPict = nextPictBefore
+            }
+          }
+          if (pkgDiagnostics && pkgDiagnostics.length > pkgDiagBefore) {
+            pkgDiagnostics.length = pkgDiagBefore
+          }
+        }
         if (!usable) { skipped.push(choice); continue }
       }
       const before = inline.length
@@ -413,6 +441,28 @@ export function parseParagraph(
     paragraph.inline = inline.filter((item) => item.kind === 'image' || retained.has(item.run))
   }
   applyParagraphDefaults(paragraph, p, context?.styles, context?.tableLayers)
+
+  for (const issue of inheritedIssues) {
+    const cat = issueCategory(issue.feature)
+    if (textRunAuthored.length > 0) {
+      if (textRunAuthored.every(auth => auth.has(cat))) continue
+    } else {
+      const pPrAuthored = authoredCategories(getChildren(pPr, 'rPr')[0])
+      if (pPrAuthored.has(cat)) continue
+    }
+    if (!appearanceIssues.some(d => d.kind === issue.kind && d.feature === issue.feature)) {
+      appearanceIssues.push(issue)
+    }
+  }
+
+  if (appearanceIssues.length > 0) {
+    paragraph.diagnostics ??= []
+    for (const issue of appearanceIssues) {
+      if (!paragraph.diagnostics.some(d => d.kind === issue.kind && d.feature === issue.feature)) {
+        paragraph.diagnostics.push(issue)
+      }
+    }
+  }
   return paragraph
 }
 
@@ -581,14 +631,9 @@ function parseDrawing(
   }
 }
 
-function parsePict(node: XmlNode): DocxImage | undefined {
-  const vmlList = parseAllVmlWordArt(node)
-  if (vmlList.length === 0) return undefined
-  let maxWidthPt = 0
-  let maxHeightPt = 0
-  const shapes: DocxDrawingShape[] = []
-
-  for (const vml of vmlList) {
+function vmlNodeToDocxShape(node: VmlNode): DocxDrawingShape | undefined {
+  if (node.kind === 'shape') {
+    const vml = node.result
     const widthPt = vml.widthPt ?? 200
     const heightPt = vml.heightPt ?? 50
     const leftPt = vml.leftPt ?? 0
@@ -597,11 +642,18 @@ function parsePict(node: XmlNode): DocxImage | undefined {
     const heightEmu = Math.round(heightPt * 12700)
     const xEmu = Math.round(leftPt * 12700)
     const yEmu = Math.round(topPt * 12700)
-
-    if (leftPt + widthPt > maxWidthPt) maxWidthPt = leftPt + widthPt
-    if (topPt + heightPt > maxHeightPt) maxHeightPt = topPt + heightPt
-
-    shapes.push({
+    if (![xEmu, yEmu, widthEmu, heightEmu].every(Number.isFinite)) {
+      vml.diagnostics ??= []
+      if (!vml.diagnostics.some(d => d.kind === 'unsupported-geometry')) {
+        vml.diagnostics.push({
+          kind: 'unsupported-geometry',
+          feature: 'vml-wordart',
+          message: 'VML shape has non-finite bounds',
+        })
+      }
+      return undefined
+    }
+    return {
       xEmu,
       yEmu,
       widthEmu,
@@ -610,18 +662,186 @@ function parsePict(node: XmlNode): DocxImage | undefined {
       fontFamily: vml.textBody.paragraphs[0]?.runs[0]?.fontFamily ?? 'Calibri',
       textBody: vml.textBody,
       paragraphs: [],
-    })
+      ...(vml.rotationDeg !== undefined ? { rotationDeg: vml.rotationDeg } : {}),
+      ...(vml.flipH ? { flipH: true } : {}),
+      ...(vml.flipV ? { flipV: true } : {}),
+    }
   }
+  const children: DocxDrawingShape[] = []
+  for (const c of node.children) {
+    const s = vmlNodeToDocxShape(c)
+    if (s) children.push(s)
+  }
+  // Retain empty groups as structural nodes so guards never silently drop siblings.
+  const group = {
+    off: { x: node.xEmu, y: node.yEmu },
+    ext: { width: node.widthEmu, height: node.heightEmu },
+    chOff: { x: Math.round(node.coordorigin.x * 12700), y: Math.round(node.coordorigin.y * 12700) },
+    chExt: { width: Math.round(node.coordsize.width * 12700), height: Math.round(node.coordsize.height * 12700) },
+  }
+  if (![node.xEmu, node.yEmu, node.widthEmu, node.heightEmu, group.chOff.x, group.chOff.y, group.chExt.width, group.chExt.height].every(Number.isFinite)) {
+    node.diagnostics ??= []
+    if (!node.diagnostics.some(d => d.kind === 'unsupported-geometry')) {
+      node.diagnostics.push({
+        kind: 'unsupported-geometry',
+        feature: 'vml-wordart',
+        message: 'VML group has non-finite bounds',
+      })
+    }
+    return undefined
+  }
+  return {
+    xEmu: node.xEmu,
+    yEmu: node.yEmu,
+    widthEmu: node.widthEmu,
+    heightEmu: node.heightEmu,
+    geometry: 'group',
+    fontFamily: '',
+    paragraphs: [],
+    group,
+    children,
+    ...(node.rotationDeg !== undefined ? { rotationDeg: node.rotationDeg } : {}),
+    ...(node.flipH ? { flipH: true } : {}),
+    ...(node.flipV ? { flipV: true } : {}),
+  }
+}
 
+function sameVmlDiagnostic(
+  list: { kind: string; partPath: string; feature?: string; identity?: string; sourcePath?: string; message: string }[],
+  candidate: { kind: string; partPath: string; feature?: string; identity?: string; sourcePath?: string; message: string },
+): boolean {
+  return list.some(
+    e =>
+      e.kind === candidate.kind &&
+      e.partPath === candidate.partPath &&
+      (e.feature ?? '') === (candidate.feature ?? '') &&
+      (e.identity ?? '') === (candidate.identity ?? '') &&
+      (e.sourcePath ?? '') === (candidate.sourcePath ?? '') &&
+      e.message === candidate.message,
+  )
+}
+
+function pushVmlDiagnostics(
+  nodes: VmlNode[],
+  ctx: ParagraphContext | undefined,
+  containerDiagnostics: import('../drawing/vml').VmlWordArtDiagnostic[] | undefined,
+  pictIndex: number,
+): void {
+  if (!ctx?.pkg) return
+  const context = drawingPartContext(ctx.pkg)
+  const partPath = ctx.partPath ?? 'word/document.xml'
+  const pictPrefix = `pict[${pictIndex}]`
+  const pushOne = (d: import('../drawing/vml').VmlWordArtDiagnostic, sourcePath: string, authoredId: string | undefined): void => {
+    const fullPath = `${pictPrefix}/${sourcePath}`
+    const candidate = {
+      kind: d.kind,
+      partPath,
+      feature: d.feature ?? 'vml-wordart',
+      identity: authoredId ?? fullPath,
+      sourcePath: fullPath,
+      message: authoredId ? `${d.message} (shape ${authoredId})` : d.message,
+    }
+    if (!sameVmlDiagnostic(context.diagnostics, candidate)) context.diagnostics.push(candidate)
+  }
+  const walk = (n: VmlNode): void => {
+    if (n.kind === 'shape') {
+      for (const d of n.result.diagnostics ?? []) pushOne(d, n.sourcePath, n.result.shapeId)
+    } else {
+      for (const d of n.diagnostics ?? []) pushOne(d, n.sourcePath, n.groupId)
+      for (const c of n.children) walk(c)
+    }
+  }
+  for (const n of nodes) walk(n)
+  for (const d of containerDiagnostics ?? []) {
+    const fullPath = d.sourcePath ? `${pictPrefix}/${d.sourcePath}` : pictPrefix
+    const candidate = {
+      kind: d.kind,
+      partPath,
+      feature: d.feature ?? 'vml-wordart',
+      identity: d.identity ?? fullPath,
+      sourcePath: fullPath,
+      message: d.message,
+    }
+    if (!sameVmlDiagnostic(context.diagnostics, candidate)) context.diagnostics.push(candidate)
+  }
+}
+
+function shapeHasRenderableLeaf(shape: DocxDrawingShape): boolean {
+  if (shape.geometry !== 'group') return true
+  return shape.children?.some(shapeHasRenderableLeaf) ?? false
+}
+
+function parsePict(node: XmlNode, context?: ParagraphContext): DocxImage | undefined {
+  if (context && !context.vmlProvenance) context.vmlProvenance = { nextPict: 0 }
+  const pictIndex = context?.vmlProvenance?.nextPict ?? 0
+  let container
+  try {
+    container = parseVmlContainer(node)
+  } catch (err) {
+    if (context?.vmlProvenance) context.vmlProvenance.nextPict = pictIndex + 1
+    if (context?.pkg) {
+      const partCtx = drawingPartContext(context.pkg)
+      const partPath = context.partPath ?? 'word/document.xml'
+      const pictPrefix = `pict[${pictIndex}]`
+      const candidate = {
+        kind: 'malformed-vml-container' as const,
+        partPath,
+        feature: 'vml-wordart',
+        identity: pictPrefix,
+        sourcePath: pictPrefix,
+        message: err instanceof Error ? err.message : String(err),
+      }
+      if (!sameVmlDiagnostic(partCtx.diagnostics, candidate)) {
+        partCtx.diagnostics.push(candidate)
+      }
+    }
+    return undefined
+  }
+  if (context?.vmlProvenance) context.vmlProvenance.nextPict = pictIndex + 1
+  const shapes: DocxDrawingShape[] = []
+  for (const n of container.nodes) {
+    const s = vmlNodeToDocxShape(n)
+    if (s && [s.xEmu, s.yEmu, s.widthEmu, s.heightEmu].every(Number.isFinite)) {
+      shapes.push(s)
+    } else {
+      if (n.kind === 'shape') {
+        n.result.diagnostics ??= []
+        if (!n.result.diagnostics.some(d => d.kind === 'unsupported-geometry')) {
+          n.result.diagnostics.push({
+            kind: 'unsupported-geometry',
+            feature: 'vml-wordart',
+            message: 'VML shape has non-finite bounds',
+          })
+        }
+      } else {
+        n.diagnostics ??= []
+        if (!n.diagnostics.some(d => d.kind === 'unsupported-geometry')) {
+          n.diagnostics.push({
+            kind: 'unsupported-geometry',
+            feature: 'vml-wordart',
+            message: 'VML group has non-finite bounds',
+          })
+        }
+      }
+    }
+  }
+  pushVmlDiagnostics(container.nodes, context, container.diagnostics, pictIndex)
+  if (container.nodes.length === 0 && !(container.diagnostics && container.diagnostics.length > 0)) return undefined
+  if (shapes.length === 0 || !shapes.some(shapeHasRenderableLeaf)) return undefined
+  let maxXEmu = 0
+  let maxYEmu = 0
+  for (const s of shapes) {
+    maxXEmu = Math.max(maxXEmu, s.xEmu + s.widthEmu)
+    maxYEmu = Math.max(maxYEmu, s.yEmu + s.heightEmu)
+  }
   const drawing: DocxDrawing = {
     kind: 'diagram',
     shapes,
   }
-
   return {
     data: new Uint8Array(),
-    widthEmu: Math.round(maxWidthPt * 12700),
-    heightEmu: Math.round(maxHeightPt * 12700),
+    widthEmu: maxXEmu,
+    heightEmu: maxYEmu,
     drawing,
   }
 }
@@ -708,7 +928,8 @@ async function loadPart(ref: XmlNode, rels: Map<string, { type: string; target: 
   const state = numbering ? parseNumbering(numbering) : undefined
   const { images, external: imageExternal } = await loadDocImages(pkg, path)
   const imageSelections = new Map<string, ImageSelection>()
-  const context: ParagraphContext = { styles, drawings: await loadDrawingParts(pkg, part, path, styles.theme, p => parseParagraph(p, images, state, { styles, drawings: new Map(), imageSelections, imageExternal }), false), reserveDrawing: drawingReservation(pkg, path), drawingCoverage: coverage, drawingPaths: sourceDrawingPaths(part, path.includes('/header') ? 'header' : 'footer'), unselectedReferenceIds, partPath: path, pkg, imageSelections, imageExternal }
+  const vmlProvenance: VmlProvenance = { nextPict: 0 }
+  const context: ParagraphContext = { styles, drawings: await loadDrawingParts(pkg, part, path, styles.theme, p => parseParagraph(p, images, state, { styles, drawings: new Map(), imageSelections, imageExternal, pkg, partPath: path, vmlProvenance }), false), reserveDrawing: drawingReservation(pkg, path), drawingCoverage: coverage, drawingPaths: sourceDrawingPaths(part, path.includes('/header') ? 'header' : 'footer'), unselectedReferenceIds, partPath: path, pkg, imageSelections, imageExternal, vmlProvenance }
   return unwrapContentControls(part).flatMap(([name, node]): DocxBlock[] => name === 'p' ? [{ kind: 'p', paragraph: parseParagraph(node, images, state, context) }] : name === 'tbl' ? [{ kind: 'table', table: parseTable(node, state, context, images) }] : [])
 }
 
@@ -790,7 +1011,8 @@ export async function parseDocx(pkg: OfficePackage): Promise<DocxDocument> {
   const drawingCoverage: DrawingCoverageEntry[] = []
   const unselectedReferenceIds = new Set<string>()
   const imageSelections = new Map<string, ImageSelection>()
-  const context: ParagraphContext = {styles,drawings:await loadDrawingParts(pkg,doc,'word/document.xml',styles.theme,p => parseParagraph(p,docImages,numbering,{styles,drawings:new Map(),imageSelections,imageExternal}),false),reserveDrawing:drawingReservation(pkg,'word/document.xml'),drawingCoverage,drawingPaths:sourceDrawingPaths(doc),unselectedReferenceIds,partPath:'word/document.xml',pkg,imageSelections,imageExternal}
+  const vmlProvenance: VmlProvenance = { nextPict: 0 }
+  const context: ParagraphContext = {styles,drawings:await loadDrawingParts(pkg,doc,'word/document.xml',styles.theme,p => parseParagraph(p,docImages,numbering,{styles,drawings:new Map(),imageSelections,imageExternal,pkg,partPath:'word/document.xml',vmlProvenance}),false),reserveDrawing:drawingReservation(pkg,'word/document.xml'),drawingCoverage,drawingPaths:sourceDrawingPaths(doc),unselectedReferenceIds,partPath:'word/document.xml',pkg,imageSelections,imageExternal,vmlProvenance}
   const sections: DocxSection[] = []
   let current: DocxSection = {
     margins: { topTwips: 1440, rightTwips: 1440, bottomTwips: 1440, leftTwips: 1440, headerTwips: 720, footerTwips: 720, gutterTwips: 0 },
@@ -874,7 +1096,7 @@ export async function parseDocx(pkg: OfficePackage): Promise<DocxDocument> {
         entry.limit = issue.limit
         if (entry.selectedRepresentation !== 'raster-fallback' && !['document-budget', 'source-node-limit'].includes(issue.reason ?? '') && !entry.reason?.includes('cached-picture')) entry.selectedRepresentation = 'none'
       }
-    } else drawingCoverage.push({ partPath: issue.partPath, treePath: issue.identity ?? issue.partPath, element: issue.kind, id: issue.identity,
+    } else drawingCoverage.push({ partPath: issue.partPath, treePath: issue.sourcePath ?? issue.identity ?? issue.partPath, element: issue.kind, id: issue.identity,
       feature: issue.feature ?? issue.kind, status: issue.kind === 'missing-part' || issue.kind === 'malformed-part' ? 'malformed' : 'unsupported',
       representation: 'native', selectedRepresentation: 'none', reason: issue.reason ?? issue.message, scope: 'diagnostic', limit: issue.limit })
   }

@@ -12,7 +12,8 @@ import { parseTextBody, textFontDefaults } from './text-parse'
 import { resolveTextFamily } from './text-layout'
 import { CONTENT_REFERENCE_DEPTH, DRAWING_GROUP_DEPTH, DOCUMENT_DRAWING_NODE_LIMIT, contentDescendants as descendants, contentDiagnostic, drawingPartContext, partRelationships, referencedPart, reserveDrawingNode, type ContentDiagnostic } from './parts'
 import { orderedChildren } from '../core/xml'
-import type { TextDirection } from './text'
+import type { TextDirection, TextWarp, TextWarpPreset } from './text'
+import { SUPPORTED_TEXT_WARP_PRESETS, DEFAULT_WARP_ADJUSTMENTS } from './text'
 export interface ContentTextRun { text: string; fontFamily?: string; fontSizePt?: number; color?: string; bold?: boolean; italic?: boolean }
 export type ContentParagraphAlign = 'left' | 'center' | 'right' | 'justify'
 export interface ContentParagraph { runs: ContentTextRun[]; align: ContentParagraphAlign }
@@ -125,6 +126,8 @@ export type DrawingContent<Paragraph = ContentParagraph, Text = never> =
       insets: { left: number; top: number; right: number; bottom: number }
       fill?: string
       line?: { color: string; widthEmu: number }
+      textWarp?: TextWarp
+      diagnostics?: Array<{ kind: 'unsupported-text-alignment' | 'unsupported-text-appearance' | 'unsupported-text-warp'; feature: string; message: string }>
     }
 
 function color(fill: XmlNode | undefined, theme: ContentTheme): string | undefined {
@@ -542,22 +545,72 @@ export async function prepareDrawingContent<Paragraph = ContentParagraph, Text =
   if (content) return follow(attrs(content).id, owner, 'contentPart')
   const wsp = child(graphic, 'wsp')
   if (wsp) {
-    const txBody = child(wsp, 'txBody')
-    if (txBody) {
-      const model = shape(wsp, theme, drawingTheme) as DrawingContentShape<Text>
-      if (adapters.parseDiagramText) model.textBody = adapters.parseDiagramText(txBody, wsp)
-      return { kind: 'diagram', shapes: [model] }
-    }
     if (adapters.parseParagraph) {
-      const body = attrs(child(wsp, 'bodyPr')), pr = child(wsp, 'spPr'), ln = child(pr, 'ln')
+      const bodyNode = child(wsp, 'bodyPr')
+      const body = attrs(bodyNode), pr = child(wsp, 'spPr'), ln = child(pr, 'ln')
       const lineColor = color(child(ln, 'solidFill'), theme)
       const direction = (body.vert ?? undefined) as TextDirection | undefined
-      return { kind: 'textbox', paragraphs: getChildren(child(child(wsp, 'txbx'), 'txbxContent'), 'p').map(adapters.parseParagraph),
+
+      let textWarp: TextWarp | undefined
+      const diagnostics: Array<{ kind: 'unsupported-text-alignment' | 'unsupported-text-appearance' | 'unsupported-text-warp'; feature: string; message: string }> = []
+      const prstWarpNode = child(bodyNode, 'prstTxWarp')
+      if (prstWarpNode) {
+        const warpPrst = attrs(prstWarpNode).prst as TextWarpPreset | undefined
+        if (warpPrst) {
+          if (warpPrst === 'textNoShape' || warpPrst === 'textPlain') {
+            // Handled as unwarped standard text
+          } else if (SUPPORTED_TEXT_WARP_PRESETS.has(warpPrst)) {
+            const avLst = child(prstWarpNode, 'avLst')
+            const adjustments: Record<string, number> = { ...(DEFAULT_WARP_ADJUSTMENTS[warpPrst] ?? {}) }
+            if (avLst) {
+              for (const gd of getChildren(avLst, 'gd')) {
+                const ga = attrs(gd)
+                if (ga.name && ga.fmla) {
+                  const rawVal = ga.fmla.startsWith('val ') ? ga.fmla.slice(4).trim() : ga.fmla.trim()
+                  const valNum = Number(rawVal)
+                  if (Number.isFinite(valNum)) adjustments[ga.name] = valNum
+                }
+              }
+            }
+            textWarp = {
+              preset: warpPrst,
+              adjustments: Object.keys(adjustments).length > 0 ? adjustments : undefined,
+            }
+          } else {
+            diagnostics.push({
+              kind: 'unsupported-text-warp',
+              feature: warpPrst,
+              message: `WordArt warp preset ${warpPrst} is unsupported; using unwarped text`,
+            })
+          }
+        }
+      }
+
+      const paragraphs = getChildren(child(child(wsp, 'txbx'), 'txbxContent'), 'p').map(adapters.parseParagraph)
+      for (const p of paragraphs) {
+        const pDiag = (p as any).diagnostics
+        if (Array.isArray(pDiag)) {
+          for (const d of pDiag) {
+            if (!diagnostics.some(existing => existing.kind === d.kind && existing.feature === d.feature)) {
+              diagnostics.push(d)
+            }
+          }
+        }
+      }
+
+      return {
+        kind: 'textbox',
+        paragraphs,
         vertical: direction !== undefined && direction !== 'horz' && ['vert', 'vert270', 'wordArtVert', 'eaVert', 'mongolianVert', 'wordArtVertRtl'].includes(direction),
         ...(direction === 'horz' || direction === 'vert' || direction === 'vert270' || direction === 'wordArtVert' || direction === 'eaVert' || direction === 'mongolianVert' || direction === 'wordArtVertRtl' ? { direction } : {}),
-        fontFamily: theme.fonts.get('minorHAnsi') ?? 'Calibri', fontSizePt: 12,
+        fontFamily: theme.fonts.get('minorHAnsi') ?? 'Calibri',
+        fontSizePt: 12,
         insets: { left: num(body.lIns, 91440), top: num(body.tIns, 45720), right: num(body.rIns, 91440), bottom: num(body.bIns, 45720) },
-        fill: color(child(pr, 'solidFill'), theme), line: lineColor ? { color: lineColor, widthEmu: num(attrs(ln).w, 6350) } : undefined }
+        fill: color(child(pr, 'solidFill'), theme),
+        line: lineColor ? { color: lineColor, widthEmu: num(attrs(ln).w, 6350) } : undefined,
+        ...(textWarp ? { textWarp } : {}),
+        ...(diagnostics.length ? { diagnostics } : {}),
+      }
     }
   }
   return undefined

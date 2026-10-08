@@ -223,9 +223,10 @@ function tokenize(para: DocxParagraph, defaults: { fontFamily: string; fontSizeP
     const style = runStyleOf(run, defaults)
     if (run.breakBefore) tokens.push({ kind: 'break', text: '', run, style })
     if (run.text.length === 0) continue
-    const chunks = run.text.split(/(\t)/)
+    const chunks = run.text.split(/([\t\n])/)
     for (const chunk of chunks) {
       if (chunk === '\t') tokens.push({ kind: 'tab', text: '', run, style })
+      else if (chunk === '\n') tokens.push({ kind: 'break', text: '', run, style })
       else if (chunk.length > 0) tokens.push({ kind: 'text', text: chunk, run, style })
     }
   }

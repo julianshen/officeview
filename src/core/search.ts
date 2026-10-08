@@ -26,6 +26,17 @@ export interface TextPlacement {
   bottom: number
   transform: TextTransform
   clip?: ReadonlyArray<{ x: number; y: number }>
+  /** Mapped curved-ink geometry (page coordinates), when the painter provided it. */
+  visual?: {
+    polygon: ReadonlyArray<{ x: number; y: number }>
+    clusters?: ReadonlyArray<{ x: number; y: number }>
+    /** Convex mesh-cell union for containment (robust to polygon winding). */
+    cells?: ReadonlyArray<readonly [{ x: number; y: number }, { x: number; y: number }, { x: number; y: number }, { x: number; y: number }]>
+    /** Mesh-triangle union for containment (authoritative; robust to twisting). */
+    tris?: ReadonlyArray<readonly [{ x: number; y: number }, { x: number; y: number }, { x: number; y: number }]>
+    /** Per-cluster mapped band bounds (page coordinates), same order as clusters. */
+    bands?: ReadonlyArray<{ x: number; y: number; width: number; height: number }>
+  }
 }
 
 export interface TextSpan {
@@ -120,6 +131,28 @@ export function createRecordingContext(
         const clip = logical.clip, cm = clip.transform ?? matrix
         if ([clip.x, clip.y, clip.width, clip.height, cm.a, cm.b, cm.c, cm.d, cm.e, cm.f].every(Number.isFinite) && clip.width >= 0 && clip.height >= 0)
           placement.clip = [[clip.x, clip.y], [clip.x + clip.width, clip.y], [clip.x + clip.width, clip.y + clip.height], [clip.x, clip.y + clip.height]].map(([x, y]) => projectTextPoint(cm, x, y))
+      }
+      if (logical?.visual) {
+        const vm = matrix
+        const finiteTuple = (p: readonly [number, number]): boolean => [p[0], p[1]].every(Number.isFinite)
+        if (logical.visual.polygon.every(finiteTuple))
+          placement.visual = {
+            polygon: logical.visual.polygon.map(([px, py]) => projectTextPoint(vm, px, py)),
+            ...(logical.visual.clusters ? { clusters: logical.visual.clusters.map(([px, py]) => projectTextPoint(vm, px, py)) } : {}),
+            ...(logical.visual.cells && logical.visual.cells.every(cell => cell.every(finiteTuple))
+              ? { cells: logical.visual.cells.map(cell => cell.map(([px, py]) => projectTextPoint(vm, px, py)) as [{ x: number; y: number }, { x: number; y: number }, { x: number; y: number }, { x: number; y: number }]) }
+              : {}),
+            ...(logical.visual.tris && logical.visual.tris.every(tri => tri.every(finiteTuple))
+              ? { tris: logical.visual.tris.map(tri => tri.map(([px, py]) => projectTextPoint(vm, px, py)) as [{ x: number; y: number }, { x: number; y: number }, { x: number; y: number }]) }
+              : {}),
+            ...(logical.visual.bands && logical.visual.bands.every(bd => bd.every(Number.isFinite))
+              ? { bands: logical.visual.bands.map(bd => {
+                const corners = [[bd[0], bd[1]], [bd[0] + bd[2], bd[1]], [bd[0] + bd[2], bd[1] + bd[3]], [bd[0], bd[1] + bd[3]]].map(([px, py]) => projectTextPoint(vm, px, py))
+                const x = Math.min(...corners.map(p => p.x)), y = Math.min(...corners.map(p => p.y))
+                return { x, y, width: Math.max(...corners.map(p => p.x)) - x, height: Math.max(...corners.map(p => p.y)) - y }
+              }) }
+              : {}),
+          }
       }
       const point = projectTextPoint(transform, left, baseline)
       const span: TextSpan = { text: str, x: point.x, y: point.y, width: width * baselineScale, fontSize: localFontSize * normalScale, placement, ...(logical ? { logical } : {}) }
@@ -306,23 +339,94 @@ export async function buildTextIndex(paintables: PaintableLike[]): Promise<TextI
  * proportionally within each span — an approximation that is exact for
  * single-span matches and close for text spanning several runs.
  */
+/** Intersect an axis-aligned rect with a span's caller viewport (if any). */
+function clipRectToViewport(
+  rect: HighlightRect,
+  clip: TextPlacement['clip'],
+): HighlightRect | undefined {
+  if (!clip?.length) return rect.width > 0 && rect.height > 0 ? rect : undefined
+  const x0 = Math.min(...clip.map(p => p.x)), y0 = Math.min(...clip.map(p => p.y))
+  const x1 = Math.max(...clip.map(p => p.x)), y1 = Math.max(...clip.map(p => p.y))
+  const ix0 = Math.max(rect.x, x0), iy0 = Math.max(rect.y, y0)
+  const ix1 = Math.min(rect.x + rect.width, x1), iy1 = Math.min(rect.y + rect.height, y1)
+  if (ix1 <= ix0 || iy1 <= iy0) return undefined
+  return { x: ix0, y: iy0, width: ix1 - ix0, height: iy1 - iy0 }
+}
+
 export function rectsForRange(line: IndexLine, start: number, end: number): HighlightRect[] {
-  const height = Math.max(2, line.bottom - line.top)
+  // Per-span results in LINE-offset space: warped spans highlight along their
+  // mapped cluster bands, unwarped spans through the ordinary band. Both are
+  // kept so mixed ranges never lose either side.
   const out: HighlightRect[] = []
   let offset = 0
   for (const span of line.spans) {
-    const spanStart = offset
-    const spanEnd = offset + span.text.length
-    offset = spanEnd
-    if (end <= spanStart || start >= spanEnd) continue
-    const from = Math.max(0, start - spanStart)
-    const to = Math.min(span.text.length, end - spanStart)
+    const lineStart = offset, lineEnd = offset + span.text.length
+    offset = lineEnd
+    if (end <= lineStart || start >= lineEnd) continue
+    const p = span.placement
+    if (p?.visual?.clusters?.length && span.logical) {
+      const boundaries = span.logical.graphemeBoundaries
+      if (boundaries?.length) {
+        const s = span.logical.start
+        const bands = p.visual.bands
+        for (let ci = 0; ci < p.visual.clusters.length; ci++) {
+          const b0 = boundaries[Math.min(ci, boundaries.length - 1)]
+          const b1 = boundaries[Math.min(ci + 1, boundaries.length - 1)]
+          const clo = lineStart + (Math.min(b0, b1) - s)
+          const chi = lineStart + (Math.max(b0, b1) - s)
+          if (chi <= clo) continue
+          const o0 = Math.max(start, clo), o1 = Math.min(end, chi)
+          if (o1 <= o0) continue
+          const band = bands?.[Math.min(ci, bands.length - 1)]
+          let rect: HighlightRect | undefined
+          if (band && band.width > 0 && band.height > 0) {
+            // Mapped per-cluster band bounds, intersected with the viewport.
+            // A partial-cluster range keeps the overlapped fraction of the
+            // band (anchored at the overlap side); whole clusters keep it all.
+            const full = o0 <= clo && o1 >= chi
+            if (full) {
+              rect = { x: band.x, y: band.y, width: band.width, height: band.height }
+            } else {
+              const f = (o1 - o0) / (chi - clo)
+              const fromLeft = o0 <= clo
+              const w = Math.max(0.5, band.width * f)
+              rect = { x: fromLeft ? band.x : band.x + band.width - w, y: band.y, width: w, height: band.height }
+            }
+          } else {
+            // No usable band data: nominal font band around the mapped center.
+            const spanLen = span.text.length || 1
+            const unitW = p.width / spanLen
+            const bandH = Math.max(2, p.bottom - p.top)
+            const center = p.visual.clusters[Math.min(ci, p.visual.clusters.length - 1)]
+            const w = Math.max(2, (o1 - o0) * unitW)
+            rect = { x: center.x - w / 2, y: center.y - (bandH * 0.8) / 2, width: w, height: bandH * 0.8 }
+          }
+          const clipped = clipRectToViewport(rect, p.clip)
+          if (clipped) out.push(clipped)
+        }
+        continue
+      }
+    }
+    // Ordinary span (or warped span without usable cluster data).
+    const from = Math.max(0, start - lineStart)
+    const to = Math.min(span.text.length, end - lineStart)
     if (to <= from) continue
     const len = span.text.length || 1
-    const x = span.x + (from / len) * span.width
-    const width = ((to - from) / len) * span.width
-    const rect = span.placement ? projectedSpanRect(span, from / len, to / len) : { x, y: line.top, width, height }
-    if (rect.width > 0 && rect.height > 0) out.push(rect)
+    if (p) {
+      const rect = projectedSpanRect(span, from / len, to / len)
+      if (rect.width > 0 && rect.height > 0) {
+        const clipped = clipRectToViewport(rect, p.clip)
+        if (clipped) out.push(clipped)
+      }
+    } else {
+      const height = Math.max(2, line.bottom - line.top)
+      const x = span.x + (from / len) * span.width
+      const width = ((to - from) / len) * span.width
+      if (width > 0) {
+        const clipped = clipRectToViewport({ x, y: line.top, width, height }, undefined)
+        if (clipped) out.push(clipped)
+      }
+    }
   }
   return out
 }

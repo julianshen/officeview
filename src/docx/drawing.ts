@@ -181,7 +181,8 @@ function paintTextbox(drawing: Extract<DocxDrawing, { kind: 'textbox' }>, ctx: C
           // boundaries split text; an image never becomes a source character.
           runs.push({ text: run.text, fontSizePt: run.fontSizePt ?? drawing.fontSizePt, fontFamily: family,
             fontFamilyEastAsia: family, fontFamilyComplexScript: family,
-            color: run.color ? textColor(run.color) : undefined, bold: run.bold, italic: run.italic })
+            color: run.color ? textColor(run.color) : undefined, bold: run.bold, italic: run.italic,
+            noFill: run.noFill, textFill: run.textFill, textOutline: run.textOutline, textShadow: run.textShadow })
           own.push(run); sourceOffset += run.text.length
         }
       }
@@ -199,7 +200,9 @@ function paintTextbox(drawing: Extract<DocxDrawing, { kind: 'textbox' }>, ctx: C
       direction: drawing.direction ?? (drawing.vertical ? 'eaVert' : 'horz'), paragraphs,
       anchor: 't', wrap: true,
       insetLeftEmu: drawing.insets.left, insetRightEmu: drawing.insets.right,
-      insetTopEmu: drawing.insets.top, insetBottomEmu: drawing.insets.bottom
+      insetTopEmu: drawing.insets.top, insetBottomEmu: drawing.insets.bottom,
+      textWarp: drawing.textWarp,
+      diagnostics: drawing.diagnostics,
     }
     const laid = layoutTextBody(body, width, height, createTextBodyMeasurer(ctx, resolve))
     ctx.save()

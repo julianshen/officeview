@@ -17,6 +17,30 @@ export interface XmlNode {
 const ATTRS = '@attrs'
 const TEXT = '#text'
 
+function isValidXmlScalar(cp: number): boolean {
+  if (cp === 0x9 || cp === 0xA || cp === 0xD) return true
+  if (cp >= 0x20 && cp <= 0xD7FF) return true
+  if (cp >= 0xE000 && cp <= 0xFFFD) return true
+  if (cp >= 0x10000 && cp <= 0x10FFFF) return true
+  return false
+}
+
+function validateNumericReferences(xml: string): void {
+  // Skip ref-looking content inside CDATA, comments, and PI
+  const sanitized = xml.replace(/<!--[\s\S]*?-->|<!\[CDATA\[[\s\S]*?\]\]>|<\?[\s\S]*?\?>/g, '')
+  const regex = /&#(?:([0-9]+)|[xX]([0-9a-fA-F]+));/g
+  let match: RegExpExecArray | null
+  while ((match = regex.exec(sanitized)) !== null) {
+    const cp = match[1] !== undefined ? parseInt(match[1], 10) : parseInt(match[2], 16)
+    if (Number.isNaN(cp) || !isValidXmlScalar(cp)) {
+      throw new Error(`Invalid XML numeric character reference: ${match[0]} (U+${cp.toString(16).toUpperCase()})`)
+    }
+  }
+}
+
+// Installed fast-xml-parser runtime accepts an empty named-entity object
+// (enabling numeric character reference decoding while keeping HTML aliases off),
+// while TypeScript declarations type htmlEntities as boolean; tests pin this behavior.
 const parser = new XMLParser({
   ignoreAttributes: false,
   attributeNamePrefix: '',
@@ -25,6 +49,7 @@ const parser = new XMLParser({
   parseTagValue: false,
   trimValues: false,
   processEntities: true,
+  htmlEntities: {} as unknown as boolean,
 });
 
 // Same options, but siblings (including text segments) stay in document
@@ -43,6 +68,7 @@ const orderedParser = new XMLParser({
   trimValues: false,
   processEntities: true,
   preserveOrder: true,
+  htmlEntities: {} as unknown as boolean,
 })
 
 /** Document-order children per node, populated only by parseXmlOrdered. */
@@ -131,6 +157,7 @@ function buildOrdered(entries: unknown[], inherited: ReadonlyMap<string, string>
 /** Parse XML keeping document order (see orderedParser). Throws on malformed input. */
 export function parseXmlOrdered(xml: string): XmlNode {
   if (xml.charCodeAt(0) === 0xfeff) xml = xml.slice(1)
+  validateNumericReferences(xml)
   const check = XMLValidator.validate(xml)
   if (check !== true) {
     throw new Error(`XML validation failed: ${JSON.stringify(check)}`)
@@ -141,7 +168,9 @@ export function parseXmlOrdered(xml: string): XmlNode {
     for (const [k, v] of Object.entries(entry)) {
       if (k.startsWith('?')) continue
       if (!Array.isArray(v)) continue
-      return buildOrdered(v as unknown[], withNamespaces(new Map(), entry[':@']))
+      const rootNode = buildOrdered(v as unknown[], withNamespaces(new Map(), entry[':@']))
+      collectOrderedAttrs(rootNode[ATTRS] as Record<string, string>, entry[':@'])
+      return rootNode
     }
   }
   throw new Error('Unexpected XML root shape')
@@ -203,6 +232,7 @@ function normalize(node: unknown, inherited: ReadonlyMap<string, string> = new M
 export function parseXml(xml: string): XmlNode {
   // strip UTF-8 BOM if present (some generators emit it)
   if (xml.charCodeAt(0) === 0xfeff) xml = xml.slice(1)
+  validateNumericReferences(xml)
   // fast-xml-parser can leave entity garbage in some edge documents — validate first
   const check = XMLValidator.validate(xml)
   if (check !== true) {
