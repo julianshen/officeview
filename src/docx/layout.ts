@@ -104,7 +104,7 @@ export interface PageLayout {
     separator?: { xPx: number; yPx: number; widthPx: number }
   }
   /** Repeating-content overflow or bounded field convergence limitations. */
-  diagnostics?: Array<'repeated-content-overflow' | 'field-layout-nonconvergence'>
+  diagnostics?: Array<'repeated-content-overflow' | 'field-layout-nonconvergence' | 'footnote-overflow' | 'endnote-overflow'>
 }
 
 /** Page header or footer content, positioned in page-relative px. */
@@ -424,29 +424,36 @@ function layoutParagraph(
     const cleanWord = word.replace(/\u00AD/g, '')
     const w = measure(cleanWord, style)
     refreshBand()
-    if (width > 0 && width + w > lineUsable) {
+    // An oversized word on an empty line still attempts a soft-hyphen break;
+    // words with no usable break fall through to whole-word overflow so the
+    // retry in the caller always makes progress (no empty-line retry loop).
+    if ((width > 0 && width + w > lineUsable) || (width === 0 && w > lineUsable && word.includes('\u00AD'))) {
       if (word.includes('\u00AD')) {
         const parts = word.split('\u00AD')
         let prefix = ''
+        let consumed = 0
         for (let pIdx = 0; pIdx < parts.length - 1; pIdx++) {
           const candidate = (prefix ? prefix + parts[pIdx] : parts[pIdx]) + '-'
           const candidateW = measure(candidate, style)
           if (width + candidateW <= lineUsable) {
             prefix = prefix ? prefix + parts[pIdx] : parts[pIdx]
+            consumed = pIdx + 1
           } else {
             break
           }
         }
         if (prefix.length > 0) {
+          // Rejoin the unconsumed parts: slicing by prefix length would
+          // miscount once several parts (and their separators) are consumed.
           const hyphenated = prefix + '-'
           pushSeg(hyphenated, run, style, measure(hyphenated, style))
           flush(false)
           firstLine = false
-          const remainder = word.slice(prefix.length + 1)
+          const remainder = parts.slice(consumed).join('\u00AD')
           return pushWord(remainder, run, style)
         }
       }
-      return false // needs new line
+      if (width > 0) return false // needs new line
     }
     pushSeg(cleanWord, run, style, w)
     return true
@@ -780,6 +787,23 @@ function layoutDocxPass(document: DocxDocument, measure: MeasureFn, totalPages: 
   return pages
 }
 
+/**
+ * Notes laid out past the note-area bottom (the footer line, or the page
+ * bottom margin when no footer exists) would overlap the footer or spill
+ * off the page: keep lines that start above the boundary, drop the rest,
+ * and report the truncation instead of painting clipped content. True
+ * repagination (reflowing body lines onto the next page) is deferred.
+ */
+function clampNoteLines(lines: LineBox[], bottomY: number): { kept: LineBox[]; truncated: boolean } {
+  const kept = lines.filter((l) => l.yPx < bottomY - 1e-6)
+  return { kept, truncated: kept.length < lines.length }
+}
+
+function pushNoteOverflow(page: PageLayout, kind: 'footnote-overflow' | 'endnote-overflow'): void {
+  page.diagnostics ??= []
+  if (!page.diagnostics.includes(kind)) page.diagnostics.push(kind)
+}
+
 function attachFootnotesToPages(
   pages: PageLayout[],
   document: DocxDocument,
@@ -812,6 +836,7 @@ function attachFootnotesToPages(
       }
     }
     if (noteParas.length === 0) continue
+    if (!(contentWidth > 0)) { pushNoteOverflow(page, 'footnote-overflow'); continue }
     const neededHeight = noteParas.length * (defaults.fontSizePt * (96 / 72) * LINE_HEIGHT_FACTOR)
     const lowestBodyY = page.lines.length > 0 ? Math.max(...page.lines.map((l) => l.yPx + l.heightPx)) : margin
     let curY = Math.max(bottomY - neededHeight, lowestBodyY + 12)
@@ -825,10 +850,12 @@ function attachFootnotesToPages(
       fnLines.push(...lines)
       curY += lines.reduce((h, l) => h + l.heightPx, 0)
     }
-    if (fnLines.length > 0) {
+    const { kept, truncated } = clampNoteLines(fnLines, bottomY)
+    if (truncated || (noteParas.length > 0 && kept.length === 0)) pushNoteOverflow(page, 'footnote-overflow')
+    if (kept.length > 0) {
       page.footnotes = {
-        lines: fnLines,
-        separator: { xPx: margin, yPx: fnLines[0].yPx - 6, widthPx: 144 }
+        lines: kept,
+        separator: { xPx: margin, yPx: kept[0].yPx - 6, widthPx: 144 }
       }
     }
   }
@@ -871,6 +898,7 @@ function attachEndnotesToPages(
     }
   }
   if (noteParas.length === 0) return
+  if (!(contentWidth > 0)) { pushNoteOverflow(lastPage, 'endnote-overflow'); return }
 
   const enLines: LineBox[] = []
   const neededHeight = noteParas.length * (defaults.fontSizePt * (96 / 72) * LINE_HEIGHT_FACTOR)
@@ -886,10 +914,12 @@ function attachEndnotesToPages(
     enLines.push(...lines)
     curY += lines.reduce((h, l) => h + l.heightPx, 0)
   }
-  if (enLines.length > 0) {
+  const { kept, truncated } = clampNoteLines(enLines, bottomY)
+  if (truncated || (noteParas.length > 0 && kept.length === 0)) pushNoteOverflow(lastPage, 'endnote-overflow')
+  if (kept.length > 0) {
     lastPage.endnotes = {
-      lines: enLines,
-      separator: { xPx: margin, yPx: enLines[0].yPx - 6, widthPx: 144 }
+      lines: kept,
+      separator: { xPx: margin, yPx: kept[0].yPx - 6, widthPx: 144 }
     }
   }
 }

@@ -1123,6 +1123,59 @@ function unwrapContentControls(node: XmlNode | undefined): Array<[string, XmlNod
   return out
 }
 
+/**
+ * Rewrite manufactured note markers to sequential decimal labels by body
+ * reference order. w:id only links a reference to its note (ids are often
+ * non-contiguous after edits), so displaying raw ids mislabels markers.
+ * Custom number formats, per-section restart, and numStart are not modeled;
+ * a global decimal sequence per note kind is the documented approximation.
+ * Runs carrying authored text alongside a reference are left untouched, as
+ * are markers for notes never referenced in the body (headers/footers are
+ * not scanned) and stray footnoteRef runs outside any note context.
+ */
+function relabelNoteMarkers(sections: DocxSection[], footnotes?: DocxNote[], endnotes?: DocxNote[]): void {
+  const order: Array<number>[] = [[], []]
+  const seen = [new Set<number>(), new Set<number>()]
+  const visitParagraph = (p: DocxParagraph, rewrite: boolean, labels: Array<Map<number, number>>): void => {
+    for (const run of p.runs) {
+      const refs: Array<{ id: number; kind: 0 | 1 }> = []
+      if (run.footnoteReference) refs.push({ id: run.footnoteReference.id, kind: 0 })
+      if (run.endnoteReference) refs.push({ id: run.endnoteReference.id, kind: 1 })
+      for (const { id, kind } of refs) {
+        if (!rewrite) {
+          if (!seen[kind].has(id)) { seen[kind].add(id); order[kind].push(id) }
+        } else if (run.text === String(id)) {
+          const label = labels[kind].get(id)
+          if (label !== undefined) run.text = String(label)
+        }
+      }
+    }
+  }
+  const visitBlocks = (blocks: DocxBlock[], rewrite: boolean, labels: Array<Map<number, number>>): void => {
+    for (const block of blocks) {
+      if (block.kind === 'p') visitParagraph(block.paragraph, rewrite, labels)
+      else for (const row of block.table.rows) for (const cell of row.cells) for (const p of cell.paragraphs) visitParagraph(p, rewrite, labels)
+    }
+  }
+  for (const section of sections) visitBlocks(section.blocks, false, [])
+  const labels = [new Map<number, number>(), new Map<number, number>()]
+  order.forEach((ids, kind) => ids.forEach((id, index) => labels[kind].set(id, index + 1)))
+  for (const section of sections) visitBlocks(section.blocks, true, labels)
+  for (const [notes, kind] of [[footnotes, 0], [endnotes, 1]] as const) {
+    for (const note of notes ?? []) {
+      const label = labels[kind].get(note.id)
+      if (label === undefined) continue
+      for (const p of note.paragraphs) {
+        for (const run of p.runs) {
+          if (((kind === 0 && run.footnoteRef) || (kind === 1 && run.endnoteRef)) && run.text === String(note.id)) {
+            run.text = String(label)
+          }
+        }
+      }
+    }
+  }
+}
+
 async function loadNotesPart(
   pkg: OfficePackage,
   docRels: Map<string, { type: string; target: string }>,
@@ -1411,6 +1464,19 @@ export async function parseDocx(pkg: OfficePackage): Promise<DocxDocument> {
   }
   // a body containing only a table (or only images) is still real content
   if (current.blocks.length > 0 || current.paragraphs.length > 0) sections.push(current)
+  // Auxiliary part loaders run BEFORE the diagnostic merge and coverage
+  // dedup below: they append malformed-part and drawing diagnostics to the
+  // shared drawingCoverage array, which must be visible to both passes.
+  const { embeddedFonts, fontDiagnostics } = await loadDocxEmbeddedFonts(pkg)
+  const footnotes = await loadNotesPart(pkg, docRels, 'footnotes', styles, numbering, drawingCoverage, unselectedReferenceIds)
+  const endnotes = await loadNotesPart(pkg, docRels, 'endnotes', styles, numbering, drawingCoverage, unselectedReferenceIds)
+  const comments = await loadCommentsPart(pkg, docRels, styles, numbering, drawingCoverage, unselectedReferenceIds)
+  const commentDiagnostics = comments?.map((c) => ({
+    id: c.id,
+    author: c.author,
+    text: c.text
+  }))
+  const settings = await loadSettings(pkg, docRels)
   for (const issue of drawingPartContext(pkg).diagnostics) {
     if (attemptedMalformedRelationshipIssue(pkg, issue)) continue
     if (issue.kind === 'node-budget' && issue.reason === 'document-budget' && drawingCoverage.some(entry =>
@@ -1439,16 +1505,9 @@ export async function parseDocx(pkg: OfficePackage): Promise<DocxDocument> {
     seenPlacements.add(key)
     return true
   })
-  const { embeddedFonts, fontDiagnostics } = await loadDocxEmbeddedFonts(pkg)
-  const footnotes = await loadNotesPart(pkg, docRels, 'footnotes', styles, numbering, drawingCoverage, unselectedReferenceIds)
-  const endnotes = await loadNotesPart(pkg, docRels, 'endnotes', styles, numbering, drawingCoverage, unselectedReferenceIds)
-  const comments = await loadCommentsPart(pkg, docRels, styles, numbering, drawingCoverage, unselectedReferenceIds)
-  const commentDiagnostics = comments?.map((c) => ({
-    id: c.id,
-    author: c.author,
-    text: c.text
-  }))
-  const settings = await loadSettings(pkg, docRels)
+  // Visible note markers number sequentially by body reference order (see
+  // relabelNoteMarkers): w:id only links a reference to its note.
+  relabelNoteMarkers(sections, footnotes, endnotes)
   return {
     drawingCoverage: uniqueCoverage,
     sections,

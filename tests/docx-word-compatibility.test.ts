@@ -547,6 +547,95 @@ describe('Phase 22 review remediation', () => {
       'word/document.xml': `<w:document ${W_NS}><w:body><w:p><w:r><w:t>a</w:t><w:noBreakHyphen/><w:t>b</w:t></w:r></w:p></w:body></w:document>`,
     })
     const doc = await parseDocx(await OfficePackage.load(buf))
-    expect(doc.sections[0].paragraphs[0].runs[0].text).toBe('a\u2011b')
+    expect(doc.sections[0].paragraphs[0].runs[0].text).toBe('a' + String.fromCharCode(0x2011) + 'b')
+  })
+})
+
+describe('Phase 22 bot review remediation', () => {
+  const SH = String.fromCharCode(0xad)
+
+  test('P2-coverage: malformed auxiliary parts surface in doc.drawingCoverage', async () => {
+    const buf = await buildDocx({
+      'word/_rels/document.xml.rels': relsFor(['footnotes', 'footnotes-broken.xml']),
+      'word/document.xml': `<w:document ${W_NS}><w:body><w:p><w:r><w:t>Body</w:t></w:r></w:p></w:body></w:document>`,
+      'word/footnotes-broken.xml': `<w:footnotes ${W_NS}><w:footnote`,
+    })
+    const doc = await parseDocx(await OfficePackage.load(buf))
+    expect(doc.footnotes).toBeUndefined()
+    const entry = doc.drawingCoverage?.find((e) => (e.treePath ?? '').includes('footnotes'))
+    expect(entry).toBeDefined()
+    expect(entry?.status).toBe('malformed')
+  })
+
+  test('P2-hyphen: oversized soft-hyphenated word breaks at line start', async () => {
+    const part = 'a'.repeat(15)
+    const word = Array(10).fill(part).join(SH)
+    const buf = await buildDocx({
+      'word/document.xml': `<w:document ${W_NS}><w:body><w:p><w:r><w:t>${word}</w:t></w:r></w:p></w:body></w:document>`,
+    })
+    const doc = await parseDocx(await OfficePackage.load(buf))
+    const pages = layoutDocx(doc, measureFixed)
+    const lines = pages[0].lines
+    expect(lines.length).toBeGreaterThan(1)
+    for (const line of lines) {
+      expect(line.widthPx).toBeLessThanOrEqual(line.contentWidthPx + 1e-6)
+    }
+    expect(lines[0].segs.map((s) => s.text).join('').endsWith('-')).toBe(true)
+    const joined = lines.map((l) => l.segs.map((s) => s.text).join('')).join('')
+    expect(joined.replace(/-/g, '')).toBe(word.split(SH).join(''))
+  })
+
+  test('P2-labels: note markers number sequentially by reference order', async () => {
+    const buf = await buildDocx({
+      'word/_rels/document.xml.rels': relsFor(['footnotes', 'footnotes.xml'], ['endnotes', 'endnotes.xml']),
+      'word/document.xml': `<w:document ${W_NS}><w:body><w:p><w:r><w:t>A</w:t></w:r><w:r><w:footnoteReference w:id="5"/></w:r><w:r><w:t>B</w:t></w:r><w:r><w:footnoteReference w:id="9"/></w:r><w:r><w:endnoteReference w:id="7"/></w:r></w:p></w:body></w:document>`,
+      'word/footnotes.xml': `<w:footnotes ${W_NS}><w:footnote w:id="5"><w:p><w:r><w:footnoteRef/></w:r><w:r><w:t> fifth</w:t></w:r></w:p></w:footnote><w:footnote w:id="9"><w:p><w:r><w:footnoteRef/></w:r><w:r><w:t> ninth</w:t></w:r></w:p></w:footnote><w:footnote w:id="99"><w:p><w:r><w:footnoteRef/></w:r><w:r><w:t> unreferenced</w:t></w:r></w:p></w:footnote></w:footnotes>`,
+      'word/endnotes.xml': `<w:endnotes ${W_NS}><w:endnote w:id="7"><w:p><w:r><w:endnoteRef/></w:r><w:r><w:t> seventh</w:t></w:r></w:p></w:endnote></w:endnotes>`,
+    })
+    const doc = await parseDocx(await OfficePackage.load(buf))
+    const runs = doc.sections[0].paragraphs[0].runs
+    expect(runs.filter((r) => r.footnoteReference).map((r) => r.text)).toEqual(['1', '2'])
+    expect(runs.filter((r) => r.endnoteReference).map((r) => r.text)).toEqual(['1'])
+    const fnMarkers = doc.footnotes!.filter((n) => n.id === 5 || n.id === 9).map((n) => n.paragraphs[0].runs[0].text)
+    expect(fnMarkers).toEqual(['1', '2'])
+    expect(doc.endnotes![0].paragraphs[0].runs[0].text).toBe('1')
+    expect(doc.footnotes!.find((n) => n.id === 99)!.paragraphs[0].runs[0].text).toBe('99')
+  })
+
+  test('P1-pagination: overflowing footnotes clamp to the page with a diagnostic', async () => {
+    const filler = Array(3).fill('<w:p><w:r><w:t>filler line</w:t></w:r></w:p>').join('')
+    const notes = Array(6).fill('<w:p><w:r><w:t>note content line that wraps the footnote block</w:t></w:r></w:p>').join('')
+    const buf = await buildDocx({
+      'word/_rels/document.xml.rels': relsFor(['footnotes', 'footnotes.xml']),
+      'word/document.xml': `<w:document ${W_NS}><w:body>${filler}<w:p><w:r><w:t>Ref</w:t></w:r><w:r><w:footnoteReference w:id="1"/></w:r></w:p><w:sectPr><w:pgSz w:w="12240" w:h="3000"/><w:pgMar w:top="144" w:right="144" w:bottom="144" w:left="144" w:header="0" w:footer="0" w:gutter="0"/></w:sectPr></w:body></w:document>`,
+      'word/footnotes.xml': `<w:footnotes ${W_NS}><w:footnote w:id="1">${notes}</w:footnote></w:footnotes>`,
+    })
+    const doc = await parseDocx(await OfficePackage.load(buf))
+    const pages = layoutDocx(doc, measureFixed)
+    const page = pages[0]
+    expect(page.footnotes).toBeDefined()
+    expect(page.footnotes!.separator).toBeDefined()
+    for (const line of page.footnotes!.lines) {
+      expect(line.yPx).toBeLessThan(page.heightPx - 96)
+    }
+    expect(page.diagnostics ?? []).toContain('footnote-overflow')
+  })
+
+  test('P1-pagination: overflowing endnotes clamp to the last page with a diagnostic', async () => {
+    const filler = Array(3).fill('<w:p><w:r><w:t>filler line</w:t></w:r></w:p>').join('')
+    const notes = Array(6).fill('<w:p><w:r><w:t>note content line that wraps the endnote block</w:t></w:r></w:p>').join('')
+    const buf = await buildDocx({
+      'word/_rels/document.xml.rels': relsFor(['endnotes', 'endnotes.xml']),
+      'word/document.xml': `<w:document ${W_NS}><w:body>${filler}<w:p><w:r><w:t>Ref</w:t></w:r><w:r><w:endnoteReference w:id="2"/></w:r></w:p><w:sectPr><w:pgSz w:w="12240" w:h="3000"/><w:pgMar w:top="144" w:right="144" w:bottom="144" w:left="144" w:header="0" w:footer="0" w:gutter="0"/></w:sectPr></w:body></w:document>`,
+      'word/endnotes.xml': `<w:endnotes ${W_NS}><w:endnote w:id="2">${notes}</w:endnote></w:endnotes>`,
+    })
+    const doc = await parseDocx(await OfficePackage.load(buf))
+    const pages = layoutDocx(doc, measureFixed)
+    const last = pages[pages.length - 1]
+    expect(last.endnotes).toBeDefined()
+    for (const line of last.endnotes!.lines) {
+      expect(line.yPx).toBeLessThan(last.heightPx - 96)
+    }
+    expect(last.diagnostics ?? []).toContain('endnote-overflow')
   })
 })
