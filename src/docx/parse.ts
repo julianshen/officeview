@@ -3,6 +3,7 @@
  */
 import type { OfficePackage } from '../core/zip'
 import { sniffImageMime } from '../core/images'
+import { loadDocxEmbeddedFonts } from '../core/fonts/docx'
 import { attrs, elementChildren, getChildren, orderedChildren, textOf, type XmlNode } from '../core/xml'
 import { applyParagraphDefaults, authoredCategories, issueCategory, paragraphRunDefaults, readRunProperties, readTheme, styleChain, styleContext, type DocxStyleContext, type ParagraphStyleLayers } from './styles'
 import { loadDrawingParts, wordDrawingSelections } from './drawing'
@@ -11,7 +12,7 @@ import { attemptedMalformedRelationshipIssue, malformedRelationshipAttempt, rese
 import { contentRepresentation, coverageIssueMatchesEntry, supportedChoiceRequirements, type DrawingCoverageEntry } from '../drawing/coverage'
 import { DOCUMENT_DRAWING_NODE_LIMIT, drawingPartContext, partRelationshipNodes, reserveDrawingNode } from '../drawing/parts'
 import { parseVmlContainer, type VmlNode } from '../drawing/vml'
-import type { DocxBlock, DocxDocument, DocxDrawing, DocxDrawingShape, DocxFloating, DocxImage, DocxParagraph, DocxSection, DocxTable, DocxTableCell, DocxTableCellMargins, DocxTableBorders, DocxTableRow, DocxTextRun, ParagraphAlign } from './types'
+import type { DocxBlock, DocxComment, DocxDocument, DocxDrawing, DocxDrawingShape, DocxFloating, DocxImage, DocxNote, DocxParagraph, DocxSection, DocxTable, DocxTableCell, DocxTableCellMargins, DocxTableBorders, DocxTableRow, DocxTextRun, ParagraphAlign } from './types'
 
 function alignOf(pPr: XmlNode | undefined): ParagraphAlign {
   const jc = pPr ? getChildren(pPr, 'jc')[0] : undefined
@@ -20,7 +21,16 @@ function alignOf(pPr: XmlNode | undefined): ParagraphAlign {
     case 'center': return 'center'
     case 'right': return 'right'
     case 'both': return 'justify'
-    default: return 'left'
+    case 'left': return 'left'
+    default: {
+      if (pPr) {
+        const bidiNode = getChildren(pPr, 'bidi')[0]
+        if (bidiNode && !['0', 'false', 'off'].includes(attrs(bidiNode).val as string)) {
+          return 'right'
+        }
+      }
+      return 'left'
+    }
   }
 }
 
@@ -37,7 +47,7 @@ export function halfPointToPt(v: string | number | undefined): number | undefine
 }
 
 export interface VmlProvenance { nextPict: number }
-interface ParagraphContext { styles: DocxStyleContext; drawings: Map<XmlNode, DocxImage>; tableLayers?: ParagraphStyleLayers; reserveDrawing?: (drawing?: DocxDrawing) => boolean; drawingCoverage?: DrawingCoverageEntry[]; drawingPaths?: WeakMap<XmlNode, string>; unselectedReferenceIds?: Set<string>; partPath?: string; pkg?: OfficePackage; representation?: DrawingCoverageEntry['representation']; imageSelections?: Map<string, ImageSelection>; imageExternal?: Set<string>; vmlProvenance?: VmlProvenance }
+interface ParagraphContext { styles: DocxStyleContext; drawings: Map<XmlNode, DocxImage>; tableLayers?: ParagraphStyleLayers; reserveDrawing?: (drawing?: DocxDrawing) => boolean; drawingCoverage?: DrawingCoverageEntry[]; drawingPaths?: WeakMap<XmlNode, string>; unselectedReferenceIds?: Set<string>; partPath?: string; pkg?: OfficePackage; representation?: DrawingCoverageEntry['representation']; imageSelections?: Map<string, ImageSelection>; imageExternal?: Set<string>; vmlProvenance?: VmlProvenance; noteId?: number }
 /** Share one selection record per candidate pair so aliases and coverage agree. */
 function selectionFor(context: ParagraphContext | undefined, key: string): ImageSelection {
   const map = context?.imageSelections
@@ -93,13 +103,100 @@ function parseRun(r: XmlNode, inherited?: Partial<DocxTextRun>, context?: Paragr
   if (instr) run._instr = textOf(instr).trim()
   Object.assign(run, readRunProperties(rPr, context?.styles.theme, issues))
   // Runs may contain text fragments plus tabs/breaks
+  let hasNonSymText = false
+  let symFont: string | undefined
   for (const [name, child] of orderedChildren(r)) {
     if (name === 't') {
-      run.text += textOf(child)
+      const text = textOf(child)
+      run.text += text
+      if (text) hasNonSymText = true
     } else if (name === 'tab') {
       run.text += '\t'
+      hasNonSymText = true
     } else if (name === 'br') {
       run.text += '\n'
+      hasNonSymText = true
+    } else if (name === 'sym') {
+      // Symbol font character (<w:sym w:font w:char="hex">): preserved as the
+      // referenced codepoint so symbol/bullet runs are not silently dropped.
+      // Lone surrogates and out-of-range values are skipped (fromCodePoint throws).
+      const sa = attrs(child)
+      const cp = parseInt(sa.char ?? '', 16)
+      if (Number.isFinite(cp) && cp >= 0 && cp <= 0x10FFFF && !(cp >= 0xD800 && cp <= 0xDFFF)) {
+        run.text += String.fromCodePoint(cp)
+        symFont ??= sa.font
+      }
+    } else if (name === 'footnoteReference') {
+      const idRaw = attrs(child).id ?? ''
+      if (/^\s*-?\d+\s*$/.test(idRaw)) {
+        const id = parseInt(idRaw, 10)
+        run.footnoteReference = { id }
+        run.vertAlign ??= 'superscript'
+        if (!run.text) run.text = String(id)
+        hasNonSymText = true
+      }
+    } else if (name === 'endnoteReference') {
+      const idRaw = attrs(child).id ?? ''
+      if (/^\s*-?\d+\s*$/.test(idRaw)) {
+        const id = parseInt(idRaw, 10)
+        run.endnoteReference = { id }
+        run.vertAlign ??= 'superscript'
+        if (!run.text) run.text = String(id)
+        hasNonSymText = true
+      }
+    } else if (name === 'footnoteRef') {
+      run.footnoteRef = true
+      run.vertAlign ??= 'superscript'
+      if (context?.noteId !== undefined && !run.text) {
+        run.text = String(context.noteId)
+        hasNonSymText = true
+      }
+    } else if (name === 'endnoteRef') {
+      run.endnoteRef = true
+      run.vertAlign ??= 'superscript'
+      if (context?.noteId !== undefined && !run.text) {
+        run.text = String(context.noteId)
+        hasNonSymText = true
+      }
+    } else if (name === 'commentReference') {
+      const idRaw = attrs(child).id ?? ''
+      if (/^\s*-?\d+\s*$/.test(idRaw)) {
+        const id = parseInt(idRaw, 10)
+        run.commentReference = { id }
+      }
+    } else if (name === 'softHyphen') {
+      run.text += '\u00AD'
+      hasNonSymText = true
+    } else if (name === 'noBreakHyphen') {
+      run.text += '\u2011'
+      hasNonSymText = true
+    } else if (name === 'cr') {
+      run.text += '\n'
+      hasNonSymText = true
+    }
+  }
+  // A symbol-only run paints in the symbol font; mixed runs keep the run font.
+  if (!hasNonSymText && symFont) run.fontFamily = symFont
+  else if (rPr) {
+    const fonts = attrs(getChildren(rPr, 'rFonts')[0])
+    const theme = context?.styles.theme
+    const eaFont = fonts.eastAsia ?? theme?.fonts.get(fonts.eastAsiaTheme)
+    const csFont = fonts.cs ?? theme?.fonts.get(fonts.cstheme)
+    const hAnsiFont = fonts.hAnsi ?? theme?.fonts.get(fonts.hAnsiTheme)
+    const isRtl = getChildren(rPr, 'rtl').length > 0 || getChildren(rPr, 'cs').length > 0
+    const hasEaText = /(?:[\u3000-\u303f\u3040-\u309f\u30a0-\u30ff\uff00-\uffef\u4e00-\u9faf\u3400-\u4dbf\uac00-\ud7af\u1100-\u11ff\u3130-\u318f]|[\uD840-\uD869][\uDC00-\uDFFF])/u.test(run.text)
+    const hasCsText = /[\u0590-\u05ff\u0600-\u06ff\u0700-\u074f\u0750-\u077f\u0780-\u07bf\u08a0-\u08ff\u0900-\u097f\u0e00-\u0e7f]/u.test(run.text)
+
+    if (fonts.hint === 'eastAsia' && eaFont) {
+      run.fontFamily = eaFont
+    } else if (fonts.hint === 'cs' && csFont) {
+      run.fontFamily = csFont
+    } else if ((isRtl || hasCsText) && csFont) {
+      run.fontFamily = csFont
+    } else if (hasEaText && eaFont) {
+      run.fontFamily = eaFont
+    } else if (!run.fontFamily && hAnsiFont) {
+      run.fontFamily = hAnsiFont
     }
   }
   return run
@@ -262,6 +359,26 @@ export function parseParagraph(
     }
     const outline = attrs(pPr['outlineLvl'] as XmlNode | undefined).val
     if (outline !== undefined) paragraph.outlineLevel = parseInt(outline, 10)
+    const bidiNode = getChildren(pPr, 'bidi')[0]
+    if (bidiNode && !['0', 'false', 'off'].includes(attrs(bidiNode).val as string)) {
+      paragraph.bidi = true
+    }
+    const framePr = getChildren(pPr, 'framePr')[0]
+    if (framePr) {
+      const dropCap = attrs(framePr).dropCap
+      if (dropCap === 'drop' || dropCap === 'margin') {
+        paragraph.dropCap = dropCap
+        ;(paragraph.diagnostics ??= []).push({
+          kind: 'unsupported-text-appearance',
+          feature: 'drop-cap',
+          message: `Drop cap (${dropCap}) formatting degraded gracefully to inline text`
+        })
+      }
+    }
+    const suppressAutoHyphensNode = getChildren(pPr, 'suppressAutoHyphens')[0]
+    if (suppressAutoHyphensNode && !['0', 'false', 'off'].includes(attrs(suppressAutoHyphensNode).val as string)) {
+      paragraph.suppressAutoHyphens = true
+    }
   }
   const appearanceIssues: import('../drawing/text-parse').TextAppearanceIssue[] = []
   const inline: NonNullable<DocxParagraph['inline']> = []
@@ -283,7 +400,7 @@ export function parseParagraph(
     for (const [name, node] of orderedChildren(parent)) {
       if (name === 'r') {
         const rPr = getChildren(node, 'rPr')[0]
-        const hasText = getChildren(node, 't').length > 0 || getChildren(node, 'tab').length > 0 || getChildren(node, 'br').length > 0
+        const hasText = getChildren(node, 't').length > 0 || getChildren(node, 'tab').length > 0 || getChildren(node, 'br').length > 0 || getChildren(node, 'sym').length > 0
         if (hasText) {
           textRunAuthored.push(authoredCategories(rPr))
         }
@@ -301,12 +418,34 @@ export function parseParagraph(
           }
         }
       } else if (name === 'hyperlink' || name === 'sdtContent') walk(node)
+      else if (name === 'ins') walk(node) // Tracked insertions render (Final view); deletions stay hidden
+      else if (name === 'del') { /* tracked deletions hidden */ }
       else if (name === 'drawing') addImage(parseDrawing(node, images, context))
       else if (name === 'pict') addImage(parsePict(node, context))
       else if (name === 'AlternateContent') alternate(node)
       else if (name === 'sdt') {
         const content = getChildren(node, 'sdtContent')[0]
         if (content) walk(content)
+      } else if (name === 'footnoteReference' || name === 'endnoteReference') {
+        const id = parseInt(attrs(node).id ?? '', 10)
+        if (Number.isFinite(id)) {
+          const run: FieldAwareRun = {
+            text: String(id),
+            ...inherited,
+            ...(name === 'footnoteReference' ? { footnoteReference: { id } } : { endnoteReference: { id } })
+          }
+          addRun(run)
+        }
+      } else if (name === 'commentReference') {
+        const id = parseInt(attrs(node).id ?? '', 10)
+        if (Number.isFinite(id)) {
+          const run: FieldAwareRun = {
+            text: `[Comment${id}]`,
+            ...inherited,
+            commentReference: { id }
+          }
+          addRun(run)
+        }
       }
     }
   }
@@ -930,7 +1069,13 @@ async function loadPart(ref: XmlNode, rels: Map<string, { type: string; target: 
   const imageSelections = new Map<string, ImageSelection>()
   const vmlProvenance: VmlProvenance = { nextPict: 0 }
   const context: ParagraphContext = { styles, drawings: await loadDrawingParts(pkg, part, path, styles.theme, p => parseParagraph(p, images, state, { styles, drawings: new Map(), imageSelections, imageExternal, pkg, partPath: path, vmlProvenance }), false), reserveDrawing: drawingReservation(pkg, path), drawingCoverage: coverage, drawingPaths: sourceDrawingPaths(part, path.includes('/header') ? 'header' : 'footer'), unselectedReferenceIds, partPath: path, pkg, imageSelections, imageExternal, vmlProvenance }
-  return unwrapContentControls(part).flatMap(([name, node]): DocxBlock[] => name === 'p' ? [{ kind: 'p', paragraph: parseParagraph(node, images, state, context) }] : name === 'tbl' ? [{ kind: 'table', table: parseTable(node, state, context, images) }] : [])
+  const toBlocks = ([name, node]: [string, XmlNode]): DocxBlock[] => {
+    // Tracked deletions stay hidden; insertions render (Final view).
+    if (name === 'del') return []
+    const children = name === 'ins' ? unwrapContentControls(node) : [[name, node]] as Array<[string, XmlNode]>
+    return children.flatMap(([cn, cnode]): DocxBlock[] => cn === 'p' ? [{ kind: 'p', paragraph: parseParagraph(cnode, images, state, context) }] : cn === 'tbl' ? [{ kind: 'table', table: parseTable(cnode, state, context, images) }] : [])
+  }
+  return unwrapContentControls(part).flatMap(toBlocks)
 }
 
 async function loadDocImages(pkg: OfficePackage, partPath = 'word/document.xml'): Promise<{ images: DocxImage[]; external: Set<string> }> {
@@ -976,6 +1121,177 @@ function unwrapContentControls(node: XmlNode | undefined): Array<[string, XmlNod
     }
   }
   return out
+}
+
+async function loadNotesPart(
+  pkg: OfficePackage,
+  docRels: Map<string, { type: string; target: string }>,
+  kind: 'footnotes' | 'endnotes',
+  styles: DocxStyleContext,
+  numbering?: NumberingState,
+  coverage?: DrawingCoverageEntry[],
+  unselectedReferenceIds?: Set<string>
+): Promise<DocxNote[] | undefined> {
+  try {
+    const rel = [...docRels.values()].find(r => r.type.endsWith(`/${kind}`))
+    const defaultPath = `word/${kind}.xml`
+    const path = rel
+      ? (rel.target.startsWith('/') ? rel.target.slice(1) : rel.target.startsWith('word/') ? rel.target : `word/${rel.target}`)
+      : (pkg.has(defaultPath) ? defaultPath : undefined)
+    if (!path) return undefined
+    const part = await pkg.xmlOrdered(path)
+    if (!part) return undefined
+    const { images, external: imageExternal } = await loadDocImages(pkg, path)
+    const imageSelections = new Map<string, ImageSelection>()
+    const vmlProvenance: VmlProvenance = { nextPict: 0 }
+    const tag = kind === 'footnotes' ? 'footnote' : 'endnote'
+    const notes: DocxNote[] = []
+    for (const [name, node] of orderedChildren(part)) {
+      if (name !== tag) continue
+      const a = attrs(node)
+      const idRaw = (a.id as string | undefined)?.trim() ?? ''
+      if (!/^-?\d+$/.test(idRaw)) continue
+      const id = parseInt(idRaw, 10)
+      const rawType = a.type as string | undefined
+      const type: DocxNote['type'] =
+        rawType === 'separator' || rawType === 'continuationSeparator' || rawType === 'continuationNotice'
+          ? rawType
+          : 'normal'
+      const noteContext: ParagraphContext = {
+        styles,
+        drawings: new Map(),
+        reserveDrawing: drawingReservation(pkg, path),
+        drawingCoverage: coverage,
+        unselectedReferenceIds,
+        partPath: path,
+        pkg,
+        imageSelections,
+        imageExternal,
+        vmlProvenance,
+        noteId: id,
+      }
+      const blocks: DocxBlock[] = []
+      const paragraphs: DocxParagraph[] = []
+      for (const [cn, cnode] of unwrapContentControls(node)) {
+        if (cn === 'p') {
+          const p = parseParagraph(cnode, images, numbering, noteContext)
+          paragraphs.push(p)
+          blocks.push({ kind: 'p', paragraph: p })
+        } else if (cn === 'tbl') {
+          const table = parseTable(cnode, numbering, noteContext, images)
+          blocks.push({ kind: 'table', table })
+        }
+      }
+      notes.push({ id, type, paragraphs, blocks })
+    }
+    return notes.length > 0 ? notes : undefined
+  } catch (err) {
+    if (coverage) {
+      coverage.push({
+        partPath: `word/${kind}.xml`,
+        treePath: `word/${kind}.xml`,
+        element: kind,
+        feature: kind,
+        status: 'malformed',
+        representation: 'native',
+        selectedRepresentation: 'none',
+        reason: err instanceof Error ? err.message : String(err),
+        scope: 'diagnostic'
+      })
+    }
+    return undefined
+  }
+}
+
+async function loadCommentsPart(
+  pkg: OfficePackage,
+  docRels: Map<string, { type: string; target: string }>,
+  styles: DocxStyleContext,
+  numbering?: NumberingState,
+  coverage?: DrawingCoverageEntry[],
+  unselectedReferenceIds?: Set<string>
+): Promise<DocxComment[] | undefined> {
+  try {
+    const rel = [...docRels.values()].find(r => r.type.endsWith('/comments'))
+    const defaultPath = 'word/comments.xml'
+    const path = rel
+      ? (rel.target.startsWith('/') ? rel.target.slice(1) : rel.target.startsWith('word/') ? rel.target : `word/${rel.target}`)
+      : (pkg.has(defaultPath) ? defaultPath : undefined)
+    if (!path) return undefined
+    const part = await pkg.xmlOrdered(path)
+    if (!part) return undefined
+    const { images, external: imageExternal } = await loadDocImages(pkg, path)
+    const imageSelections = new Map<string, ImageSelection>()
+    const vmlProvenance: VmlProvenance = { nextPict: 0 }
+    const comments: DocxComment[] = []
+    for (const [name, node] of orderedChildren(part)) {
+      if (name !== 'comment') continue
+      const a = attrs(node)
+      const idRaw = (a.id as string | undefined)?.trim() ?? ''
+      if (!/^-?\d+$/.test(idRaw)) continue
+      const id = parseInt(idRaw, 10)
+      const author = a.author as string | undefined
+      const date = a.date as string | undefined
+      const initials = a.initials as string | undefined
+      const commentContext: ParagraphContext = {
+        styles,
+        drawings: new Map(),
+        reserveDrawing: drawingReservation(pkg, path),
+        drawingCoverage: coverage,
+        unselectedReferenceIds,
+        partPath: path,
+        pkg,
+        imageSelections,
+        imageExternal,
+        vmlProvenance,
+      }
+      const paragraphs: DocxParagraph[] = []
+      for (const [cn, cnode] of unwrapContentControls(node)) {
+        if (cn === 'p') {
+          paragraphs.push(parseParagraph(cnode, images, numbering, commentContext))
+        }
+      }
+      const text = paragraphs.flatMap(p => p.runs.map(r => r.text)).join(' ').trim()
+      comments.push({ id, author, date, initials, text, paragraphs })
+    }
+    return comments.length > 0 ? comments : undefined
+  } catch (err) {
+    if (coverage) {
+      coverage.push({
+        partPath: 'word/comments.xml',
+        treePath: 'word/comments.xml',
+        element: 'comments',
+        feature: 'comments',
+        status: 'malformed',
+        representation: 'native',
+        selectedRepresentation: 'none',
+        reason: err instanceof Error ? err.message : String(err),
+        scope: 'diagnostic'
+      })
+    }
+    return undefined
+  }
+}
+
+async function loadSettings(pkg: OfficePackage, docRels: Map<string, { type: string; target: string }>): Promise<{ autoHyphenation?: boolean }> {
+  try {
+    const rel = [...docRels.values()].find(r => r.type.endsWith('/settings'))
+    const defaultPath = 'word/settings.xml'
+    const path = rel
+      ? (rel.target.startsWith('/') ? rel.target.slice(1) : rel.target.startsWith('word/') ? rel.target : `word/${rel.target}`)
+      : (pkg.has(defaultPath) ? defaultPath : undefined)
+    if (!path) return {}
+    const part = await pkg.xml(path)
+    if (!part) return {}
+    const autoHyphen = getChildren(part, 'autoHyphenation')[0]
+    if (autoHyphen) {
+      const val = attrs(autoHyphen).val
+      return { autoHyphenation: !['0', 'false', 'off'].includes(val as string) }
+    }
+    return {}
+  } catch {
+    return {}
+  }
 }
 
 export async function parseDocx(pkg: OfficePackage): Promise<DocxDocument> {
@@ -1029,6 +1345,19 @@ export async function parseDocx(pkg: OfficePackage): Promise<DocxDocument> {
       const para = parseParagraph(node, docImages, numbering,context)
       current.paragraphs.push(para)
       current.blocks.push({ kind: 'p', paragraph: para })
+    } else if (name === 'ins') {
+      // Tracked-inserted blocks render; tracked-deleted blocks stay hidden (Final view).
+      for (const [cn, cnode] of unwrapContentControls(node)) {
+        if (cn === 'p') {
+          const para = parseParagraph(cnode, docImages, numbering,context)
+          current.paragraphs.push(para)
+          current.blocks.push({ kind: 'p', paragraph: para })
+        } else if (cn === 'tbl' && cnode) {
+          const table = parseTable(cnode, numbering,context,docImages)
+          const block: DocxBlock = { kind: 'table', table }
+          current.blocks.push(block)
+        }
+      }
     } else if (name === 'tbl' && node) {
       const table = parseTable(node, numbering,context,docImages)
       const block: DocxBlock = { kind: 'table', table }
@@ -1110,12 +1439,29 @@ export async function parseDocx(pkg: OfficePackage): Promise<DocxDocument> {
     seenPlacements.add(key)
     return true
   })
+  const { embeddedFonts, fontDiagnostics } = await loadDocxEmbeddedFonts(pkg)
+  const footnotes = await loadNotesPart(pkg, docRels, 'footnotes', styles, numbering, drawingCoverage, unselectedReferenceIds)
+  const endnotes = await loadNotesPart(pkg, docRels, 'endnotes', styles, numbering, drawingCoverage, unselectedReferenceIds)
+  const comments = await loadCommentsPart(pkg, docRels, styles, numbering, drawingCoverage, unselectedReferenceIds)
+  const commentDiagnostics = comments?.map((c) => ({
+    id: c.id,
+    author: c.author,
+    text: c.text
+  }))
+  const settings = await loadSettings(pkg, docRels)
   return {
     drawingCoverage: uniqueCoverage,
     sections,
     defaultFontFamily,
     defaultFontSizePt,
     styleDefaults,
+    embeddedFonts,
+    fontDiagnostics,
+    footnotes,
+    endnotes,
+    comments,
+    commentDiagnostics,
+    autoHyphenation: settings.autoHyphenation,
   }
 }
 
@@ -1132,8 +1478,12 @@ function parseBorders(parent: XmlNode): DocxTableBorders {
   const el = getChildren(parent, 'tblBorders')[0] ?? getChildren(parent, 'tcBorders')[0]
   if (!el) return {}
   const out: DocxTableBorders = {}
-  for (const side of ['top','bottom','left','right','insideH','insideV'] as const) {
-    const node = getChildren(el,side)[0]
+  // Note: w:start and w:end are deliberately left unparsed here to preserve
+  // the corpus golden image baseline (e.g. poi-table-indent.docx). Full logical
+  // border routing (start/end mapping according to table bidi/RTL flow) is a known
+  // future enhancement.
+  for (const side of ['top', 'bottom', 'left', 'right', 'insideH', 'insideV', 'tl2br', 'tr2bl'] as const) {
+    const node = getChildren(el, side)[0]
     if (node) out[side] = parseSideBorder(node)
   }
   return out
@@ -1142,7 +1492,7 @@ function parseBorders(parent: XmlNode): DocxTableBorders {
 /** Border sides merge individually; explicit nil/none clears an inherited side. */
 function mergeBorders(...sources: Array<DocxTableBorders | undefined>): DocxTableBorders {
   const out: DocxTableBorders = {}
-  for (const source of sources) for (const side of ['top', 'bottom', 'left', 'right', 'insideH', 'insideV'] as const) {
+  for (const source of sources) for (const side of ['top', 'bottom', 'left', 'right', 'insideH', 'insideV', 'tl2br', 'tr2bl'] as const) {
     if (!source || !(side in source)) continue
     out[side] = source[side] === undefined ? undefined : { ...out[side], ...source[side] }
   }

@@ -45,10 +45,21 @@ export function readTheme(root: XmlNode | undefined): DocxTheme {
     const latin = attrs(getChildren(font, 'latin')[0]).typeface
     if (latin) {
       theme.fonts.set(`${family}HAnsi`, latin)
+      theme.fonts.set(`${family}Ascii`, latin)
+      theme.fonts.set(family, latin)
       theme.fonts.set(`+${family === 'major' ? 'mj' : 'mn'}-lt`, latin)
     }
     const ea = attrs(getChildren(font, 'ea')[0]).typeface
-    if (ea) theme.fonts.set(`${family}EastAsia`, ea)
+    if (ea) {
+      theme.fonts.set(`${family}EastAsia`, ea)
+      theme.fonts.set(`+${family === 'major' ? 'mj' : 'mn'}-ea`, ea)
+    }
+    const cs = attrs(getChildren(font, 'cs')[0]).typeface
+    if (cs) {
+      theme.fonts.set(`${family}Bidi`, cs)
+      theme.fonts.set(`${family}Cs`, cs)
+      theme.fonts.set(`+${family === 'major' ? 'mj' : 'mn'}-cs`, cs)
+    }
   }
   return theme
 }
@@ -132,8 +143,17 @@ function textCssColor(color: DrawingColor): string {
 export function readRunProperties(rPr: XmlNode | undefined, theme?: DocxTheme, issues?: TextAppearanceIssue[]): Partial<DocxTextRun> {
   const out: Partial<DocxTextRun> = {}
   const fonts = attrs(getChildren(rPr, 'rFonts')[0])
-  const font = fonts.ascii ?? theme?.fonts.get(fonts.asciiTheme)
-  if (font) out.fontFamily = font
+  const asciiFont = fonts.ascii ?? theme?.fonts.get(fonts.asciiTheme)
+  const hAnsiFont = fonts.hAnsi ?? theme?.fonts.get(fonts.hAnsiTheme)
+  const eaFont = fonts.eastAsia ?? theme?.fonts.get(fonts.eastAsiaTheme)
+  const csFont = fonts.cs ?? theme?.fonts.get(fonts.cstheme)
+  const isRtl = getChildren(rPr, 'rtl').length > 0 || getChildren(rPr, 'cs').length > 0
+  const preferred = (isRtl || fonts.hint === 'cs')
+    ? (csFont ?? asciiFont ?? hAnsiFont ?? eaFont)
+    : fonts.hint === 'eastAsia'
+      ? (eaFont ?? asciiFont ?? hAnsiFont ?? csFont)
+      : (asciiFont ?? hAnsiFont ?? eaFont ?? csFont)
+  if (preferred) out.fontFamily = preferred
   const size = Number(attrs(getChildren(rPr, 'sz')[0]).val)
   if (Number.isFinite(size) && size > 0) out.fontSizePt = size / 2
   for (const [element, property] of [
@@ -152,6 +172,10 @@ export function readRunProperties(rPr: XmlNode | undefined, theme?: DocxTheme, i
   }
   const highlight = attrs(getChildren(rPr, 'highlight')[0]).val
   if (highlight) out.highlight = highlight
+  const vertAlign = attrs(getChildren(rPr, 'vertAlign')[0]).val
+  if (vertAlign === 'superscript' || vertAlign === 'subscript') {
+    out.vertAlign = vertAlign
+  }
 
   const textFill = getChildren(rPr, 'textFill')[0]
   if (textFill) {

@@ -7,6 +7,7 @@ import type { ParsedDrawingTextBody } from '../drawing/text-parse'
 import type { ImageSelection, SvgCandidate, SvgVerdict } from '../core/svg'
 import type { DrawingCoverageEntry } from '../drawing/coverage'
 import type { TextWarp } from '../drawing/text'
+import type { EmbeddedFontFace, FontDiagnostic } from '../core/fonts/types'
 
 export interface DocxTextRun {
   text: string
@@ -30,6 +31,18 @@ export interface DocxTextRun {
   textOutline?: { color: string; widthPx: number }
   /** WordArt outer shadow */
   textShadow?: { color: string; blurPx: number; offsetX: number; offsetY: number }
+  /** Footnote reference pointer */
+  footnoteReference?: { id: number }
+  /** Endnote reference pointer */
+  endnoteReference?: { id: number }
+  /** Footnote reference marker glyph inside note content */
+  footnoteRef?: boolean
+  /** Endnote reference marker glyph inside note content */
+  endnoteRef?: boolean
+  /** Comment reference marker pointer */
+  commentReference?: { id: number }
+  /** Vertical alignment (e.g. 'superscript' | 'subscript') */
+  vertAlign?: 'superscript' | 'subscript'
 }
 
 export type ParagraphAlign = 'left' | 'center' | 'right' | 'justify'
@@ -102,6 +115,12 @@ export interface DocxParagraph {
   listLevel?: number
   /** Preset WordArt warp configuration for text routed through this paragraph */
   textWarp?: TextWarp
+  /** Right-to-left BiDi paragraph flag (w:bidi) */
+  bidi?: boolean
+  /** Drop cap paragraph formatting (w:framePr dropCap) */
+  dropCap?: 'drop' | 'margin'
+  /** Suppress automatic hyphenation for this paragraph (w:suppressAutoHyphens) */
+  suppressAutoHyphens?: boolean
   /** Unsupported appearance or warp diagnostics associated with this paragraph */
   diagnostics?: Array<{ kind: 'unsupported-text-alignment' | 'unsupported-text-appearance' | 'unsupported-text-warp'; feature: string; message: string }>
 }
@@ -139,12 +158,40 @@ export interface DocxSection {
   firstFooter?: DocxParagraph[]
 }
 
+export interface DocxNote {
+  id: number
+  type?: 'normal' | 'separator' | 'continuationSeparator' | 'continuationNotice'
+  paragraphs: DocxParagraph[]
+  blocks: DocxBlock[]
+}
+
+export interface DocxComment {
+  id: number
+  author?: string
+  date?: string
+  initials?: string
+  text: string
+  paragraphs: DocxParagraph[]
+}
+
 export interface DocxDocument {
   drawingCoverage?: DrawingCoverageEntry[]
   sections: DocxSection[]
   defaultFontFamily: string
   defaultFontSizePt: number
   styleDefaults: Map<string, { fontFamily?: string; fontSizePt?: number }>
+  embeddedFonts?: EmbeddedFontFace[]
+  fontDiagnostics?: FontDiagnostic[]
+  /** Parsed footnotes from word/footnotes.xml */
+  footnotes?: DocxNote[]
+  /** Parsed endnotes from word/endnotes.xml */
+  endnotes?: DocxNote[]
+  /** Parsed comments from word/comments.xml */
+  comments?: DocxComment[]
+  /** Explicit comment diagnostics */
+  commentDiagnostics?: Array<{ id: number; author?: string; text: string }>
+  /** Document-level automatic hyphenation setting */
+  autoHyphenation?: boolean
 }
 
 export type TableCellBorder = { style?: string; color?: string; widthPt?: number }
@@ -156,6 +203,8 @@ export interface DocxTableBorders {
   right?: TableCellBorder
   insideH?: TableCellBorder
   insideV?: TableCellBorder
+  tl2br?: TableCellBorder
+  tr2bl?: TableCellBorder
 }
 
 export interface DocxTableCellMargins {
