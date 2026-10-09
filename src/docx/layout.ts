@@ -926,7 +926,11 @@ export function renderPages(
   ctx.textBaseline = 'alphabetic'
   ctx.fillStyle = '#000000'
   let lastFont = ''
-  const fontResolver = options?.resolveFont ?? options?.assets?.resolveFont
+  // NOTE: resolved only from RenderPagesOptions.resolveFont. A sibling
+  // embedded-fonts change threads an equivalent hook through
+  // ContentPaintAssets; that type extension is not part of Phase 22, so this
+  // lookup intentionally stays branch-local to keep the Phase 22 tree green.
+  const fontResolver = options?.resolveFont
   const baseFamilyCss = fontResolver ? (family: string) => fontFamilyCss(fontResolver(family)) : fontFamilyCss
   const resolveFamily = withFallbackFonts(baseFamilyCss, options?.assets?.fallbackFonts)
   const measure = createMeasurer(ctx, resolveFamily)
