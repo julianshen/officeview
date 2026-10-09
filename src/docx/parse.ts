@@ -546,7 +546,7 @@ function parseDrawing(
     if (!context?.reserveDrawing || !context.drawingCoverage) return
     context.drawingCoverage.push({ partPath: context.partPath ?? 'word/document.xml', treePath: context.drawingPaths?.get(drawing) ?? `drawing[${context.drawingCoverage.length}]`, element: 'drawing', id: docPr.id, name: docPr.name,
       referenceId, feature, status: status === 'native' && selectedRepresentation === 'fallback' ? 'fallback' : status,
-      selectedRepresentation: !consumed ? 'none' : vector?.drawing ? contentRepresentation(vector.drawing.kind) : status === 'native' ? selectedRepresentation === 'fallback' ? 'raster-fallback' : 'picture' : 'none',
+      selectedRepresentation: !consumed ? 'none' : vector?.drawing ? contentRepresentation(vector.drawing) : status === 'native' ? selectedRepresentation === 'fallback' ? 'raster-fallback' : 'picture' : 'none',
       representation: selectedRepresentation, reason: reason ?? nestedSelection?.reason, scope: 'original', limit, ...(imageSelection ? { imageSelection } : {}) })
   }
   if (!allowed) { audit('unsupported', 'drawing node budget exceeded', undefined, false, DOCUMENT_DRAWING_NODE_LIMIT); return undefined }
@@ -1094,7 +1094,10 @@ export async function parseDocx(pkg: OfficePackage): Promise<DocxDocument> {
         else if (['external-reference', 'unsupported-content', 'content-cycle', 'content-depth', 'group-depth', 'node-budget'].includes(issue.kind)) entry.status = 'unsupported'
         entry.reason = issue.reason ?? issue.message
         entry.limit = issue.limit
-        if (entry.selectedRepresentation !== 'raster-fallback' && !['document-budget', 'source-node-limit'].includes(issue.reason ?? '') && !entry.reason?.includes('cached-picture')) entry.selectedRepresentation = 'none'
+        // A text-only entry already reports rendered fallback text (its reason
+        // names the fallback); resetting it to none would un-report content
+        // the entry proves is retained.
+        if (entry.selectedRepresentation !== 'raster-fallback' && entry.selectedRepresentation !== 'text-only' && !['document-budget', 'source-node-limit'].includes(issue.reason ?? '') && !entry.reason?.includes('cached-picture')) entry.selectedRepresentation = 'none'
       }
     } else drawingCoverage.push({ partPath: issue.partPath, treePath: issue.sourcePath ?? issue.identity ?? issue.partPath, element: issue.kind, id: issue.identity,
       feature: issue.feature ?? issue.kind, status: issue.kind === 'missing-part' || issue.kind === 'malformed-part' ? 'malformed' : 'unsupported',
