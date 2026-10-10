@@ -171,7 +171,12 @@ export async function guardFilter(request: FilterGuardRequest): Promise<GuardOut
       }
     }
   }
+  // Changed rows all lie inside the projection, so a drawing anchored beyond it can
+  // only be moved when some changed row precedes it; otherwise it is untouched and
+  // its (unmeasurable) geometry must not turn an unrelated filter into a refusal.
+  const firstChanged = changedSources.length > 0 ? changedSources[0] : Number.POSITIVE_INFINITY
   for (const drawing of structure.drawingsIn({ r0: 0, r1: MAX_ROWS - 1, c0: 0, c1: MAX_COLS - 1 })) {
+    if (drawing.from.row >= count && firstChanged >= drawing.from.row) continue
     let before: { startY: number; endY: number }
     let after: { startY: number; endY: number }
     try {

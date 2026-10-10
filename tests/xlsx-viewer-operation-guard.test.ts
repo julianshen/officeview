@@ -269,6 +269,35 @@ describe('guardFilter merge/spill and drawing prefix impact', () => {
     const outcome = await guardFilter(filterRequest(band(0, 1, 0, 3), [0], new StructuralIndex(result)))
     expect(outcome).toEqual({ ok: false, refusal: { reason: 'invalid-range', message: expect.any(String) } })
   })
+  it('skips drawings beyond the projection when no changed row precedes them', async () => {
+    const drawing: DrawingAnchor = {
+      id: 'past-end',
+      kind: 'oneCell',
+      from: { row: 5000, col: 0, offsetXEmu: 0, offsetYEmu: 0 },
+      extent: { x: 0, y: 0, width: 1000, height: 1000 },
+      bounds: { r0: 5000, r1: 5005, c0: 0, c1: 2 },
+    }
+    const result: StructuralResult = {
+      stamp: { docId: 'd', sheetId: 's', valueGen: 0 },
+      completeness: 'complete', merges: [], tables: [], spills: [], drawings: [drawing], missing: [],
+    }
+    expect(await guardFilter(filterRequest(band(0, 1, 0, 3), [], new StructuralIndex(result)))).toEqual({ ok: true })
+  })
+  it('refuses a drawing beyond the projection only once a changed row precedes it', async () => {
+    const beyond: DrawingAnchor = {
+      id: 'past-end',
+      kind: 'oneCell',
+      from: { row: 5000, col: 0, offsetXEmu: 0, offsetYEmu: 0 },
+      extent: { x: 0, y: 0, width: 1000, height: 1000 },
+      bounds: { r0: 5000, r1: 5005, c0: 0, c1: 2 },
+    }
+    const base = drawingBelowBand()
+    const result: StructuralResult = { ...base, drawings: [beyond, ...base.drawings] }
+    expect(await guardFilter(filterRequest(band(0, 1, 0, 3), [], new StructuralIndex(result)))).toEqual({ ok: true })
+    expect(await guardFilter(filterRequest(band(5, 10, 0, 3), [8, 9], new StructuralIndex(result)))).toEqual({
+      ok: false, refusal: { reason: 'invalid-range', message: expect.any(String) },
+    })
+  })
   it('tracks changed rows through a band permutation in source order', async () => {
     const reversed = createRowOrder([{ r0: 0, r1: 9, sourceAtOffset: Uint32Array.from([9, 8, 7, 6, 5, 4, 3, 2, 1, 0]) }])
     const result: StructuralResult = {
