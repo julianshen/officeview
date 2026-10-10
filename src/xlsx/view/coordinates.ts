@@ -1,4 +1,5 @@
-/** Full zero-based worksheet domain; spec §3 (CAP-01). */
+/** Full zero-based worksheet domain; spec §3 (CAP-01).
+ * Negative zero is rejected so source identities always use canonical positive zero. */
 export const MAX_ROWS = 1_048_576
 export const MAX_COLS = 16_384
 export const MAX_CELL_ID = 2 ** 34 - 1
@@ -20,8 +21,8 @@ export class CoordinateError extends RangeError {
   }
 }
 export function isValidCoordinate(row: number, col: number): boolean {
-  return Number.isSafeInteger(row) && row >= 0 && row < MAX_ROWS
-    && Number.isSafeInteger(col) && col >= 0 && col < MAX_COLS
+  return Number.isSafeInteger(row) && !Object.is(row, -0) && row >= 0 && row < MAX_ROWS
+    && Number.isSafeInteger(col) && !Object.is(col, -0) && col >= 0 && col < MAX_COLS
 }
 
 export function validateCoordinate(row: number, col: number): void {
@@ -36,8 +37,8 @@ export function cellId(row: SourceRow, col: SourceCol): CellId {
   return row * MAX_COLS + col
 }
 
-export function cellIdToCoordinate(id: CellId): SourceCell {
-  if (!Number.isSafeInteger(id) || id < 0 || id > MAX_CELL_ID) {
+export function cellIdToCoordinate(id: unknown): SourceCell {
+  if (typeof id !== 'number' || !Number.isSafeInteger(id) || Object.is(id, -0) || id < 0 || id > MAX_CELL_ID) {
     throw new CoordinateError('invalid-cell-id', 'Cell ID is outside the worksheet domain')
   }
   return { row: Math.floor(id / MAX_COLS), col: id % MAX_COLS }
@@ -47,8 +48,7 @@ export function cellIdToCoordinate(id: CellId): SourceCell {
  * Sheet names, ranges, whitespace and leading-zero row labels are not cell addresses. */
 export function parseA1(address: string): SourceCell {
   const match = /^\$?([A-Za-z]{1,3})\$?([1-9][0-9]{0,6})$/.exec(address)
-  // JS `$` also matches before a final newline, so require the entire input.
-  if (!match || match[0] !== address) {
+  if (!match) {
     throw new CoordinateError('invalid-a1', 'Invalid A1 cell address')
   }
   const col = lettersToColumn(match[1])
@@ -76,9 +76,9 @@ export function columnToLetters(col: SourceCol): string {
   return letters
 }
 
-/** Column-only labels accept lowercase, but not `$` markers (spec §3). */
+/** Column-only labels accept lowercase, but not `$` markers. */
 export function lettersToColumn(letters: string): SourceCol {
-  if (!/^[A-Za-z]{1,3}$/.test(letters) || /[^A-Za-z]/.test(letters)) {
+  if (!/^[A-Za-z]{1,3}$/.test(letters)) {
     throw new CoordinateError('invalid-a1', 'Invalid A1 column letters')
   }
   let ordinal = 0
@@ -91,18 +91,23 @@ export function lettersToColumn(letters: string): SourceCol {
   return ordinal - 1
 }
 
-export function isValidSourceRect(rect: SourceRect): boolean {
-  return isValidCoordinate(rect.r0, rect.c0) && isValidCoordinate(rect.r1, rect.c1)
-    && rect.r0 <= rect.r1 && rect.c0 <= rect.c1
+/** Predicates return false for malformed inputs; validators throw CoordinateError. */
+export function isValidSourceRect(rect: unknown): rect is SourceRect {
+  if (typeof rect !== 'object' || rect === null) return false
+  const candidate = rect as Partial<SourceRect>
+  if (typeof candidate.r0 !== 'number' || typeof candidate.r1 !== 'number'
+    || typeof candidate.c0 !== 'number' || typeof candidate.c1 !== 'number') return false
+  return isValidCoordinate(candidate.r0, candidate.c0) && isValidCoordinate(candidate.r1, candidate.c1)
+    && candidate.r0 <= candidate.r1 && candidate.c0 <= candidate.c1
 }
 
-export function validateSourceRect(rect: SourceRect): void {
+export function validateSourceRect(rect: unknown): asserts rect is SourceRect {
   if (!isValidSourceRect(rect)) {
     throw new CoordinateError('invalid-source-rect', 'Invalid inclusive source rectangle')
   }
 }
 
-export function sourceRectCellCount(rect: SourceRect): number {
+export function sourceRectCellCount(rect: unknown): number {
   validateSourceRect(rect)
   return (rect.r1 - rect.r0 + 1) * (rect.c1 - rect.c0 + 1)
 }

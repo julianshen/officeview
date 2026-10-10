@@ -1,4 +1,5 @@
 import { describe, expect, expectTypeOf, it } from 'vitest'
+import * as contractConstants from '../src/xlsx/view/contracts'
 import {
   MAX_ROWS, MAX_COLS, MAX_CELL_ID, CoordinateError,
   validateCoordinate, isValidCoordinate, cellId, cellIdToCoordinate,
@@ -13,7 +14,8 @@ import type {
   CompactSourceRowSet, WorkerCommand, WorkerReply, CacheIdentity, WorkbookOwner,
   ValuePolicy, OperationRefusal, SourceErrorCode, ReadOptions, SourceRowInterval,
   RowOrder, RowPermutationBand, RowVisibility, AxisMetrics, SheetMetrics, ScrollWindow,
-  StructuralResult, SheetView, WorkerResult,
+  StructuralResult, SheetView, WorkerResult, SourceFailure, AuthoritativeCell, SparseRowPage,
+  ColumnEntry, ViewCommitDelta, PagedKeySetRef, WorkerReplyBase,
 } from '../src/xlsx/view/contracts'
 
 function expectCode(action: () => unknown, code: CoordinateError['code']) {
@@ -132,6 +134,41 @@ describe('coordinate contracts (spec §3, AC-CAP-01)', () => {
     expect(isValidSourceRect(rect)).toBe(false)
   })
 
+  it('rejects negative zero rather than publishing a signed-zero identity', () => {
+    expect(Object.is(-0, 0)).toBe(false)
+    expect(isValidCoordinate(-0, 0)).toBe(false)
+    expect(isValidCoordinate(0, -0)).toBe(false)
+    expectCode(() => validateCoordinate(-0, -0), 'invalid-coordinate')
+    expectCode(() => cellId(-0, 0), 'invalid-coordinate')
+    expectCode(() => cellIdToCoordinate(-0), 'invalid-cell-id')
+    expect(Object.is(cellIdToCoordinate(0).row, -0)).toBe(false)
+    expect(Object.is(cellIdToCoordinate(0).col, -0)).toBe(false)
+  })
+
+  it.each(['A\n', 'A1\n', 'XFD\n', 'A\t'])(
+    'rejects trailing whitespace without multiline regex guards: %j', (text) => {
+      expect(/^[A-Za-z]{1,3}$/.exec(text)).toBeNull()
+      expect(/^\$?([A-Za-z]{1,3})\$?([1-9][0-9]{0,6})$/.exec(text)).toBeNull()
+      expectCode(() => parseA1(text), 'invalid-a1')
+      expectCode(() => lettersToColumn(text), 'invalid-a1')
+    },
+  )
+
+  it.each([undefined, null, '1', {}, [], Symbol('coordinate'), 1n])(
+    'rejects non-number IDs with the existing typed error: %s', (input) => {
+      // The cast exercises calls from untyped consumers at the API boundary.
+      expectCode(() => cellIdToCoordinate(input as number), 'invalid-cell-id')
+    },
+  )
+  it.each([undefined, null, 'A1', 1, [], Symbol('rectangle')])(
+    'returns false for non-rectangles and validates them with a typed error: %s', (input) => {
+      const rect = input as unknown as Parameters<typeof validateSourceRect>[0]
+      expect(isValidSourceRect(rect)).toBe(false)
+      expectCode(() => validateSourceRect(rect), 'invalid-source-rect')
+      expectCode(() => sourceRectCellCount(rect), 'invalid-source-rect')
+    },
+  )
+
   it.todo('S0.2 full-extent sparse provider: expect(await source.readCell({ row: 1_048_575, col: 16_383 }, readOptions)).toMatchObject({ kind: \'cell\' })')
 })
 
@@ -141,6 +178,7 @@ describe('type contract freeze (spec §§4–5, 10)', () => {
   // Only a compile-time fake; adapter behavior and the edge-cell fixture belong to S0.2/S1.
   const source = {
     stamp,
+    valuePolicy: 'engine',
     extent: { rows: 1_048_576, cols: 16_384, used: { r0: 0, r1: 0, c0: 0, c1: 0 } },
     async readCell() { return { kind: 'unknown', pageId: 'page-1' } as const },
     async readRows() { return emptyPage() },
@@ -258,15 +296,192 @@ describe('type contract freeze (spec §§4–5, 10)', () => {
 
   it('requires generation-complete owners on completed sheet and workbook publications', () => {
     type DocumentOnlySheetReply = {
-      kind: 'complete'; requestId: string; owner: { docId: string }; diagnostics: []
+      kind: 'complete'; commandKind: 'viewport'; requestId: string; owner: { docId: string }; diagnostics: []
       result: Extract<WorkerResult, { kind: 'viewport' }>
     }
     type LocalOnlySearchReply = {
-      kind: 'complete'; requestId: string; owner: CacheIdentity; diagnostics: []
+      kind: 'complete'; commandKind: 'search'; requestId: string; owner: CacheIdentity; diagnostics: []
       result: Extract<WorkerResult, { kind: 'search' }>
     }
     expectTypeOf<DocumentOnlySheetReply extends WorkerReply ? true : false>().toEqualTypeOf<false>()
     expectTypeOf<LocalOnlySearchReply extends WorkerReply ? true : false>().toEqualTypeOf<false>()
+  })
+
+  it('carries typed failures and independently unloaded overview groups in every source page', () => {
+    const failure = { code: 'quota', retryable: true, message: 'Storage full' } satisfies SourceFailure
+    const groups = [
+      { groupId: 'known', content: 'blank', populatedCount: 0, countKind: 'exact', style: { kind: 'uniform', styleIndex: 0 } },
+      { groupId: 'pending', content: 'unknown', pageId: 'page-2' },
+    ] satisfies OverviewGroup[]
+    const page = { items: groups, completeness: 'incomplete', stamp, error: failure } satisfies Page<OverviewGroup>
+    function summarize(group: OverviewGroup): string {
+      switch (group.content) {
+        case 'unknown': return `loading:${group.pageId}`
+        case 'blank': return 'blank'
+        case 'populated': return `populated:${group.populatedCount}`
+        case 'mixed': return 'mixed'
+        default: { const exhaustive: never = group; return exhaustive }
+      }
+    }
+    expect(page.items.map(summarize)).toEqual(['blank', 'loading:page-2'])
+    expect(page.error.code).toBe('quota')
+    // Unknown aggregates must not invent counts/styles before their page loads.
+    expectTypeOf<Extract<OverviewGroup, { content: 'unknown' }>>().toEqualTypeOf<{
+      groupId: string; content: 'unknown'; pageId: string
+    }>()
+    const failures = [
+      { items: [], completeness: 'incomplete', stamp, error: failure } satisfies Page<SparseRowPage>,
+      { items: [], completeness: 'incomplete', stamp, error: failure } satisfies Page<ColumnEntry>,
+      { items: [], completeness: 'incomplete', stamp, error: failure } satisfies Page<AuthoritativeCell>,
+    ]
+    expect(failures.every(result => result.error === failure)).toBe(true)
+  })
+
+  it('keeps availability explicit in sparse rows/scans and fixes document value policy', () => {
+    const engineCell = { id: 0, row: 0, col: 0, value: 2, formula: '1+1', hasCachedValue: false, styleIndex: 0 } satisfies AuthoritativeCell
+    const cachedCell = { ...engineCell, value: null, unavailable: true, valueProvenance: 'cached' } satisfies AuthoritativeCell
+    const row = { row: 0, cells: [engineCell, cachedCell] } satisfies SparseRowPage
+    const scan = { items: [cachedCell], completeness: 'complete', stamp } satisfies Page<AuthoritativeCell>
+    expect(row.cells.map(cell => 'unavailable' in cell ? cell.unavailable : undefined)).toEqual([undefined, true])
+    expect(scan.items[0].unavailable).toBe(true)
+    expect(source.valuePolicy).toBe('engine')
+    expectTypeOf<SourceStore['valuePolicy']>().toEqualTypeOf<ValuePolicy>()
+    expectTypeOf<AuthoritativeCell['unavailable']>().toEqualTypeOf<true | undefined>()
+    expectTypeOf<Extract<keyof AuthoritativeCell, 'style'>>().toEqualTypeOf<never>()
+    expectTypeOf<Extract<keyof SparseRowPage, 'range' | 'limit' | 'cursor'>>().toEqualTypeOf<never>()
+  })
+
+  it('pins source error codes at runtime and treats source code and reply kind as orthogonal', () => {
+    const codes = [
+      'invalid-coordinate', 'invalid-source-rect', 'invalid-cursor', 'stale-source',
+      'cancelled', 'incomplete', 'quota', 'resource-limit', 'unsupported',
+      'parse-error', 'storage-error', 'page-error',
+    ] satisfies SourceErrorCode[]
+    expect(Reflect.get(contractConstants, 'SOURCE_ERROR_CODES')).toEqual(codes)
+    function classify(code: SourceErrorCode): string {
+      switch (code) {
+        case 'invalid-coordinate': case 'invalid-source-rect': case 'invalid-cursor': case 'stale-source':
+        case 'cancelled': case 'incomplete': case 'quota': case 'resource-limit': case 'unsupported':
+        case 'parse-error': case 'storage-error': case 'page-error': return code
+        default: { const exhaustive: never = code; return exhaustive }
+      }
+    }
+    expect(codes.map(classify)).toEqual(codes)
+    const owner = { ...stamp, fontGen: 0, viewGen: 0 }
+    const reply = { commandKind: 'viewport', kind: 'error', requestId: 'r1', owner, diagnostics: [], code: 'quota', retryable: true } satisfies WorkerReply
+    expect(reply.kind).toBe('error')
+    expect(reply.code).toBe('quota')
+    expectTypeOf<Extract<CompactSourceRowSet, { kind: 'ref' }>['stamp']>().toEqualTypeOf<PagedKeySetRef['owner']>()
+  })
+
+  it('includes absolute sheet zoom and DPR in viewport ownership and progressive detail/coarse replies', () => {
+    expect(Reflect.get(contractConstants, 'SHEET_MIN_ZOOM')).toBe(0.25)
+    expect(Reflect.get(contractConstants, 'SHEET_MAX_ZOOM')).toBe(4)
+    const bounds = { x: 0, y: 0, width: 40, height: 20 }
+    const results = [
+      { kind: 'viewport', completeness: 'loading', content: { kind: 'detail', cells: [{ source: { row: 0, col: 0 }, bounds, kind: 'unknown', pageId: 'p1' }] } },
+      { kind: 'viewport', completeness: 'loading', content: { kind: 'overview', groups: [{ groupId: 'g1', bounds, content: 'unknown', pageId: 'p2' }] } },
+      { kind: 'viewport', completeness: 'loading', content: { kind: 'unknown', pageId: 'p3' } },
+      { kind: 'viewport', completeness: 'incomplete', content: { kind: 'unknown', pageId: 'p4' }, error: { code: 'page-error', retryable: true, message: 'Unavailable page' } },
+    ] satisfies Extract<WorkerResult, { kind: 'viewport' }>[]
+    function mode(result: Extract<WorkerResult, { kind: 'viewport' }>): string {
+      const content = result.content
+      switch (content.kind) {
+        case 'detail': return content.cells[0].kind
+        case 'overview': return content.groups[0].content
+        case 'unknown': return content.kind
+        default: { const exhaustive: never = content; return exhaustive }
+      }
+    }
+    expect(results.map(mode)).toEqual(['unknown', 'unknown', 'unknown', 'unknown'])
+    const command = { kind: 'viewport', requestId: 'r1', owner: { ...stamp, viewGen: 0, fontGen: 0 }, window: { box: bounds, zoom: 0.25, deviceScale: 2 } } satisfies WorkerCommand
+    expect(command.window.zoom * command.window.deviceScale).toBe(0.5)
+  })
+
+  it('correlates progress/failure/refusal ownership with the command kind', () => {
+    type BadProgress = { kind: 'progress'; commandKind: 'sort'; requestId: string; diagnostics: []; owner: { docId: string }; completed: number }
+    type BadSearchFailure = { kind: 'error'; commandKind: 'search'; requestId: string; diagnostics: []; owner: CacheIdentity; code: 'page-error'; retryable: true }
+    type BadResultKind = { kind: 'complete'; commandKind: 'sort'; requestId: string; diagnostics: []; owner: CacheIdentity; result: Extract<WorkerResult, { kind: 'search' }> }
+    expectTypeOf<BadProgress extends WorkerReply ? true : false>().toEqualTypeOf<false>()
+    expectTypeOf<BadSearchFailure extends WorkerReply ? true : false>().toEqualTypeOf<false>()
+    expectTypeOf<BadResultKind extends WorkerReply ? true : false>().toEqualTypeOf<false>()
+    type WorkbookOwnedSort = Omit<BadProgress, 'owner'> & { owner: WorkbookOwner }
+    expectTypeOf<WorkbookOwnedSort extends WorkerReplyBase<'sort' | 'search'> ? true : false>().toEqualTypeOf<false>()
+    const owner = { ...stamp, viewGen: 0, fontGen: 0 }
+    const refusal = { reason: 'merge', range: { r0: 0, r1: 1, c0: 0, c1: 1 } } satisfies OperationRefusal
+    const reply = { kind: 'error', commandKind: 'sort', requestId: 'r1', owner, diagnostics: [], code: 'operation-refused', retryable: false, refusal } satisfies WorkerReply
+    expect(reply.owner).toEqual(owner)
+    expect(reply.refusal).toEqual(refusal)
+    expect('missing' in reply).toBe(false)
+    type BogusRefusal = Omit<typeof reply, 'code'> & { code: 'page-error' }
+    expectTypeOf<BogusRefusal extends WorkerReply ? true : false>().toEqualTypeOf<false>()
+  })
+
+  it('pins ascending absolute lists and LSB-first bounded masks to the same exact members', () => {
+    type EncodedRows = Exclude<CompactSourceRowSet, { kind: 'ref' }>
+    function decode(set: EncodedRows): number[] {
+      switch (set.kind) {
+        case 'intervals': {
+          const rows: number[] = []
+          let previousEnd = -1
+          for (const interval of set.intervals) {
+            expect(interval.r0).toBeGreaterThan(previousEnd)
+            expect(interval.r1).toBeGreaterThanOrEqual(interval.r0)
+            for (let row = interval.r0; row <= interval.r1; row++) rows.push(row)
+            previousEnd = interval.r1
+          }
+          return rows
+        }
+        case 'list': {
+          const rows = Array.from(set.rows)
+          rows.forEach((row, index) => {
+            expect(row).toBeGreaterThanOrEqual(set.r0)
+            expect(row).toBeLessThanOrEqual(set.r1)
+            if (index > 0) expect(row).toBeGreaterThan(rows[index - 1])
+          })
+          return rows
+        }
+        case 'bitset': {
+          const length = set.r1 - set.r0 + 1
+          expect(set.words.length).toBe(Math.ceil(length / 32))
+          const rows: number[] = []
+          for (let i = 0; i < set.words.length * 32; i++) {
+            // Bitwise operations encode one mask word, never a cell identity.
+            const bit = (set.words[Math.floor(i / 32)] >>> (i % 32)) & 1
+            if (i >= length) expect(bit).toBe(0)
+            else if (bit) rows.push(set.r0 + i)
+          }
+          expect(rows.length).toBe(set.count)
+          return rows
+        }
+        default: { const exhaustive: never = set; return exhaustive }
+      }
+    }
+    for (const rows of [[1, 3], [0, 1, 3], [100, 101, 131, 132, 133]]) {
+      const r0 = rows[0], r1 = rows[rows.length - 1]
+      const words = rows.length === 5 ? new Uint32Array([0x80000003, 3]) : new Uint32Array([rows[0] === 0 ? 11 : 5])
+      const list = { kind: 'list', r0, r1, rows: new Uint32Array(rows) } satisfies CompactSourceRowSet
+      const bitset = { kind: 'bitset', r0, r1, words, count: rows.length } satisfies CompactSourceRowSet
+      expect(decode(list)).toEqual(decode(bitset))
+      expect(decode(bitset)).toEqual(rows)
+      expect(decode(bitset)).not.toContain(2)
+      const visibility = [bitset] satisfies ViewCommitDelta['visibility']
+      expect(visibility[0].count).toBe(rows.length)
+    }
+    const intervals = { kind: 'intervals', intervals: [{ r0: 0, r1: 1 }, { r0: 3, r1: 3 }] } satisfies CompactSourceRowSet
+    expect(decode(intervals)).toEqual([0, 1, 3])
+    expectTypeOf<ViewCommitDelta['visibility'][number]>().toEqualTypeOf<Extract<CompactSourceRowSet, { kind: 'bitset' }>>()
+  })
+
+  it('pins forward absolute source rows and inverse band-relative display offsets', () => {
+    for (const r0 of [0, 10]) {
+      const band = { r0, r1: r0 + 3, sourceAtOffset: new Uint32Array([r0, r0 + 3, r0 + 1, r0 + 2]), displayOffsetOfSource: new Uint32Array([0, 2, 3, 1]) } satisfies RowPermutationBand
+      band.sourceAtOffset.forEach((sourceRow, displayOffset) => {
+        expect(band.displayOffsetOfSource[sourceRow - band.r0]).toBe(displayOffset)
+      })
+      expect(Array.from(band.sourceAtOffset.slice(1, 3)).map(row => row - r0).sort()).toEqual([1, 3])
+      expect(Array.from(band.sourceAtOffset.slice(0, 3)).map(row => row - r0).sort()).toEqual([0, 1, 3])
+    }
   })
 
   it('provides DTO v1 command/reply examples with complete generation owners', () => {
@@ -281,13 +496,13 @@ describe('type contract freeze (spec §§4–5, 10)', () => {
       { kind: 'prepareColumns', requestId: 'r2', owner, cols: new Uint16Array([16_383]) },
       { kind: 'sort', requestId: 'r3', owner, spec: null },
       { kind: 'filter', requestId: 'r4', owner, spec: null, nowMs: 0 },
-      { kind: 'viewport', requestId: 'r5', owner, window: { x: 0, y: 0, width: 800, height: 600 } },
+      { kind: 'viewport', requestId: 'r5', owner, window: { box: { x: 0, y: 0, width: 800, height: 600 }, zoom: 0.25, deviceScale: 2 } },
       { kind: 'valueQuery', requestId: 'r6', owner, query: { col: 0, rows: { kind: 'intervals', intervals: [{ r0: 0, r1: 10 }] }, limit: 200 } },
       { kind: 'search', requestId: 'r7', owner: workbook, query: { text: 'value', caseSensitive: false } },
       { kind: 'cancel', requestId: 'r8', targetRequestId: 'r7' },
       { kind: 'close', requestId: 'r9', docId: stamp.docId },
     ] satisfies WorkerCommand[]
-    const base = { requestId: 'r3', owner, diagnostics: [] }
+    const base = { commandKind: 'sort' as const, requestId: 'r3', owner, diagnostics: [] }
     const replies = [
       { ...base, kind: 'progress', completed: 5, total: 10 },
       { ...base, kind: 'complete', result: { kind: 'view', delta: {
