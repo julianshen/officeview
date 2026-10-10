@@ -1,12 +1,19 @@
 import type { AxisMetrics, AxisRun, AxisSizeInterval, AxisWindow, RowOrder, RowVisibility, SheetMetrics } from './contracts'
 import { MAX_COLS, MAX_ROWS, validateCoordinate, type SourceCell, type SourceRow, type DisplaySlot } from './coordinates'
+import { AxisMetricsError } from './axes'
 import { createIdentityOrder } from './order'
 import type { VisibleRank } from './visibility'
 export type { VisibleRank } from './visibility'
 
 /** rows are immutable SOURCE-space dimensions; visibility is DISPLAY-space. */
 export interface ProjectionOptions { rows: AxisMetrics; cols: AxisMetrics; order?: RowOrder; visibility?: RowVisibility }
-export interface ProjectedRows extends AxisMetrics { continueVisibleBetween(startCss: number, endCss: number, cursor: string): AxisWindow }
+export interface ProjectedRows extends AxisMetrics {
+  /** First bounded page of [startCss,endCss) (at most 256 visited runs); `count` is this
+   * page's rows and `nextCursor` resumes via continueVisibleBetween. `visibleBetween`
+   * itself is the complete lazy window. */
+  visiblePageBetween(startCss: number, endCss: number): AxisWindow
+  continueVisibleBetween(startCss: number, endCss: number, cursor: string): AxisWindow
+}
 export interface ProjectedSheetMetrics extends SheetMetrics {
   rows: ProjectedRows
   visibleRankToDisplay(ordinal: VisibleRank): DisplaySlot | null
@@ -61,7 +68,7 @@ function floatSpacingAt(value: number): number {
 }
 function validateCellPrecision(origin: number, end: number, height: number): void {
   if (height < floatSpacingAt(origin) || origin + height <= origin || end <= origin) {
-    throw new RangeError('Projected geometry exceeds Float64 cell precision and cannot be represented')
+    throw new AxisMetricsError('PRECISION_EXCEEDED', 'Projected geometry exceeds Float64 cell precision and cannot be represented')
   }
 }
 function sourceSegments(axis: AxisMetrics, maximum: number): SourceSegment[] {
@@ -187,7 +194,7 @@ export function createSheetMetrics(options: ProjectionOptions): ProjectedSheetMe
     }
     total += section.total
     visibleCount += section.count
-    finite(total)
+    if (!Number.isFinite(total)) throw new AxisMetricsError('TOTAL_NOT_FINITE', 'Projected axis total must be finite')
     if (section.count) {
       if (section.prefix) {
         // A locally valid prefix may alias after another section's global origin
@@ -288,33 +295,17 @@ export function createSheetMetrics(options: ProjectionOptions): ProjectedSheetMe
     }
     return low - 1
   }
-  function windowBetween(startCss: number, endCss: number, cursor?: string): AxisWindow {
-    finite(startCss)
-    finite(endCss)
-    if (endCss < startCss) throw new RangeError('Projection window is reversed')
+  /** One bounded page of at most WINDOW_WORK_LIMIT visited runs starting at visible rank
+   * `ordinal`; `next` is the rank to resume from, or -1 when the window is exhausted. */
+  function pageFrom(upper: number, ordinal: VisibleRank): { runs: AxisRun[]; count: number; next: VisibleRank } {
     lastWindowVisitedSlots = 0
-    const lower = Math.max(0, startCss), upper = Math.min(total, endCss)
-    const initialSlot = lower < upper ? locate(lower) : null
-    const initial = initialSlot === null ? visibleCount : displayToVisibleRank(initialSlot)!
-    let ordinal = initial
-    if (cursor !== undefined) {
-      const parts = cursor.split(':')
-      const next = Number(parts[4])
-      if (parts.length !== 5 || parts[0] !== 'projection' || parts[1] !== String(projectionId)
-        || parts[2] !== String(startCss) || parts[3] !== String(endCss)
-        || !Number.isSafeInteger(next) || parts[4] !== String(next) || next <= initial || next >= visibleCount
-        || rowStart(visibleRankToDisplay(next)!) >= upper) {
-        throw new RangeError('Projection cursor does not belong to this window')
-      }
-      ordinal = next
-    }
     const runs: AxisRun[] = []
     let count = 0
     while (ordinal < visibleCount && lastWindowVisitedSlots < WINDOW_WORK_LIMIT) {
       const start = visibleRankToDisplay(ordinal)!
       const section = sectionOf(start)
       const startCss = sectionStart(section, start)
-      if (startCss >= upper) break
+      if (startCss >= upper) { ordinal = visibleCount; break }
       lastWindowVisitedSlots++
       let end = start
       const sizeCss = sectionSize(section, start)
@@ -338,9 +329,73 @@ export function createSheetMetrics(options: ProjectionOptions): ProjectedSheetMe
       ordinal += length
     }
     const nextSlot = ordinal < visibleCount ? visibleRankToDisplay(ordinal) : null
-    const nextCursor = nextSlot !== null && rowStart(nextSlot) < upper
-      ? `projection:${projectionId}:${startCss}:${endCss}:${ordinal}` : undefined
-    return { runs, count, ...(nextCursor === undefined ? {} : { nextCursor }) }
+    return { runs, count, next: nextSlot !== null && rowStart(nextSlot) < upper ? ordinal : -1 }
+  }
+
+  function bounds(startCss: number, endCss: number): { lower: number; upper: number; initial: VisibleRank } {
+    finite(startCss)
+    finite(endCss)
+    if (endCss < startCss) throw new RangeError('Projection window is reversed')
+    const lower = Math.max(0, startCss), upper = Math.min(total, endCss)
+    const initialSlot = lower < upper ? locate(lower) : null
+    return { lower, upper, initial: initialSlot === null ? visibleCount : displayToVisibleRank(initialSlot)! }
+  }
+
+  /** Visible rows covered by [lower,upper) as a rank difference: O(log n), no row visits. */
+  function coveredCount(upper: number, initial: VisibleRank): number {
+    if (initial >= visibleCount) return 0
+    if (upper >= total) return visibleCount - initial
+    const slot = locate(upper)!
+    const rank = displayToVisibleRank(slot)!
+    return (rowStart(slot) === upper ? rank : rank + 1) - initial
+  }
+
+  function boundedPage(startCss: number, endCss: number, cursor?: string): AxisWindow {
+    const { upper, initial } = bounds(startCss, endCss)
+    let ordinal = initial
+    if (cursor !== undefined) {
+      const parts = cursor.split(':')
+      const next = Number(parts[4])
+      if (parts.length !== 5 || parts[0] !== 'projection' || parts[1] !== String(projectionId)
+        || parts[2] !== String(startCss) || parts[3] !== String(endCss)
+        || !Number.isSafeInteger(next) || parts[4] !== String(next) || next <= initial || next >= visibleCount
+        || rowStart(visibleRankToDisplay(next)!) >= upper) {
+        throw new RangeError('Projection cursor does not belong to this window')
+      }
+      ordinal = next
+    }
+    const page = pageFrom(upper, ordinal)
+    return { runs: page.runs, count: page.count,
+      ...(page.next < 0 ? {} : { nextCursor: `projection:${projectionId}:${startCss}:${endCss}:${page.next}` }) }
+  }
+
+  /** Complete, lazy window: `runs` is re-iterable and pages internally (at most one
+   * bounded page resident) until [startCss,endCss) is exhausted; adjacent equal runs
+   * that straddle a page boundary are coalesced. `count` is the total covered rows and
+   * `nextCursor` is never set. */
+  function windowBetween(startCss: number, endCss: number): AxisWindow {
+    const { upper, initial } = bounds(startCss, endCss)
+    return {
+      runs: {
+        *[Symbol.iterator](): Iterator<AxisRun> {
+          let ordinal = initial
+          let pending: AxisRun | undefined
+          while (ordinal >= 0) {
+            const page = pageFrom(upper, ordinal)
+            for (const run of page.runs) {
+              if (pending && pending.end + 1 === run.start && pending.sizeCss === run.sizeCss) pending.end = run.end
+              else {
+                if (pending) yield pending
+                pending = { ...run }
+              }
+            }
+            ordinal = page.next
+          }
+          if (pending) yield pending
+        },
+      },
+      count: coveredCount(upper, initial),
+    }
   }
 
   // Display overrides can be as fragmented as a sorted band or visibility mask.
@@ -429,8 +484,9 @@ export function createSheetMetrics(options: ProjectionOptions): ProjectedSheetMe
   })
   const rows: ProjectedRows = Object.freeze({ logicalCount, defaultSizeCss, overrides,
     totalCss: () => total, start: rowStart, size: rowSize, locate,
-    visibleBetween: (startCss: number, endCss: number) => windowBetween(startCss, endCss),
-    continueVisibleBetween: (startCss: number, endCss: number, cursor: string) => windowBetween(startCss, endCss, cursor),
+    visibleBetween: windowBetween,
+    visiblePageBetween: (startCss: number, endCss: number) => boundedPage(startCss, endCss),
+    continueVisibleBetween: (startCss: number, endCss: number, cursor: string) => boundedPage(startCss, endCss, cursor),
   })
   return Object.freeze({ rows, cols: options.cols, order,
     sourceCellToLogical(at: SourceCell) {

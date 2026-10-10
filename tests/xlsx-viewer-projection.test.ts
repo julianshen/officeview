@@ -1,10 +1,10 @@
 import { describe, expect, it } from 'vitest'
-import { createAxisMetrics } from '../src/xlsx/view/axes'
+import { AxisMetricsError, createAxisMetrics } from '../src/xlsx/view/axes'
 import { createSheetMetrics } from '../src/xlsx/view/projection'
 import { MAX_ROWS, MAX_COLS } from '../src/xlsx/view/coordinates'
 import { createIdentityOrder, createRowOrder, pinRowPermutation } from '../src/xlsx/view/order'
 import { CompactRowVisibility, createRowVisibility, createIntervalSet, visibilityFromHidden, isVisibleSource, normalizeFilter, projectVisibility } from '../src/xlsx/view/visibility'
-import type { FilterSpec } from '../src/xlsx/view/contracts'
+import type { AxisMetrics, FilterSpec, SheetMetrics } from '../src/xlsx/view/contracts'
 
 function shuffled(length: number, seed: number): Uint32Array {
   const rows = Uint32Array.from({ length }, (_, i) => i)
@@ -306,7 +306,7 @@ describe('projection precision, cursor and allocation regressions', () => {
     const cols = createAxisMetrics({ logicalCount: 1, defaultSizeCss: 64 })
     const sheet = createSheetMetrics({ rows, cols, visibility: createRowVisibility(900, slot => slot % 2 === 0) })
     const visited: number[] = []
-    let page = sheet.rows.visibleBetween(0, 450)
+    let page = sheet.rows.visiblePageBetween(0, 450)
     const cursor = page.nextCursor!
     expect(cursor).toBeDefined()
     for (;;) {
@@ -331,7 +331,7 @@ describe('projection precision, cursor and allocation regressions', () => {
     const before = sheet.diagnostics.typedArrayBytes + order.diagnostics.typedArrayBytes + maskBytes
     expect(sheet.diagnostics.densePrefixBytes).toBe((MAX_ROWS + 1) * 8)
     expect(before).toBeLessThan(30 * 1024 * 1024)
-    const page = sheet.rows.visibleBetween(0, sheet.rows.totalCss())
+    const page = sheet.rows.visiblePageBetween(0, sheet.rows.totalCss())
     expect(page.count).toBe(256)
     expect(page.nextCursor).toBeDefined()
     expect(sheet.diagnostics.lastWindowVisitedSlots).toBe(256)
@@ -349,4 +349,82 @@ it('keeps lazy display override arrays enumerable and serializable like the froz
   expect(Object.keys(sheet.rows.overrides)).toEqual(['0'])
   expect(JSON.parse(JSON.stringify(sheet.rows.overrides))).toEqual([{ start: 1, end: 1, sizeCss: 48 }])
   expect(() => { (sheet.rows.overrides as { start: number; end: number; sizeCss: number }[])[0] = { start: 0, end: 1, sizeCss: 1 } }).toThrow()
+})
+
+describe('contract-typed lazy projected windows (review item 1)', () => {
+  it('a SheetMetrics consumer sees all 450 runs of 1,000 alternating hidden/visible display rows', () => {
+    const sheet: SheetMetrics = createSheetMetrics({ rows: createAxisMetrics({ logicalCount: 1000, defaultSizeCss: 1 }),
+      cols: createAxisMetrics({ logicalCount: 1, defaultSizeCss: 64 }), visibility: createRowVisibility(1000, slot => slot % 2 === 0) })
+    const window = sheet.rows.visibleBetween(0, 450)
+    const rows: number[] = []
+    for (const run of window.runs) for (let row = run.start; row <= run.end; row++) rows.push(row)
+    expect(rows).toEqual(Array.from({ length: 450 }, (_, i) => i * 2))
+    expect(window.count).toBe(450)
+    expect(window.nextCursor).toBeUndefined()
+  })
+  it('iterates a 1M-row dense variable band completely, exactly once, and twice', () => {
+    const half = MAX_ROWS / 2
+    const values = Uint32Array.from({ length: MAX_ROWS }, (_, slot) => slot % 2 ? slot / 2 - 0.5 : half + slot / 2)
+    const order = createRowOrder([{ r0: 0, r1: MAX_ROWS - 1, sourceAtOffset: values }])
+    const concrete = createSheetMetrics({ rows: createAxisMetrics({ logicalCount: MAX_ROWS, defaultSizeCss: 24, overrides: [{ start: half, end: MAX_ROWS - 1, sizeCss: 48 }] }),
+      cols: createAxisMetrics({ logicalCount: 1, defaultSizeCss: 64 }), order })
+    const sheet: SheetMetrics = concrete
+    const window = sheet.rows.visibleBetween(0, sheet.rows.totalCss())
+    expect(window.count).toBe(MAX_ROWS)
+    for (let pass = 0; pass < 2; pass++) {
+      let next = 0, css = 0, exact = true, peak = 0
+      for (const run of window.runs) {
+        if (run.start !== next || run.startCss !== css) exact = false
+        css += (run.end - run.start + 1) * run.sizeCss
+        next = run.end + 1
+        peak = Math.max(peak, concrete.diagnostics.lastWindowVisitedSlots)
+      }
+      expect(exact).toBe(true)
+      expect(next).toBe(MAX_ROWS)
+      expect(css).toBe(sheet.rows.totalCss())
+      expect(peak).toBeLessThanOrEqual(256)
+    }
+  }, 60_000)
+  it('reports count equal to covered rows for randomized masked, reordered windows', () => {
+    for (let seed = 1; seed <= 15; seed++) {
+      const count = 83
+      const heights = Array.from({ length: count }, (_, source) => [0, 0.5, 1, 3][(source * 7 + seed) % 4])
+      const order = createRowOrder([{ r0: 5, r1: 70, sourceAtOffset: Uint32Array.from(shuffled(66, seed), row => row + 5) }])
+      const sheet = createSheetMetrics({ rows: createAxisMetrics({ logicalCount: count, defaultSizeCss: 1, overrides: heights.map((height, row) => ({ start: row, end: row, sizeCss: height })) }),
+        cols: createAxisMetrics({ logicalCount: 1, defaultSizeCss: 64 }), order, visibility: createRowVisibility(count, slot => (slot * 5 + seed) % 9 > 1) })
+      for (let query = 0; query < 25; query++) {
+        const lower = ((query * 37 + seed * 11) % 140) / 2 - 2, upper = lower + ((query * 53 + seed) % 60) / 2
+        const rows: number[] = []
+        for (const run of sheet.rows.visibleBetween(lower, upper).runs) for (let row = run.start; row <= run.end; row++) rows.push(row)
+        const expected = Array.from({ length: count }, (_, slot) => slot).filter(slot => {
+          const size = sheet.rows.size(slot), start = sheet.rows.start(slot)
+          return size > 0 && lower < upper && start < upper && start + size > lower
+        })
+        expect(rows).toEqual(expected)
+        expect(sheet.rows.visibleBetween(lower, upper).count).toBe(expected.length)
+      }
+    }
+  })
+})
+
+describe('typed projection construction errors (review item 4)', () => {
+  const cols = createAxisMetrics({ logicalCount: 1, defaultSizeCss: 64 })
+  const codeOf = (build: () => unknown): string | undefined => {
+    try { build() } catch (error) {
+      expect(error).toBeInstanceOf(AxisMetricsError)
+      expect(error).toBeInstanceOf(RangeError)
+      return (error as AxisMetricsError).code
+    }
+    return undefined
+  }
+  it('reports PRECISION_EXCEEDED when a reorder pushes a tiny cell past Float64 resolution', () => {
+    const rows = createAxisMetrics({ logicalCount: 2, defaultSizeCss: 25165824, overrides: [{ start: 0, end: 0, sizeCss: 1e-10 }] })
+    const order = createRowOrder([{ r0: 0, r1: 1, sourceAtOffset: new Uint32Array([1, 0]) }])
+    expect(codeOf(() => createSheetMetrics({ rows, cols, order }))).toBe('PRECISION_EXCEEDED')
+  })
+  it('reports TOTAL_NOT_FINITE when the display total overflows Float64', () => {
+    const huge: AxisMetrics = { logicalCount: 2, defaultSizeCss: Number.MAX_VALUE, overrides: [], totalCss: () => Infinity,
+      start: () => 0, size: () => Number.MAX_VALUE, locate: () => null, visibleBetween: () => ({ runs: [], count: 0 }) }
+    expect(codeOf(() => createSheetMetrics({ rows: huge, cols }))).toBe('TOTAL_NOT_FINITE')
+  })
 })
