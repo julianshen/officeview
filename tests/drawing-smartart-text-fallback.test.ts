@@ -222,6 +222,31 @@ describe('Phase 23: cacheless SmartArt text-only fallback', () => {
     expect(entry).toMatchObject({ selectedRepresentation: 'text-only' })
   })
 
+  test('pretty-printed nested DrawingML runs inside dgm:t still yield text', async () => {
+    const nestedDataXml =
+      `<dgm:dataModel ${DGM}>` +
+      `  <dgm:ptLst>` +
+      `    <dgm:pt modelId="{D1}"><dgm:prSet/>` +
+      `      <dgm:t>` +
+      `        <a:p xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><a:r><a:t>Nested hi</a:t></a:r></a:p>` +
+      `      </dgm:t>` +
+      `    </dgm:pt>` +
+      `  </dgm:ptLst>` +
+      `  <dgm:cxnLst/>` +
+      `  <dgm:whole/>` +
+      `</dgm:dataModel>`
+    const pkg = await packageWithParts({
+      'word/document.xml': '<w:document/>',
+      'word/_rels/document.xml.rels': relsXml([{ id: 'rDm1', type: DIAGRAM_DATA_REL, target: 'diagrams/data1.xml' }]),
+      'word/diagrams/data1.xml': nestedDataXml,
+    })
+    const content = await prepareDrawingContent(pkg, graphicNode, 'word/document.xml', theme, drawingTheme)
+    expect(content?.kind).toBe('diagram')
+    if (content?.kind === 'diagram') {
+      expect(content.shapes[0].paragraphs.map((p) => p.runs.map((r) => r.text).join(''))).toEqual(['Nested hi'])
+    }
+  })
+
   test('truncation diagnostic fires only when text is actually dropped', async () => {
     const textPt = (i: number) => `<dgm:pt modelId="{D${i}}"><dgm:prSet/><dgm:t>point ${i}</dgm:t></dgm:pt>`
     const emptyPt = (i: number) => `<dgm:pt modelId="{E${i}}"><dgm:prSet/></dgm:pt>`

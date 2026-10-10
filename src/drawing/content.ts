@@ -396,13 +396,31 @@ const SMARTART_TEXT_PARAGRAPH_LIMIT = 1000
  * point with non-blank dgm:t content. Empty points contribute nothing.
  * Returns the texts plus whether points were dropped at the limit.
  */
+/**
+ * Collect leaf run texts under a dataModel text container, descending
+ * through nested DrawingML. Nested runs are non-conformant but observed
+ * when pretty-printed, where textOf alone would early-return the container
+ * whitespace and lose everything. Pretty whitespace between elements is
+ * skipped; intentional spacing inside runs is preserved. Plain string
+ * points behave exactly as a single textOf call.
+ */
+function collectRunTexts(node: XmlNode, out: string[]): void {
+  const kids = orderedChildren(node).filter(([name]) => name !== '#text')
+  if (kids.length === 0) {
+    out.push(textOf(node))
+    return
+  }
+  for (const [, child] of kids) collectRunTexts(child, out)
+}
 function collectDataModelTexts(root: XmlNode | undefined): { texts: string[]; truncated: boolean } {
   const dataModel = root && child(root, 'ptLst') ? root : child(root, 'dataModel')
   const pts = dataModel ? getChildren(child(dataModel, 'ptLst'), 'pt') : []
   const texts: string[] = []
   let truncated = false
   for (const pt of pts) {
-    const text = getChildren(pt, 't').map((t) => textOf(t)).join('').trim()
+    const runs: string[] = []
+    for (const t of getChildren(pt, 't')) collectRunTexts(t, runs)
+    const text = runs.join('').trim()
     if (!text) continue
     if (texts.length >= SMARTART_TEXT_PARAGRAPH_LIMIT) { truncated = true; break }
     texts.push(text)

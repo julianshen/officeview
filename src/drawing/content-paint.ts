@@ -59,7 +59,14 @@ export function paintDrawingContent<Paragraph, Text>(drawing: DrawingContent<Par
           ctx.stroke()
         }
       }
-      try { options.paintDiagramText?.(s, ctx, w, h) }
+      // Text-only fallback shapes carry no intrinsic extents; offer the
+      // enclosing diagram box instead of a degenerate one (which text
+      // painters early-return on, losing all visible ink). Shapes with
+      // parsed geometry keep their authored box even when degenerate, so
+      // cached rendering is byte-identical.
+      const textW = w > 0 || s.drawingGeometry ? w : width
+      const textH = h > 0 || s.drawingGeometry ? h : height
+      try { options.paintDiagramText?.(s, ctx, textW, textH) }
       catch { /* A malformed text body cannot suppress later shapes. */ }
       } finally { ctx.restore() }
     }

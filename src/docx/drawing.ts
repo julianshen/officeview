@@ -118,12 +118,7 @@ export async function loadDrawingParts(
 }
 export function paintDrawing(drawing: DocxDrawing, ctx: CanvasRenderingContext2D, width: number, height: number, assets?: ContentPaintAssets): void {
   const resolve = withFallbackFonts(fontFamilyCss, assets?.fallbackFonts)
-  paintDrawingContent(drawing, ctx, width, height, { fontFamilyCss: resolve, paintDiagramText: (s, c, w, h) =>
-    // Cacheless-SmartArt text boxes carry no intrinsic extents; paint their
-    // text across the drawing box instead of a degenerate one (which the
-    // shared engine early-returns on, losing all visible ink, and which the
-    // legacy rows loop below would overflow unclipped from 0,0).
-    paintDiagramText(s, c, w > 0 ? w : width, h > 0 ? h : height, resolve), paintTextbox, assets })
+  paintDrawingContent(drawing, ctx, width, height, { fontFamilyCss: resolve, paintDiagramText: (s, c, w, h) => paintDiagramText(s, c, w, h, resolve), paintTextbox, assets })
 }
 // Cached DrawingML text can carry alpha as a CSS color; older Word text runs
 // carry six-digit RGB without a leading #.
