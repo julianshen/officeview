@@ -1,9 +1,10 @@
 // @vitest-environment node
 import { describe, expect, test } from 'vitest'
 import JSZip from 'jszip'
+import { createCanvas } from 'canvas'
 import { OfficePackage } from '../src/core/zip'
 import { parseDocx } from '../src/docx/parse'
-import { layoutDocx, type MeasureFn } from '../src/docx/layout'
+import { collectDocImages, layoutDocx, renderPages, type MeasureFn } from '../src/docx/layout'
 
 const measureFixed: MeasureFn = (text, style) => {
   return text.length * style.fontSizePt * 0.6 * (96 / 72)
@@ -637,5 +638,86 @@ describe('Phase 22 bot review remediation', () => {
       expect(line.yPx).toBeLessThan(last.heightPx - 96)
     }
     expect(last.diagnostics ?? []).toContain('endnote-overflow')
+  })
+})
+
+describe('Phase 22 bot review round 2', () => {
+  test('P2-auxrel: footnote parts resolve through parent-relative targets', async () => {
+    const buf = await buildDocx({
+      'word/_rels/document.xml.rels': relsFor(['footnotes', '../custom/footnotes.xml']),
+      'word/document.xml': `<w:document ${W_NS}><w:body><w:p><w:r><w:t>See</w:t></w:r><w:r><w:footnoteReference w:id="3"/></w:r></w:p></w:body></w:document>`,
+      'custom/footnotes.xml': `<w:footnotes ${W_NS}><w:footnote w:id="3"><w:p><w:r><w:footnoteRef/></w:r><w:r><w:t> custom placed note</w:t></w:r></w:p></w:footnote></w:footnotes>`,
+    })
+    const doc = await parseDocx(await OfficePackage.load(buf))
+    const fn = doc.footnotes?.find((n) => n.id === 3)
+    expect(fn).toBeDefined()
+    expect(fn?.paragraphs[0].runs.map((r) => r.text).join('')).toContain('custom placed note')
+    expect(doc.sections[0].paragraphs[0].runs.find((r) => r.footnoteReference)?.text).toBe('1')
+  })
+
+  test('P2-fonts: style-inherited East Asian fonts resolve by run script', async () => {
+    // The style carries BOTH an ascii and an eastAsia font: the inherited
+    // layer collapses to its ASCII preference, so script detection must
+    // still recover the eastAsia candidate for CJK text.
+    const buf = await buildDocx({
+      'word/styles.xml': `<w:styles ${W_NS}><w:style w:styleId="CJK" w:type="paragraph"><w:rPr><w:rFonts w:ascii="Arial" w:eastAsia="SimSun"/></w:rPr></w:style></w:styles>`,
+      'word/document.xml': `<w:document ${W_NS}><w:body><w:p><w:pPr><w:pStyle w:val="CJK"/></w:pPr><w:r><w:t>日本語</w:t></w:r></w:p></w:body></w:document>`,
+    })
+    const doc = await parseDocx(await OfficePackage.load(buf))
+    expect(doc.sections[0].paragraphs[0].runs[0].fontFamily).toBe('SimSun')
+  })
+
+  test('P2-baseline: superscript rises and subscript lowers relative to the shared baseline', async () => {
+    const buf = await buildDocx({
+      'word/document.xml': `<w:document ${W_NS}><w:body><w:p>` +
+        `<w:r><w:t>Ax</w:t></w:r>` +
+        `<w:r><w:rPr><w:vertAlign w:val="superscript"/></w:rPr><w:t>Bx</w:t></w:r>` +
+        `<w:r><w:rPr><w:vertAlign w:val="subscript"/></w:rPr><w:t>Cx</w:t></w:r>` +
+        `</w:p></w:body></w:document>`,
+    })
+    const doc = await parseDocx(await OfficePackage.load(buf))
+    const pages = layoutDocx(doc, measureFixed)
+    const canvas = createCanvas(200, 60)
+    const ctx = canvas.getContext('2d')
+    const placed: Array<{ text: string; y: number }> = []
+    const original = ctx.fillText.bind(ctx)
+    ctx.fillText = ((text: string, x: number, y: number) => {
+      placed.push({ text, y })
+      original(text, x, y)
+    }) as typeof ctx.fillText
+    renderPages(pages, ctx as never)
+    const yOf = (text: string) => placed.find((p) => p.text === text)?.y
+    expect(yOf('Ax')).toBeDefined()
+    expect(yOf('Bx')).toBeLessThan(yOf('Ax')!)
+    expect(yOf('Cx')).toBeGreaterThan(yOf('Ax')!)
+  })
+
+  test('P2-notetables: footnote tables lay out cell text and grid in the note area', async () => {
+    const buf = await buildDocx({
+      'word/_rels/document.xml.rels': relsFor(['footnotes', 'footnotes.xml']),
+      'word/document.xml': `<w:document ${W_NS}><w:body><w:p><w:r><w:t>Ref</w:t></w:r><w:r><w:footnoteReference w:id="1"/></w:r></w:p></w:body></w:document>`,
+      'word/footnotes.xml': `<w:footnotes ${W_NS}><w:footnote w:id="1"><w:tbl><w:tblGrid><w:gridCol w:w="4000"/></w:tblGrid><w:tr><w:tc><w:p><w:r><w:t>CellNote</w:t></w:r></w:p></w:tc></w:tr></w:tbl></w:footnote></w:footnotes>`,
+    })
+    const doc = await parseDocx(await OfficePackage.load(buf))
+    const pages = layoutDocx(doc, measureFixed)
+    const text = pages[0].footnotes?.lines.flatMap((l) => l.segs.map((s) => s.text)).join('') ?? ''
+    expect(text).toContain('CellNote')
+    expect(pages[0].tables.length).toBeGreaterThanOrEqual(1)
+  })
+
+  test('P2-noteimages: footnote inline pictures index into page images', async () => {
+    const fakePng = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])
+    const PIC_NS = `${W_NS} xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:pic="http://schemas.openxmlformats.org/drawingml/2006/picture" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"`
+    const buf = await buildDocx({
+      'word/_rels/document.xml.rels': relsFor(['footnotes', 'footnotes.xml']),
+      'word/document.xml': `<w:document ${W_NS}><w:body><w:p><w:r><w:t>Ref</w:t></w:r><w:r><w:footnoteReference w:id="1"/></w:r></w:p></w:body></w:document>`,
+      'word/footnotes.xml': `<w:footnotes ${PIC_NS}><w:footnote w:id="1"><w:p><w:r><w:drawing><wp:inline><wp:extent cx="914400" cy="609600"/><wp:docPr id="1" name="pic"/><a:graphic><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/picture"><pic:pic><pic:nvPicPr><pic:cNvPr id="1" name="pic"/><pic:cNvPicPr/></pic:nvPicPr><pic:blipFill><a:blip r:embed="rImg1"/><a:stretch><a:fillRect/></a:stretch></pic:blipFill><pic:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="914400" cy="609600"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom></pic:spPr></pic:pic></a:graphicData></a:graphic></wp:inline></w:drawing></w:r></w:p></w:footnote></w:footnotes>`,
+      'word/_rels/footnotes.xml.rels': `${REL_HEAD}<Relationship Id="rImg1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="media/note.png"/></Relationships>`,
+      'word/media/note.png': fakePng as unknown as string,
+    })
+    const doc = await parseDocx(await OfficePackage.load(await buf))
+    expect(collectDocImages(doc).length).toBeGreaterThanOrEqual(1)
+    const pages = layoutDocx(doc, measureFixed)
+    expect(pages[0].images.some((box) => box.imageIndex >= 0)).toBe(true)
   })
 })

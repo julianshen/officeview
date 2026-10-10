@@ -154,6 +154,14 @@ export function readRunProperties(rPr: XmlNode | undefined, theme?: DocxTheme, i
       ? (eaFont ?? asciiFont ?? hAnsiFont ?? csFont)
       : (asciiFont ?? hAnsiFont ?? eaFont ?? csFont)
   if (preferred) out.fontFamily = preferred
+  if (asciiFont || hAnsiFont || eaFont || csFont) {
+    out.runFonts = {
+      ...(asciiFont ? { ascii: asciiFont } : {}),
+      ...(hAnsiFont ? { hAnsi: hAnsiFont } : {}),
+      ...(eaFont ? { eastAsia: eaFont } : {}),
+      ...(csFont ? { cs: csFont } : {}),
+    }
+  }
   const size = Number(attrs(getChildren(rPr, 'sz')[0]).val)
   if (Number.isFinite(size) && size > 0) out.fontSizePt = size / 2
   for (const [element, property] of [
@@ -388,7 +396,13 @@ export function paragraphRunDefaults(
     const authored = authoredCategories(node)
     const layerIssues: TextAppearanceIssue[] = []
     const layerProps = readRunProperties(node, context.theme, layerIssues)
+    // Script font candidates merge per key (later layers win per script);
+    // a blind assign would let a layer without East Asian fonts erase an
+    // earlier layer's eastAsia/cs choice before script detection runs.
+    const mergedFonts = { ...merged.runFonts, ...layerProps.runFonts }
     Object.assign(merged, layerProps)
+    if (Object.keys(mergedFonts).length > 0) merged.runFonts = mergedFonts
+    else delete merged.runFonts
 
     for (const cat of ['fill', 'outline', 'shadow', 'glow', 'reflection'] as const) {
       if (authored.has(cat)) {

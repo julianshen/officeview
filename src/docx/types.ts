@@ -16,6 +16,12 @@ export interface DocxTextRun {
   underline?: boolean
   strike?: boolean
   fontFamily?: string
+  /**
+   * Unresolved per-script font candidates (w:rFonts ascii/hAnsi/eastAsia/cs,
+   * theme-resolved). Lets script detection prefer an inherited East Asian
+   * or complex-script family over the collapsed ASCII-preferred fontFamily.
+   */
+  runFonts?: { ascii?: string; hAnsi?: string; eastAsia?: string; cs?: string }
   fontSizePt?: number
   color?: string
   highlight?: string

@@ -577,6 +577,14 @@ export function collectDocImages(document: DocxDocument): DocxImage[] {
   }
   for (const section of document.sections) collect(section.blocks ?? section.paragraphs.map(paragraph => ({ kind: 'p', paragraph })))
   for (const section of document.sections) for (const kind of ['header', 'footer', 'firstHeader', 'firstFooter'] as const) collect(repeatedBlocks(section, kind) ?? [])
+  // Note content lays out into page footers/endnotes: its images need asset
+  // indexing and decoding like body images. Comments are never laid out, so
+  // their images stay out of the collection.
+  for (const notes of [document.footnotes, document.endnotes]) {
+    for (const note of notes ?? []) {
+      for (const paragraph of blockParagraphs(note.blocks)) for (const image of paragraph.images ?? []) push(image)
+    }
+  }
   return out
 }
 
@@ -781,8 +789,8 @@ function layoutDocxPass(document: DocxDocument, measure: MeasureFn, totalPages: 
     previousEndY = y
 
   }
-  attachFootnotesToPages(pages, document, measure, defaults)
-  attachEndnotesToPages(pages, document, measure, defaults)
+  attachFootnotesToPages(pages, document, measure, defaults, imageIndex)
+  attachEndnotesToPages(pages, document, measure, defaults, imageIndex)
   refreshRepeatedImages(pages, measure, totalPages)
   return pages
 }
@@ -804,11 +812,87 @@ function pushNoteOverflow(page: PageLayout, kind: 'footnote-overflow' | 'endnote
   if (!page.diagnostics.includes(kind)) page.diagnostics.push(kind)
 }
 
+/**
+ * Lay out footnote/endnote blocks (paragraphs and tables) into the note
+ * area. Inline images transfer into the page image layer with resolved
+ * indices; tables lay out as a single chunk bounded by the note area, so
+ * oversized tables truncate rows instead of spilling past the footer.
+ * Returns laid lines, the end position, and whether a table was truncated.
+ */
+function layoutNoteBlocks(
+  blocks: DocxBlock[],
+  page: PageLayout,
+  margin: number,
+  contentWidth: number,
+  bottomY: number,
+  startY: number,
+  measure: MeasureFn,
+  noteDefaults: { fontFamily: string; fontSizePt: number },
+  imageIndex: Map<DocxImage, number>,
+): { lines: LineBox[]; endY: number; tableOverflow: boolean } {
+  const lines: LineBox[] = []
+  let curY = startY
+  let tableOverflow = false
+  const transferImages = (boxLines: LineBox[], dx: number, dy: number): void => {
+    for (const line of boxLines) {
+      for (const box of line.inlineImages ?? []) {
+        page.images.push({
+          ...box,
+          xPx: box.xPx + dx,
+          yPx: box.yPx + dy,
+          clip: shiftedImageClip(box.clip, dx, dy),
+          imageIndex: imageIndex.get(box.image) ?? -1,
+          drawing: box.image.drawing,
+        })
+      }
+    }
+  }
+  for (const block of blocks) {
+    if (block.kind === 'p') {
+      const laid = layoutParagraph(block.paragraph, measure, {
+        contentX: margin,
+        contentWidth,
+        startY: curY,
+        defaults: noteDefaults,
+      })
+      transferImages(laid.lines, 0, 0)
+      lines.push(...laid.lines)
+      curY += laid.lines.reduce((h, l) => h + l.heightPx, 0)
+    } else {
+      const sized = autoWidthTable(block.table, measure, noteDefaults, contentWidth)
+      const chunk = layoutTableRows(sized, measure, noteDefaults, {
+        fromRow: 0,
+        repeatHeader: false,
+        maxHeightPx: Math.max(0, bottomY - curY),
+        allowFirstRowOverflow: false,
+      })
+      if (chunk.consumedRows < sized.rows.length) tableOverflow = true
+      if (chunk.consumedRows === 0) continue
+      transferImages(chunk.lines, margin, curY)
+      for (const line of chunk.lines) {
+        lines.push({
+          ...line,
+          xPx: line.xPx + margin,
+          yPx: line.yPx + curY,
+          baselinePx: line.baselinePx === undefined ? undefined : line.baselinePx + curY,
+          segs: line.segs.map((seg) =>
+            seg.transform ? { ...seg, transform: { ...seg.transform, e: seg.transform.e + margin, f: seg.transform.f + curY } } : seg
+          ),
+        })
+      }
+      page.tables.push({ xPx: margin, yPx: curY, widthPx: chunk.widthPx, rows: chunk.rows })
+      curY += chunk.heightPx
+    }
+  }
+  return { lines, endY: curY, tableOverflow }
+}
+
 function attachFootnotesToPages(
   pages: PageLayout[],
   document: DocxDocument,
   measure: MeasureFn,
-  defaults: { fontFamily: string; fontSizePt: number }
+  defaults: { fontFamily: string; fontSizePt: number },
+  imageIndex: Map<DocxImage, number>
 ): void {
   if (!document.footnotes || document.footnotes.length === 0) return
   const noteMap = new Map(document.footnotes.map((n) => [n.id, n]))
@@ -826,32 +910,24 @@ function attachFootnotesToPages(
     const margin = page.footer?.margins?.left ?? 96
     const contentWidth = page.widthPx - margin - (page.footer?.margins?.right ?? 96)
     const bottomY = page.footer ? page.footer.yPx - 20 : page.heightPx - 96
-    const noteParas: DocxParagraph[] = []
+    const noteBlocks: DocxBlock[] = []
     for (const id of pageNoteIds) {
       const note = noteMap.get(id)
       if (note && (note.type === 'normal' || !note.type)) {
-        for (const p of note.paragraphs) {
-          noteParas.push(p)
-        }
+        noteBlocks.push(...note.blocks)
       }
     }
-    if (noteParas.length === 0) continue
+    if (noteBlocks.length === 0) continue
     if (!(contentWidth > 0)) { pushNoteOverflow(page, 'footnote-overflow'); continue }
-    const neededHeight = noteParas.length * (defaults.fontSizePt * (96 / 72) * LINE_HEIGHT_FACTOR)
+    const estUnits = noteBlocks.reduce((n, b) => n + (b.kind === 'p' ? 1 : b.table.rows.length), 0)
+    const neededHeight = estUnits * (defaults.fontSizePt * (96 / 72) * LINE_HEIGHT_FACTOR)
     const lowestBodyY = page.lines.length > 0 ? Math.max(...page.lines.map((l) => l.yPx + l.heightPx)) : margin
-    let curY = Math.max(bottomY - neededHeight, lowestBodyY + 12)
-    for (const p of noteParas) {
-      const { lines } = layoutParagraph(p, measure, {
-        contentX: margin,
-        contentWidth,
-        startY: curY,
-        defaults: { fontFamily: defaults.fontFamily, fontSizePt: Math.max(8, defaults.fontSizePt * 0.85) }
-      })
-      fnLines.push(...lines)
-      curY += lines.reduce((h, l) => h + l.heightPx, 0)
-    }
+    const curY = Math.max(bottomY - neededHeight, lowestBodyY + 12)
+    const noteDefaults = { fontFamily: defaults.fontFamily, fontSizePt: Math.max(8, defaults.fontSizePt * 0.85) }
+    const laid = layoutNoteBlocks(noteBlocks, page, margin, contentWidth, bottomY, curY, measure, noteDefaults, imageIndex)
+    fnLines.push(...laid.lines)
     const { kept, truncated } = clampNoteLines(fnLines, bottomY)
-    if (truncated || (noteParas.length > 0 && kept.length === 0)) pushNoteOverflow(page, 'footnote-overflow')
+    if (truncated || laid.tableOverflow || (noteBlocks.length > 0 && kept.length === 0)) pushNoteOverflow(page, 'footnote-overflow')
     if (kept.length > 0) {
       page.footnotes = {
         lines: kept,
@@ -865,7 +941,8 @@ function attachEndnotesToPages(
   pages: PageLayout[],
   document: DocxDocument,
   measure: MeasureFn,
-  defaults: { fontFamily: string; fontSizePt: number }
+  defaults: { fontFamily: string; fontSizePt: number },
+  imageIndex: Map<DocxImage, number>
 ): void {
   if (!document.endnotes || document.endnotes.length === 0 || pages.length === 0) return
   const noteMap = new Map(document.endnotes.map((n) => [n.id, n]))
@@ -888,34 +965,26 @@ function attachEndnotesToPages(
   const margin = lastPage.footer?.margins?.left ?? 96
   const contentWidth = lastPage.widthPx - margin - (lastPage.footer?.margins?.right ?? 96)
   const bottomY = lastPage.footer ? lastPage.footer.yPx - 20 : lastPage.heightPx - 96
-  const noteParas: DocxParagraph[] = []
+  const noteBlocks: DocxBlock[] = []
   for (const id of targetIds) {
     const note = noteMap.get(id)
     if (note && (note.type === 'normal' || !note.type)) {
-      for (const p of note.paragraphs) {
-        noteParas.push(p)
-      }
+      noteBlocks.push(...note.blocks)
     }
   }
-  if (noteParas.length === 0) return
+  if (noteBlocks.length === 0) return
   if (!(contentWidth > 0)) { pushNoteOverflow(lastPage, 'endnote-overflow'); return }
 
   const enLines: LineBox[] = []
-  const neededHeight = noteParas.length * (defaults.fontSizePt * (96 / 72) * LINE_HEIGHT_FACTOR)
+  const estUnits = noteBlocks.reduce((n, b) => n + (b.kind === 'p' ? 1 : b.table.rows.length), 0)
+  const neededHeight = estUnits * (defaults.fontSizePt * (96 / 72) * LINE_HEIGHT_FACTOR)
   const lowestBodyY = lastPage.lines.length > 0 ? Math.max(...lastPage.lines.map((l) => l.yPx + l.heightPx)) : margin
-  let curY = Math.max(bottomY - neededHeight, lowestBodyY + 12)
-  for (const p of noteParas) {
-    const { lines } = layoutParagraph(p, measure, {
-      contentX: margin,
-      contentWidth,
-      startY: curY,
-      defaults: { fontFamily: defaults.fontFamily, fontSizePt: Math.max(8, defaults.fontSizePt * 0.85) }
-    })
-    enLines.push(...lines)
-    curY += lines.reduce((h, l) => h + l.heightPx, 0)
-  }
+  const curY = Math.max(bottomY - neededHeight, lowestBodyY + 12)
+  const noteDefaults = { fontFamily: defaults.fontFamily, fontSizePt: Math.max(8, defaults.fontSizePt * 0.85) }
+  const laid = layoutNoteBlocks(noteBlocks, lastPage, margin, contentWidth, bottomY, curY, measure, noteDefaults, imageIndex)
+  enLines.push(...laid.lines)
   const { kept, truncated } = clampNoteLines(enLines, bottomY)
-  if (truncated || (noteParas.length > 0 && kept.length === 0)) pushNoteOverflow(lastPage, 'endnote-overflow')
+  if (truncated || laid.tableOverflow || (noteBlocks.length > 0 && kept.length === 0)) pushNoteOverflow(lastPage, 'endnote-overflow')
   if (kept.length > 0) {
     lastPage.endnotes = {
       lines: kept,
@@ -1048,12 +1117,18 @@ export function renderPages(
               ctx.fillRect(segX, line.yPx, seg.widthPx, line.heightPx)
             }
             ctx.fillStyle = seg.run.color ? resolveColor(seg.run.color) : '#000000'
-            ctx.fillText(seg.text, segX, baseline)
+            // Superscript rises and subscript lowers relative to the shared
+            // baseline; the shrunken size alone would leave markers sitting
+            // on the baseline. Rotated-glyph segments keep their resolved
+            // placement (handled in the transform branch above).
+            const vertDy = seg.run.vertAlign === 'superscript' ? -seg.style.fontSizePt * 0.35
+              : seg.run.vertAlign === 'subscript' ? seg.style.fontSizePt * 0.25 : 0
+            ctx.fillText(seg.text, segX, baseline + vertDy)
             if (seg.run.underline || seg.run.strike) {
               ctx.strokeStyle = ctx.fillStyle
               ctx.lineWidth = Math.max(1, seg.style.fontSizePt * 0.06)
               ctx.beginPath()
-              const yy = seg.run.underline ? baseline + seg.style.fontSizePt * 0.15 : baseline - seg.style.fontSizePt * 0.3
+              const yy = seg.run.underline ? baseline + vertDy + seg.style.fontSizePt * 0.15 : baseline + vertDy - seg.style.fontSizePt * 0.3
               ctx.moveTo(segX, yy)
               ctx.lineTo(segX + seg.widthPx, yy)
               ctx.stroke()

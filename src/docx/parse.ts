@@ -10,7 +10,7 @@ import { loadDrawingParts, wordDrawingSelections } from './drawing'
 import { findSvgBlip, looksLikeSvg, scanSelfContainedSvg, svgCandidate, svgStateCandidate, type ImageSelection, type SvgCandidate, type SvgVerdict } from '../core/svg'
 import { attemptedMalformedRelationshipIssue, malformedRelationshipAttempt, reserveDrawingContent } from '../drawing/content'
 import { contentRepresentation, coverageIssueMatchesEntry, supportedChoiceRequirements, type DrawingCoverageEntry } from '../drawing/coverage'
-import { DOCUMENT_DRAWING_NODE_LIMIT, drawingPartContext, partRelationshipNodes, reserveDrawingNode } from '../drawing/parts'
+import { DOCUMENT_DRAWING_NODE_LIMIT, drawingPartContext, partRelationshipNodes, reserveDrawingNode, resolvePartTarget } from '../drawing/parts'
 import { parseVmlContainer, type VmlNode } from '../drawing/vml'
 import type { DocxBlock, DocxComment, DocxDocument, DocxDrawing, DocxDrawingShape, DocxFloating, DocxImage, DocxNote, DocxParagraph, DocxSection, DocxTable, DocxTableCell, DocxTableCellMargins, DocxTableBorders, DocxTableRow, DocxTextRun, ParagraphAlign } from './types'
 
@@ -101,7 +101,15 @@ function parseRun(r: XmlNode, inherited?: Partial<DocxTextRun>, context?: Paragr
   if (fld) run._fldChar = attrs(fld).fldCharType as string
   const instr = getChildren(r, 'instrText')[0]
   if (instr) run._instr = textOf(instr).trim()
-  Object.assign(run, readRunProperties(rPr, context?.styles.theme, issues))
+  const directProps = readRunProperties(rPr, context?.styles.theme, issues)
+  Object.assign(run, directProps)
+  // Script font candidates merge per key like paragraphRunDefaults: direct
+  // ascii must not erase an inherited eastAsia/cs choice before detection.
+  if (inherited?.runFonts || directProps.runFonts) {
+    const mergedFonts = { ...inherited?.runFonts, ...directProps.runFonts }
+    if (Object.keys(mergedFonts).length > 0) run.runFonts = mergedFonts
+    else delete run.runFonts
+  }
   // Runs may contain text fragments plus tabs/breaks
   let hasNonSymText = false
   let symFont: string | undefined
@@ -177,12 +185,14 @@ function parseRun(r: XmlNode, inherited?: Partial<DocxTextRun>, context?: Paragr
   }
   // A symbol-only run paints in the symbol font; mixed runs keep the run font.
   if (!hasNonSymText && symFont) run.fontFamily = symFont
-  else if (rPr) {
+  else {
+    // Script detection also runs without direct rPr: inherited families may
+    // carry the only East Asian / complex-script candidates (layered styles).
     const fonts = attrs(getChildren(rPr, 'rFonts')[0])
     const theme = context?.styles.theme
-    const eaFont = fonts.eastAsia ?? theme?.fonts.get(fonts.eastAsiaTheme)
-    const csFont = fonts.cs ?? theme?.fonts.get(fonts.cstheme)
-    const hAnsiFont = fonts.hAnsi ?? theme?.fonts.get(fonts.hAnsiTheme)
+    const eaFont = fonts.eastAsia ?? inherited?.runFonts?.eastAsia ?? theme?.fonts.get(fonts.eastAsiaTheme)
+    const csFont = fonts.cs ?? inherited?.runFonts?.cs ?? theme?.fonts.get(fonts.cstheme)
+    const hAnsiFont = fonts.hAnsi ?? inherited?.runFonts?.hAnsi ?? theme?.fonts.get(fonts.hAnsiTheme)
     const isRtl = getChildren(rPr, 'rtl').length > 0 || getChildren(rPr, 'cs').length > 0
     const hasEaText = /(?:[\u3000-\u303f\u3040-\u309f\u30a0-\u30ff\uff00-\uffef\u4e00-\u9faf\u3400-\u4dbf\uac00-\ud7af\u1100-\u11ff\u3130-\u318f]|[\uD840-\uD869][\uDC00-\uDFFF])/u.test(run.text)
     const hasCsText = /[\u0590-\u05ff\u0600-\u06ff\u0700-\u074f\u0750-\u077f\u0780-\u07bf\u08a0-\u08ff\u0900-\u097f\u0e00-\u0e7f]/u.test(run.text)
@@ -1189,7 +1199,7 @@ async function loadNotesPart(
     const rel = [...docRels.values()].find(r => r.type.endsWith(`/${kind}`))
     const defaultPath = `word/${kind}.xml`
     const path = rel
-      ? (rel.target.startsWith('/') ? rel.target.slice(1) : rel.target.startsWith('word/') ? rel.target : `word/${rel.target}`)
+      ? (rel.target.startsWith('/') ? rel.target.slice(1) : rel.target.startsWith('word/') ? rel.target : resolvePartTarget('word/document.xml', rel.target))
       : (pkg.has(defaultPath) ? defaultPath : undefined)
     if (!path) return undefined
     const part = await pkg.xmlOrdered(path)
@@ -1268,7 +1278,7 @@ async function loadCommentsPart(
     const rel = [...docRels.values()].find(r => r.type.endsWith('/comments'))
     const defaultPath = 'word/comments.xml'
     const path = rel
-      ? (rel.target.startsWith('/') ? rel.target.slice(1) : rel.target.startsWith('word/') ? rel.target : `word/${rel.target}`)
+      ? (rel.target.startsWith('/') ? rel.target.slice(1) : rel.target.startsWith('word/') ? rel.target : resolvePartTarget('word/document.xml', rel.target))
       : (pkg.has(defaultPath) ? defaultPath : undefined)
     if (!path) return undefined
     const part = await pkg.xmlOrdered(path)
@@ -1331,7 +1341,7 @@ async function loadSettings(pkg: OfficePackage, docRels: Map<string, { type: str
     const rel = [...docRels.values()].find(r => r.type.endsWith('/settings'))
     const defaultPath = 'word/settings.xml'
     const path = rel
-      ? (rel.target.startsWith('/') ? rel.target.slice(1) : rel.target.startsWith('word/') ? rel.target : `word/${rel.target}`)
+      ? (rel.target.startsWith('/') ? rel.target.slice(1) : rel.target.startsWith('word/') ? rel.target : resolvePartTarget('word/document.xml', rel.target))
       : (pkg.has(defaultPath) ? defaultPath : undefined)
     if (!path) return {}
     const part = await pkg.xml(path)
