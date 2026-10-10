@@ -16,6 +16,6 @@
     "resolveJsonModule": true,
     "noEmit": true
   },
-  "include": ["src", "tests", "scripts/generate-viewer-fixtures.ts", "vite.config.ts", "vitest.config.ts"],
+  "include": ["src", "tests", "scripts/generate-viewer-fixtures.ts", "vite.config.ts", "vitest.config.ts", "vite.harness.config.ts"],
   "exclude": ["node_modules", "dist"]
 }

@@ -13,4 +13,7 @@ corpus/*
 validation/office-reference/*.pdf
 validation/office-reference/*.png
 
+# Playwright / harness artifacts
+test-results/
+playwright-report/
 .tmp/
