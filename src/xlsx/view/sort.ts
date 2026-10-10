@@ -89,15 +89,54 @@ class Budget {
   release(bytes: number): void { this.live -= bytes }
   finish(): SortLedger { this.ledger.retainedBytes = this.live; return Object.freeze({ ...this.ledger }) }
 }
+/** MessageChannel yields a real task without nested timer clamping in workers.
+ * Each operation owns its ports and closes them in its public boundary finally. */
+function defaultScheduler(): { yield: () => Promise<void>; dispose: () => void } {
+  if (typeof MessageChannel !== 'undefined') {
+    const channel = new MessageChannel()
+    let resume: (() => void) | undefined
+    channel.port1.onmessage = () => {
+      const resolve = resume
+      resume = undefined
+      resolve?.()
+    }
+    return {
+      yield: () => new Promise<void>(resolve => {
+        resume = resolve
+        channel.port2.postMessage(null)
+      }),
+      dispose: () => {
+        channel.port1.onmessage = null
+        channel.port1.close()
+        channel.port2.close()
+      },
+    }
+  }
+  const scheduler = (globalThis as typeof globalThis & {
+    scheduler?: { yield: () => Promise<void> }
+    setImmediate?: (callback: () => void) => unknown
+  })
+  return {
+    yield: scheduler.scheduler?.yield
+      ? () => scheduler.scheduler!.yield()
+      : scheduler.setImmediate
+        ? () => new Promise<void>(resolve => scheduler.setImmediate!(resolve))
+        : () => new Promise<void>(resolve => setTimeout(resolve, 0)),
+    dispose: () => {},
+  }
+}
 class Cooperative {
   private work = 0
   private last: number
   readonly now: () => number
   readonly schedule: (phase: SortPhase) => Promise<void>
+  readonly dispose: () => void
   constructor(readonly store: SourceStore, readonly stamp: SourceStamp, readonly options: SortOptions) {
     this.now = options.now ?? (() => performance.now())
-    this.schedule = options.yield ?? (() => new Promise(resolve => setTimeout(resolve, 0)))
     this.last = this.now()
+    const scheduler = options.yield ? undefined : defaultScheduler()
+    this.schedule = options.yield ?? scheduler!.yield
+    this.dispose = scheduler?.dispose ?? (() => {})
   }
   check(): void {
     if (this.options.signal?.aborted) throw new Halt({ kind: 'cancelled' })
@@ -116,8 +155,28 @@ function failure(error: unknown, options: SortOptions): SortFailure {
   if (options.signal?.aborted) return { kind: 'cancelled' }
   if (error instanceof Halt) return error.outcome
   if (error instanceof CoordinateError) return { kind: 'error', error: { code: error.code === 'invalid-source-rect' ? 'invalid-source-rect' : 'invalid-coordinate', retryable: false, message: error.message } }
-  if (error instanceof RangeError) return { kind: 'error', error: { code: 'resource-limit', retryable: false, message: error.message } }
   return { kind: 'error', error: { code: 'page-error', retryable: true, message: error instanceof Error ? error.message : String(error) } }
+}
+/** Only allocation sites may classify a RangeError as exhausted resources. */
+function allocate<T>(create: () => T): T {
+  try { return create() }
+  catch (error) {
+    if (error instanceof RangeError && !(error instanceof CoordinateError)) {
+      throw sourceError('resource-limit', error.message)
+    }
+    throw error
+  }
+}
+function sortCollator(locale: string, caseSensitive: boolean): Intl.Collator {
+  try {
+    return new Intl.Collator(locale, {
+      numeric: true, sensitivity: caseSensitive ? 'variant' : 'accent', caseFirst: 'upper',
+    })
+  } catch (error) {
+    // The frozen source codes have no locale-specific code; unsupported is the
+    // closest nonretryable configuration outcome, not an allocation failure.
+    throw sourceError('unsupported', error instanceof Error ? error.message : String(error))
+  }
 }
 /** Stable bottom-up index merge: both initialization and comparison/output work yield.
  * Native Array/TypedArray.sort cannot provide an abort boundary. */
@@ -141,7 +200,7 @@ async function rankDictionary(values: readonly string[], compare: (a: string, b:
   const bytes = values.length * 4
   budget.charge(bytes * 3)
   budget.ledger.ranksBytes += bytes
-  const ranks = new Uint32Array(values.length), index = new Uint32Array(values.length), scratch = new Uint32Array(values.length)
+  const ranks = allocate(() => new Uint32Array(values.length)), index = allocate(() => new Uint32Array(values.length)), scratch = allocate(() => new Uint32Array(values.length))
   for (let id = 0; id < values.length; id++) { index[id] = id; if (cooperative.due()) await cooperative.pause('dictionary') }
   const sorted = await mergeIndexes(index, scratch, values.length, (a, b) => compare(values[a], values[b]), cooperative, 'dictionary')
   let rank = 0
@@ -156,17 +215,17 @@ async function rankDictionary(values: readonly string[], compare: (a: string, b:
 async function prepare(store: SourceStore, spec: SortSpec, cooperative: Cooperative, budget: Budget, locale: string): Promise<PreparedSortKeys> {
   const r0 = spec.range.r0 + spec.range.headerRows, r1 = spec.range.r1 - spec.range.totalsRows
   const length = Math.max(0, r1 - r0 + 1), lanes: SortLane[] = []
-  const collator = new Intl.Collator(locale, { numeric: true, sensitivity: spec.caseSensitive ? 'variant' : 'accent', caseFirst: 'upper' })
+  const collator = sortCollator(locale, spec.caseSensitive)
   let incomplete = false, unavailableCount = 0, firstAddress: { row: number; col: number } | undefined
   for (const key of spec.keys) {
     budget.charge(length * 9 + 512)
     budget.ledger.fixedOverheadBytes += 512
     budget.ledger.tagsBytes += length
     budget.ledger.numbersBytes += length * 8
-    const lane: MutableLane = { tags: new Uint8Array(length), numbers: new Float64Array(length), strings: [], errors: [], stringRanks: new Uint32Array(0), errorRanks: new Uint32Array(0) }
+    const lane: MutableLane = { tags: allocate(() => new Uint8Array(length)), numbers: allocate(() => new Float64Array(length)), strings: [], errors: [], stringRanks: allocate(() => new Uint32Array(0)), errorRanks: allocate(() => new Uint32Array(0)) }
     let stringIds: Map<string, number> | undefined, errorIds: Map<string, number> | undefined, mapBytes = 0
     function intern(raw: string, error: boolean): number {
-      if (!lane.ids) { budget.charge(length * 4); budget.ledger.idsBytes += length * 4; lane.ids = new Uint32Array(length) }
+      if (!lane.ids) { budget.charge(length * 4); budget.ledger.idsBytes += length * 4; lane.ids = allocate(() => new Uint32Array(length)) }
       const map = error ? (errorIds ??= new Map()) : (stringIds ??= new Map())
       const dictionary = error ? lane.errors : lane.strings
       const existing = map.get(raw)
@@ -225,10 +284,19 @@ async function prepare(store: SourceStore, spec: SortSpec, cooperative: Cooperat
                 if (cell.row !== row || cell.col !== key.col || cell.id !== row * 16384 + key.col) throw sourceError('page-error', 'Cell identity does not match its key entry')
                 if (cell.valueIsError) { lane.tags[offset] = ERROR; const id = intern(String(value), true); lane.ids![offset] = id }
                 else if (value === null) lane.tags[offset] = BLANK
-                else if (typeof value === 'number' && Number.isFinite(value)) { lane.tags[offset] = NUMBER; lane.numbers[offset] = value }
+                else if (typeof value === 'number') {
+                  if (Number.isFinite(value)) { lane.tags[offset] = NUMBER; lane.numbers[offset] = value }
+                  else {
+                    // No finite engine representation: use the same raw error
+                    // dictionary entry as a real #NUM! cell, preserving source ties.
+                    lane.tags[offset] = ERROR
+                    const id = intern('#NUM!', true)
+                    lane.ids![offset] = id
+                  }
+                }
                 else if (typeof value === 'boolean') { lane.tags[offset] = BOOLEAN; lane.numbers[offset] = value ? 1 : 0 }
                 else if (typeof value === 'string') { lane.tags[offset] = STRING; const id = intern(value, false); lane.ids![offset] = id }
-                else throw sourceError('page-error', 'Nonfinite or unsupported authoritative key')
+                else throw sourceError('page-error', 'Unsupported authoritative key type')
                 break
               }
             }
@@ -260,13 +328,16 @@ async function prepare(store: SourceStore, spec: SortSpec, cooperative: Cooperat
   return Object.freeze({ spec, stamp: cooperative.stamp, r0, r1, lanes: Object.freeze(lanes), ledger: budget.finish(), locale })
 }
 export async function prepareSortKeys(store: SourceStore, input: SortSpec, options: SortOptions = {}): Promise<PreparedSortResult> {
+  let cooperative: Cooperative | undefined
   try {
     options = Object.freeze({ ...options })
     const stamp = Object.freeze({ ...(options.stamp ?? store.stamp) }), spec = snapshotSpec(input)
-    const cooperative = new Cooperative(store, stamp, options), budget = new Budget(options)
+    const budget = new Budget(options)
+    cooperative = new Cooperative(store, stamp, options)
     cooperative.check()
     return { kind: 'complete', prepared: await prepare(store, spec, cooperative, budget, options.locale ?? 'en') }
   } catch (error) { return failure(error, options) }
+  finally { cooperative?.dispose() }
 }
 function compareRows(prepared: PreparedSortKeys, a: number, b: number): number {
   const first = a - prepared.r0, second = b - prepared.r0
@@ -296,10 +367,12 @@ function ownedOrder(r0: number, r1: number, sourceAtOffset: Uint32Array, display
 /** Pure draft only. S7.1/S3 must admit whole-row structural/outside-column effects
  * before a caller commits this object; this kernel cannot authorize those guards. */
 export async function sortRowOrder(store: SourceStore, input: SortSpec | null, options: SortOptions = {}): Promise<SortResult> {
+  let cooperative: Cooperative | undefined
   try {
     options = Object.freeze({ ...options })
     const stamp = Object.freeze({ ...(options.stamp ?? store.stamp) }), spec = input === null ? null : snapshotSpec(input), locale = options.locale ?? 'en'
-    const cooperative = new Cooperative(store, stamp, options), budget = new Budget(options)
+    const budget = new Budget(options)
+    cooperative = new Cooperative(store, stamp, options)
     cooperative.check()
     let order: RowOrder = createIdentityOrder()
     if (spec !== null) {
@@ -308,7 +381,7 @@ export async function sortRowOrder(store: SourceStore, input: SortSpec | null, o
         const pinned = options.visibility ? hiddenSlotPins(options.visibility) : () => false
         budget.charge(length * 8)
         budget.ledger.indexBytes = length * 4; budget.ledger.scratchBytes = length * 4
-        const index = new Uint32Array(length), scratch = new Uint32Array(length)
+        const index = allocate(() => new Uint32Array(length)), scratch = allocate(() => new Uint32Array(length))
         let count = 0
         for (let row = prepared.r0; row <= prepared.r1; row++) { if (!pinned(row)) index[count++] = row; if (cooperative.due()) await cooperative.pause('candidates') }
         const sorted = await mergeIndexes(index, scratch, count, (a, b) => compareRows(prepared, a, b), cooperative, 'merge')
@@ -317,12 +390,12 @@ export async function sortRowOrder(store: SourceStore, input: SortSpec | null, o
           // createRowOrder then copies order/inverse again while that band lives.
           budget.charge(length * 20)
           budget.ledger.constructionCopiesBytes = length * 12
-          const band = pinRowPermutation(prepared.r0, prepared.r1, pinned, sorted.subarray(0, count))
-          order = createRowOrder([band])
+          const band = allocate(() => pinRowPermutation(prepared.r0, prepared.r1, pinned, sorted.subarray(0, count)))
+          order = allocate(() => createRowOrder([band]))
           budget.release(length * 12)
         } else {
           budget.charge(length * 8)
-          const rows = new Uint32Array(length), inverse = new Uint32Array(length)
+          const rows = allocate(() => new Uint32Array(length)), inverse = allocate(() => new Uint32Array(length))
           let at = 0
           for (let offset = 0; offset < length; offset++) {
             const row = prepared.r0 + offset
@@ -353,21 +426,57 @@ export async function sortRowOrder(store: SourceStore, input: SortSpec | null, o
     await cooperative.pause('publish')
     return { kind: 'complete', order, metadata: Object.freeze({ sort: spec, stamp, locale, structuralAdmission: 'caller-required' }), ledger: budget.finish() }
   } catch (error) { return failure(error, options) }
+  finally { cooperative?.dispose() }
 }
 export type SortCommand = { kind: 'cycle'; col: number; shift?: boolean; range: FilterRange } | { kind: 'toggle-case' } | { kind: 'clear' }
-export function reduceSortCommand(sort: SortSpec | null, command: SortCommand): { sort: SortSpec | null; notice?: { reason: 'too-many-sort-keys'; maxKeys: 8 } } {
-  if (command.kind === 'clear') return { sort: null }
-  if (command.kind === 'toggle-case') return { sort: sort ? snapshotSpec({ ...sort, caseSensitive: !sort.caseSensitive }) : null }
-  const existing = sort?.keys.find(key => key.col === command.col), direction = existing?.order === 'asc' ? 'desc' : existing?.order === 'desc' ? null : 'asc'
-  const keys = command.shift ? [...sort?.keys ?? []] : []
-  const at = keys.findIndex(key => key.col === command.col)
-  if (direction === null) { if (at >= 0) keys.splice(at, 1) }
-  else if (at >= 0) keys[at] = { col: command.col, order: direction }
-  else {
-    if (keys.length === 8) return { sort, notice: { reason: 'too-many-sort-keys', maxKeys: 8 } }
-    keys.push({ col: command.col, order: direction })
+export type SortCommandNotice =
+  | { reason: 'too-many-sort-keys'; maxKeys: 8 }
+  | { reason: 'no-active-sort' }
+  | { reason: 'invalid-sort-command'; error: SourceFailure }
+/** Changed bounds start a fresh single ascending key even with Shift. Keep the
+ * user's case preference; it is independent of range/key ownership. Refusals
+ * preserve the exact previous state, including malformed external drafts. */
+export function reduceSortCommand(sort: SortSpec | null, command: SortCommand): {
+  sort: SortSpec | null; notice?: SortCommandNotice
+} {
+  try {
+    if (command.kind === 'clear') return { sort: null }
+    const previous = sort ? snapshotSpec(sort) : null
+    if (command.kind === 'toggle-case') {
+      return previous
+        ? { sort: snapshotSpec({ ...previous, caseSensitive: !previous.caseSensitive }) }
+        : { sort, notice: { reason: 'no-active-sort' } }
+    }
+    if (command.kind !== 'cycle') throw sourceError('invalid-source-rect', 'Invalid sort command')
+    const next = snapshotSpec({
+      range: command.range, keys: [{ col: command.col, order: 'asc' }],
+      caseSensitive: previous?.caseSensitive ?? false,
+    })
+    const range = previous?.range
+    const sameRange = range && range.r0 === next.range.r0 && range.r1 === next.range.r1
+      && range.c0 === next.range.c0 && range.c1 === next.range.c1
+      && range.headerRows === next.range.headerRows && range.totalsRows === next.range.totalsRows
+    if (!sameRange) return { sort: next }
+    const existing = previous!.keys.find(key => key.col === command.col)
+    const direction = existing?.order === 'asc' ? 'desc' : existing?.order === 'desc' ? null : 'asc'
+    const keys = command.shift ? [...previous!.keys] : []
+    const at = keys.findIndex(key => key.col === command.col)
+    if (direction === null) { if (at >= 0) keys.splice(at, 1) }
+    else if (at >= 0) keys[at] = { col: command.col, order: direction }
+    else {
+      if (keys.length === 8) return { sort, notice: { reason: 'too-many-sort-keys', maxKeys: 8 } }
+      keys.push({ col: command.col, order: direction })
+    }
+    return { sort: keys.length ? snapshotSpec({ ...next, keys }) : null }
+  } catch (error) {
+    const outcome = failure(error, {})
+    const diagnostic = outcome.kind === 'error' && (
+      outcome.error.code === 'invalid-coordinate' || outcome.error.code === 'invalid-source-rect'
+    ) ? outcome.error : {
+      code: 'invalid-source-rect' as const, retryable: false, message: 'Invalid sort command or draft shape',
+    }
+    return { sort, notice: { reason: 'invalid-sort-command', error: diagnostic } }
   }
-  return { sort: keys.length ? snapshotSpec({ range: command.range, keys, caseSensitive: sort?.caseSensitive ?? false }) : null }
 }
 // TODO(S7.3): exact external text runs/merge for huge unique domains. U raw
 // strings cost sum(2*UTF16 length + 40B) retained + 128U Map construction bytes,

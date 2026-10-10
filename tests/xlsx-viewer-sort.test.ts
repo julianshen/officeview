@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { prepareSortKeys, sortRowOrder, reduceSortCommand, type SortOptions, type SortResult } from '../src/xlsx/view/sort'
 import type { SourceStore, SortSpec, ColumnEntry, SortKey } from '../src/xlsx/view/contracts'
 import { cellId, MAX_ROWS } from '../src/xlsx/view/coordinates'
@@ -331,5 +331,120 @@ describe('immutable option ownership', () => {
     const options: SortOptions = { ...quiet, visibility: createRowVisibility(MAX_ROWS, row => row !== 0) }
     const delayed: SourceStore = { ...store, queryColumn: async (request, read) => { const page = await original(request, read); options.visibility = createRowVisibility(MAX_ROWS); return page } }
     expect(rowsOf(await sortRowOrder(delayed, specFor(3), options))).toEqual([0, 2, 1])
+  })
+})
+
+
+describe('review behavior regressions', () => {
+  it('default MessageChannel scheduling avoids timers and disposes on every outcome', async () => {
+    const timer = globalThis.setTimeout
+    for (const outcome of ['complete', 'cancelled', 'error'] as const) {
+      const controller = new AbortController()
+      let channels = 0, closed = 0, messages = 0, time = 0
+      class TestChannel {
+        constructor() { channels++ }
+        port1 = { onmessage: null as (() => void) | null, close: () => { closed++ } }
+        port2 = {
+          close: () => { closed++ },
+          postMessage: () => {
+            timer(() => {
+              messages++
+              if (outcome === 'cancelled') controller.abort()
+              this.port1.onmessage?.()
+            }, 0)
+          },
+        }
+      }
+      const timers = vi.fn(timer)
+      vi.stubGlobal('MessageChannel', TestChannel)
+      vi.stubGlobal('setTimeout', timers)
+      try {
+        const store = dataStore([[fixtureCell(2)], [fixtureCell(1)]])
+        let reads = 0
+        const original = store.queryColumn.bind(store)
+        const source: SourceStore = { ...store, queryColumn: async (request, options) => {
+          if (outcome === 'error' && reads++) throw new Error('source failed after yield')
+          return original(request, options)
+        } }
+        const result = await sortRowOrder(source, specFor(2, [
+          { col: 0, order: 'asc' }, { col: 1, order: 'asc' },
+        ]), { now: () => (time += 11), signal: controller.signal })
+        expect(result.kind).toBe(outcome)
+        if (result.kind === 'complete') expect(rowsOf(result)).toEqual([1, 0])
+        expect(timers).not.toHaveBeenCalled()
+        expect(channels).toBe(1)
+        expect(messages).toBeGreaterThan(0)
+        expect(closed).toBe(2)
+      } finally { vi.unstubAllGlobals() }
+    }
+  })
+  it('invalid locale is unsupported and nonretryable rather than an allocation failure', async () => {
+    const store = dataStore([[fixtureCell(1)]])
+    for (const run of [prepareSortKeys, sortRowOrder]) {
+      expect(await run(store, specFor(1), { ...quiet, locale: 'en_US' })).toMatchObject({
+        kind: 'error', error: { code: 'unsupported', retryable: false },
+      })
+    }
+  })
+  it('source RangeErrors are page failures rather than allocation failures', async () => {
+    const store = dataStore([[fixtureCell(1)]])
+    const source: SourceStore = { ...store, queryColumn: async () => { throw new RangeError('source decoder bounds') } }
+    expect(await sortRowOrder(source, specFor(1), quiet)).toMatchObject({
+      kind: 'error', error: { code: 'page-error', message: 'source decoder bounds' },
+    })
+  })
+  it.each(['asc', 'desc'] as const)('nonfinite numbers share the real #NUM! rank in %s', async order => {
+    const cells = [fixtureCell(NaN), fixtureCell(3), fixtureCell('#NUM!', true),
+      fixtureCell(Infinity), fixtureCell('#DIV/0!', true), fixtureCell(-Infinity),
+      fixtureCell(''), fixtureCell(null), fixtureCell(false), fixtureCell(-2)]
+    const store = dataStore(cells.map(cell => [cell]))
+    const spec = specFor(cells.length, [{ col: 0, order }])
+    expect(rowsOf(await sortRowOrder(store, spec, quiet))).toEqual(order === 'asc'
+      ? [9, 1, 6, 8, 4, 0, 2, 3, 5, 7] : [8, 6, 1, 9, 4, 0, 2, 3, 5, 7])
+    const prepared = await prepareSortKeys(store, spec, quiet)
+    expect(prepared.kind).toBe('complete')
+    if (prepared.kind === 'complete') {
+      const lane = prepared.prepared.lanes[0]
+      expect(lane.errors).toEqual(['#NUM!', '#DIV/0!'])
+      for (const row of [0, 2, 3, 5]) expect(lane.ids![row]).toBe(lane.ids![0])
+    }
+  })
+  it('reducer returns typed notices for invalid commands and preserves prior state', () => {
+    const sort = specFor(4)
+    for (const col of [-1, 16384, 8]) {
+      expect(() => reduceSortCommand(sort, { kind: 'cycle', col, range: sort.range })).not.toThrow()
+      const result = reduceSortCommand(sort, { kind: 'cycle', col, range: sort.range })
+      expect(result.sort).toBe(sort)
+      expect(result.notice).toMatchObject({ reason: 'invalid-sort-command', error: { code: 'invalid-coordinate', retryable: false } })
+    }
+    const range = { ...sort.range, r1: -1 }
+    const result = reduceSortCommand(sort, { kind: 'cycle', col: 0, range })
+    expect(result.sort).toBe(sort)
+    expect(result.notice).toMatchObject({ reason: 'invalid-sort-command', error: { code: 'invalid-source-rect' } })
+    expect(reduceSortCommand(null, { kind: 'toggle-case' })).toEqual({ sort: null, notice: { reason: 'no-active-sort' } })
+    const malformed = { ...sort, keys: null } as unknown as SortSpec
+    expect(reduceSortCommand(malformed, { kind: 'toggle-case' }).sort).toBe(malformed)
+    expect(reduceSortCommand(malformed, { kind: 'toggle-case' }).notice).toMatchObject({ reason: 'invalid-sort-command' })
+  })
+  it('toggle-case without a sort reports a typed notice', () => {
+    expect(reduceSortCommand(null, { kind: 'toggle-case' }))
+      .toEqual({ sort: null, notice: { reason: 'no-active-sort' } })
+  })
+  it.each([false, true])('changed range begins a fresh single ascending key even with shift=%s', shift => {
+    const sort = specFor(4, [{ col: 0, order: 'asc' }, { col: 1, order: 'desc' }], true)
+    const range = { ...sort.range, r1: 5 }
+    expect(reduceSortCommand(sort, { kind: 'cycle', col: 0, shift, range }).sort).toEqual({
+      range, keys: [{ col: 0, order: 'asc' }], caseSensitive: true,
+    })
+  })
+  it('nonshift multi-key click collapses to that cycled key; ninth key leaves state unchanged', () => {
+    const sort = specFor(4, [{ col: 0, order: 'asc' }, { col: 1, order: 'asc' }])
+    expect(reduceSortCommand(sort, { kind: 'cycle', col: 1, range: sort.range }).sort?.keys)
+      .toEqual([{ col: 1, order: 'desc' }])
+    const full = { ...specFor(4, Array.from({ length: 8 }, (_v, col) => ({ col, order: 'asc' }))),
+      range: { ...sort.range, c1: 8 } } as SortSpec
+    const refused = reduceSortCommand(full, { kind: 'cycle', col: 8, shift: true, range: full.range })
+    expect(refused.sort).toBe(full)
+    expect(refused.notice).toEqual({ reason: 'too-many-sort-keys', maxKeys: 8 })
   })
 })
