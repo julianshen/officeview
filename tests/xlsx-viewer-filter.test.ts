@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { classifyColumn, filterMenus, rawValueKey, FilterEngine, type PreparedValue, type ColumnClassification } from '../src/xlsx/view/filter'
+import { classifyColumn, filterMenus, rawValueKey, FilterEngine, type PreparedValue, type ColumnClassification, type FilterLimits } from '../src/xlsx/view/filter'
 import type { ColumnRule, FilterSpec, NumberOp, TextOp } from '../src/xlsx/view/contracts'
 import type { ResolvedSemantics } from '../src/xlsx/formula/types'
 import { createIdentityOrder } from '../src/xlsx/view/order'
@@ -145,6 +145,9 @@ describe('literal and wildcard Unicode semantics', () => {
   })
   it('rejects wildcard tilde escapes of ordinary characters', () => expect(() => engine.matchText('eq', '~x', true, 'x')).toThrow(RangeError))
   it('validates malformed trailing escape on compilation', () => expect(() => engine.compileRule({ kind: 'text', op: 'eq', first: 'abc~', wildcards: true }, mixed)).toThrow(RangeError))
+  it.each([null, {}, { used: null }, { used: undefined }, { used: NaN }, { used: -1 }, { used: 0.5 }])('rejects malformed supplied work counter %j', work => {
+    expect(() => engine.matchText('eq', 'a', false, 'a', { work } as FilterLimits)).toThrow(RangeError)
+  })
   it('bounds pathological wildcard work and supports cancellation with explicit outcomes', () => {
     const work = { used: 0 }, text = 'a'.repeat(160)
     expect(engine.matchText('eq', '*a*a*a*a*a*b', true, text, { work, maxWork: 10000000 })).toBe(false)

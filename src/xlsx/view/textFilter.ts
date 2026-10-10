@@ -16,10 +16,12 @@ export class WorkBudget {
   constructor(readonly limits: FilterLimits = {}) {
     this.maxWork = limits.maxWork === undefined ? DEFAULT_FILTER_WORK : limits.maxWork
     this.maxTextLength = limits.maxTextLength === undefined ? DEFAULT_FILTER_TEXT_LENGTH : limits.maxTextLength
-    for (const value of [this.maxWork, this.maxTextLength, limits.work?.used ?? 0]) {
+    if (limits.work !== undefined && (limits.work === null || typeof limits.work !== 'object')) throw new RangeError('Invalid filter work counter')
+    const used = limits.work === undefined ? 0 : limits.work.used
+    for (const value of [this.maxWork, this.maxTextLength, used]) {
       if (!Number.isSafeInteger(value) || value < 0) throw new RangeError('Invalid filter resource policy')
     }
-    this.work = limits.work ?? { used: 0 }
+    this.work = limits.work === undefined ? { used: 0 } : limits.work
     this.charge(0)
   }
   charge(amount: number): void {
