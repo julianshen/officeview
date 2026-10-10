@@ -419,6 +419,18 @@ describe('refusal identity and determinism', () => {
       throw new Error('expected a drawing refusal for the notices test')
     }
   })
+  it('refuses an invalid pageLimit up front instead of throwing a raw RangeError', async () => {
+    const { handle, index } = await f5Setup()
+    const source = fixtureSource(handle)
+    for (const pageLimit of [0, -1, 1.5, Number.NaN, Number.POSITIVE_INFINITY]) {
+      expect(await guardSort(band(60, 65, 0, 1), index, source, { pageLimit }))
+        .toEqual({ ok: false, refusal: { reason: 'invalid-range', message: 'Invalid chunk page limit' } })
+    }
+    // Up front means before structural checks: a merge-intersecting band still reports the option error.
+    expect(await guardSort(band(0, 5, 0, 3), index, source, { pageLimit: 0 }))
+      .toEqual({ ok: false, refusal: { reason: 'invalid-range', message: 'Invalid chunk page limit' } })
+    expect(await guardSort(band(60, 65, 0, 1), index, source, { pageLimit: 16 })).toEqual({ ok: true })
+  })
   it('refuses invalid ranges instead of throwing', async () => {
     const { handle, index } = await f5Setup()
     const source = fixtureSource(handle)

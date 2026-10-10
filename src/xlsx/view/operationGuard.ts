@@ -84,6 +84,12 @@ export async function guardSort(
   let band: SourceRowInterval | null
   try {
     band = bodyBand(range)
+    // Validate before any structural work so a bad option is a typed refusal here,
+    // not a raw RangeError from the populated scan after the checks have run.
+    const pageLimit = options?.pageLimit
+    if (pageLimit !== undefined && (!Number.isSafeInteger(pageLimit) || pageLimit <= 0)) {
+      throw new RangeError('Invalid chunk page limit')
+    }
   } catch (error) {
     return invalidRange(error)
   }
