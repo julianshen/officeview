@@ -8,7 +8,10 @@ import { drawingPartContext } from '../src/drawing/parts'
 import { paintDrawingContent } from '../src/drawing/content-paint'
 import { parseTextBody, textFontDefaults } from '../src/drawing/text-parse'
 import { parsePptx } from '../src/pptx/parse'
+import { renderSlide } from '../src/pptx/render'
 import { parseDocx } from '../src/docx/parse'
+import { paintDrawing } from '../src/docx/drawing'
+import { RECORD_TEXT } from '../src/core/text-recording'
 
 const DIAGRAM_URI = 'http://schemas.openxmlformats.org/drawingml/2006/diagram'
 const DGM = 'xmlns:dgm="http://schemas.openxmlformats.org/drawingml/2006/diagram"'
@@ -217,5 +220,81 @@ describe('Phase 23: cacheless SmartArt text-only fallback', () => {
     const entry = doc.drawingCoverage!.find((e) => e.element === 'drawing' && e.feature === 'diagram')
     expect(entry).toBeDefined()
     expect(entry).toMatchObject({ selectedRepresentation: 'text-only' })
+  })
+
+  test('truncation diagnostic fires only when text is actually dropped', async () => {
+    const textPt = (i: number) => `<dgm:pt modelId="{D${i}}"><dgm:prSet/><dgm:t>point ${i}</dgm:t></dgm:pt>`
+    const emptyPt = (i: number) => `<dgm:pt modelId="{E${i}}"><dgm:prSet/></dgm:pt>`
+    const filler = Array.from({ length: 1000 }, (_, i) => textPt(i)).join('') + Array.from({ length: 5 }, (_, i) => emptyPt(i)).join('')
+    const pkg = await packageWithParts({
+      'word/document.xml': '<w:document/>',
+      'word/_rels/document.xml.rels': relsXml([{ id: 'rDm1', type: DIAGRAM_DATA_REL, target: 'diagrams/data1.xml' }]),
+      'word/diagrams/data1.xml': `<dgm:dataModel ${DGM}><dgm:ptLst>${filler}</dgm:ptLst><dgm:cxnLst/><dgm:whole/></dgm:dataModel>`,
+    })
+    const content = await prepareDrawingContent(pkg, graphicNode, 'word/document.xml', theme, drawingTheme)
+    expect(content?.kind).toBe('diagram')
+    if (content?.kind === 'diagram') expect(content.shapes[0].paragraphs).toHaveLength(1000)
+    const ctx = drawingPartContext(pkg)
+    expect(ctx.diagnostics.some((d) => d.reason === 'smartart-text-truncated')).toBe(false)
+
+    const over = Array.from({ length: 1002 }, (_, i) => textPt(i)).join('')
+    const pkg2 = await packageWithParts({
+      'word/document.xml': '<w:document/>',
+      'word/_rels/document.xml.rels': relsXml([{ id: 'rDm1', type: DIAGRAM_DATA_REL, target: 'diagrams/data1.xml' }]),
+      'word/diagrams/data1.xml': `<dgm:dataModel ${DGM}><dgm:ptLst>${over}</dgm:ptLst><dgm:cxnLst/><dgm:whole/></dgm:dataModel>`,
+    })
+    const content2 = await prepareDrawingContent(pkg2, graphicNode, 'word/document.xml', theme, drawingTheme)
+    expect(content2?.kind).toBe('diagram')
+    if (content2?.kind === 'diagram') expect(content2.shapes[0].paragraphs).toHaveLength(1000)
+    const ctx2 = drawingPartContext(pkg2)
+    expect(ctx2.diagnostics.some((d) => d.reason === 'smartart-text-truncated')).toBe(true)
+  })
+})
+
+describe('Phase 23 review: fallback text paints visibly', () => {
+  test('DOCX fallback paints recorded text (not an invisible 0x0 box)', async () => {
+    const zip = new JSZip()
+    zip.file('_rels/.rels', '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/></Relationships>')
+    zip.file('word/_rels/document.xml.rels', relsXml([{ id: 'rDm1', type: DIAGRAM_DATA_REL, target: 'diagrams/data1.xml' }]))
+    zip.file('word/document.xml',
+      `<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:dgm="http://schemas.openxmlformats.org/drawingml/2006/diagram" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><w:body><w:p><w:r>` +
+      `<w:drawing><wp:inline><wp:extent cx="952500" cy="952500"/><wp:docPr id="7" name="smartart1"/><a:graphic><a:graphicData uri="${DIAGRAM_URI}"><dgm:relIds dm="rDm1"/></a:graphicData></a:graphic></wp:inline></w:drawing>` +
+      `</w:r></w:p></w:body></w:document>`)
+    zip.file('word/diagrams/data1.xml', cachelessDataXml)
+    const doc = await parseDocx(await OfficePackage.load(await zip.generateAsync({ type: 'uint8array' })))
+    const drawing = doc.sections[0].paragraphs[0].images.find((image) => image.drawing)?.drawing
+    expect(drawing).toBeDefined()
+    const canvas = createCanvas(200, 200)
+    const ctx = canvas.getContext('2d') as never
+    const recorded: string[] = []
+    ;(ctx as unknown as Record<symbol, unknown>)[RECORD_TEXT] = (text: string) => { recorded.push(text) }
+    paintDrawing(drawing!, ctx, 100, 100)
+    const joined = recorded.join(' ').replace(/\s+/g, ' ')
+    expect(joined).toContain('Alpha & Omega')
+    expect(joined).toContain('Beta <gamma>')
+  })
+
+  test('PPTX fallback paints recorded text (not an invisible 0x0 box)', async () => {
+    const zip = new JSZip()
+    zip.file('ppt/presentation.xml', '<p:presentation xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><p:sldSz cx="952500" cy="952500"/><p:sldIdLst><p:sldId r:id="s1"/></p:sldIdLst></p:presentation>')
+    zip.file('ppt/_rels/presentation.xml.rels', relsXml([{ id: 's1', type: 'http://schemas.openxmlformats.org/officeDocument/2006/relationships/slide', target: 'slides/slide1.xml' }]))
+    zip.file('ppt/slides/slide1.xml',
+      `<p:sld xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:dgm="http://schemas.openxmlformats.org/drawingml/2006/diagram"><p:cSld><p:spTree>` +
+      `<p:graphicFrame><p:nvGraphicFramePr><p:cNvPr id="81" name="smartart1"/></p:nvGraphicFramePr>` +
+      `<p:xfrm><a:off x="0" y="0"/><a:ext cx="952500" cy="952500"/></p:xfrm>` +
+      `<a:graphic><a:graphicData uri="${DIAGRAM_URI}"><dgm:relIds dm="rDm1"/></a:graphicData></a:graphic>` +
+      `</p:graphicFrame>` +
+      `</p:spTree></p:cSld></p:sld>`)
+    zip.file('ppt/slides/_rels/slide1.xml.rels', relsXml([{ id: 'rDm1', type: DIAGRAM_DATA_REL, target: '../diagrams/data1.xml' }]))
+    zip.file('ppt/diagrams/data1.xml', cachelessDataXml)
+    const doc = await parsePptx(await OfficePackage.load(await zip.generateAsync({ type: 'uint8array' })))
+    const canvas = createCanvas(200, 200)
+    const ctx = canvas.getContext('2d') as never
+    const recorded: string[] = []
+    ;(ctx as unknown as Record<symbol, unknown>)[RECORD_TEXT] = (text: string) => { recorded.push(text) }
+    renderSlide(doc.slides[0], ctx)
+    const joined = recorded.join(' ').replace(/\s+/g, ' ')
+    expect(joined).toContain('Alpha & Omega')
+    expect(joined).toContain('Beta <gamma>')
   })
 })

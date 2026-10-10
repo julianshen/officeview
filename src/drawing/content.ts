@@ -402,9 +402,10 @@ function collectDataModelTexts(root: XmlNode | undefined): { texts: string[]; tr
   const texts: string[] = []
   let truncated = false
   for (const pt of pts) {
-    if (texts.length >= SMARTART_TEXT_PARAGRAPH_LIMIT) { truncated = true; break }
     const text = getChildren(pt, 't').map((t) => textOf(t)).join('').trim()
-    if (text) texts.push(text)
+    if (!text) continue
+    if (texts.length >= SMARTART_TEXT_PARAGRAPH_LIMIT) { truncated = true; break }
+    texts.push(text)
   }
   return { texts, truncated }
 }

@@ -57,7 +57,12 @@ export function renderSlide(
       paintContent(shape, context, w, h) {
         if (shape.content) paintDrawingContent(shape.content, context, w, h, {
           fontFamilyCss: family => JSON.stringify(resolveFont(family)),
-          paintDiagramText(node, c, width, height) { if (node.textBody) paintTextBody(node.textBody, c, 0, 0, width, height, resolveFont, slide.theme) },
+          paintDiagramText(node, c, width, height) {
+            // Cacheless-SmartArt text boxes carry no intrinsic extents; paint
+            // their text across the enclosing frame box instead of a degenerate
+            // one (which paintTextBody early-returns on, losing all visible ink).
+            if (node.textBody) paintTextBody(node.textBody, c, 0, 0, width > 0 ? width : w, height > 0 ? height : h, resolveFont, slide.theme)
+          },
           paintTextbox(drawing, c, width, height) {
             paintTextBody({ paragraphs: drawing.paragraphs, anchor: 't', wrap: true,
               insetLeftEmu: drawing.insets.left, insetRightEmu: drawing.insets.right,
