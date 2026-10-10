@@ -382,14 +382,28 @@ function toRowIntervals(rows: number[]): SourceRowInterval[] {
 /** Per-row populated-column intervals for one row band. Answers the
  * outside-columns query without scanning all 16,384 columns per candidate row:
  * only populated cells are ever visited. */
-export class RowChunkIndex {
-  private readonly rows: ReadonlyMap<number, readonly SourceColInterval[]>
-  private readonly orderedRows: readonly number[]
+export interface RowIntervalView {
+  readonly band: SourceRowInterval
   readonly complete: boolean
   readonly missing: readonly SourceRect[]
-  private constructor(rows: ReadonlyMap<number, readonly SourceColInterval[]>, complete: boolean, missing: readonly SourceRect[]) {
+  columnsOf(row: number): readonly SourceColInterval[]
+}
+export interface ColumnIntervalView {
+  readonly band: SourceRowInterval
+  readonly complete: boolean
+  readonly missing: readonly SourceRect[]
+  rowsOf(col: number): readonly SourceRowInterval[]
+}
+export class RowChunkIndex implements RowIntervalView {
+  private readonly rows: ReadonlyMap<number, readonly SourceColInterval[]>
+  private readonly orderedRows: readonly number[]
+  readonly band: SourceRowInterval
+  readonly complete: boolean
+  readonly missing: readonly SourceRect[]
+  private constructor(rows: ReadonlyMap<number, readonly SourceColInterval[]>, band: SourceRowInterval, complete: boolean, missing: readonly SourceRect[]) {
     this.rows = rows
     this.orderedRows = Object.freeze([...rows.keys()].sort((a, b) => a - b))
+    this.band = Object.freeze({ ...band })
     this.complete = complete
     this.missing = missing
   }
@@ -397,7 +411,7 @@ export class RowChunkIndex {
     const consumed = await consumeBand(source, band, pageLimit)
     const rows = new Map<number, readonly SourceColInterval[]>()
     for (const [row, cols] of consumed.byRow) rows.set(row, Object.freeze(toColumnIntervals(cols)))
-    return { index: new RowChunkIndex(rows, consumed.complete, consumed.missing), complete: consumed.complete, missing: consumed.missing }
+    return { index: new RowChunkIndex(rows, band, consumed.complete, consumed.missing), complete: consumed.complete, missing: consumed.missing }
   }
   columnsOf(row: number): readonly SourceColInterval[] {
     validateCoordinate(row, 0)
@@ -466,12 +480,14 @@ export async function findOutsideColumnData(
   return { kind: 'clear' }
 }
 /** Transposed per-column populated-row intervals for the same band. */
-export class ColumnChunkIndex {
+export class ColumnChunkIndex implements ColumnIntervalView {
   private readonly cols: ReadonlyMap<number, readonly SourceRowInterval[]>
+  readonly band: SourceRowInterval
   readonly complete: boolean
   readonly missing: readonly SourceRect[]
-  private constructor(cols: ReadonlyMap<number, readonly SourceRowInterval[]>, complete: boolean, missing: readonly SourceRect[]) {
+  private constructor(cols: ReadonlyMap<number, readonly SourceRowInterval[]>, band: SourceRowInterval, complete: boolean, missing: readonly SourceRect[]) {
     this.cols = cols
+    this.band = Object.freeze({ ...band })
     this.complete = complete
     this.missing = missing
   }
@@ -487,70 +503,103 @@ export class ColumnChunkIndex {
     }
     const cols = new Map<number, readonly SourceRowInterval[]>()
     for (const [col, rows] of byCol) cols.set(col, Object.freeze(toRowIntervals(rows)))
-    return { index: new ColumnChunkIndex(cols, consumed.complete, consumed.missing), complete: consumed.complete, missing: consumed.missing }
+    return { index: new ColumnChunkIndex(cols, band, consumed.complete, consumed.missing), complete: consumed.complete, missing: consumed.missing }
   }
   rowsOf(col: number): readonly SourceRowInterval[] {
     validateCoordinate(0, col)
     return this.cols.get(col) ?? []
   }
 }
-function intervalContainsCol(intervals: readonly SourceColInterval[], col: number): boolean {
-  let lo = 0, hi = intervals.length
-  while (lo < hi) {
-    const mid = (lo + hi) >> 1
-    if (intervals[mid].c1 < col) lo = mid + 1
-    else hi = mid
+/** Sorted sub-array of column intervals overlapping [lo,hi] by binary search:
+ * O(log n + overlaps), never a full scan. Returned slices share no state. */
+export function overlappingRange(intervals: readonly SourceColInterval[], lo: number, hi: number): readonly SourceColInterval[] {
+  let start = 0, end = intervals.length
+  while (start < end) {
+    const mid = (start + end) >> 1
+    if (intervals[mid].c1 < lo) start = mid + 1
+    else end = mid
   }
-  return lo < intervals.length && intervals[lo].c0 <= col
+  let stop = start
+  while (stop < intervals.length && intervals[stop].c0 <= hi) stop++
+  return intervals.slice(start, stop)
 }
-function intervalContainsRow(intervals: readonly SourceRowInterval[], row: number): boolean {
-  let lo = 0, hi = intervals.length
-  while (lo < hi) {
-    const mid = (lo + hi) >> 1
-    if (intervals[mid].r1 < row) lo = mid + 1
-    else hi = mid
+/** Row-interval variant of overlappingRange. */
+export function overlappingRows(intervals: readonly SourceRowInterval[], lo: number, hi: number): readonly SourceRowInterval[] {
+  let start = 0, end = intervals.length
+  while (start < end) {
+    const mid = (start + end) >> 1
+    if (intervals[mid].r1 < lo) start = mid + 1
+    else end = mid
   }
-  return lo < intervals.length && intervals[lo].r0 <= row
+  let stop = start
+  while (stop < intervals.length && intervals[stop].r0 <= hi) stop++
+  return intervals.slice(start, stop)
 }
-/** Bounding box of the 4-connected populated component containing the seed, found
- * through sparse adjacency only. Diagonally touching cells are separate regions.
- * An unpopulated seed has no region. Excel-rectangle expansion beyond the
- * connected component (including blank interior) belongs to S7 range resolution. */
-export function currentRegion(seed: SourceCell, rows: RowChunkIndex, cols: ColumnChunkIndex): SourceRect | null {
+/** Excel current-region semantics: starting from the seed's populated cell,
+ * repeatedly grow the bounding box while ANY populated cell exists in the
+ * one-cell ring around it, to a fixpoint. The ring is checked sparsely: edge
+ * rows through the row index, side columns through the column index, each an
+ * O(log n) overlap probe (never a dense scan, never a per-stripe pair scan).
+ * A diagonally touching cell joins through the ring (A1+B2 yields A1:B2); blank
+ * interior stays inside the box. An unpopulated seed has no region (null).
+ * Incomplete indexes, a column index narrower than the row band, or growth that
+ * would need rows outside the indexed band yield `unknown`: the caller must
+ * widen the band and retry rather than silently truncating (spec section 6.1:
+ * unknown pages cannot be boundaries). */
+export function currentRegion(
+  seed: SourceCell, rows: RowIntervalView, cols: ColumnIntervalView,
+): SourceRect | null | { kind: 'unknown'; missing: readonly SourceRect[] } {
   validateCoordinate(seed.row, seed.col)
-  if (!intervalContainsCol(rows.columnsOf(seed.row), seed.col)
-    || !intervalContainsRow(cols.rowsOf(seed.col), seed.row)) return null
-  const visited = new Set<number>()
-  const box: SourceRect = { r0: seed.row, r1: seed.row, c0: seed.col, c1: seed.col }
-  const queue: { row: number; c0: number; c1: number }[] = [{ row: seed.row, c0: seed.col, c1: seed.col }]
-  const keyOf = (row: number, c0: number): number => row * MAX_COLS + c0
-  for (const seedInterval of rows.columnsOf(seed.row)) {
-    if (seedInterval.c0 <= seed.col && seed.col <= seedInterval.c1) {
-      queue[0] = { row: seed.row, c0: seedInterval.c0, c1: seedInterval.c1 }
-      visited.add(keyOf(seed.row, seedInterval.c0))
-      box.c0 = seedInterval.c0
-      box.c1 = seedInterval.c1
-      break
+  if (!rows.complete || !cols.complete) {
+    return { kind: 'unknown', missing: Object.freeze([...rows.missing, ...cols.missing]) }
+  }
+  if (cols.band.r0 > rows.band.r0 || cols.band.r1 < rows.band.r1) {
+    return {
+      kind: 'unknown',
+      missing: Object.freeze([{ r0: rows.band.r0, r1: rows.band.r1, c0: 0, c1: MAX_COLS - 1 }]),
     }
   }
-  while (queue.length > 0) {
-    const current = queue.pop()!
-    box.r0 = Math.min(box.r0, current.row)
-    box.r1 = Math.max(box.r1, current.row)
-    box.c0 = Math.min(box.c0, current.c0)
-    box.c1 = Math.max(box.c1, current.c1)
-    for (const next of [current.row - 1, current.row + 1]) {
-      if (next < 0 || next >= MAX_ROWS) continue
-      for (const interval of rows.columnsOf(next)) {
-        if (interval.c1 < current.c0 || interval.c0 > current.c1) continue
-        const key = keyOf(next, interval.c0)
-        if (visited.has(key)) continue
-        visited.add(key)
-        queue.push({ row: next, c0: interval.c0, c1: interval.c1 })
+  const inRows = overlappingRange(rows.columnsOf(seed.row), seed.col, seed.col).length > 0
+  const inCols = overlappingRows(cols.rowsOf(seed.col), seed.row, seed.row).length > 0
+  if (!inRows || !inCols) {
+    if (seed.row < rows.band.r0 || seed.row > rows.band.r1) {
+      return { kind: 'unknown', missing: Object.freeze([{ r0: seed.row, r1: seed.row, c0: seed.col, c1: seed.col }]) }
+    }
+    return null
+  }
+  let box: SourceRect = { r0: seed.row, r1: seed.row, c0: seed.col, c1: seed.col }
+  for (;;) {
+    let r0 = box.r0, r1 = box.r1, c0 = box.c0, c1 = box.c1
+    for (const row of [box.r0 - 1, box.r1 + 1]) {
+      if (row < 0 || row >= MAX_ROWS) continue
+      if (row < rows.band.r0 || row > rows.band.r1) {
+        return { kind: 'unknown', missing: Object.freeze([{ ...box }]) }
+      }
+      const found = overlappingRange(rows.columnsOf(row), box.c0 - 1, box.c1 + 1)
+      if (found.length > 0) {
+        r0 = Math.min(r0, row)
+        r1 = Math.max(r1, row)
+        for (const interval of found) {
+          c0 = Math.min(c0, interval.c0)
+          c1 = Math.max(c1, interval.c1)
+        }
       }
     }
+    for (const col of [box.c0 - 1, box.c1 + 1]) {
+      if (col < 0 || col >= MAX_COLS) continue
+      const found = overlappingRows(cols.rowsOf(col), box.r0, box.r1)
+      if (found.length > 0) {
+        c0 = Math.min(c0, col)
+        c1 = Math.max(c1, col)
+        for (const interval of found) {
+          r0 = Math.min(r0, interval.r0)
+          r1 = Math.max(r1, interval.r1)
+        }
+      }
+    }
+    if (r0 === box.r0 && r1 === box.r1 && c0 === box.c0 && c1 === box.c1) return box
+    box = { r0, r1, c0, c1 }
   }
-  return box
 }
 /** Store-backed populated source so S1 can feed the chunk indexes from
  * scanPopulated. Store cursors pass through opaquely; the store itself rejects

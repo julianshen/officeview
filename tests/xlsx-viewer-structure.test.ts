@@ -10,9 +10,13 @@ import {
   currentRegion,
   findOutsideColumnData,
   fromStoreScan,
+  overlappingRange,
+  overlappingRows,
   type CellAnchoredDrawing,
+  type ColumnIntervalView,
   type PopulatedCellSource,
   type PopulatedPage,
+  type RowIntervalView,
   type StructuralPage,
 } from '../src/xlsx/view/structure'
 import { createFixture, createPrng, readOptionsFor, type FixtureHandle } from './helpers/xlsx-viewer-fixtures'
@@ -390,7 +394,42 @@ describe('row and column chunk indexes', () => {
   })
 })
 
-describe('sparse current-region detection', () => {
+describe('interval overlap primitives', () => {
+  it('finds overlapping sub-arrays at the boundaries', () => {
+    const intervals = [{ c0: 0, c1: 0 }, { c0: 4, c1: 9 }, { c0: 10, c1: 10 }, { c0: 20, c1: 30 }]
+    expect(overlappingRange([], 0, 5)).toEqual([])
+    expect(overlappingRange(intervals, 1, 3)).toEqual([])
+    expect(overlappingRange(intervals, 0, 0)).toEqual([{ c0: 0, c1: 0 }])
+    expect(overlappingRange(intervals, 9, 10)).toEqual([{ c0: 4, c1: 9 }, { c0: 10, c1: 10 }])
+    expect(overlappingRange(intervals, 0, 100)).toEqual(intervals)
+    expect(overlappingRange(intervals, 31, 40)).toEqual([])
+    const rows = [{ r0: 2, r1: 5 }, { r0: 9, r1: 9 }]
+    expect(overlappingRows(rows, 5, 9)).toEqual(rows)
+    expect(overlappingRows(rows, 6, 8)).toEqual([])
+    expect(overlappingRows(rows, 0, 1)).toEqual([])
+  })
+})
+
+describe('Excel current-region detection', () => {
+  function handViews(cells: ReadonlyArray<{ row: number; col: number }>, band: { r0: number; r1: number }) {
+    const source: PopulatedCellSource = {
+      async iterate(range: SourceRect): Promise<PopulatedPage> {
+        return {
+          items: cells.filter(cell => cell.row >= range.r0 && cell.row <= range.r1),
+          completeness: 'complete',
+          missing: [],
+        }
+      },
+    }
+    return { source, band }
+  }
+  async function views(cells: ReadonlyArray<{ row: number; col: number }>, band: { r0: number; r1: number }) {
+    const { source } = handViews(cells, band)
+    return {
+      rows: (await RowChunkIndex.build(source, band)).index,
+      cols: (await ColumnChunkIndex.build(source, band)).index,
+    }
+  }
   it('expands through populated adjacency and stops at blank separators', async () => {
     const handle = createFixture('F5')
     const source = fixtureSource(handle)
@@ -401,25 +440,100 @@ describe('sparse current-region detection', () => {
     expect(currentRegion({ row: 0, col: 0 }, rows, cols)).toEqual({ r0: 0, r1: 0, c0: 0, c1: 0 })
     expect(currentRegion({ row: 10, col: 10 }, rows, cols)).toBeNull()
   })
-  it('excludes diagonally touching cells', async () => {
+  it('absorbs diagonally touching cells like Excel (A1+B2 -> A1:B2)', async () => {
+    const { rows, cols } = await views([{ row: 0, col: 0 }, { row: 1, col: 1 }], { r0: 0, r1: 9 })
+    expect(currentRegion({ row: 0, col: 0 }, rows, cols)).toEqual({ r0: 0, r1: 1, c0: 0, c1: 1 })
+    expect(currentRegion({ row: 1, col: 1 }, rows, cols)).toEqual({ r0: 0, r1: 1, c0: 0, c1: 1 })
+  })
+  it('grows through ring adjacency (A1:C1+A2+C3 -> A1:C3)', async () => {
     const cells = [
-      { row: 2, col: 2 }, { row: 2, col: 3 }, { row: 3, col: 2 }, { row: 3, col: 3 },
-      { row: 4, col: 4 },
+      { row: 0, col: 0 }, { row: 0, col: 1 }, { row: 0, col: 2 }, { row: 1, col: 0 }, { row: 2, col: 2 },
     ]
-    const source: PopulatedCellSource = {
-      async iterate(range: SourceRect): Promise<PopulatedPage> {
-        return {
-          items: cells.filter(cell => cell.row >= range.r0 && cell.row <= range.r1),
-          completeness: 'complete',
-          missing: [],
-        }
-      },
-    }
-    const band = { r0: 0, r1: 9 }
+    const { rows, cols } = await views(cells, { r0: 0, r1: 9 })
+    expect(currentRegion({ row: 0, col: 0 }, rows, cols)).toEqual({ r0: 0, r1: 2, c0: 0, c1: 2 })
+  })
+  it('absorbs diagonal chains and keeps L-shapes and holes as bounding boxes', async () => {
+    const chain = [{ row: 10, col: 10 }, { row: 11, col: 11 }, { row: 12, col: 12 }]
+    const grown = await views(chain, { r0: 0, r1: 20 })
+    expect(currentRegion({ row: 10, col: 10 }, grown.rows, grown.cols)).toEqual({ r0: 10, r1: 12, c0: 10, c1: 12 })
+    const ell = [{ row: 30, col: 30 }, { row: 31, col: 30 }, { row: 31, col: 31 }]
+    const ellViews = await views(ell, { r0: 20, r1: 40 })
+    expect(currentRegion({ row: 30, col: 30 }, ellViews.rows, ellViews.cols)).toEqual({ r0: 30, r1: 31, c0: 30, c1: 31 })
+    const donut = [
+      { row: 50, col: 50 }, { row: 50, col: 51 }, { row: 50, col: 52 },
+      { row: 51, col: 50 }, { row: 51, col: 52 },
+      { row: 52, col: 50 }, { row: 52, col: 51 }, { row: 52, col: 52 },
+    ]
+    const donutViews = await views(donut, { r0: 40, r1: 60 })
+    expect(currentRegion({ row: 50, col: 50 }, donutViews.rows, donutViews.cols)).toEqual({ r0: 50, r1: 52, c0: 50, c1: 52 })
+  })
+  it('returns unknown for incomplete indexes instead of bounding partial data', async () => {
+    const handle = createFixture('F5')
+    const pending: SourceRect = { r0: 0, r1: 60, c0: 0, c1: MAX_COLS - 1 }
+    const source = fixtureSource(handle, [pending])
+    const band = { r0: 0, r1: 60 }
     const rows = (await RowChunkIndex.build(source, band)).index
     const cols = (await ColumnChunkIndex.build(source, band)).index
-    expect(currentRegion({ row: 2, col: 2 }, rows, cols)).toEqual({ r0: 2, r1: 3, c0: 2, c1: 3 })
-    expect(currentRegion({ row: 4, col: 4 }, rows, cols)).toEqual({ r0: 4, r1: 4, c0: 4, c1: 4 })
+    expect(rows.complete).toBe(false)
+    expect(currentRegion({ row: 0, col: 0 }, rows, cols)).toMatchObject({ kind: 'unknown' })
+  })
+  it('returns unknown when the region touches the band edge', async () => {
+    const cells = [{ row: 5, col: 5 }, { row: 6, col: 5 }, { row: 7, col: 5 }, { row: 8, col: 5 }, { row: 9, col: 5 }]
+    const { rows, cols } = await views(cells, { r0: 0, r1: 9 })
+    const outcome = currentRegion({ row: 7, col: 5 }, rows, cols)
+    expect(outcome).toMatchObject({ kind: 'unknown' })
+    const wide = await views(cells, { r0: 0, r1: 20 })
+    expect(currentRegion({ row: 7, col: 5 }, wide.rows, wide.cols)).toEqual({ r0: 5, r1: 9, c0: 5, c1: 5 })
+  })
+  it('returns unknown when the column index covers a narrower band', async () => {
+    const { source, band } = handViews([{ row: 5, col: 5 }], { r0: 0, r1: 9 })
+    const rows = (await RowChunkIndex.build(source, band)).index
+    const narrow = (await ColumnChunkIndex.build(source, { r0: 6, r1: 9 })).index
+    expect(currentRegion({ row: 5, col: 5 }, rows, narrow)).toMatchObject({ kind: 'unknown' })
+  })
+  it('bounds interval probes on wide combs (counting probe)', async () => {
+    const stripes = 2000
+    const cells = [{ row: 4, col: 0 }, { row: 6, col: 0 }]
+    for (let k = 0; k < stripes; k++) cells.push({ row: 5, col: k * 2 })
+    const { source, band } = handViews(cells, { r0: 0, r1: 9 })
+    const rows = (await RowChunkIndex.build(source, band)).index
+    const cols = (await ColumnChunkIndex.build(source, band)).index
+    let accesses = 0
+    const counted = (intervals: readonly { c0: number; c1: number }[]) => new Proxy(intervals, {
+      get(target, property, receiver) {
+        if (typeof property === 'string' && /^(0|[1-9][0-9]*)$/.test(property)) accesses++
+        return Reflect.get(target, property, receiver)
+      },
+    })
+    const countedRows: RowIntervalView = {
+      band: rows.band, complete: rows.complete, missing: rows.missing,
+      columnsOf: row => counted(rows.columnsOf(row) as { c0: number; c1: number }[]),
+    }
+    const countedCols: ColumnIntervalView = {
+      band: cols.band, complete: cols.complete, missing: cols.missing,
+      rowsOf: col => cols.rowsOf(col),
+    }
+    expect(currentRegion({ row: 4, col: 0 }, countedRows, countedCols)).toEqual({ r0: 4, r1: 6, c0: 0, c1: 0 })
+    expect(accesses).toBeLessThan(stripes / 4)
+  })
+  it('handles a huge sparse sheet without blowup (counting probe)', async () => {
+    const random = createPrng(4242)
+    const cells = Array.from({ length: 5000 }, () => ({ row: Math.floor(random() * MAX_ROWS), col: Math.floor(random() * MAX_COLS) }))
+    cells.push({ row: 100, col: 100 }, { row: 100, col: 101 }, { row: 101, col: 100 })
+    const { source, band } = handViews(cells, { r0: 0, r1: MAX_ROWS - 1 })
+    const rows = (await RowChunkIndex.build(source, band)).index
+    const cols = (await ColumnChunkIndex.build(source, band)).index
+    let calls = 0
+    const countedRows: RowIntervalView = {
+      band: rows.band, complete: rows.complete, missing: rows.missing,
+      columnsOf: row => { calls++; return rows.columnsOf(row) },
+    }
+    const countedCols: ColumnIntervalView = {
+      band: cols.band, complete: cols.complete, missing: cols.missing,
+      rowsOf: col => { calls++; return cols.rowsOf(col) },
+    }
+    expect(currentRegion({ row: 100, col: 100 }, countedRows, countedCols)).toEqual({ r0: 100, r1: 101, c0: 100, c1: 101 })
+    expect(calls).toBeLessThan(100)
   })
 })
 
