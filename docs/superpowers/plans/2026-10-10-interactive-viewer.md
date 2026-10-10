@@ -94,7 +94,7 @@ Every package is implemented on its own branch, reviewed by at least one agent f
 | S0.1 contracts, S0.2 fixtures, S0.3 harness scaffold | merged |
 | S2.1 order/visibility/axes, S2.2 scroll window, S2.4 sheet zoom model (UI wiring open) | merged |
 | S8.1 typed filters, date lowering | implemented; two reviews requested changes; fixes in progress |
-| S7.2 pure sort engine | implemented; one review approved with fixes, fixes applied; second-family review in progress |
+| S7.2 pure sort engine (`src/xlsx/view/sort.ts`; worker kernel/session/header integration open) | merged |
 | S1.1 streaming ZIP/XML | design spike in progress (no production code yet) |
 | S3.1/S3.2 structural index and operation guard (pure parts) | not started (first attempt lost to an agent endpoint failure) |
 | S1.2, S1.3, S2.3, S4, S5, S6, S7.1, S8.2, S8.3, S9, S10, S11/S12 status, S13 | not started |
@@ -432,9 +432,11 @@ expect(wide.contains({ row: 2, col: 0 })).toBe(false)
 
 ### S7.2 Worker sort kernel and cycle commands
 
+> **Status (2026-10-11):** pure sort engine merged (`src/xlsx/view/sort.ts`, 82 tests; reviewed by Claude and opencode over three rounds, codex implementer). Worker kernel/session commands, header cycles, external-run merge and browser smoke are NOT delivered and stay unchecked.
+
 **Files:** create `src/xlsx/view/sort.ts`; extend `src/worker/viewerKernel.ts`, `viewerSession.ts`; integrate `GridHeaders.tsx`; test `tests/xlsx-viewer-sort.test.ts`, `tests/xlsx-viewer-sort-integration.test.tsx`.
 
-- [ ] RED: comparator truth table, numeric/date serial, host `Intl.Collator` accent/variant sensitivity with `numeric:true`, caseFirst upper, booleans, mixed types, errors before blanks, both directions blanks last, source-ID tiebreak. Test 8 keys, repeated sort/unsort, filtered-pinned rows, source formula/string immutability and source high-row entering top viewport.
+- [x] RED: comparator truth table, numeric/date serial, host `Intl.Collator` accent/variant sensitivity with `numeric:true`, caseFirst upper, booleans, mixed types, errors before blanks, both directions blanks last, source-ID tiebreak. Test 8 keys, repeated sort/unsort, filtered-pinned rows, source formula/string immutability and source high-row entering top viewport.
 - [ ] Run `bunx vitest run tests/xlsx-viewer-sort.test.ts tests/xlsx-viewer-sort-integration.test.tsx`; expected comparator/whole-row/visibility/stability assertion fails.
 - [ ] GREEN: prepare at most eight columns in typed batches; stable permutation by source-row ID ties, sorted visible eligible slots only, pin hidden/protected/outside rows. Multi-key/case options and unsorted→asc→desc→unsorted commands publish one view transaction; Shift+sort appends under documented 8-key UI limit.
 - [ ] Large admitted numeric sorts use resident prepared columns/external runs as required; comparators must never asynchronously load OPFS/IndexedDB pages or create NlogN random page churn. Prepare bounded key runs first, stable-sort admitted runs, then merge sequentially with cancellation/backpressure and exact host semantics. Count key lanes, row/index/scratch/string buffers and run readers for eight-key sorts toward aggregate budgets; natural text compares through the host collator. Do not reparse, recalculate formulas, clone the workbook or scan every column. Unknown source values prevent a complete sort commit until resolved/admitted.
