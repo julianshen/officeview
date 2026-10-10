@@ -45,10 +45,21 @@ export function readTheme(root: XmlNode | undefined): DocxTheme {
     const latin = attrs(getChildren(font, 'latin')[0]).typeface
     if (latin) {
       theme.fonts.set(`${family}HAnsi`, latin)
+      theme.fonts.set(`${family}Ascii`, latin)
+      theme.fonts.set(family, latin)
       theme.fonts.set(`+${family === 'major' ? 'mj' : 'mn'}-lt`, latin)
     }
     const ea = attrs(getChildren(font, 'ea')[0]).typeface
-    if (ea) theme.fonts.set(`${family}EastAsia`, ea)
+    if (ea) {
+      theme.fonts.set(`${family}EastAsia`, ea)
+      theme.fonts.set(`+${family === 'major' ? 'mj' : 'mn'}-ea`, ea)
+    }
+    const cs = attrs(getChildren(font, 'cs')[0]).typeface
+    if (cs) {
+      theme.fonts.set(`${family}Bidi`, cs)
+      theme.fonts.set(`${family}Cs`, cs)
+      theme.fonts.set(`+${family === 'major' ? 'mj' : 'mn'}-cs`, cs)
+    }
   }
   return theme
 }
@@ -132,8 +143,25 @@ function textCssColor(color: DrawingColor): string {
 export function readRunProperties(rPr: XmlNode | undefined, theme?: DocxTheme, issues?: TextAppearanceIssue[]): Partial<DocxTextRun> {
   const out: Partial<DocxTextRun> = {}
   const fonts = attrs(getChildren(rPr, 'rFonts')[0])
-  const font = fonts.ascii ?? theme?.fonts.get(fonts.asciiTheme)
-  if (font) out.fontFamily = font
+  const asciiFont = fonts.ascii ?? theme?.fonts.get(fonts.asciiTheme)
+  const hAnsiFont = fonts.hAnsi ?? theme?.fonts.get(fonts.hAnsiTheme)
+  const eaFont = fonts.eastAsia ?? theme?.fonts.get(fonts.eastAsiaTheme)
+  const csFont = fonts.cs ?? theme?.fonts.get(fonts.cstheme)
+  const isRtl = getChildren(rPr, 'rtl').length > 0 || getChildren(rPr, 'cs').length > 0
+  const preferred = (isRtl || fonts.hint === 'cs')
+    ? (csFont ?? asciiFont ?? hAnsiFont ?? eaFont)
+    : fonts.hint === 'eastAsia'
+      ? (eaFont ?? asciiFont ?? hAnsiFont ?? csFont)
+      : (asciiFont ?? hAnsiFont ?? eaFont ?? csFont)
+  if (preferred) out.fontFamily = preferred
+  if (asciiFont || hAnsiFont || eaFont || csFont) {
+    out.runFonts = {
+      ...(asciiFont ? { ascii: asciiFont } : {}),
+      ...(hAnsiFont ? { hAnsi: hAnsiFont } : {}),
+      ...(eaFont ? { eastAsia: eaFont } : {}),
+      ...(csFont ? { cs: csFont } : {}),
+    }
+  }
   const size = Number(attrs(getChildren(rPr, 'sz')[0]).val)
   if (Number.isFinite(size) && size > 0) out.fontSizePt = size / 2
   for (const [element, property] of [
@@ -152,6 +180,10 @@ export function readRunProperties(rPr: XmlNode | undefined, theme?: DocxTheme, i
   }
   const highlight = attrs(getChildren(rPr, 'highlight')[0]).val
   if (highlight) out.highlight = highlight
+  const vertAlign = attrs(getChildren(rPr, 'vertAlign')[0]).val
+  if (vertAlign === 'superscript' || vertAlign === 'subscript') {
+    out.vertAlign = vertAlign
+  }
 
   const textFill = getChildren(rPr, 'textFill')[0]
   if (textFill) {
@@ -364,7 +396,13 @@ export function paragraphRunDefaults(
     const authored = authoredCategories(node)
     const layerIssues: TextAppearanceIssue[] = []
     const layerProps = readRunProperties(node, context.theme, layerIssues)
+    // Script font candidates merge per key (later layers win per script);
+    // a blind assign would let a layer without East Asian fonts erase an
+    // earlier layer's eastAsia/cs choice before script detection runs.
+    const mergedFonts = { ...merged.runFonts, ...layerProps.runFonts }
     Object.assign(merged, layerProps)
+    if (Object.keys(mergedFonts).length > 0) merged.runFonts = mergedFonts
+    else delete merged.runFonts
 
     for (const cat of ['fill', 'outline', 'shadow', 'glow', 'reflection'] as const) {
       if (authored.has(cat)) {
@@ -395,6 +433,7 @@ export function applyParagraphDefaults(paragraph: DocxParagraph, p: XmlNode, con
   const direct = getChildren(p, 'pPr')[0]
   const id = attrs(getChildren(direct, 'pStyle')[0]).val ?? context.defaultParagraph
   let lineValue: number | undefined, lineRule: 'auto' | 'exact' | 'atLeast' = 'auto'
+  let jcAuthored = false
   for (const pPr of [context.paragraphDefaults, ...(table?.pPr ?? []), ...styleChain(id, context).map(style => getChildren(style, 'pPr')[0]), direct]) {
     const spacing = attrs(getChildren(pPr, 'spacing')[0])
     if (spacing.before !== undefined) paragraph.spacingBeforeTwips = Number(spacing.before)
@@ -402,7 +441,14 @@ export function applyParagraphDefaults(paragraph: DocxParagraph, p: XmlNode, con
     if (spacing.line !== undefined) lineValue = Number(spacing.line)
     if (spacing.lineRule !== undefined) lineRule = spacing.lineRule as typeof lineRule
     const jc = attrs(getChildren(pPr, 'jc')[0]).val
-    if (jc !== undefined) paragraph.align = jc === 'both' ? 'justify' : jc === 'center' || jc === 'right' ? jc : 'left'
+    if (jc !== undefined) {
+      paragraph.align = jc === 'both' ? 'justify' : jc === 'center' || jc === 'right' ? jc : 'left'
+      jcAuthored = true
+    }
+    // BiDi direction inherits like other paragraph properties (CT_OnOff:
+    // absent value means on). Later layers, including direct formatting, win.
+    const bidiNode = getChildren(pPr, 'bidi')[0]
+    if (bidiNode) paragraph.bidi = !['0', 'false', 'off'].includes(attrs(bidiNode).val as string)
     const ind = attrs(getChildren(pPr, 'ind')[0])
     for (const [key, value] of [['indentLeftTwips', ind.left ?? ind.start], ['indentRightTwips', ind.right ?? ind.end], ['indentFirstLineTwips', ind.firstLine ?? (ind.hanging !== undefined ? -Number(ind.hanging) : undefined)]] as const)
       if (value !== undefined) paragraph[key] = Number(value)
@@ -410,4 +456,7 @@ export function applyParagraphDefaults(paragraph: DocxParagraph, p: XmlNode, con
     if (outline !== undefined) paragraph.outlineLevel = Number(outline)
   }
   if (lineValue !== undefined) paragraph.lineSpacing = { value: lineValue, rule: lineRule }
+  // An RTL paragraph with no authored alignment defaults to right,
+  // matching direct-only w:bidi handling elsewhere.
+  if (paragraph.bidi && !jcAuthored) paragraph.align = 'right'
 }

@@ -8,6 +8,7 @@ import { paintDrawing } from './drawing'
 import type { ContentPaintAssets } from '../drawing/content'
 import { fontFamilyCss } from './styles'
 import { withFallbackFonts } from '../core/fonts/fallback'
+import type { FontResolver } from '../core/fonts/register'
 import { emuToPx } from '../core/geometry'
 import { twipsToPx } from '../core/geometry'
 import { resolveColor } from '../core/color'
@@ -79,6 +80,7 @@ export interface LineBox {
   baselinePx?: number
   logical?: LogicalTextRange
   defaultStyle?: RunStyle
+  bidi?: boolean
 }
 
 export interface PageLayout {
@@ -91,8 +93,18 @@ export interface PageLayout {
   images: ImageBox[]
   header?: HFBlock
   footer?: HFBlock
+  /** Footnotes positioned on this page. */
+  footnotes?: {
+    lines: LineBox[]
+    separator?: { xPx: number; yPx: number; widthPx: number }
+  }
+  /** Endnotes positioned on this page (typically final page). */
+  endnotes?: {
+    lines: LineBox[]
+    separator?: { xPx: number; yPx: number; widthPx: number }
+  }
   /** Repeating-content overflow or bounded field convergence limitations. */
-  diagnostics?: Array<'repeated-content-overflow' | 'field-layout-nonconvergence'>
+  diagnostics?: Array<'repeated-content-overflow' | 'field-layout-nonconvergence' | 'footnote-overflow' | 'endnote-overflow'>
 }
 
 /** Page header or footer content, positioned in page-relative px. */
@@ -134,8 +146,8 @@ export interface TableCellBox {
   widthPx: number
   heightPx: number
   fill?: string
-  borders?: { left?: string; right?: string; top?: string; bottom?: string }
-  borderSpecs?: Partial<Record<'left' | 'right' | 'top' | 'bottom', TableCellBorder>>
+  borders?: { left?: string; right?: string; top?: string; bottom?: string; tl2br?: string; tr2bl?: string }
+  borderSpecs?: Partial<Record<'left' | 'right' | 'top' | 'bottom' | 'tl2br' | 'tr2bl', TableCellBorder>>
 }
 
 export interface TableRowBox {
@@ -185,9 +197,11 @@ export function fontCss(s: RunStyle, familyCss: (family: string) => string = fon
 }
 
 function runStyleOf(run: DocxTextRun, defaults: { fontFamily: string; fontSizePt: number }): RunStyle {
+  const baseSize = run.fontSizePt ?? defaults.fontSizePt
+  const fontSizePt = run.vertAlign === 'superscript' || run.vertAlign === 'subscript' ? Math.max(6, baseSize * 0.7) : baseSize
   return {
     fontFamily: run.fontFamily ?? defaults.fontFamily,
-    fontSizePt: run.fontSizePt ?? defaults.fontSizePt,
+    fontSizePt,
     bold: !!run.bold,
     italic: !!run.italic,
   }
@@ -268,6 +282,19 @@ function layoutParagraph(
   const markerGutter = para.listMarker ? measure(`${para.listMarker} `, markerStyle) : 0
   const fullUsable = contentWidth - indentLeft - indentRight - markerGutter
   if (fullUsable <= 0) return { lines, endY: startY }
+
+  if (para.bidi && !para.diagnostics?.some(d => d.feature === 'bidi-mixed-run-order')) {
+    const hasRtl = para.runs.some(r => /[\u0590-\u05ff\u0600-\u06ff\u0700-\u074f\u0750-\u077f\u0780-\u07bf\u08a0-\u08ff]/.test(r.text))
+    const hasLtr = para.runs.some(r => /[A-Za-z]/.test(r.text))
+    if (hasRtl && hasLtr) {
+      para.diagnostics ??= []
+      para.diagnostics.push({
+        kind: 'unsupported-text-alignment',
+        feature: 'bidi-mixed-run-order',
+        message: 'Mixed LTR/RTL runs within BiDi paragraph rendered with segment reversal; full Unicode BiDi algorithm deferred'
+      })
+    }
+  }
 
   // Per-line band: a floating image narrows the column on the lines it spans.
   // Recomputed at each line start (Word snaps wrapping to line granularity).
@@ -354,6 +381,18 @@ function layoutParagraph(
         if (seg.text === ' ') gapsSoFar++
       }
     }
+    // Visual order follows direction alone: right-packed pen offsets span
+    // the content width, so left/center/justify alignment offsets position
+    // the ordered line box unchanged. Gating on alignment would silently
+    // render explicit-left RTL paragraphs in LTR order.
+    const isBidiRtl = !!para.bidi
+    if (isBidiRtl) {
+      let rightOffset = width
+      for (const seg of segs) {
+        rightOffset -= seg.widthPx
+        seg.penOffset = rightOffset
+      }
+    }
     lines.push({
       yPx: y,
       xPx: lineX + lineIndent,
@@ -364,6 +403,7 @@ function layoutParagraph(
       heightPx: h,
       contentWidthPx: lineUsable,
       marker,
+      bidi: isBidiRtl,
       ...(boxes.length ? { inlineImages: boxes, baselinePx: y + h } : {})
     })
     y += h
@@ -385,10 +425,41 @@ function layoutParagraph(
   }
 
   const pushWord = (word: string, run: DocxTextRun, style: RunStyle): boolean => {
-    const w = measure(word, style)
+    const cleanWord = word.replace(/\u00AD/g, '')
+    const w = measure(cleanWord, style)
     refreshBand()
-    if (width > 0 && width + w > lineUsable) return false // needs new line
-    pushSeg(word, run, style, w)
+    // An oversized word on an empty line still attempts a soft-hyphen break;
+    // words with no usable break fall through to whole-word overflow so the
+    // retry in the caller always makes progress (no empty-line retry loop).
+    if ((width > 0 && width + w > lineUsable) || (width === 0 && w > lineUsable && word.includes('\u00AD'))) {
+      if (word.includes('\u00AD')) {
+        const parts = word.split('\u00AD')
+        let prefix = ''
+        let consumed = 0
+        for (let pIdx = 0; pIdx < parts.length - 1; pIdx++) {
+          const candidate = (prefix ? prefix + parts[pIdx] : parts[pIdx]) + '-'
+          const candidateW = measure(candidate, style)
+          if (width + candidateW <= lineUsable) {
+            prefix = prefix ? prefix + parts[pIdx] : parts[pIdx]
+            consumed = pIdx + 1
+          } else {
+            break
+          }
+        }
+        if (prefix.length > 0) {
+          // Rejoin the unconsumed parts: slicing by prefix length would
+          // miscount once several parts (and their separators) are consumed.
+          const hyphenated = prefix + '-'
+          pushSeg(hyphenated, run, style, measure(hyphenated, style))
+          flush(false)
+          firstLine = false
+          const remainder = parts.slice(consumed).join('\u00AD')
+          return pushWord(remainder, run, style)
+        }
+      }
+      if (width > 0) return false // needs new line
+    }
+    pushSeg(cleanWord, run, style, w)
     return true
   }
 
@@ -510,6 +581,14 @@ export function collectDocImages(document: DocxDocument): DocxImage[] {
   }
   for (const section of document.sections) collect(section.blocks ?? section.paragraphs.map(paragraph => ({ kind: 'p', paragraph })))
   for (const section of document.sections) for (const kind of ['header', 'footer', 'firstHeader', 'firstFooter'] as const) collect(repeatedBlocks(section, kind) ?? [])
+  // Note content lays out into page footers/endnotes: its images need asset
+  // indexing and decoding like body images. Comments are never laid out, so
+  // their images stay out of the collection.
+  for (const notes of [document.footnotes, document.endnotes]) {
+    for (const note of notes ?? []) {
+      for (const paragraph of blockParagraphs(note.blocks)) for (const image of paragraph.images ?? []) push(image)
+    }
+  }
   return out
 }
 
@@ -714,8 +793,218 @@ function layoutDocxPass(document: DocxDocument, measure: MeasureFn, totalPages: 
     previousEndY = y
 
   }
+  attachFootnotesToPages(pages, document, measure, defaults, imageIndex)
+  attachEndnotesToPages(pages, document, measure, defaults, imageIndex)
   refreshRepeatedImages(pages, measure, totalPages)
   return pages
+}
+
+/**
+ * Notes laid out past the note-area bottom (the footer line, or the page
+ * bottom margin when no footer exists) would overlap the footer or spill
+ * off the page: keep lines that start above the boundary, drop the rest,
+ * and report the truncation instead of painting clipped content. True
+ * repagination (reflowing body lines onto the next page) is deferred.
+ */
+function clampNoteLines(lines: LineBox[], bottomY: number): { kept: LineBox[]; truncated: boolean } {
+  const kept = lines.filter((l) => l.yPx < bottomY - 1e-6)
+  return { kept, truncated: kept.length < lines.length }
+}
+
+function pushNoteOverflow(page: PageLayout, kind: 'footnote-overflow' | 'endnote-overflow'): void {
+  page.diagnostics ??= []
+  if (!page.diagnostics.includes(kind)) page.diagnostics.push(kind)
+}
+
+/**
+ * Lay out footnote/endnote blocks (paragraphs and tables) into the note
+ * area. Inline image boxes ride on their lines and transfer into the page
+ * image layer only for lines the caller retains, so images on clamped
+ * (dropped) lines never paint as orphans. Tables lay out as a single chunk
+ * bounded by the note area, so oversized tables truncate rows instead of
+ * spilling past the footer.
+ * Returns laid entries (line plus its image boxes), the end position, and
+ * whether a table was truncated.
+ */
+function layoutNoteBlocks(
+  blocks: DocxBlock[],
+  page: PageLayout,
+  margin: number,
+  contentWidth: number,
+  bottomY: number,
+  startY: number,
+  measure: MeasureFn,
+  noteDefaults: { fontFamily: string; fontSizePt: number },
+  imageIndex: Map<DocxImage, number>,
+): { entries: Array<{ line: LineBox; images: ImageBox[] }>; endY: number; tableOverflow: boolean } {
+  const entries: Array<{ line: LineBox; images: ImageBox[] }> = []
+  let curY = startY
+  let tableOverflow = false
+  const collectImages = (boxLines: LineBox[], dx: number, dy: number): ImageBox[] => {
+    const boxes: ImageBox[] = []
+    for (const line of boxLines) {
+      for (const box of line.inlineImages ?? []) {
+        boxes.push({
+          ...box,
+          xPx: box.xPx + dx,
+          yPx: box.yPx + dy,
+          clip: shiftedImageClip(box.clip, dx, dy),
+          imageIndex: imageIndex.get(box.image) ?? -1,
+          drawing: box.image.drawing,
+        })
+      }
+    }
+    return boxes
+  }
+  for (const block of blocks) {
+    if (block.kind === 'p') {
+      const laid = layoutParagraph(block.paragraph, measure, {
+        contentX: margin,
+        contentWidth,
+        startY: curY,
+        defaults: noteDefaults,
+      })
+      for (const line of laid.lines) entries.push({ line, images: collectImages([line], 0, 0) })
+      curY += laid.lines.reduce((h, l) => h + l.heightPx, 0)
+    } else {
+      const sized = autoWidthTable(block.table, measure, noteDefaults, contentWidth)
+      const chunk = layoutTableRows(sized, measure, noteDefaults, {
+        fromRow: 0,
+        repeatHeader: false,
+        maxHeightPx: Math.max(0, bottomY - curY),
+        allowFirstRowOverflow: false,
+      })
+      if (chunk.consumedRows < sized.rows.length) tableOverflow = true
+      if (chunk.consumedRows === 0) continue
+      for (const line of chunk.lines) {
+        entries.push({
+          line: {
+            ...line,
+            xPx: line.xPx + margin,
+            yPx: line.yPx + curY,
+            baselinePx: line.baselinePx === undefined ? undefined : line.baselinePx + curY,
+            segs: line.segs.map((seg) =>
+              seg.transform ? { ...seg, transform: { ...seg.transform, e: seg.transform.e + margin, f: seg.transform.f + curY } } : seg
+            ),
+          },
+          images: collectImages([line], margin, curY),
+        })
+      }
+      page.tables.push({ xPx: margin, yPx: curY, widthPx: chunk.widthPx, rows: chunk.rows })
+      curY += chunk.heightPx
+    }
+  }
+  return { entries, endY: curY, tableOverflow }
+}
+
+function attachFootnotesToPages(
+  pages: PageLayout[],
+  document: DocxDocument,
+  measure: MeasureFn,
+  defaults: { fontFamily: string; fontSizePt: number },
+  imageIndex: Map<DocxImage, number>
+): void {
+  if (!document.footnotes || document.footnotes.length === 0) return
+  const noteMap = new Map(document.footnotes.map((n) => [n.id, n]))
+  for (const page of pages) {
+    const pageNoteIds = new Set<number>()
+    for (const line of page.lines) {
+      for (const seg of line.segs) {
+        if (seg.run.footnoteReference?.id !== undefined) {
+          pageNoteIds.add(seg.run.footnoteReference.id)
+        }
+      }
+    }
+    if (pageNoteIds.size === 0) continue
+    const fnLines: LineBox[] = []
+    const margin = page.footer?.margins?.left ?? 96
+    const contentWidth = page.widthPx - margin - (page.footer?.margins?.right ?? 96)
+    const bottomY = page.footer ? page.footer.yPx - 20 : page.heightPx - 96
+    const noteBlocks: DocxBlock[] = []
+    for (const id of pageNoteIds) {
+      const note = noteMap.get(id)
+      if (note && (note.type === 'normal' || !note.type)) {
+        noteBlocks.push(...note.blocks)
+      }
+    }
+    if (noteBlocks.length === 0) continue
+    if (!(contentWidth > 0)) { pushNoteOverflow(page, 'footnote-overflow'); continue }
+    const estUnits = noteBlocks.reduce((n, b) => n + (b.kind === 'p' ? 1 : b.table.rows.length), 0)
+    const neededHeight = estUnits * (defaults.fontSizePt * (96 / 72) * LINE_HEIGHT_FACTOR)
+    const lowestBodyY = page.lines.length > 0 ? Math.max(...page.lines.map((l) => l.yPx + l.heightPx)) : margin
+    const curY = Math.max(bottomY - neededHeight, lowestBodyY + 12)
+    const noteDefaults = { fontFamily: defaults.fontFamily, fontSizePt: Math.max(8, defaults.fontSizePt * 0.85) }
+    const laid = layoutNoteBlocks(noteBlocks, page, margin, contentWidth, bottomY, curY, measure, noteDefaults, imageIndex)
+    for (const e of laid.entries) fnLines.push(e.line)
+    const { kept, truncated } = clampNoteLines(fnLines, bottomY)
+    const keptSet = new Set(kept)
+    for (const e of laid.entries) if (keptSet.has(e.line)) for (const box of e.images) page.images.push(box)
+    if (truncated || laid.tableOverflow || (noteBlocks.length > 0 && kept.length === 0)) pushNoteOverflow(page, 'footnote-overflow')
+    if (kept.length > 0) {
+      page.footnotes = {
+        lines: kept,
+        separator: { xPx: margin, yPx: kept[0].yPx - 6, widthPx: 144 }
+      }
+    }
+  }
+}
+
+function attachEndnotesToPages(
+  pages: PageLayout[],
+  document: DocxDocument,
+  measure: MeasureFn,
+  defaults: { fontFamily: string; fontSizePt: number },
+  imageIndex: Map<DocxImage, number>
+): void {
+  if (!document.endnotes || document.endnotes.length === 0 || pages.length === 0) return
+  const noteMap = new Map(document.endnotes.map((n) => [n.id, n]))
+  const referencedIds = new Set<number>()
+  for (const page of pages) {
+    for (const line of page.lines) {
+      for (const seg of line.segs) {
+        if (seg.run.endnoteReference?.id !== undefined) {
+          referencedIds.add(seg.run.endnoteReference.id)
+        }
+      }
+    }
+  }
+  // Unreferenced endnotes stay unattached (Word shows nothing for them),
+  // matching the footnote path which only lays out referenced notes.
+  if (referencedIds.size === 0) return
+  const targetIds = referencedIds
+
+  const lastPage = pages[pages.length - 1]
+  const margin = lastPage.footer?.margins?.left ?? 96
+  const contentWidth = lastPage.widthPx - margin - (lastPage.footer?.margins?.right ?? 96)
+  const bottomY = lastPage.footer ? lastPage.footer.yPx - 20 : lastPage.heightPx - 96
+  const noteBlocks: DocxBlock[] = []
+  for (const id of targetIds) {
+    const note = noteMap.get(id)
+    if (note && (note.type === 'normal' || !note.type)) {
+      noteBlocks.push(...note.blocks)
+    }
+  }
+  if (noteBlocks.length === 0) return
+  if (!(contentWidth > 0)) { pushNoteOverflow(lastPage, 'endnote-overflow'); return }
+
+  const enLines: LineBox[] = []
+  const estUnits = noteBlocks.reduce((n, b) => n + (b.kind === 'p' ? 1 : b.table.rows.length), 0)
+  const neededHeight = estUnits * (defaults.fontSizePt * (96 / 72) * LINE_HEIGHT_FACTOR)
+  const lowestBodyY = lastPage.lines.length > 0 ? Math.max(...lastPage.lines.map((l) => l.yPx + l.heightPx)) : margin
+  const curY = Math.max(bottomY - neededHeight, lowestBodyY + 12)
+  const noteDefaults = { fontFamily: defaults.fontFamily, fontSizePt: Math.max(8, defaults.fontSizePt * 0.85) }
+  const laid = layoutNoteBlocks(noteBlocks, lastPage, margin, contentWidth, bottomY, curY, measure, noteDefaults, imageIndex)
+  for (const e of laid.entries) enLines.push(e.line)
+  const { kept, truncated } = clampNoteLines(enLines, bottomY)
+  const keptSet = new Set(kept)
+  for (const e of laid.entries) if (keptSet.has(e.line)) for (const box of e.images) lastPage.images.push(box)
+  if (truncated || laid.tableOverflow || (noteBlocks.length > 0 && kept.length === 0)) pushNoteOverflow(lastPage, 'endnote-overflow')
+  if (kept.length > 0) {
+    lastPage.endnotes = {
+      lines: kept,
+      separator: { xPx: margin, yPx: kept[0].yPx - 6, widthPx: 144 }
+    }
+  }
 }
 
 const HIGHLIGHT_CSS: Record<string, string> = {
@@ -736,6 +1025,8 @@ export interface RenderPagesOptions {
   watermark?: WatermarkOptions | ResolvedWatermark
   /** Optional decoded-asset lookup for nested picture paint. */
   assets?: ContentPaintAssets
+  /** Optional embedded font resolver for mapping families to registered aliases. */
+  resolveFont?: FontResolver
 }
 
 export function renderPages(
@@ -748,7 +1039,13 @@ export function renderPages(
   ctx.textBaseline = 'alphabetic'
   ctx.fillStyle = '#000000'
   let lastFont = ''
-  const resolveFamily = withFallbackFonts(fontFamilyCss, options?.assets?.fallbackFonts)
+  // NOTE: resolved only from RenderPagesOptions.resolveFont. A sibling
+  // embedded-fonts change threads an equivalent hook through
+  // ContentPaintAssets; that type extension is not part of Phase 22, so this
+  // lookup intentionally stays branch-local to keep the Phase 22 tree green.
+  const fontResolver = options?.resolveFont
+  const baseFamilyCss = fontResolver ? (family: string) => fontFamilyCss(fontResolver(family)) : fontFamilyCss
+  const resolveFamily = withFallbackFonts(baseFamilyCss, options?.assets?.fallbackFonts)
   const measure = createMeasurer(ctx, resolveFamily)
   const firstNumber = options?.pageNumberStart ?? 1
   const totalPages = options?.totalPages ?? pages.length
@@ -759,89 +1056,101 @@ export function renderPages(
       paintWatermark(ctx, { widthPx: page.widthPx, heightPx: page.heightPx }, options.watermark)
     }
     const paintLines = (allLines: LineBox[]) => {
+      ctx.textAlign = 'left'
       for (const line of allLines) {
-        let offset = 0
-        if (line.align === 'center') offset = (line.contentWidthPx - line.widthPx) / 2
-        else if (line.align === 'right') offset = line.contentWidthPx - line.widthPx
-        let x = line.xPx + offset
-        let maxAscent = 0
-        for (const seg of line.segs) maxAscent = Math.max(maxAscent, seg.style.fontSizePt * LINE_HEIGHT_FACTOR * 0.8)
-        const baseline = line.baselinePx ?? line.yPx + maxAscent
-        const record = (ctx as TextRecordingContext)[RECORD_TEXT]
-        if (!line.segs.length && line.logical && record) {
-          if (line.defaultStyle) { ctx.font = fontCss(line.defaultStyle, resolveFamily); lastFont = ctx.font }
-          record('', line.xPx, baseline, 0, line.logical)
-        }
-        // list marker sits left of the (indented) text
-        if (line.marker) {
-          const markerStyle: RunStyle = {
-            fontFamily: seg0Font(line),
-            fontSizePt: seg0Size(line),
-            bold: !!line.segs[0]?.run.bold,
-            italic: !!line.segs[0]?.run.italic,
+        if (line.bidi) ctx.direction = 'rtl'
+        try {
+          let offset = 0
+          if (line.align === 'center') offset = (line.contentWidthPx - line.widthPx) / 2
+          else if (line.align === 'right') offset = line.contentWidthPx - line.widthPx
+          let x = line.xPx + offset
+          let maxAscent = 0
+          for (const seg of line.segs) maxAscent = Math.max(maxAscent, seg.style.fontSizePt * LINE_HEIGHT_FACTOR * 0.8)
+          const baseline = line.baselinePx ?? line.yPx + maxAscent
+          const record = (ctx as TextRecordingContext)[RECORD_TEXT]
+          if (!line.segs.length && line.logical && record) {
+            if (line.defaultStyle) { ctx.font = fontCss(line.defaultStyle, resolveFamily); lastFont = ctx.font }
+            record('', line.xPx, baseline, 0, line.logical)
           }
-          const font = fontCss(markerStyle, resolveFamily)
-          if (font !== lastFont) {
-            ctx.font = font
-            lastFont = font
-          }
-          ctx.fillStyle = line.segs[0]?.run.color ? resolveColor(line.segs[0].run.color) : '#000000'
-          ctx.fillText(line.marker.text.trimEnd(), line.xPx - line.marker.widthPx, baseline)
-        }
-        for (const seg of line.segs) {
-          const fontCssStr = fontCss(seg.style, resolveFamily)
-          if (fontCssStr !== lastFont) {
-            ctx.font = fontCssStr
-            lastFont = fontCssStr
-          }
-          if (seg.transform) {
-            // Direction-rotated glyphs carry absolute page placement; the
-            // shared layout engine already resolved rotation and position.
-            const t = seg.transform
-            const size = seg.style.fontSizePt
-            ctx.save()
-            try {
-              ctx.transform(t.a, t.b, t.c, t.d, t.e, t.f)
-              if (seg.run.highlight) {
-                const hl = HIGHLIGHT_CSS[seg.run.highlight] ?? seg.run.highlight
-                ctx.fillStyle = hl
-                ctx.fillRect(0, -maxAscent, seg.widthPx, line.heightPx)
-              }
-              ctx.fillStyle = seg.run.color ? resolveColor(seg.run.color) : '#000000'
-              if (record && seg.logical) record(seg.text, 0, 0, seg.widthPx, seg.logical)
-              else ctx.fillText(seg.text, 0, 0)
-              if (seg.run.underline || seg.run.strike) {
-                ctx.strokeStyle = ctx.fillStyle
-                ctx.lineWidth = Math.max(1, size * 0.06)
-                ctx.beginPath()
-                const yy = seg.run.underline ? size * 0.15 : -size * 0.3
-                ctx.moveTo(0, yy)
-                ctx.lineTo(seg.widthPx, yy)
-                ctx.stroke()
-              }
-            } finally {
-              ctx.restore()
+          // list marker sits left of the (indented) text
+          if (line.marker) {
+            const markerStyle: RunStyle = {
+              fontFamily: seg0Font(line),
+              fontSizePt: seg0Size(line),
+              bold: !!line.segs[0]?.run.bold,
+              italic: !!line.segs[0]?.run.italic,
             }
-            continue
+            const font = fontCss(markerStyle, resolveFamily)
+            if (font !== lastFont) {
+              ctx.font = font
+              lastFont = font
+            }
+            ctx.fillStyle = line.segs[0]?.run.color ? resolveColor(line.segs[0].run.color) : '#000000'
+            ctx.fillText(line.marker.text.trimEnd(), line.xPx - line.marker.widthPx, baseline)
           }
-          const segX = seg.penOffset !== undefined ? line.xPx + offset + seg.penOffset : x
-          if (seg.run.highlight) {
-            const hl = HIGHLIGHT_CSS[seg.run.highlight] ?? seg.run.highlight
-            ctx.fillStyle = hl
-            ctx.fillRect(segX, line.yPx, seg.widthPx, line.heightPx)
+          for (const seg of line.segs) {
+            const fontCssStr = fontCss(seg.style, resolveFamily)
+            if (fontCssStr !== lastFont) {
+              ctx.font = fontCssStr
+              lastFont = fontCssStr
+            }
+            if (seg.transform) {
+              // Direction-rotated glyphs carry absolute page placement; the
+              // shared layout engine already resolved rotation and position.
+              const t = seg.transform
+              const size = seg.style.fontSizePt
+              ctx.save()
+              try {
+                ctx.transform(t.a, t.b, t.c, t.d, t.e, t.f)
+                if (seg.run.highlight) {
+                  const hl = HIGHLIGHT_CSS[seg.run.highlight] ?? seg.run.highlight
+                  ctx.fillStyle = hl
+                  ctx.fillRect(0, -maxAscent, seg.widthPx, line.heightPx)
+                }
+                ctx.fillStyle = seg.run.color ? resolveColor(seg.run.color) : '#000000'
+                if (record && seg.logical) record(seg.text, 0, 0, seg.widthPx, seg.logical)
+                else ctx.fillText(seg.text, 0, 0)
+                if (seg.run.underline || seg.run.strike) {
+                  ctx.strokeStyle = ctx.fillStyle
+                  ctx.lineWidth = Math.max(1, size * 0.06)
+                  ctx.beginPath()
+                  const yy = seg.run.underline ? size * 0.15 : -size * 0.3
+                  ctx.moveTo(0, yy)
+                  ctx.lineTo(seg.widthPx, yy)
+                  ctx.stroke()
+                }
+              } finally {
+                ctx.restore()
+              }
+              continue
+            }
+            const segX = seg.penOffset !== undefined ? line.xPx + offset + seg.penOffset : x
+            if (seg.run.highlight) {
+              const hl = HIGHLIGHT_CSS[seg.run.highlight] ?? seg.run.highlight
+              ctx.fillStyle = hl
+              ctx.fillRect(segX, line.yPx, seg.widthPx, line.heightPx)
+            }
+            ctx.fillStyle = seg.run.color ? resolveColor(seg.run.color) : '#000000'
+            // Superscript rises and subscript lowers relative to the shared
+            // baseline; the shrunken size alone would leave markers sitting
+            // on the baseline. Rotated-glyph segments keep their resolved
+            // placement (handled in the transform branch above).
+            const vertDy = seg.run.vertAlign === 'superscript' ? -seg.style.fontSizePt * 0.35
+              : seg.run.vertAlign === 'subscript' ? seg.style.fontSizePt * 0.25 : 0
+            ctx.fillText(seg.text, segX, baseline + vertDy)
+            if (seg.run.underline || seg.run.strike) {
+              ctx.strokeStyle = ctx.fillStyle
+              ctx.lineWidth = Math.max(1, seg.style.fontSizePt * 0.06)
+              ctx.beginPath()
+              const yy = seg.run.underline ? baseline + vertDy + seg.style.fontSizePt * 0.15 : baseline + vertDy - seg.style.fontSizePt * 0.3
+              ctx.moveTo(segX, yy)
+              ctx.lineTo(segX + seg.widthPx, yy)
+              ctx.stroke()
+            }
+            x = segX + seg.widthPx
           }
-          ctx.fillStyle = seg.run.color ? resolveColor(seg.run.color) : '#000000'
-          ctx.fillText(seg.text, segX, baseline)
-          if (seg.run.underline || seg.run.strike) {
-            ctx.strokeStyle = ctx.fillStyle
-            ctx.lineWidth = Math.max(1, seg.style.fontSizePt * 0.06)
-            ctx.beginPath()
-            const yy = seg.run.underline ? baseline + seg.style.fontSizePt * 0.15 : baseline - seg.style.fontSizePt * 0.3
-            ctx.moveTo(segX, yy)
-            ctx.lineTo(segX + seg.widthPx, yy)
-            ctx.stroke()
-          }
-          x = segX + seg.widthPx
+        } finally {
+          if (line.bidi) ctx.direction = 'ltr'
         }
       }
     }
@@ -850,6 +1159,28 @@ export function renderPages(
     paintImages(bodyImages, ctx, images, 'behind', options?.assets)
     paintImages(bodyImages, ctx, images, 'front', options?.assets)
     paintLines(page.lines)
+    if (page.footnotes) {
+      if (page.footnotes.separator) {
+        ctx.strokeStyle = '#000000'
+        ctx.lineWidth = 1
+        ctx.beginPath()
+        ctx.moveTo(page.footnotes.separator.xPx, page.footnotes.separator.yPx)
+        ctx.lineTo(page.footnotes.separator.xPx + page.footnotes.separator.widthPx, page.footnotes.separator.yPx)
+        ctx.stroke()
+      }
+      paintLines(page.footnotes.lines)
+    }
+    if (page.endnotes) {
+      if (page.endnotes.separator) {
+        ctx.strokeStyle = '#000000'
+        ctx.lineWidth = 1
+        ctx.beginPath()
+        ctx.moveTo(page.endnotes.separator.xPx, page.endnotes.separator.yPx)
+        ctx.lineTo(page.endnotes.separator.xPx + page.endnotes.separator.widthPx, page.endnotes.separator.yPx)
+        ctx.stroke()
+      }
+      paintLines(page.endnotes.lines)
+    }
     for (const hf of [page.header, page.footer]) {
       if (!hf) continue
       const repeated = layoutRepeated(hf, measure, firstNumber + pageIndex, totalPages, page)
@@ -1002,8 +1333,41 @@ function paintImages(
   }
 }
 
-/** Paint table cell fills and borders (beneath text). Cell coords are
- * table-relative; box carries the page position. */
+function resolveDocxBorder(a: TableCellBorder | undefined, b: TableCellBorder | undefined): TableCellBorder | undefined {
+  if (!a || a.style === 'none' || a.style === 'nil') return (b && b.style !== 'none' && b.style !== 'nil') ? b : undefined
+  if (!b || b.style === 'none' || b.style === 'nil') return a
+  const wA = a.widthPt !== undefined ? a.widthPt : (BORDER_WIDTH[a.style ?? 'thin'] ? (BORDER_WIDTH[a.style ?? 'thin'] * 3) / 4 : 0.75)
+  const wB = b.widthPt !== undefined ? b.widthPt : (BORDER_WIDTH[b.style ?? 'thin'] ? (BORDER_WIDTH[b.style ?? 'thin'] * 3) / 4 : 0.75)
+  if (wA !== wB) return wA > wB ? a : b
+  const styleRank: Record<string, number> = {
+    double: 5,
+    single: 4,
+    thin: 4,
+    thick: 4,
+    wave: 4,
+    dashed: 3,
+    dotted: 2,
+    nil: 0,
+    none: 0,
+  }
+  const rA = styleRank[a.style ?? 'single'] ?? 1
+  const rB = styleRank[b.style ?? 'single'] ?? 1
+  if (rA !== rB) return rA > rB ? a : b
+  return a
+}
+
+function hasConflict(a: TableCellBorder | undefined, b: TableCellBorder | undefined): boolean {
+  if (!a || !b) return false
+  if (a.style === 'none' || a.style === 'nil' || b.style === 'none' || b.style === 'nil') return true
+  const wA = a.widthPt !== undefined ? a.widthPt : (BORDER_WIDTH[a.style ?? 'thin'] ? (BORDER_WIDTH[a.style ?? 'thin'] * 3) / 4 : 0.75)
+  const wB = b.widthPt !== undefined ? b.widthPt : (BORDER_WIDTH[b.style ?? 'thin'] ? (BORDER_WIDTH[b.style ?? 'thin'] * 3) / 4 : 0.75)
+  const cA = a.color ?? 'auto'
+  const cB = b.color ?? 'auto'
+  const sA = a.style ?? 'single'
+  const sB = b.style ?? 'single'
+  return Math.abs(wA - wB) > 0.05 || cA !== cB || sA !== sB
+}
+
 function paintTables(tables: TableBox[], ctx: CanvasRenderingContext2D): void {
   for (const table of tables) {
     for (const row of table.rows) {
@@ -1014,28 +1378,169 @@ function paintTables(tables: TableBox[], ctx: CanvasRenderingContext2D): void {
         }
       }
     }
+    // Resolved adjacent-border intervals (table-relative coords) per cell edge.
+    // A shared gridline stretch between unequal-height neighbors resolves per
+    // segment: the winner paints exactly its overlap, and each side keeps its
+    // own spec on stretches no neighbor covers. Intervals are recorded on
+    // BOTH cells of a resolved pair, so resolution is order-independent and
+    // no stretch ever paints twice or drops out.
+    type EdgeSide = 'left' | 'right' | 'top' | 'bottom'
+    const suppressed = new Map<TableCellBox, Partial<Record<EdgeSide, Array<[number, number]>>>>()
+    const addSuppressed = (cell: TableCellBox, side: EdgeSide, lo: number, hi: number): void => {
+      if (!(hi > lo + 1e-9)) return
+      let sides = suppressed.get(cell)
+      if (!sides) { sides = {}; suppressed.set(cell, sides) }
+      const list = sides[side] ?? []
+      list.push([lo, hi])
+      sides[side] = list
+    }
+    const isCovered = (cell: TableCellBox, side: EdgeSide, lo: number, hi: number): boolean =>
+      (suppressed.get(cell)?.[side] ?? []).some(([a, b]) => a <= lo + 1e-6 && hi <= b + 1e-6)
+    // Paint the caller's own spec on the parts of [lo, hi] no resolution covers.
+    const paintUncovered = (cell: TableCellBox, side: EdgeSide, lo: number, hi: number, paint: (a: number, b: number) => void): void => {
+      const covered = (suppressed.get(cell)?.[side] ?? []).slice().sort((p, q) => p[0] - q[0])
+      let cursor = lo
+      for (const [a, b] of covered) {
+        if (a > cursor + 1e-6) paint(cursor, Math.min(a, hi))
+        cursor = Math.max(cursor, b)
+        if (cursor >= hi - 1e-6) break
+      }
+      if (cursor < hi - 1e-6) paint(cursor, hi)
+    }
+
     // borders after fills so they sit on top of shading
-    for (const row of table.rows) {
-      for (const cell of row.cells) {
+    for (let ri = 0; ri < table.rows.length; ri++) {
+      const row = table.rows[ri]
+      for (let ci = 0; ci < row.cells.length; ci++) {
+        const cell = row.cells[ci]
         const b = cell.borders
         if (!b) continue
         const cx = table.xPx + cell.xPx
         const cy = table.yPx + cell.yPx
-        const draw = (side: 'left' | 'right' | 'top' | 'bottom', x1: number, y1: number, x2: number, y2: number) => {
-          const spec = cell.borderSpecs?.[side]
+        const draw = (side: 'left' | 'right' | 'top' | 'bottom' | 'tl2br' | 'tr2bl', x1: number, y1: number, x2: number, y2: number, customSpec?: TableCellBorder) => {
+          const spec = customSpec ?? cell.borderSpecs?.[side]
+          const style = spec?.style ?? b[side]
           ctx.strokeStyle = spec?.color && spec.color !== 'auto' ? resolveColor(spec.color) : '#000000'
-          ctx.lineWidth =
-            spec?.widthPt !== undefined ? (spec.widthPt * 4) / 3 : Math.max(1, BORDER_WIDTH[b[side] ?? 'thin'] ?? 1)
+          const lw =
+            spec?.widthPt !== undefined ? (spec.widthPt * 4) / 3 : Math.max(1, BORDER_WIDTH[style ?? 'thin'] ?? 1)
+          ctx.lineWidth = lw
           const offset = spec?.widthPt !== undefined ? 0 : 0.5
-          ctx.beginPath()
-          ctx.moveTo(x1 + offset, y1 + offset)
-          ctx.lineTo(x2 + offset, y2 + offset)
-          ctx.stroke()
+          if (style === 'dashed' || style === 'dotted' || style === 'dotDash') {
+            ctx.save()
+            if (style === 'dashed') ctx.setLineDash([lw * 4, lw * 2])
+            else if (style === 'dotted') ctx.setLineDash([lw, lw * 1.5])
+            else if (style === 'dotDash') ctx.setLineDash([lw * 3, lw, lw, lw])
+            ctx.beginPath()
+            ctx.moveTo(x1 + offset, y1 + offset)
+            ctx.lineTo(x2 + offset, y2 + offset)
+            ctx.stroke()
+            ctx.restore()
+          } else {
+            ctx.beginPath()
+            ctx.moveTo(x1 + offset, y1 + offset)
+            ctx.lineTo(x2 + offset, y2 + offset)
+            ctx.stroke()
+          }
         }
-        if (b.left) draw('left', cx, cy, cx, cy + cell.heightPx)
-        if (b.right) draw('right', cx + cell.widthPx, cy, cx + cell.widthPx, cy + cell.heightPx)
-        if (b.top) draw('top', cx, cy, cx + cell.widthPx, cy)
-        if (b.bottom) draw('bottom', cx, cy + cell.heightPx, cx + cell.widthPx, cy + cell.heightPx)
+
+        // Left border (own spec on stretches no conflict resolution covers)
+        if (b.left) {
+          paintUncovered(cell, 'left', cell.yPx, cell.yPx + cell.heightPx, (a, b2) =>
+            draw('left', cx, table.yPx + a, cx, table.yPx + b2))
+        }
+
+        // Right border: resolve per shared-gridline segment against every
+        // overlapping neighbor in any row (merged cells span rows).
+        if (b.right) {
+          const edgeX = cell.xPx + cell.widthPx
+          const y0 = cell.yPx, y1 = cell.yPx + cell.heightPx
+          const ownSpec = cell.borderSpecs?.right
+          const neighbors = table.rows.flatMap(r => r.cells)
+            .filter(c => c !== cell && Math.abs(c.xPx - edgeX) < 1.5 && c.yPx < y1 - 1e-6 && c.yPx + c.heightPx > y0 + 1e-6)
+            .sort((p, q) => p.yPx - q.yPx)
+          if (!neighbors.some(n => hasConflict(ownSpec, n.borderSpecs?.left))) {
+            // No conflict on this edge: legacy full-edge paint, byte-identical
+            // (including dash phasing and translucent overdraw).
+            draw('right', cx + cell.widthPx, cy, cx + cell.widthPx, cy + cell.heightPx)
+          } else {
+            const paintGap = (a: number, b2: number): void => {
+              paintUncovered(cell, 'right', a, b2, (pa, pb) =>
+                draw('right', cx + cell.widthPx, table.yPx + pa, cx + cell.widthPx, table.yPx + pb))
+            }
+            let cursor = y0
+            for (const n of neighbors) {
+              const o0 = Math.max(y0, n.yPx), o1 = Math.min(y1, n.yPx + n.heightPx)
+              if (o1 <= o0 + 1e-6) continue
+              if (o0 > cursor + 1e-6) paintGap(cursor, Math.min(o0, y1))
+              if (isCovered(cell, 'right', o0, o1) || isCovered(n, 'left', o0, o1)) {
+                cursor = Math.max(cursor, o1)
+                continue
+              }
+              if (hasConflict(ownSpec, n.borderSpecs?.left)) {
+                const winner = resolveDocxBorder(ownSpec, n.borderSpecs?.left)
+                if (winner) draw('right', cx + cell.widthPx, table.yPx + o0, cx + cell.widthPx, table.yPx + o1, winner)
+                addSuppressed(cell, 'right', o0, o1)
+                addSuppressed(n, 'left', o0, o1)
+              } else {
+                // No conflict: legacy overdraw behavior (both sides paint).
+                paintGap(o0, o1)
+              }
+              cursor = Math.max(cursor, o1)
+            }
+            if (cursor < y1 - 1e-6) paintGap(cursor, y1)
+          }
+        }
+
+        // Top border (own spec on stretches no conflict resolution covers)
+        if (b.top) {
+          paintUncovered(cell, 'top', cell.xPx, cell.xPx + cell.widthPx, (a, b2) =>
+            draw('top', table.xPx + a, cy, table.xPx + b2, cy))
+        }
+
+        // Bottom border: resolve per shared-gridline segment against every
+        // overlapping neighbor below (colSpan cells differ in width).
+        if (b.bottom) {
+          const edgeY = cell.yPx + cell.heightPx
+          const x0 = cell.xPx, x1 = cell.xPx + cell.widthPx
+          const ownSpec = cell.borderSpecs?.bottom
+          const neighbors = table.rows.flatMap(r => r.cells)
+            .filter(c => c !== cell && Math.abs(c.yPx - edgeY) < 1.5 && c.xPx < x1 - 1e-6 && c.xPx + c.widthPx > x0 + 1e-6)
+            .sort((p, q) => p.xPx - q.xPx)
+          if (!neighbors.some(n => hasConflict(ownSpec, n.borderSpecs?.top))) {
+            // No conflict on this edge: legacy full-edge paint, byte-identical.
+            draw('bottom', cx, cy + cell.heightPx, cx + cell.widthPx, cy + cell.heightPx)
+          } else {
+            const paintGap = (a: number, b2: number): void => {
+              paintUncovered(cell, 'bottom', a, b2, (pa, pb) =>
+                draw('bottom', table.xPx + pa, cy + cell.heightPx, table.xPx + pb, cy + cell.heightPx))
+            }
+            let cursor = x0
+            for (const n of neighbors) {
+              const o0 = Math.max(x0, n.xPx), o1 = Math.min(x1, n.xPx + n.widthPx)
+              if (o1 <= o0 + 1e-6) continue
+              if (o0 > cursor + 1e-6) paintGap(cursor, Math.min(o0, x1))
+              if (isCovered(cell, 'bottom', o0, o1) || isCovered(n, 'top', o0, o1)) {
+                cursor = Math.max(cursor, o1)
+                continue
+              }
+              if (hasConflict(ownSpec, n.borderSpecs?.top)) {
+                const winner = resolveDocxBorder(ownSpec, n.borderSpecs?.top)
+                if (winner) draw('bottom', table.xPx + o0, cy + cell.heightPx, table.xPx + o1, cy + cell.heightPx, winner)
+                addSuppressed(cell, 'bottom', o0, o1)
+                addSuppressed(n, 'top', o0, o1)
+              } else {
+                // No conflict: legacy overdraw behavior (both sides paint).
+                paintGap(o0, o1)
+              }
+              cursor = Math.max(cursor, o1)
+            }
+            if (cursor < x1 - 1e-6) paintGap(cursor, x1)
+          }
+        }
+
+        // Diagonal borders
+        if (b.tl2br) draw('tl2br', cx, cy, cx + cell.widthPx, cy + cell.heightPx)
+        if (b.tr2bl) draw('tr2bl', cx + cell.widthPx, cy, cx, cy + cell.heightPx)
       }
     }
   }
@@ -1148,7 +1653,7 @@ interface MergeRegion {
   startCol: number
   colSpan: number
   fill?: string
-  borders?: { left?: string; right?: string; top?: string; bottom?: string }
+  borders?: { left?: string; right?: string; top?: string; bottom?: string; tl2br?: string; tr2bl?: string }
   borderSpecs?: TableCellBox['borderSpecs']
 }
 
@@ -1188,6 +1693,7 @@ function computeMergeRegions(table: DocxTable, positions: CellPosition[][]): Map
         if (tb) return tb[side] ?? (side === 'top' || side === 'bottom' ? tb.insideH : tb.insideV)
         return undefined
       }
+      const cb = cell.borders
       const region: MergeRegion = {
         startRow: r,
         endRow: r,
@@ -1198,9 +1704,18 @@ function computeMergeRegions(table: DocxTable, positions: CellPosition[][]): Map
           left: borderCss(spec('left')),
           right: borderCss(spec('right')),
           top: borderCss(spec('top')),
-          bottom: borderCss(spec('bottom'))
+          bottom: borderCss(spec('bottom')),
+          tl2br: borderCss(cb?.tl2br ?? tb?.tl2br),
+          tr2bl: borderCss(cb?.tr2bl ?? tb?.tr2bl),
         },
-        borderSpecs: { left: spec('left'), right: spec('right'), top: spec('top'), bottom: spec('bottom') }
+        borderSpecs: {
+          left: spec('left'),
+          right: spec('right'),
+          top: spec('top'),
+          bottom: spec('bottom'),
+          tl2br: cb?.tl2br ?? tb?.tl2br,
+          tr2bl: cb?.tr2bl ?? tb?.tr2bl,
+        }
       }
       // extend over following continue cells
       for (let rr = r + 1; rr < table.rows.length; rr++) {
@@ -1706,9 +2221,18 @@ function layoutTableRows(
             left: borderCss(spec('left')),
             right: borderCss(spec('right')),
             top: borderCss(spec('top')),
-            bottom: borderCss(spec('bottom'))
+            bottom: borderCss(spec('bottom')),
+            tl2br: borderCss(cb?.tl2br ?? tb?.tl2br),
+            tr2bl: borderCss(cb?.tr2bl ?? tb?.tr2bl),
           },
-          borderSpecs: { left: spec('left'), right: spec('right'), top: spec('top'), bottom: spec('bottom') }
+          borderSpecs: {
+            left: spec('left'),
+            right: spec('right'),
+            top: spec('top'),
+            bottom: spec('bottom'),
+            tl2br: cb?.tl2br ?? tb?.tl2br,
+            tr2bl: cb?.tr2bl ?? tb?.tr2bl,
+          }
         },
         lines: cellLines,
         anchors: cellAnchors,
