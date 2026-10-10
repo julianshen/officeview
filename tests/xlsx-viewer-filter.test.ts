@@ -162,6 +162,9 @@ describe('complete classification and exact keys', () => {
     expect(classifyColumn([{ kind: 'number', value: 2, formatCode: '"' + slash + '"yyyy-mm-dd' }], true, semantics)).toEqual(date)
     expect(classifyColumn([{ kind: 'number', value: -2, formatCode: '0 "' + slash + '";yyyy-mm-dd' }], true, semantics)).toEqual(date)
   })
+  it('preserves semicolons in inactive bracket regions during active-section classification', () => {
+    expect(classifyColumn([{ kind: 'number', value: 0, formatCode: '0;[foo;yyyy];0' }], true, semantics)).toEqual(numeric)
+  })
   it('never infers date for empty/errors or completes missing domains', () => {
     for (const values of [[], [{ kind: 'blank' }], [{ kind: 'error', value: '#NUM!' }]] as PreparedValue[][]) expect(classifyColumn(values, true, semantics)).toEqual({ kind: 'empty', hasNumeric: false })
     expect(classifyColumn([n(1)], false, semantics).kind).toBe('loading')

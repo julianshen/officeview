@@ -33,9 +33,13 @@ function dateFormatted(value: Extract<PreparedValue, { kind: 'number' }>, semant
   const probe = formatCommon(value.value, value.formatCode, { ...semantics, locale: 'en-US' })
   if (probe.kind !== 'text') return false
   const active = value.value < 0 ? 1 : value.value === 0 ? 2 : 0
-  let section = 0, quoted = false, escaped = false, found = false
+  let section = 0, quoted = false, bracketed = false, escaped = false, found = false
   const sections: boolean[] = []
   for (const point of value.formatCode) {
+    if (bracketed) {
+      if (point === ']') bracketed = false
+      continue
+    }
     if (quoted) {
       if (point === '"') quoted = false
       continue
@@ -43,6 +47,7 @@ function dateFormatted(value: Extract<PreparedValue, { kind: 'number' }>, semant
     if (escaped) { escaped = false; continue }
     if (point === '\\') { escaped = true; continue }
     if (point === '"') { quoted = true; continue }
+    if (point === '[') { bracketed = true; continue }
     if (point === ';') { sections[section++] = found; found = false; continue }
     if (/[ymdhs]/i.test(point)) found = true
   }
