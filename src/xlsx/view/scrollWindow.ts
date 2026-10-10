@@ -26,6 +26,13 @@ function state(window: ScrollWindow): void {
     || window.physicalPosition.x > window.physicalExtent.width || window.physicalPosition.y > window.physicalExtent.height) throw new RangeError('Invalid sheet scroll window')
 }
 function clamp(value: number, min: number, max: number): number { return Math.max(min, Math.min(max, value)) }
+/** Zoom arguments are document state: non-finite values are rejected instead of
+ * silently becoming a bound. Gesture deltas/distances are event inputs and keep
+ * their ignore-and-keep-state rule (see wheelSheetZoom/pinchSheetZoom). */
+function finiteZoom(zoom: number): number {
+  if (!Number.isFinite(zoom)) throw new RangeError('Sheet zoom must be finite')
+  return zoom
+}
 function axisBounds(axis: AxisMetrics, viewportCss: number, zoom: number) {
   const total = axis.totalCss()
   finite(total)
@@ -54,7 +61,7 @@ function makeWindow(metrics: SheetMetrics, viewport: ViewportSize, offset: Scrol
  * native segment offset; its derived logical base is origin-position/zoom (§5.4).
  * Recentring changes the native offset, never the viewport's world origin. */
 export function createScrollWindow(metrics: SheetMetrics, viewport: ViewportSize, options: ScrollOptions = {}): ScrollWindow {
-  return makeWindow(metrics, viewport, options.offset ?? { x: 0, y: 0 }, clampZoom(options.zoom ?? 1, SHEET_MIN_ZOOM, SHEET_MAX_ZOOM), options.deviceScale ?? 1)
+  return makeWindow(metrics, viewport, options.offset ?? { x: 0, y: 0 }, clampZoom(finiteZoom(options.zoom ?? 1), SHEET_MIN_ZOOM, SHEET_MAX_ZOOM), options.deviceScale ?? 1)
 }
 export function scrollOffset(window: ScrollWindow): ScrollPoint { state(window); return { ...window.logicalOrigin } }
 export function setScrollOffset(window: ScrollWindow, metrics: SheetMetrics, viewport: ViewportSize, offset: ScrollPoint): ScrollWindow {
@@ -109,7 +116,7 @@ export function refreshScrollWindow(window: ScrollWindow, metrics: SheetMetrics,
 export function setScrollZoom(window: ScrollWindow, metrics: SheetMetrics, viewport: ViewportSize, nextZoom: number, anchor: ScrollPoint, nextAnchor: ScrollPoint = anchor, deviceScale = window.deviceScale): ScrollWindow {
   const world = viewportToLogical(window, anchor)
   point(nextAnchor)
-  const zoom = clampZoom(nextZoom, SHEET_MIN_ZOOM, SHEET_MAX_ZOOM)
+  const zoom = clampZoom(finiteZoom(nextZoom), SHEET_MIN_ZOOM, SHEET_MAX_ZOOM)
   return makeWindow(metrics, viewport, { x: world.x - nextAnchor.x / zoom, y: world.y - nextAnchor.y / zoom }, zoom, deviceScale)
 }
 export function logicalToViewport(window: ScrollWindow, value: ScrollPoint): ScrollPoint {
@@ -270,23 +277,49 @@ function bodyCandidate(context: NavigationContext, from: number, direction: -1 |
   }
   return null
 }
+/** Nearest visible display slot of any kind in display order, forward on ties.
+ * Slots hidden by the mask or collapsed to zero height never qualify. */
+function nearestVisibleSlot(context: NavigationContext, slot: number): DisplaySlot | null {
+  if (!context.metrics.rows.totalCss()) return null
+  const forward = rowNeighbor(context, slot, 1)
+  const backward = rowNeighbor(context, slot, -1)
+  if (forward === null) return backward
+  if (backward === null) return forward
+  return forward - slot <= slot - backward ? forward : backward
+}
 function retainActive(context: NavigationContext, active: SourceCell | null): SourceCell | null {
   if (!active || !isValidCoordinate(active.row, active.col)) return null
-  const { metrics } = context
+  const { metrics, view } = context
   if (active.row >= metrics.rows.logicalCount || active.col >= metrics.cols.logicalCount) return null
-  if (metrics.sourceCellToLogical(active)) return active
+  if (metrics.sourceCellToLogical(active)) return Object.freeze({ row: active.row, col: active.col })
   const slot = metrics.order.sourceToDisplay(active.row)
+  const col = nearestColumn(metrics.cols, active.col)
+  if (col === null) return null
+  // Only the column is hidden: the row itself is visible, so keep the source
+  // row and move to the nearest visible column (§8.1 never substitutes rows).
+  if (metrics.rows.size(slot) > 0 && view.visibility.visible(slot)) {
+    return Object.freeze({ row: active.row, col })
+  }
+  // The row itself is hidden. A row hidden by the filter body relocates within
+  // the body (protected headers/totals are not substitutes); any other hidden
+  // row relocates to the nearest visible row of any kind, forward on ties.
+  const filter = normalizeFilter(view.filter)
+  const bounds = sourceBodyBounds(context)
+  const inFilterBody = filter !== null && active.row >= bounds.first && active.row <= bounds.last
+  if (!inFilterBody) {
+    const targetSlot = nearestVisibleSlot(context, slot)
+    return targetSlot === null ? null : Object.freeze({ row: metrics.order.displayToSource(targetSlot), col })
+  }
   const forward = bodyCandidate(context, slot, 1), backward = bodyCandidate(context, slot, -1)
   const targetSlot = forward === null ? backward : backward === null ? forward : forward - slot <= slot - backward ? forward : backward
-  const col = nearestColumn(metrics.cols, active.col)
-  return targetSlot === null || col === null ? null : { row: metrics.order.displayToSource(targetSlot), col }
+  return targetSlot === null ? null : Object.freeze({ row: metrics.order.displayToSource(targetSlot), col })
 }
 function validateTarget(metrics: SheetMetrics, target: SourceCell): void {
   validateCoordinate(target.row, target.col)
   if (target.row >= metrics.rows.logicalCount || target.col >= metrics.cols.logicalCount) throw new RangeError('Navigation target outside logical axes')
 }
 function visibleResult(window: ScrollWindow, metrics: SheetMetrics, target: SourceCell): NavigationResult {
-  return { kind: 'visible', window, active: target, target, display: { rowSlot: metrics.order.sourceToDisplay(target.row), col: target.col }, activate: true }
+  return { kind: 'visible', window, active: Object.freeze({ ...target }), target: Object.freeze({ ...target }), display: { rowSlot: metrics.order.sourceToDisplay(target.row), col: target.col }, activate: true }
 }
 function emptyResult(window: ScrollWindow): NavigationResult { return { kind: 'empty', window, active: null, target: null, display: null, activate: false } }
 function ensureVisible(window: ScrollWindow, context: NavigationContext, target: SourceCell): ScrollWindow {
@@ -355,7 +388,11 @@ export function navigateKey(window: ScrollWindow, context: NavigationContext, ke
       if (seeded) break
       const direction = key === 'PageDown' ? 1 : -1
       pageWindow = scrollBy(window, context.metrics, context.viewport, { x: 0, y: direction * context.viewport.height })
-      const visibleAnchor = Math.max(context.metrics.rows.start(slot), window.logicalOrigin.y)
+      // Clamp a far-away active cell into the visible pane so the page target
+      // always overlaps the moved viewport (an inclusive upper edge would land
+      // exactly on its bottom border, outside it).
+      const span = context.viewport.height / window.zoom
+      const visibleAnchor = clamp(Math.max(context.metrics.rows.start(slot), window.logicalOrigin.y), window.logicalOrigin.y, previousFloat(window.logicalOrigin.y + span))
       const css = clamp(visibleAnchor + direction * context.viewport.height / window.zoom, 0, previousFloat(context.metrics.rows.totalCss()))
       targetSlot = context.metrics.rows.locate(css) ?? slot
       break

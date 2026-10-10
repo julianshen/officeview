@@ -111,6 +111,13 @@ describe('bounded Float64 scroll segments (AC-CAP-02, AC-VIEW-03)', () => {
     expect(() => scrollBy(window, metrics, viewport, { x: NaN, y: 0 })).toThrow()
     expect(() => createScrollWindow(fullMetrics(), { width: Infinity, height: 600 })).toThrow()
   })
+
+  it.each([NaN, Infinity, -Infinity])('rejects non-finite zoom %s at scroll entry points', (zoom) => {
+    const metrics = fullMetrics()
+    const start = createScrollWindow(metrics, viewport)
+    expect(() => createScrollWindow(metrics, viewport, { zoom })).toThrow(RangeError)
+    expect(() => setScrollZoom(start, metrics, viewport, zoom, { x: 10, y: 10 })).toThrow(RangeError)
+  })
 })
 
 describe('display/source navigator and hidden inspector (AC-VIEW-04)', () => {
@@ -125,6 +132,19 @@ describe('display/source navigator and hidden inspector (AC-VIEW-04)', () => {
     expect(original.target).toEqual({ row: 1, col: 0 })
     expect(original.display).toEqual({ rowSlot: 2, col: 0 })
   })
+  it('returns fresh frozen active/target cells without aliasing caller objects', () => {
+    const order = createRowOrder([{ r0: 0, r1: 2, sourceAtOffset: new Uint32Array([0, 2, 1]) }])
+    const context = contextFor(3, null, createIntervalSet([]), order)
+    const window = createScrollWindow(context.metrics, viewport)
+    const displayed = navigateTo(window, context, navigatorRequestFromA1('A2'))
+    expect(displayed.kind).toBe('visible')
+    if (displayed.kind === 'visible') {
+      expect(displayed.active).toEqual(displayed.target)
+      expect(displayed.active).not.toBe(displayed.target)
+      expect(Object.isFrozen(displayed.active)).toBe(true)
+      expect(Object.isFrozen(displayed.target)).toBe(true)
+    }
+  })
   it('inspects hidden exact targets without unhide or activation and retains the valid active cell', () => {
     const context = contextFor(8, null, createIntervalSet([{ r0: 2, r1: 2 }]))
     const window = createScrollWindow(context.metrics, viewport), active = { row: 0, col: 0 }
@@ -132,7 +152,9 @@ describe('display/source navigator and hidden inspector (AC-VIEW-04)', () => {
     expect(result.kind).toBe('hidden')
     expect(result.activate).toBe(false)
     if (result.kind === 'hidden') expect(result.hiddenReason).toBe('authored-hidden')
-    expect(result.active).toBe(active)
+    expect(result.active).toEqual(active)
+    expect(result.active).not.toBe(active)
+    expect(Object.isFrozen(result.active)).toBe(true)
     expect(result.window).toBe(window)
     expect(context.view.visibility.visible(2)).toBe(false)
     expect(context.view.selection.active).toEqual(active)
@@ -148,6 +170,65 @@ describe('display/source navigator and hidden inspector (AC-VIEW-04)', () => {
     const none = createRowVisibility(6, row => row === 0 || row === 5)
     const noBody = { ...context, metrics: createSheetMetrics({ rows: createAxisMetrics({ logicalCount: 6, defaultSizeCss: 24 }), cols: createAxisMetrics({ logicalCount: MAX_COLS, defaultSizeCss: 64 }), visibility: none }), view: { ...context.view, visibility: none } }
     expect(navigateTo(window, noBody, navigatorRequestFromA1('A4'), { row: 3, col: 0 }).active).toBeNull()
+  })
+  it('keeps the active row when only its column is hidden, moving to the nearest visible column', () => {
+    const filter: FilterSpec = { range: { r0: 0, r1: 5, c0: 0, c1: 3, headerRows: 1, totalsRows: 0 }, columns: new Map([[0, { kind: 'number', op: 'gt', first: 0 }]]) }
+    const hidden = createIntervalSet([])
+    const order = createIdentityOrder()
+    const projected = projectVisibility(hidden, filter, order, row => row !== 3, 12)
+    const metrics = createSheetMetrics({
+      rows: createAxisMetrics({ logicalCount: 12, defaultSizeCss: 24 }),
+      cols: createAxisMetrics({ logicalCount: 4, defaultSizeCss: 64, collapsed: [{ start: 2, end: 2 }] }),
+      order, visibility: projected.visibility })
+    const context: NavigationContext = { viewport, metrics, view: { baseHidden: hidden, filter: projected.filter, visibility: projected.visibility, selection: Object.freeze({ active: null, anchor: null, ranges: [] }) } }
+    const window = createScrollWindow(metrics, viewport)
+    const header = navigateTo(window, context, navigatorRequestFromA1('A4', 'source'), { row: 0, col: 2 })
+    expect(header.kind).toBe('hidden')
+    expect(header.active).toEqual({ row: 0, col: 3 })
+    const outside = navigateKey(window, context, 'ArrowDown', { row: 10, col: 2 })
+    expect(outside.active).toEqual({ row: 11, col: 3 })
+  })
+  it('relocates authored-hidden rows outside the filter body to the nearest visible row of any kind', () => {
+    const filter: FilterSpec = { range: { r0: 0, r1: 5, c0: 0, c1: 0, headerRows: 1, totalsRows: 0 }, columns: new Map([[0, { kind: 'number', op: 'gt', first: 0 }]]) }
+    const hidden = createIntervalSet([{ r0: 10, r1: 10 }])
+    const order = createIdentityOrder()
+    const projected = projectVisibility(hidden, filter, order, () => true, 12)
+    const metrics = createSheetMetrics({
+      rows: createAxisMetrics({ logicalCount: 12, defaultSizeCss: 24 }),
+      cols: createAxisMetrics({ logicalCount: 4, defaultSizeCss: 64 }), order, visibility: projected.visibility })
+    const context: NavigationContext = { viewport, metrics, view: { baseHidden: hidden, filter: projected.filter, visibility: projected.visibility, selection: Object.freeze({ active: null, anchor: null, ranges: [] }) } }
+    const window = createScrollWindow(metrics, viewport)
+    const result = navigateTo(window, context, navigatorRequestFromA1('C11', 'source'), { row: 10, col: 2 })
+    expect(result.kind).toBe('hidden')
+    expect(result.active).toEqual({ row: 11, col: 2 })
+  })
+  it('never substitutes a protected header for a filter-hidden body row', () => {
+    const filter: FilterSpec = { range: { r0: 0, r1: 5, c0: 0, c1: 0, headerRows: 1, totalsRows: 0 }, columns: new Map([[0, { kind: 'number', op: 'gt', first: 0 }]]) }
+    const hidden = createIntervalSet([])
+    const order = createIdentityOrder()
+    const projected = projectVisibility(hidden, filter, order, row => row === 4, 6)
+    const metrics = createSheetMetrics({
+      rows: createAxisMetrics({ logicalCount: 6, defaultSizeCss: 24 }),
+      cols: createAxisMetrics({ logicalCount: 4, defaultSizeCss: 64 }), order, visibility: projected.visibility })
+    const context: NavigationContext = { viewport, metrics, view: { baseHidden: hidden, filter: projected.filter, visibility: projected.visibility, selection: Object.freeze({ active: null, anchor: null, ranges: [] }) } }
+    const window = createScrollWindow(metrics, viewport)
+    const result = navigateTo(window, context, navigatorRequestFromA1('A3', 'source'), { row: 1, col: 0 })
+    expect(result.kind).toBe('hidden')
+    expect(result.active).toEqual({ row: 4, col: 0 })
+  })
+  it('relocates a stale hidden body row under a permutation without touching headers', () => {
+    const order = createRowOrder([{ r0: 5, r1: 7, sourceAtOffset: new Uint32Array([6, 5, 7]) }])
+    const filter: FilterSpec = { range: { r0: 5, r1: 7, c0: 0, c1: 0, headerRows: 1, totalsRows: 0 }, columns: new Map([[0, { kind: 'number', op: 'gt', first: 0 }]]) }
+    const hidden = createIntervalSet([])
+    const projected = projectVisibility(hidden, filter, order, row => row === 7, 10)
+    const metrics = createSheetMetrics({
+      rows: createAxisMetrics({ logicalCount: 10, defaultSizeCss: 24 }),
+      cols: createAxisMetrics({ logicalCount: 4, defaultSizeCss: 64 }), order, visibility: projected.visibility })
+    const context: NavigationContext = { viewport, metrics, view: { baseHidden: hidden, filter: projected.filter, visibility: projected.visibility, selection: Object.freeze({ active: null, anchor: null, ranges: [] }) } }
+    const window = createScrollWindow(metrics, viewport)
+    const result = navigateTo(window, context, navigatorRequestFromA1('A7', 'source'), { row: 6, col: 0 })
+    expect(result.kind).toBe('hidden')
+    expect(result.active).toEqual({ row: 7, col: 0 })
   })
   it('uses rank/select and axis summaries for arrows, Home/End, Ctrl-arrows and all-hidden cases', () => {
     const context = contextFor(8, null, createIntervalSet([{ r0: 1, r1: 2 }]))
@@ -205,6 +286,20 @@ describe('guard-zone and giant-cell page navigation regressions', () => {
     expect(up.window.logicalOrigin.y).toBe(400)
     expect(up.active).toEqual({ row: 0, col: 0 })
   })
+  it('keeps the page target inside the moved viewport when the active cell is far outside it', () => {
+    const context = contextFor(1000)
+    const window = createScrollWindow(context.metrics, viewport, { offset: { x: 0, y: 12000 } })
+    const down = navigateKey(window, context, 'PageDown', { row: 900, col: 0 })
+    expect(down.window.logicalOrigin.y).toBe(12600)
+    const box = context.metrics.sourceCellToLogical(down.active!)!
+    expect(box.y).toBeGreaterThanOrEqual(down.window.logicalOrigin.y)
+    expect(box.y).toBeLessThan(down.window.logicalOrigin.y + viewport.height)
+    const up = navigateKey(window, context, 'PageUp', { row: 100, col: 0 })
+    expect(up.window.logicalOrigin.y).toBe(11400)
+    const upBox = context.metrics.sourceCellToLogical(up.active!)!
+    expect(upBox.y).toBeGreaterThanOrEqual(up.window.logicalOrigin.y)
+    expect(upBox.y).toBeLessThan(up.window.logicalOrigin.y + viewport.height)
+  })
 })
 
 it('recenters only the guarded axis and keeps ordinary virtual wheel motion local', () => {
@@ -252,6 +347,60 @@ it('answers fully collapsed navigation/hits without enumerating rows, columns or
   const window = createScrollWindow(metrics, viewport)
   expect(hitTestViewport(window, metrics, viewport, { x: 10, y: 10 })).toBeNull()
   expect(navigateKey(window, context, 'End', null, { ctrl: true }).kind).toBe('empty')
+})
+
+describe('seeded scroll segment properties (cap, bounds, coverage)', () => {
+  let seed = 20261010
+  const random = (n: number): number => {
+    seed = (seed * 1103515245 + 12345) % 2147483648
+    return seed % n
+  }
+  const checkWindow = (window: ScrollWindow, view: { width: number; height: number }, totals: { width: number; height: number }): void => {
+    for (const axis of [{ extent: window.physicalExtent.width, position: window.physicalPosition.x, viewSize: view.width, origin: window.logicalOrigin.x, total: totals.width },
+      { extent: window.physicalExtent.height, position: window.physicalPosition.y, viewSize: view.height, origin: window.logicalOrigin.y, total: totals.height }]) {
+      expect(axis.extent).toBeLessThanOrEqual(MAX_PHYSICAL_SCROLL_CSS_PX)
+      expect(axis.position).toBeGreaterThanOrEqual(0)
+      expect(axis.position).toBeLessThanOrEqual(Math.max(0, axis.extent - axis.viewSize))
+      const base = axis.origin - axis.position / window.zoom
+      expect(base).toBeGreaterThanOrEqual(-1e-6)
+      expect(base).toBeLessThanOrEqual(axis.origin)
+      expect(base + axis.extent / window.zoom).toBeGreaterThanOrEqual(axis.origin + axis.viewSize / window.zoom - 1e-6)
+      expect(base + axis.extent / window.zoom).toBeLessThanOrEqual(axis.total + 1e-6)
+    }
+  }
+  it('holds across random metrics, zoom, DPR, sizes, giant intervals and operation sequences', () => {
+    const zooms = [0.25, 0.5, 1, 1.37, 2, 4]
+    const scales = [1, 1.5, 2, 3]
+    const sizes = [8, 24, 64, 200, 1000]
+    for (let trial = 0; trial < 25; trial++) {
+      const rowSize = sizes[random(sizes.length)]
+      const colSize = sizes[random(sizes.length)]
+      const giant = random(3) === 0
+      const metrics = createSheetMetrics({
+        rows: createAxisMetrics({ logicalCount: 500 + random(2000), defaultSizeCss: rowSize,
+          overrides: giant ? [{ start: 100, end: 104, sizeCss: 1e6 }] : [] }),
+        cols: createAxisMetrics({ logicalCount: 100 + random(500), defaultSizeCss: colSize,
+          overrides: giant ? [{ start: 10, end: 12, sizeCss: 1e6 }] : [] }),
+      })
+      const view = { width: 200 + random(800), height: 200 + random(800) }
+      const zoom = zooms[random(zooms.length)]
+      const deviceScale = scales[random(scales.length)]
+      let window = createScrollWindow(metrics, view, {
+        zoom, deviceScale,
+        offset: { x: random(2_000_000), y: random(2_000_000) },
+      })
+      checkWindow(window, view, { width: metrics.cols.totalCss(), height: metrics.rows.totalCss() })
+      for (let step = 0; step < 12; step++) {
+        const action = random(5)
+        if (action === 0) window = scrollBy(window, metrics, view, { x: random(4000) - 2000, y: random(4000) - 2000 })
+        else if (action === 1) window = setScrollZoom(window, metrics, view, zooms[random(zooms.length)], { x: random(view.width), y: random(view.height) })
+        else if (action === 2) window = recenterScrollWindow({ ...window, physicalPosition: { x: 0, y: 0 } }, metrics, view)
+        else if (action === 3) window = refreshScrollWindow(window, metrics, view)
+        else window = setScrollOffset(window, metrics, view, { x: random(2_000_000), y: random(2_000_000) })
+        checkWindow(window, view, { width: metrics.cols.totalCss(), height: metrics.rows.totalCss() })
+      }
+    }
+  })
 })
 
 it('rejects scroll origins whose Float64 spacing loses device pixels instead of silently mis-scrolling', () => {

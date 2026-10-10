@@ -3,8 +3,8 @@ import { MIN_ZOOM, MAX_ZOOM, clampZoom } from '../src/core/zoom'
 import { SHEET_MIN_ZOOM, SHEET_MAX_ZOOM } from '../src/xlsx/view/contracts'
 import { createAxisMetrics } from '../src/xlsx/view/axes'
 import { createSheetMetrics } from '../src/xlsx/view/projection'
-import { createScrollWindow, scrollOffset, viewportToLogical } from '../src/xlsx/view/scrollWindow'
-import { clampSheetZoom, createSheetZoomState, reduceSheetZoom, sheetZoomFor, zoomSheetAt, keyboardSheetZoom, wheelSheetZoom, pinchSheetZoom } from '../src/xlsx/view/sheetZoom'
+import { createScrollWindow, refreshScrollWindow, scrollOffset, viewportToLogical } from '../src/xlsx/view/scrollWindow'
+import { clampSheetZoom, createSheetZoomState, reduceSheetZoom, sheetZoomFor, zoomSheetAt, keyboardSheetZoom, wheelSheetZoom, pinchSheetZoom, SHEET_ZOOM_STEPS } from '../src/xlsx/view/sheetZoom'
 
 const viewport = { width: 375, height: 667 }
 const metrics = createSheetMetrics({
@@ -15,10 +15,7 @@ const metrics = createSheetMetrics({
 describe('absolute sheet zoom and document ownership (AC-VIEW-04)', () => {
   it('starts each sheet at absolute 100%, independent of authored width or viewport', () => {
     const state = createSheetZoomState('doc-a', 'wide')
-    const authoredWidth = 1000
-    const viewportWidth = 375
     expect(sheetZoomFor(state)).toBe(1)
-    expect(authoredWidth * sheetZoomFor(state)).toBeGreaterThan(viewportWidth)
     expect(sheetZoomFor(state, 'another')).toBe(1)
     expect(state.zoomBySheet.size).toBe(0)
   })
@@ -94,6 +91,23 @@ describe('sheet gestures through ScrollWindow (AC-VIEW-04)', () => {
     expect(window.physicalExtent.width).toBeGreaterThan(viewport.width)
   })
 
+  it('keeps absolute 100% across refresh and viewport resize in a 375px container', () => {
+    const narrow = { width: 375, height: 667 }
+    const wide = createSheetMetrics({
+      rows: createAxisMetrics({ logicalCount: 10, defaultSizeCss: 20 }),
+      cols: createAxisMetrics({ logicalCount: 10, defaultSizeCss: 100 }),
+    })
+    const window = createScrollWindow(wide, narrow)
+    expect(window.zoom).toBe(1)
+    const refreshed = refreshScrollWindow(window, wide, narrow)
+    expect(refreshed.zoom).toBe(1)
+    expect(refreshed.physicalExtent.width).toBe(1000)
+    const resized = refreshScrollWindow(window, wide, { width: 200, height: 400 })
+    expect(resized.zoom).toBe(1)
+    expect(resized.physicalExtent.width).toBe(1000)
+    expect(resized.physicalExtent.width).toBeGreaterThan(200)
+  })
+
   it.each([0.25, 0.5, 1.37, 4])('changes to absolute %s preserving the pointer at a segmented offset', zoom => {
     const anchor = { x: 111.5, y: 232.25 }
     const start = createScrollWindow(metrics, viewport, { zoom: 1, deviceScale: 3, offset: { x: 700_000, y: 19_000_000 } })
@@ -123,11 +137,34 @@ describe('sheet gestures through ScrollWindow (AC-VIEW-04)', () => {
     const before = viewportToLogical(start, center)
     expect(before).toEqual({ x: 1187.5, y: 2333.5 })
     const next = keyboardSheetZoom(start, metrics, viewport, -1)
-    expect(next.zoom).toBeCloseTo(1 / 1.5, 12)
+    expect(next.zoom).toBe(0.75)
     expect(viewportToLogical(next, center).x).toBeCloseTo(before.x, 10)
     expect(viewportToLogical(next, center).y).toBeCloseTo(before.y, 10)
     const up = keyboardSheetZoom(next, metrics, viewport, 1, center)
-    expect(up.zoom).toBeCloseTo(1, 12)
+    expect(up.zoom).toBe(1)
+  })
+
+  it('snaps keyboard zoom to the documented step table with exact inverse round trips', () => {
+    for (const step of SHEET_ZOOM_STEPS) {
+      const window = createScrollWindow(metrics, viewport, { zoom: step })
+      if (step > SHEET_MIN_ZOOM) {
+        const down = keyboardSheetZoom(window, metrics, viewport, -1)
+        expect(down.zoom).toBeLessThan(step)
+        expect(keyboardSheetZoom(down, metrics, viewport, 1).zoom).toBe(step)
+      } else {
+        expect(keyboardSheetZoom(window, metrics, viewport, -1).zoom).toBe(step)
+      }
+      if (step < SHEET_MAX_ZOOM) {
+        const up = keyboardSheetZoom(window, metrics, viewport, 1)
+        expect(up.zoom).toBeGreaterThan(step)
+        expect(keyboardSheetZoom(up, metrics, viewport, -1).zoom).toBe(step)
+      } else {
+        expect(keyboardSheetZoom(window, metrics, viewport, 1).zoom).toBe(step)
+      }
+    }
+    const offTable = createScrollWindow(metrics, viewport, { zoom: 1.37 })
+    expect(keyboardSheetZoom(offTable, metrics, viewport, 1).zoom).toBe(1.5)
+    expect(keyboardSheetZoom(offTable, metrics, viewport, -1).zoom).toBe(1.25)
   })
 
   it.each([{ ctrlKey: true }, { metaKey: true }])('zooms modified wheel about its pointer (%j)', modifier => {
@@ -183,5 +220,11 @@ describe('sheet gestures through ScrollWindow (AC-VIEW-04)', () => {
     const next = zoomSheetAt(start, metrics, viewport, 0.25, { x: 100, y: 200 })
     expect(next.zoom).toBe(0.25)
     expect(scrollOffset(next)).toEqual({ x: 0, y: 0 })
+  })
+
+  it.each([NaN, Infinity, -Infinity])('rejects non-finite zoom %s instead of silently clamping', (zoom) => {
+    const start = createScrollWindow(metrics, viewport)
+    expect(() => zoomSheetAt(start, metrics, viewport, zoom, { x: 10, y: 10 })).toThrow(RangeError)
+    expect(start.zoom).toBe(1)
   })
 })

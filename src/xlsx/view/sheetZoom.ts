@@ -24,6 +24,21 @@ export function clampSheetZoom(zoom: number): SheetZoom {
   return clampZoom(zoom, SHEET_MIN_ZOOM, SHEET_MAX_ZOOM)
 }
 
+/** Documented keyboard step table: in/out are exact inverses, including at the
+ * bounds (off-table zooms snap to the nearest step in the key direction). */
+export const SHEET_ZOOM_STEPS: readonly SheetZoom[] = [0.25, 0.33, 0.5, 0.67, 0.75, 1, 1.25, 1.5, 2, 3, 4]
+
+export function snapSheetZoom(zoom: number, direction: 1 | -1): SheetZoom {
+  if (direction > 0) {
+    for (const step of SHEET_ZOOM_STEPS) if (step > zoom) return step
+    return SHEET_MAX_ZOOM
+  }
+  for (let index = SHEET_ZOOM_STEPS.length - 1; index >= 0; index--) {
+    if (SHEET_ZOOM_STEPS[index] < zoom) return SHEET_ZOOM_STEPS[index]
+  }
+  return SHEET_MIN_ZOOM
+}
+
 export function createSheetZoomState(docId: string, activeSheetId: string): SheetZoomState {
   return { docId, activeSheetId, zoomBySheet: new Map() }
 }
@@ -53,6 +68,7 @@ export function zoomSheetAt(
   nextZoom: number,
   anchorCSS: SheetZoomPoint,
 ): ScrollWindow {
+  if (!Number.isFinite(nextZoom)) throw new RangeError('Sheet zoom must be finite')
   return setScrollZoom(start, metrics, viewport, clampSheetZoom(nextZoom), anchorCSS)
 }
 
@@ -63,8 +79,7 @@ export function keyboardSheetZoom(
   direction: 1 | -1,
   anchorCSS: SheetZoomPoint = { x: viewport.width / 2, y: viewport.height / 2 },
 ): ScrollWindow {
-  const nextZoom = direction > 0 ? start.zoom * 1.5 : start.zoom / 1.5
-  return zoomSheetAt(start, metrics, viewport, nextZoom, anchorCSS)
+  return zoomSheetAt(start, metrics, viewport, snapSheetZoom(start.zoom, direction), anchorCSS)
 }
 
 export function wheelSheetZoom(
@@ -74,6 +89,8 @@ export function wheelSheetZoom(
   input: SheetWheelInput,
   anchorCSS: SheetZoomPoint,
 ): ScrollWindow {
+  // Event input, not document state: unmodified or non-finite deltas keep the
+  // window unchanged instead of throwing (zoom arguments still reject).
   if ((!input.ctrlKey && !input.metaKey) || !Number.isFinite(input.deltaY)) return start
   // Saturate before exponentiation so large finite deltas keep their direction.
   const exponent = -input.deltaY * 0.002
@@ -92,6 +109,8 @@ export function pinchSheetZoom(
   startAnchorCSS: SheetZoomPoint,
   currentAnchorCSS: SheetZoomPoint,
 ): ScrollWindow {
+  // Gesture distances are event inputs like wheel deltas: invalid values keep
+  // the window unchanged instead of throwing.
   if (!Number.isFinite(startDistance) || startDistance <= 0
     || !Number.isFinite(currentDistance) || currentDistance <= 0) return start
   const maxRatio = SHEET_MAX_ZOOM / SHEET_MIN_ZOOM
