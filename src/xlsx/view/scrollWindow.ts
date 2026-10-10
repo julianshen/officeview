@@ -1,6 +1,7 @@
 import { clampZoom } from '../../core/zoom'
 import { MAX_PHYSICAL_SCROLL_CSS_PX, SHEET_MIN_ZOOM, SHEET_MAX_ZOOM, type AxisMetrics, type LogicalCellBox, type ScrollWindow, type SheetMetrics, type SheetView } from './contracts'
-import { parseA1, validateCoordinate, type NavigatorRequest, type SourceCell, type DisplaySlot } from './coordinates'
+import { isValidCoordinate, parseA1, validateCoordinate, type NavigatorRequest, type SourceCell, type DisplaySlot } from './coordinates'
+import { normalizeFilter } from './visibility'
 
 export interface ViewportSize { width: number; height: number }
 export interface ScrollPoint { x: number; y: number }
@@ -210,9 +211,9 @@ function validatePixelPrecision(origin: number, viewportCss: number, zoom: numbe
   const pixelStep = 1 / zoom / Math.max(1, deviceScale)
   if (pixelStep < spacing) throw new RangeError('Scroll viewport pixel precision is not representable')
 }
-function bodyBounds(context: NavigationContext): { first: number; last: number } {
-  const filter = context.view.filter
-  return filter && filter.columns.size ? { first: filter.range.r0 + filter.range.headerRows, last: filter.range.r1 - filter.range.totalsRows }
+function sourceBodyBounds(context: NavigationContext): { first: number; last: number } {
+  const filter = normalizeFilter(context.view.filter)
+  return filter ? { first: filter.range.r0 + filter.range.headerRows, last: filter.range.r1 - filter.range.totalsRows }
     : { first: 0, last: context.metrics.rows.logicalCount - 1 }
 }
 function firstAxis(axis: AxisMetrics): number | null { return axis.totalCss() > 0 ? axis.locate(0) : null }
@@ -226,20 +227,56 @@ function nearestColumn(axis: AxisMetrics, col: number): number | null {
   if (backward === null) return forward
   return forward - col <= col - backward ? forward : backward
 }
+/** Source body membership is independent of where a permutation displays it.
+ * Search only its display envelope, choosing the smaller of source membership
+ * and visible display candidates so a tiny body in a large band stays bounded. */
+function bodyCandidate(context: NavigationContext, from: number, direction: -1 | 1): number | null {
+  const { metrics, view } = context
+  const bounds = sourceBodyBounds(context)
+  bounds.last = Math.min(bounds.last, metrics.rows.logicalCount - 1)
+  if (bounds.first > bounds.last || !metrics.rows.totalCss()) return null
+  let first = bounds.first, last = bounds.last
+  for (const band of metrics.order.bands) {
+    if (band.r0 <= bounds.last && band.r1 >= bounds.first) {
+      first = Math.min(first, band.r0)
+      last = Math.max(last, band.r1)
+    }
+  }
+  if (direction === 1) first = Math.max(first, from)
+  else last = Math.min(last, from)
+  if (first > last) return null
+  const startRank = view.visibility.rank(first), endRank = view.visibility.rank(last + 1)
+  if (bounds.last - bounds.first + 1 < endRank - startRank) {
+    let best: number | null = null
+    for (let source = bounds.first; source <= bounds.last; source++) {
+      const slot = metrics.order.sourceToDisplay(source)
+      if (slot >= first && slot <= last && view.visibility.visible(slot) && metrics.rows.size(slot) > 0
+        && (best === null || (direction === 1 ? slot < best : slot > best))) best = slot
+    }
+    return best
+  }
+  let candidate = view.visibility.select(direction === 1 ? startRank : endRank - 1)
+  while (candidate !== null && candidate >= first && candidate <= last) {
+    if (metrics.rows.size(candidate) === 0) {
+      const at = metrics.rows.start(candidate)
+      const next = metrics.rows.locate(direction === 1 ? at : previousFloat(at))
+      if (next === null) return null
+      candidate = view.visibility.select(direction === 1 ? view.visibility.rank(next) : view.visibility.rank(next + 1) - 1)
+      continue
+    }
+    const source = metrics.order.displayToSource(candidate)
+    if (source >= bounds.first && source <= bounds.last) return candidate
+    candidate = view.visibility.next(candidate, direction)
+  }
+  return null
+}
 function retainActive(context: NavigationContext, active: SourceCell | null): SourceCell | null {
-  if (!active) return null
-  validateCoordinate(active.row, active.col)
+  if (!active || !isValidCoordinate(active.row, active.col)) return null
   const { metrics } = context
   if (active.row >= metrics.rows.logicalCount || active.col >= metrics.cols.logicalCount) return null
   if (metrics.sourceCellToLogical(active)) return active
-  const bounds = bodyBounds(context)
-  if (bounds.first > bounds.last || !metrics.rows.totalCss()) return null
   const slot = metrics.order.sourceToDisplay(active.row)
-  const first = clamp(slot, bounds.first, bounds.last)
-  let forward = metrics.rows.locate(axisStart(metrics.rows, first))
-  let backward = metrics.rows.locate(previousFloat(axisStart(metrics.rows, Math.min(bounds.last + 1, slot + 1))))
-  if (forward !== null && (forward < bounds.first || forward > bounds.last)) forward = null
-  if (backward !== null && (backward < bounds.first || backward > bounds.last)) backward = null
+  const forward = bodyCandidate(context, slot, 1), backward = bodyCandidate(context, slot, -1)
   const targetSlot = forward === null ? backward : backward === null ? forward : forward - slot <= slot - backward ? forward : backward
   const col = nearestColumn(metrics.cols, active.col)
   return targetSlot === null || col === null ? null : { row: metrics.order.displayToSource(targetSlot), col }
@@ -272,9 +309,9 @@ export function navigateTo(window: ScrollWindow, context: NavigationContext, req
   const box = context.metrics.sourceCellToLogical(target)
   if (box) return visibleResult(setScrollOffset(window, context.metrics, context.viewport, box), context.metrics, target)
   const rowSlot = context.metrics.order.sourceToDisplay(target.row)
-  const filter = context.view.filter, bounds = bodyBounds(context)
+  const filter = normalizeFilter(context.view.filter), bounds = sourceBodyBounds(context)
   const hiddenReason = context.metrics.cols.size(target.col) === 0 ? 'authored-hidden'
-    : filter && filter.columns.size && target.row >= bounds.first && target.row <= bounds.last && !context.view.visibility.visible(rowSlot) ? 'filter-hidden' : 'authored-hidden'
+    : filter && target.row >= bounds.first && target.row <= bounds.last && !context.view.visibility.visible(rowSlot) ? 'filter-hidden' : 'authored-hidden'
   return { kind: 'hidden', window, active: retainActive(context, currentActive), target, display: { rowSlot, col: target.col }, activate: false, hiddenReason }
 }
 function rowNeighbor(context: NavigationContext, slot: number, direction: -1 | 1): number | null {
@@ -292,25 +329,30 @@ function columnNeighbor(axis: AxisMetrics, col: number, direction: -1 | 1): numb
 export function navigateKey(window: ScrollWindow, context: NavigationContext, key: NavigationKey, currentActive: SourceCell | null = null, options: { ctrl?: boolean } = {}): NavigationResult {
   state(window)
   let active = retainActive(context, currentActive)
-  const firstRow = firstAxis(context.metrics.rows), firstCol = firstAxis(context.metrics.cols)
+  const seeded = !active
+  let firstRow = firstAxis(context.metrics.rows)
+  const firstCol = firstAxis(context.metrics.cols)
   if (firstRow === null || firstCol === null) return emptyResult(window)
   if (!active) {
-    const bounds = bodyBounds(context)
-    const slot = context.metrics.rows.locate(axisStart(context.metrics.rows, bounds.first))
-    if (slot === null || slot > bounds.last) return emptyResult(window)
+    const slot = bodyCandidate(context, 0, 1)
+    if (slot === null) return emptyResult(window)
+    firstRow = slot
     active = { row: context.metrics.order.displayToSource(slot), col: firstCol }
   }
   const slot = context.metrics.order.sourceToDisplay(active.row)
+  const lastRow = () => seeded ? bodyCandidate(context, context.metrics.rows.logicalCount - 1, -1)! : lastAxis(context.metrics.rows)!
   let targetSlot = slot, col = active.col
   let pageWindow: ScrollWindow | undefined
   switch (key) {
-    case 'ArrowDown': case 'Enter': targetSlot = options.ctrl ? lastAxis(context.metrics.rows)! : rowNeighbor(context, slot, 1) ?? slot; break
-    case 'ArrowUp': targetSlot = options.ctrl ? firstRow : rowNeighbor(context, slot, -1) ?? slot; break
+    case 'ArrowDown': case 'Enter': targetSlot = options.ctrl ? lastRow() : seeded ? slot : rowNeighbor(context, slot, 1) ?? slot; break
+    case 'ArrowUp': targetSlot = options.ctrl ? firstRow : seeded ? slot : rowNeighbor(context, slot, -1) ?? slot; break
     case 'ArrowRight': col = options.ctrl ? lastAxis(context.metrics.cols)! : columnNeighbor(context.metrics.cols, col, 1) ?? col; break
     case 'ArrowLeft': col = options.ctrl ? firstCol : columnNeighbor(context.metrics.cols, col, -1) ?? col; break
     case 'Home': col = firstCol; if (options.ctrl) targetSlot = firstRow; break
-    case 'End': col = lastAxis(context.metrics.cols)!; if (options.ctrl) targetSlot = lastAxis(context.metrics.rows)!; break
+    case 'End': col = lastAxis(context.metrics.cols)!; if (options.ctrl) targetSlot = lastRow(); break
     case 'PageDown': case 'PageUp': {
+      // Initialization creates focus at a body record before page traversal.
+      if (seeded) break
       const direction = key === 'PageDown' ? 1 : -1
       pageWindow = scrollBy(window, context.metrics, context.viewport, { x: 0, y: direction * context.viewport.height })
       const visibleAnchor = Math.max(context.metrics.rows.start(slot), window.logicalOrigin.y)

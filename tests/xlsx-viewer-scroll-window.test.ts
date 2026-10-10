@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { createAxisMetrics } from '../src/xlsx/view/axes'
 import { createRowOrder, createIdentityOrder } from '../src/xlsx/view/order'
-import { createIntervalSet, createRowVisibility, projectVisibility } from '../src/xlsx/view/visibility'
+import { createIntervalSet, createRowVisibility, projectVisibility, normalizeFilter } from '../src/xlsx/view/visibility'
 import { createSheetMetrics } from '../src/xlsx/view/projection'
 import { MAX_ROWS, MAX_COLS } from '../src/xlsx/view/coordinates'
 import { MAX_PHYSICAL_SCROLL_CSS_PX, type FilterSpec, type GridSelection, type ScrollWindow } from '../src/xlsx/view/contracts'
@@ -270,3 +270,123 @@ it.each([{ origin: 2 ** 52 - 1, zoom: 1, deviceScale: 2 }, { origin: 2 ** 49 - 1
     expect(() => createScrollWindow(metrics, viewport, { zoom, deviceScale, offset: { x: origin, y: origin } })).toThrow(/precision|represent/i)
   },
 )
+
+describe('review: source body membership under arbitrary display order', () => {
+  function filtered(values: number[], r0: number, range: FilterSpec['range'], match: (row: number) => boolean, count = 12): NavigationContext {
+    const order = createRowOrder([{ r0, r1: r0 + values.length - 1, sourceAtOffset: new Uint32Array(values) }])
+    const filter: FilterSpec = { range, columns: new Map([[0, { kind: 'number', op: 'gt', first: 0 }]]) }
+    const baseHidden = createIntervalSet([])
+    const applied = projectVisibility(baseHidden, filter, order, match, count)
+    return { viewport, metrics: createSheetMetrics({ rows: createAxisMetrics({ logicalCount: count, defaultSizeCss: 24 }), cols: createAxisMetrics({ logicalCount: MAX_COLS, defaultSizeCss: 64 }), order, visibility: applied.visibility }),
+      view: { baseHidden, filter: applied.filter, visibility: applied.visibility, selection: { active: null, anchor: null, ranges: [] } } }
+  }
+  it('reproduces the relocated protected-header counterexample and checks source membership', () => {
+    const context = filtered([6, 5, 7], 5, { r0: 5, r1: 7, c0: 0, c1: 0, headerRows: 1, totalsRows: 0 }, row => row !== 6)
+    const window = createScrollWindow(context.metrics, viewport)
+    const result = navigateTo(window, context, navigatorRequestFromA1('A7', 'source'), { row: 6, col: 0 })
+    expect(result.kind).toBe('hidden')
+    expect(result.active).toEqual({ row: 7, col: 0 })
+    expect(result.activate).toBe(false)
+  })
+  it.each(['Home', 'End', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Enter', 'PageUp', 'PageDown'] as const)(
+    'seeds %s from null with a visible source body record, not a moved header/totals row', key => {
+      const context = filtered([6, 5, 8, 7], 5, { r0: 5, r1: 8, c0: 0, c1: 0, headerRows: 1, totalsRows: 1 }, row => row !== 6)
+      const window = createScrollWindow(context.metrics, viewport)
+      const result = navigateKey(window, context, key, null)
+      expect(result.active?.row).toBe(7)
+      expect(context.metrics.sourceCellToLogical(result.active!)).not.toBeNull()
+    },
+  )
+  it.each(['Home', 'End', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'] as const)(
+    'keeps Ctrl+%s null initialization inside the visible source body', key => {
+      const context = filtered([6, 5, 8, 7], 5, { r0: 5, r1: 8, c0: 0, c1: 0, headerRows: 1, totalsRows: 1 }, row => row !== 6)
+      expect(navigateKey(createScrollWindow(context.metrics, viewport), context, key, null, { ctrl: true }).active?.row).toBe(7)
+    },
+  )
+  it('prefers the forward display candidate on ties while excluding a moved protected header and totals', () => {
+    const context = filtered([7, 5, 8, 9, 6], 5, { r0: 5, r1: 9, c0: 0, c1: 0, headerRows: 1, totalsRows: 1 }, row => row !== 8)
+    const result = navigateTo(createScrollWindow(context.metrics, viewport), context, navigatorRequestFromA1('A9', 'source'), { row: 8, col: 0 })
+    expect(result.active).toEqual({ row: 6, col: 0 }) // slot 9; slot 5 is equally far backward; slots 6/8 are protected.
+  })
+  it('returns null active without substituting protected or outside rows when no body candidate remains', () => {
+    const context = filtered([6, 5, 8, 7], 5, { r0: 5, r1: 8, c0: 0, c1: 0, headerRows: 1, totalsRows: 1 }, () => false)
+    const window = createScrollWindow(context.metrics, viewport)
+    expect(navigateTo(window, context, navigatorRequestFromA1('A7', 'source'), { row: 6, col: 0 }).active).toBeNull()
+    for (const key of ['Home', 'End', 'ArrowUp', 'ArrowDown', 'PageUp', 'PageDown'] as const) {
+      const result = navigateKey(window, context, key, null)
+      expect(result.kind).toBe('empty')
+      expect(result.active).toBeNull()
+      expect(result.activate).toBe(false)
+    }
+  })
+  it('matches a source-membership oracle across all five-row permutations and body masks', () => {
+    function* permutations(rows: number[]): Generator<number[]> {
+      if (!rows.length) { yield []; return }
+      for (let i = 0; i < rows.length; i++) {
+        for (const tail of permutations(rows.filter((_, at) => at !== i))) yield [rows[i], ...tail]
+      }
+    }
+    for (const values of permutations([5, 6, 7, 8, 9])) for (let mask = 0; mask < 7; mask++) {
+      const matches = (row: number) => Math.floor(mask / 2 ** (row - 6)) % 2 === 1
+      const context = filtered(values, 5, { r0: 5, r1: 9, c0: 0, c1: 0, headerRows: 1, totalsRows: 1 }, matches)
+      const window = createScrollWindow(context.metrics, viewport)
+      const candidates = values.map((source, slot) => ({ source, slot: slot + 5 })).filter(({ source }) => source >= 6 && source <= 8 && matches(source))
+      expect(navigateKey(window, context, 'Home', null).active?.row ?? null).toBe(candidates[0]?.source ?? null)
+      expect(navigateKey(window, context, 'End', null, { ctrl: true }).active?.row ?? null).toBe(candidates.at(-1)?.source ?? null)
+      for (let hidden = 6; hidden <= 8; hidden++) if (!matches(hidden)) {
+        const slot = values.indexOf(hidden) + 5
+        const nearest = [...candidates].sort((a, b) => Math.abs(a.slot - slot) - Math.abs(b.slot - slot) || b.slot - a.slot)[0]
+        const result = navigateTo(window, context, { addressSpace: 'source', at: { row: hidden, col: 0 } }, { row: hidden, col: 0 })
+        expect(result.active?.row ?? null).toBe(nearest?.source ?? null)
+      }
+    }
+  })
+  it('skips visible-mask rows with authored zero height in both display directions', () => {
+    const original = filtered([8, 5, 7, 6, 9], 5, { r0: 5, r1: 9, c0: 0, c1: 0, headerRows: 1, totalsRows: 1 }, row => row !== 7)
+    for (const collapsed of [[{ start: 6, end: 6 }], [{ start: 8, end: 8 }], [{ start: 6, end: 8 }]]) {
+      const context = { ...original, metrics: createSheetMetrics({ rows: createAxisMetrics({ logicalCount: 12, defaultSizeCss: 24, collapsed }), cols: original.metrics.cols, order: original.metrics.order, visibility: original.view.visibility }) }
+      const window = createScrollWindow(context.metrics, viewport)
+      const expected = collapsed[0].end === 8 ? (collapsed[0].start === 6 ? null : 6) : 8
+      expect(navigateTo(window, context, { addressSpace: 'source', at: { row: 7, col: 0 } }, { row: 7, col: 0 }).active?.row ?? null).toBe(expected)
+      expect(navigateKey(window, context, 'Home', null).active?.row ?? null).toBe(expected)
+    }
+  })
+  it('bounds membership probes for an empty one-record body permuted across the full row domain', () => {
+    const sourceAtOffset = new Uint32Array(MAX_ROWS)
+    for (let slot = 0; slot < MAX_ROWS - 1; slot++) sourceAtOffset[slot] = slot + 1
+    sourceAtOffset[MAX_ROWS - 1] = 0
+    const order = createRowOrder([{ r0: 0, r1: MAX_ROWS - 1, sourceAtOffset }])
+    const filter: FilterSpec = { range: { r0: 5, r1: 7, c0: 0, c1: 0, headerRows: 1, totalsRows: 1 }, columns: new Map([[0, { kind: 'number', op: 'gt', first: 0 }]]) }
+    const baseHidden = createIntervalSet([])
+    const applied = projectVisibility(baseHidden, filter, order, () => false)
+    const metrics = createSheetMetrics({ rows: createAxisMetrics({ logicalCount: MAX_ROWS, defaultSizeCss: 24 }), cols: createAxisMetrics({ logicalCount: MAX_COLS, defaultSizeCss: 64 }), order, visibility: applied.visibility })
+    let probes = 0
+    const measuredOrder = { ...order, displayToSource(slot: number) { probes++; return order.displayToSource(slot) }, sourceToDisplay(row: number) { probes++; return order.sourceToDisplay(row) } }
+    const context: NavigationContext = { viewport, metrics: { ...metrics, order: measuredOrder }, view: { baseHidden, filter, visibility: applied.visibility, selection: { active: null, anchor: null, ranges: [] } } }
+    const window = createScrollWindow(context.metrics, viewport)
+    expect(navigateKey(window, context, 'Home', null).kind).toBe('empty')
+    expect(navigateTo(window, context, { addressSpace: 'source', at: { row: 6, col: 0 } }, { row: 6, col: 0 }).active).toBeNull()
+    expect(probes).toBeLessThanOrEqual(5)
+  })
+  it('returns null for invalidated out-of-domain active coordinates instead of throwing', () => {
+    const context = filtered([6, 5, 7], 5, { r0: 5, r1: 7, c0: 0, c1: 0, headerRows: 1, totalsRows: 0 }, row => row !== 6)
+    const window = createScrollWindow(context.metrics, viewport)
+    for (const active of [{ row: -1, col: 0 }, { row: NaN, col: 0 }, { row: Infinity, col: 0 }, { row: 0, col: MAX_COLS }, { row: MAX_ROWS, col: 0 }, { row: -0, col: 0 }]) {
+      const result = navigateTo(window, context, navigatorRequestFromA1('A7', 'source'), active)
+      expect(result.active).toBeNull()
+      expect(result.activate).toBe(false)
+    }
+  })
+  it('guards malformed filter maps with RangeError consistently in normalization and navigation', () => {
+    const context = contextFor(4, null, createIntervalSet([{ r0: 1, r1: 1 }]))
+    const window = createScrollWindow(context.metrics, viewport)
+    for (const malformed of [{}, { columns: null }, { columns: {} }]) {
+      const filter = malformed as FilterSpec
+      expect(() => normalizeFilter(filter)).toThrow(RangeError)
+      expect(() => navigateTo(window, { ...context, view: { ...context.view, filter } }, navigatorRequestFromA1('A2', 'source'), { row: 0, col: 0 })).toThrow(RangeError)
+      expect(() => navigateKey(window, { ...context, view: { ...context.view, filter } }, 'Home', null)).toThrow(RangeError)
+    }
+    expect(normalizeFilter(null)).toBeNull()
+    expect(normalizeFilter({ range: { r0: 0, r1: 3, c0: 0, c1: 0, headerRows: 1, totalsRows: 0 }, columns: new Map() })).toBeNull()
+  })
+})
