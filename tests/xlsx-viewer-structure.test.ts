@@ -344,6 +344,20 @@ describe('query immutability', () => {
     expect(Object.isFrozen(page.drawings)).toBe(true)
     expect(JSON.stringify(index.query(fullDomain))).toBe(before)
   })
+  it('clones an own "__proto__" key as data without changing the prototype', () => {
+    const hostile = JSON.parse(
+      '{"id":"m","range":{"r0":0,"r1":1,"c0":0,"c1":1},"anchor":{"row":0,"col":0},"__proto__":{"polluted":true}}',
+    ) as MergeExtent
+    const index = new StructuralIndex({ stamp, completeness: 'complete', merges: [hostile], tables: [], spills: [], drawings: [], missing: [] })
+    const record = index.query({ r0: 0, r1: 0, c0: 0, c1: 0 }).merges[0]
+    expect(Object.getPrototypeOf(record)).toBe(Object.prototype)
+    expect((record as unknown as { polluted?: boolean }).polluted).toBeUndefined()
+    expect(Object.hasOwn(record, '__proto__')).toBe(true)
+    expect(Object.isFrozen(record)).toBe(true)
+    expect(Object.getOwnPropertyDescriptor(record, '__proto__')?.value).toEqual({ polluted: true })
+    expect(Object.isFrozen(Object.getOwnPropertyDescriptor(record, '__proto__')?.value)).toBe(true)
+    expect(({} as { polluted?: boolean }).polluted).toBeUndefined()
+  })
   it('rejects invalid query rects instead of scanning', async () => {
     const { index } = await f5Index()
     expect(() => index.query({ r0: 10, r1: 5, c0: 0, c1: 0 })).toThrow()

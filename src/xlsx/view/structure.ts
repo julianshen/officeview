@@ -211,7 +211,11 @@ function frozenClone<T>(value: T): T {
   if (Array.isArray(value)) return Object.freeze(value.map(frozenClone)) as unknown as T
   if (typeof value === 'object' && value !== null) {
     const out: Record<string, unknown> = {}
-    for (const [key, entry] of Object.entries(value)) out[key] = frozenClone(entry)
+    // defineProperty, not assignment: an own "__proto__" key (e.g. from JSON.parse)
+    // is data here and must never rewrite the clone's prototype.
+    for (const [key, entry] of Object.entries(value)) {
+      Object.defineProperty(out, key, { value: frozenClone(entry), enumerable: true, writable: true, configurable: true })
+    }
     return Object.freeze(out) as T
   }
   return value
