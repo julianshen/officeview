@@ -22,7 +22,7 @@ import {
   verifyHarnessResult,
 } from '../src/debug/harness/result'
 import type { AllocationPool, HarnessEnvironment, HarnessMetric } from '../src/debug/harness/types'
-import { buildResult, clone, makeEnvironment, makeSample, range, rehash } from './helpers/harnessResult'
+import { buildResult, clone, makeEnvironment, makeSample, range } from './helpers/harnessResult'
 
 describe('AllocationLedger', () => {
   it('charges bytes per pool and owner with retained/peak/charged accounting', () => {
@@ -354,6 +354,3 @@ describe('finalizeResult / validateHarnessResult / verifyHarnessResult basics', 
     ).rejects.toThrow(/release/)
   })
 })
-
-// Referenced so the helper stays exercised even if a test above is trimmed.
-void rehash

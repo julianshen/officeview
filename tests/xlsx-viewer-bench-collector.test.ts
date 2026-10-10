@@ -9,7 +9,7 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { createServer, request as httpRequest, type Server } from 'node:http'
 import type { AddressInfo } from 'node:net'
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import {
@@ -21,8 +21,6 @@ import {
   type Collector,
   type CollectorConfig,
 } from '../scripts/harness/collector'
-import { hashResult } from '../src/debug/harness/result'
-import type { HarnessResult } from '../src/debug/harness/types'
 import { buildDeviceResult, clone, makeSample, range, rehash } from './helpers/harnessResult'
 
 const TOKEN = 'tok-0123456789abcdef0123456789abcdef'
@@ -289,7 +287,3 @@ describe('HTTP middleware (same-origin, no CORS)', () => {
     expect(response.status).toBe(401)
   })
 })
-
-void existsSync
-void hashResult
-void (undefined as unknown as HarnessResult)

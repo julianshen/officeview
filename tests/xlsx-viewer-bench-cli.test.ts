@@ -6,7 +6,7 @@
  * based; no browser involved.
  */
 import { describe, expect, it } from 'vitest'
-import { mkdtempSync, readFileSync, readdirSync, writeFileSync } from 'node:fs'
+import { mkdtempSync, readFileSync, readdirSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { MAX_SAMPLE_VALUES, validateHarnessResult, verifyHarnessResult } from '../src/debug/harness/result'
@@ -16,7 +16,7 @@ import { checkBaselineComparable, compareResults, parseBaseline } from '../scrip
 import { retagResult } from '../scripts/harness/retag'
 import { detectLanIp } from '../scripts/harness/lan'
 import { checkIdentity, commitLabel, HARNESS_SERVICE } from '../scripts/harness/identity'
-import { buildResult, clone, makeEnvironment, makeSample, range, rehash } from './helpers/harnessResult'
+import { buildResult, clone, makeSample, range, rehash } from './helpers/harnessResult'
 
 function args(argv: string[]): BenchArgs {
   const parsed = parseArgs(argv)
@@ -301,6 +301,3 @@ describe('harness identity', () => {
     expect(commitLabel({ commit: 'unknown', dirty: true })).toBe('unknown')
   })
 })
-
-void makeEnvironment
-void writeFileSync

@@ -178,6 +178,16 @@ Labeling rules (spec §12.2):
   integers, array sizes are capped, unknown keys are rejected, and
   browser/automation/evidence/placeholder labels must be mutually consistent.
 
+## Notes for scenario authors
+
+- **Long tasks and CDP.** Blink does not report a long task for work that runs
+  directly inside a CDP `page.evaluate` call (nor for a task that registered the
+  observer itself). To provoke or measure one in a Playwright run, execute the
+  work from a timer task (`setTimeout`) after the observer started, as the smoke
+  spec does.
+- **Hidden tabs.** `requestAnimationFrame` does not fire in hidden tabs; every
+  `markPresent` therefore has a timeout and rejects instead of hanging.
+
 ## What plugs in when
 
 | Package | Scenario |

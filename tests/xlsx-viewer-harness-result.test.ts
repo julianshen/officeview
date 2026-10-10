@@ -12,7 +12,7 @@ import {
   deriveEvidence,
   verifyHarnessResult,
 } from '../src/debug/harness/result'
-import { buildResult, makeEnvironment, makeSample, range, rehash } from './helpers/harnessResult'
+import { buildResult, makeEnvironment, makeSample, rehash } from './helpers/harnessResult'
 
 type Mutator = (draft: Record<string, any>) => void
 
@@ -272,5 +272,3 @@ describe('deriveEvidence', () => {
     expect(deriveEvidence(env({}))).toBe('device')
   })
 })
-
-void range
