@@ -36,10 +36,13 @@ function dateFormatted(value: Extract<PreparedValue, { kind: 'number' }>, semant
   let section = 0, quoted = false, escaped = false, found = false
   const sections: boolean[] = []
   for (const point of value.formatCode) {
+    if (quoted) {
+      if (point === '"') quoted = false
+      continue
+    }
     if (escaped) { escaped = false; continue }
     if (point === '\\') { escaped = true; continue }
-    if (point === '"') { quoted = !quoted; continue }
-    if (quoted) continue
+    if (point === '"') { quoted = true; continue }
     if (point === ';') { sections[section++] = found; found = false; continue }
     if (/[ymdhs]/i.test(point)) found = true
   }

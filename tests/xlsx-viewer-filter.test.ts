@@ -157,6 +157,11 @@ describe('complete classification and exact keys', () => {
     expect(classifyColumn([{ kind: 'number', value: 2, formatCode: 'yyyy-mm-dd' }], true, { ...semantics, locale: 'zh-TW' })).toEqual(date)
     expect(classifyColumn([s('s'), { kind: 'boolean', value: true }], true, semantics)).toEqual({ kind: 'text', hasNumeric: false })
   })
+  it('treats backslashes inside quoted format literals as shared grammar literal text', () => {
+    const slash = String.fromCharCode(92)
+    expect(classifyColumn([{ kind: 'number', value: 2, formatCode: '"' + slash + '"yyyy-mm-dd' }], true, semantics)).toEqual(date)
+    expect(classifyColumn([{ kind: 'number', value: -2, formatCode: '0 "' + slash + '";yyyy-mm-dd' }], true, semantics)).toEqual(date)
+  })
   it('never infers date for empty/errors or completes missing domains', () => {
     for (const values of [[], [{ kind: 'blank' }], [{ kind: 'error', value: '#NUM!' }]] as PreparedValue[][]) expect(classifyColumn(values, true, semantics)).toEqual({ kind: 'empty', hasNumeric: false })
     expect(classifyColumn([n(1)], false, semantics).kind).toBe('loading')
