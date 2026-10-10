@@ -286,4 +286,73 @@ describe('HTTP middleware (same-origin, no CORS)', () => {
     const response = await fetch(`${base}/__harness/collect`, { method: 'POST', headers: { 'x-harness-token': 'nope' }, body: '{}' })
     expect(response.status).toBe(401)
   })
+
+  it('answers 401 for a missing token without waiting for the declared body', async () => {
+    const outcome = await new Promise<string>((done) => {
+      const req = httpRequest(`${base}/__harness/collect`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', 'content-length': 2 * 1024 * 1024 },
+      }, (res) => {
+        done(`status ${res.statusCode}`)
+        res.resume()
+      })
+      req.on('error', () => done('connection aborted'))
+      req.write('{"partial": true')
+      // Never send the remaining ~2 MiB: a headers-only decision must already have arrived.
+    })
+    expect(outcome).toBe('status 401')
+    expect(readdirSync(outputDir)).toEqual([])
+  })
+
+  it('answers 403 for a cross-origin request without reading its body', async () => {
+    const outcome = await new Promise<string>((done) => {
+      const req = httpRequest(`${base}/__harness/collect`, {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+          'content-length': 2 * 1024 * 1024,
+          'x-harness-token': TOKEN,
+          origin: 'http://evil.example',
+          host: new URL(base).host,
+        },
+      }, (res) => {
+        done(`status ${res.statusCode}`)
+        res.resume()
+      })
+      req.on('error', () => done('connection aborted'))
+      req.write('{"partial": true')
+    })
+    expect(outcome).toBe('status 403')
+    expect(readdirSync(outputDir)).toEqual([])
+  })
+
+  it('times out a slowloris-style stalled body instead of holding the connection', async () => {
+    const stalled = createServer((req, res) => createCollectorMiddleware(createCollector(config()), { requestTimeoutMs: 300 })(req, res, () => {
+      res.statusCode = 404
+      res.end('next')
+    }))
+    await new Promise<void>((done) => stalled.listen(0, '127.0.0.1', done))
+    try {
+      const port = (stalled.address() as AddressInfo).port
+      const outcome = await new Promise<string>((done) => {
+        const settled = (value: string): void => done(value)
+        const req = httpRequest(`http://127.0.0.1:${port}/__harness/collect`, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json', 'x-harness-token': TOKEN },
+        }, (res) => {
+          settled(`status ${res.statusCode}`)
+          res.resume()
+        })
+        req.on('error', () => settled('connection aborted'))
+        req.on('timeout', () => settled('client gave up'))
+        req.write('{"stalled": true')
+        setTimeout(() => settled('still open (bad)'), 5000).unref?.()
+      })
+      expect(outcome).toMatch(/status 408|connection aborted/)
+      expect(readdirSync(outputDir)).toEqual([])
+    } finally {
+      stalled.closeAllConnections()
+      await new Promise((done) => stalled.close(done))
+    }
+  }, 15_000)
 })

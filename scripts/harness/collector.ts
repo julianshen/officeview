@@ -30,6 +30,8 @@ import type { FixtureId, HarnessMode, HarnessProfile, HarnessResult } from '../.
 
 export const MAX_BODY_BYTES = 1024 * 1024
 export const MAX_ARTIFACTS = 100
+/** Idle time allowed for one collector request before the server gives up on it. */
+export const COLLECT_REQUEST_TIMEOUT_MS = 30_000
 /** Labels a page may legitimately report from an unautomated device browser. */
 export const ALLOWED_DEVICE_BROWSERS: readonly string[] = ['safari', 'webkit', 'chromium', 'firefox']
 const MAX_REPORTED_ERRORS = 20
@@ -60,6 +62,8 @@ export interface IngestResponse {
 
 export interface Collector {
   readonly maxBodyBytes: number
+  /** Headers-only gate: token, then Origin/Host. Null means "read the body". */
+  precheck(token: string | null, origin: string | null, host: string | null): IngestResponse | null
   ingest(request: IngestRequest): Promise<IngestResponse>
 }
 
@@ -95,17 +99,23 @@ export function createCollector(config: CollectorConfig): Collector {
   let written = 0
   mkdirSync(config.outputDir, { recursive: true })
 
-  async function ingest(request: IngestRequest): Promise<IngestResponse> {
-    if (!tokensMatch(config.token, request.token)) return fail(401, ['missing or invalid session token'])
-    if (request.origin !== null) {
+  function precheck(token: string | null, origin: string | null, host: string | null): IngestResponse | null {
+    if (!tokensMatch(config.token, token)) return fail(401, ['missing or invalid session token'])
+    if (origin !== null) {
       let originHost: string | null = null
       try {
-        originHost = new URL(request.origin).host
+        originHost = new URL(origin).host
       } catch {
         // fall through: unparsable origin is refused below
       }
-      if (originHost === null || originHost !== request.host) return fail(403, ['cross-origin posts are refused'])
+      if (originHost === null || originHost !== host) return fail(403, ['cross-origin posts are refused'])
     }
+    return null
+  }
+
+  async function ingest(request: IngestRequest): Promise<IngestResponse> {
+    const gate = precheck(request.token, request.origin, request.host)
+    if (gate) return gate
     if (Buffer.byteLength(request.body) > maxBodyBytes) return fail(413, [`body exceeds the ${maxBodyBytes}-byte limit`])
     if (written >= maxArtifacts) return fail(429, [`this session already stored ${maxArtifacts} artifacts`])
 
@@ -163,7 +173,7 @@ export function createCollector(config: CollectorConfig): Collector {
     return fail(500, ['could not allocate a free artifact name'])
   }
 
-  return { maxBodyBytes, ingest }
+  return { maxBodyBytes, precheck, ingest }
 }
 
 function send(res: ServerResponse, status: number, body: unknown, extraHeaders: Record<string, string> = {}): void {
@@ -177,8 +187,14 @@ function send(res: ServerResponse, status: number, body: unknown, extraHeaders: 
   res.end(text)
 }
 
-/** Connect-style adapter; streams the body with a hard byte cap. */
-export function createCollectorMiddleware(collector: Collector): (req: IncomingMessage, res: ServerResponse, next: () => void) => void {
+/** Connect-style adapter; streams the body with a hard byte cap. Authentication
+ * and origin are decided from headers BEFORE any body byte is read, and a
+ * stalled upload is destroyed after an explicit idle timeout. */
+export function createCollectorMiddleware(
+  collector: Collector,
+  options: { requestTimeoutMs?: number } = {},
+): (req: IncomingMessage, res: ServerResponse, next: () => void) => void {
+  const requestTimeoutMs = options.requestTimeoutMs ?? COLLECT_REQUEST_TIMEOUT_MS
   return (req, res, next) => {
     const pathname = new URL(req.url ?? '/', 'http://harness.invalid').pathname
     if (pathname !== COLLECT_PATH) {
@@ -189,6 +205,25 @@ export function createCollectorMiddleware(collector: Collector): (req: IncomingM
       send(res, 405, { ok: false, errors: ['POST only'] }, { allow: 'POST' })
       return
     }
+    const failClosed = (status: number, errors: string[]): void => {
+      send(res, status, { ok: false, errors })
+      req.destroy()
+    }
+    const headerOf = (name: string): string | null => {
+      const value = req.headers[name]
+      return typeof value === 'string' ? value : null
+    }
+    const gate = collector.precheck(headerOf('x-harness-token'), headerOf('origin'), headerOf('host'))
+    if (gate) {
+      failClosed(gate.status, gate.body.errors as string[])
+      return
+    }
+    req.setTimeout(requestTimeoutMs, () => {
+      if (res.writableEnded) return
+      const text = JSON.stringify({ ok: false, errors: [`collector request timed out after ${requestTimeoutMs} ms without completing`] })
+      res.writeHead(408, { 'content-type': 'application/json', 'content-length': Buffer.byteLength(text), connection: 'close' })
+      res.end(text, () => req.destroy())
+    })
     const max = collector.maxBodyBytes
     let aborted = false
     const tooLarge = (): void => {
@@ -220,6 +255,7 @@ export function createCollectorMiddleware(collector: Collector): (req: IncomingM
     })
     req.on('end', () => {
       if (aborted) return
+      req.setTimeout(0)
       const token = req.headers['x-harness-token']
       void collector
         .ingest({
