@@ -117,6 +117,16 @@ describe('typed filter evaluation', () => {
     expect(() => engine.compileFilter(textSpec, new Map([[0, mixed]]), () => s('a'), { signal: controller.signal })).toThrow(/cancel/i)
     expect(() => engine.projectFilter(null, createIntervalSet([]), createIdentityOrder(), new Map(), () => n(1), 6, { signal: controller.signal })).toThrow(/cancel/i)
   })
+  it('rejects compound children outside the two typed-condition contract', () => {
+    const first: ColumnRule = { kind: 'number', op: 'gt', first: 0 }
+    const nested: ColumnRule = { kind: 'compound', connective: 'or', first, second: first }
+    const cyclic = { kind: 'compound', connective: 'or', first, second: first } as unknown as Record<string, unknown>
+    cyclic.first = cyclic
+    for (const invalid of [nested, { kind: 'values' }, null, 5, cyclic]) {
+      const rule = { kind: 'compound', connective: 'or', first: invalid, second: first } as ColumnRule
+      expect(() => engine.compileRule(rule, numeric)).toThrow(/typed condition/i)
+    }
+  })
   it('rejects invalid numeric rules and prepared nonfinite values', () => {
     for (const first of [NaN, Infinity, -Infinity]) expect(() => engine.compileRule({ kind: 'number', op: 'eq', first }, numeric)).toThrow(RangeError)
     expect(() => engine.compileRule({ kind: 'number', op: 'between', first: 5, second: 3 }, numeric)).toThrow(/reversed/i)
@@ -185,6 +195,9 @@ describe('complete classification and exact keys', () => {
   })
   it('preserves semicolons in inactive bracket regions during active-section classification', () => {
     expect(classifyColumn([{ kind: 'number', value: 0, formatCode: '0;[foo;yyyy];0' }], true, semantics)).toEqual(numeric)
+  })
+  it('honors an explicit empty custom format over a date builtin', () => {
+    expect(classifyColumn([{ kind: 'number', value: 2, numFmtId: 14, formatCode: '' }], true, semantics)).toEqual(numeric)
   })
   it('never infers date for empty/errors or completes missing domains', () => {
     for (const values of [[], [{ kind: 'blank' }], [{ kind: 'error', value: '#NUM!' }]] as PreparedValue[][]) expect(classifyColumn(values, true, semantics)).toEqual({ kind: 'empty', hasNumeric: false })

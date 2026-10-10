@@ -28,7 +28,7 @@ function resolved(value: PreparedValue): void {
  * so this adapter only reads validated active-section tokens (no new grammar).
  * Fixed en-US probes avoid confusing its date-label locale limit with type. */
 function dateFormatted(value: Extract<PreparedValue, { kind: 'number' }>, semantics: ResolvedSemantics, budget: WorkBudget): boolean {
-  if (!value.formatCode) return value.numFmtId !== undefined && value.numFmtId >= 14 && value.numFmtId <= 22
+  if (value.formatCode === undefined) return value.numFmtId !== undefined && value.numFmtId >= 14 && value.numFmtId <= 22
   budget.text(value.formatCode)
   const probe = formatCommon(value.value, value.formatCode, { ...semantics, locale: 'en-US' })
   if (probe.kind !== 'text') return false
@@ -105,6 +105,9 @@ export class FilterEngine {
     if (columnKind === 'loading') throw new FilterDiagnostic('incomplete', 'Filter incomplete: column classification is loading')
     if (rule.kind === 'values') throw new FilterDiagnostic('unsupported-values', 'Values membership belongs to S8.2')
     if (rule.kind === 'compound') {
+      for (const child of [rule.first, rule.second]) {
+        if (!child || typeof child !== 'object' || !['number', 'text', 'date', 'datePreset'].includes(child.kind)) throw new RangeError('Compound children must be typed conditions')
+      }
       if (rule.connective !== 'and' && rule.connective !== 'or') throw new RangeError('Invalid compound connective')
       const connective = rule.connective
       const first = this.compileRule(rule.first, classification, shared), second = this.compileRule(rule.second, classification, shared)
