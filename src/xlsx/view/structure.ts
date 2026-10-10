@@ -149,7 +149,8 @@ export class RectangleIndex<T> {
     }
     return offset
   }
-  query(rect: SourceRect, options?: RectangleQueryOptions): RectanglePage<T> {    validateSourceRect(rect)
+  query(rect: SourceRect, options?: RectangleQueryOptions): RectanglePage<T> {
+    validateSourceRect(rect)
     const limit = options?.limit === undefined ? RECTANGLE_PAGE_DEFAULT_LIMIT
       : (!Number.isSafeInteger(options.limit) || options.limit <= 0
         ? (() => { throw new RangeError('Invalid rectangle page limit') })() : options.limit)
@@ -183,7 +184,7 @@ export type StructuralHit =
   | { kind: 'drawing'; record: CellAnchoredDrawing }
 /** One entry per spill over the union of saved, evaluated and anchor extents.
  * The union may cover gaps between extents, so queries verify exact matches;
- * single entries keep cursors exactamente resumable with no cross-page dedup. */
+ * single entries keep cursors exactly resumable with no cross-page dedup. */
 function spillUnion(spill: SpillExtent): SourceRect {
   let r0 = spill.anchor.row, r1 = spill.anchor.row, c0 = spill.anchor.col, c1 = spill.anchor.col
   for (const extent of [spill.saved, spill.evaluated]) {

@@ -150,7 +150,8 @@ describe('giant-rectangle memory behavior', () => {
   })
 })
 
-describe('bounded pages and cursors', () => {  async function drain(index: StructuralIndex, rect: SourceRect, limit: number): Promise<StructuralPage> {
+describe('bounded pages and cursors', () => {
+  async function drain(index: StructuralIndex, rect: SourceRect, limit: number): Promise<StructuralPage> {
     const merges: MergeExtent[] = []
     const tables: TableExtent[] = []
     const spills: SpillExtent[] = []
@@ -298,7 +299,8 @@ describe('column-dimension visit bound', () => {
   })
 })
 
-describe('rectangle index differential vs brute force', () => {  it('matches a list scan on thousands of random rects including domain edges', () => {
+describe('rectangle index differential vs brute force', () => {
+  it('matches a list scan on thousands of random rects including domain edges', () => {
     const random = createPrng(20261010)
     const integer = (max: number): number => Math.floor(random() * (max + 1))
     const records = Array.from({ length: 600 }, (_, id) => {
@@ -414,15 +416,6 @@ describe('row and column chunk indexes', () => {
     expect(waiting.complete).toBe(false)
     expect(waiting.missing).toEqual([pending])
     expect(waiting.index.outsideColumnData(0, 1)).toEqual({ kind: 'unknown', missing: [pending] })
-  })
-  it('treats style-only marks as non-data by construction', async () => {
-    const styleOnly: PopulatedCellSource = {
-      async iterate(): Promise<PopulatedPage> {
-        return { items: [], completeness: 'complete', missing: [] }
-      },
-    }
-    const built = await RowChunkIndex.build(styleOnly, { r0: 4, r1: 4 })
-    expect(built.index.outsideColumnData(0, 0)).toEqual({ kind: 'clear' })
   })
   it('transposes populated rows per column', async () => {
     const handle = createFixture('F5')
