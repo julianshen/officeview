@@ -2,6 +2,8 @@ import type { RowOrder, RowPermutationBand, RowVisibility } from './contracts'
 import { MAX_ROWS, validateCoordinate, type DisplaySlot, type SourceRow } from './coordinates'
 
 export interface PermutationInput { r0: SourceRow; r1: SourceRow; sourceAtOffset: Uint32Array }
+/** Runtime row order. Conversion to/from the `CompactRowOrder`/`ViewCommitDelta` wire
+ * encoding is owned by S4.1; nothing here serializes. */
 export interface CompactRowOrder extends RowOrder {
   readonly diagnostics: { typedArrayBytes: number; bandCount: number }
 }
@@ -76,18 +78,30 @@ function orderOf(bands: readonly RowPermutationBand[]): CompactRowOrder {
 export function createRowOrder(inputs: readonly PermutationInput[]): CompactRowOrder {
   return inputs.length ? orderOf(buildBands(inputs)) : identity
 }
-/** A true pin retains its source-corresponding display slot. Include protected
- * header/totals and hidden rows in pins; candidates contain only movable rows (§5.1). */
-export function pinRowPermutation(r0: SourceRow, r1: SourceRow, pins: RowVisibility, candidates: Uint32Array): RowPermutationBand {
+/** True when a DISPLAY slot must keep its source-corresponding row (header/totals rows,
+ * hidden rows). This is deliberately a callback and not a RowVisibility: a visibility mask
+ * answers "visible?", the opposite question, so passing one by mistake must not compile. */
+export type IsPinnedSlot = (displaySlot: DisplaySlot) => boolean
+/** Pin exactly the hidden slots of a display-visibility mask (visible rows are movable). */
+export function hiddenSlotPins(display: RowVisibility): IsPinnedSlot {
+  return displaySlot => !display.visible(displaySlot)
+}
+/** Pinned slots keep their own row; `candidates` lists only the movable (unpinned) source
+ * rows, in their new display order, and fills the remaining slots left to right (§5.1). */
+export function pinRowPermutation(r0: SourceRow, r1: SourceRow, isPinned: IsPinnedSlot, candidates: Uint32Array): RowPermutationBand {
   validateBand(r0, r1)
+  if (typeof isPinned !== 'function') throw new TypeError('isPinned must be a callback; use hiddenSlotPins(visibility) for a mask')
   if (!(candidates instanceof Uint32Array)) throw new RangeError('Candidates must be Uint32 source rows')
   const length = r1 - r0 + 1
-  if (candidates.length !== length - (pins.rank(r1 + 1) - pins.rank(r0))) throw new RangeError('Wrong visible candidate count')
+  let pinnedCount = 0
+  for (let displaySlot = r0; displaySlot <= r1; displaySlot++) if (isPinned(displaySlot)) pinnedCount++
+  if (candidates.length !== length - pinnedCount) throw new RangeError('Wrong movable candidate count')
   const rows = new Uint32Array(length)
   let candidateOffset = 0
   for (let displaySlot = r0; displaySlot <= r1; displaySlot++) {
-    const sourceRow = pins.visible(displaySlot) ? displaySlot : candidates[candidateOffset++]
-    if (sourceRow < r0 || sourceRow > r1 || (sourceRow !== displaySlot && pins.visible(sourceRow))) throw new RangeError('A pinned/outside source row cannot move')
+    const pinned = isPinned(displaySlot)
+    const sourceRow = pinned ? displaySlot : candidates[candidateOffset++]
+    if (sourceRow < r0 || sourceRow > r1 || (sourceRow !== displaySlot && isPinned(sourceRow))) throw new RangeError('A pinned/outside source row cannot move')
     rows[displaySlot - r0] = sourceRow
   }
   return makeBand({ r0, r1, sourceAtOffset: rows })

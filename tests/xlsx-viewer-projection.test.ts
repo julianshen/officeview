@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { AxisMetricsError, createAxisMetrics } from '../src/xlsx/view/axes'
 import { createSheetMetrics } from '../src/xlsx/view/projection'
 import { MAX_ROWS, MAX_COLS } from '../src/xlsx/view/coordinates'
-import { createIdentityOrder, createRowOrder, pinRowPermutation } from '../src/xlsx/view/order'
+import { createIdentityOrder, createRowOrder, hiddenSlotPins, pinRowPermutation } from '../src/xlsx/view/order'
 import { CompactRowVisibility, createRowVisibility, createIntervalSet, visibilityFromHidden, isVisibleSource, normalizeFilter, projectVisibility } from '../src/xlsx/view/visibility'
 import type { AxisMetrics, FilterSpec, SheetMetrics } from '../src/xlsx/view/contracts'
 
@@ -71,13 +71,25 @@ describe('row identity and permutations (AC-VIEW-01)', () => {
     }
   })
   it('pins hidden/header/totals slots while permuting visible candidates', () => {
-    const pins = createRowVisibility(6, slot => slot === 0 || slot === 2 || slot === 5)
-    const band = pinRowPermutation(0, 5, pins, new Uint32Array([4, 1, 3]))
+    const pinned = new Set([0, 2, 5])
+    const isPinned = (slot: number) => pinned.has(slot)
+    const band = pinRowPermutation(0, 5, isPinned, new Uint32Array([4, 1, 3]))
     expect(Array.from(band.sourceAtOffset)).toEqual([0, 4, 2, 1, 3, 5])
     const order = createRowOrder([band])
     expect(order.sourceToDisplay(2)).toBe(2)
-    expect(() => pinRowPermutation(0, 5, pins, new Uint32Array([4, 2, 3]))).toThrow()
-    expect(() => pinRowPermutation(0, 5, pins, new Uint32Array([4, 1]))).toThrow()
+    expect(() => pinRowPermutation(0, 5, isPinned, new Uint32Array([4, 2, 3]))).toThrow()
+    expect(() => pinRowPermutation(0, 5, isPinned, new Uint32Array([4, 1]))).toThrow()
+  })
+  it('derives pins from the real display-visibility mask without inverting its meaning', () => {
+    const display = createRowVisibility(6, slot => slot !== 1 && slot !== 4)
+    const band = pinRowPermutation(0, 5, hiddenSlotPins(display), new Uint32Array([5, 3, 2, 0]))
+    // Hidden slots 1 and 4 keep their rows; the four visible rows permute around them.
+    expect(Array.from(band.sourceAtOffset)).toEqual([5, 1, 3, 2, 4, 0])
+    expect(() => pinRowPermutation(0, 5, hiddenSlotPins(display), new Uint32Array([5, 1, 3, 0]))).toThrow()
+  })
+  it('rejects a RowVisibility passed where a pin callback is required', () => {
+    const display = createRowVisibility(3)
+    expect(() => pinRowPermutation(0, 2, display as unknown as (slot: number) => boolean, new Uint32Array([2, 1, 0]))).toThrow(TypeError)
   })
 })
 
@@ -145,9 +157,9 @@ describe('hierarchical display visibility and source snapshots (AC-SEM-01)', () 
 
 describe('model boundary validation and filter permutation ownership', () => {
   it('rejects fractional candidate inputs instead of truncating them into a valid permutation', () => {
-    const pins = createRowVisibility(3, () => false)
-    expect(() => pinRowPermutation(0, 2, pins, [0.5, 1.5, 2] as unknown as Uint32Array)).toThrow()
-    expect(() => pinRowPermutation(0, 2, pins, [0, 1, 2] as unknown as Uint32Array)).toThrow()
+    const noPins = () => false
+    expect(() => pinRowPermutation(0, 2, noPins, [0.5, 1.5, 2] as unknown as Uint32Array)).toThrow()
+    expect(() => pinRowPermutation(0, 2, noPins, [0, 1, 2] as unknown as Uint32Array)).toThrow()
     expect(() => new CompactRowVisibility(3, [7] as unknown as Uint32Array)).toThrow()
   })
   it('rejects signed-zero mask dimensions', () => {

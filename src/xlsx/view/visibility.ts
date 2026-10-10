@@ -35,7 +35,10 @@ function visibleWords(count: number): Uint32Array {
   if (count % 32) words[words.length - 1] = 2 ** (count % 32) - 1
   return words
 }
-/** Two-level counts: binary-search blocks, then inspect at most 32 words.
+/** Runtime (in-memory) display-row mask. Deliberately not the wire format: adapters to
+ * and from `BoundedRowBitset<'display'>` / `ViewCommitDelta` are owned by S4.1, which
+ * decides the transferable encoding; this class stays a plain generation-owned structure.
+ * Two-level counts: binary-search blocks, then inspect at most 32 words.
  * Only mask-word operations use bitwise arithmetic; cell IDs never do (§3). */
 export class CompactRowVisibility implements RowVisibility {
   readonly words: Uint32Array
