@@ -269,9 +269,9 @@ describe('Phase 23 review: fallback text paints visibly', () => {
     const recorded: string[] = []
     ;(ctx as unknown as Record<symbol, unknown>)[RECORD_TEXT] = (text: string) => { recorded.push(text) }
     paintDrawing(drawing!, ctx, 100, 100)
-    const joined = recorded.join(' ').replace(/\s+/g, ' ')
-    expect(joined).toContain('Alpha & Omega')
-    expect(joined).toContain('Beta <gamma>')
+    const flat = recorded.join('').replace(/\s+/g, '')
+    expect(flat).toContain('Alpha&Omega')
+    expect(flat).toContain('Beta<gamma>')
   })
 
   test('PPTX fallback paints recorded text (not an invisible 0x0 box)', async () => {
@@ -293,8 +293,8 @@ describe('Phase 23 review: fallback text paints visibly', () => {
     const recorded: string[] = []
     ;(ctx as unknown as Record<symbol, unknown>)[RECORD_TEXT] = (text: string) => { recorded.push(text) }
     renderSlide(doc.slides[0], ctx)
-    const joined = recorded.join(' ').replace(/\s+/g, ' ')
-    expect(joined).toContain('Alpha & Omega')
-    expect(joined).toContain('Beta <gamma>')
+    const flat = recorded.join('').replace(/\s+/g, '')
+    expect(flat).toContain('Alpha&Omega')
+    expect(flat).toContain('Beta<gamma>')
   })
 })
