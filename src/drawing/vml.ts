@@ -57,13 +57,13 @@ const DEFAULT_SHAPE_HEIGHT_PT = 50
 const SHADOW_DEFAULT_PT = 2
 const PX_PER_PT = 96 / 72
 
-function isVmlFalse(val: string | undefined): boolean {
+export function isVmlFalse(val: string | undefined): boolean {
   if (val === undefined) return false
   const v = String(val).trim().toLowerCase()
   return v === 'f' || v === 'false' || v === '0'
 }
 
-function isVmlTrue(val: string | undefined): boolean {
+export function isVmlTrue(val: string | undefined): boolean {
   if (val === undefined) return false
   const v = String(val).trim().toLowerCase()
   return v === 't' || v === 'true' || v === '1'

@@ -10,11 +10,15 @@ import { resolveColor } from '../core/color'
 import { paintWatermark, type ResolvedWatermark, type WatermarkOptions } from '../core/watermark'
 import { paintScene } from '../drawing/scene-paint'
 import { paintDrawingContent } from '../drawing/content-paint'
+import type { ContentPaintAssets } from '../drawing/content'
 import { createTextBodyMeasurer, paintTextBody } from '../drawing/text-paint'
 import { graphemes } from '../core/text-recording'
 import { resolveGeometry } from '../drawing/geometry'
 import type { DrawingContentShape } from '../drawing/content'
-import { isFormulaError } from './formula/evaluator'
+import { isFormulaError, isEvaluationError } from './formula/evaluator'
+import { formatCommon } from './formula/format'
+import { decodeSerial } from './formula/serial'
+import type { ResolvedSemantics } from './formula/types'
 
 export interface GridMetrics {
   colWidthsPx: number[]
@@ -299,6 +303,12 @@ export function computePrintMetrics(sheet: XlsxSheet, grid: GridMetrics, dpi = 9
  * area, clipped. Page (pageCol, pageRow) selects its sheet-coordinate window;
  * content beyond one page clips (multi-page paintables are a follow-up).
  */
+export interface RenderSheetAssets {
+  images?: ReadonlyArray<CanvasImageSource | undefined>
+  resolveFont?: (family: string) => string
+  imageFor?: ContentPaintAssets['imageFor']
+}
+
 export function renderPrintPage(
   sheet: XlsxSheet,
   ctx: CanvasRenderingContext2D,
@@ -307,7 +317,7 @@ export function renderPrintPage(
   pageCol = 0,
   pageRow = 0,
   watermark?: WatermarkOptions | ResolvedWatermark,
-  prepared?: { images?: ReadonlyArray<CanvasImageSource | undefined>; resolveFont?: (family: string) => string },
+  prepared?: RenderSheetAssets,
 ): void {
   ctx.save()
   try {
@@ -334,31 +344,150 @@ export function renderPrintPage(
   }
 }
 
+/** Default render semantics when a hand-built sheet carries none. */
+const DEFAULT_RENDER_SEMANTICS: ResolvedSemantics = {
+  dateSystem: '1900',
+  unicode: { version: 2, source: 'standalone-default' },
+  locale: 'en-US',
+  timeZone: 'UTC',
+  epochNowMs: 0,
+}
+
+/** One private fallback shared by the default numFmt path and the
+ * unsupported-format fallback. `Math.round(value * 100) / 100` can overflow to
+ * Infinity for a finite source, so when that intermediate is not finite we keep
+ * the source magnitude (rawString) rather than emitting Infinity/NaN. */
+function formatFiniteFallback(value: number): string {
+  const rounded = Math.round(value * 100) / 100
+  return Number.isFinite(rounded) ? String(rounded) : String(value)
+}
+
+/** Native General controls use at most eleven unsigned display characters.
+ * Short exact decimals retain their zeros; longer small numbers and numbers
+ * with twelve integer digits use scientific notation. Cell painting supplies
+ * a physical width test so the display can lose precision without changing
+ * the stored value. This finite profile does not implement locale General. */
+function formatGeneral(value: number, fits: (text: string) => boolean = () => true): string {
+  if (!Number.isFinite(value)) return String(value)
+  if (value === 0) return '0'
+  const negative = value < 0, absolute = Math.abs(value)
+  const sign = negative ? '-' : ''
+  const raw = String(absolute)
+  // Expand only small exponents which could fit the plain-character budget.
+  const plain = raw.includes('e') && absolute < 1 && absolute >= 1e-9
+    ? '0.' + '0'.repeat(-Number(raw.split('e')[1]) - 1) + raw.split('e')[0].replace('.', '')
+    : raw
+  const scientific = (digits: number) => {
+    const [mantissa, exponent] = absolute.toExponential(digits).split('e')
+    const compact = mantissa.includes('.') ? mantissa.replace(/0+$/, '').replace(/\.$/, '') : mantissa
+    const e = Number(exponent)
+    return `${sign}${compact}E${e < 0 ? '-' : '+'}${String(Math.abs(e)).padStart(2, '0')}`
+  }
+  const useScientific = absolute >= 1e11 || (absolute < 1e-4 && (plain.includes('e') || plain.length > 11))
+  if (!useScientific) {
+    if (plain.length <= 11 && fits(sign + plain)) return sign + plain
+    const integerDigits = absolute >= 1 ? Math.floor(Math.log10(absolute)) + 1 : 1
+    for (let decimals = Math.max(0, 10 - integerDigits); decimals >= 0; decimals--) {
+      const fixed = absolute.toFixed(decimals)
+      const compact = fixed.includes('.') ? fixed.replace(/0+$/, '').replace(/\.$/, '') : fixed
+      // A nonzero value must not disappear through display rounding.
+      if (compact.length <= 11 && Number(compact) !== 0 && fits(sign + compact)) return sign + compact
+    }
+  }
+  for (let decimals = 5; decimals >= 0; decimals--) {
+    const text = scientific(decimals)
+    if (text.length - sign.length <= 11 && fits(text)) return text
+  }
+  return '#'
+}
+
 /** Format a numeric value for common built-in number formats. */
-export function formatValue(value: string | number | boolean | null, numFmtId: number): string {
+export function formatValue(
+  value: string | number | boolean | null,
+  numFmtId: number,
+  semantics?: ResolvedSemantics,
+): string {
   if (value === null) return ''
   if (typeof value === 'string') return value
   if (typeof value === 'boolean') return value ? 'TRUE' : 'FALSE'
+  const sem = semantics ?? DEFAULT_RENDER_SEMANTICS
   switch (numFmtId) {
+    case 0: // General
+      return formatGeneral(value)
     case 2: // 0.00
-      return value.toFixed(2)
-    case 9: return `${Math.round(value * 100)}%`
-    case 10: return `${(value * 100).toFixed(2)}%`
-    case 3: return Math.round(value).toLocaleString('en-US')
-    case 4: return value.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+      return formatText(value, '0.00', sem)
+    case 9: // 0%
+      return formatText(value, '0%', sem)
+    case 10: // 0.00%
+      return formatText(value, '0.00%', sem)
+    case 3: // #,##0
+      return formatText(value, '#,##0', sem)
+    case 4: // #,##0.00
+      return formatText(value, '#,##0.00', sem)
     default:
-      if (numFmtId >= 14 && numFmtId <= 22) return formatDateSerial(value)
-      return String(Math.round(value * 100) / 100)
+      // Built-in date formats keep the established ISO product convention but
+      // now decode through the SHARED serial model (1900 day-0/fictitious day,
+      // explicit 1904) instead of the removed JS-Date epoch path.
+      if (numFmtId >= 18 && numFmtId <= 22) {
+        const formats = ['h:mm AM/PM', 'h:mm:ss AM/PM', 'h:mm', 'h:mm:ss', 'm/d/yy h:mm']
+        return formatText(value, formats[numFmtId - 18], sem)
+      }
+      if (numFmtId >= 14 && numFmtId <= 17) return formatDateSerial(value, sem.dateSystem)
+      return formatFiniteFallback(value)
   }
 }
 
-const EXCEL_EPOCH = Date.UTC(1899, 11, 30)
+/** One shared formatter call; unsupported classes fall back to plain numbers. */
+function formatText(value: number, format: string, semantics: ResolvedSemantics): string {
+  const result = formatCommon(value, format, semantics)
+  if (result.kind === 'text') return result.text
+  if (isEvaluationError(result)) return ''
+  return formatFiniteFallback(value)
+}
 
-export function formatDateSerial(serial: number): string {
-  const d = new Date(EXCEL_EPOCH + serial * 86400000)
-  const mm = String(d.getUTCMonth() + 1).padStart(2, '0')
-  const dd = String(d.getUTCDate()).padStart(2, '0')
-  return `${d.getUTCFullYear()}-${mm}-${dd}`
+export function formatDateSerial(serial: number, dateSystem: '1900' | '1904' = '1900'): string {
+  const parts = decodeSerial(serial, dateSystem)
+  if (isEvaluationError(parts)) return ''
+  const { year, month, day } = parts.civil
+  const y = year < 0 ? `-${String(-year).padStart(4, '0')}` : String(year).padStart(4, '0')
+  return `${y}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`
+}
+
+/**
+ * Cell text for the shared renderer: an authored custom numFmt formatCode uses
+ * the SAME finite common formatter as TEXT (numeric AND text/boolean values, so
+ * the fourth text section applies). Unsupported authored classes fall back to
+ * the built-in/default output and record a specific sheet diagnostic.
+ */
+function renderCellText(
+  value: string | number | boolean | null,
+  style: XlsxCellStyle | undefined,
+  semantics: ResolvedSemantics | undefined,
+  sheet: XlsxSheet,
+  fitsGeneral?: (text: string) => boolean,
+): string {
+  const code = style?.formatCode
+  if (code !== undefined && value !== null) {
+    const result = formatCommon(value, code, semantics ?? DEFAULT_RENDER_SEMANTICS)
+    if (result.kind === 'text') return result.text
+    if (!isEvaluationError(result)) noteFormatUnsupported(sheet, code, result.reason)
+  }
+  if (typeof value === 'number' && (style?.numFmtId ?? 0) === 0) return formatGeneral(value, fitsGeneral)
+  return formatValue(value, style?.numFmtId ?? 0, semantics)
+}
+
+/**
+ * Record an unsupported authored-format diagnostic on the existing sheet
+ * channel (same shape as doc.diagnostics), deduped across repeated paints.
+ * No product warning UI is produced.
+ */
+function noteFormatUnsupported(sheet: XlsxSheet, format: string, reason: string): void {
+  const holder = sheet as unknown as { diagnostics?: Array<{ kind: string; feature: string; message: string }> }
+  holder.diagnostics ??= []
+  const message = `Format '${format}' is outside the finite common-format grammar: ${reason}`
+  if (!holder.diagnostics.some((d) => d.feature === 'format-unsupported' && d.message === message)) {
+    holder.diagnostics.push({ kind: 'unsupported-format', feature: 'format-unsupported', message })
+  }
 }
 
 function prefixSums(widths: number[]): number[] {
@@ -381,7 +510,7 @@ export function renderSheet(
   ctx: CanvasRenderingContext2D,
   metrics?: GridMetrics,
   watermark?: WatermarkOptions | ResolvedWatermark,
-  prepared?: { images?: ReadonlyArray<CanvasImageSource | undefined>; resolveFont?: (family: string) => string },
+  prepared?: RenderSheetAssets,
   viewport?: SheetViewport,
 ): void {
   ctx.save()
@@ -462,11 +591,15 @@ export function renderSheet(
         ctx.fillRect(x, y, w, hh)
       }
       // text (right-align numbers, left-align strings; alignment spans the merge)
-      const text = formatValue(cell.value, cell.style?.numFmtId ?? 0)
+      const font = `${cell.style?.italic ? 'italic ' : ''}${cell.style?.bold ? 'bold ' : ''}${cell.style?.fontSizePt ?? 10}pt "Calibri"`
+      const fitsGeneral = cellTextRotation(cell.style?.textRotation) === undefined
+        ? (text: string) => measured(font, text) <= Math.max(0, w - PADDING_L - PADDING_R)
+        : undefined
+      const text = renderCellText(cell.value, cell.style, sheet.semantics, sheet, fitsGeneral)
       if (text !== '') {
         const color = cell.style?.color ? resolveColor(cell.style.color) : '#000000'
         ctx.fillStyle = color
-        ctx.font = `${cell.style?.italic ? 'italic ' : ''}${cell.style?.bold ? 'bold ' : ''}${cell.style?.fontSizePt ?? 10}pt "Calibri"`
+        ctx.font = font
         // OOXML often authors default alignment fields on every cell. Those
         // retain ordinary placement; real alignment/wrapping/rotation needs
         // the measured local layout (including explicit no-wrap for255).
@@ -545,6 +678,7 @@ export function renderSheet(
     paintContent(node, context, w, h) {
       if (!node.content) return
       paintDrawingContent(node.content, context, w, h, {
+        assets: prepared,
         fontFamilyCss: family => JSON.stringify(prepared?.resolveFont?.(family) ?? family),
         paintDiagramText(shape, c, width, height) { if (shape.textBody) paintTextBody(shape.textBody, c, 0, 0, width, height, prepared?.resolveFont ?? (f => f), sheet.drawingTheme) },
         paintTextbox(content, c, width, height) { paintTextBody({ paragraphs: content.paragraphs, anchor: 't', wrap: true, insetLeftEmu: content.insets.left, insetTopEmu: content.insets.top, insetRightEmu: content.insets.right, insetBottomEmu: content.insets.bottom }, c, 0, 0, width, height, prepared?.resolveFont ?? (f => f), sheet.drawingTheme) },

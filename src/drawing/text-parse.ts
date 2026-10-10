@@ -1,8 +1,8 @@
 /** DrawingML text metadata shared by slides, cached diagrams, and sheet drawings. */
 import { attrs, getChildren, orderedChildren, textOf, type XmlNode } from '../core/xml'
 import { parseDrawingColor, resolveDrawingColor, type DrawingColor, type ThemeContext } from './style'
-import type { DrawingTextParagraph as PptxParagraph, DrawingTextBody as PptxTextBody, DrawingTextRun as PptxTextRun, DrawingTextSpacing as PptxTextSpacing, DrawingTextStyle as PptxTextStyle, DrawingTabStop as PptxTabStop, TextDirection, PatternPreset, TextWarpPreset } from './text'
-import { SUPPORTED_PATTERN_PRESETS, SUPPORTED_TEXT_WARP_PRESETS, DEFAULT_WARP_ADJUSTMENTS } from './text'
+import type { DrawingTextParagraph as PptxParagraph, DrawingTextBody as PptxTextBody, DrawingTextRun as PptxTextRun, DrawingTextSpacing as PptxTextSpacing, DrawingTextStyle as PptxTextStyle, DrawingTabStop as PptxTabStop, TextDirection, PatternPreset, TextWarpPreset, DrawingTextAutofit } from './text'
+import { SUPPORTED_PATTERN_PRESETS, SUPPORTED_TEXT_WARP_PRESETS, DEFAULT_WARP_ADJUSTMENTS, parseAdjustGuides, parseTextPlainAdjustment } from './text'
 
 const number = (v: string | undefined, fallback = 0): number => v !== undefined && Number.isFinite(Number(v)) ? Number(v) : fallback
 function align(v: string | undefined): PptxParagraph['align'] {
@@ -219,12 +219,58 @@ export interface ParsedDrawingTextBody extends PptxTextBody {
   diagnostics?: Array<{ kind: 'unsupported-text-alignment'; feature: string; message: string } | TextAppearanceIssue | TextWarpIssue>
 }
 
+/**
+ * Parses ECMA-376 DrawingML autofit percentages (ST_TextFontScalePercent / ST_TextSpacingPercent).
+ * In ECMA-376, values are integers in 1000ths of a percent (e.g. 100000 = 100% -> 1.0, 80000 = 80% -> 0.8).
+ * Also leniency-supports percentage strings (e.g. "80%" -> 0.8) for non-strict/relaxed XML inputs.
+ */
+export function parseAutofitPercent(raw: string | undefined): number | undefined {
+  if (raw === undefined || raw.trim() === '') return undefined
+  const trimmed = raw.trim()
+  if (trimmed.endsWith('%')) {
+    const val = parseFloat(trimmed.slice(0, -1))
+    return Number.isFinite(val) ? val / 100 : undefined
+  }
+  const val = Number(trimmed)
+  return Number.isFinite(val) ? val / 100000 : undefined
+}
+
+export function parseAutofitNode(node: XmlNode | undefined): DrawingTextAutofit | undefined {
+  if (!node) return undefined
+  const noAutofit = getChildren(node, 'noAutofit')[0]
+  if (noAutofit) return { kind: 'none' }
+  const spAutoFit = getChildren(node, 'spAutoFit')[0]
+  if (spAutoFit) return { kind: 'shape' }
+  const normAutofit = getChildren(node, 'normAutofit')[0]
+  if (normAutofit) {
+    const a = attrs(normAutofit)
+    let fontScale = parseAutofitPercent(a.fontScale)
+    if (fontScale !== undefined) {
+      fontScale = Math.min(1, Math.max(0.01, fontScale))
+    }
+    let lnSpcReduction = parseAutofitPercent(a.lnSpcReduction)
+    if (lnSpcReduction !== undefined) {
+      lnSpcReduction = Math.min(1, Math.max(0, lnSpcReduction))
+    }
+    return {
+      kind: 'normal',
+      ...(fontScale !== undefined ? { fontScale } : {}),
+      ...(lnSpcReduction !== undefined ? { lnSpcReduction } : {}),
+    }
+  }
+  return undefined
+}
+
 export function parseTextBody(txBody: XmlNode, theme?: ThemeContext, defaults?: XmlNode, fontDefaults: PptxTextStyle = {}, inheritedLayers: readonly InheritedTextLayer[] = []): ParsedDrawingTextBody {
   const a = Object.assign({}, ...inheritedLayers.map(layer => attrs(getChildren(layer.body, 'bodyPr')[0])), attrs(getChildren(txBody, 'bodyPr')[0]))
   const body: ParsedDrawingTextBody = { paragraphs: [], anchor: a.anchor === 'ctr' ? 'ctr' : a.anchor === 'b' ? 'b' : 't',
     insetLeftEmu: number(a.lIns, 91440), insetRightEmu: number(a.rIns, 91440), insetTopEmu: number(a.tIns, 45720), insetBottomEmu: number(a.bIns, 45720), wrap: a.wrap !== 'none',
     ...(directions.has(a.vert as TextDirection) ? { direction: a.vert as TextDirection } : {}) }
   const bodyPrNodes = [...inheritedLayers.map(layer => getChildren(layer.body, 'bodyPr')[0]), getChildren(txBody, 'bodyPr')[0]].filter((n): n is XmlNode => !!n)
+  for (let i = bodyPrNodes.length - 1; i >= 0; i--) {
+    const af = parseAutofitNode(bodyPrNodes[i])
+    if (af) { body.autofit = af; break }
+  }
   let prstWarpNode: XmlNode | undefined
   for (let i = bodyPrNodes.length - 1; i >= 0; i--) {
     const warp = getChildren(bodyPrNodes[i], 'prstTxWarp')[0]
@@ -233,22 +279,23 @@ export function parseTextBody(txBody: XmlNode, theme?: ThemeContext, defaults?: 
   if (prstWarpNode) {
     const warpPrst = attrs(prstWarpNode).prst
     if (warpPrst) {
-      if (warpPrst === 'textNoShape' || warpPrst === 'textPlain') {
+      if (warpPrst === 'textNoShape') {
         // Handled as unwarped standard text
+      } else if (warpPrst === 'textPlain') {
+        const nonDefaultAdj = parseTextPlainAdjustment(prstWarpNode)
+        if (nonDefaultAdj !== undefined) {
+          body.diagnostics ??= []
+          body.diagnostics.push({
+            kind: 'unsupported-text-warp',
+            feature: 'textPlain',
+            message: `WordArt warp preset textPlain with nondefault adjustment ${nonDefaultAdj} is unsupported; using unwarped text`,
+          })
+        }
       } else if (SUPPORTED_TEXT_WARP_PRESETS.has(warpPrst)) {
         const avLst = getChildren(prstWarpNode, 'avLst')[0]
-        const adjustments: Record<string, number> = { ...(DEFAULT_WARP_ADJUSTMENTS[warpPrst] ?? {}) }
-        if (avLst) {
-          for (const gd of getChildren(avLst, 'gd')) {
-            const ga = attrs(gd)
-            if (ga.name && ga.fmla) {
-              const rawVal = ga.fmla.startsWith('val ') ? ga.fmla.slice(4).trim() : ga.fmla.trim()
-              const valNum = Number(rawVal)
-              if (Number.isFinite(valNum)) {
-                adjustments[ga.name] = valNum
-              }
-            }
-          }
+        const adjustments: Record<string, number> = {
+          ...(DEFAULT_WARP_ADJUSTMENTS[warpPrst] ?? {}),
+          ...parseAdjustGuides(avLst),
         }
         body.textWarp = {
           preset: warpPrst as TextWarpPreset,
@@ -279,32 +326,91 @@ export function parseTextBody(txBody: XmlNode, theme?: ThemeContext, defaults?: 
     }
     propertyLayers.push(...listNodes(list).map(node => [node, 'list'] as [XmlNode | undefined, 'list']), [pPr, 'paragraph'])
     let inherited = { ...fontDefaults }
-    const appearanceIssues: TextAppearanceIssue[] = []
+    let inheritedAppearanceIssues: TextAppearanceIssue[] = []
     const propertySources: NonNullable<PptxTextRun['propertySources']> = {}
     for (const key of Object.keys(fontDefaults) as Array<keyof PptxTextStyle>) propertySources[key] = 'default'
     const para: PptxParagraph = { runs: [], align: 'left', level }
     for (const [node, origin] of propertyLayers) {
       Object.assign(para, paragraphProperties(node))
-      const values = style(getChildren(node, 'defRPr')[0], theme, appearanceIssues)
-      inherited = { ...inherited, ...values }
-      for (const key of Object.keys(values) as Array<keyof PptxTextStyle>) propertySources[key] = origin
+      const defRPr = getChildren(node, 'defRPr')[0]
+      if (defRPr) {
+        const layerIssues: TextAppearanceIssue[] = []
+        const values = style(defRPr, theme, layerIssues)
+        const hasFill = getChildren(defRPr, 'solidFill').length > 0 ||
+          getChildren(defRPr, 'gradFill').length > 0 ||
+          getChildren(defRPr, 'pattFill').length > 0 ||
+          getChildren(defRPr, 'blipFill').length > 0 ||
+          getChildren(defRPr, 'noFill').length > 0
+        const hasOutline = getChildren(defRPr, 'ln').length > 0
+        if (hasFill) {
+          inheritedAppearanceIssues = inheritedAppearanceIssues.filter(i => !(i.feature?.startsWith('pattFill') || i.feature === 'blipFill' || i.feature?.startsWith('gradFill')))
+        }
+        if (hasOutline) {
+          inheritedAppearanceIssues = inheritedAppearanceIssues.filter(i => !i.feature?.startsWith('ln'))
+        }
+        inheritedAppearanceIssues.push(...layerIssues)
+        inherited = { ...inherited, ...values }
+        for (const key of Object.keys(values) as Array<keyof PptxTextStyle>) propertySources[key] = origin
+      }
     }
     if (para.sourceAlign && !['l', 'ctr', 'r', 'just'].includes(para.sourceAlign)) {
       body.diagnostics ??= []
       body.diagnostics.push({ kind: 'unsupported-text-alignment', feature: para.sourceAlign, message: `DrawingML alignment ${para.sourceAlign} is deferred; using left alignment` })
     }
     para.defaultProperties = inherited
-    para.endProperties = style(getChildren(p, 'endParaRPr')[0], theme, appearanceIssues)
+    const endParaIssues: TextAppearanceIssue[] = []
+    para.endProperties = style(getChildren(p, 'endParaRPr')[0], theme, endParaIssues)
+    const runIssues: TextAppearanceIssue[] = []
+    let anyRunInheritedFill = false
+    let anyRunInheritedOutline = false
+    let hasTextRuns = false
+
     for (const [name, node] of orderedChildren(p)) {
       if (name !== 'r' && name !== 'br' && name !== 'fld') continue
-      const directProperties = style(getChildren(node, 'rPr')[0], theme, appearanceIssues)
+      const rPr = getChildren(node, 'rPr')[0]
+      if (name !== 'br') {
+        hasTextRuns = true
+        const hasDirectFill = !!rPr && (
+          getChildren(rPr, 'solidFill').length > 0 ||
+          getChildren(rPr, 'gradFill').length > 0 ||
+          getChildren(rPr, 'pattFill').length > 0 ||
+          getChildren(rPr, 'blipFill').length > 0 ||
+          getChildren(rPr, 'noFill').length > 0
+        )
+        const hasDirectOutline = !!rPr && getChildren(rPr, 'ln').length > 0
+        if (!hasDirectFill) anyRunInheritedFill = true
+        if (!hasDirectOutline) anyRunInheritedOutline = true
+      }
+
+      const directProperties = style(rPr, theme, runIssues)
       const end = name === 'br' ? para.endProperties : {}
       const origins = { ...propertySources }
       for (const key of Object.keys(end) as Array<keyof PptxTextStyle>) origins[key] = 'end'
       for (const key of Object.keys(directProperties) as Array<keyof PptxTextStyle>) origins[key] = 'run'
       para.runs.push({ ...inherited, ...end, ...directProperties, text: name === 'br' ? '\n' : textOf(getChildren(node, 't')[0]), directProperties, propertySources: origins })
     }
-    if (appearanceIssues.length) body.diagnostics = [...(body.diagnostics ?? []), ...appearanceIssues]
+
+    const effectiveAppearanceIssues: TextAppearanceIssue[] = [...runIssues]
+    if (hasTextRuns) {
+      for (const issue of inheritedAppearanceIssues) {
+        const isFillIssue = issue.feature?.startsWith('pattFill') || issue.feature === 'blipFill' || issue.feature?.startsWith('gradFill')
+        const isOutlineIssue = issue.feature?.startsWith('ln')
+        if (isFillIssue && !anyRunInheritedFill) continue
+        if (isOutlineIssue && !anyRunInheritedOutline) continue
+        effectiveAppearanceIssues.push(issue)
+      }
+    } else {
+      effectiveAppearanceIssues.push(...endParaIssues)
+    }
+
+    if (effectiveAppearanceIssues.length) {
+      body.diagnostics ??= []
+      for (const issue of effectiveAppearanceIssues) {
+        if (!body.diagnostics.some(existing => existing.kind === issue.kind && existing.feature === issue.feature)) {
+          body.diagnostics.push(issue)
+        }
+      }
+    }
     body.paragraphs.push(para)
   }
   return body

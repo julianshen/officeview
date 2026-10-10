@@ -725,10 +725,14 @@ describe('xlsx formula parser (AST)', () => {
     expect(parseFormula('')).toEqual({ type: 'empty' })
     expect(parseFormula('=')).toEqual({ type: 'empty' })
 
-    // 3. Unknown identifiers without parentheses
-    const errIdent = parseFormula('=UNKNOWN')
-    expect(errIdent.type).toBe('error')
-    expect((errIdent as any).error).toMatch(/#NAME\?/)
+    // 3. Bare identifiers are grammar-level names (B1 ABI), not parse errors:
+    // unknown names evaluate to #NAME? only on the evaluated path, and
+    // untaken branches stay silent. Original source spelling is preserved.
+    const nameIdent = parseFormula('=UNKNOWN')
+    expect(nameIdent).toEqual({ type: 'name', ref: { name: 'UNKNOWN' } })
+    expect(parseFormula('=sCoPeDvAlUe')).toEqual({ type: 'name', ref: { name: 'sCoPeDvAlUe' } })
+    expect(evaluateFormula('=UNKNOWN')).toBe('#NAME?')
+    expect(evaluateFormula('=IF(FALSE,UNKNOWN,7)')).toBe(7)
 
     // 4. Unclosed parentheses
     const errParen = parseFormula('=(1 + 2')
@@ -773,9 +777,11 @@ describe('xlsx formula parser (AST)', () => {
     const legalParens50 = '=' + '('.repeat(50) + '42' + ')'.repeat(50)
     expect(parseFormula(legalParens50)).toEqual({ type: 'number', value: 42 })
 
-    // 2. Token start offsets wired into error messages
+    // 2. Bare-name grammar: FOOBAR parses as a name node (B1 ABI); the
+    // #NAME? surfaces only when the unknown name is actually evaluated.
     const errUnknown = parseFormula('=FOOBAR')
-    expect((errUnknown as any).error).toBe('#NAME? Unknown identifier "FOOBAR" at position 0')
+    expect(errUnknown).toEqual({ type: 'name', ref: { name: 'FOOBAR' } })
+    expect(evaluateFormula('=FOOBAR')).toBe('#NAME?')
 
     const errMissingParen = parseFormula('=(1 + 2')
     expect((errMissingParen as any).error).toBe('#NAME? Missing closing parenthesis for "(" at position 0')
@@ -783,8 +789,12 @@ describe('xlsx formula parser (AST)', () => {
     const errFnMissingParen = parseFormula('=SUM(A1, B1')
     expect((errFnMissingParen as any).error).toBe('#NAME? Missing closing parenthesis for function SUM at position 10')
 
-    const errFnMissingComma = parseFormula('=SUM(A1 B1)')
-    expect((errFnMissingComma as any).error).toBe('#NAME? Expected comma or closing parenthesis in function SUM at position 7')
+    // B1 (root-authorized): cell-cell whitespace adjacency is a legitimate
+    // intersect now (empty geometric overlap evaluates typed #NULL!); the
+    // obsolete parse-error expectation is replaced. Source spans preserved.
+    const cellCellIntersect = parseFormula('=SUM(A1 B1)')
+    expect(cellCellIntersect).toMatchObject({ type: 'call' })
+    expect((cellCellIntersect as any).args[0]).toMatchObject({ type: 'intersect' })
 
     const errUnexpected = parseFormula('=1 + 2 3')
     expect((errUnexpected as any).error).toBe('#NAME? Unexpected token "3" at position 6')
@@ -850,7 +860,7 @@ describe('xlsx formula evaluator', () => {
     // 5. Division by zero and invalid powers
     expect(evaluateFormula('10 / 0')).toBe('#DIV/0!')
     expect(evaluateFormula('0 / 0')).toBe('#DIV/0!')
-    expect(evaluateFormula('0 ^ 0')).toBe(1) // in Excel, 0^0 evaluates to 1
+    expect(evaluateFormula('0 ^ 0')).toBe('#NUM!') // native Excel 16.106.1: 0^0 = #NUM!
   })
 
   test('Evaluates string concatenation (&) and Excel comparison ordering (number < text < FALSE < TRUE)', () => {
@@ -1120,8 +1130,10 @@ describe('xlsx formula evaluator', () => {
     expect(evaluateFormula('PRODUCT(A1, B1)', ctx)).toBe(10)
     expect(evaluateFormula('PRODUCT(B1)', ctx)).toBe(0)
 
-    // 5. Direct blank evaluation and unbound cells without context
-    expect(evaluateFormula('B1', ctx)).toBeNull()
+    // 5. Direct blank evaluation: typed-context blank refs are native 0
+    // (REV1-4, native 16.106.1 oracle row 25: bare D1 blank ref = 0); the
+    // truly-absent/unbound rows (no getCellValue below) stay null.
+    expect(evaluateFormula('B1', ctx)).toBe(0)
     expect(evaluateFormula('Z99')).toBeNull()
     expect(evaluateFormula('Z99 + 5')).toBe(5)
     expect(evaluateFormula('Z99 & "abc"')).toBe('abc')
@@ -1238,8 +1250,8 @@ describe('xlsx formula evaluator', () => {
     expect(evaluateFormula('SUM(A1, A2, A3)', cellCtx)).toBe(10)
     expect(evaluateFormula('COUNT(A1, A2, A3)', cellCtx)).toBe(1)
 
-    // 2. 0^0 = 1 in Excel
-    expect(evaluateFormula('0^0')).toBe(1)
+    // 2. 0^0 = #NUM! (native Excel 16.106.1 oracle row 18)
+    expect(evaluateFormula('0^0')).toBe('#NUM!')
     expect(evaluateFormula('0^-1')).toBe('#NUM!')
     expect(evaluateFormula('(-1)^0.5')).toBe('#NUM!')
 
@@ -1247,7 +1259,7 @@ describe('xlsx formula evaluator', () => {
     expect(evaluateFormula('ROUND(-1.5, 0)')).toBe(-2)
     expect(evaluateFormula('ROUND(-2.5, 0)')).toBe(-3)
     expect(evaluateFormula('ROUND(2.5, 0)')).toBe(3)
-    expect(evaluateFormula('ROUND(1, 309)')).toBe('#NUM!')
+    expect(evaluateFormula('ROUND(1, 309)')).toBe(1) // native: extreme positive digits are a no-op
 
     // 4. Arithmetic overflow guard returning #NUM!
     expect(evaluateFormula('1e308 * 10')).toBe('#NUM!')
@@ -1259,16 +1271,17 @@ describe('xlsx formula evaluator', () => {
     expect(evaluateFormula('TRIM("a\u00A0b")')).toBe('a\u00A0b')
 
     // 6. INT precision guard
-    expect(evaluateFormula('INT(1.999999999999999)')).toBe(2)
+    expect(evaluateFormula('INT(1.999999999999999)')).toBe(1) // native: INT truncates the actual value
     expect(evaluateFormula('INT(2.1)')).toBe(2)
 
-    // 7. Direct empty/null arguments in aggregate functions (Excel parity)
-    // Direct empty args (e.g. MIN(5,)) are ignored rather than coerced to 0
-    expect(evaluateFormula('MIN(5, )')).toBe(5)
-    expect(evaluateFormula('MAX(-5, )')).toBe(-5)
-    expect(evaluateFormula('AVERAGE(, )')).toBe('#DIV/0!')
+    // 7. Explicit omitted arguments participate as 0 in aggregates (native
+    // oracle: MIN(5,)=0, MAX(-5,)=0, AVERAGE(,)=0, COUNT(,)=2); PRODUCT ignores
+    // omitted args (native PRODUCT(5,)=5); SUM(,)=0 unchanged.
+    expect(evaluateFormula('MIN(5, )')).toBe(0)
+    expect(evaluateFormula('MAX(-5, )')).toBe(0)
+    expect(evaluateFormula('AVERAGE(, )')).toBe(0)
     expect(evaluateFormula('PRODUCT(5, )')).toBe(5)
-    expect(evaluateFormula('COUNT(, )')).toBe(0)
+    expect(evaluateFormula('COUNT(, )')).toBe(2)
     expect(evaluateFormula('SUM(, )')).toBe(0)
   })
 })

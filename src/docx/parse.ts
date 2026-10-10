@@ -2,8 +2,8 @@
  * Parse DOCX parts (document.xml, styles.xml) into the DocxDocument model.
  */
 import type { OfficePackage } from '../core/zip'
-import { sniffImageMime } from '../core/images'
 import { loadDocxEmbeddedFonts } from '../core/fonts/docx'
+import { sniffImageMime } from '../core/images'
 import { attrs, elementChildren, getChildren, orderedChildren, textOf, type XmlNode } from '../core/xml'
 import { applyParagraphDefaults, authoredCategories, issueCategory, paragraphRunDefaults, readRunProperties, readTheme, styleChain, styleContext, type DocxStyleContext, type ParagraphStyleLayers } from './styles'
 import { loadDrawingParts, wordDrawingSelections } from './drawing'
@@ -94,6 +94,12 @@ interface FieldAwareRun extends DocxTextRun {
   _instr?: string
 }
 
+function symbolText(node: XmlNode): string {
+  const value = attrs(node).char ?? ''
+  const cp = /^[0-9a-f]{1,6}$/i.test(value) ? parseInt(value, 16) : NaN
+  return Number.isInteger(cp) && cp <= 0x10ffff && !(cp >= 0xd800 && cp <= 0xdfff) ? String.fromCodePoint(cp) : ''
+}
+
 function parseRun(r: XmlNode, inherited?: Partial<DocxTextRun>, context?: ParagraphContext, issues?: import('../drawing/text-parse').TextAppearanceIssue[]): FieldAwareRun {
   const rPr = getChildren(r, 'rPr')[0]
   let run: FieldAwareRun = { text: '', ...inherited }
@@ -128,11 +134,10 @@ function parseRun(r: XmlNode, inherited?: Partial<DocxTextRun>, context?: Paragr
       // Symbol font character (<w:sym w:font w:char="hex">): preserved as the
       // referenced codepoint so symbol/bullet runs are not silently dropped.
       // Lone surrogates and out-of-range values are skipped (fromCodePoint throws).
-      const sa = attrs(child)
-      const cp = parseInt(sa.char ?? '', 16)
-      if (Number.isFinite(cp) && cp >= 0 && cp <= 0x10FFFF && !(cp >= 0xD800 && cp <= 0xDFFF)) {
-        run.text += String.fromCodePoint(cp)
-        symFont ??= sa.font
+      const text = symbolText(child)
+      if (text) {
+        run.text += text
+        symFont ??= attrs(child).font
       }
     } else if (name === 'footnoteReference') {
       const idRaw = attrs(child).id ?? ''
@@ -422,13 +427,17 @@ export function parseParagraph(
             if (tag === 't') addRun({ ...run, text: textOf(child), breakBefore: undefined })
             else if (tag === 'tab') addRun({ ...run, text: '\t', breakBefore: undefined })
             else if (tag === 'br') addRun({ ...run, text: '\n', breakBefore: undefined })
+            else if (tag === 'sym') {
+              const text = symbolText(child)
+              if (text) addRun({ ...run, text, breakBefore: undefined })
+            }
             else if (tag === 'drawing') addImage(parseDrawing(child, images, context))
             else if (tag === 'pict') addImage(parsePict(child, context))
             else if (tag === 'AlternateContent') alternate(child)
           }
         }
       } else if (name === 'hyperlink' || name === 'sdtContent') walk(node)
-      else if (name === 'ins') walk(node) // Tracked insertions render (Final view); deletions stay hidden
+      else if (name === 'ins' || name === 'moveTo') walk(node) // Tracked insertions render (Final view); deletions stay hidden
       else if (name === 'del') { /* tracked deletions hidden */ }
       else if (name === 'drawing') addImage(parseDrawing(node, images, context))
       else if (name === 'pict') addImage(parsePict(node, context))
@@ -1124,7 +1133,7 @@ function unwrapContentControls(node: XmlNode | undefined): Array<[string, XmlNod
   for (const [name, child] of orderedChildren(node)) {
     if (name === 'sdt') {
       out.push(...unwrapContentControls(getChildren(child, 'sdtContent')[0]))
-    } else if (name === 'sdtContent') {
+    } else if (name === 'sdtContent' || name === 'ins' || name === 'moveTo') {
       out.push(...unwrapContentControls(child))
     } else {
       out.push([name, child])
@@ -1495,10 +1504,18 @@ export async function parseDocx(pkg: OfficePackage): Promise<DocxDocument> {
     const matched = drawingCoverage.filter(entry => coverageIssueMatchesEntry(issue, entry))
     if (matched.length) {
       for (const entry of matched) {
-        if (issue.kind === 'missing-part' || issue.kind === 'malformed-part') entry.status = 'malformed'
-        else if (['external-reference', 'unsupported-content', 'content-cycle', 'content-depth', 'group-depth', 'node-budget'].includes(issue.kind)) entry.status = 'unsupported'
-        entry.reason = issue.reason ?? issue.message
-        entry.limit = issue.limit
+        // A text fallback never downgrades an authoritative earlier failure:
+        // keep a malformed/unsupported status and its specific reason (e.g. a
+        // missing cached drawing part) while still reporting text-only below.
+        const fallbackKeepsPriorFailure =
+          issue.reason === 'cacheless-smartart-text-fallback' &&
+          (entry.status === 'malformed' || entry.status === 'unsupported')
+        if (!fallbackKeepsPriorFailure) {
+          if (issue.kind === 'missing-part' || issue.kind === 'malformed-part') entry.status = 'malformed'
+          else if (['external-reference', 'unsupported-content', 'content-cycle', 'content-depth', 'group-depth', 'node-budget'].includes(issue.kind)) entry.status = 'unsupported'
+          entry.reason = issue.reason ?? issue.message
+          entry.limit = issue.limit
+        }
         // A text-only entry already reports rendered fallback text (its reason
         // names the fallback); resetting it to none would un-report content
         // the entry proves is retained.

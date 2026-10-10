@@ -11,7 +11,7 @@ import { sniffImageMime } from '../core/images'
 import { findSvgBlip, looksLikeSvg, scanSelfContainedSvg, svgCandidate, svgStateCandidate, type ImageSelection, type SvgCandidate, type SvgVerdict } from '../core/svg'
 import { emuToPx } from '../core/geometry'
 import { parseGeometry, resolveGeometry } from '../drawing/geometry'
-import { parseDrawingColor, parseFillDefinition, parseThemeContext, resolveDrawingColor, resolveDrawingStyle, resolveFill, type DrawingColor, type DrawingIssue, type ThemeContext } from '../drawing/style'
+import { parseDrawingColor, parseFillDefinition, parseGroupShapeProperties, parseThemeContext, resolveDrawingColor, resolveDrawingStyle, resolveFill, type DrawingColor, type DrawingIssue, type DrawingStyle, type ThemeContext } from '../drawing/style'
 
 import { parseTextBody, textFontDefaults, type InheritedTextLayer } from './text-parse'
 
@@ -111,7 +111,7 @@ interface SlideTextInheritance {
   layers(type: string, idx: number, placeholder: boolean): InheritedTextLayer[]
 }
 
-interface PptxImageContext { external: Set<string>; selections: Map<string, ImageSelection> }
+interface PptxImageContext { external: Set<string>; selections: Map<string, ImageSelection>; background?: string }
 /** Share one selection record per candidate pair so aliases and coverage agree. */
 function selectionFor(context: PptxImageContext | undefined, key: string): ImageSelection {
   const map = context?.selections
@@ -121,14 +121,20 @@ function selectionFor(context: PptxImageContext | undefined, key: string): Image
   return selection
 }
 
-function parseShape(sp: XmlNode, slideImages: Map<string, PptxImageRef>, theme: ThemeContext, source: PptxSource, textDefaults?: XmlNode, inheritance?: SlideTextInheritance, imageContext?: PptxImageContext): PptxShape | undefined {
+function parseShape(sp: XmlNode, slideImages: Map<string, PptxImageRef>, theme: ThemeContext, source: PptxSource, textDefaults?: XmlNode, inheritance?: SlideTextInheritance, imageContext?: PptxImageContext, groupStyle?: Partial<DrawingStyle>): PptxShape | undefined {
   const spPr = getChildren(sp, 'spPr')[0]
   if (!spPr) return undefined
   const xfrm = getChildren(spPr, 'xfrm')[0]
   const drawingGeometry = parseGeometry(spPr)
   const prst = drawingGeometry.preset
   const drawingStyle = resolveDrawingStyle(spPr, getChildren(sp, 'style')[0], theme,
-    source.element === 'cxnSp' ? { fill: { kind: 'none' } } : {})
+    source.element === 'cxnSp' ? { ...groupStyle, fill: { kind: 'none' } } : groupStyle)
+  // useBgFill is an attribute of p:sp, independent of the group's fill.
+  // Backgrounds currently resolve to a slide/layout/master solid color.
+  if (['1', 'true'].includes(attrs(sp).useBgFill)) {
+    const hex = imageContext?.background?.replace(/^#/, '') ?? 'FFFFFF'
+    drawingStyle.fill = { kind: 'solid', color: { r: parseInt(hex.slice(0, 2), 16), g: parseInt(hex.slice(2, 4), 16), b: parseInt(hex.slice(4, 6), 16), a: 1 } }
+  }
   const shape: PptxShape = {
     ...parseTransform(xfrm),
     geometry: prst === 'ellipse' ? 'ellipse' : prst === 'roundRect' ? 'roundRect' : prst === 'rect' ? 'rect' : 'other',
@@ -437,7 +443,7 @@ function tableColor(node: XmlNode | undefined, theme: Map<string, string>): stri
 function tableBorders(tcStyle: XmlNode | undefined, theme: Map<string, string>): PptxTableBorders {
   const out: PptxTableBorders = {}
   const borders = getChildren(tcStyle, 'tcBdr')[0]
-  for (const side of ['left', 'right', 'top', 'bottom', 'insideH', 'insideV'] as const) {
+  for (const side of ['left', 'right', 'top', 'bottom', 'insideH', 'insideV', 'tl2br', 'tr2bl', 'tlToBr', 'blToTr'] as const) {
     const line = getChildren(getChildren(borders, side)[0], 'ln')[0]
     const color = tableColor(getChildren(line, 'solidFill')[0], theme)
     if (color) out[side] = { color, widthEmu: num(attrs(line).w as string, 12700) }
@@ -555,7 +561,14 @@ function parseGraphicFrame(frame: XmlNode, tableStyles: Map<string, TableStyleEn
       if (tcPr) {
         cell.drawingFill = resolveFill(parseFillDefinition(tcPr, issues), theme, undefined, issues)
         if (cell.drawingFill?.kind === 'solid') cell.fill = cssColor(cell.drawingFill.color)
-        for (const [name, side] of [['lnL', 'left'], ['lnR', 'right'], ['lnT', 'top'], ['lnB', 'bottom']] as const) {
+        for (const [name, side] of [
+          ['lnL', 'left'],
+          ['lnR', 'right'],
+          ['lnT', 'top'],
+          ['lnB', 'bottom'],
+          ['lnTlToBr', 'tlToBr'],
+          ['lnBlToTr', 'blToTr'],
+        ] as const) {
           const borderNode = getChildren(tcPr, name)[0]
           if (!borderNode) continue
           const border = resolveDrawingStyle({ ln: borderNode }, undefined, theme)
@@ -758,6 +771,7 @@ function parseShapeTree(
   pkg: OfficePackage, contents: Map<XmlNode, DrawingContent<PptxParagraph, PptxTextBody>>, parent: XmlNode | undefined, partPath: string, slideImages: Map<string, PptxImageRef>, theme: ThemeContext,
   tableStyles: Map<string, TableStyleEntry>, diagnostics: PptxDiagnostic[], compatibility: DrawingCompatibility, treePath = 'spTree',
   representation?: Omit<Representation, 'node'>, depth = 0, textDefaults?: XmlNode, groupDepth = 0, inheritance?: SlideTextInheritance, imageContext?: PptxImageContext,
+  groupStyle?: Partial<DrawingStyle>,
 ): PptxShape[] {
   const shapes: PptxShape[] = []
   if (depth >= MAX_DRAWING_DEPTH) {
@@ -770,7 +784,7 @@ function parseShapeTree(
       const selected = compatibility.selectRepresentation(original)
       if (selected) {
         const { node, ...selection } = selected
-        const selectedShapes = parseShapeTree(pkg, contents, node, partPath, slideImages, theme, tableStyles, diagnostics, compatibility, `${path}/${selected.representation}`, selection, depth + 1, textDefaults, groupDepth, inheritance, imageContext)
+        const selectedShapes = parseShapeTree(pkg, contents, node, partPath, slideImages, theme, tableStyles, diagnostics, compatibility, `${path}/${selected.representation}`, selection, depth + 1, textDefaults, groupDepth, inheritance, imageContext, groupStyle)
         if (selected.representation === 'fallback') retainChoiceText(getChildren(original, 'Choice')[0], selectedShapes)
         if (!selectedShapes.length) diagnostics.push({ kind: 'missing-representation', message: 'Selected AlternateContent representation contains no usable drawing', feature: selected.feature, source: sourceOf(original, name, partPath, path, selection) })
         shapes.push(...selectedShapes)
@@ -789,13 +803,18 @@ function parseShapeTree(
     if (representation?.representation === 'fallback') shapeIssues.push({ kind: 'fallback-representation', message: representation.reason!, feature: representation.feature, source })
     let shape: PptxShape | undefined
     if (name === 'grpSp') {
-      const xfrm = getChildren(getChildren(original, 'grpSpPr')[0], 'xfrm')[0]
+      const grpSpPr = getChildren(original, 'grpSpPr')[0]
+      const currentGroupStyle = parseGroupShapeProperties(grpSpPr, theme, groupStyle)
+      const xfrm = getChildren(grpSpPr, 'xfrm')[0]
       const transform = parseTransform(xfrm)
       const ca = attrs(getChildren(xfrm, 'chOff')[0]), ce = attrs(getChildren(xfrm, 'chExt')[0])
       const validChildren = [ca.x, ca.y, ce.cx, ce.cy].every(value => value !== undefined && value.trim() !== '' && Number.isFinite(Number(value))) && num(ce.cx) > 0 && num(ce.cy) > 0
       shape = { ...transform, geometry: 'other', source, transformValid: transform.transformValid && validChildren,
+        drawingStyle: currentGroupStyle,
+        fill: currentGroupStyle.fill?.kind === 'solid' ? cssColor(currentGroupStyle.fill.color) : undefined,
+        line: currentGroupStyle.line?.fill?.kind === 'solid' ? { color: cssColor(currentGroupStyle.line.fill.color), widthEmu: (currentGroupStyle.line.width ?? 1) * 9525 } : undefined,
         group: { off: { x: transform.xEmu, y: transform.yEmu }, ext: { width: transform.widthEmu, height: transform.heightEmu }, chOff: { x: num(ca.x), y: num(ca.y) }, chExt: { width: num(ce.cx), height: num(ce.cy) } },
-        children: parseShapeTree(pkg, contents, original, partPath, slideImages, theme, tableStyles, diagnostics, compatibility, path, representation, depth + 1, textDefaults, groupDepth + 1, inheritance, imageContext), diagnostics: [],
+        children: parseShapeTree(pkg, contents, original, partPath, slideImages, theme, tableStyles, diagnostics, compatibility, path, representation, depth + 1, textDefaults, groupDepth + 1, inheritance, imageContext, currentGroupStyle), diagnostics: [],
       }
     } else {
       const node = selectNestedAlternates(original, source, shapeIssues, compatibility)
@@ -804,7 +823,7 @@ function parseShapeTree(
       if (content && (name === 'graphicFrame' || name === 'contentPart')) {
         reserveDrawingContent(pkg, content, partPath, false)
         shape = { ...parseTransform(getChildren(node, 'xfrm')[0]), geometry: 'other', content }
-      } else shape = name === 'graphicFrame' ? parseGraphicFrame(node, tableStyles, theme, textDefaults) : parseShape(node, slideImages, theme, source, textDefaults, inheritance, imageContext)
+      } else shape = name === 'graphicFrame' ? parseGraphicFrame(node, tableStyles, theme, textDefaults) : parseShape(node, slideImages, theme, source, textDefaults, inheritance, imageContext, groupStyle)
     }
     if (!shape) {
       diagnostics.push({ kind: 'unsupported-object', message: `No static renderer for ${name}`, feature: compatibility.unsupportedFeature(original) ?? name, source })
@@ -863,6 +882,7 @@ export async function parsePptx(pkg: OfficePackage): Promise<PptxDocument> {
     const tableStyles = await readTableStyles(pkg, theme.palette)
     const slide: PptxSlide = { index: i, widthEmu: doc.slideWidthEmu, heightEmu: doc.slideHeightEmu, shapes: [], theme: theme.context, diagnostics: [] }
     slide.background = await slideBackground(pkg, path, slideRoot, theme.context)
+    imageContext.background = slide.background
     const spTree = getChildren(getChildren(slideRoot, 'cSld')[0], 'spTree')[0]
     const contents = new Map<XmlNode, DrawingContent<PptxParagraph, PptxTextBody>>()
     const compatibility = new DrawingCompatibility(contents)

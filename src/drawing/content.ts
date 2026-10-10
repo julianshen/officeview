@@ -2,18 +2,19 @@
 import { attrs, getChildren, parseXmlOrdered, textOf, type XmlNode } from '../core/xml'
 import { emuToPx } from '../core/geometry'
 import type { GeometryDefinition, GeometryIssue } from './geometry'
-import type { DrawingStyle, ThemeContext } from './style'
+import type { DrawingColor, DrawingStyle, ThemeContext } from './style'
 import type { SceneGroupTransform } from './scene'
 import type { OfficePackage } from '../core/zip'
 import { parseGeometry, resolveGeometry } from './geometry'
 import { supportedChoiceRequirements } from './coverage'
-import { resolveDrawingStyle } from './style'
-import { parseTextBody, textFontDefaults } from './text-parse'
+import { parseGroupShapeProperties, resolveDrawingStyle } from './style'
+import { parseTextBody, textFontDefaults, parseAutofitNode } from './text-parse'
+import { isVmlTrue } from './vml'
 import { resolveTextFamily } from './text-layout'
 import { CONTENT_REFERENCE_DEPTH, DRAWING_GROUP_DEPTH, DOCUMENT_DRAWING_NODE_LIMIT, contentDescendants as descendants, contentDiagnostic, drawingPartContext, partRelationships, referencedPart, reserveDrawingNode, type ContentDiagnostic } from './parts'
 import { orderedChildren } from '../core/xml'
-import type { TextDirection, TextWarp, TextWarpPreset } from './text'
-import { SUPPORTED_TEXT_WARP_PRESETS, DEFAULT_WARP_ADJUSTMENTS } from './text'
+import type { TextDirection, TextWarp, TextWarpPreset, DrawingTextAutofit } from './text'
+import { SUPPORTED_TEXT_WARP_PRESETS, DEFAULT_WARP_ADJUSTMENTS, parseAdjustGuides, parseTextPlainAdjustment } from './text'
 export interface ContentTextRun { text: string; fontFamily?: string; fontSizePt?: number; color?: string; bold?: boolean; italic?: boolean }
 export type ContentParagraphAlign = 'left' | 'center' | 'right' | 'justify'
 export interface ContentParagraph { runs: ContentTextRun[]; align: ContentParagraphAlign }
@@ -29,6 +30,8 @@ export interface ContentPaintAssets {
   imageFor?: (image: ContentImageAsset) => CanvasImageSource | undefined
   /** Optional explicit fallback chain/region, threaded into adapter resolvers. */
   fallbackFonts?: import('../core/fonts/fallback').FallbackFontsOptions
+  /** Optional embedded font resolver for mapping families to registered aliases. */
+  resolveFont?: import('../core/fonts/register').FontResolver
 }
 const num = (v: string | undefined, fallback = 0): number => v !== undefined && Number.isFinite(Number(v)) ? Number(v) : fallback
 const child = (n: XmlNode | undefined, name: string) => getChildren(n, name)[0]
@@ -75,6 +78,7 @@ export interface DrawingContentShape<Text = never> {
   widthEmu: number
   heightEmu: number
   geometry: string
+  image?: ContentImageAsset
   /** Cached DrawingML outline; absent on handwritten legacy drawing models. */
   drawingGeometry?: GeometryDefinition
   drawingStyle?: DrawingStyle
@@ -124,9 +128,12 @@ export type DrawingContent<Paragraph = ContentParagraph, Text = never> =
       fontFamily: string
       fontSizePt: number
       insets: { left: number; top: number; right: number; bottom: number }
+      anchor?: 't' | 'ctr' | 'b'
+      wrap?: boolean
       fill?: string
       line?: { color: string; widthEmu: number }
       textWarp?: TextWarp
+      autofit?: DrawingTextAutofit
       diagnostics?: Array<{ kind: 'unsupported-text-alignment' | 'unsupported-text-appearance' | 'unsupported-text-warp'; feature: string; message: string }>
     }
 
@@ -171,17 +178,23 @@ function color(fill: XmlNode | undefined, theme: ContentTheme): string | undefin
     .toUpperCase()
 }
 
-function shape(node: XmlNode, theme: ContentTheme, drawingTheme: ThemeContext): DrawingContentShape {
+function hexDrawingColor(color: DrawingColor): string {
+  const hex = (n: number) => Math.round(n * 255).toString(16).padStart(2, '0').toUpperCase()
+  return `${hex(color.r)}${hex(color.g)}${hex(color.b)}`
+}
+
+function shape(node: XmlNode, theme: ContentTheme, drawingTheme: ThemeContext, groupStyle?: Partial<DrawingStyle>, name?: string): DrawingContentShape {
   const pr = child(node, 'spPr'),
     transform = child(pr, 'xfrm')
   const offset = attrs(child(transform, 'off')),
     extent = attrs(child(transform, 'ext'))
   const ln = child(pr, 'ln'),
     lineColor = color(child(ln, 'solidFill'), theme)
+  const txAttrs = attrs(transform)
   const textColor = color(child(child(node, 'style'), 'fontRef'), theme)
   const fontFamily = theme.fonts.get('minorHAnsi') ?? 'Calibri'
   const drawingGeometry = parseGeometry(pr)
-  const drawingStyle = resolveDrawingStyle(pr, child(node, 'style'), drawingTheme)
+  const drawingStyle = resolveDrawingStyle(pr, child(node, 'style'), drawingTheme, name === 'cxnSp' ? { ...groupStyle, fill: { kind: 'none' } } : groupStyle)
   const geometryIssues = resolveGeometry(drawingGeometry, emuToPx(num(extent.cx)), emuToPx(num(extent.cy))).issues
   const textBody = child(node, 'txBody')
   const parsedText = textBody ? parseTextBody(textBody, drawingTheme, undefined, textFontDefaults(child(node, 'style'), drawingTheme)) : undefined
@@ -205,9 +218,15 @@ function shape(node: XmlNode, theme: ContentTheme, drawingTheme: ThemeContext): 
     drawingGeometry,
     drawingStyle,
     geometryIssues,
-    rotationDeg: num(attrs(transform).rot) / 60000,
-    fill: color(child(pr, 'solidFill'), theme),
-    line: lineColor ? { color: lineColor, widthEmu: num(attrs(ln).w, 12700) } : undefined,
+    rotationDeg: num(txAttrs.rot) / 60000,
+    flipH: isVmlTrue(txAttrs.flipH),
+    flipV: isVmlTrue(txAttrs.flipV),
+    fill: color(child(pr, 'solidFill'), theme) ?? (drawingStyle.fill?.kind === 'solid' ? hexDrawingColor(drawingStyle.fill.color) : undefined),
+    line: lineColor
+      ? { color: lineColor, widthEmu: num(attrs(ln).w, 12700) }
+      : (drawingStyle.line?.fill?.kind === 'solid'
+          ? { color: hexDrawingColor(drawingStyle.line.fill.color), widthEmu: (drawingStyle.line.width ?? 1) * 9525 }
+          : undefined),
     textBody: parsedText as unknown as any,
     paragraphs,
     fontFamily,
@@ -354,18 +373,25 @@ const deferredDiagrams = new WeakMap<object, { materializeSelected: () => boolea
 const SOURCE_PROBE_LIMIT = DOCUMENT_DRAWING_NODE_LIMIT * 2
 const cachedGroupIdentity = (group: XmlNode): string | undefined => attrs(child(child(group, 'nvGrpSpPr'), 'cNvPr')).id || attrs(group).id
 /** Raw source capability check: no styles, text models, or cached shapes built. */
-function inspectCachedTree(tree: XmlNode): { supported: boolean; sawPicture: boolean; pictureId?: string; invalidGroup: boolean; limitReached: boolean; overDepthGroup?: XmlNode } {
-  const result: { supported: boolean; sawPicture: boolean; pictureId?: string; invalidGroup: boolean; limitReached: boolean; overDepthGroup?: XmlNode } = { supported: false, sawPicture: false, invalidGroup: false, limitReached: false }
+function inspectCachedTree(tree: XmlNode): { supported: boolean; sawPicture: boolean; pictureIds: string[]; invalidGroup: boolean; limitReached: boolean; overDepthGroup?: XmlNode } {
+  const result: { supported: boolean; sawPicture: boolean; pictureIds: string[]; invalidGroup: boolean; limitReached: boolean; overDepthGroup?: XmlNode } = { supported: false, sawPicture: false, pictureIds: [], invalidGroup: false, limitReached: false }
   const pending: Array<{ name: string; node: XmlNode; groupDepth: number }> = [{ name: 'spTree', node: tree, groupDepth: 0 }]
   let inspected = 0
   while (pending.length && inspected < SOURCE_PROBE_LIMIT) {
     const { name, node, groupDepth } = pending.pop()!
     if (name !== 'spTree') {
       inspected++
-      if (name === 'sp' || name === 'cxnSp') { result.supported = true; return result }
+      if (name === 'sp' || name === 'cxnSp') { result.supported = true; continue }
+      if (name === 'graphicFrame') {
+        const tbl = child(child(child(node, 'graphic'), 'graphicData'), 'tbl')
+        if (tbl) result.supported = true
+        continue
+      }
       if (name === 'pic') {
         result.sawPicture = true
-        result.pictureId ??= attrs(child(child(node, 'blipFill'), 'blip')).embed
+        const blip = child(child(node, 'blipFill'), 'blip')
+        const picId = attrs(blip).embed ?? attrs(blip).link
+        if (picId) result.pictureIds.push(picId)
         continue
       }
       if (groupDepth >= DRAWING_GROUP_DEPTH) {
@@ -383,7 +409,7 @@ function inspectCachedTree(tree: XmlNode): { supported: boolean; sawPicture: boo
     const children = orderedChildren(node)
     for (let i = children.length - 1; i >= 0; i--) {
       const [childName, sourceNode] = children[i]
-      if (['sp', 'cxnSp', 'grpSp', 'pic'].includes(childName)) pending.push({ name: childName, node: sourceNode, groupDepth: name === 'grpSp' ? groupDepth + 1 : groupDepth })
+      if (['sp', 'cxnSp', 'grpSp', 'pic', 'graphicFrame'].includes(childName)) pending.push({ name: childName, node: sourceNode, groupDepth: name === 'grpSp' ? groupDepth + 1 : groupDepth })
     }
   }
   result.limitReached = pending.length > 0
@@ -494,30 +520,56 @@ export async function prepareDrawingContent<Paragraph = ContentParagraph, Text =
     if (tree) {
       const capability = inspectCachedTree(tree)
       if (!capability.supported) {
+        let hasValidPicture = false
         if (capability.sawPicture) {
-          if (capability.pictureId) {
-            const rel = (await partRelationships(pkg, path)).get(capability.pictureId)
-            if (rel?.external) contentDiagnostic(context, 'external-reference', path, capability.pictureId, { identity: capability.pictureId, reason: 'external-relationship' })
-            else if (!rel?.path || !pkg.has(rel.path)) contentDiagnostic(context, 'missing-part', path, capability.pictureId, { identity: capability.pictureId, reason: rel?.path ? 'part-not-found' : 'relationship-not-found' })
+          const rels = await partRelationships(pkg, path)
+          for (const picId of capability.pictureIds) {
+            const rel = rels.get(picId)
+            if (rel?.external) {
+              contentDiagnostic(context, 'external-reference', path, picId, { identity: picId, reason: 'external-relationship' })
+            } else if (!rel?.path || !pkg.has(rel.path)) {
+              contentDiagnostic(context, 'missing-part', path, picId, { identity: picId, reason: rel?.path ? 'part-not-found' : 'relationship-not-found' })
+            } else {
+              hasValidPicture = true
+            }
           }
-          contentDiagnostic(context, 'unsupported-content', path, 'pic', { reason: 'cached-picture-unsupported' })
+          if (!hasValidPicture) {
+            contentDiagnostic(context, 'unsupported-content', path, 'pic', { reason: 'cached-picture-unsupported' })
+          }
         }
-        if (capability.invalidGroup) contentDiagnostic(context, 'unsupported-content', path, 'invalid-group-transform')
-        if (capability.overDepthGroup) contentDiagnostic(context, 'group-depth', path, undefined, { identity: cachedGroupIdentity(capability.overDepthGroup), reason: 'group-depth', limit: DRAWING_GROUP_DEPTH })
-        if (capability.limitReached) contentDiagnostic(context, 'unsupported-content', path, 'source-probe-limit', { reason: 'source-probe-limit', limit: SOURCE_PROBE_LIMIT })
-        contentDiagnostic(context, 'unsupported-content', path, 'empty-diagram', { reason: 'no-supported-shapes' })
-        return undefined
+        if (!hasValidPicture) {
+          if (capability.invalidGroup) contentDiagnostic(context, 'unsupported-content', path, 'invalid-group-transform')
+          if (capability.overDepthGroup) contentDiagnostic(context, 'group-depth', path, undefined, { identity: cachedGroupIdentity(capability.overDepthGroup), reason: 'group-depth', limit: DRAWING_GROUP_DEPTH })
+          if (capability.limitReached) contentDiagnostic(context, 'unsupported-content', path, 'source-probe-limit', { reason: 'source-probe-limit', limit: SOURCE_PROBE_LIMIT })
+          contentDiagnostic(context, 'unsupported-content', path, 'empty-diagram', { reason: 'no-supported-shapes' })
+          return undefined
+        }
       }
-      const pictureRels = await partRelationships(pkg, path)
+      const pictureRels = capability.sawPicture ? await partRelationships(pkg, path) : new Map()
+      const pictureBytes = new Map<string, Uint8Array>()
+      if (capability.sawPicture) {
+        // Preload only picture ids actually referenced by the cached tree,
+        // not every relationship of the part (which may point at large
+        // non-image payloads).
+        for (const picId of capability.pictureIds) {
+          if (pictureBytes.has(picId)) continue
+          const rel = pictureRels.get(picId)
+          if (!rel || rel.external || !rel.path || !pkg.has(rel.path)) continue
+          try {
+            const bytes = await pkg.bytes(rel.path)
+            if (bytes) pictureBytes.set(picId, bytes)
+          } catch {}
+        }
+      }
       let shapes: DrawingContentShape<Text>[] | undefined
       const content: Extract<DrawingContent<Paragraph, Text>, { kind: 'diagram' }> = { kind: 'diagram', shapes: [] }
       Object.defineProperty(content, 'shapes', {
         enumerable: true,
-        get: () => shapes ?? (shapes = diagramShapes(tree, path, pictureRels, false)),
+        get: () => shapes ?? (shapes = diagramShapes(tree, path, pictureRels, pictureBytes, false)),
         set: (value: DrawingContentShape<Text>[]) => { shapes = value },
       })
       deferredDiagrams.set(content, { materializeSelected: () => {
-        shapes = diagramShapes(tree, path, pictureRels, true)
+        shapes = diagramShapes(tree, path, pictureRels, pictureBytes, true)
         return true
       } })
       return content
@@ -593,14 +645,17 @@ export async function prepareDrawingContent<Paragraph = ContentParagraph, Text =
   }
   const diagramShapes = (
     tree: XmlNode, part: string,
-    pictureRels: Map<string, { path?: string; external: boolean; type?: string }>, selected: boolean,
+    pictureRels: Map<string, { path?: string; external: boolean; type?: string }>,
+    pictureBytes: Map<string, Uint8Array>,
+    selected: boolean,
     groupDepth = 0,
     state = { nodes: 0, exhausted: false, pictureReported: false, missingPictures: new Set<string>() },
+    groupStyle?: Partial<DrawingStyle>,
   ): DrawingContentShape<Text>[] => {
     const out: DrawingContentShape<Text>[] = []
     for (const [name, node] of orderedChildren(tree)) {
       if (state.exhausted) break
-      if (!['sp', 'cxnSp', 'grpSp', 'pic'].includes(name)) continue
+      if (!['sp', 'cxnSp', 'grpSp', 'pic', 'graphicFrame'].includes(name)) continue
       if (selected) {
         if (!reserveDrawingNode(context, part)) { state.exhausted = true; break }
       } else if (++state.nodes > DOCUMENT_DRAWING_NODE_LIMIT) {
@@ -610,34 +665,187 @@ export async function prepareDrawingContent<Paragraph = ContentParagraph, Text =
       }
       if (name === 'pic') {
         const image = child(child(node, 'blipFill'), 'blip')
-        const id = attrs(image).embed
-        if (id && !state.missingPictures.has(id) && state.missingPictures.size < 64) {
+        const id = attrs(image).embed ?? attrs(image).link
+        let imgData: Uint8Array | undefined
+        if (id) {
           const rel = pictureRels.get(id)
-          if (rel?.external) contentDiagnostic(context, 'external-reference', part, id, { identity: id, reason: 'external-relationship' })
-          else if (!rel?.path || !pkg.has(rel.path)) contentDiagnostic(context, 'missing-part', part, id, { identity: id, reason: rel?.path ? 'part-not-found' : 'relationship-not-found' })
-          state.missingPictures.add(id)
+          // Dedupe repeated ids and bound the tracking set so a hostile tree
+          // with many distinct dangling references cannot grow it without limit.
+          if (rel?.external) {
+            if (!state.missingPictures.has(id) && state.missingPictures.size < 64) {
+              contentDiagnostic(context, 'external-reference', part, id, { identity: id, reason: 'external-relationship' })
+              state.missingPictures.add(id)
+            }
+          } else if (!rel?.path || !pkg.has(rel.path)) {
+            if (!state.missingPictures.has(id) && state.missingPictures.size < 64) {
+              contentDiagnostic(context, 'missing-part', part, id, { identity: id, reason: rel?.path ? 'part-not-found' : 'relationship-not-found' })
+              state.missingPictures.add(id)
+            }
+          } else {
+            imgData = pictureBytes.get(id)
+          }
         }
-        if (!state.pictureReported) {
-          contentDiagnostic(context, 'unsupported-content', part, 'pic', { reason: 'cached-picture-unsupported' })
-          state.pictureReported = true
+        if (!imgData) {
+          if (!state.pictureReported) {
+            contentDiagnostic(context, 'unsupported-content', part, 'pic', { reason: 'cached-picture-unsupported' })
+            state.pictureReported = true
+          }
+          continue
         }
+        const pr = child(node, 'spPr')
+        const transform = child(pr, 'xfrm')
+        const txAttrs = attrs(transform)
+        const offset = attrs(child(transform, 'off'))
+        const extent = attrs(child(transform, 'ext'))
+        const drawingGeometry = parseGeometry(pr)
+        out.push({
+          xEmu: num(offset.x),
+          yEmu: num(offset.y),
+          widthEmu: num(extent.cx),
+          heightEmu: num(extent.cy),
+          geometry: drawingGeometry.preset ?? 'rect',
+          rotationDeg: num(txAttrs.rot) / 60000,
+          flipH: isVmlTrue(txAttrs.flipH),
+          flipV: isVmlTrue(txAttrs.flipV),
+          image: { data: imgData },
+          paragraphs: [],
+          fontFamily: '',
+        })
+        continue
+      }
+      if (name === 'graphicFrame') {
+        const transform = child(node, 'xfrm')
+        const frameOffset = attrs(child(transform, 'off'))
+        const frameExtent = attrs(child(transform, 'ext'))
+        const frameX = num(frameOffset.x)
+        const frameY = num(frameOffset.y)
+        const frameW = num(frameExtent.cx)
+        const frameH = num(frameExtent.cy)
+
+        const graphic = child(node, 'graphic')
+        const graphicData = child(graphic, 'graphicData')
+        const tbl = child(graphicData, 'tbl')
+        if (tbl) {
+          const tblGrid = child(tbl, 'tblGrid')
+          const cols = getChildren(tblGrid, 'gridCol').map(c => num(attrs(c).w))
+          const trs = getChildren(tbl, 'tr')
+          const rowHeights = trs.map(tr => num(attrs(tr).h))
+          let currentY = frameY
+          for (let r = 0; r < trs.length; r++) {
+            if (state.exhausted) break
+            const tr = trs[r]
+            const defaultRowH = (rowHeights[r] && rowHeights[r] > 0) ? rowHeights[r] : (trs.length > 0 ? frameH / trs.length : 0)
+            let currentX = frameX
+            let colIdx = 0
+            const tcs = getChildren(tr, 'tc')
+            // Standard DrawingML rows retain merged-away physical cells;
+            // compact producer rows omit those placeholders.
+            const physicalColumns = tcs.length === cols.length
+            for (const [cellIndex, tc] of tcs.entries()) {
+              if (selected) {
+                if (!reserveDrawingNode(context, part)) { state.exhausted = true; break }
+              } else if (++state.nodes > DOCUMENT_DRAWING_NODE_LIMIT) {
+                contentDiagnostic(context, 'node-budget', part, undefined, { reason: 'source-node-limit', limit: DOCUMENT_DRAWING_NODE_LIMIT })
+                state.exhausted = true
+                break
+              }
+              if (isVmlTrue(attrs(tc).hMerge) || isVmlTrue(attrs(tc).vMerge)) {
+                currentX += cols[colIdx] ?? (tcs.length > 0 ? frameW / tcs.length : 0)
+                colIdx++
+                continue
+              }
+              const boundedSpan = (feature: 'gridSpan' | 'rowSpan', remaining: number): number => {
+                const raw = attrs(tc)[feature]
+                const span = raw === undefined ? 1 : Number(raw)
+                if (!Number.isInteger(span) || span < 1 || span > remaining) {
+                  contentDiagnostic(context, 'malformed-part', part, feature, {
+                    identity: raw, reason: 'invalid-table-span', limit: remaining,
+                  })
+                  // Preserve malformed cell text as one slot, without
+                  // expanding beyond the actual table grid or row list.
+                  return Math.min(1, remaining)
+                }
+                return span
+              }
+              let gridSpan = boundedSpan('gridSpan', Math.max(0, (cols.length || tcs.length) - colIdx))
+              if (physicalColumns && gridSpan > 1 && !tcs.slice(cellIndex + 1, cellIndex + gridSpan).every(covered => isVmlTrue(attrs(covered).hMerge))) {
+                contentDiagnostic(context, 'malformed-part', part, 'gridSpan', { reason: 'missing-merge-placeholder' })
+                // Contradictory physical rows retain each cell in its own
+                // column rather than painting a span over later text.
+                gridSpan = 1
+              }
+              const rowSpan = boundedSpan('rowSpan', trs.length - r)
+              if (gridSpan === 0) continue
+              let cellW = 0
+              for (let s = 0; s < gridSpan; s++) {
+                cellW += (cols.length > 0 ? cols[colIdx + s] : undefined) ?? (tcs.length > 0 ? frameW / tcs.length : 0)
+              }
+              let cellH = 0
+              for (let s = 0; s < rowSpan; s++) {
+                const rIdx = r + s
+                cellH += (rowHeights[rIdx] && rowHeights[rIdx] > 0) ? rowHeights[rIdx] : defaultRowH
+              }
+              const tcPr = child(tc, 'tcPr')
+              const cellFill = color(child(tcPr, 'solidFill'), theme)
+              const ln = child(tcPr, 'lnL') ?? child(tcPr, 'lnT') ?? child(tcPr, 'lnB') ?? child(tcPr, 'lnR') ?? child(tcPr, 'ln')
+              const cellLineColor = ln ? color(child(ln, 'solidFill'), theme) : undefined
+              const txBody = child(tc, 'txBody')
+              const parsedText = txBody ? parseTextBody(txBody, drawingTheme, undefined, textFontDefaults(undefined, drawingTheme)) : undefined
+              const fontFamily = theme.fonts.get('minorHAnsi') ?? 'Calibri'
+              const paragraphs = parsedText?.paragraphs.map((p) => ({
+                align: p.align,
+                runs: p.runs.map((run) => ({
+                  text: run.text,
+                  fontFamily: theme.fonts.get(run.fontFamily ?? '') ?? resolveTextFamily(run, drawingTheme) ?? fontFamily,
+                  fontSizePt: run.fontSizePt ?? 12,
+                  color: run.color?.replace(/^#/, ''),
+                  bold: run.bold,
+                  italic: run.italic,
+                }))
+              })) ?? []
+              const cellShape: DrawingContentShape<Text> = {
+                xEmu: currentX,
+                yEmu: currentY,
+                widthEmu: cellW,
+                heightEmu: cellH,
+                geometry: 'rect',
+                fill: cellFill,
+                drawingStyle: tcPr ? resolveDrawingStyle(tcPr, undefined, drawingTheme) : undefined,
+                line: cellLineColor ? { color: cellLineColor, widthEmu: num(attrs(ln).w, 12700) } : undefined,
+                paragraphs,
+                fontFamily,
+                textBody: parsedText as unknown as any,
+              }
+              if (txBody && adapters.parseDiagramText) cellShape.textBody = adapters.parseDiagramText(txBody, tc)
+              out.push(cellShape)
+              currentX += physicalColumns ? cols[colIdx] : cellW
+              colIdx += physicalColumns ? 1 : gridSpan
+            }
+            currentY += defaultRowH
+          }
+          continue
+        }
+        contentDiagnostic(context, 'unsupported-content', part, attrs(graphicData).uri || 'graphicFrame')
         continue
       }
       if (name === 'grpSp') {
         if (groupDepth >= DRAWING_GROUP_DEPTH) { contentDiagnostic(context, 'group-depth', part, undefined, { identity: cachedGroupIdentity(node), reason: 'group-depth', limit: DRAWING_GROUP_DEPTH }); continue }
-        const transform = child(child(node, 'grpSpPr'), 'xfrm'), a = attrs(transform)
+        const grpSpPr = child(node, 'grpSpPr')
+        const currentGroupStyle = parseGroupShapeProperties(grpSpPr, drawingTheme, groupStyle)
+        const transform = child(grpSpPr, 'xfrm'), a = attrs(transform)
         const off = attrs(child(transform, 'off')), ext = attrs(child(transform, 'ext'))
         const chOff = attrs(child(transform, 'chOff')), chExt = attrs(child(transform, 'chExt'))
         if (![off.x, off.y, ext.cx, ext.cy, chOff.x, chOff.y, chExt.cx, chExt.cy].every(v => v !== undefined && v.trim() !== '' && Number.isFinite(Number(v))) || num(chExt.cx) <= 0 || num(chExt.cy) <= 0) {
           contentDiagnostic(context, 'unsupported-content', part, 'invalid-group-transform'); continue
         }
         out.push({ xEmu: num(off.x), yEmu: num(off.y), widthEmu: num(ext.cx), heightEmu: num(ext.cy), geometry: 'group', paragraphs: [], fontFamily: '',
-          rotationDeg: num(a.rot) / 60000, flipH: a.flipH === '1' || a.flipH === 'true', flipV: a.flipV === '1' || a.flipV === 'true',
+          rotationDeg: num(a.rot) / 60000, flipH: isVmlTrue(a.flipH), flipV: isVmlTrue(a.flipV),
+          drawingStyle: currentGroupStyle,
           group: { off: { x: num(off.x), y: num(off.y) }, ext: { width: num(ext.cx), height: num(ext.cy) }, chOff: { x: num(chOff.x), y: num(chOff.y) }, chExt: { width: num(chExt.cx), height: num(chExt.cy) } },
-          children: diagramShapes(node, part, pictureRels, selected, groupDepth + 1, state),
+          children: diagramShapes(node, part, pictureRels, pictureBytes, selected, groupDepth + 1, state, currentGroupStyle),
         })
       } else {
-        const model = shape(node, theme, drawingTheme) as DrawingContentShape<Text>
+        const model = shape(node, theme, drawingTheme, groupStyle, name) as DrawingContentShape<Text>
         const txBody = child(node, 'txBody')
         if (txBody && adapters.parseDiagramText) model.textBody = adapters.parseDiagramText(txBody, node)
         out.push(model)
@@ -669,20 +877,22 @@ export async function prepareDrawingContent<Paragraph = ContentParagraph, Text =
       if (prstWarpNode) {
         const warpPrst = attrs(prstWarpNode).prst as TextWarpPreset | undefined
         if (warpPrst) {
-          if (warpPrst === 'textNoShape' || warpPrst === 'textPlain') {
+          if (warpPrst === 'textNoShape') {
             // Handled as unwarped standard text
+          } else if (warpPrst === 'textPlain') {
+            const nonDefaultAdj = parseTextPlainAdjustment(prstWarpNode)
+            if (nonDefaultAdj !== undefined) {
+              diagnostics.push({
+                kind: 'unsupported-text-warp',
+                feature: 'textPlain',
+                message: `WordArt warp preset textPlain with nondefault adjustment ${nonDefaultAdj} is unsupported; using unwarped text`,
+              })
+            }
           } else if (SUPPORTED_TEXT_WARP_PRESETS.has(warpPrst)) {
             const avLst = child(prstWarpNode, 'avLst')
-            const adjustments: Record<string, number> = { ...(DEFAULT_WARP_ADJUSTMENTS[warpPrst] ?? {}) }
-            if (avLst) {
-              for (const gd of getChildren(avLst, 'gd')) {
-                const ga = attrs(gd)
-                if (ga.name && ga.fmla) {
-                  const rawVal = ga.fmla.startsWith('val ') ? ga.fmla.slice(4).trim() : ga.fmla.trim()
-                  const valNum = Number(rawVal)
-                  if (Number.isFinite(valNum)) adjustments[ga.name] = valNum
-                }
-              }
+            const adjustments: Record<string, number> = {
+              ...(DEFAULT_WARP_ADJUSTMENTS[warpPrst] ?? {}),
+              ...parseAdjustGuides(avLst),
             }
             textWarp = {
               preset: warpPrst,
@@ -710,6 +920,20 @@ export async function prepareDrawingContent<Paragraph = ContentParagraph, Text =
         }
       }
 
+      const rawAnchor = body.anchor?.trim().toLowerCase()
+      let anchor: 't' | 'ctr' | 'b' | undefined
+      if (rawAnchor === 'ctr' || rawAnchor === 'b' || rawAnchor === 't') {
+        anchor = rawAnchor
+      } else if (rawAnchor === 'just' || rawAnchor === 'dist') {
+        diagnostics.push({
+          kind: 'unsupported-text-alignment',
+          feature: `anchor-${rawAnchor}`,
+          message: `Vertical text anchoring ${rawAnchor} is deferred; using top anchoring`,
+        })
+      }
+      const wrap = body.wrap?.trim().toLowerCase() === 'none' ? false : true
+      const autofit = parseAutofitNode(bodyNode)
+
       return {
         kind: 'textbox',
         paragraphs,
@@ -718,9 +942,12 @@ export async function prepareDrawingContent<Paragraph = ContentParagraph, Text =
         fontFamily: theme.fonts.get('minorHAnsi') ?? 'Calibri',
         fontSizePt: 12,
         insets: { left: num(body.lIns, 91440), top: num(body.tIns, 45720), right: num(body.rIns, 91440), bottom: num(body.bIns, 45720) },
+        ...(anchor ? { anchor } : {}),
+        wrap,
         fill: color(child(pr, 'solidFill'), theme),
         line: lineColor ? { color: lineColor, widthEmu: num(attrs(ln).w, 6350) } : undefined,
         ...(textWarp ? { textWarp } : {}),
+        ...(autofit ? { autofit } : {}),
         ...(diagnostics.length ? { diagnostics } : {}),
       }
     }

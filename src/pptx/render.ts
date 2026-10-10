@@ -1,4 +1,5 @@
 import { paintDrawingContent } from '../drawing/content-paint'
+import type { ContentPaintAssets } from '../drawing/content'
 import type { FontResolver } from '../core/fonts/register'
 /**
  * PPTX rendering: paint slides onto a canvas 2D context. 1 unit = 1 px;
@@ -35,6 +36,7 @@ export function renderSlide(
   images?: Array<CanvasImageSource | undefined>,
   watermark?: WatermarkOptions | ResolvedWatermark,
   resolveFont: FontResolver = family => family,
+  contentAssets?: ContentPaintAssets,
 ): void {
   ctx.save()
   try {
@@ -56,12 +58,16 @@ export function renderSlide(
       images, missingImage,
       paintContent(shape, context, w, h) {
         if (shape.content) paintDrawingContent(shape.content, context, w, h, {
+          assets: contentAssets,
           fontFamilyCss: family => JSON.stringify(resolveFont(family)),
           paintDiagramText(node, c, width, height) { if (node.textBody) paintTextBody(node.textBody, c, 0, 0, width, height, resolveFont, slide.theme) },
           paintTextbox(drawing, c, width, height) {
-            paintTextBody({ paragraphs: drawing.paragraphs, anchor: 't', wrap: true,
+            paintTextBody({ paragraphs: drawing.paragraphs, anchor: drawing.anchor ?? 't', wrap: drawing.wrap ?? true,
               insetLeftEmu: drawing.insets.left, insetRightEmu: drawing.insets.right,
               insetTopEmu: drawing.insets.top, insetBottomEmu: drawing.insets.bottom,
+              direction: drawing.direction,
+              textWarp: drawing.textWarp,
+              autofit: drawing.autofit,
             }, c, 0, 0, width, height, resolveFont, slide.theme)
           },
         })
@@ -166,6 +172,28 @@ function paintTable(
         ctx.fillStyle = resolveColor(fill)
         ctx.fillRect(cx, cy, cw, ch)
       }
+      const headerBorders = table.firstRow && ri === 0 ? table.firstRowBorders : undefined
+      const tableBorderDiag = headerBorders?.tlToBr ?? headerBorders?.tl2br ?? table.styleBorders?.tlToBr ?? table.styleBorders?.tl2br
+      const paintDiag = (
+        direct: DrawingLine | undefined,
+        styleBorder: { color: string; widthEmu?: number } | undefined,
+        x1: number, y1: number, x2: number, y2: number,
+      ): void => {
+        const hexSource = styleBorder?.color ?? ''
+        const hex = /^#([0-9a-f]{6})$/i.exec(hexSource)?.[1]
+        const fallbackFill: DrawingFill = { kind: 'solid', color: hex ? { r: parseInt(hex.slice(0, 2), 16), g: parseInt(hex.slice(2, 4), 16), b: parseInt(hex.slice(4), 16), a: 1 } : { r: 0, g: 0, b: 0, a: .35 } }
+        if (direct) {
+          const line: DrawingLine = { ...direct, width: direct.width ?? (styleBorder ? emuToPx(styleBorder.widthEmu ?? 12700) : 1), fill: direct.fill ?? fallbackFill }
+          paintGeometry(ctx, [{ fill: 'none', stroke: true, commands: [['moveTo', x1, y1], ['lnTo', x2, y2]] }], { line, issues: [] }, w, h)
+        } else if (styleBorder) {
+          // Style-level diagonal with no direct cell override still paints.
+          const line: DrawingLine = { width: emuToPx(styleBorder.widthEmu ?? 12700), fill: fallbackFill }
+          paintGeometry(ctx, [{ fill: 'none', stroke: true, commands: [['moveTo', x1, y1], ['lnTo', x2, y2]] }], { line, issues: [] }, w, h)
+        }
+      }
+      paintDiag(cell.drawingBorders?.tlToBr, tableBorderDiag, cx, cy, cx + cw, cy + ch)
+      const tableBorderBlTr = headerBorders?.blToTr ?? headerBorders?.tr2bl ?? table.styleBorders?.blToTr ?? table.styleBorders?.tr2bl
+      paintDiag(cell.drawingBorders?.blToTr, tableBorderBlTr, cx, cy + ch, cx + cw, cy)
       if (cell.paragraphs.length > 0) {
         // header rows in a styled table often switch to light text
         const textColor = table.firstRow && ri === 0 ? table.firstRowTextColor : undefined
@@ -208,15 +236,26 @@ function paintTable(
     const owner = owners.get(`${row}:${col}`)
     return owner === undefined ? undefined : ownerCells.get(owner)?.drawingBorders?.[side]
   }
+  const resolveDirectBorder = (a: DrawingLine | undefined, b: DrawingLine | undefined): DrawingLine | undefined => {
+    if (a?.fill?.kind === 'none' || b?.fill?.kind === 'none') {
+      return a?.fill?.kind === 'none' ? a : b
+    }
+    if (!a) return b
+    if (!b) return a
+    const wA = a.width ?? 1
+    const wB = b.width ?? 1
+    if (wA !== wB) return wA > wB ? a : b
+    return a
+  }
   const draw = (side: 'left' | 'right' | 'top' | 'bottom' | 'insideH' | 'insideV',
     row: number, col: number, x1: number, y1: number, x2: number, y2: number) => {
     const headerSide = side === 'insideH' && row === 1 ? 'bottom' : side
     const headerBoundary = row === 0 || (side === 'insideH' && row === 1)
     const border = table.firstRow && headerBoundary ? table.firstRowBorders?.[headerSide] ?? table.styleBorders?.[side]
       : table.styleBorders?.[side]
-    // At a shared boundary the later cell's left/top declaration wins.
-    const direct = side === 'insideV' ? directBorder(row, col, 'left') ?? directBorder(row, col - 1, 'right')
-      : side === 'insideH' ? directBorder(row, col, 'top') ?? directBorder(row - 1, col, 'bottom')
+    // At a shared boundary, resolve conflicting borders: wider border wins.
+    const direct = side === 'insideV' ? resolveDirectBorder(directBorder(row, col - 1, 'right'), directBorder(row, col, 'left'))
+      : side === 'insideH' ? resolveDirectBorder(directBorder(row - 1, col, 'bottom'), directBorder(row, col, 'top'))
       : directBorder(side === 'bottom' ? row - 1 : row, side === 'right' ? col - 1 : col, side)
     if (direct) {
       const hex = /^#([0-9a-f]{6})$/i.exec(border?.color ?? '')?.[1]

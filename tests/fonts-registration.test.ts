@@ -3,10 +3,11 @@ import { afterEach, describe, expect, test, vi } from 'vitest'
 import { createCanvas } from 'canvas'
 import { getPaintables } from '../src/render/paint'
 import type { PptxDocument } from '../src/pptx/types'
+import type { FontVariant } from '../src/core/fonts/types'
 import type { FontRegistrationRequest, RegisterFont } from '../src/core/fonts/register'
 const bytes = new Uint8Array(readFileSync('tests/fixtures/fonts/Liter-Regular.ttf'))
 function doc(): PptxDocument {
- return { slideWidthEmu: 9144000, slideHeightEmu: 6858000, images: [], embeddedFonts: ['regular', 'bold', 'italic', 'boldItalic'].map(variant => ({ family: 'Liter', variant: variant as 'regular', partPath: `font/${variant}`, relationshipId: variant, bytes })), slides: [{ index: 0, widthEmu: 9144000, heightEmu: 6858000, shapes: [{ xEmu: 0, yEmu: 0, widthEmu: 5000000, heightEmu: 2000000, geometry: 'rect', textBody: { anchor: 't', insetLeftEmu: 0, insetRightEmu: 0, insetTopEmu: 0, insetBottomEmu: 0, wrap: true, paragraphs: [{ align: 'left', level: 0, runs: [{ text: 'Guide for NATS', fontFamily: 'Liter', bold: true, fontSizePt: 54 }] }] } }] }] }
+ return { slideWidthEmu: 9144000, slideHeightEmu: 6858000, images: [], embeddedFonts: ['regular', 'bold', 'italic', 'boldItalic'].map(variant => ({ family: 'Liter', variant: variant as FontVariant, partPath: `font/${variant}`, relationshipId: variant, bytes })), slides: [{ index: 0, widthEmu: 9144000, heightEmu: 6858000, shapes: [{ xEmu: 0, yEmu: 0, widthEmu: 5000000, heightEmu: 2000000, geometry: 'rect', textBody: { anchor: 't', insetLeftEmu: 0, insetRightEmu: 0, insetTopEmu: 0, insetBottomEmu: 0, wrap: true, paragraphs: [{ align: 'left', level: 0, runs: [{ text: 'Guide for NATS', fontFamily: 'Liter', bold: true, fontSizePt: 54 }] }] } }] }] }
 }
 function deferred() { let resolve!: () => void; const promise = new Promise<void>(r => { resolve = r }); return { promise, resolve } }
 afterEach(() => { vi.restoreAllMocks(); vi.unstubAllGlobals() })

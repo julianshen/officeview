@@ -316,6 +316,7 @@ export function pptxCoverage(slide: PptxSlide, spTree: XmlNode | undefined, part
   const visibleFill = (fill: DrawingFill | undefined, width: number, height: number): boolean => {
     if (!fill || fill.kind === 'none') return false
     if (fill.kind === 'solid') return [fill.color.r, fill.color.g, fill.color.b, fill.color.a].every(Number.isFinite) && fill.color.a > 0
+    if (fill.kind === 'pattern') return [fill.fgColor.r, fill.fgColor.g, fill.fgColor.b, fill.fgColor.a, fill.bgColor.r, fill.bgColor.g, fill.bgColor.b, fill.bgColor.a].every(Number.isFinite) && (fill.fgColor.a > 0 || fill.bgColor.a > 0)
     if (fill.gradient === 'circle' && (width <= 0 || height <= 0)) return false
     const dx = Math.cos(fill.angle) * (fill.scaled ? height : 1)
     const dy = Math.sin(fill.angle) * (fill.scaled ? width : 1)
@@ -497,9 +498,17 @@ export function pptxCoverage(slide: PptxSlide, spTree: XmlNode | undefined, part
       : entry.partPath === content.partPath && (entry.referenceId === content.identity || entry.id === content.identity || entry.treePath === content.identity)) : []
     if (associated.length && ['missing-part', 'malformed-part', 'external-reference', 'content-cycle', 'group-depth', 'content-depth', 'node-budget', 'unsupported-content'].includes(issue.kind)) {
       for (const affected of associated) {
-        affected.status = issue.kind === 'missing-part' || issue.kind === 'malformed-part' ? 'malformed' : 'unsupported'
-        affected.reason = content.reason ?? issue.message
-        affected.limit = content.limit
+        // A text fallback never downgrades an authoritative earlier failure:
+        // keep a malformed/unsupported status and its specific reason (e.g. a
+        // missing cached drawing part) while still reporting text-only below.
+        const fallbackKeepsPriorFailure =
+          (content.reason ?? '') === 'cacheless-smartart-text-fallback' &&
+          (affected.status === 'malformed' || affected.status === 'unsupported')
+        if (!fallbackKeepsPriorFailure) {
+          affected.status = issue.kind === 'missing-part' || issue.kind === 'malformed-part' ? 'malformed' : 'unsupported'
+          affected.reason = content.reason ?? issue.message
+          affected.limit = content.limit
+        }
         if (!allShapes.some(shape => shape.source?.treePath === affected.treePath && (shape.content || shape.image || shape.table || shape.textBody)) &&
           !retainedGeometryAt(affected)) affected.selectedRepresentation = 'none'
         if (affected.scope === 'original' && (issue.kind === 'missing-part' || issue.kind === 'malformed-part')) {

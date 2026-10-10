@@ -48,7 +48,7 @@ async function png(color: string): Promise<Buffer> {
 
 interface NestedFixture {
   doc: Awaited<ReturnType<typeof parseDocx>>
-  keyOf: (img: DocxImage) => string
+  keyOf: (img: Pick<DocxImage, 'data'>) => string
 }
 
 async function nestedFixture(): Promise<NestedFixture> {
@@ -92,7 +92,7 @@ async function nestedFixture(): Promise<NestedFixture> {
   zip.file('word/_rels/header1.xml.rels', rels(imgRel('imgH', 'media/h.png')))
   zip.file('word/media/h.png', gray)
   const doc = await parseDocx(await OfficePackage.load(await zip.generateAsync({ type: 'uint8array' })))
-  const keyOf = (img: DocxImage): string => {
+  const keyOf = (img: Pick<DocxImage, 'data'>): string => {
     for (const [id, buffer] of Object.entries(buffers)) if (img.data.length === buffer.length && img.data.every((b, i) => b === buffer[i])) return id === 'imgD' || id === 'imgE' ? 'shared' : id
     return img.data.length === 0 ? 'vector' : 'unknown'
   }

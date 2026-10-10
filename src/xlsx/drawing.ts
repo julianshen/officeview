@@ -7,7 +7,7 @@ import { parseGeometry } from '../drawing/geometry'
 import { coverageIssueMatchesEntry, supportedChoiceRequirements, xlsxNodeCoverage } from '../drawing/coverage'
 import { attemptedMalformedRelationshipIssue, malformedRelationshipAttempt, prepareCompatibleDrawingContent, prepareDrawingContent, reserveDrawingContent } from '../drawing/content'
 import { contentDiagnostic, drawingPartContext, DOCUMENT_DRAWING_NODE_LIMIT, DRAWING_GROUP_DEPTH, partRelationships, referencedPart, reserveDrawingNode } from '../drawing/parts'
-import { resolveDrawingStyle, type ThemeContext } from '../drawing/style'
+import { parseGroupShapeProperties, resolveDrawingStyle, type DrawingStyle, type ThemeContext } from '../drawing/style'
 import { parseTextBody, textFontDefaults } from '../drawing/text-parse'
 import { parseVmlContainer, type VmlNode } from '../drawing/vml'
 import type { XlsxDrawing, XlsxImage, XlsxSheet } from './types'
@@ -325,7 +325,7 @@ function source(owner: string, path: string, name: string, node: XmlNode, repres
   return { partPath: owner, treePath: path, element: name, id: a.id ?? (name === 'contentPart' ? attrs(node).id : undefined), name: a.name, representation }
 }
 
-async function parseObject(pkg: OfficePackage, owner: string, name: string, node: XmlNode, theme: ThemeContext, path: string, depth: number, representation: 'native' | 'choice' | 'fallback' = 'native', parentCarrier?: XmlNode, anchorTopLevel = false, selections: Map<string, ImageSelection> = new Map()): Promise<XlsxDrawing | undefined> {
+async function parseObject(pkg: OfficePackage, owner: string, name: string, node: XmlNode, theme: ThemeContext, path: string, depth: number, representation: 'native' | 'choice' | 'fallback' = 'native', parentCarrier?: XmlNode, anchorTopLevel = false, selections: Map<string, ImageSelection> = new Map(), groupStyle?: Partial<DrawingStyle>): Promise<XlsxDrawing | undefined> {
   const context = drawingPartContext(pkg)
   if (name === 'grpSp' && depth >= DRAWING_GROUP_DEPTH) {
     contentDiagnostic(context, 'group-depth', owner, path, { identity: attrs(child(child(node, 'nvGrpSpPr'), 'cNvPr')).id, reason: 'group-depth', limit: DRAWING_GROUP_DEPTH })
@@ -340,14 +340,16 @@ async function parseObject(pkg: OfficePackage, owner: string, name: string, node
   if (anchorTopLevel && !localTransform && (name === 'sp' || name === 'cxnSp' || name === 'pic')) t.transformValid = true
   const result: XlsxDrawing = { ...t, source: source(owner, path, name, node, representation) }
   if (name === 'grpSp') {
+    const currentGroupStyle = parseGroupShapeProperties(spPr, theme, groupStyle)
+    result.drawingStyle = currentGroupStyle
     const xfrm = child(spPr, 'xfrm'), ca = attrs(child(xfrm, 'chOff')), ce = attrs(child(xfrm, 'chExt'))
     const cx = finite(ca.x), cy = finite(ca.y), cw = finite(ce.cx), ch = finite(ce.cy)
     if (cx === undefined || cy === undefined || cw === undefined || ch === undefined || cw <= 0 || ch <= 0) { result.transformValid = false; return result }
     result.group = { off: { x: t.xEmu, y: t.yEmu }, ext: { width: t.widthEmu, height: t.heightEmu }, chOff: { x: cx, y: cy }, chExt: { width: cw, height: ch } }
-    result.children = await parseObjects(pkg, owner, node, theme, path, depth + 1, representation, parentCarrier, false, selections)
+    result.children = await parseObjects(pkg, owner, node, theme, path, depth + 1, representation, parentCarrier, false, selections, currentGroupStyle)
   } else if (name === 'sp' || name === 'cxnSp') {
     result.drawingGeometry = parseGeometry(spPr)
-    result.drawingStyle = resolveDrawingStyle(spPr, child(node, 'style'), theme, name === 'cxnSp' ? { fill: { kind: 'none' } } : {})
+    result.drawingStyle = resolveDrawingStyle(spPr, child(node, 'style'), theme, name === 'cxnSp' ? { ...groupStyle, fill: { kind: 'none' } } : groupStyle)
     const body = child(node, 'txBody')
     if (body) result.textBody = parseTextBody(body, theme, undefined, textFontDefaults(child(node, 'style'), theme))
     await imageFor(pkg, owner, node, result, selections)
@@ -372,7 +374,7 @@ async function parseObject(pkg: OfficePackage, owner: string, name: string, node
         result.content = prepared
       }
       else if (t.widthEmu > 0 && t.heightEmu > 0) {
-        const native = await parseObjects(pkg, owner, node, theme, `${path}/native`, depth, 'native', undefined, false, selections)
+        const native = await parseObjects(pkg, owner, node, theme, `${path}/native`, depth, 'native', undefined, false, selections, groupStyle)
         if (native.length) {
           result.group = { off: { x: t.xEmu, y: t.yEmu }, ext: { width: t.widthEmu, height: t.heightEmu }, chOff: { x: 0, y: 0 }, chExt: { width: t.widthEmu, height: t.heightEmu } }
           result.children = native
@@ -383,7 +385,7 @@ async function parseObject(pkg: OfficePackage, owner: string, name: string, node
   return result
 }
 
-async function parseObjects(pkg: OfficePackage, owner: string, container: XmlNode, theme: ThemeContext, path: string, depth = 0, representation: 'native' | 'choice' | 'fallback' = 'native', carrier?: XmlNode, anchorTopLevel = false, selections: Map<string, ImageSelection> = new Map()): Promise<XlsxDrawing[]> {
+async function parseObjects(pkg: OfficePackage, owner: string, container: XmlNode, theme: ThemeContext, path: string, depth = 0, representation: 'native' | 'choice' | 'fallback' = 'native', carrier?: XmlNode, anchorTopLevel = false, selections: Map<string, ImageSelection> = new Map(), groupStyle?: Partial<DrawingStyle>): Promise<XlsxDrawing[]> {
   const out: XlsxDrawing[] = []
   let index = 0
   for (const [name, node] of orderedChildren(container)) {
@@ -392,11 +394,11 @@ async function parseObjects(pkg: OfficePackage, owner: string, container: XmlNod
     const treePath = `${path}/${name}[${index++}]`
     if (name === 'AlternateContent') {
       const selected = await selectedAlternative(pkg, owner, node, theme, 0, carrier)
-      if (selected) out.push(...await parseObjects(pkg, owner, selected.branch, theme, treePath, depth, selected.mode, carrier, anchorTopLevel, selections))
+      if (selected) out.push(...await parseObjects(pkg, owner, selected.branch, theme, treePath, depth, selected.mode, carrier, anchorTopLevel, selections, groupStyle))
     } else if (name === 'graphic' || name === 'graphicData') {
-      out.push(...await parseObjects(pkg, owner, node, theme, treePath, depth, representation, name === 'graphicData' ? node : carrier, anchorTopLevel, selections))
+      out.push(...await parseObjects(pkg, owner, node, theme, treePath, depth, representation, name === 'graphicData' ? node : carrier, anchorTopLevel, selections, groupStyle))
     } else if (['sp', 'cxnSp', 'pic', 'grpSp', 'graphicFrame', 'contentPart'].includes(name)) {
-      const drawing = await parseObject(pkg, owner, name, node, theme, treePath, depth, representation, carrier, anchorTopLevel, selections)
+      const drawing = await parseObject(pkg, owner, name, node, theme, treePath, depth, representation, carrier, anchorTopLevel, selections, groupStyle)
       if (drawing) out.push(drawing)
     }
   }
