@@ -608,6 +608,21 @@ describe('round three source ownership regressions', () => {
     expect(result.kind).toBe('complete')
     if (result.kind === 'complete') expect(result.ledger.retainedBytes).toBe(0)
   })
+  it('refuses a present legacy visibility key instead of silently sorting unpinned', async () => {
+    const store = dataStore([[fixtureCell(3)], [fixtureCell(1)], [fixtureCell(2)]])
+    const legacy = { ...quiet, visibility: createRowVisibility(3, slot => slot !== 1) } as unknown as SortOptions
+    for (const run of [prepareSortKeys, sortRowOrder]) {
+      expect(await run(store, specFor(3), legacy)).toMatchObject({
+        kind: 'error', error: { code: 'unsupported', retryable: false },
+      })
+    }
+    expect('order' in await sortRowOrder(store, specFor(3), legacy)).toBe(false)
+  })
+  it('ignores an explicitly undefined legacy visibility key', async () => {
+    const store = dataStore([[fixtureCell(2)], [fixtureCell(1)]])
+    const options = { ...quiet, visibility: undefined } as unknown as SortOptions
+    expect(rowsOf(await sortRowOrder(store, specFor(2), options))).toEqual([1, 0])
+  })
   it('unknown source throws are nonretryable page failures', async () => {
     const store = dataStore([[fixtureCell(1)]])
     for (const error of [new Error('disk failed'), new RangeError('decoder bounds')]) {

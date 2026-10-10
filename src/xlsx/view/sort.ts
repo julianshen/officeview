@@ -101,6 +101,15 @@ class Halt extends Error {
 }
 const sourceError = (code: SourceFailure['code'], message: string): Halt =>
   new Halt({ kind: 'error', error: { code, message, retryable: false } })
+/** The forbidden DISPLAY-space `visibility` key is a type error, but casts and
+ * plain-JS callers bypass types: a present key would otherwise be silently
+ * ignored and the sort would run unpinned. Refuse it as an unsupported option
+ * instead. An explicitly undefined key carries no mask and stays harmless. */
+function rejectLegacyVisibility(options: SortOptions): void {
+  if ((options as { visibility?: unknown }).visibility !== undefined) {
+    throw sourceError('unsupported', 'Sort options.visibility was replaced by hidden: translate the current view with hiddenSourceRowsFromDisplay')
+  }
+}
 function snapshotSpec(spec: SortSpec): SortSpec {
   validateSourceRect(spec.range)
   if (![0, 1].includes(spec.range.headerRows) || ![0, 1].includes(spec.range.totalsRows)
@@ -500,6 +509,7 @@ export async function prepareSortKeys(
   let cooperative: Cooperative | undefined
   try {
     options = Object.freeze({ ...options })
+    rejectLegacyVisibility(options)
     const stamp = Object.freeze({ ...(options.stamp ?? store.stamp) }), spec = snapshotSpec(input)
     const budget = new Budget(options)
     cooperative = new Cooperative(store, stamp, options)
@@ -555,6 +565,7 @@ export async function sortRowOrder(store: SourceStore, input: SortSpec | null, o
   let cooperative: Cooperative | undefined
   try {
     options = Object.freeze({ ...options })
+    rejectLegacyVisibility(options)
     const stamp = Object.freeze({ ...(options.stamp ?? store.stamp) })
     const spec = input === null ? null : snapshotSpec(input), locale = options.locale ?? 'en'
     const budget = new Budget(options)
