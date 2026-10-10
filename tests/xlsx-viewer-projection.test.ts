@@ -440,3 +440,73 @@ describe('typed projection construction errors (review item 4)', () => {
     expect(codeOf(() => createSheetMetrics({ rows: huge, cols }))).toBe('TOTAL_NOT_FINITE')
   })
 })
+
+
+describe('final review cleanup: canonical spans and typed query guards', () => {
+  function codeOf(action: () => unknown): string | undefined {
+    try { action() } catch (error) {
+      expect(error).toBeInstanceOf(AxisMetricsError)
+      expect(error).toBeInstanceOf(RangeError)
+      return (error as AxisMetricsError).code
+    }
+    return undefined
+  }
+  it('reports INVALID_METADATA for projection construction validation', () => {
+    const rows = createAxisMetrics({ logicalCount: 3, defaultSizeCss: 1 })
+    const cols = createAxisMetrics({ logicalCount: 1, defaultSizeCss: 64 })
+    const identity = createIdentityOrder()
+    const valid = { r0: 0, r1: 2, sourceAtOffset: new Uint32Array([0, 1, 2]), displayOffsetOfSource: new Uint32Array([0, 1, 2]) }
+    const builds = [
+      () => createSheetMetrics({ rows, cols: { ...cols, logicalCount: MAX_COLS + 1 } }),
+      () => createSheetMetrics({ rows: { ...rows, defaultSizeCss: NaN }, cols }),
+      () => createSheetMetrics({ rows: { ...rows, overrides: [{ start: 2, end: 1, sizeCss: 1 }] }, cols }),
+      () => createSheetMetrics({ rows, cols, visibility: createRowVisibility(2) }),
+      () => createSheetMetrics({ rows, cols, visibility: { visible: () => true, select: () => 0, next: () => null, rank: () => 1 } }),
+      () => createSheetMetrics({ rows, cols, order: { ...identity, bands: [valid] } }),
+      () => createSheetMetrics({ rows, cols, order: { ...identity, kind: 'bands', bands: [{ ...valid, sourceAtOffset: new Uint32Array([0]) }] } }),
+      () => createSheetMetrics({ rows, cols, order: { ...identity, kind: 'bands', bands: [{ ...valid, sourceAtOffset: new Uint32Array([0, 0, 2]) }] } }),
+    ]
+    for (const build of builds) expect(codeOf(build)).toBe('INVALID_METADATA')
+  })
+  it('coalesces 20k equal adjacent fragments before transient source-segment allocation', () => {
+    const count = 20_000
+    const rows: AxisMetrics = {
+      logicalCount: count, defaultSizeCss: 1,
+      overrides: Array.from({ length: count }, (_, index) => ({ start: index, end: index, sizeCss: 2 })),
+      totalCss: () => count * 2, start: index => index * 2, size: () => 2,
+      locate: css => css < 0 || css >= count * 2 ? null : Math.floor(css / 2),
+      visibleBetween: () => ({ runs: [], count: 0 }),
+    }
+    const cols = createAxisMetrics({ logicalCount: 1, defaultSizeCss: 64 })
+    let allocatedSegments = 0
+    const originalPush = Array.prototype.push
+    // Install directly: a mocking framework uses push to record its own calls.
+    Array.prototype.push = function(this: unknown[], ...items: unknown[]): number {
+      for (const item of items) {
+        if (item && typeof item === 'object' && Object.keys(item).join(',') === 'start,end,sizeCss') allocatedSegments++
+      }
+      return originalPush.apply(this, items)
+    }
+    let sheet: ReturnType<typeof createSheetMetrics>
+    try { sheet = createSheetMetrics({ rows, cols }) } finally { Array.prototype.push = originalPush }
+    expect(sheet.diagnostics.sectionCount).toBe(1)
+    expect(allocatedSegments).toBeLessThanOrEqual(2) // One canonical row segment + one column segment.
+    expect(sheet.rows.totalCss()).toBe(count * 2)
+    expect(sheet.rows.size(count - 1)).toBe(2)
+  })
+  it('reports INVALID_QUERY for every projection query guard', () => {
+    const sheet = createSheetMetrics({ rows: createAxisMetrics({ logicalCount: 3, defaultSizeCss: 1 }), cols: createAxisMetrics({ logicalCount: 2, defaultSizeCss: 64 }) })
+    const queries = [
+      () => sheet.rows.start(4), () => sheet.rows.size(3), () => sheet.rows.locate(Infinity),
+      () => sheet.rows.visibleBetween(2, 1), () => sheet.rows.visibleBetween(NaN, 2),
+      () => sheet.rows.visiblePageBetween(0, Infinity), () => sheet.rows.continueVisibleBetween(0, 2, 'bad'),
+      () => sheet.sourceCellToLogical({ row: -1, col: 0 }), () => sheet.sourceCellToLogical({ row: 0, col: MAX_COLS }),
+      () => sheet.logicalPointToSource(NaN, 0), () => sheet.logicalPointToSource(0, Infinity),
+      () => sheet.displayToVisibleRank(-1), () => sheet.visibleRankToDisplay(NaN),
+      () => sheet.sourceToVisibleRank(3), () => sheet.visibleRankToSource(-1),
+    ]
+    for (const query of queries) expect(codeOf(query)).toBe('INVALID_QUERY')
+    expect(sheet.logicalPointToSource(-1, 0)).toBeNull()
+    expect(sheet.visibleRankToSource(3)).toBeNull()
+  })
+})

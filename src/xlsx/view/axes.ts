@@ -13,14 +13,16 @@ import type { AxisMetrics, AxisRun, AxisSizeInterval, AxisWindow } from './contr
 import { MAX_ROWS } from './coordinates'
 
 /** Stable, machine-readable reasons a caller-supplied axis description is rejected
- * at construction. S2.3/S3 map these to a diagnosed fallback instead of a crash.
+ * at construction or query boundaries. S2.3/S3 map metadata failures to a
+ * diagnosed fallback; query misuse is a caller error.
  * - CONTRADICTORY_OVERRIDES: overlapping overrides with different sizes
  * - PRECISION_EXCEEDED: a positive cell cannot be told from its neighbour in Float64
  * - TOTAL_NOT_FINITE: the axis total overflows Float64
  * - INVALID_METADATA: counts, sizes or intervals outside the axis domain
+ * - INVALID_QUERY: invalid query indexes, CSS bounds or continuation cursors
  * Extends RangeError so existing `instanceof RangeError` handling keeps working. */
 export type AxisMetricsErrorCode =
-  | 'CONTRADICTORY_OVERRIDES' | 'PRECISION_EXCEEDED' | 'TOTAL_NOT_FINITE' | 'INVALID_METADATA'
+  | 'CONTRADICTORY_OVERRIDES' | 'PRECISION_EXCEEDED' | 'TOTAL_NOT_FINITE' | 'INVALID_METADATA' | 'INVALID_QUERY'
 export class AxisMetricsError extends RangeError {
   readonly code: AxisMetricsErrorCode
   constructor(code: AxisMetricsErrorCode, message: string) {
@@ -53,7 +55,7 @@ export interface SparseAxisMetrics extends AxisMetrics {
 
 function validateInteger(value: number, min: number, max: number): void {
   if (!Number.isSafeInteger(value) || Object.is(value, -0) || value < min || value > max) {
-    throw new RangeError('Axis index or count is outside the domain')
+    throw new AxisMetricsError('INVALID_QUERY', 'Axis index or count is outside the domain')
   }
 }
 function metadataInteger(value: number, min: number, max: number): void {
@@ -177,7 +179,7 @@ export function createAxisMetrics(options: AxisMetricsOptions): SparseAxisMetric
   }
 
   function validateCss(value: number): void {
-    if (!Number.isFinite(value)) throw new RangeError('Axis offset must be finite')
+    if (!Number.isFinite(value)) throw new AxisMetricsError('INVALID_QUERY', 'Axis offset must be finite')
   }
 
   function visibleSegmentAt(css: number, trackComparisons = false): number {
@@ -248,7 +250,7 @@ export function createAxisMetrics(options: AxisMetricsOptions): SparseAxisMetric
   function bounds(startCss: number, endCss: number): { lower: number; upper: number } {
     validateCss(startCss)
     validateCss(endCss)
-    if (endCss < startCss) throw new RangeError('Axis window is reversed')
+    if (endCss < startCss) throw new AxisMetricsError('INVALID_QUERY', 'Axis window is reversed')
     return { lower: Math.max(0, startCss), upper: Math.min(total, endCss) }
   }
 
@@ -286,7 +288,7 @@ export function createAxisMetrics(options: AxisMetricsOptions): SparseAxisMetric
         || parts[2] !== String(startCss) || parts[3] !== String(endCss)
         || !Number.isSafeInteger(next) || parts[4] !== String(next)
         || next <= position || next >= visibleSegments.length || prefix[visibleSegments[next]] >= upper) {
-        throw new RangeError('Axis cursor does not belong to this window')
+        throw new AxisMetricsError('INVALID_QUERY', 'Axis cursor does not belong to this window')
       }
       position = next
     }

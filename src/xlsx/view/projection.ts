@@ -1,6 +1,6 @@
 import type { AxisMetrics, AxisRun, AxisSizeInterval, AxisWindow, RowOrder, RowVisibility, SheetMetrics } from './contracts'
-import { MAX_COLS, MAX_ROWS, validateCoordinate, type SourceCell, type SourceRow, type DisplaySlot } from './coordinates'
-import { AxisMetricsError } from './axes'
+import { MAX_COLS, MAX_ROWS, type SourceCell, type SourceRow, type DisplaySlot } from './coordinates'
+import { AxisMetricsError, type AxisMetricsErrorCode } from './axes'
 import { createIdentityOrder } from './order'
 import type { VisibleRank } from './visibility'
 export type { VisibleRank } from './visibility'
@@ -47,17 +47,17 @@ interface Section {
 const WINDOW_WORK_LIMIT = 256
 let nextProjectionId = 0
 
-function integer(value: number, maximum: number): void {
+function integer(value: number, maximum: number, code: AxisMetricsErrorCode = 'INVALID_QUERY'): void {
   if (!Number.isSafeInteger(value) || Object.is(value, -0) || value < 0 || value > maximum) {
-    throw new RangeError('Projection index or count is outside the axis')
+    throw new AxisMetricsError(code, 'Projection index or count is outside the axis')
   }
 }
-function finite(value: number): void {
-  if (!Number.isFinite(value)) throw new RangeError('Projection offset must be finite')
+function finite(value: number, code: AxisMetricsErrorCode = 'INVALID_QUERY'): void {
+  if (!Number.isFinite(value)) throw new AxisMetricsError(code, 'Projection offset must be finite')
 }
 function size(value: number): void {
-  finite(value)
-  if (value < 0) throw new RangeError('Projection dimensions must be nonnegative')
+  finite(value, 'INVALID_METADATA')
+  if (value < 0) throw new AxisMetricsError('INVALID_METADATA', 'Projection dimensions must be nonnegative')
 }
 function floatSpacingAt(value: number): number {
   if (value === 0) return Number.MIN_VALUE
@@ -72,20 +72,25 @@ function validateCellPrecision(origin: number, end: number, height: number): voi
   }
 }
 function sourceSegments(axis: AxisMetrics, maximum: number): SourceSegment[] {
-  integer(axis.logicalCount, maximum)
+  integer(axis.logicalCount, maximum, 'INVALID_METADATA')
   size(axis.defaultSizeCss)
   const segments: SourceSegment[] = []
+  function append(start: number, end: number, sizeCss: number): void {
+    const previous = segments[segments.length - 1]
+    if (previous && previous.end === start && previous.sizeCss === sizeCss) previous.end = end
+    else segments.push({ start, end, sizeCss })
+  }
   let next = 0
   for (const interval of axis.overrides) {
-    integer(interval.start, axis.logicalCount - 1)
-    integer(interval.end, axis.logicalCount - 1)
+    integer(interval.start, axis.logicalCount - 1, 'INVALID_METADATA')
+    integer(interval.end, axis.logicalCount - 1, 'INVALID_METADATA')
     size(interval.sizeCss)
-    if (interval.start < next || interval.end < interval.start) throw new RangeError('Invalid effective axis overrides')
-    if (next < interval.start) segments.push({ start: next, end: interval.start, sizeCss: axis.defaultSizeCss })
-    segments.push({ start: interval.start, end: interval.end + 1, sizeCss: interval.sizeCss })
+    if (interval.start < next || interval.end < interval.start) throw new AxisMetricsError('INVALID_METADATA', 'Invalid effective axis overrides')
+    if (next < interval.start) append(next, interval.start, axis.defaultSizeCss)
+    append(interval.start, interval.end + 1, interval.sizeCss)
     next = interval.end + 1
   }
-  if (next < axis.logicalCount) segments.push({ start: next, end: axis.logicalCount, sizeCss: axis.defaultSizeCss })
+  if (next < axis.logicalCount) append(next, axis.logicalCount, axis.defaultSizeCss)
   return segments
 }
 /** Return the first item whose exclusive end lies beyond the query. */
@@ -99,6 +104,9 @@ function endingAfter<T>(items: readonly T[], query: number, end: (item: T) => nu
   return low
 }
 
+/** Construction rejects invalid caller metadata with AxisMetricsError/INVALID_METADATA.
+ * Caller-owned order buffers, visibility words and axes must not be mutated after
+ * publication; S4 owns their generation lifetimes and replacement (§10.1). */
 export function createSheetMetrics(options: ProjectionOptions): ProjectedSheetMetrics {
   const source = sourceSegments(options.rows, MAX_ROWS)
   sourceSegments(options.cols, MAX_COLS)
@@ -110,26 +118,26 @@ export function createSheetMetrics(options: ProjectionOptions): ProjectedSheetMe
   const maskVisible = (slot: DisplaySlot) => !visibility || visibility.visible(slot)
   // Compact masks expose their extent; the base contract also permits custom rank/select implementations.
   const maskCount = (visibility as (RowVisibility & { logicalCount?: number }) | undefined)?.logicalCount
-  if (maskCount !== undefined && maskCount !== logicalCount) throw new RangeError('Visibility extent differs from row axis')
+  if (maskCount !== undefined && maskCount !== logicalCount) throw new AxisMetricsError('INVALID_METADATA', 'Visibility extent differs from row axis')
   const maskTotal = maskRank(logicalCount)
-  integer(maskTotal, logicalCount)
-  if (maskRank(0) !== 0) throw new RangeError('Invalid visibility rank origin')
+  integer(maskTotal, logicalCount, 'INVALID_METADATA')
+  if (maskRank(0) !== 0) throw new AxisMetricsError('INVALID_METADATA', 'Invalid visibility rank origin')
   let previousEnd = -1
-  if (order.kind !== 'identity' && order.kind !== 'bands') throw new RangeError('Invalid row order kind')
-  if (order.kind === 'identity' && order.bands.length) throw new RangeError('Identity order cannot contain bands')
+  if (order.kind !== 'identity' && order.kind !== 'bands') throw new AxisMetricsError('INVALID_METADATA', 'Invalid row order kind')
+  if (order.kind === 'identity' && order.bands.length) throw new AxisMetricsError('INVALID_METADATA', 'Identity order cannot contain bands')
   for (const band of order.bands) {
-    integer(band.r0, logicalCount - 1)
-    integer(band.r1, logicalCount - 1)
+    integer(band.r0, logicalCount - 1, 'INVALID_METADATA')
+    integer(band.r1, logicalCount - 1, 'INVALID_METADATA')
     const length = band.r1 - band.r0 + 1
     if (length < 1 || band.r0 <= previousEnd || !(band.sourceAtOffset instanceof Uint32Array)
       || !(band.displayOffsetOfSource instanceof Uint32Array)
       || band.sourceAtOffset.length !== length || band.displayOffsetOfSource.length !== length) {
-      throw new RangeError('Invalid projection permutation band')
+      throw new AxisMetricsError('INVALID_METADATA', 'Invalid projection permutation band')
     }
     for (let offset = 0; offset < length; offset++) {
       const row = band.sourceAtOffset[offset]
       if (row < band.r0 || row > band.r1 || band.displayOffsetOfSource[row - band.r0] !== offset) {
-        throw new RangeError('Projection permutation is not bijective')
+        throw new AxisMetricsError('INVALID_METADATA', 'Projection permutation is not bijective')
       }
     }
     previousEnd = band.r1
@@ -335,7 +343,7 @@ export function createSheetMetrics(options: ProjectionOptions): ProjectedSheetMe
   function bounds(startCss: number, endCss: number): { lower: number; upper: number; initial: VisibleRank } {
     finite(startCss)
     finite(endCss)
-    if (endCss < startCss) throw new RangeError('Projection window is reversed')
+    if (endCss < startCss) throw new AxisMetricsError('INVALID_QUERY', 'Projection window is reversed')
     const lower = Math.max(0, startCss), upper = Math.min(total, endCss)
     const initialSlot = lower < upper ? locate(lower) : null
     return { lower, upper, initial: initialSlot === null ? visibleCount : displayToVisibleRank(initialSlot)! }
@@ -360,7 +368,7 @@ export function createSheetMetrics(options: ProjectionOptions): ProjectedSheetMe
         || parts[2] !== String(startCss) || parts[3] !== String(endCss)
         || !Number.isSafeInteger(next) || parts[4] !== String(next) || next <= initial || next >= visibleCount
         || rowStart(visibleRankToDisplay(next)!) >= upper) {
-        throw new RangeError('Projection cursor does not belong to this window')
+        throw new AxisMetricsError('INVALID_QUERY', 'Projection cursor does not belong to this window')
       }
       ordinal = next
     }
@@ -490,7 +498,6 @@ export function createSheetMetrics(options: ProjectionOptions): ProjectedSheetMe
   })
   return Object.freeze({ rows, cols: options.cols, order,
     sourceCellToLogical(at: SourceCell) {
-      validateCoordinate(at.row, at.col)
       integer(at.row, logicalCount - 1)
       integer(at.col, options.cols.logicalCount - 1)
       const slot = order.sourceToDisplay(at.row)

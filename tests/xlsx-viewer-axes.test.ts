@@ -371,8 +371,16 @@ describe('typed construction errors (review item 4)', () => {
     expect(codeOf(() => createAxisMetrics({ logicalCount: 3, defaultSizeCss: 1, collapsed: [{ start: 0, end: 3 }] }))).toBe('INVALID_METADATA')
     expect(codeOf(() => createAxisMetrics({ logicalCount: 3, defaultSizeCss: 1, overrides: [{ start: 0, end: 0, sizeCss: -1 }] }))).toBe('INVALID_METADATA')
   })
-  it('keeps query-time domain errors as plain RangeError', () => {
+  it('reports INVALID_QUERY for every axis query guard, retaining RangeError compatibility', () => {
     const axis = createAxisMetrics({ logicalCount: 3, defaultSizeCss: 1 })
-    try { axis.start(9) } catch (error) { expect(error).not.toBeInstanceOf(AxisMetricsError) }
+    const queries = [
+      () => axis.start(9), () => axis.start(-0), () => axis.size(3),
+      () => axis.locate(NaN), () => axis.visibleBetween(0, Infinity),
+      () => axis.visibleBetween(2, 1), () => axis.visiblePageBetween(NaN, 2),
+      () => axis.continueVisibleBetween(0, 2, 'bad'),
+    ]
+    for (const query of queries) expect(codeOf(query)).toBe('INVALID_QUERY')
+    expect(axis.locate(-1)).toBeNull()
+    expect(axis.visibleBetween(5, 6).count).toBe(0)
   })
 })
