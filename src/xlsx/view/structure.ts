@@ -244,7 +244,10 @@ export interface PopulatedPage {
   nextCursor?: string
 }
 export interface PopulatedCellSource {
-  iterate(range: SourceRect, cursor?: string): Promise<PopulatedPage>
+  /** Pages are source-sized; `limit` caps items per page when the source honors
+   * it (the store does). Cursors are scoped to one range and one limit: a cursor
+   * resumed with a different range or limit is rejected with a RangeError. */
+  iterate(range: SourceRect, cursor?: string, limit?: number): Promise<PopulatedPage>
 }
 export type OutsideColumnAnswer =
   | { kind: 'clear' }
@@ -265,7 +268,7 @@ async function consumeBand(source: PopulatedCellSource, band: SourceRowInterval,
   let cursor: string | undefined
   const seen = new Set<string>()
   for (;;) {
-    const page = await source.iterate(range, cursor)
+    const page = await source.iterate(range, cursor, pageLimit)
     for (const cell of page.items) {
       validateCoordinate(cell.row, cell.col)
       if (cell.row < range.r0 || cell.row > range.r1) throw new RangeError('Populated cell outside the requested band')
@@ -344,6 +347,51 @@ export class RowChunkIndex {
     }
     return { kind: 'clear' }
   }
+}
+/** Streams the two outside-column rects `[0,c0-1]` and `[c1+1,16383]` for one
+ * populated cell, stopping at the first one. Key/range columns are never read,
+ * no per-cell index is retained (O(1) working state), and `pageLimit` is passed
+ * to every source request. A found cell is decisive even on a loading page;
+ * without one, loading pages report `unknown` instead of a fake `clear`. */
+export async function findOutsideColumnData(
+  source: PopulatedCellSource, band: SourceRowInterval, c0: number, c1: number, pageLimit = 4096,
+): Promise<OutsideColumnAnswer> {
+  validateCoordinate(band.r0, 0)
+  validateCoordinate(band.r1, 0)
+  if (band.r0 > band.r1) throw new RangeError('Reversed chunk band')
+  validateCoordinate(0, c0)
+  validateCoordinate(0, c1)
+  if (c0 > c1) throw new RangeError('Reversed outside-column span')
+  if (!Number.isSafeInteger(pageLimit) || pageLimit <= 0) throw new RangeError('Invalid chunk page limit')
+  const rects: SourceRect[] = []
+  if (c0 > 0) rects.push({ r0: band.r0, r1: band.r1, c0: 0, c1: c0 - 1 })
+  if (c1 < MAX_COLS - 1) rects.push({ r0: band.r0, r1: band.r1, c0: c1 + 1, c1: MAX_COLS - 1 })
+  const missing: SourceRect[] = []
+  let complete = true
+  for (const rect of rects) {
+    let cursor: string | undefined
+    const seen = new Set<string>()
+    for (;;) {
+      const page = await source.iterate(rect, cursor, pageLimit)
+      for (const cell of page.items) {
+        validateCoordinate(cell.row, cell.col)
+        if (cell.row < rect.r0 || cell.row > rect.r1 || cell.col < rect.c0 || cell.col > rect.c1) {
+          throw new RangeError('Populated cell outside the requested range')
+        }
+        return { kind: 'occupied', at: { row: cell.row, col: cell.col } }
+      }
+      if (page.completeness !== 'complete') {
+        complete = false
+        for (const miss of page.missing) missing.push(miss)
+      }
+      if (page.nextCursor === undefined) break
+      if (seen.has(page.nextCursor)) throw new RangeError('Populated cursor made no progress')
+      seen.add(page.nextCursor)
+      cursor = page.nextCursor
+    }
+  }
+  if (!complete) return { kind: 'unknown', missing: Object.freeze(missing) }
+  return { kind: 'clear' }
 }
 /** Transposed per-column populated-row intervals for the same band. */
 export class ColumnChunkIndex {
@@ -440,14 +488,16 @@ export function currentRegion(seed: SourceCell, rows: RowChunkIndex, cols: Colum
 export function fromStoreScan(store: SourceStore, options: ReadOptions, pageLimit = 4096): PopulatedCellSource {
   if (!Number.isSafeInteger(pageLimit) || pageLimit <= 0) throw new RangeError('Invalid store scan page limit')
   return {
-    async iterate(range: SourceRect, cursor?: string): Promise<PopulatedPage> {
+    async iterate(range: SourceRect, cursor?: string, limit?: number): Promise<PopulatedPage> {
       validateSourceRect(range)
       if (cursor !== undefined && (typeof cursor !== 'string' || cursor.length === 0)) {
         throw new RangeError('Invalid populated cursor')
       }
+      const effective = limit ?? pageLimit
+      if (!Number.isSafeInteger(effective) || effective <= 0) throw new RangeError('Invalid store scan page limit')
       const request: PopulatedQuery = cursor === undefined
-        ? { range, limit: pageLimit }
-        : { range, limit: pageLimit, cursor }
+        ? { range, limit: effective }
+        : { range, limit: effective, cursor }
       for await (const page of store.scanPopulated(request, options)) {
         if (page.error !== undefined) throw new RangeError(`Populated scan failed: ${page.error.code}`)
         const items = Object.freeze(page.items.map((cell: AuthoritativeCell) => ({ row: cell.row, col: cell.col })))

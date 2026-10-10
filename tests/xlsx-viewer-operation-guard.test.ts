@@ -149,6 +149,45 @@ describe('guardSort structural refusals', () => {
     const { handle, index } = await f5Setup()
     expect(await guardSort(band(60, 65, 0, 1), index, fixtureSource(handle))).toEqual({ ok: true })
   })
+  it('queries only outside columns, never the key columns', async () => {
+    const requested: SourceRect[] = []
+    const source: PopulatedCellSource = {
+      async iterate(range: SourceRect): Promise<PopulatedPage> {
+        requested.push({ ...range })
+        const items = range.r0 === 0 && range.c0 <= 100 && 100 <= range.c1 ? [{ row: 0, col: 100 }] : []
+        return { items, completeness: 'complete', missing: [] }
+      },
+    }
+    const empty = new StructuralIndex({
+      stamp: { docId: 'd', sheetId: 's', valueGen: 0 },
+      completeness: 'complete', merges: [], tables: [], spills: [], drawings: [], missing: [],
+    })
+    expect(await guardSort(band(0, 199999, 0, 3), empty, source)).toEqual({
+      ok: false, refusal: { reason: 'outside-column-data', range: { r0: 0, r1: 0, c0: 100, c1: 100 } },
+    })
+    expect(requested.length).toBeGreaterThan(0)
+    for (const rect of requested) expect(rect.c0 > 3 || rect.c1 < 0).toBe(true)
+  })
+  it('stops paging after the first outside cell', async () => {
+    let calls = 0
+    const source: PopulatedCellSource = {
+      async iterate(_range: SourceRect, cursor?: string): Promise<PopulatedPage> {
+        calls++
+        if (cursor === undefined) {
+          return { items: [{ row: 0, col: 100 }], completeness: 'complete', missing: [], nextCursor: 'more' }
+        }
+        return { items: [{ row: 50, col: 200 }], completeness: 'complete', missing: [] }
+      },
+    }
+    const empty = new StructuralIndex({
+      stamp: { docId: 'd', sheetId: 's', valueGen: 0 },
+      completeness: 'complete', merges: [], tables: [], spills: [], drawings: [], missing: [],
+    })
+    expect(await guardSort(band(0, 199999, 0, 3), empty, source)).toEqual({
+      ok: false, refusal: { reason: 'outside-column-data', range: { r0: 0, r1: 0, c0: 100, c1: 100 } },
+    })
+    expect(calls).toBe(1)
+  })
   it('finds outside-column data on a later store page instead of truncating', async () => {
     const { handle } = await f5Setup()
     const empty = new StructuralIndex({

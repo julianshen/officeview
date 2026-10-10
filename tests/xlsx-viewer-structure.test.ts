@@ -8,6 +8,7 @@ import {
   RowChunkIndex,
   StructuralIndex,
   currentRegion,
+  findOutsideColumnData,
   fromStoreScan,
   type CellAnchoredDrawing,
   type PopulatedCellSource,
@@ -278,6 +279,22 @@ describe('row and column chunk indexes', () => {
     }
     const built = await RowChunkIndex.build(source, { r0: 0, r1: 9 })
     expect(built.index.outsideColumnData(0, 1)).toEqual({ kind: 'occupied', at: { row: 2, col: 3 } })
+  })
+  it('streams outside-only rects with the page limit to every request', async () => {
+    const seen: Array<{ rect: SourceRect; limit: number | undefined }> = []
+    const source: PopulatedCellSource = {
+      async iterate(range: SourceRect, _cursor?: string, limit?: number): Promise<PopulatedPage> {
+        seen.push({ rect: { ...range }, limit })
+        return { items: [], completeness: 'complete', missing: [] }
+      },
+    }
+    expect(await findOutsideColumnData(source, { r0: 0, r1: 9 }, 2, 5, 23)).toEqual({ kind: 'clear' })
+    expect(seen).toEqual([
+      { rect: { r0: 0, r1: 9, c0: 0, c1: 1 }, limit: 23 },
+      { rect: { r0: 0, r1: 9, c0: 6, c1: MAX_COLS - 1 }, limit: 23 },
+    ])
+    await RowChunkIndex.build(source, { r0: 0, r1: 9 }, 17)
+    expect(seen[seen.length - 1]).toEqual({ rect: { r0: 0, r1: 9, c0: 0, c1: MAX_COLS - 1 }, limit: 17 })
   })
   it('reports clear for empty bands and never fakes safety for pending pages', async () => {
     const handle = createFixture('F5')

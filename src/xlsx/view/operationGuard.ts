@@ -6,7 +6,7 @@
 import type { FilterRange, MergeExtent, OperationRefusal, RowVisibility, SourceRowInterval, SpillExtent, TableExtent } from './contracts'
 import { MAX_COLS, MAX_ROWS, validateSourceRect, type SourceRect } from './coordinates'
 import type { ProjectedSheetMetrics } from './projection'
-import { RowChunkIndex, type CellAnchoredDrawing, type PopulatedCellSource, type StructuralIndex, type StructuralPage } from './structure'
+import { findOutsideColumnData, type CellAnchoredDrawing, type PopulatedCellSource, type StructuralIndex, type StructuralPage } from './structure'
 
 export type GuardOutcome = { ok: true } | { ok: false; refusal: OperationRefusal }
 export interface SortGuardOptions { pageLimit?: number }
@@ -130,16 +130,14 @@ export async function guardSort(
   if (hits.drawings.length > 0) {
     return { ok: false, refusal: { reason: 'drawing-impact', drawingId: hits.drawings[0].id } }
   }
-  const built = await RowChunkIndex.build(occupancy, band, options?.pageLimit)
-  if (!built.complete) return { ok: false, refusal: { reason: 'incomplete', missing: built.missing } }
-  const outside = built.index.outsideColumnData(range.c0, range.c1)
-  if (outside.kind === 'unknown') return { ok: false, refusal: { reason: 'incomplete', missing: outside.missing } }
-  if (outside.kind === 'occupied') {
+  const built = await findOutsideColumnData(occupancy, band, range.c0, range.c1, options?.pageLimit)
+  if (built.kind === 'unknown') return { ok: false, refusal: { reason: 'incomplete', missing: built.missing } }
+  if (built.kind === 'occupied') {
     return {
       ok: false,
       refusal: {
         reason: 'outside-column-data',
-        range: { r0: outside.at.row, r1: outside.at.row, c0: outside.at.col, c1: outside.at.col },
+        range: { r0: built.at.row, r1: built.at.row, c0: built.at.col, c1: built.at.col },
       },
     }
   }
