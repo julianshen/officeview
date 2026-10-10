@@ -441,3 +441,42 @@ describe('compilation and certificate boundaries', () => {
     } finally { vi.restoreAllMocks() }
   })
 })
+
+describe('zero-weight wildcard literals never rewind raw endpoints', () => {
+  it.each(['eq', 'neq', 'begins', 'ends', 'contains', 'not-contains'] as TextOp[])('preserves forward consumption for %s', op => {
+    const matcher = new TextFilterMatcher('en-US'), reference = new ReferenceTextFilterMatcher('en-US')
+    const pattern = '?\u200b?', text = '\u200b'
+    expect(matcher.match(op, pattern, true, text)).toBe(reference.match(op, pattern, true, text))
+  })
+  it('matches exhaustive tiny-alphabet questions, ignored literals and stars', () => {
+    const strings = (alphabet: readonly string[], maximum: number) => {
+      let level = [''], result = ['']
+      for (let size = 1; size <= maximum; size++) { level = level.flatMap(prefix => alphabet.map(point => prefix + point)); result = result.concat(level) }
+      return result
+    }
+    const matcher = new TextFilterMatcher('en-US'), reference = new ReferenceTextFilterMatcher('en-US')
+    const patterns = strings(['?', '*', '\u200b', 'a'], 5), texts = strings(['\u200b', 'a'], 4)
+    let checked = 0
+    for (const pattern of patterns) {
+      for (const text of texts) {
+        for (const op of ['eq', 'neq', 'begins', 'ends', 'contains', 'not-contains'] as TextOp[]) {
+          const actual = matcher.match(op, pattern, true, text), expected = reference.match(op, pattern, true, text)
+          if (actual !== expected) throw new Error(JSON.stringify({ op, pattern, text, actual, expected }))
+          checked++
+        }
+      }
+    }
+    expect(checked).toBe(253890)
+  })
+  it('keeps ignored endpoint propagation forward through long plateaus', () => {
+    const matcher = new TextFilterMatcher('en-US'), reference = new ReferenceTextFilterMatcher('en-US')
+    for (const size of [1, 2, 3, 25, 100, 401]) {
+      const text = '\u200b'.repeat(size)
+      for (const pattern of ['?\u200b?', '??\u200b?', '?\u200b??', '?\u200b?\u200b?', 'a?\u200b?b']) {
+        for (const op of ['eq', 'neq', 'begins', 'ends', 'contains', 'not-contains'] as TextOp[]) {
+          expect(matcher.match(op, pattern, true, text, { maxWork: Number.MAX_SAFE_INTEGER })).toBe(reference.match(op, pattern, true, text, { maxWork: Number.MAX_SAFE_INTEGER }))
+        }
+      }
+    }
+  })
+})

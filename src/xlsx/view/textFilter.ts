@@ -273,15 +273,27 @@ export class TextFilterMatcher extends ReferenceTextFilterMatcher {
             for (let start = 0; start < text.length; start++) if (row[start]) next[start + 1] = 1
           } else {
             const literal = literals.get(token.text)!
-            let hits = occurrences.get(token.text)
-            if (!hits) { hits = literalOccurrences(folded, literal, budget); occurrences.set(token.text, hits) }
-            const targets = new Uint8Array(folded.length + 1)
-            budget.charge((text.length + 1) * 2)
-            for (let start = 0; start <= text.length; start++) {
-              const target = weights[start] + literal.text.length
-              if (row[start] && hits[weights[start]] && target <= folded.length) targets[target] = 1
+            if (!literal.text.length) {
+              // Zero-weight runs may only move forward within their plateau;
+              // reaching its later boundary never re-enables earlier ones.
+              budget.charge(text.length + 1)
+              let reachable = false
+              for (let end = 0; end <= text.length; end++) {
+                if (end === 0 || weights[end] !== weights[end - 1]) reachable = false
+                reachable ||= Boolean(row[end])
+                next[end] = reachable ? 1 : 0
+              }
+            } else {
+              let hits = occurrences.get(token.text)
+              if (!hits) { hits = literalOccurrences(folded, literal, budget); occurrences.set(token.text, hits) }
+              const targets = new Uint8Array(folded.length + 1)
+              budget.charge((text.length + 1) * 2)
+              for (let start = 0; start <= text.length; start++) {
+                const target = weights[start] + literal.text.length
+                if (row[start] && hits[weights[start]] && target <= folded.length) targets[target] = 1
+              }
+              for (let end = 0; end <= text.length; end++) next[end] = targets[weights[end]]
             }
-            for (let end = 0; end <= text.length; end++) next[end] = targets[weights[end]]
           }
           row = next
         }
