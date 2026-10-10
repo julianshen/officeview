@@ -169,14 +169,14 @@ export class FilterEngine {
     validateSourceRect(spec.range)
     normalizeFilter(spec)
     const budget = new WorkBudget(limits)
-    const compiled: { col: number; match: CompiledRule }[] = []
+    const compiled: { col: number; match: (value: PreparedValue, budget: WorkBudget) => boolean }[] = []
     for (const [col, rule] of spec.columns) {
       budget.charge(1)
       validateCoordinate(0, col)
       if (col < spec.range.c0 || col > spec.range.c1) throw new RangeError('Filter column outside range')
       const classification = columns.get(col)
       if (!classification) throw new FilterDiagnostic('incomplete', 'Filter incomplete: missing column classification')
-      compiled.push({ col, match: this.compileRule(rule, classification, limits) })
+      compiled.push({ col, match: this.prepareRule(rule, classification, budget) })
     }
     return row => {
       validateCoordinate(row, 0)
@@ -186,7 +186,7 @@ export class FilterEngine {
         // Each source column cell owns its allowance; compound children share it.
         const cell = new WorkBudget(limits)
         cell.charge(1)
-        const result = entry.match(read(row, entry.col), { ...limits, budget: cell, work: undefined })
+        const result = entry.match(read(row, entry.col), cell)
         matched = result && matched
       }
       return matched

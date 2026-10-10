@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { ReferenceTextFilterMatcher, TextFilterMatcher } from '../src/xlsx/view/textFilter'
 import { classifyColumn, filterMenus, rawValueKey, FilterEngine, WorkBudget, type PreparedValue, type ColumnClassification, type FilterLimits } from '../src/xlsx/view/filter'
 import type { ColumnRule, FilterSpec, NumberOp, TextOp } from '../src/xlsx/view/contracts'
@@ -293,7 +293,8 @@ describe('explicit scan budgets', () => {
   it.each(['and', 'or'] as const)('shares one cell allowance for compound %s', connective => {
     const first: ColumnRule = { kind: 'text', op: 'eq', first: 'hello', wildcards: false }
     const match = engine.compileRule({ kind: 'compound', connective, first, second: first }, mixed)
-    expect(() => match(s('hello'), { maxWork: 30 })).toThrow(/resource/i)
+    expect(engine.compileRule(first, mixed)(s('hello'), { maxWork: 15 })).toBe(true)
+    expect(() => match(s('hello'), { maxWork: 15 })).toThrow(/resource/i)
     expect(match(s('hello'), { maxWork: 100 })).toBe(true)
   })
 })
@@ -315,7 +316,7 @@ describe('exact reference differential coverage', () => {
   it.each([false, true])('matches 20k seeded cases for all six operations (wildcards=%s)', wildcards => {
     const locales = ['en-US', 'de-DE', 'da-DK', 'tr-TR', 'cs-CZ', 'es-ES']
     const matchers = locales.map(locale => [new TextFilterMatcher(locale), new ReferenceTextFilterMatcher(locale)] as const)
-    const ascii = ['a', 'A', 'b', 'B', 'c', 'h', 'i', 'I', 'z', '0', '2', ' ', '.', '-', '*', '?', '~']
+    const ascii = Array.from({ length: 95 }, (_, i) => String.fromCharCode(32 + i))
     const unicode = [...ascii, 'é', 'e', '\u0301', '\u200b', '\u00ad', 'ﬁ', '😀', '\ud800', '\udc00', 'å', 'İ']
     const ops: TextOp[] = ['eq', 'neq', 'begins', 'ends', 'contains', 'not-contains']
     let seed = wildcards ? 173 : 107, checked = 0
@@ -390,5 +391,53 @@ describe('complete ordinary text scans and periodic differential coverage', () =
         }
       }
     }
+  })
+})
+
+describe('certified ASCII backend work', () => {
+  it('handles a nonperiodic ASCII miss with linear candidate work on the pinned backend', () => {
+    let seed = 79, text = ''
+    const pool = 'abcdefghijklmnopqrstuvwxy 0123456789!'
+    for (let i = 0; i < 1000; i++) { seed = seed * 48271 % 2147483647; text += pool[seed % pool.length] }
+    const work = { used: 0 }
+    expect(engine.matchText('contains', 'zzz', false, text, { work, maxWork: Number.MAX_SAFE_INTEGER })).toBe(false)
+    expect(work.used).toBeLessThan(10000)
+  })
+  it('propagates all ignorable endpoint plateaus without quadratic wildcard work', () => {
+    const work = { used: 0 }, text = 'a' + '\u200b'.repeat(2000) + 'b'
+    expect(engine.matchText('eq', 'a*b', true, text, { work, maxWork: Number.MAX_SAFE_INTEGER })).toBe(true)
+    expect(work.used).toBeLessThan(30000)
+    expect(engine.matchText('eq', 'a?b', true, 'a\u200bb')).toBe(true)
+    expect(engine.matchText('eq', 'a?b', true, 'a\u200b\u200bb')).toBe(true)
+  })
+})
+
+describe('compilation and certificate boundaries', () => {
+  it('bounds all columns of a filter compilation with one per-call allowance', () => {
+    const first: ColumnRule = { kind: 'text', op: 'eq', first: 'a'.repeat(100), wildcards: false }
+    expect(() => engine.compileFilter(spec([0, first], [1, first]), new Map([[0, mixed], [1, mixed]]), () => s('a'), { maxWork: 300 })).toThrow(/resource/i)
+  })
+  it('falls back on unknown backend versions and browser hosts', () => {
+    const original = process
+    try {
+      vi.stubGlobal('process', { ...original, versions: { ...original.versions, icu: '999' } })
+      expect(new TextFilterMatcher('en-US').certifiedAsciiProfile).toBe(false)
+      vi.stubGlobal('process', undefined)
+      expect(new TextFilterMatcher('en-US').certifiedAsciiProfile).toBe(false)
+    } finally { vi.unstubAllGlobals() }
+  })
+  it.each(['NODE_ICU_DATA', 'ICU_DATA', 'NODE_OPTIONS'])('falls back on explicit custom ICU configuration %s', variable => {
+    try {
+      vi.stubEnv(variable, variable === 'NODE_OPTIONS' ? '--icu-data-dir=/custom' : '/custom')
+      expect(new TextFilterMatcher('en-US').certifiedAsciiProfile).toBe(false)
+    } finally { vi.unstubAllEnvs() }
+  })
+  it('falls back on tailored locales and substituted Intl constructors', () => {
+    for (const locale of ['da-DK', 'tr-TR', 'cs-CZ', 'de-DE']) expect(new TextFilterMatcher(locale).certifiedAsciiProfile).toBe(false)
+    const Native = Intl.Collator
+    try {
+      vi.spyOn(Intl, 'Collator').mockImplementation(function (locale, options) { return new Native(locale, options) })
+      expect(new TextFilterMatcher('en-US').certifiedAsciiProfile).toBe(false)
+    } finally { vi.restoreAllMocks() }
   })
 })
