@@ -60,9 +60,9 @@ export class TextFilterMatcher {
   constructor(locale: string) {
     this.collator = new Intl.Collator(locale, { sensitivity: 'accent', numeric: false, usage: 'search' })
   }
-  validate(op: TextOp, pattern: string, wildcards: boolean): void {
+  validate(op: TextOp, pattern: string, wildcards: boolean, limits?: FilterLimits): void {
     if (!TEXT_OPS.includes(op) || typeof pattern !== 'string' || typeof wildcards !== 'boolean') throw new RangeError('Invalid text condition')
-    const budget = new WorkBudget()
+    const budget = new WorkBudget(limits)
     if (wildcards) tokens(pattern, budget)
     else budget.text(pattern)
   }

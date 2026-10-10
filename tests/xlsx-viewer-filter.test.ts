@@ -99,6 +99,24 @@ describe('typed filter evaluation', () => {
     expect(baseHidden.contains(2)).toBe(true)
     expect(() => engine.compileRule({ kind: 'number', op: 'eq', first: 1 }, numeric)(n(1), { signal: controller.signal })).toThrow(/cancel/i)
   })
+  it('shares compile-time pattern limits, column work and cancellation with the operation', () => {
+    const textSpec = spec([0, { kind: 'text', op: 'eq', first: 'a'.repeat(65000), wildcards: false }])
+    expect(() => engine.compileFilter(textSpec, new Map([[0, mixed]]), () => s('a'), { maxTextLength: 1 })).toThrow(/resource/i)
+  })
+  it('charges compilation and evaluation to the same counter', () => {
+    const work = { used: 0 }
+    const compiled = engine.compileFilter(spec([0, { kind: 'text', op: 'eq', first: 'abc', wildcards: false }]), new Map([[0, mixed]]), () => s('abc'), { work })
+    expect(work.used).toBeGreaterThanOrEqual(3)
+    const before = work.used
+    compiled(2)
+    expect(work.used).toBeGreaterThan(before)
+  })
+  it('rejects cancellation of compilation and Clear projection', () => {
+    const textSpec = spec([0, { kind: 'text', op: 'eq', first: 'a', wildcards: false }])
+    const controller = new AbortController(); controller.abort()
+    expect(() => engine.compileFilter(textSpec, new Map([[0, mixed]]), () => s('a'), { signal: controller.signal })).toThrow(/cancel/i)
+    expect(() => engine.projectFilter(null, createIntervalSet([]), createIdentityOrder(), new Map(), () => n(1), 6, { signal: controller.signal })).toThrow(/cancel/i)
+  })
   it('rejects invalid numeric rules and prepared nonfinite values', () => {
     for (const first of [NaN, Infinity, -Infinity]) expect(() => engine.compileRule({ kind: 'number', op: 'eq', first }, numeric)).toThrow(RangeError)
     expect(() => engine.compileRule({ kind: 'number', op: 'between', first: 5, second: 3 }, numeric)).toThrow(/reversed/i)

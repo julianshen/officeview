@@ -97,15 +97,18 @@ export class FilterEngine {
   matchText(op: TextOp, pattern: string, wildcards: boolean, text: string, limits?: FilterLimits): boolean {
     return this.text.match(op, pattern, wildcards, text, limits)
   }
-  compileRule(rule: ColumnRule, classification: ColumnClassification): CompiledRule {
+  compileRule(rule: ColumnRule, classification: ColumnClassification, limits?: FilterLimits): CompiledRule {
+    const compilation = new WorkBudget(limits)
+    compilation.charge(1)
+    const shared = { ...limits, maxWork: compilation.maxWork, maxTextLength: compilation.maxTextLength, work: compilation.work }
     const columnKind = classification.kind
     if (columnKind === 'loading') throw new FilterDiagnostic('incomplete', 'Filter incomplete: column classification is loading')
     if (rule.kind === 'values') throw new FilterDiagnostic('unsupported-values', 'Values membership belongs to S8.2')
     if (rule.kind === 'compound') {
       if (rule.connective !== 'and' && rule.connective !== 'or') throw new RangeError('Invalid compound connective')
       const connective = rule.connective
-      const first = this.compileRule(rule.first, classification), second = this.compileRule(rule.second, classification)
-      return (value, limits) => {
+      const first = this.compileRule(rule.first, classification, shared), second = this.compileRule(rule.second, classification, shared)
+      return (value, limits = shared) => {
         // Evaluate both lanes so a successful branch cannot disguise missing
         // authoritative values or an unprepared formatted-text lane.
         const budget = new WorkBudget(limits)
@@ -119,7 +122,7 @@ export class FilterEngine {
         || !Number.isFinite(rule.first) || (rule.second !== undefined && !Number.isFinite(rule.second))) throw new RangeError('Invalid numeric condition')
       if (rule.op === 'between' && (rule.second === undefined || rule.first > rule.second)) throw new RangeError('Missing or reversed numeric bounds')
       const { op, first, second } = rule
-      return (value, limits) => {
+      return (value, limits = shared) => {
         new WorkBudget(limits)
         resolved(value)
         if (value.kind !== 'number') return false
@@ -136,16 +139,16 @@ export class FilterEngine {
     }
     if (rule.kind === 'date' || rule.kind === 'datePreset') {
       const interval = lowerDateCondition(rule, this.context)
-      return (value, limits) => {
+      return (value, limits = shared) => {
         new WorkBudget(limits)
         resolved(value)
         return value.kind === 'number' && columnKind === 'date' && matchesDateInterval(value.value, interval)
       }
     }
     if (rule.kind !== 'text') throw new RangeError('Invalid condition kind')
-    this.text.validate(rule.op, rule.first, rule.wildcards)
+    this.text.validate(rule.op, rule.first, rule.wildcards, shared)
     const { op, first, wildcards } = rule
-    return (value, limits) => {
+    return (value, limits = shared) => {
       new WorkBudget(limits)
       resolved(value)
       if (value.kind === 'blank' || value.kind === 'error') return false
@@ -164,11 +167,12 @@ export class FilterEngine {
     const shared = { ...limits, maxWork: budget.maxWork, maxTextLength: budget.maxTextLength, work: budget.work }
     const compiled: { col: number; match: CompiledRule }[] = []
     for (const [col, rule] of spec.columns) {
+      budget.charge(1)
       validateCoordinate(0, col)
       if (col < spec.range.c0 || col > spec.range.c1) throw new RangeError('Filter column outside range')
       const classification = columns.get(col)
       if (!classification) throw new FilterDiagnostic('incomplete', 'Filter incomplete: missing column classification')
-      compiled.push({ col, match: this.compileRule(rule, classification) })
+      compiled.push({ col, match: this.compileRule(rule, classification, shared) })
     }
     return row => {
       validateCoordinate(row, 0)
@@ -183,8 +187,11 @@ export class FilterEngine {
     }
   }
   projectFilter(spec: FilterSpec | null, baseHidden: IntervalSet, order: RowOrder, columns: ReadonlyMap<number, ColumnClassification>, read: (row: number, col: number) => PreparedValue, count?: number, limits?: FilterLimits) {
+    const budget = new WorkBudget(limits)
     const normalized = normalizeFilter(spec)
     const matches = normalized ? this.compileFilter(normalized, columns, read, limits) : () => true
-    return projectVisibility(baseHidden, normalized, order, matches, count)
+    const result = projectVisibility(baseHidden, normalized, order, matches, count)
+    budget.charge(0)
+    return result
   }
 }
