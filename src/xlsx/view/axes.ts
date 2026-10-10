@@ -1,5 +1,34 @@
+/**
+ * Sparse axis geometry (§5.3). Storage is proportional to metadata transitions,
+ * never to the blank axis length.
+ *
+ * Measured cost of pathological layouts (accepted for now): every transition
+ * keeps a JS segment object plus a frozen `overrides` copy, ~160 B/transition.
+ * 1,048,576 alternating 1 px overrides built in ~430 ms and ~160 MB.
+ * TODO(S4.3): move segment storage into typed arrays (the starts/ends/sizes/prefix
+ * summaries below already are) and derive `overrides` lazily if worker budgets
+ * require it.
+ */
 import type { AxisMetrics, AxisRun, AxisSizeInterval, AxisWindow } from './contracts'
 import { MAX_ROWS } from './coordinates'
+
+/** Stable, machine-readable reasons a caller-supplied axis description is rejected
+ * at construction. S2.3/S3 map these to a diagnosed fallback instead of a crash.
+ * - CONTRADICTORY_OVERRIDES: overlapping overrides with different sizes
+ * - PRECISION_EXCEEDED: a positive cell cannot be told from its neighbour in Float64
+ * - TOTAL_NOT_FINITE: the axis total overflows Float64
+ * - INVALID_METADATA: counts, sizes or intervals outside the axis domain
+ * Extends RangeError so existing `instanceof RangeError` handling keeps working. */
+export type AxisMetricsErrorCode =
+  | 'CONTRADICTORY_OVERRIDES' | 'PRECISION_EXCEEDED' | 'TOTAL_NOT_FINITE' | 'INVALID_METADATA'
+export class AxisMetricsError extends RangeError {
+  readonly code: AxisMetricsErrorCode
+  constructor(code: AxisMetricsErrorCode, message: string) {
+    super(message)
+    this.name = 'AxisMetricsError'
+    this.code = code
+  }
+}
 
 export interface AxisMetricsOptions {
   logicalCount: number
@@ -10,6 +39,9 @@ export interface AxisMetricsOptions {
 }
 
 export interface SparseAxisMetrics extends AxisMetrics {
+  /** First bounded page of [startCss,endCss): at most `maxWindowRuns` runs. `count` is
+   * this page's covered indexes; `nextCursor` resumes via continueVisibleBetween. */
+  visiblePageBetween(startCss: number, endCss: number): AxisWindow
   continueVisibleBetween(startCss: number, endCss: number, cursor: string): AxisWindow
   readonly diagnostics: {
     segmentCount: number
@@ -24,9 +56,14 @@ function validateInteger(value: number, min: number, max: number): void {
     throw new RangeError('Axis index or count is outside the domain')
   }
 }
+function metadataInteger(value: number, min: number, max: number): void {
+  if (!Number.isSafeInteger(value) || Object.is(value, -0) || value < min || value > max) {
+    throw new AxisMetricsError('INVALID_METADATA', 'Axis index or count is outside the domain')
+  }
+}
 
 function validateSize(size: number): void {
-  if (!Number.isFinite(size) || size < 0) throw new RangeError('Axis size must be finite and nonnegative')
+  if (!Number.isFinite(size) || size < 0) throw new AxisMetricsError('INVALID_METADATA', 'Axis size must be finite and nonnegative')
 }
 
 function floatSpacingAt(value: number): number {
@@ -39,8 +76,8 @@ function floatSpacingAt(value: number): number {
 
 function normalize(intervals: readonly AxisSizeInterval[], logicalCount: number): AxisSizeInterval[] {
   const sorted = intervals.map(interval => {
-    validateInteger(interval.start, 0, logicalCount - 1)
-    validateInteger(interval.end, interval.start, logicalCount - 1)
+    metadataInteger(interval.start, 0, logicalCount - 1)
+    metadataInteger(interval.end, interval.start, logicalCount - 1)
     validateSize(interval.sizeCss)
     return { ...interval }
   }).sort((a, b) => a.start - b.start || a.end - b.end)
@@ -48,7 +85,7 @@ function normalize(intervals: readonly AxisSizeInterval[], logicalCount: number)
   for (const interval of sorted) {
     const previous = result[result.length - 1]
     if (previous && interval.start <= previous.end && interval.sizeCss !== previous.sizeCss) {
-      throw new RangeError('Contradictory overlapping axis overrides')
+      throw new AxisMetricsError('CONTRADICTORY_OVERRIDES', 'Contradictory overlapping axis overrides')
     }
     if (previous && interval.start <= previous.end + 1 && interval.sizeCss === previous.sizeCss) {
       previous.end = Math.max(previous.end, interval.end)
@@ -60,13 +97,13 @@ function normalize(intervals: readonly AxisSizeInterval[], logicalCount: number)
 let nextAxisId = 0
 
 /** Geometry is proportional to metadata transitions, never the blank axis length.
- * Windows cover [startCss,endCss); count belongs to this page, not later pages. */
+ * Windows cover [startCss,endCss). */
 export function createAxisMetrics(options: AxisMetricsOptions): SparseAxisMetrics {
   const { logicalCount, defaultSizeCss } = options
   const maxWindowRuns = options.maxWindowRuns ?? 256
-  validateInteger(logicalCount, 0, MAX_ROWS)
+  metadataInteger(logicalCount, 0, MAX_ROWS)
   validateSize(defaultSizeCss)
-  validateInteger(maxWindowRuns, 1, MAX_ROWS)
+  metadataInteger(maxWindowRuns, 1, MAX_ROWS)
   const overrides = normalize(options.overrides ?? [], logicalCount)
   const collapsed = normalize((options.collapsed ?? []).map(interval => ({ ...interval, sizeCss: 0 })), logicalCount)
   const boundaries = [...new Set([0, logicalCount,
@@ -97,19 +134,25 @@ export function createAxisMetrics(options: AxisMetricsOptions): SparseAxisMetric
   for (let i = 0; i < segments.length; i++) {
     const count = ends[i] - starts[i] + 1
     prefix[i + 1] = prefix[i] + count * sizes[i]
-    if (!Number.isFinite(prefix[i + 1])) throw new RangeError('Axis total must be finite')
+    if (!Number.isFinite(prefix[i + 1])) throw new AxisMetricsError('TOTAL_NOT_FINITE', 'Axis total must be finite')
     if (sizes[i] > 0) {
       const lastCellStart = prefix[i] + (count - 1) * sizes[i]
       // A segment total can advance while its individual positive cells alias.
       // Check the largest origin's resolution once, without visiting each cell.
       if (sizes[i] < floatSpacingAt(lastCellStart) || prefix[i] + sizes[i] <= prefix[i]
         || prefix[i + 1] <= lastCellStart) {
-        throw new RangeError('Axis geometry exceeds Float64 cell precision and cannot be represented')
+        throw new AxisMetricsError('PRECISION_EXCEEDED', 'Axis geometry exceeds Float64 cell precision and cannot be represented')
       }
     }
     if (prefix[i + 1] > prefix[i]) positive.push(i)
   }
   const visibleSegments = Uint32Array.from(positive)
+  // cumulative[k] = indexes in the first k positive segments (count of a window in O(log n)).
+  const cumulative = new Uint32Array(visibleSegments.length + 1)
+  for (let i = 0; i < visibleSegments.length; i++) {
+    const segment = visibleSegments[i]
+    cumulative[i + 1] = cumulative[i] + ends[segment] - starts[segment] + 1
+  }
   const effectiveOverrides = Object.freeze(segments.filter(segment => segment.sizeCss !== defaultSizeCss)
     .map(segment => Object.freeze(segment)))
   const total = prefix[prefix.length - 1]
@@ -177,30 +220,14 @@ export function createAxisMetrics(options: AxisMetricsOptions): SparseAxisMetric
     return indexAt(css, visibleSegments[visibleSegmentAt(css, true)], true)
   }
 
-  function windowBetween(startCss: number, endCss: number, cursor?: string): AxisWindow {
-    validateCss(startCss)
-    validateCss(endCss)
-    if (endCss < startCss) throw new RangeError('Axis window is reversed')
+  /** One bounded page starting at positive-segment `position`; `next` is -1 when exhausted. */
+  function pageFrom(lower: number, upper: number, position: number): { runs: AxisRun[]; count: number; next: number } {
     lastWindowVisitedSegments = 0
-    const lower = Math.max(0, startCss)
-    const upper = Math.min(total, endCss)
-    let position = lower < upper ? visibleSegmentAt(lower) : visibleSegments.length
-    if (cursor !== undefined) {
-      const parts = cursor.split(':')
-      const next = Number(parts[4])
-      if (parts.length !== 5 || parts[0] !== 'axis' || parts[1] !== String(axisId)
-        || parts[2] !== String(startCss) || parts[3] !== String(endCss)
-        || !Number.isSafeInteger(next) || parts[4] !== String(next)
-        || next <= position || next >= visibleSegments.length || prefix[visibleSegments[next]] >= upper) {
-        throw new RangeError('Axis cursor does not belong to this window')
-      }
-      position = next
-    }
     const runs: AxisRun[] = []
     let count = 0
     while (position < visibleSegments.length && runs.length < maxWindowRuns) {
       const segment = visibleSegments[position]
-      if (prefix[segment] >= upper) break
+      if (prefix[segment] >= upper) { position = visibleSegments.length; break }
       lastWindowVisitedSegments++
       const start = indexAt(Math.max(lower, prefix[segment]), segment)
       let end = ends[segment]
@@ -214,9 +241,78 @@ export function createAxisMetrics(options: AxisMetricsOptions): SparseAxisMetric
       }
       position++
     }
-    const nextCursor = position < visibleSegments.length && prefix[visibleSegments[position]] < upper
-      ? `axis:${axisId}:${startCss}:${endCss}:${position}` : undefined
-    return { runs, count, ...(nextCursor === undefined ? {} : { nextCursor }) }
+    const more = position < visibleSegments.length && prefix[visibleSegments[position]] < upper
+    return { runs, count, next: more ? position : -1 }
+  }
+
+  function bounds(startCss: number, endCss: number): { lower: number; upper: number } {
+    validateCss(startCss)
+    validateCss(endCss)
+    if (endCss < startCss) throw new RangeError('Axis window is reversed')
+    return { lower: Math.max(0, startCss), upper: Math.min(total, endCss) }
+  }
+
+  function firstPosition(lower: number, upper: number): number {
+    return lower < upper ? visibleSegmentAt(lower) : visibleSegments.length
+  }
+
+  /** Indexes covered by [lower,upper), from the per-segment cumulative counts: O(log n). */
+  function coveredCount(lower: number, upper: number): number {
+    if (!(lower < upper)) return 0
+    const startPosition = visibleSegmentAt(lower)
+    if (startPosition >= visibleSegments.length) return 0
+    const startSegment = visibleSegments[startPosition]
+    const before = cumulative[startPosition] + indexAt(Math.max(lower, prefix[startSegment]), startSegment) - starts[startSegment]
+    const endPosition = visibleSegmentAt(upper)
+    let through = cumulative[endPosition]
+    if (endPosition < visibleSegments.length) {
+      const segment = visibleSegments[endPosition]
+      if (prefix[segment] < upper) {
+        let end = indexAt(upper, segment)
+        if (startInSegment(end, segment) === upper) end--
+        through += end - starts[segment] + 1
+      }
+    }
+    return through - before
+  }
+
+  function boundedPage(startCss: number, endCss: number, cursor?: string): AxisWindow {
+    const { lower, upper } = bounds(startCss, endCss)
+    let position = firstPosition(lower, upper)
+    if (cursor !== undefined) {
+      const parts = cursor.split(':')
+      const next = Number(parts[4])
+      if (parts.length !== 5 || parts[0] !== 'axis' || parts[1] !== String(axisId)
+        || parts[2] !== String(startCss) || parts[3] !== String(endCss)
+        || !Number.isSafeInteger(next) || parts[4] !== String(next)
+        || next <= position || next >= visibleSegments.length || prefix[visibleSegments[next]] >= upper) {
+        throw new RangeError('Axis cursor does not belong to this window')
+      }
+      position = next
+    }
+    const page = pageFrom(lower, upper, position)
+    return { runs: page.runs, count: page.count,
+      ...(page.next < 0 ? {} : { nextCursor: `axis:${axisId}:${startCss}:${endCss}:${page.next}` }) }
+  }
+
+  /** Complete, lazy window: `runs` is re-iterable, pages internally (at most
+   * maxWindowRuns runs resident at a time) until [startCss,endCss) is exhausted, and
+   * `count` is the total number of covered indexes. `nextCursor` is never set. */
+  function windowBetween(startCss: number, endCss: number): AxisWindow {
+    const { lower, upper } = bounds(startCss, endCss)
+    return {
+      runs: {
+        *[Symbol.iterator](): Iterator<AxisRun> {
+          let position = firstPosition(lower, upper)
+          while (position >= 0) {
+            const page = pageFrom(lower, upper, position)
+            yield* page.runs
+            position = page.next
+          }
+        },
+      },
+      count: coveredCount(lower, upper),
+    }
   }
 
   return Object.freeze({
@@ -230,12 +326,13 @@ export function createAxisMetrics(options: AxisMetricsOptions): SparseAxisMetric
     },
     size: (index: number) => sizes[segmentOf(index)],
     locate,
-    visibleBetween: (startCss: number, endCss: number) => windowBetween(startCss, endCss),
-    continueVisibleBetween: (startCss: number, endCss: number, cursor: string) => windowBetween(startCss, endCss, cursor),
+    visibleBetween: windowBetween,
+    visiblePageBetween: (startCss: number, endCss: number) => boundedPage(startCss, endCss),
+    continueVisibleBetween: (startCss: number, endCss: number, cursor: string) => boundedPage(startCss, endCss, cursor),
     get diagnostics() {
       return {
         segmentCount: starts.length,
-        summaryBytes: starts.byteLength + ends.byteLength + sizes.byteLength + prefix.byteLength + visibleSegments.byteLength,
+        summaryBytes: starts.byteLength + ends.byteLength + sizes.byteLength + prefix.byteLength + visibleSegments.byteLength + cumulative.byteLength,
         lastWindowVisitedSegments,
         lastLocateComparisons,
       }

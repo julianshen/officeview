@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
-import { createAxisMetrics } from '../src/xlsx/view/axes'
+import { AxisMetricsError, createAxisMetrics } from '../src/xlsx/view/axes'
 import { MAX_ROWS, MAX_COLS } from '../src/xlsx/view/coordinates'
+import type { AxisMetrics, AxisRun } from '../src/xlsx/view/contracts'
 
 describe('sparse axis metrics (spec §§3, 5.3, AC-VIEW-03)', () => {
   it('rejects a positive cell that cannot advance the Float64 logical prefix', () => {
@@ -118,7 +119,7 @@ describe('sparse axis metrics (spec §§3, 5.3, AC-VIEW-03)', () => {
       overrides: [{ start: 1, end: 1, sizeCss: 2 }, { start: 3, end: 3, sizeCss: 3 }],
       collapsed: [{ start: 5, end: MAX_ROWS - 2 }],
     })
-    let page = axis.visibleBetween(0, 100)
+    let page = axis.visiblePageBetween(0, 100)
     const runs = [...page.runs]
     let count = page.count
     let pages = 1
@@ -133,7 +134,7 @@ describe('sparse axis metrics (spec §§3, 5.3, AC-VIEW-03)', () => {
     expect(runs.map(run => [run.start, run.end])).toEqual([[0, 0], [1, 1], [2, 2], [3, 3], [4, 4], [MAX_ROWS - 1, MAX_ROWS - 1]])
     expect(count).toBe(6)
     expect(pages).toBe(3)
-    const cursor = axis.visibleBetween(0, 100).nextCursor!
+    const cursor = axis.visiblePageBetween(0, 100).nextCursor!
     expect(() => axis.continueVisibleBetween(0, 99, cursor)).toThrow(RangeError)
     expect(() => createAxisMetrics({ logicalCount: MAX_ROWS, defaultSizeCss: 1 }).continueVisibleBetween(0, 100, cursor)).toThrow(RangeError)
     expect(() => axis.continueVisibleBetween(0, 100, 'bad')).toThrow(RangeError)
@@ -237,7 +238,7 @@ describe('sparse axis metrics (spec §§3, 5.3, AC-VIEW-03)', () => {
         const expected = sizes.flatMap((size, row) => size > 0 && lower < upper
           && prefix[row] < upper && prefix[row + 1] > lower ? [row] : [])
         const actual: number[] = []
-        let page = axis.visibleBetween(lower, upper)
+        let page = axis.visiblePageBetween(lower, upper)
         let count = 0
         let pages = 0
         for (;;) {
@@ -255,5 +256,123 @@ describe('sparse axis metrics (spec §§3, 5.3, AC-VIEW-03)', () => {
         expect(count).toBe(expected.length)
       }
     }
+  })
+})
+
+describe('contract-typed lazy windows (review item 1)', () => {
+  it('a consumer typed against AxisMetrics sees every run of 1,000 alternating hidden/visible rows', () => {
+    const axis: AxisMetrics = createAxisMetrics({ logicalCount: 1000, defaultSizeCss: 1,
+      collapsed: Array.from({ length: 500 }, (_, i) => ({ start: i * 2 + 1, end: i * 2 + 1 })) })
+    const window = axis.visibleBetween(0, 450)
+    const runs = [...window.runs]
+    expect(runs).toHaveLength(450)
+    expect(runs.map(run => run.start)).toEqual(Array.from({ length: 450 }, (_, i) => i * 2))
+    expect(window.count).toBe(450)
+    expect(window.nextCursor).toBeUndefined()
+  })
+
+  it('iterates a 1M alternating layout exactly once per run, bounded per page, and is re-iterable', () => {
+    const maxWindowRuns = 64
+    const concrete = createAxisMetrics({ logicalCount: MAX_ROWS, defaultSizeCss: 1, maxWindowRuns,
+      overrides: Array.from({ length: MAX_ROWS / 2 }, (_, i) => ({ start: i * 2 + 1, end: i * 2 + 1, sizeCss: 2 })) })
+    const axis: AxisMetrics = concrete
+    const window = axis.visibleBetween(0, axis.totalCss())
+    expect(window.count).toBe(MAX_ROWS)
+    expect(window.nextCursor).toBeUndefined()
+    for (let pass = 0; pass < 2; pass++) {
+      let expectedStart = 0
+      let expectedCss = 0
+      let peakVisited = 0
+      let runsSeen = 0
+      let exact = true
+      // expect() per run is far too slow for a million runs; fold into one boolean.
+      for (const run of window.runs as Iterable<AxisRun>) {
+        if (run.start !== expectedStart || run.end !== expectedStart || run.startCss !== expectedCss) exact = false
+        expectedStart++
+        expectedCss += run.sizeCss
+        runsSeen++
+        peakVisited = Math.max(peakVisited, concrete.diagnostics.lastWindowVisitedSegments)
+      }
+      expect(exact).toBe(true)
+      expect(runsSeen).toBe(MAX_ROWS)
+      expect(expectedCss).toBe(axis.totalCss())
+      expect(peakVisited).toBeLessThanOrEqual(maxWindowRuns)
+    }
+  }, 30_000)
+
+  it('starts inside the window mid-layout and supports abandoning iteration early', () => {
+    const axis = createAxisMetrics({ logicalCount: 2000, defaultSizeCss: 1, maxWindowRuns: 4,
+      collapsed: Array.from({ length: 1000 }, (_, i) => ({ start: i * 2 + 1, end: i * 2 + 1 })) })
+    const first: number[] = []
+    for (const run of axis.visibleBetween(100.5, 1000).runs) {
+      first.push(run.start)
+      if (first.length === 10) break
+    }
+    expect(first).toEqual([200, 202, 204, 206, 208, 210, 212, 214, 216, 218])
+  })
+
+  it('reports count equal to the number of covered indices for randomized windows', () => {
+    let seed = 99
+    const random = () => (seed = seed * 16807 % 2147483647)
+    for (let trial = 0; trial < 30; trial++) {
+      const sizes = Array.from({ length: 90 }, () => random() % 5 / 2)
+      const axis = createAxisMetrics({ logicalCount: sizes.length, defaultSizeCss: 1, maxWindowRuns: 3,
+        overrides: sizes.map((sizeCss, start) => ({ start, end: start, sizeCss })) })
+      for (let query = 0; query < 20; query++) {
+        const lower = random() % 300 / 4 - 3
+        const upper = lower + random() % 120 / 4
+        const window = axis.visibleBetween(lower, upper)
+        let total = 0
+        for (const run of window.runs) total += run.end - run.start + 1
+        expect(window.count).toBe(total)
+      }
+    }
+  })
+
+  it('keeps the eager bounded page API for cursor consumers', () => {
+    const axis = createAxisMetrics({ logicalCount: 100, defaultSizeCss: 1, maxWindowRuns: 3,
+      collapsed: Array.from({ length: 50 }, (_, i) => ({ start: i * 2 + 1, end: i * 2 + 1 })) })
+    const page = axis.visiblePageBetween(0, 50)
+    expect([...page.runs]).toHaveLength(3)
+    expect(page.count).toBe(3)
+    expect(page.nextCursor).toBeDefined()
+    expect(axis.continueVisibleBetween(0, 50, page.nextCursor!).count).toBe(3)
+  })
+})
+
+describe('typed construction errors (review item 4)', () => {
+  const codeOf = (build: () => unknown): string | undefined => {
+    try { build() } catch (error) {
+      expect(error).toBeInstanceOf(AxisMetricsError)
+      expect(error).toBeInstanceOf(RangeError)
+      expect((error as Error).name).toBe('AxisMetricsError')
+      return (error as AxisMetricsError).code
+    }
+    return undefined
+  }
+  it('reports CONTRADICTORY_OVERRIDES for overlapping overrides with different sizes', () => {
+    expect(codeOf(() => createAxisMetrics({ logicalCount: 3, defaultSizeCss: 1, overrides: [
+      { start: 0, end: 1, sizeCss: 2 }, { start: 1, end: 2, sizeCss: 3 },
+    ] }))).toBe('CONTRADICTORY_OVERRIDES')
+  })
+  it('reports PRECISION_EXCEEDED for cells Float64 cannot tell apart', () => {
+    expect(codeOf(() => createAxisMetrics({ logicalCount: 3, defaultSizeCss: 1, overrides: [
+      { start: 0, end: 0, sizeCss: 25_165_824 }, { start: 1, end: 1, sizeCss: 1e-10 },
+    ] }))).toBe('PRECISION_EXCEEDED')
+  })
+  it('reports TOTAL_NOT_FINITE when the axis total overflows', () => {
+    expect(codeOf(() => createAxisMetrics({ logicalCount: 4, defaultSizeCss: 1,
+      overrides: [{ start: 0, end: 3, sizeCss: Number.MAX_VALUE }] }))).toBe('TOTAL_NOT_FINITE')
+  })
+  it('reports INVALID_METADATA for out-of-domain counts, sizes and intervals', () => {
+    expect(codeOf(() => createAxisMetrics({ logicalCount: MAX_ROWS + 1, defaultSizeCss: 1 }))).toBe('INVALID_METADATA')
+    expect(codeOf(() => createAxisMetrics({ logicalCount: 3, defaultSizeCss: NaN }))).toBe('INVALID_METADATA')
+    expect(codeOf(() => createAxisMetrics({ logicalCount: 3, defaultSizeCss: 1, maxWindowRuns: 0 }))).toBe('INVALID_METADATA')
+    expect(codeOf(() => createAxisMetrics({ logicalCount: 3, defaultSizeCss: 1, collapsed: [{ start: 0, end: 3 }] }))).toBe('INVALID_METADATA')
+    expect(codeOf(() => createAxisMetrics({ logicalCount: 3, defaultSizeCss: 1, overrides: [{ start: 0, end: 0, sizeCss: -1 }] }))).toBe('INVALID_METADATA')
+  })
+  it('keeps query-time domain errors as plain RangeError', () => {
+    const axis = createAxisMetrics({ logicalCount: 3, defaultSizeCss: 1 })
+    try { axis.start(9) } catch (error) { expect(error).not.toBeInstanceOf(AxisMetricsError) }
   })
 })
