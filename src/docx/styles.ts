@@ -433,6 +433,7 @@ export function applyParagraphDefaults(paragraph: DocxParagraph, p: XmlNode, con
   const direct = getChildren(p, 'pPr')[0]
   const id = attrs(getChildren(direct, 'pStyle')[0]).val ?? context.defaultParagraph
   let lineValue: number | undefined, lineRule: 'auto' | 'exact' | 'atLeast' = 'auto'
+  let jcAuthored = false
   for (const pPr of [context.paragraphDefaults, ...(table?.pPr ?? []), ...styleChain(id, context).map(style => getChildren(style, 'pPr')[0]), direct]) {
     const spacing = attrs(getChildren(pPr, 'spacing')[0])
     if (spacing.before !== undefined) paragraph.spacingBeforeTwips = Number(spacing.before)
@@ -440,7 +441,14 @@ export function applyParagraphDefaults(paragraph: DocxParagraph, p: XmlNode, con
     if (spacing.line !== undefined) lineValue = Number(spacing.line)
     if (spacing.lineRule !== undefined) lineRule = spacing.lineRule as typeof lineRule
     const jc = attrs(getChildren(pPr, 'jc')[0]).val
-    if (jc !== undefined) paragraph.align = jc === 'both' ? 'justify' : jc === 'center' || jc === 'right' ? jc : 'left'
+    if (jc !== undefined) {
+      paragraph.align = jc === 'both' ? 'justify' : jc === 'center' || jc === 'right' ? jc : 'left'
+      jcAuthored = true
+    }
+    // BiDi direction inherits like other paragraph properties (CT_OnOff:
+    // absent value means on). Later layers, including direct formatting, win.
+    const bidiNode = getChildren(pPr, 'bidi')[0]
+    if (bidiNode) paragraph.bidi = !['0', 'false', 'off'].includes(attrs(bidiNode).val as string)
     const ind = attrs(getChildren(pPr, 'ind')[0])
     for (const [key, value] of [['indentLeftTwips', ind.left ?? ind.start], ['indentRightTwips', ind.right ?? ind.end], ['indentFirstLineTwips', ind.firstLine ?? (ind.hanging !== undefined ? -Number(ind.hanging) : undefined)]] as const)
       if (value !== undefined) paragraph[key] = Number(value)
@@ -448,4 +456,7 @@ export function applyParagraphDefaults(paragraph: DocxParagraph, p: XmlNode, con
     if (outline !== undefined) paragraph.outlineLevel = Number(outline)
   }
   if (lineValue !== undefined) paragraph.lineSpacing = { value: lineValue, rule: lineRule }
+  // An RTL paragraph with no authored alignment defaults to right,
+  // matching direct-only w:bidi handling elsewhere.
+  if (paragraph.bidi && !jcAuthored) paragraph.align = 'right'
 }

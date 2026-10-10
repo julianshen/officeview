@@ -721,3 +721,75 @@ describe('Phase 22 bot review round 2', () => {
     expect(pages[0].images.some((box) => box.imageIndex >= 0)).toBe(true)
   })
 })
+
+describe('Phase 22 bot review round 3', () => {
+  test('P2-bidi-align: explicit-left BiDi paragraphs keep RTL visual order', async () => {
+    const buf = await buildDocx({
+      'word/document.xml': `<w:document ${W_NS}><w:body><w:p><w:pPr><w:bidi w:val="1"/><w:jc w:val="left"/></w:pPr><w:r><w:t>RightFirst</w:t></w:r><w:r><w:t> </w:t></w:r><w:r><w:t>LeftSecond</w:t></w:r></w:p></w:body></w:document>`,
+    })
+    const doc = await parseDocx(await OfficePackage.load(buf))
+    const para = doc.sections[0].paragraphs[0]
+    expect(para.bidi).toBe(true)
+    expect(para.align).toBe('left')
+    const pages = layoutDocx(doc, measureFixed)
+    const line = pages[0].lines[0]
+    expect(line.bidi).toBe(true)
+    const segRight = line.segs.find((s) => s.text === 'RightFirst')
+    const segLeft = line.segs.find((s) => s.text === 'LeftSecond')
+    expect(segRight!.penOffset!).toBeGreaterThan(segLeft!.penOffset!)
+  })
+
+  test('P2-bidi-style: paragraph styles supply BiDi direction', async () => {
+    const buf = await buildDocx({
+      'word/styles.xml': `<w:styles ${W_NS}><w:style w:styleId="RTL" w:type="paragraph"><w:pPr><w:bidi/></w:pPr></w:style></w:styles>`,
+      'word/document.xml': `<w:document ${W_NS}><w:body><w:p><w:pPr><w:pStyle w:val="RTL"/></w:pPr><w:r><w:t>RightFirst</w:t></w:r><w:r><w:t> </w:t></w:r><w:r><w:t>LeftSecond</w:t></w:r></w:p></w:body></w:document>`,
+    })
+    const doc = await parseDocx(await OfficePackage.load(buf))
+    const para = doc.sections[0].paragraphs[0]
+    expect(para.bidi).toBe(true)
+    expect(para.align).toBe('right')
+    const pages = layoutDocx(doc, measureFixed)
+    const line = pages[0].lines[0]
+    expect(line.bidi).toBe(true)
+    const segRight = line.segs.find((s) => s.text === 'RightFirst')
+    const segLeft = line.segs.find((s) => s.text === 'LeftSecond')
+    expect(segRight!.penOffset!).toBeGreaterThan(segLeft!.penOffset!)
+  })
+
+  test('P2-noteimages-kept: images on retained note lines transfer, dropped lines do not', async () => {
+    const fakePng = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])
+    const PIC_NS = `${W_NS} xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:pic="http://schemas.openxmlformats.org/drawingml/2006/picture" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"`
+    const picPara = `<w:p><w:r><w:drawing><wp:inline><wp:extent cx="914400" cy="609600"/><wp:docPr id="1" name="pic"/><a:graphic><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/picture"><pic:pic><pic:nvPicPr><pic:cNvPr id="1" name="pic"/><pic:cNvPicPr/></pic:nvPicPr><pic:blipFill><a:blip r:embed="rImg1"/><a:stretch><a:fillRect/></a:stretch></pic:blipFill><pic:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="914400" cy="609600"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom></pic:spPr></pic:pic></a:graphicData></a:graphic></wp:inline></w:drawing></w:r></w:p>`
+    const filler = Array(3).fill('<w:p><w:r><w:t>filler line</w:t></w:r></w:p>').join('')
+    const longText = Array(6).fill('<w:p><w:r><w:t>note content line that wraps the footnote block</w:t></w:r></w:p>').join('')
+    const buf = await buildDocx({
+      'word/_rels/document.xml.rels': relsFor(['footnotes', 'footnotes.xml']),
+      'word/document.xml': `<w:document ${W_NS}><w:body>${filler}<w:p><w:r><w:t>Ref</w:t></w:r><w:r><w:footnoteReference w:id="1"/></w:r></w:p><w:sectPr><w:pgSz w:w="12240" w:h="3000"/><w:pgMar w:top="144" w:right="144" w:bottom="144" w:left="144" w:header="0" w:footer="0" w:gutter="0"/></w:sectPr></w:body></w:document>`,
+      'word/footnotes.xml': `<w:footnotes ${PIC_NS}><w:footnote w:id="1"><w:p><w:r><w:t>kept intro</w:t></w:r></w:p>${picPara}${longText}</w:footnote></w:footnotes>`,
+      'word/_rels/footnotes.xml.rels': `${REL_HEAD}<Relationship Id="rImg1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="media/note.png"/></Relationships>`,
+      'word/media/note.png': fakePng as unknown as string,
+    })
+    const doc = await parseDocx(await OfficePackage.load(buf))
+    expect(doc.footnotes![0].paragraphs.flatMap((p) => p.images ?? [])).toHaveLength(1)
+    const pages = layoutDocx(doc, measureFixed)
+    const page = pages[0]
+    expect(page.footnotes).toBeDefined()
+    // The intro paragraph is retained; the picture paragraph overflows the
+    // clamped note area, so no image box may reach the page image layer.
+    expect(page.images).toHaveLength(0)
+    expect(page.diagnostics ?? []).toContain('footnote-overflow')
+  })
+
+  test('P2-endnotes-unreferenced: endnotes without references stay unattached', async () => {
+    const buf = await buildDocx({
+      'word/_rels/document.xml.rels': relsFor(['endnotes', 'endnotes.xml']),
+      'word/document.xml': `<w:document ${W_NS}><w:body><w:p><w:r><w:t>Body without references</w:t></w:r></w:p></w:body></w:document>`,
+      'word/endnotes.xml': `<w:endnotes ${W_NS}><w:endnote w:id="9"><w:p><w:r><w:endnoteRef/></w:r><w:r><w:t> Stale entry</w:t></w:r></w:p></w:endnote></w:endnotes>`,
+    })
+    const doc = await parseDocx(await OfficePackage.load(buf))
+    expect(doc.endnotes).toHaveLength(1)
+    const pages = layoutDocx(doc, measureFixed)
+    const last = pages[pages.length - 1]
+    expect(last.endnotes).toBeUndefined()
+  })
+})

@@ -381,8 +381,12 @@ function layoutParagraph(
         if (seg.text === ' ') gapsSoFar++
       }
     }
-    const isBidiRtl = !!para.bidi && para.align !== 'left'
-    if (isBidiRtl && (para.align === 'right' || !para.align)) {
+    // Visual order follows direction alone: right-packed pen offsets span
+    // the content width, so left/center/justify alignment offsets position
+    // the ordered line box unchanged. Gating on alignment would silently
+    // render explicit-left RTL paragraphs in LTR order.
+    const isBidiRtl = !!para.bidi
+    if (isBidiRtl) {
       let rightOffset = width
       for (const seg of segs) {
         rightOffset -= seg.widthPx
@@ -814,10 +818,13 @@ function pushNoteOverflow(page: PageLayout, kind: 'footnote-overflow' | 'endnote
 
 /**
  * Lay out footnote/endnote blocks (paragraphs and tables) into the note
- * area. Inline images transfer into the page image layer with resolved
- * indices; tables lay out as a single chunk bounded by the note area, so
- * oversized tables truncate rows instead of spilling past the footer.
- * Returns laid lines, the end position, and whether a table was truncated.
+ * area. Inline image boxes ride on their lines and transfer into the page
+ * image layer only for lines the caller retains, so images on clamped
+ * (dropped) lines never paint as orphans. Tables lay out as a single chunk
+ * bounded by the note area, so oversized tables truncate rows instead of
+ * spilling past the footer.
+ * Returns laid entries (line plus its image boxes), the end position, and
+ * whether a table was truncated.
  */
 function layoutNoteBlocks(
   blocks: DocxBlock[],
@@ -829,14 +836,15 @@ function layoutNoteBlocks(
   measure: MeasureFn,
   noteDefaults: { fontFamily: string; fontSizePt: number },
   imageIndex: Map<DocxImage, number>,
-): { lines: LineBox[]; endY: number; tableOverflow: boolean } {
-  const lines: LineBox[] = []
+): { entries: Array<{ line: LineBox; images: ImageBox[] }>; endY: number; tableOverflow: boolean } {
+  const entries: Array<{ line: LineBox; images: ImageBox[] }> = []
   let curY = startY
   let tableOverflow = false
-  const transferImages = (boxLines: LineBox[], dx: number, dy: number): void => {
+  const collectImages = (boxLines: LineBox[], dx: number, dy: number): ImageBox[] => {
+    const boxes: ImageBox[] = []
     for (const line of boxLines) {
       for (const box of line.inlineImages ?? []) {
-        page.images.push({
+        boxes.push({
           ...box,
           xPx: box.xPx + dx,
           yPx: box.yPx + dy,
@@ -846,6 +854,7 @@ function layoutNoteBlocks(
         })
       }
     }
+    return boxes
   }
   for (const block of blocks) {
     if (block.kind === 'p') {
@@ -855,8 +864,7 @@ function layoutNoteBlocks(
         startY: curY,
         defaults: noteDefaults,
       })
-      transferImages(laid.lines, 0, 0)
-      lines.push(...laid.lines)
+      for (const line of laid.lines) entries.push({ line, images: collectImages([line], 0, 0) })
       curY += laid.lines.reduce((h, l) => h + l.heightPx, 0)
     } else {
       const sized = autoWidthTable(block.table, measure, noteDefaults, contentWidth)
@@ -868,23 +876,25 @@ function layoutNoteBlocks(
       })
       if (chunk.consumedRows < sized.rows.length) tableOverflow = true
       if (chunk.consumedRows === 0) continue
-      transferImages(chunk.lines, margin, curY)
       for (const line of chunk.lines) {
-        lines.push({
-          ...line,
-          xPx: line.xPx + margin,
-          yPx: line.yPx + curY,
-          baselinePx: line.baselinePx === undefined ? undefined : line.baselinePx + curY,
-          segs: line.segs.map((seg) =>
-            seg.transform ? { ...seg, transform: { ...seg.transform, e: seg.transform.e + margin, f: seg.transform.f + curY } } : seg
-          ),
+        entries.push({
+          line: {
+            ...line,
+            xPx: line.xPx + margin,
+            yPx: line.yPx + curY,
+            baselinePx: line.baselinePx === undefined ? undefined : line.baselinePx + curY,
+            segs: line.segs.map((seg) =>
+              seg.transform ? { ...seg, transform: { ...seg.transform, e: seg.transform.e + margin, f: seg.transform.f + curY } } : seg
+            ),
+          },
+          images: collectImages([line], margin, curY),
         })
       }
       page.tables.push({ xPx: margin, yPx: curY, widthPx: chunk.widthPx, rows: chunk.rows })
       curY += chunk.heightPx
     }
   }
-  return { lines, endY: curY, tableOverflow }
+  return { entries, endY: curY, tableOverflow }
 }
 
 function attachFootnotesToPages(
@@ -925,8 +935,10 @@ function attachFootnotesToPages(
     const curY = Math.max(bottomY - neededHeight, lowestBodyY + 12)
     const noteDefaults = { fontFamily: defaults.fontFamily, fontSizePt: Math.max(8, defaults.fontSizePt * 0.85) }
     const laid = layoutNoteBlocks(noteBlocks, page, margin, contentWidth, bottomY, curY, measure, noteDefaults, imageIndex)
-    fnLines.push(...laid.lines)
+    for (const e of laid.entries) fnLines.push(e.line)
     const { kept, truncated } = clampNoteLines(fnLines, bottomY)
+    const keptSet = new Set(kept)
+    for (const e of laid.entries) if (keptSet.has(e.line)) for (const box of e.images) page.images.push(box)
     if (truncated || laid.tableOverflow || (noteBlocks.length > 0 && kept.length === 0)) pushNoteOverflow(page, 'footnote-overflow')
     if (kept.length > 0) {
       page.footnotes = {
@@ -956,10 +968,10 @@ function attachEndnotesToPages(
       }
     }
   }
-  const targetIds = referencedIds.size > 0
-    ? referencedIds
-    : new Set(document.endnotes.filter((n) => n.type === 'normal' || !n.type).map((n) => n.id))
-  if (targetIds.size === 0) return
+  // Unreferenced endnotes stay unattached (Word shows nothing for them),
+  // matching the footnote path which only lays out referenced notes.
+  if (referencedIds.size === 0) return
+  const targetIds = referencedIds
 
   const lastPage = pages[pages.length - 1]
   const margin = lastPage.footer?.margins?.left ?? 96
@@ -982,8 +994,10 @@ function attachEndnotesToPages(
   const curY = Math.max(bottomY - neededHeight, lowestBodyY + 12)
   const noteDefaults = { fontFamily: defaults.fontFamily, fontSizePt: Math.max(8, defaults.fontSizePt * 0.85) }
   const laid = layoutNoteBlocks(noteBlocks, lastPage, margin, contentWidth, bottomY, curY, measure, noteDefaults, imageIndex)
-  enLines.push(...laid.lines)
+  for (const e of laid.entries) enLines.push(e.line)
   const { kept, truncated } = clampNoteLines(enLines, bottomY)
+  const keptSet = new Set(kept)
+  for (const e of laid.entries) if (keptSet.has(e.line)) for (const box of e.images) lastPage.images.push(box)
   if (truncated || laid.tableOverflow || (noteBlocks.length > 0 && kept.length === 0)) pushNoteOverflow(lastPage, 'endnote-overflow')
   if (kept.length > 0) {
     lastPage.endnotes = {
