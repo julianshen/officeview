@@ -7,6 +7,7 @@ import type { ParsedDrawingTextBody } from '../drawing/text-parse'
 import type { ImageSelection, SvgCandidate, SvgVerdict } from '../core/svg'
 import type { DrawingCoverageEntry } from '../drawing/coverage'
 import type { TextWarp } from '../drawing/text'
+import type { EmbeddedFontFace, FontDiagnostic } from '../core/fonts/types'
 
 export interface DocxTextRun {
   text: string
@@ -140,6 +141,8 @@ export interface DocxSection {
 }
 
 export interface DocxDocument {
+  embeddedFonts?: EmbeddedFontFace[]
+  fontDiagnostics?: FontDiagnostic[]
   drawingCoverage?: DrawingCoverageEntry[]
   sections: DocxSection[]
   defaultFontFamily: string
@@ -156,6 +159,8 @@ export interface DocxTableBorders {
   right?: TableCellBorder
   insideH?: TableCellBorder
   insideV?: TableCellBorder
+  tl2br?: TableCellBorder
+  tr2bl?: TableCellBorder
 }
 
 export interface DocxTableCellMargins {

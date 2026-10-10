@@ -64,7 +64,7 @@ export interface PptxTableCell {
   fill?: string
   /** Direct DrawingML paint; explicit none/transparent paint overrides style fill. */
   drawingFill?: DrawingFill
-  drawingBorders?: Partial<Record<'left' | 'right' | 'top' | 'bottom', DrawingLine>>
+  drawingBorders?: Partial<Record<'left' | 'right' | 'top' | 'bottom' | 'tlToBr' | 'blToTr', DrawingLine>>
   margins?: { leftEmu?: number; rightEmu?: number; topEmu?: number; bottomEmu?: number }
   anchor?: PptxTextBody['anchor']
 }
@@ -80,7 +80,7 @@ export interface PptxTableBorder {
   widthEmu?: number
 }
 
-export type PptxTableBorders = Partial<Record<'left' | 'right' | 'top' | 'bottom' | 'insideH' | 'insideV', PptxTableBorder>>
+export type PptxTableBorders = Partial<Record<'left' | 'right' | 'top' | 'bottom' | 'insideH' | 'insideV' | 'tl2br' | 'tr2bl' | 'tlToBr' | 'blToTr', PptxTableBorder>>
 
 export interface PptxTable {
   /** a:tblGrid/a:gridCol@w in EMU. */

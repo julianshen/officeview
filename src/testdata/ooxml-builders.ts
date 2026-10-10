@@ -347,6 +347,7 @@ export interface PptxTableCellSpec {
   /** Emitted as hMerge/vMerge (a merged-away cell). */
   merged?: boolean
   fill?: string
+  borders?: string
 }
 
 export interface PptxTableSpec {
@@ -359,6 +360,8 @@ export interface PptxTableSpec {
   }>
   /** a:tblPr/a:tableStyleId (must exist in the fixture tableStyles.xml). */
   styleId?: string
+  /** Raw <a:tblStyle> XML overriding the canned style entry for styleId (test-only). */
+  customStyleXml?: string
   firstRow?: boolean
   bandRow?: boolean
 }
@@ -430,10 +433,14 @@ export async function buildPptx(shapes: PptxShapeSpec[]): Promise<Uint8Array> {
   <p:sldSz cx="9144000" cy="6858000"/>
 </p:presentation>`)
   const styleIds = [...new Set(shapes.map((s) => s.table?.styleId).filter((v): v is string => !!v))]
+  const customStyles = new Map<string, string>()
+  for (const s of shapes) {
+    if (s.table?.styleId && s.table.customStyleXml) customStyles.set(s.table.styleId, s.table.customStyleXml)
+  }
   if (styleIds.length > 0) {
     zip.file('ppt/tableStyles.xml',
       `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-<a:tblStyleLst xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" def="{5C22544A-7EE6-4342-B048-85BDC9FD1C3A}">${styleIds.map((id) => tableStyleXml(id)).join('')}</a:tblStyleLst>`)
+<a:tblStyleLst xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" def="{5C22544A-7EE6-4342-B048-85BDC9FD1C3A}">${styleIds.map((id) => customStyles.get(id) ?? tableStyleXml(id)).join('')}</a:tblStyleLst>`)
   }
   const shapeXml = (s: PptxShapeSpec) => {
     if (s.table) {
@@ -442,7 +449,8 @@ export async function buildPptx(shapes: PptxShapeSpec[]): Promise<Uint8Array> {
         if (c.gridSpan) attrs.push(`gridSpan="${c.gridSpan}"`)
         if (c.rowSpan) attrs.push(`rowSpan="${c.rowSpan}"`)
         if (c.merged) attrs.push('hMerge="1"')
-        const tcPr = c.fill ? `<a:tcPr><a:solidFill><a:srgbClr val="${c.fill}"/></a:solidFill></a:tcPr>` : '<a:tcPr/>'
+        const tcPrContent = `${c.fill ? `<a:solidFill><a:srgbClr val="${c.fill}"/></a:solidFill>` : ''}${c.borders ?? ''}`
+        const tcPr = tcPrContent ? `<a:tcPr>${tcPrContent}</a:tcPr>` : '<a:tcPr/>'
         const ps = (c.paragraphs ?? []).map(pptxParaXml).join('')
         return `<a:tc ${attrs.join(' ')}>${tcPr}<a:txBody><a:bodyPr/><a:lstStyle/>${ps || '<a:p/>'}</a:txBody></a:tc>`
       }

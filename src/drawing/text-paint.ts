@@ -6,6 +6,8 @@ import { layoutTextBody, resolveTextFamily, type MeasureText, type TextLayout } 
 import type { DrawingTextBody as PptxTextBody, DrawingTextStyle as PptxTextStyle } from './text'
 import { buildWarpMapping, buildWarpLattice, type WarpMapping } from './text-warp'
 import { scratchSurface, type PaintSurface } from './paint'
+import { getPatternTile, evictPatternTile } from './pattern'
+export { paintPatternTile } from './pattern'
 
 /** Without native spacing, preserve contextual shaping rather than drawing
  * isolated Arabic/Indic clusters. Requested source tracking remains in the model. */
@@ -25,82 +27,7 @@ export function trackingEligible(cluster: string): boolean {
 const canvasText = (text: string): string => text.replace(/[\t\n\f\r]/g, ' ')
 
 export interface AppearanceBox { x: number; y: number; width: number; height: number }
-/**
- * Paint one pattern tile (tile-sized ctx). Diagonal families draw 45-degree
- * fg lines over bg; grids draw fg rules. Deterministic geometry so tiles
- * repeat seamlessly.
- */
-export function paintPatternTile(ctx: CanvasRenderingContext2D, preset: string, fg: string, bg: string, size: number): void {
-  ctx.save()
-  try {
-    ctx.fillStyle = bg
-    ctx.fillRect(0, 0, size, size)
-    ctx.strokeStyle = fg
-    if (preset.endsWith('UpDiag') || preset.endsWith('DnDiag')) {
-      const up = preset.endsWith('UpDiag')
-      ctx.lineWidth = preset.startsWith('dk') ? Math.max(2, size / 3) : Math.max(1, size / 8)
-      ctx.beginPath()
-      for (const o of [-size, 0, size]) {
-        if (up) { ctx.moveTo(o, size); ctx.lineTo(o + size, 0) }
-        else { ctx.moveTo(o, 0); ctx.lineTo(o + size, size) }
-      }
-      ctx.stroke()
-    } else {
-      const cell = preset === 'smGrid' ? size / 2 : size
-      ctx.lineWidth = Math.max(1, size / 8)
-      ctx.beginPath()
-      for (let k = 0; k <= size + 0.5; k += cell) {
-        ctx.moveTo(k, 0); ctx.lineTo(k, size)
-        ctx.moveTo(0, k); ctx.lineTo(size, k)
-      }
-      ctx.stroke()
-    }
-  } finally {
-    ctx.restore()
-  }
-}
-function makePatternTile(size: number): { image: CanvasImageSource; ctx: CanvasRenderingContext2D } | undefined {
-  if (typeof OffscreenCanvas !== 'undefined') {
-    const canvas = new OffscreenCanvas(size, size)
-    const ctx = canvas.getContext('2d')
-    if (ctx) return { image: canvas, ctx: ctx as unknown as CanvasRenderingContext2D }
-  }
-  // In a real browser DOM, use a detached <canvas>. Under Node/jsdom, avoid
-  // passing mock DOM elements to native canvas bindings.
-  if (typeof document !== 'undefined' && (typeof process === 'undefined' || !process.versions?.node)) {
-    const canvas = document.createElement('canvas')
-    canvas.width = canvas.height = size
-    const ctx = canvas.getContext('2d')
-    if (ctx) return { image: canvas, ctx }
-  }
-  // No tile surface (e.g. node-canvas): callers fall back to the fg solid.
-  return undefined
-}
-/** Tile canvases are ctx-independent and shared across paints, bounded so
- * file-controlled colours cannot grow the process cache without limit. */
-const patternTiles = new Map<string, CanvasImageSource>()
-const MAX_PATTERN_TILES = 64
-function patternTile(preset: string, fg: string, bg: string): CanvasImageSource | undefined {
-  const key = `${preset}\n${fg}\n${bg}`
-  let tile = patternTiles.get(key)
-  if (tile) {
-    // True LRU: a hit promotes the entry to most-recent. The previous Map's
-    // insertion-order eviction was FIFO while documented as LRU — fixed here
-    // (C1); the capacity policy (64 tiles, 8x8 px each) is unchanged.
-    patternTiles.delete(key)
-    patternTiles.set(key, tile)
-    return tile
-  }
-  const made = makePatternTile(8)
-  if (!made) return undefined
-  paintPatternTile(made.ctx, preset, fg, bg, 8)
-  if (patternTiles.size >= MAX_PATTERN_TILES) {
-    const oldest = patternTiles.keys().next()
-    if (!oldest.done) patternTiles.delete(oldest.value)
-  }
-  patternTiles.set(key, made.image)
-  return made.image
-}
+
 function resolveTextFill(
   ctx: CanvasRenderingContext2D,
   style: PptxTextStyle,
@@ -127,13 +54,12 @@ function resolveTextFill(
     const key = `${fill.preset}\n${fill.fg}\n${fill.bg}`
     let pat = patternCache.get(key)
     if (pat === undefined) {
-      const tile = patternTile(fill.preset, fill.fg, fill.bg)
-      // Defensive: some hosts hand out canvas elements their own
-      // createPattern rejects (e.g. jsdom stubs) — fall back to fg solid.
+      const tile = getPatternTile(ctx, fill.preset, fill.fg, fill.bg)
       try {
         pat = tile ? ctx.createPattern(tile, 'repeat') : null
       } catch {
         pat = null
+        evictPatternTile(fill.preset, fill.fg, fill.bg)
       }
       patternCache.set(key, pat)
     }

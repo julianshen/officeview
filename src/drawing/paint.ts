@@ -1,6 +1,7 @@
 /** DrawingML painting in local pixels; adapters own placement/rotation/flips. */
 import type { ResolvedCommand, ResolvedGeometry, ResolvedPath } from './geometry'
-import { resolveDrawingColor, type ArrowEnd, type DrawingColor, type DrawingFill, type DrawingLine, type DrawingStyle, type DrawingIssue } from './style'
+import { resolveDrawingColor, computeShadowOffset, type ArrowEnd, type DrawingColor, type DrawingFill, type DrawingLine, type DrawingStyle, type DrawingIssue } from './style'
+import { getPatternTile, evictPatternTile } from './pattern'
 
 type Point = [number, number]
 interface PaintBounds { left: number; top: number; right: number; bottom: number }
@@ -30,6 +31,25 @@ function paintFill(ctx: CanvasRenderingContext2D, fill: DrawingFill | undefined,
   if (fill.kind === 'solid') {
     if (!finiteColor(fill.color)) { issues.push({ kind: 'invalid-paint', message: 'Nonfinite fill color' }); return undefined }
     return css(shadeColor(fill.color, mode))
+  }
+  if (fill.kind === 'pattern') {
+    if (!finiteColor(fill.fgColor) || !finiteColor(fill.bgColor)) {
+      issues.push({ kind: 'invalid-paint', message: 'Nonfinite pattern color' }); return undefined
+    }
+    const fg = shadeColor(fill.fgColor, mode)
+    const bg = shadeColor(fill.bgColor, mode)
+    const fgCss = css(fg)
+    const bgCss = css(bg)
+    const tile = getPatternTile(ctx, fill.preset, fgCss, bgCss)
+    if (tile) {
+      try {
+        const pat = ctx.createPattern(tile, 'repeat')
+        if (pat) return pat
+      } catch {
+        evictPatternTile(fill.preset, fgCss, bgCss)
+      }
+    }
+    return fgCss
   }
   if (!Number.isFinite(fill.angle) || fill.stops.some(stop => !Number.isFinite(stop.position) || !finiteColor(stop.color))) {
     issues.push({ kind: 'invalid-paint', message: 'Nonfinite gradient data' }); return undefined
@@ -324,6 +344,82 @@ export function paintGeometry(ctx: CanvasRenderingContext2D, geometry: ResolvedG
   const paths = Array.isArray(geometry) ? geometry : geometry.paths
   ctx.save()
   try {
+    if (style.shadow) {
+      if (!finiteColor(style.shadow.color)) {
+        issues.push({ kind: 'invalid-paint', message: 'Nonfinite shadow color' })
+      } else if (!Number.isFinite(style.shadow.offsetX) || !Number.isFinite(style.shadow.offsetY) || !Number.isFinite(style.shadow.blurPx)) {
+        issues.push({ kind: 'invalid-paint', message: 'Nonfinite shadow metrics' })
+      } else {
+        const { offsetX: effOffX, offsetY: effOffY } = computeShadowOffset(style.shadow)
+        if (style.shadow.color.a > 0 && (effOffX !== 0 || effOffY !== 0 || style.shadow.blurPx > 0)) {
+          // Move the complete source silhouette left of the device viewport,
+          // then compensate the shadow offset to keep its intended placement.
+          const matrix = ctx.getTransform()
+          const scaleX = Math.hypot(matrix.a, matrix.b)
+          const scaleY = Math.hypot(matrix.c, matrix.d)
+          let sourceRight = 0
+          for (const path of paths) {
+            if (!validPath(path.commands)) continue
+            const bounds = paintBounds(path, style.line)
+            if (!bounds) continue
+            // Control-point/arc bounds also include strokes, miters and arrows.
+            // Transform every corner so rotation, skew, flips and translation
+            // cannot bring a supposedly displaced source back onto the canvas.
+            for (const x of [bounds.left, bounds.right]) {
+              for (const y of [bounds.top, bounds.bottom]) {
+                sourceRight = Math.max(sourceRight, matrix.a * x + matrix.c * y + matrix.e)
+              }
+            }
+          }
+          const dxDev = -(sourceRight + 1)
+          const scale = scaleX
+          let offXDev: number, offYDev: number
+          if (style.shadow.rotWithShape === false) {
+            // Device-space offset: per-axis CTM scale keeps x/y honest under
+            // non-uniform scaling; flips are direction-preserving via hypot.
+            offXDev = effOffX * (scaleX > 0 ? scaleX : 1)
+            offYDev = effOffY * (scaleY > 0 ? scaleY : 1)
+          } else {
+            offXDev = matrix.a * effOffX + matrix.c * effOffY
+            offYDev = matrix.b * effOffX + matrix.d * effOffY
+          }
+          ctx.save()
+          try {
+            ctx.setTransform(matrix.a, matrix.b, matrix.c, matrix.d, matrix.e + dxDev, matrix.f)
+            ctx.shadowOffsetX = offXDev - dxDev
+            ctx.shadowOffsetY = offYDev
+            ctx.shadowBlur = style.shadow.blurPx * (scale > 0 ? scale : 1)
+            const shadowCss = css(style.shadow.color)
+            ctx.shadowColor = shadowCss
+          ctx.fillStyle = shadowCss
+          ctx.strokeStyle = shadowCss
+          // Note: for shapes with both fill and stroke, sequential shadow passes approximate
+          // the unified OpenXML silhouette; small stroke-overlap differences are an accepted Canvas 2D tradeoff.
+          for (const path of paths) {
+            if (!validPath(path.commands)) continue
+            const hasFill = path.fill !== 'none' && width > 0 && height > 0 && style.fill && style.fill.kind !== 'none'
+            const hasStroke = path.stroke && style.line && (style.line.fill ? style.line.fill.kind !== 'none' : true)
+            if (!hasFill && !hasStroke) continue
+            drawPath(ctx, path.commands)
+            if (hasFill) {
+              ctx.fill()
+            }
+            if (hasStroke) {
+              const lineWidth = setupLine(ctx, style.line!, [])
+              if (lineWidth !== undefined) {
+                ctx.stroke()
+                const ends = endpoints(path.commands)
+                arrow(ctx, ends.head, style.line!.headEnd, lineWidth, true)
+                arrow(ctx, ends.tail, style.line!.tailEnd, lineWidth, false)
+              }
+            }
+          }
+        } finally {
+          ctx.restore()
+        }
+      }
+    }
+  }
     for (const [pathIndex, path] of paths.entries()) {
       if (!validPath(path.commands)) { issues.push({ kind: 'invalid-paint', message: 'Invalid geometry path', pathIndex }); continue }
       const bounds = paintBounds(path, style.line)

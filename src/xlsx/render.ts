@@ -10,6 +10,7 @@ import { resolveColor } from '../core/color'
 import { paintWatermark, type ResolvedWatermark, type WatermarkOptions } from '../core/watermark'
 import { paintScene } from '../drawing/scene-paint'
 import { paintDrawingContent } from '../drawing/content-paint'
+import type { ContentPaintAssets } from '../drawing/content'
 import { createTextBodyMeasurer, paintTextBody } from '../drawing/text-paint'
 import { graphemes } from '../core/text-recording'
 import { resolveGeometry } from '../drawing/geometry'
@@ -302,6 +303,12 @@ export function computePrintMetrics(sheet: XlsxSheet, grid: GridMetrics, dpi = 9
  * area, clipped. Page (pageCol, pageRow) selects its sheet-coordinate window;
  * content beyond one page clips (multi-page paintables are a follow-up).
  */
+export interface RenderSheetAssets {
+  images?: ReadonlyArray<CanvasImageSource | undefined>
+  resolveFont?: (family: string) => string
+  imageFor?: ContentPaintAssets['imageFor']
+}
+
 export function renderPrintPage(
   sheet: XlsxSheet,
   ctx: CanvasRenderingContext2D,
@@ -310,7 +317,7 @@ export function renderPrintPage(
   pageCol = 0,
   pageRow = 0,
   watermark?: WatermarkOptions | ResolvedWatermark,
-  prepared?: { images?: ReadonlyArray<CanvasImageSource | undefined>; resolveFont?: (family: string) => string },
+  prepared?: RenderSheetAssets,
 ): void {
   ctx.save()
   try {
@@ -503,7 +510,7 @@ export function renderSheet(
   ctx: CanvasRenderingContext2D,
   metrics?: GridMetrics,
   watermark?: WatermarkOptions | ResolvedWatermark,
-  prepared?: { images?: ReadonlyArray<CanvasImageSource | undefined>; resolveFont?: (family: string) => string },
+  prepared?: RenderSheetAssets,
   viewport?: SheetViewport,
 ): void {
   ctx.save()
@@ -671,6 +678,7 @@ export function renderSheet(
     paintContent(node, context, w, h) {
       if (!node.content) return
       paintDrawingContent(node.content, context, w, h, {
+        assets: prepared,
         fontFamilyCss: family => JSON.stringify(prepared?.resolveFont?.(family) ?? family),
         paintDiagramText(shape, c, width, height) { if (shape.textBody) paintTextBody(shape.textBody, c, 0, 0, width, height, prepared?.resolveFont ?? (f => f), sheet.drawingTheme) },
         paintTextbox(content, c, width, height) { paintTextBody({ paragraphs: content.paragraphs, anchor: 't', wrap: true, insetLeftEmu: content.insets.left, insetTopEmu: content.insets.top, insetRightEmu: content.insets.right, insetBottomEmu: content.insets.bottom }, c, 0, 0, width, height, prepared?.resolveFont ?? (f => f), sheet.drawingTheme) },

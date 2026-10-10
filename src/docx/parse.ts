@@ -2,6 +2,7 @@
  * Parse DOCX parts (document.xml, styles.xml) into the DocxDocument model.
  */
 import type { OfficePackage } from '../core/zip'
+import { loadDocxEmbeddedFonts } from '../core/fonts/docx'
 import { sniffImageMime } from '../core/images'
 import { attrs, elementChildren, getChildren, orderedChildren, textOf, type XmlNode } from '../core/xml'
 import { applyParagraphDefaults, authoredCategories, issueCategory, paragraphRunDefaults, readRunProperties, readTheme, styleChain, styleContext, type DocxStyleContext, type ParagraphStyleLayers } from './styles'
@@ -84,6 +85,12 @@ interface FieldAwareRun extends DocxTextRun {
   _instr?: string
 }
 
+function symbolText(node: XmlNode): string {
+  const value = attrs(node).char ?? ''
+  const cp = /^[0-9a-f]{1,6}$/i.test(value) ? parseInt(value, 16) : NaN
+  return Number.isInteger(cp) && cp <= 0x10ffff && !(cp >= 0xd800 && cp <= 0xdfff) ? String.fromCodePoint(cp) : ''
+}
+
 function parseRun(r: XmlNode, inherited?: Partial<DocxTextRun>, context?: ParagraphContext, issues?: import('../drawing/text-parse').TextAppearanceIssue[]): FieldAwareRun {
   const rPr = getChildren(r, 'rPr')[0]
   let run: FieldAwareRun = { text: '', ...inherited }
@@ -100,6 +107,13 @@ function parseRun(r: XmlNode, inherited?: Partial<DocxTextRun>, context?: Paragr
       run.text += '\t'
     } else if (name === 'br') {
       run.text += '\n'
+    } else if (name === 'sym') {
+      const a = attrs(child)
+      const text = symbolText(child)
+      if (text) {
+        run.text += text
+        if (!getChildren(r, 't').length && a.font) run.fontFamily = a.font
+      }
     }
   }
   return run
@@ -283,7 +297,7 @@ export function parseParagraph(
     for (const [name, node] of orderedChildren(parent)) {
       if (name === 'r') {
         const rPr = getChildren(node, 'rPr')[0]
-        const hasText = getChildren(node, 't').length > 0 || getChildren(node, 'tab').length > 0 || getChildren(node, 'br').length > 0
+        const hasText = getChildren(node, 't').length > 0 || getChildren(node, 'tab').length > 0 || getChildren(node, 'br').length > 0 || getChildren(node, 'sym').length > 0
         if (hasText) {
           textRunAuthored.push(authoredCategories(rPr))
         }
@@ -295,12 +309,16 @@ export function parseParagraph(
             if (tag === 't') addRun({ ...run, text: textOf(child), breakBefore: undefined })
             else if (tag === 'tab') addRun({ ...run, text: '\t', breakBefore: undefined })
             else if (tag === 'br') addRun({ ...run, text: '\n', breakBefore: undefined })
+            else if (tag === 'sym') {
+              const text = symbolText(child)
+              if (text) addRun({ ...run, text, breakBefore: undefined })
+            }
             else if (tag === 'drawing') addImage(parseDrawing(child, images, context))
             else if (tag === 'pict') addImage(parsePict(child, context))
             else if (tag === 'AlternateContent') alternate(child)
           }
         }
-      } else if (name === 'hyperlink' || name === 'sdtContent') walk(node)
+      } else if (name === 'hyperlink' || name === 'sdtContent' || name === 'ins' || name === 'moveTo') walk(node)
       else if (name === 'drawing') addImage(parseDrawing(node, images, context))
       else if (name === 'pict') addImage(parsePict(node, context))
       else if (name === 'AlternateContent') alternate(node)
@@ -969,7 +987,7 @@ function unwrapContentControls(node: XmlNode | undefined): Array<[string, XmlNod
   for (const [name, child] of orderedChildren(node)) {
     if (name === 'sdt') {
       out.push(...unwrapContentControls(getChildren(child, 'sdtContent')[0]))
-    } else if (name === 'sdtContent') {
+    } else if (name === 'sdtContent' || name === 'ins' || name === 'moveTo') {
       out.push(...unwrapContentControls(child))
     } else {
       out.push([name, child])
@@ -1114,6 +1132,7 @@ export async function parseDocx(pkg: OfficePackage): Promise<DocxDocument> {
     return true
   })
   return {
+    ...await loadDocxEmbeddedFonts(pkg),
     drawingCoverage: uniqueCoverage,
     sections,
     defaultFontFamily,
@@ -1135,7 +1154,7 @@ function parseBorders(parent: XmlNode): DocxTableBorders {
   const el = getChildren(parent, 'tblBorders')[0] ?? getChildren(parent, 'tcBorders')[0]
   if (!el) return {}
   const out: DocxTableBorders = {}
-  for (const side of ['top','bottom','left','right','insideH','insideV'] as const) {
+  for (const side of ['top','bottom','left','right','insideH','insideV','tl2br','tr2bl'] as const) {
     const node = getChildren(el,side)[0]
     if (node) out[side] = parseSideBorder(node)
   }
@@ -1145,7 +1164,7 @@ function parseBorders(parent: XmlNode): DocxTableBorders {
 /** Border sides merge individually; explicit nil/none clears an inherited side. */
 function mergeBorders(...sources: Array<DocxTableBorders | undefined>): DocxTableBorders {
   const out: DocxTableBorders = {}
-  for (const source of sources) for (const side of ['top', 'bottom', 'left', 'right', 'insideH', 'insideV'] as const) {
+  for (const source of sources) for (const side of ['top', 'bottom', 'left', 'right', 'insideH', 'insideV', 'tl2br', 'tr2bl'] as const) {
     if (!source || !(side in source)) continue
     out[side] = source[side] === undefined ? undefined : { ...out[side], ...source[side] }
   }

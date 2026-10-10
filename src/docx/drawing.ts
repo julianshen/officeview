@@ -117,7 +117,8 @@ export async function loadDrawingParts(
   return out
 }
 export function paintDrawing(drawing: DocxDrawing, ctx: CanvasRenderingContext2D, width: number, height: number, assets?: ContentPaintAssets): void {
-  const resolve = withFallbackFonts(fontFamilyCss, assets?.fallbackFonts)
+  const baseFamilyCss = assets?.resolveFont ? (family: string) => fontFamilyCss(assets.resolveFont!(family)) : fontFamilyCss
+  const resolve = withFallbackFonts(baseFamilyCss, assets?.fallbackFonts)
   paintDrawingContent(drawing, ctx, width, height, { fontFamilyCss: resolve, paintDiagramText: (s, c, w, h) => paintDiagramText(s, c, w, h, resolve), paintTextbox, assets })
 }
 // Cached DrawingML text can carry alpha as a CSS color; older Word text runs
@@ -141,12 +142,12 @@ function paintDiagramText(s: DocxDrawingShape, ctx: CanvasRenderingContext2D, w:
       for (const p of rows) {
         const fontSize = Math.max(0, ...p.runs.map((r) => ((r.fontSizePt ?? 24) * 4) / 3))
         const textWidth = p.runs.reduce((sum, r) => {
-          ctx.font = font(r, s.fontFamily, 24)
+          ctx.font = font(r, s.fontFamily, 24, resolve)
           return sum + ctx.measureText(r.text).width
         }, 0)
         let tx = p.align === 'center' ? (w - textWidth) / 2 : p.align === 'right' ? w - textWidth : 0
         for (const r of p.runs) {
-          ctx.font = font(r, s.fontFamily, 24)
+          ctx.font = font(r, s.fontFamily, 24, resolve)
           ctx.fillStyle = textColor(r.color ?? s.textColor ?? '000000')
           ctx.textBaseline = 'alphabetic'
           ctx.fillText(r.text, tx, ty + fontSize * 0.9)
@@ -156,7 +157,8 @@ function paintDiagramText(s: DocxDrawingShape, ctx: CanvasRenderingContext2D, w:
       }
 }
 function paintTextbox(drawing: Extract<DocxDrawing, { kind: 'textbox' }>, ctx: CanvasRenderingContext2D, width: number, height: number, assets?: ContentPaintAssets): void {
-  const resolve = withFallbackFonts(fontFamilyCss, assets?.fallbackFonts)
+  const baseFamilyCss = assets?.resolveFont ? (family: string) => fontFamilyCss(assets.resolveFont!(family)) : fontFamilyCss
+  const resolve = withFallbackFonts(baseFamilyCss, assets?.fallbackFonts)
   ctx.save()
   try {
     const sources: DocxTextRun[][] = []
@@ -198,10 +200,12 @@ function paintTextbox(drawing: Extract<DocxDrawing, { kind: 'textbox' }>, ctx: C
     })
     const body: PptxTextBody = {
       direction: drawing.direction ?? (drawing.vertical ? 'eaVert' : 'horz'), paragraphs,
-      anchor: 't', wrap: true,
+      anchor: drawing.anchor ?? 't',
+      wrap: drawing.wrap ?? true,
       insetLeftEmu: drawing.insets.left, insetRightEmu: drawing.insets.right,
       insetTopEmu: drawing.insets.top, insetBottomEmu: drawing.insets.bottom,
       textWarp: drawing.textWarp,
+      autofit: drawing.autofit,
       diagnostics: drawing.diagnostics,
     }
     const laid = layoutTextBody(body, width, height, createTextBodyMeasurer(ctx, resolve))
@@ -276,6 +280,7 @@ const TEXTBOX_HIGHLIGHT_CSS: Record<string, string> = {
   darkYellow: '#808000', darkGray: '#a9a9a9', lightGray: '#d3d3d3',
   black: '#000000', white: '#ffffff'
 }
-function font(run: DocxTextRun, family: string, size: number): string {
-  return `${run.italic ? 'italic ' : ''}${run.bold ? 'bold ' : ''}${run.fontSizePt ?? size}pt ${fontFamilyCss(run.fontFamily ?? family)}`
+function font(run: DocxTextRun, family: string, size: number, resolve?: FontResolver): string {
+  const css = resolve ? resolve(run.fontFamily ?? family) : fontFamilyCss(run.fontFamily ?? family)
+  return `${run.italic ? 'italic ' : ''}${run.bold ? 'bold ' : ''}${run.fontSizePt ?? size}pt ${css}`
 }

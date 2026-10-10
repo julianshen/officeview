@@ -34,7 +34,10 @@ export function paintDrawingContent<Paragraph, Text>(drawing: DrawingContent<Par
         paintShapes(s.children ?? [])
         continue
       }
-      if (s.drawingGeometry) {
+      if (s.image) {
+        const img = options.assets?.imageFor?.(s.image)
+        if (img && w > 0 && h > 0) ctx.drawImage(img, 0, 0, w, h)
+      } else if (s.drawingGeometry) {
         paintGeometry(ctx, resolveGeometry(s.drawingGeometry, w, h), s.drawingStyle ?? { issues: [] }, w, h)
       } else {
         ctx.beginPath()

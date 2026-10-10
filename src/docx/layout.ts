@@ -5,7 +5,8 @@
  */
 import type { DocxBlock, DocxDocument, DocxImage, DocxParagraph, DocxSection, DocxTable, DocxTableCell, DocxTableRow, DocxTextRun, TableCellBorder } from './types'
 import { paintDrawing } from './drawing'
-import type { ContentPaintAssets } from '../drawing/content'
+import type { ContentImageAsset, ContentPaintAssets } from '../drawing/content'
+import type { FontResolver } from '../core/fonts/register'
 import { fontFamilyCss } from './styles'
 import { withFallbackFonts } from '../core/fonts/fallback'
 import { emuToPx } from '../core/geometry'
@@ -104,7 +105,7 @@ export interface HFBlock {
   margins?: { top: number; bottom: number; left: number; right: number }
   clipTopPx?: number
   clipBottomPx?: number
-  imageIndex?: Map<DocxImage, number>
+  imageIndex?: Map<CollectedDocImage, number>
   yPx: number
   xPx: number
   widthPx: number
@@ -135,7 +136,7 @@ export interface TableCellBox {
   heightPx: number
   fill?: string
   borders?: { left?: string; right?: string; top?: string; bottom?: string }
-  borderSpecs?: Partial<Record<'left' | 'right' | 'top' | 'bottom', TableCellBorder>>
+  borderSpecs?: Partial<Record<'left' | 'right' | 'top' | 'bottom' | 'tl2br' | 'tr2bl', TableCellBorder>>
 }
 
 export interface TableRowBox {
@@ -496,14 +497,25 @@ function blockParagraphs(blocks: DocxBlock[]): DocxParagraph[] {
  * Vector drawings that carry textbox paragraphs contribute their nested
  * images depth-first (cycles impossible through the seen set), so a textbox
  * asset keeps its source position directly after its owning placement. */
-export function collectDocImages(document: DocxDocument): DocxImage[] {
-  const out: DocxImage[] = [], seen = new Set<DocxImage>()
-  const push = (image: DocxImage): void => {
+export type CollectedDocImage = ContentImageAsset & Partial<Omit<DocxImage, 'data' | 'mime'>>
+export function collectDocImages(document: DocxDocument): CollectedDocImage[] {
+  const out: CollectedDocImage[] = [], seen = new Set<ContentImageAsset>()
+  const shapesSeen = new Set<import('./types').DocxDrawingShape>()
+  const shapes = (items: import('./types').DocxDrawingShape[]): void => {
+    for (const shape of items) {
+      if (shapesSeen.has(shape)) continue
+      shapesSeen.add(shape)
+      if (shape.image) push(shape.image)
+      if (shape.children) shapes(shape.children)
+    }
+  }
+  const push = (image: CollectedDocImage): void => {
     if (seen.has(image)) return
     seen.add(image)
     out.push(image)
     const drawing = image.drawing
     if (drawing?.kind === 'textbox') for (const paragraph of drawing.paragraphs) for (const nested of paragraph.images ?? []) push(nested)
+    if (drawing?.kind === 'diagram') shapes(drawing.shapes)
   }
   const collect = (blocks: DocxBlock[]) => {
     for (const paragraph of blockParagraphs(blocks)) for (const image of paragraph.images ?? []) push(image)
@@ -728,6 +740,8 @@ const HIGHLIGHT_CSS: Record<string, string> = {
 
 /** Paint laid pages onto a 2D context already scaled so 1 unit = 1 px. */
 export interface RenderPagesOptions {
+  /** Registered family aliases, shared by text measurement and painting. */
+  resolveFont?: FontResolver
   /** First page's number for PAGE field substitution (default 1). */
   pageNumberStart?: number
   /** Total for NUMPAGES substitution (default pages.length). */
@@ -748,7 +762,8 @@ export function renderPages(
   ctx.textBaseline = 'alphabetic'
   ctx.fillStyle = '#000000'
   let lastFont = ''
-  const resolveFamily = withFallbackFonts(fontFamilyCss, options?.assets?.fallbackFonts)
+  const resolveFont = options?.resolveFont ?? options?.assets?.resolveFont
+  const resolveFamily = withFallbackFonts(resolveFont ? family => fontFamilyCss(resolveFont(family)) : fontFamilyCss, options?.assets?.fallbackFonts)
   const measure = createMeasurer(ctx, resolveFamily)
   const firstNumber = options?.pageNumberStart ?? 1
   const totalPages = options?.totalPages ?? pages.length
@@ -1005,6 +1020,53 @@ function paintImages(
 /** Paint table cell fills and borders (beneath text). Cell coords are
  * table-relative; box carries the page position. */
 function paintTables(tables: TableBox[], ctx: CanvasRenderingContext2D): void {
+  type Border = { spec?: TableCellBorder; css: string }
+  type Edge = Border & { start: number; end: number }
+  const styles = ['single', 'thick', 'double', 'dotted', 'dashed', 'dotDash', 'dotDotDash', 'triple', 'thinThickSmallGap', 'thickThinSmallGap', 'thinThickThinSmallGap', 'thinThickMediumGap', 'thickThinMediumGap', 'thinThickThinMediumGap', 'thinThickLargeGap', 'thickThinLargeGap', 'thinThickThinLargeGap', 'wave', 'doubleWave', 'dashSmallGap', 'dashDotStroked', 'threeDEmboss', 'threeDEngrave', 'outset', 'inset']
+  const width = (border: Border) => border.spec?.widthPt !== undefined ? border.spec.widthPt * 4 / 3 : Math.max(1, BORDER_WIDTH[border.css] ?? 1)
+  const weight = (border: Border) => {
+    const style = border.spec?.style ?? border.css
+    if (style === 'dotted' || style === 'dashed') return 1
+    const number = style === 'single' || style === 'thin' ? 1 : style === 'thick' ? 2 : style === 'double' ? 3 : Math.max(1, styles.indexOf(style) + 3)
+    // Word's conflict weight uses eighths of a point; dotted/dashed have
+    // fixed weight 1, so a common pixel scale cannot be canceled here.
+    return width(border) * 6 * number
+  }
+  const winner = (a: Border, b: Border): Border => {
+    if (weight(a) !== weight(b)) return weight(a) > weight(b) ? a : b
+    const ai = styles.indexOf(a.spec?.style ?? 'single'), bi = styles.indexOf(b.spec?.style ?? 'single')
+    if (ai !== bi) return ai < bi ? a : b
+    // Darker colors win identical-style ties; reading order settles equality.
+    const brightness = (border: Border) => {
+      const rgb = /^#?([0-9a-f]{6})$/i.exec(border.spec?.color ?? '000000')?.[1] ?? '000000'
+      const r = parseInt(rgb.slice(0, 2), 16), g = parseInt(rgb.slice(2, 4), 16), b = parseInt(rgb.slice(4), 16)
+      return [r + b + 2 * g, b + 2 * g, g]
+    }
+    const ab = brightness(a), bb = brightness(b)
+    for (let i = 0; i < ab.length; i++) if (ab[i] !== bb[i]) return ab[i] < bb[i] ? a : b
+    return a
+  }
+  const draw = (border: Border, x1: number, y1: number, x2: number, y2: number) => {
+    const lineWidth = width(border)
+    if (!(lineWidth > 0 && Number.isFinite(lineWidth))) return
+    const style = border.spec?.style ?? border.css
+    const offset = border.spec?.widthPt !== undefined ? 0 : 0.5
+    ctx.save()
+    try {
+      ctx.strokeStyle = border.spec?.color && border.spec.color !== 'auto' ? resolveColor(border.spec.color) : '#000000'
+      ctx.lineWidth = lineWidth
+      ctx.lineJoin = 'miter'
+      ctx.setLineDash(style === 'dashed' || style === 'dashSmallGap' ? [lineWidth * 3, lineWidth * 2] : style === 'dotted' ? [lineWidth, lineWidth * 2] : style === 'dotDash' ? [lineWidth * 3, lineWidth * 2, lineWidth, lineWidth * 2] : [])
+      const stroke = (dx = 0, dy = 0) => {
+        ctx.beginPath(); ctx.moveTo(x1 + offset + dx, y1 + offset + dy); ctx.lineTo(x2 + offset + dx, y2 + offset + dy); ctx.stroke()
+      }
+      if (style === 'double') {
+        ctx.lineWidth = lineWidth / 3
+        const length = Math.hypot(x2 - x1, y2 - y1)
+        if (length > 0) { const dx = -(y2 - y1) / length * lineWidth / 3, dy = (x2 - x1) / length * lineWidth / 3; stroke(dx, dy); stroke(-dx, -dy) }
+      } else stroke()
+    } finally { ctx.restore() }
+  }
   for (const table of tables) {
     for (const row of table.rows) {
       for (const cell of row.cells) {
@@ -1014,30 +1076,49 @@ function paintTables(tables: TableBox[], ctx: CanvasRenderingContext2D): void {
         }
       }
     }
-    // borders after fills so they sit on top of shading
+    // Split shared edges at every adjacent-cell endpoint. A vertically merged
+    // cell can therefore resolve a different conflict on each neighboring row.
+    const vertical = new Map<number, Edge[]>(), horizontal = new Map<number, Edge[]>()
+    const add = (map: Map<number, Edge[]>, coordinate: number, start: number, end: number, border: Border) => {
+      const key = Math.round(coordinate * 1e6) / 1e6
+      const edges = map.get(key) ?? []
+      edges.push({ ...border, start, end }); map.set(key, edges)
+    }
     for (const row of table.rows) {
       for (const cell of row.cells) {
         const b = cell.borders
-        if (!b) continue
         const cx = table.xPx + cell.xPx
         const cy = table.yPx + cell.yPx
-        const draw = (side: 'left' | 'right' | 'top' | 'bottom', x1: number, y1: number, x2: number, y2: number) => {
+        const border = (side: 'left' | 'right' | 'top' | 'bottom'): Border => ({ spec: cell.borderSpecs?.[side], css: b?.[side] ?? 'thin' })
+        if (b?.left) add(vertical, cx, cy, cy + cell.heightPx, border('left'))
+        if (b?.right) add(vertical, cx + cell.widthPx, cy, cy + cell.heightPx, border('right'))
+        if (b?.top) add(horizontal, cy, cx, cx + cell.widthPx, border('top'))
+        if (b?.bottom) add(horizontal, cy + cell.heightPx, cx, cx + cell.widthPx, border('bottom'))
+        for (const side of ['tl2br', 'tr2bl'] as const) {
           const spec = cell.borderSpecs?.[side]
-          ctx.strokeStyle = spec?.color && spec.color !== 'auto' ? resolveColor(spec.color) : '#000000'
-          ctx.lineWidth =
-            spec?.widthPt !== undefined ? (spec.widthPt * 4) / 3 : Math.max(1, BORDER_WIDTH[b[side] ?? 'thin'] ?? 1)
-          const offset = spec?.widthPt !== undefined ? 0 : 0.5
-          ctx.beginPath()
-          ctx.moveTo(x1 + offset, y1 + offset)
-          ctx.lineTo(x2 + offset, y2 + offset)
-          ctx.stroke()
+          if (spec) draw({ spec, css: spec.style ?? 'single' }, side === 'tl2br' ? cx : cx + cell.widthPx, cy, side === 'tl2br' ? cx + cell.widthPx : cx, cy + cell.heightPx)
         }
-        if (b.left) draw('left', cx, cy, cx, cy + cell.heightPx)
-        if (b.right) draw('right', cx + cell.widthPx, cy, cx + cell.widthPx, cy + cell.heightPx)
-        if (b.top) draw('top', cx, cy, cx + cell.widthPx, cy)
-        if (b.bottom) draw('bottom', cx, cy + cell.heightPx, cx + cell.widthPx, cy + cell.heightPx)
       }
     }
+    const paintEdges = (map: Map<number, Edge[]>, isVertical: boolean) => {
+      for (const [coordinate, edges] of map) {
+        const events = edges.flatMap(edge => [{ point: edge.start, edge, start: true }, { point: edge.end, edge, start: false }]).sort((a, b) => a.point - b.point)
+        const active = new Set<Edge>()
+        for (let i = 0; i < events.length;) {
+          const start = events[i].point
+          while (i < events.length && events[i].point === start) {
+            const event = events[i++]
+            if (event.start) active.add(event.edge); else active.delete(event.edge)
+          }
+          if (i === events.length || !active.size) continue
+          const end = events[i].point, candidates = [...active]
+          const border = candidates.reduce<Border>(winner, candidates[0])
+          if (isVertical) draw(border, coordinate, start, coordinate, end)
+          else draw(border, start, coordinate, end, coordinate)
+        }
+      }
+    }
+    paintEdges(vertical, true); paintEdges(horizontal, false)
   }
 }
 
@@ -1200,7 +1281,7 @@ function computeMergeRegions(table: DocxTable, positions: CellPosition[][]): Map
           top: borderCss(spec('top')),
           bottom: borderCss(spec('bottom'))
         },
-        borderSpecs: { left: spec('left'), right: spec('right'), top: spec('top'), bottom: spec('bottom') }
+        borderSpecs: { left: spec('left'), right: spec('right'), top: spec('top'), bottom: spec('bottom'), tl2br: cell.borders && 'tl2br' in cell.borders ? cell.borders.tl2br : tb?.tl2br, tr2bl: cell.borders && 'tr2bl' in cell.borders ? cell.borders.tr2bl : tb?.tr2bl }
       }
       // extend over following continue cells
       for (let rr = r + 1; rr < table.rows.length; rr++) {
@@ -1708,7 +1789,7 @@ function layoutTableRows(
             top: borderCss(spec('top')),
             bottom: borderCss(spec('bottom'))
           },
-          borderSpecs: { left: spec('left'), right: spec('right'), top: spec('top'), bottom: spec('bottom') }
+          borderSpecs: { left: spec('left'), right: spec('right'), top: spec('top'), bottom: spec('bottom'), tl2br: cb && 'tl2br' in cb ? cb.tl2br : tb?.tl2br, tr2bl: cb && 'tr2bl' in cb ? cb.tr2bl : tb?.tr2bl }
         },
         lines: cellLines,
         anchors: cellAnchors,

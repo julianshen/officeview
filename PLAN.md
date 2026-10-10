@@ -225,3 +225,93 @@ src/drawing/
 - [x] Test: V1 - Container-parse errors emit malformed-vml-container diagnostic in DOCX and XLSX
 - [x] Test: V2 - Non-finite EMU shapes emit unsupported-geometry diagnostic with shape identity
 - [x] Test: V3 - Document 100px outline cap and rename stale RED test suite to regressions
+
+### Phase 9: DrawingML Impact Audit Gate (Baseline Verification & Fixture Absence)
+- [x] Test: Enumerate corpus fixtures for absence of shape pattFill and body outerShdw (zero golden movement expected)
+- [x] Test: Baseline strict test suite passes with zero regressions before new DrawingML changes
+
+### Phase 10: Shape Pattern Fill Support (`<a:pattFill>`)
+- [x] Test: Parse pattern preset, fgClr, and bgClr from shape `<a:pattFill>` into `DrawingFill`
+- [x] Test: Unsupported shape pattern presets diagnose `unsupported-fill` and fall back cleanly
+- [x] Test: Paint tiles supported shape presets using shared `paintPatternTile` with bounded LRU cache
+- [x] Test: Pattern fill respects shape geometry clipping and group transforms
+- [x] Test: Synthetic pattern-fill shape fixture and golden test
+
+### Phase 11: Word Cached-Path Parity (Tables, Pics, Leaf Flips in `<dsp:>`)
+- [x] Test: Cached `graphicFrame`/tables in `<dsp:spTree>` parse and paint with table grid geometry
+- [x] Test: Cached `pic` inside `<dsp:spTree>` resolves through the image pipeline rather than `cached-picture-unsupported`
+- [x] Test: Cached leaf `flipH`/`flipV` in `<dsp:spTree>` compose into paint
+- [x] Test: Newly supported cached constructs remove diagnostics where previously diagnosed
+
+### Phase 12: Approximated Shape Outer Shadow (`<a:outerShdw>`)
+- [x] Test: Parse shape `outerShdw` distance, direction, blur radius, and color from `<a:spPr><a:effectLst>`
+- [x] Test: Shape `outerShdw` paints bounded-blur silhouette offset under fill and stroke
+- [x] Test: Shape shadow isolation prevents bleeding across sibling shapes and transforms
+- [x] Test: Inner shadows, 3D, glow, and reflection continue to diagnose and degrade gracefully
+
+### Phase 13: DOCX Textbox Positioning & Wrap Alignment
+- [x] Test: Parse `wps:bodyPr` vertical anchoring (`anchor="t"|"ctr"|"b"`) and pass through textbox model
+- [x] Test: Parse `wps:bodyPr` wrapping (`wrap="square"|"none"`) and pass through textbox model
+- [x] Test: Vertical anchoring positions text baseline correctly for center and bottom anchored textboxes
+
+### Phase 14: Nondefault `textPlain` Adjustments & Diagnostic Cleanup
+- [x] Test: Nondefault `textPlain` adjustment values (`avLst`) parse and deform text or diagnose explicitly
+- [x] Test: Overridden default fills do not report fallback degradation warnings when run fill is supported
+
+### Phase 15: Text Autofit Support (`normAutofit`, `spAutoFit`, `noAutofit`)
+- [x] Test: Parse `<a:noAutofit>`, `<a:spAutoFit>`, and `<a:normAutofit>` with `fontScale` and `lnSpcReduction` into `DrawingTextBody`
+- [x] Test: Parse percentage strings and integer 1000ths for `fontScale` and `lnSpcReduction` with range clamping
+- [x] Test: Parse `wps:bodyPr` autofit in DOCX textboxes and forward to text body model
+- [x] Test: Layout applies explicit `fontScale` reduction to run font sizes in `normAutofit`
+- [x] Test: Layout applies explicit `lnSpcReduction` to line spacing in `normAutofit`
+- [x] Test: Layout dynamically shrinks overflowing text to fit available height under `normAutofit`
+- [x] Test: Layout respects vertical text flow under `normAutofit`
+- [x] Test: Zero-scale and extreme overflow boundary conditions degrade safely without division by zero or negative font sizes
+
+### Phase 16: Text Autofit Review Remediation (OpenCode Review Findings M1–M5, S1–S3)
+- [x] Test: M1 - Dynamic floor never inflates authored sub-0.2 scale under overflow
+- [x] Test: M3 - Character spacing and outline stroke width scale proportionally in scaleTextBody
+- [x] Test: S1 - Unwrapped text (!wrap) dynamically shrinks on width overflow under normAutofit
+- [x] Test: S2 - Vertical text direction dynamically shrinks columns on width overflow under normAutofit
+- [x] Test: M2, M4, M5, S3 - Document spAutoFit fixed-bounds limitation, percent leniency, and align degenerate leading handling
+- [x] Test: S4 - layoutTextBody surfaces residual overflow as TextLayout.overflow { horizontal, vertical } (autofit branch only)
+- [x] Test: M6 - layoutTextBody never mutates caller text body and repeated layout of same body is stable
+
+### Phase 17: DOCX Embedded Fonts & ODTTF Deobfuscation
+- [x] Test: Parse `word/fontTable.xml` and relationships to locate embedded font parts and fontKey GUIDs
+- [x] Test: ODTTF deobfuscation correctly decrypts the 32-byte header using 16-byte reversed GUID XOR key
+- [x] Test: Deobfuscated embedded fonts decode via existing `decodeEmbeddedFont` (MTX/SFNT) with permission and safety bounds
+- [x] Test: `parseDocx` exposes `embeddedFonts` and diagnostics, registering faces in `acquireFonts`
+- [x] Test: DOCX canvas layout and text rendering measure and paint using registered embedded font aliases
+
+### Phase 18: Multi-Side Table Cell Borders (`a:tbl` / `w:tbl`)
+- [x] Test: Parse separate per-side border styles (`lnL`, `lnR`, `lnT`, `lnB`, `lnTlToBr`, `lnBlToTr`) in DrawingML table cells
+- [x] Test: Parse separate per-side border properties (`w:top`, `w:bottom`, `w:left`, `w:right`) in DOCX table cells
+- [x] Test: Table cell painter renders distinct strokes per cell edge with proper joins and offsets
+- [x] Test: Adjacent cell border collapse resolves conflicting widths and styles consistently
+
+### Phase 19: Expanded DrawingML Pattern Fills (`<a:pattFill>`)
+- [x] Test: Tile generator generates seamless bitmasks for extended pattern presets (`pct10`–`pct90`, `horz`, `vert`, `grid`, `check`, `trellis`)
+- [x] Test: Extended pattern fills paint with correct foreground and background colors and LRU cache reuse
+- [x] Test: Unsupported pattern presets degrade gracefully to solid foreground fill with truthful diagnostics
+
+### Phase 20: Shape Outer Shadow Attributes (`algn`, `rotWithShape`)
+- [x] Test: Parse `@algn` and `@rotWithShape` attributes on `<a:outerShdw>`
+- [x] Test: Shadow alignment anchor only positions scale/skew, never the offset (ECMA-376); sx/sy/kx/ky diagnose and degrade to pure dist/dir
+- [x] Test: When `rotWithShape="0"`, shape rotation does not alter shadow vector angle in CTM
+
+### Phase 21: Group Shape Style Cascading (`<a:grpSpPr>`)
+- [x] Test: Parse group shape properties (`grpSpPr`) including fills and outline defaults
+- [x] Test: Child shapes with `<a:useBgFill/>` or omitted fill inherit parent group fill style
+- [x] Test: Group style inheritance cascades cleanly across nested group hierarchies without mutating child geometry
+
+### Phase 22: Word Compatibility Gaps (Review Findings)
+- [x] Test: Footnotes/endnotes parts parse with reference markers and layout (currently absent)
+- [x] Test: Comment parts parse and render or diagnose explicitly (currently absent)
+- [x] Test: BiDi paragraphs (`w:bidi`) render in visual order
+- [x] Test: Complex-script and East-Asia run fonts (`w:cs`, `w:eastAsia`, `w:hAnsi`) resolve instead of falling back to ascii only
+- [x] Test: Drop caps and hyphenation degrade gracefully with explicit coverage
+
+### Phase 23: SmartArt Compatibility Gaps (Review Findings)
+- [ ] Test: Cacheless SmartArt (dataModel without cached `dsp:drawing`) falls back to a searchable text-only box from `dgm:pt/dgm:t` instead of losing all text
+- [ ] Test: Text-only fallback synthesizes format-correct paragraphs per adapter (DOCX `w:p`, PPTX `a:p`) with existing `text-only` representation status

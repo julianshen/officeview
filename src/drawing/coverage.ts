@@ -316,6 +316,7 @@ export function pptxCoverage(slide: PptxSlide, spTree: XmlNode | undefined, part
   const visibleFill = (fill: DrawingFill | undefined, width: number, height: number): boolean => {
     if (!fill || fill.kind === 'none') return false
     if (fill.kind === 'solid') return [fill.color.r, fill.color.g, fill.color.b, fill.color.a].every(Number.isFinite) && fill.color.a > 0
+    if (fill.kind === 'pattern') return [fill.fgColor.r, fill.fgColor.g, fill.fgColor.b, fill.fgColor.a, fill.bgColor.r, fill.bgColor.g, fill.bgColor.b, fill.bgColor.a].every(Number.isFinite) && (fill.fgColor.a > 0 || fill.bgColor.a > 0)
     if (fill.gradient === 'circle' && (width <= 0 || height <= 0)) return false
     const dx = Math.cos(fill.angle) * (fill.scaled ? height : 1)
     const dy = Math.sin(fill.angle) * (fill.scaled ? width : 1)

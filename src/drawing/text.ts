@@ -1,6 +1,8 @@
-/** Source-preserving DrawingML text model shared by document adapters. */
+import { attrs, getChildren, type XmlNode } from '../core/xml'
 import { TEXT_WARP_CATALOG } from './text-warp-catalog'
 import { textWarpSeedValues, evaluateGuides } from './geometry'
+import { SUPPORTED_PATTERN_PRESETS, type PatternPreset } from './pattern'
+export { SUPPORTED_PATTERN_PRESETS, type PatternPreset }
 export type TextDirection = 'horz' | 'vert' | 'vert270' | 'wordArtVert' | 'eaVert' | 'mongolianVert' | 'wordArtVertRtl'
 export interface DrawingTextStyle {
   bold?: boolean
@@ -28,17 +30,6 @@ export interface DrawingTextStyle {
   characterSpacingPt?: number
   language?: string
 }
-/**
- * WordArt pattern presets paint can tile (diagonal families and grids).
- * Parse accepts exactly this set and defers the rest with a diagnostic;
- * keep both sides on this list.
- */
-export const SUPPORTED_PATTERN_PRESETS: ReadonlySet<string> = new Set([
-  'dkUpDiag', 'dkDnDiag', 'ltUpDiag', 'ltDnDiag', 'smGrid', 'lgGrid',
-])
-/** Type-enforced twin of the set above: adding a preset here without
- * extending paintPatternTile is a compile error, not a silent grid. */
-export type PatternPreset = 'dkUpDiag' | 'dkDnDiag' | 'ltUpDiag' | 'ltDnDiag' | 'smGrid' | 'lgGrid'
 export interface DrawingTextRun extends DrawingTextStyle {
   text: string
   directProperties?: DrawingTextStyle
@@ -75,6 +66,26 @@ export interface DrawingTextParagraph {
   defaultProperties?: DrawingTextStyle
   endProperties?: DrawingTextStyle
 }
+export interface DrawingTextAutofitNormal {
+  kind: 'normal'
+  /** Font scale factor in range [0.01, 1.0]. E.g. 0.8 for 80% / 80000. */
+  fontScale?: number
+  /** Line spacing reduction factor in range [0.0, 1.0]. E.g. 0.2 for 20% / 20000. */
+  lnSpcReduction?: number
+}
+
+export type DrawingTextAutofit =
+  /** a:noAutofit: No text scaling; text underflows or overflows fixed box. */
+  | { kind: 'none' }
+  /**
+   * a:spAutoFit: In authoring applications, the shape boundary grows to fit text.
+   * In OfficeView's fixed-bounds canvas model, text renders unscaled (scale 1.0)
+   * within the authored geometry without artificial shrinking.
+   */
+  | { kind: 'shape' }
+  /** a:normAutofit: Normal text scaling; fonts shrink to fit the text frame. */
+  | DrawingTextAutofitNormal
+
 export interface DrawingTextBody {
   paragraphs: DrawingTextParagraph[]
   direction?: TextDirection
@@ -85,6 +96,7 @@ export interface DrawingTextBody {
   insetBottomEmu: number
   wrap: boolean
   textWarp?: TextWarp
+  autofit?: DrawingTextAutofit
 }
 export interface LocalAffine { a: number; b: number; c: number; d: number; e: number; f: number }
 
@@ -254,4 +266,39 @@ export const DEFAULT_WARP_ADJUSTMENTS: Readonly<Record<string, Record<string, nu
 /** Regulated presets ALWAYS take catalog defaults (single source of truth for
  * geometry and parse-like callers): the hand entries above are display-only. */
 Object.assign(DEFAULT_WARP_ADJUSTMENTS as Record<string, Record<string, number>>, OFFICIAL_SUPPORTED_DEFAULTS)
+
+/** Parses guide adjustments from an <a:avLst> XML node. */
+export function parseAdjustGuides(avLst: XmlNode | undefined): Record<string, number> {
+  const adjustments: Record<string, number> = {}
+  if (!avLst) return adjustments
+  for (const gd of getChildren(avLst, 'gd')) {
+    const ga = attrs(gd)
+    if (ga.name && ga.fmla) {
+      const raw = ga.fmla.startsWith('val ') ? ga.fmla.slice(4).trim() : ga.fmla.trim()
+      if (raw.length > 0) {
+        const valNum = Number(raw)
+        if (Number.isFinite(valNum)) {
+          adjustments[ga.name] = valNum
+        }
+      }
+    }
+  }
+  return adjustments
+}
+
+/**
+ * Evaluates whether a textPlain warp node has a nondefault adjustment.
+ * Default is adj = 50000 (unwarped). If adj is absent or 50000, returns undefined.
+ * If nondefault adj is specified, returns the numeric adjustment.
+ */
+export function parseTextPlainAdjustment(prstWarpNode: XmlNode | undefined): number | undefined {
+  if (!prstWarpNode) return undefined
+  const avLst = getChildren(prstWarpNode, 'avLst')[0]
+  const guides = parseAdjustGuides(avLst)
+  const adj = guides['adj']
+  if (adj !== undefined && adj !== 50000) {
+    return adj
+  }
+  return undefined
+}
 
