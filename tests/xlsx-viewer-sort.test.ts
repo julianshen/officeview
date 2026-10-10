@@ -205,7 +205,7 @@ describe('sort ownership, bounded work and resource admission', () => {
     const result = await sortRowOrder(store, specFor(2), quiet)
     expect(result.kind).toBe('complete')
     if (result.kind !== 'complete') return
-    expect(result.ledger.retainedBytes).toBe(16)
+    expect(result.ledger.retainedBytes).toBe(16 + 256)
     expect(result.ledger.peakBytes).toBeGreaterThan(result.ledger.retainedBytes)
     expect(await sortRowOrder(store, specFor(2), { ...quiet, residentWorkerBytes: 1000, maxWorkerBytes: 1000 + result.ledger.peakBytes - 1 })).toMatchObject({ kind: 'resource-limit' })
     const invalid = { ...specFor(2), keys: [{ col: 16384, order: 'asc' as const }] }
@@ -236,7 +236,7 @@ describe('full-axis typed sort workspace', () => {
     expect(result.ledger.scratchBytes).toBe(4 * MAX_ROWS)
     expect(result.ledger.numbersBytes).toBe(8 * MAX_ROWS)
     expect(result.ledger.idsBytes).toBe(0)
-    expect(result.ledger.retainedBytes).toBe(8 * MAX_ROWS)
+    expect(result.ledger.retainedBytes).toBe(8 * MAX_ROWS + 256)
     for (let slot = 0; slot < MAX_ROWS; slot++) {
       if (band.sourceAtOffset[slot] !== MAX_ROWS - 1 - slot || band.displayOffsetOfSource[MAX_ROWS - 1 - slot] !== slot) throw new Error(`Invalid permutation at ${slot}`)
     }
@@ -256,7 +256,7 @@ describe('full-axis typed sort workspace', () => {
     expect(ledger.numbersBytes).toBeLessThanOrEqual(64 * 1024 * 1024)
     expect(ledger.numbersBytes).toBe(64 * 1024 * 1024)
     expect(ledger.tagsBytes).toBe(8 * MAX_ROWS)
-    expect(ledger.retainedBytes).toBe(ledger.numbersBytes + ledger.tagsBytes)
+    expect(ledger.retainedBytes).toBe(ledger.numbersBytes + ledger.tagsBytes + ledger.fixedOverheadBytes)
     expect(ledger.aggregatePeakBytes).toBe(ledger.peakBytes + 10 * 1024 * 1024)
   }, 30000)
   it('small-helper and cooperative-builder paths agree with same pinned direct oracle', async () => {
@@ -270,5 +270,66 @@ describe('full-axis typed sort workspace', () => {
       expect(rowsOf(result)).toEqual(slots)
       if (result.kind === 'complete') for (let slot = 0; slot < length; slot++) expect(result.order.sourceToDisplay(slots[slot])).toBe(slot)
     }
+  })
+})
+
+describe('construction/accounting cancellation regressions', () => {
+  it('charges page UTF16 before a read yield and exposes dictionary Map/copy peaks', async () => {
+    const long = 'x'.repeat(10000)
+    const result = await sortRowOrder(dataStore([[fixtureCell(long)]]), specFor(1), quiet)
+    expect(result.kind).toBe('complete')
+    if (result.kind !== 'complete') return
+    expect(result.ledger.dictionaryMapPeakBytes).toBeGreaterThanOrEqual(128)
+    expect(result.ledger.pagePeakBytes).toBeGreaterThanOrEqual(long.length * 2)
+    expect(result.ledger.constructionCopiesBytes).toBeGreaterThanOrEqual(12)
+    expect(result.ledger.fixedOverheadBytes).toBeGreaterThan(0)
+  })
+  it('dictionary index, merge, and rank assignment all expose cancellation boundaries', async () => {
+    for (const boundary of [1, 3, 32]) {
+      const controller = new AbortController()
+      let dictionaryYields = 0
+      const result = await sortRowOrder(createFixture('F4', { rowCount: 8193 }).createStore(), specFor(8193), { now: () => 0, signal: controller.signal, yield: async phase => {
+        if (phase === 'dictionary' && ++dictionaryYields === boundary) controller.abort()
+      } })
+      expect(dictionaryYields).toBe(boundary)
+      expect(result).toEqual({ kind: 'cancelled' })
+    }
+  })
+  it('every work phase yields by <=4096 checked work units even when clock stays fixed', async () => {
+    let checks = 0
+    const perPhase = new Map<string, number>()
+    const result = await sortRowOrder(createFixture('F4', { rowCount: 16385 }).createStore(), specFor(16385), { now: () => { checks++; return 0 }, yield: async phase => {
+      // Clock sampling happens once per work unit, plus scheduler reset/initialization.
+      expect(checks).toBeLessThanOrEqual(4097)
+      perPhase.set(phase, (perPhase.get(phase) ?? 0) + 1)
+      checks = 0
+    } })
+    expect(result.kind).toBe('complete')
+    for (const phase of ['read', 'dictionary', 'candidates', 'merge', 'output', 'inverse', 'publish']) expect(perPhase.has(phase)).toBe(true)
+  })
+  it('handles row-empty protected bands, initial abort, and thrown source failure without publication', async () => {
+    const store = dataStore([[fixtureCell(1)]])
+    const spec = { ...specFor(1), range: { ...specFor(1).range, headerRows: 1 as const } }
+    const complete = await sortRowOrder(store, spec, quiet)
+    expect(complete.kind).toBe('complete')
+    if (complete.kind === 'complete') expect(complete.order).toBe(createIdentityOrder())
+    const controller = new AbortController(); controller.abort()
+    expect(await sortRowOrder(store, null, { signal: controller.signal })).toEqual({ kind: 'cancelled' })
+    expect(await sortRowOrder({ ...store, queryColumn: async () => { throw new Error('disk unavailable') } }, specFor(1), quiet)).toMatchObject({ kind: 'error', error: { code: 'page-error', message: 'disk unavailable' } })
+  })
+})
+
+describe('immutable option ownership', () => {
+  it('keeps the original abort signal when the caller replaces options.signal', async () => {
+    const controller = new AbortController()
+    const options: SortOptions = { now: () => 0, signal: controller.signal, yield: async () => { options.signal = undefined; controller.abort() } }
+    expect((await sortRowOrder(createFixture('F7', { rowCount: 8193 }).createStore(), specFor(8193), options)).kind).toBe('cancelled')
+  })
+  it('keeps the visibility generation captured before preparing keys', async () => {
+    const store = dataStore([[fixtureCell(3)], [fixtureCell(2)], [fixtureCell(1)]])
+    const original = store.queryColumn.bind(store)
+    const options: SortOptions = { ...quiet, visibility: createRowVisibility(MAX_ROWS, row => row !== 0) }
+    const delayed: SourceStore = { ...store, queryColumn: async (request, read) => { const page = await original(request, read); options.visibility = createRowVisibility(MAX_ROWS); return page } }
+    expect(rowsOf(await sortRowOrder(delayed, specFor(3), options))).toEqual([0, 2, 1])
   })
 })

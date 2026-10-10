@@ -19,6 +19,10 @@ export interface SortLedger {
   idsBytes: number
   ranksBytes: number
   dictionaryBytes: number
+  dictionaryMapPeakBytes: number
+  pagePeakBytes: number
+  constructionCopiesBytes: number
+  fixedOverheadBytes: number
   indexBytes: number
   scratchBytes: number
   orderBytes: number
@@ -62,7 +66,7 @@ function snapshotSpec(spec: SortSpec): SortSpec {
   return Object.freeze({ range: Object.freeze({ ...spec.range }), keys: Object.freeze(spec.keys.map(key => Object.freeze({ ...key }))), caseSensitive: spec.caseSensitive })
 }
 function emptyLedger(options: SortOptions): SortLedger {
-  return { tagsBytes: 0, numbersBytes: 0, idsBytes: 0, ranksBytes: 0, dictionaryBytes: 0, indexBytes: 0, scratchBytes: 0, orderBytes: 0, inverseBytes: 0, retainedBytes: 0, peakBytes: 0, residentWorkerBytes: options.residentWorkerBytes ?? 0, aggregatePeakBytes: options.residentWorkerBytes ?? 0 }
+  return { tagsBytes: 0, numbersBytes: 0, idsBytes: 0, ranksBytes: 0, dictionaryBytes: 0, dictionaryMapPeakBytes: 0, pagePeakBytes: 0, constructionCopiesBytes: 0, fixedOverheadBytes: 0, indexBytes: 0, scratchBytes: 0, orderBytes: 0, inverseBytes: 0, retainedBytes: 0, peakBytes: 0, residentWorkerBytes: options.residentWorkerBytes ?? 0, aggregatePeakBytes: options.residentWorkerBytes ?? 0 }
 }
 class Budget {
   readonly ledger: SortLedger
@@ -72,6 +76,8 @@ class Budget {
     this.ledger = emptyLedger(options)
     this.limit = options.maxWorkerBytes ?? 512 * MiB
     if (!Number.isFinite(this.limit) || this.limit < 0 || !Number.isFinite(this.ledger.residentWorkerBytes) || this.ledger.residentWorkerBytes < 0) throw sourceError('resource-limit', 'Invalid worker budget')
+    this.ledger.fixedOverheadBytes = 1024
+    this.charge(1024)
   }
   charge(bytes: number): void {
     const aggregate = this.ledger.residentWorkerBytes + this.live + bytes
@@ -153,7 +159,8 @@ async function prepare(store: SourceStore, spec: SortSpec, cooperative: Cooperat
   const collator = new Intl.Collator(locale, { numeric: true, sensitivity: spec.caseSensitive ? 'variant' : 'accent', caseFirst: 'upper' })
   let incomplete = false, unavailableCount = 0, firstAddress: { row: number; col: number } | undefined
   for (const key of spec.keys) {
-    budget.charge(length * 9)
+    budget.charge(length * 9 + 512)
+    budget.ledger.fixedOverheadBytes += 512
     budget.ledger.tagsBytes += length
     budget.ledger.numbersBytes += length * 8
     const lane: MutableLane = { tags: new Uint8Array(length), numbers: new Float64Array(length), strings: [], errors: [], stringRanks: new Uint32Array(0), errorRanks: new Uint32Array(0) }
@@ -170,13 +177,14 @@ async function prepare(store: SourceStore, spec: SortSpec, cooperative: Cooperat
       budget.charge(retained + 128)
       budget.ledger.dictionaryBytes += retained
       mapBytes += 128
+      budget.ledger.dictionaryMapPeakBytes = Math.max(budget.ledger.dictionaryMapPeakBytes, mapBytes)
       const id = dictionary.length
       dictionary.push(raw); map.set(raw, id)
       return id
     }
     for (let start = r0; start <= r1; start += CHUNK) {
       const end = Math.min(r1, start + CHUNK - 1)
-      let cursor: string | undefined, pages = 0
+      let cursor: string | undefined, pages = 0, cursorBytes = 0
       const cursors = new Set<string>()
       do {
         cooperative.check()
@@ -188,11 +196,15 @@ async function prepare(store: SourceStore, spec: SortSpec, cooperative: Cooperat
         // A bounded source page can retain transient cell objects/raw strings even
         // when a repeated key does not enter the dictionary.
         let pageBytes = 256 * page.items.length
+        budget.charge(pageBytes)
         for (const item of page.items) {
-          if (item.kind === 'cell' && typeof item.cell.value === 'string') pageBytes += item.cell.value.length * 2 + 24
+          if (item.kind === 'cell' || item.kind === 'unavailable') {
+            const strings = [item.cell.value, item.cell.formula, item.cell.arrayRef, item.cell.formulaType, item.cell.sharedFormula?.ref]
+            for (const raw of strings) if (typeof raw === 'string') { const bytes = raw.length * 2 + 24; pageBytes += bytes; budget.charge(bytes) }
+          }
           if (cooperative.due()) await cooperative.pause('read')
         }
-        budget.charge(pageBytes)
+        budget.ledger.pagePeakBytes = Math.max(budget.ledger.pagePeakBytes, pageBytes)
         for (const item of page.items) {
           const first = 'row' in item ? item.row : item.r0, last = 'row' in item ? item.row : item.r1
           if (!Number.isSafeInteger(first) || !Number.isSafeInteger(last) || first < start || last > end || last < first) throw sourceError('page-error', 'Column entry outside requested chunk')
@@ -227,10 +239,13 @@ async function prepare(store: SourceStore, spec: SortSpec, cooperative: Cooperat
         cursor = page.nextCursor
         if (cursor !== undefined) {
           if (cursors.has(cursor) || ++pages > CHUNK) throw sourceError('invalid-cursor', 'Column cursor made no progress')
+          const bytes = cursor.length * 2 + 128
+          budget.charge(bytes); cursorBytes += bytes
           cursors.add(cursor)
         }
         if (cooperative.due()) await cooperative.pause('read')
       } while (cursor !== undefined)
+      budget.release(cursorBytes)
       for (let row = start; row <= end; row++) { if (!lane.tags[row - r0]) incomplete = true; if (cooperative.due()) await cooperative.pause('read') }
     }
     lane.stringRanks = await rankDictionary(lane.strings, collator.compare, budget, cooperative)
@@ -246,6 +261,7 @@ async function prepare(store: SourceStore, spec: SortSpec, cooperative: Cooperat
 }
 export async function prepareSortKeys(store: SourceStore, input: SortSpec, options: SortOptions = {}): Promise<PreparedSortResult> {
   try {
+    options = Object.freeze({ ...options })
     const stamp = Object.freeze({ ...(options.stamp ?? store.stamp) }), spec = snapshotSpec(input)
     const cooperative = new Cooperative(store, stamp, options), budget = new Budget(options)
     cooperative.check()
@@ -281,6 +297,7 @@ function ownedOrder(r0: number, r1: number, sourceAtOffset: Uint32Array, display
  * before a caller commits this object; this kernel cannot authorize those guards. */
 export async function sortRowOrder(store: SourceStore, input: SortSpec | null, options: SortOptions = {}): Promise<SortResult> {
   try {
+    options = Object.freeze({ ...options })
     const stamp = Object.freeze({ ...(options.stamp ?? store.stamp) }), spec = input === null ? null : snapshotSpec(input), locale = options.locale ?? 'en'
     const cooperative = new Cooperative(store, stamp, options), budget = new Budget(options)
     cooperative.check()
@@ -299,6 +316,7 @@ export async function sortRowOrder(store: SourceStore, input: SortSpec | null, o
           // pinRowPermutation peak: candidates + rows + copied order + inverse;
           // createRowOrder then copies order/inverse again while that band lives.
           budget.charge(length * 20)
+          budget.ledger.constructionCopiesBytes = length * 12
           const band = pinRowPermutation(prepared.r0, prepared.r1, pinned, sorted.subarray(0, count))
           order = createRowOrder([band])
           budget.release(length * 12)
@@ -325,11 +343,13 @@ export async function sortRowOrder(store: SourceStore, input: SortSpec | null, o
         budget.release(length * 8)
         // Prepared lanes are private to this operation and not retained by output.
         const keyBytes = budget.ledger.tagsBytes + budget.ledger.numbersBytes + budget.ledger.idsBytes + budget.ledger.ranksBytes + budget.ledger.dictionaryBytes
-        budget.release(keyBytes)
+        budget.release(keyBytes + budget.ledger.fixedOverheadBytes)
       } else {
         budget.release(budget.ledger.retainedBytes)
       }
     }
+    if (spec === null) budget.release(budget.ledger.fixedOverheadBytes)
+    budget.charge(256)
     await cooperative.pause('publish')
     return { kind: 'complete', order, metadata: Object.freeze({ sort: spec, stamp, locale, structuralAdmission: 'caller-required' }), ledger: budget.finish() }
   } catch (error) { return failure(error, options) }
