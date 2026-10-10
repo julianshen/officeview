@@ -25,6 +25,7 @@ function nextDay(date: CalendarDay, system: DateSystem): number {
 }
 export function lowerDateCondition(condition: DateCondition, context: DateContext): DateInterval {
   if (!condition || typeof condition !== 'object' || !['date', 'datePreset'].includes(condition.kind)) throw new RangeError('Invalid date condition')
+  if (typeof context.timeZone !== 'string' || !context.timeZone) throw new RangeError('Invalid date time zone')
   new Intl.DateTimeFormat('en-US', { timeZone: context.timeZone })
   const system = context.dateSystem
   if (system !== '1900' && system !== '1904') throw new RangeError('Invalid date system')

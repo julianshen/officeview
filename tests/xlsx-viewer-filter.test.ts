@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest'
+import { ReferenceTextFilterMatcher, TextFilterMatcher } from '../src/xlsx/view/textFilter'
 import { classifyColumn, filterMenus, rawValueKey, FilterEngine, WorkBudget, type PreparedValue, type ColumnClassification, type FilterLimits } from '../src/xlsx/view/filter'
 import type { ColumnRule, FilterSpec, NumberOp, TextOp } from '../src/xlsx/view/contracts'
 import type { ResolvedSemantics } from '../src/xlsx/formula/types'
@@ -307,5 +308,87 @@ describe('prepared text predicates', () => {
     const again = work.used
     expect(match(s(''))).toBe(true)
     expect(work.used - again).toBeLessThanOrEqual(2000)
+  })
+})
+
+describe('exact reference differential coverage', () => {
+  it.each([false, true])('matches 20k seeded cases for all six operations (wildcards=%s)', wildcards => {
+    const locales = ['en-US', 'de-DE', 'da-DK', 'tr-TR', 'cs-CZ', 'es-ES']
+    const matchers = locales.map(locale => [new TextFilterMatcher(locale), new ReferenceTextFilterMatcher(locale)] as const)
+    const ascii = ['a', 'A', 'b', 'B', 'c', 'h', 'i', 'I', 'z', '0', '2', ' ', '.', '-', '*', '?', '~']
+    const unicode = [...ascii, 'é', 'e', '\u0301', '\u200b', '\u00ad', 'ﬁ', '😀', '\ud800', '\udc00', 'å', 'İ']
+    const ops: TextOp[] = ['eq', 'neq', 'begins', 'ends', 'contains', 'not-contains']
+    let seed = wildcards ? 173 : 107, checked = 0
+    const random = (length: number) => { seed = (seed * 48271) % 2147483647; return seed % length }
+    for (let index = 0; index < 20000; index++) {
+      const pool = index % 3 === 0 ? ascii : unicode
+      let text = '', pattern = ''
+      for (let i = random(8); i > 0; i--) text += pool[random(pool.length)]
+      for (let i = random(6); i > 0; i--) {
+        const point = pool[random(pool.length)]
+        pattern += wildcards && point === '~' ? '~~' : point
+      }
+      const [fast, reference] = matchers[index % locales.length]
+      for (const op of ops) {
+        const actual = fast.match(op, pattern, wildcards, text), expected = reference.match(op, pattern, wildcards, text)
+        if (actual !== expected) throw new Error(JSON.stringify({ index, locale: locales[index % locales.length], op, pattern, text, wildcards, actual, expected }))
+        checked++
+      }
+    }
+    expect(checked).toBe(120000)
+  })
+  it('retains arbitrarily long ignorable endpoint candidates and locale contractions', () => {
+    for (const locale of ['en-US', 'da-DK', 'cs-CZ', 'tr-TR']) {
+      const fast = new TextFilterMatcher(locale), reference = new ReferenceTextFilterMatcher(locale)
+      for (const [pattern, text] of [['a', 'a' + '\u200b'.repeat(400)], ['å', 'aa'], ['å', 'a\u200ba'], ['ch', 'cH'], ['I', 'i']]) {
+        for (const op of ['eq', 'neq', 'begins', 'ends', 'contains', 'not-contains'] as TextOp[]) {
+          for (const wildcards of [false, true]) expect(fast.match(op, pattern, wildcards, text, { maxWork: Number.MAX_SAFE_INTEGER })).toBe(reference.match(op, pattern, wildcards, text, { maxWork: Number.MAX_SAFE_INTEGER }))
+        }
+      }
+    }
+  })
+})
+
+describe('sound text shortcuts', () => {
+  it('finds ASCII literal witnesses before scanning every endpoint', () => {
+    const work = { used: 0 }
+    expect(engine.matchText('contains', 'ZzZ', false, 'a'.repeat(1000) + 'zzz', { work, maxWork: Number.MAX_SAFE_INTEGER })).toBe(true)
+    expect(work.used).toBeLessThan(10000)
+  })
+  it('shares exact repeated-substring comparisons across a periodic ASCII miss', () => {
+    const work = { used: 0 }
+    expect(engine.matchText('contains', 'zzz', false, 'a'.repeat(2000), { work, maxWork: Number.MAX_SAFE_INTEGER })).toBe(false)
+    expect(work.used).toBeLessThan(2100000)
+  })
+  it('evaluates wildcard-free compiled rules with the literal matcher', () => {
+    const work = { used: 0 }
+    const match = engine.compileRule({ kind: 'text', op: 'eq', first: 'a'.repeat(2000), wildcards: true }, mixed, { work })
+    const before = work.used
+    expect(match(s('a'.repeat(2000)))).toBe(true)
+    expect(work.used - before).toBeLessThan(10000)
+  })
+})
+
+describe('complete ordinary text scans and periodic differential coverage', () => {
+  it('filters 10k ordinary 200-character cells with default per-cell allowances', () => {
+    const text = 'hello world '.repeat(17).slice(0, 200)
+    const match = engine.compileFilter(spec([0, { kind: 'text', op: 'contains', first: 'zzz', wildcards: false }]), new Map([[0, mixed]]), () => s(text))
+    let rejected = 0
+    expect(() => { for (let row = 0; row < 10000; row++) if (!match(row)) rejected++ }).not.toThrow()
+    expect(rejected).toBe(10000)
+  })
+  it('preserves tailored collation on every short raw period and wildcard literal run', () => {
+    const patterns = ['a', 'A', 'aa', 'å', 'ch', 'I', 'i', 'ﬁ', 'fi', 'zzz', '\u200b', '*a?', '?i*', 'a*b', '~*', '*']
+    for (const locale of ['en-US', 'da-DK', 'tr-TR', 'cs-CZ']) {
+      const fast = new TextFilterMatcher(locale), reference = new ReferenceTextFilterMatcher(locale)
+      for (let period = 1; period <= 16; period++) {
+        const text = 'aaIich0*?~ zABCD'.slice(0, period).repeat(3).slice(0, period * 3 - 1)
+        for (const pattern of patterns) {
+          for (const op of ['eq', 'neq', 'begins', 'ends', 'contains', 'not-contains'] as TextOp[]) {
+            for (const wildcards of [false, true]) expect(fast.match(op, pattern, wildcards, text)).toBe(reference.match(op, pattern, wildcards, text))
+          }
+        }
+      }
+    }
   })
 })

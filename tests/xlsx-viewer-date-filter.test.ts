@@ -64,7 +64,7 @@ describe('date filter calendar intervals', () => {
 
 describe('review date regressions', () => {
   it('validates static date time zones as well as preset zones', () => {
-    expect(() => lowerDateCondition({ kind: 'date', op: 'eq', first: day(2026, 3, 8) }, { ...ctx, timeZone: 'invalid-zone' })).toThrow(RangeError)
+    for (const timeZone of ['invalid-zone', '', undefined]) expect(() => lowerDateCondition({ kind: 'date', op: 'eq', first: day(2026, 3, 8) }, { ...ctx, timeZone } as typeof ctx)).toThrow(RangeError)
   })
   it.each([['Asia/Kolkata', '2026-03-08T18:40:00Z', day(2026, 3, 9)], ['Asia/Kathmandu', '2026-03-08T18:20:00Z', day(2026, 3, 9)]] as const)('uses fractional-hour local day in %s', (timeZone, now, first) => {
     expect(lowerDateCondition({ kind: 'datePreset', preset: 'today' }, { ...ctx, timeZone, nowMs: Date.parse(now) })).toEqual({ start: serial(first), end: serial(first) + 1, complement: false })

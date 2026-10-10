@@ -87,7 +87,7 @@ export class ReferenceTextFilterMatcher {
     const budget = new WorkBudget(limits)
     return this.prepare(op, pattern, wildcards, budget)(text, budget)
   }
-  protected evaluate(op: TextOp, pattern: string, parsed: readonly Token[] | undefined, text: string, budget: WorkBudget): boolean {
+  protected evaluate(op: TextOp, pattern: string, parsed: readonly Token[] | undefined, text: string, budget: WorkBudget, period?: number): boolean {
     if (typeof text !== 'string') throw new RangeError('Invalid text condition')
     budget.text(text)
     const negative = op === 'neq' || op === 'not-contains'
@@ -95,7 +95,20 @@ export class ReferenceTextFilterMatcher {
     const points: number[] = [0]
     for (const point of text) points.push(points[points.length - 1] + point.length)
     const count = points.length - 1
+    const comparisons = new Map<string, Map<number, boolean>>()
     const equal = (literal: string, start: number, end: number) => {
+      if (period !== undefined && parsed) {
+        const key = (start % period) * (count + 1) + end - start
+        let run = comparisons.get(literal)
+        if (!run) { run = new Map(); comparisons.set(literal, run) }
+        budget.charge(1)
+        const cached = run.get(key)
+        if (cached !== undefined) return cached
+        budget.charge(literal.length + points[end] - points[start])
+        const matched = this.collator.compare(literal, text.slice(points[start], points[end])) === 0
+        run.set(key, matched)
+        return matched
+      }
       // Charge inspected UTF-16 length as well as candidate count, not merely
       // DP states: collation and slicing long candidates also consume work.
       budget.charge(1 + literal.length + points[end] - points[start])
@@ -106,7 +119,7 @@ export class ReferenceTextFilterMatcher {
       if (positive === 'eq') matched = equal(pattern, 0, count)
       else {
         outer: for (let start = 0; start <= count; start++) {
-          if (positive === 'begins' && start > 0) break
+          if ((positive === 'begins' && start > 0) || (positive === 'contains' && period !== undefined && start >= period)) break
           const endStart = positive === 'ends' ? count : start
           for (let end = endStart; end <= count; end++) {
             if (equal(pattern, start, end)) { matched = true; break outer }
@@ -140,4 +153,47 @@ export class ReferenceTextFilterMatcher {
   }
 }
 
-export class TextFilterMatcher extends ReferenceTextFilterMatcher {}
+export class TextFilterMatcher extends ReferenceTextFilterMatcher {
+  protected evaluate(op: TextOp, pattern: string, parsed: readonly Token[] | undefined, text: string, budget: WorkBudget): boolean {
+    if (typeof text !== 'string') throw new RangeError('Invalid text condition')
+    const positive = op === 'neq' ? 'eq' : op === 'not-contains' ? 'contains' : op
+    const negative = op === 'neq' || op === 'not-contains'
+    if (parsed) {
+      const start = positive === 'ends' || positive === 'contains' ? 1 : 0
+      const end = parsed.length - (positive === 'begins' || positive === 'contains' ? 1 : 0)
+      const core = parsed.slice(start, end)
+      if (core.length === 1 && core[0].kind === 'literal') {
+        pattern = core[0].text
+        parsed = undefined
+      }
+    }
+    if (!parsed && positive === 'eq') return super.evaluate(op, pattern, parsed, text, budget)
+    let period: number | undefined
+    if (/^[\x20-\x7e]*$/.test(text)) {
+      budget.charge(text.length)
+      if (!parsed && /^[\x20-\x7e]*$/.test(pattern) && positive !== 'eq') {
+        const folded = text.toLowerCase(), needle = pattern.toLowerCase()
+        const at = positive === 'begins' ? (folded.startsWith(needle) ? 0 : -1)
+          : positive === 'ends' ? (folded.endsWith(needle) ? text.length - pattern.length : -1) : folded.indexOf(needle)
+        if (at >= 0) {
+          budget.text(text)
+          budget.charge(1 + pattern.length * 2)
+          // A host-verified actual slice is an exact witness, including tailored locales.
+          if (this.collator.compare(pattern, text.slice(at, at + pattern.length)) === 0) return !negative
+        }
+      }
+      // Raw periodicity, not a guessed collation profile: every candidate at
+      // later starts is byte-identical to one at start % period. No Intl
+      // contraction/ignorable assumptions or Unicode endpoint bounds apply.
+      for (let candidate = 1; (parsed || positive === 'contains') && candidate <= Math.min(16, text.length); candidate++) {
+        let repeats = true
+        for (let i = candidate; i < text.length; i++) {
+          budget.charge(1)
+          if (text[i] !== text[i % candidate]) { repeats = false; break }
+        }
+        if (repeats) { period = candidate; break }
+      }
+    }
+    return super.evaluate(op, pattern, parsed, text, budget, period)
+  }
+}
