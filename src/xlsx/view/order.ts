@@ -36,38 +36,45 @@ function makeBand(input: PermutationInput): RowPermutationBand {
   }
   return Object.freeze({ r0: input.r0, r1: input.r1, sourceAtOffset, displayOffsetOfSource })
 }
-/** Input buffers are copied once; published buffers belong to this immutable view
- * generation and must not be mutated by consumers (§§5.1,10.1). */
-export function createRowOrder(inputs: readonly PermutationInput[]): CompactRowOrder {
-  if (!inputs.length) return identity
+/** Validate and copy every band. Module-level on purpose: a closure created in the same
+ * scope as `inputs`/`sorted` would share their context and keep the caller's buffers
+ * alive for the lifetime of the order (review item 2). */
+function buildBands(inputs: readonly PermutationInput[]): readonly RowPermutationBand[] {
   const sorted = [...inputs].sort((a, b) => a.r0 - b.r0)
-  sorted.forEach((band, index) => {
-    validateBand(band.r0, band.r1)
-    if (index && sorted[index - 1].r1 >= band.r0) throw new RangeError('Overlapping permutation bands')
-  })
-  const bands = Object.freeze(sorted.map(makeBand))
-  const lookup = (row: number): RowPermutationBand | undefined => {
-    rowIndex(row)
-    let lo = 0, hi = bands.length
-    while (lo < hi) {
-      const mid = Math.floor((lo + hi) / 2)
-      if (bands[mid].r1 < row) lo = mid + 1
-      else hi = mid
-    }
-    return lo < bands.length && bands[lo].r0 <= row ? bands[lo] : undefined
+  for (let index = 0; index < sorted.length; index++) {
+    validateBand(sorted[index].r0, sorted[index].r1)
+    if (index && sorted[index - 1].r1 >= sorted[index].r0) throw new RangeError('Overlapping permutation bands')
   }
+  return Object.freeze(sorted.map(makeBand))
+}
+function bandAt(bands: readonly RowPermutationBand[], row: number): RowPermutationBand | undefined {
+  rowIndex(row)
+  let lo = 0, hi = bands.length
+  while (lo < hi) {
+    const mid = Math.floor((lo + hi) / 2)
+    if (bands[mid].r1 < row) lo = mid + 1
+    else hi = mid
+  }
+  return lo < bands.length && bands[lo].r0 <= row ? bands[lo] : undefined
+}
+function orderOf(bands: readonly RowPermutationBand[]): CompactRowOrder {
   return Object.freeze({
     kind: 'bands', bands,
     displayToSource(displaySlot: DisplaySlot) {
-      const band = lookup(displaySlot)
+      const band = bandAt(bands, displaySlot)
       return band ? band.sourceAtOffset[displaySlot - band.r0] : displaySlot
     },
     sourceToDisplay(sourceRow: SourceRow) {
-      const band = lookup(sourceRow)
+      const band = bandAt(bands, sourceRow)
       return band ? band.r0 + band.displayOffsetOfSource[sourceRow - band.r0] : sourceRow
     },
     diagnostics: Object.freeze({ bandCount: bands.length, typedArrayBytes: bands.reduce((n, band) => n + band.sourceAtOffset.byteLength + band.displayOffsetOfSource.byteLength, 0) }),
   })
+}
+/** Input buffers are copied once and never retained; published buffers belong to this
+ * immutable view generation and must not be mutated by consumers (§§5.1,10.1). */
+export function createRowOrder(inputs: readonly PermutationInput[]): CompactRowOrder {
+  return inputs.length ? orderOf(buildBands(inputs)) : identity
 }
 /** A true pin retains its source-corresponding display slot. Include protected
  * header/totals and hidden rows in pins; candidates contain only movable rows (§5.1). */
