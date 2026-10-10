@@ -397,20 +397,42 @@ const SMARTART_TEXT_PARAGRAPH_LIMIT = 1000
  * Returns the texts plus whether points were dropped at the limit.
  */
 /**
- * Collect leaf run texts under a dataModel text container, descending
- * through nested DrawingML. Nested runs are non-conformant but observed
- * when pretty-printed, where textOf alone would early-return the container
- * whitespace and lose everything. Pretty whitespace between elements is
- * skipped; intentional spacing inside runs is preserved. Plain string
- * points behave exactly as a single textOf call.
+ * Paragraph texts for one dataModel point. Plain string points yield a
+ * single paragraph. Nested DrawingML (non-conformant but observed when
+ * pretty-printed) yields one paragraph per nested p, with br line breaks
+ * preserved as newline characters; pretty whitespace between elements is
+ * skipped while intentional spacing inside runs is preserved.
  */
-function collectRunTexts(node: XmlNode, out: string[]): void {
-  const kids = orderedChildren(node).filter(([name]) => name !== '#text')
-  if (kids.length === 0) {
-    out.push(textOf(node))
-    return
+function pointParagraphs(pt: XmlNode): string[] {
+  const tops = getChildren(pt, 't')
+  if (!tops.some((t) => orderedChildren(t).some(([name]) => name !== '#text'))) {
+    const text = tops.map((t) => textOf(t)).join('').trim()
+    return text ? [text] : []
   }
-  for (const [, child] of kids) collectRunTexts(child, out)
+  const paras: string[] = []
+  let cur = ''
+  const flush = (): void => { if (cur !== '') { paras.push(cur); cur = '' } }
+  const walk = (node: XmlNode): void => {
+    for (const [name, child] of orderedChildren(node)) {
+      if (name === '#text') {
+        const s = textOf(child)
+        if (s.trim() !== '') cur += s
+      } else if (name === 'p') {
+        flush()
+        walk(child)
+        flush()
+      } else if (name === 'br') {
+        cur += '\n'
+      } else if (name === 't' && !orderedChildren(child).some(([n]) => n !== '#text')) {
+        cur += textOf(child)
+      } else {
+        walk(child)
+      }
+    }
+  }
+  for (const t of tops) walk(t)
+  flush()
+  return paras
 }
 function collectDataModelTexts(root: XmlNode | undefined): { texts: string[]; truncated: boolean } {
   const dataModel = root && child(root, 'ptLst') ? root : child(root, 'dataModel')
@@ -418,12 +440,13 @@ function collectDataModelTexts(root: XmlNode | undefined): { texts: string[]; tr
   const texts: string[] = []
   let truncated = false
   for (const pt of pts) {
-    const runs: string[] = []
-    for (const t of getChildren(pt, 't')) collectRunTexts(t, runs)
-    const text = runs.join('').trim()
-    if (!text) continue
-    if (texts.length >= SMARTART_TEXT_PARAGRAPH_LIMIT) { truncated = true; break }
-    texts.push(text)
+    for (const para of pointParagraphs(pt)) {
+      const text = para.trim()
+      if (!text) continue
+      if (texts.length >= SMARTART_TEXT_PARAGRAPH_LIMIT) { truncated = true; break }
+      texts.push(text)
+    }
+    if (truncated) break
   }
   return { texts, truncated }
 }

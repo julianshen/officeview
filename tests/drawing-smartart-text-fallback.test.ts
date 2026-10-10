@@ -2,10 +2,11 @@ import { describe, expect, test } from 'vitest'
 import JSZip from 'jszip'
 import { createCanvas } from 'canvas'
 import { OfficePackage } from '../src/core/zip'
-import { getChildren, type XmlNode } from '../src/core/xml'
+import { getChildren, parseXmlOrdered, type XmlNode } from '../src/core/xml'
 import { prepareDrawingContent } from '../src/drawing/content'
 import { drawingPartContext } from '../src/drawing/parts'
 import { paintDrawingContent } from '../src/drawing/content-paint'
+import { parseGeometry } from '../src/drawing/geometry'
 import { parseTextBody, textFontDefaults } from '../src/drawing/text-parse'
 import { parsePptx } from '../src/pptx/parse'
 import { renderSlide } from '../src/pptx/render'
@@ -321,5 +322,55 @@ describe('Phase 23 review: fallback text paints visibly', () => {
     const flat = recorded.join('').replace(/\s+/g, '')
     expect(flat).toContain('Alpha&Omega')
     expect(flat).toContain('Beta<gamma>')
+  })
+
+  test('nested paragraphs and breaks keep separators instead of merging words', async () => {
+    const nestedDataXml =
+      `<dgm:dataModel ${DGM}>` +
+      `  <dgm:ptLst>` +
+      `    <dgm:pt modelId="{D1}"><dgm:prSet/>` +
+      `      <dgm:t>` +
+      `        <a:p xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><a:r><a:t>North</a:t></a:r></a:p>` +
+      `        <a:p xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><a:r><a:t>South</a:t></a:r><a:br/><a:r><a:t>South2</a:t></a:r></a:p>` +
+      `      </dgm:t>` +
+      `    </dgm:pt>` +
+      `  </dgm:ptLst>` +
+      `  <dgm:cxnLst/>` +
+      `  <dgm:whole/>` +
+      `</dgm:dataModel>`
+    const pkg = await packageWithParts({
+      'word/document.xml': '<w:document/>',
+      'word/_rels/document.xml.rels': relsXml([{ id: 'rDm1', type: DIAGRAM_DATA_REL, target: 'diagrams/data1.xml' }]),
+      'word/diagrams/data1.xml': nestedDataXml,
+    })
+    const content = await prepareDrawingContent(pkg, graphicNode, 'word/document.xml', theme, drawingTheme)
+    expect(content?.kind).toBe('diagram')
+    if (content?.kind === 'diagram') {
+      expect(content.shapes[0].paragraphs.map((p) => p.runs.map((r) => r.text).join(''))).toEqual(['North', 'South\nSouth2'])
+    }
+  })
+
+  test('zero-box cached shapes keep prior behavior (no frame expansion)', async () => {
+    const canvas = createCanvas(200, 200)
+    const ctx = canvas.getContext('2d') as never
+    const calls: Array<[number, number]> = []
+    const recorded: string[] = []
+    ;(ctx as unknown as Record<symbol, unknown>)[RECORD_TEXT] = (text: string) => { recorded.push(text) }
+    const geom = parseGeometry(parseXmlOrdered(
+      `<a:spPr xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><a:prstGeom prst="rect"/></a:spPr>`
+    ))
+    const textBody = { paragraphs: [{ runs: [{ text: 'Cached label' }] }] } as never
+    const cachedShape: any = {
+      xEmu: 0, yEmu: 0, widthEmu: 0, heightEmu: 0, geometry: 'rect',
+      drawingGeometry: geom, textBody,
+      paragraphs: [{ runs: [{ text: 'Cached label' }], align: 'left' }],
+      fontFamily: 'Calibri',
+    }
+    const cachedContent: any = { kind: 'diagram', shapes: [cachedShape] }
+    paintDrawingContent(cachedContent, ctx, 100, 100, {
+      paintDiagramText: (_s: any, _c: any, w: number, h: number) => { calls.push([w, h]) },
+    })
+    expect(calls).toEqual([[0, 0]])
+    expect(recorded).toEqual([])
   })
 })
