@@ -2,11 +2,23 @@
 import type { OfficePackage } from '../core/zip'
 import { attrs, getChildren, textOf, type XmlNode } from '../core/xml'
 import type { XlsxCell, XlsxDocument, XlsxMergeRange, XlsxRow, XlsxSheet } from './types'
+import type {
+  CalcSettings,
+  DefinedNameMetadata,
+  ResolvedSemantics,
+  TableMetadata,
+  WorkbookSheetIdentity,
+} from './formula/types'
+import { parseDefinedNames } from './formula/names'
+import { parseTableMetadata, isTablePartSource } from './formula/tables'
 import { parseWorksheetDrawings, collectXlsxImages } from './drawing'
 import { computeMetrics } from './render'
 import { resolvePartTarget } from '../drawing/parts'
 import { parseThemeContext, type ThemeContext } from '../drawing/style'
 import { evaluateWorkbookFormulas } from './formula/workbook'
+import { initializeSavedSpills } from './formula/saved-spills'
+import { dynamicMetadataIndices } from './metadata'
+import { decodeXlsxString } from './strings'
 
 /** Convert "A1" / "BC23" to 0-based [row, col]. */
 export function parseRef(ref: string): [number, number] {
@@ -34,10 +46,10 @@ async function sharedStrings(pkg: OfficePackage): Promise<string[]> {
     let s = ''
     const direct = si['t']
     if (direct !== undefined) {
-      s += textOf(asNode(direct))
+      s += decodeXlsxString(textOf(asNode(direct)))
     }
     for (const r of getChildren(si, 'r')) {
-      s += textOf(getChildren(r, 't')[0])
+      s += decodeXlsxString(textOf(getChildren(r, 't')[0]))
     }
     out.push(s)
   }
@@ -51,6 +63,8 @@ function asNode(v: unknown): XmlNode {
 
 interface Styles {
   numFmtIds: number[]
+  /** Authored custom number formats (styles.xml <numFmts>), keyed by numFmtId. */
+  numFmts: Map<number, string>
   fonts: Array<{ bold: boolean; italic: boolean; sizePt?: number; color?: string }>
   fills: Array<{ rgb?: string; pattern?: string }>
   borders: Array<{ left?: string; right?: string; top?: string; bottom?: string }>
@@ -59,8 +73,16 @@ interface Styles {
 
 async function parseStyles(pkg: OfficePackage): Promise<Styles> {
   const root = await pkg.xml('xl/styles.xml')
-  const styles: Styles = { numFmtIds: [], fonts: [], fills: [], borders: [], xfs: [] }
+  const styles: Styles = { numFmtIds: [], numFmts: new Map(), fonts: [], fills: [], borders: [], xfs: [] }
   if (!root) return styles
+  for (const numFmtsN of getChildren(root, 'numFmts')) {
+    for (const nf of getChildren(numFmtsN, 'numFmt')) {
+      const a = attrs(nf)
+      const id = parseInt(a.numFmtId ?? '', 10)
+      const code = typeof a.formatCode === 'string' ? a.formatCode : undefined
+      if (Number.isFinite(id) && code !== undefined) styles.numFmts.set(id, code)
+    }
+  }
   for (const f of getChildren(root, 'fonts').flatMap((n) => getChildren(n, 'font'))) {
     const font = {
       bold: f['b'] !== undefined,
@@ -115,15 +137,28 @@ export async function parseXlsx(pkg: OfficePackage): Promise<XlsxDocument> {
   if (!workbook) throw new Error('xl/workbook.xml missing — not a valid xlsx?')
   const rels = await pkg.xml('xl/_rels/workbook.xml.rels')
   const relMap = new Map<string, string>()
+  const relTypes = new Map<string, string>()
   let themePath: string | undefined
+  // Actual calcChain provenance: detected from the workbook relationship
+  // inventory only (never inferred from a producer or a missing part).
+  let calcChainPresent = false
+  let metadataPath: string | undefined
   if (rels) {
     for (const rel of getChildren(rels, 'Relationship')) {
       const a = attrs(rel)
       if (a.Id && a.Target && a.TargetMode !== 'External') relMap.set(a.Id, a.Target as string)
+      if (a.Id && a.Type) relTypes.set(a.Id, a.Type as string)
       if (a.Type?.endsWith('/theme') && a.TargetMode !== 'External' && a.Target) themePath = resolvePartTarget('xl/workbook.xml', a.Target)
+      if (a.Type?.endsWith('/calcChain') && a.TargetMode !== 'External' && a.Target) calcChainPresent = true
+      if (a.Type === 'http://schemas.openxmlformats.org/officeDocument/2006/relationships/sheetMetadata' && a.TargetMode !== 'External' && a.Target) metadataPath = resolvePartTarget('xl/workbook.xml',a.Target)
     }
   }
   const strings = await sharedStrings(pkg)
+  let dynamicIndices:ReadonlySet<number> = new Set()
+  if(metadataPath){
+    try { const text=await pkg.text(metadataPath);if(text)dynamicIndices=dynamicMetadataIndices(text) }
+    catch { /* Unverified optional metadata never upgrades a fixed array. */ }
+  }
   const styles = await parseStyles(pkg)
   let theme: ThemeContext = parseThemeContext()
   if (themePath) {
@@ -132,14 +167,24 @@ export async function parseXlsx(pkg: OfficePackage): Promise<XlsxDocument> {
   }
 
   const sheets: XlsxSheet[] = []
+  const workbookSheets: WorkbookSheetIdentity[] = []
+  const sheetPartPaths: string[] = []
   const sheetsNode = getChildren(workbook, 'sheets')[0]
+  let workbookIndex = 0
   for (const sheetNode of getChildren(sheetsNode, 'sheet')) {
     const a = attrs(sheetNode)
     const name = (a.name as string) ?? 'Sheet'
-    const target = relMap.get(a['r:id'] ?? a.id ?? '') ?? ''
+    const sheetId = typeof a.sheetId === 'string' && a.sheetId !== '' ? a.sheetId : String(workbookIndex + 1)
+    const relId = (a['r:id'] ?? a.id ?? '') as string
+    const target = relMap.get(relId) ?? ''
+    const relType = relTypes.get(relId) ?? ''
+    const kind = relType.endsWith('/worksheet') ? 'worksheet' : relType !== '' ? 'other' : 'worksheet'
     const path = target.startsWith('/') ? target.slice(1) : `xl/${target.replace(/^\.\.\//, '')}`
-    const sheet = await parseSheet(pkg, path, name, strings, styles, theme)
+    const sheet = await parseSheet(pkg, path, name, strings, styles, theme, sheetId, workbookIndex, kind, dynamicIndices)
     sheets.push(sheet)
+    sheetPartPaths.push(path)
+    workbookSheets.push({ sheetId, workbookIndex, name, kind })
+    workbookIndex++
   }
   const drawingCoverage = sheets.flatMap((sheet, unit) => {
     const entries = (sheet.drawingCoverage ?? []).map(entry => ({ ...entry, unit }))
@@ -153,11 +198,155 @@ export async function parseXlsx(pkg: OfficePackage): Promise<XlsxDocument> {
     })
     return entries
   })
+  const workbookPrNode = getChildren(workbook, 'workbookPr')[0]
+  const workbookPrAttrs = workbookPrNode ? attrs(workbookPrNode) : {}
+  const dateSystem = workbookPrAttrs.date1904 === '1' || workbookPrAttrs.date1904 === 'true' ? '1904' : '1900'
+
   const calcPrNode = getChildren(workbook, 'calcPr')[0]
   const calcPrAttrs = calcPrNode ? attrs(calcPrNode) : {}
+  const calcModeRaw = calcPrAttrs.calcMode
+  const calcMode = calcModeRaw === 'manual' || calcModeRaw === 'autoNoTable' ? calcModeRaw : 'auto'
   const fullCalcOnLoad = calcPrAttrs.fullCalcOnLoad === '1' || calcPrAttrs.fullCalcOnLoad === 'true'
+  const iterate = calcPrAttrs.iterate === '1' || calcPrAttrs.iterate === 'true'
+  const iterateCountRaw = parseInt(calcPrAttrs.iterateCount ?? '', 10)
+  const iterateCount = Number.isFinite(iterateCountRaw) && iterateCountRaw >= 0 ? iterateCountRaw : 100
+  const iterateDeltaRaw = parseFloat(calcPrAttrs.iterateDelta ?? '')
+  const iterateDelta = Number.isFinite(iterateDeltaRaw) && iterateDeltaRaw >= 0 ? iterateDeltaRaw : 0.001
+  const calc: CalcSettings = { calcMode, fullCalcOnLoad, iterate, iterateCount, iterateDelta }
 
-  const doc: XlsxDocument = { sheets, images: collectXlsxImages(sheets), drawingCoverage }
+  const definedNames: DefinedNameMetadata[] = parseDefinedNames(workbook)
+
+  // Tables resolve exclusively through each worksheet's tableParts and that
+  // worksheet's own relationship part — never through workbook rels.
+  // Tables resolve exclusively through each worksheet's tableParts and that
+  // worksheet's own internal table-typed relationships — never through
+  // workbook rels, external targets, or untyped table-like content. A declared
+  // tablePart that cannot be fully resolved leaves the inventory unavailable
+  // (tables undefined), distinct from a complete known-empty registry ([]).
+  // Usable scalar cells are always preserved.
+  const resolvedTables: TableMetadata[] = []
+  let declaredTableParts = 0
+  let tableInventoryComplete = true
+  for (let i = 0; i < sheets.length; i++) {
+    const sheetPath = sheetPartPaths[i]
+    const identity = workbookSheets[i]
+    if (!sheetPath || !identity) continue
+    try {
+      const wsRoot = await pkg.xml(sheetPath)
+      // A referenced worksheet that cannot be inspected has unknown table
+      // inventory — unless it is a non-worksheet part, which never declares
+      // tableParts. The readable no-tableParts worksheet below stays [].
+      if (!wsRoot) {
+        if (identity.kind === 'worksheet') tableInventoryComplete = false
+        continue
+      }
+      const wsData = getChildren(wsRoot, 'worksheet')[0] ?? wsRoot
+      // Every tablePart element is a declaration (CT_TablePart requires
+      // r:id): one without a resolvable id is unavailable inventory, never
+      // evidence of zero declarations.
+      const tablePartDecls: Array<string | undefined> = []
+      for (const parts of getChildren(wsData, 'tableParts')) {
+        for (const part of getChildren(parts, 'tablePart')) {
+          const rid = attrs(part).id
+          tablePartDecls.push(typeof rid === 'string' && rid !== '' ? rid : undefined)
+        }
+      }
+      if (tablePartDecls.length === 0) continue
+      declaredTableParts += tablePartDecls.length
+      const slash = sheetPath.lastIndexOf('/')
+      const wsRelsPath = `${slash < 0 ? '' : `${sheetPath.slice(0, slash)}/`}_rels/${slash < 0 ? sheetPath : sheetPath.slice(slash + 1)}.rels`
+      const wsRels = await pkg.xml(wsRelsPath)
+      const wsRelTargets = new Map<string, { target: string; type: string }>()
+      if (wsRels) {
+        for (const rel of getChildren(wsRels, 'Relationship')) {
+          const ra = attrs(rel)
+          if (ra.Id && ra.Target && ra.TargetMode !== 'External') {
+            wsRelTargets.set(ra.Id, { target: ra.Target as string, type: (ra.Type ?? '') as string })
+          }
+        }
+      }
+      for (const rid of tablePartDecls) {
+        // A declaration without a required relationship id cannot resolve.
+        if (rid === undefined) {
+          tableInventoryComplete = false
+          continue
+        }
+        const rel = wsRelTargets.get(rid)
+        // Only an internal recognized table relationship establishes table
+        // ownership: missing rels, unresolved r:ids, external targets and
+        // wrong relationship types all leave the inventory unavailable.
+        if (!rel || !rel.type.endsWith('/table')) {
+          tableInventoryComplete = false
+          continue
+        }
+        const partPath = resolvePartTarget(sheetPath, rel.target)
+        try {
+          const sourceText = await pkg.text(partPath)
+          if (!isTablePartSource(sourceText)) {
+            tableInventoryComplete = false
+            continue
+          }
+          const tableRoot = await pkg.xml(partPath)
+          const tableNode = getChildren(tableRoot, 'table')[0] ?? tableRoot
+          const meta = parseTableMetadata(tableNode, identity.sheetId, partPath)
+          if (!meta) {
+            tableInventoryComplete = false
+            continue
+          }
+          resolvedTables.push(meta)
+        } catch {
+          // An unreadable table part leaves the inventory unavailable;
+          // usable cells are preserved below.
+          tableInventoryComplete = false
+        }
+      }
+    } catch {
+      // Worksheet-level discovery failure with declared parts is unavailable,
+      // never a false complete registry.
+      tableInventoryComplete = false
+    }
+  }
+  // Completeness first: any failed discovery keeps the inventory
+  // unavailable even when zero declarations were observed. Only a fully
+  // inspected workbook with no tableParts declarations is complete [].
+  const tables: TableMetadata[] | undefined = !tableInventoryComplete
+    ? undefined
+    : declaredTableParts === 0
+      ? []
+      : resolvedTables
+
+  // No verified workbook Unicode metadata exists in this inventory; producer
+  // text never proves compatibility. Parsed workbooks resolve to the
+  // workbook-default compatibility (version 1).
+  let timeZone = 'UTC'
+  try {
+    const resolved = Intl.DateTimeFormat().resolvedOptions().timeZone
+    if (typeof resolved === 'string' && resolved !== '') timeZone = resolved
+  } catch { /* keep UTC fallback */ }
+  const semantics: ResolvedSemantics = {
+    dateSystem: dateSystem as '1900' | '1904',
+    unicode: { version: 1, source: 'workbook-default' },
+    locale: 'en-US',
+    timeZone,
+    epochNowMs: Date.now(),
+  }
+  // Propagate the resolved semantics to every parsed sheet so the renderer can
+  // decode serials with the SAME date system the evaluator used, without
+  // callers injecting it manually (paint.ts keeps calling renderSheet(sheet,…)).
+  for (const sheet of sheets) sheet.semantics = semantics
+
+  const doc: XlsxDocument = {
+    sheets,
+    images: collectXlsxImages(sheets),
+    drawingCoverage,
+    workbookSheets,
+    definedNames,
+    tables,
+    calc,
+    calcChainPresent,
+    semantics,
+  }
+  initializeSavedSpills(doc)
   evaluateWorkbookFormulas(doc, { fullCalcOnLoad })
   return doc
 }
@@ -169,9 +358,13 @@ async function parseSheet(
   strings: string[],
   styles: Styles,
   theme: ThemeContext,
+  sheetId: string,
+  workbookIndex: number,
+  kind: 'worksheet' | 'other',
+  dynamicIndices:ReadonlySet<number>,
 ): Promise<XlsxSheet> {
   const root = await pkg.xml(path)
-  const sheet: XlsxSheet = { name, sourcePartPath: path, rows: [], cols: [], merges: [], mergeRanges: [] }
+  const sheet: XlsxSheet = { name, sourcePartPath: path, sheetId, workbookIndex, kind, rows: [], cols: [], merges: [], mergeRanges: [] }
   if (!root) return sheet
   const data = getChildren(root, 'worksheet')[0] ?? root
   const colsNode = getChildren(data, 'cols')[0]
@@ -243,6 +436,8 @@ async function parseSheet(
       let value: string | number | boolean | null = null
       let formula: string | undefined
       let sharedFormula: { si: number; ref?: string } | undefined
+      let arrayRef: string | undefined
+      let formulaType: string | undefined
       const vNode = getChildren(cNode, 'v')[0]
       const isNode = getChildren(cNode, 'is')[0]
       let calcAlways = ca.ca === '1' || ca.ca === 'true'
@@ -251,9 +446,18 @@ async function parseSheet(
         const rawF = textOf(fNode)
         if (rawF !== '') formula = rawF
         const fa = attrs(fNode)
+        // Preserve the raw formula type verbatim; array/shared have dedicated
+        // fields, `dataTable` is the what-if type the calc policy must exclude.
+        if (typeof fa.t === 'string' && fa.t !== '') formulaType = fa.t
         // ECMA-376 Part 1 §18.3.1.40: ca attribute on <f>
         if (fa.ca === '1' || fa.ca === 'true') {
           calcAlways = true
+        }
+        // Legacy fixed array formula: <f t="array" ref="A1:B2">. The declared
+        // output rectangle is preserved verbatim; t=array alone is NOT dynamic
+        // provenance (SPILLS.md).
+        if (fa.t === 'array') {
+          arrayRef = (fa.ref as string) || undefined
         }
         if (fa.t === 'shared') {
           const si = parseInt(fa.si ?? '0', 10)
@@ -267,11 +471,12 @@ async function parseSheet(
         const idx = vNode ? parseInt(textOf(vNode), 10) : NaN
         value = Number.isFinite(idx) ? (strings[idx] ?? '') : ''
       } else if (t === 'inlineStr') {
-        value = isNode ? textOf(isNode) : ''
+        value = isNode ? decodeXlsxString(textOf(getChildren(isNode,'t')[0]))+
+          getChildren(isNode,'r').map(r=>decodeXlsxString(textOf(getChildren(r,'t')[0]))).join('') : ''
       } else if (t === 'b') {
         value = vNode ? textOf(vNode) === '1' : false
       } else if (t === 'str') {
-        value = vNode ? textOf(vNode) : ''
+        value = vNode ? decodeXlsxString(textOf(vNode)) : ''
       } else if (t === 'e') {
         value = vNode ? textOf(vNode) : null
       } else {
@@ -279,16 +484,26 @@ async function parseSheet(
         const raw = vNode ? textOf(vNode) : ''
         value = raw !== '' && Number.isFinite(parseFloat(raw)) ? parseFloat(raw) : raw === '' ? null : raw
       }
+      // An empty NUMERIC <v/> carries NO cached value (Excel recalculates —
+      // missing cache); an explicit t="str" cell with an EMPTY cached <v/>
+      // holds a legitimate cached EMPTY STRING and stays cached. Only a
+      // non-empty cached text or an inline string is a cache otherwise.
+      const cachedText = vNode ? textOf(vNode) : undefined
+      const emptyStringCache = t === 'str' && cachedText === ''
+      const hasCached = (cachedText !== undefined && cachedText !== '') || isNode !== undefined || emptyStringCache
       const cell: XlsxCell = {
         ref,
         row: rowIdx,
         col: colIdx,
         value,
-        hasCachedValue: vNode !== undefined || isNode !== undefined,
+        hasCachedValue: hasCached,
         valueIsError: t === 'e',
         styleIndex: Number.isFinite(sIdx) ? sIdx : 0,
         formula,
         sharedFormula,
+        arrayRef,
+        ...(/^\d+$/.test(ca.cm??'')&&dynamicIndices.has(Number(ca.cm))&&formulaType==='array'?{dynamicArray:true}:{}),
+        formulaType,
         ca: calcAlways ? true : undefined,
       }
       const xf = styles.xfs[cell.styleIndex]
@@ -298,6 +513,7 @@ async function parseSheet(
         const border = styles.borders[xf.borderId]
         cell.style = {
           numFmtId: xf.numFmtId,
+          formatCode: styles.numFmts.get(xf.numFmtId),
           bold: font?.bold,
           italic: font?.italic,
           fontSizePt: font?.sizePt,
