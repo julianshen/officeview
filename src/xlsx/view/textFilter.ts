@@ -1,16 +1,18 @@
 import type { TextOp } from './contracts'
 export interface FilterWork { used: number }
-export interface FilterLimits { maxWork?: number; maxTextLength?: number; signal?: AbortSignal; work?: FilterWork }
+export interface FilterLimits { maxWork?: number; maxTextLength?: number; signal?: AbortSignal; work?: FilterWork; budget?: WorkBudget }
 export class FilterDiagnostic extends Error {
   constructor(readonly code: 'resource-limit' | 'cancelled' | 'incomplete' | 'missing-display-text' | 'unsupported-values', message: string) {
     super(message)
     this.name = 'FilterDiagnostic'
   }
 }
-export const DEFAULT_FILTER_WORK = 1_000_000
+/** Per-cell allowance, never an implicit limit on the complete row domain. */
+export const DEFAULT_FILTER_WORK = 10_000_000
 export const DEFAULT_FILTER_TEXT_LENGTH = 65_536
 export class WorkBudget {
   readonly work: FilterWork
+  private used = 0
   readonly maxWork: number
   readonly maxTextLength: number
   constructor(readonly limits: FilterLimits = {}) {
@@ -21,12 +23,15 @@ export class WorkBudget {
     for (const value of [this.maxWork, this.maxTextLength, used]) {
       if (!Number.isSafeInteger(value) || value < 0) throw new RangeError('Invalid filter resource policy')
     }
+    if (limits.budget !== undefined && !(limits.budget instanceof WorkBudget)) throw new RangeError('Invalid cumulative filter budget')
     this.work = limits.work === undefined ? { used: 0 } : limits.work
     this.charge(0)
   }
   charge(amount: number): void {
     if (this.limits.signal?.aborted) throw new FilterDiagnostic('cancelled', 'Filter cancelled')
-    if (amount > this.maxWork - this.work.used) throw new FilterDiagnostic('resource-limit', 'Filter resource work limit exceeded')
+    if (amount > this.maxWork - this.used) throw new FilterDiagnostic('resource-limit', 'Filter resource work limit exceeded')
+    this.limits.budget?.charge(amount)
+    this.used += amount
     this.work.used += amount
   }
   text(value: string): void {
@@ -46,6 +51,7 @@ function tokens(pattern: string, budget: WorkBudget): Token[] {
   const flush = () => { if (literal) { result.push({ kind: 'literal', text: literal }); literal = '' } }
   for (const point of pattern) {
     if (escaped) {
+      // Strict ~ escapes match src/xlsx/formula/wildcard.ts.
       if (point !== '*' && point !== '?' && point !== '~') throw new RangeError('Wildcard escape must precede a metacharacter')
       literal += point; escaped = false
     }
@@ -70,7 +76,9 @@ export class TextFilterMatcher {
   }
   match(op: TextOp, pattern: string, wildcards: boolean, text: string, limits?: FilterLimits): boolean {
     if (!TEXT_OPS.includes(op) || typeof pattern !== 'string' || typeof text !== 'string' || typeof wildcards !== 'boolean') throw new RangeError('Invalid text condition')
-    const budget = new WorkBudget(limits)
+    return this.matchWithBudget(op, pattern, wildcards, text, new WorkBudget(limits))
+  }
+  matchWithBudget(op: TextOp, pattern: string, wildcards: boolean, text: string, budget: WorkBudget): boolean {
     budget.text(text)
     const negative = op === 'neq' || op === 'not-contains'
     const positive = op === 'neq' ? 'eq' : op === 'not-contains' ? 'contains' : op

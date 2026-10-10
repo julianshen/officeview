@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { classifyColumn, filterMenus, rawValueKey, FilterEngine, type PreparedValue, type ColumnClassification, type FilterLimits } from '../src/xlsx/view/filter'
+import { classifyColumn, filterMenus, rawValueKey, FilterEngine, WorkBudget, type PreparedValue, type ColumnClassification, type FilterLimits } from '../src/xlsx/view/filter'
 import type { ColumnRule, FilterSpec, NumberOp, TextOp } from '../src/xlsx/view/contracts'
 import type { ResolvedSemantics } from '../src/xlsx/formula/types'
 import { createIdentityOrder } from '../src/xlsx/view/order'
@@ -85,11 +85,11 @@ describe('typed filter evaluation', () => {
     classification.kind = 'text'
     expect(dateMatch(n(46089.5))).toBe(true)
   })
-  it('shares bounded column/row work and cancellation through filter projection', () => {
+  it('bounds each column cell independently and retains projection cancellation', () => {
     const columns = new Map([[0, mixed], [1, mixed]])
     const input = spec([0, { kind: 'text', op: 'eq', first: 'a', wildcards: false }], [1, { kind: 'text', op: 'eq', first: 'a', wildcards: false }])
     const match = engine.compileFilter(input, columns, () => s('a'), { maxWork: 10 })
-    expect(() => match(2)).toThrow(/resource/i)
+    expect(match(2)).toBe(true)
     const controller = new AbortController()
     const baseHidden = createIntervalSet([{ r0: 2, r1: 2 }])
     const numericSpec = spec([0, { kind: 'number', op: 'gt', first: 0 }])
@@ -153,7 +153,7 @@ describe('literal and wildcard Unicode semantics', () => {
     expect(engine.matchText('not-contains', 'a?', true, 'tail-ab-tail')).toBe(false)
     expect(engine.matchText('neq', 'a?', true, 'ab')).toBe(false)
   })
-  it('rejects wildcard tilde escapes of ordinary characters', () => expect(() => engine.matchText('eq', '~x', true, 'x')).toThrow(RangeError))
+  it('rejects wildcard tilde escapes of ordinary characters consistently with the formula helper', () => expect(() => engine.matchText('eq', '~x', true, 'x')).toThrow(RangeError))
   it('validates malformed trailing escape on compilation', () => expect(() => engine.compileRule({ kind: 'text', op: 'eq', first: 'abc~', wildcards: true }, mixed)).toThrow(RangeError))
   it.each([null, {}, { used: null }, { used: undefined }, { used: NaN }, { used: -1 }, { used: 0.5 }])('rejects malformed supplied work counter %j', work => {
     expect(() => engine.matchText('eq', 'a', false, 'a', { work } as FilterLimits)).toThrow(RangeError)
@@ -181,8 +181,8 @@ describe('complete classification and exact keys', () => {
     expect(classifyColumn([{ kind: 'number', value: 2, formatCode: '0 "days"' }], true, semantics)).toEqual(numeric)
     expect(classifyColumn([{ kind: 'number', value: 2, formatCode: '0;yyyy-mm-dd' }], true, semantics)).toEqual(numeric)
     expect(classifyColumn([n(2), s('s')], true, semantics)).toEqual(mixed)
-    expect(classifyColumn([{ kind: 'number', value: -2, formatCode: '0;yyyy-mm-dd' }], true, semantics)).toEqual(date)
-    expect(classifyColumn([{ kind: 'number', value: 0, formatCode: '0;0;yyyy-mm-dd' }], true, semantics)).toEqual(date)
+    expect(classifyColumn([{ kind: 'number', value: -2, formatCode: '0;yyyy-mm-dd' }], true, semantics)).toEqual(numeric)
+    expect(classifyColumn([{ kind: 'number', value: 0, formatCode: '0;0;yyyy-mm-dd' }], true, semantics)).toEqual(numeric)
     expect(classifyColumn([{ kind: 'number', value: 0, formatCode: 'yyyy-mm-dd;0' }], true, semantics)).toEqual(date)
     expect(classifyColumn([{ kind: 'number', value: 2, formatCode: '0\\\\d' }], true, semantics)).toEqual(numeric)
     expect(classifyColumn([{ kind: 'number', value: 2, formatCode: 'yyyy-mm-dd' }], true, { ...semantics, locale: 'zh-TW' })).toEqual(date)
@@ -191,7 +191,7 @@ describe('complete classification and exact keys', () => {
   it('treats backslashes inside quoted format literals as shared grammar literal text', () => {
     const slash = String.fromCharCode(92)
     expect(classifyColumn([{ kind: 'number', value: 2, formatCode: '"' + slash + '"yyyy-mm-dd' }], true, semantics)).toEqual(date)
-    expect(classifyColumn([{ kind: 'number', value: -2, formatCode: '0 "' + slash + '";yyyy-mm-dd' }], true, semantics)).toEqual(date)
+    expect(classifyColumn([{ kind: 'number', value: -2, formatCode: '0 "' + slash + '";yyyy-mm-dd' }], true, semantics)).toEqual(numeric)
   })
   it('preserves semicolons in inactive bracket regions during active-section classification', () => {
     expect(classifyColumn([{ kind: 'number', value: 0, formatCode: '0;[foo;yyyy];0' }], true, semantics)).toEqual(numeric)
@@ -221,8 +221,8 @@ describe('complete classification and exact keys', () => {
     expect(() => rawValueKey({ kind: 'unknown' }, mixed)).toThrow(/incomplete/i)
     expect(() => rawValueKey(n(Infinity), mixed)).toThrow(RangeError)
   })
-  it('bounds complete-domain scanning', () => {
-    expect(() => classifyColumn([n(1), n(2)], true, semantics, { maxWork: 1 })).toThrow(/resource/i)
+  it('bounds each classification cell', () => {
+    expect(() => classifyColumn([{ kind: 'number', value: 1, formatCode: '0.00' }], true, semantics, { maxWork: 1 })).toThrow(/resource/i)
     const controller = new AbortController(); controller.abort()
     expect(() => classifyColumn([n(1)], true, semantics, { signal: controller.signal })).toThrow(/cancel/i)
   })
@@ -244,5 +244,55 @@ describe('AC-SEM-01 visibility composition', () => {
     expect(visible(null)).toEqual([false, true, false, true, false, true])
     expect(visible(spec())).toEqual(visible(null))
     expect(JSON.stringify(rows)).toBe(before)
+  })
+})
+
+describe('review regressions', () => {
+  it('rejects null and missing-kind rules before property access', () => {
+    for (const rule of [null, {}, undefined]) expect(() => engine.compileRule(rule as unknown as ColumnRule, numeric)).toThrow(RangeError)
+  })
+  it('uses per-cell defaults across one million numeric rows', () => {
+    const match = engine.compileFilter(spec([0, { kind: 'number', op: 'gt', first: 0 }]), new Map([[0, numeric]]), () => n(1))
+    let accepted = 0
+    expect(() => { for (let row = 0; row < 1000000; row++) if (match(row)) accepted++ }).not.toThrow()
+    expect(accepted).toBe(1000000)
+  })
+  it('classifies 200k custom-format numeric cells with per-cell defaults', () => {
+    function* values() { for (let row = 0; row < 200000; row++) yield { kind: 'number' as const, value: row, formatCode: '0.000' } }
+    expect(classifyColumn(values(), true, semantics)).toEqual(numeric)
+  })
+  it('repeated compiled calls and instrumentation never become implicit cumulative limits', () => {
+    const work = { used: 0 }
+    const match = engine.compileRule({ kind: 'text', op: 'eq', first: 'hello', wildcards: false }, mixed, { work, maxWork: 50 })
+    expect(() => { for (let row = 0; row < 10000; row++) expect(match(s('hello'))).toBe(true) }).not.toThrow()
+    expect(work.used).toBeGreaterThan(50)
+  })
+  it.each(['[$-409]mmm d, yyyy', '[$-F800]dddd, mmmm dd, yyyy', '[$-409]h:mm:ss AM/PM', 'yyyy年m月d日', '[Red]yyyy-mm-dd', '[$-411]ge.m.d', 'e', 'g', 'b', 'h:mm', '[Color10][>=0][$USD-409]yyyy-mm-dd'])('classifies authored locale/date format %s', formatCode => {
+    expect(classifyColumn([{ kind: 'number', value: -2, formatCode }], true, semantics)).toEqual(date)
+  })
+  it.each(['[h]:mm', '[hh]', '[mm]:ss', '[ss]', 'mm:ss.0', 'mmss.0', 'General', '0.00E+00', '@', '0 \"days\"', '0_d', '0*y', '0\\m', '[foo]0'])('keeps duration/numeric/text format %s numeric', formatCode => {
+    expect(classifyColumn([{ kind: 'number', value: 2, formatCode }], true, semantics)).toEqual(numeric)
+  })
+  it.each([...Array.from({ length: 9 }, (_, i) => 14 + i), ...Array.from({ length: 10 }, (_, i) => 27 + i), ...Array.from({ length: 9 }, (_, i) => 50 + i)])('recognizes date builtin %s', numFmtId => {
+    expect(classifyColumn([{ kind: 'number', value: 2, numFmtId }], true, semantics)).toEqual(date)
+  })
+  it.each([45, 46, 47])('keeps duration builtin %s numeric', numFmtId => {
+    expect(classifyColumn([{ kind: 'number', value: 2, numFmtId }], true, semantics)).toEqual(numeric)
+  })
+})
+
+describe('explicit scan budgets', () => {
+  it('stops a whole scan only when a cumulative budget is explicitly supplied', () => {
+    const budget = new WorkBudget({ maxWork: 20 })
+    const match = engine.compileFilter(spec([0, { kind: 'number', op: 'gt', first: 0 }]), new Map([[0, numeric]]), () => n(1), { budget })
+    expect(match(2)).toBe(true)
+    expect(() => { for (let row = 0; row < 50; row++) match(row) }).toThrow(/resource/i)
+    expect(() => classifyColumn([n(1), n(2)], true, semantics, { budget: new WorkBudget({ maxWork: 1 }) })).toThrow(/resource/i)
+  })
+  it.each(['and', 'or'] as const)('shares one cell allowance for compound %s', connective => {
+    const first: ColumnRule = { kind: 'text', op: 'eq', first: 'hello', wildcards: false }
+    const match = engine.compileRule({ kind: 'compound', connective, first, second: first }, mixed)
+    expect(() => match(s('hello'), { maxWork: 30 })).toThrow(/resource/i)
+    expect(match(s('hello'), { maxWork: 100 })).toBe(true)
   })
 })

@@ -1,12 +1,11 @@
 import type { ColumnRule, FilterSpec, IntervalSet, RowOrder, TextOp } from './contracts'
 import type { ResolvedSemantics } from '../formula/types'
 import { lowerDateCondition, matchesDateInterval, type DateContext } from './datePredicates'
-import { formatCommon } from '../formula/format'
 import { validateCoordinate, validateSourceRect } from './coordinates'
 import { FilterDiagnostic, TextFilterMatcher, WorkBudget, type FilterLimits } from './textFilter'
 import { projectVisibility, normalizeFilter } from './visibility'
 
-export { FilterDiagnostic } from './textFilter'
+export { FilterDiagnostic, WorkBudget } from './textFilter'
 export type { FilterLimits, FilterWork } from './textFilter'
 export type { NumberOp, TextOp, DateOp, CalendarDay, DatePreset, TypedCondition, CompoundFilter, ValuesFilter, ValueSelection, PagedKeySetRef, ColumnRule, FilterSpec } from './contracts'
 /** Prepared authority from a complete body-domain scan. Display text is a
@@ -24,50 +23,51 @@ function resolved(value: PreparedValue): void {
   if (value.kind === 'unknown' || value.kind === 'unavailable') throw new FilterDiagnostic('incomplete', 'Filter incomplete: authoritative value is unresolved')
   if (value.kind === 'number' && !Number.isFinite(value.value)) throw new RangeError('Non-finite prepared numeric value')
 }
-/** formatCommon owns grammar validation. Its date-token classifier is private,
- * so this adapter only reads validated active-section tokens (no new grammar).
- * Fixed en-US probes avoid confusing its date-label locale limit with type. */
-function dateFormatted(value: Extract<PreparedValue, { kind: 'number' }>, semantics: ResolvedSemantics, budget: WorkBudget): boolean {
-  if (value.formatCode === undefined) return value.numFmtId !== undefined && value.numFmtId >= 14 && value.numFmtId <= 22
+/** Classification uses the positive (first) section regardless of value sign.
+ * Brackets and authored literals do not contribute date tokens. */
+function dateFormatted(value: Extract<PreparedValue, { kind: 'number' }>, budget: WorkBudget): boolean {
+  if (value.formatCode === undefined) {
+    const id = value.numFmtId
+    return id !== undefined && ((id >= 14 && id <= 22) || (id >= 27 && id <= 36) || (id >= 50 && id <= 58))
+  }
   budget.text(value.formatCode)
-  const probe = formatCommon(value.value, value.formatCode, { ...semantics, locale: 'en-US' })
-  if (probe.kind !== 'text') return false
-  const active = value.value < 0 ? 1 : value.value === 0 ? 2 : 0
-  let section = 0, quoted = false, bracketed = false, escaped = false, found = false
-  const sections: boolean[] = []
+  let active = '', quoted = false, escaped = false, bracket = '', bracketed = false, elapsed = false
   for (const point of value.formatCode) {
     if (bracketed) {
-      if (point === ']') bracketed = false
+      if (point === ']') { elapsed ||= /^(h{1,2}|m{1,2}|s{1,2})$/i.test(bracket); bracketed = false }
+      else bracket += point
       continue
     }
-    if (quoted) {
-      if (point === '"') quoted = false
-      continue
-    }
+    if (quoted) { if (point === '"') quoted = false; continue }
     if (escaped) { escaped = false; continue }
-    if (point === '\\') { escaped = true; continue }
+    if (point === '\\' || point === '_' || point === '*') { escaped = true; continue }
     if (point === '"') { quoted = true; continue }
-    if (point === '[') { bracketed = true; continue }
-    if (point === ';') { sections[section++] = found; found = false; continue }
-    if (/[ymdhs]/i.test(point)) found = true
+    if (point === '[') { bracketed = true; bracket = ''; continue }
+    if (point === ';') break
+    active += point
   }
-  sections[section] = found
-  return sections[active < sections.length ? active : 0] ?? false
+  if (elapsed || quoted || bracketed || escaped) return false
+  // Exponent E is numeric syntax; era e is a date token otherwise.
+  active = active.replace(/[eE][+-]0+/g, '').replace(/General/gi, '')
+  if (/[0#?@]/.test(active.replace(/s+\.0+/gi, 's'))) return false
+  return /[ydgeb]/i.test(active) || /h/i.test(active) || /am\/pm|a\/p/i.test(active) || (/m/i.test(active) && !/s/i.test(active))
 }
-export function classifyColumn(values: Iterable<PreparedValue>, complete: boolean, semantics: ResolvedSemantics, limits?: FilterLimits): ColumnClassification {
-  const budget = new WorkBudget(limits)
+export function classifyColumn(values: Iterable<PreparedValue>, complete: boolean, _semantics: ResolvedSemantics, limits?: FilterLimits): ColumnClassification {
+  new WorkBudget(limits)
   let hasNumeric = false, hasOther = false, hasDate = false, missing = !complete
   for (const value of values) {
+    const budget = new WorkBudget(limits)
     budget.charge(1)
     if (value.kind === 'unknown' || value.kind === 'unavailable') { missing = true; continue }
     resolved(value)
     if (value.kind === 'blank' || value.kind === 'error') continue
-    if (value.kind === 'number') { hasNumeric = true; hasDate ||= dateFormatted(value, semantics, budget) }
+    if (value.kind === 'number') { hasNumeric = true; hasDate ||= dateFormatted(value, budget) }
     else hasOther = true
   }
   return { kind: missing ? 'loading' : hasOther ? 'text' : hasNumeric ? hasDate ? 'date' : 'number' : 'empty', hasNumeric }
 }
-export function filterMenus(classification: ColumnClassification): readonly string[] {
+export type FilterMenu = 'values' | 'blanks' | 'text' | 'number' | 'date'
+export function filterMenus(classification: ColumnClassification): readonly FilterMenu[] {
   switch (classification.kind) {
     case 'loading': return []
     case 'empty': return ['values', 'blanks']
@@ -99,8 +99,12 @@ export class FilterEngine {
   }
   compileRule(rule: ColumnRule, classification: ColumnClassification, limits?: FilterLimits): CompiledRule {
     const compilation = new WorkBudget(limits)
+    const evaluate = this.prepareRule(rule, classification, compilation)
+    return (value, override = limits) => evaluate(value, new WorkBudget(override))
+  }
+  private prepareRule(rule: ColumnRule, classification: ColumnClassification, compilation: WorkBudget): (value: PreparedValue, budget: WorkBudget) => boolean {
     compilation.charge(1)
-    const shared = { ...limits, maxWork: compilation.maxWork, maxTextLength: compilation.maxTextLength, work: compilation.work }
+    if (!rule || typeof rule !== 'object' || typeof rule.kind !== 'string') throw new RangeError('Invalid condition kind')
     const columnKind = classification.kind
     if (columnKind === 'loading') throw new FilterDiagnostic('incomplete', 'Filter incomplete: column classification is loading')
     if (rule.kind === 'values') throw new FilterDiagnostic('unsupported-values', 'Values membership belongs to S8.2')
@@ -110,13 +114,12 @@ export class FilterEngine {
       }
       if (rule.connective !== 'and' && rule.connective !== 'or') throw new RangeError('Invalid compound connective')
       const connective = rule.connective
-      const first = this.compileRule(rule.first, classification, shared), second = this.compileRule(rule.second, classification, shared)
-      return (value, limits = shared) => {
+      const first = this.prepareRule(rule.first, classification, compilation), second = this.prepareRule(rule.second, classification, compilation)
+      return (value, budget) => {
         // Evaluate both lanes so a successful branch cannot disguise missing
         // authoritative values or an unprepared formatted-text lane.
-        const budget = new WorkBudget(limits)
-        const shared = { ...limits, work: budget.work }
-        const a = first(value, shared), b = second(value, shared)
+        budget.charge(0)
+        const a = first(value, budget), b = second(value, budget)
         return connective === 'and' ? a && b : a || b
       }
     }
@@ -125,8 +128,8 @@ export class FilterEngine {
         || !Number.isFinite(rule.first) || (rule.second !== undefined && !Number.isFinite(rule.second))) throw new RangeError('Invalid numeric condition')
       if (rule.op === 'between' && (rule.second === undefined || rule.first > rule.second)) throw new RangeError('Missing or reversed numeric bounds')
       const { op, first, second } = rule
-      return (value, limits = shared) => {
-        new WorkBudget(limits)
+      return (value, budget) => {
+        budget.charge(0)
         resolved(value)
         if (value.kind !== 'number') return false
         switch (op) {
@@ -142,23 +145,23 @@ export class FilterEngine {
     }
     if (rule.kind === 'date' || rule.kind === 'datePreset') {
       const interval = lowerDateCondition(rule, this.context)
-      return (value, limits = shared) => {
-        new WorkBudget(limits)
+      return (value, budget) => {
+        budget.charge(0)
         resolved(value)
         return value.kind === 'number' && columnKind === 'date' && matchesDateInterval(value.value, interval)
       }
     }
     if (rule.kind !== 'text') throw new RangeError('Invalid condition kind')
-    this.text.validate(rule.op, rule.first, rule.wildcards, shared)
+    this.text.validate(rule.op, rule.first, rule.wildcards, { ...compilation.limits, budget: compilation, work: undefined })
     const { op, first, wildcards } = rule
-    return (value, limits = shared) => {
-      new WorkBudget(limits)
+    return (value, budget) => {
+      budget.charge(0)
       resolved(value)
       if (value.kind === 'blank' || value.kind === 'error') return false
-      if (value.kind === 'string') return this.matchText(op, first, wildcards, value.value, limits)
+      if (value.kind === 'string') return this.text.matchWithBudget(op, first, wildcards, value.value, budget)
       if ((value.kind === 'number' || value.kind === 'boolean') && columnKind === 'text') {
         if (value.displayText === undefined) throw new FilterDiagnostic('missing-display-text', 'Missing formatted display text lane')
-        return this.matchText(op, first, wildcards, value.displayText, limits)
+        return this.text.matchWithBudget(op, first, wildcards, value.displayText, budget)
       }
       return false
     }
@@ -167,7 +170,6 @@ export class FilterEngine {
     validateSourceRect(spec.range)
     normalizeFilter(spec)
     const budget = new WorkBudget(limits)
-    const shared = { ...limits, maxWork: budget.maxWork, maxTextLength: budget.maxTextLength, work: budget.work }
     const compiled: { col: number; match: CompiledRule }[] = []
     for (const [col, rule] of spec.columns) {
       budget.charge(1)
@@ -175,15 +177,17 @@ export class FilterEngine {
       if (col < spec.range.c0 || col > spec.range.c1) throw new RangeError('Filter column outside range')
       const classification = columns.get(col)
       if (!classification) throw new FilterDiagnostic('incomplete', 'Filter incomplete: missing column classification')
-      compiled.push({ col, match: this.compileRule(rule, classification, shared) })
+      compiled.push({ col, match: this.compileRule(rule, classification, limits) })
     }
     return row => {
       validateCoordinate(row, 0)
-      budget.charge(1)
+      new WorkBudget(limits).charge(0)
       let matched = true
       for (const entry of compiled) {
-        budget.charge(1)
-        const result = entry.match(read(row, entry.col), shared)
+        // Each source column cell owns its allowance; compound children share it.
+        const cell = new WorkBudget(limits)
+        cell.charge(1)
+        const result = entry.match(read(row, entry.col), { ...limits, budget: cell, work: undefined })
         matched = result && matched
       }
       return matched

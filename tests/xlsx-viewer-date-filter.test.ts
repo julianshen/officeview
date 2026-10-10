@@ -61,3 +61,17 @@ describe('date filter calendar intervals', () => {
     expect(() => lower({ kind: 'datePreset', preset: 'bad' as DatePreset })).toThrow(RangeError)
   })
 })
+
+describe('review date regressions', () => {
+  it('validates static date time zones as well as preset zones', () => {
+    expect(() => lowerDateCondition({ kind: 'date', op: 'eq', first: day(2026, 3, 8) }, { ...ctx, timeZone: 'invalid-zone' })).toThrow(RangeError)
+  })
+  it.each([['Asia/Kolkata', '2026-03-08T18:40:00Z', day(2026, 3, 9)], ['Asia/Kathmandu', '2026-03-08T18:20:00Z', day(2026, 3, 9)]] as const)('uses fractional-hour local day in %s', (timeZone, now, first) => {
+    expect(lowerDateCondition({ kind: 'datePreset', preset: 'today' }, { ...ctx, timeZone, nowMs: Date.parse(now) })).toEqual({ start: serial(first), end: serial(first) + 1, complement: false })
+  })
+  it.each(['today', 'yesterday', 'tomorrow', 'thisWeek', 'thisMonth', 'thisYear'] as const)('lowers modern 1904 preset %s', preset => {
+    const a = lowerDateCondition({ kind: 'datePreset', preset }, ctx)
+    const b = lowerDateCondition({ kind: 'datePreset', preset }, { ...ctx, dateSystem: '1904' })
+    expect(b).toEqual({ start: a.start - 1462, end: a.end - 1462, complement: false })
+  })
+})
