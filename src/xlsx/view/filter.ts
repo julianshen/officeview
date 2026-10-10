@@ -49,8 +49,10 @@ function dateFormatted(value: Extract<PreparedValue, { kind: 'number' }>, budget
   if (elapsed || quoted || bracketed || escaped) return false
   // Exponent E is numeric syntax; era e is a date token otherwise.
   active = active.replace(/[eE][+-]0+/g, '').replace(/General/gi, '')
+  // Definitive date tokens classify even combinations the renderer cannot format.
+  if (/[ydgebh]/i.test(active) || /am\/pm|a\/p/i.test(active)) return true
   if (/[0#?@]/.test(active.replace(/s+\.0+/gi, 's'))) return false
-  return /[ydgeb]/i.test(active) || /h/i.test(active) || /am\/pm|a\/p/i.test(active) || (/m/i.test(active) && !/s/i.test(active))
+  return /m/i.test(active) && !/s/i.test(active)
 }
 export function classifyColumn(values: Iterable<PreparedValue>, complete: boolean, _semantics: ResolvedSemantics, limits?: FilterLimits): ColumnClassification {
   new WorkBudget(limits)

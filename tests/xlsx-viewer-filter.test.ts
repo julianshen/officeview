@@ -185,7 +185,7 @@ describe('complete classification and exact keys', () => {
     expect(classifyColumn([{ kind: 'number', value: -2, formatCode: '0;yyyy-mm-dd' }], true, semantics)).toEqual(numeric)
     expect(classifyColumn([{ kind: 'number', value: 0, formatCode: '0;0;yyyy-mm-dd' }], true, semantics)).toEqual(numeric)
     expect(classifyColumn([{ kind: 'number', value: 0, formatCode: 'yyyy-mm-dd;0' }], true, semantics)).toEqual(date)
-    expect(classifyColumn([{ kind: 'number', value: 2, formatCode: '0\\\\d' }], true, semantics)).toEqual(numeric)
+    expect(classifyColumn([{ kind: 'number', value: 2, formatCode: '0\\\\d' }], true, semantics), 'unescaped d after an escaped backslash is a definitive date token').toEqual(date)
     expect(classifyColumn([{ kind: 'number', value: 2, formatCode: 'yyyy-mm-dd' }], true, { ...semantics, locale: 'zh-TW' })).toEqual(date)
     expect(classifyColumn([s('s'), { kind: 'boolean', value: true }], true, semantics)).toEqual({ kind: 'text', hasNumeric: false })
   })
@@ -519,5 +519,15 @@ describe('fallback text preflight precedes normalization', () => {
     const matcher = new ReferenceTextFilterMatcher('da-DK')
     const evaluate = matcher.prepare('contains', 'x', false, new WorkBudget())
     expect(() => evaluate('x'.repeat(1000), evaluation)).toThrow(/cancel/i)
+  })
+})
+
+describe('definitive authored date tokens override numeric placeholders', () => {
+  it('keeps a day token escaped by one runtime backslash numeric', () => {
+    const formatCode = '0' + String.fromCharCode(92) + 'd'
+    expect(classifyColumn([{ kind: 'number', value: 2, formatCode }], true, semantics)).toEqual(numeric)
+  })
+  it.each(['yyyy-mm-dd 0', 'h:mm:ss 0'])('classifies definitive date/time format %s', formatCode => {
+    expect(classifyColumn([{ kind: 'number', value: 2, formatCode }], true, semantics)).toEqual(date)
   })
 })
