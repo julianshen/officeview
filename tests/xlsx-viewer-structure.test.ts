@@ -133,15 +133,14 @@ describe('giant-rectangle memory behavior', () => {
     }
     return new StructuralIndex(result)
   }
-  it('keeps a full-domain merge as one record with bounded heap growth', () => {
-    singleMergeIndex(fullDomain)
-    const before = process.memoryUsage().heapUsed
+  it('keeps a full-domain merge as one record with bounded visits', () => {
     const index = singleMergeIndex(fullDomain)
     expect(index.recordCount).toBe(1)
-    expect(index.query({ r0: 500000, r1: 500100, c0: 0, c1: MAX_COLS - 1 }).merges).toHaveLength(1)
-    expect(index.query({ r0: 0, r1: 0, c0: 0, c1: 0 }).merges).toHaveLength(1)
-    const after = process.memoryUsage().heapUsed
-    expect(after - before).toBeLessThan(16 * 1024 * 1024)
+    let visits = 0
+    const probe = (n: number) => { visits += n }
+    expect(index.query({ r0: 500000, r1: 500100, c0: 0, c1: MAX_COLS - 1 }, { countVisits: probe }).merges).toHaveLength(1)
+    expect(index.query({ r0: 0, r1: 0, c0: 0, c1: 0 }, { countVisits: probe }).merges).toHaveLength(1)
+    expect(visits).toBeLessThanOrEqual(16)
   })
   it('gives narrow-column giant rectangles no phantom coverage', () => {
     const index = singleMergeIndex({ r0: 0, r1: MAX_ROWS - 1, c0: 5, c1: 5 })
@@ -257,8 +256,49 @@ describe('first-hit search and resumable visits', () => {
   })
 })
 
-describe('rectangle index differential vs brute force', () => {
-  it('matches a list scan on thousands of random rects including domain edges', () => {
+describe('column-dimension visit bound', () => {
+  it('pins visits per hit on 1M small records with random small queries', () => {
+    const random = createPrng(777)
+    const count = 1000000
+    const records = new Array(count)
+    for (let id = 0; id < count; id++) {
+      const r0 = Math.floor(random() * MAX_ROWS)
+      const c0 = Math.floor(random() * MAX_COLS)
+      records[id] = {
+        rect: {
+          r0, r1: Math.min(MAX_ROWS - 1, r0 + Math.floor(random() * 20)),
+          c0, c1: Math.min(MAX_COLS - 1, c0 + Math.floor(random() * 20)),
+        },
+        value: { id },
+      }
+    }
+    const index = RectangleIndex.build(records)
+    expect(index.size).toBe(count)
+    for (let query = 0; query < 30; query++) {
+      const r0 = Math.floor(random() * MAX_ROWS)
+      const c0 = Math.floor(random() * MAX_COLS)
+      const rect: SourceRect = {
+        r0, r1: Math.min(MAX_ROWS - 1, r0 + 30), c0, c1: Math.min(MAX_COLS - 1, c0 + 30),
+      }
+      let visits = 0
+      const page = index.query(rect, { limit: 100000, countVisits: n => { visits += n } })
+      expect(page.nextCursor).toBeUndefined()
+      expect(visits).toBeLessThanOrEqual(8 * (page.items.length + 64))
+    }
+  })
+  it('bounds the adversarial full-height column case by row hits, not hits', () => {
+    const stripes = Array.from({ length: MAX_COLS }, (_v, col) => ({
+      rect: { r0: 0, r1: MAX_ROWS - 1, c0: col, c1: col }, value: { id: col },
+    }))
+    const index = RectangleIndex.build(stripes)
+    let visits = 0
+    const page = index.query({ r0: 100, r1: 200, c0: 5, c1: 5 }, { countVisits: n => { visits += n } })
+    expect(page.items.map(item => item.id)).toEqual([5])
+    expect(visits).toBeLessThanOrEqual(4 * MAX_COLS)
+  })
+})
+
+describe('rectangle index differential vs brute force', () => {  it('matches a list scan on thousands of random rects including domain edges', () => {
     const random = createPrng(20261010)
     const integer = (max: number): number => Math.floor(random() * (max + 1))
     const records = Array.from({ length: 600 }, (_, id) => {
@@ -608,5 +648,43 @@ describe('absolute drawing retention', () => {
     expect(index.query(fullDomain).drawings).toEqual([])
     expect(index.absoluteDrawings).toEqual([absolute])
     expect(index.recordCount).toBe(0)
+  })
+})
+
+describe('structural result error handling', () => {
+  it('treats a set result error as incomplete instead of authorizing', () => {
+    const result: StructuralResult = {
+      stamp, completeness: 'complete', merges: [], tables: [], spills: [], drawings: [], missing: [],
+      error: { code: 'page-error', retryable: false, message: 'structural page failed' },
+    }
+    expect(new StructuralIndex(result).completeness).toBe('incomplete')
+  })
+})
+
+describe('record ownership', () => {
+  it('isolates the index from later caller mutation', () => {
+    const spill = {
+      anchor: { row: 32, col: 0 }, kind: 'fixed' as const,
+      saved: { r0: 32, r1: 34, c0: 0, c1: 1 } as SourceRect,
+    }
+    const result: StructuralResult = {
+      stamp, completeness: 'complete', merges: [], tables: [], spills: [spill], drawings: [], missing: [],
+    }
+    const index = new StructuralIndex(result)
+    const query: SourceRect = { r0: 33, r1: 33, c0: 1, c1: 1 }
+    expect(index.query(query).spills).toHaveLength(1)
+    spill.saved = { r0: 32, r1: 34, c0: 5, c1: 5 }
+    spill.anchor.col = 9
+    expect(index.query(query).spills).toHaveLength(1)
+    expect(index.query(query).spills[0].anchor).toEqual({ row: 32, col: 0 })
+  })
+  it('freezes returned records so mutation attempts throw', async () => {
+    const { index } = await f5Index()
+    const page = index.query({ r0: 0, r1: 1, c0: 0, c1: 1 })
+    expect(page.merges).toHaveLength(1)
+    expect(() => { (page.merges[0] as unknown as { id: string }).id = 'x' }).toThrow()
+    expect(() => { (page.merges[0].range as unknown as { r1: number }).r1 = 999 }).toThrow()
+    expect(() => { (page.merges[0].anchor as unknown as { row: number }).row = 7 }).toThrow()
+    expect(page.merges[0]).toMatchObject({ id: 'merge-0', range: { r0: 0, r1: 1, c0: 0, c1: 1 } })
   })
 })

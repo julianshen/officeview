@@ -253,6 +253,22 @@ describe('guardFilter merge/spill and drawing prefix impact', () => {
     const index = new StructuralIndex(drawingBelowBand())
     expect(await guardFilter(filterRequest(band(0, 1, 0, 3), [], index))).toEqual({ ok: true })
   })
+  it('returns a typed refusal for drawings anchored outside the projection', async () => {
+    const drawing: DrawingAnchor = {
+      id: 'past-end',
+      kind: 'twoCell',
+      from: { row: 5000, col: 0, offsetXEmu: 0, offsetYEmu: 0 },
+      to: { row: 5005, col: 2, offsetXEmu: 0, offsetYEmu: 0 },
+      extent: { x: 0, y: 0, width: 1000, height: 1000 },
+      bounds: { r0: 5000, r1: 5005, c0: 0, c1: 2 },
+    }
+    const result: StructuralResult = {
+      stamp: { docId: 'd', sheetId: 's', valueGen: 0 },
+      completeness: 'complete', merges: [], tables: [], spills: [], drawings: [drawing], missing: [],
+    }
+    const outcome = await guardFilter(filterRequest(band(0, 1, 0, 3), [0], new StructuralIndex(result)))
+    expect(outcome).toEqual({ ok: false, refusal: { reason: 'invalid-range', message: expect.any(String) } })
+  })
   it('tracks changed rows through a band permutation in source order', async () => {
     const reversed = createRowOrder([{ r0: 0, r1: 9, sourceAtOffset: Uint32Array.from([9, 8, 7, 6, 5, 4, 3, 2, 1, 0]) }])
     const result: StructuralResult = {
@@ -294,6 +310,20 @@ describe('incomplete coverage waits without authorizing', () => {
     const outcome = await guardSort(band(60, 65, 0, 1), index, fixtureSource(handle, pending))
     expect(outcome).toEqual({ ok: false, refusal: { reason: 'incomplete', missing: pending } })
   })
+  it('treats style-only cells as blank through the real store contract', async () => {
+    const handle = createFixture('F5')
+    const store = handle.createStore({ read: {
+      isPopulated: () => false,
+      cellAt: () => null,
+      styleOf: () => 1,
+    } })
+    expect(await store.readCell({ row: 4, col: 1 }, readOptionsFor(store))).toEqual({ kind: 'blank' })
+    const empty = new StructuralIndex({
+      stamp: { docId: 'd', sheetId: 's', valueGen: 0 },
+      completeness: 'complete', merges: [], tables: [], spills: [], drawings: [], missing: [],
+    })
+    expect(await guardSort(band(0, 9, 0, 1), empty, fromStoreScan(store, readOptionsFor(store)))).toEqual({ ok: true })
+  })
 })
 
 describe('atomic refusal and read-only selection', () => {
@@ -322,6 +352,19 @@ describe('atomic refusal and read-only selection', () => {
     expect(isChildOnlyRange({ r0: 45, r1: 45, c0: 3, c1: 3 }, index)).toMatchObject({ reason: 'dynamic-spill' })
     expect(isChildOnlyRange({ r0: 32, r1: 32, c0: 0, c1: 0 }, index)).toBeNull()
     expect(isChildOnlyRange({ r0: 60, r1: 65, c0: 0, c1: 1 }, index)).toBeNull()
+  })
+  it('waits instead of reporting a safe null for loading structures', async () => {
+    const { index } = await f5Setup()
+    const missing: SourceRect[] = [{ r0: 0, r1: 9, c0: 0, c1: 3 }]
+    const loading = new StructuralIndex({
+      stamp: { docId: 'd', sheetId: 's', valueGen: 0 },
+      completeness: 'loading', merges: [], tables: [], spills: [], drawings: [], missing,
+    })
+    expect(loading.completeness).toBe('loading')
+    expect(isChildOnlyRange({ r0: 60, r1: 65, c0: 0, c1: 1 }, loading)).toEqual({
+      reason: 'incomplete', missing,
+    })
+    expect(index.completeness).toBe('complete')
   })
 })
 
