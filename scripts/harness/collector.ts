@@ -32,6 +32,9 @@ export const MAX_BODY_BYTES = 1024 * 1024
 export const MAX_ARTIFACTS = 100
 /** Idle time allowed for one collector request before the server gives up on it. */
 export const COLLECT_REQUEST_TIMEOUT_MS = 30_000
+/** Absolute wall-clock budget per collector request: a client that keeps the
+ * connection alive with a slow drip still cannot hold it past this deadline. */
+export const COLLECT_REQUEST_DEADLINE_MS = 30_000
 /** Labels a page may legitimately report from an unautomated device browser. */
 export const ALLOWED_DEVICE_BROWSERS: readonly string[] = ['safari', 'webkit', 'chromium', 'firefox']
 const MAX_REPORTED_ERRORS = 20
@@ -188,13 +191,15 @@ function send(res: ServerResponse, status: number, body: unknown, extraHeaders: 
 }
 
 /** Connect-style adapter; streams the body with a hard byte cap. Authentication
- * and origin are decided from headers BEFORE any body byte is read, and a
- * stalled upload is destroyed after an explicit idle timeout. */
+ * and origin are decided from headers BEFORE any body byte is read, a stalled
+ * upload is destroyed after an explicit idle timeout, and no request — however
+ * chatty — outlives an absolute wall-clock deadline. */
 export function createCollectorMiddleware(
   collector: Collector,
-  options: { requestTimeoutMs?: number } = {},
+  options: { requestTimeoutMs?: number; requestDeadlineMs?: number } = {},
 ): (req: IncomingMessage, res: ServerResponse, next: () => void) => void {
   const requestTimeoutMs = options.requestTimeoutMs ?? COLLECT_REQUEST_TIMEOUT_MS
+  const requestDeadlineMs = options.requestDeadlineMs ?? COLLECT_REQUEST_DEADLINE_MS
   return (req, res, next) => {
     const pathname = new URL(req.url ?? '/', 'http://harness.invalid').pathname
     if (pathname !== COLLECT_PATH) {
@@ -206,8 +211,10 @@ export function createCollectorMiddleware(
       return
     }
     const failClosed = (status: number, errors: string[]): void => {
-      send(res, status, { ok: false, errors })
-      req.destroy()
+      if (res.writableEnded) return
+      const text = JSON.stringify({ ok: false, errors })
+      res.writeHead(status, { 'content-type': 'application/json', 'content-length': Buffer.byteLength(text), connection: 'close' })
+      res.end(text, () => req.destroy())
     }
     const headerOf = (name: string): string | null => {
       const value = req.headers[name]
@@ -218,20 +225,36 @@ export function createCollectorMiddleware(
       failClosed(gate.status, gate.body.errors as string[])
       return
     }
+    let finished = false
+    const finish = (): void => {
+      if (finished) return
+      finished = true
+      clearTimeout(deadlineTimer)
+      try {
+        req.setTimeout(0)
+      } catch {
+        // socket already gone; nothing left to disarm
+      }
+    }
+    const deadlineTimer = setTimeout(() => {
+      if (finished || res.writableEnded) return
+      finish()
+      failClosed(408, [`collector request exceeded its ${requestDeadlineMs} ms wall-clock deadline`])
+    }, requestDeadlineMs)
+    // setTimeout without unref: a live collector request must keep the process
+    // alive until it is answered, timed out, or destroyed.
     req.setTimeout(requestTimeoutMs, () => {
-      if (res.writableEnded) return
-      const text = JSON.stringify({ ok: false, errors: [`collector request timed out after ${requestTimeoutMs} ms without completing`] })
-      res.writeHead(408, { 'content-type': 'application/json', 'content-length': Buffer.byteLength(text), connection: 'close' })
-      res.end(text, () => req.destroy())
+      if (finished || res.writableEnded) return
+      finish()
+      failClosed(408, [`collector request timed out after ${requestTimeoutMs} ms without completing`])
     })
     const max = collector.maxBodyBytes
     let aborted = false
     const tooLarge = (): void => {
       if (aborted) return
       aborted = true
-      const text = JSON.stringify({ ok: false, errors: [`body exceeds the ${max}-byte limit`] })
-      res.writeHead(413, { 'content-type': 'application/json', 'content-length': Buffer.byteLength(text), connection: 'close' })
-      res.end(text, () => req.destroy())
+      finish()
+      failClosed(413, [`body exceeds the ${max}-byte limit`])
     }
     const declared = Number(req.headers['content-length'])
     if (Number.isFinite(declared) && declared > max) {
@@ -252,10 +275,10 @@ export function createCollectorMiddleware(
     })
     req.on('error', () => {
       aborted = true
+      finish()
     })
     req.on('end', () => {
       if (aborted) return
-      req.setTimeout(0)
       const token = req.headers['x-harness-token']
       void collector
         .ingest({
@@ -264,8 +287,14 @@ export function createCollectorMiddleware(
           host: typeof req.headers.host === 'string' ? req.headers.host : null,
           body: Buffer.concat(chunks).toString('utf8'),
         })
-        .then((response) => send(res, response.status, response.body))
-        .catch(() => send(res, 500, { ok: false, errors: ['collector failure'] }))
+        .then((response) => {
+          finish()
+          send(res, response.status, response.body)
+        })
+        .catch(() => {
+          finish()
+          send(res, 500, { ok: false, errors: ['collector failure'] })
+        })
     })
   }
 }

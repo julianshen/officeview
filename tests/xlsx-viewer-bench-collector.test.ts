@@ -288,19 +288,23 @@ describe('HTTP middleware (same-origin, no CORS)', () => {
   })
 
   it('answers 401 for a missing token without waiting for the declared body', async () => {
-    const outcome = await new Promise<string>((done) => {
+    const outcome = await new Promise<{ status: string; closed: boolean }>((done) => {
+      const finish = (status: string, closed: boolean): void => done({ status, closed })
       const req = httpRequest(`${base}/__harness/collect`, {
         method: 'POST',
         headers: { 'content-type': 'application/json', 'content-length': 2 * 1024 * 1024 },
       }, (res) => {
-        done(`status ${res.statusCode}`)
+        const status = `status ${res.statusCode}`
         res.resume()
+        res.on('close', () => finish(status, true))
       })
-      req.on('error', () => done('connection aborted'))
+      req.on('error', () => finish('connection aborted', true))
       req.write('{"partial": true')
       // Never send the remaining ~2 MiB: a headers-only decision must already have arrived.
+      setTimeout(() => finish('still open (bad)', false), 3000).unref?.()
     })
-    expect(outcome).toBe('status 401')
+    expect(outcome.status).toBe('status 401')
+    expect(outcome.closed).toBe(true)
     expect(readdirSync(outputDir)).toEqual([])
   })
 
@@ -353,6 +357,44 @@ describe('HTTP middleware (same-origin, no CORS)', () => {
     } finally {
       stalled.closeAllConnections()
       await new Promise((done) => stalled.close(done))
+    }
+  }, 15_000)
+
+  it('kills a slow drip that stays under the idle timeout but exceeds the absolute deadline', async () => {
+    const dripping = createServer((req, res) => createCollectorMiddleware(createCollector(config()), { requestTimeoutMs: 10_000, requestDeadlineMs: 400 })(req, res, () => {
+      res.statusCode = 404
+      res.end('next')
+    }))
+    await new Promise<void>((done) => dripping.listen(0, '127.0.0.1', done))
+    try {
+      const port = (dripping.address() as AddressInfo).port
+      const outcome = await new Promise<string>((done) => {
+        const settled = (value: string): void => done(value)
+        const req = httpRequest(`http://127.0.0.1:${port}/__harness/collect`, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json', 'x-harness-token': TOKEN },
+        }, (res) => {
+          settled(`status ${res.statusCode}`)
+          res.resume()
+        })
+        req.on('error', () => settled('connection aborted'))
+        const drip = setInterval(() => {
+          if (req.destroyed) {
+            clearInterval(drip)
+            return
+          }
+          req.write(' ')
+        }, 100)
+        setTimeout(() => {
+          clearInterval(drip)
+          settled('still open (bad)')
+        }, 5000).unref?.()
+      })
+      expect(outcome).toMatch(/status 408|connection aborted/)
+      expect(readdirSync(outputDir)).toEqual([])
+    } finally {
+      dripping.closeAllConnections()
+      await new Promise((done) => dripping.close(done))
     }
   }, 15_000)
 })
