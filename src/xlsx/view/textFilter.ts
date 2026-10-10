@@ -101,6 +101,7 @@ export class ReferenceTextFilterMatcher {
   }
   protected evaluate(op: TextOp, pattern: string, parsed: readonly Token[] | undefined, text: string, budget: WorkBudget, period?: number): boolean {
     if (typeof text !== 'string') throw new RangeError('Invalid text condition')
+    budget.charge(0)
     budget.text(text)
     const negative = op === 'neq' || op === 'not-contains'
     const positive = op === 'neq' ? 'eq' : op === 'not-contains' ? 'contains' : op
@@ -315,6 +316,8 @@ export class TextFilterMatcher extends ReferenceTextFilterMatcher {
   }
   protected evaluate(op: TextOp, pattern: string, parsed: readonly Token[] | undefined, text: string, budget: WorkBudget): boolean {
     if (typeof text !== 'string') throw new RangeError('Invalid text condition')
+    budget.charge(0)
+    if (text.length > budget.maxTextLength) budget.text(text)
     const positive = op === 'neq' ? 'eq' : op === 'not-contains' ? 'contains' : op
     const negative = op === 'neq' || op === 'not-contains'
     if (parsed) {

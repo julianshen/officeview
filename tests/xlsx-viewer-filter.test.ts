@@ -502,3 +502,22 @@ describe('partial browser process shims fail closed', () => {
     } finally { vi.unstubAllGlobals() }
   })
 })
+
+describe('fallback text preflight precedes normalization', () => {
+  it('rejects oversized fallback text before making normalized copies', () => {
+    const matcher = new TextFilterMatcher('da-DK'), text = 'x'.repeat(1000)
+    const copy = vi.spyOn(String.prototype, 'toLowerCase')
+    try {
+      expect(() => matcher.match('contains', 'x', false, text, { maxTextLength: 10 })).toThrow(/resource/i)
+      expect(copy.mock.contexts.some(value => typeof value === 'string' && value.length === text.length)).toBe(false)
+    } finally { copy.mockRestore() }
+  })
+  it('checks cancellation before oversized reference text processing', () => {
+    const controller = new AbortController()
+    const evaluation = new WorkBudget({ signal: controller.signal, maxTextLength: 10 })
+    controller.abort()
+    const matcher = new ReferenceTextFilterMatcher('da-DK')
+    const evaluate = matcher.prepare('contains', 'x', false, new WorkBudget())
+    expect(() => evaluate('x'.repeat(1000), evaluation)).toThrow(/cancel/i)
+  })
+})
