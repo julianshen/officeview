@@ -43,11 +43,18 @@ function checkLimit(limit: number | undefined, what: string): number {
 
 /** True two-dimensional rectangle index over caller-owned records.
  * Segment tree over r0-sorted entries with max-r1 augmentation: O(n log n) build,
- * O(records) memory, O(log n + rowHits) queries with an O(1) column check per hit.
- * A full-domain merge is one entry; narrow-column giant rectangles keep exact
- * column bounds, so no phantom coverage appears. Immutable after build. */
-export interface RectangleQueryOptions { limit?: number; cursor?: string }
+ * O(records) memory. Row filtering is O(log n + rowHits); the O(1) column check
+ * runs per row hit, so column-narrow queries over tall records visit rowHits
+ * leaves per hit found (worst case O(n) node visits for full-height records;
+ * full-width band queries have rowHits == hits). Cursors resume at entry indexes,
+ * so pages never re-collect prior hits: each page costs O(log n) redescent plus
+ * its own examinations. A full-domain merge is one entry; narrow-column giant
+ * rectangles keep exact column bounds, so no phantom coverage appears.
+ * Immutable after build. */
+export interface RectangleQueryOptions { limit?: number; cursor?: string; countVisits?: (visits: number) => void }
 export interface RectanglePage<T> { items: readonly T[]; nextCursor?: string }
+export interface WalkOptions<T> { pred?: (value: T) => boolean; countVisits?: (visits: number) => void }
+export interface WalkResult<T> { items: readonly T[]; resume: number; exhausted: boolean }
 interface SortedEntry<T> { r0: number; r1: number; c0: number; c1: number; value: T }
 export class RectangleIndex<T> {
   private readonly sorted: readonly SortedEntry<T>[]
@@ -75,52 +82,84 @@ export class RectangleIndex<T> {
   }
   /** All hits in deterministic r0 order; callers slice for bounded pages. */
   collect(rect: SourceRect): readonly T[] {
+    return this.walkFrom(rect, 0, Number.MAX_SAFE_INTEGER).items
+  }
+  /** First hit in index order with early exit; no full drain. */
+  first(rect: SourceRect): T | undefined {
+    return this.walkFrom(rect, 0, 1).items[0]
+  }
+  /** First hit satisfying pred with early exit; later hits are never visited. */
+  firstWhere(rect: SourceRect, pred: (value: T) => boolean): T | undefined {
+    return this.walkFrom(rect, 0, 1, { pred }).items[0]
+  }
+  /** Low-level resumable primitive: examines candidate leaves from startIndex,
+   * emitting those that pass the column check and pred, stopping after maxEmit
+   * emissions. resume advances past every examined leaf, so callers make strict
+   * progress; exhausted is true only when the walk ran to completion. */
+  walkFrom(rect: SourceRect, startIndex: number, maxEmit: number, options?: WalkOptions<T>): WalkResult<T> {
     validateSourceRect(rect)
+    if (!Number.isSafeInteger(startIndex) || startIndex < 0) throw new RangeError('Invalid rectangle walk origin')
+    if (!Number.isSafeInteger(maxEmit) || maxEmit < 1) throw new RangeError('Invalid rectangle walk budget')
+    return this.walk(rect, startIndex, maxEmit, options?.pred, options?.countVisits)
+  }
+  private walk(
+    rect: SourceRect, startIndex: number, maxEmit: number,
+    pred: ((value: T) => boolean) | undefined, report: ((visits: number) => void) | undefined,
+  ): WalkResult<T> {
     const out: T[] = []
+    let resume = startIndex
+    let visits = 0
     const total = this.sorted.length
-    if (total === 0) return Object.freeze(out)
     let lo = 0, hi = total
     while (lo < hi) {
       const mid = (lo + hi) >> 1
       if (this.sorted[mid].r0 <= rect.r1) lo = mid + 1
       else hi = mid
     }
-    const visit = (node: number, left: number, right: number): void => {
-      if (left >= hi || right <= 0 || this.maxR1[node] < rect.r0) return
+    const visit = (node: number, left: number, right: number): boolean => {
+      visits++
+      if (right <= startIndex || left >= hi || this.maxR1[node] < rect.r0) return false
       if (left + 1 === right) {
         const entry = this.sorted[left]
-        if (entry.r1 >= rect.r0 && columnsOverlap(entry.c0, entry.c1, rect.c0, rect.c1)) out.push(entry.value)
-        return
+        resume = left + 1
+        if (entry.r1 >= rect.r0 && columnsOverlap(entry.c0, entry.c1, rect.c0, rect.c1)
+          && (pred === undefined || pred(entry.value))) {
+          out.push(entry.value)
+          if (out.length >= maxEmit) return true
+        }
+        return false
       }
       const mid = (left + right) >> 1
-      visit(node * 2, left, mid)
-      visit(node * 2 + 1, mid, right)
+      return visit(node * 2, left, mid) || visit(node * 2 + 1, mid, right)
     }
-    visit(1, 0, total)
-    return Object.freeze(out)
+    let stopped = false
+    if (total > 0) stopped = visit(1, 0, total)
+    if (report !== undefined) report(visits)
+    return { items: Object.freeze(out), resume, exhausted: !stopped }
   }
-  query(rect: SourceRect, options?: RectangleQueryOptions): RectanglePage<T> {
+  private decodeCursor(cursor: string | undefined, rect: SourceRect): number {
+    if (cursor === undefined) return 0
+    const parts = cursor.split(':')
+    if (parts.length !== 3 || parts[0] !== 'rectindex2' || parts[1] !== rectKey(rect)) {
+      throw new RangeError('Invalid rectangle cursor')
+    }
+    const offset = Number(parts[2])
+    if (!Number.isSafeInteger(offset) || offset < 0 || offset > this.size || parts[2] !== String(offset)) {
+      throw new RangeError('Invalid rectangle cursor')
+    }
+    return offset
+  }
+  query(rect: SourceRect, options?: RectangleQueryOptions): RectanglePage<T> {    validateSourceRect(rect)
     const limit = options?.limit === undefined ? RECTANGLE_PAGE_DEFAULT_LIMIT
       : (!Number.isSafeInteger(options.limit) || options.limit <= 0
         ? (() => { throw new RangeError('Invalid rectangle page limit') })() : options.limit)
-    const offset = decodeOffset(options?.cursor, rect, 'rectangle')
-    const hits = this.collect(rect)
-    const items = Object.freeze(hits.slice(offset, offset + limit))
-    return offset + limit < hits.length
-      ? { items, nextCursor: `rectindex:${rectKey(rect)}:${offset + limit}` }
-      : { items }
+    const startIndex = this.decodeCursor(options?.cursor, rect)
+    const found = this.walk(rect, startIndex, limit, undefined, options?.countVisits)
+    const items = Object.freeze(found.items)
+    return found.exhausted
+      ? { items }
+      : { items, nextCursor: `rectindex2:${rectKey(rect)}:${found.resume}` }
   }
-}
-function decodeOffset(cursor: string | undefined, rect: SourceRect, what: string): number {
-  if (cursor === undefined) return 0
-  const parts = cursor.split(':')
-  const offset = Number(parts[parts.length - 1])
-  const prefix = what === 'rectangle' ? 'rectindex' : 's3struct'
-  if (parts.length !== 3 || parts[0] !== prefix || parts[1] !== rectKey(rect)
-    || !Number.isSafeInteger(offset) || offset < 0 || parts[2] !== String(offset)) {
-    throw new RangeError(`Invalid ${what} cursor`)
-  }
-  return offset
 }
 
 /** Paged structural answer. The frozen store wire type (StructuralResult) carries no
@@ -134,9 +173,36 @@ export interface StructuralPage {
   drawings: readonly CellAnchoredDrawing[]
   nextCursor?: string
 }
-export interface StructuralQueryOptions { limit?: number; cursor?: string }
+export interface StructuralQueryOptions { limit?: number; cursor?: string; countVisits?: (visits: number) => void }
 export type CellAnchoredDrawing = Extract<DrawingAnchor, { kind: 'oneCell' | 'twoCell' }>
 export type AbsoluteDrawing = Extract<DrawingAnchor, { kind: 'absolute' }>
+export type StructuralHit =
+  | { kind: 'merge'; record: MergeExtent }
+  | { kind: 'table'; record: TableExtent }
+  | { kind: 'spill'; record: SpillExtent }
+  | { kind: 'drawing'; record: CellAnchoredDrawing }
+/** One entry per spill over the union of saved, evaluated and anchor extents.
+ * The union may cover gaps between extents, so queries verify exact matches;
+ * single entries keep cursors exactamente resumable with no cross-page dedup. */
+function spillUnion(spill: SpillExtent): SourceRect {
+  let r0 = spill.anchor.row, r1 = spill.anchor.row, c0 = spill.anchor.col, c1 = spill.anchor.col
+  for (const extent of [spill.saved, spill.evaluated]) {
+    if (extent === undefined) continue
+    r0 = Math.min(r0, extent.r0); r1 = Math.max(r1, extent.r1)
+    c0 = Math.min(c0, extent.c0); c1 = Math.max(c1, extent.c1)
+  }
+  return { r0, r1, c0, c1 }
+}
+/** Exact spill match mirroring the store predicate: an extent intersection or
+ * the anchor cell inside the query (child-only counts either way). */
+function spillMatches(spill: SpillExtent, rect: SourceRect): boolean {
+  for (const extent of [spill.saved, spill.evaluated]) {
+    if (extent !== undefined && extent.r0 <= rect.r1 && rect.r0 <= extent.r1
+      && extent.c0 <= rect.c1 && rect.c0 <= extent.c1) return true
+  }
+  return spill.anchor.row >= rect.r0 && spill.anchor.row <= rect.r1
+    && spill.anchor.col >= rect.c0 && spill.anchor.col <= rect.c1
+}
 /** Immutable index set over one StructuralResult. Spills are indexed per extent
  * (saved, evaluated) plus their anchor cell, so child-only intersections match even
  * when the anchor lies outside the query; absolute anchors are retained separately
@@ -162,17 +228,7 @@ export class StructuralIndex {
       else drawingEntries.push({ rect: { ...drawing.bounds }, value: drawing })
     }
     const spillEntries: { rect: SourceRect; value: SpillExtent }[] = []
-    for (const spill of result.spills) {
-      if (spill.saved !== undefined) spillEntries.push({ rect: { ...spill.saved }, value: spill })
-      if (spill.evaluated !== undefined
-        && (spill.saved === undefined || rectKey(spill.evaluated) !== rectKey(spill.saved))) {
-        spillEntries.push({ rect: { ...spill.evaluated }, value: spill })
-      }
-      spillEntries.push({
-        rect: { r0: spill.anchor.row, r1: spill.anchor.row, c0: spill.anchor.col, c1: spill.anchor.col },
-        value: spill,
-      })
-    }
+    for (const spill of result.spills) spillEntries.push({ rect: spillUnion(spill), value: spill })
     this.merges = RectangleIndex.build(result.merges.map(merge => ({ rect: merge.range, value: merge })))
     this.tables = RectangleIndex.build(result.tables.map(table => ({ rect: table.range, value: table })))
     this.spillEntries = RectangleIndex.build(spillEntries)
@@ -180,57 +236,73 @@ export class StructuralIndex {
     this.absoluteDrawings = Object.freeze(absolute)
     this.recordCount = this.merges.size + this.tables.size + this.spillEntries.size + this.drawings.size
   }
+  /** First hit across kinds in merge/table/spill/drawing order with early exit.
+   * Later kinds are never visited once a hit is found. */
+  firstWhere(rect: SourceRect, pred: (hit: StructuralHit) => boolean): StructuralHit | undefined {
+    validateSourceRect(rect)
+    const merge = this.merges.firstWhere(rect, record => pred({ kind: 'merge', record }))
+    if (merge !== undefined) return { kind: 'merge', record: merge }
+    const table = this.tables.firstWhere(rect, record => pred({ kind: 'table', record }))
+    if (table !== undefined) return { kind: 'table', record: table }
+    const spill = this.spillEntries.firstWhere(rect, record => spillMatches(record, rect) && pred({ kind: 'spill', record }))
+    if (spill !== undefined) return { kind: 'spill', record: spill }
+    const drawing = this.drawings.firstWhere(rect, record => pred({ kind: 'drawing', record }))
+    if (drawing !== undefined) return { kind: 'drawing', record: drawing }
+    return undefined
+  }
+  /** All cell-anchored drawings intersecting rect in one walk; the guard Y-checks
+   * every drawing, so collection (not paging) is the work here. */
+  drawingsIn(rect: SourceRect): readonly CellAnchoredDrawing[] {
+    return this.drawings.collect(rect)
+  }
   query(rect: SourceRect, options?: StructuralQueryOptions): StructuralPage {
     validateSourceRect(rect)
     const limit = checkLimit(options?.limit, 'structural')
-    const offset = decodeOffset(options?.cursor, rect, 'structural')
-    const spills: SpillExtent[] = []
-    const seen = new Set<SpillExtent>()
-    for (const spill of this.spillEntries.collect(rect)) {
-      if (!seen.has(spill)) {
-        seen.add(spill)
-        spills.push(spill)
+    const state = decodeStructuralCursor(options?.cursor, rect)
+    let remaining = limit
+    let visits = 0
+    const probe = options?.countVisits === undefined ? undefined : (n: number) => { visits += n }
+    const take = <T>(index: RectangleIndex<T>, start: number, pred?: (value: T) => boolean) => {
+      if (remaining === 0) {
+        const empty: T[] = []
+        return { items: Object.freeze(empty), resume: start, exhausted: start >= index.size }
       }
+      const found = index.walkFrom(rect, start, remaining, { pred, countVisits: probe })
+      remaining -= found.items.length
+      return found
     }
-    const ordered: {
-      merges: readonly MergeExtent[]; tables: readonly TableExtent[]
-      spills: readonly SpillExtent[]; drawings: readonly CellAnchoredDrawing[]
-    } = {
-      merges: this.merges.collect(rect),
-      tables: this.tables.collect(rect),
-      spills: Object.freeze(spills),
-      drawings: this.drawings.collect(rect),
-    }
-    const flattened: (MergeExtent | TableExtent | SpillExtent | CellAnchoredDrawing)[] = [
-      ...ordered.merges, ...ordered.tables, ...ordered.spills, ...ordered.drawings,
-    ]
-    const kinds = [
-      ...ordered.merges.map(() => 0), ...ordered.tables.map(() => 1),
-      ...ordered.spills.map(() => 2), ...ordered.drawings.map(() => 3),
-    ]
-    const pageMerges: MergeExtent[] = []
-    const pageTables: TableExtent[] = []
-    const pageSpills: SpillExtent[] = []
-    const pageDrawings: CellAnchoredDrawing[] = []
-    for (let index = offset; index < Math.min(flattened.length, offset + limit); index++) {
-      const item = flattened[index]
-      if (kinds[index] === 0) pageMerges.push(item as MergeExtent)
-      else if (kinds[index] === 1) pageTables.push(item as TableExtent)
-      else if (kinds[index] === 2) pageSpills.push(item as SpillExtent)
-      else pageDrawings.push(item as CellAnchoredDrawing)
-    }
+    const merges = take(this.merges, state.m)
+    const tables = take(this.tables, state.t)
+    const spills = take(this.spillEntries, state.s, spill => spillMatches(spill, rect))
+    const drawings = take(this.drawings, state.d)
     const page: StructuralPage = {
       completeness: this.completeness,
       missing: this.missing,
-      merges: Object.freeze(pageMerges),
-      tables: Object.freeze(pageTables),
-      spills: Object.freeze(pageSpills),
-      drawings: Object.freeze(pageDrawings),
+      merges: merges.items,
+      tables: tables.items,
+      spills: spills.items,
+      drawings: drawings.items,
     }
-    return offset + limit < flattened.length
-      ? { ...page, nextCursor: `s3struct:${rectKey(rect)}:${offset + limit}` }
-      : page
+    if (probe !== undefined && options?.countVisits !== undefined) options.countVisits(visits)
+    const exhausted = merges.exhausted && tables.exhausted && spills.exhausted && drawings.exhausted
+    return exhausted ? page : {
+      ...page,
+      nextCursor: `s3struct2:${rectKey(rect)}:${merges.resume}:${tables.resume}:${spills.resume}:${drawings.resume}`,
+    }
   }
+}
+function decodeStructuralCursor(cursor: string | undefined, rect: SourceRect): { m: number; t: number; s: number; d: number } {
+  const fresh = { m: 0, t: 0, s: 0, d: 0 }
+  if (cursor === undefined) return fresh
+  const parts = cursor.split(':')
+  if (parts.length !== 6 || parts[0] !== 's3struct2' || parts[1] !== rectKey(rect)) {
+    throw new RangeError('Invalid structural cursor')
+  }
+  const numbers = parts.slice(2).map(Number)
+  if (!numbers.every((n, i) => Number.isSafeInteger(n) && n >= 0 && parts[i + 2] === String(n))) {
+    throw new RangeError('Invalid structural cursor')
+  }
+  return { m: numbers[0], t: numbers[1], s: numbers[2], d: numbers[3] }
 }
 
 /** Sparse populated-cell feed. Only truly populated cells are items: style-only

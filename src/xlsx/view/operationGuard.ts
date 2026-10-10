@@ -3,14 +3,13 @@
  * caller-built projections, and return a discriminated outcome. A refusal changes
  * no view generation, mask, selection or cache owner. Incomplete coverage WAITS
  * (reason 'incomplete') and never authorizes. */
-import type { FilterRange, MergeExtent, OperationRefusal, RowVisibility, SourceRowInterval, SpillExtent, TableExtent } from './contracts'
+import type { FilterRange, OperationRefusal, RowVisibility, SourceRowInterval, SpillExtent } from './contracts'
 import { MAX_COLS, MAX_ROWS, validateSourceRect, type SourceRect } from './coordinates'
 import type { ProjectedSheetMetrics } from './projection'
-import { findOutsideColumnData, type CellAnchoredDrawing, type PopulatedCellSource, type StructuralIndex, type StructuralPage } from './structure'
+import { findOutsideColumnData, type CellAnchoredDrawing, type PopulatedCellSource, type StructuralIndex } from './structure'
 
 export type GuardOutcome = { ok: true } | { ok: false; refusal: OperationRefusal }
 export interface SortGuardOptions { pageLimit?: number }
-export const GUARD_PAGE_LIMIT = 1024
 /** Candidate filter plus the before/after geometry the caller built from it.
  * currentVisibility is the committed mask (null when fully visible); the changed
  * band is derived from current vs candidate so the structural query covers at
@@ -51,31 +50,9 @@ function mergeBands(bands: readonly SourceRowInterval[]): SourceRowInterval[] {
   }
   return out
 }
-async function collectStructural(structure: StructuralIndex, rect: SourceRect): Promise<StructuralPage> {
-  const merges: MergeExtent[] = []
-  const tables: TableExtent[] = []
-  const spills: SpillExtent[] = []
-  const drawings: CellAnchoredDrawing[] = []
-  let cursor: string | undefined
-  for (;;) {
-    const page = structure.query(rect, cursor === undefined ? { limit: GUARD_PAGE_LIMIT } : { limit: GUARD_PAGE_LIMIT, cursor })
-    for (const merge of page.merges) merges.push(merge)
-    for (const table of page.tables) tables.push(table)
-    for (const spill of page.spills) spills.push(spill)
-    for (const drawing of page.drawings) drawings.push(drawing)
-    if (page.nextCursor === undefined) {
-      return {
-        completeness: page.completeness, missing: page.missing,
-        merges: Object.freeze(merges), tables: Object.freeze(tables),
-        spills: Object.freeze(spills), drawings: Object.freeze(drawings),
-      }
-    }
-    cursor = page.nextCursor
-  }
-}
 /** First intersecting saved/evaluated extent, else the anchor cell. The record was
- * found by a band query, so one of them always intersects. */
-function spillRefusalRange(spill: StructuralPage['spills'][number], band: SourceRect): SourceRect {
+ * found by a band first-hit, so one of them always intersects. */
+function spillRefusalRange(spill: SpillExtent, band: SourceRect): SourceRect {
   for (const extent of [spill.saved, spill.evaluated]) {
     if (extent !== undefined && extent.r0 <= band.r1 && band.r0 <= extent.r1
       && extent.c0 <= band.c1 && band.c0 <= extent.c1) return extent
@@ -115,20 +92,23 @@ export async function guardSort(
     return { ok: false, refusal: { reason: 'incomplete', missing: structure.missing } }
   }
   const fullBand: SourceRect = { r0: band.r0, r1: band.r1, c0: 0, c1: MAX_COLS - 1 }
-  const hits = await collectStructural(structure, fullBand)
-  if (hits.merges.length > 0) return { ok: false, refusal: { reason: 'merge', range: hits.merges[0].range } }
-  if (hits.spills.length > 0) {
-    const spill = hits.spills[0]
+  const merge = structure.firstWhere(fullBand, hit => hit.kind === 'merge')
+  if (merge !== undefined && merge.kind === 'merge') {
+    return { ok: false, refusal: { reason: 'merge', range: merge.record.range } }
+  }
+  const spill = structure.firstWhere(fullBand, hit => hit.kind === 'spill')
+  if (spill !== undefined && spill.kind === 'spill') {
     return {
       ok: false,
       refusal: {
-        reason: spill.kind === 'fixed' ? 'fixed-array' : 'dynamic-spill',
-        range: spillRefusalRange(spill, fullBand),
+        reason: spill.record.kind === 'fixed' ? 'fixed-array' : 'dynamic-spill',
+        range: spillRefusalRange(spill.record, fullBand),
       },
     }
   }
-  if (hits.drawings.length > 0) {
-    return { ok: false, refusal: { reason: 'drawing-impact', drawingId: hits.drawings[0].id } }
+  const drawing = structure.firstWhere(fullBand, hit => hit.kind === 'drawing')
+  if (drawing !== undefined && drawing.kind === 'drawing') {
+    return { ok: false, refusal: { reason: 'drawing-impact', drawingId: drawing.record.id } }
   }
   const built = await findOutsideColumnData(occupancy, band, range.c0, range.c1, options?.pageLimit)
   if (built.kind === 'unknown') return { ok: false, refusal: { reason: 'incomplete', missing: built.missing } }
@@ -175,22 +155,23 @@ export async function guardFilter(request: FilterGuardRequest): Promise<GuardOut
     else changed.push({ r0: source, r1: source })
   }
   for (const covered of mergeBands([band, ...changed])) {
-    const hits = await collectStructural(structure, { r0: covered.r0, r1: covered.r1, c0: 0, c1: MAX_COLS - 1 })
-    if (hits.merges.length > 0) return { ok: false, refusal: { reason: 'merge', range: hits.merges[0].range } }
-    if (hits.spills.length > 0) {
-      const spill = hits.spills[0]
-      const fullBand: SourceRect = { r0: covered.r0, r1: covered.r1, c0: 0, c1: MAX_COLS - 1 }
+    const coveredBand: SourceRect = { r0: covered.r0, r1: covered.r1, c0: 0, c1: MAX_COLS - 1 }
+    const merge = structure.firstWhere(coveredBand, hit => hit.kind === 'merge')
+    if (merge !== undefined && merge.kind === 'merge') {
+      return { ok: false, refusal: { reason: 'merge', range: merge.record.range } }
+    }
+    const spill = structure.firstWhere(coveredBand, hit => hit.kind === 'spill')
+    if (spill !== undefined && spill.kind === 'spill') {
       return {
         ok: false,
         refusal: {
-          reason: spill.kind === 'fixed' ? 'fixed-array' : 'dynamic-spill',
-          range: spillRefusalRange(spill, fullBand),
+          reason: spill.record.kind === 'fixed' ? 'fixed-array' : 'dynamic-spill',
+          range: spillRefusalRange(spill.record, coveredBand),
         },
       }
     }
   }
-  const drawings = await collectStructural(structure, { r0: 0, r1: MAX_ROWS - 1, c0: 0, c1: MAX_COLS - 1 })
-  for (const drawing of drawings.drawings) {
+  for (const drawing of structure.drawingsIn({ r0: 0, r1: MAX_ROWS - 1, c0: 0, c1: MAX_COLS - 1 })) {
     const before = drawingSpan(drawing, projectionBefore)
     const after = drawingSpan(drawing, projectionAfter)
     if (before.startY !== after.startY || before.endY !== after.endY) {
@@ -204,23 +185,17 @@ export async function guardFilter(request: FilterGuardRequest): Promise<GuardOut
  * Range derivation (S7) consults this before resolving; selection itself stays allowed. */
 export function isChildOnlyRange(range: SourceRect, structure: StructuralIndex): OperationRefusal | null {
   validateSourceRect(range)
-  let cursor: string | undefined
-  for (;;) {
-    const page = structure.query(range, cursor === undefined ? { limit: GUARD_PAGE_LIMIT } : { limit: GUARD_PAGE_LIMIT, cursor })
-    for (const merge of page.merges) {
-      if (!anchorInside(merge.anchor, range)) return { reason: 'merge', range: merge.range }
+  if (structure.completeness !== 'complete') return { reason: 'incomplete', missing: structure.missing }
+  const merge = structure.firstWhere(range, hit => hit.kind === 'merge' && !anchorInside(hit.record.anchor, range))
+  if (merge !== undefined && merge.kind === 'merge') return { reason: 'merge', range: merge.record.range }
+  const spill = structure.firstWhere(range, hit => hit.kind === 'spill' && !anchorInside(hit.record.anchor, range))
+  if (spill !== undefined && spill.kind === 'spill') {
+    return {
+      reason: spill.record.kind === 'fixed' ? 'fixed-array' : 'dynamic-spill',
+      range: spillRefusalRange(spill.record, range),
     }
-    for (const spill of page.spills) {
-      if (!anchorInside(spill.anchor, range)) {
-        return {
-          reason: spill.kind === 'fixed' ? 'fixed-array' : 'dynamic-spill',
-          range: spillRefusalRange(spill, range),
-        }
-      }
-    }
-    if (page.nextCursor === undefined) return null
-    cursor = page.nextCursor
   }
+  return null
 }
 /** Read-only selection/highlighting is always safe, including spill/merge children
  * (spec section 8.1). Only operation ranges are refused. */

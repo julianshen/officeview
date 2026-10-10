@@ -147,8 +147,7 @@ describe('giant-rectangle memory behavior', () => {
   })
 })
 
-describe('bounded pages and cursors', () => {
-  async function drain(index: StructuralIndex, rect: SourceRect, limit: number): Promise<StructuralPage> {
+describe('bounded pages and cursors', () => {  async function drain(index: StructuralIndex, rect: SourceRect, limit: number): Promise<StructuralPage> {
     const merges: MergeExtent[] = []
     const tables: TableExtent[] = []
     const spills: SpillExtent[] = []
@@ -191,6 +190,66 @@ describe('bounded pages and cursors', () => {
     expect(() => index.query({ r0: 0, r1: 10, c0: 0, c1: 10 }, { limit: 2, cursor: first.nextCursor })).toThrow(RangeError)
     expect(() => index.query(fullDomain, { limit: 0 })).toThrow(RangeError)
     expect(() => index.query(fullDomain, { limit: 1.5 })).toThrow(RangeError)
+  })
+})
+
+describe('first-hit search and resumable visits', () => {
+  it('finds the first hit without draining the index', async () => {
+    const { index } = await f5Index()
+    const band: SourceRect = { r0: 0, r1: 199999, c0: 0, c1: MAX_COLS - 1 }
+    expect(index.firstWhere(band, hit => hit.kind === 'merge')).toMatchObject({
+      kind: 'merge', record: { id: 'merge-0', range: { r0: 0, r1: 1, c0: 0, c1: 1 } },
+    })
+    expect(index.firstWhere(band, hit => hit.kind === 'spill')).toMatchObject({
+      kind: 'spill', record: { anchor: { row: 32, col: 0 } },
+    })
+    expect(index.firstWhere({ r0: 500000, r1: 600000, c0: 0, c1: 0 }, () => true)).toBeUndefined()
+  })
+  it('firstWhere skips non-qualifying hits and keeps scanning', async () => {
+    const { index } = await f5Index()
+    const hit = index.firstWhere(fullDomain, entry => entry.kind === 'merge' && entry.record.range.r0 > 10)
+    expect(hit).toMatchObject({ kind: 'merge', record: { id: 'merge-1' } })
+  })
+  it('resumed pages never re-collect prior hits', () => {
+    const random = createPrng(303)
+    const records = Array.from({ length: 2000 }, (_, id) => {
+      const r0 = Math.floor(random() * 100000)
+      return { rect: { r0, r1: r0 + Math.floor(random() * 50), c0: Math.floor(random() * 100), c1: 0 }, value: { id } }
+    }).map(entry => ({ rect: { ...entry.rect, c1: entry.rect.c0 + 5 }, value: entry.value }))
+    const index = RectangleIndex.build(records)
+    const rect: SourceRect = { r0: 0, r1: 99999, c0: 0, c1: 99 }
+    const full = index.query(rect, { limit: 1000000 })
+    expect(full.nextCursor).toBeUndefined()
+    let cursor: string | undefined
+    const seen: number[] = []
+    let pages = 0
+    let visits = 0
+    for (;;) {
+      const page = index.query(rect, cursor === undefined ? { limit: 7, countVisits: n => { visits += n } } : { limit: 7, cursor, countVisits: n => { visits += n } })
+      for (const item of page.items) seen.push(item.id)
+      pages++
+      if (page.nextCursor === undefined) break
+      cursor = page.nextCursor
+      if (pages > 1000) throw new Error('cursor did not terminate')
+    }
+    expect(seen.sort((a, b) => a - b)).toEqual(full.items.map(item => item.id).sort((a, b) => a - b))
+    expect(pages).toBeGreaterThan(2)
+    expect(visits).toBeLessThan(8 * (seen.length + pages * 64))
+  })
+  it('split-spill unions verify exact extents: gap-only queries miss', () => {
+    const spill = {
+      anchor: { row: 10, col: 0 }, kind: 'dynamic' as const,
+      saved: { r0: 10, r1: 12, c0: 0, c1: 0 }, evaluated: { r0: 20, r1: 22, c0: 0, c1: 0 },
+    }
+    const result: StructuralResult = {
+      stamp, completeness: 'complete', merges: [], tables: [], spills: [spill], drawings: [], missing: [],
+    }
+    const index = new StructuralIndex(result)
+    expect(index.recordCount).toBe(1)
+    expect(index.query({ r0: 14, r1: 18, c0: 0, c1: 0 }).spills).toHaveLength(0)
+    expect(index.query({ r0: 10, r1: 10, c0: 0, c1: 0 }).spills).toHaveLength(1)
+    expect(index.query({ r0: 21, r1: 21, c0: 0, c1: 0 }).spills).toHaveLength(1)
+    expect(index.firstWhere({ r0: 14, r1: 18, c0: 0, c1: 0 }, hit => hit.kind === 'spill')).toBeUndefined()
   })
 })
 
