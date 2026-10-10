@@ -26,9 +26,11 @@ export function clampSheetZoom(zoom: number): SheetZoom {
 
 /** Documented keyboard step table: in/out are exact inverses, including at the
  * bounds (off-table zooms snap to the nearest step in the key direction). */
-export const SHEET_ZOOM_STEPS: readonly SheetZoom[] = [0.25, 0.33, 0.5, 0.67, 0.75, 1, 1.25, 1.5, 2, 3, 4]
+export const SHEET_ZOOM_STEPS: readonly SheetZoom[] = Object.freeze([0.25, 0.33, 0.5, 0.67, 0.75, 1, 1.25, 1.5, 2, 3, 4])
 
 export function snapSheetZoom(zoom: number, direction: 1 | -1): SheetZoom {
+  // Reject instead of silently snapping NaN/Infinity to a bound (consistent with the other zoom entry points).
+  if (!Number.isFinite(zoom)) throw new RangeError(`sheet zoom must be finite, got ${zoom}`)
   if (direction > 0) {
     for (const step of SHEET_ZOOM_STEPS) if (step > zoom) return step
     return SHEET_MAX_ZOOM

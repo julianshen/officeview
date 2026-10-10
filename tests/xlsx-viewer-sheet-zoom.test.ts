@@ -4,7 +4,7 @@ import { SHEET_MIN_ZOOM, SHEET_MAX_ZOOM } from '../src/xlsx/view/contracts'
 import { createAxisMetrics } from '../src/xlsx/view/axes'
 import { createSheetMetrics } from '../src/xlsx/view/projection'
 import { createScrollWindow, refreshScrollWindow, scrollOffset, viewportToLogical } from '../src/xlsx/view/scrollWindow'
-import { clampSheetZoom, createSheetZoomState, reduceSheetZoom, sheetZoomFor, zoomSheetAt, keyboardSheetZoom, wheelSheetZoom, pinchSheetZoom, SHEET_ZOOM_STEPS } from '../src/xlsx/view/sheetZoom'
+import { clampSheetZoom, createSheetZoomState, reduceSheetZoom, sheetZoomFor, zoomSheetAt, keyboardSheetZoom, wheelSheetZoom, pinchSheetZoom, SHEET_ZOOM_STEPS, snapSheetZoom } from '../src/xlsx/view/sheetZoom'
 
 const viewport = { width: 375, height: 667 }
 const metrics = createSheetMetrics({
@@ -226,5 +226,19 @@ describe('sheet gestures through ScrollWindow (AC-VIEW-04)', () => {
     const start = createScrollWindow(metrics, viewport)
     expect(() => zoomSheetAt(start, metrics, viewport, zoom, { x: 10, y: 10 })).toThrow(RangeError)
     expect(start.zoom).toBe(1)
+  })
+})
+
+describe('snapSheetZoom hardening', () => {
+  it('rejects non-finite zoom instead of snapping to a bound', () => {
+    for (const bad of [NaN, Infinity, -Infinity]) {
+      expect(() => snapSheetZoom(bad, 1)).toThrow(RangeError)
+      expect(() => snapSheetZoom(bad, -1)).toThrow(RangeError)
+    }
+  })
+
+  it('keeps the step table immutable at runtime', () => {
+    expect(Object.isFrozen(SHEET_ZOOM_STEPS)).toBe(true)
+    expect(() => (SHEET_ZOOM_STEPS as number[]).push(5)).toThrow(TypeError)
   })
 })
