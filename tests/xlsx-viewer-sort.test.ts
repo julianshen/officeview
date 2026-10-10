@@ -1,9 +1,9 @@
 import { describe, expect, it, vi } from 'vitest'
-import { prepareSortKeys, sortRowOrder, reduceSortCommand, type SortOptions, type SortResult } from '../src/xlsx/view/sort'
+import { prepareSortKeys, sortRowOrder, reduceSortCommand, hiddenSourceRowsFromDisplay, type SortOptions, type SortResult } from '../src/xlsx/view/sort'
 import type { SourceStore, SortSpec, ColumnEntry, SortKey } from '../src/xlsx/view/contracts'
 import { cellId, MAX_ROWS } from '../src/xlsx/view/coordinates'
 import { createRowVisibility } from '../src/xlsx/view/visibility'
-import { createIdentityOrder } from '../src/xlsx/view/order'
+import { createIdentityOrder, createRowOrder } from '../src/xlsx/view/order'
 import { createAxisMetrics } from '../src/xlsx/view/axes'
 import { createSheetMetrics } from '../src/xlsx/view/projection'
 import { createFixture, createPrng, f8Cases, type FixtureCell } from './helpers/xlsx-viewer-fixtures'
@@ -54,7 +54,7 @@ describe('pure whole-row sort', () => {
     const values = [99, 4, 1, 1, 0, 90]
     const store = dataStore(values.map(v => [fixtureCell(v)]))
     const spec = { ...specFor(6), range: { ...specFor(6).range, headerRows: 1 as const, totalsRows: 1 as const } }
-    const options = { ...quiet, visibility: createRowVisibility(MAX_ROWS, row => row !== 2) }
+    const options = { ...quiet, hidden: hiddenSourceRowsFromDisplay(createIdentityOrder(), createRowVisibility(MAX_ROWS, row => row !== 2)) }
     expect(rowsOf(await sortRowOrder(store, spec, options))).toEqual([4, 2, 3, 1])
     expect(rowsOf(await sortRowOrder(store, { ...spec, keys: [{ col: 0, order: 'desc' }] }, options))).toEqual([1, 2, 3, 4])
     const clear = await sortRowOrder(store, null, options)
@@ -266,7 +266,7 @@ describe('full-axis typed sort workspace', () => {
       const expected = values.map((_v, row) => row).filter(row => !hidden(row)).sort((a, b) => values[a] - values[b] || a - b)
       let next = 0
       const slots = values.map((_v, row) => hidden(row) ? row : expected[next++])
-      const result = await sortRowOrder(dataStore(values.map(v => [fixtureCell(v)])), specFor(length), { ...quiet, visibility: createRowVisibility(MAX_ROWS, row => !hidden(row)), now: () => 0 })
+      const result = await sortRowOrder(dataStore(values.map(v => [fixtureCell(v)])), specFor(length), { ...quiet, hidden: hiddenSourceRowsFromDisplay(createIdentityOrder(), createRowVisibility(MAX_ROWS, row => !hidden(row))), now: () => 0 })
       expect(rowsOf(result)).toEqual(slots)
       if (result.kind === 'complete') for (let slot = 0; slot < length; slot++) expect(result.order.sourceToDisplay(slots[slot])).toBe(slot)
     }
@@ -328,8 +328,8 @@ describe('immutable option ownership', () => {
   it('keeps the visibility generation captured before preparing keys', async () => {
     const store = dataStore([[fixtureCell(3)], [fixtureCell(2)], [fixtureCell(1)]])
     const original = store.queryColumn.bind(store)
-    const options: SortOptions = { ...quiet, visibility: createRowVisibility(MAX_ROWS, row => row !== 0) }
-    const delayed: SourceStore = { ...store, queryColumn: async (request, read) => { const page = await original(request, read); options.visibility = createRowVisibility(MAX_ROWS); return page } }
+    const options: SortOptions = { ...quiet, hidden: hiddenSourceRowsFromDisplay(createIdentityOrder(), createRowVisibility(MAX_ROWS, row => row !== 0)) }
+    const delayed: SourceStore = { ...store, queryColumn: async (request, read) => { const page = await original(request, read); options.hidden = hiddenSourceRowsFromDisplay(createIdentityOrder(), createRowVisibility(MAX_ROWS)); return page } }
     expect(rowsOf(await sortRowOrder(delayed, specFor(3), options))).toEqual([0, 2, 1])
   })
 })
@@ -454,7 +454,7 @@ describe('review behavior regressions', () => {
 describe('review policy and full-axis evidence', () => {
   it('hidden unknown and unavailable key rows conservatively block publication', async () => {
     const fixture = createFixture('F8')
-    const options = { ...quiet, visibility: createRowVisibility(MAX_ROWS, row => row !== 1) }
+    const options = { ...quiet, hidden: hiddenSourceRowsFromDisplay(createIdentityOrder(), createRowVisibility(MAX_ROWS, row => row !== 1)) }
     expect(await sortRowOrder(fixture.createStore({ valuePolicy: 'cached' }),
       specFor(3, [{ col: 1, order: 'asc' }]), options)).toMatchObject({
       kind: 'refused', refusal: { reason: 'formula-value-unavailable', firstAddress: { row: 1, col: 1 } },
@@ -490,7 +490,7 @@ describe('review policy and full-axis evidence', () => {
     ]
     const result = await sortRowOrder(dataStore(rows), specFor(rows.length, [
       { col: 0, order }, { col: 1, order: 'desc' },
-    ]), { ...quiet, visibility: createRowVisibility(MAX_ROWS, row => row !== 2) })
+    ]), { ...quiet, hidden: hiddenSourceRowsFromDisplay(createIdentityOrder(), createRowVisibility(MAX_ROWS, row => row !== 2)) })
     expect(rowsOf(result)).toEqual(order === 'asc'
       ? [0, 1, 2, 9, 8, 4, 3, 5, 6, 7] : [3, 4, 2, 0, 1, 9, 8, 5, 6, 7])
   })
@@ -563,7 +563,7 @@ describe('literal boundary regressions', () => {
       rank: base.rank.bind(base), select: base.select.bind(base), next: base.next.bind(base),
     }
     expect(await sortRowOrder(dataStore([[fixtureCell(2)], [fixtureCell(1)]]), specFor(2),
-      { ...quiet, visibility })).toMatchObject({
+      { ...quiet, hidden: hiddenSourceRowsFromDisplay(createIdentityOrder(), visibility) })).toMatchObject({
       kind: 'error', error: { code: 'page-error', message: 'visibility generation changed' },
     })
     expect(calls).toBe(3)
@@ -580,3 +580,194 @@ describe('literal boundary regressions', () => {
     expect(reduceSortCommand(draft, { kind: 'toggle-case' }).sort).toBe(draft)
   })
 })
+
+
+describe('round three source ownership regressions', () => {
+  it('translates current display visibility before replacing a filtered sort', async () => {
+    const values = [3, 1, 2], store = dataStore(values.map(value => [fixtureCell(value)]))
+    const first = await sortRowOrder(store, specFor(3, [{ col: 0, order: 'desc' }]), quiet)
+    expect(first.kind).toBe('complete')
+    if (first.kind !== 'complete') return
+    expect(rowsOf(first)).toEqual([0, 2, 1])
+    const hidden = hiddenSourceRowsFromDisplay(first.order, createRowVisibility(MAX_ROWS, slot => slot !== 1))
+    expect([0, 1, 2].map(row => hidden.hidden(row))).toEqual([false, false, true])
+    const replacement = await sortRowOrder(store, specFor(3), { ...quiet, hidden })
+    expect(rowsOf(replacement).map(row => values[row])).toEqual([1, 3, 2])
+  })
+  it('translates identity and a nonzero permutation band including outside rows', () => {
+    const display = createRowVisibility(MAX_ROWS, slot => slot !== 6 && slot !== 2)
+    const identity = hiddenSourceRowsFromDisplay(createIdentityOrder(), display)
+    expect([2, 5, 6, 7].map(row => identity.hidden(row))).toEqual([true, false, true, false])
+    const order = createRowOrder([{ r0: 5, r1: 7, sourceAtOffset: new Uint32Array([7, 5, 6]) }])
+    const hidden = hiddenSourceRowsFromDisplay(order, display)
+    expect([2, 5, 6, 7].map(row => hidden.hidden(row))).toEqual([true, true, false, false])
+  })
+  it('retains no key, fixed or metadata reservation for a no-work empty identity', async () => {
+    const spec = { ...specFor(1), range: { ...specFor(1).range, headerRows: 1 as const } }
+    const result = await sortRowOrder(dataStore([[fixtureCell(1)]]), spec, quiet)
+    expect(result.kind).toBe('complete')
+    if (result.kind === 'complete') expect(result.ledger.retainedBytes).toBe(0)
+  })
+  it('unknown source throws are nonretryable page failures', async () => {
+    const store = dataStore([[fixtureCell(1)]])
+    for (const error of [new Error('disk failed'), new RangeError('decoder bounds')]) {
+      expect(await sortRowOrder({ ...store, queryColumn: async () => { throw error } }, specFor(1), quiet))
+        .toMatchObject({ kind: 'error', error: { code: 'page-error', retryable: false } })
+    }
+  })
+  it('bounded helper copy allocation failures are resource limits', async () => {
+    const store = dataStore([[fixtureCell(2)], [fixtureCell(1)]])
+    const copy = vi.spyOn(Uint32Array.prototype, 'slice').mockImplementation(() => { throw new RangeError('order copy exhausted') })
+    try {
+      expect(await sortRowOrder(store, specFor(2), quiet)).toMatchObject({
+        kind: 'error', error: { code: 'resource-limit', retryable: false, message: 'order copy exhausted' },
+      })
+    } finally { copy.mockRestore() }
+  })
+  it.each([3, 4, 5])('bounded helper typed allocation %i is a resource limit', async failAt => {
+    const store = dataStore([[fixtureCell(2)], [fixtureCell(1)]])
+    const TypedRows = Uint32Array
+    let allocations = 0
+    vi.stubGlobal('Uint32Array', new Proxy(TypedRows, {
+      construct(target, args) {
+        if (args[0] === 2 && ++allocations === failAt) throw new RangeError('helper buffer exhausted')
+        return Reflect.construct(target, args)
+      },
+    }))
+    try {
+      expect(await sortRowOrder(store, specFor(2), quiet)).toMatchObject({
+        kind: 'error', error: { code: 'resource-limit', retryable: false, message: 'helper buffer exhausted' },
+      })
+      expect(allocations).toBe(failAt)
+    } finally { vi.unstubAllGlobals() }
+  })
+  it('second order helper copy allocation is also a resource limit', async () => {
+    const store = dataStore([[fixtureCell(2)], [fixtureCell(1)]])
+    const original = Uint32Array.prototype.slice
+    let copies = 0
+    const copy = vi.spyOn(Uint32Array.prototype, 'slice').mockImplementation(function (this: Uint32Array, start?: number, end?: number) {
+      if (++copies === 2) throw new RangeError('published order copy exhausted')
+      return original.call(this, start, end)
+    })
+    try {
+      expect(await sortRowOrder(store, specFor(2), quiet)).toMatchObject({
+        kind: 'error', error: { code: 'resource-limit', retryable: false, message: 'published order copy exhausted' },
+      })
+      expect(copies).toBe(2)
+    } finally { copy.mockRestore() }
+  })
+  it('dictionary Map growth allocation failures are resource limits', async () => {
+    const store = dataStore([[fixtureCell('item')]])
+    const original = Map.prototype.set
+    const growth = vi.spyOn(Map.prototype, 'set').mockImplementation(function (this: Map<unknown, unknown>, key: unknown, value: unknown) {
+      if (key === 'item') throw new RangeError('dictionary exhausted')
+      return original.call(this, key, value)
+    })
+    try {
+      expect(await prepareSortKeys(store, specFor(1), quiet)).toMatchObject({
+        kind: 'error', error: { code: 'resource-limit', retryable: false, message: 'dictionary exhausted' },
+      })
+    } finally { growth.mockRestore() }
+  })
+  it('spec getter RangeErrors stay validation page failures', async () => {
+    let reads = 0
+    const spec = { ...specFor(1), keys: [{
+      get col() { if (++reads === 5) throw new RangeError('key getter failed'); return 0 }, order: 'asc' as const,
+    }] }
+    expect(await sortRowOrder(dataStore([[fixtureCell(1)]]), spec, quiet)).toMatchObject({
+      kind: 'error', error: { code: 'page-error', retryable: false, message: 'key getter failed' },
+    })
+  })
+  it('owned specification key growth allocation failures are resource limits', async () => {
+    const store = dataStore([[fixtureCell(1)]])
+    const spec = specFor(1), original = Array.prototype.push
+    Array.prototype.push = function (this: unknown[], ...items: unknown[]) {
+      const item = items[0]
+      if (items.length === 1 && item !== null && typeof item === 'object'
+        && Object.isFrozen(item) && Object.keys(item).length === 2
+        && 'col' in item && 'order' in item && item.col === 0 && item.order === 'asc') {
+        throw new RangeError('owned sort keys exhausted')
+      }
+      return original.apply(this, items)
+    }
+    try {
+      expect(await sortRowOrder(store, spec, quiet)).toMatchObject({
+        kind: 'error', error: { code: 'resource-limit', retryable: false, message: 'owned sort keys exhausted' },
+      })
+    } finally { Array.prototype.push = original }
+  })
+  it.each([false, true])('hostile prototype probes still resolve to a typed nonretryable failure (always hostile: %s)', async always => {
+    const store = dataStore([[fixtureCell(1)]])
+    let probes = 0
+    const thrown = new Proxy({}, { getPrototypeOf() {
+      if (always || ++probes === 1) throw new Error('prototype forbidden')
+      return Object.prototype
+    } })
+    await expect(sortRowOrder({ ...store, queryColumn: async () => { throw thrown } }, specFor(1), quiet))
+      .resolves.toMatchObject({
+        kind: 'error', error: { code: 'page-error', retryable: false, message: 'Sort operation failed' },
+      })
+  })
+  it('hostile unknown throws still return a typed nonretryable failure', async () => {
+    const store = dataStore([[fixtureCell(1)]])
+    const error = { toString: () => { throw new Error('conversion forbidden') } }
+    expect(await sortRowOrder({ ...store, queryColumn: async () => { throw error } }, specFor(1), quiet))
+      .toMatchObject({ kind: 'error', error: { code: 'page-error', retryable: false, message: 'Sort operation failed' } })
+  })
+  it('Node immediate is preferred when a native scheduler also exists', async () => {
+    let immediate = 0, native = 0
+    vi.stubGlobal('setImmediate', (resume: () => void) => { immediate++; resume() })
+    vi.stubGlobal('scheduler', { yield: async () => { native++ } })
+    try {
+      expect((await sortRowOrder(dataStore([[fixtureCell(1)]]), specFor(1))).kind).toBe('complete')
+      expect(immediate).toBeGreaterThan(0)
+      expect(native).toBe(0)
+    } finally { vi.unstubAllGlobals() }
+  })
+  it('browser native scheduler is preferred over MessageChannel', async () => {
+    let yielded = 0
+    vi.stubGlobal('setImmediate', undefined)
+    vi.stubGlobal('scheduler', { yield: async () => { yielded++ } })
+    vi.stubGlobal('MessageChannel', class { constructor() { throw new Error('ports should not be created') } })
+    try {
+      expect((await sortRowOrder(dataStore([[fixtureCell(1)]]), specFor(1))).kind).toBe('complete')
+      expect(yielded).toBeGreaterThan(0)
+    } finally { vi.unstubAllGlobals() }
+  })
+})
+
+// Compile-only consumer contract: public lanes never grant write access or
+// methods returning the worker's mutable backing storage.
+function preparedLaneTypeContract(lane: import('../src/xlsx/view/sort').SortLane): void {
+  // @ts-expect-error The buffer reference is immutable too.
+  lane.tags = new Uint8Array(1)
+  // @ts-expect-error Element writes corrupt the resident sort keys.
+  lane.tags[0] = 1
+  // @ts-expect-error Numeric values are readonly too.
+  lane.numbers[0] = 2
+  // @ts-expect-error IDs are readonly too.
+  lane.ids![0] = 0
+  // @ts-expect-error Ranks are readonly too.
+  lane.stringRanks[0] = 0
+  // @ts-expect-error Error ranks are readonly too.
+  lane.errorRanks[0] = 0
+  // @ts-expect-error Mutating typed array methods are not public.
+  lane.tags.fill(0)
+  // @ts-expect-error Subarray views must not escape with mutable elements.
+  lane.tags.subarray(0)[0] = 0
+  // @ts-expect-error A writable backing ArrayBuffer must not escape.
+  new Uint8Array(lane.tags.buffer)[0] = 0
+  // @ts-expect-error DISPLAY-space masks cannot be passed to the old raw option.
+  const raw: SortOptions = { visibility: createRowVisibility(MAX_ROWS) }
+  // @ts-expect-error A DISPLAY visibility object is not branded SOURCE hidden rows.
+  const wrongSpace: SortOptions = { hidden: createRowVisibility(MAX_ROWS) }
+  // @ts-expect-error An unbranded predicate must be explicitly translated.
+  const unbranded: SortOptions = { hidden: { hidden: () => false } }
+  const inferredLegacy = { yield: async () => {}, visibility: createRowVisibility(MAX_ROWS) }
+  // @ts-expect-error Legacy options are forbidden through inferred variables too.
+  void sortRowOrder(dataStore([]), specFor(1), inferredLegacy)
+  void raw
+  void wrongSpace
+  void unbranded
+}
+void preparedLaneTypeContract

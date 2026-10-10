@@ -1,15 +1,31 @@
 import type {
   SortSpec, SourceStore, RowOrder, RowVisibility, SourceStamp, SourceFailure, OperationRefusal, FilterRange,
 } from './contracts'
-import { createIdentityOrder, createRowOrder, pinRowPermutation, hiddenSlotPins, type CompactRowOrder } from './order'
-import { MAX_ROWS, CoordinateError, validateCoordinate, validateSourceRect } from './coordinates'
+import { createIdentityOrder, createRowOrder, pinRowPermutation, type CompactRowOrder } from './order'
+import { MAX_ROWS, MAX_COLS, CoordinateError, validateCoordinate, validateSourceRect } from './coordinates'
+
+declare const hiddenSourceBrand: unique symbol
+export interface HiddenSourceRows {
+  readonly [hiddenSourceBrand]: true
+  hidden(sourceRow: number): boolean
+}
+/** Translate the CURRENT view's DISPLAY mask before a replacement sort starts
+ * again from source order. Captured generations must remain immutable. */
+export function hiddenSourceRowsFromDisplay(currentOrder: RowOrder, displayVisibility: RowVisibility): HiddenSourceRows {
+  return Object.freeze({
+    hidden: (sourceRow: number) => !displayVisibility.visible(currentOrder.sourceToDisplay(sourceRow)),
+  }) as HiddenSourceRows
+}
 
 export type SortPhase = 'read' | 'dictionary' | 'candidates' | 'merge' | 'output' | 'inverse' | 'publish'
 export interface SortOptions {
   signal?: AbortSignal
   stamp?: SourceStamp
   locale?: string
-  visibility?: RowVisibility
+  hidden?: HiddenSourceRows
+  /** Forbidden legacy DISPLAY mask, including structurally inferred options.
+   * Translate the current view with hiddenSourceRowsFromDisplay instead. */
+  visibility?: never
   now?: () => number
   yield?: (phase: SortPhase) => Promise<void>
   maxWorkerBytes?: number
@@ -34,14 +50,24 @@ export interface SortLedger {
   residentWorkerBytes: number
   aggregatePeakBytes: number
 }
+/** Readonly consumer capability, including views; never expose a writable
+ * backing buffer. Runtime storage belongs to the worker generation: consumers
+ * must not cast/mutate it. No full-lane copies or per-element proxies are used. */
+export interface ReadonlySortBuffer {
+  readonly [index: number]: number
+  readonly length: number
+  readonly byteLength: number
+  [Symbol.iterator](): IterableIterator<number>
+  subarray(begin?: number, end?: number): ReadonlySortBuffer
+}
 export interface SortLane {
-  tags: Uint8Array
-  numbers: Float64Array
-  ids?: Uint32Array
-  strings: readonly string[]
-  errors: readonly string[]
-  stringRanks: Uint32Array
-  errorRanks: Uint32Array
+  readonly tags: ReadonlySortBuffer
+  readonly numbers: ReadonlySortBuffer
+  readonly ids?: ReadonlySortBuffer
+  readonly strings: readonly string[]
+  readonly errors: readonly string[]
+  readonly stringRanks: ReadonlySortBuffer
+  readonly errorRanks: ReadonlySortBuffer
 }
 export interface PreparedSortKeys {
   spec: SortSpec
@@ -81,18 +107,23 @@ function snapshotSpec(spec: SortSpec): SortSpec {
     || typeof spec.caseSensitive !== 'boolean' || spec.keys.length < 1 || spec.keys.length > 8) {
     throw sourceError('invalid-source-rect', 'Invalid sort specification')
   }
-  const cols = new Set<number>()
+  const cols = allocate(() => new Set<number>())
+  const keys = allocate(() => new Array<SortSpec['keys'][number]>())
   for (const key of spec.keys) {
     validateCoordinate(0, key.col)
     if (key.col < spec.range.c0 || key.col > spec.range.c1
       || cols.has(key.col) || !['asc', 'desc'].includes(key.order)) {
       throw sourceError('invalid-coordinate', 'Sort keys must be unique columns in the range with asc/desc direction')
     }
-    cols.add(key.col)
+    const col = key.col, order = key.order
+    // Read caller fields before classifying native owned-array growth failures.
+    const ownedKey = Object.freeze({ col, order })
+    allocate(() => cols.add(col))
+    allocate(() => keys.push(ownedKey))
   }
   return Object.freeze({
     range: Object.freeze({ ...spec.range }),
-    keys: Object.freeze(spec.keys.map(key => Object.freeze({ ...key }))),
+    keys: Object.freeze(keys),
     caseSensitive: spec.caseSensitive,
   })
 }
@@ -141,8 +172,9 @@ function defaultScheduler(): { yield: () => Promise<void>; dispose: () => void }
     yield: () => new Promise<void>(resolve => host.setImmediate!(resolve)),
     dispose: () => {},
   }
+  if (host.scheduler?.yield) return { yield: () => host.scheduler!.yield(), dispose: () => {} }
   if (typeof MessageChannel !== 'undefined') {
-    const channel = new MessageChannel()
+    const channel = allocate(() => new MessageChannel())
     let resume: (() => void) | undefined
     channel.port1.onmessage = () => {
       const resolve = resume
@@ -162,9 +194,7 @@ function defaultScheduler(): { yield: () => Promise<void>; dispose: () => void }
     }
   }
   return {
-    yield: host.scheduler?.yield
-      ? () => host.scheduler!.yield()
-      : () => new Promise<void>(resolve => setTimeout(resolve, 0)),
+    yield: () => new Promise<void>(resolve => setTimeout(resolve, 0)),
     dispose: () => {},
   }
 }
@@ -194,18 +224,29 @@ class Cooperative {
     this.last = this.now()
   }
 }
+function errorMessage(error: unknown): string {
+  try { return error instanceof Error ? error.message : String(error) }
+  catch { return 'Sort operation failed' }
+}
 function failure(error: unknown, options: SortOptions): SortFailure {
-  if (options.signal?.aborted) return { kind: 'cancelled' }
-  if (error instanceof Halt) return error.outcome
-  if (error instanceof CoordinateError) return {
-    kind: 'error', error: {
-      code: error.code === 'invalid-source-rect' ? 'invalid-source-rect' : 'invalid-coordinate',
-      retryable: false, message: error.message,
-    },
+  let message: string | undefined
+  try {
+    if (options.signal?.aborted) return { kind: 'cancelled' }
+    if (error instanceof Halt) return error.outcome
+    if (error instanceof CoordinateError) return {
+      kind: 'error', error: {
+        code: error.code === 'invalid-source-rect' ? 'invalid-source-rect' : 'invalid-coordinate',
+        retryable: false, message: error.message,
+      },
+    }
+  } catch {
+    // Untrusted thrown objects may reject even instanceof probes. Do not probe
+    // that object again, including through error-message conversion.
+    message = 'Sort operation failed'
   }
   return {
     kind: 'error', error: {
-      code: 'page-error', retryable: true, message: error instanceof Error ? error.message : String(error),
+      code: 'page-error', retryable: false, message: message ?? errorMessage(error),
     },
   }
 }
@@ -254,7 +295,15 @@ async function mergeIndexes(
   }
   return input
 }
-interface MutableLane extends SortLane { strings: string[]; errors: string[] }
+interface MutableLane {
+  tags: Uint8Array
+  numbers: Float64Array
+  ids?: Uint32Array
+  strings: string[]
+  errors: string[]
+  stringRanks: Uint32Array
+  errorRanks: Uint32Array
+}
 async function rankDictionary(
   values: readonly string[],
   compare: (a: string, b: string) => number,
@@ -313,7 +362,7 @@ async function prepare(
         budget.ledger.idsBytes += length * 4
         lane.ids = allocate(() => new Uint32Array(length))
       }
-      const map = error ? (errorIds ??= new Map()) : (stringIds ??= new Map())
+      const map = error ? (errorIds ??= allocate(() => new Map())) : (stringIds ??= allocate(() => new Map()))
       const dictionary = error ? lane.errors : lane.strings
       const existing = map.get(raw)
       if (existing !== undefined) return existing
@@ -325,18 +374,18 @@ async function prepare(
       mapBytes += 128
       budget.ledger.dictionaryMapPeakBytes = Math.max(budget.ledger.dictionaryMapPeakBytes, mapBytes)
       const id = dictionary.length
-      dictionary.push(raw); map.set(raw, id)
+      allocate(() => dictionary.push(raw)); allocate(() => map.set(raw, id))
       return id
     }
     for (let start = r0; start <= r1; start += CHUNK) {
       const end = Math.min(r1, start + CHUNK - 1)
       let cursor: string | undefined, pages = 0, cursorBytes = 0
-      const cursors = new Set<string>()
+      const cursors = allocate(() => new Set<string>())
       do {
         cooperative.check()
         const page = await store.queryColumn({
           col: key.col, rows: { kind: 'intervals', intervals: [{ r0: start, r1: end }] }, limit: CHUNK, cursor,
-        }, { stamp: cooperative.stamp, signal: cooperative.options.signal ?? new AbortController().signal })
+        }, { stamp: cooperative.stamp, signal: cooperative.options.signal ?? allocate(() => new AbortController()).signal })
         cooperative.check()
         if (!sameStamp(page.stamp, cooperative.stamp)) throw sourceError('stale-source', 'Column page owner changed')
         if (page.error) throw new Halt({ kind: 'error', error: { ...page.error } })
@@ -380,7 +429,7 @@ async function prepare(
               }
               case 'cell': {
                 const cell = item.cell, value = cell.value
-                if (cell.row !== row || cell.col !== key.col || cell.id !== row * 16384 + key.col) {
+                if (cell.row !== row || cell.col !== key.col || cell.id !== row * MAX_COLS + key.col) {
                   throw sourceError('page-error', 'Cell identity does not match its key entry')
                 }
                 if (cell.valueIsError) {
@@ -418,7 +467,8 @@ async function prepare(
           if (cursors.has(cursor) || ++pages > CHUNK) throw sourceError('invalid-cursor', 'Column cursor made no progress')
           const bytes = cursor.length * 2 + 128
           budget.charge(bytes); cursorBytes += bytes
-          cursors.add(cursor)
+          const nextCursor = cursor
+          allocate(() => cursors.add(nextCursor))
         }
         if (cooperative.due()) await cooperative.pause('read')
       } while (cursor !== undefined)
@@ -432,7 +482,8 @@ async function prepare(
     lane.errorRanks = await rankDictionary(lane.errors, (a, b) => a < b ? -1 : a > b ? 1 : 0, budget, cooperative)
     stringIds = undefined; errorIds = undefined
     budget.release(mapBytes)
-    lanes.push(Object.freeze({ ...lane, strings: Object.freeze(lane.strings), errors: Object.freeze(lane.errors) }))
+    const publishedLane = Object.freeze({ ...lane, strings: Object.freeze(lane.strings), errors: Object.freeze(lane.errors) })
+    allocate(() => lanes.push(publishedLane))
   }
   if (firstAddress) throw new Halt({
     kind: 'refused', refusal: { reason: 'formula-value-unavailable', count: unavailableCount, firstAddress },
@@ -509,12 +560,12 @@ export async function sortRowOrder(store: SourceStore, input: SortSpec | null, o
     const budget = new Budget(options)
     cooperative = new Cooperative(store, stamp, options)
     cooperative.check()
-    let order: RowOrder = createIdentityOrder()
+    let order: RowOrder = createIdentityOrder(), emptyBody = false
     if (spec !== null) {
       const prepared = await prepare(store, spec, cooperative, budget, locale)
       const length = Math.max(0, prepared.r1 - prepared.r0 + 1)
       if (length) {
-        const pinned = options.visibility ? hiddenSlotPins(options.visibility) : () => false
+        const pinned = options.hidden ? (row: number) => options.hidden!.hidden(row) : () => false
         budget.charge(length * 8)
         budget.ledger.indexBytes = length * 4; budget.ledger.scratchBytes = length * 4
         const index = allocate(() => new Uint32Array(length)), scratch = allocate(() => new Uint32Array(length))
@@ -529,8 +580,25 @@ export async function sortRowOrder(store: SourceStore, input: SortSpec | null, o
           // createRowOrder then copies order/inverse again while that band lives.
           budget.charge(length * 20)
           budget.ledger.constructionCopiesBytes = length * 12
-          const band = pinRowPermutation(prepared.r0, prepared.r1, pinned, sorted.subarray(0, count))
-          order = createRowOrder([band])
+          // Recheck external pins OUTSIDE allocation boundaries, using the freed
+          // merge buffer for a stable snapshot. Helpers now receive only validated
+          // worker-owned inputs/pins; their remaining RangeErrors are allocations.
+          const pins = sorted === index ? scratch : index
+          let movable = 0
+          for (let offset = 0; offset < length; offset++) {
+            pins[offset] = pinned(prepared.r0 + offset) ? 1 : 0
+            if (!pins[offset]) movable++
+            if (cooperative.due()) await cooperative.pause('output')
+          }
+          if (movable !== count) throw sourceError('page-error', 'Pinned population changed while sorting')
+          for (let at = 0; at < count; at++) {
+            if (pins[sorted[at] - prepared.r0]) throw sourceError('page-error', 'Pinned population changed while sorting')
+          }
+          const candidates = allocate(() => sorted.subarray(0, count))
+          const band = allocate(() => pinRowPermutation(
+            prepared.r0, prepared.r1, row => pins[row - prepared.r0] === 1, candidates,
+          ))
+          order = allocate(() => createRowOrder([band]))
           budget.release(length * 12)
         } else {
           budget.charge(length * 8)
@@ -556,16 +624,16 @@ export async function sortRowOrder(store: SourceStore, input: SortSpec | null, o
         }
         budget.ledger.orderBytes = length * 4; budget.ledger.inverseBytes = length * 4
         budget.release(length * 8)
-        // Prepared lanes are private to this operation and not retained by output.
-        const keyBytes = budget.ledger.tagsBytes + budget.ledger.numbersBytes
-          + budget.ledger.idsBytes + budget.ledger.ranksBytes + budget.ledger.dictionaryBytes
-        budget.release(keyBytes + budget.ledger.fixedOverheadBytes)
-      } else {
-        budget.release(budget.ledger.retainedBytes)
-      }
+      } else emptyBody = true
+      // Prepared lanes and fixed work reservations are private to this operation.
+      const keyBytes = budget.ledger.tagsBytes + budget.ledger.numbersBytes
+        + budget.ledger.idsBytes + budget.ledger.ranksBytes + budget.ledger.dictionaryBytes
+      budget.release(keyBytes + budget.ledger.fixedOverheadBytes)
     }
     if (spec === null) budget.release(budget.ledger.fixedOverheadBytes)
-    budget.charge(256)
+    // An empty protected body returns the shared identity with no retained worker
+    // work. Its small metadata object is caller bookkeeping, outside this pool.
+    if (!emptyBody) budget.charge(256)
     await cooperative.pause('publish')
     return {
       kind: 'complete', order,
