@@ -65,3 +65,18 @@ export async function rehash(result: HarnessResult, mutate: (draft: Record<strin
 }
 
 export { canonicalize }
+
+/** What a real, unautomated Safari posts back from the placeholder page. */
+export function deviceEnvironment(overrides: Partial<HarnessEnvironment> = {}): HarnessEnvironment {
+  return makeEnvironment({
+    browser: { name: 'safari', version: '17.5', engine: 'webkit', userAgent: 'ua', automation: 'none' },
+    source: { adapter: 'xlsx-placeholder', bytes: 5000, rows: 120, cols: 10 },
+    fixtureId: null,
+    requestedFixtureId: 'F1',
+    ...overrides,
+  })
+}
+
+export async function buildDeviceResult(overrides: Partial<HarnessEnvironment> = {}, samples: HarnessSample[] = [makeSample(range(30))]): Promise<HarnessResult> {
+  return finalizeResult({ environment: deviceEnvironment(overrides), samples, ledger: new AllocationLedger().accounting() })
+}
