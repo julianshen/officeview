@@ -2,11 +2,9 @@ import { describe, expect, it, vi } from 'vitest'
 import { ReferenceTextFilterMatcher, TextFilterMatcher } from '../src/xlsx/view/textFilter'
 import { classifyColumn, filterMenus, rawValueKey, FilterEngine, WorkBudget, type PreparedValue, type ColumnClassification, type FilterLimits } from '../src/xlsx/view/filter'
 import type { ColumnRule, FilterSpec, NumberOp, TextOp } from '../src/xlsx/view/contracts'
-import type { ResolvedSemantics } from '../src/xlsx/formula/types'
 import { createIdentityOrder } from '../src/xlsx/view/order'
 import { createIntervalSet } from '../src/xlsx/view/visibility'
 const context = { locale: 'en-US', dateSystem: '1900' as const, timeZone: 'UTC', nowMs: Date.parse('2026-03-08T12:00:00Z') }
-const semantics: ResolvedSemantics = { ...context, epochNowMs: context.nowMs, unicode: { version: 2, source: 'standalone-default' } }
 const engine = new FilterEngine(context)
 const mixed: ColumnClassification = { kind: 'text', hasNumeric: true }
 const numeric: ColumnClassification = { kind: 'number', hasNumeric: true }
@@ -175,36 +173,36 @@ describe('literal and wildcard Unicode semantics', () => {
 })
 describe('complete classification and exact keys', () => {
   it('classifies all body values with supported date formats and builtins', () => {
-    expect(classifyColumn([n(1), n(2)], true, semantics)).toEqual(numeric)
-    expect(classifyColumn([n(1), { kind: 'number', value: 2, numFmtId: 14 }, { kind: 'blank' }, { kind: 'error', value: '#NUM!' }], true, semantics)).toEqual(date)
-    expect(classifyColumn([n(1), { kind: 'number', value: 2, formatCode: 'yyyy-mm-dd' }], true, semantics)).toEqual(date)
-    expect(classifyColumn([n(1), { kind: 'number', value: 2, formatCode: 'h:mm' }], true, semantics)).toEqual(date)
-    expect(classifyColumn([{ kind: 'number', value: 2, formatCode: '0 "days"' }], true, semantics)).toEqual(numeric)
-    expect(classifyColumn([{ kind: 'number', value: 2, formatCode: '0;yyyy-mm-dd' }], true, semantics)).toEqual(numeric)
-    expect(classifyColumn([n(2), s('s')], true, semantics)).toEqual(mixed)
-    expect(classifyColumn([{ kind: 'number', value: -2, formatCode: '0;yyyy-mm-dd' }], true, semantics)).toEqual(numeric)
-    expect(classifyColumn([{ kind: 'number', value: 0, formatCode: '0;0;yyyy-mm-dd' }], true, semantics)).toEqual(numeric)
-    expect(classifyColumn([{ kind: 'number', value: 0, formatCode: 'yyyy-mm-dd;0' }], true, semantics)).toEqual(date)
-    expect(classifyColumn([{ kind: 'number', value: 2, formatCode: '0\\\\d' }], true, semantics), 'unescaped d after an escaped backslash is a definitive date token').toEqual(date)
-    expect(classifyColumn([{ kind: 'number', value: 2, formatCode: 'yyyy-mm-dd' }], true, { ...semantics, locale: 'zh-TW' })).toEqual(date)
-    expect(classifyColumn([s('s'), { kind: 'boolean', value: true }], true, semantics)).toEqual({ kind: 'text', hasNumeric: false })
+    expect(classifyColumn([n(1), n(2)], true)).toEqual(numeric)
+    expect(classifyColumn([n(1), { kind: 'number', value: 2, numFmtId: 14 }, { kind: 'blank' }, { kind: 'error', value: '#NUM!' }], true)).toEqual(date)
+    expect(classifyColumn([n(1), { kind: 'number', value: 2, formatCode: 'yyyy-mm-dd' }], true)).toEqual(date)
+    expect(classifyColumn([n(1), { kind: 'number', value: 2, formatCode: 'h:mm' }], true)).toEqual(date)
+    expect(classifyColumn([{ kind: 'number', value: 2, formatCode: '0 "days"' }], true)).toEqual(numeric)
+    expect(classifyColumn([{ kind: 'number', value: 2, formatCode: '0;yyyy-mm-dd' }], true)).toEqual(numeric)
+    expect(classifyColumn([n(2), s('s')], true)).toEqual(mixed)
+    expect(classifyColumn([{ kind: 'number', value: -2, formatCode: '0;yyyy-mm-dd' }], true)).toEqual(numeric)
+    expect(classifyColumn([{ kind: 'number', value: 0, formatCode: '0;0;yyyy-mm-dd' }], true)).toEqual(numeric)
+    expect(classifyColumn([{ kind: 'number', value: 0, formatCode: 'yyyy-mm-dd;0' }], true)).toEqual(date)
+    expect(classifyColumn([{ kind: 'number', value: 2, formatCode: '0\\\\d' }], true), 'unescaped d after an escaped backslash is a definitive date token').toEqual(date)
+    expect(classifyColumn([{ kind: 'number', value: 2, formatCode: 'yyyy-mm-dd' }], true)).toEqual(date)
+    expect(classifyColumn([s('s'), { kind: 'boolean', value: true }], true)).toEqual({ kind: 'text', hasNumeric: false })
   })
   it('treats backslashes inside quoted format literals as shared grammar literal text', () => {
     const slash = String.fromCharCode(92)
-    expect(classifyColumn([{ kind: 'number', value: 2, formatCode: '"' + slash + '"yyyy-mm-dd' }], true, semantics)).toEqual(date)
-    expect(classifyColumn([{ kind: 'number', value: -2, formatCode: '0 "' + slash + '";yyyy-mm-dd' }], true, semantics)).toEqual(numeric)
+    expect(classifyColumn([{ kind: 'number', value: 2, formatCode: '"' + slash + '"yyyy-mm-dd' }], true)).toEqual(date)
+    expect(classifyColumn([{ kind: 'number', value: -2, formatCode: '0 "' + slash + '";yyyy-mm-dd' }], true)).toEqual(numeric)
   })
   it('preserves semicolons in inactive bracket regions during active-section classification', () => {
-    expect(classifyColumn([{ kind: 'number', value: 0, formatCode: '0;[foo;yyyy];0' }], true, semantics)).toEqual(numeric)
+    expect(classifyColumn([{ kind: 'number', value: 0, formatCode: '0;[foo;yyyy];0' }], true)).toEqual(numeric)
   })
   it('honors an explicit empty custom format over a date builtin', () => {
-    expect(classifyColumn([{ kind: 'number', value: 2, numFmtId: 14, formatCode: '' }], true, semantics)).toEqual(numeric)
+    expect(classifyColumn([{ kind: 'number', value: 2, numFmtId: 14, formatCode: '' }], true)).toEqual(numeric)
   })
   it('never infers date for empty/errors or completes missing domains', () => {
-    for (const values of [[], [{ kind: 'blank' }], [{ kind: 'error', value: '#NUM!' }]] as PreparedValue[][]) expect(classifyColumn(values, true, semantics)).toEqual({ kind: 'empty', hasNumeric: false })
-    expect(classifyColumn([n(1)], false, semantics).kind).toBe('loading')
-    for (const kind of ['unknown', 'unavailable'] as const) expect(classifyColumn([n(1), { kind }], true, semantics).kind).toBe('loading')
-    expect(() => classifyColumn([n(NaN)], true, semantics)).toThrow(RangeError)
+    for (const values of [[], [{ kind: 'blank' }], [{ kind: 'error', value: '#NUM!' }]] as PreparedValue[][]) expect(classifyColumn(values, true)).toEqual({ kind: 'empty', hasNumeric: false })
+    expect(classifyColumn([n(1)], false).kind).toBe('loading')
+    for (const kind of ['unknown', 'unavailable'] as const) expect(classifyColumn([n(1), { kind }], true).kind).toBe('loading')
+    expect(() => classifyColumn([n(NaN)], true)).toThrow(RangeError)
   })
   it('exposes only available typed menus', () => {
     expect(filterMenus(numeric)).toEqual(['values', 'blanks', 'number'])
@@ -223,9 +221,9 @@ describe('complete classification and exact keys', () => {
     expect(() => rawValueKey(n(Infinity), mixed)).toThrow(RangeError)
   })
   it('bounds each classification cell', () => {
-    expect(() => classifyColumn([{ kind: 'number', value: 1, formatCode: '0.00' }], true, semantics, { maxWork: 1 })).toThrow(/resource/i)
+    expect(() => classifyColumn([{ kind: 'number', value: 1, formatCode: '0.00' }], true, { maxWork: 1 })).toThrow(/resource/i)
     const controller = new AbortController(); controller.abort()
-    expect(() => classifyColumn([n(1)], true, semantics, { signal: controller.signal })).toThrow(/cancel/i)
+    expect(() => classifyColumn([n(1)], true, { signal: controller.signal })).toThrow(/cancel/i)
   })
 })
 describe('AC-SEM-01 visibility composition', () => {
@@ -260,7 +258,7 @@ describe('review regressions', () => {
   })
   it('classifies 200k custom-format numeric cells with per-cell defaults', () => {
     function* values() { for (let row = 0; row < 200000; row++) yield { kind: 'number' as const, value: row, formatCode: '0.000' } }
-    expect(classifyColumn(values(), true, semantics)).toEqual(numeric)
+    expect(classifyColumn(values(), true)).toEqual(numeric)
   })
   it('repeated compiled calls and instrumentation never become implicit cumulative limits', () => {
     const work = { used: 0 }
@@ -269,16 +267,16 @@ describe('review regressions', () => {
     expect(work.used).toBeGreaterThan(50)
   })
   it.each(['[$-409]mmm d, yyyy', '[$-F800]dddd, mmmm dd, yyyy', '[$-409]h:mm:ss AM/PM', 'yyyy年m月d日', '[Red]yyyy-mm-dd', '[$-411]ge.m.d', 'e', 'g', 'b', 'h:mm', '[Color10][>=0][$USD-409]yyyy-mm-dd'])('classifies authored locale/date format %s', formatCode => {
-    expect(classifyColumn([{ kind: 'number', value: -2, formatCode }], true, semantics)).toEqual(date)
+    expect(classifyColumn([{ kind: 'number', value: -2, formatCode }], true)).toEqual(date)
   })
   it.each(['[h]:mm', '[hh]', '[mm]:ss', '[ss]', 'mm:ss.0', 'mmss.0', 'General', '0.00E+00', '@', '0 \"days\"', '0_d', '0*y', '0\\m', '[foo]0'])('keeps duration/numeric/text format %s numeric', formatCode => {
-    expect(classifyColumn([{ kind: 'number', value: 2, formatCode }], true, semantics)).toEqual(numeric)
+    expect(classifyColumn([{ kind: 'number', value: 2, formatCode }], true)).toEqual(numeric)
   })
   it.each([...Array.from({ length: 9 }, (_, i) => 14 + i), ...Array.from({ length: 10 }, (_, i) => 27 + i), ...Array.from({ length: 9 }, (_, i) => 50 + i)])('recognizes date builtin %s', numFmtId => {
-    expect(classifyColumn([{ kind: 'number', value: 2, numFmtId }], true, semantics)).toEqual(date)
+    expect(classifyColumn([{ kind: 'number', value: 2, numFmtId }], true)).toEqual(date)
   })
   it.each([45, 46, 47])('keeps duration builtin %s numeric', numFmtId => {
-    expect(classifyColumn([{ kind: 'number', value: 2, numFmtId }], true, semantics)).toEqual(numeric)
+    expect(classifyColumn([{ kind: 'number', value: 2, numFmtId }], true)).toEqual(numeric)
   })
 })
 
@@ -288,7 +286,7 @@ describe('explicit scan budgets', () => {
     const match = engine.compileFilter(spec([0, { kind: 'number', op: 'gt', first: 0 }]), new Map([[0, numeric]]), () => n(1), { budget })
     expect(match(2)).toBe(true)
     expect(() => { for (let row = 0; row < 50; row++) match(row) }).toThrow(/resource/i)
-    expect(() => classifyColumn([n(1), n(2)], true, semantics, { budget: new WorkBudget({ maxWork: 1 }) })).toThrow(/resource/i)
+    expect(() => classifyColumn([n(1), n(2)], true, { budget: new WorkBudget({ maxWork: 1 }) })).toThrow(/resource/i)
   })
   it.each(['and', 'or'] as const)('shares one cell allowance for compound %s', connective => {
     const first: ColumnRule = { kind: 'text', op: 'eq', first: 'hello', wildcards: false }
@@ -313,15 +311,17 @@ describe('prepared text predicates', () => {
 })
 
 describe('exact reference differential coverage', () => {
-  it.each([false, true])('matches 20k seeded cases for all six operations (wildcards=%s)', wildcards => {
-    const locales = ['en-US', 'de-DE', 'da-DK', 'tr-TR', 'cs-CZ', 'es-ES']
+  it.each([false, true])('matches seeded cases for all six operations (wildcards=%s)', wildcards => {
+    const cases = Number(process.env.S8_FILTER_DIFFERENTIAL_CASES ?? 20000)
+    if (!Number.isSafeInteger(cases) || cases < 20000) throw new RangeError('Differential case count must be at least 20000')
+    const locales = ['en-US', 'de-DE', 'sv-SE', 'tr-TR', 'da-DK', 'es-ES-u-co-trad', 'cs-CZ']
     const matchers = locales.map(locale => [new TextFilterMatcher(locale), new ReferenceTextFilterMatcher(locale)] as const)
     const ascii = Array.from({ length: 95 }, (_, i) => String.fromCharCode(32 + i))
-    const unicode = [...ascii, 'é', 'e', '\u0301', '\u200b', '\u00ad', 'ﬁ', '😀', '\ud800', '\udc00', 'å', 'İ']
+    const unicode = [...ascii, 'é', 'e', '\u0301', '\u200b', '\u00ad', '\ufeff', '\u2060', 'ﬁ', 'ß', '😀', '\u200d', '漢', '\ud800', '\udc00', 'å', 'İ']
     const ops: TextOp[] = ['eq', 'neq', 'begins', 'ends', 'contains', 'not-contains']
     let seed = wildcards ? 173 : 107, checked = 0
     const random = (length: number) => { seed = (seed * 48271) % 2147483647; return seed % length }
-    for (let index = 0; index < 20000; index++) {
+    for (let index = 0; index < cases; index++) {
       const pool = index % 3 === 0 ? ascii : unicode
       let text = '', pattern = ''
       for (let i = random(8); i > 0; i--) text += pool[random(pool.length)]
@@ -329,6 +329,7 @@ describe('exact reference differential coverage', () => {
         const point = pool[random(pool.length)]
         pattern += wildcards && point === '~' ? '~~' : point
       }
+      if (index % 2000 === 0) text = ['é', 'a', '漢😀', '\ud800', 'e\u0301\u200b'][Math.floor(index / 2000) % 5].repeat(32)
       const [fast, reference] = matchers[index % locales.length]
       for (const op of ops) {
         const actual = fast.match(op, pattern, wildcards, text), expected = reference.match(op, pattern, wildcards, text)
@@ -336,8 +337,9 @@ describe('exact reference differential coverage', () => {
         checked++
       }
     }
-    expect(checked).toBe(120000)
-  })
+    expect(checked).toBe(cases * ops.length)
+    console.info(`S8 differential: ${cases} seeded inputs, ${checked} comparisons, wildcards=${wildcards}, host=${process.versions.bun ? 'Bun ' + process.versions.bun : 'Node ' + process.versions.node}`)
+  }, process.env.S8_FILTER_DIFFERENTIAL_CASES ? 60000 : undefined)
   it('retains arbitrarily long ignorable endpoint candidates and locale contractions', () => {
     for (const locale of ['en-US', 'da-DK', 'cs-CZ', 'tr-TR']) {
       const fast = new TextFilterMatcher(locale), reference = new ReferenceTextFilterMatcher(locale)
@@ -395,17 +397,24 @@ describe('complete ordinary text scans and periodic differential coverage', () =
 })
 
 describe('certified ASCII backend work', () => {
-  it('handles a nonperiodic ASCII miss with linear candidate work on the pinned backend', () => {
+  it('uses the ASCII optimization on the Bun or Node host running this suite', () => {
+    expect(new TextFilterMatcher('en-US').certifiedAsciiProfile).toBe(true)
+  })
+  it('handles a nonperiodic ASCII miss with linear candidate work on a certified host', ({ skip }) => {
+    const matcher = new TextFilterMatcher('en-US')
+    if (!matcher.certifiedAsciiProfile) skip('Host ASCII profile is not certified')
     let seed = 79, text = ''
     const pool = 'abcdefghijklmnopqrstuvwxy 0123456789!'
     for (let i = 0; i < 1000; i++) { seed = seed * 48271 % 2147483647; text += pool[seed % pool.length] }
     const work = { used: 0 }
-    expect(engine.matchText('contains', 'zzz', false, text, { work, maxWork: Number.MAX_SAFE_INTEGER })).toBe(false)
+    expect(matcher.match('contains', 'zzz', false, text, { work, maxWork: Number.MAX_SAFE_INTEGER })).toBe(false)
     expect(work.used).toBeLessThan(10000)
   })
-  it('propagates all ignorable endpoint plateaus without quadratic wildcard work', () => {
+  it('propagates all ignorable endpoint plateaus without quadratic wildcard work', ({ skip }) => {
+    const matcher = new TextFilterMatcher('en-US')
+    if (!matcher.certifiedAsciiProfile) skip('Host ASCII profile is not certified')
     const work = { used: 0 }, text = 'a' + '\u200b'.repeat(2000) + 'b'
-    expect(engine.matchText('eq', 'a*b', true, text, { work, maxWork: Number.MAX_SAFE_INTEGER })).toBe(true)
+    expect(matcher.match('eq', 'a*b', true, text, { work, maxWork: Number.MAX_SAFE_INTEGER })).toBe(true)
     expect(work.used).toBeLessThan(30000)
     expect(engine.matchText('eq', 'a?b', true, 'a\u200bb')).toBe(true)
     expect(engine.matchText('eq', 'a?b', true, 'a\u200b\u200bb')).toBe(true)
@@ -525,9 +534,82 @@ describe('fallback text preflight precedes normalization', () => {
 describe('definitive authored date tokens override numeric placeholders', () => {
   it('keeps a day token escaped by one runtime backslash numeric', () => {
     const formatCode = '0' + String.fromCharCode(92) + 'd'
-    expect(classifyColumn([{ kind: 'number', value: 2, formatCode }], true, semantics)).toEqual(numeric)
+    expect(classifyColumn([{ kind: 'number', value: 2, formatCode }], true)).toEqual(numeric)
   })
   it.each(['yyyy-mm-dd 0', 'h:mm:ss 0'])('classifies definitive date/time format %s', formatCode => {
-    expect(classifyColumn([{ kind: 'number', value: 2, formatCode }], true, semantics)).toEqual(date)
+    expect(classifyColumn([{ kind: 'number', value: 2, formatCode }], true)).toEqual(date)
+  })
+})
+
+
+describe('classification per-value allowances', () => {
+  it('allows classification policy as the third argument and resets the per-value allowance', () => {
+    const work = { used: 0 }
+    expect(classifyColumn([n(1), n(2), n(3)], true, { maxWork: 1, work })).toEqual(numeric)
+    expect(work.used).toBe(3)
+  })
+})
+
+
+describe('duration and time-of-day classification decision', () => {
+  // R2 decision: mm:ss[.0] mirrors duration/fraction built-ins 45–47;
+  // h:mm denotes time of day and remains date-typed.
+  it.each(['mm:ss.0', 'mm:ss'])('keeps %s numeric', formatCode => {
+    expect(classifyColumn([{ kind: 'number', value: 0.5, formatCode }], true)).toEqual(numeric)
+  })
+  it('keeps h:mm date-typed', () => {
+    expect(classifyColumn([{ kind: 'number', value: 0.5, formatCode: 'h:mm' }], true)).toEqual(date)
+  })
+})
+
+
+describe('exact Unicode witnesses and repeated slices', () => {
+  it('finds a raw Unicode witness before exhaustive slice enumeration', () => {
+    const matcher = new TextFilterMatcher('da-DK'), work = { used: 0 }
+    const text = 'àé漢😀'.repeat(200) + '東京'
+    expect(matcher.match('contains', '東京', false, text, { work, maxWork: Number.MAX_SAFE_INTEGER })).toBe(true)
+    expect(work.used).toBeLessThan(10000)
+  })
+  it('shares byte-identical periodic Unicode slices without assuming collation weights', () => {
+    const matcher = new TextFilterMatcher('da-DK'), work = { used: 0 }
+    expect(matcher.match('contains', 'zzz', false, 'é'.repeat(2000), { work, maxWork: Number.MAX_SAFE_INTEGER })).toBe(false)
+    expect(work.used).toBeLessThan(2100000)
+  })
+  it('shares periodic wildcard literal comparisons across code-point phases', () => {
+    const matcher = new TextFilterMatcher('da-DK'), work = { used: 0 }
+    expect(matcher.match('eq', '*a*a*a*b', true, 'é'.repeat(500), { work, maxWork: Number.MAX_SAFE_INTEGER })).toBe(false)
+    expect(work.used).toBeLessThan(300000)
+  })
+  it('never treats a lone-surrogate needle inside a paired surrogate as a witness', () => {
+    const matcher = new TextFilterMatcher('da-DK'), reference = new ReferenceTextFilterMatcher('da-DK')
+    for (const op of ['begins', 'ends', 'contains'] as const) {
+      for (const pattern of ['\ud83d', '\ude00']) expect(matcher.match(op, pattern, false, '😀')).toBe(reference.match(op, pattern, false, '😀'))
+    }
+  })
+})
+
+
+describe('actual substituted collator identity', () => {
+  it('fails closed for a contextual comparator despite native-looking options', () => {
+    const Native = Intl.Collator
+    try {
+      vi.spyOn(Intl, 'Collator').mockImplementation(function (locale, options) {
+        const collator = new Native(locale, options), compare = collator.compare
+        // All <=3-element strings retain native behavior. A finite probe
+        // domain cannot establish the rule for longer contextual rewrites.
+        Object.defineProperty(collator, 'compare', {
+          value: (a: string, b: string) => compare(a.replace(/abcd/g, 'wxyz'), b.replace(/abcd/g, 'wxyz')),
+        })
+        return collator
+      })
+      const matcher = new TextFilterMatcher('en-US'), reference = new ReferenceTextFilterMatcher('en-US')
+      expect(matcher.certifiedAsciiProfile).toBe(false)
+      for (const wildcards of [false, true]) {
+        for (const op of ['eq', 'neq', 'begins', 'ends', 'contains', 'not-contains'] as TextOp[]) {
+          expect(matcher.match(op, 'wxyz', wildcards, 'abcd')).toBe(reference.match(op, 'wxyz', wildcards, 'abcd'))
+        }
+      }
+      expect(matcher.match('eq', 'wxyz', false, 'abcd')).toBe(true)
+    } finally { vi.restoreAllMocks() }
   })
 })

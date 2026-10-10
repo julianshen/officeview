@@ -36,6 +36,11 @@ export class WorkBudget {
     this.work = limits.work === undefined ? { used: 0 } : limits.work
     this.charge(0)
   }
+  /** Start another source cell without resetting observations or the caller's scan quota. */
+  resetAllowance(): void {
+    this.used = 0
+    this.charge(0)
+  }
   charge(amount: number): void {
     if (this.limits.signal?.aborted) throw new FilterDiagnostic('cancelled', 'Filter cancelled')
     if (amount > this.maxWork - this.used) throw new FilterDiagnostic('resource-limit', 'Filter resource work limit exceeded')
@@ -331,27 +336,46 @@ export class TextFilterMatcher extends ReferenceTextFilterMatcher {
     }
     if (!parsed && positive === 'eq') return super.evaluate(op, pattern, parsed, text, budget)
     let period: number | undefined
-    if (/^[\x20-\x7e]*$/.test(text)) {
-      budget.charge(text.length)
-      if (!parsed && /^[\x20-\x7e]*$/.test(pattern) && positive !== 'eq') {
+    budget.charge(text.length)
+    if (!parsed) {
+      // A positive actual slice is a witness regardless of locale, expansions
+      // or context. UTF-16 search must not introduce a boundary inside a pair.
+      const boundary = (at: number) => at === 0 || at === text.length
+        || !(text.charCodeAt(at - 1) >= 0xd800 && text.charCodeAt(at - 1) <= 0xdbff
+          && text.charCodeAt(at) >= 0xdc00 && text.charCodeAt(at) <= 0xdfff)
+      let at = positive === 'begins' ? (text.startsWith(pattern) ? 0 : -1)
+        : positive === 'ends' ? (text.endsWith(pattern) ? text.length - pattern.length : -1) : text.indexOf(pattern)
+      while (at >= 0) {
+        budget.charge(1 + pattern.length * 2)
+        if (boundary(at) && boundary(at + pattern.length)
+          && this.collator.compare(pattern, text.slice(at, at + pattern.length)) === 0) {
+          budget.text(text)
+          return !negative
+        }
+        if (positive !== 'contains') break
+        at = text.indexOf(pattern, at + 1)
+      }
+      if (/^[\x20-\x7e]*$/.test(text) && /^[\x20-\x7e]*$/.test(pattern)) {
         const folded = text.toLowerCase(), needle = pattern.toLowerCase()
         const at = positive === 'begins' ? (folded.startsWith(needle) ? 0 : -1)
           : positive === 'ends' ? (folded.endsWith(needle) ? text.length - pattern.length : -1) : folded.indexOf(needle)
         if (at >= 0) {
           budget.text(text)
           budget.charge(1 + pattern.length * 2)
-          // A host-verified actual slice is an exact witness, including tailored locales.
           if (this.collator.compare(pattern, text.slice(at, at + pattern.length)) === 0) return !negative
         }
       }
-      // Raw periodicity, not a guessed collation profile: every candidate at
-      // later starts is byte-identical to one at start % period. No Intl
-      // contraction/ignorable assumptions or Unicode endpoint bounds apply.
-      for (let candidate = 1; (parsed || positive === 'contains') && candidate <= Math.min(16, text.length); candidate++) {
+    }
+    if (parsed || positive === 'contains') {
+      // For every phase and element length a raw periodic string has exactly
+      // the same UTF-16 slice. Cache only these byte-identical comparisons;
+      // periods count code points so emoji and lone surrogates stay separate.
+      const elements = Array.from(text)
+      for (let candidate = 1; candidate <= Math.min(16, elements.length); candidate++) {
         let repeats = true
-        for (let i = candidate; i < text.length; i++) {
+        for (let i = candidate; i < elements.length; i++) {
           budget.charge(1)
-          if (text[i] !== text[i % candidate]) { repeats = false; break }
+          if (elements[i] !== elements[i % candidate]) { repeats = false; break }
         }
         if (repeats) { period = candidate; break }
       }

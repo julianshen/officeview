@@ -1,5 +1,4 @@
 import type { ColumnRule, FilterSpec, IntervalSet, RowOrder, TextOp } from './contracts'
-import type { ResolvedSemantics } from '../formula/types'
 import { lowerDateCondition, matchesDateInterval, type DateContext } from './datePredicates'
 import { validateCoordinate, validateSourceRect } from './coordinates'
 import { FilterDiagnostic, TextFilterMatcher, WorkBudget, type FilterLimits } from './textFilter'
@@ -54,11 +53,11 @@ function dateFormatted(value: Extract<PreparedValue, { kind: 'number' }>, budget
   if (/[0#?@]/.test(active.replace(/s+\.0+/gi, 's'))) return false
   return /m/i.test(active) && !/s/i.test(active)
 }
-export function classifyColumn(values: Iterable<PreparedValue>, complete: boolean, _semantics: ResolvedSemantics, limits?: FilterLimits): ColumnClassification {
-  new WorkBudget(limits)
+export function classifyColumn(values: Iterable<PreparedValue>, complete: boolean, limits?: FilterLimits): ColumnClassification {
+  const budget = new WorkBudget(limits)
   let hasNumeric = false, hasOther = false, hasDate = false, missing = !complete
   for (const value of values) {
-    const budget = new WorkBudget(limits)
+    budget.resetAllowance()
     budget.charge(1)
     if (value.kind === 'unknown' || value.kind === 'unavailable') { missing = true; continue }
     resolved(value)
