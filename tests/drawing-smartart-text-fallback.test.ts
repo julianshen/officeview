@@ -373,4 +373,60 @@ describe('Phase 23 review: fallback text paints visibly', () => {
     expect(calls).toEqual([[0, 0]])
     expect(recorded).toEqual([])
   })
+
+  test('broken cache keeps malformed status and specific reason under text-only representation (DOCX)', async () => {
+    const brokenExtDataXml =
+      `<dgm:dataModel ${DGM}>` +
+      `  <dgm:ptLst><dgm:pt modelId="{D1}"><dgm:prSet/><dgm:t>Rescued text</dgm:t></dgm:pt></dgm:ptLst>` +
+      `  <dgm:cxnLst/>` +
+      `  <dgm:whole/>` +
+      `  <dgm:extLst><dgm:ext><dsp:dataModelExt xmlns:dsp="http://schemas.microsoft.com/office/drawing/2008/diagram" relId="rDg1"/></dgm:ext></dgm:extLst>` +
+      `</dgm:dataModel>`
+    const zip = new JSZip()
+    zip.file('_rels/.rels', '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/></Relationships>')
+    zip.file('word/_rels/document.xml.rels', relsXml([{ id: 'rDm1', type: DIAGRAM_DATA_REL, target: 'diagrams/data1.xml' }]))
+    zip.file('word/document.xml',
+      `<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:dgm="http://schemas.openxmlformats.org/drawingml/2006/diagram" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><w:body><w:p><w:r>` +
+      `<w:drawing><wp:inline><wp:extent cx="952500" cy="952500"/><wp:docPr id="7" name="smartart1"/><a:graphic><a:graphicData uri="${DIAGRAM_URI}"><dgm:relIds dm="rDm1"/></a:graphicData></a:graphic></wp:inline></w:drawing>` +
+      `</w:r></w:p></w:body></w:document>`)
+    zip.file('word/diagrams/data1.xml', brokenExtDataXml)
+    zip.file('word/diagrams/_rels/data1.xml.rels', relsXml([
+      { id: 'rDg1', type: 'http://schemas.microsoft.com/office/2007/relationships/diagramDrawing', target: 'drawing1.xml' },
+    ]))
+    const doc = await parseDocx(await OfficePackage.load(await zip.generateAsync({ type: 'uint8array' })))
+    const entry = doc.drawingCoverage!.find((e) => e.element === 'drawing' && e.feature === 'diagram')
+    expect(entry).toBeDefined()
+    expect(entry).toMatchObject({ status: 'malformed', selectedRepresentation: 'text-only' })
+    expect(entry!.reason ?? '').not.toContain('cacheless-smartart-text-fallback')
+  })
+
+  test('broken cache keeps malformed status and specific reason under text-only representation (PPTX)', async () => {
+    const brokenExtDataXml =
+      `<dgm:dataModel ${DGM}>` +
+      `  <dgm:ptLst><dgm:pt modelId="{D1}"><dgm:prSet/><dgm:t>Rescued text</dgm:t></dgm:pt></dgm:ptLst>` +
+      `  <dgm:cxnLst/>` +
+      `  <dgm:whole/>` +
+      `  <dgm:extLst><dgm:ext><dsp:dataModelExt xmlns:dsp="http://schemas.microsoft.com/office/drawing/2008/diagram" relId="rDg1"/></dgm:ext></dgm:extLst>` +
+      `</dgm:dataModel>`
+    const zip = new JSZip()
+    zip.file('ppt/presentation.xml', '<p:presentation xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><p:sldSz cx="952500" cy="952500"/><p:sldIdLst><p:sldId r:id="s1"/></p:sldIdLst></p:presentation>')
+    zip.file('ppt/_rels/presentation.xml.rels', relsXml([{ id: 's1', type: 'http://schemas.openxmlformats.org/officeDocument/2006/relationships/slide', target: 'slides/slide1.xml' }]))
+    zip.file('ppt/slides/slide1.xml',
+      `<p:sld xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:dgm="http://schemas.openxmlformats.org/drawingml/2006/diagram"><p:cSld><p:spTree>` +
+      `<p:graphicFrame><p:nvGraphicFramePr><p:cNvPr id="81" name="smartart1"/></p:nvGraphicFramePr>` +
+      `<p:xfrm><a:off x="0" y="0"/><a:ext cx="952500" cy="952500"/></p:xfrm>` +
+      `<a:graphic><a:graphicData uri="${DIAGRAM_URI}"><dgm:relIds dm="rDm1"/></a:graphicData></a:graphic>` +
+      `</p:graphicFrame>` +
+      `</p:spTree></p:cSld></p:sld>`)
+    zip.file('ppt/slides/_rels/slide1.xml.rels', relsXml([{ id: 'rDm1', type: DIAGRAM_DATA_REL, target: '../diagrams/data1.xml' }]))
+    zip.file('ppt/diagrams/data1.xml', brokenExtDataXml)
+    zip.file('ppt/diagrams/_rels/data1.xml.rels', relsXml([
+      { id: 'rDg1', type: 'http://schemas.microsoft.com/office/2007/relationships/diagramDrawing', target: 'drawing1.xml' },
+    ]))
+    const doc = await parsePptx(await OfficePackage.load(await zip.generateAsync({ type: 'uint8array' })))
+    const entry = doc.drawingCoverage!.find((e) => e.id === '81')
+    expect(entry).toBeDefined()
+    expect(entry).toMatchObject({ status: 'malformed', selectedRepresentation: 'text-only' })
+    expect(entry!.reason ?? '').not.toContain('cacheless-smartart-text-fallback')
+  })
 })

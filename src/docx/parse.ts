@@ -1108,10 +1108,18 @@ export async function parseDocx(pkg: OfficePackage): Promise<DocxDocument> {
     const matched = drawingCoverage.filter(entry => coverageIssueMatchesEntry(issue, entry))
     if (matched.length) {
       for (const entry of matched) {
-        if (issue.kind === 'missing-part' || issue.kind === 'malformed-part') entry.status = 'malformed'
-        else if (['external-reference', 'unsupported-content', 'content-cycle', 'content-depth', 'group-depth', 'node-budget'].includes(issue.kind)) entry.status = 'unsupported'
-        entry.reason = issue.reason ?? issue.message
-        entry.limit = issue.limit
+        // A text fallback never downgrades an authoritative earlier failure:
+        // keep a malformed/unsupported status and its specific reason (e.g. a
+        // missing cached drawing part) while still reporting text-only below.
+        const fallbackKeepsPriorFailure =
+          issue.reason === 'cacheless-smartart-text-fallback' &&
+          (entry.status === 'malformed' || entry.status === 'unsupported')
+        if (!fallbackKeepsPriorFailure) {
+          if (issue.kind === 'missing-part' || issue.kind === 'malformed-part') entry.status = 'malformed'
+          else if (['external-reference', 'unsupported-content', 'content-cycle', 'content-depth', 'group-depth', 'node-budget'].includes(issue.kind)) entry.status = 'unsupported'
+          entry.reason = issue.reason ?? issue.message
+          entry.limit = issue.limit
+        }
         // A text-only entry already reports rendered fallback text (its reason
         // names the fallback); resetting it to none would un-report content
         // the entry proves is retained.

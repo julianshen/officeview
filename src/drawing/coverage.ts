@@ -498,9 +498,17 @@ export function pptxCoverage(slide: PptxSlide, spTree: XmlNode | undefined, part
       : entry.partPath === content.partPath && (entry.referenceId === content.identity || entry.id === content.identity || entry.treePath === content.identity)) : []
     if (associated.length && ['missing-part', 'malformed-part', 'external-reference', 'content-cycle', 'group-depth', 'content-depth', 'node-budget', 'unsupported-content'].includes(issue.kind)) {
       for (const affected of associated) {
-        affected.status = issue.kind === 'missing-part' || issue.kind === 'malformed-part' ? 'malformed' : 'unsupported'
-        affected.reason = content.reason ?? issue.message
-        affected.limit = content.limit
+        // A text fallback never downgrades an authoritative earlier failure:
+        // keep a malformed/unsupported status and its specific reason (e.g. a
+        // missing cached drawing part) while still reporting text-only below.
+        const fallbackKeepsPriorFailure =
+          (content.reason ?? '') === 'cacheless-smartart-text-fallback' &&
+          (affected.status === 'malformed' || affected.status === 'unsupported')
+        if (!fallbackKeepsPriorFailure) {
+          affected.status = issue.kind === 'missing-part' || issue.kind === 'malformed-part' ? 'malformed' : 'unsupported'
+          affected.reason = content.reason ?? issue.message
+          affected.limit = content.limit
+        }
         if (!allShapes.some(shape => shape.source?.treePath === affected.treePath && (shape.content || shape.image || shape.table || shape.textBody)) &&
           !retainedGeometryAt(affected)) affected.selectedRepresentation = 'none'
         if (affected.scope === 'original' && (issue.kind === 'missing-part' || issue.kind === 'malformed-part')) {
