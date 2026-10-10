@@ -3,7 +3,7 @@ import react from '@vitejs/plugin-react'
 import { fileURLToPath, URL } from 'node:url'
 import { readFileSync } from 'node:fs'
 
-export default defineConfig(({ command }) => ({
+export default defineConfig({
   plugins: [react(), {
     name: 'drawing-preset-notices',
     generateBundle() {
@@ -40,11 +40,6 @@ export default defineConfig(({ command }) => ({
     },
     rollupOptions: {
       external: ['react', 'react-dom'],
-      // Dev-only harness page input: registered only when serving (vite dev
-      // server). Never part of the library build, so dist output is unchanged.
-      ...(command === 'serve'
-        ? { input: { 'debug/interactive-viewer': fileURLToPath(new URL('./src/debug/interactive-viewer.html', import.meta.url)) } }
-        : {}),
     },
   },
-}))
+})
