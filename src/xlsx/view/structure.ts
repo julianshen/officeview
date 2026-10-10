@@ -203,10 +203,24 @@ function spillMatches(spill: SpillExtent, rect: SourceRect): boolean {
   return spill.anchor.row >= rect.r0 && spill.anchor.row <= rect.r1
     && spill.anchor.col >= rect.c0 && spill.anchor.col <= rect.c1
 }
-/** Immutable index set over one StructuralResult. Spills are indexed per extent
- * (saved, evaluated) plus their anchor cell, so child-only intersections match even
- * when the anchor lies outside the query; absolute anchors are retained separately
- * and never enter the spatial index. */
+/** Deep clone-then-freeze for plain structural records. The index owns its
+ * copies: later caller mutation cannot affect queries, and returned records
+ * reject mutation attempts instead of aliasing caller state. */
+function frozenClone<T>(value: T): T {
+  if (Array.isArray(value)) return Object.freeze(value.map(frozenClone)) as unknown as T
+  if (typeof value === 'object' && value !== null) {
+    const out: Record<string, unknown> = {}
+    for (const [key, entry] of Object.entries(value)) out[key] = frozenClone(entry)
+    return Object.freeze(out) as T
+  }
+  return value
+}
+/** Immutable index set over one StructuralResult. Each spill is one entry over
+ * the union of saved, evaluated and anchor extents, verified exactly on query,
+ * so child-only intersections match even when the anchor lies outside the query
+ * and cursors stay exactly resumable with no cross-page dedup. Absolute anchors
+ * are retained separately and never enter the spatial index. All records are
+ * cloned and deep-frozen: the index owns its copies. */
 export class StructuralIndex {
   readonly stamp: SourceStamp
   readonly completeness: Completeness
@@ -218,19 +232,33 @@ export class StructuralIndex {
   private readonly spillEntries: RectangleIndex<SpillExtent>
   private readonly drawings: RectangleIndex<CellAnchoredDrawing>
   constructor(result: StructuralResult) {
-    this.stamp = { ...result.stamp }
-    this.completeness = result.completeness
-    this.missing = Object.freeze(result.missing.map(rect => ({ ...rect })))
+    this.stamp = frozenClone(result.stamp)
+    // A set error poisons the result even when completeness claims otherwise:
+    // errored structural data must wait, never authorize.
+    this.completeness = result.error !== undefined ? 'incomplete' : result.completeness
+    this.missing = Object.freeze(result.missing.map(rect => frozenClone(rect)))
     const absolute: AbsoluteDrawing[] = []
     const drawingEntries: { rect: SourceRect; value: CellAnchoredDrawing }[] = []
     for (const drawing of result.drawings) {
-      if (drawing.kind === 'absolute') absolute.push(drawing)
-      else drawingEntries.push({ rect: { ...drawing.bounds }, value: drawing })
+      const record = frozenClone(drawing)
+      if (record.kind === 'absolute') absolute.push(record)
+      else drawingEntries.push({ rect: record.bounds, value: record })
     }
     const spillEntries: { rect: SourceRect; value: SpillExtent }[] = []
-    for (const spill of result.spills) spillEntries.push({ rect: spillUnion(spill), value: spill })
-    this.merges = RectangleIndex.build(result.merges.map(merge => ({ rect: merge.range, value: merge })))
-    this.tables = RectangleIndex.build(result.tables.map(table => ({ rect: table.range, value: table })))
+    for (const spill of result.spills) {
+      const record = frozenClone(spill)
+      spillEntries.push({ rect: spillUnion(record), value: record })
+    }
+    const mergeEntries = result.merges.map(merge => {
+      const record = frozenClone(merge)
+      return { rect: record.range, value: record }
+    })
+    const tableEntries = result.tables.map(table => {
+      const record = frozenClone(table)
+      return { rect: record.range, value: record }
+    })
+    this.merges = RectangleIndex.build(mergeEntries)
+    this.tables = RectangleIndex.build(tableEntries)
     this.spillEntries = RectangleIndex.build(spillEntries)
     this.drawings = RectangleIndex.build(drawingEntries)
     this.absoluteDrawings = Object.freeze(absolute)

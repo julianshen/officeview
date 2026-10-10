@@ -172,8 +172,17 @@ export async function guardFilter(request: FilterGuardRequest): Promise<GuardOut
     }
   }
   for (const drawing of structure.drawingsIn({ r0: 0, r1: MAX_ROWS - 1, c0: 0, c1: MAX_COLS - 1 })) {
-    const before = drawingSpan(drawing, projectionBefore)
-    const after = drawingSpan(drawing, projectionAfter)
+    let before: { startY: number; endY: number }
+    let after: { startY: number; endY: number }
+    try {
+      before = drawingSpan(drawing, projectionBefore)
+      after = drawingSpan(drawing, projectionAfter)
+    } catch (error) {
+      // Anchors outside the projection geometry (or any other range-shaped
+      // failure while reading it) refuse as invalid ranges, never throw.
+      if (error instanceof RangeError) return { ok: false, refusal: { reason: 'invalid-range', message: error.message } }
+      throw error
+    }
     if (before.startY !== after.startY || before.endY !== after.endY) {
       return { ok: false, refusal: { reason: 'drawing-impact', drawingId: drawing.id } }
     }
