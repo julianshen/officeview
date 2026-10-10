@@ -8,6 +8,7 @@
  */
 import { mergeConfig } from 'vite'
 import { fileURLToPath } from 'node:url'
+import { join } from 'node:path'
 import baseConfig from './vite.config'
 import { harnessPlugin } from './scripts/harness/vite-plugin'
 import type { CollectorConfig } from './scripts/harness/collector'
@@ -29,4 +30,14 @@ if (collect && !collect.outputDir) throw new Error('HARNESS_COLLECT_TOKEN requir
 
 export default mergeConfig(baseConfig, {
   plugins: [harnessPlugin({ root: fileURLToPath(new URL('.', import.meta.url)), collect })],
+  // LAN-mode lockdown: the harness page only needs its own directory (plus the
+  // node_modules its react/jszip imports resolve to). Everything else in the
+  // checkout — package.json, library sources, other configs — is denied, even
+  // though the server binds all interfaces in manual mode.
+  server: {
+    fs: {
+      strict: true,
+      allow: [join(fileURLToPath(new URL('.', import.meta.url)), 'src', 'debug'), join(fileURLToPath(new URL('.', import.meta.url)), 'node_modules')],
+    },
+  },
 })

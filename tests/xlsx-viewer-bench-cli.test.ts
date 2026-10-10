@@ -15,7 +15,7 @@ import { csvField, metricCell, writeArtifacts, type CollectedRun } from '../scri
 import { checkBaselineComparable, compareResults, parseBaseline } from '../scripts/harness/baseline'
 import { retagResult } from '../scripts/harness/retag'
 import { detectLanIp } from '../scripts/harness/lan'
-import { checkIdentity, commitLabel, HARNESS_SERVICE } from '../scripts/harness/identity'
+import { checkIdentity, commitLabel, HARNESS_SERVICE, identityDigest } from '../scripts/harness/identity'
 import { buildResult, clone, makeSample, range, rehash } from './helpers/harnessResult'
 
 function args(argv: string[]): BenchArgs {
@@ -285,15 +285,15 @@ describe('detectLanIp', () => {
 })
 
 describe('harness identity', () => {
-  const expected = { commit: 'a'.repeat(40), root: '/repo' }
+  const expected = { commit: 'a'.repeat(40), rootDigest: identityDigest('/repo', 'a'.repeat(40)) }
   it('accepts only the harness service for this commit and checkout', () => {
-    expect(checkIdentity({ service: HARNESS_SERVICE, commit: expected.commit, dirty: false, root: '/repo' }, expected)).toBeNull()
+    expect(checkIdentity({ service: HARNESS_SERVICE, commit: expected.commit, dirty: false, rootDigest: expected.rootDigest }, expected)).toBeNull()
   })
   it('refuses a foreign server, an SPA fallback page, a stale commit and another checkout', () => {
     expect(checkIdentity('<!doctype html><html>', expected)).toMatch(/not.*harness/i)
     expect(checkIdentity({ service: 'something-else' }, expected)).toMatch(/not.*harness/i)
-    expect(checkIdentity({ service: HARNESS_SERVICE, commit: 'b'.repeat(40), dirty: false, root: '/repo' }, expected)).toMatch(/commit/)
-    expect(checkIdentity({ service: HARNESS_SERVICE, commit: expected.commit, dirty: false, root: '/other' }, expected)).toMatch(/checkout|root/)
+    expect(checkIdentity({ service: HARNESS_SERVICE, commit: 'b'.repeat(40), dirty: false, rootDigest: expected.rootDigest }, expected)).toMatch(/commit/)
+    expect(checkIdentity({ service: HARNESS_SERVICE, commit: expected.commit, dirty: false, rootDigest: '0'.repeat(64) }, expected)).toMatch(/checkout/)
   })
   it('labels dirty trees', () => {
     expect(commitLabel({ commit: 'abc1234', dirty: false })).toBe('abc1234')

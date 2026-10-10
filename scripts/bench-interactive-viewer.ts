@@ -166,6 +166,8 @@ async function serveForManualDevice(args: BenchArgs, label: string, identity: Re
     console.log(`  WARNING: the vite dev server is bound to ALL interfaces (0.0.0.0) and serves this repository's`)
     console.log(`           sources unauthenticated to anyone who can reach port ${args.port}. Only the result POST`)
     console.log(`           is protected (session token). Use a trusted network and stop the server when done.`)
+    console.log(`  WARNING: the device URL travels over plain HTTP, so the session token is sniffable on this`)
+    console.log(`           network. Anyone holding it can POST results until you stop the server.`)
     if (loopbackFallback) {
       console.log(`  WARNING: no LAN interface was found; the URL below uses 127.0.0.1 and NO OTHER DEVICE can reach it.`)
     }

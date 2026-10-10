@@ -35,7 +35,7 @@ test.beforeAll(async () => {
   } catch {
     // keep the raw text; checkIdentity rejects it
   }
-  expect(checkIdentity(body, { commit: identity.commit, root: identity.root })).toBeNull()
+  expect(checkIdentity(body, { commit: identity.commit, rootDigest: identity.rootDigest })).toBeNull()
 })
 
 type Harness = NonNullable<Window['__viewerHarness']>

@@ -113,10 +113,15 @@ from the query string (`?collect=` is ignored).
 
 Security notes for the LAN mode:
 
-- The vite dev server is bound to **all interfaces** and serves this
-  repository's sources unauthenticated to anyone who can reach the port. Only
-  the result POST is protected by the token. Use a trusted network; the CLI
-  prints this warning every time.
+- The vite dev server is bound to **all interfaces**, but its file serving is
+  locked to the harness minimum (`src/debug`, the `node_modules` the page
+  imports, nothing else): `package.json`, library sources and other configs
+  answer non-200. Only the result POST is further protected by the token. Use
+  a trusted network; the CLI prints this warning every time.
+- The device URL (including the session token) travels over plain `http://`,
+  so the token is sniffable on this network; anyone holding it can POST
+  results until the server stops. The token authenticates the POST, it does
+  not encrypt anything.
 - If no LAN interface is found the URL falls back to `127.0.0.1` and the CLI
   says loudly that no other device can reach it.
 - The device URL is `http://`, an insecure origin: `crypto.subtle` and
@@ -128,6 +133,11 @@ Security notes for the LAN mode:
 
 Labeling rules (spec §12.2):
 
+- A `safari` browser label (and therefore a `device` evidence label) is
+  **operator-attested, not verified**: the harness classifies the user agent
+  conservatively, but it cannot prove the operator really ran actual Safari on
+  the stated OS/device. Record the hardware, OS and browser build with the
+  artifact and audit the claim; never present the label itself as proof.
 - Playwright-driven **WebKit** results are labeled `webkit-playwright`
   (`evidence: "emulated-webkit"`) and are **never** relabeled Safari. In the
   page, `safari` is claimed only for a non-automated WebKit whose user agent has
