@@ -85,18 +85,34 @@ The integration owner serializes changes to `OfficeDoc.tsx`, `xlsx/render.ts`, `
 
 S1 and S2 focused modules may proceed concurrently after S0; shared integrations remain serial. S7 and S8 may proceed concurrently after S4 using synthetic adapters; neither may bypass S3. S11 and S12 are independent experiments and must not delay a compliant baseline with an unbounded rewrite. Estimates are planning ranges, not schedule promises.
 
+### 0.4 Progress log (updated when a package merges)
+
+Every package is implemented on its own branch, reviewed by at least one agent from a different model family than its implementer, and merged into `feature/interactive-viewer` only after every finding is fixed. Checkboxes below in each section are ticked only for merged work.
+
+| Package | State (2026-10-10) |
+|---|---|
+| S0.1 contracts, S0.2 fixtures, S0.3 harness scaffold | merged |
+| S2.1 order/visibility/axes, S2.2 scroll window, S2.4 sheet zoom model (UI wiring open) | merged |
+| S8.1 typed filters, date lowering | implemented; two reviews requested changes; fixes in progress |
+| S7.2 pure sort engine | implemented; one review approved with fixes, fixes applied; second-family review in progress |
+| S1.1 streaming ZIP/XML | design spike in progress (no production code yet) |
+| S3.1/S3.2 structural index and operation guard (pure parts) | not started (first attempt lost to an agent endpoint failure) |
+| S1.2, S1.3, S2.3, S4, S5, S6, S7.1, S8.2, S8.3, S9, S10, S11/S12 status, S13 | not started |
+
 ## S0 — Freeze contracts, counterexamples and fixture/harness infrastructure
 
 ### S0.1 Coordinate/source/view contracts
 
+> **Status (2026-10-10): done.** Merged into `feature/interactive-viewer` (codex implementation; three review rounds by Claude and opencode; every finding fixed). Review follow-ups recorded below in S1.2 and S4.1.
+
 **Files:** create `src/xlsx/view/coordinates.ts`, `contracts.ts`; test `tests/xlsx-viewer-contracts.test.ts`; narrowly extend `src/xlsx/types.ts` only for additive metadata/source descriptors.
 
-- [ ] RED: add boundaries for A1, XFD1048576, row 16385, XFE1, row 1048577, negative/fractional/NaN/Infinity coordinates, malicious dimensions and a declared full extent with one populated cell. Pin zero-based row/column identity and maximum cell ID. Include row boundaries 16,384/16,385/131,072/262,144/1,048,575 and column boundaries 4,095/4,096/16,383: row 131,072 crosses signed 2^31 and row 262,144 crosses 2^32 under forbidden packing.
-- [ ] Run `bunx vitest run tests/xlsx-viewer-contracts.test.ts`; expected assertion failure for an invalid accepted coordinate or aliased ID, not only missing symbols.
-- [ ] GREEN: implement finite safe-integer domain checks, address parsing/formatting and `cellId = row * 16384 + col`. Do not use 32-bit shifts, `row << 14`, bitwise `|0`, or pack the total ID into Uint32. Carry row in Uint32 and col in Uint16; maximum ID is 17,179,869,183 and remains a safe JS Number.
-- [ ] Freeze `SourceStore`, `OverviewQuery`/`OverviewDomain`/`OverviewGroup`, read status (`known value`, `known blank`, `pending/unknown`, `error`), `RowOrder`, `RowVisibility`, `AxisMetrics`, `ScrollWindow`, structural results, cancellable requests and cache/session IDs. Define pending as distinct from blank, including sort/filter/count eligibility. `queryOverview` is mandatory and source-space only: domains carry groupId, exact `CompactSourceRowSet` and column intervals; raw responses carry source-owned count/countKind/style/content and no viewport bounds. Freeze maxGroups≤2048 desktop/≤1024 mobile, bounded resident membership handles, cancellation/cursor/source-stamp validity and terminal complete/resource/error outcomes. Never replace disjoint rows with their enclosing rectangle, sample text as complete, or keep a complete source indefinitely loading.
-- [ ] Run the focused command and `bunx tsc --noEmit`; expected all contract assertions pass and additive types compile without changing existing format consumers.
-- [ ] Deliver a reviewed contract PR with versioned DTO examples and paths; no returning-identity sort/filter stubs are considered completed engines.
+- [x] RED: add boundaries for A1, XFD1048576, row 16385, XFE1, row 1048577, negative/fractional/NaN/Infinity coordinates, malicious dimensions and a declared full extent with one populated cell. Pin zero-based row/column identity and maximum cell ID. Include row boundaries 16,384/16,385/131,072/262,144/1,048,575 and column boundaries 4,095/4,096/16,383: row 131,072 crosses signed 2^31 and row 262,144 crosses 2^32 under forbidden packing.
+- [x] Run `bunx vitest run tests/xlsx-viewer-contracts.test.ts`; expected assertion failure for an invalid accepted coordinate or aliased ID, not only missing symbols.
+- [x] GREEN: implement finite safe-integer domain checks, address parsing/formatting and `cellId = row * 16384 + col`. Do not use 32-bit shifts, `row << 14`, bitwise `|0`, or pack the total ID into Uint32. Carry row in Uint32 and col in Uint16; maximum ID is 17,179,869,183 and remains a safe JS Number.
+- [x] Freeze `SourceStore`, `OverviewQuery`/`OverviewDomain`/`OverviewGroup`, read status (`known value`, `known blank`, `pending/unknown`, `error`), `RowOrder`, `RowVisibility`, `AxisMetrics`, `ScrollWindow`, structural results, cancellable requests and cache/session IDs. Define pending as distinct from blank, including sort/filter/count eligibility. `queryOverview` is mandatory and source-space only: domains carry groupId, exact `CompactSourceRowSet` and column intervals; raw responses carry source-owned count/countKind/style/content and no viewport bounds. Freeze maxGroups≤2048 desktop/≤1024 mobile, bounded resident membership handles, cancellation/cursor/source-stamp validity and terminal complete/resource/error outcomes. Never replace disjoint rows with their enclosing rectangle, sample text as complete, or keep a complete source indefinitely loading.
+- [x] Run the focused command and `bunx tsc --noEmit`; expected all contract assertions pass and additive types compile without changing existing format consumers.
+- [x] Deliver a reviewed contract PR with versioned DTO examples and paths; no returning-identity sort/filter stubs are considered completed engines.
 
 Meaningful boundary assertion to preserve:
 
@@ -109,25 +125,29 @@ expect(await source.readCell({ row: 1_048_575, col: 16_383 }, readOptions)).toMa
 
 ### S0.2 Deterministic fixture family
 
+> **Status (2026-10-10): done.** Merged (opencode implementation; three review rounds by Claude; every finding fixed). The `it.todo` for `source.readCell` in the contracts test is satisfied in `tests/xlsx-viewer-fixtures.test.ts`.
+
 **Files:** create `tests/helpers/xlsx-viewer-fixtures.ts`, `tests/fixtures/xlsx-viewer/manifest.json`; generated small native packages under `tests/fixtures/xlsx-viewer/`; test `tests/xlsx-viewer-fixtures.test.ts`.
 
-- [ ] RED: assert builder output domain, populated count, key checksums, formula/error/style metadata and repeatability. A full-capacity synthetic provider must report every cell readable while generating values by coordinates and materializing only requested pages.
-- [ ] Run `bunx vitest run tests/xlsx-viewer-fixtures.test.ts`; expected fixture metadata/checksum assertions fail on deliberately incomplete fixture builders.
-- [ ] GREEN: implement these deterministic families (names per specification §12.5): F1 corner (full extent, 100k NNZ, edge XFD1048576 and legacy-cap row), F2 tall (1,048,576×8 numeric/mixed columns), F3 wide (dense 256×16,384 true XLSX = 4,194,304 populated records; separate sparse-wide variant), F4 string domain (1M unique natural-sort strings, accented/case/lone-surrogate examples), F5 structural (giant merge/style intervals/spill child/drawing below band), F6 full-axis synthetic (synthetic fully populated 1,048,576×16,384 provider, geometry/window queries only), F7 view stress (many max-dimension sparse sheets, equal local revisions, eight-key sorts, slow jobs, variable/tiny dimensions/zoom/DPR, fonts/assets), F8 compatibility (cache/error/date/table/Unicode parity).
-- [ ] Keep committed binary fixtures small. Generate tall/text/wide packages from deterministic seeds into a declared temporary output directory. Record encoded/uncompressed bytes, NNZ, row/column bounds, seed, source hash and expected query hashes in the manifest. Do not allocate `rows × cols` during generation.
-- [ ] Run the focused suite; expected no giant in-memory workbook, F6 only requests bounded windows, generated/package and adapter queries agree.
-- [ ] Deliver builders reusable by units, browser scripts, native comparison and both backend experiments; document native fixture provenance and permission-free local generation. F2 and F3 benchmarks require generated true XLSX input, not only an arithmetic provider. Fixture IDs F1–F8 are the single canonical names from the specification catalog (§12.5); the manifest, harness flags and tests use only these IDs.
+- [x] RED: assert builder output domain, populated count, key checksums, formula/error/style metadata and repeatability. A full-capacity synthetic provider must report every cell readable while generating values by coordinates and materializing only requested pages.
+- [x] Run `bunx vitest run tests/xlsx-viewer-fixtures.test.ts`; expected fixture metadata/checksum assertions fail on deliberately incomplete fixture builders.
+- [x] GREEN: implement these deterministic families (names per specification §12.5): F1 corner (full extent, 100k NNZ, edge XFD1048576 and legacy-cap row), F2 tall (1,048,576×8 numeric/mixed columns), F3 wide (dense 256×16,384 true XLSX = 4,194,304 populated records; separate sparse-wide variant), F4 string domain (1M unique natural-sort strings, accented/case/lone-surrogate examples), F5 structural (giant merge/style intervals/spill child/drawing below band), F6 full-axis synthetic (synthetic fully populated 1,048,576×16,384 provider, geometry/window queries only), F7 view stress (many max-dimension sparse sheets, equal local revisions, eight-key sorts, slow jobs, variable/tiny dimensions/zoom/DPR, fonts/assets), F8 compatibility (cache/error/date/table/Unicode parity).
+- [x] Keep committed binary fixtures small. Generate tall/text/wide packages from deterministic seeds into a declared temporary output directory. Record encoded/uncompressed bytes, NNZ, row/column bounds, seed, source hash and expected query hashes in the manifest. Do not allocate `rows × cols` during generation.
+- [x] Run the focused suite; expected no giant in-memory workbook, F6 only requests bounded windows, generated/package and adapter queries agree.
+- [x] Deliver builders reusable by units, browser scripts, native comparison and both backend experiments; document native fixture provenance and permission-free local generation. F2 and F3 benchmarks require generated true XLSX input, not only an arithmetic provider. Fixture IDs F1–F8 are the single canonical names from the specification catalog (§12.5); the manifest, harness flags and tests use only these IDs.
 
 ### S0.3 Real-browser harness and performance result schema
 
+> **Status (2026-10-10): done as a scaffold.** Merged (pi/Claude/opencode implementation, Claude reviews over three rounds, all findings fixed). Corner-navigation remains `test.fixme` until S5; `--mode release` is refused until real fixtures flow through the viewer (`REAL_FIXTURES_AVAILABLE` in `scripts/harness/args.ts`). No viewer SLA is claimed.
+
 **Files:** create `playwright.viewer.config.ts`, `tests/browser/interactive-viewer.spec.ts`, `src/debug/interactive-viewer.html`, `src/debug/interactive-viewer.tsx`, `scripts/bench-interactive-viewer.ts`; modify `package.json` and `bun.lock` in the execution PR.
 
-- [ ] RED: harness smoke scenario opens a source fixture and asks for corner navigation, keyboard input acknowledgement and a structured result; expected missing interactive path or result fields fail. Unit harness tests may check accounting, never timing SLA values.
-- [ ] Add explicit dev dependency through `bun add -d @playwright/test` in this future work package; record the resolved version in the lockfile. Install only required engines with `bunx playwright install chromium webkit`. Safari and iPad results still require actual Safari/device runs; Playwright WebKit is not relabeled Safari.
-- [ ] GREEN: implement fixture loading, deterministic clock, input markers, frame/present markers, long-task collection, application allocation ledger and JSON/CSV artifacts. Browser-produced event/layout metrics remain separate from Bun/model microbenchmarks.
-- [ ] Implement CLI flags for `--browser chromium|webkit|safari-manual`, `--profile desktop|mobile`, `--fixture`, `--repeat`, `--output`, `--mode smoke|release`, `--baseline`, and manual-device server flags `--serve --port 4173`. Manual-device mode serves the same deterministic harness, emits a LAN/local URL, and ingests/export-verifies device result JSON without relabeling emulation as physical evidence. Record hardware, OS, browser/build, DPR, viewport, font resolution, cache/cold state, source bytes and backend.
-- [ ] Run `bunx playwright test --config playwright.viewer.config.ts --grep 'harness smoke'` and `bun scripts/bench-interactive-viewer.ts --browser chromium --profile desktop --fixture F1 --repeat 3 --mode smoke --output /tmp/officeview-viewer-smoke`; expected harness works and emits complete measured fields, with unsupported metrics labeled unavailable rather than zero.
-- [ ] Deliver a runnable harness scaffold and device-run instructions. Do not claim any full viewer SLA passed from this scaffold.
+- [x] RED (corner-navigation scenario is `test.fixme` until S5; the harness smoke itself is green): harness smoke scenario opens a source fixture and asks for corner navigation, keyboard input acknowledgement and a structured result; expected missing interactive path or result fields fail. Unit harness tests may check accounting, never timing SLA values.
+- [x] Add explicit dev dependency through `bun add -d @playwright/test` in this future work package; record the resolved version in the lockfile. Install only required engines with `bunx playwright install chromium webkit`. Safari and iPad results still require actual Safari/device runs; Playwright WebKit is not relabeled Safari.
+- [x] GREEN: implement fixture loading, deterministic clock, input markers, frame/present markers, long-task collection, application allocation ledger and JSON/CSV artifacts. Browser-produced event/layout metrics remain separate from Bun/model microbenchmarks.
+- [x] Implement CLI flags for `--browser chromium|webkit|safari-manual`, `--profile desktop|mobile`, `--fixture`, `--repeat`, `--output`, `--mode smoke|release`, `--baseline`, and manual-device server flags `--serve --port 4173`. Manual-device mode serves the same deterministic harness, emits a LAN/local URL, and ingests/export-verifies device result JSON without relabeling emulation as physical evidence. Record hardware, OS, browser/build, DPR, viewport, font resolution, cache/cold state, source bytes and backend.
+- [x] Run `bunx playwright test --config playwright.viewer.config.ts --grep 'harness smoke'` and `bun scripts/bench-interactive-viewer.ts --browser chromium --profile desktop --fixture F1 --repeat 3 --mode smoke --output /tmp/officeview-viewer-smoke`; expected harness works and emits complete measured fields, with unsupported metrics labeled unavailable rather than zero.
+- [x] Deliver a runnable harness scaffold and device-run instructions. Do not claim any full viewer SLA passed from this scaffold.
 
 ## S1 — Mandatory bounded import, source access and value fidelity
 
@@ -189,25 +209,29 @@ expect(await source.readCell({ row: 1_048_575, col: 16_383 }, readOptions)).toMa
 
 ### S2.1 Order, visibility and axis data structures
 
+> **Status (2026-10-10): done.** Merged (codex implementation; reviews by Claude and opencode; every finding fixed). Typed `AxisMetricsError` mapping to diagnosed fallbacks is tracked in S2.3.
+
 **Files:** create `src/xlsx/view/order.ts`, `visibility.ts`, `axes.ts`, `projection.ts`; test `tests/xlsx-viewer-projection.test.ts`, `tests/xlsx-viewer-axes.test.ts`.
 
-- [ ] RED: construct full row/column capacity without row/cell objects, row 16385 and XFD widths, hidden row/column intervals, default dimension overrides across whole axes, a 1M-row sorted band and all-body-hidden rank/select. Assert identity outside a sorted band and invert source↔display slot exactly.
-- [ ] Run `bunx vitest run tests/xlsx-viewer-projection.test.ts tests/xlsx-viewer-axes.test.ts`; expected wrong mapping, overflow or object allocation assertions fail.
-- [ ] GREEN: implement lazy identity `RowOrder`; allocate a Uint32 permutation/inverse only for a reordered band. Compact bitsets/rank/select govern visibility and pinned rows. Store width/height defaults plus sparse interval overlays and Float64 prefix/segment navigation; no object per blank row/cell and no per-cell merge expansion.
-- [ ] Define source row, display slot and visible rank distinctly. Worksheet row labels use display slot +1, never visible rank +1; body ARIA row indices use display slot +2 and body column indices use sourceCol +2 because header chrome occupies semantic row1/col1 (S6.2); hit testing uses visible rank→display slot→source. Source dimensions move with reordered source rows. Collapsed rows/cols have zero extent and produce no text/layout records.
-- [ ] Implement one body-only visibility predicate: filter body excludes protected header/totals; protected/outside rows retain base snapshot visibility; matching authored-hidden body may reveal; range replacement recomputes from base; Clear restores the snapshot exactly.
-- [ ] Run focused suites; expected full capacity/roundtrip and body/header/totals cases pass, identity construction has no million-object allocation and prefix precision remains stable at the edge. For explicit full-band accounting, row order+inverse≈8MiB, Float64 prefix≈8MiB, Float64 height lane≈8MiB, one visibility mask≈128KiB; all scratch lanes and up-to-eight numeric key lanes are charged, never treated as free.
-- [ ] Deliver projection-only PR with allocation ledger and unit complexity invariants (query visits counts), no UI wiring.
+- [x] RED: construct full row/column capacity without row/cell objects, row 16385 and XFD widths, hidden row/column intervals, default dimension overrides across whole axes, a 1M-row sorted band and all-body-hidden rank/select. Assert identity outside a sorted band and invert source↔display slot exactly.
+- [x] Run `bunx vitest run tests/xlsx-viewer-projection.test.ts tests/xlsx-viewer-axes.test.ts`; expected wrong mapping, overflow or object allocation assertions fail.
+- [x] GREEN: implement lazy identity `RowOrder`; allocate a Uint32 permutation/inverse only for a reordered band. Compact bitsets/rank/select govern visibility and pinned rows. Store width/height defaults plus sparse interval overlays and Float64 prefix/segment navigation; no object per blank row/cell and no per-cell merge expansion.
+- [x] Define source row, display slot and visible rank distinctly. Worksheet row labels use display slot +1, never visible rank +1; body ARIA row indices use display slot +2 and body column indices use sourceCol +2 because header chrome occupies semantic row1/col1 (S6.2); hit testing uses visible rank→display slot→source. Source dimensions move with reordered source rows. Collapsed rows/cols have zero extent and produce no text/layout records.
+- [x] Implement one body-only visibility predicate: filter body excludes protected header/totals; protected/outside rows retain base snapshot visibility; matching authored-hidden body may reveal; range replacement recomputes from base; Clear restores the snapshot exactly.
+- [x] Run focused suites; expected full capacity/roundtrip and body/header/totals cases pass, identity construction has no million-object allocation and prefix precision remains stable at the edge. For explicit full-band accounting, row order+inverse≈8MiB, Float64 prefix≈8MiB, Float64 height lane≈8MiB, one visibility mask≈128KiB; all scratch lanes and up-to-eight numeric key lanes are charged, never treated as free.
+- [x] Deliver projection-only PR with allocation ledger and unit complexity invariants (query visits counts), no UI wiring.
 
 ### S2.2 Bounded scroll window and navigation math
 
+> **Status (2026-10-10): done.** Merged with S2.4 (codex implementation; reviews by opencode and Claude; every finding fixed).
+
 **Files:** create `src/xlsx/view/scrollWindow.ts`; test `tests/xlsx-viewer-scroll-window.test.ts`.
 
-- [ ] RED: navigate directly to XFD1048576, recenter across both axis window edges, `SheetZoom` (S2.4)/DPR changes (25%/200%/400% and fractional zoom), hidden zero-height runs, giant custom intervals and offsets near the end. Assert physical scroll surface, including wide default 64px columns and applied zoom, never exceeds 1,000,000 CSS pixels per axis and logical coordinates never jump after recentering.
-- [ ] Run `bunx vitest run tests/xlsx-viewer-scroll-window.test.ts`; expected unbounded surface or rounding/recenter mismatch fails.
-- [ ] GREEN: implement Float64 logical offsets plus local physical scroll offset, segment recentering and viewport anchor preservation. Coordinate navigation, keyboard navigation and programmatic find use the same navigator; do not depend on browser maximum scrollHeight/width. UI Go To defaults to a displayed address (row display slot→source via RowOrder); explicit Original cell navigation and source-coordinate API accept SourceCell and map through inverse order. Formula/search refs remain source identities. Add order [0,2,1] with no header: Go To A2 resolves source A3; Original A2 resolves displayed A3. An exact hidden target opens the read-only value inspector with hidden reason without unhiding or creating an invalid grid active descendant; existing nearest-visible/null grid active state remains valid.
-- [ ] Run focused command; expected exact source hit tests at first/last cells before/after recentering, clamped legal edges, preserved zoom anchor and no allocation proportional to `R×C`.
-- [ ] Deliver scroll math independently; browser scroll integration is S5/S6 after resident sessions.
+- [x] RED: navigate directly to XFD1048576, recenter across both axis window edges, `SheetZoom` (S2.4)/DPR changes (25%/200%/400% and fractional zoom), hidden zero-height runs, giant custom intervals and offsets near the end. Assert physical scroll surface, including wide default 64px columns and applied zoom, never exceeds 1,000,000 CSS pixels per axis and logical coordinates never jump after recentering.
+- [x] Run `bunx vitest run tests/xlsx-viewer-scroll-window.test.ts`; expected unbounded surface or rounding/recenter mismatch fails.
+- [x] GREEN: implement Float64 logical offsets plus local physical scroll offset, segment recentering and viewport anchor preservation. Coordinate navigation, keyboard navigation and programmatic find use the same navigator; do not depend on browser maximum scrollHeight/width. UI Go To defaults to a displayed address (row display slot→source via RowOrder); explicit Original cell navigation and source-coordinate API accept SourceCell and map through inverse order. Formula/search refs remain source identities. Add order [0,2,1] with no header: Go To A2 resolves source A3; Original A2 resolves displayed A3. An exact hidden target opens the read-only value inspector with hidden reason without unhiding or creating an invalid grid active descendant; existing nearest-visible/null grid active state remains valid.
+- [x] Run focused command; expected exact source hit tests at first/last cells before/after recentering, clamped legal edges, preserved zoom anchor and no allocation proportional to `R×C`.
+- [x] Deliver scroll math independently; browser scroll integration is S5/S6 after resident sessions.
 
 ### S2.3 Remove cap aliasing from interactive path; explicit static budgets
 
@@ -223,16 +247,18 @@ expect(await source.readCell({ row: 1_048_575, col: 16_383 }, readOptions)).toMa
 
 ### S2.4 Sheet scale/zoom model and legacy-path isolation
 
+> **Status (2026-10-10): model done, UI wiring open.** The pure sheet-zoom model, retained per-sheet store and `ScrollWindow` integration are merged; the `OfficeDoc.tsx` mode switch behind the flag, the §11.1 detail-admission wiring (S5.1) and the corpus gates for the flag-off path remain unchecked below.
+
 **Files:** create `src/xlsx/view/sheetZoom.ts`; integrate `src/components/OfficeDoc.tsx` behind the interactive feature flag; reuse `src/core/zoom.ts` read-only; test `tests/xlsx-viewer-sheet-zoom.test.ts`, extend `tests/officeview-zoom.test.tsx`.
 
-- [ ] RED: encode spec §5.5 and AC-VIEW-04. `SHEET_MIN_ZOOM = 0.25`, `SHEET_MAX_ZOOM = 4`, initial `1.0`, absolute CSS scale (not relative to container width). A 1000px-wide sheet in a 375px container stays at 100% and scrolls horizontally in sheet mode. Pinch/Ctrl+wheel/keyboard zoom keeps the pointer/viewport anchor through `ScrollWindow`. Per-sheet zoom survives sheet switches and sort/filter and resets only on document replacement. With the flag off, gestures and ordinary admitted unhidden-sheet rendering are byte-identical to the baseline. Preserve the S2.3 named authored-hidden golden exception and explicit oversized static-output failures; the flag does not suppress those required correctness fixes. Pin that `MIN_ZOOM === 1` and `MAX_ZOOM === 6` and every DOCX/PPTX/legacy-XLSX gesture are unchanged.
-- [ ] Run `bunx vitest run tests/xlsx-viewer-sheet-zoom.test.ts tests/officeview-zoom.test.tsx`; expected the sheet-mode assertions fail while the page-document assertions already pass.
+- [x] RED: encode spec §5.5 and AC-VIEW-04. `SHEET_MIN_ZOOM = 0.25`, `SHEET_MAX_ZOOM = 4`, initial `1.0`, absolute CSS scale (not relative to container width). A 1000px-wide sheet in a 375px container stays at 100% and scrolls horizontally in sheet mode. Pinch/Ctrl+wheel/keyboard zoom keeps the pointer/viewport anchor through `ScrollWindow`. Per-sheet zoom survives sheet switches and sort/filter and resets only on document replacement. With the flag off, gestures and ordinary admitted unhidden-sheet rendering are byte-identical to the baseline. Preserve the S2.3 named authored-hidden golden exception and explicit oversized static-output failures; the flag does not suppress those required correctness fixes. Pin that `MIN_ZOOM === 1` and `MAX_ZOOM === 6` and every DOCX/PPTX/legacy-XLSX gesture are unchanged.
+- [x] Run `bunx vitest run tests/xlsx-viewer-sheet-zoom.test.ts tests/officeview-zoom.test.tsx`; expected the sheet-mode assertions fail while the page-document assertions already pass.
 - [ ] GREEN: implement sheet zoom as a scalar next to `ScrollWindow`, not as the translate/scale pan transform.
-  - [ ] Clamp with `clampZoom(z, SHEET_MIN_ZOOM, SHEET_MAX_ZOOM)`; do not share helpers that hard-code `MIN_ZOOM` (for example pan clamping at `z <= MIN_ZOOM`).
+  - [x] Clamp with `clampZoom(z, SHEET_MIN_ZOOM, SHEET_MAX_ZOOM)`; do not share helpers that hard-code `MIN_ZOOM` (for example pan clamping at `z <= MIN_ZOOM`).
   - [ ] Add a mode switch in `OfficeDoc.tsx` selecting sheet mode only for XLSX with the interactive flag on; the flag defaults off until S13.
   - [ ] Feed `SheetZoom × DPR` to the §11.1 detail-admission math.
 - [ ] Run focused command plus `bunx vitest run tests/officeview-selection.test.tsx tests/xlsx-viewport.test.ts` and standard corpus gates; expected ordinary admitted unhidden-sheet flag-off goldens remain unchanged; only the S2.3 named source-evidenced authored-hidden corrections may move, and oversized-output admission returns an explicit resource error.
-- [ ] Deliver the scale model as a small, independent PR before S5.2 wires real scrolling.
+- [x] Deliver the scale model as a small, independent PR before S5.2 wires real scrolling.
 
 ## S3 — Shared structural range index and refusal policy
 
