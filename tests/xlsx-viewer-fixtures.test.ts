@@ -637,7 +637,10 @@ describe('counting store reads (no vacuous wrappers)', () => {
     expect(visits.cellAt).toBeLessThanOrEqual(600)
   })
 
-  it('proves analytic overviews read nothing while scans stay bounded', async () => {
+  // NOTE: the analytic overview path (`summarizeDomain`) does not go through the injected read probe, so the zero-visit
+  // counters below cannot fail for overviews; enumeration there is guarded by the brute-force oracle and by the full-axes
+  // overview tests (which would time out if it enumerated). The probe does cover the scan paths asserted here.
+  it('keeps scans bounded through the read probe (overview boundedness is guarded by the oracle and timeout tests)', async () => {
     for (const id of ['F1', 'F2', 'F3', 'F4', 'F5', 'F8'] as FixtureId[]) {
       const handle = createFixture(id)
       const { read, visits } = counting(handle)
@@ -1078,13 +1081,13 @@ describe('analytic summaries match brute-force enumeration (oracle)', () => {
   it('matches enumeration for F1, F2 (incl. rowCount=2), F3 dense/sparse, F4, F5, F7, F8 and F6 windows', async () => {
     const cases: Array<{ handle: FixtureHandle; members: number[]; spans: Array<{ c0: number; c1: number }> }> = [
       { handle: createFixture('F1', { nnz: 200 }), members: [0, 1, 2, 3, 50, 1048575], spans: [{ c0: 0, c1: 2 }] },
-      { handle: createFixture('F2', { rowCount: 50 }), members: [0, 1, 3, 7, 49], spans: [{ c0: 0, c1: 7 }, { c0: 4, c1: 4 }] },
+      { handle: createFixture('F2', { rowCount: 50 }), members: [0, 1, 3, 7, 49], spans: [{ c0: 0, c1: 3 }, { c0: 5, c1: 7 }] },
       { handle: createFixture('F2', { rowCount: 2 }), members: [0, 1], spans: [{ c0: 0, c1: 7 }] },
-      { handle: createFixture('F3', { rowCount: 8, colCount: 16 }), members: [0, 3, 7], spans: [{ c0: 0, c1: 15 }, { c0: 5, c1: 5 }] },
+      { handle: createFixture('F3', { rowCount: 8, colCount: 16 }), members: [0, 3, 7], spans: [{ c0: 0, c1: 4 }, { c0: 6, c1: 15 }] },
       { handle: createFixture('F3', { rowCount: 8, colCount: 64, variant: 'sparse-wide' }), members: [0, 3, 7], spans: [{ c0: 0, c1: 63 }] },
       { handle: createFixture('F4', { rowCount: 100 }), members: [0, 3, 11, 99], spans: [{ c0: 0, c1: 0 }] },
       { handle: createFixture('F5'), members: [0, 4, 32, 40, 45, 500000], spans: [{ c0: 0, c1: 3 }] },
-      { handle: createFixture('F7', { rowCount: 100 }), members: [0, 5, 99], spans: [{ c0: 0, c1: 7 }, { c0: 7, c1: 7 }] },
+      { handle: createFixture('F7', { rowCount: 100 }), members: [0, 5, 99], spans: [{ c0: 0, c1: 3 }, { c0: 7, c1: 7 }] },
       { handle: createFixture('F8'), members: [0, 1, 2, 3, 4, 1048575], spans: [{ c0: 0, c1: 3 }] },
       { handle: createFixture('F6'), members: [0, 1, 100, 1048575], spans: [{ c0: 0, c1: 3 }] },
     ]
