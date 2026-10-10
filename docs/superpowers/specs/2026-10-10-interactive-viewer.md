@@ -49,7 +49,7 @@ Rules:
 ### 4.2 Rendering integration
 
 - **Headers are DOM, not canvas.** The grid canvas paints no headers today (A1 starts at 0,0) and stays that way: a sticky DOM strip (column letters + row numbers as real `<button>`s) overlays the sheet, synced to scroll/zoom transforms. All header interactions live in the strips — the funnel and sort buttons sit inside letter-strip cells, never on data row 1, which stays ordinary data. Rationale: zero canvas geometry shift (corpus goldens for default views stay byte-identical), native hit-testing, and free keyboard/ARIA semantics. Consequence for v2: freeze panes extends the same sticky-strip mechanism rather than requiring canvas surgery. (The strips themselves are sticky; only data-row freezing is v2 — see divergence #5.)
-- **Metrics carry the view; `renderSheet` keeps its signature.** `computeMetrics` gains an optional view input and emits `rowOrder: number[]` (display sequence of source row indices, hidden and filtered rows included at 0 height) plus prefix sums over visible spans only. The paint loop iterates `rowOrder` instead of `sheet.rows` and skips 0-height spans through the existing zero-span machinery — no signature change, no new positional params.
+- **Metrics carry the view; `renderSheet` keeps its signature.** `computeMetrics` gains an optional view input and emits `rowOrder: number[]` (display sequence of source row indices, hidden and filtered rows included at 0 height) plus prefix sums over visible spans only. The paint loop iterates `rowOrder` instead of `sheet.rows`, and Phase A adds an explicit 0-height text skip (verified: no such skip exists today — `fillText` is unguarded, so collapsed rows would otherwise still paint text) — no signature change, no new positional params.
 - **Merges stay source-space.** Merge ranges are authored in source coordinates; sort refuses ranges intersecting merges (diagnostic, §5.3), and filtered-hidden rows flow through the existing hidden-interval merge math because filtered rows keep 0-height entries rather than vanishing. (This is why `filteredOut` rows remain in `order` instead of being removed.)
 - **Hidden fix (Phase A prerequisite).** Verified: hidden rows/cols collapse only when the sheet has drawings (`drawing` flag in `computeMetrics`). The view-aware path honors hidden unconditionally. Golden rule restated honestly: movement is expected *only* on authored-hidden sheets, reviewed against source evidence; every other sheet must stay byte-identical. The Phase A metrics-identity test must therefore use sheets with no authored hidden rows, or it contradicts the fix in the same phase.
 - Popups (filter dropdown, sort dialog) are **DOM**, anchored to canvas coordinates (same pattern as the existing search bar), so native menus, listboxes, and screen readers work without reimplementing them on canvas.
@@ -100,7 +100,7 @@ interface SortSpec {
 | error | stable group immediately before blanks, ordered by error-code string (documented approximation) |
 | mixed | number < string < boolean < error < blank (documented order) |
 
-Sort is **stable** (source-index tiebreak). Sort keys apply left-to-right; rows outside `range` never move. Hidden rows (authored or filtered-out) stay pinned at fixed display positions while visible rows permute around them; `applySort` tests pin interleavings. Only currently **visible** rows within the sort range are permuted; hidden rows (filtered-out or authored) stay pinned — the predictable viewer rule, flagged as a possible Excel divergence to confirm in review.
+Sort is **stable** (source-index tiebreak). Sort keys apply left-to-right; rows outside `range` never move. Only currently **visible** rows within the sort range are permuted; hidden rows (filtered-out or authored) stay pinned at fixed display positions while visible rows permute around them — the predictable viewer rule, flagged as a possible Excel divergence to confirm in review; `applySort` tests pin interleavings.
 
 ### 5.3 Interactions and click zones (disambiguated)
 
@@ -130,9 +130,13 @@ type FilterOp =
   | 'begins' | 'ends' | 'contains' | 'not-contains'                 // text (wildcards *? in custom builder)
   | 'before' | 'after'                                              // dates (same serial engine, date UI)
   | 'topN';                                                        // v2 (diagnosed in v1)
+
+// Shared ops dispatch by operand type per the §6.3 type-checking rule:
+// text eq never matches numbers, numeric ops never match text;
+// before/after evaluate date serials, between takes same-typed bounds.
 interface ValueFilter { kind: 'values'; selected: string[]; showBlanks: boolean }
 interface ConditionFilter { kind: 'condition'; op: FilterOp; v1: FilterValue; v2?: FilterValue }
-interface RangeRef { r0: number; r1: number; c0: number; c1: number; headerRow: boolean }
+interface RangeRef { r0: number; r1: number; c0: number; c1: number; headerRow: boolean }  // headerRow is always true for v1 filters; carried for v2 ranges without headers
 interface FilterSpec {
   range: RangeRef;                       // header row = range top row
   columns: Record<number, ValueFilter | ConditionFilter>;  // at most one rule per column (Excel semantics)
@@ -150,7 +154,7 @@ Per-column button in the letter strip opens a DOM popup, top to bottom:
 2. Condition submenu by detected column type: text (equals, does-not-equal, begins-with, ends-with, contains, does-not-contain), number (=, ≠, >, ≥, <, ≤, between), date (=, before, after, between + fixed preset subset: today/yesterday/tomorrow/this-week/this-month/this-year — full dynamic list is v2).
 3. Custom filter (two conditions + And/Or + wildcards `*?`) — v1 includes the two-condition builder; it is the only multi-condition surface.
 4. Search box + Select-All + scrollable value checkbox list (cap 10k uniques like Excel, inline "showing first 10,000" note + diagnostic past it) + explicit `(Blanks)` row.
-5. OK / Cancel. Esc cancels (focus returns to the funnel button — no trap in dropdowns), Enter applies.
+5. OK / Cancel. Esc cancels (focus returns to the funnel button — no trap in dropdowns), Enter applies. All cell-derived text (value rows, tooltips, status counts) renders via `textContent`, never `innerHTML` — the file is the attacker here.
 
 Deferred to v2 with diagnostics where declared: Top-10, Above/Below Average, fill/font color filters.
 
@@ -167,13 +171,13 @@ Deferred to v2 with diagnostics where declared: Top-10, Above/Below Average, fil
 Sheets in this repo diagnose silently by design — but refusals and caps need a visible surface, so v1 defines exactly one: the **status line** (already planned for "N of M records", `aria-live="polite"`), plus inline notes at the point of action (dropdown list footer, dialog note) and the retained diagnostics array for audit. No toasts or modals in v1 (no such infrastructure; honest scope). Concretely: merge-refusal → status message + no state change; caps → inline note + status message; applying a filter over another range **replaces it with a status note**; dropdown/dialog diagnostics mirror into the array.
 
 - Letter-strip button shows funnel glyph when its column is filtered (arrow otherwise) with hover tooltips naming the rule; tap shows the same text in the status line (no-hover mobile rule).
-- Status counts are pinned: N = visible body rows in the filter range, M = total body rows in it; with no active filter the line shows "M records"; the line is always present when the sheet has rows.
+- Status counts are pinned: N = visible body rows in the filter range, M = total body rows in it; with no active filter there is no filter range, so M falls back to used-range rows and the line shows "M records"; the line is always present when the sheet has rows.
 - Hidden rows reuse the collapsed-height path (§4.2); authored-hidden rows stay hidden independently.
 - One filter range per sheet (Excel rule).
 
 ### 6.5 Type detection per column
 
-A column is date-typed iff every non-blank value is a date serial **and** at least one such cell is date-formatted; numeric iff every non-blank value is numeric (otherwise); else text. Mixed columns get text conditions plus the value list. Value-key date tagging follows the same classification (serial keys only in date-typed columns). Detection result is shown in the dropdown subtitle ("Text filters").
+A column is date-typed iff every non-blank value is a date serial **and** at least one such cell is date-formatted (detected via the existing format-code machinery: built-in date `numFmtId` handling in the sheet value formatter plus the shared `format.ts` grammar); numeric iff every non-blank value is numeric; else text. Mixed columns get text conditions plus the value list. Value-key date tagging follows the same classification (serial keys only in date-typed columns). Detection result is shown in the dropdown subtitle ("Text filters").
 
 ### 6.6 Declared constructs (parser scope, pinned)
 
@@ -209,7 +213,7 @@ Covered by §4.4 (selection model) and §6.2/§6.4 (dropdown/dialog patterns); s
 
 ## 10. Acceptance criteria
 
-- Unit: comparator table (§5.2) as a truth table incl. blanks/errors/mixed + error-code ordering; condition operators per type incl. wildcards/between; blanks/errors table (§6.3); AND-across-columns; stability; header detection cases; merged refusal; tagged-key dedupe (same display, different serials stay separate).
+- Unit: comparator table (§5.2) as a truth table incl. blanks/errors/mixed + error-code ordering; condition operators per type incl. wildcards/between; blanks/errors table (§6.3); AND-across-columns; stability; pinned-hidden interleavings; disjoint sort/filter ranges; 0-height text skip; status-count definitions (N/M incl. no-filter M); header detection cases; merged refusal; tagged-key dedupe (same display, different serials stay separate).
 - Component: dropdown opens/closes/applies/cancels via keyboard alone; ARIA roles present; status line counts; funnel icons appear/clear; grid arrows/focus/announcements per §4.4/§7.
 - Integration: apply filter → hidden rows collapse → metrics/paint consistent; sort → order changes, values intact; formula cells compare by computed value; corpus goldens reviewed.
 - Gates: `bunx tsc --noEmit`, `bun run build`, `bunx vitest run`, corpus diff review — the repo's standard gates, no new tooling.
