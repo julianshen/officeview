@@ -171,54 +171,48 @@ export class ReferenceTextFilterMatcher {
   }
 }
 
-// Certificate boundary: the released ICU root/search tables have one context-
-// free primary weight per printable ASCII character, common secondary weight,
-// A-Z/a-z equality, and zero weights for U+200B. No all-alphabet contractions.
-// https://github.com/unicode-org/icu/blob/release-74-2/icu4c/source/data/unidata/FractionalUCA.txt
-// https://github.com/unicode-org/icu/blob/release-78.2/icu4c/source/data/unidata/FractionalUCA.txt
-// Both releases: icu4c/source/data/coll/{root,en,en_US}.txt (root search tailoring).
-// Custom ICU data, other versions/locales, and browser hosts retain reference semantics.
-function certifiedAsciiBackend(collator: Intl.Collator): boolean {
-  try {
-    if (typeof process !== 'object' || !process) return false
-    const versions = process.versions
-    if (!versions || typeof versions !== 'object') return false
-    // This guard assumes the reported runtime uses its released, unmodified ICU data.
-    const backend = (versions.bun === '1.3.10' && versions.icu === '74.2' && versions.unicode === '15.1')
-      || (!versions.bun && versions.node === '22.22.3' && versions.icu === '78.2' && versions.cldr === '48.0' && versions.unicode === '17.0')
-    if (!backend) return false
-    const env = process.env, args = process.execArgv
-    if (!env || typeof env !== 'object' || Array.isArray(env) || !Array.isArray(args) || args.some(arg => typeof arg !== 'string')) return false
-    if (env.NODE_ICU_DATA !== undefined || env.ICU_DATA !== undefined
-      || (env.NODE_OPTIONS !== undefined && (typeof env.NODE_OPTIONS !== 'string' || env.NODE_OPTIONS.includes('--icu-data-dir')))
-      || args.some(arg => arg.startsWith('--icu-data-dir'))) return false
-    const native = (value: unknown) => typeof value === 'function' && Function.prototype.toString.call(value).includes('[native code]')
-    if (!native(Intl.Collator) || !native(collator.compare) || !native(collator.resolvedOptions)
-      || !native(Object.getOwnPropertyDescriptor(Intl.Collator.prototype, 'compare')?.get)) return false
-    const options = collator.resolvedOptions()
-    return (options.locale === 'en' || options.locale === 'en-US') && options.usage === 'search' && options.sensitivity === 'accent'
-      && !options.numeric && !options.ignorePunctuation && options.collation === 'default' && options.caseFirst === 'false'
-  } catch {
-    // Browser shims may expose partial or throwing metadata; optimization is optional.
-    return false
-  }
+/** Certificates accept the empirical, context-independent equality model for
+ * the actual alphabet, not a universal theorem about Intl. All raw pairs and
+ * relevant triples (observed adjacency, plus exhaustive triples for tiny
+ * alphabets) must agree with class concatenation and have no cross-length
+ * equality collisions. Canonical/compatibility expansions and combining-mark
+ * contexts are inconclusive. Only certified alphabets admit class-ID KMP/DP;
+ * other inputs retain the exact raw-slice reference and its explicit budget.
+ * An observed expansion factor alone cannot bound every future candidate end.
+ * In particular, ignored plateaus have unbounded raw length, and ? consumes raw
+ * code points. We therefore do not infer bounded windows for failed profiles.
+ */
+const COLLATOR_CONSTRUCTOR = Intl.Collator
+const COLLATOR_COMPARE_GETTER = Object.getOwnPropertyDescriptor(Intl.Collator.prototype, 'compare')?.get
+const MAX_ALPHABET = 40
+const MAX_PROBE_WORK = 90_000
+const MAX_PROBE_CACHE = 8192
+const MAX_PROFILES = 128
+const MAX_PROFILE_KEY = 8192
+interface AlphabetProfile { readonly classes: ReadonlyMap<string, number> }
+interface ProbeCache {
+  readonly comparisons: Map<string, number>
+  readonly profiles: Map<string, AlphabetProfile | null>
 }
-
-const CERTIFIED_ASCII = /^[\x20-\x7e\u200b]*$/
-const foldCertified = (value: string) => value.replace(/\u200b/g, '').toLowerCase()
-interface LiteralSearch { readonly text: string; readonly failure: readonly number[] }
-function prepareLiteral(text: string, budget: WorkBudget): LiteralSearch {
-  const failure = Array<number>(text.length).fill(0)
-  for (let i = 1, length = 0; i < text.length; i++) {
+const probeCaches = new Map<string, ProbeCache>()
+class InconclusiveProbe extends Error {}
+function retain<K, V>(map: Map<K, V>, key: K, value: V, maximum: number): void {
+  if (map.size >= maximum) map.delete(map.keys().next().value!)
+  map.set(key, value)
+}
+interface LiteralSearch { readonly ids: readonly number[]; readonly failure: readonly number[] }
+function prepareLiteral(ids: readonly number[], budget: WorkBudget): LiteralSearch {
+  const failure = Array<number>(ids.length).fill(0)
+  for (let i = 1, length = 0; i < ids.length; i++) {
     budget.charge(1)
-    while (length > 0 && text[i] !== text[length]) { budget.charge(1); length = failure[length - 1] }
-    if (text[i] === text[length]) length++
+    while (length > 0 && ids[i] !== ids[length]) { budget.charge(1); length = failure[length - 1] }
+    if (ids[i] === ids[length]) length++
     failure[i] = length
   }
-  return Object.freeze({ text, failure: Object.freeze(failure) })
+  return { ids, failure }
 }
-function literalOccurrences(text: string, literal: LiteralSearch, budget: WorkBudget): Uint8Array {
-  const result = new Uint8Array(text.length + 1), needle = literal.text
+function literalOccurrences(text: readonly number[], literal: LiteralSearch, budget: WorkBudget): Uint8Array {
+  const result = new Uint8Array(text.length + 1), needle = literal.ids
   if (!needle.length) { budget.charge(result.length); result.fill(1); return result }
   for (let i = 0, length = 0; i < text.length; i++) {
     budget.charge(1)
@@ -228,12 +222,125 @@ function literalOccurrences(text: string, literal: LiteralSearch, budget: WorkBu
   }
   return result
 }
-
 export class TextFilterMatcher extends ReferenceTextFilterMatcher {
-  readonly certifiedAsciiProfile: boolean
+  /** Compatibility name: reports the LAST actual alphabet, including Unicode.
+   * False before the first evaluation; no speculative constructor certificate. */
+  certifiedAsciiProfile = false
+  readonly certification = { comparisons: 0, cacheHits: 0, chargedWork: 0 }
+  private readonly ownerCompare: Intl.Collator['compare']
+  private readonly ownerOptions: Intl.Collator['resolvedOptions']
+  private readonly nativeOwner: boolean
+  private readonly config: string
   constructor(locale: string) {
     super(locale)
-    this.certifiedAsciiProfile = certifiedAsciiBackend(this.collator)
+    this.ownerCompare = this.collator.compare
+    this.ownerOptions = this.collator.resolvedOptions
+    const native = (value: unknown) => typeof value === 'function' && Function.prototype.toString.call(value).includes('[native code]')
+    this.nativeOwner = Intl.Collator === COLLATOR_CONSTRUCTOR && native(Intl.Collator)
+      && Object.getOwnPropertyDescriptor(Intl.Collator.prototype, 'compare')?.get === COLLATOR_COMPARE_GETTER
+      && native(COLLATOR_COMPARE_GETTER)
+      && native(this.ownerCompare) && native(this.ownerOptions)
+    this.config = JSON.stringify(this.collator.resolvedOptions())
+  }
+  private profile(runs: readonly string[], text: string, budget: WorkBudget): AlphabetProfile | undefined {
+    this.certifiedAsciiProfile = false
+    this.certification.comparisons = this.certification.cacheHits = this.certification.chargedWork = 0
+    if (!this.nativeOwner || Intl.Collator !== COLLATOR_CONSTRUCTOR
+      || Object.getOwnPropertyDescriptor(Intl.Collator.prototype, 'compare')?.get !== COLLATOR_COMPARE_GETTER
+      || this.collator.compare !== this.ownerCompare
+      || this.collator.resolvedOptions !== this.ownerOptions) return undefined
+    const alphabet = new Set<string>(), triples = new Set<string>()
+    for (const run of [...runs, text]) {
+      let previous = '', before = ''
+      for (const point of run) {
+        budget.charge(1)
+        alphabet.add(point)
+        if (alphabet.size > MAX_ALPHABET) return undefined
+        if (before) triples.add(before + previous + point)
+        before = previous; previous = point
+      }
+    }
+    const points = [...alphabet].sort()
+    // Combining marks/ZWJ attach across raw boundaries; expansion characters
+    // must fail even when their counterpart is absent from this alphabet.
+    if (points.some(point => /\p{M}|\u200d/u.test(point)
+      || [...point.normalize('NFKD')].filter(value => !/\p{M}/u.test(value)).length > 1
+      || [...point.toUpperCase()].length > 1)) return undefined
+    if (points.length <= 5) for (const a of points) for (const b of points) for (const c of points) triples.add(a + b + c)
+    const key = JSON.stringify([points, [...triples].sort()])
+    let cache = probeCaches.get(this.config)
+    if (!cache) {
+      cache = { comparisons: new Map(), profiles: new Map() }
+      retain(probeCaches, this.config, cache, 8)
+    }
+    if (cache.profiles.has(key)) {
+      budget.charge(1)
+      this.certification.cacheHits++
+      this.certification.chargedWork++
+      const found = cache.profiles.get(key)
+      this.certifiedAsciiProfile = Boolean(found)
+      return found ?? undefined
+    }
+    const save = (profile: AlphabetProfile | null) => {
+      // Entry counts alone would retain megabytes of unique triple keys.
+      if (key.length <= MAX_PROFILE_KEY) retain(cache.profiles, key, profile, MAX_PROFILES)
+    }
+    let probeWork = 0
+    const compare = (a: string, b: string): number => {
+      const probeKey = JSON.stringify([a, b]), found = cache.comparisons.get(probeKey)
+      const amount = found === undefined ? 1 + a.length + b.length : 1
+      if (probeWork + amount > MAX_PROBE_WORK) throw new InconclusiveProbe()
+      budget.charge(amount)
+      probeWork += amount
+      this.certification.chargedWork += amount
+      if (found !== undefined) { this.certification.cacheHits++; return found }
+      const value = this.ownerCompare(a, b)
+      this.certification.comparisons++
+      retain(cache.comparisons, probeKey, value, MAX_PROBE_CACHE)
+      return value
+    }
+    try {
+      const classes = new Map<string, number>()
+      const sorted = points.slice().sort(compare)
+      let id = 0, last: string | undefined
+      for (const point of sorted) {
+        if (compare(point, '') === 0) classes.set(point, 0)
+        else {
+          if (last === undefined || compare(last, point) !== 0) id++
+          classes.set(point, id); last = point
+        }
+      }
+      const representatives = new Map<number, string>()
+      for (const point of points) { const id = classes.get(point)!; if (id && !representatives.has(id)) representatives.set(id, point) }
+      const signature = (value: string) => [...value].map(point => classes.get(point)!).filter(id => id !== 0).join(',')
+      const candidates = new Set(['', ...points, ...triples])
+      for (const a of points) for (const b of points) candidates.add(a + b)
+      // A pair/triple equality must coincide exactly with its class sequence.
+      // Sorting makes every equality collision adjacent, without quadratic
+      // comparison of the already quadratic pair domain.
+      for (const candidate of candidates) {
+        const canonical = [...candidate].map(point => representatives.get(classes.get(point)!) ?? '').join('')
+        if (compare(candidate, canonical) !== 0) {
+          save(null)
+          return undefined
+        }
+      }
+      const ordered = [...candidates].sort(compare)
+      for (let i = 1; i < ordered.length; i++) {
+        if ((compare(ordered[i - 1], ordered[i]) === 0) !== (signature(ordered[i - 1]) === signature(ordered[i]))) {
+          save(null)
+          return undefined
+        }
+      }
+      const result = { classes }
+      save(result)
+      this.certifiedAsciiProfile = true
+      return result
+    } catch (error) {
+      if (!(error instanceof InconclusiveProbe)) throw error
+      save(null)
+      return undefined
+    }
   }
   protected prepared(op: TextOp, pattern: string, parsed: readonly Token[] | undefined, budget: WorkBudget): (text: string, budget: WorkBudget) => boolean {
     const positive = op === 'neq' ? 'eq' : op === 'not-contains' ? 'contains' : op
@@ -245,57 +352,70 @@ export class TextFilterMatcher extends ReferenceTextFilterMatcher {
         parsed = undefined
       }
     }
-    if (!this.certifiedAsciiProfile || (!parsed ? !CERTIFIED_ASCII.test(pattern) : parsed.some(token => token.kind === 'literal' && !CERTIFIED_ASCII.test(token.text)))) {
-      return super.prepared(op, pattern, parsed, budget)
-    }
-    const literals = new Map<string, LiteralSearch>()
-    for (const raw of parsed ? parsed.filter((token): token is Extract<Token, { kind: 'literal' }> => token.kind === 'literal').map(token => token.text) : [pattern]) {
-      if (!literals.has(raw)) literals.set(raw, prepareLiteral(foldCertified(raw), budget))
-    }
+    budget.charge(pattern.length)
+    const runs = parsed ? parsed.filter((token): token is Extract<Token, { kind: 'literal' }> => token.kind === 'literal').map(token => token.text) : [pattern]
     return (text, budget) => {
       budget.charge(0)
-      if (typeof text === 'string' && text.length > budget.maxTextLength) budget.text(text)
-      if (typeof text !== 'string' || !CERTIFIED_ASCII.test(text)) return this.evaluate(op, pattern, parsed, text, budget)
+      if (typeof text !== 'string') throw new RangeError('Invalid text condition')
+      if (text.length > budget.maxTextLength) budget.text(text)
+      if (!parsed && positive === 'eq') {
+        this.certifiedAsciiProfile = false
+        this.certification.comparisons = this.certification.cacheHits = this.certification.chargedWork = 0
+        // Full-string equality already needs just one actual comparison.
+        budget.charge(1 + pattern.length + text.length)
+        const matched = this.collator.compare(pattern, text) === 0
+        return op === 'neq' ? !matched : matched
+      }
+      if (!runs.length) {
+        // Literal-free wildcards use raw boundaries without a certificate.
+        this.certifiedAsciiProfile = false
+        this.certification.comparisons = this.certification.cacheHits = this.certification.chargedWork = 0
+      }
+      const profile = runs.length ? this.profile(runs, text, budget) : { classes: new Map<string, number>() }
+      if (!profile) return this.evaluate(op, pattern, parsed, text, budget)
       budget.text(text)
-      const folded = foldCertified(text), negative = op === 'neq' || op === 'not-contains'
-      const positive = op === 'neq' ? 'eq' : op === 'not-contains' ? 'contains' : op
+      const raw = Array.from(text), weights = new Uint32Array(raw.length + 1), folded: number[] = []
+      for (let i = 0; i < raw.length; i++) {
+        const id = profile.classes.get(raw[i])!
+        if (id) folded.push(id)
+        weights[i + 1] = folded.length
+      }
+      const literals = new Map<string, LiteralSearch>()
+      for (const run of runs) if (!literals.has(run)) {
+        const ids = Array.from(run, point => profile.classes.get(point)!).filter(id => id !== 0)
+        literals.set(run, prepareLiteral(ids, budget))
+      }
+      const negative = op === 'neq' || op === 'not-contains'
       let matched: boolean
       if (!parsed) {
-        const literal = literals.get(pattern)!
-        budget.charge(literal.text.length + 1)
-        if (positive === 'eq') matched = folded === literal.text
-        else if (positive === 'begins') matched = folded.startsWith(literal.text)
-        else if (positive === 'ends') matched = folded.endsWith(literal.text)
+        const literal = literals.get(pattern)!, needle = literal.ids
+        budget.charge(needle.length + 1)
+        if (positive === 'eq') matched = folded.length === needle.length && needle.every((id, index) => id === folded[index])
+        else if (positive === 'begins') matched = needle.length <= folded.length && needle.every((id, index) => id === folded[index])
+        else if (positive === 'ends') matched = needle.length <= folded.length && needle.every((id, index) => id === folded[folded.length - needle.length + index])
         else {
           const hits = literalOccurrences(folded, literal, budget)
           budget.charge(hits.length)
           matched = hits.some(value => value === 1)
         }
       } else {
-        // Prefix counts preserve every raw code-point boundary in a plateau of
-        // ignored characters. Literal transitions union all endpoint plateaus;
-        // ? still consumes exactly one raw element, including an ignored one.
-        const weights = new Uint32Array(text.length + 1)
-        for (let i = 0; i < text.length; i++) weights[i + 1] = weights[i] + (text[i] === '\u200b' ? 0 : 1)
-        let row = new Uint8Array(text.length + 1)
+        let row = new Uint8Array(raw.length + 1)
         row[0] = 1
         const occurrences = new Map<string, Uint8Array>()
         for (const token of parsed) {
-          budget.charge(text.length + 1)
-          const next = new Uint8Array(text.length + 1)
+          budget.charge(raw.length + 1)
+          const next = new Uint8Array(raw.length + 1)
           if (token.kind === 'star') {
             next[0] = row[0]
-            for (let end = 1; end <= text.length; end++) next[end] = row[end] || next[end - 1]
+            for (let end = 1; end <= raw.length; end++) next[end] = row[end] || next[end - 1]
           } else if (token.kind === 'one') {
-            for (let start = 0; start < text.length; start++) if (row[start]) next[start + 1] = 1
+            for (let start = 0; start < raw.length; start++) if (row[start]) next[start + 1] = 1
           } else {
             const literal = literals.get(token.text)!
-            if (!literal.text.length) {
-              // Zero-weight runs may only move forward within their plateau;
-              // reaching its later boundary never re-enables earlier ones.
-              budget.charge(text.length + 1)
+            if (!literal.ids.length) {
+              budget.charge(raw.length + 1)
               let reachable = false
-              for (let end = 0; end <= text.length; end++) {
+              for (let end = 0; end <= raw.length; end++) {
                 if (end === 0 || weights[end] !== weights[end - 1]) reachable = false
                 reachable ||= Boolean(row[end])
                 next[end] = reachable ? 1 : 0
@@ -304,17 +424,17 @@ export class TextFilterMatcher extends ReferenceTextFilterMatcher {
               let hits = occurrences.get(token.text)
               if (!hits) { hits = literalOccurrences(folded, literal, budget); occurrences.set(token.text, hits) }
               const targets = new Uint8Array(folded.length + 1)
-              budget.charge((text.length + 1) * 2)
-              for (let start = 0; start <= text.length; start++) {
-                const target = weights[start] + literal.text.length
+              budget.charge((raw.length + 1) * 2)
+              for (let start = 0; start <= raw.length; start++) {
+                const target = weights[start] + literal.ids.length
                 if (row[start] && hits[weights[start]] && target <= folded.length) targets[target] = 1
               }
-              for (let end = 0; end <= text.length; end++) next[end] = targets[weights[end]]
+              for (let end = 0; end <= raw.length; end++) next[end] = targets[weights[end]]
             }
           }
           row = next
         }
-        matched = Boolean(row[text.length])
+        matched = Boolean(row[raw.length])
       }
       return negative ? !matched : matched
     }
