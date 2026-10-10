@@ -1,17 +1,18 @@
 import type { XlsxCell, XlsxDocument } from '../types'
-import type { CellId, SourceCell, SourceCol, SourceRect, SourceRow } from './coordinates'
+import type { CellId, DisplaySlot, SourceCell, SourceCol, SourceRect, SourceRow } from './coordinates'
 
 /** Source-space contracts, spec §4.1; limits bound output, never semantic membership. */
 export const MAX_OVERVIEW_GROUPS_DESKTOP = 2048
 export const MAX_OVERVIEW_GROUPS_MOBILE = 1024
 export type Completeness = 'complete' | 'loading' | 'incomplete'
-/** Source failure codes are orthogonal to worker reply kinds (§§4.1, 10.2).
- * A page can fail with quota/cancelled/incomplete; transporting that failure in an
- * error reply preserves its code. Dedicated worker states are not source codes. */
+export const OPERATION_REFUSED_CODE = 'operation-refused'
+/** Shared source/worker error-code registry, orthogonal to reply kinds (§§4.1, 10.2).
+ * Quota/cancelled/incomplete codes preserve source failures in an error reply;
+ * operation-refused denotes the guarded worker refusal with its required payload. */
 export const SOURCE_ERROR_CODES = [
   'invalid-coordinate', 'invalid-source-rect', 'invalid-cursor', 'stale-source',
   'cancelled', 'incomplete', 'quota', 'resource-limit', 'unsupported',
-  'parse-error', 'storage-error', 'page-error',
+  'parse-error', 'storage-error', 'page-error', OPERATION_REFUSED_CODE,
 ] as const
 export type SourceErrorCode = typeof SOURCE_ERROR_CODES[number]
 
@@ -27,13 +28,19 @@ export interface AuthoritativeCell extends Pick<XlsxCell,
   /** Explicit authority state in rows/scans; never infer from cache flags in engine mode (§4.4). */
   unavailable?: true
 }
-/** Unavailable is permanent; unknown is a pending page, never a proven blank (§4.4). */
+/** Single-cell payloads use the enclosing discriminant, never the bulk marker (§4.4).
+ * Omit alone accepts existing objects with extra properties; optional never also
+ * excludes unavailable:true on an already-typed AuthoritativeCell. */
+export type SingleCellPayload = Omit<AuthoritativeCell, 'unavailable'> & { unavailable?: never }
+/** readCell returns kind='unavailable' for permanent missing values; unknown is
+ * a pending page, never blank. Raw readRows/scanPopulated and future column lanes
+ * use AuthoritativeCell.unavailable; current ColumnEntry uses its discriminant. */
 export type CellRead =
-  | { kind: 'cell'; cell: AuthoritativeCell }
+  | { kind: 'cell'; cell: SingleCellPayload }
   | { kind: 'blank' }
   | { kind: 'unknown'; pageId: string }
   | { kind: 'error'; code: SourceErrorCode; retryable: boolean }
-  | { kind: 'unavailable'; cell: AuthoritativeCell; reason: 'formula-value-unavailable' }
+  | { kind: 'unavailable'; cell: SingleCellPayload; reason: 'formula-value-unavailable' }
 
 export interface SourceStamp { docId: string; sheetId: string; valueGen: number }
 export interface ReadOptions { signal: AbortSignal; stamp: SourceStamp }
@@ -54,10 +61,12 @@ export interface SourceColInterval { c0: SourceCol; c1: SourceCol }
 /** Shared bounded mask encoding (§§4.1, 5.1, 8.1): inclusive [r0,r1],
  * words.length=ceil((r1-r0+1)/32). Bit i (LSB-first within each Uint32 word)
  * represents row r0+i. Padding bits are zero; count equals the popcount. */
-export interface BoundedRowBitset {
+export interface BoundedRowBitset<Space extends 'source' | 'display' = 'source'> {
   kind: 'bitset'
-  r0: number
-  r1: number
+  /** Explicit space tag preserves type/wire identity even though both aliases are numbers. */
+  space: Space
+  r0: Space extends 'source' ? SourceRow : DisplaySlot
+  r1: Space extends 'source' ? SourceRow : DisplaySlot
   words: Uint32Array
   count: number
 }
@@ -69,7 +78,7 @@ export interface BoundedRowBitset {
 export type CompactSourceRowSet =
   | { kind: 'intervals'; intervals: readonly SourceRowInterval[] }
   | { kind: 'list'; r0: SourceRow; r1: SourceRow; rows: Uint32Array }
-  | BoundedRowBitset
+  | BoundedRowBitset<'source'>
   | { kind: 'ref'; refId: string; count: number; stamp: SourceStamp }
 
 export interface OverviewDomain {
@@ -106,15 +115,15 @@ export interface ColumnQuery {
   limit: number
   cursor?: string
 }
-/** S1.2 extension point (§4.1): adapters may add a typed-lanes variant here.
+/** TODO(S1.2): a typed-lanes variant is REQUIRED before S7/S8 consume queryColumn (§4.1).
  * Freeze row/type/value lane encoding with the storage implementation first;
  * raw strings must use reversible UTF-16 code-unit indexes/offsets, not UTF-8
  * replacement. Current cell items and default blank runs remain bounded pages. */
 export type ColumnEntry =
-  | { kind: 'cell'; row: SourceRow; cell: AuthoritativeCell }
+  | { kind: 'cell'; row: SourceRow; cell: SingleCellPayload }
   | { kind: 'blank'; r0: SourceRow; r1: SourceRow }
   | { kind: 'unknown'; r0: SourceRow; r1: SourceRow; pageId: string }
-  | { kind: 'unavailable'; row: SourceRow; cell: AuthoritativeCell; reason: 'formula-value-unavailable' }
+  | { kind: 'unavailable'; row: SourceRow; cell: SingleCellPayload; reason: 'formula-value-unavailable' }
   | { kind: 'error'; r0: SourceRow; r1: SourceRow; code: SourceErrorCode; retryable: boolean }
 export interface PopulatedQuery { range: SourceRect; limit: number; cursor?: string }
 export interface SourceFailure { code: SourceErrorCode; retryable: boolean; message: string }
@@ -305,6 +314,14 @@ export type ViewportContent =
   | { kind: 'detail'; cells: readonly ViewportCell[] }
   | { kind: 'overview'; groups: readonly ViewportOverviewGroup[] }
   | { kind: 'unknown'; pageId: string }
+/** Completed viewports contain only resolved detail/coarse records (§§4.1, 10.4).
+ * Permanent unavailable cells are resolved; loading/error records are not. */
+export type CompleteViewportContent =
+  | { kind: 'detail'; cells: readonly Exclude<ViewportCell, { kind: 'unknown' | 'error' }>[] }
+  | { kind: 'overview'; groups: readonly Exclude<ViewportOverviewGroup, { content: 'unknown' }>[] }
+export type ViewportResult =
+  | { kind: 'viewport'; completeness: 'complete'; content: CompleteViewportContent; error?: never }
+  | { kind: 'viewport'; completeness: 'loading' | 'incomplete'; content: ViewportContent; error?: SourceFailure }
 
 /** Every asynchronous publication captures the relevant complete owner, spec §10.1. */
 export interface CacheIdentity { docId: string; sheetId: string; valueGen: number; fontGen: number; viewGen: number }
@@ -338,7 +355,7 @@ export type WorkerCommand =
 export interface ViewCommitDelta {
   bands: readonly RowPermutationBand[]
   /** Same bounded mask encoding, but indexes are DISPLAY slots (§5.1). */
-  visibility: readonly BoundedRowBitset[]
+  visibility: readonly BoundedRowBitset<'display'>[]
   metrics: { rows: readonly AxisSizeInterval[]; cols: readonly AxisSizeInterval[] }
   counts: { visible: number; total: number }
   selection: GridSelection
@@ -354,7 +371,8 @@ export type WorkerCommandKind = WorkerCommand['kind']
 export type WorkerCommandOwner<K extends WorkerCommandKind> =
   Extract<WorkerCommand, { kind: K }> extends { owner: infer Owner extends WorkerOwner }
     ? Owner : K extends 'cancel' ? WorkerOwner : { docId: string }
-/** Command kind correlates owners on ALL progress/terminal replies (§§10.1–10.2). */
+/** Freeze addition to §10.2: commandKind echoes the originating command kind
+ * for owner correlation on ALL replies. S4.1's wire format MUST populate it. */
 export type WorkerReplyBase<K extends WorkerCommandKind> =
   K extends WorkerCommandKind ? {
     commandKind: K
@@ -367,26 +385,27 @@ export type WorkerResult =
   | { kind: 'activateSheet'; sheetId: string }
   | { kind: 'prepareColumns'; cols: Uint16Array }
   | { kind: 'view'; delta: ViewCommitDelta }
-  | { kind: 'viewport'; content: ViewportContent; completeness: Completeness; error?: SourceFailure }
+  | ViewportResult
   | { kind: 'valueQuery'; page: Page<ColumnEntry> }
   | { kind: 'search'; items: readonly SearchHit[]; nextCursor?: string; unavailableCount: number }
   | { kind: 'close' }
-/** Sort/filter publish one view delta; other completions match their command (§10.2). */
+/** Cancel is non-completing: it terminates with cancelled/error, not complete (§10.2).
+ * Sort/filter publish one view delta; other completions match their command. */
 export type WorkerResultFor<K extends WorkerCommandKind> =
-  Extract<WorkerResult, { kind: K extends 'sort' | 'filter' ? 'view' : K }>
+  K extends 'cancel' ? never : Extract<WorkerResult, { kind: K extends 'sort' | 'filter' ? 'view' : K }>
 /** Refusals use the existing error reply with the meaningful operation-refused
  * transport code (§6.3). No missing range or source failure is invented. The
  * captured owner is unchanged; emit one status/diagnostic, not a view completion. */
 export type WorkerReply<K extends WorkerCommandKind = WorkerCommandKind> =
   K extends WorkerCommandKind ? WorkerReplyBase<K> & (
     | { kind: 'progress'; completed: number; total?: number }
-    | { kind: 'complete'; result: WorkerResultFor<K> }
+    | (K extends 'cancel' ? never : { kind: 'complete'; result: WorkerResultFor<K> })
     | { kind: 'cancelled' }
     | { kind: 'incomplete'; missing: readonly SourceRect[] }
     | { kind: 'quota'; resource: 'memory' | 'storage'; limitBytes?: number; requiredBytes?: number }
-    | { kind: 'error'; code: SourceErrorCode; retryable: boolean; refusal?: never }
+    | { kind: 'error'; code: Exclude<SourceErrorCode, typeof OPERATION_REFUSED_CODE>; retryable: boolean; refusal?: never }
     | (K extends 'sort' | 'filter' ? {
-      kind: 'error'; code: 'operation-refused'; retryable: false; refusal: OperationRefusal
+      kind: 'error'; code: typeof OPERATION_REFUSED_CODE; retryable: false; refusal: OperationRefusal
     } : never)
   ) : never
 export type WorkerCompletion = Extract<WorkerReply, { kind: 'complete' }>

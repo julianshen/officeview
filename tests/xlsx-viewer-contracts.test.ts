@@ -1,13 +1,15 @@
 import { describe, expect, expectTypeOf, it } from 'vitest'
-import * as contractConstants from '../src/xlsx/view/contracts'
 import {
   MAX_ROWS, MAX_COLS, MAX_CELL_ID, CoordinateError,
   validateCoordinate, isValidCoordinate, cellId, cellIdToCoordinate,
   parseA1, formatA1, columnToLetters, lettersToColumn,
   validateSourceRect, isValidSourceRect, sourceRectCellCount,
+  validateSourceRectInput, isValidSourceRectInput, sourceRectCellCountInput, cellIdToCoordinateInput,
 } from '../src/xlsx/view/coordinates'
+import type { SourceRect } from '../src/xlsx/view/coordinates'
 import {
   MAX_OVERVIEW_GROUPS_DESKTOP, MAX_OVERVIEW_GROUPS_MOBILE, MAX_PHYSICAL_SCROLL_CSS_PX,
+  SOURCE_ERROR_CODES, SHEET_MIN_ZOOM, SHEET_MAX_ZOOM, OPERATION_REFUSED_CODE,
 } from '../src/xlsx/view/contracts'
 import type {
   CellRead, SourceStore, Page, SourceStamp, OverviewDomain, OverviewGroup,
@@ -15,7 +17,7 @@ import type {
   ValuePolicy, OperationRefusal, SourceErrorCode, ReadOptions, SourceRowInterval,
   RowOrder, RowPermutationBand, RowVisibility, AxisMetrics, SheetMetrics, ScrollWindow,
   StructuralResult, SheetView, WorkerResult, SourceFailure, AuthoritativeCell, SparseRowPage,
-  ColumnEntry, ViewCommitDelta, PagedKeySetRef, WorkerReplyBase,
+  ColumnEntry, ViewCommitDelta, PagedKeySetRef, WorkerReplyBase, WorkerResultFor,
 } from '../src/xlsx/view/contracts'
 
 function expectCode(action: () => unknown, code: CoordinateError['code']) {
@@ -158,6 +160,7 @@ describe('coordinate contracts (spec §3, AC-CAP-01)', () => {
     'rejects non-number IDs with the existing typed error: %s', (input) => {
       // The cast exercises calls from untyped consumers at the API boundary.
       expectCode(() => cellIdToCoordinate(input as number), 'invalid-cell-id')
+      expectCode(() => cellIdToCoordinateInput(input), 'invalid-cell-id')
     },
   )
   it.each([undefined, null, 'A1', 1, [], Symbol('rectangle')])(
@@ -166,8 +169,42 @@ describe('coordinate contracts (spec §3, AC-CAP-01)', () => {
       expect(isValidSourceRect(rect)).toBe(false)
       expectCode(() => validateSourceRect(rect), 'invalid-source-rect')
       expectCode(() => sourceRectCellCount(rect), 'invalid-source-rect')
+      expect(isValidSourceRectInput(input)).toBe(false)
+      expectCode(() => validateSourceRectInput(input), 'invalid-source-rect')
+      expectCode(() => sourceRectCellCountInput(input), 'invalid-source-rect')
     },
   )
+
+  it('keeps typed rectangle false branches usable and typed entry points checked', () => {
+    function invalidStart(typedRect: SourceRect): number | null {
+      if (!isValidSourceRect(typedRect)) return typedRect.r0
+      return null
+    }
+    expect(invalidStart({ r0: 1, r1: 0, c0: 0, c1: 0 })).toBe(1)
+    // @ts-expect-error The typed ID API requires a number; use the untrusted-input API for unknown.
+    const invalidId = () => cellIdToCoordinate('0')
+    // @ts-expect-error The typed rectangle validator requires a SourceRect.
+    const invalidRect = () => validateSourceRect(null)
+    // @ts-expect-error The typed count API requires a SourceRect.
+    const invalidCount = () => sourceRectCellCount(undefined)
+    // @ts-expect-error The typed rectangle predicate requires a SourceRect.
+    const invalidPredicate = () => isValidSourceRect('A1')
+    expectCode(invalidId, 'invalid-cell-id')
+    expectCode(invalidRect, 'invalid-source-rect')
+    expectCode(invalidCount, 'invalid-source-rect')
+    expect(invalidPredicate()).toBe(false)
+  })
+
+  it('validates untrusted inputs before making them available to typed callers', () => {
+    const rect: unknown = { r0: 0, r1: MAX_ROWS - 1, c0: 0, c1: MAX_COLS - 1 }
+    expect(isValidSourceRectInput(rect)).toBe(true)
+    validateSourceRectInput(rect)
+    expectTypeOf(rect).toEqualTypeOf<SourceRect>()
+    expect(sourceRectCellCountInput(rect)).toBe(2 ** 34)
+    const id: unknown = MAX_CELL_ID
+    expect(cellIdToCoordinateInput(id)).toEqual({ row: MAX_ROWS - 1, col: MAX_COLS - 1 })
+    expectCode(() => cellIdToCoordinateInput(-0), 'invalid-cell-id')
+  })
 
   it.todo('S0.2 full-extent sparse provider: expect(await source.readCell({ row: 1_048_575, col: 16_383 }, readOptions)).toMatchObject({ kind: \'cell\' })')
 })
@@ -247,7 +284,7 @@ describe('type contract freeze (spec §§4–5, 10)', () => {
     const memberships = [
       { kind: 'intervals', intervals: [{ r0: 1, r1: 1 }, { r0: 3, r1: 3 }] },
       { kind: 'list', r0: 1, r1: 3, rows: new Uint32Array([1, 3]) },
-      { kind: 'bitset', r0: 1, r1: 3, words: new Uint32Array([5]), count: 2 },
+      { kind: 'bitset', space: 'source', r0: 1, r1: 3, words: new Uint32Array([5]), count: 2 },
       { kind: 'ref', refId: 'rows-v1', count: 2, stamp },
     ] satisfies CompactSourceRowSet[]
     const domain = { groupId: 'group-v1', rows: memberships[0], cols: [{ c0: 0, c1: 0 }] } satisfies OverviewDomain
@@ -355,14 +392,14 @@ describe('type contract freeze (spec §§4–5, 10)', () => {
     const codes = [
       'invalid-coordinate', 'invalid-source-rect', 'invalid-cursor', 'stale-source',
       'cancelled', 'incomplete', 'quota', 'resource-limit', 'unsupported',
-      'parse-error', 'storage-error', 'page-error',
+      'parse-error', 'storage-error', 'page-error', 'operation-refused',
     ] satisfies SourceErrorCode[]
-    expect(Reflect.get(contractConstants, 'SOURCE_ERROR_CODES')).toEqual(codes)
+    expect(SOURCE_ERROR_CODES).toEqual(codes)
     function classify(code: SourceErrorCode): string {
       switch (code) {
         case 'invalid-coordinate': case 'invalid-source-rect': case 'invalid-cursor': case 'stale-source':
         case 'cancelled': case 'incomplete': case 'quota': case 'resource-limit': case 'unsupported':
-        case 'parse-error': case 'storage-error': case 'page-error': return code
+        case 'parse-error': case 'storage-error': case 'page-error': case 'operation-refused': return code
         default: { const exhaustive: never = code; return exhaustive }
       }
     }
@@ -375,8 +412,8 @@ describe('type contract freeze (spec §§4–5, 10)', () => {
   })
 
   it('includes absolute sheet zoom and DPR in viewport ownership and progressive detail/coarse replies', () => {
-    expect(Reflect.get(contractConstants, 'SHEET_MIN_ZOOM')).toBe(0.25)
-    expect(Reflect.get(contractConstants, 'SHEET_MAX_ZOOM')).toBe(4)
+    expect(SHEET_MIN_ZOOM).toBe(0.25)
+    expect(SHEET_MAX_ZOOM).toBe(4)
     const bounds = { x: 0, y: 0, width: 40, height: 20 }
     const results = [
       { kind: 'viewport', completeness: 'loading', content: { kind: 'detail', cells: [{ source: { row: 0, col: 0 }, bounds, kind: 'unknown', pageId: 'p1' }] } },
@@ -461,16 +498,16 @@ describe('type contract freeze (spec §§4–5, 10)', () => {
       const r0 = rows[0], r1 = rows[rows.length - 1]
       const words = rows.length === 5 ? new Uint32Array([0x80000003, 3]) : new Uint32Array([rows[0] === 0 ? 11 : 5])
       const list = { kind: 'list', r0, r1, rows: new Uint32Array(rows) } satisfies CompactSourceRowSet
-      const bitset = { kind: 'bitset', r0, r1, words, count: rows.length } satisfies CompactSourceRowSet
+      const bitset = { kind: 'bitset', space: 'source', r0, r1, words, count: rows.length } satisfies CompactSourceRowSet
       expect(decode(list)).toEqual(decode(bitset))
       expect(decode(bitset)).toEqual(rows)
       expect(decode(bitset)).not.toContain(2)
-      const visibility = [bitset] satisfies ViewCommitDelta['visibility']
+      const visibility = [{ ...bitset, space: 'display' }] satisfies ViewCommitDelta['visibility']
       expect(visibility[0].count).toBe(rows.length)
     }
     const intervals = { kind: 'intervals', intervals: [{ r0: 0, r1: 1 }, { r0: 3, r1: 3 }] } satisfies CompactSourceRowSet
     expect(decode(intervals)).toEqual([0, 1, 3])
-    expectTypeOf<ViewCommitDelta['visibility'][number]>().toEqualTypeOf<Extract<CompactSourceRowSet, { kind: 'bitset' }>>()
+    expectTypeOf<ViewCommitDelta['visibility'][number]>().not.toEqualTypeOf<Extract<CompactSourceRowSet, { kind: 'bitset' }>>()
   })
 
   it('pins forward absolute source rows and inverse band-relative display offsets', () => {
@@ -482,6 +519,76 @@ describe('type contract freeze (spec §§4–5, 10)', () => {
       expect(Array.from(band.sourceAtOffset.slice(1, 3)).map(row => row - r0).sort()).toEqual([1, 3])
       expect(Array.from(band.sourceAtOffset.slice(0, 3)).map(row => row - r0).sort()).toEqual([0, 1, 3])
     }
+  })
+
+  it('rejects complete viewport loading/error contradictions and permits valid progress', () => {
+    type ViewportResult = Extract<WorkerResult, { kind: 'viewport' }>
+    const bounds = { x: 0, y: 0, width: 40, height: 20 }
+    const failure = { code: 'page-error', retryable: true, message: 'Failed' } satisfies SourceFailure
+    const valid = [
+      { kind: 'viewport', completeness: 'complete', content: { kind: 'detail', cells: [] } },
+      { kind: 'viewport', completeness: 'complete', content: { kind: 'overview', groups: [] } },
+      { kind: 'viewport', completeness: 'loading', content: { kind: 'unknown', pageId: 'p1' } },
+      { kind: 'viewport', completeness: 'incomplete', content: { kind: 'unknown', pageId: 'p1' }, error: failure },
+    ] satisfies ViewportResult[]
+    // @ts-expect-error A complete viewport cannot have wholly unknown content.
+    const unknown: ViewportResult = { kind: 'viewport', completeness: 'complete', content: { kind: 'unknown', pageId: 'p1' } }
+    // @ts-expect-error A complete viewport cannot carry a failure.
+    const failed: ViewportResult = { kind: 'viewport', completeness: 'complete', content: { kind: 'detail', cells: [] }, error: failure }
+    // @ts-expect-error Complete detail cannot contain an unloaded cell.
+    const unknownCell: ViewportResult = { kind: 'viewport', completeness: 'complete', content: { kind: 'detail', cells: [{ kind: 'unknown', pageId: 'p1', source: { row: 0, col: 0 }, bounds }] } }
+    // @ts-expect-error Complete overview cannot contain an unloaded group.
+    const unknownGroup: ViewportResult = { kind: 'viewport', completeness: 'complete', content: { kind: 'overview', groups: [{ content: 'unknown', pageId: 'p1', groupId: 'g1', bounds }] } }
+    expect(valid).toHaveLength(4)
+    expect([unknown, failed, unknownCell, unknownGroup]).toHaveLength(4)
+  })
+
+  it('requires discriminants for single-cell availability, including existing bulk objects', () => {
+    const cell = { id: 0, row: 0, col: 0, value: null, styleIndex: 0 }
+    const bulk = { ...cell, unavailable: true } satisfies AuthoritativeCell
+    const valid = [
+      { kind: 'cell', cell },
+      { kind: 'unavailable', cell, reason: 'formula-value-unavailable' },
+    ] satisfies CellRead[]
+    // @ts-expect-error A known cell cannot simultaneously be marked unavailable.
+    const invalid: CellRead = { kind: 'cell', cell: { ...cell, unavailable: true } }
+    // @ts-expect-error Existing bulk objects must also be rejected, not just excess literal properties.
+    const invalidBulk: CellRead = { kind: 'cell', cell: bulk }
+    // @ts-expect-error Column entries use their discriminant rather than a bulk marker.
+    const invalidColumn: ColumnEntry = { kind: 'cell', row: 0, cell: bulk }
+    // Omit alone drops excess-property checks for an already-typed object.
+    expectTypeOf<typeof bulk>().toExtend<Omit<AuthoritativeCell, 'unavailable'>>()
+    expect(valid.map(read => read.kind)).toEqual(['cell', 'unavailable'])
+    expect([invalid, invalidBulk, invalidColumn]).toHaveLength(3)
+  })
+
+  it('separates display visibility masks from source-space membership', () => {
+    const display = { kind: 'bitset', space: 'display', r0: 1, r1: 3, words: new Uint32Array([5]), count: 2 } satisfies ViewCommitDelta['visibility'][number]
+    // @ts-expect-error A display-space mask cannot supply source membership after sorting.
+    const invalidSource: CompactSourceRowSet = display
+    const sourceMask = { ...display, space: 'source' } satisfies CompactSourceRowSet
+    // @ts-expect-error A source-space mask cannot publish display visibility.
+    const invalidDisplay: ViewCommitDelta['visibility'][number] = sourceMask
+    expect(sourceMask.space).toBe('source')
+    expect(display.space).toBe('display')
+    expect([invalidSource, invalidDisplay]).toHaveLength(2)
+  })
+
+  it('keeps refusal code classified while requiring its payload and non-retryable outcome', () => {
+    const owner = { ...stamp, viewGen: 0, fontGen: 0 }
+    const base = { kind: 'error' as const, commandKind: 'sort' as const, requestId: 'r1', owner, diagnostics: [], code: 'operation-refused' as const }
+    const refusal = { reason: 'merge' as const, range: { r0: 0, r1: 1, c0: 0, c1: 1 } }
+    const reply = { ...base, retryable: false, refusal } satisfies WorkerReply
+    const code: SourceErrorCode = reply.code
+    expect(SOURCE_ERROR_CODES).toContain(code)
+    expect(OPERATION_REFUSED_CODE).toBe('operation-refused')
+    // @ts-expect-error Recognizing the code must not permit a refusal without its payload.
+    const missing: WorkerReply = { ...base, retryable: false }
+    // @ts-expect-error A refused operation retains the current owner and is not retried automatically.
+    const retryable: WorkerReply = { ...base, retryable: true, refusal }
+    expect([missing, retryable]).toHaveLength(2)
+    expectTypeOf<WorkerResultFor<'cancel'>>().toEqualTypeOf<never>()
+    expectTypeOf<Extract<WorkerReply<'cancel'>, { kind: 'complete' }>>().toEqualTypeOf<never>()
   })
 
   it('provides DTO v1 command/reply examples with complete generation owners', () => {

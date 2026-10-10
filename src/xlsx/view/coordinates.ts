@@ -37,7 +37,12 @@ export function cellId(row: SourceRow, col: SourceCol): CellId {
   return row * MAX_COLS + col
 }
 
-export function cellIdToCoordinate(id: unknown): SourceCell {
+/** Typed caller boundary; untrusted values use cellIdToCoordinateInput. */
+export function cellIdToCoordinate(id: CellId): SourceCell {
+  return cellIdToCoordinateInput(id)
+}
+
+export function cellIdToCoordinateInput(id: unknown): SourceCell {
   if (typeof id !== 'number' || !Number.isSafeInteger(id) || Object.is(id, -0) || id < 0 || id > MAX_CELL_ID) {
     throw new CoordinateError('invalid-cell-id', 'Cell ID is outside the worksheet domain')
   }
@@ -91,8 +96,13 @@ export function lettersToColumn(letters: string): SourceCol {
   return ordinal - 1
 }
 
-/** Predicates return false for malformed inputs; validators throw CoordinateError. */
-export function isValidSourceRect(rect: unknown): rect is SourceRect {
+/** Already-typed rectangles remain SourceRect in both branches; geometry may be invalid. */
+export function isValidSourceRect(rect: SourceRect): boolean {
+  return isValidSourceRectInput(rect)
+}
+
+/** Untrusted-input predicate narrows only after validating every coordinate. */
+export function isValidSourceRectInput(rect: unknown): rect is SourceRect {
   if (typeof rect !== 'object' || rect === null) return false
   const candidate = rect as Partial<SourceRect>
   if (typeof candidate.r0 !== 'number' || typeof candidate.r1 !== 'number'
@@ -101,13 +111,22 @@ export function isValidSourceRect(rect: unknown): rect is SourceRect {
     && candidate.r0 <= candidate.r1 && candidate.c0 <= candidate.c1
 }
 
-export function validateSourceRect(rect: unknown): asserts rect is SourceRect {
-  if (!isValidSourceRect(rect)) {
+export function validateSourceRect(rect: SourceRect): void {
+  validateSourceRectInput(rect)
+}
+
+/** Untrusted validators throw the same stable errors as the typed APIs. */
+export function validateSourceRectInput(rect: unknown): asserts rect is SourceRect {
+  if (!isValidSourceRectInput(rect)) {
     throw new CoordinateError('invalid-source-rect', 'Invalid inclusive source rectangle')
   }
 }
 
-export function sourceRectCellCount(rect: unknown): number {
-  validateSourceRect(rect)
+export function sourceRectCellCount(rect: SourceRect): number {
+  return sourceRectCellCountInput(rect)
+}
+
+export function sourceRectCellCountInput(rect: unknown): number {
+  validateSourceRectInput(rect)
   return (rect.r1 - rect.r0 + 1) * (rect.c1 - rect.c0 + 1)
 }
