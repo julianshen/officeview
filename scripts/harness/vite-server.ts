@@ -42,7 +42,7 @@ async function probe(port: number): Promise<{ state: 'down' } | { state: 'up'; b
 export async function ensureHarnessServer(options: ServerOptions, timeoutMs = 30_000): Promise<ServerHandle> {
   const existing = await probe(options.port)
   if (existing.state === 'up') {
-    const problem = checkIdentity(existing.body, options.identity)
+    const problem = checkIdentity(existing.body, { commit: options.identity.commit, root: options.root })
     if (problem) throw new Error(`port ${options.port} is already in use and cannot be reused: ${problem}`)
     if (!options.allowReuse) throw new Error(`port ${options.port} already serves a harness; stop it first (this mode needs its own server)`)
     return { reused: true, stop: () => undefined }
@@ -76,7 +76,7 @@ export async function ensureHarnessServer(options: ServerOptions, timeoutMs = 30
   for (;;) {
     const state = await probe(options.port)
     if (state.state === 'up') {
-      const problem = checkIdentity(state.body, options.identity)
+      const problem = checkIdentity(state.body, { commit: options.identity.commit, root: options.root })
       if (!problem) return { reused: false, stop }
       stop()
       throw new Error(`vite started but the harness identity check failed: ${problem}\n${output}`)

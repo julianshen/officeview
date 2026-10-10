@@ -21,12 +21,22 @@ function freePort(): Promise<number> {
   })
 }
 
-describe('harness identity carries a digest, never an absolute path', () => {
+describe('harness identity carries a salted digest, never an absolute path', () => {
   it('is stable for one checkout and differs across checkouts', () => {
-    expect(identityDigest('/repo/a', 'abc123')).toBe(identityDigest('/repo/a', 'abc123'))
-    expect(identityDigest('/repo/a', 'abc123')).not.toBe(identityDigest('/repo/b', 'abc123'))
-    expect(identityDigest('/repo/a', 'abc123')).not.toBe(identityDigest('/repo/a', 'def456'))
-    expect(identityDigest('/repo/a', 'abc123')).toMatch(/^[0-9a-f]{64}$/)
+    expect(identityDigest('/repo/a', 'abc123', 'salt')).toBe(identityDigest('/repo/a', 'abc123', 'salt'))
+    expect(identityDigest('/repo/a', 'abc123', 'salt')).not.toBe(identityDigest('/repo/b', 'abc123', 'salt'))
+    expect(identityDigest('/repo/a', 'abc123', 'salt')).not.toBe(identityDigest('/repo/a', 'def456', 'salt'))
+    expect(identityDigest('/repo/a', 'abc123', 'salt')).not.toBe(identityDigest('/repo/a', 'abc123', 'pepper'))
+    expect(identityDigest('/repo/a', 'abc123', 'salt')).toMatch(/^[0-9a-f]{64}$/)
+  })
+
+  it('uses a fresh random salt per server start', () => {
+    const first = gitIdentity(process.cwd())
+    const second = gitIdentity(process.cwd())
+    expect(first.salt).toMatch(/^[0-9a-f]{32}$/)
+    expect(second.salt).toMatch(/^[0-9a-f]{32}$/)
+    expect(first.salt).not.toBe(second.salt)
+    expect(first.rootDigest).not.toBe(second.rootDigest)
   })
 
   it('exposes no absolute path on the public marker', () => {
@@ -34,20 +44,24 @@ describe('harness identity carries a digest, never an absolute path', () => {
     expect(identity).not.toHaveProperty('root')
     expect(JSON.stringify(identity)).not.toContain(process.cwd())
     expect(identity).toMatchObject({ service: 'officeview-viewer-harness' })
-    expect(identity.rootDigest).toBe(identityDigest(resolve(process.cwd()), identity.commit))
+    expect(identity.rootDigest).toBe(identityDigest(resolve(process.cwd()), identity.commit, identity.salt))
   })
 
   it('accepts a matching marker and rejects stale, foreign or mismatched ones', () => {
     const identity = gitIdentity(process.cwd())
-    expect(checkIdentity({ ...identity }, { commit: identity.commit, rootDigest: identity.rootDigest })).toBeNull()
+    const local = { commit: identity.commit, root: process.cwd() }
+    expect(checkIdentity({ ...identity }, local)).toBeNull()
     const stale = { ...identity, commit: 'deadbee' }
-    expect(checkIdentity(stale, { commit: identity.commit, rootDigest: identity.rootDigest })).toMatch(/commit/)
+    expect(checkIdentity(stale, local)).toMatch(/commit/)
     const foreign = { ...identity, rootDigest: '0'.repeat(64) }
-    expect(checkIdentity(foreign, { commit: identity.commit, rootDigest: identity.rootDigest })).toMatch(/checkout/)
-    expect(checkIdentity({ service: 'something-else' }, { commit: identity.commit, rootDigest: identity.rootDigest })).toMatch(/not the officeview viewer harness/)
+    expect(checkIdentity(foreign, local)).toMatch(/checkout/)
+    expect(checkIdentity({ service: 'something-else' }, local)).toMatch(/not the officeview viewer harness/)
+    const unsalted = { ...identity }
+    delete (unsalted as Partial<typeof unsalted>).salt
+    expect(checkIdentity(unsalted, local)).toMatch(/salt/)
     for (const outcome of [
-      checkIdentity(stale, { commit: identity.commit, rootDigest: identity.rootDigest }),
-      checkIdentity(foreign, { commit: identity.commit, rootDigest: identity.rootDigest }),
+      checkIdentity(stale, local),
+      checkIdentity(foreign, local),
     ]) {
       expect(outcome ?? '').not.toContain(process.cwd())
     }

@@ -285,15 +285,19 @@ describe('detectLanIp', () => {
 })
 
 describe('harness identity', () => {
-  const expected = { commit: 'a'.repeat(40), rootDigest: identityDigest('/repo', 'a'.repeat(40)) }
+  const expected = { commit: 'a'.repeat(40), root: '/repo' }
+  const marker = { service: HARNESS_SERVICE, commit: expected.commit, dirty: false, salt: 's'.repeat(32), rootDigest: identityDigest('/repo', expected.commit, 's'.repeat(32)) }
   it('accepts only the harness service for this commit and checkout', () => {
-    expect(checkIdentity({ service: HARNESS_SERVICE, commit: expected.commit, dirty: false, rootDigest: expected.rootDigest }, expected)).toBeNull()
+    expect(checkIdentity(marker, expected)).toBeNull()
   })
-  it('refuses a foreign server, an SPA fallback page, a stale commit and another checkout', () => {
+  it('refuses a foreign server, an SPA fallback page, a stale commit, another checkout and a missing salt', () => {
     expect(checkIdentity('<!doctype html><html>', expected)).toMatch(/not.*harness/i)
     expect(checkIdentity({ service: 'something-else' }, expected)).toMatch(/not.*harness/i)
-    expect(checkIdentity({ service: HARNESS_SERVICE, commit: 'b'.repeat(40), dirty: false, rootDigest: expected.rootDigest }, expected)).toMatch(/commit/)
-    expect(checkIdentity({ service: HARNESS_SERVICE, commit: expected.commit, dirty: false, rootDigest: '0'.repeat(64) }, expected)).toMatch(/checkout/)
+    expect(checkIdentity({ ...marker, commit: 'b'.repeat(40) }, expected)).toMatch(/commit/)
+    expect(checkIdentity({ ...marker, rootDigest: '0'.repeat(64) }, expected)).toMatch(/checkout/)
+    const { salt: _dropped, ...unsalted } = marker
+    void _dropped
+    expect(checkIdentity(unsalted, expected)).toMatch(/salt/)
   })
   it('labels dirty trees', () => {
     expect(commitLabel({ commit: 'abc1234', dirty: false })).toBe('abc1234')
