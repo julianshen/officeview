@@ -495,7 +495,7 @@ function validateMetrics(metrics: unknown, samples: HarnessSample[], samplesVali
   }
   if (samplesValid) {
     for (const sample of samples) {
-      if (!(sample.name in metrics)) errors.push(`metrics.${sample.name}: missing for the sample series of the same name`)
+      if (!Object.prototype.hasOwnProperty.call(metrics, sample.name)) errors.push(`metrics.${sample.name}: missing for the sample series of the same name`)
     }
   }
 }
@@ -564,19 +564,31 @@ export async function verifyHarnessResult(input: unknown): Promise<{ ok: boolean
   return { ok: true, errors: [] }
 }
 
+/** A metric/sample name that can never round-trip JSON as an own key. The
+ * ingest validator rejects it too (METRIC_NAME/scanStructure); this guard
+ * makes finalizeResult fail fast with a clear error instead of silently
+ * dropping the series through prototype assignment. */
+function assertSafeMetricName(name: string, role: string): void {
+  if (name === '__proto__') throw new Error(`${role} name "__proto__" is forbidden (it cannot round-trip JSON safely)`)
+}
+
 /**
  * Build a complete result: derive metrics, attach the ledger, compute the
  * hash. Refuses to emit anything the ingest validator would reject, so a
  * device never exports a result the collector must bounce.
  */
 export async function finalizeResult(draft: ResultDraft): Promise<HarnessResult> {
-  const metrics: Record<string, HarnessMetric> = {}
+  // Null-prototype accumulator: inherited-looking names (constructor, toString)
+  // behave as ordinary own keys, and no assignment can touch Object.prototype.
+  const metrics: Record<string, HarnessMetric> = Object.create(null)
   for (const sample of draft.samples) {
-    if (sample.name in metrics) throw new Error(`finalizeResult: duplicate sample series ${JSON.stringify(sample.name)}`)
+    assertSafeMetricName(sample.name, 'sample series')
+    if (Object.prototype.hasOwnProperty.call(metrics, sample.name)) throw new Error(`finalizeResult: duplicate sample series ${JSON.stringify(sample.name)}`)
     metrics[sample.name] = deriveMetric({ ...sample, values: [...sample.values] })
   }
   for (const [name, metric] of Object.entries(draft.extraMetrics ?? {})) {
-    if (name in metrics) throw new Error(`finalizeResult: extra metric ${JSON.stringify(name)} collides with a sample series`)
+    assertSafeMetricName(name, 'extra metric')
+    if (Object.prototype.hasOwnProperty.call(metrics, name)) throw new Error(`finalizeResult: extra metric ${JSON.stringify(name)} collides with a sample series`)
     metrics[name] = metric
   }
   const withoutHash = {

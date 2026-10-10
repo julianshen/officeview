@@ -67,6 +67,10 @@ export function createViewerHarness(deps: HarnessDeps = {}): ViewerHarness {
   const ledger = new AllocationLedger()
   const inputMarkers = new Map<string, number>()
   const samples = new Map<string, SampleState>()
+  /** Labels with an input marker not yet consumed by markPresent. A second
+   * concurrent use of a pending label is rejected so overlapping pairs can
+   * never share (and silently overwrite) one start time. */
+  const pendingInputs = new Set<string>()
   let observer: PerformanceObserver | null = null
   let longtaskState: LongTaskState = 'idle'
   const longtaskEntries: number[] = []
@@ -108,23 +112,27 @@ export function createViewerHarness(deps: HarnessDeps = {}): ViewerHarness {
     }
     return new Promise<void>((resolve, reject) => {
       let settled = false
-      const timer = setTimeout(() => {
+      const finish = (action: () => void): void => {
+        if (settled) return
         settled = true
-        reject(new Error(`markPresent(${label}) timed out after ${timeoutMs} ms waiting for two animation frames (hidden tab?)`))
+        clearTimeout(timer)
+        pendingInputs.delete(label)
+        action()
+      }
+      const timer = setTimeout(() => {
+        finish(() => reject(new Error(`markPresent(${label}) timed out after ${timeoutMs} ms waiting for two animation frames (hidden tab?)`)))
       }, timeoutMs)
       raf(() => {
         raf(() => {
           if (settled) return
-          settled = true
-          clearTimeout(timer)
           try {
             const presentMs = clock.now()
             const state = sampleState('input-to-present', 'ms', 'operation')
             if (discard) state.warmupExcluded += 1
             else state.values.push(presentMs - inputMs)
-            resolve()
+            finish(resolve)
           } catch (error) {
-            reject(error)
+            finish(() => reject(error))
           }
         })
       })
@@ -208,12 +216,16 @@ export function createViewerHarness(deps: HarnessDeps = {}): ViewerHarness {
       if (grid) ledger.charge('main', grid.length * Math.max(1, grid[0]?.length ?? 0) * 8, 'grid-values')
     },
     markInput(label: string): void {
+      if (pendingInputs.has(label)) {
+        throw new Error(`markInput: label ${JSON.stringify(label)} is already pending; overlapping pairs must use distinct labels`)
+      }
       inputMarkers.set(label, clock.now())
+      pendingInputs.add(label)
     },
     markPresent,
     /** One input→present round-trip; resolves when the sample (or warmup) is recorded. */
     async recordRoundTrip(label: string, warmup = false): Promise<void> {
-      inputMarkers.set(label, clock.now())
+      this.markInput(label)
       await markPresent(label, warmup)
     },
     sampleCount,

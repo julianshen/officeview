@@ -16,11 +16,19 @@ export type AutomationKind = 'playwright' | 'webdriver' | 'none'
  * Generic labels: `safari` is claimed only for a real, non-automated Safari
  * (see classifyBrowser); every other WebKit is plain `webkit`, and
  * `webkit-playwright` is applied only by the Playwright driver.
+ *
+ * Operator-attested, not verified: the harness cannot prove what device or
+ * browser actually produced a result. A `safari`/`device` label means the
+ * operator ran the collection on the stated Safari/device and recorded it;
+ * treat it as a claim to audit, never as machine-checked evidence.
  */
 export type BrowserName = 'chromium' | 'safari' | 'webkit' | 'firefox' | 'webkit-playwright' | 'unknown'
 /**
  * What kind of evidence a result can ever count as. Derived from the
- * environment (see deriveEvidence) and re-checked on ingest.
+ * environment (see deriveEvidence) and re-checked on ingest. Like the browser
+ * label itself, the `device` variant is operator-attested: the harness derives
+ * it from self-reported fields, so physical-device verification remains the
+ * operator's responsibility (spec §12.2).
  */
 export type EvidenceLabel = 'scaffold-placeholder' | 'emulated-webkit' | 'automated-browser' | 'device'
 export type FontStatus = 'ready' | 'loading' | 'unavailable'

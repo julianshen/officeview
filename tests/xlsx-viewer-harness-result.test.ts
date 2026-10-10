@@ -5,14 +5,16 @@
  * and RECOMPUTES the hash.
  */
 import { describe, expect, it } from 'vitest'
+import { AllocationLedger } from '../src/debug/harness/ledger'
 import {
   MAX_SAMPLE_SERIES,
   MAX_SAMPLE_VALUES,
   checkProfileConformance,
   deriveEvidence,
+  finalizeResult,
   verifyHarnessResult,
 } from '../src/debug/harness/result'
-import { buildResult, makeEnvironment, makeSample, rehash } from './helpers/harnessResult'
+import { buildResult, makeEnvironment, makeSample, range, rehash } from './helpers/harnessResult'
 
 type Mutator = (draft: Record<string, any>) => void
 
@@ -168,6 +170,44 @@ describe('prototype pollution and unknown keys', () => {
     const forged = await rehash(await buildResult(), (d) => (d.note = 'x'))
     const outcome = await verifyHarnessResult({ ...(forged as object), deep })
     expect(outcome.ok).toBe(false)
+  })
+
+  it('accepts inherited-looking sample names like constructor and toString end to end', async () => {
+    for (const name of ['constructor', 'toString', 'hasOwnProperty', 'valueOf']) {
+      const result = await finalizeResult({
+        environment: makeEnvironment(),
+        samples: [makeSample(range(30), 'operation', name)],
+        ledger: new AllocationLedger().accounting(),
+      })
+      expect(Object.prototype.hasOwnProperty.call(result.metrics, name)).toBe(true)
+      expect(result.metrics[name].status).toBe('ok')
+      await expect(verifyHarnessResult(result)).resolves.toEqual({ ok: true, errors: [] })
+    }
+  })
+
+  it('still reports a missing metric for a constructor sample whose metric was stripped', async () => {
+    const result = await finalizeResult({
+      environment: makeEnvironment(),
+      samples: [makeSample(range(30), 'operation', 'constructor')],
+      ledger: new AllocationLedger().accounting(),
+    })
+    const stripped = JSON.parse(JSON.stringify(result)) as Record<string, any>
+    delete stripped.metrics.constructor
+    expect(Object.prototype.hasOwnProperty.call(stripped.metrics, 'constructor')).toBe(false)
+    const forged = await rehash(result, (d) => delete d.metrics.constructor)
+    const outcome = await verifyHarnessResult(forged)
+    expect(outcome.ok).toBe(false)
+    expect(outcome.errors.join('\n')).toMatch(/missing for the sample series/)
+  })
+
+  it('rejects a __proto__ sample series without polluting Object.prototype', async () => {
+    await expect(finalizeResult({
+      environment: makeEnvironment(),
+      samples: [makeSample(range(30), 'operation', '__proto__')],
+      ledger: new AllocationLedger().accounting(),
+    })).rejects.toThrow(/__proto__/)
+    expect(({} as Record<string, unknown>).__proto__marker).toBeUndefined()
+    expect(Object.getPrototypeOf({})).toBe(Object.prototype)
   })
 })
 

@@ -107,6 +107,38 @@ describe('markInput / markPresent', () => {
     expect(harness.sampleCount('input-to-present')).toBe(0)
   })
 
+  it('rejects a second concurrent use of a label that is still pending', async () => {
+    const frames = manualRaf()
+    const harness = makeHarness({ raf: frames.raf })
+    harness.markInput('dup')
+    expect(() => harness.markInput('dup')).toThrow(/pending/)
+    expect(() => harness.markInput('dup')).toThrow(/pending/)
+    // The first pairing still completes once its frames run.
+    const settled = harness.markPresent('dup')
+    frames.frame()
+    frames.frame()
+    await settled
+    expect(harness.sampleCount('input-to-present')).toBe(1)
+    // After completion the label is reusable.
+    harness.markInput('dup')
+    const again = harness.markPresent('dup')
+    frames.frame()
+    frames.frame()
+    await again
+    expect(harness.sampleCount('input-to-present')).toBe(2)
+  })
+
+  it('rejects concurrent recordRoundTrip calls sharing one label', async () => {
+    const frames = manualRaf()
+    const harness = makeHarness({ raf: frames.raf })
+    const first = harness.recordRoundTrip('shared')
+    await expect(harness.recordRoundTrip('shared')).rejects.toThrow(/pending/)
+    frames.frame()
+    frames.frame()
+    await first
+    expect(harness.sampleCount('input-to-present')).toBe(1)
+  })
+
   it('rejects instead of hanging when no animation frame ever fires', async () => {
     const harness = makeHarness({ raf: () => undefined, timeoutMs: 20 })
     harness.markInput('hidden-tab')
