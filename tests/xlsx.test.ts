@@ -91,6 +91,35 @@ describe('xlsx render', () => {
   })
 })
 
+describe('xlsx finite fallback', () => {
+  // Ported from final-integration-preparation/render-review/finite-fallback.test.ts.
+  // A finite source value must never be rendered as Infinity/NaN by a built-in
+  // numeric format, and the unsupported-format fallback must keep the finite
+  // source magnitude instead of leaking a non-finite rounding intermediate.
+  test.each([1e308, -1e308, Number.MAX_VALUE, -Number.MAX_VALUE])(
+    'finite large value is never displayed as Infinity/NaN: %s',
+    (value) => {
+      for (const id of [0, 2, 3, 4, 9, 10]) {
+        const text = formatValue(value, id)
+        expect(text).not.toMatch(/Infinity|NaN/)
+        expect(text.length).toBeGreaterThan(0)
+      }
+    },
+  )
+
+  test('fallback retains finite source magnitude for unsupported percent overflow', () => {
+    expect(formatValue(1e308, 9)).toBe('1e+308')
+    expect(formatValue(-1e308, 10)).toBe('-1e+308')
+  })
+
+  test('ordinary common-format output is preserved', () => {
+    expect(formatValue(3.14159, 2)).toBe('3.14')
+    expect(formatValue(0.42, 9)).toBe('42%')
+    expect(formatValue(4500.5, 3)).toBe('4,501')
+    expect(formatValue(4500.5, 4)).toBe('4,500.50')
+  })
+})
+
 describe('xlsx grid sizing limits', () => {
   test('ignores an implausibly wide <col> declaration (found via corpus poi-56295.xlsx)', async () => {
     // declares 1025 columns but only holds data in A1:C1

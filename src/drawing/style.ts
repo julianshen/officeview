@@ -1,7 +1,7 @@
-/** Serializable DrawingML color, theme and paint models shared by Office adapters. */
 import { attrs, getChild, getChildren, orderedChildren, parseXmlOrdered, type XmlNode } from '../core/xml'
+import { SUPPORTED_PATTERN_PRESETS, type PatternPreset } from './pattern'
 export interface DrawingIssue {
-  kind: 'invalid-color' | 'invalid-color-transform' | 'unsupported-color-transform' | 'invalid-fill' | 'unsupported-fill' | 'unsupported-gradient' | 'invalid-line' | 'unsupported-line' | 'missing-theme-style' | 'unsupported-effect' | 'unsupported-3d' | 'invalid-theme' | 'invalid-paint' | 'unsupported-text-appearance' | 'unsupported-text-warp'
+  kind: 'invalid-color' | 'invalid-color-transform' | 'unsupported-color-transform' | 'unsupported-color-mode' | 'invalid-fill' | 'unsupported-fill' | 'unsupported-gradient' | 'invalid-line' | 'unsupported-line' | 'missing-theme-style' | 'unsupported-effect' | 'unsupported-3d' | 'invalid-theme' | 'invalid-paint' | 'unsupported-text-appearance' | 'unsupported-text-warp'
   message: string
   feature?: string
   pathIndex?: number
@@ -19,10 +19,13 @@ export type FillDefinition =
   | { kind: 'none' }
   | { kind: 'solid'; color?: ColorDefinition }
   | { kind: 'gradient'; stops?: Array<{ position: number; color?: ColorDefinition }>; gradient?: string; angle?: number; scaled?: boolean; focus?: Partial<RelativeRect>; rotateWithShape?: boolean }
+  | { kind: 'pattern'; preset?: string; fgColor?: ColorDefinition; bgColor?: ColorDefinition }
+  | { kind: 'group' }
 export type DrawingFill =
   | { kind: 'none' }
   | { kind: 'solid'; color: DrawingColor }
   | { kind: 'gradient'; gradient: 'linear' | 'circle'; stops: Array<{ position: number; color: DrawingColor }>; angle: number; scaled: boolean; focus?: RelativeRect; rotateWithShape?: boolean }
+  | { kind: 'pattern'; preset: PatternPreset; fgColor: DrawingColor; bgColor: DrawingColor }
 export interface ArrowEnd { type?: 'none' | 'triangle' | 'stealth' | 'diamond' | 'oval' | 'arrow'; width?: 'sm' | 'med' | 'lg'; length?: 'sm' | 'med' | 'lg' }
 export interface DrawingLine {
   width?: number
@@ -48,7 +51,63 @@ export interface ThemeContext {
   effectStyles: string[][]
   issues: DrawingIssue[]
 }
-export interface DrawingStyle { fill?: DrawingFill; line?: DrawingLine; issues: DrawingIssue[] }
+export type RectAlignment = 'tl' | 't' | 'tr' | 'l' | 'ctr' | 'r' | 'bl' | 'b' | 'br'
+
+export interface DrawingShadow {
+  color: DrawingColor
+  blurPx: number
+  offsetX: number
+  offsetY: number
+  algn?: RectAlignment
+  rotWithShape?: boolean
+}
+export interface DrawingStyle {
+  fill?: DrawingFill
+  line?: DrawingLine
+  shadow?: DrawingShadow
+  issues: DrawingIssue[]
+}
+
+/**
+ * Normalized alignment anchor point on unit rect [0, 1]x[0, 1] per ECMA-376 Part 1 §20.1.8.46 (ST_RectAlignment).
+ * Default alignment for outerShdw is 'b' (0.5, 1.0).
+ *
+ * Per ECMA-376 (CT_OuterShadowEffect), "alignment happens first, effectively
+ * setting the origin for scale, skew, and offset": the shadow copy starts
+ * coincident with the shape, is scaled (sx/sy) and skewed (kx/ky) about this
+ * anchor, and is then translated by the dist/dir vector. A translation is
+ * anchor-independent, so at 100% scale and zero skew algn is a geometric
+ * no-op regardless of its value. In particular it must NOT displace the
+ * shadow (e.g. PowerPoint's stock `algn="ctr"` offset shadows render below
+ * the shape, not centered on it).
+ */
+export function shadowAlignmentOrigin(algn?: RectAlignment): { x: number; y: number } {
+  switch (algn) {
+    case 'tl': return { x: 0, y: 0 }
+    case 't': return { x: 0.5, y: 0 }
+    case 'tr': return { x: 1, y: 0 }
+    case 'l': return { x: 0, y: 0.5 }
+    case 'ctr': return { x: 0.5, y: 0.5 }
+    case 'r': return { x: 1, y: 0.5 }
+    case 'bl': return { x: 0, y: 1 }
+    case 'b': return { x: 0.5, y: 1 }
+    case 'br': return { x: 1, y: 1 }
+    default: return { x: 0.5, y: 1 }
+  }
+}
+
+/**
+ * Computes effective shadow offset. This is the authored dist/dir vector
+ * unchanged: per ECMA-376 the algn anchor only positions scale/skew, and a
+ * translation does not depend on its origin, so alignment never contributes
+ * a displacement (see shadowAlignmentOrigin).
+ */
+export function computeShadowOffset(shadow: DrawingShadow): { offsetX: number; offsetY: number } {
+  return {
+    offsetX: shadow.offsetX,
+    offsetY: shadow.offsetY,
+  }
+}
 
 const colorKinds = { srgbClr: 'srgb', schemeClr: 'scheme', sysClr: 'system', prstClr: 'preset', scrgbClr: 'scrgb', hslClr: 'hsl' } as const
 const clamp = (value: number): number => Math.min(1, Math.max(0, value))
@@ -185,8 +244,10 @@ function parseRect(node: XmlNode | undefined, issues: DrawingIssue[]): Partial<R
 }
 /** Parse fields without filling defaults, allowing property-by-property inheritance. */
 export function parseFillDefinition(node: XmlNode | undefined, issues: DrawingIssue[] = []): FillDefinition | undefined {
+  if (!node) return undefined
   for (const [name, child] of orderedChildren(node)) {
     if (name === 'noFill') return { kind: 'none' }
+    if (name === 'grpFill') return { kind: 'group' }
     if (name === 'solidFill') { const color = parseDrawingColor(child); return { kind: 'solid', ...(color ? { color } : {}) } }
     if (name === 'gradFill') {
       const fill: Extract<FillDefinition, { kind: 'gradient' }> = { kind: 'gradient' }
@@ -216,7 +277,13 @@ export function parseFillDefinition(node: XmlNode | undefined, issues: DrawingIs
       if (attrs(child).flip && attrs(child).flip !== 'none') issue(issues, 'unsupported-gradient', 'Gradient tile flipping is deferred', 'flip')
       return fill
     }
-    if (['blipFill', 'pattFill', 'grpFill'].includes(name)) { issue(issues, 'unsupported-fill', `Fill ${name} is deferred`, name); return { kind: 'none' } }
+    if (name === 'pattFill') {
+      const prst = attrs(child).prst
+      const fgColor = parseDrawingColor(getChild(child, 'fgClr'))
+      const bgColor = parseDrawingColor(getChild(child, 'bgClr'))
+      return { kind: 'pattern', ...(prst !== undefined ? { preset: prst } : {}), ...(fgColor ? { fgColor } : {}), ...(bgColor ? { bgColor } : {}) }
+    }
+    if (name === 'blipFill') { issue(issues, 'unsupported-fill', `Fill ${name} is deferred`, name); return { kind: 'none' } }
   }
   return undefined
 }
@@ -320,15 +387,32 @@ export function parseThemeContext(input?: string | XmlNode, colorMap: Record<str
 }
 function mergeFill(base: FillDefinition | undefined, direct: FillDefinition | undefined): FillDefinition | undefined {
   if (!direct) return base
-  if (!base || base.kind !== direct.kind || direct.kind === 'none') return direct
+  if (!base || base.kind !== direct.kind || direct.kind === 'none' || direct.kind === 'group') return direct
   if (base.kind === 'gradient' && direct.kind === 'gradient') return { ...base, ...direct, ...(base.focus || direct.focus ? { focus: { ...base.focus, ...direct.focus } } : {}) }
+  if (base.kind === 'pattern' && direct.kind === 'pattern') return { ...base, ...direct }
   return { ...base, ...direct } as FillDefinition
 }
 export function resolveFill(definition: FillDefinition | undefined, theme?: ThemeContext, placeholder?: DrawingColor, issues: DrawingIssue[] = []): DrawingFill | undefined {
-  if (!definition || definition.kind === 'none') return definition
+  if (!definition || definition.kind === 'none' || definition.kind === 'group') return definition?.kind === 'none' ? { kind: 'none' } : undefined
   if (definition.kind === 'solid') {
     const color = resolveDrawingColor(definition.color, theme, placeholder, issues)
     return color ? { kind: 'solid', color } : { kind: 'none' }
+  }
+  if (definition.kind === 'pattern') {
+    const preset = definition.preset ?? ''
+    if (!preset) {
+      issue(issues, 'invalid-fill', 'Pattern fill missing prst attribute', 'pattFill')
+      const fg = resolveDrawingColor(definition.fgColor, theme, placeholder, issues)
+      return fg ? { kind: 'solid', color: fg } : { kind: 'none' }
+    }
+    if (!SUPPORTED_PATTERN_PRESETS.has(preset)) {
+      issue(issues, 'unsupported-fill', `Pattern preset ${preset} is deferred`, preset)
+      const fg = resolveDrawingColor(definition.fgColor, theme, placeholder, issues)
+      return fg ? { kind: 'solid', color: fg } : { kind: 'none' }
+    }
+    const fg = resolveDrawingColor(definition.fgColor, theme, placeholder, issues) ?? placeholder ?? { r: 0, g: 0, b: 0, a: 1 }
+    const bg = resolveDrawingColor(definition.bgColor, theme, placeholder, issues) ?? { r: 255, g: 255, b: 255, a: 1 }
+    return { kind: 'pattern', preset: preset as PatternPreset, fgColor: fg, bgColor: bg }
   }
   const stops = (definition.stops ?? []).flatMap(stop => {
     const color = resolveDrawingColor(stop.color, theme, placeholder, issues)
@@ -351,7 +435,7 @@ function referenceIndex(node: XmlNode, issues: DrawingIssue[]): number | undefin
 }
 /** Resolve direct spPr over theme fillRef/lnRef. Absent fields remain inheritable. */
 export function resolveDrawingStyle(spPr?: XmlNode, style?: XmlNode, theme?: ThemeContext, defaults: Partial<DrawingStyle> = {}): DrawingStyle {
-  const issues: DrawingIssue[] = [...(defaults.issues ?? [])]
+  const issues: DrawingIssue[] = []
   let inheritedFill: FillDefinition | undefined, inheritedLine: LineDefinition | undefined, fillPlaceholder: DrawingColor | undefined, linePlaceholder: DrawingColor | undefined
   const fillRef = getChild(style, 'fillRef'), lineRef = getChild(style, 'lnRef')
   if (fillRef) {
@@ -373,7 +457,14 @@ export function resolveDrawingStyle(spPr?: XmlNode, style?: XmlNode, theme?: The
     }
   }
   const definition = mergeFill(inheritedFill, parseFillDefinition(spPr, issues))
-  const fill = definition ? resolveFill(definition, theme, fillPlaceholder, issues) : defaults.fill
+  const fill = definition
+    ? definition.kind === 'group'
+      ? defaults.fill
+      : resolveFill(definition, theme, fillPlaceholder, issues)
+    : defaults.fill
+  if ((!definition || definition.kind === 'group') && defaults.fill?.kind === 'gradient') {
+    issue(issues, 'unsupported-gradient', 'Group-level gradient fill across child shapes is evaluated in child local coordinates', 'gradFill')
+  }
   const directLine = parseLineDefinition(getChild(spPr, 'ln'), issues)
   let line: DrawingLine | undefined = defaults.line ? { ...defaults.line } : undefined
   if (inheritedLine || directLine) {
@@ -386,9 +477,59 @@ export function resolveDrawingStyle(spPr?: XmlNode, style?: XmlNode, theme?: The
       if (inheritedLine?.[end] || directLine?.[end]) line[end] = { type: 'none', width: 'med', length: 'med', ...defaults.line?.[end], ...inheritedLine?.[end], ...directLine?.[end] }
     }
   }
-  for (const name of ['effectLst', 'effectDag']) {
-    const effects = getChild(spPr, name)
-    if (effects && orderedChildren(effects).some(([n]) => n !== '#text')) issue(issues, 'unsupported-effect', 'Drawing effects are deferred', name)
+  // Under DrawingML group effect model, group shadow cascades to child shapes.
+  // We defensive-copy defaults.shadow to avoid aliasing and mutation bleed.
+  let shadow: DrawingShadow | undefined = defaults.shadow ? { ...defaults.shadow } : undefined
+  const effectLst = getChild(spPr, 'effectLst')
+  if (effectLst) {
+    for (const [name, child] of orderedChildren(effectLst)) {
+      if (name === '#text') continue
+      if (name === 'outerShdw') {
+        const a = attrs(child)
+        const distNum = numeric(a.dist) ?? 0
+        const dirNum = numeric(a.dir) ?? 0
+        const blurNum = numeric(a.blurRad) ?? 0
+        const distPx = Math.max(0, distNum) / 9525
+        const blurPx = Math.min(100, Math.max(0, blurNum / 9525))
+        const dirRad = ((dirNum / 60000) * Math.PI) / 180
+        // Same DoS posture as text shadows (MAX_SHADOW_OFFSET_PX): hostile
+        // distances clamp per axis instead of projecting silhouettes megameters
+        // off-canvas.
+        const clampAxis = (n: number): number => Math.min(200, Math.max(-200, n))
+        const offsetX = clampAxis(Math.cos(dirRad) * distPx)
+        const offsetY = clampAxis(Math.sin(dirRad) * distPx)
+        const rawAlgn = a.algn
+        const validAlgns: readonly RectAlignment[] = ['tl', 't', 'tr', 'l', 'ctr', 'r', 'bl', 'b', 'br'] as const
+        const algn = typeof rawAlgn === 'string' && (validAlgns as readonly string[]).includes(rawAlgn)
+          ? (rawAlgn as RectAlignment)
+          : undefined
+        const rotWithShape = a.rotWithShape !== undefined
+          ? !['0', 'false'].includes(a.rotWithShape)
+          : true
+        // CT_OuterShadowEffect scale/skew (sx/sy ST_Percentage default 100%,
+        // kx/ky ST_FixedAngle default 0) apply about the algn anchor before the
+        // dist/dir translation. Canvas 2D shadow projection paints the
+        // unscaled silhouette, so non-default values are diagnosed and the
+        // shadow falls back to the pure dist/dir offset. (Per MS-OI29500,
+        // spPr shadows only render at 100% sx/sy anyway; ignoring scale here
+        // matches Office for every conformant spPr shadow.)
+        const sx = percentage(a.sx) ?? 1
+        const sy = percentage(a.sy) ?? 1
+        const kx = (numeric(a.kx) ?? 0) / 60000
+        const ky = (numeric(a.ky) ?? 0) / 60000
+        if (sx !== 1 || sy !== 1 || kx !== 0 || ky !== 0) {
+          issue(issues, 'unsupported-effect', 'Scaled or skewed outer shadows render unscaled; sx/sy/kx/ky are deferred', 'outerShdw-scale')
+        }
+        const color = resolveDrawingColor(parseDrawingColor(child), theme, fillPlaceholder, issues) ?? { r: 0, g: 0, b: 0, a: 1 }
+        shadow = { color, blurPx, offsetX, offsetY, ...(algn ? { algn } : {}), rotWithShape }
+      } else {
+        issue(issues, 'unsupported-effect', `Drawing effect ${name} is deferred`, name)
+      }
+    }
+  }
+  const effectDag = getChild(spPr, 'effectDag')
+  if (effectDag && orderedChildren(effectDag).some(([n]) => n !== '#text')) {
+    issue(issues, 'unsupported-effect', 'Drawing effects are deferred', 'effectDag')
   }
   for (const name of ['sp3d', 'scene3d']) if (getChild(spPr, name)) issue(issues, 'unsupported-3d', 'Drawing 3D effects are deferred', name)
   const effectRef = getChild(style, 'effectRef')
@@ -396,5 +537,39 @@ export function resolveDrawingStyle(spPr?: XmlNode, style?: XmlNode, theme?: The
     const index = referenceIndex(effectRef, issues)
     if (index && theme?.effectStyles[index - 1]?.length) issue(issues, 'unsupported-effect', `Theme effect style ${index} is deferred`, 'effectRef')
   }
-  return { ...(fill ? { fill } : {}), ...(line ? { line } : {}), issues }
+  return { ...(fill ? { fill } : {}), ...(line ? { line } : {}), ...(shadow ? { shadow } : {}), issues }
+}
+
+/**
+ * Resolves DrawingML group shape properties (<a:grpSpPr>), cascading any parent
+ * group defaults for fills, outline defaults, and shadow.
+ *
+ * Spec note (ECMA-376 CT_GroupShapeProperties):
+ * Valid elements are xfrm, fill, effectLst/effectDag, scene3d, sp3d, extLst.
+ * <a:ln> is absent from schema; outlines in grpSpPr are accepted leniently as container defaults.
+ * <a:useBgFill/> maps to the container group fill when present inside groups,
+ * approximating MSO show-through behavior for opaque and transparent containers.
+ * Group shadow cascades per-child, which converges with Office's unit group shadow
+ * for opaque shapes as later siblings overpaint earlier child shadows.
+ */
+export function parseGroupShapeProperties(
+  grpSpPr?: XmlNode,
+  theme?: ThemeContext,
+  defaults: Partial<DrawingStyle> = {},
+): DrawingStyle {
+  if (!grpSpPr) {
+    return {
+      ...(defaults.fill ? { fill: defaults.fill } : {}),
+      ...(defaults.line ? { line: { ...defaults.line } } : {}),
+      ...(defaults.shadow ? { shadow: { ...defaults.shadow } } : {}),
+      issues: [],
+    }
+  }
+  const bwMode = attrs(grpSpPr).bwMode
+  const issues: DrawingIssue[] = []
+  if (bwMode && bwMode !== 'auto') {
+    issue(issues, 'unsupported-color-mode', `Group black-and-white mode ${bwMode} is deferred`, bwMode)
+  }
+  const resolved = resolveDrawingStyle(grpSpPr, undefined, theme, defaults)
+  return { ...resolved, issues: [...issues, ...resolved.issues] }
 }

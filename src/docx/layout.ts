@@ -5,7 +5,7 @@
  */
 import type { DocxBlock, DocxDocument, DocxImage, DocxParagraph, DocxSection, DocxTable, DocxTableCell, DocxTableRow, DocxTextRun, TableCellBorder } from './types'
 import { paintDrawing } from './drawing'
-import type { ContentPaintAssets } from '../drawing/content'
+import type { ContentImageAsset, ContentPaintAssets } from '../drawing/content'
 import { fontFamilyCss } from './styles'
 import { withFallbackFonts } from '../core/fonts/fallback'
 import type { FontResolver } from '../core/fonts/register'
@@ -116,7 +116,7 @@ export interface HFBlock {
   margins?: { top: number; bottom: number; left: number; right: number }
   clipTopPx?: number
   clipBottomPx?: number
-  imageIndex?: Map<DocxImage, number>
+  imageIndex?: Map<CollectedDocImage, number>
   yPx: number
   xPx: number
   widthPx: number
@@ -567,14 +567,25 @@ function blockParagraphs(blocks: DocxBlock[]): DocxParagraph[] {
  * Vector drawings that carry textbox paragraphs contribute their nested
  * images depth-first (cycles impossible through the seen set), so a textbox
  * asset keeps its source position directly after its owning placement. */
-export function collectDocImages(document: DocxDocument): DocxImage[] {
-  const out: DocxImage[] = [], seen = new Set<DocxImage>()
-  const push = (image: DocxImage): void => {
+export type CollectedDocImage = ContentImageAsset & Partial<Omit<DocxImage, 'data' | 'mime'>>
+export function collectDocImages(document: DocxDocument): CollectedDocImage[] {
+  const out: CollectedDocImage[] = [], seen = new Set<ContentImageAsset>()
+  const shapesSeen = new Set<import('./types').DocxDrawingShape>()
+  const shapes = (items: import('./types').DocxDrawingShape[]): void => {
+    for (const shape of items) {
+      if (shapesSeen.has(shape)) continue
+      shapesSeen.add(shape)
+      if (shape.image) push(shape.image)
+      if (shape.children) shapes(shape.children)
+    }
+  }
+  const push = (image: CollectedDocImage): void => {
     if (seen.has(image)) return
     seen.add(image)
     out.push(image)
     const drawing = image.drawing
     if (drawing?.kind === 'textbox') for (const paragraph of drawing.paragraphs) for (const nested of paragraph.images ?? []) push(nested)
+    if (drawing?.kind === 'diagram') shapes(drawing.shapes)
   }
   const collect = (blocks: DocxBlock[]) => {
     for (const paragraph of blockParagraphs(blocks)) for (const image of paragraph.images ?? []) push(image)
@@ -835,7 +846,7 @@ function layoutNoteBlocks(
   startY: number,
   measure: MeasureFn,
   noteDefaults: { fontFamily: string; fontSizePt: number },
-  imageIndex: Map<DocxImage, number>,
+  imageIndex: Map<CollectedDocImage, number>,
 ): { entries: Array<{ line: LineBox; images: ImageBox[] }>; endY: number; tableOverflow: boolean } {
   const entries: Array<{ line: LineBox; images: ImageBox[] }> = []
   let curY = startY
@@ -902,7 +913,7 @@ function attachFootnotesToPages(
   document: DocxDocument,
   measure: MeasureFn,
   defaults: { fontFamily: string; fontSizePt: number },
-  imageIndex: Map<DocxImage, number>
+  imageIndex: Map<CollectedDocImage, number>
 ): void {
   if (!document.footnotes || document.footnotes.length === 0) return
   const noteMap = new Map(document.footnotes.map((n) => [n.id, n]))
@@ -954,7 +965,7 @@ function attachEndnotesToPages(
   document: DocxDocument,
   measure: MeasureFn,
   defaults: { fontFamily: string; fontSizePt: number },
-  imageIndex: Map<DocxImage, number>
+  imageIndex: Map<CollectedDocImage, number>
 ): void {
   if (!document.endnotes || document.endnotes.length === 0 || pages.length === 0) return
   const noteMap = new Map(document.endnotes.map((n) => [n.id, n]))
@@ -1017,6 +1028,8 @@ const HIGHLIGHT_CSS: Record<string, string> = {
 
 /** Paint laid pages onto a 2D context already scaled so 1 unit = 1 px. */
 export interface RenderPagesOptions {
+  /** Registered family aliases, shared by text measurement and painting. */
+  resolveFont?: FontResolver
   /** First page's number for PAGE field substitution (default 1). */
   pageNumberStart?: number
   /** Total for NUMPAGES substitution (default pages.length). */
@@ -1025,8 +1038,6 @@ export interface RenderPagesOptions {
   watermark?: WatermarkOptions | ResolvedWatermark
   /** Optional decoded-asset lookup for nested picture paint. */
   assets?: ContentPaintAssets
-  /** Optional embedded font resolver for mapping families to registered aliases. */
-  resolveFont?: FontResolver
 }
 
 export function renderPages(
@@ -1039,13 +1050,8 @@ export function renderPages(
   ctx.textBaseline = 'alphabetic'
   ctx.fillStyle = '#000000'
   let lastFont = ''
-  // NOTE: resolved only from RenderPagesOptions.resolveFont. A sibling
-  // embedded-fonts change threads an equivalent hook through
-  // ContentPaintAssets; that type extension is not part of Phase 22, so this
-  // lookup intentionally stays branch-local to keep the Phase 22 tree green.
-  const fontResolver = options?.resolveFont
-  const baseFamilyCss = fontResolver ? (family: string) => fontFamilyCss(fontResolver(family)) : fontFamilyCss
-  const resolveFamily = withFallbackFonts(baseFamilyCss, options?.assets?.fallbackFonts)
+  const resolveFont = options?.resolveFont ?? options?.assets?.resolveFont
+  const resolveFamily = withFallbackFonts(resolveFont ? family => fontFamilyCss(resolveFont(family)) : fontFamilyCss, options?.assets?.fallbackFonts)
   const measure = createMeasurer(ctx, resolveFamily)
   const firstNumber = options?.pageNumberStart ?? 1
   const totalPages = options?.totalPages ?? pages.length
@@ -1336,24 +1342,32 @@ function paintImages(
 function resolveDocxBorder(a: TableCellBorder | undefined, b: TableCellBorder | undefined): TableCellBorder | undefined {
   if (!a || a.style === 'none' || a.style === 'nil') return (b && b.style !== 'none' && b.style !== 'nil') ? b : undefined
   if (!b || b.style === 'none' || b.style === 'nil') return a
-  const wA = a.widthPt !== undefined ? a.widthPt : (BORDER_WIDTH[a.style ?? 'thin'] ? (BORDER_WIDTH[a.style ?? 'thin'] * 3) / 4 : 0.75)
-  const wB = b.widthPt !== undefined ? b.widthPt : (BORDER_WIDTH[b.style ?? 'thin'] ? (BORDER_WIDTH[b.style ?? 'thin'] * 3) / 4 : 0.75)
-  if (wA !== wB) return wA > wB ? a : b
-  const styleRank: Record<string, number> = {
-    double: 5,
-    single: 4,
-    thin: 4,
-    thick: 4,
-    wave: 4,
-    dashed: 3,
-    dotted: 2,
-    nil: 0,
-    none: 0,
+  type Border = { spec?: TableCellBorder; css: string }
+  const styles = ['single', 'thick', 'double', 'dotted', 'dashed', 'dotDash', 'dotDotDash', 'triple', 'thinThickSmallGap', 'thickThinSmallGap', 'thinThickThinSmallGap', 'thinThickMediumGap', 'thickThinMediumGap', 'thinThickThinMediumGap', 'thinThickLargeGap', 'thickThinLargeGap', 'thinThickThinLargeGap', 'wave', 'doubleWave', 'dashSmallGap', 'dashDotStroked', 'threeDEmboss', 'threeDEngrave', 'outset', 'inset']
+  const width = (border: Border) => border.spec?.widthPt !== undefined ? border.spec.widthPt * 4 / 3 : Math.max(1, BORDER_WIDTH[border.css] ?? 1)
+  const weight = (border: Border) => {
+    const style = border.spec?.style ?? border.css
+    if (style === 'dotted' || style === 'dashed') return 1
+    const number = style === 'single' || style === 'thin' ? 1 : style === 'thick' ? 2 : style === 'double' ? 3 : Math.max(1, styles.indexOf(style) + 3)
+    // Word's conflict weight uses eighths of a point; dotted/dashed have
+    // fixed weight 1, so a common pixel scale cannot be canceled here.
+    return width(border) * 6 * number
   }
-  const rA = styleRank[a.style ?? 'single'] ?? 1
-  const rB = styleRank[b.style ?? 'single'] ?? 1
-  if (rA !== rB) return rA > rB ? a : b
-  return a
+  const winner = (a: Border, b: Border): Border => {
+    if (weight(a) !== weight(b)) return weight(a) > weight(b) ? a : b
+    const ai = styles.indexOf(a.spec?.style ?? 'single'), bi = styles.indexOf(b.spec?.style ?? 'single')
+    if (ai !== bi) return ai < bi ? a : b
+    // Darker colors win identical-style ties; reading order settles equality.
+    const brightness = (border: Border) => {
+      const rgb = /^#?([0-9a-f]{6})$/i.exec(border.spec?.color ?? '000000')?.[1] ?? '000000'
+      const r = parseInt(rgb.slice(0, 2), 16), g = parseInt(rgb.slice(2, 4), 16), b = parseInt(rgb.slice(4), 16)
+      return [r + b + 2 * g, b + 2 * g, g]
+    }
+    const ab = brightness(a), bb = brightness(b)
+    for (let i = 0; i < ab.length; i++) if (ab[i] !== bb[i]) return ab[i] < bb[i] ? a : b
+    return a
+  }
+  return winner({ spec: a, css: a.style ?? 'single' }, { spec: b, css: b.style ?? 'single' }).spec
 }
 
 function hasConflict(a: TableCellBorder | undefined, b: TableCellBorder | undefined): boolean {
@@ -1435,6 +1449,22 @@ function paintTables(tables: TableBox[], ctx: CanvasRenderingContext2D): void {
             ctx.lineTo(x2 + offset, y2 + offset)
             ctx.stroke()
             ctx.restore()
+          } else if (style === 'double') {
+            const length = Math.hypot(x2 - x1, y2 - y1)
+            if (length > 0) {
+              ctx.save()
+              try {
+                ctx.lineWidth = lw / 3
+                const dx = -(y2 - y1) / length * lw / 3
+                const dy = (x2 - x1) / length * lw / 3
+                for (const sign of [1, -1]) {
+                  ctx.beginPath()
+                  ctx.moveTo(x1 + offset + sign * dx, y1 + offset + sign * dy)
+                  ctx.lineTo(x2 + offset + sign * dx, y2 + offset + sign * dy)
+                  ctx.stroke()
+                }
+              } finally { ctx.restore() }
+            }
           } else {
             ctx.beginPath()
             ctx.moveTo(x1 + offset, y1 + offset)
@@ -1705,17 +1735,10 @@ function computeMergeRegions(table: DocxTable, positions: CellPosition[][]): Map
           right: borderCss(spec('right')),
           top: borderCss(spec('top')),
           bottom: borderCss(spec('bottom')),
-          tl2br: borderCss(cb?.tl2br ?? tb?.tl2br),
-          tr2bl: borderCss(cb?.tr2bl ?? tb?.tr2bl),
+          tl2br: borderCss(cb && 'tl2br' in cb ? cb.tl2br : tb?.tl2br),
+          tr2bl: borderCss(cb && 'tr2bl' in cb ? cb.tr2bl : tb?.tr2bl),
         },
-        borderSpecs: {
-          left: spec('left'),
-          right: spec('right'),
-          top: spec('top'),
-          bottom: spec('bottom'),
-          tl2br: cb?.tl2br ?? tb?.tl2br,
-          tr2bl: cb?.tr2bl ?? tb?.tr2bl,
-        }
+        borderSpecs: { left: spec('left'), right: spec('right'), top: spec('top'), bottom: spec('bottom'), tl2br: cell.borders && 'tl2br' in cell.borders ? cell.borders.tl2br : tb?.tl2br, tr2bl: cell.borders && 'tr2bl' in cell.borders ? cell.borders.tr2bl : tb?.tr2bl }
       }
       // extend over following continue cells
       for (let rr = r + 1; rr < table.rows.length; rr++) {
@@ -2222,17 +2245,10 @@ function layoutTableRows(
             right: borderCss(spec('right')),
             top: borderCss(spec('top')),
             bottom: borderCss(spec('bottom')),
-            tl2br: borderCss(cb?.tl2br ?? tb?.tl2br),
-            tr2bl: borderCss(cb?.tr2bl ?? tb?.tr2bl),
+            tl2br: borderCss(cb && 'tl2br' in cb ? cb.tl2br : tb?.tl2br),
+            tr2bl: borderCss(cb && 'tr2bl' in cb ? cb.tr2bl : tb?.tr2bl),
           },
-          borderSpecs: {
-            left: spec('left'),
-            right: spec('right'),
-            top: spec('top'),
-            bottom: spec('bottom'),
-            tl2br: cb?.tl2br ?? tb?.tl2br,
-            tr2bl: cb?.tr2bl ?? tb?.tr2bl,
-          }
+          borderSpecs: { left: spec('left'), right: spec('right'), top: spec('top'), bottom: spec('bottom'), tl2br: cb && 'tl2br' in cb ? cb.tl2br : tb?.tl2br, tr2bl: cb && 'tr2bl' in cb ? cb.tr2bl : tb?.tr2bl }
         },
         lines: cellLines,
         anchors: cellAnchors,

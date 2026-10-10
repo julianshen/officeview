@@ -86,3 +86,57 @@ describe('docx render', () => {
     expect(ink).toBeGreaterThan(100)
   })
 })
+
+describe('docx revision markup and symbol runs', () => {
+  const NS = 'xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"'
+  async function parseBodyXml(bodyInner: string) {
+    const JSZip = (await import('jszip')).default
+    const zip = new JSZip()
+    zip.file('word/document.xml', `<w:document ${NS}><w:body>${bodyInner}</w:body></w:document>`)
+    zip.file('word/_rels/document.xml.rels', '<Relationships/>')
+    return parseDocx(await OfficePackage.load(await zip.generateAsync({ type: 'uint8array' })))
+  }
+
+  test('w:sym parses to its codepoint with the symbol font', async () => {
+    const doc = await parseBodyXml(
+      `<w:p><w:r><w:rPr><w:sz w:val="24"/></w:rPr><w:sym w:font="Wingdings" w:char="F0B7"/></w:r></w:p>`)
+    const run = doc.sections[0].paragraphs[0].runs[0]
+    expect(run.text).toBe(String.fromCodePoint(0xF0B7))
+    expect(run.fontFamily).toBe('Wingdings')
+  })
+
+  test('w:sym with invalid char is skipped safely', async () => {
+    const doc = await parseBodyXml(
+      `<w:p><w:r><w:t>A</w:t><w:sym w:font="Wingdings" w:char="ZZZ"/><w:sym w:font="Wingdings" w:char="110000"/></w:r></w:p>`)
+    expect(doc.sections[0].paragraphs[0].runs[0].text).toBe('A')
+  })
+
+  test('mixed text and sym preserves order without overriding the run font', async () => {
+    const doc = await parseBodyXml(
+      `<w:p><w:r><w:rPr><w:rFonts w:ascii="Calibri"/></w:rPr><w:t>Item </w:t><w:sym w:font="Wingdings" w:char="F0A7"/></w:r></w:p>`)
+    const run = doc.sections[0].paragraphs[0].runs[0]
+    expect(run.text).toBe('Item ' + String.fromCodePoint(0xF0A7))
+    expect(run.fontFamily).toBe('Calibri')
+  })
+
+  test('tracked insertions render while deletions stay hidden (Final view)', async () => {
+    const doc = await parseBodyXml(
+      `<w:p><w:r><w:t>Keep </w:t></w:r><w:ins><w:r><w:t>added</w:t></w:r></w:ins><w:del><w:r><w:t>removed</w:t></w:r></w:del></w:p>`)
+    const text = doc.sections[0].paragraphs[0].runs.map(r => r.text).join('')
+    expect(text).toContain('Keep ')
+    expect(text).toContain('added')
+    expect(text).not.toContain('removed')
+  })
+
+  test('symbols remain in order when a run also contains a drawing', async () => {
+    const doc = await parseBodyXml('<w:p><w:r><w:t>A</w:t><w:sym w:font="Wingdings" w:char="F0B7"/><w:drawing/><w:t>B</w:t></w:r></w:p>')
+    expect(doc.sections[0].paragraphs[0].runs.map(run => run.text).join('')).toBe('A' + String.fromCodePoint(0xF0B7) + 'B')
+  })
+
+  test('block-level tracked insertion collects inserted paragraphs', async () => {
+    const doc = await parseBodyXml(
+      `<w:p><w:r><w:t>First</w:t></w:r></w:p><w:ins><w:p><w:r><w:t>Inserted</w:t></w:r></w:p></w:ins><w:del><w:p><w:r><w:t>Deleted</w:t></w:r></w:p></w:del>`)
+    const texts = doc.sections[0].paragraphs.map(p => p.runs.map(r => r.text).join(''))
+    expect(texts).toEqual(['First', 'Inserted'])
+  })
+})

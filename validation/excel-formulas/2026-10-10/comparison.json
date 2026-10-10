@@ -1,0 +1,5633 @@
+{
+  "nativeSha256": "7abf55e42f389c75eafe66f81c6fcc12d8e00f7d336595b39fe479cb5ba2fbf8",
+  "counts": {
+    "from-file": {
+      "match": 36,
+      "diagnosed-gap": 35,
+      "mismatch": 16
+    },
+    "dynamic": {
+      "match": 36,
+      "diagnosed-gap": 35,
+      "mismatch": 16
+    }
+  },
+  "fileLoadObservations": {
+    "B322": "_xDE00_"
+  },
+  "cases": [
+    {
+      "id": 1,
+      "group": "supported-control",
+      "formula": "SUM(Data!A1:A4)",
+      "cell": "B2",
+      "range": "B2:B2",
+      "row": 2,
+      "rows": 1,
+      "cols": 1,
+      "native": [
+        [
+          8
+        ]
+      ],
+      "nativeFormula": "SUM(Data!A1:A4)",
+      "nativeFormulaAttrs": {},
+      "nativeCellAttrs": {
+        "r": "B2"
+      },
+      "from-file": {
+        "actual": [
+          [
+            8
+          ]
+        ],
+        "issues": [],
+        "status": "match",
+        "display": "8"
+      },
+      "dynamic": {
+        "actual": [
+          [
+            8
+          ]
+        ],
+        "issues": [],
+        "status": "match",
+        "display": "8"
+      },
+      "cached": {
+        "actual": [
+          [
+            8
+          ]
+        ],
+        "issues": [],
+        "status": "match",
+        "display": "8"
+      }
+    },
+    {
+      "id": 2,
+      "group": "supported-control",
+      "formula": "AVERAGE(Data!A1:A4)",
+      "cell": "B7",
+      "range": "B7:B7",
+      "row": 7,
+      "rows": 1,
+      "cols": 1,
+      "native": [
+        [
+          2
+        ]
+      ],
+      "nativeFormula": "AVERAGE(Data!A1:A4)",
+      "nativeFormulaAttrs": {},
+      "nativeCellAttrs": {
+        "r": "B7"
+      },
+      "from-file": {
+        "actual": [
+          [
+            2
+          ]
+        ],
+        "issues": [],
+        "status": "match",
+        "display": "2"
+      },
+      "dynamic": {
+        "actual": [
+          [
+            2
+          ]
+        ],
+        "issues": [],
+        "status": "match",
+        "display": "2"
+      },
+      "cached": {
+        "actual": [
+          [
+            2
+          ]
+        ],
+        "issues": [],
+        "status": "match",
+        "display": "2"
+      }
+    },
+    {
+      "id": 3,
+      "group": "supported-control",
+      "formula": "COUNT(Data!A1:A4)",
+      "cell": "B12",
+      "range": "B12:B12",
+      "row": 12,
+      "rows": 1,
+      "cols": 1,
+      "native": [
+        [
+          4
+        ]
+      ],
+      "nativeFormula": "COUNT(Data!A1:A4)",
+      "nativeFormulaAttrs": {},
+      "nativeCellAttrs": {
+        "r": "B12"
+      },
+      "from-file": {
+        "actual": [
+          [
+            4
+          ]
+        ],
+        "issues": [],
+        "status": "match",
+        "display": "4"
+      },
+      "dynamic": {
+        "actual": [
+          [
+            4
+          ]
+        ],
+        "issues": [],
+        "status": "match",
+        "display": "4"
+      },
+      "cached": {
+        "actual": [
+          [
+            4
+          ]
+        ],
+        "issues": [],
+        "status": "match",
+        "display": "4"
+      }
+    },
+    {
+      "id": 4,
+      "group": "supported-control",
+      "formula": "IF(FALSE,1/0,7)",
+      "cell": "B17",
+      "range": "B17:B17",
+      "row": 17,
+      "rows": 1,
+      "cols": 1,
+      "native": [
+        [
+          7
+        ]
+      ],
+      "nativeFormula": "IF(FALSE,1/0,7)",
+      "nativeFormulaAttrs": {},
+      "nativeCellAttrs": {
+        "r": "B17"
+      },
+      "from-file": {
+        "actual": [
+          [
+            7
+          ]
+        ],
+        "issues": [],
+        "status": "match",
+        "display": "7"
+      },
+      "dynamic": {
+        "actual": [
+          [
+            7
+          ]
+        ],
+        "issues": [],
+        "status": "match",
+        "display": "7"
+      },
+      "cached": {
+        "actual": [
+          [
+            7
+          ]
+        ],
+        "issues": [],
+        "status": "match",
+        "display": "7"
+      }
+    },
+    {
+      "id": 5,
+      "group": "supported-control",
+      "formula": "IFERROR(1/0,9)",
+      "cell": "B22",
+      "range": "B22:B22",
+      "row": 22,
+      "rows": 1,
+      "cols": 1,
+      "native": [
+        [
+          9
+        ]
+      ],
+      "nativeFormula": "IFERROR(1/0,9)",
+      "nativeFormulaAttrs": {},
+      "nativeCellAttrs": {
+        "r": "B22"
+      },
+      "from-file": {
+        "actual": [
+          [
+            9
+          ]
+        ],
+        "issues": [],
+        "status": "match",
+        "display": "9"
+      },
+      "dynamic": {
+        "actual": [
+          [
+            9
+          ]
+        ],
+        "issues": [],
+        "status": "match",
+        "display": "9"
+      },
+      "cached": {
+        "actual": [
+          [
+            9
+          ]
+        ],
+        "issues": [],
+        "status": "match",
+        "display": "9"
+      }
+    },
+    {
+      "id": 6,
+      "group": "supported-control",
+      "formula": "SUMIF(Data!A1:A4,\">1\",Data!B1:B4)",
+      "cell": "B27",
+      "range": "B27:B27",
+      "row": 27,
+      "rows": 1,
+      "cols": 1,
+      "native": [
+        [
+          90
+        ]
+      ],
+      "nativeFormula": "SUMIF(Data!A1:A4,\">1\",Data!B1:B4)",
+      "nativeFormulaAttrs": {},
+      "nativeCellAttrs": {
+        "r": "B27"
+      },
+      "from-file": {
+        "actual": [
+          [
+            90
+          ]
+        ],
+        "issues": [],
+        "status": "match",
+        "display": "90"
+      },
+      "dynamic": {
+        "actual": [
+          [
+            90
+          ]
+        ],
+        "issues": [],
+        "status": "match",
+        "display": "90"
+      },
+      "cached": {
+        "actual": [
+          [
+            90
+          ]
+        ],
+        "issues": [],
+        "status": "match",
+        "display": "90"
+      }
+    },
+    {
+      "id": 7,
+      "group": "supported-control",
+      "formula": "COUNTIFS(Data!A1:A4,\">=2\",Data!B1:B4,\"<40\")",
+      "cell": "B32",
+      "range": "B32:B32",
+      "row": 32,
+      "rows": 1,
+      "cols": 1,
+      "native": [
+        [
+          2
+        ]
+      ],
+      "nativeFormula": "COUNTIFS(Data!A1:A4,\">=2\",Data!B1:B4,\"<40\")",
+      "nativeFormulaAttrs": {},
+      "nativeCellAttrs": {
+        "r": "B32"
+      },
+      "from-file": {
+        "actual": [
+          [
+            2
+          ]
+        ],
+        "issues": [],
+        "status": "match",
+        "display": "2"
+      },
+      "dynamic": {
+        "actual": [
+          [
+            2
+          ]
+        ],
+        "issues": [],
+        "status": "match",
+        "display": "2"
+      },
+      "cached": {
+        "actual": [
+          [
+            2
+          ]
+        ],
+        "issues": [],
+        "status": "match",
+        "display": "2"
+      }
+    },
+    {
+      "id": 8,
+      "group": "supported-control",
+      "formula": "XLOOKUP(2,Data!A1:A4,Data!B1:B4)",
+      "cell": "B37",
+      "range": "B37:B37",
+      "row": 37,
+      "rows": 1,
+      "cols": 1,
+      "native": [
+        [
+          20
+        ]
+      ],
+      "nativeFormula": "_xlfn.XLOOKUP(2,Data!A1:A4,Data!B1:B4)",
+      "nativeFormulaAttrs": {},
+      "nativeCellAttrs": {
+        "r": "B37"
+      },
+      "from-file": {
+        "actual": [
+          [
+            20
+          ]
+        ],
+        "issues": [],
+        "status": "match",
+        "display": "20"
+      },
+      "dynamic": {
+        "actual": [
+          [
+            20
+          ]
+        ],
+        "issues": [],
+        "status": "match",
+        "display": "20"
+      },
+      "cached": {
+        "actual": [
+          [
+            20
+          ]
+        ],
+        "issues": [],
+        "status": "match",
+        "display": "20"
+      }
+    },
+    {
+      "id": 9,
+      "group": "supported-control",
+      "formula": "XLOOKUP(2,Data!A1:A4,Data!B1:B4,,0,-1)",
+      "cell": "B42",
+      "range": "B42:B42",
+      "row": 42,
+      "rows": 1,
+      "cols": 1,
+      "native": [
+        [
+          30
+        ]
+      ],
+      "nativeFormula": "_xlfn.XLOOKUP(2,Data!A1:A4,Data!B1:B4,,0,-1)",
+      "nativeFormulaAttrs": {},
+      "nativeCellAttrs": {
+        "r": "B42"
+      },
+      "from-file": {
+        "actual": [
+          [
+            30
+          ]
+        ],
+        "issues": [],
+        "status": "match",
+        "display": "30"
+      },
+      "dynamic": {
+        "actual": [
+          [
+            30
+          ]
+        ],
+        "issues": [],
+        "status": "match",
+        "display": "30"
+      },
+      "cached": {
+        "actual": [
+          [
+            30
+          ]
+        ],
+        "issues": [],
+        "status": "match",
+        "display": "30"
+      }
+    },
+    {
+      "id": 10,
+      "group": "supported-control",
+      "formula": "MATCH(2,Data!A1:A4,0)",
+      "cell": "B47",
+      "range": "B47:B47",
+      "row": 47,
+      "rows": 1,
+      "cols": 1,
+      "native": [
+        [
+          2
+        ]
+      ],
+      "nativeFormula": "MATCH(2,Data!A1:A4,0)",
+      "nativeFormulaAttrs": {},
+      "nativeCellAttrs": {
+        "r": "B47"
+      },
+      "from-file": {
+        "actual": [
+          [
+            2
+          ]
+        ],
+        "issues": [],
+        "status": "match",
+        "display": "2"
+      },
+      "dynamic": {
+        "actual": [
+          [
+            2
+          ]
+        ],
+        "issues": [],
+        "status": "match",
+        "display": "2"
+      },
+      "cached": {
+        "actual": [
+          [
+            2
+          ]
+        ],
+        "issues": [],
+        "status": "match",
+        "display": "2"
+      }
+    },
+    {
+      "id": 11,
+      "group": "supported-control",
+      "formula": "INDEX(Data!A1:B4,3,2)",
+      "cell": "B52",
+      "range": "B52:B52",
+      "row": 52,
+      "rows": 1,
+      "cols": 1,
+      "native": [
+        [
+          30
+        ]
+      ],
+      "nativeFormula": "INDEX(Data!A1:B4,3,2)",
+      "nativeFormulaAttrs": {},
+      "nativeCellAttrs": {
+        "r": "B52"
+      },
+      "from-file": {
+        "actual": [
+          [
+            30
+          ]
+        ],
+        "issues": [],
+        "status": "match",
+        "display": "30"
+      },
+      "dynamic": {
+        "actual": [
+          [
+            30
+          ]
+        ],
+        "issues": [],
+        "status": "match",
+        "display": "30"
+      },
+      "cached": {
+        "actual": [
+          [
+            30
+          ]
+        ],
+        "issues": [],
+        "status": "match",
+        "display": "30"
+      }
+    },
+    {
+      "id": 12,
+      "group": "supported-control",
+      "formula": "DATE(1900,2,29)",
+      "cell": "B57",
+      "range": "B57:B57",
+      "row": 57,
+      "rows": 1,
+      "cols": 1,
+      "native": [
+        [
+          60
+        ]
+      ],
+      "nativeFormula": "DATE(1900,2,29)",
+      "nativeFormulaAttrs": {},
+      "nativeCellAttrs": {
+        "r": "B57",
+        "s": "1"
+      },
+      "from-file": {
+        "actual": [
+          [
+            60
+          ]
+        ],
+        "issues": [],
+        "status": "match",
+        "display": "1900-02-29"
+      },
+      "dynamic": {
+        "actual": [
+          [
+            60
+          ]
+        ],
+        "issues": [],
+        "status": "match",
+        "display": "1900-02-29"
+      },
+      "cached": {
+        "actual": [
+          [
+            60
+          ]
+        ],
+        "issues": [],
+        "status": "match",
+        "display": "1900-02-29"
+      }
+    },
+    {
+      "id": 13,
+      "group": "supported-control",
+      "formula": "DATEVALUE(\"2024-02-29\")",
+      "cell": "B62",
+      "range": "B62:B62",
+      "row": 62,
+      "rows": 1,
+      "cols": 1,
+      "native": [
+        [
+          45351
+        ]
+      ],
+      "nativeFormula": "DATEVALUE(\"2024-02-29\")",
+      "nativeFormulaAttrs": {},
+      "nativeCellAttrs": {
+        "r": "B62"
+      },
+      "from-file": {
+        "actual": [
+          [
+            45351
+          ]
+        ],
+        "issues": [],
+        "status": "match",
+        "display": "45351"
+      },
+      "dynamic": {
+        "actual": [
+          [
+            45351
+          ]
+        ],
+        "issues": [],
+        "status": "match",
+        "display": "45351"
+      },
+      "cached": {
+        "actual": [
+          [
+            45351
+          ]
+        ],
+        "issues": [],
+        "status": "match",
+        "display": "45351"
+      }
+    },
+    {
+      "id": 14,
+      "group": "supported-control",
+      "formula": "TEXT(1234.567,\"#,##0.00\")",
+      "cell": "B67",
+      "range": "B67:B67",
+      "row": 67,
+      "rows": 1,
+      "cols": 1,
+      "native": [
+        [
+          "1,234.57"
+        ]
+      ],
+      "nativeFormula": "TEXT(1234.567,\"#,##0.00\")",
+      "nativeFormulaAttrs": {},
+      "nativeCellAttrs": {
+        "r": "B67",
+        "t": "str"
+      },
+      "from-file": {
+        "actual": [
+          [
+            "1,234.57"
+          ]
+        ],
+        "issues": [],
+        "status": "match",
+        "display": "1,234.57"
+      },
+      "dynamic": {
+        "actual": [
+          [
+            "1,234.57"
+          ]
+        ],
+        "issues": [],
+        "status": "match",
+        "display": "1,234.57"
+      },
+      "cached": {
+        "actual": [
+          [
+            "1,234.57"
+          ]
+        ],
+        "issues": [],
+        "status": "match",
+        "display": "1,234.57"
+      }
+    },
+    {
+      "id": 15,
+      "group": "supported-control",
+      "formula": "TEXT(60,\"yyyy-mm-dd\")",
+      "cell": "B72",
+      "range": "B72:B72",
+      "row": 72,
+      "rows": 1,
+      "cols": 1,
+      "native": [
+        [
+          "1900-02-29"
+        ]
+      ],
+      "nativeFormula": "TEXT(60,\"yyyy-mm-dd\")",
+      "nativeFormulaAttrs": {},
+      "nativeCellAttrs": {
+        "r": "B72",
+        "t": "str"
+      },
+      "from-file": {
+        "actual": [
+          [
+            "1900-02-29"
+          ]
+        ],
+        "issues": [],
+        "status": "match",
+        "display": "1900-02-29"
+      },
+      "dynamic": {
+        "actual": [
+          [
+            "1900-02-29"
+          ]
+        ],
+        "issues": [],
+        "status": "match",
+        "display": "1900-02-29"
+      },
+      "cached": {
+        "actual": [
+          [
+            "1900-02-29"
+          ]
+        ],
+        "issues": [],
+        "status": "match",
+        "display": "1900-02-29"
+      }
+    },
+    {
+      "id": 16,
+      "group": "lookup-edge",
+      "formula": "XMATCH(2,Data!C1:C4)",
+      "cell": "B77",
+      "range": "B77:B77",
+      "row": 77,
+      "rows": 1,
+      "cols": 1,
+      "native": [
+        [
+          3
+        ]
+      ],
+      "nativeFormula": "_xlfn.XMATCH(2,Data!C1:C4)",
+      "nativeFormulaAttrs": {},
+      "nativeCellAttrs": {
+        "r": "B77"
+      },
+      "from-file": {
+        "actual": [
+          [
+            "#NAME?"
+          ]
+        ],
+        "issues": [
+          {
+            "kind": "unsupported-reference",
+            "feature": "lookup-blank-vector-unverified",
+            "message": "Structural absent lookup cells need a function-specific comparison profile"
+          }
+        ],
+        "status": "diagnosed-gap",
+        "display": "#NAME?"
+      },
+      "dynamic": {
+        "actual": [
+          [
+            "#NAME?"
+          ]
+        ],
+        "issues": [
+          {
+            "kind": "unsupported-reference",
+            "feature": "lookup-blank-vector-unverified",
+            "message": "Structural absent lookup cells need a function-specific comparison profile"
+          }
+        ],
+        "status": "diagnosed-gap",
+        "display": "#NAME?"
+      },
+      "cached": {
+        "actual": [
+          [
+            3
+          ]
+        ],
+        "issues": [
+          {
+            "kind": "unsupported-reference",
+            "feature": "lookup-blank-vector-unverified",
+            "message": "Structural absent lookup cells need a function-specific comparison profile"
+          },
+          {
+            "kind": "unsupported-formula",
+            "feature": "lookup-blank-vector-unverified",
+            "message": "Formula at B77 uses unsupported lookup-blank-vector-unverified; prior cached value retained"
+          }
+        ],
+        "status": "diagnosed-gap",
+        "display": "3"
+      }
+    },
+    {
+      "id": 17,
+      "group": "lookup-edge",
+      "formula": "XLOOKUP(2,Data!C1:C4,Data!B1:B4)",
+      "cell": "B82",
+      "range": "B82:B82",
+      "row": 82,
+      "rows": 1,
+      "cols": 1,
+      "native": [
+        [
+          30
+        ]
+      ],
+      "nativeFormula": "_xlfn.XLOOKUP(2,Data!C1:C4,Data!B1:B4)",
+      "nativeFormulaAttrs": {},
+      "nativeCellAttrs": {
+        "r": "B82"
+      },
+      "from-file": {
+        "actual": [
+          [
+            "#NAME?"
+          ]
+        ],
+        "issues": [
+          {
+            "kind": "unsupported-reference",
+            "feature": "lookup-blank-vector-unverified",
+            "message": "Structural absent lookup cells need a function-specific comparison profile"
+          }
+        ],
+        "status": "diagnosed-gap",
+        "display": "#NAME?"
+      },
+      "dynamic": {
+        "actual": [
+          [
+            "#NAME?"
+          ]
+        ],
+        "issues": [
+          {
+            "kind": "unsupported-reference",
+            "feature": "lookup-blank-vector-unverified",
+            "message": "Structural absent lookup cells need a function-specific comparison profile"
+          }
+        ],
+        "status": "diagnosed-gap",
+        "display": "#NAME?"
+      },
+      "cached": {
+        "actual": [
+          [
+            30
+          ]
+        ],
+        "issues": [
+          {
+            "kind": "unsupported-reference",
+            "feature": "lookup-blank-vector-unverified",
+            "message": "Structural absent lookup cells need a function-specific comparison profile"
+          },
+          {
+            "kind": "unsupported-formula",
+            "feature": "lookup-blank-vector-unverified",
+            "message": "Formula at B82 uses unsupported lookup-blank-vector-unverified; prior cached value retained"
+          }
+        ],
+        "status": "diagnosed-gap",
+        "display": "30"
+      }
+    },
+    {
+      "id": 18,
+      "group": "lookup-edge",
+      "formula": "MATCH(2,Data!C1:C4,0)",
+      "cell": "B87",
+      "range": "B87:B87",
+      "row": 87,
+      "rows": 1,
+      "cols": 1,
+      "native": [
+        [
+          3
+        ]
+      ],
+      "nativeFormula": "MATCH(2,Data!C1:C4,0)",
+      "nativeFormulaAttrs": {},
+      "nativeCellAttrs": {
+        "r": "B87"
+      },
+      "from-file": {
+        "actual": [
+          [
+            "#NAME?"
+          ]
+        ],
+        "issues": [
+          {
+            "kind": "unsupported-reference",
+            "feature": "lookup-blank-vector-unverified",
+            "message": "Structural absent lookup cells need a function-specific comparison profile"
+          }
+        ],
+        "status": "diagnosed-gap",
+        "display": "#NAME?"
+      },
+      "dynamic": {
+        "actual": [
+          [
+            "#NAME?"
+          ]
+        ],
+        "issues": [
+          {
+            "kind": "unsupported-reference",
+            "feature": "lookup-blank-vector-unverified",
+            "message": "Structural absent lookup cells need a function-specific comparison profile"
+          }
+        ],
+        "status": "diagnosed-gap",
+        "display": "#NAME?"
+      },
+      "cached": {
+        "actual": [
+          [
+            3
+          ]
+        ],
+        "issues": [
+          {
+            "kind": "unsupported-reference",
+            "feature": "lookup-blank-vector-unverified",
+            "message": "Structural absent lookup cells need a function-specific comparison profile"
+          },
+          {
+            "kind": "unsupported-formula",
+            "feature": "lookup-blank-vector-unverified",
+            "message": "Formula at B87 uses unsupported lookup-blank-vector-unverified; prior cached value retained"
+          }
+        ],
+        "status": "diagnosed-gap",
+        "display": "3"
+      }
+    },
+    {
+      "id": 19,
+      "group": "lookup-edge",
+      "formula": "XLOOKUP(\"\",Data!C1:C4,Data!B1:B4)",
+      "cell": "B92",
+      "range": "B92:B92",
+      "row": 92,
+      "rows": 1,
+      "cols": 1,
+      "native": [
+        [
+          40
+        ]
+      ],
+      "nativeFormula": "_xlfn.XLOOKUP(\"\",Data!C1:C4,Data!B1:B4)",
+      "nativeFormulaAttrs": {},
+      "nativeCellAttrs": {
+        "r": "B92"
+      },
+      "from-file": {
+        "actual": [
+          [
+            "#NAME?"
+          ]
+        ],
+        "issues": [
+          {
+            "kind": "unsupported-reference",
+            "feature": "lookup-blank-value-unverified",
+            "message": "Blank lookup input matching needs a settled function-specific profile"
+          }
+        ],
+        "status": "diagnosed-gap",
+        "display": "#NAME?"
+      },
+      "dynamic": {
+        "actual": [
+          [
+            "#NAME?"
+          ]
+        ],
+        "issues": [
+          {
+            "kind": "unsupported-reference",
+            "feature": "lookup-blank-value-unverified",
+            "message": "Blank lookup input matching needs a settled function-specific profile"
+          }
+        ],
+        "status": "diagnosed-gap",
+        "display": "#NAME?"
+      },
+      "cached": {
+        "actual": [
+          [
+            40
+          ]
+        ],
+        "issues": [
+          {
+            "kind": "unsupported-reference",
+            "feature": "lookup-blank-value-unverified",
+            "message": "Blank lookup input matching needs a settled function-specific profile"
+          },
+          {
+            "kind": "unsupported-formula",
+            "feature": "lookup-blank-value-unverified",
+            "message": "Formula at B92 uses unsupported lookup-blank-value-unverified; prior cached value retained"
+          }
+        ],
+        "status": "diagnosed-gap",
+        "display": "40"
+      }
+    },
+    {
+      "id": 20,
+      "group": "lookup-edge",
+      "formula": "XLOOKUP(0,Data!C1:C4,Data!B1:B4)",
+      "cell": "B97",
+      "range": "B97:B97",
+      "row": 97,
+      "rows": 1,
+      "cols": 1,
+      "native": [
+        [
+          "#N/A"
+        ]
+      ],
+      "nativeFormula": "_xlfn.XLOOKUP(0,Data!C1:C4,Data!B1:B4)",
+      "nativeFormulaAttrs": {},
+      "nativeCellAttrs": {
+        "r": "B97",
+        "t": "e"
+      },
+      "from-file": {
+        "actual": [
+          [
+            "#NAME?"
+          ]
+        ],
+        "issues": [
+          {
+            "kind": "unsupported-reference",
+            "feature": "lookup-blank-vector-unverified",
+            "message": "Structural absent lookup cells need a function-specific comparison profile"
+          }
+        ],
+        "status": "diagnosed-gap",
+        "display": "#NAME?"
+      },
+      "dynamic": {
+        "actual": [
+          [
+            "#NAME?"
+          ]
+        ],
+        "issues": [
+          {
+            "kind": "unsupported-reference",
+            "feature": "lookup-blank-vector-unverified",
+            "message": "Structural absent lookup cells need a function-specific comparison profile"
+          }
+        ],
+        "status": "diagnosed-gap",
+        "display": "#NAME?"
+      },
+      "cached": {
+        "actual": [
+          [
+            "#N/A"
+          ]
+        ],
+        "issues": [
+          {
+            "kind": "unsupported-reference",
+            "feature": "lookup-blank-vector-unverified",
+            "message": "Structural absent lookup cells need a function-specific comparison profile"
+          },
+          {
+            "kind": "unsupported-formula",
+            "feature": "lookup-blank-vector-unverified",
+            "message": "Formula at B97 uses unsupported lookup-blank-vector-unverified; prior cached value retained"
+          }
+        ],
+        "status": "diagnosed-gap",
+        "display": "#N/A"
+      }
+    },
+    {
+      "id": 21,
+      "group": "lookup-edge",
+      "formula": "XMATCH(2,Data!D1:D4)",
+      "cell": "B102",
+      "range": "B102:B102",
+      "row": 102,
+      "rows": 1,
+      "cols": 1,
+      "native": [
+        [
+          3
+        ]
+      ],
+      "nativeFormula": "_xlfn.XMATCH(2,Data!D1:D4)",
+      "nativeFormulaAttrs": {},
+      "nativeCellAttrs": {
+        "r": "B102"
+      },
+      "from-file": {
+        "actual": [
+          [
+            "#NAME?"
+          ]
+        ],
+        "issues": [
+          {
+            "kind": "unsupported-reference",
+            "feature": "lookup-numeric-text-unverified",
+            "message": "Stored numeric text is not converted to an unverified numeric lookup match"
+          }
+        ],
+        "status": "diagnosed-gap",
+        "display": "#NAME?"
+      },
+      "dynamic": {
+        "actual": [
+          [
+            "#NAME?"
+          ]
+        ],
+        "issues": [
+          {
+            "kind": "unsupported-reference",
+            "feature": "lookup-numeric-text-unverified",
+            "message": "Stored numeric text is not converted to an unverified numeric lookup match"
+          }
+        ],
+        "status": "diagnosed-gap",
+        "display": "#NAME?"
+      },
+      "cached": {
+        "actual": [
+          [
+            3
+          ]
+        ],
+        "issues": [
+          {
+            "kind": "unsupported-reference",
+            "feature": "lookup-numeric-text-unverified",
+            "message": "Stored numeric text is not converted to an unverified numeric lookup match"
+          },
+          {
+            "kind": "unsupported-formula",
+            "feature": "lookup-numeric-text-unverified",
+            "message": "Formula at B102 uses unsupported lookup-numeric-text-unverified; prior cached value retained"
+          }
+        ],
+        "status": "diagnosed-gap",
+        "display": "3"
+      }
+    },
+    {
+      "id": 22,
+      "group": "lookup-edge",
+      "formula": "MATCH(2,Data!D1:D4,0)",
+      "cell": "B107",
+      "range": "B107:B107",
+      "row": 107,
+      "rows": 1,
+      "cols": 1,
+      "native": [
+        [
+          3
+        ]
+      ],
+      "nativeFormula": "MATCH(2,Data!D1:D4,0)",
+      "nativeFormulaAttrs": {},
+      "nativeCellAttrs": {
+        "r": "B107"
+      },
+      "from-file": {
+        "actual": [
+          [
+            "#NAME?"
+          ]
+        ],
+        "issues": [
+          {
+            "kind": "unsupported-reference",
+            "feature": "lookup-numeric-text-unverified",
+            "message": "Stored numeric text is not converted to an unverified numeric lookup match"
+          }
+        ],
+        "status": "diagnosed-gap",
+        "display": "#NAME?"
+      },
+      "dynamic": {
+        "actual": [
+          [
+            "#NAME?"
+          ]
+        ],
+        "issues": [
+          {
+            "kind": "unsupported-reference",
+            "feature": "lookup-numeric-text-unverified",
+            "message": "Stored numeric text is not converted to an unverified numeric lookup match"
+          }
+        ],
+        "status": "diagnosed-gap",
+        "display": "#NAME?"
+      },
+      "cached": {
+        "actual": [
+          [
+            3
+          ]
+        ],
+        "issues": [
+          {
+            "kind": "unsupported-reference",
+            "feature": "lookup-numeric-text-unverified",
+            "message": "Stored numeric text is not converted to an unverified numeric lookup match"
+          },
+          {
+            "kind": "unsupported-formula",
+            "feature": "lookup-numeric-text-unverified",
+            "message": "Formula at B107 uses unsupported lookup-numeric-text-unverified; prior cached value retained"
+          }
+        ],
+        "status": "diagnosed-gap",
+        "display": "3"
+      }
+    },
+    {
+      "id": 23,
+      "group": "lookup-edge",
+      "formula": "XLOOKUP(2,Data!D1:D4,Data!B1:B4)",
+      "cell": "B112",
+      "range": "B112:B112",
+      "row": 112,
+      "rows": 1,
+      "cols": 1,
+      "native": [
+        [
+          30
+        ]
+      ],
+      "nativeFormula": "_xlfn.XLOOKUP(2,Data!D1:D4,Data!B1:B4)",
+      "nativeFormulaAttrs": {},
+      "nativeCellAttrs": {
+        "r": "B112"
+      },
+      "from-file": {
+        "actual": [
+          [
+            "#NAME?"
+          ]
+        ],
+        "issues": [
+          {
+            "kind": "unsupported-reference",
+            "feature": "lookup-numeric-text-unverified",
+            "message": "Stored numeric text is not converted to an unverified numeric lookup match"
+          }
+        ],
+        "status": "diagnosed-gap",
+        "display": "#NAME?"
+      },
+      "dynamic": {
+        "actual": [
+          [
+            "#NAME?"
+          ]
+        ],
+        "issues": [
+          {
+            "kind": "unsupported-reference",
+            "feature": "lookup-numeric-text-unverified",
+            "message": "Stored numeric text is not converted to an unverified numeric lookup match"
+          }
+        ],
+        "status": "diagnosed-gap",
+        "display": "#NAME?"
+      },
+      "cached": {
+        "actual": [
+          [
+            30
+          ]
+        ],
+        "issues": [
+          {
+            "kind": "unsupported-reference",
+            "feature": "lookup-numeric-text-unverified",
+            "message": "Stored numeric text is not converted to an unverified numeric lookup match"
+          },
+          {
+            "kind": "unsupported-formula",
+            "feature": "lookup-numeric-text-unverified",
+            "message": "Formula at B112 uses unsupported lookup-numeric-text-unverified; prior cached value retained"
+          }
+        ],
+        "status": "diagnosed-gap",
+        "display": "30"
+      }
+    },
+    {
+      "id": 24,
+      "group": "lookup-edge",
+      "formula": "XMATCH(2,Data!E1:E4)",
+      "cell": "B117",
+      "range": "B117:B117",
+      "row": 117,
+      "rows": 1,
+      "cols": 1,
+      "native": [
+        [
+          3
+        ]
+      ],
+      "nativeFormula": "_xlfn.XMATCH(2,Data!E1:E4)",
+      "nativeFormulaAttrs": {},
+      "nativeCellAttrs": {
+        "r": "B117"
+      },
+      "from-file": {
+        "actual": [
+          [
+            "#NAME?"
+          ]
+        ],
+        "issues": [
+          {
+            "kind": "unsupported-reference",
+            "feature": "lookup-vector-error-unverified",
+            "message": "Lookup-vector error inclusion/propagation requires a function-specific profile"
+          }
+        ],
+        "status": "diagnosed-gap",
+        "display": "#NAME?"
+      },
+      "dynamic": {
+        "actual": [
+          [
+            "#NAME?"
+          ]
+        ],
+        "issues": [
+          {
+            "kind": "unsupported-reference",
+            "feature": "lookup-vector-error-unverified",
+            "message": "Lookup-vector error inclusion/propagation requires a function-specific profile"
+          }
+        ],
+        "status": "diagnosed-gap",
+        "display": "#NAME?"
+      },
+      "cached": {
+        "actual": [
+          [
+            3
+          ]
+        ],
+        "issues": [
+          {
+            "kind": "unsupported-reference",
+            "feature": "lookup-vector-error-unverified",
+            "message": "Lookup-vector error inclusion/propagation requires a function-specific profile"
+          },
+          {
+            "kind": "unsupported-formula",
+            "feature": "lookup-vector-error-unverified",
+            "message": "Formula at B117 uses unsupported lookup-vector-error-unverified; prior cached value retained"
+          }
+        ],
+        "status": "diagnosed-gap",
+        "display": "3"
+      }
+    },
+    {
+      "id": 25,
+      "group": "lookup-edge",
+      "formula": "XLOOKUP(2,Data!E1:E4,Data!B1:B4)",
+      "cell": "B122",
+      "range": "B122:B122",
+      "row": 122,
+      "rows": 1,
+      "cols": 1,
+      "native": [
+        [
+          30
+        ]
+      ],
+      "nativeFormula": "_xlfn.XLOOKUP(2,Data!E1:E4,Data!B1:B4)",
+      "nativeFormulaAttrs": {},
+      "nativeCellAttrs": {
+        "r": "B122"
+      },
+      "from-file": {
+        "actual": [
+          [
+            "#NAME?"
+          ]
+        ],
+        "issues": [
+          {
+            "kind": "unsupported-reference",
+            "feature": "lookup-vector-error-unverified",
+            "message": "Lookup-vector error inclusion/propagation requires a function-specific profile"
+          }
+        ],
+        "status": "diagnosed-gap",
+        "display": "#NAME?"
+      },
+      "dynamic": {
+        "actual": [
+          [
+            "#NAME?"
+          ]
+        ],
+        "issues": [
+          {
+            "kind": "unsupported-reference",
+            "feature": "lookup-vector-error-unverified",
+            "message": "Lookup-vector error inclusion/propagation requires a function-specific profile"
+          }
+        ],
+        "status": "diagnosed-gap",
+        "display": "#NAME?"
+      },
+      "cached": {
+        "actual": [
+          [
+            30
+          ]
+        ],
+        "issues": [
+          {
+            "kind": "unsupported-reference",
+            "feature": "lookup-vector-error-unverified",
+            "message": "Lookup-vector error inclusion/propagation requires a function-specific profile"
+          },
+          {
+            "kind": "unsupported-formula",
+            "feature": "lookup-vector-error-unverified",
+            "message": "Formula at B122 uses unsupported lookup-vector-error-unverified; prior cached value retained"
+          }
+        ],
+        "status": "diagnosed-gap",
+        "display": "30"
+      }
+    },
+    {
+      "id": 26,
+      "group": "lookup-edge",
+      "formula": "XLOOKUP(2,Data!E1:E4,Data!B1:B4,,0,-1)",
+      "cell": "B127",
+      "range": "B127:B127",
+      "row": 127,
+      "rows": 1,
+      "cols": 1,
+      "native": [
+        [
+          30
+        ]
+      ],
+      "nativeFormula": "_xlfn.XLOOKUP(2,Data!E1:E4,Data!B1:B4,,0,-1)",
+      "nativeFormulaAttrs": {},
+      "nativeCellAttrs": {
+        "r": "B127"
+      },
+      "from-file": {
+        "actual": [
+          [
+            30
+          ]
+        ],
+        "issues": [],
+        "status": "match",
+        "display": "30"
+      },
+      "dynamic": {
+        "actual": [
+          [
+            30
+          ]
+        ],
+        "issues": [],
+        "status": "match",
+        "display": "30"
+      },
+      "cached": {
+        "actual": [
+          [
+            30
+          ]
+        ],
+        "issues": [],
+        "status": "match",
+        "display": "30"
+      }
+    },
+    {
+      "id": 27,
+      "group": "lookup-edge",
+      "formula": "XMATCH(\"漢\",Data!F1:F4)",
+      "cell": "B132",
+      "range": "B132:B132",
+      "row": 132,
+      "rows": 1,
+      "cols": 1,
+      "native": [
+        [
+          1
+        ]
+      ],
+      "nativeFormula": "_xlfn.XMATCH(\"漢\",Data!F1:F4)",
+      "nativeFormulaAttrs": {},
+      "nativeCellAttrs": {
+        "r": "B132"
+      },
+      "from-file": {
+        "actual": [
+          [
+            "#NAME?"
+          ]
+        ],
+        "issues": [
+          {
+            "kind": "unsupported-reference",
+            "feature": "lookup-text-unicode-unverified",
+            "message": "Only the accepted finite ASCII case profile is implemented"
+          }
+        ],
+        "status": "diagnosed-gap",
+        "display": "#NAME?"
+      },
+      "dynamic": {
+        "actual": [
+          [
+            "#NAME?"
+          ]
+        ],
+        "issues": [
+          {
+            "kind": "unsupported-reference",
+            "feature": "lookup-text-unicode-unverified",
+            "message": "Only the accepted finite ASCII case profile is implemented"
+          }
+        ],
+        "status": "diagnosed-gap",
+        "display": "#NAME?"
+      },
+      "cached": {
+        "actual": [
+          [
+            1
+          ]
+        ],
+        "issues": [
+          {
+            "kind": "unsupported-reference",
+            "feature": "lookup-text-unicode-unverified",
+            "message": "Only the accepted finite ASCII case profile is implemented"
+          },
+          {
+            "kind": "unsupported-formula",
+            "feature": "lookup-text-unicode-unverified",
+            "message": "Formula at B132 uses unsupported lookup-text-unicode-unverified; prior cached value retained"
+          }
+        ],
+        "status": "diagnosed-gap",
+        "display": "1"
+      }
+    },
+    {
+      "id": 28,
+      "group": "lookup-edge",
+      "formula": "XLOOKUP(\"漢\",Data!F1:F4,Data!B1:B4)",
+      "cell": "B137",
+      "range": "B137:B137",
+      "row": 137,
+      "rows": 1,
+      "cols": 1,
+      "native": [
+        [
+          10
+        ]
+      ],
+      "nativeFormula": "_xlfn.XLOOKUP(\"漢\",Data!F1:F4,Data!B1:B4)",
+      "nativeFormulaAttrs": {},
+      "nativeCellAttrs": {
+        "r": "B137"
+      },
+      "from-file": {
+        "actual": [
+          [
+            "#NAME?"
+          ]
+        ],
+        "issues": [
+          {
+            "kind": "unsupported-reference",
+            "feature": "lookup-text-unicode-unverified",
+            "message": "Only the accepted finite ASCII case profile is implemented"
+          }
+        ],
+        "status": "diagnosed-gap",
+        "display": "#NAME?"
+      },
+      "dynamic": {
+        "actual": [
+          [
+            "#NAME?"
+          ]
+        ],
+        "issues": [
+          {
+            "kind": "unsupported-reference",
+            "feature": "lookup-text-unicode-unverified",
+            "message": "Only the accepted finite ASCII case profile is implemented"
+          }
+        ],
+        "status": "diagnosed-gap",
+        "display": "#NAME?"
+      },
+      "cached": {
+        "actual": [
+          [
+            10
+          ]
+        ],
+        "issues": [
+          {
+            "kind": "unsupported-reference",
+            "feature": "lookup-text-unicode-unverified",
+            "message": "Only the accepted finite ASCII case profile is implemented"
+          },
+          {
+            "kind": "unsupported-formula",
+            "feature": "lookup-text-unicode-unverified",
+            "message": "Formula at B137 uses unsupported lookup-text-unicode-unverified; prior cached value retained"
+          }
+        ],
+        "status": "diagnosed-gap",
+        "display": "10"
+      }
+    },
+    {
+      "id": 29,
+      "group": "lookup-edge",
+      "formula": "XMATCH(\"漢*\",Data!F1:F4,2)",
+      "cell": "B142",
+      "range": "B142:B142",
+      "row": 142,
+      "rows": 1,
+      "cols": 1,
+      "native": [
+        [
+          1
+        ]
+      ],
+      "nativeFormula": "_xlfn.XMATCH(\"漢*\",Data!F1:F4,2)",
+      "nativeFormulaAttrs": {},
+      "nativeCellAttrs": {
+        "r": "B142"
+      },
+      "from-file": {
+        "actual": [
+          [
+            "#NAME?"
+          ]
+        ],
+        "issues": [
+          {
+            "kind": "unsupported-reference",
+            "feature": "lookup-wildcard-unsupported-non-ascii",
+            "message": "pattern contains a non-ASCII code unit; Unicode wildcard/case parity is not established and is not faked"
+          }
+        ],
+        "status": "diagnosed-gap",
+        "display": "#NAME?"
+      },
+      "dynamic": {
+        "actual": [
+          [
+            "#NAME?"
+          ]
+        ],
+        "issues": [
+          {
+            "kind": "unsupported-reference",
+            "feature": "lookup-wildcard-unsupported-non-ascii",
+            "message": "pattern contains a non-ASCII code unit; Unicode wildcard/case parity is not established and is not faked"
+          }
+        ],
+        "status": "diagnosed-gap",
+        "display": "#NAME?"
+      },
+      "cached": {
+        "actual": [
+          [
+            1
+          ]
+        ],
+        "issues": [
+          {
+            "kind": "unsupported-reference",
+            "feature": "lookup-wildcard-unsupported-non-ascii",
+            "message": "pattern contains a non-ASCII code unit; Unicode wildcard/case parity is not established and is not faked"
+          },
+          {
+            "kind": "unsupported-formula",
+            "feature": "lookup-wildcard-unsupported-non-ascii",
+            "message": "Formula at B142 uses unsupported lookup-wildcard-unsupported-non-ascii; prior cached value retained"
+          }
+        ],
+        "status": "diagnosed-gap",
+        "display": "1"
+      }
+    },
+    {
+      "id": 30,
+      "group": "lookup-edge",
+      "formula": "XMATCH(\"é\",Data!G1:G4)",
+      "cell": "B147",
+      "range": "B147:B147",
+      "row": 147,
+      "rows": 1,
+      "cols": 1,
+      "native": [
+        [
+          1
+        ]
+      ],
+      "nativeFormula": "_xlfn.XMATCH(\"é\",Data!G1:G4)",
+      "nativeFormulaAttrs": {},
+      "nativeCellAttrs": {
+        "r": "B147"
+      },
+      "from-file": {
+        "actual": [
+          [
+            "#NAME?"
+          ]
+        ],
+        "issues": [
+          {
+            "kind": "unsupported-reference",
+            "feature": "lookup-text-unicode-unverified",
+            "message": "Only the accepted finite ASCII case profile is implemented"
+          }
+        ],
+        "status": "diagnosed-gap",
+        "display": "#NAME?"
+      },
+      "dynamic": {
+        "actual": [
+          [
+            "#NAME?"
+          ]
+        ],
+        "issues": [
+          {
+            "kind": "unsupported-reference",
+            "feature": "lookup-text-unicode-unverified",
+            "message": "Only the accepted finite ASCII case profile is implemented"
+          }
+        ],
+        "status": "diagnosed-gap",
+        "display": "#NAME?"
+      },
+      "cached": {
+        "actual": [
+          [
+            1
+          ]
+        ],
+        "issues": [
+          {
+            "kind": "unsupported-reference",
+            "feature": "lookup-text-unicode-unverified",
+            "message": "Only the accepted finite ASCII case profile is implemented"
+          },
+          {
+            "kind": "unsupported-formula",
+            "feature": "lookup-text-unicode-unverified",
+            "message": "Formula at B147 uses unsupported lookup-text-unicode-unverified; prior cached value retained"
+          }
+        ],
+        "status": "diagnosed-gap",
+        "display": "1"
+      }
+    },
+    {
+      "id": 31,
+      "group": "lookup-edge",
+      "formula": "XMATCH(TRUE,Data!H1:H4)",
+      "cell": "B152",
+      "range": "B152:B152",
+      "row": 152,
+      "rows": 1,
+      "cols": 1,
+      "native": [
+        [
+          1
+        ]
+      ],
+      "nativeFormula": "_xlfn.XMATCH(TRUE,Data!H1:H4)",
+      "nativeFormulaAttrs": {},
+      "nativeCellAttrs": {
+        "r": "B152"
+      },
+      "from-file": {
+        "actual": [
+          [
+            1
+          ]
+        ],
+        "issues": [],
+        "status": "match",
+        "display": "1"
+      },
+      "dynamic": {
+        "actual": [
+          [
+            1
+          ]
+        ],
+        "issues": [],
+        "status": "match",
+        "display": "1"
+      },
+      "cached": {
+        "actual": [
+          [
+            1
+          ]
+        ],
+        "issues": [],
+        "status": "match",
+        "display": "1"
+      }
+    },
+    {
+      "id": 32,
+      "group": "lookup-edge",
+      "formula": "INDEX(Data!A1:B4,1,)",
+      "cell": "B157",
+      "range": "B157:B157",
+      "row": 157,
+      "rows": 1,
+      "cols": 1,
+      "native": [
+        [
+          1
+        ]
+      ],
+      "nativeFormula": "INDEX(Data!A1:B4,1,)",
+      "nativeFormulaAttrs": {
+        "t": "array",
+        "ref": "B157:C157"
+      },
+      "nativeCellAttrs": {
+        "r": "B157",
+        "cm": "1"
+      },
+      "from-file": {
+        "actual": [
+          [
+            "#NAME?"
+          ]
+        ],
+        "issues": [
+          {
+            "kind": "unsupported-reference",
+            "feature": "lookup-index-omission-unverified",
+            "message": "Explicit INDEX omission is distinct from zero-axis selection"
+          }
+        ],
+        "status": "diagnosed-gap",
+        "display": "#NAME?"
+      },
+      "dynamic": {
+        "actual": [
+          [
+            "#NAME?"
+          ]
+        ],
+        "issues": [
+          {
+            "kind": "unsupported-reference",
+            "feature": "lookup-index-omission-unverified",
+            "message": "Explicit INDEX omission is distinct from zero-axis selection"
+          }
+        ],
+        "status": "diagnosed-gap",
+        "display": "#NAME?"
+      },
+      "cached": {
+        "actual": [
+          [
+            1
+          ]
+        ],
+        "issues": [
+          {
+            "kind": "unsupported-reference",
+            "feature": "lookup-index-omission-unverified",
+            "message": "Explicit INDEX omission is distinct from zero-axis selection"
+          },
+          {
+            "kind": "unsupported-formula",
+            "feature": "lookup-index-omission-unverified",
+            "message": "Formula at B157 uses unsupported lookup-index-omission-unverified; prior cached value retained"
+          }
+        ],
+        "status": "diagnosed-gap",
+        "display": "1"
+      }
+    },
+    {
+      "id": 33,
+      "group": "lookup-edge",
+      "formula": "INDEX(Data!A1:B4,1.9,2)",
+      "cell": "B162",
+      "range": "B162:B162",
+      "row": 162,
+      "rows": 1,
+      "cols": 1,
+      "native": [
+        [
+          10
+        ]
+      ],
+      "nativeFormula": "INDEX(Data!A1:B4,1.9,2)",
+      "nativeFormulaAttrs": {
+        "t": "array",
+        "ref": "B162"
+      },
+      "nativeCellAttrs": {
+        "r": "B162",
+        "cm": "1"
+      },
+      "from-file": {
+        "actual": [
+          [
+            "#NAME?"
+          ]
+        ],
+        "issues": [
+          {
+            "kind": "unsupported-reference",
+            "feature": "lookup-integer-argument-unverified",
+            "message": "Noninteger lookup positions/modes have no accepted profile"
+          }
+        ],
+        "status": "diagnosed-gap",
+        "display": "#NAME?"
+      },
+      "dynamic": {
+        "actual": [
+          [
+            "#NAME?"
+          ]
+        ],
+        "issues": [
+          {
+            "kind": "unsupported-reference",
+            "feature": "lookup-integer-argument-unverified",
+            "message": "Noninteger lookup positions/modes have no accepted profile"
+          }
+        ],
+        "status": "diagnosed-gap",
+        "display": "#NAME?"
+      },
+      "cached": {
+        "actual": [
+          [
+            10
+          ]
+        ],
+        "issues": [
+          {
+            "kind": "unsupported-reference",
+            "feature": "lookup-integer-argument-unverified",
+            "message": "Noninteger lookup positions/modes have no accepted profile"
+          },
+          {
+            "kind": "unsupported-formula",
+            "feature": "lookup-integer-argument-unverified",
+            "message": "Formula at B162 uses unsupported lookup-integer-argument-unverified; prior cached value retained"
+          }
+        ],
+        "status": "diagnosed-gap",
+        "display": "10"
+      }
+    },
+    {
+      "id": 34,
+      "group": "lookup-edge",
+      "formula": "MATCH(2,Data!A1:A4,0.9)",
+      "cell": "B167",
+      "range": "B167:B167",
+      "row": 167,
+      "rows": 1,
+      "cols": 1,
+      "native": [
+        [
+          3
+        ]
+      ],
+      "nativeFormula": "MATCH(2,Data!A1:A4,0.9)",
+      "nativeFormulaAttrs": {},
+      "nativeCellAttrs": {
+        "r": "B167"
+      },
+      "from-file": {
+        "actual": [
+          [
+            "#NAME?"
+          ]
+        ],
+        "issues": [
+          {
+            "kind": "unsupported-reference",
+            "feature": "lookup-integer-argument-unverified",
+            "message": "Noninteger lookup positions/modes have no accepted profile"
+          }
+        ],
+        "status": "diagnosed-gap",
+        "display": "#NAME?"
+      },
+      "dynamic": {
+        "actual": [
+          [
+            "#NAME?"
+          ]
+        ],
+        "issues": [
+          {
+            "kind": "unsupported-reference",
+            "feature": "lookup-integer-argument-unverified",
+            "message": "Noninteger lookup positions/modes have no accepted profile"
+          }
+        ],
+        "status": "diagnosed-gap",
+        "display": "#NAME?"
+      },
+      "cached": {
+        "actual": [
+          [
+            3
+          ]
+        ],
+        "issues": [
+          {
+            "kind": "unsupported-reference",
+            "feature": "lookup-integer-argument-unverified",
+            "message": "Noninteger lookup positions/modes have no accepted profile"
+          },
+          {
+            "kind": "unsupported-formula",
+            "feature": "lookup-integer-argument-unverified",
+            "message": "Formula at B167 uses unsupported lookup-integer-argument-unverified; prior cached value retained"
+          }
+        ],
+        "status": "diagnosed-gap",
+        "display": "3"
+      }
+    },
+    {
+      "id": 35,
+      "group": "conditional-edge",
+      "formula": "COUNTIF(Data!C1:C4,\"\")",
+      "cell": "B172",
+      "range": "B172:B172",
+      "row": 172,
+      "rows": 1,
+      "cols": 1,
+      "native": [
+        [
+          2
+        ]
+      ],
+      "nativeFormula": "COUNTIF(Data!C1:C4,\"\")",
+      "nativeFormulaAttrs": {},
+      "nativeCellAttrs": {
+        "r": "B172"
+      },
+      "from-file": {
+        "actual": [
+          [
+            2
+          ]
+        ],
+        "issues": [],
+        "status": "match",
+        "display": "2"
+      },
+      "dynamic": {
+        "actual": [
+          [
+            2
+          ]
+        ],
+        "issues": [],
+        "status": "match",
+        "display": "2"
+      },
+      "cached": {
+        "actual": [
+          [
+            2
+          ]
+        ],
+        "issues": [],
+        "status": "match",
+        "display": "2"
+      }
+    },
+    {
+      "id": 36,
+      "group": "conditional-edge",
+      "formula": "COUNTIF(Data!C1:C4,\"<>\")",
+      "cell": "B177",
+      "range": "B177:B177",
+      "row": 177,
+      "rows": 1,
+      "cols": 1,
+      "native": [
+        [
+          3
+        ]
+      ],
+      "nativeFormula": "COUNTIF(Data!C1:C4,\"<>\")",
+      "nativeFormulaAttrs": {},
+      "nativeCellAttrs": {
+        "r": "B177"
+      },
+      "from-file": {
+        "actual": [
+          [
+            "#NAME?"
+          ]
+        ],
+        "issues": [
+          {
+            "kind": "unsupported-reference",
+            "feature": "conditional-empty-comparison-unverified",
+            "message": "Empty comparison operand is not silently conflated with literal empty text"
+          }
+        ],
+        "status": "diagnosed-gap",
+        "display": "#NAME?"
+      },
+      "dynamic": {
+        "actual": [
+          [
+            "#NAME?"
+          ]
+        ],
+        "issues": [
+          {
+            "kind": "unsupported-reference",
+            "feature": "conditional-empty-comparison-unverified",
+            "message": "Empty comparison operand is not silently conflated with literal empty text"
+          }
+        ],
+        "status": "diagnosed-gap",
+        "display": "#NAME?"
+      },
+      "cached": {
+        "actual": [
+          [
+            3
+          ]
+        ],
+        "issues": [
+          {
+            "kind": "unsupported-reference",
+            "feature": "conditional-empty-comparison-unverified",
+            "message": "Empty comparison operand is not silently conflated with literal empty text"
+          },
+          {
+            "kind": "unsupported-formula",
+            "feature": "conditional-empty-comparison-unverified",
+            "message": "Formula at B177 uses unsupported conditional-empty-comparison-unverified; prior cached value retained"
+          }
+        ],
+        "status": "diagnosed-gap",
+        "display": "3"
+      }
+    },
+    {
+      "id": 37,
+      "group": "conditional-edge",
+      "formula": "COUNTIF(Data!C1:C4,0)",
+      "cell": "B182",
+      "range": "B182:B182",
+      "row": 182,
+      "rows": 1,
+      "cols": 1,
+      "native": [
+        [
+          0
+        ]
+      ],
+      "nativeFormula": "COUNTIF(Data!C1:C4,0)",
+      "nativeFormulaAttrs": {},
+      "nativeCellAttrs": {
+        "r": "B182"
+      },
+      "from-file": {
+        "actual": [
+          [
+            0
+          ]
+        ],
+        "issues": [],
+        "status": "match",
+        "display": "0"
+      },
+      "dynamic": {
+        "actual": [
+          [
+            0
+          ]
+        ],
+        "issues": [],
+        "status": "match",
+        "display": "0"
+      },
+      "cached": {
+        "actual": [
+          [
+            0
+          ]
+        ],
+        "issues": [],
+        "status": "match",
+        "display": "0"
+      }
+    },
+    {
+      "id": 38,
+      "group": "conditional-edge",
+      "formula": "COUNTIF(Data!D1:D4,2)",
+      "cell": "B187",
+      "range": "B187:B187",
+      "row": 187,
+      "rows": 1,
+      "cols": 1,
+      "native": [
+        [
+          2
+        ]
+      ],
+      "nativeFormula": "COUNTIF(Data!D1:D4,2)",
+      "nativeFormulaAttrs": {},
+      "nativeCellAttrs": {
+        "r": "B187"
+      },
+      "from-file": {
+        "actual": [
+          [
+            "#NAME?"
+          ]
+        ],
+        "issues": [
+          {
+            "kind": "unsupported-reference",
+            "feature": "conditional-numeric-text-unverified",
+            "message": "Stored numeric text is not silently coerced to a numeric criteria match"
+          }
+        ],
+        "status": "diagnosed-gap",
+        "display": "#NAME?"
+      },
+      "dynamic": {
+        "actual": [
+          [
+            "#NAME?"
+          ]
+        ],
+        "issues": [
+          {
+            "kind": "unsupported-reference",
+            "feature": "conditional-numeric-text-unverified",
+            "message": "Stored numeric text is not silently coerced to a numeric criteria match"
+          }
+        ],
+        "status": "diagnosed-gap",
+        "display": "#NAME?"
+      },
+      "cached": {
+        "actual": [
+          [
+            2
+          ]
+        ],
+        "issues": [
+          {
+            "kind": "unsupported-reference",
+            "feature": "conditional-numeric-text-unverified",
+            "message": "Stored numeric text is not silently coerced to a numeric criteria match"
+          },
+          {
+            "kind": "unsupported-formula",
+            "feature": "conditional-numeric-text-unverified",
+            "message": "Formula at B187 uses unsupported conditional-numeric-text-unverified; prior cached value retained"
+          }
+        ],
+        "status": "diagnosed-gap",
+        "display": "2"
+      }
+    },
+    {
+      "id": 39,
+      "group": "conditional-edge",
+      "formula": "COUNTIF(Data!D1:D4,\"<>2\")",
+      "cell": "B192",
+      "range": "B192:B192",
+      "row": 192,
+      "rows": 1,
+      "cols": 1,
+      "native": [
+        [
+          3
+        ]
+      ],
+      "nativeFormula": "COUNTIF(Data!D1:D4,\"<>2\")",
+      "nativeFormulaAttrs": {},
+      "nativeCellAttrs": {
+        "r": "B192"
+      },
+      "from-file": {
+        "actual": [
+          [
+            "#NAME?"
+          ]
+        ],
+        "issues": [
+          {
+            "kind": "unsupported-reference",
+            "feature": "conditional-negative-text-unverified",
+            "message": "Negative numeric criteria against text has no accepted profile"
+          }
+        ],
+        "status": "diagnosed-gap",
+        "display": "#NAME?"
+      },
+      "dynamic": {
+        "actual": [
+          [
+            "#NAME?"
+          ]
+        ],
+        "issues": [
+          {
+            "kind": "unsupported-reference",
+            "feature": "conditional-negative-text-unverified",
+            "message": "Negative numeric criteria against text has no accepted profile"
+          }
+        ],
+        "status": "diagnosed-gap",
+        "display": "#NAME?"
+      },
+      "cached": {
+        "actual": [
+          [
+            3
+          ]
+        ],
+        "issues": [
+          {
+            "kind": "unsupported-reference",
+            "feature": "conditional-negative-text-unverified",
+            "message": "Negative numeric criteria against text has no accepted profile"
+          },
+          {
+            "kind": "unsupported-formula",
+            "feature": "conditional-negative-text-unverified",
+            "message": "Formula at B192 uses unsupported conditional-negative-text-unverified; prior cached value retained"
+          }
+        ],
+        "status": "diagnosed-gap",
+        "display": "3"
+      }
+    },
+    {
+      "id": 40,
+      "group": "conditional-edge",
+      "formula": "SUMIF(Data!D1:D4,2,Data!B1:B4)",
+      "cell": "B197",
+      "range": "B197:B197",
+      "row": 197,
+      "rows": 1,
+      "cols": 1,
+      "native": [
+        [
+          50
+        ]
+      ],
+      "nativeFormula": "SUMIF(Data!D1:D4,2,Data!B1:B4)",
+      "nativeFormulaAttrs": {},
+      "nativeCellAttrs": {
+        "r": "B197"
+      },
+      "from-file": {
+        "actual": [
+          [
+            "#NAME?"
+          ]
+        ],
+        "issues": [
+          {
+            "kind": "unsupported-reference",
+            "feature": "conditional-numeric-text-unverified",
+            "message": "Stored numeric text is not silently coerced to a numeric criteria match"
+          }
+        ],
+        "status": "diagnosed-gap",
+        "display": "#NAME?"
+      },
+      "dynamic": {
+        "actual": [
+          [
+            "#NAME?"
+          ]
+        ],
+        "issues": [
+          {
+            "kind": "unsupported-reference",
+            "feature": "conditional-numeric-text-unverified",
+            "message": "Stored numeric text is not silently coerced to a numeric criteria match"
+          }
+        ],
+        "status": "diagnosed-gap",
+        "display": "#NAME?"
+      },
+      "cached": {
+        "actual": [
+          [
+            50
+          ]
+        ],
+        "issues": [
+          {
+            "kind": "unsupported-reference",
+            "feature": "conditional-numeric-text-unverified",
+            "message": "Stored numeric text is not silently coerced to a numeric criteria match"
+          },
+          {
+            "kind": "unsupported-formula",
+            "feature": "conditional-numeric-text-unverified",
+            "message": "Formula at B197 uses unsupported conditional-numeric-text-unverified; prior cached value retained"
+          }
+        ],
+        "status": "diagnosed-gap",
+        "display": "50"
+      }
+    },
+    {
+      "id": 41,
+      "group": "conditional-edge",
+      "formula": "COUNTIF(Data!H1:H4,TRUE)",
+      "cell": "B202",
+      "range": "B202:B202",
+      "row": 202,
+      "rows": 1,
+      "cols": 1,
+      "native": [
+        [
+          1
+        ]
+      ],
+      "nativeFormula": "COUNTIF(Data!H1:H4,TRUE)",
+      "nativeFormulaAttrs": {},
+      "nativeCellAttrs": {
+        "r": "B202"
+      },
+      "from-file": {
+        "actual": [
+          [
+            "#NAME?"
+          ]
+        ],
+        "issues": [
+          {
+            "kind": "unsupported-reference",
+            "feature": "conditional-boolean-criterion-unverified",
+            "message": "Boolean criteria require a function-specific native profile"
+          }
+        ],
+        "status": "diagnosed-gap",
+        "display": "#NAME?"
+      },
+      "dynamic": {
+        "actual": [
+          [
+            "#NAME?"
+          ]
+        ],
+        "issues": [
+          {
+            "kind": "unsupported-reference",
+            "feature": "conditional-boolean-criterion-unverified",
+            "message": "Boolean criteria require a function-specific native profile"
+          }
+        ],
+        "status": "diagnosed-gap",
+        "display": "#NAME?"
+      },
+      "cached": {
+        "actual": [
+          [
+            1
+          ]
+        ],
+        "issues": [
+          {
+            "kind": "unsupported-reference",
+            "feature": "conditional-boolean-criterion-unverified",
+            "message": "Boolean criteria require a function-specific native profile"
+          },
+          {
+            "kind": "unsupported-formula",
+            "feature": "conditional-boolean-criterion-unverified",
+            "message": "Formula at B202 uses unsupported conditional-boolean-criterion-unverified; prior cached value retained"
+          }
+        ],
+        "status": "diagnosed-gap",
+        "display": "1"
+      }
+    },
+    {
+      "id": 42,
+      "group": "conditional-edge",
+      "formula": "SUMIF(Data!A1:A4,\">0\",Data!H1:H4)",
+      "cell": "B207",
+      "range": "B207:B207",
+      "row": 207,
+      "rows": 1,
+      "cols": 1,
+      "native": [
+        [
+          1
+        ]
+      ],
+      "nativeFormula": "SUMIF(Data!A1:A4,\">0\",Data!H1:H4)",
+      "nativeFormulaAttrs": {},
+      "nativeCellAttrs": {
+        "r": "B207"
+      },
+      "from-file": {
+        "actual": [
+          [
+            "#NAME?"
+          ]
+        ],
+        "issues": [
+          {
+            "kind": "unsupported-reference",
+            "feature": "conditional-boolean-target-unverified",
+            "message": "This function has no settled boolean target coercion profile"
+          }
+        ],
+        "status": "diagnosed-gap",
+        "display": "#NAME?"
+      },
+      "dynamic": {
+        "actual": [
+          [
+            "#NAME?"
+          ]
+        ],
+        "issues": [
+          {
+            "kind": "unsupported-reference",
+            "feature": "conditional-boolean-target-unverified",
+            "message": "This function has no settled boolean target coercion profile"
+          }
+        ],
+        "status": "diagnosed-gap",
+        "display": "#NAME?"
+      },
+      "cached": {
+        "actual": [
+          [
+            1
+          ]
+        ],
+        "issues": [
+          {
+            "kind": "unsupported-reference",
+            "feature": "conditional-boolean-target-unverified",
+            "message": "This function has no settled boolean target coercion profile"
+          },
+          {
+            "kind": "unsupported-formula",
+            "feature": "conditional-boolean-target-unverified",
+            "message": "Formula at B207 uses unsupported conditional-boolean-target-unverified; prior cached value retained"
+          }
+        ],
+        "status": "diagnosed-gap",
+        "display": "1"
+      }
+    },
+    {
+      "id": 43,
+      "group": "conditional-edge",
+      "formula": "SUMIF(Data!A1:A4,\">0\",Data!E1:E4)",
+      "cell": "B212",
+      "range": "B212:B212",
+      "row": 212,
+      "rows": 1,
+      "cols": 1,
+      "native": [
+        [
+          "#N/A"
+        ]
+      ],
+      "nativeFormula": "SUMIF(Data!A1:A4,\">0\",Data!E1:E4)",
+      "nativeFormulaAttrs": {},
+      "nativeCellAttrs": {
+        "r": "B212",
+        "t": "e"
+      },
+      "from-file": {
+        "actual": [
+          [
+            "#NAME?"
+          ]
+        ],
+        "issues": [
+          {
+            "kind": "unsupported-reference",
+            "feature": "conditional-selected-target-error-unverified",
+            "message": "Selected target-error propagation requires an accepted function-specific native profile"
+          }
+        ],
+        "status": "diagnosed-gap",
+        "display": "#NAME?"
+      },
+      "dynamic": {
+        "actual": [
+          [
+            "#NAME?"
+          ]
+        ],
+        "issues": [
+          {
+            "kind": "unsupported-reference",
+            "feature": "conditional-selected-target-error-unverified",
+            "message": "Selected target-error propagation requires an accepted function-specific native profile"
+          }
+        ],
+        "status": "diagnosed-gap",
+        "display": "#NAME?"
+      },
+      "cached": {
+        "actual": [
+          [
+            "#N/A"
+          ]
+        ],
+        "issues": [
+          {
+            "kind": "unsupported-reference",
+            "feature": "conditional-selected-target-error-unverified",
+            "message": "Selected target-error propagation requires an accepted function-specific native profile"
+          },
+          {
+            "kind": "unsupported-formula",
+            "feature": "conditional-selected-target-error-unverified",
+            "message": "Formula at B212 uses unsupported conditional-selected-target-error-unverified; prior cached value retained"
+          }
+        ],
+        "status": "diagnosed-gap",
+        "display": "#N/A"
+      }
+    },
+    {
+      "id": 44,
+      "group": "conditional-edge",
+      "formula": "AVERAGEIF(Data!A1:A4,\">0\",Data!E1:E4)",
+      "cell": "B217",
+      "range": "B217:B217",
+      "row": 217,
+      "rows": 1,
+      "cols": 1,
+      "native": [
+        [
+          "#N/A"
+        ]
+      ],
+      "nativeFormula": "AVERAGEIF(Data!A1:A4,\">0\",Data!E1:E4)",
+      "nativeFormulaAttrs": {},
+      "nativeCellAttrs": {
+        "r": "B217",
+        "t": "e"
+      },
+      "from-file": {
+        "actual": [
+          [
+            "#NAME?"
+          ]
+        ],
+        "issues": [
+          {
+            "kind": "unsupported-reference",
+            "feature": "conditional-selected-target-error-unverified",
+            "message": "Selected target-error propagation requires an accepted function-specific native profile"
+          }
+        ],
+        "status": "diagnosed-gap",
+        "display": "#NAME?"
+      },
+      "dynamic": {
+        "actual": [
+          [
+            "#NAME?"
+          ]
+        ],
+        "issues": [
+          {
+            "kind": "unsupported-reference",
+            "feature": "conditional-selected-target-error-unverified",
+            "message": "Selected target-error propagation requires an accepted function-specific native profile"
+          }
+        ],
+        "status": "diagnosed-gap",
+        "display": "#NAME?"
+      },
+      "cached": {
+        "actual": [
+          [
+            "#N/A"
+          ]
+        ],
+        "issues": [
+          {
+            "kind": "unsupported-reference",
+            "feature": "conditional-selected-target-error-unverified",
+            "message": "Selected target-error propagation requires an accepted function-specific native profile"
+          },
+          {
+            "kind": "unsupported-formula",
+            "feature": "conditional-selected-target-error-unverified",
+            "message": "Formula at B217 uses unsupported conditional-selected-target-error-unverified; prior cached value retained"
+          }
+        ],
+        "status": "diagnosed-gap",
+        "display": "#N/A"
+      }
+    },
+    {
+      "id": 45,
+      "group": "conditional-edge",
+      "formula": "COUNTIF(Data!E1:E4,\"#N/A\")",
+      "cell": "B222",
+      "range": "B222:B222",
+      "row": 222,
+      "rows": 1,
+      "cols": 1,
+      "native": [
+        [
+          1
+        ]
+      ],
+      "nativeFormula": "COUNTIF(Data!E1:E4,\"#N/A\")",
+      "nativeFormulaAttrs": {},
+      "nativeCellAttrs": {
+        "r": "B222"
+      },
+      "from-file": {
+        "actual": [
+          [
+            1
+          ]
+        ],
+        "issues": [],
+        "status": "match",
+        "display": "1"
+      },
+      "dynamic": {
+        "actual": [
+          [
+            1
+          ]
+        ],
+        "issues": [],
+        "status": "match",
+        "display": "1"
+      },
+      "cached": {
+        "actual": [
+          [
+            1
+          ]
+        ],
+        "issues": [],
+        "status": "match",
+        "display": "1"
+      }
+    },
+    {
+      "id": 46,
+      "group": "conditional-edge",
+      "formula": "SUMIF(Data!E1:E4,\"#N/A\",Data!B1:B4)",
+      "cell": "B227",
+      "range": "B227:B227",
+      "row": 227,
+      "rows": 1,
+      "cols": 1,
+      "native": [
+        [
+          10
+        ]
+      ],
+      "nativeFormula": "SUMIF(Data!E1:E4,\"#N/A\",Data!B1:B4)",
+      "nativeFormulaAttrs": {},
+      "nativeCellAttrs": {
+        "r": "B227"
+      },
+      "from-file": {
+        "actual": [
+          [
+            "#NAME?"
+          ]
+        ],
+        "issues": [
+          {
+            "kind": "unsupported-reference",
+            "feature": "conditional-error-criterion-unverified",
+            "message": "Error-string criterion matching is measured only for this COUNTIF profile"
+          }
+        ],
+        "status": "diagnosed-gap",
+        "display": "#NAME?"
+      },
+      "dynamic": {
+        "actual": [
+          [
+            "#NAME?"
+          ]
+        ],
+        "issues": [
+          {
+            "kind": "unsupported-reference",
+            "feature": "conditional-error-criterion-unverified",
+            "message": "Error-string criterion matching is measured only for this COUNTIF profile"
+          }
+        ],
+        "status": "diagnosed-gap",
+        "display": "#NAME?"
+      },
+      "cached": {
+        "actual": [
+          [
+            10
+          ]
+        ],
+        "issues": [
+          {
+            "kind": "unsupported-reference",
+            "feature": "conditional-error-criterion-unverified",
+            "message": "Error-string criterion matching is measured only for this COUNTIF profile"
+          },
+          {
+            "kind": "unsupported-formula",
+            "feature": "conditional-error-criterion-unverified",
+            "message": "Formula at B227 uses unsupported conditional-error-criterion-unverified; prior cached value retained"
+          }
+        ],
+        "status": "diagnosed-gap",
+        "display": "10"
+      }
+    },
+    {
+      "id": 47,
+      "group": "conditional-edge",
+      "formula": "COUNTIF(Data!F1:F4,\"漢*\")",
+      "cell": "B232",
+      "range": "B232:B232",
+      "row": 232,
+      "rows": 1,
+      "cols": 1,
+      "native": [
+        [
+          2
+        ]
+      ],
+      "nativeFormula": "COUNTIF(Data!F1:F4,\"漢*\")",
+      "nativeFormulaAttrs": {},
+      "nativeCellAttrs": {
+        "r": "B232"
+      },
+      "from-file": {
+        "actual": [
+          [
+            "#NAME?"
+          ]
+        ],
+        "issues": [
+          {
+            "kind": "unsupported-reference",
+            "feature": "conditional-wildcard-unsupported-non-ascii",
+            "message": "pattern contains a non-ASCII code unit; Unicode wildcard/case parity is not established and is not faked"
+          }
+        ],
+        "status": "diagnosed-gap",
+        "display": "#NAME?"
+      },
+      "dynamic": {
+        "actual": [
+          [
+            "#NAME?"
+          ]
+        ],
+        "issues": [
+          {
+            "kind": "unsupported-reference",
+            "feature": "conditional-wildcard-unsupported-non-ascii",
+            "message": "pattern contains a non-ASCII code unit; Unicode wildcard/case parity is not established and is not faked"
+          }
+        ],
+        "status": "diagnosed-gap",
+        "display": "#NAME?"
+      },
+      "cached": {
+        "actual": [
+          [
+            2
+          ]
+        ],
+        "issues": [
+          {
+            "kind": "unsupported-reference",
+            "feature": "conditional-wildcard-unsupported-non-ascii",
+            "message": "pattern contains a non-ASCII code unit; Unicode wildcard/case parity is not established and is not faked"
+          },
+          {
+            "kind": "unsupported-formula",
+            "feature": "conditional-wildcard-unsupported-non-ascii",
+            "message": "Formula at B232 uses unsupported conditional-wildcard-unsupported-non-ascii; prior cached value retained"
+          }
+        ],
+        "status": "diagnosed-gap",
+        "display": "2"
+      }
+    },
+    {
+      "id": 48,
+      "group": "conditional-edge",
+      "formula": "COUNTIF(Data!F1:F4,\"<>漢\")",
+      "cell": "B237",
+      "range": "B237:B237",
+      "row": 237,
+      "rows": 1,
+      "cols": 1,
+      "native": [
+        [
+          3
+        ]
+      ],
+      "nativeFormula": "COUNTIF(Data!F1:F4,\"<>漢\")",
+      "nativeFormulaAttrs": {},
+      "nativeCellAttrs": {
+        "r": "B237"
+      },
+      "from-file": {
+        "actual": [
+          [
+            "#NAME?"
+          ]
+        ],
+        "issues": [
+          {
+            "kind": "unsupported-reference",
+            "feature": "conditional-wildcard-unsupported-non-ascii",
+            "message": "pattern contains a non-ASCII code unit; Unicode wildcard/case parity is not established and is not faked"
+          }
+        ],
+        "status": "diagnosed-gap",
+        "display": "#NAME?"
+      },
+      "dynamic": {
+        "actual": [
+          [
+            "#NAME?"
+          ]
+        ],
+        "issues": [
+          {
+            "kind": "unsupported-reference",
+            "feature": "conditional-wildcard-unsupported-non-ascii",
+            "message": "pattern contains a non-ASCII code unit; Unicode wildcard/case parity is not established and is not faked"
+          }
+        ],
+        "status": "diagnosed-gap",
+        "display": "#NAME?"
+      },
+      "cached": {
+        "actual": [
+          [
+            3
+          ]
+        ],
+        "issues": [
+          {
+            "kind": "unsupported-reference",
+            "feature": "conditional-wildcard-unsupported-non-ascii",
+            "message": "pattern contains a non-ASCII code unit; Unicode wildcard/case parity is not established and is not faked"
+          },
+          {
+            "kind": "unsupported-formula",
+            "feature": "conditional-wildcard-unsupported-non-ascii",
+            "message": "Formula at B237 uses unsupported conditional-wildcard-unsupported-non-ascii; prior cached value retained"
+          }
+        ],
+        "status": "diagnosed-gap",
+        "display": "3"
+      }
+    },
+    {
+      "id": 49,
+      "group": "conditional-edge",
+      "formula": "COUNTIF(Data!G1:G4,\"<b\")",
+      "cell": "B242",
+      "range": "B242:B242",
+      "row": 242,
+      "rows": 1,
+      "cols": 1,
+      "native": [
+        [
+          0
+        ]
+      ],
+      "nativeFormula": "COUNTIF(Data!G1:G4,\"<b\")",
+      "nativeFormulaAttrs": {},
+      "nativeCellAttrs": {
+        "r": "B242"
+      },
+      "from-file": {
+        "actual": [
+          [
+            "#NAME?"
+          ]
+        ],
+        "issues": [
+          {
+            "kind": "unsupported-reference",
+            "feature": "conditional-text-comparison-unverified",
+            "message": "Text ordering is outside the documented equality/negative ASCII text profile"
+          }
+        ],
+        "status": "diagnosed-gap",
+        "display": "#NAME?"
+      },
+      "dynamic": {
+        "actual": [
+          [
+            "#NAME?"
+          ]
+        ],
+        "issues": [
+          {
+            "kind": "unsupported-reference",
+            "feature": "conditional-text-comparison-unverified",
+            "message": "Text ordering is outside the documented equality/negative ASCII text profile"
+          }
+        ],
+        "status": "diagnosed-gap",
+        "display": "#NAME?"
+      },
+      "cached": {
+        "actual": [
+          [
+            0
+          ]
+        ],
+        "issues": [
+          {
+            "kind": "unsupported-reference",
+            "feature": "conditional-text-comparison-unverified",
+            "message": "Text ordering is outside the documented equality/negative ASCII text profile"
+          },
+          {
+            "kind": "unsupported-formula",
+            "feature": "conditional-text-comparison-unverified",
+            "message": "Formula at B242 uses unsupported conditional-text-comparison-unverified; prior cached value retained"
+          }
+        ],
+        "status": "diagnosed-gap",
+        "display": "0"
+      }
+    },
+    {
+      "id": 50,
+      "group": "conditional-edge",
+      "formula": "COUNTIF(Data!A1:A4,)",
+      "cell": "B247",
+      "range": "B247:B247",
+      "row": 247,
+      "rows": 1,
+      "cols": 1,
+      "native": [
+        [
+          0
+        ]
+      ],
+      "nativeFormula": "COUNTIF(Data!A1:A4,)",
+      "nativeFormulaAttrs": {},
+      "nativeCellAttrs": {
+        "r": "B247"
+      },
+      "from-file": {
+        "actual": [
+          [
+            "#NAME?"
+          ]
+        ],
+        "issues": [
+          {
+            "kind": "unsupported-reference",
+            "feature": "conditional-omitted-criterion-unverified",
+            "message": "Explicitly omitted criteria remain separate from empty text and blank references"
+          }
+        ],
+        "status": "diagnosed-gap",
+        "display": "#NAME?"
+      },
+      "dynamic": {
+        "actual": [
+          [
+            "#NAME?"
+          ]
+        ],
+        "issues": [
+          {
+            "kind": "unsupported-reference",
+            "feature": "conditional-omitted-criterion-unverified",
+            "message": "Explicitly omitted criteria remain separate from empty text and blank references"
+          }
+        ],
+        "status": "diagnosed-gap",
+        "display": "#NAME?"
+      },
+      "cached": {
+        "actual": [
+          [
+            0
+          ]
+        ],
+        "issues": [
+          {
+            "kind": "unsupported-reference",
+            "feature": "conditional-omitted-criterion-unverified",
+            "message": "Explicitly omitted criteria remain separate from empty text and blank references"
+          },
+          {
+            "kind": "unsupported-formula",
+            "feature": "conditional-omitted-criterion-unverified",
+            "message": "Formula at B247 uses unsupported conditional-omitted-criterion-unverified; prior cached value retained"
+          }
+        ],
+        "status": "diagnosed-gap",
+        "display": "0"
+      }
+    },
+    {
+      "id": 51,
+      "group": "missing-function",
+      "formula": "SUMPRODUCT(Data!A1:A4,Data!B1:B4)",
+      "cell": "B252",
+      "range": "B252:B252",
+      "row": 252,
+      "rows": 1,
+      "cols": 1,
+      "native": [
+        [
+          230
+        ]
+      ],
+      "nativeFormula": "SUMPRODUCT(Data!A1:A4,Data!B1:B4)",
+      "nativeFormulaAttrs": {},
+      "nativeCellAttrs": {
+        "r": "B252"
+      },
+      "from-file": {
+        "actual": [
+          [
+            "#NAME?"
+          ]
+        ],
+        "issues": [],
+        "status": "mismatch",
+        "display": "#NAME?"
+      },
+      "dynamic": {
+        "actual": [
+          [
+            "#NAME?"
+          ]
+        ],
+        "issues": [],
+        "status": "mismatch",
+        "display": "#NAME?"
+      },
+      "cached": {
+        "actual": [
+          [
+            230
+          ]
+        ],
+        "issues": [
+          {
+            "kind": "unsupported-formula",
+            "feature": "SUMPRODUCT",
+            "message": "Formula at B252 uses unsupported SUMPRODUCT; prior cached value retained"
+          }
+        ],
+        "status": "diagnosed-gap",
+        "display": "230"
+      }
+    },
+    {
+      "id": 52,
+      "group": "missing-function",
+      "formula": "COUNTBLANK(Data!C1:C4)",
+      "cell": "B257",
+      "range": "B257:B257",
+      "row": 257,
+      "rows": 1,
+      "cols": 1,
+      "native": [
+        [
+          2
+        ]
+      ],
+      "nativeFormula": "COUNTBLANK(Data!C1:C4)",
+      "nativeFormulaAttrs": {},
+      "nativeCellAttrs": {
+        "r": "B257"
+      },
+      "from-file": {
+        "actual": [
+          [
+            "#NAME?"
+          ]
+        ],
+        "issues": [],
+        "status": "mismatch",
+        "display": "#NAME?"
+      },
+      "dynamic": {
+        "actual": [
+          [
+            "#NAME?"
+          ]
+        ],
+        "issues": [],
+        "status": "mismatch",
+        "display": "#NAME?"
+      },
+      "cached": {
+        "actual": [
+          [
+            2
+          ]
+        ],
+        "issues": [
+          {
+            "kind": "unsupported-formula",
+            "feature": "COUNTBLANK",
+            "message": "Formula at B257 uses unsupported COUNTBLANK; prior cached value retained"
+          }
+        ],
+        "status": "diagnosed-gap",
+        "display": "2"
+      }
+    },
+    {
+      "id": 53,
+      "group": "missing-function",
+      "formula": "MEDIAN(Data!A1:A4)",
+      "cell": "B262",
+      "range": "B262:B262",
+      "row": 262,
+      "rows": 1,
+      "cols": 1,
+      "native": [
+        [
+          2
+        ]
+      ],
+      "nativeFormula": "MEDIAN(Data!A1:A4)",
+      "nativeFormulaAttrs": {},
+      "nativeCellAttrs": {
+        "r": "B262"
+      },
+      "from-file": {
+        "actual": [
+          [
+            "#NAME?"
+          ]
+        ],
+        "issues": [],
+        "status": "mismatch",
+        "display": "#NAME?"
+      },
+      "dynamic": {
+        "actual": [
+          [
+            "#NAME?"
+          ]
+        ],
+        "issues": [],
+        "status": "mismatch",
+        "display": "#NAME?"
+      },
+      "cached": {
+        "actual": [
+          [
+            2
+          ]
+        ],
+        "issues": [
+          {
+            "kind": "unsupported-formula",
+            "feature": "MEDIAN",
+            "message": "Formula at B262 uses unsupported MEDIAN; prior cached value retained"
+          }
+        ],
+        "status": "diagnosed-gap",
+        "display": "2"
+      }
+    },
+    {
+      "id": 54,
+      "group": "missing-function",
+      "formula": "POWER(2,3)",
+      "cell": "B267",
+      "range": "B267:B267",
+      "row": 267,
+      "rows": 1,
+      "cols": 1,
+      "native": [
+        [
+          8
+        ]
+      ],
+      "nativeFormula": "POWER(2,3)",
+      "nativeFormulaAttrs": {},
+      "nativeCellAttrs": {
+        "r": "B267"
+      },
+      "from-file": {
+        "actual": [
+          [
+            "#NAME?"
+          ]
+        ],
+        "issues": [],
+        "status": "mismatch",
+        "display": "#NAME?"
+      },
+      "dynamic": {
+        "actual": [
+          [
+            "#NAME?"
+          ]
+        ],
+        "issues": [],
+        "status": "mismatch",
+        "display": "#NAME?"
+      },
+      "cached": {
+        "actual": [
+          [
+            8
+          ]
+        ],
+        "issues": [
+          {
+            "kind": "unsupported-formula",
+            "feature": "POWER",
+            "message": "Formula at B267 uses unsupported POWER; prior cached value retained"
+          }
+        ],
+        "status": "diagnosed-gap",
+        "display": "8"
+      }
+    },
+    {
+      "id": 55,
+      "group": "missing-function",
+      "formula": "SQRT(9)",
+      "cell": "B272",
+      "range": "B272:B272",
+      "row": 272,
+      "rows": 1,
+      "cols": 1,
+      "native": [
+        [
+          3
+        ]
+      ],
+      "nativeFormula": "SQRT(9)",
+      "nativeFormulaAttrs": {},
+      "nativeCellAttrs": {
+        "r": "B272"
+      },
+      "from-file": {
+        "actual": [
+          [
+            "#NAME?"
+          ]
+        ],
+        "issues": [],
+        "status": "mismatch",
+        "display": "#NAME?"
+      },
+      "dynamic": {
+        "actual": [
+          [
+            "#NAME?"
+          ]
+        ],
+        "issues": [],
+        "status": "mismatch",
+        "display": "#NAME?"
+      },
+      "cached": {
+        "actual": [
+          [
+            3
+          ]
+        ],
+        "issues": [
+          {
+            "kind": "unsupported-formula",
+            "feature": "SQRT",
+            "message": "Formula at B272 uses unsupported SQRT; prior cached value retained"
+          }
+        ],
+        "status": "diagnosed-gap",
+        "display": "3"
+      }
+    },
+    {
+      "id": 56,
+      "group": "missing-function",
+      "formula": "TEXTJOIN(\",\",TRUE,Data!F1:F4)",
+      "cell": "B277",
+      "range": "B277:B277",
+      "row": 277,
+      "rows": 1,
+      "cols": 1,
+      "native": [
+        [
+          "漢,漢字,other"
+        ]
+      ],
+      "nativeFormula": "_xlfn.TEXTJOIN(\",\",TRUE,Data!F1:F4)",
+      "nativeFormulaAttrs": {},
+      "nativeCellAttrs": {
+        "r": "B277",
+        "t": "str"
+      },
+      "from-file": {
+        "actual": [
+          [
+            "#NAME?"
+          ]
+        ],
+        "issues": [],
+        "status": "mismatch",
+        "display": "#NAME?"
+      },
+      "dynamic": {
+        "actual": [
+          [
+            "#NAME?"
+          ]
+        ],
+        "issues": [],
+        "status": "mismatch",
+        "display": "#NAME?"
+      },
+      "cached": {
+        "actual": [
+          [
+            "漢,漢字,other"
+          ]
+        ],
+        "issues": [
+          {
+            "kind": "unsupported-formula",
+            "feature": "TEXTJOIN",
+            "message": "Formula at B277 uses unsupported TEXTJOIN; prior cached value retained"
+          }
+        ],
+        "status": "diagnosed-gap",
+        "display": "漢,漢字,other"
+      }
+    },
+    {
+      "id": 57,
+      "group": "missing-function",
+      "formula": "LET(x,2,x+3)",
+      "cell": "B282",
+      "range": "B282:B282",
+      "row": 282,
+      "rows": 1,
+      "cols": 1,
+      "native": [
+        [
+          5
+        ]
+      ],
+      "nativeFormula": "_xlfn.LET(_xlpm.x,2,_xlpm.x+3)",
+      "nativeFormulaAttrs": {},
+      "nativeCellAttrs": {
+        "r": "B282"
+      },
+      "from-file": {
+        "actual": [
+          [
+            "#NAME?"
+          ]
+        ],
+        "issues": [],
+        "status": "mismatch",
+        "display": "#NAME?"
+      },
+      "dynamic": {
+        "actual": [
+          [
+            "#NAME?"
+          ]
+        ],
+        "issues": [],
+        "status": "mismatch",
+        "display": "#NAME?"
+      },
+      "cached": {
+        "actual": [
+          [
+            5
+          ]
+        ],
+        "issues": [
+          {
+            "kind": "unsupported-formula",
+            "feature": "LET",
+            "message": "Formula at B282 uses unsupported LET; prior cached value retained"
+          }
+        ],
+        "status": "diagnosed-gap",
+        "display": "5"
+      }
+    },
+    {
+      "id": 58,
+      "group": "missing-function",
+      "formula": "LAMBDA(x,x+1)(2)",
+      "cell": "B287",
+      "range": "B287:B287",
+      "row": 287,
+      "rows": 1,
+      "cols": 1,
+      "native": [
+        [
+          3
+        ]
+      ],
+      "nativeFormula": "_xlfn.LAMBDA(_xlpm.x,_xlpm.x+1)(2)",
+      "nativeFormulaAttrs": {
+        "t": "array",
+        "ref": "B287"
+      },
+      "nativeCellAttrs": {
+        "r": "B287",
+        "cm": "1"
+      },
+      "from-file": {
+        "actual": [
+          [
+            "#NAME?"
+          ]
+        ],
+        "issues": [],
+        "status": "mismatch",
+        "display": "#NAME?"
+      },
+      "dynamic": {
+        "actual": [
+          [
+            "#NAME?"
+          ]
+        ],
+        "issues": [],
+        "status": "mismatch",
+        "display": "#NAME?"
+      },
+      "cached": {
+        "actual": [
+          [
+            3
+          ]
+        ],
+        "issues": [
+          {
+            "kind": "unsupported-formula",
+            "feature": "formula-syntax",
+            "message": "Formula at B287 uses unsupported formula-syntax; prior cached value retained"
+          }
+        ],
+        "status": "diagnosed-gap",
+        "display": "3"
+      }
+    },
+    {
+      "id": 59,
+      "group": "missing-function",
+      "formula": "OFFSET(Data!A1,1,0)",
+      "cell": "B292",
+      "range": "B292:B292",
+      "row": 292,
+      "rows": 1,
+      "cols": 1,
+      "native": [
+        [
+          2
+        ]
+      ],
+      "nativeFormula": "OFFSET(Data!A1,1,0)",
+      "nativeFormulaAttrs": {
+        "ca": "1"
+      },
+      "nativeCellAttrs": {
+        "r": "B292"
+      },
+      "from-file": {
+        "actual": [
+          [
+            "#NAME?"
+          ]
+        ],
+        "issues": [],
+        "status": "mismatch",
+        "display": "#NAME?"
+      },
+      "dynamic": {
+        "actual": [
+          [
+            "#NAME?"
+          ]
+        ],
+        "issues": [],
+        "status": "mismatch",
+        "display": "#NAME?"
+      },
+      "cached": {
+        "actual": [
+          [
+            2
+          ]
+        ],
+        "issues": [
+          {
+            "kind": "unsupported-formula",
+            "feature": "OFFSET",
+            "message": "Formula at B292 uses unsupported OFFSET; prior cached value retained"
+          }
+        ],
+        "status": "diagnosed-gap",
+        "display": "2"
+      }
+    },
+    {
+      "id": 60,
+      "group": "missing-function",
+      "formula": "INDIRECT(\"Data!B2\")",
+      "cell": "B297",
+      "range": "B297:B297",
+      "row": 297,
+      "rows": 1,
+      "cols": 1,
+      "native": [
+        [
+          20
+        ]
+      ],
+      "nativeFormula": "INDIRECT(\"Data!B2\")",
+      "nativeFormulaAttrs": {
+        "t": "array",
+        "aca": "1",
+        "ref": "B297",
+        "ca": "1"
+      },
+      "nativeCellAttrs": {
+        "r": "B297",
+        "cm": "1"
+      },
+      "from-file": {
+        "actual": [
+          [
+            "#NAME?"
+          ]
+        ],
+        "issues": [],
+        "status": "mismatch",
+        "display": "#NAME?"
+      },
+      "dynamic": {
+        "actual": [
+          [
+            "#NAME?"
+          ]
+        ],
+        "issues": [],
+        "status": "mismatch",
+        "display": "#NAME?"
+      },
+      "cached": {
+        "actual": [
+          [
+            20
+          ]
+        ],
+        "issues": [
+          {
+            "kind": "unsupported-formula",
+            "feature": "INDIRECT",
+            "message": "Formula at B297 uses unsupported INDIRECT; prior cached value retained"
+          }
+        ],
+        "status": "diagnosed-gap",
+        "display": "20"
+      }
+    },
+    {
+      "id": 61,
+      "group": "missing-function",
+      "formula": "PMT(0.01,12,1000)",
+      "cell": "B302",
+      "range": "B302:B302",
+      "row": 302,
+      "rows": 1,
+      "cols": 1,
+      "native": [
+        [
+          -88.84878867834168
+        ]
+      ],
+      "nativeFormula": "PMT(0.01,12,1000)",
+      "nativeFormulaAttrs": {},
+      "nativeCellAttrs": {
+        "r": "B302",
+        "s": "2"
+      },
+      "from-file": {
+        "actual": [
+          [
+            "#NAME?"
+          ]
+        ],
+        "issues": [],
+        "status": "mismatch",
+        "display": "#NAME?"
+      },
+      "dynamic": {
+        "actual": [
+          [
+            "#NAME?"
+          ]
+        ],
+        "issues": [],
+        "status": "mismatch",
+        "display": "#NAME?"
+      },
+      "cached": {
+        "actual": [
+          [
+            -88.84878867834168
+          ]
+        ],
+        "issues": [
+          {
+            "kind": "unsupported-formula",
+            "feature": "PMT",
+            "message": "Formula at B302 uses unsupported PMT; prior cached value retained"
+          }
+        ],
+        "status": "diagnosed-gap",
+        "display": "-88.85"
+      }
+    },
+    {
+      "id": 62,
+      "group": "missing-function",
+      "formula": "STDEV.S(Data!A1:A4)",
+      "cell": "B307",
+      "range": "B307:B307",
+      "row": 307,
+      "rows": 1,
+      "cols": 1,
+      "native": [
+        [
+          0.816496580927726
+        ]
+      ],
+      "nativeFormula": "_xlfn.STDEV.S(Data!A1:A4)",
+      "nativeFormulaAttrs": {},
+      "nativeCellAttrs": {
+        "r": "B307"
+      },
+      "from-file": {
+        "actual": [
+          [
+            "#NAME?"
+          ]
+        ],
+        "issues": [],
+        "status": "mismatch",
+        "display": "#NAME?"
+      },
+      "dynamic": {
+        "actual": [
+          [
+            "#NAME?"
+          ]
+        ],
+        "issues": [],
+        "status": "mismatch",
+        "display": "#NAME?"
+      },
+      "cached": {
+        "actual": [
+          [
+            0.816496580927726
+          ]
+        ],
+        "issues": [
+          {
+            "kind": "unsupported-formula",
+            "feature": "STDEV.S",
+            "message": "Formula at B307 uses unsupported STDEV.S; prior cached value retained"
+          }
+        ],
+        "status": "diagnosed-gap",
+        "display": "0.82"
+      }
+    },
+    {
+      "id": 63,
+      "group": "text-date-edge",
+      "formula": "LEN(\"😀\")",
+      "cell": "B312",
+      "range": "B312:B312",
+      "row": 312,
+      "rows": 1,
+      "cols": 1,
+      "native": [
+        [
+          2
+        ]
+      ],
+      "nativeFormula": "LEN(\"😀\")",
+      "nativeFormulaAttrs": {},
+      "nativeCellAttrs": {
+        "r": "B312"
+      },
+      "from-file": {
+        "actual": [
+          [
+            2
+          ]
+        ],
+        "issues": [],
+        "status": "match",
+        "display": "2"
+      },
+      "dynamic": {
+        "actual": [
+          [
+            2
+          ]
+        ],
+        "issues": [],
+        "status": "match",
+        "display": "2"
+      },
+      "cached": {
+        "actual": [
+          [
+            2
+          ]
+        ],
+        "issues": [],
+        "status": "match",
+        "display": "2"
+      }
+    },
+    {
+      "id": 64,
+      "group": "text-date-edge",
+      "formula": "LEFT(\"😀x\",1)",
+      "cell": "B317",
+      "range": "B317:B317",
+      "row": 317,
+      "rows": 1,
+      "cols": 1,
+      "native": [
+        [
+          "😀"
+        ]
+      ],
+      "nativeFormula": "LEFT(\"😀x\",1)",
+      "nativeFormulaAttrs": {},
+      "nativeCellAttrs": {
+        "r": "B317",
+        "t": "str"
+      },
+      "from-file": {
+        "actual": [
+          [
+            "\ud83d"
+          ]
+        ],
+        "issues": [],
+        "status": "mismatch",
+        "display": "\ud83d"
+      },
+      "dynamic": {
+        "actual": [
+          [
+            "\ud83d"
+          ]
+        ],
+        "issues": [],
+        "status": "mismatch",
+        "display": "\ud83d"
+      },
+      "cached": {
+        "actual": [
+          [
+            "\ud83d"
+          ]
+        ],
+        "issues": [],
+        "status": "mismatch",
+        "display": "\ud83d"
+      }
+    },
+    {
+      "id": 65,
+      "group": "text-date-edge",
+      "formula": "MID(\"😀x\",2,1)",
+      "cell": "B322",
+      "range": "B322:B322",
+      "row": 322,
+      "rows": 1,
+      "cols": 1,
+      "native": [
+        [
+          "\ude00"
+        ]
+      ],
+      "nativeFormula": "MID(\"😀x\",2,1)",
+      "nativeFormulaAttrs": {},
+      "nativeCellAttrs": {
+        "r": "B322",
+        "t": "str"
+      },
+      "from-file": {
+        "actual": [
+          [
+            "\ude00"
+          ]
+        ],
+        "issues": [],
+        "status": "match",
+        "display": "\ude00"
+      },
+      "dynamic": {
+        "actual": [
+          [
+            "\ude00"
+          ]
+        ],
+        "issues": [],
+        "status": "match",
+        "display": "\ude00"
+      },
+      "cached": {
+        "actual": [
+          [
+            "\ude00"
+          ]
+        ],
+        "issues": [],
+        "status": "match",
+        "display": "\ude00"
+      }
+    },
+    {
+      "id": 66,
+      "group": "text-date-edge",
+      "formula": "LEN(\"é\")",
+      "cell": "B327",
+      "range": "B327:B327",
+      "row": 327,
+      "rows": 1,
+      "cols": 1,
+      "native": [
+        [
+          2
+        ]
+      ],
+      "nativeFormula": "LEN(\"é\")",
+      "nativeFormulaAttrs": {},
+      "nativeCellAttrs": {
+        "r": "B327"
+      },
+      "from-file": {
+        "actual": [
+          [
+            2
+          ]
+        ],
+        "issues": [],
+        "status": "match",
+        "display": "2"
+      },
+      "dynamic": {
+        "actual": [
+          [
+            2
+          ]
+        ],
+        "issues": [],
+        "status": "match",
+        "display": "2"
+      },
+      "cached": {
+        "actual": [
+          [
+            2
+          ]
+        ],
+        "issues": [],
+        "status": "match",
+        "display": "2"
+      }
+    },
+    {
+      "id": 67,
+      "group": "text-date-edge",
+      "formula": "TEXT(1234.5,\"$#,##0.00\")",
+      "cell": "B332",
+      "range": "B332:B332",
+      "row": 332,
+      "rows": 1,
+      "cols": 1,
+      "native": [
+        [
+          "$1,234.50"
+        ]
+      ],
+      "nativeFormula": "TEXT(1234.5,\"$#,##0.00\")",
+      "nativeFormulaAttrs": {},
+      "nativeCellAttrs": {
+        "r": "B332",
+        "t": "str"
+      },
+      "from-file": {
+        "actual": [
+          [
+            "$1,234.50"
+          ]
+        ],
+        "issues": [],
+        "status": "match",
+        "display": "$1,234.50"
+      },
+      "dynamic": {
+        "actual": [
+          [
+            "$1,234.50"
+          ]
+        ],
+        "issues": [],
+        "status": "match",
+        "display": "$1,234.50"
+      },
+      "cached": {
+        "actual": [
+          [
+            "$1,234.50"
+          ]
+        ],
+        "issues": [],
+        "status": "match",
+        "display": "$1,234.50"
+      }
+    },
+    {
+      "id": 68,
+      "group": "text-date-edge",
+      "formula": "TEXT(1.5,\"[h]:mm\")",
+      "cell": "B337",
+      "range": "B337:B337",
+      "row": 337,
+      "rows": 1,
+      "cols": 1,
+      "native": [
+        [
+          "36:00"
+        ]
+      ],
+      "nativeFormula": "TEXT(1.5,\"[h]:mm\")",
+      "nativeFormulaAttrs": {},
+      "nativeCellAttrs": {
+        "r": "B337",
+        "t": "str"
+      },
+      "from-file": {
+        "actual": [
+          [
+            "#NAME?"
+          ]
+        ],
+        "issues": [
+          {
+            "kind": "native-gate",
+            "feature": "format-unsupported",
+            "message": "Format '[h]:mm' is outside the finite common-format grammar: elapsed token"
+          }
+        ],
+        "status": "diagnosed-gap",
+        "display": "#NAME?"
+      },
+      "dynamic": {
+        "actual": [
+          [
+            "#NAME?"
+          ]
+        ],
+        "issues": [
+          {
+            "kind": "native-gate",
+            "feature": "format-unsupported",
+            "message": "Format '[h]:mm' is outside the finite common-format grammar: elapsed token"
+          }
+        ],
+        "status": "diagnosed-gap",
+        "display": "#NAME?"
+      },
+      "cached": {
+        "actual": [
+          [
+            "36:00"
+          ]
+        ],
+        "issues": [
+          {
+            "kind": "native-gate",
+            "feature": "format-unsupported",
+            "message": "Format '[h]:mm' is outside the finite common-format grammar: elapsed token"
+          },
+          {
+            "kind": "unsupported-formula",
+            "feature": "format-unsupported",
+            "message": "Formula at B337 uses unsupported format-unsupported; prior cached value retained"
+          }
+        ],
+        "status": "diagnosed-gap",
+        "display": "36:00"
+      }
+    },
+    {
+      "id": 69,
+      "group": "text-date-edge",
+      "formula": "TEXT(12345,\"0.00E+00\")",
+      "cell": "B342",
+      "range": "B342:B342",
+      "row": 342,
+      "rows": 1,
+      "cols": 1,
+      "native": [
+        [
+          "1.23E+04"
+        ]
+      ],
+      "nativeFormula": "TEXT(12345,\"0.00E+00\")",
+      "nativeFormulaAttrs": {},
+      "nativeCellAttrs": {
+        "r": "B342",
+        "t": "str"
+      },
+      "from-file": {
+        "actual": [
+          [
+            "#NAME?"
+          ]
+        ],
+        "issues": [
+          {
+            "kind": "native-gate",
+            "feature": "format-unsupported",
+            "message": "Format '0.00E+00' is outside the finite common-format grammar: scientific token"
+          }
+        ],
+        "status": "diagnosed-gap",
+        "display": "#NAME?"
+      },
+      "dynamic": {
+        "actual": [
+          [
+            "#NAME?"
+          ]
+        ],
+        "issues": [
+          {
+            "kind": "native-gate",
+            "feature": "format-unsupported",
+            "message": "Format '0.00E+00' is outside the finite common-format grammar: scientific token"
+          }
+        ],
+        "status": "diagnosed-gap",
+        "display": "#NAME?"
+      },
+      "cached": {
+        "actual": [
+          [
+            "1.23E+04"
+          ]
+        ],
+        "issues": [
+          {
+            "kind": "native-gate",
+            "feature": "format-unsupported",
+            "message": "Format '0.00E+00' is outside the finite common-format grammar: scientific token"
+          },
+          {
+            "kind": "unsupported-formula",
+            "feature": "format-unsupported",
+            "message": "Formula at B342 uses unsupported format-unsupported; prior cached value retained"
+          }
+        ],
+        "status": "diagnosed-gap",
+        "display": "1.23E+04"
+      }
+    },
+    {
+      "id": 70,
+      "group": "text-date-edge",
+      "formula": "TEXT(-12,\"[Red]0.00\")",
+      "cell": "B347",
+      "range": "B347:B347",
+      "row": 347,
+      "rows": 1,
+      "cols": 1,
+      "native": [
+        [
+          "#VALUE!"
+        ]
+      ],
+      "nativeFormula": "TEXT(-12,\"[Red]0.00\")",
+      "nativeFormulaAttrs": {},
+      "nativeCellAttrs": {
+        "r": "B347",
+        "t": "e"
+      },
+      "from-file": {
+        "actual": [
+          [
+            "#NAME?"
+          ]
+        ],
+        "issues": [
+          {
+            "kind": "native-gate",
+            "feature": "format-unsupported",
+            "message": "Format '[Red]0.00' is outside the finite common-format grammar: color token"
+          }
+        ],
+        "status": "diagnosed-gap",
+        "display": "#NAME?"
+      },
+      "dynamic": {
+        "actual": [
+          [
+            "#NAME?"
+          ]
+        ],
+        "issues": [
+          {
+            "kind": "native-gate",
+            "feature": "format-unsupported",
+            "message": "Format '[Red]0.00' is outside the finite common-format grammar: color token"
+          }
+        ],
+        "status": "diagnosed-gap",
+        "display": "#NAME?"
+      },
+      "cached": {
+        "actual": [
+          [
+            "#VALUE!"
+          ]
+        ],
+        "issues": [
+          {
+            "kind": "native-gate",
+            "feature": "format-unsupported",
+            "message": "Format '[Red]0.00' is outside the finite common-format grammar: color token"
+          },
+          {
+            "kind": "unsupported-formula",
+            "feature": "format-unsupported",
+            "message": "Formula at B347 uses unsupported format-unsupported; prior cached value retained"
+          }
+        ],
+        "status": "diagnosed-gap",
+        "display": "#VALUE!"
+      }
+    },
+    {
+      "id": 71,
+      "group": "text-date-edge",
+      "formula": "TEXT(45351,\"DD.MM.YYYY\")",
+      "cell": "B352",
+      "range": "B352:B352",
+      "row": 352,
+      "rows": 1,
+      "cols": 1,
+      "native": [
+        [
+          "29.02.2024"
+        ]
+      ],
+      "nativeFormula": "TEXT(45351,\"DD.MM.YYYY\")",
+      "nativeFormulaAttrs": {},
+      "nativeCellAttrs": {
+        "r": "B352",
+        "t": "str"
+      },
+      "from-file": {
+        "actual": [
+          [
+            "29.02.2024"
+          ]
+        ],
+        "issues": [],
+        "status": "match",
+        "display": "29.02.2024"
+      },
+      "dynamic": {
+        "actual": [
+          [
+            "29.02.2024"
+          ]
+        ],
+        "issues": [],
+        "status": "match",
+        "display": "29.02.2024"
+      },
+      "cached": {
+        "actual": [
+          [
+            "29.02.2024"
+          ]
+        ],
+        "issues": [],
+        "status": "match",
+        "display": "29.02.2024"
+      }
+    },
+    {
+      "id": 72,
+      "group": "text-date-edge",
+      "formula": "DATEVALUE(\"29/02/2024\")",
+      "cell": "B357",
+      "range": "B357:B357",
+      "row": 357,
+      "rows": 1,
+      "cols": 1,
+      "native": [
+        [
+          "#VALUE!"
+        ]
+      ],
+      "nativeFormula": "DATEVALUE(\"29/02/2024\")",
+      "nativeFormulaAttrs": {},
+      "nativeCellAttrs": {
+        "r": "B357",
+        "t": "e"
+      },
+      "from-file": {
+        "actual": [
+          [
+            "#VALUE!"
+          ]
+        ],
+        "issues": [],
+        "status": "match",
+        "display": "#VALUE!"
+      },
+      "dynamic": {
+        "actual": [
+          [
+            "#VALUE!"
+          ]
+        ],
+        "issues": [],
+        "status": "match",
+        "display": "#VALUE!"
+      },
+      "cached": {
+        "actual": [
+          [
+            "#VALUE!"
+          ]
+        ],
+        "issues": [],
+        "status": "match",
+        "display": "#VALUE!"
+      }
+    },
+    {
+      "id": 73,
+      "group": "text-date-edge",
+      "formula": "TEXT(DATE(2024,2,29),\"yyyy-mm-dd\")",
+      "cell": "B362",
+      "range": "B362:B362",
+      "row": 362,
+      "rows": 1,
+      "cols": 1,
+      "native": [
+        [
+          "2024-02-29"
+        ]
+      ],
+      "nativeFormula": "TEXT(DATE(2024,2,29),\"yyyy-mm-dd\")",
+      "nativeFormulaAttrs": {},
+      "nativeCellAttrs": {
+        "r": "B362",
+        "t": "str"
+      },
+      "from-file": {
+        "actual": [
+          [
+            "2024-02-29"
+          ]
+        ],
+        "issues": [],
+        "status": "match",
+        "display": "2024-02-29"
+      },
+      "dynamic": {
+        "actual": [
+          [
+            "2024-02-29"
+          ]
+        ],
+        "issues": [],
+        "status": "match",
+        "display": "2024-02-29"
+      },
+      "cached": {
+        "actual": [
+          [
+            "2024-02-29"
+          ]
+        ],
+        "issues": [],
+        "status": "match",
+        "display": "2024-02-29"
+      }
+    },
+    {
+      "id": 74,
+      "group": "dynamic-array",
+      "formula": "SEQUENCE(2,2)",
+      "cell": "B367",
+      "range": "B367:C368",
+      "row": 367,
+      "rows": 2,
+      "cols": 2,
+      "native": [
+        [
+          1,
+          2
+        ],
+        [
+          3,
+          4
+        ]
+      ],
+      "nativeFormula": "_xlfn.SEQUENCE(2,2)",
+      "nativeFormulaAttrs": {
+        "t": "array",
+        "ref": "B367:C368"
+      },
+      "nativeCellAttrs": {
+        "r": "B367",
+        "cm": "1"
+      },
+      "from-file": {
+        "actual": [
+          [
+            1,
+            2
+          ],
+          [
+            3,
+            4
+          ]
+        ],
+        "issues": [],
+        "status": "match",
+        "display": "1"
+      },
+      "dynamic": {
+        "actual": [
+          [
+            1,
+            2
+          ],
+          [
+            3,
+            4
+          ]
+        ],
+        "issues": [],
+        "status": "match",
+        "display": "1"
+      },
+      "cached": {
+        "actual": [
+          [
+            1,
+            2
+          ],
+          [
+            3,
+            4
+          ]
+        ],
+        "issues": [],
+        "status": "match",
+        "display": "1"
+      }
+    },
+    {
+      "id": 75,
+      "group": "dynamic-array",
+      "formula": "TRANSPOSE(Data!A1:B3)",
+      "cell": "B372",
+      "range": "B372:D373",
+      "row": 372,
+      "rows": 2,
+      "cols": 3,
+      "native": [
+        [
+          1,
+          2,
+          2
+        ],
+        [
+          10,
+          20,
+          30
+        ]
+      ],
+      "nativeFormula": "TRANSPOSE(Data!A1:B3)",
+      "nativeFormulaAttrs": {
+        "t": "array",
+        "ref": "B372:D373"
+      },
+      "nativeCellAttrs": {
+        "r": "B372",
+        "cm": "1"
+      },
+      "from-file": {
+        "actual": [
+          [
+            1,
+            2,
+            2
+          ],
+          [
+            10,
+            20,
+            30
+          ]
+        ],
+        "issues": [],
+        "status": "match",
+        "display": "1"
+      },
+      "dynamic": {
+        "actual": [
+          [
+            1,
+            2,
+            2
+          ],
+          [
+            10,
+            20,
+            30
+          ]
+        ],
+        "issues": [],
+        "status": "match",
+        "display": "1"
+      },
+      "cached": {
+        "actual": [
+          [
+            1,
+            2,
+            2
+          ],
+          [
+            10,
+            20,
+            30
+          ]
+        ],
+        "issues": [],
+        "status": "match",
+        "display": "1"
+      }
+    },
+    {
+      "id": 76,
+      "group": "dynamic-array",
+      "formula": "FILTER(Data!A1:B4,Data!A1:A4>1)",
+      "cell": "B377",
+      "range": "B377:C379",
+      "row": 377,
+      "rows": 3,
+      "cols": 2,
+      "native": [
+        [
+          2,
+          20
+        ],
+        [
+          2,
+          30
+        ],
+        [
+          3,
+          40
+        ]
+      ],
+      "nativeFormula": "_xlfn._xlws.FILTER(Data!A1:B4,Data!A1:A4>1)",
+      "nativeFormulaAttrs": {
+        "t": "array",
+        "ref": "B377:C379"
+      },
+      "nativeCellAttrs": {
+        "r": "B377",
+        "cm": "1"
+      },
+      "from-file": {
+        "actual": [
+          [
+            2,
+            20
+          ],
+          [
+            2,
+            30
+          ],
+          [
+            3,
+            40
+          ]
+        ],
+        "issues": [],
+        "status": "match",
+        "display": "2"
+      },
+      "dynamic": {
+        "actual": [
+          [
+            2,
+            20
+          ],
+          [
+            2,
+            30
+          ],
+          [
+            3,
+            40
+          ]
+        ],
+        "issues": [],
+        "status": "match",
+        "display": "2"
+      },
+      "cached": {
+        "actual": [
+          [
+            2,
+            20
+          ],
+          [
+            2,
+            30
+          ],
+          [
+            3,
+            40
+          ]
+        ],
+        "issues": [],
+        "status": "match",
+        "display": "2"
+      }
+    },
+    {
+      "id": 77,
+      "group": "dynamic-array",
+      "formula": "SORT(Data!A1:B4,1,-1)",
+      "cell": "B382",
+      "range": "B382:C385",
+      "row": 382,
+      "rows": 4,
+      "cols": 2,
+      "native": [
+        [
+          3,
+          40
+        ],
+        [
+          2,
+          20
+        ],
+        [
+          2,
+          30
+        ],
+        [
+          1,
+          10
+        ]
+      ],
+      "nativeFormula": "_xlfn._xlws.SORT(Data!A1:B4,1,-1)",
+      "nativeFormulaAttrs": {
+        "t": "array",
+        "ref": "B382:C385"
+      },
+      "nativeCellAttrs": {
+        "r": "B382",
+        "cm": "1"
+      },
+      "from-file": {
+        "actual": [
+          [
+            3,
+            40
+          ],
+          [
+            2,
+            20
+          ],
+          [
+            2,
+            30
+          ],
+          [
+            1,
+            10
+          ]
+        ],
+        "issues": [],
+        "status": "match",
+        "display": "3"
+      },
+      "dynamic": {
+        "actual": [
+          [
+            3,
+            40
+          ],
+          [
+            2,
+            20
+          ],
+          [
+            2,
+            30
+          ],
+          [
+            1,
+            10
+          ]
+        ],
+        "issues": [],
+        "status": "match",
+        "display": "3"
+      },
+      "cached": {
+        "actual": [
+          [
+            3,
+            40
+          ],
+          [
+            2,
+            20
+          ],
+          [
+            2,
+            30
+          ],
+          [
+            1,
+            10
+          ]
+        ],
+        "issues": [],
+        "status": "match",
+        "display": "3"
+      }
+    },
+    {
+      "id": 78,
+      "group": "dynamic-array",
+      "formula": "UNIQUE(Data!A1:A4)",
+      "cell": "B387",
+      "range": "B387:B389",
+      "row": 387,
+      "rows": 3,
+      "cols": 1,
+      "native": [
+        [
+          1
+        ],
+        [
+          2
+        ],
+        [
+          3
+        ]
+      ],
+      "nativeFormula": "_xlfn.UNIQUE(Data!A1:A4)",
+      "nativeFormulaAttrs": {
+        "t": "array",
+        "ref": "B387:B389"
+      },
+      "nativeCellAttrs": {
+        "r": "B387",
+        "cm": "1"
+      },
+      "from-file": {
+        "actual": [
+          [
+            1
+          ],
+          [
+            2
+          ],
+          [
+            3
+          ]
+        ],
+        "issues": [],
+        "status": "match",
+        "display": "1"
+      },
+      "dynamic": {
+        "actual": [
+          [
+            1
+          ],
+          [
+            2
+          ],
+          [
+            3
+          ]
+        ],
+        "issues": [],
+        "status": "match",
+        "display": "1"
+      },
+      "cached": {
+        "actual": [
+          [
+            1
+          ],
+          [
+            2
+          ],
+          [
+            3
+          ]
+        ],
+        "issues": [],
+        "status": "match",
+        "display": "1"
+      }
+    },
+    {
+      "id": 79,
+      "group": "dynamic-array",
+      "formula": "SORTBY(Data!A1:B4,Data!B1:B4,-1)",
+      "cell": "B392",
+      "range": "B392:C395",
+      "row": 392,
+      "rows": 4,
+      "cols": 2,
+      "native": [
+        [
+          3,
+          40
+        ],
+        [
+          2,
+          30
+        ],
+        [
+          2,
+          20
+        ],
+        [
+          1,
+          10
+        ]
+      ],
+      "nativeFormula": "_xlfn.SORTBY(Data!A1:B4,Data!B1:B4,-1)",
+      "nativeFormulaAttrs": {
+        "t": "array",
+        "ref": "B392:C395"
+      },
+      "nativeCellAttrs": {
+        "r": "B392",
+        "cm": "1"
+      },
+      "from-file": {
+        "actual": [
+          [
+            3,
+            40
+          ],
+          [
+            2,
+            30
+          ],
+          [
+            2,
+            20
+          ],
+          [
+            1,
+            10
+          ]
+        ],
+        "issues": [],
+        "status": "match",
+        "display": "3"
+      },
+      "dynamic": {
+        "actual": [
+          [
+            3,
+            40
+          ],
+          [
+            2,
+            30
+          ],
+          [
+            2,
+            20
+          ],
+          [
+            1,
+            10
+          ]
+        ],
+        "issues": [],
+        "status": "match",
+        "display": "3"
+      },
+      "cached": {
+        "actual": [
+          [
+            3,
+            40
+          ],
+          [
+            2,
+            30
+          ],
+          [
+            2,
+            20
+          ],
+          [
+            1,
+            10
+          ]
+        ],
+        "issues": [],
+        "status": "match",
+        "display": "3"
+      }
+    },
+    {
+      "id": 80,
+      "group": "array-date",
+      "formula": "DATE({2024;2025},1,1)",
+      "cell": "B397",
+      "range": "B397:B398",
+      "row": 397,
+      "rows": 2,
+      "cols": 1,
+      "native": [
+        [
+          45292
+        ],
+        [
+          45658
+        ]
+      ],
+      "nativeFormula": "DATE({2024;2025},1,1)",
+      "nativeFormulaAttrs": {
+        "t": "array",
+        "ref": "B397:B398"
+      },
+      "nativeCellAttrs": {
+        "r": "B397",
+        "s": "1",
+        "cm": "1"
+      },
+      "from-file": {
+        "actual": [
+          [
+            "#NAME?"
+          ],
+          [
+            null
+          ]
+        ],
+        "issues": [
+          {
+            "kind": "native-gate",
+            "feature": "date-array-input-unverified",
+            "message": "Array input to a scalar date/time function is not verified"
+          }
+        ],
+        "status": "diagnosed-gap",
+        "display": "#NAME?"
+      },
+      "dynamic": {
+        "actual": [
+          [
+            "#NAME?"
+          ],
+          [
+            null
+          ]
+        ],
+        "issues": [
+          {
+            "kind": "native-gate",
+            "feature": "date-array-input-unverified",
+            "message": "Array input to a scalar date/time function is not verified"
+          }
+        ],
+        "status": "diagnosed-gap",
+        "display": "#NAME?"
+      },
+      "cached": {
+        "actual": [
+          [
+            45292
+          ],
+          [
+            45658
+          ]
+        ],
+        "issues": [
+          {
+            "kind": "native-gate",
+            "feature": "date-array-input-unverified",
+            "message": "Array input to a scalar date/time function is not verified"
+          },
+          {
+            "kind": "unsupported-formula",
+            "feature": "date-array-input-unverified",
+            "message": "Formula at B397 uses unsupported date-array-input-unverified; prior cached value retained"
+          }
+        ],
+        "status": "diagnosed-gap",
+        "display": "2024-01-01"
+      }
+    },
+    {
+      "id": 81,
+      "group": "array-text",
+      "formula": "TEXT({1;2},\"0.00\")",
+      "cell": "B402",
+      "range": "B402:B403",
+      "row": 402,
+      "rows": 2,
+      "cols": 1,
+      "native": [
+        [
+          "1.00"
+        ],
+        [
+          "2.00"
+        ]
+      ],
+      "nativeFormula": "TEXT({1;2},\"0.00\")",
+      "nativeFormulaAttrs": {
+        "t": "array",
+        "ref": "B402:B403"
+      },
+      "nativeCellAttrs": {
+        "r": "B402",
+        "t": "str",
+        "cm": "1"
+      },
+      "from-file": {
+        "actual": [
+          [
+            "#NAME?"
+          ],
+          [
+            null
+          ]
+        ],
+        "issues": [
+          {
+            "kind": "native-gate",
+            "feature": "text-array-input-unverified",
+            "message": "TEXT array-input profile is not verified; scalar TEXT only"
+          }
+        ],
+        "status": "diagnosed-gap",
+        "display": "#NAME?"
+      },
+      "dynamic": {
+        "actual": [
+          [
+            "#NAME?"
+          ],
+          [
+            null
+          ]
+        ],
+        "issues": [
+          {
+            "kind": "native-gate",
+            "feature": "text-array-input-unverified",
+            "message": "TEXT array-input profile is not verified; scalar TEXT only"
+          }
+        ],
+        "status": "diagnosed-gap",
+        "display": "#NAME?"
+      },
+      "cached": {
+        "actual": [
+          [
+            "1.00"
+          ],
+          [
+            "2.00"
+          ]
+        ],
+        "issues": [
+          {
+            "kind": "native-gate",
+            "feature": "text-array-input-unverified",
+            "message": "TEXT array-input profile is not verified; scalar TEXT only"
+          },
+          {
+            "kind": "unsupported-formula",
+            "feature": "text-array-input-unverified",
+            "message": "Formula at B402 uses unsupported text-array-input-unverified; prior cached value retained"
+          }
+        ],
+        "status": "diagnosed-gap",
+        "display": "1.00"
+      }
+    },
+    {
+      "id": 82,
+      "group": "missing-array",
+      "formula": "TEXTSPLIT(\"a,b\",\",\")",
+      "cell": "B407",
+      "range": "B407:C407",
+      "row": 407,
+      "rows": 1,
+      "cols": 2,
+      "native": [
+        [
+          "a",
+          "b"
+        ]
+      ],
+      "nativeFormula": "_xlfn.TEXTSPLIT(\"a,b\",\",\")",
+      "nativeFormulaAttrs": {
+        "t": "array",
+        "ref": "B407:C407"
+      },
+      "nativeCellAttrs": {
+        "r": "B407",
+        "t": "str",
+        "cm": "1"
+      },
+      "from-file": {
+        "actual": [
+          [
+            "#NAME?",
+            null
+          ]
+        ],
+        "issues": [],
+        "status": "mismatch",
+        "display": "#NAME?"
+      },
+      "dynamic": {
+        "actual": [
+          [
+            "#NAME?",
+            null
+          ]
+        ],
+        "issues": [],
+        "status": "mismatch",
+        "display": "#NAME?"
+      },
+      "cached": {
+        "actual": [
+          [
+            "a",
+            "b"
+          ]
+        ],
+        "issues": [
+          {
+            "kind": "unsupported-formula",
+            "feature": "TEXTSPLIT",
+            "message": "Formula at B407 uses unsupported TEXTSPLIT; prior cached value retained"
+          }
+        ],
+        "status": "diagnosed-gap",
+        "display": "a"
+      }
+    },
+    {
+      "id": 83,
+      "group": "missing-array",
+      "formula": "VSTACK({1,2},{3,4})",
+      "cell": "B412",
+      "range": "B412:C413",
+      "row": 412,
+      "rows": 2,
+      "cols": 2,
+      "native": [
+        [
+          1,
+          2
+        ],
+        [
+          3,
+          4
+        ]
+      ],
+      "nativeFormula": "_xlfn.VSTACK({1,2},{3,4})",
+      "nativeFormulaAttrs": {
+        "t": "array",
+        "ref": "B412:C413"
+      },
+      "nativeCellAttrs": {
+        "r": "B412",
+        "cm": "1"
+      },
+      "from-file": {
+        "actual": [
+          [
+            "#NAME?",
+            null
+          ],
+          [
+            null,
+            null
+          ]
+        ],
+        "issues": [],
+        "status": "mismatch",
+        "display": "#NAME?"
+      },
+      "dynamic": {
+        "actual": [
+          [
+            "#NAME?",
+            null
+          ],
+          [
+            null,
+            null
+          ]
+        ],
+        "issues": [],
+        "status": "mismatch",
+        "display": "#NAME?"
+      },
+      "cached": {
+        "actual": [
+          [
+            1,
+            2
+          ],
+          [
+            3,
+            4
+          ]
+        ],
+        "issues": [
+          {
+            "kind": "unsupported-formula",
+            "feature": "VSTACK",
+            "message": "Formula at B412 uses unsupported VSTACK; prior cached value retained"
+          }
+        ],
+        "status": "diagnosed-gap",
+        "display": "1"
+      }
+    },
+    {
+      "id": 84,
+      "group": "missing-array",
+      "formula": "TAKE(Data!A1:B4,2)",
+      "cell": "B417",
+      "range": "B417:C418",
+      "row": 417,
+      "rows": 2,
+      "cols": 2,
+      "native": [
+        [
+          1,
+          10
+        ],
+        [
+          2,
+          20
+        ]
+      ],
+      "nativeFormula": "_xlfn.TAKE(Data!A1:B4,2)",
+      "nativeFormulaAttrs": {
+        "t": "array",
+        "ref": "B417:C418"
+      },
+      "nativeCellAttrs": {
+        "r": "B417",
+        "cm": "1"
+      },
+      "from-file": {
+        "actual": [
+          [
+            "#NAME?",
+            null
+          ],
+          [
+            null,
+            null
+          ]
+        ],
+        "issues": [],
+        "status": "mismatch",
+        "display": "#NAME?"
+      },
+      "dynamic": {
+        "actual": [
+          [
+            "#NAME?",
+            null
+          ],
+          [
+            null,
+            null
+          ]
+        ],
+        "issues": [],
+        "status": "mismatch",
+        "display": "#NAME?"
+      },
+      "cached": {
+        "actual": [
+          [
+            1,
+            10
+          ],
+          [
+            2,
+            20
+          ]
+        ],
+        "issues": [
+          {
+            "kind": "unsupported-formula",
+            "feature": "TAKE",
+            "message": "Formula at B417 uses unsupported TAKE; prior cached value retained"
+          }
+        ],
+        "status": "diagnosed-gap",
+        "display": "1"
+      }
+    },
+    {
+      "id": 85,
+      "group": "display",
+      "formula": "3.14159265358979",
+      "cell": "B422",
+      "range": "B422:B422",
+      "row": 422,
+      "rows": 1,
+      "cols": 1,
+      "format": "General",
+      "native": [
+        [
+          3.14159265358979
+        ]
+      ],
+      "nativeFormula": "3.14159265358979",
+      "nativeFormulaAttrs": {},
+      "nativeCellAttrs": {
+        "r": "B422"
+      },
+      "from-file": {
+        "actual": [
+          [
+            3.14159265358979
+          ]
+        ],
+        "issues": [],
+        "status": "match",
+        "display": "3.14"
+      },
+      "dynamic": {
+        "actual": [
+          [
+            3.14159265358979
+          ]
+        ],
+        "issues": [],
+        "status": "match",
+        "display": "3.14"
+      },
+      "cached": {
+        "actual": [
+          [
+            3.14159265358979
+          ]
+        ],
+        "issues": [],
+        "status": "match",
+        "display": "3.14"
+      }
+    },
+    {
+      "id": 86,
+      "group": "display",
+      "formula": "0.524259259259259",
+      "cell": "B427",
+      "range": "B427:B427",
+      "row": 427,
+      "rows": 1,
+      "cols": 1,
+      "format": "h:mm:ss",
+      "native": [
+        [
+          0.524259259259259
+        ]
+      ],
+      "nativeFormula": "0.524259259259259",
+      "nativeFormulaAttrs": {},
+      "nativeCellAttrs": {
+        "r": "B427",
+        "s": "3"
+      },
+      "from-file": {
+        "actual": [
+          [
+            0.524259259259259
+          ]
+        ],
+        "issues": [],
+        "status": "match",
+        "display": "1900-01-00"
+      },
+      "dynamic": {
+        "actual": [
+          [
+            0.524259259259259
+          ]
+        ],
+        "issues": [],
+        "status": "match",
+        "display": "1900-01-00"
+      },
+      "cached": {
+        "actual": [
+          [
+            0.524259259259259
+          ]
+        ],
+        "issues": [],
+        "status": "match",
+        "display": "1900-01-00"
+      }
+    },
+    {
+      "id": 87,
+      "group": "display",
+      "formula": "1234.5",
+      "cell": "B432",
+      "range": "B432:B432",
+      "row": 432,
+      "rows": 1,
+      "cols": 1,
+      "format": "$#,##0.00",
+      "native": [
+        [
+          1234.5
+        ]
+      ],
+      "nativeFormula": "1234.5",
+      "nativeFormulaAttrs": {},
+      "nativeCellAttrs": {
+        "r": "B432"
+      },
+      "from-file": {
+        "actual": [
+          [
+            1234.5
+          ]
+        ],
+        "issues": [],
+        "status": "match",
+        "display": "1234.5"
+      },
+      "dynamic": {
+        "actual": [
+          [
+            1234.5
+          ]
+        ],
+        "issues": [],
+        "status": "match",
+        "display": "1234.5"
+      },
+      "cached": {
+        "actual": [
+          [
+            1234.5
+          ]
+        ],
+        "issues": [],
+        "status": "match",
+        "display": "1234.5"
+      }
+    }
+  ]
+}

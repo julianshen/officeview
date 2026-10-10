@@ -24,7 +24,18 @@ export interface PlacedTextLine {
   /** Source order among visual wraps/columns, independent of page geometry. */
   logicalLineIndex?: number
 }
-export interface TextLayout { lines: PlacedTextLine[]; height: number }
+export interface TextLayout {
+  lines: PlacedTextLine[]
+  height: number
+  /**
+   * Residual overflow after normAutofit shrinking, in physical box axes.
+   * Present only when the body requested normAutofit; absent otherwise.
+   */
+  overflow?: {
+    horizontal: boolean
+    vertical: boolean
+  }
+}
 
 // DrawingML theme supplemental faces use ISO 15924 script tags. Keep this
 // Unicode-to-theme mapping generic; language distinguishes Han variants.
@@ -107,7 +118,7 @@ export function sortedBoundaryRange(boundaries: readonly number[], start: number
   return [lower(start, includeStart), lower(end, false)]
 }
 
-function layoutHorizontalTextBody(body: PptxTextBody, width: number, height: number, measure: MeasureText, theme?: ThemeContext, originalRefs?: SourceRunRef[][]): TextLayout {
+function doLayoutHorizontalTextBody(body: PptxTextBody, width: number, height: number, measure: MeasureText, theme?: ThemeContext, originalRefs?: SourceRunRef[][]): TextLayout {
   const left = emuToPx(body.insetLeftEmu), right = width - emuToPx(body.insetRightEmu)
   const top = emuToPx(body.insetTopEmu), bottom = height - emuToPx(body.insetBottomEmu)
   const lines: PlacedTextLine[] = []
@@ -333,6 +344,191 @@ function layoutHorizontalTextBody(body: PptxTextBody, width: number, height: num
   return { lines, height: y }
 }
 
+function scaleTextBody(body: PptxTextBody, fontScale: number, lnSpcReduction: number = 0): PptxTextBody {
+  // Tab stops (positionEmu) are intentionally unscaled as they represent absolute
+  // paragraph/column formatting coordinates, consistent with Office treating stops as fixed.
+  if (fontScale === 1 && lnSpcReduction === 0) {
+    return { ...body, autofit: undefined }
+  }
+  const spcFactor = Math.max(0, 1 - lnSpcReduction)
+  return {
+    ...body,
+    autofit: undefined,
+    paragraphs: body.paragraphs.map(p => {
+      let lineSpacing = p.lineSpacing
+      if (lnSpcReduction > 0) {
+        if (lineSpacing) {
+          lineSpacing = { ...lineSpacing, value: lineSpacing.value * spcFactor }
+        } else {
+          lineSpacing = { kind: 'percent', value: 1.0 * spcFactor }
+        }
+      }
+      const wordLineSpacing = p.wordLineSpacing && lnSpcReduction > 0
+        ? { ...p.wordLineSpacing, value: Math.max(1, Math.round(p.wordLineSpacing.value * spcFactor)) }
+        : p.wordLineSpacing
+      const spaceBefore = p.spaceBefore && p.spaceBefore.kind === 'points' && fontScale !== 1
+        ? { ...p.spaceBefore, value: p.spaceBefore.value * fontScale }
+        : p.spaceBefore
+      const spaceAfter = p.spaceAfter && p.spaceAfter.kind === 'points' && fontScale !== 1
+        ? { ...p.spaceAfter, value: p.spaceAfter.value * fontScale }
+        : p.spaceAfter
+      const defaultProperties = p.defaultProperties
+        ? {
+            ...p.defaultProperties,
+            ...(p.defaultProperties.fontSizePt !== undefined
+              ? { fontSizePt: p.defaultProperties.fontSizePt * fontScale }
+              : {}),
+            ...(p.defaultProperties.characterSpacingPt !== undefined
+              ? { characterSpacingPt: p.defaultProperties.characterSpacingPt * fontScale }
+              : {}),
+            ...(p.defaultProperties.textOutline
+              ? { textOutline: { ...p.defaultProperties.textOutline, widthPx: p.defaultProperties.textOutline.widthPx * fontScale } }
+              : {}),
+          }
+        : undefined
+      const endProperties = p.endProperties
+        ? {
+            ...p.endProperties,
+            ...(p.endProperties.fontSizePt !== undefined
+              ? { fontSizePt: p.endProperties.fontSizePt * fontScale }
+              : {}),
+            ...(p.endProperties.characterSpacingPt !== undefined
+              ? { characterSpacingPt: p.endProperties.characterSpacingPt * fontScale }
+              : {}),
+            ...(p.endProperties.textOutline
+              ? { textOutline: { ...p.endProperties.textOutline, widthPx: p.endProperties.textOutline.widthPx * fontScale } }
+              : {}),
+          }
+        : undefined
+      const runs = p.runs.map(r => ({
+        ...r,
+        fontSizePt: (r.fontSizePt ?? 12) * fontScale,
+        ...(r.characterSpacingPt !== undefined ? { characterSpacingPt: r.characterSpacingPt * fontScale } : {}),
+        ...(r.textOutline ? { textOutline: { ...r.textOutline, widthPx: r.textOutline.widthPx * fontScale } } : {}),
+        ...(r.directProperties
+          ? {
+              directProperties: {
+                ...r.directProperties,
+                ...(r.directProperties.fontSizePt !== undefined
+                  ? { fontSizePt: r.directProperties.fontSizePt * fontScale }
+                  : {}),
+                ...(r.directProperties.characterSpacingPt !== undefined
+                  ? { characterSpacingPt: r.directProperties.characterSpacingPt * fontScale }
+                  : {}),
+                ...(r.directProperties.textOutline
+                  ? { textOutline: { ...r.directProperties.textOutline, widthPx: r.directProperties.textOutline.widthPx * fontScale } }
+                  : {}),
+              },
+            }
+          : {}),
+      }))
+      return {
+        ...p,
+        runs,
+        lineSpacing,
+        wordLineSpacing,
+        spaceBefore,
+        spaceAfter,
+        defaultProperties,
+        endProperties,
+      }
+    }),
+  }
+}
+
+function layoutHorizontalTextBody(body: PptxTextBody, width: number, height: number, measure: MeasureText, theme?: ThemeContext, originalRefs?: SourceRunRef[][]): TextLayout {
+  if (body.autofit?.kind !== 'normal') {
+    return doLayoutHorizontalTextBody(body, width, height, measure, theme, originalRefs)
+  }
+  const top = emuToPx(body.insetTopEmu), bottom = height - emuToPx(body.insetBottomEmu)
+  const left = emuToPx(body.insetLeftEmu), right = width - emuToPx(body.insetRightEmu)
+  const availHeight = bottom - top
+  const availWidth = right - left
+
+  const authoredScale = typeof body.autofit.fontScale === 'number' && Number.isFinite(body.autofit.fontScale)
+    ? Math.max(0.01, Math.min(1.0, body.autofit.fontScale))
+    : undefined
+  const lnReduction = typeof body.autofit.lnSpcReduction === 'number' && Number.isFinite(body.autofit.lnSpcReduction)
+    ? Math.max(0, Math.min(1.0, body.autofit.lnSpcReduction))
+    : 0
+
+  let currentScale = authoredScale ?? 1.0
+  let scaledBody = scaleTextBody(body, currentScale, lnReduction)
+  let layout = doLayoutHorizontalTextBody(scaledBody, width, height, measure, theme, originalRefs)
+
+  const maxLineWidth = (ly: TextLayout): number => {
+    let max = 0
+    for (const line of ly.lines) {
+      let lineLeft = left, lineRight = right
+      for (const seg of line.segments) {
+        lineLeft = Math.min(lineLeft, seg.x)
+        lineRight = Math.max(lineRight, seg.x + seg.width)
+      }
+      for (const slot of line.inlineSlots ?? []) {
+        lineLeft = Math.min(lineLeft, slot.x)
+        lineRight = Math.max(lineRight, slot.x + slot.width)
+      }
+      // Include both ends after alignment: center/right alignment can place
+      // oversized content left of the box while its right edge still fits.
+      max = Math.max(max, lineRight - lineLeft)
+    }
+    return max
+  }
+
+  const calcOverflowRatio = (ly: TextLayout): number => {
+    let ratio = 1.0
+    if (availHeight > 0 && Number.isFinite(availHeight) && ly.height > availHeight + 1e-4) {
+      ratio = Math.min(ratio, availHeight / ly.height)
+    }
+    // Emergency wrapping cannot divide an oversized grapheme or inline slot.
+    if (availWidth > 0 && Number.isFinite(availWidth)) {
+      const lineWidth = maxLineWidth(ly)
+      if (lineWidth > availWidth + 1e-4) {
+        ratio = Math.min(ratio, availWidth / lineWidth)
+      }
+    }
+    return ratio
+  }
+
+  // Dynamic autofit when no authored scale was specified, OR if text still overflows available box
+  const ratio = calcOverflowRatio(layout)
+  if (ratio < 1.0) {
+    const minScale = Math.min(0.2, currentScale)
+    currentScale = Math.min(currentScale, Math.max(minScale, currentScale * ratio))
+    scaledBody = scaleTextBody(body, currentScale, lnReduction)
+    layout = doLayoutHorizontalTextBody(scaledBody, width, height, measure, theme, originalRefs)
+
+    if (calcOverflowRatio(layout) < 1.0 && currentScale > minScale) {
+      // Margins, indents, tabs and inline slots retain fixed coordinates, so
+      // multiplying by the whole-box ratio need not converge in two passes.
+      // Find a fitting lower bound first: if the floor still overflows, no
+      // further font reduction is permitted and residual overflow is retained.
+      let upperScale = currentScale, lowerScale = minScale
+      let fittedLayout = doLayoutHorizontalTextBody(scaleTextBody(body, lowerScale, lnReduction), width, height, measure, theme, originalRefs)
+      if (calcOverflowRatio(fittedLayout) === 1.0) {
+        // Bounded bisection avoids slow asymptotic convergence near a fixed
+        // margin, while retaining the largest known fitting scale. Each
+        // candidate is fully rewrapped and measured, including vertical fit.
+        for (let attempt = 0; attempt < 24; attempt++) {
+          const candidateScale = (lowerScale + upperScale) / 2
+          const candidateLayout = doLayoutHorizontalTextBody(scaleTextBody(body, candidateScale, lnReduction), width, height, measure, theme, originalRefs)
+          if (calcOverflowRatio(candidateLayout) === 1.0) {
+            lowerScale = candidateScale; fittedLayout = candidateLayout
+          } else upperScale = candidateScale
+        }
+      }
+      layout = fittedLayout
+    }
+  }
+
+  const overflow = {
+    horizontal: availWidth > 0 && Number.isFinite(availWidth) && maxLineWidth(layout) > availWidth + 1e-4,
+    vertical: availHeight > 0 && Number.isFinite(availHeight) && layout.height > availHeight + 1e-4,
+  }
+
+  return { ...layout, overflow }
+}
+
 function verticalPieces(text: string, direction: TextDirection): Array<{ text: string; start: number; orientation: 'upright' | 'clockwise' | 'counterclockwise' }> {
   const out: Array<{ text: string; start: number; orientation: 'upright' | 'clockwise' | 'counterclockwise' }> = []
   for (const cluster of graphemes(text)) {
@@ -463,7 +659,18 @@ export function layoutTextBody(body: PptxTextBody, width: number, height: number
         y: direction === 'vert270' ? bottom - slot.x - slot.width - anchorShift : slot.x + anchorShift })),
       segments, logicalLineIndex }
   })
-  return { lines, height: transverse.height }
+  return {
+    lines,
+    height: transverse.height,
+    ...(transverse.overflow
+      ? {
+          overflow: {
+            horizontal: transverse.overflow.vertical,
+            vertical: transverse.overflow.horizontal,
+          },
+        }
+      : {}),
+  }
 }
 
 export function applyTableTextDefaults(paragraph: PptxParagraph, defaults: PptxTextStyle): PptxParagraph {

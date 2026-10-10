@@ -94,15 +94,15 @@ describe('<OfficeDoc> text selection', () => {
     for (let i = 0; i < before.length; i += 4) if (before[i] < 200) inkBefore++
 
     fireEvent.doubleClick(canvas, { clientX: 160, clientY: 104, bubbles: true })
-    await new Promise((r) => setTimeout(r, 40))
-
-    const after = ctx.getImageData(0, 0, canvas.width, canvas.height).data
-    let blue = 0
-    // selection wash is rgba(64,128,255,0.35) over white -> ~(188,207,255)
-    for (let i = 0; i < after.length; i += 4) {
-      if (after[i] > 175 && after[i] < 205 && after[i + 1] > 195 && after[i + 1] < 225 && after[i + 2] > 240) blue++
-    }
-    expect(blue).toBeGreaterThan(10)
+    await waitFor(() => {
+      const after = ctx.getImageData(0, 0, canvas.width, canvas.height).data
+      let blue = 0
+      // selection wash is rgba(64,128,255,0.35) over white -> ~(188,207,255)
+      for (let i = 0; i < after.length; i += 4) {
+        if (after[i] > 175 && after[i] < 205 && after[i + 1] > 195 && after[i + 1] < 225 && after[i + 2] > 240) blue++
+      }
+      expect(blue).toBeGreaterThan(10)
+    })
     void inkBefore
   })
 
