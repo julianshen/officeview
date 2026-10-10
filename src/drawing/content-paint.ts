@@ -59,7 +59,15 @@ export function paintDrawingContent<Paragraph, Text>(drawing: DrawingContent<Par
           ctx.stroke()
         }
       }
-      try { options.paintDiagramText?.(s, ctx, w, h) }
+      // Text-only fallback diagrams carry no intrinsic extents; offer the
+      // enclosing diagram box instead of a degenerate one (which text
+      // painters early-return on, losing all visible ink). Gated on the
+      // fallback marker — every other diagram, including degenerate cached
+      // shapes, keeps authored boxes byte-identically.
+      const fallbackBox = drawing.textOnly === true
+      const textW = w > 0 || !fallbackBox ? w : width
+      const textH = h > 0 || !fallbackBox ? h : height
+      try { options.paintDiagramText?.(s, ctx, textW, textH) }
       catch { /* A malformed text body cannot suppress later shapes. */ }
       } finally { ctx.restore() }
     }

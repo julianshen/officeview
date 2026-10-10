@@ -1,5 +1,5 @@
 /** Theme-resolved payloads; source parts are cached separately from these models. */
-import { attrs, getChildren, textOf, type XmlNode } from '../core/xml'
+import { attrs, getChildren, parseXmlOrdered, textOf, type XmlNode } from '../core/xml'
 import { emuToPx } from '../core/geometry'
 import type { GeometryDefinition, GeometryIssue } from './geometry'
 import type { DrawingStyle, ThemeContext } from './style'
@@ -93,7 +93,7 @@ export interface DrawingContentShape<Text = never> {
 }
 
 export type DrawingContent<Paragraph = ContentParagraph, Text = never> =
-  | { kind: 'diagram'; shapes: DrawingContentShape<Text>[] }
+  | { kind: 'diagram'; shapes: DrawingContentShape<Text>[]; textOnly?: boolean }
   | {
       kind: 'ink'
       strokes: Array<{ points: Array<[number, number]>; widthEmu: number; color: string }>
@@ -389,6 +389,79 @@ function inspectCachedTree(tree: XmlNode): { supported: boolean; sawPicture: boo
   result.limitReached = pending.length > 0
   return result
 }
+/** Bound dataModel point collection so a hostile part cannot stage unbounded paragraphs. */
+const SMARTART_TEXT_PARAGRAPH_LIMIT = 1000
+/**
+ * Collect SmartArt dataModel point texts in document order, one entry per
+ * point with non-blank dgm:t content. Empty points contribute nothing.
+ * Returns the texts plus whether points were dropped at the limit.
+ */
+/**
+ * Paragraph texts for one dataModel point. Plain string points yield a
+ * single paragraph. Nested DrawingML (non-conformant but observed when
+ * pretty-printed) yields one paragraph per nested p, with br line breaks
+ * preserved as newline characters; pretty whitespace between elements is
+ * skipped while intentional spacing inside runs is preserved.
+ */
+function pointParagraphs(pt: XmlNode): string[] {
+  const tops = getChildren(pt, 't')
+  if (!tops.some((t) => orderedChildren(t).some(([name]) => name !== '#text'))) {
+    const text = tops.map((t) => textOf(t)).join('').trim()
+    return text ? [text] : []
+  }
+  const paras: string[] = []
+  let cur = ''
+  const flush = (): void => { if (cur !== '') { paras.push(cur); cur = '' } }
+  const walk = (node: XmlNode): void => {
+    for (const [name, child] of orderedChildren(node)) {
+      if (name === '#text') {
+        const s = textOf(child)
+        if (s.trim() !== '') cur += s
+      } else if (name === 'p') {
+        flush()
+        walk(child)
+        flush()
+      } else if (name === 'br') {
+        cur += '\n'
+      } else if (name === 't' && !orderedChildren(child).some(([n]) => n !== '#text')) {
+        cur += textOf(child)
+      } else {
+        walk(child)
+      }
+    }
+  }
+  for (const t of tops) walk(t)
+  flush()
+  return paras
+}
+function collectDataModelTexts(root: XmlNode | undefined): { texts: string[]; truncated: boolean } {
+  const dataModel = root && child(root, 'ptLst') ? root : child(root, 'dataModel')
+  const pts = dataModel ? getChildren(child(dataModel, 'ptLst'), 'pt') : []
+  const texts: string[] = []
+  let truncated = false
+  for (const pt of pts) {
+    for (const para of pointParagraphs(pt)) {
+      const text = para.trim()
+      if (!text) continue
+      if (texts.length >= SMARTART_TEXT_PARAGRAPH_LIMIT) { truncated = true; break }
+      texts.push(text)
+    }
+    if (truncated) break
+  }
+  return { texts, truncated }
+}
+/**
+ * Build a minimal DrawingML text body carrying the fallback paragraphs, so
+ * each caller parses them through its own parseDiagramText pipeline
+ * (DOCX and PPTX adapters both consume a:p runs; the node is produced by
+ * the real XML parser, never hand-shaped). Plain &/<> escaping only;
+ * unparseable text degrades at the call site, never here.
+ */
+function smartArtTextBodyXml(texts: string[]): string {
+  const esc = (text: string): string => text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+  const paras = texts.map((text) => `<a:p><a:r><a:t>${esc(text)}</a:t></a:r></a:p>`).join('')
+  return `<a:txBody xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><a:bodyPr/>${paras}</a:txBody>`
+}
 /** Resolve a single supported cached payload. Never cache theme-resolved models. */
 export async function prepareDrawingContent<Paragraph = ContentParagraph, Text = never>(
   pkg: OfficePackage, graphic: XmlNode, owner: string, theme: ContentTheme, drawingTheme: ThemeContext,
@@ -455,7 +528,10 @@ export async function prepareDrawingContent<Paragraph = ContentParagraph, Text =
       // Existing Word producers may attach the cached drawing rel to either owner.
       const local = (await partRelationships(pkg, path)).get(cachedId)
       const cachedOwner = local ? path : from
-      return prepareDrawingContent(pkg, { contentPart: { '@attrs': { id: cachedId } } }, cachedOwner, theme, drawingTheme, adapters, next, depth + 1, origin)
+      const cachedContent = await prepareDrawingContent(pkg, { contentPart: { '@attrs': { id: cachedId } } }, cachedOwner, theme, drawingTheme, adapters, next, depth + 1, origin)
+      if (cachedContent) return cachedContent
+      // A broken cache keeps its diagnostics and falls through to the
+      // dataModel text fallback below instead of losing all text.
     }
     // A chart document contains c:chart with plotArea; it is not a new
     // relationship carrier. Unsupported chart types end at this target.
@@ -463,6 +539,42 @@ export async function prepareDrawingContent<Paragraph = ContentParagraph, Text =
     if (chartDocument && !attrs(chartDocument).id) {
       contentDiagnostic(context, 'unsupported-content', path, 'chart', { reason: 'unsupported-chart' })
       return undefined
+    }
+    // Cacheless (or cache-broken) SmartArt: the dataModel carries author
+    // text but no usable cached dsp:drawing. Synthesize a searchable
+    // text-only box from dgm:pt/dgm:t instead of losing all text. Cached
+    // rendering stays preferred; this only runs when nothing usable was
+    // found above. Generic paragraphs carry the text adapter-free while
+    // textBody flows through the caller's own parseDiagramText pipeline,
+    // so DOCX and PPTX adapters each parse format-correct paragraphs; the
+    // unsupported-content diagnostic lets the existing coverage mapping
+    // report the long-standing text-only representation status.
+    const { texts: smartArtTexts, truncated: smartArtTruncated } = collectDataModelTexts(root)
+    if (smartArtTexts.length > 0) {
+      const paragraphs = smartArtTexts.map((text) => ({ runs: [{ text }], align: 'left' as const }))
+      let textBody: Text | undefined
+      if (adapters.parseDiagramText) {
+        try {
+          textBody = adapters.parseDiagramText(parseXmlOrdered(smartArtTextBodyXml(smartArtTexts)), {})
+        } catch {
+          textBody = undefined
+        }
+      }
+      contentDiagnostic(context, 'unsupported-content', path, 'smartart', { reason: 'cacheless-smartart-text-fallback' })
+      if (smartArtTruncated) {
+        contentDiagnostic(context, 'unsupported-content', path, 'smartart', { reason: 'smartart-text-truncated', limit: SMARTART_TEXT_PARAGRAPH_LIMIT })
+      }
+      const fallbackShape: DrawingContentShape<Text> = {
+        xEmu: 0,
+        yEmu: 0,
+        widthEmu: 0,
+        heightEmu: 0,
+        geometry: 'rect',
+        ...(textBody !== undefined ? { textBody } : {}),
+        paragraphs,
+        fontFamily: theme.fonts.get('minorHAnsi') ?? 'Calibri',
+      }
+      return { kind: 'diagram', shapes: [fallbackShape], textOnly: true }
     }
     const data = child(root, 'graphicData') ?? child(child(root, 'graphic'), 'graphicData') ?? root
     const beforeNested = context.diagnostics.length
