@@ -1,6 +1,6 @@
 import type { CalendarDay, TypedCondition } from './contracts'
 import type { DateSystem } from '../formula/types'
-import { decodeSerial, encodeCivil, epochToSerial, realDaysInMonth, weekdayIndex } from '../formula/serial'
+import { civilFromDays, daysFromCivil, decodeSerial, encodeCivil, epochToSerial, realDaysInMonth, weekdayIndex } from '../formula/serial'
 export interface DateContext { dateSystem: DateSystem; timeZone: string; nowMs: number }
 /** Serializable pure value; unbounded before/after use explicit infinities internally. */
 export interface DateInterval { start: number; end: number; complement: boolean }
@@ -44,7 +44,8 @@ export function lowerDateCondition(condition: DateCondition, context: DateContex
   const today = Math.floor(numeric(epochToSerial(context.nowMs, context.timeZone, system)))
   const decoded = decodeSerial(today, system)
   if ('kind' in decoded) throw new RangeError('Invalid current date')
-  const date = decoded.civil
+  const date = decoded.civil.special === '1900-january-day-zero'
+    ? civilFromDays(daysFromCivil(1900, 1, 1) - 1) : decoded.civil
   validateDay(date, system)
   let start: number, end: number
   switch (condition.preset) {
