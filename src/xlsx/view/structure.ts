@@ -263,6 +263,7 @@ async function consumeBand(source: PopulatedCellSource, band: SourceRowInterval,
   const missing: SourceRect[] = []
   let complete = true
   let cursor: string | undefined
+  const seen = new Set<string>()
   for (;;) {
     const page = await source.iterate(range, cursor)
     for (const cell of page.items) {
@@ -277,6 +278,8 @@ async function consumeBand(source: PopulatedCellSource, band: SourceRowInterval,
       for (const rect of page.missing) missing.push(rect)
     }
     if (page.nextCursor === undefined) break
+    if (seen.has(page.nextCursor)) throw new RangeError('Populated cursor made no progress')
+    seen.add(page.nextCursor)
     cursor = page.nextCursor
   }
   return { byRow, complete, missing: Object.freeze(missing) }
@@ -448,8 +451,8 @@ export function fromStoreScan(store: SourceStore, options: ReadOptions, pageLimi
       for await (const page of store.scanPopulated(request, options)) {
         if (page.error !== undefined) throw new RangeError(`Populated scan failed: ${page.error.code}`)
         const items = Object.freeze(page.items.map((cell: AuthoritativeCell) => ({ row: cell.row, col: cell.col })))
-        if (page.completeness === 'complete') return { items, completeness: page.completeness, missing: [] }
-        return { items, completeness: page.completeness, missing: Object.freeze([{ ...range }]) }
+        if (page.completeness === 'complete') return { items, completeness: page.completeness, missing: [], nextCursor: page.nextCursor }
+        return { items, completeness: page.completeness, missing: Object.freeze([{ ...range }]), nextCursor: page.nextCursor }
       }
       throw new RangeError('Populated scan ended without a page')
     },

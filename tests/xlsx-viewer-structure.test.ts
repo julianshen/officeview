@@ -348,6 +348,29 @@ describe('sparse current-region detection', () => {
 })
 
 describe('store-backed populated source', () => {
+  it('propagates store cursors across pages instead of truncating the band', async () => {
+    const handle = createFixture('F5')
+    const store = handle.createStore()
+    const source = fromStoreScan(store, readOptionsFor(store), 2)
+    const first = await source.iterate({ r0: 0, r1: 99, c0: 0, c1: MAX_COLS - 1 })
+    expect(first.items.length).toBeLessThanOrEqual(2)
+    expect(first.nextCursor).toBeDefined()
+    const second = await source.iterate({ r0: 0, r1: 99, c0: 0, c1: MAX_COLS - 1 }, first.nextCursor)
+    expect(second.items.length).toBeGreaterThan(0)
+    const built = await RowChunkIndex.build(source, { r0: 0, r1: 99 })
+    expect(built.complete).toBe(true)
+    expect(built.index.populatedRows()).toEqual([
+      { r0: 0, r1: 9 }, { r0: 32, r1: 32 }, { r0: 40, r1: 40 }, { r0: 44, r1: 46 },
+    ])
+  })
+  it('rejects a source that repeats its cursor instead of looping forever', async () => {
+    const looping: PopulatedCellSource = {
+      async iterate(): Promise<PopulatedPage> {
+        return { items: [], completeness: 'complete', missing: [], nextCursor: 'loop' }
+      },
+    }
+    await expect(RowChunkIndex.build(looping, { r0: 0, r1: 9 })).rejects.toThrow(/cursor/i)
+  })
   it('feeds chunk indexes from scanPopulated with small pages and cursors', async () => {
     const handle = createFixture('F5')
     const store = handle.createStore()

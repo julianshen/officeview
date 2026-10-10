@@ -8,7 +8,7 @@ import type {
   RowVisibility,
   StructuralResult,
 } from '../src/xlsx/view/contracts'
-import { StructuralIndex, type PopulatedCellSource, type PopulatedPage } from '../src/xlsx/view/structure'
+import { StructuralIndex, fromStoreScan, type PopulatedCellSource, type PopulatedPage } from '../src/xlsx/view/structure'
 import {
   guardFilter,
   guardSort,
@@ -148,6 +148,20 @@ describe('guardSort structural refusals', () => {
   it('accepts a clean band with no structure, drawings or outside data', async () => {
     const { handle, index } = await f5Setup()
     expect(await guardSort(band(60, 65, 0, 1), index, fixtureSource(handle))).toEqual({ ok: true })
+  })
+  it('finds outside-column data on a later store page instead of truncating', async () => {
+    const { handle } = await f5Setup()
+    const empty = new StructuralIndex({
+      stamp: { docId: 'd', sheetId: 's', valueGen: 0 },
+      completeness: 'complete', merges: [], tables: [], spills: [], drawings: [], missing: [],
+    })
+    for (const pageLimit of [5, 2, 1]) {
+      const store = handle.createStore()
+      const source = fromStoreScan(store, readOptionsFor(store), pageLimit)
+      expect(await guardSort(band(0, 99, 0, 3), empty, source)).toEqual({
+        ok: false, refusal: { reason: 'outside-column-data', range: { r0: 0, r1: 0, c0: 6, c1: 6 } },
+      })
+    }
   })
   it('refuses a sort moving a cell-anchored drawing band', async () => {
     const { handle, index } = await f5Setup()
