@@ -152,16 +152,15 @@ export class FilterEngine {
       }
     }
     if (rule.kind !== 'text') throw new RangeError('Invalid condition kind')
-    this.text.validate(rule.op, rule.first, rule.wildcards, { ...compilation.limits, budget: compilation, work: undefined })
-    const { op, first, wildcards } = rule
+    const match = this.text.prepare(rule.op, rule.first, rule.wildcards, compilation)
     return (value, budget) => {
       budget.charge(0)
       resolved(value)
       if (value.kind === 'blank' || value.kind === 'error') return false
-      if (value.kind === 'string') return this.text.matchWithBudget(op, first, wildcards, value.value, budget)
+      if (value.kind === 'string') return match(value.value, budget)
       if ((value.kind === 'number' || value.kind === 'boolean') && columnKind === 'text') {
         if (value.displayText === undefined) throw new FilterDiagnostic('missing-display-text', 'Missing formatted display text lane')
-        return this.text.matchWithBudget(op, first, wildcards, value.displayText, budget)
+        return match(value.displayText, budget)
       }
       return false
     }

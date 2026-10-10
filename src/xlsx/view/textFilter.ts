@@ -39,7 +39,7 @@ export class WorkBudget {
     this.charge(value.length)
   }
 }
-type Token = { kind: 'literal'; text: string } | { kind: 'star' } | { kind: 'one' }
+type Token = Readonly<{ kind: 'literal'; text: string } | { kind: 'star' } | { kind: 'one' }>
 const TEXT_OPS: readonly TextOp[] = ['eq', 'neq', 'begins', 'ends', 'contains', 'not-contains']
 /** The formula wildcard helper deliberately rejects Unicode and compares ASCII
  * characters individually. This contract needs host-collated literal runs of
@@ -51,7 +51,7 @@ function tokens(pattern: string, budget: WorkBudget): Token[] {
   const flush = () => { if (literal) { result.push({ kind: 'literal', text: literal }); literal = '' } }
   for (const point of pattern) {
     if (escaped) {
-      // Strict ~ escapes match src/xlsx/formula/wildcard.ts.
+      // Strict ~ escapes match src/xlsx/formula/functions/wildcard.ts.
       if (point !== '*' && point !== '?' && point !== '~') throw new RangeError('Wildcard escape must precede a metacharacter')
       literal += point; escaped = false
     }
@@ -63,22 +63,32 @@ function tokens(pattern: string, budget: WorkBudget): Token[] {
   flush()
   return result
 }
-export class TextFilterMatcher {
+export class ReferenceTextFilterMatcher {
   readonly collator: Intl.Collator
   constructor(locale: string) {
     this.collator = new Intl.Collator(locale, { sensitivity: 'accent', numeric: false, usage: 'search' })
   }
   validate(op: TextOp, pattern: string, wildcards: boolean, limits?: FilterLimits): void {
+    this.prepare(op, pattern, wildcards, new WorkBudget(limits))
+  }
+  prepare(op: TextOp, pattern: string, wildcards: boolean, budget: WorkBudget): (text: string, budget: WorkBudget) => boolean {
     if (!TEXT_OPS.includes(op) || typeof pattern !== 'string' || typeof wildcards !== 'boolean') throw new RangeError('Invalid text condition')
-    const budget = new WorkBudget(limits)
-    if (wildcards) tokens(pattern, budget)
-    else budget.text(pattern)
+    const positive = op === 'neq' ? 'eq' : op === 'not-contains' ? 'contains' : op
+    let parsed: readonly Token[] | undefined
+    if (wildcards) {
+      const list = tokens(pattern, budget)
+      if (positive === 'ends' || positive === 'contains') list.unshift({ kind: 'star' })
+      if (positive === 'begins' || positive === 'contains') list.push({ kind: 'star' })
+      parsed = Object.freeze(list.map(token => Object.freeze(token)))
+    } else budget.text(pattern)
+    return (text, budget) => this.evaluate(op, pattern, parsed, text, budget)
   }
   match(op: TextOp, pattern: string, wildcards: boolean, text: string, limits?: FilterLimits): boolean {
-    if (!TEXT_OPS.includes(op) || typeof pattern !== 'string' || typeof text !== 'string' || typeof wildcards !== 'boolean') throw new RangeError('Invalid text condition')
-    return this.matchWithBudget(op, pattern, wildcards, text, new WorkBudget(limits))
+    const budget = new WorkBudget(limits)
+    return this.prepare(op, pattern, wildcards, budget)(text, budget)
   }
-  matchWithBudget(op: TextOp, pattern: string, wildcards: boolean, text: string, budget: WorkBudget): boolean {
+  protected evaluate(op: TextOp, pattern: string, parsed: readonly Token[] | undefined, text: string, budget: WorkBudget): boolean {
+    if (typeof text !== 'string') throw new RangeError('Invalid text condition')
     budget.text(text)
     const negative = op === 'neq' || op === 'not-contains'
     const positive = op === 'neq' ? 'eq' : op === 'not-contains' ? 'contains' : op
@@ -92,8 +102,7 @@ export class TextFilterMatcher {
       return this.collator.compare(literal, text.slice(points[start], points[end])) === 0
     }
     let matched = false
-    if (!wildcards) {
-      budget.text(pattern)
+    if (!parsed) {
       if (positive === 'eq') matched = equal(pattern, 0, count)
       else {
         outer: for (let start = 0; start <= count; start++) {
@@ -105,9 +114,6 @@ export class TextFilterMatcher {
         }
       }
     } else {
-      const parsed = tokens(pattern, budget)
-      if (positive === 'ends' || positive === 'contains') parsed.unshift({ kind: 'star' })
-      if (positive === 'begins' || positive === 'contains') parsed.push({ kind: 'star' })
       let row = new Uint8Array(count + 1)
       row[0] = 1
       for (const token of parsed) {
@@ -133,3 +139,5 @@ export class TextFilterMatcher {
     return negative ? !matched : matched
   }
 }
+
+export class TextFilterMatcher extends ReferenceTextFilterMatcher {}

@@ -296,3 +296,16 @@ describe('explicit scan budgets', () => {
     expect(match(s('hello'), { maxWork: 100 })).toBe(true)
   })
 })
+
+describe('prepared text predicates', () => {
+  it('tokenizes wildcard patterns once when compiled rather than per cell', () => {
+    const work = { used: 0 }
+    const match = engine.compileRule({ kind: 'text', op: 'eq', first: '*'.repeat(2000), wildcards: true }, mixed, { work })
+    const before = work.used
+    expect(match(s(''))).toBe(true)
+    expect(work.used - before).toBeLessThanOrEqual(2000)
+    const again = work.used
+    expect(match(s(''))).toBe(true)
+    expect(work.used - again).toBeLessThanOrEqual(2000)
+  })
+})
