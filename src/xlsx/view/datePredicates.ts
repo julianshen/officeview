@@ -2,7 +2,8 @@ import type { CalendarDay, TypedCondition } from './contracts'
 import type { DateSystem } from '../formula/types'
 import { civilFromDays, daysFromCivil, decodeSerial, encodeCivil, epochToSerial, realDaysInMonth, weekdayIndex } from '../formula/serial'
 export interface DateContext { dateSystem: DateSystem; timeZone: string; nowMs: number }
-/** Serializable pure value; unbounded before/after use explicit infinities internally. */
+/** Structured-cloneable pure value; unbounded before/after use internal infinities.
+ * Serialize the original rules for JSON replay, not these lowered boundaries. */
 export interface DateInterval { start: number; end: number; complement: boolean }
 type DateCondition = Extract<TypedCondition, { kind: 'date' | 'datePreset' }>
 function numeric(result: unknown): number {
