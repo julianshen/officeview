@@ -173,20 +173,31 @@ export class ReferenceTextFilterMatcher {
 // Both releases: icu4c/source/data/coll/{root,en,en_US}.txt (root search tailoring).
 // Custom ICU data, other versions/locales, and browser hosts retain reference semantics.
 function certifiedAsciiBackend(collator: Intl.Collator): boolean {
-  if (typeof process === 'undefined' || !process.versions || process.env.NODE_ICU_DATA !== undefined || process.env.ICU_DATA !== undefined
-    || process.env.NODE_OPTIONS?.includes('--icu-data-dir')
-    || process.execArgv.some(arg => arg.startsWith('--icu-data-dir'))) return false
-  const versions = process.versions
-  // This guard assumes the reported runtime uses its released, unmodified ICU data.
-  const backend = (versions.bun === '1.3.10' && versions.icu === '74.2' && versions.unicode === '15.1')
-    || (!versions.bun && versions.node === '22.22.3' && versions.icu === '78.2' && versions.cldr === '48.0' && versions.unicode === '17.0')
-  const native = (value: unknown) => typeof value === 'function' && Function.prototype.toString.call(value).includes('[native code]')
-  if (!backend || !native(Intl.Collator) || !native(collator.compare) || !native(collator.resolvedOptions)
-    || !native(Object.getOwnPropertyDescriptor(Intl.Collator.prototype, 'compare')?.get)) return false
-  const options = collator.resolvedOptions()
-  return (options.locale === 'en' || options.locale === 'en-US') && options.usage === 'search' && options.sensitivity === 'accent'
-    && !options.numeric && !options.ignorePunctuation && options.collation === 'default' && options.caseFirst === 'false'
+  try {
+    if (typeof process !== 'object' || !process) return false
+    const versions = process.versions
+    if (!versions || typeof versions !== 'object') return false
+    // This guard assumes the reported runtime uses its released, unmodified ICU data.
+    const backend = (versions.bun === '1.3.10' && versions.icu === '74.2' && versions.unicode === '15.1')
+      || (!versions.bun && versions.node === '22.22.3' && versions.icu === '78.2' && versions.cldr === '48.0' && versions.unicode === '17.0')
+    if (!backend) return false
+    const env = process.env, args = process.execArgv
+    if (!env || typeof env !== 'object' || Array.isArray(env) || !Array.isArray(args) || args.some(arg => typeof arg !== 'string')) return false
+    if (env.NODE_ICU_DATA !== undefined || env.ICU_DATA !== undefined
+      || (env.NODE_OPTIONS !== undefined && (typeof env.NODE_OPTIONS !== 'string' || env.NODE_OPTIONS.includes('--icu-data-dir')))
+      || args.some(arg => arg.startsWith('--icu-data-dir'))) return false
+    const native = (value: unknown) => typeof value === 'function' && Function.prototype.toString.call(value).includes('[native code]')
+    if (!native(Intl.Collator) || !native(collator.compare) || !native(collator.resolvedOptions)
+      || !native(Object.getOwnPropertyDescriptor(Intl.Collator.prototype, 'compare')?.get)) return false
+    const options = collator.resolvedOptions()
+    return (options.locale === 'en' || options.locale === 'en-US') && options.usage === 'search' && options.sensitivity === 'accent'
+      && !options.numeric && !options.ignorePunctuation && options.collation === 'default' && options.caseFirst === 'false'
+  } catch {
+    // Browser shims may expose partial or throwing metadata; optimization is optional.
+    return false
+  }
 }
+
 const CERTIFIED_ASCII = /^[\x20-\x7e\u200b]*$/
 const foldCertified = (value: string) => value.replace(/\u200b/g, '').toLowerCase()
 interface LiteralSearch { readonly text: string; readonly failure: readonly number[] }

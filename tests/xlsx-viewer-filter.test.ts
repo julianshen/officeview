@@ -480,3 +480,25 @@ describe('zero-weight wildcard literals never rewind raw endpoints', () => {
     }
   })
 })
+
+describe('partial browser process shims fail closed', () => {
+  it.each([
+    { versions: {} },
+    { versions: {}, env: {} },
+    { versions: { bun: '1.3.10', icu: '74.2', unicode: '15.1' } },
+    { versions: { bun: '1.3.10', icu: '74.2', unicode: '15.1' }, env: {} },
+    { versions: { bun: '1.3.10', icu: '74.2', unicode: '15.1' }, env: {}, execArgv: null },
+    { versions: { bun: '1.3.10', icu: '74.2', unicode: '15.1' }, env: {}, execArgv: {} },
+    { versions: { bun: '1.3.10', icu: '74.2', unicode: '15.1' }, env: {}, execArgv: [null] },
+    { versions: { bun: '1.3.10', icu: '74.2', unicode: '15.1' }, env: null, execArgv: [] },
+    { get versions(): never { throw new Error('metadata unavailable') } },
+  ])('retains exact fallback for incomplete/malformed metadata', shim => {
+    try {
+      vi.stubGlobal('process', shim)
+      const matcher = new TextFilterMatcher('en-US')
+      expect(matcher.certifiedAsciiProfile).toBe(false)
+      expect(matcher.match('eq', 'é', false, 'e\u0301')).toBe(true)
+      expect(matcher.match('eq', '?\u200b?', true, '\u200b')).toBe(false)
+    } finally { vi.unstubAllGlobals() }
+  })
+})
