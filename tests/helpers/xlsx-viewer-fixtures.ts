@@ -485,7 +485,9 @@ export function f8Cases(): F8Case[] {
 }
 
 /** Committed native-compat oracle tests this parity family leans on. F8 cases
- * stay fixed vectors by design (a seed would void their parity meaning). */
+ * stay fixed vectors by design (a seed would void their parity meaning).
+ * TODO(S3): table-part/drawing-part XML and table metadata descriptors for the
+ * F8 table cells and F5 drawings (plan §S3.1 owns table/drawing part parsing). */
 export function f8CorpusRefs(): string[] {
   return [
     'tests/xlsx-native-strings.test.ts',
