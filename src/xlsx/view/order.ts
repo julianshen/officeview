@@ -2,8 +2,8 @@ import type { RowOrder, RowPermutationBand, RowVisibility } from './contracts'
 import { MAX_ROWS, validateCoordinate, type DisplaySlot, type SourceRow } from './coordinates'
 
 export interface PermutationInput { r0: SourceRow; r1: SourceRow; sourceAtOffset: Uint32Array }
-/** Runtime row order. Conversion to/from the `CompactRowOrder`/`ViewCommitDelta` wire
- * encoding is owned by S4.1; nothing here serializes. */
+/** Runtime row order. Adapters to/from the `ViewCommitDelta` wire encoding are owned by
+ * S4.1; nothing here serializes. */
 export interface CompactRowOrder extends RowOrder {
   readonly diagnostics: { typedArrayBytes: number; bandCount: number }
 }
