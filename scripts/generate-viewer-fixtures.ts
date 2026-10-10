@@ -566,7 +566,7 @@ async function main(): Promise<void> {
   const tableIndex = args.indexOf('--string-table')
   const scale = scaleIndex >= 0 ? args[scaleIndex + 1] : 'small'
   if (scale !== 'small' && scale !== 'full') throw new Error(`unknown scale ${scale}`)
-  const stringTable = tableIndex >= 0 ? args[tableIndex + 1] : 'inline'
+  const stringTable = tableIndex >= 0 ? args[tableIndex + 1] : 'shared'
   if (stringTable !== 'inline' && stringTable !== 'shared') throw new Error(`unknown string table ${stringTable}`)
   const wanted = (fixturesIndex >= 0 ? args[fixturesIndex + 1].split(',') : ['F1', 'F2', 'F3', 'F4', 'F5', 'F6', 'F7', 'F8']) as FixtureId[]
   mkdirSync(out, { recursive: true })

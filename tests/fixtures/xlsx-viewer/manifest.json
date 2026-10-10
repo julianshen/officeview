@@ -18,7 +18,7 @@
       "queryScope": "head (readRows r0..r4, overview rows 0..999)",
       "queryHashes": {
         "readRowsHead": "a6573e86bd2c4d9d11a91b75f0741dacc3eab59fd27703c9a347d1caf3a9267a",
-        "overviewHead": "f31fca5a650acca6117764cac09d33c8683b255c92e36a9c53de47b85987a1d3"
+        "overviewHead": "e85ffaa95e337a2b15cf8b49ec76f0832961cfa2487096a9e09809083592b7d6"
       },
       "package": "f1-small.xlsx",
       "packageFixture": "F1",
@@ -59,7 +59,7 @@
       "queryScope": "head (readRows r0..r4, overview rows 0..999)",
       "queryHashes": {
         "readRowsHead": "b0ece49a415729b86ec9e39acae95fe1c4f0b3ddb49150e5236d0f2fffe32bf4",
-        "overviewHead": "8be6b17524ec20a068e6dd27ccea3d5517cad821cadbf997eba16ba008dba960"
+        "overviewHead": "3723280cf73382aee9ec9f9339833217c776b62c3b11e3c9335862edb6176872"
       },
       "package": null,
       "packageFixture": null,
@@ -86,7 +86,7 @@
       "queryScope": "head (readRows r0..r4, overview rows 0..999)",
       "queryHashes": {
         "readRowsHead": "fc6aa0ea650b68edeea06d1078ad178cf14ea204275093274125e88b874fa643",
-        "overviewHead": "4fbaedda6c38aa6a89e4b24cb76f0e6aa065b38695ed30434c2c9ae56723e67e"
+        "overviewHead": "24ff14c10b338c5f7233b78dd67f8c611aee9708697f0746f59df89924155392"
       },
       "package": null,
       "packageFixture": null,
@@ -137,7 +137,7 @@
       "queryScope": "head (readRows r0..r4, overview rows 0..999)",
       "queryHashes": {
         "readRowsHead": "0248659d7193ccede18d55d777960fe5c4f327a2b74d511afc54407e943ca30c",
-        "overviewHead": "e29c622cc117994b4f3627553076cbdf2e5da7b30e947e8242b40c0089c766fb"
+        "overviewHead": "c3a6146fa60385ba79310a49cc5ee20ca99b041fcdc055e4b28325548229de58"
       },
       "package": null,
       "packageFixture": null,
@@ -175,18 +175,18 @@
       "seed": 616595082,
       "rowCount": 1048576,
       "colCount": 16384,
-      "nnz": 46,
+      "nnz": 42,
       "used": {
         "r0": 0,
         "r1": 199999,
         "c0": 0,
         "c1": 100
       },
-      "samplesSha256": "16eab64f69fc9c70b5cbd99e104264eb88df6eb63bae852c687034e6c516ee76",
+      "samplesSha256": "df199fa7045b2baf482265e0ea5a1e76b7f005155f2431f3db1d26c871020f06",
       "queryScope": "head (readRows r0..r4, overview rows 0..999)",
       "queryHashes": {
         "readRowsHead": "e9c8c45f5b40967145fdded5c8b51268d2a6f002c9eb44c1abfb950c3f519cd6",
-        "overviewHead": "05615e98e1f4ab88f8d423a2bc12e14a0fd9be45b10030612ce26dae555a7767"
+        "overviewHead": "5919f16df1f37148fe00a6273bc1093547daf3f47634c39831fe0858de238f55"
       },
       "package": "f5-small.xlsx",
       "packageFixture": "F5",
@@ -225,7 +225,7 @@
       "queryScope": "head (readRows r0..r4, overview rows 0..999)",
       "queryHashes": {
         "readRowsHead": "0db0ae751ba9d99da7d99009513250c985fb48793bdb8127dd4dc4ed224001d8",
-        "overviewHead": "94ad31966c20782d727f9da1620e03359ad33e9216fc677b24855ac3850e3dce"
+        "overviewHead": "6c9ec85c85f786e2da8c2b9a74597a06559789245e1dce9b288183941f86c5d7"
       },
       "package": null,
       "packageFixture": null,
@@ -252,7 +252,7 @@
       "queryScope": "head (readRows r0..r4, overview rows 0..999)",
       "queryHashes": {
         "readRowsHead": "c120a1c9f0751d00e3c0d30c6063fa05f7dcdf94244815e4293c400cc3cce3cb",
-        "overviewHead": "d2e1e6c8ce5d8763f5f738be7ad45b6145a38b69592d4394e661ad252d2b07a2"
+        "overviewHead": "35dc277747ffa12dd785a084a6c24e01b2483cd74bbec4e93181da98bbdec1e7"
       },
       "package": null,
       "packageFixture": null,
@@ -279,7 +279,7 @@
       "queryScope": "head (readRows r0..r4, overview rows 0..999)",
       "queryHashes": {
         "readRowsHead": "9cdd3e61352d1de2a4afc76cb18fa5576129ed825446b552be90e5e4b06406a8",
-        "overviewHead": "1101ba4a96a45f46497f42e3df8029bf6cc445ca3151fe0cea5a1bf2beb2d362"
+        "overviewHead": "477e4f9e28ca48f6a6cac5a69d90bca88864d4f529fff8e7c2ec96c4f87f3f48"
       },
       "package": "f8-small.xlsx",
       "packageFixture": "F8",
