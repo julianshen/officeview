@@ -128,6 +128,26 @@ describe('markInput / markPresent', () => {
     expect(harness.sampleCount('input-to-present')).toBe(2)
   })
 
+  it('supports a destructured recordRoundTrip without a receiver', async () => {
+    const harness = makeHarness()
+    const { recordRoundTrip } = harness
+    await recordRoundTrip('detached')
+    expect(harness.sampleCount('input-to-present')).toBe(1)
+  })
+
+  it('consumes the input marker: a second markPresent for one input throws', async () => {
+    const frames = manualRaf()
+    const harness = makeHarness({ raf: frames.raf })
+    harness.markInput('once')
+    const settled = harness.markPresent('once')
+    frames.frame()
+    frames.frame()
+    await settled
+    expect(harness.sampleCount('input-to-present')).toBe(1)
+    expect(() => harness.markPresent('once')).toThrow(/once/)
+    expect(harness.sampleCount('input-to-present')).toBe(1)
+  })
+
   it('rejects concurrent recordRoundTrip calls sharing one label', async () => {
     const frames = manualRaf()
     const harness = makeHarness({ raf: frames.raf })

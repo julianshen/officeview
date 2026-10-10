@@ -71,6 +71,16 @@ export function createViewerHarness(deps: HarnessDeps = {}): ViewerHarness {
    * concurrent use of a pending label is rejected so overlapping pairs can
    * never share (and silently overwrite) one start time. */
   const pendingInputs = new Set<string>()
+  /** Labels with a markPresent flight in progress (double rAF outstanding). */
+  const inflightPresent = new Set<string>()
+
+  function markInput(label: string): void {
+    if (pendingInputs.has(label)) {
+      throw new Error(`markInput: label ${JSON.stringify(label)} is already pending; overlapping pairs must use distinct labels`)
+    }
+    inputMarkers.set(label, clock.now())
+    pendingInputs.add(label)
+  }
   let observer: PerformanceObserver | null = null
   let longtaskState: LongTaskState = 'idle'
   const longtaskEntries: number[] = []
@@ -110,6 +120,10 @@ export function createViewerHarness(deps: HarnessDeps = {}): ViewerHarness {
     if (inputMs === undefined) {
       throw new Error(`markPresent: unknown input label ${JSON.stringify(label)}; call markInput first`)
     }
+    if (inflightPresent.has(label)) {
+      throw new Error(`markPresent: label ${JSON.stringify(label)} already has a presentation flight in progress`)
+    }
+    inflightPresent.add(label)
     return new Promise<void>((resolve, reject) => {
       let settled = false
       const finish = (action: () => void): void => {
@@ -117,6 +131,8 @@ export function createViewerHarness(deps: HarnessDeps = {}): ViewerHarness {
         settled = true
         clearTimeout(timer)
         pendingInputs.delete(label)
+        inflightPresent.delete(label)
+        inputMarkers.delete(label)
         action()
       }
       const timer = setTimeout(() => {
@@ -215,17 +231,11 @@ export function createViewerHarness(deps: HarnessDeps = {}): ViewerHarness {
       ledger.charge('main', info.bytes, 'fixture-bytes')
       if (grid) ledger.charge('main', grid.length * Math.max(1, grid[0]?.length ?? 0) * 8, 'grid-values')
     },
-    markInput(label: string): void {
-      if (pendingInputs.has(label)) {
-        throw new Error(`markInput: label ${JSON.stringify(label)} is already pending; overlapping pairs must use distinct labels`)
-      }
-      inputMarkers.set(label, clock.now())
-      pendingInputs.add(label)
-    },
+    markInput,
     markPresent,
     /** One input→present round-trip; resolves when the sample (or warmup) is recorded. */
     async recordRoundTrip(label: string, warmup = false): Promise<void> {
-      this.markInput(label)
+      markInput(label)
       await markPresent(label, warmup)
     },
     sampleCount,
