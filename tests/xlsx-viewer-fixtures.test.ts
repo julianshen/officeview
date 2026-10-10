@@ -187,6 +187,42 @@ describe('F5 structural metadata', () => {
     const miss = await store.queryStructural({ r0: 500_000, r1: 500_010, c0: 8000, c1: 8010 }, options)
     expect([...miss.merges, ...miss.tables, ...miss.spills, ...miss.drawings]).toHaveLength(0)
   })
+
+  it('counts exactly the brute-force cells with no duplicates', () => {
+    for (const seed of [7, 8]) {
+      const handle = createFixture('F5', { seed })
+      let brute = 0
+      for (let row = 0; row < 200; row++) for (let col = 0; col < 20; col++) {
+        if (handle.cellAt(row, col) !== null) brute++
+      }
+      expect(handle.nnz()).toBe(brute)
+    }
+  })
+
+  it('scans unique cells in ascending cell order', async () => {
+    const handle = createFixture('F5')
+    const { store } = makeStore(handle)
+    const options = readOptionsFor(store)
+    const seen = new Set<number>()
+    let previous = -1
+    let cursor: string | undefined
+    for (let guard = 0; guard < 20; guard++) {
+      let advanced = false
+      for await (const page of store.scanPopulated({ range: { r0: 0, r1: 199999, c0: 0, c1: 100 }, limit: 7, cursor }, options)) {
+        for (const cell of page.items) {
+          const id = cell.row * MAX_COLS + cell.col
+          expect(seen.has(id)).toBe(false)
+          seen.add(id)
+          expect(id).toBeGreaterThan(previous)
+          previous = id
+        }
+        cursor = page.nextCursor
+        advanced = true
+      }
+      if (!advanced || cursor === undefined) break
+    }
+    expect(seen.size).toBe(handle.nnz())
+  })
 })
 
 describe('F6 full-axis synthetic provider', () => {
@@ -199,21 +235,14 @@ describe('F6 full-axis synthetic provider', () => {
     expect(await store.readCell({ row: 123456, col: 7890 }, options)).toMatchObject({ kind: 'cell' })
   })
 
-  it('answers bounded windows without enumerating the domain', async () => {
+  it('answers bounded readRows windows through the injected probe', async () => {
     const inner = createFixture('F6')
     let visits = 0
-    const handle: FixtureHandle = { ...inner, cellAt: (row, col) => { visits++; return inner.cellAt(row, col) } }
-    const { store } = makeStore(handle)
+    const store = inner.createStore({ read: { cellAt: (row, col) => { visits++; return inner.cellAt(row, col) } } })
     const options = readOptionsFor(store)
-    visits = 0
     await store.readRows({ r0: 1000, r1: 1099, c0: 0, c1: 7 }, undefined, options)
+    expect(visits).toBeGreaterThan(0)
     expect(visits).toBeLessThanOrEqual(100 * 8)
-    visits = 0
-    await store.queryOverview({
-      groups: [{ groupId: 'g', rows: { kind: 'intervals', intervals: [{ r0: 0, r1: MAX_ROWS - 1 }] }, cols: [{ c0: 0, c1: 7 }] }],
-      maxGroups: 8,
-    }, options)
-    expect(visits).toBe(0)
   })
 })
 
@@ -581,12 +610,17 @@ describe('counting store reads (no vacuous wrappers)', () => {
     const { read, visits } = counting(handle)
     const store = handle.createStore({ read })
     const options = readOptionsFor(store)
+    const zero = () => visits.cellAt + visits.isPopulated + visits.styleOf
     await store.queryOverview({
       groups: [{ groupId: 'g', rows: { kind: 'intervals', intervals: [{ r0: 0, r1: MAX_ROWS - 1 }] }, cols: [{ c0: 0, c1: 7 }] }],
       maxGroups: 8,
     }, options)
     await store.queryStructural({ r0: 0, r1: 10, c0: 0, c1: 10 }, options)
-    expect(visits.cellAt + visits.isPopulated + visits.styleOf).toBe(0)
+    expect(zero()).toBe(0)
+    for await (const page of store.scanPopulated({ range: { r0: 0, r1: 999, c0: 0, c1: 7 }, limit: 500, cursor: undefined }, options)) {
+      expect(page.items).toHaveLength(500)
+    }
+    expect(visits.cellAt).toBe(500)
   })
 
   it('bounds F6 scan and column visits by the requested limit', async () => {
@@ -603,22 +637,24 @@ describe('counting store reads (no vacuous wrappers)', () => {
     expect(visits.cellAt).toBeLessThanOrEqual(600)
   })
 
-  it('runs F5/F2/F3/F4 overview and scan within visit budgets', async () => {
-    for (const id of ['F5', 'F2', 'F3', 'F4'] as FixtureId[]) {
+  it('proves analytic overviews read nothing while scans stay bounded', async () => {
+    for (const id of ['F1', 'F2', 'F3', 'F4', 'F5', 'F8'] as FixtureId[]) {
       const handle = createFixture(id)
       const { read, visits } = counting(handle)
       const store = handle.createStore({ read })
       const options = readOptionsFor(store)
-      const before = visits.cellAt + visits.isPopulated + visits.styleOf
+      const zero = () => visits.cellAt + visits.isPopulated + visits.styleOf
       await store.queryOverview({
         groups: [{ groupId: 'g', rows: { kind: 'intervals', intervals: [{ r0: 0, r1: 999 }] }, cols: [{ c0: 0, c1: 7 }] }],
         maxGroups: 8,
       }, options)
+      expect(zero()).toBe(0)
       for await (const page of store.scanPopulated({ range: { r0: 0, r1: 99, c0: 0, c1: 7 }, limit: 200, cursor: undefined }, options)) {
         expect(page.items.length).toBeLessThanOrEqual(200)
       }
-      const spent = visits.cellAt + visits.isPopulated + visits.styleOf - before
-      expect(spent).toBeLessThan(100 * 8 + 1000)
+      const spent = zero()
+      expect(spent).toBeGreaterThan(0)
+      expect(spent).toBeLessThan(2500)
     }
   })
 })
@@ -707,6 +743,35 @@ describe('overview classification and request validation', () => {
       expect(page.items).toHaveLength(0)
     }
   })
+
+  it('derives sparse style from populated cells, not row residues', async () => {
+    const handle = createFixture('F3', { rowCount: 256, variant: 'sparse-wide' })
+    const { store } = makeStore(handle)
+    const options = readOptionsFor(store)
+    const page = await store.queryOverview({
+      groups: [{ groupId: 'u', rows: { kind: 'intervals', intervals: [{ r0: 2, r1: 3 }] }, cols: [{ c0: 7, c1: 200 }] }],
+      maxGroups: 8,
+    }, options)
+    const group = page.items[0]
+    if (group.content === 'unknown') throw new Error('must resolve')
+    expect(group.content).toBe('mixed')
+    expect(group.style).toEqual({ kind: 'uniform', styleIndex: 2 })
+  })
+
+  it('counts populated rows only where the column window covers cells', async () => {
+    const { store } = makeStore(createFixture('F2', { rowCount: 100 }))
+    const options = readOptionsFor(store)
+    const narrow = await store.queryOverview({
+      groups: [{ groupId: 'n', rows: { kind: 'intervals', intervals: [{ r0: 1, r1: 20 }] }, cols: [{ c0: 4, c1: 4 }] }],
+      maxGroups: 8,
+    }, options)
+    const group = narrow.items[0]
+    if (group.content === 'unknown') throw new Error('must resolve')
+    let blanks = 0
+    for (let row = 1; row <= 20; row++) if (row % 7 === 3) blanks++
+    expect(group.populatedCount).toBe(20 - blanks)
+    expect(group.content).toBe('mixed')
+  })
 })
 
 describe('five-state matrix across every query method', () => {
@@ -785,6 +850,41 @@ describe('five-state matrix across every query method', () => {
     }, options)
     expect(errored.completeness).toBe('incomplete')
     expect(errored.error?.code).toBe('page-error')
+    expect(errored.items).toHaveLength(0)
+  })
+
+  it('returns healthy groups alongside overview errors and pending groups', async () => {
+    const { store, options } = fiveStateStore()
+    const page = await store.queryOverview({
+      groups: [
+        { groupId: 'ok', rows: { kind: 'intervals', intervals: [{ r0: 0, r1: 0 }] }, cols: [{ c0: 0, c1: 0 }] },
+        { groupId: 'bad', rows: { kind: 'intervals', intervals: [{ r0: 11, r1: 11 }] }, cols: [{ c0: 0, c1: 0 }] },
+        { groupId: 'wait', rows: { kind: 'intervals', intervals: [{ r0: 10, r1: 10 }] }, cols: [{ c0: 0, c1: 0 }] },
+      ],
+      maxGroups: 8,
+    }, options)
+    expect(page.completeness).toBe('incomplete')
+    expect(page.error?.code).toBe('page-error')
+    expect(page.items.map((group) => group.groupId)).toEqual(['ok', 'wait'])
+    expect(page.items[1]).toMatchObject({ content: 'unknown' })
+  })
+
+  it('clamps an unbounded caller limit to the documented page maximum with a cursor', async () => {
+    const handle = createFixture('F6')
+    const { store } = makeStore(handle)
+    const options = readOptionsFor(store)
+    const column = await store.queryColumn({ col: 0, rows: { kind: 'intervals', intervals: [{ r0: 0, r1: 999_999 }] }, limit: 5_000_000, cursor: undefined }, options)
+    expect(column.items.length).toBeLessThanOrEqual(10_000)
+    expect(column.items.length).toBeGreaterThan(0)
+    expect(column.nextCursor).toBeDefined()
+    const scan = await (async () => {
+      for await (const page of store.scanPopulated({ range: { r0: 0, r1: 999_999, c0: 0, c1: 0 }, limit: 5_000_000, cursor: undefined }, options)) {
+        return page
+      }
+      throw new Error('scan must yield')
+    })()
+    expect(scan.items.length).toBeLessThanOrEqual(10_000)
+    expect(scan.nextCursor).toBeDefined()
   })
 
   it('pages readRows cursors through the whole range exactly once', async () => {
@@ -920,4 +1020,76 @@ describe('corpus parity references', () => {
       expect(existsSync(join(__dirname, '..', ref))).toBe(true)
     }
   })
+})
+
+describe('analytic summaries match brute-force enumeration (oracle)', () => {
+  function bitsetOf(members: number[]): { kind: 'bitset'; space: 'source'; r0: number; r1: number; words: Uint32Array; count: number } {
+    const sorted = [...new Set(members)].sort((a, b) => a - b)
+    const r0 = sorted[0]
+    const r1 = sorted[sorted.length - 1]
+    const words = new Uint32Array(Math.ceil((r1 - r0 + 1) / 32))
+    for (const row of sorted) words[(row - r0) >> 5] |= 1 << ((row - r0) & 31)
+    return { kind: 'bitset', space: 'source', r0, r1, words, count: sorted.length }
+  }
+
+  async function checkOracle(handle: FixtureHandle, members: number[], spans: Array<{ c0: number; c1: number }>) {
+    const unique = [...new Set(members)].sort((a, b) => a - b)
+    const summarize = (rows: number[]) => {
+      const cells: Array<{ row: number; col: number; style: number }> = []
+      for (const row of rows) {
+        for (const span of spans) {
+          for (let col = span.c0; col <= span.c1; col++) {
+            const cell = handle.cellAt(row, col)
+            if (cell !== null) cells.push({ row, col, style: cell.styleIndex })
+          }
+        }
+      }
+      const width = spans.reduce((sum, span) => sum + (span.c1 - span.c0 + 1), 0)
+      const total = rows.length * width
+      const styles = new Set(cells.map((c) => c.style))
+      return {
+        populatedCount: cells.length,
+        countKind: 'exact' as const,
+        content: cells.length === 0 ? 'blank' as const : cells.length === total ? 'populated' as const : 'mixed' as const,
+        style: cells.length === 0 ? { kind: 'uniform' as const, styleIndex: 0 }
+          : styles.size === 1 ? { kind: 'uniform' as const, styleIndex: [...styles][0] } : { kind: 'mixed' as const },
+      }
+    }
+    const { store } = makeStore(handle)
+    const options = readOptionsFor(store)
+    const sets: Array<{ set: { kind: 'intervals'; intervals: { r0: number; r1: number }[] } | { kind: 'list'; r0: number; r1: number; rows: Uint32Array } | ReturnType<typeof bitsetOf>; rows: number[] }> = [
+      { set: { kind: 'intervals', intervals: [{ r0: unique[0], r1: unique[unique.length - 1] }] }, rows: Array.from({ length: unique[unique.length - 1] - unique[0] + 1 }, (_, i) => unique[0] + i) },
+      { set: { kind: 'list', r0: unique[0], r1: unique[unique.length - 1], rows: new Uint32Array(unique) }, rows: unique },
+      { set: bitsetOf(unique), rows: unique },
+    ]
+    for (const { set, rows } of sets) {
+      const expected = summarize(rows)
+      const page = await store.queryOverview({ groups: [{ groupId: 'o', rows: set, cols: spans }], maxGroups: 8 }, options)
+      expect(page.completeness).toBe('complete')
+      const group = page.items[0]
+      if (group.content === 'unknown') throw new Error('oracle domain must resolve')
+      expect(group.populatedCount).toBe(expected.populatedCount)
+      expect(group.countKind).toBe('exact')
+      expect(group.content).toBe(expected.content)
+      expect(group.style).toEqual(expected.style)
+    }
+  }
+
+  it('matches enumeration for F1, F2 (incl. rowCount=2), F3 dense/sparse, F4, F5, F7, F8 and F6 windows', async () => {
+    const cases: Array<{ handle: FixtureHandle; members: number[]; spans: Array<{ c0: number; c1: number }> }> = [
+      { handle: createFixture('F1', { nnz: 200 }), members: [0, 1, 2, 3, 50, 1048575], spans: [{ c0: 0, c1: 2 }] },
+      { handle: createFixture('F2', { rowCount: 50 }), members: [0, 1, 3, 7, 49], spans: [{ c0: 0, c1: 7 }, { c0: 4, c1: 4 }] },
+      { handle: createFixture('F2', { rowCount: 2 }), members: [0, 1], spans: [{ c0: 0, c1: 7 }] },
+      { handle: createFixture('F3', { rowCount: 8, colCount: 16 }), members: [0, 3, 7], spans: [{ c0: 0, c1: 15 }, { c0: 5, c1: 5 }] },
+      { handle: createFixture('F3', { rowCount: 8, colCount: 64, variant: 'sparse-wide' }), members: [0, 3, 7], spans: [{ c0: 0, c1: 63 }] },
+      { handle: createFixture('F4', { rowCount: 100 }), members: [0, 3, 11, 99], spans: [{ c0: 0, c1: 0 }] },
+      { handle: createFixture('F5'), members: [0, 4, 32, 40, 45, 500000], spans: [{ c0: 0, c1: 3 }] },
+      { handle: createFixture('F7', { rowCount: 100 }), members: [0, 5, 99], spans: [{ c0: 0, c1: 7 }, { c0: 7, c1: 7 }] },
+      { handle: createFixture('F8'), members: [0, 1, 2, 3, 4, 1048575], spans: [{ c0: 0, c1: 3 }] },
+      { handle: createFixture('F6'), members: [0, 1, 100, 1048575], spans: [{ c0: 0, c1: 3 }] },
+    ]
+    for (const { handle, members, spans } of cases) {
+      await checkOracle(handle, members, spans)
+    }
+  }, 120_000)
 })

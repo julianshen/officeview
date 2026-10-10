@@ -212,6 +212,9 @@ export async function headQueryHashes(handle: FixtureHandle): Promise<{ readRows
 export const READ_ROWS_PAGE_SIZE = 200
 /** Admission guard: a single readRows call resolving more cells refuses loudly. */
 export const READ_ROWS_MAX_CELLS = 262144
+/** Caller limits are clamped to this page maximum even without an explicit
+ * bound (spec §11.1): oversized pages truncate with a nextCursor. */
+export const STORE_PAGE_LIMIT = 10_000
 /** Hard ceiling for overview output (spec §4.1 desktop cap; no profile is carried). */
 export const MAX_OVERVIEW_OUTPUT_GROUPS = 2048
 
@@ -604,15 +607,11 @@ function f5Nnz(seed: number): number {
   for (let row = 0; row < 100; row++) for (let col = 0; col < 10; col++) {
     if (f5CellAt(seed, row, col) !== null) count++
   }
-  return count + 4
+  return count
 }
 
 function f5Enumerate(seed: number, visit: (row: number, col: number, cell: FixtureCell) => void): void {
   for (let row = 0; row < 100; row++) for (let col = 0; col < 10; col++) {
-    const cell = f5CellAt(seed, row, col)
-    if (cell !== null) visit(row, col, cell)
-  }
-  for (const [row, col] of [[44, 3], [46, 3], [32, 0], [40, 3]] as Array<[number, number]>) {
     const cell = f5CellAt(seed, row, col)
     if (cell !== null) visit(row, col, cell)
   }
@@ -694,7 +693,7 @@ export function createFixture(id: FixtureId, params: FixtureParams = {}): Fixtur
           }
           return out
         },
-        scanFrom: (range, offset, limit, exclude = []) => {
+        scanFrom: (range, offset, limit, exclude, read) => {
           const out: CellRef[] = []
           let skipped = 0
           const start = lowerBoundId(sorted, range.r0 * MAX_COLS)
@@ -709,8 +708,9 @@ export function createFixture(id: FixtureId, params: FixtureParams = {}): Fixtur
               skipped++
               continue
             }
-            const corner = cornerCells.get(lookup)
-            out.push({ row, col, cell: corner ?? f1ValueFor(lookup) })
+            const cell = read.cellAt(row, col)
+            if (cell === null) continue
+            out.push({ row, col, cell })
           }
           return out
         },
@@ -835,10 +835,10 @@ export function createFixture(id: FixtureId, params: FixtureParams = {}): Fixtur
           })
           return out
         },
-        scanFrom: (range, offset, limit, exclude = []) => {
+        scanFrom: (range, offset, limit, exclude, read) => {
           const out: CellRef[] = []
           let skipped = 0
-          f5Enumerate(seed, (row, col, cell) => {
+          f5Enumerate(seed, (row, col) => {
             if (out.length >= limit) return
             if (row < range.r0 || row > range.r1 || col < range.c0 || col > range.c1) return
             if (exclude.some((rect) => rectContains(rect, row, col))) return
@@ -846,6 +846,8 @@ export function createFixture(id: FixtureId, params: FixtureParams = {}): Fixtur
               skipped++
               return
             }
+            const cell = read.cellAt(row, col)
+            if (cell === null) return
             out.push({ row, col, cell })
           })
           return out
@@ -906,7 +908,7 @@ export function createFixture(id: FixtureId, params: FixtureParams = {}): Fixtur
           for (const c of ordered) visit(c.address.row, c.address.col, c.cell)
         },
         enumerateHead: (limit) => ordered.slice(0, limit).map((c) => ({ row: c.address.row, col: c.address.col, cell: c.cell })),
-        scanFrom: (range, offset, limit, exclude = []) => {
+        scanFrom: (range, offset, limit, exclude, read) => {
           const out: CellRef[] = []
           let skipped = 0
           for (const c of ordered) {
@@ -917,7 +919,9 @@ export function createFixture(id: FixtureId, params: FixtureParams = {}): Fixtur
               skipped++
               continue
             }
-            out.push({ row: c.address.row, col: c.address.col, cell: c.cell })
+            const cell = read.cellAt(c.address.row, c.address.col)
+            if (cell === null) continue
+            out.push({ row: c.address.row, col: c.address.col, cell })
           }
           return out
         },
@@ -933,7 +937,7 @@ function makeHandle(options: {
   variant?: 'dense' | 'sparse-wide'
   sampleAddrs?: Array<{ row: number; col: number }>
   enumeratePopulated?: (visit: (row: number, col: number, cell: FixtureCell) => void) => void
-  scanFrom?: (range: SourceRect, offset: number, limit: number, exclude?: SourceRect[]) => CellRef[]
+  scanFrom?: (range: SourceRect, offset: number, limit: number, exclude: SourceRect[], read: CellReader) => CellRef[]
   enumerateHead?: (limit: number) => CellRef[]
 }): FixtureHandle {
   const { id, seed, rowCount, colCount, used } = options
@@ -980,7 +984,7 @@ function makeHandle(options: {
   const scanCells = (
     range: SourceRect, offset: number, limit: number, read: CellReader = selfReader, exclude: SourceRect[] = [],
   ): CellRef[] => {
-    if (options.scanFrom !== undefined) return options.scanFrom(range, offset, limit, exclude)
+    if (options.scanFrom !== undefined) return options.scanFrom(range, offset, limit, exclude, read)
     const clamped = intersectRect(range, used)
     if (clamped === null) return []
     const out: CellRef[] = []
@@ -1157,7 +1161,13 @@ function summarizeF2(ctx: SummaryContext, rows: CompactSourceRowSet, cols: Reado
     return sum + count
   }, 0)
   const populatedCells = (header ? width : 0) + bodyCells + (totals ? totalsWidth : 0)
-  const populatedRows = (header ? 1 : 0) + bodyRows + (totals ? 1 : 0)
+  // A row counts only when the column window actually covers one of its cells:
+  // body rows vanish when the window holds nothing but blank col-4 cells, and
+  // the totals row vanishes outside columns {0,1,3,4}.
+  const onlyBlankCol = spans.length > 0 && spans.every((span) => span.c0 === 4 && span.c1 === 4)
+  const populatedBodyRows = onlyBlankCol ? bodyRows - blanksInBody : bodyRows
+  const populatedTotals = totals && totalsWidth > 0 ? 1 : 0
+  const populatedRows = (header ? 1 : 0) + populatedBodyRows + populatedTotals
   if (populatedCells === 0) return { totalRows, populatedRows: 0, populatedCells: 0, uniformStyle: STYLE_DEFAULT }
   const styles = new Set<number>()
   if (header) styles.add(STYLE_HEADER)
@@ -1250,7 +1260,10 @@ function denseResidueStyle(
   return zero && !two ? STYLE_DEFAULT : !zero && two ? STYLE_NUMBER : null
 }
 
-/** Sparse lattice columns are all ≡7 (mod 64), hence ≡7 (mod 8): style varies by row only. */
+/** Sparse lattice columns are all ≡7 (mod 64), hence ≡7 (mod 8): a populated
+ * cell's style follows its row alone (style 0 iff (row+7)%8===0). Uniformity is
+ * decided over the actual style set, not row residues: rows with distinct
+ * nonzero residues still share style 2. */
 function sparseResidueStyle(rows: CompactSourceRowSet, fixtureRowCount: number, populatedCells: number): number | null {
   if (populatedCells === 1) {
     const only = rows.kind === 'intervals'
@@ -1259,10 +1272,10 @@ function sparseResidueStyle(rows: CompactSourceRowSet, fixtureRowCount: number, 
     if (only === undefined) return null
     return (only + 7) % 8 === 0 ? STYLE_DEFAULT : STYLE_NUMBER
   }
-  const residues = new Set<number>()
+  const styles = new Set<number>()
   const visit = (row: number): boolean => {
-    residues.add(((row + 7) % 8 + 8) % 8)
-    return residues.size > 1
+    styles.add(((row + 7) % 8 + 8) % 8 === 0 ? STYLE_DEFAULT : STYLE_NUMBER)
+    return styles.size > 1
   }
   if (rows.kind === 'intervals') {
     const clamped = clampIntervals(rows.intervals, 0, fixtureRowCount - 1)
@@ -1277,8 +1290,8 @@ function sparseResidueStyle(rows: CompactSourceRowSet, fixtureRowCount: number, 
       if (visit(row)) return null
     }
   }
-  if (residues.size === 0) return STYLE_DEFAULT
-  return residues.has(0) && residues.size === 1 ? STYLE_DEFAULT : residues.size === 1 ? STYLE_NUMBER : null
+  if (styles.size === 0) return STYLE_DEFAULT
+  return styles.size === 1 ? [...styles][0] : null
 }
 
 function singlePopulatedAddr(
@@ -1404,6 +1417,8 @@ function badCursorPage<T>(stamp: SourceStamp): Page<T> {
 }
 
 function badLimitPage<T>(stamp: SourceStamp): Page<T> {
+  // The frozen registry has no dedicated limit code; limit+cursor form the
+  // pagination contract, so invalid-cursor carries malformed bounds.
   return { items: [], completeness: 'incomplete', stamp, error: { code: 'invalid-cursor', retryable: false, message: 'column limit must be a positive integer' } }
 }
 
@@ -1527,6 +1542,7 @@ function createSyntheticStore(backend: StoreBackend, storeOptions: SyntheticStor
       }
       if (request.rows.kind === 'ref') return badCursorPage(stamp)
       if (!Number.isSafeInteger(request.limit) || request.limit <= 0) return badLimitPage(stamp)
+      const limit = Math.min(request.limit, STORE_PAGE_LIMIT)
       const queryKey = `qc:${request.col}|${request.limit}|${JSON.stringify(request.rows)}`
       const offset = parseCursor(request.cursor, 'cell', queryKey)
       if (offset === null) return badCursorPage(stamp)
@@ -1543,7 +1559,7 @@ function createSyntheticStore(backend: StoreBackend, storeOptions: SyntheticStor
           skipped++
           continue
         }
-        if (items.length >= request.limit) {
+        if (items.length >= limit) {
           finished = false
           break
         }
@@ -1591,8 +1607,9 @@ function createSyntheticStore(backend: StoreBackend, storeOptions: SyntheticStor
         yield badCursorPage(stamp)
         return
       }
+      const limit = Math.min(request.limit, STORE_PAGE_LIMIT)
       const excluded = [...errors.map((entry) => entry.range), ...pending]
-      const found = backend.scanCells(request.range, offset, request.limit, read, excluded)
+      const found = backend.scanCells(request.range, offset, limit, read, excluded)
       const failure = firstOverlapError(request.range.r0, request.range.r1, request.range.c0, request.range.c1)
       const waiting = rangeOverlaps(pending, request.range.r0, request.range.r1, request.range.c0, request.range.c1)
       yield {
@@ -1600,7 +1617,7 @@ function createSyntheticStore(backend: StoreBackend, storeOptions: SyntheticStor
         completeness: failure !== undefined ? 'incomplete' : waiting ? 'loading' : 'complete',
         stamp,
         error: failure === undefined ? undefined : { code: failure.code, retryable: failure.retryable, message: 'scan range overlaps a failed region' },
-        nextCursor: found.length === request.limit ? makeCursor('cell', offset + request.limit, queryKey) : undefined,
+        nextCursor: found.length === limit ? makeCursor('cell', offset + limit, queryKey) : undefined,
       }
     },
     queryStructural: async (rect, options) => {
@@ -1659,20 +1676,14 @@ function createSyntheticStore(backend: StoreBackend, storeOptions: SyntheticStor
       if (start === null) return badCursorPage(stamp)
       const items: OverviewGroup[] = []
       const end = Math.min(request.groups.length, start + request.maxGroups)
+      let failure: { code: SourceErrorCode; retryable: boolean } | null = null
       for (let index = start; index < end; index++) {
         const domain = request.groups[index]
-        const failure = domain.cols.map((span) => firstOverlapError(
-          domain.rows.kind === 'intervals' && domain.rows.intervals.length > 0 ? domain.rows.intervals[0].r0 : 0,
-          domain.rows.kind === 'intervals' && domain.rows.intervals.length > 0 ? domain.rows.intervals[domain.rows.intervals.length - 1].r1 : MAX_ROWS - 1,
-          span.c0, span.c1,
-        )).find((entry) => entry !== undefined)
-        void failure
-        const errorOverlap = errors.some((entry) => rowSetOverlapsRange(domain.rows, entry.range.r0, entry.range.r1)
+        const errorOverlap = errors.find((entry) => rowSetOverlapsRange(domain.rows, entry.range.r0, entry.range.r1)
           && domain.cols.some((span) => span.c0 <= entry.range.c1 && entry.range.c0 <= span.c1))
-        if (errorOverlap) {
-          const first = errors.find((entry) => rowSetOverlapsRange(domain.rows, entry.range.r0, entry.range.r1)
-            && domain.cols.some((span) => span.c0 <= entry.range.c1 && entry.range.c0 <= span.c1))!
-          return { items: [], completeness: 'incomplete', stamp, error: { code: first.code, retryable: first.retryable, message: 'overview domain overlaps a failed region' } }
+        if (errorOverlap !== undefined) {
+          if (failure === null) failure = errorOverlap
+          continue
         }
         const overlapsPending = pending.some((rect) => rowSetOverlapsRange(domain.rows, rect.r0, rect.r1)
           && domain.cols.some((span) => span.c0 <= rect.c1 && rect.c0 <= span.c1))
@@ -1697,7 +1708,14 @@ function createSyntheticStore(backend: StoreBackend, storeOptions: SyntheticStor
           content: mixed ? 'mixed' : 'populated',
         })
       }
-      return { items, completeness: 'complete', stamp, nextCursor: end < request.groups.length ? makeCursor('group', end, queryKey) : undefined }
+      // Healthy groups are returned alongside the failure: Page.error carries
+      // the first failed domain while resolved and pending groups stay intact.
+      return {
+        items, stamp,
+        completeness: failure !== null ? 'incomplete' : 'complete',
+        error: failure === null ? undefined : { code: failure.code, retryable: failure.retryable, message: 'overview domain overlaps a failed region' },
+        nextCursor: end < request.groups.length ? makeCursor('group', end, queryKey) : undefined,
+      }
     },
     ensureComplete: async (rect, options) => {
       options.signal.throwIfAborted()
