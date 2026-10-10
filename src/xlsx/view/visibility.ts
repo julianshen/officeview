@@ -138,7 +138,9 @@ export function visibilityFromHidden(hidden: IntervalSet, count = MAX_ROWS): Com
   return new CompactRowVisibility(count, snapshotWords(hidden, count))
 }
 export function normalizeFilter(filter: FilterSpec | null): FilterSpec | null {
-  if (!filter || !filter.columns.size) return null
+  if (!filter) return null
+  if (!(filter.columns instanceof Map)) throw new RangeError('Filter columns must be a Map')
+  if (!filter.columns.size) return null
   validateSourceRect(filter.range)
   if (![0, 1].includes(filter.range.headerRows) || ![0, 1].includes(filter.range.totalsRows)) throw new RangeError('Invalid protected row counts')
   return filter
