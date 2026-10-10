@@ -185,6 +185,8 @@ export type OperationRefusal =
   | { reason: 'merge' | 'fixed-array' | 'dynamic-spill' | 'outside-column-data'; range: SourceRect }
   | { reason: 'drawing-impact'; drawingId: string }
   | { reason: 'incomplete'; missing: readonly SourceRect[] }
+  /** The structural source itself failed; distinct from waiting on missing ranges. */
+  | { reason: 'source-error'; code: SourceErrorCode; retryable: boolean; message: string }
   | { reason: 'ambiguous-selection' | 'invalid-range' | 'invalid-rule' | 'resource-limit' | 'unsupported'; message: string }
 export type RefusalReason = OperationRefusal['reason']
 

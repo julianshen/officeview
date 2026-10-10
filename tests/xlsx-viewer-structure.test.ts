@@ -352,7 +352,7 @@ describe('query immutability', () => {
     const record = index.query({ r0: 0, r1: 0, c0: 0, c1: 0 }).merges[0]
     expect(Object.getPrototypeOf(record)).toBe(Object.prototype)
     expect((record as unknown as { polluted?: boolean }).polluted).toBeUndefined()
-    expect(Object.hasOwn(record, '__proto__')).toBe(true)
+    expect(Object.prototype.hasOwnProperty.call(record, '__proto__')).toBe(true)
     expect(Object.isFrozen(record)).toBe(true)
     expect(Object.getOwnPropertyDescriptor(record, '__proto__')?.value).toEqual({ polluted: true })
     expect(Object.isFrozen(Object.getOwnPropertyDescriptor(record, '__proto__')?.value)).toBe(true)
@@ -362,6 +362,25 @@ describe('query immutability', () => {
     const { index } = await f5Index()
     expect(() => index.query({ r0: 10, r1: 5, c0: 0, c1: 0 })).toThrow()
     expect(() => index.query({ r0: 0, r1: MAX_ROWS, c0: 0, c1: 0 })).toThrow()
+  })
+})
+
+describe('structural error handling', () => {
+  const base = { stamp, merges: [], tables: [], spills: [], drawings: [], missing: [] }
+  it('poisons completeness only for a defined error', () => {
+    const failure = { code: 'page-error' as const, retryable: false, message: 'boom' }
+    const bad = new StructuralIndex({ ...base, completeness: 'complete', error: failure })
+    expect(bad.completeness).toBe('incomplete')
+    expect(bad.failure).toEqual(failure)
+    expect(Object.isFrozen(bad.failure)).toBe(true)
+    const explicitUndefined = new StructuralIndex({ ...base, completeness: 'complete', error: undefined })
+    expect(explicitUndefined.completeness).toBe('complete')
+    expect(explicitUndefined.failure).toBeUndefined()
+    expect(new StructuralIndex({ ...base, completeness: 'complete' }).failure).toBeUndefined()
+  })
+  it('rejects a null error explicitly instead of treating it as success or failure', () => {
+    const wire = { ...base, completeness: 'complete', error: null } as unknown as StructuralResult
+    expect(() => new StructuralIndex(wire)).toThrow(RangeError)
   })
 })
 

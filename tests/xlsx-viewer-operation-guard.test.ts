@@ -355,6 +355,46 @@ describe('incomplete coverage waits without authorizing', () => {
   })
 })
 
+describe('errored structural results refuse with the source failure', () => {
+  const failure = { code: 'storage-error' as const, retryable: true, message: 'chunk read failed' }
+  const expected = { ok: false, refusal: { reason: 'source-error', code: 'storage-error', retryable: true, message: 'chunk read failed' } }
+  function errored(missing: SourceRect[] = []): StructuralIndex {
+    return new StructuralIndex({
+      stamp: { docId: 'd', sheetId: 's', valueGen: 0 },
+      completeness: 'complete', merges: [], tables: [], spills: [], drawings: [], missing, error: failure,
+    })
+  }
+  it('propagates code and retryable from sort, filter and child-only checks even with empty missing', async () => {
+    const index = errored()
+    expect(index.completeness).toBe('incomplete')
+    expect(index.failure).toEqual(failure)
+    const empty: PopulatedCellSource = {
+      async iterate(): Promise<PopulatedPage> { return { items: [], completeness: 'complete', missing: [] } },
+    }
+    expect(await guardSort(band(0, 9, 0, 1), index, empty)).toEqual(expected)
+    expect(await guardFilter(filterRequest(band(0, 1, 0, 3), [0], index))).toEqual(expected)
+    expect(isChildOnlyRange({ r0: 0, r1: 1, c0: 0, c1: 1 }, index)).toEqual(expected.refusal)
+  })
+  it('prefers the failure over a non-empty missing list and keeps a distinct dedup key', async () => {
+    const missing: SourceRect[] = [{ r0: 0, r1: 9, c0: 0, c1: 3 }]
+    const empty: PopulatedCellSource = {
+      async iterate(): Promise<PopulatedPage> { return { items: [], completeness: 'complete', missing: [] } },
+    }
+    const outcome = await guardSort(band(0, 9, 0, 1), errored(missing), empty)
+    expect(outcome).toEqual(expected)
+    if (outcome.ok) throw new Error('expected a refusal')
+    const waiting = new StructuralIndex({
+      stamp: { docId: 'd', sheetId: 's', valueGen: 0 },
+      completeness: 'loading', merges: [], tables: [], spills: [], drawings: [], missing,
+    })
+    expect(waiting.failure).toBeUndefined()
+    const waitKey = refusalKey({ reason: 'incomplete', missing })
+    expect(refusalKey(outcome.refusal)).toBe('source-error:storage-error:true')
+    expect(refusalKey(outcome.refusal)).not.toBe(waitKey)
+    expect(refusalKey({ ...outcome.refusal, retryable: false } as OperationRefusal)).not.toBe(refusalKey(outcome.refusal))
+  })
+})
+
 describe('atomic refusal and read-only selection', () => {
   it('changes no view state, order, visibility or stamp on refusal', async () => {
     const request = filterRequest(band(0, 1, 0, 3), [0, 1], new StructuralIndex(drawingBelowBand()))

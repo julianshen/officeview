@@ -36,6 +36,15 @@ function bodyBand(range: FilterRange): SourceRowInterval | null {
   const r1 = range.r1 - range.totalsRows
   return r0 > r1 ? null : { r0, r1 }
 }
+/** Refusal for a non-complete structural index: a source failure outranks a bare
+ * wait (it carries the code and retryability), else the missing ranges. */
+function incompleteRefusal(structure: StructuralIndex): OperationRefusal {
+  const failure = structure.failure
+  if (failure !== undefined) {
+    return { reason: 'source-error', code: failure.code, retryable: failure.retryable, message: failure.message }
+  }
+  return { reason: 'incomplete', missing: structure.missing }
+}
 function invalidRange(error: unknown): GuardOutcome {
   if (error instanceof RangeError) return { ok: false, refusal: { reason: 'invalid-range', message: error.message } }
   throw error
@@ -95,7 +104,7 @@ export async function guardSort(
   }
   if (band === null) return { ok: true }
   if (structure.completeness !== 'complete') {
-    return { ok: false, refusal: { reason: 'incomplete', missing: structure.missing } }
+    return { ok: false, refusal: incompleteRefusal(structure) }
   }
   const fullBand: SourceRect = { r0: band.r0, r1: band.r1, c0: 0, c1: MAX_COLS - 1 }
   const merge = structure.firstWhere(fullBand, hit => hit.kind === 'merge')
@@ -144,7 +153,7 @@ export async function guardFilter(request: FilterGuardRequest): Promise<GuardOut
   }
   if (band === null) return { ok: true }
   if (structure.completeness !== 'complete') {
-    return { ok: false, refusal: { reason: 'incomplete', missing: structure.missing } }
+    return { ok: false, refusal: incompleteRefusal(structure) }
   }
   const count = projectionBefore.rows.logicalCount
   const changedSources: number[] = []
@@ -205,7 +214,7 @@ export async function guardFilter(request: FilterGuardRequest): Promise<GuardOut
  * Range derivation (S7) consults this before resolving; selection itself stays allowed. */
 export function isChildOnlyRange(range: SourceRect, structure: StructuralIndex): OperationRefusal | null {
   validateSourceRect(range)
-  if (structure.completeness !== 'complete') return { reason: 'incomplete', missing: structure.missing }
+  if (structure.completeness !== 'complete') return incompleteRefusal(structure)
   const merge = structure.firstWhere(range, hit => hit.kind === 'merge' && !anchorInside(hit.record.anchor, range))
   if (merge !== undefined && merge.kind === 'merge') return { reason: 'merge', range: merge.record.range }
   const spill = structure.firstWhere(range, hit => hit.kind === 'spill' && !anchorInside(hit.record.anchor, range))
@@ -242,6 +251,8 @@ export function refusalKey(refusal: OperationRefusal): string {
       return `drawing-impact:${refusal.drawingId}`
     case 'incomplete':
       return `incomplete:${refusal.missing.map(rect => `${rect.r0}:${rect.r1}:${rect.c0}:${rect.c1}`).join(',')}`
+    case 'source-error':
+      return `source-error:${refusal.code}:${refusal.retryable}`
     case 'formula-value-unavailable':
       return `formula-value-unavailable:${refusal.firstAddress.row}:${refusal.firstAddress.col}`
     default:

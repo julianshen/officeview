@@ -10,6 +10,7 @@ import type {
   PopulatedQuery,
   ReadOptions,
   SourceColInterval,
+  SourceFailure,
   SourceRowInterval,
   SourceStamp,
   SourceStore,
@@ -229,6 +230,8 @@ function frozenClone<T>(value: T): T {
 export class StructuralIndex {
   readonly stamp: SourceStamp
   readonly completeness: Completeness
+  /** Set when the source reported an error; guards refuse with it instead of a bare wait. */
+  readonly failure?: SourceFailure
   readonly missing: readonly SourceRect[]
   readonly absoluteDrawings: readonly AbsoluteDrawing[]
   readonly recordCount: number
@@ -238,8 +241,11 @@ export class StructuralIndex {
   private readonly drawings: RectangleIndex<CellAnchoredDrawing>
   constructor(result: StructuralResult) {
     this.stamp = frozenClone(result.stamp)
-    // A set error poisons the result even when completeness claims otherwise:
-    // errored structural data must wait, never authorize.
+    // A defined error poisons the result even when completeness claims otherwise:
+    // errored structural data must wait, never authorize. null is malformed wire
+    // data (absence is `undefined`), so it is rejected rather than guessed at.
+    if ((result.error as unknown) === null) throw new RangeError('Invalid structural error: null')
+    if (result.error !== undefined) this.failure = frozenClone(result.error)
     this.completeness = result.error !== undefined ? 'incomplete' : result.completeness
     this.missing = Object.freeze(result.missing.map(rect => frozenClone(rect)))
     const absolute: AbsoluteDrawing[] = []
