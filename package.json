@@ -45,6 +45,7 @@
     "test:watch": "vitest",
     "test:browser": "playwright test --config playwright.viewer.config.ts",
     "bench:viewer": "bun scripts/bench-interactive-viewer.ts",
+    "typecheck:scripts": "tsc -p tsconfig.scripts.json",
     "lint": "tsc --noEmit",
     "prepublishOnly": "bun run build"
   },
