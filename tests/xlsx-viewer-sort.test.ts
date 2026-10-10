@@ -356,6 +356,7 @@ describe('review behavior regressions', () => {
         }
       }
       const timers = vi.fn(timer)
+      vi.stubGlobal('setImmediate', undefined)
       vi.stubGlobal('MessageChannel', TestChannel)
       vi.stubGlobal('setTimeout', timers)
       try {
@@ -446,5 +447,136 @@ describe('review behavior regressions', () => {
     const refused = reduceSortCommand(full, { kind: 'cycle', col: 8, shift: true, range: full.range })
     expect(refused.sort).toBe(full)
     expect(refused.notice).toEqual({ reason: 'too-many-sort-keys', maxKeys: 8 })
+  })
+})
+
+
+describe('review policy and full-axis evidence', () => {
+  it('hidden unknown and unavailable key rows conservatively block publication', async () => {
+    const fixture = createFixture('F8')
+    const options = { ...quiet, visibility: createRowVisibility(MAX_ROWS, row => row !== 1) }
+    expect(await sortRowOrder(fixture.createStore({ valuePolicy: 'cached' }),
+      specFor(3, [{ col: 1, order: 'asc' }]), options)).toMatchObject({
+      kind: 'refused', refusal: { reason: 'formula-value-unavailable', firstAddress: { row: 1, col: 1 } },
+    })
+    const pending = fixture.createStore({ pending: [{ r0: 1, r1: 1, c0: 0, c1: 0 }] })
+    expect(await sortRowOrder(pending, specFor(3), options)).toEqual({ kind: 'incomplete' })
+  })
+  it('empty string remains text ahead of errors and absent/null blanks in both directions', async () => {
+    const store = dataStore([[fixtureCell(null)], [fixtureCell('')], [], [fixtureCell('#NUM!', true)]])
+    for (const order of ['asc', 'desc'] as const) {
+      expect(rowsOf(await sortRowOrder(store, specFor(4, [{ col: 0, order }]), quiet)))
+        .toEqual([1, 3, 0, 2])
+    }
+  })
+  it('sort A then B derives ties from immutable source rather than stacking A', async () => {
+    const rows = [[2, 1], [0, 1], [1, 1], [0, 0]]
+    const store = dataStore(rows.map(row => row.map(value => fixtureCell(value))))
+    const a = rowsOf(await sortRowOrder(store, specFor(4), quiet))
+    const b = rowsOf(await sortRowOrder(store, specFor(4, [{ col: 1, order: 'asc' }]), quiet))
+    const stacked = [...a].sort((left, right) => rows[left][1] - rows[right][1])
+    expect(a).toEqual([1, 3, 2, 0])
+    expect(b).toEqual([3, 0, 1, 2])
+    expect(b).not.toEqual(stacked)
+    expect(rows).toEqual([[2, 1], [0, 1], [1, 1], [0, 0]])
+  })
+  it.each(['asc', 'desc'] as const)('mixed multi-key %s pins hidden slots and keeps terminal categories', async order => {
+    const rows = [
+      [fixtureCell(1), fixtureCell('b')], [fixtureCell(1), fixtureCell('a')],
+      [fixtureCell(1), fixtureCell('a')], [fixtureCell(false), fixtureCell(1)],
+      [fixtureCell('2'), fixtureCell(true)], [fixtureCell('#NUM!', true), fixtureCell('b')],
+      [fixtureCell('#NUM!', true), fixtureCell('a')], [fixtureCell(null), fixtureCell(0)],
+      [fixtureCell(1), fixtureCell(null)], [fixtureCell(1), fixtureCell('#Z!', true)],
+    ]
+    const result = await sortRowOrder(dataStore(rows), specFor(rows.length, [
+      { col: 0, order }, { col: 1, order: 'desc' },
+    ]), { ...quiet, visibility: createRowVisibility(MAX_ROWS, row => row !== 2) })
+    expect(rowsOf(result)).toEqual(order === 'asc'
+      ? [0, 1, 2, 9, 8, 4, 3, 5, 6, 7] : [3, 4, 2, 0, 1, 9, 8, 5, 6, 7])
+  })
+  it('genuine typed allocation RangeErrors remain nonretryable resource failures', async () => {
+    vi.stubGlobal('Uint8Array', class {
+      constructor() { throw new RangeError('allocation exhausted') }
+    })
+    try {
+      expect(await prepareSortKeys(dataStore([[fixtureCell(1)]]), specFor(1), quiet))
+        .toMatchObject({ kind: 'error', error: { code: 'resource-limit', retryable: false, message: 'allocation exhausted' } })
+    } finally { vi.unstubAllGlobals() }
+  })
+  it('unsupported object values still refuse without a draft', async () => {
+    const store = dataStore([[fixtureCell(1)]])
+    const original = store.queryColumn.bind(store)
+    const invalid: SourceStore = { ...store, queryColumn: async (request, options) => {
+      const page = await original(request, options)
+      return { ...page, items: page.items.map(item => item.kind === 'cell'
+        ? { ...item, cell: { ...item.cell, value: {} as unknown as typeof item.cell.value } } : item) }
+    } }
+    expect(await sortRowOrder(invalid, specFor(1), quiet))
+      .toMatchObject({ kind: 'error', error: { code: 'page-error' } })
+  })
+  it('seeded random maximum-row numeric permutation matches native typed-index oracle', async () => {
+    const random = createPrng(20261010)
+    const values = Float64Array.from({ length: MAX_ROWS }, (_v, row) => row)
+    for (let row = MAX_ROWS - 1; row > 0; row--) {
+      const at = Math.floor(random() * (row + 1)), value = values[row]
+      values[row] = values[at]
+      values[at] = value
+    }
+    const oracle = Uint32Array.from({ length: MAX_ROWS }, (_v, row) => row)
+      .sort((a, b) => values[a] - values[b] || a - b)
+    const store = createFixture('F2').createStore({ read: {
+      isPopulated: (_row, col) => col === 0,
+      cellAt: row => fixtureCell(values[row]),
+    } })
+    const result = await sortRowOrder(store, specFor(MAX_ROWS), { ...quiet, now: () => 0 })
+    expect(result.kind).toBe('complete')
+    if (result.kind !== 'complete') return
+    const band = result.order.bands[0], ledger = result.ledger
+    expect(band.sourceAtOffset).toBeInstanceOf(Uint32Array)
+    expect(band.displayOffsetOfSource).toBeInstanceOf(Uint32Array)
+    expect(ledger.tagsBytes).toBe(MAX_ROWS)
+    expect(ledger.numbersBytes).toBe(8 * MAX_ROWS)
+    expect(ledger.idsBytes + ledger.ranksBytes + ledger.dictionaryBytes).toBe(0)
+    expect(ledger.indexBytes).toBe(4 * MAX_ROWS)
+    expect(ledger.scratchBytes).toBe(4 * MAX_ROWS)
+    expect(ledger.orderBytes + ledger.inverseBytes).toBe(8 * MAX_ROWS)
+    expect(ledger.retainedBytes).toBe(8 * MAX_ROWS + 256)
+    expect(ledger.aggregatePeakBytes).toBe(ledger.peakBytes + ledger.residentWorkerBytes)
+    expect(ledger.peakBytes).toBeGreaterThan(ledger.retainedBytes)
+    expect(ledger.peakBytes).toBeLessThanOrEqual(512 * 1024 * 1024)
+    for (let slot = 0; slot < MAX_ROWS; slot++) {
+      if (band.sourceAtOffset[slot] !== oracle[slot]
+        || band.displayOffsetOfSource[oracle[slot]] !== slot) {
+        throw new Error(`Random typed oracle mismatch at ${slot}`)
+      }
+    }
+  }, 30000)
+})
+
+
+describe('literal boundary regressions', () => {
+  it('bounded helper visibility RangeErrors are source failures, not allocations', async () => {
+    let calls = 0
+    const base = createRowVisibility(MAX_ROWS)
+    const visibility = {
+      visible: () => { if (++calls === 3) throw new RangeError('visibility generation changed'); return true },
+      rank: base.rank.bind(base), select: base.select.bind(base), next: base.next.bind(base),
+    }
+    expect(await sortRowOrder(dataStore([[fixtureCell(2)], [fixtureCell(1)]]), specFor(2),
+      { ...quiet, visibility })).toMatchObject({
+      kind: 'error', error: { code: 'page-error', message: 'visibility generation changed' },
+    })
+    expect(calls).toBe(3)
+  })
+  it('reducer safely refuses getters throwing an object whose conversion throws', () => {
+    const thrown = { toString: () => { throw new Error('conversion must not run') } }
+    const sort = specFor(4)
+    const command = { get kind() { throw thrown } } as unknown as Parameters<typeof reduceSortCommand>[1]
+    expect(() => reduceSortCommand(sort, command)).not.toThrow()
+    expect(reduceSortCommand(sort, command)).toMatchObject({
+      sort, notice: { reason: 'invalid-sort-command', error: { code: 'invalid-source-rect', retryable: false } },
+    })
+    const draft = { get range() { throw thrown } } as unknown as SortSpec
+    expect(reduceSortCommand(draft, { kind: 'toggle-case' }).sort).toBe(draft)
   })
 })
