@@ -19,15 +19,11 @@ export interface ViewerPort {
   removeEventListener?(type: 'message', listener: MessageListener): void
   onmessage?: ((event: MessageEvent) => void) | null
 }
-export interface SendOptions<K extends WorkerCommandKind> {
-  onProgress?: (reply: Extract<WorkerReply<K>, { kind: 'progress' }>) => void
-}
 interface Pending {
   kind: WorkerCommandKind
   owner: WorkerOwner | undefined
   resolve: (reply: WorkerReply) => void
   reject: (error: Error) => void
-  onProgress?: (reply: WorkerReply) => void
 }
 
 export class ViewerClient {
@@ -66,7 +62,7 @@ export class ViewerClient {
    * Everything else is structured-cloned, which copies each unique backing buffer
    * in FULL, so those are accounted by full byteLength once per buffer. An open
    * command's object source document is cloned as one estimated copy. */
-  send<K extends WorkerCommandKind>(command: CommandOf<K>, options: SendOptions<K> = {}): Promise<WorkerReply<K>> {
+  send<K extends WorkerCommandKind>(command: CommandOf<K>): Promise<WorkerReply<K>> {
     if (this.pending.has(command.requestId)) return Promise.reject(new Error(`Duplicate requestId ${command.requestId}`))
     const transfer: ArrayBuffer[] = []
     const message = command as WorkerCommand
@@ -100,7 +96,6 @@ export class ViewerClient {
       this.pending.set(command.requestId, {
         kind: command.kind, owner: this.expectedOwner(command),
         resolve: resolve as (reply: WorkerReply) => void, reject,
-        onProgress: options.onProgress as ((reply: WorkerReply) => void) | undefined,
       })
       try {
         this.accounting.transfer(transfer)
@@ -126,11 +121,14 @@ export class ViewerClient {
     if (!entry) { this.ignored++; return }
     // Correlate on kind and owner too: a reply for another command or owner
     // that reuses this requestId must never settle the request.
-    if (data.commandKind !== entry.kind || (entry.owner !== undefined && !sameOwner(data.owner, entry.owner))) {
+    if (data.commandKind !== entry.kind || (entry.owner !== undefined && !sameOwner(data.owner, entry.owner)
+      && !isDocumentlessCancelError(data))) {
       this.rejected++
       return
     }
-    if (!isTerminalReply(data)) { entry.onProgress?.(data); return }
+    // TODO(S4.2): the worker emits no progress yet; a progress API arrives with
+    // the scheduler's completed-batch progress. Progress never settles a request.
+    if (!isTerminalReply(data)) return
     this.pending.delete(data.requestId)
     entry.resolve(data)
   }
@@ -145,6 +143,12 @@ export function createViewerClient(port: ViewerPort, prefix?: string): ViewerCli
   return new ViewerClient(port, prefix)
 }
 
+/** The defined cancel outcome for a target the worker never saw: an error whose
+ * owner is the document-less `{ docId: '' }` (a cancel names no document). */
+function isDocumentlessCancelError(reply: WorkerReply): boolean {
+  const owner = reply.owner as { docId?: unknown }
+  return reply.commandKind === 'cancel' && reply.kind === 'error' && owner.docId === '' && Object.keys(owner).length === 1
+}
 /** Structural equality over plain owner data (no Maps or class instances). */
 function sameOwner(a: unknown, b: unknown): boolean {
   if (a === b) return true

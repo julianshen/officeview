@@ -12,9 +12,10 @@ import {
   visibilityFromDisplayBitsets,
 } from '../src/worker/viewerProtocol'
 import {
-  cacheKey, createObjectWorkbookSource, DocumentSession, workbookIndexKey, type FilterEvaluator, type ViewDraft,
-  type WorkbookSource,
+  cacheKey, DocumentSession, PREPARED_COLUMN_OVERHEAD, PREPARED_ENTRY_LANE_BYTES, workbookIndexKey, type FilterEvaluator,
+  type ViewDraft, type WorkbookSource,
 } from '../src/worker/viewerSession'
+import { createObjectWorkbookSource, READ_ROWS_MAX_CELLS } from '../src/worker/viewerObjectSource'
 import { connectInProcess, ViewerKernel } from '../src/worker/viewerKernel'
 import { createViewerClient } from '../src/worker/viewerClient'
 import { createWorkerMessageHandler } from '../src/worker/worker-entry'
@@ -443,7 +444,8 @@ describe('S4.1 review findings (codex)', () => {
     completed(await run(kernel, { kind: 'open', requestId: rid(), docId: 'doc', source: { kind: 'object', document: doc }, profile: 'D' }))
     const spec: SortSpec = { range: { r0: 1, r1: 2, c0: 0, c1: 0, headerRows: 0, totalsRows: 0 }, keys: [{ col: 0, order: 'desc' }], caseSensitive: false }
     const out = await run(kernel, { kind: 'sort', requestId: rid(), owner: initialIdentity('doc', 'A'), spec })
-    expect(out).toMatchObject({ kind: 'error', code: 'operation-refused', retryable: false, refusal: { reason: 'incomplete' } })
+    // Incomplete coverage is a wait (spec §6.3/§10.4), not a refusal.
+    expect(out).toMatchObject({ kind: 'incomplete', commandKind: 'sort', missing: [{ r0: 0, r1: 1_048_575, c0: 0, c1: 16_383 }] })
     expect(kernel.session('doc')!.globalViewGen).toBe(0)
   })
 
@@ -538,7 +540,7 @@ describe('S4.1 review findings (codex)', () => {
     const kernel = new ViewerKernel({ parse: async () => doc }, quiet)
     completed(await run(kernel, { kind: 'open', requestId: rid(), docId: 'doc', source: { kind: 'object', document: doc }, profile: 'D' }))
     const out = await run(kernel, { kind: 'sort', requestId: rid(), owner: initialIdentity('doc', 'A'), spec: sortSpec(1, 0) })
-    expect(out).toMatchObject({ kind: 'error', code: 'operation-refused', refusal: { reason: 'incomplete' } })
+    expect(out).toMatchObject({ kind: 'incomplete', commandKind: 'sort' })
     const structural = await createObjectWorkbookSource(doc, 'doc').store('A').queryStructural({ r0: 0, r1: 1, c0: 0, c1: 0 }, { signal: new AbortController().signal, stamp: { docId: 'doc', sheetId: 'A', valueGen: 0 } })
     expect(structural.completeness).toBe('incomplete')
   })
@@ -617,5 +619,304 @@ describe('S4.1 review findings (codex)', () => {
     expect((await store.queryColumn({ col: 0, rows: badCount, limit: 4 }, options)).error?.code).toBe('invalid-source-rect')
     const badList = { kind: 'list' as const, r0: 0, r1: 1_048_576, rows: new Uint32Array([0]) }
     expect((await store.queryColumn({ col: 0, rows: badList, limit: 4 }, options)).error?.code).toBe('invalid-source-rect')
+  })
+})
+
+/** Store whose column cursors are opaque tokens (a conforming §4.1 backend). */
+function opaqueCursors(source: WorkbookSource): WorkbookSource {
+  const stores = new Map<string, SourceStore>()
+  let counter = 0
+  return {
+    valuePolicy: source.valuePolicy, sheets: source.sheets, geometry: id => source.geometry(id), release: () => source.release(),
+    store(sheetId) {
+      let store = stores.get(sheetId)
+      if (!store) {
+        const inner = source.store(sheetId)
+        const tokens = new Map<string, string>()
+        store = Object.create(inner) as SourceStore
+        store.queryColumn = async (request, options) => {
+          let cursor: string | undefined
+          if (request.cursor !== undefined) {
+            cursor = tokens.get(request.cursor)
+            if (cursor === undefined) return { items: [], completeness: 'incomplete', stamp: inner.stamp, error: { code: 'invalid-cursor', retryable: false, message: 'unknown token' } }
+          }
+          const page = await inner.queryColumn({ ...request, cursor }, options)
+          if (page.nextCursor === undefined) return page
+          const token = `opaque-${++counter}`
+          tokens.set(token, page.nextCursor)
+          return { ...page, nextCursor: token }
+        }
+        stores.set(sheetId, store)
+      }
+      return store
+    },
+  }
+}
+const cellValues = (out: WorkerReply) => {
+  const result = completed(out)
+  if (result.kind !== 'valueQuery') throw new Error(result.kind)
+  expect(result.page.error).toBeUndefined()
+  return result.page.items.map(item => item.kind === 'cell' ? item.cell.value : item.kind)
+}
+
+describe('S4.1 round-2 findings (codex C / pi P)', () => {
+  it('P1 structural incomplete coverage replies incomplete with missing domains and an unresolvable diagnostic', async () => {
+    const drawing = objectDoc([{ sheetId: 'A', rows: column([2, 1]) }])
+    drawing.sheets[0].drawings = [{} as never]
+    const sequence = objectDoc([{ sheetId: 'A', rows: column([1, 2, 3]) }])
+    Object.assign(sequence.sheets[0].rows[0].cells[0], { formula: '_xlfn.SEQUENCE(3,1)', dynamicArray: true, arrayRef: 'A1' })
+    for (const [doc, missing] of [[drawing, { r0: 0, r1: 1_048_575, c0: 0, c1: 16_383 }], [sequence, { r0: 0, r1: 1_048_575, c0: 0, c1: 16_383 }]] as const) {
+      const evaluator: FilterEvaluator = async () => ({ kind: 'complete', matches: () => true })
+      const kernel = new ViewerKernel({ parse: async () => doc }, { ...quiet, filterEvaluator: evaluator })
+      completed(await run(kernel, { kind: 'open', requestId: rid(), docId: 'doc', source: { kind: 'object', document: doc }, profile: 'D' }))
+      const owner = initialIdentity('doc', 'A')
+      const sorted = await run(kernel, { kind: 'sort', requestId: rid(), owner, spec: sortSpec(1, 0) })
+      expect(sorted).toMatchObject({ kind: 'incomplete', commandKind: 'sort', owner })
+      expect(sorted.kind === 'incomplete' && sorted.missing).toContainEqual(missing)
+      expect(sorted.diagnostics.map(d => d.code)).toContain('coverage-unresolvable')
+      const filter: FilterSpec = { range: { r0: 0, r1: 1, c0: 0, c1: 0, headerRows: 0, totalsRows: 0 }, columns: new Map([[0, { kind: 'number', op: 'gt', first: 0 }]]) }
+      const filtered = await run(kernel, { kind: 'filter', requestId: rid(), owner, spec: filter, nowMs: 0 })
+      expect(filtered).toMatchObject({ kind: 'incomplete', commandKind: 'filter' })
+      expect(filtered.diagnostics.map(d => d.code)).toContain('coverage-unresolvable')
+      expect(kernel.session('doc')!.globalViewGen).toBe(0)
+    }
+  })
+
+  it('C1 concurrent preparations are serialized: no double charge, every completed batch was resident', async () => {
+    const doc = objectDoc([{ sheetId: 'A', rows: [[1, 2, 3, 4], [5, 6, 7, 8]] }])
+    const tracked = instrumented(createObjectWorkbookSource(doc, 'doc'))
+    const gate = deferred()
+    const inner = tracked.wrapped.store('A')
+    const base = inner.queryColumn
+    inner.queryColumn = async (request, options) => { if (request.col === 0) await gate.promise; return base(request, options) }
+    const kernel = new ViewerKernel({ parse: async () => doc, openSource: async () => tracked.wrapped }, { ...quiet, preparedBudget: { maxColumns: 2, maxBytes: 1 << 20 } })
+    completed(await run(kernel, { kind: 'open', requestId: rid(), docId: 'doc', source: { kind: 'object', document: doc }, profile: 'D' }))
+    const owner = initialIdentity('doc', 'A')
+    const session = kernel.session('doc')!
+    const same = [run(kernel, { kind: 'prepareColumns', requestId: rid(), owner, cols: new Uint16Array([0]) }), run(kernel, { kind: 'prepareColumns', requestId: rid(), owner, cols: new Uint16Array([0]) })]
+    await tick()
+    gate.resolve()
+    for (const out of await Promise.all(same)) completed(out)
+    expect(session.preparedStats()).toEqual({ columns: 1, bytes: session.preparedFootprint('A', 0)!.bytes })
+    const gate2 = deferred()
+    inner.queryColumn = async (request, options) => { if (request.col === 1) await gate2.promise; return base(request, options) }
+    const first = run(kernel, { kind: 'prepareColumns', requestId: rid(), owner, cols: new Uint16Array([0, 1]) })
+    const second = run(kernel, { kind: 'prepareColumns', requestId: rid(), owner, cols: new Uint16Array([2, 3]) })
+    await tick()
+    gate2.resolve()
+    completed(await first)
+    completed(await second)
+    // Commit order follows request order; the later batch wins the working set.
+    expect(session.preparedColumns('A')).toEqual([2, 3])
+    expect(session.preparedStats().bytes).toBe(session.preparedFootprint('A', 2)!.bytes + session.preparedFootprint('A', 3)!.bytes)
+  })
+
+  it('C2 the source keeps no whole-column caches behind the prepared working set', async () => {
+    const row = Array.from({ length: 8 }, (_v, col) => col)
+    const doc = objectDoc([{ sheetId: 'A', rows: [row, row] }])
+    const kernel = new ViewerKernel({ parse: async () => doc }, quiet)
+    completed(await run(kernel, { kind: 'open', requestId: rid(), docId: 'doc', source: { kind: 'object', document: doc }, profile: 'M' }))
+    const owner = initialIdentity('doc', 'A')
+    completed(await run(kernel, { kind: 'prepareColumns', requestId: rid(), owner, cols: new Uint16Array([0, 1, 2, 3]) }))
+    completed(await run(kernel, { kind: 'prepareColumns', requestId: rid(), owner, cols: new Uint16Array([4, 5, 6, 7]) }))
+    const session = kernel.session('doc')!
+    expect(session.preparedStats().columns).toBe(4)
+    const store = session.source.store('A') as unknown as { cachedColumnCount: number }
+    expect(store.cachedColumnCount).toBe(0)
+  })
+
+  it('C3 a completion is rechecked against close immediately before emission', async () => {
+    const doc = objectDoc([{ sheetId: 'A', rows: column([1]) }])
+    const order: string[] = []
+    let closing: Promise<void> | undefined
+    const kernel = new ViewerKernel({
+      parse: async () => doc,
+      afterDispatch: async command => {
+        if (command.kind === 'valueQuery') closing = kernel.handle({ kind: 'close', requestId: 'close-1', docId: 'doc' }, out => order.push(`close:${out.kind}`))
+      },
+    }, quiet)
+    completed(await run(kernel, { kind: 'open', requestId: rid(), docId: 'doc', source: { kind: 'object', document: doc }, profile: 'D' }))
+    await kernel.handle({ kind: 'valueQuery', requestId: 'q', owner: initialIdentity('doc', 'A'), query: { col: 0, rows: { kind: 'intervals', intervals: [{ r0: 0, r1: 0 }] }, limit: 1 } }, out => order.push(`query:${out.kind}`))
+    await closing
+    expect(order).not.toContain('query:complete')
+    expect(order).toContain('close:complete')
+  })
+
+  it('C4 a cancel racing a finished target settles with the target owner instead of hanging', async () => {
+    const doc = objectDoc([{ sheetId: 'A', rows: column([1]) }])
+    const kernel = new ViewerKernel({ parse: async () => doc }, quiet)
+    const queue: { data: unknown }[] = []
+    let listener: (event: { data: unknown }) => void = () => {}
+    const tasks: Promise<void>[] = []
+    const port = {
+      postMessage: (message: unknown) => { tasks.push(kernel.handle(structuredClone(message) as WorkerCommand, out => queue.push({ data: structuredClone(out) }))) },
+      addEventListener: (_type: 'message', l: (event: { data: unknown }) => void) => { listener = l },
+      removeEventListener: () => {},
+    }
+    const flush = async () => { await Promise.all(tasks); while (queue.length) listener(queue.shift()!) }
+    const client = createViewerClient(port)
+    const opened = client.send({ kind: 'open', requestId: 'o', docId: 'doc', source: { kind: 'object', document: doc }, profile: 'D' })
+    await flush()
+    completed(await opened)
+    const owner = initialIdentity('doc', 'A')
+    const query = client.send({ kind: 'valueQuery', requestId: 'q', owner, query: { col: 0, rows: { kind: 'intervals', intervals: [{ r0: 0, r1: 0 }] }, limit: 1 } })
+    await Promise.all(tasks) // worker finished; its reply is still queued
+    const cancel = client.send({ kind: 'cancel', requestId: 'c', targetRequestId: 'q' })
+    await flush()
+    expect(await cancel).toMatchObject({ commandKind: 'cancel', kind: 'error', owner })
+    expect((await query).kind).toBe('complete')
+    expect(client.rejectedReplies).toBe(0)
+    // Cancelling something the worker never saw still settles (document-less owner).
+    const unknown = client.send({ kind: 'cancel', requestId: 'c2', targetRequestId: 'never' })
+    await flush()
+    expect(await unknown).toMatchObject({ commandKind: 'cancel', kind: 'error', owner: { docId: '' } })
+  })
+
+  it('C5 paging survives preparation and eviction over a store with opaque cursors', async () => {
+    const doc = objectDoc([{ sheetId: 'A', rows: [[1, 'x'], [2, 'y'], [3, 'z']] }])
+    const kernel = new ViewerKernel({ parse: async () => doc, openSource: async () => opaqueCursors(createObjectWorkbookSource(doc, 'doc')) }, { ...quiet, preparedBudget: { maxColumns: 1, maxBytes: 1 << 20 } })
+    completed(await run(kernel, { kind: 'open', requestId: rid(), docId: 'doc', source: { kind: 'object', document: doc }, profile: 'D' }))
+    const owner = initialIdentity('doc', 'A')
+    const query = (cursor?: string) => ({ col: 0, rows: { kind: 'intervals' as const, intervals: [{ r0: 0, r1: 2 }] }, limit: 1, cursor })
+    const page = async (cursor?: string) => {
+      const out = await run(kernel, { kind: 'valueQuery', requestId: rid(), owner, query: query(cursor) })
+      const result = completed(out)
+      return result.kind === 'valueQuery' ? result.page : undefined
+    }
+    const p1 = (await page())!
+    expect(p1.error).toBeUndefined()
+    completed(await run(kernel, { kind: 'prepareColumns', requestId: rid(), owner, cols: new Uint16Array([0]) }))
+    const p2 = (await page(p1.nextCursor))!
+    expect(p2.error).toBeUndefined()
+    // Evict column 0 (budget 1) and continue from a prepared-view cursor via the store.
+    completed(await run(kernel, { kind: 'prepareColumns', requestId: rid(), owner, cols: new Uint16Array([1]) }))
+    const p3 = (await page(p2.nextCursor))!
+    expect(p3.error).toBeUndefined()
+    expect([...p1.items, ...p2.items, ...p3.items].map(item => item.kind === 'cell' ? item.cell.value : item.kind)).toEqual([1, 2, 3])
+    expect(p3.nextCursor).toBeUndefined()
+  })
+
+  it('C6 empty-column overhead is reserved before staging', async () => {
+    const doc = objectDoc([{ sheetId: 'A', rows: column([1]) }])
+    const kernel = new ViewerKernel({ parse: async () => doc }, { ...quiet, preparedBudget: { maxColumns: 8, maxBytes: Math.floor(PREPARED_COLUMN_OVERHEAD * 2.5) } })
+    completed(await run(kernel, { kind: 'open', requestId: rid(), docId: 'doc', source: { kind: 'object', document: doc }, profile: 'D' }))
+    const out = await run(kernel, { kind: 'prepareColumns', requestId: rid(), owner: initialIdentity('doc', 'A'), cols: new Uint16Array([5, 6, 7]) })
+    expect(out).toMatchObject({ kind: 'quota', resource: 'memory' })
+    expect(kernel.session('doc')!.preparedStats()).toEqual({ columns: 0, bytes: 0 })
+  })
+
+  it('C7 a failed session construction releases the acquired source', async () => {
+    let releases = 0
+    const kernel = new ViewerKernel({
+      parse: async () => objectDoc([]),
+      openSource: async () => ({ valuePolicy: 'engine', sheets: [], store: () => { throw new Error('none') }, geometry: () => { throw new Error('none') }, release: async () => { releases++ } }),
+    }, quiet)
+    const out = await run(kernel, { kind: 'open', requestId: rid(), docId: 'doc', source: { kind: 'object', document: objectDoc([]) }, profile: 'D' })
+    expect(out.kind).toBe('error')
+    expect(releases).toBe(1)
+    expect(kernel.session('doc')).toBeUndefined()
+  })
+
+  it('P2 prepared columns retain compact lanes whose charged bytes equal measured retention', async () => {
+    const n = 5000
+    const numbers = objectDoc([{ sheetId: 'A', rows: Array.from({ length: n }, (_v, row) => [row * 1.5, `s${row % 10}`]) }])
+    const kernel = new ViewerKernel({ parse: async () => numbers }, quiet)
+    completed(await run(kernel, { kind: 'open', requestId: rid(), docId: 'doc', source: { kind: 'object', document: numbers }, profile: 'D' }))
+    const owner = initialIdentity('doc', 'A')
+    completed(await run(kernel, { kind: 'prepareColumns', requestId: rid(), owner, cols: new Uint16Array([0, 1]) }))
+    const session = kernel.session('doc')!
+    const numeric = session.preparedFootprint('A', 0)!
+    expect(numeric).toMatchObject({ entries: n, extraObjects: 0, stringBytes: 0 })
+    expect(numeric.laneBytes).toBe(n * PREPARED_ENTRY_LANE_BYTES)
+    expect(numeric.bytes).toBe(PREPARED_COLUMN_OVERHEAD + numeric.laneBytes)
+    const text = session.preparedFootprint('A', 1)!
+    expect(text.extraObjects).toBe(0)
+    expect(text.uniqueStrings).toBe(10)
+    expect(text.bytes).toBe(PREPARED_COLUMN_OVERHEAD + text.laneBytes + text.stringBytes)
+    expect(session.preparedStats().bytes).toBe(numeric.bytes + text.bytes)
+    // Order of magnitude: compact lanes, not per-row payload objects (~tens of bytes per row).
+    expect(numeric.bytes / n).toBeLessThan(32)
+    // Served pages are rebuilt from lanes with identical values.
+    expect(cellValues(await run(kernel, { kind: 'valueQuery', requestId: rid(), owner, query: { col: 0, rows: { kind: 'intervals', intervals: [{ r0: 2, r1: 3 }] }, limit: 4 } }))).toEqual([3, 4.5])
+    expect(cellValues(await run(kernel, { kind: 'valueQuery', requestId: rid(), owner, query: { col: 1, rows: { kind: 'intervals', intervals: [{ r0: 11, r1: 11 }] }, limit: 4 } }))).toEqual(['s1'])
+  })
+
+  it('P3 readRows pages are bounded by cells as well as rows', async () => {
+    expect(READ_ROWS_MAX_CELLS).toBe(262_144)
+    const doc = objectDoc([{ sheetId: 'A', rows: Array.from({ length: 5 }, () => [1, 2, 3, 4]) }])
+    const store = createObjectWorkbookSource(doc, 'doc', { readRowsMaxCells: 10 }).store('A')
+    const options = { signal: new AbortController().signal, stamp: store.stamp }
+    const sizes: number[] = []
+    let cursor: string | undefined
+    do {
+      const page = await store.readRows({ r0: 0, r1: 1_048_575, c0: 0, c1: 16_383 }, cursor, options)
+      expect(page.error).toBeUndefined()
+      sizes.push(page.items.reduce((sum, row) => sum + row.cells.length, 0))
+      cursor = page.nextCursor
+    } while (cursor !== undefined)
+    expect(sizes).toEqual([8, 8, 4])
+  })
+
+  it('P4 the populated guard feed honors the caller page limit', async () => {
+    const doc = objectDoc([{ sheetId: 'A', rows: [Array.from({ length: 10 }, (_v, col) => col + 1)] }])
+    const session = new DocumentSession('doc', createObjectWorkbookSource(doc, 'doc'))
+    const feed = session.populatedSource('A', new AbortController().signal)
+    const range = { r0: 0, r1: 1_048_575, c0: 0, c1: 16_383 }
+    const pages: number[] = []
+    let cursor: string | undefined
+    do {
+      const page = await feed.iterate(range, cursor, 3)
+      pages.push(page.items.length)
+      cursor = page.nextCursor
+    } while (cursor !== undefined)
+    expect(pages).toEqual([3, 3, 3, 1])
+  })
+
+  it('P5 an unknown command kind gets a typed unsupported error', async () => {
+    const kernel = new ViewerKernel({ parse: async () => objectDoc([]) }, quiet)
+    const replies: WorkerReply[] = []
+    await kernel.handle({ kind: 'bogus', requestId: 'b' } as never, out => replies.push(out))
+    expect(replies).toHaveLength(1)
+    expect(replies[0]).toMatchObject({ kind: 'error', code: 'unsupported', requestId: 'b' })
+  })
+
+  it('P7 progress replies never settle a request (no progress API until S4.2)', async () => {
+    let listener: (event: { data: unknown }) => void = () => {}
+    const client = createViewerClient({ postMessage: () => {}, addEventListener: (_t: 'message', l: (event: { data: unknown }) => void) => { listener = l }, removeEventListener: () => {} })
+    const owner = initialIdentity('doc', 'A')
+    let settled = false
+    const pending = client.send({ kind: 'valueQuery', requestId: 'v', owner, query: { col: 0, rows: { kind: 'intervals', intervals: [{ r0: 0, r1: 0 }] }, limit: 1 } })
+    void pending.then(() => { settled = true })
+    listener({ data: { kind: 'progress', commandKind: 'valueQuery', requestId: 'v', owner, diagnostics: [], completed: 1 } })
+    await tick()
+    expect(settled).toBe(false)
+    listener({ data: { kind: 'cancelled', commandKind: 'valueQuery', requestId: 'v', owner, diagnostics: [] } })
+    expect((await pending).kind).toBe('cancelled')
+    expect(client.send.length).toBe(1) // send(command) only: no onProgress option
+  })
+
+  it('P9 view snapshots are frozen copies', async () => {
+    const doc = objectDoc([{ sheetId: 'A', rows: column([1]) }])
+    const session = new DocumentSession('doc', createObjectWorkbookSource(doc, 'doc'))
+    const view = session.view('A')
+    expect(Object.isFrozen(view)).toBe(true)
+    expect(Object.isFrozen(view.selection)).toBe(true)
+    expect(() => { (view as { revision: number }).revision = 9 }).toThrow()
+    expect(session.view('A').revision).toBe(0)
+  })
+
+  it('P10 prepareColumns validates its input before use and quota replies carry requiredBytes', async () => {
+    const doc = objectDoc([{ sheetId: 'A', rows: column([1]) }])
+    const kernel = new ViewerKernel({ parse: async () => doc }, quiet)
+    completed(await run(kernel, { kind: 'open', requestId: rid(), docId: 'doc', source: { kind: 'object', document: doc }, profile: 'M' }))
+    const owner = initialIdentity('doc', 'A')
+    const session = kernel.session('doc')!
+    expect(await session.prepareColumns(owner, null as never, new AbortController().signal)).toMatchObject({ kind: 'error', error: { code: 'invalid-coordinate' } })
+    const bad = await run(kernel, { kind: 'prepareColumns', requestId: rid(), owner, cols: [0] as never })
+    expect(bad).toMatchObject({ kind: 'error', code: 'invalid-coordinate' })
+    expect(bad.diagnostics.length).toBe(1)
+    const quota = await run(kernel, { kind: 'prepareColumns', requestId: rid(), owner, cols: new Uint16Array([0, 1, 2, 3, 4]) })
+    expect(quota).toMatchObject({ kind: 'quota', resource: 'memory' })
+    expect(quota.kind === 'quota' && quota.requiredBytes).toBeGreaterThan(0)
   })
 })

@@ -17,9 +17,9 @@ import {
   type CommandOf, type ReplyBody, type TransferLedger,
 } from './viewerProtocol'
 import {
-  createObjectWorkbookSource, DocumentSession, type CommittedView, type OperationOutcome, type SessionOptions,
-  type WorkbookSource,
+  DocumentSession, type CommittedView, type OperationOutcome, type PrepareOutcome, type SessionOptions, type WorkbookSource,
 } from './viewerSession'
+import { createObjectWorkbookSource } from './viewerObjectSource'
 import { MAX_ROWS } from '../xlsx/view/coordinates'
 
 export type ReplySink = (reply: WorkerReply, transfer: ArrayBuffer[]) => void
@@ -28,7 +28,13 @@ export interface ViewerKernelEnv {
   parse(bytes: Uint8Array): Promise<XlsxDocument>
   /** Optional source override (S1 paged adapters, instrumented tests). */
   openSource?(handle: SourceHandle, docId: string, signal: AbortSignal): Promise<WorkbookSource>
+  /** Instrumentation seam between dispatch and emission (tests pin the final
+   * ownership recheck by closing a document exactly here). */
+  afterDispatch?(command: WorkerCommand): void | Promise<void>
 }
+/** Recently finished request owners kept so a late cancel can still answer
+ * with its target's owner (bounded; oldest dropped first). */
+const FINISHED_OWNERS_LIMIT = 1024
 export interface KernelStats { opens: number; parses: number; sourceReads: number }
 interface InFlight { controller: AbortController; owner: WorkerOwner; kind: WorkerCommandKind }
 
@@ -49,6 +55,7 @@ export class ViewerKernel {
   private readonly sessions = new Map<string, DocumentSession>()
   private readonly inflight = new Map<string, InFlight>()
   private readonly opening = new Set<string>()
+  private readonly finished = new Map<string, WorkerOwner>()
   private readonly accounting = new TransferAccounting()
   readonly stats: KernelStats = { opens: 0, parses: 0, sourceReads: 0 }
 
@@ -75,13 +82,53 @@ export class ViewerKernel {
       const controller = new AbortController()
       this.inflight.set(command.requestId, { controller, owner: capturedOwner(command), kind: command.kind })
       tracked = true
-      emit(await this.dispatch(command, controller.signal))
+      const out = await this.dispatch(command, controller.signal)
+      await this.env.afterDispatch?.(command)
+      emit(this.finalCheck(command, out, controller.signal))
     } catch (cause) {
       emit(errorReply(command, capturedOwner(command) as never, 'page-error', false, [{
         code: 'worker-exception', message: cause instanceof Error ? cause.message : String(cause),
       }]))
     } finally {
-      if (tracked) this.inflight.delete(command.requestId)
+      if (tracked) {
+        const entry = this.inflight.get(command.requestId)
+        this.inflight.delete(command.requestId)
+        if (entry) {
+          this.finished.set(command.requestId, entry.owner)
+          if (this.finished.size > FINISHED_OWNERS_LIMIT) this.finished.delete(this.finished.keys().next().value as string)
+        }
+      }
+    }
+  }
+  /** Last ownership check, immediately before emission (§10.1): a completion is
+   * never published for a cancelled request, a closed document or an owner a
+   * newer commit superseded. Sort/filter completions already committed their
+   * view; they are only withheld when the document itself is gone. */
+  private finalCheck(command: Exclude<WorkerCommand, { kind: 'cancel' }>, out: WorkerReply, signal: AbortSignal): WorkerReply {
+    if (out.kind !== 'complete') return out
+    switch (command.kind) {
+      case 'open':
+        return this.sessions.has(command.docId) ? out : reply(command, { docId: command.docId }, { kind: 'cancelled' })
+      case 'close':
+        return out
+      case 'sort':
+      case 'filter': {
+        const session = this.sessions.get(command.owner.docId)
+        return session && !session.isClosed ? out : this.stale(command, command.owner)
+      }
+      case 'activateSheet': {
+        if (signal.aborted) return reply(command, command.owner, { kind: 'cancelled' })
+        const session = this.sessions.get(command.owner.docId)
+        return session && !session.isClosed ? out : errorReply(command, command.owner, 'stale-source', false, [{ code: 'unknown-document', message: 'Document closed' }])
+      }
+      case 'prepareColumns':
+      case 'valueQuery': {
+        if (signal.aborted) return reply(command, command.owner, { kind: 'cancelled' })
+        const session = this.sessions.get(command.owner.docId)
+        return session && session.isCurrent(command.owner) ? out : this.stale(command, command.owner)
+      }
+      default:
+        return out
     }
   }
 
@@ -101,7 +148,9 @@ export class ViewerKernel {
       case 'prepareColumns': {
         const session = this.current(command.owner)
         if (!session) return this.stale(command, command.owner)
-        if (!isUint16Array(command.cols)) return errorReply(command, command.owner, 'invalid-coordinate', false)
+        if (!isUint16Array(command.cols)) {
+          return errorReply(command, command.owner, 'invalid-coordinate', false, [{ code: 'invalid-columns', message: 'cols must be a Uint16Array of column indexes' }])
+        }
         const outcome = await session.prepareColumns(command.owner, [...command.cols], signal)
         if (outcome.kind === 'resource-limit') return errorReply(command, command.owner, 'resource-limit', false, [{ code: 'prepare-batch-limit', message: outcome.message }])
         if (outcome.kind !== 'complete') return this.failed(command, command.owner, outcome)
@@ -143,6 +192,12 @@ export class ViewerKernel {
       case 'search':
         // Owned by S5 (canonical viewport records and global find).
         return errorReply(command, command.owner as never, 'unsupported', false, [{ code: `${command.kind}-not-implemented`, message: `${command.kind} is delivered by S5` }])
+      default: {
+        // Unknown kinds (malformed or newer clients) get a typed error, never undefined.
+        const unknown = command as unknown as { kind: unknown; requestId: string; owner?: WorkerOwner; docId?: unknown }
+        const owner = unknown.owner ?? { docId: typeof unknown.docId === 'string' ? unknown.docId : '' }
+        return errorReply(unknown as never, owner as never, 'unsupported', false, [{ code: 'unknown-command', message: `Unknown command kind ${String(unknown.kind)}` }])
+      }
     }
   }
 
@@ -165,7 +220,15 @@ export class ViewerKernel {
       this.opening.delete(command.docId)
     }
     if (signal.aborted) { await source.release(); return reply(command, owner, { kind: 'cancelled' }) }
-    this.sessions.set(command.docId, new DocumentSession(command.docId, source, { ...this.options, profile: command.profile }))
+    let session: DocumentSession
+    try {
+      session = new DocumentSession(command.docId, source, { ...this.options, profile: command.profile })
+    } catch (cause) {
+      // Ownership never transferred: release what open acquired.
+      await source.release()
+      throw cause
+    }
+    this.sessions.set(command.docId, session)
     this.stats.opens++
     return reply(command, owner, { kind: 'complete', result: { kind: 'open', valuePolicy: source.valuePolicy, sheets: source.sheets } })
   }
@@ -208,7 +271,15 @@ export class ViewerKernel {
    * its own cancelled reply. Scheduling-level cancellation is S4.2. */
   private cancel(command: CommandOf<'cancel'>): WorkerReply {
     const target = this.inflight.get(command.targetRequestId)
-    if (!target) return errorReply(command, { docId: '' }, 'stale-source', false, [{ code: 'unknown-request', message: 'No such in-flight request' }])
+    if (!target) {
+      // Defined outcome for a target that already finished (its reply may still
+      // be queued): an error carrying the target's owner. A target this worker
+      // never saw has no owner; the reply then uses the document-less owner.
+      const done = this.finished.get(command.targetRequestId)
+      return done
+        ? errorReply(command, done, 'stale-source', false, [{ code: 'target-finished', message: 'The target request already finished' }])
+        : errorReply(command, { docId: '' }, 'stale-source', false, [{ code: 'unknown-request', message: 'No such request' }])
+    }
     target.controller.abort()
     return reply(command, target.owner, { kind: 'cancelled' })
   }
@@ -221,17 +292,18 @@ export class ViewerKernel {
   }
   private failed<K extends 'prepareColumns' | 'sort' | 'filter'>(
     command: CommandOf<K>, owner: CacheIdentity,
-    outcome: Exclude<OperationOutcome, { kind: 'committed' | 'refused' | 'quota' }> | { kind: 'quota'; limitBytes: number; requiredBytes?: number },
+    outcome: Exclude<OperationOutcome, { kind: 'committed' | 'refused' }> | Exclude<PrepareOutcome, { kind: 'complete' | 'resource-limit' }>,
   ): WorkerReply<K> {
     const own = owner as WorkerCommandOwner<K>
     switch (outcome.kind) {
       case 'stale': return this.stale(command, owner)
       case 'cancelled': return reply(command, own, { kind: 'cancelled' } as unknown as ReplyBody<K>)
-      case 'incomplete': return reply(command, own, { kind: 'incomplete', missing: outcome.missing } as unknown as ReplyBody<K>)
+      case 'incomplete':
+        return reply(command, own, { kind: 'incomplete', missing: outcome.missing } as unknown as ReplyBody<K>,
+          'diagnostics' in outcome ? outcome.diagnostics ?? [] : [])
       case 'quota': return reply(command, own, {
-        kind: 'quota', resource: 'memory', limitBytes: outcome.limitBytes,
-        ...(outcome.requiredBytes !== undefined ? { requiredBytes: outcome.requiredBytes } : {}),
-      } as unknown as ReplyBody<K>)
+        kind: 'quota', resource: 'memory', limitBytes: outcome.limitBytes, requiredBytes: outcome.requiredBytes,
+      } as unknown as ReplyBody<K>, 'diagnostics' in outcome ? outcome.diagnostics ?? [] : [])
       case 'error': return errorReply(command, own, outcome.error.code === 'operation-refused' ? 'page-error' : outcome.error.code, outcome.error.retryable, [{ code: 'source-error', message: outcome.error.message }])
     }
   }
@@ -257,7 +329,10 @@ export class ViewerKernel {
    * source dimensions; the client projects them through `bands`, as
    * createSheetMetrics does); `visibility` lists display slots outside every
    * bitset as visible; `counts.total` is the logical row axis (1,048,576), not a
-   * filter range, and `counts.visible` its visible display slots. */
+   * filter range, and `counts.visible` its visible display slots. S9.1 record
+   * counts ("N of M records") need a body/filter-range total, which the frozen
+   * ViewCommitDelta has no field for: that is a reviewed additive contract
+   * change for S9.1, deliberately not made here. */
   private delta(view: CommittedView): ViewCommitDelta {
     const bands = view.order.bands.map(band => {
       const sourceAtOffset = band.sourceAtOffset.slice()
