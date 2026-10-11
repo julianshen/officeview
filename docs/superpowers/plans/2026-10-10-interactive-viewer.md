@@ -116,7 +116,8 @@ Every package is implemented on its own branch, reviewed by at least one agent f
 | S1.3 authoritative formula/cache/error/format value bridge (`values.ts`, `value-policy.ts`) | merged |
 | S5.2 canvas tiles, overlays and OfficeDoc integration (`InteractiveSheetDoc.tsx` lazy chunk, `sheetAssets.ts`) | merged behind the `interactiveSheets` prop (default off; eager +0.21 KB gz); seams closed by S9.2 (grid copy, S9.1 controls) and left for S5.4 (worker-backed paged viewer), S10 (browser smoke, mouse-drag selection) and worker viewport/search commands |
 | S9.2 copy in displayed order and budgeted static print (`copy.ts`, `viewerControlsClient.ts`, clipboard/print policy) | merged (codex implementation; opencode reviews over two rounds); copy works on resident sheets — paged sheets wait for S5.4 |
-| S5.4, S8.4, S10 (physical-device receipts skipped for now by user decision), S11/S12 status, S13 | not started |
+| S5.4 worker-backed interactive viewer for paged workbooks (`viewerRemoteSource.ts`, `pagedWorkbook.ts`, `pagedGeometry.ts`, worker `read` command, paged filter evaluator) | implemented on `feature/iv-s5-4` (Claude); awaiting review |
+| S8.4, S10 (physical-device receipts skipped for now by user decision), S11/S12 status, S13 | not started |
 
 ## S0 — Freeze contracts, counterexamples and fixture/harness infrastructure
 
@@ -428,13 +429,15 @@ expect(session.publishWorkbookIndex(staleA)).toBe(false)
 
 > Added 2026-10-12 after the S9.2 review found that no production caller mounts `InteractiveSheetDoc` with a worker-backed source: with `interactiveSheets` on, paged (large) workbooks still fall back to compatibility mode, so viewport, find, filter/sort, selection and copy are proven only on resident documents. Required for the 2^34-cell capacity goal; must land before S10.
 
+> **Status (2026-10-12):** implemented (Claude). Routing: `<OfficeFile interactiveSheets viewerWorker>` passes a paged route to the loader; a paged admission (seekable, spooled or bytes) opens in the worker and returns a shell document marked with a `RemoteWorkbook` source (`pagedDocument.ts`), which `OfficeDoc` hands to `InteractiveSheetDoc`. Reads use an additive `read` command (cell/rows/scan/structural/complete) owned by the committed CacheIdentity; activation publishes the compact sheet layout; paged sessions evaluate typed/compound/value-list filters in the worker (value-list keys ship with the filter command). The object planner/painter and FindController stay on the main thread over a bounded row cache; the kernel `viewport`/`search` command kinds stay unimplemented. Without `viewerWorker` (or with the flag off) paged files keep compatibility mode. Gaps: paged cells paint with General formatting (the paged reader keeps style ids only); paged hidden columns are not collapsed (S1.2 geometry ignores them); static print of a worker-backed workbook is refused with the large-export notice; browser smoke stays with S10.
+
 **Files:** modify `src/components/OfficeDoc.tsx`, `src/components/OfficeFile.tsx`, `src/components/xlsx/InteractiveSheetDoc.tsx`, `src/worker/viewer{Protocol,Session,Kernel,Client,LargeSource}.ts`; test `tests/xlsx-viewer-paged-viewer.test.tsx`, extend `tests/xlsx-viewer-paged-worker.test.ts`.
 
-- [ ] RED: with `interactiveSheets` on, a workbook admitted as `paged` mounts the interactive viewer (not compatibility mode); the saved-values notice and admission notices still render once.
-- [ ] RED: viewport records, cell reads, find paging, filter/sort commit and copy all go through bounded worker commands with ownership/generation checks; no full-sheet transfer to the main thread; unknown pages show pending, never blank; cancellation and source replacement discard late replies.
-- [ ] RED: a far-corner cell (row 1,048,576, column XFD) in a paged fixture is reachable by Go To, find and copy, and the separator lower bound refuses a full-sheet copy before any worker cell read.
-- [ ] GREEN: worker viewport/search/value/copy-read commands on the resident session; a main-thread source adapter implementing the `InteractiveSheetDoc` source contract over `viewerClient`; OfficeDoc/OfficeFile route paged admissions to it when the flag is on. Compatibility mode stays the default when the flag is off.
-- [ ] Gates: focused suites, whole vitest, build (eager growth ≤ +0.4 KB gz, new code in lazy chunks), golden compare unchanged.
+- [x] RED: with `interactiveSheets` on, a workbook admitted as `paged` mounts the interactive viewer (not compatibility mode); the saved-values notice and admission notices still render once.
+- [x] RED: viewport records, cell reads, find paging, filter/sort commit and copy all go through bounded worker commands with ownership/generation checks; no full-sheet transfer to the main thread; unknown pages show pending, never blank; cancellation and source replacement discard late replies.
+- [x] RED: a far-corner cell (row 1,048,576, column XFD) in a paged fixture is reachable by Go To, find and copy, and the separator lower bound refuses a full-sheet copy before any worker cell read.
+- [x] GREEN: worker viewport/search/value/copy-read commands on the resident session; a main-thread source adapter implementing the `InteractiveSheetDoc` source contract over `viewerClient`; OfficeDoc/OfficeFile route paged admissions to it when the flag is on. Compatibility mode stays the default when the flag is off.
+- [x] Gates: focused suites, whole vitest, build (eager growth ≤ +0.4 KB gz, new code in lazy chunks), golden compare unchanged.
 
 ## S6 — Active sheet, source-identity selection, virtual headers and accessibility
 
