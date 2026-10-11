@@ -73,7 +73,7 @@ export function cellIdOf(source: SourceCell): CellId {
   return source.row * MAX_COLS + source.col
 }
 
-export interface LayoutCacheStats { built: number; reused: number; invalidations: number; entries: number }
+export interface LayoutCacheStats { built: number; reused: number; invalidations: number; entries: number; bytes: number; evicted: number }
 
 /** Formatted values and text layouts across frames (plan S5.1). The scope is the
  * document, sheet and font generation: a font publication (`fontGen`) or another
@@ -81,17 +81,22 @@ export interface LayoutCacheStats { built: number; reused: number; invalidations
  * identity, everything the host formats/shapes from (value, error/formula flags,
  * resolved style) and the box dimensions, so a value or geometry change rebuilds
  * only the records it touches. Zoom/DPR are not keys: layout is in logical CSS
- * pixels and the caller applies the scale. Bounded LRU. */
+ * pixels and the caller applies the scale. LRU bounded by entry count and by
+ * estimated retained bytes (text, runs, laid-out lines), which are charged to the
+ * §12.4 main-thread pool: the default 8 MiB is an eighth of desktop's 64 MiB. */
 export class LayoutCache {
-  readonly stats: LayoutCacheStats = { built: 0, reused: 0, invalidations: 0, entries: 0 }
+  readonly stats: LayoutCacheStats = { built: 0, reused: 0, invalidations: 0, entries: 0, bytes: 0, evicted: 0 }
   private scope: string | undefined
   private readonly entries = new Map<string, CellBodyLayout>()
-  constructor(readonly maxEntries = 65_536) {}
+  private readonly sizes = new Map<string, number>()
+  constructor(readonly maxEntries = 65_536, readonly maxBytes = DEFAULT_LAYOUT_CACHE_BYTES) {}
   layout(owner: CacheIdentity, placed: PlacedCell, host: CellLayoutHost): CellBodyLayout {
     const scope = `${owner.docId}\u0000${owner.sheetId}\u0000${owner.fontGen}`
     if (scope !== this.scope) {
       if (this.scope !== undefined) this.stats.invalidations++
       this.entries.clear()
+      this.sizes.clear()
+      this.stats.bytes = 0
       this.scope = scope
     }
     const key = layoutKey(placed)
@@ -104,11 +109,41 @@ export class LayoutCache {
     }
     const built = host.layoutBody(placed.cell, placed.width, placed.height)
     this.stats.built++
+    const bytes = estimateLayoutBytes(key, built)
     this.entries.set(key, built)
-    while (this.entries.size > this.maxEntries) this.entries.delete(this.entries.keys().next().value!)
+    this.sizes.set(key, bytes)
+    this.stats.bytes += bytes
+    // Evict least recently used entries; the newest entry always stays (it is
+    // being painted) even when it alone exceeds the budget.
+    while (this.entries.size > 1 && (this.entries.size > this.maxEntries || this.stats.bytes > this.maxBytes)) {
+      const oldest = this.entries.keys().next().value!
+      this.entries.delete(oldest)
+      this.stats.bytes -= this.sizes.get(oldest) ?? 0
+      this.sizes.delete(oldest)
+      this.stats.evicted++
+    }
     this.stats.entries = this.entries.size
     return built
   }
+}
+
+export const DEFAULT_LAYOUT_CACHE_BYTES = 8 * 1024 * 1024
+/** Conservative retained-size estimate: UTF-16 strings at 2 bytes per unit plus
+ * fixed object overheads for the body, each laid-out line and segment. */
+export function estimateLayoutBytes(key: string, body: CellBodyLayout): number {
+  let bytes = 256 + 2 * key.length + 2 * body.formattedText.length
+  const text = body.text
+  if (text) {
+    bytes += 128 + 2 * (text.text.length + text.font.length)
+    if (text.kind === 'layout') {
+      bytes += 512 + 2 * text.text.length // body/paragraph copy of the source text
+      for (const line of text.layout.lines) {
+        bytes += 96
+        for (const segment of line.segments) bytes += 160 + 2 * segment.text.length
+      }
+    }
+  }
+  return bytes
 }
 
 const styleKeys = new WeakMap<XlsxCellStyle, string>()
