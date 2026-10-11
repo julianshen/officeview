@@ -293,6 +293,20 @@ describe('review fixes', () => {
     expect(exact.mode).toBe('paged')
   })
 
+  it('round 2: the tokenizer carry at the failure point is charged too (min(maxTokenChars, fed) bytes, 4 per element)', async () => {
+    // the failure sits at the end of a part larger than one output chunk, so bytes were fed
+    // (and possibly carried) before it: the whole part must end up charged
+    const body = '<x/>'.repeat(50_000)
+    const part = (tail: string) => `<extLst xmlns="${SS_NS}">${body}${tail}</extLst>`
+    const make = (tail: string) => buildZip([...xlsxEntries({}), { name: 'customXml/item1.xml', data: part(tail) }]).bytes
+    const clean = await g2(make('<y a="1" b="2"/>'), 'D')
+    const bad = await g2(make('<y a="1" a="2"/>'), 'D')
+    expect(clean.mode === 'object' && bad.mode === 'object').toBe(true)
+    if (clean.mode !== 'object' || bad.mode !== 'object') return
+    expect(bad.legacyFallback?.part).toBe('customXml/item1.xml')
+    expect(bad.counters.elements - clean.counters.elements).toBeGreaterThanOrEqual(Math.floor(part('<y a="1" a="2"/>').length / 4) - 2)
+  })
+
   it('MAJOR 1: the first grammar fallback is kept and every fallen part is still byte-verified', async () => {
     const entries = xlsxEntries({}).map((e) => e.name === 'xl/workbook.xml' ? { ...e, data: `<!DOCTYPE a><workbook xmlns="${SS_NS}"><sheets/></workbook>` }
       : e.name === 'xl/styles.xml' ? { ...e, data: '<!DOCTYPE b><styleSheet/>' } : e)
@@ -300,7 +314,7 @@ describe('review fixes', () => {
     expect(d.mode === 'object' && d.legacyFallback?.part).toBe('xl/workbook.xml')
   })
 
-  it('MINOR 2: a formula with an empty or whitespace-only <v> is load-evaluated (as parse.ts decides); t="str" with an empty <v/> is a cached empty string', async () => {
+  it('MINOR 2: a formula with an empty <v> is load-evaluated as in parse.ts; whitespace-only <v> is counted too (parse.ts calls it cached: fail-closed over-count); t="str" with an empty <v/> is cached', async () => {
     const count = async (cell: string) => {
       const d = await g2(xlsxBytes({ sheetData: `<row r="1"><c r="B1"><v>1</v></c><c r="B2"><v>2</v></c>${cell}</row>` }), 'D')
       return d.mode === 'object' ? d.counters.loadEvaluatedFormulas : -1

@@ -226,9 +226,12 @@ export async function verifyObjectCandidate(src: RangeSource, inventory: ZipInve
             // (decision 3). The part's tokens counted so far stay; the bytes
             // after the last fully tokenized chunk are charged as the densest
             // markup possible (one element per 4 bytes, `<a/>`), so the
-            // envelope can only over-estimate. The part is then byte-verified.
+            // envelope can only over-estimate. The tokenizer's carry (fed but
+            // never tokenized: at most maxTokenChars, and at most what was fed)
+            // is charged the same way. The part is then byte-verified.
             legacyFallback ??= { part: entry.name, message: error.message }
-            counters.elements += Math.ceil(Math.max(0, entry.uncompressedSize - fed) / 4)
+            const untokenized = Math.max(0, entry.uncompressedSize - fed) + Math.min(limits.maxTokenChars, fed)
+            counters.elements += Math.ceil(untokenized / 4)
             checkCaps(counters, 0, limits)
             if (!info.drawing) nonDrawing -= partBytes
             counters.expandedBytes -= partBytes

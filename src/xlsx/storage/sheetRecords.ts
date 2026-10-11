@@ -86,8 +86,10 @@ export function countingEvents(counters: AdmissionCounters, partId: string, opti
   let inSheetData = false
   // cell state
   let inCell = false
-  // cached value, decided as parse.ts does: non-empty <v> text, an inline
-  // string, or t="str" with any <v> (a cached empty string)
+  // cached value: non-whitespace <v> text, an inline string, or t="str" with
+  // any <v> (a cached empty string). parse.ts also treats whitespace-only
+  // <v> text as cached (measured: fast-xml-parser keeps " "); counting it as
+  // uncached here only over-reserves, which is the fail-closed direction.
   let cellHasValue = false
   let cellSawV = false
   let cellHasInline = false
