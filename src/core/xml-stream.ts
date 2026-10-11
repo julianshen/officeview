@@ -220,7 +220,9 @@ export class XmlTokenizer {
 
   private hold(buf: string, pos: number): void {
     this.carry = buf.slice(pos)
-    if (this.carry.length > this.limits.maxTokenChars) {
+    // Reference and CR holds are structurally bounded (at most 34 chars); only
+    // markup is subject to maxTokenChars, whatever limit the caller set.
+    if (this.carry.charCodeAt(0) === LT && this.carry.length > this.limits.maxTokenChars) {
       throw new PackageError('resource-limit', `markup token exceeds maxTokenChars (${this.limits.maxTokenChars})`)
     }
   }

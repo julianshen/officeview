@@ -303,6 +303,11 @@ describe('bounds (RED test 12)', () => {
     }
   })
 
+  it('a tiny maxTokenChars applies to markup only, never to a held reference', () => {
+    const doc = '<r>&#00000000000000065;</r>'
+    expect(textOfOutcome(expectSameEverywhere(doc, { maxTokenChars: 4 }))).toBe('A')
+  })
+
   it('an unterminated comment fails with resource-limit, not after the whole input', () => {
     const tok = new XmlTokenizer(recorder().handler, { maxTokenChars: 4096 })
     tok.write('<r><!--')
