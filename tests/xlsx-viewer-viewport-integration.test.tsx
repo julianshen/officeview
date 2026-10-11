@@ -3,7 +3,7 @@
  * tiles in the bitmap pool, independent overlays, view-generation invalidation,
  * document-owned zoom reset and the feature flag.
  */
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { TILE_DEVICE_PX, prefetchTiles, tileLogicalBox, tileRangeFor } from '../src/xlsx/view/tileCache'
 
 describe('tile grid math', () => {
@@ -543,5 +543,41 @@ describe('bitmap admission before allocation (S5.2 review round 1)', () => {
       Object.defineProperty(owner!, 'width', canvasWidth)
       ;(window as { devicePixelRatio: number }).devicePixelRatio = dpr
     }
+  })
+})
+
+describe('sheet-mode printing (S5.2 review round 1)', () => {
+  it('Ctrl/Cmd+P prints every sheet through the budgeted static page path, never the bare viewport', async () => {
+    const doc = await workbook([{ name: 'S1', rows: [{ r: 1, cells: [{ ref: 'A1', v: 'one' }] }] }, { name: 'S2', rows: [{ r: 1, cells: [{ ref: 'A1', v: 'two' }] }] }])
+    const print = vi.fn()
+    const original = window.print
+    window.print = print
+    try {
+      const { ui } = await mountSheet(doc)
+      // Without preparation the print medium shows an explicit notice, not the pane.
+      const notice = ui.getByTestId('officeview-sheet-print-notice')
+      expect(notice.textContent).toMatch(/Ctrl\/Cmd\+P/)
+      expect([...document.querySelectorAll('style')].some(style => /@media print/.test(style.textContent ?? '') && /data-officeview-sheet-screen/.test(style.textContent ?? ''))).toBe(true)
+      act(() => { fireEvent.keyDown(ui.getByRole('region', { name: 'Spreadsheet viewer' }), { key: 'p', ctrlKey: true }) })
+      await waitFor(() => expect(print).toHaveBeenCalledTimes(1))
+      const pages = ui.getByTestId('officeview-sheet-print-pages').querySelectorAll('canvas')
+      expect(pages).toHaveLength(2)
+      act(() => { window.dispatchEvent(new Event('afterprint')) })
+      await waitFor(() => expect(ui.getByTestId('officeview-sheet-print-pages').querySelectorAll('canvas')).toHaveLength(0))
+    } finally { window.print = original }
+  })
+
+  it('allowPrint={false} keeps the print guard and never prepares pages', async () => {
+    const doc = await workbook()
+    const print = vi.fn()
+    const original = window.print
+    window.print = print
+    try {
+      const { ui } = await mountSheet(doc, { allowPrint: false })
+      act(() => { fireEvent.keyDown(ui.getByRole('region', { name: 'Spreadsheet viewer' }), { key: 'p', ctrlKey: true }) })
+      await settle()
+      expect(print).not.toHaveBeenCalled()
+      expect(ui.queryByTestId('officeview-sheet-print-pages')).toBeNull()
+    } finally { window.print = original }
   })
 })

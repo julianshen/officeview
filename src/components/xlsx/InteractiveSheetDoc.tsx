@@ -45,6 +45,7 @@ import { gridGeometryToViewport, gridSelectionOverlay, paintGridSelectionOverlay
 import { normalizeWatermark, type WatermarkOptions } from '../../core/watermark'
 import type { FallbackFontsOptions } from '../../core/fonts/fallback'
 import { prepareSheetAssets, type SheetAssetsLease } from './sheetAssets'
+import { getPaintables, type Paintable, type PaintableArray } from '../../render/paint'
 import { GridSemantics, type GridTransition } from './GridSemantics'
 import { GRID_HEADER_SIZE } from './GridHeaders'
 import { coarseSelectionRecords, overlayRecords, selectionContains } from './selectionOverlay'
@@ -549,6 +550,7 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
     if (mod && key === 'f') { event.preventDefault(); inputRef.current?.focus(); inputRef.current?.select(); return }
     if (!allowCopy && mod && key === 'c') { event.preventDefault(); return }
     if (!allowPrint && mod && key === 'p') { event.preventDefault(); return }
+    if (allowPrint && mod && key === 'p') { event.preventDefault(); void preparePrint(); return }
     // Zoom keys belong to the grid/viewer, never to inputs or header controls.
     const target = event.target as HTMLElement
     if (!(target === event.currentTarget || target.hasAttribute?.('data-officeview-grid')) || mod || event.altKey) return
@@ -567,6 +569,45 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
     el.addEventListener('wheel', suppress, { passive: false })
     return () => el.removeEventListener('wheel', suppress)
   }, [])
+
+  // ---- printing (spec §11.5): the S2.3 budgeted static pages, never the bare pane ----
+  // Ctrl/Cmd+P prepares one static unit per sheet through getPaintables (which
+  // refuses oversized sheets with a typed notice instead of truncating), paints
+  // them into print-only canvases, prints, and releases them afterwards. A print
+  // started from the browser menu shows an explicit print-only notice instead of
+  // an unlabeled viewport subset.
+  const [printPages, setPrintPages] = useState<readonly Paintable[] | null>(null)
+  const printLease = useRef<PaintableArray | null>(null)
+  const preparePrint = async () => {
+    const pages = await getPaintables(doc, { ...(markKey ? { watermark } : {}), ...(fontKey ? { fallbackFonts } : {}) })
+    printLease.current?.dispose()
+    printLease.current = pages
+    setPrintPages([...pages])
+  }
+  const printRefs = useRef<Array<HTMLCanvasElement | null>>([])
+  useLayoutEffect(() => {
+    if (!printPages) return
+    printPages.forEach((page, index) => {
+      const canvas = printRefs.current[index]
+      const ctx = canvas?.getContext('2d')
+      if (!canvas || !ctx) return
+      canvas.width = page.spec.widthPx
+      canvas.height = page.spec.heightPx
+      page.paint(ctx)
+    })
+    window.print?.()
+  }, [printPages])
+  useEffect(() => {
+    if (!allowPrint) return
+    const release = () => { setPrintPages(null); printLease.current?.dispose(); printLease.current = null }
+    window.addEventListener('afterprint', release)
+    const host = globalThis.document
+    const media = host.createElement('style')
+    media.setAttribute('data-officeview-sheet-print-media', '')
+    media.textContent = '[data-officeview-sheet-print] { display: none; } @media print { [data-officeview-sheet-screen] { display: none !important; } [data-officeview-sheet-print] { display: block !important; } }'
+    host.head.appendChild(media)
+    return () => { window.removeEventListener('afterprint', release); media.remove(); release() }
+  }, [allowPrint])
 
   // Print guard while this viewer is mounted (same rule as the page viewer).
   useEffect(() => {
@@ -625,6 +666,7 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
           WebkitUserSelect: allowCopy ? undefined : 'none', userSelect: allowCopy ? undefined : 'none', ...props.style,
         }}
       >
+        <div data-officeview-sheet-screen="" style={{ display: 'flex', flexDirection: 'column', minHeight: 0, flex: '1 1 auto' }}>
         <SheetNavigator documentId={docId} sheets={doc.sheets.map((sheet, index) => ({ id: sheetIds[index], name: sheet.name }))}
           activeSheetId={activeSheetId} onSheetChange={onSheetChange} onNavigate={onNavigate} onNotice={setAnnouncement} disabled={!entry} />
         <div ref={paneRef} data-testid="officeview-sheet-pane" style={{ position: 'relative', flex: '1 1 auto', minHeight: 0, overflow: 'hidden', background: '#ffffff' }}>
@@ -645,6 +687,15 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
             </GridSemantics>
           )}
         </div>
+        </div>
+        {allowPrint && (
+          <div data-officeview-sheet-print="" aria-hidden="true">
+            {!printPages && <p data-testid="officeview-sheet-print-notice">To print this spreadsheet, press Ctrl/Cmd+P inside the viewer.</p>}
+            <div data-testid="officeview-sheet-print-pages">
+              {printPages?.map((_, index) => <canvas key={index} ref={el => { printRefs.current[index] = el }} style={{ display: 'block', maxWidth: '100%', breakAfter: 'page' }} />)}
+            </div>
+          </div>
+        )}
       </div>
       {showSearch && (
         <SearchBar inputRef={inputRef} query={query} onQuery={setQuery} count={matchCount} active={activeHit < 0 ? -1 : pageOffset + activeHit}
