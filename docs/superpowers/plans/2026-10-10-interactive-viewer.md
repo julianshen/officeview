@@ -116,7 +116,7 @@ Every package is implemented on its own branch, reviewed by at least one agent f
 | S1.3 authoritative formula/cache/error/format value bridge (`values.ts`, `value-policy.ts`) | merged |
 | S5.2 canvas tiles, overlays and OfficeDoc integration (`InteractiveSheetDoc.tsx` lazy chunk, `sheetAssets.ts`) | merged behind the `interactiveSheets` prop (default off; eager +0.21 KB gz); seams closed by S9.2 (grid copy, S9.1 controls) and left for S5.4 (worker-backed paged viewer), S10 (browser smoke, mouse-drag selection) and worker viewport/search commands |
 | S9.2 copy in displayed order and budgeted static print (`copy.ts`, `viewerControlsClient.ts`, clipboard/print policy) | merged (codex implementation; opencode reviews over two rounds); copy works on resident sheets — paged sheets wait for S5.4 |
-| S5.4, S8.4, S10 (physical-device receipts skipped for now by user decision), S11/S12 status, S13 | not started |
+| S5.4, S8.4, S8.6 (sort performance), S10 (physical-device receipts skipped for now by user decision), S11/S12 status, S13 | not started |
 
 ## S0 — Freeze contracts, counterexamples and fixture/harness infrastructure
 
@@ -568,6 +568,20 @@ expect(wide.contains({ row: 2, col: 0 })).toBe(false)
 - [ ] Open a reviewed PR that freezes each threshold in `performance-profile.json` as either the spec §12.2 value or a measured, justified replacement. Loosening any value more than 2× needs a specification amendment citing the browser measurements. Record the F4 headroom explicitly (spec estimates about 3.1 s against the 4 s ceiling).
 - [ ] If a threshold is unmet, apply only the spec-permitted levers (ASCII/Latin-1 fast path proven identical to the host collator, run-merge sort, worker-parallel runs); never relax collation or semantics. Do not start S11/S12 as a substitute.
 - [ ] From this point S10.2 enforces the frozen values; before it, a miss is a recorded finding, not a failure.
+
+### S8.6 Sort performance to the frozen thresholds
+
+> Added 2026-10-12. S8.4's Chrome baseline (D profile, M4 Pro, headless, n=30) misses every sort threshold by more than 2×: 100k 8-key 759 ms vs 100 ms; 1M 2-key prepared 4,375 ms vs 1,000 ms; 1M natural text refused by the 512 MiB worker budget once resident input is charged (unadmitted diagnostic 9,159 ms vs 4,000 ms). Thresholds stay frozen; this package must meet them, or come back with measured evidence for a user-approved spec amendment. Phase timings put the row merge at about 2.5 s of 3.4 s for 1M one-key, and dictionary collation at about 4.8 s for F4. Depends on the S8.4 harness scenarios.
+
+**Files:** `src/xlsx/view/scheduler.ts`, `src/xlsx/view/sort.ts` (and new helpers beside it), worker kernel/session wiring for parallel runs, prepared-column storage; tests `tests/xlsx-viewer-sort*.test.ts`, extend `tests/xlsx-viewer-kernel-scenarios.test.ts`; update `docs/validation/interactive-viewer-performance.md` and `-results.json`.
+
+- [ ] Parity harness first: a differential test that runs the current kernel and every optimized path over a seeded fuzz corpus (numbers, dates, booleans, errors, blanks, mixed and multilingual text, duplicates, every key direction, 1–8 keys) and asserts byte-identical permutations, stable ties by source row ID, and identical error/blank placement. Each step below must keep it green.
+- [ ] Cooperative-check amortization (spec §12.1 clarification): batch the clock sample and cancellation/staleness check. Tests prove a check at least every 256 work units and at every pause, the §10.2 yield bound, and no change in output.
+- [ ] Merge phase: replace the per-comparison merge with a typed-array key/index representation; use run-merge (spec lever) to exploit presorted runs. Profile again before and after.
+- [ ] Text sort: ASCII/Latin-1 fast path proven identical to the host collator (spec lever) via exhaustive single-code-unit and pairwise checks plus the fuzz corpus; anything outside the proven set uses the existing path. Reduce the F4 dictionary/collation peak so the 1M text sort is admitted within the D budget with resident input charged.
+- [ ] Worker-parallel runs (spec lever) only if the single-worker path still misses: bounded parallelism within the §12.4 aggregate memory budget, deterministic merge, cancellation fan-out.
+- [ ] Prepared-column budget: make 1M × 8 keys fit by compacting prepared storage (for example per-column ranks or packed numeric lanes instead of tagged values). If it still cannot fit in 64 MiB, bring measurements and a proposed §12.4 amendment to the user; do not change budgets unilaterally.
+- [ ] Re-measure all S8.4 scenarios in Chrome with the same method and sample counts. Update the results JSON and the performance doc with before/after tables, and keep every threshold at its frozen value. Misses that remain are recorded findings for S10.2, with the evidence needed for any amendment.
 
 ## S9 — Controls, copy/print policy and mobile interactions
 
