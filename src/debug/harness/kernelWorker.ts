@@ -17,7 +17,8 @@ self.onmessage = async (event: MessageEvent<KernelRequest>) => {
       case 'setup': {
         if (runner) throw new Error('scenario already set up; one scenario per worker')
         if (!isScenarioId(request.scenario)) throw new Error(`unknown scenario ${request.scenario}`)
-        runner = createScenarioRunner(request.scenario, request.rows ?? undefined)
+        if (request.profile !== 'D' && request.profile !== 'M') throw new Error(`unknown profile ${String(request.profile)}`)
+        runner = createScenarioRunner(request.scenario, request.rows ?? undefined, request.profile)
         const prep = await runner.prepare()
         post({ type: 'ready', id: request.id, info: runner.info, prep })
         break

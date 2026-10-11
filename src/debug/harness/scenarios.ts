@@ -10,6 +10,7 @@ export type ScenarioId =
   | 'sort-100k-1key'
   | 'sort-100k-8key'
   | 'sort-1m-1key'
+  | 'sort-1m-2key'
   | 'sort-1m-8key'
   | 'filter-1m-numeric'
   | 'text-sort-1m-natural'
@@ -45,9 +46,13 @@ export const SCENARIOS: Readonly<Record<ScenarioId, ScenarioDef>> = Object.freez
     id: 'sort-1m-1key', kind: 'sort', fixture: 'F2', rows: F2_FULL_ROWS, threshold: 'numeric-sort-1m',
     description: 'F2 1,048,574 body rows, one numeric key (date)',
   },
+  'sort-1m-2key': {
+    id: 'sort-1m-2key', kind: 'sort', fixture: 'F2', rows: F2_FULL_ROWS, threshold: 'numeric-sort-1m',
+    description: 'F2 1,048,574 body rows, two numeric keys (date, amount): the most 1M-row key columns the D prepared budget admits',
+  },
   'sort-1m-8key': {
     id: 'sort-1m-8key', kind: 'sort', fixture: 'F2', rows: F2_FULL_ROWS, threshold: 'numeric-sort-1m',
-    description: 'F2 1,048,574 body rows, eight keys over all F2 fields, lowest cardinality first',
+    description: 'F2 1,048,574 body rows, eight keys over all F2 fields, lowest cardinality first; FALLBACK diagnostic: the D prepared budget refuses 8 x 1M columns, so the sort reads the source',
   },
   'filter-1m-numeric': {
     id: 'filter-1m-numeric', kind: 'filter', fixture: 'F2', rows: F2_FULL_ROWS, threshold: 'numeric-filter-1m',

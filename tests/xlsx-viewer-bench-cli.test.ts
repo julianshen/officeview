@@ -215,9 +215,9 @@ describe('baseline handling', () => {
 
   it('flags profile, browser, fixture and mode mismatches before launching', async () => {
     const result = await buildResult()
-    const expected = { browserLabel: 'chromium', profile: 'desktop', requestedFixtureId: 'F1', mode: 'smoke' }
+    const expected = { browserLabel: 'chromium', profile: 'desktop', requestedFixtureId: 'F1', mode: 'smoke', scenario: null }
     expect(checkBaselineComparable(result, expected)).toEqual([])
-    const reasons = checkBaselineComparable(result, { browserLabel: 'webkit-playwright', profile: 'mobile', requestedFixtureId: 'F2', mode: 'release' })
+    const reasons = checkBaselineComparable(result, { browserLabel: 'webkit-playwright', profile: 'mobile', requestedFixtureId: 'F2', mode: 'release', scenario: null })
     expect(reasons).toHaveLength(4)
     expect(reasons.join('\n')).toMatch(/browser.*profile.*|profile/s)
   })
@@ -229,6 +229,21 @@ describe('baseline handling', () => {
     expect(comparison.rows.find((row) => row.metric === 'op')).toEqual({ metric: 'op', baselineP50: 20, p50: 30, delta: 10 })
     expect(comparison.warnings.join('\n')).toMatch(/dpr/i)
     expect(comparison.warnings.join('\n')).toMatch(/commit/i)
+  })
+
+  it('refuses cross-scenario baselines before launching and at comparison time', async () => {
+    const oneKey = { id: 'sort-100k-1key', kind: 'sort' as const, keys: [1], rows: 100_002 }
+    const eightKey = { id: 'sort-100k-8key', kind: 'sort' as const, keys: [2, 3, 7, 1, 5, 4, 6, 0], rows: 100_002 }
+    const baseline = await buildResult([makeSample([10, 20, 30])], { scenario: oneKey })
+    expect(validateHarnessResult(baseline).ok).toBe(true)
+    const expected = { browserLabel: 'chromium', profile: 'desktop', requestedFixtureId: 'F1', mode: 'smoke' }
+    expect(checkBaselineComparable(baseline, { ...expected, scenario: { id: 'sort-100k-1key', rows: 100_002 } })).toEqual([])
+    expect(checkBaselineComparable(baseline, { ...expected, scenario: { id: 'sort-100k-8key', rows: 100_002 } }).join()).toMatch(/scenario sort-100k-1key differs/)
+    expect(checkBaselineComparable(baseline, { ...expected, scenario: { id: 'sort-100k-1key', rows: 2002 } }).join()).toMatch(/rows 100002 differ/)
+    expect(checkBaselineComparable(baseline, { ...expected, scenario: null }).join()).toMatch(/kernel scenario/)
+    const current = await buildResult([makeSample([110, 120, 130])], { scenario: eightKey })
+    expect(() => compareResults(baseline, current)).toThrow(/not comparable/)
+    expect(compareResults(baseline, await buildResult([makeSample([20])], { scenario: oneKey })).rows[0].delta).toBe(0)
   })
 
   it('marks metrics without a numeric p50 on either side as not comparable', async () => {

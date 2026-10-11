@@ -27,6 +27,7 @@ import { mkdirSync, readFileSync } from 'node:fs'
 import { dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { verifyHarnessResult, validateHarnessResult } from '../src/debug/harness/result'
+import { SCENARIOS } from '../src/debug/harness/scenarios'
 import type { HarnessResult } from '../src/debug/harness/types'
 import { HELP_TEXT, parseArgs, type BenchArgs } from './harness/args'
 import { writeArtifacts, type CollectedRun } from './harness/artifacts'
@@ -234,6 +235,7 @@ async function main(): Promise<void> {
       profile: args.profile,
       requestedFixtureId: args.fixture,
       mode: args.mode,
+      scenario: args.scenario ? { id: args.scenario, rows: args.rows ?? SCENARIOS[args.scenario].rows } : null,
     })
     if (reasons.length > 0) throw new Error(`baseline ${args.baseline} is not comparable:\n  ${reasons.join('\n  ')}`)
   }

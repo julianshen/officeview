@@ -301,10 +301,21 @@ function validateEnvironment(env: unknown, errors: string[]): void {
   }
   exactKeys(
     env,
-    ['buildCommit', 'hardware', 'os', 'browser', 'dpr', 'viewport', 'profileConformance', 'fonts', 'cache', 'source', 'backend', 'requestedFixtureId', 'fixtureId', 'evidence', 'operator', 'profile', 'mode', 'note'],
+    ['buildCommit', 'hardware', 'os', 'browser', 'dpr', 'viewport', 'profileConformance', 'fonts', 'cache', 'source', 'backend', 'requestedFixtureId', 'fixtureId', 'evidence', 'operator', 'profile', 'mode', 'note', 'scenario'],
     'environment',
     errors,
   )
+  if (env.scenario !== undefined) {
+    const scenario = env.scenario
+    if (!isPlainObject(scenario)) errors.push('environment.scenario: must be an object when present')
+    else {
+      exactKeys(scenario, ['id', 'kind', 'keys', 'rows'], 'environment.scenario', errors)
+      if (!boundedString(scenario.id, 64, 1)) errors.push('environment.scenario.id: must be a non-empty string')
+      if (scenario.kind !== 'sort' && scenario.kind !== 'filter' && scenario.kind !== 'value-index') errors.push('environment.scenario.kind: must be sort|filter|value-index')
+      if (!Array.isArray(scenario.keys) || scenario.keys.length > 8 || !scenario.keys.every(isCount)) errors.push('environment.scenario.keys: must be at most 8 column indexes')
+      if (!isCount(scenario.rows) || scenario.rows === 0) errors.push('environment.scenario.rows: must be a positive integer')
+    }
+  }
   if (typeof env.buildCommit !== 'string' || !COMMIT.test(env.buildCommit)) errors.push('environment.buildCommit: must be "unknown" or a hex commit id, optionally "-dirty"')
 
   const hardware = env.hardware

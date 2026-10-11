@@ -14,6 +14,8 @@ export interface FixtureInfo {
   rows: number | null
   cols: number | null
   note?: string
+  /** Kernel scenario identity, carried into the result environment. */
+  scenario?: import('./types').ScenarioIdentity
 }
 
 export interface LoadedFixture {
