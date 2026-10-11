@@ -256,6 +256,8 @@ function LegacyOfficeDoc({
   const owner = useMemo(() => ({ document, markKey, fontKey }), [document, markKey, fontKey])
   const ownerRef = useRef<typeof owner | null>(owner)
   ownerRef.current = owner
+  const copyAllowed = useRef(allowCopy)
+  copyAllowed.current = allowCopy
   useEffect(() => {
     let cancelled = false
     let lease: PaintableArray | undefined
@@ -695,7 +697,8 @@ function LegacyOfficeDoc({
     if (!index || !selection) return
     const text = textForRange(index, selection)
     if (text.length === 0) return
-    const outcome = await copyText(text)
+    const outcome = await copyText(text, { allowed: () => copyAllowed.current && ownerRef.current === owner })
+    if (!copyAllowed.current || ownerRef.current !== owner) return
     // be honest about failure: the selection stays visible so the reader can
     // still press the platform copy shortcut themselves
     setCopied(outcome === 'failed' ? 'failed' : 'done')

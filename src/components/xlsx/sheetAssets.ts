@@ -246,6 +246,8 @@ export function prepareSheetAssets(doc: XlsxDocument, options: SheetAssetsOption
 }
 
 export interface PrintUnitsOptions extends SheetAssetsOptions {
+  /** Check before acquiring assets, including programmatic callers. */
+  allowed?: () => boolean
   /** Lease factory; the viewer passes its own so print shares its image budget. */
   assetLoader?: typeof prepareSheetAssets
 }
@@ -258,6 +260,9 @@ export interface PrintUnitsOptions extends SheetAssetsOptions {
 /** Print units plus, per unit, the pictures admission refused (shown as notices). */
 export interface PrintUnits extends PaintableArray { refusedImages: number[] }
 export async function preparePrintUnits(doc: XlsxDocument, options: PrintUnitsOptions = {}): Promise<PrintUnits> {
+  const permitted = () => options.allowed?.() ?? true
+  const denied = () => Object.assign(new Error('Printing is not permitted.'), { code: 'permission-denied' })
+  if (!permitted()) throw denied()
   const { assetLoader = prepareSheetAssets, ...lease } = options
   const watermark = normalizeWatermark(options.watermark as WatermarkOptions | undefined)
   const leases: SheetAssetsLease[] = []
@@ -265,8 +270,10 @@ export async function preparePrintUnits(doc: XlsxDocument, options: PrintUnitsOp
   try {
     const units: Paintable[] = []
     for (let sheetIndex = 0; sheetIndex < doc.sheets.length; sheetIndex++) {
+      if (!permitted()) throw denied()
       const held = await assetLoader(doc, { ...lease, sheetIndex })
       leases.push(held)
+      if (!permitted()) throw denied()
       units.push(sheetPaintable(doc.sheets[sheetIndex], held.assets, watermark))
     }
     let released = false

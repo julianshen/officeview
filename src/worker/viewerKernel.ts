@@ -169,7 +169,14 @@ export class ViewerKernel {
       await this.env.afterDispatch?.(command)
       const final = this.finalCheck(command, out, entry)
       report.close()
-      emit(this.withReason(final, entry))
+      const source = docId ? this.sessions.get(docId)?.source : undefined
+      const status = source?.valueStatus?.()
+      const diagnosed = final.kind === 'complete' && status?.policy === 'cached' ? { ...final, diagnostics: [
+        ...final.diagnostics.filter(d => d.code !== 'cached-value-policy'),
+        ...(source?.openDiagnostics ?? []).filter(d => d.code !== 'cached-value-policy' && !final.diagnostics.some(existing => existing.code === d.code && existing.message === d.message)),
+        { code: 'cached-value-policy', message: status.message! },
+      ] } : final
+      emit(this.withReason(diagnosed, entry))
     } catch (cause) {
       emit(errorReply(command, capturedOwner(command) as never, 'page-error', false, [{
         code: 'worker-exception', message: cause instanceof Error ? cause.message : String(cause),

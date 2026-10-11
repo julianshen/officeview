@@ -63,6 +63,7 @@ export function sheetPaintable(sheet: XlsxSheet, assets: RenderSheetAssets, wate
 }
 
 const REFUSAL_SPEC: PageSpec = { widthPx: 480, heightPx: 96 }
+export const LARGE_EXPORT_MESSAGE = 'This sheet is too large to export as one image. Choose a range or print selected pages.'
 /** A static unit that explains the refusal instead of painting a truncated grid. */
 function refusalPaintable(sheet: XlsxSheet, limits: readonly StaticExportLimit[], watermark?: ResolvedWatermark): Paintable {
   // Same deduped diagnostics channel the renderer uses for unsupported formats.
@@ -86,7 +87,8 @@ function refusalPaintable(sheet: XlsxSheet, limits: readonly StaticExportLimit[]
         ctx.font = 'bold 13px sans-serif'
         ctx.fillText(`Sheet "${sheet.name}" is too large for a static image.`, 12, 28)
         ctx.font = '12px sans-serif'
-        limits.slice(0, 2).forEach((limit, index) => ctx.fillText(limit.message, 12, 52 + index * 20))
+        ctx.fillText('This sheet is too large to export as one image.', 12, 52)
+        ctx.fillText('Choose a range or print selected pages.', 12, 72)
       } finally { ctx.restore() }
     },
   }
