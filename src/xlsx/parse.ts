@@ -11,7 +11,7 @@ import type {
 } from './formula/types'
 import { parseDefinedNames } from './formula/names'
 import { parseTableMetadata, isTablePartSource } from './formula/tables'
-import { hasDeclaredFiltering, parseDeclaredAutoFilter, parseDeclaredSortState, parseDeclaredTable, type DeclaredSheetFilters, type DeclaredTableFilters } from './view/declaredFilters'
+import { hasDeclaredFiltering, parseDeclaredAutoFilter, parseDeclaredSortState, parseDeclaredTable, pickDeclaredSortState, type DeclaredSheetFilters, type DeclaredTableFilters } from './view/declaredFilters'
 import { parseWorksheetDrawings, collectXlsxImages } from './drawing'
 import { computeMetrics } from './render'
 import { resolvePartTarget } from '../drawing/parts'
@@ -248,10 +248,15 @@ export async function parseXlsx(pkg: OfficePackage): Promise<XlsxDocument> {
       const wsData = getChildren(wsRoot, 'worksheet')[0] ?? wsRoot
       // S8.3: declared worksheet filter/sort state is diagnostics only. The
       // worksheet XML is already in hand; stored order and hidden rows below
-      // are never touched by this.
-      const worksheetAutoFilter = parseDeclaredAutoFilter(getChildren(wsData, 'autoFilter')[0])
+      // are never touched by this. sortState is valid both as a direct child
+      // and nested inside <autoFilter>; direct wins with a duplicate flag.
+      const autoNode = getChildren(wsData, 'autoFilter')[0]
+      const worksheetAutoFilter = parseDeclaredAutoFilter(autoNode)
       if (worksheetAutoFilter) sheetEntry.worksheetAutoFilter = worksheetAutoFilter
-      const worksheetSortState = parseDeclaredSortState(getChildren(wsData, 'sortState')[0])
+      const worksheetSortState = pickDeclaredSortState(
+        parseDeclaredSortState(getChildren(wsData, 'sortState')[0], 'direct'),
+        parseDeclaredSortState(autoNode ? getChildren(autoNode, 'sortState')[0] : undefined, 'nested'),
+      )
       if (worksheetSortState) sheetEntry.worksheetSortState = worksheetSortState
       // Every tablePart element is a declaration (CT_TablePart requires
       // r:id): one without a resolvable id is unavailable inventory, never
@@ -324,8 +329,10 @@ export async function parseXlsx(pkg: OfficePackage): Promise<XlsxDocument> {
       if (hasDeclaredFiltering(sheetEntry)) declaredFilters.push(sheetEntry)
     } catch {
       // Worksheet-level discovery failure with declared parts is unavailable,
-      // never a false complete registry.
+      // never a false complete registry. Worksheet declarations already read
+      // survive independently of the table failure.
       tableInventoryComplete = false
+      if (hasDeclaredFiltering(sheetEntry)) declaredFilters.push(sheetEntry)
     }
   }
   // Completeness first: any failed discovery keeps the inventory
