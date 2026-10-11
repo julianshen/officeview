@@ -456,13 +456,19 @@ async function finishRect(
   }
 }
 /** A single contiguous multi-cell selection containing the active cell. Full
- * rows/columns keep region detection from the active cell (spec §6.1). */
-function explicitRect(selection: GridSelection, active: SourceCell): SourceRect | null {
+ * rows/columns keep region detection from the active cell (spec §6.1). A
+ * single interval part that is malformed (empty, reversed, fractional or out of
+ * domain) is refused rather than silently replaced by region detection;
+ * multi-part or multi-interval selections are disjoint and seed from the
+ * active cell instead. */
+function explicitRect(selection: GridSelection, active: SourceCell): SourceRect | null | 'invalid' {
   if (selection.ranges.length !== 1) return null
   const part = selection.ranges[0]
-  if (part.rows.kind !== 'intervals' || part.rows.intervals.length !== 1 || part.cols.length !== 1) return null
+  if (part.rows.kind !== 'intervals') return null
+  if (part.rows.intervals.length === 0 || part.cols.length === 0) return 'invalid'
+  if (part.rows.intervals.length !== 1 || part.cols.length !== 1) return null
   const rect = { r0: part.rows.intervals[0].r0, r1: part.rows.intervals[0].r1, c0: part.cols[0].c0, c1: part.cols[0].c1 }
-  if (!isValidSourceRectInput(rect)) return null
+  if (!isValidSourceRectInput(rect)) return 'invalid'
   if (rect.r0 === rect.r1 && rect.c0 === rect.c1) return null
   if ((rect.r0 === 0 && rect.r1 === MAX_ROWS - 1) || (rect.c0 === 0 && rect.c1 === MAX_COLS - 1)) return null
   if (active.row < rect.r0 || active.row > rect.r1 || active.col < rect.c0 || active.col > rect.c1) return null
@@ -523,6 +529,7 @@ async function detectRange(request: RangeDetectionRequest, pacer: Pacer): Promis
     return finishRect(context, table.range, { kind: 'table', id: table.id }, table)
   }
   const explicit = explicitRect(selection, active)
+  if (explicit === 'invalid') return refused({ reason: 'invalid-range', message: 'Malformed explicit selection range' })
   if (explicit !== null) return finishRect(context, explicit, { kind: 'explicit' })
   const region = await probeCurrentRegion(active, scanner, pageLimit)
   if (region.kind === 'incomplete') return { kind: 'incomplete', missing: region.missing }
