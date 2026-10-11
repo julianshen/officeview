@@ -9,7 +9,7 @@ import { collectDocImages, createMeasurer, layoutDocx, renderPages } from '../do
 import { fontFamilyCss as fontFamilyCssDocx } from '../docx/styles'
 import { decodeImageAsset, releaseDecodedImage, type ImageCandidates, type ImageDecodeFn } from '../core/images'
 import { normalizeWatermark, paintWatermark, type ResolvedWatermark, type WatermarkOptions } from '../core/watermark'
-import { computeMetrics, renderSheet, type RenderSheetAssets, type StaticExportLimit } from '../xlsx/render'
+import { computeMetrics, renderSheet, type StaticExportLimit } from '../xlsx/render'
 import { renderSlide, slideMetrics } from '../pptx/render'
 import type { DocxDocument } from '../docx/types'
 import type { ContentImageAsset, DrawingContent, DrawingContentShape } from '../drawing/content'
@@ -36,7 +36,8 @@ function withLease(pages: Paintable[], dispose: () => void = () => {}, fontDiagn
   } })
 }
 /** Each decoded bitmap is closed once, even when shared by several assets. */
-function releaseDecoded(decoded: Array<CanvasImageSource | undefined>): void {
+/** @internal */
+export function releaseDecoded(decoded: Array<CanvasImageSource | undefined>): void {
   for (const image of new Set(decoded)) releaseDecodedImage(image)
 }
 export interface Paintable {
@@ -134,7 +135,8 @@ function bytesEqual(a: Uint8Array | undefined, b: Uint8Array | undefined): boole
  * once. The selected representation/reason is propagated to every alias's
  * selection record so coverage stays consistent.
  */
-async function decodeImageAssets(assets: Array<ImageCandidates & { drawing?: unknown }>, decode?: ImageDecodeFn): Promise<Array<CanvasImageSource | undefined>> {
+/** @internal Shared with the interactive sheet asset lease (components/xlsx/sheetAssets). */
+export async function decodeImageAssets(assets: Array<ImageCandidates & { drawing?: unknown }>, decode?: ImageDecodeFn): Promise<Array<CanvasImageSource | undefined>> {
   // Complete-pair identity: raster bytes + SVG bytes + SVG verdict state +
   // primary-SVG verdict state + fallback availability. Missing/external
   // candidates (byte-less) and ordinary rasters therefore never collapse.
@@ -175,7 +177,8 @@ async function decodeImageAssets(assets: Array<ImageCandidates & { drawing?: unk
 interface ContentCarrier { content?: DrawingContent<unknown, unknown>; children?: ContentCarrier[] }
 /** Append cached pictures after indexed assets so ordinary scene image indices
  * stay stable. Identity deduplication also bounds handwritten cyclic models. */
-function collectCachedPictures(nodes: ContentCarrier[]): ContentImageAsset[] {
+/** @internal */
+export function collectCachedPictures(nodes: ContentCarrier[]): ContentImageAsset[] {
   const images: ContentImageAsset[] = [], seenImages = new Set<ContentImageAsset>()
   const seenNodes = new Set<ContentCarrier>(), seenShapes = new Set<DrawingContentShape<unknown>>()
   const shapes = (items: DrawingContentShape<unknown>[]) => {
@@ -270,42 +273,6 @@ export function getPaintables(
         spec: { widthPx: sm.widthPx, heightPx: sm.heightPx },
         paint: ctx => renderSlide(slide, ctx, sm, decoded, watermark, withFallbackFonts(lease.resolve, options?.fallbackFonts), { imageFor: image => decodedByObject.get(image) }),
       })), lease.dispose, lease.diagnostics, decoded)
-    } catch (error) { releaseDecoded(decoded); lease.dispose(); throw error }
-  })
-}
-
-/** Font/image lease for the interactive sheet viewport (plan S5.2). */
-export interface SheetAssetsLease {
-  /** Shared by every sheet of the workbook (images are indexed workbook-wide). */
-  assets: RenderSheetAssets
-  fontDiagnostics: FontDiagnostic[]
-  dispose: () => void
-}
-/**
- * The same font registration and image decode the static sheet paintables use,
- * without building any sheet raster: the interactive path paints bounded tiles
- * through renderSheetViewport instead (spec §11.5 keeps getPaintables as the
- * static/export path). Release with dispose() when the viewer unmounts.
- */
-export function prepareSheetAssets(doc: XlsxDocument, options?: PaintOptions): Promise<SheetAssetsLease> {
-  return acquireFonts(doc, options?.registerFont).then(async lease => {
-    let decoded: Array<CanvasImageSource | undefined> = []
-    try {
-      const cached = collectCachedPictures(doc.sheets.flatMap(sheet => sheet.drawings ?? []))
-      const indexed = doc.images ?? []
-      decoded = await decodeImageAssets([...indexed, ...cached], options?.decodeImage)
-      const decodedByObject = new Map(cached.map((image, index) => [image, decoded[indexed.length + index]]))
-      let released = false
-      return {
-        assets: { images: decoded, imageFor: image => decodedByObject.get(image), resolveFont: withFallbackFonts(lease.resolve, options?.fallbackFonts) },
-        fontDiagnostics: lease.diagnostics,
-        dispose: () => {
-          if (released) return
-          released = true
-          lease.dispose()
-          releaseDecoded(decoded)
-        },
-      }
     } catch (error) { releaseDecoded(decoded); lease.dispose(); throw error }
   })
 }

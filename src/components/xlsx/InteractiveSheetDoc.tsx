@@ -44,7 +44,7 @@ import type { TileCacheStats } from '../../xlsx/view/tileCache'
 import { gridGeometryToViewport, gridSelectionOverlay, paintGridSelectionOverlay, paintSearchOverlay, type HighlightRect } from '../../core/overlay'
 import { normalizeWatermark, type WatermarkOptions } from '../../core/watermark'
 import type { FallbackFontsOptions } from '../../core/fonts/fallback'
-import { prepareSheetAssets, type SheetAssetsLease } from '../../render/paint'
+import { prepareSheetAssets, type SheetAssetsLease } from './sheetAssets'
 import { GridSemantics, type GridTransition } from './GridSemantics'
 import { GRID_HEADER_SIZE } from './GridHeaders'
 import { coarseSelectionRecords, overlayRecords, selectionContains } from './selectionOverlay'
@@ -102,6 +102,8 @@ export interface InteractiveSheetDocProps {
   onFrame?: (stats: SheetFrameStats) => void
   /** @internal Resource profile (desktop D / mobile M); default D. */
   profile?: ProfileId
+  /** @internal Asset lease factory (tests inject delayed leases). */
+  assetLoader?: typeof prepareSheetAssets
 }
 
 // Document identity alone owns zoom reset (§10.1): a stable id per document object.
@@ -145,20 +147,33 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
   const source = useMemo(() => createObjectWorkbookSource(doc, docId), [doc, docId])
   useEffect(() => () => { void source.release() }, [source])
 
-  // ---- fonts/images: a font publication bumps fontGen (re-keys tiles, keeps zoom) ----
+  // ---- fonts/images: one lease per (fallback fonts, active sheet) ----
+  // A font publication bumps fontGen (re-keys tiles, keeps zoom). Leases swap
+  // atomically: the current one stays alive, and keeps painting, until its
+  // admitted replacement has committed; only then is it disposed (§10.1).
   const fontKey = fallbackFonts ? JSON.stringify(fallbackFonts) : ''
-  const [assets, setAssets] = useState<{ lease: SheetAssetsLease; fontGen: number } | null>(null)
-  const fontGenRef = useRef(0)
+  const [assets, setAssets] = useState<{ lease: SheetAssetsLease; fontGen: number; fontKey: string; sheetId: string } | null>(null)
+  const fontGenRef = useRef<{ key: string; gen: number }>({ key: fontKey, gen: 0 })
+  const loadAssets = props.assetLoader ?? prepareSheetAssets
   useEffect(() => {
-    let cancelled = false, lease: SheetAssetsLease | undefined
-    void prepareSheetAssets(doc, fontKey ? { fallbackFonts } : {}).then(next => {
+    if (!activeSheetId) return
+    let cancelled = false
+    const sheetIndex = sheetIds.indexOf(activeSheetId)
+    void loadAssets(doc, { ...(fontKey ? { fallbackFonts } : {}), sheetIndex, profile }).then(next => {
       if (cancelled) { next.dispose(); return }
-      lease = next
-      setAssets({ lease: next, fontGen: ++fontGenRef.current })
+      if (fontGenRef.current.key !== fontKey || fontGenRef.current.gen === 0) fontGenRef.current = { key: fontKey, gen: fontGenRef.current.gen + 1 }
+      setAssets({ lease: next, fontGen: fontGenRef.current.gen, fontKey, sheetId: activeSheetId })
     })
-    return () => { cancelled = true; lease?.dispose() }
+    return () => { cancelled = true }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [doc, fontKey])
+  }, [doc, fontKey, activeSheetId, profile])
+  const committedLease = useRef<SheetAssetsLease | null>(null)
+  useEffect(() => {
+    const previous = committedLease.current
+    committedLease.current = assets?.lease ?? null
+    if (previous && previous !== committedLease.current) previous.dispose()
+  }, [assets])
+  useEffect(() => () => { committedLease.current?.dispose(); committedLease.current = null }, [])
   const fontGen = assets?.fontGen ?? 0
 
   // ---- per-sheet committed views and geometry (one geometry per viewGen) ----
@@ -291,7 +306,8 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
   // Base layer: keyed by owner/position/zoom/DPR/pane only; overlay changes never re-run it.
   useLayoutEffect(() => {
     const canvas = baseRef.current, frame = frameOf()
-    if (!canvas || !frame || !assets || admittedDpr === null) return
+    // Paint only with the active sheet's own lease; until it commits the last frame stays.
+    if (!canvas || !frame || !assets || assets.sheetId !== activeSheetId || admittedDpr === null) return
     // The pool (and its admission) exists before the pane surface is sized.
     const renderer = rendererFor()
     if (canvas.width !== device.width) canvas.width = device.width
