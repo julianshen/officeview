@@ -193,7 +193,8 @@ export class WorkbookFind {
   private readonly needle: string
   private readonly pageSize: number
   private readonly scanLimit: number
-  private readonly sheets: readonly FindSheetInput[]
+  /** Requested, supplied sheets in owner (workbook) order; set by validate(). */
+  private sheets: readonly FindSheetInput[] = []
   private readonly slice: FindSlice
   private ready: FindHit[] = []
   private held: FindHit[] = []
@@ -215,8 +216,6 @@ export class WorkbookFind {
     this.scanLimit = options.scanLimit ?? FIND_SCAN_LIMIT
     if (!Number.isSafeInteger(this.pageSize) || this.pageSize <= 0) throw new RangeError('Invalid find page size')
     if (!Number.isSafeInteger(this.scanLimit) || this.scanLimit <= 0) throw new RangeError('Invalid find scan limit')
-    const wanted = query.sheetIds ? new Set(query.sheetIds) : undefined
-    this.sheets = input.sheets.filter(sheet => !wanted || wanted.has(sheet.sheetId))
     this.slice = new FindSlice(options, () => this.guard())
   }
 
@@ -241,6 +240,22 @@ export class WorkbookFind {
       }
       ids.add(sheet.sheetId)
     }
+    // The domain is every requested sheet of the owner, in workbook order. A
+    // requested sheet the caller did not supply is explicitly incomplete, so a
+    // partial input can never pass for (or be cached as) the whole workbook.
+    const vector = owner.sheetVector.map(entry => entry.sheetId)
+    for (const id of this.query.sheetIds ?? []) {
+      if (!vector.includes(id)) throw new FindError('stale', `Sheet ${id} is not part of the captured workbook owner`)
+    }
+    const wanted = this.query.sheetIds ? new Set(this.query.sheetIds) : undefined
+    const sheets: FindSheetInput[] = []
+    for (const id of vector) {
+      if (wanted && !wanted.has(id)) continue
+      const sheet = this.input.sheets.find(item => item.sheetId === id)
+      if (sheet) sheets.push(sheet)
+      else this.fail({ sheetId: id, code: 'incomplete', retryable: true, message: `Sheet ${id} was not supplied to find` })
+    }
+    this.sheets = sheets
   }
 
   async nextPage(): Promise<FindPage> {

@@ -221,3 +221,40 @@ describe('navigation to a match', () => {
     expect(nav.windows.get('B').zoom).toBe(2)
   })
 })
+
+describe('review: sheet coverage of the aggregate owner (codex 6)', () => {
+  it('a requested sheet missing from the input is explicitly incomplete, never a final total', async () => {
+    const { input } = findInputOf(twoSheets())
+    const onlyA = { ...input, sheets: [input.sheets[0]] }
+    const page = await new WorkbookFind(onlyA, ci('hit')).nextPage()
+    expect(where(page.hits).map(([sheet]) => sheet)).toEqual(['A', 'A', 'A', 'A'])
+    expect(page.complete).toBe(true)
+    expect(page.totalKnown).toBeUndefined()
+    expect(page.incomplete).toEqual(['B'])
+    expect(page.failures).toMatchObject([{ sheetId: 'B', code: 'incomplete' }])
+    // Not requested, not missing: a sheet-restricted query over A alone is final.
+    expect((await new WorkbookFind(onlyA, { ...ci('hit'), sheetIds: ['A'] }).nextPage()).totalKnown).toBe(4)
+  })
+
+  it('scans in owner (workbook) order whatever order the sheets are supplied in', async () => {
+    const { input } = findInputOf(twoSheets())
+    const hits = await drain(new WorkbookFind({ ...input, sheets: [input.sheets[1], input.sheets[0]] }, ci('0 hit')))
+    expect(where(hits)).toEqual([['A', 0, 0], ['B', 0, 0]])
+  })
+
+  it('a requested sheet unknown to the owner rejects as stale', async () => {
+    const { input } = findInputOf(twoSheets())
+    expect((await rejection(new WorkbookFind(input, { ...ci('hit'), sheetIds: ['Z'] }).nextPage())).code).toBe('stale')
+  })
+
+  it('a partial-coverage result is never cached for the full workbook request', async () => {
+    const d = twoSheets()
+    const { input } = findInputOf(d)
+    const controller = new FindController({ currentOwner: () => input.owner })
+    await controller.run({ ...input, sheets: [input.sheets[0]] }, ci('hit'))
+    const full = await controller.run(findInputOf(d).input, ci('hit'))
+    expect(controller.stats.cacheHits).toBe(0)
+    expect(full!.hits.map(hit => hit.sheetId)).toContain('B')
+    expect(full!.totalKnown).toBe(8)
+  })
+})
