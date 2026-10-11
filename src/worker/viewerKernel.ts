@@ -12,6 +12,12 @@
  * on the same column; close cancels everything of its document. Cancelled
  * replies name their reason in a diagnostic.
  *
+ * TODO(S4.2-deferred): the spec §10.2 initial query timeout (120 s in
+ * deterministic harnesses and the interactive long-operation policy, then abort
+ * with an explicit incomplete/cancelled outcome) is not implemented; requests
+ * run until they finish, are cancelled or superseded, or their document closes.
+ * TODO(S5): viewport/search reply `unsupported` until S5 (see dispatch).
+ *
  * No worker globals: worker-entry.ts is a thin adapter, and tests drive the
  * kernel in-process (directly, or through connectInProcess, which reproduces
  * structured-clone/transfer semantics including buffer detachment).
@@ -279,7 +285,9 @@ export class ViewerKernel {
       }
       case 'viewport':
       case 'search':
-        // Owned by S5 (canonical viewport records and global find).
+        // TODO(S5): canonical viewport records (S5.1/S5.2) and global find (S5.3);
+        // the §10.2 scheduler priority for current viewport/active-cell work over
+        // background queries lands with them.
         return errorReply(command, command.owner as never, 'unsupported', false, [{ code: `${command.kind}-not-implemented`, message: `${command.kind} is delivered by S5` }])
       default: {
         // Unknown kinds (malformed or newer clients) get a typed error, never undefined.
