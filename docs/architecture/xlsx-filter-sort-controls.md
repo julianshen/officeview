@@ -21,8 +21,11 @@ Select All updates the entire matching subset, preserving other choices;
 canonical-empty searches take whole-domain Select All semantics, including
 blanks. Individual patches use captured ordinals/raw semantic keys, never labels.
 Blanks are separate; error-looking strings and error values have distinct names.
-Unresolved membership is indeterminate/disabled. Apply is disabled until the
-universe/count/search result are complete. Explicit value inspection is bounded
+Unresolved membership is indeterminate/disabled. Values Apply is disabled until
+the universe/count/search result are complete. Custom predicates depend on a
+resolved source range and validated classification/condition; they do not depend
+on completing the distinct-values universe. The guarded apply transaction still
+requires complete authoritative source and structural coverage. Explicit value inspection is bounded
 to 64 KiB and returns the raw type-tagged value; an oversize value is refused,
 not silently truncated.
 
@@ -48,7 +51,11 @@ results and notices cannot replace a newer generation's notice. Successful
 callbacks carry the authoritative snapshot and body counts only after commit.
 The host must publish its owner/view/projection/selection/window coherently.
 The client has no view publication on checkbox, query, condition or sort-level
-edits. Clear and sort shortcuts are separate explicit guarded transactions.
+edits. Clear and sort shortcuts are separate explicit guarded transactions. Inspect is
+disabled during reads, mutations and apply. A pending draft mutation disables
+search, wildcard and searched-Select-All blank inputs; the refresh handler also
+rejects replacement reads until that mutation finishes. Cancellation still aborts
+the draft. Read-only searches can replace earlier read-only searches.
 
 ## Conditions and sort controls
 
@@ -76,18 +83,25 @@ otherwise the supplied current-grid fallback. In an embedded GridPopup the
 S6 parent owns final generation-safe focus return. Search Enter runs search;
 form Enter applies only a valid draft; native button/checkbox actions retain
 native behavior. Controls isolate pointerdown/double-click and non-find keys;
-Ctrl/Cmd+F retains workbook-find propagation (sort modal cancels before it).
-Controls and checkbox labels have 44px hit targets and safe-area padding.
+Ctrl/Cmd+F retains workbook-find propagation (sort modal cancels and restores invoker/grid focus before propagating it).
+Controls and checkbox labels have 44px hit targets and safe-area padding. On
+coarse pointers or viewports at most 640 CSS pixels wide, FilterDropdown is a
+fixed full-width bottom sheet with bounded scrolling and a semantic dialog
+owner. It retains normal focus return and does not trap Tab.
 
 ## Header/status integration and S5 mount
 
 GridHeaders offers distinct letter/select, sort-cycle and funnel buttons, plus
 an optional sort-dialog entry point. Committed sort priority and rule descriptions
-name the controls; tap sends the same information to status. To fit 44px
-controls without resizing authored columns, column tools expand vertically
-below the selected native header control in explicit control mode. GridSemantics
-tracks that control column and forwards the callbacks. Existing plain headers
-and the legacy page path retain their prior behavior.
+name the controls; arrow/funnel aria-pressed and visible glyph/fill reflect the
+committed state, and tap sends the same information to status. Tools remain
+visible in every represented header independent of focus. F2 alone enters native
+control mode; incidental focus returns to the grid and navigation-mode mouse
+presses do not focus header buttons. Gridcells have no tabindex. Desktop tools
+share the projected column width, including narrow/zoomed columns; coarse-pointer controls stack with 44px targets.
+GridSemantics reserves that header chrome above the unchanged body viewport and
+uses its height when converting pointer coordinates to source cells. Dropdown
+sort shortcuts receive appliedSort and retain its case-sensitive setting.
 
 ViewerStatus remains the sole live notice surface. Its optional body count mode
 renders `Visible body N / complete body M` only for complete counts; incomplete
@@ -98,10 +112,17 @@ No alternate toast or innerHTML path was introduced. The host supplies notices
 from OfficeFileState and static export errors rather than reconstructing a
 formula count from partially loaded cells.
 
-Base f6db7e8 has no S5 interactive OfficeDoc sheet path. The mounting seam is
-therefore explicit: the S5/integration owner mounts these controls only in the
+### Explicit deferral to S5.2
+
+The reviewed integration snapshot 24f8631 still has no interactive OfficeDoc
+sheet mount: S5.1 supplies layout/viewport records but OfficeDoc remains on its
+legacy page path. Mounting these controls into that path would present changed
+view state without the corresponding sorted/filtered canvas. Production surface
+activation is therefore deferred to **S5.2**, as allowed by review finding 6.
+The S5.2/integration owner mounts these controls only in the
 XLSX interactive branch, supplies the protected source port/current owner,
-and binds callbacks to GridSemantics plus its one ViewerStatus. FilterDropdown
+and binds callbacks to GridSemantics plus its one ViewerStatus. Pass the applied
+sort snapshot as FilterDropdown.appliedSort. FilterDropdown
 may be the content of a GridPopup with embedded=true; SortDialog may use the
 same ownership container with a modal-labelled parent, or be a separate modal
 with a current-grid focus fallback. Do not nest two dialog roles or two live
@@ -114,4 +135,5 @@ The actual kernel value-draft RPC (open/read/search/prepare/toggle/commit/cancel
 ref leases), null-sort reset and values-rule compilation need that production
 adapter. The reference/in-process test seam is implemented; real worker/S5
 end-to-end activation and desktop/mobile screen-reader receipts are not claimed.
-The browser smoke server could not listen on localhost (EPERM).
+CSS/focus/transaction checks in jsdom are regression evidence, not actual
+browser, touch-device or screen-reader acceptance receipts.
