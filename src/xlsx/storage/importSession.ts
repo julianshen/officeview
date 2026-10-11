@@ -3,9 +3,7 @@
  * by the entry points (design note §4.3-§4.5).
  *
  * S1.1b owns admission (object / paged / refuse) and the typed refusal; the
- * paged importer that commits pages to a PageSink is S1.2's, so a `paged`
- * decision currently surfaces as a typed `unsupported` refusal with reason
- * `paged-not-yet` and never as a blank or truncated document.
+ * paged importer (S1.2) lives in ./pagedImport and commits pages to a SourcePageStore.
  */
 import type { Completeness, ProfileId, SourceFailure, SourceStamp, WorkerDiagnostic } from '../view/contracts'
 import type { PackageErrorCode } from '../../core/package-error'

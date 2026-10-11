@@ -370,17 +370,29 @@ export class ObjectXlsxSheetAdapter implements SourceStore {
 }
 
 function sheetGeometry(sheet: XlsxSheet): SheetGeometry {
+  return buildGeometry([...sheet.rows].sort((a, b) => a.index - b.index), sheet.cols)
+}
+/** Source-space geometry from authored rows (ascending) and column specs; shared by both adapters. */
+export function buildGeometry(
+  rows: Iterable<{ index: number; heightPt?: number; hidden?: boolean }>,
+  specs: readonly { min: number; max: number; widthChars?: number }[],
+  hiddenIntervals: readonly SourceRowInterval[] = [],
+): SheetGeometry {
   const rowOverrides: AxisSizeInterval[] = []
   const hidden: SourceRowInterval[] = []
-  for (const row of [...sheet.rows].sort((a, b) => a.index - b.index)) {
+  for (const row of rows) {
     if (!isValidCoordinate(row.index, 0)) continue
     if (row.heightPt !== undefined && Number.isFinite(row.heightPt) && row.heightPt >= 0) {
       rowOverrides.push({ start: row.index, end: row.index, sizeCss: row.heightPt * 96 / 72 })
     }
-    if (row.hidden) hidden.push({ r0: row.index, r1: row.index })
+    if (row.hidden) {
+      const last = hidden[hidden.length - 1]
+      if (last && last.r1 + 1 === row.index) hidden[hidden.length - 1] = { r0: last.r0, r1: row.index }
+      else if (!last || last.r1 < row.index) hidden.push({ r0: row.index, r1: row.index })
+    }
   }
   const colOverrides: AxisSizeInterval[] = []
-  for (const spec of sheet.cols) {
+  for (const spec of specs) {
     if (spec.widthChars === undefined || !Number.isFinite(spec.widthChars) || spec.widthChars < 0) continue
     const start = Math.max(0, spec.min), end = Math.min(MAX_COLS - 1, spec.max)
     if (Number.isSafeInteger(start) && Number.isSafeInteger(end) && start <= end) {
@@ -398,11 +410,12 @@ function sheetGeometry(sheet: XlsxSheet): SheetGeometry {
     cols: createAxisMetrics({ logicalCount: MAX_COLS, defaultSizeCss: DEFAULT_COL_CSS, overrides: cols }),
     rowOverrides: Object.freeze(rowOverrides),
     colOverrides: Object.freeze(cols),
-    baseHidden: createIntervalSet(hidden),
+    baseHidden: createIntervalSet(hiddenIntervals.length ? hiddenIntervals : hidden),
   })
 }
 /** Wraps an already-parsed workbook by reference (no clone). Sheet ids use the
  * parser's stable workbook identity; documents are separated by docId. */
+export { toPayload, isUnavailable, isPopulated, intersects, parseRange }
 export function createObjectWorkbookSource(doc: XlsxDocument, docId: string, options: ObjectSourceOptions = {}): WorkbookSource {
   const maxCells = options.readRowsMaxCells ?? READ_ROWS_MAX_CELLS
   const policy = options.valuePolicy ?? 'engine'
@@ -443,6 +456,7 @@ export function createObjectWorkbookSource(doc: XlsxDocument, docId: string, opt
       return geometry
     },
     coverageDiagnostics: sheetId => storeFor(sheetId).coverageDiagnostics(),
+    declaredFilters: () => doc.declaredFilters ?? [],
     async release() {
       await Promise.all([...stores.values()].map(store => store.release()))
       stores.clear()

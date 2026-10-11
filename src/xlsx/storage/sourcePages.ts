@@ -31,6 +31,8 @@ export const K_BOOL = 4 // nums 1/0
 export const K_ERROR = 5 // text lane, valueIsError
 export const F_CACHED = 1
 export const F_META = 2
+/** t="e": valueIsError, also when the error cell has no <v> (value null). */
+export const F_ERROR = 4
 
 /** Formula metadata of one record; strings round-trip through JSON (lone surrogates are escaped). */
 export interface FormulaMeta {
@@ -83,12 +85,12 @@ export class PageBuilder {
   get records(): number { return this.rows.length }
   /** Encoded size estimate used for the target page size. */
   get bytes(): number { return this.rows.length * 20 + this.units * 2 + this.meta.size * 64 }
-  add(row: number, col: number, kind: number, styleIndex: number, num: number, text: string, cached: boolean, meta: FormulaMeta | undefined): void {
+  add(row: number, col: number, kind: number, styleIndex: number, num: number, text: string, cached: boolean, meta: FormulaMeta | undefined, error = kind === K_ERROR): void {
     const i = this.rows.length
     this.rows.push(row); this.cols.push(col); this.kinds.push(kind); this.styles.push(styleIndex); this.nums.push(num)
     this.texts.push(text)
     this.units += text.length
-    this.flags.push((cached ? F_CACHED : 0) | (meta ? F_META : 0))
+    this.flags.push((cached ? F_CACHED : 0) | (meta ? F_META : 0) | (error ? F_ERROR : 0))
     if (meta) this.meta.set(i, meta)
   }
   build(): CellPagePayload {

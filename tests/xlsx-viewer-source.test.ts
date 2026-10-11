@@ -138,3 +138,161 @@ describe('object adapter queryOverview (source-space aggregates, §4.1)', () => 
     expect(tooMany.error?.code).toBe('resource-limit')
   })
 })
+
+// ---------------------------------------------------------------------------
+// Small/large adapter parity (spec §4.2): the same file through the object
+// adapter (parsed with valuePolicy 'cached') and through the paged importer +
+// PagedXlsxSheetAdapter answers every SourceStore question identically.
+
+import { readFileSync, readdirSync, existsSync } from 'node:fs'
+import { join, dirname } from 'node:path'
+import { fileURLToPath } from 'node:url'
+import { openImportSession } from '../src/xlsx/storage/pagedImport'
+import { SourcePageStore, memoryPageBackend } from '../src/xlsx/storage/sourcePages'
+import { createPagedWorkbookSource } from '../src/xlsx/view/pagedSource'
+import type { WorkbookSource } from '../src/worker/viewerSession'
+import type { ColumnEntry, AuthoritativeCell } from '../src/xlsx/view/contracts'
+
+const HERE = dirname(fileURLToPath(import.meta.url))
+const FULL = { r0: 0, r1: 1_048_575, c0: 0, c1: 16_383 }
+
+async function objectSource(bytes: Uint8Array): Promise<WorkbookSource> {
+  const doc = await parseXlsx(await OfficePackage.load(bytes), { valuePolicy: 'cached' })
+  return createObjectWorkbookSource(doc, 'doc', { valuePolicy: 'cached' })
+}
+async function pagedSource(bytes: Uint8Array, pageRows = 7) {
+  const store = new SourcePageStore({ docId: 'doc', backend: memoryPageBackend() })
+  const session = await openImportSession({ kind: 'blob', blob: new Blob([bytes as BlobPart]) }, { docId: 'doc', profile: 'D', store, pageRows })
+  const outcome = await session.done
+  return { session, outcome, source: createPagedWorkbookSource(session) }
+}
+async function allRows(store: SourceStore) {
+  const out: { row: number; cells: readonly AuthoritativeCell[] }[] = []
+  let cursor: string | undefined
+  for (let guard = 0; guard < 100_000; guard++) {
+    const page = await store.readRows(FULL, cursor, opts(store))
+    expect(page.error).toBeUndefined()
+    out.push(...page.items)
+    cursor = page.nextCursor
+    if (cursor === undefined) { expect(page.completeness).toBe('complete'); break }
+  }
+  return out
+}
+/** Column answer as canonical runs: adjacent blank runs merged (page cuts may split them). */
+async function column(store: SourceStore, col: number, encoding?: 'lanes') {
+  const out: unknown[] = []
+  let cursor: string | undefined
+  for (let guard = 0; guard < 100_000; guard++) {
+    const page = await store.queryColumn({ col, rows: { kind: 'intervals', intervals: [{ r0: 0, r1: 1_048_575 }] }, limit: encoding ? 300_000 : 64, cursor, encoding }, opts(store))
+    expect(page.error).toBeUndefined()
+    expect(page.completeness).toBe('complete')
+    for (const item of page.items as ColumnEntry[]) {
+      if (item.kind === 'lanes') {
+        for (let i = 0; i < item.rows.length; i++) out.push(['lane', item.rows[i], item.tags[i], item.numbers[i], item.styles[i], String.fromCharCode(...item.text.subarray(item.textStart[i], item.textStart[i + 1]))])
+        continue
+      }
+      const last = out[out.length - 1] as { kind?: string; r1?: number } | undefined
+      if (item.kind === 'blank' && last?.kind === 'blank' && last.r1! + 1 === item.r0) { last.r1 = item.r1; continue }
+      out.push({ ...item })
+    }
+    cursor = page.nextCursor
+    if (cursor === undefined) break
+  }
+  return out
+}
+async function scanAll(store: SourceStore) {
+  const out: AuthoritativeCell[] = []
+  for await (const page of store.scanPopulated({ range: FULL, limit: 500 }, opts(store))) {
+    expect(page.error).toBeUndefined()
+    out.push(...page.items)
+  }
+  return out
+}
+async function expectParity(name: string, bytes: Uint8Array) {
+  const small = await objectSource(bytes)
+  const large = await pagedSource(bytes)
+  expect(large.outcome.kind, `${name}: paged import outcome`).toBe('complete')
+  expect(large.source.sheets).toEqual(small.sheets)
+  expect(large.source.declaredFilters?.()).toEqual(small.declaredFilters?.())
+  let cells = 0
+  for (const { sheetId } of small.sheets) {
+    const a = small.store(sheetId), b = large.source.store(sheetId)
+    expect(b.extent, `${name}/${sheetId} extent`).toEqual(a.extent)
+    const rowsA = await allRows(a), rowsB = await allRows(b)
+    expect(rowsB, `${name}/${sheetId} readRows`).toEqual(rowsA)
+    cells += rowsA.reduce((n, r) => n + r.cells.length, 0)
+    expect(await scanAll(b), `${name}/${sheetId} scanPopulated`).toEqual(await scanAll(a))
+    const used = a.extent.used
+    const lastCol = used ? Math.min(used.c1, used.c0 + 6) : 0
+    for (let col = used?.c0 ?? 0; col <= lastCol; col++) {
+      expect(await column(b, col), `${name}/${sheetId} col ${col}`).toEqual(await column(a, col))
+      expect(await column(b, col, 'lanes'), `${name}/${sheetId} lanes ${col}`).toEqual(await column(a, col, 'lanes'))
+    }
+    const structA = await a.queryStructural(FULL, opts(a)), structB = await b.queryStructural(FULL, opts(b))
+    expect({ ...structB, stamp: null }, `${name}/${sheetId} structure`).toEqual({ ...structA, stamp: null })
+    for (const at of [{ row: 0, col: 0 }, { row: used?.r1 ?? 5, col: used?.c1 ?? 5 }, { row: 1_048_575, col: 16_383 }, ...rowsA.slice(0, 40).flatMap(r => r.cells.map(c => ({ row: c.row, col: c.col })))]) {
+      expect(await b.readCell(at, opts(b)), `${name}/${sheetId} readCell ${at.row},${at.col}`).toEqual(await a.readCell(at, opts(a)))
+    }
+    const groups = [
+      { groupId: 'all', rows: { kind: 'intervals' as const, intervals: [{ r0: 0, r1: 1_048_575 }] }, cols: [{ c0: 0, c1: 16_383 }] },
+      { groupId: 'head', rows: { kind: 'intervals' as const, intervals: [{ r0: 0, r1: 9 }] }, cols: [{ c0: 0, c1: 3 }] },
+      { groupId: 'odd', rows: { kind: 'list' as const, r0: 1, r1: 9, rows: new Uint32Array([1, 3, 5, 7, 9]) }, cols: [{ c0: 0, c1: 1 }, { c0: 3, c1: 3 }] },
+    ]
+    const ovA = await a.queryOverview({ groups, maxGroups: 16 }, opts(a)), ovB = await b.queryOverview({ groups, maxGroups: 16 }, opts(b))
+    expect({ ...ovB, stamp: null }, `${name}/${sheetId} overview`).toEqual({ ...ovA, stamp: null })
+    const gA = small.geometry(sheetId), gB = large.source.geometry(sheetId)
+    expect(gB.rowOverrides).toEqual(gA.rowOverrides)
+    expect(gB.colOverrides).toEqual(gA.colOverrides)
+    expect(gB.baseHidden.intervals).toEqual(gA.baseHidden.intervals)
+  }
+  await large.source.release()
+  return cells
+}
+
+const EDGE = xlsxBytes({
+  sharedStrings: ['héllo', 'x_xD83D__xDE00_y'],
+  styles: '<cellXfs count="4"><xf numFmtId="0"/><xf numFmtId="0"/><xf numFmtId="14"/><xf numFmtId="0"/></cellXfs>',
+  beforeSheetData: '<cols><col min="2" max="4" width="20" customWidth="1"/></cols>',
+  sheetData: [
+    COLUMN_A,
+    '<row r="10" ht="30" customHeight="1"><c r="A10"><f t="shared" ref="A10:A12" si="0">B10+1</f><v>3</v></c><c r="B10" t="s"><v>1</v></c><c r="C10" t="s"><v>99</v></c></row>',
+    '<row r="11" hidden="1"><c r="A11"><f t="shared" si="0"/><v>4</v></c><c r="D11" t="d"><v>2024-01-02</v></c></row>',
+    '<row r="12" hidden="1"><c r="A12"><f t="shared" si="0"/></c><c r="B12" t="e"/><c r="C12" t="str"><v></v></c><c r="D12"><v>abc</v></c></row>',
+    '<row r="13"><c r="A13"><f t="array" ref="A13:B14">ROW(1:2)</f><v>1</v></c><c r="B13" ca="1"><v>7</v></c></row>',
+    '<row r="20"/>',
+    '<row r="300000"><c r="XFD300000" t="inlineStr"><is><t>a</t><r><t>b</t><t>ignored</t></r><rPh><t>phon</t></rPh></is></c></row>',
+    '<row r="1048576"><c r="A1048576"><v>-0</v></c><c r="XFD1048576"><v>1E308</v></c></row>',
+  ].join(''),
+  afterSheetData: '<autoFilter ref="A1:D12"><filterColumn colId="1"><filters blank="1"><filter val="x"/></filters></filterColumn><filterColumn colId="0"><customFilters and="1"><customFilter operator="greaterThan" val="1"/><customFilter val="5"/></customFilters></filterColumn></autoFilter><sortState ref="A2:D12"><sortCondition ref="A2:A12" descending="1"/></sortState><mergeCells count="2"><mergeCell ref="B1:C2"/><mergeCell ref="E5:F9"/></mergeCells>',
+})
+
+describe('small/large adapter parity (S1.2, same file, cached policy)', () => {
+  it('edge package: values, shared/inline strings, errors, unavailable formulas, merges, filters, geometry', async () => {
+    expect(await expectParity('edge', EDGE)).toBeGreaterThan(20)
+  })
+
+  const fixtureDir = join(HERE, 'fixtures', 'xlsx-viewer')
+  for (const file of readdirSync(fixtureDir).filter(f => f.endsWith('.xlsx'))) {
+    it(`generated fixture ${file}`, async () => {
+      expect(await expectParity(file, new Uint8Array(readFileSync(join(fixtureDir, file))))).toBeGreaterThan(0)
+    })
+  }
+
+  const corpusDir = join(HERE, '..', 'corpus')
+  const corpus = existsSync(corpusDir) ? readdirSync(corpusDir).filter(f => f.endsWith('.xlsx') && !f.startsWith('~$')) : []
+  /** Files the paged path refuses with a typed reason (they open through the compatibility path). */
+  const UNSERVABLE: Record<string, string> = { 'poi-59746_NoRowNums.xlsx': 'rows without row numbers' }
+  for (const file of corpus) {
+    it.skipIf(!existsSync(join(corpusDir, file)))(`corpus ${file}`, async () => {
+      const bytes = new Uint8Array(readFileSync(join(corpusDir, file)))
+      const probe = await pagedSource(bytes)
+      if (UNSERVABLE[file]) {
+        expect(probe.outcome.kind).toBe('incomplete')
+        await probe.source.release()
+        return
+      }
+      await probe.source.release()
+      await expectParity(file, bytes)
+    })
+  }
+})

@@ -33,6 +33,7 @@
  * reports `view-reapplied`. A released session never revives: no lazy state,
  * activation, admission or publication after release.
  */
+import type { DeclaredSheetFilters } from '../xlsx/view/declaredFilters'
 import type {
   AxisMetrics, AxisSizeInterval, CacheIdentity, ColumnEntry, ColumnQuery, CompactSourceRowSet, FilterSpec,
   GridSelection, IntervalSet, OperationRefusal, Page, ProfileId, RowOrder, SingleCellPayload, SortSpec,
@@ -149,6 +150,8 @@ export interface WorkbookSource {
   coverageDiagnostics?(sheetId: string): readonly WorkerDiagnostic[]
   /** S4.3: decoded source pages register in the session pool's `source` tier. */
   bindMemory?(pool: MemoryPool): void
+  /** S8.3 declared file filter/sort diagnostics; both adapters build identical records. */
+  declaredFilters?(): readonly DeclaredSheetFilters[]
   release(): Promise<void>
 }
 
