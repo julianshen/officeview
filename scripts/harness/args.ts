@@ -4,6 +4,7 @@
  */
 import { FIXTURE_IDS, MAX_SAMPLE_VALUES } from '../../src/debug/harness/result'
 import type { FixtureId, HarnessMode, HarnessProfile, OperatorMetadata } from '../../src/debug/harness/types'
+import { SCENARIOS, SCENARIO_IDS, isScenarioId, type ScenarioId } from '../../src/debug/harness/scenarios'
 
 export interface BenchArgs {
   browser: 'chromium' | 'webkit' | 'safari-manual'
@@ -19,6 +20,14 @@ export interface BenchArgs {
   serve: boolean
   port: number
   operator: OperatorMetadata
+  /** S8.4 kernel scenario; null keeps the S0.3 input-to-present round-trips. */
+  scenario: ScenarioId | null
+  /** Reduced fixture rows for a scenario smoke run; null is full scale. */
+  rows: number | null
+  /** Playwright browser channel: bundled Chromium or installed Google Chrome. */
+  channel: 'chromium' | 'chrome'
+  /** Whole-collection time budget in minutes (kernel scenarios can be long). */
+  timeoutMinutes: number
 }
 
 /**
@@ -50,7 +59,14 @@ export const HELP_TEXT = `interactive-viewer bench CLI (S0.3 scaffold — no vie
                POSTed back from the device on the same origin. Operator flags
                record device model, OS version, thermal and battery state.
   --baseline FILE  informational p50 deltas; the file is validated and checked
-               for comparability BEFORE any browser launches.`
+               for comparability BEFORE any browser launches.
+  --scenario ID    S8.4 kernel scenario (${SCENARIO_IDS.join(', ')}):
+               each iteration records kernel, query-completion, query-roundtrip
+               and input-to-present separately. Sets --fixture to the scenario's
+               fixture (an explicit different --fixture is an error).
+  --rows N     reduced fixture rows for a scenario smoke run (default: full scale)
+  --channel    chromium (bundled, default) | chrome (installed Google Chrome)
+  --timeout-min M  whole-collection budget in minutes (default 15)`
 
 const OPERATOR_FLAGS: Record<string, keyof OperatorMetadata> = {
   'device-model': 'deviceModel',
@@ -59,7 +75,7 @@ const OPERATOR_FLAGS: Record<string, keyof OperatorMetadata> = {
   battery: 'batteryState',
 }
 
-const KNOWN_FLAGS = ['browser', 'profile', 'fixture', 'repeat', 'warmup', 'output', 'mode', 'baseline', 'serve', 'port']
+const KNOWN_FLAGS = ['browser', 'profile', 'fixture', 'repeat', 'warmup', 'output', 'mode', 'baseline', 'serve', 'port', 'scenario', 'rows', 'channel', 'timeout-min']
 
 export function parseArgs(argv: string[]): BenchArgs | { help: true } {
   const args: BenchArgs = {
@@ -74,8 +90,13 @@ export function parseArgs(argv: string[]): BenchArgs | { help: true } {
     serve: false,
     port: 4173,
     operator: { deviceModel: null, osVersion: null, thermalState: null, batteryState: null },
+    scenario: null,
+    rows: null,
+    channel: 'chromium',
+    timeoutMinutes: 15,
   }
   let requestedMode: string = args.mode
+  let explicitFixture: FixtureId | null = null
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i]
     if (arg === '-h' || arg === '--help') return { help: true }
@@ -103,6 +124,7 @@ export function parseArgs(argv: string[]): BenchArgs | { help: true } {
       case 'fixture':
         if (!FIXTURE_IDS.includes(text as FixtureId)) throw new Error(`--fixture must be one of ${FIXTURE_IDS.join(', ')}, got ${text}`)
         args.fixture = text as FixtureId
+        explicitFixture = args.fixture
         break
       case 'repeat': {
         const repeat = Number(text)
@@ -136,10 +158,37 @@ export function parseArgs(argv: string[]): BenchArgs | { help: true } {
         args.port = port
         break
       }
+      case 'scenario':
+        if (!isScenarioId(text)) throw new Error(`--scenario must be one of ${SCENARIO_IDS.join(', ')}, got ${text}`)
+        args.scenario = text
+        break
+      case 'rows': {
+        const rows = Number(text)
+        if (!Number.isInteger(rows) || rows < 3 || rows > 1_048_576) throw new Error(`--rows must be an integer in 3..1048576, got ${text}`)
+        args.rows = rows
+        break
+      }
+      case 'channel':
+        if (text !== 'chromium' && text !== 'chrome') throw new Error(`--channel must be chromium|chrome, got ${text}`)
+        args.channel = text
+        break
+      case 'timeout-min': {
+        const minutes = Number(text)
+        if (!Number.isFinite(minutes) || minutes <= 0 || minutes > 120) throw new Error(`--timeout-min must be in (0, 120], got ${text}`)
+        args.timeoutMinutes = minutes
+        break
+      }
       default:
         args.operator[OPERATOR_FLAGS[name]] = text === '' ? null : text
     }
   }
+  if (args.scenario !== null) {
+    const fixture = SCENARIOS[args.scenario].fixture
+    if (explicitFixture !== null && explicitFixture !== fixture) throw new Error(`--scenario ${args.scenario} runs fixture ${fixture}, not --fixture ${explicitFixture}`)
+    args.fixture = fixture
+    if (args.browser === 'safari-manual') throw new Error('--scenario applies to automated browsers only, not safari-manual')
+  } else if (args.rows !== null) throw new Error('--rows applies to --scenario runs only')
+  if (args.channel === 'chrome' && args.browser !== 'chromium') throw new Error('--channel chrome applies to --browser chromium only')
   if (requestedMode === 'release' && !REAL_FIXTURES_AVAILABLE) {
     throw new Error('--mode release is refused: every fixture is still the 120x10 placeholder (real F1..F8 arrive with S0.2), and a placeholder measurement must not be labeled release evidence')
   }

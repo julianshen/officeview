@@ -60,6 +60,8 @@ function pageQuery(args: BenchArgs, label: string, extra: Record<string, string>
     mode: args.mode,
     cache: 'cold',
     commit: label,
+    ...(args.scenario ? { scenario: args.scenario } : {}),
+    ...(args.rows !== null ? { rows: String(args.rows) } : {}),
     ...extra,
   })
   const { deviceModel, osVersion, thermalState, batteryState } = args.operator
@@ -76,11 +78,12 @@ type HarnessWindow = {
     recordRoundTrip(label: string, warmup?: boolean): Promise<void>
     exportResult(): Promise<unknown>
   }
+  __viewerKernelBench?: { run(warmup: number, repeat: number): Promise<void> }
 }
 
 async function collectAutomated(args: BenchArgs, label: string): Promise<CollectedRun> {
   const engine = args.browser === 'chromium' ? chromium : webkit
-  const browser = await engine.launch({ headless: true })
+  const browser = await engine.launch({ headless: true, ...(args.channel === 'chrome' ? { channel: 'chrome' } : {}) })
   const browserVersion = browser.version()
   try {
     const context = await browser.newContext({
@@ -90,24 +93,40 @@ async function collectAutomated(args: BenchArgs, label: string): Promise<Collect
       hasTouch: args.profile === 'mobile',
     })
     const page = await context.newPage()
-    page.setDefaultTimeout(ROUND_TRIP_TIMEOUT_MS)
+    page.setDefaultTimeout(args.scenario ? args.timeoutMinutes * 60_000 : ROUND_TRIP_TIMEOUT_MS)
     await page.goto(`http://127.0.0.1:${args.port}${HARNESS_PAGE_PATH}?${pageQuery(args, label)}`)
-    await page.waitForFunction(() => (window as unknown as HarnessWindow).__viewerHarness?.booted === true, undefined, { timeout: 30_000 })
+    page.on('pageerror', (error) => console.error(`  page error: ${error.message}`))
+    page.on('console', (message) => { if (message.type() === 'error') console.error(`  page console: ${message.text()}`) })
+    const budgetMs = args.timeoutMinutes * 60_000
+    // A kernel scenario prepares its fixture in the worker before booting.
+    await page.waitForFunction(() => (window as unknown as HarnessWindow).__viewerHarness?.booted === true, undefined, { timeout: args.scenario ? budgetMs : 30_000 })
 
-    // All round-trips in one evaluate: no driver latency between input and
-    // present, and each round-trip has its own in-page timeout (harness.ts).
     const iterations = args.warmup + args.repeat
-    await withTimeout(
-      page.evaluate(
-        async ({ warmup, repeat }) => {
-          const harness = (window as unknown as HarnessWindow).__viewerHarness!
-          for (let i = 0; i < warmup + repeat; i++) await harness.recordRoundTrip(`rt-${i}`, i < warmup)
-        },
-        { warmup: args.warmup, repeat: args.repeat },
-      ),
-      ROUND_TRIP_TIMEOUT_MS + iterations * 1000,
-      'input-to-present round-trips',
-    )
+    if (args.scenario) {
+      // One evaluate drives every kernel/query/present iteration in-page.
+      await withTimeout(
+        page.evaluate(
+          ({ warmup, repeat }) => (window as unknown as HarnessWindow).__viewerKernelBench!.run(warmup, repeat),
+          { warmup: args.warmup, repeat: args.repeat },
+        ),
+        budgetMs,
+        `kernel scenario ${args.scenario}`,
+      )
+    } else {
+      // All round-trips in one evaluate: no driver latency between input and
+      // present, and each round-trip has its own in-page timeout (harness.ts).
+      await withTimeout(
+        page.evaluate(
+          async ({ warmup, repeat }) => {
+            const harness = (window as unknown as HarnessWindow).__viewerHarness!
+            for (let i = 0; i < warmup + repeat; i++) await harness.recordRoundTrip(`rt-${i}`, i < warmup)
+          },
+          { warmup: args.warmup, repeat: args.repeat },
+        ),
+        ROUND_TRIP_TIMEOUT_MS + iterations * 1000,
+        'input-to-present round-trips',
+      )
+    }
     const exported = (await withTimeout(
       page.evaluate(() => (window as unknown as HarnessWindow).__viewerHarness!.exportResult()),
       ROUND_TRIP_TIMEOUT_MS,
@@ -198,6 +217,7 @@ async function main(): Promise<void> {
   const label = commitLabel(identity)
   console.log(`interactive-viewer bench (S0.3 scaffold — measures the harness frame, claims no viewer SLA)`)
   console.log(`  browser=${args.browser} profile=${args.profile} fixture=${args.fixture} repeat=${args.repeat} warmup=${args.warmup} mode=${args.mode} port=${args.port} commit=${label}`)
+  if (args.scenario) console.log(`  scenario=${args.scenario} rows=${args.rows ?? 'full'} channel=${args.channel} timeout=${args.timeoutMinutes} min`)
   if (args.browser === 'safari-manual') {
     await serveForManualDevice(args, label, identity)
     return

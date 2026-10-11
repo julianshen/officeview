@@ -40,6 +40,8 @@ export interface ViewerHarness {
   startLongTaskCollection(): boolean
   stopLongTaskCollection(): void
   recordOneShot(name: string, unit: string, kind: SampleKind, value: number): void
+  /** Counts one warmup run of a one-shot series (run, then dropped from values). */
+  recordWarmup(name: string, unit: string, kind: SampleKind): void
   exportResult(): Promise<HarnessResult>
   ledger: AllocationLedger
   deterministicClock: { now(): number; inject(now: () => number): void }
@@ -242,6 +244,9 @@ export function createViewerHarness(deps: HarnessDeps = {}): ViewerHarness {
     warmupCount,
     recordOneShot(name: string, unit: string, kind: SampleKind, value: number): void {
       pushSample(name, unit, kind, value)
+    },
+    recordWarmup(name: string, unit: string, kind: SampleKind): void {
+      sampleState(name, unit, kind).warmupExcluded += 1
     },
     startLongTaskCollection,
     stopLongTaskCollection,

@@ -38,7 +38,25 @@ describe('parseArgs', () => {
       serve: false,
       port: 4173,
       operator: { deviceModel: null, osVersion: null, thermalState: null, batteryState: null },
+      scenario: null,
+      rows: null,
+      channel: 'chromium',
+      timeoutMinutes: 15,
     })
+  })
+
+  it('parses S8.4 kernel scenario flags and derives the scenario fixture', () => {
+    expect(args(['--scenario', 'text-sort-1m-natural', '--rows=1000', '--channel', 'chrome', '--timeout-min', '20'])).toMatchObject({
+      scenario: 'text-sort-1m-natural', fixture: 'F4', rows: 1000, channel: 'chrome', timeoutMinutes: 20,
+    })
+    expect(args(['--scenario=sort-1m-8key', '--fixture', 'F2'])).toMatchObject({ fixture: 'F2', rows: null })
+    expect(() => args(['--scenario', 'sort-1m-8key', '--fixture', 'F4'])).toThrow(/runs fixture F2/)
+    expect(() => args(['--scenario', 'nope'])).toThrow(/--scenario must be one of/)
+    expect(() => args(['--rows', '10'])).toThrow(/--scenario runs only/)
+    expect(() => args(['--scenario', 'sort-1m-1key', '--rows', '2'])).toThrow(/--rows/)
+    expect(() => args(['--browser', 'webkit', '--channel', 'chrome'])).toThrow(/chromium only/)
+    expect(() => args(['--timeout-min', '0'])).toThrow(/--timeout-min/)
+    expect(() => args(['--browser', 'safari-manual', '--serve', '--scenario', 'sort-1m-1key'])).toThrow(/automated browsers only/)
   })
 
   it('parses every flag in both "--flag value" and "--flag=value" forms', () => {
