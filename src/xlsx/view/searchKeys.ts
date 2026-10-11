@@ -24,6 +24,7 @@ export interface SearchKeyStrategySpec {
   /** Necessary condition for an exact contains match; false is decisive.
    * Default: valueKey.includes(queryKey). */
   matchKey?: (valueKey: string, queryKey: string) => boolean
+  maxKeyUnitsPerUnit?: number
 }
 /** Frozen, versioned and certified (createSearchKeyStrategy or the built-in
  * canonicalKeyStrategy only). */
@@ -37,7 +38,9 @@ export interface SearchKeyStrategy {
    * the exact matcher itself and its result is final, wildcards included.
    * Custom strategies are necessary-condition filters with exact confirmation. */
   readonly exactKeys: boolean
+  readonly maxKeyUnitsPerUnit: number
 }
+export const CANONICAL_KEY_MAX_UNITS_PER_UNIT = 4
 const certified = new WeakSet<SearchKeyStrategy>()
 export function isCertifiedSearchKeyStrategy(strategy: unknown): strategy is SearchKeyStrategy {
   return typeof strategy === 'object' && strategy !== null && certified.has(strategy as SearchKeyStrategy)
@@ -86,12 +89,12 @@ export function createSearchKeyStrategy(spec: SearchKeyStrategySpec): SearchKeyS
     throw new ValueIndexError('invalid-rule', 'Invalid search key strategy specification')
   }
   const matchKey = spec.matchKey ?? ((valueKey: string, queryKey: string) => valueKey.includes(queryKey))
-  const strategy: SearchKeyStrategy = Object.freeze({ id: `${canonicalizerVersion}|unicode-${unicodeVersion}|${foldVariant}`, foldVariant, searchKeyOf, matchKey, exactKeys: false })
+  const strategy: SearchKeyStrategy = Object.freeze({ id: `${canonicalizerVersion}|unicode-${unicodeVersion}|${foldVariant}`, foldVariant, searchKeyOf, matchKey, exactKeys: false, maxKeyUnitsPerUnit: 4 })
   probe(strategy)
   certified.add(strategy)
   return strategy
 }
-export const EXACT_SEARCH: SearchKeyStrategy = Object.freeze({ id: 'exact', foldVariant: 'default' as const, searchKeyOf: () => null, matchKey: () => true, exactKeys: false })
+export const EXACT_SEARCH: SearchKeyStrategy = Object.freeze({ id: 'exact', foldVariant: 'default' as const, searchKeyOf: () => null, matchKey: () => true, exactKeys: false, maxKeyUnitsPerUnit: 0 })
 certified.add(EXACT_SEARCH)
 /** Self-check of the canonical key path against the raw S8.1/S8.5 predicate
  * on the probe set (both must agree exactly; they share one evaluator). */
@@ -117,7 +120,7 @@ export function canonicalKeyStrategy(variant: FoldVariant): SearchKeyStrategy {
   let strategy = canonicalStrategies.get(variant)
   if (!strategy) {
     strategy = Object.freeze({
-      id: canonicalKeyStrategyId(variant), foldVariant: variant, exactKeys: true,
+      id: canonicalKeyStrategyId(variant), foldVariant: variant, exactKeys: true, maxKeyUnitsPerUnit: CANONICAL_KEY_MAX_UNITS_PER_UNIT,
       searchKeyOf: (text: string) => canonicalSearchKey(text, variant),
       matchKey: (valueKey: string, queryKey: string) => keyContains(valueKey, queryKey),
     })

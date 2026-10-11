@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { canonicalKeyStrategyId } from '../src/xlsx/view/canonicalText'
+import { canonicalKeyStrategyId, canonicalSearchKey } from '../src/xlsx/view/canonicalText'
 import type { FilterRange, SourceStamp, ValuePatch, ValueSearchPredicate } from '../src/xlsx/view/contracts'
 import type { ColumnClassification } from '../src/xlsx/view/filter'
 import {
@@ -7,7 +7,7 @@ import {
   type ValueColumnSource, type ValueIndex, type ValueIndexIdentity, type ValuePageRead, type ValueSearchResult,
 } from '../src/xlsx/view/valueIndex'
 import {
-  EXACT_SEARCH, MemorySearchKeyStore, SEARCH_HASH_CHUNK_BYTES, canonicalKeyStrategy, createSearchKeyStrategy, foldVariantOf, textContentHash,
+  CANONICAL_KEY_MAX_UNITS_PER_UNIT, EXACT_SEARCH, MemorySearchKeyStore, SEARCH_HASH_CHUNK_BYTES, canonicalKeyStrategy, createSearchKeyStrategy, foldVariantOf, textContentHash,
   type SearchKeyOwner, type SearchKeyStrategy, type SearchKeyStrategySpec,
 } from '../src/xlsx/view/searchKeys'
 
@@ -481,4 +481,63 @@ describe('review round 5 findings', () => {
       }
     }
   }, 60_000)
+})
+
+describe('review round 6 findings', () => {
+  const codePointHex = (text: string) => Array.from(text, point => point.codePointAt(0)!.toString(16).padStart(16, '0')).join('')
+  it('pins the canonical key expansion bound over every code point, both fold variants (codex r6 1)', () => {
+    expect(CANONICAL_KEY_MAX_UNITS_PER_UNIT).toBe(4)
+    expect(canonicalKeyStrategy('default').maxKeyUnitsPerUnit).toBe(4)
+    for (const variant of ['default', 'turkic'] as const) {
+      let max = 0
+      for (let point = 0; point <= 0x10ffff; point++) {
+        const text = String.fromCodePoint(point)
+        max = Math.max(max, canonicalSearchKey(text, variant).length / text.length)
+      }
+      expect(max, variant).toBeLessThanOrEqual(CANONICAL_KEY_MAX_UNITS_PER_UNIT)
+      for (const text of seededValues(2_000, 5)) {
+        expect(canonicalSearchKey(text, variant).length).toBeLessThanOrEqual(CANONICAL_KEY_MAX_UNITS_PER_UNIT * text.length)
+      }
+    }
+  })
+  it('rejects strategies whose keys exceed the declared expansion, at creation and at runtime (codex r6 1)', async () => {
+    expect(() => createSearchKeyStrategy({ ...asciiSpec(), canonicalizerVersion: 'hex-1', searchKeyOf: codePointHex, matchKey: () => true }))
+      .toThrow(expect.objectContaining({ code: 'invalid-rule' }))
+    const explode = createSearchKeyStrategy({ ...asciiSpec(), canonicalizerVersion: 'explode-1', matchKey: () => true,
+      searchKeyOf: text => text.length > 200 ? 'k'.repeat(text.length * 10) : text.toLowerCase() })
+    const cache = new ValueIndexCache({ searchKeys: { strategy: explode } }), index = cache.open(identity(), new StringSource(['alpha', 'b'.repeat(500)]))
+    await index.build()
+    await expect(index.search({ text: 'al', locale: 'en-US' })).rejects.toMatchObject({ code: 'invalid-rule' })
+  })
+  it('charges declared worst-case scratch before generating a key (codex r6 1)', async () => {
+    const seen = { max: 0 }, long = 'q'.repeat(32_768)
+    const wide = createSearchKeyStrategy({ ...asciiSpec(), canonicalizerVersion: 'hex-16', maxKeyUnitsPerUnit: 16, matchKey: () => true,
+      searchKeyOf: text => { seen.max = Math.max(seen.max, text.length); return codePointHex(text) } })
+    const probe = new ValueIndexCache({ searchKeys: { strategy: EXACT_SEARCH } }), sized = probe.open(identity(), new StringSource(['alpha', long]))
+    await sized.build()
+    const expected = matchedOrdinals(await sized.search({ text: 'q', locale: 'en-US' }))
+    const cache = new ValueIndexCache({ limitBytes: probe.usedBytes + 1024 * 1024, searchKeys: { strategy: wide } })
+    const index = cache.open(identity(), new StringSource(['alpha', long]))
+    await index.build()
+    expect(matchedOrdinals(await index.search({ text: 'q', locale: 'en-US' }))).toEqual(expected)
+    expect(seen.max).toBeLessThan(long.length)
+    expect(cache.usedBytes).toBeLessThanOrEqual(cache.limitBytes)
+  })
+  it('builds resident keys under the effective search limit and admits raw length before key misses (codex r6 2)', async () => {
+    const seen = { max: 0 }, long = 'b'.repeat(32_769)
+    const spy = createSearchKeyStrategy({ ...asciiSpec(), canonicalizerVersion: 'spy-2', searchKeyOf: text => { seen.max = Math.max(seen.max, text.length); return printable.test(text) ? text.toLowerCase() : null } })
+    const limits = { maxTextLength: 32_768 }
+    const fresh = new ValueIndexCache({ searchKeys: { strategy: spy } }).open(identity(), new StringSource(['alpha', long]))
+    await fresh.build()
+    await expect(fresh.search({ text: 'zzz', locale: 'en-US' }, { limits })).rejects.toMatchObject({ code: 'resource-limit' })
+    expect(seen.max).toBeLessThan(long.length)
+    const warm = new ValueIndexCache({ searchKeys: { strategy: spy } }).open(identity(), new StringSource(['alpha', long]))
+    await warm.build()
+    await warm.search({ text: 'alp', locale: 'en-US' })
+    expect(warm.searchKeyStatus.keyed).toBe(2)
+    const exact = new ValueIndexCache({ searchKeys: { strategy: EXACT_SEARCH } }).open(identity(), new StringSource(['alpha', long]))
+    await exact.build()
+    await expect(exact.search({ text: 'zzz', locale: 'en-US' }, { limits })).rejects.toMatchObject({ code: 'resource-limit' })
+    await expect(warm.search({ text: 'zzz', locale: 'en-US' }, { limits })).rejects.toMatchObject({ code: 'resource-limit' })
+  })
 })
