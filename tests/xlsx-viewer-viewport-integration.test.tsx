@@ -583,3 +583,39 @@ describe('sheet-mode printing (S5.2 review round 1)', () => {
     } finally { window.print = original }
   })
 })
+
+describe('resize admission (S5.2 review round 2)', () => {
+  it('a tall-to-wide resize never creates an intermediate backing store larger than either admitted size', async () => {
+    const size = { width: 644, height: 3044 }
+    const cw = Object.getOwnPropertyDescriptor(Element.prototype, 'clientWidth')!
+    const ch = Object.getOwnPropertyDescriptor(Element.prototype, 'clientHeight')!
+    const proto = Object.getPrototypeOf(document.createElement('canvas')) as object
+    const w = Object.getOwnPropertyDescriptor(proto, 'width')!, hgt = Object.getOwnPropertyDescriptor(proto, 'height')!
+    let peak = 0
+    const track = (canvas: HTMLCanvasElement) => {
+      if (!canvas.dataset.testid?.startsWith('officeview-sheet-')) return
+      peak = Math.max(peak, (w.get!.call(canvas) as number) * (hgt.get!.call(canvas) as number) * 4)
+    }
+    Object.defineProperty(Element.prototype, 'clientWidth', { configurable: true, get() { return (this as HTMLElement).dataset?.testid === 'officeview-sheet-pane' ? size.width : 0 } })
+    Object.defineProperty(Element.prototype, 'clientHeight', { configurable: true, get() { return (this as HTMLElement).dataset?.testid === 'officeview-sheet-pane' ? size.height : 0 } })
+    Object.defineProperty(proto, 'width', { configurable: true, get() { return w.get!.call(this) }, set(value: number) { w.set!.call(this, value); track(this as HTMLCanvasElement) } })
+    Object.defineProperty(proto, 'height', { configurable: true, get() { return hgt.get!.call(this) }, set(value: number) { hgt.set!.call(this, value); track(this as HTMLCanvasElement) } })
+    try {
+      const doc = await workbook()
+      const { ui } = await mountSheet(doc)
+      const base = ui.getByTestId('officeview-sheet-base') as HTMLCanvasElement
+      const tall = base.width * base.height * 4
+      size.width = 3044; size.height = 644
+      act(() => { window.dispatchEvent(new Event('resize')) })
+      await settle()
+      expect(base.width).toBe(3000)
+      const wide = base.width * base.height * 4
+      expect(peak).toBeLessThanOrEqual(Math.max(tall, wide))
+    } finally {
+      Object.defineProperty(Element.prototype, 'clientWidth', cw)
+      Object.defineProperty(Element.prototype, 'clientHeight', ch)
+      Object.defineProperty(proto, 'width', w)
+      Object.defineProperty(proto, 'height', hgt)
+    }
+  })
+})

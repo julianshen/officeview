@@ -232,7 +232,10 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
       setPane(current => current.width === width && current.height === height ? current : { width, height })
     }
     update()
-    if (typeof ResizeObserver === 'undefined') return
+    if (typeof ResizeObserver === 'undefined') {
+      window.addEventListener('resize', update)
+      return () => window.removeEventListener('resize', update)
+    }
     const ro = new ResizeObserver(update)
     ro.observe(el)
     return () => ro.disconnect()
@@ -312,8 +315,7 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
     if (!canvas || !frame || !assets || assets.sheetId !== activeSheetId || admittedDpr === null) return
     // The pool (and its admission) exists before the pane surface is sized.
     const renderer = rendererFor()
-    if (canvas.width !== device.width) canvas.width = device.width
-    if (canvas.height !== device.height) canvas.height = device.height
+    sizeCanvas(canvas, device.width, device.height)
     const ctx = canvas.getContext('2d')
     if (!ctx) return
     biasRef.current = renderer.present(ctx, frame).bias
@@ -436,8 +438,7 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
   useLayoutEffect(() => {
     const canvas = overlayRef.current
     if (!canvas || !entry || !scroll || admittedDpr === null) return
-    if (canvas.width !== device.width) canvas.width = device.width
-    if (canvas.height !== device.height) canvas.height = device.height
+    sizeCanvas(canvas, device.width, device.height)
     const ctx = canvas.getContext('2d')
     if (!ctx) return
     overlayPaints.current++
@@ -708,6 +709,15 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
       )}
     </div>
   )
+}
+
+/** Resize a backing store without an intermediate W_new x H_old surface: release
+ * it first (0 bytes), then assign the admitted final dimensions (§12.4). */
+function sizeCanvas(canvas: HTMLCanvasElement, width: number, height: number): void {
+  if (canvas.width === width && canvas.height === height) return
+  canvas.height = 0
+  canvas.width = width
+  canvas.height = height
 }
 
 /** TODO(S1.3): the interim object source reports a formula without a cached or
