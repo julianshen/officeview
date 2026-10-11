@@ -130,3 +130,20 @@ describe('internal spreadsheet entry: paged decisions open paged sessions (the T
     await expect(openSpreadsheetSource(new Blob([xlsxBytes({ sheetData: rowsXml([1, 2]) }) as BlobPart]), ctx(limits), {})).rejects.toMatchObject({ name: 'ImportRefusal', code: 'storage-error' })
   })
 })
+
+describe('RED 14a through the worker: unreadable structure refuses sort, never sorts past it', () => {
+  it('a paged sheet whose mergeCells sit in mc:AlternateContent refuses a sort over it with the structural reason', async () => {
+    const parse = vi.fn(async (bytes: Uint8Array) => parseXlsx(await OfficePackage.load(bytes)))
+    const kernel = new ViewerKernel({ parse, importLimits: PAGED }, quiet)
+    const MC = 'xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"'
+    const bytes = xlsxBytes({ sheetData: rowsXml([3, 1, 4, 1, 5]), afterSheetData: `<mc:AlternateContent ${MC}><mc:Choice Requires="x"><mergeCells><mergeCell ref="A2:B3"/></mergeCells></mc:Choice></mc:AlternateContent>` })
+    completed(await run(kernel, { kind: 'open', requestId: rid(), docId: 'mc', source: { kind: 'blob', blob: new Blob([bytes as BlobPart]) }, profile: 'D' }))
+    const owner = initialIdentity('mc', '1')
+    const out = await run(kernel, { kind: 'sort', requestId: rid(), owner, spec: { range: { r0: 0, r1: 4, c0: 0, c1: 1, headerRows: 0, totalsRows: 0 }, keys: [{ col: 0, order: 'asc' }], caseSensitive: false } })
+    expect(out).toMatchObject({ kind: 'error', code: 'unsupported', retryable: false })
+    expect(out.diagnostics).toEqual([{ code: 'source-error', message: 'merges metadata is wrapped in mc:AlternateContent and cannot be read' }])
+    // Inspection is unaffected.
+    const values = completed(await run(kernel, { kind: 'valueQuery', requestId: rid(), owner, query: { col: 0, rows: { kind: 'intervals', intervals: [{ r0: 0, r1: 4 }] }, limit: 10 } }))
+    expect(values.kind === 'valueQuery' && values.page.items.length).toBe(5)
+  })
+})
