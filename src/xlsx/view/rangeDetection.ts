@@ -1,6 +1,7 @@
 /** Sort/filter operation range detection and structural admission (spec §6.1).
  * Pure module over caller-owned source state. Resolution precedence is strict:
- * a table containing the active cell wins with its metadata header/totals, then
+ * a table containing the active cell wins with its metadata header/totals
+ * (overlapping tables at the active cell refuse as ambiguous), then
  * an explicit contiguous selection, then the current region grown from the
  * active cell by bounded ring probes, then (for a blank seed only) the used
  * fallback. The used extent is a hint: the fallback resolves to the sole
@@ -616,11 +617,17 @@ async function detectRange(request: RangeDetectionRequest, pacer: Pacer, owner: 
   const pageLimit = request.pageLimit ?? 4096
   const context: DetectionContext = { request, pacer, owner }
   const scanner = new Scanner(store, options, pacer, request.workBudget ?? DEFAULT_DETECTION_WORK_BUDGET)
-  const tableHit = structure.firstWhere(
-    { r0: active.row, r1: active.row, c0: active.col, c1: active.col },
-    hit => hit.kind === 'table',
-  )
-  if (tableHit !== undefined && tableHit.kind === 'table') return finishTable(context, tableHit.record)
+  const activeRect = { r0: active.row, r1: active.row, c0: active.col, c1: active.col }
+  const tableHit = structure.firstWhere(activeRect, hit => hit.kind === 'table')
+  if (tableHit !== undefined && tableHit.kind === 'table') {
+    // Overlapping tables are illegal in Excel but constructible in a malformed
+    // file; index order must not silently pick one of them.
+    const rival = structure.firstWhere(activeRect, hit => hit.kind === 'table' && hit.record !== tableHit.record)
+    if (rival !== undefined) {
+      return refused({ reason: 'ambiguous-selection', message: 'More than one table contains the active cell' })
+    }
+    return finishTable(context, tableHit.record)
+  }
   const explicit = explicitRect(selection, active)
   if (explicit === 'invalid') return refused({ reason: 'invalid-range', message: 'Malformed explicit selection range' })
   if (explicit === 'ambiguous') {
