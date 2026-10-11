@@ -236,6 +236,7 @@ describe('interactive sheet viewport (S5.2)', () => {
     // An older revision never replaces the committed view.
     ui.rerender(<InteractiveSheetDoc doc={doc} onFrame={h.onFrame} views={{ 1: { revision: 0 } }} />)
     await settle()
+    expect(h.last().identity.viewGen).toBe(1)
     expect(ui.getByRole('gridcell', { name: 'B3, value 1; original B1' })).toBeTruthy()
   })
 

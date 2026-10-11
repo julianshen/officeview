@@ -180,15 +180,18 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
     else session.updateProjection(sheetId, entry.metrics, entry.body, view)
     return entry
   }
-  const identityOf = (sheetId: string): CacheIdentity => ({ docId, sheetId, valueGen: 0, fontGen, viewGen: viewInput(sheetId).revision })
-  const globalViewGen = sheetIds.reduce((sum, id) => sum + viewInput(id).revision, 0)
+  // The committed revision: a stale (lower) prop revision never regresses the
+  // owner that keys tiles, find and hit geometry; a newer one is built on use.
+  const revisionOf = (sheetId: string): number => Math.max(entries.get(sheetId)?.revision ?? 0, viewInput(sheetId).revision)
+  const identityOf = (sheetId: string): CacheIdentity => ({ docId, sheetId, valueGen: 0, fontGen, viewGen: revisionOf(sheetId) })
+  const globalViewGen = sheetIds.reduce((sum, id) => sum + revisionOf(id), 0)
   const ownerOf = (): WorkbookOwner => ({
     docId, globalViewGen, workbookValueGen: 0, fontGen,
-    sheetVector: sheetIds.map(sheetId => ({ sheetId, revision: viewInput(sheetId).revision, valueGen: 0 })),
+    sheetVector: sheetIds.map(sheetId => ({ sheetId, revision: revisionOf(sheetId), valueGen: 0 })),
   })
   const ownerRef = useRef(ownerOf)
   ownerRef.current = ownerOf
-  const ownerKey = JSON.stringify([globalViewGen, fontGen, sheetIds.map(id => viewInput(id).revision)])
+  const ownerKey = JSON.stringify([globalViewGen, fontGen, sheetIds.map(revisionOf)])
 
   const entry = activeSheetId ? entryFor(activeSheetId) : null
   const identity = identityOf(activeSheetId)
