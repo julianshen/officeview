@@ -14,17 +14,19 @@ export function FilterDropdown(props: FilterDropdownProps): ReactElement | null 
   const bottomSheet = useControlMedia('(pointer: coarse), (max-width: 640px)')
   const life = useControlLifetime(props), session = useRef<ValuesDraftPort | null>(null), searchInput = useRef<HTMLInputElement>(null), changingRef = useRef(false)
   const [range, setRange] = useState<DetectedRange | null>(null), [page, setPage] = useState<DraftPage | null>(null), [query, setQuery] = useState<DraftQuery>({ text: '', offset: 0 })
-  const [changing, setChanging] = useState(false)
+  const [changing, setChanging] = useState(false), [domainClass, setDomainClass] = useState<ColumnClassification | null>(null)
   const [busy, setBusy] = useState(true), [progress, setProgress] = useState('Loading values'), [error, setError] = useState(''), [inspection, setInspection] = useState(''), [includeBlanks, setIncludeBlanks] = useState(false)
   const appliedRule = props.applied?.columns.get(props.col)
   const initial = appliedRule?.kind === 'compound' ? appliedRule.first : appliedRule && appliedRule.kind !== 'values' ? appliedRule : undefined
   const [method, setMethod] = useState<'values' | 'custom'>(initial ? 'custom' : 'values'), [first, setFirst] = useState(() => conditionInput(initial)), [second, setSecond] = useState(() => conditionInput(appliedRule?.kind === 'compound' ? appliedRule.second : undefined))
   const [compound, setCompound] = useState(appliedRule?.kind === 'compound'), [connective, setConnective] = useState<'and' | 'or'>(appliedRule?.kind === 'compound' ? appliedRule.connective : 'and')
-  const classification: ColumnClassification = session.current?.identity.classification ?? { kind: 'loading', hasNumeric: false }
+  // Typed rules need only the domain identity, so a failed value universe
+  // (quota, storage) must not hide the custom builder.
+  const classification: ColumnClassification = session.current?.identity.classification ?? domainClass ?? { kind: 'loading', hasNumeric: false }
   life.dispose.current = () => { session.current?.cancel(); session.current = null }
   const noticeError = (message: string) => { setError(message); props.onNotice(message) }
   const initialize = () => {
-    const job = life.begin(); changingRef.current = false; setChanging(false); setBusy(true); setError(''); setPage(null); setRange(null)
+    const job = life.begin(); changingRef.current = false; setChanging(false); setBusy(true); setError(''); setPage(null); setRange(null); setDomainClass(null)
     setMethod(initial ? 'custom' : 'values'); setFirst(conditionInput(initial)); setSecond(conditionInput(appliedRule?.kind === 'compound' ? appliedRule.second : undefined))
     setCompound(appliedRule?.kind === 'compound'); setConnective(appliedRule?.kind === 'compound' ? appliedRule.connective : 'and'); setInspection(''); setIncludeBlanks(false)
     session.current?.cancel(); session.current = null
@@ -34,11 +36,13 @@ export function FilterDropdown(props: FilterDropdownProps): ReactElement | null 
       if (resolved.kind !== 'complete') { noticeError(resolved.kind === 'refused' ? failureText(resolved) : 'Source range is incomplete; retry.'); setBusy(false); return }
       if (props.col < resolved.range.c0 || props.col > resolved.range.c1) throw new RangeError('Column is outside the resolved filter range.')
       setRange(resolved)
+      const domain = props.client.classify(job.owner, resolved.range, props.col, job.signal)
+      setDomainClass(domain)
+      if (!initial) { const kind = domain.kind === 'number' ? 'number' : domain.kind === 'date' ? 'date' : 'text'; setFirst(conditionInput(undefined, kind)); setSecond(conditionInput(undefined, kind)) }
       const rule = props.applied && sameFilterRange(props.applied.range, resolved.range) && appliedRule?.kind === 'values' ? appliedRule : null
       const port = await props.client.values(job.owner, resolved.range, props.col, rule, job.signal)
       if (!job.current()) { port.cancel(); return }
       session.current = port
-      if (!initial) { const kind = port.identity.classification.kind === 'number' ? 'number' : port.identity.classification.kind === 'date' ? 'date' : 'text'; setFirst(conditionInput(undefined, kind)); setSecond(conditionInput(undefined, kind)) }
       const result = await port.read({ text: '', offset: 0 }, job.signal, p => { if (job.current()) setProgress(`${p.message}: ${p.completed} / ${p.total}`) })
       if (job.current()) { setQuery({ text: '', offset: 0 }); setPage(result); setBusy(false) }
     })().catch(error => { if (job.current()) { noticeError(life.error(error)); setBusy(false) } })

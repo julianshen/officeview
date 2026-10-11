@@ -1,6 +1,6 @@
 import type { CacheIdentity, ColumnRule, FilterRange, FilterSpec, OperationRefusal, SortSpec, ValuesFilter } from '../../xlsx/view/contracts'
 import { reduceSortCommand } from '../../xlsx/view/sort'
-import { canonicalSearchKey, type FilterContext } from '../../xlsx/view/filter'
+import { canonicalSearchKey, type ColumnClassification, type FilterContext } from '../../xlsx/view/filter'
 import { detectOperationRange, admitSortRange, type RangeDetection, type RangeDetectionRequest } from '../../xlsx/view/rangeDetection'
 import { ValueSelectionDraft, ValueIndexError, type ValueSearchResult, type ValueColumnSource, type ValueEntryView, type ValueIndexCache, type ValueIndexIdentity, type ValueLabeler, type ValueSelectedCount, type ValueSelectionState } from '../../xlsx/view/valueIndex'
 import type { ValueRunStore } from '../../xlsx/view/valueRuns'
@@ -38,6 +38,8 @@ export interface ControlsClient {
   owner(): CacheIdentity
   context(): FilterContext
   resolve(owner: CacheIdentity, kind: 'filter' | 'sort', signal: AbortSignal, override?: 0 | 1, col?: number): Promise<RangeDetection>
+  /** Domain classification for typed filters; independent of building the value universe. */
+  classify(owner: CacheIdentity, range: FilterRange, col: number, signal: AbortSignal): ColumnClassification
   values(owner: CacheIdentity, range: FilterRange, col: number, applied: ValuesFilter | null, signal: AbortSignal): Promise<ValuesDraftPort>
   filter(owner: CacheIdentity, spec: FilterSpec | null, signal: AbortSignal, progress?: (value: ControlProgress) => void, lease?: ValuesDraftPort): Promise<ControlResult>
   sort(owner: CacheIdentity, spec: SortSpec | null, signal: AbortSignal, progress?: (value: ControlProgress) => void): Promise<ControlResult>
@@ -113,6 +115,10 @@ export function createControlsClient(options: ControlsClientOptions): ControlsCl
       const result = await (kind === 'sort' ? admitSortRange : detectOperationRange)({ ...request, options: { stamp: { docId: owner.docId, sheetId: owner.sheetId, valueGen: owner.valueGen }, signal }, override: override === undefined ? null : { headerRows: override } })
       assert(owner, signal)
       return result
+    },
+    classify(owner, range, col, signal) {
+      assert(owner, signal)
+      return options.domain(owner, range, col).identity.classification
     },
     async values(owner, range, col, applied, signal) {
       assert(owner, signal)

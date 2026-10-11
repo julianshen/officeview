@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { controlsFixture } from './helpers/xlsx-controls-fixture'
 import { createControlsClient, filterWithColumn } from '../src/components/xlsx/controlsClient'
 import { compileValuesMembership } from '../src/xlsx/view/valueIndex'
+import { ValueIndexError } from '../src/xlsx/view/valueRuns'
 
 const signal = () => new AbortController().signal
 
@@ -479,4 +480,21 @@ it('keeps custom Apply disabled while classification is pending instead of clear
   fireEvent.click(ui.getByRole('button', { name: 'OK' }))
   expect(f.publications).toBe(0)
   expect(f.snapshot.filter?.columns.get(0)).toEqual({ kind: 'text', op: 'contains', first: 'item', wildcards: false })
+})
+
+it('offers typed conditions from the resolved domain when values() fails on quota, and applies a typed rule', async () => {
+  const f = controlsFixture(10), base = f.client
+  const client: ControlsClient = { ...base, async values() { throw new ValueIndexError('quota', 'Value index quota exceeded', { resource: 'memory' }) } }
+  const ui = render(<FilterHarness fixture={f} client={client} />)
+  await waitFor(() => expect(ui.queryByRole('progressbar')).toBeNull())
+  expect(ui.getAllByText(/quota/i).length).toBeGreaterThan(0)
+  const method = ui.getByRole('combobox', { name: 'Filter method' }) as HTMLSelectElement
+  expect([...method.options].map(option => option.textContent)).toContain('Text / mixed filters')
+  fireEvent.change(method, { target: { value: 'custom' } })
+  fireEvent.change(ui.getByRole('combobox', { name: 'Condition 1 operator' }), { target: { value: 'contains' } })
+  fireEvent.change(ui.getByRole('textbox', { name: 'Condition 1 first' }), { target: { value: 'item' } })
+  await waitFor(() => expect((ui.getByRole('button', { name: 'OK' }) as HTMLButtonElement).disabled).toBe(false))
+  fireEvent.click(ui.getByRole('button', { name: 'OK' }))
+  await waitFor(() => expect(f.publications).toBe(1))
+  expect(f.snapshot.filter?.columns.get(0)).toMatchObject({ kind: 'text', op: 'contains', first: 'item' })
 })
