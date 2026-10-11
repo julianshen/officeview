@@ -265,12 +265,22 @@ describe('ambiguous and invalid inputs', () => {
   })
   it('seeds region detection from the active cell for full-column selections', async () => {
     const store = gridStore(headerGrid())
-    const selection = sel(0, 1, [
+    const selection = sel(1, 0, [
       { rows: { kind: 'intervals', intervals: [{ r0: 0, r1: MAX_ROWS - 1 }] }, cols: [{ c0: 0, c1: 0 }] },
     ])
     expect(await detectOperationRange(request(store, emptyIndex(store), selection))).toEqual(
       done(store, { r0: 0, r1: 3, c0: 0, c1: 1, headerRows: 1, totalsRows: 0 }, { kind: 'region' }, 'heuristic'),
     )
+  })
+  it('refuses a contiguous selection that does not contain the active cell instead of ignoring it', async () => {
+    const store = gridStore(headerGrid())
+    const ambiguous = { kind: 'refused', refusal: { reason: 'ambiguous-selection', message: expect.any(String) } }
+    const away = sel(1, 0, [{ rows: { kind: 'intervals', intervals: [{ r0: 10, r1: 11 }] }, cols: [{ c0: 0, c1: 1 }] }])
+    expect(await detectOperationRange(request(store, emptyIndex(store), away))).toEqual(ambiguous)
+    const column = sel(1, 1, [{ rows: { kind: 'intervals', intervals: [{ r0: 0, r1: MAX_ROWS - 1 }] }, cols: [{ c0: 0, c1: 0 }] }])
+    expect(await detectOperationRange(request(store, emptyIndex(store), column))).toEqual(ambiguous)
+    const otherCell = sel(1, 0, [{ rows: { kind: 'intervals', intervals: [{ r0: 2, r1: 2 }] }, cols: [{ c0: 1, c1: 1 }] }])
+    expect(await detectOperationRange(request(store, emptyIndex(store), otherCell))).toEqual(ambiguous)
   })
   it('resolves every equivalent encoding of one contiguous selection to the same explicit range', async () => {
     const store = gridStore(headerGrid())
@@ -354,6 +364,25 @@ describe('ambiguous and invalid inputs', () => {
     expect(await detectOperationRange(request(store, index, sel(50, 50), { usedRange: badUsed }))).toEqual({
       kind: 'refused', refusal: { reason: 'invalid-range', message: expect.any(String) },
     })
+  })
+})
+
+describe('nested tables at the active cell', () => {
+  it('refuses when more than one table contains the active cell instead of picking one by index order', async () => {
+    const store = gridStore(headerGrid())
+    const structure = new StructuralIndex({
+      stamp: store.stamp, completeness: 'complete', merges: [], spills: [], drawings: [], missing: [],
+      tables: [
+        { id: 'outer', range: { r0: 0, r1: 9, c0: 0, c1: 3 }, headerRows: 1, totalsRows: 0 },
+        { id: 'inner', range: { r0: 2, r1: 5, c0: 0, c1: 3 }, headerRows: 0, totalsRows: 0 },
+      ],
+    })
+    const ambiguous = { kind: 'refused', refusal: { reason: 'ambiguous-selection', message: expect.any(String) } }
+    expect(await detectOperationRange(request(store, structure, sel(3, 0)))).toEqual(ambiguous)
+    // Outside the overlap only the outer table contains the active cell.
+    expect(await detectOperationRange(request(store, structure, sel(1, 0)))).toEqual(
+      done(store, { r0: 0, r1: 9, c0: 0, c1: 3, headerRows: 1, totalsRows: 0 }, { kind: 'table', id: 'outer' }, 'metadata'),
+    )
   })
 })
 
@@ -484,6 +513,18 @@ describe('owner revalidation and late cancellation', () => {
 })
 
 describe('used-range fallback', () => {
+  it('checks for a second region beyond a used hint the sole region has outgrown', async () => {
+    const column: Array<readonly [number, number, string | number]> = [[0, 0, 'h'], [1, 0, 1], [2, 0, 2], [3, 0, 3], [4, 0, 4]]
+    const hint = { r0: 0, r1: 2, c0: 0, c1: 0 }
+    const far = sparseStore([...column, [5000, 2, 'far']], hint)
+    expect(await detectOperationRange(request(far, emptyIndex(far), sel(1, 5)))).toEqual({
+      kind: 'refused', refusal: { reason: 'ambiguous-selection', message: expect.any(String) },
+    })
+    const alone = sparseStore(column, hint)
+    expect(await detectOperationRange(request(alone, emptyIndex(alone), sel(1, 5)))).toEqual(
+      done(alone, { r0: 0, r1: 4, c0: 0, c1: 0, headerRows: 1, totalsRows: 0 }, { kind: 'used' }, 'heuristic'),
+    )
+  })
   it('refuses a blank seed when the used range holds more than one current region', async () => {
     const rows = [
       [fixtureCell('K'), fixtureCell('V'), undefined, fixtureCell('K2'), fixtureCell('V2')],
@@ -641,6 +682,35 @@ describe('structural admission through the shared guard', () => {
 })
 
 describe('source failures and pending coverage', () => {
+  it('maps a contract-violating scan page to a typed page-error refusal instead of throwing', async () => {
+    const base = gridStore(headerGrid())
+    const rogue: SourceStore = {
+      ...base,
+      scanPopulated: async function* (query, options): AsyncIterable<Page<AuthoritativeCell>> {
+        for await (const page of base.scanPopulated(query, options)) {
+          const stray = { ...authoritative(query.range.r1, query.range.c1, 1), row: Math.min(query.range.r1 + 1, MAX_ROWS - 1) }
+          yield { ...page, items: [...page.items, stray] }
+          return
+        }
+      },
+    }
+    expect(await detectOperationRange(request(rogue, emptyIndex(base), sel(1, 0)))).toEqual({
+      kind: 'refused', refusal: { reason: 'source-error', code: 'page-error', retryable: false, message: expect.any(String) },
+    })
+  })
+  it('maps a contract-violating row page in the header probe to a typed page-error refusal', async () => {
+    const base = gridStore(headerGrid())
+    const rogue: SourceStore = {
+      ...base,
+      readRows: async (range, cursor, options) => {
+        const page = await base.readRows(range, cursor, options)
+        return { ...page, items: [...page.items, { row: range.r1 + 5, cells: [] }] }
+      },
+    }
+    expect(await detectOperationRange(request(rogue, emptyIndex(base), sel(1, 0)))).toEqual({
+      kind: 'refused', refusal: { reason: 'source-error', code: 'page-error', retryable: false, message: expect.any(String) },
+    })
+  })
   const twoBlock = (): (readonly (FixtureCell | undefined)[])[] => [
     [fixtureCell('H'), fixtureCell('Q')], [fixtureCell(1), fixtureCell(2)], [fixtureCell(3), fixtureCell(4)],
   ]
