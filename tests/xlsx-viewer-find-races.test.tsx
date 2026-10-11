@@ -258,3 +258,31 @@ describe('review: sheet coverage of the aggregate owner (codex 6)', () => {
     expect(full!.totalKnown).toBe(8)
   })
 })
+
+describe('review: settling a pending yield (codex 4)', () => {
+  const settles = <T,>(promise: Promise<T>) => Promise.race([promise.then(() => 'resolved', (error: FindError) => error.code), new Promise(resolve => setTimeout(() => resolve('hung'), 200))])
+  const pending = () => {
+    const cells = Array.from({ length: 10_000 }, (_, row) => ({ row, col: 0, value: `v${row}` }))
+    return findInputOf(workbookOf([{ sheetId: 'A', cells }, { sheetId: 'B', cells: [] }])).input
+  }
+  it('close() during a yield whose port was disposed rejects the page as closed instead of hanging', async () => {
+    let entered!: () => void
+    const inYield = new Promise<void>(resolve => { entered = resolve })
+    // A disposed MessageChannel port never delivers: the yield never settles.
+    const session = new WorkbookFind(pending(), ci('zzz'), { yield: () => { entered(); return new Promise<void>(() => {}) } })
+    const page = settles(session.nextPage())
+    await inYield
+    session.close()
+    expect(await page).toBe('closed')
+  })
+  it('an abort during a pending yield rejects as cancelled', async () => {
+    let entered!: () => void
+    const inYield = new Promise<void>(resolve => { entered = resolve })
+    const abort = new AbortController()
+    const session = new WorkbookFind(pending(), ci('zzz'), { signal: abort.signal, yield: () => { entered(); return new Promise<void>(() => {}) } })
+    const page = settles(session.nextPage())
+    await inYield
+    abort.abort()
+    expect(await page).toBe('cancelled')
+  })
+})

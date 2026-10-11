@@ -45,7 +45,7 @@ import type {
   SheetMetrics, SourceErrorCode, SourceStamp, SourceStore, WorkbookOwner,
 } from './contracts'
 import { MAX_COLS, MAX_ROWS, cellId, type SourceCell, type SourceRect } from './coordinates'
-import { CooperativeSlice, type CooperativeOptions } from './scheduler'
+import { CooperativeSlice, createHostYield, type CooperativeOptions, type HostYield } from './scheduler'
 import { buildCellRecords, rawTextOf, type CellLayout, type CellLayoutHost, type LayoutCache, type Rect } from './textLayout'
 import { navigateSelection, type SheetNavigationSession } from './selection'
 import { createScrollWindow, navigateTo, type HiddenTargetReason, type ViewportSize } from './scrollWindow'
@@ -179,7 +179,7 @@ interface ScanState {
 }
 
 class FindSlice extends CooperativeSlice<FindPhase> {
-  constructor(options: FindOptions, private readonly guard: () => void) { super(options) }
+  constructor(options: CooperativeOptions<FindPhase>, private readonly guard: () => void) { super(options) }
   override check(): void { this.guard() }
 }
 
@@ -205,6 +205,11 @@ export class WorkbookFind {
   private readonly incompleteSheets = new Set<string>()
   private readonly failures: FindSourceFailure[] = []
   private readonly failureKeys = new Set<string>()
+  private host: HostYield | undefined
+  /** Settles the pending yield early: a disposed port (MessageChannel) never
+   * delivers, so close/abort must wake the waiter for its guard to reject. */
+  private wake: (() => void) | undefined
+  private readonly onAbort = () => this.wake?.()
   private validated = false
   private done = false
   private closed = false
@@ -216,7 +221,14 @@ export class WorkbookFind {
     this.scanLimit = options.scanLimit ?? FIND_SCAN_LIMIT
     if (!Number.isSafeInteger(this.pageSize) || this.pageSize <= 0) throw new RangeError('Invalid find page size')
     if (!Number.isSafeInteger(this.scanLimit) || this.scanLimit <= 0) throw new RangeError('Invalid find scan limit')
-    this.slice = new FindSlice(options, () => this.guard())
+    this.host = options.yield ? undefined : createHostYield()
+    const inner = options.yield ?? this.host!.yield
+    const wrapped = (phase: FindPhase) => new Promise<void>((resolve, reject) => {
+      this.wake = resolve
+      inner(phase).then(resolve, reject)
+    }).finally(() => { this.wake = undefined })
+    this.slice = new FindSlice({ ...(options.now ? { now: options.now } : {}), yield: wrapped }, () => this.guard())
+    options.signal?.addEventListener('abort', this.onAbort, { once: true })
   }
 
   /** Closure, cancellation and owner currency: run after every await. */
@@ -277,6 +289,8 @@ export class WorkbookFind {
     this.stats.bufferedHits = this.ready.length + this.held.length
     this.stats.yields = this.slice.yields
     const complete = this.done && this.ready.length === 0
+    // A finished scan never yields again; its host ports go now, not at close.
+    if (this.done) this.releaseHost()
     const incomplete = [...this.incompleteSheets]
     return {
       owner: this.input.owner, hits, complete,
@@ -296,7 +310,14 @@ export class WorkbookFind {
     this.ready = []
     this.held = []
     this.stats.bufferedHits = 0
-    this.slice.dispose()
+    this.options.signal?.removeEventListener('abort', this.onAbort)
+    this.wake?.()
+    this.releaseHost()
+  }
+
+  private releaseHost(): void {
+    this.host?.dispose()
+    this.host = undefined
   }
 
   private fail(failure: FindSourceFailure): void {
