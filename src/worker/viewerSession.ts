@@ -448,6 +448,15 @@ export class ViewQuotaError extends RangeError {
     this.name = 'ViewQuotaError'
   }
 }
+/** Smallest admissible worker budget: one full-axis sheet mask. */
+export const MIN_WORKER_BUDGET_BYTES = Math.ceil(MAX_ROWS / 32) * 4 + (Math.ceil(MAX_ROWS / 32 / 32) + 1) * 4
+/** A configured worker budget that could never hold one sheet view. */
+export class WorkerBudgetError extends RangeError {
+  constructor(readonly budgetBytes: number) {
+    super(`Worker budget ${budgetBytes} B is below one sheet mask (${MIN_WORKER_BUDGET_BYTES} B)`)
+    this.name = 'WorkerBudgetError'
+  }
+}
 /** Per body row of a sort: index + scratch + order + inverse Uint32 lanes. */
 export const SORT_ROW_ESTIMATE_BYTES = 16
 /** Per body row and key: tag Uint8 + number Float64 + string id Uint32. */
@@ -606,7 +615,10 @@ export class DocumentSession {
   constructor(readonly docId: string, readonly source: WorkbookSource, private readonly options: SessionOptions = {}) {
     if (!source.sheets.length) throw new RangeError('Workbook has no sheets')
     this.activeSheetId = source.sheets[0].sheetId
-    this.memory = new MemoryPool({ limitBytes: options.workerBudgetBytes ?? WORKER_BUDGETS[options.profile ?? 'D'] })
+    const limitBytes = options.workerBudgetBytes ?? WORKER_BUDGETS[options.profile ?? 'D']
+    // Below one full-axis mask no sheet could ever be viewed: refuse up front.
+    if (!(limitBytes >= MIN_WORKER_BUDGET_BYTES)) throw new WorkerBudgetError(limitBytes)
+    this.memory = new MemoryPool({ limitBytes })
     this.memory.protect(this.activeSheetId)
     source.bindMemory?.(this.memory)
   }
@@ -660,7 +672,9 @@ export class DocumentSession {
     const identity = state.order.kind === 'identity'
     this.states.set(sheetId, Object.freeze({
       ...state, visibility: null, order: identity ? state.order : null,
-      digest: identity ? state.digest : orderDigest(state.order),
+      // The committed order's digest is taken once and kept across rebuilds, so
+      // every rebuild is checked against the order the user committed.
+      digest: identity ? state.digest : state.digest ?? orderDigest(state.order),
     }))
   }
   private pinView(sheetId: string): () => void {
@@ -706,7 +720,14 @@ export class DocumentSession {
     })
   }
   /** Frozen snapshot of a sheet's committed view; never the live mutable state.
-   * Throws ViewNotResidentError while an evicted order awaits its rebuild. */
+   *
+   * IMPORTANT: throws ViewNotResidentError whenever the sheet's order buffers
+   * are absent — after LRU eviction of an inactive sheet AND after a value
+   * publication on any sheet with an applied sort (its order is re-derived from
+   * the new values). Asynchronous callers must `await ensureView(sheetId)`
+   * first; the kernel never calls view() (activateSheet/sort/filter rebuild
+   * through ensureView/materialize). It may also throw ViewQuotaError when a
+   * lazily built mask cannot be admitted. */
   view(sheetId: string): SheetViewSnapshot {
     return this.snapshot(this.residentSync(sheetId))
   }
@@ -795,7 +816,9 @@ export class DocumentSession {
         return { kind: 'error', error: failure('page-error', `Sheet view ${sheetId} rebuilt different visible rows`) }
       }
       const next: ResidentState = Object.freeze({
-        ...state, order: result.order, visibility, digest: undefined, orderValueGen: state.valueGen,
+        ...state, order: result.order, visibility, orderValueGen: state.valueGen,
+        // Kept when verified; a re-applied sort starts a new baseline.
+        digest: sameValues && state.digest !== undefined ? state.digest : orderDigest(result.order),
       })
       // The rebuilt buffers move from the transient ledger to the retained view.
       charge.set(0)

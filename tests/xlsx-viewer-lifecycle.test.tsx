@@ -21,7 +21,7 @@ import { createIdentityOrder, createRowOrder } from '../src/xlsx/view/order'
 import { createIntervalSet, visibilityFromHidden } from '../src/xlsx/view/visibility'
 import { GUARD_SCRATCH_BYTES } from '../src/xlsx/view/operationGuard'
 import {
-  DocumentSession, ViewNotResidentError, ViewQuotaError, type FilterEvaluator, type OperationOutcome, type SessionOptions, type WorkbookSource,
+  DocumentSession, MIN_WORKER_BUDGET_BYTES, ViewNotResidentError, ViewQuotaError, WorkerBudgetError, type FilterEvaluator, type OperationOutcome, type SessionOptions, type WorkbookSource,
 } from '../src/worker/viewerSession'
 import { createObjectWorkbookSource } from '../src/worker/viewerObjectSource'
 import { ViewerKernel } from '../src/worker/viewerKernel'
@@ -637,7 +637,12 @@ function versionedSource(docs: XlsxDocument[]) {
       return store
     },
   }
-  return { source, publish() { gen++ } }
+  return {
+    source,
+    publish() { gen++ },
+    /** A broken source: later reads see other values under the SAME stamp. */
+    swapSilently() { inners.reverse() },
+  }
 }
 
 describe('S4.3 review fixes', () => {
@@ -748,5 +753,62 @@ describe('S4.3 review fixes', () => {
     await kernel.handle({ kind: 'activateSheet', requestId: 'a2', owner: session.workbookOwner(), sheetId: 'A' }, sink)
     expect(replies.at(-1)).toMatchObject({ requestId: 'a2', kind: 'complete' })
     expect(session.activeSheetId).toBe('A')
+  })
+})
+
+describe('S4.3 review round 2', () => {
+  it('every rebuild is verified against the committed order digest, not only the first', async () => {
+    const rows = 500
+    const docs = [
+      sparseDoc([fullCapacitySheet('A', rows, 1), fullCapacitySheet('B', rows, 2)]),
+      sparseDoc([fullCapacitySheet('A', rows, 9), fullCapacitySheet('B', rows, 2)]),
+    ]
+    const versioned = versionedSource(docs)
+    const session = new DocumentSession('doc', versioned.source, { ...fast, filterEvaluator: thirds })
+    await committed(session.sort(session.identity('A'), sortOf(rows), live()))
+    session.activate('B')
+    for (let i = 0; i < 3; i++) {
+      session.memory.trim(0)
+      expect((await session.ensureView('A', live())).kind).toBe('resident')
+    }
+    // Values change WITHOUT a publication (a broken source): the next rebuild
+    // must be refused by the digest check, whatever number of rebuilds came first.
+    versioned.swapSilently()
+    session.memory.trim(0)
+    const refused = await session.ensureView('A', live())
+    expect(refused).toMatchObject({ kind: 'error', error: { code: 'page-error' } })
+    expect(session.isResident('A')).toBe(false)
+    await session.release()
+  })
+
+  it('refuses a worker budget below one full-axis sheet mask at construction', () => {
+    const doc = sparseDoc([fullCapacitySheet('A', 50, 1)])
+    expect(MIN_WORKER_BUDGET_BYTES).toBe(135_172)
+    expect(() => objectSession(doc, { workerBudgetBytes: MIN_WORKER_BUDGET_BYTES - 1 })).toThrow(WorkerBudgetError)
+    const session = objectSession(doc, { workerBudgetBytes: MIN_WORKER_BUDGET_BYTES })
+    expect(session.view('A').revision).toBe(0)
+    expect(session.memoryStats().totalBytes).toBeLessThanOrEqual(MIN_WORKER_BUDGET_BYTES)
+  })
+
+  it('the kernel never reads view() unguarded: activation after a value publication rebuilds via ensureView', async () => {
+    expect(readFileSync('src/worker/viewerKernel.ts', 'utf8')).not.toMatch(/\.view\(/)
+    const rows = 500
+    const docs = [
+      sparseDoc([fullCapacitySheet('A', rows, 1), fullCapacitySheet('B', rows, 2)]),
+      sparseDoc([fullCapacitySheet('A', rows, 9), fullCapacitySheet('B', rows, 2)]),
+    ]
+    const versioned = versionedSource(docs)
+    const kernel = new ViewerKernel({ parse: async () => docs[0], openSource: async () => versioned.source }, { ...fast, filterEvaluator: thirds })
+    const replies: WorkerReply[] = []
+    const sink = (out: WorkerReply) => { replies.push(out) }
+    await kernel.handle({ kind: 'open', requestId: 'o', docId: 'doc', source: { kind: 'object', document: docs[0] }, profile: 'D' }, sink)
+    const session = kernel.session('doc')!
+    await kernel.handle({ kind: 'sort', requestId: 's', owner: initialIdentity('doc', 'A'), spec: sortOf(rows) }, sink)
+    versioned.publish()
+    session.publishValues('A')
+    expect(() => session.view('A')).toThrow(ViewNotResidentError)
+    await kernel.handle({ kind: 'activateSheet', requestId: 'a', owner: session.workbookOwner(), sheetId: 'A' }, sink)
+    expect(replies.at(-1)).toMatchObject({ requestId: 'a', kind: 'complete', diagnostics: [{ code: 'view-reapplied' }] })
+    expect(session.isResident('A')).toBe(true)
   })
 })
