@@ -1,6 +1,7 @@
 import type { ColumnEntry, FilterRange, PagedKeySetRef, SourceFailure, SourceStamp, SourceStore, ValueSearchPredicate, ValuesFilter } from './contracts'
 import type { ColumnClassification, PreparedValue } from './filter'
-import { FilterDiagnostic, TextFilterMatcher, WorkBudget, type FilterLimits } from './textFilter'
+import { DEFAULT_FILTER_TEXT_LENGTH, FilterDiagnostic, TextFilterMatcher, WorkBudget, type FilterLimits } from './textFilter'
+import { canonicalSearchKey } from './canonicalText'
 import {
   KEY_BOOLEAN, KEY_DATE, KEY_ERROR, KEY_NUMBER, KEY_STRING, NumberTable, ValueIndexError, loadKeySet,
   sameStamp, valueKeyString, type LaneAccount, type ValueKeySet, type ValueRunStore,
@@ -121,6 +122,24 @@ const STRING_ENTRY_BYTES = 40 + 128 + 8
 const KEY_PATCH_BYTES = 48 // one Map<ordinal, boolean> entry
 const RUN_ELEMENT_BYTES = 17 // kind 1 + number 8 + texts reference 8
 const PACE_STRIDE = 16
+/** Charged before generating one key: two copies of a canonical form whose
+ * UTF-16 length is conservatively bounded by 4x the raw length. */
+const keyScratchBytes = (length: number): number => length * 16 + 128
+/** Spec §7.1: a (validated) query whose canonical form is empty is no search
+ * term. Wildcard patterns qualify only when they have no unescaped `*`/`?`. */
+function canonicalEmpty(query: ValueSearchQuery): boolean {
+  let literal = query.text
+  if (query.wildcards) {
+    literal = ''
+    for (let at = 0; at < query.text.length; at++) {
+      const unit = query.text[at]
+      if (unit === '*' || unit === '?') return false
+      if (unit === '~') at++
+      literal += query.text[at] ?? ''
+    }
+  }
+  return canonicalSearchKey(literal, foldVariantOf(query.locale)) === ''
+}
 const MERGED = 1, UNKNOWN = 2 // page state 0 = unread
 const words = (bits: number): number => Math.ceil(bits / 32)
 const hasBit = (set: Uint32Array, at: number): boolean => (set[at >>> 5] & (1 << (at & 31))) !== 0
@@ -507,6 +526,7 @@ export class ValueIndex implements LaneAccount {
     if (this.keyState === 'streaming') return
     const complete = this.completeness === 'complete'
     let hash: string | undefined
+    const scratch = this.reserve()
     try {
       if (store && complete && this.searchKeys.length === 0 && total > 0) {
         hash = await this.contentHash(signal, pacer)
@@ -534,7 +554,14 @@ export class ValueIndex implements LaneAccount {
       if (this.searchKeys.length < total) {
         this.keyState = 'computing'
         for (let id = this.searchKeys.length; id < total; id++) {
-          const key = strategy.searchKeyOf(texts[id])
+          // Preflight raw length (an oversized value keeps a null key and the
+          // exact path rejects it, as EXACT_SEARCH does), then admit scratch.
+          const text = texts[id]
+          let key: string | null = null
+          if (text.length <= DEFAULT_FILTER_TEXT_LENGTH) {
+            scratch.charge(keyScratchBytes(text.length))
+            try { key = strategy.searchKeyOf(text) } finally { scratch.release() }
+          }
           if (key !== null && typeof key !== 'string') throw new ValueIndexError('invalid-rule', 'Search key function returned a non-string key')
           this.retainKey(key === null ? 8 : key.length * 2 + 48)
           this.searchKeys.push(key)
@@ -550,7 +577,7 @@ export class ValueIndex implements LaneAccount {
       if (!memoryQuota(error)) throw error
       this.dropSearchKeys()
       return
-    }
+    } finally { scratch.close() }
     progress()
     if (!store || !complete || this.keyState !== 'computed') return
     try {
@@ -755,7 +782,9 @@ export class ValueIndex implements LaneAccount {
       const label = labelOption ?? defaultLabel, strategy = this.strategy
       try {
         const budget = new WorkBudget({ ...limits, signal })
-        const contains = query.text === '' ? undefined : new TextFilterMatcher(query.locale).prepare('contains', query.text, wildcards, budget)
+        let contains = query.text === '' ? undefined : new TextFilterMatcher(query.locale).prepare('contains', query.text, wildcards, budget)
+        // After validation: a canonical-empty query takes the empty-query path.
+        if (contains && canonicalEmpty(query)) contains = undefined
         // Canonical keys evaluate the exact predicate (wildcards included);
         // custom keys only filter plain queries.
         const keysUsable = contains !== undefined && (!wildcards || strategy.exactKeys) && strategy !== EXACT_SEARCH && foldVariantOf(query.locale) === strategy.foldVariant
@@ -770,12 +799,24 @@ export class ValueIndex implements LaneAccount {
         const queryKey = keysUsable && !exactKeys ? strategy.searchKeyOf(query.text) : null
         if (queryKey !== null && typeof queryKey !== 'string') throw new ValueIndexError('invalid-rule', 'Search key function returned a non-string key')
         const streaming = this.keyState === 'streaming', keys = this.searchKeys
+        // Streaming keys: preflight raw length and admit scratch before generating;
+        // a value that cannot be admitted uses the exact path (as EXACT_SEARCH does).
+        const scratch = streaming ? this.reserve() : undefined
+        const streamKey = (text: string): string | null => {
+          if (text.length > budget.maxTextLength) return null
+          try { scratch!.charge(keyScratchBytes(text.length)) } catch (error) {
+            if (error instanceof ValueIndexError && error.code === 'quota') return null
+            throw error
+          }
+          try { return strategy.searchKeyOf(text) } finally { scratch!.release() }
+        }
+        try {
         for (let ordinal = from; ordinal < end; ordinal++) {
           budget.resetAllowance()
           let hit = true
           if (contains && exactKeys && (this.kinds[ordinal] === KEY_STRING || this.kinds[ordinal] === KEY_ERROR)) {
             const text = this.texts[this.numbers[ordinal]], id = this.numbers[ordinal]
-            const key = streaming ? strategy.searchKeyOf(text) : id < keys.length ? keys[id] : null
+            const key = streaming ? streamKey(text) : id < keys.length ? keys[id] : null
             if (key !== null && typeof key !== 'string') throw new ValueIndexError('invalid-rule', 'Search key function returned a non-string key')
             // The canonical key is the value's canonical form: predicate.key is the exact result.
             if (key !== null) { keyed++; hit = contains.key(key, text.length, budget) } else { exact++; hit = contains(text, budget) }
@@ -784,7 +825,7 @@ export class ValueIndex implements LaneAccount {
             if (queryKey !== null) {
               const kind = this.kinds[ordinal], id = this.numbers[ordinal]
               if (kind === KEY_STRING || kind === KEY_ERROR) {
-                const key = streaming ? strategy.searchKeyOf(this.texts[id]) : id < keys.length ? keys[id] : null
+                const key = streaming ? streamKey(this.texts[id]) : id < keys.length ? keys[id] : null
                 if (key !== null && typeof key !== 'string') throw new ValueIndexError('invalid-rule', 'Search key function returned a non-string key')
                 if (key !== null) { keyed++; candidate = strategy.matchKey(key, queryKey) }
               }
@@ -800,6 +841,7 @@ export class ValueIndex implements LaneAccount {
             live()
           }
         }
+        } finally { scratch?.close() }
       } catch (error) { throw diagnostic(error) }
       live()
       onProgress?.({ searched: end, total: end, matches: count })

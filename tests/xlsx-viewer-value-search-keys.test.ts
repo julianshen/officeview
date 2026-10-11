@@ -460,7 +460,8 @@ describe('review round 5 findings', () => {
         }
       }
       expect(index.searchKeyStatus.state).toBe('none')
-      await expect(index.search({ text: '\u200b*', locale: 'en-US', wildcards: true })).rejects.toMatchObject({ code: 'missing-display-text' })
+      // A real wildcard is a search term: it evaluates values (the 70k string is rejected first).
+      await expect(index.search({ text: '\u200b*', locale: 'en-US', wildcards: true })).rejects.toMatchObject({ code: 'resource-limit' })
     })
   it('preflights raw length before generating keys, resident and streaming (codex r5 2)', async () => {
     const huge = '가'.repeat(1 << 20), seen = { max: 0 }
