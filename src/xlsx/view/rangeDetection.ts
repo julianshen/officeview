@@ -3,9 +3,17 @@
  * a table containing the active cell wins with its metadata header/totals, then
  * an explicit contiguous selection, then the current region grown from the
  * active cell by bounded ring probes, then (for a blank seed only) the used
- * range when it holds exactly one current region. Disjoint Shift selections
- * are never coerced into a bounding rectangle: only the active cell seeds
- * detection. Guards run through the shared S3 guard; nothing here publishes,
+ * fallback. The used extent is a hint: the fallback resolves to the sole
+ * current region R of the first populated cell in it, and only when nothing
+ * else in the used range is populated; R itself is returned (it need not equal
+ * the used extent, whose blank margins would otherwise move styled blank rows),
+ * with source 'used'. Two blocks around a blank cell refuse as ambiguous.
+ * Disjoint Shift selections are never coerced into a bounding rectangle: only
+ * the active cell seeds detection. A derived range (explicit, region or used)
+ * that intersects any table it does not exactly equal refuses with
+ * 'ambiguous-selection' (it would mix table and non-table rows, or slice a
+ * table seeded from outside it); one exactly equal to a table takes the table
+ * path with its metadata. Guards run through the shared S3 guard; nothing here publishes,
  * mutates, or invents values. Unknown coverage waits, refusals carry typed
  * diagnostics, source failures map to typed source-error refusals, and
  * cancellation maps to cancelled. Outcomes are deep-frozen.
@@ -14,7 +22,7 @@
  * detection from scratch once the caller has completed the missing ranges. */
 import type {
   AuthoritativeCell, FilterRange, GridSelection, OperationRefusal, Page, ReadOptions,
-  SourceFailure, SourceStamp, SourceStore,
+  SourceFailure, SourceStamp, SourceStore, TableExtent,
 } from './contracts'
 import {
   MAX_COLS, MAX_ROWS, isValidCoordinate, isValidSourceRectInput, validateCoordinate,
@@ -474,6 +482,30 @@ function explicitRect(selection: GridSelection, active: SourceCell): SourceRect 
   if (active.row < rect.r0 || active.row > rect.r1 || active.col < rect.c0 || active.col > rect.c1) return null
   return rect
 }
+function finishTable(context: DetectionContext, table: TableExtent): Promise<RangeDetection> | RangeDetection {
+  if (!isValidSourceRectInput(table.range)
+    || (table.headerRows !== 0 && table.headerRows !== 1)
+    || (table.totalsRows !== 0 && table.totalsRows !== 1)) {
+    return refused({ reason: 'invalid-range', message: 'Declared table range is outside the worksheet domain' })
+  }
+  return finishRect(context, table.range, { kind: 'table', id: table.id }, table)
+}
+function sameRect(a: SourceRect, b: SourceRect): boolean {
+  return a.r0 === b.r0 && a.r1 === b.r1 && a.c0 === b.c0 && a.c1 === b.c1
+}
+/** Table-overlap admission for ranges not resolved from a containing table:
+ * any intersecting table other than an exact match refuses; an exact match is
+ * the table itself and keeps its metadata. */
+function finishDerived(context: DetectionContext, rect: SourceRect, source: RangeSource): Promise<RangeDetection> | RangeDetection {
+  const structure = context.request.structure
+  const other = structure.firstWhere(rect, hit => hit.kind === 'table' && !sameRect(hit.record.range, rect))
+  if (other !== undefined && other.kind === 'table') {
+    return refused({ reason: 'ambiguous-selection', message: `Derived range overlaps table ${other.record.id} without matching it` })
+  }
+  const exact = structure.firstWhere(rect, hit => hit.kind === 'table')
+  if (exact !== undefined && exact.kind === 'table') return finishTable(context, exact.record)
+  return finishRect(context, rect, source)
+}
 /** used minus region: up to four rectangles, clipped where the region overhangs. */
 function outsideRegion(used: SourceRect, region: SourceRect): SourceRect[] {
   const out: SourceRect[] = []
@@ -519,21 +551,13 @@ async function detectRange(request: RangeDetectionRequest, pacer: Pacer): Promis
     { r0: active.row, r1: active.row, c0: active.col, c1: active.col },
     hit => hit.kind === 'table',
   )
-  if (tableHit !== undefined && tableHit.kind === 'table') {
-    const table = tableHit.record
-    if (!isValidSourceRectInput(table.range)
-      || (table.headerRows !== 0 && table.headerRows !== 1)
-      || (table.totalsRows !== 0 && table.totalsRows !== 1)) {
-      return refused({ reason: 'invalid-range', message: 'Declared table range is outside the worksheet domain' })
-    }
-    return finishRect(context, table.range, { kind: 'table', id: table.id }, table)
-  }
+  if (tableHit !== undefined && tableHit.kind === 'table') return finishTable(context, tableHit.record)
   const explicit = explicitRect(selection, active)
   if (explicit === 'invalid') return refused({ reason: 'invalid-range', message: 'Malformed explicit selection range' })
-  if (explicit !== null) return finishRect(context, explicit, { kind: 'explicit' })
+  if (explicit !== null) return finishDerived(context, explicit, { kind: 'explicit' })
   const region = await probeCurrentRegion(active, scanner, pageLimit)
   if (region.kind === 'incomplete') return { kind: 'incomplete', missing: region.missing }
-  if (region.kind === 'region') return finishRect(context, region.rect, { kind: 'region' })
+  if (region.kind === 'region') return finishDerived(context, region.rect, { kind: 'region' })
   // Blank seed: the used range applies only when it holds exactly one current
   // region; two blocks around a blank cell must never become one range (§6.1).
   const used = request.usedRange ?? store.extent.used
@@ -556,7 +580,7 @@ async function detectRange(request: RangeDetectionRequest, pacer: Pacer): Promis
       return refused({ reason: 'ambiguous-selection', message: 'Blank active cell and the used range holds more than one region' })
     }
   }
-  return finishRect(context, sole.rect, { kind: 'used' })
+  return finishDerived(context, sole.rect, { kind: 'used' })
 }
 /** Typed boundary: cancellation, scan failures and budget exhaustion become
  * outcomes; anything else is a programming/source-contract error and throws. */
