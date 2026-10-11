@@ -272,6 +272,57 @@ describe('ambiguous and invalid inputs', () => {
       done(store, { r0: 0, r1: 3, c0: 0, c1: 1, headerRows: 1, totalsRows: 0 }, { kind: 'region' }, 'heuristic'),
     )
   })
+  it('resolves every equivalent encoding of one contiguous selection to the same explicit range', async () => {
+    const store = gridStore(headerGrid())
+    const expected = done(store, { r0: 0, r1: 1, c0: 0, c1: 0, headerRows: 1, totalsRows: 0 }, { kind: 'explicit' }, 'heuristic')
+    const encodings: GridSelection['ranges'][number]['rows'][] = [
+      { kind: 'intervals', intervals: [{ r0: 0, r1: 1 }] },
+      { kind: 'intervals', intervals: [{ r0: 0, r1: 0 }, { r0: 1, r1: 1 }] },
+      { kind: 'list', r0: 0, r1: 1, rows: Uint32Array.from([0, 1]) },
+      { kind: 'list', r0: 0, r1: 5, rows: Uint32Array.from([0, 1]) },
+      { kind: 'bitset', space: 'source', r0: 0, r1: 1, words: Uint32Array.from([3]), count: 2 },
+      { kind: 'bitset', space: 'source', r0: 0, r1: 40, words: Uint32Array.from([3, 0]), count: 2 },
+    ]
+    for (const rows of encodings) {
+      expect(await detectOperationRange(request(store, emptyIndex(store), sel(0, 0, [{ rows, cols: [{ c0: 0, c1: 0 }] }])))).toEqual(expected)
+    }
+    const splitCols = sel(1, 0, [{ rows: { kind: 'intervals', intervals: [{ r0: 1, r1: 2 }] }, cols: [{ c0: 0, c1: 0 }, { c0: 1, c1: 1 }] }])
+    expect(await detectOperationRange(request(store, emptyIndex(store), splitCols))).toEqual(
+      done(store, { r0: 1, r1: 2, c0: 0, c1: 1, headerRows: 0, totalsRows: 0 }, { kind: 'explicit' }, 'heuristic'),
+    )
+  })
+  it('treats every non-contiguous encoding as disjoint and seeds from the active cell', async () => {
+    const store = gridStore(headerGrid())
+    const region = done(store, { r0: 0, r1: 3, c0: 0, c1: 1, headerRows: 1, totalsRows: 0 }, { kind: 'region' }, 'heuristic')
+    const encodings: GridSelection['ranges'][number]['rows'][] = [
+      { kind: 'intervals', intervals: [{ r0: 0, r1: 0 }, { r0: 2, r1: 2 }] },
+      { kind: 'list', r0: 0, r1: 2, rows: Uint32Array.from([0, 2]) },
+      { kind: 'bitset', space: 'source', r0: 0, r1: 2, words: Uint32Array.from([5]), count: 2 },
+    ]
+    for (const rows of encodings) {
+      expect(await detectOperationRange(request(store, emptyIndex(store), sel(0, 0, [{ rows, cols: [{ c0: 0, c1: 0 }] }])))).toEqual(region)
+    }
+  })
+  it('refuses malformed list/bitset encodings and unresolvable refs with typed reasons', async () => {
+    const store = gridStore(headerGrid())
+    const invalid = { kind: 'refused', refusal: { reason: 'invalid-range', message: expect.any(String) } }
+    const malformed: GridSelection['ranges'][number]['rows'][] = [
+      { kind: 'list', r0: 0, r1: 1, rows: Uint32Array.from([1, 0]) },
+      { kind: 'list', r0: 0, r1: 1, rows: Uint32Array.from([0, 2]) },
+      { kind: 'list', r0: 0, r1: 1, rows: new Uint32Array(0) },
+      { kind: 'bitset', space: 'source', r0: 0, r1: 1, words: Uint32Array.from([3]), count: 1 },
+      { kind: 'bitset', space: 'source', r0: 0, r1: 1, words: Uint32Array.from([7]), count: 3 },
+      { kind: 'bitset', space: 'source', r0: 0, r1: 1, words: Uint32Array.from([3, 0]), count: 2 },
+      { kind: 'intervals', intervals: [{ r0: 1, r1: 1 }, { r0: 0, r1: 0 }] },
+    ]
+    for (const rows of malformed) {
+      expect(await detectOperationRange(request(store, emptyIndex(store), sel(0, 0, [{ rows, cols: [{ c0: 0, c1: 0 }] }])))).toEqual(invalid)
+    }
+    const ref = sel(0, 0, [{ rows: { kind: 'ref', refId: 'r', count: 2, stamp: store.stamp }, cols: [{ c0: 0, c1: 0 }] }])
+    expect(await detectOperationRange(request(store, emptyIndex(store), ref))).toEqual({
+      kind: 'refused', refusal: { reason: 'unsupported', message: expect.any(String) },
+    })
+  })
   it('refuses a malformed explicit selection part instead of falling back to region detection', async () => {
     const store = gridStore(headerGrid())
     const invalid = { kind: 'refused', refusal: { reason: 'invalid-range', message: expect.any(String) } }
@@ -364,6 +415,74 @@ describe('source identity', () => {
   })
 })
 
+describe('owner revalidation and late cancellation', () => {
+  it('refuses a result whose source generation changed while a read was in flight', async () => {
+    const base = gridStore(headerGrid())
+    let generation = 0
+    const moving: SourceStore = {
+      ...base,
+      get stamp() { return { ...base.stamp, valueGen: generation } },
+      readRows: async (range, cursor, options) => {
+        const page = await base.readRows(range, cursor, options)
+        generation = 1
+        return page
+      },
+    }
+    const outcome = await detectOperationRange({
+      store: moving, structure: emptyIndex(base), selection: sel(1, 0), options: readOptionsFor(base),
+    })
+    expect(outcome).toEqual({
+      kind: 'refused', refusal: { reason: 'source-error', code: 'stale-source', retryable: true, message: expect.any(String) },
+    })
+  })
+  it('stamps a complete result with the captured owner, not a later read of the store', async () => {
+    const store = gridStore(headerGrid())
+    const result = await detectOperationRange(request(store, emptyIndex(store), sel(1, 0)))
+    expect(result.kind === 'complete' && result.stamp).toEqual(store.stamp)
+  })
+  /** The guard's last outside-column page ends admission; the header probe's
+   * last row page ends detection. Abort exactly while that final page is served. */
+  async function abortOnLastCall(kind: 'scan' | 'rows'): Promise<RangeDetection> {
+    const base = gridStore(headerGrid())
+    const run = kind === 'scan' ? admitSortRange : detectOperationRange
+    const counting = (abortAt: number, controller: AbortController | null) => {
+      let scans = 0, reads = 0
+      const store: SourceStore = {
+        ...base,
+        scanPopulated: async function* (query, options) {
+          for await (const page of base.scanPopulated(query, options)) {
+            scans++
+            if (kind === 'scan' && scans === abortAt) controller?.abort()
+            yield page
+            return
+          }
+        },
+        readRows: async (range, cursor, options) => {
+          const page = await base.readRows(range, cursor, options)
+          reads++
+          if (kind === 'rows' && reads === abortAt) controller?.abort()
+          return page
+        },
+      }
+      return { store, totals: () => (kind === 'scan' ? scans : reads) }
+    }
+    const dry = counting(0, null)
+    expect((await run(request(dry.store, emptyIndex(base), sel(1, 0)))).kind).toBe('complete')
+    const controller = new AbortController()
+    const live = counting(dry.totals(), controller)
+    return run({
+      store: live.store, structure: emptyIndex(base), selection: sel(1, 0),
+      options: { signal: controller.signal, stamp: { ...base.stamp } },
+    })
+  }
+  it('cancels when the abort lands while the final scan page is in flight', async () => {
+    expect(await abortOnLastCall('scan')).toEqual({ kind: 'cancelled' })
+  })
+  it('cancels when the abort lands while the final row page is in flight', async () => {
+    expect(await abortOnLastCall('rows')).toEqual({ kind: 'cancelled' })
+  })
+})
+
 describe('used-range fallback', () => {
   it('refuses a blank seed when the used range holds more than one current region', async () => {
     const rows = [
@@ -389,13 +508,27 @@ describe('used-range fallback', () => {
     expect(await detectOperationRange(request(store, emptyIndex(store), sel(2, 5)))).toEqual(expected)
     expect(await admitSortRange(request(store, emptyIndex(store), sel(2, 5)))).toEqual(expected)
   })
-  it('waits on an unknown used extent only for blank seeds', async () => {
+  it('falls back to a bounded whole-sheet probe when the optional used hint is absent', async () => {
     const store = gridStore(headerGrid())
     const noused = { ...store, extent: { rows: 1048576 as const, cols: 16384 as const } }
     expect(await detectOperationRange(request(noused, emptyIndex(noused), sel(0, 0)))).toEqual(
       done(noused, { r0: 0, r1: 3, c0: 0, c1: 1, headerRows: 1, totalsRows: 0 }, { kind: 'region' }, 'heuristic'),
     )
-    expect(await detectOperationRange(request(noused, emptyIndex(noused), sel(2, 5)))).toEqual({
+    expect(await detectOperationRange(request(noused, emptyIndex(noused), sel(2, 5)))).toEqual(
+      done(noused, { r0: 0, r1: 3, c0: 0, c1: 1, headerRows: 1, totalsRows: 0 }, { kind: 'used' }, 'heuristic'),
+    )
+  })
+  it('refuses a proven-empty source without a used hint instead of waiting forever', async () => {
+    const empty = sparseStore([])
+    const ambiguous = { kind: 'refused', refusal: { reason: 'ambiguous-selection', message: expect.any(String) } }
+    expect(await detectOperationRange(request(empty, emptyIndex(empty), sel(5, 5)))).toEqual(ambiguous)
+    // A retry after the caller completes coverage stays decided, never a perpetual wait.
+    expect(await detectOperationRange(request(empty, emptyIndex(empty), sel(5, 5)))).toEqual(ambiguous)
+  })
+  it('waits without a used hint only while the whole-sheet probe meets pending coverage', async () => {
+    const store = gridStore([], 3, { pending: [{ r0: 0, r1: 2, c0: 0, c1: 7 }] })
+    const noused = { ...store, extent: { rows: 1048576 as const, cols: 16384 as const } }
+    expect(await detectOperationRange(request(noused, emptyIndex(noused), sel(5, 9)))).toEqual({
       kind: 'incomplete', missing: [{ r0: 0, r1: MAX_ROWS - 1, c0: 0, c1: MAX_COLS - 1 }],
     })
   })
