@@ -183,7 +183,8 @@ export class ViewerKernel {
   /** Last ownership check, immediately before emission (§10.1): a completion is
    * never published for a cancelled request, a closed or replaced document epoch
    * or an owner a newer commit superseded. Sort/filter completions already
-   * committed their view; they are withheld only when their epoch is gone. */
+   * committed their view; they are withheld when their epoch is gone or a newer
+   * commit replaced their delta (the client then learns the newer state). */
   private finalCheck(command: Exclude<WorkerCommand, { kind: 'cancel' }>, out: WorkerReply, entry: InFlight): WorkerReply {
     if (out.kind !== 'complete') return out
     const signal = entry.controller.signal
@@ -194,8 +195,14 @@ export class ViewerKernel {
       case 'close':
         return out
       case 'sort':
-      case 'filter':
-        return live(command.owner.docId) ? out : this.stale(command, command.owner)
+      case 'filter': {
+        // The command owner is superseded by its own commit; the committed
+        // delta's owner must still be the sheet's current one, so a delta that a
+        // newer commit replaced before emission is never published.
+        const delta = out.result.kind === 'view' ? out.result.delta : undefined
+        return live(command.owner.docId) && delta !== undefined && entry.session!.isCurrent(delta.owner)
+          ? out : this.stale(command, command.owner)
+      }
       case 'activateSheet': {
         if (signal.aborted) return reply(command, command.owner, { kind: 'cancelled' })
         return live(command.owner.docId) ? out : errorReply(command, command.owner, 'stale-source', false, [{ code: 'unknown-document', message: 'Document closed' }])
