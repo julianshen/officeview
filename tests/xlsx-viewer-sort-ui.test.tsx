@@ -220,3 +220,21 @@ it('reserves touch header chrome for visible 44px controls and retains source-sp
     ui.unmount()
   } finally { window.matchMedia = previous }
 })
+
+import { createAxisMetrics } from '../src/xlsx/view/axes'
+import { createSheetMetrics } from '../src/xlsx/view/projection'
+import { createScrollWindow } from '../src/xlsx/view/scrollWindow'
+import { MAX_ROWS, MAX_COLS } from '../src/xlsx/view/coordinates'
+it.each([16, 40, 64])('keeps compact desktop header targets inside a %ipx projected column', width => {
+  const p = gridFixture(), projection = createSheetMetrics({ rows: createAxisMetrics({ logicalCount: MAX_ROWS, defaultSizeCss: 24 }), cols: createAxisMetrics({ logicalCount: MAX_COLS, defaultSizeCss: 64 }), order: p.projection.order, visibility: p.view.visibility })
+  const window = createScrollWindow(projection, p.viewport, { zoom: width / 64 })
+  const ui = render(<GridHeaders projection={projection} window={window} viewport={p.viewport} columns={[0]} selection={p.selection}
+    sort={null} onSortCycle={vi.fn()} onFilter={vi.fn()} touchControls={false} />)
+  const header = ui.getByRole('columnheader', { name: 'Column A' })
+  const buttons = [...header.querySelectorAll('button')]
+  expect(buttons).toHaveLength(3)
+  // Explicit CSS width/minimum constraints cannot demand more than the projected box.
+  const floors = buttons.map(button => Math.max(parseFloat(button.style.width) || 0, parseFloat(button.style.minWidth) || 0))
+  expect(floors.every(value => value > 0)).toBe(true)
+  expect(floors.reduce((sum, value) => sum + value, 0)).toBeLessThanOrEqual(parseFloat(header.style.width) + 1e-6)
+})
