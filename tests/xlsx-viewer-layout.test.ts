@@ -7,7 +7,7 @@ import { describe, expect, test } from 'vitest'
 import { createCanvas } from 'canvas'
 import { computeMetrics, createCellLayoutHost, renderSheet, renderSheetViewport } from '../src/xlsx/render'
 import {
-  buildSheetGeometry, planViewport, queryViewport, sourceSetsForSlots, VIEWPORT_DETAIL_LIMITS,
+  buildSheetGeometry, planViewport, queryViewport, sourceSetsForSlots, toViewportResults, VIEWPORT_DETAIL_LIMITS,
   type SheetGeometry, type StoreViewportOutcome,
 } from '../src/xlsx/view/viewport'
 import { buildCellRecords, LayoutCache, placedFromViewportCells, type CellLayoutHost } from '../src/xlsx/view/textLayout'
@@ -601,5 +601,86 @@ describe('empty store windows', () => {
     expect(outcome.completeness).toBe('incomplete')
     expect(outcome.error).toMatchObject({ code: 'resource-limit' })
     expect(calls).toBeLessThanOrEqual(VIEWPORT_DETAIL_LIMITS.D.pages)
+  })
+})
+
+describe('review round 1 (opencode)', () => {
+  test('F1: the layout cache is byte-bounded; long wrapped texts evict LRU entries under the budget', () => {
+    const budget = 48 * 1024
+    const cache = new LayoutCache(65_536, budget)
+    const long = 'wrapped words '.repeat(12)
+    const rows: XlsxRow[] = Array.from({ length: 24 }, (_, r) => ({ index: r, heightPt: 60, customHeight: true, cells: Array.from({ length: 2 }, (_, c) => cell(r, c, `${r}:${c} ${long}`, { numFmtId: 0, wrapText: true })) }))
+    const sheet = sheetOf(rows)
+    const geometry = ready(sheet)
+    for (let frame = 0; frame < 6; frame++) {
+      renderSheetViewport(sheet, recorder().ctx, geometry, view(0, frame * 320, 128, 320), {}, { owner: OWNER, cache })
+      expect(cache.stats.bytes).toBeLessThanOrEqual(budget)
+    }
+    expect(cache.stats.built).toBeGreaterThan(cache.stats.entries)
+    expect(cache.stats.evicted).toBeGreaterThan(0)
+    // The default budget is a fraction of the §12.4 main-thread pool.
+    expect(new LayoutCache().maxBytes).toBeLessThanOrEqual(16 * 1024 * 1024)
+  })
+  test('F2: an active blank cell has no exact record on the store path', async () => {
+    const fixture = createFixture('F1', { nnz: 50 })
+    const store = fixture.createStore()
+    const metrics = storeMetrics()
+    const outcome = viewportOf(await queryViewport(store, metrics, view(0, 0, 320, 200), storeOwner(store), { signal: signal(), activeCell: { row: 5, col: 3 } }))
+    expect(fixture.isPopulated(5, 3)).toBe(false)
+    expect(outcome.active).toBeUndefined()
+    expect(outcome.work.semanticNodes).toBe(0)
+    const corner = viewportOf(await queryViewport(store, metrics, view(0, 0, 320, 200), storeOwner(store), { signal: signal(), activeCell: { row: 0, col: 0 } }))
+    expect(corner.active).toMatchObject({ kind: 'cell', source: { row: 0, col: 0 } })
+  })
+  test('F3: per-tile admission counts the same records on the object and store paths (all-merged 2x2 frame)', async () => {
+    // 72 x 72 grid of 5px cells merged 2x2: 1,296 anchors, 5,184 grid boxes in one tile.
+    const n = 72
+    const ranges = [] as Array<{ minRow: number; maxRow: number; minCol: number; maxCol: number }>
+    for (let r = 0; r < n; r += 2) for (let c = 0; c < n; c += 2) ranges.push({ minRow: r, maxRow: r + 1, minCol: c, maxCol: c + 1 })
+    const rows: XlsxRow[] = Array.from({ length: n }, (_, r) => ({ index: r, heightPt: 3.75, customHeight: true, cells: r % 2 ? [] : Array.from({ length: n / 2 }, (_, k) => cell(r, 2 * k, 1)) }))
+    const sheet = sheetOf(rows, [{ min: 0, max: n - 1, widthChars: 0 }], { mergeRanges: ranges, merges: [] })
+    const pane = view(0, 0, n * 5, n * 5)
+    expect(planViewport(ready(sheet), pane).kind).toBe('detail')
+    const inner = createFixture('F6').createStore()
+    const store: SourceStore = { ...inner, queryStructural: async (rect, options) => ({ ...(await inner.queryStructural(rect, options)), merges: ranges.map((m, i) => ({ id: `m${i}`, range: { r0: m.minRow, r1: m.maxRow, c0: m.minCol, c1: m.maxCol }, anchor: { row: m.minRow, col: m.minCol } })) }) }
+    const metrics = createSheetMetrics({
+      rows: createAxisMetrics({ logicalCount: MAX_ROWS, defaultSizeCss: 20, overrides: [{ start: 0, end: n - 1, sizeCss: 5 }] }),
+      cols: createAxisMetrics({ logicalCount: MAX_COLS, defaultSizeCss: 64, overrides: [{ start: 0, end: n - 1, sizeCss: 5 }] }),
+    })
+    const outcome = viewportOf(await queryViewport(store, metrics, pane, storeOwner(store), { signal: signal() }))
+    expect(outcome.coarse).toEqual([])
+    expect(outcome.cells.filter(item => item.kind === 'cell')).toHaveLength(n * n / 4)
+  })
+  test('F5: a multi-row readRows page places each cell at its own row', async () => {
+    const inner = createFixture('F6').createStore()
+    const store: SourceStore = {
+      ...inner,
+      readRows: async (range, cursor, options) => {
+        const page = await inner.readRows(range, cursor, options)
+        // Pack all cells of the page under its first row record.
+        return { ...page, items: page.items.length ? [{ row: page.items[0].row, cells: page.items.flatMap(item => item.cells) }] : [] }
+      },
+    }
+    const outcome = viewportOf(await queryViewport(store, storeMetrics(), view(0, 0, 128, 40), storeOwner(store), { signal: signal() }))
+    const cells = outcome.cells.filter(item => item.kind === 'cell')
+    expect(cells).toHaveLength(4)
+    for (const item of cells) {
+      if (item.kind !== 'cell') continue
+      expect(item.source.row).toBe(item.cell.row)
+      expect(item.bounds.y).toBe(item.cell.row * 20)
+    }
+    expect(outcome.cells.some(item => item.kind === 'unknown')).toBe(false)
+  })
+  test('F7: store frames map onto the worker ViewportResult contract', async () => {
+    const fixture = createFixture('F6')
+    const store = fixture.createStore()
+    const detail = viewportOf(await queryViewport(store, storeMetrics(), view(0, 0, 128, 40), storeOwner(store), { signal: signal() }))
+    expect(toViewportResults(detail)).toEqual([{ kind: 'viewport', completeness: 'complete', content: { kind: 'detail', cells: detail.cells } }])
+    const coarse = viewportOf(await queryViewport(store, storeMetrics({ rowCss: 0.5, colCss: 1 }), view(0, 0, 1440, 900, 0.25, 1), storeOwner(store), { signal: signal() }))
+    expect(toViewportResults(coarse)).toEqual([{ kind: 'viewport', completeness: 'complete', content: { kind: 'overview', groups: coarse.groups } }])
+    const pending = fixture.createStore({ pending: [{ r0: 0, r1: 100, c0: 0, c1: 100 }] })
+    const loading = viewportOf(await queryViewport(pending, storeMetrics({ rowCss: 0.5, colCss: 1 }), view(0, 0, 1440, 900, 0.25, 1), storeOwner(pending), { signal: signal() }))
+    const [result] = toViewportResults(loading)
+    expect(result.completeness).toBe('loading')
   })
 })
