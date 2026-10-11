@@ -699,9 +699,24 @@ export function renderSheet(
 function staticAdmission(sheet: XlsxSheet, m: GridMetrics, viewport?: SheetViewport): StaticExportLimit[] {
   const coverage = gridCoverageLimits(sheet, m.rowHeightsPx.length, m.colWidthsPx.length)
   if (!viewport) return [...coverage, ...requestedRasterLimits(m)]
-  const sum = (sizes: number[]) => sizes.reduce((a, b) => a + b, 0)
-  const gridWidth = sum(m.colWidthsPx), gridHeight = sum(m.rowHeightsPx)
-  return coverage.filter(limit => limit.resource === 'rows' ? viewport.y + viewport.height > gridHeight : viewport.x + viewport.width > gridWidth)
+  const colX = prefixSums(m.colWidthsPx), rowY = prefixSums(m.rowHeightsPx)
+  const nCols = m.colWidthsPx.length, nRows = m.rowHeightsPx.length
+  const gridWidth = colX[nCols], gridHeight = rowY[nRows]
+  const limits = coverage.filter(limit => limit.resource === 'rows' ? viewport.y + viewport.height > gridHeight : viewport.x + viewport.width > gridWidth)
+  // A merge the grid truncates has no true extent here: its anchor would lay out
+  // against the bitmap edge. Refuse a window that touches its retained part.
+  for (const r of sheet.mergeRanges ?? []) {
+    if (!validMerge(r) || (r.maxRow < nRows && r.maxCol < nCols) || r.minRow >= nRows || r.minCol >= nCols) continue
+    const x = colX[r.minCol], y = rowY[r.minRow]
+    const right = r.maxCol < nCols ? colX[r.maxCol + 1] : gridWidth, bottom = r.maxRow < nRows ? rowY[r.maxRow + 1] : gridHeight
+    if (x < viewport.x + viewport.width && right > viewport.x && y < viewport.y + viewport.height && bottom > viewport.y) {
+      const resource = r.maxRow >= nRows ? 'rows' as const : 'cols' as const
+      const requested = resource === 'rows' ? r.maxRow + 1 : r.maxCol + 1, limit = resource === 'rows' ? nRows : nCols
+      limits.push({ code: 'large-export-limit', resource, requested, limit, message: `A merged range reaching ${resource === 'rows' ? 'row' : 'column'} ${requested} is truncated by the ${limit}-${resource === 'rows' ? 'row' : 'column'} static grid; render it through the interactive viewer` })
+      break
+    }
+  }
+  return limits
 }
 
 type MeasureCached = (font: string, text: string) => number
