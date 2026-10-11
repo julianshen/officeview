@@ -105,8 +105,9 @@ Every package is implemented on its own branch, reviewed by at least one agent f
 | S2.3 full-coordinate renderer seam and explicit static budgets (`src/xlsx/view/viewport.ts`, `render.ts`, `paint.ts`) | merged |
 | S8.3 declared filter diagnostics (`src/xlsx/view/declaredFilters.ts`, parse.ts) | merged |
 | S8.2 semantic value index and searched Select All (`valueIndex.ts`, `valueRuns.ts`, `searchKeys.ts`) | merged |
-| S1.1b, S4.3, S6.1 | in progress (implementation or review rounds on their own branches) |
-| S1.2, S1.3, S4.3–S4.5, S5, S6, S9, S10 (physical-device receipts skipped for now by user decision), S11/S12 status, S13 | not started |
+| S4.3 lifecycle, document-wide memory pool, LRU tiers, tile cache and leases (`tileCache.ts`, worker session/kernel) | merged |
+| S1.1b, S6.1 | in progress (implementation or review rounds on their own branches) |
+| S1.2, S1.3, S4.4–S4.5, S5, S6, S9, S10 (physical-device receipts skipped for now by user decision), S11/S12 status, S13 | not started |
 
 ## S0 — Freeze contracts, counterexamples and fixture/harness infrastructure
 
@@ -344,12 +345,14 @@ expect(session.publishWorkbookIndex(staleA)).toBe(false)
 
 ### S4.3 LRU/resource close and font/image leases
 
+> **Status (2026-10-11):** merged (Claude implementation; pi reviews over two rounds; every finding fixed). One `MemoryPool` per document (D 512 / M 256 MiB, minimum one sheet mask) with no force path; LRU tiers rebuildable→source→view; evicted inactive views rebuilt from recipes and verified against the committed-order digest; value publication re-derives sorted orders on all sheets (`view-reapplied`); closed sessions never revive; `TileCache` closes surfaces exactly once (not yet wired to paint, S5.2); image/font lease leak in `getPaintables` fixed. F7 ledger plateaus (12 sheets, 4 MiB budget). Browser retained-memory verification remains S10.
+
 **Files:** extend `viewerSession.ts`; create `src/xlsx/view/tileCache.ts`; integrate `src/core/images.ts`, `src/core/fonts/register.ts`, `src/render/paint.ts`; test `tests/xlsx-viewer-lifecycle.test.tsx`, retain `tests/fonts-index-lease.test.tsx`, `tests/cached-picture-pipeline.test.ts`.
 
-- [ ] RED: repeatedly open/close documents, change sheet/font/backend, cancel jobs, evict/reload pages and dispose while bitmap/font/image resources are in flight. Assert lease counts and retained owned bytes return to baseline, closed sessions cannot revive and previously active sheet views survive LRU eviction by source identity. F7 switches among many full-capacity sparse sheets with local sort/filter states; aggregate memory must plateau across sessions/sheets, not merely satisfy a per-sheet cap.
-- [ ] Run `bunx vitest run tests/xlsx-viewer-lifecycle.test.tsx tests/fonts-index-lease.test.tsx tests/cached-picture-pipeline.test.ts`; expected retained lease/session or stale publish fails.
-- [ ] GREEN: close removes listeners/pending entries/pages/external runs/column caches; close ImageBitmaps and GPU objects; retain/release existing image/font leases exactly once. LRU separates persisted source pages, retained compact sheet views and rebuildable layout/tile data. Inactive permutations/prefixes/prepared columns also count toward the single document-wide budget and may be externalized/evicted/rebuilt; never retain one 8MiB prefix per sheet without admission. Charge Wasm heaps, pending transfers and temporary buffers to the same worker budget.
-- [ ] Run focused command; expected cancellation/close recover allocations and cached/offscreen search records do not release fonts still needed by active paint.
+- [x] RED: repeatedly open/close documents, change sheet/font/backend, cancel jobs, evict/reload pages and dispose while bitmap/font/image resources are in flight. Assert lease counts and retained owned bytes return to baseline, closed sessions cannot revive and previously active sheet views survive LRU eviction by source identity. F7 switches among many full-capacity sparse sheets with local sort/filter states; aggregate memory must plateau across sessions/sheets, not merely satisfy a per-sheet cap.
+- [x] Run `bunx vitest run tests/xlsx-viewer-lifecycle.test.tsx tests/fonts-index-lease.test.tsx tests/cached-picture-pipeline.test.ts`; expected retained lease/session or stale publish fails.
+- [x] GREEN: close removes listeners/pending entries/pages/external runs/column caches; close ImageBitmaps and GPU objects; retain/release existing image/font leases exactly once. LRU separates persisted source pages, retained compact sheet views and rebuildable layout/tile data. Inactive permutations/prefixes/prepared columns also count toward the single document-wide budget and may be externalized/evicted/rebuilt; never retain one 8MiB prefix per sheet without admission. Charge Wasm heaps, pending transfers and temporary buffers to the same worker budget.
+- [x] Run focused command; expected cancellation/close recover allocations and cached/offscreen search records do not release fonts still needed by active paint.
 - [ ] Deliver lifecycle PR with repeated-open memory ledger; browser retained-memory verification remains S10.
 
 ## S5 — Visible rendering, shared canonical records and global search
