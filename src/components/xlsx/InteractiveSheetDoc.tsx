@@ -292,6 +292,8 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
   const mark = useMemo(() => normalizeWatermark(watermark), [markKey]) // eslint-disable-line react-hooks/exhaustive-deps
   const biasRef = useRef({ x: 0, y: 0 })
   const overlayPaints = useRef(0)
+  // Set by the overlay pass; read by the next render's status (a declared coarse state).
+  const selectionIncomplete = useRef(false)
   const frameOf = (): SheetFrame | null => entry && scroll ? {
     sheet: entry.sheet, geometry: entry.geometry, identity, origin: scroll.logicalOrigin, viewport, zoom: scroll.zoom, dpr,
     extent: { width: entry.metrics.cols.totalCss(), height: entry.metrics.rows.totalCss() },
@@ -468,9 +470,11 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
     if (selection.ranges.length) {
       const records = overlayRecords(entry.metrics, pane, profile)
       // Past the per-cell cap the membership is coalesced into pixel groups, never dropped.
+      const coarse = records ? null : coarseSelectionRecords(selection, entry.metrics, pane, scroll.zoom * dpr)
+      selectionIncomplete.current = Boolean(coarse?.incomplete)
       const geometry = records
         ? gridSelectionOverlay({ contains: at => selectionContains(selection, at) }, records, pane, scroll.zoom * dpr)
-        : gridSelectionOverlay({ contains: () => true }, coarseSelectionRecords(selection, entry.metrics, pane, scroll.zoom * dpr), pane, scroll.zoom * dpr)
+        : gridSelectionOverlay({ contains: () => true }, coarse!.records, pane, scroll.zoom * dpr)
       paintGridSelectionOverlay(ctx, gridGeometryToViewport(geometry, pane, scroll.zoom, bias), dpr)
     }
     report()
@@ -674,7 +678,7 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
         <div ref={paneRef} data-testid="officeview-sheet-pane" style={{ position: 'relative', flex: '1 1 auto', minHeight: 0, overflow: 'hidden', background: '#ffffff' }}>
           {entry && scroll && (
             <GridSemantics owner={identity} projection={entry.metrics} view={entry.view} selection={selection} window={scroll} viewport={viewport}
-              body={entry.body} onChange={onGridChange} announcement={[resourceNotice, announcement].filter(Boolean).join(' ')} inspection={inspection} profile={profile} label={`Worksheet ${entry.sheet.name}`}
+              body={entry.body} onChange={onGridChange} announcement={[resourceNotice, selectionIncomplete.current ? 'Selection highlight is incomplete at this zoom; zoom in for detail.' : '', announcement].filter(Boolean).join(' ')} inspection={inspection} profile={profile} label={`Worksheet ${entry.sheet.name}`}
               cellPresentation={at => {
                 const cell = cellAt(entry, at)
                 return { text: cell ? cellDisplayText(entry.sheet, cell) : '' }

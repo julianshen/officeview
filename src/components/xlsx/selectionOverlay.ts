@@ -12,11 +12,9 @@ import { rowContains } from '../../xlsx/view/selection'
 import type { GridOverlayRecord } from '../../core/overlay'
 
 interface Box { x: number; y: number; width: number; height: number }
-/** Per-row mapping work inside permuted bands, per frame. Past it a band's selected
- * rows are summarized by the band's display range (declared coarse state). */
+/** Per-frame membership work (band slots tested, list rows/bitset words visited).
+ * Past it the remaining slots are skipped, never painted (declared incomplete). */
 export const COARSE_SELECTION_ROW_BUDGET = 65_536
-/** Coalesced groups per axis per frame. */
-export const COARSE_SELECTION_GROUPS = 1024
 
 /** Bounded per-cell overlay records for the pane plus one neighbour ring; null
  * past the profile's frame cap (the declared coarse state, spec §11.1). */
@@ -52,70 +50,114 @@ export function selectionContains(selection: GridSelection, at: SourceCell): boo
 }
 
 type Span = [number, number]
-/** Sort, snap to device pixels and merge touching spans, then coarsen until at most
- * COARSE_SELECTION_GROUPS remain. */
-function coalesce(spans: Span[], lo: number, hi: number, scale: number): Span[] {
-  let unit = 1 / scale
-  for (;;) {
-    const snapped = spans
-      .map(([a, b]): Span => [Math.max(lo, Math.floor(a / unit) * unit), Math.min(hi, Math.max(Math.floor(a / unit) * unit + unit, Math.ceil(b / unit) * unit))])
-      .filter(([a, b]) => b > a)
-      .sort((x, y) => x[0] - y[0])
-    const out: Span[] = []
-    for (const span of snapped) {
-      const last = out[out.length - 1]
-      if (last && span[0] <= last[1]) last[1] = Math.max(last[1], span[1])
-      else out.push([...span] as Span)
-    }
-    if (out.length <= COARSE_SELECTION_GROUPS) return out
-    unit *= 2
-  }
-}
-/** Selected display-slot ranges of one source row set (bounded work). */
-function slotRanges(rows: GridSelection['ranges'][number]['rows'], metrics: ProjectedSheetMetrics, budget: { rows: number }): Array<[number, number]> {
-  if (rows.kind === 'ref') return []
-  const sourceIntervals: Array<[number, number]> = []
-  if (rows.kind === 'intervals') for (const r of rows.intervals) sourceIntervals.push([r.r0, r.r1])
-  else if (rows.kind === 'list') for (const row of rows.rows) sourceIntervals.push([row, row])
-  else {
-    // Walk set bits word by word; empty words cost one test.
-    rows.words.forEach((word, index) => {
-      for (let bit = 0; word !== 0 && bit < 32; bit++) if (Math.floor(word / 2 ** bit) % 2) { const row = rows.r0 + index * 32 + bit; sourceIntervals.push([row, row]) }
+/** Total coarse records per frame across every part and both axes. */
+export const COARSE_SELECTION_RECORDS = 4096
+
+/** Snap spans to `unit` and merge overlapping/touching ones (clipped to [lo,hi]). */
+function snapMerge(spans: readonly Span[], lo: number, hi: number, unit: number): Span[] {
+  const snapped = spans
+    .map(([a, b]): Span => {
+      const start = Math.max(lo, Math.floor(a / unit) * unit)
+      return [start, Math.min(hi, Math.max(start + unit, Math.ceil(b / unit) * unit))]
     })
-  }
-  const bands = [...metrics.order.bands].sort((a, b) => a.r0 - b.r0)
-  const out: Array<[number, number]> = []
-  for (const [r0, r1] of sourceIntervals) {
-    let at = r0
-    for (const band of bands) {
-      if (band.r1 < at || band.r0 > r1) continue
-      if (band.r0 > at) out.push([at, band.r0 - 1]) // identity stretch: slot == source row
-      const b0 = Math.max(at, band.r0), b1 = Math.min(r1, band.r1)
-      if (b1 - b0 + 1 <= budget.rows) {
-        budget.rows -= b1 - b0 + 1
-        for (let row = b0; row <= b1; row++) { const slot = metrics.order.sourceToDisplay(row); out.push([slot, slot]) }
-      } else out.push([band.r0, band.r1])
-      at = b1 + 1
-      if (at > r1) break
-    }
-    if (at <= r1) out.push([at, r1])
+    .filter(([a, b]) => b > a)
+    .sort((x, y) => x[0] - y[0])
+  const out: Span[] = []
+  for (const span of snapped) {
+    const last = out[out.length - 1]
+    if (last && span[0] <= last[1]) last[1] = Math.max(last[1], span[1])
+    else out.push([span[0], span[1]])
   }
   return out
 }
-/** Coarse selection records: coalesced device-pixel groups of the selected
- * membership clipped to the pane. `contains` is true for every record. */
-export function coarseSelectionRecords(selection: GridSelection, metrics: ProjectedSheetMetrics, pane: Box, scale: number): GridOverlayRecord[] {
-  const budget = { rows: COARSE_SELECTION_ROW_BUDGET }
-  const records: GridOverlayRecord[] = []
-  const yLo = pane.y, yHi = pane.y + pane.height, xLo = pane.x, xHi = pane.x + pane.width
-  for (const part of selection.ranges) {
-    const ys = coalesce(slotRanges(part.rows, metrics, budget)
-      .map(([s0, s1]): Span => [metrics.rows.start(s0), metrics.rows.start(s1) + metrics.rows.size(s1)])
-      .filter(([a, b]) => b > yLo && a < yHi), yLo, yHi, scale)
-    const xs = coalesce(part.cols
-      .map((c): Span => [metrics.cols.start(c.c0), metrics.cols.start(c.c1) + metrics.cols.size(c.c1)])
-      .filter(([a, b]) => b > xLo && a < xHi), xLo, xHi, scale)
-    for (const [y0, y1] of ys) for (const [x0, x1] of xs) records.push({ source: { row: 0, col: 0 }, bounds: { x: x0, y: y0, width: x1 - x0, height: y1 - y0 } })
+
+type RowSet = GridSelection['ranges'][number]['rows']
+function lowerBound(rows: Uint32Array, value: number): number {
+  let lo = 0, hi = rows.length
+  while (lo < hi) { const mid = Math.floor((lo + hi) / 2); if (rows[mid] < value) lo = mid + 1; else hi = mid }
+  return lo
+}
+/** Selected source rows within the identity stretch [a,b] (slot == source row). */
+function identitySpans(rows: RowSet, a: number, b: number, budget: { work: number }, out: Array<[number, number]>): boolean {
+  if (rows.kind === 'intervals') {
+    for (const r of rows.intervals) { const lo = Math.max(a, r.r0), hi = Math.min(b, r.r1); if (lo <= hi) out.push([lo, hi]) }
+    return true
   }
-  return records
+  if (rows.kind === 'list') {
+    for (let at = lowerBound(rows.rows, a); at < rows.rows.length && rows.rows[at] <= b; at++) {
+      if (--budget.work < 0) return false
+      out.push([rows.rows[at], rows.rows[at]])
+    }
+    return true
+  }
+  if (rows.kind === 'bitset') {
+    const first = Math.max(0, Math.floor((a - rows.r0) / 32)), last = Math.min(rows.words.length - 1, Math.floor((b - rows.r0) / 32))
+    for (let index = first; index <= last; index++) {
+      if (--budget.work < 0) return false
+      const word = rows.words[index]
+      if (word === 0) continue
+      for (let bit = 0; bit < 32; bit++) {
+        const row = rows.r0 + index * 32 + bit
+        if (row >= a && row <= b && Math.floor(word / 2 ** bit) % 2) out.push([row, row])
+      }
+    }
+  }
+  return true
+}
+
+/**
+ * Coarse selection records for a pane past the per-cell cap: EXACT visible
+ * membership, never an enclosing approximation. Identity stretches intersect the
+ * selection's source sets with the visible slot range; permuted band slots are
+ * tested one by one against a per-frame work budget, and when it runs out the
+ * remaining slots are skipped (`incomplete`), never painted. Output is bounded
+ * across all parts and both axes by COARSE_SELECTION_RECORDS through pixel-group
+ * coalescing; coarsening beyond one device pixel also marks `incomplete`.
+ */
+export function coarseSelectionRecords(selection: GridSelection, metrics: ProjectedSheetMetrics, pane: Box, scale: number): { records: GridOverlayRecord[]; incomplete: boolean } {
+  const yLo = pane.y, yHi = pane.y + pane.height, xLo = pane.x, xHi = pane.x + pane.width
+  const budget = { work: COARSE_SELECTION_ROW_BUDGET }
+  let incomplete = false
+  // Visible display slot range of the pane (first/last positive-size slots).
+  let vs0 = -1, vs1 = -1, runs = 0
+  for (const run of metrics.rows.visibleBetween(yLo, yHi).runs) {
+    if (vs0 < 0) vs0 = run.start
+    vs1 = run.end
+    if (++runs > COARSE_SELECTION_ROW_BUDGET) { incomplete = true; break }
+  }
+  if (vs0 < 0) return { records: [], incomplete }
+  const bands = [...metrics.order.bands].filter(band => band.r1 >= vs0 && band.r0 <= vs1).sort((x, y) => x.r0 - y.r0)
+  const parts: Array<{ ys: Span[]; xs: Span[] }> = []
+  for (const part of selection.ranges) {
+    if (part.rows.kind === 'ref') { incomplete = true; continue }
+    const slots: Array<[number, number]> = []
+    let at = vs0
+    const identity = (a: number, b: number) => { if (a <= b && !identitySpans(part.rows, a, b, budget, slots)) incomplete = true }
+    for (const band of bands) {
+      identity(at, Math.min(vs1, band.r0 - 1))
+      const b0 = Math.max(at, band.r0), b1 = Math.min(vs1, band.r1)
+      for (let slot = b0; slot <= b1; slot++) {
+        if (--budget.work < 0) { incomplete = true; break }
+        if (rowContains(part.rows, metrics.order.displayToSource(slot))) slots.push([slot, slot])
+      }
+      at = b1 + 1
+    }
+    identity(at, vs1)
+    const ys = slots.map(([s0, s1]): Span => [metrics.rows.start(s0), metrics.rows.start(s1) + metrics.rows.size(s1)]).filter(([a, b]) => b > yLo && a < yHi)
+    const xs = part.cols.map((c): Span => [metrics.cols.start(c.c0), metrics.cols.start(c.c1) + metrics.cols.size(c.c1)]).filter(([a, b]) => b > xLo && a < xHi)
+    if (ys.length && xs.length) parts.push({ ys, xs })
+  }
+  // One global output budget: coarsen every axis of every part together.
+  let unit = 1 / scale
+  for (;;) {
+    const grouped = parts.map(part => ({ ys: snapMerge(part.ys, yLo, yHi, unit), xs: snapMerge(part.xs, xLo, xHi, unit) }))
+    const total = grouped.reduce((sum, part) => sum + part.ys.length * part.xs.length, 0)
+    if (total <= COARSE_SELECTION_RECORDS) {
+      if (unit > 1 / scale) incomplete = true
+      const records: GridOverlayRecord[] = []
+      for (const part of grouped) for (const [y0, y1] of part.ys) for (const [x0, x1] of part.xs) records.push({ source: { row: 0, col: 0 }, bounds: { x: x0, y: y0, width: x1 - x0, height: y1 - y0 } })
+      return { records, incomplete }
+    }
+    unit *= 2
+  }
 }
