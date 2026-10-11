@@ -107,6 +107,8 @@ export type ObjectDecision =
     evaluation: ObjectEvaluationCaps
     predictedPeak: number
     admissionTotal: number
+    /** Set when the strict tokenizer refused a part's XML grammar; the legacy parser decides (decision 3). */
+    legacyFallback?: { part: string; message: string }
   }
   | { mode: 'paged'; counters: AdmissionCounters; reason: string }
   | { mode: 'refuse'; failure: SourceFailure }
@@ -175,48 +177,63 @@ export async function verifyObjectCandidate(src: RangeSource, inventory: ZipInve
   const counters = newAdmissionCounters()
   counters.highRatioParts = highRatioParts(inventory, o.maxRatio)
   let nonDrawing = 0
+  let legacyFallback: { part: string; message: string } | undefined
   try {
     for (const entry of verificationOrder(inventory)) {
       throwIfAborted(signal)
       const info = classifyPart(entry.name)
       if (info.cls === 'media') continue
       const partCap = info.drawing ? o.drawingPartBytes : o.nonDrawingPartBytes
-      const ledgerBudget = ledger.partBudget(entry.name, partCap)
       let partBytes = 0
-      const budget: ExpandedBudget = {
-        charge(bytes) {
-          if (partBytes + bytes > partCap) throw new CapTrip(`part ${entry.name} expands beyond ${partCap} bytes`)
-          if (!info.drawing && nonDrawing + bytes > o.nonDrawingExpandedBytes) throw new CapTrip(`non-drawing parts expand beyond ${o.nonDrawingExpandedBytes} bytes`)
-          ledgerBudget.charge(bytes)
-          partBytes += bytes
-          if (!info.drawing) nonDrawing += bytes
-          counters.expandedBytes += bytes
-          if (partBytes > counters.maxPartBytes) counters.maxPartBytes = partBytes
-        },
-      }
-      const part = openPart(src, entry, { signal, budget, rangeReadBytes: limits.rangeReadBytes, outputBufferBytes: limits.inflateOutputBytes })
-      try {
-        if (info.cls === 'xml') {
-          const events = countingEvents(counters, entry.name, { check: (c, pending) => checkCaps(c, pending, limits), alternateContentData: 'record' })
-          await tokenizeBytes(part, events, { signal, limits: { maxTokenChars: limits.maxTokenChars, maxAttributes: o.maxAttributesPerElement } })
-        } else {
-          for await (const chunk of part) void chunk
+      const open = () => {
+        const ledgerBudget = ledger.partBudget(entry.name, partCap)
+        const budget: ExpandedBudget = {
+          charge(bytes) {
+            if (partBytes + bytes > partCap) throw new CapTrip(`part ${entry.name} expands beyond ${partCap} bytes`)
+            if (!info.drawing && nonDrawing + bytes > o.nonDrawingExpandedBytes) throw new CapTrip(`non-drawing parts expand beyond ${o.nonDrawingExpandedBytes} bytes`)
+            ledgerBudget.charge(bytes)
+            partBytes += bytes
+            if (!info.drawing) nonDrawing += bytes
+            counters.expandedBytes += bytes
+            if (partBytes > counters.maxPartBytes) counters.maxPartBytes = partBytes
+          },
         }
-      } catch (error) {
-        throw isPackageError(error) && error.partId === undefined && !(error instanceof CapTrip)
-          ? new PackageError(error.code, error.message, entry.name)
-          : error
+        return tagged(openPart(src, entry, { signal, budget, rangeReadBytes: limits.rangeReadBytes, outputBufferBytes: limits.inflateOutputBytes }), entry.name)
+      }
+      const drain = async () => { for await (const chunk of open()) void chunk }
+      try {
+        if (info.cls === 'xml' && legacyFallback === undefined) {
+          const events = countingEvents(counters, entry.name, { check: (c, pending) => checkCaps(c, pending, limits), alternateContentData: 'record' })
+          try {
+            await tokenizeBytes(open(), events, { signal, limits: { maxTokenChars: limits.maxTokenChars, maxAttributes: o.maxAttributesPerElement } })
+          } catch (error) {
+            if (error instanceof PartByteError || error instanceof CapTrip || !isPackageError(error) || error.code === 'cancelled') throw error
+            // An XML grammar the strict tokenizer refuses (DOCTYPE, long
+            // references, attribute/depth caps, malformed markup) is not a
+            // safety violation: the legacy parser decides, as today
+            // (decision 3). This part and the rest are still byte-verified.
+            legacyFallback = { part: entry.name, message: error.message }
+            if (!info.drawing) nonDrawing -= partBytes
+            counters.expandedBytes -= partBytes
+            partBytes = 0
+            ledger.drainQueue()
+            await drain()
+          }
+        } else {
+          await drain()
+        }
       } finally {
         ledger.drainQueue()
       }
     }
   } catch (error) {
     if (error instanceof CapTrip) return { mode: 'paged', counters, reason: error.reason }
-    if (isPackageError(error)) {
-      if (error.code === 'cancelled') throw error
-      return { mode: 'refuse', failure: failure(error.code, error.message) }
+    const cause = error instanceof PartByteError ? error.error : error
+    if (isPackageError(cause)) {
+      if (cause.code === 'cancelled') throw cause
+      return { mode: 'refuse', failure: failure(cause.code, cause.message) }
     }
-    throw error
+    throw cause
   }
   const peak = predictedPeak(counters, limits)
   const total = admissionTotal(counters, limits)
@@ -229,6 +246,21 @@ export async function verifyObjectCandidate(src: RangeSource, inventory: ZipInve
     predictedPeak: peak,
     admissionTotal: total,
     evaluation: { maxArrayCells: ev.maxArrayCells, maxArraySide: ev.maxArrayCells, maxMaterializedCells },
+    ...(legacyFallback ? { legacyFallback } : {}),
+  }
+}
+
+/** A failure raised by the part's bytes (size, CRC, termination): always a safety refusal. */
+class PartByteError {
+  constructor(readonly error: unknown) {}
+}
+
+async function* tagged(part: AsyncGenerator<Uint8Array, void, void>, partId: string): AsyncGenerator<Uint8Array, void, void> {
+  try {
+    for await (const chunk of part) yield chunk
+  } catch (error) {
+    if (error instanceof CapTrip) throw error
+    throw new PartByteError(isPackageError(error) && error.partId === undefined ? new PackageError(error.code, error.message, partId) : error)
   }
 }
 
@@ -242,7 +274,24 @@ export function evaluationHitCap(doc: XlsxDocument): string | undefined {
 export type SpreadsheetAdmission =
   | { mode: 'object'; decision: Extract<ObjectDecision, { mode: 'object' }> }
   | { mode: 'paged'; reason: string; counters?: AdmissionCounters }
-  | { mode: 'refuse'; failure: SourceFailure }
+  /** The strict reader refused the archive for a non-safety reason; the legacy path decides after a bounded size check. */
+  | { mode: 'legacy-fallback'; reason: string }
+  /** `duplicateName`: the caller may downgrade a case-insensitive-only duplicate to a legacy fallback. */
+  | { mode: 'refuse'; failure: SourceFailure; duplicateName?: string }
+
+/**
+ * Strict-reader refusals that are grammar or capability limits, not safety
+ * violations (decision 3): the legacy JSZip path handles them exactly as
+ * today (and errors where it errored). Kept as refusals: declared sizes beyond
+ * the caps, exact duplicate names (parser differential, §4.5 disguise chain),
+ * overlapping entries, data outside the data area and forged or inconsistent
+ * EOCD/ZIP64 structure.
+ */
+const GRAMMAR_INVENTORY = /entries exceed the limit|central directory of \d+ bytes exceeds|part name of \d+ bytes exceeds|part name is not valid UTF-8|escaping or invalid part name|empty part name/
+
+export function isGrammarInventoryRefusal(error: PackageError): boolean {
+  return error.code === 'unsupported' || GRAMMAR_INVENTORY.test(error.message)
+}
 
 /** Inventory (paged caps), G1, then G2 for an object candidate. */
 export async function admitSpreadsheet(src: RangeSource, profile: ProfileId, limits: ImportLimits, signal: AbortSignal, options: VerifyOptions = {}): Promise<SpreadsheetAdmission> {
@@ -250,8 +299,10 @@ export async function admitSpreadsheet(src: RangeSource, profile: ProfileId, lim
   try {
     inventory = await readZipInventory(src, inventoryLimits(limits), signal)
   } catch (error) {
-    if (isPackageError(error) && error.code !== 'cancelled') return { mode: 'refuse', failure: failure(error.code, error.message) }
-    throw error
+    if (!isPackageError(error) || error.code === 'cancelled') throw error
+    if (isGrammarInventoryRefusal(error)) return { mode: 'legacy-fallback', reason: error.message }
+    const duplicate = /^duplicate part name (.*)$/.exec(error.message)
+    return { mode: 'refuse', failure: failure(error.code, error.message), ...(duplicate ? { duplicateName: duplicate[1] } : {}) }
   }
   const g1 = admit(profile, src.size, inventory, limits)
   if (g1.mode !== 'object-candidate') return g1

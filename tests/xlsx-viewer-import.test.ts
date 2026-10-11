@@ -187,6 +187,45 @@ describe('files the old path opened still open (orchestrator decisions)', () => 
   })
 })
 
+describe('decision 3: strict-reader grammar refusals fall back to the legacy path', () => {
+  const opensLikeLegacy = async (bytes: Uint8Array) => {
+    vi.spyOn(Date, 'now').mockReturnValue(Date.UTC(2026, 9, 11, 12))
+    const legacy = await detectAndParse(await OfficePackage.load(bytes)) as { sheets: unknown[] }
+    for (const source of [bytes, new Blob([bytes as BlobPart]), chunked(bytes, 16 * KiB)]) {
+      const doc = await loadOfficeFile(source as Uint8Array) as { sheets: unknown[]; diagnostics?: Array<{ feature: string }> }
+      expect(doc.sheets).toEqual(legacy.sheets)
+      expect(doc.diagnostics?.some((d) => d.feature === 'strict-reader-fallback')).toBe(true)
+    }
+  }
+  const withPart = (name: string, data: string) => buildZip(xlsxEntries({ sheetData: valueCells(5) }).map((e) => e.name === name ? { ...e, data } : e)).bytes
+  const SS = 'xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"'
+
+  it('DOCTYPE', async () => opensLikeLegacy(withPart('xl/styles.xml', `<?xml version="1.0"?><!DOCTYPE styleSheet><styleSheet ${SS}><cellXfs count="1"><xf numFmtId="0"/></cellXfs></styleSheet>`)))
+  it('references longer than 32 characters', async () => opensLikeLegacy(buildZip(xlsxEntries({ sheetData: '<row r="1"><c r="A1" t="s"><v>0</v></c></row>', sharedStrings: ['&#0000000000000000000000000000000065;'] })).bytes))
+  it('more than 128 attributes on one element', async () => opensLikeLegacy(buildZip(xlsxEntries({ sheetData: valueCells(3), afterSheetData: `<extLst><ext ${Array.from({ length: 130 }, (_, i) => `a${i}="1"`).join(' ')}/></extLst>` })).bytes))
+  it('nesting deeper than 256 fails exactly as the legacy parser does (it never opened)', async () => {
+    const bytes = buildZip(xlsxEntries({ sheetData: valueCells(3), afterSheetData: `<extLst>${'<x>'.repeat(300)}${'</x>'.repeat(300)}</extLst>` })).bytes
+    const legacy = await detectAndParse(await OfficePackage.load(bytes)).then(() => 'ok', (e: unknown) => String(e))
+    expect(legacy).toMatch(/Maximum nested tags exceeded/)
+    expect(await loadOfficeFile(bytes).then(() => 'ok', (e: unknown) => String(e))).toBe(legacy)
+  })
+  it('case-insensitive duplicate part names', async () => opensLikeLegacy(buildZip([...xlsxEntries({ sheetData: valueCells(3) }), { name: 'xl/media/a.bin', data: 'a' }, { name: 'xl/media/A.bin', data: 'b' }]).bytes))
+  it('more than 4096 entries and a central directory above 4 MiB', async () => {
+    const extra = Array.from({ length: 4600 }, (_, i) => ({ name: `customXml/${String(i).padStart(5, '0')}${'n'.repeat(900)}.bin`, data: 'x', method: 0 }))
+    await opensLikeLegacy(buildZip([...xlsxEntries({ sheetData: valueCells(3) }), ...extra]).bytes)
+  }, 120_000)
+
+  it('safety violations stay typed refusals: a lying declared size inside a grammar-fallback package', async () => {
+    const entries = [...xlsxEntries({ sheetData: '<row r="1"/>'.repeat(400_000) }), { name: 'xl/media/a.bin', data: 'a' }, { name: 'xl/media/A.bin', data: 'b' }]
+    const layout = buildZip(entries)
+    const forged = layout.bytes.slice()
+    const ws = entries.findIndex((e) => e.name === 'xl/worksheets/sheet1.xml')
+    new DataView(forged.buffer).setUint32(layout.entries[ws].centralOffset + 24, 1024, true)
+    const err = await refusal(loadOfficeFile(forged))
+    expect(err.code).toBe('resource-limit')
+  })
+})
+
 describe('decision 5: mc:AlternateContent-wrapped data in a small file', () => {
   const mc = 'xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"'
   const bytes = () => buildZip(xlsxEntries({}).map((e) => e.name === 'xl/worksheets/sheet1.xml'

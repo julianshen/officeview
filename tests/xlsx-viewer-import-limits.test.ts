@@ -386,14 +386,29 @@ describe('verification pass bounds', () => {
     expect((err as PackageError).code).toBe('unsupported')
   })
 
-  it('malformed XML and DTDs in an object candidate are typed refusals', async () => {
-    const bad = xlsxEntries({}).map((e) => e.name === 'xl/styles.xml' ? { ...e, data: '<styleSheet><a></styleSheet>' } : e)
-    const d = await g2(buildZip(bad).bytes, 'D')
-    expect(d.mode === 'refuse' && d.failure.code).toBe('parse-error')
-    expect(d.mode === 'refuse' && d.failure.message).toContain('xl/styles.xml')
+  it('tokenizer grammar failures (DOCTYPE, malformed XML) fall back to the legacy parser; bytes are still verified (decision 3)', async () => {
     const dtd = xlsxEntries({}).map((e) => e.name === 'xl/styles.xml' ? { ...e, data: '<!DOCTYPE x><styleSheet/>' } : e)
     const t = await g2(buildZip(dtd).bytes, 'D')
-    expect(t.mode === 'refuse' && t.failure.code).toBe('unsupported')
+    expect(t.mode).toBe('object')
+    if (t.mode !== 'object') return
+    expect(t.legacyFallback).toMatchObject({ part: 'xl/styles.xml' })
+    const declared = (await readZipInventory(bytesRangeSource(buildZip(dtd).bytes), inventoryLimits(importLimitsFor('D')))).entries.reduce((n, e) => n + e.uncompressedSize, 0)
+    expect(t.counters.expandedBytes).toBe(declared)
+
+    const bad = xlsxEntries({}).map((e) => e.name === 'xl/styles.xml' ? { ...e, data: '<styleSheet><a></styleSheet>' } : e)
+    const d = await g2(buildZip(bad).bytes, 'D')
+    expect(d.mode === 'object' && d.legacyFallback?.part).toBe('xl/styles.xml')
+  })
+
+  it('byte-level violations stay refusals even after a grammar fallback (CRC mismatch)', async () => {
+    const entries = xlsxEntries({}).map((e) => e.name === 'xl/styles.xml' ? { ...e, data: '<!DOCTYPE x><styleSheet/>' } : e)
+    const layout = buildZip(entries)
+    const forged = layout.bytes.slice()
+    const ws = entries.findIndex((e) => e.name === 'xl/worksheets/sheet1.xml')
+    const at = layout.entries[ws].centralOffset + 16
+    new DataView(forged.buffer).setUint32(at, (new DataView(forged.buffer).getUint32(at, true) ^ 1) >>> 0, true)
+    const d = await g2(forged, 'D')
+    expect(d.mode === 'refuse' && d.failure.code).toBe('parse-error')
   })
 
   it('binary parts are byte-counted, not tokenized', async () => {
