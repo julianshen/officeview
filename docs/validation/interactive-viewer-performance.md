@@ -60,7 +60,7 @@ one fresh browser context and one page load per scenario.
   - `input-to-present`: the page input mark, then the query reply, then the
     status line and a 40-row text viewport written to the DOM, then a double
     `requestAnimationFrame`.
-  
+
   Kernel and query runs alternate, so input-to-present never includes the
   standalone kernel run. Runs are separated by a 30 ms settle.
 - **Preparation is reported separately and never folded into kernel time.**
@@ -172,7 +172,7 @@ and one laptop does not justify a stricter gate.
    - an ASCII/Latin-1 fast path proven identical to the host collator, aimed at
      the dictionary;
    - run-merge or worker-parallel runs, aimed at both.
-   
+
    None was applied in S8.4. Each needs its own proof/parity package, and a miss
    before S10.2 is a finding. Loosening the frozen value would exceed 2× and
    need a spec amendment citing these measurements; none is written here.
