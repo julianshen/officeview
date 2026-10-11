@@ -107,7 +107,12 @@ function boundedLabel(text: string): { label: string; labelTruncated: boolean } 
   if (code >= 0xd800 && code <= 0xdbff) end--
   return { label: text.slice(0, end), labelTruncated: true }
 }
-const defaultLabel: ValueLabeler = (kind, value) => kind === 'boolean' ? (value ? 'TRUE' : 'FALSE') : String(value)
+/** Booleans have canonical labels; number/date text needs the caller's
+ * formatted display lane, exactly as S8.1 text conditions refuse to guess. */
+const defaultLabel: ValueLabeler = (kind, value) => {
+  if (kind === 'boolean') return value ? 'TRUE' : 'FALSE'
+  throw new FilterDiagnostic('missing-display-text', 'Missing formatted display text lane')
+}
 function defaultYield(): Promise<void> {
   const host = globalThis as { setImmediate?: (callback: () => void) => unknown }
   return new Promise(resolve => host.setImmediate ? host.setImmediate(resolve) : setTimeout(resolve, 0))
@@ -121,7 +126,7 @@ function checkSignal(signal: AbortSignal | undefined, what: string): void {
   if (signal?.aborted) throw new ValueIndexError('cancelled', `${what} cancelled`)
 }
 function diagnostic(error: unknown): unknown {
-  if (error instanceof FilterDiagnostic) {
+  if (error instanceof FilterDiagnostic && error.code !== 'missing-display-text') {
     return new ValueIndexError(error.code === 'cancelled' ? 'cancelled' : error.code === 'resource-limit' ? 'resource-limit' : 'incomplete', error.message)
   }
   if (error instanceof RangeError) return new ValueIndexError('invalid-rule', error.message)

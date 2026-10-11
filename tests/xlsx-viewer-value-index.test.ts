@@ -90,6 +90,8 @@ describe('semantic value keys', () => {
     const entries = index.page({ offset: 0, limit: 10, label }).entries
     expect(entries.map(entry => entry.label)).toEqual(['2023-01-01', '2023-01-01', '2023-01-02'])
     expect(entries.map(entry => entry.kind)).toEqual(['date', 'date', 'date'])
+    expect(() => index.page({ offset: 0, limit: 10 })).toThrow(expect.objectContaining({ code: 'missing-display-text' }))
+    await expect(index.search({ text: '2023', locale: 'en-US' })).rejects.toMatchObject({ code: 'missing-display-text' })
     const day = await index.search({ text: '2023-01-01', locale: 'en-US' }, { label })
     expect(index.page({ offset: 0, limit: 10, search: day, label }).entries.map(entry => entry.key)).toEqual(['d:44927.25', 'd:44927.75'])
   })
@@ -368,7 +370,7 @@ describe('scale with typed lanes', () => {
     expect(warm).toBe(index)
     expect(await warm.build()).toBe('complete')
     expect(warm.ledger).toEqual(cold)
-    expect(index.page({ offset: 0, limit: 500 })).toMatchObject({ total, displayed: VALUE_DISPLAY_LIMIT, truncated: true })
+    expect(index.page({ offset: 0, limit: 500, label })).toMatchObject({ total, displayed: VALUE_DISPLAY_LIMIT, truncated: true })
     const store = new MemoryValueRunStore(), draft = await ValueSelectionDraft.open(index, null, store)
     draft.toggle(index.find(num(999_999.5)), false)
     const { rule } = await draft.commit()
