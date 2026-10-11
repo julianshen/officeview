@@ -73,9 +73,35 @@ export function laneValue(value: string | number | boolean | null | undefined, v
 export function documentValuePolicy(doc: XlsxDocument): ValuePolicy {
   return workbookValuePolicy(doc)
 }
-export function countFormulaCells(doc: XlsxDocument): number {
+/** Functions that force evaluation on load whatever the cache says (design note §4.3 rule 1). */
+const LOAD_VOLATILE = /(^|[^A-Za-z0-9_.])(NOW|TODAY|RAND|RANDBETWEEN|RANDARRAY|OFFSET|INDIRECT|CELL|INFO)\s*\(/i
+/** Formula text kept for the volatile scan (twice Excel's 8,192 cap); longer text is treated as volatile (fail-closed). */
+export const MAX_LOAD_FORMULA_CHARS = 16_384
+export interface LoadFormula {
+  /** The file holds a saved value for the formula. */
+  cached: boolean
+  /** `ca="1"` on the cell or its formula. */
+  calcAlways: boolean
+  /** Formula text; undefined for a shared-formula follower (no text of its own). */
+  text: string | undefined
+}
+/**
+ * Would the engine evaluate this formula at load? Uncached, calculate-always,
+ * volatile, or every formula under fullCalcOnLoad. One rule for admission's
+ * evaluation reserve and for N in the saved-values status: the formulas a
+ * cached document actually loses.
+ */
+export function isLoadEvaluated(formula: LoadFormula, fullCalcOnLoad: boolean): boolean {
+  if (fullCalcOnLoad || !formula.cached || formula.calcAlways) return true
+  const text = formula.text
+  return text !== undefined && (text.length > MAX_LOAD_FORMULA_CHARS || LOAD_VOLATILE.test(text))
+}
+export function countLoadEvaluatedFormulas(doc: XlsxDocument): number {
+  const fullCalcOnLoad = doc.calc?.fullCalcOnLoad === true
   let n = 0
-  for (const sheet of doc.sheets) for (const row of sheet.rows) for (const cell of row.cells) if (hasFormula(cell)) n++
+  for (const sheet of doc.sheets) for (const row of sheet.rows) for (const cell of row.cells) {
+    if (hasFormula(cell) && isLoadEvaluated({ cached: cell.hasCachedValue === true, calcAlways: cell.ca === true, text: cell.formula }, fullCalcOnLoad)) n++
+  }
   return n
 }
 /** Status line / accessible text: only cached documents have one. With a known
@@ -86,7 +112,7 @@ export function savedValuesStatus(policy: ValuePolicy, formulas?: number): strin
 }
 export interface ValueStatus {
   policy: ValuePolicy
-  /** Formula records in the document; undefined while a paged import still runs. */
+  /** Formulas the engine would have evaluated at load (`isLoadEvaluated`); undefined while a paged import still runs. */
   formulas: number | undefined
   message: string | undefined
 }

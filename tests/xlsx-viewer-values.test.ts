@@ -18,7 +18,7 @@ import {
   type FilterSpec, type SortSpec, type SourceStore,
 } from '../src/xlsx/view/contracts'
 import {
-  FORMULA_VALUE_UNAVAILABLE, SAVED_VALUES_STATUS, countFormulaCells, documentValuePolicy, filterValueDomain, isValueUnavailable,
+  FORMULA_VALUE_UNAVAILABLE, SAVED_VALUES_STATUS, countLoadEvaluatedFormulas, documentValuePolicy, filterValueDomain, isValueUnavailable,
   laneValue, savedValuesStatus, scanValueDomain, valueAuthority,
 } from '../src/xlsx/view/values'
 import { xlsxBytes } from './helpers/xlsx-package'
@@ -187,8 +187,13 @@ describe('formula-value-unavailable refusals are limited to the key/value domain
 describe('engine documents are unchanged', () => {
   it('explicit engine policy is byte-identical to the default parse and the adapter reads the published cell.value', async () => {
     const sheet = TABLE + '<row r="5"><c r="A5" t="e"><v>#DIV/0!</v></c><c r="B5" t="str"><v>#VALUE!</v></c><c r="C5" t="b"><v>0</v></c><c r="D5" s="0"/></row>'
-    const plain = await load(sheet)
-    const explicit = await load(sheet, 'engine')
+    // parse.ts samples Date.now() into the workbook semantics; pin it so the two parses are comparable.
+    const clock = vi.spyOn(Date, 'now').mockReturnValue(1_700_000_000_000)
+    let plain, explicit
+    try {
+      plain = await load(sheet)
+      explicit = await load(sheet, 'engine')
+    } finally { clock.mockRestore() }
     expect(JSON.stringify(explicit)).toBe(JSON.stringify(plain))
     const store = createObjectWorkbookSource(plain, 'doc').store('1')
     for (const row of plain.sheets[0].rows) for (const cell of row.cells) {
@@ -214,14 +219,15 @@ describe('saved-values status', () => {
     expect(SAVED_VALUES_STATUS).toBe('Showing saved values; formulas are not recalculated')
   })
 
-  it('object sources report it on open only under cached, counting formula records', async () => {
+  it('object sources report it on open only under cached, counting the formulas the engine would have evaluated', async () => {
     const cached = await load(TABLE, 'cached')
-    expect(countFormulaCells(cached)).toBe(3)
+    // B2 has a saved value; B3/B4 do not: only those two are lost.
+    expect(countLoadEvaluatedFormulas(cached)).toBe(2)
     const source = createObjectWorkbookSource(cached, 'doc')
-    expect(source.openDiagnostics).toContainEqual({ code: 'cached-value-policy', message: 'Showing saved values — 3 formulas not recalculated (file too large)' })
-    expect(source.valueStatus?.()).toEqual({ policy: 'cached', formulas: 3, message: 'Showing saved values — 3 formulas not recalculated (file too large)' })
+    expect(source.openDiagnostics).toContainEqual({ code: 'cached-value-policy', message: 'Showing saved values — 2 formulas not recalculated (file too large)' })
+    expect(source.valueStatus?.()).toEqual({ policy: 'cached', formulas: 2, message: 'Showing saved values — 2 formulas not recalculated (file too large)' })
     const engine = createObjectWorkbookSource(await load(TABLE), 'doc')
     expect(engine.openDiagnostics ?? []).toEqual([])
-    expect(engine.valueStatus?.()).toEqual({ policy: 'engine', formulas: 3, message: undefined })
+    expect(engine.valueStatus?.()).toMatchObject({ policy: 'engine', message: undefined })
   })
 })

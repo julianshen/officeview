@@ -6,7 +6,7 @@
  */
 import type { OfficePackage } from '../core/zip'
 import { parseXlsx } from '../xlsx/parse'
-import { countFormulaCells, savedValuesStatus } from '../xlsx/view/values'
+import { countLoadEvaluatedFormulas, savedValuesStatus } from '../xlsx/view/values'
 import type { XlsxDocument } from '../xlsx/types'
 import { isRtf } from '../rtf/parse'
 import type { ByteStreamReader } from '../core/stream'
@@ -51,7 +51,7 @@ async function parseWithCaps(pkg: OfficePackage, evaluation: { maxArrayCells: nu
   if (doc === undefined) {
     // Saved values only: the allocation is the element envelope already admitted.
     doc = await parseXlsx(pkg, { valuePolicy: 'cached' })
-    addDiagnostic(doc, NOTICE_CACHED_VALUES, savedValuesStatus('cached', formulasNotRecalculated ?? countFormulaCells(doc))!)
+    addDiagnostic(doc, NOTICE_CACHED_VALUES, savedValuesStatus('cached', formulasNotRecalculated ?? countLoadEvaluatedFormulas(doc))!)
   }
   return doc
 }

@@ -15,7 +15,7 @@ import type {
   SparseRowPage, StructuralResult, ValuePolicy, WorkerDiagnostic,
 } from './contracts'
 import type { ColumnLanes } from './contracts'
-import { countFormulaCells, documentValuePolicy, isValueUnavailable, laneValue, SAVED_VALUES_DIAGNOSTIC, valueAuthority, valueStatus } from './values'
+import { countLoadEvaluatedFormulas, documentValuePolicy, isValueUnavailable, laneValue, SAVED_VALUES_DIAGNOSTIC, valueAuthority, valueStatus } from './values'
 import type { XlsxCell, XlsxDocument, XlsxRow, XlsxSheet } from '../types'
 import type { TableMetadata } from '../formula/types'
 import { MAX_COLS, MAX_ROWS, cellId, isValidCoordinate, isValidSourceRect, parseA1, type SourceRect } from './coordinates'
@@ -454,7 +454,7 @@ export function createObjectWorkbookSource(doc: XlsxDocument, docId: string, opt
     }
     return store
   }
-  const status = valueStatus(policy, countFormulaCells(doc))
+  const status = valueStatus(policy, countLoadEvaluatedFormulas(doc))
   return {
     valuePolicy: policy,
     valueStatus: () => status,

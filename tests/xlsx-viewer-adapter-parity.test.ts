@@ -14,7 +14,8 @@ import { openImportSession } from '../src/xlsx/storage/pagedImport'
 import { SourcePageStore, memoryPageBackend } from '../src/xlsx/storage/sourcePages'
 import type { WorkbookSource } from '../src/worker/viewerSession'
 import type { CellRead, ColumnLanes, SourceStore } from '../src/xlsx/view/contracts'
-import { FORMULA_VALUE_UNAVAILABLE, SAVED_VALUES_STATUS } from '../src/xlsx/view/values'
+import { FORMULA_VALUE_UNAVAILABLE, SAVED_VALUES_STATUS, countLoadEvaluatedFormulas } from '../src/xlsx/view/values'
+import { loadOfficeFile } from '../src/components/OfficeFile'
 import { xlsxEntries } from './helpers/xlsx-package'
 import { buildZip } from './helpers/zip-builder'
 
@@ -158,7 +159,7 @@ describe('adapter parity under the cached policy (S1.3 matrix)', () => {
 
   it('both cached sources state the saved-values status; the paged one gains the count once imported', async () => {
     const { object, paged } = await bothAdapters(packageBytes())
-    const formulas = 12
+    const formulas = 3
     expect(object.valueStatus?.()).toEqual({ policy: 'cached', formulas, message: `Showing saved values — ${formulas} formulas not recalculated (file too large)` })
     expect(paged.valueStatus?.()).toEqual(object.valueStatus?.())
     expect(paged.openDiagnostics).toContainEqual({ code: 'cached-value-policy', message: expect.stringMatching(/^Showing saved values/) })
@@ -174,7 +175,7 @@ describe('adapter parity under the cached policy (S1.3 matrix)', () => {
     expect(early?.policy).toBe('cached')
     if (early?.formulas === undefined) expect(early?.message).toBe(SAVED_VALUES_STATUS)
     await session.done
-    expect(source.valueStatus?.().formulas).toBe(12)
+    expect(source.valueStatus?.().formulas).toBe(3)
     await source.release()
   })
 
@@ -217,5 +218,28 @@ describe('engine versus cached: enumerated differences, never asserted equal', (
     const { engine, cached } = await pair('<row r="1"><c r="A1"><v>4</v></c><c r="B1"><f>A1*2</f><v>99</v></c></row>')
     expect(authority(await engine.readCell(at, opts(engine)))).toMatchObject({ value: 99, valueProvenance: 'engine' })
     expect(authority(await cached.readCell(at, opts(cached)))).toMatchObject({ value: 99, valueProvenance: 'cached' })
+  })
+})
+
+describe('N in the saved-values status = formulas the engine would have evaluated at load (coordinator decision Q1)', () => {
+  // Load-evaluated: B1 uncached, D1 cached but ca="1", E1 cached volatile NOW(). Kept: C1, F1 (cached, ordinary).
+  const MIXED = '<row r="1"><c r="A1"><v>4</v></c><c r="B1"><f>A1+1</f></c><c r="C1"><f>A1*2</f><v>8</v></c><c r="D1"><f ca="1">A1*3</f><v>12</v></c><c r="E1"><f>NOW()</f><v>45000</v></c><c r="F1"><f>A1-1</f><v>3</v></c></row>'
+  const message = (n: number) => `Showing saved values — ${n} formulas not recalculated (file too large)`
+
+  it('object and paged sources agree on a mixed cached/uncached workbook; fullCalcOnLoad counts every formula', async () => {
+    for (const [fullCalcOnLoad, n] of [[false, 3], [true, 5]] as const) {
+      const { object, paged } = await bothAdapters(buildZip(xlsxEntries({ sheetData: MIXED, fullCalcOnLoad })).bytes)
+      expect(object.valueStatus?.()).toEqual({ policy: 'cached', formulas: n, message: message(n) })
+      expect(paged.valueStatus?.()).toEqual(object.valueStatus?.())
+      await paged.release()
+    }
+  })
+
+  it('the loader notice uses the same definition (cap-hit fallback over a mixed workbook)', async () => {
+    // An uncached SEQUENCE(200000,1) trips the evaluator cap, so the file reopens with saved values.
+    const sheetData = MIXED.replace('</row>', '<c r="G1"><f>SEQUENCE(200000,1)</f></c></row>')
+    const doc = await loadOfficeFile(buildZip(xlsxEntries({ sheetData })).bytes) as { diagnostics?: Array<{ feature: string; message: string }> }
+    expect(countLoadEvaluatedFormulas(doc as never)).toBe(4)
+    expect(doc.diagnostics?.find(d => d.feature === 'cached-value-policy')?.message).toBe(message(4))
   })
 })

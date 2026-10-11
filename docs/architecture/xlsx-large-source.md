@@ -1287,11 +1287,10 @@ Mechanics:
   consumer renders exactly one) and expose `WorkbookSource.valueStatus()`; the paged count (`PagedWorkbook.formulaRecords`)
   is final once the import completes. `largeSource.ts` builds its notice with the same helper. Rendering it in the status line and
   accessible description is S5.2's integration.
-- Open question (count semantics): the sources count **all** formula records (`countFormulaCells`, `PagedWorkbook.formulaRecords`);
-  the admission route in `largeSource.ts` reports `loadEvaluatedFormulas` (formulas the engine would have evaluated at load:
-  uncached, `ca`, or all under `fullCalcOnLoad`), and only its cap-hit route counts all formulas. The two agree when every formula
-  is load-evaluated (the pinned fixtures) and can differ for a mix of cached and uncached formulas; the orchestrator decides which
-  number the approved wording means.
+- N (decided 2026-10-12, coordinator Q1): the formulas the engine **would have evaluated at load** and the user therefore loses:
+  uncached, `ca="1"`, volatile (`NOW`, `RAND`, `OFFSET`, `INDIRECT`, ...), or every formula under `fullCalcOnLoad`. One predicate,
+  `isLoadEvaluated` in `values.ts`, drives admission's `loadEvaluatedFormulas` counter (`sheetRecords.ts`), the paged importer's
+  `PagedWorkbook.loadEvaluatedFormulas`, `countLoadEvaluatedFormulas` for object documents and the `largeSource.ts` notice.
 
 ### 9.2 Enumerated engine-versus-cached differences
 

@@ -8,6 +8,7 @@
  */
 import { PackageError } from '../../core/package-error'
 import { localName, XstringDecoder, type XmlEvents } from '../../core/xml-stream'
+import { isLoadEvaluated, MAX_LOAD_FORMULA_CHARS } from '../view/values'
 
 export interface AdmissionCounters {
   expandedBytes: number
@@ -42,12 +43,8 @@ export function newAdmissionCounters(): AdmissionCounters {
   }
 }
 
-/** Functions that force evaluation on load whatever the cache says (design note §4.3 rule 1). */
-const VOLATILE = /(^|[^A-Za-z0-9_.])(NOW|TODAY|RAND|RANDBETWEEN|RANDARRAY|OFFSET|INDIRECT|CELL|INFO)\s*\(/i
-/** Formula text kept for the volatile-function scan. Excel caps formulas at
- * 8,192 characters; twice that is kept as margin, and anything longer is
- * treated as volatile (fail-closed). */
-const MAX_FORMULA_CHARS = 16_384
+/** Formula text kept for the volatile-function scan (values.ts owns the rule). */
+const MAX_FORMULA_CHARS = MAX_LOAD_FORMULA_CHARS
 
 const STYLE_RECORDS = new Set(['xf', 'font', 'fill', 'border', 'numFmt', 'dxf'])
 const STRUCTURE: Record<string, AdmissionCounters['structuralIncomplete'][number]> = {
@@ -104,7 +101,7 @@ export function countingEvents(counters: AdmissionCounters, partId: string, opti
 
   const finishCell = (): void => {
     const cached = cellHasValue || cellHasInline || (cellIsStr && cellSawV)
-    if (cellHasFormula && (counters.fullCalcOnLoad || !cached || cellCalcAlways || formulaVolatile || VOLATILE.test(formulaText))) {
+    if (cellHasFormula && (formulaVolatile || isLoadEvaluated({ cached, calcAlways: cellCalcAlways, text: formulaText }, counters.fullCalcOnLoad))) {
       counters.loadEvaluatedFormulas++
     }
     inCell = false

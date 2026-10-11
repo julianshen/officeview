@@ -488,7 +488,7 @@ export function createPagedWorkbookSource(session: PagedImportSession): Workbook
     valuePolicy: 'cached',
     // The formula count is only final once the import completed; until then
     // the status carries the spec's count-free wording.
-    valueStatus: () => valueStatus('cached', workbook.completeness === 'complete' ? workbook.formulaRecords : undefined),
+    valueStatus: () => valueStatus('cached', workbook.completeness === 'complete' ? workbook.loadEvaluatedFormulas : undefined),
     openDiagnostics: Object.freeze([{ code: SAVED_VALUES_DIAGNOSTIC, message: SAVED_VALUES_STATUS }]),
     sheets: Object.freeze(workbook.sheets.map(s => Object.freeze({ sheetId: s.sheetId, name: s.name }))),
     store: storeFor,
