@@ -23,7 +23,7 @@
  * structured-clone/transfer semantics including buffer detachment).
  */
 import type {
-  CacheIdentity, OperationRefusal, ProfileId, SourceHandle, ViewCommitDelta, WorkerCommand, WorkerCommandKind,
+  CacheIdentity, FilterKeySet, OperationRefusal, ProfileId, SourceHandle, ViewCommitDelta, WorkerCommand, WorkerCommandKind,
   WorkerCommandOwner, WorkerDiagnostic, WorkerOwner, WorkerReply,
 } from '../xlsx/view/contracts'
 import type { XlsxDocument } from '../xlsx/types'
@@ -36,6 +36,7 @@ import {
   type WorkbookSource,
 } from './viewerSession'
 import { createObjectWorkbookSource } from './viewerObjectSource'
+import { createWorkerFilterEvaluator } from './viewerFilterEvaluator'
 import { MAX_ROWS } from '../xlsx/view/coordinates'
 
 /** A typed open refusal (admission or storage); the open replies with its code. */
@@ -120,6 +121,11 @@ export class ViewerKernel {
   private readonly opening = new Set<string>()
   private readonly finished = new Map<string, WorkerOwner>()
   private readonly accounting = new TransferAccounting()
+  /** Sources opened through the paged route: their views live here, so filter
+   * rules are evaluated here too (S5.4); object sessions keep the S9 transport. */
+  private readonly pagedSources = new WeakSet<WorkbookSource>()
+  /** Value-list keys shipped with in-flight filter commands, per document. */
+  private readonly keySets = new Map<string, Map<string, FilterKeySet>>()
   private epochs = 0
   readonly stats: KernelStats = { opens: 0, parses: 0, sourceReads: 0 }
 
@@ -247,6 +253,12 @@ export class ViewerKernel {
         if (signal.aborted) return reply(command, command.owner, { kind: 'cancelled' })
         return live(command.owner.docId) && entry.session!.isCurrent(command.owner) ? out : this.stale(command, command.owner)
       }
+      case 'read': {
+        // A read finishing after cancel, close, replacement or a newer commit is withheld (§10.1).
+        if (signal.aborted) return reply(command, command.owner, { kind: 'cancelled' })
+        return live(command.owner.docId) && entry.session!.isCurrent(command.owner)
+          ? out : errorReply(command, command.owner, 'stale-source', true, [{ code: 'stale-owner', message: 'Command owner is not the current committed view' }])
+      }
       default:
         return out
     }
@@ -270,7 +282,7 @@ export class ViewerKernel {
           case 'resident':
             if (session.isClosed) return errorReply(command, command.owner, 'stale-source', false, [{ code: 'unknown-document', message: 'Document closed' }])
             session.activate(command.sheetId)
-            return reply(command, command.owner, { kind: 'complete', result: { kind: 'activateSheet', sheetId: command.sheetId } }, resident.diagnostics ?? [])
+            return reply(command, command.owner, { kind: 'complete', result: { kind: 'activateSheet', sheetId: command.sheetId, layout: session.layout(command.sheetId) } }, resident.diagnostics ?? [])
           case 'cancelled': return reply(command, command.owner, { kind: 'cancelled' })
           case 'stale': return errorReply(command, command.owner, 'stale-source', true, [{ code: 'view-rebuild-stale', message: 'The sheet view changed while it was being rebuilt' }])
           case 'incomplete': return reply(command, command.owner, { kind: 'incomplete', missing: resident.missing })
@@ -305,9 +317,13 @@ export class ViewerKernel {
         if (!session) return this.stale(command, command.owner)
         report(0, VIEW_OPERATION_STAGES)
         const hooks = { progress: report }
-        const outcome = command.kind === 'sort'
-          ? await session.sort(command.owner, command.spec, signal, hooks)
-          : await session.filter(command.owner, command.spec, command.nowMs, signal, hooks)
+        const shipped = command.kind === 'filter' ? this.installKeys(command.owner.docId, command.keySets) : []
+        let outcome: OperationOutcome
+        try {
+          outcome = command.kind === 'sort'
+            ? await session.sort(command.owner, command.spec, signal, hooks)
+            : await session.filter(command.owner, command.spec, command.nowMs, signal, hooks)
+        } finally { this.removeKeys(command.owner.docId, shipped) }
         if (outcome.kind === 'committed') {
           return reply(command, command.owner, { kind: 'complete', result: { kind: 'view', delta: this.delta(outcome.view) } } as ReplyBody<typeof command.kind>)
         }
@@ -324,6 +340,16 @@ export class ViewerKernel {
         if (signal.aborted) return reply(command, command.owner, { kind: 'cancelled' })
         if (!session.isCurrent(command.owner)) return this.stale(command, command.owner)
         return reply(command, command.owner, { kind: 'complete', result: { kind: 'valueQuery', page } })
+      }
+      case 'read': {
+        const session = this.current(command.owner)
+        if (!session) return errorReply(command, command.owner, 'stale-source', true, [{ code: 'stale-owner', message: 'Command owner is not the current committed view' }])
+        const out = await session.read(command.owner, command.query, signal)
+        if ('kind' in out) {
+          return out.kind === 'cancelled' ? reply(command, command.owner, { kind: 'cancelled' })
+            : errorReply(command, command.owner, 'stale-source', true, [{ code: 'stale-owner', message: 'Command owner is not the current committed view' }])
+        }
+        return reply(command, command.owner, { kind: 'complete', result: { kind: 'read', result: out } })
       }
       case 'viewport':
       case 'search':
@@ -372,8 +398,10 @@ export class ViewerKernel {
     }
     if (signal.aborted) { await source.release(); return reply(command, owner, { kind: 'cancelled' }) }
     let session: DocumentSession
+    const evaluator = !this.options.filterEvaluator && this.pagedSources.has(source)
+      ? { filterEvaluator: createWorkerFilterEvaluator(stamp => this.keySets.get(stamp.docId) ?? new Map()) } : {}
     try {
-      session = new DocumentSession(command.docId, source, { ...this.options, profile: command.profile, epoch: ++this.epochs })
+      session = new DocumentSession(command.docId, source, { ...this.options, ...evaluator, profile: command.profile, epoch: ++this.epochs })
     } catch (cause) {
       // Ownership never transferred: release what open acquired.
       await source.release()
@@ -397,7 +425,7 @@ export class ViewerKernel {
           // copies the blob into worker memory (S1.2).
           const { openLargeBlob } = await import('./viewerLargeSource')
           const routed = await openLargeBlob(handle.blob, docId, { profile, signal, limits: this.env.importLimits, storage: this.env.pageStorage })
-          if (routed.kind === 'paged') return routed.source
+          if (routed.kind === 'paged') { this.pagedSources.add(routed.source); return routed.source }
           if (routed.kind === 'refuse') throw new OpenRefusal(routed.code, routed.message)
           openDiagnostics = routed.diagnostics
         }
@@ -446,6 +474,28 @@ export class ViewerKernel {
     }
     this.abort(target, 'cancel-requested')
     return reply(command, target.owner, { kind: 'cancelled' })
+  }
+  /** Installs well-formed shipped keys for one filter command; returns their ids. */
+  private installKeys(docId: string, keySets: readonly FilterKeySet[] | undefined): string[] {
+    if (!Array.isArray(keySets) || !keySets.length) return []
+    let map = this.keySets.get(docId)
+    if (!map) this.keySets.set(docId, map = new Map())
+    const installed: string[] = []
+    for (const set of keySets) {
+      const run = set?.run
+      if (typeof set?.refId !== 'string' || typeof set.scope !== 'string' || !run || !Number.isSafeInteger(run.count) || run.count < 0
+        || !(run.kinds instanceof Uint8Array) || !(run.numbers instanceof Float64Array) || !Array.isArray(run.texts)
+        || run.kinds.length < run.count || run.numbers.length < run.count || run.texts.length < run.count) continue
+      map.set(set.refId, set)
+      installed.push(set.refId)
+    }
+    return installed
+  }
+  private removeKeys(docId: string, refIds: readonly string[]): void {
+    const map = this.keySets.get(docId)
+    if (!map) return
+    for (const refId of refIds) map.delete(refId)
+    if (!map.size) this.keySets.delete(docId)
   }
   private current(owner: CacheIdentity): DocumentSession | undefined {
     const session = this.sessions.get(owner.docId)

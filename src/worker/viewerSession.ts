@@ -36,8 +36,8 @@
 import type { DeclaredSheetFilters } from '../xlsx/view/declaredFilters'
 import type {
   AxisMetrics, AxisSizeInterval, CacheIdentity, ColumnEntry, ColumnQuery, CompactSourceRowSet, FilterSpec,
-  GridSelection, GridSelectionPart, IntervalSet, OperationRefusal, Page, ProfileId, RowOrder, SingleCellPayload, SortSpec,
-  SourceFailure, SourceRowInterval, SourceStamp, SourceStore, ValuePolicy, WorkbookOwner, WorkerDiagnostic,
+  AuthoritativeCell, GridSelection, GridSelectionPart, IntervalSet, OperationRefusal, Page, ProfileId, RowOrder, SingleCellPayload, SortSpec,
+  SheetLayout, SourceFailure, SourceReadQuery, SourceReadResult, SourceRowInterval, SourceStamp, SourceStore, ValuePolicy, WorkbookOwner, WorkerDiagnostic,
 } from '../xlsx/view/contracts'
 import { MAX_COLS, MAX_ROWS, cellId, isValidCoordinate, type SourceRect, type SourceRow } from '../xlsx/view/coordinates'
 import { createIdentityOrder } from '../xlsx/view/order'
@@ -55,6 +55,18 @@ import { filterValueDomain, scanValueDomain, type ValueStatus } from '../xlsx/vi
 
 const FULL_SHEET: SourceRect = Object.freeze({ r0: 0, r1: MAX_ROWS - 1, c0: 0, c1: MAX_COLS - 1 })
 const PREPARE_PAGE_LIMIT = 4096
+/** S5.4 read bounds: populated cells per find page, open scan continuations per document. */
+export const MAX_SCAN_PAGE = 4096
+export const MAX_OPEN_SCANS = 4
+interface OpenScan {
+  key: string
+  sheetId: string
+  valueGen: number
+  iterator: AsyncIterator<Page<AuthoritativeCell>>
+  controller: AbortController
+  /** One page read ahead, so the last page carries no continuation. */
+  ahead?: IteratorResult<Page<AuthoritativeCell>>
+}
 
 export const sameStamp = (a: SourceStamp, b: SourceStamp): boolean =>
   a.docId === b.docId && a.sheetId === b.sheetId && a.valueGen === b.valueGen
@@ -623,6 +635,9 @@ export class DocumentSession {
   private readonly structures = new Map<string, StructuralIndex>()
   private published: WorkbookOwner | null = null
   private closed = false
+  /** Insertion order is recency order; bounded by MAX_OPEN_SCANS. */
+  private readonly scans = new Map<string, OpenScan>()
+  private scanSerial = 0
   activeSheetId: string
 
   constructor(readonly docId: string, readonly source: WorkbookSource, private readonly options: SessionOptions = {}) {
@@ -1580,6 +1595,79 @@ export class DocumentSession {
     if (!this.isCurrent(owner)) return { kind: 'stale' }
     return page
   }
+  /** Compact source-space layout of a sheet (S5.4): what the main thread needs
+   * to build the same axis metrics and base visibility as this session. */
+  layout(sheetId: string): SheetLayout {
+    const geometry = this.source.geometry(sheetId)
+    const used = this.source.store(sheetId).extent.used
+    return {
+      rowOverrides: geometry.rowOverrides.map(interval => ({ ...interval })),
+      colOverrides: geometry.colOverrides.map(interval => ({ ...interval })),
+      hidden: geometry.baseHidden.intervals.map(interval => ({ ...interval })),
+      ...(used ? { used: { ...used } } : {}),
+    }
+  }
+  /** One bounded source read for the paged viewer (S5.4), owned by the sheet's
+   * committed view: a newer commit, a close or a cancellation withholds it.
+   * Store pages carry their own bounds (rows: READ_ROWS_PAGE_ROWS/MAX_CELLS);
+   * a scan page is capped at MAX_SCAN_PAGE and continues a resident iterator. */
+  async read(owner: CacheIdentity, query: SourceReadQuery, signal: AbortSignal): Promise<SourceReadResult | { kind: 'stale' } | { kind: 'cancelled' }> {
+    if (!this.isCurrent(owner)) return { kind: 'stale' }
+    const store = this.source.store(owner.sheetId)
+    const options = { signal, stamp: { ...store.stamp } }
+    let result: SourceReadResult
+    switch (query?.op) {
+      case 'cell': result = { op: 'cell', read: await store.readCell(query.at, options) }; break
+      case 'rows': result = { op: 'rows', page: await store.readRows(query.range, query.cursor, options) }; break
+      case 'structural': result = { op: 'structural', result: await store.queryStructural(query.rect, options) }; break
+      case 'complete': result = { op: 'complete', result: await store.ensureComplete(query.rect, options) }; break
+      case 'scan': result = { op: 'scan', page: await this.scanPage(owner, store, query, signal) }; break
+      default: result = { op: 'rows', page: failedPage(store.stamp, failure('unsupported', 'Unknown read operation')) }
+    }
+    if (signal.aborted) return { kind: 'cancelled' }
+    if (!this.isCurrent(owner)) return { kind: 'stale' }
+    return result
+  }
+  private async scanPage(owner: CacheIdentity, store: SourceStore, query: Extract<SourceReadQuery, { op: 'scan' }>, signal: AbortSignal): Promise<Page<AuthoritativeCell>> {
+    const request = { range: query.request.range, limit: Math.min(MAX_SCAN_PAGE, query.request.limit) }
+    const key = JSON.stringify([owner.sheetId, store.stamp.valueGen, request.range, request.limit])
+    let scan: OpenScan | undefined
+    if (query.cursor !== undefined) {
+      scan = this.scans.get(query.cursor)
+      this.scans.delete(query.cursor)
+      // A cursor belongs to its query and source generation (§4.1).
+      if (!scan || scan.key !== key) {
+        scan?.controller.abort()
+        return failedPage(store.stamp, failure('invalid-cursor', 'Scan cursor expired; restart the scan'))
+      }
+    } else {
+      const controller = new AbortController()
+      scan = { key, sheetId: owner.sheetId, valueGen: store.stamp.valueGen, controller,
+        iterator: store.scanPopulated(request, { signal: controller.signal, stamp: { ...store.stamp } })[Symbol.asyncIterator]() }
+    }
+    const open = scan
+    // Cancelling the command abandons its scan; the client restarts from page 0.
+    const abort = () => open.controller.abort()
+    signal.addEventListener('abort', abort, { once: true })
+    let step: IteratorResult<Page<AuthoritativeCell>>, ahead: IteratorResult<Page<AuthoritativeCell>> | undefined
+    try {
+      step = open.ahead ?? await open.iterator.next()
+      open.ahead = undefined
+      if (!step.done && step.value.completeness !== 'incomplete' && !signal.aborted) ahead = await open.iterator.next()
+    } finally { signal.removeEventListener('abort', abort) }
+    if (step.done) return { items: [], completeness: 'complete', stamp: store.stamp }
+    const page = step.value
+    if (!ahead || ahead.done || signal.aborted) { open.controller.abort(); return page }
+    open.ahead = ahead
+    const cursor = `scan:${this.epoch}:${++this.scanSerial}`
+    this.scans.set(cursor, open)
+    while (this.scans.size > MAX_OPEN_SCANS) {
+      const oldest = this.scans.keys().next().value as string
+      this.scans.get(oldest)!.controller.abort()
+      this.scans.delete(oldest)
+    }
+    return { ...page, nextCursor: cursor }
+  }
   /** Close: every retained entry is released through the pool ('closed'), so
    * views, prepared columns and structural handles are uncharged exactly once;
    * in-flight operations release their transient shares in their own finally. */
@@ -1594,6 +1682,8 @@ export class DocumentSession {
     this.structures.clear()
     this.structureEntries.clear()
     this.structureBytes = 0
+    for (const scan of this.scans.values()) scan.controller.abort()
+    this.scans.clear()
     await this.source.release()
   }
 }
