@@ -24,6 +24,9 @@ export interface SearchKeyStrategySpec {
   /** Necessary condition for an exact contains match; false is decisive.
    * Default: valueKey.includes(queryKey). */
   matchKey?: (valueKey: string, queryKey: string) => boolean
+  /** Declared worst-case key length per raw UTF-16 unit (integer 1..64,
+   * default 4); keys may add at most KEY_LENGTH_SLACK units. Scratch is
+   * charged from it before generation, and it is checked on every key. */
   maxKeyUnitsPerUnit?: number
 }
 /** Frozen, versioned and certified (createSearchKeyStrategy or the built-in
@@ -40,7 +43,24 @@ export interface SearchKeyStrategy {
   readonly exactKeys: boolean
   readonly maxKeyUnitsPerUnit: number
 }
+/** Worst case of the S8.5 pipeline (NFD, ignorable removal, full fold, NFD)
+ * per input unit over all code points in both fold variants (U+1F82), pinned
+ * by test against the pinned Unicode data; additive across code points. */
 export const CANONICAL_KEY_MAX_UNITS_PER_UNIT = 4
+export const KEY_LENGTH_SLACK = 8
+export const keyLengthBound = (strategy: SearchKeyStrategy, length: number): number => strategy.maxKeyUnitsPerUnit * length + KEY_LENGTH_SLACK
+/** Transient bytes charged before generating one key: up to four strings of
+ * the bounded length (2 B/unit) plus code-point arrays (8 B/unit). */
+export const keyScratchBytes = (strategy: SearchKeyStrategy, length: number): number => keyLengthBound(strategy, length) * 16 + 256
+/** Generates a key and enforces its type and declared length bound. */
+export function generateSearchKey(strategy: SearchKeyStrategy, text: string): string | null {
+  const key = strategy.searchKeyOf(text)
+  if (key !== null && typeof key !== 'string') throw new ValueIndexError('invalid-rule', 'Search key function returned a non-string key')
+  if (key !== null && key.length > keyLengthBound(strategy, text.length)) {
+    throw new ValueIndexError('invalid-rule', `Search key strategy ${strategy.id} exceeded its declared expansion`)
+  }
+  return key
+}
 const certified = new WeakSet<SearchKeyStrategy>()
 export function isCertifiedSearchKeyStrategy(strategy: unknown): strategy is SearchKeyStrategy {
   return typeof strategy === 'object' && strategy !== null && certified.has(strategy as SearchKeyStrategy)
@@ -63,11 +83,7 @@ function probeQueries(): string[] {
  * differential suite for the real canonical key. */
 function probe(strategy: SearchKeyStrategy): void {
   const matcher = new TextFilterMatcher(strategy.foldVariant === 'turkic' ? 'tr-TR' : 'en-US')
-  const key = (text: string): string | null => {
-    const value = strategy.searchKeyOf(text)
-    if (value !== null && typeof value !== 'string') throw new ValueIndexError('invalid-rule', 'Search key function returned a non-string key')
-    return value
-  }
+  const key = (text: string): string | null => generateSearchKey(strategy, text)
   const valueKeys = PROBE_VALUES.map(key)
   for (const query of probeQueries()) {
     const queryKey = key(query)
@@ -85,11 +101,12 @@ export function createSearchKeyStrategy(spec: SearchKeyStrategySpec): SearchKeyS
   const { canonicalizerVersion, unicodeVersion, foldVariant, searchKeyOf } = spec ?? {} as SearchKeyStrategySpec
   if (typeof canonicalizerVersion !== 'string' || !canonicalizerVersion || typeof unicodeVersion !== 'string' || !unicodeVersion
     || (foldVariant !== 'default' && foldVariant !== 'turkic') || typeof searchKeyOf !== 'function'
-    || (spec.matchKey !== undefined && typeof spec.matchKey !== 'function')) {
+    || (spec.matchKey !== undefined && typeof spec.matchKey !== 'function')
+    || (spec.maxKeyUnitsPerUnit !== undefined && !(Number.isInteger(spec.maxKeyUnitsPerUnit) && spec.maxKeyUnitsPerUnit >= 1 && spec.maxKeyUnitsPerUnit <= 64))) {
     throw new ValueIndexError('invalid-rule', 'Invalid search key strategy specification')
   }
   const matchKey = spec.matchKey ?? ((valueKey: string, queryKey: string) => valueKey.includes(queryKey))
-  const strategy: SearchKeyStrategy = Object.freeze({ id: `${canonicalizerVersion}|unicode-${unicodeVersion}|${foldVariant}`, foldVariant, searchKeyOf, matchKey, exactKeys: false, maxKeyUnitsPerUnit: 4 })
+  const strategy: SearchKeyStrategy = Object.freeze({ id: `${canonicalizerVersion}|unicode-${unicodeVersion}|${foldVariant}`, foldVariant, searchKeyOf, matchKey, exactKeys: false, maxKeyUnitsPerUnit: spec.maxKeyUnitsPerUnit ?? 4 })
   probe(strategy)
   certified.add(strategy)
   return strategy
@@ -105,7 +122,7 @@ function probeCanonical(strategy: SearchKeyStrategy): void {
       let predicate
       try { predicate = matcher.prepare('contains', query, wildcards, new WorkBudget()) } catch { continue }
       for (const value of PROBE_VALUES) {
-        const key = strategy.searchKeyOf(value)!
+        const key = generateSearchKey(strategy, value)!
         if (predicate.key(key, value.length, new WorkBudget()) !== predicate(value, new WorkBudget())) {
           throw new ValueIndexError('invalid-rule', `Canonical key path disagrees with the raw predicate (${JSON.stringify(query)} in ${JSON.stringify(value)})`)
         }

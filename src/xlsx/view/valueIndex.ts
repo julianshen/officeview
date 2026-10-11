@@ -1,13 +1,13 @@
 import type { ColumnEntry, FilterRange, PagedKeySetRef, SourceFailure, SourceStamp, SourceStore, ValueSearchPredicate, ValuesFilter } from './contracts'
 import type { ColumnClassification, PreparedValue } from './filter'
-import { DEFAULT_FILTER_TEXT_LENGTH, FilterDiagnostic, TextFilterMatcher, WorkBudget, type FilterLimits } from './textFilter'
+import { FilterDiagnostic, TextFilterMatcher, WorkBudget, type FilterLimits } from './textFilter'
 import { canonicalSearchKey } from './canonicalText'
 import {
   KEY_BOOLEAN, KEY_DATE, KEY_ERROR, KEY_NUMBER, KEY_STRING, NumberTable, ValueIndexError, loadKeySet,
   sameStamp, valueKeyString, type LaneAccount, type ValueKeySet, type ValueRunStore,
 } from './valueRuns'
 import {
-  EXACT_SEARCH, foldVariantOf, isCertifiedSearchKeyStrategy, textContentHash,
+  EXACT_SEARCH, foldVariantOf, generateSearchKey, isCertifiedSearchKeyStrategy, keyScratchBytes, textContentHash,
   type SearchKeyOwner, type SearchKeyStore, type SearchKeyStrategy,
 } from './searchKeys'
 
@@ -122,9 +122,6 @@ const STRING_ENTRY_BYTES = 40 + 128 + 8
 const KEY_PATCH_BYTES = 48 // one Map<ordinal, boolean> entry
 const RUN_ELEMENT_BYTES = 17 // kind 1 + number 8 + texts reference 8
 const PACE_STRIDE = 16
-/** Charged before generating one key: two copies of a canonical form whose
- * UTF-16 length is conservatively bounded by 4x the raw length. */
-const keyScratchBytes = (length: number): number => length * 16 + 128
 /** Spec §7.1: a (validated) query whose canonical form is empty is no search
  * term. Wildcard patterns qualify only when they have no unescaped `*`/`?`. */
 function canonicalEmpty(query: ValueSearchQuery): boolean {
@@ -517,7 +514,7 @@ export class ValueIndex implements LaneAccount {
    * Cancellable and resumable. Keys are an optimization only: storage
    * failures are reported in searchKeyStatus, and memory pressure switches to
    * streaming keys; neither changes results. */
-  private async keyPhase(signal: AbortSignal | undefined, pacer: Pacer, onProgress: ValueBuildOptions['onProgress']): Promise<void> {
+  private async keyPhase(signal: AbortSignal | undefined, pacer: Pacer, onProgress: ValueBuildOptions['onProgress'], maxTextLength: number): Promise<void> {
     const strategy = this.strategy, store = this.cache.searchKeyStore, texts = this.texts, total = texts.length
     const progress = () => { onProgress?.({ phase: 'keys', completed: this.searchKeys.length, total }); this.check(signal) }
     const failure = (error: unknown): ValueIndexError => error instanceof ValueIndexError ? error
@@ -554,15 +551,15 @@ export class ValueIndex implements LaneAccount {
       if (this.searchKeys.length < total) {
         this.keyState = 'computing'
         for (let id = this.searchKeys.length; id < total; id++) {
-          // Preflight raw length (an oversized value keeps a null key and the
-          // exact path rejects it, as EXACT_SEARCH does), then admit scratch.
+          // Preflight raw length against the triggering search's effective limit
+          // (an oversized value keeps a null key and the exact path rejects it,
+          // as EXACT_SEARCH does), then admit the declared worst-case scratch.
           const text = texts[id]
           let key: string | null = null
-          if (text.length <= DEFAULT_FILTER_TEXT_LENGTH) {
-            scratch.charge(keyScratchBytes(text.length))
-            try { key = strategy.searchKeyOf(text) } finally { scratch.release() }
+          if (text.length <= maxTextLength) {
+            scratch.charge(keyScratchBytes(strategy, text.length))
+            try { key = generateSearchKey(strategy, text) } finally { scratch.release() }
           }
-          if (key !== null && typeof key !== 'string') throw new ValueIndexError('invalid-rule', 'Search key function returned a non-string key')
           this.retainKey(key === null ? 8 : key.length * 2 + 48)
           this.searchKeys.push(key)
           if (id % PACE_STRIDE === PACE_STRIDE - 1 && pacer.due) {
@@ -792,23 +789,22 @@ export class ValueIndex implements LaneAccount {
         // a concurrent search scans with the keys that exist so far.
         if (keysUsable && !this.keysDone && !this.keyRunning) {
           this.keyRunning = true
-          try { await this.keyPhase(signal, pacer, options.onKeyProgress) } finally { this.keyRunning = false }
+          try { await this.keyPhase(signal, pacer, options.onKeyProgress, budget.maxTextLength) } finally { this.keyRunning = false }
           live()
         }
         const exactKeys = keysUsable && strategy.exactKeys
-        const queryKey = keysUsable && !exactKeys ? strategy.searchKeyOf(query.text) : null
-        if (queryKey !== null && typeof queryKey !== 'string') throw new ValueIndexError('invalid-rule', 'Search key function returned a non-string key')
+        const queryKey = keysUsable && !exactKeys ? generateSearchKey(strategy, query.text) : null
         const streaming = this.keyState === 'streaming', keys = this.searchKeys
         // Streaming keys: preflight raw length and admit scratch before generating;
         // a value that cannot be admitted uses the exact path (as EXACT_SEARCH does).
         const scratch = streaming ? this.reserve() : undefined
         const streamKey = (text: string): string | null => {
           if (text.length > budget.maxTextLength) return null
-          try { scratch!.charge(keyScratchBytes(text.length)) } catch (error) {
+          try { scratch!.charge(keyScratchBytes(strategy, text.length)) } catch (error) {
             if (error instanceof ValueIndexError && error.code === 'quota') return null
             throw error
           }
-          try { return strategy.searchKeyOf(text) } finally { scratch!.release() }
+          try { return generateSearchKey(strategy, text) } finally { scratch!.release() }
         }
         try {
         for (let ordinal = from; ordinal < end; ordinal++) {
@@ -826,8 +822,8 @@ export class ValueIndex implements LaneAccount {
               const kind = this.kinds[ordinal], id = this.numbers[ordinal]
               if (kind === KEY_STRING || kind === KEY_ERROR) {
                 const key = streaming ? streamKey(this.texts[id]) : id < keys.length ? keys[id] : null
-                if (key !== null && typeof key !== 'string') throw new ValueIndexError('invalid-rule', 'Search key function returned a non-string key')
-                if (key !== null) { keyed++; candidate = strategy.matchKey(key, queryKey) }
+                // Same raw-length admission as the exact path before any decisive miss.
+                if (key !== null) { budget.admit(this.texts[id].length); keyed++; candidate = strategy.matchKey(key, queryKey) }
               }
             }
             // A key miss is decisive; a candidate (or unkeyed value) is confirmed exactly.
