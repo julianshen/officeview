@@ -124,8 +124,8 @@ describe('declared table autoFilter', () => {
     const tables = doc.declaredFilters![0].tableAutoFilters
     expect(tables).toHaveLength(1)
     expect(tables[0].table).toMatchObject({ displayName: 'Table1', partPath: 'xl/tables/table1.xml' })
-    expect(tables[0].autoFilter.refVerbatim).toBe('A1:B3')
-    expect(tables[0].autoFilter.columns[0].rule).toMatchObject({ kind: 'top10', top: false, percent: true, val: '20' })
+    expect(tables[0].autoFilter?.refVerbatim).toBe('A1:B3')
+    expect(tables[0].autoFilter?.columns[0].rule).toMatchObject({ kind: 'top10', top: false, percent: true, val: '20' })
     expect(tables[0].sortState?.conditions[0]).toMatchObject({ sortBy: 'value' })
   })
 
@@ -187,5 +187,108 @@ describe('adapter-neutral classifiers', () => {
     expect(sortByOf('icon')).toBe('icon')
     expect(sortByOf(undefined)).toBe('value')
     expect(sortByOf('fancy')).toBe('unknown')
+  })
+})
+
+describe('codex round-2 findings', () => {
+  it('F1 keeps sortState nested inside autoFilter with attribution', async () => {
+    const doc = await parseFiles(sheetFiles(sheetWrap(
+      `<autoFilter ref="A1:C3"><filterColumn colId="0"><filters><filter val="a"/></filters></filterColumn><sortState ref="A1:C3"><sortCondition ref="B1:B3" descending="1"/></sortState></autoFilter>`,
+    )))
+    const sort = doc.declaredFilters![0].worksheetSortState!
+    expect(sort.refVerbatim).toBe('A1:C3')
+    expect(sort.placement).toBe('nested')
+    expect(sort.conditions).toMatchObject([{ sortBy: 'value', descending: true }])
+  })
+
+  it('F1 direct sortState wins over nested with a duplicate flag', async () => {
+    const doc = await parseFiles(sheetFiles(sheetWrap(
+      `<autoFilter ref="A1:C3"><sortState ref="A1:C3"><sortCondition ref="B1:B3"/></sortState></autoFilter><sortState ref="A1:C3"><sortCondition ref="A1:A3"/></sortState>`,
+    )))
+    const sort = doc.declaredFilters![0].worksheetSortState!
+    expect(sort.placement).toBe('direct')
+    expect(sort.conditions).toHaveLength(1)
+    expect(sort.conditions[0].refVerbatim).toBe('A1:A3')
+    expect(sort.malformed).toBe('duplicate-sortState')
+  })
+
+  it('F2 retains sort-only tables in diagnostics', async () => {
+    const files = sheetFiles(
+      `<?xml version="1.0" encoding="UTF-8"?><worksheet xmlns="${NS_MAIN}" xmlns:r="${NS_R}"><sheetData><row r="1"><c r="A1"><v>1</v></c></row></sheetData><tableParts count="1"><tablePart r:id="rIdT1"/></tableParts></worksheet>`,
+      {
+        'xl/worksheets/_rels/sheet1.xml.rels': `<?xml version="1.0" encoding="UTF-8"?><Relationships xmlns="${NS_REL}"><Relationship Id="rIdT1" Type="${NS_R}/table" Target="../tables/table1.xml"/></Relationships>`,
+        'xl/tables/table1.xml': `<?xml version="1.0" encoding="UTF-8"?><table xmlns="${NS_MAIN}" id="1" name="T" displayName="T" ref="A1:B2" headerRowCount="1" totalsRowShown="0"><sortState ref="A1:B2"><sortCondition ref="A1:A2"/></sortState><tableColumns count="2"><tableColumn id="1" name="A"/><tableColumn id="2" name="B"/></tableColumns></table>`,
+      },
+    )
+    const doc = await parseFiles(files)
+    expect(doc.tables?.[0].displayName).toBe('T')
+    const tables = doc.declaredFilters![0].tableAutoFilters
+    expect(tables).toHaveLength(1)
+    expect(tables[0].autoFilter).toBeUndefined()
+    expect(tables[0].sortState?.refVerbatim).toBe('A1:B2')
+  })
+
+  it('F3 preserves worksheet diagnostics when table rels fail', async () => {
+    const files = sheetFiles(
+      `<?xml version="1.0" encoding="UTF-8"?><worksheet xmlns="${NS_MAIN}" xmlns:r="${NS_R}"><sheetData><row r="1"><c r="A1"><v>1</v></c></row><row r="2" hidden="1"><c r="A2"><v>2</v></c></row></sheetData><autoFilter ref="A1:A2"><filterColumn colId="0"><filters><filter val="1"/></filters></filterColumn></autoFilter><tableParts count="1"><tablePart r:id="rIdT1"/></tableParts></worksheet>`,
+      { 'xl/worksheets/_rels/sheet1.xml.rels': 'not xml at all <<' },
+    )
+    const doc = await parseFiles(files)
+    expect(doc.tables).toBeUndefined()
+    expect(doc.sheets[0].rows[1].hidden).toBe(true)
+    expect(doc.declaredFilters![0].worksheetAutoFilter?.refVerbatim).toBe('A1:A2')
+  })
+
+  it('F4 bounds columns, conditions and summaries with omission counts', async () => {
+    const cols = Array.from({ length: 3000 }, (_, i) => `<filterColumn colId="${i}"/>`).join('')
+    const conds = Array.from({ length: 1500 }, () => `<sortCondition ref="A1:A3"/>`).join('')
+    const doc = await parseFiles(sheetFiles(sheetWrap(`<autoFilter ref="A1:C3">${cols}</autoFilter><sortState ref="A1:C3">${conds}</sortState>`)))
+    const entry = doc.declaredFilters![0]
+    expect(entry.worksheetAutoFilter!.columns).toHaveLength(1024)
+    expect(entry.worksheetAutoFilter!.omittedColumns).toBe(1976)
+    expect(entry.worksheetSortState!.conditions).toHaveLength(1024)
+    expect(entry.worksheetSortState!.omittedConditions).toBe(476)
+    expect(summarizeDeclaredFiltering(entry).length).toBeLessThan(4096)
+    expect(summarizeDeclaredFiltering(entry)).toContain('more')
+  })
+
+  it('F5 ignores extLst metadata when collecting rule alternatives', async () => {
+    const doc = await parseFiles(sheetFiles(sheetWrap(
+      `<autoFilter ref="A1:B2"><filterColumn colId="0"><filters><filter val="a"/></filters><extLst><ext><x:y xmlns:x="urn:x"/></ext></extLst></filterColumn><filterColumn colId="1"><extLst><ext/></extLst></filterColumn></autoFilter>`,
+    )))
+    const columns = doc.declaredFilters![0].worksheetAutoFilter!.columns
+    expect(columns[0].rule).toMatchObject({ kind: 'values', valueCount: 1 })
+    expect(columns[0].malformed).toBeUndefined()
+    expect(columns[1].rule).toBeUndefined()
+    expect(columns[1].malformed).toBeUndefined()
+  })
+
+  it('keeps sortState nested inside a table autoFilter', async () => {
+    const files = sheetFiles(
+      `<?xml version="1.0" encoding="UTF-8"?><worksheet xmlns="${NS_MAIN}" xmlns:r="${NS_R}"><sheetData><row r="1"><c r="A1"><v>1</v></c></row></sheetData><tableParts count="1"><tablePart r:id="rIdT1"/></tableParts></worksheet>`,
+      {
+        'xl/worksheets/_rels/sheet1.xml.rels': `<?xml version="1.0" encoding="UTF-8"?><Relationships xmlns="${NS_REL}"><Relationship Id="rIdT1" Type="${NS_R}/table" Target="../tables/table1.xml"/></Relationships>`,
+        'xl/tables/table1.xml': `<?xml version="1.0" encoding="UTF-8"?><table xmlns="${NS_MAIN}" id="1" name="T" displayName="T" ref="A1:B2" headerRowCount="1" totalsRowShown="0"><autoFilter ref="A1:B2"><sortState ref="A1:B2"><sortCondition ref="B1:B2" descending="1"/></sortState></autoFilter><tableColumns count="2"><tableColumn id="1" name="A"/><tableColumn id="2" name="B"/></tableColumns></table>`,
+      },
+    )
+    const doc = await parseFiles(files)
+    const tables = doc.declaredFilters![0].tableAutoFilters
+    expect(tables).toHaveLength(1)
+    expect(tables[0].autoFilter?.refVerbatim).toBe('A1:B2')
+    expect(tables[0].sortState?.placement).toBe('nested')
+    expect(tables[0].sortState?.conditions).toMatchObject([{ sortBy: 'value', descending: true }])
+  })
+
+  it('F6 validates colId spelling, range and duplicates without repair', async () => {
+    const doc = await parseFiles(sheetFiles(sheetWrap(
+      `<autoFilter ref="A1:B3"><filterColumn colId="0junk"/><filterColumn colId="1.5"/><filterColumn colId="5"/><filterColumn colId="0"/><filterColumn colId="0"/></autoFilter>`,
+    )))
+    const columns = doc.declaredFilters![0].worksheetAutoFilter!.columns
+    expect(columns[0]).toMatchObject({ colId: undefined, malformed: 'invalid-colId' })
+    expect(columns[1]).toMatchObject({ colId: undefined, malformed: 'invalid-colId' })
+    expect(columns[2]).toMatchObject({ colId: 5, malformed: 'colId-out-of-range' })
+    expect(columns[3]).toMatchObject({ colId: 0 })
+    expect(columns[3].malformed).toBeUndefined()
+    expect(columns[4]).toMatchObject({ colId: 0, malformed: 'duplicate-colId' })
   })
 })
