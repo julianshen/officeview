@@ -104,6 +104,8 @@ function imageIndexes(nodes: readonly XlsxDrawing[], out = new Set<number>()): S
 }
 
 const UNIT_PX: Record<string, number> = { '': 1, px: 1, pt: 4 / 3, pc: 16, in: 96, cm: 96 / 2.54, mm: 96 / 25.4 }
+const SIZING_EXACT = new Set(['width', 'height', 'viewBox', 'style'])
+const SIZING = new Set([...SIZING_EXACT].map(name => name.toLowerCase()))
 /** Index just past the doctype starting at `at` (internal subset and quotes honoured), or -1. */
 function skipDoctype(text: string, at: number): number {
   let depth = 0, quote = ''
@@ -156,7 +158,12 @@ export function svgIntrinsicSize(bytes: Uint8Array): { width: number; height: nu
     pattern.lastIndex = at
     const match = pattern.exec(text)
     if (!match) break
-    attrs.set(match[1].toLowerCase(), match[2] ?? match[3])
+    // XML attribute names are case-sensitive: keep them exact. A duplicate name or a
+    // case variant of a sizing attribute makes the decoder's choice ambiguous.
+    const key = match[1]
+    if (attrs.has(key)) return null
+    if (SIZING.has(key.toLowerCase()) && !SIZING_EXACT.has(key)) return null
+    attrs.set(key, match[2] ?? match[3])
     at = pattern.lastIndex
   }
   if (!/^\s*\/?>/.test(text.slice(at, at + 8))) return null
@@ -248,7 +255,9 @@ export interface PrintUnitsOptions extends SheetAssetsOptions {
  * as the viewport (never the unrestricted workbook-wide decode). Sheets are
  * leased one at a time; release everything with dispose() after printing.
  */
-export async function preparePrintUnits(doc: XlsxDocument, options: PrintUnitsOptions = {}): Promise<PaintableArray> {
+/** Print units plus, per unit, the pictures admission refused (shown as notices). */
+export interface PrintUnits extends PaintableArray { refusedImages: number[] }
+export async function preparePrintUnits(doc: XlsxDocument, options: PrintUnitsOptions = {}): Promise<PrintUnits> {
   const { assetLoader = prepareSheetAssets, ...lease } = options
   const watermark = normalizeWatermark(options.watermark as WatermarkOptions | undefined)
   const leases: SheetAssetsLease[] = []
@@ -261,6 +270,10 @@ export async function preparePrintUnits(doc: XlsxDocument, options: PrintUnitsOp
       units.push(sheetPaintable(doc.sheets[sheetIndex], held.assets, watermark))
     }
     let released = false
-    return Object.assign(units, { fontDiagnostics: leases[0]?.fontDiagnostics ?? [], dispose: () => { if (!released) { released = true; release() } } })
+    return Object.assign(units, {
+      fontDiagnostics: leases[0]?.fontDiagnostics ?? [],
+      refusedImages: leases.map(held => held.refusedImages),
+      dispose: () => { if (!released) { released = true; release() } },
+    })
   } catch (error) { release(); throw error }
 }

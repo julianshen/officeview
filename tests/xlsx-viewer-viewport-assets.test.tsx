@@ -184,3 +184,50 @@ describe('round 3: SVG raster bounds are proven from the real XML root', () => {
     lease.dispose()
   })
 })
+
+describe('round 4: exact SVG attribute names; print refusal diagnostics', () => {
+  const enc = (text: string) => new TextEncoder().encode(text)
+  const NS = 'xmlns="http://www.w3.org/2000/svg"'
+  it('withdraws case variants, duplicates and malformed sizing attributes', async () => {
+    const { svgIntrinsicSize } = await import('../src/components/xlsx/sheetAssets')
+    expect(svgIntrinsicSize(enc(`<svg ${NS} width="640" height="360" WIDTH="1" HEIGHT="1"/>`))).toBeNull()
+    expect(svgIntrinsicSize(enc(`<svg ${NS} WIDTH="1" HEIGHT="1"/>`))).toBeNull()
+    expect(svgIntrinsicSize(enc(`<svg ${NS} width="1" height="1" ViewBox="0 0 640 360"/>`))).toBeNull()
+    expect(svgIntrinsicSize(enc(`<svg ${NS} width="1" width="20000" height="1"/>`))).toBeNull()
+    expect(svgIntrinsicSize(enc(`<svg ${NS} width=640 height="360"/>`))).toBeNull()
+    expect(svgIntrinsicSize(enc(`<svg ${NS} width="640" height="360" junk/>`))).toBeNull()
+    expect(svgIntrinsicSize(enc(`<svg ${NS} width="640px" height="360"/>`))).toEqual({ width: 640, height: 360 })
+  })
+
+  it('a disguised case-variant 20000² root never reaches the decoder', async () => {
+    const decode = vi.fn(async () => ({}) as CanvasImageSource)
+    const doc = {
+      sheets: [{ name: 'A', rows: [], cols: [], merges: [], mergeRanges: [], drawings: [picture(0)] }],
+      images: [{ data: enc(`<svg ${NS} width="20000" height="20000" WIDTH="1" HEIGHT="1"/>`), mime: 'image/svg+xml' }],
+    } as unknown as XlsxDocument
+    const lease = await prepareSheetAssets(doc, { decodeImage: decode, profile: 'D' })
+    expect(decode).not.toHaveBeenCalled()
+    expect(lease.refusedImages).toBe(1)
+    lease.dispose()
+  })
+
+  it('print units report pictures refused by the shared image budget', async () => {
+    const { preparePrintUnits, SheetImageCache } = await import('../src/components/xlsx/sheetAssets')
+    const decode = vi.fn(async () => ({ close() {} }) as unknown as CanvasImageSource)
+    const doc = {
+      sheets: [
+        { name: 'A', rows: [], cols: [], merges: [], mergeRanges: [], drawings: [picture(0)] },
+        { name: 'B', rows: [], cols: [], merges: [], mergeRanges: [], drawings: [picture(1)] },
+      ],
+      images: [{ data: pngHeader(4096, 4096, 1), mime: 'image/png' }, { data: pngHeader(4096, 4096, 2), mime: 'image/png' }],
+    } as unknown as XlsxDocument
+    const cache = new SheetImageCache(128 * 1024 * 1024)
+    const units = await preparePrintUnits(doc, { decodeImage: decode, profile: 'D', imageCache: cache })
+    try {
+      // Whatever is refused is reported per unit; nothing is silently blank.
+      const refused = units.refusedImages
+      expect(refused).toHaveLength(2)
+      expect(refused[0] + refused[1] + decode.mock.calls.length).toBe(2)
+    } finally { units.dispose() }
+  })
+})
