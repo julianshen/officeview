@@ -191,8 +191,8 @@ hosts. The worst is `a`: Cr 41 ms, WK 47 ms.
 
 Observations:
 
-- **Cost is dominated by hits, not by scanning.** A miss scans 1M keys in
-  4–6 ms. Each hit pays an owner lookup (binary search over offsets), a bit-set
+- **Cost is dominated by hits, not by scanning.** A short miss scans 1M keys
+  in 4–6 ms; the 14-unit miss `ingeniería del` takes 16 ms (Cr) or 30 ms (WK). Each hit pays an owner lookup (binary search over offsets), a bit-set
   and, for non-simple keys, a grapheme check. The prototype runs a host
   `Intl.Segmenter` pass for that check, about 2–3 µs per complex hit; `é`
   matches only complex keys.
@@ -337,7 +337,7 @@ bytes and UTF-16 text, written through `createSyncAccessHandle` in the worker.
 | Operation | Cr | WK |
 |---|---:|---:|
 | IDB write, chunked, 245 records | 242 ms | 609 ms |
-| IDB storage used (`estimate().usage` delta) | 33.7 MB (LevelDB compression) | 84.8 MB |
+| IDB storage used (`estimate().usage` delta) | 33.7 MB (likely LevelDB value compression; not verified) | 84.8 MB |
 | IDB read warm (`getAll` + reassemble) | 67 + 10 ms | 96 + 15 ms |
 | **IDB read after browser relaunch** (open + `getAll` + reassemble) | 102 + 89 + 17 = **208 ms** | 4 + 137 + 21 = **162 ms** |
 | IDB per-key records, **100k only** (10k/txn): write / read | 2,402 / 155 ms | 1,118 / 277 ms |
