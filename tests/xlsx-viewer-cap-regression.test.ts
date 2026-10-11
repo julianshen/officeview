@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'vitest'
 import { createCanvas } from 'canvas'
 import JSZip from 'jszip'
-import { computeMetrics, computePrintMetrics, renderPrintPage, renderSheet, renderSheetViewport, STATIC_SHEET_BUDGET, StaticExportLimitError } from '../src/xlsx/render'
+import { computeMetrics, computePrintMetrics, mergeEdges, renderPrintPage, renderSheet, renderSheetViewport, STATIC_SHEET_BUDGET, StaticExportLimitError } from '../src/xlsx/render'
 import { OfficePackage } from '../src/core/zip'
 import { parseXlsx } from '../src/xlsx/parse'
 import { buildXlsx } from '../src/testdata/ooxml-builders'
@@ -550,5 +550,28 @@ describe('review round 2 (Codex findings)', () => {
     const fourPx = ready(sheetOf([{ index: 0, heightPt: 3, customHeight: true, cells: [cell(0, 0, 'A1')] }]))
     expect(fourPx.metrics.rows.size(0)).toBe(4)
     expect(planViewport(fourPx, { box: { x: 0, y: 0, width: 64, height: 4 }, zoom: 1, deviceScale: 1 }).kind).toBe('detail')
+  })
+})
+
+describe('delta review (opencode)', () => {
+  test('beyond-grid merge edges cost O(B + T log B), not T x B', () => {
+    // 3,000 custom-height rows past the 16,384-row grid and 3,000 edge queries.
+    const rows: XlsxRow[] = [{ index: 0, cells: [cell(0, 0, 'A1')] }]
+    for (let i = 0; i < 3000; i++) rows.push({ index: 16_384 + i * 2, heightPt: 30, customHeight: true, cells: [] })
+    const sheet = sheetOf(rows)
+    const m = computeMetrics(sheet)
+    expect(m.rowHeightsPx).toHaveLength(16_384)
+    const edges = mergeEdges(sheet, m)
+    let expected = 16_384 * 20
+    let last = 16_384
+    const results: number[] = []
+    for (let t = 0; t < 3000; t++) results.push(edges.row(16_385 + t * 2))
+    // Row 16_384 + 2k carries 40px; odd rows keep 20px.
+    for (let t = 0; t < 3000; t++) {
+      const index = 16_385 + t * 2
+      while (last < index) { expected += (last - 16_384) % 2 === 0 ? 40 : 20; last++ }
+      expect(results[t]).toBe(expected)
+    }
+    expect(edges.work()).toBeLessThan(3000 * 20)
   })
 })

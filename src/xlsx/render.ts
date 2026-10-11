@@ -712,7 +712,9 @@ function staticAdmission(sheet: XlsxSheet, m: GridMetrics, viewport?: SheetViewp
  * the prefix sums; past it (a merge the static grid truncates) the extent follows
  * the same authored row/column rules, so an anchor lays out against its true
  * merged box instead of the bitmap edge. Invalid edges keep the bitmap clamp. */
-function mergeEdges(sheet: XlsxSheet, m: GridMetrics, colX: number[], rowY: number[]) {
+/** @internal Exported for work-count tests; not part of the public API. */
+export function mergeEdges(sheet: XlsxSheet, m: GridMetrics, colX: number[] = prefixSums(m.colWidthsPx), rowY: number[] = prefixSums(m.rowHeightsPx)) {
+  let work = 0
   const nRows = m.rowHeightsPx.length, nCols = m.colWidthsPx.length
   let rowsBeyond: Map<number, number> | undefined, colsBeyond: Map<number, number> | undefined
   const beyondRows = () => {
@@ -739,16 +741,35 @@ function mergeEdges(sheet: XlsxSheet, m: GridMetrics, colX: number[], rowY: numb
     }
     return colsBeyond
   }
-  const edge = (index: number, prefix: number[], n: number, size: number, beyond: () => Map<number, number>, clamp: number): number => {
+  // Each beyond-grid axis becomes sorted positions plus a prefix of size deltas,
+  // built once; an edge is then a binary search (O(B + T log B) for T merges).
+  const sorted = (beyond: Map<number, number>, size: number) => {
+    const entries = [...beyond].sort((a, b) => a[0] - b[0])
+    work += entries.length
+    const at = Float64Array.from(entries, entry => entry[0])
+    const delta = new Float64Array(entries.length + 1)
+    entries.forEach(([, value], i) => { delta[i + 1] = delta[i] + value - size })
+    return { at, delta }
+  }
+  let rowPrefix: ReturnType<typeof sorted> | undefined, colPrefix: ReturnType<typeof sorted> | undefined
+  const edge = (index: number, prefix: number[], n: number, size: number, deltas: () => ReturnType<typeof sorted>, clamp: number): number => {
     if (index <= n) return prefix[index] ?? clamp
     if (!Number.isSafeInteger(index)) return clamp
-    let total = prefix[n] + (index - n) * size
-    for (const [at, value] of beyond()) if (at < index) total += value - size
-    return total
+    const { at, delta } = deltas()
+    let low = 0, high = at.length
+    while (low < high) {
+      work++
+      const mid = Math.floor((low + high) / 2)
+      if (at[mid] < index) low = mid + 1
+      else high = mid
+    }
+    return prefix[n] + (index - n) * size + delta[low]
   }
   return {
-    row: (index: number) => edge(index, rowY, nRows, DEFAULT_ROW_PX, beyondRows, m.heightPx),
-    col: (index: number) => edge(index, colX, nCols, DEFAULT_COL_PX, beyondCols, m.widthPx),
+    row: (index: number) => edge(index, rowY, nRows, DEFAULT_ROW_PX, () => (rowPrefix ??= sorted(beyondRows(), DEFAULT_ROW_PX)), m.heightPx),
+    col: (index: number) => edge(index, colX, nCols, DEFAULT_COL_PX, () => (colPrefix ??= sorted(beyondCols(), DEFAULT_COL_PX)), m.widthPx),
+    /** Beyond-grid entries visited so far (test seam for the O(B + T log B) bound). */
+    work: () => work,
   }
 }
 
