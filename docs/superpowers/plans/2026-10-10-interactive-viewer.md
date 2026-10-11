@@ -102,7 +102,8 @@ Every package is implemented on its own branch, reviewed by at least one agent f
 | S7.1 range detection/header policy/admission (`src/xlsx/view/rangeDetection.ts`) | merged |
 | S4.2 cooperative scheduling/cancellation/atomic publication (`src/xlsx/view/scheduler.ts`, worker session/kernel/client) | merged |
 | S1.1a bounded ZIP reader, pull inflater, incremental XML tokenizer (`src/core/{zip-stream,inflater,xml-stream}.ts`, `pako` 1.0.11) | merged (opencode review; one disputed finding accepted by the reviewer) |
-| S1.1b, S2.3, S8.2, S8.3 | in progress (implementation or review rounds on their own branches) |
+| S2.3 full-coordinate renderer seam and explicit static budgets (`src/xlsx/view/viewport.ts`, `render.ts`, `paint.ts`) | merged |
+| S1.1b, S8.2, S8.3, S4.3, S6.1 | in progress (implementation or review rounds on their own branches) |
 | S1.2, S1.3, S4.3–S4.5, S5, S6, S9, S10 (physical-device receipts skipped for now by user decision), S11/S12 status, S13 | not started |
 
 ## S0 — Freeze contracts, counterexamples and fixture/harness infrastructure
@@ -241,15 +242,17 @@ expect(await source.readCell({ row: 1_048_575, col: 16_383 }, readOptions)).toMa
 
 ### S2.3 Remove cap aliasing from interactive path; explicit static budgets
 
+> **Status (2026-10-11):** merged (Claude implementation; codex, pi and opencode reviews over four rounds; every finding fixed; xlsx goldens unchanged). Interactive geometry uses full logical axes with per-frame admission from bounded metadata before any cell read (record/gridline budgets, four-device-pixel detail rule, bounded drawing queries, indexed merge lookup); `AxisMetricsError` codes map to diagnosed fallbacks. Static path: ordinary sheets inside the legacy 16,384×4,096 grid render exactly as before at any pixel size; only output the old path silently truncated gets a typed `large-export-limit` refusal; grid-truncated merges lay out at their true extent in bounded requests. Coarse layer is a placeholder until S5.1; new API (`renderSheetViewport`, `buildSheetGeometry`, `StaticExportLimitError`) not yet re-exported from `src/index.ts`; `parse.ts` row numbering for rows without `r` remains open.
+
 **Files:** modify `src/xlsx/render.ts`, `src/render/paint.ts`; create `src/xlsx/view/viewport.ts` boundary; test `tests/xlsx-viewer-cap-regression.test.ts`, extend `tests/xlsx-viewport.test.ts`, `tests/xlsx-print.test.ts`.
 
-- [ ] RED: current-row regression with source rows 0 and 16385, viewport at origin and at row 16385; assert 'BeyondCap' is absent at row-zero baseline, then visible only at its true offset or its sorted display slot. Repeat edge-column XFD and edge-row XFD1048576.
-- [ ] Run `bunx vitest run tests/xlsx-viewer-cap-regression.test.ts tests/xlsx-viewport.test.ts`; expected current fallback paints BeyondCap at Y≈16.67 and fails.
-- [ ] GREEN: interactive metrics use full logical axis/projection methods, not capped arrays; remove every `rowY[row.index] ?? 0`/`colX[col] ?? 0` alias in that path. Viewport reads only admitted logical bounds and fetched rows. If no geometry exists, return pending/diagnostic, never origin.
-- [ ] Map the typed `AxisMetricsError` codes thrown by S2.1 (contradictory overlapping overrides, unrepresentable Float64 geometry) to a diagnosed fallback in every caller (S2.3 renderer seam, S3 structure/guards); a thrown error must never reach the user as an unhandled exception or blank sheet.
-- [ ] Preserve small ordinary-sheet layout behavior; honor authored-hidden rows/cols unconditionally rather than drawing-gated. Keep static print/export separate with explicit pixel/page/operation budgets and diagnostic/refusal; it must not quietly clamp logical coordinates or emit a deceptively complete partial bitmap.
-- [ ] Run focused suites plus `bunx vitest run tests/xlsx.test.ts tests/xlsx-drawings.test.ts tests/xlsx-print.test.ts` and standard corpus gates; expected no-origin-alias passes, small default goldens unchanged, authored-hidden deltas named and reviewed.
-- [ ] Deliver full-coordinate renderer seam. This package is not complete if only model sorting bypasses `MAX_GRID_*` while painting still aliases high coordinates.
+- [x] RED: current-row regression with source rows 0 and 16385, viewport at origin and at row 16385; assert 'BeyondCap' is absent at row-zero baseline, then visible only at its true offset or its sorted display slot. Repeat edge-column XFD and edge-row XFD1048576.
+- [x] Run `bunx vitest run tests/xlsx-viewer-cap-regression.test.ts tests/xlsx-viewport.test.ts`; expected current fallback paints BeyondCap at Y≈16.67 and fails.
+- [x] GREEN: interactive metrics use full logical axis/projection methods, not capped arrays; remove every `rowY[row.index] ?? 0`/`colX[col] ?? 0` alias in that path. Viewport reads only admitted logical bounds and fetched rows. If no geometry exists, return pending/diagnostic, never origin.
+- [x] Map the typed `AxisMetricsError` codes thrown by S2.1 (contradictory overlapping overrides, unrepresentable Float64 geometry) to a diagnosed fallback in every caller (S2.3 renderer seam, S3 structure/guards); a thrown error must never reach the user as an unhandled exception or blank sheet.
+- [x] Preserve small ordinary-sheet layout behavior; honor authored-hidden rows/cols unconditionally rather than drawing-gated. Keep static print/export separate with explicit pixel/page/operation budgets and diagnostic/refusal; it must not quietly clamp logical coordinates or emit a deceptively complete partial bitmap.
+- [x] Run focused suites plus `bunx vitest run tests/xlsx.test.ts tests/xlsx-drawings.test.ts tests/xlsx-print.test.ts` and standard corpus gates; expected no-origin-alias passes, small default goldens unchanged, authored-hidden deltas named and reviewed.
+- [x] Deliver full-coordinate renderer seam. This package is not complete if only model sorting bypasses `MAX_GRID_*` while painting still aliases high coordinates.
 
 ### S2.4 Sheet scale/zoom model and legacy-path isolation
 
