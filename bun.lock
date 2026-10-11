@@ -7,6 +7,7 @@
       "dependencies": {
         "fast-xml-parser": "^5.11.1",
         "jszip": "^3.10.2",
+        "pako": "1.0.11",
       },
       "devDependencies": {
         "@playwright/test": "^1.64.0",
