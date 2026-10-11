@@ -137,43 +137,78 @@ export function drawingExtent(nodes: readonly XlsxDrawing[]): { left: number; to
   return bounds
 }
 
-/** Float64 box index over drawing extents: top-sorted entries with a max-bottom
- * segment tree, so a frame visits O(log n + hits) nodes instead of every drawing. */
+/** Nodes one top-level drawing paints (group children and diagram shapes included):
+ * its record weight against the per-frame budget. */
+function drawingWeight(node: XlsxDrawing | DrawingContentShape): number {
+  let weight = 1
+  for (const child of (node.children ?? []) as Array<XlsxDrawing | DrawingContentShape>) weight += drawingWeight(child)
+  if ('content' in node && node.content?.kind === 'diagram') for (const shape of node.content.shapes) weight += drawingWeight(shape as DrawingContentShape)
+  return weight
+}
+
+interface DrawingBox { left: number; top: number; right: number; bottom: number; index: number; weight: number }
+/** Float64 box index over drawing extents: top-sorted entries in a segment tree whose
+ * nodes carry max-bottom and the x-span of their subtree, so typical frames visit
+ * O(log n + hits) nodes. Every query is visit- and weight-budgeted: an adversarial
+ * layout that defeats pruning ends the query (coarse frame) instead of a full scan. */
 class BoxIndex {
-  private readonly tree: Float64Array
-  private constructor(private readonly entries: ReadonlyArray<{ left: number; top: number; right: number; bottom: number; index: number }>) {
-    this.tree = new Float64Array(Math.max(1, 4 * entries.length)).fill(-Infinity)
-    const build = (node: number, lo: number, hi: number): number => {
-      if (lo + 1 === hi) return (this.tree[node] = entries[lo].bottom)
+  private readonly maxBottom: Float64Array
+  private readonly minLeft: Float64Array
+  private readonly maxRight: Float64Array
+  private constructor(private readonly entries: readonly DrawingBox[]) {
+    const size = Math.max(1, 4 * entries.length)
+    this.maxBottom = new Float64Array(size).fill(-Infinity)
+    this.minLeft = new Float64Array(size).fill(Infinity)
+    this.maxRight = new Float64Array(size).fill(-Infinity)
+    const build = (node: number, lo: number, hi: number): void => {
+      if (lo + 1 === hi) {
+        const entry = entries[lo]
+        this.maxBottom[node] = entry.bottom; this.minLeft[node] = entry.left; this.maxRight[node] = entry.right
+        return
+      }
       const mid = Math.floor((lo + hi) / 2)
-      return (this.tree[node] = Math.max(build(node * 2, lo, mid), build(node * 2 + 1, mid, hi)))
+      build(node * 2, lo, mid)
+      build(node * 2 + 1, mid, hi)
+      this.maxBottom[node] = Math.max(this.maxBottom[node * 2], this.maxBottom[node * 2 + 1])
+      this.minLeft[node] = Math.min(this.minLeft[node * 2], this.minLeft[node * 2 + 1])
+      this.maxRight[node] = Math.max(this.maxRight[node * 2], this.maxRight[node * 2 + 1])
     }
     if (entries.length) build(1, 0, entries.length)
   }
-  static build(boxes: ReadonlyArray<{ left: number; top: number; right: number; bottom: number; index: number }>): BoxIndex {
+  static build(boxes: readonly DrawingBox[]): BoxIndex {
     return new BoxIndex([...boxes].sort((a, b) => a.top - b.top || a.index - b.index))
   }
-  /** Original indexes of boxes touching the query, ascending; stops after `limit + 1` hits. */
-  query(left: number, top: number, right: number, bottom: number, limit: number): number[] {
+  /** Original indexes of boxes touching the query, ascending, or null once the hits'
+   * weight exceeds `budget` or the walk exceeds its visit allowance. */
+  query(left: number, top: number, right: number, bottom: number, budget: number): number[] | null {
     const hits: number[] = []
+    let weight = 0, visits = 0
+    const maxVisits = 2 * Math.max(0, budget) + 64
     let hi = 0, upper = this.entries.length
     while (hi < upper) {
       const mid = Math.floor((hi + upper) / 2)
       if (this.entries[mid].top <= bottom) hi = mid + 1
       else upper = mid
     }
-    const visit = (node: number, lo: number, end: number): boolean => {
-      if (lo >= hi || this.tree[node] < top) return false
+    let exhausted = false
+    const visit = (node: number, lo: number, end: number): void => {
+      if (exhausted || lo >= hi || this.maxBottom[node] < top || this.minLeft[node] > right || this.maxRight[node] < left) return
+      if (++visits > maxVisits) { exhausted = true; return }
       if (lo + 1 === end) {
         const entry = this.entries[lo]
-        if (entry.right >= left && entry.left <= right) hits.push(entry.index)
-        return hits.length > limit
+        if (entry.right >= left && entry.left <= right) {
+          hits.push(entry.index)
+          weight += entry.weight
+          if (weight > budget) exhausted = true
+        }
+        return
       }
       const mid = Math.floor((lo + end) / 2)
-      return visit(node * 2, lo, mid) || visit(node * 2 + 1, mid, end)
+      visit(node * 2, lo, mid)
+      visit(node * 2 + 1, mid, end)
     }
     if (this.entries.length) visit(1, 0, this.entries.length)
-    return hits.sort((a, b) => a - b)
+    return exhausted ? null : hits.sort((a, b) => a - b)
   }
 }
 
@@ -193,8 +228,9 @@ export interface SheetGeometry {
   /** Populated cells of one source row, ascending by column; undefined for blank rows. */
   cellsOf(sourceRow: number): readonly XlsxCell[] | undefined
   readonly merges: RectangleIndex<XlsxMergeRange>
-  /** Top-level drawings touching a logical CSS box, in authored paint order. */
-  drawingsIn(left: number, top: number, right: number, bottom: number, limit: number): readonly XlsxDrawing[] | null
+  /** Top-level drawings touching a logical CSS box, in authored paint order, or null
+   * when their node weight or the index walk exceeds `budget` records. */
+  drawingsIn(left: number, top: number, right: number, bottom: number, budget: number): readonly XlsxDrawing[] | null
 }
 export type SheetGeometryResult =
   | SheetGeometry
@@ -319,7 +355,7 @@ export function buildSheetGeometry(sheet: XlsxSheet, options: SheetGeometryOptio
     mergeEntries.push({ rect: { r0: range.minRow, r1: range.maxRow, c0: range.minCol, c1: range.maxCol }, value: range })
   }
   const drawings = sheet.drawings ?? []
-  const boxes = drawings.map((node, index) => ({ ...drawingExtent([node]), index }))
+  const boxes = drawings.map((node, index) => ({ ...drawingExtent([node]), index, weight: drawingWeight(node) }))
     .filter(box => box.left <= box.right && box.top <= box.bottom)
   const drawingIndex = BoxIndex.build(boxes)
   return Object.freeze({
@@ -328,9 +364,9 @@ export function buildSheetGeometry(sheet: XlsxSheet, options: SheetGeometryOptio
     diagnostics: Object.freeze(diagnostics),
     cellsOf: (sourceRow: number) => cellsByRow.get(sourceRow),
     merges: RectangleIndex.build(mergeEntries),
-    drawingsIn(left: number, top: number, right: number, bottom: number, limit: number) {
-      const hits = drawingIndex.query(left, top, right, bottom, limit)
-      return hits.length > limit ? null : hits.map(index => drawings[index])
+    drawingsIn(left: number, top: number, right: number, bottom: number, budget: number) {
+      const hits = drawingIndex.query(left, top, right, bottom, budget)
+      return hits && hits.map(index => drawings[index])
     },
   })
 }
@@ -413,9 +449,22 @@ function detailPlan(geometry: SheetGeometry, viewport: LogicalViewport, limits: 
   for (const run of colWindow.runs) { visibleC0 = Math.min(visibleC0, run.start); visibleC1 = Math.max(visibleC1, run.end) }
   if (!slots.length || visibleC1 < 0) return { kind: 'detail', cells, merges, drawings: [], rowLines, colLines, extent, diagnostics }
   // Overflow dependencies: cells whose unclipped text may reach into the pane.
-  const reachLeft = x - TEXT_OVERFLOW_REACH_CSS, reachRight = x + width + TEXT_OVERFLOW_REACH_CSS
-  const c0 = Math.min(visibleC0, reachLeft <= 0 ? 0 : metrics.cols.locate(reachLeft) ?? 0)
-  const c1 = Math.max(visibleC1, reachRight >= extent.width ? MAX_COLS - 1 : metrics.cols.locate(reachRight) ?? MAX_COLS - 1)
+  // They obey the same detail admission: walking outward from the pane, columns
+  // join only while every run projects to four device pixels, and a side whose
+  // window alone exceeds the boundary budget contributes no dependencies.
+  const dependencies = (from: number, to: number): AxisRun[] => {
+    if (!(to > from)) return []
+    const window = metrics.cols.visibleBetween(from, to)
+    if (window.count > limits.gridlines) return []
+    return [...window.runs]
+  }
+  let c0 = visibleC0, c1 = visibleC1
+  const leftRuns = dependencies(Math.max(0, x - TEXT_OVERFLOW_REACH_CSS), Math.max(0, x))
+  for (let index = leftRuns.length - 1; index >= 0 && leftRuns[index].sizeCss * scale >= MIN_DETAIL_DEVICE_PX; index--) c0 = Math.min(c0, leftRuns[index].start)
+  for (const run of dependencies(Math.min(extent.width, x + width), Math.min(extent.width, x + width + TEXT_OVERFLOW_REACH_CSS))) {
+    if (run.sizeCss * scale < MIN_DETAIL_DEVICE_PX) break
+    c1 = Math.max(c1, run.end)
+  }
 
   // Merges never span a permutation band (the S3/S7 sort guard refuses that), so
   // outside bands display slots equal source rows and the slot envelope is the
