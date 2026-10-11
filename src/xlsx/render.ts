@@ -17,10 +17,12 @@ import { isFormulaError, isEvaluationError } from './formula/evaluator'
 import { formatCommon } from './formula/format'
 import { decodeSerial } from './formula/serial'
 import type { ResolvedSemantics } from './formula/types'
-import type { LogicalViewport, WorkerDiagnostic } from './view/contracts'
+import type { CacheIdentity, LogicalViewport, WorkerDiagnostic } from './view/contracts'
 import { MAX_COLS, isValidCoordinate } from './view/coordinates'
 import { RectangleIndex } from './view/structure'
-import { cellSourceRow, drawingExtent, planViewport, type SheetGeometryResult, type ViewportPlan, type ViewportProfile } from './view/viewport'
+import { cellSourceRow, COARSE_NOTICE, drawingExtent, emptyWork, planViewport, type CoarseGroup, type MergeQueryCache, type SheetGeometryResult, type ViewportPlan, type ViewportProfile, type ViewportWork } from './view/viewport'
+import { buildCellRecords, LayoutCache, type CellBodyLayout, type CellLayout, type CellLayoutHost } from './view/textLayout'
+import type { SourceCell } from './view/coordinates'
 
 export interface GridMetrics {
   colWidthsPx: number[]
@@ -109,8 +111,11 @@ function alignedLayout(layout: TextLayout, bounds: ReturnType<typeof textLayoutB
 }
 /** Wrapped text chooses a measured local multiline box that fits its rotated
  * cell interior. No-wrap or physically oversized text keeps authored font size
- * and clips to the cell; source remains complete, with clip-aware indexing. */
-function paintCellText(ctx: CanvasRenderingContext2D, text: string, style: XlsxCellStyle | undefined, numeric: boolean, x: number, y: number, w: number, h: number, color: string, center = false): void {
+ * and clips to the cell; source remains complete, with clip-aware indexing.
+ * Layout and paint are separate so the viewer can cache the layout (computed
+ * in a box at the origin) and replay it; the static path runs both back to back
+ * at absolute coordinates, exactly as before. */
+function layoutCellText(ctx: CanvasRenderingContext2D, text: string, style: XlsxCellStyle | undefined, numeric: boolean, x: number, y: number, w: number, h: number, color: string, center = false): Extract<NonNullable<CellBodyLayout['text']>, { kind: 'layout' }> {
   const mapped = cellTextRotation(style?.textRotation), stacked = mapped && 'stacked' in mapped
   const radians = mapped && 'radians' in mapped ? mapped.radians : 0
   const defaultHorizontal = numeric ? 'right' : center ? 'center' : 'left'
@@ -157,9 +162,16 @@ function paintCellText(ctx: CanvasRenderingContext2D, text: string, style: XlsxC
     }
     const bounds = textLayoutBounds(layout, measure)
     const placed = alignedLayout(layout, bounds, { x, y, w, h }, horizontal, vertical)
-    // Coordinates in the placed layout are worksheet-local and already include
+    // Coordinates in the placed layout are box-local to (x, y) and already include
     // the final merged bounds. Paint and recording replay this exact geometry.
-    paintTextBody(body, ctx, 0, 0, w, h, family => family, undefined, { layout: placed, clip: { x, y, width: w, height: h } })
+    return { kind: 'layout', text, font: '', color, body, layout: placed, clip: { x, y, width: w, height: h },
+      ...(stacked ? { stacked: true } : radians ? { rotation: radians } : {}), wrap, lines: placed.lines.length }
+  } finally { ctx.restore() }
+}
+function paintCellText(ctx: CanvasRenderingContext2D, text: Extract<NonNullable<CellBodyLayout['text']>, { kind: 'layout' }>): void {
+  ctx.save()
+  try {
+    paintTextBody(text.body, ctx, 0, 0, text.clip.width, text.clip.height, family => family, undefined, { layout: text.layout, clip: text.clip })
   } finally { ctx.restore() }
 }
 /** How much wider than the used range a <col> declaration may be and still
@@ -820,22 +832,29 @@ function paintCellBody(
   measured: MeasureCached,
   extent: { width: number; height: number },
 ): (() => void) | undefined {
-  // fill
-  const fill = cell.style?.fillColor
-  if (fill) {
-    ctx.fillStyle = resolveColor(fill)
-    ctx.fillRect(x, y, w, hh)
-  }
+  return paintCellLayout(ctx, layoutCellBody(ctx, sheet, cell, x, y, w, hh, measured), extent)
+}
+
+/** Host formatting and text layout of one cell in the box (x, y, w, hh): the
+ * single source of a cell's display text and geometry for both paths. */
+function layoutCellBody(
+  ctx: CanvasRenderingContext2D,
+  sheet: XlsxSheet,
+  cell: XlsxCell,
+  x: number, y: number, w: number, hh: number,
+  measured: MeasureCached,
+): CellBodyLayout {
+  const out: CellBodyLayout = { x, y, w, h: hh, formattedText: '' }
+  if (cell.style?.fillColor) out.fill = resolveColor(cell.style.fillColor)
   // text (right-align numbers, left-align strings; alignment spans the merge)
   const font = `${cell.style?.italic ? 'italic ' : ''}${cell.style?.bold ? 'bold ' : ''}${cell.style?.fontSizePt ?? 10}pt "Calibri"`
   const fitsGeneral = cellTextRotation(cell.style?.textRotation) === undefined
     ? (text: string) => measured(font, text) <= Math.max(0, w - PADDING_L - PADDING_R)
     : undefined
   const text = renderCellText(cell.value, cell.style, sheet.semantics, sheet, fitsGeneral)
+  out.formattedText = text
   if (text !== '') {
     const color = cell.style?.color ? resolveColor(cell.style.color) : '#000000'
-    ctx.fillStyle = color
-    ctx.font = font
     // OOXML often authors default alignment fields on every cell. Those
     // retain ordinary placement; real alignment/wrapping/rotation needs
     // the measured local layout (including explicit no-wrap for255).
@@ -843,9 +862,13 @@ function paintCellBody(
       || (cell.style?.vertical !== undefined && cell.style.vertical !== 'bottom')
       || cell.style?.wrapText === true || cellTextRotation(cell.style?.textRotation) !== undefined
     const isCenter = cell.valueIsError ?? (cell.formula !== undefined && isFormulaError(cell.value))
-    if (explicit) paintCellText(ctx, text, cell.style, typeof cell.value === 'number', x, y, w, hh, color, isCenter)
-    else {
+    if (explicit) {
+      ctx.fillStyle = color
+      ctx.font = font
+      out.text = { ...layoutCellText(ctx, text, cell.style, typeof cell.value === 'number', x, y, w, hh, color, isCenter), font }
+    } else {
       // Preserve accepted ordinary default horizontal layout exactly.
+      ctx.font = font
       const textW = measured(ctx.font, text)
       const tx = typeof cell.value === 'number'
         ? x + w - PADDING_R - textW
@@ -853,11 +876,29 @@ function paintCellBody(
           ? x + (w - textW) / 2
           : x + PADDING_L
       const ty = y + hh - (hh - (cell.style?.fontSizePt ?? 10) * (96 / 72)) / 2
-      ctx.textBaseline = 'alphabetic'; ctx.fillText(text, tx, ty)
+      out.text = { kind: 'plain', text, font, color, tx, ty, width: textW }
     }
   }
+  if (cell.style?.borders) out.borders = cell.style.borders
+  return out
+}
+
+/** Replay one cell layout at its own coordinates; returns the deferred border. */
+function paintCellLayout(ctx: CanvasRenderingContext2D, layout: CellBodyLayout, extent: { width: number; height: number }): (() => void) | undefined {
+  const { x, y, w, h: hh } = layout
+  if (layout.fill) {
+    ctx.fillStyle = layout.fill
+    ctx.fillRect(x, y, w, hh)
+  }
+  const text = layout.text
+  if (text) {
+    ctx.fillStyle = text.color
+    ctx.font = text.font
+    if (text.kind === 'layout') paintCellText(ctx, text)
+    else { ctx.textBaseline = 'alphabetic'; ctx.fillText(text.text, text.tx, text.ty) }
+  }
   // borders (anchor draws the merged rect's outline)
-  const b = cell.style?.borders
+  const b = layout.borders
   if (!b) return undefined
   return () => {
     ctx.lineWidth = 1
@@ -896,26 +937,57 @@ function paintSheetDrawings(sheet: XlsxSheet, drawings: readonly XlsxDrawing[], 
   })
 }
 
-export interface ViewportPaintResult { kind: ViewportPlan['kind']; diagnostics: readonly WorkerDiagnostic[] }
+/** The host side of canonical records (spec §11.2): the same formatting and text
+ * layout the static renderer uses, laid out in a box at the origin. Measurement
+ * is cached per host by face and text. */
+export function createCellLayoutHost(ctx: CanvasRenderingContext2D, sheet: Partial<XlsxSheet> = {}): CellLayoutHost {
+  const measured = textMeasurer(ctx)
+  // Format diagnostics land on the caller's sheet when one is given.
+  const target = sheet as XlsxSheet
+  return { layoutBody: (cell, w, h) => layoutCellBody(ctx, target, cell, 0, 0, w, h, measured) }
+}
+
+export interface ViewportPaintResult {
+  kind: ViewportPlan['kind']; diagnostics: readonly WorkerDiagnostic[]
+  /** Canonical records the frame painted (spec §11.2), in paint order. */
+  records: readonly CellLayout[]
+  /** Summarized sub-detail pixel groups (whole frame when `kind` is coarse). */
+  coarse: readonly CoarseGroup[]
+  /** The exact active-cell record, painted in any mode. */
+  active?: CellLayout
+  work: ViewportWork
+}
 export interface ViewportPaintOptions {
   profile?: ViewportProfile
+  /** Publication owner of the records; layouts are cached under it. */
+  owner?: CacheIdentity
+  /** Cross-frame formatted-value/layout cache (plan S5.1). */
+  cache?: LayoutCache
+  merges?: MergeQueryCache
+  activeCell?: SourceCell
   /** Painted in viewport space: protection marks follow the visible pane. */
   watermark?: WatermarkOptions | ResolvedWatermark
 }
 const VIEWPORT_NOTICE: Record<Exclude<ViewportPlan['kind'], 'detail'>, string> = {
   pending: 'Loading…',
-  coarse: 'Zoom in or inspect a cell for detail',
+  coarse: COARSE_NOTICE,
   diagnostic: 'This sheet cannot be laid out',
 }
+/** Coarse summaries without a resolved aggregate paint a neutral "pending" tone,
+ * never a white (asserted blank) region. */
+const COARSE_FILL = '#eceff3'
 
 /**
- * Interactive full-coordinate seam (spec §§5.3, 11.1, 11.5). ctx state: 1 unit =
- * 1 logical CSS px at the viewport's top-left; the caller applies zoom/DPR.
+ * Interactive full-coordinate seam (spec §§5.3, 11.1, 11.2, 11.5). ctx state: 1
+ * unit = 1 logical CSS px at the viewport's top-left; the caller applies zoom/DPR.
  * Geometry comes from the full S2.1 axes/projection (`buildSheetGeometry`), so a
  * source row past the legacy 16,384-row cap paints at its true offset or sorted
- * display slot. Pending, coarse and diagnostic frames paint a visible notice and
- * return their state; none of them paints a cell at the origin or throws for a
- * typed axis failure.
+ * display slot. The planner admits detail first; the host lays each admitted
+ * cell out once (cached across frames by its complete identity) into canonical
+ * records, and the painter replays those records at tile-local coordinates
+ * derived in Float64 (`logical - origin`), never through a global translation.
+ * Pending, coarse and diagnostic frames paint a visible notice and return their
+ * state; none of them paints a cell at the origin or throws for a typed axis failure.
  */
 export function renderSheetViewport(
   sheet: XlsxSheet,
@@ -925,9 +997,17 @@ export function renderSheetViewport(
   prepared?: RenderSheetAssets,
   options: ViewportPaintOptions = {},
 ): ViewportPaintResult {
-  const plan = planViewport(geometry, viewport, options.profile)
+  const plan = planViewport(geometry, viewport, options.profile, { activeCell: options.activeCell, merges: options.merges })
   const { x: vx, y: vy, width, height } = viewport.box
   const paintable = Number.isFinite(width) && Number.isFinite(height) && width > 0 && height > 0
+  const owner = options.owner ?? { docId: '', sheetId: sheet.sheetId ?? sheet.name, valueGen: 0, fontGen: 0, viewGen: 0 }
+  const cache = options.cache ?? new LayoutCache()
+  const notice = (text: string) => {
+    ctx.fillStyle = '#666666'
+    ctx.font = '12px sans-serif'
+    ctx.textBaseline = 'alphabetic'
+    ctx.fillText(text, 8, 20)
+  }
   ctx.save()
   try {
     if (paintable) {
@@ -935,47 +1015,75 @@ export function renderSheetViewport(
       ctx.fillRect(0, 0, width, height)
       if (options.watermark) paintWatermark(ctx, { widthPx: width, heightPx: height }, options.watermark)
     }
-    if (plan.kind !== 'detail') {
-      if (paintable) {
-        ctx.fillStyle = '#666666'
-        ctx.font = '12px sans-serif'
-        ctx.textBaseline = 'alphabetic'
-        ctx.fillText(VIEWPORT_NOTICE[plan.kind], 8, 20)
-      }
-      return { kind: plan.kind, diagnostics: plan.diagnostics }
+    if (plan.kind === 'pending' || plan.kind === 'diagnostic') {
+      if (paintable) notice(VIEWPORT_NOTICE[plan.kind])
+      return { kind: plan.kind, diagnostics: plan.diagnostics, records: [], coarse: [], work: emptyWork() }
     }
-    ctx.translate(-vx, -vy)
-    const measured = textMeasurer(ctx)
+    const work = plan.work
+    const built = cache.stats.built, reused = cache.stats.reused
+    // The host lays a cell out in a box at the origin: records are box-relative.
+    const host = createCellLayoutHost(ctx, sheet)
+    const records = plan.kind === 'detail' ? buildCellRecords(plan.cells, owner, host, cache) : []
+    const active = plan.active ? buildCellRecords([plan.active], owner, host, cache)[0] : undefined
+    work.layoutsBuilt = cache.stats.built - built
+    work.layoutsReused = cache.stats.reused - reused
+    const coarse = plan.kind === 'detail' ? plan.coarse : plan.groups
     const paintBorders: Array<() => void> = []
-    for (const placed of plan.cells) {
-      const border = paintCellBody(ctx, sheet, placed.cell, placed.x, placed.y, placed.width, placed.height, measured, plan.extent)
-      if (border) paintBorders.push(border)
+    const replay = (record: CellLayout) => {
+      // Float64 local offset; the canvas only ever sees tile-local coordinates.
+      const lx = record.logicalBounds.x - vx, ly = record.logicalBounds.y - vy
+      // Border strokes clamp to the sheet extent (paintCellLayout); expressed in the
+      // record's box-local frame.
+      const localExtent = { width: plan.extent.width - record.logicalBounds.x, height: plan.extent.height - record.logicalBounds.y }
+      ctx.save()
+      ctx.translate(lx, ly)
+      const border = paintCellLayout(ctx, record.body, localExtent)
+      ctx.restore()
+      if (border) paintBorders.push(() => { ctx.save(); ctx.translate(lx, ly); border(); ctx.restore() })
     }
-    ctx.strokeStyle = '#d0d0d0'
-    ctx.lineWidth = 1
-    ctx.beginPath()
-    // Segments overshoot the pane by one pixel so their butt caps fall outside it,
-    // exactly like the static path's full-length lines.
-    const yTop = Math.max(0, vy - 1), yBottom = Math.min(plan.extent.height, vy + height + 1)
-    const xLeft = Math.max(0, vx - 1), xRight = Math.min(plan.extent.width, vx + width + 1)
-    for (const x of plan.colLines) {
-      const hidden = plan.merges.filter(merge => merge.x < x && x < merge.x + merge.width).map(merge => [merge.y, merge.y + merge.height] as [number, number])
-      for (const [y1, y2] of openSegments(yTop, yBottom, hidden)) {
-        ctx.moveTo(x + 0.5, y1 + 0.5)
-        ctx.lineTo(x + 0.5, y2 + 0.5)
+    for (const group of coarse) {
+      ctx.fillStyle = COARSE_FILL
+      ctx.fillRect(group.bounds.x - vx, group.bounds.y - vy, group.bounds.width, group.bounds.height)
+    }
+    for (const record of records) replay(record)
+    if (plan.kind === 'detail') {
+      ctx.strokeStyle = '#d0d0d0'
+      ctx.lineWidth = 1
+      ctx.beginPath()
+      // Segments overshoot the pane by one pixel so their butt caps fall outside it,
+      // exactly like the static path's full-length lines.
+      const yTop = Math.max(0, vy - 1), yBottom = Math.min(plan.extent.height, vy + height + 1)
+      const xLeft = Math.max(0, vx - 1), xRight = Math.min(plan.extent.width, vx + width + 1)
+      for (const x of plan.colLines) {
+        const hidden = plan.merges.filter(merge => merge.x < x && x < merge.x + merge.width).map(merge => [merge.y, merge.y + merge.height] as [number, number])
+        for (const [y1, y2] of openSegments(yTop, yBottom, hidden)) {
+          work.gridlineSpans++
+          ctx.moveTo(x - vx + 0.5, y1 - vy + 0.5)
+          ctx.lineTo(x - vx + 0.5, y2 - vy + 0.5)
+        }
+      }
+      for (const y of plan.rowLines) {
+        const hidden = plan.merges.filter(merge => merge.y < y && y < merge.y + merge.height).map(merge => [merge.x, merge.x + merge.width] as [number, number])
+        for (const [x1, x2] of openSegments(xLeft, xRight, hidden)) {
+          work.gridlineSpans++
+          ctx.moveTo(x1 - vx + 0.5, y - vy + 0.5)
+          ctx.lineTo(x2 - vx + 0.5, y - vy + 0.5)
+        }
+      }
+      ctx.stroke()
+      for (const paint of paintBorders) paint()
+      if (plan.drawings.length) {
+        // Drawing scenes carry worksheet coordinates in their own transforms.
+        ctx.save()
+        ctx.translate(-vx, -vy)
+        paintSheetDrawings(sheet, plan.drawings, ctx, prepared)
+        ctx.restore()
       }
     }
-    for (const y of plan.rowLines) {
-      const hidden = plan.merges.filter(merge => merge.y < y && y < merge.y + merge.height).map(merge => [merge.x, merge.x + merge.width] as [number, number])
-      for (const [x1, x2] of openSegments(xLeft, xRight, hidden)) {
-        ctx.moveTo(x1 + 0.5, y + 0.5)
-        ctx.lineTo(x2 + 0.5, y + 0.5)
-      }
-    }
-    ctx.stroke()
-    for (const paint of paintBorders) paint()
-    paintSheetDrawings(sheet, plan.drawings, ctx, prepared)
-    return { kind: 'detail', diagnostics: plan.diagnostics }
+    // The active cell keeps its exact record even inside a summarized region.
+    if (active && !records.some(record => record.id === active.id)) replay(active)
+    if (paintable && coarse.length) notice(COARSE_NOTICE)
+    return { kind: plan.kind, diagnostics: plan.diagnostics, records, coarse, ...(active ? { active } : {}), work }
   } finally { ctx.restore() }
 }
 

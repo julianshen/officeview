@@ -3,7 +3,8 @@ import { createCanvas, type Canvas } from 'canvas'
 import { OfficePackage } from '../src/core/zip'
 import { parseXlsx } from '../src/xlsx/parse'
 import { computeMetrics, renderSheet, renderSheetViewport } from '../src/xlsx/render'
-import { buildSheetGeometry } from '../src/xlsx/view/viewport'
+import { buildSheetGeometry, MergeQueryCache } from '../src/xlsx/view/viewport'
+import { LayoutCache } from '../src/xlsx/view/textLayout'
 import { buildXlsx } from '../src/testdata/ooxml-builders'
 
 async function bigSheet() {
@@ -101,5 +102,50 @@ describe('xlsx viewport culling', () => {
     renderSheet(sheet, a.getContext('2d') as never, m, undefined, {})
     renderSheet(sheet, b.getContext('2d') as never, m, undefined, {}, undefined)
     expect(Buffer.from(a.toBuffer())).toEqual(Buffer.from(b.toBuffer()))
+  })
+  test('scrolling frames replay cached records and still equal the static crop', async () => {
+    const { sheet, m } = await bigSheet()
+    const full = createCanvas(m.widthPx, m.heightPx)
+    renderSheet(sheet, full.getContext('2d') as never, m, undefined, {})
+    const a = pixels(full)
+    const geometry = buildSheetGeometry(sheet)
+    const cache = new LayoutCache(), merges = new MergeQueryCache()
+    const owner = { docId: 'd', sheetId: 'Big', valueGen: 0, fontGen: 0, viewGen: 0 }
+    const frame = (box: { x: number; y: number; width: number; height: number }) => {
+      const view = createCanvas(box.width, box.height)
+      const result = renderSheetViewport(sheet, view.getContext('2d') as never, geometry, { box, zoom: 1, deviceScale: 1 }, {}, { owner, cache, merges })
+      const b = pixels(view)
+      let diff = 0
+      for (let y = 0; y < box.height; y++) for (let x = 0; x < box.width; x++) {
+        const i = (y * box.width + x) * 4, j = ((box.y + y) * a.width + (box.x + x)) * 4
+        for (let k = 0; k < 3; k++) if (b.data[i + k] !== a.data[j + k]) { diff++; break }
+      }
+      return { result, diff }
+    }
+    const first = frame({ x: 0, y: 980, width: 640, height: 200 })
+    expect(first.diff).toBe(0)
+    expect(first.result.work.layoutsBuilt).toBe(first.result.records.length)
+    // Two rows further down: only the newly exposed rows are laid out (20 cells per
+    // row, overflow dependencies to the right of the pane included).
+    const second = frame({ x: 0, y: 1020, width: 640, height: 200 })
+    expect(second.diff).toBe(0)
+    expect(second.result.work.layoutsBuilt).toBeGreaterThan(0)
+    expect(second.result.work.layoutsBuilt).toBeLessThanOrEqual(2 * 20)
+    expect(second.result.work.layoutsReused).toBe(second.result.records.length - second.result.work.layoutsBuilt)
+    // The merge query for an unchanged frame rectangle is served from its cache.
+    const again = frame({ x: 0, y: 1020, width: 640, height: 200 })
+    expect(again.diff).toBe(0)
+    expect(again.result.work.layoutsBuilt).toBe(0)
+    expect(again.result.work.mergeQueries).toBe(0)
+  })
+  test('a fractional pane origin paints the same cells at sub-pixel local offsets', async () => {
+    const { sheet } = await bigSheet()
+    const geometry = buildSheetGeometry(sheet)
+    const integral = createCanvas(300, 150), fractional = createCanvas(300, 150)
+    const r1 = renderSheetViewport(sheet, integral.getContext('2d') as never, geometry, { box: { x: 100, y: 400, width: 300, height: 150 }, zoom: 1, deviceScale: 1 }, {})
+    const r2 = renderSheetViewport(sheet, fractional.getContext('2d') as never, geometry, { box: { x: 100.25, y: 400.5, width: 300, height: 150 }, zoom: 1, deviceScale: 1 }, {})
+    expect(r2.records.map(record => record.id)).toEqual(r1.records.map(record => record.id))
+    expect(r2.records.map(record => record.logicalBounds)).toEqual(r1.records.map(record => record.logicalBounds))
+    expect(Array.from(pixels(fractional).data).some(v => v < 250)).toBe(true)
   })
 })
