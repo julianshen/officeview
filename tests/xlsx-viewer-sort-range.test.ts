@@ -315,7 +315,7 @@ describe('table overlap of derived ranges', () => {
     const { store, index } = await f5Setup()
     // F5's block 0..9 x 0..9 overlaps table-0 (rows 4..20, cols 0..3); (0,3) lies outside it.
     expect(await detectOperationRange(request(store, index, sel(0, 3)))).toEqual(ambiguous)
-    expect(await admitSortRange(request(store, index, sel(0, 0)))).toEqual(ambiguous)
+    expect(await admitSortRange(request(store, index, sel(1, 2)))).toEqual(ambiguous)
   })
   it('refuses a current region that fully contains a smaller table', async () => {
     const store = gridStore(headerGrid())
