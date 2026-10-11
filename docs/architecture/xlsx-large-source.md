@@ -452,7 +452,7 @@ treats different consumers differently:
 | `sharedStrings.xml` `si` | Same tree walk (`parse.ts:40-58`); `si` inside `AlternateContent` is ignored. | Same rule as sheetData: `si` inside `AlternateContent` makes the import `incomplete`/`unsupported`. |
 | `styles.xml` (fonts, fills, borders, numFmts, cellXfs) | Tree walk in `parseStyles`; AlternateContent not unwrapped. | Skip with a counted diagnostic; `incomplete`/`unsupported` if the skipped subtree contains an element that populates `Styles`. |
 | Worksheet-level structure (cols, merges, hidden rows, tables, hyperlinks, `extLst`) | Same tree walk; unknown or wrapped elements ignored. | Collected from the worksheet token stream into compact records (§4.3.7). If an `AlternateContent` subtree contains a structure-bearing element (`mergeCells`/`mergeCell`, `tableParts`/`tablePart`, `drawing`, `legacyDrawing`, `cols`, row `hidden`/outline metadata), the affected `StructuralResult` domain is marked **incomplete** (see below). Purely ignorable content (unknown extension elements) is skipped with a counted diagnostic. |
-| Drawings (`xl/drawings/*.xml`, anchors) | `selectedAlternative` (`xlsx/drawing.ts:154-171`) evaluates `Choice` branches in order, skipping any whose `Requires` prefixes are not supported (`['a','xdr','c','dgm','dsp','ink']`), takes the first available one, and only then the `Fallback` (`drawing.ts:163` Choice with supported `Requires`, `:168` Fallback); nesting is depth-limited (`MAX_COMPATIBILITY_DEPTH`). | **No reimplementation.** Drawing parts go through the existing tree path (`parseWorksheetDrawings`) under a per-part byte cap (proposed 8 MiB on D, 4 MiB on M, enforced while inflating) that binds in **both** modes: on the object path drawing parts are excluded from the 6 / 3 MiB non-media byte guard (they have this cap instead) but their elements count in the §4.3 envelope; on the paged path each drawing part is tree-parsed only if, on its own, it is within the cap and its envelope (`64 MiB + 1,750 B x elements + 128 B x attributes + 64 B x text`) is at most 128 MiB on D / 64 MiB on M, counted by a token pass before the tree is built. Over the cap, the drawing's rendering is omitted with a typed `resource-limit` diagnostic, but its **anchors are still extracted** by a streaming pass over the anchor elements (`oneCellAnchor`/`twoCellAnchor`/`absoluteAnchor` with `from`/`to`/`ext`, a bounded record per anchor); if even that is impossible (anchor count over the cap, malformed part), the drawings domain is marked **incomplete**. |
+| Drawings (`xl/drawings/*.xml`, anchors) | `selectedAlternative` (`xlsx/drawing.ts:154-171`) evaluates `Choice` branches in order, skipping any whose `Requires` prefixes are not supported (`['a','xdr','c','dgm','dsp','ink']`), takes the first available one, and only then the `Fallback` (`drawing.ts:163` Choice with supported `Requires`, `:168` Fallback); nesting is depth-limited (`MAX_COMPATIBILITY_DEPTH`). | **No reimplementation.** Drawing parts go through the existing tree path (`parseWorksheetDrawings`) under a per-part byte cap (proposed 8 MiB on D, 4 MiB on M, enforced while inflating) that binds in **both** modes: on the object path drawing parts are excluded from the 6 / 3 MiB non-media byte guard (they have this cap instead) but their elements count in the §4.3 envelope; on the paged path each drawing part is tree-parsed only if, on its own, it is within the cap and its envelope (`64 MiB + 1,750 B x elements + 128 B x attributes + 64 B x text`) is at most 128 MiB on D / 64 MiB on M, counted by a token pass before the tree is built. Over the cap, the drawing's rendering is omitted with a typed `resource-limit` diagnostic, but its **anchors are still extracted** by a streaming pass over the anchor elements (`oneCellAnchor`/`twoCellAnchor`/`absoluteAnchor` with `from`/`to`/`ext`, a bounded record per anchor); if even that is impossible (more than 65,536 anchors in the part, proposed `maxAnchorsPerDrawingPart`, or a malformed part), the drawings domain is marked **incomplete**. |
 
 Structural completeness rule (spec §4.5). Merges, tables, spills and drawing anchors feed `StructuralResult` (`contracts.ts`:
 `completeness`, `merges`, `tables`, `spills`, `drawings`, `missing`). Anything the importer skipped or omitted that could carry
@@ -665,7 +665,7 @@ export function admit(profile: ProfileId, compressedBytes: number, inventory: Zi
 export interface AdmissionCounters {
   expandedBytes: number; maxPartBytes: number; elements: number; attributes: number; textChars: number
   rows: number; cells: number; uniqueStrings: number; longestString: number; merges: number; styleRecords: number
-  maxAttributesPerElement: number; loadEvaluatedFormulas: number; sumK: number; fullCalcOnLoad: boolean
+  maxAttributesPerElement: number; loadEvaluatedFormulas: number; sumK?: number /* interim variant only, unused by the decided rule */; fullCalcOnLoad: boolean
 }
 /** Gate 2: runs the verification pass for an object candidate and applies every actual-count guard, including the evaluation
  * budget. Returns the evaluator options the legacy parse must use, or a paged/refuse decision. Never parses a tree. */
@@ -681,8 +681,8 @@ The spec (§12.3, §12.4) gives only throughput and aggregate budgets, so this n
 **Why bytes are not a bound.** An earlier revision bounded the object path by expanded XML bytes using a 33x amplification
 taken from F2. Review found a counterexample, re-measured here: a stored worksheet of 125,000 metadata-only rows
 (`<row r="N"/>`, 2,016,163 B of XML including the other parts, zero cells, zero strings) passed the old Mobile guards, yet the
-legacy parse grew peak RSS by **222 MB on Bun/JSC (113x the XML bytes) and 116 MB on Node/V8 (61x)**, with 89-92 MB (JSC) / 35 MB
-(V8) still retained afterwards. Across shapes, peak RSS per XML byte ranged from 12x to 191x, so bytes cannot bound the legacy
+legacy parse grew peak RSS by **221.2 MB on Bun/JSC (115x the XML bytes) and 114.8 MB on Node/V8 (60x)** in the final artifact run
+(`shapes-final.jsonl`; earlier runs gave 218-222 / 116-117 MB), with 91.5 MB (JSC) / 34.7 MB (V8) still retained afterwards. Across shapes, peak RSS per XML byte ranged from 12x to 191x, so bytes cannot bound the legacy
 parser. What it allocates scales with **elements, attributes and text**, which the verification pass can count exactly before
 anything is retained.
 
@@ -698,7 +698,7 @@ predictedPeak = 64 MiB + 1,750 B x elements + 128 B x attributes + 64 B x textCh
 ```
 
 is at or above the measured peak in **all 56 runs** (re-run in round 4 with the recording script itself using these
-coefficients, `shapes-final.jsonl`); the tightest is 80k merges on JSC (167.4 MB measured, 207.3 MB predicted, ratio 0.81); the counterexample is 222.4 MB measured against 287.9 MB predicted. The 64 MiB constant covers heap-growth steps on
+coefficients, `shapes-final.jsonl`); the tightest is 80k merges on JSC (167.4 MB measured, 207.3 MB predicted, ratio 0.81); the counterexample is 221.2 MB measured against 287.9 MB predicted. The 64 MiB constant covers heap-growth steps on
 small inputs (an empty sheet already costs 4-8 MB, 31k rows 89 MB on JSC). This is an empirical envelope with about 20% headroom on
 the worst shape, **not a proof**: the coefficients are JSC/V8 process measurements, browser heaps are unmeasured, and S10 must
 re-measure them in Chrome and Safari before freezing. It is enforceable, because every input to it is counted exactly by the
@@ -714,11 +714,11 @@ refuse without inflating; a G2 failure means paged, decided before the legacy pa
 
 | Guard (all must hold for **object**) | D | M | Basis |
 |---|---:|---:|---|
-| **G2** `predictedPeak + formulaScalarReserve + evaluatorAllowance` (defined below; elements, attributes, text and load-evaluated formulas counted exactly) | **≤ 256 MiB** | **≤ 128 MiB** | Measured envelopes above and below. The 125k-row counterexample predicts 287.9 MiB: paged on both profiles |
+| **G2** Admission inequality `predictedPeak + N x Cs + (N > 0 ? A x Ccell : 0) ≤ budget`, where `N` = load-evaluated formulas, `Cs` = 2,048 B, `A` = 16,384 D / 4,096 M, `Ccell` = 2,000 B (rule 3 below); on success the legacy parse runs with `maxMaterializedCells = floor((budget - predictedPeak - N x Cs) / Ccell)` | budget **256 MiB** | budget **128 MiB** | Measured envelopes above and below. The `A x Ccell` term (room for one maximal array) is the part with teeth; the `maxMaterializedCells` assignment then spends the rest. The 125k-row counterexample predicts 287.9 MiB: paged on both profiles |
 | **G1** Compressed package bytes | 32 MiB | 16 MiB | The legacy path holds the whole compressed buffer plus JSZip; equals the in-memory spool limit |
-| **G1 declared, G2 actual** Sum of expanded bytes of non-media parts **excluding drawing parts** (`xl/drawings/*.xml`, charts and diagram parts) | 6 MiB | 3 MiB | Keeps the verification pass and the legacy strings small; drawing parts have their own cap below |
+| **G1 declared, G2 actual** Sum of expanded bytes of non-media parts **excluding drawing-family parts** (`xl/drawings/*.xml`, `xl/charts/*.xml`, `xl/diagrams/*.xml`) | 6 MiB | 3 MiB | Keeps the verification pass and the legacy strings small; drawing-family parts have their own per-part cap below |
 | **G1 declared, G2 actual** One non-drawing part | 4 MiB | 2 MiB | Largest single string handed to the legacy parser |
-| **G1 declared, G2 actual** One drawing part | 8 MiB | 4 MiB | Drawing cap (§3.4); its elements still count in the envelope. Over the cap: rendering omitted with a diagnostic, anchors streamed |
+| **G1 declared, G2 actual** One drawing-family part (drawing, chart or diagram part) | 8 MiB | 4 MiB | Drawing cap (§3.4), covering charts and diagrams too; elements still count in the envelope. Over the cap: rendering omitted with a diagnostic; for a drawing part, anchors streamed |
 | **G2** Rows; populated cells; unique shared strings; merges; style records (`xf`, `font`, `fill`, `border`, `numFmt`, `dxf`) | 100,000; 100,000; 50,000; 20,000; 20,000 | 50,000; 50,000; 25,000; 10,000; 10,000 | Secondary caps so no single allocation kind dominates; the element model is usually the binding guard (M allows about 38,000 elements beyond the constant) |
 | **G2** Attributes per element; any one string or inline string | 128; 64 KiB | 128; 64 KiB | Tokenizer cap; spec §4.3.4 soft threshold |
 | **G1** Entries; per-part declared ratio (parts over 1 MiB); **G2** actual ratio | 1,024; 200:1 | 512; 200:1 | F2/F3/F4 sheets are 6:1 to 9:1 and shared strings 22:1; deflate's maximum is 1032:1 |
@@ -834,9 +834,26 @@ Pre-retention guards on the small (object) path, per spec §4.2 ("never build a 
 3. Only after every counter passes does the legacy parser start, with the evaluator capped (`A` and `maxMaterializedCells`). Before that decision the only allocations are the compressed buffer (at most the cap), a 64 KiB inflate buffer,
    the tokenizer carry (at most 1 MiB) and the counters, so **a restart never follows an oversized allocation**: when a counter
    trips, the session switches to paged mode from the retained source with nothing large to discard, or refuses.
-4. The only post-parse switch is the evaluator reroute (rule 4 above), and it happens within the reserved budget and before
+4. The only post-parse switch is the evaluator reroute (rule 5 above), and it happens within the reserved budget and before
    publication. The residual risk is the envelope's coefficients themselves (browser heaps unmeasured), which S10 re-measures; a
    coefficient increase only moves more files to paged mode.
+
+Image parts (`xl/media/*`, plan S1.1 "decode image dimensions/pixel area before full raster allocation"). Media parts are never
+tokenized and do not count toward the XML guards or the envelope. Instead, on both paths, before any raster decode:
+
+1. **Header-only probe.** Read at most 64 KiB from the start of the part through `openPart` (so a deflated image is inflated with
+   the same bounded output buffer) and parse the dimensions from the format header: PNG `IHDR`, JPEG `SOFn`, GIF logical screen
+   descriptor, BMP `BITMAPINFOHEADER`, WebP `VP8 `/`VP8L`/`VP8X`, TIFF IFD width/length tags. Unknown format, missing or
+   inconsistent header: diagnosed placeholder, no decode.
+2. **Pixel-area admission.** `decodedBytes = width x height x 4` (RGBA) plus a transient decode surface of the same size. Per image:
+   at most 16,777,216 pixels and 64 MiB decoded on D, 8,388,608 pixels and 32 MiB on M (proposed). Over the cap: diagnosed
+   placeholder, or a bounded downsample path where the platform decoder supports decoding to a target size (spec §12.4).
+3. **Charging.** Each decode reserves `2 x decodedBytes` from the ledger's `decodedBuffers` pool before it starts and releases the
+   transient half when the decode finishes; decoded images live in a bounded LRU charged to the same pool (proposed pool cap 128 MiB
+   on D, 64 MiB on M). Inactive images keep only their source reference and are not decoded.
+
+None of this was measured in the spike (no image decoding experiment was run); it is the design S1.1 implements, and RED test 14b
+pins it.
 
 ### 4.4 `src/xlsx/storage/importSession.ts`
 
@@ -921,8 +938,10 @@ first bytes, and an **authoritative** answer from the central directory plus `[C
      cannot be created or exceeds its caps (no storage backend over the memory cap, quota, or the paged compressed cap), the load
      is **refused with a typed error** that says the format could not be determined within the first 64 KiB. There is no
      automatic fallback to unbounded accumulation for an unresolved ZIP.
-3. **Admission** (§4.3) for spreadsheets: `object` runs the verification pass and then the unchanged `OfficePackage` plus
-   `parseXlsx` with evaluator caps; `paged` opens an `ImportSession`; `refuse` releases the spool and rejects with a typed error.
+3. **Admission** (§4.3) for spreadsheets: gate 1 `admit()` yields `object-candidate`, `paged` or `refuse`; for an
+   `object-candidate`, gate 2 `verifyObjectCandidate()` yields `object` (then the unchanged `OfficePackage` plus `parseXlsx` with the
+   returned evaluator caps), `paged` or `refuse`; `paged` opens an `ImportSession`; `refuse` releases the spool and rejects with a
+   typed error.
 4. **Result.** The internal entry returns `{ kind: 'document', document } | { kind: 'paged', session }`. Until the interactive
    viewer is wired (later packages), the exported `loadOfficeFile` and `<OfficeFile>` map `paged` and `refuse` to a typed
    rejection that names the applied limit.
@@ -1006,7 +1025,7 @@ User-flagged items (each needs explicit user visibility at the PR; none is added
    or review; the production suite must include the chunk-split property tests and the malformed fuzz, not only examples.
 7. Deliberate behavior differences from the current parser (listed in §3.4): DTD rejected, references over 32 characters,
    AlternateContent-wrapped data becomes `incomplete`, typed errors instead of tree garbage.
-8. The admission envelope is empirical (56 runs, worst 0.82 of predicted) from JSC/V8 process measurements, not browser heaps
+8. The admission envelope is empirical (56 runs, worst 0.81 of predicted) from JSC/V8 process measurements, not browser heaps
    and not a proof; S10 re-measures it. A remote spreadsheet with no storage backend over the memory cap now fails (user-flagged).
 9. `OfficePackage` is a public export; any change to `zip.ts` must be additive.
 
@@ -1078,6 +1097,10 @@ XML tokenizer:
 
 Spool and entry points (separately from part parsing, plan S1.1):
 
+14b. **Images**: a PNG whose `IHDR` declares 100,000 x 100,000 pixels, compressed to a few KB, and a JPEG with an equivalent `SOF0`,
+    are never decoded: the header probe reads at most 64 KiB, the result is a diagnosed placeholder, and the `decodedBuffers` pool
+    never reserves more than the probe; an image just under the cap decodes with `2 x decodedBytes` reserved and the transient half
+    released afterwards; an image with an unknown or truncated header becomes a placeholder; inactive images are not decoded.
 15. Backend selection with an injected `StorageEnv`: known small length uses memory; unknown length promotes to OPFS at the
     limit; no OPFS uses IndexedDB; neither and over the hard cap gives typed `storage-error`; insufficient `estimate()` gives
     typed `quota`; **no truncated Blob is ever returned**. **Lying length**: a source advertising 1 KiB that delivers 40 MiB is
@@ -1152,9 +1175,12 @@ owned by S1.1 (see §7). Still open:
 5. **Sniff coverage.** ZIP64 data descriptors (24 bytes) in the sniff walk and stored-with-descriptor entries before the content
    types are `undetermined`, which now means bounded spool then classify, or a typed refusal when no spool is possible.
    Acceptable for v1?
-7. **Evaluator budget variant.** Decided (§7.6): the cumulative `maxMaterializedCells`. Remaining question: confirm the per-formula
-   scalar constant (2,048 B, from one Bun shape) and `Ccell` (2,000 B) are re-measured in browsers in S10 before freezing.
-6. **Real-browser performance** with page encoding and storage included remains an S10 gate.
+6. **Evaluator budget variant.** Decided (§7.6): the cumulative `maxMaterializedCells`. Remaining question: confirm the per-formula
+   scalar constant (2,048 B, from one Bun shape) and `Ccell` (2,000 B) are re-measured in browsers in S10 before freezing. Watch item:
+   the measured components (spill 1.8-2.0 KB per cell plus transient about 0.5 KB per element) can sum above 2,000 B, so the S10
+   measurement must use transient-inclusive peaks; the process-RSS evidence so far fits with margin (for example `sort-5000` on D:
+   92.5 MB measured against a 122.7 MiB admission total).
+7. **Real-browser performance** with page encoding and storage included remains an S10 gate.
 
 ## 7. Orchestrator decisions on the open questions (2026-10-11), corrected after two reviews
 
@@ -1175,7 +1201,7 @@ the final PR. "(corrected)" marks entries that replace an earlier version; "(rou
    object path is bounded by a measured element/attribute/text envelope counted exactly in the verification pass (bytes are not a
    bound: the 125k metadata-row counterexample), secondary caps applied together, and an **evaluation reserve** for load-evaluated
    formulas with the evaluator capped; any evaluator resource hit reroutes to paged/`cached` before publication (the
-   `SEQUENCE(200000,1)` counterexample). All **proposed, to be frozen in S10**. **Evaluator variant (§6.7) decided (round 3): the additive cumulative `maxMaterializedCells` counter in `src/xlsx/formula/*` with `A` = 16,384 (D) / 4,096 (M).** **Corrected in round 4:** the reserve is one shared reservation bounded by the cumulative cap (`predictedPeak + N x 2,048 B + maxMaterializedCells x 2,000 B ≤ budget`, admission requiring room for at least one `A`-cell array), independent of formula count and `k`; the per-formula `sum(k) x A` reserve applies only to the superseded interim variant. Measured: 20/200/2,000 trivial uncached formulas, 20 volatile, 20 `fullCalcOnLoad`, 20 `ca` stay object/engine on D and M. It is an additive internal option (default unchanged for existing callers) and the additive `parseXlsx` options argument stays a user-flagged item (§4.5 #7).
+   `SEQUENCE(200000,1)` counterexample). All **proposed, to be frozen in S10**. **Evaluator variant (§6.6) decided (round 3): the additive cumulative `maxMaterializedCells` counter in `src/xlsx/formula/*` with `A` = 16,384 (D) / 4,096 (M).** **Corrected in round 4:** the reserve is one shared reservation bounded by the cumulative cap (`predictedPeak + N x 2,048 B + maxMaterializedCells x 2,000 B ≤ budget`, admission requiring room for at least one `A`-cell array), independent of formula count and `k`; the per-formula `sum(k) x A` reserve applies only to the superseded interim variant. Measured: 20/200/2,000 trivial uncached formulas, 20 volatile, 20 `fullCalcOnLoad`, 20 `ca` stay object/engine on D and M. It is an additive internal option (default unchanged for existing callers) and the additive `parseXlsx` options argument stays a user-flagged item (§4.5 #7).
 7. **Event consumers** live in `src/xlsx/storage/sheetRecords.ts`; S1.2 defines the `PageSink` payload against `contracts.ts`
    lanes (S1.1 defines the port, §4.4).
 8. **Network spool (corrected, rounds 2 and 3):** S1.1 owns spooling and the entry-point wiring. A 64 KiB prefix gives a **hint**
