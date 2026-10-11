@@ -100,7 +100,9 @@ export async function openImportSession(source: Extract<SourceHandle, { kind: 'b
   else options.signal?.addEventListener('abort', forward, { once: true })
   const signal = controller.signal
   const src = blobRangeSource(source.blob)
-  const ledger = options.ledger ?? createQuotaLedger(quotaLimitsFor(options.profile), { maxTotalExpandedBytes: limits.paged.expandedBytes })
+  const ledger = options.ledger ?? options.store?.ledger ?? createQuotaLedger(quotaLimitsFor(options.profile), { maxTotalExpandedBytes: limits.paged.expandedBytes })
+  // An injected store is charged on the same ledger the session reports.
+  options.store?.attachLedger(ledger)
   const partOpts = (name: string, cap: number) => ({ signal, budget: ledger.partBudget(name, cap), rangeReadBytes: limits.rangeReadBytes, outputBufferBytes: limits.inflateOutputBytes })
   const inventory = await readZipInventory(src, inventoryLimits(limits), signal)
   const smallPart = async (name: string): Promise<string | undefined> => {

@@ -82,16 +82,25 @@ export class PageBuilder {
   private texts: string[] = []
   private meta = new Map<number, FormulaMeta>()
   private units = 0
+  /** Sum of JSON.stringify([index, meta]) lengths, for the exact meta lane size. */
+  private metaChars = 0
   get records(): number { return this.rows.length }
-  /** Encoded size estimate used for the target page size. */
-  get bytes(): number { return this.rows.length * 20 + this.units * 2 + this.meta.size * 64 }
+  /** Exact encodePage() size of what has been added (the page target is charged on it). */
+  get bytes(): number {
+    const n = this.rows.length
+    const metaLength = this.meta.size ? 2 + this.metaChars + (this.meta.size - 1) : 0
+    return encodedSize(n, this.units, metaLength)
+  }
   add(row: number, col: number, kind: number, styleIndex: number, num: number, text: string, cached: boolean, meta: FormulaMeta | undefined, error = kind === K_ERROR): void {
     const i = this.rows.length
     this.rows.push(row); this.cols.push(col); this.kinds.push(kind); this.styles.push(styleIndex); this.nums.push(num)
     this.texts.push(text)
     this.units += text.length
     this.flags.push((cached ? F_CACHED : 0) | (meta ? F_META : 0) | (error ? F_ERROR : 0))
-    if (meta) this.meta.set(i, meta)
+    if (meta) {
+      this.meta.set(i, meta)
+      this.metaChars += JSON.stringify([i, meta]).length
+    }
   }
   build(): CellPagePayload {
     const n = this.rows.length
@@ -132,6 +141,10 @@ export function summarize(sheetId: string, pageId: string, r0: number, r1: numbe
 // Binary codec: 8 u32 header words, then 8-byte aligned lanes, then the meta JSON as UTF-16.
 const MAGIC = 0x4f565031 // 'OVP1'
 const align8 = (n: number) => (n + 7) & ~7
+
+function encodedSize(n: number, units: number, metaLength: number): number {
+  return 32 + [8 * n, 4 * n, 4 * n, 4 * (n + 1), 2 * n, 2 * units, n, n, 2 * metaLength].reduce((sum, size) => sum + align8(size), 0)
+}
 
 export function encodePage(p: CellPagePayload): Uint8Array {
   const n = p.rows.length
@@ -259,11 +272,15 @@ interface OpfsFile {
   getFile(): Promise<Blob>
 }
 export const PAGE_PREFIX = 'officeview-pages-'
+const escapeName = (text: string): string => text.replace(/[^A-Za-z0-9.]/g, (c) => `_${c.charCodeAt(0).toString(16).padStart(4, '0')}`)
 /** One flat file per page, named `${PAGE_PREFIX}${owner}-${key}` so removeAll can find them. */
 export function opfsPageBackend(dir: OpfsDir, owner: string): PageBackend {
-  const prefix = `${PAGE_PREFIX}${owner}-`
+  // Injective names: every character outside [A-Za-z0-9.] becomes _hhhh (its
+  // UTF-16 code unit), so distinct keys never share a file, and the encoded
+  // owner contains no '-', so one owner's prefix never matches another's files.
+  const prefix = `${PAGE_PREFIX}${escapeName(owner)}-`
   const written = new Set<string>()
-  const fileName = (key: string) => `${prefix}${key.replace(/[^A-Za-z0-9_.-]/g, '_')}`
+  const fileName = (key: string) => `${prefix}${escapeName(key)}`
   return {
     kind: 'opfs',
     async put(key, bytes) {
@@ -439,7 +456,7 @@ export const payloadBytes = (p: CellPagePayload): number =>
 export class SourcePageStore implements PageSink {
   readonly docId: string
   private readonly backend: PageBackend
-  private readonly ledger?: QuotaLedger
+  private chargedTo?: QuotaLedger
   private readonly index = new Map<string, PageSummary[]>()
   private readonly reservations: Reservation[] = []
   private readonly resident = new Map<string, Resident<CellPagePayload | StringChunk>>()
@@ -455,10 +472,13 @@ export class SourcePageStore implements PageSink {
   constructor(options: SourcePageStoreOptions) {
     this.docId = options.docId
     this.backend = options.backend
-    this.ledger = options.ledger
+    this.chargedTo = options.ledger
     this.cacheBytes = options.cacheBytes ?? 32 * 1024 * 1024
   }
   get backendKind(): PageBackendKind { return this.backend.kind }
+  get ledger(): QuotaLedger | undefined { return this.chargedTo }
+  /** The import session's ledger, for a store created without one; never replaces an existing ledger. */
+  attachLedger(ledger: QuotaLedger): void { this.chargedTo ??= ledger }
   get stats(): PageStoreStats { return { ...this.counters } }
   get live(): boolean { return !this.closed && !this.abandoned }
 
@@ -467,7 +487,7 @@ export class SourcePageStore implements PageSink {
     if (docId !== this.docId) throw new PackageError('cancelled', `page for document ${docId} rejected by the store of ${this.docId}`)
   }
   private charge(pool: 'pages' | 'sharedStrings', bytes: number): void {
-    if (this.ledger) this.reservations.push(this.ledger.reserve(pool, bytes))
+    if (this.chargedTo) this.reservations.push(this.chargedTo.reserve(pool, bytes))
   }
 
   async commit(page: ImportedPage & { payload?: CellPagePayload }, docId = this.docId): Promise<void> {

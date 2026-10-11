@@ -67,7 +67,7 @@ describe('page backends', () => {
     const dir = fakeOpfsDirectory()
     const backend = opfsPageBackend(dir, 'doc-1')
     await backend.put('1/p0', new Uint8Array([1]))
-    expect([...dir.files.keys()].every((name) => name.startsWith('officeview-pages-doc-1-'))).toBe(true)
+    expect([...dir.files.keys()].every((name) => name.startsWith('officeview-pages-doc_002d1-'))).toBe(true)
     await roundTrip(backend)
     expect(dir.files.size).toBe(0)
   })
@@ -398,5 +398,36 @@ describe('page storage budget (measured: F2 full stores 8,238,808 cells in 211.0
       expect(quotaLimitsFor(profile).pages).toBeGreaterThanOrEqual(importLimitsFor(profile).paged.cells * 27)
     }
     expect(quotaLimitsFor('D').pages).toBeGreaterThan(211 * 1024 * 1024)
+  })
+})
+
+describe('review round 1 (opencode) storage findings', () => {
+  it('NIT 6: OPFS page names are injective: keys differing only in escaped characters never collide', async () => {
+    const dir = fakeOpfsDirectory()
+    const backend = opfsPageBackend(dir, 'doc')
+    await backend.put('a/b', new Uint8Array([1]))
+    await backend.put('a_b', new Uint8Array([2]))
+    await backend.put('a_002fb', new Uint8Array([3]))
+    expect(dir.files.size).toBe(3)
+    expect([...(await backend.get('a/b'))!]).toEqual([1])
+    expect([...(await backend.get('a_b'))!]).toEqual([2])
+    expect([...(await backend.get('a_002fb'))!]).toEqual([3])
+  })
+
+  it('NIT 7: an injected store without a ledger is charged on the import session ledger', async () => {
+    const store = new SourcePageStore({ docId: 'd', backend: memoryPageBackend() })
+    const session = await openImportSession(blobOf(xlsxBytes({ sheetData: rowsXml(300) })), { docId: 'd', profile: 'D', store, pageRows: 100 })
+    await session.done
+    expect(session.ledger.snapshot().current.pages).toBe(store.stats.storedBytes)
+    expect(store.stats.storedBytes).toBeGreaterThan(0)
+    await session.release()
+    expect(session.ledger.snapshot().current.pages).toBe(0)
+  })
+
+  it('NIT 9: PageBuilder.bytes is the exact encoded size, so the page target is honoured', () => {
+    const b = new PageBuilder()
+    expect(b.bytes).toBe(encodePage(b.build()).length)
+    for (let i = 0; i < 37; i++) b.add(i, i % 5, i % 3 === 0 ? K_TEXT : K_NUMBER, i, i, i % 3 === 0 ? `t\ud800${i}` : '', true, i % 7 === 0 ? { formula: `A${i}*2`, ca: true } : undefined)
+    expect(b.bytes).toBe(encodePage(b.build()).length)
   })
 })

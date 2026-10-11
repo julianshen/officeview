@@ -21,7 +21,7 @@ export interface LoadProgress extends Progress {
 export type OfficeFileState =
   | { status: 'loading' }
   /** `code`/`reason` are set when a spreadsheet was refused by admission
-   * (`reason: 'paged-not-yet'` = it needs the large-workbook viewer). */
+   * (`reason: 'limit'` names the applied limit; `'paged-not-yet'` is no longer produced). */
   | { status: 'error'; message: string; code?: PackageErrorCode; reason?: RefusalReason }
   /** `notices`: user-visible load notices (e.g. saved values shown, data not shown). */
   | { status: 'ready'; document: AnyDoc; notices?: readonly string[] }
