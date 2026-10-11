@@ -109,3 +109,23 @@ export function paintGridSelectionOverlay(ctx: CanvasRenderingContext2D, geometr
   }
   ctx.restore()
 }
+/** Sheet-space overlay geometry → viewport CSS for the presented pane: subtract
+ * the Float64 logical origin before scaling (never a global canvas translate),
+ * plus the sub-device-pixel `bias` (CSS px) the base tiles were snapped by. */
+export function gridGeometryToViewport(geometry: GridSelectionGeometry, origin: { x: number; y: number }, zoom: number, bias: { x: number; y: number } = { x: 0, y: 0 }): GridSelectionGeometry {
+  const x = (value: number) => (value - origin.x) * zoom + bias.x, y = (value: number) => (value - origin.y) * zoom + bias.y
+  return {
+    fills: geometry.fills.map(rect => ({ x: x(rect.x), y: y(rect.y), width: rect.width * zoom, height: rect.height * zoom })),
+    borders: geometry.borders.map(edge => ({ x0: x(edge.x0), y0: y(edge.y0), x1: x(edge.x1), y1: y(edge.y1) })),
+  }
+}
+/** Search wash and active-match outline, the same colours as the page overlay. */
+export function paintSearchOverlay(ctx: CanvasRenderingContext2D, highlights: readonly HighlightRect[], active: readonly HighlightRect[], scale = 1): void {
+  ctx.save()
+  ctx.fillStyle = 'rgba(255, 214, 0, 0.45)'
+  for (const r of highlights) ctx.fillRect(r.x, r.y, r.width, r.height)
+  ctx.strokeStyle = '#ff8c00'
+  ctx.lineWidth = 1.5 / scale
+  for (const r of active) ctx.strokeRect(r.x, r.y, r.width, r.height)
+  ctx.restore()
+}
