@@ -93,11 +93,17 @@ Every package is implemented on its own branch, reviewed by at least one agent f
 |---|---|
 | S0.1 contracts, S0.2 fixtures, S0.3 harness scaffold | merged |
 | S2.1 order/visibility/axes, S2.2 scroll window, S2.4 sheet zoom model (UI wiring open) | merged |
-| S8.1 typed filters, date lowering (`filter.ts`, `datePredicates.ts`, `textFilter.ts`; worker/mask publication open) | merged; known residual: uncertified text classes fail with typed `resource-limit` near 1,000 chars (see `docs/validation/s8-1-text-match-amendment-proposal.md`) |
+| S8.1 typed filters, date lowering (`filter.ts`, `datePredicates.ts`, `textFilter.ts`; worker/mask publication open) | merged; its collator text matching is replaced by S8.5 canonical matching |
+| S8.5 canonical text matching (`canonicalText.ts`, pinned Unicode 16.0 tables under `src/xlsx/view/unicode/`, `textFilter.ts`) | merged (codex reviews over two rounds; Unicode 16.0 pinned data incl. combining classes; key strategy `canonical-text/v2`) |
 | S7.2 pure sort engine (`src/xlsx/view/sort.ts`; worker kernel/session/header integration open) | merged |
-| S1.1 streaming ZIP/XML | design spike in progress (no production code yet) |
+| S1.1 streaming ZIP/XML | design note merged (`docs/architecture/xlsx-large-source.md`, reviewed by codex, pi and opencode over five rounds; user approved `pako`); implementation split into S1.1a (ZIP/inflate/XML tokenizer core) and S1.1b (spool, admission gates, entry wiring) |
 | S3.1/S3.2 structural index and operation guard (pure parts: `structure.ts`, `operationGuard.ts`; parser/drawing/spill wiring open) | merged |
-| S1.2, S1.3, S2.3, S4, S5, S6, S7.1, S8.2, S8.3, S9, S10, S11/S12 status, S13 | not started |
+| S4.1 resident worker protocol/session (`src/worker/viewer*.ts`; temporary object-backed source until S1.2) | merged |
+| S7.1 range detection/header policy/admission (`src/xlsx/view/rangeDetection.ts`) | merged |
+| S4.2 cooperative scheduling/cancellation/atomic publication (`src/xlsx/view/scheduler.ts`, worker session/kernel/client) | merged |
+| S1.1a bounded ZIP reader, pull inflater, incremental XML tokenizer (`src/core/{zip-stream,inflater,xml-stream}.ts`, `pako` 1.0.11) | merged (opencode review; one disputed finding accepted by the reviewer) |
+| S1.1b, S2.3, S8.2, S8.3 | in progress (implementation or review rounds on their own branches) |
+| S1.2, S1.3, S4.3–S4.5, S5, S6, S9, S10 (physical-device receipts skipped for now by user decision), S11/S12 status, S13 | not started |
 
 ## S0 — Freeze contracts, counterexamples and fixture/harness infrastructure
 
@@ -294,16 +300,18 @@ expect(await source.readCell({ row: 1_048_575, col: 16_383 }, readOptions)).toMa
 
 ### S4.1 Protocol and session ownership
 
+> **Status (2026-10-11):** merged (Claude implementation; codex, pi and opencode reviews over three rounds; every finding fixed). Interim limits: the temporary object-backed `SourceStore` (`src/worker/viewerObjectSource.ts`, replaced in S1.2) reports drawings, dynamic-array spill extents and unreadable table lists as `incomplete` coverage with a `coverage-unresolvable` diagnostic, so sort/filter on those sheets wait as incomplete until S3.1 parser wiring; `viewport`/`search` return `unsupported` until S5; typed filters need the S8 evaluator wiring; scheduling/cancellation beyond request abort is S4.2.
+
 **Files:** create `src/worker/viewerProtocol.ts`, `viewerSession.ts`, `viewerKernel.ts`, `viewerClient.ts`; modify `src/worker/office-worker.ts`, `worker-entry.ts`; test `tests/xlsx-viewer-worker.test.ts`, retain `tests/worker-render.test.ts`.
 
-- [ ] RED: open once, switch sheets, prepare/query repeatedly and assert parse count=1, no workbook clone per sort/filter and no detached source needed again. Two sheets reach local revision 1; assert their aggregate workbook index identity differs. Cross-document same-sheet IDs must not collide.
-- [ ] Run `bunx vitest run tests/xlsx-viewer-worker.test.ts tests/worker-render.test.ts`; expected current per-request parse or insufficient identity fails.
-- [ ] GREEN: resident document session owns source/pages, authoritative values, per-sheet views, prepared columns and cache handles. Send compact commands/ranges/query IDs and return typed permutations/masks/window records/diagnostics; make a single admitted initial compact transfer/copy, then reuse handles. Record actual ArrayBuffer copies and transfer ownership; 'typed' does not mean zero-copy.
-- [ ] Populate `commandKind` on every worker reply (S0.1 freeze addition to spec §10.2 that correlates the reply owner type with the command kind; refusals ride an `error` reply with code `operation-refused` and `retryable:false`).
-- [ ] Populate the S0.1 `space` tag (`source` or `display`) on every `BoundedRowBitset` (source membership versus `ViewCommitDelta.visibility`); the two spaces are deliberately not assignable to each other. Design note: `operation-refused` lives in the shared `SOURCE_ERROR_CODES` registry (reviewer-requested single registry); the generic error reply excludes it, so only sort/filter replies may carry it, with `retryable:false` and a `refusal` payload.
-- [ ] Add monotonically increasing workbook-wide `WorkbookOwner.globalViewGen` for every sheet view commit; per-sheet `viewGen` remains for local caches. Cache/publication identity includes docId, sheetId, valueGen, fontGen and viewGen; aggregate results capture `WorkbookOwner.globalViewGen` and the ordered `sheetVector` of every contributing sheet revision.
-- [ ] Run focused suite; expected once-only preparation, compact command payloads, two-sheet revision collision prevented, legacy one-shot DOCX/PPTX worker still passes.
-- [ ] Deliver a resident session PR; never call legacy full reparse for ordinary interactive commands.
+- [x] RED: open once, switch sheets, prepare/query repeatedly and assert parse count=1, no workbook clone per sort/filter and no detached source needed again. Two sheets reach local revision 1; assert their aggregate workbook index identity differs. Cross-document same-sheet IDs must not collide.
+- [x] Run `bunx vitest run tests/xlsx-viewer-worker.test.ts tests/worker-render.test.ts`; expected current per-request parse or insufficient identity fails.
+- [x] GREEN: resident document session owns source/pages, authoritative values, per-sheet views, prepared columns and cache handles. Send compact commands/ranges/query IDs and return typed permutations/masks/window records/diagnostics; make a single admitted initial compact transfer/copy, then reuse handles. Record actual ArrayBuffer copies and transfer ownership; 'typed' does not mean zero-copy.
+- [x] Populate `commandKind` on every worker reply (S0.1 freeze addition to spec §10.2 that correlates the reply owner type with the command kind; refusals ride an `error` reply with code `operation-refused` and `retryable:false`).
+- [x] Populate the S0.1 `space` tag (`source` or `display`) on every `BoundedRowBitset` (source membership versus `ViewCommitDelta.visibility`); the two spaces are deliberately not assignable to each other. Design note: `operation-refused` lives in the shared `SOURCE_ERROR_CODES` registry (reviewer-requested single registry); the generic error reply excludes it, so only sort/filter replies may carry it, with `retryable:false` and a `refusal` payload.
+- [x] Add monotonically increasing workbook-wide `WorkbookOwner.globalViewGen` for every sheet view commit; per-sheet `viewGen` remains for local caches. Cache/publication identity includes docId, sheetId, valueGen, fontGen and viewGen; aggregate results capture `WorkbookOwner.globalViewGen` and the ordered `sheetVector` of every contributing sheet revision.
+- [x] Run focused suite; expected once-only preparation, compact command payloads, two-sheet revision collision prevented, legacy one-shot DOCX/PPTX worker still passes.
+- [x] Deliver a resident session PR; never call legacy full reparse for ordinary interactive commands.
 
 Representative race assertion:
 
@@ -318,14 +326,16 @@ expect(session.publishWorkbookIndex(staleA)).toBe(false)
 
 ### S4.2 Cooperative scheduling, cancellation and atomic publication
 
+> **Status (2026-10-11):** merged (Claude implementation; pi and opencode reviews over two rounds; every finding fixed). Shared cooperative scheduler (≤4,096 units or 10 ms) used by sort, preparation, guard scans and visibility projection; epoch/owner rechecks before every publication; one-transaction `commitDraft`; cancel reasons on replies; in-thread fallback for small documents, typed `worker-required`/`storage-required` refusal in large mode. Deferred with TODO markers: §10.2 viewport/active-cell priority (S5), 120 s query timeout, wire commands for value/font publication (S1.3/S4.3).
+
 **Files:** extend `viewerProtocol.ts`, `viewerSession.ts`, `viewerKernel.ts`, `viewerClient.ts`; test `tests/xlsx-viewer-worker-races.test.ts`.
 
-- [ ] RED: delayed query/sort/index result arrives after another view commit, sheet switch, value publication, font change, close or reopen. Assert stale results never replace current order, UI counts, search geometry or status; cancelling a command preserves the previous committed view.
-- [ ] Run `bunx vitest run tests/xlsx-viewer-worker-races.test.ts`; expected stale publication or uncancellable work fails.
-- [ ] GREEN: request IDs, document epoch, workbook/per-sheet generations and cancellation tokens guard every publication. Long jobs yield at least every 10ms or 4,096 rows, whichever arrives first, including preparation, scans, external runs and value indexes. Provide progress from completed authoritative batches, not an optimistic timer.
-- [ ] Build drafts privately, validate resource/structural/source completion, then commit order/visibility/metrics/revisions as one transaction. Cancel on range replacement, source close or superseding draft; acknowledge input immediately while worker work continues. Define no-worker support separately: small admitted fallback may share chunked TS kernels; large mode refuses unsupported mandatory worker/storage features visibly.
-- [ ] Run focused suite with deterministic scheduler; expected bounded yield counts, cancellation reclaim, no half-applied views and no stale status/progress publication.
-- [ ] Deliver scheduler/publication patch with reproducible race logs, not timing-based unit assertions.
+- [x] RED: delayed query/sort/index result arrives after another view commit, sheet switch, value publication, font change, close or reopen. Assert stale results never replace current order, UI counts, search geometry or status; cancelling a command preserves the previous committed view.
+- [x] Run `bunx vitest run tests/xlsx-viewer-worker-races.test.ts`; expected stale publication or uncancellable work fails.
+- [x] GREEN: request IDs, document epoch, workbook/per-sheet generations and cancellation tokens guard every publication. Long jobs yield at least every 10ms or 4,096 rows, whichever arrives first, including preparation, scans, external runs and value indexes. Provide progress from completed authoritative batches, not an optimistic timer.
+- [x] Build drafts privately, validate resource/structural/source completion, then commit order/visibility/metrics/revisions as one transaction. Cancel on range replacement, source close or superseding draft; acknowledge input immediately while worker work continues. Define no-worker support separately: small admitted fallback may share chunked TS kernels; large mode refuses unsupported mandatory worker/storage features visibly.
+- [x] Run focused suite with deterministic scheduler; expected bounded yield counts, cancellation reclaim, no half-applied views and no stale status/progress publication.
+- [x] Deliver scheduler/publication patch with reproducible race logs, not timing-based unit assertions.
 
 ### S4.3 LRU/resource close and font/image leases
 
@@ -426,13 +436,15 @@ expect(wide.contains({ row: 2, col: 0 })).toBe(false)
 
 ### S7.1 Range detection/header policy/structural admission
 
+> **Status (2026-10-11):** merged (opencode implementation; Claude fixes; reviews by Claude, codex and pi over three rounds; every finding fixed). Region detection is a bounded async ring-growth probe (full-capacity dense column: ~93 MB peak vs 1.8 GB before) with a work budget; orchestrator decisions: a blank seed resolves to the sole current region in the used extent or refuses `ambiguous-selection`; any derived range intersecting a table it does not exactly equal, overlapping tables at the active cell, and a contiguous selection not containing the active cell refuse `ambiguous-selection`.
+
 **Files:** create `src/xlsx/view/rangeDetection.ts`; consume `structure.ts`, `operationGuard.ts`; test `tests/xlsx-viewer-sort-range.test.ts`.
 
-- [ ] RED: table→current-region→used-range precedence, table headerRows=0/1, totals rows, all-text data, explicit override, blank gap before D outsiderange values and a pending outsiderange page. Assert no commit before complete safety query.
-- [ ] Run `bunx vitest run tests/xlsx-viewer-sort-range.test.ts`; expected naive adjacent-only/header-always-true acceptance fails.
-- [ ] GREEN: derive source-coordinate whole-row band with explicit protected header/totals, allowed override and authoritative used extent. Query indexed nonblank content in every outside column anywhere in the band; refuse conflicting data, merges/spills or geometrically affected drawings through the shared guard.
-- [ ] Run focused suite; expected table metadata precedence, source ranges immutable, separated D data refuses atomically and pending checks wait/cancel without fake safe state.
-- [ ] Deliver range detector independently for engine/UI reuse.
+- [x] RED: table→current-region→used-range precedence, table headerRows=0/1, totals rows, all-text data, explicit override, blank gap before D outsiderange values and a pending outsiderange page. Assert no commit before complete safety query.
+- [x] Run `bunx vitest run tests/xlsx-viewer-sort-range.test.ts`; expected naive adjacent-only/header-always-true acceptance fails.
+- [x] GREEN: derive source-coordinate whole-row band with explicit protected header/totals, allowed override and authoritative used extent. Query indexed nonblank content in every outside column anywhere in the band; refuse conflicting data, merges/spills or geometrically affected drawings through the shared guard.
+- [x] Run focused suite; expected table metadata precedence, source ranges immutable, separated D data refuses atomically and pending checks wait/cancel without fake safe state.
+- [x] Deliver range detector independently for engine/UI reuse.
 
 ### S7.2 Worker sort kernel and cycle commands
 
@@ -451,7 +463,7 @@ expect(wide.contains({ row: 2, col: 0 })).toBe(false)
 
 ### S8.1 Typed filters and day/period boundaries
 
-> **Status (2026-10-11):** pure filter/date engine merged (codex implementation; Claude round-3 fixes; reviews by Claude and opencode over four rounds; every finding fixed; 0 mismatches in ~1.85M fast-vs-reference comparisons across 34 locales). Known residual, user decision pending: cells whose text the collator certificate cannot certify (e.g. `ß`, NFD marks, Danish `aa`+`å`) fall back to the exact reference matcher and fail with typed `resource-limit` around 1,000 characters for plain `contains` under the default allowance; a canonical-form semantics amendment is proposed in `docs/validation/s8-1-text-match-amendment-proposal.md`. Mask publication through S3 guards, the formatted display-text lane and worker integration are NOT delivered.
+> **Status (2026-10-11):** pure filter/date engine merged (codex implementation; Claude round-3 fixes; reviews by Claude and opencode over four rounds; every finding fixed; 0 mismatches in ~1.85M fast-vs-reference comparisons across 34 locales). The collator certificate and its `resource-limit` residual for uncertifiable text (`ß`, NFD marks, Danish `aa`+`å`) are removed by S8.5, which replaces collator matching with the canonical form of the amended spec §7.1. Mask publication through S3 guards, the formatted display-text lane and worker integration are NOT delivered.
 
 **Files:** create `src/xlsx/view/filter.ts`, `datePredicates.ts`; extend worker kernel/session; consume existing `src/xlsx/formula/serial.ts`, `functions/wildcard.ts`; test `tests/xlsx-viewer-filter.test.ts`, `tests/xlsx-viewer-date-filter.test.ts`.
 
@@ -486,6 +498,18 @@ expect(wide.contains({ row: 2, col: 0 })).toBe(false)
 - [ ] Run focused command plus adapter parity and standard gates; expected supported saved effects render correctly through S2 hidden fix, no formula/table parser regression.
 - [ ] Deliver parser delta through the shared integration owner.
 
+### S8.5 Canonical text matching (spec §7.1 amendment, approved 2026-10-11)
+
+> **Status (2026-10-11):** merged (Claude implementation; codex reviews over two rounds; every finding fixed: Turkic After_I/Before_Dot over the post-removal sequence with pinned combining classes, single raw-length admission on raw and key paths, independent test oracle). 0 mismatches in 600k differential comparisons; linear cost (≈2 µs per Latin value at 2,000 chars, Bun, non-browser).
+
+**Files:** modify `src/xlsx/view/textFilter.ts`, `filter.ts`; create `src/xlsx/view/canonicalText.ts` and generated pinned Unicode data (case folding incl. Turkic, default-ignorable set, extended-grapheme segmentation rules) under `src/xlsx/view/unicode/` with its generator script; test `tests/xlsx-viewer-canonical-text.test.ts`, update `tests/xlsx-viewer-filter.test.ts`.
+
+- [x] RED: every row of the "verified differences" table in `docs/validation/s8-1-text-match-amendment-proposal.md` (Danish `aa`/`aA`, `å`/`aa`, `å`/`a\u200ba`, `a`/U+0363, `ß`/`ss`, `ﬁ`/`fi` with `?`, `contains('e','é')` vs `e\u0301`, `?` vs `é`/`e\u0301`, `?` vs lone U+200B), Turkish/Azeri dotted/dotless I incl. decomposed `I`+U+0307, emoji ZWJ sequences and flags as single graphemes, lone surrogates as single units, default-ignorables removed, `~` escapes unchanged.
+- [x] GREEN: canonical pipeline (NFD → remove default-ignorables → locale-aware full case fold → NFD) over pinned data independent of the host's ICU; grapheme segmentation of the canonical form; equality/begins/ends/contains on grapheme boundaries with linear-time matching (e.g. KMP over grapheme-unit IDs) and wildcard `*`/`?` over grapheme units with memoized/DP or linear glob matching; remove the collator certificate and the cubic reference path from the filter (keep a slow test-only oracle built from the spec text for differential tests).
+- [x] Derived canonical key per value is cacheable (S8.2 search-key port supplies `searchKeyOf`); raw values/semantic keys unchanged.
+- [x] Differential/property tests: ≥100k seeded cases comparing the optimized matcher with the spec-text oracle over the S8.1 hostile pools; no `resource-limit` for ordinary text up to the §12 text-length targets; cost linear in text length.
+- [x] Deliver with measured (non-browser, labelled) per-value cost for contains/equals/wildcard at 100–2000 characters, and remove the S8.1 residual from §0.4.
+
 ### S8.4 Performance threshold freeze (exit gate for S8)
 
 **Files:** create `tests/fixtures/xlsx-viewer/performance-profile.json`; extend `scripts/bench-interactive-viewer.ts`; write `docs/validation/interactive-viewer-performance.md` (baseline section).
@@ -496,6 +520,11 @@ expect(wide.contains({ row: 2, col: 0 })).toBe(false)
 - [ ] From this point S10.2 enforces the frozen values; before it, a miss is a recorded finding, not a failure.
 
 ## S9 — Controls, copy/print policy and mobile interactions
+
+> **User-approved behaviour changes (2026-10-11), to be surfaced by S9 copy and listed in the final PR:**
+> 1. A remote spreadsheet whose type cannot be determined from its first 64 KiB, too large for the memory spool, with neither OPFS nor IndexedDB available, is refused with: "This file is too large to open from the web in this browser. Download it and open it locally."
+> 2. Workbooks whose load-time evaluation would exceed the memory budget open with the file's cached values; show a status line such as "Showing saved values — N formulas not recalculated (file too large)"; uncached formula cells show as unavailable (a "Recalculate anyway" action is a possible later addition).
+> 3. Whole-sheet static export/print of sheets beyond the legacy 16,384×4,096 grid (or drawing sheets beyond the old drawing clamp) is refused instead of silently truncated, with: "This sheet is too large to export as one image. Choose a range or print selected pages." Ordinary sheets within the legacy grid render exactly as before.
 
 ### S9.1 Atomic filter dropdown and sort dialog
 

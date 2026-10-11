@@ -1,7 +1,11 @@
 # S8.1 text matching: proposed amendment to spec §7.1
 
-Status: **proposal for review; not shipped semantics**. The authoritative spec
-is unchanged. This document adds no implementation or runtime dependency.
+Status: **approved and adopted** into spec §7.1 (2026-10-11, with the later
+clarification that ZWJ, variation selectors and tag characters are retained and
+a canonically empty query is no search term). Implemented by plan S8.5
+(`src/xlsx/view/canonicalText.ts`, `textFilter.ts`); the collator certificate
+described below is historical. The verified differences are pinned in
+`tests/xlsx-viewer-canonical-text.test.ts`.
 
 The current implementation retains host `Intl.Collator` raw-slice equality and
 raw Unicode code-point wildcard units. Its optimization accepts an empirical
@@ -107,8 +111,8 @@ Verified differences that this proposal deliberately introduces:
 | `?` against `é` versus `e\u0301` | True versus false: one versus two raw code points | Both true: one canonical extended grapheme |
 | `?` against U+200B alone | True: one raw code point, even though collation ignores it | False: default-ignorable removal leaves no canonical grapheme |
 
-The native counterexamples and rejected window are pinned in
-`tests/xlsx-viewer-filter.test.ts`. Canonical matching has not been implemented.
+The native counterexamples and the rejected window were pinned in
+`tests/xlsx-viewer-filter.test.ts` until S8.5 removed the collator path.
 Approval must resolve the semantic change before implementation; the Unicode
 case-folding/segmentation data policy and further emoji/ignorable boundary
 coverage remain implementation planning questions. Browser acceptance still
