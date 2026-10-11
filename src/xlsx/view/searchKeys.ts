@@ -1,6 +1,9 @@
 import { sha256HexJs } from '../../debug/harness/sha256'
-import { TextFilterMatcher } from './textFilter'
+import { canonicalKeyStrategyId, canonicalSearchKey, keyContains, type FoldVariant } from './canonicalText'
+import { TextFilterMatcher, WorkBudget } from './textFilter'
 import { ValueIndexError, type LaneAccount } from './valueRuns'
+
+export { foldVariantOf, type FoldVariant } from './canonicalText'
 
 /** Optional precomputed search keys for value-list search (spec §7.4; value-
  * search spike decisions 2026-10-11). The key function is injected; S8.5
@@ -12,7 +15,6 @@ import { ValueIndexError, type LaneAccount } from './valueRuns'
  * no "equivalent" mode until S8.5 provides boundary-aware key matchers (under
  * canonical matching key('é') includes 'e' although contains('é', 'e') fails). */
 export type SearchKeyOf = (text: string) => string | null
-export type FoldVariant = 'default' | 'turkic'
 export interface SearchKeyStrategySpec {
   canonicalizerVersion: string
   unicodeVersion: string
@@ -23,21 +25,22 @@ export interface SearchKeyStrategySpec {
    * Default: valueKey.includes(queryKey). */
   matchKey?: (valueKey: string, queryKey: string) => boolean
 }
-/** Frozen, versioned and certified by createSearchKeyStrategy only. */
+/** Frozen, versioned and certified (createSearchKeyStrategy or the built-in
+ * canonicalKeyStrategy only). */
 export interface SearchKeyStrategy {
   readonly id: string
   readonly foldVariant: FoldVariant
   readonly searchKeyOf: SearchKeyOf
   readonly matchKey: (valueKey: string, queryKey: string) => boolean
+  /** True only for the built-in S8.5 canonical keys: the key IS the value's
+   * canonical form, so the S8.5 predicate evaluated on it (predicate.key) is
+   * the exact matcher itself and its result is final, wildcards included.
+   * Custom strategies are necessary-condition filters with exact confirmation. */
+  readonly exactKeys: boolean
 }
 const certified = new WeakSet<SearchKeyStrategy>()
 export function isCertifiedSearchKeyStrategy(strategy: unknown): strategy is SearchKeyStrategy {
   return typeof strategy === 'object' && strategy !== null && certified.has(strategy as SearchKeyStrategy)
-}
-/** The fold variant a query locale needs; keys of another variant are unused. */
-export function foldVariantOf(locale: string): FoldVariant {
-  const language = String(locale).split(/[-_]/)[0].toLowerCase()
-  return language === 'tr' || language === 'az' ? 'turkic' : 'default'
 }
 const PROBE_VALUES = [
   'alpha', 'ALPHA', 'beta', 'Straße', 'STRASSE', 'strasse', 'é', 'é', 'café', 'CAFE', 'ﬁle', 'file', 'Ångström', 'aa', 'å',
@@ -83,13 +86,47 @@ export function createSearchKeyStrategy(spec: SearchKeyStrategySpec): SearchKeyS
     throw new ValueIndexError('invalid-rule', 'Invalid search key strategy specification')
   }
   const matchKey = spec.matchKey ?? ((valueKey: string, queryKey: string) => valueKey.includes(queryKey))
-  const strategy: SearchKeyStrategy = Object.freeze({ id: `${canonicalizerVersion}|unicode-${unicodeVersion}|${foldVariant}`, foldVariant, searchKeyOf, matchKey })
+  const strategy: SearchKeyStrategy = Object.freeze({ id: `${canonicalizerVersion}|unicode-${unicodeVersion}|${foldVariant}`, foldVariant, searchKeyOf, matchKey, exactKeys: false })
   probe(strategy)
   certified.add(strategy)
   return strategy
 }
-export const EXACT_SEARCH: SearchKeyStrategy = Object.freeze({ id: 'exact', foldVariant: 'default' as const, searchKeyOf: () => null, matchKey: () => true })
+export const EXACT_SEARCH: SearchKeyStrategy = Object.freeze({ id: 'exact', foldVariant: 'default' as const, searchKeyOf: () => null, matchKey: () => true, exactKeys: false })
 certified.add(EXACT_SEARCH)
+/** Self-check of the canonical key path against the raw S8.1/S8.5 predicate
+ * on the probe set (both must agree exactly; they share one evaluator). */
+function probeCanonical(strategy: SearchKeyStrategy): void {
+  const matcher = new TextFilterMatcher(strategy.foldVariant === 'turkic' ? 'tr' : 'und')
+  for (const query of probeQueries()) {
+    for (const wildcards of [false, true]) {
+      let predicate
+      try { predicate = matcher.prepare('contains', query, wildcards, new WorkBudget()) } catch { continue }
+      for (const value of PROBE_VALUES) {
+        const key = strategy.searchKeyOf(value)!
+        if (predicate.key(key, value.length, new WorkBudget()) !== predicate(value, new WorkBudget())) {
+          throw new ValueIndexError('invalid-rule', `Canonical key path disagrees with the raw predicate (${JSON.stringify(query)} in ${JSON.stringify(value)})`)
+        }
+      }
+    }
+  }
+}
+const canonicalStrategies = new Map<FoldVariant, SearchKeyStrategy>()
+/** The built-in S8.5 canonical-key strategy for one fold variant. */
+export function canonicalKeyStrategy(variant: FoldVariant): SearchKeyStrategy {
+  if (variant !== 'default' && variant !== 'turkic') throw new ValueIndexError('invalid-rule', 'Invalid fold variant')
+  let strategy = canonicalStrategies.get(variant)
+  if (!strategy) {
+    strategy = Object.freeze({
+      id: canonicalKeyStrategyId(variant), foldVariant: variant, exactKeys: true,
+      searchKeyOf: (text: string) => canonicalSearchKey(text, variant),
+      matchKey: (valueKey: string, queryKey: string) => keyContains(valueKey, queryKey),
+    })
+    probeCanonical(strategy)
+    certified.add(strategy)
+    canonicalStrategies.set(variant, strategy)
+  }
+  return strategy
+}
 
 /** Keys are valid only for this exact value domain and key strategy. */
 export interface SearchKeyOwner {

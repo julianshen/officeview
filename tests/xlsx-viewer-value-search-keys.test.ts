@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest'
+import { canonicalKeyStrategyId } from '../src/xlsx/view/canonicalText'
 import type { FilterRange, SourceStamp, ValuePatch, ValueSearchPredicate } from '../src/xlsx/view/contracts'
 import type { ColumnClassification } from '../src/xlsx/view/filter'
 import {
@@ -67,7 +68,7 @@ const matchedOrdinals = (result: ValueSearchResult): number[] => {
   for (let i = 0; i < result.searchedEntries; i++) if (result.matches[i >>> 5] & (1 << (i & 31))) out.push(i)
   return out
 }
-async function index(values: readonly string[], options: ConstructorParameters<typeof ValueIndexCache>[0] = {}, extra: Partial<ValueIndexIdentity> = {}): Promise<ValueIndex> {
+async function index(values: readonly string[], options: ConstructorParameters<typeof ValueIndexCache>[0] = { searchKeys: { strategy: EXACT_SEARCH } }, extra: Partial<ValueIndexIdentity> = {}): Promise<ValueIndex> {
   const built = new ValueIndexCache(options).open(identity(extra), new StringSource(values))
   await built.build()
   return built
@@ -78,11 +79,18 @@ const owner = (strategy: SearchKeyStrategy, extra: Partial<ValueIndexIdentity> =
 }
 
 describe('search-key strategies', () => {
-  it('defaults to the exact matcher for every value', async () => {
-    const values = seededValues(500, 11), plain = await index(values)
-    const result = await plain.search({ text: 'ab', locale: 'en-US' })
-    expect(result.stats).toEqual({ keyed: 0, exact: 500 })
+  it('defaults to S8.5 canonical keys for the locale fold variant; EXACT_SEARCH disables keys', async () => {
+    const values = seededValues(500, 11)
+    const canonical = await index(values, {})
+    const result = await canonical.search({ text: 'ab', locale: 'en-US' })
+    expect(canonical.searchKeyStatus).toMatchObject({ strategyId: canonicalKeyStrategyId('default'), state: 'computed', keyed: 500 })
+    expect(result.stats).toEqual({ keyed: 500, exact: 0 })
+    expect(new ValueIndexCache({ searchKeys: { locale: 'tr-TR' } }).searchKeyStrategy.id).toBe(canonicalKeyStrategyId('turkic'))
+    const plain = await index(values)
+    const exact = await plain.search({ text: 'ab', locale: 'en-US' })
+    expect(exact.stats).toEqual({ keyed: 0, exact: 500 })
     expect(plain.searchKeyStatus).toMatchObject({ strategyId: EXACT_SEARCH.id, state: 'none', keyed: 0 })
+    expect(matchedOrdinals(result)).toEqual(matchedOrdinals(exact))
   })
   it('creates frozen, versioned strategies with a fold-variant dimension and no equivalent mode', () => {
     const strategy = asciiCandidate()
@@ -393,4 +401,37 @@ describe('review round 4 findings', () => {
     expect(store.usedBytes).toBe(0)
     expect(pool.usedBytes).toBe(0)
   })
+})
+
+describe('S8.5 canonical keys', () => {
+  it('match the raw canonical predicate exactly over >=100k seeded cases, both fold variants, plain and wildcard', async () => {
+    const values = seededValues(2_000, 97)
+    values.push('İstanbul', 'ISTANBUL', 'ıstanbul', 'i̇stanbul', 'Straße', 'STRASSE', 'e\u0301', 'é', '👩‍👩‍👧', '🇹🇼', 'a\u200db', 'ﬁ')
+    const exactDefault = await index(values), exactTurkic = await index(values)
+    const keyedDefault = await index(values, { searchKeys: { locale: 'en-US' } })
+    const keyedTurkic = await index(values, { searchKeys: { locale: 'tr-TR' } })
+    const random = (() => { let seed = 7; return (n: number) => { seed = (seed * 48271) % 2147483647; return seed % n } })()
+    const queries = seededQueries(values, 30, 131)
+    for (let i = 0; i < 10; i++) {
+      const points = Array.from(values[random(values.length)])
+      queries.push(points.map(point => random(4) === 0 ? '?' : random(6) === 0 ? '*' : point).join(''))
+    }
+    let comparisons = 0
+    for (const query of queries) {
+      for (const wildcards of [false, true]) {
+        for (const [locale, exact, keyed] of [['en-US', exactDefault, keyedDefault], ['tr-TR', exactTurkic, keyedTurkic]] as const) {
+          let expected: number[]
+          try { expected = matchedOrdinals(await exact.search({ text: query, locale, wildcards })) } catch (error) {
+            await expect(keyed.search({ text: query, locale, wildcards })).rejects.toMatchObject({ code: (error as { code: string }).code })
+            continue
+          }
+          const result = await keyed.search({ text: query, locale, wildcards })
+          expect(matchedOrdinals(result), `${JSON.stringify(query)} ${locale} wildcards=${wildcards}`).toEqual(expected)
+          if (query) expect(result.stats.keyed).toBeGreaterThan(0)
+          comparisons += values.length
+        }
+      }
+    }
+    expect(comparisons).toBeGreaterThanOrEqual(100_000)
+  }, 300_000)
 })

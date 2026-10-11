@@ -6,7 +6,7 @@ import {
   sameStamp, valueKeyString, type LaneAccount, type ValueKeySet, type ValueRunStore,
 } from './valueRuns'
 import {
-  EXACT_SEARCH, foldVariantOf, isCertifiedSearchKeyStrategy, textContentHash,
+  EXACT_SEARCH, canonicalKeyStrategy, foldVariantOf, isCertifiedSearchKeyStrategy, textContentHash,
   type SearchKeyOwner, type SearchKeyStore, type SearchKeyStrategy,
 } from './searchKeys'
 
@@ -217,11 +217,13 @@ export class ValueIndexCache {
   private readonly indexes = new Map<string, ValueIndex>()
   private readonly strategy: SearchKeyStrategy
   private readonly keyStore: SearchKeyStore | undefined
-  /** The key strategy is fixed for the cache's lifetime; indexes snapshot it. */
-  constructor(options: { limitBytes?: number; searchKeys?: { strategy?: SearchKeyStrategy; store?: SearchKeyStore } } = {}) {
+  /** The key strategy is fixed for the cache's lifetime; indexes snapshot it.
+   * Default: S8.5 canonical keys for the fold variant of searchKeys.locale
+   * (only the active locale's variant is built). EXACT_SEARCH disables keys. */
+  constructor(options: { limitBytes?: number; searchKeys?: { strategy?: SearchKeyStrategy; store?: SearchKeyStore; locale?: string } } = {}) {
     this.limitBytes = options.limitBytes ?? 512 * MiB
     if (!Number.isFinite(this.limitBytes) || this.limitBytes < 0) throw new RangeError('Invalid value index memory limit')
-    const strategy = options.searchKeys?.strategy ?? EXACT_SEARCH
+    const strategy = options.searchKeys?.strategy ?? canonicalKeyStrategy(foldVariantOf(options.searchKeys?.locale ?? 'und'))
     if (!isCertifiedSearchKeyStrategy(strategy)) throw new ValueIndexError('invalid-rule', 'Search key strategies must come from createSearchKeyStrategy')
     this.strategy = strategy
     this.keyStore = options.searchKeys?.store
@@ -752,7 +754,9 @@ export class ValueIndex implements LaneAccount {
       try {
         const budget = new WorkBudget({ ...limits, signal })
         const contains = query.text === '' ? undefined : new TextFilterMatcher(query.locale).prepare('contains', query.text, wildcards, budget)
-        const keysUsable = contains !== undefined && !wildcards && strategy !== EXACT_SEARCH && foldVariantOf(query.locale) === strategy.foldVariant
+        // Canonical keys evaluate the exact predicate (wildcards included);
+        // custom keys only filter plain queries.
+        const keysUsable = contains !== undefined && (!wildcards || strategy.exactKeys) && strategy !== EXACT_SEARCH && foldVariantOf(query.locale) === strategy.foldVariant
         // Keys are built lazily by the first plain search (spike decision);
         // a concurrent search scans with the keys that exist so far.
         if (keysUsable && !this.keysDone && !this.keyRunning) {
@@ -760,13 +764,20 @@ export class ValueIndex implements LaneAccount {
           try { await this.keyPhase(signal, pacer, options.onKeyProgress) } finally { this.keyRunning = false }
           live()
         }
-        const queryKey = keysUsable ? strategy.searchKeyOf(query.text) : null
+        const exactKeys = keysUsable && strategy.exactKeys
+        const queryKey = keysUsable && !exactKeys ? strategy.searchKeyOf(query.text) : null
         if (queryKey !== null && typeof queryKey !== 'string') throw new ValueIndexError('invalid-rule', 'Search key function returned a non-string key')
         const streaming = this.keyState === 'streaming', keys = this.searchKeys
         for (let ordinal = from; ordinal < end; ordinal++) {
           budget.resetAllowance()
           let hit = true
-          if (contains) {
+          if (contains && exactKeys && (this.kinds[ordinal] === KEY_STRING || this.kinds[ordinal] === KEY_ERROR)) {
+            const text = this.texts[this.numbers[ordinal]], id = this.numbers[ordinal]
+            const key = streaming ? strategy.searchKeyOf(text) : id < keys.length ? keys[id] : null
+            if (key !== null && typeof key !== 'string') throw new ValueIndexError('invalid-rule', 'Search key function returned a non-string key')
+            // The canonical key is the value's canonical form: predicate.key is the exact result.
+            if (key !== null) { keyed++; hit = contains.key(key, text.length, budget) } else { exact++; hit = contains(text, budget) }
+          } else if (contains) {
             let candidate = true
             if (queryKey !== null) {
               const kind = this.kinds[ordinal], id = this.numbers[ordinal]

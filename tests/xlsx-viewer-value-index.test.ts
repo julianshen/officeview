@@ -7,6 +7,9 @@ import {
   type ValueColumnSource, type ValueIndex, type ValueIndexIdentity, type ValueLabeler, type ValueLanePage, type ValuePageRead,
 } from '../src/xlsx/view/valueIndex'
 import { MemoryValueRunStore } from '../src/xlsx/view/valueRuns'
+import { EXACT_SEARCH } from '../src/xlsx/view/searchKeys'
+/** Tests of pool bytes and scan pacing exclude lazily retained canonical keys. */
+const EXACT = { searchKeys: { strategy: EXACT_SEARCH } } as const
 
 const MiB = 1024 * 1024
 const STAMP: SourceStamp = { docId: 'doc', sheetId: 's1', valueGen: 3 }
@@ -52,8 +55,8 @@ function fromCells(cells: readonly Cell[], pageRows = 4, onRead?: (page: number)
 }
 const identity = (classification: ColumnClassification = mixed, extra: Partial<ValueIndexIdentity> = {}): ValueIndexIdentity =>
   ({ ...STAMP, range: RANGE, col: 2, classification, classificationGen: 1, ...extra })
-async function built(cells: readonly Cell[], classification: ColumnClassification = mixed, pageRows = 4) {
-  const cache = new ValueIndexCache(), source = fromCells(cells, pageRows)
+async function built(cells: readonly Cell[], classification: ColumnClassification = mixed, pageRows = 4, options: ConstructorParameters<typeof ValueIndexCache>[0] = {}) {
+  const cache = new ValueIndexCache(options), source = fromCells(cells, pageRows)
   const index = cache.open(identity(classification), source)
   await index.build()
   return { cache, source, index }
@@ -562,7 +565,7 @@ describe('review round 1 findings', () => {
     expect(source.stamp.valueGen).toBe(7)
   })
   it('charges retained search layers, committed key sets and evaluators to the pool and releases them (codex 3, opencode 3)', async () => {
-    const cache = new ValueIndexCache({ limitBytes: 16 * MiB })
+    const cache = new ValueIndexCache({ limitBytes: 16 * MiB, ...EXACT })
     const index = cache.open(identity(), fromCells(items(6_000), 1024))
     await index.build()
     const base = cache.usedBytes
@@ -589,7 +592,7 @@ describe('review round 1 findings', () => {
     expect(cache.usedBytes).toBe(base)
   })
   it('keeps the displayed search held and releases a superseded unpatched one', async () => {
-    const cache = new ValueIndexCache(), index = cache.open(identity(), fromCells(items(64), 16))
+    const cache = new ValueIndexCache(EXACT), index = cache.open(identity(), fromCells(items(64), 16))
     await index.build()
     const base = cache.usedBytes
     const draft = await ValueSelectionDraft.open(index, null, new MemoryValueRunStore())
@@ -701,7 +704,7 @@ describe('review round 1 findings', () => {
     expect(done.at(-1)).toEqual({ phase: 'pages', completed: pages.length, total: pages.length })
   })
   it('interrupts a search with a scheduled abort within a time slice and reports progress (codex 7)', async () => {
-    const { index } = await built(items(15_000), mixed, 1024)
+    const { index } = await built(items(15_000), mixed, 1024, EXACT)
     const controller = new AbortController(), progress: number[] = []
     setTimeout(() => controller.abort(), 0)
     // sliceMs 0 yields every pacing stride; the canonical matcher may finish a
@@ -823,7 +826,7 @@ describe('review round 2 findings', () => {
     expect(pool.usedBytes).toBe(0)
   })
   it('lets a draft adopt the search result of another draft with independent ownership (codex r2 4)', async () => {
-    const cache = new ValueIndexCache(), index = cache.open(identity(), fromCells(items(64), 16))
+    const cache = new ValueIndexCache(EXACT), index = cache.open(identity(), fromCells(items(64), 16))
     await index.build()
     const base = cache.usedBytes
     const a = await ValueSelectionDraft.open(index, null, new MemoryValueRunStore())
@@ -840,7 +843,7 @@ describe('review round 2 findings', () => {
   })
   it('never runs unbounded synchronous matching for later-merged values; prepare is async, paced and cancellable (codex r2 5)', async () => {
     const { source, state } = loadingPair(['seed-a', 'seed-b'], items(30_000))
-    const index = new ValueIndexCache().open(identity(), source)
+    const index = new ValueIndexCache(EXACT).open(identity(), source)
     await index.build()
     const draft = await ValueSelectionDraft.open(index, null, new MemoryValueRunStore())
     draft.selectAll(false, await draft.search({ text: 'item-1', locale: 'en-US' }))
@@ -877,7 +880,7 @@ describe('review round 2 findings', () => {
   })
   it('releases transient charges when membership preparation fails (codex r2 7)', async () => {
     const { source, state } = loadingPair(['seed-a'], ['x'.repeat(70_000)])
-    const cache = new ValueIndexCache(), index = cache.open(identity(), source)
+    const cache = new ValueIndexCache(EXACT), index = cache.open(identity(), source)
     await index.build()
     const draft = await ValueSelectionDraft.open(index, null, new MemoryValueRunStore())
     draft.selectAll(false, await draft.search({ text: 'zz', locale: 'en-US' }))
@@ -895,7 +898,7 @@ describe('review round 2 findings', () => {
 
 describe('review round 3 findings', () => {
   it('rechecks owner and cancellation after the outer draft.search await (codex r3 1)', async () => {
-    const source = fromCells(items(40)), index = new ValueIndexCache().open(identity(), source)
+    const source = fromCells(items(40)), index = new ValueIndexCache(EXACT).open(identity(), source)
     await index.build()
     const draft = await ValueSelectionDraft.open(index, null, new MemoryValueRunStore())
     // Two nested microtasks land between the inner adoption and the outer
@@ -904,7 +907,7 @@ describe('review round 3 findings', () => {
     await expect(draft.search({ text: 'item', locale: 'en-US' }, {
       onProgress: p => { if (p.searched === p.total) later(() => { source.stamp = { ...STAMP, valueGen: 8 } }) },
     })).rejects.toMatchObject({ code: 'stale-source' })
-    const other = fromCells(items(40)), cache = new ValueIndexCache(), second = cache.open(identity(), other)
+    const other = fromCells(items(40)), cache = new ValueIndexCache(EXACT), second = cache.open(identity(), other)
     await second.build()
     const base = cache.usedBytes
     const cancelled = await ValueSelectionDraft.open(second, null, new MemoryValueRunStore())
