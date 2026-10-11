@@ -14,6 +14,12 @@
  * DOCTYPE is refused (`unsupported`); `&` must start a reference of at most
  * 32 characters ending in `;` in text and attribute values (so `&#;`, `&#x;`
  * and over-long references are errors, while unknown `&name;` stays literal).
+ *
+ * Kept for parity (pinned by tests): raw characters outside the XML 1.0 Char
+ * production (C0 controls, U+FFFE/U+FFFF, lone surrogates) pass through text,
+ * CDATA and attribute values unchanged, exactly as the current parser keeps
+ * them; rejecting them here would make accept/reject depend on size routing.
+ * Numeric references to such characters are a parse-error on both paths.
  */
 import { PackageError, throwIfAborted } from './package-error'
 
@@ -86,22 +92,21 @@ function decodeReference(body: string): string {
 }
 
 const INCOMPLETE = -1
-let lastReference = ''
+interface ScannedReference { next: number; text: string }
 
-/** Scan a reference at s[pos] === '&'. Returns the next position (decoded text
- * in lastReference) or INCOMPLETE when s ends before the decision. */
-function scanReference(s: string, pos: number): number {
+/** Scan a reference at s[pos] === '&'. Returns the next position and the
+ * decoded text, or undefined when s ends before the decision. */
+function scanReference(s: string, pos: number): ScannedReference | undefined {
   const len = s.length
   const limit = Math.min(len, pos + 2 + MAX_REFERENCE_BODY)
   let j = pos + 1
   while (j < limit && isRefChar(s.charCodeAt(j))) j++
   const body = j - pos - 1
   if (body > MAX_REFERENCE_BODY) parseError(`reference longer than ${MAX_REFERENCE_BODY} characters`)
-  if (j === len) return INCOMPLETE
+  if (j === len) return undefined
   if (s.charCodeAt(j) !== SEMI) parseError(body === 0 ? "bare '&' is not a reference" : 'malformed reference: missing ;')
   if (body === 0) parseError('empty reference')
-  lastReference = decodeReference(s.slice(pos + 1, j))
-  return j + 1
+  return { next: j + 1, text: decodeReference(s.slice(pos + 1, j)) }
 }
 
 /** Attribute value: references resolved, literal CR/CRLF normalized to LF (as the current parser does). */
@@ -113,10 +118,10 @@ function decodeAttributeValue(raw: string): string {
     const c = raw.charCodeAt(i)
     if (c === AMP) {
       out += raw.slice(start, i)
-      const next = scanReference(raw, i)
-      if (next === INCOMPLETE) parseError('unterminated reference in attribute value')
-      out += lastReference
-      i = start = next
+      const ref = scanReference(raw, i)
+      if (ref === undefined) parseError('unterminated reference in attribute value')
+      out += ref.text
+      i = start = ref.next
     } else if (c === CR) {
       out += raw.slice(start, i) + '\n'
       i += raw.charCodeAt(i + 1) === LF ? 2 : 1
@@ -242,10 +247,10 @@ export class XmlTokenizer {
       if (c === LT) break
       if (c === AMP) {
         if (pos > start) this.addText(buf.slice(start, pos))
-        const next = scanReference(buf, pos)
-        if (next === INCOMPLETE) { this.hold(buf, pos); return len }
-        this.addText(lastReference)
-        pos = start = next
+        const ref = scanReference(buf, pos)
+        if (ref === undefined) { this.hold(buf, pos); return len }
+        this.addText(ref.text)
+        pos = start = ref.next
       } else if (c === CR) {
         if (pos > start) this.addText(buf.slice(start, pos))
         if (pos + 1 === len) { this.hold(buf, pos); return len }

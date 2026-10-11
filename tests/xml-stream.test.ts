@@ -390,6 +390,29 @@ describe('parity with the current parser on the snippet corpus (RED test 13)', (
     for (const cuts of [[], everyN(xml, 1), everyN(xml, 5), everyN(xml, 1_048_576)]) expect(streamStrings(xml, cuts)).toEqual(expected)
   })
 
+  // Raw characters outside the XML 1.0 Char production: the current parser keeps
+  // them in text, CDATA and attribute values, so the large path must too, or
+  // accept/reject would depend on size routing. (A text-only ROOT element makes
+  // parseXml fail with "Unexpected XML root shape" for any content, which is
+  // why these probes always nest inside <r>.)
+  const RAW_NON_CHARS = ['\u0000', '\u0001', '\u0008', '\u000B', '\u001F', '\u007F', '\uFFFE', '\uFFFF', '\uD800', '\uDE00']
+  it.each(RAW_NON_CHARS.map((c) => [JSON.stringify(c), c]))('raw %s is kept like the current parser in text, CDATA and attributes', (_label, ch) => {
+    const sst = `<sst><si><t>x${ch}y</t></si><si><t><![CDATA[p${ch}q]]></t></si></sst>`
+    expect(legacyStrings(sst)).toEqual([`x${ch}y`, `p${ch}q`])
+    for (const cuts of [[], everyN(sst, 1)]) expect(streamStrings(sst, cuts)).toEqual(legacyStrings(sst))
+    const attr = `<r><a b="x${ch}y"/></r>`
+    const legacyAttr = (parseXml(attr).a as XmlNode)['@attrs']!.b
+    const o = outcomeOf(attr, [])
+    expect(o.ok && o.events[1]).toEqual({ kind: 'open', name: 'a', attrs: [['b', legacyAttr]], selfClosing: true })
+    expect(legacyAttr).toBe(`x${ch}y`)
+  })
+
+  it.each(['&#0;', '&#x1;', '&#xFFFE;', '&#xFFFF;'])('a numeric reference %s to a non-Char fails on both paths', (ref) => {
+    const xml = `<sst><si><t>${ref}</t></si></sst>`
+    expect(() => legacyStrings(xml)).toThrow()
+    expect(() => streamStrings(xml, [])).toThrow(PackageError)
+  })
+
   it('an invalid numeric reference fails on both paths', () => {
     const xml = '<sst><si><t>&#xD800;</t></si></sst>'
     expect(() => legacyStrings(xml)).toThrow()

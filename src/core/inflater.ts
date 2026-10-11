@@ -45,6 +45,9 @@ export function createPakoInflater(): InflaterPort {
   return {
     step(input, inPos, out) {
       if (strm === null) throw new PackageError('parse-error', 'inflater already disposed')
+      if (!Number.isSafeInteger(inPos) || inPos < 0 || inPos > input.length) {
+        throw new PackageError('parse-error', `inflater input position ${inPos} out of range [0, ${input.length}]`)
+      }
       strm.input = input
       strm.next_in = inPos
       strm.avail_in = input.length - inPos

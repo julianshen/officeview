@@ -162,6 +162,18 @@ describe('pako low-level inflater port: status mapping', () => {
   })
 })
 
+describe('pako low-level inflater port: contract checks', () => {
+  it.each([-1, 4, 999, 1.5, Number.NaN])('an input position %s outside [0, input.length] is a typed parse-error', (inPos) => {
+    const port = createPakoInflater()
+    let err: unknown
+    try { port.step(Uint8Array.of(1, 2, 3), inPos, new Uint8Array(16)) } catch (e) { err = e }
+    expect(err).toBeInstanceOf(PackageError)
+    expect((err as PackageError).code).toBe('parse-error')
+    expect((err as PackageError).message).toMatch(/input position/)
+    port.dispose()
+  })
+})
+
 describe('pako low-level inflater port: structural output bound (RED test 6)', () => {
   it('one step never produces more than the caller-owned buffer, whatever the input slice', async () => {
     const zeros = deflateRawSync(new Uint8Array(16 * 1024 * 1024))
