@@ -117,8 +117,8 @@ const SCAN_PAGE_LIMIT = 4096
  */
 export async function scanValueDomain(
   store: SourceStore, domain: ValueDomain, options: ReadOptions,
-  /** Cooperative yield between pages (the caller's shared slice). */
-  cooperate?: () => Promise<void>,
+  /** Cooperative yield between pages, charged with the entries just scanned. */
+  cooperate?: (units: number) => Promise<void>,
 ): Promise<ValueDomainScan> {
   let count = 0
   let first: SourceCell | null = null
@@ -150,7 +150,7 @@ export async function scanValueDomain(
         }
       }
       if (page.completeness !== 'complete') return { kind: 'incomplete', missing: [{ r0: domain.r0, r1: domain.r1, c0: col, c1: col }] }
-      await cooperate?.()
+      await cooperate?.(page.items.length)
       cursor = page.nextCursor
       if (cursor !== undefined) {
         if (seen.has(cursor)) return { kind: 'error', error: { code: 'invalid-cursor', retryable: false, message: 'Value domain cursor made no progress' } }

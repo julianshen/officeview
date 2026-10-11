@@ -392,6 +392,8 @@ export interface SessionOptions {
   /** Explicit document-wide worker budget (tests, embedders). */
   workerBudgetBytes?: number
 }
+/** Scanned value-domain entries per shared-budget charge (filter precheck). */
+const DOMAIN_SCAN_CHARGE = 256
 /** Visible display slots and the logical row axis, committed with the view. */
 export interface ViewCounts { readonly visible: number; readonly total: number }
 /** Private draft; commitDraft publishes it atomically. */
@@ -1477,9 +1479,23 @@ export class DocumentSession {
         const domain = filterValueDomain(normalized)
         if (domain) {
           const store = this.preparedStore(owner.sheetId)
-          const scan = await scanValueDomain(store, domain, { signal, stamp: store.stamp }, async () => {
-            if (slice.due()) await slice.pause('filter-domain')
-          })
+          // Its own yield budget, charged in batches of scanned entries (like
+          // the guard's 32-row words) and created on first charge: a small
+          // domain samples no clock, and the rule/guard phases keep the
+          // operation slice's accounting unchanged.
+          let scanSlice: CooperativeSlice<string> | undefined
+          let pending = 0
+          let scan: Awaited<ReturnType<typeof scanValueDomain>>
+          try {
+            scan = await scanValueDomain(store, domain, { signal, stamp: store.stamp }, async units => {
+              pending += units
+              if (pending < DOMAIN_SCAN_CHARGE) return
+              scanSlice ??= this.slice()
+              const due = scanSlice.due(pending)
+              pending = 0
+              if (due) await scanSlice.pause('filter-domain')
+            })
+          } finally { scanSlice?.dispose() }
           const halt = this.halted(owner, signal)
           if (halt) return halt
           switch (scan.kind) {
