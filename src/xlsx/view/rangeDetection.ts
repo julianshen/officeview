@@ -25,7 +25,7 @@ import type {
   SourceFailure, SourceStamp, SourceStore, TableExtent,
 } from './contracts'
 import {
-  MAX_COLS, MAX_ROWS, isValidCoordinate, isValidSourceRectInput, validateCoordinate,
+  MAX_COLS, MAX_ROWS, isValidCoordinate, isValidSourceRectInput,
   type SourceCell, type SourceRect,
 } from './coordinates'
 import type { PopulatedCellSource, StructuralIndex } from './structure'
@@ -91,6 +91,11 @@ class ScanFailure extends Error {
   }
 }
 class WorkBudgetExceeded extends Error {}
+/** A page that breaks the store contract (cells outside the request, stalled
+ * cursors, missing pages) is a non-retryable malformed page, never a throw. */
+function contractViolation(message: string): ScanFailure {
+  return new ScanFailure({ code: 'page-error', retryable: false, message })
+}
 
 function frozenCopy<T>(value: T): T {
   if (Array.isArray(value)) return Object.freeze(value.map(frozenCopy)) as unknown as T
@@ -184,16 +189,16 @@ class Scanner {
     }
     // An abort that landed while this page was in flight wins over its content.
     this.options.signal.throwIfAborted()
-    if (first === undefined) throw new RangeError('Populated scan ended without a page')
+    if (first === undefined) throw contractViolation('Populated scan ended without a page')
     if (first.error !== undefined) throw new ScanFailure(first.error)
     if (!sameStamp(first.stamp, this.options.stamp)) {
       throw new ScanFailure({ code: 'stale-source', retryable: true, message: 'Populated scan page belongs to another source stamp' })
     }
     this.work += first.items.length
     for (const cell of first.items) {
-      validateCoordinate(cell.row, cell.col)
+      if (!isValidCoordinate(cell.row, cell.col)) throw contractViolation('Populated cell outside the worksheet domain')
       if (cell.row < rect.r0 || cell.row > rect.r1 || cell.col < rect.c0 || cell.col > rect.c1) {
-        throw new RangeError('Populated cell outside the requested range')
+        throw contractViolation('Populated cell outside the requested range')
       }
     }
     return first
@@ -209,7 +214,7 @@ class Scanner {
       if (page.items.length > 0) return 'occupied'
       if (page.completeness !== 'complete') complete = false
       if (page.nextCursor === undefined) return complete ? 'blank' : 'unknown'
-      if (seen.has(page.nextCursor)) throw new RangeError('Populated cursor made no progress')
+      if (seen.has(page.nextCursor)) throw contractViolation('Populated cursor made no progress')
       seen.add(page.nextCursor)
       cursor = page.nextCursor
     }
@@ -224,7 +229,7 @@ class Scanner {
       if (page.items.length > 0) return { row: page.items[0].row, col: page.items[0].col }
       if (page.completeness !== 'complete') complete = false
       if (page.nextCursor === undefined) return complete ? 'blank' : 'unknown'
-      if (seen.has(page.nextCursor)) throw new RangeError('Populated cursor made no progress')
+      if (seen.has(page.nextCursor)) throw contractViolation('Populated cursor made no progress')
       seen.add(page.nextCursor)
       cursor = page.nextCursor
     }
@@ -381,11 +386,11 @@ async function probeHeaderRows(store: SourceStore, options: ReadOptions, pacer: 
     }
     if (page.completeness !== 'complete') pending = true
     for (const item of page.items) {
-      if (item.row < band.r0 || item.row > band.r1) throw new RangeError('Read row outside the requested band')
+      if (item.row < band.r0 || item.row > band.r1) throw contractViolation('Read row outside the requested band')
       for (const cell of item.cells) {
-        validateCoordinate(cell.row, cell.col)
+        if (!isValidCoordinate(cell.row, cell.col)) throw contractViolation('Read cell outside the worksheet domain')
         if (cell.row < band.r0 || cell.row > band.r1 || cell.col < band.c0 || cell.col > band.c1) {
-          throw new RangeError('Read cell outside the requested band')
+          throw contractViolation('Read cell outside the requested band')
         }
         if (cell.unavailable) {
           unavailable++
@@ -406,7 +411,7 @@ async function probeHeaderRows(store: SourceStore, options: ReadOptions, pacer: 
       }
     }
     if (page.nextCursor === undefined) break
-    if (seen.has(page.nextCursor)) throw new RangeError('Read cursor made no progress')
+    if (seen.has(page.nextCursor)) throw contractViolation('Read cursor made no progress')
     seen.add(page.nextCursor)
     cursor = page.nextCursor
   }
@@ -636,7 +641,7 @@ async function detectRange(request: RangeDetectionRequest, pacer: Pacer, owner: 
   }
   const sole = await probeCurrentRegion(first, scanner, pageLimit)
   if (sole.kind === 'incomplete') return { kind: 'incomplete', missing: sole.missing }
-  if (sole.kind === 'blank') throw new RangeError('Populated cell vanished during detection')
+  if (sole.kind === 'blank') throw contractViolation('Populated cell vanished during detection')
   for (const rect of outsideRegion(used, sole.rect)) {
     const answer = await scanner.exists(rect)
     if (answer === 'unknown') return { kind: 'incomplete', missing: [rect] }
@@ -646,8 +651,9 @@ async function detectRange(request: RangeDetectionRequest, pacer: Pacer, owner: 
   }
   return finishDerived(context, sole.rect, { kind: 'used' })
 }
-/** Typed boundary: cancellation, scan failures and budget exhaustion become
- * outcomes; anything else is a programming/source-contract error and throws.
+/** Typed boundary: cancellation, scan failures (including contract-violating
+ * pages, as page-error) and budget exhaustion become outcomes; anything else
+ * is a programming error and throws.
  * The source owner is captured before any await and revalidated after the
  * last one (spec §10.1): an outcome computed while the store moved to another
  * generation is about old data, so it refuses as stale instead of being
