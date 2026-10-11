@@ -103,7 +103,8 @@ Every package is implemented on its own branch, reviewed by at least one agent f
 | S4.2 cooperative scheduling/cancellation/atomic publication (`src/xlsx/view/scheduler.ts`, worker session/kernel/client) | merged |
 | S1.1a bounded ZIP reader, pull inflater, incremental XML tokenizer (`src/core/{zip-stream,inflater,xml-stream}.ts`, `pako` 1.0.11) | merged (opencode review; one disputed finding accepted by the reviewer) |
 | S2.3 full-coordinate renderer seam and explicit static budgets (`src/xlsx/view/viewport.ts`, `render.ts`, `paint.ts`) | merged |
-| S1.1b, S8.2, S8.3, S4.3, S6.1 | in progress (implementation or review rounds on their own branches) |
+| S8.3 declared filter diagnostics (`src/xlsx/view/declaredFilters.ts`, parse.ts) | merged |
+| S1.1b, S8.2, S4.3, S6.1 | in progress (implementation or review rounds on their own branches) |
 | S1.2, S1.3, S4.3–S4.5, S5, S6, S9, S10 (physical-device receipts skipped for now by user decision), S11/S12 status, S13 | not started |
 
 ## S0 — Freeze contracts, counterexamples and fixture/harness infrastructure
@@ -493,13 +494,15 @@ expect(wide.contains({ row: 2, col: 0 })).toBe(false)
 
 ### S8.3 Declared filter diagnostic parsing
 
+> **Status (2026-10-11):** merged (opencode implementation; Claude fixes; codex, Claude and pi reviews over four rounds; every finding fixed or disputed with primary-source evidence accepted by the reviewer). Declared autoFilter/sortState (worksheet and table, direct and nested) parsed as diagnostics only, bounded by a 256 KiB per-document byte budget, adapter-neutral builders ready for the large adapter. Small/large adapter parity is pending the large adapter (S1.2); Clear restores from the existing file-hidden snapshot.
+
 **Files:** modify `src/xlsx/parse.ts`, page importer metadata; test `tests/xlsx-viewer-declared-filters.test.ts`.
 
-- [ ] RED: package autoFilter refs/kinds, unsupported color/Top-10/average filters, supported filters saved only as hidden rows, sortState source order and unsupported dynamic preset. Small/large adapters must expose identical diagnostics.
-- [ ] Run `bunx vitest run tests/xlsx-viewer-declared-filters.test.ts`; expected missing/mismatched diagnostic or mistaken authored-view import fails.
-- [ ] GREEN: parse declared range and rule kinds for diagnostics only per spec; preserve file-hidden snapshot and original stored order. Do not silently import unsupported filter state or invent funnel state from hidden rows. Clear restores load snapshot, including file-declared filtering effects.
+- [x] RED: package autoFilter refs/kinds, unsupported color/Top-10/average filters, supported filters saved only as hidden rows, sortState source order and unsupported dynamic preset. Small/large adapters must expose identical diagnostics.
+- [x] Run `bunx vitest run tests/xlsx-viewer-declared-filters.test.ts`; expected missing/mismatched diagnostic or mistaken authored-view import fails.
+- [x] GREEN: parse declared range and rule kinds for diagnostics only per spec; preserve file-hidden snapshot and original stored order. Do not silently import unsupported filter state or invent funnel state from hidden rows. Clear restores load snapshot, including file-declared filtering effects.
 - [ ] Run focused command plus adapter parity and standard gates; expected supported saved effects render correctly through S2 hidden fix, no formula/table parser regression.
-- [ ] Deliver parser delta through the shared integration owner.
+- [x] Deliver parser delta through the shared integration owner.
 
 ### S8.5 Canonical text matching (spec §7.1 amendment, approved 2026-10-11)
 
