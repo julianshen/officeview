@@ -743,6 +743,8 @@ export class DocumentSession {
         diagnostics: [{ code: 'prepared-column-limit', message: `Profile working set holds at most ${budget.maxColumns} prepared columns` }],
       }
     }
+    // Admitted: acknowledge with zero completed batches over the batch total.
+    hooks.progress?.(0, batch.length * MAX_ROWS)
     const slice = this.slice()
     const charge = this.charge()
     try {

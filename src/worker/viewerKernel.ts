@@ -236,8 +236,8 @@ export class ViewerKernel {
         if (!isUint16Array(command.cols)) {
           return errorReply(command, command.owner, 'invalid-coordinate', false, [{ code: 'invalid-columns', message: 'cols must be a Uint16Array of column indexes' }])
         }
-        // Immediate acknowledgment: zero completed batches is a fact, not a timer.
-        report(0, new Set(command.cols).size * MAX_ROWS)
+        // The zero-batch acknowledgment comes from the session once this batch is
+        // admitted past the serialized preparation queue, never while queued.
         const outcome = await session.prepareColumns(command.owner, [...command.cols], signal, { progress: report })
         if (outcome.kind === 'resource-limit') return errorReply(command, command.owner, 'resource-limit', false, [{ code: 'prepare-batch-limit', message: outcome.message }])
         if (outcome.kind !== 'complete') return this.failed(command, command.owner, outcome)
