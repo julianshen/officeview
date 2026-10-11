@@ -1,0 +1,92 @@
+/**
+ * S1.2 worker wiring: a blob that admission routes to paged opens a paged
+ * WorkbookSource (cached policy, no whole-blob copy, no legacy parse) instead
+ * of the temporary object source; sort/value queries run over pages; a file
+ * the paged path cannot serve yet opens through the compatibility path with a
+ * notice; storage refusals are typed open errors.
+ */
+import { describe, expect, it, vi } from 'vitest'
+import type { CacheIdentity, WorkerCommand, WorkerReply } from '../src/xlsx/view/contracts'
+import { OfficePackage } from '../src/core/zip'
+import { parseXlsx } from '../src/xlsx/parse'
+import { initialIdentity } from '../src/worker/viewerProtocol'
+import { ViewerKernel } from '../src/worker/viewerKernel'
+import { fakeIndexedDb } from './helpers/fake-storage'
+import { colName, repeat, xlsxBytes } from './helpers/xlsx-package'
+
+const quiet = { yield: async () => {} }
+let nextId = 0
+const rid = () => `pw-${++nextId}`
+async function run<K extends WorkerCommand['kind']>(kernel: ViewerKernel, command: Extract<WorkerCommand, { kind: K }>): Promise<WorkerReply<K>> {
+  const replies: WorkerReply[] = []
+  await kernel.handle(command, out => { replies.push(out) })
+  return replies[replies.length - 1] as WorkerReply<K>
+}
+function completed<T extends WorkerReply>(out: T): Extract<T, { kind: 'complete' }>['result'] {
+  if (out.kind !== 'complete') throw new Error(`expected complete, got ${JSON.stringify(out)}`)
+  return (out as Extract<T, { kind: 'complete' }>).result
+}
+const rowsXml = (values: number[]) => values.map((v, r) => `<row r="${r + 1}"><c r="A${r + 1}"><v>${v}</v></c><c r="B${r + 1}"><v>${r}</v></c></row>`).join('')
+/** Forces admission's paged decision on a tiny file: the object path allows one row. */
+const PAGED = { object: { rows: 1 } }
+
+describe('resident worker opens paged sources (S1.2)', () => {
+  it('routes a paged admission to PagedXlsxSheetAdapter: no blob copy, no legacy parse, cached policy', async () => {
+    const parse = vi.fn(async (bytes: Uint8Array) => parseXlsx(await OfficePackage.load(bytes)))
+    const kernel = new ViewerKernel({ parse, importLimits: PAGED }, quiet)
+    const blob = new Blob([xlsxBytes({ sheetData: rowsXml([3, 1, 4, 1, 5]) }) as BlobPart])
+    const whole = vi.spyOn(blob, 'arrayBuffer')
+    const open = completed(await run(kernel, { kind: 'open', requestId: rid(), docId: 'doc', source: { kind: 'blob', blob }, profile: 'D' }))
+    expect(open).toEqual({ kind: 'open', valuePolicy: 'cached', sheets: [{ sheetId: '1', name: 'S' }] })
+    expect(parse).not.toHaveBeenCalled()
+    expect(whole).not.toHaveBeenCalled()
+    const owner: CacheIdentity = initialIdentity('doc', '1')
+    const values = completed(await run(kernel, { kind: 'valueQuery', requestId: rid(), owner, query: { col: 0, rows: { kind: 'intervals', intervals: [{ r0: 0, r1: 4 }] }, limit: 10 } }))
+    expect(values.kind === 'valueQuery' && values.page.items.map(item => item.kind === 'cell' ? item.cell.value : item.kind)).toEqual([3, 1, 4, 1, 5])
+    completed(await run(kernel, { kind: 'prepareColumns', requestId: rid(), owner, cols: new Uint16Array([0]) }))
+    const sorted = completed(await run(kernel, { kind: 'sort', requestId: rid(), owner, spec: { range: { r0: 0, r1: 4, c0: 0, c1: 1, headerRows: 0, totalsRows: 0 }, keys: [{ col: 0, order: 'asc' }], caseSensitive: false } }))
+    expect(sorted.kind === 'view' && [...sorted.delta.bands[0].sourceAtOffset]).toEqual([1, 3, 0, 2, 4])
+    const session = kernel.session('doc')!
+    expect(session.source.valuePolicy).toBe('cached')
+    completed(await run(kernel, { kind: 'close', requestId: rid(), docId: 'doc' }))
+  })
+
+  it('opens a file the paged path cannot serve yet through the compatibility path with a notice', async () => {
+    const parse = vi.fn(async (bytes: Uint8Array) => parseXlsx(await OfficePackage.load(bytes)))
+    const kernel = new ViewerKernel({ parse, importLimits: PAGED }, quiet)
+    // Rows without numbers: the legacy parser accepts them, the paged reader refuses.
+    const bytes = xlsxBytes({ sheetData: '<row><c r="A1"><v>1</v></c></row><row><c r="A2"><v>2</v></c></row>' })
+    const replies: WorkerReply[] = []
+    await kernel.handle({ kind: 'open', requestId: rid(), docId: 'compat', source: { kind: 'blob', blob: new Blob([bytes as BlobPart]) }, profile: 'D' }, out => { replies.push(out) })
+    const open = replies.at(-1)!
+    expect(completed(open)).toMatchObject({ kind: 'open', valuePolicy: 'engine' })
+    expect(open.diagnostics.some(d => d.code === 'large-file-compatibility' && /compatibility mode/.test(d.message))).toBe(true)
+    expect(parse).toHaveBeenCalledTimes(1)
+  })
+
+  it('a large paged document without page storage is a typed storage-error open, not a blank document', async () => {
+    const parse = vi.fn(async (bytes: Uint8Array) => parseXlsx(await OfficePackage.load(bytes)))
+    // The memory fallback holds at most 16 bytes, so this document needs real storage.
+    const kernel = new ViewerKernel({ parse, importLimits: { ...PAGED, spool: { memoryLimitBytes: 16 } }, pageStorage: {} }, quiet)
+    const out = await run(kernel, { kind: 'open', requestId: rid(), docId: 'nostore', source: { kind: 'blob', blob: new Blob([xlsxBytes({ sheetData: rowsXml([1, 2]) }) as BlobPart]) }, profile: 'D' })
+    expect(out).toMatchObject({ kind: 'error', code: 'storage-error', retryable: true })
+    expect(kernel.session('nostore')).toBeUndefined()
+    expect(parse).not.toHaveBeenCalled()
+  })
+
+  it('stores pages in IndexedDB when the document exceeds the memory fallback and removes them on close', async () => {
+    const idb = fakeIndexedDb()
+    const parse = vi.fn(async (bytes: Uint8Array) => parseXlsx(await OfficePackage.load(bytes)))
+    const kernel = new ViewerKernel({ parse, importLimits: { ...PAGED, spool: { memoryLimitBytes: 16 } }, pageStorage: { indexedDb: idb } }, quiet)
+    const values = Array.from({ length: 50 }, (_, i) => (i * 37) % 11)
+    completed(await run(kernel, { kind: 'open', requestId: rid(), docId: 'idb', source: { kind: 'blob', blob: new Blob([xlsxBytes({ sheetData: rowsXml(values) }) as BlobPart]) }, profile: 'D' }))
+    const owner = initialIdentity('idb', '1')
+    const page = completed(await run(kernel, { kind: 'valueQuery', requestId: rid(), owner, query: { col: 0, rows: { kind: 'intervals', intervals: [{ r0: 40, r1: 49 }] }, limit: 20 } }))
+    expect(page.kind === 'valueQuery' && page.page.items.map(item => item.kind === 'cell' ? item.cell.value : item.kind)).toEqual(values.slice(40))
+    expect(idb.stores.size).toBe(1)
+    completed(await run(kernel, { kind: 'close', requestId: rid(), docId: 'idb' }))
+    expect(idb.stores.size).toBe(0)
+    expect(idb.deleted.length).toBe(1)
+  })
+})
+void colName; void repeat

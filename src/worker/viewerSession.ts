@@ -150,6 +150,8 @@ export interface WorkbookSource {
   coverageDiagnostics?(sheetId: string): readonly WorkerDiagnostic[]
   /** S4.3: decoded source pages register in the session pool's `source` tier. */
   bindMemory?(pool: MemoryPool): void
+  /** Notices attached to the open reply (e.g. compatibility mode). */
+  readonly openDiagnostics?: readonly WorkerDiagnostic[]
   /** S8.3 declared file filter/sort diagnostics; both adapters build identical records. */
   declaredFilters?(): readonly DeclaredSheetFilters[]
   release(): Promise<void>
