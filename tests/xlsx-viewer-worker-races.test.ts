@@ -13,7 +13,8 @@ import type {
 } from '../src/xlsx/view/contracts'
 import type { XlsxDocument } from '../src/xlsx/types'
 import { formatA1, MAX_ROWS } from '../src/xlsx/view/coordinates'
-import { projectVisibility } from '../src/xlsx/view/visibility'
+import { createIntervalSet, projectVisibility, projectVisibilitySteps, PROJECTION_CHUNK } from '../src/xlsx/view/visibility'
+import { createRowOrder, pinRowPermutation } from '../src/xlsx/view/order'
 import { YIELD_INTERVAL_MS, YIELD_WORK_UNITS } from '../src/xlsx/view/scheduler'
 import { initialIdentity, initialWorkbookOwner } from '../src/worker/viewerProtocol'
 import { sameStamp, type FilterEvaluator, type WorkbookSource } from '../src/worker/viewerSession'
@@ -749,6 +750,126 @@ describe('S4.2 no-worker support', () => {
     const paged = await client.send({ kind: 'open', requestId: 'o2', docId: 'big', source: { kind: 'paged', handleId: 'h' }, profile: 'D' })
     expect(paged).toMatchObject({ kind: 'error', code: 'unsupported', diagnostics: [{ code: 'worker-required' }] })
     client.dispose()
+  })
+})
+
+describe('S4.2 review fixes', () => {
+  it('pi#1 preparation refuses column pages out of ascending contiguous row order (typed page-error, nothing staged)', async () => {
+    const doc = objectDoc([{ sheetId: 'A', rows: descending(20) }])
+    for (const mangle of [
+      (items: readonly unknown[]) => [...items].reverse(),
+      (items: readonly unknown[]) => [items[0], ...items],
+    ]) {
+      const inner = createObjectWorkbookSource(doc, 'doc')
+      const base = inner.store('A')
+      const store = Object.create(base) as SourceStore
+      store.queryColumn = async (request, options) => {
+        const page = await base.queryColumn(request, options)
+        return { ...page, items: mangle(page.items) as typeof page.items }
+      }
+      const source: WorkbookSource = { ...inner, sheets: inner.sheets, geometry: id => inner.geometry(id), store: () => store, release: () => inner.release() }
+      const kernel = new ViewerKernel({ parse: async () => doc, openSource: async () => source }, { yield: async () => {} })
+      const log = new RaceLog()
+      await kernel.handle({ kind: 'open', requestId: 'o', docId: 'doc', source: { kind: 'object', document: doc }, profile: 'D' }, log.sink)
+      await kernel.handle({ kind: 'prepareColumns', requestId: 'p', owner: initialIdentity('doc', 'A'), cols: new Uint16Array([0]) }, log.sink)
+      expect(lastReply(log, 'p')).toBe('p prepareColumns:error page-error')
+      expect(kernel.session('doc')!.preparedStats()).toEqual({ columns: 0, bytes: 0 })
+      expect(kernel.session('doc')!.memoryStats().transientBytes).toBe(0)
+    }
+  })
+
+  it('pi#2 the filter geometry guard steps the shared budget: one unit per mask word, changed slot, source word and band', async () => {
+    // Filter rows 0..1 hiding row 0: 32,768 mask words compared, 1 changed slot,
+    // 1 source word scanned, 1 covered band queried, no drawings.
+    const guardUnits = MAX_ROWS / 32 + 1 + 1 + 1
+    const filter = { filterEvaluator: (async () => ({ kind: 'complete', matches: (row: number) => row !== 0 })) as FilterEvaluator }
+    const fixed = await rig(objectDoc([{ sheetId: 'A', rows: descending(2) }]), filter)
+    await send(fixed, { kind: 'filter', requestId: 'f', owner: initialIdentity('doc', 'A'), spec: filterSpec(1), nowMs: 0 })
+    expect(lastReply(fixed.log, 'f')).toBe('f filter:complete rev1 g1')
+    // The 2 projected rows share the operation budget with the guard.
+    expect(fixed.steps.count('guard')).toBe(Math.floor((2 + guardUnits) / YIELD_WORK_UNITS))
+    expect(Math.max(...fixed.steps.gaps)).toBeLessThanOrEqual(YIELD_WORK_UNITS + 1)
+    const slow = await rig(objectDoc([{ sheetId: 'A', rows: descending(2) }]), { ...filter, tick: YIELD_INTERVAL_MS })
+    await send(slow, { kind: 'filter', requestId: 'f', owner: initialIdentity('doc', 'A'), spec: filterSpec(1), nowMs: 0 })
+    expect(slow.steps.count('guard')).toBe(guardUnits)
+  })
+
+  it('pi#2 a cancel during the geometry guard stops it at its next yield', async () => {
+    const r = await rig(objectDoc([{ sheetId: 'A', rows: descending(2) }]), { filterEvaluator: async () => ({ kind: 'complete', matches: row => row !== 0 }) })
+    r.steps.holdAt('guard')
+    const filtering = send(r, { kind: 'filter', requestId: 'f', owner: initialIdentity('doc', 'A'), spec: filterSpec(1), nowMs: 0 })
+    await until(() => r.steps.waiting > 0, 'guard yield')
+    await send(r, { kind: 'cancel', requestId: 'x', targetRequestId: 'f' })
+    const before = r.steps.count('guard')
+    r.steps.releaseHeld()
+    await filtering
+    expect(lastReply(r.log, 'f')).toBe('f filter:cancelled cancel-requested')
+    expect(r.steps.count('guard')).toBe(before)
+    expect(r.kernel.session('doc')!.view('A').revision).toBe(0)
+  })
+
+  it('pi#3 a sort/filter completion is withheld when a newer commit superseded its delta before emission', async () => {
+    const r = await rig(objectDoc([{ sheetId: 'A', rows: descending(5) }]), {
+      afterDispatch: async (command, r) => {
+        if (command.kind !== 'sort') return
+        const session = r.kernel.session('doc')!
+        const view = session.view('A')
+        r.log.act('commit selection draft before emission')
+        await session.commitView('A', { order: view.order, visibility: view.visibility, sort: view.sort, filter: view.filter })
+      },
+    })
+    await send(r, { kind: 'sort', requestId: 's', owner: initialIdentity('doc', 'A'), spec: sortSpec(4) })
+    expect(r.log.events.slice(-2)).toEqual(['> commit selection draft before emission', 's sort:error stale-source'])
+  })
+
+  it('pi#4 a queued preparation acknowledges only once its transaction is admitted', async () => {
+    const r = await rig(objectDoc([{ sheetId: 'A', rows: descending(10_000) }]))
+    r.steps.holdAt('prepare')
+    const owner = initialIdentity('doc', 'A')
+    const first = send(r, { kind: 'prepareColumns', requestId: 'p1', owner, cols: new Uint16Array([0]) })
+    await until(() => r.steps.waiting > 0, 'prepare yield')
+    const second = send(r, { kind: 'prepareColumns', requestId: 'p2', owner, cols: new Uint16Array([1]) })
+    await settle()
+    r.log.act('release p1')
+    r.steps.releaseHeld()
+    await Promise.all([first, second])
+    expect(r.log.events.slice(1)).toEqual([
+      `p1 prepareColumns:progress 0/${MAX_ROWS}`,
+      '> release p1',
+      `p1 prepareColumns:progress 4096/${MAX_ROWS}`,
+      `p1 prepareColumns:progress 8192/${MAX_ROWS}`,
+      `p1 prepareColumns:progress ${MAX_ROWS}/${MAX_ROWS}`,
+      // p2 is admitted when p1's transaction ends, just before p1's reply is emitted.
+      `p2 prepareColumns:progress 0/${MAX_ROWS}`,
+      'p1 prepareColumns:complete',
+      `p2 prepareColumns:progress ${MAX_ROWS}/${MAX_ROWS}`,
+      'p2 prepareColumns:complete',
+    ])
+  })
+
+  it('opencode#1 a cancellation notice keeps the worker cancel reason', () => {
+    const pubs = new ViewerPublications()
+    pubs.open('doc', [{ sheetId: 'A' }])
+    const ticket = pubs.begin('doc', 'A', 's1')
+    pubs.settle(ticket, { kind: 'cancelled', commandKind: 'sort', requestId: 's1', owner: initialIdentity('doc', 'A'), diagnostics: [{ code: 'superseded', message: 'newer draft' }] })
+    expect(pubs.get('doc', 'A')!.notice).toEqual({ requestId: 's1', kind: 'cancelled', code: 'superseded' })
+  })
+
+  it('opencode#2 the synchronous projection and the cooperative steps are one implementation', () => {
+    const n = 10_000
+    const order = createRowOrder([pinRowPermutation(0, n - 1, () => false, Uint32Array.from({ length: n }, (_v, i) => n - 1 - i))])
+    const hidden = createIntervalSet([{ r0: 3, r1: 7 }])
+    const spec = filterSpec(n - 1)
+    const matches = (row: number) => row % 5 !== 0
+    const steps = projectVisibilitySteps(hidden, spec, order, matches)
+    const chunks: number[] = []
+    let next = steps.next()
+    for (; !next.done; next = steps.next()) chunks.push(next.value)
+    // Band rows plus filter body rows, reported in bounded chunks.
+    expect(chunks.reduce((sum, units) => sum + units, 0)).toBe(2 * n)
+    expect(Math.max(...chunks)).toBeLessThanOrEqual(PROJECTION_CHUNK)
+    expect(YIELD_WORK_UNITS % PROJECTION_CHUNK).toBe(0)
+    expect([...next.value.visibility.words]).toEqual([...projectVisibility(hidden, spec, order, matches).visibility.words])
   })
 })
 
