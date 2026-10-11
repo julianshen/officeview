@@ -327,3 +327,47 @@ describe('review: every publication re-checks owner and cancellation (codex 3)',
     expect(controller.stats.cacheHits).toBe(0)
   })
 })
+
+describe('review: controller keeps engine pagination (codex 2)', () => {
+  const many = () => findInputOf(workbookOf([{ sheetId: 'A', cells: Array.from({ length: 450 }, (_, row) => ({ row, col: 0, value: 'hit' })) }, { sheetId: 'B', cells: [] }])).input
+  it('publishes bounded pages on demand, never an accumulated prefix', async () => {
+    const input = many()
+    const sizes: number[] = []
+    const controller = new FindController({ currentOwner: () => input.owner, onPublish: state => sizes.push(state.hits.length) })
+    const first = await controller.run(input, ci('hit'))
+    expect(first).toMatchObject({ pageIndex: 0, complete: false })
+    expect(first!.hits).toHaveLength(200)
+    expect(controller.running).toBe(true)
+    const second = await controller.next()
+    expect(second).toMatchObject({ pageIndex: 1, complete: false })
+    expect(second!.hits[0].source.row).toBe(200)
+    const third = await controller.next()
+    expect(third).toMatchObject({ pageIndex: 2, complete: true, totalKnown: 450 })
+    expect(third!.hits).toHaveLength(50)
+    expect(await controller.next()).toBeNull()
+    expect(sizes).toEqual([200, 200, 50])
+    expect(controller.running).toBe(false)
+    // A multi-page result is not cached: holding it would defeat the bounded pages.
+    await controller.run(input, ci('hit'))
+    expect(controller.stats.cacheHits).toBe(0)
+  })
+
+  it('cancel releases the open session and the published page; dispose drops the cache', async () => {
+    const input = many()
+    const controller = new FindController({ currentOwner: () => input.owner })
+    await controller.run(input, ci('hit'))
+    controller.cancel()
+    expect(controller.running).toBe(false)
+    expect(controller.published).toBeNull()
+    expect(await controller.next()).toBeNull()
+    const small = findInputOf(twoSheets()).input
+    const other = new FindController({ currentOwner: () => small.owner })
+    await other.run(small, ci('hit'))
+    await other.run(small, ci('hit'))
+    expect(other.stats.cacheHits).toBe(1)
+    other.dispose()
+    expect(other.published).toBeNull()
+    await other.run(small, ci('hit'))
+    expect(other.stats.cacheHits).toBe(1)
+  })
+})

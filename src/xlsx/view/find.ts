@@ -481,13 +481,16 @@ export function navigateToHit(navigation: FindNavigation, hit: FindHit): Navigat
   return { kind: 'visible', sheetId: hit.sheetId, window: moved.window, announcement: selected.announcement }
 }
 
+/** One published page: `hits` holds this page only (at most the page size). */
 export interface FindPublication {
   key: string
   owner: WorkbookOwner
   query: SearchQuery
   hits: readonly FindHit[]
+  pageIndex: number
   complete: boolean
   totalKnown?: number
+  cursor?: string
   unavailableCount: number
   incomplete: readonly string[]
   failures: readonly FindSourceFailure[]
@@ -495,33 +498,57 @@ export interface FindPublication {
 export interface FindControllerOptions {
   currentOwner: () => WorkbookOwner
   onPublish?: (state: FindPublication) => void
-  /** Completed results kept by aggregate key (LRU). */
+  /** Complete single-page results kept by aggregate key (LRU), at most a page each. */
   cacheEntries?: number
+}
+interface FindRun {
+  token: number
+  key: string
+  input: FindInput
+  query: SearchQuery
+  session: WorkbookFind
+  abort: AbortController
+  detach: () => void
+  pageIndex: number
 }
 
 /**
  * Replace/cancel/publish policy for the UI. One run is current: starting
- * another aborts it. Pages publish only while their run is current and the
- * host's owner still equals the run's captured owner; completed results are
- * cached by findCacheKey, so an unchanged owner+query is served without a
- * rescan while any view/value/font change misses.
+ * another, or cancel(), closes it. Pages are pulled one at a time (run, then
+ * next) and each publication carries that page only, so the controller never
+ * holds more than the engine's bounded page. Every publication, cached ones
+ * included, first re-checks the run token, abort and the host's current owner.
+ * Only complete single-page results are cached (by findCacheKey), so the cache
+ * is bounded by entries × one page; any view/value/font change misses it.
  */
 export class FindController {
   readonly stats = { cacheHits: 0, staleRejected: 0, superseded: 0 }
   published: FindPublication | null = null
   private generation = 0
-  private active: AbortController | undefined
+  private current: FindRun | undefined
   private readonly cache = new Map<string, FindPublication>()
   constructor(private readonly options: FindControllerOptions) {}
 
+  /** A run is open and has further pages to pull. */
+  get running(): boolean { return this.current !== undefined }
+
+  /** Closes the current run and releases its session and published page. */
   cancel(): void {
     this.generation++
-    this.active?.abort()
-    this.active = undefined
+    this.close()
+    this.published = null
   }
 
-  async run(input: FindInput, query: SearchQuery, options: FindOptions = {}): Promise<FindPublication | null> {
+  dispose(): void {
     this.cancel()
+    this.cache.clear()
+  }
+
+  /** Replaces the current run. The last published page stays visible until the
+   * replacement publishes (spec §10.1); cancel() is the explicit release. */
+  async run(input: FindInput, query: SearchQuery, options: FindOptions = {}): Promise<FindPublication | null> {
+    this.generation++
+    this.close()
     const token = this.generation
     const key = findCacheKey(input.owner, query)
     if (!this.publishable(token, input.owner, options.signal)) return null
@@ -534,41 +561,61 @@ export class FindController {
       return cached
     }
     const abort = new AbortController()
-    this.active = abort
     const outer = options.signal
     const onOuter = () => abort.abort()
     outer?.addEventListener('abort', onOuter, { once: true })
-    if (outer?.aborted) abort.abort()
     const session = new WorkbookFind(input, query, { ...options, signal: abort.signal, currentOwner: this.options.currentOwner })
-    const hits: FindHit[] = []
+    this.current = { token, key, input, query, session, abort, detach: () => outer?.removeEventListener('abort', onOuter), pageIndex: 0 }
+    return this.pull(this.current)
+  }
+
+  /** The next page of the current run, or null when there is none. */
+  async next(): Promise<FindPublication | null> {
+    return this.current ? this.pull(this.current) : null
+  }
+
+  private async pull(run: FindRun): Promise<FindPublication | null> {
+    let page: FindPage
     try {
-      for (;;) {
-        const page = await session.nextPage()
-        // The session's own last guard ran before this continuation: any owner
-        // change, abort or replacement in between must still block publication.
-        if (!this.publishable(token, input.owner, abort.signal)) return null
-        hits.push(...page.hits)
-        const state: FindPublication = {
-          key, owner: input.owner, query, hits: hits.slice(), complete: page.complete,
-          ...(page.totalKnown !== undefined ? { totalKnown: page.totalKnown } : {}),
-          unavailableCount: page.unavailableCount, incomplete: page.incomplete, failures: page.failures,
-        }
-        this.publish(state)
-        if (page.complete) {
-          if (page.totalKnown !== undefined) this.remember(key, state)
-          return state
-        }
-      }
+      page = await run.session.nextPage()
     } catch (error) {
       if (!(error instanceof FindError)) throw error
       if (error.code === 'stale') this.stats.staleRejected++
-      else if (token !== this.generation) this.stats.superseded++
+      else this.stats.superseded++
+      this.end(run)
       return null
-    } finally {
-      outer?.removeEventListener('abort', onOuter)
-      session.close()
-      if (this.active === abort) this.active = undefined
     }
+    // The session's own last guard ran before this continuation: any owner
+    // change, abort or replacement in between must still block publication.
+    if (!this.publishable(run.token, run.input.owner, run.abort.signal)) {
+      this.end(run)
+      return null
+    }
+    const state: FindPublication = {
+      key: run.key, owner: run.input.owner, query: run.query, hits: page.hits, pageIndex: run.pageIndex++, complete: page.complete,
+      ...(page.totalKnown !== undefined ? { totalKnown: page.totalKnown } : {}),
+      ...(page.cursor !== undefined ? { cursor: page.cursor } : {}),
+      unavailableCount: page.unavailableCount, incomplete: page.incomplete, failures: page.failures,
+    }
+    this.publish(state)
+    if (page.complete) {
+      if (state.pageIndex === 0 && page.totalKnown !== undefined) this.remember(run.key, state)
+      this.end(run)
+    }
+    return state
+  }
+
+  private end(run: FindRun): void {
+    if (this.current === run) this.close()
+  }
+
+  private close(): void {
+    const run = this.current
+    this.current = undefined
+    if (!run) return
+    run.abort.abort()
+    run.detach()
+    run.session.close()
   }
 
   /** Checked immediately before every publication, cached ones included (§10.1). */
