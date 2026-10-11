@@ -170,6 +170,26 @@ function boundedRectangle(rows: number, cols: number, ctx: EvaluationContext | u
     return arrayShapeGate(ctx, 'array-shape-unavailable', `Array-mode reference ${rows}x${cols} is not a nonempty rectangle`)
   }
   if (rows > maxSide || cols > maxSide || rows * cols > maxCells) return arrayResourceGate(ctx, rows, cols)
+  return chargeMaterialization(ctx, rows, cols)
+}
+
+/** Charge the cumulative budget before a materialization (design note §4.3
+ * rule 3). Shares the array-resource-limit feature so a load-time hit is one
+ * signal for the admission reroute. */
+export function chargeMaterialization(ctx: EvaluationContext | undefined, rows: number, cols: number): EvaluationError | undefined {
+  const budget = ctx?.materializationBudget
+  if (budget === undefined) return undefined
+  const cells = rows * cols
+  if (budget.used + cells > budget.limit) {
+    markUnsupported(ctx, 'array-resource-limit')
+    ctx?.reportFormulaIssue?.({
+      kind: 'unsupported-reference',
+      feature: 'array-resource-limit',
+      message: `Array materialization of ${rows}x${cols} exceeds the cumulative application policy (maxMaterializedCells ${budget.limit}, ${budget.used} already materialized); resource policy, not a native shape error`,
+    })
+    return formulaError('#NAME?')
+  }
+  budget.used += cells
   return undefined
 }
 

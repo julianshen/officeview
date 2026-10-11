@@ -30,6 +30,7 @@ import type {
 import { parseFormula } from './parser'
 import { isReferenceNode } from './refs'
 import {
+  chargeMaterialization,
   coerceToBoolean,
   coerceToNumber,
   compareValues,
@@ -84,6 +85,8 @@ function materialize(
   if (rows > maxSide || cols > maxSide || rows * cols > maxCells) {
     return resourceGate(ctx, rows, cols, maxCells, maxSide)
   }
+  const overBudget = chargeMaterialization(ctx, rows, cols)
+  if (overBudget) return overBudget
   const values: ElementValue[][] = []
   for (let row = 0; row < rows; row++) {
     const out: ElementValue[] = []

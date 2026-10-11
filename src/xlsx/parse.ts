@@ -15,7 +15,7 @@ import { parseWorksheetDrawings, collectXlsxImages } from './drawing'
 import { computeMetrics } from './render'
 import { resolvePartTarget } from '../drawing/parts'
 import { parseThemeContext, type ThemeContext } from '../drawing/style'
-import { evaluateWorkbookFormulas } from './formula/workbook'
+import { evaluateWorkbookFormulas, type WorkbookEvaluationOptions } from './formula/workbook'
 import { initializeSavedSpills } from './formula/saved-spills'
 import { dynamicMetadataIndices } from './metadata'
 import { decodeXlsxString } from './strings'
@@ -132,7 +132,12 @@ async function parseStyles(pkg: OfficePackage): Promise<Styles> {
   return styles
 }
 
-export async function parseXlsx(pkg: OfficePackage): Promise<XlsxDocument> {
+export interface ParseXlsxOptions {
+  /** Load-time evaluator resource caps (large-source admission, design note §4.3). Unset = today's behaviour. */
+  evaluation?: Pick<WorkbookEvaluationOptions, 'maxArrayCells' | 'maxArraySide' | 'maxMaterializedCells'>
+}
+
+export async function parseXlsx(pkg: OfficePackage, options: ParseXlsxOptions = {}): Promise<XlsxDocument> {
   const workbook = await pkg.xml('xl/workbook.xml')
   if (!workbook) throw new Error('xl/workbook.xml missing — not a valid xlsx?')
   const rels = await pkg.xml('xl/_rels/workbook.xml.rels')
@@ -347,7 +352,7 @@ export async function parseXlsx(pkg: OfficePackage): Promise<XlsxDocument> {
     semantics,
   }
   initializeSavedSpills(doc)
-  evaluateWorkbookFormulas(doc, { fullCalcOnLoad })
+  evaluateWorkbookFormulas(doc, { fullCalcOnLoad, ...options.evaluation })
   return doc
 }
 
