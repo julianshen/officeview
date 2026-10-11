@@ -126,6 +126,7 @@ export class MemoryPool {
   }
   get closed(): boolean { return this.isClosed }
   get totalBytes(): number { return this.retained + this.transient }
+  get transientBytes(): number { return this.transient }
 
   /** Admits a retained entry. Without `force` it first evicts other entries so
    * the total stays under the hard limit and returns null when it cannot; with
@@ -186,6 +187,14 @@ export class MemoryPool {
   /** Evicts until `bytes` more fit under the hard limit; false when they cannot. */
   makeRoom(bytes: number): boolean {
     return !this.isClosed && validBytes(bytes) && this.fit(bytes)
+  }
+  /** Memory pressure / pre-admission: evicts evictable entries (tier order, LRU)
+   * until the total is at most `targetBytes` or nothing evictable is left.
+   * Returns the bytes evicted. */
+  trim(targetBytes: number): number {
+    const before = this.evictedBytes
+    this.evictUntil(() => this.totalBytes <= targetBytes, null)
+    return this.evictedBytes - before
   }
   /** The active owner (sheet): its view entries are never evicted. */
   protect(owner: string | null): void { this.protectedOwner = owner }
