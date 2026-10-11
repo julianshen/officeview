@@ -495,6 +495,22 @@ describe('S4.1 review findings (codex)', () => {
     expect(prefix[0].rows.rows.length).toBe(1)
   })
 
+  it('copies the gesture part on commit like the prefix, leaving the caller object unfrozen', async () => {
+    const doc = objectDoc([{ sheetId: 'A', rows: column([3, 1, 2, 4, 5]) }])
+    const kernel = new ViewerKernel({ parse: async () => doc }, quiet)
+    completed(await run(kernel, { kind: 'open', requestId: rid(), docId: 'doc', source: { kind: 'object', document: doc }, profile: 'D' }))
+    const part = { rows: { kind: 'intervals' as const, intervals: [{ r0: 2, r1: 4 }] }, cols: [{ c0: 0, c1: 0 }] }
+    const selection = { active: { row: 4, col: 0 }, anchor: { row: 2, col: 0 }, ranges: [part], gesture: { kind: 'cells' as const, anchor: { row: 2, col: 0 }, prefix: [], part } }
+    const session = kernel.session('doc')!
+    const committed = await session.commitView('A', { ...draftOf(session, 'A'), selection })
+    expect(committed.selection.gesture!.part).toEqual(part)
+    expect(committed.selection.gesture!.part).not.toBe(part)
+    expect(Object.isFrozen(part)).toBe(false)
+    expect(Object.isFrozen(part.cols)).toBe(false)
+    const delta = deltaOf(await run(kernel, { kind: 'sort', requestId: rid(), owner: committed.identity, spec: sortSpec(2, 0) }))
+    expect(structuredClone(delta.selection).gesture!.part).toEqual(part)
+  })
+
   it('round-trips a real compact gesture whose part shares ranges row buffers through worker commit/delta', async () => {
     const doc = objectDoc([{ sheetId: 'A', rows: column([3, 1, 2, 4, 5]) }])
     const kernel = new ViewerKernel({ parse: async () => doc }, quiet)
