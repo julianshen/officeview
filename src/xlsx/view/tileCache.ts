@@ -374,3 +374,55 @@ export class TileCache {
     closeSurface(record.surface)
   }
 }
+
+/** Inclusive tile indices of the device-pixel tile grid. */
+export interface TileIndexRange { c0: number; c1: number; r0: number; r1: number }
+export interface TileGridInput {
+  /** Float64 logical CSS origin of the pane (ScrollWindow.logicalOrigin). */
+  origin: { x: number; y: number }
+  /** Pane size in viewport CSS px. */
+  viewport: { width: number; height: number }
+  zoom: number
+  dpr: number
+  /** Full logical sheet extent; tiles wholly past it are never requested. */
+  extent: { width: number; height: number }
+}
+/** Bounded adjacent prefetch ring (spec §11.1 capped overscan; §12.4 arithmetic). */
+export const TILE_PREFETCH_RING = 1
+
+/** Tiles intersecting the pane, optionally grown by `ring` tiles per side. The
+ * grid lives in global device pixels (logical x zoom x DPR) computed in Float64,
+ * so a tile index is exact at the last row of the full domain; every tile's own
+ * paint stays tile-local (renderSheetViewport subtracts the Float64 origin). */
+export function tileRangeFor(input: TileGridInput, ring = 0): TileIndexRange {
+  const scale = input.zoom * input.dpr
+  if (!(scale > 0) || !Number.isFinite(scale) || !Number.isSafeInteger(ring) || ring < 0) throw new RangeError('Invalid tile grid')
+  const axis = (origin: number, viewportCss: number, extentCss: number) => {
+    const start = origin * scale, end = start + viewportCss * input.dpr
+    const last = Math.max(0, Math.ceil((extentCss * scale) / TILE_DEVICE_PX) - 1)
+    const lo = Math.max(0, Math.floor(start / TILE_DEVICE_PX) - ring)
+    const hi = Math.min(last, Math.max(lo, Math.ceil(end / TILE_DEVICE_PX) - 1 + ring))
+    return [Math.min(lo, last), hi] as const
+  }
+  const [c0, c1] = axis(input.origin.x, input.viewport.width, input.extent.width)
+  const [r0, r1] = axis(input.origin.y, input.viewport.height, input.extent.height)
+  return { c0, c1, r0, r1 }
+}
+/** Logical CSS box of one tile; the grid is anchored at logical (0,0). */
+export function tileLogicalBox(col: number, row: number, zoom: number, dpr: number): { x: number; y: number; width: number; height: number } {
+  const scale = zoom * dpr
+  return { x: (col * TILE_DEVICE_PX) / scale, y: (row * TILE_DEVICE_PX) / scale, width: TILE_DEVICE_PX / scale, height: TILE_DEVICE_PX / scale }
+}
+/** Ring tiles of `outer` that are not in `inner`, nearest rows/columns first. */
+export function prefetchTiles(inner: TileIndexRange, outer: TileIndexRange): Array<{ col: number; row: number }> {
+  const out: Array<{ col: number; row: number; d: number }> = []
+  for (let row = outer.r0; row <= outer.r1; row++) {
+    for (let col = outer.c0; col <= outer.c1; col++) {
+      if (col >= inner.c0 && col <= inner.c1 && row >= inner.r0 && row <= inner.r1) continue
+      const dc = col < inner.c0 ? inner.c0 - col : col > inner.c1 ? col - inner.c1 : 0
+      const dr = row < inner.r0 ? inner.r0 - row : row > inner.r1 ? row - inner.r1 : 0
+      out.push({ col, row, d: dc + dr })
+    }
+  }
+  return out.sort((a, b) => a.d - b.d).map(({ col, row }) => ({ col, row }))
+}

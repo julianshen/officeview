@@ -9,7 +9,7 @@ import { collectDocImages, createMeasurer, layoutDocx, renderPages } from '../do
 import { fontFamilyCss as fontFamilyCssDocx } from '../docx/styles'
 import { decodeImageAsset, releaseDecodedImage, type ImageCandidates, type ImageDecodeFn } from '../core/images'
 import { normalizeWatermark, paintWatermark, type ResolvedWatermark, type WatermarkOptions } from '../core/watermark'
-import { computeMetrics, renderSheet, type StaticExportLimit } from '../xlsx/render'
+import { computeMetrics, renderSheet, type RenderSheetAssets, type StaticExportLimit } from '../xlsx/render'
 import { renderSlide, slideMetrics } from '../pptx/render'
 import type { DocxDocument } from '../docx/types'
 import type { ContentImageAsset, DrawingContent, DrawingContentShape } from '../drawing/content'
@@ -36,7 +36,8 @@ function withLease(pages: Paintable[], dispose: () => void = () => {}, fontDiagn
   } })
 }
 /** Each decoded bitmap is closed once, even when shared by several assets. */
-function releaseDecoded(decoded: Array<CanvasImageSource | undefined>): void {
+/** @internal */
+export function releaseDecoded(decoded: Array<CanvasImageSource | undefined>): void {
   for (const image of new Set(decoded)) releaseDecodedImage(image)
 }
 export interface Paintable {
@@ -47,6 +48,18 @@ export interface Paintable {
    * static bitmap cannot hold the sheet, so `paint` draws a notice instead of a
    * partial grid that would look complete. */
   refusal?: readonly StaticExportLimit[]
+}
+
+/** @internal One static sheet unit (S2.3 budgeted path): the whole-sheet raster,
+ * or a typed `large-export-limit` refusal unit. Shared by getPaintables and the
+ * sheet viewer's print preparation, which supplies admitted image assets. */
+export function sheetPaintable(sheet: XlsxSheet, assets: RenderSheetAssets, watermark?: ResolvedWatermark): Paintable {
+  const m = computeMetrics(sheet)
+  if (m.exportLimits?.length) return refusalPaintable(sheet, m.exportLimits, watermark)
+  return {
+    spec: { widthPx: m.widthPx, heightPx: m.heightPx },
+    paint: (ctx) => renderSheet(sheet, ctx, m, watermark, assets),
+  }
 }
 
 const REFUSAL_SPEC: PageSpec = { widthPx: 480, heightPx: 96 }
@@ -134,7 +147,8 @@ function bytesEqual(a: Uint8Array | undefined, b: Uint8Array | undefined): boole
  * once. The selected representation/reason is propagated to every alias's
  * selection record so coverage stays consistent.
  */
-async function decodeImageAssets(assets: Array<ImageCandidates & { drawing?: unknown }>, decode?: ImageDecodeFn): Promise<Array<CanvasImageSource | undefined>> {
+/** @internal Shared with the interactive sheet asset lease (components/xlsx/sheetAssets). */
+export async function decodeImageAssets(assets: Array<ImageCandidates & { drawing?: unknown }>, decode?: ImageDecodeFn): Promise<Array<CanvasImageSource | undefined>> {
   // Complete-pair identity: raster bytes + SVG bytes + SVG verdict state +
   // primary-SVG verdict state + fallback availability. Missing/external
   // candidates (byte-less) and ordinary rasters therefore never collapse.
@@ -175,7 +189,8 @@ async function decodeImageAssets(assets: Array<ImageCandidates & { drawing?: unk
 interface ContentCarrier { content?: DrawingContent<unknown, unknown>; children?: ContentCarrier[] }
 /** Append cached pictures after indexed assets so ordinary scene image indices
  * stay stable. Identity deduplication also bounds handwritten cyclic models. */
-function collectCachedPictures(nodes: ContentCarrier[]): ContentImageAsset[] {
+/** @internal */
+export function collectCachedPictures(nodes: ContentCarrier[]): ContentImageAsset[] {
   const images: ContentImageAsset[] = [], seenImages = new Set<ContentImageAsset>()
   const seenNodes = new Set<ContentCarrier>(), seenShapes = new Set<DrawingContentShape<unknown>>()
   const shapes = (items: DrawingContentShape<unknown>[]) => {
@@ -248,14 +263,9 @@ export function getPaintables(
         const indexed = doc.images ?? []
         decoded = await decodeImageAssets([...indexed, ...cached], options?.decodeImage)
         const decodedByObject = new Map(cached.map((image, index) => [image, decoded[indexed.length + index]]))
-        return withLease(doc.sheets.map((sheet): Paintable => {
-          const m = computeMetrics(sheet)
-          if (m.exportLimits?.length) return refusalPaintable(sheet, m.exportLimits, watermark)
-          return {
-            spec: { widthPx: m.widthPx, heightPx: m.heightPx },
-            paint: (ctx) => renderSheet(sheet, ctx, m, watermark, { images: decoded, imageFor: image => decodedByObject.get(image), resolveFont: withFallbackFonts(lease.resolve, options?.fallbackFonts) }),
-          }
-        }), lease.dispose, lease.diagnostics, decoded)
+        return withLease(doc.sheets.map((sheet): Paintable =>
+          sheetPaintable(sheet, { images: decoded, imageFor: image => decodedByObject.get(image), resolveFont: withFallbackFonts(lease.resolve, options?.fallbackFonts) }, watermark),
+        ), lease.dispose, lease.diagnostics, decoded)
       } catch (error) { releaseDecoded(decoded); lease.dispose(); throw error }
     })
   }
