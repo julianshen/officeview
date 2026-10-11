@@ -112,10 +112,11 @@ Every package is implemented on its own branch, reviewed by at least one agent f
 | S6.2 virtual owned grid semantics, headers, event isolation (`GridSemantics.tsx`, `GridHeaders.tsx`, OfficeDoc guards) | merged; Ctrl/Cmd+wheel over any viewer now actually blocks browser page zoom (behaviour change, flagged) |
 | S5.3 global workbook find engine (`src/xlsx/view/find.ts`) | merged; OfficeDoc wiring and worker search command wait for S5.2 |
 | S1.2 sparse pages, external page storage, small/large adapter parity (`sourcePages.ts`, `pagedImport.ts`, `pagedSource.ts`, `overviewIndex.ts`, `viewerLargeSource.ts`) | merged; worker routes admitted-paged blobs to paged sources; exported entry keeps compatibility mode until the viewer is enabled |
-| S9.1 atomic filter dropdown and sort dialog (`FilterDropdown.tsx`, `SortDialog.tsx`, `controlsClient.ts`, header sort/funnel buttons) | merged; mounting into the interactive viewer is done with S9.2 |
+| S9.1 atomic filter dropdown and sort dialog (`FilterDropdown.tsx`, `SortDialog.tsx`, `controlsClient.ts`, header sort/funnel buttons) | merged; mounted in the interactive viewer by S9.2 |
 | S1.3 authoritative formula/cache/error/format value bridge (`values.ts`, `value-policy.ts`) | merged |
-| S5.2 canvas tiles, overlays and OfficeDoc integration (`InteractiveSheetDoc.tsx` lazy chunk, `sheetAssets.ts`) | merged behind the `interactiveSheets` prop (default off; eager +0.21 KB gz); seams left for S9.2 (grid copy, mounting the S9.1 controls), S10 (browser smoke, mouse-drag selection) and worker viewport/search commands |
-| S4.4–S4.5, S8.4, S9.2, S10 (physical-device receipts skipped for now by user decision), S11/S12 status, S13 | not started |
+| S5.2 canvas tiles, overlays and OfficeDoc integration (`InteractiveSheetDoc.tsx` lazy chunk, `sheetAssets.ts`) | merged behind the `interactiveSheets` prop (default off; eager +0.21 KB gz); seams closed by S9.2 (grid copy, S9.1 controls) and left for S5.4 (worker-backed paged viewer), S10 (browser smoke, mouse-drag selection) and worker viewport/search commands |
+| S9.2 copy in displayed order and budgeted static print (`copy.ts`, `viewerControlsClient.ts`, clipboard/print policy) | merged (codex implementation; opencode reviews over two rounds); copy works on resident sheets — paged sheets wait for S5.4 |
+| S5.4, S8.4, S10 (physical-device receipts skipped for now by user decision), S11/S12 status, S13 | not started |
 
 ## S0 — Freeze contracts, counterexamples and fixture/harness infrastructure
 
@@ -422,6 +423,19 @@ expect(session.publishWorkbookIndex(staleA)).toBe(false)
 - [ ] Run focused command and browser smoke for far-corner find; expected result order/geometry matches displayed view, offscreen result appears after navigation and no zoom reset or old workbook index overwrite.
 - [ ] Deliver workbook find PR with scan/record allocation counts and DOCX/PPTX search parity.
 
+
+### S5.4 Worker-backed interactive viewer for paged workbooks
+
+> Added 2026-10-12 after the S9.2 review found that no production caller mounts `InteractiveSheetDoc` with a worker-backed source: with `interactiveSheets` on, paged (large) workbooks still fall back to compatibility mode, so viewport, find, filter/sort, selection and copy are proven only on resident documents. Required for the 2^34-cell capacity goal; must land before S10.
+
+**Files:** modify `src/components/OfficeDoc.tsx`, `src/components/OfficeFile.tsx`, `src/components/xlsx/InteractiveSheetDoc.tsx`, `src/worker/viewer{Protocol,Session,Kernel,Client,LargeSource}.ts`; test `tests/xlsx-viewer-paged-viewer.test.tsx`, extend `tests/xlsx-viewer-paged-worker.test.ts`.
+
+- [ ] RED: with `interactiveSheets` on, a workbook admitted as `paged` mounts the interactive viewer (not compatibility mode); the saved-values notice and admission notices still render once.
+- [ ] RED: viewport records, cell reads, find paging, filter/sort commit and copy all go through bounded worker commands with ownership/generation checks; no full-sheet transfer to the main thread; unknown pages show pending, never blank; cancellation and source replacement discard late replies.
+- [ ] RED: a far-corner cell (row 1,048,576, column XFD) in a paged fixture is reachable by Go To, find and copy, and the separator lower bound refuses a full-sheet copy before any worker cell read.
+- [ ] GREEN: worker viewport/search/value/copy-read commands on the resident session; a main-thread source adapter implementing the `InteractiveSheetDoc` source contract over `viewerClient`; OfficeDoc/OfficeFile route paged admissions to it when the flag is on. Compatibility mode stays the default when the flag is off.
+- [ ] Gates: focused suites, whole vitest, build (eager growth ≤ +0.4 KB gz, new code in lazy chunks), golden compare unchanged.
+
 ## S6 — Active sheet, source-identity selection, virtual headers and accessibility
 
 ### S6.1 Navigator and selection state machine
@@ -578,16 +592,18 @@ expect(wide.contains({ row: 2, col: 0 })).toBe(false)
 
 ### S9.2 Copy in displayed view order and budgeted static print
 
+> **Status (2026-10-12):** merged (codex implementation; opencode reviews over two rounds, every finding fixed, final verdict APPROVE). Copy projects source selection into display order with the 8 MiB raw UTF-16 ceiling, the separator lower bound refuses before reads, and allowCopy/allowPrint are enforced on every path. The interactive viewer still mounts only on resident documents, so copy at paged scale is delivered by S5.4. Real clipboard/print receipts belong to S10.
+
 **Files:** create `src/xlsx/view/copy.ts`; modify `src/core/clipboard.ts`, `src/components/OfficeDoc.tsx`, `src/render/paint.ts` budget integration; test `tests/xlsx-viewer-copy.test.ts`, `tests/xlsx-viewer-policy.test.tsx`.
 
-- [ ] RED: disjoint source membership after Shift/re-sort, filtered hidden rows, multiple selected ranges/columns, far-corner cells, formatted values, literal errors, tabs/newlines and surrogate strings. Clipboard limit is 8MiB of raw UTF-16 code units×2 bytes: a 5MiB ASCII string is 10MiB UTF-16 and must reject; lone surrogates count their original code units without replacement. Copy >8MiB must reject the entire operation, never silently truncate; denied allowCopy/allowPrint does not access clipboard/print.
-- [ ] RED: a one-million-row single-column short-value selection fitting the complete byte/session budget is accepted without an arbitrary 100k-cell cap. Selecting the fully visible/default-unhidden full worksheet fails its separator-byte lower bound before any source-cell reads; assert bounded metadata/count queries and zero selected-cell enumeration. Selecting the full logical sheet with only one visible row and column may fit and is accepted; preflight always uses actual visible counts.
-- [ ] Run `bunx vitest run tests/xlsx-viewer-copy.test.ts tests/xlsx-viewer-policy.test.tsx tests/clipboard.test.ts tests/officeview-protection.test.tsx`; expected source-order copy/partial truncation/policy violation fails.
-- [ ] GREEN: project selected source membership into current visible display order, query authoritative values in bounded batches without allocating the selected row×column product, dedupe overlapping membership, assemble bounded TSV/text with declared escaping, and write once only after full budget check. Preserve source selection after later sorts; unknown pages keep copy pending/cancellable, not blank. Preflight byte accounting uses the final clipboard string’s raw UTF-16 code-unit length×2, including delimiters/escaping, under the 8MiB ceiling. Preserve lone surrogates; do not budget via UTF-8 encoding or replacement.
-- [ ] Implement the rectangular separator lower bound `2 * (R * (C - 1) + (R - 1))` bytes from compact visible-membership counts, plus conservative disjoint-block bounds. Refuse provably oversized output before reads, then enforce exact byte/session reservations during bounded worker serialization; capacity alone never creates a lower fixed row-count limit.
-- [ ] Enforce existing copy/print permissions across keyboard, UI and programmatic path. Static print/export reports selected extent and budget; if full output exceeds admitted pages/pixels/memory/time, refuse with status/diagnostic or require an explicit bounded selection rather than outputting an unlabeled subset.
+- [x] RED: disjoint source membership after Shift/re-sort, filtered hidden rows, multiple selected ranges/columns, far-corner cells, formatted values, literal errors, tabs/newlines and surrogate strings. Clipboard limit is 8MiB of raw UTF-16 code units×2 bytes: a 5MiB ASCII string is 10MiB UTF-16 and must reject; lone surrogates count their original code units without replacement. Copy >8MiB must reject the entire operation, never silently truncate; denied allowCopy/allowPrint does not access clipboard/print.
+- [x] RED: a one-million-row single-column short-value selection fitting the complete byte/session budget is accepted without an arbitrary 100k-cell cap. Selecting the fully visible/default-unhidden full worksheet fails its separator-byte lower bound before any source-cell reads; assert bounded metadata/count queries and zero selected-cell enumeration. Selecting the full logical sheet with only one visible row and column may fit and is accepted; preflight always uses actual visible counts.
+- [x] Run `bunx vitest run tests/xlsx-viewer-copy.test.ts tests/xlsx-viewer-policy.test.tsx tests/clipboard.test.ts tests/officeview-protection.test.tsx`; expected source-order copy/partial truncation/policy violation fails.
+- [x] GREEN: project selected source membership into current visible display order, query authoritative values in bounded batches without allocating the selected row×column product, dedupe overlapping membership, assemble bounded TSV/text with declared escaping, and write once only after full budget check. Preserve source selection after later sorts; unknown pages keep copy pending/cancellable, not blank. Preflight byte accounting uses the final clipboard string’s raw UTF-16 code-unit length×2, including delimiters/escaping, under the 8MiB ceiling. Preserve lone surrogates; do not budget via UTF-8 encoding or replacement.
+- [x] Implement the rectangular separator lower bound `2 * (R * (C - 1) + (R - 1))` bytes from compact visible-membership counts, plus conservative disjoint-block bounds. Refuse provably oversized output before reads, then enforce exact byte/session reservations during bounded worker serialization; capacity alone never creates a lower fixed row-count limit.
+- [x] Enforce existing copy/print permissions across keyboard, UI and programmatic path. Static print/export reports selected extent and budget; if full output exceeds admitted pages/pixels/memory/time, refuse with status/diagnostic or require an explicit bounded selection rather than outputting an unlabeled subset.
 - [ ] Run focused tests and browser clipboard/print mock scenarios; expected whole-operation budget refusal, correct visible order and protected content blocked.
-- [ ] Deliver policy/copy PR with readable output examples and no changes to source content.
+- [x] Deliver policy/copy PR with readable output examples and no changes to source content.
 
 ## S10 — Mandatory full-scale hardening and controlled release performance
 
