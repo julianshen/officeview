@@ -90,3 +90,43 @@ describe('resident worker opens paged sources (S1.2)', () => {
   })
 })
 void colName; void repeat
+
+import { openSpreadsheetSource } from '../src/components/largeSource'
+import { importLimitsFor } from '../src/xlsx/storage/importSession'
+import { createPagedWorkbookSource } from '../src/xlsx/view/pagedSource'
+
+describe('internal spreadsheet entry: paged decisions open paged sessions (the TODO(S1.2) flip)', () => {
+  const ctx = (limits = PAGED) => ({ signal: new AbortController().signal, profile: 'D' as const, limits: importLimitsFor('D', limits), options: { limits } })
+
+  it('opens a paged session for a paged admission without reading the whole blob', async () => {
+    const blob = new Blob([xlsxBytes({ sheetData: rowsXml([3, 1, 4]) }) as BlobPart])
+    const whole = vi.spyOn(blob, 'arrayBuffer')
+    const opened = await openSpreadsheetSource(blob, ctx())
+    expect(opened.kind).toBe('paged')
+    if (opened.kind !== 'paged') return
+    expect(whole).not.toHaveBeenCalled()
+    expect(await opened.session.done).toMatchObject({ kind: 'complete' })
+    const sheet = createPagedWorkbookSource(opened.session).store('1')
+    expect(await sheet.readCell({ row: 2, col: 0 }, { signal: new AbortController().signal, stamp: { ...sheet.stamp } })).toMatchObject({ kind: 'cell', cell: { value: 4 } })
+    await opened.session.release()
+  })
+
+  it('keeps the compatibility path, with its notice, for a file the paged reader cannot serve yet', async () => {
+    const blob = new Blob([xlsxBytes({ sheetData: '<row><c r="A1"><v>1</v></c></row><row><c r="A2"><v>2</v></c></row>' }) as BlobPart])
+    const opened = await openSpreadsheetSource(blob, ctx())
+    expect(opened.kind).toBe('document')
+    if (opened.kind !== 'document') return
+    expect(opened.document.diagnostics?.map(d => d.message)).toContain('Large file — opened in compatibility mode')
+    expect(opened.document.sheets[0].rows[0].cells[0].value).toBe(1)
+  })
+
+  it('object admissions load the document unchanged', async () => {
+    const opened = await openSpreadsheetSource(new Blob([xlsxBytes({ sheetData: rowsXml([7]) }) as BlobPart]), ctx({} as typeof PAGED))
+    expect(opened.kind).toBe('document')
+  })
+
+  it('a paged admission with no page storage is a typed refusal, never an in-memory fallback', async () => {
+    const limits = { ...PAGED, spool: { memoryLimitBytes: 16 } }
+    await expect(openSpreadsheetSource(new Blob([xlsxBytes({ sheetData: rowsXml([1, 2]) }) as BlobPart]), ctx(limits), {})).rejects.toMatchObject({ name: 'ImportRefusal', code: 'storage-error' })
+  })
+})

@@ -15,6 +15,8 @@ import { classifyPackage, sniffPackage, type OfficeKind } from '../core/package-
 import { browserStorageEnv, openSpool, sweepLeftoverSpools, type SpooledSource } from '../core/spool'
 import { admitSpreadsheet, evaluationHitCap, inventoryLimits, type CompatibilityKind, type SpreadsheetAdmission } from '../xlsx/storage/admission'
 import { ImportRefusal } from '../xlsx/storage/importSession'
+import { firstPageOrOutcome, openImportSession, type PagedImportSession } from '../xlsx/storage/pagedImport'
+import type { PageStorageEnv } from '../xlsx/storage/sourcePages'
 import { NOTICE_ALTERNATE_CONTENT, NOTICE_CACHED_VALUES, NOTICE_COMPATIBILITY, NOTICE_DAMAGED, NOTICE_STRICT_FALLBACK, type AnyDoc, type LoadCtx } from './loadOfficeSource'
 
 type Ctx = LoadCtx
@@ -93,8 +95,10 @@ export async function parseSpreadsheet(pkg: OfficePackage, bytes: Uint8Array, ct
     case 'refuse':
       throw refusalFrom(admission)
     case 'paged':
-      // TODO(S1.2): switch to paged. Until the paged importer exists, a paged
-      // decision opens through today's legacy object path (decision A).
+      // The exported entry returns an XlsxDocument, which no paged session can
+      // be; paged sessions open through openSpreadsheetSource (internal entry,
+      // used by the resident viewer) and here keep the compatibility parse with
+      // its notice (decision A) until a paged consumer renders them.
       return compatibilityParse(pkg, 'large', admission.reason, ctx)
     case 'legacy-fallback':
       return compatibilityParse(pkg, admission.kind, admission.reason, ctx)
@@ -230,4 +234,44 @@ function concat(chunks: Uint8Array[], total: number): Uint8Array {
   let at = 0
   for (const c of chunks) { out.set(c, at); at += c.length }
   return out
+}
+
+/** Internal entry result (design note §4.5 item 4). */
+export type SpreadsheetSource =
+  | { kind: 'paged'; session: PagedImportSession }
+  | { kind: 'document'; document: XlsxDocument }
+
+/**
+ * Internal seekable-spreadsheet entry: admission, then a paged import session
+ * for a paged decision (no whole-file copy). The object path, and a file the
+ * paged reader refuses before any page landed, load as today's document; the
+ * latter carries the compatibility notice. Storage/quota refusals are typed
+ * ImportRefusals: no unbounded in-memory fallback.
+ */
+export async function openSpreadsheetSource(blob: Blob, ctx: Ctx, storage?: PageStorageEnv): Promise<SpreadsheetSource> {
+  const admission = await admitSpreadsheet(blobRangeSource(blob), ctx.profile, ctx.limits, ctx.signal)
+  throwIfAborted(ctx.signal)
+  const legacy = async (decided: SpreadsheetAdmission): Promise<SpreadsheetSource> => {
+    const bytes = await readWhole(blob, ctx)
+    const { OfficePackage } = await import('../core/zip')
+    return { kind: 'document', document: await parseSpreadsheet(await OfficePackage.load(bytes), bytes, ctx, decided) }
+  }
+  if (admission.mode !== 'paged') return legacy(admission)
+  let session: PagedImportSession
+  try {
+    session = await openImportSession({ kind: 'blob', blob }, { docId: `doc-${Date.now().toString(36)}`, profile: ctx.profile, signal: ctx.signal, limits: ctx.options.limits, storage })
+  } catch (error) {
+    if (isPackageError(error) && (error.code === 'storage-error' || error.code === 'quota' || error.code === 'cancelled')) {
+      if (error.code === 'cancelled') throw error
+      throw new ImportRefusal(error.code, 'limit', `This spreadsheet needs browser storage to open: ${error.message}`)
+    }
+    return legacy(admission)
+  }
+  const early = await firstPageOrOutcome(session)
+  if (early && early.kind === 'incomplete' && early.failure.code === 'unsupported' && session.workbook.store.stats.committed === 0) {
+    await session.release()
+    // compatibilityParse adds the 'opened in compatibility mode' notice.
+    return legacy({ mode: 'paged', reason: early.failure.message })
+  }
+  return { kind: 'paged', session }
 }

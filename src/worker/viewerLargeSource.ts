@@ -9,7 +9,7 @@ import type { ProfileId, WorkerDiagnostic } from '../xlsx/view/contracts'
 import { blobRangeSource } from '../core/zip-stream'
 import { admitSpreadsheet } from '../xlsx/storage/admission'
 import { importLimitsFor, type ImportLimitOverrides } from '../xlsx/storage/importSession'
-import { openImportSession } from '../xlsx/storage/pagedImport'
+import { firstPageOrOutcome, openImportSession } from '../xlsx/storage/pagedImport'
 import type { PageStorageEnv } from '../xlsx/storage/sourcePages'
 import { createPagedWorkbookSource } from '../xlsx/view/pagedSource'
 import type { WorkbookSource } from './viewerSession'
@@ -45,7 +45,7 @@ export async function openLargeBlob(blob: Blob, docId: string, options: LargeOpe
   }
   // A file whose first sheet the paged reader refuses before any page landed
   // (e.g. rows without numbers) still opens through the compatibility path.
-  const early = await Promise.race([session.done, session.workbook.changed().then(() => undefined)])
+  const early = await firstPageOrOutcome(session)
   if (early && early.kind === 'incomplete' && early.failure.code === 'unsupported' && session.workbook.store.stats.committed === 0) {
     await session.release()
     return { kind: 'object', diagnostics: [compat(early.failure)] }

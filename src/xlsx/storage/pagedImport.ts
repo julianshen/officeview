@@ -421,3 +421,13 @@ async function resolveTables(sheet: PagedSheet, targets: RelTargets | undefined,
   }
   return complete ? resolved : undefined
 }
+
+/** Resolves undefined once a page is committed, or with the outcome if the import ends first. */
+export async function firstPageOrOutcome(session: PagedImportSession): Promise<ImportOutcome | undefined> {
+  for (;;) {
+    if (session.workbook.store.stats.committed > 0) return undefined
+    if (session.completeness !== 'loading') return session.done
+    const settled = await Promise.race([session.done, session.workbook.changed().then(() => undefined)])
+    if (settled) return settled
+  }
+}
