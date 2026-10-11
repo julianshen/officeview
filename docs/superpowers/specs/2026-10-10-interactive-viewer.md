@@ -728,6 +728,7 @@ Current target browsers must be tested directly; support is not implied by API p
 10. Large/paged documents (`cached` value policy, §4.4) never recalculate formulas: sort/filter/search/copy use the file's cached values, and formula cells without a cache are unavailable and block only operations whose key/value domain contains them. Small documents keep the existing `engine` behavior.
 11. Text conditions on text/mixed columns evaluate the formatted display text of numeric/date/boolean cells (so `contains "2"` matches 20); Excel's behavior for mixed columns is undocumented and it offers no Text Filters on pure number columns.
 12. Interactive sheet mode uses an absolute 25%–400% zoom with scroll, not the fit-to-width model used for page documents (§5.5).
+14. In sheet mode, unclipped text overflowing from a cell outside the viewport is painted only while every column between that cell and the viewport projects to at least four device pixels (§11.1); the static renderer and Excel let it overflow across narrower columns.
 
 Surface actionable differences in dialog/status/help copy and retain code comments/tests; do not burden ordinary navigation with implementation explanations.
 
