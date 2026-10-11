@@ -178,3 +178,20 @@ describe('workbook find on F1 without painting or a full bitmap', () => {
     expect(geometry.rects).toEqual([{ x: 194 + 70, y: 100, width: 20, height: 20 }])
   })
 })
+
+describe('review: lowercase offset mapping (codex 7)', () => {
+  const one = async (text: string, query: string) => {
+    const d = workbookOf([{ sheetId: 'A', cells: [{ row: 0, col: 0, value: text }] }])
+    const [hit] = await drain(new WorkbookFind(findInputOf(d).input, ci(query)))
+    return hit && [hit.start, hit.end]
+  }
+  it('covers the originating character of a lowercase expansion', async () => {
+    expect(await one('İ', 'i')).toEqual([0, 1])
+    expect(await one('xİy', 'i̇')).toEqual([1, 2])
+  })
+  it('keeps UTF-16 positions inside a surrogate pair after an expansion', async () => {
+    expect(await one('İ😀', '\ud83d')).toEqual([1, 2])
+    expect(await one('İ😀', '\ude00')).toEqual([2, 3])
+    expect(await one('İ😀', '😀')).toEqual([1, 3])
+  })
+})

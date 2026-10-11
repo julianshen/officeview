@@ -121,22 +121,26 @@ export function findCacheKey(owner: WorkbookOwner, query: SearchQuery): string {
   return JSON.stringify([workbookFindKey(owner), query.text, query.caseSensitive, query.sheetIds ?? null])
 }
 
-/** Lowercased text plus, only when lowering changed the length, the original
- * offset of every lowered code unit (so highlights use raw UTF-16 offsets). */
-function lowered(text: string): { text: string; map?: Uint32Array } {
+/** Lowercased text plus, only when lowering changed the length, the raw
+ * [start,end) of every lowered code unit. A code point that lowercases to the
+ * same number of units maps unit by unit, so surrogate halves keep their own
+ * positions; an expansion (İ → i̇) maps each produced unit to the whole
+ * originating code point, so a match inside it still covers that character. */
+function lowered(text: string): { text: string; from?: Uint32Array; to?: Uint32Array } {
   const lower = text.toLowerCase()
   if (lower.length === text.length) return { text: lower }
-  const map = new Uint32Array(lower.length + 1)
+  const from = new Uint32Array(lower.length), to = new Uint32Array(lower.length)
   let out = 0
   for (let at = 0; at < text.length;) {
-    const point = text.codePointAt(at)!
-    const width = point > 0xffff ? 2 : 1
+    const width = text.codePointAt(at)! > 0xffff ? 2 : 1
     const piece = text.slice(at, at + width).toLowerCase()
-    for (let k = 0; k < piece.length; k++) map[out++] = at
+    for (let k = 0; k < piece.length; k++, out++) {
+      if (piece.length === width) { from[out] = at + k; to[out] = at + k + 1 }
+      else { from[out] = at; to[out] = at + width }
+    }
     at += width
   }
-  map[out] = text.length
-  return { text: lower, map }
+  return { text: lower, from, to }
 }
 function firstMatch(text: string, needle: string, caseSensitive: boolean): { start: number; end: number } | null {
   if (caseSensitive) {
@@ -146,7 +150,7 @@ function firstMatch(text: string, needle: string, caseSensitive: boolean): { sta
   const hay = lowered(text)
   const at = hay.text.indexOf(needle)
   if (at < 0) return null
-  return hay.map ? { start: hay.map[at], end: hay.map[at + needle.length] } : { start: at, end: at + needle.length }
+  return hay.from ? { start: hay.from[at], end: hay.to![at + needle.length - 1] } : { start: at, end: at + needle.length }
 }
 function bandOf(bands: readonly RowPermutationBand[], row: number): RowPermutationBand | undefined {
   let lo = 0, hi = bands.length
