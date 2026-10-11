@@ -84,8 +84,9 @@ describe('MemoryPool: one accounted document-wide budget', () => {
 })
 
 /** Fake ImageBitmap: jsdom has none; close() is what eviction must call. */
-function surface(width = 512, height = 512): TileSurface & { close: ReturnType<typeof vi.fn> } {
-  return { width, height, close: vi.fn() }
+function surface(width = 512, height = 512) {
+  const close = vi.fn<() => void>()
+  return { width, height, close } satisfies TileSurface
 }
 const tile = (overrides: Partial<TileKey> = {}): TileKey =>
   ({ identity: identity(), backend: 'canvas2d', zoom: 1, dpr: 2, col: 0, row: 0, ...overrides })
