@@ -222,6 +222,22 @@ describe('selection boundary regressions', () => {
     expect(shifted.contains({ row: 2999 * 3 + 2, col: 2999 * 5 })).toBe(true)
     expect(shifted.contains({ row: 2999 * 3 + 2, col: 2999 * 5 + 1 })).toBe(false)
   }, 120000)
+  it('charges the stored gesture prefix overlap against the per-selection byte bound', () => {
+    const p = fixtureProjection([0, 1, 2, 3])
+    // Nine distinct ~128 KiB row masks hidden under one Shift part: ranges shrink
+    // to that single part, but the stored overlap still exceeds 1 MiB.
+    const prefix = Array.from({ length: 9 }, (_, i) => {
+      const words = new Uint32Array(MAX_ROWS / 32).fill(0x55555555)
+      words[i] = 0x55555554
+      let count = 0
+      for (const word of words) for (let bits = word; bits; bits &= bits - 1) count++
+      return { rows: { kind: 'bitset' as const, space: 'source' as const, r0: 0, r1: MAX_ROWS - 2, words, count }, cols: [{ c0: i, c1: i }] }
+    })
+    const state = { active: { row: 0, col: 0 }, anchor: { row: 0, col: 0 }, ranges: [], gesture: { kind: 'cells' as const, anchor: { row: 0, col: 0 }, prefix } }
+    expect(() => selectCell(state, p, { row: MAX_ROWS - 1, col: 8 }, { extend: true })).toThrow(expect.objectContaining({ code: 'resource-limit' }))
+    // Without overlap the same Shift is admitted.
+    expect(selectCell({ ...state, gesture: { ...state.gesture, prefix: [] } }, p, { row: MAX_ROWS - 1, col: 8 }, { extend: true }).gesture!.prefix).toEqual([])
+  }, 30000)
   it('admits all 16384 Ctrl column-header toggles compactly (N1)', () => {
     const p = fixtureProjection([0, 1, 2, 3])
     let state = emptyGridSelection()

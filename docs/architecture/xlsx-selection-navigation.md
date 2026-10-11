@@ -109,7 +109,9 @@ selections never vanish. Zero-size (hidden) records paint nothing.
 Shared cell edges cancel before viewport clipping, and
 clipping does not invent selection borders. Its paint helper uses a
 translucent green fill and 2 CSS-pixel border, independently of the existing
-blue text selection. S5 owns overview-group coalescing and detail admission;
+blue text selection. A widened sub-pixel cell can overlap a wider selected
+neighbour that snaps to the same pixel and leave a 1 device-pixel interior
+tick; S5 owns that overview-group coalescing as well as detail admission;
 this seam does not enumerate a selected logical rectangle. `navigateSelection`
 is the selection-specific navigation API; `navigateTo` remains a compatibility
 alias, and S2 continues to own ScrollWindow navigation.
