@@ -1,14 +1,21 @@
 /**
- * Main-thread client for the resident viewer worker (spec §10.2, plan S4.1).
+ * Main-thread client for the resident viewer worker (spec §§10.2–10.4, plans
+ * S4.1/S4.2).
  *
  * Correlates replies to commands by requestId, surfaces progress, ignores late
  * or foreign messages (including legacy render responses on the same worker)
  * and accounts every ArrayBuffer it transfers or leaves to structured clone.
- * Main-safe: imports only the protocol module.
+ * ViewerPublications is the main-thread half of atomic publication: the one
+ * place committed order/counts/status/search geometry change, guarded by the
+ * document epoch and monotonic owners. selectViewerHost defines no-worker
+ * support. Main-safe: imports only the protocol module.
  */
-import type { WorkerCommand, WorkerCommandKind, WorkerOwner, WorkerReply } from '../xlsx/view/contracts'
+import type {
+  CacheIdentity, ViewCommitDelta, WorkbookOwner, WorkerCommand, WorkerCommandKind, WorkerOwner, WorkerReply,
+} from '../xlsx/view/contracts'
 import {
-  isArrayBuffer, isTerminalReply, isViewerReply, TransferAccounting, type CommandOf, type TransferLedger,
+  initialIdentity, initialWorkbookOwner, isArrayBuffer, isTerminalReply, isViewerReply, TransferAccounting,
+  type CommandOf, type TransferLedger,
 } from './viewerProtocol'
 
 type MessageListener = (event: { data: unknown }) => void
@@ -24,10 +31,16 @@ interface Pending {
   owner: WorkerOwner | undefined
   resolve: (reply: WorkerReply) => void
   reject: (error: Error) => void
+  /** Last progress delivered; progress must strictly increase. */
+  completed: number
 }
+/** Completed authoritative work reported by the worker for one request. */
+export interface ViewerProgress { completed: number; total?: number }
+export type ProgressListener = (progress: ViewerProgress) => void
 
 export class ViewerClient {
   private readonly pending = new Map<string, Pending>()
+  private readonly listeners = new Map<string, Set<ProgressListener>>()
   private readonly accounting = new TransferAccounting()
   private counter = 0
   private ignored = 0
@@ -95,7 +108,7 @@ export class ViewerClient {
     return new Promise<WorkerReply<K>>((resolve, reject) => {
       this.pending.set(command.requestId, {
         kind: command.kind, owner: this.expectedOwner(command),
-        resolve: resolve as (reply: WorkerReply) => void, reject,
+        resolve: resolve as (reply: WorkerReply) => void, reject, completed: -1,
       })
       try {
         this.accounting.transfer(transfer)
@@ -126,17 +139,38 @@ export class ViewerClient {
       this.rejected++
       return
     }
-    // TODO(S4.2): the worker emits no progress yet; a progress API arrives with
-    // the scheduler's completed-batch progress. Progress never settles a request.
-    if (!isTerminalReply(data)) return
+    // Progress never settles a request; it is delivered while the request is
+    // pending, strictly increasing (a reordered or repeated count is dropped).
+    if (!isTerminalReply(data)) {
+      if (data.kind !== 'progress' || data.completed <= entry.completed) return
+      entry.completed = data.completed
+      const progress: ViewerProgress = data.total === undefined ? { completed: data.completed } : { completed: data.completed, total: data.total }
+      for (const listener of [...(this.listeners.get(data.requestId) ?? [])]) listener(progress)
+      return
+    }
     this.pending.delete(data.requestId)
+    this.listeners.delete(data.requestId)
     entry.resolve(data)
+  }
+  /** Subscribes to completed-batch progress of one request (subscribe before
+   * send to see the immediate acknowledgment). Listeners are dropped when the
+   * request settles; the returned function unsubscribes earlier. */
+  onProgress(requestId: string, listener: ProgressListener): () => void {
+    let set = this.listeners.get(requestId)
+    if (!set) this.listeners.set(requestId, set = new Set())
+    set.add(listener)
+    return () => {
+      const current = this.listeners.get(requestId)
+      current?.delete(listener)
+      if (current && !current.size) this.listeners.delete(requestId)
+    }
   }
   /** Detaches from the port and rejects every pending request. */
   dispose(): void {
     this.detach()
     for (const entry of this.pending.values()) entry.reject(new Error('Viewer client disposed'))
     this.pending.clear()
+    this.listeners.clear()
   }
 }
 export function createViewerClient(port: ViewerPort, prefix?: string): ViewerClient {
@@ -182,4 +216,204 @@ function estimateCloneBytes(root: unknown): number {
     for (const [key, entry] of Object.entries(value)) { bytes += key.length * 2; stack.push(entry) }
   }
   return bytes
+}
+
+/** One request's claim on a sheet publication, bound to the document epoch. */
+export interface PublicationTicket {
+  readonly docId: string
+  readonly sheetId: string
+  readonly epoch: number
+  readonly requestId: string
+}
+export type SheetStatus =
+  | { readonly kind: 'ready' }
+  | { readonly kind: 'pending'; readonly requestId: string; readonly progress: ViewerProgress | null }
+/** One status notice for a request that ended without a commit (§§6.3, 10.4). */
+export interface SheetNotice {
+  readonly requestId: string
+  readonly kind: 'cancelled' | 'refused' | 'stale' | 'incomplete' | 'quota' | 'error'
+  readonly code?: string
+}
+/** Geometry-dependent search/layout records, owned by an exact view and font. */
+export interface SheetGeometry {
+  readonly owner: CacheIdentity
+  readonly fontGen: number
+  readonly payload: unknown
+}
+/** The committed main-thread view of one sheet; replaced as a whole. */
+export interface SheetPublication {
+  readonly epoch: number
+  readonly owner: CacheIdentity
+  readonly workbookOwner: WorkbookOwner
+  readonly bands: ViewCommitDelta['bands']
+  readonly visibility: ViewCommitDelta['visibility']
+  /** Null until the first committed view delta reports them. */
+  readonly counts: ViewCommitDelta['counts'] | null
+  readonly status: SheetStatus
+  readonly notice: SheetNotice | null
+  readonly geometry: SheetGeometry | null
+}
+interface DocumentPublications { epoch: number; fontGen: number; sheets: Map<string, SheetPublication> }
+const sameIdentityValue = (a: CacheIdentity, b: CacheIdentity): boolean =>
+  a.docId === b.docId && a.sheetId === b.sheetId && a.valueGen === b.valueGen && a.fontGen === b.fontGen && a.viewGen === b.viewGen
+
+/**
+ * Main-thread atomic publication (§§10.1, 10.4). Input is acknowledged at once
+ * (begin → pending) while the last committed view stays visible. A completion
+ * replaces order/mask/counts as ONE record swap, and only when its ticket
+ * belongs to the current document epoch and its owner is strictly newer than
+ * the committed one; delayed, reordered, superseded or previous-epoch replies
+ * never replace order, counts, status or geometry. A request that ends without
+ * a commit settles status (with one notice) only if it is still the sheet's
+ * current pending request.
+ */
+export class ViewerPublications {
+  private readonly documents = new Map<string, DocumentPublications>()
+  /** Epoch counters survive close, so a reopened docId never reuses one. */
+  private readonly epochs = new Map<string, number>()
+
+  /** Starts a new document epoch with generation-0 owners (protocol convention). */
+  open(docId: string, sheets: readonly { sheetId: string }[]): number {
+    const epoch = (this.epochs.get(docId) ?? 0) + 1
+    this.epochs.set(docId, epoch)
+    const workbookOwner = initialWorkbookOwner(docId, sheets)
+    const records = new Map<string, SheetPublication>()
+    for (const { sheetId } of sheets) {
+      records.set(sheetId, Object.freeze({
+        epoch, owner: initialIdentity(docId, sheetId), workbookOwner, bands: [], visibility: [], counts: null,
+        status: READY, notice: null, geometry: null,
+      }))
+    }
+    this.documents.set(docId, { epoch, fontGen: 0, sheets: records })
+    return epoch
+  }
+  close(docId: string): void { this.documents.delete(docId) }
+  epoch(docId: string): number { return this.documents.get(docId)?.epoch ?? 0 }
+  fontGen(docId: string): number { return this.documents.get(docId)?.fontGen ?? 0 }
+  get(docId: string, sheetId: string): SheetPublication | undefined {
+    return this.documents.get(docId)?.sheets.get(sheetId)
+  }
+  /** Immediate input acknowledgment: the sheet shows pending for this request
+   * (superseding any earlier pending request) and keeps its committed view. */
+  begin(docId: string, sheetId: string, requestId: string): PublicationTicket {
+    const document = this.documents.get(docId)
+    const current = document?.sheets.get(sheetId)
+    if (!document || !current) throw new RangeError(`No open sheet ${docId}/${sheetId}`)
+    this.replace(document, sheetId, { ...current, status: Object.freeze({ kind: 'pending', requestId, progress: null }) })
+    return Object.freeze({ docId, sheetId, epoch: document.epoch, requestId })
+  }
+  /** Records progress only for the sheet's current pending request. */
+  progress(ticket: PublicationTicket, progress: ViewerProgress): boolean {
+    const found = this.pendingFor(ticket)
+    if (!found) return false
+    const previous = found.current.status.kind === 'pending' ? found.current.status.progress : null
+    if (previous && progress.completed <= previous.completed) return false
+    this.replace(found.document, ticket.sheetId, {
+      ...found.current, status: Object.freeze({ kind: 'pending', requestId: ticket.requestId, progress: Object.freeze({ ...progress }) }),
+    })
+    return true
+  }
+  /** Applies a terminal sort/filter reply. 'applied': a newer committed view
+   * replaced the record; 'status': a non-commit ended the current pending
+   * request; 'ignored': stale, superseded or from another epoch. */
+  settle(ticket: PublicationTicket, out: WorkerReply): 'applied' | 'status' | 'ignored' {
+    const document = this.documents.get(ticket.docId)
+    const current = document?.sheets.get(ticket.sheetId)
+    if (!document || !current || document.epoch !== ticket.epoch || out.requestId !== ticket.requestId) return 'ignored'
+    const isCurrentPending = current.status.kind === 'pending' && current.status.requestId === ticket.requestId
+    if (out.kind === 'complete') {
+      if (out.result.kind !== 'view') return 'ignored'
+      const delta = out.result.delta
+      const newer = delta.owner.docId === ticket.docId && delta.owner.sheetId === ticket.sheetId
+        && delta.owner.viewGen > current.owner.viewGen && delta.workbookOwner.globalViewGen > current.workbookOwner.globalViewGen
+      if (!newer) return 'ignored'
+      this.replace(document, ticket.sheetId, {
+        epoch: document.epoch, owner: delta.owner, workbookOwner: delta.workbookOwner,
+        bands: delta.bands, visibility: delta.visibility, counts: delta.counts,
+        // A newer commit settles its own request; another pending request stays pending.
+        status: isCurrentPending ? READY : current.status,
+        notice: isCurrentPending ? null : current.notice,
+        // An applied view change invalidates geometry-dependent search layout (§10.1).
+        geometry: null,
+      })
+      return 'applied'
+    }
+    if (!isCurrentPending || out.kind === 'progress') return 'ignored'
+    this.replace(document, ticket.sheetId, { ...current, status: READY, notice: Object.freeze(noticeOf(out)) })
+    return 'status'
+  }
+  /** Accepts geometry only for the exact committed owner and current font. */
+  publishGeometry(docId: string, sheetId: string, owner: CacheIdentity, fontGen: number, payload: unknown): boolean {
+    const document = this.documents.get(docId)
+    const current = document?.sheets.get(sheetId)
+    if (!document || !current || fontGen !== document.fontGen || !sameIdentityValue(owner, current.owner)) return false
+    this.replace(document, sheetId, { ...current, geometry: Object.freeze({ owner, fontGen, payload }) })
+    return true
+  }
+  /** Font readiness invalidates geometry only; order, counts and status stay. */
+  fontChanged(docId: string): void {
+    const document = this.documents.get(docId)
+    if (!document) return
+    document.fontGen++
+    for (const [sheetId, current] of document.sheets) {
+      if (current.geometry) this.replace(document, sheetId, { ...current, geometry: null })
+    }
+  }
+  private pendingFor(ticket: PublicationTicket): { document: DocumentPublications; current: SheetPublication } | null {
+    const document = this.documents.get(ticket.docId)
+    const current = document?.sheets.get(ticket.sheetId)
+    if (!document || !current || document.epoch !== ticket.epoch) return null
+    if (current.status.kind !== 'pending' || current.status.requestId !== ticket.requestId) return null
+    return { document, current }
+  }
+  private replace(document: DocumentPublications, sheetId: string, next: SheetPublication): void {
+    document.sheets.set(sheetId, Object.freeze({ ...next }))
+  }
+}
+const READY: SheetStatus = Object.freeze({ kind: 'ready' })
+function noticeOf(out: WorkerReply): SheetNotice {
+  switch (out.kind) {
+    case 'cancelled': {
+      // Keep the worker's cancel reason (superseded, range-replaced, ...).
+      const code = out.diagnostics[0]?.code
+      return code === undefined ? { requestId: out.requestId, kind: 'cancelled' } : { requestId: out.requestId, kind: 'cancelled', code }
+    }
+    case 'incomplete': return { requestId: out.requestId, kind: 'incomplete' }
+    case 'quota': return { requestId: out.requestId, kind: 'quota' }
+    case 'error':
+      if (out.code === 'operation-refused') return { requestId: out.requestId, kind: 'refused', code: out.code }
+      if (out.code === 'stale-source') return { requestId: out.requestId, kind: 'stale', code: out.code }
+      return { requestId: out.requestId, kind: 'error', code: out.code }
+    default: return { requestId: out.requestId, kind: 'error' }
+  }
+}
+
+/** Host selection for the viewer (plan S4.2 no-worker support). Large mode
+ * needs the resident worker and persistent page storage and refuses visibly
+ * with a typed reason when either is missing. Small admitted documents use the
+ * worker when available, else the in-thread port running the same chunked
+ * TypeScript kernels (`createInThreadPort`). Ports are created lazily. */
+export type ViewerHostChoice =
+  | { kind: 'worker'; port: ViewerPort }
+  | { kind: 'in-thread'; port: ViewerPort }
+  | { kind: 'refused'; code: 'unsupported'; reason: 'worker-required' | 'storage-required'; message: string }
+export interface ViewerHostInput {
+  mode: 'small' | 'large'
+  /** Worker factory, or null when the host cannot start a module worker. */
+  worker: (() => ViewerPort) | null
+  /** OPFS/IndexedDB page storage is available to the worker. */
+  persistentStorage: boolean
+  inThread: () => ViewerPort
+}
+export function selectViewerHost(input: ViewerHostInput): ViewerHostChoice {
+  if (input.mode === 'large') {
+    if (!input.worker) {
+      return { kind: 'refused', code: 'unsupported', reason: 'worker-required', message: 'Large workbooks need the resident viewer worker, which this browser cannot start' }
+    }
+    if (!input.persistentStorage) {
+      return { kind: 'refused', code: 'unsupported', reason: 'storage-required', message: 'Large workbooks need persistent page storage (OPFS or IndexedDB), which is unavailable' }
+    }
+    return { kind: 'worker', port: input.worker() }
+  }
+  return input.worker ? { kind: 'worker', port: input.worker() } : { kind: 'in-thread', port: input.inThread() }
 }

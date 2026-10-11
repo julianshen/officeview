@@ -5,6 +5,7 @@
  * (reason 'incomplete') and never authorizes. */
 import type { FilterRange, OperationRefusal, RowVisibility, SourceRowInterval, SpillExtent } from './contracts'
 import { MAX_COLS, MAX_ROWS, validateSourceRect, type SourceRect } from './coordinates'
+import { CompactRowVisibility } from './visibility'
 import type { ProjectedSheetMetrics } from './projection'
 import { findOutsideColumnData, type CellAnchoredDrawing, type PopulatedCellSource, type StructuralIndex } from './structure'
 
@@ -21,6 +22,16 @@ export interface FilterGuardRequest {
   projectionBefore: ProjectedSheetMetrics
   projectionAfter: ProjectedSheetMetrics
   structure: StructuralIndex
+  /** Optional cooperative budget (S4.2), charged per ROW: 32 units per mask word
+   * compared and per source word scanned (the rows each word covers), plus one
+   * unit per changed slot mapped, covered band queried and drawing measured, so
+   * a frozen clock still yields within 4,096 rows. `pause` may throw to abandon
+   * the guard (cancellation). */
+  cooperate?: GuardCooperation
+}
+export interface GuardCooperation {
+  due(units: number): boolean
+  pause(): Promise<void>
 }
 function protectedCounts(range: FilterRange): void {
   if ((range.headerRows !== 0 && range.headerRows !== 1) || (range.totalsRows !== 0 && range.totalsRows !== 1)) {
@@ -156,20 +167,63 @@ export async function guardFilter(request: FilterGuardRequest): Promise<GuardOut
     return { ok: false, refusal: incompleteRefusal(structure) }
   }
   const count = projectionBefore.rows.logicalCount
-  const changedSources: number[] = []
-  for (let slot = 0; slot < count; slot++) {
-    const before = currentVisibility?.visible(slot) ?? true
-    if (before !== candidateVisibility.visible(slot)) changedSources.push(projectionBefore.order.displayToSource(slot))
+  // Synchronous budget check per unit; only a spent budget awaits.
+  const cooperate = request.cooperate
+  const due = (units = 1): boolean => cooperate !== undefined && cooperate.due(units)
+  // Changed display slots become a SOURCE-space bitset (band permutations map
+  // display slots to arbitrary source rows); scanning it ascending yields merged
+  // changed intervals without sorting. Memory: a bounded constant 128 KiB
+  // (1,048,576 bits) that lives only for this call; it is deliberately not
+  // charged to the worker's transient ledger (the guard has no ledger access).
+  // TODO(S4.3): charge it through a ledger hook if the budget audit requires it.
+  const sourceWords = new Uint32Array(Math.ceil(MAX_ROWS / 32))
+  let firstWord = sourceWords.length, lastWord = -1
+  const mark = (slot: number) => {
+    const source = projectionBefore.order.displayToSource(slot)
+    const word = Math.floor(source / 32)
+    sourceWords[word] = (sourceWords[word] | 2 ** (source % 32)) >>> 0
+    if (word < firstWord) firstWord = word
+    if (word > lastWord) lastWord = word
   }
-  // Source rows are not display-ordered under a band permutation, so sort before merging.
-  changedSources.sort((a, b) => a - b)
+  const beforeMask = currentVisibility instanceof CompactRowVisibility && currentVisibility.logicalCount === count ? currentVisibility : null
+  const afterMask = candidateVisibility instanceof CompactRowVisibility && candidateVisibility.logicalCount === count ? candidateVisibility : null
+  if (afterMask && (beforeMask || currentVisibility === null)) {
+    // Word-level diff: only differing words visit their slots.
+    for (let word = 0; word < afterMask.words.length; word++) {
+      const diff = ((beforeMask ? beforeMask.words[word] : 0xffffffff) ^ afterMask.words[word]) >>> 0
+      if (diff) {
+        for (let bit = 0; bit < 32; bit++) {
+          const slot = word * 32 + bit
+          if (slot < count && Math.floor(diff / 2 ** bit) % 2 === 1) { mark(slot); if (due()) await cooperate!.pause() }
+        }
+      }
+      if (due(32)) await cooperate!.pause()
+    }
+  } else {
+    for (let slot = 0; slot < count; slot++) {
+      const visibleBefore = currentVisibility?.visible(slot) ?? true
+      if (visibleBefore !== candidateVisibility.visible(slot)) mark(slot)
+      if (due()) await cooperate!.pause()
+    }
+  }
   const changed: SourceRowInterval[] = []
-  for (const source of changedSources) {
-    const previous = changed[changed.length - 1]
-    if (previous && previous.r1 + 1 >= source) previous.r1 = Math.max(previous.r1, source)
-    else changed.push({ r0: source, r1: source })
+  let firstChanged = Number.POSITIVE_INFINITY
+  for (let word = firstWord; word <= lastWord; word++) {
+    const bits = sourceWords[word]
+    if (bits) {
+      for (let bit = 0; bit < 32; bit++) {
+        if (Math.floor(bits / 2 ** bit) % 2 !== 1) continue
+        const source = word * 32 + bit
+        if (source < firstChanged) firstChanged = source
+        const previous = changed[changed.length - 1]
+        if (previous && previous.r1 + 1 >= source) previous.r1 = source
+        else changed.push({ r0: source, r1: source })
+      }
+    }
+    if (due(32)) await cooperate!.pause()
   }
   for (const covered of mergeBands([band, ...changed])) {
+    if (due()) await cooperate!.pause()
     const coveredBand: SourceRect = { r0: covered.r0, r1: covered.r1, c0: 0, c1: MAX_COLS - 1 }
     const merge = structure.firstWhere(coveredBand, hit => hit.kind === 'merge')
     if (merge !== undefined && merge.kind === 'merge') {
@@ -189,8 +243,8 @@ export async function guardFilter(request: FilterGuardRequest): Promise<GuardOut
   // Changed rows all lie inside the projection, so a drawing anchored beyond it can
   // only be moved when some changed row precedes it; otherwise it is untouched and
   // its (unmeasurable) geometry must not turn an unrelated filter into a refusal.
-  const firstChanged = changedSources.length > 0 ? changedSources[0] : Number.POSITIVE_INFINITY
   for (const drawing of structure.drawingsIn({ r0: 0, r1: MAX_ROWS - 1, c0: 0, c1: MAX_COLS - 1 })) {
+    if (due()) await cooperate!.pause()
     if (drawing.from.row >= count && firstChanged >= drawing.from.row) continue
     let before: { startY: number; endY: number }
     let after: { startY: number; endY: number }
