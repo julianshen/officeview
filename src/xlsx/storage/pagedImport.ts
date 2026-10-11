@@ -20,7 +20,7 @@ import { createQuotaLedger, quotaLimitsFor, type QuotaLedger } from './quota'
 import { inventoryLimits } from './admission'
 import { anchorCountEvents, newSheetMetadata, normalizeRowMetadata, sharedStringEvents, sheetRecordEvents, type SheetMetadata } from './sheetRecords'
 import { PageBuilder, SourcePageStore, browserPageStorageEnv, choosePageBackend, type PageStorageEnv, type StoredPage } from './sourcePages'
-import { importLimitsFor, type ImportLimitOverrides, type ImportOutcome, type ImportProgress, type ImportSession, type ImportedPage } from './importSession'
+import { importLimitsFor, type ImportLimits, type ImportLimitOverrides, type ImportOutcome, type ImportProgress, type ImportSession, type ImportedPage } from './importSession'
 
 const MiB = 1024 * 1024
 
@@ -477,4 +477,14 @@ export function rangeOf(ref: string): SourceRect | null {
   } catch {
     return null
   }
+}
+
+/**
+ * Whether a file the paged reader cannot serve may fall back to today's
+ * legacy parse: only when the whole compressed package fits the object
+ * path's buffer cap (G1). Beyond it the legacy path would hold an unbounded
+ * object model, so the caller surfaces the typed incomplete/refused outcome.
+ */
+export function compatibilityFallbackAllowed(compressedBytes: number, limits: ImportLimits): boolean {
+  return compressedBytes <= limits.object.compressedBytes
 }

@@ -15,7 +15,7 @@ import { classifyPackage, sniffPackage, type OfficeKind } from '../core/package-
 import { browserStorageEnv, openSpool, sweepLeftoverSpools, type SpooledSource } from '../core/spool'
 import { admitSpreadsheet, evaluationHitCap, inventoryLimits, type CompatibilityKind, type SpreadsheetAdmission } from '../xlsx/storage/admission'
 import { ImportRefusal } from '../xlsx/storage/importSession'
-import { firstPageOrOutcome, openImportSession, type PagedImportSession } from '../xlsx/storage/pagedImport'
+import { compatibilityFallbackAllowed, firstPageOrOutcome, openImportSession, type PagedImportSession } from '../xlsx/storage/pagedImport'
 import type { PageStorageEnv } from '../xlsx/storage/sourcePages'
 import { NOTICE_ALTERNATE_CONTENT, NOTICE_CACHED_VALUES, NOTICE_COMPATIBILITY, NOTICE_DAMAGED, NOTICE_STRICT_FALLBACK, type AnyDoc, type LoadCtx } from './loadOfficeSource'
 
@@ -257,6 +257,7 @@ export async function openSpreadsheetSource(blob: Blob, ctx: Ctx, storage?: Page
     return { kind: 'document', document: await parseSpreadsheet(await OfficePackage.load(bytes), bytes, ctx, decided) }
   }
   if (admission.mode !== 'paged') return legacy(admission)
+  const fallback = compatibilityFallbackAllowed(blob.size, ctx.limits)
   let session: PagedImportSession
   try {
     session = await openImportSession({ kind: 'blob', blob }, { docId: `doc-${Date.now().toString(36)}`, profile: ctx.profile, signal: ctx.signal, limits: ctx.options.limits, storage })
@@ -265,10 +266,17 @@ export async function openSpreadsheetSource(blob: Blob, ctx: Ctx, storage?: Page
       if (error.code === 'cancelled') throw error
       throw new ImportRefusal(error.code, 'limit', `This spreadsheet needs browser storage to open: ${error.message}`)
     }
+    if (!fallback) {
+      const code = isPackageError(error) ? error.code : 'parse-error'
+      throw new ImportRefusal(code, 'limit', `This large spreadsheet could not be read: ${(error as Error).message}`)
+    }
     return legacy(admission)
   }
+  // Within the object caps a file the paged reader refuses before any page
+  // landed loads through the compatibility parse (with its notice); beyond
+  // them the incomplete session is returned with its typed failure.
   const early = await firstPageOrOutcome(session)
-  if (early && early.kind === 'incomplete' && early.failure.code === 'unsupported' && session.workbook.store.stats.committed === 0) {
+  if (fallback && early && early.kind === 'incomplete' && early.failure.code === 'unsupported' && session.workbook.store.stats.committed === 0) {
     await session.release()
     // compatibilityParse adds the 'opened in compatibility mode' notice.
     return legacy({ mode: 'paged', reason: early.failure.message })

@@ -147,3 +147,32 @@ describe('RED 14a through the worker: unreadable structure refuses sort, never s
     expect(values.kind === 'valueQuery' && values.page.items.length).toBe(5)
   })
 })
+
+describe('review MINOR 1: the compatibility fallback is bounded by the object caps', () => {
+  const NO_ROW_NUMBERS = () => xlsxBytes({ sheetData: '<row><c r="A1"><v>1</v></c></row><row><c r="A2"><v>2</v></c></row>' })
+  const BEYOND = { object: { rows: 1, compressedBytes: 100 } }
+
+  it('worker: beyond the object compressed cap, an unservable file stays a typed incomplete paged source (no legacy parse)', async () => {
+    const parse = vi.fn(async (bytes: Uint8Array) => parseXlsx(await OfficePackage.load(bytes)))
+    const kernel = new ViewerKernel({ parse, importLimits: BEYOND }, quiet)
+    const replies: WorkerReply[] = []
+    await kernel.handle({ kind: 'open', requestId: rid(), docId: 'big', source: { kind: 'blob', blob: new Blob([NO_ROW_NUMBERS() as BlobPart]) }, profile: 'D' }, out => { replies.push(out) })
+    const open = replies.at(-1)!
+    expect(completed(open)).toMatchObject({ kind: 'open', valuePolicy: 'cached' })
+    expect(open.diagnostics).toContainEqual(expect.objectContaining({ code: 'paged-unsupported' }))
+    expect(parse).not.toHaveBeenCalled()
+    const owner = initialIdentity('big', '1')
+    const out = await run(kernel, { kind: 'valueQuery', requestId: rid(), owner, query: { col: 0, rows: { kind: 'intervals', intervals: [{ r0: 0, r1: 1 }] }, limit: 10 } })
+    expect(JSON.stringify(out)).toContain('unsupported')
+  })
+
+  it('internal entry: beyond the cap the paged session is returned incomplete instead of a legacy parse', async () => {
+    const limits = BEYOND as unknown as typeof PAGED
+    const opened = await openSpreadsheetSource(new Blob([NO_ROW_NUMBERS() as BlobPart]), { signal: new AbortController().signal, profile: 'D', limits: importLimitsFor('D', limits), options: { limits } })
+    expect(opened.kind).toBe('paged')
+    if (opened.kind !== 'paged') return
+    expect(opened.session.completeness).toBe('incomplete')
+    expect((await opened.session.done)).toMatchObject({ kind: 'incomplete', failure: { code: 'unsupported' } })
+    await opened.session.release()
+  })
+})
