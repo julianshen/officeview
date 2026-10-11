@@ -238,3 +238,17 @@ it.each([16, 40, 64])('keeps compact desktop header targets inside a %ipx projec
   expect(floors.every(value => value > 0)).toBe(true)
   expect(floors.reduce((sum, value) => sum + value, 0)).toBeLessThanOrEqual(parseFloat(header.style.width) + 1e-6)
 })
+it.each([16, 40])('keeps touch header targets of a %ipx projected column out of the next column', width => {
+  const p = gridFixture(), projection = createSheetMetrics({ rows: createAxisMetrics({ logicalCount: MAX_ROWS, defaultSizeCss: 24 }), cols: createAxisMetrics({ logicalCount: MAX_COLS, defaultSizeCss: 64 }), order: p.projection.order, visibility: p.view.visibility })
+  const window = createScrollWindow(projection, p.viewport, { zoom: width / 64 })
+  const ui = render(<GridHeaders projection={projection} window={window} viewport={p.viewport} columns={[0, 1]} selection={p.selection}
+    sort={null} onSortCycle={vi.fn()} onFilter={vi.fn()} onSortDialog={vi.fn()} touchControls />)
+  const a = ui.getByRole('columnheader', { name: 'Column A' }), b = ui.getByRole('columnheader', { name: 'Column B' })
+  const right = parseFloat(a.style.left) + parseFloat(a.style.width)
+  expect(right).toBeLessThanOrEqual(parseFloat(b.style.left) + 1e-6)
+  // Deterministic hit ownership: no control of A may demand space past A's box.
+  for (const button of a.querySelectorAll('button')) {
+    expect(Math.max(parseFloat(button.style.width) || 0, parseFloat(button.style.minWidth) || 0)).toBeLessThanOrEqual(parseFloat(a.style.width) + 1e-6)
+  }
+  expect(a.style.overflow).toBe('hidden')
+})

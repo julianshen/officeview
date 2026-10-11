@@ -127,10 +127,13 @@ export function GridHeaders(props: GridHeadersProps): ReactElement {
       const selected = selectedColumn(props, col), label = `Column ${columnToLetters(col)}${direction ? `; sort priority ${priority + 1}, ${direction}` : ''}`
       const rule = props.filter?.columns.get(col), description = rule ? columnRuleDescription(rule) : 'No viewer filter'
       const actions = Boolean(props.onSortCycle || props.onFilter || props.onSortDialog)
-      const cellTarget = { ...target, width: touch ? box.width : box.width / (actions ? props.onSortDialog ? 4 : 3 : 1), flex: 'none' }
+      // A touch target keeps its 44px floor only while the column is that wide;
+      // narrower, it is clamped (and the header clips) so a neighbour's control
+      // never overlaps and steals the hit (spec §9.3 deterministic ownership).
+      const cellTarget = { ...target, minWidth: touch ? Math.min(GRID_HEADER_SIZE, box.width) : 0, width: touch ? box.width : box.width / (actions ? props.onSortDialog ? 4 : 3 : 1), flex: 'none' }
       const iconClip = { display: 'block', width: touch ? box.width : undefined, overflow: 'hidden', textAlign: 'center' as const }
       return <div key={col} role="columnheader" aria-colindex={col + 2} aria-label={label} aria-selected={selected} aria-sort={priority === 0 ? direction : undefined}
-        style={{ position: 'absolute', left: GRID_HEADER_SIZE + box.x, width: box.width, height, display: 'flex', flexDirection: touch ? 'column' : 'row', alignItems: 'stretch' }}>
+        style={{ position: 'absolute', left: GRID_HEADER_SIZE + box.x, width: box.width, height, overflow: 'hidden', display: 'flex', flexDirection: touch ? 'column' : 'row', alignItems: 'stretch' }}>
         <button type="button" aria-label={`Select ${label}`} data-header-column={col} tabIndex={props.controlMode ? 0 : -1} onMouseDown={keepGridFocus}
           aria-description={actions ? description : undefined} title={`${label}; ${description}`}
           onClick={event => { props.onNotice?.(`${label}; ${description}`); props.onSelect?.('column', col, { toggle: event.ctrlKey || event.metaKey, extend: event.shiftKey }, event) }}
