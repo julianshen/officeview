@@ -112,10 +112,10 @@ Every package is implemented on its own branch, reviewed by at least one agent f
 | S6.2 virtual owned grid semantics, headers, event isolation (`GridSemantics.tsx`, `GridHeaders.tsx`, OfficeDoc guards) | merged; Ctrl/Cmd+wheel over any viewer now actually blocks browser page zoom (behaviour change, flagged) |
 | S5.3 global workbook find engine (`src/xlsx/view/find.ts`) | merged; OfficeDoc wiring and worker search command wait for S5.2 |
 | S1.2 sparse pages, external page storage, small/large adapter parity (`sourcePages.ts`, `pagedImport.ts`, `pagedSource.ts`, `overviewIndex.ts`, `viewerLargeSource.ts`) | merged; worker routes admitted-paged blobs to paged sources; exported entry keeps compatibility mode until the viewer is enabled |
-| S9.1 atomic filter dropdown and sort dialog (`FilterDropdown.tsx`, `SortDialog.tsx`, `controlsClient.ts`, header sort/funnel buttons) | merged; mounted by S5.2 |
+| S9.1 atomic filter dropdown and sort dialog (`FilterDropdown.tsx`, `SortDialog.tsx`, `controlsClient.ts`, header sort/funnel buttons) | merged; mounting into the interactive viewer is done with S9.2 |
 | S1.3 authoritative formula/cache/error/format value bridge (`values.ts`, `value-policy.ts`) | merged |
-| S5.2 | in progress (behind `interactiveSheets` flag) | (implementation or review rounds on their own branches) |
-| S1.2, S1.3, S4.4–S4.5, S5, S6, S9, S10 (physical-device receipts skipped for now by user decision), S11/S12 status, S13 | not started |
+| S5.2 canvas tiles, overlays and OfficeDoc integration (`InteractiveSheetDoc.tsx` lazy chunk, `sheetAssets.ts`) | merged behind the `interactiveSheets` prop (default off; eager +0.21 KB gz); seams left for S9.2 (grid copy, mounting the S9.1 controls), S10 (browser smoke, mouse-drag selection) and worker viewport/search commands |
+| S4.4–S4.5, S8.4, S9.2, S10 (physical-device receipts skipped for now by user decision), S11/S12 status, S13 | not started |
 
 ## S0 — Freeze contracts, counterexamples and fixture/harness infrastructure
 
@@ -398,14 +398,16 @@ expect(session.publishWorkbookIndex(staleA)).toBe(false)
 
 **Prerequisite:** S2.4 sheet scale model. The viewport integration below uses absolute `SheetZoom` and `ScrollWindow`; it never reuses the fit-to-width pan transform for sheet mode.
 
+> **Status (2026-10-12):** merged (Claude implementation; codex reviews over five rounds, every finding fixed, final verdict APPROVE). The viewer is opt-in through the `interactiveSheets` OfficeDoc prop and loads as a lazy `InteractiveSheetDoc` chunk; eager growth +0.21 KB gz. SVG pictures without provable absolute root dimensions are withdrawn; print pictures go through shared image admission and refusals are announced per sheet. The real-browser smoke stays open for S10, grid copy for S9.2.
+
 **Files:** extend `tileCache.ts`, `viewport.ts`; modify `src/components/OfficeDoc.tsx`, `src/render/paint.ts`, `src/core/overlay.ts`; test `tests/xlsx-viewer-viewport-integration.test.tsx`, extend `tests/officeview-zoom.test.tsx`.
 
-- [ ] RED: scroll/zoom/pan produce bounded viewport requests; moving selection/search highlight does not increment base-cell paint count; view commit updates affected tiles while preserving zoom; source change resets zoom through existing ownership rules. Assert physical canvas/tile allocations stay below budgets.
-- [ ] Run `bunx vitest run tests/xlsx-viewer-viewport-integration.test.tsx tests/officeview-zoom.test.tsx`; expected current all-base repaint/no viewport fails.
-- [ ] GREEN: connect logical navigator to real scroll/zoom/DPR and active-sheet canvas tiles. Base tile cache is distinct from selection/search/watermark overlays as appropriate; overlay movement never repaints all cells. Prefetch bounded adjacent tiles, LRU reclaim bitmaps and keep last committed viewport while new records arrive.
-- [ ] View generations invalidate geometry/search/base tiles explicitly; document ownership alone controls zoom reset. Watermark/protection remain applied to every presented region. Static export uses its explicit budgeted path, never stitching a full 17B-cell bitmap.
+- [x] RED: scroll/zoom/pan produce bounded viewport requests; moving selection/search highlight does not increment base-cell paint count; view commit updates affected tiles while preserving zoom; source change resets zoom through existing ownership rules. Assert physical canvas/tile allocations stay below budgets.
+- [x] Run `bunx vitest run tests/xlsx-viewer-viewport-integration.test.tsx tests/officeview-zoom.test.tsx`; expected current all-base repaint/no viewport fails.
+- [x] GREEN: connect logical navigator to real scroll/zoom/DPR and active-sheet canvas tiles. Base tile cache is distinct from selection/search/watermark overlays as appropriate; overlay movement never repaints all cells. Prefetch bounded adjacent tiles, LRU reclaim bitmaps and keep last committed viewport while new records arrive.
+- [x] View generations invalidate geometry/search/base tiles explicitly; document ownership alone controls zoom reset. Watermark/protection remain applied to every presented region. Static export uses its explicit budgeted path, never stitching a full 17B-cell bitmap.
 - [ ] Run focused command and browser smoke; expected no base repaint on overlay-only updates, correct edge recentering and retained zoom after sort/filter draft commits.
-- [ ] Deliver interactive viewport integration behind a feature flag until S6–S10 complete.
+- [x] Deliver interactive viewport integration behind a feature flag until S6–S10 complete.
 
 ### S5.3 Global workbook find without a full bitmap
 
