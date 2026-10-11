@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
-import { ReferenceTextFilterMatcher, TextFilterMatcher } from '../src/xlsx/view/textFilter'
+import { DEFAULT_FILTER_WORK, ReferenceTextFilterMatcher, TextFilterMatcher } from '../src/xlsx/view/textFilter'
 import { classifyColumn, filterMenus, rawValueKey, FilterEngine, WorkBudget, type PreparedValue, type ColumnClassification, type FilterLimits } from '../src/xlsx/view/filter'
 import type { ColumnRule, FilterSpec, NumberOp, TextOp } from '../src/xlsx/view/contracts'
 import { createIdentityOrder } from '../src/xlsx/view/order'
@@ -818,8 +818,16 @@ describe('ignorable runs between context characters stay exact', () => {
     const cases = Number(process.env.S8_IGNORABLE_FUZZ_CASES ?? 3000)
     for (let index = 0; index < cases; index++) {
       let text = '', pattern = ''
-      for (let i = 1 + random(9); i > 0; i--) text += pool[random(pool.length)]
-      for (let i = 1 + random(4); i > 0; i--) pattern += pool[random(pool.length)]
+      if (index % 2 === 0) {
+        for (let i = 1 + random(9); i > 0; i--) text += pool[random(pool.length)]
+        for (let i = 1 + random(4); i > 0; i--) pattern += pool[random(pool.length)]
+      } else {
+        // Structured: a known context with 0-3 ignorables between its characters.
+        const contexts = ['l\u00b7', 'el\u00b7', 'L\u00b7', 'll', 'aa', 'l\u00b7l'], gap = () => { let run = ''; for (let i = random(4); i > 0; i--) run += pool[random(5)]; return run }
+        for (const point of contexts[random(contexts.length)]) text += point + gap()
+        text = 'ab'.slice(0, random(3)) + text + 'cd'.slice(0, random(3))
+        for (const point of contexts[random(contexts.length)]) pattern += point + (random(4) === 0 ? gap() : '')
+      }
       const [fast, reference, locale] = locales[index % locales.length]
       for (const op of ops) for (const wildcards of [false, true]) {
         const actual = fast.match(op, pattern, wildcards, text, all), expected = reference.match(op, pattern, wildcards, text, all)
@@ -845,7 +853,7 @@ describe('large alphabets are certified by observed adjacency', () => {
         const matcher = new TextFilterMatcher(locale), work = { used: 0 }
         expect(matcher.match('contains', 'zzz', false, sample(pool, length), { work })).toBe(false)
         expect(matcher.certifiedAsciiProfile).toBe(true)
-        expect(work.used).toBeLessThan(DEFAULT_BUDGET / 5)
+        expect(work.used).toBeLessThan(DEFAULT_FILTER_WORK / 5)
       }
     }
   })
@@ -867,4 +875,3 @@ describe('large alphabets are certified by observed adjacency', () => {
     expect(da.certifiedAsciiProfile).toBe(false)
   })
 })
-const DEFAULT_BUDGET = 10_000_000

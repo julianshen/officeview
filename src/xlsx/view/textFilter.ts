@@ -180,9 +180,11 @@ export class ReferenceTextFilterMatcher {
  * a literal are probed, and each must equal the concatenation of its class
  * representatives with no cross-signature equality collision among the
  * windows. Canonical/compatibility expansions and combining-mark contexts are
- * inconclusive, and so is any run of two or more adjacent ignorables: native
- * context rules (e.g. Catalan l + U+00B7) look through a single ignorable but
- * not through a run, and a window of three cannot see across a run. Only
+ * inconclusive, and so is any run of two or more adjacent ignorables. Native
+ * context rules (e.g. Catalan l + U+00B7) are broken by ignorables placed
+ * between their characters. One ignorable is visible: the window l,Z,. fails
+ * its representative check. No window of three spans both context characters
+ * across a run, so l,Z,Z,. would be certified while the reference disagrees. Only
  * certified inputs admit class-ID KMP/DP; everything else retains the exact
  * raw-slice reference and its explicit budget. An observed expansion factor
  * alone cannot bound every future candidate end, and ignored plateaus have
