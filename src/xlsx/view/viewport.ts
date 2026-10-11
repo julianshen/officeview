@@ -29,6 +29,11 @@ const CHAR_CSS = 7
 const COL_PADDING_CSS = 5
 /** §11.1: individual detail needs projected width and height of at least four device pixels. */
 export const MIN_DETAIL_DEVICE_PX = 4
+/** Float tolerance for that rule: 0.4 CSS px x 10 computes 3.9999999999999996. */
+const DETAIL_EPSILON = 1e-9
+function belowDetail(sizeCss: number, scale: number): boolean {
+  return sizeCss * scale < MIN_DETAIL_DEVICE_PX - DETAIL_EPSILON
+}
 /** How far (logical CSS px) left/right of the pane unclipped cell text is fetched
  * as a layout dependency. The static renderer never clips ordinary text, so a crop
  * of it shows overflow from neighbouring cells; the viewer reproduces that within
@@ -371,6 +376,64 @@ export function buildSheetGeometry(sheet: XlsxSheet, options: SheetGeometryOptio
   })
 }
 
+interface LocatedMerge { minRow: number; maxRow: number; range: XlsxMergeRange }
+/** Point location over one frame's covering merges. A segment tree over the frame's
+ * column span stores each merge at O(log C) canonical nodes; each node's list is
+ * sorted by first row with a prefix maximum of last rows, so a lookup walks one
+ * root-to-leaf path with a binary search per node: O(log C log M) per cell instead
+ * of a scan of every merge. Field reads happen once per merge at build. */
+class MergeLocator {
+  private readonly nodes = new Map<number, { entries: LocatedMerge[]; reach: Float64Array }>()
+  constructor(ranges: readonly XlsxMergeRange[], private readonly c0: number, private readonly c1: number) {
+    const lists = new Map<number, LocatedMerge[]>()
+    const insert = (node: number, lo: number, hi: number, a: number, b: number, entry: LocatedMerge): void => {
+      if (b < lo || a > hi) return
+      if (a <= lo && hi <= b) {
+        let list = lists.get(node)
+        if (!list) lists.set(node, list = [])
+        list.push(entry)
+        return
+      }
+      const mid = Math.floor((lo + hi) / 2)
+      insert(node * 2, lo, mid, a, b, entry)
+      insert(node * 2 + 1, mid + 1, hi, a, b, entry)
+    }
+    for (const range of ranges) {
+      const { minRow, maxRow, minCol, maxCol } = range
+      if (c1 >= c0) insert(1, c0, c1, Math.max(minCol, c0), Math.min(maxCol, c1), { minRow, maxRow, range })
+    }
+    for (const [node, entries] of lists) {
+      entries.sort((a, b) => a.minRow - b.minRow)
+      const reach = new Float64Array(entries.length)
+      entries.forEach((entry, index) => { reach[index] = Math.max(index ? reach[index - 1] : -1, entry.maxRow) })
+      this.nodes.set(node, { entries, reach })
+    }
+  }
+  at(row: number, col: number): XlsxMergeRange | undefined {
+    if (col < this.c0 || col > this.c1) return undefined
+    let node = 1, lo = this.c0, hi = this.c1
+    for (;;) {
+      const list = this.nodes.get(node)
+      if (list) {
+        let low = 0, high = list.entries.length
+        while (low < high) {
+          const mid = Math.floor((low + high) / 2)
+          if (list.entries[mid].minRow <= row) low = mid + 1
+          else high = mid
+        }
+        // Valid merges are disjoint, so this normally checks one entry; overlapping
+        // (invalid) input stays correct by walking back while the prefix reach allows.
+        for (let index = low - 1; index >= 0 && list.reach[index] >= row; index--) {
+          if (list.entries[index].maxRow >= row) return list.entries[index].range
+        }
+      }
+      if (lo === hi) return undefined
+      const mid = Math.floor((lo + hi) / 2)
+      if (col <= mid) { node = node * 2; hi = mid } else { node = node * 2 + 1; lo = mid + 1 }
+    }
+  }
+}
+
 function firstCellAtOrAfter(cells: readonly XlsxCell[], col: number): number {
   let low = 0, high = cells.length
   while (low < high) {
@@ -403,7 +466,7 @@ function boundaries(runs: Iterable<AxisRun>, start: (index: number) => number, s
   let tooSmall = false
   const push = (value: number) => { if (lines[lines.length - 1] !== value) lines.push(value) }
   for (const run of runs) {
-    if (run.sizeCss * scale < MIN_DETAIL_DEVICE_PX) tooSmall = true
+    if (belowDetail(run.sizeCss, scale)) tooSmall = true
     for (let index = run.start; index <= run.end; index++) {
       push(start(index))
       if (lines.length > limit) return null
@@ -435,6 +498,9 @@ function detailPlan(geometry: SheetGeometry, viewport: LogicalViewport, limits: 
   if (!rowBounds || !colBounds || rowBounds.lines.length + colBounds.lines.length > limits.gridlines) {
     return coarse(`boundary instances exceed ${limits.gridlines}`)
   }
+  // TODO(S5.1): coarse is per frame here: one sub-detail run makes the whole pane
+  // coarse. The S5.1 coarse layer should coalesce only those runs and keep detail
+  // for the rest; until it lands, a mixed pane shows the coarse notice.
   if (rowBounds.tooSmall || colBounds.tooSmall) {
     return coarse(`visible rows/columns project below ${MIN_DETAIL_DEVICE_PX} device pixels at zoom ${viewport.zoom} x DPR ${viewport.deviceScale}`)
   }
@@ -460,9 +526,9 @@ function detailPlan(geometry: SheetGeometry, viewport: LogicalViewport, limits: 
   }
   let c0 = visibleC0, c1 = visibleC1
   const leftRuns = dependencies(Math.max(0, x - TEXT_OVERFLOW_REACH_CSS), Math.max(0, x))
-  for (let index = leftRuns.length - 1; index >= 0 && leftRuns[index].sizeCss * scale >= MIN_DETAIL_DEVICE_PX; index--) c0 = Math.min(c0, leftRuns[index].start)
+  for (let index = leftRuns.length - 1; index >= 0 && !belowDetail(leftRuns[index].sizeCss, scale); index--) c0 = Math.min(c0, leftRuns[index].start)
   for (const run of dependencies(Math.min(extent.width, x + width), Math.min(extent.width, x + width + TEXT_OVERFLOW_REACH_CSS))) {
-    if (run.sizeCss * scale < MIN_DETAIL_DEVICE_PX) break
+    if (belowDetail(run.sizeCss, scale)) break
     c1 = Math.max(c1, run.end)
   }
 
@@ -500,7 +566,7 @@ function detailPlan(geometry: SheetGeometry, viewport: LogicalViewport, limits: 
       cells.push({ cell: anchor[at], source: { row: range.minRow, col: range.minCol }, slot: range.minRow, ...placement, merge: range })
     }
   }
-  const coveredBy = (row: number, col: number) => covering.find(range => row >= range.minRow && row <= range.maxRow && col >= range.minCol && col <= range.maxCol)
+  const locator = new MergeLocator(covering, c0, c1)
   for (const slot of slots) {
     const source = metrics.order.displayToSource(slot)
     const rowCells = geometry.cellsOf(source)
@@ -512,7 +578,7 @@ function detailPlan(geometry: SheetGeometry, viewport: LogicalViewport, limits: 
       const col = item.col
       const colWidth = metrics.cols.size(col)
       // Collapsed rows/columns produce no fill, text or hit target (spec §5.3).
-      if (colWidth <= 0 || coveredBy(source, col)) continue
+      if (colWidth <= 0 || locator.at(source, col)) continue
       cells.push({ cell: item, source: { row: source, col }, slot, x: metrics.cols.start(col), y: top, width: colWidth, height: rowHeight })
     }
   }
