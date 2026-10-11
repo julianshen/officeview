@@ -43,6 +43,10 @@ one fresh browser context and one page load per scenario.
   stores (`tests/helpers/xlsx-viewer-fixtures.ts`). F2 is the full 1,048,576 rows
   (1,048,574 body rows) or a 100,002-row cut (exactly 100k body rows). F4 is 1M
   unique strings or its first 100k.
+- **Keys.** The 8-key scenarios sort on all eight F2 fields, as §12.5 defines
+  F2. Three of those lanes are boolean or string (flag, name, note), so "8-key"
+  here is not eight numeric keys. The 1-key scenarios sort on `date`, a purely
+  numeric key with source-ID stable ties.
 - **Three separate boundaries per iteration** (spec §12.6):
   - `kernel`: the kernel call alone, timed in the worker. For sorts this is
     `sortRowOrder` over `session.preparedStore()`. For the filter it is
