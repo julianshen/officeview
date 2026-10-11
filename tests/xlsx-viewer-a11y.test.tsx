@@ -7,7 +7,6 @@ import { createSheetMetrics } from '../src/xlsx/view/projection'
 import { MAX_ROWS, MAX_COLS } from '../src/xlsx/view/coordinates'
 import { createScrollWindow, navigateTo } from '../src/xlsx/view/scrollWindow'
 import { emptyGridSelection, selectCell, selectHeader } from '../src/xlsx/view/selection'
-
 import { gridFixture } from './helpers/xlsx-grid-fixture'
 
 describe('owned virtual grid semantics (S6.2)', () => {
@@ -54,6 +53,17 @@ describe('owned virtual grid semantics (S6.2)', () => {
     expect(document.getElementById(next)?.closest('[role="grid"]')).toBe(grid)
     ui.rerender(<GridSemantics {...props} selection={{ ...props.selection, active: null, anchor: null }} />)
     expect(ui.getByRole('grid').hasAttribute('aria-activedescendant')).toBe(false)
+  })
+  it('keeps the active descendant ID across value/font republish and keeps it short for long doc IDs', () => {
+    const docId = `https://example.test/${'very long path/'.repeat(40)}book.xlsx?sig=abc%20def`
+    const props = gridFixture({ owner: { docId, sheetId: 'Sheet 1', valueGen: 1, fontGen: 1, viewGen: 1 } })
+    const ui = render(<GridSemantics {...props} />), grid = ui.getByRole('grid')
+    const before = grid.getAttribute('aria-activedescendant')!
+    expect(before.length).toBeLessThan(64)
+    expect(before).not.toMatch(/[%\s/]/)
+    ui.rerender(<GridSemantics {...props} owner={{ ...props.owner, valueGen: 7, fontGen: 3 }} />)
+    expect(grid.getAttribute('aria-activedescendant')).toBe(before)
+    expect(document.getElementById(before)?.closest('[role="grid"]')).toBe(grid)
   })
   it('removes a stale descendant for an all-hidden filter body and preserves exact membership', () => {
     const props = gridFixture(), visibility = visibilityFromHidden(createIntervalSet([{ r0: 1, r1: 3 }]))
