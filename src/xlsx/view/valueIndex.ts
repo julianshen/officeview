@@ -6,7 +6,7 @@ import {
   sameStamp, valueKeyString, type LaneAccount, type ValueKeySet, type ValueRunStore,
 } from './valueRuns'
 import {
-  EXACT_SEARCH, canonicalKeyStrategy, foldVariantOf, isCertifiedSearchKeyStrategy, textContentHash,
+  EXACT_SEARCH, foldVariantOf, isCertifiedSearchKeyStrategy, textContentHash,
   type SearchKeyOwner, type SearchKeyStore, type SearchKeyStrategy,
 } from './searchKeys'
 
@@ -218,12 +218,14 @@ export class ValueIndexCache {
   private readonly strategy: SearchKeyStrategy
   private readonly keyStore: SearchKeyStore | undefined
   /** The key strategy is fixed for the cache's lifetime; indexes snapshot it.
-   * Default: S8.5 canonical keys for the fold variant of searchKeys.locale
-   * (only the active locale's variant is built). EXACT_SEARCH disables keys. */
-  constructor(options: { limitBytes?: number; searchKeys?: { strategy?: SearchKeyStrategy; store?: SearchKeyStore; locale?: string } } = {}) {
+   * Default on every profile: EXACT_SEARCH (no resident keys). The S8.5
+   * plain path is ~0.12-0.2 us/value, so canonical keys (~2x on later
+   * searches, ~76 MiB per 1M strings) are opt-in, e.g. a desktop profile with
+   * pool headroom: { strategy: canonicalKeyStrategy(foldVariantOf(locale)) }. */
+  constructor(options: { limitBytes?: number; searchKeys?: { strategy?: SearchKeyStrategy; store?: SearchKeyStore } } = {}) {
     this.limitBytes = options.limitBytes ?? 512 * MiB
     if (!Number.isFinite(this.limitBytes) || this.limitBytes < 0) throw new RangeError('Invalid value index memory limit')
-    const strategy = options.searchKeys?.strategy ?? canonicalKeyStrategy(foldVariantOf(options.searchKeys?.locale ?? 'und'))
+    const strategy = options.searchKeys?.strategy ?? EXACT_SEARCH
     if (!isCertifiedSearchKeyStrategy(strategy)) throw new ValueIndexError('invalid-rule', 'Search key strategies must come from createSearchKeyStrategy')
     this.strategy = strategy
     this.keyStore = options.searchKeys?.store

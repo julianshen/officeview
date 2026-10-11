@@ -7,7 +7,7 @@ import {
   type ValueColumnSource, type ValueIndex, type ValueIndexIdentity, type ValuePageRead, type ValueSearchResult,
 } from '../src/xlsx/view/valueIndex'
 import {
-  EXACT_SEARCH, MemorySearchKeyStore, SEARCH_HASH_CHUNK_BYTES, createSearchKeyStrategy, foldVariantOf, textContentHash,
+  EXACT_SEARCH, MemorySearchKeyStore, SEARCH_HASH_CHUNK_BYTES, canonicalKeyStrategy, createSearchKeyStrategy, foldVariantOf, textContentHash,
   type SearchKeyOwner, type SearchKeyStrategy, type SearchKeyStrategySpec,
 } from '../src/xlsx/view/searchKeys'
 
@@ -79,17 +79,18 @@ const owner = (strategy: SearchKeyStrategy, extra: Partial<ValueIndexIdentity> =
 }
 
 describe('search-key strategies', () => {
-  it('defaults to S8.5 canonical keys for the locale fold variant; EXACT_SEARCH disables keys', async () => {
+  it('defaults to the exact matcher with no resident keys; canonical keys are opt-in per fold variant', async () => {
     const values = seededValues(500, 11)
-    const canonical = await index(values, {})
+    const plain = await index(values, {})
+    const exact = await plain.search({ text: 'ab', locale: 'en-US' })
+    expect(new ValueIndexCache().searchKeyStrategy).toBe(EXACT_SEARCH)
+    expect(exact.stats).toEqual({ keyed: 0, exact: 500 })
+    expect(plain.searchKeyStatus).toMatchObject({ strategyId: EXACT_SEARCH.id, state: 'none', keyed: 0 })
+    const canonical = await index(values, { searchKeys: { strategy: canonicalKeyStrategy(foldVariantOf('en-US')) } })
     const result = await canonical.search({ text: 'ab', locale: 'en-US' })
     expect(canonical.searchKeyStatus).toMatchObject({ strategyId: canonicalKeyStrategyId('default'), state: 'computed', keyed: 500 })
     expect(result.stats).toEqual({ keyed: 500, exact: 0 })
-    expect(new ValueIndexCache({ searchKeys: { locale: 'tr-TR' } }).searchKeyStrategy.id).toBe(canonicalKeyStrategyId('turkic'))
-    const plain = await index(values)
-    const exact = await plain.search({ text: 'ab', locale: 'en-US' })
-    expect(exact.stats).toEqual({ keyed: 0, exact: 500 })
-    expect(plain.searchKeyStatus).toMatchObject({ strategyId: EXACT_SEARCH.id, state: 'none', keyed: 0 })
+    expect(canonicalKeyStrategy(foldVariantOf('tr-TR')).id).toBe(canonicalKeyStrategyId('turkic'))
     expect(matchedOrdinals(result)).toEqual(matchedOrdinals(exact))
   })
   it('creates frozen, versioned strategies with a fold-variant dimension and no equivalent mode', () => {
@@ -408,8 +409,8 @@ describe('S8.5 canonical keys', () => {
     const values = seededValues(2_000, 97)
     values.push('İstanbul', 'ISTANBUL', 'ıstanbul', 'i̇stanbul', 'Straße', 'STRASSE', 'e\u0301', 'é', '👩‍👩‍👧', '🇹🇼', 'a\u200db', 'ﬁ')
     const exactDefault = await index(values), exactTurkic = await index(values)
-    const keyedDefault = await index(values, { searchKeys: { locale: 'en-US' } })
-    const keyedTurkic = await index(values, { searchKeys: { locale: 'tr-TR' } })
+    const keyedDefault = await index(values, { searchKeys: { strategy: canonicalKeyStrategy('default') } })
+    const keyedTurkic = await index(values, { searchKeys: { strategy: canonicalKeyStrategy('turkic') } })
     const random = (() => { let seed = 7; return (n: number) => { seed = (seed * 48271) % 2147483647; return seed % n } })()
     const queries = seededQueries(values, 30, 131)
     for (let i = 0; i < 10; i++) {
