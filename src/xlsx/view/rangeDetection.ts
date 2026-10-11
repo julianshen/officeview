@@ -474,7 +474,7 @@ async function finishRect(
 type AxisRun = { lo: number; hi: number } | 'disjoint' | 'invalid' | 'unsupported'
 /** Ascending, non-overlapping inclusive spans; adjacent spans merge, so split
  * encodings of one contiguous run are the same run. */
-function spanRun(spans: readonly { lo: number; hi: number }[], limit: number): AxisRun {
+function spanRun(spans: readonly { lo: number; hi: number }[], limit: number): Exclude<AxisRun, 'unsupported'> {
   if (spans.length === 0) return 'invalid'
   let disjoint = false
   let lo = -1, hi = -2
