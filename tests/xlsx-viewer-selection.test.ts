@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
+import { serialize } from 'node:v8'
 import { createAxisMetrics } from '../src/xlsx/view/axes'
 import { MAX_COLS, MAX_ROWS } from '../src/xlsx/view/coordinates'
 import { createRowOrder, pinRowPermutation, hiddenSlotPins } from '../src/xlsx/view/order'
@@ -207,6 +208,20 @@ describe('selection boundary regressions', () => {
     expect(selected.contains({ row: 3, col: 0 })).toBe(false)
     expect(selectionBytes(state.ranges)).toBeLessThan(MAX_SELECTION_BYTES)
   }, 30000)
+  it('stores the Ctrl gesture prefix compactly instead of duplicating ranges (3000 clicks)', () => {
+    const p = fixtureProjection([0, 1, 2, 3])
+    let state = emptyGridSelection()
+    for (let i = 0; i < 3000; i++) state = selectCell(state, p, { row: i * 3, col: i * 5 }, { toggle: true })
+    expect(state.ranges).toHaveLength(3000)
+    expect(state.gesture!.prefix).toHaveLength(0)
+    const payload = serialize(state).byteLength, rangesOnly = serialize({ ranges: state.ranges }).byteLength
+    expect(payload).toBeLessThan(rangesOnly * 1.1)
+    // Round-trip keeps the prefix: Shift replaces only the last click.
+    const shifted = new SourceSelection(selectCell(structuredClone(state), p, { row: 2999 * 3 + 2, col: 2999 * 5 }, { extend: true }).ranges)
+    for (const i of [0, 1, 1500, 2998, 2999]) expect(shifted.contains({ row: i * 3, col: i * 5 })).toBe(true)
+    expect(shifted.contains({ row: 2999 * 3 + 2, col: 2999 * 5 })).toBe(true)
+    expect(shifted.contains({ row: 2999 * 3 + 2, col: 2999 * 5 + 1 })).toBe(false)
+  }, 120000)
   it('admits all 16384 Ctrl column-header toggles compactly (N1)', () => {
     const p = fixtureProjection([0, 1, 2, 3])
     let state = emptyGridSelection()

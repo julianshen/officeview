@@ -154,9 +154,17 @@ function displayColsBetween(projection: ProjectedSheetMetrics, anchor: number, t
     .map(run => ({ c0: Math.max(c0, run.start), c1: Math.min(c1, run.end) }))
 }
 
-function gestureSnapshot(active: SourceCell | null, anchor: SourceCell | null, ranges: readonly GridSelectionPart[], gesture: GridSelectionGesture): GridSelection {
-  const state = snapshot(active, anchor, ranges), prefix = normalizeParts(gesture.prefix)
-  return Object.freeze({ ...state, gesture: Object.freeze({ ...gesture, anchor: Object.freeze({ ...gesture.anchor }), prefix: Object.freeze(prefix) }) })
+/** Stores the gesture as its applied part plus only the prefix cells under it
+ * (P = (R \ C) ∪ (P ∩ C)), so the prefix never duplicates `ranges`. The stored
+ * overlap and part are charged with the ranges against the byte bound. */
+function gestureSnapshot(active: SourceCell | null, anchor: SourceCell | null, ranges: readonly GridSelectionPart[], gesture: GridSelectionGesture, part: GridSelectionPart): GridSelection {
+  const state = snapshot(active, anchor, ranges), overlap = normalizeParts(intersectParts(gesture.prefix, part))
+  if (state.ranges.length + overlap.length > MAX_SELECTION_PARTS || selectionBytes([...state.ranges, part, ...overlap]) > MAX_SELECTION_BYTES) throw new SelectionError('resource-limit', 'Selection exceeds its aggregate budget; choose a simpler selection')
+  const stored = Object.freeze({ rows: part.rows, cols: Object.freeze(part.cols.map(col => Object.freeze({ ...col }))) })
+  return Object.freeze({ ...state, gesture: Object.freeze({ kind: gesture.kind, anchor: Object.freeze({ ...gesture.anchor }), prefix: Object.freeze(overlap), part: stored }) })
+}
+function gesturePrefix(state: GridSelection, gesture: GridSelectionGesture): readonly GridSelectionPart[] {
+  return gesture.part ? [...subtract(state.ranges, gesture.part), ...gesture.prefix] : gesture.prefix
 }
 function copyGesture(before: GridSelection, after: GridSelection): GridSelection {
   const gesture = before.gesture
@@ -214,6 +222,18 @@ function mergeCols(cols: GridSelectionPart['cols']): GridSelectionPart['cols'] {
     else out.push({ ...col })
   }
   return out
+}
+function intersectParts(parts: readonly GridSelectionPart[], cut: GridSelectionPart): GridSelectionPart[] {
+  return parts.flatMap(part => {
+    const cols: { c0: number; c1: number }[] = []
+    for (const col of part.cols) for (const c of cut.cols) {
+      const c0 = Math.max(col.c0, c.c0), c1 = Math.min(col.c1, c.c1)
+      if (c0 <= c1) cols.push({ c0, c1 })
+    }
+    if (!cols.length) return []
+    const rows = rowIntersection(part.rows, cut.rows, false)
+    return nonempty(rows) ? [{ rows, cols }] : []
+  })
 }
 function subtract(parts: readonly GridSelectionPart[], cut: GridSelectionPart): GridSelectionPart[] {
   return parts.flatMap(part => {
@@ -339,9 +359,9 @@ function extendGesture(state: GridSelection, projection: ProjectedSheetMetrics, 
   if (!previous || previous.kind === 'cells') {
     if (!projection.sourceCellToLogical(anchor)) anchor = state.active && projection.sourceCellToLogical(state.active) ? state.active : target
   }
-  const gesture: GridSelectionGesture = { kind: kind ?? previous?.kind ?? 'cells', anchor, prefix: previous?.prefix ?? legacyPrefix(state, projection) }
+  const gesture: GridSelectionGesture = { kind: kind ?? previous?.kind ?? 'cells', anchor, prefix: previous ? gesturePrefix(state, previous) : legacyPrefix(state, projection) }
   const part = extendedPart(projection, gesture, target)
-  return gestureSnapshot(target, anchor, [...subtract(gesture.prefix, part), part], gesture)
+  return gestureSnapshot(target, anchor, [...subtract(gesture.prefix, part), part], gesture, part)
 }
 export function selectCell(state: GridSelection, projection: ProjectedSheetMetrics, at: SourceCell, options: { extend?: boolean; toggle?: boolean } = {}): GridSelection {
   validateCell(projection, at)
@@ -351,7 +371,7 @@ export function selectCell(state: GridSelection, projection: ProjectedSheetMetri
   }
   const part: GridSelectionPart = { rows: { kind: 'intervals', intervals: [{ r0: at.row, r1: at.row }] }, cols: [{ c0: at.col, c1: at.col }] }
   const prefix = options.toggle ? subtract(state.ranges, part) : []
-  return gestureSnapshot(at, at, options.toggle ? togglePart(state, part) : [part], { kind: 'cells', anchor: at, prefix })
+  return gestureSnapshot(at, at, options.toggle ? togglePart(state, part) : [part], { kind: 'cells', anchor: at, prefix }, part)
 }
 export function selectHeader(state: GridSelection, projection: ProjectedSheetMetrics, kind: 'row' | 'column', index: number, toggle = false, extend = false): GridSelection {
   const row = kind === 'row' ? index : state.active?.row ?? projection.visibleRankToSource(0) ?? 0
@@ -365,7 +385,7 @@ export function selectHeader(state: GridSelection, projection: ProjectedSheetMet
   // Header membership is full logical space (hidden members included); active must be visible.
   const active = projection.sourceCellToLogical(at) ? at : state.active && projection.sourceCellToLogical(state.active) ? state.active : null
   const prefix = toggle ? subtract(state.ranges, part) : []
-  return gestureSnapshot(active, active, toggle ? togglePart(state, part) : [part], { kind, anchor: at, prefix })
+  return gestureSnapshot(active, active, toggle ? togglePart(state, part) : [part], { kind, anchor: at, prefix }, part)
 }
 export function selectionOperationRange(selection: GridSelection, explicit?: FilterRange): { ok: true; range: FilterRange } | Extract<GuardOutcome, { ok: false }> {
   if (explicit) {

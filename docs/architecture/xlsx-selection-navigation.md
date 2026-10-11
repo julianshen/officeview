@@ -5,10 +5,12 @@ source cells. `extendDisplayRange` maps the visible display interval through
 the current projection; it stores exact source membership, never its enclosing
 rectangle. Identity/full-axis selections use intervals. Fragmented row sets
 use at most 128 KiB per source-tagged row mask, with no per-cell allocation.
-Equal row memberships share a part with merged column intervals. Per-sheet admission counts only normalized selection ranges: at most 1 MiB of
+Equal row memberships share a part with merged column intervals. Per-sheet admission counts normalized selection ranges plus stored gesture data: at most 1 MiB of
 typed buffers plus estimated metadata, with generous safety bounds of 4096
-parts and 16384 column intervals. Shared buffers are charged once; the Shift
-prefix does not double-count selected membership. Exceeding admission throws
+parts and 16384 column intervals. Shared buffers are charged once. The stored
+gesture part and prefix overlap are charged with the ranges (the overlap also
+counts toward the part bound), and the prefix never duplicates `ranges`.
+Exceeding admission throws
 `SelectionError` with `resource-limit` before publication; membership is never
 truncated. There is no document-wide selection ceiling. Session registration,
 selection retention and projection updates do not re-admit already-admitted
@@ -21,8 +23,12 @@ local intervals/bitsets and does not materialize an opaque ref.
 `selectCell` accepts `extend` and `toggle`; S6.2 maps Shift and Ctrl/Cmd onto
 these flags. Shift replaces only the most recent gesture while retaining earlier
 Ctrl parts, even if those parts temporarily overlap the extended region.
-The optional `GridSelection.gesture` stores mode, source anchor and prefix as
-plain serializable data; spread, structuredClone and worker commit/deltas retain
+The optional `GridSelection.gesture` stores mode, source anchor, the applied
+gesture `part` and only the prefix cells hidden under that part as plain
+serializable data. The full Ctrl prefix is `ranges \ part` plus that overlap,
+so thousands of Ctrl-clicks store an empty prefix rather than a second copy of
+`ranges`. Gestures without `part` carry a full legacy prefix and remain
+readable. Spread, structuredClone and worker commit/deltas retain
 it. Legacy selections without gesture metadata remain valid: Shift derives
 their prefix by subtracting only the anchor..active span (the active cell after
 a Ctrl-click), so merged Ctrl parts keep their other cells. Header
