@@ -13,14 +13,19 @@ import type { RenderSheetAssets } from '../../xlsx/render'
 import { renderSheetViewport } from '../../xlsx/view/renderViewport'
 import { paintWatermark, type ResolvedWatermark } from '../../core/watermark'
 import type { LayoutCache } from '../../xlsx/view/textLayout'
-import type { MergeQueryCache, SheetGeometryResult } from '../../xlsx/view/viewport'
+import { frameBudgetFor, type FrameBudget, type MergeQueryCache, type SheetGeometryResult } from '../../xlsx/view/viewport'
 import {
   BITMAP_BUDGETS, MemoryPool, RGBA_BYTES, TILE_DEVICE_PX, TILE_PREFETCH_RING, TileCache,
   prefetchTiles, tileLogicalBox, tileRangeFor, type TileIndexRange, type TileKey, type TileSurface,
 } from '../../xlsx/view/tileCache'
 
 export const TILE_BACKEND = 'canvas2d'
-export interface CanvasTile extends TileSurface { readonly canvas: HTMLCanvasElement; close(): void }
+export interface CanvasTile extends TileSurface {
+  readonly canvas: HTMLCanvasElement
+  close(): void
+  /** Detail work the tile embodies, charged whenever it is presented. */
+  cost?: { records: number; gridlines: number }
+}
 export interface SheetFrame {
   sheet: XlsxSheet
   geometry: SheetGeometryResult
@@ -50,6 +55,11 @@ export interface SheetTileStats {
   lastRequests: LogicalViewport[]
   /** Peak accounted bitmap bytes: retained tiles + pane surfaces + one in-flight tile. */
   peakBitmapBytes: number
+  /** Detail records/gridline instances presented by the latest frame and by the
+   * latest prefetch batch; each stays within the §11.1 per-frame caps. */
+  frameRecords: number
+  frameGridlines: number
+  prefetchRecords: number
 }
 const TILE_BYTES = TILE_DEVICE_PX * TILE_DEVICE_PX * RGBA_BYTES
 
@@ -67,7 +77,7 @@ export function createCanvasTile(): CanvasTile {
 }
 
 export class SheetTileRenderer {
-  readonly stats: SheetTileStats = { basePaints: 0, tileHits: 0, prefetched: 0, refused: 0, lastRequests: [], peakBitmapBytes: 0 }
+  readonly stats: SheetTileStats = { basePaints: 0, tileHits: 0, prefetched: 0, refused: 0, lastRequests: [], peakBitmapBytes: 0, frameRecords: 0, frameGridlines: 0, prefetchRecords: 0 }
   readonly budgetBytes: number
   readonly cache: TileCache
   private readonly pool: MemoryPool
@@ -98,6 +108,8 @@ export class SheetTileRenderer {
     const px = Math.round(frame.origin.x * scale), py = Math.round(frame.origin.y * scale)
     const { visible } = this.ranges(frame)
     this.stats.lastRequests = []
+    const budget = frameBudgetFor(this.profile)
+    let records = 0, gridlines = 0
     target.save()
     try {
       target.setTransform(1, 0, 0, 1, 0, 0)
@@ -105,7 +117,9 @@ export class SheetTileRenderer {
       target.fillRect(0, 0, target.canvas.width, target.canvas.height)
       for (let row = visible.r0; row <= visible.r1; row++) {
         for (let col = visible.c0; col <= visible.c1; col++) {
-          const tile = this.tile(frame, col, row, true)
+          const tile = this.tile(frame, col, row, true, budget)
+          records += tile.surface.cost?.records ?? 0
+          gridlines += tile.surface.cost?.gridlines ?? 0
           // Float64 global device offsets minus the snapped origin: small integers.
           target.drawImage(tile.surface.canvas, col * TILE_DEVICE_PX - px, row * TILE_DEVICE_PX - py)
           if (!tile.retained) tile.surface.close()
@@ -116,6 +130,9 @@ export class SheetTileRenderer {
         paintWatermark(target, { widthPx: frame.viewport.width, heightPx: frame.viewport.height }, frame.watermark)
       }
     } finally { target.restore() }
+    // Measured from the tiles' own work, independent of the budget bookkeeping.
+    this.stats.frameRecords = records
+    this.stats.frameGridlines = gridlines
     // Drop tiles of an older owner/zoom/DPR only after the new frame is up, so the
     // last committed frame stays presented while the replacement paints (§10.1).
     this.cache.invalidate(key => !sameIdentity(key.identity, frame.identity) || key.zoom !== frame.zoom || key.dpr !== frame.dpr)
@@ -125,15 +142,19 @@ export class SheetTileRenderer {
   /** Paint up to `limit` missing ring tiles (bounded adjacent prefetch). */
   prefetch(frame: SheetFrame, limit = Number.POSITIVE_INFINITY): number {
     const { visible, ring } = this.ranges(frame)
-    let painted = 0
+    // Prefetch is its own bounded batch with its own per-frame budget.
+    const budget = frameBudgetFor(this.profile)
+    let painted = 0, records = 0
     for (const { col, row } of prefetchTiles(visible, ring)) {
       if (painted >= limit) break
       if (this.cache.get(this.key(frame, col, row))) continue
-      const tile = this.tile(frame, col, row, false)
+      const tile = this.tile(frame, col, row, false, budget)
+      records += tile.surface.cost?.records ?? 0
       if (!tile.retained) { tile.surface.close(); break }
       painted++
       this.stats.prefetched++
     }
+    this.stats.prefetchRecords = records
     return painted
   }
 
@@ -143,24 +164,41 @@ export class SheetTileRenderer {
     return { identity: frame.identity, backend: TILE_BACKEND, zoom: frame.zoom, dpr: frame.dpr, col, row }
   }
 
-  private tile(frame: SheetFrame, col: number, row: number, visible: boolean): { surface: CanvasTile; retained: boolean } {
+  private tile(frame: SheetFrame, col: number, row: number, visible: boolean, budget: FrameBudget): { surface: CanvasTile; retained: boolean } {
     const key = this.key(frame, col, row)
     const cached = this.cache.get(key) as CanvasTile | undefined
-    if (cached) { if (visible) this.stats.tileHits++; return { surface: cached, retained: true } }
+    const cost = cached?.cost
+    // A cached tile counts its detail work against this frame; one that no longer
+    // fits is repainted against what is left (coarse past the budget).
+    if (cached && cost && cost.records <= budget.records && cost.gridlines <= budget.gridlines) {
+      budget.records -= cost.records
+      budget.gridlines -= cost.gridlines
+      if (visible) this.stats.tileHits++
+      return { surface: cached, retained: true }
+    }
     const surface = this.createTile()
     this.stats.peakBitmapBytes = Math.max(this.stats.peakBitmapBytes, this.bitmapBytes() + TILE_BYTES)
     const ctx = surface.canvas.getContext('2d')
     const box = tileLogicalBox(col, row, frame.zoom, frame.dpr)
     const viewport: LogicalViewport = { box, zoom: frame.zoom, deviceScale: frame.dpr }
     if (visible) this.stats.lastRequests.push(viewport)
+    const full = budget.records >= frameBudgetFor(this.profile).records && budget.gridlines >= frameBudgetFor(this.profile).gridlines
+    let kind: string = 'pending'
+    let work = { records: 0, gridlines: 0 }
     if (ctx) {
       const scale = frame.zoom * frame.dpr
       ctx.setTransform(scale, 0, 0, scale, 0, 0)
       this.stats.basePaints++
-      renderSheetViewport(frame.sheet, ctx, frame.geometry, viewport, frame.assets, {
-        profile: this.profile, owner: frame.identity, cache: frame.layoutCache, merges: frame.merges,
+      const result = renderSheetViewport(frame.sheet, ctx, frame.geometry, viewport, frame.assets, {
+        profile: this.profile, owner: frame.identity, cache: frame.layoutCache, merges: frame.merges, frameBudget: budget,
       })
+      kind = result.kind
+      if (result.kind === 'detail') work = { records: result.work.records, gridlines: result.work.gridlines }
     }
+    surface.cost = work
+    // A tile made coarse only because earlier tiles spent the frame budget is not
+    // the tile's own content: present it, but never cache it.
+    if (kind === 'coarse' && !full) return { surface, retained: false }
     const retained = this.cache.put(key, surface)
     if (!retained) this.stats.refused++
     return { surface, retained }

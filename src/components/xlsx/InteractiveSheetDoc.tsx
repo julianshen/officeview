@@ -76,6 +76,10 @@ export interface SheetFrameStats {
   bitmapBytes: number
   peakBitmapBytes: number
   budgetBytes: number
+  /** Detail records presented by the latest frame / painted by the latest prefetch batch. */
+  frameRecords: number
+  frameGridlines: number
+  prefetchRecords: number
   activeSheetId: string
   zoom: number
   identity: CacheIdentity
@@ -274,7 +278,7 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
       basePaints: stats.basePaints, tileHits: stats.tileHits, prefetched: stats.prefetched, refused: stats.refused,
       overlayPaints: overlayPaints.current, lastRequests: stats.lastRequests.map(request => ({ ...request.box })),
       tiles: renderer.cache.stats(), bitmapBytes: renderer.bitmapBytes(), peakBitmapBytes: stats.peakBitmapBytes,
-      budgetBytes: renderer.budgetBytes, activeSheetId, zoom: scroll.zoom, identity,
+      budgetBytes: renderer.budgetBytes, frameRecords: stats.frameRecords, frameGridlines: stats.frameGridlines, prefetchRecords: stats.prefetchRecords, activeSheetId, zoom: scroll.zoom, identity,
     })
   }
 

@@ -443,6 +443,16 @@ export interface PlanOptions {
   activeCell?: SourceCell
   /** Merge-query cache reused across frames of one geometry generation. */
   merges?: MergeQueryCache
+  /** Remaining §11.1 PER-FRAME budget shared by every tile of one presented frame
+   * (plan S5.2). Each detail tile is admitted against what is left and charges its
+   * records and gridline instances; once spent, later tiles of the frame go coarse
+   * before any cell content is read. */
+  frameBudget?: FrameBudget
+}
+export interface FrameBudget { records: number; gridlines: number }
+export function frameBudgetFor(profile: ViewportProfile = 'D'): FrameBudget {
+  const limits = VIEWPORT_DETAIL_LIMITS[profile]
+  return { records: limits.records, gridlines: limits.gridlines }
 }
 
 /** Plan one frame. Admission happens before any cell is read: window counts
@@ -455,7 +465,14 @@ export function planViewport(geometry: SheetGeometryResult | undefined, viewport
   if (!geometry) return { kind: 'pending', diagnostics: [{ code: 'geometry-pending', message: 'sheet geometry has not been published' }] }
   if (geometry.kind !== 'ready') return { kind: 'diagnostic', diagnostics: geometry.diagnostics }
   try {
-    return detailPlan(geometry, viewport, VIEWPORT_DETAIL_LIMITS[profile], options)
+    const base = VIEWPORT_DETAIL_LIMITS[profile], budget = options.frameBudget
+    const limits = budget ? { ...base, records: Math.max(0, Math.min(base.records, budget.records)), gridlines: Math.max(0, Math.min(base.gridlines, budget.gridlines)) } : base
+    const plan = detailPlan(geometry, viewport, limits, options)
+    if (budget && plan.kind === 'detail') {
+      budget.records -= plan.work.records
+      budget.gridlines -= plan.work.gridlines
+    }
+    return plan
   } catch (error) {
     if (!(error instanceof AxisMetricsError)) throw error
     return { kind: 'diagnostic', diagnostics: [...geometry.diagnostics, axisDiagnostic(error, 'viewport')] }

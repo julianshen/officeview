@@ -486,3 +486,23 @@ describe('hidden targets, coarse selection (S5.2 review round 1)', () => {
     expect(tinted).toBeGreaterThan(overlay.width * overlay.height * 0.5)
   })
 })
+
+describe('per-frame caps across tiles (S5.2 review round 1)', () => {
+  it('a dense sheet never presents more detail records in one frame than the §11.1 frame cap', async () => {
+    const { VIEWPORT_DETAIL_LIMITS } = await import('../src/xlsx/view/viewport')
+    const { columnToLetters } = await import('../src/xlsx/view/coordinates')
+    const rows = Array.from({ length: 220 }, (_, r) => ({ r: r + 1, cells: Array.from({ length: 200 }, (_, c) => ({ ref: `${columnToLetters(c)}${r + 1}`, v: r * 1000 + c })) }))
+    const doc = await workbook([{ name: 'Dense', rows }])
+    const { ui, h } = await mountSheet(doc)
+    const grid = ui.getByRole('grid')
+    for (let i = 0; i < 6; i++) act(() => { grid.focus(); fireEvent.keyDown(grid, { key: '-' }) })
+    await settle()
+    expect(h.last().zoom).toBe(0.25)
+    const caps = VIEWPORT_DETAIL_LIMITS.D
+    for (const frame of h.frames) {
+      expect(frame.frameRecords).toBeLessThanOrEqual(caps.records)
+      expect(frame.frameGridlines).toBeLessThanOrEqual(caps.gridlines)
+      expect(frame.prefetchRecords).toBeLessThanOrEqual(caps.records)
+    }
+  }, 30_000)
+})

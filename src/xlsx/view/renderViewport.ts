@@ -7,7 +7,7 @@
 import type { XlsxSheet } from '../types'
 import type { CacheIdentity, LogicalViewport, WorkerDiagnostic } from './contracts'
 import type { SourceCell } from './coordinates'
-import { COARSE_NOTICE, emptyWork, planViewport, type CoarseGroup, type MergeQueryCache, type SheetGeometryResult, type ViewportPlan, type ViewportProfile, type ViewportWork } from './viewport'
+import { COARSE_NOTICE, emptyWork, planViewport, type CoarseGroup, type FrameBudget, type MergeQueryCache, type SheetGeometryResult, type ViewportPlan, type ViewportProfile, type ViewportWork } from './viewport'
 import { buildCellRecords, LayoutCache, type CellLayout, type CellLayoutHost } from './textLayout'
 import { layoutCellBody, paintCellLayout, paintSheetDrawings, textMeasurer, type RenderSheetAssets } from '../render'
 import { paintWatermark, type ResolvedWatermark, type WatermarkOptions } from '../../core/watermark'
@@ -40,6 +40,8 @@ export interface ViewportPaintOptions {
   /** Cross-frame formatted-value/layout cache (plan S5.1). */
   cache?: LayoutCache
   merges?: MergeQueryCache
+  /** Shared per-frame budget across the tiles of one frame (see PlanOptions). */
+  frameBudget?: FrameBudget
   activeCell?: SourceCell
   /** Painted in viewport space: protection marks follow the visible pane. */
   watermark?: WatermarkOptions | ResolvedWatermark
@@ -73,7 +75,7 @@ export function renderSheetViewport(
   prepared?: RenderSheetAssets,
   options: ViewportPaintOptions = {},
 ): ViewportPaintResult {
-  const plan = planViewport(geometry, viewport, options.profile, { activeCell: options.activeCell, merges: options.merges })
+  const plan = planViewport(geometry, viewport, options.profile, { activeCell: options.activeCell, merges: options.merges, frameBudget: options.frameBudget })
   const { x: vx, y: vy, width, height } = viewport.box
   const paintable = Number.isFinite(width) && Number.isFinite(height) && width > 0 && height > 0
   const owner = options.owner ?? { docId: '', sheetId: sheet.sheetId ?? sheet.name, valueGen: 0, fontGen: 0, viewGen: 0 }
