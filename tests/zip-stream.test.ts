@@ -551,7 +551,9 @@ async function deflateZeros(size: number): Promise<Uint8Array> {
   for (let done = 0; done < size; done += block.length) {
     if (!d.write(block)) await new Promise((r) => d.once('drain', r))
   }
-  await new Promise((r) => d.end(r))
+  const finished = new Promise((r) => d.once('end', r))
+  d.end()
+  await finished
   return concatBytes(...parts)
 }
 
