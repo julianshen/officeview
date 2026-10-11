@@ -551,3 +551,14 @@ scale linearly with real data.
 6. For the mobile M profile, is the streaming-canonicalization mode (exact,
    0.35–0.85 s+ per keystroke per 1M, no retained keys) acceptable as the
    pressure fallback, or must keys stay resident?
+
+## Orchestrator decisions (2026-10-11)
+
+1. **Design adopted:** lazily built canonical keys in worker memory (array of strings + "simple" bitset), charged to the value-index cache and evictable; linear scan with grapheme-boundary check; progressive results with per-keystroke cancellation and query-extension narrowing over the raw-containment superset.
+2. **No persistence in v1** (IndexedDB/OPFS save only ~0.3–0.7 s per 1M values after relaunch versus a rebuild); the `SearchKeyStore` port stays, with the in-memory backend only. Revisit if S10 browser measurements show rebuild cost matters. Any future persistence must round-trip lone surrogates losslessly (no `TextDecoder('utf-16le')`).
+3. **Streaming fallback** (canonicalize during the scan, no resident keys) under memory pressure is accepted on all profiles.
+4. **Spec/plan conflict (Q1):** resolved in spec §7.1 — ZWJ, variation selectors and tag characters are retained in the canonical form so emoji sequences stay single graphemes.
+5. **Empty canonical query (Q2):** treated as no search term (spec §7.1).
+6. **Turkic folding (Q3):** keys are versioned by fold variant; only the key set for the active locale's variant is built.
+7. **Dropdown search (Q4):** contains plus `*`/`?` wildcard search (Excel's dropdown search supports wildcards); no separate begins/ends in the dropdown.
+8. **S8.2 changes required:** fix the `equivalent` contract to use S8.5's key-level boundary-aware matchers; add locale/fold variant and versioned strategy id; store a content hash instead of raw texts for alignment; add the streaming fallback.
