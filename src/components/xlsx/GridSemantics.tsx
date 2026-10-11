@@ -50,7 +50,10 @@ export function GridSemantics(props: GridSemanticsProps): ReactElement {
   const prefix = `${instance}-${encodeURIComponent(JSON.stringify([docId, sheetId, valueGen, fontGen, viewGen]))}`
   const gridRef = useRef<HTMLDivElement>(null), popupRef = useRef<HTMLDivElement>(null), previousPopup = useRef<{ popup: GridPopup; owner: string } | null>(null)
   const previousOwner = useRef(prefix)
-  const [controlMode, setControlMode] = useState(false), [notice, setNotice] = useState('')
+  const [controlMode, setControlModeState] = useState(false), [notice, setNotice] = useState('')
+  // Focus handlers run before React re-renders, so they read the mode from a ref.
+  const controlModeRef = useRef(false)
+  const setControlMode = (on: boolean) => { controlModeRef.current = on; setControlModeState(on) }
   useLayoutEffect(() => {
     if (previousOwner.current !== prefix) {
       if (gridRef.current?.contains(document.activeElement) || popupRef.current?.contains(document.activeElement)) gridRef.current?.focus()
@@ -61,8 +64,11 @@ export function GridSemantics(props: GridSemanticsProps): ReactElement {
     }
     if (previousPopup.current && !props.popup) {
       const { popup, owner } = previousPopup.current, invoker = popup.invoker
-      if (owner === prefix && invoker?.isConnected && gridRef.current?.contains(invoker)) invoker.focus()
-      else gridRef.current?.focus()
+      if (owner === prefix && invoker?.isConnected && gridRef.current?.contains(invoker)) {
+        // A header invoker is a native control, so restoring it re-enters control mode.
+        if (invoker !== gridRef.current) setControlMode(true)
+        invoker.focus()
+      } else gridRef.current?.focus()
     }
     previousPopup.current = props.popup ? { popup: props.popup, owner: previousPopup.current?.owner ?? prefix } : null
   }, [prefix, props.popup])
@@ -97,7 +103,7 @@ export function GridSemantics(props: GridSemanticsProps): ReactElement {
       return
     }
     if (event.target !== grid) {
-      if (event.key === 'Escape' && controlMode && grid?.contains(event.target as Node)) {
+      if (event.key === 'Escape' && grid?.contains(event.target as Node)) {
         event.preventDefault(); setControlMode(false); grid.focus()
       }
       event.stopPropagation()
@@ -111,7 +117,7 @@ export function GridSemantics(props: GridSemanticsProps): ReactElement {
     } else if (event.key === 'F2') {
       const buttons = [...grid.querySelectorAll<HTMLButtonElement>('[data-header-column]')]
       const button = buttons.find(button => Number(button.dataset.headerColumn) === active?.col) ?? buttons[0]
-      if (button) { event.preventDefault(); event.stopPropagation(); button.focus() }
+      if (button) { event.preventDefault(); event.stopPropagation(); setControlMode(true); button.focus() }
     } else if (event.altKey && event.key === 'ArrowDown' && active && props.onFilter) {
       event.preventDefault(); event.stopPropagation(); props.onFilter(active.col, grid)
     } else if (navigationKeys.has(event.key) && !event.altKey) {
@@ -140,8 +146,8 @@ export function GridSemantics(props: GridSemanticsProps): ReactElement {
         }
         if (hit === undefined) return
         index = kind === 'row' ? projection.order.displayToSource(hit) : hit
-        const buttons = [...gridRef.current.querySelectorAll<HTMLButtonElement>(kind === 'row' ? '[data-header-row]' : '[data-header-column]')]
-        buttons.find(button => Number(kind === 'row' ? button.dataset.headerRow : button.dataset.headerColumn) === hit)?.focus()
+        // Pointer selection stays in navigation mode: arrows continue from the grid.
+        gridRef.current.focus()
       }
       publish(() => {
         const selected = selectHeader(selection, projection, kind, index, options.toggle, options.extend)
@@ -157,7 +163,12 @@ export function GridSemantics(props: GridSemanticsProps): ReactElement {
       aria-multiselectable="true" aria-activedescendant={active ? `${prefix}-cell-${cellId(active.row, active.col)}` : undefined}
       aria-description={`Worksheet capacity ${MAX_ROWS} rows by ${MAX_COLS} columns.${coarse ? ' Coarse view. Zoom in or inspect a cell for detail.' : ''}`}
       tabIndex={controlMode ? -1 : 0} data-officeview-grid=""
-      onFocusCapture={event => setControlMode(event.target !== event.currentTarget)}
+      onFocusCapture={event => {
+        // Only F2 or a restored header invoker enters control mode; incidental
+        // focus (mousedown, screen-reader cursor) returns to the single grid stop.
+        if (event.target === event.currentTarget) { if (controlModeRef.current) setControlMode(false) }
+        else if (!controlModeRef.current) event.currentTarget.focus()
+      }}
       onPointerDown={event => { event.stopPropagation(); if (event.target === event.currentTarget) event.currentTarget.focus() }}
       onDoubleClick={event => event.stopPropagation()}
       onClick={event => {
@@ -182,7 +193,7 @@ export function GridSemantics(props: GridSemanticsProps): ReactElement {
             const at = { row, col }, value = props.cellPresentation?.(at) ?? { text: '', state: 'loading' as const }
             const column = viewportHeaderBox(projection, window, viewport, 'column', col)
             const offscreen = extra || (slot === activeSlot && active?.col === col && !columns.includes(col))
-            return <div key={col} role="gridcell" tabIndex={-1} id={`${prefix}-cell-${cellId(row, col)}`} aria-colindex={col + 2}
+            return <div key={col} role="gridcell" id={`${prefix}-cell-${cellId(row, col)}`} aria-colindex={col + 2}
               aria-label={activeAnnouncement(projection, at, value.text)} aria-selected={membership.contains(at)} aria-description={value.state}
               style={offscreen ? { ...hiddenText, top: 0, left: 0 } : { position: 'absolute', top: 0, left: GRID_HEADER_SIZE + column.x, width: column.width, height: box.height }}><span style={hiddenText}>{boundedSelectionText(value.text)}</span></div>
           })}
