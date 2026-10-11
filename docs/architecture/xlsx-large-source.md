@@ -13,7 +13,7 @@ Rule for every number below: it is either **measured** (with the setup stated), 
 | Does the current path meet §4.3? | No. It reads the whole file into one buffer, decodes whole parts to strings, builds whole-part XML trees, and caches both for the package lifetime. Measured on F2: 135 s and about 7.2 GB peak RSS (Bun), against a 512 MiB worker budget. |
 | Can JSZip be made to comply? | No. `loadAsync` needs the whole archive in memory; the streaming internals have no cancel API (the repo already works around this in `zip.ts:91-101`). It stays for small documents and for docx/pptx/odt. |
 | Recommended ZIP layer | A small in-repo central-directory reader over lazy `Blob.slice().arrayBuffer()` range reads (about 150 lines, no dependency, ZIP64 and data descriptors handled). |
-| Recommended inflater | `pako@1.0.11` `Inflate({ raw: true })` fed in 4 KiB compressed slices, with in-repo JS CRC-32. Already in the lockfile through JSZip; it only becomes a direct dependency. Native `DecompressionStream('deflate-raw')` stays behind the same port as an optional accelerator, not the default (reasons in §2.4). |
+| Recommended inflater | `pako@1.0.11` `Inflate({ raw: true })` fed in 4 KiB compressed slices (a deviation from the spec's 256 KiB chunk, see §5.1), with in-repo JS CRC-32. Already in the lockfile through JSZip; it only becomes a direct dependency. Native `DecompressionStream('deflate-raw')` stays behind the same port as an optional accelerator, not the default (reasons in §2.4). |
 | Recommended XML layer | A minimal in-repo SAX-style tokenizer (about 200 lines for the prototype). `fast-xml-parser` has no usable streaming API; `saxes` is 2x slower and not a production dependency. |
 | Measured end to end (F2, 373 MB expanded, 8,238,808 cells) | Range-read, pako, TextDecoder, tokenizer, cell events, CRC verified: 131 MiB/s and 3.03 M cells/s (Bun/JSC), 88-91 MiB/s and 2.0-2.1 M cells/s (Node/V8). Targets are 20 MiB/s and 100k cells/s on D. This excludes page encoding and storage, which S1.2 owns and which will dominate. |
 
@@ -84,8 +84,9 @@ A ZIP library does two jobs. They are compared independently so the numbers are 
 - Input is always a lazy file-backed Blob (`Bun.file()`, `fs.openAsBlob`, or a real `<input type=file>` File in Chrome) read by
   `blob.slice(a, b).arrayBuffer()` in 256 KiB ranges. Never `new Blob([buf])` or `readFile`, which would charge 42 MB to
   every option. JSZip is the exception: it needs the whole file by design, so it got `readFileSync`.
-- Throughput is MiB/s of expanded bytes through the inflater only (a counting consumer), median-stable over 3 repeats
-  (spread under 4%).
+- Throughput is MiB/s of expanded bytes through the inflater only (a counting consumer). Only the native `pipeThrough` and pako
+  rows on F2 were repeated (3 runs each, spread under 4%); every other row, and the F3 and tokenizer rows unless a range is
+  shown, is a single run.
 
 ### 2.3 Inflate throughput and memory (F2, 372.9 MB expanded)
 
@@ -122,13 +123,14 @@ entry made with Python `zipfile` (1,043,786 B file), limit 8 MiB, 256 KiB input 
 | `pako` raw, 256 KiB pushes, 64 KiB output chunks | 8,454,144 (limit + one chunk) | 59 MB, 23 ms | Bounded by output chunking; throwing from `onData` aborts. |
 | Native, Bun and Node, `pipeThrough` or manual writes | 8,404,992 (limit + one 16 KiB chunk) | 48-57 MB, 13-20 ms | Lazy: with one 256 KiB write and one read, then idle 1.5 s, RSS rose 1-2 MB; the remaining 269,704,688 bytes were produced only as they were pulled. |
 | **Native, Chrome 155** reading chunks | 8,454,144 (129 x 64 KiB) | n/a | Reader-side limit works. |
-| **Native, Chrome 155**, one write then one read then idle | **A single 256 KiB write was fully inflated eagerly**: the write promise resolved after 1.5 s idle, and 269,704,688 bytes were queued (RSS +290 MB over the browser baseline). A 16 KiB write queued 16.85 MB; 4 KiB queued 4.2 MB. | +290 MB | The engine does **not** apply backpressure inside one write. |
+| **Native, Chrome 155**, one write then one read then idle | **A single 256 KiB write was fully inflated eagerly**: the write promise resolved after 1.5 s idle, and 269,704,688 bytes were queued. A 16 KiB write queued 16.85 MB; 4 KiB queued 4.2 MB. | indicative only: roughly +290 MB process-tree RSS, sampled across a job that includes the drain loop, in a page that had already run earlier jobs | The engine does **not** apply backpressure inside one write. The clean evidence is that the write promise resolved during the idle wait; the RSS figure is not a clean measurement. |
 
 Conclusions that drive the design:
 
 1. Backpressure granularity is the compressed write size, because worst-case expansion is 1029x per write on every engine.
    To keep any single push at or below the 8 MiB queue bound, push at most 4 KiB of compressed data at a time (worst case
-   4.2 MB). Measured cost of small pushes: negligible (Chrome native 1,455 MiB/s at 8 KiB writes, 1,298 at 4 KiB, versus
+   4,096 x 1032, the deflate maximum ratio, is 4.2 MB). 8 KiB is already too much: the measured 8 KiB fflate run emitted
+   8,426,024 bytes, over 8 MiB (8,388,608); the hard ceiling is therefore 8 MiB / 1032 = 8,128 bytes, and the default is 4,096. Measured cost of small pushes: negligible (Chrome native 1,455 MiB/s at 8 KiB writes, 1,298 at 4 KiB, versus
    1,578 at 256 KiB; pako 784 MiB/s on Bun at 8 KiB). The 256 KiB input chunk of the spec stays the *range-read* size; it is
    sliced into small pushes below it.
 2. Do not rely on any engine's laziness. Node and Bun are lazy; Chromium is eager. WebKit and Firefox are **unmeasured**.
@@ -162,7 +164,12 @@ locator, `0xFFFF` entry counts, a local-header extra of a different layout conta
 Python `zipfile.testzip()` and parses correctly in the in-repo reader on Bun and Node with all three CRCs and sizes matching.
 Not tested: a real archive larger than 4 GiB (the logic is exercised with sentinels only).
 
-Pitfalls the reader must get right (each is in the prototype; each needs a RED test):
+Pitfalls the reader must get right (each needs a RED test). **Prototyped** (exercised by the experiments): local-header data
+start; central-directory sizes; ZIP64 extra order, EOCD locator and ZIP64 EOCD; EOCD tail scan with comment validation;
+multi-disk rejection; central directory range and entry/size limit checks; offsets beyond 2^53; entry data range inside the
+file; CRC and size comparison after inflate. **Designed, not yet built** (the prototype reads the fields but does not enforce
+them): encryption bit, rejecting methods other than 0 and 8, duplicate and escaping names, name byte limits, ratio limit,
+declared-versus-produced size enforcement mid-stream (the prototype only compares at the end).
 
 - Data start comes from the **local** header: `localHeaderOffset + 30 + local name length + local extra length`. The local
   extra field may differ from the central one (the forged archive does).
@@ -198,8 +205,8 @@ parsed a jsdom Blob correctly. Consequence: the range-source abstraction must be
 - fflate is rejected for the inflater (unbounded callback chunk, 8x slower on JSC) and for the container (no random access,
   no declared sizes for data-descriptor entries). It would be the right choice only if bundle size were the top concern
   (2.2 KB gzip), which the already-bundled pako makes moot.
-- If the orchestrator wants zero new dependency declarations, native-only is viable on Chromium (measured) with 4-8 KiB
-  writes, and unmeasured elsewhere; see open question 1.
+- If the orchestrator wants zero new dependency declarations, native-only is viable on Chromium (measured) with writes of at
+  most 4 KiB, and unmeasured elsewhere; see open question 1.
 
 Network input: an OOXML central directory is at the end, so network sources are spooled to a seekable Blob first (spec §4.3.3).
 Spool backends (OPFS file, IndexedDB blob chunks, memory only under an admission threshold) are **unmeasured** here: this
@@ -313,13 +320,13 @@ Types come from `src/xlsx/view/contracts.ts` (frozen): `SourceErrorCode`, `Sourc
 `SourceHandle`, `ProfileId`, `WorkerDiagnostic`. Cell addressing uses `cellId = row * 16384 + col` after validation, never
 32-bit bit operations (rules §4). `src/core/*` must not import `src/xlsx/*`; the core modules define their own error code
 subset and `importSession.ts` maps it, with a compile-time check that it is assignable to `SourceErrorCode`
-(`'cancelled' | 'resource-limit' | 'unsupported' | 'parse-error' | 'storage-error'`, all already present in
+(`'cancelled' | 'resource-limit' | 'unsupported' | 'parse-error' | 'storage-error' | 'quota'`, all already present in
 `SOURCE_ERROR_CODES`).
 
 ### 4.1 `src/core/zip-stream.ts` (generic OPC/ZIP, no XLSX knowledge)
 
 ```ts
-export type PackageErrorCode = 'cancelled' | 'resource-limit' | 'unsupported' | 'parse-error' | 'storage-error'
+export type PackageErrorCode = 'cancelled' | 'resource-limit' | 'unsupported' | 'parse-error' | 'storage-error' | 'quota'
 export class PackageError extends Error { readonly code: PackageErrorCode; readonly partId?: string }
 
 /** Lazy random-access bytes. Blob adapter is slice(a,b).arrayBuffer(), never Blob.stream() (jsdom has none). */
@@ -342,7 +349,7 @@ export interface ExpandedBudget { charge(bytes: number): void } // throws Packag
 export interface InflaterPort { write(compressed: Uint8Array, last: boolean, emit: (out: Uint8Array) => void): void; dispose(): void }
 export type InflaterFactory = () => InflaterPort // default: pako raw; optional native adapter; tests inject a bursty double
 
-export interface PartReadOptions { signal: AbortSignal; budget: ExpandedBudget; verifyCrc?: boolean; compressedSliceBytes?: number /* default 4096, hard max 8192 */ ; rangeReadBytes?: number /* default 262144 */ }
+export interface PartReadOptions { signal: AbortSignal; budget: ExpandedBudget; verifyCrc?: boolean; compressedSliceBytes?: number /* default 4096, hard max 8128 = floor(8 MiB / 1032) */ ; rangeReadBytes?: number /* default 262144 */ }
 /** Pull model: each next() performs at most one compressed slice and yields its output, so backpressure is await-granular. */
 export function openPart(src: RangeSource, entry: ZipEntryInfo, opts: PartReadOptions, makeInflater?: InflaterFactory): AsyncGenerator<Uint8Array, void, void>
 /** For small parts (rels, workbook, content types): bounded, never cached by this module. */
@@ -374,7 +381,7 @@ One ledger for aggregate budgets (spec §12.4), also the `ExpandedBudget` implem
 
 ```ts
 export type Pool = 'compressedSpool' | 'expandedQueue' | 'pages' | 'sharedStrings' | 'blobRecords' | 'decodedBuffers'
-export interface QuotaLimits { readonly [P in Pool]: number } // from ProfileId D/M
+export type QuotaLimits = Readonly<Record<Pool, number>> // from ProfileId D/M
 export interface QuotaLedger extends ExpandedBudget {
   reserve(pool: Pool, bytes: number): Reservation // throws PackageError code 'quota' | 'resource-limit' (typed, never a blank source)
   snapshot(): { current: Record<Pool, number>; peak: Record<Pool, number>; totalExpanded: number; released: boolean }
@@ -390,7 +397,13 @@ paged mode from the retained Blob.
 ### 4.4 `src/xlsx/storage/importSession.ts`
 
 ```ts
-export interface ImportOptions { docId: string; profile: ProfileId; signal: AbortSignal; limits?: Partial<ImportLimits>; onProgress?(p: ImportProgress): void }
+/** Where finished pages go. S1.2's storage implements it; S1.1 tests use an in-memory sink so the RED tests do not depend on S1.2. */
+export interface ImportedPage { sheetId: string; pageId: string; r0: number; r1: number; cellCount: number; bytes: number } // plus the compact payload
+export interface PageSink {
+  commit(page: ImportedPage): Promise<void>   // awaited: this is the downstream backpressure point; a page is never half-published
+  abandon(docId: string): Promise<void>       // cancel/failure: remove everything committed for this owner
+}
+export interface ImportOptions { docId: string; profile: ProfileId; signal: AbortSignal; sink: PageSink; limits?: Partial<ImportLimits>; onProgress?(p: ImportProgress): void }
 export interface ImportProgress { phase: 'inventory' | 'styles' | 'sharedStrings' | 'sheet' | 'done'; compressedRead: number; compressedTotal: number | undefined; expandedBytes: number; expandedTotal: number | 'unknown'; populatedCells: number }
 export type ImportOutcome =
   | { kind: 'complete'; stamp: SourceStamp }
@@ -407,10 +420,10 @@ export interface ImportSession {
 export function openImportSession(source: Extract<SourceHandle, { kind: 'blob' }>, options: ImportOptions): Promise<ImportSession>
 ```
 
-It consumes the page-storage interface that S1.2 defines (not specified here: open question 7). Order of work: inventory, then
-`workbook.xml`/rels/`styles.xml`/`sharedStrings.xml` before any sheet (possible because of random access), then sheets by
-workbook order; the first rows are readable while later pages still load (`readRows` returns `unknown` pages, completeness
-`'loading'`). No whole-file `ArrayBuffer`, no whole-part string, no tree.
+It writes finished pages to a `PageSink` port; S1.2's `sourcePages` storage will implement it (exact payload encoding is open
+question 7). Order of work: inventory, then `workbook.xml`/rels/`styles.xml`/`sharedStrings.xml` before any sheet (possible
+because of random access), then sheets by workbook order; the first pages are committed to the sink while `completeness` is
+still `'loading'` (later, S1.2's `readRows` reports the uncommitted remainder as `unknown`). No whole-file `ArrayBuffer`, no whole-part string, no tree.
 
 Network and `stream.ts`: extract a `spoolSource(source, sink, opts): Promise<{ blob: Blob; policy; watermark }>` out of
 `readSource` (same Response/Request/headers/credentials/protection/watermark behavior, bounded chunks to a `SpoolSink`),
@@ -429,6 +442,9 @@ branch is unchanged. Spool pause/resume/backpressure/cancel is tested separately
 - JSZip and `OfficePackage` stay for small documents and for docx/pptx/odt, untouched.
 - Native `DecompressionStream` adapter behind `InflaterPort`, off by default, enabled only after cross-browser bounded-write
   evidence.
+- **Recorded deviation from spec §4.3.4.** The spec's initial proposal fixes 256 KiB input chunks. This note keeps 256 KiB as the
+  *range-read* size but feeds the inflater at most 4 KiB at a time (hard ceiling 8,128 bytes), because one input chunk can expand
+  1029x and the 8 MiB queue bound cannot otherwise be guaranteed (§2.4). The spec owns that constant; see open question 12.
 
 ### 5.2 Risks
 
@@ -467,7 +483,7 @@ ZIP reader:
 4. Limit crossing while decoding: a 1 GiB-zeros entry (about 1 MB file) with an 8 MiB limit: delivered bytes at most limit plus
    one 64 KiB output chunk, peak queued expanded bytes at most 8 MiB, range reads stop after the abort, ledger returns to zero.
 5. Burst safety independent of the engine: inject a bursty `InflaterPort` double that expands every write 1029x; assert the
-   pump never writes more than `compressedSliceBytes` (default 4096, hard max 8192) at once and that queued expanded bytes per
+   pump never writes more than `compressedSliceBytes` (default 4096, hard max 8128) at once and that queued expanded bytes per
    push stay within the 8 MiB bound.
 6. Cancellation mid-part: `AbortSignal` abort or generator `return()` stops further range reads, calls the inflater's
    `dispose`, releases every reservation (`snapshot().current` all zero), and surfaces `cancelled`.
@@ -492,8 +508,11 @@ Import session (large mode):
 12. No whole-file `ArrayBuffer` retained (spy on `Blob.prototype.arrayBuffer`/range reads) and no retained string or tree for
     a worksheet or `sharedStrings` part above the small-object threshold (assert via the quota ledger peaks and an
     instrumented page builder).
-13. Progressive first rows: after inventory, `readRows` for the head returns pages while the session is still `loading`;
-    unloaded coordinates read as `unknown`, never blank; `completeness` becomes `'complete'` only at the end.
+13. Progressive first rows, observed through the `PageSink` (no S1.2 dependency): with an in-memory sink that records commits, the
+    first page covering the head rows is committed after the inventory and before the sheet part is fully inflated, while
+    `session.completeness` is still `'loading'`; `completeness` becomes `'complete'` only after the last commit and `done`
+    resolves `complete`. A sink that rejects `commit` (quota/storage error) ends the session `incomplete` with a typed failure and
+    triggers `abandon`. (Reporting uncommitted coordinates as `unknown`, never blank, is asserted in S1.2's `readRows` tests.)
 14. Actual expanded-byte accounting equals the sum of bytes produced by the inflater (and equals `uncompressedSize` on
     success); progress reports compressed and expanded bytes and populated cells with total known or unknown.
 15. An incomplete import (limit, malformed, truncated) publishes `incomplete` with a typed `SourceFailure`, never a complete
@@ -532,6 +551,9 @@ Import session (large mode):
     and sheets whose `sheetData` precedes `cols`: what is the large-mode behavior (diagnose and continue vs refuse)?
 11. **Performance claims.** This note shows engine-level and tokenizer-level numbers on a desktop machine. The §12.3 throughput
     targets and the Mobile M targets still need the real-browser harness runs with page encoding and storage included.
+
+12. **Input-chunk constant.** Confirm the reading of spec §4.3.4 above: 256 KiB range reads, inflater pushes of at most 4 KiB. If
+    the spec intends 256 KiB inflater writes, the 8 MiB queued-expanded bound cannot be guaranteed against a 1029:1 stream.
 
 ## 7. Reproduction and artifacts
 
