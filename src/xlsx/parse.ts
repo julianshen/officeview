@@ -11,7 +11,7 @@ import type {
 } from './formula/types'
 import { parseDefinedNames } from './formula/names'
 import { parseTableMetadata, isTablePartSource } from './formula/tables'
-import { hasDeclaredFiltering, parseDeclaredAutoFilter, parseDeclaredSortState, parseDeclaredTable, pickDeclaredSortState, type DeclaredSheetFilters, type DeclaredTableFilters } from './view/declaredFilters'
+import { collectDeclaredTable, createDeclaredBudget, declaredSheetBuilder, hasDeclaredFiltering, parseDeclaredContainer, type DeclaredSheetFilters } from './view/declaredFilters'
 import { parseWorksheetDrawings, collectXlsxImages } from './drawing'
 import { computeMetrics } from './render'
 import { resolvePartTarget } from '../drawing/parts'
@@ -229,6 +229,8 @@ export async function parseXlsx(pkg: OfficePackage): Promise<XlsxDocument> {
   let declaredTableParts = 0
   let tableInventoryComplete = true
   const declaredFilters: DeclaredSheetFilters[] = []
+  // One retained-record budget for the whole document's declarations.
+  const declaredBudget = createDeclaredBudget()
   for (let i = 0; i < sheets.length; i++) {
     const sheetPath = sheetPartPaths[i]
     const identity = workbookSheets[i]
@@ -236,6 +238,7 @@ export async function parseXlsx(pkg: OfficePackage): Promise<XlsxDocument> {
     const sheetEntry: DeclaredSheetFilters = {
       sheetId: identity.sheetId, name: identity.name, workbookIndex: identity.workbookIndex, partPath: sheetPath, tableAutoFilters: [],
     }
+    const sheetDeclared = declaredSheetBuilder(sheetEntry, declaredBudget)
     try {
       const wsRoot = await pkg.xml(sheetPath)
       // A referenced worksheet that cannot be inspected has unknown table
@@ -250,14 +253,9 @@ export async function parseXlsx(pkg: OfficePackage): Promise<XlsxDocument> {
       // worksheet XML is already in hand; stored order and hidden rows below
       // are never touched by this. sortState is valid both as a direct child
       // and nested inside <autoFilter>; direct wins with a duplicate flag.
-      const autoNode = getChildren(wsData, 'autoFilter')[0]
-      const worksheetAutoFilter = parseDeclaredAutoFilter(autoNode)
-      if (worksheetAutoFilter) sheetEntry.worksheetAutoFilter = worksheetAutoFilter
-      const worksheetSortState = pickDeclaredSortState(
-        parseDeclaredSortState(getChildren(wsData, 'sortState')[0], 'direct'),
-        parseDeclaredSortState(autoNode ? getChildren(autoNode, 'sortState')[0] : undefined, 'nested'),
-      )
-      if (worksheetSortState) sheetEntry.worksheetSortState = worksheetSortState
+      const worksheetDeclared = parseDeclaredContainer(wsData, declaredBudget)
+      if (worksheetDeclared.autoFilter) sheetEntry.worksheetAutoFilter = worksheetDeclared.autoFilter
+      if (worksheetDeclared.sortState) sheetEntry.worksheetSortState = worksheetDeclared.sortState
       // Every tablePart element is a declaration (CT_TablePart requires
       // r:id): one without a resolvable id is unavailable inventory, never
       // evidence of zero declarations.
@@ -309,11 +307,9 @@ export async function parseXlsx(pkg: OfficePackage): Promise<XlsxDocument> {
           const tableRoot = await pkg.xml(partPath)
           const tableNode = getChildren(tableRoot, 'table')[0] ?? tableRoot
           // S8.3 diagnostics: declared table filter/sort state, parsed
-          // independently of metadata validity and attributed by part path.
-          const declaredTable: DeclaredTableFilters | undefined = tableNode
-            ? parseDeclaredTable(tableNode, partPath)
-            : undefined
-          if (declaredTable) sheetEntry.tableAutoFilters.push(declaredTable)
+          // independently of metadata validity and attributed by part path
+          // (repeated references to one part are diagnosed once).
+          if (tableNode) collectDeclaredTable(sheetDeclared, tableNode, partPath)
           const meta = parseTableMetadata(tableNode, identity.sheetId, partPath)
           if (!meta) {
             tableInventoryComplete = false

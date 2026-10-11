@@ -2,41 +2,48 @@ import { attrs, elementChildren, getChildren, type XmlNode } from '../../core/xm
 
 /** Declared file filter/sort state as diagnostics only (spec §7.5, §13.3 items
  * 8-9). The small parser builds this from part XML; the large adapter produces
- * the identical structure later from its own traversal, reusing the kinds, the
- * classifiers and the ref parser below. Nothing here ever becomes a viewer
- * rule: supported file filters persist as hidden rows, Clear restores the
- * load snapshot, and stored sortState never reorders source rows. */
+ * the identical structure later from its own traversal by feeding the same
+ * adapter-neutral builders below. Nothing here ever becomes a viewer rule:
+ * supported file filters persist as hidden rows, Clear restores the load
+ * snapshot, and stored sortState never reorders source rows. */
 export interface DeclaredRange {
   minRow: number
   minCol: number
   maxRow: number
   maxCol: number
 }
+/** Records that copy file text set `truncated` when any retained string was
+ * cut to MAX_DECLARED_TEXT. */
 export type DeclaredFilterRule =
   | { kind: 'values'; valueCount: number; hasBlank: boolean; hasDateGroups: boolean }
-  | { kind: 'custom'; operator: 'and' | 'or'; conditions: { operator: string; value: string }[]; totalCount: number }
-  | { kind: 'top10'; top?: boolean; percent?: boolean; val?: string; filterVal?: string }
-  | { kind: 'dynamic'; filterType: string; value?: string; maxValue?: string }
-  | { kind: 'color'; dxfId?: string; cellColor?: string }
-  | { kind: 'unknown'; element: string }
-export interface DeclaredFilterColumn {
+  | { kind: 'custom'; operator: 'and' | 'or'; conditions: { operator: string; value: string }[]; totalCount: number; truncated?: true }
+  | { kind: 'top10'; top?: boolean; percent?: boolean; val?: string; filterVal?: string; truncated?: true }
+  | { kind: 'dynamic'; filterType: string; value?: string; maxValue?: string; truncated?: true }
+  | { kind: 'color'; dxfId?: string; cellColor?: string; truncated?: true }
+  | { kind: 'unknown'; element: string; truncated?: true }
+/** `malformed` is the first flag raised; `flags` lists every distinct flag in
+ * the order raised, so a later problem is never lost behind an earlier one. */
+interface Flagged {
+  malformed?: string
+  flags?: string[]
+}
+export interface DeclaredFilterColumn extends Flagged {
   index: number
   colId?: number
   hiddenButton?: boolean
   showButton?: boolean
   rule?: DeclaredFilterRule
-  malformed?: string
 }
-export interface DeclaredAutoFilter {
+export interface DeclaredAutoFilter extends Flagged {
   refVerbatim?: string
   range?: DeclaredRange
   columns: DeclaredFilterColumn[]
-  /** Columns beyond MAX_DECLARED_ITEMS are counted, not retained. */
+  /** Columns beyond MAX_DECLARED_ITEMS or the document budget are counted, not retained. */
   omittedColumns?: number
-  malformed?: string
+  truncated?: true
 }
 export type DeclaredSortBy = 'value' | 'cellColor' | 'fontColor' | 'icon' | 'unknown'
-export interface DeclaredSortCondition {
+export interface DeclaredSortCondition extends Flagged {
   refVerbatim?: string
   range?: DeclaredRange
   sortBy: DeclaredSortBy
@@ -44,22 +51,28 @@ export interface DeclaredSortCondition {
   descending?: boolean
   dxfId?: string
   customListCount?: number
-  malformed?: string
+  truncated?: true
 }
-export interface DeclaredSortState {
+export interface DeclaredSortState extends Flagged {
   refVerbatim?: string
   range?: DeclaredRange
   caseSensitive?: boolean
+  /** columnSort as authored; true is a left-to-right sort. */
+  columnSort?: boolean
+  sortMethod?: string
+  /** Sort kinds the viewer cannot describe as a row order. */
+  unsupported?: 'left-to-right'
   /** Direct worksheet/table child, or nested inside <autoFilter> (both valid). */
   placement?: 'direct' | 'nested'
   conditions: DeclaredSortCondition[]
-  /** Conditions beyond MAX_DECLARED_ITEMS are counted, not retained. */
+  /** Conditions beyond MAX_DECLARED_ITEMS or the document budget are counted, not retained. */
   omittedConditions?: number
-  malformed?: string
+  truncated?: true
 }
 export interface DeclaredTableRef {
   displayName?: string
   partPath: string
+  truncated?: true
 }
 export interface DeclaredTableFilters {
   table: DeclaredTableRef
@@ -75,6 +88,10 @@ export interface DeclaredSheetFilters {
   worksheetAutoFilter?: DeclaredAutoFilter
   worksheetSortState?: DeclaredSortState
   tableAutoFilters: DeclaredTableFilters[]
+  /** Declaring tables beyond MAX_DECLARED_TABLES, counted not retained. */
+  omittedTables?: number
+  /** Repeated tablePart references to a part already seen on this sheet. */
+  duplicateTableParts?: number
 }
 export type DeclaredFilterRuleTag = 'filters' | 'top10' | 'customFilters' | 'dynamicFilter' | 'colorFilter' | 'unknown'
 
@@ -83,8 +100,17 @@ const MAX_COL = 16384
 const MAX_RECORDED_CONDITIONS = 8
 /** Retained records per autoFilter/sortState; the rest are counted (§12.4). */
 export const MAX_DECLARED_ITEMS = 1024
+/** Retained declaring tables per sheet; the rest are counted (§12.4). */
+export const MAX_DECLARED_TABLES = 64
+/** Retained column + sort-condition records per document across all sheets
+ * and tables, so many declaring parts cannot multiply the per-item cap (§12.4). */
+export const MAX_DECLARED_RECORDS = 8192
+/** Longest file string copied into a diagnostic record. */
+export const MAX_DECLARED_TEXT = 256
 /** Column/sort kinds listed in status copy before "and N more". */
 const MAX_SUMMARY_ITEMS = 8
+const MAX_SUMMARY_LABEL = 64
+const MAX_SUMMARY_DECLARED = 1536
 
 /** Element name of a filterColumn rule child, for either adapter. */
 export function classifyFilterRuleTag(tag: string): DeclaredFilterRuleTag {
@@ -132,6 +158,36 @@ function intAttr(value: unknown): number | undefined {
   const n = parseInt(value, 10)
   return Number.isSafeInteger(n) && n >= 0 ? n : undefined
 }
+function flag(owner: Flagged, reason: string): void {
+  if (owner.malformed === undefined) owner.malformed = reason
+  const flags = owner.flags ?? (owner.flags = [])
+  if (!flags.includes(reason)) flags.push(reason)
+}
+/** Copies file text into a record, cut to MAX_DECLARED_TEXT (never inside a
+ * surrogate pair) with the owner flagged. */
+function keep(text: string, owner: { truncated?: true }): string {
+  if (text.length <= MAX_DECLARED_TEXT) return text
+  owner.truncated = true
+  return cut(text, MAX_DECLARED_TEXT)
+}
+function cut(text: string, length: number): string {
+  const last = text.charCodeAt(length - 1)
+  return text.slice(0, last >= 0xd800 && last <= 0xdbff ? length - 1 : length)
+}
+/** Remaining retained records for one document; shared by every builder. */
+export interface DeclaredBudget {
+  records: number
+}
+export function createDeclaredBudget(): DeclaredBudget {
+  return { records: MAX_DECLARED_RECORDS }
+}
+function takeRecord(budget: DeclaredBudget | undefined): boolean {
+  if (!budget) return true
+  if (budget.records <= 0) return false
+  budget.records--
+  return true
+}
+
 /** Attribute record as either adapter sees it (tree attrs or SAX attributes). */
 export type DeclaredAttrs = Readonly<Record<string, unknown>>
 /** One filterColumn rule child, reduced to what the kind needs: the tag, its
@@ -162,45 +218,56 @@ export function declaredRuleOf(input: DeclaredRuleInput): DeclaredFilterRule {
         hasBlank: a.blank === '1' || a.blank === 'true',
         hasDateGroups: input.dateGroupItemCount > 0,
       }
-    case 'top10':
-      return {
-        kind: 'top10',
-        ...(boolAttr(a.top) !== undefined ? { top: boolAttr(a.top) } : {}),
-        ...(boolAttr(a.percent) !== undefined ? { percent: boolAttr(a.percent) } : {}),
-        ...(textAttr(a.val) !== undefined ? { val: textAttr(a.val) } : {}),
-        ...(textAttr(a.filterVal) !== undefined ? { filterVal: textAttr(a.filterVal) } : {}),
-      }
-    case 'customFilters': {
-      const conditions = input.customFilters.slice(0, MAX_RECORDED_CONDITIONS).map(ca => (
-        { operator: textAttr(ca.operator) ?? 'equal', value: textAttr(ca.val) ?? '' }
-      ))
-      return { kind: 'custom', operator: a.and === '1' || a.and === 'true' ? 'and' : 'or', conditions, totalCount: input.customFilterCount }
+    case 'top10': {
+      const rule: DeclaredFilterRule = { kind: 'top10' }
+      const top = boolAttr(a.top), percent = boolAttr(a.percent), val = textAttr(a.val), filterVal = textAttr(a.filterVal)
+      if (top !== undefined) rule.top = top
+      if (percent !== undefined) rule.percent = percent
+      if (val !== undefined) rule.val = keep(val, rule)
+      if (filterVal !== undefined) rule.filterVal = keep(filterVal, rule)
+      return rule
     }
-    case 'dynamicFilter':
-      return {
-        kind: 'dynamic',
-        filterType: textAttr(a.type) ?? '',
-        ...(textAttr(a.val) !== undefined ? { value: textAttr(a.val) } : {}),
-        ...(textAttr(a.maxVal) !== undefined ? { maxValue: textAttr(a.maxVal) } : {}),
+    case 'customFilters': {
+      const rule: DeclaredFilterRule = {
+        kind: 'custom', operator: a.and === '1' || a.and === 'true' ? 'and' : 'or', conditions: [], totalCount: input.customFilterCount,
       }
-    case 'colorFilter':
-      return {
-        kind: 'color',
-        ...(textAttr(a.dxfId) !== undefined ? { dxfId: textAttr(a.dxfId) } : {}),
-        ...(textAttr(a.cellColor) !== undefined ? { cellColor: textAttr(a.cellColor) } : {}),
+      for (const ca of input.customFilters.slice(0, MAX_RECORDED_CONDITIONS)) {
+        rule.conditions.push({ operator: keep(textAttr(ca.operator) ?? 'equal', rule), value: keep(textAttr(ca.val) ?? '', rule) })
       }
-    default: return { kind: 'unknown', element: input.tag }
+      return rule
+    }
+    case 'dynamicFilter': {
+      const rule: DeclaredFilterRule = { kind: 'dynamic', filterType: '' }
+      rule.filterType = keep(textAttr(a.type) ?? '', rule)
+      const value = textAttr(a.val), maxValue = textAttr(a.maxVal)
+      if (value !== undefined) rule.value = keep(value, rule)
+      if (maxValue !== undefined) rule.maxValue = keep(maxValue, rule)
+      return rule
+    }
+    case 'colorFilter': {
+      const rule: DeclaredFilterRule = { kind: 'color' }
+      const dxfId = textAttr(a.dxfId), cellColor = textAttr(a.cellColor)
+      if (dxfId !== undefined) rule.dxfId = keep(dxfId, rule)
+      if (cellColor !== undefined) rule.cellColor = keep(cellColor, rule)
+      return rule
+    }
+    default: {
+      const rule: DeclaredFilterRule = { kind: 'unknown', element: '' }
+      rule.element = keep(input.tag, rule)
+      return rule
+    }
   }
 }
-function refInto(out: { refVerbatim?: string; range?: DeclaredRange; malformed?: string }, value: unknown): void {
+/** The range is parsed from the full spelling; only the stored copy is cut. */
+function refInto(out: Flagged & { refVerbatim?: string; range?: DeclaredRange; truncated?: true }, value: unknown): void {
   const refVerbatim = textAttr(value)
   if (refVerbatim === undefined) {
-    out.malformed = 'missing-ref'
+    flag(out, 'missing-ref')
     return
   }
-  out.refVerbatim = refVerbatim
+  out.refVerbatim = keep(refVerbatim, out)
   const range = parseDeclaredRef(refVerbatim)
-  if (!range) out.malformed = 'invalid-ref'
+  if (!range) flag(out, 'invalid-ref')
   else out.range = range
 }
 export interface DeclaredAutoFilterBuilder {
@@ -210,13 +277,13 @@ export interface DeclaredAutoFilterBuilder {
 /** Adapter-neutral accumulator for one <autoFilter>: bounding and validation
  * live here so the tree and streaming adapters produce identical diagnostics.
  * Malformed input is recorded, never thrown and never repaired into a range. */
-export function declaredAutoFilterBuilder(attrs: DeclaredAttrs): DeclaredAutoFilterBuilder {
+export function declaredAutoFilterBuilder(attrs: DeclaredAttrs, budget?: DeclaredBudget): DeclaredAutoFilterBuilder {
   const out: DeclaredAutoFilter = { columns: [] }
   refInto(out, attrs.ref)
   let index = 0
   return {
     addColumn(input) {
-      if (index >= MAX_DECLARED_ITEMS) {
+      if (index >= MAX_DECLARED_ITEMS || !takeRecord(budget)) {
         index++
         out.omittedColumns = (out.omittedColumns ?? 0) + 1
         return
@@ -225,27 +292,24 @@ export function declaredAutoFilterBuilder(attrs: DeclaredAttrs): DeclaredAutoFil
       const colId = intAttr(ca.colId)
       const column: DeclaredFilterColumn = { index: index++, colId: undefined }
       if (colId !== undefined) column.colId = colId
-      else column.malformed = 'invalid-colId'
+      else flag(column, 'invalid-colId')
       const hidden = boolAttr(ca.hiddenButton), shown = boolAttr(ca.showButton)
       if (hidden !== undefined) column.hiddenButton = hidden
       if (shown !== undefined) column.showButton = shown
-      if (input.ruleCount > 1) column.malformed = 'multiple-rule-elements'
+      if (input.ruleCount > 1) flag(column, 'multiple-rule-elements')
       if (input.firstRule) column.rule = declaredRuleOf(input.firstRule)
       out.columns.push(column)
     },
     finish() {
       // Second pass over retained columns: colId is a 0-based offset into the
-      // declared range, so it is only meaningful against a known range. The
-      // first flag wins; evidence is kept, never repaired into a valid index.
+      // declared range, so it is only meaningful against a known range.
+      // Evidence is kept, never repaired into a valid index.
       const width = out.range ? out.range.maxCol - out.range.minCol + 1 : undefined
       const seen = new Set<number>()
       for (const column of out.columns) {
-        if (column.colId === undefined || column.malformed !== undefined) {
-          if (column.colId !== undefined) seen.add(column.colId)
-          continue
-        }
-        if (width !== undefined && column.colId >= width) column.malformed = 'colId-out-of-range'
-        else if (seen.has(column.colId)) column.malformed = 'duplicate-colId'
+        if (column.colId === undefined) continue
+        if (width !== undefined && column.colId >= width) flag(column, 'colId-out-of-range')
+        else if (seen.has(column.colId)) flag(column, 'duplicate-colId')
         else seen.add(column.colId)
       }
       return out
@@ -255,13 +319,18 @@ export function declaredAutoFilterBuilder(attrs: DeclaredAttrs): DeclaredAutoFil
 function sortConditionOf(a: DeclaredAttrs): DeclaredSortCondition {
   const out: DeclaredSortCondition = { sortBy: sortByOf(textAttr(a.sortBy)) }
   refInto(out, a.ref)
-  if (out.sortBy === 'unknown') out.sortByVerbatim = a.sortBy === undefined ? undefined : String(a.sortBy)
+  if (out.sortBy === 'unknown') out.sortByVerbatim = a.sortBy === undefined ? undefined : keep(String(a.sortBy), out)
   const descending = boolAttr(a.descending)
   if (descending !== undefined) out.descending = descending
   const dxfId = textAttr(a.dxfId)
-  if (dxfId !== undefined) out.dxfId = dxfId
+  if (dxfId !== undefined) out.dxfId = keep(dxfId, out)
   const customList = textAttr(a.customList)
-  if (customList !== undefined) out.customListCount = customList.split(',').length
+  if (customList !== undefined) {
+    // Counted in place: splitting a long list would copy every entry.
+    let count = 1
+    for (let i = 0; i < customList.length; i++) if (customList.charCodeAt(i) === 44) count++
+    out.customListCount = count
+  }
   return out
 }
 export interface DeclaredSortStateBuilder {
@@ -271,11 +340,13 @@ export interface DeclaredSortStateBuilder {
 /** Adapter-neutral accumulator for one <sortState>. Stored order is never
  * touched: this describes what the file declares. The caller attributes
  * placement (direct child vs nested inside <autoFilter>). */
-export function declaredSortStateBuilder(attrs: DeclaredAttrs, placement: 'direct' | 'nested'): DeclaredSortStateBuilder {
+export function declaredSortStateBuilder(
+  attrs: DeclaredAttrs, placement: 'direct' | 'nested', budget?: DeclaredBudget,
+): DeclaredSortStateBuilder {
   const out: DeclaredSortState = { placement, conditions: [] }
   return {
     addCondition(condition) {
-      if (out.conditions.length >= MAX_DECLARED_ITEMS) {
+      if (out.conditions.length >= MAX_DECLARED_ITEMS || !takeRecord(budget)) {
         out.omittedConditions = (out.omittedConditions ?? 0) + 1
         return
       }
@@ -285,6 +356,64 @@ export function declaredSortStateBuilder(attrs: DeclaredAttrs, placement: 'direc
       refInto(out, attrs.ref)
       const caseSensitive = boolAttr(attrs.caseSensitive)
       if (caseSensitive !== undefined) out.caseSensitive = caseSensitive
+      const columnSort = boolAttr(attrs.columnSort)
+      if (columnSort !== undefined) out.columnSort = columnSort
+      if (columnSort) out.unsupported = 'left-to-right'
+      const sortMethod = textAttr(attrs.sortMethod)
+      if (sortMethod !== undefined) out.sortMethod = keep(sortMethod, out)
+      return out
+    },
+  }
+}
+export interface DeclaredContainerState {
+  autoFilter?: DeclaredAutoFilter
+  sortState?: DeclaredSortState
+}
+export interface DeclaredContainerBuilder {
+  /** Builder for the first <autoFilter>; undefined (and flagged) for later ones. */
+  autoFilter(attrs: DeclaredAttrs): DeclaredAutoFilterBuilder | undefined
+  /** Builder for the first sortState of a placement; undefined (and flagged)
+   * for later ones. Nested ones belong to the first <autoFilter> only. */
+  sortState(attrs: DeclaredAttrs, placement: 'direct' | 'nested'): DeclaredSortStateBuilder | undefined
+  finish(): DeclaredContainerState
+}
+/** One worksheet or table part's declarations, fed in document order. Only the
+ * first declaration of each kind is kept; repeats are flagged on it. A direct
+ * sortState wins over one nested in <autoFilter>, also flagged. */
+export function declaredContainerBuilder(budget?: DeclaredBudget): DeclaredContainerBuilder {
+  let auto: DeclaredAutoFilterBuilder | undefined
+  let autoRepeats = 0
+  const sorts: Record<'direct' | 'nested', { builder?: DeclaredSortStateBuilder; repeats: number }> = {
+    direct: { repeats: 0 }, nested: { repeats: 0 },
+  }
+  return {
+    autoFilter(attrs) {
+      if (auto) {
+        autoRepeats++
+        return undefined
+      }
+      return auto = declaredAutoFilterBuilder(attrs, budget)
+    },
+    sortState(attrs, placement) {
+      const slot = sorts[placement]
+      if (slot.builder) {
+        slot.repeats++
+        return undefined
+      }
+      return slot.builder = declaredSortStateBuilder(attrs, placement, budget)
+    },
+    finish() {
+      const out: DeclaredContainerState = {}
+      const autoFilter = auto?.finish()
+      if (autoFilter) {
+        if (autoRepeats > 0) flag(autoFilter, 'duplicate-autoFilter')
+        out.autoFilter = autoFilter
+      }
+      const direct = sorts.direct.builder?.finish(), nested = sorts.nested.builder?.finish()
+      if (direct && (sorts.direct.repeats > 0 || nested)) flag(direct, 'duplicate-sortState')
+      if (nested && sorts.nested.repeats > 0) flag(nested, 'duplicate-sortState')
+      const sortState = direct ?? nested
+      if (sortState) out.sortState = sortState
       return out
     },
   }
@@ -292,15 +421,45 @@ export function declaredSortStateBuilder(attrs: DeclaredAttrs, placement: 'direc
 /** Table attribution is verbatim (displayName as authored, part path), so a
  * table whose metadata is invalid still reports what it declares; undefined
  * when the table declares neither. */
-export function declaredTableOf(
-  attrs: DeclaredAttrs, partPath: string, autoFilter: DeclaredAutoFilter | undefined, sortState: DeclaredSortState | undefined,
-): DeclaredTableFilters | undefined {
-  if (!autoFilter && !sortState) return undefined
+export function declaredTableOf(attrs: DeclaredAttrs, partPath: string, state: DeclaredContainerState): DeclaredTableFilters | undefined {
+  if (!state.autoFilter && !state.sortState) return undefined
+  const table: DeclaredTableRef = { partPath }
   const displayName = textAttr(attrs.displayName)
-  const out: DeclaredTableFilters = { table: { partPath, ...(displayName !== undefined ? { displayName } : {}) } }
-  if (autoFilter) out.autoFilter = autoFilter
-  if (sortState) out.sortState = sortState
+  if (displayName !== undefined) table.displayName = keep(displayName, table)
+  const out: DeclaredTableFilters = { table }
+  if (state.autoFilter) out.autoFilter = state.autoFilter
+  if (state.sortState) out.sortState = state.sortState
   return out
+}
+export interface DeclaredSheetBuilder {
+  readonly entry: DeclaredSheetFilters
+  readonly budget: DeclaredBudget
+  /** Offers one resolved tablePart. `declares` says whether the part has any
+   * autoFilter/sortState; `build` runs only for a new part with room left. */
+  addTable(partPath: string, declares: boolean, build: () => DeclaredTableFilters | undefined): void
+}
+/** Per-sheet table accumulator: repeated references to one part are counted
+ * once, and declaring tables beyond MAX_DECLARED_TABLES are counted, not built. */
+export function declaredSheetBuilder(entry: DeclaredSheetFilters, budget: DeclaredBudget): DeclaredSheetBuilder {
+  const seen = new Set<string>()
+  return {
+    entry,
+    budget,
+    addTable(partPath, declares, build) {
+      if (seen.has(partPath)) {
+        entry.duplicateTableParts = (entry.duplicateTableParts ?? 0) + 1
+        return
+      }
+      seen.add(partPath)
+      if (!declares) return
+      if (entry.tableAutoFilters.length >= MAX_DECLARED_TABLES) {
+        entry.omittedTables = (entry.omittedTables ?? 0) + 1
+        return
+      }
+      const table = build()
+      if (table) entry.tableAutoFilters.push(table)
+    },
+  }
 }
 
 // Tree adapter: walks parsed part XML into the builders above.
@@ -316,47 +475,35 @@ function ruleInputOf(tag: string, node: XmlNode): DeclaredRuleInput {
     customFilterCount: customs.length,
   }
 }
-/** Parses one <autoFilter> element; undefined when absent. */
-export function parseDeclaredAutoFilter(node: XmlNode | undefined): DeclaredAutoFilter | undefined {
-  if (!node) return undefined
-  const builder = declaredAutoFilterBuilder(attrs(node))
-  for (const child of getChildren(node, 'filterColumn')) {
-    // extLst is extension metadata, not a filter criterion: it is neither a
-    // rule alternative nor evidence of multiple rules.
-    const rules = elementChildren(child).filter(([tag]) => tag !== 'extLst')
-    const first = rules[0]
-    builder.addColumn({ attrs: attrs(child), ruleCount: rules.length, ...(first ? { firstRule: ruleInputOf(first[0], first[1]) } : {}) })
-  }
-  return builder.finish()
-}
-/** Parses one <sortState> element; undefined when absent. */
-export function parseDeclaredSortState(node: XmlNode | undefined, placement: 'direct' | 'nested'): DeclaredSortState | undefined {
-  if (!node) return undefined
-  const builder = declaredSortStateBuilder(attrs(node), placement)
+function feedSortState(builder: DeclaredSortStateBuilder | undefined, node: XmlNode): void {
+  if (!builder) return
   for (const condition of getChildren(node, 'sortCondition')) builder.addCondition(attrs(condition))
-  return builder.finish()
 }
-/** Parses a <table> part's <autoFilter>/<sortState>; undefined when neither is
- * present. */
-export function parseDeclaredTable(node: XmlNode | undefined, partPath: string): DeclaredTableFilters | undefined {
-  if (!node) return undefined
-  const autoNode = getChildren(node, 'autoFilter')[0]
-  const autoFilter = parseDeclaredAutoFilter(autoNode)
-  const sortState = pickDeclaredSortState(
-    parseDeclaredSortState(getChildren(node, 'sortState')[0], 'direct'),
-    parseDeclaredSortState(autoNode ? getChildren(autoNode, 'sortState')[0] : undefined, 'nested'),
-  )
-  return declaredTableOf(attrs(node), partPath, autoFilter, sortState)
+/** Parses a worksheet's or table's <autoFilter>/<sortState> children in
+ * schema order (filterColumns, then the nested sortState, then direct ones). */
+export function parseDeclaredContainer(node: XmlNode, budget?: DeclaredBudget): DeclaredContainerState {
+  const container = declaredContainerBuilder(budget)
+  for (const autoNode of getChildren(node, 'autoFilter')) {
+    const builder = container.autoFilter(attrs(autoNode))
+    if (!builder) continue
+    for (const child of getChildren(autoNode, 'filterColumn')) {
+      // extLst is extension metadata, not a filter criterion: it is neither a
+      // rule alternative nor evidence of multiple rules.
+      const rules = elementChildren(child).filter(([tag]) => tag !== 'extLst')
+      const first = rules[0]
+      builder.addColumn({ attrs: attrs(child), ruleCount: rules.length, ...(first ? { firstRule: ruleInputOf(first[0], first[1]) } : {}) })
+    }
+    for (const sortNode of getChildren(autoNode, 'sortState')) feedSortState(container.sortState(attrs(sortNode), 'nested'), sortNode)
+  }
+  for (const sortNode of getChildren(node, 'sortState')) feedSortState(container.sortState(attrs(sortNode), 'direct'), sortNode)
+  return container.finish()
 }
-/** Direct child wins over a nested <autoFilter>/<sortState>; the conflict is
- * flagged on the kept declaration (first flag wins, evidence never merged). */
-export function pickDeclaredSortState(
-  direct: DeclaredSortState | undefined, nested: DeclaredSortState | undefined,
-): DeclaredSortState | undefined {
-  if (!direct) return nested
-  if (nested && direct.malformed === undefined) direct.malformed = 'duplicate-sortState'
-  return direct
+/** Offers one parsed <table> part to the sheet accumulator. */
+export function collectDeclaredTable(sheet: DeclaredSheetBuilder, node: XmlNode, partPath: string): void {
+  const declares = getChildren(node, 'autoFilter').length > 0 || getChildren(node, 'sortState').length > 0
+  sheet.addTable(partPath, declares, () => declaredTableOf(attrs(node), partPath, parseDeclaredContainer(node, sheet.budget)))
 }
+
 /** Whether the sheet declares any file filter/sort state (well-formed or not). */
 export function hasDeclaredFiltering(entry: DeclaredSheetFilters | undefined): boolean {
   if (!entry) return false
@@ -367,30 +514,56 @@ function ruleSummary(rule: DeclaredFilterRule): string {
     case 'values': return `values (${rule.valueCount} listed${rule.hasBlank ? ', blanks' : ''})`
     case 'custom': return `custom (${rule.totalCount} conditions)`
     case 'top10': return 'Top 10'
-    case 'dynamic': return `dynamic (${rule.filterType || 'untyped'})`
+    case 'dynamic': return `dynamic (${label(rule.filterType) || 'untyped'})`
     case 'color': return 'color'
     default: return 'unsupported'
   }
 }
+/** File text in status copy is cut short; the record keeps the longer copy. */
+function label(text: string): string {
+  return text.length > MAX_SUMMARY_LABEL ? `${cut(text, MAX_SUMMARY_LABEL - 1)}…` : text
+}
+function filterSummary(auto: DeclaredAutoFilter): string {
+  if (!auto.range) {
+    return auto.refVerbatim !== undefined
+      ? `a file filter on an unreadable range "${label(auto.refVerbatim)}"`
+      : 'a file filter the viewer could not read'
+  }
+  // Only columns carrying a rule filter anything; a bare filterColumn (e.g.
+  // hiddenButton only) is button metadata.
+  const ruled = auto.columns.filter(column => column.rule !== undefined)
+  const shown = ruled.slice(0, MAX_SUMMARY_ITEMS).map(column => ruleSummary(column.rule!))
+  const more = ruled.length - shown.length
+  const details = ruled.length === 0
+    ? 'no filtered columns'
+    : `${ruled.length} filtered column${ruled.length === 1 ? '' : 's'}: ${shown.join(', ')}${more > 0 ? `, and ${more} more` : ''}`
+  const unread = auto.omittedColumns ? `; ${auto.omittedColumns} more column declarations not read` : ''
+  return `a file filter on ${label(auto.refVerbatim ?? '')} (${details}${unread})`
+}
+function sortSummary(sort: DeclaredSortState): string {
+  const kind = sort.unsupported === 'left-to-right' ? 'a stored left-to-right sort' : 'a stored sort'
+  const suffix = sort.unsupported ? ' (unsupported)' : ''
+  if (sort.range) return `${kind} on ${label(sort.refVerbatim ?? '')}${suffix}`
+  if (sort.refVerbatim !== undefined) return `${kind} on an unreadable range "${label(sort.refVerbatim)}"${suffix}`
+  return `${kind} the viewer could not read${suffix}`
+}
 /** One-line status copy for Clear/snapshot explanations (spec §7.5): the file
- * filter effects are the load snapshot, not editable viewer rules. */
+ * filter effects are the load snapshot, not editable viewer rules. Bounded
+ * regardless of how much the file declares. */
 export function summarizeDeclaredFiltering(entry: DeclaredSheetFilters): string {
   const parts: string[] = []
-  const auto = entry.worksheetAutoFilter
-  if (auto?.refVerbatim) {
-    const shown = auto.columns.slice(0, MAX_SUMMARY_ITEMS)
-    const listed = shown.map(column => column.rule ? ruleSummary(column.rule) : 'unfiltered').join(', ')
-    const hidden = auto.columns.length - shown.length + (auto.omittedColumns ?? 0)
-    parts.push(`a file filter on ${auto.refVerbatim} (${auto.columns.length} filtered columns: ${listed}${hidden > 0 ? `; and ${hidden} more` : ''})`)
-  } else if (auto) parts.push('a file filter declaration the viewer could not read')
-  if (entry.worksheetSortState?.refVerbatim) parts.push(`a stored sort on ${entry.worksheetSortState.refVerbatim}`)
-  entry.tableAutoFilters.slice(0, MAX_SUMMARY_ITEMS).forEach(table => {
-    const label = table.table.displayName ?? table.table.partPath
-    if (table.autoFilter?.refVerbatim) parts.push(`table "${label}" declares a filter on ${table.autoFilter.refVerbatim}`)
-    else parts.push(`table "${label}" declares a filter the viewer could not read`)
-  })
-  const hiddenTables = entry.tableAutoFilters.length - Math.min(entry.tableAutoFilters.length, MAX_SUMMARY_ITEMS)
+  if (entry.worksheetAutoFilter) parts.push(filterSummary(entry.worksheetAutoFilter))
+  if (entry.worksheetSortState) parts.push(sortSummary(entry.worksheetSortState))
+  const shownTables = entry.tableAutoFilters.slice(0, MAX_SUMMARY_ITEMS)
+  for (const table of shownTables) {
+    const what: string[] = []
+    if (table.autoFilter) what.push(filterSummary(table.autoFilter))
+    if (table.sortState) what.push(sortSummary(table.sortState))
+    parts.push(`table "${label(table.table.displayName ?? table.table.partPath)}" has ${what.join(' and ')}`)
+  }
+  const hiddenTables = entry.tableAutoFilters.length - shownTables.length + (entry.omittedTables ?? 0)
   if (hiddenTables > 0) parts.push(`and ${hiddenTables} more table declarations`)
-  const declared = parts.length > 0 ? parts.join('; ') : 'file filter declarations'
-  return `Sheet "${entry.name}" has ${declared}; hidden rows are part of the file snapshot and Clear restores this snapshot without creating editable filter rules.`
+  let declared = parts.length > 0 ? parts.join('; ') : 'file filter declarations'
+  if (declared.length > MAX_SUMMARY_DECLARED) declared = `${cut(declared, MAX_SUMMARY_DECLARED - 1)}…`
+  return `Sheet "${label(entry.name)}": ${declared}. Hidden rows are part of the file snapshot and Clear restores this snapshot without creating editable filter rules.`
 }
