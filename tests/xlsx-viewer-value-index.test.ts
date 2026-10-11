@@ -656,6 +656,22 @@ describe('review round 1 findings', () => {
     expect(rule).toMatchObject({ selection: { mode: 'allExcept', excluded: { count: 2 } } })
     expect([num(10), num(210), num(20), num(30)].map(await membership(rule, store))).toEqual([false, false, true, true])
   })
+  it('applies a search patch made while loading to values merged later in isSelected and selectedCount', async () => {
+    let resolved = false
+    const source = new FakeSource([
+      () => lanes('p0', ['alpha-1', 'beta-1']),
+      () => resolved ? lanes('p1', ['alpha-2', 'beta-2']) : { kind: 'unknown', pageId: 'p1' },
+    ])
+    const index = new ValueIndexCache().open(identity(), source)
+    await index.build()
+    const draft = await ValueSelectionDraft.open(index, null, new MemoryValueRunStore())
+    draft.selectAll(false, await draft.search({ text: 'alpha', locale: 'en-US' }))
+    resolved = true
+    expect(await index.build()).toBe('complete')
+    expect(draft.isSelected(index.find(str('alpha-2')))).toBe(false)
+    expect(draft.isSelected(index.find(str('beta-2')))).toBe(true)
+    expect(draft.selectedCount()).toEqual({ count: 2, complete: true })
+  })
   it('interrupts a build of immediately resolved pages with a scheduled abort and reports progress (codex 7)', async () => {
     const total = 200_000, rows = 1024, pages: (() => ValuePageRead)[] = []
     for (let start = 0; start < total; start += rows) {

@@ -250,7 +250,13 @@ export class ValueIndexCache {
   }
 }
 
-interface SearchRecord { reservation: ValueReservation; label?: ValueLabeler; limits?: Omit<FilterLimits, 'signal'> }
+interface SearchRecord {
+  reservation: ValueReservation
+  label?: ValueLabeler
+  limits?: Omit<FilterLimits, 'signal'>
+  /** Lazily prepared matcher for ordinals merged after the search. */
+  tail?: { budget: WorkBudget; contains: (text: string, budget: WorkBudget) => boolean }
+}
 
 export class ValueIndex implements LaneAccount {
   readonly ledger: ValueIndexLedger = { sourcePageReads: 0, mergedPages: 0, unknownPages: 0, allocations: 0, allocatedBytes: 0, chargedBytes: 0, peakBytes: 0 }
@@ -520,6 +526,21 @@ export class ValueIndex implements LaneAccount {
       throw new ValueIndexError('stale-source', 'Search result belongs to another or a released value index result')
     }
   }
+  /** @internal Exact membership of an ordinal in an owned search patch,
+   * evaluating ordinals merged after the search with its own policy. */
+  searchMatches(result: ValueSearchResult, ordinal: number): boolean {
+    if (ordinal < result.searchedEntries) return hasBit(result.matches, ordinal)
+    if (result.query.text === '') return true
+    const record = this.results.get(result)!
+    try {
+      if (!record.tail) {
+        const budget = new WorkBudget({ ...record.limits })
+        record.tail = { budget, contains: new TextFilterMatcher(result.query.locale).prepare('contains', result.query.text, false, budget) }
+      }
+      record.tail.budget.resetAllowance()
+      return record.tail.contains(this.searchText(ordinal, record.label ?? defaultLabel), record.tail.budget)
+    } catch (error) { throw diagnostic(error) }
+  }
   /** A bounded display page. Only the first VALUE_DISPLAY_LIMIT entries of the
    * universe or search result are displayable; totals stay exact. */
   page(request: ValuePageRequest): ValuePage {
@@ -673,7 +694,7 @@ export class ValueSelectionDraft {
       if (layer.kind === 'keys') {
         const selected = layer.entries.get(ordinal)
         if (selected !== undefined) return selected
-      } else if (ordinal < layer.result.searchedEntries && hasBit(layer.result.matches, ordinal)) return layer.selected
+      } else if (this.index.searchMatches(layer.result, ordinal)) return layer.selected
     }
     return this.baseSelected(ordinal)
   }
@@ -766,8 +787,12 @@ export class ValueSelectionDraft {
         for (const [ordinal, selected] of layer.entries) (selected ? setBit : clearBit)(bits, ordinal)
         continue
       }
-      const matches = layer.result.matches, count = words(layer.result.searchedEntries)
+      const matches = layer.result.matches, searched = layer.result.searchedEntries, count = words(searched)
       for (let word = 0; word < count; word++) bits[word] = layer.selected ? bits[word] | matches[word] : bits[word] & ~matches[word]
+      // Values merged after a loading-time search still belong to its patch.
+      for (let ordinal = searched; ordinal < size; ordinal++) {
+        if (index.searchMatches(layer.result, ordinal)) (layer.selected ? setBit : clearBit)(bits, ordinal)
+      }
     }
     return bits
   }
