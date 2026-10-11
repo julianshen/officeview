@@ -5,6 +5,8 @@ import { parseXlsx } from '../src/xlsx/parse'
 import type { XlsxDocument } from '../src/xlsx/types'
 import {
   classifyFilterRuleTag,
+  declaredAutoFilterBuilder,
+  declaredSortStateBuilder,
   hasDeclaredFiltering,
   parseDeclaredRef,
   sortByOf,
@@ -290,5 +292,32 @@ describe('codex round-2 findings', () => {
     expect(columns[3]).toMatchObject({ colId: 0 })
     expect(columns[3].malformed).toBeUndefined()
     expect(columns[4]).toMatchObject({ colId: 0, malformed: 'duplicate-colId' })
+  })
+})
+
+describe('adapter-neutral builders', () => {
+  it('produce the same diagnostics from per-element input as the tree adapter', async () => {
+    const doc = await parseFiles(sheetFiles(sheetWrap(
+      `<autoFilter ref="A1:C3"><filterColumn colId="0" hiddenButton="1"><customFilters and="1"><customFilter operator="greaterThan" val="3"/><customFilter val="x"/></customFilters></filterColumn><filterColumn colId="0"><filters blank="1"><filter val="a"/><dateGroupItem year="2020" dateTimeGrouping="year"/></filters></filterColumn><filterColumn colId="x"><colorFilter dxfId="2"/></filterColumn></autoFilter><sortState ref="A1:C3" caseSensitive="1"><sortCondition ref="A1:A3" descending="1" customList="a,b"/><sortCondition sortBy="icon"/></sortState>`,
+    )))
+    const auto = declaredAutoFilterBuilder({ ref: 'A1:C3' })
+    auto.addColumn({
+      attrs: { colId: '0', hiddenButton: '1' }, ruleCount: 1,
+      firstRule: { tag: 'customFilters', attrs: { and: '1' }, filterCount: 0, dateGroupItemCount: 0, customFilters: [{ operator: 'greaterThan', val: '3' }, { val: 'x' }], customFilterCount: 2 },
+    })
+    auto.addColumn({
+      attrs: { colId: '0' }, ruleCount: 1,
+      firstRule: { tag: 'filters', attrs: { blank: '1' }, filterCount: 1, dateGroupItemCount: 1, customFilters: [], customFilterCount: 0 },
+    })
+    auto.addColumn({
+      attrs: { colId: 'x' }, ruleCount: 1,
+      firstRule: { tag: 'colorFilter', attrs: { dxfId: '2' }, filterCount: 0, dateGroupItemCount: 0, customFilters: [], customFilterCount: 0 },
+    })
+    const sort = declaredSortStateBuilder({ ref: 'A1:C3', caseSensitive: '1' }, 'direct')
+    sort.addCondition({ ref: 'A1:A3', descending: '1', customList: 'a,b' })
+    sort.addCondition({ sortBy: 'icon' })
+    const entry = doc.declaredFilters![0]
+    expect(auto.finish()).toEqual(entry.worksheetAutoFilter)
+    expect(sort.finish()).toEqual(entry.worksheetSortState)
   })
 })

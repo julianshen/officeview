@@ -132,14 +132,36 @@ function intAttr(value: unknown): number | undefined {
   const n = parseInt(value, 10)
   return Number.isSafeInteger(n) && n >= 0 ? n : undefined
 }
-function ruleOf(tag: string, node: XmlNode): DeclaredFilterRule {
-  const a = attrs(node)
-  switch (classifyFilterRuleTag(tag)) {
-    case 'filters': {
-      const valueCount = getChildren(node, 'filter').length + getChildren(node, 'dateGroupItem').length
-      const hasDateGroups = getChildren(node, 'dateGroupItem').length > 0
-      return { kind: 'values', valueCount, hasBlank: a.blank === '1' || a.blank === 'true', hasDateGroups }
-    }
+/** Attribute record as either adapter sees it (tree attrs or SAX attributes). */
+export type DeclaredAttrs = Readonly<Record<string, unknown>>
+/** One filterColumn rule child, reduced to what the kind needs: the tag, its
+ * attributes and child counts. customFilters holds at most
+ * MAX_RECORDED_CONDITIONS records, so a huge rule costs a counter, not an array. */
+export interface DeclaredRuleInput {
+  tag: string
+  attrs: DeclaredAttrs
+  filterCount: number
+  dateGroupItemCount: number
+  customFilters: DeclaredAttrs[]
+  customFilterCount: number
+}
+/** One filterColumn: its attributes, the number of rule alternatives (extLst
+ * excluded) and the first one. */
+export interface DeclaredColumnInput {
+  attrs: DeclaredAttrs
+  ruleCount: number
+  firstRule?: DeclaredRuleInput
+}
+export function declaredRuleOf(input: DeclaredRuleInput): DeclaredFilterRule {
+  const a = input.attrs
+  switch (classifyFilterRuleTag(input.tag)) {
+    case 'filters':
+      return {
+        kind: 'values',
+        valueCount: input.filterCount + input.dateGroupItemCount,
+        hasBlank: a.blank === '1' || a.blank === 'true',
+        hasDateGroups: input.dateGroupItemCount > 0,
+      }
     case 'top10':
       return {
         kind: 'top10',
@@ -149,12 +171,10 @@ function ruleOf(tag: string, node: XmlNode): DeclaredFilterRule {
         ...(textAttr(a.filterVal) !== undefined ? { filterVal: textAttr(a.filterVal) } : {}),
       }
     case 'customFilters': {
-      const customs = getChildren(node, 'customFilter')
-      const conditions = customs.slice(0, MAX_RECORDED_CONDITIONS).map(entry => {
-        const ca = attrs(entry)
-        return { operator: textAttr(ca.operator) ?? 'equal', value: textAttr(ca.val) ?? '' }
-      })
-      return { kind: 'custom', operator: a.and === '1' || a.and === 'true' ? 'and' : 'or', conditions, totalCount: customs.length }
+      const conditions = input.customFilters.slice(0, MAX_RECORDED_CONDITIONS).map(ca => (
+        { operator: textAttr(ca.operator) ?? 'equal', value: textAttr(ca.val) ?? '' }
+      ))
+      return { kind: 'custom', operator: a.and === '1' || a.and === 'true' ? 'and' : 'or', conditions, totalCount: input.customFilterCount }
     }
     case 'dynamicFilter':
       return {
@@ -169,71 +189,72 @@ function ruleOf(tag: string, node: XmlNode): DeclaredFilterRule {
         ...(textAttr(a.dxfId) !== undefined ? { dxfId: textAttr(a.dxfId) } : {}),
         ...(textAttr(a.cellColor) !== undefined ? { cellColor: textAttr(a.cellColor) } : {}),
       }
-    default: return { kind: 'unknown', element: tag }
+    default: return { kind: 'unknown', element: input.tag }
   }
 }
-/** Parses one <autoFilter> element; undefined when absent. Malformed input is
- * recorded, never thrown and never repaired into a range. */
-export function parseDeclaredAutoFilter(node: XmlNode | undefined): DeclaredAutoFilter | undefined {
-  if (!node) return undefined
-  const a = attrs(node)
-  const refVerbatim = textAttr(a.ref)
+function refInto(out: { refVerbatim?: string; range?: DeclaredRange; malformed?: string }, value: unknown): void {
+  const refVerbatim = textAttr(value)
+  if (refVerbatim === undefined) {
+    out.malformed = 'missing-ref'
+    return
+  }
+  out.refVerbatim = refVerbatim
+  const range = parseDeclaredRef(refVerbatim)
+  if (!range) out.malformed = 'invalid-ref'
+  else out.range = range
+}
+export interface DeclaredAutoFilterBuilder {
+  addColumn(input: DeclaredColumnInput): void
+  finish(): DeclaredAutoFilter
+}
+/** Adapter-neutral accumulator for one <autoFilter>: bounding and validation
+ * live here so the tree and streaming adapters produce identical diagnostics.
+ * Malformed input is recorded, never thrown and never repaired into a range. */
+export function declaredAutoFilterBuilder(attrs: DeclaredAttrs): DeclaredAutoFilterBuilder {
   const out: DeclaredAutoFilter = { columns: [] }
-  if (refVerbatim === undefined) out.malformed = 'missing-ref'
-  else {
-    out.refVerbatim = refVerbatim
-    const range = parseDeclaredRef(refVerbatim)
-    if (!range) out.malformed = 'invalid-ref'
-    else out.range = range
+  refInto(out, attrs.ref)
+  let index = 0
+  return {
+    addColumn(input) {
+      if (index >= MAX_DECLARED_ITEMS) {
+        index++
+        out.omittedColumns = (out.omittedColumns ?? 0) + 1
+        return
+      }
+      const ca = input.attrs
+      const colId = intAttr(ca.colId)
+      const column: DeclaredFilterColumn = { index: index++, colId: undefined }
+      if (colId !== undefined) column.colId = colId
+      else column.malformed = 'invalid-colId'
+      const hidden = boolAttr(ca.hiddenButton), shown = boolAttr(ca.showButton)
+      if (hidden !== undefined) column.hiddenButton = hidden
+      if (shown !== undefined) column.showButton = shown
+      if (input.ruleCount > 1) column.malformed = 'multiple-rule-elements'
+      if (input.firstRule) column.rule = declaredRuleOf(input.firstRule)
+      out.columns.push(column)
+    },
+    finish() {
+      // Second pass over retained columns: colId is a 0-based offset into the
+      // declared range, so it is only meaningful against a known range. The
+      // first flag wins; evidence is kept, never repaired into a valid index.
+      const width = out.range ? out.range.maxCol - out.range.minCol + 1 : undefined
+      const seen = new Set<number>()
+      for (const column of out.columns) {
+        if (column.colId === undefined || column.malformed !== undefined) {
+          if (column.colId !== undefined) seen.add(column.colId)
+          continue
+        }
+        if (width !== undefined && column.colId >= width) column.malformed = 'colId-out-of-range'
+        else if (seen.has(column.colId)) column.malformed = 'duplicate-colId'
+        else seen.add(column.colId)
+      }
+      return out
+    },
   }
-  getChildren(node, 'filterColumn').forEach((child, index) => {
-    if (index >= MAX_DECLARED_ITEMS) {
-      out.omittedColumns = (out.omittedColumns ?? 0) + 1
-      return
-    }
-    const ca = attrs(child)
-    const colId = intAttr(ca.colId)
-    const column: DeclaredFilterColumn = { index, colId: undefined }
-    if (colId !== undefined) column.colId = colId
-    else column.malformed = 'invalid-colId'
-    const hidden = boolAttr(ca.hiddenButton), shown = boolAttr(ca.showButton)
-    if (hidden !== undefined) column.hiddenButton = hidden
-    if (shown !== undefined) column.showButton = shown
-    // extLst is extension metadata, not a filter criterion: it is neither a
-    // rule alternative nor evidence of multiple rules.
-    const rules = elementChildren(child).filter(([tag]) => tag !== 'extLst')
-    if (rules.length > 1) column.malformed = 'multiple-rule-elements'
-    const first = rules[0]
-    if (first) column.rule = ruleOf(first[0], first[1])
-    out.columns.push(column)
-  })
-  // Second pass over retained columns: colId is a 0-based offset into the
-  // declared range, so it is only meaningful against a known range. The first
-  // flag wins; evidence is kept, never repaired into a valid index.
-  const width = out.range ? out.range.maxCol - out.range.minCol + 1 : undefined
-  const seen = new Set<number>()
-  for (const column of out.columns) {
-    if (column.colId === undefined || column.malformed !== undefined) {
-      if (column.colId !== undefined) seen.add(column.colId)
-      continue
-    }
-    if (width !== undefined && column.colId >= width) column.malformed = 'colId-out-of-range'
-    else if (seen.has(column.colId)) column.malformed = 'duplicate-colId'
-    else seen.add(column.colId)
-  }
-  return out
 }
-function sortConditionOf(node: XmlNode): DeclaredSortCondition {
-  const a = attrs(node)
+function sortConditionOf(a: DeclaredAttrs): DeclaredSortCondition {
   const out: DeclaredSortCondition = { sortBy: sortByOf(textAttr(a.sortBy)) }
-  const refVerbatim = textAttr(a.ref)
-  if (refVerbatim === undefined) out.malformed = 'missing-ref'
-  else {
-    out.refVerbatim = refVerbatim
-    const range = parseDeclaredRef(refVerbatim)
-    if (!range) out.malformed = 'invalid-ref'
-    else out.range = range
-  }
+  refInto(out, a.ref)
   if (out.sortBy === 'unknown') out.sortByVerbatim = a.sortBy === undefined ? undefined : String(a.sortBy)
   const descending = boolAttr(a.descending)
   if (descending !== undefined) out.descending = descending
@@ -243,35 +264,80 @@ function sortConditionOf(node: XmlNode): DeclaredSortCondition {
   if (customList !== undefined) out.customListCount = customList.split(',').length
   return out
 }
-/** Parses one <sortState> element; undefined when absent. Stored order is
- * never touched: this is a description of what the file declares. The caller
- * attributes placement (direct child vs nested inside <autoFilter>). */
-export function parseDeclaredSortState(node: XmlNode | undefined, placement: 'direct' | 'nested'): DeclaredSortState | undefined {
-  if (!node) return undefined
-  const a = attrs(node)
-  const refVerbatim = textAttr(a.ref)
+export interface DeclaredSortStateBuilder {
+  addCondition(attrs: DeclaredAttrs): void
+  finish(): DeclaredSortState
+}
+/** Adapter-neutral accumulator for one <sortState>. Stored order is never
+ * touched: this describes what the file declares. The caller attributes
+ * placement (direct child vs nested inside <autoFilter>). */
+export function declaredSortStateBuilder(attrs: DeclaredAttrs, placement: 'direct' | 'nested'): DeclaredSortStateBuilder {
   const out: DeclaredSortState = { placement, conditions: [] }
-  getChildren(node, 'sortCondition').forEach(condition => {
-    if (out.conditions.length >= MAX_DECLARED_ITEMS) {
-      out.omittedConditions = (out.omittedConditions ?? 0) + 1
-      return
-    }
-    out.conditions.push(sortConditionOf(condition))
-  })
-  if (refVerbatim === undefined) out.malformed = 'missing-ref'
-  else {
-    out.refVerbatim = refVerbatim
-    const range = parseDeclaredRef(refVerbatim)
-    if (!range) out.malformed = 'invalid-ref'
-    else out.range = range
+  return {
+    addCondition(condition) {
+      if (out.conditions.length >= MAX_DECLARED_ITEMS) {
+        out.omittedConditions = (out.omittedConditions ?? 0) + 1
+        return
+      }
+      out.conditions.push(sortConditionOf(condition))
+    },
+    finish() {
+      refInto(out, attrs.ref)
+      const caseSensitive = boolAttr(attrs.caseSensitive)
+      if (caseSensitive !== undefined) out.caseSensitive = caseSensitive
+      return out
+    },
   }
-  const caseSensitive = boolAttr(a.caseSensitive)
-  if (caseSensitive !== undefined) out.caseSensitive = caseSensitive
+}
+/** Table attribution is verbatim (displayName as authored, part path), so a
+ * table whose metadata is invalid still reports what it declares; undefined
+ * when the table declares neither. */
+export function declaredTableOf(
+  attrs: DeclaredAttrs, partPath: string, autoFilter: DeclaredAutoFilter | undefined, sortState: DeclaredSortState | undefined,
+): DeclaredTableFilters | undefined {
+  if (!autoFilter && !sortState) return undefined
+  const displayName = textAttr(attrs.displayName)
+  const out: DeclaredTableFilters = { table: { partPath, ...(displayName !== undefined ? { displayName } : {}) } }
+  if (autoFilter) out.autoFilter = autoFilter
+  if (sortState) out.sortState = sortState
   return out
 }
+
+// Tree adapter: walks parsed part XML into the builders above.
+
+function ruleInputOf(tag: string, node: XmlNode): DeclaredRuleInput {
+  const customs = getChildren(node, 'customFilter')
+  return {
+    tag,
+    attrs: attrs(node),
+    filterCount: getChildren(node, 'filter').length,
+    dateGroupItemCount: getChildren(node, 'dateGroupItem').length,
+    customFilters: customs.slice(0, MAX_RECORDED_CONDITIONS).map(entry => attrs(entry)),
+    customFilterCount: customs.length,
+  }
+}
+/** Parses one <autoFilter> element; undefined when absent. */
+export function parseDeclaredAutoFilter(node: XmlNode | undefined): DeclaredAutoFilter | undefined {
+  if (!node) return undefined
+  const builder = declaredAutoFilterBuilder(attrs(node))
+  for (const child of getChildren(node, 'filterColumn')) {
+    // extLst is extension metadata, not a filter criterion: it is neither a
+    // rule alternative nor evidence of multiple rules.
+    const rules = elementChildren(child).filter(([tag]) => tag !== 'extLst')
+    const first = rules[0]
+    builder.addColumn({ attrs: attrs(child), ruleCount: rules.length, ...(first ? { firstRule: ruleInputOf(first[0], first[1]) } : {}) })
+  }
+  return builder.finish()
+}
+/** Parses one <sortState> element; undefined when absent. */
+export function parseDeclaredSortState(node: XmlNode | undefined, placement: 'direct' | 'nested'): DeclaredSortState | undefined {
+  if (!node) return undefined
+  const builder = declaredSortStateBuilder(attrs(node), placement)
+  for (const condition of getChildren(node, 'sortCondition')) builder.addCondition(attrs(condition))
+  return builder.finish()
+}
 /** Parses a <table> part's <autoFilter>/<sortState>; undefined when neither is
- * present. Attribution is verbatim (displayName as authored, part path), so a
- * table whose metadata is invalid still reports what it declares. */
+ * present. */
 export function parseDeclaredTable(node: XmlNode | undefined, partPath: string): DeclaredTableFilters | undefined {
   if (!node) return undefined
   const autoNode = getChildren(node, 'autoFilter')[0]
@@ -280,12 +346,7 @@ export function parseDeclaredTable(node: XmlNode | undefined, partPath: string):
     parseDeclaredSortState(getChildren(node, 'sortState')[0], 'direct'),
     parseDeclaredSortState(autoNode ? getChildren(autoNode, 'sortState')[0] : undefined, 'nested'),
   )
-  if (!autoFilter && !sortState) return undefined
-  const displayName = textAttr(attrs(node).displayName)
-  const out: DeclaredTableFilters = { table: { partPath, ...(displayName !== undefined ? { displayName } : {}) } }
-  if (autoFilter) out.autoFilter = autoFilter
-  if (sortState) out.sortState = sortState
-  return out
+  return declaredTableOf(attrs(node), partPath, autoFilter, sortState)
 }
 /** Direct child wins over a nested <autoFilter>/<sortState>; the conflict is
  * flagged on the kept declaration (first flag wins, evidence never merged). */
