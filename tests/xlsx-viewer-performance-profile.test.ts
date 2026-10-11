@@ -6,6 +6,7 @@
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
+import { SCENARIOS, isScenarioId } from '../src/debug/harness/scenarios'
 
 const PROFILE_PATH = join(process.cwd(), 'tests/fixtures/xlsx-viewer/performance-profile.json')
 const RESULTS_PATH = join(process.cwd(), 'docs/validation/interactive-viewer-performance-results.json')
@@ -59,7 +60,7 @@ const profile = JSON.parse(readFileSync(PROFILE_PATH, 'utf8')) as Profile
 interface ResultRow {
   admitted: boolean | null
   note: string
-  scenario: { keys: number[]; admitted: boolean } | null
+  scenario: { id: string; keys: number[]; admitted?: boolean } | null
   series: Record<string, { samples: number; warmupExcluded: number; p50: number; p95: number | null; max: number }>
 }
 const results = JSON.parse(readFileSync(RESULTS_PATH, 'utf8')) as Record<string, ResultRow>
@@ -78,6 +79,14 @@ function checkAgainstResults(measurement: Measurement, where: string): void {
   // only if no resident harness data existed to charge.
   const admitted = row.admitted ?? (!/UNADMITTED/.test(row.note) && row.series['prep:resident-source-bytes'] === undefined && row.series['prep:resident-source-materialize'] === undefined)
   expect(measurement.admitted, `${where}: admitted flag matches the run`).toBe(admitted)
+  // The declared key count is the scenario's real key configuration.
+  expect(isScenarioId(measurement.scenario), `${where}: known scenario`).toBe(true)
+  const keys = [...SCENARIOS[measurement.scenario as keyof typeof SCENARIOS].keys]
+  if (measurement.keys !== null) expect(measurement.keys, `${where}: keys = scenario key count`).toBe(keys.length)
+  if (row.scenario) {
+    expect(row.scenario.id, `${where}: retained run is this scenario`).toBe(measurement.scenario)
+    expect(row.scenario.keys, `${where}: retained run used the scenario keys`).toEqual(keys)
+  }
   if (measurement.preparedColumns !== null) {
     expect(measurement.preparedColumns, `${where}: prepared columns match the run`).toBe(row.series['prep:prepared-columns-admitted']?.p50)
   }
@@ -152,6 +161,11 @@ describe('performance-profile.json (S8.4 threshold freeze)', () => {
       expect(measurement.preparedColumns, `${id}: every key column was prepared`).toBe(measurement.keys)
       expect(measurement.preparedColumns! >= 1, id).toBe(true)
       expect(measurement.admitted, id).toBe(true)
+      // Retained evidence of the warm boundary: zero raw source column reads.
+      const row = results[measurement.scenario]
+      expect(row.scenario?.keys, id).toEqual([...SCENARIOS[measurement.scenario as keyof typeof SCENARIOS].keys])
+      expect(row.series['kernel-source-column-reads']?.max, `${id}: kernel source reads`).toBe(0)
+      expect(row.series['query:source-column-reads']?.max, `${id}: query source reads`).toBe(0)
     }
   })
 

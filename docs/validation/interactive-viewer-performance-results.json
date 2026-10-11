@@ -1,26 +1,34 @@
 {
   "sort-100k-1key": {
-    "artifact": "viewer-chromium-desktop-F2-smoke-2026-10-11T20-48-25-544Z-00291358.json",
-    "resultHash": "cc8d43b3d2eee1660b7131e35c57b28b84a224d73834ea21997b4984b640df4d",
-    "buildCommit": "e09d242dd752872499ea47fd99af8ea2a3a780aa",
+    "artifact": "viewer-chromium-desktop-F2-smoke-2026-10-11T23-02-56-044Z-54cc3e54.json",
+    "resultHash": "27d0a7b79e6b5a992162637bd0411feda376ce56a47865f4c6dc872d74cfd5d2",
+    "buildCommit": "12822737eb43b1050a70e7dcc4c549e445ce9e9d",
     "browser": "chromium 155.0.8059.39",
     "rows": 100002,
     "profile": "desktop",
-    "admitted": null,
-    "scenario": null,
+    "admitted": true,
+    "scenario": {
+      "id": "sort-100k-1key",
+      "kind": "sort",
+      "keys": [
+        1
+      ],
+      "rows": 100002,
+      "admitted": true
+    },
     "profileConformance": {
       "conforms": true,
       "deviations": []
     },
-    "note": "S8.4 kernel scenario sort-100k-1key (full scale): F2 100k body rows, one numeric key (date: 365 distinct values, source-ID stable ties). Delivered S7/S8 kernels in a module worker over the S0.2 F2 fixture store; no XLSX import, no canvas viewport. prepareColumns(1) -> complete",
+    "note": "S8.4 kernel scenario sort-100k-1key (full scale): F2 100k body rows, one numeric key (date: 365 distinct values, source-ID stable ties). Delivered S7/S8 kernels in a module worker over the S0.2 F2 fixture store; no XLSX import, no canvas viewport. profile D; prepareColumns(1) -> complete",
     "series": {
       "prep:prepare-columns": {
         "unit": "ms",
         "samples": 1,
         "warmupExcluded": 0,
-        "p50": 85.3,
+        "p50": 85.5,
         "p95": null,
-        "max": 85.3
+        "max": 85.5
       },
       "prep:prepared-columns-admitted": {
         "unit": "count",
@@ -34,9 +42,9 @@
         "unit": "ms",
         "samples": 30,
         "warmupExcluded": 3,
-        "p50": 297,
-        "p95": 299.7,
-        "max": 300.5
+        "p50": 243.5,
+        "p95": 256.1,
+        "max": 264.4
       },
       "kernel-peak-bytes": {
         "unit": "bytes",
@@ -46,195 +54,77 @@
         "p95": 2501536,
         "max": 2501536
       },
-      "kernel-phase:read": {
-        "unit": "ms",
+      "kernel-aggregate-peak-bytes": {
+        "unit": "bytes",
         "samples": 30,
         "warmupExcluded": 3,
-        "p50": 51.1,
-        "p95": 51.9,
-        "max": 52.1
+        "p50": 5638214,
+        "p95": 5638214,
+        "max": 5638214
       },
-      "kernel-phase:yielded": {
-        "unit": "ms",
-        "samples": 30,
-        "warmupExcluded": 3,
-        "p50": 0.8,
-        "p95": 1.5,
-        "max": 1.6
-      },
-      "kernel-phase:candidates": {
-        "unit": "ms",
-        "samples": 30,
-        "warmupExcluded": 3,
-        "p50": 11.1,
-        "p95": 11.4,
-        "max": 11.5
-      },
-      "kernel-phase:merge": {
-        "unit": "ms",
-        "samples": 30,
-        "warmupExcluded": 3,
-        "p50": 209.8,
-        "p95": 212.8,
-        "max": 213.2
-      },
-      "kernel-phase:output": {
-        "unit": "ms",
-        "samples": 30,
-        "warmupExcluded": 3,
-        "p50": 11.9,
-        "p95": 12.2,
-        "max": 12.4
-      },
-      "kernel-phase:inverse": {
-        "unit": "ms",
-        "samples": 30,
-        "warmupExcluded": 3,
-        "p50": 11.4,
-        "p95": 11.7,
-        "max": 11.9
-      },
-      "kernel-phase:publish": {
-        "unit": "ms",
-        "samples": 30,
-        "warmupExcluded": 3,
-        "p50": 0.3,
-        "p95": 0.3,
-        "max": 0.3
-      },
-      "kernel-phase:tail": {
-        "unit": "ms",
+      "kernel-dictionary-bytes": {
+        "unit": "bytes",
         "samples": 30,
         "warmupExcluded": 3,
         "p50": 0,
         "p95": 0,
         "max": 0
       },
-      "input-to-present": {
-        "unit": "ms",
-        "samples": 30,
-        "warmupExcluded": 3,
-        "p50": 321,
-        "p95": 329.1,
-        "max": 336
-      },
-      "query-completion": {
-        "unit": "ms",
-        "samples": 30,
-        "warmupExcluded": 3,
-        "p50": 309.7,
-        "p95": 316.8,
-        "max": 317.6
-      },
-      "query-roundtrip": {
-        "unit": "ms",
-        "samples": 30,
-        "warmupExcluded": 3,
-        "p50": 310,
-        "p95": 316.9,
-        "max": 317.8
-      },
-      "longtask-duration": {
-        "unit": "ms",
-        "status": "none-observed",
-        "samples": 0
-      }
-    }
-  },
-  "sort-100k-8key": {
-    "artifact": "viewer-chromium-desktop-F2-smoke-2026-10-11T20-49-18-336Z-0b096e6a.json",
-    "resultHash": "79d2c49cbabecd5a5b553d87eeae32766fb2380c535f618c18efd176c7a40709",
-    "buildCommit": "e09d242dd752872499ea47fd99af8ea2a3a780aa",
-    "browser": "chromium 155.0.8059.39",
-    "rows": 100002,
-    "profile": "desktop",
-    "admitted": null,
-    "scenario": null,
-    "profileConformance": {
-      "conforms": true,
-      "deviations": []
-    },
-    "note": "S8.4 kernel scenario sort-100k-8key (full scale): F2 100k body rows, eight keys over all F2 fields, lowest cardinality first so every lane is compared. Delivered S7/S8 kernels in a module worker over the S0.2 F2 fixture store; no XLSX import, no canvas viewport. prepareColumns(2,3,7,1,5,4,6,0) -> complete",
-    "series": {
-      "prep:prepare-columns": {
-        "unit": "ms",
-        "samples": 1,
-        "warmupExcluded": 0,
-        "p50": 590.8,
-        "p95": null,
-        "max": 590.8
-      },
-      "prep:prepared-columns-admitted": {
+      "kernel-source-column-reads": {
         "unit": "count",
-        "samples": 1,
-        "warmupExcluded": 0,
-        "p50": 8,
-        "p95": null,
-        "max": 8
-      },
-      "kernel": {
-        "unit": "ms",
         "samples": 30,
         "warmupExcluded": 3,
-        "p50": 717.1,
-        "p95": 733.5,
-        "max": 748.5
-      },
-      "kernel-peak-bytes": {
-        "unit": "bytes",
-        "samples": 30,
-        "warmupExcluded": 3,
-        "p50": 10006300,
-        "p95": 10006300,
-        "max": 10006300
+        "p50": 0,
+        "p95": 0,
+        "max": 0
       },
       "kernel-phase:read": {
         "unit": "ms",
         "samples": 30,
         "warmupExcluded": 3,
-        "p50": 418,
-        "p95": 425.3,
-        "max": 434.2
+        "p50": 44.2,
+        "p95": 45,
+        "max": 45.1
       },
       "kernel-phase:yielded": {
         "unit": "ms",
         "samples": 30,
         "warmupExcluded": 3,
-        "p50": 2.5,
-        "p95": 4.8,
-        "max": 5
+        "p50": 0.9,
+        "p95": 1.3,
+        "max": 1.6
       },
       "kernel-phase:candidates": {
         "unit": "ms",
         "samples": 30,
         "warmupExcluded": 3,
-        "p50": 11.3,
-        "p95": 11.7,
-        "max": 11.8
+        "p50": 9.1,
+        "p95": 9.4,
+        "max": 9.6
       },
       "kernel-phase:merge": {
         "unit": "ms",
         "samples": 30,
         "warmupExcluded": 3,
-        "p50": 261.5,
-        "p95": 271.6,
-        "max": 272.8
+        "p50": 170.2,
+        "p95": 183.1,
+        "max": 188.6
       },
       "kernel-phase:output": {
         "unit": "ms",
         "samples": 30,
         "warmupExcluded": 3,
-        "p50": 11.7,
-        "p95": 12,
-        "max": 12.4
+        "p50": 9.7,
+        "p95": 10.3,
+        "max": 10.6
       },
       "kernel-phase:inverse": {
         "unit": "ms",
         "samples": 30,
         "warmupExcluded": 3,
-        "p50": 12.2,
-        "p95": 12.8,
-        "max": 12.9
+        "p50": 9.1,
+        "p95": 9.5,
+        "max": 10
       },
       "kernel-phase:publish": {
         "unit": "ms",
@@ -249,174 +139,56 @@
         "samples": 30,
         "warmupExcluded": 3,
         "p50": 0,
-        "p95": 0.1,
+        "p95": 0,
         "max": 0.1
       },
       "input-to-present": {
         "unit": "ms",
         "samples": 30,
         "warmupExcluded": 3,
-        "p50": 753.6,
-        "p95": 771.1,
-        "max": 773.7
+        "p50": 274.6,
+        "p95": 278.2,
+        "max": 278.8
       },
       "query-completion": {
         "unit": "ms",
         "samples": 30,
         "warmupExcluded": 3,
-        "p50": 741.7,
-        "p95": 759.1,
-        "max": 761.9
+        "p50": 259.9,
+        "p95": 265.3,
+        "max": 265.4
       },
       "query-roundtrip": {
         "unit": "ms",
         "samples": 30,
         "warmupExcluded": 3,
-        "p50": 741.7,
-        "p95": 759.3,
-        "max": 762.1
+        "p50": 260,
+        "p95": 265.5,
+        "max": 265.5
       },
-      "longtask-duration": {
-        "unit": "ms",
-        "status": "none-observed",
-        "samples": 0
-      }
-    }
-  },
-  "sort-1m-1key": {
-    "artifact": "viewer-chromium-desktop-F2-smoke-2026-10-11T20-53-41-298Z-5c00d6dd.json",
-    "resultHash": "7118bf944599563f6596e3b12b10c345885bd81762148d520c1f611329ca2d43",
-    "buildCommit": "e09d242dd752872499ea47fd99af8ea2a3a780aa",
-    "browser": "chromium 155.0.8059.39",
-    "rows": 1048576,
-    "profile": "desktop",
-    "admitted": null,
-    "scenario": null,
-    "profileConformance": {
-      "conforms": true,
-      "deviations": []
-    },
-    "note": "S8.4 kernel scenario sort-1m-1key (full scale): F2 1,048,574 body rows, one numeric key (date). Delivered S7/S8 kernels in a module worker over the S0.2 F2 fixture store; no XLSX import, no canvas viewport. prepareColumns(1) -> complete",
-    "series": {
-      "prep:prepare-columns": {
-        "unit": "ms",
-        "samples": 1,
-        "warmupExcluded": 0,
-        "p50": 1666.6,
-        "p95": null,
-        "max": 1666.6
-      },
-      "prep:prepared-columns-admitted": {
-        "unit": "count",
-        "samples": 1,
-        "warmupExcluded": 0,
-        "p50": 1,
-        "p95": null,
-        "max": 1
-      },
-      "kernel": {
-        "unit": "ms",
-        "samples": 30,
-        "warmupExcluded": 3,
-        "p50": 3416.2,
-        "p95": 3582.8,
-        "max": 3585.3
-      },
-      "kernel-peak-bytes": {
+      "query:worker-pool-peak-bytes": {
         "unit": "bytes",
         "samples": 30,
         "warmupExcluded": 3,
-        "p50": 26215886,
-        "p95": 26215886,
-        "max": 26215886
+        "p50": 5084066,
+        "p95": 5084066,
+        "max": 5084066
       },
-      "kernel-phase:read": {
-        "unit": "ms",
-        "samples": 30,
-        "warmupExcluded": 3,
-        "p50": 553.9,
-        "p95": 569.1,
-        "max": 570.3
-      },
-      "kernel-phase:yielded": {
-        "unit": "ms",
-        "samples": 30,
-        "warmupExcluded": 3,
-        "p50": 10.3,
-        "p95": 14.5,
-        "max": 14.7
-      },
-      "kernel-phase:candidates": {
-        "unit": "ms",
-        "samples": 30,
-        "warmupExcluded": 3,
-        "p50": 115.5,
-        "p95": 118.5,
-        "max": 118.9
-      },
-      "kernel-phase:merge": {
-        "unit": "ms",
-        "samples": 30,
-        "warmupExcluded": 3,
-        "p50": 2506.7,
-        "p95": 2624,
-        "max": 2627.3
-      },
-      "kernel-phase:output": {
-        "unit": "ms",
-        "samples": 30,
-        "warmupExcluded": 3,
-        "p50": 117.8,
-        "p95": 121.2,
-        "max": 121.2
-      },
-      "kernel-phase:inverse": {
-        "unit": "ms",
-        "samples": 30,
-        "warmupExcluded": 3,
-        "p50": 122.5,
-        "p95": 134.9,
-        "max": 137.6
-      },
-      "kernel-phase:publish": {
-        "unit": "ms",
+      "query:worker-pool-source-bytes": {
+        "unit": "bytes",
         "samples": 30,
         "warmupExcluded": 3,
         "p50": 0,
-        "p95": 0.1,
-        "max": 0.1
+        "p95": 0,
+        "max": 0
       },
-      "kernel-phase:tail": {
-        "unit": "ms",
+      "query:source-column-reads": {
+        "unit": "count",
         "samples": 30,
         "warmupExcluded": 3,
         "p50": 0,
-        "p95": 0.1,
-        "max": 0.1
-      },
-      "input-to-present": {
-        "unit": "ms",
-        "samples": 30,
-        "warmupExcluded": 3,
-        "p50": 3611.7,
-        "p95": 3799.5,
-        "max": 3834.6
-      },
-      "query-completion": {
-        "unit": "ms",
-        "samples": 30,
-        "warmupExcluded": 3,
-        "p50": 3598.7,
-        "p95": 3783.6,
-        "max": 3829.5
-      },
-      "query-roundtrip": {
-        "unit": "ms",
-        "samples": 30,
-        "warmupExcluded": 3,
-        "p50": 3598.9,
-        "p95": 3783.9,
-        "max": 3829.8
+        "p95": 0,
+        "max": 0
       },
       "longtask-duration": {
         "unit": "ms",
@@ -425,116 +197,139 @@
       }
     }
   },
-  "sort-1m-2key": {
-    "artifact": "viewer-chromium-desktop-F2-smoke-2026-10-11T22-01-32-910Z-fdb9bd47.json",
-    "resultHash": "e0014cac60f1d1f5b6e03009b02cdfe3d808a9d6f3cdc63bb97ded77dec798d6",
-    "buildCommit": "5c2b2026e9633ecd8a0bb3d2237161e9af3922f3",
+  "sort-100k-8key": {
+    "artifact": "viewer-chromium-desktop-F2-smoke-2026-10-11T23-03-42-475Z-f18ce049.json",
+    "resultHash": "06338d92791979ae7b44081d5b0247aa101f2fb2fa65d329fc85e1ac9ff750de",
+    "buildCommit": "12822737eb43b1050a70e7dcc4c549e445ce9e9d",
     "browser": "chromium 155.0.8059.39",
-    "rows": 1048576,
+    "rows": 100002,
     "profile": "desktop",
     "admitted": true,
     "scenario": {
-      "id": "sort-1m-2key",
+      "id": "sort-100k-8key",
       "kind": "sort",
       "keys": [
+        2,
+        3,
+        7,
         1,
-        4
+        5,
+        4,
+        6,
+        0
       ],
-      "rows": 1048576
+      "rows": 100002,
+      "admitted": true
     },
     "profileConformance": {
       "conforms": true,
       "deviations": []
     },
-    "note": "S8.4 kernel scenario sort-1m-2key (full scale): F2 1,048,574 body rows, two numeric keys (date, amount): the most 1M-row key columns the D prepared budget admits. Delivered S7/S8 kernels in a module worker over the S0.2 F2 fixture store; no XLSX import, no canvas viewport. profile D: prepareColumns(1,4) -> complete",
+    "note": "S8.4 kernel scenario sort-100k-8key (full scale): F2 100k body rows, eight keys over all F2 fields, lowest cardinality first so every lane is compared. Delivered S7/S8 kernels in a module worker over the S0.2 F2 fixture store; no XLSX import, no canvas viewport. profile D; prepareColumns(2,3,7,1,5,4,6,0) -> complete",
     "series": {
       "prep:prepare-columns": {
         "unit": "ms",
         "samples": 1,
         "warmupExcluded": 0,
-        "p50": 3380.3,
+        "p50": 600.6,
         "p95": null,
-        "max": 3380.3
+        "max": 600.6
       },
       "prep:prepared-columns-admitted": {
         "unit": "count",
         "samples": 1,
         "warmupExcluded": 0,
-        "p50": 2,
+        "p50": 8,
         "p95": null,
-        "max": 2
+        "max": 8
       },
       "kernel": {
         "unit": "ms",
         "samples": 30,
         "warmupExcluded": 3,
-        "p50": 4158.9,
-        "p95": 4212.8,
-        "max": 4219
+        "p50": 622.4,
+        "p95": 632.8,
+        "max": 644.3
       },
       "kernel-peak-bytes": {
         "unit": "bytes",
         "samples": 30,
         "warmupExcluded": 3,
-        "p50": 35653564,
-        "p95": 35653564,
-        "max": 35653564
+        "p50": 10006300,
+        "p95": 10006300,
+        "max": 10006300
       },
       "kernel-aggregate-peak-bytes": {
         "unit": "bytes",
         "samples": 30,
         "warmupExcluded": 3,
-        "p50": 87020940,
-        "p95": 87020940,
-        "max": 87020940
+        "p50": 28232468,
+        "p95": 28232468,
+        "max": 28232468
+      },
+      "kernel-dictionary-bytes": {
+        "unit": "bytes",
+        "samples": 30,
+        "warmupExcluded": 3,
+        "p50": 1096,
+        "p95": 1096,
+        "max": 1096
+      },
+      "kernel-source-column-reads": {
+        "unit": "count",
+        "samples": 30,
+        "warmupExcluded": 3,
+        "p50": 0,
+        "p95": 0,
+        "max": 0
       },
       "kernel-phase:read": {
         "unit": "ms",
         "samples": 30,
         "warmupExcluded": 3,
-        "p50": 1142.3,
-        "p95": 1151.1,
-        "max": 1151.3
+        "p50": 367.6,
+        "p95": 373.1,
+        "max": 373.6
       },
       "kernel-phase:yielded": {
         "unit": "ms",
         "samples": 30,
         "warmupExcluded": 3,
-        "p50": 12.3,
-        "p95": 13.9,
-        "max": 14.4
+        "p50": 2.6,
+        "p95": 3.4,
+        "max": 3.4
       },
       "kernel-phase:candidates": {
         "unit": "ms",
         "samples": 30,
         "warmupExcluded": 3,
-        "p50": 120.8,
-        "p95": 124.6,
-        "max": 124.7
+        "p50": 9.4,
+        "p95": 9.7,
+        "max": 9.8
       },
       "kernel-phase:merge": {
         "unit": "ms",
         "samples": 30,
         "warmupExcluded": 3,
-        "p50": 2633.5,
-        "p95": 2681.5,
-        "max": 2686.7
+        "p50": 224.4,
+        "p95": 227.7,
+        "max": 241.1
       },
       "kernel-phase:output": {
         "unit": "ms",
         "samples": 30,
         "warmupExcluded": 3,
-        "p50": 123.7,
-        "p95": 127.2,
-        "max": 127.3
+        "p50": 9.5,
+        "p95": 9.8,
+        "max": 9.9
       },
       "kernel-phase:inverse": {
         "unit": "ms",
         "samples": 30,
         "warmupExcluded": 3,
-        "p50": 124.8,
-        "p95": 130,
-        "max": 135.2
+        "p50": 9.6,
+        "p95": 10,
+        "max": 10
       },
       "kernel-phase:publish": {
         "unit": "ms",
@@ -556,25 +351,422 @@
         "unit": "ms",
         "samples": 30,
         "warmupExcluded": 3,
-        "p50": 4321.6,
-        "p95": 4389.1,
-        "max": 4393.9
+        "p50": 657.8,
+        "p95": 671.7,
+        "max": 676.8
       },
       "query-completion": {
         "unit": "ms",
         "samples": 30,
         "warmupExcluded": 3,
-        "p50": 4311.8,
-        "p95": 4374.8,
-        "max": 4383.8
+        "p50": 650,
+        "p95": 657.4,
+        "max": 657.7
       },
       "query-roundtrip": {
         "unit": "ms",
         "samples": 30,
         "warmupExcluded": 3,
-        "p50": 4311.9,
-        "p95": 4375,
-        "max": 4383.9
+        "p50": 650.1,
+        "p95": 657.6,
+        "max": 657.7
+      },
+      "query:worker-pool-peak-bytes": {
+        "unit": "bytes",
+        "samples": 30,
+        "warmupExcluded": 3,
+        "p50": 20173556,
+        "p95": 20173556,
+        "max": 20173556
+      },
+      "query:worker-pool-source-bytes": {
+        "unit": "bytes",
+        "samples": 30,
+        "warmupExcluded": 3,
+        "p50": 0,
+        "p95": 0,
+        "max": 0
+      },
+      "query:source-column-reads": {
+        "unit": "count",
+        "samples": 30,
+        "warmupExcluded": 3,
+        "p50": 0,
+        "p95": 0,
+        "max": 0
+      },
+      "longtask-duration": {
+        "unit": "ms",
+        "status": "none-observed",
+        "samples": 0
+      }
+    }
+  },
+  "sort-1m-1key": {
+    "artifact": "viewer-chromium-desktop-F2-smoke-2026-10-11T23-07-19-142Z-119ec720.json",
+    "resultHash": "35a7718f4aa506ceed3aff086d3f1f34820edbcafb8437d97bb5e581c84ebbac",
+    "buildCommit": "12822737eb43b1050a70e7dcc4c549e445ce9e9d",
+    "browser": "chromium 155.0.8059.39",
+    "rows": 1048576,
+    "profile": "desktop",
+    "admitted": true,
+    "scenario": {
+      "id": "sort-1m-1key",
+      "kind": "sort",
+      "keys": [
+        1
+      ],
+      "rows": 1048576,
+      "admitted": true
+    },
+    "profileConformance": {
+      "conforms": true,
+      "deviations": []
+    },
+    "note": "S8.4 kernel scenario sort-1m-1key (full scale): F2 1,048,574 body rows, one numeric key (date). Delivered S7/S8 kernels in a module worker over the S0.2 F2 fixture store; no XLSX import, no canvas viewport. profile D; prepareColumns(1) -> complete",
+    "series": {
+      "prep:prepare-columns": {
+        "unit": "ms",
+        "samples": 1,
+        "warmupExcluded": 0,
+        "p50": 1705.4,
+        "p95": null,
+        "max": 1705.4
+      },
+      "prep:prepared-columns-admitted": {
+        "unit": "count",
+        "samples": 1,
+        "warmupExcluded": 0,
+        "p50": 1,
+        "p95": null,
+        "max": 1
+      },
+      "kernel": {
+        "unit": "ms",
+        "samples": 30,
+        "warmupExcluded": 3,
+        "p50": 2892.4,
+        "p95": 2941.7,
+        "max": 2944.6
+      },
+      "kernel-peak-bytes": {
+        "unit": "bytes",
+        "samples": 30,
+        "warmupExcluded": 3,
+        "p50": 26215886,
+        "p95": 26215886,
+        "max": 26215886
+      },
+      "kernel-aggregate-peak-bytes": {
+        "unit": "bytes",
+        "samples": 30,
+        "warmupExcluded": 3,
+        "p50": 57809786,
+        "p95": 57809786,
+        "max": 57809786
+      },
+      "kernel-dictionary-bytes": {
+        "unit": "bytes",
+        "samples": 30,
+        "warmupExcluded": 3,
+        "p50": 0,
+        "p95": 0,
+        "max": 0
+      },
+      "kernel-source-column-reads": {
+        "unit": "count",
+        "samples": 30,
+        "warmupExcluded": 3,
+        "p50": 0,
+        "p95": 0,
+        "max": 0
+      },
+      "kernel-phase:read": {
+        "unit": "ms",
+        "samples": 30,
+        "warmupExcluded": 3,
+        "p50": 501.2,
+        "p95": 508.6,
+        "max": 511.6
+      },
+      "kernel-phase:yielded": {
+        "unit": "ms",
+        "samples": 30,
+        "warmupExcluded": 3,
+        "p50": 11.3,
+        "p95": 13.6,
+        "max": 13.8
+      },
+      "kernel-phase:candidates": {
+        "unit": "ms",
+        "samples": 30,
+        "warmupExcluded": 3,
+        "p50": 101.7,
+        "p95": 104.1,
+        "max": 104.9
+      },
+      "kernel-phase:merge": {
+        "unit": "ms",
+        "samples": 30,
+        "warmupExcluded": 3,
+        "p50": 2076.9,
+        "p95": 2111.2,
+        "max": 2114.5
+      },
+      "kernel-phase:output": {
+        "unit": "ms",
+        "samples": 30,
+        "warmupExcluded": 3,
+        "p50": 98.5,
+        "p95": 100.3,
+        "max": 101.1
+      },
+      "kernel-phase:inverse": {
+        "unit": "ms",
+        "samples": 30,
+        "warmupExcluded": 3,
+        "p50": 100.2,
+        "p95": 109.9,
+        "max": 112.9
+      },
+      "kernel-phase:publish": {
+        "unit": "ms",
+        "samples": 30,
+        "warmupExcluded": 3,
+        "p50": 0,
+        "p95": 0.1,
+        "max": 0.1
+      },
+      "kernel-phase:tail": {
+        "unit": "ms",
+        "samples": 30,
+        "warmupExcluded": 3,
+        "p50": 0,
+        "p95": 0.1,
+        "max": 0.1
+      },
+      "input-to-present": {
+        "unit": "ms",
+        "samples": 30,
+        "warmupExcluded": 3,
+        "p50": 3069.3,
+        "p95": 3110.5,
+        "max": 3140
+      },
+      "query-completion": {
+        "unit": "ms",
+        "samples": 30,
+        "warmupExcluded": 3,
+        "p50": 3054.7,
+        "p95": 3101.6,
+        "max": 3126.8
+      },
+      "query-roundtrip": {
+        "unit": "ms",
+        "samples": 30,
+        "warmupExcluded": 3,
+        "p50": 3055,
+        "p95": 3101.7,
+        "max": 3127.1
+      },
+      "query:worker-pool-peak-bytes": {
+        "unit": "bytes",
+        "samples": 30,
+        "warmupExcluded": 3,
+        "p50": 40117664,
+        "p95": 40117664,
+        "max": 40117664
+      },
+      "query:worker-pool-source-bytes": {
+        "unit": "bytes",
+        "samples": 30,
+        "warmupExcluded": 3,
+        "p50": 0,
+        "p95": 0,
+        "max": 0
+      },
+      "query:source-column-reads": {
+        "unit": "count",
+        "samples": 30,
+        "warmupExcluded": 3,
+        "p50": 0,
+        "p95": 0,
+        "max": 0
+      },
+      "longtask-duration": {
+        "unit": "ms",
+        "status": "none-observed",
+        "samples": 0
+      }
+    }
+  },
+  "sort-1m-2key": {
+    "artifact": "viewer-chromium-desktop-F2-smoke-2026-10-11T23-11-18-035Z-36e9301b.json",
+    "resultHash": "f833ae67bc8493f707da90415c56e7fd739546b7cb930f32eab8620684258b78",
+    "buildCommit": "12822737eb43b1050a70e7dcc4c549e445ce9e9d",
+    "browser": "chromium 155.0.8059.39",
+    "rows": 1048576,
+    "profile": "desktop",
+    "admitted": true,
+    "scenario": {
+      "id": "sort-1m-2key",
+      "kind": "sort",
+      "keys": [
+        1,
+        4
+      ],
+      "rows": 1048576,
+      "admitted": true
+    },
+    "profileConformance": {
+      "conforms": true,
+      "deviations": []
+    },
+    "note": "S8.4 kernel scenario sort-1m-2key (full scale): F2 1,048,574 body rows, two numeric keys (date, amount), prepared as one batch. Delivered S7/S8 kernels in a module worker over the S0.2 F2 fixture store; no XLSX import, no canvas viewport. profile D; prepareColumns(1,4) -> complete",
+    "series": {
+      "prep:prepare-columns": {
+        "unit": "ms",
+        "samples": 1,
+        "warmupExcluded": 0,
+        "p50": 3349,
+        "p95": null,
+        "max": 3349
+      },
+      "prep:prepared-columns-admitted": {
+        "unit": "count",
+        "samples": 1,
+        "warmupExcluded": 0,
+        "p50": 2,
+        "p95": null,
+        "max": 2
+      },
+      "kernel": {
+        "unit": "ms",
+        "samples": 30,
+        "warmupExcluded": 3,
+        "p50": 3430.5,
+        "p95": 3454.4,
+        "max": 3460.7
+      },
+      "kernel-peak-bytes": {
+        "unit": "bytes",
+        "samples": 30,
+        "warmupExcluded": 3,
+        "p50": 35653564,
+        "p95": 35653564,
+        "max": 35653564
+      },
+      "kernel-aggregate-peak-bytes": {
+        "unit": "bytes",
+        "samples": 30,
+        "warmupExcluded": 3,
+        "p50": 87020940,
+        "p95": 87020940,
+        "max": 87020940
+      },
+      "kernel-dictionary-bytes": {
+        "unit": "bytes",
+        "samples": 30,
+        "warmupExcluded": 3,
+        "p50": 0,
+        "p95": 0,
+        "max": 0
+      },
+      "kernel-source-column-reads": {
+        "unit": "count",
+        "samples": 30,
+        "warmupExcluded": 3,
+        "p50": 0,
+        "p95": 0,
+        "max": 0
+      },
+      "kernel-phase:read": {
+        "unit": "ms",
+        "samples": 30,
+        "warmupExcluded": 3,
+        "p50": 994.4,
+        "p95": 998.8,
+        "max": 999.3
+      },
+      "kernel-phase:yielded": {
+        "unit": "ms",
+        "samples": 30,
+        "warmupExcluded": 3,
+        "p50": 11.7,
+        "p95": 13.9,
+        "max": 14.1
+      },
+      "kernel-phase:candidates": {
+        "unit": "ms",
+        "samples": 30,
+        "warmupExcluded": 3,
+        "p50": 101.2,
+        "p95": 102.6,
+        "max": 103
+      },
+      "kernel-phase:merge": {
+        "unit": "ms",
+        "samples": 30,
+        "warmupExcluded": 3,
+        "p50": 2124.4,
+        "p95": 2147.1,
+        "max": 2147.5
+      },
+      "kernel-phase:output": {
+        "unit": "ms",
+        "samples": 30,
+        "warmupExcluded": 3,
+        "p50": 98.3,
+        "p95": 100.8,
+        "max": 100.9
+      },
+      "kernel-phase:inverse": {
+        "unit": "ms",
+        "samples": 30,
+        "warmupExcluded": 3,
+        "p50": 97.7,
+        "p95": 100.6,
+        "max": 102.4
+      },
+      "kernel-phase:publish": {
+        "unit": "ms",
+        "samples": 30,
+        "warmupExcluded": 3,
+        "p50": 0.1,
+        "p95": 0.1,
+        "max": 0.1
+      },
+      "kernel-phase:tail": {
+        "unit": "ms",
+        "samples": 30,
+        "warmupExcluded": 3,
+        "p50": 0,
+        "p95": 0.1,
+        "max": 0.1
+      },
+      "input-to-present": {
+        "unit": "ms",
+        "samples": 30,
+        "warmupExcluded": 3,
+        "p50": 3627.1,
+        "p95": 3657.6,
+        "max": 3659.2
+      },
+      "query-completion": {
+        "unit": "ms",
+        "samples": 30,
+        "warmupExcluded": 3,
+        "p50": 3616.2,
+        "p95": 3641.2,
+        "max": 3644.5
+      },
+      "query-roundtrip": {
+        "unit": "ms",
+        "samples": 30,
+        "warmupExcluded": 3,
+        "p50": 3616.3,
+        "p95": 3641.4,
+        "max": 3644.7
       },
       "query:worker-pool-peak-bytes": {
         "unit": "bytes",
@@ -592,6 +784,214 @@
         "p95": 0,
         "max": 0
       },
+      "query:source-column-reads": {
+        "unit": "count",
+        "samples": 30,
+        "warmupExcluded": 3,
+        "p50": 0,
+        "p95": 0,
+        "max": 0
+      },
+      "longtask-duration": {
+        "unit": "ms",
+        "status": "none-observed",
+        "samples": 0
+      }
+    }
+  },
+  "sort-1m-3key": {
+    "artifact": "viewer-chromium-desktop-F2-smoke-2026-10-11T23-16-05-804Z-69a5ce56.json",
+    "resultHash": "32fb35245e4747974dd7ec8b37b8b425df41367b1ae84d5db4f77574e17cbbaa",
+    "buildCommit": "12822737eb43b1050a70e7dcc4c549e445ce9e9d",
+    "browser": "chromium 155.0.8059.39",
+    "rows": 1048576,
+    "profile": "desktop",
+    "admitted": true,
+    "scenario": {
+      "id": "sort-1m-3key",
+      "kind": "sort",
+      "keys": [
+        1,
+        4,
+        5
+      ],
+      "rows": 1048576,
+      "admitted": true
+    },
+    "profileConformance": {
+      "conforms": true,
+      "deviations": []
+    },
+    "note": "S8.4 kernel scenario sort-1m-3key (full scale): F2 1,048,574 body rows, three keys (date, amount, ratio: numeric with #DIV/0! every 101st row); the 3-column batch exceeds the D staging budget, so the columns are staged one at a time and all three stay prepared. Delivered S7/S8 kernels in a module worker over the S0.2 F2 fixture store; no XLSX import, no canvas viewport. profile D; prepareColumns(1,4,5) -> quota (required 77445972 B > limit 67108864 B); staged prepareColumns(1) -> complete; staged prepareColumns(4) -> complete; staged prepareColumns(5) -> complete",
+    "series": {
+      "prep:prepare-columns": {
+        "unit": "ms",
+        "samples": 1,
+        "warmupExcluded": 0,
+        "p50": 9043.2,
+        "p95": null,
+        "max": 9043.2
+      },
+      "prep:prepared-columns-admitted": {
+        "unit": "count",
+        "samples": 1,
+        "warmupExcluded": 0,
+        "p50": 3,
+        "p95": null,
+        "max": 3
+      },
+      "kernel": {
+        "unit": "ms",
+        "samples": 30,
+        "warmupExcluded": 3,
+        "p50": 4036,
+        "p95": 4119.6,
+        "max": 4144
+      },
+      "kernel-peak-bytes": {
+        "unit": "bytes",
+        "samples": 30,
+        "warmupExcluded": 3,
+        "p50": 49285596,
+        "p95": 49285596,
+        "max": 49285596
+      },
+      "kernel-aggregate-peak-bytes": {
+        "unit": "bytes",
+        "samples": 30,
+        "warmupExcluded": 3,
+        "p50": 123721998,
+        "p95": 123721998,
+        "max": 123721998
+      },
+      "kernel-dictionary-bytes": {
+        "unit": "bytes",
+        "samples": 30,
+        "warmupExcluded": 3,
+        "p50": 54,
+        "p95": 54,
+        "max": 54
+      },
+      "kernel-source-column-reads": {
+        "unit": "count",
+        "samples": 30,
+        "warmupExcluded": 3,
+        "p50": 0,
+        "p95": 0,
+        "max": 0
+      },
+      "kernel-phase:read": {
+        "unit": "ms",
+        "samples": 30,
+        "warmupExcluded": 3,
+        "p50": 1489.6,
+        "p95": 1513.1,
+        "max": 1515.7
+      },
+      "kernel-phase:yielded": {
+        "unit": "ms",
+        "samples": 30,
+        "warmupExcluded": 3,
+        "p50": 13.9,
+        "p95": 16.2,
+        "max": 16.7
+      },
+      "kernel-phase:candidates": {
+        "unit": "ms",
+        "samples": 30,
+        "warmupExcluded": 3,
+        "p50": 98,
+        "p95": 99.4,
+        "max": 100.8
+      },
+      "kernel-phase:merge": {
+        "unit": "ms",
+        "samples": 30,
+        "warmupExcluded": 3,
+        "p50": 2236.2,
+        "p95": 2305.3,
+        "max": 2307.7
+      },
+      "kernel-phase:output": {
+        "unit": "ms",
+        "samples": 30,
+        "warmupExcluded": 3,
+        "p50": 99.4,
+        "p95": 101.5,
+        "max": 104
+      },
+      "kernel-phase:inverse": {
+        "unit": "ms",
+        "samples": 30,
+        "warmupExcluded": 3,
+        "p50": 100.3,
+        "p95": 107.3,
+        "max": 107.4
+      },
+      "kernel-phase:publish": {
+        "unit": "ms",
+        "samples": 30,
+        "warmupExcluded": 3,
+        "p50": 0.1,
+        "p95": 0.1,
+        "max": 0.1
+      },
+      "kernel-phase:tail": {
+        "unit": "ms",
+        "samples": 30,
+        "warmupExcluded": 3,
+        "p50": 0,
+        "p95": 0,
+        "max": 0.1
+      },
+      "input-to-present": {
+        "unit": "ms",
+        "samples": 30,
+        "warmupExcluded": 3,
+        "p50": 4278.9,
+        "p95": 4367.8,
+        "max": 4391.3
+      },
+      "query-completion": {
+        "unit": "ms",
+        "samples": 30,
+        "warmupExcluded": 3,
+        "p50": 4267.7,
+        "p95": 4362.5,
+        "max": 4375.9
+      },
+      "query-roundtrip": {
+        "unit": "ms",
+        "samples": 30,
+        "warmupExcluded": 3,
+        "p50": 4267.9,
+        "p95": 4362.8,
+        "max": 4376
+      },
+      "query:worker-pool-peak-bytes": {
+        "unit": "bytes",
+        "samples": 30,
+        "warmupExcluded": 3,
+        "p50": 88980286,
+        "p95": 88980286,
+        "max": 88980286
+      },
+      "query:worker-pool-source-bytes": {
+        "unit": "bytes",
+        "samples": 30,
+        "warmupExcluded": 3,
+        "p50": 0,
+        "p95": 0,
+        "max": 0
+      },
+      "query:source-column-reads": {
+        "unit": "count",
+        "samples": 30,
+        "warmupExcluded": 3,
+        "p50": 0,
+        "p95": 0,
+        "max": 0
+      },
       "longtask-duration": {
         "unit": "ms",
         "status": "none-observed",
@@ -600,43 +1000,58 @@
     }
   },
   "sort-1m-8key": {
-    "artifact": "viewer-chromium-desktop-F2-smoke-2026-10-11T21-02-59-817Z-bd769021.json",
-    "resultHash": "7f24b253cf4793fc0e7fa9cdad9baacba7d739f927c6554d632169891704d7ed",
-    "buildCommit": "e09d242dd752872499ea47fd99af8ea2a3a780aa",
+    "artifact": "viewer-chromium-desktop-F2-smoke-2026-10-11T23-24-16-916Z-1cbd8a8a.json",
+    "resultHash": "52ce8a40e1316643388e88fbf0dcde79f9f991a33437fbbd0375e63c1f67a205",
+    "buildCommit": "12822737eb43b1050a70e7dcc4c549e445ce9e9d",
     "browser": "chromium 155.0.8059.39",
     "rows": 1048576,
     "profile": "desktop",
-    "admitted": null,
-    "scenario": null,
+    "admitted": true,
+    "scenario": {
+      "id": "sort-1m-8key",
+      "kind": "sort",
+      "keys": [
+        2,
+        3,
+        7,
+        1,
+        5,
+        4,
+        6,
+        0
+      ],
+      "rows": 1048576,
+      "admitted": true
+    },
     "profileConformance": {
       "conforms": true,
       "deviations": []
     },
-    "note": "S8.4 kernel scenario sort-1m-8key (full scale): F2 1,048,574 body rows, eight keys over all F2 fields, lowest cardinality first. Delivered S7/S8 kernels in a module worker over the S0.2 F2 fixture store; no XLSX import, no canvas viewport. prepareColumns(2,3,7,1,5,4,6,0) -> quota (required 80742522 B > limit 67108864 B; sorts read the source store)",
+    "note": "S8.4 kernel scenario sort-1m-8key (full scale): F2 1,048,574 body rows, eight keys over all F2 fields, lowest cardinality first; FALLBACK diagnostic: the D prepared budget cannot hold 8 x 1M columns, so unprepared keys are read from the source. Delivered S7/S8 kernels in a module worker over the S0.2 F2 fixture store; no XLSX import, no canvas viewport. profile D; prepareColumns(2,3,7,1,5,4,6,0) -> quota (required 80742522 B > limit 67108864 B); staged prepareColumns(2) -> complete; staged prepareColumns(3) -> complete; staged prepareColumns(7) -> complete; staging column 7 evicted prepared column(s) 2; only 2 of 8 key columns prepared: FALLBACK, not the prepared warm boundary",
     "series": {
       "prep:prepare-columns": {
         "unit": "ms",
         "samples": 1,
         "warmupExcluded": 0,
-        "p50": 3830.6,
+        "p50": 8883.3,
         "p95": null,
-        "max": 3830.6
+        "max": 8883.3
       },
       "prep:prepared-columns-admitted": {
         "unit": "count",
         "samples": 1,
         "warmupExcluded": 0,
-        "p50": 0,
+        "p50": 2,
         "p95": null,
-        "max": 0
+        "max": 2
       },
       "kernel": {
         "unit": "ms",
         "samples": 30,
         "warmupExcluded": 3,
-        "p50": 8222.9,
-        "p95": 8429,
-        "max": 8463.7
+        "p50": 7025.4,
+        "p95": 7247.6,
+        "max": 7269.9
       },
       "kernel-peak-bytes": {
         "unit": "bytes",
@@ -646,59 +1061,83 @@
         "p95": 104863700,
         "max": 104863700
       },
+      "kernel-aggregate-peak-bytes": {
+        "unit": "bytes",
+        "samples": 30,
+        "warmupExcluded": 3,
+        "p50": 159527690,
+        "p95": 159527690,
+        "max": 159527690
+      },
+      "kernel-dictionary-bytes": {
+        "unit": "bytes",
+        "samples": 30,
+        "warmupExcluded": 3,
+        "p50": 1096,
+        "p95": 1096,
+        "max": 1096
+      },
+      "kernel-source-column-reads": {
+        "unit": "count",
+        "samples": 30,
+        "warmupExcluded": 3,
+        "p50": 1536,
+        "p95": 1536,
+        "max": 1536
+      },
       "kernel-phase:read": {
         "unit": "ms",
         "samples": 30,
         "warmupExcluded": 3,
-        "p50": 4425.7,
-        "p95": 4486.2,
-        "max": 4486.6
+        "p50": 3816.1,
+        "p95": 3862.6,
+        "max": 3876
       },
       "kernel-phase:yielded": {
         "unit": "ms",
         "samples": 30,
         "warmupExcluded": 3,
-        "p50": 24,
-        "p95": 31.7,
-        "max": 35.6
+        "p50": 24.1,
+        "p95": 29.8,
+        "max": 30.1
       },
       "kernel-phase:candidates": {
         "unit": "ms",
         "samples": 30,
         "warmupExcluded": 3,
-        "p50": 119.9,
-        "p95": 121.8,
-        "max": 122.1
+        "p50": 102.3,
+        "p95": 105,
+        "max": 105
       },
       "kernel-phase:merge": {
         "unit": "ms",
         "samples": 30,
         "warmupExcluded": 3,
-        "p50": 3403.3,
-        "p95": 3564.7,
-        "max": 3567.2
+        "p50": 2878.6,
+        "p95": 3047.9,
+        "max": 3055.1
       },
       "kernel-phase:output": {
         "unit": "ms",
         "samples": 30,
         "warmupExcluded": 3,
-        "p50": 122.2,
-        "p95": 124.6,
-        "max": 125.4
+        "p50": 99.4,
+        "p95": 102,
+        "max": 103.3
       },
       "kernel-phase:inverse": {
         "unit": "ms",
         "samples": 30,
         "warmupExcluded": 3,
-        "p50": 124.6,
-        "p95": 130.4,
-        "max": 131.3
+        "p50": 99.1,
+        "p95": 108,
+        "max": 109.5
       },
       "kernel-phase:publish": {
         "unit": "ms",
         "samples": 30,
         "warmupExcluded": 3,
-        "p50": 0.3,
+        "p50": 0.2,
         "p95": 0.3,
         "max": 0.3
       },
@@ -714,25 +1153,49 @@
         "unit": "ms",
         "samples": 30,
         "warmupExcluded": 3,
-        "p50": 8477.3,
-        "p95": 8746.8,
-        "max": 8897
+        "p50": 7389.2,
+        "p95": 7659,
+        "max": 7667.4
       },
       "query-completion": {
         "unit": "ms",
         "samples": 30,
         "warmupExcluded": 3,
-        "p50": 8464.6,
-        "p95": 8745.3,
-        "max": 8877
+        "p50": 7382.5,
+        "p95": 7643.4,
+        "max": 7655.5
       },
       "query-roundtrip": {
         "unit": "ms",
         "samples": 30,
         "warmupExcluded": 3,
-        "p50": 8464.9,
-        "p95": 8745.5,
-        "max": 8877.4
+        "p50": 7382.7,
+        "p95": 7643.6,
+        "max": 7655.8
+      },
+      "query:worker-pool-peak-bytes": {
+        "unit": "bytes",
+        "samples": 30,
+        "warmupExcluded": 3,
+        "p50": 92276836,
+        "p95": 92276836,
+        "max": 92276836
+      },
+      "query:worker-pool-source-bytes": {
+        "unit": "bytes",
+        "samples": 30,
+        "warmupExcluded": 3,
+        "p50": 0,
+        "p95": 0,
+        "max": 0
+      },
+      "query:source-column-reads": {
+        "unit": "count",
+        "samples": 30,
+        "warmupExcluded": 3,
+        "p50": 1536,
+        "p95": 1536,
+        "max": 1536
       },
       "longtask-duration": {
         "unit": "ms",
@@ -742,9 +1205,9 @@
     }
   },
   "filter-1m-numeric": {
-    "artifact": "viewer-chromium-desktop-F2-smoke-2026-10-11T21-56-46-398Z-fa1448d3.json",
-    "resultHash": "77059955a64abe590e347dfd7f3b007a5df20edf2985b444962cb87b6d76d2b7",
-    "buildCommit": "5c2b2026e9633ecd8a0bb3d2237161e9af3922f3",
+    "artifact": "viewer-chromium-desktop-F2-smoke-2026-10-11T23-03-56-722Z-81b5321d.json",
+    "resultHash": "9f7c4904ad6c0dcc14c1e9b4bf770699d392e2c7a7437ad25ee51d597d699d7a",
+    "buildCommit": "12822737eb43b1050a70e7dcc4c549e445ce9e9d",
     "browser": "chromium 155.0.8059.39",
     "rows": 1048576,
     "profile": "desktop",
@@ -755,7 +1218,8 @@
       "keys": [
         4
       ],
-      "rows": 1048576
+      "rows": 1048576,
+      "admitted": true
     },
     "profileConformance": {
       "conforms": true,
@@ -767,17 +1231,17 @@
         "unit": "ms",
         "samples": 1,
         "warmupExcluded": 0,
-        "p50": 8.9,
+        "p50": 9.4,
         "p95": null,
-        "max": 8.9
+        "max": 9.4
       },
       "prep:classify-column": {
         "unit": "ms",
         "samples": 1,
         "warmupExcluded": 0,
-        "p50": 15,
+        "p50": 14.8,
         "p95": null,
-        "max": 15
+        "max": 14.8
       },
       "prep:resident-lane-bytes": {
         "unit": "bytes",
@@ -791,9 +1255,9 @@
         "unit": "ms",
         "samples": 30,
         "warmupExcluded": 3,
-        "p50": 56.4,
-        "p95": 57.2,
-        "max": 58
+        "p50": 57.5,
+        "p95": 59.1,
+        "max": 60.2
       },
       "kernel-visible-rows": {
         "unit": "count",
@@ -807,25 +1271,25 @@
         "unit": "ms",
         "samples": 30,
         "warmupExcluded": 3,
-        "p50": 79.6,
-        "p95": 83.1,
-        "max": 83.3
+        "p50": 78.5,
+        "p95": 81,
+        "max": 81.1
       },
       "query-completion": {
         "unit": "ms",
         "samples": 30,
         "warmupExcluded": 3,
-        "p50": 70.2,
+        "p50": 71.1,
         "p95": 72,
-        "max": 72.6
+        "max": 72.1
       },
       "query-roundtrip": {
         "unit": "ms",
         "samples": 30,
         "warmupExcluded": 3,
-        "p50": 70.4,
-        "p95": 72.1,
-        "max": 72.6
+        "p50": 71.2,
+        "p95": 72.3,
+        "max": 72.3
       },
       "query:worker-pool-peak-bytes": {
         "unit": "bytes",
@@ -851,13 +1315,13 @@
     }
   },
   "text-sort-1m-natural": {
-    "artifact": "viewer-chromium-desktop-F4-smoke-2026-10-11T22-13-04-780Z-21e5a1d3.json",
-    "resultHash": "ae445422d0688547914a2fcac9b0e3e71b7bfe66a28e0cac0935e206cfc1232d",
-    "buildCommit": "245c44067e5a98afa73450ad4e2a0bb17018fa4f",
+    "artifact": "viewer-chromium-desktop-F4-smoke-2026-10-11T23-32-30-702Z-6683677b.json",
+    "resultHash": "c998965a7d2d5ed0d34d1f2b38e13ee1891011f2ebdbc4cff7164615c0a4b92a",
+    "buildCommit": "12822737eb43b1050a70e7dcc4c549e445ce9e9d",
     "browser": "chromium 155.0.8059.39",
     "rows": 1000000,
     "profile": "desktop",
-    "admitted": false,
+    "admitted": true,
     "scenario": {
       "id": "text-sort-1m-natural",
       "kind": "sort",
@@ -865,21 +1329,21 @@
         0
       ],
       "rows": 1000000,
-      "admitted": false
+      "admitted": true
     },
     "profileConformance": {
       "conforms": true,
       "deviations": []
     },
-    "note": "S8.4 kernel scenario text-sort-1m-natural (full scale, UNADMITTED: resident harness data not charged to the worker budget): F4 1M unique strings, host Intl.Collator numeric (natural) case-insensitive sort, source-ID stable ties. Delivered S7/S8 kernels in a module worker over the S0.2 F4 fixture store; no XLSX import, no canvas viewport. UNADMITTED run: F4 cells are materialized once (239052798 B) but NOT charged to the worker budget; this is diagnostic timing, not an admitted-profile measurement; profile D: prepareColumns(0) -> quota (required 67109542 B > limit 67108864 B; sorts read the source store: FALLBACK, not the prepared warm boundary)",
+    "note": "S8.4 kernel scenario text-sort-1m-natural (full scale): F4 1M unique strings, host Intl.Collator numeric (natural) case-insensitive sort, source-ID stable ties. Delivered S7/S8 kernels in a module worker over the S0.2 F4 fixture store; no XLSX import, no canvas viewport. F4 cells are materialized once (239052798 B, charged to the worker pool source tier) so repeated sorts do not re-synthesize fixture strings; profile D; prepareColumns(0) -> quota (required 67109542 B > limit 67108864 B); staged prepareColumns(0) -> quota; only 0 of 1 key columns prepared: FALLBACK, not the prepared warm boundary",
     "series": {
       "prep:resident-source-materialize": {
         "unit": "ms",
         "samples": 1,
         "warmupExcluded": 0,
-        "p50": 63.7,
+        "p50": 64.1,
         "p95": null,
-        "max": 63.7
+        "max": 64.1
       },
       "prep:resident-source-bytes": {
         "unit": "bytes",
@@ -893,9 +1357,9 @@
         "unit": "ms",
         "samples": 1,
         "warmupExcluded": 0,
-        "p50": 287.7,
+        "p50": 517.9,
         "p95": null,
-        "max": 287.7
+        "max": 517.9
       },
       "prep:prepared-columns-admitted": {
         "unit": "count",
@@ -909,89 +1373,105 @@
         "unit": "ms",
         "samples": 30,
         "warmupExcluded": 3,
-        "p50": 8743.5,
-        "p95": 9057.1,
-        "max": 9075.2
+        "p50": 7270.3,
+        "p95": 7441,
+        "max": 7457.5
       },
       "kernel-peak-bytes": {
         "unit": "bytes",
         "samples": 30,
         "warmupExcluded": 3,
-        "p50": 328054334,
-        "p95": 328054334,
-        "max": 328054334
+        "p50": 169001536,
+        "p95": 169001536,
+        "max": 169001536
       },
       "kernel-aggregate-peak-bytes": {
         "unit": "bytes",
         "samples": 30,
         "warmupExcluded": 3,
-        "p50": 336190530,
-        "p95": 336190530,
-        "max": 336190530
+        "p50": 416190530,
+        "p95": 416190530,
+        "max": 416190530
+      },
+      "kernel-dictionary-bytes": {
+        "unit": "bytes",
+        "samples": 30,
+        "warmupExcluded": 3,
+        "p50": 16000000,
+        "p95": 16000000,
+        "max": 16000000
+      },
+      "kernel-source-column-reads": {
+        "unit": "count",
+        "samples": 30,
+        "warmupExcluded": 3,
+        "p50": 245,
+        "p95": 245,
+        "max": 245
       },
       "kernel-phase:read": {
         "unit": "ms",
         "samples": 30,
         "warmupExcluded": 3,
-        "p50": 722.8,
-        "p95": 798.1,
-        "max": 821.4
+        "p50": 589.2,
+        "p95": 644.6,
+        "max": 697.3
       },
       "kernel-phase:yielded": {
         "unit": "ms",
         "samples": 30,
         "warmupExcluded": 3,
-        "p50": 24.1,
-        "p95": 29.5,
-        "max": 44.3
+        "p50": 21.1,
+        "p95": 25.1,
+        "max": 32.1
       },
       "kernel-phase:dictionary": {
         "unit": "ms",
         "samples": 30,
         "warmupExcluded": 3,
-        "p50": 4936.4,
-        "p95": 5065.7,
-        "max": 5166.3
+        "p50": 4288.7,
+        "p95": 4333.6,
+        "max": 4367.6
       },
       "kernel-phase:candidates": {
         "unit": "ms",
         "samples": 30,
         "warmupExcluded": 3,
-        "p50": 117.2,
-        "p95": 121.4,
-        "max": 123.1
+        "p50": 96.4,
+        "p95": 100.6,
+        "max": 101.2
       },
       "kernel-phase:merge": {
         "unit": "ms",
         "samples": 30,
         "warmupExcluded": 3,
-        "p50": 2675.9,
-        "p95": 2770.2,
-        "max": 2980.7
+        "p50": 2078.5,
+        "p95": 2246.4,
+        "max": 2289.2
       },
       "kernel-phase:output": {
         "unit": "ms",
         "samples": 30,
         "warmupExcluded": 3,
-        "p50": 119.1,
-        "p95": 122.6,
-        "max": 124.7
+        "p50": 94.6,
+        "p95": 103.3,
+        "max": 104.6
       },
       "kernel-phase:inverse": {
         "unit": "ms",
         "samples": 30,
         "warmupExcluded": 3,
-        "p50": 119.4,
-        "p95": 126.7,
-        "max": 135.1
+        "p50": 92.7,
+        "p95": 95.5,
+        "max": 95.6
       },
       "kernel-phase:publish": {
         "unit": "ms",
         "samples": 30,
         "warmupExcluded": 3,
-        "p50": 0.4,
-        "p95": 0.6,
-        "max": 0.6
+        "p50": 0.3,
+        "p95": 0.4,
+        "max": 0.4
       },
       "kernel-phase:tail": {
         "unit": "ms",
@@ -1005,41 +1485,49 @@
         "unit": "ms",
         "samples": 30,
         "warmupExcluded": 3,
-        "p50": 8988.2,
-        "p95": 9165.9,
-        "max": 9247.8
+        "p50": 7532.3,
+        "p95": 7662.1,
+        "max": 7764.2
       },
       "query-completion": {
         "unit": "ms",
         "samples": 30,
         "warmupExcluded": 3,
-        "p50": 8976.6,
-        "p95": 9159.1,
-        "max": 9240.6
+        "p50": 7523.4,
+        "p95": 7648.4,
+        "max": 7748.2
       },
       "query-roundtrip": {
         "unit": "ms",
         "samples": 30,
         "warmupExcluded": 3,
-        "p50": 8976.8,
-        "p95": 9159.3,
-        "max": 9240.8
+        "p50": 7523.5,
+        "p95": 7648.6,
+        "max": 7748.4
       },
       "query:worker-pool-peak-bytes": {
         "unit": "bytes",
         "samples": 30,
         "warmupExcluded": 3,
-        "p50": 67108124,
-        "p95": 67108124,
-        "max": 67108124
+        "p50": 306160922,
+        "p95": 306160922,
+        "max": 306160922
       },
       "query:worker-pool-source-bytes": {
         "unit": "bytes",
         "samples": 30,
         "warmupExcluded": 3,
-        "p50": 0,
-        "p95": 0,
-        "max": 0
+        "p50": 239052798,
+        "p95": 239052798,
+        "max": 239052798
+      },
+      "query:source-column-reads": {
+        "unit": "count",
+        "samples": 30,
+        "warmupExcluded": 3,
+        "p50": 245,
+        "p95": 245,
+        "max": 245
       },
       "longtask-duration": {
         "unit": "ms",
@@ -1049,9 +1537,9 @@
     }
   },
   "value-index-100k-cold": {
-    "artifact": "viewer-chromium-desktop-F4-smoke-2026-10-11T21-56-38-471Z-24079204.json",
-    "resultHash": "ad0b4a8ce666781e3d3cca3c6556eb740f333f0051d1ab8f48c0663a3954b477",
-    "buildCommit": "5c2b2026e9633ecd8a0bb3d2237161e9af3922f3",
+    "artifact": "viewer-chromium-desktop-F4-smoke-2026-10-11T23-03-48-757Z-062691d4.json",
+    "resultHash": "3ec92827ce2e6b03b1f76252463b759e6667c71dda3382b5f47e9b1345499030",
+    "buildCommit": "12822737eb43b1050a70e7dcc4c549e445ce9e9d",
     "browser": "chromium 155.0.8059.39",
     "rows": 100000,
     "profile": "desktop",
@@ -1060,7 +1548,8 @@
       "id": "value-index-100k-cold",
       "kind": "value-index",
       "keys": [],
-      "rows": 100000
+      "rows": 100000,
+      "admitted": true
     },
     "profileConformance": {
       "conforms": true,
@@ -1072,9 +1561,9 @@
         "unit": "ms",
         "samples": 1,
         "warmupExcluded": 0,
-        "p50": 6.6,
+        "p50": 6.7,
         "p95": null,
-        "max": 6.6
+        "max": 6.7
       },
       "prep:resident-source-bytes": {
         "unit": "bytes",
@@ -1088,9 +1577,9 @@
         "unit": "ms",
         "samples": 30,
         "warmupExcluded": 3,
-        "p50": 24.2,
-        "p95": 26,
-        "max": 26.2
+        "p50": 25.7,
+        "p95": 27.3,
+        "max": 28.2
       },
       "index-unique-values": {
         "unit": "count",
@@ -1120,25 +1609,25 @@
         "unit": "ms",
         "samples": 30,
         "warmupExcluded": 3,
-        "p50": 28.6,
-        "p95": 43.7,
-        "max": 46.6
+        "p50": 42.3,
+        "p95": 45.2,
+        "max": 45.2
       },
       "query-completion": {
         "unit": "ms",
         "samples": 30,
         "warmupExcluded": 3,
-        "p50": 24.2,
-        "p95": 28,
-        "max": 28.2
+        "p50": 25.8,
+        "p95": 33.2,
+        "max": 34.2
       },
       "query-roundtrip": {
         "unit": "ms",
         "samples": 30,
         "warmupExcluded": 3,
-        "p50": 24.3,
-        "p95": 28.1,
-        "max": 28.3
+        "p50": 25.9,
+        "p95": 33.4,
+        "max": 34.5
       },
       "query:worker-aggregate-bytes": {
         "unit": "bytes",
