@@ -1,13 +1,13 @@
 /** In-process S9 transport: stage in a private, budgeted session and publish the
  * resulting order/mask together. The uploaded document and live view stay untouched
  * while a dialog is pending. Worker transports use the same ControlsClient port. */
-import type { CacheIdentity, FilterRange, PagedKeySetRef, ProfileId, SheetView } from '../../xlsx/view/contracts'
+import type { CacheIdentity, FilterKeySet, FilterRange, FilterSpec, OperationRefusal, PagedKeySetRef, ProfileId, SheetView, SortSpec } from '../../xlsx/view/contracts'
 import type { XlsxCell, XlsxDocument } from '../../xlsx/types'
 import { cellDisplayText } from '../../xlsx/render'
 import { classifyColumn, FilterEngine, type FilterContext, type PreparedValue, type ColumnClassification } from '../../xlsx/view/filter'
-import { compileValuesMembership, ValueIndexCache, valueSourceFromStore, type ValueIndexIdentity, type ValueLanePage, ValueIndexError } from '../../xlsx/view/valueIndex'
+import { compileValuesMembership, ValueIndexCache, valueScope, valueSourceFromStore, type ValueIndexIdentity, type ValueLanePage, ValueIndexError } from '../../xlsx/view/valueIndex'
 import { CompactRowVisibility, createRowVisibility } from '../../xlsx/view/visibility'
-import { MemoryValueRunStore, type ValueRunStore } from '../../xlsx/view/valueRuns'
+import { MemoryValueRunStore, VALUE_RUN_PAGE, type ValueRunStore } from '../../xlsx/view/valueRuns'
 import { StructuralIndex } from '../../xlsx/view/structure'
 import { DocumentSession, type OperationOutcome, type WorkbookSource, sameStamp } from '../../worker/viewerSession'
 import { createControlsClient, type ControlSnapshot, type ControlsClient, type StagedControl, type ControlProgress, sameControlOwner } from './controlsClient'
@@ -47,6 +47,18 @@ export interface ViewerControlsOptions {
   snapshot(): ControlSnapshot
   view(): SheetView
   publish(view: Pick<SheetView, 'order' | 'visibility' | 'filter' | 'sort'>): ControlSnapshot
+  /** Worker-owned sheet views (S5.4): sort/filter commit in the resident worker,
+   * which then publishes its view to this side; nothing is staged here. */
+  remote?: RemoteViewPort
+}
+export type RemoteViewCommit =
+  | { kind: 'committed'; view: Pick<SheetView, 'order' | 'filter' | 'sort'> & { visibility?: SheetView['visibility'] } }
+  | { kind: 'refused'; refusal: OperationRefusal }
+  | { kind: 'stale' | 'cancelled' | 'incomplete' }
+  | { kind: 'error'; message: string }
+export interface RemoteViewPort {
+  sort(spec: SortSpec | null, signal: AbortSignal, progress?: (completed: number, total: number) => void): Promise<RemoteViewCommit>
+  filter(spec: FilterSpec | null, keySets: readonly FilterKeySet[], signal: AbortSignal, progress?: (completed: number, total: number) => void): Promise<RemoteViewCommit>
 }
 export interface ViewerControls { client: ControlsClient; dispose(): void }
 export async function viewerControls(options: ViewerControlsOptions, signal: AbortSignal): Promise<ViewerControls> {
@@ -106,7 +118,42 @@ export async function viewerControls(options: ViewerControlsOptions, signal: Abo
     classifications.set(key, { kind: loading ? 'loading' : text ? 'text' : numeric ? date ? 'date' : 'number' : 'empty', hasNumeric: numeric })
   }
   const identity = (owner: CacheIdentity, range: FilterRange, col: number): ValueIndexIdentity => ({ ...store.stamp, range, col, classification: classifications.get(scope(owner, range, col)) ?? { kind: 'loading', hasNumeric: false }, classificationGen: owner.valueGen })
+  /** Committed value-list keys of a filter, read from the main-owned key store
+   * for shipment with a worker filter command (bounded by that store). */
+  const shipKeys = async (owner: CacheIdentity, filter: FilterSpec, abort: AbortSignal): Promise<FilterKeySet[]> => {
+    const out: FilterKeySet[] = []
+    for (const [col, rule] of filter.columns) {
+      if (rule.kind !== 'values') continue
+      const ref = rule.selection.mode === 'include' ? rule.selection.keys : rule.selection.mode === 'allExcept' ? rule.selection.excluded : null
+      if (!ref) continue
+      await classify(owner, filter.range, col, abort)
+      const scope = valueScope(identity(owner, filter.range, col))
+      const kinds = new Uint8Array(ref.count), numbers = new Float64Array(ref.count), texts: (string | undefined)[] = []
+      for (let offset = 0; offset < ref.count; offset += VALUE_RUN_PAGE) {
+        const run = await runs.read(ref, offset, Math.min(VALUE_RUN_PAGE, ref.count - offset), scope, abort)
+        kinds.set(run.kinds.subarray(0, run.count), offset)
+        numbers.set(run.numbers.subarray(0, run.count), offset)
+        for (let i = 0; i < run.count; i++) texts.push(run.texts[i])
+      }
+      out.push({ refId: ref.refId, scope, run: { count: ref.count, kinds, numbers, texts } })
+    }
+    return out
+  }
+  const stageRemote = async (remote: RemoteViewPort, kind: 'filter' | 'sort', spec: FilterSpec | SortSpec | null, owner: CacheIdentity, abort: AbortSignal, progress?: (value: ControlProgress) => void): Promise<StagedControl> => {
+    const report = (completed: number, total: number) => progress?.({ completed, total, message: kind === 'sort' ? 'Sorting view' : 'Filtering view' })
+    const commit = kind === 'sort' ? await remote.sort(spec as SortSpec | null, abort, report)
+      : await remote.filter(spec as FilterSpec | null, spec ? await shipKeys(owner, spec as FilterSpec, abort) : [], abort, report)
+    switch (commit.kind) {
+      case 'committed': {
+        const view = commit.view
+        return { kind: 'ready', publish: () => options.publish({ order: view.order, visibility: view.visibility ?? options.view().visibility, filter: view.filter, sort: view.sort }) }
+      }
+      case 'error': return { kind: 'refused', refusal: { reason: 'source-error', code: 'page-error', retryable: true, message: commit.message } }
+      default: return commit
+    }
+  }
   const stage = async (kind: 'filter' | 'sort', spec: Parameters<ControlsClient['filter']>[1] | Parameters<ControlsClient['sort']>[1], owner: CacheIdentity, abort: AbortSignal, progress?: (value: ControlProgress) => void): Promise<StagedControl> => {
+    if (options.remote) return stageRemote(options.remote, kind, spec, owner, abort, progress)
     const before = options.view(), filterContext = context()
     // Borrow the source: closing a private draft releases only its own caches.
     const borrowed: WorkbookSource = { ...source, bindMemory: undefined, release: async () => {} }

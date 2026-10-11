@@ -26,6 +26,7 @@ import { isViewerUiTarget } from './xlsx/gridEvents'
 import type { PageOverlay } from '../core/overlay'
 import { SearchBar, ZoomControls } from './viewerControls'
 import { copyText } from '../core/clipboard'
+import { pagedWorkbookOf } from './pagedDocument'
 import {
   distance,
   midpoint,
@@ -842,9 +843,11 @@ const InteractiveSheetDoc = lazy(() => import('./xlsx/InteractiveSheetDoc'))
 export function OfficeDoc(props: OfficeDocProps): ReactElement {
   const { interactiveSheets = false, document, ...rest } = props
   if (interactiveSheets && 'sheets' in document) {
+    // A worker-backed (paged) shell document carries its source (S5.4).
+    const paged = pagedWorkbookOf(document)
     return (
       <Suspense fallback={<div role="status" data-officeview-root="" style={{ padding: 16 }}>Loading spreadsheet viewer…</div>}>
-        <InteractiveSheetDoc doc={document} {...rest} />
+        <InteractiveSheetDoc doc={document} {...(paged ? { source: paged.source } : {})} {...rest} />
       </Suspense>
     )
   }

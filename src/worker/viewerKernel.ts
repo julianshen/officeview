@@ -16,7 +16,10 @@
  * deterministic harnesses and the interactive long-operation policy, then abort
  * with an explicit incomplete/cancelled outcome) is not implemented; requests
  * run until they finish, are cancelled or superseded, or their document closes.
- * TODO(S5): viewport/search reply `unsupported` until S5 (see dispatch).
+ * S5.4: the paged interactive viewer reads through `read` (one bounded store
+ * call per command, owned by the committed view) and keeps the object planner
+ * and FindController on the main thread; `viewport`/`search` still reply
+ * `unsupported` (see dispatch).
  *
  * No worker globals: worker-entry.ts is a thin adapter, and tests drive the
  * kernel in-process (directly, or through connectInProcess, which reproduces
@@ -353,9 +356,9 @@ export class ViewerKernel {
       }
       case 'viewport':
       case 'search':
-        // TODO(S5): canonical viewport records (S5.1/S5.2) and global find (S5.3);
-        // the §10.2 scheduler priority for current viewport/active-cell work over
-        // background queries lands with them.
+        // Not used by the S5.4 paged viewer, which reads row/scan pages through
+        // `read` and plans/finds on the main thread. A worker-side planner (and
+        // the §10.2 viewport-over-background scheduler priority) would land here.
         return errorReply(command, command.owner as never, 'unsupported', false, [{ code: `${command.kind}-not-implemented`, message: `${command.kind} is delivered by S5` }])
       default: {
         // Unknown kinds (malformed or newer clients) get a typed error, never undefined.
@@ -484,7 +487,7 @@ export class ViewerKernel {
     for (const set of keySets) {
       const run = set?.run
       if (typeof set?.refId !== 'string' || typeof set.scope !== 'string' || !run || !Number.isSafeInteger(run.count) || run.count < 0
-        || !(run.kinds instanceof Uint8Array) || !(run.numbers instanceof Float64Array) || !Array.isArray(run.texts)
+        || !isTyped(run.kinds, 'Uint8Array') || !isTyped(run.numbers, 'Float64Array') || !Array.isArray(run.texts)
         || run.kinds.length < run.count || run.numbers.length < run.count || run.texts.length < run.count) continue
       map.set(set.refId, set)
       installed.push(set.refId)
@@ -566,6 +569,8 @@ export class ViewerKernel {
     }
   }
 }
+/** Realm-independent typed-array tag check (commands are structured clones). */
+const isTyped = (value: unknown, tag: 'Uint8Array' | 'Float64Array'): boolean => Object.prototype.toString.call(value) === `[object ${tag}]`
 function refusalDiagnostics(refusal: OperationRefusal): WorkerDiagnostic[] {
   const message = 'message' in refusal ? refusal.message : `Operation refused: ${refusal.reason}`
   return [{ code: `refused-${refusal.reason}`, message }]

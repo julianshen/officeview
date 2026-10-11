@@ -8,7 +8,7 @@
  * this module; the watermark is stamped into the pane after the tiles.
  */
 import type { XlsxSheet } from '../../xlsx/types'
-import type { CacheIdentity, LogicalViewport, ProfileId } from '../../xlsx/view/contracts'
+import type { CacheIdentity, LogicalCellBox, LogicalViewport, ProfileId } from '../../xlsx/view/contracts'
 import type { RenderSheetAssets } from '../../xlsx/render'
 import { renderSheetViewport } from '../../xlsx/view/renderViewport'
 import { paintWatermark, type ResolvedWatermark } from '../../core/watermark'
@@ -43,6 +43,10 @@ export interface SheetFrame {
   /** Stamped into the pane bitmap after the tiles (tiles stay mark-free and
    * cacheable), so it travels with the presented pixels like the page path. */
   watermark?: ResolvedWatermark
+  /** Worker-backed sheets (S5.4): logical boxes inside `box` whose records are
+   * still loading. They paint a pending tone, never an asserted blank, and a
+   * tile holding any is presented but not cached (it repaints once they land). */
+  pending?: (box: LogicalCellBox) => readonly LogicalCellBox[]
 }
 export interface SheetTileStats {
   /** renderSheetViewport calls: the only base-cell painting. */
@@ -62,6 +66,8 @@ export interface SheetTileStats {
   prefetchRecords: number
   /** Largest record count any single tile has built (§11.1 per-tile cap). */
   maxTileRecords: number
+  /** Visible tiles of the latest frame that showed pending (loading) records. */
+  pendingTiles: number
 }
 export const TILE_BYTES = TILE_DEVICE_PX * TILE_DEVICE_PX * RGBA_BYTES
 
@@ -103,7 +109,7 @@ export function createCanvasTile(): CanvasTile {
 }
 
 export class SheetTileRenderer {
-  readonly stats: SheetTileStats = { basePaints: 0, tileHits: 0, prefetched: 0, refused: 0, lastRequests: [], peakBitmapBytes: 0, frameRecords: 0, frameGridlines: 0, prefetchRecords: 0, maxTileRecords: 0 }
+  readonly stats: SheetTileStats = { basePaints: 0, tileHits: 0, prefetched: 0, refused: 0, lastRequests: [], peakBitmapBytes: 0, frameRecords: 0, frameGridlines: 0, prefetchRecords: 0, maxTileRecords: 0, pendingTiles: 0 }
   readonly budgetBytes: number
   readonly cache: TileCache
   private readonly pool: MemoryPool
@@ -134,6 +140,7 @@ export class SheetTileRenderer {
     const px = Math.round(frame.origin.x * scale), py = Math.round(frame.origin.y * scale)
     const { visible } = this.ranges(frame)
     this.stats.lastRequests = []
+    this.stats.pendingTiles = 0
     const budget = frameBudgetFor(this.profile)
     let records = 0, gridlines = 0
     target.save()
@@ -223,6 +230,12 @@ export class SheetTileRenderer {
       this.stats.maxTileRecords = Math.max(this.stats.maxTileRecords, work.records)
     }
     surface.cost = work
+    const pending = frame.pending?.(box) ?? []
+    if (pending.length) {
+      if (visible) this.stats.pendingTiles++
+      if (ctx) paintPending(ctx, box, pending)
+      return { surface, retained: false }
+    }
     // A tile made coarse only because earlier tiles spent the frame budget is not
     // the tile's own content: present it, but never cache it.
     if (kind === 'coarse' && !full) return { surface, retained: false }
@@ -230,6 +243,25 @@ export class SheetTileRenderer {
     if (!retained) this.stats.refused++
     return { surface, retained }
   }
+}
+
+/** Unknown records are loading, never blank (spec §§4.1, 10.4): a neutral tone
+ * and one notice. ctx carries the tile's logical scale; boxes are logical. */
+const PENDING_FILL = '#eceff3'
+function paintPending(ctx: CanvasRenderingContext2D, box: LogicalCellBox, pending: readonly LogicalCellBox[]): void {
+  ctx.save()
+  try {
+    ctx.fillStyle = PENDING_FILL
+    for (const rect of pending) {
+      const top = Math.max(rect.y, box.y), bottom = Math.min(rect.y + rect.height, box.y + box.height)
+      if (bottom > top) ctx.fillRect(0, top - box.y, box.width, bottom - top)
+    }
+    const first = pending[0]
+    ctx.fillStyle = '#666666'
+    ctx.font = '12px sans-serif'
+    ctx.textBaseline = 'alphabetic'
+    ctx.fillText('Loading…', 8, Math.max(0, first.y - box.y) + 16)
+  } finally { ctx.restore() }
 }
 
 function sameIdentity(a: CacheIdentity, b: CacheIdentity): boolean {
