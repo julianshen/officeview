@@ -315,17 +315,38 @@ describe('review round 1 (Codex findings)', () => {
     expect(m.exportLimits).toEqual(expect.arrayContaining([expect.objectContaining({ resource: 'rows', requested: 16_386 })]))
     expect(m.diagnostics).toEqual(expect.arrayContaining([expect.objectContaining({ code: 'inconsistent-row-coordinate' })]))
   })
-  test('F2: a full-sheet raster beyond the pixel budget is refused before allocation', async () => {
-    const big = sheetOf([{ index: 999, cells: [cell(999, 999, 'Far')] }])
-    const m = computeMetrics(big)
-    expect(m.exportLimits).toEqual(expect.arrayContaining([expect.objectContaining({ code: 'large-export-limit', resource: 'pixels', limit: STATIC_SHEET_BUDGET.maxSidePx })]))
-    expect(() => renderSheet(big, recorder().ctx)).toThrow(StaticExportLimitError)
-    const units = await getPaintables({ sheets: [big] })
-    try { expect(units[0].refusal).toEqual(expect.arrayContaining([expect.objectContaining({ resource: 'pixels' })])) } finally { units.dispose() }
+  test('F2 (corrected): only rasters the old path would have truncated are refused', async () => {
+    // The legacy drawing clamp (16,384 px per axis, 16,777,216 px area) silently
+    // cropped the bitmap; that request is now a typed refusal instead.
     const drawing = { ...sheetOf([{ index: 0, cells: [cell(0, 0, 'A1')] }]), drawings: [{ xEmu: 20_000 * 9525, yEmu: 0, widthEmu: 9525 * 10, heightEmu: 9525 * 10, geometry: 'rect' as const, fill: 'FF0000', source: { partPath: 'd', treePath: 't', element: 'sp', representation: 'native' as const } }] }
     const clamped = computeMetrics(drawing)
     expect(clamped.retainedDrawingBounds!.right).toBeLessThan(clamped.requestedDrawingBounds!.right)
-    expect(clamped.exportLimits).toEqual(expect.arrayContaining([expect.objectContaining({ resource: 'pixels' })]))
+    expect(clamped.exportLimits).toEqual(expect.arrayContaining([expect.objectContaining({ code: 'large-export-limit', resource: 'pixels', limit: STATIC_SHEET_BUDGET.maxDrawingSidePx })]))
+    expect(() => renderSheet(drawing, recorder().ctx)).toThrow(StaticExportLimitError)
+    const units = await getPaintables({ sheets: [drawing] })
+    try { expect(units[0].refusal).toEqual(expect.arrayContaining([expect.objectContaining({ resource: 'pixels' })])) } finally { units.dispose() }
+    // A drawing-free sheet inside the legacy grid caps was always rendered in full
+    // (spec §11.5: existing admitted static output is preserved), however large.
+    const wide = sheetOf([{ index: 999, cells: [cell(999, 999, 'Far')] }])
+    expect(computeMetrics(wide).exportLimits).toBeUndefined()
+  })
+  test('an ordinary 2,000-row sheet still paints completely through the static path', async () => {
+    const rows: XlsxRow[] = Array.from({ length: 2000 }, (_, index) => ({ index, cells: [cell(index, 0, `Row ${index + 1}`), cell(index, 1, index)] }))
+    const sheet = sheetOf(rows)
+    const m = computeMetrics(sheet)
+    expect(m.exportLimits).toBeUndefined()
+    expect([m.widthPx, m.heightPx]).toEqual([128, 40_000])
+    const units = await getPaintables({ sheets: [sheet] })
+    try {
+      expect(units[0].refusal).toBeUndefined()
+      expect(units[0].spec).toEqual({ widthPx: 128, heightPx: 40_000 })
+      // node-canvas caps a side at 32,767 px; fillText is recorded whether or not it lands on the surface.
+      const out = recorder(128, 200)
+      units[0].paint(out.ctx)
+      expect(out.find('Row 1')).toEqual([{ text: 'Row 1', x: PAD, y: expect.closeTo(BASELINE, 6) }])
+      expect(out.find('Row 2000')).toEqual([{ text: 'Row 2000', x: PAD, y: expect.closeTo(1999 * 20 + BASELINE, 6) }])
+      expect(out.texts.filter(item => item.text.startsWith('Row ')).length).toBe(2000)
+    } finally { units.dispose() }
   })
   test('F3: a canonical visibility mask can reveal an authored-hidden row', () => {
     const sheet = sheetOf([

@@ -165,9 +165,10 @@ function paintCellText(ctx: CanvasRenderingContext2D, text: string, style: XlsxC
 /** How much wider than the used range a <col> declaration may be and still
  * count as real formatting rather than noise. */
 const MAX_DECLARED_COL_SLACK = 64
-/** Static full-sheet raster admission (spec §11.5): at most 16,384 px per axis and
- * 64 MiB of RGBA backing store (the mobile bitmap pool, §12.4). The drawing path's
- * historical clamp used the same numbers; exceeding them is now a typed refusal. */
+/** The legacy drawing-path raster clamp: 16,384 px per axis and 16,777,216 px
+ * (64 MiB RGBA). A request beyond it used to be cropped silently and is now a typed
+ * refusal. Drawing-free sheets were never clamped by pixels: within the legacy grid
+ * caps they keep rendering in full (spec §11.5 preserves admitted static output). */
 const MAX_RASTER_SIDE = 16384
 const MAX_RASTER_BYTES = 64 * 1024 * 1024
 const MAX_DRAWING_SIDE = MAX_RASTER_SIDE
@@ -179,8 +180,6 @@ const MAX_PRINT_PAGES = 10_000
 export const STATIC_SHEET_BUDGET = Object.freeze({
   maxGridRows: MAX_GRID_ROWS,
   maxGridCols: MAX_GRID_COLS,
-  maxSidePx: MAX_RASTER_SIDE,
-  maxRasterBytes: MAX_RASTER_BYTES,
   maxDrawingSidePx: MAX_DRAWING_SIDE,
   maxDrawingAreaPx: MAX_DRAWING_AREA,
   maxPrintPages: MAX_PRINT_PAGES,
@@ -212,7 +211,8 @@ function gridCoverageLimits(sheet: XlsxSheet, rows: number, cols: number): Stati
   return limits
 }
 
-/** Pixel/byte admission for one full-sheet raster of the requested size. */
+/** Pixel/byte admission for one full-sheet drawing-bearing raster: exactly the
+ * requests the legacy clamp would have truncated. */
 function rasterLimits(width: number, height: number): StaticExportLimit[] {
   const w = Math.ceil(width), h = Math.ceil(height)
   const limits: StaticExportLimit[] = []
@@ -221,9 +221,9 @@ function rasterLimits(width: number, height: number): StaticExportLimit[] {
   if (w * h * 4 > MAX_RASTER_BYTES) limits.push({ code: 'large-export-limit', resource: 'raster-bytes', requested: w * h * 4, limit: MAX_RASTER_BYTES, message: `A ${w}x${h}px sheet image needs ${w * h * 4} bytes, over the ${MAX_RASTER_BYTES}-byte static raster budget` })
   return limits
 }
-/** Full-sheet raster size a metrics object asks for (drawings may exceed the grid). */
-function requestedRaster(m: GridMetrics): { width: number; height: number } {
-  return m.requestedDrawingBounds ? { width: m.requestedDrawingBounds.right, height: m.requestedDrawingBounds.bottom } : { width: m.widthPx, height: m.heightPx }
+/** Raster limits of a full-sheet request; only a clamped drawing bitmap can truncate. */
+function requestedRasterLimits(m: GridMetrics): StaticExportLimit[] {
+  return m.requestedDrawingBounds ? rasterLimits(m.requestedDrawingBounds.right, m.requestedDrawingBounds.bottom) : []
 }
 
 function transformedDrawingBounds(nodes: XlsxDrawing[]): { right: number; bottom: number } {
@@ -285,14 +285,14 @@ export function computeMetrics(sheet: XlsxSheet): GridMetrics {
     }
   }
   const gridWidth = colWidthsPx.reduce((a, b) => a + b, 0), gridHeight = rowHeightsPx.reduce((a, b) => a + b, 0)
-  const extras = (width: number, height: number) => {
-    const exportLimits = [...gridCoverageLimits(sheet, nRows, nCols), ...rasterLimits(width, height)]
+  const extras = (raster: StaticExportLimit[]) => {
+    const exportLimits = [...gridCoverageLimits(sheet, nRows, nCols), ...raster]
     return {
       ...(exportLimits.length ? { exportLimits } : {}),
       ...(diagnostics.length ? { diagnostics } : {}),
     }
   }
-  if (!drawing) return { colWidthsPx, rowHeightsPx, widthPx: gridWidth, heightPx: gridHeight, ...extras(gridWidth, gridHeight) }
+  if (!drawing) return { colWidthsPx, rowHeightsPx, widthPx: gridWidth, heightPx: gridHeight, ...extras([]) }
   const visual = transformedDrawingBounds(sheet.drawings!)
   const requested = { right: Math.max(gridWidth, visual.right), bottom: Math.max(gridHeight, visual.bottom) }
   // The retained bitmap stays clamped (parse-time coverage reporting relies on
@@ -307,7 +307,7 @@ export function computeMetrics(sheet: XlsxSheet): GridMetrics {
     heightPx: height,
     requestedDrawingBounds: requested,
     retainedDrawingBounds: { right: width, bottom: height },
-    ...extras(requested.right, requested.bottom),
+    ...extras(rasterLimits(requested.right, requested.bottom)),
   }
 }
 
@@ -694,14 +694,11 @@ export function renderSheet(
 /** Static admission (spec §11.5, plan S2.3), always recomputed from the sheet and
  * the metrics actually used, never trusted from caller-supplied refusal metadata.
  * A full-sheet raster must cover every populated cell and merge and fit the
- * raster budget. A bounded window is admitted unless it reaches past the grid on
+ * legacy drawing raster clamp. A bounded window is admitted unless it reaches past the grid on
  * an axis where data continues. Nothing uncovered is ever drawn over A1. */
 function staticAdmission(sheet: XlsxSheet, m: GridMetrics, viewport?: SheetViewport): StaticExportLimit[] {
   const coverage = gridCoverageLimits(sheet, m.rowHeightsPx.length, m.colWidthsPx.length)
-  if (!viewport) {
-    const raster = requestedRaster(m)
-    return [...coverage, ...rasterLimits(raster.width, raster.height)]
-  }
+  if (!viewport) return [...coverage, ...requestedRasterLimits(m)]
   const sum = (sizes: number[]) => sizes.reduce((a, b) => a + b, 0)
   const gridWidth = sum(m.colWidthsPx), gridHeight = sum(m.rowHeightsPx)
   return coverage.filter(limit => limit.resource === 'rows' ? viewport.y + viewport.height > gridHeight : viewport.x + viewport.width > gridWidth)
