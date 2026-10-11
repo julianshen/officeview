@@ -100,7 +100,7 @@ export function fakeIndexedDb(options: { failDeletes?: number } = {}): IDBFactor
     let closed = false
     return {
       name,
-      objectStoreNames: { contains: (s: string) => s === 'chunks' },
+      objectStoreNames: { contains: (s: string) => s === 'chunks' || s === 'pages' },
       createObjectStore: () => ({}),
       close: () => { closed = true },
       transaction(_store: string, mode: IDBTransactionMode = 'readonly') {
@@ -119,6 +119,10 @@ export function fakeIndexedDb(options: { failDeletes?: number } = {}): IDBFactor
               record.puts++
               data.set(key, value)
               return request(() => key)
+            },
+            get(key: number) {
+              if (!active) throw new DOMException('transaction committed', 'TransactionInactiveError')
+              return request(() => data.get(key))
             },
             getAll() {
               if (!active) throw new DOMException('transaction committed', 'TransactionInactiveError')
