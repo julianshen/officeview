@@ -20,8 +20,9 @@ import type { ResolvedSemantics } from './formula/types'
 import type { CacheIdentity, LogicalViewport, WorkerDiagnostic } from './view/contracts'
 import { MAX_COLS, isValidCoordinate } from './view/coordinates'
 import { RectangleIndex } from './view/structure'
-import { cellSourceRow, drawingExtent, emptyWork, planViewport, type CoarseGroup, type SheetGeometryResult, type ViewportPlan, type ViewportProfile, type ViewportWork } from './view/viewport'
-import type { CellBodyLayout, CellLayout, LayoutCache } from './view/textLayout'
+import { cellSourceRow, COARSE_NOTICE, drawingExtent, emptyWork, planViewport, type CoarseGroup, type MergeQueryCache, type SheetGeometryResult, type ViewportPlan, type ViewportProfile, type ViewportWork } from './view/viewport'
+import { buildCellRecords, LayoutCache, type CellBodyLayout, type CellLayout, type CellLayoutHost } from './view/textLayout'
+import type { SourceCell } from './view/coordinates'
 
 export interface GridMetrics {
   colWidthsPx: number[]
@@ -936,31 +937,57 @@ function paintSheetDrawings(sheet: XlsxSheet, drawings: readonly XlsxDrawing[], 
   })
 }
 
+/** The host side of canonical records (spec §11.2): the same formatting and text
+ * layout the static renderer uses, laid out in a box at the origin. Measurement
+ * is cached per host by face and text. */
+export function createCellLayoutHost(ctx: CanvasRenderingContext2D, sheet: Partial<XlsxSheet> = {}): CellLayoutHost {
+  const measured = textMeasurer(ctx)
+  // Format diagnostics land on the caller's sheet when one is given.
+  const target = sheet as XlsxSheet
+  return { layoutBody: (cell, w, h) => layoutCellBody(ctx, target, cell, 0, 0, w, h, measured) }
+}
+
 export interface ViewportPaintResult {
   kind: ViewportPlan['kind']; diagnostics: readonly WorkerDiagnostic[]
-  records: readonly CellLayout[]; coarse: readonly CoarseGroup[]; work: ViewportWork
+  /** Canonical records the frame painted (spec §11.2), in paint order. */
+  records: readonly CellLayout[]
+  /** Summarized sub-detail pixel groups (whole frame when `kind` is coarse). */
+  coarse: readonly CoarseGroup[]
+  /** The exact active-cell record, painted in any mode. */
+  active?: CellLayout
+  work: ViewportWork
 }
 export interface ViewportPaintOptions {
   profile?: ViewportProfile
+  /** Publication owner of the records; layouts are cached under it. */
   owner?: CacheIdentity
+  /** Cross-frame formatted-value/layout cache (plan S5.1). */
   cache?: LayoutCache
+  merges?: MergeQueryCache
+  activeCell?: SourceCell
   /** Painted in viewport space: protection marks follow the visible pane. */
   watermark?: WatermarkOptions | ResolvedWatermark
 }
 const VIEWPORT_NOTICE: Record<Exclude<ViewportPlan['kind'], 'detail'>, string> = {
   pending: 'Loading…',
-  coarse: 'Zoom in or inspect a cell for detail',
+  coarse: COARSE_NOTICE,
   diagnostic: 'This sheet cannot be laid out',
 }
+/** Coarse summaries without a resolved aggregate paint a neutral "pending" tone,
+ * never a white (asserted blank) region. */
+const COARSE_FILL = '#eceff3'
 
 /**
- * Interactive full-coordinate seam (spec §§5.3, 11.1, 11.5). ctx state: 1 unit =
- * 1 logical CSS px at the viewport's top-left; the caller applies zoom/DPR.
+ * Interactive full-coordinate seam (spec §§5.3, 11.1, 11.2, 11.5). ctx state: 1
+ * unit = 1 logical CSS px at the viewport's top-left; the caller applies zoom/DPR.
  * Geometry comes from the full S2.1 axes/projection (`buildSheetGeometry`), so a
  * source row past the legacy 16,384-row cap paints at its true offset or sorted
- * display slot. Pending, coarse and diagnostic frames paint a visible notice and
- * return their state; none of them paints a cell at the origin or throws for a
- * typed axis failure.
+ * display slot. The planner admits detail first; the host lays each admitted
+ * cell out once (cached across frames by its complete identity) into canonical
+ * records, and the painter replays those records at tile-local coordinates
+ * derived in Float64 (`logical - origin`), never through a global translation.
+ * Pending, coarse and diagnostic frames paint a visible notice and return their
+ * state; none of them paints a cell at the origin or throws for a typed axis failure.
  */
 export function renderSheetViewport(
   sheet: XlsxSheet,
@@ -970,9 +997,17 @@ export function renderSheetViewport(
   prepared?: RenderSheetAssets,
   options: ViewportPaintOptions = {},
 ): ViewportPaintResult {
-  const plan = planViewport(geometry, viewport, options.profile)
+  const plan = planViewport(geometry, viewport, options.profile, { activeCell: options.activeCell, merges: options.merges })
   const { x: vx, y: vy, width, height } = viewport.box
   const paintable = Number.isFinite(width) && Number.isFinite(height) && width > 0 && height > 0
+  const owner = options.owner ?? { docId: '', sheetId: sheet.sheetId ?? sheet.name, valueGen: 0, fontGen: 0, viewGen: 0 }
+  const cache = options.cache ?? new LayoutCache()
+  const notice = (text: string) => {
+    ctx.fillStyle = '#666666'
+    ctx.font = '12px sans-serif'
+    ctx.textBaseline = 'alphabetic'
+    ctx.fillText(text, 8, 20)
+  }
   ctx.save()
   try {
     if (paintable) {
@@ -980,47 +1015,73 @@ export function renderSheetViewport(
       ctx.fillRect(0, 0, width, height)
       if (options.watermark) paintWatermark(ctx, { widthPx: width, heightPx: height }, options.watermark)
     }
-    if (plan.kind !== 'detail') {
-      if (paintable) {
-        ctx.fillStyle = '#666666'
-        ctx.font = '12px sans-serif'
-        ctx.textBaseline = 'alphabetic'
-        ctx.fillText(VIEWPORT_NOTICE[plan.kind], 8, 20)
-      }
+    if (plan.kind === 'pending' || plan.kind === 'diagnostic') {
+      if (paintable) notice(VIEWPORT_NOTICE[plan.kind])
       return { kind: plan.kind, diagnostics: plan.diagnostics, records: [], coarse: [], work: emptyWork() }
     }
-    ctx.translate(-vx, -vy)
-    const measured = textMeasurer(ctx)
+    const work = plan.work
+    const built = cache.stats.built, reused = cache.stats.reused
+    // The host lays a cell out in a box at the origin: records are box-relative.
+    const host = createCellLayoutHost(ctx, sheet)
+    const records = plan.kind === 'detail' ? buildCellRecords(plan.cells, owner, host, cache) : []
+    const active = plan.active ? buildCellRecords([plan.active], owner, host, cache)[0] : undefined
+    work.layoutsBuilt = cache.stats.built - built
+    work.layoutsReused = cache.stats.reused - reused
+    const coarse = plan.kind === 'detail' ? plan.coarse : plan.groups
     const paintBorders: Array<() => void> = []
-    for (const placed of plan.cells) {
-      const border = paintCellBody(ctx, sheet, placed.cell, placed.x, placed.y, placed.width, placed.height, measured, plan.extent)
-      if (border) paintBorders.push(border)
+    const replay = (record: CellLayout) => {
+      // Float64 local offset; the canvas only ever sees tile-local coordinates.
+      const lx = record.logicalBounds.x - vx, ly = record.logicalBounds.y - vy
+      const rel = { width: plan.extent.width - record.logicalBounds.x, height: plan.extent.height - record.logicalBounds.y }
+      ctx.save()
+      ctx.translate(lx, ly)
+      const border = paintCellLayout(ctx, record.body, rel)
+      ctx.restore()
+      if (border) paintBorders.push(() => { ctx.save(); ctx.translate(lx, ly); border(); ctx.restore() })
     }
-    ctx.strokeStyle = '#d0d0d0'
-    ctx.lineWidth = 1
-    ctx.beginPath()
-    // Segments overshoot the pane by one pixel so their butt caps fall outside it,
-    // exactly like the static path's full-length lines.
-    const yTop = Math.max(0, vy - 1), yBottom = Math.min(plan.extent.height, vy + height + 1)
-    const xLeft = Math.max(0, vx - 1), xRight = Math.min(plan.extent.width, vx + width + 1)
-    for (const x of plan.colLines) {
-      const hidden = plan.merges.filter(merge => merge.x < x && x < merge.x + merge.width).map(merge => [merge.y, merge.y + merge.height] as [number, number])
-      for (const [y1, y2] of openSegments(yTop, yBottom, hidden)) {
-        ctx.moveTo(x + 0.5, y1 + 0.5)
-        ctx.lineTo(x + 0.5, y2 + 0.5)
+    for (const group of coarse) {
+      ctx.fillStyle = COARSE_FILL
+      ctx.fillRect(group.bounds.x - vx, group.bounds.y - vy, group.bounds.width, group.bounds.height)
+    }
+    for (const record of records) replay(record)
+    if (plan.kind === 'detail') {
+      ctx.strokeStyle = '#d0d0d0'
+      ctx.lineWidth = 1
+      ctx.beginPath()
+      // Segments overshoot the pane by one pixel so their butt caps fall outside it,
+      // exactly like the static path's full-length lines.
+      const yTop = Math.max(0, vy - 1), yBottom = Math.min(plan.extent.height, vy + height + 1)
+      const xLeft = Math.max(0, vx - 1), xRight = Math.min(plan.extent.width, vx + width + 1)
+      for (const x of plan.colLines) {
+        const hidden = plan.merges.filter(merge => merge.x < x && x < merge.x + merge.width).map(merge => [merge.y, merge.y + merge.height] as [number, number])
+        for (const [y1, y2] of openSegments(yTop, yBottom, hidden)) {
+          work.gridlineSpans++
+          ctx.moveTo(x - vx + 0.5, y1 - vy + 0.5)
+          ctx.lineTo(x - vx + 0.5, y2 - vy + 0.5)
+        }
+      }
+      for (const y of plan.rowLines) {
+        const hidden = plan.merges.filter(merge => merge.y < y && y < merge.y + merge.height).map(merge => [merge.x, merge.x + merge.width] as [number, number])
+        for (const [x1, x2] of openSegments(xLeft, xRight, hidden)) {
+          work.gridlineSpans++
+          ctx.moveTo(x1 - vx + 0.5, y - vy + 0.5)
+          ctx.lineTo(x2 - vx + 0.5, y - vy + 0.5)
+        }
+      }
+      ctx.stroke()
+      for (const paint of paintBorders) paint()
+      if (plan.drawings.length) {
+        // Drawing scenes carry worksheet coordinates in their own transforms.
+        ctx.save()
+        ctx.translate(-vx, -vy)
+        paintSheetDrawings(sheet, plan.drawings, ctx, prepared)
+        ctx.restore()
       }
     }
-    for (const y of plan.rowLines) {
-      const hidden = plan.merges.filter(merge => merge.y < y && y < merge.y + merge.height).map(merge => [merge.x, merge.x + merge.width] as [number, number])
-      for (const [x1, x2] of openSegments(xLeft, xRight, hidden)) {
-        ctx.moveTo(x1 + 0.5, y + 0.5)
-        ctx.lineTo(x2 + 0.5, y + 0.5)
-      }
-    }
-    ctx.stroke()
-    for (const paint of paintBorders) paint()
-    paintSheetDrawings(sheet, plan.drawings, ctx, prepared)
-    return { kind: 'detail', diagnostics: plan.diagnostics, records: [], coarse: [], work: emptyWork() }
+    // The active cell keeps its exact record even inside a summarized region.
+    if (active && !records.some(record => record.id === active.id)) replay(active)
+    if (paintable && coarse.length) notice(COARSE_NOTICE)
+    return { kind: plan.kind, diagnostics: plan.diagnostics, records, coarse, ...(active ? { active } : {}), work }
   } finally { ctx.restore() }
 }
 
