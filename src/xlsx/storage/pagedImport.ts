@@ -112,18 +112,17 @@ export async function openImportSession(source: Extract<SourceHandle, { kind: 'b
   if (workbookText === undefined) throw new PackageError('parse-error', 'xl/workbook.xml missing — not a valid xlsx?')
   const relsText = await smallPart('xl/_rels/workbook.xml.rels')
   const relMap = new Map<string, string>(), relTypes = new Map<string, string>()
-  let sstPath: string | undefined, metadataPath: string | undefined
+  let metadataPath: string | undefined
   if (relsText !== undefined) {
     for (const rel of getChildren(parseXml(relsText), 'Relationship')) {
       const a = attrs(rel)
       if (a.Id && a.Target && a.TargetMode !== 'External') relMap.set(a.Id, a.Target)
       if (a.Id && a.Type) relTypes.set(a.Id, a.Type)
-      if (a.Type?.endsWith('/sharedStrings') && a.TargetMode !== 'External' && a.Target) sstPath = resolvePartTarget('xl/workbook.xml', a.Target)
       if (a.Type === 'http://schemas.openxmlformats.org/officeDocument/2006/relationships/sheetMetadata' && a.TargetMode !== 'External' && a.Target) metadataPath = resolvePartTarget('xl/workbook.xml', a.Target)
     }
   }
   // parse.ts reads xl/sharedStrings.xml by name, not through the relationship.
-  sstPath = inventory.find('xl/sharedStrings.xml') ? 'xl/sharedStrings.xml' : undefined
+  const sstPath = inventory.find('xl/sharedStrings.xml') ? 'xl/sharedStrings.xml' : undefined
   const sheets: PagedSheet[] = []
   const workbookRoot = parseXml(workbookText)
   let workbookIndex = 0
@@ -154,7 +153,23 @@ export async function openImportSession(source: Extract<SourceHandle, { kind: 'b
   const stamp: SourceStamp = { docId: options.docId, sheetId: sheets[0]?.sheetId ?? '', valueGen: 0 }
   const plannedParts = ['xl/workbook.xml', 'xl/_rels/workbook.xml.rels', sstPath, metadataPath, ...sheets.map((s) => s.partPath)]
     .filter((p): p is string => p !== undefined && inventory.find(p) !== undefined)
-  const expandedTotal = plannedParts.reduce((sum, p) => sum + inventory.find(p)!.uncompressedSize, 0)
+  let expandedTotal = plannedParts.reduce((sum, p) => sum + inventory.find(p)!.uncompressedSize, 0)
+  // Parts discovered later (worksheet rels, tables, drawings) join the total
+  // before they are read, so expandedBytes never exceeds the reported total.
+  const planned = new Set(plannedParts)
+  const plan = (name: string) => {
+    const entry = inventory.find(name)
+    if (entry && !planned.has(name)) { planned.add(name); expandedTotal += entry.uncompressedSize }
+  }
+  const partTexts = new Map<string, string | undefined>()
+  const readPlanned = async (name: string): Promise<string | undefined> => {
+    // Each discovered part is inflated once, however often it is referenced.
+    if (partTexts.has(name)) return partTexts.get(name)
+    plan(name)
+    const text = await smallPart(name)
+    partTexts.set(name, text)
+    return text
+  }
   let compressedRead = 0
   let populatedCells = 0
   let cellsSeen = 0
@@ -284,12 +299,15 @@ export async function openImportSession(source: Extract<SourceHandle, { kind: 'b
       const state = container.finish()
       if (state.autoFilter) declaredEntry.worksheetAutoFilter = state.autoFilter
       if (state.sortState) declaredEntry.worksheetSortState = state.sortState
-      const wsRels = await worksheetRels(sheet, smallPart)
-      sheet.tables = await resolveTables(sheet, wsRels, declaredEntry, declaredBudget, smallPart)
+      const wsRels = await worksheetRels(sheet, readPlanned)
+      sheet.tables = await resolveTables(sheet, wsRels, declaredEntry, declaredBudget, readPlanned)
       for (const id of sheet.metadata.drawingIds) {
         const rel = id === undefined ? undefined : wsRels?.get(id)
         const drawing = rel && rel.type.endsWith('/drawing') ? inventory.find(resolvePartTarget(sheet.partPath, rel.target)) : undefined
         if (!drawing) { sheet.metadata.drawingAnchors++; continue }
+        if (planned.has(drawing.name) && partTexts.has(drawing.name)) continue
+        plan(drawing.name)
+        partTexts.set(drawing.name, undefined)
         try {
           let anchors = 0
           await tokenizeBytes(openPart(src, drawing, partOpts(drawing.name, limits.paged.drawingPartEnvelopeBytes)), anchorCountEvents(() => { anchors++ }), { signal, limits: { maxTokenChars: limits.maxTokenChars } })

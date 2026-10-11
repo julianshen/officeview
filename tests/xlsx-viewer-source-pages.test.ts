@@ -280,6 +280,32 @@ describe('paged import session', () => {
     await session.release()
   })
 
+  it('RED 22: worksheet rels, table and drawing parts join the expanded total before they are read', async () => {
+    const R = 'xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"'
+    const bytes = xlsxBytes({
+      sheetData: rowsXml(30),
+      afterSheetData: `<drawing r:id="rId2" ${R}/><tableParts count="2"><tablePart r:id="rId1" ${R}/><tablePart r:id="rId1" ${R}/></tableParts>`,
+      extra: [
+        { name: 'xl/worksheets/_rels/sheet1.xml.rels', data: '<?xml version="1.0"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/table" Target="../tables/table1.xml"/><Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/drawing" Target="../drawings/drawing1.xml"/></Relationships>' },
+        { name: 'xl/tables/table1.xml', data: '<?xml version="1.0"?><table xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" id="1" name="T" displayName="T" ref="A1:C30"><autoFilter ref="A1:C30"/><tableColumns count="3"><tableColumn id="1" name="a"/><tableColumn id="2" name="b"/><tableColumn id="3" name="c"/></tableColumns></table>' },
+        { name: 'xl/drawings/drawing1.xml', data: '<?xml version="1.0"?><xdr:wsDr xmlns:xdr="http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing"/>' },
+      ],
+    })
+    const inventory = await readZipInventory(bytesRangeSource(bytes), { maxEntries: 100, maxCentralDirectoryBytes: 1 << 20, maxNameBytes: 1024, maxPartExpandedBytes: 1 << 30, maxTotalExpandedBytes: 1 << 30, maxRatio: 1e9 })
+    const read = ['xl/workbook.xml', 'xl/_rels/workbook.xml.rels', 'xl/worksheets/sheet1.xml', 'xl/worksheets/_rels/sheet1.xml.rels', 'xl/tables/table1.xml', 'xl/drawings/drawing1.xml']
+    const expected = read.reduce((n, name) => n + inventory.find(name)!.uncompressedSize, 0)
+    const events: ImportProgress[] = []
+    const store = new SourcePageStore({ docId: 'd', backend: memoryPageBackend() })
+    const session = await openImportSession(blobOf(bytes), { docId: 'd', profile: 'D', store, onProgress: (p) => events.push({ ...p }) })
+    expect(await session.done).toMatchObject({ kind: 'complete' })
+    for (const e of events) expect(e.expandedBytes).toBeLessThanOrEqual(e.expandedTotal as number)
+    expect(session.ledger.snapshot().totalExpanded).toBe(expected)
+    expect(events.at(-1)).toMatchObject({ phase: 'done', expandedBytes: expected, expandedTotal: expected })
+    // A repeated tablePart resolves twice, exactly as parse.ts does; its part is inflated once.
+    expect(session.workbook.sheets[0].tables?.map((t) => t.id)).toEqual(['1', '1'])
+    await session.release()
+  })
+
   it('RED 23: AlternateContent-wrapped cell data, malformed XML and a cell limit end incomplete with a typed failure, never complete blank', async () => {
     const cases: Array<[string, Uint8Array, string, Parameters<typeof openImportSession>[1]['limits']?]> = [
       ['alternate content', xlsxBytes({ sheetData: '', afterSheetData: '', beforeSheetData: '', extra: [] }).length ? xlsxBytes({ sheetData: rowsXml(3).replace('<row r="2">', '<mc:AlternateContent xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"><mc:Choice Requires="x"><row r="2">').replace('</row><row r="3">', '</row></mc:Choice></mc:AlternateContent><row r="3">') }) : new Uint8Array(), 'unsupported'],
