@@ -12,7 +12,8 @@ export { ValueIndexError } from './valueRuns'
  *
  * The worker owns a ValueIndexCache per document session. S4.x maps dropdown
  * open/search/page/OK onto ValueIndexCache.open → build → page/search and
- * ValueSelectionDraft; only bounded ValuePage records cross to the main thread.
+ * ValueSelectionDraft; only bounded ValuePage records (ordinals and bounded
+ * labels) cross to the main thread, and full keys stay worker-side (key()).
  * The display limit applies to pages, never to construction, search or rules. */
 
 /** Source lane tags (same numbering as sort.ts); 0 is an uncovered cell. */
@@ -33,7 +34,8 @@ export interface ValueLanePage {
   styles?: Uint32Array
 }
 export type ValuePageRead = ValueLanePage | { kind: 'unknown'; pageId: string } | { kind: 'error'; failure: SourceFailure }
-/** Body pages of one column in a fixed order; page numbers are stable under stamp. */
+/** Body pages of one column in a fixed order; page numbers are stable under
+ * stamp, and stamp is read live so an owner change is observable. */
 export interface ValueColumnSource {
   readonly stamp: SourceStamp
   readonly pageCount: number
@@ -54,54 +56,60 @@ export interface ValueIndexLedger {
   sourcePageReads: number
   mergedPages: number
   unknownPages: number
-  /** Typed-array allocations made by the index, including growth copies. */
+  /** Typed-array allocation steps (parallel lanes grown together count once). */
   allocations: number
   allocatedBytes: number
-  /** Currently retained charge in the cache's worker-memory pool. */
+  /** Currently retained index charge in the cache's worker-memory pool. */
   chargedBytes: number
   peakBytes: number
 }
 export type ValueLabeler = (kind: 'number' | 'date' | 'boolean', value: number, style: number) => string
 export type ValueEntryKind = 'number' | 'date' | 'string' | 'boolean' | 'error'
-export interface ValueEntryView { ordinal: number; key: string; kind: ValueEntryKind; label: string; labelTruncated: boolean; count: number }
+/** Bounded display record; the exact key is inspected through ValueIndex.key. */
+export interface ValueEntryView { ordinal: number; kind: ValueEntryKind; label: string; labelTruncated: boolean; count: number }
 /** Matches over the first searchedEntries ordinals; complete only once that is
- * the whole complete universe. Bit i (LSB-first per word) is ordinal i. */
+ * the whole complete universe. Bit i (LSB-first per word) is ordinal i. Only
+ * the producing index instance accepts it, and it holds a pool charge until
+ * released (ValueIndex.release, draft close, or index disposal). */
 export interface ValueSearchResult {
-  query: ValueSearchPredicate
-  owner: SourceStamp
-  matches: Uint32Array
-  count: number
-  searchedEntries: number
-  complete: boolean
+  readonly query: ValueSearchPredicate
+  readonly owner: SourceStamp
+  readonly matches: Uint32Array
+  readonly count: number
+  readonly searchedEntries: number
+  readonly complete: boolean
 }
 export interface ValuePageRequest { offset: number; limit: number; search?: ValueSearchResult; label?: ValueLabeler }
 export interface ValuePage { entries: readonly ValueEntryView[]; total: number; displayed: number; truncated: boolean; completeness: ValueCompleteness }
 export interface ValueProgress { phase: 'pages'; completed: number; total: number }
 export interface ValueSearchProgress { searched: number; total: number; matches: number }
-export interface ValueBuildOptions {
-  signal?: AbortSignal
-  onProgress?: (progress: ValueProgress) => void
+interface Pacing {
   /** Maximum uninterrupted work before an event-loop yield (default 8 ms). */
   sliceMs?: number
   now?: () => number
   yield?: () => Promise<void>
 }
-export interface ValueSearchOptions {
+export interface ValueBuildOptions extends Pacing {
+  signal?: AbortSignal
+  onProgress?: (progress: ValueProgress) => void
+}
+export interface ValueSearchOptions extends Pacing {
   signal?: AbortSignal
   label?: ValueLabeler
   limits?: Omit<FilterLimits, 'signal'>
-  yield?: () => Promise<void>
   onProgress?: (progress: ValueSearchProgress) => void
-  sliceMs?: number
-  now?: () => number
-  /** Continue a result over ordinals merged after it was produced. */
+  /** Continue a result over ordinals merged after it was produced; its own
+   * label/limits policy is reused unless overridden. */
   resume?: ValueSearchResult
 }
 
 const MiB = 1024 * 1024
 const LANE_BYTES = 17 // kind 1 + number 8 + style 4 + count 4
-const STRING_ENTRY_BYTES = 40 + 128 // string header + Map entry, as sort.ts charges
-const SEARCH_CHUNK = 2048
+// String header + Map entry (as sort.ts charges) + the texts[] reference slot.
+const STRING_ENTRY_BYTES = 40 + 128 + 8
+const KEY_PATCH_BYTES = 48 // one Map<ordinal, boolean> entry
+const RUN_ELEMENT_BYTES = 17 // kind 1 + number 8 + texts reference 8
+const PACE_STRIDE = 16
 const MERGED = 1, UNKNOWN = 2 // page state 0 = unread
 const words = (bits: number): number => Math.ceil(bits / 32)
 const hasBit = (set: Uint32Array, at: number): boolean => (set[at >>> 5] & (1 << (at & 31))) !== 0
@@ -129,8 +137,28 @@ function defaultYield(): Promise<void> {
   const host = globalThis as { setImmediate?: (callback: () => void) => unknown }
   return new Promise(resolve => host.setImmediate ? host.setImmediate(resolve) : setTimeout(resolve, 0))
 }
-export function valueScope(identity: ValueIndexIdentity): string { return identityKey(identity) }
-function identityKey(identity: ValueIndexIdentity): string {
+/** Time-sliced cooperative yielding: an abort scheduled as a task runs within
+ * one slice even when every awaited page resolves immediately. */
+class Pacer {
+  private last: number
+  private readonly now: () => number
+  private readonly sliceMs: number
+  private readonly pause: () => Promise<void>
+  constructor(options: Pacing) {
+    this.now = options.now ?? (() => performance.now())
+    this.sliceMs = options.sliceMs ?? 8
+    if (!Number.isFinite(this.sliceMs) || this.sliceMs < 0) throw new ValueIndexError('invalid-rule', 'Invalid time slice')
+    this.pause = options.yield ?? defaultYield
+    this.last = this.now()
+  }
+  get due(): boolean { return this.now() - this.last >= this.sliceMs }
+  async yield(): Promise<void> {
+    await this.pause()
+    this.last = this.now()
+  }
+}
+/** Exact value domain of an index: rules and key runs are valid only there. */
+export function valueScope(identity: ValueIndexIdentity): string {
   const { range } = identity
   return JSON.stringify([identity.docId, identity.sheetId, identity.valueGen, range.r0, range.r1, range.c0, range.c1,
     range.headerRows, range.totalsRows, identity.col, identity.classification.kind, identity.classification.hasNumeric, identity.classificationGen])
@@ -146,8 +174,32 @@ function diagnostic(error: unknown): unknown {
   return error
 }
 
-/** Aggregate worker-memory pool for every cached index plus transient search
- * and commit buffers; idle LRU indexes are evicted before admission fails. */
+/** A retained charge in the pool, owned by a draft, search result or evaluator. */
+export class ValueReservation implements LaneAccount {
+  bytes = 0
+  private released = false
+  constructor(private readonly cache: ValueIndexCache, private readonly owner: ValueIndex | null) {}
+  get closed(): boolean { return this.released }
+  charge(bytes: number): void {
+    if (this.released) throw new ValueIndexError('closed', 'Reservation already released')
+    this.cache.charge(this.owner, bytes)
+    this.bytes += bytes
+  }
+  release(bytes = this.bytes): void {
+    if (this.released) return
+    const amount = Math.min(bytes, this.bytes)
+    this.cache.release(amount)
+    this.bytes -= amount
+  }
+  close(): void {
+    this.release()
+    this.released = true
+  }
+}
+
+/** Aggregate worker-memory pool for every cached index plus retained search
+ * results, draft patches/key sets, evaluators and transient commit buffers;
+ * idle LRU indexes are evicted before admission fails. */
 export class ValueIndexCache {
   readonly limitBytes: number
   private used = 0
@@ -162,7 +214,7 @@ export class ValueIndexCache {
   open(identity: ValueIndexIdentity, source: ValueColumnSource): ValueIndex {
     const stamp = { docId: identity.docId, sheetId: identity.sheetId, valueGen: identity.valueGen }
     if (!sameStamp(source.stamp, stamp)) throw new ValueIndexError('stale-source', 'Value source owner does not match the index identity')
-    const key = identityKey(identity)
+    const key = valueScope(identity)
     let index = this.indexes.get(key)
     if (index && !index.disposed) {
       this.indexes.delete(key)
@@ -174,35 +226,36 @@ export class ValueIndexCache {
   invalidate(predicate: (identity: ValueIndexIdentity) => boolean = () => true): void {
     for (const index of [...this.indexes.values()]) if (predicate(index.identity)) index.dispose()
   }
+  reserve(owner: ValueIndex | null = null): ValueReservation { return new ValueReservation(this, owner) }
   /** @internal */
   charge(owner: ValueIndex | null, bytes: number): void {
-    this.admit(owner, bytes)
-    this.used += bytes
-  }
-  /** @internal */
-  release(bytes: number): void { this.used -= bytes }
-  /** @internal Checks room for a transient buffer without retaining it. */
-  admit(owner: ValueIndex | null, bytes: number): void {
-    if (this.used + bytes <= this.limitBytes) return
-    for (const index of [...this.indexes.values()]) {
-      if (this.used + bytes <= this.limitBytes) break
-      if (index !== owner && index.idle) index.dispose()
+    if (this.used + bytes > this.limitBytes) {
+      for (const index of [...this.indexes.values()]) {
+        if (this.used + bytes <= this.limitBytes) break
+        if (index !== owner && index.idle) index.dispose()
+      }
     }
     if (this.used + bytes > this.limitBytes) {
       throw new ValueIndexError('quota', 'Value index worker memory quota exceeded', {
         resource: 'memory', requiredBytes: this.used + bytes, limitBytes: this.limitBytes, retryable: false,
       })
     }
+    this.used += bytes
   }
+  /** @internal */
+  release(bytes: number): void { this.used -= bytes }
   /** @internal */
   forget(key: string, index: ValueIndex): void {
     if (this.indexes.get(key) === index) this.indexes.delete(key)
   }
 }
 
+interface SearchRecord { reservation: ValueReservation; label?: ValueLabeler; limits?: Omit<FilterLimits, 'signal'> }
+
 export class ValueIndex implements LaneAccount {
   readonly ledger: ValueIndexLedger = { sourcePageReads: 0, mergedPages: 0, unknownPages: 0, allocations: 0, allocatedBytes: 0, chargedBytes: 0, peakBytes: 0 }
   readonly stamp: SourceStamp
+  readonly scope: string
   blankCount = 0
   unavailableCount = 0
   disposed = false
@@ -222,8 +275,11 @@ export class ValueIndex implements LaneAccount {
   private strings = new Map<string, number>()
   private errors = new Map<string, number>()
   private readonly numberKind: number
-  constructor(readonly identity: ValueIndexIdentity, source: ValueColumnSource, private readonly cache: ValueIndexCache, private readonly cacheKey: string) {
+  private readonly results = new WeakMap<ValueSearchResult, SearchRecord>()
+  private readonly reservations = new Set<ValueReservation>()
+  constructor(readonly identity: ValueIndexIdentity, source: ValueColumnSource, private readonly cache: ValueIndexCache, key: string) {
     this.stamp = Object.freeze({ docId: identity.docId, sheetId: identity.sheetId, valueGen: identity.valueGen })
+    this.scope = key
     this.source = source
     this.numberKind = identity.classification.kind === 'date' ? KEY_DATE : KEY_NUMBER
   }
@@ -233,8 +289,7 @@ export class ValueIndex implements LaneAccount {
     if (this.identity.classification.kind === 'loading' || !this.pages || this.unmerged) return 'loading'
     return this.unavailableCount ? 'incomplete' : 'complete'
   }
-  /** @internal Charges a typed allocation step before it is made; parallel
-   * lanes grown together count as one step. */
+  /** @internal Charges a typed allocation step before it is made. */
   charge(bytes: number): void {
     this.retain(bytes)
     this.ledger.allocations++
@@ -246,36 +301,51 @@ export class ValueIndex implements LaneAccount {
     this.ledger.peakBytes = Math.max(this.ledger.peakBytes, this.ledger.chargedBytes)
   }
   /** @internal */
-  release(bytes: number): void {
-    this.cache.release(bytes)
-    this.ledger.chargedBytes -= bytes
+  release(bytes: number): void
+  /** Releases a search result's retained bitset charge. */
+  release(result: ValueSearchResult): void
+  release(target: number | ValueSearchResult): void {
+    if (typeof target === 'number') {
+      this.cache.release(target)
+      this.ledger.chargedBytes -= target
+      return
+    }
+    const record = this.results.get(target)
+    if (!record) return
+    record.reservation.close()
+    this.reservations.delete(record.reservation)
   }
   /** @internal */
   attach(source: ValueColumnSource): void { this.source = source }
   /** @internal Drafts pin the index against memory eviction, not invalidation. */
   pin(delta: 1 | -1): void { this.pins += delta }
   /** @internal */
-  admit(bytes: number): void { this.cache.admit(this, bytes) }
+  reserve(): ValueReservation { return this.cache.reserve(this) }
   dispose(): void {
     if (this.disposed) return
     this.disposed = true
     this.cache.release(this.ledger.chargedBytes)
     this.ledger.chargedBytes = 0
-    this.cache.forget(this.cacheKey, this)
+    for (const reservation of this.reservations) reservation.close()
+    this.reservations.clear()
+    this.cache.forget(this.scope, this)
     this.kinds = new Uint8Array(0); this.numbers = new Float64Array(0); this.styles = new Uint32Array(0); this.counts = new Uint32Array(0)
     this.texts = []; this.strings = new Map(); this.errors = new Map(); this.numberIds = undefined
   }
-  private alive(): void {
-    if (this.disposed) throw new ValueIndexError('stale-source', 'Value index was invalidated')
+  /** Throws stale-source (and disposes) once invalidated or the live source
+   * owner differs; every cached path and publication checks this. */
+  assertLive(): void {
+    if (!this.disposed && !sameStamp(this.source.stamp, this.stamp)) this.dispose()
+    if (this.disposed) throw new ValueIndexError('stale-source', 'Value index was invalidated; retry')
   }
-  /** Merges unread/unknown pages in cancellable page batches. A page merges
-   * atomically, so cancellation or a source error leaves resumable state. */
+  /** Merges unread/unknown pages in cancellable, time-sliced page batches. A
+   * page merges atomically, so cancellation or a source error leaves resumable state. */
   build(options: ValueBuildOptions = {}): Promise<ValueCompleteness> {
-    this.alive()
+    try { this.assertLive() } catch (error) { return Promise.reject(error) }
     if (this.identity.classification.kind === 'loading') return Promise.resolve('loading')
     if (this.pages && !this.unmerged) return Promise.resolve(this.completeness)
     if (this.pending) return this.pending
-    this.pending = this.run(options.signal).catch(error => {
+    this.pending = this.run(options).catch(error => {
       // Partial merges after a quota/owner failure cannot be resumed honestly.
       if (error instanceof ValueIndexError && (error.code === 'quota' || error.code === 'stale-source')) this.dispose()
       throw error
@@ -284,10 +354,10 @@ export class ValueIndex implements LaneAccount {
   }
   private check(signal: AbortSignal | undefined): void {
     checkSignal(signal, 'Value index build')
-    this.alive()
-    if (!sameStamp(this.source.stamp, this.stamp)) throw new ValueIndexError('stale-source', 'Value source owner changed')
+    this.assertLive()
   }
-  private async run(signal: AbortSignal | undefined): Promise<ValueCompleteness> {
+  private async run(options: ValueBuildOptions): Promise<ValueCompleteness> {
+    const { signal, onProgress } = options, pacer = new Pacer(options)
     const source = this.source, pageCount = source.pageCount
     if (!this.pages) {
       if (!Number.isSafeInteger(pageCount) || pageCount < 0) throw new ValueIndexError('page-error', 'Invalid value source page count')
@@ -298,6 +368,7 @@ export class ValueIndex implements LaneAccount {
       this.numberIds = new NumberTable(this, 2048)
     } else if (pageCount !== this.pages.length) throw new ValueIndexError('page-error', 'Value source page count changed')
     const readSignal = signal ?? new AbortController().signal
+    const progress = () => onProgress?.({ phase: 'pages', completed: pageCount - this.unmerged, total: pageCount })
     for (let page = 0; page < pageCount; page++) {
       if (this.pages[page] === MERGED) continue
       this.check(signal)
@@ -307,18 +378,23 @@ export class ValueIndex implements LaneAccount {
       if (read.kind === 'error') {
         throw new ValueIndexError(read.failure.code, read.failure.message, { retryable: read.failure.retryable })
       }
-      if (read.kind === 'unknown' || !this.admissible(read)) {
-        this.pages[page] = UNKNOWN
-        continue
+      if (read.kind === 'unknown' || !this.admissible(read)) this.pages[page] = UNKNOWN
+      else {
+        this.merge(read)
+        this.pages[page] = MERGED
+        this.unmerged--
+        this.ledger.mergedPages++
       }
-      this.merge(read)
-      this.pages[page] = MERGED
-      this.unmerged--
-      this.ledger.mergedPages++
+      if (pacer.due) {
+        progress()
+        await pacer.yield()
+        this.check(signal)
+      }
     }
     let unknown = 0
     for (let page = 0; page < pageCount; page++) if (this.pages[page] === UNKNOWN) unknown++
     this.ledger.unknownPages = unknown
+    progress()
     return this.completeness
   }
   /** Validates a lane page before any merge; unknown cells defer the whole page. */
@@ -406,15 +482,16 @@ export class ValueIndex implements LaneAccount {
     const kind = this.kinds[ordinal]
     return kind === KEY_STRING || kind === KEY_ERROR ? this.texts[this.numbers[ordinal]] : undefined
   }
+  /** Full exact key, for worker-side inspection only (never in display pages). */
   key(ordinal: number): string {
-    this.alive()
+    this.assertLive()
     if (!Number.isSafeInteger(ordinal) || ordinal < 0 || ordinal >= this.count) throw new ValueIndexError('invalid-cursor', 'Value ordinal outside the index')
     const kind = this.kinds[ordinal]
     return valueKeyString(kind, kind === KEY_STRING || kind === KEY_ERROR ? 0 : this.numbers[ordinal], this.entryText(ordinal))
   }
   /** Ordinal of an exact raw value, or -1 (blanks are never entries). */
   find(value: PreparedValue): number {
-    this.alive()
+    this.assertLive()
     switch (value.kind) {
       case 'number':
         if (!Number.isFinite(value.value)) return this.errors.get('#NUM!') ?? -1
@@ -433,18 +510,20 @@ export class ValueIndex implements LaneAccount {
   private view(ordinal: number, label: ValueLabeler): ValueEntryView {
     const kind = this.kinds[ordinal]
     const name: ValueEntryKind = kind === KEY_NUMBER ? 'number' : kind === KEY_DATE ? 'date' : kind === KEY_BOOLEAN ? 'boolean' : kind === KEY_STRING ? 'string' : 'error'
-    return { ordinal, key: this.key(ordinal), kind: name, ...boundedLabel(this.searchText(ordinal, label)), count: this.counts[ordinal] }
+    return { ordinal, kind: name, ...boundedLabel(this.searchText(ordinal, label)), count: this.counts[ordinal] }
   }
-  /** @internal */
+  /** @internal Only results produced by this instance (and still held) are accepted. */
   ownsSearch(result: ValueSearchResult): void {
-    if (!sameStamp(result.owner, this.stamp) || result.searchedEntries > this.count || result.matches.length < words(result.searchedEntries)) {
-      throw new ValueIndexError('stale-source', 'Search result belongs to another value index')
+    this.assertLive()
+    const record = this.results.get(result)
+    if (!record || record.reservation.closed || result.searchedEntries > this.count) {
+      throw new ValueIndexError('stale-source', 'Search result belongs to another or a released value index result')
     }
   }
   /** A bounded display page. Only the first VALUE_DISPLAY_LIMIT entries of the
    * universe or search result are displayable; totals stay exact. */
   page(request: ValuePageRequest): ValuePage {
-    this.alive()
+    this.assertLive()
     const { offset, limit, search } = request
     if (!Number.isSafeInteger(offset) || !Number.isSafeInteger(limit) || offset < 0 || limit < 0 || limit > VALUE_PAGE_LIMIT) {
       throw new ValueIndexError('invalid-cursor', 'Invalid value page request')
@@ -473,38 +552,56 @@ export class ValueIndex implements LaneAccount {
   }
   /** Searches every merged value with the S8.1 host-collated `contains`
    * semantics over raw text (strings, errors) or display labels (numbers,
-   * dates, booleans). Labels never become keys. */
+   * dates, booleans). Labels never become keys. Time-sliced and cancellable. */
   async search(query: ValueSearchPredicate, options: ValueSearchOptions = {}): Promise<ValueSearchResult> {
-    this.alive()
+    this.assertLive()
     if (!query || typeof query.text !== 'string' || typeof query.locale !== 'string') throw new ValueIndexError('invalid-rule', 'Invalid value search')
-    const { signal, resume } = options
+    const { signal, resume, onProgress } = options
+    let inherited: SearchRecord | undefined
     if (resume) {
       this.ownsSearch(resume)
+      inherited = this.results.get(resume)
       if (resume.query.text !== query.text || resume.query.locale !== query.locale) throw new ValueIndexError('invalid-rule', 'Search resume changed its query')
     }
-    const from = resume?.searchedEntries ?? 0, end = this.count
-    this.admit(words(end) * 4)
-    const matches = new Uint32Array(words(end))
-    if (resume) matches.set(resume.matches.subarray(0, words(from)))
-    let count = resume?.count ?? 0
-    const label = options.label ?? defaultLabel, pause = options.yield ?? defaultYield
+    const labelOption = options.label ?? inherited?.label, limits = options.limits ?? inherited?.limits
+    const from = resume?.searchedEntries ?? 0, end = this.count, pacer = new Pacer(options)
+    const reservation = this.reserve()
+    reservation.charge(words(end) * 4)
+    this.reservations.add(reservation)
     try {
-      const budget = new WorkBudget({ ...options.limits, signal })
-      const contains = query.text === '' ? undefined : new TextFilterMatcher(query.locale).prepare('contains', query.text, false, budget)
-      for (let ordinal = from; ordinal < end; ordinal++) {
-        budget.resetAllowance()
-        // An empty literal is a subsequence of every candidate.
-        if (!contains || contains(this.searchText(ordinal, label), budget)) { setBit(matches, ordinal); count++ }
-        if ((ordinal - from) % SEARCH_CHUNK === SEARCH_CHUNK - 1) {
-          await pause()
-          checkSignal(signal, 'Value search')
-          this.alive()
+      const matches = new Uint32Array(words(end))
+      if (resume) matches.set(resume.matches.subarray(0, words(from)))
+      let count = resume?.count ?? 0
+      const label = labelOption ?? defaultLabel
+      try {
+        const budget = new WorkBudget({ ...limits, signal })
+        const contains = query.text === '' ? undefined : new TextFilterMatcher(query.locale).prepare('contains', query.text, false, budget)
+        for (let ordinal = from; ordinal < end; ordinal++) {
+          budget.resetAllowance()
+          // An empty literal is a subsequence of every candidate.
+          if (!contains || contains(this.searchText(ordinal, label), budget)) { setBit(matches, ordinal); count++ }
+          if ((ordinal - from) % PACE_STRIDE === PACE_STRIDE - 1 && pacer.due) {
+            onProgress?.({ searched: ordinal + 1, total: end, matches: count })
+            await pacer.yield()
+            checkSignal(signal, 'Value search')
+            this.assertLive()
+          }
         }
-      }
-    } catch (error) { throw diagnostic(error) }
-    checkSignal(signal, 'Value search')
-    this.alive()
-    return { query: { text: query.text, locale: query.locale }, owner: this.stamp, matches, count, searchedEntries: end, complete: end === this.count && this.completeness === 'complete' }
+      } catch (error) { throw diagnostic(error) }
+      checkSignal(signal, 'Value search')
+      this.assertLive()
+      onProgress?.({ searched: end, total: end, matches: count })
+      const result: ValueSearchResult = Object.freeze({
+        query: Object.freeze({ text: query.text, locale: query.locale }), owner: this.stamp, matches, count,
+        searchedEntries: end, complete: end === this.count && this.completeness === 'complete',
+      })
+      this.results.set(result, { reservation, label: labelOption, limits })
+      return result
+    } catch (error) {
+      reservation.close()
+      this.reservations.delete(reservation)
+      throw error
+    }
   }
 }
 
@@ -512,36 +609,48 @@ type Layer = { kind: 'search'; result: ValueSearchResult; selected: boolean } | 
 export interface ValueDraftPatchSummary { kind: 'keys' | 'search'; selected: boolean; count: number }
 export type ValueCommit = { kind: 'unchanged' | 'committed'; rule: ValuesFilter | null }
 /** A dropdown draft pinned to one index owner: base plus ordered patches where
- * the last matching patch wins (spec §7.4). Nothing is stored before OK. */
+ * the last matching patch wins (spec §7.4). Nothing is stored before OK. Its
+ * key set, patches, searches and commit buffers are charged to the pool and
+ * released on close. */
 export class ValueSelectionDraft {
   closed = false
   private base: 'all' | 'none' | 'committed'
   private layers: Layer[] = []
   private showBlanks: boolean
   private dirty = false
+  private keyBytes = 0
   private readonly controllers = new Set<AbortController>()
+  private readonly owned = new Set<ValueSearchResult>()
+  private current: ValueSearchResult | undefined
   private constructor(
     readonly index: ValueIndex,
     readonly committed: ValuesFilter | null,
     private readonly store: ValueRunStore,
-    private readonly committedKeys: ValueKeySet | undefined,
+    private committedKeys: ValueKeySet | undefined,
+    private readonly reservation: ValueReservation,
   ) {
     this.base = committed ? 'committed' : 'all'
     this.showBlanks = committed ? committed.showBlanks : true
     index.pin(1)
   }
-  /** Opens on the applied rule; a rule owned by another generation is stale. */
+  /** Opens on the applied rule; a rule owned by another generation or column is stale. */
   static async open(index: ValueIndex, committed: ValuesFilter | null, store: ValueRunStore, signal?: AbortSignal): Promise<ValueSelectionDraft> {
-    if (index.disposed) throw new ValueIndexError('stale-source', 'Value index was invalidated')
-    let keys: ValueKeySet | undefined
-    if (committed) {
-      const ref = committedRef(committed)
-      if (!sameStamp(ref.owner, index.stamp)) throw new ValueIndexError('stale-source', 'Applied values rule belongs to another source generation')
-      keys = await loadKeySet(store, ref, signal)
-      checkSignal(signal, 'Value draft open')
-      if (index.disposed) throw new ValueIndexError('stale-source', 'Value index was invalidated')
+    index.assertLive()
+    const reservation = index.reserve()
+    try {
+      let keys: ValueKeySet | undefined
+      if (committed) {
+        const ref = committedRef(committed)
+        if (!sameStamp(ref.owner, index.stamp)) throw new ValueIndexError('stale-source', 'Applied values rule belongs to another source generation')
+        keys = await loadKeySet(store, ref, index.scope, signal, reservation)
+        checkSignal(signal, 'Value draft open')
+        index.assertLive()
+      }
+      return new ValueSelectionDraft(index, committed, store, keys, reservation)
+    } catch (error) {
+      reservation.close()
+      throw error
     }
-    return new ValueSelectionDraft(index, committed, store, keys)
   }
   private open(): void {
     if (this.closed) throw new ValueIndexError('closed', 'Value draft is closed')
@@ -557,6 +666,7 @@ export class ValueSelectionDraft {
   }
   isSelected(ordinal: number): boolean {
     this.open()
+    this.index.assertLive()
     this.ordinal(ordinal)
     for (let at = this.layers.length - 1; at >= 0; at--) {
       const layer = this.layers[at]
@@ -570,9 +680,14 @@ export class ValueSelectionDraft {
   /** An individual checkbox is an exact raw-key patch. */
   toggle(ordinal: number, selected: boolean): void {
     this.open()
+    this.index.assertLive()
     this.ordinal(ordinal)
     let top = this.layers[this.layers.length - 1]
     if (!top || top.kind !== 'keys') this.layers.push(top = { kind: 'keys', entries: new Map() })
+    if (!top.entries.has(ordinal)) {
+      this.reservation.charge(KEY_PATCH_BYTES)
+      this.keyBytes += KEY_PATCH_BYTES
+    }
     top.entries.set(ordinal, selected)
     this.dirty = true
   }
@@ -585,10 +700,15 @@ export class ValueSelectionDraft {
    * matching subset (also over values merged later), preserving other choices. */
   selectAll(selected: boolean, search?: ValueSearchResult, options: { includeBlanks?: boolean } = {}): void {
     this.open()
+    this.index.assertLive()
     if (!search) {
       this.base = selected ? 'all' : 'none'
       this.layers = []
       this.showBlanks = selected
+      this.dropCommittedKeys()
+      this.reservation.release(this.keyBytes)
+      this.keyBytes = 0
+      this.releaseUnused()
     } else {
       this.index.ownsSearch(search)
       this.layers.push({ kind: 'search', result: search, selected })
@@ -596,7 +716,22 @@ export class ValueSelectionDraft {
     }
     this.dirty = true
   }
-  /** Search changes only the displayed list; Cancel aborts it. */
+  private dropCommittedKeys(): void {
+    if (!this.committedKeys) return
+    this.reservation.release(this.committedKeys.bytes)
+    this.committedKeys = undefined
+  }
+  /** Releases searches this draft produced that are neither displayed nor
+   * referenced by a layer. */
+  private releaseUnused(): void {
+    for (const result of this.owned) {
+      if (result === this.current || this.layers.some(layer => layer.kind === 'search' && layer.result === result)) continue
+      this.index.release(result)
+      this.owned.delete(result)
+    }
+  }
+  /** Search changes only the displayed list; Cancel aborts it. The previous
+   * displayed search is released unless a Select All patch retains it. */
   async search(query: ValueSearchPredicate, options: ValueSearchOptions = {}): Promise<ValueSearchResult> {
     this.open()
     const controller = new AbortController(), outer = options.signal
@@ -606,16 +741,23 @@ export class ValueSelectionDraft {
     this.controllers.add(controller)
     try {
       const result = await this.index.search(query, { ...options, signal: controller.signal })
-      if (this.closed) throw new ValueIndexError('cancelled', 'Value draft closed during search')
+      if (this.closed) {
+        this.index.release(result)
+        throw new ValueIndexError('cancelled', 'Value draft closed during search')
+      }
+      this.owned.add(result)
+      this.current = result
+      this.releaseUnused()
       return result
     } finally {
       outer?.removeEventListener('abort', forward)
       this.controllers.delete(controller)
     }
   }
+  /** Final membership bitset over the universe; the caller releases its charge. */
   private membership(): Uint32Array {
     const index = this.index, size = index.size
-    index.admit(words(size) * 4)
+    this.reservation.charge(words(size) * 4)
     const bits = new Uint32Array(words(size))
     if (this.base === 'all') { bits.fill(0xffffffff); if (size % 32) bits[bits.length - 1] = 2 ** (size % 32) - 1 }
     else if (this.base === 'committed') for (let ordinal = 0; ordinal < size; ordinal++) if (this.baseSelected(ordinal)) setBit(bits, ordinal)
@@ -631,8 +773,11 @@ export class ValueSelectionDraft {
   }
   selectedCount(): { count: number; complete: boolean } {
     this.open()
+    this.index.assertLive()
+    const bits = this.membership()
     let count = 0
-    for (const word of this.membership()) count += popcount(word)
+    for (const word of bits) count += popcount(word)
+    this.reservation.release(bits.length * 4)
     return { count, complete: this.index.completeness === 'complete' }
   }
   describe(): { base: 'all' | 'none'; patches: readonly ValueDraftPatchSummary[]; blanks: boolean } {
@@ -653,48 +798,71 @@ export class ValueSelectionDraft {
     }
     return { base, patches, blanks: this.showBlanks }
   }
-  /** OK: compacts the draft over the complete universe into include or
-   * all-minus-exclusions refs; refuses while the universe is incomplete. */
-  async commit(signal?: AbortSignal): Promise<ValueCommit> {
+  private ready(signal: AbortSignal | undefined): void {
     this.open()
+    checkSignal(signal, 'Value commit')
+    this.index.assertLive()
+  }
+  /** OK: compacts the draft over the complete universe into include or
+   * all-minus-exclusions refs; refuses while the universe is incomplete.
+   * Cancellation and owner changes are checked before every publication. */
+  async commit(signal?: AbortSignal): Promise<ValueCommit> {
+    this.ready(signal)
     const index = this.index
-    if (index.disposed) throw new ValueIndexError('stale-source', 'Value index was invalidated; retry')
     if (index.completeness !== 'complete') throw new ValueIndexError('incomplete', 'Value universe is incomplete')
     if (!this.dirty) { this.close(); return { kind: 'unchanged', rule: this.committed } }
     for (const layer of this.layers) {
       if (layer.kind === 'search' && layer.result.searchedEntries < index.size) {
-        layer.result = await index.search(layer.result.query, { resume: layer.result, signal })
+        const previous = layer.result
+        layer.result = await index.search(previous.query, { resume: previous, signal })
+        this.owned.add(layer.result)
+        this.ready(signal)
       }
     }
-    this.open()
-    if (index.disposed) throw new ValueIndexError('stale-source', 'Value index was invalidated; retry')
+    this.releaseUnused()
     const bits = this.membership(), size = index.size
-    let selected = 0
-    for (const word of bits) selected += popcount(word)
-    if (selected === size && (this.showBlanks || index.blankCount === 0)) { this.close(); return { kind: 'committed', rule: null } }
-    const include = size - selected > selected, count = include ? selected : size - selected
-    index.admit(count * 9)
-    const kinds = new Uint8Array(count), numbers = new Float64Array(count), texts: (string | undefined)[] = new Array(count)
-    let at = 0
-    for (let ordinal = 0; ordinal < size; ordinal++) {
-      if (hasBit(bits, ordinal) !== include) continue
-      kinds[at] = index.entryKind(ordinal)
-      numbers[at] = index.entryText(ordinal) === undefined ? index.entryNumber(ordinal) : 0
-      texts[at++] = index.entryText(ordinal)
+    let transient = bits.length * 4
+    try {
+      let selected = 0
+      for (const word of bits) selected += popcount(word)
+      if (selected === size && (this.showBlanks || index.blankCount === 0)) {
+        this.ready(signal)
+        this.close()
+        return { kind: 'committed', rule: null }
+      }
+      const include = size - selected > selected, count = include ? selected : size - selected
+      this.reservation.charge(count * RUN_ELEMENT_BYTES)
+      transient += count * RUN_ELEMENT_BYTES
+      const kinds = new Uint8Array(count), numbers = new Float64Array(count), texts: (string | undefined)[] = new Array(count)
+      let at = 0
+      for (let ordinal = 0; ordinal < size; ordinal++) {
+        if (hasBit(bits, ordinal) !== include) continue
+        kinds[at] = index.entryKind(ordinal)
+        numbers[at] = index.entryText(ordinal) === undefined ? index.entryNumber(ordinal) : 0
+        texts[at++] = index.entryText(ordinal)
+      }
+      const ref = await this.store.put({ count, kinds, numbers, texts }, index.stamp, index.scope, signal)
+      try { this.ready(signal) } catch (error) {
+        await this.store.release(ref)
+        throw error
+      }
+      this.close()
+      const selection = include ? { mode: 'include' as const, keys: ref } : { mode: 'allExcept' as const, excluded: ref }
+      return { kind: 'committed', rule: { kind: 'values', selection, showBlanks: this.showBlanks } }
+    } finally {
+      if (!this.closed) this.reservation.release(transient)
     }
-    const ref = await this.store.put({ count, kinds, numbers, texts }, index.stamp, valueScope(index.identity), signal)
-    if (this.closed || index.disposed) {
-      await this.store.release(ref)
-      throw new ValueIndexError(this.closed ? 'cancelled' : 'stale-source', 'Value draft changed owner during commit')
-    }
-    this.close()
-    const selection = include ? { mode: 'include' as const, keys: ref } : { mode: 'allExcept' as const, excluded: ref }
-    return { kind: 'committed', rule: { kind: 'values', selection, showBlanks: this.showBlanks } }
   }
   private close(): void {
     if (this.closed) return
     this.closed = true
     this.index.pin(-1)
+    for (const result of this.owned) this.index.release(result)
+    this.owned.clear()
+    this.current = undefined
+    this.layers = []
+    this.committedKeys = undefined
+    this.reservation.close()
   }
   /** Cancel/Esc: discards the draft and pending searches; stores nothing. */
   cancel(): void {
@@ -712,27 +880,29 @@ function committedRef(rule: ValuesFilter): PagedKeySetRef {
   throw new ValueIndexError('unsupported', 'Query-patch values rules must be compacted before evaluation')
 }
 
+export interface ValuesMembership {
+  matches: (value: PreparedValue) => boolean
+  /** Retained key-set charge (in options.cache when given). */
+  bytes: number
+  release(): void
+}
 /** Row-level evaluator for an applied values rule — the extension point for
- * FilterEngine (which still defers kind 'values' to this module). */
-export interface ValuesMembership { matches: (value: PreparedValue) => boolean; bytes: number; release(): void }
+ * FilterEngine (which still defers kind 'values' to this module). The rule is
+ * valid only for the exact value domain of identity. */
 export async function compileValuesMembership(
   rule: ValuesFilter, identity: ValueIndexIdentity, store: ValueRunStore, options: { cache?: ValueIndexCache; signal?: AbortSignal } = {},
 ): Promise<ValuesMembership> {
-  const classification = identity.classification, signal = options.signal
+  const ref = committedRef(rule), classification = identity.classification
   const owner = { docId: identity.docId, sheetId: identity.sheetId, valueGen: identity.valueGen }
-  const matches = await compileValuesMatcher(rule, classification, store, owner, signal)
-  return { matches, bytes: 0, release: () => {} }
-}
-async function compileValuesMatcher(
-  rule: ValuesFilter, classification: ColumnClassification, store: ValueRunStore, owner: SourceStamp, signal?: AbortSignal,
-): Promise<(value: PreparedValue) => boolean> {
-  const ref = committedRef(rule)
   if (!sameStamp(ref.owner, owner)) throw new ValueIndexError('stale-source', 'Values rule belongs to another source generation')
   if (classification.kind === 'loading') throw new FilterDiagnostic('incomplete', 'Filter incomplete: column classification is loading')
-  const keys = await loadKeySet(store, ref, signal)
+  const reservation = options.cache?.reserve()
+  let keys: ValueKeySet
+  try { keys = await loadKeySet(store, ref, valueScope(identity), options.signal, reservation) }
+  catch (error) { reservation?.close(); throw error }
   const include = rule.selection.mode === 'include', showBlanks = rule.showBlanks
   const numberKind = classification.kind === 'date' ? KEY_DATE : KEY_NUMBER
-  return value => {
+  const matches = (value: PreparedValue): boolean => {
     let member: boolean
     switch (value.kind) {
       case 'unknown': case 'unavailable': throw new FilterDiagnostic('incomplete', 'Filter incomplete: authoritative value is unresolved')
@@ -744,17 +914,20 @@ async function compileValuesMatcher(
     }
     return include ? member : !member
   }
+  return { matches, bytes: keys.bytes, release: () => reservation?.close() }
 }
 
 /** Adapts SourceStore.queryColumn (cell-object pages) to typed lane pages until
- * the S1.2 typed-lanes queryColumn variant exists. One page per row band. */
+ * the S1.2 typed-lanes queryColumn variant exists. One page per row band; the
+ * owner is read live from the store. */
 export function valueSourceFromStore(store: SourceStore, col: number, body: { r0: number; r1: number }, pageRows = 4096): ValueColumnSource {
   if (!Number.isSafeInteger(pageRows) || pageRows < 1 || body.r1 < body.r0 - 1) throw new RangeError('Invalid value source paging')
-  const stamp = store.stamp, rows = body.r1 - body.r0 + 1
+  const rows = body.r1 - body.r0 + 1
   return {
-    stamp,
+    get stamp() { return store.stamp },
     pageCount: Math.ceil(rows / pageRows),
     async readPage(page: number, signal: AbortSignal): Promise<ValuePageRead> {
+      const stamp = store.stamp
       const r0 = body.r0 + page * pageRows, r1 = Math.min(body.r1, r0 + pageRows - 1), count = r1 - r0 + 1
       if (!Number.isSafeInteger(page) || page < 0 || count < 1) throw new ValueIndexError('invalid-cursor', 'Value page outside the source')
       const tags = new Uint8Array(count), numbers = new Float64Array(count), styles = new Uint32Array(count), texts: (string | undefined)[] = []
@@ -763,8 +936,10 @@ export function valueSourceFromStore(store: SourceStore, col: number, body: { r0
       do {
         const result = await store.queryColumn({ col, rows: { kind: 'intervals', intervals: [{ r0, r1 }] }, limit: count, cursor }, { signal, stamp })
         checkSignal(signal, 'Value page read')
-        if (!sameStamp(result.stamp, stamp)) throw new ValueIndexError('stale-source', 'Column page owner changed')
+        if (!sameStamp(result.stamp, stamp) || !sameStamp(store.stamp, stamp)) throw new ValueIndexError('stale-source', 'Column page owner changed')
         if (result.error) return { kind: 'error', failure: { ...result.error } }
+        // A covered page that is not complete is still not authoritative (§4.1).
+        if (result.completeness === 'incomplete') return { kind: 'error', failure: { code: 'incomplete', retryable: true, message: 'Column page is incomplete' } }
         if (result.completeness !== 'complete') loading = true
         for (const item of result.items) {
           const outcome = place(item, r0, r1, col, tags, numbers, styles, texts)
@@ -776,10 +951,8 @@ export function valueSourceFromStore(store: SourceStore, col: number, body: { r0
           cursors.add(cursor)
         }
       } while (cursor !== undefined)
-      if (tags.includes(0)) {
-        if (loading) return { kind: 'unknown', pageId: `${stamp.sheetId}:${col}:${r0}` }
-        throw new ValueIndexError('page-error', 'Complete column page left rows uncovered')
-      }
+      if (loading) return { kind: 'unknown', pageId: `${stamp.sheetId}:${col}:${r0}` }
+      if (tags.includes(0)) throw new ValueIndexError('page-error', 'Complete column page left rows uncovered')
       return { kind: 'values', pageId: `${stamp.sheetId}:${col}:${r0}`, count, tags, numbers, texts, styles }
     },
   }

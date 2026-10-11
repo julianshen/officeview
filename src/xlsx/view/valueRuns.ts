@@ -97,6 +97,10 @@ export class NumberTable {
     this.account?.release(oldBytes)
   }
 }
+/** Estimated retained bytes per key: two Float64+Int32 hash slots at <=0.5
+ * load for numbers; raw UTF-16, header and a Set entry for text. */
+export const keySetElementBytes = (kind: number, text: string | undefined): number =>
+  kind === KEY_BOOLEAN ? 0 : textual(kind) ? (text?.length ?? 0) * 2 + 40 + 48 : 24
 /** Exact key membership used by committed rules and draft bases. */
 export class ValueKeySet {
   private readonly numbers = new NumberTable()
@@ -105,8 +109,13 @@ export class ValueKeySet {
   private readonly strings = new Set<string>()
   private readonly errors = new Set<string>()
   size = 0
+  bytes = 0
+  constructor(private readonly account?: LaneAccount) {}
   add(kind: number, value: number, text: string | undefined): void {
     if (this.has(kind, value, text)) return
+    const bytes = keySetElementBytes(kind, text)
+    this.account?.charge(bytes)
+    this.bytes += bytes
     switch (kind) {
       case KEY_NUMBER: this.numbers.set(value === 0 ? 0 : value, 0); break
       case KEY_DATE: this.dates.set(value === 0 ? 0 : value, 0); break
@@ -140,17 +149,20 @@ export function validateRun(run: ValueKeyRun): void {
 }
 export interface ValueRunStore {
   /** Stores an immutable copy; refusal is a typed storage quota error. */
+  /** scope names the exact value domain (range/column/classification, see
+   * valueScope); key runs are meaningless in any other column. */
   put(run: ValueKeyRun, owner: SourceStamp, scope: string, signal?: AbortSignal): Promise<PagedKeySetRef>
-  /** Reads [offset, offset+limit) of the ref; a ref with another owner is stale. */
-  read(ref: PagedKeySetRef, offset: number, limit: number, signal?: AbortSignal): Promise<ValueKeyRun>
+  /** Reads [offset, offset+limit); another owner or scope is stale. */
+  read(ref: PagedKeySetRef, offset: number, limit: number, scope: string, signal?: AbortSignal): Promise<ValueKeyRun>
   release(ref: PagedKeySetRef): Promise<void>
 }
 export const VALUE_RUN_PAGE = 65_536
-export async function loadKeySet(store: ValueRunStore, ref: PagedKeySetRef, signal?: AbortSignal): Promise<ValueKeySet> {
-  const set = new ValueKeySet()
+/** Charges each loaded key to account (when given) before retaining it. */
+export async function loadKeySet(store: ValueRunStore, ref: PagedKeySetRef, scope: string, signal?: AbortSignal, account?: LaneAccount): Promise<ValueKeySet> {
+  const set = new ValueKeySet(account)
   let offset = 0
   while (offset < ref.count) {
-    const run = await store.read(ref, offset, Math.min(VALUE_RUN_PAGE, ref.count - offset), signal)
+    const run = await store.read(ref, offset, Math.min(VALUE_RUN_PAGE, ref.count - offset), scope, signal)
     if (run.count === 0) throw new ValueIndexError('page-error', 'Value key run ended early')
     validateRun(run)
     for (let i = 0; i < run.count; i++) set.add(run.kinds[i], run.numbers[i], run.texts[i])
@@ -159,7 +171,7 @@ export async function loadKeySet(store: ValueRunStore, ref: PagedKeySetRef, sign
   if (set.size !== ref.count) throw new ValueIndexError('page-error', 'Value key run contains duplicate keys')
   return set
 }
-interface StoredRun { run: ValueKeyRun; owner: SourceStamp; bytes: number }
+interface StoredRun { run: ValueKeyRun; owner: SourceStamp; scope: string; bytes: number }
 export class MemoryValueRunStore implements ValueRunStore {
   readonly limitBytes: number
   usedBytes = 0
@@ -170,10 +182,11 @@ export class MemoryValueRunStore implements ValueRunStore {
     if (!(this.limitBytes >= 0)) throw new RangeError('Invalid value run store limit')
   }
   get refCount(): number { return this.runs.size }
-  async put(run: ValueKeyRun, owner: SourceStamp, _scope: string, signal?: AbortSignal): Promise<PagedKeySetRef> {
+  async put(run: ValueKeyRun, owner: SourceStamp, scope: string, signal?: AbortSignal): Promise<PagedKeySetRef> {
     if (signal?.aborted) throw new ValueIndexError('cancelled', 'Value run write cancelled')
     validateRun(run)
-    let bytes = 64
+    if (typeof scope !== 'string') throw new ValueIndexError('invalid-rule', 'Value run scope is required')
+    let bytes = 64 + scope.length * 2
     for (let i = 0; i < run.count; i++) bytes += runElementBytes(run.kinds[i], run.texts[i])
     if (this.usedBytes + bytes > this.limitBytes) {
       throw new ValueIndexError('quota', 'Value run storage quota exceeded', {
@@ -185,15 +198,15 @@ export class MemoryValueRunStore implements ValueRunStore {
       texts: Object.freeze(Array.from({ length: run.count }, (_, i) => run.texts[i])),
     })
     const refId = `values-${++this.puts}`
-    this.runs.set(refId, { run: copy, owner: { ...owner }, bytes })
+    this.runs.set(refId, { run: copy, owner: { ...owner }, scope, bytes })
     this.usedBytes += bytes
     return Object.freeze({ refId, count: run.count, owner: Object.freeze({ ...owner }) })
   }
-  async read(ref: PagedKeySetRef, offset: number, limit: number, signal?: AbortSignal): Promise<ValueKeyRun> {
+  async read(ref: PagedKeySetRef, offset: number, limit: number, scope: string, signal?: AbortSignal): Promise<ValueKeyRun> {
     if (signal?.aborted) throw new ValueIndexError('cancelled', 'Value run read cancelled')
     const stored = this.runs.get(ref.refId)
-    if (!stored || !sameStamp(stored.owner, ref.owner) || stored.run.count !== ref.count) {
-      throw new ValueIndexError('stale-source', 'Value run ref is missing or owned by another source generation')
+    if (!stored || !sameStamp(stored.owner, ref.owner) || stored.run.count !== ref.count || stored.scope !== scope) {
+      throw new ValueIndexError('stale-source', 'Value run ref is missing or owned by another source generation or column')
     }
     if (!Number.isSafeInteger(offset) || !Number.isSafeInteger(limit) || offset < 0 || limit < 1 || limit > VALUE_RUN_PAGE) {
       throw new ValueIndexError('invalid-cursor', 'Invalid value run page')
