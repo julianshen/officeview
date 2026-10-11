@@ -32,8 +32,12 @@ function withLease(pages: Paintable[], dispose: () => void = () => {}, fontDiagn
     if (released) return
     released = true
     dispose()
-    for (const image of new Set(decoded)) releaseDecodedImage(image)
+    releaseDecoded(decoded)
   } })
+}
+/** Each decoded bitmap is closed once, even when shared by several assets. */
+function releaseDecoded(decoded: Array<CanvasImageSource | undefined>): void {
+  for (const image of new Set(decoded)) releaseDecodedImage(image)
 }
 export interface Paintable {
   spec: PageSpec
@@ -202,13 +206,15 @@ export function getPaintables(
   const watermark = normalizeWatermark(options?.watermark as WatermarkOptions | undefined)
   if ('sections' in doc) {
     return acquireFonts(doc, options?.registerFont).then(async (lease) => {
+      // Decoded before the lease exists: a later failure must close them too.
+      let decoded: Array<CanvasImageSource | undefined> = []
       try {
         const baseFamilyCss = (family: string) => fontFamilyCssDocx(lease.resolve(family))
         const measure = await measurerFromDoc(withFallbackFonts(baseFamilyCss, options?.fallbackFonts))
         const pages = layoutDocx(doc, measure)
         // One decode per unique candidate pair; failures degrade to a blank slot.
         const docImages = collectDocImages(doc)
-        const decoded = await decodeImageAssets(docImages, options?.decodeImage)
+        decoded = await decodeImageAssets(docImages, options?.decodeImage)
         const decodedByObject = new Map<ContentImageAsset, CanvasImageSource | undefined>(docImages.map((img, index) => [img, decoded[index]]))
         // Each page paints on its own canvas, so PAGE/NUMPAGES fields must be
         // resolved against the whole document, not the single-page array.
@@ -231,15 +237,16 @@ export function getPaintables(
             })
           },
         })), lease.dispose, lease.diagnostics, decoded)
-      } catch (error) { lease.dispose(); throw error }
+      } catch (error) { releaseDecoded(decoded); lease.dispose(); throw error }
     })
   }
   if ('sheets' in doc) {
     return acquireFonts(doc, options?.registerFont).then(async lease => {
+      let decoded: Array<CanvasImageSource | undefined> = []
       try {
         const cached = collectCachedPictures(doc.sheets.flatMap(sheet => sheet.drawings ?? []))
         const indexed = doc.images ?? []
-        const decoded = await decodeImageAssets([...indexed, ...cached], options?.decodeImage)
+        decoded = await decodeImageAssets([...indexed, ...cached], options?.decodeImage)
         const decodedByObject = new Map(cached.map((image, index) => [image, decoded[indexed.length + index]]))
         return withLease(doc.sheets.map((sheet): Paintable => {
           const m = computeMetrics(sheet)
@@ -249,19 +256,20 @@ export function getPaintables(
             paint: (ctx) => renderSheet(sheet, ctx, m, watermark, { images: decoded, imageFor: image => decodedByObject.get(image), resolveFont: withFallbackFonts(lease.resolve, options?.fallbackFonts) }),
           }
         }), lease.dispose, lease.diagnostics, decoded)
-      } catch (error) { lease.dispose(); throw error }
+      } catch (error) { releaseDecoded(decoded); lease.dispose(); throw error }
     })
   }
   return acquireFonts(doc, options?.registerFont).then(async lease => {
+    let decoded: Array<CanvasImageSource | undefined> = []
     try {
       const sm = slideMetrics(doc)
       const cached = collectCachedPictures(doc.slides.flatMap(slide => slide.shapes))
-      const decoded = await decodeImageAssets([...doc.images, ...cached], options?.decodeImage)
+      decoded = await decodeImageAssets([...doc.images, ...cached], options?.decodeImage)
       const decodedByObject = new Map(cached.map((image, index) => [image, decoded[doc.images.length + index]]))
       return withLease(doc.slides.map(slide => ({
         spec: { widthPx: sm.widthPx, heightPx: sm.heightPx },
         paint: ctx => renderSlide(slide, ctx, sm, decoded, watermark, withFallbackFonts(lease.resolve, options?.fallbackFonts), { imageFor: image => decodedByObject.get(image) }),
       })), lease.dispose, lease.diagnostics, decoded)
-    } catch (error) { lease.dispose(); throw error }
+    } catch (error) { releaseDecoded(decoded); lease.dispose(); throw error }
   })
 }
