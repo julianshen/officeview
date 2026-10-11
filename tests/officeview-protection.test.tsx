@@ -1,5 +1,5 @@
 import { describe, test, expect, vi, beforeEach } from 'vitest'
-import { render, waitFor, fireEvent } from '@testing-library/react'
+import { act, render, waitFor, fireEvent } from '@testing-library/react'
 import { OfficeDoc } from '../src/components/OfficeDoc'
 import { OfficePackage } from '../src/core/zip'
 import { parseDocx } from '../src/docx/parse'
@@ -26,7 +26,7 @@ async function mount(props: Record<string, unknown> = {}) {
   const canvas = utils.container.querySelector('canvas') as HTMLCanvasElement
   canvas.getBoundingClientRect = () =>
     ({ left: 0, top: 0, width: 816, height: 1056, right: 816, bottom: 1056, x: 0, y: 0, toJSON: () => ({}) }) as DOMRect
-  return { ...utils, canvas }
+  return { ...utils, canvas, doc }
 }
 
 /** Drag across the first line of text, the way a reader would. */
@@ -145,4 +145,20 @@ describe('copy and print prevention are independent', () => {
     expect(copyButton(container)).toBeNull()
     expect(printGuards().length).toBe(1)
   })
+})
+
+test('withdrawing copy permission while the API is pending blocks the legacy fallback', async () => {
+  let reject!: (error: Error) => void
+  writeText.mockImplementationOnce(() => new Promise<void>((_resolve, no) => { reject = no }))
+  const previous = document.execCommand, exec = vi.fn(() => true)
+  document.execCommand = exec as unknown as typeof document.execCommand
+  try {
+    const ui = await mount(); dragAcrossText(ui.canvas)
+    await waitFor(() => expect(copyButton(ui.container)).toBeTruthy())
+    fireEvent.click(copyButton(ui.container) as HTMLElement)
+    await waitFor(() => expect(writeText).toHaveBeenCalled())
+    ui.rerender(<OfficeDoc document={ui.doc} allowCopy={false} />)
+    await act(async () => { reject(new Error('clipboard denied')); await Promise.resolve() })
+    expect(exec).not.toHaveBeenCalled()
+  } finally { document.execCommand = previous }
 })

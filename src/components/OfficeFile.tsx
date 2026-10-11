@@ -159,7 +159,7 @@ export function OfficeFile({
       {...rest}
     />
   )
-  if (!state.notices) return doc
+  if (!state.notices || (rest.interactiveSheets && 'sheets' in state.document)) return doc
   return (
     <>
       <div role="status" data-officeview-notice="">{state.notices.join(' · ')}</div>

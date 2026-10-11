@@ -15,9 +15,11 @@
  * changes keep zoom and scroll. A committed view bumps that sheet's viewGen and
  * the workbook globalViewGen, which re-keys base tiles, find and hit geometry.
  *
- * TODO(S1.2/S4): source reads, geometry and find run in-thread over the interim
- * object source; the worker `viewport`/`search` commands replace them for the
- * paged source without changing this component's layers.
+ * Staged scope: OfficeDoc currently supplies only `doc`, never the paged `source`
+ * port. The interactive viewport and its copy controls are therefore absent on
+ * production paged sheets; this is not a clipboard refusal path. Worker viewport,
+ * search and source wiring remain a follow-up package. In-process source reads
+ * and geometry continue here until that integration.
  */
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type ReactElement } from 'react'
 import type { XlsxCell, XlsxDocument, XlsxSheet } from '../../xlsx/types'
@@ -34,7 +36,7 @@ import {
   createScrollWindow, navigateTo as scrollNavigateTo, refreshScrollWindow, scrollPhysicalTo, setScrollZoom, visibleLogicalViewport, type ViewportSize,
 } from '../../xlsx/view/scrollWindow'
 import { keyboardSheetZoom, pinchSheetZoom, wheelSheetZoom } from '../../xlsx/view/sheetZoom'
-import { SheetNavigationSession, emptyGridSelection, navigateSelection } from '../../xlsx/view/selection'
+import { SheetNavigationSession, emptyGridSelection, navigateSelection, recordCounts } from '../../xlsx/view/selection'
 import { FIND_PAGE_HITS, FindController, hitGeometry, navigateToHit, type FindHit, type FindInput, type FindOptions, type FindPublication } from '../../xlsx/view/find'
 import { LayoutCache } from '../../xlsx/view/textLayout'
 import { cellDisplayText } from '../../xlsx/render'
@@ -47,7 +49,17 @@ import type { FallbackFontsOptions } from '../../core/fonts/fallback'
 import { SheetImageCache, imageBudgetFor, preparePrintUnits, prepareSheetAssets, type PrintUnitsOptions, type SheetAssetsLease } from './sheetAssets'
 import type { Paintable, PaintableArray } from '../../render/paint'
 import { GridSemantics, type GridTransition } from './GridSemantics'
-import { GRID_HEADER_SIZE } from './GridHeaders'
+import { GRID_HEADER_SIZE, columnHeaderHeight } from './GridHeaders'
+import { useControlMedia } from './controlMedia'
+import { FilterDropdown } from './FilterDropdown'
+import { SortDialog } from './SortDialog'
+import { createViewerControlResources, viewerControls, type ViewerControlResources, type ViewerControls } from './viewerControlsClient'
+import type { ControlSnapshot } from './controlsClient'
+import { failureText } from './controlUi'
+import { copySelection, copySessionBudget } from '../../xlsx/view/copy'
+import { LARGE_EXPORT_MESSAGE } from '../../render/paint'
+import { SAVED_VALUES_DIAGNOSTIC } from '../../xlsx/view/values'
+import type { WorkbookSource } from '../../worker/viewerSession'
 import { coarseSelectionRecords, overlayRecords, selectionContains } from './selectionOverlay'
 import { SheetNavigator } from './SheetNavigator'
 import type { HiddenCellInspection } from './ViewerStatus'
@@ -88,6 +100,8 @@ export interface SheetFrameStats {
 }
 export interface InteractiveSheetDocProps {
   doc: XlsxDocument
+  /** @internal Authoritative source port; the viewer owns its release. */
+  source?: WorkbookSource
   background?: string
   className?: string
   style?: CSSProperties
@@ -113,7 +127,7 @@ export interface InteractiveSheetDocProps {
 // Document identity alone owns zoom reset (§10.1): a stable id per document object.
 const documentIds = new WeakMap<object, string>()
 let nextDocumentId = 0
-function documentIdOf(doc: XlsxDocument): string {
+function documentIdOf(doc: object): string {
   let id = documentIds.get(doc)
   if (!id) documentIds.set(doc, id = `xlsx-${++nextDocumentId}`)
   return id
@@ -121,8 +135,8 @@ function documentIdOf(doc: XlsxDocument): string {
 export function sheetIdOf(sheet: XlsxSheet, index: number): string { return sheet.sheetId ?? String(index + 1) }
 
 export default function InteractiveSheetDoc(props: InteractiveSheetDocProps): ReactElement {
-  const docId = documentIdOf(props.doc)
-  return <SheetViewer key={docId} docId={docId} {...props} />
+  const docId = props.source?.store(props.source.sheets[0].sheetId).stamp.docId ?? documentIdOf(props.doc)
+  return <SheetViewer key={`${documentIdOf(props.doc)}:${props.source ? documentIdOf(props.source) : ''}`} docId={docId} {...props} />
 }
 
 interface SheetEntry {
@@ -148,7 +162,7 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
   const session = useRef(new SheetNavigationSession(docId)).current
   const windows = useRef(new Map<string, ScrollWindow>()).current
   const entries = useRef(new Map<string, SheetEntry>()).current
-  const source = useMemo(() => createObjectWorkbookSource(doc, docId), [doc, docId])
+  const source = useMemo(() => props.source ?? createObjectWorkbookSource(doc, docId), [doc, docId, props.source])
   useEffect(() => () => { void source.release() }, [source])
 
   // ---- fonts/images: one lease per (fallback fonts, active sheet) ----
@@ -191,7 +205,11 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
   const fontGen = fontGenRef.current.gen
 
   // ---- per-sheet committed views and geometry (one geometry per viewGen) ----
-  const viewInput = (sheetId: string): SheetViewInput => views?.[sheetId] ?? { revision: 0 }
+  const localViews = useRef(new Map<string, SheetViewInput>()).current
+  const viewInput = (sheetId: string): SheetViewInput => {
+    const local = localViews.get(sheetId), external = views?.[sheetId]
+    return local && (!external || local.revision >= external.revision) ? local : external ?? { revision: 0 }
+  }
   const entryFor = (sheetId: string): SheetEntry => {
     const index = sheetIds.indexOf(sheetId)
     const sheet = doc.sheets[index]
@@ -207,7 +225,7 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
     const selection = previous?.view.selection ?? emptyGridSelection()
     const view: SheetView = { sheetId, revision: input.revision, order, baseHidden, visibility, sort: input.sort ?? null, filter: input.filter ?? null, selection }
     const entry: SheetEntry = {
-      sheet, revision: input.revision, view, geometry: built, metrics: built.metrics, body: usedBody(sheet),
+      sheet, revision: input.revision, view, geometry: built, metrics: built.metrics, body: input.filter || input.sort ? { r0: (input.filter?.range ?? input.sort!.range).r0 + (input.filter?.range ?? input.sort!.range).headerRows, r1: (input.filter?.range ?? input.sort!.range).r1 - (input.filter?.range ?? input.sort!.range).totalsRows } : usedBody(sheet),
       // Layout records are keyed by complete identity; a new view gets its own merge cache.
       layoutCache: previous?.layoutCache ?? new LayoutCache(), merges: new MergeQueryCache(),
     }
@@ -219,11 +237,11 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
   // The committed revision: a stale (lower) prop revision never regresses the
   // owner that keys tiles, find and hit geometry; a newer one is built on use.
   const revisionOf = (sheetId: string): number => Math.max(entries.get(sheetId)?.revision ?? 0, viewInput(sheetId).revision)
-  const identityOf = (sheetId: string): CacheIdentity => ({ docId, sheetId, valueGen: 0, fontGen, viewGen: revisionOf(sheetId) })
+  const identityOf = (sheetId: string): CacheIdentity => ({ docId, sheetId, valueGen: source.store(sheetId).stamp.valueGen, fontGen, viewGen: revisionOf(sheetId) })
   const globalViewGen = sheetIds.reduce((sum, id) => sum + revisionOf(id), 0)
   const ownerOf = (): WorkbookOwner => ({
     docId, globalViewGen, workbookValueGen: 0, fontGen,
-    sheetVector: sheetIds.map(sheetId => ({ sheetId, revision: revisionOf(sheetId), valueGen: 0 })),
+    sheetVector: sheetIds.map(sheetId => ({ sheetId, revision: revisionOf(sheetId), valueGen: source.store(sheetId).stamp.valueGen })),
   })
   const ownerRef = useRef(ownerOf)
   ownerRef.current = ownerOf
@@ -252,7 +270,9 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
     ro.observe(el)
     return () => ro.disconnect()
   }, [])
-  const viewport: ViewportSize = useMemo(() => ({ width: Math.max(1, pane.width - GRID_HEADER_SIZE), height: Math.max(1, pane.height - GRID_HEADER_SIZE) }), [pane])
+  const touchControls = useControlMedia('(pointer: coarse)')
+  const headerHeight = columnHeaderHeight(touchControls, true, true)
+  const viewport: ViewportSize = useMemo(() => ({ width: Math.max(1, pane.width - GRID_HEADER_SIZE), height: Math.max(1, pane.height - headerHeight) }), [pane, headerHeight])
   const nativeDpr = Math.min(typeof window !== 'undefined' ? window.devicePixelRatio || 1 : 1, 3)
   // Admit the pane surfaces before sizing any canvas; a lower device scale keeps
   // the pane within the bitmap budget, and nothing fits → a visible resource outcome.
@@ -487,6 +507,7 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
   }
   const goToHit = (hit: FindHit) => {
     if (!sheetIds.includes(hit.sheetId)) return
+    cancelCopy()
     const sheetEntry = entryFor(hit.sheetId)
     if (!windows.has(hit.sheetId)) windowFor(hit.sheetId, sheetEntry)
     const result = navigateToHit({ session, windows, viewport }, hit)
@@ -503,6 +524,117 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
     if (hit) goToHit(hit)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [page, activeHit])
+
+  // ---- atomic control transport and copy ownership ----
+  const current = useRef({ entryFor, identityOf, activeSheetId, allowCopy, allowPrint })
+  current.current = { entryFor, identityOf, activeSheetId, allowCopy, allowPrint }
+  const snapshot = (sheetId: string): ControlSnapshot => {
+    const e = current.current.entryFor(sheetId), body = e.body
+    return { owner: current.current.identityOf(current.current.activeSheetId), filter: e.view.filter, sort: e.view.sort, records: { ...recordCounts(e.metrics, body), completeness: 'complete' } }
+  }
+  const [controls, setControls] = useState<ViewerControls | null>(null)
+  const controlsReady = useRef<Promise<ViewerControls> | null>(null)
+  const controlPorts = useRef(new Map<string, ViewerControls>()).current
+  const controlResources = useRef<ViewerControlResources | null>(null)
+  useEffect(() => {
+    const reused = controlPorts.get(activeSheetId)
+    setControls(reused ?? null)
+    if (reused) {
+      controlPorts.delete(activeSheetId); controlPorts.set(activeSheetId, reused)
+      controlsReady.current = Promise.resolve(reused)
+      return
+    }
+    const abort = new AbortController()
+    const resources = controlResources.current ??= createViewerControlResources(profile)
+    const ready = viewerControls({ doc, source, resources, sheetId: activeSheetId, snapshot: () => snapshot(activeSheetId),
+      view: () => ({ ...current.current.entryFor(activeSheetId).view, selection: session.get(activeSheetId).selection }),
+      publish: draft => {
+        cancelCopy()
+        const revision = current.current.identityOf(activeSheetId).viewGen + 1
+        localViews.set(activeSheetId, { revision, ...draft })
+        current.current.entryFor(activeSheetId)
+        rerender()
+        return snapshot(activeSheetId)
+      },
+    }, abort.signal)
+    controlsReady.current = ready
+    void ready.then(port => {
+      if (abort.signal.aborted) { port.dispose(); return }
+      controlPorts.set(activeSheetId, port)
+      // Retain the active port and one recent sheet, not a full index per visit.
+      while (controlPorts.size > 2) {
+        const oldest = controlPorts.keys().next().value!
+        controlPorts.get(oldest)!.dispose(); controlPorts.delete(oldest)
+      }
+      setControls(port)
+    })
+      .catch(error => { if (!abort.signal.aborted) setAnnouncement(error instanceof Error ? error.message : 'Controls unavailable.') })
+    return () => abort.abort()
+  }, [activeSheetId, source])
+  useEffect(() => () => { for (const port of controlPorts.values()) port.dispose(); controlPorts.clear(); controlResources.current?.dispose(); controlResources.current = null }, [])
+  const [popup, setPopup] = useState<{ kind: 'filter' | 'sort'; col: number; invoker: HTMLElement } | null>(null)
+  const closePopup = () => setPopup(null)
+  const controlJob = useRef<AbortController | null>(null)
+  useEffect(() => { closePopup(); controlJob.current?.abort() }, [activeSheetId])
+  useEffect(() => () => controlJob.current?.abort(), [])
+  const sortCycle = async (col: number, shift: boolean) => {
+    const sheetId = activeSheetId
+    controlJob.current?.abort()
+    const abort = new AbortController(); controlJob.current = abort
+    try {
+      const client = (controls ?? await controlsReady.current)?.client
+      if (!client || abort.signal.aborted || current.current.activeSheetId !== sheetId) return
+      const owner = client.owner(), previous = current.current.entryFor(sheetId).view.sort
+      const resolved = await client.resolve(owner, 'sort', abort.signal, undefined, col)
+      if (resolved.kind !== 'complete') { if (!abort.signal.aborted) setAnnouncement(resolved.kind === 'refused' ? failureText(resolved) : 'Source range is incomplete.'); return }
+      const key = previous?.keys.find(key => key.col === col)
+      const order = !key ? 'asc' : key.order === 'asc' ? 'desc' : null
+      const keys = shift ? [...previous?.keys.filter(key => key.col !== col) ?? []] : []
+      if (order) keys.push({ col, order })
+      const result = await client.sort(owner, keys.length ? { range: resolved.range, keys, caseSensitive: previous?.caseSensitive ?? false } : null, abort.signal)
+      if (!abort.signal.aborted) setAnnouncement('snapshot' in result ? 'View-only sort applied; formulas unchanged.' : failureText(result))
+    } catch (error) { if (!abort.signal.aborted) setAnnouncement(error instanceof Error ? error.message : 'Sort unavailable.') }
+  }
+  const copyJob = useRef<AbortController | null>(null), copyToken = useRef(0)
+  const [copyPending, setCopyPending] = useState(false)
+  const cancelCopy = () => { copyToken.current++; copyJob.current?.abort(); setCopyPending(false) }
+  useEffect(() => { cancelCopy() }, [identityKey, allowCopy, selection])
+  useEffect(() => () => { copyToken.current++; copyJob.current?.abort() }, [])
+  const copyGrid = async () => {
+    if (!current.current.allowCopy || !entry) return
+    cancelCopy()
+    const token = ++copyToken.current, abort = new AbortController(); copyJob.current = abort
+    setCopyPending(true)
+    // Column visibility is compact authored geometry, not the selected cell product.
+    const hiddenCols: SourceRowInterval[] = []
+    let start: number | null = null
+    for (let col = 0; col < entry.metrics.cols.logicalCount; col++) {
+      if (entry.metrics.cols.size(col) === 0) { start ??= col }
+      else if (start !== null) { hiddenCols.push({ r0: start, r1: col - 1 }); start = null }
+    }
+    if (start !== null) hiddenCols.push({ r0: start, r1: entry.metrics.cols.logicalCount - 1 })
+    const result = await copySelection({ store: source.store(activeSheetId), owner: { ...identity }, currentOwner: () => current.current.identityOf(current.current.activeSheetId),
+      sessionBudgetBytes: copySessionBudget(profile),
+      selection, order: entry.view.order, visibility: entry.view.visibility, columns: visibilityFromHidden(createIntervalSet(hiddenCols), entry.metrics.cols.logicalCount),
+      allowed: () => current.current.allowCopy, signal: abort.signal, onPending: () => { if (token === copyToken.current) setAnnouncement('Copy is waiting for values; cancel to stop.') },
+      format: cell => { const raw = cellAt(entry, cell); return cellDisplayText(entry.sheet, { value: cell.value, style: raw?.style }) },
+    })
+    if (token !== copyToken.current) return
+    setCopyPending(false)
+    setAnnouncement(result.kind === 'copied' ? 'Selection copied.' : result.kind === 'refused' ? result.message : result.kind === 'stale' ? 'Source or view changed; copy again.' : 'Copy cancelled.')
+  }
+  const [valueNotice, setValueNotice] = useState(() => source.valueStatus?.().message)
+  useEffect(() => {
+    const refresh = () => {
+      const status = source.valueStatus?.()
+      setValueNotice(status?.message)
+      return status?.policy === 'cached' && status.formulas === undefined
+    }
+    if (!refresh()) return
+    const timer = setInterval(() => { if (!refresh()) clearInterval(timer) }, 100)
+    return () => clearInterval(timer)
+  }, [source])
+  const notices = [...new Set([...(doc.diagnostics ?? []).filter(d => d.feature !== SAVED_VALUES_DIAGNOSTIC && ['alternate-content-data', 'large-file-compatibility', 'possibly-damaged'].includes(d.feature)).map(d => d.message), ...(source.openDiagnostics ?? []).filter(d => d.code !== SAVED_VALUES_DIAGNOSTIC).map(d => d.message), ...(valueNotice ? [valueNotice] : [])])]
 
   // Overlay layer: selection and search highlights in viewport space.
   useLayoutEffect(() => {
@@ -624,6 +756,8 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
   const onKeyDown = (event: React.KeyboardEvent) => {
     const mod = event.metaKey || event.ctrlKey, key = event.key.toLowerCase()
     if (mod && key === 'f') { event.preventDefault(); inputRef.current?.focus(); inputRef.current?.select(); return }
+    if (key === 'Escape' && copyPending) { event.preventDefault(); cancelCopy(); setAnnouncement('Copy cancelled.'); return }
+    if (allowCopy && mod && key === 'c' && ((event.target as HTMLElement).hasAttribute?.('data-officeview-grid') || event.target === event.currentTarget)) { event.preventDefault(); void copyGrid(); return }
     if (!allowCopy && mod && key === 'c') { event.preventDefault(); return }
     if (!allowPrint && mod && key === 'p') { event.preventDefault(); return }
     if (allowPrint && mod && key === 'p') { event.preventDefault(); void preparePrint(); return }
@@ -663,11 +797,16 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
   allowPrintRef.current = allowPrint
   const releasePrint = () => { setPrintPages(null); setPrintReserved(0); printLease.current?.dispose(); printLease.current = null }
   const preparePrint = async () => {
+    if (!allowPrintRef.current) return
     const token = ++printToken.current
     const loader = props.printLoader ?? preparePrintUnits
-    const pages = await loader(doc, {
-      ...(markKey ? { watermark } : {}), ...(fontKey ? { fallbackFonts } : {}), profile, imageCache: imageCacheFor(), assetLoader: loadAssets,
-    })
+    let pages: Awaited<ReturnType<typeof loader>>
+    try { pages = await loader(doc, {
+      ...(markKey ? { watermark } : {}), ...(fontKey ? { fallbackFonts } : {}), profile, imageCache: imageCacheFor(), assetLoader: loadAssets, allowed: () => allowPrintRef.current,
+    }) } catch (error) {
+      if (token === printToken.current && allowPrintRef.current) setAnnouncement(error instanceof Error ? error.message : 'Print unavailable; try again.')
+      return
+    }
     if (token !== printToken.current || !allowPrintRef.current) { pages.dispose(); return }
     // Admission against the CURRENT pane geometry (a resize may have landed during
     // the await): print stores + pane surfaces + the pool's minimum tiles <= budget.
@@ -675,6 +814,7 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
     const { viewport: current, dpr: scale } = latestGeometry.current
     let remaining = BITMAP_BUDGETS[profile] - paneSurfaceBytes(current, scale) - 2 * TILE_BYTES
     let reserved = 0
+    if (pages.some(page => page.refusal?.length)) setAnnouncement(LARGE_EXPORT_MESSAGE)
     const units = pages.map((page, index) => {
       const bytes = page.spec.widthPx * page.spec.heightPx * 4
       const admitted = bytes <= remaining
@@ -731,6 +871,7 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
   }, [allowPrint])
 
   const onGridChange = (transition: GridTransition) => {
+    cancelCopy()
     session.setSelection(activeSheetId, transition.selection)
     setAnnouncement(transition.announcement)
     setInspection(undefined)
@@ -745,11 +886,13 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
     if (result.kind === 'hidden') { inspectHidden(activeSheetId, result.target, result.hiddenReason ?? 'authored-hidden'); return }
     setInspection(undefined)
     const moved = scrollNavigateTo(scroll, { metrics: entry.metrics, viewport, view: { ...entry.view, selection: result.selection } }, request, state.selection.active)
+    cancelCopy()
     session.setSelection(activeSheetId, result.selection)
     setWindow(activeSheetId, moved.window)
   }
   const onSheetChange = (sheetId: string) => {
     if (!sheetIds.includes(sheetId)) return
+    cancelCopy()
     entryFor(sheetId)
     setInspection(undefined)
     session.activate(sheetId)
@@ -769,7 +912,7 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
         data-officeview-sheet-mode=""
         tabIndex={-1}
         onKeyDown={onKeyDown}
-        onCopyCapture={allowCopy ? undefined : event => event.preventDefault()}
+        onCopyCapture={event => { if (!allowCopy) event.preventDefault(); else if ((event.target as HTMLElement).hasAttribute?.('data-officeview-grid')) { event.preventDefault(); void copyGrid() } }}
         onContextMenu={allowCopy ? undefined : event => event.preventDefault()}
         style={{
           background: props.background ?? '#888888', display: 'flex', flexDirection: 'column', minHeight: 0, flex: '1 1 auto',
@@ -779,10 +922,13 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
         <div data-officeview-sheet-screen="" style={{ display: 'flex', flexDirection: 'column', minHeight: 0, flex: '1 1 auto' }}>
         <SheetNavigator documentId={docId} sheets={doc.sheets.map((sheet, index) => ({ id: sheetIds[index], name: sheet.name }))}
           activeSheetId={activeSheetId} onSheetChange={onSheetChange} onNavigate={onNavigate} onNotice={setAnnouncement} disabled={!entry} />
+        <div data-officeview-ui="sheet-actions"><button type="button" disabled={!allowCopy || !selection.ranges.length || copyPending} onClick={() => void copyGrid()}>Copy selection</button>{copyPending && <button type="button" onClick={cancelCopy}>Cancel copy</button>}<button type="button" disabled={!allowPrint} onClick={() => void preparePrint()}>Print</button></div>
         <div ref={paneRef} data-testid="officeview-sheet-pane" style={{ position: 'relative', flex: '1 1 auto', minHeight: 0, overflow: 'hidden', background: '#ffffff' }}>
           {entry && scroll && (
             <GridSemantics owner={identity} projection={entry.metrics} view={entry.view} selection={selection} window={scroll} viewport={viewport}
-              body={entry.body} onChange={onGridChange} announcement={[resourceNotice, assets?.sheetId !== activeSheetId ? 'Loading sheet…' : '', assets && assets.sheetId === activeSheetId && assets.lease.refusedImages > 0 ? `${assets.lease.refusedImages} picture${assets.lease.refusedImages === 1 ? ' is' : 's are'} not shown (image memory budget).` : '', selectionIncomplete ? 'Selection highlight is incomplete at this zoom; zoom in for detail.' : '', announcement].filter(Boolean).join(' ')} inspection={inspection} profile={profile} label={`Worksheet ${entry.sheet.name}`}
+              body={entry.body} onChange={onGridChange} status={{ records: snapshot(activeSheetId).records, countMode: 'body', loadReport: { status: 'ready', notices } }}
+              onSortCycle={(col, shift) => void sortCycle(col, shift)} onFilter={(col, invoker) => { setPopup({ kind: 'filter', col, invoker }) }} onSortDialog={(col, invoker) => { setPopup({ kind: 'sort', col, invoker }) }} onNotice={setAnnouncement}
+              popup={popup && controls ? { invoker: popup.invoker, close: closePopup, content: popup.kind === 'filter' ? <FilterDropdown owner={identity} client={controls.client} applied={entry.view.filter} appliedSort={entry.view.sort} col={popup.col} invoker={popup.invoker} embedded onClose={closePopup} onApplied={() => rerender()} onNotice={setAnnouncement} /> : <SortDialog owner={identity} client={controls.client} applied={entry.view.sort} col={popup.col} invoker={popup.invoker} embedded onClose={closePopup} onApplied={() => rerender()} onNotice={setAnnouncement} /> } : undefined} announcement={[resourceNotice, assets?.sheetId !== activeSheetId ? 'Loading sheet…' : '', assets && assets.sheetId === activeSheetId && assets.lease.refusedImages > 0 ? `${assets.lease.refusedImages} picture${assets.lease.refusedImages === 1 ? ' is' : 's are'} not shown (image memory budget).` : '', selectionIncomplete ? 'Selection highlight is incomplete at this zoom; zoom in for detail.' : '', announcement].filter(Boolean).join(' ')} inspection={inspection} profile={profile} label={`Worksheet ${entry.sheet.name}`}
               cellPresentation={at => {
                 const cell = cellAt(entry, at)
                 return { text: cell ? cellDisplayText(entry.sheet, cell) : '' }
@@ -804,6 +950,7 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
             <div data-testid="officeview-sheet-print-pages">
               {printPages?.map((unit, index) => unit.page
                 ? <div key={index} style={{ breakAfter: 'page' }}>
+                    {unit.page.refusal?.length ? <p>{LARGE_EXPORT_MESSAGE}</p> : null}
                     {unit.refusedImages > 0 && <p>Sheet “{unit.name}”: {unit.refusedImages} picture{unit.refusedImages === 1 ? ' is' : 's are'} omitted from print (image memory budget).</p>}
                     <canvas ref={el => { printRefs.current[index] = el }} style={{ display: 'block', maxWidth: '100%' }} />
                   </div>
