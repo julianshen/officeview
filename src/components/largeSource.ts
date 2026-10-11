@@ -80,15 +80,11 @@ async function compatibilityParse(pkg: OfficePackage, kind: CompatibilityKind, r
     addDiagnostic(doc, NOTICE_DAMAGED, DAMAGED_NOTICE)
     addDiagnostic(doc, 'damage-reason', reason)
   } else {
-    addDiagnostic(doc, NOTICE_STRICT_FALLBACK, `Opened with the compatibility reader: ${reason}`)
+    addDiagnostic(doc, NOTICE_STRICT_FALLBACK, `strict reader refused (${reason}); parsed by the legacy reader`)
   }
   return doc
 }
 
-function caseFoldedTwins(pkg: OfficePackage, name: string): boolean {
-  const key = name.toLowerCase()
-  return pkg.paths((p) => p.toLowerCase() === key).length > 1
-}
 
 export async function parseSpreadsheet(pkg: OfficePackage, bytes: Uint8Array, ctx: Ctx, decided?: SpreadsheetAdmission): Promise<XlsxDocument> {
   const admission = decided ?? await admitSpreadsheet(bytesRangeSource(bytes), ctx.profile, ctx.limits, ctx.signal)
@@ -100,18 +96,15 @@ export async function parseSpreadsheet(pkg: OfficePackage, bytes: Uint8Array, ct
       // TODO(S1.2): switch to paged. Until the paged importer exists, a paged
       // decision opens through today's legacy object path (decision A).
       return compatibilityParse(pkg, 'large', admission.reason, ctx)
-    case 'legacy-fallback': {
-      // a case-insensitive-only duplicate is grammar, an exact one is damage
-      const twins = admission.duplicateName !== undefined && caseFoldedTwins(pkg, admission.duplicateName)
-      return compatibilityParse(pkg, twins ? 'strict' : admission.kind, admission.reason, ctx)
-    }
+    case 'legacy-fallback':
+      return compatibilityParse(pkg, admission.kind, admission.reason, ctx)
     case 'object':
       break
   }
   const { decision } = admission
   const doc = await parseWithCaps(pkg, decision.evaluation, decision.valuePolicy, decision.counters.loadEvaluatedFormulas, ctx)
   if (decision.legacyFallback) {
-    addDiagnostic(doc, NOTICE_STRICT_FALLBACK, `Opened with the compatibility reader: ${decision.legacyFallback.message} (${decision.legacyFallback.part})`)
+    addDiagnostic(doc, NOTICE_STRICT_FALLBACK, `strict reader refused ${decision.legacyFallback.part} (${decision.legacyFallback.message}); parsed by the legacy reader`)
   }
   for (const part of decision.counters.alternateContentData) {
     addDiagnostic(doc, NOTICE_ALTERNATE_CONTENT, `Some cell data in ${part} is wrapped in mc:AlternateContent and is not shown`)

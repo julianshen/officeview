@@ -44,7 +44,9 @@ export function newAdmissionCounters(): AdmissionCounters {
 
 /** Functions that force evaluation on load whatever the cache says (design note §4.3 rule 1). */
 const VOLATILE = /(^|[^A-Za-z0-9_.])(NOW|TODAY|RAND|RANDBETWEEN|RANDARRAY|OFFSET|INDIRECT|CELL|INFO)\s*\(/i
-/** Excel formulas are at most 8,192 characters; anything longer is treated as volatile. */
+/** Formula text kept for the volatile-function scan. Excel caps formulas at
+ * 8,192 characters; twice that is kept as margin, and anything longer is
+ * treated as volatile (fail-closed). */
 const MAX_FORMULA_CHARS = 16_384
 
 const STYLE_RECORDS = new Set(['xf', 'font', 'fill', 'border', 'numFmt', 'dxf'])
@@ -84,7 +86,12 @@ export function countingEvents(counters: AdmissionCounters, partId: string, opti
   let inSheetData = false
   // cell state
   let inCell = false
+  // cached value, decided as parse.ts does: non-empty <v> text, an inline
+  // string, or t="str" with any <v> (a cached empty string)
   let cellHasValue = false
+  let cellSawV = false
+  let cellHasInline = false
+  let cellIsStr = false
   let cellCalcAlways = false
   let cellHasFormula = false
   let formulaText = ''
@@ -94,7 +101,8 @@ export function countingEvents(counters: AdmissionCounters, partId: string, opti
   let inPhonetic = 0
 
   const finishCell = (): void => {
-    if (cellHasFormula && (counters.fullCalcOnLoad || !cellHasValue || cellCalcAlways || formulaVolatile || VOLATILE.test(formulaText))) {
+    const cached = cellHasValue || cellHasInline || (cellIsStr && cellSawV)
+    if (cellHasFormula && (counters.fullCalcOnLoad || !cached || cellCalcAlways || formulaVolatile || VOLATILE.test(formulaText))) {
       counters.loadEvaluatedFormulas++
     }
     inCell = false
@@ -130,6 +138,9 @@ export function countingEvents(counters: AdmissionCounters, partId: string, opti
           counters.cells++
           inCell = true
           cellHasValue = false
+          cellSawV = false
+          cellHasInline = false
+          cellIsStr = attr(names, values, count, 't') === 'str'
           cellHasFormula = false
           formulaText = ''
           formulaVolatile = false
@@ -139,9 +150,10 @@ export function countingEvents(counters: AdmissionCounters, partId: string, opti
           cellHasFormula = true
           if (TRUE(attr(names, values, count, 'ca'))) cellCalcAlways = true
         } else if (inCell && local === 'v') {
-          cellHasValue = true
+          cellSawV = true
           if (!selfClosing) inString = 'v'
         } else if (inCell && local === 'is') {
+          cellHasInline = true
           if (!selfClosing) inString = 'is'
         } else if (local === 'mergeCell') counters.merges++
         else if (local === 'rPh' && inString === 'is' && !selfClosing) inPhonetic++
@@ -195,6 +207,7 @@ export function countingEvents(counters: AdmissionCounters, partId: string, opti
         if (formulaText.length + text.length > MAX_FORMULA_CHARS) formulaVolatile = true
         else formulaText += text
       }
+      if (inCell && top === 'v' && /\S/.test(text)) cellHasValue = true
       // shared/inline strings: t and r/t text, never phonetic runs (parse.ts sharedStrings)
       if (inString !== undefined && inPhonetic === 0 && (inString === 'v' ? top === 'v' : top === 't')) stringChars += text.length
       options.check(counters, stringChars)

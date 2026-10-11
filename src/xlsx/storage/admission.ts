@@ -9,7 +9,7 @@
  * all fit. Nothing large is allocated before that decision, so a switch to
  * paged mode never follows an oversized allocation.
  */
-import { PackageError, isPackageError, throwIfAborted } from '../../core/package-error'
+import { PackageError, isPackageError, throwIfAborted, type PackageErrorReason } from '../../core/package-error'
 import { openPart, readZipInventory, type ExpandedBudget, type RangeSource, type ZipEntryInfo, type ZipInventory, type ZipLimits } from '../../core/zip-stream'
 import { tokenizeBytes } from '../../core/xml-stream'
 import type { ProfileId, SourceFailure } from '../view/contracts'
@@ -111,7 +111,7 @@ export type ObjectDecision =
     legacyFallback?: { part: string; message: string }
   }
   | { mode: 'paged'; counters: AdmissionCounters; reason: string }
-  | { mode: 'refuse'; failure: SourceFailure }
+  | { mode: 'refuse'; failure: SourceFailure; reason?: PackageErrorReason }
 
 /** `predictedPeak = constant + perElement x elements + perAttribute x attributes + perTextChar x text`. */
 export function predictedPeak(counters: AdmissionCounters, limits: ImportLimits): number {
@@ -202,17 +202,34 @@ export async function verifyObjectCandidate(src: RangeSource, inventory: ZipInve
       }
       const drain = async () => { for await (const chunk of open()) void chunk }
       try {
-        if (info.cls === 'xml' && legacyFallback === undefined) {
+        if (info.cls === 'xml') {
+          // Every XML part is tokenized and counted, also after an earlier
+          // part fell back: a fallback never switches the envelope off.
           const events = countingEvents(counters, entry.name, { check: (c, pending) => checkCaps(c, pending, limits), alternateContentData: 'record' })
+          let fed = 0
+          let current = 0
+          const source = open()
+          const counted = (async function* () {
+            for await (const chunk of source) {
+              fed += current
+              current = chunk.length
+              yield chunk
+            }
+          })()
           try {
-            await tokenizeBytes(open(), events, { signal, limits: { maxTokenChars: limits.maxTokenChars, maxAttributes: o.maxAttributesPerElement } })
+            await tokenizeBytes(counted, events, { signal, limits: { maxTokenChars: limits.maxTokenChars, maxAttributes: o.maxAttributesPerElement } })
           } catch (error) {
             if (error instanceof PartByteError || error instanceof CapTrip || !isPackageError(error) || error.code === 'cancelled') throw error
             // An XML grammar the strict tokenizer refuses (DOCTYPE, long
             // references, attribute/depth caps, malformed markup) is not a
             // safety violation: the legacy parser decides, as today
-            // (decision 3). This part and the rest are still byte-verified.
-            legacyFallback = { part: entry.name, message: error.message }
+            // (decision 3). The part's tokens counted so far stay; the bytes
+            // after the last fully tokenized chunk are charged as the densest
+            // markup possible (one element per 4 bytes, `<a/>`), so the
+            // envelope can only over-estimate. The part is then byte-verified.
+            legacyFallback ??= { part: entry.name, message: error.message }
+            counters.elements += Math.ceil(Math.max(0, entry.uncompressedSize - fed) / 4)
+            checkCaps(counters, 0, limits)
             if (!info.drawing) nonDrawing -= partBytes
             counters.expandedBytes -= partBytes
             partBytes = 0
@@ -231,7 +248,7 @@ export async function verifyObjectCandidate(src: RangeSource, inventory: ZipInve
     const cause = error instanceof PartByteError ? error.error : error
     if (isPackageError(cause)) {
       if (cause.code === 'cancelled') throw cause
-      return { mode: 'refuse', failure: failure(cause.code, cause.message) }
+      return { mode: 'refuse', failure: failure(cause.code, cause.message), ...(cause.reason ? { reason: cause.reason } : {}) }
     }
     throw cause
   }
@@ -260,7 +277,7 @@ async function* tagged(part: AsyncGenerator<Uint8Array, void, void>, partId: str
     for await (const chunk of part) yield chunk
   } catch (error) {
     if (error instanceof CapTrip) throw error
-    throw new PartByteError(isPackageError(error) && error.partId === undefined ? new PackageError(error.code, error.message, partId) : error)
+    throw new PartByteError(isPackageError(error) && error.partId === undefined ? new PackageError(error.code, error.message, partId, error.reason) : error)
   }
 }
 
@@ -279,40 +296,38 @@ export type SpreadsheetAdmission =
    * The legacy object path decides, as today: `strict` = a grammar or
    * capability limit of the strict reader, `damaged` = archive damage the
    * legacy JSZip path tolerates, `large` = beyond the paged caps.
-   * `duplicateName`: a case-insensitive-only duplicate downgrades to `strict`.
    */
-  | { mode: 'legacy-fallback'; reason: string; kind: CompatibilityKind; duplicateName?: string }
+  | { mode: 'legacy-fallback'; reason: string; kind: CompatibilityKind }
   /** Only damage the legacy JSZip path rejects as well (decision C). */
   | { mode: 'refuse'; failure: SourceFailure }
 
-/**
- * Strict-reader refusals that are grammar or capability limits (decision 3):
- * entry count, central directory size, name length/encoding/escaping,
- * encryption, methods, multi-disk.
- */
-const GRAMMAR_INVENTORY = /entries exceed the limit|central directory of \d+ bytes exceeds|part name of \d+ bytes exceeds|part name is not valid UTF-8|escaping or invalid part name|empty part name/
+/** Grammar or capability limits of the strict reader (decision 3): the legacy path decides. */
+const STRICT_REASONS: ReadonlySet<PackageErrorReason> = new Set<PackageErrorReason>([
+  'entry-limit', 'central-directory-limit', 'name-limit', 'name-encoding', 'name-invalid',
+  'case-duplicate-name', 'encrypted', 'method', 'multi-disk',
+])
 /**
  * The damage JSZip also rejects (measured: "Bug : uncompressed data size
- * mismatch" after inflating the whole part): produced != declared size and a
- * deflate stream that ends before its final block. Everything else the strict
+ * mismatch" after inflating the whole part). Everything else the strict
  * reader calls damage (CRC, trailing bytes, local != central header, exact
  * duplicate names, overlapping entries, inconsistent EOCD/ZIP64) opens today
  * and falls back with a "may be damaged" notice (decision C).
  */
-const REFUSED_DAMAGE = /part inflates beyond its declared size|part produced \d+ of \d+ declared bytes|compressed data ends before the deflate stream does|deflate stream consumed \d+ of \d+ declared bytes/
+const REFUSED_REASONS: ReadonlySet<PackageErrorReason> = new Set<PackageErrorReason>(['size-mismatch', 'truncated-deflate'])
 
-export function failureRoute(failure: { code: string; message: string }): CompatibilityKind | 'refuse' {
-  if (failure.code === 'unsupported' || GRAMMAR_INVENTORY.test(failure.message)) return 'strict'
-  if (REFUSED_DAMAGE.test(failure.message) || failure.code === 'storage-error' || failure.code === 'quota' || failure.code === 'cancelled') return 'refuse'
+/** Routing on typed codes and reasons only, never on message text. */
+export function failureRoute(failure: { code: string; reason?: PackageErrorReason }): CompatibilityKind | 'refuse' {
+  if (failure.reason !== undefined && REFUSED_REASONS.has(failure.reason)) return 'refuse'
+  if (failure.code === 'storage-error' || failure.code === 'quota' || failure.code === 'cancelled') return 'refuse'
+  if (failure.code === 'unsupported' || (failure.reason !== undefined && STRICT_REASONS.has(failure.reason))) return 'strict'
   if (failure.code === 'resource-limit') return 'large'
   return 'damaged'
 }
 
-function routed(failure: SourceFailure): SpreadsheetAdmission {
-  const kind = failureRoute(failure)
+function routed(failure: SourceFailure, reason?: PackageErrorReason): SpreadsheetAdmission {
+  const kind = failureRoute({ code: failure.code, reason })
   if (kind === 'refuse') return { mode: 'refuse', failure }
-  const duplicate = /^duplicate part name (.*)$/.exec(failure.message)
-  return { mode: 'legacy-fallback', reason: failure.message, kind, ...(duplicate ? { duplicateName: duplicate[1] } : {}) }
+  return { mode: 'legacy-fallback', reason: failure.message, kind }
 }
 
 /** Inventory (paged caps), G1, then G2 for an object candidate. */
@@ -322,7 +337,7 @@ export async function admitSpreadsheet(src: RangeSource, profile: ProfileId, lim
     inventory = await readZipInventory(src, inventoryLimits(limits), signal)
   } catch (error) {
     if (!isPackageError(error) || error.code === 'cancelled') throw error
-    return routed(failure(error.code, error.message))
+    return routed(failure(error.code, error.message), error.reason)
   }
   const g1 = admit(profile, src.size, inventory, limits)
   if (g1.mode === 'refuse') return routed(g1.failure)
@@ -330,5 +345,5 @@ export async function admitSpreadsheet(src: RangeSource, profile: ProfileId, lim
   const g2 = await verifyObjectCandidate(src, inventory, limits, signal, { profile, ...options })
   if (g2.mode === 'object') return { mode: 'object', decision: g2 }
   if (g2.mode === 'paged') return { mode: 'paged', reason: g2.reason, counters: g2.counters }
-  return routed(g2.failure)
+  return routed(g2.failure, g2.reason)
 }

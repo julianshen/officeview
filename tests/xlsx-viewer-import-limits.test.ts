@@ -121,7 +121,7 @@ describe('ledger through openPart (ledger parts of RED tests 4 and 7)', () => {
 // ---------------------------------------------------------------------------
 // Admission gates (RED test 19)
 
-import { admit, admissionTotal, classifyPart, inventoryLimits, predictedPeak, verifyObjectCandidate, type ObjectDecision } from '../src/xlsx/storage/admission'
+import { admit, admissionTotal, classifyPart, failureRoute, inventoryLimits, predictedPeak, verifyObjectCandidate, type ObjectDecision } from '../src/xlsx/storage/admission'
 import { importLimitsFor, type ImportLimitOverrides } from '../src/xlsx/storage/importSession'
 import { countingEvents, newAdmissionCounters } from '../src/xlsx/storage/sheetRecords'
 import { tokenizeBytes } from '../src/core/xml-stream'
@@ -268,6 +268,72 @@ describe('boundaries at cap - 1, cap, cap + 1 (D and M)', () => {
   })
 })
 
+describe('review fixes', () => {
+  it('MAJOR 1: a strict-grammar failure in one part does not switch off counting for later parts', async () => {
+    const entries = xlsxEntries({ afterSheetData: `<mergeCells>${repeat(30_000, (i) => `<mergeCell ref="A${2 * i + 1}:B${2 * i + 2}"/>`)}</mergeCells>` })
+      .map((e) => e.name === 'xl/workbook.xml'
+        ? { ...e, data: `<workbook xmlns="${SS_NS}"><sheets/><extLst><ext ${repeat(130, (i) => `a${i}="1" `)}/></extLst></workbook>` }
+        : e)
+    const d = await g2(buildZip(entries).bytes, 'D')
+    expect(d.mode).toBe('paged')
+    expect(d.mode === 'paged' && d.reason).toMatch(/merges 20001 > 20000/)
+  })
+
+  it('MAJOR 1: the unparsed remainder of a fallen part is charged conservatively (4 bytes per element)', async () => {
+    const entries = xlsxEntries({}).map((e) => e.name === 'xl/workbook.xml'
+      ? { ...e, data: `<!DOCTYPE workbook><workbook xmlns="${SS_NS}"><sheets/><extLst>${'<x/>'.repeat(200_000)}</extLst></workbook>` }
+      : e)
+    const d = await g2(buildZip(entries).bytes, 'D')
+    expect(d.mode).toBe('paged')
+    expect(d.mode === 'paged' && d.reason).toMatch(/predicted peak/)
+    // the same markup without the DOCTYPE is counted exactly and is also paged
+    const exact = await g2(buildZip(xlsxEntries({}).map((e) => e.name === 'xl/workbook.xml'
+      ? { ...e, data: `<workbook xmlns="${SS_NS}"><sheets/><extLst>${'<x/>'.repeat(200_000)}</extLst></workbook>` }
+      : e)).bytes, 'D')
+    expect(exact.mode).toBe('paged')
+  })
+
+  it('MAJOR 1: the first grammar fallback is kept and every fallen part is still byte-verified', async () => {
+    const entries = xlsxEntries({}).map((e) => e.name === 'xl/workbook.xml' ? { ...e, data: `<!DOCTYPE a><workbook xmlns="${SS_NS}"><sheets/></workbook>` }
+      : e.name === 'xl/styles.xml' ? { ...e, data: '<!DOCTYPE b><styleSheet/>' } : e)
+    const d = await g2(buildZip(entries).bytes, 'D')
+    expect(d.mode === 'object' && d.legacyFallback?.part).toBe('xl/workbook.xml')
+  })
+
+  it('MINOR 2: a formula with an empty or whitespace-only <v> is load-evaluated (as parse.ts decides); t="str" with an empty <v/> is a cached empty string', async () => {
+    const count = async (cell: string) => {
+      const d = await g2(xlsxBytes({ sheetData: `<row r="1"><c r="B1"><v>1</v></c><c r="B2"><v>2</v></c>${cell}</row>` }), 'D')
+      return d.mode === 'object' ? d.counters.loadEvaluatedFormulas : -1
+    }
+    expect(await count('<c r="A1"><f>SUM(B1:B2)</f><v/></c>')).toBe(1)
+    expect(await count('<c r="A1"><f>SUM(B1:B2)</f><v></v></c>')).toBe(1)
+    expect(await count('<c r="A1"><f>SUM(B1:B2)</f><v> </v></c>')).toBe(1)
+    expect(await count('<c r="A1"><f>SUM(B1:B2)</f><v>3</v></c>')).toBe(0)
+    expect(await count('<c r="A1" t="str"><f>""</f><v/></c>')).toBe(0)
+    expect(await count('<c r="A1" t="inlineStr"><f>"x"</f><is><t>x</t></is></c>')).toBe(0)
+  })
+
+  it('NIT 5: failure routing reads typed reasons, never message text', () => {
+    expect(failureRoute(new PackageError('parse-error', 'anything', 'p', 'size-mismatch'))).toBe('refuse')
+    expect(failureRoute(new PackageError('parse-error', 'anything', 'p', 'truncated-deflate'))).toBe('refuse')
+    expect(failureRoute(new PackageError('parse-error', 'part produced 1 of 2 declared bytes'))).toBe('damaged')
+    expect(failureRoute(new PackageError('parse-error', 'x', 'p', 'duplicate-name'))).toBe('damaged')
+    expect(failureRoute(new PackageError('parse-error', 'x', 'p', 'case-duplicate-name'))).toBe('strict')
+    expect(failureRoute(new PackageError('resource-limit', 'x', undefined, 'entry-limit'))).toBe('strict')
+    expect(failureRoute(new PackageError('resource-limit', 'x'))).toBe('large')
+    expect(failureRoute(new PackageError('unsupported', 'x', 'p', 'encrypted'))).toBe('strict')
+  })
+
+  it('NIT 5: the strict reader tags duplicates as exact or case-insensitive', async () => {
+    const reasonOf = async (extra: BuildEntry) => {
+      try { await readZipInventory(bytesRangeSource(buildZip([...xlsxEntries({}), extra]).bytes), inventoryLimits(importLimitsFor('D'))) } catch (e) { return (e as PackageError).reason }
+      return 'ok'
+    }
+    expect(await reasonOf({ name: 'xl/styles.xml', data: 'x' })).toBe('duplicate-name')
+    expect(await reasonOf({ name: 'xl/Styles.xml', data: 'x' })).toBe('case-duplicate-name')
+  })
+})
+
 describe('formula evaluation reserve (round-4 table)', () => {
   const cases: Array<[string, () => PackageSpec, number]> = [
     ['20 trivial uncached', () => ({ sheetData: formulaRows(20, (i) => `A${i + 1}+1`) }), 20],
@@ -300,7 +366,7 @@ describe('formula evaluation reserve (round-4 table)', () => {
     expect(d.mode === 'object' && d.counters.loadEvaluatedFormulas).toBe(0)
   })
 
-  it('20,000 trivial uncached formulas: saved values on D (the evaluation reserve does not fit), paged on M (envelope)', async () => {
+  it('orchestrator decision 2 (supersedes the round-4 table row "paged"): 20,000 trivial uncached formulas open with saved values on D; the envelope still pages them on M', async () => {
     const bytes = xlsxBytes({ sheetData: formulaRows(20_000, (i) => `A${i + 1}+1`) })
     const d = await g2(bytes, 'D', { object: { rows: 1e9, cells: 1e9 } })
     expect(d.mode === 'object' && d.valuePolicy).toBe('cached')

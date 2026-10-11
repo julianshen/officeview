@@ -76,6 +76,7 @@ export interface LoadCtx {
 /** Diagnostic features the viewer shows to the user (OfficeFileState.notices). */
 export const NOTICE_ALTERNATE_CONTENT = 'alternate-content-data'
 export const NOTICE_CACHED_VALUES = 'cached-value-policy'
+/** Debug diagnostic, not a notice: the legacy output is identical to today's. */
 export const NOTICE_STRICT_FALLBACK = 'strict-reader-fallback'
 export const NOTICE_COMPATIBILITY = 'large-file-compatibility'
 export const NOTICE_DAMAGED = 'possibly-damaged'

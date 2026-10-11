@@ -3,15 +3,23 @@
  * subset; tests pin that each one is a member of SOURCE_ERROR_CODES. */
 export type PackageErrorCode = 'cancelled' | 'resource-limit' | 'unsupported' | 'parse-error' | 'storage-error' | 'quota'
 
+/** Machine-readable cause for the failures callers route on (messages are for people). */
+export type PackageErrorReason =
+  | 'entry-limit' | 'central-directory-limit' | 'name-limit' | 'name-encoding' | 'name-invalid'
+  | 'duplicate-name' | 'case-duplicate-name' | 'encrypted' | 'method' | 'multi-disk'
+  | 'size-mismatch' | 'truncated-deflate'
+
 export class PackageError extends Error {
   readonly code: PackageErrorCode
   readonly partId?: string
+  readonly reason?: PackageErrorReason
 
-  constructor(code: PackageErrorCode, message: string, partId?: string) {
+  constructor(code: PackageErrorCode, message: string, partId?: string, reason?: PackageErrorReason) {
     super(partId === undefined ? message : `${message} (${partId})`)
     this.name = 'PackageError'
     this.code = code
     if (partId !== undefined) this.partId = partId
+    if (reason !== undefined) this.reason = reason
   }
 }
 
