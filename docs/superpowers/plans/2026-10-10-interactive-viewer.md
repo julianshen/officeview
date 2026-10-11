@@ -109,7 +109,8 @@ Every package is implemented on its own branch, reviewed by at least one agent f
 | S1.1b spool, admission gates, quota ledger, entry wiring (`spool.ts`, `storage/{quota,admission,importSession,sheetRecords,imageAdmission}.ts`, `largeSource.ts` lazy chunk) | merged; until S1.2 every 'paged' decision opens in compatibility mode with a notice |
 | S6.1 selection state machine, navigator and status (`selection.ts`, `SheetNavigator.tsx`, `ViewerStatus.tsx`) | merged |
 | S5.1 canonical text/layout records and viewport queries (`textLayout.ts`, `viewport.ts`, render layout/paint split) | merged |
-| S1.2, S6.2, S9.1 | in progress (implementation or review rounds on their own branches) |
+| S6.2 virtual owned grid semantics, headers, event isolation (`GridSemantics.tsx`, `GridHeaders.tsx`, OfficeDoc guards) | merged; Ctrl/Cmd+wheel over any viewer now actually blocks browser page zoom (behaviour change, flagged) |
+| S1.2, S5.3, S9.1 | in progress (implementation or review rounds on their own branches) |
 | S1.2, S1.3, S4.4–S4.5, S5, S6, S9, S10 (physical-device receipts skipped for now by user decision), S11/S12 status, S13 | not started |
 
 ## S0 — Freeze contracts, counterexamples and fixture/harness infrastructure
@@ -439,15 +440,17 @@ expect(wide.contains({ row: 2, col: 0 })).toBe(false)
 
 ### S6.2 Virtual owned grid semantics and event isolation
 
+> **Status (2026-10-11):** merged (codex implementation; Claude fixes; Claude and opencode reviews over two rounds; every finding fixed). ARIA grid with header-inclusive indices (1,048,577 × 16,385), bounded DOM, one Tab entry, control mode only via F2, copy/print protection and Escape fall-through preserved under the viewer UI guard. Not mounted until S5.2; desktop/mobile screen-reader checks are S10.
+
 **Files:** create `src/components/xlsx/GridSemantics.tsx`, `GridHeaders.tsx`; modify `src/components/OfficeDoc.tsx`; test `tests/xlsx-viewer-a11y.test.tsx`, `tests/xlsx-viewer-events.test.tsx`; extend existing selection/zoom suites.
 
-- [ ] RED: assert grid owns a bounded row→gridcell/header DOM tree, total semantic row/column counts, header-inclusive `aria-rowindex`/`aria-colindex`, `aria-selected`, `aria-sort`, valid `aria-activedescendant` and live status. Navigation to XFD1048576 exposes correct indices without 17B DOM nodes. Semantic grid counts are MAX_ROWS+1=1,048,577 and MAX_COLS+1=16,385 to include header chrome: corner row1/col1, letter headers row1/col(c+2), data rows row(displaySlot+2), rowheader col1, data cells col(c+2). Last data cell must exactly equal both counts.
-- [ ] Run `bunx vitest run tests/xlsx-viewer-a11y.test.tsx tests/xlsx-viewer-events.test.tsx`; expected count-only accessibility/independent header ownership fails; header/body indices must not collide.
-- [ ] GREEN: virtual viewport/active semantic rows and cells with unique generation-safe IDs, columnheader/rowheader roles owned through rows, one managed Tab entry and grid-owned aria-activedescendant. Explicit nested header-control mode restores valid active-grid focus on Escape. Keep active cell mounted or move its semantic record atomically; nullable active removes invalid descendant. Worksheet labels use display slot+1 and A..XFD, while semantic data indices include header offset +2 and values identify source cells; do not label compressed visible rank as row number. Expose full worksheet capacity separately from semantic chrome counts.
-- [ ] Sticky headers share ScrollWindow/zoom/DPR transforms, viewport-only elements and native button click zones. Grid arrows stop container scrolling only when grid owns focus; Esc priority popup→grid selection→existing handler, Ctrl/Cmd+F unchanged.
-- [ ] Ignore viewer gestures from editable targets and viewer UI subtrees; negative/zero filter typing must not reset zoom, header double-click must not pan/reset, checkbox Space and native Enter work. Mobile targets/hit-slop meet 44px without changing row geometry.
+- [x] RED: assert grid owns a bounded row→gridcell/header DOM tree, total semantic row/column counts, header-inclusive `aria-rowindex`/`aria-colindex`, `aria-selected`, `aria-sort`, valid `aria-activedescendant` and live status. Navigation to XFD1048576 exposes correct indices without 17B DOM nodes. Semantic grid counts are MAX_ROWS+1=1,048,577 and MAX_COLS+1=16,385 to include header chrome: corner row1/col1, letter headers row1/col(c+2), data rows row(displaySlot+2), rowheader col1, data cells col(c+2). Last data cell must exactly equal both counts.
+- [x] Run `bunx vitest run tests/xlsx-viewer-a11y.test.tsx tests/xlsx-viewer-events.test.tsx`; expected count-only accessibility/independent header ownership fails; header/body indices must not collide.
+- [x] GREEN: virtual viewport/active semantic rows and cells with unique generation-safe IDs, columnheader/rowheader roles owned through rows, one managed Tab entry and grid-owned aria-activedescendant. Explicit nested header-control mode restores valid active-grid focus on Escape. Keep active cell mounted or move its semantic record atomically; nullable active removes invalid descendant. Worksheet labels use display slot+1 and A..XFD, while semantic data indices include header offset +2 and values identify source cells; do not label compressed visible rank as row number. Expose full worksheet capacity separately from semantic chrome counts.
+- [x] Sticky headers share ScrollWindow/zoom/DPR transforms, viewport-only elements and native button click zones. Grid arrows stop container scrolling only when grid owns focus; Esc priority popup→grid selection→existing handler, Ctrl/Cmd+F unchanged.
+- [x] Ignore viewer gestures from editable targets and viewer UI subtrees; negative/zero filter typing must not reset zoom, header double-click must not pan/reset, checkbox Space and native Enter work. Mobile targets/hit-slop meet 44px without changing row geometry.
 - [ ] Run focused command plus `bunx vitest run tests/officeview-selection.test.tsx tests/officeview-zoom.test.tsx` and browser keyboard smoke; expected ownership/focus/actions and event isolation pass. Record desktop/mobile screen-reader manual checks in S10.
-- [ ] Deliver header/a11y PR; DOM shell should not move default canvas goldens.
+- [x] Deliver header/a11y PR; DOM shell should not move default canvas goldens.
 
 ## S7 — Stable whole-row sort and authoritative range detection
 
