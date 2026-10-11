@@ -13,6 +13,7 @@ import type {
   TableMetadata,
   WorkbookSheetIdentity,
 } from './formula/types'
+import type { DeclaredSheetFilters } from './view/declaredFilters'
 
 export interface XlsxDrawingSource { partPath: string; treePath: string; element: string; id?: string; name?: string; referenceId?: string; representation: 'native' | 'choice' | 'fallback'; reason?: string; emptySelection?: boolean }
 export interface XlsxDrawing extends SceneNode<PptxTextBody, SceneImage> {
@@ -152,6 +153,11 @@ export interface XlsxDocument {
   workbookSheets?: WorkbookSheetIdentity[]
   definedNames?: DefinedNameMetadata[]
   tables?: TableMetadata[]
+  /** Declared file filter/sort state as diagnostics only (S8.3, spec §7.5):
+   * present only when a sheet declares worksheet/table autoFilter or
+   * sortState. Supported file filters persist as hidden rows; nothing here
+   * becomes an editable viewer rule. */
+  declaredFilters?: DeclaredSheetFilters[]
   calc?: CalcSettings
   /** True when the package actually ships an `xl/calcChain.xml` part, detected
    * from the workbook relationship inventory — never inferred from a producer

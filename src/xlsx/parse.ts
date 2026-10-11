@@ -11,6 +11,7 @@ import type {
 } from './formula/types'
 import { parseDefinedNames } from './formula/names'
 import { parseTableMetadata, isTablePartSource } from './formula/tables'
+import { hasDeclaredFiltering, parseDeclaredAutoFilter, parseDeclaredSortState, parseDeclaredTable, type DeclaredSheetFilters, type DeclaredTableFilters } from './view/declaredFilters'
 import { parseWorksheetDrawings, collectXlsxImages } from './drawing'
 import { computeMetrics } from './render'
 import { resolvePartTarget } from '../drawing/parts'
@@ -227,10 +228,14 @@ export async function parseXlsx(pkg: OfficePackage): Promise<XlsxDocument> {
   const resolvedTables: TableMetadata[] = []
   let declaredTableParts = 0
   let tableInventoryComplete = true
+  const declaredFilters: DeclaredSheetFilters[] = []
   for (let i = 0; i < sheets.length; i++) {
     const sheetPath = sheetPartPaths[i]
     const identity = workbookSheets[i]
     if (!sheetPath || !identity) continue
+    const sheetEntry: DeclaredSheetFilters = {
+      sheetId: identity.sheetId, name: identity.name, workbookIndex: identity.workbookIndex, partPath: sheetPath, tableAutoFilters: [],
+    }
     try {
       const wsRoot = await pkg.xml(sheetPath)
       // A referenced worksheet that cannot be inspected has unknown table
@@ -241,6 +246,13 @@ export async function parseXlsx(pkg: OfficePackage): Promise<XlsxDocument> {
         continue
       }
       const wsData = getChildren(wsRoot, 'worksheet')[0] ?? wsRoot
+      // S8.3: declared worksheet filter/sort state is diagnostics only. The
+      // worksheet XML is already in hand; stored order and hidden rows below
+      // are never touched by this.
+      const worksheetAutoFilter = parseDeclaredAutoFilter(getChildren(wsData, 'autoFilter')[0])
+      if (worksheetAutoFilter) sheetEntry.worksheetAutoFilter = worksheetAutoFilter
+      const worksheetSortState = parseDeclaredSortState(getChildren(wsData, 'sortState')[0])
+      if (worksheetSortState) sheetEntry.worksheetSortState = worksheetSortState
       // Every tablePart element is a declaration (CT_TablePart requires
       // r:id): one without a resolvable id is unavailable inventory, never
       // evidence of zero declarations.
@@ -251,7 +263,10 @@ export async function parseXlsx(pkg: OfficePackage): Promise<XlsxDocument> {
           tablePartDecls.push(typeof rid === 'string' && rid !== '' ? rid : undefined)
         }
       }
-      if (tablePartDecls.length === 0) continue
+      if (tablePartDecls.length === 0) {
+        if (hasDeclaredFiltering(sheetEntry)) declaredFilters.push(sheetEntry)
+        continue
+      }
       declaredTableParts += tablePartDecls.length
       const slash = sheetPath.lastIndexOf('/')
       const wsRelsPath = `${slash < 0 ? '' : `${sheetPath.slice(0, slash)}/`}_rels/${slash < 0 ? sheetPath : sheetPath.slice(slash + 1)}.rels`
@@ -288,6 +303,12 @@ export async function parseXlsx(pkg: OfficePackage): Promise<XlsxDocument> {
           }
           const tableRoot = await pkg.xml(partPath)
           const tableNode = getChildren(tableRoot, 'table')[0] ?? tableRoot
+          // S8.3 diagnostics: declared table filter/sort state, parsed
+          // independently of metadata validity and attributed by part path.
+          const declaredTable: DeclaredTableFilters | undefined = tableNode
+            ? parseDeclaredTable(tableNode, partPath)
+            : undefined
+          if (declaredTable) sheetEntry.tableAutoFilters.push(declaredTable)
           const meta = parseTableMetadata(tableNode, identity.sheetId, partPath)
           if (!meta) {
             tableInventoryComplete = false
@@ -300,6 +321,7 @@ export async function parseXlsx(pkg: OfficePackage): Promise<XlsxDocument> {
           tableInventoryComplete = false
         }
       }
+      if (hasDeclaredFiltering(sheetEntry)) declaredFilters.push(sheetEntry)
     } catch {
       // Worksheet-level discovery failure with declared parts is unavailable,
       // never a false complete registry.
@@ -345,6 +367,7 @@ export async function parseXlsx(pkg: OfficePackage): Promise<XlsxDocument> {
     calc,
     calcChainPresent,
     semantics,
+    ...(declaredFilters.length > 0 ? { declaredFilters } : {}),
   }
   initializeSavedSpills(doc)
   evaluateWorkbookFormulas(doc, { fullCalcOnLoad })
