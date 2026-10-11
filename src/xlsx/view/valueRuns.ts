@@ -97,25 +97,33 @@ export class NumberTable {
     this.account?.release(oldBytes)
   }
 }
-/** Estimated retained bytes per key: two Float64+Int32 hash slots at <=0.5
- * load for numbers; raw UTF-16, header and a Set entry for text. */
+/** Estimated retained bytes per text key (raw UTF-16, header, Set entry).
+ * Numeric keys are charged as their actual typed hash-table allocations. */
 export const keySetElementBytes = (kind: number, text: string | undefined): number =>
-  kind === KEY_BOOLEAN ? 0 : textual(kind) ? (text?.length ?? 0) * 2 + 40 + 48 : 24
-/** Exact key membership used by committed rules and draft bases. */
+  textual(kind) ? (text?.length ?? 0) * 2 + 40 + 48 : 0
+/** Exact key membership used by committed rules and draft bases. bytes is
+ * the charged total, including hash-table capacity and growth. */
 export class ValueKeySet {
-  private readonly numbers = new NumberTable()
-  private readonly dates = new NumberTable()
+  private readonly numbers: NumberTable
+  private readonly dates: NumberTable
   private readonly booleans = new Uint8Array(2)
   private readonly strings = new Set<string>()
   private readonly errors = new Set<string>()
+  private readonly ledger: LaneAccount
   size = 0
   bytes = 0
-  constructor(private readonly account?: LaneAccount) {}
+  constructor(account?: LaneAccount) {
+    this.ledger = {
+      charge: bytes => { account?.charge(bytes); this.bytes += bytes },
+      release: bytes => { account?.release(bytes); this.bytes -= bytes },
+    }
+    this.numbers = new NumberTable(this.ledger)
+    this.dates = new NumberTable(this.ledger)
+  }
   add(kind: number, value: number, text: string | undefined): void {
     if (this.has(kind, value, text)) return
     const bytes = keySetElementBytes(kind, text)
-    this.account?.charge(bytes)
-    this.bytes += bytes
+    if (bytes) this.ledger.charge(bytes)
     switch (kind) {
       case KEY_NUMBER: this.numbers.set(value === 0 ? 0 : value, 0); break
       case KEY_DATE: this.dates.set(value === 0 ? 0 : value, 0); break
@@ -177,9 +185,12 @@ export class MemoryValueRunStore implements ValueRunStore {
   usedBytes = 0
   puts = 0
   private readonly runs = new Map<string, StoredRun>()
+  /** RAM-backed: retained bytes are charged to account (a worker pool) when given. */
+  private readonly account: LaneAccount | undefined
   constructor(options: { limitBytes?: number; account?: LaneAccount } = {}) {
     this.limitBytes = options.limitBytes ?? Infinity
     if (!(this.limitBytes >= 0)) throw new RangeError('Invalid value run store limit')
+    this.account = options.account
   }
   get refCount(): number { return this.runs.size }
   async put(run: ValueKeyRun, owner: SourceStamp, scope: string, signal?: AbortSignal): Promise<PagedKeySetRef> {
@@ -193,6 +204,7 @@ export class MemoryValueRunStore implements ValueRunStore {
         resource: 'storage', requiredBytes: this.usedBytes + bytes, limitBytes: this.limitBytes, retryable: false,
       })
     }
+    this.account?.charge(bytes)
     const copy: ValueKeyRun = Object.freeze({
       count: run.count, kinds: run.kinds.slice(0, run.count), numbers: run.numbers.slice(0, run.count),
       texts: Object.freeze(Array.from({ length: run.count }, (_, i) => run.texts[i])),
@@ -219,5 +231,6 @@ export class MemoryValueRunStore implements ValueRunStore {
     if (!stored) return
     this.runs.delete(ref.refId)
     this.usedBytes -= stored.bytes
+    this.account?.release(stored.bytes)
   }
 }

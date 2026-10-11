@@ -5,7 +5,10 @@ import {
   KEY_BOOLEAN, KEY_DATE, KEY_ERROR, KEY_NUMBER, KEY_STRING, NumberTable, ValueIndexError, loadKeySet,
   sameStamp, valueKeyString, type LaneAccount, type ValueKeySet, type ValueRunStore,
 } from './valueRuns'
-import { EXACT_SEARCH, type SearchKeyOwner, type SearchKeyStore, type SearchKeyStrategy } from './searchKeys'
+import {
+  EXACT_SEARCH, SEARCH_HASH_CHUNK, combineTextHash, foldVariantOf, isCertifiedSearchKeyStrategy, textChunkHash,
+  type SearchKeyOwner, type SearchKeyStore, type SearchKeyStrategy,
+} from './searchKeys'
 
 export { ValueIndexError } from './valueRuns'
 
@@ -73,7 +76,7 @@ export interface ValueEntryView { ordinal: number; kind: ValueEntryKind; label: 
  * the producing index instance accepts it, and it holds a pool charge until
  * released (ValueIndex.release, draft close, or index disposal). */
 export interface ValueSearchResult {
-  readonly query: ValueSearchPredicate
+  readonly query: ValueSearchQuery
   readonly owner: SourceStamp
   readonly matches: Uint32Array
   readonly count: number
@@ -82,7 +85,7 @@ export interface ValueSearchResult {
   /** Values decided through search keys vs the exact matcher (instrumentation). */
   readonly stats: { readonly keyed: number; readonly exact: number }
 }
-export type SearchKeyState = 'none' | 'computing' | 'computed' | 'loaded' | 'persisted' | 'unpersisted'
+export type SearchKeyState = 'none' | 'computing' | 'computed' | 'loaded' | 'persisted' | 'unpersisted' | 'streaming'
 /** Dropdown search: contains, optionally with S8.1 `*`/`?`/`~` wildcards. */
 export type ValueSearchQuery = ValueSearchPredicate & { wildcards?: boolean }
 export interface ValuePageRequest { offset: number; limit: number; search?: ValueSearchResult; label?: ValueLabeler }
@@ -210,15 +213,23 @@ export class ValueIndexCache {
   readonly limitBytes: number
   private used = 0
   private readonly indexes = new Map<string, ValueIndex>()
-  readonly searchKeys: { strategy: SearchKeyStrategy; store?: SearchKeyStore }
+  private readonly strategy: SearchKeyStrategy
+  private readonly keyStore: SearchKeyStore | undefined
+  /** The key strategy is fixed for the cache's lifetime; indexes snapshot it. */
   constructor(options: { limitBytes?: number; searchKeys?: { strategy?: SearchKeyStrategy; store?: SearchKeyStore } } = {}) {
     this.limitBytes = options.limitBytes ?? 512 * MiB
-    this.searchKeys = { strategy: options.searchKeys?.strategy ?? EXACT_SEARCH, store: options.searchKeys?.store }
     if (!Number.isFinite(this.limitBytes) || this.limitBytes < 0) throw new RangeError('Invalid value index memory limit')
+    const strategy = options.searchKeys?.strategy ?? EXACT_SEARCH
+    if (!isCertifiedSearchKeyStrategy(strategy)) throw new ValueIndexError('invalid-rule', 'Search key strategies must come from createSearchKeyStrategy')
+    this.strategy = strategy
+    this.keyStore = options.searchKeys?.store
+    this.keyStore?.bindAccount?.(this.reserve())
   }
   get usedBytes(): number { return this.used }
   get size(): number { return this.indexes.size }
-  get searchKeyStrategy(): SearchKeyStrategy { return this.searchKeys.strategy }
+  get searchKeyStrategy(): SearchKeyStrategy { return this.strategy }
+  /** @internal */
+  get searchKeyStore(): SearchKeyStore | undefined { return this.keyStore }
   /** Returns the cached (complete or resumable) index for exactly this identity. */
   open(identity: ValueIndexIdentity, source: ValueColumnSource): ValueIndex {
     const stamp = { docId: identity.docId, sheetId: identity.sheetId, valueGen: identity.valueGen }
@@ -232,16 +243,25 @@ export class ValueIndexCache {
     this.indexes.set(key, index)
     return index
   }
+  /** Owner changes: disposes matching indexes and deletes their stored keys. */
   invalidate(predicate: (identity: ValueIndexIdentity) => boolean = () => true): void {
-    for (const index of [...this.indexes.values()]) if (predicate(index.identity)) index.dispose()
+    for (const index of [...this.indexes.values()]) {
+      if (!predicate(index.identity)) continue
+      index.dispose()
+      if (this.keyStore && this.strategy !== EXACT_SEARCH) this.keyStore.delete(index.keyOwner()).catch(() => {})
+    }
   }
   reserve(owner: ValueIndex | null = null): ValueReservation { return new ValueReservation(this, owner) }
   /** @internal */
   charge(owner: ValueIndex | null, bytes: number): void {
-    if (this.used + bytes > this.limitBytes) {
+    // Shed in order of rebuild cost: stored keys, idle resident keys, idle indexes.
+    if (this.used + bytes > this.limitBytes) this.keyStore?.shed?.(this.used + bytes - this.limitBytes)
+    for (const pass of [0, 1]) {
       for (const index of [...this.indexes.values()]) {
         if (this.used + bytes <= this.limitBytes) break
-        if (index !== owner && index.idle) index.dispose()
+        if (index === owner || !index.idle) continue
+        if (pass === 0) index.dropSearchKeys()
+        else index.dispose()
       }
     }
     if (this.used + bytes > this.limitBytes) {
@@ -259,12 +279,13 @@ export class ValueIndexCache {
   }
 }
 
+/** A search result's charge and policy; holders count independent owners
+ * (the caller, drafts, patches), and the charge is released at zero. */
 interface SearchRecord {
   reservation: ValueReservation
+  holders: number
   label?: ValueLabeler
   limits?: Omit<FilterLimits, 'signal'>
-  /** Lazily prepared matcher for ordinals merged after the search. */
-  tail?: { budget: WorkBudget; contains: (text: string, budget: WorkBudget) => boolean }
 }
 
 export class ValueIndex implements LaneAccount {
@@ -293,22 +314,27 @@ export class ValueIndex implements LaneAccount {
   private searchKeys: (string | null)[] = []
   private keyState: SearchKeyState = 'none'
   private keyError: ValueIndexError | undefined
+  private keyBytes = 0
+  private searching = 0
   private readonly results = new WeakMap<ValueSearchResult, SearchRecord>()
   private readonly reservations = new Set<ValueReservation>()
+  /** Snapshot of the cache's certified strategy; never changes for this index. */
+  readonly strategy: SearchKeyStrategy
   constructor(readonly identity: ValueIndexIdentity, source: ValueColumnSource, private readonly cache: ValueIndexCache, key: string) {
     this.stamp = Object.freeze({ docId: identity.docId, sheetId: identity.sheetId, valueGen: identity.valueGen })
+    this.strategy = cache.searchKeyStrategy
     this.scope = key
     this.source = source
     this.numberKind = identity.classification.kind === 'date' ? KEY_DATE : KEY_NUMBER
   }
   get size(): number { return this.count }
   get searchKeyStatus(): { strategyId: string; keyed: number; state: SearchKeyState; error?: ValueIndexError } {
-    return { strategyId: this.cache.searchKeys.strategy.id, keyed: this.searchKeys.length, state: this.keyState, ...(this.keyError ? { error: this.keyError } : {}) }
+    return { strategyId: this.strategy.id, keyed: this.searchKeys.length, state: this.keyState, ...(this.keyError ? { error: this.keyError } : {}) }
   }
   private get keysDone(): boolean {
-    return this.cache.searchKeys.strategy === EXACT_SEARCH || this.searchKeys.length === this.texts.length
+    return this.strategy === EXACT_SEARCH || this.keyState === 'streaming' || this.searchKeys.length === this.texts.length
   }
-  get idle(): boolean { return !this.pins && !this.pending }
+  get idle(): boolean { return !this.pins && !this.pending && !this.searching }
   get completeness(): ValueCompleteness {
     if (this.identity.classification.kind === 'loading' || !this.pages || this.unmerged) return 'loading'
     return this.unavailableCount ? 'incomplete' : 'complete'
@@ -335,9 +361,24 @@ export class ValueIndex implements LaneAccount {
       return
     }
     const record = this.results.get(target)
-    if (!record) return
+    if (!record || record.reservation.closed) return
+    if (--record.holders > 0) return
     record.reservation.close()
     this.reservations.delete(record.reservation)
+  }
+  /** Adds an independent holder to an owned, live search result. */
+  acquire(result: ValueSearchResult): void {
+    this.ownsSearch(result)
+    this.results.get(result)!.holders++
+  }
+  /** @internal Under pool pressure: drop resident keys; search then streams
+   * keys during the scan with identical results. */
+  dropSearchKeys(): void {
+    if (this.strategy === EXACT_SEARCH || this.disposed) return
+    this.release(this.keyBytes)
+    this.keyBytes = 0
+    this.searchKeys = []
+    this.keyState = 'streaming'
   }
   /** @internal */
   attach(source: ValueColumnSource): void { this.source = source }
@@ -354,7 +395,7 @@ export class ValueIndex implements LaneAccount {
     this.reservations.clear()
     this.cache.forget(this.scope, this)
     this.kinds = new Uint8Array(0); this.numbers = new Float64Array(0); this.styles = new Uint32Array(0); this.counts = new Uint32Array(0)
-    this.texts = []; this.strings = new Map(); this.errors = new Map(); this.numberIds = undefined; this.searchKeys = []
+    this.texts = []; this.strings = new Map(); this.errors = new Map(); this.numberIds = undefined; this.searchKeys = []; this.keyBytes = 0
   }
   /** Throws stale-source (and disposes) once invalidated or the live source
    * owner differs; every cached path and publication checks this. */
@@ -419,62 +460,90 @@ export class ValueIndex implements LaneAccount {
     for (let page = 0; page < pageCount; page++) if (this.pages[page] === UNKNOWN) unknown++
     this.ledger.unknownPages = unknown
     progress()
-    if (this.cache.searchKeys.strategy !== EXACT_SEARCH) await this.keyPhase(signal, pacer, onProgress)
+    this.check(signal)
+    if (this.strategy !== EXACT_SEARCH) await this.keyPhase(signal, pacer, onProgress)
     return this.completeness
   }
-  private keyOwner(strategy: SearchKeyStrategy): SearchKeyOwner {
+  /** @internal Store owner of this index's keys. */
+  keyOwner(): SearchKeyOwner {
     const id = this.identity
-    return { docId: id.docId, sheetId: id.sheetId, valueGen: id.valueGen, col: id.col, classificationGen: id.classificationGen, scope: this.scope, strategyId: strategy.id }
+    return { docId: id.docId, sheetId: id.sheetId, valueGen: id.valueGen, col: id.col, classificationGen: id.classificationGen, scope: this.scope, strategyId: this.strategy.id }
   }
-  /** Computes (or adopts persisted) search keys for the raw text dictionary.
-   * Cancellable and resumable; keys are an optimization only, so storage
-   * failures are reported in searchKeyStatus and never change results. */
+  private retainKey(bytes: number): void {
+    this.retain(bytes)
+    this.keyBytes += bytes
+  }
+  /** Content hash of the raw text dictionary, in paced cancellable chunks. */
+  private async contentHash(signal: AbortSignal | undefined, pacer: Pacer): Promise<string> {
+    const chunks: string[] = [], texts = this.texts
+    for (let start = 0; start < texts.length; start += SEARCH_HASH_CHUNK) {
+      chunks.push(textChunkHash(texts, start, Math.min(texts.length, start + SEARCH_HASH_CHUNK)))
+      if (pacer.due) { await pacer.yield(); this.check(signal) }
+    }
+    return combineTextHash(texts.length, chunks)
+  }
+  /** Computes (or adopts stored) search keys for the raw text dictionary.
+   * Cancellable and resumable. Keys are an optimization only: storage
+   * failures are reported in searchKeyStatus, and memory pressure switches to
+   * streaming keys; neither changes results. */
   private async keyPhase(signal: AbortSignal | undefined, pacer: Pacer, onProgress: ValueBuildOptions['onProgress']): Promise<void> {
-    const { strategy, store } = this.cache.searchKeys, texts = this.texts, total = texts.length
-    const progress = () => onProgress?.({ phase: 'keys', completed: this.searchKeys.length, total })
+    const strategy = this.strategy, store = this.cache.searchKeyStore, texts = this.texts, total = texts.length
+    const progress = () => { onProgress?.({ phase: 'keys', completed: this.searchKeys.length, total }); this.check(signal) }
     const failure = (error: unknown): ValueIndexError => error instanceof ValueIndexError ? error
       : new ValueIndexError('storage-error', error instanceof Error ? error.message : String(error))
+    const memoryQuota = (error: unknown) => error instanceof ValueIndexError && error.code === 'quota' && error.detail.resource === 'memory'
+    if (this.keyState === 'streaming') return
     const complete = this.completeness === 'complete'
-    if (store && complete && this.searchKeys.length === 0 && total > 0) {
-      try {
-        const run = await store.load(this.keyOwner(strategy), signal)
-        this.check(signal)
-        // Adopt only an exactly aligned run: the stored texts must equal ours.
-        if (run && run.count === total && run.keys.length === total) {
-          let bytes = 0
-          for (const key of run.keys) {
-            if (key !== null && typeof key !== 'string') throw new ValueIndexError('page-error', 'Malformed persisted search key')
-            bytes += key === null ? 8 : key.length * 2 + 48
-          }
-          this.retain(bytes)
-          this.searchKeys = run.keys.slice()
-          this.keyState = 'loaded'
-          progress()
-          return
-        }
-      } catch (error) {
-        if (error instanceof ValueIndexError && (error.code === 'cancelled' || error.code === 'stale-source' || error.code === 'quota' && error.detail.resource === 'memory')) throw error
-        this.keyError = failure(error)
-      }
-    }
-    if (this.searchKeys.length >= total) return
-    this.keyState = 'computing'
-    for (let id = this.searchKeys.length; id < total; id++) {
-      const key = strategy.searchKeyOf(texts[id])
-      if (key !== null && typeof key !== 'string') throw new ValueIndexError('invalid-rule', 'Search key function returned a non-string key')
-      this.retain(key === null ? 8 : key.length * 2 + 48)
-      this.searchKeys.push(key)
-      if (id % PACE_STRIDE === PACE_STRIDE - 1 && pacer.due) {
-        progress()
-        await pacer.yield()
-        this.check(signal)
-      }
-    }
-    this.keyState = 'computed'
-    progress()
-    if (!store || !complete) return
+    let hash: string | undefined
     try {
-      await store.save(this.keyOwner(strategy), { count: this.searchKeys.length, hash: '', keys: this.searchKeys }, signal)
+      if (store && complete && this.searchKeys.length === 0 && total > 0) {
+        hash = await this.contentHash(signal, pacer)
+        try {
+          const run = await store.load(this.keyOwner(), signal)
+          this.check(signal)
+          // Adopt only a run whose count and content hash match exactly.
+          if (run && run.count === total && run.keys.length === total && run.hash === hash) {
+            let bytes = 0
+            for (const key of run.keys) {
+              if (key !== null && typeof key !== 'string') throw new ValueIndexError('page-error', 'Malformed stored search key')
+              bytes += key === null ? 8 : key.length * 2 + 48
+            }
+            this.retainKey(bytes)
+            this.searchKeys = run.keys.slice()
+            this.keyState = 'loaded'
+            progress()
+            return
+          }
+        } catch (error) {
+          if (error instanceof ValueIndexError && (error.code === 'cancelled' || error.code === 'stale-source') || memoryQuota(error)) throw error
+          this.keyError = failure(error)
+        }
+      }
+      if (this.searchKeys.length < total) {
+        this.keyState = 'computing'
+        for (let id = this.searchKeys.length; id < total; id++) {
+          const key = strategy.searchKeyOf(texts[id])
+          if (key !== null && typeof key !== 'string') throw new ValueIndexError('invalid-rule', 'Search key function returned a non-string key')
+          this.retainKey(key === null ? 8 : key.length * 2 + 48)
+          this.searchKeys.push(key)
+          if (id % PACE_STRIDE === PACE_STRIDE - 1 && pacer.due) {
+            progress()
+            await pacer.yield()
+            this.check(signal)
+          }
+        }
+        this.keyState = 'computed'
+      }
+    } catch (error) {
+      if (!memoryQuota(error)) throw error
+      this.dropSearchKeys()
+      return
+    }
+    progress()
+    if (!store || !complete || this.keyState !== 'computed') return
+    try {
+      hash ??= await this.contentHash(signal, pacer)
+      await store.save(this.keyOwner(), { count: total, hash, keys: this.searchKeys }, signal)
       this.check(signal)
       this.keyState = 'persisted'
     } catch (error) {
@@ -606,21 +675,6 @@ export class ValueIndex implements LaneAccount {
       throw new ValueIndexError('stale-source', 'Search result belongs to another or a released value index result')
     }
   }
-  /** @internal Exact membership of an ordinal in an owned search patch,
-   * evaluating ordinals merged after the search with its own policy. */
-  searchMatches(result: ValueSearchResult, ordinal: number): boolean {
-    if (ordinal < result.searchedEntries) return hasBit(result.matches, ordinal)
-    if (result.query.text === '') return true
-    const record = this.results.get(result)!
-    try {
-      if (!record.tail) {
-        const budget = new WorkBudget({ ...record.limits })
-        record.tail = { budget, contains: new TextFilterMatcher(result.query.locale).prepare('contains', result.query.text, false, budget) }
-      }
-      record.tail.budget.resetAllowance()
-      return record.tail.contains(this.searchText(ordinal, record.label ?? defaultLabel), record.tail.budget)
-    } catch (error) { throw diagnostic(error) }
-  }
   /** A bounded display page. Only the first VALUE_DISPLAY_LIMIT entries of the
    * universe or search result are displayable; totals stay exact. */
   page(request: ValuePageRequest): ValuePage {
@@ -652,75 +706,89 @@ export class ValueIndex implements LaneAccount {
     return { entries, total, displayed, truncated: total > VALUE_DISPLAY_LIMIT, completeness: this.completeness }
   }
   /** Searches every merged value with the S8.1 host-collated `contains`
-   * semantics over raw text (strings, errors) or display labels (numbers,
-   * dates, booleans). Labels never become keys. Time-sliced and cancellable. */
+   * semantics (optionally with `*`/`?`/`~` wildcards) over raw text (strings,
+   * errors) or display labels (numbers, dates, booleans). Labels never become
+   * keys. Search keys of the index's certified strategy only exclude values
+   * (decisive misses) for plain queries of the same fold variant; every key
+   * hit, null key, label and wildcard query uses the exact matcher. Without
+   * resident keys (memory pressure) keys are computed during the scan.
+   * Time-sliced and cancellable; ownership is rechecked after every callback. */
   async search(query: ValueSearchQuery, options: ValueSearchOptions = {}): Promise<ValueSearchResult> {
     this.assertLive()
-    if (!query || typeof query.text !== 'string' || typeof query.locale !== 'string') throw new ValueIndexError('invalid-rule', 'Invalid value search')
+    if (!query || typeof query.text !== 'string' || typeof query.locale !== 'string' || (query.wildcards !== undefined && typeof query.wildcards !== 'boolean')) {
+      throw new ValueIndexError('invalid-rule', 'Invalid value search')
+    }
+    const wildcards = query.wildcards === true
     const { signal, resume, onProgress } = options
     let inherited: SearchRecord | undefined
     if (resume) {
       this.ownsSearch(resume)
       inherited = this.results.get(resume)
-      if (resume.query.text !== query.text || resume.query.locale !== query.locale) throw new ValueIndexError('invalid-rule', 'Search resume changed its query')
+      if (resume.query.text !== query.text || resume.query.locale !== query.locale || (resume.query.wildcards === true) !== wildcards) {
+        throw new ValueIndexError('invalid-rule', 'Search resume changed its query')
+      }
     }
     const labelOption = options.label ?? inherited?.label, limits = options.limits ?? inherited?.limits
     const from = resume?.searchedEntries ?? 0, end = this.count, pacer = new Pacer(options)
+    const live = () => { checkSignal(signal, 'Value search'); this.assertLive() }
     const reservation = this.reserve()
     reservation.charge(words(end) * 4)
     this.reservations.add(reservation)
+    // A running scan holds resident keys: not idle for key dropping/eviction.
+    this.searching++
     try {
       const matches = new Uint32Array(words(end))
       if (resume) matches.set(resume.matches.subarray(0, words(from)))
       let count = resume?.count ?? 0, keyed = 0, exact = 0
-      const label = labelOption ?? defaultLabel
-      const strategy = this.cache.searchKeys.strategy, keys = this.searchKeys
+      const label = labelOption ?? defaultLabel, strategy = this.strategy
       try {
         const budget = new WorkBudget({ ...limits, signal })
-        const contains = query.text === '' ? undefined : new TextFilterMatcher(query.locale).prepare('contains', query.text, false, budget)
-        const queryKey = contains && strategy !== EXACT_SEARCH ? strategy.searchKeyOf(query.text) : null
+        const contains = query.text === '' ? undefined : new TextFilterMatcher(query.locale).prepare('contains', query.text, wildcards, budget)
+        const keysUsable = contains !== undefined && !wildcards && strategy !== EXACT_SEARCH && foldVariantOf(query.locale) === strategy.foldVariant
+        const queryKey = keysUsable ? strategy.searchKeyOf(query.text) : null
         if (queryKey !== null && typeof queryKey !== 'string') throw new ValueIndexError('invalid-rule', 'Search key function returned a non-string key')
+        const streaming = this.keyState === 'streaming', keys = this.searchKeys
         for (let ordinal = from; ordinal < end; ordinal++) {
           budget.resetAllowance()
-          let hit = true, decided = !contains
-          if (queryKey !== null) {
-            const kind = this.kinds[ordinal], id = this.numbers[ordinal]
-            const key = (kind === KEY_STRING || kind === KEY_ERROR) && id < keys.length ? keys[id] : null
-            if (key !== null) {
-              keyed++
-              hit = key.includes(queryKey)
-              // A key miss is decisive; a candidate hit needs exact confirmation.
-              decided = !hit
+          let hit = true
+          if (contains) {
+            let candidate = true
+            if (queryKey !== null) {
+              const kind = this.kinds[ordinal], id = this.numbers[ordinal]
+              if (kind === KEY_STRING || kind === KEY_ERROR) {
+                const key = streaming ? strategy.searchKeyOf(this.texts[id]) : id < keys.length ? keys[id] : null
+                if (key !== null && typeof key !== 'string') throw new ValueIndexError('invalid-rule', 'Search key function returned a non-string key')
+                if (key !== null) { keyed++; candidate = strategy.matchKey(key, queryKey) }
+              }
             }
-          }
-          if (!decided) {
-            exact++
-            // An empty literal is a subsequence of every candidate.
-            hit = !contains || contains(this.searchText(ordinal, label), budget)
-          } else if (!contains) exact++
+            // A key miss is decisive; a candidate (or unkeyed value) is confirmed exactly.
+            if (candidate) { exact++; hit = contains(this.searchText(ordinal, label), budget) } else hit = false
+          } else exact++
           if (hit) { setBit(matches, ordinal); count++ }
           if ((ordinal - from) % PACE_STRIDE === PACE_STRIDE - 1 && pacer.due) {
             onProgress?.({ searched: ordinal + 1, total: end, matches: count })
+            live()
             await pacer.yield()
-            checkSignal(signal, 'Value search')
-            this.assertLive()
+            live()
           }
         }
       } catch (error) { throw diagnostic(error) }
-      checkSignal(signal, 'Value search')
-      this.assertLive()
+      live()
       onProgress?.({ searched: end, total: end, matches: count })
+      live()
       const result: ValueSearchResult = Object.freeze({
-        query: Object.freeze({ text: query.text, locale: query.locale }), owner: this.stamp, matches, count,
+        query: Object.freeze({ text: query.text, locale: query.locale, ...(wildcards ? { wildcards: true } : {}) }), owner: this.stamp, matches, count,
         searchedEntries: end, complete: end === this.count && this.completeness === 'complete',
         stats: Object.freeze({ keyed, exact }),
       })
-      this.results.set(result, { reservation, label: labelOption, limits })
+      this.results.set(result, { reservation, holders: 1, label: labelOption, limits })
       return result
     } catch (error) {
       reservation.close()
       this.reservations.delete(reservation)
       throw error
+    } finally {
+      this.searching--
     }
   }
 }
@@ -728,10 +796,14 @@ export class ValueIndex implements LaneAccount {
 type Layer = { kind: 'search'; result: ValueSearchResult; selected: boolean } | { kind: 'keys'; entries: Map<number, boolean> }
 export interface ValueDraftPatchSummary { kind: 'keys' | 'search'; selected: boolean; count: number }
 export type ValueCommit = { kind: 'unchanged' | 'committed'; rule: ValuesFilter | null }
+/** 'pending': a search patch made while loading has not yet been evaluated
+ * for this later-merged value; prepare() resolves it asynchronously. */
+export type ValueSelectionState = boolean | 'pending'
+export interface ValueSelectedCount { count: number; pending: number; complete: boolean }
 /** A dropdown draft pinned to one index owner: base plus ordered patches where
  * the last matching patch wins (spec §7.4). Nothing is stored before OK. Its
- * key set, patches, searches and commit buffers are charged to the pool and
- * released on close. */
+ * key set, patches, held searches and commit buffers are charged to the pool
+ * and released on close. Synchronous reads never run the text matcher. */
 export class ValueSelectionDraft {
   closed = false
   private base: 'all' | 'none' | 'committed'
@@ -740,7 +812,8 @@ export class ValueSelectionDraft {
   private dirty = false
   private keyBytes = 0
   private readonly controllers = new Set<AbortController>()
-  private readonly owned = new Set<ValueSearchResult>()
+  /** Search results this draft holds one index hold on (displayed or patched). */
+  private readonly held = new Set<ValueSearchResult>()
   private current: ValueSearchResult | undefined
   private constructor(
     readonly index: ValueIndex,
@@ -779,25 +852,30 @@ export class ValueSelectionDraft {
     if (!Number.isSafeInteger(ordinal) || ordinal < 0 || ordinal >= this.index.size) throw new ValueIndexError('invalid-cursor', 'Value ordinal outside the index')
   }
   get blanks(): boolean { return this.showBlanks }
-  get pending(): boolean { return false }
-  async prepare(_options: ValueSearchOptions = {}): Promise<void> {}
+  /** True while a loading-time search patch has unevaluated later values. */
+  get pending(): boolean {
+    return this.layers.some(layer => layer.kind === 'search' && layer.result.searchedEntries < this.index.size)
+  }
   private baseSelected(ordinal: number): boolean {
     if (this.base !== 'committed') return this.base === 'all'
     const index = this.index, member = this.committedKeys!.has(index.entryKind(ordinal), index.entryNumber(ordinal), index.entryText(ordinal))
     return this.committed!.selection.mode === 'include' ? member : !member
   }
-  isSelected(ordinal: number): boolean {
+  /** Forward evaluation over the layers; O(layers), no text matching. */
+  isSelected(ordinal: number): ValueSelectionState {
     this.open()
     this.index.assertLive()
     this.ordinal(ordinal)
-    for (let at = this.layers.length - 1; at >= 0; at--) {
-      const layer = this.layers[at]
+    let value = this.baseSelected(ordinal), known = true
+    for (const layer of this.layers) {
       if (layer.kind === 'keys') {
         const selected = layer.entries.get(ordinal)
-        if (selected !== undefined) return selected
-      } else if (this.index.searchMatches(layer.result, ordinal)) return layer.selected
+        if (selected !== undefined) { value = selected; known = true }
+      } else if (ordinal < layer.result.searchedEntries) {
+        if (hasBit(layer.result.matches, ordinal)) { value = layer.selected; known = true }
+      } else if (!(known && value === layer.selected)) known = false
     }
-    return this.baseSelected(ordinal)
+    return known ? value : 'pending'
   }
   /** An individual checkbox is an exact raw-key patch. */
   toggle(ordinal: number, selected: boolean): void {
@@ -819,7 +897,8 @@ export class ValueSelectionDraft {
     this.dirty = true
   }
   /** Without search: the complete domain and blanks. With search: exactly the
-   * matching subset (also over values merged later), preserving other choices. */
+   * matching subset (also over values merged later), preserving other
+   * choices. The draft takes its own hold on an adopted search result. */
   selectAll(selected: boolean, search?: ValueSearchResult, options: { includeBlanks?: boolean } = {}): void {
     this.open()
     this.index.assertLive()
@@ -832,30 +911,34 @@ export class ValueSelectionDraft {
       this.keyBytes = 0
       this.releaseUnused()
     } else {
-      this.index.ownsSearch(search)
+      this.hold(search)
       this.layers.push({ kind: 'search', result: search, selected })
       if (options.includeBlanks) this.showBlanks = selected
     }
     this.dirty = true
+  }
+  private hold(result: ValueSearchResult): void {
+    if (this.held.has(result)) { this.index.ownsSearch(result); return }
+    this.index.acquire(result)
+    this.held.add(result)
   }
   private dropCommittedKeys(): void {
     if (!this.committedKeys) return
     this.reservation.release(this.committedKeys.bytes)
     this.committedKeys = undefined
   }
-  /** Releases searches this draft produced that are neither displayed nor
-   * referenced by a layer. */
+  /** Releases held searches that are neither displayed nor patched. */
   private releaseUnused(): void {
-    for (const result of this.owned) {
+    for (const result of this.held) {
       if (result === this.current || this.layers.some(layer => layer.kind === 'search' && layer.result === result)) continue
       this.index.release(result)
-      this.owned.delete(result)
+      this.held.delete(result)
     }
   }
-  /** Search changes only the displayed list; Cancel aborts it. The previous
-   * displayed search is released unless a Select All patch retains it. */
-  async search(query: ValueSearchQuery, options: ValueSearchOptions = {}): Promise<ValueSearchResult> {
-    this.open()
+  /** Runs an index search under a draft-owned controller (Cancel aborts it)
+   * and adopts the result only if the draft, signal and owner are still
+   * valid after the await; otherwise the result is released. */
+  private async searchOwned(query: ValueSearchQuery, options: ValueSearchOptions): Promise<ValueSearchResult> {
     const controller = new AbortController(), outer = options.signal
     const forward = () => controller.abort()
     if (outer?.aborted) controller.abort()
@@ -863,48 +946,86 @@ export class ValueSelectionDraft {
     this.controllers.add(controller)
     try {
       const result = await this.index.search(query, { ...options, signal: controller.signal })
-      if (this.closed) {
+      try {
+        if (this.closed || controller.signal.aborted) throw new ValueIndexError('cancelled', 'Value draft search cancelled')
+        this.index.assertLive()
+      } catch (error) {
         this.index.release(result)
-        throw new ValueIndexError('cancelled', 'Value draft closed during search')
+        throw error
       }
-      this.owned.add(result)
-      this.current = result
-      this.releaseUnused()
+      this.held.add(result)
       return result
     } finally {
       outer?.removeEventListener('abort', forward)
       this.controllers.delete(controller)
     }
   }
-  /** Final membership bitset over the universe; the caller releases its charge. */
-  private membership(): Uint32Array {
-    const index = this.index, size = index.size
-    this.reservation.charge(words(size) * 4)
-    const bits = new Uint32Array(words(size))
-    if (this.base === 'all') { bits.fill(0xffffffff); if (size % 32) bits[bits.length - 1] = 2 ** (size % 32) - 1 }
-    else if (this.base === 'committed') for (let ordinal = 0; ordinal < size; ordinal++) if (this.baseSelected(ordinal)) setBit(bits, ordinal)
-    for (const layer of this.layers) {
-      if (layer.kind === 'keys') {
-        for (const [ordinal, selected] of layer.entries) (selected ? setBit : clearBit)(bits, ordinal)
-        continue
-      }
-      const matches = layer.result.matches, searched = layer.result.searchedEntries, count = words(searched)
-      for (let word = 0; word < count; word++) bits[word] = layer.selected ? bits[word] | matches[word] : bits[word] & ~matches[word]
-      // Values merged after a loading-time search still belong to its patch.
-      for (let ordinal = searched; ordinal < size; ordinal++) {
-        if (index.searchMatches(layer.result, ordinal)) (layer.selected ? setBit : clearBit)(bits, ordinal)
-      }
-    }
-    return bits
+  /** Search changes only the displayed list. The previous displayed search is
+   * released unless a Select All patch holds it. */
+  async search(query: ValueSearchQuery, options: ValueSearchOptions = {}): Promise<ValueSearchResult> {
+    this.open()
+    const result = await this.searchOwned(query, options)
+    this.current = result
+    this.releaseUnused()
+    return result
   }
-  selectedCount(): { count: number; complete: boolean } {
+  /** Asynchronously evaluates loading-time search patches over later-merged
+   * values (paced, cancellable, with progress) so reads stop being pending. */
+  async prepare(options: ValueSearchOptions = {}): Promise<void> {
     this.open()
     this.index.assertLive()
-    const bits = this.membership()
-    let count = 0
-    for (const word of bits) count += popcount(word)
-    this.reservation.release(bits.length * 4)
-    return { count, complete: this.index.completeness === 'complete' }
+    for (const layer of this.layers) {
+      if (layer.kind !== 'search' || layer.result.searchedEntries >= this.index.size) continue
+      const previous = layer.result
+      const next = await this.searchOwned(previous.query, { ...options, resume: previous, label: undefined, limits: undefined })
+      for (const other of this.layers) if (other.kind === 'search' && other.result === previous) other.result = next
+      if (this.current === previous) this.current = next
+      this.releaseUnused()
+    }
+  }
+  /** Final membership; pending marks values a partial patch leaves undecided.
+   * The caller releases both bitsets' charge. */
+  private membership(): { bits: Uint32Array; pending: Uint32Array; bytes: number } {
+    const index = this.index, size = index.size, length = words(size)
+    const bytes = length * 8
+    this.reservation.charge(bytes)
+    try {
+      const bits = new Uint32Array(length), pending = new Uint32Array(length)
+      if (this.base === 'all') { bits.fill(0xffffffff); if (size % 32) bits[length - 1] = 2 ** (size % 32) - 1 }
+      else if (this.base === 'committed') for (let ordinal = 0; ordinal < size; ordinal++) if (this.baseSelected(ordinal)) setBit(bits, ordinal)
+      for (const layer of this.layers) {
+        if (layer.kind === 'keys') {
+          for (const [ordinal, selected] of layer.entries) { (selected ? setBit : clearBit)(bits, ordinal); clearBit(pending, ordinal) }
+          continue
+        }
+        index.ownsSearch(layer.result)
+        const matches = layer.result.matches, searched = layer.result.searchedEntries
+        for (let word = 0; word < words(searched); word++) {
+          const hit = matches[word]
+          bits[word] = layer.selected ? bits[word] | hit : bits[word] & ~hit
+          pending[word] &= ~hit
+        }
+        // Unsearched later values: undecided unless already known to equal the patch.
+        for (let ordinal = searched; ordinal < size; ordinal++) {
+          if (!hasBit(pending, ordinal) && hasBit(bits, ordinal) === layer.selected) continue
+          setBit(pending, ordinal)
+        }
+      }
+      return { bits, pending, bytes }
+    } catch (error) {
+      this.reservation.release(bytes)
+      throw error
+    }
+  }
+  selectedCount(): ValueSelectedCount {
+    this.open()
+    this.index.assertLive()
+    const { bits, pending, bytes } = this.membership()
+    try {
+      let count = 0, undecided = 0
+      for (let word = 0; word < bits.length; word++) { count += popcount(bits[word] & ~pending[word]); undecided += popcount(pending[word]) }
+      return { count, pending: undecided, complete: undecided === 0 && this.index.completeness === 'complete' }
+    } finally { this.reservation.release(bytes) }
   }
   describe(): { base: 'all' | 'none'; patches: readonly ValueDraftPatchSummary[]; blanks: boolean } {
     this.open()
@@ -937,18 +1058,12 @@ export class ValueSelectionDraft {
     const index = this.index
     if (index.completeness !== 'complete') throw new ValueIndexError('incomplete', 'Value universe is incomplete')
     if (!this.dirty) { this.close(); return { kind: 'unchanged', rule: this.committed } }
-    for (const layer of this.layers) {
-      if (layer.kind === 'search' && layer.result.searchedEntries < index.size) {
-        const previous = layer.result
-        layer.result = await index.search(previous.query, { resume: previous, signal })
-        this.owned.add(layer.result)
-        this.ready(signal)
-      }
-    }
-    this.releaseUnused()
-    const bits = this.membership(), size = index.size
-    let transient = bits.length * 4
+    await this.prepare({ signal })
+    this.ready(signal)
+    const { bits, pending, bytes } = this.membership(), size = index.size
+    let transient = bytes
     try {
+      if (pending.some(word => word !== 0)) throw new ValueIndexError('incomplete', 'Value selection is still pending')
       let selected = 0
       for (const word of bits) selected += popcount(word)
       if (selected === size && (this.showBlanks || index.blankCount === 0)) {
@@ -983,8 +1098,8 @@ export class ValueSelectionDraft {
     if (this.closed) return
     this.closed = true
     this.index.pin(-1)
-    for (const result of this.owned) this.index.release(result)
-    this.owned.clear()
+    for (const result of this.held) this.index.release(result)
+    this.held.clear()
     this.current = undefined
     this.layers = []
     this.committedKeys = undefined
