@@ -457,7 +457,7 @@ describe('declared-size and budget bounds (RED tests 3, 4, 6, 8)', () => {
     expect(header[0]).toBe(info.localHeaderOffset)
     expect(data.reduce((n, [a, e]) => n + (e - a), 0)).toBeLessThanOrEqual(262_144)
     expect(src.reads.length).toBe(readsAtError)
-  })
+  }, LARGE ? 600_000 : undefined)
 
   it('a port that produces more than the output buffer is rejected; the real port never exceeds it, whatever the input chunk size', async () => {
     const bursty: InflaterFactory = () => {
