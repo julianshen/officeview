@@ -135,6 +135,9 @@ async function parseStyles(pkg: OfficePackage): Promise<Styles> {
 export interface ParseXlsxOptions {
   /** Load-time evaluator resource caps (large-source admission, design note §4.3). Unset = today's behaviour. */
   evaluation?: Pick<WorkbookEvaluationOptions, 'maxArrayCells' | 'maxArraySide' | 'maxMaterializedCells'>
+  /** 'cached' shows saved values only: no load-time evaluation, so a formula
+   * without a cached value stays unavailable (hasCachedValue false). Default 'engine'. */
+  valuePolicy?: 'engine' | 'cached'
 }
 
 export async function parseXlsx(pkg: OfficePackage, options: ParseXlsxOptions = {}): Promise<XlsxDocument> {
@@ -352,7 +355,7 @@ export async function parseXlsx(pkg: OfficePackage, options: ParseXlsxOptions = 
     semantics,
   }
   initializeSavedSpills(doc)
-  evaluateWorkbookFormulas(doc, { fullCalcOnLoad, ...options.evaluation })
+  if (options.valuePolicy !== 'cached') evaluateWorkbookFormulas(doc, { fullCalcOnLoad, ...options.evaluation })
   return doc
 }
 

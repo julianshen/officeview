@@ -102,18 +102,24 @@ function admittedParser(bytes: Uint8Array, ctx: Ctx, decided?: SpreadsheetAdmiss
     const admission = decided ?? await admitSpreadsheet(bytesRangeSource(bytes), ctx.profile, ctx.limits, ctx.signal)
     if (admission.mode !== 'object') throw refusalFrom(admission)
     throwIfAborted(ctx.signal)
-    const doc = await parseXlsx(pkg, { evaluation: admission.decision.evaluation })
-    for (const part of admission.decision.counters.alternateContentData) {
+    const { decision } = admission
+    let doc: XlsxDocument | undefined
+    if (decision.valuePolicy === 'engine') {
+      doc = await parseXlsx(pkg, { evaluation: decision.evaluation })
+      // Rule 5: an evaluator resource hit is never published; reopen with saved values.
+      if (evaluationHitCap(doc)) doc = undefined
+      throwIfAborted(ctx.signal)
+    }
+    if (doc === undefined) {
+      // Saved values only: the allocation is the element envelope G2 already admitted.
+      doc = await parseXlsx(pkg, { valuePolicy: 'cached' })
+      addDiagnostic(doc, NOTICE_CACHED_VALUES, `Showing saved values — ${decision.counters.loadEvaluatedFormulas} formulas not recalculated (file too large)`)
+    }
+    for (const part of decision.counters.alternateContentData) {
       addDiagnostic(doc, NOTICE_ALTERNATE_CONTENT, `Some cell data in ${part} is wrapped in mc:AlternateContent and is not shown`)
     }
-    for (const part of admission.decision.counters.highRatioParts) {
+    for (const part of decision.counters.highRatioParts) {
       addDiagnostic(doc, 'high-compression-ratio', `${part} declares a compression ratio above ${ctx.limits.object.maxRatio}:1 (sizes verified exactly)`)
-    }
-    const hit = evaluationHitCap(doc)
-    // Rule 5: an evaluator resource hit reroutes to paged/`cached` before publication.
-    if (hit) {
-      throw new ImportRefusal('unsupported', 'paged-not-yet',
-        `Formula evaluation in this spreadsheet exceeds the load-time budget (${hit}); saved values need the large-workbook viewer, which is not available yet`)
     }
     return doc
   }

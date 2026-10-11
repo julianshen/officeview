@@ -99,7 +99,15 @@ export function admit(profile: ProfileId, compressedBytes: number, inventory: Zi
 
 export interface ObjectEvaluationCaps { maxArrayCells: number; maxArraySide: number; maxMaterializedCells: number }
 export type ObjectDecision =
-  | { mode: 'object'; counters: AdmissionCounters; evaluation: ObjectEvaluationCaps; predictedPeak: number; admissionTotal: number }
+  | {
+    mode: 'object'
+    counters: AdmissionCounters
+    /** 'engine' when the evaluation reserve fits; otherwise saved values only (no load-time evaluation). */
+    valuePolicy: 'engine' | 'cached'
+    evaluation: ObjectEvaluationCaps
+    predictedPeak: number
+    admissionTotal: number
+  }
   | { mode: 'paged'; counters: AdmissionCounters; reason: string }
   | { mode: 'refuse'; failure: SourceFailure }
 
@@ -138,8 +146,10 @@ function checkCaps(counters: AdmissionCounters, pendingString: number, limits: I
   if (counters.maxAttributesPerElement > o.maxAttributesPerElement) throw new CapTrip(`attributes per element ${counters.maxAttributesPerElement} > ${o.maxAttributesPerElement}`)
   const longest = Math.max(counters.longestString, pendingString)
   if (longest > limits.inlineStringSoftBytes) throw new CapTrip(`string of ${longest} characters > ${limits.inlineStringSoftBytes}`)
-  const total = admissionTotal(counters, limits)
-  if (total > o.budgetBytes) throw new CapTrip(`admission total ${total} bytes > ${o.budgetBytes} (predicted peak ${predictedPeak(counters, limits)}, ${counters.loadEvaluatedFormulas} load-evaluated formulas)`)
+  // The element envelope decides object vs paged; the evaluation reserve only
+  // decides engine vs saved values at the end (decision 2).
+  const peak = predictedPeak(counters, limits)
+  if (peak > o.budgetBytes) throw new CapTrip(`predicted peak ${peak} bytes > ${o.budgetBytes}`)
 }
 
 /** Workbook first, so fullCalcOnLoad is known before any worksheet formula is counted. */
@@ -215,6 +225,7 @@ export async function verifyObjectCandidate(src: RangeSource, inventory: ZipInve
   return {
     mode: 'object',
     counters,
+    valuePolicy: total <= o.budgetBytes ? 'engine' : 'cached',
     predictedPeak: peak,
     admissionTotal: total,
     evaluation: { maxArrayCells: ev.maxArrayCells, maxArraySide: ev.maxArrayCells, maxMaterializedCells },

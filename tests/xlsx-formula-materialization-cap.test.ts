@@ -68,6 +68,15 @@ describe('cumulative maxMaterializedCells', () => {
 })
 
 describe('parseXlsx evaluation options (additive)', () => {
+  it("valuePolicy 'cached' keeps saved values and never evaluates", async () => {
+    const bytes = await buildXlsx([{ name: 'S', rows: [{ r: 1, cells: [{ ref: 'A1', formula: '1+1' }, { ref: 'B1', formula: '2+2', v: 9 }] }] }])
+    const doc = await parseXlsx(await OfficePackage.load(bytes), { valuePolicy: 'cached' })
+    const [a1, b1] = doc.sheets[0].rows[0].cells
+    expect(a1.value).toBeNull()
+    expect(a1.hasCachedValue).toBe(false)
+    expect(b1.value).toBe(9)
+  })
+
   it('passes the caps to the load-time evaluation; without options the result is unchanged', async () => {
     const bytes = await buildXlsx([{ name: 'S', rows: [{ r: 1, cells: [{ ref: 'A1', formula: 'SUM(SEQUENCE(200000,1))' }] }] }])
     const plain = await parseXlsx(await OfficePackage.load(bytes))

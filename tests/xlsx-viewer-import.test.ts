@@ -211,13 +211,25 @@ describe('decision 5: mc:AlternateContent-wrapped data in a small file', () => {
 })
 
 describe('formula expansion through the entry point (RED test 19)', () => {
-  it('uncached SEQUENCE(200000,1) is evaluated with the caps, hits array-resource-limit and is rerouted before publishing', async () => {
-    const bytes = xlsxBytes({ sheetData: '<row r="1"><c r="A1"><f>SEQUENCE(200000,1)</f></c></row>' })
+  it('decision 2: uncached SEQUENCE(200000,1) hits array-resource-limit and still opens with saved values and a notice', async () => {
+    const bytes = xlsxBytes({ sheetData: '<row r="1"><c r="A1"><f>SEQUENCE(200000,1)</f></c><c r="B1"><v>7</v></c></row>' })
     const started = Date.now()
-    const err = await refusal(loadOfficeFile(bytes))
-    expect(err.reason).toBe('paged-not-yet')
-    expect(err.message).toMatch(/array-resource-limit/)
+    const doc = await loadOfficeFile(bytes) as { sheets: Array<{ rows: Array<{ cells: Array<{ ref: string; value: unknown; hasCachedValue?: boolean }> }> }>; diagnostics?: Array<{ feature: string; message: string }> }
     expect(Date.now() - started).toBeLessThan(10_000)
+    expect(doc.sheets[0].rows).toHaveLength(1) // no 200,000-row model
+    const a1 = doc.sheets[0].rows[0].cells.find((c) => c.ref === 'A1')!
+    expect(a1.value).toBeNull()
+    expect(a1.hasCachedValue).toBe(false) // unavailable, not computed
+    expect(doc.sheets[0].rows[0].cells.find((c) => c.ref === 'B1')!.value).toBe(7)
+    expect(doc.diagnostics?.find((d) => d.feature === 'cached-value-policy')?.message).toBe('Showing saved values — 1 formulas not recalculated (file too large)')
+    expect(doc.diagnostics?.some((d) => d.feature === 'array-resource-limit')).toBe(false)
+  })
+
+  it('decision 2: when the evaluation reserve does not fit, the workbook opens with saved values without evaluating', async () => {
+    const bytes = xlsxBytes({ sheetData: Array.from({ length: 15_000 }, (_, i) => `<row r="${i + 1}"><c r="A${i + 1}"><v>${i}</v></c><c r="B${i + 1}"><f>A${i + 1}+1</f><v>${i + 1}</v></c></row>`).join(''), fullCalcOnLoad: true })
+    const doc = await loadOfficeSource(bytes, { profile: 'D', limits: { object: { rows: 1e9, cells: 1e9 } } }) as { sheets: Array<{ rows: Array<{ cells: Array<{ value: unknown }> }> }>; diagnostics?: Array<{ feature: string; message: string }> }
+    expect(doc.sheets[0].rows[14_999].cells[1].value).toBe(15_000)
+    expect(doc.diagnostics?.find((d) => d.feature === 'cached-value-policy')?.message).toMatch(/15000 formulas not recalculated/)
   })
 
   it('the same formula with a cached value stays object (engine policy) and loads', async () => {

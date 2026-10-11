@@ -178,7 +178,7 @@ describe('how the measured shapes fall when every guard is applied (§4.3 table)
     const d = await g2(xlsxBytes({ sheetData: metaRows(125_000) }), 'D', { object: { rows: 1e9 } })
     expect(d.mode).toBe('paged')
     if (d.mode !== 'paged') return
-    expect(d.reason).toMatch(/admission total/)
+    expect(d.reason).toMatch(/predicted peak/)
   })
 
   it('80k merges, 30k style records and a 2 M-character string pass the envelope on D but are paged by their secondary cap', async () => {
@@ -221,8 +221,15 @@ describe('boundaries at cap - 1, cap, cap + 1 (D and M)', () => {
       const limits = importLimitsFor(profile)
       const need = predictedPeak(probe.counters, limits) + 30 * 2048 + limits.object.evaluation.maxArrayCells * 2000
       expect(admissionTotal(probe.counters, limits)).toBe(need)
-      const at = async (budgetBytes: number) => decision(await g2(bytes, profile, { object: { budgetBytes } }))
-      expect([await at(need + 1), await at(need), await at(need - 1)]).toEqual(['object', 'object', 'paged'])
+      const policy = async (budgetBytes: number) => {
+        const d = await g2(bytes, profile, { object: { budgetBytes } })
+        return d.mode === 'object' ? d.valuePolicy : d.mode
+      }
+      // the evaluation reserve decides engine vs saved values (decision 2) ...
+      expect([await policy(need + 1), await policy(need), await policy(need - 1)]).toEqual(['engine', 'engine', 'cached'])
+      // ... and the element envelope alone decides object vs paged
+      const peak = predictedPeak(probe.counters, limits)
+      expect([await policy(peak + 1), await policy(peak), await policy(peak - 1)]).toEqual(['cached', 'cached', 'paged'])
     })
   }
 
@@ -277,6 +284,7 @@ describe('formula evaluation reserve (round-4 table)', () => {
         expect(d.mode).toBe('object')
         if (d.mode !== 'object') return
         expect(d.counters.loadEvaluatedFormulas).toBe(n)
+        expect(d.valuePolicy).toBe('engine')
         const limits = importLimitsFor(profile)
         expect(d.evaluation.maxArrayCells).toBe(limits.object.evaluation.maxArrayCells)
         expect(d.evaluation.maxMaterializedCells).toBe(Math.floor((limits.object.budgetBytes - d.predictedPeak - n * 2048) / 2000))
@@ -292,11 +300,12 @@ describe('formula evaluation reserve (round-4 table)', () => {
     expect(d.mode === 'object' && d.counters.loadEvaluatedFormulas).toBe(0)
   })
 
-  it('20,000 trivial uncached formulas route to paged before any legacy parse', async () => {
-    for (const profile of ['D', 'M'] as const) {
-      const d = await g2(xlsxBytes({ sheetData: formulaRows(20_000, (i) => `A${i + 1}+1`) }), profile, { object: { rows: 1e9, cells: 1e9 } })
-      expect(d.mode).toBe('paged')
-    }
+  it('20,000 trivial uncached formulas: saved values on D (the evaluation reserve does not fit), paged on M (envelope)', async () => {
+    const bytes = xlsxBytes({ sheetData: formulaRows(20_000, (i) => `A${i + 1}+1`) })
+    const d = await g2(bytes, 'D', { object: { rows: 1e9, cells: 1e9 } })
+    expect(d.mode === 'object' && d.valuePolicy).toBe('cached')
+    const m = await g2(bytes, 'M', { object: { rows: 1e9, cells: 1e9 } })
+    expect(m.mode).toBe('paged')
   })
 })
 
