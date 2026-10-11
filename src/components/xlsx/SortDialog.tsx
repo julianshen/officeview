@@ -66,7 +66,7 @@ export function SortDialog(props: SortDialogProps): ReactElement | null {
   return <div ref={root} role={props.embedded ? undefined : 'dialog'} aria-label="Sort worksheet" aria-modal={props.embedded ? undefined : true} data-officeview-ui="sort-dialog"
     onPointerDown={event => event.stopPropagation()} onDoubleClick={event => event.stopPropagation()}
     onKeyDown={event => {
-      if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'f') { life.cancel(false); return }
+      if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'f') { life.cancel(); return }
       event.stopPropagation()
       if (event.key === 'Escape') { event.preventDefault(); life.cancel() }
       else if (event.key === 'Tab') {

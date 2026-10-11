@@ -70,8 +70,9 @@ export function columnRuleDescription(rule: ColumnRule): string {
   if (rule.kind === 'values') return rule.selection.mode === 'allExcept' ? `All except ${rule.selection.excluded.count} values` : rule.selection.mode === 'include' ? `${rule.selection.keys.count} included values` : 'Complete value-query selection'
   if (rule.kind === 'datePreset') return `Date period: ${rule.preset}`
   const op: Record<string, string> = { gt: 'Greater than', gte: 'Greater than or equal', lt: 'Less than', lte: 'Less than or equal', eq: 'Equals', neq: 'Does not equal', between: 'Between', contains: 'Contains', 'not-contains': 'Does not contain', begins: 'Begins with', ends: 'Ends with', before: 'Before', after: 'After' }
-  const value = typeof rule.first === 'object' ? `${rule.first.year}-${rule.first.month}-${rule.first.day}` : String(rule.first)
-  return boundedSelectionText(`${op[rule.op]} ${value}${'second' in rule && rule.second !== undefined ? ` through ${typeof rule.second === 'object' ? `${rule.second.year}-${rule.second.month}-${rule.second.day}` : rule.second}` : ''}`)
+  const value = (input: typeof rule.first) => typeof input === 'object'
+    ? `${String(input.year).padStart(4, '0')}-${String(input.month).padStart(2, '0')}-${String(input.day).padStart(2, '0')}` : String(input)
+  return boundedSelectionText(`${op[rule.op]} ${value(rule.first)}${'second' in rule && rule.second !== undefined ? ` through ${value(rule.second)}` : ''}`)
 }
 function selectedColumn(props: GridHeadersProps, col: number): boolean | undefined {
   const parts = props.selection.ranges.filter(part => part.cols.some(c => col >= c.c0 && col <= c.c1))

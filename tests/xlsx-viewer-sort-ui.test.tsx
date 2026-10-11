@@ -163,3 +163,35 @@ it('shows the committed sort direction and pressed arrow/funnel state without fo
   expect(funnel.querySelector('svg')).toBeTruthy()
   expect(ui.getByRole('columnheader', { name: /Column A/ }).getAttribute('aria-sort')).toBe('descending')
 })
+
+it.each(['ctrlKey', 'metaKey'])('restores the invoker before %s+F reaches workbook find', async modifier => {
+  const f = setup(), invoker = document.createElement('button')
+  document.body.append(invoker)
+  let focusAtFind: Element | null = null
+  const ui = render(<div onKeyDown={event => { if (event.key === 'f') focusAtFind = document.activeElement }}><SortDialog {...f.props} invoker={invoker} /></div>)
+  await waitFor(() => expect(ui.getByRole('textbox', { name: 'Column level 1' })).toBeTruthy())
+  const first = ui.getByRole('textbox', { name: 'Column level 1' })
+  act(() => first.focus())
+  fireEvent.keyDown(first, { key: 'f', [modifier]: true })
+  expect(f.close).toHaveBeenCalledOnce()
+  expect(focusAtFind).toBe(invoker)
+  expect(document.activeElement).toBe(invoker)
+  expect(f.fixture.publications).toBe(0)
+  invoker.remove()
+})
+
+it('returns workbook-find focus to the grid when the modal invoker is detached', async () => {
+  const f = setup(), grid = document.createElement('div'), fallback = vi.fn(() => grid.focus())
+  grid.tabIndex = 0; document.body.append(grid)
+  const ui = render(<SortDialog {...f.props} invoker={document.createElement('button')} fallbackFocus={fallback} />)
+  await waitFor(() => expect(ui.getByRole('textbox', { name: 'Column level 1' })).toBeTruthy())
+  fireEvent.keyDown(ui.getByRole('textbox', { name: 'Column level 1' }), { key: 'f', ctrlKey: true })
+  expect(fallback).toHaveBeenCalledOnce()
+  expect(document.activeElement).toBe(grid)
+  grid.remove()
+})
+
+import { columnRuleDescription } from '../src/components/xlsx/GridHeaders'
+it('describes committed date conditions with zero-padded ISO dates', () => {
+  expect(columnRuleDescription({ kind: 'date', op: 'between', first: { year: 2026, month: 1, day: 2 }, second: { year: 2026, month: 10, day: 9 } })).toBe('Between 2026-01-02 through 2026-10-09')
+})
