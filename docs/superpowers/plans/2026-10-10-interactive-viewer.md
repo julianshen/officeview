@@ -99,7 +99,8 @@ Every package is implemented on its own branch, reviewed by at least one agent f
 | S3.1/S3.2 structural index and operation guard (pure parts: `structure.ts`, `operationGuard.ts`; parser/drawing/spill wiring open) | merged |
 | S4.1 resident worker protocol/session (`src/worker/viewer*.ts`; temporary object-backed source until S1.2) | merged |
 | S7.1 range detection/header policy/admission (`src/xlsx/view/rangeDetection.ts`) | merged |
-| S1.2, S1.3, S2.3, S4.2–S4.5, S5, S6, S8.2, S8.3, S9, S10, S11/S12 status, S13 | not started |
+| S1.1a, S2.3, S4.2, S8.2, S8.3, S8.5, value-search spike | in progress (implementation or review rounds on their own branches) |
+| S1.1b, S1.2, S1.3, S4.3–S4.5, S5, S6, S9, S10 (physical-device receipts skipped for now by user decision), S11/S12 status, S13 | not started |
 
 ## S0 — Freeze contracts, counterexamples and fixture/harness infrastructure
 
