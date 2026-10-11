@@ -8,6 +8,7 @@ import {
   declaredAutoFilterBuilder,
   declaredSortStateBuilder,
   hasDeclaredFiltering,
+  MAX_DECLARED_BYTES,
   parseDeclaredRef,
   sortByOf,
   summarizeDeclaredFiltering,
@@ -533,5 +534,33 @@ describe('pi round-3 findings', () => {
     expect(conditions[1]).toMatchObject({ sortBy: 'unknown', sortByVerbatim: 'strokeCount', malformed: 'invalid-sortBy' })
     expect(conditions[2].sortBy).toBe('value')
     expect(conditions[2].malformed).toBeUndefined()
+  })
+})
+
+describe('pi round-4 findings', () => {
+  const manySheets = (n: number, sheetInner: string): Record<string, string> => {
+    const files: Record<string, string> = {
+      'xl/workbook.xml': `<?xml version="1.0" encoding="UTF-8"?><workbook xmlns="${NS_MAIN}" xmlns:r="${NS_R}"><sheets>${Array.from({ length: n }, (_, i) => `<sheet name="S${i}" sheetId="${i + 1}" r:id="rId${i + 1}"/>`).join('')}</sheets></workbook>`,
+      'xl/_rels/workbook.xml.rels': `<?xml version="1.0" encoding="UTF-8"?><Relationships xmlns="${NS_REL}">${Array.from({ length: n }, (_, i) => `<Relationship Id="rId${i + 1}" Type="${NS_R}/worksheet" Target="worksheets/sheet${i + 1}.xml"/>`).join('')}</Relationships>`,
+    }
+    for (let i = 0; i < n; i++) files[`xl/worksheets/sheet${i + 1}.xml`] = sheetWrap(sheetInner)
+    return files
+  }
+  // Uncharged per-sheet wrappers (sheetId, name, partPath) plus one record of overshoot.
+  const slack = 4096
+
+  it('1 charges flags added by finish validation (repeating colIds)', async () => {
+    const wide = Array.from({ length: 1024 }, (_, i) => `<filterColumn colId="${i % 3}"><filters><filter val="a"/></filters></filterColumn>`).join('')
+    const doc = await parseFiles(manySheets(9, `<autoFilter ref="A1:C3">${wide}</autoFilter>`))
+    const retained = doc.declaredFilters!.reduce((sum, d) => sum + d.worksheetAutoFilter!.columns.length, 0)
+    expect(retained).toBeGreaterThan(0)
+    expect(JSON.stringify(doc.declaredFilters).length).toBeLessThanOrEqual(MAX_DECLARED_BYTES + slack)
+  })
+
+  it('1 stays within budget for large flagged records', async () => {
+    const custom = `<customFilters><customFilter val="${'v'.repeat(256)}"/><customFilter val="${'w'.repeat(256)}"/></customFilters>`
+    const wide = Array.from({ length: 1024 }, (_, i) => `<filterColumn colId="${i % 3}">${custom}</filterColumn>`).join('')
+    const doc = await parseFiles(manySheets(9, `<autoFilter ref="A1:C3">${wide}</autoFilter><sortState ref="A1:C3"><sortCondition ref="A1:A3"/></sortState>`))
+    expect(JSON.stringify(doc.declaredFilters).length).toBeLessThanOrEqual(MAX_DECLARED_BYTES + slack)
   })
 })
