@@ -87,25 +87,26 @@ describe('xlsx print setup', () => {
       }) as unknown as CanvasRenderingContext2D
       return { ctx, calls: () => calls }
     }
-    test('a full-sheet run over the page budget is refused before painting', () => {
+    test('a full-run page quota is reported, but one bounded page is still admitted', () => {
       // Inside the 16,384 x 4,096 grid, but ~139k Letter pages at 100%.
       const sheet = handBuilt(16_383, 4_095)
       const m = computeMetrics(sheet)
-      expect(m.exportLimits).toBeUndefined()
+      expect(m.exportLimits?.some(limit => limit.resource === 'rows' || limit.resource === 'cols')).toBeFalsy()
       const print = computePrintMetrics(sheet, m, 96)
       expect(print.pagesWide * print.pagesTall).toBeGreaterThan(STATIC_SHEET_BUDGET.maxPrintPages)
       expect(print.exportLimits).toEqual([expect.objectContaining({ code: 'large-export-limit', resource: 'pages', limit: STATIC_SHEET_BUDGET.maxPrintPages })])
       const out = counting()
-      expect(() => renderPrintPage(sheet, out.ctx, m, print)).toThrow(StaticExportLimitError)
-      expect(out.calls()).toBe(0)
+      expect(() => renderPrintPage(sheet, out.ctx, m, print)).not.toThrow()
+      expect(out.calls()).toBeGreaterThan(0)
     })
-    test('a sheet beyond the static grid cannot print as if complete', () => {
+    test('a sheet beyond the static grid prints bounded pages but refuses the truncated edge page', () => {
       const sheet = handBuilt(16_385, 0)
       const m = computeMetrics(sheet)
       const print = computePrintMetrics(sheet, m, 96)
       expect(print.exportLimits).toEqual([expect.objectContaining({ resource: 'rows', requested: 16_386, limit: STATIC_SHEET_BUDGET.maxGridRows })])
+      expect(() => renderPrintPage(sheet, counting().ctx, m, print, 0, 0)).not.toThrow()
       const out = counting()
-      expect(() => renderPrintPage(sheet, out.ctx, m, print)).toThrow(StaticExportLimitError)
+      expect(() => renderPrintPage(sheet, out.ctx, m, print, 0, print.pagesTall - 1)).toThrow(StaticExportLimitError)
       expect(out.calls()).toBe(0)
     })
     test('a page outside the page grid is rejected instead of painting a blank page', async () => {

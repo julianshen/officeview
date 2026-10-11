@@ -1,10 +1,14 @@
 import { describe, expect, test } from 'vitest'
 import { createCanvas } from 'canvas'
-import { computeMetrics, renderSheet, renderSheetViewport, StaticExportLimitError } from '../src/xlsx/render'
+import JSZip from 'jszip'
+import { computeMetrics, renderSheet, renderSheetViewport, STATIC_SHEET_BUDGET, StaticExportLimitError } from '../src/xlsx/render'
+import { OfficePackage } from '../src/core/zip'
+import { parseXlsx } from '../src/xlsx/parse'
+import { buildXlsx } from '../src/testdata/ooxml-builders'
 import { getPaintables } from '../src/render/paint'
-import { AXIS_ERROR_DIAGNOSTICS, buildSheetGeometry, planViewport, VIEWPORT_DETAIL_LIMITS, type SheetGeometry } from '../src/xlsx/view/viewport'
+import { AXIS_ERROR_DIAGNOSTICS, buildSheetGeometry, planViewport, sheetBaseHidden, VIEWPORT_DETAIL_LIMITS, type SheetGeometry } from '../src/xlsx/view/viewport'
 import { createRowOrder } from '../src/xlsx/view/order'
-import { createRowVisibility } from '../src/xlsx/view/visibility'
+import { createIntervalSet, createRowVisibility, visibilityFromHidden } from '../src/xlsx/view/visibility'
 import type { AxisMetricsErrorCode } from '../src/xlsx/view/axes'
 import { MAX_COLS, MAX_ROWS } from '../src/xlsx/view/coordinates'
 import type { LogicalViewport } from '../src/xlsx/view/contracts'
@@ -68,7 +72,7 @@ describe('static path never aliases a capped coordinate to the origin', () => {
     const { ctx, find } = recorder()
     let error: unknown
     try {
-      renderSheet(beyondCapSheet(), ctx, undefined, undefined, {}, { x: 0, y: 0, width: 320, height: 200 })
+      renderSheet(beyondCapSheet(), ctx)
     } catch (caught) { error = caught }
     expect(find('BeyondCap')).toEqual([])
     expect(error).toBeInstanceOf(StaticExportLimitError)
@@ -77,9 +81,9 @@ describe('static path never aliases a capped coordinate to the origin', () => {
   test('computeMetrics reports the retained grid instead of silently clamping', () => {
     const m = computeMetrics(beyondCapSheet())
     expect(m.rowHeightsPx).toHaveLength(16_384)
-    expect(m.exportLimits).toEqual([expect.objectContaining({ code: 'large-export-limit', resource: 'rows', requested: 16_386, limit: 16_384 })])
+    expect(m.exportLimits).toEqual(expect.arrayContaining([expect.objectContaining({ code: 'large-export-limit', resource: 'rows', requested: 16_386, limit: 16_384 })]))
     const edge = computeMetrics(sheetOf([{ index: 0, cells: [cell(0, MAX_COLS - 1, 'EdgeCol')] }]))
-    expect(edge.exportLimits).toEqual([expect.objectContaining({ resource: 'cols', requested: MAX_COLS, limit: 4096 })])
+    expect(edge.exportLimits).toEqual(expect.arrayContaining([expect.objectContaining({ resource: 'cols', requested: MAX_COLS, limit: 4096 })]))
     expect(computeMetrics(sheetOf([{ index: 0, cells: [cell(0, 0, 'A')] }])).exportLimits).toBeUndefined()
   })
   test('caller-supplied metrics that do not cover a cell are refused too', () => {
@@ -92,14 +96,14 @@ describe('static path never aliases a capped coordinate to the origin', () => {
     const sheet = beyondCapSheet()
     const units = await getPaintables({ sheets: [sheet, sheetOf([{ index: 0, cells: [cell(0, 0, 'Fine')] }])] })
     try {
-      expect(units[0].refusal).toEqual([expect.objectContaining({ code: 'large-export-limit', resource: 'rows' })])
+      expect(units[0].refusal).toEqual(expect.arrayContaining([expect.objectContaining({ code: 'large-export-limit', resource: 'rows' })]))
       expect(units[1].refusal).toBeUndefined()
       const { ctx, find, texts } = recorder(units[0].spec.widthPx, units[0].spec.heightPx)
       units[0].paint(ctx)
       expect(find('BeyondCap')).toEqual([])
       expect(find('Origin')).toEqual([])
       expect(texts.some(item => /too large/i.test(item.text))).toBe(true)
-      expect(sheet.diagnostics).toEqual([expect.objectContaining({ kind: 'large-export-limit', feature: 'large-export-limit' })])
+      expect(sheet.diagnostics).toEqual(expect.arrayContaining([expect.objectContaining({ kind: 'large-export-limit', feature: 'large-export-limit' })]))
     } finally { units.dispose() }
   })
 })
@@ -278,5 +282,157 @@ describe('authored-hidden rows and columns collapse unconditionally', () => {
     const geometry = ready(sheet)
     expect(geometry.metrics.rows.size(0)).toBe(20)
     expect(geometry.diagnostics).toEqual(expect.arrayContaining([expect.objectContaining({ code: 'conflicting-row-metadata' })]))
+  })
+})
+
+describe('review round 1 (Codex findings)', () => {
+  async function parsedSheet(rows: Parameters<typeof buildXlsx>[0][0]['rows'], patch: (xml: string) => string = xml => xml, extra: Partial<Parameters<typeof buildXlsx>[0][0]> = {}): Promise<XlsxSheet> {
+    const bytes = await buildXlsx([{ name: 'S', rows, ...extra }])
+    const zip = await JSZip.loadAsync(bytes)
+    const path = 'xl/worksheets/sheet1.xml'
+    zip.file(path, patch(await zip.file(path)!.async('string')))
+    return (await parseXlsx(await OfficePackage.load(await zip.generateAsync({ type: 'uint8array' })))).sheets[0]
+  }
+  test('F1: a <row> without r keeps its cell at the explicit A16386 reference', async () => {
+    const sheet = await parsedSheet([
+      { r: 1, cells: [{ ref: 'A1', v: 1 }] },
+      { r: 16386, cells: [{ ref: 'A16386', v: 7 }] },
+    ], xml => xml.replace('<row r="16386">', '<row>'))
+    expect(sheet.rows[1].index).toBe(0)
+    expect(sheet.rows[1].cells[0].row).toBe(16_385)
+    const geometry = ready(sheet)
+    expect(geometry.diagnostics).toEqual(expect.arrayContaining([expect.objectContaining({ code: 'inconsistent-row-coordinate' })]))
+    const origin = recorder()
+    renderSheetViewport(sheet, origin.ctx, geometry, view(0, 0))
+    expect(origin.find('7')).toEqual([])
+    const far = recorder()
+    renderSheetViewport(sheet, far.ctx, geometry, view(0, 16_385 * 20 - 40))
+    // Painted inside its own row band (the parsed default style is 11pt, not 10pt).
+    expect(far.find('7')).toHaveLength(1)
+    expect(far.find('7')[0].y).toBeGreaterThan(40)
+    expect(far.find('7')[0].y).toBeLessThan(60)
+    const m = computeMetrics(sheet)
+    expect(m.exportLimits).toEqual(expect.arrayContaining([expect.objectContaining({ resource: 'rows', requested: 16_386 })]))
+    expect(m.diagnostics).toEqual(expect.arrayContaining([expect.objectContaining({ code: 'inconsistent-row-coordinate' })]))
+  })
+  test('F2: a full-sheet raster beyond the pixel budget is refused before allocation', async () => {
+    const big = sheetOf([{ index: 999, cells: [cell(999, 999, 'Far')] }])
+    const m = computeMetrics(big)
+    expect(m.exportLimits).toEqual(expect.arrayContaining([expect.objectContaining({ code: 'large-export-limit', resource: 'pixels', limit: STATIC_SHEET_BUDGET.maxSidePx })]))
+    expect(() => renderSheet(big, recorder().ctx)).toThrow(StaticExportLimitError)
+    const units = await getPaintables({ sheets: [big] })
+    try { expect(units[0].refusal).toEqual(expect.arrayContaining([expect.objectContaining({ resource: 'pixels' })])) } finally { units.dispose() }
+    const drawing = { ...sheetOf([{ index: 0, cells: [cell(0, 0, 'A1')] }]), drawings: [{ xEmu: 20_000 * 9525, yEmu: 0, widthEmu: 9525 * 10, heightEmu: 9525 * 10, geometry: 'rect' as const, fill: 'FF0000', source: { partPath: 'd', treePath: 't', element: 'sp', representation: 'native' as const } }] }
+    const clamped = computeMetrics(drawing)
+    expect(clamped.retainedDrawingBounds!.right).toBeLessThan(clamped.requestedDrawingBounds!.right)
+    expect(clamped.exportLimits).toEqual(expect.arrayContaining([expect.objectContaining({ resource: 'pixels' })]))
+  })
+  test('F3: a canonical visibility mask can reveal an authored-hidden row', () => {
+    const sheet = sheetOf([
+      { index: 0, cells: [cell(0, 0, 'A1')] },
+      { index: 1, hidden: true, cells: [cell(1, 0, 'Revealed')] },
+    ])
+    expect(sheetBaseHidden(sheet).intervals).toEqual([{ r0: 1, r1: 1 }])
+    const revealed = ready(sheet, { visibility: visibilityFromHidden(createIntervalSet([]), MAX_ROWS) })
+    expect(revealed.metrics.rows.size(1)).toBe(20)
+    const out = recorder()
+    renderSheetViewport(sheet, out.ctx, revealed, view(0, 0))
+    expect(out.find('Revealed')).toEqual([{ text: 'Revealed', x: PAD, y: expect.closeTo(20 + BASELINE, 6) }])
+    const snapshot = ready(sheet, { visibility: visibilityFromHidden(sheetBaseHidden(sheet), MAX_ROWS) })
+    expect(snapshot.metrics.rows.size(1)).toBe(0)
+  })
+  test('F4: detail needs four device pixels per visible row/column; tiny positive sizes survive', () => {
+    const onePx = sheetOf(Array.from({ length: 10 }, (_, index) => ({ index, heightPt: 0.75, customHeight: true, cells: [cell(index, 0, `r${index}`)] })))
+    const geometry = ready(onePx)
+    expect(geometry.metrics.rows.size(0)).toBe(1)
+    const at = (zoom: number, deviceScale: number) => planViewport(geometry, { box: { x: 0, y: 0, width: 320, height: 200 }, zoom, deviceScale })
+    expect(at(0.25, 1)).toMatchObject({ kind: 'coarse', diagnostics: [expect.objectContaining({ code: 'detail-limit' })] })
+    expect(at(4, 1).kind).toBe('detail')
+    const tiny = ready(sheetOf([{ index: 0, cells: [cell(0, 0, 'A1')] }, { index: 1, heightPt: 0.3, customHeight: true, cells: [cell(1, 0, 'Tiny')] }]))
+    expect(tiny.metrics.rows.size(1)).toBeCloseTo(0.4, 12)
+    expect(planViewport(tiny, { box: { x: 0, y: 0, width: 320, height: 200 }, zoom: 4, deviceScale: 3 }).kind).toBe('detail')
+    expect(planViewport(tiny, { box: { x: 0, y: 0, width: 320, height: 200 }, zoom: 1, deviceScale: 1 }).kind).toBe('coarse')
+    expect(planViewport(tiny, { box: { x: 0, y: 0, width: 320, height: 200 }, zoom: Number.NaN, deviceScale: 1 })).toMatchObject({ kind: 'diagnostic', diagnostics: expect.arrayContaining([expect.objectContaining({ code: 'axis-invalid-query' })]) })
+  })
+  test('F5: an over-budget frame is refused before any cell content is read', () => {
+    // value reads = content access; col reads = per-cell visits (index probes are logarithmic).
+    let reads = 0, visits = 0
+    const counted = (row: number, col: number): XlsxCell => {
+      const base = cell(row, col, 'x')
+      Object.defineProperty(base, 'value', { get() { reads++; return 'x' }, enumerable: true })
+      return Object.defineProperty(base, 'col', { get() { visits++; return col }, enumerable: true }) as XlsxCell
+    }
+    const rows: XlsxRow[] = Array.from({ length: 100 }, (_, r) => ({ index: r, cells: Array.from({ length: 400 }, (_, c) => counted(r, c)) }))
+    const sheet = sheetOf(rows)
+    const geometry = ready(sheet)
+    reads = 0
+    visits = 0
+    const plan = planViewport(geometry, view(0, 0, 400 * 64, 100 * 20))
+    expect(plan).toMatchObject({ kind: 'coarse', diagnostics: [expect.objectContaining({ code: 'detail-limit' })] })
+    expect(reads).toBe(0)
+    // 100 rows x ~2 binary searches over 400 cells, never the 20,000 cells before refusal.
+    expect(visits).toBeLessThan(100 * 40)
+  })
+  test('F5: a small pane paints only the drawings that intersect it', () => {
+    let fills = 0
+    const node = (xPx: number, yPx: number) => Object.defineProperty({ xEmu: xPx * 9525, yEmu: yPx * 9525, widthEmu: 20 * 9525, heightEmu: 10 * 9525, geometry: 'rect', source: { partPath: 'd', treePath: 't', element: 'sp', representation: 'native' } }, 'fill', { get() { fills++; return 'FF0000' }, enumerable: true })
+    const drawings = [node(10, 5), ...Array.from({ length: 5000 }, (_, i) => node(100_000 + i * 30, 500_000))]
+    const sheet = { ...sheetOf([{ index: 0, cells: [] }]), drawings } as XlsxSheet
+    const geometry = ready(sheet)
+    fills = 0
+    const out = recorder(64, 20)
+    renderSheetViewport(sheet, out.ctx, geometry, view(0, 0, 64, 20))
+    expect(fills).toBeGreaterThan(0)
+    expect(fills).toBeLessThan(10)
+  })
+  test('F6: boundary instances are coalesced and admitted at their real count', () => {
+    const rows: XlsxRow[] = Array.from({ length: 4000 }, (_, index) => ({ index, hidden: index % 2 === 1, cells: [] }))
+    const geometry = ready(sheetOf(rows))
+    const plan = planViewport(geometry, view(0, 0, 320, 2000 * 20), 'M')
+    if (plan.kind !== 'detail') throw new Error(`expected detail, got ${plan.kind}`)
+    expect(new Set(plan.rowLines).size).toBe(plan.rowLines.length)
+    expect(plan.rowLines.length + plan.colLines.length).toBeLessThanOrEqual(VIEWPORT_DETAIL_LIMITS.M.gridlines)
+    const over = planViewport(geometry, view(0, 0, 320, 2050 * 20), 'M')
+    expect(over.kind).toBe('coarse')
+  })
+  test('F7: merge extents are part of the static grid and refuse when uncovered', () => {
+    const tall = { ...sheetOf([{ index: 0, cells: [cell(0, 0, 'Anchor')] }]), merges: ['A1:A20001'], mergeRanges: [{ minRow: 0, minCol: 0, maxRow: 20_000, maxCol: 0 }] }
+    expect(computeMetrics(tall).exportLimits).toEqual(expect.arrayContaining([expect.objectContaining({ resource: 'rows', requested: 20_001 })]))
+    const short = { ...sheetOf([{ index: 0, cells: [cell(0, 0, 'Anchor')] }]), merges: ['A1:B5'], mergeRanges: [{ minRow: 0, minCol: 0, maxRow: 4, maxCol: 1 }] }
+    const m = computeMetrics(short)
+    expect(m.exportLimits).toBeUndefined()
+    expect([m.rowHeightsPx.length, m.colWidthsPx.length]).toEqual([5, 2])
+    expect([m.widthPx, m.heightPx]).toEqual([128, 100])
+  })
+  test('F8: a bounded static viewport is admitted when it needs no uncovered coordinate', () => {
+    const sheet = beyondCapSheet()
+    const small = recorder(64, 20)
+    expect(() => renderSheet(sheet, small.ctx, undefined, undefined, {}, { x: 0, y: 0, width: 64, height: 20 })).not.toThrow()
+    expect(small.find('Origin')).toHaveLength(1)
+    expect(small.find('BeyondCap')).toEqual([])
+    const edge = recorder(64, 60)
+    expect(() => renderSheet(sheet, edge.ctx, undefined, undefined, {}, { x: 0, y: 16_384 * 20 - 20, width: 64, height: 60 })).toThrow(StaticExportLimitError)
+    expect(edge.find('BeyondCap')).toEqual([])
+  })
+  test('F9: text overflowing from a cell left of the pane is part of the crop', () => {
+    const sheet = sheetOf([{ index: 0, cells: [cell(0, 0, 'A long label that overflows across several columns')] }, { index: 3, cells: [cell(3, 3, 'D4')] }])
+    const m = computeMetrics(sheet)
+    const full = createCanvas(m.widthPx + 400, 200)
+    renderSheet(sheet, full.getContext('2d') as never, { ...m, widthPx: m.widthPx + 400, heightPx: 200 })
+    const box = { x: 64, y: 0, width: 150, height: 60 }
+    const pane = createCanvas(box.width, box.height)
+    renderSheetViewport(sheet, pane.getContext('2d') as never, ready(sheet), { box, zoom: 1, deviceScale: 1 })
+    const a = full.getContext('2d').getImageData(box.x, box.y, box.width, box.height).data
+    const b = pane.getContext('2d').getImageData(0, 0, box.width, box.height).data
+    let diff = 0
+    for (let i = 0; i < a.length; i += 4) if (a[i] !== b[i] || a[i + 1] !== b[i + 1] || a[i + 2] !== b[i + 2]) diff++
+    expect(diff).toBe(0)
+  })
+  test('F10: empty caller-supplied refusal metadata does not bypass coverage', () => {
+    const sheet = beyondCapSheet()
+    const m = computeMetrics(sheet)
+    const out = recorder()
+    expect(() => renderSheet(sheet, out.ctx, { ...m, exportLimits: [] })).toThrow(StaticExportLimitError)
+    expect(out.find('BeyondCap')).toEqual([])
   })
 })
