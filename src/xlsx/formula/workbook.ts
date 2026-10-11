@@ -9,6 +9,10 @@ import { decideCellCalculation, isWhatIfDataTable, type CalcMode, type CalcPolic
 import { canonicalOrder, findCyclicCells, ITERATIVE_PASS_HARD_CAP, runBoundedPasses, transitiveDependents } from './iterative'
 import type { XlsxCell, XlsxDocument, XlsxSheet } from '../types'
 import { savedSpillFollowers } from './saved-spills'
+import { workbookValuePolicy } from './value-policy'
+
+/** Per-document value policy (spec §4.4): cached documents never reach the evaluator. */
+export { markSavedValuesOnly, workbookValuePolicy, type WorkbookValuePolicy } from './value-policy'
 
 /** Monotonic reference generation: each recalculation invalidates old cursors. */
 let workbookReferenceGeneration = 0
@@ -343,6 +347,9 @@ export function evaluateWorkbookFormulas(
   doc: XlsxDocument,
   options?: WorkbookEvaluationOptions
 ): void {
+  if (workbookValuePolicy(doc) === 'cached') {
+    throw new RangeError('This workbook shows saved values only; its formulas are never evaluated')
+  }
   // Cheap early-exit: skip evaluation work entirely when no cell has a formula.
   // A what-if `<f t="dataTable"/>` may carry no formula text at all; it is
   // still unsupported and must be diagnosed, so the actual what-if type keeps

@@ -57,7 +57,7 @@ export async function openLargeBlob(blob: Blob, docId: string, options: LargeOpe
   }
   const source = createPagedWorkbookSource(session)
   if (refusedEarly) {
-    return { kind: 'paged', source: { ...source, openDiagnostics: [{ code: PAGED_UNSUPPORTED_DIAGNOSTIC, message: `This large file uses a layout the large-file reader does not support yet (${early.failure.message})` }] } }
+    return { kind: 'paged', source: { ...source, openDiagnostics: [...(source.openDiagnostics ?? []), { code: PAGED_UNSUPPORTED_DIAGNOSTIC, message: `This large file uses a layout the large-file reader does not support yet (${early.failure.message})` }] } }
   }
   return { kind: 'paged', source }
 }

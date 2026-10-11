@@ -14,7 +14,8 @@ import type {
   RangeCompletion, ReadOptions, SingleCellPayload, SourceFailure, SourceRowInterval, SourceStamp, SourceStore,
   SparseRowPage, StructuralResult, ValuePolicy, WorkerDiagnostic,
 } from './contracts'
-import { LANE_BLANK, LANE_BOOLEAN, LANE_ERROR, LANE_NUMBER, LANE_STRING, LANE_UNAVAILABLE, type ColumnLanes } from './contracts'
+import type { ColumnLanes } from './contracts'
+import { countLoadEvaluatedFormulas, documentValuePolicy, isValueUnavailable, laneValue, SAVED_VALUES_DIAGNOSTIC, valueAuthority, valueStatus } from './values'
 import type { XlsxCell, XlsxDocument, XlsxRow, XlsxSheet } from '../types'
 import type { TableMetadata } from '../formula/types'
 import { MAX_COLS, MAX_ROWS, cellId, isValidCoordinate, isValidSourceRect, parseA1, type SourceRect } from './coordinates'
@@ -40,15 +41,15 @@ const DEFAULT_COL_CSS = 64
 
 const isPopulated = (cell: XlsxCell): boolean => cell.value !== null || cell.formula !== undefined
 /** Under 'cached' a formula without a saved value is permanently unavailable (§4.4). */
-const isUnavailable = (cell: XlsxCell, policy: ValuePolicy): boolean =>
-  policy === 'cached' && (cell.formula !== undefined || cell.sharedFormula !== undefined) && cell.hasCachedValue !== true
+const isUnavailable = (cell: XlsxCell, policy: ValuePolicy): boolean => isValueUnavailable(cell, policy)
 function toPayload(cell: XlsxCell, policy: ValuePolicy = 'engine'): SingleCellPayload {
+  const authority = valueAuthority(cell, policy)
   const payload: SingleCellPayload = {
-    id: cellId(cell.row, cell.col), row: cell.row, col: cell.col, value: cell.value, styleIndex: cell.styleIndex,
-    valueProvenance: policy,
+    id: cellId(cell.row, cell.col), row: cell.row, col: cell.col, value: authority.value, styleIndex: cell.styleIndex,
+    valueProvenance: authority.provenance,
   }
   if (cell.hasCachedValue !== undefined) payload.hasCachedValue = cell.hasCachedValue
-  if (cell.valueIsError !== undefined) payload.valueIsError = cell.valueIsError
+  if (cell.valueIsError !== undefined) payload.valueIsError = authority.valueIsError
   if (cell.formula !== undefined) payload.formula = cell.formula
   if (cell.sharedFormula !== undefined) payload.sharedFormula = { ...cell.sharedFormula }
   if (cell.arrayRef !== undefined) payload.arrayRef = cell.arrayRef
@@ -72,14 +73,7 @@ export class LaneBuilder {
   get count(): number { return this.rows.length }
   /** Same classification as the value index's cell-entry path (valueIndex.place). */
   add(row: number, value: string | number | boolean | null | undefined, valueIsError: boolean | undefined, styleIndex: number, unavailable: boolean): void {
-    let tag: number, num = 0, text = ''
-    if (unavailable) tag = LANE_UNAVAILABLE
-    else if (valueIsError) { tag = LANE_ERROR; text = String(value) }
-    else if (value === null || value === undefined) tag = LANE_BLANK
-    else if (typeof value === 'number') {
-      if (Number.isFinite(value)) { tag = LANE_NUMBER; num = value } else { tag = LANE_ERROR; text = '#NUM!' }
-    } else if (typeof value === 'boolean') { tag = LANE_BOOLEAN; num = value ? 1 : 0 }
-    else { tag = LANE_STRING; text = value }
+    const { tag, num, text } = laneValue(value, valueIsError, unavailable)
     this.rows.push(row); this.tags.push(tag); this.numbers.push(num); this.styles.push(styleIndex); this.texts.push(text)
     this.textUnits += text.length
   }
@@ -430,7 +424,12 @@ export { toPayload, isUnavailable, isPopulated, intersects, parseRange }
 export const invalidMergeDiagnostic = (n: number): WorkerDiagnostic => ({ code: 'invalid-merge-ref', message: `Ignored ${n} merge${n === 1 ? '' : 's'} with an unreadable range` })
 export function createObjectWorkbookSource(doc: XlsxDocument, docId: string, options: ObjectSourceOptions = {}): WorkbookSource {
   const maxCells = options.readRowsMaxCells ?? READ_ROWS_MAX_CELLS
-  const policy = options.valuePolicy ?? 'engine'
+  // The document's own policy decides (§4.4: one policy per document, never
+  // mixed); an explicit option may only restate it.
+  const policy = documentValuePolicy(doc)
+  if (options.valuePolicy !== undefined && options.valuePolicy !== policy) {
+    throw new RangeError(`A document parsed under the '${policy}' value policy cannot be served as '${options.valuePolicy}'`)
+  }
   if (!Number.isSafeInteger(maxCells) || maxCells <= 0) throw new RangeError('Invalid readRows cell bound')
   const sheets = doc.sheets.map((sheet, index) => ({ sheet, sheetId: sheet.sheetId ?? String(index + 1) }))
   const ids = new Set<string>()
@@ -455,8 +454,11 @@ export function createObjectWorkbookSource(doc: XlsxDocument, docId: string, opt
     }
     return store
   }
+  const status = valueStatus(policy, countLoadEvaluatedFormulas(doc))
   return {
     valuePolicy: policy,
+    valueStatus: () => status,
+    ...(status.message === undefined ? {} : { openDiagnostics: Object.freeze([{ code: SAVED_VALUES_DIAGNOSTIC, message: status.message }]) }),
     sheets: Object.freeze(sheets.map(({ sheet, sheetId }) => Object.freeze({ sheetId, name: sheet.name }))),
     store: storeFor,
     geometry(sheetId) {

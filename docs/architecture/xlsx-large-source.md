@@ -1251,3 +1251,80 @@ other than headless Chromium 155; the IndexedDB composed-Blob read path; page en
 (all runs are single-threaded processes, not Workers); Chrome RSS precision (process-tree RSS sampled at 250 ms, quoted only as
 deltas); browser heap for the admission envelope (the element/attribute/text coefficients are Bun/JSC and Node/V8 process
 measurements of the legacy path); Safari/Firefox native `DecompressionStream` termination behavior.
+
+## 9. Value policy and the formula/cache bridge (S1.3, spec §4.4)
+
+### 9.1 Decision
+
+Every document carries exactly one value policy, fixed at admission and never mixed:
+
+| Policy | Documents | Source of a formula cell's value |
+|---|---|---|
+| `engine` | admitted small documents (`ObjectXlsxSheetAdapter`) | the existing evaluator's published `cell.value`, `hasCachedValue`, `valueIsError` and calc policy, unchanged |
+| `cached` | paged documents (`PagedXlsxSheetAdapter`) and saved-values fallbacks (decision 2: evaluation reserve does not fit, or an evaluator resource cap trips) | the file's saved `<v>`, provenance `cached`; **no evaluator runs** |
+
+Mechanics:
+
+- `parseXlsx(pkg, { valuePolicy: 'cached' })` skips evaluation and stamps `valuePolicy: 'cached'` on the document
+  (`src/xlsx/formula/value-policy.ts`, re-exported by `formula/workbook.ts`). Engine documents carry no flag, so their parse output
+  is byte-identical to before S1.3. The flag is a plain own property so it survives structured cloning to the worker.
+  `evaluateWorkbookFormulas` throws on a flagged document: nothing can recalculate saved values by accident.
+- `createObjectWorkbookSource` takes the policy from the document. An explicit `valuePolicy` option may only restate it; a
+  mismatch is a `RangeError`. (Before S1.3 the worker wrapped every object document as `engine`, so a saved-values fallback served
+  its uncached formulas as blank cells.) The paged source is always `cached`; the paged importer never imports the evaluator.
+- `src/xlsx/view/values.ts` is the single authority both adapters call: `isValueUnavailable`, `valueAuthority` (value, provenance,
+  `valueIsError`, `unavailable`) and `laneValue` (typed-lane classification). Under `cached`, a formula (formula text or a
+  shared-formula reference) without a saved value is `unavailable`: its value is withheld (`null`, `valueIsError: false`), it is
+  never blank, zero or an error, and it is permanent (distinct from `unknown`, which is a page not yet imported).
+- Refusals: sort (`sort.ts`) and filter (`viewerSession.filter`, through `scanValueDomain` over the rule columns' body band)
+  refuse with `formula-value-unavailable`, the count and the row-major first address, **only** when the key/value domain contains
+  unavailable cells. Unavailable cells in other columns never block. Header detection (`rangeDetection.ts`) refuses the same way
+  for its probed rows. Search reports them as `unavailableCount`.
+- Status: `savedValuesStatus(policy, n)` returns nothing for `engine`; for `cached` it returns the user-approved
+  "Showing saved values — N formulas not recalculated (file too large)" when the formula count is known and the spec wording
+  "Showing saved values; formulas are not recalculated" otherwise. Object cached sources and paged sources put it in the open
+  reply's diagnostics (code `cached-value-policy`, the same feature code the loader uses for its document notice, so a
+  consumer renders exactly one) and expose `WorkbookSource.valueStatus()`; the paged count (`PagedWorkbook.formulaRecords`)
+  is final once the import completes. `largeSource.ts` builds its notice with the same helper. Rendering it in the status line and
+  accessible description is S5.2's integration.
+- N (decided 2026-10-12, coordinator Q1): the formulas the engine **would have evaluated at load** and the user therefore loses:
+  uncached, `ca="1"`, volatile (`NOW`, `RAND`, `OFFSET`, `INDIRECT`, ...), or every formula under `fullCalcOnLoad`. One predicate,
+  `isLoadEvaluated` in `values.ts`, drives admission's `loadEvaluatedFormulas` counter (`sheetRecords.ts`), the paged importer's
+  `PagedWorkbook.loadEvaluatedFormulas`, `countLoadEvaluatedFormulas` for object documents and the `largeSource.ts` notice.
+
+### 9.2 Enumerated engine-versus-cached differences
+
+Adapter parity is asserted **within** `cached` only (`tests/xlsx-viewer-adapter-parity.test.ts`); across policies these cases
+differ by design and each is pinned by a fixture, never asserted equal:
+
+1. A supported formula with no saved value: `engine` publishes the computed value; `cached` is `unavailable` and blocks sort/filter
+   on its column.
+2. `fullCalcOnLoad="1"` over a stale cache: `engine` recalculates; `cached` shows the saved value.
+3. A `ca="1"` (calculate-always) formula with a cache: `engine` re-evaluates at load; `cached` shows the saved value.
+4. Volatile functions (`NOW()`, `RAND()`, ...) without a cache follow case 1; with a cache, `engine`'s file-load policy already keeps
+   the cache unless case 2/3 applies, so both show the saved value.
+5. Dynamic-array anchors: `engine` may republish the spill from the evaluator; `cached` serves the saved anchor value and the saved
+   child records (children carry no formula, so they are never `unavailable`; a child without a saved value is a blank record).
+6. Provenance always differs (`engine` vs `cached`), even where the value agrees (a cache both policies keep).
+
+Unchanged under both: error tokens (`t="e"`) versus error-looking text (`t="str"`/shared/inline `#VALUE!`), booleans, `-0`,
+style-only blanks, date serials with their style index, unsupported-function caches kept verbatim, lone UTF-16 surrogates in shared
+and inline strings, and formula text (inspectable, never rewritten).
+
+### 9.3 `valueGen`
+
+Each authoritative value publication increments `valueGen` (spec §4.4). Under the current backends the import is the single
+publication: an object document is complete before it is opened, and a paged page is immutable once committed while uncommitted
+rows read `unknown`, which no consumer caches as complete (prepared columns, sort/filter and the viewport all return
+`incomplete`/`loading` for them). So the stamp stays at `INITIAL_GENERATION` through the import and committed pages never change
+under it. View operations (sort, filter, find) only read values: they never recalculate, rewrite formulas or bump `valueGen`.
+A later publication (the evaluation bridge below) must advance the store stamp and call `DocumentSession.publishValues`, which
+already drops prepared columns, structural handles and re-derives applied sorts.
+
+### 9.4 Evaluation-bridge upgrade path (out of scope for v1)
+
+A bounded evaluator for paged documents is **not** v1 and needs its own spec amendment. It must keep this contract: the document
+policy flag stays `cached` until a complete evaluated publication exists; it adds its own resource admission (dependency closure,
+materialization cap, page budget) before running; it publishes results as a new `valueGen` with provenance `engine` per cell; and
+it never presents a partial recalculation as a ready, complete result. Until then, a "Recalculate anyway" action (plan §S9
+decision 2) is a possible later addition, not a fallback.

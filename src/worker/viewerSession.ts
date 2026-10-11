@@ -51,6 +51,7 @@ import { StructuralIndex, type PopulatedCellSource } from '../xlsx/view/structur
 import { guardFilter, guardSort, type GuardOutcome } from '../xlsx/view/operationGuard'
 import { MemoryPool, WORKER_BUDGETS, type PoolEntry } from '../xlsx/view/tileCache'
 import { INITIAL_GENERATION as INITIAL_VALUE_GEN, isUint32Array, validateBitset } from './viewerProtocol'
+import { filterValueDomain, scanValueDomain, type ValueStatus } from '../xlsx/view/values'
 
 const FULL_SHEET: SourceRect = Object.freeze({ r0: 0, r1: MAX_ROWS - 1, c0: 0, c1: MAX_COLS - 1 })
 const PREPARE_PAGE_LIMIT = 4096
@@ -150,8 +151,11 @@ export interface WorkbookSource {
   coverageDiagnostics?(sheetId: string): readonly WorkerDiagnostic[]
   /** S4.3: decoded source pages register in the session pool's `source` tier. */
   bindMemory?(pool: MemoryPool): void
-  /** Notices attached to the open reply (e.g. compatibility mode). */
+  /** Notices attached to the open reply (e.g. compatibility mode, saved values). */
   readonly openDiagnostics?: readonly WorkerDiagnostic[]
+  /** Value policy status (§4.4): the saved-values message exists only for
+   * cached documents; a paged import learns its formula count as it runs. */
+  valueStatus?(): ValueStatus
   /** S8.3 declared file filter/sort diagnostics; both adapters build identical records. */
   declaredFilters?(): readonly DeclaredSheetFilters[]
   release(): Promise<void>
@@ -388,6 +392,8 @@ export interface SessionOptions {
   /** Explicit document-wide worker budget (tests, embedders). */
   workerBudgetBytes?: number
 }
+/** Scanned value-domain entries per shared-budget charge (filter precheck). */
+const DOMAIN_SCAN_CHARGE = 256
 /** Visible display slots and the logical row axis, committed with the view. */
 export interface ViewCounts { readonly visible: number; readonly total: number }
 /** Private draft; commitDraft publishes it atomically. */
@@ -1467,6 +1473,40 @@ export class DocumentSession {
     try {
       let matches: ((row: SourceRow, filter: FilterSpec) => boolean) | undefined
       if (normalized && evaluator) {
+        // §4.4: an unavailable (cache-less formula) value inside the rule
+        // columns' body refuses the filter with its count and first address;
+        // unavailable cells elsewhere never block. Checked before any rule runs.
+        // Engine documents have no unavailable values (§4.4): nothing to scan.
+        const domain = this.source.store(owner.sheetId).valuePolicy === 'cached' ? filterValueDomain(normalized) : null
+        if (domain) {
+          const store = this.preparedStore(owner.sheetId)
+          // Its own yield budget, charged in batches of scanned entries (like
+          // the guard's 32-row words) and created on first charge: a small
+          // domain samples no clock, and the rule/guard phases keep the
+          // operation slice's accounting unchanged.
+          let scanSlice: CooperativeSlice<string> | undefined
+          let pending = 0
+          let scan: Awaited<ReturnType<typeof scanValueDomain>>
+          try {
+            scan = await scanValueDomain(store, domain, { signal, stamp: store.stamp }, async units => {
+              pending += units
+              if (pending < DOMAIN_SCAN_CHARGE) return
+              scanSlice ??= this.slice()
+              const due = scanSlice.due(pending)
+              pending = 0
+              if (due) await scanSlice.pause('filter-domain')
+            })
+          } finally { scanSlice?.dispose() }
+          const halt = this.halted(owner, signal)
+          if (halt) return halt
+          switch (scan.kind) {
+            case 'clear': break
+            case 'refused': return { kind: 'refused', refusal: scan.refusal }
+            case 'incomplete': return { kind: 'incomplete', missing: scan.missing }
+            case 'cancelled': return { kind: 'cancelled' }
+            case 'error': return scan.error.code === 'stale-source' ? { kind: 'stale' } : { kind: 'error', error: scan.error }
+          }
+        }
         const evaluation = await evaluator({ store: this.preparedStore(owner.sheetId), spec: normalized, nowMs, signal, cooperate: slice })
         if (evaluation.kind !== 'complete') return evaluation
         const halt = this.halted(owner, signal)

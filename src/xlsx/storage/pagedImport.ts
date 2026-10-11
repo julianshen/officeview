@@ -16,6 +16,7 @@ import {
   collectDeclaredTable, createDeclaredBudget, declaredContainerBuilder, declaredSheetBuilder, hasDeclaredFiltering, type DeclaredSheetFilters,
 } from '../view/declaredFilters'
 import { MAX_COLS, MAX_ROWS, parseA1, type SourceRect } from '../view/coordinates'
+import { isLoadEvaluated } from '../view/values'
 import { createQuotaLedger, quotaLimitsFor, type QuotaLedger } from './quota'
 import { classifyPart, inventoryLimits } from './admission'
 import { anchorCountEvents, newSheetMetadata, normalizeRowMetadata, sharedStringEvents, sheetRecordEvents, type SheetMetadata } from './sheetRecords'
@@ -52,6 +53,9 @@ export interface PagedWorkbook {
   readonly diagnostics: WorkerDiagnostic[]
   completeness: Completeness
   failure?: SourceFailure
+  /** Formulas the engine would have evaluated at load (values.ts `isLoadEvaluated`)
+   * seen so far; final once `completeness` is 'complete'. Feeds the saved-values status. */
+  loadEvaluatedFormulas: number
   /** Resolves on every committed page and on completion (adapters wait on it). */
   changed(): Promise<void>
 }
@@ -136,6 +140,9 @@ export async function openImportSession(source: Extract<SourceHandle, { kind: 'b
   const sstPath = inventory.find('xl/sharedStrings.xml') ? 'xl/sharedStrings.xml' : undefined
   const sheets: PagedSheet[] = []
   const workbookRoot = parseXml(workbookText)
+  const calcPrNode = getChildren(workbookRoot, 'calcPr')[0]
+  const calcPr = calcPrNode ? attrs(calcPrNode) : {}
+  const fullCalcOnLoad = calcPr.fullCalcOnLoad === '1' || calcPr.fullCalcOnLoad === 'true'
   let workbookIndex = 0
   for (const sheetNode of getChildren(getChildren(workbookRoot, 'sheets')[0], 'sheet')) {
     const a = attrs(sheetNode)
@@ -158,7 +165,7 @@ export async function openImportSession(source: Extract<SourceHandle, { kind: 'b
   let changedPromise = new Promise<void>((resolve) => { notify = resolve })
   const pulse = () => { const fire = notify; changedPromise = new Promise<void>((resolve) => { notify = resolve }); fire() }
   const workbook: PagedWorkbook = {
-    docId: options.docId, store, sheets, diagnostics: [], completeness: 'loading',
+    docId: options.docId, store, sheets, diagnostics: [], completeness: 'loading', loadEvaluatedFormulas: 0,
     changed: () => changedPromise,
   }
   const stamp: SourceStamp = { docId: options.docId, sheetId: sheets[0]?.sheetId ?? '', valueGen: 0 }
@@ -276,6 +283,9 @@ export async function openImportSession(source: Extract<SourceHandle, { kind: 'b
         declared: container,
         onCell(record) {
           builder.add(record.row, record.col, record.kind, record.styleIndex, record.num, record.text, record.cached, record.meta, record.valueIsError)
+          const meta = record.meta
+          if ((meta?.formula !== undefined || meta?.sharedFormula !== undefined)
+            && isLoadEvaluated({ cached: record.cached, calcAlways: meta.ca === true, text: meta.formula }, fullCalcOnLoad)) workbook.loadEvaluatedFormulas++
           if (record.row < r0) r0 = record.row
           if (record.row > r1) r1 = record.row
           if (record.col < c0) c0 = record.col

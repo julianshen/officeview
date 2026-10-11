@@ -16,7 +16,7 @@ import { parseWorksheetDrawings, collectXlsxImages } from './drawing'
 import { computeMetrics } from './render'
 import { resolvePartTarget } from '../drawing/parts'
 import { parseThemeContext, type ThemeContext } from '../drawing/style'
-import { evaluateWorkbookFormulas, type WorkbookEvaluationOptions } from './formula/workbook'
+import { evaluateWorkbookFormulas, markSavedValuesOnly, type WorkbookEvaluationOptions } from './formula/workbook'
 import { initializeSavedSpills } from './formula/saved-spills'
 import { dynamicMetadataIndices } from './metadata'
 import { decodeXlsxString } from './strings'
@@ -388,7 +388,8 @@ export async function parseXlsx(pkg: OfficePackage, options: ParseXlsxOptions = 
     ...(declaredFilters.length > 0 ? { declaredFilters } : {}),
   }
   initializeSavedSpills(doc)
-  if (options.valuePolicy !== 'cached') evaluateWorkbookFormulas(doc, { fullCalcOnLoad, ...options.evaluation })
+  if (options.valuePolicy === 'cached') markSavedValuesOnly(doc)
+  else evaluateWorkbookFormulas(doc, { fullCalcOnLoad, ...options.evaluation })
   return doc
 }
 

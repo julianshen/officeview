@@ -159,6 +159,9 @@ export interface XlsxDocument {
    * becomes an editable viewer rule. */
   declaredFilters?: DeclaredSheetFilters[]
   calc?: CalcSettings
+  /** Value policy (spec §4.4), set only on saved-values documents (parseXlsx valuePolicy 'cached');
+   * absent means 'engine'. Read through workbookValuePolicy / documentValuePolicy. */
+  valuePolicy?: 'engine' | 'cached'
   /** True when the package actually ships an `xl/calcChain.xml` part, detected
    * from the workbook relationship inventory — never inferred from a producer
    * or guessed. `undefined` means the model did not declare it. */

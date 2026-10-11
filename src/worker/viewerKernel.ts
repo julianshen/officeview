@@ -399,7 +399,7 @@ export class ViewerKernel {
         this.accounting.copy(bytes.byteLength)
         this.stats.parses++
         const source = createObjectWorkbookSource(await this.env.parse(new Uint8Array(bytes)), docId)
-        return openDiagnostics.length ? { ...source, openDiagnostics } : source
+        return openDiagnostics.length ? { ...source, openDiagnostics: [...(source.openDiagnostics ?? []), ...openDiagnostics] } : source
       }
       default: throw new RangeError('Paged source handles are delivered by S1.2')
     }
