@@ -15,6 +15,7 @@ import type {
   RangeCompletion, ReadOptions, SingleCellPayload, SourceFailure, SourceRowInterval, SourceStamp, SourceStore,
   SparseRowPage, StructuralResult, ValuePolicy, WorkerDiagnostic,
 } from './contracts'
+import { PackageError } from '../../core/package-error'
 import { MAX_COLS, MAX_ROWS, cellId, isValidCoordinate, isValidSourceRect, type SourceRect } from './coordinates'
 import { INITIAL_GENERATION } from '../../worker/viewerProtocol'
 import { failedPage, failure, rowSetIntervals, sameStamp, type SheetGeometry, type WorkbookSource } from '../../worker/viewerSession'
@@ -86,8 +87,13 @@ export class PagedXlsxSheetAdapter implements SourceStore {
     for (let i = lo; i < pages.length && pages[i].r0 <= r1; i++) out.push(pages[i])
     return out
   }
-  private load(page: PageSummary): Promise<CellPagePayload> {
-    return this.workbook.store.page(this.sheet.sheetId, page.pageId)
+  /** Cooperative cancellation at every page boundary: a cancelled query never
+   * starts another page load and drops the one in flight. */
+  private async load(page: PageSummary, signal: AbortSignal | undefined): Promise<CellPagePayload> {
+    if (signal?.aborted) throw new PackageError('cancelled', 'Request cancelled')
+    const payload = await this.workbook.store.page(this.sheet.sheetId, page.pageId)
+    if (signal?.aborted) throw new PackageError('cancelled', 'Request cancelled')
+    return payload
   }
   private isUnavailable(p: CellPagePayload, i: number): boolean {
     const meta = p.meta.get(i)
@@ -142,7 +148,7 @@ export class PagedXlsxSheetAdapter implements SourceStore {
     const [page] = this.pagesFor(at.row, at.row)
     if (!page || page.aggregate.records === 0 || at.col < page.c0 || at.col > page.c1) return { kind: 'blank' }
     try {
-      const p = await this.load(page)
+      const p = await this.load(page, options.signal)
       const i = this.find(p, at.row, at.col)
       if (i < 0) return { kind: 'blank' }
       const cell = await this.payload(p, i)
@@ -169,7 +175,7 @@ export class PagedXlsxSheetAdapter implements SourceStore {
     try {
       for (const page of this.pagesFor(row, range.r1)) {
         if (page.aggregate.records === 0 || page.c1 < range.c0 || page.c0 > range.c1) continue
-        const p = await this.load(page)
+        const p = await this.load(page, options.signal)
         let i = lower(p.rows, row)
         while (i < p.rows.length && p.rows[i] <= range.r1) {
           const r = p.rows[i]
@@ -247,7 +253,7 @@ export class PagedXlsxSheetAdapter implements SourceStore {
           const builder = new LaneBuilder()
           for (const page of this.pagesFor(row, r1)) {
             if (page.aggregate.records === 0 || request.col < page.c0 || request.col > page.c1) continue
-            const p = await this.load(page)
+            const p = await this.load(page, options.signal)
             for (let i = lower(p.rows, row); i < p.rows.length && p.rows[i] <= r1; i++) {
               if (p.cols[i] !== request.col) continue
               builder.add(p.rows[i], await this.valueOf(p, i), (p.flags[i] & F_ERROR) !== 0, p.styles[i], this.isUnavailable(p, i))
@@ -261,7 +267,7 @@ export class PagedXlsxSheetAdapter implements SourceStore {
           let found: { p: CellPagePayload; i: number } | undefined
           for (const page of this.pagesFor(row, ready)) {
             if (page.aggregate.records === 0 || request.col < page.c0 || request.col > page.c1) continue
-            const p = await this.load(page)
+            const p = await this.load(page, options.signal)
             for (let i = lower(p.rows, row); i < p.rows.length && p.rows[i] <= ready; i++) {
               if (p.cols[i] === request.col) { found = { p, i }; break }
             }
@@ -311,7 +317,7 @@ export class PagedXlsxSheetAdapter implements SourceStore {
       try {
         for (const page of this.pagesFor(row, Math.min(range.r1, this.sheet.importedThroughRow))) {
           if (page.aggregate.populated === 0 || page.c1 < range.c0 || page.c0 > range.c1) { row = Math.max(row, page.r1 + 1); continue }
-          const p = await this.load(page)
+          const p = await this.load(page, options.signal)
           for (let i = lower(p.rows, row); i < p.rows.length && p.rows[i] <= range.r1; i++) {
             if (p.cols[i] < range.c0 || p.cols[i] > range.c1 || !recordPopulated(p, i)) continue
             items.push(await this.rowCell(p, i))
@@ -386,10 +392,10 @@ export class PagedXlsxSheetAdapter implements SourceStore {
   async queryOverview(request: OverviewQuery, options: ReadOptions): Promise<Page<OverviewGroup>> {
     const error = this.guard(options)
     if (error) return failedPage(this.stamp, error)
-    return answerOverview(request, { aggregate: rect => this.aggregate(rect) }, this.stamp, options.signal)
+    return answerOverview(request, { aggregate: (rect, signal) => this.aggregate(rect, signal) }, this.stamp, options.signal)
   }
   /** Page summaries answer whole pages analytically; only a cut page is loaded. */
-  private async aggregate(rect: SourceRect): Promise<AggregateOutcome> {
+  private async aggregate(rect: SourceRect, signal: AbortSignal): Promise<AggregateOutcome> {
     const status = this.status(rect.r1)
     if (status.kind === 'unknown') return { kind: 'unknown', pageId: status.pageId }
     if (status.kind === 'error') return { kind: 'error', failure: status.failure }
@@ -401,7 +407,7 @@ export class PagedXlsxSheetAdapter implements SourceStore {
           mergeAggregate(sum, page.aggregate)
           continue
         }
-        const p = await this.load(page)
+        const p = await this.load(page, signal)
         for (let i = lower(p.rows, rect.r0); i < p.rows.length && p.rows[i] <= rect.r1; i++) {
           if (p.cols[i] >= rect.c0 && p.cols[i] <= rect.c1) addRecord(sum, p.styles[i], recordPopulated(p, i))
         }

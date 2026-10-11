@@ -104,3 +104,31 @@ describe('paged scan batches (1M×8 shape, reduced rows in CI)', () => {
     await source.release()
   })
 })
+
+describe('review MINOR 3: paged queries stop at the next page once cancelled', () => {
+  it('readRows, queryColumn, overview and scanPopulated abort after the page in flight', async () => {
+    const inner = memoryPageBackend()
+    let onGet: (() => void) | undefined
+    const backend: PageBackend = { kind: 'memory', put: (k, b) => inner.put(k, b), removeAll: () => inner.removeAll(), async get(k) { onGet?.(); return inner.get(k) } }
+    const { store, sheet, source } = await paged(xlsxBytes({ sheetData: grid(1000, 2) }), backend, 100, 1)
+    const run = async (label: string, query: (signal: AbortSignal) => Promise<{ error?: { code: string } }>) => {
+      const controller = new AbortController()
+      const before = store.stats.loads
+      onGet = () => controller.abort()
+      const page = await query(controller.signal)
+      onGet = undefined
+      expect(page.error?.code, label).toBe('cancelled')
+      expect(store.stats.loads - before, label).toBe(1)
+    }
+    const o = (signal: AbortSignal) => ({ signal, stamp: { ...sheet.stamp } })
+    await run('readRows', (signal) => sheet.readRows({ r0: 0, r1: 999, c0: 0, c1: 1 }, undefined, o(signal)))
+    await run('queryColumn', (signal) => sheet.queryColumn({ col: 1, rows: { kind: 'intervals', intervals: [{ r0: 0, r1: 999 }] }, limit: 100_000, encoding: 'lanes' }, o(signal)))
+    await run('overview', (signal) => sheet.queryOverview({ maxGroups: 1, groups: [{ groupId: 'g', rows: { kind: 'list', r0: 5, r1: 995, rows: Uint32Array.from({ length: 100 }, (_, i) => i * 10 + 5) }, cols: [{ c0: 0, c1: 0 }] }] }, o(signal)))
+    await run('scanPopulated', async (signal) => {
+      let last: { error?: { code: string } } = {}
+      for await (const page of sheet.scanPopulated({ range: { r0: 0, r1: 999, c0: 0, c1: 1 }, limit: 100_000 }, o(signal))) last = page
+      return last
+    })
+    await source.release()
+  })
+})
