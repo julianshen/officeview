@@ -451,3 +451,38 @@ describe('sheet-mode find parity (S5.2 review round 1)', () => {
     await waitFor(() => expect(status(ui)).toMatch(/^no matches \(1 value unavailable\)$/))
   })
 })
+
+describe('hidden targets, coarse selection (S5.2 review round 1)', () => {
+  it('Go To a hidden cell exposes an exact read-only inspection without moving the grid', async () => {
+    const doc = await workbook([{ name: 'S1', rows: [{ r: 1, cells: [{ ref: 'A1', v: 'top' }] }, { r: 2, cells: [{ ref: 'A2', v: 'secret' }] }, { r: 3, cells: [{ ref: 'A3', v: 'low' }] }] }])
+    doc.sheets[0].rows[1].hidden = true
+    const { ui } = await mountSheet(doc)
+    const grid = ui.getByRole('grid')
+    act(() => { fireEvent.click(grid, { clientX: 44 + 10, clientY: 44 + 5, detail: 1 }) })
+    const before = grid.getAttribute('aria-activedescendant')
+    act(() => { fireEvent.change(ui.getByRole('textbox', { name: 'Go To cell' }), { target: { value: 'A2' } }) })
+    act(() => { fireEvent.change(ui.getByRole('combobox', { name: 'Address space' }), { target: { value: 'source' } }) })
+    act(() => { fireEvent.submit(ui.getByRole('textbox', { name: 'Go To cell' }).closest('form')!) })
+    await waitFor(() => expect(ui.getByRole('status').textContent).toContain('Original cell A2'))
+    await waitFor(() => expect(ui.getByRole('status').textContent).toContain('Value secret'))
+    expect(ui.getByRole('status').textContent).toContain('read-only')
+    expect(grid.getAttribute('aria-activedescendant')).toBe(before)
+  })
+
+  it('keeps a coarse selection overlay when the pane crosses the per-cell overlay cap', async () => {
+    // Narrow columns at 25% put more cells in the pane than the mobile per-frame cap.
+    const doc = await workbook([{ name: 'S1', cols: '<col min="1" max="16384" width="1" customWidth="1"/>', rows: [{ r: 1, cells: [{ ref: 'A1', v: 'x' }] }] }])
+    const { ui, h } = await mountSheet(doc, { profile: 'M' })
+    const grid = ui.getByRole('grid')
+    for (let i = 0; i < 6; i++) act(() => { grid.focus(); fireEvent.keyDown(grid, { key: '-' }) })
+    await settle()
+    expect(h.last().zoom).toBe(0.25)
+    act(() => { fireEvent.click(ui.getByRole('button', { name: 'Select worksheet' })) })
+    await settle()
+    const overlay = ui.getByTestId('officeview-sheet-overlay') as HTMLCanvasElement
+    const data = overlay.getContext('2d')!.getImageData(0, 0, overlay.width, overlay.height).data
+    let tinted = 0
+    for (let i = 0; i < data.length; i += 4) if (data[i + 3] > 0) tinted++
+    expect(tinted).toBeGreaterThan(overlay.width * overlay.height * 0.5)
+  })
+})

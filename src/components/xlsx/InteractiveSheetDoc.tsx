@@ -34,20 +34,22 @@ import {
   createScrollWindow, navigateTo as scrollNavigateTo, refreshScrollWindow, scrollPhysicalTo, setScrollZoom, visibleLogicalViewport, type ViewportSize,
 } from '../../xlsx/view/scrollWindow'
 import { keyboardSheetZoom, pinchSheetZoom, wheelSheetZoom } from '../../xlsx/view/sheetZoom'
-import { SheetNavigationSession, emptyGridSelection, navigateSelection, rowContains } from '../../xlsx/view/selection'
+import { SheetNavigationSession, emptyGridSelection, navigateSelection } from '../../xlsx/view/selection'
 import { FIND_PAGE_HITS, FindController, hitGeometry, navigateToHit, type FindHit, type FindInput, type FindOptions, type FindPublication } from '../../xlsx/view/find'
 import { LayoutCache } from '../../xlsx/view/textLayout'
 import { cellDisplayText } from '../../xlsx/render'
 import { createCellLayoutHost } from '../../xlsx/view/renderViewport'
 import { createObjectWorkbookSource } from '../../worker/viewerObjectSource'
 import { bitmapPoolPlan, type TileCacheStats } from '../../xlsx/view/tileCache'
-import { gridGeometryToViewport, gridSelectionOverlay, paintGridSelectionOverlay, paintSearchOverlay, type GridOverlayRecord, type HighlightRect } from '../../core/overlay'
+import { gridGeometryToViewport, gridSelectionOverlay, paintGridSelectionOverlay, paintSearchOverlay, type HighlightRect } from '../../core/overlay'
 import { normalizeWatermark, type WatermarkOptions } from '../../core/watermark'
 import type { FallbackFontsOptions } from '../../core/fonts/fallback'
 import { prepareSheetAssets, type SheetAssetsLease } from '../../render/paint'
 import { GridSemantics, type GridTransition } from './GridSemantics'
 import { GRID_HEADER_SIZE } from './GridHeaders'
+import { coarseSelectionRecords, overlayRecords, selectionContains } from './selectionOverlay'
 import { SheetNavigator } from './SheetNavigator'
+import type { HiddenCellInspection } from './ViewerStatus'
 import { SheetTileRenderer, type SheetFrame } from './sheetTiles'
 import { SearchBar, ZoomControls } from '../viewerControls'
 
@@ -299,6 +301,9 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
   const [activeHit, setActiveHit] = useState(-1)
   const [searching, setSearching] = useState(false)
   const [announcement, setAnnouncement] = useState('')
+  const [inspection, setInspection] = useState<HiddenCellInspection | undefined>(undefined)
+  const inspectHidden = (sheetId: string, target: SourceCell, reason: string) =>
+    setInspection({ target, hiddenReason: reason === 'filter-hidden' ? 'hidden by filter' : 'authored hidden', source: source.store(sheetId) })
   const inputRef = useRef<HTMLInputElement | null>(null)
   const finder = useMemo(() => new FindController({ currentOwner: () => ownerRef.current() }), [])
   useEffect(() => () => finder.dispose(), [finder])
@@ -385,6 +390,8 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
     if (!windows.has(hit.sheetId)) windowFor(hit.sheetId, sheetEntry)
     const result = navigateToHit({ session, windows, viewport }, hit)
     if (result.kind === 'needs-projection') return
+    if (result.kind === 'hidden') inspectHidden(hit.sheetId, hit.source, result.hiddenReason)
+    else setInspection(undefined)
     session.activate(hit.sheetId)
     setActiveSheetId(hit.sheetId)
     setAnnouncement(result.announcement)
@@ -428,9 +435,12 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
       })
     }
     paintSearchOverlay(ctx, highlights, active)
-    const records = overlayRecords(entry.metrics, pane, profile)
-    if (records && selection.ranges.length) {
-      const geometry = gridSelectionOverlay({ contains: at => selectionContains(selection, at) }, records, pane, scroll.zoom * dpr)
+    if (selection.ranges.length) {
+      const records = overlayRecords(entry.metrics, pane, profile)
+      // Past the per-cell cap the membership is coalesced into pixel groups, never dropped.
+      const geometry = records
+        ? gridSelectionOverlay({ contains: at => selectionContains(selection, at) }, records, pane, scroll.zoom * dpr)
+        : gridSelectionOverlay({ contains: () => true }, coarseSelectionRecords(selection, entry.metrics, pane, scroll.zoom * dpr), pane, scroll.zoom * dpr)
       paintGridSelectionOverlay(ctx, gridGeometryToViewport(geometry, pane, scroll.zoom, bias), dpr)
     }
     report()
@@ -545,6 +555,7 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
   const onGridChange = (transition: GridTransition) => {
     session.setSelection(activeSheetId, transition.selection)
     setAnnouncement(transition.announcement)
+    setInspection(undefined)
     if (transition.window !== scroll) setWindow(activeSheetId, transition.window)
     else rerender()
   }
@@ -553,7 +564,8 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
     const state = session.get(activeSheetId)
     const result = navigateSelection(state.selection, entry.metrics, request, entry.view)
     setAnnouncement(result.announcement)
-    if (result.kind === 'hidden') return
+    if (result.kind === 'hidden') { inspectHidden(activeSheetId, result.target, result.hiddenReason ?? 'authored-hidden'); return }
+    setInspection(undefined)
     const moved = scrollNavigateTo(scroll, { metrics: entry.metrics, viewport, view: { ...entry.view, selection: result.selection } }, request, state.selection.active)
     session.setSelection(activeSheetId, result.selection)
     setWindow(activeSheetId, moved.window)
@@ -561,6 +573,7 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
   const onSheetChange = (sheetId: string) => {
     if (!sheetIds.includes(sheetId)) return
     entryFor(sheetId)
+    setInspection(undefined)
     session.activate(sheetId)
     setActiveSheetId(sheetId)
   }
@@ -590,7 +603,7 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
         <div ref={paneRef} data-testid="officeview-sheet-pane" style={{ position: 'relative', flex: '1 1 auto', minHeight: 0, overflow: 'hidden', background: '#ffffff' }}>
           {entry && scroll && (
             <GridSemantics owner={identity} projection={entry.metrics} view={entry.view} selection={selection} window={scroll} viewport={viewport}
-              body={entry.body} onChange={onGridChange} announcement={announcement} profile={profile} label={`Worksheet ${entry.sheet.name}`}
+              body={entry.body} onChange={onGridChange} announcement={announcement} inspection={inspection} profile={profile} label={`Worksheet ${entry.sheet.name}`}
               cellPresentation={at => {
                 const cell = cellAt(entry, at)
                 return { text: cell ? cellDisplayText(entry.sheet, cell) : '' }
@@ -649,37 +662,4 @@ function usedBody(sheet: XlsxSheet): SourceRowInterval | null {
     r1 = Math.max(r1, row.index)
   }
   return r1 < 0 ? null : { r0, r1 }
-}
-
-/** Bounded per-cell overlay records for the pane plus one neighbour ring; null
- * past the profile's frame cap (the declared coarse state, spec §11.1). */
-function overlayRecords(metrics: ProjectedSheetMetrics, pane: { x: number; y: number; width: number; height: number }, profile: ProfileId): GridOverlayRecord[] | null {
-  const cap = profile === 'M' ? 10_000 : 20_000
-  const rows = metrics.rows.visibleBetween(pane.y, pane.y + pane.height), cols = metrics.cols.visibleBetween(pane.x, pane.x + pane.width)
-  if ((rows.count + 2) * (cols.count + 2) > cap) return null
-  const slots = expand([...rows.runs], metrics.rows.logicalCount), columns = expand([...cols.runs], metrics.cols.logicalCount)
-  const records: GridOverlayRecord[] = []
-  for (const slot of slots) {
-    const y = metrics.rows.start(slot), height = metrics.rows.size(slot)
-    if (!(height > 0)) continue
-    const row = metrics.order.displayToSource(slot)
-    for (const col of columns) {
-      const width = metrics.cols.size(col)
-      if (width > 0) records.push({ source: { row, col }, bounds: { x: metrics.cols.start(col), y, width, height } })
-    }
-  }
-  return records
-}
-function expand(runs: readonly { start: number; end: number }[], count: number): number[] {
-  const out: number[] = []
-  if (!runs.length) return out
-  const first = runs[0].start, last = runs[runs.length - 1].end
-  if (first > 0) out.push(first - 1)
-  for (const run of runs) for (let index = run.start; index <= run.end; index++) out.push(index)
-  if (last + 1 < count) out.push(last + 1)
-  return out
-}
-function selectionContains(selection: GridSelection, at: SourceCell): boolean {
-  // Worker `ref` row sets need a resolver this in-thread path does not hold yet.
-  return selection.ranges.some(part => part.rows.kind !== 'ref' && part.cols.some(c => at.col >= c.c0 && at.col <= c.c1) && rowContains(part.rows, at.row))
 }

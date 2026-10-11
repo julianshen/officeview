@@ -6,7 +6,7 @@ import { visibleLogicalViewport, navigateKey, navigateTo, hitTestViewport, type 
 import { MAX_ROWS, MAX_COLS, cellId } from '../../xlsx/view/coordinates'
 import { activeAnnouncement, boundedSelectionText, reconcileSelection, recordCounts, emptyGridSelection, selectCell, selectHeader } from '../../xlsx/view/selection'
 import { GridHeaders, GridRowHeader, GRID_HEADER_SIZE, cellSelected, viewportHeaderBox } from './GridHeaders'
-import { ViewerStatus } from './ViewerStatus'
+import { ViewerStatus, type HiddenCellInspection } from './ViewerStatus'
 
 export interface GridCellPresentation { text: string; state?: 'loading' | 'error' | 'unavailable' }
 export interface GridTransition { selection: GridSelection; window: ScrollWindow; announcement: string }
@@ -28,6 +28,8 @@ export interface GridSemanticsProps {
   label?: string
   profile?: ProfileId
   renderMode?: 'detail' | 'coarse'
+  /** Exact read-only inspection of a hidden Go To/find target (grid focus stays put). */
+  inspection?: HiddenCellInspection
 }
 const navigationKeys = new Set<string>(['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Enter', 'Home', 'End', 'PageUp', 'PageDown'])
 /** The parent commits viewport and selection together, so the new descendant
@@ -216,6 +218,6 @@ export function GridSemantics(props: GridSemanticsProps): ReactElement {
     {props.popup && <div ref={popupRef} role="dialog" aria-label="Column filter" data-officeview-ui="grid-popup"
       onPointerDown={event => event.stopPropagation()} onDoubleClick={event => event.stopPropagation()}
       style={{ position: 'absolute', zIndex: 3, bottom: 0, maxWidth: '100%', paddingBottom: 'env(safe-area-inset-bottom)' }}>{props.popup.content}</div>}
-    <ViewerStatus records={recordCounts(projection, props.body)} announcement={status} />
+    <ViewerStatus records={recordCounts(projection, props.body)} announcement={status} inspection={props.inspection} />
   </div>
 }
