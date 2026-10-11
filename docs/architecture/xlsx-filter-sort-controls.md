@@ -130,6 +130,10 @@ regions. S6.1 session.updateProjection reconciles active selection before a
 sort/filter snapshot is rendered. The host's successful onApplied handler
 rebuilds projection/visibility/order and keeps zoom/scroll ownership; S9 does
 not paint legacy pages with a changed-view label and unchanged cell order.
+The viewport must size its column-header strip (and offset the cell pane) with
+`columnHeaderHeight(touch, actions, more)` from GridHeaders, not
+GRID_HEADER_SIZE: with touch header actions the strip is 132px (sort + filter)
+or 176px (with the More sort options target), and only 44px otherwise.
 
 The actual kernel value-draft RPC (open/read/search/prepare/toggle/commit/cancel,
 ref leases), null-sort reset and values-rule compilation need that production
