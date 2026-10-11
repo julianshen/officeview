@@ -121,7 +121,27 @@ function withSparseRows(store: SourceStore): SourceStore {
     if (page.error || page.nextCursor !== undefined) return { ...page, nextCursor: undefined, completeness: 'incomplete' }
     return { ...page, ...(end < last ? { nextCursor: `sparse:${end + 1}` } : {}) }
   }
-  return new Proxy(store, { get: (target, key, receiver) => (key === 'readRows' ? readRows : Reflect.get(target, key, receiver)) })
+  return { ...plainStore(store), readRows }
+}
+
+/** A plain-object view of a store. NOT a Proxy: the kernels read `stamp` on
+ * every cooperative check (per comparison), and each Proxy layer measurably
+ * slows them (a harness artifact, not kernel cost). Fixture stamps are
+ * constant for the store's lifetime, so a data property is exact. */
+function plainStore(store: SourceStore): SourceStore {
+  return {
+    stamp: store.stamp,
+    valuePolicy: store.valuePolicy,
+    extent: store.extent,
+    readCell: (at, options) => store.readCell(at, options),
+    readRows: (range, cursor, options) => store.readRows(range, cursor, options),
+    queryColumn: (request, options) => store.queryColumn(request, options),
+    scanPopulated: (request, options) => store.scanPopulated(request, options),
+    queryStructural: (rect, options) => store.queryStructural(rect, options),
+    queryOverview: (request, options) => store.queryOverview(request, options),
+    ensureComplete: (rect, options) => store.ensureComplete(rect, options),
+    release: () => store.release(),
+  }
 }
 
 /** Resident harness data (materialized source cells, prepared filter lanes)
@@ -161,7 +181,7 @@ function countingColumns(store: SourceStore): { store: SourceStore; reads: () =>
   let reads = 0
   const queryColumn: SourceStore['queryColumn'] = (request, options) => { reads++; return store.queryColumn(request, options) }
   return {
-    store: new Proxy(store, { get: (target, key, receiver) => (key === 'queryColumn' ? queryColumn : Reflect.get(target, key, receiver)) }),
+    store: { ...plainStore(store), queryColumn },
     reads: () => reads,
     reset: () => { reads = 0 },
   }

@@ -205,5 +205,6 @@ describe('startKernelBench (page side)', () => {
     expect(unitOf('kernel-peak-bytes')).toBe('bytes')
     expect(unitOf('index-unique-values')).toBe('count')
     expect(unitOf('prepare-columns')).toBe('ms')
+    expect(unitOf('kernel-source-column-reads')).toBe('count')
   })
 })

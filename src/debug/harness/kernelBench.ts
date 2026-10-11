@@ -33,7 +33,7 @@ const SETTLE_MS = 30
 
 export function unitOf(name: string): string {
   if (name.endsWith('-bytes')) return 'bytes'
-  if (name.endsWith('-rows') || name.endsWith('-values') || name.endsWith('-admitted')) return 'count'
+  if (name.endsWith('-rows') || name.endsWith('-values') || name.endsWith('-admitted') || name.endsWith('-reads')) return 'count'
   return 'ms'
 }
 
