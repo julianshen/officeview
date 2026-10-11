@@ -5,7 +5,8 @@
  * active cell by bounded ring probes, then (for a blank seed only) the used
  * fallback. The used extent is a hint: the fallback resolves to the sole
  * current region R of the first populated cell in it, and only when nothing
- * else in the used range is populated; R itself is returned (it need not equal
+ * else in the used range is populated (the whole sheet when R outgrew the
+ * hint, which proves it stale); R itself is returned (it need not equal
  * the used extent, whose blank margins would otherwise move styled blank rows),
  * with source 'used'. Two blocks around a blank cell refuse as ambiguous.
  * Disjoint Shift selections are never coerced into a bounding rectangle: only
@@ -647,7 +648,10 @@ async function detectRange(request: RangeDetectionRequest, pacer: Pacer, owner: 
   const sole = await probeCurrentRegion(first, scanner, pageLimit)
   if (sole.kind === 'incomplete') return { kind: 'incomplete', missing: sole.missing }
   if (sole.kind === 'blank') throw contractViolation('Populated cell vanished during detection')
-  for (const rect of outsideRegion(used, sole.rect)) {
+  // A region that outgrew the hint proves the hint stale, so the sole-region
+  // check then covers the whole sheet (still limit-1 probes, at most four).
+  const inside = sole.rect.r0 >= used.r0 && sole.rect.r1 <= used.r1 && sole.rect.c0 >= used.c0 && sole.rect.c1 <= used.c1
+  for (const rect of outsideRegion(inside ? used : FULL_DOMAIN, sole.rect)) {
     const answer = await scanner.exists(rect)
     if (answer === 'unknown') return { kind: 'incomplete', missing: [rect] }
     if (answer === 'occupied') {
