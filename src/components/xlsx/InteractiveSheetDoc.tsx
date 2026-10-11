@@ -22,7 +22,7 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type ReactElement } from 'react'
 import type { XlsxCell, XlsxDocument, XlsxSheet } from '../../xlsx/types'
 import type {
-  CacheIdentity, FilterSpec, GridSelection, ProfileId, RowOrder, RowVisibility, ScrollWindow, SheetView, SortSpec, SourceRowInterval, WorkbookOwner,
+  AuthoritativeCell, CacheIdentity, FilterSpec, GridSelection, ProfileId, RowOrder, RowVisibility, ScrollWindow, SheetView, SortSpec, SourceRowInterval, SourceStore, WorkbookOwner,
 } from '../../xlsx/view/contracts'
 import { SHEET_MIN_ZOOM } from '../../xlsx/view/contracts'
 import type { NavigatorRequest, SourceCell } from '../../xlsx/view/coordinates'
@@ -35,9 +35,9 @@ import {
 } from '../../xlsx/view/scrollWindow'
 import { keyboardSheetZoom, pinchSheetZoom, wheelSheetZoom } from '../../xlsx/view/sheetZoom'
 import { SheetNavigationSession, emptyGridSelection, navigateSelection, rowContains } from '../../xlsx/view/selection'
-import { FIND_PAGE_HITS, FindController, hitGeometry, navigateToHit, type FindHit, type FindInput, type FindPublication } from '../../xlsx/view/find'
+import { FIND_PAGE_HITS, FindController, hitGeometry, navigateToHit, type FindHit, type FindInput, type FindOptions, type FindPublication } from '../../xlsx/view/find'
 import { LayoutCache } from '../../xlsx/view/textLayout'
-import { formatValue } from '../../xlsx/render'
+import { cellDisplayText } from '../../xlsx/render'
 import { createCellLayoutHost } from '../../xlsx/view/renderViewport'
 import { createObjectWorkbookSource } from '../../worker/viewerObjectSource'
 import { bitmapPoolPlan, type TileCacheStats } from '../../xlsx/view/tileCache'
@@ -307,23 +307,32 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
     owner: ownerOf(),
     sheets: sheetIds.map(sheetId => {
       const sheetEntry = entryFor(sheetId)
-      return { sheetId, store: source.store(sheetId), identity: identityOf(sheetId), order: sheetEntry.view.order, visibility: sheetEntry.view.visibility }
+      return {
+        sheetId, store: withUnavailableFormulas(source.store(sheetId)), identity: identityOf(sheetId), order: sheetEntry.view.order, visibility: sheetEntry.view.visibility,
+        // Authored-hidden (zero-width) columns are outside the visible search domain (§11.4).
+        isColumnVisible: (col: number) => sheetEntry.metrics.cols.size(col) > 0,
+      }
     }),
   })
+  // The arguments of the current search, so a backward/wrapping step can restart it.
+  const runArgs = useRef<{ input: FindInput; query: string; options: FindOptions } | null>(null)
   useEffect(() => {
-    if (!query.trim()) { finder.cancel(); setPage(null); setActiveHit(-1); setSearching(false); return }
+    // Only an empty query cancels: whitespace is a literal search (core/search parity).
+    if (query.length === 0) { finder.cancel(); runArgs.current = null; setPage(null); setActiveHit(-1); setSearching(false); return }
     let cancelled = false
     setSearching(true)
     const input = findInput()
     const byId = new Map(sheetIds.map(id => [id, entryFor(id)]))
-    void finder.run(input, { text: query, caseSensitive: false }, {
-      // Display text parity with the painted cell: General/built-in number formats.
+    const options: FindOptions = {
+      // The same canonical display text the cell paints (authored formats, semantics).
       textOf: (cell, sheetId) => {
         const sheetEntry = byId.get(sheetId)
         const styled = sheetEntry && cellAt(sheetEntry, cell)
-        return formatValue(cell.value, styled?.style?.numFmtId ?? 0)
+        return sheetEntry ? cellDisplayText(sheetEntry.sheet, styled ?? cell) : String(cell.value ?? '')
       },
-    }).then(published => {
+    }
+    runArgs.current = { input, query, options }
+    void finder.run(input, { text: query, caseSensitive: false }, options).then(published => {
       if (cancelled) return
       setPage(published)
       setActiveHit(published && published.hits.length ? 0 : -1)
@@ -338,16 +347,37 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
   }, [query, ownerKey])
   const pageOffset = page ? page.pageIndex * FIND_PAGE_HITS : 0
   const matchCount = page ? page.totalKnown ?? pageOffset + page.hits.length : 0
+  // Partial results present a lower bound, never a final-looking count (§10.4).
+  // A total learned by an earlier complete traversal of the same run stays final.
+  const knownTotal = useRef<{ key: string; total: number } | null>(null)
+  if (page?.complete && page.totalKnown !== undefined) knownTotal.current = { key: page.key, total: page.totalKnown }
+  const learned = page && knownTotal.current?.key === page.key ? knownTotal.current.total : undefined
+  const countLabel = page && !page.complete ? (learned !== undefined ? String(learned) : `${pageOffset + page.hits.length}+`) : undefined
+  const searchNote = page ? findNote(page) : undefined
+  /** Bring page `target` (or the last page) in, one bounded page at a time: forward
+   * pulls continue the run; anything earlier restarts it from page 0. */
+  const loadPage = async (target: number | 'last'): Promise<FindPublication | null> => {
+    let current = page
+    const done = (candidate: FindPublication | null) => !candidate || (target === 'last' ? candidate.complete : candidate.pageIndex === target)
+    if (done(current)) return current
+    if (!current || (target !== 'last' && current.pageIndex > target) || !finder.running) {
+      const args = runArgs.current
+      if (!args) return null
+      current = await finder.run(args.input, { text: args.query, caseSensitive: false }, args.options)
+    }
+    while (current && !done(current) && finder.running) current = await finder.next()
+    return current
+  }
   const stepHit = async (direction: 1 | -1) => {
     if (!page || !page.hits.length) return
     const next = activeHit + direction
     if (next >= 0 && next < page.hits.length) { setActiveHit(next); return }
-    if (direction > 0 && finder.running) {
-      const published = await finder.next()
-      if (published?.hits.length) { setPage(published); setActiveHit(0); return }
-    }
-    // TODO(S10): page-backward cursor; within the bounded page the order wraps.
-    setActiveHit(direction > 0 ? 0 : page.hits.length - 1)
+    let target: FindPublication | null
+    if (direction > 0) target = page.complete ? await loadPage(0) : await loadPage(page.pageIndex + 1)
+    else target = page.pageIndex > 0 ? await loadPage(page.pageIndex - 1) : await loadPage('last')
+    if (!target || !target.hits.length) return
+    setPage(target)
+    setActiveHit(direction > 0 ? 0 : target.hits.length - 1)
   }
   const goToHit = (hit: FindHit) => {
     if (!sheetIds.includes(hit.sheetId)) return
@@ -563,7 +593,7 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
               body={entry.body} onChange={onGridChange} announcement={announcement} profile={profile} label={`Worksheet ${entry.sheet.name}`}
               cellPresentation={at => {
                 const cell = cellAt(entry, at)
-                return { text: cell ? formatValue(cell.value, cell.style?.numFmtId ?? 0) : '' }
+                return { text: cell ? cellDisplayText(entry.sheet, cell) : '' }
               }}>
               <canvas ref={baseRef} data-testid="officeview-sheet-base" style={canvasStyle} />
               <canvas ref={overlayRef} data-testid="officeview-sheet-overlay" style={canvasStyle} />
@@ -578,6 +608,7 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
       </div>
       {showSearch && (
         <SearchBar inputRef={inputRef} query={query} onQuery={setQuery} count={matchCount} active={activeHit < 0 ? -1 : pageOffset + activeHit}
+          countLabel={countLabel} note={searchNote}
           indexing={searching} onPrev={() => void stepHit(-1)} onNext={() => void stepHit(1)} />
       )}
       {showZoomControls && (
@@ -585,6 +616,28 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
       )}
     </div>
   )
+}
+
+/** TODO(S1.3): the interim object source reports a formula without a cached or
+ * evaluated value as a null cell; find must count it as unavailable (§4.4), never
+ * as a blank that silently cannot match. */
+function withUnavailableFormulas(store: SourceStore): SourceStore {
+  const mark = (cell: AuthoritativeCell): AuthoritativeCell =>
+    cell.formula !== undefined && cell.value === null && cell.hasCachedValue === false && !cell.unavailable ? { ...cell, unavailable: true } : cell
+  return Object.assign(Object.create(store) as SourceStore, {
+    async *scanPopulated(request: Parameters<SourceStore['scanPopulated']>[0], options: Parameters<SourceStore['scanPopulated']>[1]) {
+      for await (const page of store.scanPopulated(request, options)) yield { ...page, items: page.items.map(mark) }
+    },
+  })
+}
+
+/** Status qualifiers retained with a published find page (§§10.4, 11.4). */
+function findNote(page: FindPublication): string | undefined {
+  const notes: string[] = []
+  if (page.unavailableCount > 0) notes.push(`${page.unavailableCount} value${page.unavailableCount === 1 ? '' : 's'} unavailable`)
+  if (page.failures.length) notes.push(`${page.failures.length} source failure${page.failures.length === 1 ? '' : 's'}; retry may help`)
+  else if (page.incomplete.length) notes.push('some sheets still loading')
+  return notes.length ? notes.join('; ') : undefined
 }
 
 /** Resolved used-data body for record counts (never the implicit million rows). */

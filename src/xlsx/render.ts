@@ -567,6 +567,13 @@ function renderCellText(
   return formatValue(value, style?.numFmtId ?? 0, semantics)
 }
 
+/** @internal The canonical display text of a cell (authored/built-in formats and
+ * workbook semantics) without General width-fitting, shared by sheet-mode find
+ * and accessible values with the painted text. */
+export function cellDisplayText(sheet: XlsxSheet, cell: Pick<XlsxCell, 'value' | 'style'>): string {
+  return renderCellText(cell.value, cell.style, sheet.semantics, sheet)
+}
+
 /**
  * Record an unsupported authored-format diagnostic on the existing sheet
  * channel (same shape as doc.diagnostics), deduped across repeated paints.

@@ -389,3 +389,65 @@ describe('tile-local drawings (S5.1 seam resolved in S5.2)', () => {
     expect(deep.pixels.some((value, index) => index % 4 === 0 && value > 200)).toBe(true)
   })
 })
+
+// ---------------------------------------------------------------------------
+// Review round 1 (codex): find semantics, status, navigation
+// ---------------------------------------------------------------------------
+describe('sheet-mode find parity (S5.2 review round 1)', () => {
+  const status = (ui: ReturnType<typeof render>) => ui.getByTestId('officeview-search-status').textContent
+  const search = (ui: ReturnType<typeof render>, text: string) => act(() => { fireEvent.change(ui.getByRole('searchbox', { name: 'Search document' }), { target: { value: text } }) })
+
+  it('does not match values in authored-hidden columns', async () => {
+    const doc = await workbook([{ name: 'S1', cols: '<col min="2" max="2" width="10" hidden="1" customWidth="1"/>', rows: [{ r: 1, cells: [{ ref: 'A1', v: 'shown' }, { ref: 'B1', v: 'secret' }] }] }])
+    const { ui } = await mountSheet(doc)
+    search(ui, 'secret')
+    await waitFor(() => expect(status(ui)).toBe('no matches'))
+    search(ui, 'shown')
+    await waitFor(() => expect(status(ui)).toBe('1 of 1'))
+  })
+
+  it('searches and announces the canonical formatted text (authored number formats)', async () => {
+    const doc = await workbook([{ name: 'S1', rows: [{ r: 1, cells: [{ ref: 'A1', v: 12 }] }] }])
+    const cell = doc.sheets[0].rows[0].cells[0]
+    cell.style = { numFmtId: 164, formatCode: '"USD "0.00' }
+    const { ui } = await mountSheet(doc)
+    search(ui, 'USD')
+    await waitFor(() => expect(status(ui)).toBe('1 of 1'))
+    expect(ui.getByRole('gridcell', { name: 'A1, value USD 12.00' })).toBeTruthy()
+  })
+
+  it('a literal whitespace query is a real search', async () => {
+    const doc = await workbook([{ name: 'S1', rows: [{ r: 1, cells: [{ ref: 'A1', v: 'A B' }] }] }])
+    const { ui } = await mountSheet(doc)
+    search(ui, ' ')
+    await waitFor(() => expect(status(ui)).toBe('1 of 1'))
+  })
+
+  it('pages backward and wraps across the whole workbook, with a lower-bound count until complete', async () => {
+    const rows = Array.from({ length: 201 }, (_, i) => ({ r: i + 1, cells: [{ ref: `A${i + 1}`, v: `hit ${i + 1}` }] }))
+    const doc = await workbook([{ name: 'S1', rows }])
+    const { ui } = await mountSheet(doc)
+    search(ui, 'hit')
+    await waitFor(() => expect(status(ui)).toBe('1 of 200+'))
+    const prev = () => act(() => { fireEvent.click(ui.getByRole('button', { name: 'Previous match' })) })
+    const next = () => act(() => { fireEvent.click(ui.getByRole('button', { name: 'Next match' })) })
+    // Previous from the first match wraps to the workbook's last match.
+    prev()
+    await waitFor(() => expect(status(ui)).toBe('201 of 201'))
+    prev()
+    await waitFor(() => expect(status(ui)).toBe('200 of 201'))
+    next()
+    await waitFor(() => expect(status(ui)).toBe('201 of 201'))
+    next()
+    await waitFor(() => expect(status(ui)).toMatch(/^1 of 20[01]\+?$/))
+  })
+
+  it('qualifies results with unavailable values instead of a plain "no matches"', async () => {
+    const doc = await workbook([{ name: 'S1', rows: [{ r: 1, cells: [{ ref: 'A1', v: 0 }, { ref: 'B1', v: 'plain' }] }] }])
+    // A formula without a cached value: its value is unavailable, not blank.
+    Object.assign(doc.sheets[0].rows[0].cells[0], { value: null, formula: 'NOW()', hasCachedValue: false })
+    const { ui } = await mountSheet(doc)
+    search(ui, 'zzz')
+    await waitFor(() => expect(status(ui)).toMatch(/^no matches \(1 value unavailable\)$/))
+  })
+})

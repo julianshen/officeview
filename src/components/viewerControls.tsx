@@ -13,6 +13,8 @@ export function SearchBar({
   indexing,
   onPrev,
   onNext,
+  countLabel,
+  note,
 }: {
   inputRef: React.RefObject<HTMLInputElement | null>
   query: string
@@ -22,8 +24,13 @@ export function SearchBar({
   indexing: boolean
   onPrev: () => void
   onNext: () => void
+  /** Shown instead of `count`, e.g. a lower bound "200+" while results are partial. */
+  countLabel?: string
+  /** Qualifier appended in parentheses (unavailable values, incomplete sheets). */
+  note?: string
 }): ReactElement {
-  const status = indexing ? 'indexing…' : count === 0 ? (query ? 'no matches' : '') : `${active + 1} of ${count}`
+  const qualifier = note ? ` (${note})` : ''
+  const status = indexing ? 'indexing…' : count === 0 ? (query ? `no matches${qualifier}` : '') : `${active + 1} of ${countLabel ?? count}${qualifier}`
   const btn: CSSProperties = {
     height: 28,
     minWidth: 28,
