@@ -271,26 +271,48 @@ export function evaluationHitCap(doc: XlsxDocument): string | undefined {
   return doc.diagnostics?.find((d) => REROUTE_FEATURES.has(d.feature))?.feature
 }
 
+export type CompatibilityKind = 'strict' | 'damaged' | 'large'
 export type SpreadsheetAdmission =
   | { mode: 'object'; decision: Extract<ObjectDecision, { mode: 'object' }> }
   | { mode: 'paged'; reason: string; counters?: AdmissionCounters }
-  /** The strict reader refused the archive for a non-safety reason; the legacy path decides after a bounded size check. */
-  | { mode: 'legacy-fallback'; reason: string }
-  /** `duplicateName`: the caller may downgrade a case-insensitive-only duplicate to a legacy fallback. */
-  | { mode: 'refuse'; failure: SourceFailure; duplicateName?: string }
+  /**
+   * The legacy object path decides, as today: `strict` = a grammar or
+   * capability limit of the strict reader, `damaged` = archive damage the
+   * legacy JSZip path tolerates, `large` = beyond the paged caps.
+   * `duplicateName`: a case-insensitive-only duplicate downgrades to `strict`.
+   */
+  | { mode: 'legacy-fallback'; reason: string; kind: CompatibilityKind; duplicateName?: string }
+  /** Only damage the legacy JSZip path rejects as well (decision C). */
+  | { mode: 'refuse'; failure: SourceFailure }
 
 /**
- * Strict-reader refusals that are grammar or capability limits, not safety
- * violations (decision 3): the legacy JSZip path handles them exactly as
- * today (and errors where it errored). Kept as refusals: declared sizes beyond
- * the caps, exact duplicate names (parser differential, §4.5 disguise chain),
- * overlapping entries, data outside the data area and forged or inconsistent
- * EOCD/ZIP64 structure.
+ * Strict-reader refusals that are grammar or capability limits (decision 3):
+ * entry count, central directory size, name length/encoding/escaping,
+ * encryption, methods, multi-disk.
  */
 const GRAMMAR_INVENTORY = /entries exceed the limit|central directory of \d+ bytes exceeds|part name of \d+ bytes exceeds|part name is not valid UTF-8|escaping or invalid part name|empty part name/
+/**
+ * The damage JSZip also rejects (measured: "Bug : uncompressed data size
+ * mismatch" after inflating the whole part): produced != declared size and a
+ * deflate stream that ends before its final block. Everything else the strict
+ * reader calls damage (CRC, trailing bytes, local != central header, exact
+ * duplicate names, overlapping entries, inconsistent EOCD/ZIP64) opens today
+ * and falls back with a "may be damaged" notice (decision C).
+ */
+const REFUSED_DAMAGE = /part inflates beyond its declared size|part produced \d+ of \d+ declared bytes|compressed data ends before the deflate stream does|deflate stream consumed \d+ of \d+ declared bytes/
 
-export function isGrammarInventoryRefusal(error: PackageError): boolean {
-  return error.code === 'unsupported' || GRAMMAR_INVENTORY.test(error.message)
+export function failureRoute(failure: { code: string; message: string }): CompatibilityKind | 'refuse' {
+  if (failure.code === 'unsupported' || GRAMMAR_INVENTORY.test(failure.message)) return 'strict'
+  if (REFUSED_DAMAGE.test(failure.message) || failure.code === 'storage-error' || failure.code === 'quota' || failure.code === 'cancelled') return 'refuse'
+  if (failure.code === 'resource-limit') return 'large'
+  return 'damaged'
+}
+
+function routed(failure: SourceFailure): SpreadsheetAdmission {
+  const kind = failureRoute(failure)
+  if (kind === 'refuse') return { mode: 'refuse', failure }
+  const duplicate = /^duplicate part name (.*)$/.exec(failure.message)
+  return { mode: 'legacy-fallback', reason: failure.message, kind, ...(duplicate ? { duplicateName: duplicate[1] } : {}) }
 }
 
 /** Inventory (paged caps), G1, then G2 for an object candidate. */
@@ -300,14 +322,13 @@ export async function admitSpreadsheet(src: RangeSource, profile: ProfileId, lim
     inventory = await readZipInventory(src, inventoryLimits(limits), signal)
   } catch (error) {
     if (!isPackageError(error) || error.code === 'cancelled') throw error
-    if (isGrammarInventoryRefusal(error)) return { mode: 'legacy-fallback', reason: error.message }
-    const duplicate = /^duplicate part name (.*)$/.exec(error.message)
-    return { mode: 'refuse', failure: failure(error.code, error.message), ...(duplicate ? { duplicateName: duplicate[1] } : {}) }
+    return routed(failure(error.code, error.message))
   }
   const g1 = admit(profile, src.size, inventory, limits)
-  if (g1.mode !== 'object-candidate') return g1
+  if (g1.mode === 'refuse') return routed(g1.failure)
+  if (g1.mode === 'paged') return g1
   const g2 = await verifyObjectCandidate(src, inventory, limits, signal, { profile, ...options })
   if (g2.mode === 'object') return { mode: 'object', decision: g2 }
   if (g2.mode === 'paged') return { mode: 'paged', reason: g2.reason, counters: g2.counters }
-  return g2
+  return routed(g2.failure)
 }

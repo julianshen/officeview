@@ -13,9 +13,9 @@ import { isPackageError, throwIfAborted, type PackageErrorCode } from '../core/p
 import { blobRangeSource, bytesRangeSource, readZipInventory, type RangeSource } from '../core/zip-stream'
 import { classifyPackage, sniffPackage, type OfficeKind } from '../core/package-sniff'
 import { browserStorageEnv, openSpool, sweepLeftoverSpools, type SpooledSource } from '../core/spool'
-import { admitSpreadsheet, classifyPart, evaluationHitCap, inventoryLimits, type SpreadsheetAdmission } from '../xlsx/storage/admission'
+import { admitSpreadsheet, evaluationHitCap, inventoryLimits, type CompatibilityKind, type SpreadsheetAdmission } from '../xlsx/storage/admission'
 import { ImportRefusal } from '../xlsx/storage/importSession'
-import { NOTICE_ALTERNATE_CONTENT, NOTICE_CACHED_VALUES, NOTICE_STRICT_FALLBACK, type AnyDoc, type LoadCtx } from './loadOfficeSource'
+import { NOTICE_ALTERNATE_CONTENT, NOTICE_CACHED_VALUES, NOTICE_COMPATIBILITY, NOTICE_DAMAGED, NOTICE_STRICT_FALLBACK, type AnyDoc, type LoadCtx } from './loadOfficeSource'
 
 type Ctx = LoadCtx
 type LoadBytes = (bytes: Uint8Array, ctx: Ctx, decided?: SpreadsheetAdmission) => Promise<AnyDoc>
@@ -27,17 +27,13 @@ function addDiagnostic(doc: XlsxDocument, feature: string, message: string): voi
   doc.diagnostics.push({ kind: 'large-source', feature, message })
 }
 
-function refusalFrom(admission: Extract<SpreadsheetAdmission, { mode: 'paged' | 'refuse' }>): ImportRefusal {
-  if (admission.mode === 'paged') {
-    return new ImportRefusal('unsupported', 'paged-not-yet',
-      `This spreadsheet is too large to open in the current viewer (${admission.reason}); the large-workbook viewer is not available yet`)
-  }
+function refusalFrom(admission: Extract<SpreadsheetAdmission, { mode: 'refuse' }>): ImportRefusal {
   return new ImportRefusal(admission.failure.code as PackageErrorCode, 'limit', admission.failure.message)
 }
 
-/** A decision that cannot be settled before the legacy package exists. */
-function settledEarly(admission: SpreadsheetAdmission): admission is Extract<SpreadsheetAdmission, { mode: 'paged' | 'refuse' }> {
-  return admission.mode === 'paged' || (admission.mode === 'refuse' && admission.duplicateName === undefined)
+/** Only a refusal is settled before the legacy package exists; every other route loads the bytes. */
+function settledEarly(admission: SpreadsheetAdmission): admission is Extract<SpreadsheetAdmission, { mode: 'refuse' }> {
+  return admission.mode === 'refuse'
 }
 
 function countFormulas(doc: XlsxDocument): number {
@@ -64,38 +60,28 @@ async function parseWithCaps(pkg: OfficePackage, evaluation: { maxArrayCells: nu
   return doc
 }
 
+const COMPAT_NOTICE = 'Large file — opened in compatibility mode'
+const DAMAGED_NOTICE = 'This file may be damaged; some content may be wrong'
+
 /**
- * The strict reader refused the archive for a grammar reason (decision 3):
- * the legacy JSZip view decides, as today, after its actual inflated sizes are
- * checked against the object-path byte caps (JSZip enforces no declared size).
+ * Today's legacy object path, used whenever admission does not choose the
+ * object path and the file is not refused (orchestrator decisions A-C). The
+ * evaluator stays capped, so a resource hit still opens with saved values.
  */
-async function legacyFallbackParse(pkg: OfficePackage, bytes: Uint8Array, reason: string, ctx: Ctx): Promise<XlsxDocument> {
+async function compatibilityParse(pkg: OfficePackage, kind: CompatibilityKind, reason: string, ctx: Ctx): Promise<XlsxDocument> {
   const o = ctx.limits.object
-  const tooBig = (what: string, value: number, limit: number) =>
-    new ImportRefusal('resource-limit', 'limit', `${what} ${value} exceeds the ${limit} limit for profile ${ctx.profile}`)
-  if (bytes.length > o.compressedBytes) throw tooBig('package size', bytes.length, o.compressedBytes)
-  let nonDrawing = 0
-  for (const path of pkg.paths()) {
-    const info = classifyPart(path)
-    if (info.cls === 'media') continue
-    const cap = info.drawing ? o.drawingPartBytes : o.nonDrawingPartBytes
-    let part: Uint8Array | undefined
-    try {
-      part = await pkg.bytes(path, cap)
-    } catch (error) {
-      if (error instanceof Error && /Part byte limit exceeded/.test(error.message)) throw tooBig(`part ${path} size`, cap + 1, cap)
-      continue // unreadable for JSZip as well: the legacy parse reports it as today
-    }
-    throwIfAborted(ctx.signal)
-    if (!info.drawing && part) {
-      nonDrawing += part.length
-      if (nonDrawing > o.nonDrawingExpandedBytes) throw tooBig('non-drawing parts total', nonDrawing, o.nonDrawingExpandedBytes)
-    }
-  }
   const ev = o.evaluation
   const evaluation = { maxArrayCells: ev.maxArrayCells, maxArraySide: ev.maxArrayCells, maxMaterializedCells: Math.floor((o.budgetBytes - o.envelope.constantBytes) / ev.perMaterializedCellBytes) }
   const doc = await parseWithCaps(pkg, evaluation, 'engine', undefined, ctx)
-  addDiagnostic(doc, NOTICE_STRICT_FALLBACK, `Opened with the compatibility reader: ${reason}`)
+  if (kind === 'large') {
+    addDiagnostic(doc, NOTICE_COMPATIBILITY, COMPAT_NOTICE)
+    addDiagnostic(doc, 'compatibility-reason', reason)
+  } else if (kind === 'damaged') {
+    addDiagnostic(doc, NOTICE_DAMAGED, DAMAGED_NOTICE)
+    addDiagnostic(doc, 'damage-reason', reason)
+  } else {
+    addDiagnostic(doc, NOTICE_STRICT_FALLBACK, `Opened with the compatibility reader: ${reason}`)
+  }
   return doc
 }
 
@@ -104,30 +90,36 @@ function caseFoldedTwins(pkg: OfficePackage, name: string): boolean {
   return pkg.paths((p) => p.toLowerCase() === key).length > 1
 }
 
-/** The only way an admitted workbook reaches parseXlsx: with the returned evaluator caps. */
 export async function parseSpreadsheet(pkg: OfficePackage, bytes: Uint8Array, ctx: Ctx, decided?: SpreadsheetAdmission): Promise<XlsxDocument> {
-  {
-    let admission = decided ?? await admitSpreadsheet(bytesRangeSource(bytes), ctx.profile, ctx.limits, ctx.signal)
-    // Case-insensitive twins are grammar; an exact duplicate is the §4.5 disguise and stays refused.
-    if (admission.mode === 'refuse' && admission.duplicateName !== undefined && caseFoldedTwins(pkg, admission.duplicateName)) {
-      admission = { mode: 'legacy-fallback', reason: admission.failure.message }
+  const admission = decided ?? await admitSpreadsheet(bytesRangeSource(bytes), ctx.profile, ctx.limits, ctx.signal)
+  throwIfAborted(ctx.signal)
+  switch (admission.mode) {
+    case 'refuse':
+      throw refusalFrom(admission)
+    case 'paged':
+      // TODO(S1.2): switch to paged. Until the paged importer exists, a paged
+      // decision opens through today's legacy object path (decision A).
+      return compatibilityParse(pkg, 'large', admission.reason, ctx)
+    case 'legacy-fallback': {
+      // a case-insensitive-only duplicate is grammar, an exact one is damage
+      const twins = admission.duplicateName !== undefined && caseFoldedTwins(pkg, admission.duplicateName)
+      return compatibilityParse(pkg, twins ? 'strict' : admission.kind, admission.reason, ctx)
     }
-    if (admission.mode === 'legacy-fallback') return legacyFallbackParse(pkg, bytes, admission.reason, ctx)
-    if (admission.mode !== 'object') throw refusalFrom(admission)
-    throwIfAborted(ctx.signal)
-    const { decision } = admission
-    const doc = await parseWithCaps(pkg, decision.evaluation, decision.valuePolicy, decision.counters.loadEvaluatedFormulas, ctx)
-    if (decision.legacyFallback) {
-      addDiagnostic(doc, NOTICE_STRICT_FALLBACK, `Opened with the compatibility reader: ${decision.legacyFallback.message} (${decision.legacyFallback.part})`)
-    }
-    for (const part of decision.counters.alternateContentData) {
-      addDiagnostic(doc, NOTICE_ALTERNATE_CONTENT, `Some cell data in ${part} is wrapped in mc:AlternateContent and is not shown`)
-    }
-    for (const part of decision.counters.highRatioParts) {
-      addDiagnostic(doc, 'high-compression-ratio', `${part} declares a compression ratio above ${ctx.limits.object.maxRatio}:1 (sizes verified exactly)`)
-    }
-    return doc
+    case 'object':
+      break
   }
+  const { decision } = admission
+  const doc = await parseWithCaps(pkg, decision.evaluation, decision.valuePolicy, decision.counters.loadEvaluatedFormulas, ctx)
+  if (decision.legacyFallback) {
+    addDiagnostic(doc, NOTICE_STRICT_FALLBACK, `Opened with the compatibility reader: ${decision.legacyFallback.message} (${decision.legacyFallback.part})`)
+  }
+  for (const part of decision.counters.alternateContentData) {
+    addDiagnostic(doc, NOTICE_ALTERNATE_CONTENT, `Some cell data in ${part} is wrapped in mc:AlternateContent and is not shown`)
+  }
+  for (const part of decision.counters.highRatioParts) {
+    addDiagnostic(doc, 'high-compression-ratio', `${part} declares a compression ratio above ${ctx.limits.object.maxRatio}:1 (sizes verified exactly)`)
+  }
+  return doc
 }
 
 /** Strict-reader classification; a refusal means "not ours to judge": the legacy path decides. */

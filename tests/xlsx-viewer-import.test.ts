@@ -52,6 +52,20 @@ const MID_XLSX = () => {
 }
 /** 125k metadata rows: paged on both profiles (the §4.3 counterexample). */
 const BIG_XLSX = () => xlsxBytes({ sheetData: metaRows(125_000) })
+const COMPAT = 'Large file — opened in compatibility mode'
+const DAMAGED = 'This file may be damaged; some content may be wrong'
+type Diag = { feature: string; message: string }
+const notices = (doc: unknown) => ((doc as { diagnostics?: Diag[] }).diagnostics ?? []).map((d) => d.message)
+/** Central directory declares more bytes than the part produces: strict and JSZip both reject it. */
+const LYING_XLSX = () => {
+  const entries = xlsxEntries({ sheetData: valueCells(5) })
+  const layout = buildZip(entries)
+  const forged = layout.bytes.slice()
+  const at = layout.entries[entries.findIndex((e) => e.name === 'xl/worksheets/sheet1.xml')].centralOffset + 24
+  const v = new DataView(forged.buffer)
+  v.setUint32(at, v.getUint32(at, true) + 10, true)
+  return forged
+}
 
 afterEach(() => {
   vi.restoreAllMocks()
@@ -107,15 +121,16 @@ describe('classification and routing (RED test 15b)', () => {
     expect(opfs.log.created).toEqual([])
   })
 
-  it('adversarial (a) is spooled and admitted as a spreadsheet, never loaded through the whole-buffer legacy path', async () => {
+  it('adversarial (a) is spooled and admitted as a spreadsheet before any legacy load', async () => {
     const entries = xlsxEntries({ sheetData: metaRows(125_000) }).map((e) => ({ method: 0, ...e }))
     const bytes = buildZip([{ name: 'docProps/custom.xml', data: `<Properties>${'p'.repeat(100_000)}</Properties>`, method: 0, dataDescriptor: false }, ...entries]).bytes
     const load = vi.spyOn(OfficePackage, 'load')
     const spooled: SpooledSource[] = []
-    const err = await refusal(loadOfficeSource(chunked(bytes, 32 * KiB), { onSpooled: (s) => spooled.push(s) }))
-    expect(err.reason).toBe('paged-not-yet')
+    // spooled and admitted first; until S1.2 the paged decision opens in compatibility mode
+    const doc = await loadOfficeSource(chunked(bytes, 32 * KiB), { onSpooled: (s) => spooled.push(s) })
+    expect(notices(doc)).toContain(COMPAT)
     expect(spooled).toHaveLength(1)
-    expect(load).not.toHaveBeenCalled()
+    load.mockClear()
 
     // no storage and over the hard memory cap: the typed "could not determine" refusal
     const none = await refusal(loadOfficeSource(chunked(bytes, 32 * KiB), {
@@ -127,18 +142,15 @@ describe('classification and routing (RED test 15b)', () => {
     expect(load).not.toHaveBeenCalled()
   })
 
-  it('a disguised spreadsheet (duplicate [Content_Types].xml, local-first DOCX) follows the pinned chain and never reaches parseXlsx', async () => {
+  it('a disguised spreadsheet (duplicate [Content_Types].xml, local-first DOCX) goes through admission; JSZip opens it today, so it opens with the damaged notice (decision C)', async () => {
     const docxCt = (await JSZip.loadAsync(await buildDocx([{ runs: [{ text: 'd' }] }]))).file('[Content_Types].xml')!.async('string')
     const entries = xlsxEntries({})
     const bytes = buildZip([{ name: '[Content_Types].xml', data: await docxCt }, ...entries]).bytes
     expect(sniffPackage(bytes)).toBe('docx')
-    const xml = vi.spyOn(OfficePackage.prototype, 'xml')
-    const err = await refusal(loadOfficeFile(chunked(bytes, 4 * KiB)))
-    expect(err.code).toBe('parse-error')
-    expect(err.message).toMatch(/duplicate part name \[Content_Types\]\.xml/)
-    // the legacy view saw a spreadsheet (later duplicate wins) but parseXlsx never read the workbook
-    expect(xml.mock.calls.map((c) => c[0])).toContain('[Content_Types].xml')
-    expect(xml.mock.calls.map((c) => c[0])).not.toContain('xl/workbook.xml')
+    const doc = await loadOfficeFile(chunked(bytes, 4 * KiB))
+    expect('sheets' in doc).toBe(true)
+    expect(notices(doc)).toContain(DAMAGED)
+    expect(((doc as { diagnostics?: Diag[] }).diagnostics ?? []).some((d) => /duplicate part name \[Content_Types\]\.xml/.test(d.message))).toBe(true)
   })
 
   it('the in-repo reader rejects duplicate part names, not only the content types', async () => {
@@ -147,7 +159,7 @@ describe('classification and routing (RED test 15b)', () => {
       .rejects.toMatchObject({ code: 'parse-error' })
   })
 
-  it('a seekable spreadsheet above the object caps is refused without reading the whole Blob (RED test 20)', async () => {
+  it('a seekable spreadsheet above the object caps is admitted with bounded reads, then opens in compatibility mode (RED test 20; TODO(S1.2) paged)', async () => {
     const bytes = BIG_XLSX()
     const blob = new Blob([bytes as BlobPart])
     const sizes: number[] = []
@@ -156,21 +168,27 @@ describe('classification and routing (RED test 15b)', () => {
       sizes.push(this.size)
       return original.call(this)
     })
-    const load = vi.spyOn(OfficePackage, 'load')
-    const err = await refusal(loadOfficeFile(blob))
-    expect(err.reason).toBe('paged-not-yet')
-    expect(err.message).toMatch(/rows|admission total/)
-    expect(load).not.toHaveBeenCalled()
-    expect(sizes.length).toBeGreaterThan(0)
-    expect(Math.max(...sizes)).toBeLessThanOrEqual(Math.max(262_144, 65_557))
-    expect(sizes).not.toContain(bytes.length)
+    const doc = await loadOfficeFile(blob)
+    expect(notices(doc)).toContain(COMPAT)
+    // every admission read is a bounded range; the one whole read is today's legacy load
+    const whole = sizes.filter((n) => n === bytes.length)
+    expect(whole).toHaveLength(1)
+    expect(Math.max(...sizes.filter((n) => n !== bytes.length))).toBeLessThanOrEqual(Math.max(262_144, 65_557))
   })
 
-  it('a refused Blob above the paged caps names the cap (typed resource-limit, no blank document)', async () => {
-    const err = await refusal(loadOfficeSource(new Blob([MID_XLSX() as BlobPart]), { limits: { paged: { compressedBytes: 1000 } } }))
-    expect(err.code).toBe('resource-limit')
-    expect(err.reason).toBe('limit')
-    expect(err.message).toMatch(/package size \d+ exceeds the 1000 limit/)
+  it('a Blob above even the paged caps opens in compatibility mode as today, the cap named in a diagnostic', async () => {
+    const doc = await loadOfficeSource(new Blob([MID_XLSX() as BlobPart]), { limits: { paged: { compressedBytes: 1000 } } })
+    expect(notices(doc)).toContain(COMPAT)
+    expect(notices(doc).some((m) => /package size \d+ exceeds the 1000 limit/.test(m))).toBe(true)
+  })
+
+  it('a genuine safety violation (declared size differs from the produced bytes; JSZip rejects it too) stays a typed refusal', async () => {
+    const legacy = await OfficePackage.load(LYING_XLSX()).then((pkg) => detectAndParse(pkg)).then(() => 'ok', (e: unknown) => String(e))
+    expect(legacy).toMatch(/size mismatch/)
+    for (const source of [LYING_XLSX(), new Blob([LYING_XLSX() as BlobPart])]) {
+      const err = await refusal(loadOfficeFile(source))
+      expect(err.code).toBe('parse-error')
+    }
   })
 })
 
@@ -215,15 +233,43 @@ describe('decision 3: strict-reader grammar refusals fall back to the legacy pat
     await opensLikeLegacy(buildZip([...xlsxEntries({ sheetData: valueCells(3) }), ...extra]).bytes)
   }, 120_000)
 
-  it('safety violations stay typed refusals: a lying declared size inside a grammar-fallback package', async () => {
+  it('a lying declared size inside a grammar-fallback package fails exactly as the legacy path does', async () => {
     const entries = [...xlsxEntries({ sheetData: '<row r="1"/>'.repeat(400_000) }), { name: 'xl/media/a.bin', data: 'a' }, { name: 'xl/media/A.bin', data: 'b' }]
     const layout = buildZip(entries)
     const forged = layout.bytes.slice()
     const ws = entries.findIndex((e) => e.name === 'xl/worksheets/sheet1.xml')
     new DataView(forged.buffer).setUint32(layout.entries[ws].centralOffset + 24, 1024, true)
-    const err = await refusal(loadOfficeFile(forged))
-    expect(err.code).toBe('resource-limit')
+    const legacy = await OfficePackage.load(forged).then((pkg) => detectAndParse(pkg)).then(() => 'ok', (e: unknown) => String(e))
+    expect(await loadOfficeFile(forged).then(() => 'ok', (e: unknown) => String(e))).toBe(legacy)
   })
+})
+
+describe('decision C: archive damage JSZip tolerates today opens with the damaged notice', () => {
+  const forgeCentral = (offset: (l: ReturnType<typeof buildZip>, e: ReturnType<typeof xlsxEntries>) => number, mutate: (v: DataView, at: number) => void) => {
+    const entries = xlsxEntries({ sheetData: valueCells(5) })
+    const layout = buildZip(entries)
+    const bytes = layout.bytes.slice()
+    mutate(new DataView(bytes.buffer), offset(layout, entries))
+    return bytes
+  }
+  const sheet = (l: ReturnType<typeof buildZip>, e: ReturnType<typeof xlsxEntries>) => l.entries[e.findIndex((x) => x.name === 'xl/worksheets/sheet1.xml')].centralOffset
+  const cases: Array<[string, () => Uint8Array]> = [
+    ['CRC mismatch', () => forgeCentral(sheet, (v, at) => v.setUint32(at + 16, v.getUint32(at + 16, true) ^ 1, true))],
+    ['classic EOCD entries-this-disk differs from the total', () => forgeCentral((l) => l.eocdOffset, (v, at) => v.setUint16(at + 8, 3, true))],
+    ['local header name differs from the central name', () => buildZip(xlsxEntries({ sheetData: valueCells(5) }).map((e) => e.name === 'xl/styles.xml' ? { ...e, localName: 'xl/stylez.xml' } : e)).bytes],
+  ]
+  for (const [name, make] of cases) {
+    it(name, async () => {
+      vi.spyOn(Date, 'now').mockReturnValue(Date.UTC(2026, 9, 11, 12))
+      const bytes = make()
+      const legacy = await detectAndParse(await OfficePackage.load(bytes)) as { sheets: unknown[] }
+      for (const source of [bytes, new Blob([bytes as BlobPart])]) {
+        const doc = await loadOfficeFile(source) as { sheets: unknown[] }
+        expect(doc.sheets).toEqual(legacy.sheets)
+        expect(notices(doc)).toContain(DAMAGED)
+      }
+    })
+  }
 })
 
 describe('decision 5: mc:AlternateContent-wrapped data in a small file', () => {
@@ -277,11 +323,17 @@ describe('formula expansion through the entry point (RED test 19)', () => {
     expect('sheets' in doc && doc.sheets[0].rows[0].cells[0].value).toBe(1)
   })
 
-  it('when a G2 counter trips the legacy parser is not invoked', async () => {
-    const load = vi.spyOn(OfficePackage, 'load')
-    const err = await refusal(loadOfficeFile(new Blob([xlsxBytes({ sharedStrings: Array.from({ length: 60_000 }, (_, i) => `s${i}`) }) as BlobPart])))
-    expect(err.message).toMatch(/unique shared strings 50001 > 50000/)
-    expect(load).not.toHaveBeenCalled()
+  it('when a G2 counter trips, the file opens in compatibility mode with the cap named (TODO(S1.2) paged)', async () => {
+    const doc = await loadOfficeFile(new Blob([xlsxBytes({ sharedStrings: Array.from({ length: 60_000 }, (_, i) => `s${i}`) }) as BlobPart]))
+    expect(notices(doc)).toContain(COMPAT)
+    expect(notices(doc).some((m) => /unique shared strings 50001 > 50000/.test(m))).toBe(true)
+  })
+
+  it('compatibility mode keeps the evaluator caps: an uncached SEQUENCE in a paged-class file opens with saved values', async () => {
+    const doc = await loadOfficeFile(xlsxBytes({ sheetData: '<row r="1"><c r="A1"><f>SEQUENCE(200000,1)</f></c></row>', sharedStrings: Array.from({ length: 60_000 }, (_, i) => `s${i}`) }))
+    expect(notices(doc)).toContain(COMPAT)
+    expect(notices(doc).some((m) => /^Showing saved values/.test(m))).toBe(true)
+    expect((doc as { sheets: Array<{ rows: unknown[] }> }).sheets[0].rows).toHaveLength(1)
   })
 })
 
@@ -365,7 +417,17 @@ describe('spool through the entry point (RED tests 15a, 16, 17, 18)', () => {
 
   it('a refusal after finish() releases the spool', async () => {
     const opfs = fakeBackend('opfs')
-    await refusal(loadOfficeSource(chunked(BIG_XLSX(), 64 * KiB), { storage: { memoryLimitBytes: 64 * KiB, opfs } }))
+    // a spooled (> 64 KiB) package whose sheet declares more bytes than it produces: refused
+    let x = 12345
+    const word = () => Array.from({ length: 20 }, () => { x = (x * 1103515245 + 12345) >>> 0; return String.fromCharCode(97 + (x >>> 27)) }).join('')
+    const entries = xlsxEntries({ sheetData: valueCells(50), sharedStrings: Array.from({ length: 16_000 }, word) })
+    const layout = buildZip(entries)
+    const big = layout.bytes.slice()
+    const v = new DataView(big.buffer)
+    const at = layout.entries[entries.findIndex((e) => e.name === 'xl/worksheets/sheet1.xml')].centralOffset + 24
+    v.setUint32(at, v.getUint32(at, true) + 10, true)
+    expect(big.length).toBeGreaterThan(64 * KiB)
+    await refusal(loadOfficeSource(chunked(big, 16 * KiB), { storage: { memoryLimitBytes: 16 * KiB, opfs } }))
     expect(opfs.log.created).toHaveLength(1)
     expect(opfs.log.live.size).toBe(0)
   })
@@ -452,13 +514,18 @@ describe('<OfficeFile> ownership (RED tests 15a, 18, 23)', () => {
       seen = useOfficeFile(data)
       return null
     }
-    render(createElement(Probe, { data: new Blob([BIG_XLSX() as BlobPart]) }))
+    render(createElement(Probe, { data: new Blob([LYING_XLSX() as BlobPart]) }))
     await waitFor(() => expect(seen?.status).toBe('error'), { timeout: 30_000 })
-    expect(seen).toMatchObject({ status: 'error', code: 'unsupported', reason: 'paged-not-yet' })
-    const { container } = render(createElement(OfficeFile, { data: new Blob([BIG_XLSX() as BlobPart]) }))
+    expect(seen).toMatchObject({ status: 'error', code: 'parse-error', reason: 'limit' })
+    const { container } = render(createElement(OfficeFile, { data: new Blob([LYING_XLSX() as BlobPart]) }))
     await waitFor(() => expect(container.querySelector('[role="alert"]')).not.toBeNull(), { timeout: 30_000 })
     expect(container.querySelectorAll('canvas')).toHaveLength(0)
   })
+
+  it('a compatibility-mode spreadsheet renders with a visible notice', async () => {
+    const { container } = render(createElement(OfficeFile, { data: new Blob([BIG_XLSX() as BlobPart]) }))
+    await waitFor(() => expect(container.querySelector('[role="status"]')?.textContent).toContain(COMPAT), { timeout: 60_000 })
+  }, 90_000)
 })
 
 describe('small-document parity (RED test 24)', () => {

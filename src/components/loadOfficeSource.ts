@@ -77,7 +77,9 @@ export interface LoadCtx {
 export const NOTICE_ALTERNATE_CONTENT = 'alternate-content-data'
 export const NOTICE_CACHED_VALUES = 'cached-value-policy'
 export const NOTICE_STRICT_FALLBACK = 'strict-reader-fallback'
-const NOTICE_FEATURES = new Set([NOTICE_ALTERNATE_CONTENT, NOTICE_CACHED_VALUES])
+export const NOTICE_COMPATIBILITY = 'large-file-compatibility'
+export const NOTICE_DAMAGED = 'possibly-damaged'
+const NOTICE_FEATURES = new Set([NOTICE_ALTERNATE_CONTENT, NOTICE_CACHED_VALUES, NOTICE_COMPATIBILITY, NOTICE_DAMAGED])
 
 export function documentNotices(doc: AnyDoc): string[] {
   const diagnostics = (doc as { diagnostics?: Array<{ feature: string; message: string }> }).diagnostics ?? []
