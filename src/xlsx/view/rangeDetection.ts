@@ -533,8 +533,10 @@ function rowRun(rows: CompactSourceRowSet): AxisRun {
 /** A single contiguous multi-cell selection containing the active cell, after
  * normalizing its encoding. Full rows/columns keep region detection from the
  * active cell (spec §6.1). Malformed membership is refused, a ref is
- * unsupported here, and disjoint membership seeds from the active cell. */
-function explicitRect(selection: GridSelection, active: SourceCell): SourceRect | null | 'invalid' | 'unsupported' {
+ * unsupported here, and disjoint membership seeds from the active cell. A
+ * contiguous selection that does not contain the active cell (single cells and
+ * full rows/columns included) is ambiguous: neither seed is silently chosen. */
+function explicitRect(selection: GridSelection, active: SourceCell): SourceRect | null | 'invalid' | 'unsupported' | 'ambiguous' {
   if (selection.ranges.length !== 1) return null
   const part = selection.ranges[0]
   const rows = rowRun(part.rows)
@@ -543,9 +545,9 @@ function explicitRect(selection: GridSelection, active: SourceCell): SourceRect 
   if (rows === 'unsupported') return 'unsupported'
   if (rows === 'disjoint' || cols === 'disjoint') return null
   const rect = { r0: rows.lo, r1: rows.hi, c0: cols.lo, c1: cols.hi }
+  if (active.row < rect.r0 || active.row > rect.r1 || active.col < rect.c0 || active.col > rect.c1) return 'ambiguous'
   if (rect.r0 === rect.r1 && rect.c0 === rect.c1) return null
   if ((rect.r0 === 0 && rect.r1 === MAX_ROWS - 1) || (rect.c0 === 0 && rect.c1 === MAX_COLS - 1)) return null
-  if (active.row < rect.r0 || active.row > rect.r1 || active.col < rect.c0 || active.col > rect.c1) return null
   return rect
 }
 function finishTable(context: DetectionContext, table: TableExtent): Promise<RangeDetection> | RangeDetection {
@@ -620,6 +622,9 @@ async function detectRange(request: RangeDetectionRequest, pacer: Pacer, owner: 
   if (tableHit !== undefined && tableHit.kind === 'table') return finishTable(context, tableHit.record)
   const explicit = explicitRect(selection, active)
   if (explicit === 'invalid') return refused({ reason: 'invalid-range', message: 'Malformed explicit selection range' })
+  if (explicit === 'ambiguous') {
+    return refused({ reason: 'ambiguous-selection', message: 'Contiguous selection does not contain the active cell' })
+  }
   if (explicit === 'unsupported') return refused({ reason: 'unsupported', message: 'Row-set refs are resolved by the worker, not range detection' })
   if (explicit !== null) return finishDerived(context, explicit, { kind: 'explicit' })
   const region = await probeCurrentRegion(active, scanner, pageLimit)
