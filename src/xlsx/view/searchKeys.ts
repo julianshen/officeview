@@ -131,15 +131,41 @@ export const combineTextHash = (count: number, chunks: readonly string[]): strin
  * allocation; afterChunk runs between chunks (cancellation checks, yields). */
 export async function textContentHash(texts: readonly string[], options: { account: LaneAccount; afterChunk: () => Promise<void> | void }): Promise<string> {
   const chunks: string[] = []
-  for (let start = 0; start < texts.length;) {
-    let end = start, size = 0
-    while (end < texts.length && (end === start || size + 4 + texts[end].length * 2 <= SEARCH_HASH_CHUNK_BYTES)) size += 4 + texts[end++].length * 2
+  const hashed = (size: number, digest: () => string) => {
     options.account.charge(size * 2 + 128)
-    try { chunks.push(textChunkHash(texts, start, end)) } finally { options.account.release(size * 2 + 128) }
+    try { chunks.push(digest()) } finally { options.account.release(size * 2 + 128) }
+  }
+  for (let start = 0; start < texts.length;) {
+    const first = 4 + texts[start].length * 2
+    if (first > SEARCH_HASH_CHUNK_BYTES) {
+      // One oversized value is hashed in bounded segments of the same
+      // length-prefixed stream; segment boundaries depend only on the text.
+      const text = texts[start], units = Math.floor((SEARCH_HASH_CHUNK_BYTES - 4) / 2)
+      for (let from = 0; from < text.length; from += units) {
+        const to = Math.min(text.length, from + units), prefix = from === 0
+        hashed((prefix ? 4 : 0) + (to - from) * 2, () => textSegmentHash(text, from, to, prefix))
+        await options.afterChunk()
+      }
+      start++
+      continue
+    }
+    let end = start, size = 0
+    while (end < texts.length && size + 4 + texts[end].length * 2 <= SEARCH_HASH_CHUNK_BYTES) size += 4 + texts[end++].length * 2
+    const from = start
+    hashed(size, () => textChunkHash(texts, from, end))
     start = end
     await options.afterChunk()
   }
   return combineTextHash(texts.length, chunks)
+}
+/** SHA-256 of code units [from, to) of one text, with its length prefix
+ * when the segment starts the text. */
+export function textSegmentHash(text: string, from: number, to: number, prefix: boolean): string {
+  const bytes = new Uint8Array((prefix ? 4 : 0) + (to - from) * 2), view = new DataView(bytes.buffer)
+  let at = 0
+  if (prefix) { view.setUint32(0, text.length, true); at = 4 }
+  for (let unit = from; unit < to; unit++) { view.setUint16(at, text.charCodeAt(unit), true); at += 2 }
+  return sha256HexJs(bytes)
 }
 export interface SearchKeyStore {
   /** null when absent; typed storage-error on failure. */
@@ -202,12 +228,15 @@ export class MemorySearchKeyStore implements SearchKeyStore {
       })
     }
     // Atomic replacement (no await): concurrent saves cannot strand charges.
+    // Admission may re-enter shed() and remove the previous run itself, so
+    // the displaced entry is reconciled after the charge, not before it.
     this.account?.charge(bytes)
     const copy = Object.freeze({ count: run.count, hash: run.hash, keys: Object.freeze(run.keys.slice()) })
+    const displaced = this.runs.get(id)?.bytes ?? 0
     this.runs.delete(id)
     this.runs.set(id, { run: copy, bytes })
-    this.usedBytes += bytes - previous
-    if (previous) this.account?.release(previous)
+    this.usedBytes += bytes - displaced
+    if (displaced) this.account?.release(displaced)
     this.saves++
   }
   async delete(owner: SearchKeyOwner): Promise<void> { this.remove(searchKeyOwnerId(owner)) }
