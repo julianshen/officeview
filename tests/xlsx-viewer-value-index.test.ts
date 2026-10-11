@@ -890,3 +890,43 @@ describe('review round 2 findings', () => {
     expect(cache.usedBytes).toBe(before)
   })
 })
+
+describe('review round 3 findings', () => {
+  it('rechecks owner and cancellation after the outer draft.search await (codex r3 1)', async () => {
+    const source = fromCells(items(40)), index = new ValueIndexCache().open(identity(), source)
+    await index.build()
+    const draft = await ValueSelectionDraft.open(index, null, new MemoryValueRunStore())
+    const later = (action: () => void) => queueMicrotask(() => queueMicrotask(() => queueMicrotask(action)))
+    await expect(draft.search({ text: 'item', locale: 'en-US' }, {
+      onProgress: p => { if (p.searched === p.total) later(() => { source.stamp = { ...STAMP, valueGen: 8 } }) },
+    })).rejects.toMatchObject({ code: 'stale-source' })
+    const other = fromCells(items(40)), cache = new ValueIndexCache(), second = cache.open(identity(), other)
+    await second.build()
+    const base = cache.usedBytes
+    const cancelled = await ValueSelectionDraft.open(second, null, new MemoryValueRunStore())
+    await expect(cancelled.search({ text: 'item', locale: 'en-US' }, {
+      onProgress: p => { if (p.searched === p.total) later(() => cancelled.cancel()) },
+    })).rejects.toMatchObject({ code: 'cancelled' })
+    expect(cancelled.closed).toBe(true)
+    expect(cache.usedBytes).toBe(base)
+  })
+  it('honours cancellation for empty refs and after the final key-set read (codex r3 4)', async () => {
+    const { index } = await built(items(10))
+    const store = new MemoryValueRunStore(), draft = await ValueSelectionDraft.open(index, null, store)
+    draft.selectAll(false)
+    const empty = (await draft.commit()).rule!
+    expect(empty).toMatchObject({ selection: { mode: 'include', keys: { count: 0 } } })
+    const cache = new ValueIndexCache(), aborted = new AbortController()
+    aborted.abort()
+    await expect(compileValuesMembership(empty, identity(), store, { cache, signal: aborted.signal })).rejects.toMatchObject({ code: 'cancelled' })
+    expect(cache.usedBytes).toBe(0)
+    const excluding = await ValueSelectionDraft.open(index, null, store)
+    excluding.toggle(1, false)
+    const rule = (await excluding.commit()).rule!
+    const during = new AbortController(), read = store.read.bind(store)
+    store.read = async (...args) => { const run = await read(...args); during.abort(); return run }
+    await expect(compileValuesMembership(rule, identity(), store, { cache, signal: during.signal })).rejects.toMatchObject({ code: 'cancelled' })
+    expect(cache.usedBytes).toBe(0)
+    await expect(ValueSelectionDraft.open(index, null, store, aborted.signal)).rejects.toMatchObject({ code: 'cancelled' })
+  })
+})

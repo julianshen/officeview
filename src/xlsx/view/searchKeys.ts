@@ -110,6 +110,8 @@ export interface SearchKeyRun {
   readonly keys: readonly (string | null)[]
 }
 export const SEARCH_HASH_CHUNK = 4096
+/** Upper bound of one hash scratch chunk (bytes of length-prefixed UTF-16). */
+export const SEARCH_HASH_CHUNK_BYTES = 1024 * 1024
 /** SHA-256 of length-prefixed UTF-16 code units; lone surrogates are hashed
  * losslessly (no text codec). */
 export function textChunkHash(texts: readonly string[], start: number, end: number): string {

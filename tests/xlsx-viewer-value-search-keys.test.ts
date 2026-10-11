@@ -6,7 +6,7 @@ import {
   type ValueColumnSource, type ValueIndex, type ValueIndexIdentity, type ValuePageRead, type ValueSearchResult,
 } from '../src/xlsx/view/valueIndex'
 import {
-  EXACT_SEARCH, MemorySearchKeyStore, createSearchKeyStrategy, foldVariantOf,
+  EXACT_SEARCH, MemorySearchKeyStore, SEARCH_HASH_CHUNK_BYTES, createSearchKeyStrategy, foldVariantOf,
   type SearchKeyOwner, type SearchKeyStrategy, type SearchKeyStrategySpec,
 } from '../src/xlsx/view/searchKeys'
 
@@ -294,5 +294,60 @@ describe('search-key store port', () => {
     await store.delete(owner(strategy))
     expect(await store.load(owner(strategy))).toBeNull()
     expect(store.usedBytes).toBe(0)
+  })
+})
+
+describe('review round 3 findings', () => {
+  const big = (count: number, units: number) => Array.from({ length: count }, (_, i) => String(i).padStart(8, '0') + 'x'.repeat(units - 8))
+  it('charges hash scratch: no room for one chunk falls back to streaming (codex r3 2)', async () => {
+    const values = big(256, 4096), probe = new ValueIndexCache(), sized = probe.open(identity(), new StringSource(values, 64))
+    await sized.build()
+    const keys = values.length * (4096 * 2 + 48), store = new MemorySearchKeyStore({ account: new ValueIndexCache().reserve() })
+    // Room for the index and its keys, but not for one hash scratch chunk.
+    const cache = new ValueIndexCache({ limitBytes: probe.usedBytes + keys + 64 * 1024, searchKeys: { strategy: asciiCandidate(), store } })
+    const index = cache.open(identity(), new StringSource(values, 64))
+    await index.build()
+    await index.search({ text: '0001', locale: 'en-US' })
+    expect(index.searchKeyStatus.state).toBe('streaming')
+    expect(cache.usedBytes).toBeLessThanOrEqual(cache.limitBytes)
+  })
+  it('hashes in bounded chunks that fit far below the full text size (codex r3 2)', async () => {
+    const values = big(1024, 4096), total = values.length * (4 + 4096 * 2)
+    expect(total).toBeGreaterThan(4 * SEARCH_HASH_CHUNK_BYTES)
+    const probe = new ValueIndexCache(), sized = probe.open(identity(), new StringSource(values, 128))
+    await sized.build()
+    const keys = values.length * (4096 * 2 + 48)
+    const limit = probe.usedBytes + keys + 3 * SEARCH_HASH_CHUNK_BYTES + 64 * 1024
+    expect(limit).toBeLessThan(probe.usedBytes + keys + 2 * total)
+    // The store's copy is charged to a separate pool so only hash scratch competes here.
+    const store = new MemorySearchKeyStore({ account: new ValueIndexCache().reserve() })
+    const cache = new ValueIndexCache({ limitBytes: limit, searchKeys: { strategy: asciiCandidate(), store } })
+    const index = cache.open(identity(), new StringSource(values, 128))
+    await index.build()
+    await index.search({ text: '0001', locale: 'en-US' })
+    expect(index.searchKeyStatus.state).toBe('persisted')
+  }, 60_000)
+  it('cancels hashing within a slice (codex r3 2)', async () => {
+    const values = big(4096, 4096), store = new MemorySearchKeyStore()
+    const cache = new ValueIndexCache({ searchKeys: { strategy: asciiCandidate(), store } })
+    const index = cache.open(identity(), new StringSource(values, 256))
+    await index.build()
+    const controller = new AbortController()
+    // Measured from the scheduled time: synchronous hashing delays the timer itself.
+    const scheduledAt = performance.now() + 5
+    setTimeout(() => controller.abort(), 5)
+    await expect(index.search({ text: '0001', locale: 'en-US' }, { signal: controller.signal, sliceMs: 0 })).rejects.toMatchObject({ code: 'cancelled' })
+    expect(performance.now() - scheduledAt).toBeLessThan(150)
+    expect(index.searchKeyStatus.state).not.toBe('persisted')
+  }, 60_000)
+  it('replaces stored runs atomically under concurrent saves (codex r3 3)', async () => {
+    const pool = new ValueIndexCache(), store = new MemorySearchKeyStore({ account: pool.reserve() }), strategy = asciiCandidate()
+    const run = (key: string) => ({ count: 2, hash: 'a'.repeat(64), keys: [key, null] })
+    await store.save(owner(strategy), run('first'))
+    await Promise.all([store.save(owner(strategy), run('second')), store.save(owner(strategy), run('third-longer')), store.save(owner(strategy), run('x'))])
+    expect(store.usedBytes).toBe(pool.usedBytes)
+    await store.delete(owner(strategy))
+    expect(store.usedBytes).toBe(0)
+    expect(pool.usedBytes).toBe(0)
   })
 })
