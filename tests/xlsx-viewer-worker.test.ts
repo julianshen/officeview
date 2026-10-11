@@ -880,7 +880,7 @@ describe('S4.1 round-2 findings (codex C / pi P)', () => {
     expect(replies[0]).toMatchObject({ kind: 'error', code: 'unsupported', requestId: 'b' })
   })
 
-  it('P7 progress replies never settle a request (no progress API until S4.2)', async () => {
+  it('P7 progress replies never settle a request (progress is a separate onProgress subscription since S4.2)', async () => {
     let listener: (event: { data: unknown }) => void = () => {}
     const client = createViewerClient({ postMessage: () => {}, addEventListener: (_t: 'message', l: (event: { data: unknown }) => void) => { listener = l }, removeEventListener: () => {} })
     const owner = initialIdentity('doc', 'A')
@@ -892,7 +892,7 @@ describe('S4.1 round-2 findings (codex C / pi P)', () => {
     expect(settled).toBe(false)
     listener({ data: { kind: 'cancelled', commandKind: 'valueQuery', requestId: 'v', owner, diagnostics: [] } })
     expect((await pending).kind).toBe('cancelled')
-    expect(client.send.length).toBe(1) // send(command) only: no onProgress option
+    expect(client.send.length).toBe(1) // send(command) only: progress uses client.onProgress
   })
 
   it('P9 view snapshots are frozen copies', async () => {
