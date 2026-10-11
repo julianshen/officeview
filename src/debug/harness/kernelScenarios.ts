@@ -17,6 +17,7 @@
 import { createFixture, type FixtureCell, type FixtureHandle } from '../../../tests/helpers/xlsx-viewer-fixtures'
 import type { ColumnRule, FilterSpec, SortSpec, SourceStore } from '../../xlsx/view/contracts'
 import { sortRowOrder } from '../../xlsx/view/sort'
+import { createHostYield } from '../../xlsx/view/scheduler'
 import { FilterEngine, classifyColumn, type ColumnClassification, type PreparedValue } from '../../xlsx/view/filter'
 import { ValueIndexCache, VALUE_PAGE_LIMIT, valueSourceFromStore, type ValueIndexIdentity } from '../../xlsx/view/valueIndex'
 import { createIdentityOrder } from '../../xlsx/view/order'
@@ -179,13 +180,34 @@ function sortRunner(def: ScenarioDef, rows: number): ScenarioRunner {
     },
     async kernel() {
       const prepared = host.session.preparedStore(host.sheetId)
+      // Phase attribution through the kernel's own yield hook, delegating to the
+      // same host yield the kernel would create: the work before each
+      // pause(phase) is charged to that phase, the remainder to `tail`.
+      const hostYield = createHostYield()
+      const phases: Record<string, number> = {}
+      let mark = 0
       const started = now()
-      const result = await sortRowOrder(prepared, spec, {
-        locale: 'en', residentWorkerBytes: host.session.memory.totalBytes, maxWorkerBytes: host.session.memory.limitBytes,
-      })
-      const ms = now() - started
+      mark = started
+      let result: Awaited<ReturnType<typeof sortRowOrder>>
+      try {
+        result = await sortRowOrder(prepared, spec, {
+          locale: 'en', residentWorkerBytes: host.session.memory.totalBytes, maxWorkerBytes: host.session.memory.limitBytes,
+          yield: async (phase) => {
+            const at = now()
+            phases[phase] = (phases[phase] ?? 0) + (at - mark)
+            await hostYield.yield()
+            mark = now()
+            phases.yielded = (phases.yielded ?? 0) + (mark - at)
+          },
+        })
+      } finally { hostYield.dispose() }
+      const ended = now()
+      phases.tail = ended - mark
+      const ms = ended - started
       if (result.kind !== 'complete') throw new Error(`sortRowOrder did not complete: ${JSON.stringify(result)}`)
-      return { ms, extras: { 'kernel-peak-bytes': result.ledger.peakBytes } }
+      const extras: Record<string, number> = { 'kernel-peak-bytes': result.ledger.peakBytes }
+      for (const [phase, value] of Object.entries(phases)) extras[`kernel-phase:${phase}`] = value
+      return { ms, extras }
     },
     async query() {
       const started = now()
