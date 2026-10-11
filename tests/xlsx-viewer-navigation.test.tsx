@@ -161,6 +161,24 @@ describe('viewport-only green grid overlay seam', () => {
       ], { x: 1, y: 1, width: 2, height: 2 }, pixelScale).borders).toEqual([])
     }
   })
+  it('paints at least one device pixel for selected cells smaller than a pixel at low zoom', () => {
+    const selected = { contains: () => true }
+    const tiny = gridSelectionOverlay(selected, [{ source: { row: 0, col: 0 }, bounds: { x: 1, y: 1, width: 0.04, height: 0.02 } }], { x: 0, y: 0, width: 10, height: 10 }, 10)
+    expect(tiny.fills).toHaveLength(1)
+    expect(tiny.fills[0]).toMatchObject({ x: 1, y: 1 })
+    expect(tiny.fills[0].width * 10).toBeCloseTo(1)
+    expect(tiny.fills[0].height * 10).toBeCloseTo(1)
+    expect(tiny.borders).toHaveLength(4)
+    // Sub-pixel neighbours coalesce into one device-pixel group, not stacked fills.
+    const group = gridSelectionOverlay(selected, [
+      { source: { row: 0, col: 0 }, bounds: { x: 1, y: 1, width: 0.02, height: 0.02 } },
+      { source: { row: 0, col: 1 }, bounds: { x: 1.02, y: 1, width: 0.02, height: 0.02 } },
+    ], { x: 0, y: 0, width: 10, height: 10 }, 10)
+    expect(group.fills).toHaveLength(1)
+    expect(group.borders).toHaveLength(4)
+    // Zero-size (hidden) records still paint nothing.
+    expect(gridSelectionOverlay(selected, [{ source: { row: 0, col: 0 }, bounds: { x: 1, y: 1, width: 0, height: 5 } }], { x: 0, y: 0, width: 10, height: 10 }, 10)).toEqual({ fills: [], borders: [] })
+  })
   it('clips selected viewport records and keeps the blue text selection separate', () => {
     const selection = new SourceSelection([{ rows: { kind: 'intervals', intervals: [{ r0: 3, r1: 3 }] }, cols: [{ c0: 0, c1: 0 }] }])
     const rects = gridSelectionOverlay(selection, [{ source: { row: 3, col: 0 }, bounds: { x: -5, y: 2, width: 20, height: 24 } }, { source: { row: 1, col: 0 }, bounds: { x: 15, y: 2, width: 20, height: 24 } }], { x: 0, y: 0, width: 10, height: 10 })

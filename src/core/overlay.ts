@@ -51,8 +51,10 @@ export function gridSelectionOverlay(selection: { contains(at: { row: number; co
     const { bounds } = record
     if (bounds.width <= 0 || bounds.height <= 0) continue
     // Key edges in integer device pixels, using the same endpoints for fills.
-    const x0 = snap(bounds.x), y0 = snap(bounds.y), x1 = snap(bounds.x + bounds.width), y1 = snap(bounds.y + bounds.height)
-    if (x1 <= x0 || y1 <= y0) continue
+    // A non-empty cell narrower than a device pixel still paints one pixel
+    // (the S5 pixel group); same-pixel neighbours then coalesce through `seen`.
+    const x0 = snap(bounds.x), y0 = snap(bounds.y)
+    const x1 = Math.max(x0 + 1, snap(bounds.x + bounds.width)), y1 = Math.max(y0 + 1, snap(bounds.y + bounds.height))
     const key = `${x0}:${y0}:${x1}:${y1}`
     if (seen.has(key)) continue
     seen.add(key)
