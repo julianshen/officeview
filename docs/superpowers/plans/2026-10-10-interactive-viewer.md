@@ -112,7 +112,8 @@ Every package is implemented on its own branch, reviewed by at least one agent f
 | S6.2 virtual owned grid semantics, headers, event isolation (`GridSemantics.tsx`, `GridHeaders.tsx`, OfficeDoc guards) | merged; Ctrl/Cmd+wheel over any viewer now actually blocks browser page zoom (behaviour change, flagged) |
 | S5.3 global workbook find engine (`src/xlsx/view/find.ts`) | merged; OfficeDoc wiring and worker search command wait for S5.2 |
 | S1.2 sparse pages, external page storage, small/large adapter parity (`sourcePages.ts`, `pagedImport.ts`, `pagedSource.ts`, `overviewIndex.ts`, `viewerLargeSource.ts`) | merged; worker routes admitted-paged blobs to paged sources; exported entry keeps compatibility mode until the viewer is enabled |
-| S9.1, S5.2 | in progress (implementation or review rounds on their own branches) |
+| S9.1 atomic filter dropdown and sort dialog (`FilterDropdown.tsx`, `SortDialog.tsx`, `controlsClient.ts`, header sort/funnel buttons) | merged; mounted by S5.2 |
+| S5.2 | in progress (behind `interactiveSheets` flag) | (implementation or review rounds on their own branches) |
 | S1.2, S1.3, S4.4–S4.5, S5, S6, S9, S10 (physical-device receipts skipped for now by user decision), S11/S12 status, S13 | not started |
 
 ## S0 — Freeze contracts, counterexamples and fixture/harness infrastructure
@@ -557,6 +558,8 @@ expect(wide.contains({ row: 2, col: 0 })).toBe(false)
 > 3. Whole-sheet static export/print of sheets beyond the legacy 16,384×4,096 grid (or drawing sheets beyond the old drawing clamp) is refused instead of silently truncated, with: "This sheet is too large to export as one image. Choose a range or print selected pages." Ordinary sheets within the legacy grid render exactly as before.
 
 ### S9.1 Atomic filter dropdown and sort dialog
+
+> **Status (2026-10-12):** merged (codex implementation; Claude fixes for the last MINORs; Claude reviews over two rounds plus opencode delta check; every finding fixed). Atomic OK/Cancel drafts over the S8.2 value universe, typed AND/OR/datePreset builder, ≤8-level focus-trapped sort dialog, always-visible header sort-arrow and funnel buttons under the S6.2 focus model, mobile bottom sheet, the three user-approved notices in ViewerStatus. Mounting into OfficeDoc happens in S5.2; real-device touch/screen-reader checks are S10.
 
 **Files:** create `src/components/xlsx/FilterDropdown.tsx`, `SortDialog.tsx`; integrate `GridHeaders.tsx`, `ViewerStatus.tsx`, `OfficeDoc.tsx`; test `tests/xlsx-viewer-filter-ui.test.tsx`, `tests/xlsx-viewer-sort-ui.test.tsx`.
 
