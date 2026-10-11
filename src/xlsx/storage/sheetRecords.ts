@@ -540,8 +540,10 @@ export function sheetRecordEvents(meta: SheetMetadata, options: SheetRecordOptio
         })
       } else if (depth === 2 && local === 'mergeCell' && stack[1] === 'mergeCells') {
         const ref = attrMap(names, values, count).ref
-        bounded(meta.merges, 'merges')
-        if (ref) meta.merges.push(ref)
+        if (ref) {
+          bounded(meta.merges, 'merges')
+          meta.merges.push(ref)
+        }
       } else if (depth === 2 && local === 'tablePart' && stack[1] === 'tableParts') {
         const id = attrMap(names, values, count).id
         bounded(meta.tablePartIds, 'table parts')

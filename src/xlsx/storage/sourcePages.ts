@@ -237,7 +237,8 @@ export function decodeStrings(bytes: Uint8Array): StringChunk {
 export type PageBackendKind = 'memory' | 'opfs' | 'indexeddb'
 export interface PageBackend {
   readonly kind: PageBackendKind
-  /** Resolves once the bytes are durable (transaction complete / file closed). */
+  /** Resolves once the bytes are durable (transaction complete / file closed).
+   * Ownership of `bytes` passes to the backend; callers must not reuse them. */
   put(key: string, bytes: Uint8Array): Promise<void>
   get(key: string): Promise<Uint8Array | undefined>
   /** Removes every stored page of this backend's owner. Idempotent. */
@@ -251,12 +252,15 @@ function storageError(error: unknown, action: string): PackageError {
   return new PackageError('storage-error', `browser storage failed while ${action}${error instanceof Error ? `: ${error.message}` : ''}`)
 }
 
-export function memoryPageBackend(): PageBackend & { readonly size: number } {
+/** Takes ownership of the bytes it is given (the store hands it a fresh
+ * encodePage buffer and never reuses it), so held bytes equal charged bytes. */
+export function memoryPageBackend(): PageBackend & { readonly size: number; readonly heldBytes: number } {
   const pages = new Map<string, Uint8Array>()
   return {
     kind: 'memory',
     get size() { return pages.size },
-    async put(key, bytes) { pages.set(key, bytes.slice()) },
+    get heldBytes() { let n = 0; for (const b of pages.values()) n += b.byteLength; return n },
+    async put(key, bytes) { pages.set(key, bytes) },
     async get(key) { return pages.get(key) },
     async removeAll() { pages.clear() },
   }
