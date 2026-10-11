@@ -1,8 +1,10 @@
 /** Slow, test-only oracle written directly from spec §7.1 (amended 2026-10-11).
  * It deliberately shares no matching or segmentation code with production:
  * - canonical form: NFD, remove \p{Default_Ignorable_Code_Point} (host regex)
- *   except ZWJ, variation selectors and tag characters,
- *   full case folding from the pinned table plus the Turkic I/İ rules, NFD;
+ *   except ZWJ, variation selectors and tag characters, then full case folding
+ *   from a plain CaseFolding C+F listing, with the Turkic I/U+0307 conditions
+ *   taken from SpecialCasing.txt and evaluated by direct scans over exact
+ *   Canonical_Combining_Class values from UnicodeData.txt; then NFD;
  * - graphemes: host Intl.Segmenter (allowed here as a test-only cross-check),
  *   with every lone surrogate forced to be its own unit;
  * - matching: exhaustive enumeration of grapheme-boundary candidates comparing
@@ -10,16 +12,47 @@
  * The host regex/segmenter follow the host's Unicode version, so pools must use
  * characters whose properties are identical in the host and pinned versions.
  */
+import { readFileSync } from 'node:fs'
+import { join } from 'node:path'
 import type { TextOp } from '../../src/xlsx/view/contracts'
-import { fullCaseFold } from '../../src/xlsx/view/canonicalText'
+
+const fixture = (name: string) => JSON.parse(readFileSync(join(__dirname, '..', 'fixtures', 'unicode', name), 'utf8'))
+const folding = new Map<number, string>()
+for (const entry of (fixture('case-folding-16.0.0.json').full as string).split(',')) {
+  const [point, target] = entry.split(':')
+  folding.set(parseInt(point, 36), String.fromCodePoint(...target.split('.').map(value => parseInt(value, 36))))
+}
+const combiningClass = new Map<number, number>()
+for (const entry of (fixture('combining-class-16.0.0.json').nonzero as string).split(',')) {
+  const [point, ccc] = entry.split(':')
+  combiningClass.set(parseInt(point, 36), Number(ccc))
+}
+const ccc = (point: string) => combiningClass.get(point.codePointAt(0)!) ?? 0
 
 // Intl.Segmenter is ES2022; the project lib targets ES2020.
 interface GraphemeSegmenter { segment(text: string): Iterable<{ segment: string }> }
 const { Segmenter } = Intl as unknown as { Segmenter: new (locale: string, options: { granularity: 'grapheme' }) => GraphemeSegmenter }
 const segmenter = new Segmenter('en', { granularity: 'grapheme' })
 const lone = (point: string) => point.length === 1 && point.charCodeAt(0) >= 0xd800 && point.charCodeAt(0) <= 0xdfff
-/** Canonical ordering puts a mark with 0 < ccc < 230 before U+0307. */
-const sortsBeforeDotAbove = (point: string) => ('\u0307' + point).normalize('NFD') !== '\u0307' + point
+/** SpecialCasing.txt: in After_I and Before_Dot, characters of combining
+ * class 0 or 230 (Above) interrupt the context; any other class may intervene. */
+const interrupts = (point: string) => ccc(point) === 0 || ccc(point) === 230
+/** After_I: there is an uppercase I before C, with no intervening class 0 or 230. */
+function afterI(points: readonly string[], at: number): boolean {
+  for (let j = at - 1; j >= 0; j--) {
+    if (points[j] === 'I') return true
+    if (interrupts(points[j])) return false
+  }
+  return false
+}
+/** Before_Dot: C is followed by U+0307, with no intervening class 0 or 230. */
+function beforeDot(points: readonly string[], at: number): boolean {
+  for (let j = at + 1; j < points.length; j++) {
+    if (points[j] === '\u0307') return true
+    if (interrupts(points[j])) return false
+  }
+  return false
+}
 
 export function oracleCanonical(text: string, locale: string): string {
   const turkic = ['tr', 'az'].includes(locale.split(/[-_]/)[0].toLowerCase())
@@ -27,17 +60,12 @@ export function oracleCanonical(text: string, locale: string): string {
   let folded = ''
   for (let i = 0; i < points.length; i++) {
     const point = points[i]
-    if (turkic && point === 'I') {
-      // SpecialCasing After_I/Before_Dot: I followed by U+0307 with no
-      // intervening ccc 0 or 230 is the decomposed İ, which folds to i.
-      let j = i + 1
-      while (j < points.length && sortsBeforeDotAbove(points[j])) j++
-      if (points[j] === '\u0307') { folded += 'i' + points.slice(i + 1, j).join(''); i = j }
-      else folded += 'ı'
-      continue
-    }
-    if (turkic && point === 'İ') { folded += 'i'; continue }
-    folded += fullCaseFold(point.codePointAt(0)!, false) ?? point
+    // Turkic: I lowercases to dotless ı unless Before_Dot; U+0307 is removed
+    // After_I (together these fold decomposed İ to i); İ itself folds to i (T).
+    if (turkic && point === 'I') folded += beforeDot(points, i) ? 'i' : '\u0131'
+    else if (turkic && point === '\u0307') folded += afterI(points, i) ? '' : point
+    else if (turkic && point === '\u0130') folded += 'i'
+    else folded += folding.get(point.codePointAt(0)!) ?? point
   }
   return folded.normalize('NFD')
 }

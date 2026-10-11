@@ -1,4 +1,4 @@
-import { CASE_FOLD_MULTIPLE, CASE_FOLD_RUNS, PROPERTY_PALETTE, PROPERTY_RUNS, PROPERTY_VALUES, TURKIC_FOLD, UNICODE_VERSION } from './unicode/textData'
+import { CASE_FOLD_MULTIPLE, CASE_FOLD_RUNS, COMBINING_RUNS, PROPERTY_PALETTE, PROPERTY_RUNS, PROPERTY_VALUES, TURKIC_FOLD, UNICODE_VERSION } from './unicode/textData'
 
 /** Canonical text-matching representation (spec §7.1, amended 2026-10-11):
  * NFD, remove Default_Ignorable_Code_Point except ZWJ, variation selectors
@@ -14,7 +14,7 @@ import { CASE_FOLD_MULTIPLE, CASE_FOLD_RUNS, PROPERTY_PALETTE, PROPERTY_RUNS, PR
  */
 export { UNICODE_VERSION }
 /** Bumped whenever canonicalSearchKey output can change for the same Unicode data. */
-export const CANONICAL_KEY_VERSION = 1
+export const CANONICAL_KEY_VERSION = 2
 export type FoldVariant = 'default' | 'turkic'
 
 // Property byte layout, mirrored by scripts/generate-unicode-text-data.ts.
@@ -67,6 +67,34 @@ export function unicodeProperty(codePoint: number): number {
   return value
 }
 
+let combiningStarts: Uint32Array | undefined, combiningKinds: Uint8Array
+function decodeCombining(): Uint32Array {
+  const starts: number[] = [], kinds: number[] = []
+  let start = 0, digits = ''
+  for (const char of COMBINING_RUNS) {
+    const kind = 'ABC'.indexOf(char)
+    if (kind < 0) { digits += char; continue }
+    start += parseInt(digits, 36)
+    digits = ''
+    starts.push(start)
+    kinds.push(kind)
+  }
+  combiningKinds = Uint8Array.from(kinds)
+  return Uint32Array.from(starts)
+}
+/** Pinned Canonical_Combining_Class reduced to 0 (ccc 0), 1 (ccc 230) or 2 (other). */
+export function combiningClassKind(codePoint: number): number {
+  if (!Number.isInteger(codePoint) || codePoint < 0 || codePoint > 0x10ffff) throw new RangeError('Invalid code point')
+  const starts = combiningStarts ??= decodeCombining()
+  let low = 0, high = starts.length - 1
+  while (low < high) {
+    const middle = (low + high + 1) >> 1
+    if (starts[middle] <= codePoint) low = middle
+    else high = middle - 1
+  }
+  return combiningKinds[low]
+}
+
 /** Default-ignorables kept by spec §7.1 (clarified 2026-10-11): U+200D ZWJ,
  * variation selectors U+FE00-FE0F/U+E0100-E01EF and tags U+E0020-E007F. */
 function retainedIgnorable(point: number): boolean {
@@ -117,16 +145,33 @@ export function canonicalKeyStrategyId(variant: FoldVariant): string {
   return `canonical-text/v${CANONICAL_KEY_VERSION}/unicode-${UNICODE_VERSION}/${variant}`
 }
 
-const beforeDotAbove = new Map<number, boolean>()
-/** True when 0 < ccc < 230: canonical ordering moves the mark before U+0307. */
-function sortsBeforeDotAbove(point: number): boolean {
-  let known = beforeDotAbove.get(point)
-  if (known === undefined) {
-    const mark = String.fromCodePoint(point)
-    known = ('\u0307' + mark).normalize('NFD') === mark + '\u0307'
-    if (beforeDotAbove.size < 4096) beforeDotAbove.set(point, known)
+/** Turkic folding of an NFD string containing I, on the sequence left after
+ * ignorable removal. CaseFolding T maps I to dotless ı and İ to i; SpecialCasing
+ * conditions keep this canonically consistent for decomposed İ: an I that is
+ * Before_Dot lowers to i, and a U+0307 that is After_I is removed. In both
+ * conditions only characters of combining class 0 or 230 interrupt; any other
+ * class may intervene (pinned Canonical_Combining_Class). */
+function foldTurkic(nfd: string): string {
+  const points: number[] = []
+  for (let i = 0; i < nfd.length;) {
+    const point = nfd.codePointAt(i)!
+    i += point > 0xffff ? 2 : 1
+    if (!removedIgnorable(point)) points.push(point)
   }
-  return known
+  let folded = '', afterI = false
+  for (let i = 0; i < points.length; i++) {
+    const point = points[i]
+    if (point === 0x49) {
+      let dotted = false
+      for (let j = i + 1; j < points.length; j++) {
+        if (points[j] === 0x307) { dotted = true; break }
+        if (combiningClassKind(points[j]) !== 2) break
+      }
+      folded += dotted ? 'i' : '\u0131'
+    } else if (!(point === 0x307 && afterI)) folded += fullCaseFold(point, true) ?? String.fromCodePoint(point)
+    afterI = point === 0x49 || (afterI && combiningClassKind(point) === 2)
+  }
+  return folded
 }
 
 let changes: Uint8Array | undefined
@@ -144,6 +189,7 @@ export function canonicalize(text: string, turkic: boolean): string {
   // ASCII has no decompositions or default-ignorables; folding is A-Z only.
   if (ASCII.test(text)) return (turkic ? text.replace(/I/g, '\u0131') : text).toLowerCase()
   const nfd = text.normalize('NFD'), length = nfd.length, rewrite = changes ??= decodeChanges()
+  if (turkic && nfd.includes('I')) return foldTurkic(nfd).normalize('NFD')
   // Copy unchanged runs as slices; per-character concatenation dominates otherwise.
   let folded = '', run = 0
   for (let i = 0; i < length;) {
@@ -157,29 +203,13 @@ export function canonicalize(text: string, turkic: boolean): string {
       if (!ignorable && !folds!.has(point)) { i += 2; continue }
     } else {
       const change = rewrite[unit]
-      if (!change && !(turkic && unit === 0x49)) { i++; continue }
+      if (!change) { i++; continue }
       ignorable = (change & 1) !== 0
     }
     folded += nfd.slice(run, i)
     i += size
     run = i
     if (ignorable) continue
-    if (turkic && point === 0x49) {
-      // SpecialCasing After_I/Before_Dot: in tr/az, I followed by U+0307 with
-      // no intervening ccc 0/230 mark is the decomposed İ and folds to i, which
-      // keeps NFD-first folding canonically equivalent to folding U+0130.
-      let marks = '', j = i, dotted = false
-      while (j < length) {
-        const next = nfd.codePointAt(j)!, step = next > 0xffff ? 2 : 1
-        if (removedIgnorable(next)) { j += step; continue }
-        if (next === 0x307) { dotted = true; j += step; break }
-        if (!sortsBeforeDotAbove(next)) break
-        marks += String.fromCodePoint(next)
-        j += step
-      }
-      if (dotted) { folded += 'i' + marks; i = run = j } else folded += '\u0131'
-      continue
-    }
     folded += fullCaseFold(point, turkic)!
   }
   if (run === 0) return nfd
