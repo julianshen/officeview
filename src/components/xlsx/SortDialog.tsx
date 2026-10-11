@@ -10,20 +10,20 @@ export function SortDialog(props: SortDialogProps): ReactElement | null {
   const life = useControlLifetime(props), root = useRef<HTMLDivElement>(null), ids = useRef(0), focus = useRef<string | null>(null)
   const [range, setRange] = useState<DetectedRange | null>(null), [levels, setLevels] = useState<Level[]>([]), [caseSensitive, setCaseSensitive] = useState(props.applied?.caseSensitive ?? false)
   const [busy, setBusy] = useState(true), [error, setError] = useState(''), [progress, setProgress] = useState('Resolving source range')
-  const resolve = (override?: 0 | 1) => {
+  const resolve = (override?: 0 | 1, reset = false) => {
     const job = life.begin(); setBusy(true); setError('')
     void props.client.resolve(job.owner, 'sort', job.signal, override, props.col).then(result => {
       if (!job.current()) return
       if (result.kind !== 'complete') { const message = result.kind === 'refused' ? failureText(result) : 'Source range is incomplete; retry.'; setError(message); props.onNotice(message); setBusy(false); return }
       setRange(result)
-      if (!levels.length) {
+      if (reset || !levels.length) {
         const applied = props.applied && sameFilterRange(props.applied.range, result.range) ? props.applied : null
         setLevels((applied?.keys ?? [{ col: props.col !== undefined && props.col >= result.range.c0 && props.col <= result.range.c1 ? props.col : result.range.c0, order: 'asc' as const }]).map(key => ({ id: ++ids.current, column: columnToLetters(key.col), order: key.order })))
       }
       setBusy(false)
     }).catch(error => { if (job.current()) { const message = life.error(error); setError(message); props.onNotice(message); setBusy(false) } })
   }
-  useEffect(() => { if (props.open !== false) { setLevels([]); resolve() } }, [props.open, life.ownerKey])
+  useEffect(() => { if (props.open !== false) { setLevels([]); setCaseSensitive(props.applied?.caseSensitive ?? false); resolve(undefined, true) } }, [props.open, life.ownerKey])
   useLayoutEffect(() => {
     if (focus.current) { root.current?.querySelector<HTMLElement>(focus.current)?.focus(); focus.current = null }
     else if (levels.length === 1 && !root.current?.contains(document.activeElement)) root.current?.querySelector<HTMLInputElement>('input')?.focus()

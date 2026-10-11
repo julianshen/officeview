@@ -1,6 +1,8 @@
 import { useEffect, useRef, useState, type ReactElement } from 'react'
 import type { ColumnRule, FilterSpec } from '../../xlsx/view/contracts'
 import { FilterEngine, type ColumnClassification } from '../../xlsx/view/filter'
+import { lowerDateCondition } from '../../xlsx/view/datePredicates'
+import { decodeSerial } from '../../xlsx/formula/serial'
 import { columnToLetters } from '../../xlsx/view/coordinates'
 import type { DetectedRange } from '../../xlsx/view/rangeDetection'
 import { filterWithColumn, sameFilterRange, type DraftPage, type DraftQuery, type ValueDraftAction, type ValuesDraftPort } from './controlsClient'
@@ -20,6 +22,8 @@ export function FilterDropdown(props: FilterDropdownProps): ReactElement | null 
   const noticeError = (message: string) => { setError(message); props.onNotice(message) }
   const initialize = () => {
     const job = life.begin(); setBusy(true); setError(''); setPage(null); setRange(null)
+    setMethod(initial ? 'custom' : 'values'); setFirst(conditionInput(initial)); setSecond(conditionInput(appliedRule?.kind === 'compound' ? appliedRule.second : undefined))
+    setCompound(appliedRule?.kind === 'compound'); setConnective(appliedRule?.kind === 'compound' ? appliedRule.connective : 'and'); setInspection(''); setIncludeBlanks(false)
     session.current?.cancel(); session.current = null
     void (async () => {
       const resolved = await props.client.resolve(job.owner, 'filter', job.signal, undefined, props.col)
@@ -51,6 +55,14 @@ export function FilterDropdown(props: FilterDropdownProps): ReactElement | null 
       custom = two ? { kind: 'compound', connective, first: one, second: two } : one
       new FilterEngine(props.client.context()).compileRule(custom, classification)
     } catch (error) { validation = life.error(error) }
+  }
+  const periods: string[] = []
+  if (method === 'custom' && custom && !validation) {
+    for (const rule of custom.kind === 'compound' ? [custom.first, custom.second] : [custom]) if (rule.kind === 'datePreset') {
+      const context = props.client.context(), interval = lowerDateCondition(rule, context)
+      const day = (serial: number) => { const decoded = decodeSerial(serial, context.dateSystem); if ('kind' in decoded) return 'unavailable'; const { year, month, day } = decoded.civil; return `${String(year).padStart(4, '0')}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}` }
+      periods.push(`${rule.preset}: ${day(interval.start)} through ${day(interval.end - 1)} (${context.timeZone}); re-resolved when applied.`)
+    }
   }
   const apply = (shortcut?: 'clear' | 'clearAll' | 'asc' | 'desc') => {
     if (busy || life.invalid || (!shortcut && (!range || !page?.complete || validation))) return
@@ -116,6 +128,7 @@ export function FilterDropdown(props: FilterDropdownProps): ReactElement | null 
         {compound && <><label>Combine <select aria-label="Combine conditions" style={controlTarget} value={connective} onChange={event => setConnective(event.target.value as 'and' | 'or')}><option value="and">All (AND)</option><option value="or">Either (OR)</option></select></label><ConditionEditor value={second} onChange={setSecond} classification={classification} index={2} invalid={Boolean(validation)} /></>}
         {classification.kind === 'date' && <p>Calendar dates in {props.client.context().timeZone}; periods include times and resolve at apply time.</p>}
       </>}
+      {periods.map(period => <p key={period}>{period}</p>)}
       {inspection && <pre>{inspection}</pre>}{validation && <p>{validation}</p>}{error && <p>{error}</p>}
       {busy && <div role="progressbar" aria-label={progress}>{progress}</div>}
       {!busy && (!page?.complete || error) && <button type="button" style={controlTarget} onClick={initialize}>Retry values</button>}

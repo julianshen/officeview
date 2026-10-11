@@ -108,3 +108,175 @@ describe('S9 filter dropdown draft UI', () => {
     invoker.remove()
   })
 })
+
+describe('S9 typed builders and guarded transactions', () => {
+  it('discards custom builder edits on Cancel/reopen and supports AND/OR without publishing drafts', async () => {
+    const f = controlsFixture(6), ui = render(<FilterHarness fixture={f} />)
+    await waitFor(() => expect(ui.getByRole('checkbox', { name: 'item-3' })).toBeTruthy())
+    fireEvent.change(ui.getByRole('combobox', { name: 'Filter method' }), { target: { value: 'custom' } })
+    fireEvent.change(ui.getByRole('combobox', { name: 'Condition 1 operator' }), { target: { value: 'contains' } })
+    fireEvent.change(ui.getByRole('textbox', { name: 'Condition 1 first' }), { target: { value: 'item' } })
+    fireEvent.click(ui.getByRole('checkbox', { name: 'Use two conditions' }))
+    fireEvent.change(ui.getByRole('combobox', { name: 'Combine conditions' }), { target: { value: 'or' } })
+    fireEvent.change(ui.getByRole('combobox', { name: 'Condition 2 type' }), { target: { value: 'number' } })
+    fireEvent.change(ui.getByRole('textbox', { name: 'Condition 2 first' }), { target: { value: '0' } })
+    expect(f.publications).toBe(0)
+    fireEvent.click(ui.getByRole('button', { name: 'Cancel' })); fireEvent.click(ui.getByRole('button', { name: 'Open filter' }))
+    await waitFor(() => expect(ui.getByRole('checkbox', { name: 'item-3' })).toBeTruthy())
+    expect((ui.getByRole('combobox', { name: 'Filter method' }) as HTMLSelectElement).value).toBe('values')
+  })
+  it('keeps date presets symbolic and previews the resolved calendar period/zone', async () => {
+    const f = controlsFixture(4, { kind: 'date', hasNumeric: true }), ui = render(<FilterHarness fixture={f} />)
+    await waitFor(() => expect(ui.getByRole('button', { name: 'OK' }).hasAttribute('disabled')).toBe(false))
+    fireEvent.change(ui.getByRole('combobox', { name: 'Filter method' }), { target: { value: 'custom' } })
+    fireEvent.change(ui.getByRole('combobox', { name: 'Condition 1 type' }), { target: { value: 'datePreset' } })
+    expect(ui.getByText(/2026-10-11.*UTC/)).toBeTruthy()
+    fireEvent.click(ui.getByRole('button', { name: 'OK' }))
+    await waitFor(() => expect(f.publications).toBe(1))
+    expect(f.snapshot.filter?.columns.get(0)).toEqual({ kind: 'datePreset', preset: 'today' })
+    expect(f.snapshot.records.visible).toBe(2)
+  })
+  it('reports invalid reversed bounds and does not apply wrong-type/error/blank conditions', async () => {
+    const f = controlsFixture(5, { kind: 'number', hasNumeric: true }), ui = render(<FilterHarness fixture={f} />)
+    await waitFor(() => expect(ui.getByRole('button', { name: 'OK' }).hasAttribute('disabled')).toBe(false))
+    fireEvent.change(ui.getByRole('combobox', { name: 'Filter method' }), { target: { value: 'custom' } })
+    fireEvent.change(ui.getByRole('combobox', { name: 'Condition 1 operator' }), { target: { value: 'between' } })
+    fireEvent.change(ui.getByRole('textbox', { name: 'Condition 1 first' }), { target: { value: '0' } })
+    fireEvent.change(ui.getByRole('textbox', { name: 'Condition 1 second' }), { target: { value: '-1' } })
+    expect(ui.getByText(/reversed numeric bounds/)).toBeTruthy()
+    expect(ui.getByRole('button', { name: 'OK' }).hasAttribute('disabled')).toBe(true)
+    expect(f.publications).toBe(0)
+  })
+  it('never commits late operation results after an owner change and does not overwrite the retry notice', async () => {
+    const f = controlsFixture(6), applied = vi.fn(), notice = vi.fn(), close = vi.fn()
+    let finish!: (stage: Awaited<ReturnType<typeof f.options.stageFilter>>) => void
+    const client = createControlsClient({ ...f.options, stageFilter: () => new Promise(resolve => { finish = resolve }) })
+    const props = { owner: f.snapshot.owner, client, col: 0, applied: null, onApplied: applied, onNotice: notice, onClose: close }
+    const ui = render(<FilterDropdown {...props} />)
+    await waitFor(() => expect(ui.getByRole('checkbox', { name: 'item-3' })).toBeTruthy())
+    fireEvent.click(ui.getByRole('checkbox', { name: 'item-3' }))
+    await waitFor(() => expect(ui.getByRole('button', { name: 'OK' }).hasAttribute('disabled')).toBe(false))
+    fireEvent.click(ui.getByRole('button', { name: 'OK' }))
+    await waitFor(() => expect(finish).toBeTypeOf('function'))
+    f.snapshot = { ...f.snapshot, owner: { ...f.snapshot.owner, sheetId: 'replacement' } }
+    ui.rerender(<FilterDropdown {...props} owner={f.snapshot.owner} />)
+    finish({ kind: 'ready', publish: () => { throw new Error('Stale operation published') } })
+    await act(async () => { await Promise.resolve() })
+    expect(applied).not.toHaveBeenCalled()
+    expect(f.publications).toBe(0)
+    expect(notice.mock.calls.at(-1)?.[0]).toBe('Source or view changed; reopen and retry.')
+    expect(f.runs.refCount).toBe(0)
+  })
+})
+
+it('surfaces approved load reports and authoritative body counts through the sole ViewerStatus', () => {
+  const messages = [
+    'This file is too large to open from the web in this browser. Download it and open it locally.',
+    'Showing saved values — 12 formulas not recalculated (file too large)',
+    'This sheet is too large to export as one image. Choose a range or print selected pages.',
+  ]
+  const ui = render(<ViewerStatus records={{ visible: 3, total: 10, completeness: 'complete' }} countMode="body" loadReport={{ status: 'ready', notices: messages }} />)
+  expect(ui.getAllByRole('status')).toHaveLength(1)
+  for (const message of messages) expect(ui.getByRole('status').textContent).toContain(message)
+  expect(ui.getByRole('status').textContent).toContain('Visible body 3 / complete body 10')
+})
+
+it('applies a typed OR builder atomically and replaces the old range with a notice', async () => {
+  const f = controlsFixture(6)
+  f.snapshot = { ...f.snapshot, filter: { range: { ...f.range, r1: 2 }, columns: new Map([[1, { kind: 'number', op: 'gt', first: 0 }]]) } }
+  const ui = render(<FilterHarness fixture={f} />)
+  await waitFor(() => expect(ui.getByRole('checkbox', { name: 'item-3' })).toBeTruthy())
+  fireEvent.change(ui.getByRole('combobox', { name: 'Filter method' }), { target: { value: 'custom' } })
+  fireEvent.change(ui.getByRole('combobox', { name: 'Condition 1 operator' }), { target: { value: 'contains' } })
+  fireEvent.change(ui.getByRole('textbox', { name: 'Condition 1 first' }), { target: { value: 'item' } })
+  fireEvent.click(ui.getByRole('checkbox', { name: 'Use two conditions' }))
+  fireEvent.change(ui.getByRole('combobox', { name: 'Combine conditions' }), { target: { value: 'or' } })
+  fireEvent.change(ui.getByRole('combobox', { name: 'Condition 2 type' }), { target: { value: 'number' } })
+  fireEvent.change(ui.getByRole('textbox', { name: 'Condition 2 first' }), { target: { value: '0' } })
+  expect(f.publications).toBe(0)
+  fireEvent.click(ui.getByRole('button', { name: 'OK' }))
+  await waitFor(() => expect(f.publications).toBe(1))
+  expect(f.snapshot.filter?.range).toEqual(f.range)
+  expect(f.snapshot.filter?.columns.size).toBe(1)
+  expect(f.snapshot.filter?.columns.get(0)).toMatchObject({ kind: 'compound', connective: 'or', first: { kind: 'text', op: 'contains' }, second: { kind: 'number', op: 'eq', first: 0 } })
+  expect(ui.getByRole('status').textContent).toContain('Previous filter range replaced')
+})
+
+it('Clear removes the final column rule, restores authoritative counts and notes snapshot-hidden rows', async () => {
+  const f = controlsFixture(6)
+  f.snapshot = { ...f.snapshot, filter: { range: f.range, columns: new Map([[0, { kind: 'number', op: 'gt', first: 0 }]]) }, records: { visible: 0, total: 6, completeness: 'complete' } }
+  const notice = vi.fn(), applied = vi.fn()
+  const ui = render(<FilterDropdown owner={f.snapshot.owner} client={f.client} col={0} applied={f.snapshot.filter} snapshotHidden onClose={() => {}} onNotice={notice} onApplied={applied} />)
+  await waitFor(() => expect(ui.getByRole('button', { name: 'Clear column' }).hasAttribute('disabled')).toBe(false))
+  fireEvent.click(ui.getByRole('button', { name: 'Clear column' }))
+  await waitFor(() => expect(applied).toHaveBeenCalledOnce())
+  expect(f.snapshot.filter).toBeNull()
+  expect(f.snapshot.records).toEqual({ visible: 6, total: 6, completeness: 'complete' })
+  expect(notice).toHaveBeenCalledWith("Filter cleared. File's saved hidden rows remain hidden.")
+})
+
+it('shows incomplete progress, disables Apply, permits cancel and releases a refused candidate', async () => {
+  const f = controlsFixture(6), client = createControlsClient({ ...f.options, stageFilter: async () => ({ kind: 'refused', refusal: { reason: 'merge', range: f.range } }) })
+  const ui = render(<FilterHarness fixture={f} client={client} />)
+  expect(ui.getByRole('progressbar')).toBeTruthy()
+  expect(ui.getByRole('button', { name: 'OK' }).hasAttribute('disabled')).toBe(true)
+  await waitFor(() => expect(ui.getByRole('checkbox', { name: 'item-3' })).toBeTruthy())
+  fireEvent.click(ui.getByRole('checkbox', { name: 'item-3' }))
+  await waitFor(() => expect(ui.getByRole('button', { name: 'OK' }).hasAttribute('disabled')).toBe(false))
+  fireEvent.click(ui.getByRole('button', { name: 'OK' }))
+  await waitFor(() => expect(ui.getByRole('status').textContent).toContain('Operation refused: merge'))
+  expect(f.publications).toBe(0)
+  expect(f.snapshot.filter).toBeNull()
+  fireEvent.click(ui.getByRole('button', { name: 'Cancel' }))
+  expect(f.runs.refCount).toBe(0)
+})
+
+it('search Enter searches without applying and native checkbox/negative typing stays isolated', async () => {
+  const f = controlsFixture(6), ui = render(<FilterHarness fixture={f} />)
+  await waitFor(() => expect(ui.getByRole('checkbox', { name: 'item-3' })).toBeTruthy())
+  const input = ui.getByRole('textbox', { name: 'Search all values' })
+  fireEvent.change(input, { target: { value: 'item' } }); fireEvent.keyDown(input, { key: 'Enter' })
+  await waitFor(() => expect(ui.getByRole('checkbox', { name: 'item-3' })).toBeTruthy())
+  expect(f.publications).toBe(0)
+})
+
+it.each(['and', 'or'] as const)('commits %s compound predicates and excludes errors/blanks through typed conditions', async connective => {
+  const f = controlsFixture(6), ui = render(<FilterHarness fixture={f} />)
+  await waitFor(() => expect(ui.getByRole('checkbox', { name: 'item-3' })).toBeTruthy())
+  fireEvent.change(ui.getByRole('combobox', { name: 'Filter method' }), { target: { value: 'custom' } })
+  fireEvent.change(ui.getByRole('combobox', { name: 'Condition 1 operator' }), { target: { value: 'contains' } })
+  fireEvent.change(ui.getByRole('textbox', { name: 'Condition 1 first' }), { target: { value: 'item' } })
+  fireEvent.click(ui.getByRole('checkbox', { name: 'Use two conditions' }))
+  fireEvent.change(ui.getByRole('combobox', { name: 'Combine conditions' }), { target: { value: connective } })
+  fireEvent.change(ui.getByRole('combobox', { name: 'Condition 2 operator' }), { target: { value: 'neq' } })
+  fireEvent.change(ui.getByRole('textbox', { name: 'Condition 2 first' }), { target: { value: 'never' } })
+  fireEvent.click(ui.getByRole('button', { name: 'OK' }))
+  await waitFor(() => expect(f.publications).toBe(1))
+  expect(f.snapshot.filter?.columns.get(0)).toMatchObject({ kind: 'compound', connective })
+})
+
+it('renders pending membership as indeterminate and never enables Apply for incomplete selections', async () => {
+  const f = controlsFixture(6), base = f.client
+  const client: ControlsClient = { ...base, async values(...args) {
+    const real = await base.values(...args)
+    return { ...real, async read(...input) { const page = await real.read(...input); return { ...page, entries: page.entries.map((entry, index) => ({ ...entry, selected: index === 0 ? 'pending' as const : entry.selected })), count: { count: 0, pending: 1, complete: false }, complete: false } } }
+  } }
+  const ui = render(<FilterHarness fixture={f} client={client} />)
+  await waitFor(() => expect(ui.getByText(/selection pending/)).toBeTruthy())
+  const pending = ui.container.querySelector<HTMLInputElement>('[data-value-ordinal] input')!
+  expect(pending.indeterminate).toBe(true)
+  expect(pending.disabled).toBe(true)
+  expect(ui.getByRole('button', { name: 'OK' }).hasAttribute('disabled')).toBe(true)
+  fireEvent.click(ui.getByRole('button', { name: 'Cancel' }))
+  expect(f.publications).toBe(0)
+})
+
+it('treats a canonical-empty search as no search for whole-domain Select All, including blanks', async () => {
+  const f = controlsFixture(6), owner = f.snapshot.owner, draft = await f.client.values(owner, f.range, 0, null, signal())
+  await draft.read({ text: '', offset: 0 }, signal())
+  await draft.change({ kind: 'all', selected: false, includeBlanks: false }, { text: '', offset: 0 }, signal())
+  const page = await draft.change({ kind: 'all', selected: true, includeBlanks: false }, { text: '\u00AD', offset: 0 }, signal())
+  expect(page.blanks).toBe(true)
+  expect(await draft.candidate(signal())).toBeNull()
+  draft.cancel()
+})

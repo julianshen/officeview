@@ -6,7 +6,7 @@ import { visibleLogicalViewport, navigateKey, navigateTo, hitTestViewport, type 
 import { MAX_ROWS, MAX_COLS, cellId } from '../../xlsx/view/coordinates'
 import { activeAnnouncement, boundedSelectionText, reconcileSelection, recordCounts, SourceSelection, emptyGridSelection, selectCell, selectHeader } from '../../xlsx/view/selection'
 import { GridHeaders, GridRowHeader, GRID_HEADER_SIZE, viewportHeaderBox } from './GridHeaders'
-import { ViewerStatus } from './ViewerStatus'
+import { ViewerStatus, type ViewerStatusProps } from './ViewerStatus'
 
 export interface GridCellPresentation { text: string; state?: 'loading' | 'error' | 'unavailable' }
 export interface GridTransition { selection: GridSelection; window: ScrollWindow; announcement: string }
@@ -26,6 +26,10 @@ export interface GridSemanticsProps {
   onFilter?: (col: number, invoker: HTMLElement) => void
   children?: ReactNode
   label?: string
+  onSortCycle?: (col: number, shift: boolean, invoker: HTMLElement) => void
+  onSortDialog?: (col: number, invoker: HTMLElement) => void
+  onNotice?: (message: string) => void
+  status?: Pick<ViewerStatusProps, 'records' | 'countMode' | 'loadReport' | 'inspection'>
   profile?: ProfileId
   renderMode?: 'detail' | 'coarse'
 }
@@ -50,7 +54,7 @@ export function GridSemantics(props: GridSemanticsProps): ReactElement {
   const prefix = `${instance}-${encodeURIComponent(JSON.stringify([docId, sheetId, valueGen, fontGen, viewGen]))}`
   const gridRef = useRef<HTMLDivElement>(null), popupRef = useRef<HTMLDivElement>(null), previousPopup = useRef<{ popup: GridPopup; owner: string } | null>(null)
   const previousOwner = useRef(prefix)
-  const [controlMode, setControlMode] = useState(false), [notice, setNotice] = useState('')
+  const [controlMode, setControlMode] = useState(false), [controlColumn, setControlColumn] = useState<number | null>(null), [notice, setNotice] = useState('')
   useLayoutEffect(() => {
     if (previousOwner.current !== prefix) {
       if (gridRef.current?.contains(document.activeElement) || popupRef.current?.contains(document.activeElement)) gridRef.current?.focus()
@@ -122,7 +126,7 @@ export function GridSemantics(props: GridSemanticsProps): ReactElement {
   const activeBox = active && projection.sourceCellToLogical(active)
   const activeColumnInPane = activeBox && activeBox.x < pane.x + pane.width && activeBox.x + activeBox.width > pane.x
   const headerColumns = coarse && active && activeColumnInPane ? [active.col] : columns
-  const headerProps = { projection, window, viewport, coarse, columns: headerColumns, selection, sort: view.sort, controlMode,
+  const headerProps = { projection, window, viewport, coarse, columns: headerColumns, selection, sort: view.sort, filter: view.filter, controlMode, controlColumn, onSortCycle: props.onSortCycle, onFilter: props.onFilter, onSortDialog: props.onSortDialog, onNotice: props.onNotice,
     onSelect: (kind: 'row' | 'column', index: number, options: { toggle: boolean; extend: boolean }, event: MouseEvent<HTMLButtonElement>) => {
       if (event.detail > 0 && !coarse && gridRef.current) {
         const bounds = gridRef.current.getBoundingClientRect()
@@ -157,7 +161,11 @@ export function GridSemantics(props: GridSemanticsProps): ReactElement {
       aria-multiselectable="true" aria-activedescendant={active ? `${prefix}-cell-${cellId(active.row, active.col)}` : undefined}
       aria-description={`Worksheet capacity ${MAX_ROWS} rows by ${MAX_COLS} columns.${coarse ? ' Coarse view. Zoom in or inspect a cell for detail.' : ''}`}
       tabIndex={controlMode ? -1 : 0} data-officeview-grid=""
-      onFocusCapture={event => setControlMode(event.target !== event.currentTarget)}
+      onFocusCapture={event => {
+        setControlMode(event.target !== event.currentTarget)
+        const target = event.target as HTMLElement, header = target.closest<HTMLElement>('[data-header-column], [data-action-column]')
+        setControlColumn(header ? Number(header.dataset.headerColumn ?? header.dataset.actionColumn) : null)
+      }}
       onPointerDown={event => { event.stopPropagation(); if (event.target === event.currentTarget) event.currentTarget.focus() }}
       onDoubleClick={event => event.stopPropagation()}
       onClick={event => {
@@ -192,6 +200,6 @@ export function GridSemantics(props: GridSemanticsProps): ReactElement {
     {props.popup && <div ref={popupRef} role="dialog" aria-label="Column filter" data-officeview-ui="grid-popup"
       onPointerDown={event => event.stopPropagation()} onDoubleClick={event => event.stopPropagation()}
       style={{ position: 'absolute', zIndex: 3, bottom: 0, maxWidth: '100%', paddingBottom: 'env(safe-area-inset-bottom)' }}>{props.popup.content}</div>}
-    <ViewerStatus records={recordCounts(projection, props.body)} announcement={status} />
+    <ViewerStatus {...props.status} records={props.status?.records ?? recordCounts(projection, props.body)} announcement={status} />
   </div>
 }

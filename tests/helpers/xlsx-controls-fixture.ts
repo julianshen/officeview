@@ -27,13 +27,13 @@ export function controlsFixture(count = 11020, classification: ColumnClassificat
   const identity = (r: FilterRange, col: number) => ({ ...source.stamp, range: r, col, classification, classificationGen: 1 })
   const options: ControlsClientOptions = { snapshot: () => snapshot, context: () => context, cache, runs,
     rangeRequest: col => ({ store, structure, selection: { active: { row: 1, col: col ?? 0 }, anchor: { row: 1, col: col ?? 0 }, ranges: [{ rows: { kind: 'intervals', intervals: [{ r0: 0, r1: count }] }, cols: [{ c0: 0, c1: 9 }] }] } }),
-    domain: (_owner, r, col) => ({ source, identity: identity(r, col) }),
+    domain: (_owner, r, col) => ({ source, identity: identity(r, col), label: (_kind, value) => String(value) }),
     async stageFilter(filter, _owner, signal): Promise<StagedControl> {
       let visible = count
       if (filter?.columns.size) {
         const rule = filter.columns.get(0), match = rule?.kind === 'values' ? (await compileValuesMembership(rule, identity(filter.range, 0), runs, { signal })).matches : rule ? new FilterEngine(context).compileRule(rule, classification) : () => true
         visible = 0
-        for (let i = 0; i < count; i++) { const value = valueAt(i); if (match(typeof value === 'number' ? { kind: 'number', value, displayText: String(value), ...(classification.kind === 'date' ? { numFmtId: 14 } : {}) } : { kind: 'string', value })) visible++ }
+        for (let i = 0; i < count; i++) { const value = valueAt(i); if (match(classification.kind !== 'date' && i === 1 ? { kind: 'error', value: '#N/A' } : classification.kind !== 'date' && i === 2 ? { kind: 'blank' } : typeof value === 'number' ? { kind: 'number', value, displayText: String(value), ...(classification.kind === 'date' ? { numFmtId: 14 } : {}) } : { kind: 'string', value })) visible++ }
       }
       return { kind: 'ready', publish() { publications++; snapshot = { ...snapshot, owner: { ...snapshot.owner, viewGen: snapshot.owner.viewGen + 1 }, filter, records: { visible, total: count, completeness: 'complete' } }; return snapshot } }
     },

@@ -70,3 +70,56 @@ describe('S9 atomic sort modal', () => {
     expect(f.applied).not.toHaveBeenCalled()
   })
 })
+
+it('sort Cancel/reopen resets private levels and never leaves an empty initial draft', async () => {
+  const f = setup(), ui = render(<SortDialog {...f.props} />)
+  await waitFor(() => expect(ui.getByRole('textbox', { name: 'Column level 1' })).toBeTruthy())
+  fireEvent.click(ui.getByRole('button', { name: 'Add level' }))
+  ui.rerender(<SortDialog {...f.props} open={false} />)
+  ui.rerender(<SortDialog {...f.props} open />)
+  await waitFor(() => expect(ui.getByRole('textbox', { name: 'Column level 1' })).toBeTruthy())
+  expect(ui.queryByRole('textbox', { name: 'Column level 2' })).toBeNull()
+})
+
+import { GridHeaders } from '../src/components/xlsx/GridHeaders'
+import { gridFixture } from './helpers/xlsx-grid-fixture'
+it('provides separate named select/sort/funnel targets and reports committed rule state on tap', () => {
+  const p = gridFixture(), sort = vi.fn(), filter = vi.fn(), select = vi.fn(), notice = vi.fn()
+  const ui = render(<div role="grid"><GridHeaders projection={p.projection} window={p.window} viewport={p.viewport} columns={[0]} selection={p.selection} sort={null} controlMode onSelect={select}
+    filter={{ range: { r0: 0, r1: 3, c0: 0, c1: 0, headerRows: 1, totalsRows: 0 }, columns: new Map([[0, { kind: 'number', op: 'gt', first: 0 }]]) }} onSortCycle={sort} onFilter={filter} onNotice={notice} /></div>)
+  fireEvent.click(ui.getByRole('button', { name: 'Select Column A' }))
+  expect(select).toHaveBeenCalledOnce()
+  expect(sort).not.toHaveBeenCalled()
+  fireEvent.click(ui.getByRole('button', { name: 'Cycle sort column A' }), { shiftKey: true })
+  expect(sort).toHaveBeenCalledWith(0, true, expect.any(HTMLButtonElement))
+  fireEvent.click(ui.getByRole('button', { name: /Filter column A.*Greater than 0/ }))
+  expect(filter).toHaveBeenCalledWith(0, expect.any(HTMLButtonElement))
+  expect(notice).toHaveBeenCalledWith(expect.stringContaining('Greater than 0'))
+  expect(ui.getAllByRole('button').every(button => button.style.minHeight === '44px' || button.style.height === '44px')).toBe(true)
+})
+
+import { cycleHeaderSort } from '../src/components/xlsx/controlsClient'
+it('cycles a guarded committed header sort through ascending, descending and unsorted', async () => {
+  const f = controlsFixture(8)
+  for (const order of ['asc', 'desc', null]) {
+    const result = await cycleHeaderSort(f.client, f.snapshot, 0, false, new AbortController().signal)
+    expect(result.kind).toBe('committed')
+    expect(f.snapshot.sort?.keys[0].order ?? null).toBe(order)
+  }
+  expect(f.publications).toBe(3)
+})
+
+it('aborts a pending sort on Cancel even if the worker ignores cancellation until it returns', async () => {
+  const f = setup()
+  let finish!: (stage: Awaited<ReturnType<typeof f.fixture.options.stageSort>>) => void
+  const client = createControlsClient({ ...f.fixture.options, stageSort: () => new Promise(resolve => { finish = resolve }) })
+  const ui = render(<SortDialog {...f.props} client={client} />)
+  await waitFor(() => expect(ui.getByRole('textbox', { name: 'Column level 1' })).toBeTruthy())
+  fireEvent.click(ui.getByRole('button', { name: 'OK' }))
+  await waitFor(() => expect(finish).toBeTypeOf('function'))
+  fireEvent.click(ui.getByRole('button', { name: 'Cancel' }))
+  finish({ kind: 'ready', publish: () => { throw new Error('Cancelled sort published') } })
+  await act(async () => { await Promise.resolve() })
+  expect(f.applied).not.toHaveBeenCalled()
+  expect(f.fixture.publications).toBe(0)
+})
