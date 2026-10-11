@@ -1,0 +1,887 @@
+/**
+ * Resident document session (spec §§4.1, 6.3, 10.1–10.2; plan S4.1).
+ *
+ * One session owns one opened workbook: its SourceStore per sheet, the
+ * per-sheet committed views, prepared columns and structural handles. Every
+ * command after open reads this resident state; nothing reparses or clones the
+ * workbook. Sort/filter build a private draft, pass the shared structural
+ * guards and commit order/visibility/revisions in one synchronous step, so a
+ * refusal or failure leaves every generation untouched.
+ *
+ * Scheduling, cancellation fan-out and publication races beyond owner checks
+ * belong to S4.2; LRU/eviction of inactive sheets belongs to S4.3.
+ */
+import type {
+  AxisMetrics, AxisSizeInterval, CacheIdentity, ColumnEntry, ColumnQuery, CompactSourceRowSet, FilterSpec,
+  GridSelection, IntervalSet, OperationRefusal, Page, ProfileId, RowOrder, SingleCellPayload, SortSpec,
+  SourceFailure, SourceRowInterval, SourceStamp, SourceStore, ValuePolicy, WorkbookOwner, WorkerDiagnostic,
+} from '../xlsx/view/contracts'
+import { MAX_COLS, MAX_ROWS, cellId, isValidCoordinate, type SourceRect, type SourceRow } from '../xlsx/view/coordinates'
+import { createIdentityOrder } from '../xlsx/view/order'
+import { normalizeFilter, projectVisibility, visibilityFromHidden, type CompactRowVisibility } from '../xlsx/view/visibility'
+import { createSheetMetrics } from '../xlsx/view/projection'
+import { hiddenSourceRowsFromDisplay, sortRowOrder, type SortOptions, type SortResult } from '../xlsx/view/sort'
+import { StructuralIndex, type PopulatedCellSource } from '../xlsx/view/structure'
+import { guardFilter, guardSort, type GuardOutcome } from '../xlsx/view/operationGuard'
+import { INITIAL_GENERATION as INITIAL_VALUE_GEN, isUint32Array, validateBitset } from './viewerProtocol'
+
+const FULL_SHEET: SourceRect = Object.freeze({ r0: 0, r1: MAX_ROWS - 1, c0: 0, c1: MAX_COLS - 1 })
+const PREPARE_PAGE_LIMIT = 4096
+
+export const sameStamp = (a: SourceStamp, b: SourceStamp): boolean =>
+  a.docId === b.docId && a.sheetId === b.sheetId && a.valueGen === b.valueGen
+export const sameIdentity = (a: CacheIdentity, b: CacheIdentity): boolean =>
+  a.docId === b.docId && a.sheetId === b.sheetId && a.valueGen === b.valueGen
+  && a.fontGen === b.fontGen && a.viewGen === b.viewGen
+/** Injective per-sheet cache key: JSON array encoding cannot alias ids that
+ * contain a delimiter ("a:b"+"c" versus "a"+"b:c"), so documents never collide. */
+export function cacheKey(identity: CacheIdentity): string {
+  return JSON.stringify([identity.docId, identity.sheetId, identity.valueGen, identity.fontGen, identity.viewGen])
+}
+/** Aggregate (whole-workbook) identity: the global owner plus the complete ordered
+ * sheet revision/value vector (§10.1). "A=1" and "B=1" never share a key. */
+export function workbookIndexKey(owner: WorkbookOwner): string {
+  return JSON.stringify([owner.docId, owner.globalViewGen, owner.workbookValueGen, owner.fontGen,
+    owner.sheetVector.map(entry => [entry.sheetId, entry.revision, entry.valueGen])])
+}
+function sameWorkbookOwner(a: WorkbookOwner, b: WorkbookOwner): boolean {
+  return workbookIndexKey(a) === workbookIndexKey(b)
+}
+export const failure = (code: SourceFailure['code'], message: string, retryable = false): SourceFailure =>
+  Object.freeze({ code, retryable, message })
+export function failedPage<T>(stamp: SourceStamp, error: SourceFailure): Page<T> {
+  return { items: [], completeness: 'incomplete', stamp, error }
+}
+export function lowerBound(sorted: ArrayLike<number>, value: number, length = sorted.length): number {
+  let lo = 0, hi = length
+  while (lo < hi) {
+    const mid = Math.floor((lo + hi) / 2)
+    if (sorted[mid] < value) lo = mid + 1
+    else hi = mid
+  }
+  return lo
+}
+
+/** Exact source membership as ascending inclusive intervals. Resident refs are
+ * not resolvable by this interim adapter; the caller reports them unsupported. */
+export function rowSetIntervals(rows: CompactSourceRowSet): SourceRowInterval[] | null {
+  const out: SourceRowInterval[] = []
+  const push = (r0: number, r1: number) => {
+    if (!isValidCoordinate(r0, 0) || !isValidCoordinate(r1, 0) || r0 > r1) throw new RangeError('Invalid row set')
+    const previous = out[out.length - 1]
+    if (previous && r0 <= previous.r1) throw new RangeError('Row set is not ascending')
+    if (previous && previous.r1 + 1 === r0) previous.r1 = r1
+    else out.push({ r0, r1 })
+  }
+  switch (rows.kind) {
+    case 'intervals':
+      for (const interval of rows.intervals) push(interval.r0, interval.r1)
+      return out
+    case 'list':
+      if (!isValidCoordinate(rows.r0, 0) || !isValidCoordinate(rows.r1, 0) || rows.r0 > rows.r1 || !isUint32Array(rows.rows)) {
+        throw new RangeError('Invalid row list bounds')
+      }
+      for (const row of rows.rows) {
+        if (row < rows.r0 || row > rows.r1) throw new RangeError('List row outside bounds')
+        push(row, row)
+      }
+      return out
+    case 'bitset': {
+      // Full encoding check first: axis bounds, word count, zero padding, popcount.
+      validateBitset(rows, 'source')
+      for (let row = rows.r0; row <= rows.r1; row++) {
+        const offset = row - rows.r0
+        if ((rows.words[Math.floor(offset / 32)] >>> (offset % 32)) & 1) push(row, row)
+      }
+      return out
+    }
+    case 'ref':
+      return null
+    default:
+      throw new RangeError('Unknown row set kind')
+  }
+}
+/** Source-space dimensions and authored hidden rows; never per-row objects. */
+export interface SheetGeometry {
+  rows: AxisMetrics
+  cols: AxisMetrics
+  rowOverrides: readonly AxisSizeInterval[]
+  colOverrides: readonly AxisSizeInterval[]
+  baseHidden: IntervalSet
+}
+/** Resident workbook source boundary. S1 swaps the implementation (paged
+ * adapters, blob/page handles) without changing the session. */
+export interface WorkbookSource {
+  readonly valuePolicy: ValuePolicy
+  readonly sheets: readonly { sheetId: string; name: string }[]
+  store(sheetId: string): SourceStore
+  geometry(sheetId: string): SheetGeometry
+  /** Coverage this backend can never resolve (e.g. the interim adapter before
+   * S3.1 wiring): attached to incomplete replies so the UI can say why. */
+  coverageDiagnostics?(sheetId: string): readonly WorkerDiagnostic[]
+  release(): Promise<void>
+}
+
+/** S8 extension point: typed filter rule evaluation over the resident store.
+ * The matcher is source-row based, so it survives later reorders. */
+export type FilterEvaluation =
+  | { kind: 'complete'; matches: (row: SourceRow, filter: FilterSpec) => boolean }
+  | { kind: 'refused'; refusal: OperationRefusal }
+  | { kind: 'incomplete'; missing: readonly SourceRect[] }
+  | { kind: 'error'; error: SourceFailure }
+  | { kind: 'cancelled' }
+export type FilterEvaluator = (input: {
+  store: SourceStore
+  spec: FilterSpec
+  nowMs: number
+  signal: AbortSignal
+}) => Promise<FilterEvaluation>
+export interface PreparedBudget { maxColumns: number; maxBytes: number }
+/** Prepared-column working set per admission profile (§12.4 worker pool). Mobile
+ * keeps fewer resident key columns; unprepared keys still stream from the store,
+ * so up-to-eight-key semantics are identical. */
+export const PREPARED_BUDGETS: Readonly<Record<ProfileId, PreparedBudget>> = Object.freeze({
+  D: Object.freeze({ maxColumns: 8, maxBytes: 64 * 1024 * 1024 }),
+  M: Object.freeze({ maxColumns: 4, maxBytes: 32 * 1024 * 1024 }),
+})
+/** Spec §3 invariant 5: requested columns are prepared in batches of at most eight. */
+export const MAX_PREPARE_BATCH = 8
+/** Fixed per-column charge (descriptor, dictionary map, extras map). */
+export const PREPARED_COLUMN_OVERHEAD = 256
+/** Exact lane bytes per populated entry: row Uint32 + tag Uint8 + number Float64
+ * + string id Uint32 + style Uint32 + flags Uint8. */
+export const PREPARED_ENTRY_LANE_BYTES = 22
+/** Charge per unique dictionary string beyond its UTF-16 payload. */
+export const PREPARED_STRING_OVERHEAD = 48
+/** Charge per sparse extras record (formula metadata) beyond its strings. */
+export const PREPARED_EXTRA_OVERHEAD = 96
+
+const TAG_NULL = 0, TAG_NUMBER = 1, TAG_STRING = 2, TAG_BOOLEAN = 3
+const F_CACHED_SET = 1, F_CACHED = 2, F_ERROR_SET = 4, F_ERROR = 8, F_PROV_ENGINE = 16, F_PROV_CACHED = 32, F_UNAVAILABLE = 64
+type Extras = Pick<SingleCellPayload, 'formula' | 'sharedFormula' | 'arrayRef' | 'dynamicArray' | 'formulaType' | 'ca'>
+type PopulatedEntry = Extract<ColumnEntry, { kind: 'cell' | 'unavailable' }>
+/** Compact resident column: typed lanes plus a string dictionary and sparse
+ * formula extras. No per-row objects are retained; pages rebuild payloads. */
+interface PreparedColumn {
+  stamp: SourceStamp
+  col: number
+  count: number
+  rows: Uint32Array
+  tags: Uint8Array
+  numbers: Float64Array
+  stringIds: Uint32Array
+  styles: Uint32Array
+  flags: Uint8Array
+  strings: readonly string[]
+  extras: ReadonlyMap<number, Extras>
+  laneBytes: number
+  stringBytes: number
+  extraBytes: number
+  bytes: number
+}
+export interface PreparedFootprint {
+  entries: number
+  laneBytes: number
+  stringBytes: number
+  uniqueStrings: number
+  extraObjects: number
+  extraBytes: number
+  bytes: number
+}
+const text = (value: unknown) => typeof value === 'string' ? value.length * 2 : 0
+/** Growable lanes for one column under construction; every growth is charged. */
+class ColumnBuilder {
+  capacity = 0
+  count = 0
+  rows = new Uint32Array(0)
+  tags = new Uint8Array(0)
+  numbers = new Float64Array(0)
+  stringIds = new Uint32Array(0)
+  styles = new Uint32Array(0)
+  flags = new Uint8Array(0)
+  readonly strings: string[] = []
+  private readonly dictionary = new Map<string, number>()
+  readonly extras = new Map<number, Extras>()
+  stringBytes = 0
+  extraBytes = 0
+  constructor(readonly col: number) {}
+  /** Bytes currently held, including spare capacity. */
+  get heldBytes(): number {
+    return PREPARED_COLUMN_OVERHEAD + this.capacity * PREPARED_ENTRY_LANE_BYTES + this.stringBytes + this.extraBytes
+  }
+  /** Peak bytes above heldBytes if the entry were appended now. A growth step
+   * allocates the new lanes (max(16, 2C) slots) while the old C slots are still
+   * held for the copy, so the whole new allocation is the transient peak. */
+  costOf(entry: PopulatedEntry): number {
+    let cost = this.count === this.capacity ? Math.max(16, this.capacity * 2) * PREPARED_ENTRY_LANE_BYTES : 0
+    const value = entry.cell.value
+    if (typeof value === 'string' && !this.dictionary.has(value)) cost += value.length * 2 + PREPARED_STRING_OVERHEAD
+    const cell = entry.cell
+    if (cell.formula !== undefined || cell.sharedFormula !== undefined || cell.arrayRef !== undefined
+      || cell.dynamicArray !== undefined || cell.formulaType !== undefined || cell.ca !== undefined) {
+      cost += PREPARED_EXTRA_OVERHEAD + text(cell.formula) + text(cell.arrayRef) + text(cell.formulaType) + text(cell.sharedFormula?.ref)
+    }
+    return cost
+  }
+  private grow(): void {
+    const capacity = Math.max(16, this.capacity * 2)
+    const resize = <T extends Uint8Array | Uint32Array | Float64Array>(old: T, make: (n: number) => T): T => {
+      const next = make(capacity)
+      next.set(old)
+      return next
+    }
+    this.rows = resize(this.rows, n => new Uint32Array(n))
+    this.tags = resize(this.tags, n => new Uint8Array(n))
+    this.numbers = resize(this.numbers, n => new Float64Array(n))
+    this.stringIds = resize(this.stringIds, n => new Uint32Array(n))
+    this.styles = resize(this.styles, n => new Uint32Array(n))
+    this.flags = resize(this.flags, n => new Uint8Array(n))
+    this.capacity = capacity
+  }
+  append(entry: PopulatedEntry): void {
+    if (this.count === this.capacity) this.grow()
+    const k = this.count++, cell = entry.cell, value = cell.value
+    this.rows[k] = entry.row
+    this.styles[k] = cell.styleIndex
+    if (value === null) this.tags[k] = TAG_NULL
+    else if (typeof value === 'number') { this.tags[k] = TAG_NUMBER; this.numbers[k] = value }
+    else if (typeof value === 'boolean') { this.tags[k] = TAG_BOOLEAN; this.numbers[k] = value ? 1 : 0 }
+    else {
+      this.tags[k] = TAG_STRING
+      let id = this.dictionary.get(value)
+      if (id === undefined) {
+        id = this.strings.length
+        this.strings.push(value)
+        this.dictionary.set(value, id)
+        this.stringBytes += value.length * 2 + PREPARED_STRING_OVERHEAD
+      }
+      this.stringIds[k] = id
+    }
+    let flags = entry.kind === 'unavailable' ? F_UNAVAILABLE : 0
+    if (cell.hasCachedValue !== undefined) flags |= F_CACHED_SET | (cell.hasCachedValue ? F_CACHED : 0)
+    if (cell.valueIsError !== undefined) flags |= F_ERROR_SET | (cell.valueIsError ? F_ERROR : 0)
+    if (cell.valueProvenance === 'engine') flags |= F_PROV_ENGINE
+    else if (cell.valueProvenance === 'cached') flags |= F_PROV_CACHED
+    this.flags[k] = flags
+    if (cell.formula !== undefined || cell.sharedFormula !== undefined || cell.arrayRef !== undefined
+      || cell.dynamicArray !== undefined || cell.formulaType !== undefined || cell.ca !== undefined) {
+      const extra: Extras = {}
+      if (cell.formula !== undefined) extra.formula = cell.formula
+      if (cell.sharedFormula !== undefined) extra.sharedFormula = { ...cell.sharedFormula }
+      if (cell.arrayRef !== undefined) extra.arrayRef = cell.arrayRef
+      if (cell.dynamicArray !== undefined) extra.dynamicArray = cell.dynamicArray
+      if (cell.formulaType !== undefined) extra.formulaType = cell.formulaType
+      if (cell.ca !== undefined) extra.ca = cell.ca
+      this.extras.set(k, Object.freeze(extra))
+      this.extraBytes += PREPARED_EXTRA_OVERHEAD + text(cell.formula) + text(cell.arrayRef) + text(cell.formulaType) + text(cell.sharedFormula?.ref)
+    }
+  }
+  /** Exact-length lanes (one transient copy when capacity exceeds the count). */
+  finish(stamp: SourceStamp): PreparedColumn {
+    const n = this.count
+    const exact = <T extends Uint8Array | Uint32Array | Float64Array>(lane: T): T => (lane.length === n ? lane : lane.slice(0, n)) as T
+    const laneBytes = n * PREPARED_ENTRY_LANE_BYTES
+    return Object.freeze({
+      stamp, col: this.col, count: n,
+      rows: exact(this.rows), tags: exact(this.tags), numbers: exact(this.numbers),
+      stringIds: exact(this.stringIds), styles: exact(this.styles), flags: exact(this.flags),
+      strings: Object.freeze(this.strings), extras: this.extras,
+      laneBytes, stringBytes: this.stringBytes, extraBytes: this.extraBytes,
+      bytes: PREPARED_COLUMN_OVERHEAD + laneBytes + this.stringBytes + this.extraBytes,
+    })
+  }
+}
+/** Rebuilds one bounded page entry from the lanes. */
+function preparedEntry(column: PreparedColumn, k: number): PopulatedEntry {
+  const row = column.rows[k], tag = column.tags[k], flags = column.flags[k]
+  const value = tag === TAG_NULL ? null : tag === TAG_NUMBER ? column.numbers[k]
+    : tag === TAG_BOOLEAN ? column.numbers[k] !== 0 : column.strings[column.stringIds[k]]
+  const cell: SingleCellPayload = { id: cellId(row, column.col), row, col: column.col, value, styleIndex: column.styles[k] }
+  if (flags & F_CACHED_SET) cell.hasCachedValue = (flags & F_CACHED) !== 0
+  if (flags & F_ERROR_SET) cell.valueIsError = (flags & F_ERROR) !== 0
+  if (flags & F_PROV_ENGINE) cell.valueProvenance = 'engine'
+  else if (flags & F_PROV_CACHED) cell.valueProvenance = 'cached'
+  const extra = column.extras.get(k)
+  if (extra) Object.assign(cell, extra, extra.sharedFormula ? { sharedFormula: { ...extra.sharedFormula } } : {})
+  Object.freeze(cell)
+  return flags & F_UNAVAILABLE
+    ? { kind: 'unavailable', row, cell, reason: 'formula-value-unavailable' }
+    : { kind: 'cell', row, cell }
+}
+/** Membership remaining after a position (interval index + next row). */
+function residualIntervals(intervals: readonly SourceRowInterval[], at: number, row: number): SourceRowInterval[] {
+  if (at >= intervals.length) return []
+  return [{ r0: Math.max(row, intervals[at].r0), r1: intervals[at].r1 }, ...intervals.slice(at + 1)]
+}
+/** FNV-1a over the normalized query; ties a session cursor to its exact query and
+ * source owner. (Bitwise arithmetic here hashes text, never a cell ID.) */
+function queryFingerprint(col: number, stamp: SourceStamp, intervals: readonly SourceRowInterval[]): string {
+  const textKey = JSON.stringify([col, stamp.docId, stamp.sheetId, stamp.valueGen, intervals.map(i => [i.r0, i.r1])])
+  let hash = 0x811c9dc5
+  for (let i = 0; i < textKey.length; i++) {
+    hash ^= textKey.charCodeAt(i)
+    hash = Math.imul(hash, 0x01000193) >>> 0
+  }
+  return `${hash.toString(36)}.${intervals.length}`
+}
+
+export type PrepareOutcome =
+  | { kind: 'complete' }
+  | { kind: 'stale' }
+  | { kind: 'cancelled' }
+  | { kind: 'incomplete'; missing: readonly SourceRect[] }
+  | { kind: 'error'; error: SourceFailure }
+  | { kind: 'quota'; limitBytes: number; requiredBytes: number; diagnostics?: readonly WorkerDiagnostic[] }
+  | { kind: 'resource-limit'; message: string }
+export interface SessionOptions {
+  /** Cooperative yield for long kernels; S4.2 replaces it with the scheduler. */
+  yield?: SortOptions['yield']
+  locale?: string
+  filterEvaluator?: FilterEvaluator
+  /** Admission profile from the open command; selects PREPARED_BUDGETS. */
+  profile?: ProfileId
+  /** Explicit override of the profile budget (tests, embedders). */
+  preparedBudget?: PreparedBudget
+}
+/** Private draft; commitView publishes it atomically. */
+export interface ViewDraft {
+  order: RowOrder
+  visibility: CompactRowVisibility
+  sort: SortSpec | null
+  filter: FilterSpec | null
+  matches?: (row: SourceRow, filter: FilterSpec) => boolean
+  selection?: GridSelection
+}
+export interface CommittedView extends Required<Omit<ViewDraft, 'matches'>> {
+  identity: CacheIdentity
+  workbookOwner: WorkbookOwner
+  geometry: SheetGeometry
+}
+export type OperationOutcome =
+  | { kind: 'committed'; view: CommittedView }
+  | { kind: 'refused'; refusal: OperationRefusal }
+  | { kind: 'stale' }
+  | { kind: 'cancelled' }
+  | { kind: 'incomplete'; missing: readonly SourceRect[]; diagnostics?: readonly WorkerDiagnostic[] }
+  | { kind: 'error'; error: SourceFailure }
+  | { kind: 'quota'; requiredBytes: number; limitBytes: number }
+/** Read-only committed view snapshot. */
+export interface SheetViewSnapshot {
+  readonly sheetId: string
+  readonly revision: number
+  readonly valueGen: number
+  readonly order: RowOrder
+  readonly visibility: CompactRowVisibility
+  readonly sort: SortSpec | null
+  readonly filter: FilterSpec | null
+  readonly selection: GridSelection
+  readonly identity: CacheIdentity
+}
+
+interface SheetState {
+  readonly sheetId: string
+  revision: number
+  valueGen: number
+  order: RowOrder
+  visibility: CompactRowVisibility
+  sort: SortSpec | null
+  filter: FilterSpec | null
+  matches?: (row: SourceRow, filter: FilterSpec) => boolean
+  selection: GridSelection
+}
+const EMPTY_SELECTION: GridSelection = Object.freeze({ active: null, anchor: null, ranges: Object.freeze([]) })
+const matchAll = () => true
+/** Deep-freezes plain selection data; typed arrays cannot be frozen and are
+ * owned by the session once committed (deltas carry accounted copies). */
+function freezeSelection(selection: GridSelection): GridSelection {
+  const freeze = (value: unknown): unknown => {
+    if (typeof value !== 'object' || value === null || ArrayBuffer.isView(value) || Object.isFrozen(value)) return value
+    for (const entry of Object.values(value)) freeze(entry)
+    return Object.freeze(value)
+  }
+  return freeze({
+    active: selection.active ? { ...selection.active } : null,
+    anchor: selection.anchor ? { ...selection.anchor } : null,
+    ranges: selection.ranges.map(range => ({ rows: { ...range.rows }, cols: range.cols.map(col => ({ ...col })) })),
+  }) as GridSelection
+}
+/** Guard refusals that are really waits or source failures are not refusals. */
+function guardOutcome(guard: Extract<GuardOutcome, { ok: false }>, diagnostics: readonly WorkerDiagnostic[]): OperationOutcome {
+  const refusal = guard.refusal
+  if (refusal.reason === 'incomplete') return { kind: 'incomplete', missing: refusal.missing, diagnostics }
+  if (refusal.reason === 'source-error') {
+    return { kind: 'error', error: failure(refusal.code, refusal.message, refusal.retryable) }
+  }
+  return { kind: 'refused', refusal }
+}
+
+export class DocumentSession {
+  private globalGen = 0
+  private readonly workbookValueGen = INITIAL_VALUE_GEN
+  private readonly fontGen = 0
+  private readonly states = new Map<string, SheetState>()
+  /** Insertion order is recency order (oldest first). */
+  private readonly prepared = new Map<string, PreparedColumn>()
+  private preparedBytes = 0
+  /** Preparation transactions run one at a time (admission/eviction are atomic). */
+  private prepareQueue: Promise<unknown> = Promise.resolve()
+  /** One structural handle per sheet, valid only for its value generation; a
+   * newer generation replaces (evicts) the stale entry, so this stays bounded
+   * by the sheet count. */
+  private readonly structures = new Map<string, StructuralIndex>()
+  private published: WorkbookOwner | null = null
+  private closed = false
+  activeSheetId: string
+
+  constructor(readonly docId: string, readonly source: WorkbookSource, private readonly options: SessionOptions = {}) {
+    if (!source.sheets.length) throw new RangeError('Workbook has no sheets')
+    this.activeSheetId = source.sheets[0].sheetId
+  }
+  get globalViewGen(): number { return this.globalGen }
+  private get budget(): PreparedBudget {
+    return this.options.preparedBudget ?? PREPARED_BUDGETS[this.options.profile ?? 'D']
+  }
+  get isClosed(): boolean { return this.closed }
+  get publishedWorkbookIndex(): WorkbookOwner | null { return this.published }
+  hasSheet(sheetId: string): boolean { return this.source.sheets.some(sheet => sheet.sheetId === sheetId) }
+  /** Lazily materialized: an untouched sheet keeps no mask or order state. */
+  private state(sheetId: string): SheetState {
+    let state = this.states.get(sheetId)
+    if (!state) {
+      if (!this.hasSheet(sheetId)) throw new RangeError(`Unknown sheet ${sheetId}`)
+      state = {
+        sheetId, revision: 0, valueGen: INITIAL_VALUE_GEN, order: createIdentityOrder(),
+        visibility: visibilityFromHidden(this.source.geometry(sheetId).baseHidden),
+        sort: null, filter: null, selection: EMPTY_SELECTION,
+      }
+      this.states.set(sheetId, state)
+    }
+    return state
+  }
+  identity(sheetId: string): CacheIdentity {
+    const state = this.states.get(sheetId)
+    if (!state && !this.hasSheet(sheetId)) throw new RangeError(`Unknown sheet ${sheetId}`)
+    return Object.freeze({
+      docId: this.docId, sheetId, valueGen: state?.valueGen ?? INITIAL_VALUE_GEN, fontGen: this.fontGen, viewGen: state?.revision ?? 0,
+    })
+  }
+  workbookOwner(): WorkbookOwner {
+    return Object.freeze({
+      docId: this.docId,
+      globalViewGen: this.globalGen,
+      workbookValueGen: this.workbookValueGen,
+      fontGen: this.fontGen,
+      sheetVector: Object.freeze(this.source.sheets.map(({ sheetId }) => {
+        const state = this.states.get(sheetId)
+        return Object.freeze({ sheetId, revision: state?.revision ?? 0, valueGen: state?.valueGen ?? INITIAL_VALUE_GEN })
+      })),
+    })
+  }
+  /** Frozen snapshot of a sheet's committed view; never the live mutable state. */
+  view(sheetId: string): SheetViewSnapshot {
+    const state = this.state(sheetId)
+    return Object.freeze({
+      sheetId: state.sheetId, revision: state.revision, valueGen: state.valueGen, order: state.order,
+      visibility: state.visibility, sort: state.sort, filter: state.filter, selection: state.selection,
+      identity: this.identity(sheetId),
+    })
+  }
+  isCurrent(owner: CacheIdentity): boolean {
+    return !this.closed && owner.docId === this.docId && this.hasSheet(owner.sheetId) && sameIdentity(owner, this.identity(owner.sheetId))
+  }
+  activate(sheetId: string): void {
+    if (!this.hasSheet(sheetId)) throw new RangeError(`Unknown sheet ${sheetId}`)
+    this.activeSheetId = sheetId
+  }
+  /** Atomic publication (§10.1): the sheet revision and the workbook-global
+   * generation advance together with order/visibility/spec in one step. */
+  async commitView(sheetId: string, draft: ViewDraft): Promise<CommittedView> {
+    if (this.closed) throw new RangeError('Session closed')
+    const state = this.state(sheetId)
+    const selection = draft.selection ? freezeSelection(draft.selection) : state.selection
+    state.order = draft.order
+    state.visibility = draft.visibility
+    state.sort = draft.sort
+    state.filter = draft.filter
+    state.matches = draft.matches
+    state.selection = selection
+    state.revision++
+    this.globalGen++
+    return Object.freeze({
+      identity: this.identity(sheetId), workbookOwner: this.workbookOwner(), geometry: this.source.geometry(sheetId),
+      order: state.order, visibility: state.visibility, sort: state.sort, filter: state.filter, selection: state.selection,
+    })
+  }
+  /** Captures the aggregate owner an async whole-workbook index is built under. */
+  beginWorkbookIndex(): WorkbookOwner { return this.workbookOwner() }
+  /** Publishes only when no sheet view, value or font changed since capture. */
+  publishWorkbookIndex(captured: WorkbookOwner): boolean {
+    if (this.closed || !sameWorkbookOwner(captured, this.workbookOwner())) return false
+    this.published = captured
+    return true
+  }
+  private preparedKey(stamp: SourceStamp, col: number): string {
+    return JSON.stringify([stamp.docId, stamp.sheetId, stamp.valueGen, col])
+  }
+  isPrepared(sheetId: string, col: number): boolean {
+    return this.prepared.has(this.preparedKey(this.source.store(sheetId).stamp, col))
+  }
+  /** Resident prepared columns of a sheet's current value generation, ascending. */
+  preparedColumns(sheetId: string): number[] {
+    const stamp = this.source.store(sheetId).stamp
+    return [...this.prepared.values()].filter(column => sameStamp(column.stamp, stamp)).map(column => column.col).sort((a, b) => a - b)
+  }
+  /** Measured retention of one prepared column (lane byteLengths + charges). */
+  preparedFootprint(sheetId: string, col: number): PreparedFootprint | undefined {
+    const column = this.prepared.get(this.preparedKey(this.source.store(sheetId).stamp, col))
+    if (!column) return undefined
+    const laneBytes = column.rows.byteLength + column.tags.byteLength + column.numbers.byteLength
+      + column.stringIds.byteLength + column.styles.byteLength + column.flags.byteLength
+    return {
+      entries: column.count, laneBytes, stringBytes: column.stringBytes, uniqueStrings: column.strings.length,
+      extraObjects: column.extras.size, extraBytes: column.extraBytes, bytes: column.bytes,
+    }
+  }
+  /** Cached structural handles (diagnostic). */
+  structureCacheSize(): number { return this.structures.size }
+  /** Retained prepared working set (document-wide, all sheets). */
+  preparedStats(): { columns: number; bytes: number } {
+    return { columns: this.prepared.size, bytes: this.preparedBytes }
+  }
+  /** Resident prepared columns, value-owned: they survive view commits and are
+   * read from the store at most once per value generation while they stay in
+   * the admitted working set. Transactions are serialized, so two overlapping
+   * batches never double-charge a column or evict each other mid-flight. A batch
+   * is atomic: staged lanes are charged against the profile budget BEFORE they
+   * are retained (including spare capacity and the per-column overhead), and
+   * nothing is kept when admission fails. Room is made by dropping least-recently
+   * used prepared columns outside the batch (rebuildable caches; S4.3 owns the
+   * document-wide LRU across pages/views). */
+  prepareColumns(owner: CacheIdentity, cols: readonly number[], signal: AbortSignal): Promise<PrepareOutcome> {
+    const run = this.prepareQueue.then(() => this.prepareTransaction(owner, cols, signal))
+    this.prepareQueue = run.catch(() => undefined)
+    return run
+  }
+  private async prepareTransaction(owner: CacheIdentity, cols: readonly number[], signal: AbortSignal): Promise<PrepareOutcome> {
+    if (!Array.isArray(cols) || !cols.every(col => isValidCoordinate(0, col))) {
+      return { kind: 'error', error: failure('invalid-coordinate', 'Columns must be valid zero-based column indexes') }
+    }
+    if (signal.aborted) return { kind: 'cancelled' }
+    if (!this.isCurrent(owner)) return { kind: 'stale' }
+    const batch = [...new Set(cols)]
+    if (batch.length > MAX_PREPARE_BATCH) {
+      return { kind: 'resource-limit', message: `At most ${MAX_PREPARE_BATCH} columns are prepared per batch` }
+    }
+    const budget = this.budget
+    if (batch.length > budget.maxColumns) {
+      return {
+        kind: 'quota', limitBytes: budget.maxBytes, requiredBytes: batch.length * PREPARED_COLUMN_OVERHEAD,
+        diagnostics: [{ code: 'prepared-column-limit', message: `Profile working set holds at most ${budget.maxColumns} prepared columns` }],
+      }
+    }
+    const store = this.source.store(owner.sheetId)
+    const stamp = store.stamp
+    const keys = batch.map(col => this.preparedKey(stamp, col))
+    let protectedBytes = 0
+    for (const key of keys) protectedBytes += this.prepared.get(key)?.bytes ?? 0
+    const staged: { key: string; column: PreparedColumn }[] = []
+    let stagedBytes = 0
+    const quota = (required: number): PrepareOutcome => ({ kind: 'quota', limitBytes: budget.maxBytes, requiredBytes: required })
+    for (let i = 0; i < batch.length; i++) {
+      const col = batch[i], key = keys[i]
+      if (this.prepared.has(key)) continue
+      const builder = new ColumnBuilder(col)
+      // Reserve the column overhead before reading anything.
+      if (protectedBytes + stagedBytes + builder.heldBytes > budget.maxBytes) return quota(protectedBytes + stagedBytes + builder.heldBytes)
+      let cursor: string | undefined
+      const seen = new Set<string>()
+      do {
+        const page = await store.queryColumn({
+          col, rows: { kind: 'intervals', intervals: [{ r0: 0, r1: MAX_ROWS - 1 }] }, limit: PREPARE_PAGE_LIMIT, cursor,
+        }, { signal, stamp })
+        if (signal.aborted) return { kind: 'cancelled' }
+        if (this.closed) return { kind: 'stale' }
+        if (page.error) return page.error.code === 'cancelled' ? { kind: 'cancelled' } : { kind: 'error', error: page.error }
+        if (!sameStamp(page.stamp, stamp)) return { kind: 'stale' }
+        for (const item of page.items) {
+          if (item.kind === 'unknown') return { kind: 'incomplete', missing: [{ r0: item.r0, r1: item.r1, c0: col, c1: col }] }
+          if (item.kind === 'error') return { kind: 'error', error: failure(item.code, 'Column source failed', item.retryable) }
+          if (item.kind !== 'cell' && item.kind !== 'unavailable') continue
+          const next = protectedBytes + stagedBytes + builder.heldBytes + builder.costOf(item)
+          if (next > budget.maxBytes) return quota(next)
+          builder.append(item)
+        }
+        if (page.completeness !== 'complete') return { kind: 'incomplete', missing: [{ r0: 0, r1: MAX_ROWS - 1, c0: col, c1: col }] }
+        cursor = page.nextCursor
+        if (cursor !== undefined) {
+          if (seen.has(cursor)) return { kind: 'error', error: failure('invalid-cursor', 'Column cursor made no progress') }
+          seen.add(cursor)
+        }
+      } while (cursor !== undefined)
+      // Trimming spare capacity briefly holds both lane sets; that peak is charged too.
+      const exactLanes = builder.count * PREPARED_ENTRY_LANE_BYTES
+      const peak = protectedBytes + stagedBytes + builder.heldBytes + (builder.capacity > builder.count ? exactLanes : 0)
+      if (peak > budget.maxBytes) return quota(peak)
+      const column = builder.finish(stamp)
+      staged.push({ key, column })
+      stagedBytes += column.bytes
+    }
+    if (signal.aborted) return { kind: 'cancelled' }
+    if (!this.isCurrent(owner)) return { kind: 'stale' }
+    const keep = new Set(keys)
+    // Evict least-recently-used columns outside this batch until it fits.
+    for (const [key, column] of this.prepared) {
+      const fitsCount = this.prepared.size + staged.length <= budget.maxColumns
+      const fitsBytes = this.preparedBytes + stagedBytes <= budget.maxBytes
+      if (fitsCount && fitsBytes) break
+      if (keep.has(key)) continue
+      this.prepared.delete(key)
+      this.preparedBytes -= column.bytes
+    }
+    for (const key of keys) {
+      const existing = this.prepared.get(key)
+      if (existing) { this.prepared.delete(key); this.prepared.set(key, existing) }
+    }
+    for (const { key, column } of staged) {
+      this.prepared.set(key, column)
+      this.preparedBytes += column.bytes
+    }
+    return { kind: 'complete' }
+  }
+  /** Column page from resident lanes over a residual membership. */
+  private preparedPage(column: PreparedColumn, residual: readonly SourceRowInterval[], limit: number): ColumnEntry[] {
+    const items: ColumnEntry[] = []
+    let at = 0, row = residual[0]?.r0 ?? 0
+    while (at < residual.length && items.length < limit) {
+      const { r0, r1 } = residual[at]
+      if (row < r0) row = r0
+      if (row > r1) { at++; continue }
+      const k = lowerBound(column.rows, row, column.count)
+      const next = k < column.count && column.rows[k] <= r1 ? column.rows[k] : -1
+      if (next < 0) { items.push({ kind: 'blank', r0: row, r1 }); at++; continue }
+      if (next > row) { items.push({ kind: 'blank', r0: row, r1: next - 1 }); row = next; continue }
+      items.push(preparedEntry(column, k))
+      row++
+    }
+    return items
+  }
+  /**
+   * The sheet store with prepared columns served from resident lanes and with
+   * SESSION-OWNED pagination: cursors are positional over the requested
+   * membership (`vq1:<query fingerprint>:<interval>:<row>`), and every page asks
+   * the backing store for the residual membership without a backend cursor. A
+   * cursor therefore stays valid when its column is prepared or evicted between
+   * pages, whatever cursor encoding the store uses (§4.1 cursors are opaque).
+   */
+  preparedStore(sheetId: string): SourceStore {
+    const store = this.source.store(sheetId)
+    const session = this
+    return {
+      get stamp() { return store.stamp },
+      get valuePolicy() { return store.valuePolicy },
+      get extent() { return store.extent },
+      readCell: (at, options) => store.readCell(at, options),
+      readRows: (range, cursor, options) => store.readRows(range, cursor, options),
+      scanPopulated: (request, options) => store.scanPopulated(request, options),
+      queryStructural: (rect, options) => store.queryStructural(rect, options),
+      queryOverview: (request, options) => store.queryOverview(request, options),
+      ensureComplete: (rect, options) => store.ensureComplete(rect, options),
+      release: () => store.release(),
+      queryColumn: (request, options) => session.pagedColumn(store, request, options),
+    }
+  }
+  private async pagedColumn(store: SourceStore, request: ColumnQuery, options: { signal: AbortSignal; stamp: SourceStamp }): Promise<Page<ColumnEntry>> {
+    const stamp = store.stamp
+    if (options.signal?.aborted) return failedPage(stamp, failure('cancelled', 'Request cancelled'))
+    if (!options.stamp || !sameStamp(options.stamp, stamp)) return failedPage(stamp, failure('stale-source', 'Source owner changed', true))
+    if (!isValidCoordinate(0, request.col)) return failedPage(stamp, failure('invalid-coordinate', 'Invalid column'))
+    if (!Number.isSafeInteger(request.limit) || request.limit <= 0) return failedPage(stamp, failure('invalid-source-rect', 'Invalid limit'))
+    let intervals: SourceRowInterval[] | null
+    try { intervals = rowSetIntervals(request.rows) } catch (cause) {
+      return failedPage(stamp, failure('invalid-source-rect', (cause as Error).message))
+    }
+    // Resident row-set refs are resolved only by the backend (S1.2).
+    if (!intervals) return store.queryColumn(request, options)
+    const fingerprint = queryFingerprint(request.col, stamp, intervals)
+    let at = 0, row = intervals[0]?.r0 ?? 0
+    if (request.cursor !== undefined) {
+      const parts = request.cursor.split(':')
+      const i = Number(parts[2]), r = Number(parts[3])
+      if (parts.length !== 4 || parts[0] !== 'vq1' || parts[1] !== fingerprint || !Number.isSafeInteger(i)
+        || i < 0 || i >= intervals.length || !isValidCoordinate(r, 0) || r < intervals[i].r0 || r > intervals[i].r1) {
+        return failedPage(stamp, failure('invalid-cursor', 'Invalid or foreign column cursor'))
+      }
+      at = i; row = r
+    }
+    const residual = residualIntervals(intervals, at, row)
+    if (!residual.length) return { items: [], completeness: 'complete', stamp }
+    const key = this.preparedKey(stamp, request.col)
+    const prepared = this.prepared.get(key)
+    let items: readonly ColumnEntry[]
+    let completeness: Page<ColumnEntry>['completeness'] = 'complete'
+    if (prepared) {
+      this.prepared.delete(key)
+      this.prepared.set(key, prepared)
+      items = this.preparedPage(prepared, residual, request.limit)
+    } else {
+      const page = await store.queryColumn({ col: request.col, rows: { kind: 'intervals', intervals: residual }, limit: request.limit }, options)
+      if (page.error) return { ...page, nextCursor: undefined }
+      if (!sameStamp(page.stamp, stamp)) return failedPage(stamp, failure('stale-source', 'Column page owner changed', true))
+      items = page.items
+      completeness = page.completeness
+    }
+    // Advance the position by the rows these entries cover; entries must cover the
+    // residual membership contiguously, in order, or the page is malformed.
+    let j = 0, next = residual[0].r0
+    for (const item of items) {
+      const first = 'row' in item ? item.row : item.r0, last = 'row' in item ? item.row : item.r1
+      if (j >= residual.length || first !== next || last < first || last > residual[j].r1) {
+        return failedPage(stamp, failure('page-error', 'Column page does not cover its rows contiguously'))
+      }
+      next = last + 1
+      if (next > residual[j].r1) { j++; if (j < residual.length) next = residual[j].r0 }
+    }
+    if (j < residual.length && !items.length) return failedPage(stamp, failure('page-error', 'Column page made no progress'))
+    return {
+      items, completeness, stamp,
+      ...(j < residual.length ? { nextCursor: `vq1:${fingerprint}:${at + j}:${next}` } : {}),
+    }
+  }
+  /** Structural handles are value-owned and shared by every guard (§6.3). Only a
+   * complete index is cached; incomplete coverage is re-queried next time. */
+  private async structure(sheetId: string, signal: AbortSignal): Promise<StructuralIndex> {
+    const store = this.source.store(sheetId)
+    const stamp = store.stamp
+    const cached = this.structures.get(sheetId)
+    if (cached && sameStamp(cached.stamp, stamp)) return cached
+    const index = new StructuralIndex(await store.queryStructural(FULL_SHEET, { signal, stamp }))
+    // Cache only a complete index for the generation it was queried under.
+    if (index.completeness === 'complete' && sameStamp(index.stamp, stamp) && !this.closed) this.structures.set(sheetId, index)
+    else if (cached && !sameStamp(cached.stamp, stamp)) this.structures.delete(sheetId)
+    return index
+  }
+  /** Populated-cell feed for outside-column guards over resident readRows pages.
+   * Honors the caller's per-page limit: a store page larger than the limit is
+   * served in slices, resuming at an offset within that same store page. */
+  populatedSource(sheetId: string, signal: AbortSignal): PopulatedCellSource {
+    const store = this.source.store(sheetId)
+    return {
+      async iterate(range, cursor, limit) {
+        if (limit !== undefined && (!Number.isSafeInteger(limit) || limit <= 0)) throw new RangeError('Invalid populated page limit')
+        let storeCursor: string | undefined, skip = 0
+        if (cursor !== undefined) {
+          let decoded: unknown
+          try { decoded = JSON.parse(cursor) } catch { decoded = undefined }
+          if (!Array.isArray(decoded) || decoded.length !== 2 || !(decoded[0] === null || typeof decoded[0] === 'string')
+            || !Number.isSafeInteger(decoded[1]) || decoded[1] < 0) throw new RangeError('Invalid populated cursor')
+          storeCursor = decoded[0] ?? undefined
+          skip = decoded[1]
+        }
+        const page = await store.readRows(range, storeCursor, { signal, stamp: store.stamp })
+        const all = page.items.flatMap(row => row.cells
+          .filter(cell => cell.value !== null || cell.formula !== undefined)
+          .map(cell => ({ row: cell.row, col: cell.col })))
+        const complete = page.completeness === 'complete' && page.error === undefined
+        if (!complete) return { items: [], completeness: 'incomplete', missing: [range] }
+        const end = limit === undefined ? all.length : Math.min(all.length, skip + limit)
+        const items = all.slice(skip, end)
+        const nextCursor = end < all.length ? JSON.stringify([storeCursor ?? null, end])
+          : page.nextCursor !== undefined ? JSON.stringify([page.nextCursor, 0]) : undefined
+        return { items, completeness: 'complete', missing: [], ...(nextCursor !== undefined ? { nextCursor } : {}) }
+      },
+    }
+  }
+  private coverageDiagnostics(sheetId: string): readonly WorkerDiagnostic[] {
+    return this.source.coverageDiagnostics?.(sheetId) ?? []
+  }
+  async sort(owner: CacheIdentity, spec: SortSpec | null, signal: AbortSignal): Promise<OperationOutcome> {
+    if (!this.isCurrent(owner)) return { kind: 'stale' }
+    const state = this.state(owner.sheetId)
+    if (spec !== null) {
+      const guard = await guardSort(spec.range, await this.structure(owner.sheetId, signal), this.populatedSource(owner.sheetId, signal))
+      if (signal.aborted) return { kind: 'cancelled' }
+      if (!this.isCurrent(owner)) return { kind: 'stale' }
+      if (!guard.ok) return guardOutcome(guard, this.coverageDiagnostics(owner.sheetId))
+    }
+    const store = this.preparedStore(owner.sheetId)
+    const result = await sortRowOrder(store, spec, {
+      signal, stamp: store.stamp, locale: this.options.locale,
+      hidden: hiddenSourceRowsFromDisplay(state.order, state.visibility),
+      ...(this.options.yield ? { yield: this.options.yield } : {}),
+    })
+    if (result.kind !== 'complete') return sortFailure(result, spec)
+    // Guards and kernels awaited: publish only if nothing committed meanwhile.
+    if (signal.aborted) return { kind: 'cancelled' }
+    if (!this.isCurrent(owner)) return { kind: 'stale' }
+    const geometry = this.source.geometry(owner.sheetId)
+    const { visibility } = projectVisibility(geometry.baseHidden, state.filter, result.order, state.matches ?? matchAll)
+    return { kind: 'committed', view: await this.commitView(owner.sheetId, {
+      order: result.order, visibility, sort: spec, filter: state.filter, matches: state.matches,
+    }) }
+  }
+  async filter(owner: CacheIdentity, spec: FilterSpec | null, nowMs: number, signal: AbortSignal): Promise<OperationOutcome> {
+    if (!this.isCurrent(owner)) return { kind: 'stale' }
+    const state = this.state(owner.sheetId)
+    let normalized: FilterSpec | null
+    try { normalized = normalizeFilter(spec) } catch (cause) {
+      return { kind: 'refused', refusal: { reason: 'invalid-rule', message: (cause as Error).message } }
+    }
+    let matches: ((row: SourceRow, filter: FilterSpec) => boolean) | undefined
+    if (normalized) {
+      const evaluator = this.options.filterEvaluator
+      if (!evaluator) {
+        return { kind: 'refused', refusal: { reason: 'unsupported', message: 'Typed filter rule evaluation is not available yet (S8)' } }
+      }
+      const evaluation = await evaluator({ store: this.preparedStore(owner.sheetId), spec: normalized, nowMs, signal })
+      if (evaluation.kind !== 'complete') return evaluation
+      if (signal.aborted) return { kind: 'cancelled' }
+      if (!this.isCurrent(owner)) return { kind: 'stale' }
+      matches = evaluation.matches
+    }
+    const geometry = this.source.geometry(owner.sheetId)
+    const candidate = projectVisibility(geometry.baseHidden, normalized, state.order, matches ?? matchAll)
+    const guardRange = normalized?.range ?? state.filter?.range
+    if (guardRange) {
+      const before = createSheetMetrics({ rows: geometry.rows, cols: geometry.cols, order: state.order, visibility: state.visibility })
+      const after = createSheetMetrics({ rows: geometry.rows, cols: geometry.cols, order: state.order, visibility: candidate.visibility })
+      const guard = await guardFilter({
+        range: guardRange, candidateVisibility: candidate.visibility, currentVisibility: state.visibility,
+        projectionBefore: before, projectionAfter: after, structure: await this.structure(owner.sheetId, signal),
+      })
+      if (!guard.ok) return guardOutcome(guard, this.coverageDiagnostics(owner.sheetId))
+    }
+    if (signal.aborted) return { kind: 'cancelled' }
+    if (!this.isCurrent(owner)) return { kind: 'stale' }
+    return { kind: 'committed', view: await this.commitView(owner.sheetId, {
+      order: state.order, visibility: candidate.visibility, sort: state.sort, filter: normalized, matches,
+    }) }
+  }
+  /** Re-checks cancellation and the full owner after the await: a page computed
+   * while a newer view committed is never published under the old owner. */
+  async valueQuery(owner: CacheIdentity, query: ColumnQuery, signal: AbortSignal): Promise<Page<ColumnEntry> | { kind: 'stale' } | { kind: 'cancelled' }> {
+    if (!this.isCurrent(owner)) return { kind: 'stale' }
+    const store = this.preparedStore(owner.sheetId)
+    const page = await store.queryColumn(query, { signal, stamp: store.stamp })
+    if (signal.aborted) return { kind: 'cancelled' }
+    if (!this.isCurrent(owner)) return { kind: 'stale' }
+    return page
+  }
+  async release(): Promise<void> {
+    if (this.closed) return
+    this.closed = true
+    this.states.clear()
+    this.prepared.clear()
+    this.preparedBytes = 0
+    this.structures.clear()
+    await this.source.release()
+  }
+}
+function sortFailure(result: Exclude<SortResult, { kind: 'complete' }>, spec: SortSpec | null): OperationOutcome {
+  switch (result.kind) {
+    case 'cancelled': return { kind: 'cancelled' }
+    case 'incomplete': return { kind: 'incomplete', missing: spec ? [{ r0: spec.range.r0, r1: spec.range.r1, c0: spec.range.c0, c1: spec.range.c1 }] : [] }
+    case 'refused': return { kind: 'refused', refusal: result.refusal }
+    case 'error': return result.error.code === 'cancelled' ? { kind: 'cancelled' } : { kind: 'error', error: result.error }
+    case 'resource-limit': return { kind: 'quota', requiredBytes: result.requiredBytes, limitBytes: result.limitBytes }
+  }
+}
