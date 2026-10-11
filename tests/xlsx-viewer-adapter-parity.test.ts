@@ -161,7 +161,7 @@ describe('adapter parity under the cached policy (S1.3 matrix)', () => {
     const formulas = 12
     expect(object.valueStatus?.()).toEqual({ policy: 'cached', formulas, message: `Showing saved values — ${formulas} formulas not recalculated (file too large)` })
     expect(paged.valueStatus?.()).toEqual(object.valueStatus?.())
-    expect(paged.openDiagnostics).toContainEqual({ code: 'saved-values', message: expect.stringMatching(/^Showing saved values/) })
+    expect(paged.openDiagnostics).toContainEqual({ code: 'cached-value-policy', message: expect.stringMatching(/^Showing saved values/) })
     await paged.release()
   })
 

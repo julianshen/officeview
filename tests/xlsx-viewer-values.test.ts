@@ -168,7 +168,9 @@ describe('formula-value-unavailable refusals are limited to the key/value domain
     expect(filterValueDomain({ range: { ...range, totalsRows: 1 }, columns: new Map() })).toBeNull()
     const doc = await load('<row r="1"><c r="A1"><f>Z1</f></c></row><row r="2"><c r="A2"><v>1</v></c></row>', 'cached')
     const store = createObjectWorkbookSource(doc, 'doc').store('1')
-    expect(await scanValueDomain(store, { cols: [0], r0: 1, r1: 1 }, opts(store))).toEqual({ kind: 'clear' })
+    let pauses = 0
+    expect(await scanValueDomain(store, { cols: [0], r0: 1, r1: 1 }, opts(store), async () => { pauses++ })).toEqual({ kind: 'clear' })
+    expect(pauses).toBeGreaterThan(0)
     expect(await scanValueDomain(store, { cols: [0], r0: 0, r1: 1 }, opts(store))).toEqual({
       kind: 'refused', refusal: { reason: FORMULA_VALUE_UNAVAILABLE, count: 1, firstAddress: { row: 0, col: 0 } },
     })
@@ -216,7 +218,7 @@ describe('saved-values status', () => {
     const cached = await load(TABLE, 'cached')
     expect(countFormulaCells(cached)).toBe(3)
     const source = createObjectWorkbookSource(cached, 'doc')
-    expect(source.openDiagnostics).toContainEqual({ code: 'saved-values', message: 'Showing saved values — 3 formulas not recalculated (file too large)' })
+    expect(source.openDiagnostics).toContainEqual({ code: 'cached-value-policy', message: 'Showing saved values — 3 formulas not recalculated (file too large)' })
     expect(source.valueStatus?.()).toEqual({ policy: 'cached', formulas: 3, message: 'Showing saved values — 3 formulas not recalculated (file too large)' })
     const engine = createObjectWorkbookSource(await load(TABLE), 'doc')
     expect(engine.openDiagnostics ?? []).toEqual([])

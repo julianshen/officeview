@@ -1477,7 +1477,9 @@ export class DocumentSession {
         const domain = filterValueDomain(normalized)
         if (domain) {
           const store = this.preparedStore(owner.sheetId)
-          const scan = await scanValueDomain(store, domain, { signal, stamp: store.stamp })
+          const scan = await scanValueDomain(store, domain, { signal, stamp: store.stamp }, async () => {
+            if (slice.due()) await slice.pause('filter-domain')
+          })
           const halt = this.halted(owner, signal)
           if (halt) return halt
           switch (scan.kind) {

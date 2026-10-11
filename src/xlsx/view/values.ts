@@ -26,8 +26,9 @@ export type ValueProvenance = ValuePolicy
 export const FORMULA_VALUE_UNAVAILABLE = 'formula-value-unavailable' as const
 /** Spec §4.4 wording, used while the formula count is not yet known. */
 export const SAVED_VALUES_STATUS = 'Showing saved values; formulas are not recalculated'
-/** Worker diagnostic code carrying the status on open. */
-export const SAVED_VALUES_DIAGNOSTIC = 'saved-values'
+/** Worker diagnostic code carrying the status on open; the same code the
+ * loader uses for its document notice, so a consumer renders one of them. */
+export const SAVED_VALUES_DIAGNOSTIC = 'cached-value-policy'
 
 /** The raw fields either adapter holds for one populated record. */
 export interface RawCellValue {
@@ -114,7 +115,11 @@ const SCAN_PAGE_LIMIT = 4096
  * never block; an unknown page can never authorize an operation, so it is
  * reported incomplete rather than guessed. First address is row-major.
  */
-export async function scanValueDomain(store: SourceStore, domain: ValueDomain, options: ReadOptions): Promise<ValueDomainScan> {
+export async function scanValueDomain(
+  store: SourceStore, domain: ValueDomain, options: ReadOptions,
+  /** Cooperative yield between pages (the caller's shared slice). */
+  cooperate?: () => Promise<void>,
+): Promise<ValueDomainScan> {
   let count = 0
   let first: SourceCell | null = null
   const note = (row: number, col: number) => {
@@ -145,6 +150,7 @@ export async function scanValueDomain(store: SourceStore, domain: ValueDomain, o
         }
       }
       if (page.completeness !== 'complete') return { kind: 'incomplete', missing: [{ r0: domain.r0, r1: domain.r1, c0: col, c1: col }] }
+      await cooperate?.()
       cursor = page.nextCursor
       if (cursor !== undefined) {
         if (seen.has(cursor)) return { kind: 'error', error: { code: 'invalid-cursor', retryable: false, message: 'Value domain cursor made no progress' } }

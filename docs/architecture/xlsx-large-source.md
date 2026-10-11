@@ -1283,9 +1283,15 @@ Mechanics:
 - Status: `savedValuesStatus(policy, n)` returns nothing for `engine`; for `cached` it returns the user-approved
   "Showing saved values — N formulas not recalculated (file too large)" when the formula count is known and the spec wording
   "Showing saved values; formulas are not recalculated" otherwise. Object cached sources and paged sources put it in the open
-  reply's diagnostics (code `saved-values`) and expose `WorkbookSource.valueStatus()`; the paged count (`PagedWorkbook.formulaRecords`)
+  reply's diagnostics (code `cached-value-policy`, the same feature code the loader uses for its document notice, so a
+  consumer renders exactly one) and expose `WorkbookSource.valueStatus()`; the paged count (`PagedWorkbook.formulaRecords`)
   is final once the import completes. `largeSource.ts` builds its notice with the same helper. Rendering it in the status line and
   accessible description is S5.2's integration.
+- Open question (count semantics): the sources count **all** formula records (`countFormulaCells`, `PagedWorkbook.formulaRecords`);
+  the admission route in `largeSource.ts` reports `loadEvaluatedFormulas` (formulas the engine would have evaluated at load:
+  uncached, `ca`, or all under `fullCalcOnLoad`), and only its cap-hit route counts all formulas. The two agree when every formula
+  is load-evaluated (the pinned fixtures) and can differ for a mix of cached and uncached formulas; the orchestrator decides which
+  number the approved wording means.
 
 ### 9.2 Enumerated engine-versus-cached differences
 
