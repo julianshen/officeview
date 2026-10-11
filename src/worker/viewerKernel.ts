@@ -242,14 +242,17 @@ export class ViewerKernel {
       case 'activateSheet': {
         // Activation selects resident state; it publishes nothing that depends on
         // view generations, so the document owner is the relevant check. An
-        // evicted view (S4.3) is rebuilt under its unchanged identity first.
+        // evicted view (S4.3) is rebuilt under its unchanged identity first, and
+        // the active sheet switches only once that succeeded: a refused rebuild
+        // leaves the previous (resident, protected) sheet active.
         const session = this.sessions.get(command.owner.docId)
         if (!session || session.isClosed) return errorReply(command, command.owner, 'stale-source', false, [{ code: 'unknown-document', message: 'Document is not open' }])
         if (!session.hasSheet(command.sheetId)) return errorReply(command, command.owner, 'stale-source', false, [{ code: 'unknown-sheet', message: `No sheet ${command.sheetId}` }])
-        session.activate(command.sheetId)
         const resident = await session.ensureView(command.sheetId, signal)
         switch (resident.kind) {
           case 'resident':
+            if (session.isClosed) return errorReply(command, command.owner, 'stale-source', false, [{ code: 'unknown-document', message: 'Document closed' }])
+            session.activate(command.sheetId)
             return reply(command, command.owner, { kind: 'complete', result: { kind: 'activateSheet', sheetId: command.sheetId } }, resident.diagnostics ?? [])
           case 'cancelled': return reply(command, command.owner, { kind: 'cancelled' })
           case 'stale': return errorReply(command, command.owner, 'stale-source', true, [{ code: 'view-rebuild-stale', message: 'The sheet view changed while it was being rebuilt' }])
