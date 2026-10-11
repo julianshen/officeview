@@ -12,7 +12,7 @@
  */
 import { crc32Update } from './crc32'
 import { defaultInflaterFactory, type InflaterFactory, type InflateStep } from './inflater'
-import { PackageError, throwIfAborted, type PackageErrorCode } from './package-error'
+import { PackageError, throwIfAborted, type PackageErrorCode, type PackageErrorReason } from './package-error'
 
 export { PackageError, isPackageError, type PackageErrorCode } from './package-error'
 export type { InflateStatus, InflateStep, InflateTotals, InflaterPort, InflaterFactory } from './inflater'
@@ -63,8 +63,8 @@ const nameDecoder = new TextDecoder('utf-8', { fatal: true, ignoreBOM: true })
 const nameEncoder = new TextEncoder()
 const EMPTY = new Uint8Array(0)
 
-function fail(code: PackageErrorCode, message: string, partId?: string): never {
-  throw new PackageError(code, message, partId)
+function fail(code: PackageErrorCode, message: string, partId?: string, reason?: PackageErrorReason): never {
+  throw new PackageError(code, message, partId, reason)
 }
 
 function u16(b: Uint8Array, at: number): number {
@@ -178,16 +178,16 @@ async function parseFromEocd(reader: TailReader, eocd: Uint8Array, eocdPos: numb
   let cdOffset: number
   let cdEndLimit: number
   if (locator !== undefined) {
-    if (u32(locator, 4) !== 0) fail('unsupported', 'multi-disk archive: ZIP64 end record on another disk')
-    if (u32(locator, 16) !== 1) fail('unsupported', `multi-disk archive: ZIP64 locator declares ${u32(locator, 16)} disks`)
-    if ((diskNo !== 0 && diskNo !== 0xffff) || (cdDisk !== 0 && cdDisk !== 0xffff)) fail('unsupported', 'multi-disk archive')
+    if (u32(locator, 4) !== 0) fail('unsupported', 'multi-disk archive: ZIP64 end record on another disk', undefined, 'multi-disk')
+    if (u32(locator, 16) !== 1) fail('unsupported', `multi-disk archive: ZIP64 locator declares ${u32(locator, 16)} disks`, undefined, 'multi-disk')
+    if ((diskNo !== 0 && diskNo !== 0xffff) || (cdDisk !== 0 && cdDisk !== 0xffff)) fail('unsupported', 'multi-disk archive', undefined, 'multi-disk')
     const z64Offset = u64(locator, 8)
     if (z64Offset + ZIP64_EOCD_BYTES > locatorPos) fail('parse-error', 'ZIP64 end record overlaps its locator')
     const z = await reader.read(z64Offset, z64Offset + ZIP64_EOCD_BYTES)
     if (u32(z, 0) !== SIG_ZIP64_EOCD) fail('parse-error', 'ZIP64 end record signature not found')
     const recordSize = u64(z, 4)
     if (recordSize < ZIP64_EOCD_BYTES - 12 || z64Offset + 12 + recordSize > locatorPos) fail('parse-error', `ZIP64 end record size ${recordSize} out of bounds`)
-    if (u32(z, 16) !== 0 || u32(z, 20) !== 0) fail('unsupported', 'multi-disk archive: ZIP64 disk numbers')
+    if (u32(z, 16) !== 0 || u32(z, 20) !== 0) fail('unsupported', 'multi-disk archive: ZIP64 disk numbers', undefined, 'multi-disk')
     const entries64ThisDisk = u64(z, 24)
     total = u64(z, 32)
     if (entries64ThisDisk !== total) fail('parse-error', 'ZIP64 entries on this disk differ from the total')
@@ -200,7 +200,7 @@ async function parseFromEocd(reader: TailReader, eocd: Uint8Array, eocdPos: numb
     cdEndLimit = z64Offset
   } else {
     if (sentinel) fail('parse-error', 'ZIP64 sentinels without a ZIP64 locator')
-    if (diskNo !== 0 || cdDisk !== 0) fail('unsupported', 'multi-disk archive')
+    if (diskNo !== 0 || cdDisk !== 0) fail('unsupported', 'multi-disk archive', undefined, 'multi-disk')
     if (entriesThisDisk !== entriesTotal) fail('parse-error', 'entries on this disk differ from the total')
     total = entriesTotal
     cdSize = cdSize32
@@ -208,8 +208,8 @@ async function parseFromEocd(reader: TailReader, eocd: Uint8Array, eocdPos: numb
     cdEndLimit = eocdPos
   }
   if (cdOffset + cdSize > cdEndLimit) fail('parse-error', 'central directory overlaps the end records')
-  if (total > limits.maxEntries) fail('resource-limit', `${total} entries exceed the limit of ${limits.maxEntries}`)
-  if (cdSize > limits.maxCentralDirectoryBytes) fail('resource-limit', `central directory of ${cdSize} bytes exceeds the limit of ${limits.maxCentralDirectoryBytes}`)
+  if (total > limits.maxEntries) fail('resource-limit', `${total} entries exceed the limit of ${limits.maxEntries}`, undefined, 'entry-limit')
+  if (cdSize > limits.maxCentralDirectoryBytes) fail('resource-limit', `central directory of ${cdSize} bytes exceeds the limit of ${limits.maxCentralDirectoryBytes}`, undefined, 'central-directory-limit')
   if (cdSize < total * CENTRAL_BYTES) fail('parse-error', 'central directory too small for its entry count')
   const cd = await reader.read(cdOffset, cdOffset + cdSize)
   return parseCentralDirectory(cd, total, cdOffset, limits)
@@ -237,12 +237,12 @@ function parseCentralDirectory(cd: Uint8Array, total: number, cdOffset: number, 
     let localHeaderOffset = u32(cd, p + 42)
     const next = p + CENTRAL_BYTES + nameLength + extraLength + commentLength
     if (next > cd.length) fail('parse-error', 'central directory entry overruns the directory')
-    if (nameLength > limits.maxNameBytes) fail('resource-limit', `part name of ${nameLength} bytes exceeds the limit of ${limits.maxNameBytes}`)
+    if (nameLength > limits.maxNameBytes) fail('resource-limit', `part name of ${nameLength} bytes exceeds the limit of ${limits.maxNameBytes}`, undefined, 'name-limit')
     let name: string
     try {
       name = nameDecoder.decode(cd.subarray(p + CENTRAL_BYTES, p + CENTRAL_BYTES + nameLength))
     } catch {
-      fail('parse-error', 'part name is not valid UTF-8')
+      fail('parse-error', 'part name is not valid UTF-8', undefined, 'name-encoding')
     }
     validateName(name)
     let zip64 = false
@@ -256,9 +256,9 @@ function parseCentralDirectory(cd: Uint8Array, total: number, cdOffset: number, 
       if (localHeaderOffset === 0xffffffff) localHeaderOffset = values.u64()
       if (diskStart === 0xffff) diskStart = values.u32()
     }
-    if ((flags & ENCRYPTION_FLAGS) !== 0) fail('unsupported', 'encrypted entry', name)
-    if (method !== 0 && method !== 8) fail('unsupported', `compression method ${method}`, name)
-    if (diskStart !== 0) fail('unsupported', 'multi-disk archive: entry on another disk', name)
+    if ((flags & ENCRYPTION_FLAGS) !== 0) fail('unsupported', 'encrypted entry', name, 'encrypted')
+    if (method !== 0 && method !== 8) fail('unsupported', `compression method ${method}`, name, 'method')
+    if (diskStart !== 0) fail('unsupported', 'multi-disk archive: entry on another disk', name, 'multi-disk')
     if (method === 0 && compressedSize !== uncompressedSize) fail('parse-error', 'stored entry sizes differ', name)
     if (localHeaderOffset + LOCAL_BYTES + nameLength + compressedSize > cdOffset) fail('parse-error', 'entry data outside the data area', name)
     if (uncompressedSize > limits.maxPartExpandedBytes) fail('resource-limit', `declared size ${uncompressedSize} exceeds the part limit of ${limits.maxPartExpandedBytes}`, name)
@@ -269,7 +269,8 @@ function parseCentralDirectory(cd: Uint8Array, total: number, cdOffset: number, 
     }
     // OPC part names compare ASCII case-insensitively (ECMA-376 Part 2 §9.1.1.1)
     const key = name.replace(/[A-Z]/g, (c) => c.toLowerCase())
-    if (byName.has(name) || folded.has(key)) fail('parse-error', `duplicate part name ${name}`)
+    if (byName.has(name)) fail('parse-error', `duplicate part name ${name}`, undefined, 'duplicate-name')
+    if (folded.has(key)) fail('parse-error', `duplicate part name ${name}`, undefined, 'case-duplicate-name')
     folded.add(key)
     const entry: ZipEntryInfo = {
       name, method, flags, crc32: crc, compressedSize, uncompressedSize, localHeaderOffset, zip64, rangeEnd: cdOffset,
@@ -294,10 +295,10 @@ function parseCentralDirectory(cd: Uint8Array, total: number, cdOffset: number, 
 }
 
 function validateName(name: string): void {
-  if (name.length === 0) fail('parse-error', 'empty part name')
+  if (name.length === 0) fail('parse-error', 'empty part name', undefined, 'name-invalid')
   if (name.includes('\u0000') || name.includes('\\') || name.startsWith('/') || /^[A-Za-z]:/.test(name)
     || name.split('/').includes('..')) {
-    fail('parse-error', `escaping or invalid part name ${JSON.stringify(name)}`)
+    fail('parse-error', `escaping or invalid part name ${JSON.stringify(name)}`, undefined, 'name-invalid')
   }
 }
 
@@ -367,7 +368,7 @@ export async function* openPart(src: RangeSource, entry: ZipEntryInfo, opts: Par
   const header = await src.read(entry.localHeaderOffset, headerEnd, signal)
   throwIfAborted(signal, part)
   if (u32(header, 0) !== SIG_LOCAL) fail('parse-error', 'local header signature not found', part)
-  if ((u16(header, 6) & ENCRYPTION_FLAGS) !== 0) fail('unsupported', 'encrypted entry', part)
+  if ((u16(header, 6) & ENCRYPTION_FLAGS) !== 0) fail('unsupported', 'encrypted entry', part, 'encrypted')
   if (u16(header, 8) !== entry.method) fail('parse-error', 'local and central compression methods differ', part)
   if (u16(header, 26) !== nameBytes.length || !sameBytes(header.subarray(LOCAL_BYTES), nameBytes)) {
     fail('parse-error', 'local and central part names differ', part)
@@ -380,7 +381,7 @@ export async function* openPart(src: RangeSource, entry: ZipEntryInfo, opts: Par
   let produced = 0
   let crc = 0
   const accept = (n: number): void => {
-    if (produced + n > entry.uncompressedSize) fail('parse-error', `part inflates beyond its declared size of ${entry.uncompressedSize} bytes`, part)
+    if (produced + n > entry.uncompressedSize) fail('parse-error', `part inflates beyond its declared size of ${entry.uncompressedSize} bytes`, part, 'size-mismatch')
     opts.budget.charge(n)
     if (verifyCrc) crc = crc32Update(crc, out, 0, n)
     produced += n
@@ -434,7 +435,7 @@ export async function* openPart(src: RangeSource, entry: ZipEntryInfo, opts: Par
         if (wantsInput) {
           if (inPos < input.length) fail('parse-error', 'inflater asked for input while input was pending', part)
           // Truncation is decided only here, at the end of the entry's compressed range.
-          if (readPos >= dataEnd) fail('parse-error', 'compressed data ends before the deflate stream does', part)
+          if (readPos >= dataEnd) fail('parse-error', 'compressed data ends before the deflate stream does', part, 'truncated-deflate')
         } else if (step.inConsumed === 0 && step.outProduced === 0) {
           fail('parse-error', 'inflater made no progress', part)
         }
@@ -442,13 +443,13 @@ export async function* openPart(src: RangeSource, entry: ZipEntryInfo, opts: Par
       if (inPos < input.length || readPos < dataEnd) fail('parse-error', 'trailing data after the end of the deflate stream', part)
       const totals = await inflater.finish()
       if (!totals.ended || consumed !== entry.compressedSize || totals.totalIn !== entry.compressedSize) {
-        fail('parse-error', `deflate stream consumed ${consumed} of ${entry.compressedSize} declared bytes`, part)
+        fail('parse-error', `deflate stream consumed ${consumed} of ${entry.compressedSize} declared bytes`, part, 'truncated-deflate')
       }
     } finally {
       await inflater.dispose()
     }
   }
-  if (produced !== entry.uncompressedSize) fail('parse-error', `part produced ${produced} of ${entry.uncompressedSize} declared bytes`, part)
+  if (produced !== entry.uncompressedSize) fail('parse-error', `part produced ${produced} of ${entry.uncompressedSize} declared bytes`, part, 'size-mismatch')
   if (verifyCrc && crc !== entry.crc32) fail('parse-error', 'CRC-32 mismatch', part)
 }
 

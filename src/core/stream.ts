@@ -217,3 +217,115 @@ export async function readSource(
   if (source instanceof ArrayBuffer) return new Uint8Array(source)
   throw new Error('Unsupported byte source')
 }
+
+/** A sequential byte source opened for pulling: progress is reported exactly
+ * as readByteStream reports it (an initial report, one per chunk, throttled
+ * to whole percents when the total is known, and a final unconditional one). */
+export interface ByteStreamReader {
+  /** Declared length (Content-Length): a hint only. */
+  readonly total: number | undefined
+  /** Next non-empty chunk, or undefined at the end. Never reads ahead. */
+  read(): Promise<Uint8Array | undefined>
+  cancel(): Promise<void>
+}
+
+export type OpenedSource =
+  | { kind: 'bytes'; bytes: Uint8Array }
+  | { kind: 'blob'; blob: Blob }
+  | { kind: 'stream'; reader: ByteStreamReader }
+
+export interface OpenSourceListeners {
+  onProgress?: ProgressListener
+  onProtection?: ProtectionListener
+  onWatermark?: WatermarkListener
+}
+
+function pullStream(stream: ReadableStream<Uint8Array>, onProgress: ProgressListener | undefined, total: number | undefined, signal?: AbortSignal): ByteStreamReader {
+  const reader = stream.getReader()
+  let loaded = 0
+  let announced = -1
+  let done = false
+  const report = () => {
+    if (total && total > 0) {
+      const pct = Math.floor((loaded / total) * 100)
+      if (pct === announced) return
+      announced = pct
+    }
+    onProgress?.({ loaded, total })
+  }
+  const cancel = async () => {
+    if (done) return
+    done = true
+    try { await reader.cancel() } catch { /* already errored */ }
+  }
+  signal?.addEventListener('abort', () => { void cancel() }, { once: true })
+  report()
+  return {
+    total,
+    async read() {
+      while (!done) {
+        const { done: end, value } = await reader.read()
+        if (end) {
+          if (!done) {
+            done = true
+            onProgress?.({ loaded, total })
+          }
+          return undefined
+        }
+        if (value && value.length > 0) {
+          loaded += value.length
+          report()
+          return value
+        }
+      }
+      return undefined
+    },
+    cancel,
+  }
+}
+
+async function openResponse(response: Response, listeners: OpenSourceListeners, signal?: AbortSignal): Promise<OpenedSource> {
+  if (!response.ok) {
+    const status = `HTTP ${response.status}${response.statusText ? ` ${response.statusText}` : ''}`
+    throw new Error(`${status} while downloading the document`)
+  }
+  listeners.onProtection?.(protectionFromHeaders(response.headers))
+  listeners.onWatermark?.(watermarkFromHeaders(response.headers))
+  const totalHeader = response.headers.get('content-length')
+  const total = totalHeader ? parseInt(totalHeader, 10) : undefined
+  if (response.body) return { kind: 'stream', reader: pullStream(response.body, listeners.onProgress, Number.isFinite(total) ? total : undefined, signal) }
+  return { kind: 'bytes', bytes: new Uint8Array(await response.arrayBuffer()) }
+}
+
+async function openFetch(input: string | Request, init: RequestInit | undefined, listeners: OpenSourceListeners, signal?: AbortSignal): Promise<OpenedSource> {
+  if (typeof fetch !== 'function') {
+    const url = typeof input === 'string' ? input : input.url
+    throw new Error(`Cannot download ${url}: fetch is not available in this environment`)
+  }
+  return openResponse(await fetch(input, init), listeners, signal)
+}
+
+/**
+ * The same source handling as readSource (promise, Request, Response, Blob,
+ * `{ url, headers, credentials }`, ReadableStream, cross-realm byte views),
+ * but a sequential source is returned as a pull reader instead of being
+ * accumulated, so the caller can look at a prefix and choose to accumulate
+ * or spool. Protection and watermark listeners fire before the first byte.
+ */
+export async function openByteStream(source: ByteSource, listeners: OpenSourceListeners = {}, signal?: AbortSignal): Promise<OpenedSource> {
+  if (typeof (source as Promise<DirectByteSource> | null)?.then === 'function') {
+    return openByteStream(await (source as Promise<DirectByteSource>), listeners, signal)
+  }
+  if (typeof Request !== 'undefined' && source instanceof Request) return openFetch(source, undefined, listeners, signal)
+  if (source instanceof Response) return openResponse(source, listeners, signal)
+  if (source instanceof Blob) return { kind: 'blob', blob: source }
+  if (typeof source === 'object' && source !== null && typeof (source as HttpSource).url === 'string') {
+    const { url, headers, credentials } = source as HttpSource
+    return openFetch(url, { headers, credentials }, listeners, signal)
+  }
+  if (typeof ReadableStream !== 'undefined' && source instanceof ReadableStream) {
+    return { kind: 'stream', reader: pullStream(source as ReadableStream<Uint8Array>, listeners.onProgress, undefined, signal) }
+  }
+  if (ArrayBuffer.isView(source) || source instanceof ArrayBuffer) return { kind: 'bytes', bytes: await readSource(source) }
+  throw new Error('Unsupported byte source')
+}

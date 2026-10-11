@@ -40,6 +40,10 @@ export default defineConfig({
     },
     rollupOptions: {
       external: ['react', 'react-dom'],
+      // The lazy large-source chunk imports shared code from the index entry;
+      // allowing the entry to gain internal exports keeps it one eager file
+      // instead of a facade plus a shared chunk.
+      preserveEntrySignatures: 'allow-extension',
     },
   },
 })
