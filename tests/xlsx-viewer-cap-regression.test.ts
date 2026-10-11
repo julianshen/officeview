@@ -12,7 +12,7 @@ import { createIntervalSet, createRowVisibility, visibilityFromHidden } from '..
 import type { AxisMetricsErrorCode } from '../src/xlsx/view/axes'
 import { MAX_COLS, MAX_ROWS } from '../src/xlsx/view/coordinates'
 import type { LogicalViewport } from '../src/xlsx/view/contracts'
-import type { XlsxCell, XlsxColumnSpec, XlsxRow, XlsxSheet } from '../src/xlsx/types'
+import type { XlsxCell, XlsxColumnSpec, XlsxMergeRange, XlsxRow, XlsxSheet } from '../src/xlsx/types'
 
 // Default 10pt text sits on y + 20 - (20 - 13.33)/2 inside a 20px row; strings start at x + 3.
 const BASELINE = 20 - (20 - 10 * 96 / 72) / 2
@@ -494,16 +494,61 @@ describe('review round 2 (Codex findings)', () => {
     const straddle = { ...sheetOf([{ index: 0, cells: [] }]), drawings: Array.from({ length: 50_000 }, (_, i) => rect(i % 2 ? 100_000 + i * 30 : -100_000 - i * 30)) } as unknown as XlsxSheet
     expect(planViewport(ready(straddle), view(0, 0, 64, 20))).toMatchObject({ kind: 'coarse', diagnostics: [expect.objectContaining({ code: 'detail-limit' })] })
   })
-  test('F7: a bounded request touching a merge truncated by the grid is refused', async () => {
-    const sheet = { ...sheetOf([{ index: 0, cells: [cell(0, 0, 'Anchor'), cell(0, 1, 'B1')] }]), merges: ['A1:A20001'], mergeRanges: [{ minRow: 0, minCol: 0, maxRow: 20_000, maxCol: 0 }] }
-    const touching = recorder(64, 20)
-    expect(() => renderSheet(sheet, touching.ctx, undefined, undefined, {}, { x: 0, y: 0, width: 64, height: 20 })).toThrow(StaticExportLimitError)
-    expect(touching.find('Anchor')).toEqual([])
-    const beside = recorder(64, 20)
-    expect(() => renderSheet(sheet, beside.ctx, undefined, undefined, {}, { x: 64, y: 0, width: 64, height: 20 })).not.toThrow()
-    expect(beside.find('B1')).toHaveLength(1)
+  test('F7 (r3): a bounded request lays a grid-truncated merge out at its true extent', async () => {
+    const tallMerge = (style?: XlsxCell['style']) => ({ ...sheetOf([{ index: 0, cells: [{ ...cell(0, 0, 'Anchor'), ...(style ? { style } : {}) }, cell(0, 1, 'B1')] }]), merges: ['A1:A20001'], mergeRanges: [{ minRow: 0, minCol: 0, maxRow: 20_000, maxCol: 0 }] })
+    const sheet = tallMerge()
     const m = computeMetrics(sheet)
+    const gridHeight = m.rowHeightsPx.length * 20
+    // Upper region: allowed. Ordinary placement centres the text in the merged box,
+    // whose true height is 20,001 rows; the truncated box would centre it at ~163,847.
+    const trueCentre = (20_001 * 20 + 10 * 96 / 72) / 2
+    const top = recorder(64, 200)
+    expect(() => renderSheet(sheet, top.ctx, undefined, undefined, {}, { x: 0, y: 0, width: 64, height: 200 })).not.toThrow()
+    expect(top.find('Anchor')).toEqual([{ text: 'Anchor', x: PAD, y: expect.closeTo(trueCentre, 6) }])
+    const inWindow = (out: ReturnType<typeof recorder>, height: number) => out.find('Anchor').filter(item => item.y > 0 && item.y < height + 20)
+    // Where the truncated layout would have put the text: nothing is painted there.
+    const truncatedCentre = (gridHeight + 10 * 96 / 72) / 2
+    const edge = recorder(64, 100)
+    expect(() => renderSheet(sheet, edge.ctx, undefined, undefined, {}, { x: 0, y: truncatedCentre - 50, width: 64, height: 100 })).not.toThrow()
+    expect(inWindow(edge, 100)).toEqual([])
+    // Top-aligned anchor text paints at the merge top.
+    const aligned = tallMerge({ numFmtId: 0, vertical: 'top' })
+    const topAligned = recorder(64, 200)
+    renderSheet(aligned, topAligned.ctx, undefined, undefined, {}, { x: 0, y: 0, width: 64, height: 200 })
+    expect(topAligned.find('Anchor').length).toBeGreaterThan(0)
+    expect(topAligned.find('Anchor')[0].y).toBeLessThan(20)
+    // A window that needs rows past the grid is still refused.
+    expect(() => renderSheet(sheet, recorder(64, 60).ctx, undefined, undefined, {}, { x: 0, y: gridHeight - 20, width: 64, height: 60 })).toThrow(StaticExportLimitError)
     const print = computePrintMetrics(sheet, m, 96)
-    expect(() => renderPrintPage(sheet, recorder(64, 64).ctx, m, print, 0, 0)).toThrow(StaticExportLimitError)
+    expect(() => renderPrintPage(sheet, recorder(64, 64).ctx, m, print, 0, 0)).not.toThrow()
+  })
+
+  test('r3 MINOR 2: per-frame merge lookup is not quadratic in records', () => {
+    // 60 rows x 100 columns, every row covered by 50 two-column merges, all cells populated.
+    let reads = 0
+    const ranges: XlsxMergeRange[] = []
+    for (let r = 0; r < 60; r++) for (let c = 0; c < 100; c += 2) {
+      const range = { minRow: r, minCol: c, maxRow: r, maxCol: c + 1 }
+      ranges.push(new Proxy(range, { get(target, key) { reads++; return Reflect.get(target, key) } }))
+    }
+    const rows: XlsxRow[] = Array.from({ length: 60 }, (_, r) => ({ index: r, cells: Array.from({ length: 100 }, (_, c) => cell(r, c, `${r}:${c}`)) }))
+    const sheet = { ...sheetOf(rows), mergeRanges: ranges }
+    const geometry = ready(sheet)
+    reads = 0
+    const plan = planViewport(geometry, view(0, 0, 100 * 64, 60 * 20))
+    if (plan.kind !== 'detail') throw new Error(`expected detail, got ${plan.kind}`)
+    expect(plan.cells).toHaveLength(3000)
+    expect(plan.cells.every(placed => placed.merge !== undefined && placed.source.col % 2 === 0)).toBe(true)
+    // A linear scan per cell reads ~6,000 x 3,000 range fields; an index is near-linear.
+    expect(reads).toBeLessThan(500_000)
+  })
+  test('r3 NIT 4: exactly four device pixels admits detail', () => {
+    const sheet = sheetOf([{ index: 0, cells: [cell(0, 0, 'A1')] }, { index: 1, heightPt: 0.3, customHeight: true, cells: [cell(1, 0, 'Tiny')] }])
+    const geometry = ready(sheet)
+    expect(geometry.metrics.rows.size(1) * 10).toBeLessThan(4)
+    expect(planViewport(geometry, { box: { x: 0, y: 0, width: 64, height: 30 }, zoom: 10, deviceScale: 1 }).kind).toBe('detail')
+    const fourPx = ready(sheetOf([{ index: 0, heightPt: 3, customHeight: true, cells: [cell(0, 0, 'A1')] }]))
+    expect(fourPx.metrics.rows.size(0)).toBe(4)
+    expect(planViewport(fourPx, { box: { x: 0, y: 0, width: 64, height: 4 }, zoom: 1, deviceScale: 1 }).kind).toBe('detail')
   })
 })
