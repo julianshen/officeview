@@ -514,6 +514,11 @@ expect(wide.contains({ row: 2, col: 0 })).toBe(false)
 
 ## S9 — Controls, copy/print policy and mobile interactions
 
+> **User-approved behaviour changes (2026-10-11), to be surfaced by S9 copy and listed in the final PR:**
+> 1. A remote spreadsheet whose type cannot be determined from its first 64 KiB, too large for the memory spool, with neither OPFS nor IndexedDB available, is refused with: "This file is too large to open from the web in this browser. Download it and open it locally."
+> 2. Workbooks whose load-time evaluation would exceed the memory budget open with the file's cached values; show a status line such as "Showing saved values — N formulas not recalculated (file too large)"; uncached formula cells show as unavailable (a "Recalculate anyway" action is a possible later addition).
+> 3. Whole-sheet static export/print of sheets beyond the legacy 16,384×4,096 grid (or drawing sheets beyond the old drawing clamp) is refused instead of silently truncated, with: "This sheet is too large to export as one image. Choose a range or print selected pages." Ordinary sheets within the legacy grid render exactly as before.
+
 ### S9.1 Atomic filter dropdown and sort dialog
 
 **Files:** create `src/components/xlsx/FilterDropdown.tsx`, `SortDialog.tsx`; integrate `GridHeaders.tsx`, `ViewerStatus.tsx`, `OfficeDoc.tsx`; test `tests/xlsx-viewer-filter-ui.test.tsx`, `tests/xlsx-viewer-sort-ui.test.tsx`.
