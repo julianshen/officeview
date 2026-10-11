@@ -38,7 +38,7 @@ export interface DeclaredAutoFilter extends Flagged {
   refVerbatim?: string
   range?: DeclaredRange
   columns: DeclaredFilterColumn[]
-  /** Columns beyond MAX_DECLARED_ITEMS or the document budget are counted, not retained. */
+  /** Columns beyond MAX_DECLARED_ITEMS or the document byte budget are counted, not retained. */
   omittedColumns?: number
   truncated?: true
 }
@@ -64,8 +64,11 @@ export interface DeclaredSortState extends Flagged {
   unsupported?: 'left-to-right'
   /** Direct worksheet/table child, or nested inside <autoFilter> (both valid). */
   placement?: 'direct' | 'nested'
+  /** Valid sortStates in the other placement that were not retained (a direct
+   * one wins over a nested one; having both is not malformed). */
+  omittedSortStates?: number
   conditions: DeclaredSortCondition[]
-  /** Conditions beyond MAX_DECLARED_ITEMS or the document budget are counted, not retained. */
+  /** Conditions beyond MAX_DECLARED_ITEMS or the document byte budget are counted, not retained. */
   omittedConditions?: number
   truncated?: true
 }
@@ -88,7 +91,7 @@ export interface DeclaredSheetFilters {
   worksheetAutoFilter?: DeclaredAutoFilter
   worksheetSortState?: DeclaredSortState
   tableAutoFilters: DeclaredTableFilters[]
-  /** Declaring tables beyond MAX_DECLARED_TABLES, counted not retained. */
+  /** Declaring tables beyond MAX_DECLARED_TABLES or the document byte budget, counted not retained. */
   omittedTables?: number
   /** Repeated tablePart references to a part already seen on this sheet. */
   duplicateTableParts?: number
@@ -102,9 +105,11 @@ const MAX_RECORDED_CONDITIONS = 8
 export const MAX_DECLARED_ITEMS = 1024
 /** Retained declaring tables per sheet; the rest are counted (§12.4). */
 export const MAX_DECLARED_TABLES = 64
-/** Retained column + sort-condition records per document across all sheets
- * and tables, so many declaring parts cannot multiply the per-item cap (§12.4). */
-export const MAX_DECLARED_RECORDS = 8192
+/** Serialized size of retained column, sort-condition and table records per
+ * document across all sheets and tables, so many declaring parts or long text
+ * cannot multiply the per-item caps (§12.4 aggregate budgets). The records only
+ * feed bounded status copy, so a small cap keeps the main-thread document lean. */
+export const MAX_DECLARED_BYTES = 256 * 1024
 /** Longest file string copied into a diagnostic record. */
 export const MAX_DECLARED_TEXT = 256
 /** Column/sort kinds listed in status copy before "and N more". */
@@ -174,18 +179,22 @@ function cut(text: string, length: number): string {
   const last = text.charCodeAt(length - 1)
   return text.slice(0, last >= 0xd800 && last <= 0xdbff ? length - 1 : length)
 }
-/** Remaining retained records for one document; shared by every builder. */
+/** Remaining serialized bytes for one document's retained records; shared by
+ * every builder. A record is admitted while any budget remains and charged its
+ * JSON size afterwards, so the overshoot is at most one record (each record's
+ * text is already capped). Both adapters build identical records, so they
+ * spend the budget identically. */
 export interface DeclaredBudget {
-  records: number
+  bytes: number
 }
 export function createDeclaredBudget(): DeclaredBudget {
-  return { records: MAX_DECLARED_RECORDS }
+  return { bytes: MAX_DECLARED_BYTES }
 }
-function takeRecord(budget: DeclaredBudget | undefined): boolean {
-  if (!budget) return true
-  if (budget.records <= 0) return false
-  budget.records--
-  return true
+function hasRoom(budget: DeclaredBudget | undefined): boolean {
+  return budget === undefined || budget.bytes > 0
+}
+function charge(budget: DeclaredBudget | undefined, record: unknown): void {
+  if (budget) budget.bytes -= JSON.stringify(record).length
 }
 
 /** Attribute record as either adapter sees it (tree attrs or SAX attributes). */
@@ -283,7 +292,7 @@ export function declaredAutoFilterBuilder(attrs: DeclaredAttrs, budget?: Declare
   let index = 0
   return {
     addColumn(input) {
-      if (index >= MAX_DECLARED_ITEMS || !takeRecord(budget)) {
+      if (index >= MAX_DECLARED_ITEMS || !hasRoom(budget)) {
         index++
         out.omittedColumns = (out.omittedColumns ?? 0) + 1
         return
@@ -298,6 +307,7 @@ export function declaredAutoFilterBuilder(attrs: DeclaredAttrs, budget?: Declare
       if (shown !== undefined) column.showButton = shown
       if (input.ruleCount > 1) flag(column, 'multiple-rule-elements')
       if (input.firstRule) column.rule = declaredRuleOf(input.firstRule)
+      charge(budget, column)
       out.columns.push(column)
     },
     finish() {
@@ -317,13 +327,20 @@ export function declaredAutoFilterBuilder(attrs: DeclaredAttrs, budget?: Declare
   }
 }
 function sortConditionOf(a: DeclaredAttrs): DeclaredSortCondition {
-  const out: DeclaredSortCondition = { sortBy: sortByOf(textAttr(a.sortBy)) }
+  // An empty spelling is not ST_SortBy: only an absent attribute defaults.
+  const sortBy = a.sortBy === undefined ? undefined : String(a.sortBy)
+  const out: DeclaredSortCondition = { sortBy: sortByOf(sortBy) }
   refInto(out, a.ref)
-  if (out.sortBy === 'unknown') out.sortByVerbatim = a.sortBy === undefined ? undefined : keep(String(a.sortBy), out)
+  if (out.sortBy === 'unknown') {
+    out.sortByVerbatim = keep(sortBy ?? '', out)
+    flag(out, 'invalid-sortBy')
+  }
   const descending = boolAttr(a.descending)
   if (descending !== undefined) out.descending = descending
   const dxfId = textAttr(a.dxfId)
   if (dxfId !== undefined) out.dxfId = keep(dxfId, out)
+  // CT_SortCondition is a leaf element: customList is an ST_Xstring attribute
+  // (ISO/IEC 29500-1 sortCondition), never a child element.
   const customList = textAttr(a.customList)
   if (customList !== undefined) {
     // Counted in place: splitting a long list would copy every entry.
@@ -346,11 +363,13 @@ export function declaredSortStateBuilder(
   const out: DeclaredSortState = { placement, conditions: [] }
   return {
     addCondition(condition) {
-      if (out.conditions.length >= MAX_DECLARED_ITEMS || !takeRecord(budget)) {
+      if (out.conditions.length >= MAX_DECLARED_ITEMS || !hasRoom(budget)) {
         out.omittedConditions = (out.omittedConditions ?? 0) + 1
         return
       }
-      out.conditions.push(sortConditionOf(condition))
+      const record = sortConditionOf(condition)
+      charge(budget, record)
+      out.conditions.push(record)
     },
     finish() {
       refInto(out, attrs.ref)
@@ -378,8 +397,9 @@ export interface DeclaredContainerBuilder {
   finish(): DeclaredContainerState
 }
 /** One worksheet or table part's declarations, fed in document order. Only the
- * first declaration of each kind is kept; repeats are flagged on it. A direct
- * sortState wins over one nested in <autoFilter>, also flagged. */
+ * first declaration of each kind is kept; true repeats (same placement) are
+ * flagged on it. A direct sortState wins over one nested in <autoFilter>; both
+ * placements are schema-valid, so the dropped one is counted, not flagged. */
 export function declaredContainerBuilder(budget?: DeclaredBudget): DeclaredContainerBuilder {
   let auto: DeclaredAutoFilterBuilder | undefined
   let autoRepeats = 0
@@ -410,8 +430,9 @@ export function declaredContainerBuilder(budget?: DeclaredBudget): DeclaredConta
         out.autoFilter = autoFilter
       }
       const direct = sorts.direct.builder?.finish(), nested = sorts.nested.builder?.finish()
-      if (direct && (sorts.direct.repeats > 0 || nested)) flag(direct, 'duplicate-sortState')
+      if (direct && sorts.direct.repeats > 0) flag(direct, 'duplicate-sortState')
       if (nested && sorts.nested.repeats > 0) flag(nested, 'duplicate-sortState')
+      if (direct && nested) direct.omittedSortStates = 1
       const sortState = direct ?? nested
       if (sortState) out.sortState = sortState
       return out
@@ -439,7 +460,8 @@ export interface DeclaredSheetBuilder {
   addTable(partPath: string, declares: boolean, build: () => DeclaredTableFilters | undefined): void
 }
 /** Per-sheet table accumulator: repeated references to one part are counted
- * once, and declaring tables beyond MAX_DECLARED_TABLES are counted, not built. */
+ * once, and declaring tables beyond MAX_DECLARED_TABLES or the document byte
+ * budget are counted, not built. */
 export function declaredSheetBuilder(entry: DeclaredSheetFilters, budget: DeclaredBudget): DeclaredSheetBuilder {
   const seen = new Set<string>()
   return {
@@ -452,12 +474,20 @@ export function declaredSheetBuilder(entry: DeclaredSheetFilters, budget: Declar
       }
       seen.add(partPath)
       if (!declares) return
-      if (entry.tableAutoFilters.length >= MAX_DECLARED_TABLES) {
+      if (entry.tableAutoFilters.length >= MAX_DECLARED_TABLES || !hasRoom(budget)) {
         entry.omittedTables = (entry.omittedTables ?? 0) + 1
         return
       }
       const table = build()
-      if (table) entry.tableAutoFilters.push(table)
+      if (!table) return
+      // Columns and conditions were charged as they were built; charge the
+      // table shell (attribution, refs) here.
+      charge(budget, {
+        ...table,
+        ...(table.autoFilter ? { autoFilter: { ...table.autoFilter, columns: [] } } : {}),
+        ...(table.sortState ? { sortState: { ...table.sortState, conditions: [] } } : {}),
+      })
+      entry.tableAutoFilters.push(table)
     },
   }
 }

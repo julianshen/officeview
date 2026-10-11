@@ -229,8 +229,9 @@ export async function parseXlsx(pkg: OfficePackage): Promise<XlsxDocument> {
   let declaredTableParts = 0
   let tableInventoryComplete = true
   const declaredFilters: DeclaredSheetFilters[] = []
-  // One retained-record budget for the whole document's declarations.
+  // One retained-size budget for the whole document's declarations.
   const declaredBudget = createDeclaredBudget()
+  const tableSourceChecks = new Map<string, boolean>()
   for (let i = 0; i < sheets.length; i++) {
     const sheetPath = sheetPartPaths[i]
     const identity = workbookSheets[i]
@@ -299,8 +300,14 @@ export async function parseXlsx(pkg: OfficePackage): Promise<XlsxDocument> {
         }
         const partPath = resolvePartTarget(sheetPath, rel.target)
         try {
-          const sourceText = await pkg.text(partPath)
-          if (!isTablePartSource(sourceText)) {
+          // The root-QName check depends only on the part's bytes, so repeated
+          // references to one part reuse it instead of re-parsing the text.
+          let sourceOk = tableSourceChecks.get(partPath)
+          if (sourceOk === undefined) {
+            sourceOk = isTablePartSource(await pkg.text(partPath))
+            tableSourceChecks.set(partPath, sourceOk)
+          }
+          if (!sourceOk) {
             tableInventoryComplete = false
             continue
           }
