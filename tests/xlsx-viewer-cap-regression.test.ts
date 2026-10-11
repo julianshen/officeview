@@ -367,12 +367,23 @@ describe('review round 1 (Codex findings)', () => {
     const geometry = ready(onePx)
     expect(geometry.metrics.rows.size(0)).toBe(1)
     const at = (zoom: number, deviceScale: number) => planViewport(geometry, { box: { x: 0, y: 0, width: 320, height: 200 }, zoom, deviceScale })
-    expect(at(0.25, 1)).toMatchObject({ kind: 'coarse', diagnostics: [expect.objectContaining({ code: 'detail-limit' })] })
+    // S5.1 per-run coarse: the ten 1px rows are summarized while the default rows
+    // below them (5 device px at 25%) keep detail; no tiny row is enumerated.
+    const quarter = at(0.25, 1)
+    if (quarter.kind !== 'detail') throw new Error(`expected a mixed detail frame, got ${quarter.kind}`)
+    expect(quarter.cells).toEqual([])
+    expect(quarter.coarse.length).toBeGreaterThan(0)
+    expect(quarter.coarse.every(group => group.slots.end <= 9)).toBe(true)
+    // Rows 0-9 alone in the pane: nothing reaches four device pixels, the frame is coarse.
+    expect(planViewport(geometry, { box: { x: 0, y: 0, width: 320, height: 10 }, zoom: 0.25, deviceScale: 1 })).toMatchObject({ kind: 'coarse', diagnostics: [expect.objectContaining({ code: 'detail-limit' })] })
     expect(at(4, 1).kind).toBe('detail')
     const tiny = ready(sheetOf([{ index: 0, cells: [cell(0, 0, 'A1')] }, { index: 1, heightPt: 0.3, customHeight: true, cells: [cell(1, 0, 'Tiny')] }]))
     expect(tiny.metrics.rows.size(1)).toBeCloseTo(0.4, 12)
     expect(planViewport(tiny, { box: { x: 0, y: 0, width: 320, height: 200 }, zoom: 4, deviceScale: 3 }).kind).toBe('detail')
-    expect(planViewport(tiny, { box: { x: 0, y: 0, width: 320, height: 200 }, zoom: 1, deviceScale: 1 }).kind).toBe('coarse')
+    const mixed = planViewport(tiny, { box: { x: 0, y: 0, width: 320, height: 200 }, zoom: 1, deviceScale: 1 })
+    if (mixed.kind !== 'detail') throw new Error(`expected a mixed detail frame, got ${mixed.kind}`)
+    expect(mixed.cells.map(placed => placed.cell.value)).toEqual(['A1'])
+    expect(mixed.coarse.every(group => group.slots.start === 1 && group.slots.end === 1)).toBe(true)
     expect(planViewport(tiny, { box: { x: 0, y: 0, width: 320, height: 200 }, zoom: Number.NaN, deviceScale: 1 })).toMatchObject({ kind: 'diagnostic', diagnostics: expect.arrayContaining([expect.objectContaining({ code: 'axis-invalid-query' })]) })
   })
   test('F5: an over-budget frame is refused before any cell content is read', () => {

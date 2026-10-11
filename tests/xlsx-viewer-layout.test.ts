@@ -5,12 +5,12 @@
  */
 import { describe, expect, test } from 'vitest'
 import { createCanvas } from 'canvas'
-import { computeMetrics, renderSheet, renderSheetViewport } from '../src/xlsx/render'
+import { computeMetrics, createCellLayoutHost, renderSheet, renderSheetViewport } from '../src/xlsx/render'
 import {
   buildSheetGeometry, planViewport, queryViewport, sourceSetsForSlots, VIEWPORT_DETAIL_LIMITS,
   type SheetGeometry, type StoreViewportOutcome,
 } from '../src/xlsx/view/viewport'
-import { LayoutCache, type CellLayoutHost } from '../src/xlsx/view/textLayout'
+import { buildCellRecords, LayoutCache, placedFromViewportCells, type CellLayoutHost } from '../src/xlsx/view/textLayout'
 import { createAxisMetrics } from '../src/xlsx/view/axes'
 import { createSheetMetrics, type ProjectedSheetMetrics } from '../src/xlsx/view/projection'
 import { createRowOrder } from '../src/xlsx/view/order'
@@ -300,10 +300,14 @@ describe('detail admission (SheetZoom x DPR, no font-size floor)', () => {
     expect(plan.coarse.length).toBeGreaterThan(0)
     for (const group of plan.coarse) {
       expect(group.slots.end).toBeLessThan(10)
-      expect(group.bounds.height * 0.25).toBeGreaterThanOrEqual(4 - 1e-9)
+      // A group is at least four device pixels unless its whole span is smaller
+      // (ten 1px rows = 2.5 device px: one group row).
+      expect(group.bounds.height).toBe(10)
+      expect(group.bounds.width * 0.25).toBeGreaterThanOrEqual(4 - 1e-9)
     }
-    const covered = plan.coarse.reduce((sum, group) => sum + (group.slots.end - group.slots.start + 1), 0)
-    expect(covered).toBe(10)
+    // The groups tile the ten tiny rows across the pane width, nothing else.
+    expect(new Set(plan.coarse.map(group => `${group.slots.start}-${group.slots.end}`))).toEqual(new Set(['0-9']))
+    expect(plan.coarse.reduce((sum, group) => sum + group.bounds.width, 0)).toBe(1280)
     const out = recorder(1280, 800)
     const result = renderSheetViewport(sheet, out.ctx, geometry, view(0, 0, 1280, 800, 0.25, 1), {}, { owner: OWNER })
     expect(out.find('Normal')).toHaveLength(1)
@@ -452,20 +456,23 @@ describe('source-store viewport at the edges of F1/F3/F6', () => {
     expect((await queryViewport(store, metrics, pane, storeOwner(store), { signal: controller.signal })).kind).toBe('cancelled')
   })
   test('a window needing more pages than the frame budget declares the remainder loading', async () => {
-    // Interleaved order: display slots alternate between two distant source bands,
-    // so the window maps to many disjoint source runs (one page request each).
+    // Display slot s shows source 2s (then the odd rows): consecutive display rows
+    // are disjoint source rows, so the window needs one page request per row.
     const fixture = createFixture('F3', { rowCount: 4096, colCount: 8 })
     const store = fixture.createStore()
     const n = 4096
-    const permutation = new Uint32Array(n).map((_, slot) => slot % 2 === 0 ? slot / 2 : n / 2 + (slot - 1) / 2)
+    const permutation = new Uint32Array(n).map((_, slot) => slot < n / 2 ? 2 * slot : 2 * (slot - n / 2) + 1)
     const metrics = storeMetrics({ order: createRowOrder([{ r0: 0, r1: n - 1, sourceAtOffset: permutation }]) })
     const outcome = viewportOf(await queryViewport(store, metrics, view(0, 0, 512, 1600), storeOwner(store), { signal: signal(), profile: 'M' }))
     expect(outcome.work.pages).toBe(VIEWPORT_DETAIL_LIMITS.M.pages)
     expect(outcome.completeness).toBe('loading')
     expect(outcome.cells.some(item => item.kind === 'unknown')).toBe(true)
     // Rows that were read sit at their display slot.
-    const first = outcome.cells.find(item => item.kind === 'cell' && item.source.row === n / 2)
-    expect(first).toMatchObject({ bounds: { y: 20 } })
+    const second = outcome.cells.find(item => item.kind === 'cell' && item.source.row === 2)
+    expect(second).toMatchObject({ bounds: { y: 20 } })
+    const unknown = outcome.cells.filter(item => item.kind === 'unknown')
+    expect(unknown).toHaveLength(80 - VIEWPORT_DETAIL_LIMITS.M.pages)
+    expect(unknown.every(item => item.kind === 'unknown' && item.pageId === 'page-budget')).toBe(true)
   })
 })
 
@@ -524,5 +531,46 @@ describe('overview groups map display pixels to exact source sets', () => {
     release()
     const outcome = await pending
     expect(outcome.kind).toBe('stale')
+  })
+})
+
+describe('store frames feed the same canonical records', () => {
+  test('F6 corner cells become records with host-formatted text, cached across frames', async () => {
+    const fixture = createFixture('F6')
+    const store = fixture.createStore()
+    const metrics = storeMetrics()
+    const box = { x: metrics.cols.totalCss() - 320, y: metrics.rows.totalCss() - 200, width: 320, height: 200 }
+    const outcome = viewportOf(await queryViewport(store, metrics, { box, zoom: 1, deviceScale: 1 }, storeOwner(store), { signal: signal() }))
+    const ctx = createCanvas(8, 8).getContext('2d') as unknown as CanvasRenderingContext2D
+    const host = createCellLayoutHost(ctx)
+    const cache = new LayoutCache()
+    const placed = placedFromViewportCells(outcome.cells)
+    expect(placed).toHaveLength(50)
+    const records = buildCellRecords(placed, outcome.owner, host, cache)
+    const corner = records.find(record => record.source.row === MAX_ROWS - 1 && record.source.col === MAX_COLS - 1)!
+    expect(corner.id).toBe(2 ** 34 - 1)
+    expect(corner.logicalBounds).toEqual({ x: (MAX_COLS - 1) * 64, y: (MAX_ROWS - 1) * 20, width: 64, height: 20 })
+    const value = fixture.cellAt(MAX_ROWS - 1, MAX_COLS - 1)!.value
+    expect(corner.text[0].formattedText).toBe(String(value))
+    expect(cache.stats.built).toBe(50)
+    buildCellRecords(placedFromViewportCells(outcome.cells), outcome.owner, host, cache)
+    expect(cache.stats.built).toBe(50)
+    expect(cache.stats.reused).toBe(50)
+  })
+  test('F5: a merge anchor offscreen paints across the merged box; covered cells disappear', async () => {
+    const fixture = createFixture('F5')
+    const store = fixture.createStore()
+    const metrics = storeMetrics()
+    const origin = viewportOf(await queryViewport(store, metrics, view(0, 0, 320, 200), storeOwner(store), { signal: signal() }))
+    const anchor = origin.cells.find(item => item.source.row === 0 && item.source.col === 0)
+    expect(anchor).toMatchObject({ kind: 'cell', bounds: { x: 0, y: 0, width: 128, height: 40 } })
+    expect(origin.cells.some(item => item.source.row <= 1 && item.source.col <= 1 && item !== anchor)).toBe(false)
+    // Inside B100:CW200000 far from its anchor: nothing but the merge.
+    const y = metrics.rows.start(150_000), x = metrics.cols.start(50)
+    const inside = viewportOf(await queryViewport(store, metrics, view(x, y, 320, 200), storeOwner(store), { signal: signal() }))
+    expect(inside.completeness).toBe('complete')
+    expect(inside.cells).toEqual([])
+    expect(inside.merges).toEqual([{ range: { minRow: 99, maxRow: 199_999, minCol: 1, maxCol: 100 }, bounds: { x: 64, y: 99 * 20, width: 100 * 64, height: (199_999 - 99 + 1) * 20 } }])
+    expect(inside.work.pages).toBeLessThanOrEqual(2)
   })
 })
