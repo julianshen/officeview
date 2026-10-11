@@ -920,3 +920,41 @@ describe('S4.1 round-2 findings (codex C / pi P)', () => {
     expect(quota.kind === 'quota' && quota.requiredBytes).toBeGreaterThan(0)
   })
 })
+
+describe('S4.1 round-3 findings (opencode)', () => {
+  it('MINOR lane growth charges the transient peak of old plus new buffers', async () => {
+    // 32 numeric rows: capacity grows 16 -> 32 at the 17th entry and needs no trim.
+    // Final retention is 256 + 32*22 = 960 B, but the growth peak holds the old
+    // 16-slot lanes (352 B) and the new 32-slot lanes (704 B) at once: 1,312 B.
+    const doc = objectDoc([{ sheetId: 'A', rows: column(Array.from({ length: 32 }, (_v, i) => i)) }])
+    const owner = initialIdentity('doc', 'A')
+    const open = async (maxBytes: number) => {
+      const kernel = new ViewerKernel({ parse: async () => doc }, { ...quiet, preparedBudget: { maxColumns: 8, maxBytes } })
+      completed(await run(kernel, { kind: 'open', requestId: rid(), docId: 'doc', source: { kind: 'object', document: doc }, profile: 'D' }))
+      return kernel
+    }
+    const tight = await open(1000)
+    expect(await run(tight, { kind: 'prepareColumns', requestId: rid(), owner, cols: new Uint16Array([0]) }))
+      .toMatchObject({ kind: 'quota', limitBytes: 1000, requiredBytes: 256 + 16 * 22 + 32 * 22 })
+    expect(tight.session('doc')!.preparedStats()).toEqual({ columns: 0, bytes: 0 })
+    const roomy = await open(1312)
+    completed(await run(roomy, { kind: 'prepareColumns', requestId: rid(), owner, cols: new Uint16Array([0]) }))
+    expect(roomy.session('doc')!.preparedStats()).toEqual({ columns: 1, bytes: 256 + 32 * 22 })
+  })
+
+  it('NIT structural handles keep one entry per sheet and drop stale value generations', async () => {
+    const doc = objectDoc([{ sheetId: 'A', rows: column([2, 1]) }])
+    const inner = createObjectWorkbookSource(doc, 'doc')
+    let valueGen = 0
+    const base = inner.store('A')
+    const store = Object.create(base) as SourceStore
+    Object.defineProperty(store, 'stamp', { get: () => ({ docId: 'doc', sheetId: 'A', valueGen }) })
+    store.queryStructural = async (rect, options) => ({ ...await base.queryStructural(rect, { ...options, stamp: base.stamp }), stamp: { docId: 'doc', sheetId: 'A', valueGen } })
+    const session = new DocumentSession('doc', { ...inner, sheets: inner.sheets, store: () => store, geometry: id => inner.geometry(id), release: () => inner.release() }, quiet)
+    for (valueGen = 0; valueGen < 3; valueGen++) {
+      // Each generation builds (and caches) its structural index before the kernels run.
+      await session.sort(session.identity('A'), sortSpec(1, 0), new AbortController().signal)
+    }
+    expect(session.structureCacheSize()).toBe(1)
+  })
+})

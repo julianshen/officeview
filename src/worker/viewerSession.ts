@@ -209,9 +209,11 @@ class ColumnBuilder {
   get heldBytes(): number {
     return PREPARED_COLUMN_OVERHEAD + this.capacity * PREPARED_ENTRY_LANE_BYTES + this.stringBytes + this.extraBytes
   }
-  /** Bytes the entry would add if appended now (growth counted at full capacity). */
+  /** Peak bytes above heldBytes if the entry were appended now. A growth step
+   * allocates the new lanes (max(16, 2C) slots) while the old C slots are still
+   * held for the copy, so the whole new allocation is the transient peak. */
   costOf(entry: PopulatedEntry): number {
-    let cost = this.count === this.capacity ? Math.max(16, this.capacity) * PREPARED_ENTRY_LANE_BYTES : 0
+    let cost = this.count === this.capacity ? Math.max(16, this.capacity * 2) * PREPARED_ENTRY_LANE_BYTES : 0
     const value = entry.cell.value
     if (typeof value === 'string' && !this.dictionary.has(value)) cost += value.length * 2 + PREPARED_STRING_OVERHEAD
     const cell = entry.cell
@@ -423,6 +425,9 @@ export class DocumentSession {
   private preparedBytes = 0
   /** Preparation transactions run one at a time (admission/eviction are atomic). */
   private prepareQueue: Promise<unknown> = Promise.resolve()
+  /** One structural handle per sheet, valid only for its value generation; a
+   * newer generation replaces (evicts) the stale entry, so this stays bounded
+   * by the sheet count. */
   private readonly structures = new Map<string, StructuralIndex>()
   private published: WorkbookOwner | null = null
   private closed = false
@@ -537,6 +542,8 @@ export class DocumentSession {
       extraObjects: column.extras.size, extraBytes: column.extraBytes, bytes: column.bytes,
     }
   }
+  /** Cached structural handles (diagnostic). */
+  structureCacheSize(): number { return this.structures.size }
   /** Retained prepared working set (document-wide, all sheets). */
   preparedStats(): { columns: number; bytes: number } {
     return { columns: this.prepared.size, bytes: this.preparedBytes }
@@ -744,11 +751,13 @@ export class DocumentSession {
    * complete index is cached; incomplete coverage is re-queried next time. */
   private async structure(sheetId: string, signal: AbortSignal): Promise<StructuralIndex> {
     const store = this.source.store(sheetId)
-    const key = JSON.stringify([store.stamp.docId, store.stamp.sheetId, store.stamp.valueGen])
-    const cached = this.structures.get(key)
-    if (cached) return cached
-    const index = new StructuralIndex(await store.queryStructural(FULL_SHEET, { signal, stamp: store.stamp }))
-    if (index.completeness === 'complete') this.structures.set(key, index)
+    const stamp = store.stamp
+    const cached = this.structures.get(sheetId)
+    if (cached && sameStamp(cached.stamp, stamp)) return cached
+    const index = new StructuralIndex(await store.queryStructural(FULL_SHEET, { signal, stamp }))
+    // Cache only a complete index for the generation it was queried under.
+    if (index.completeness === 'complete' && sameStamp(index.stamp, stamp) && !this.closed) this.structures.set(sheetId, index)
+    else if (cached && !sameStamp(cached.stamp, stamp)) this.structures.delete(sheetId)
     return index
   }
   /** Populated-cell feed for outside-column guards over resident readRows pages.
