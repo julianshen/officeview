@@ -574,3 +574,32 @@ describe('store frames feed the same canonical records', () => {
     expect(inside.work.pages).toBeLessThanOrEqual(2)
   })
 })
+
+describe('empty store windows', () => {
+  test('a pane past the last row or column is an empty complete frame, not a failed read', async () => {
+    const fixture = createFixture('F6')
+    const store = fixture.createStore()
+    const metrics = storeMetrics()
+    for (const box of [
+      { x: 0, y: metrics.rows.totalCss() + 10, width: 320, height: 200 },
+      { x: metrics.cols.totalCss() + 10, y: 0, width: 320, height: 200 },
+    ]) {
+      const outcome = viewportOf(await queryViewport(store, metrics, { box, zoom: 1, deviceScale: 1 }, storeOwner(store), { signal: signal() }))
+      expect(outcome.completeness).toBe('complete')
+      expect(outcome.error).toBeUndefined()
+      expect(outcome.cells).toEqual([])
+      expect(outcome.work.pages).toBe(0)
+    }
+  })
+  test('an overview store that never stops paging ends in an explicit resource outcome', async () => {
+    const fixture = createFixture('F6')
+    const inner = fixture.createStore()
+    let calls = 0
+    const store: SourceStore = { ...inner, queryOverview: async (request, options) => { calls++; const page = await inner.queryOverview({ ...request, cursor: undefined }, options); return { ...page, nextCursor: 'again' } } }
+    const metrics = storeMetrics({ rowCss: 0.5, colCss: 1 })
+    const outcome = viewportOf(await queryViewport(store, metrics, view(0, 0, 1440, 900, 0.25, 1), storeOwner(store), { signal: signal() }))
+    expect(outcome.completeness).toBe('incomplete')
+    expect(outcome.error).toMatchObject({ code: 'resource-limit' })
+    expect(calls).toBeLessThanOrEqual(VIEWPORT_DETAIL_LIMITS.D.pages)
+  })
+})

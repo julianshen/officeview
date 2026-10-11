@@ -298,8 +298,9 @@ export interface ViewportWork {
 export function emptyWork(): ViewportWork {
   return { pages: 0, visitedRecords: 0, records: 0, layoutsBuilt: 0, layoutsReused: 0, gridlines: 0, gridlineSpans: 0, runsVisited: 0, overviewGroups: 0, overviewPages: 0, semanticNodes: 0, mergeQueries: 0 }
 }
-/** One bounded display pixel group: inclusive display slots/columns whose start
- * lies in the group's logical box, never a source bounding rectangle. */
+/** One bounded display pixel group: inclusive display slots/columns whose boxes
+ * intersect the group's logical box (a row straddling a bucket edge is summarized
+ * in both adjacent groups), never a source bounding rectangle. */
 export interface CoarseGroup { groupId: string; bounds: LogicalCellBox; slots: { start: number; end: number }; cols: { c0: number; c1: number } }
 /** Whole-frame coarse: every visible region is summarized; `groups` are the
  * bounded display pixel groups (no cell content was read). */
@@ -969,13 +970,14 @@ export async function queryViewport(store: SourceStore, metrics: ProjectedSheetM
     }
     let cells: ViewportCell[] = []
     const mergePlacements: StoreMerge[] = []
-    if (detail) {
+    // An empty axis (pane past the last row/column) has nothing to read.
+    if (detail && detail.rows.detail.length && detail.cols.detail.length) {
       const structural = await structuralMerges(store, metrics, detail.rows.detail, detail.cols.detail, readOptions, merge, diagnostics)
       if (options.signal.aborted) throw new Cancelled()
       cells = await readDetail(store, metrics, detail.rows.detail, detail.cols.detail, limits.pages, readOptions, work, merge)
       cells = await applyMerges(store, cells, structural, viewport, limits.pages, readOptions, work, merge, mergePlacements)
     }
-    const groups = coarse.length ? await overview(store, metrics, coarse, limits.overviewGroups, readOptions, work, merge) : []
+    const groups = coarse.length ? await overview(store, metrics, coarse, limits.overviewGroups, limits.pages, readOptions, work, merge) : []
     let active: ViewportCell | undefined
     if (options.activeCell && isValidCoordinate(options.activeCell.row, options.activeCell.col)) {
       const at = options.activeCell
@@ -1127,7 +1129,7 @@ async function readDetail(store: SourceStore, metrics: ProjectedSheetMetrics, sl
  * aggregates assigned to display boxes (spec §4.1). A group splits into at most
  * two domains (identity intervals and a permuted-band list); its aggregate is the
  * exact combination, unknown if any part is unknown, never a sampled value. */
-async function overview(store: SourceStore, metrics: ProjectedSheetMetrics, groups: readonly CoarseGroup[], maxGroups: number, options: ReadOptionsLike, work: ViewportWork, merge: Merge): Promise<ViewportOverviewGroup[]> {
+async function overview(store: SourceStore, metrics: ProjectedSheetMetrics, groups: readonly CoarseGroup[], maxGroups: number, pageBudget: number, options: ReadOptionsLike, work: ViewportWork, merge: Merge): Promise<ViewportOverviewGroup[]> {
   const domains: OverviewDomain[] = []
   const parts = new Map<string, string[]>()
   for (const group of groups) {
@@ -1147,6 +1149,12 @@ async function overview(store: SourceStore, metrics: ProjectedSheetMetrics, grou
   const results = new Map<string, OverviewGroup>()
   let cursor: string | undefined
   do {
+    // Output is bounded per page; a store that keeps paging past the frame's
+    // page budget ends in an explicit resource outcome, never a loop.
+    if (work.overviewPages >= pageBudget) {
+      merge('incomplete', { code: 'resource-limit', retryable: true, message: `overview needs more than ${pageBudget} pages` })
+      break
+    }
     work.overviewPages++
     const page = await store.queryOverview({ groups: domains, maxGroups, cursor }, options)
     if (options.signal.aborted) throw new Cancelled()
