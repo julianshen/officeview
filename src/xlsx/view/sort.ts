@@ -3,6 +3,7 @@ import type {
 } from './contracts'
 import { createIdentityOrder, createRowOrder, pinRowPermutation, type CompactRowOrder } from './order'
 import { MAX_ROWS, MAX_COLS, CoordinateError, validateCoordinate, validateSourceRect } from './coordinates'
+import { CooperativeSlice } from './scheduler'
 
 declare const hiddenSourceBrand: unique symbol
 export interface HiddenSourceRows {
@@ -168,69 +169,16 @@ class Budget {
   release(bytes: number): void { this.live -= bytes }
   finish(): SortLedger { this.ledger.retainedBytes = this.live; return Object.freeze({ ...this.ledger }) }
 }
-/** MessageChannel yields a real task without nested timer clamping in workers.
- * Each operation owns its ports and closes them in its public boundary finally. */
-function defaultScheduler(): { yield: () => Promise<void>; dispose: () => void } {
-  const host = globalThis as typeof globalThis & {
-    scheduler?: { yield: () => Promise<void> }
-    setImmediate?: (callback: () => void) => unknown
-  }
-  // Node can drain a chain of port messages within one poll phase. Its immediate
-  // queue gives timers/I/O a turn between yields; browsers use task-backed ports.
-  if (host.setImmediate) return {
-    yield: () => new Promise<void>(resolve => host.setImmediate!(resolve)),
-    dispose: () => {},
-  }
-  if (host.scheduler?.yield) return { yield: () => host.scheduler!.yield(), dispose: () => {} }
-  if (typeof MessageChannel !== 'undefined') {
-    const channel = allocate(() => new MessageChannel())
-    let resume: (() => void) | undefined
-    channel.port1.onmessage = () => {
-      const resolve = resume
-      resume = undefined
-      resolve?.()
-    }
-    return {
-      yield: () => new Promise<void>(resolve => {
-        resume = resolve
-        channel.port2.postMessage(null)
-      }),
-      dispose: () => {
-        channel.port1.onmessage = null
-        channel.port1.close()
-        channel.port2.close()
-      },
-    }
-  }
-  return {
-    yield: () => new Promise<void>(resolve => setTimeout(resolve, 0)),
-    dispose: () => {},
-  }
-}
-class Cooperative {
-  private work = 0
-  private last: number
-  readonly now: () => number
-  readonly schedule: (phase: SortPhase) => Promise<void>
-  readonly dispose: () => void
+/** Shared S4.2 budget (scheduler.ts): yield after 4,096 work units or 10 ms,
+ * whichever first. The host scheduler's MessageChannel ports are allocated
+ * through `allocate` and closed in each public boundary's finally. */
+class Cooperative extends CooperativeSlice<SortPhase> {
   constructor(readonly store: SourceStore, readonly stamp: SourceStamp, readonly options: SortOptions) {
-    this.now = options.now ?? (() => performance.now())
-    this.last = this.now()
-    const scheduler = options.yield ? undefined : defaultScheduler()
-    this.schedule = options.yield ?? scheduler!.yield
-    this.dispose = scheduler?.dispose ?? (() => {})
+    super(options, allocate)
   }
-  check(): void {
+  override check(): void {
     if (this.options.signal?.aborted) throw new Halt({ kind: 'cancelled' })
     if (!sameStamp(this.store.stamp, this.stamp)) throw sourceError('stale-source', 'Source owner changed')
-  }
-  due(): boolean { this.check(); return ++this.work >= CHUNK || this.now() - this.last >= 10 }
-  async pause(phase: SortPhase): Promise<void> {
-    this.check()
-    await this.schedule(phase)
-    this.check()
-    this.work = 0
-    this.last = this.now()
   }
 }
 function errorMessage(error: unknown): string {
