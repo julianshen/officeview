@@ -163,6 +163,24 @@ describe('formula-value-unavailable refusals are limited to the key/value domain
     expect(evaluated).toBe(1)
   })
 
+  it('the filter precheck runs only for cached documents (engine values are never unavailable)', async () => {
+    const reads: Record<string, number> = {}
+    for (const policy of ['engine', 'cached'] as const) {
+      const inner = createObjectWorkbookSource(await load(TABLE, policy), 'doc')
+      const store = inner.store('1')
+      reads[policy] = 0
+      const counted: SourceStore = Object.assign(Object.create(Object.getPrototypeOf(store)), store, {
+        queryColumn: (...args: Parameters<SourceStore['queryColumn']>) => { reads[policy]++; return store.queryColumn(...args) },
+      })
+      const source = { ...inner, store: () => counted }
+      const filterEvaluator: FilterEvaluator = async () => ({ kind: 'complete', matches: () => true })
+      const session = new DocumentSession('doc', source, { ...quiet, filterEvaluator })
+      await session.filter(initialIdentity('doc', '1'), filterOn(0), 0, new AbortController().signal)
+    }
+    expect(reads.engine).toBe(0)
+    expect(reads.cached).toBeGreaterThan(0)
+  })
+
   it('the domain is the body band of the rule/key columns: header and totals rows are outside it', async () => {
     expect(filterValueDomain(filterOn(1))).toEqual({ cols: [1], r0: 1, r1: 3 })
     expect(filterValueDomain({ range: { ...range, totalsRows: 1 }, columns: new Map() })).toBeNull()

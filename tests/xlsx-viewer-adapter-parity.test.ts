@@ -173,9 +173,14 @@ describe('adapter parity under the cached policy (S1.3 matrix)', () => {
     const source = createPagedWorkbookSource(session)
     const early = source.valueStatus?.()
     expect(early?.policy).toBe('cached')
-    if (early?.formulas === undefined) expect(early?.message).toBe(SAVED_VALUES_STATUS)
+    if (early?.formulas === undefined) {
+      expect(early?.message).toBe(SAVED_VALUES_STATUS)
+      expect(source.openDiagnostics).toEqual([{ code: 'cached-value-policy', message: SAVED_VALUES_STATUS }])
+    }
     await session.done
     expect(source.valueStatus?.().formulas).toBe(3)
+    // The open notice is refreshed: read after completion it carries the counted wording.
+    expect(source.openDiagnostics).toEqual([{ code: 'cached-value-policy', message: 'Showing saved values — 3 formulas not recalculated (file too large)' }])
     await source.release()
   })
 

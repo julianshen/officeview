@@ -1476,7 +1476,8 @@ export class DocumentSession {
         // §4.4: an unavailable (cache-less formula) value inside the rule
         // columns' body refuses the filter with its count and first address;
         // unavailable cells elsewhere never block. Checked before any rule runs.
-        const domain = filterValueDomain(normalized)
+        // Engine documents have no unavailable values (§4.4): nothing to scan.
+        const domain = this.source.store(owner.sheetId).valuePolicy === 'cached' ? filterValueDomain(normalized) : null
         if (domain) {
           const store = this.preparedStore(owner.sheetId)
           // Its own yield budget, charged in batches of scanned entries (like

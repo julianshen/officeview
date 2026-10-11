@@ -7,10 +7,10 @@ import type { XlsxDocument } from '../types'
  * an engine document is byte-identical to one parsed before it existed; a plain
  * own property (not a WeakSet/Symbol) survives structured cloning to a worker.
  */
-export type WorkbookValuePolicy = 'engine' | 'cached'
+export type WorkbookValuePolicy = NonNullable<XlsxDocument['valuePolicy']>
 export function workbookValuePolicy(doc: XlsxDocument): WorkbookValuePolicy {
-  return (doc as { valuePolicy?: unknown }).valuePolicy === 'cached' ? 'cached' : 'engine'
+  return doc.valuePolicy === 'cached' ? 'cached' : 'engine'
 }
 export function markSavedValuesOnly(doc: XlsxDocument): void {
-  (doc as XlsxDocument & { valuePolicy?: WorkbookValuePolicy }).valuePolicy = 'cached'
+  doc.valuePolicy = 'cached'
 }

@@ -489,7 +489,12 @@ export function createPagedWorkbookSource(session: PagedImportSession): Workbook
     // The formula count is only final once the import completed; until then
     // the status carries the spec's count-free wording.
     valueStatus: () => valueStatus('cached', workbook.completeness === 'complete' ? workbook.loadEvaluatedFormulas : undefined),
-    openDiagnostics: Object.freeze([{ code: SAVED_VALUES_DIAGNOSTIC, message: SAVED_VALUES_STATUS }]),
+    // A getter, not a snapshot: read after the import completed it carries the
+    // counted wording; read at open (import still running) the spec wording.
+    get openDiagnostics() {
+      const status = valueStatus('cached', workbook.completeness === 'complete' ? workbook.loadEvaluatedFormulas : undefined)
+      return Object.freeze([{ code: SAVED_VALUES_DIAGNOSTIC, message: status.message ?? SAVED_VALUES_STATUS }])
+    },
     sheets: Object.freeze(workbook.sheets.map(s => Object.freeze({ sheetId: s.sheetId, name: s.name }))),
     store: storeFor,
     geometry(sheetId) {
