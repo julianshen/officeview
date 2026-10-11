@@ -15,9 +15,9 @@ import type { XlsxCell, XlsxDrawing, XlsxMergeRange, XlsxRow, XlsxSheet } from '
 import type { DrawingContentShape } from '../../drawing/content'
 import { resolveGeometry } from '../../drawing/geometry'
 import type {
-  AxisMetrics, AxisRun, AxisSizeInterval, AxisWindow, CacheIdentity, CompactSourceRowSet, Completeness, IntervalSet, LogicalCellBox,
+  AxisMetrics, AxisRun, AxisSizeInterval, AxisWindow, CacheIdentity, CompactSourceRowSet, CompleteViewportContent, Completeness, IntervalSet, LogicalCellBox,
   LogicalViewport, OverviewDomain, OverviewGroup, RowOrder, RowPermutationBand, RowVisibility, SourceFailure, SourceStore, SparseRowPage,
-  ViewportCell, ViewportOverviewGroup, WorkerDiagnostic,
+  ViewportCell, ViewportOverviewGroup, ViewportResult, WorkerDiagnostic,
 } from './contracts'
 import { MAX_COLS, MAX_ROWS, isValidCoordinate, type SourceCell } from './coordinates'
 import { AxisMetricsError, createAxisMetrics, type AxisMetricsErrorCode, type SparseAxisMetrics } from './axes'
@@ -930,10 +930,14 @@ export type StoreViewportOutcome =
 
 class Cancelled extends Error {}
 
-/** Store-backed frame (spec §§4.1, 11.1): admission from geometry alone, then
+/** Store-backed frame (spec §§4.1, 11.1): admission from geometry and structural
+ * metadata, then
  * bounded `readRows` pages for detail and analytic `queryOverview` for coarse
  * groups. A frame that needs more pages than its budget declares the rest
- * loading; unknown summaries are loading, never blank; failures stay explicit. */
+ * loading; unknown summaries are loading, never blank; failures stay explicit.
+ * TODO(S5.2): the object path's text-overflow dependency columns and drawing
+ * admission are not yet mirrored here; this path is not wired to the worker yet,
+ * and must gain both before the worker `viewport` command publishes it. */
 export async function queryViewport(store: SourceStore, metrics: ProjectedSheetMetrics, viewport: LogicalViewport, owner: CacheIdentity, options: StoreViewportOptions): Promise<StoreViewportOutcome> {
   const profile = VIEWPORT_DETAIL_LIMITS[options.profile ?? 'D']
   const limits = options.scope === 'tile' ? { ...profile, records: profile.tile.records, pages: profile.tile.pages } : profile
@@ -952,17 +956,6 @@ export async function queryViewport(store: SourceStore, metrics: ProjectedSheetM
     let coarse = window.kind === 'coarse' ? window.groups : window.coarse
     let detail = window.kind === 'detail' ? window : null
     if (window.kind === 'coarse') diagnostics.push({ code: 'detail-limit', message: window.message })
-    // Conservative admission before any read: a source may populate every cell.
-    if (detail) {
-      const area = detail.rows.detail.length * detail.cols.detail.length
-      const tiles = area <= limits.records && tileOverflow(gridBoxes(metrics, detail.rows.detail, detail.cols.detail), viewport, window.scale, profile.tile.records)
-      if (area > limits.records || tiles) {
-        const message = tiles ? `more than ${profile.tile.records} cells in one ${TILE_DEVICE_PX}-device-pixel tile` : `${area} cells exceed ${limits.records} records`
-        diagnostics.push({ code: 'detail-limit', message })
-        coarse = coarseGroups(metrics, [{ rows: { start: Math.max(0, viewport.box.y), end: Math.min(window.extent.height, viewport.box.y + viewport.box.height) }, cols: { start: Math.max(0, viewport.box.x), end: Math.min(window.extent.width, viewport.box.x + viewport.box.width) } }], window.scale, limits.overviewGroups)
-        detail = null
-      } else if (coarse.length) diagnostics.push({ code: 'detail-coarse-region', message: `${coarse.length} sub-detail pixel group(s) summarized` })
-    }
     const state = { completeness: 'complete' as Completeness, error: undefined as SourceFailure | undefined }
     const merge = (completeness: Completeness, error?: SourceFailure) => {
       if (completeness === 'incomplete') { state.completeness = 'incomplete'; state.error ??= error }
@@ -972,10 +965,22 @@ export async function queryViewport(store: SourceStore, metrics: ProjectedSheetM
     const mergePlacements: StoreMerge[] = []
     // An empty axis (pane past the last row/column) has nothing to read.
     if (detail && detail.rows.detail.length && detail.cols.detail.length) {
+      // Admission before any cell read, from geometry plus structural metadata:
+      // a source may populate every cell, but a merged range is one record (its
+      // anchor across the merged box), exactly as the object path counts records.
       const structural = await structuralMerges(store, metrics, detail.rows.detail, detail.cols.detail, readOptions, merge, diagnostics)
       if (options.signal.aborted) throw new Cancelled()
-      cells = await readDetail(store, metrics, detail.rows.detail, detail.cols.detail, limits.pages, readOptions, work, merge)
-      cells = await applyMerges(store, cells, structural, viewport, limits.pages, readOptions, work, merge, mergePlacements)
+      const boxes = candidateBoxes(metrics, detail.rows.detail, detail.cols.detail, structural, limits.records)
+      const tiles = boxes !== null && tileOverflow(boxes, viewport, window.scale, profile.tile.records)
+      if (boxes === null || tiles) {
+        diagnostics.push({ code: 'detail-limit', message: tiles ? `more than ${profile.tile.records} records in one ${TILE_DEVICE_PX}-device-pixel tile` : `more than ${limits.records} candidate records in the frame` })
+        coarse = coarseGroups(metrics, [{ rows: { start: Math.max(0, viewport.box.y), end: Math.min(window.extent.height, viewport.box.y + viewport.box.height) }, cols: { start: Math.max(0, viewport.box.x), end: Math.min(window.extent.width, viewport.box.x + viewport.box.width) } }], window.scale, limits.overviewGroups)
+        detail = null
+      } else {
+        if (coarse.length) diagnostics.push({ code: 'detail-coarse-region', message: `${coarse.length} sub-detail pixel group(s) summarized` })
+        cells = await readDetail(store, metrics, detail.rows.detail, detail.cols.detail, limits.pages, readOptions, work, merge)
+        cells = await applyMerges(store, cells, structural, viewport, limits.pages, readOptions, work, merge, mergePlacements)
+      }
     }
     const groups = coarse.length ? await overview(store, metrics, coarse, limits.overviewGroups, limits.pages, readOptions, work, merge) : []
     let active: ViewportCell | undefined
@@ -983,7 +988,9 @@ export async function queryViewport(store: SourceStore, metrics: ProjectedSheetM
       const at = options.activeCell
       const read = await store.readCell(at, readOptions)
       const box = metrics.sourceCellToLogical(at)
-      if (box) { active = { ...read, source: at, bounds: box } as ViewportCell; work.semanticNodes = 1 }
+      // Blank and collapsed cells have no exact record; loading/error reads stay
+      // explicit placeholder records so the inspector can say so.
+      if (box && read.kind !== 'blank') { active = { ...read, source: at, bounds: box } as ViewportCell; work.semanticNodes = 1 }
     }
     if (options.signal.aborted) return { kind: 'cancelled', owner, work, diagnostics }
     if (options.isCurrent && !options.isCurrent(owner)) return { kind: 'stale', owner, work, diagnostics }
@@ -1001,12 +1008,23 @@ export async function queryViewport(store: SourceStore, metrics: ProjectedSheetM
   }
 }
 
-/** One box per detail cell; callers admit the area against the record cap first. */
-function* gridBoxes(metrics: ProjectedSheetMetrics, slots: readonly number[], cols: readonly number[]): Iterable<LogicalCellBox> {
+/** Candidate record boxes of a store detail grid: every cell outside a merge
+ * (a source may populate any of them) plus one merged box per visible merge.
+ * Null once the count exceeds `cap`, before enumerating further. */
+function candidateBoxes(metrics: ProjectedSheetMetrics, slots: readonly number[], cols: readonly number[], merges: readonly StoreMerge[], cap: number): LogicalCellBox[] | null {
+  const boxes: LogicalCellBox[] = merges.map(item => item.bounds)
+  if (boxes.length > cap) return null
+  const locator = merges.length ? new MergeLocator(merges.map(item => item.range), 0, MAX_COLS - 1) : null
   for (const slot of slots) {
+    const row = metrics.order.displayToSource(slot)
     const y = metrics.rows.start(slot), height = metrics.rows.size(slot)
-    for (const col of cols) yield { x: metrics.cols.start(col), y, width: metrics.cols.size(col), height }
+    for (const col of cols) {
+      if (locator?.at(row, col)) continue
+      boxes.push({ x: metrics.cols.start(col), y, width: metrics.cols.size(col), height })
+      if (boxes.length > cap) return null
+    }
   }
+  return boxes
 }
 
 type Merge = (completeness: Completeness, error?: SourceFailure) => void
@@ -1086,18 +1104,22 @@ async function readDetail(store: SourceStore, metrics: ProjectedSheetMetrics, sl
     const x = metrics.cols.start(c0)
     cells.push({ kind: 'unknown', pageId, source: { row, col: c0 }, bounds: { x, y: metrics.rows.start(slot), width: metrics.cols.start(c1) + metrics.cols.size(c1) - x, height: metrics.rows.size(slot) } })
   }
-  const place = (page: SparseRowPage) => {
+  // Each cell carries its own source row: a page item is not assumed to hold a
+  // single row (the SourceStore contract does not pin that), so rows are marked
+  // seen and placed per cell.
+  const place = (page: SparseRowPage, range: { r0: number; r1: number }) => {
     seen.add(page.row)
-    const slot = metrics.order.sourceToDisplay(page.row)
-    const y = metrics.rows.start(slot), height = metrics.rows.size(slot)
     for (const cell of page.cells) {
       work.visitedRecords++
-      if (!detailCol.has(cell.col)) continue
-      const bounds = { x: metrics.cols.start(cell.col), y, width: metrics.cols.size(cell.col), height }
+      const row = cell.row
+      if (!(row >= range.r0 && row <= range.r1) || !detailCol.has(cell.col)) continue
+      seen.add(row)
+      const slot = metrics.order.sourceToDisplay(row)
+      const bounds = { x: metrics.cols.start(cell.col), y: metrics.rows.start(slot), width: metrics.cols.size(cell.col), height: metrics.rows.size(slot) }
       const { unavailable, ...payload } = cell
       cells.push(unavailable
-        ? { kind: 'unavailable', cell: payload, reason: 'formula-value-unavailable', source: { row: page.row, col: cell.col }, bounds }
-        : { kind: 'cell', cell: payload, source: { row: page.row, col: cell.col }, bounds })
+        ? { kind: 'unavailable', cell: payload, reason: 'formula-value-unavailable', source: { row, col: cell.col }, bounds }
+        : { kind: 'cell', cell: payload, source: { row, col: cell.col }, bounds })
     }
   }
   let budgetHit = false
@@ -1114,7 +1136,7 @@ async function readDetail(store: SourceStore, metrics: ProjectedSheetMetrics, sl
       if (options.signal.aborted) throw new Cancelled()
       merge(page.completeness, page.error)
       if (page.completeness !== 'complete') complete = false
-      for (const item of page.items) place(item)
+      for (const item of page.items) place(item, run)
       cursor = page.nextCursor
       if (cursor === undefined) break
     }
@@ -1196,3 +1218,29 @@ async function overview(store: SourceStore, metrics: ProjectedSheetMetrics, grou
 
 /** Re-exported for typed consumers of permuted bands. */
 export type { RowPermutationBand }
+
+/** Worker reply adapter (spec §§4.1, 10.2): one `ViewportResult` per content
+ * kind present (a mixed pane yields detail and overview). A content is complete
+ * only when it holds no unknown/error record; otherwise it carries the frame's
+ * non-complete state and error, so no loading record is published as complete. */
+export function toViewportResults(outcome: StoreViewport): ViewportResult[] {
+  const results: ViewportResult[] = []
+  const pendingCells = outcome.cells.some(item => item.kind === 'unknown' || item.kind === 'error')
+  const pendingGroups = outcome.groups.some(group => group.content === 'unknown')
+  const state = (pending: boolean): 'complete' | 'loading' | 'incomplete' =>
+    outcome.completeness === 'complete' && !pending ? 'complete' : outcome.completeness === 'complete' ? 'loading' : outcome.completeness
+  const error = outcome.error ? { error: outcome.error } : {}
+  if (outcome.cells.length || !outcome.groups.length) {
+    const completeness = state(pendingCells)
+    results.push(completeness === 'complete'
+      ? { kind: 'viewport', completeness, content: { kind: 'detail', cells: outcome.cells as Extract<CompleteViewportContent, { kind: 'detail' }>['cells'] } }
+      : { kind: 'viewport', completeness, content: { kind: 'detail', cells: outcome.cells }, ...error })
+  }
+  if (outcome.groups.length) {
+    const completeness = state(pendingGroups)
+    results.push(completeness === 'complete'
+      ? { kind: 'viewport', completeness, content: { kind: 'overview', groups: outcome.groups as Extract<CompleteViewportContent, { kind: 'overview' }>['groups'] } }
+      : { kind: 'viewport', completeness, content: { kind: 'overview', groups: outcome.groups }, ...error })
+  }
+  return results
+}
