@@ -1,0 +1,244 @@
+{
+  "schemaVersion": 1,
+  "spec": "docs/superpowers/specs/2026-10-10-interactive-viewer.md §12.2 (freeze rule §12.1, protocol §12.6)",
+  "frozenAt": "2026-10-12",
+  "maxLoosenRatio": 2,
+  "evidence": {
+    "doc": "docs/validation/interactive-viewer-performance.md",
+    "results": "docs/validation/interactive-viewer-performance-results.json",
+    "commit": "e09d242dd752872499ea47fd99af8ea2a3a780aa",
+    "browser": "Google Chrome 155.0.8059.39 (stable, Playwright 1.64 channel chrome, headless)",
+    "machine": "Apple M4 Pro, 14 cores, 24 GiB, macOS 26.5.2 (25F84), AC power",
+    "profile": "D"
+  },
+  "thresholds": [
+    {
+      "id": "warm-viewport-frame",
+      "operation": "Warm viewport frame, ordinary/wrapped fixture mix",
+      "boundary": "Frame production/presentation under sustained scroll, including query/layout/paint scheduling",
+      "desktop": {
+        "specMs": 16.7,
+        "frozenMs": 16.7,
+        "basis": "spec",
+        "outcome": "unmeasured",
+        "justification": "Not an S8.4 operation: the harness has no viewport scroll scenario yet (S5 viewer not harnessed); frozen at spec, measured by S10.2.",
+        "measurement": null
+      },
+      "mobile": {
+        "specMs": 33.3,
+        "frozenMs": 33.3,
+        "basis": "spec",
+        "outcome": "unmeasured",
+        "justification": "No physical iPad/mobile device run exists (skipped by user decision); frozen at the spec value, no device SLA is claimed.",
+        "measurement": null
+      }
+    },
+    {
+      "id": "input-acknowledgment",
+      "operation": "Input acknowledgment",
+      "boundary": "Input event to pending/focus/status visual acknowledgment",
+      "desktop": {
+        "specMs": 50,
+        "frozenMs": 50,
+        "basis": "spec",
+        "outcome": "unmeasured",
+        "justification": "Not an S8.4 operation (needs the mounted viewer controls); frozen at spec, measured by S10.2.",
+        "measurement": null
+      },
+      "mobile": {
+        "specMs": 50,
+        "frozenMs": 50,
+        "basis": "spec",
+        "outcome": "unmeasured",
+        "justification": "No physical iPad/mobile device run exists (skipped by user decision); frozen at the spec value, no device SLA is claimed.",
+        "measurement": null
+      }
+    },
+    {
+      "id": "numeric-sort-100k",
+      "operation": "100k numeric sort, up to 8 keys",
+      "boundary": "Prepared complete columns -> atomic view ready (worker DocumentSession.sort commit); input-to-present reported too",
+      "desktop": {
+        "specMs": 100,
+        "frozenMs": 100,
+        "basis": "spec",
+        "outcome": "miss",
+        "justification": "Kept at spec: the 8-key p95 misses by >2x (1-key p95 316.8 ms also misses), so no loosening is permitted without a spec amendment and the miss is an S8.4 finding. Desktop D measurement (Chrome 155 headless, M4 Pro); see docs/validation/interactive-viewer-performance.md.",
+        "measurement": {
+          "scenario": "sort-100k-8key",
+          "series": "query-completion",
+          "summary": {
+            "samples": 30,
+            "warmupExcluded": 3,
+            "p50": 741.7,
+            "p95": 759.1,
+            "max": 761.9
+          }
+        }
+      },
+      "mobile": {
+        "specMs": 300,
+        "frozenMs": 300,
+        "basis": "spec",
+        "outcome": "unmeasured",
+        "justification": "No physical iPad/mobile device run exists (skipped by user decision); frozen at the spec value, no device SLA is claimed.",
+        "measurement": null
+      }
+    },
+    {
+      "id": "numeric-sort-1m",
+      "operation": "1M numeric sort, up to 8 keys",
+      "boundary": "Prepared complete columns -> atomic view ready; cold column preparation reported separately",
+      "desktop": {
+        "specMs": 1000,
+        "frozenMs": 1000,
+        "basis": "spec",
+        "outcome": "miss",
+        "justification": "Kept at spec: the 8-key p95 misses by >2x (1-key p95 3783.6 ms also misses); recorded finding, no loosening. Desktop D measurement (Chrome 155 headless, M4 Pro); see docs/validation/interactive-viewer-performance.md.",
+        "measurement": {
+          "scenario": "sort-1m-8key",
+          "series": "query-completion",
+          "summary": {
+            "samples": 30,
+            "warmupExcluded": 3,
+            "p50": 8464.6,
+            "p95": 8745.3,
+            "max": 8877
+          }
+        }
+      },
+      "mobile": {
+        "specMs": 3000,
+        "frozenMs": 3000,
+        "basis": "spec",
+        "outcome": "unmeasured",
+        "justification": "No physical iPad/mobile device run exists (skipped by user decision); frozen at the spec value, no device SLA is claimed.",
+        "measurement": null
+      }
+    },
+    {
+      "id": "numeric-filter-1m",
+      "operation": "1M numeric filter",
+      "boundary": "Prepared columns -> mask/count/metrics publication, all body rows (worker DocumentSession.filter commit)",
+      "desktop": {
+        "specMs": 100,
+        "frozenMs": 100,
+        "basis": "spec",
+        "outcome": "pass",
+        "justification": "Kept at spec: passes with p95 71.3 ms (kernel p95 58.1 ms); not tightened because other admitted D machines must also meet it. Desktop D measurement (Chrome 155 headless, M4 Pro); see docs/validation/interactive-viewer-performance.md.",
+        "measurement": {
+          "scenario": "filter-1m-numeric",
+          "series": "query-completion",
+          "summary": {
+            "samples": 30,
+            "warmupExcluded": 3,
+            "p50": 70,
+            "p95": 71.3,
+            "max": 71.6
+          }
+        }
+      },
+      "mobile": {
+        "specMs": 300,
+        "frozenMs": 300,
+        "basis": "spec",
+        "outcome": "unmeasured",
+        "justification": "No physical iPad/mobile device run exists (skipped by user decision); frozen at the spec value, no device SLA is claimed.",
+        "measurement": null
+      }
+    },
+    {
+      "id": "natural-text-sort-1m",
+      "operation": "1M natural text sort",
+      "boundary": "Host Intl.Collator semantics, source-ID stable ties; prepared -> atomic view ready",
+      "desktop": {
+        "specMs": 4000,
+        "frozenMs": 4000,
+        "basis": "spec",
+        "outcome": "miss",
+        "justification": "Kept at spec: p95 misses by >2x (kernel p95 8748.4 ms); loosening is not permitted without an amendment and collation semantics are never relaxed. Recorded finding; see headroom. Desktop D measurement (Chrome 155 headless, M4 Pro); see docs/validation/interactive-viewer-performance.md.",
+        "measurement": {
+          "scenario": "text-sort-1m-natural",
+          "series": "query-completion",
+          "summary": {
+            "samples": 30,
+            "warmupExcluded": 3,
+            "p50": 8780.8,
+            "p95": 9048.1,
+            "max": 9181.1
+          }
+        }
+      },
+      "mobile": {
+        "specMs": 10000,
+        "frozenMs": 10000,
+        "basis": "spec",
+        "outcome": "unmeasured",
+        "justification": "No physical iPad/mobile device run exists (skipped by user decision); frozen at the spec value, no device SLA is claimed.",
+        "measurement": null
+      }
+    },
+    {
+      "id": "cold-value-index-100k",
+      "operation": "Cold 100k-value semantic index/query first page",
+      "boundary": "Complete column without prior prepared index -> first bounded page plus complete-domain membership capability",
+      "desktop": {
+        "specMs": 750,
+        "frozenMs": 750,
+        "basis": "spec",
+        "outcome": "pass",
+        "justification": "Kept at spec: passes with p95 32.3 ms. The delivered index pages values in first-occurrence order (no collated ordering inside this boundary). Desktop D measurement (Chrome 155 headless, M4 Pro); see docs/validation/interactive-viewer-performance.md.",
+        "measurement": {
+          "scenario": "value-index-100k-cold",
+          "series": "query-completion",
+          "summary": {
+            "samples": 30,
+            "warmupExcluded": 3,
+            "p50": 24.6,
+            "p95": 32.3,
+            "max": 32.5
+          }
+        }
+      },
+      "mobile": {
+        "specMs": 2000,
+        "frozenMs": 2000,
+        "basis": "spec",
+        "outcome": "unmeasured",
+        "justification": "No physical iPad/mobile device run exists (skipped by user decision); frozen at the spec value, no device SLA is claimed.",
+        "measurement": null
+      }
+    },
+    {
+      "id": "progressive-first-viewport",
+      "operation": "Progressive first usable viewport",
+      "boundary": "Local File/Blob or complete package availability -> labelled usable first viewport for F1/F2/F3",
+      "desktop": {
+        "specMs": 1500,
+        "frozenMs": 1500,
+        "basis": "spec",
+        "outcome": "unmeasured",
+        "justification": "Not an S8.4 operation (needs the S1 importer + S5 viewport in the harness); frozen at spec, measured by S10.2.",
+        "measurement": null
+      },
+      "mobile": {
+        "specMs": 3000,
+        "frozenMs": 3000,
+        "basis": "spec",
+        "outcome": "unmeasured",
+        "justification": "No physical iPad/mobile device run exists (skipped by user decision); frozen at the spec value, no device SLA is claimed.",
+        "measurement": null
+      }
+    }
+  ],
+  "headroom": {
+    "natural-text-sort-1m": {
+      "ceilingMs": 4000,
+      "specEstimateMs": 3100,
+      "measuredP95Ms": 9048.1,
+      "headroomMs": -5048.1,
+      "scenario": "text-sort-1m-natural",
+      "note": "Negative headroom: measured p95 exceeds the ceiling. Kernel phases (p50): dictionary collation rank 4816 ms, row merge 2619 ms, key read 707 ms."
+    }
+  }
+}
