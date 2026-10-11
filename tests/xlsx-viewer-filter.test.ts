@@ -1,9 +1,10 @@
 import { describe, expect, it, vi } from 'vitest'
-import { DEFAULT_FILTER_WORK, ReferenceTextFilterMatcher, TextFilterMatcher } from '../src/xlsx/view/textFilter'
+import { DEFAULT_FILTER_WORK, TextFilterMatcher } from '../src/xlsx/view/textFilter'
 import { classifyColumn, filterMenus, rawValueKey, FilterEngine, WorkBudget, type PreparedValue, type ColumnClassification, type FilterLimits } from '../src/xlsx/view/filter'
 import type { ColumnRule, FilterSpec, NumberOp, TextOp } from '../src/xlsx/view/contracts'
 import { createIdentityOrder } from '../src/xlsx/view/order'
 import { createIntervalSet } from '../src/xlsx/view/visibility'
+import { oracleMatch } from './helpers/canonical-text-oracle'
 const context = { locale: 'en-US', dateSystem: '1900' as const, timeZone: 'UTC', nowMs: Date.parse('2026-03-08T12:00:00Z') }
 const engine = new FilterEngine(context)
 const mixed: ColumnClassification = { kind: 'text', hasNumeric: true }
@@ -140,13 +141,13 @@ describe('literal and wildcard Unicode semantics', () => {
     ['begins', 'é', 'e\u0301abc', true], ['ends', 'é', 'abce\u0301', true], ['contains', 'é', 'abe\u0301cd', true],
     ['contains', '\ud800', 'a\ud800b', true], ['begins', '\ud83d', '😀', false], ['ends', '\ude00', '😀', false],
     ['neq', 'é', 'e', true], ['not-contains', 'x', 'aaa', true],
-  ] as const)('%s uses literal host collation at code-point boundaries', (op, pattern, text, expected) => expect(engine.matchText(op, pattern, false, text)).toBe(expected))
+  ] as const)('%s compares canonical forms at grapheme boundaries', (op, pattern, text, expected) => expect(engine.matchText(op, pattern, false, text)).toBe(expected))
   it.each([
     ['*', '', true], ['?', '😀', true], ['?', '\ud800', true], ['??', '😀', false],
     ['~*~?~~', '*?~', true], ['a*b', 'ab', true], ['a*b', 'a😀b', true], ['a?b', 'a😀b', true],
     ['é?', 'e\u0301a', true], ['fi?', 'ﬁa', true], ['a?b', 'ab', false], ['é*', 'E\u0301a', true],
     ['\u200b?', 'a', true],
-  ] as const)('wildcard %s respects code points and collated literal runs', (pattern, text, expected) => expect(engine.matchText('eq', pattern, true, text)).toBe(expected))
+  ] as const)('wildcard %s respects canonical graphemes and literal runs', (pattern, text, expected) => expect(engine.matchText('eq', pattern, true, text)).toBe(expected))
   it('uses wildcards with prefix/suffix/subsequence and negative operators', () => {
     for (const [op, text] of [['begins', 'ab-tail'], ['ends', 'tail-ab'], ['contains', 'tail-ab-tail']] as const) expect(engine.matchText(op, 'a?', true, text)).toBe(true)
     expect(engine.matchText('not-contains', 'a?', true, 'tail-ab-tail')).toBe(false)
@@ -160,8 +161,10 @@ describe('literal and wildcard Unicode semantics', () => {
   it('bounds pathological wildcard work and supports cancellation with explicit outcomes', () => {
     const work = { used: 0 }, text = 'a'.repeat(160)
     expect(engine.matchText('eq', '*a*a*a*a*a*b', true, text, { work, maxWork: 10000000 })).toBe(false)
-    expect(work.used).toBeGreaterThan(1000)
-    expect(work.used).toBeLessThan(10000000)
+    // Changed pin: greedy leftmost star placement is linear, so the old
+    // quadratic-DP lower bound (> 1000 units) no longer applies.
+    expect(work.used).toBeGreaterThan(160)
+    expect(work.used).toBeLessThan(20 * 160)
     expect(() => engine.matchText('contains', 'z', false, text, { maxWork: 1 })).toThrow(/resource/i)
     expect(() => engine.matchText('eq', 'a', false, text, { maxTextLength: 10 })).toThrow(/resource/i)
     const controller = new AbortController(); controller.abort()
@@ -291,8 +294,10 @@ describe('explicit scan budgets', () => {
   it.each(['and', 'or'] as const)('shares one cell allowance for compound %s', connective => {
     const first: ColumnRule = { kind: 'text', op: 'eq', first: 'hello', wildcards: false }
     const match = engine.compileRule({ kind: 'compound', connective, first, second: first }, mixed)
-    expect(engine.compileRule(first, mixed)(s('hello'), { maxWork: 15 })).toBe(true)
-    expect(() => match(s('hello'), { maxWork: 15 })).toThrow(/resource/i)
+    // Changed pin: one canonical evaluation of 'hello' charges 16 units
+    // (text 5 + canonical 5 + comparison 6), so the allowance is 20, not 15.
+    expect(engine.compileRule(first, mixed)(s('hello'), { maxWork: 20 })).toBe(true)
+    expect(() => match(s('hello'), { maxWork: 20 })).toThrow(/resource/i)
     expect(match(s('hello'), { maxWork: 100 })).toBe(true)
   })
 })
@@ -310,58 +315,16 @@ describe('prepared text predicates', () => {
   })
 })
 
-describe('exact reference differential coverage', () => {
-  it.each([false, true])('matches seeded cases for all six operations (wildcards=%s)', wildcards => {
-    const cases = Number(process.env.S8_FILTER_DIFFERENTIAL_CASES ?? 2000)
-    if (!Number.isSafeInteger(cases) || cases < 2000) throw new RangeError('Differential case count must be at least 2000')
-    const locales = ['en-US', 'de-DE', 'sv-SE', 'tr-TR', 'da-DK', 'es-ES-u-co-trad', 'cs-CZ']
-    const matchers = locales.map(locale => [new TextFilterMatcher(locale), new ReferenceTextFilterMatcher(locale)] as const)
-    const ascii = Array.from({ length: 95 }, (_, i) => String.fromCharCode(32 + i))
-    const unicode = [...ascii, 'é', 'e', '\u0301', '\u200b', '\u00ad', '\ufeff', '\u2060', 'ﬁ', 'ß', '😀', '\u200d', '漢', '\ud800', '\udc00', 'å', 'İ']
-    const ops: TextOp[] = ['eq', 'neq', 'begins', 'ends', 'contains', 'not-contains']
-    let seed = wildcards ? 173 : 107, checked = 0
-    const random = (length: number) => { seed = (seed * 48271) % 2147483647; return seed % length }
-    for (let index = 0; index < cases; index++) {
-      const pool = index % 3 === 0 ? ascii : unicode
-      let text = '', pattern = ''
-      for (let i = random(8); i > 0; i--) text += pool[random(pool.length)]
-      for (let i = random(6); i > 0; i--) {
-        const point = pool[random(pool.length)]
-        pattern += wildcards && point === '~' ? '~~' : point
-      }
-      if (index % 2000 === 0) text = ['é', 'a', '漢😀', '\ud800', 'e\u0301\u200b'][Math.floor(index / 2000) % 5].repeat(32)
-      const [fast, reference] = matchers[index % locales.length]
-      for (const op of ops) {
-        const actual = fast.match(op, pattern, wildcards, text), expected = reference.match(op, pattern, wildcards, text)
-        if (actual !== expected) throw new Error(JSON.stringify({ index, locale: locales[index % locales.length], op, pattern, text, wildcards, actual, expected }))
-        checked++
-      }
-    }
-    expect(checked).toBe(cases * ops.length)
-    console.info(`S8 differential: ${cases} seeded inputs, ${checked} comparisons, wildcards=${wildcards}, host=${process.versions.bun ? 'Bun ' + process.versions.bun : 'Node ' + process.versions.node}`)
-  }, process.env.S8_FILTER_DIFFERENTIAL_CASES ? 600000 : undefined)
-  it('retains arbitrarily long ignorable endpoint candidates and locale contractions', () => {
-    for (const locale of ['en-US', 'da-DK', 'cs-CZ', 'tr-TR']) {
-      const fast = new TextFilterMatcher(locale), reference = new ReferenceTextFilterMatcher(locale)
-      for (const [pattern, text] of [['a', 'a' + '\u200b'.repeat(400)], ['å', 'aa'], ['å', 'a\u200ba'], ['ch', 'cH'], ['I', 'i']]) {
-        for (const op of ['eq', 'neq', 'begins', 'ends', 'contains', 'not-contains'] as TextOp[]) {
-          for (const wildcards of [false, true]) expect(fast.match(op, pattern, wildcards, text, { maxWork: Number.MAX_SAFE_INTEGER })).toBe(reference.match(op, pattern, wildcards, text, { maxWork: Number.MAX_SAFE_INTEGER }))
-        }
-      }
-    }
-  })
-})
-
-describe('sound text shortcuts', () => {
+describe('linear literal shortcuts', () => {
   it('finds ASCII literal witnesses before scanning every endpoint', () => {
     const work = { used: 0 }
     expect(engine.matchText('contains', 'ZzZ', false, 'a'.repeat(1000) + 'zzz', { work, maxWork: Number.MAX_SAFE_INTEGER })).toBe(true)
     expect(work.used).toBeLessThan(10000)
   })
-  it('shares exact repeated-substring comparisons across a periodic ASCII miss', () => {
+  it('rejects a periodic ASCII miss with linear work', () => {
     const work = { used: 0 }
     expect(engine.matchText('contains', 'zzz', false, 'a'.repeat(2000), { work, maxWork: Number.MAX_SAFE_INTEGER })).toBe(false)
-    expect(work.used).toBeLessThan(2100000)
+    expect(work.used).toBeLessThan(10000)
   })
   it('evaluates wildcard-free compiled rules with the literal matcher', () => {
     const work = { used: 0 }
@@ -372,7 +335,7 @@ describe('sound text shortcuts', () => {
   })
 })
 
-describe('complete ordinary text scans and periodic differential coverage', () => {
+describe('complete ordinary text scans', () => {
   it('filters 10k ordinary 200-character cells with default per-cell allowances', () => {
     const text = 'hello world '.repeat(17).slice(0, 200)
     const match = engine.compileFilter(spec([0, { kind: 'text', op: 'contains', first: 'zzz', wildcards: false }]), new Map([[0, mixed]]), () => s(text))
@@ -380,161 +343,82 @@ describe('complete ordinary text scans and periodic differential coverage', () =
     expect(() => { for (let row = 0; row < 10000; row++) if (!match(row)) rejected++ }).not.toThrow()
     expect(rejected).toBe(10000)
   })
-  it('preserves tailored collation on every short raw period and wildcard literal run', () => {
-    const patterns = ['a', 'A', 'aa', 'å', 'ch', 'I', 'i', 'ﬁ', 'fi', 'zzz', '\u200b', '*a?', '?i*', 'a*b', '~*', '*']
-    for (const locale of ['en-US', 'da-DK', 'tr-TR', 'cs-CZ']) {
-      const fast = new TextFilterMatcher(locale), reference = new ReferenceTextFilterMatcher(locale)
-      for (let period = 1; period <= 16; period++) {
-        const text = 'aaIich0*?~ zABCD'.slice(0, period).repeat(3).slice(0, period * 3 - 1)
-        for (const pattern of patterns) {
-          for (const op of ['eq', 'neq', 'begins', 'ends', 'contains', 'not-contains'] as TextOp[]) {
-            for (const wildcards of [false, true]) expect(fast.match(op, pattern, wildcards, text)).toBe(reference.match(op, pattern, wildcards, text))
-          }
-        }
-      }
-    }
+  it('filters 10k 2000-character German/NFD/Danish cells without resource-limit', () => {
+    const text = 'Straße e\u0301tude Ærø aa å ﬁ '.repeat(80).slice(0, 2000)
+    const match = engine.compileFilter(spec([0, { kind: 'text', op: 'contains', first: 'zzz', wildcards: false }]), new Map([[0, mixed]]), () => s(text))
+    let rejected = 0
+    expect(() => { for (let row = 0; row < 10000; row++) if (!match(row)) rejected++ }).not.toThrow()
+    expect(rejected).toBe(10000)
   })
 })
 
-describe('certified ASCII backend work', () => {
-  it('uses the ASCII optimization on the Bun or Node host running this suite', () => {
-    const matcher = new TextFilterMatcher('en-US')
-    matcher.match('contains', 'zzz', false, 'hello')
-    expect(matcher.certifiedAsciiProfile).toBe(true)
-  })
-  it('handles a nonperiodic ASCII miss with linear candidate work on a certified host', ({ skip }) => {
-    const matcher = new TextFilterMatcher('en-US')
-    let seed = 79, text = ''
-    const pool = 'abcdefghijklmnopqrstuvwxy 0123456789!'
-    for (let i = 0; i < 1000; i++) { seed = seed * 48271 % 2147483647; text += pool[seed % pool.length] }
-    const work = { used: 0 }
-    expect(matcher.match('contains', 'zzz', false, text, { work, maxWork: Number.MAX_SAFE_INTEGER })).toBe(false)
-    if (!matcher.certifiedAsciiProfile) skip('Actual alphabet exceeded the bounded certificate work cap; reference retained')
-    // Includes the cold observed-adjacency certificate: about 120 units/char.
-    expect(work.used).toBeLessThan(150000)
-  })
-  it('propagates single ignorables linearly and keeps runs exact through the reference', () => {
-    const matcher = new TextFilterMatcher('en-US'), reference = new ReferenceTextFilterMatcher('en-US')
-    const work = { used: 0 }, text = 'a\u200b'.repeat(1000) + 'b'
-    expect(matcher.match('eq', 'a*b', true, text, { work, maxWork: Number.MAX_SAFE_INTEGER })).toBe(true)
-    expect(matcher.certifiedAsciiProfile).toBe(true)
-    expect(work.used).toBeLessThan(150000)
-    // A run of two or more ignorables is outside the certificate window, so it
-    // must retain the exact (uncertified) reference path.
-    const run = 'a' + '\u200b'.repeat(40) + 'b'
-    for (const op of ['eq', 'neq', 'begins', 'ends', 'contains', 'not-contains'] as TextOp[]) {
-      expect(matcher.match(op, 'a*b', true, run, { maxWork: Number.MAX_SAFE_INTEGER })).toBe(reference.match(op, 'a*b', true, run, { maxWork: Number.MAX_SAFE_INTEGER }))
-    }
-    expect(matcher.certifiedAsciiProfile).toBe(false)
-    expect(engine.matchText('eq', 'a?b', true, 'a\u200bb')).toBe(true)
-    expect(engine.matchText('eq', 'a?b', true, 'a\u200b\u200bb')).toBe(true)
-  })
-})
-
-describe('compilation and certificate boundaries', () => {
+describe('compilation boundaries', () => {
   it('bounds all columns of a filter compilation with one per-call allowance', () => {
     const first: ColumnRule = { kind: 'text', op: 'eq', first: 'a'.repeat(100), wildcards: false }
     expect(() => engine.compileFilter(spec([0, first], [1, first]), new Map([[0, mixed], [1, mixed]]), () => s('a'), { maxWork: 300 })).toThrow(/resource/i)
   })
-  it.each([undefined, {}, { versions: { icu: '999' } }])('certifies actual alphabets without process metadata', shim => {
+  it.each([undefined, {}, { versions: { icu: '999', unicode: '1.0' } }])('does not depend on process metadata (%j)', shim => {
     try {
       vi.stubGlobal('process', shim)
-      const matcher = new TextFilterMatcher('de-DE'), work = { used: 0 }
-      expect(matcher.match('contains', 'zzz', false, 'é漢😀'.repeat(667), { work })).toBe(false)
-      expect(matcher.certifiedAsciiProfile).toBe(true)
-      expect(work.used).toBeLessThan(100000)
+      const matcher = new TextFilterMatcher('de-DE')
+      expect(matcher.match('contains', 'zzz', false, 'é漢😀'.repeat(667))).toBe(false)
+      expect(matcher.match('eq', 'é', false, 'e\u0301')).toBe(true)
+      expect(matcher.match('eq', 'SS', false, 'ß')).toBe(true)
     } finally { vi.unstubAllGlobals() }
-  })
-  it('fails closed on substituted Intl constructors', () => {
-    const Native = Intl.Collator
-    try {
-      vi.spyOn(Intl, 'Collator').mockImplementation(function (locale, options) { return new Native(locale, options) })
-      expect(new TextFilterMatcher('en-US').certifiedAsciiProfile).toBe(false)
-    } finally { vi.restoreAllMocks() }
   })
 })
 
-describe('zero-weight wildcard literals never rewind raw endpoints', () => {
-  it.each(['eq', 'neq', 'begins', 'ends', 'contains', 'not-contains'] as TextOp[])('preserves forward consumption for %s', op => {
-    const matcher = new TextFilterMatcher('en-US'), reference = new ReferenceTextFilterMatcher('en-US')
-    const pattern = '?\u200b?', text = '\u200b'
-    expect(matcher.match(op, pattern, true, text)).toBe(reference.match(op, pattern, true, text))
-  })
-  it('matches exhaustive tiny-alphabet questions, ignored literals and stars', () => {
+describe('exhaustive tiny alphabets against the spec-text oracle', () => {
+  it('matches every question/star/ignorable/letter pattern up to five units', () => {
     const strings = (alphabet: readonly string[], maximum: number) => {
       let level = [''], result = ['']
       for (let size = 1; size <= maximum; size++) { level = level.flatMap(prefix => alphabet.map(point => prefix + point)); result = result.concat(level) }
       return result
     }
-    const matcher = new TextFilterMatcher('en-US'), reference = new ReferenceTextFilterMatcher('en-US')
+    const matcher = new TextFilterMatcher('en-US')
     const patterns = strings(['?', '*', '\u200b', 'a'], 5), texts = strings(['\u200b', 'a'], 4)
     let checked = 0
     for (const pattern of patterns) {
       for (const text of texts) {
         for (const op of ['eq', 'neq', 'begins', 'ends', 'contains', 'not-contains'] as TextOp[]) {
-          const actual = matcher.match(op, pattern, true, text), expected = reference.match(op, pattern, true, text)
+          const actual = matcher.match(op, pattern, true, text), expected = oracleMatch(op, pattern, true, text, 'en-US')
           if (actual !== expected) throw new Error(JSON.stringify({ op, pattern, text, actual, expected }))
           checked++
         }
       }
     }
     expect(checked).toBe(253890)
-  })
-  it('keeps ignored endpoint propagation forward through long plateaus', () => {
-    const matcher = new TextFilterMatcher('en-US'), reference = new ReferenceTextFilterMatcher('en-US')
+  }, 120000)
+  it('treats ignorable plateaus of any length as empty', () => {
+    const matcher = new TextFilterMatcher('en-US')
     for (const size of [1, 2, 3, 25, 100, 401]) {
       const text = '\u200b'.repeat(size)
-      for (const pattern of ['?\u200b?', '??\u200b?', '?\u200b??', '?\u200b?\u200b?', 'a?\u200b?b']) {
+      for (const pattern of ['?\u200b?', '??\u200b?', '?\u200b??', '?\u200b?\u200b?', 'a?\u200b?b', '*', '\u200b']) {
         for (const op of ['eq', 'neq', 'begins', 'ends', 'contains', 'not-contains'] as TextOp[]) {
-          expect(matcher.match(op, pattern, true, text, { maxWork: Number.MAX_SAFE_INTEGER })).toBe(reference.match(op, pattern, true, text, { maxWork: Number.MAX_SAFE_INTEGER }))
+          expect(matcher.match(op, pattern, true, text)).toBe(oracleMatch(op, pattern, true, text, 'en-US'))
         }
       }
     }
   })
 })
 
-describe('partial browser process shims do not govern certificates', () => {
-  it.each([
-    { versions: {} },
-    { versions: {}, env: {} },
-    { versions: { bun: '1.3.10', icu: '74.2', unicode: '15.1' } },
-    { versions: { bun: '1.3.10', icu: '74.2', unicode: '15.1' }, env: {} },
-    { versions: { bun: '1.3.10', icu: '74.2', unicode: '15.1' }, env: {}, execArgv: null },
-    { versions: { bun: '1.3.10', icu: '74.2', unicode: '15.1' }, env: {}, execArgv: {} },
-    { versions: { bun: '1.3.10', icu: '74.2', unicode: '15.1' }, env: {}, execArgv: [null] },
-    { versions: { bun: '1.3.10', icu: '74.2', unicode: '15.1' }, env: null, execArgv: [] },
-    { get versions(): never { throw new Error('metadata unavailable') } },
-  ])('retains exact fallback for incomplete/malformed metadata', shim => {
-    try {
-      vi.stubGlobal('process', shim)
-      const matcher = new TextFilterMatcher('en-US')
-      expect(matcher.match('contains', 'zzz', false, 'é漢😀'.repeat(667))).toBe(false)
-      expect(matcher.certifiedAsciiProfile).toBe(true)
-      expect(matcher.match('eq', 'é', false, 'e\u0301')).toBe(true)
-      expect(matcher.match('eq', '?\u200b?', true, '\u200b')).toBe(false)
-    } finally { vi.unstubAllGlobals() }
-  })
-})
-
-describe('fallback text preflight precedes normalization', () => {
-  it('rejects oversized fallback text before making normalized copies', () => {
-    const matcher = new TextFilterMatcher('da-DK'), text = 'x'.repeat(1000)
-    const copy = vi.spyOn(String.prototype, 'toLowerCase')
+describe('text preflight precedes normalization', () => {
+  it('rejects oversized text before making normalized copies', () => {
+    const matcher = new TextFilterMatcher('da-DK'), text = 'x\u0301'.repeat(500)
+    const copy = vi.spyOn(String.prototype, 'normalize')
     try {
       expect(() => matcher.match('contains', 'x', false, text, { maxTextLength: 10 })).toThrow(/resource/i)
       expect(copy.mock.contexts.some(value => typeof value === 'string' && value.length === text.length)).toBe(false)
     } finally { copy.mockRestore() }
   })
-  it('checks cancellation before oversized reference text processing', () => {
+  it('checks cancellation before oversized text processing', () => {
     const controller = new AbortController()
     const evaluation = new WorkBudget({ signal: controller.signal, maxTextLength: 10 })
     controller.abort()
-    const matcher = new ReferenceTextFilterMatcher('da-DK')
-    const evaluate = matcher.prepare('contains', 'x', false, new WorkBudget())
+    const evaluate = new TextFilterMatcher('da-DK').prepare('contains', 'x', false, new WorkBudget())
     expect(() => evaluate('x'.repeat(1000), evaluation)).toThrow(/cancel/i)
   })
 })
-
 describe('definitive authored date tokens override numeric placeholders', () => {
   it('keeps a day token escaped by one runtime backslash numeric', () => {
     const formatCode = '0' + String.fromCharCode(92) + 'd'
@@ -566,280 +450,67 @@ describe('duration and time-of-day classification decision', () => {
   })
 })
 
-
-describe('exact Unicode witnesses and repeated slices', () => {
-  it('finds a raw Unicode witness before exhaustive slice enumeration', () => {
+describe('Unicode witnesses and periodic text stay linear', () => {
+  it('finds a Unicode witness with linear work', () => {
     const matcher = new TextFilterMatcher('da-DK'), work = { used: 0 }
     const text = 'àé漢😀'.repeat(200) + '東京'
     expect(matcher.match('contains', '東京', false, text, { work, maxWork: Number.MAX_SAFE_INTEGER })).toBe(true)
-    expect(work.used).toBeLessThan(10000)
+    expect(work.used).toBeLessThan(20000)
   })
-  it('shares byte-identical periodic Unicode slices without assuming collation weights', () => {
+  it('rejects a periodic Unicode miss with linear work', () => {
     const matcher = new TextFilterMatcher('da-DK'), work = { used: 0 }
     expect(matcher.match('contains', 'zzz', false, 'é'.repeat(2000), { work, maxWork: Number.MAX_SAFE_INTEGER })).toBe(false)
-    expect(work.used).toBeLessThan(2100000)
+    expect(work.used).toBeLessThan(20000)
   })
-  it('shares periodic wildcard literal comparisons across code-point phases', () => {
+  it('matches periodic wildcard literals with linear work', () => {
     const matcher = new TextFilterMatcher('da-DK'), work = { used: 0 }
     expect(matcher.match('eq', '*a*a*a*b', true, 'é'.repeat(500), { work, maxWork: Number.MAX_SAFE_INTEGER })).toBe(false)
-    expect(work.used).toBeLessThan(300000)
+    expect(work.used).toBeLessThan(20000)
   })
   it('never treats a lone-surrogate needle inside a paired surrogate as a witness', () => {
-    const matcher = new TextFilterMatcher('da-DK'), reference = new ReferenceTextFilterMatcher('da-DK')
+    const matcher = new TextFilterMatcher('da-DK')
     for (const op of ['begins', 'ends', 'contains'] as const) {
-      for (const pattern of ['\ud83d', '\ude00']) expect(matcher.match(op, pattern, false, '😀')).toBe(reference.match(op, pattern, false, '😀'))
+      for (const pattern of ['\ud83d', '\ude00']) expect(matcher.match(op, pattern, false, '😀')).toBe(false)
     }
   })
-})
-
-
-describe('actual substituted collator identity', () => {
-  it('fails closed for a contextual comparator despite native-looking options', () => {
-    const Native = Intl.Collator
-    try {
-      vi.spyOn(Intl, 'Collator').mockImplementation(function (locale, options) {
-        const collator = new Native(locale, options), compare = collator.compare
-        // All <=3-element strings retain native behavior. A finite probe
-        // domain cannot establish the rule for longer contextual rewrites.
-        Object.defineProperty(collator, 'compare', {
-          value: (a: string, b: string) => compare(a.replace(/abcd/g, 'wxyz'), b.replace(/abcd/g, 'wxyz')),
-        })
-        return collator
-      })
-      const matcher = new TextFilterMatcher('en-US'), reference = new ReferenceTextFilterMatcher('en-US')
-      expect(matcher.certifiedAsciiProfile).toBe(false)
-      for (const wildcards of [false, true]) {
-        for (const op of ['eq', 'neq', 'begins', 'ends', 'contains', 'not-contains'] as TextOp[]) {
-          expect(matcher.match(op, 'wxyz', wildcards, 'abcd')).toBe(reference.match(op, 'wxyz', wildcards, 'abcd'))
-        }
-      }
-      expect(matcher.match('eq', 'wxyz', false, 'abcd')).toBe(true)
-    } finally { vi.restoreAllMocks() }
-  })
-})
-
-
-describe('actual alphabet certification work', () => {
-  it.each(['en-US', 'de-DE', 'sv-SE', 'tr-TR', 'da-DK', 'es-ES-u-co-trad'])('certifies nonperiodic Unicode literals and raw wildcard endpoints in %s', locale => {
-    const matcher = new TextFilterMatcher(locale), work = { used: 0 }
-    let seed = 317, text = ''
-    const pool = ['é', 'à', '漢', '東', '😀', '😄']
-    for (let i = 0; i < 2000; i++) { seed = seed * 48271 % 2147483647; text += pool[seed % pool.length] }
-    expect(matcher.match('contains', 'zzz', false, text, { work })).toBe(false)
-    expect(matcher.certifiedAsciiProfile).toBe(true)
-    expect(work.used).toBeLessThan(100000)
-    expect(matcher.match('eq', '*é*é*zzz', true, text)).toBe(false)
-    expect(matcher.certifiedAsciiProfile).toBe(true)
-  })
-  it('fails closed for expansion and canonical mark alphabets, preserving the oracle', () => {
-    const matcher = new TextFilterMatcher('en-US'), reference = new ReferenceTextFilterMatcher('en-US')
-    for (const [pattern, text] of [['fi', 'ﬁ'], ['ss', 'ß'], ['é', 'e\u0301'], ['å', 'aa']]) {
-      for (const wildcards of [false, true]) for (const op of ['eq', 'neq', 'begins', 'ends', 'contains', 'not-contains'] as TextOp[]) {
-        expect(matcher.match(op, pattern, wildcards, text)).toBe(reference.match(op, pattern, wildcards, text))
-      }
-    }
-  })
-  it('charges certificate probes to the actual cell and whole-scan allowance', () => {
+  it('charges canonicalization to the actual cell and whole-scan allowance', () => {
     const matcher = new TextFilterMatcher('sv-SE')
     expect(() => matcher.match('contains', 'zzz', false, 'é漢😀'.repeat(667), { budget: new WorkBudget({ maxWork: 50 }) })).toThrow(/resource/i)
     expect(() => matcher.match('contains', 'zzz', false, 'é漢😀'.repeat(667), { maxWork: 50 })).toThrow(/resource/i)
   })
-  it('never reuses a certificate after replacing the actual comparator', () => {
-    const matcher = new TextFilterMatcher('en-US')
-    matcher.match('contains', 'zzz', false, 'abc')
-    const compare = matcher.collator.compare
-    Object.defineProperty(matcher.collator, 'compare', { value: (a: string, b: string) => compare(a.replace(/abcd/g, 'wxyz'), b.replace(/abcd/g, 'wxyz')) })
-    expect(matcher.match('contains', 'wxyz', false, 'abcd')).toBe(true)
-    expect(matcher.certifiedAsciiProfile).toBe(false)
-  })
 })
 
-describe('bounded certificate ownership and measurements', () => {
-  it('reuses actual native profile probes and certifies large alphabets by adjacency', () => {
-    const matcher = new TextFilterMatcher('sv-SE'), text = 'é漢😀東à'.repeat(400)
-    expect(matcher.certification.comparisons).toBe(0)
-    matcher.match('contains', 'zzz', false, text)
-    expect(matcher.certifiedAsciiProfile).toBe(true)
-    const work = { used: 0 }
-    matcher.match('contains', 'zzz', false, text, { work })
-    expect(matcher.certification.comparisons).toBe(0)
-    expect(matcher.certification.cacheHits).toBeGreaterThan(0)
-    expect(work.used).toBeLessThan(100000)
-    const huge = Array.from({ length: 80 }, (_, index) => String.fromCodePoint(0x4e00 + index)).join('').repeat(25)
-    expect(matcher.match('contains', 'zzz', false, huge)).toBe(false)
-    expect(matcher.certifiedAsciiProfile).toBe(true)
-  })
-  it('detects native pair contractions and expansion/canonical boundary differences', () => {
-    const da = new TextFilterMatcher('da-DK'), en = new TextFilterMatcher('en-US')
-    expect(da.match('contains', 'å', false, 'aa')).toBe(true)
-    expect(da.certifiedAsciiProfile).toBe(false)
+describe('canonical semantics replacing former collator pins', () => {
+  // Each expectation marked "changed" deliberately reverses an S8.1 pin of the
+  // host-collator behaviour (spec §7.1 amendment, verified-differences table).
+  it('expansions and decomposed marks', () => {
+    const en = new TextFilterMatcher('en-US')
     expect(en.match('contains', 'fi', false, 'ﬁ')).toBe(true)
-    expect(en.certifiedAsciiProfile).toBe(false)
-    expect(en.match('contains', 'f', false, 'ﬁ')).toBe(false)
-    expect(en.match('eq', 'ss', false, 'ß')).toBe(false)
+    expect(en.match('contains', 'f', false, 'ﬁ')).toBe(true) // changed: was false
+    expect(en.match('eq', 'ss', false, 'ß')).toBe(true) // changed: was false
     expect(en.match('eq', '?', true, 'é')).toBe(true)
-    expect(en.match('eq', '?', true, 'e\u0301')).toBe(false)
+    expect(en.match('eq', '?', true, 'e\u0301')).toBe(true) // changed: was false
     expect(en.match('eq', 'fi', false, 'ﬁ' + '\u200b'.repeat(400))).toBe(true)
+    expect(en.match('contains', 'a', false, '\u0363')).toBe(false) // changed: was true
   })
-  it('reports cold and warm actual probe work separately from total cell work', () => {
-    const rows: object[] = []
-    for (const locale of ['en-US', 'de-DE', 'sv-SE', 'tr-TR', 'da-DK', 'es-ES-u-co-trad']) {
-      for (const kind of ['prose', 'unicode', 'random-ascii', 'expansion'] as const) {
-        let seed = 881, text = ''
-        if (kind === 'prose') text = 'The quick brown fox jumps over the lazy dog. A filter examines each ordinary cell. '.repeat(25).slice(0, 2000)
-        else {
-          const pool = kind === 'unicode' ? ['é', 'à', '漢', '東', '😀', '😄'] : kind === 'expansion' ? ['ﬁ', 'ß', 'é', '\u0301'] : Array.from('abcdefghijklmnopqrstuvwxy 0123456789!')
-          for (let index = 0; index < 2000; index++) { seed = seed * 48271 % 2147483647; text += pool[seed % pool.length] }
-        }
-        const construction = performance.now(), matcher = new TextFilterMatcher(locale), constructorMs = performance.now() - construction
-        for (const temperature of ['cold', 'warm'] as const) {
-          const work = { used: 0 }, at = performance.now()
-          let outcome = 'miss'
-          try { matcher.match('contains', 'zzz', false, text, { work }) } catch (error) { if (!(error instanceof Error) || !/resource/i.test(error.message)) throw error; outcome = 'resource-limit' }
-          rows.push({ locale, kind, temperature, constructorMs: Number(constructorMs.toFixed(3)), ms: Number((performance.now() - at).toFixed(3)), used: work.used, certified: matcher.certifiedAsciiProfile, ...matcher.certification, outcome })
-        }
-        if (kind === 'unicode') {
-          const work = { used: 0 }, at = performance.now()
-          expect(matcher.match('eq', '*é*é*zzz', true, text, { work })).toBe(false)
-          rows.push({ locale, kind: 'unicode-wildcard', ms: Number((performance.now() - at).toFixed(3)), used: work.used, certified: matcher.certifiedAsciiProfile, ...matcher.certification })
-        }
-      }
-    }
-    console.info('S8 certificate measurements ' + JSON.stringify(rows))
-    expect(rows.length).toBe(54)
-  })
-})
-
-
-describe('step 2 observed-unit window rejection evidence', () => {
-  it('clears previous probe observations for a wildcard without literals', () => {
-    const matcher = new TextFilterMatcher('sv-SE')
-    matcher.match('contains', 'zzz', false, 'é漢😀'.repeat(667))
-    expect(matcher.certifiedAsciiProfile).toBe(true)
-    expect(matcher.certification.chargedWork).toBeGreaterThan(0)
-    expect(matcher.match('eq', '?', true, '😀')).toBe(true)
-    expect(matcher.certifiedAsciiProfile).toBe(false)
-    expect(matcher.certification).toEqual({ comparisons: 0, cacheHits: 0, chargedWork: 0 })
-  })
-  it('rejects the tentative non-mark-unit window after a native zero-unit alias counterexample', () => {
-    const matcher = new TextFilterMatcher('en-US'), reference = new ReferenceTextFilterMatcher('en-US')
-    // Attempted bound: NFKD non-mark units, actual empty-equal ignorables,
-    // observed scalar expansion factor; plateau ends retain raw CP boundaries.
-    // This is a rejected prototype, not shipped matching semantics.
-    const units = (point: string) => matcher.collator.compare(point, '') === 0 ? 0
-      : Array.from(point.normalize('NFKD')).filter(point => !/\p{M}/u.test(point)).length
-    const windowMatch = (needle: string, text: string) => {
-      const points = Array.from(text), alphabet = Array.from(new Set([...needle, ...text]))
-      const factor = Math.max(1, ...alphabet.map(units)), needleUnits = Array.from(needle).reduce((sum, point) => sum + units(point), 0)
-      const minimum = Math.ceil(needleUnits / factor), maximum = needleUnits * factor
-      for (let start = 0; start <= points.length; start++) {
-        let length = 0
-        for (let end = start; end <= points.length; end++) {
-          if (end > start) length += units(points[end - 1])
-          if (length > maximum) break
-          if (length >= minimum && matcher.collator.compare(needle, points.slice(start, end).join('')) === 0) return true
-        }
-      }
-      return false
-    }
-    for (const [needle, text] of [['a', '\u0363'], ['e', '\u0364'], ['\u0363', 'a']]) {
-      expect(matcher.collator.compare(needle, text)).toBe(0)
-      expect(windowMatch(needle, text)).toBe(false)
-      expect(reference.match('contains', needle, false, text)).toBe(true)
-      expect(matcher.match('contains', needle, false, text)).toBe(true)
-      expect(matcher.certifiedAsciiProfile).toBe(false)
-    }
-  })
-  it('keeps ignored separators inside Danish contractions and raw accent slice boundaries exact', () => {
+  it('Danish contractions and ignorable separators', () => {
     const da = new TextFilterMatcher('da-DK'), en = new TextFilterMatcher('en-US')
-    expect(da.match('contains', 'å', false, 'aa')).toBe(true)
+    expect(da.match('contains', 'å', false, 'aa')).toBe(false) // changed: was true
     expect(da.match('contains', 'å', false, 'a\u200ba')).toBe(false)
-    expect(da.match('contains', 'aa', false, 'aA')).toBe(false)
+    expect(da.match('contains', 'aa', false, 'aA')).toBe(true) // changed: was false
     expect(en.match('contains', 'e', false, 'é')).toBe(false)
-    expect(en.match('contains', 'e', false, 'e\u0301')).toBe(true)
+    expect(en.match('contains', 'e', false, 'e\u0301')).toBe(false) // changed: was true
+  })
+  it('ignorable runs between context characters are removed', () => {
+    const en = new TextFilterMatcher('en-US')
+    expect(en.match('contains', 'l·', false, 'abl\u200b\u200b·cd')).toBe(true) // changed: was false
+    expect(en.match('eq', 'a?b', true, 'a\u200bb')).toBe(false) // changed: was true
+    expect(en.match('eq', 'a?b', true, 'a\u200b\u200bb')).toBe(false) // changed: was true
+    expect(en.match('eq', 'a*b', true, 'a\u200b'.repeat(1000) + 'b')).toBe(true)
   })
 })
 
-describe('native-looking bound comparator ownership', () => {
-  it('rejects a replaced prototype getter returning a bound JavaScript comparator', () => {
-    const getter = Object.getOwnPropertyDescriptor(Intl.Collator.prototype, 'compare')!.get!
-    const bound = new WeakMap<Intl.Collator, Intl.Collator['compare']>()
-    try {
-      vi.spyOn(Intl.Collator.prototype, 'compare', 'get').mockImplementation(function (this: Intl.Collator) {
-        let compare = bound.get(this)
-        if (!compare) {
-          const native = getter.call(this) as Intl.Collator['compare']
-          compare = function (a: string, b: string) { return native(a.replace(/abcd/g, 'wxyz'), b.replace(/abcd/g, 'wxyz')) }.bind(null)
-          bound.set(this, compare)
-        }
-        return compare
-      })
-      const matcher = new TextFilterMatcher('en-US')
-      expect(matcher.match('contains', 'wxyz', false, 'abcd')).toBe(true)
-      expect(matcher.certifiedAsciiProfile).toBe(false)
-    } finally { vi.restoreAllMocks() }
-  })
-})
-
-describe('ignorable runs between context characters stay exact', () => {
-  const ops: TextOp[] = ['eq', 'neq', 'begins', 'ends', 'contains', 'not-contains']
-  const all = { maxWork: Number.MAX_SAFE_INTEGER }
-  const agree = (locale: string, pattern: string, text: string) => {
-    const fast = new TextFilterMatcher(locale), reference = new ReferenceTextFilterMatcher(locale)
-    for (const op of ops) for (const wildcards of [false, true]) {
-      const actual = fast.match(op, pattern, wildcards, text, all), expected = reference.match(op, pattern, wildcards, text, all)
-      if (actual !== expected) throw new Error(JSON.stringify({ locale, op, pattern, text, wildcards, actual, expected }))
-    }
-  }
-  it.each([
-    ['en-US', 'l·', 'abl​​·cd'],
-    ['zh', 'l·', 'xl​⁠·y'],
-    ['de', 'l·', 'xl​﻿·y'],
-    ['en', 'l·', 'abl​­·cd'],
-    ['zh', 'el·', 'El​⁠·'],
-    ['kk', 'el·', 'El​⁠·'],
-    ['en-US', 'l​​·', 'abl·cd'],
-    ['en-US', 'l·', 'abl​·cd'],
-  ])('matches the reference for %s %j in %j', (locale, pattern, text) => agree(locale, pattern, text))
-  it('pins the native oracle that the certificate must not contradict', () => {
-    const reference = new ReferenceTextFilterMatcher('en-US'), fast = new TextFilterMatcher('en-US')
-    const text = 'abl​​·cd'
-    expect(reference.match('contains', 'l·', false, text)).toBe(false)
-    expect(fast.match('contains', 'l·', false, text)).toBe(false)
-    expect(fast.certifiedAsciiProfile).toBe(false)
-    expect(fast.match('contains', 'cd', false, 'abcd')).toBe(true)
-    expect(fast.certifiedAsciiProfile).toBe(true)
-  })
-  it('matches the reference over seeded ignorable-run fuzz in en, zh, de and kk', () => {
-    const pool = ['​', '­', '﻿', '⁠', '‍', '·', 'l', 'e', 'a', 'L', 'E']
-    const locales = ['en', 'zh', 'de', 'kk'].map(locale => [new TextFilterMatcher(locale), new ReferenceTextFilterMatcher(locale), locale] as const)
-    let seed = 4241, checked = 0
-    const random = (length: number) => { seed = (seed * 48271) % 2147483647; return seed % length }
-    const cases = Number(process.env.S8_IGNORABLE_FUZZ_CASES ?? 3000)
-    for (let index = 0; index < cases; index++) {
-      let text = '', pattern = ''
-      if (index % 2 === 0) {
-        for (let i = 1 + random(9); i > 0; i--) text += pool[random(pool.length)]
-        for (let i = 1 + random(4); i > 0; i--) pattern += pool[random(pool.length)]
-      } else {
-        // Structured: a known context with 0-3 ignorables between its characters.
-        const contexts = ['l\u00b7', 'el\u00b7', 'L\u00b7', 'll', 'aa', 'l\u00b7l'], gap = () => { let run = ''; for (let i = random(4); i > 0; i--) run += pool[random(5)]; return run }
-        for (const point of contexts[random(contexts.length)]) text += point + gap()
-        text = 'ab'.slice(0, random(3)) + text + 'cd'.slice(0, random(3))
-        for (const point of contexts[random(contexts.length)]) pattern += point + (random(4) === 0 ? gap() : '')
-      }
-      const [fast, reference, locale] = locales[index % locales.length]
-      for (const op of ops) for (const wildcards of [false, true]) {
-        const actual = fast.match(op, pattern, wildcards, text, all), expected = reference.match(op, pattern, wildcards, text, all)
-        if (actual !== expected) throw new Error(JSON.stringify({ index, locale, op, pattern, text, wildcards, actual, expected }))
-        checked++
-      }
-    }
-    expect(checked).toBe(cases * ops.length * 2)
-  })
-})
-
-describe('large alphabets are certified by observed adjacency', () => {
+describe('large alphabets stay within default allowances', () => {
   const latin = Array.from('abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789 .,;-').slice(0, 50)
   const cjk = Array.from({ length: 150 }, (_, index) => String.fromCodePoint(0x4e00 + index * 7))
   const sample = (pool: readonly string[], length: number) => {
@@ -852,26 +523,8 @@ describe('large alphabets are certified by observed adjacency', () => {
       for (const length of [100, 300, 1000, 2000]) {
         const matcher = new TextFilterMatcher(locale), work = { used: 0 }
         expect(matcher.match('contains', 'zzz', false, sample(pool, length), { work })).toBe(false)
-        expect(matcher.certifiedAsciiProfile).toBe(true)
-        expect(work.used).toBeLessThan(DEFAULT_FILTER_WORK / 5)
+        expect(work.used).toBeLessThan(DEFAULT_FILTER_WORK / 1000)
       }
     }
-  })
-  it('keeps certified large-alphabet answers equal to the reference', () => {
-    for (const [pool, locale] of [[latin, 'en-US'], [cjk, 'zh'], [latin, 'da-DK']] as const) {
-      const fast = new TextFilterMatcher(locale), reference = new ReferenceTextFilterMatcher(locale)
-      const text = sample(pool, 120)
-      for (const pattern of [text.slice(10, 14), text.slice(100), 'zzz', text.slice(3, 5) + '*' + text.slice(30, 33)]) {
-        for (const op of ['eq', 'neq', 'begins', 'ends', 'contains', 'not-contains'] as TextOp[]) {
-          expect(fast.match(op, pattern, true, text, { maxWork: Number.MAX_SAFE_INTEGER })).toBe(reference.match(op, pattern, true, text, { maxWork: Number.MAX_SAFE_INTEGER }))
-        }
-      }
-    }
-  })
-  it('still fails explicitly or exactly when a large alphabet is inconclusive', () => {
-    const da = new TextFilterMatcher('da-DK'), reference = new ReferenceTextFilterMatcher('da-DK')
-    const text = sample(latin, 200) + 'aa'
-    expect(da.match('contains', 'å', false, text)).toBe(reference.match('contains', 'å', false, text))
-    expect(da.certifiedAsciiProfile).toBe(false)
   })
 })
