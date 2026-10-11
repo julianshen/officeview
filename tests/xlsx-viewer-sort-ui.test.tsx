@@ -195,3 +195,28 @@ import { columnRuleDescription } from '../src/components/xlsx/GridHeaders'
 it('describes committed date conditions with zero-padded ISO dates', () => {
   expect(columnRuleDescription({ kind: 'date', op: 'between', first: { year: 2026, month: 1, day: 2 }, second: { year: 2026, month: 10, day: 9 } })).toBe('Between 2026-01-02 through 2026-10-09')
 })
+
+it('reserves touch header chrome for visible 44px controls and retains source-space hit testing', () => {
+  const previous = window.matchMedia
+  window.matchMedia = vi.fn(query => ({ matches: query.includes('pointer: coarse'), media: query, onchange: null,
+    addEventListener: vi.fn(), removeEventListener: vi.fn(), addListener: vi.fn(), removeListener: vi.fn(), dispatchEvent: () => true }))
+  try {
+    const p = gridFixture(), change = vi.fn()
+    const ui = render(<GridSemantics {...p} onChange={change} onSortCycle={vi.fn()} onFilter={vi.fn()} />)
+    const grid = ui.getByRole('grid')
+    const header = ui.getByRole('button', { name: 'Select Column A' }).closest<HTMLElement>('[role="columnheader"]')!
+    expect(header.style.height).toBe('132px')
+    for (const button of header.querySelectorAll('button')) {
+      expect(button.style.minWidth).toBe('44px')
+      expect(button.style.minHeight).toBe('44px')
+      expect(button.closest('[hidden]')).toBeNull()
+    }
+    expect((grid.querySelector('[aria-rowindex="2"]') as HTMLElement).style.top).toBe('132px')
+    act(() => grid.focus())
+    fireEvent.click(grid, { detail: 1, clientX: 54, clientY: 142 })
+    expect(change).toHaveBeenCalledOnce()
+    expect(change.mock.calls[0][0].selection.active).toEqual({ row: 0, col: 0 })
+    expect(document.activeElement).toBe(grid)
+    ui.unmount()
+  } finally { window.matchMedia = previous }
+})
