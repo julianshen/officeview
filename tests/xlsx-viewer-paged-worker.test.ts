@@ -176,3 +176,20 @@ describe('review MINOR 1: the compatibility fallback is bounded by the object ca
     await opened.session.release()
   })
 })
+
+import { loadOfficeFile } from '../src/components/OfficeFile'
+import { buildZip } from './helpers/zip-builder'
+import { xlsxEntries } from './helpers/xlsx-package'
+
+describe('coordinator decision on MINOR 1: the exported entry keeps the earlier rule', () => {
+  it('a >32 MiB file the paged reader refuses still opens through compatibility mode (legacy parse) on loadOfficeFile', async () => {
+    const entries = xlsxEntries({ sheetData: '<row><c r="A1"><v>1</v></c></row><row><c r="A2"><v>2</v></c></row>' })
+    // A stored 33 MiB media part puts the package beyond the 32 MiB object cap (G1 → paged).
+    entries.push({ name: 'xl/media/pad.png', data: new Uint8Array(33 * 1024 * 1024), method: 0 })
+    const bytes = buildZip(entries).bytes
+    expect(bytes.length).toBeGreaterThan(32 * 1024 * 1024)
+    const doc = await loadOfficeFile(new Blob([bytes as BlobPart])) as import('../src/xlsx/types').XlsxDocument
+    expect(doc.diagnostics?.map(d => d.message)).toContain('Large file — opened in compatibility mode')
+    expect(doc.sheets[0].rows.flatMap(r => r.cells.map(c => c.value))).toEqual([1, 2])
+  }, 60_000)
+})
