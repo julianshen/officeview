@@ -41,14 +41,55 @@ export interface SearchKeyStore {
   delete(owner: SearchKeyOwner): Promise<void>
 }
 export const searchKeyOwnerId = (owner: SearchKeyOwner): string => `${owner.scope}\u0000${owner.strategyId}`
+const runBytes = (run: SearchKeyRun): number => {
+  let bytes = 64
+  for (let i = 0; i < run.texts.length; i++) {
+    const key = run.keys[i]
+    bytes += run.texts[i].length * 2 + 40 + (key === null ? 8 : key.length * 2 + 40)
+  }
+  return bytes
+}
+function validateRun(run: SearchKeyRun): void {
+  if (!run || !Array.isArray(run.texts) || !Array.isArray(run.keys) || run.texts.length !== run.keys.length
+    || run.texts.some(text => typeof text !== 'string') || run.keys.some(key => key !== null && typeof key !== 'string')) {
+    throw new ValueIndexError('invalid-rule', 'Malformed search key run')
+  }
+}
+/** Reference backend for tests and small sessions; the durable backend is a
+ * later decision (a persistence spike is pending). */
 export class MemorySearchKeyStore implements SearchKeyStore {
   readonly limitBytes: number
   usedBytes = 0
   saves = 0
   loads = 0
-  constructor(options: { limitBytes?: number } = {}) { this.limitBytes = options.limitBytes ?? Infinity }
-  async load(_owner: SearchKeyOwner): Promise<SearchKeyRun | null> { this.loads++; return null }
-  async save(_owner: SearchKeyOwner, _run: SearchKeyRun): Promise<void> {}
-  async delete(_owner: SearchKeyOwner): Promise<void> {}
+  private readonly runs = new Map<string, { run: SearchKeyRun; bytes: number }>()
+  constructor(options: { limitBytes?: number } = {}) {
+    this.limitBytes = options.limitBytes ?? Infinity
+    if (!(this.limitBytes >= 0)) throw new RangeError('Invalid search key store limit')
+  }
+  async load(owner: SearchKeyOwner, signal?: AbortSignal): Promise<SearchKeyRun | null> {
+    if (signal?.aborted) throw new ValueIndexError('cancelled', 'Search key load cancelled')
+    this.loads++
+    const stored = this.runs.get(searchKeyOwnerId(owner))
+    return stored ? { texts: stored.run.texts.slice(), keys: stored.run.keys.slice() } : null
+  }
+  async save(owner: SearchKeyOwner, run: SearchKeyRun, signal?: AbortSignal): Promise<void> {
+    if (signal?.aborted) throw new ValueIndexError('cancelled', 'Search key save cancelled')
+    validateRun(run)
+    const id = searchKeyOwnerId(owner), previous = this.runs.get(id)?.bytes ?? 0, bytes = runBytes(run)
+    if (this.usedBytes - previous + bytes > this.limitBytes) {
+      throw new ValueIndexError('quota', 'Search key storage quota exceeded', {
+        resource: 'storage', requiredBytes: this.usedBytes - previous + bytes, limitBytes: this.limitBytes, retryable: false,
+      })
+    }
+    this.runs.set(id, { run: Object.freeze({ texts: Object.freeze(run.texts.slice()), keys: Object.freeze(run.keys.slice()) }), bytes })
+    this.usedBytes += bytes - previous
+    this.saves++
+  }
+  async delete(owner: SearchKeyOwner): Promise<void> {
+    const id = searchKeyOwnerId(owner), stored = this.runs.get(id)
+    if (!stored) return
+    this.runs.delete(id)
+    this.usedBytes -= stored.bytes
+  }
 }
-void ValueIndexError

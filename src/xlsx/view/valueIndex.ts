@@ -5,7 +5,7 @@ import {
   KEY_BOOLEAN, KEY_DATE, KEY_ERROR, KEY_NUMBER, KEY_STRING, NumberTable, ValueIndexError, loadKeySet,
   sameStamp, valueKeyString, type LaneAccount, type ValueKeySet, type ValueRunStore,
 } from './valueRuns'
-import { EXACT_SEARCH, type SearchKeyStore, type SearchKeyStrategy } from './searchKeys'
+import { EXACT_SEARCH, type SearchKeyOwner, type SearchKeyStore, type SearchKeyStrategy } from './searchKeys'
 
 export { ValueIndexError } from './valueRuns'
 
@@ -287,6 +287,9 @@ export class ValueIndex implements LaneAccount {
   private strings = new Map<string, number>()
   private errors = new Map<string, number>()
   private readonly numberKind: number
+  private searchKeys: (string | null)[] = []
+  private keyState: SearchKeyState = 'none'
+  private keyError: ValueIndexError | undefined
   private readonly results = new WeakMap<ValueSearchResult, SearchRecord>()
   private readonly reservations = new Set<ValueReservation>()
   constructor(readonly identity: ValueIndexIdentity, source: ValueColumnSource, private readonly cache: ValueIndexCache, key: string) {
@@ -297,7 +300,10 @@ export class ValueIndex implements LaneAccount {
   }
   get size(): number { return this.count }
   get searchKeyStatus(): { strategyId: string; keyed: number; state: SearchKeyState; error?: ValueIndexError } {
-    return { strategyId: 'exact', keyed: 0, state: 'none' }
+    return { strategyId: this.cache.searchKeys.strategy.id, keyed: this.searchKeys.length, state: this.keyState, ...(this.keyError ? { error: this.keyError } : {}) }
+  }
+  private get keysDone(): boolean {
+    return this.cache.searchKeys.strategy === EXACT_SEARCH || this.searchKeys.length === this.texts.length
   }
   get idle(): boolean { return !this.pins && !this.pending }
   get completeness(): ValueCompleteness {
@@ -345,7 +351,7 @@ export class ValueIndex implements LaneAccount {
     this.reservations.clear()
     this.cache.forget(this.scope, this)
     this.kinds = new Uint8Array(0); this.numbers = new Float64Array(0); this.styles = new Uint32Array(0); this.counts = new Uint32Array(0)
-    this.texts = []; this.strings = new Map(); this.errors = new Map(); this.numberIds = undefined
+    this.texts = []; this.strings = new Map(); this.errors = new Map(); this.numberIds = undefined; this.searchKeys = []
   }
   /** Throws stale-source (and disposes) once invalidated or the live source
    * owner differs; every cached path and publication checks this. */
@@ -358,7 +364,7 @@ export class ValueIndex implements LaneAccount {
   build(options: ValueBuildOptions = {}): Promise<ValueCompleteness> {
     try { this.assertLive() } catch (error) { return Promise.reject(error) }
     if (this.identity.classification.kind === 'loading') return Promise.resolve('loading')
-    if (this.pages && !this.unmerged) return Promise.resolve(this.completeness)
+    if (this.pages && !this.unmerged && this.keysDone) return Promise.resolve(this.completeness)
     if (this.pending) return this.pending
     this.pending = this.run(options).catch(error => {
       // Partial merges after a quota/owner failure cannot be resumed honestly.
@@ -410,7 +416,69 @@ export class ValueIndex implements LaneAccount {
     for (let page = 0; page < pageCount; page++) if (this.pages[page] === UNKNOWN) unknown++
     this.ledger.unknownPages = unknown
     progress()
+    if (this.cache.searchKeys.strategy !== EXACT_SEARCH) await this.keyPhase(signal, pacer, onProgress)
     return this.completeness
+  }
+  private keyOwner(strategy: SearchKeyStrategy): SearchKeyOwner {
+    const id = this.identity
+    return { docId: id.docId, sheetId: id.sheetId, valueGen: id.valueGen, col: id.col, classificationGen: id.classificationGen, scope: this.scope, strategyId: strategy.id }
+  }
+  /** Computes (or adopts persisted) search keys for the raw text dictionary.
+   * Cancellable and resumable; keys are an optimization only, so storage
+   * failures are reported in searchKeyStatus and never change results. */
+  private async keyPhase(signal: AbortSignal | undefined, pacer: Pacer, onProgress: ValueBuildOptions['onProgress']): Promise<void> {
+    const { strategy, store } = this.cache.searchKeys, texts = this.texts, total = texts.length
+    const progress = () => onProgress?.({ phase: 'keys', completed: this.searchKeys.length, total })
+    const failure = (error: unknown): ValueIndexError => error instanceof ValueIndexError ? error
+      : new ValueIndexError('storage-error', error instanceof Error ? error.message : String(error))
+    const complete = this.completeness === 'complete'
+    if (store && complete && this.searchKeys.length === 0 && total > 0) {
+      try {
+        const run = await store.load(this.keyOwner(strategy), signal)
+        this.check(signal)
+        // Adopt only an exactly aligned run: the stored texts must equal ours.
+        if (run && run.texts.length === total && run.keys.length === total && run.texts.every((text, id) => text === texts[id])) {
+          let bytes = 0
+          for (const key of run.keys) {
+            if (key !== null && typeof key !== 'string') throw new ValueIndexError('page-error', 'Malformed persisted search key')
+            bytes += key === null ? 8 : key.length * 2 + 48
+          }
+          this.retain(bytes)
+          this.searchKeys = run.keys.slice()
+          this.keyState = 'loaded'
+          progress()
+          return
+        }
+      } catch (error) {
+        if (error instanceof ValueIndexError && (error.code === 'cancelled' || error.code === 'stale-source' || error.code === 'quota' && error.detail.resource === 'memory')) throw error
+        this.keyError = failure(error)
+      }
+    }
+    if (this.searchKeys.length >= total) return
+    this.keyState = 'computing'
+    for (let id = this.searchKeys.length; id < total; id++) {
+      const key = strategy.searchKeyOf(texts[id])
+      if (key !== null && typeof key !== 'string') throw new ValueIndexError('invalid-rule', 'Search key function returned a non-string key')
+      this.retain(key === null ? 8 : key.length * 2 + 48)
+      this.searchKeys.push(key)
+      if (id % PACE_STRIDE === PACE_STRIDE - 1 && pacer.due) {
+        progress()
+        await pacer.yield()
+        this.check(signal)
+      }
+    }
+    this.keyState = 'computed'
+    progress()
+    if (!store || !complete) return
+    try {
+      await store.save(this.keyOwner(strategy), { texts: this.texts, keys: this.searchKeys }, signal)
+      this.check(signal)
+      this.keyState = 'persisted'
+    } catch (error) {
+      if (error instanceof ValueIndexError && (error.code === 'cancelled' || error.code === 'stale-source')) throw error
+      this.keyState = 'unpersisted'
+      this.keyError = failure(error)
+    }
   }
   /** Validates a lane page before any merge; unknown cells defer the whole page. */
   private admissible(page: ValueLanePage): boolean {
@@ -601,15 +669,33 @@ export class ValueIndex implements LaneAccount {
     try {
       const matches = new Uint32Array(words(end))
       if (resume) matches.set(resume.matches.subarray(0, words(from)))
-      let count = resume?.count ?? 0
+      let count = resume?.count ?? 0, keyed = 0, exact = 0
       const label = labelOption ?? defaultLabel
+      const strategy = this.cache.searchKeys.strategy, keys = this.searchKeys
       try {
         const budget = new WorkBudget({ ...limits, signal })
         const contains = query.text === '' ? undefined : new TextFilterMatcher(query.locale).prepare('contains', query.text, false, budget)
+        const queryKey = contains && strategy !== EXACT_SEARCH ? strategy.searchKeyOf(query.text) : null
+        if (queryKey !== null && typeof queryKey !== 'string') throw new ValueIndexError('invalid-rule', 'Search key function returned a non-string key')
         for (let ordinal = from; ordinal < end; ordinal++) {
           budget.resetAllowance()
-          // An empty literal is a subsequence of every candidate.
-          if (!contains || contains(this.searchText(ordinal, label), budget)) { setBit(matches, ordinal); count++ }
+          let hit = true, decided = !contains
+          if (queryKey !== null) {
+            const kind = this.kinds[ordinal], id = this.numbers[ordinal]
+            const key = (kind === KEY_STRING || kind === KEY_ERROR) && id < keys.length ? keys[id] : null
+            if (key !== null) {
+              keyed++
+              hit = key.includes(queryKey)
+              // A key miss is decisive; a candidate hit needs exact confirmation.
+              decided = !hit || strategy.exactness === 'equivalent'
+            }
+          }
+          if (!decided) {
+            exact++
+            // An empty literal is a subsequence of every candidate.
+            hit = !contains || contains(this.searchText(ordinal, label), budget)
+          } else if (!contains) exact++
+          if (hit) { setBit(matches, ordinal); count++ }
           if ((ordinal - from) % PACE_STRIDE === PACE_STRIDE - 1 && pacer.due) {
             onProgress?.({ searched: ordinal + 1, total: end, matches: count })
             await pacer.yield()
@@ -624,7 +710,7 @@ export class ValueIndex implements LaneAccount {
       const result: ValueSearchResult = Object.freeze({
         query: Object.freeze({ text: query.text, locale: query.locale }), owner: this.stamp, matches, count,
         searchedEntries: end, complete: end === this.count && this.completeness === 'complete',
-        stats: Object.freeze({ keyed: 0, exact: end - from }),
+        stats: Object.freeze({ keyed, exact }),
       })
       this.results.set(result, { reservation, label: labelOption, limits })
       return result

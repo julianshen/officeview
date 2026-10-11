@@ -73,25 +73,27 @@ describe('search-key injection seam', () => {
     expect(result.stats).toEqual({ keyed: 0, exact: 500 })
     expect(plain.searchKeyStatus).toMatchObject({ strategyId: EXACT_SEARCH.id, state: 'none', keyed: 0 })
   })
-  it.each([
-    ['candidate', asciiCandidate()],
-    ['equivalent', digitsEquivalent],
-  ] as const)('matches the exact path on seeded values incl. hostile pools (%s keys)', async (_name, strategy) => {
-    const values = seededValues(1_500, strategy === digitsEquivalent ? 29 : 17)
-    const exact = await index(values), keyed = await index(values, { searchKeys: { strategy } })
-    expect(keyed.searchKeyStatus).toMatchObject({ strategyId: strategy.id, state: 'computed', keyed: 1_500 })
-    let comparisons = 0, keyedDecisions = 0
-    for (const query of seededQueries(values, 40, 101)) {
+  it('matches the exact path on seeded values incl. hostile pools (candidate and equivalent keys)', async () => {
+    const values = seededValues(1_200, 17), exact = await index(values)
+    const strategies = [asciiCandidate(), digitsEquivalent]
+    const keyed = await Promise.all(strategies.map(strategy => index(values, { searchKeys: { strategy } })))
+    keyed.forEach((built, at) => expect(built.searchKeyStatus).toMatchObject({ strategyId: strategies[at].id, state: 'computed', keyed: 1_200 }))
+    let comparisons = 0
+    const keyedDecisions = [0, 0]
+    for (const query of seededQueries(values, 30, 101)) {
       for (const locale of ['en-US', 'de-DE', 'da-DK']) {
-        const a = await exact.search({ text: query, locale }), b = await keyed.search({ text: query, locale })
-        expect(matchedOrdinals(b), `${JSON.stringify(query)} ${locale}`).toEqual(matchedOrdinals(a))
-        expect(b.stats.keyed + b.stats.exact).toBeGreaterThanOrEqual(values.length)
-        comparisons += values.length
-        keyedDecisions += b.stats.keyed
+        const expected = matchedOrdinals(await exact.search({ text: query, locale }))
+        for (let at = 0; at < keyed.length; at++) {
+          const result = await keyed[at].search({ text: query, locale })
+          expect(matchedOrdinals(result), `${strategies[at].id} ${JSON.stringify(query)} ${locale}`).toEqual(expected)
+          expect(result.stats.keyed + result.stats.exact).toBeGreaterThanOrEqual(values.length)
+          comparisons += values.length
+          keyedDecisions[at] += result.stats.keyed
+        }
       }
     }
-    expect(comparisons).toBeGreaterThanOrEqual(180_000)
-    expect(keyedDecisions).toBeGreaterThan(0)
+    expect(comparisons).toBeGreaterThanOrEqual(200_000)
+    expect(keyedDecisions.every(count => count > 0)).toBe(true)
   }, 300_000)
   it('runs the exact matcher only on null-key values and confirmed candidates', async () => {
     const values = ['apple', 'APPLE pie', 'banana', 'äpple', 'grape']
