@@ -106,7 +106,8 @@ Every package is implemented on its own branch, reviewed by at least one agent f
 | S8.3 declared filter diagnostics (`src/xlsx/view/declaredFilters.ts`, parse.ts) | merged |
 | S8.2 semantic value index and searched Select All (`valueIndex.ts`, `valueRuns.ts`, `searchKeys.ts`) | merged |
 | S4.3 lifecycle, document-wide memory pool, LRU tiers, tile cache and leases (`tileCache.ts`, worker session/kernel) | merged |
-| S1.1b, S6.1 | in progress (implementation or review rounds on their own branches) |
+| S1.1b spool, admission gates, quota ledger, entry wiring (`spool.ts`, `storage/{quota,admission,importSession,sheetRecords,imageAdmission}.ts`, `largeSource.ts` lazy chunk) | merged; until S1.2 every 'paged' decision opens in compatibility mode with a notice |
+| S6.1, S5.1 | in progress (implementation or review rounds on their own branches) |
 | S1.2, S1.3, S4.4–S4.5, S5, S6, S9, S10 (physical-device receipts skipped for now by user decision), S11/S12 status, S13 | not started |
 
 ## S0 — Freeze contracts, counterexamples and fixture/harness infrastructure
@@ -162,6 +163,8 @@ expect(await source.readCell({ row: 1_048_575, col: 16_383 }, readOptions)).toMa
 ## S1 — Mandatory bounded import, source access and value fidelity
 
 ### S1.1 Package/XML streaming and admission
+
+> **Status (2026-10-11):** S1.1a (ZIP/inflate/XML core) and S1.1b (spool, admission G1/G2, quota ledger, evaluator materialization cap, entry wiring) merged after codex/pi/opencode reviews. Orchestrator rule applied: anything that opened before still opens — paged decisions use the legacy path with a 'compatibility mode' notice until S1.2; evaluator cap hits reopen with saved values; damaged-but-readable archives open with a 'may be damaged' notice; typed refusals only for produced≠declared size, truncated deflate and spool storage/quota. Eager bundle +2.7 KB gz; large path in a lazy chunk never loaded for DOCX/PPTX. Not delivered: RED 14a, 14b render wiring, 21, import progress (22), session-level 23 (S1.2).
 
 **Files:** create `src/core/zip-stream.ts`, `xml-stream.ts`, `src/xlsx/storage/importSession.ts`, `quota.ts`; modify `src/core/zip.ts`, `stream.ts`, `src/components/OfficeFile.tsx`; test `tests/xlsx-viewer-import.test.ts`, `tests/xlsx-viewer-import-limits.test.ts`, retain `tests/streaming.test.ts`/`officeview-streaming.test.tsx`.
 
