@@ -16,6 +16,8 @@ export class ValueIndexError extends Error {
     this.name = 'ValueIndexError'
   }
 }
+export const sameStamp = (a: SourceStamp, b: SourceStamp): boolean =>
+  a.docId === b.docId && a.sheetId === b.sheetId && a.valueGen === b.valueGen
 /** Parallel typed lanes: numbers hold the value (booleans 0/1) and texts hold
  * string/error raw UTF-16 at the same offset. */
 export interface ValueKeyRun {
@@ -24,31 +26,185 @@ export interface ValueKeyRun {
   readonly numbers: Float64Array
   readonly texts: readonly (string | undefined)[]
 }
+const textual = (kind: number): boolean => kind === KEY_STRING || kind === KEY_ERROR
+/** Same encoding as filter.ts rawValueKey; -0 joins 0 and strings keep raw code units. */
 export function valueKeyString(kind: number, value: number, text: string | undefined): string {
-  return `n:${value}${text ?? ''}${kind}`
+  switch (kind) {
+    case KEY_NUMBER: return `n:${value === 0 ? 0 : value}`
+    case KEY_DATE: return `d:${value === 0 ? 0 : value}`
+    case KEY_BOOLEAN: return value ? 'b:1' : 'b:0'
+    case KEY_STRING: return `s:${text}`
+    case KEY_ERROR: return `e:${text}`
+    default: throw new ValueIndexError('invalid-rule', 'Unknown value key kind')
+  }
 }
+/** Approximate retained bytes of one key-run element, for store admission. */
+export const runElementBytes = (kind: number, text: string | undefined): number =>
+  9 + (textual(kind) ? (text?.length ?? 0) * 2 + 40 : 0)
+
+const hashView = new Float64Array(1), hashWords = new Uint32Array(hashView.buffer)
+/** Mixes the IEEE-754 words of a finite, -0-normalized number. */
+function hashNumber(value: number): number {
+  hashView[0] = value
+  let hash = Math.imul(hashWords[0] ^ 0x9e3779b9, 0x85ebca6b) ^ Math.imul(hashWords[1] ^ 0x7f4a7c15, 0xc2b2ae35)
+  hash ^= hash >>> 15
+  hash = Math.imul(hash, 0x27d4eb2f)
+  return (hash ^ (hash >>> 13)) >>> 0
+}
+/** Receives every typed allocation so a pool can admit it before it exists. */
+export interface LaneAccount {
+  charge(bytes: number): void
+  release(bytes: number): void
+}
+/** Open-addressing number → id table in typed lanes; a Map would box doubles. */
+export class NumberTable {
+  private keys: Float64Array
+  private ids: Int32Array
+  private mask: number
+  size = 0
+  constructor(private readonly account?: LaneAccount, capacity = 64) {
+    account?.charge(capacity * 12)
+    this.keys = new Float64Array(capacity)
+    this.ids = new Int32Array(capacity).fill(-1)
+    this.mask = capacity - 1
+  }
+  get bytes(): number { return this.keys.length * 12 }
+  get(value: number): number {
+    for (let slot = hashNumber(value) & this.mask; ; slot = (slot + 1) & this.mask) {
+      const id = this.ids[slot]
+      if (id < 0) return -1
+      if (this.keys[slot] === value) return id
+    }
+  }
+  /** The caller guarantees value is absent. */
+  set(value: number, id: number): void {
+    if ((this.size + 1) * 2 > this.keys.length) this.grow()
+    let slot = hashNumber(value) & this.mask
+    while (this.ids[slot] >= 0) slot = (slot + 1) & this.mask
+    this.keys[slot] = value
+    this.ids[slot] = id
+    this.size++
+  }
+  private grow(): void {
+    const capacity = this.keys.length * 2, oldBytes = this.bytes
+    this.account?.charge(capacity * 12)
+    const keys = this.keys, ids = this.ids
+    this.keys = new Float64Array(capacity)
+    this.ids = new Int32Array(capacity).fill(-1)
+    this.mask = capacity - 1
+    this.size = 0
+    for (let slot = 0; slot < ids.length; slot++) if (ids[slot] >= 0) this.set(keys[slot], ids[slot])
+    this.account?.release(oldBytes)
+  }
+}
+/** Exact key membership used by committed rules and draft bases. */
 export class ValueKeySet {
-  add(_kind: number, _value: number, _text: string | undefined): void {}
-  has(_kind: number, _value: number, _text: string | undefined): boolean { return true }
-  get size(): number { return 0 }
+  private readonly numbers = new NumberTable()
+  private readonly dates = new NumberTable()
+  private readonly booleans = new Uint8Array(2)
+  private readonly strings = new Set<string>()
+  private readonly errors = new Set<string>()
+  size = 0
+  add(kind: number, value: number, text: string | undefined): void {
+    if (this.has(kind, value, text)) return
+    switch (kind) {
+      case KEY_NUMBER: this.numbers.set(value === 0 ? 0 : value, 0); break
+      case KEY_DATE: this.dates.set(value === 0 ? 0 : value, 0); break
+      case KEY_BOOLEAN: this.booleans[value ? 1 : 0] = 1; break
+      case KEY_STRING: this.strings.add(text!); break
+      case KEY_ERROR: this.errors.add(text!); break
+    }
+    this.size++
+  }
+  has(kind: number, value: number, text: string | undefined): boolean {
+    switch (kind) {
+      case KEY_NUMBER: return this.numbers.get(value === 0 ? 0 : value) >= 0
+      case KEY_DATE: return this.dates.get(value === 0 ? 0 : value) >= 0
+      case KEY_BOOLEAN: return this.booleans[value ? 1 : 0] === 1
+      case KEY_STRING: return this.strings.has(text!)
+      case KEY_ERROR: return this.errors.has(text!)
+      default: throw new ValueIndexError('invalid-rule', 'Unknown value key kind')
+    }
+  }
+}
+export function validateRun(run: ValueKeyRun): void {
+  if (!Number.isSafeInteger(run.count) || run.count < 0 || run.kinds.length < run.count || run.numbers.length < run.count) {
+    throw new ValueIndexError('invalid-rule', 'Malformed value key run')
+  }
+  for (let i = 0; i < run.count; i++) {
+    const kind = run.kinds[i]
+    if (kind < KEY_NUMBER || kind > KEY_DATE || (textual(kind) ? typeof run.texts[i] !== 'string' : !Number.isFinite(run.numbers[i]))) {
+      throw new ValueIndexError('invalid-rule', 'Malformed value key run element')
+    }
+  }
 }
 export interface ValueRunStore {
+  /** Stores an immutable copy; refusal is a typed storage quota error. */
   put(run: ValueKeyRun, owner: SourceStamp, signal?: AbortSignal): Promise<PagedKeySetRef>
+  /** Reads [offset, offset+limit) of the ref; a ref with another owner is stale. */
   read(ref: PagedKeySetRef, offset: number, limit: number, signal?: AbortSignal): Promise<ValueKeyRun>
   release(ref: PagedKeySetRef): Promise<void>
 }
+export const VALUE_RUN_PAGE = 65_536
+export async function loadKeySet(store: ValueRunStore, ref: PagedKeySetRef, signal?: AbortSignal): Promise<ValueKeySet> {
+  const set = new ValueKeySet()
+  let offset = 0
+  while (offset < ref.count) {
+    const run = await store.read(ref, offset, Math.min(VALUE_RUN_PAGE, ref.count - offset), signal)
+    if (run.count === 0) throw new ValueIndexError('page-error', 'Value key run ended early')
+    validateRun(run)
+    for (let i = 0; i < run.count; i++) set.add(run.kinds[i], run.numbers[i], run.texts[i])
+    offset += run.count
+  }
+  if (set.size !== ref.count) throw new ValueIndexError('page-error', 'Value key run contains duplicate keys')
+  return set
+}
+interface StoredRun { run: ValueKeyRun; owner: SourceStamp; bytes: number }
 export class MemoryValueRunStore implements ValueRunStore {
   readonly limitBytes: number
   usedBytes = 0
   puts = 0
-  private readonly runs = new Map<string, { run: ValueKeyRun; owner: SourceStamp }>()
-  constructor(options: { limitBytes?: number } = {}) { this.limitBytes = options.limitBytes ?? Infinity }
-  get refCount(): number { return this.runs.size }
-  async put(run: ValueKeyRun, owner: SourceStamp): Promise<PagedKeySetRef> {
-    const refId = `run-${++this.puts}`
-    this.runs.set(refId, { run, owner })
-    return { refId, count: run.count, owner }
+  private readonly runs = new Map<string, StoredRun>()
+  constructor(options: { limitBytes?: number } = {}) {
+    this.limitBytes = options.limitBytes ?? Infinity
+    if (!(this.limitBytes >= 0)) throw new RangeError('Invalid value run store limit')
   }
-  async read(ref: PagedKeySetRef): Promise<ValueKeyRun> { return this.runs.get(ref.refId)!.run }
-  async release(ref: PagedKeySetRef): Promise<void> { this.runs.delete(ref.refId) }
+  get refCount(): number { return this.runs.size }
+  async put(run: ValueKeyRun, owner: SourceStamp, signal?: AbortSignal): Promise<PagedKeySetRef> {
+    if (signal?.aborted) throw new ValueIndexError('cancelled', 'Value run write cancelled')
+    validateRun(run)
+    let bytes = 64
+    for (let i = 0; i < run.count; i++) bytes += runElementBytes(run.kinds[i], run.texts[i])
+    if (this.usedBytes + bytes > this.limitBytes) {
+      throw new ValueIndexError('quota', 'Value run storage quota exceeded', {
+        resource: 'storage', requiredBytes: this.usedBytes + bytes, limitBytes: this.limitBytes, retryable: false,
+      })
+    }
+    const copy: ValueKeyRun = Object.freeze({
+      count: run.count, kinds: run.kinds.slice(0, run.count), numbers: run.numbers.slice(0, run.count),
+      texts: Object.freeze(Array.from({ length: run.count }, (_, i) => run.texts[i])),
+    })
+    const refId = `values-${++this.puts}`
+    this.runs.set(refId, { run: copy, owner: { ...owner }, bytes })
+    this.usedBytes += bytes
+    return Object.freeze({ refId, count: run.count, owner: Object.freeze({ ...owner }) })
+  }
+  async read(ref: PagedKeySetRef, offset: number, limit: number, signal?: AbortSignal): Promise<ValueKeyRun> {
+    if (signal?.aborted) throw new ValueIndexError('cancelled', 'Value run read cancelled')
+    const stored = this.runs.get(ref.refId)
+    if (!stored || !sameStamp(stored.owner, ref.owner) || stored.run.count !== ref.count) {
+      throw new ValueIndexError('stale-source', 'Value run ref is missing or owned by another source generation')
+    }
+    if (!Number.isSafeInteger(offset) || !Number.isSafeInteger(limit) || offset < 0 || limit < 1 || limit > VALUE_RUN_PAGE) {
+      throw new ValueIndexError('invalid-cursor', 'Invalid value run page')
+    }
+    const end = Math.min(stored.run.count, offset + limit)
+    return { count: Math.max(0, end - offset), kinds: stored.run.kinds.slice(offset, end), numbers: stored.run.numbers.slice(offset, end), texts: stored.run.texts.slice(offset, end) }
+  }
+  async release(ref: PagedKeySetRef): Promise<void> {
+    const stored = this.runs.get(ref.refId)
+    if (!stored) return
+    this.runs.delete(ref.refId)
+    this.usedBytes -= stored.bytes
+  }
 }

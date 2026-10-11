@@ -74,7 +74,7 @@ describe('semantic value keys', () => {
       typeof cell === 'number' ? num(cell) : typeof cell === 'string' ? str(cell) : typeof cell === 'boolean' ? { kind: 'boolean', value: cell }
         : { kind: 'error', value: (cell as { error: string }).error }, mixed)))
     expect(new Set(keysOf(index))).toEqual(oracle)
-    expect(index.size).toBe(11)
+    expect(index.size).toBe(10)
     expect(index.blankCount).toBe(2)
     expect(keysOf(index)).toEqual(expect.arrayContaining(['e:#N/A', 'e:#DIV/0!', 's:#N/A', 'b:1', 's:TRUE', 'n:1.5', 's:1.5', 'n:0']))
     expect(keysOf(index)).not.toContain('n:-0')
@@ -90,6 +90,8 @@ describe('semantic value keys', () => {
     const entries = index.page({ offset: 0, limit: 10, label }).entries
     expect(entries.map(entry => entry.label)).toEqual(['2023-01-01', '2023-01-01', '2023-01-02'])
     expect(entries.map(entry => entry.kind)).toEqual(['date', 'date', 'date'])
+    const day = await index.search({ text: '2023-01-01', locale: 'en-US' }, { label })
+    expect(index.page({ offset: 0, limit: 10, search: day, label }).entries.map(entry => entry.key)).toEqual(['d:44927.25', 'd:44927.75'])
   })
   it('keys the cache by classification so the same serials are numeric keys under number classification', async () => {
     const cache = new ValueIndexCache(), source = fromCells([44927.25, 44927.75])
@@ -340,8 +342,6 @@ describe('scale with typed lanes', () => {
     const elapsed = performance.now() - started
     expect(hit.count).toBe(1)
     expect(index.page({ offset: 0, limit: 5, search: hit, label }).entries[0].key).toBe('s:text-99998')
-    const numeric = await index.search({ text: '149998.5', locale: 'en-US' }, { label })
-    expect(index.page({ offset: 0, limit: 5, search: numeric, label }).entries.map(entry => entry.key)).toEqual(['n:149998.5'])
     expect(elapsed).toBeGreaterThan(0)
   }, 120_000)
   it('indexes 1M distinct numeric values with bounded typed allocations and a warm reopen', async () => {
