@@ -434,6 +434,11 @@ function setSlot(words: Uint32Array, slot: number, visible: boolean): void {
   const word = Math.floor(slot / 32), bit = 2 ** (slot % 32)
   words[word] = visible ? (words[word] | bit) >>> 0 : (words[word] & ~bit) >>> 0
 }
+/** Abandons a cooperative guard at a yield when its request was cancelled or
+ * its owner superseded; caught by the operation and returned as its outcome. */
+class GuardHalt extends Error {
+  constructor(readonly outcome: { kind: 'cancelled' } | { kind: 'stale' }) { super(outcome.kind) }
+}
 /** One operation's share of the transient ledger. */
 interface Charge { set(bytes: number): void; release(): void }
 const EMPTY_SELECTION: GridSelection = Object.freeze({ active: null, anchor: null, ranges: Object.freeze([]) })
@@ -1069,10 +1074,24 @@ export class DocumentSession {
       if (guardRange) {
         const before = createSheetMetrics({ rows: geometry.rows, cols: geometry.cols, order: state.order, visibility: state.visibility })
         const after = createSheetMetrics({ rows: geometry.rows, cols: geometry.cols, order: state.order, visibility: projected.visibility })
-        const guard = await guardFilter({
-          range: guardRange, candidateVisibility: projected.visibility, currentVisibility: state.visibility,
-          projectionBefore: before, projectionAfter: after, structure: await this.structure(owner.sheetId, signal),
-        })
+        let guard: GuardOutcome
+        try {
+          guard = await guardFilter({
+            range: guardRange, candidateVisibility: projected.visibility, currentVisibility: state.visibility,
+            projectionBefore: before, projectionAfter: after, structure: await this.structure(owner.sheetId, signal),
+            cooperate: {
+              due: units => slice.due(units),
+              pause: async () => {
+                await slice.pause('guard')
+                const halt = this.halted(owner, signal)
+                if (halt) throw new GuardHalt(halt)
+              },
+            },
+          })
+        } catch (cause) {
+          if (cause instanceof GuardHalt) return cause.outcome
+          throw cause
+        }
         if (!guard.ok) return guardOutcome(guard, this.coverageDiagnostics(owner.sheetId))
       }
       const halt = this.halted(owner, signal)
