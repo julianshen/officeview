@@ -260,7 +260,9 @@ export class WorkbookFind {
   /** Settles the pending yield early: a disposed port (MessageChannel) never
    * delivers, so close/abort must wake the waiter for its guard to reject. */
   private wake: (() => void) | undefined
-  private readonly onAbort = () => this.wake?.()
+  /** Aborted on close() or caller abort: every source read uses this signal. */
+  private readonly lifetime = new AbortController()
+  private readonly onAbort = () => { this.wake?.(); this.lifetime.abort() }
   private validated = false
   private done = false
   private closed = false
@@ -282,6 +284,20 @@ export class WorkbookFind {
     }).finally(() => { this.wake = undefined })
     this.slice = new FindSlice({ ...(options.now ? { now: options.now } : {}), yield: wrapped }, () => this.guard())
     options.signal?.addEventListener('abort', this.onAbort, { once: true })
+    if (options.signal?.aborted) this.lifetime.abort()
+  }
+
+  /** Settles when the session is closed/aborted even if the source ignores
+   * its signal; the following guard() then rejects with closed/cancelled. */
+  private interruptible<T>(work: Promise<T>): Promise<T | undefined> {
+    const signal = this.lifetime.signal
+    if (signal.aborted) return Promise.resolve(undefined)
+    return new Promise<T | undefined>((resolve, reject) => {
+      const stop = () => resolve(undefined)
+      signal.addEventListener('abort', stop, { once: true })
+      work.then(value => { signal.removeEventListener('abort', stop); resolve(value) },
+        error => { signal.removeEventListener('abort', stop); reject(error) })
+    })
   }
 
   /** Closure, cancellation and owner currency: run after every await. */
@@ -370,6 +386,7 @@ export class WorkbookFind {
     this.account()
     this.options.signal?.removeEventListener('abort', this.onAbort)
     this.wake?.()
+    this.lifetime.abort()
     this.releaseHost()
   }
 
@@ -406,11 +423,12 @@ export class WorkbookFind {
     const scan = this.scan
     if (!scan.iterator) {
       const range = scan.range ??= scan.sheet.store.extent.used ?? FULL_SHEET
-      const signal = this.options.signal ?? new AbortController().signal
+      const signal = this.lifetime.signal
       scan.iterator = scan.sheet.store.scanPopulated({ range, limit: this.scanLimit, ...(scan.cursor !== undefined ? { cursor: scan.cursor } : {}) }, { signal, stamp: scan.stamp })[Symbol.asyncIterator]()
     }
-    const next = await scan.iterator.next()
+    const next = await this.interruptible(scan.iterator.next())
     this.guard()
+    if (!next) throw new FindError('closed', 'Find session closed')
     if (next.done) {
       // A store may end one iteration with a continuation cursor (§4.1).
       const cursor = scan.last?.nextCursor
@@ -528,8 +546,9 @@ export class WorkbookFind {
     const slot = Math.floor(key / MAX_COLS), col = key - slot * MAX_COLS
     const row = sheet.order.displayToSource(slot)
     const stamp = { docId: sheet.identity.docId, sheetId: sheet.sheetId, valueGen: sheet.identity.valueGen }
-    const read = await sheet.store.readCell({ row, col }, { signal: this.options.signal ?? new AbortController().signal, stamp })
+    const read = await this.interruptible(sheet.store.readCell({ row, col }, { signal: this.lifetime.signal, stamp }))
     this.guard()
+    if (!read) throw new FindError('closed', 'Find session closed')
     if (read.kind === 'error' && read.code === 'cancelled') throw new FindError('cancelled', 'Find cancelled')
     if (read.kind === 'error' && read.code !== 'stale-source') {
       this.fail({ sheetId: sheet.sheetId, code: read.code, retryable: read.retryable, message: `Cell ${row},${col} could not be read`, range: { r0: row, r1: row, c0: col, c1: col } })

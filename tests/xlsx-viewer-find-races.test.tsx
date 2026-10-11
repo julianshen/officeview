@@ -371,3 +371,25 @@ describe('review: controller keeps engine pagination (codex 2)', () => {
     expect(other.stats.cacheHits).toBe(1)
   })
 })
+
+describe('review: interruptible hit materialization (opencode nit)', () => {
+  it('close() during a hung readCell aborts the read and settles the page promptly', async () => {
+    const { input } = findInputOf(twoSheets())
+    let seen: AbortSignal | undefined
+    let entered!: () => void
+    const inRead = new Promise<void>(resolve => { entered = resolve })
+    const hung = input.sheets.map(sheet => ({
+      ...sheet,
+      store: Object.create(sheet.store, {
+        readCell: { value: (_at: unknown, options: { signal: AbortSignal }) => { seen = options.signal; entered(); return new Promise(() => {}) } },
+      }) as SourceStore,
+    }))
+    const session = new WorkbookFind({ ...input, sheets: hung }, ci('hit'))
+    const page = Promise.race([session.nextPage().then(() => 'resolved', (error: FindError) => error.code), new Promise(resolve => setTimeout(() => resolve('hung'), 200))])
+    await inRead
+    expect(seen!.aborted).toBe(false)
+    session.close()
+    expect(await page).toBe('closed')
+    expect(seen!.aborted).toBe(true)
+  })
+})
