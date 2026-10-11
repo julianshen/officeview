@@ -123,7 +123,8 @@ describe('ledger through openPart (ledger parts of RED tests 4 and 7)', () => {
 
 import { admit, admissionTotal, classifyPart, inventoryLimits, predictedPeak, verifyObjectCandidate, type ObjectDecision } from '../src/xlsx/storage/admission'
 import { importLimitsFor, type ImportLimitOverrides } from '../src/xlsx/storage/importSession'
-import { newAdmissionCounters } from '../src/xlsx/storage/sheetRecords'
+import { countingEvents, newAdmissionCounters } from '../src/xlsx/storage/sheetRecords'
+import { tokenizeBytes } from '../src/core/xml-stream'
 import type { ProfileId } from '../src/xlsx/view/contracts'
 import { formulaRows, metaRows, repeat, SS_NS, valueCells, xlsxBytes, xlsxEntries, type PackageSpec } from './helpers/xlsx-package'
 
@@ -343,19 +344,19 @@ describe('verification pass bounds', () => {
     expect(allZero(ledger.snapshot().current)).toBe(true)
   })
 
-  it('sheetData or si inside mc:AlternateContent is refused as unsupported (never a blank sheet); other MC content is counted', async () => {
+  it('small files: sheetData or si inside mc:AlternateContent stays object (legacy rendering) and is recorded for a diagnostic (decision 5)', async () => {
     const mc = 'xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"'
     const wrapped = xlsxEntries({}).map((e) => e.name === 'xl/worksheets/sheet1.xml'
       ? { ...e, data: `<worksheet xmlns="${SS_NS}" ${mc}><mc:AlternateContent><mc:Choice Requires="x"><sheetData><row r="1"><c r="A1"><v>1</v></c></row></sheetData></mc:Choice></mc:AlternateContent></worksheet>` }
       : e)
     const d = await g2(buildZip(wrapped).bytes, 'D')
-    expect(d.mode === 'refuse' && d.failure.code).toBe('unsupported')
+    expect(d.mode === 'object' && d.counters.alternateContentData).toEqual(['xl/worksheets/sheet1.xml'])
 
     const si = xlsxEntries({ sharedStrings: ['a'] }).map((e) => e.name === 'xl/sharedStrings.xml'
       ? { ...e, data: `<sst xmlns="${SS_NS}" ${mc}><mc:AlternateContent><mc:Choice Requires="x"><si><t>a</t></si></mc:Choice></mc:AlternateContent></sst>` }
       : e)
     const s = await g2(buildZip(si).bytes, 'M')
-    expect(s.mode === 'refuse' && s.failure.code).toBe('unsupported')
+    expect(s.mode === 'object' && s.counters.alternateContentData).toEqual(['xl/sharedStrings.xml'])
 
     const merges = xlsxEntries({ afterSheetData: `<mc:AlternateContent ${mc}><mc:Choice Requires="x"><mergeCells><mergeCell ref="A1:B2"/></mergeCells></mc:Choice></mc:AlternateContent>` })
     const m = await g2(buildZip(merges).bytes, 'D')
@@ -363,6 +364,17 @@ describe('verification pass bounds', () => {
     if (m.mode !== 'object') return
     expect(m.counters.alternateContentSubtrees).toBe(1)
     expect(m.counters.structuralIncomplete).toEqual(['merges'])
+  })
+
+  it('large mode keeps the rule: data inside mc:AlternateContent is a typed unsupported failure', async () => {
+    const counters = newAdmissionCounters()
+    const events = countingEvents(counters, 'xl/worksheets/sheet1.xml', { check() {}, alternateContentData: 'refuse' })
+    const xml = `<worksheet xmlns:mc="m"><mc:AlternateContent><mc:Choice><sheetData/></mc:Choice></mc:AlternateContent></worksheet>`
+    let err: unknown
+    try {
+      await tokenizeBytes((async function* () { yield new TextEncoder().encode(xml) })(), events)
+    } catch (e) { err = e }
+    expect((err as PackageError).code).toBe('unsupported')
   })
 
   it('malformed XML and DTDs in an object candidate are typed refusals', async () => {

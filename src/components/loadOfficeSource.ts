@@ -73,6 +73,16 @@ interface Ctx {
 
 let swept = false
 
+/** Diagnostic features the viewer shows to the user (OfficeFileState.notices). */
+export const NOTICE_ALTERNATE_CONTENT = 'alternate-content-data'
+export const NOTICE_CACHED_VALUES = 'cached-value-policy'
+const NOTICE_FEATURES = new Set([NOTICE_ALTERNATE_CONTENT, NOTICE_CACHED_VALUES])
+
+export function documentNotices(doc: AnyDoc): string[] {
+  const diagnostics = (doc as { diagnostics?: Array<{ feature: string; message: string }> }).diagnostics ?? []
+  return diagnostics.filter((d) => NOTICE_FEATURES.has(d.feature)).map((d) => d.message)
+}
+
 function addDiagnostic(doc: XlsxDocument, feature: string, message: string): void {
   doc.diagnostics ??= []
   doc.diagnostics.push({ kind: 'large-source', feature, message })
@@ -93,6 +103,9 @@ function admittedParser(bytes: Uint8Array, ctx: Ctx, decided?: SpreadsheetAdmiss
     if (admission.mode !== 'object') throw refusalFrom(admission)
     throwIfAborted(ctx.signal)
     const doc = await parseXlsx(pkg, { evaluation: admission.decision.evaluation })
+    for (const part of admission.decision.counters.alternateContentData) {
+      addDiagnostic(doc, NOTICE_ALTERNATE_CONTENT, `Some cell data in ${part} is wrapped in mc:AlternateContent and is not shown`)
+    }
     for (const part of admission.decision.counters.highRatioParts) {
       addDiagnostic(doc, 'high-compression-ratio', `${part} declares a compression ratio above ${ctx.limits.object.maxRatio}:1 (sizes verified exactly)`)
     }

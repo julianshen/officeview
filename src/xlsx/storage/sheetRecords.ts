@@ -30,13 +30,15 @@ export interface AdmissionCounters {
   structuralIncomplete: Array<'merges' | 'tables' | 'drawings' | 'columns' | 'rows'>
   /** Parts above 1 MiB declaring more than maxRatio:1 (diagnostic only). */
   highRatioParts: string[]
+  /** Parts with sheetData/row/c or si inside AlternateContent (recorded in 'record' mode). */
+  alternateContentData: string[]
 }
 
 export function newAdmissionCounters(): AdmissionCounters {
   return {
     expandedBytes: 0, maxPartBytes: 0, elements: 0, attributes: 0, textChars: 0, rows: 0, cells: 0, uniqueStrings: 0,
     longestString: 0, merges: 0, styleRecords: 0, maxAttributesPerElement: 0, loadEvaluatedFormulas: 0, fullCalcOnLoad: false,
-    alternateContentSubtrees: 0, structuralIncomplete: [], highRatioParts: [],
+    alternateContentSubtrees: 0, structuralIncomplete: [], highRatioParts: [], alternateContentData: [],
   }
 }
 
@@ -60,13 +62,19 @@ function attr(names: readonly string[], values: readonly string[], count: number
 export interface CountingOptions {
   /** Called after every event that can grow a counter; throws to stop the pass. */
   check(counters: AdmissionCounters, pendingStringChars: number): void
+  /**
+   * Data inside AlternateContent: 'refuse' (large/paged mode, default) throws a
+   * typed `unsupported`; 'record' (small object files, which keep today's
+   * rendering) lists the part so the loader can attach a visible diagnostic.
+   */
+  alternateContentData?: 'refuse' | 'record'
 }
 
 /**
  * Count one XML part. The part kind is taken from its root element, never
  * from its name. Data (`sheetData`/`row`/`c`, `si`) inside AlternateContent is
- * refused with a typed `unsupported`, because the legacy tree walk would drop
- * it silently and publish a blank sheet (§3.4, spec §4.3.8).
+ * dropped by the legacy tree walk: large mode refuses it with a typed
+ * `unsupported` (§3.4, spec §4.3.8); small files record it (decision 5).
  */
 export function countingEvents(counters: AdmissionCounters, partId: string, options: CountingOptions): XmlEvents {
   type Kind = 'worksheet' | 'sst' | 'styleSheet' | 'workbook' | 'other'
@@ -106,7 +114,10 @@ export function countingEvents(counters: AdmissionCounters, partId: string, opti
       if (!selfClosing) mcDepth++
     } else if (mcDepth > 0) {
       if ((kind === 'worksheet' && (local === 'sheetData' || local === 'row' || local === 'c')) || (kind === 'sst' && local === 'si')) {
-        throw new PackageError('unsupported', `${local} inside mc:AlternateContent is not supported; the sheet would load blank`, partId)
+        if (options.alternateContentData !== 'record') {
+          throw new PackageError('unsupported', `${local} inside mc:AlternateContent is not supported; the sheet would load blank`, partId)
+        }
+        if (!counters.alternateContentData.includes(partId)) counters.alternateContentData.push(partId)
       }
       const domain = kind === 'worksheet' ? STRUCTURE[local] : undefined
       if (domain !== undefined && !counters.structuralIncomplete.includes(domain)) counters.structuralIncomplete.push(domain)

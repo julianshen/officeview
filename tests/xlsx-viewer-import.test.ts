@@ -187,6 +187,29 @@ describe('files the old path opened still open (orchestrator decisions)', () => 
   })
 })
 
+describe('decision 5: mc:AlternateContent-wrapped data in a small file', () => {
+  const mc = 'xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"'
+  const bytes = () => buildZip(xlsxEntries({}).map((e) => e.name === 'xl/worksheets/sheet1.xml'
+    ? { ...e, data: `<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" ${mc}><cols><col min="1" max="1" width="20" customWidth="1"/></cols><mc:AlternateContent><mc:Choice Requires="x"><sheetData><row r="1"><c r="A1"><v>1</v></c></row></sheetData></mc:Choice></mc:AlternateContent></worksheet>` }
+    : e)).bytes
+
+  it('renders as today and carries a visible diagnostic', async () => {
+    vi.spyOn(Date, 'now').mockReturnValue(Date.UTC(2026, 9, 11, 12))
+    const b = bytes()
+    const legacy = await detectAndParse(await OfficePackage.load(b)) as { sheets: unknown[] }
+    const doc = await loadOfficeFile(b) as { sheets: unknown[]; diagnostics?: Array<{ feature: string; message: string }> }
+    expect(doc.sheets).toEqual(legacy.sheets)
+    expect(doc.diagnostics?.find((d) => d.feature === 'alternate-content-data')?.message).toMatch(/xl\/worksheets\/sheet1.xml/)
+    let seen: ReturnType<typeof useOfficeFile> | undefined
+    function Probe() { seen = useOfficeFile(b); return null }
+    render(createElement(Probe))
+    await waitFor(() => expect(seen?.status).toBe('ready'), { timeout: 30_000 })
+    expect(seen?.status === 'ready' && seen.notices?.[0]).toMatch(/mc:AlternateContent/)
+    const { container } = render(createElement(OfficeFile, { data: b }))
+    await waitFor(() => expect(container.querySelector('[role="status"]')?.textContent).toMatch(/not shown/), { timeout: 30_000 })
+  })
+})
+
 describe('formula expansion through the entry point (RED test 19)', () => {
   it('uncached SEQUENCE(200000,1) is evaluated with the caps, hits array-resource-limit and is rerouted before publishing', async () => {
     const bytes = xlsxBytes({ sheetData: '<row r="1"><c r="A1"><f>SEQUENCE(200000,1)</f></c></row>' })

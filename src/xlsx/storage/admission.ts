@@ -187,7 +187,7 @@ export async function verifyObjectCandidate(src: RangeSource, inventory: ZipInve
       const part = openPart(src, entry, { signal, budget, rangeReadBytes: limits.rangeReadBytes, outputBufferBytes: limits.inflateOutputBytes })
       try {
         if (info.cls === 'xml') {
-          const events = countingEvents(counters, entry.name, { check: (c, pending) => checkCaps(c, pending, limits) })
+          const events = countingEvents(counters, entry.name, { check: (c, pending) => checkCaps(c, pending, limits), alternateContentData: 'record' })
           await tokenizeBytes(part, events, { signal, limits: { maxTokenChars: limits.maxTokenChars, maxAttributes: o.maxAttributesPerElement } })
         } else {
           for await (const chunk of part) void chunk

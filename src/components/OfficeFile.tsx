@@ -8,7 +8,7 @@ import { OfficeDoc, type OfficeDocProps } from './OfficeDoc'
 import type { ByteSource, Progress, ProtectionListener, ProtectionPolicy, WatermarkListener } from '../core/stream'
 import { mergeWatermark, type WatermarkOptions } from '../core/watermark'
 import type { PackageErrorCode } from '../core/package-error'
-import { loadOfficeSource, type AnyDoc } from './loadOfficeSource'
+import { documentNotices, loadOfficeSource, type AnyDoc } from './loadOfficeSource'
 import { ImportRefusal, type RefusalReason } from '../xlsx/storage/importSession'
 
 export type { AnyDoc } from './loadOfficeSource'
@@ -23,7 +23,8 @@ export type OfficeFileState =
   /** `code`/`reason` are set when a spreadsheet was refused by admission
    * (`reason: 'paged-not-yet'` = it needs the large-workbook viewer). */
   | { status: 'error'; message: string; code?: PackageErrorCode; reason?: RefusalReason }
-  | { status: 'ready'; document: AnyDoc }
+  /** `notices`: user-visible load notices (e.g. saved values shown, data not shown). */
+  | { status: 'ready'; document: AnyDoc; notices?: readonly string[] }
 
 /**
  * Load an office file from any byte source — bytes in memory, a Blob, a
@@ -78,7 +79,9 @@ export function useOfficeFile(
       onWatermark: (m) => { if (!cancelled) watermarkRef.current?.(m) },
     })
       .then((document) => {
-        if (!cancelled) setState({ status: 'ready', document })
+        if (cancelled) return
+        const notices = documentNotices(document)
+        setState(notices.length > 0 ? { status: 'ready', document, notices } : { status: 'ready', document })
       })
       .catch((e: unknown) => {
         if (cancelled) return
@@ -147,7 +150,7 @@ export function OfficeFile({
     return <>{loading}</>
   }
   if (state.status === 'error') return error ? error(state.message) : <div role="alert">{state.message}</div>
-  return (
+  const doc = (
     <OfficeDoc
       document={state.document}
       allowCopy={effectiveAllowCopy}
@@ -155,6 +158,13 @@ export function OfficeFile({
       {...(effectiveWatermark ? { watermark: effectiveWatermark } : {})}
       {...rest}
     />
+  )
+  if (!state.notices) return doc
+  return (
+    <>
+      <div role="status" data-officeview-notice="">{state.notices.join(' · ')}</div>
+      {doc}
+    </>
   )
 }
 
