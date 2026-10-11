@@ -4,12 +4,13 @@
  * the complete cache owner plus zoom/DPR/backend/grid cell and retained in the
  * bitmap pool through TileCache. Presenting a frame draws cached tiles into the
  * pane surface; only a missing tile calls renderSheetViewport. Overlays
- * (selection, search, watermark) live on their own surface, so moving them never
- * reaches this module.
+ * (selection, search) live on their own surface, so moving them never reaches
+ * this module; the watermark is stamped into the pane after the tiles.
  */
 import type { XlsxSheet } from '../../xlsx/types'
 import type { CacheIdentity, LogicalViewport, ProfileId } from '../../xlsx/view/contracts'
 import { renderSheetViewport, type RenderSheetAssets } from '../../xlsx/render'
+import { paintWatermark, type ResolvedWatermark } from '../../core/watermark'
 import type { LayoutCache } from '../../xlsx/view/textLayout'
 import type { MergeQueryCache, SheetGeometryResult } from '../../xlsx/view/viewport'
 import {
@@ -33,6 +34,9 @@ export interface SheetFrame {
   assets?: RenderSheetAssets
   layoutCache: LayoutCache
   merges: MergeQueryCache
+  /** Stamped into the pane bitmap after the tiles (tiles stay mark-free and
+   * cacheable), so it travels with the presented pixels like the page path. */
+  watermark?: ResolvedWatermark
 }
 export interface SheetTileStats {
   /** renderSheetViewport calls: the only base-cell painting. */
@@ -105,6 +109,10 @@ export class SheetTileRenderer {
           target.drawImage(tile.surface.canvas, col * TILE_DEVICE_PX - px, row * TILE_DEVICE_PX - py)
           if (!tile.retained) tile.surface.close()
         }
+      }
+      if (frame.watermark) {
+        target.setTransform(frame.dpr, 0, 0, frame.dpr, 0, 0)
+        paintWatermark(target, { widthPx: frame.viewport.width, heightPx: frame.viewport.height }, frame.watermark)
       }
     } finally { target.restore() }
     // Drop tiles of an older owner/zoom/DPR only after the new frame is up, so the

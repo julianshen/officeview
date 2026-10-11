@@ -6,8 +6,8 @@
  * page viewer's fit-to-width pan transform. Three independent layers:
  *  - base: 512px device tiles painted by renderSheetViewport into the bitmap
  *    pool (SheetTileRenderer) and drawn into one pane surface;
- *  - overlay: grid selection, search highlights and the watermark, repainted
- *    alone when only they change;
+ *  - overlay: grid selection and search highlights, repainted alone when only
+ *    they change (the watermark is stamped into the pane bitmap after tiles);
  *  - DOM: GridSemantics (owned ARIA grid, headers, status) and SheetNavigator.
  *
  * Ownership (§10.1): a document replacement remounts the viewer and resets zoom;
@@ -41,7 +41,7 @@ import { createCellLayoutHost, formatValue } from '../../xlsx/render'
 import { createObjectWorkbookSource } from '../../worker/viewerObjectSource'
 import { bitmapPoolPlan, type TileCacheStats } from '../../xlsx/view/tileCache'
 import { gridGeometryToViewport, gridSelectionOverlay, paintGridSelectionOverlay, paintSearchOverlay, type GridOverlayRecord, type HighlightRect } from '../../core/overlay'
-import { normalizeWatermark, paintWatermark, type WatermarkOptions } from '../../core/watermark'
+import { normalizeWatermark, type WatermarkOptions } from '../../core/watermark'
 import type { FallbackFontsOptions } from '../../core/fonts/fallback'
 import { prepareSheetAssets, type SheetAssetsLease } from '../../render/paint'
 import { GridSemantics, type GridTransition } from './GridSemantics'
@@ -243,22 +243,27 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
   const device = { width: Math.ceil(viewport.width * dpr), height: Math.ceil(viewport.height * dpr) }
   const surfaceBytes = bitmapPoolPlan({ cssWidth: viewport.width, cssHeight: viewport.height, dpr }).overlayBytes * 2
   const rendererRef = useRef<SheetTileRenderer | null>(null)
-  if (!rendererRef.current || rendererRef.current.surfaceBytes !== surfaceBytes || rendererRef.current.profile !== profile) {
-    rendererRef.current?.dispose()
-    rendererRef.current = new SheetTileRenderer(profile, surfaceBytes)
+  // Created lazily in effects: an unmount (or StrictMode's dev re-mount) disposes
+  // it, and the next effect run starts a fresh pool instead of a closed one.
+  const rendererFor = (): SheetTileRenderer => {
+    const current = rendererRef.current
+    if (current && current.surfaceBytes === surfaceBytes && current.profile === profile) return current
+    current?.dispose()
+    return rendererRef.current = new SheetTileRenderer(profile, surfaceBytes)
   }
-  const renderer = rendererRef.current
-  useEffect(() => () => rendererRef.current?.dispose(), [])
+  useEffect(() => () => { rendererRef.current?.dispose(); rendererRef.current = null }, [])
+  const markKey = watermark ? JSON.stringify(watermark) : ''
+  const mark = useMemo(() => normalizeWatermark(watermark), [markKey]) // eslint-disable-line react-hooks/exhaustive-deps
   const biasRef = useRef({ x: 0, y: 0 })
   const overlayPaints = useRef(0)
   const frameOf = (): SheetFrame | null => entry && scroll ? {
     sheet: entry.sheet, geometry: entry.geometry, identity, origin: scroll.logicalOrigin, viewport, zoom: scroll.zoom, dpr,
     extent: { width: entry.metrics.cols.totalCss(), height: entry.metrics.rows.totalCss() },
-    assets: assets?.lease.assets, layoutCache: entry.layoutCache, merges: entry.merges,
+    assets: assets?.lease.assets, layoutCache: entry.layoutCache, merges: entry.merges, ...(mark ? { watermark: mark } : {}),
   } : null
   const report = () => {
     if (!props.onFrame || !scroll) return
-    const stats = renderer.stats
+    const renderer = rendererFor(), stats = renderer.stats
     props.onFrame({
       basePaints: stats.basePaints, tileHits: stats.tileHits, prefetched: stats.prefetched, refused: stats.refused,
       overlayPaints: overlayPaints.current, lastRequests: stats.lastRequests.map(request => ({ ...request.box })),
@@ -275,13 +280,14 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
     if (canvas.height !== device.height) canvas.height = device.height
     const ctx = canvas.getContext('2d')
     if (!ctx) return
+    const renderer = rendererFor()
     biasRef.current = renderer.present(ctx, frame).bias
     report()
     // Bounded adjacent prefetch after the visible frame is up.
     const timer = setTimeout(() => { renderer.prefetch(frame); report() }, 0)
     return () => clearTimeout(timer)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [identityKey, scroll, viewport, dpr, assets, renderer])
+  }, [identityKey, scroll, viewport, dpr, assets, surfaceBytes, profile, mark])
 
   // ---- find (workbook-wide, bounded pages) ----
   const [query, setQuery] = useState('')
@@ -356,9 +362,7 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [page, activeHit])
 
-  // Overlay layer: selection, search highlights and watermark in viewport space.
-  const markKey = watermark ? JSON.stringify(watermark) : ''
-  const mark = useMemo(() => normalizeWatermark(watermark), [markKey]) // eslint-disable-line react-hooks/exhaustive-deps
+  // Overlay layer: selection and search highlights in viewport space.
   useLayoutEffect(() => {
     const canvas = overlayRef.current
     if (!canvas || !entry || !scroll) return
@@ -395,11 +399,9 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
       const geometry = gridSelectionOverlay({ contains: at => selectionContains(selection, at) }, records, pane, scroll.zoom * dpr)
       paintGridSelectionOverlay(ctx, gridGeometryToViewport(geometry, pane, scroll.zoom, bias), dpr)
     }
-    // Protection mark over every presented region, in pane space.
-    if (mark) paintWatermark(ctx, { widthPx: viewport.width, heightPx: viewport.height }, mark)
     report()
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [scroll, selection, page, activeHit, mark, viewport, dpr, identityKey])
+  }, [scroll, selection, page, activeHit, viewport, dpr, identityKey])
 
   // Keep the native scroller on the window's physical segment (Go To, keys, recenter).
   const syncing = useRef(false)
@@ -484,6 +486,17 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
     else if (event.key === '0') { event.preventDefault(); resetZoom() }
   }
 
+  // Ctrl/Cmd+wheel anywhere over the viewer (headers, navigator) never zooms the
+  // browser page; React's wheel listeners are passive, so this one is native.
+  const rootRef = useRef<HTMLDivElement | null>(null)
+  useEffect(() => {
+    const el = rootRef.current
+    if (!el) return
+    const suppress = (event: WheelEvent) => { if (event.ctrlKey || event.metaKey) event.preventDefault() }
+    el.addEventListener('wheel', suppress, { passive: false })
+    return () => el.removeEventListener('wheel', suppress)
+  }, [])
+
   // Print guard while this viewer is mounted (same rule as the page viewer).
   useEffect(() => {
     if (allowPrint) return
@@ -523,6 +536,7 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
   return (
     <div style={{ position: 'relative', display: 'flex', flexDirection: 'column', minHeight: 0 }}>
       <div
+        ref={rootRef}
         className={props.className}
         role="region"
         aria-label="Spreadsheet viewer"

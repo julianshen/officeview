@@ -260,14 +260,38 @@ describe('interactive sheet viewport (S5.2)', () => {
     }
   })
 
-  it('stamps the watermark on the presented pane overlay', async () => {
+  it('stamps the watermark into the presented pane bitmap; changing it re-presents cached tiles only', async () => {
     const doc = await workbook()
-    const { ui } = await mountSheet(doc, { watermark: { text: 'CONFIDENTIAL', opacity: 1, color: '#ff0000' } })
-    const overlay = ui.getByTestId('officeview-sheet-overlay') as HTMLCanvasElement
-    const data = overlay.getContext('2d')!.getImageData(0, 0, overlay.width, overlay.height).data
-    let red = 0
-    for (let i = 0; i < data.length; i += 4) if (data[i] > 200 && data[i + 1] < 80 && data[i + 3] > 100) red++
-    expect(red).toBeGreaterThan(0)
+    const h = harness()
+    const ui = render(<InteractiveSheetDoc doc={doc} onFrame={h.onFrame} />)
+    await waitFor(() => expect(h.last()?.basePaints ?? 0).toBeGreaterThan(0))
+    await settle()
+    const base = ui.getByTestId('officeview-sheet-base') as HTMLCanvasElement
+    const red = () => {
+      const data = base.getContext('2d')!.getImageData(0, 0, base.width, base.height).data
+      let count = 0
+      for (let i = 0; i < data.length; i += 4) if (data[i] > 200 && data[i + 1] < 80 && data[i + 2] < 80) count++
+      return count
+    }
+    expect(red()).toBe(0)
+    const painted = h.last().basePaints
+    ui.rerender(<InteractiveSheetDoc doc={doc} onFrame={h.onFrame} watermark={{ text: 'CONFIDENTIAL', opacity: 1, color: '#ff0000' }} />)
+    await settle()
+    expect(red()).toBeGreaterThan(0)
+    // Tiles stay mark-free in the pool: the change is a re-present, not a base repaint.
+    expect(h.last().basePaints).toBe(painted)
+    expect(h.last().tileHits).toBeGreaterThan(0)
+  })
+
+  it('survives a StrictMode double mount with a live tile pool', async () => {
+    const { StrictMode } = await import('react')
+    const doc = await workbook()
+    const h = harness()
+    render(<StrictMode><InteractiveSheetDoc doc={doc} onFrame={h.onFrame} /></StrictMode>)
+    await waitFor(() => expect(h.last()?.basePaints ?? 0).toBeGreaterThan(0))
+    await settle()
+    expect(h.last().refused).toBe(0)
+    expect(h.last().tiles.tiles).toBeGreaterThan(0)
   })
 })
 
