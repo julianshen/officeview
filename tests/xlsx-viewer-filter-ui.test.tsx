@@ -460,3 +460,23 @@ it('respects no-header table metadata in the filter dropdown and includes the fi
   expect(f.snapshot.filter?.range.headerRows).toBe(0)
   expect(f.snapshot.records).toEqual({ visible: 5, total: 6, completeness: 'complete' })
 })
+
+it('keeps custom Apply disabled while classification is pending instead of clearing the applied rule', async () => {
+  const f = controlsFixture(10), base = f.client
+  f.snapshot = { ...f.snapshot, filter: { range: f.range, columns: new Map([[0, { kind: 'text', op: 'contains', first: 'item', wildcards: false }]]) } }
+  const client: ControlsClient = { ...base, async values(...args) {
+    const port = await base.values(...args)
+    return { ...port, identity: { ...port.identity, classification: { kind: 'loading', hasNumeric: false } },
+      async read(...input) { const page = await port.read(...input); return { ...page, complete: false } },
+    }
+  } }
+  const ui = render(<FilterHarness fixture={f} client={client} />)
+  await waitFor(() => expect(ui.queryByRole('progressbar')).toBeNull())
+  expect((ui.getByRole('textbox', { name: 'Condition 1 first' }) as HTMLInputElement).value).toBe('item')
+  expect((ui.getByRole('combobox', { name: 'Filter method' }) as HTMLSelectElement).value).toBe('custom')
+  expect(ui.getByText('Column classification is pending; wait and retry.')).toBeTruthy()
+  expect((ui.getByRole('button', { name: 'OK' }) as HTMLButtonElement).disabled).toBe(true)
+  fireEvent.click(ui.getByRole('button', { name: 'OK' }))
+  expect(f.publications).toBe(0)
+  expect(f.snapshot.filter?.columns.get(0)).toEqual({ kind: 'text', op: 'contains', first: 'item', wildcards: false })
+})

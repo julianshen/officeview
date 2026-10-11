@@ -52,7 +52,7 @@ export function FilterDropdown(props: FilterDropdownProps): ReactElement | null 
     void (action ? port.change(action, next, job.signal) : port.read(next, job.signal, p => { if (job.current()) setProgress(`${p.message}: ${p.completed} / ${p.total}`) }))
       .then(result => { if (job.current()) { changingRef.current = false; setChanging(false); setPage(result); setBusy(false) } }).catch(error => { if (job.current()) { changingRef.current = false; setChanging(false); noticeError(life.error(error)); setBusy(false) } })
   }
-  let custom: ColumnRule | undefined, validation = ''
+  let custom: ColumnRule | undefined, validation = method === 'custom' && classification.kind === 'loading' ? 'Column classification is pending; wait and retry.' : ''
   if (method === 'custom' && classification.kind !== 'loading') {
     try {
       const one = typedCondition(first), two = compound ? typedCondition(second) : undefined
@@ -68,8 +68,9 @@ export function FilterDropdown(props: FilterDropdownProps): ReactElement | null 
       periods.push(`${rule.preset}: ${day(interval.start)} through ${day(interval.end - 1)} (${context.timeZone}); re-resolved when applied.`)
     }
   }
+  const canApply = Boolean(range) && (method === 'values' ? Boolean(page?.complete) : Boolean(custom) && !validation)
   const apply = (shortcut?: 'clear' | 'clearAll' | 'asc' | 'desc') => {
-    if (busy || life.invalid || (!shortcut && (!range || (method === 'values' && !page?.complete) || validation))) return
+    if (busy || life.invalid || (!shortcut && !canApply)) return
     const job = life.begin(); setBusy(true); setError('')
     void (async () => {
       let outcome
@@ -109,7 +110,7 @@ export function FilterDropdown(props: FilterDropdownProps): ReactElement | null 
       <div><button type="button" style={controlTarget} disabled={busy || !range || life.invalid} onClick={() => apply('asc')}>Sort ascending</button><button type="button" style={controlTarget} disabled={busy || !range || life.invalid} onClick={() => apply('desc')}>Sort descending</button></div>
       <button type="button" style={controlTarget} disabled={busy || life.invalid} onClick={() => apply('clear')}>Clear column</button><button type="button" style={controlTarget} disabled={busy || life.invalid} onClick={() => apply('clearAll')}>Clear all filters</button>
       {range && <p>{range.source.kind === 'table' ? `Table metadata: ${range.range.headerRows} header row(s), ${range.range.totalsRows} totals row(s).` : 'Resolved source range.'}{props.applied && !sameFilterRange(props.applied.range, range.range) ? ' OK will replace the previous filter range.' : ''}</p>}
-      <label>Filter method <select aria-label="Filter method" style={controlTarget} value={method} onChange={event => setMethod(event.target.value as 'values' | 'custom')}><option value="values">Values and blanks</option>{!['loading', 'empty'].includes(classification.kind) && <option value="custom">{classification.kind === 'date' ? 'Date filters' : classification.kind === 'number' ? 'Number filters' : 'Text / mixed filters'}</option>}</select></label>
+      <label>Filter method <select aria-label="Filter method" style={controlTarget} value={method} onChange={event => setMethod(event.target.value as 'values' | 'custom')}><option value="values">Values and blanks</option>{(method === 'custom' || !['loading', 'empty'].includes(classification.kind)) && <option value="custom">{classification.kind === 'loading' ? 'Custom filters (classification pending)' : classification.kind === 'date' ? 'Date filters' : classification.kind === 'number' ? 'Number filters' : 'Text / mixed filters'}</option>}</select></label>
       {method === 'values' ? <>
         <label>Search <input ref={searchInput} aria-label="Search all values" disabled={changing || life.invalid} style={controlTarget} value={query.text} onChange={event => refresh({ text: event.target.value, offset: 0, wildcards: query.wildcards })} /></label>
         <label style={{ ...controlTarget, display: 'flex', alignItems: 'center' }}><input type="checkbox" disabled={changing || life.invalid} checked={Boolean(query.wildcards)} onChange={event => refresh({ ...query, offset: 0, wildcards: event.target.checked })} />Search with wildcards</label>
@@ -136,7 +137,7 @@ export function FilterDropdown(props: FilterDropdownProps): ReactElement | null 
       {inspection && <pre>{inspection}</pre>}{validation && <p>{validation}</p>}{error && <p>{error}</p>}
       {busy && <div role="progressbar" aria-label={progress}>{progress}</div>}
       {!busy && (!page?.complete || error) && <button type="button" style={controlTarget} onClick={initialize}>Retry values</button>}
-      <button type="submit" style={controlTarget} disabled={busy || !range || (method === 'values' && !page?.complete) || Boolean(validation) || life.invalid}>OK</button><button type="button" style={controlTarget} onClick={() => life.cancel()}>Cancel</button>
+      <button type="submit" style={controlTarget} disabled={busy || !canApply || life.invalid}>OK</button><button type="button" style={controlTarget} onClick={() => life.cancel()}>Cancel</button>
     </form>
   </div>
 }
