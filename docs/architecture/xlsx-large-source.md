@@ -696,7 +696,7 @@ columns and caches.
 
 | Guard (all must hold for **object**) | D | M | Basis |
 |---|---:|---:|---|
-| **`predictedPeak`** over all non-media XML parts (elements, attributes, text counted by the verification pass) | **≤ 256 MiB** | **≤ 128 MiB** | Measured envelope above. The 125k-row counterexample predicts 287.9 MiB: paged on both profiles |
+| **`predictedPeak + evaluationReserve`** (elements, attributes, text and formula cells counted by the verification pass; reserve defined below) | **≤ 256 MiB** | **≤ 128 MiB** | Measured envelopes above and below. The 125k-row counterexample predicts 287.9 MiB: paged on both profiles |
 | Compressed package bytes | 32 MiB | 16 MiB | The legacy path holds the whole compressed buffer plus JSZip; equals the in-memory spool limit |
 | Sum of declared AND actual expanded bytes of non-media parts | 6 MiB | 3 MiB | Keeps the verification pass and the legacy strings small; no longer the memory bound |
 | One part, declared and actual | 4 MiB | 2 MiB | Largest single string handed to the legacy parser |
@@ -704,10 +704,72 @@ columns and caches.
 | Attributes per element; any one string or inline string | 128; 64 KiB | 128; 64 KiB | Tokenizer cap; spec §4.3.4 soft threshold |
 | Entries; per-part ratio (parts over 1 MiB expanded) | 1,024; 200:1 | 512; 200:1 | F2/F3/F4 sheets are 6:1 to 9:1 and shared strings 22:1; deflate's maximum is 1032:1 |
 
-How the measured shapes fall: 16,384 cols (97 MiB predicted) and 31k metadata rows (120 MiB) stay object on both profiles; 80k
-merges (207 MiB) and the 2 M-character string (186 MiB) are object on D and paged on M; 125k metadata rows (288 MiB), 30k
-8-cell rows (963 MiB), 100k shared strings (434 MiB) and 500k rows (960 MiB) are paged on both. The real corpus files and the
-small fixtures all predict 64-72 MiB and stay object.
+How the measured shapes fall when **every** guard is applied (an earlier revision applied only the envelope and wrongly called
+80k merges and the 2 M-character string "object on D"):
+
+| Shape | Binding guard(s) | D | M |
+|---|---|---|---|
+| Empty sheet; the 9 corpus xlsx; the 5 small fixtures | none (predicted 64-72 MiB, tiny counts) | object | object |
+| 16,384 cols | none (97.4 MiB, 0.6 MB XML) | object | object |
+| 31,250 metadata-only rows | none on D; on M 120.0 MiB ≤ 128 and 31,250 rows ≤ 50,000 | object | object |
+| 30k unknown elements with 16 attributes | M: envelope (149.9 > 128) and part size (3.55 MiB > 2 MiB) | object | paged |
+| 80k merges | merges > 20,000 / 10,000 (envelope alone, 207.3, would pass D) | paged | paged |
+| 30k `cellXfs` records | style records > 20,000 / 10,000 (envelope 118.4 would pass both) | paged | paged |
+| One 2 M-character inline string | string > 64 KiB (envelope 186.1 would pass D) | paged | paged |
+| 100k shared strings | unique strings > 50,000 / 25,000; envelope 433.8 | paged | paged |
+| 125k metadata rows (counterexample) | envelope 287.9; rows > 100,000 / 50,000 | paged | paged |
+| 125k rows with 8 attributes; 30k 8-cell rows; 60k cells with 6 attributes; 300k unknown elements; 500k rows | envelope (326-963 MiB); also expanded bytes, cells or rows | paged | paged |
+| `SEQUENCE(200000,1)` dynamic array, 1 cell, uncached | envelope 64.05 + reserve fits, so object **with evaluator caps**; the cap trips, so the session reroutes to paged/cached before publishing (below) | paged (rerouted) | paged (rerouted) |
+
+**Formula evaluation is a separate allocation source (round 3).** The legacy parse ends with `evaluateWorkbookFormulas(doc, {
+fullCalcOnLoad })` (`parse.ts:350`), whose array resource policy defaults to 1,048,576 cells and side
+(`formula/arrays.ts:46-47`, `spills.ts:125-126`). A document's counters say nothing about what the evaluator will generate.
+Measured (`gen-shapes.py dyn|sumseq...`, legacy path, Bun / Node):
+
+| Fixture (one formula cell, under 3 KB of XML, predicted 64.0-64.1 MiB) | Peak RSS delta | Retained heap | Rows after parse | Time |
+|---|---:|---:|---:|---:|
+| Dynamic array `SEQUENCE(200000,1)`, no cached value | **348.9 MB / 241.1 MB** | 146.4 / 201.6 MB | 200,000 | 60 s / 153 s |
+| Same, `SEQUENCE(50000,1)` | 91.2 / 85.7 MB | 41.4 / 50.4 MB | 50,000 | 3.5 / 4.5 s |
+| Same with a cached value | 4.1 / 8.0 MB | 4.2 / 0.5 MB | 1 | 17 ms |
+| `SUM(SEQUENCE(200000,1))`, no cache (transient array, no spill) | 56.4 / 98.4 MB | 32.1 / 47.3 MB | 1 | 35 / 59 ms |
+| Same, cached | 3.7 MB | 4.2 MB | 1 | 15 ms |
+| Same, cached but `ca="1"` | 56.5 MB | 28.1 MB | 1 | 34 ms |
+
+So on file load the engine evaluates formulas that are **uncached, marked `ca`, or forced by `fullCalcOnLoad`**, and those can
+expand without bound in memory and time. The existing `WorkbookEvaluationOptions.maxArrayCells/maxArraySide`
+(`formula/workbook.ts:16-40`, honored by `materialize` and the spill engine) stops it: with the option forced to 16,384 or 4,096 in
+a patched copy of the legacy path outside the repo, `SEQUENCE(200000,1)` and `SUM(SEQUENCE(200000,1))` peaked at **4.5-5.0 MB**
+in 18-20 ms and left `doc.diagnostics[*].feature === 'array-resource-limit'` (`cap-diag.mjs`); `SEQUENCE(10000,1)` spilled normally
+under a 16,384 cap (37.5 MB peak) and tripped under 4,096.
+
+Rule for the object path:
+
+1. **Count load-evaluated formulas** in the verification pass: formula cells without a cached `<v>`, with `ca="1"`, all formula
+   cells when `workbook.xml` sets `fullCalcOnLoad="1"`, and (conservatively) any formula naming a volatile function (`NOW`, `TODAY`,
+   `RAND`, `RANDBETWEEN`, `RANDARRAY`, `OFFSET`, `INDIRECT`, `CELL`, `INFO`). For each, `k = 1 + number of function calls + number of
+   range operators` in its text (formula length is already capped at 8,192 characters by the lexer).
+2. **Cap the evaluator**: the object path calls the evaluator with `maxArrayCells = maxArraySide = A`. This needs `parseXlsx` to
+   accept and forward `WorkbookEvaluationOptions` (an additive change to the shared `parse.ts`, flagged in §4.5).
+3. **Reserve memory for it**: `evaluationReserve = (sum of k over load-evaluated formulas) x A x 2,000 B`. 2,000 B per generated
+   cell covers the measured spill cost (1.8-2.0 KB per spilled cell, `SEQUENCE(50000)` on both engines) and the transient cost
+   (about 0.5 KB per element for `SUM(SEQUENCE)`), with the fixed part already inside the 64 MiB constant.
+4. **Reroute on any resource hit**: if evaluation reports `array-resource-limit` (or any other evaluator resource policy), the
+   document is not published in `engine` mode. The session reroutes to paged mode with the `cached` value policy (spec §4.4) from
+   the retained source, before anything is published. The value policy is still fixed once, at admission; no partially
+   recalculated document is ever shown. Allocation at the moment of the hit is at most `predictedPeak + evaluationReserve`, so
+   the reroute does not follow an oversized allocation.
+
+Values of `A` and the remaining choice:
+
+| Variant | `A` | Aggregate bound | Effect |
+|---|---|---|---|
+| **Interim, no evaluator change** | 2,048 on D and M | the reserve above (sum of k) | 3.9 MiB per array-capable node: with predicted 64-72 MiB, about 47 nodes on D and 14 on M fit; more load-evaluated formulas route to paged/cached (their uncached cells become "unavailable", spec §4.4) |
+| **Recommended, additive evaluator change** | 16,384 D / 4,096 M | a new cumulative `maxMaterializedCells = floor((budget - predictedPeak) / 2,000 B)` counted in `materialize` and the spill engine before allocating; on overflow, evaluation stops with `array-resource-limit` | Sound for any number of formulas (cumulative materialized cells bound live ones); far fewer documents leave the engine policy. Needs an additive change in `src/xlsx/formula/*` beyond S1.3's narrow flag (decision needed, §6) |
+
+The counterexample under either variant: 1 load-evaluated formula with `k = 2` (one call, no range); the total fits (interim
+64.05 + 7.8 = 71.9 MiB on D and M; recommended 64.05 + 62.5 = 126.6 MiB on D, 64.05 + 15.6 = 79.7 MiB on M); evaluation trips
+the cap at 4.8-5.0 MB peak (measured with caps 4,096 and 16,384) and the document is rerouted to paged/cached. In paged mode no evaluator runs, the
+anchor has no cached value and is shown as unavailable, and no 200,000-row expansion happens.
 
 | Guard (all must hold for **paged**, otherwise refuse) | D | M | Basis |
 |---|---:|---:|---|
@@ -727,15 +789,16 @@ Pre-retention guards on the small (object) path, per spec §4.2 ("never build a 
 1. Declared central-directory sums and entry counts are checked before any data is read (declared sizes are untrusted).
 2. A **verification pass** inflates every non-media part once through `openPart` with a 6 MiB (D) / 3 MiB (M) `ExpandedBudget`
    and runs the real tokenizer over it, counting elements, attributes, text characters, rows, cells, unique strings, merges, style
-   records and the longest text run, and maintaining `predictedPeak` incrementally. It checks CRC, exact size and exact end of
-   stream, and **aborts at the first counter that crosses its cap**. Measured cost: the tokenizer runs at 90+ MiB/s, so a
-   cap-sized input takes tens of ms (extrapolated from §3.2).
-3. Only after every counter passes does the legacy parser start (it reads the same parts again through JSZip; sizes are now known
-   to match). Before that decision the only allocations are the compressed buffer (at most the cap), a 64 KiB inflate buffer, the
-   tokenizer carry (at most 1 MiB) and the counters, so **a restart never follows an oversized allocation**: when a counter trips,
-   the session switches to paged mode from the retained source with nothing large to discard, or refuses.
-4. No mid-parse switch is needed, because the pass is exact. The residual risk is the envelope's coefficients themselves
-   (browser heaps unmeasured), which S10 re-measures; a coefficient increase only moves more files to paged mode.
+   records, the longest text run and load-evaluated formulas with their `k`, and maintaining `predictedPeak + evaluationReserve`
+   incrementally. It checks CRC, exact size and exact end of stream, and **aborts at the first counter that crosses its cap**.
+   Measured cost: the tokenizer runs at 90+ MiB/s, so a cap-sized input takes tens of ms (extrapolated from §3.2).
+3. Only after every counter passes does the legacy parser start, with the evaluator capped (`A`, and the aggregate cap if
+   approved). Before that decision the only allocations are the compressed buffer (at most the cap), a 64 KiB inflate buffer,
+   the tokenizer carry (at most 1 MiB) and the counters, so **a restart never follows an oversized allocation**: when a counter
+   trips, the session switches to paged mode from the retained source with nothing large to discard, or refuses.
+4. The only post-parse switch is the evaluator reroute (rule 4 above), and it happens within the reserved budget and before
+   publication. The residual risk is the envelope's coefficients themselves (browser heaps unmeasured), which S10 re-measures; a
+   coefficient increase only moves more files to paged mode.
 
 ### 4.4 `src/xlsx/storage/importSession.ts`
 
@@ -770,20 +833,30 @@ the orchestrator decision). Order of work: inventory, then `workbook.xml`/rels/`
 
 ### 4.5 Entry-point wiring and user-flagged items
 
-`loadOfficeFile(source, options)` and `<OfficeFile>` keep their signatures. **Format detection happens before any spooling**, so
-DOCX, PPTX, ODT, RTF and anything unrecognized keep today's whole-buffer path byte for byte (including its behavior for large
-remote files); only sources detected as spreadsheets enter the bounded path.
+`loadOfficeFile(source, options)` and `<OfficeFile>` keep their signatures. Classification has two levels: a **hint** from the
+first bytes, and an **authoritative** answer from the central directory plus `[Content_Types].xml` (the same data the legacy
+`detectAndParse` already uses). Part names are never a classification, only a hint input to nothing: an
+`xl/printerSettings/...` part can sit inside a DOCX.
 
-1. **Seekable input** (Blob/File, `Uint8Array`/`ArrayBuffer`): read a 64 KiB prefix through the `RangeSource`, run the RTF check,
-   then the ZIP inventory and `[Content_Types].xml` (a bounded part) as today's `detectAndParse` does. Non-spreadsheet: the
-   existing path, unchanged.
+1. **Seekable input** (Blob/File, `Uint8Array`/`ArrayBuffer`): authoritative classification directly (RTF check on the first bytes,
+   then central directory and the bounded `[Content_Types].xml` part). Spreadsheet: admission (§4.3). DOCX/PPTX/ODT/other:
+   today's path, unchanged.
 2. **Sequential input** (`ReadableStream`, `Response`, `Request`, `{url, headers, credentials}`, or a promise of these): start the
    download exactly as `readSource` does today (same fetch, headers, credentials, protection and watermark listeners before the
-   first byte, same progress), hold the first chunks in memory up to a **64 KiB sniff prefix**, and classify it with
-   `sniffPackage(prefix)` (below). Non-spreadsheet or undetermined: continue with today's accumulate-everything path, the prefix
-   prepended, behavior unchanged. Spreadsheet: hand the prefix and the rest of the stream to `spoolSource` (§4.2.1).
+   first byte, same progress), hold up to a **64 KiB prefix**, and compute the hint with `sniffPackage(prefix)`:
+   - **hint DOCX/PPTX/other ZIP, RTF or not-ZIP**: today's accumulate-everything path (prefix prepended), so these formats behave
+     exactly as now. Before any parser runs, the legacy loader's own authoritative check (central directory + content types) is
+     consulted: **if it says spreadsheet, `parseXlsx` is not called**; the in-memory bytes go to admission through
+     `bytesRangeSource` (object, paged or refuse). Download memory for such a disguised spreadsheet is the same as for any DOCX of
+     that size today, but parsing never bypasses admission.
+   - **hint spreadsheet or undetermined** (a ZIP whose first readable entries do not include a complete `[Content_Types].xml` within
+     the prefix): **bounded spool, then authoritative classification** from the spooled source's central directory. Spreadsheet:
+     admission. DOCX/PPTX/other: loaded through the legacy path from the spooled Blob (read into memory, as today). If the spool
+     cannot be created or exceeds its caps (no storage backend over the memory cap, quota, or the paged compressed cap), the load
+     is **refused with a typed error** that says the format could not be determined within the first 64 KiB. There is no
+     automatic fallback to unbounded accumulation for an unresolved ZIP.
 3. **Admission** (§4.3) for spreadsheets: `object` runs the verification pass and then the unchanged `OfficePackage` plus
-   `parseXlsx`; `paged` opens an `ImportSession`; `refuse` releases the spool and rejects with a typed error.
+   `parseXlsx` with evaluator caps; `paged` opens an `ImportSession`; `refuse` releases the spool and rejects with a typed error.
 4. **Result.** The internal entry returns `{ kind: 'document', document } | { kind: 'paged', session }`. Until the interactive
    viewer is wired (later packages), the exported `loadOfficeFile` and `<OfficeFile>` map `paged` and `refuse` to a typed
    rejection that names the applied limit.
@@ -791,25 +864,41 @@ remote files); only sources detected as spreadsheets enter the bounded path.
    spool, the verification pass and the session and releases the `SpooledSource` (§4.2.1 ownership table), in addition to the
    existing `cancelled` flag that already drops stale protection/watermark/progress events and stale results.
 
-`sniffPackage(prefix)` (measured, `sniff.mjs`): walk local file headers from offset 0. If an entry is `[Content_Types].xml`,
-classify by its content types (deflated: inflate inside the prefix with the low-level port, output capped at 64 KiB; stored:
-read to `</Types>` when a data descriptor hides the size). If an earlier entry has a data descriptor and is deflated, inflate it
-inside the prefix to find its exact end (the port reports consumed bytes), skip the descriptor (12 or 16 bytes; a ZIP64 descriptor
-is 24, not yet handled), and continue. A part name under `xl/`, `word/` or `ppt/` also classifies. A stored entry with a data
-descriptor before the content types, or nothing conclusive inside the prefix, is `undetermined`, which keeps the legacy path.
-Results with prefixes of **4 KiB, 16 KiB and 64 KiB** over the 33 real packages available (9 xlsx, 11 docx, 10 pptx from the
-fetched corpus, plus the F2/F3/F4 spreadsheets): **33 of 33 classified correctly, 0 undetermined, 0 wrong** at every prefix size (6 corpus files
-start with `_rels/.rels` under a data descriptor and needed the inflate-to-skip step). The two non-ZIP Word lock files (`~$...`)
-in the corpus were classified `not-zip` and stay on the legacy path. A `Content-Type` response header is only a secondary hint and
-never overrides the sniff.
+`sniffPackage(prefix)` (measured, `sniff.mjs`, `sniff-auth.mjs`): walk local file headers from offset 0 and classify **only** from a
+complete `[Content_Types].xml` inside the prefix (deflated: inflated inside the prefix with the low-level port, output capped at
+64 KiB; stored: read to `</Types>` when a data descriptor hides the size). Earlier entries are skipped by their sizes, or, for a
+deflated entry with a data descriptor, by inflating it inside the prefix to find its exact end and skipping the 12- or 16-byte
+descriptor (a ZIP64 descriptor of 24 bytes is not handled and yields `undetermined`). Hint against authoritative answer, over
+the 30 real corpus packages (9 xlsx, 11 docx, 10 pptx), F2/F3/F4, the 2 Word lock files and two adversarial packages:
+
+| Prefix | hint = authoritative | undetermined (spool, then classify) | hint differs |
+|---|---:|---:|---:|
+| 64 KiB | 35 | 1 (adversarial (a)) | 1 (`poi-crash-...docx`, below) |
+| 4 KiB | 30 | 6 (content types or an earlier entry not complete in 4 KiB) | 1 (same file) |
+
+- Adversarial (a), a valid 125k-row xlsx with a 100,000-character generic OPC part (`docProps/custom.xml`) stored before
+  `[Content_Types].xml`: hint `undetermined`, authoritative `xlsx`. Under the old rule it went to whole-buffer legacy loading and
+  bypassed admission; now it is spooled, classified and admitted (paged: 287.9 MiB predicted).
+- Adversarial (b), a valid DOCX whose first part is `xl/printerSettings/printerSettings1.bin`: the old part-name rule called it
+  xlsx; the content-types-only rule gives hint `docx`, authoritative `docx`, legacy path unchanged.
+- `poi-crash-517626e8...docx` (a fuzzing crash file from the corpus): hint `docx` from its local content types, but this
+  note's strict central-directory reader rejects the archive. It takes the legacy path exactly as today; the post-download check
+  uses the legacy loader's own central-directory view, so what happens to it is unchanged.
+- The 2 Word lock files (`~$...`, not ZIPs) give `not-zip` on both levels and stay on the legacy path.
 
 User-flagged items (each needs explicit user visibility at the PR; none is added silently):
 
 1. New **direct dependency** `pako@1.0.11` (exact pin; license `MIT AND Zlib`), used through internal `lib/zlib/*` modules.
 2. **Behavior change for oversized xlsx**: input that today attempts a (possibly multi-GB) legacy parse will instead fail fast
-   with a typed error until the viewer lands; small inputs are unchanged. Non-spreadsheet formats are **not** affected
-   (format detection precedes spooling); a remote spreadsheet over the memory cap with no storage backend now fails with a
-   typed `storage-error`/`quota` instead of being accumulated in RAM.
+   with a typed error until the viewer lands; small inputs are unchanged. A remote spreadsheet over the memory cap with no
+   storage backend now fails with a typed `storage-error`/`quota` instead of being accumulated in RAM. Non-spreadsheet formats
+   whose prefix hint is DOCX/PPTX/other are **not** affected. A remote ZIP whose type cannot be determined within the first
+   64 KiB is spooled (bounded) and, if that is impossible, **refused** instead of being accumulated (0 of the 30 real corpus
+   packages at 64 KiB; 5 of 30 at 4 KiB, which is why the prefix is 64 KiB).
+7. `parseXlsx` gains an optional, additive evaluation-options argument so the object path can cap the evaluator; with the
+   recommended variant, an additive cumulative `maxMaterializedCells` in `src/xlsx/formula/*` (beyond S1.3's narrow flag).
+8. Formula-bearing small workbooks that exceed the evaluation reserve, or whose evaluation hits the cap, open in `cached` value
+   policy (paged) instead of `engine`: uncached formulas show as unavailable instead of being computed.
 3. Any **new public export or `OfficeFileState` variant**: none is proposed in S1.1 (`ImportProgress`, `PackageError`, spool types
    stay internal). If implementation shows one is required, it is raised first.
 4. `OfficePackage.fromBlob`: **not added**. If the implementer concludes it is necessary, it is an API addition to be flagged
@@ -931,10 +1020,13 @@ Spool and entry points (separately from part parsing, plan S1.1):
 15a. **Ownership**: `finish()` returns a `SpooledSource`; each row of the §4.2.1 ownership table has a test asserting the fake
     env's temp storage is gone after the stated event (download error, cancel, refusal, stale owner, document close after the
     object path, `session.release()` after the paged path) and that `release()` is idempotent.
-15b. **Format detection first**: a remote DOCX and PPTX larger than the memory cap with **no** storage backend load exactly as
-    today (legacy path, no spool created); an xlsx is detected from the first 64 KiB, including packages whose first entry is a
-    deflated `_rels/.rels` with a data descriptor and packages with a stored `[Content_Types].xml` under a data descriptor;
-    undetermined prefixes keep the legacy path.
+15b. **Classification**: a remote DOCX and PPTX larger than the memory cap with **no** storage backend and a DOCX/PPTX hint load
+    exactly as today (legacy path, no spool created); an xlsx hint is produced for packages whose first entry is a deflated
+    `_rels/.rels` with a data descriptor and for a stored `[Content_Types].xml` under a data descriptor; **adversarial (a)** (generic
+    100k part before the content types) is undetermined, spooled and then admitted as a spreadsheet, never loaded through the
+    whole-buffer legacy path; with no storage backend it is refused with the typed "could not determine" error; **adversarial (b)**
+    (DOCX with an `xl/printerSettings` first part) stays on the DOCX path; a **disguised spreadsheet** (prefix content types say
+    DOCX, central directory says spreadsheet) is accumulated like a DOCX but `parseXlsx` is never called without admission.
 16. Backpressure and pause/resume: while `append` is pending the source reader is not read further (assert at most one chunk
     ahead); resuming continues without loss; a fake IndexedDB that auto-commits transactions fails the test if chunks are not
     batched into one transaction.
@@ -943,7 +1035,13 @@ Spool and entry points (separately from part parsing, plan S1.1):
     dropped and cleaned; protection and watermark listeners fire before the first byte and only for the live owner; HTTP
     headers, credentials and `Request` options are forwarded exactly as today (fetch spy); progress throttling unchanged.
 19. Admission (§4.3): boundary tests at each cap minus one, equal and plus one for D and M, including the `predictedPeak`
-    envelope; **the 125,000 metadata-only row counterexample is routed to paged on both profiles** (predicted 287.9 MiB); a small
+    envelope and every secondary cap (the "how the measured shapes fall" table is a table-driven test: 80k merges, 30k style
+    records and a 2 M-character string are paged on D despite passing the envelope); **the 125,000 metadata-only row
+    counterexample is routed to paged on both profiles** (predicted 287.9 MiB); **formula expansion**: the uncached
+    `SEQUENCE(200000,1)` dynamic-array fixture is evaluated with the cap, reports `array-resource-limit`, and the session
+    reroutes to paged/cached before publishing, with the ledger peak within `predictedPeak + evaluationReserve` and no
+    200,000-row object model ever built; a cached copy of the same fixture stays object/engine; formulas over the reserve route
+    to paged before the legacy parser runs (spy); a small
     file with lying declared sizes (1 MB inflating to 1 GiB) is stopped by actual counting; when any counter trips, the legacy
     parser (`OfficePackage.xml`/`parseXlsx` spies) is **not** invoked and the ledger peak stays at or below the object-path cap
     (no restart after an oversized allocation); refusals name the cap, value and part. A browser-heap check of the envelope is
@@ -981,7 +1079,10 @@ owned by S1.1 (see §7). Still open:
 4. **200:1 ratio cap** on parts over 1 MiB: confirm it is acceptable for real spreadsheets with long runs of blank styled cells
    (measured fixtures are 6:1 to 22:1).
 5. **Sniff coverage.** ZIP64 data descriptors (24 bytes) in the sniff walk and stored-with-descriptor entries before the content
-   types are `undetermined` (legacy path). Acceptable for v1?
+   types are `undetermined`, which now means bounded spool then classify, or a typed refusal when no spool is possible.
+   Acceptable for v1?
+7. **Evaluator budget variant.** Approve the additive cumulative `maxMaterializedCells` in `src/xlsx/formula/*` (recommended), or
+   ship the interim rule (`A = 2,048`, per-node reserve), which sends more uncached-formula workbooks to the `cached` policy.
 6. **Real-browser performance** with page encoding and storage included remains an S10 gate.
 
 ## 7. Orchestrator decisions on the open questions (2026-10-11), corrected after two reviews
@@ -999,13 +1100,17 @@ the final PR. "(corrected)" marks entries that replace an earlier version; "(rou
    **external-input decoding policy only**; the internal string representation stays UTF-16 code units and never passes through a
    lossy encoding (spec §4.3.6). UTF-16LE parts: refuse with a typed diagnostic in v1.
 5. **DOCTYPE:** rejected in large mode with a typed diagnostic.
-6. **Object/paged/refuse thresholds (corrected, round 2):** the spec gives no admission numbers, so §4.3 proposes them. The object
-   path is bounded by a measured element/attribute/text envelope counted exactly in the verification pass (bytes are not a
-   bound: the 125k metadata-row counterexample), plus secondary caps; all **proposed, to be frozen in S10**.
+6. **Object/paged/refuse thresholds (corrected, rounds 2 and 3):** the spec gives no admission numbers, so §4.3 proposes them. The
+   object path is bounded by a measured element/attribute/text envelope counted exactly in the verification pass (bytes are not a
+   bound: the 125k metadata-row counterexample), secondary caps applied together, and an **evaluation reserve** for load-evaluated
+   formulas with the evaluator capped; any evaluator resource hit reroutes to paged/`cached` before publication (the
+   `SEQUENCE(200000,1)` counterexample). All **proposed, to be frozen in S10**; the evaluator-change variant is open (§6.7).
 7. **Event consumers** live in `src/xlsx/storage/sheetRecords.ts`; S1.2 defines the `PageSink` payload against `contracts.ts`
    lanes (S1.1 defines the port, §4.4).
-8. **Network spool (corrected, round 2):** S1.1 owns spooling and the entry-point wiring. Format detection runs **before**
-   spooling (64 KiB prefix sniff, §4.5), so non-spreadsheet formats keep today's path unchanged. Spreadsheet spools enforce actual
+8. **Network spool (corrected, rounds 2 and 3):** S1.1 owns spooling and the entry-point wiring. A 64 KiB prefix gives a **hint**
+   from `[Content_Types].xml` only (never part names); DOCX/PPTX hints keep today's path, guarded by the authoritative
+   central-directory check before parsing; spreadsheet and undetermined hints are spooled (bounded) and classified authoritatively,
+   with a typed refusal when no spool is possible (§4.5). Spreadsheet spools enforce actual
    bytes on every append and return a `SpooledSource` with explicit `release()` ownership through success, refusal, cancellation
    and document close (§4.2.1). Backends: memory under a threshold, OPFS where available, IndexedDB fallback, typed failure
    otherwise.
@@ -1031,7 +1136,9 @@ Experiments live outside the repo in `/tmp/iv-s11-spike` (ephemeral), and nothin
 - `exp/inflate-bench.mjs`, `exp/low-bench.mjs`, `exp/bomb.mjs`, `exp/pako-push-max.mjs`, `exp/pako-term.mjs`, `exp/pako-low-test.mjs`,
   `exp/tok-bench.mjs`, `exp/e2e-low.mjs` (and the earlier `e2e-pako.mjs`), `exp/ss-fidelity.mjs`, `exp/parity.mjs`,
   `exp/tok-fuzz.mjs`, `exp/limits.mjs`, `exp/zip64-matrix.mjs`, `exp/cur-probe.mjs`, `exp/current-path.mjs`, `exp/native-term.mjs`,
-  `exp/bufnoprogress.mjs`, `exp/sniff.mjs`, `exp/gen-shapes.py` + `exp/legacy-measure.mjs` (element model; Node run via a
+  `exp/bufnoprogress.mjs`, `exp/sniff.mjs`, `exp/sniff-auth.mjs` + `exp/sniff-adv.py` (hint vs authoritative, adversarial packages),
+  `exp/cap-diag.mjs` + `exp/legacy-measure-capped.mjs` (evaluator caps, run against a patched copy of `src` exported to
+  `/tmp/iv-s11-spike/s11`), `exp/gen-shapes.py` + `exp/legacy-measure.mjs` (element model and formula fixtures; Node run via a
   `bun build --target=node` bundle), `exp/cdp-run.mjs` plus
   `exp/web/bench.html` for the Chrome runs (headless Chrome over CDP, `DOM.setFileInputFiles` so the source is a real file-backed
   `File`; includes the OPFS and IndexedDB spool probes and `nativeTerm()`).
