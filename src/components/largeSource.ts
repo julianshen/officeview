@@ -6,6 +6,7 @@
  */
 import type { OfficePackage } from '../core/zip'
 import { parseXlsx } from '../xlsx/parse'
+import { countFormulaCells, savedValuesStatus } from '../xlsx/view/values'
 import type { XlsxDocument } from '../xlsx/types'
 import { isRtf } from '../rtf/parse'
 import type { ByteStreamReader } from '../core/stream'
@@ -38,12 +39,6 @@ function settledEarly(admission: SpreadsheetAdmission): admission is Extract<Spr
   return admission.mode === 'refuse'
 }
 
-function countFormulas(doc: XlsxDocument): number {
-  let n = 0
-  for (const sheet of doc.sheets) for (const row of sheet.rows) for (const cell of row.cells) if (cell.formula !== undefined || cell.sharedFormula !== undefined) n++
-  return n
-}
-
 /** Engine evaluation with caps; an evaluator resource hit reopens with saved values (decision 2). */
 async function parseWithCaps(pkg: OfficePackage, evaluation: { maxArrayCells: number; maxArraySide: number; maxMaterializedCells: number }, policy: 'engine' | 'cached', formulasNotRecalculated: number | undefined, ctx: Ctx): Promise<XlsxDocument> {
   let doc: XlsxDocument | undefined
@@ -56,8 +51,7 @@ async function parseWithCaps(pkg: OfficePackage, evaluation: { maxArrayCells: nu
   if (doc === undefined) {
     // Saved values only: the allocation is the element envelope already admitted.
     doc = await parseXlsx(pkg, { valuePolicy: 'cached' })
-    const n = formulasNotRecalculated ?? countFormulas(doc)
-    addDiagnostic(doc, NOTICE_CACHED_VALUES, `Showing saved values — ${n} formulas not recalculated (file too large)`)
+    addDiagnostic(doc, NOTICE_CACHED_VALUES, savedValuesStatus('cached', formulasNotRecalculated ?? countFormulaCells(doc))!)
   }
   return doc
 }

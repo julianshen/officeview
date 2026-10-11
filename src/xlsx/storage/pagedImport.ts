@@ -52,6 +52,9 @@ export interface PagedWorkbook {
   readonly diagnostics: WorkerDiagnostic[]
   completeness: Completeness
   failure?: SourceFailure
+  /** Formula records seen so far (cells with formula text or a shared-formula
+   * reference); final once `completeness` is 'complete'. Feeds the saved-values status. */
+  formulaRecords: number
   /** Resolves on every committed page and on completion (adapters wait on it). */
   changed(): Promise<void>
 }
@@ -158,7 +161,7 @@ export async function openImportSession(source: Extract<SourceHandle, { kind: 'b
   let changedPromise = new Promise<void>((resolve) => { notify = resolve })
   const pulse = () => { const fire = notify; changedPromise = new Promise<void>((resolve) => { notify = resolve }); fire() }
   const workbook: PagedWorkbook = {
-    docId: options.docId, store, sheets, diagnostics: [], completeness: 'loading',
+    docId: options.docId, store, sheets, diagnostics: [], completeness: 'loading', formulaRecords: 0,
     changed: () => changedPromise,
   }
   const stamp: SourceStamp = { docId: options.docId, sheetId: sheets[0]?.sheetId ?? '', valueGen: 0 }
@@ -276,6 +279,7 @@ export async function openImportSession(source: Extract<SourceHandle, { kind: 'b
         declared: container,
         onCell(record) {
           builder.add(record.row, record.col, record.kind, record.styleIndex, record.num, record.text, record.cached, record.meta, record.valueIsError)
+          if (record.meta?.formula !== undefined || record.meta?.sharedFormula !== undefined) workbook.formulaRecords++
           if (record.row < r0) r0 = record.row
           if (record.row > r1) r1 = record.row
           if (record.col < c0) c0 = record.col

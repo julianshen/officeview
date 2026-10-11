@@ -26,6 +26,7 @@ import {
   type CellPagePayload, type PageSummary,
 } from '../storage/sourcePages'
 import { addRecord, answerOverview, emptyAggregate, mergeAggregate, type AggregateOutcome } from '../storage/overviewIndex'
+import { isValueUnavailable, SAVED_VALUES_DIAGNOSTIC, SAVED_VALUES_STATUS, valueAuthority, valueStatus } from './values'
 import type { PagedImportSession, PagedSheet, PagedWorkbook } from '../storage/pagedImport'
 
 type RowStatus = { kind: 'ready' } | { kind: 'unknown'; pageId: string } | { kind: 'error'; failure: SourceFailure }
@@ -97,7 +98,7 @@ export class PagedXlsxSheetAdapter implements SourceStore {
   }
   private isUnavailable(p: CellPagePayload, i: number): boolean {
     const meta = p.meta.get(i)
-    return (meta?.formula !== undefined || meta?.sharedFormula !== undefined) && (p.flags[i] & F_CACHED) === 0
+    return isValueUnavailable({ value: null, formula: meta?.formula, sharedFormula: meta?.sharedFormula, hasCachedValue: (p.flags[i] & F_CACHED) !== 0 }, 'cached')
   }
   private async valueOf(p: CellPagePayload, i: number): Promise<string | number | boolean | null> {
     switch (p.kinds[i]) {
@@ -111,11 +112,15 @@ export class PagedXlsxSheetAdapter implements SourceStore {
   }
   private async payload(p: CellPagePayload, i: number): Promise<SingleCellPayload> {
     const row = p.rows[i], col = p.cols[i]
-    const out: SingleCellPayload = {
-      id: cellId(row, col), row, col, value: await this.valueOf(p, i), styleIndex: p.styles[i], valueProvenance: 'cached',
-      hasCachedValue: (p.flags[i] & F_CACHED) !== 0, valueIsError: (p.flags[i] & F_ERROR) !== 0,
-    }
     const meta = p.meta.get(i)
+    const hasCachedValue = (p.flags[i] & F_CACHED) !== 0
+    const authority = valueAuthority({
+      value: await this.valueOf(p, i), hasCachedValue, valueIsError: (p.flags[i] & F_ERROR) !== 0, formula: meta?.formula, sharedFormula: meta?.sharedFormula,
+    }, this.valuePolicy)
+    const out: SingleCellPayload = {
+      id: cellId(row, col), row, col, value: authority.value, styleIndex: p.styles[i], valueProvenance: authority.provenance,
+      hasCachedValue, valueIsError: authority.valueIsError,
+    }
     if (meta) {
       if (meta.formula !== undefined) out.formula = meta.formula
       if (meta.sharedFormula !== undefined) out.sharedFormula = { ...meta.sharedFormula }
@@ -481,6 +486,10 @@ export function createPagedWorkbookSource(session: PagedImportSession): Workbook
   }
   return {
     valuePolicy: 'cached',
+    // The formula count is only final once the import completed; until then
+    // the status carries the spec's count-free wording.
+    valueStatus: () => valueStatus('cached', workbook.completeness === 'complete' ? workbook.formulaRecords : undefined),
+    openDiagnostics: Object.freeze([{ code: SAVED_VALUES_DIAGNOSTIC, message: SAVED_VALUES_STATUS }]),
     sheets: Object.freeze(workbook.sheets.map(s => Object.freeze({ sheetId: s.sheetId, name: s.name }))),
     store: storeFor,
     geometry(sheetId) {
