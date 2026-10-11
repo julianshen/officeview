@@ -9,6 +9,7 @@ import { layoutTextBody, type MeasureText, type TextLayout } from '../drawing/te
 import { resolveColor } from '../core/color'
 import { paintWatermark, type ResolvedWatermark, type WatermarkOptions } from '../core/watermark'
 import { paintScene } from '../drawing/scene-paint'
+import { CSS_PX_PER_INCH, EMU_PER_INCH } from '../core/geometry'
 import { paintDrawingContent } from '../drawing/content-paint'
 import type { ContentPaintAssets } from '../drawing/content'
 import { createTextBodyMeasurer, paintTextBody } from '../drawing/text-paint'
@@ -1073,11 +1074,12 @@ export function renderSheetViewport(
       ctx.stroke()
       for (const paint of paintBorders) paint()
       if (plan.drawings.length) {
-        // Drawing scenes carry worksheet coordinates in their own transforms.
-        ctx.save()
-        ctx.translate(-vx, -vy)
-        paintSheetDrawings(sheet, plan.drawings, ctx, prepared)
-        ctx.restore()
+        // Rebase each top-level placement by the Float64 pane origin (EMU) instead
+        // of translating the canvas by worksheet coordinates: near the last row
+        // a global translation would reach ~2.5e7 px, beyond Float32 transform
+        // precision. Group children are relative to their parent and unchanged.
+        const emuPerPx = EMU_PER_INCH / CSS_PX_PER_INCH, dx = vx * emuPerPx, dy = vy * emuPerPx
+        paintSheetDrawings(sheet, plan.drawings.map(node => ({ ...node, xEmu: node.xEmu - dx, yEmu: node.yEmu - dy })), ctx, prepared)
       }
     }
     // The active cell keeps its exact record even inside a summarized region.

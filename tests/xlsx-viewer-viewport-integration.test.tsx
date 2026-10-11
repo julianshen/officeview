@@ -319,3 +319,48 @@ describe('feature flag and document-owned zoom (S5.2)', () => {
     expect(label()).toBe('100%')
   })
 })
+
+// ---------------------------------------------------------------------------
+// S5.1 seam: drawings are painted tile-local, never under a global translation
+// ---------------------------------------------------------------------------
+import { renderSheetViewport } from '../src/xlsx/render'
+import { buildSheetGeometry } from '../src/xlsx/view/viewport'
+import type { XlsxSheet } from '../src/xlsx/types'
+
+describe('tile-local drawings (S5.1 seam resolved in S5.2)', () => {
+  const source = { partPath: 'd', treePath: 't', element: 'sp', representation: 'native' as const }
+  const sheetWith = (xPx: number, yPx: number) => ({
+    name: 'D', rows: [], cols: [], merges: [], mergeRanges: [],
+    drawings: [{ xEmu: xPx * 9525, yEmu: yPx * 9525, widthEmu: 20 * 9525, heightEmu: 10 * 9525, geometry: 'rect', fill: 'FF0000', source }],
+  }) as unknown as XlsxSheet
+  function paint(sheet: XlsxSheet, box: { x: number; y: number }) {
+    const canvas = document.createElement('canvas')
+    canvas.width = 64
+    canvas.height = 32
+    const real = canvas.getContext('2d')!
+    const offsets: number[] = []
+    const ctx = new Proxy(real, {
+      get(target, key) {
+        if (key === 'translate') return (x: number, y: number) => { offsets.push(Math.abs(x), Math.abs(y)); target.translate(x, y) }
+        const value = Reflect.get(target, key, target)
+        return typeof value === 'function' ? value.bind(target) : value
+      },
+      set(target, key, value) { return Reflect.set(target, key, value, target) },
+    })
+    const geometry = buildSheetGeometry(sheet)
+    const result = renderSheetViewport(sheet, ctx, geometry, { box: { ...box, width: 64, height: 32 }, zoom: 1, deviceScale: 1 })
+    return { result, offsets, pixels: [...real.getImageData(0, 0, 64, 32).data] }
+  }
+  it('a drawing near the last row paints at its tile-local offset with small canvas translations', () => {
+    const far = 20_000_000
+    const near = paint(sheetWith(10, 5), { x: 0, y: 0 })
+    const deep = paint(sheetWith(10, far + 5), { x: 0, y: far })
+    expect(deep.result.kind).toBe('detail')
+    expect(Math.max(...deep.offsets)).toBeLessThan(TILE_DEVICE_PX * 4)
+    // The drawing's interior (gridline overshoot differs at the sheet's top edge).
+    const crop = (pixels: number[]) => pixels.filter((_, index) => { const p = index >> 2, x = p % 64, y = Math.floor(p / 64); return x > 11 && x < 29 && y > 6 && y < 14 })
+    expect(crop(deep.pixels)).toEqual(crop(near.pixels))
+    // Red fill landed inside the pane.
+    expect(deep.pixels.some((value, index) => index % 4 === 0 && value > 200)).toBe(true)
+  })
+})
