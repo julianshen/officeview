@@ -150,3 +150,37 @@ describe('round 2: SVG bounds, shared image budget, stale sheet pixels', () => {
     ui.unmount()
   })
 })
+
+describe('round 3: SVG raster bounds are proven from the real XML root', () => {
+  const enc = (text: string) => new TextEncoder().encode(text)
+  const NS = 'xmlns="http://www.w3.org/2000/svg"'
+  it('skips comments, PIs and doctype; withdraws CSS- or context-dependent sizes', async () => {
+    const { svgIntrinsicSize } = await import('../src/components/xlsx/sheetAssets')
+    // A commented-out root must not decide the size.
+    expect(svgIntrinsicSize(enc(`<!-- <svg width="1" height="1"> --><svg ${NS} viewBox="0 0 640 360"/>`))).toBeNull()
+    expect(svgIntrinsicSize(enc(`<!-- <svg width="1" height="1"> --><svg ${NS} width="20000" height="20000"/>`))).toEqual({ width: 20_000, height: 20_000 })
+    // CSS can resize the root: style attribute, <style> element, xml-stylesheet PI.
+    expect(svgIntrinsicSize(enc(`<svg ${NS} width="1" height="1" style="width:640px;height:360px"/>`))).toBeNull()
+    expect(svgIntrinsicSize(enc(`<svg ${NS} width="1" height="1"><style>svg{width:640px;height:360px}</style></svg>`))).toBeNull()
+    expect(svgIntrinsicSize(enc(`<?xml-stylesheet href="s.css"?><svg ${NS} width="1" height="1"/>`))).toBeNull()
+    // Relative or missing dimensions depend on the decoder's context.
+    expect(svgIntrinsicSize(enc(`<svg ${NS} width="100%" height="50%" viewBox="0 0 10 10"/>`))).toBeNull()
+    expect(svgIntrinsicSize(enc(`<svg ${NS} width="10em" height="10em"/>`))).toBeNull()
+    expect(svgIntrinsicSize(enc(`<svg ${NS}/>`))).toBeNull()
+    // Declarations and a doctype (with an internal subset) are skipped.
+    expect(svgIntrinsicSize(enc(`<?xml version="1.0"?><!DOCTYPE svg [ <!ENTITY e "<svg width='1' height='1'>"> ]><!-- c --><svg ${NS} width="100" height="80"/>`))).toEqual({ width: 100, height: 80 })
+    expect(svgIntrinsicSize(enc(`<svg ${NS} width="1in" height="72pt"/>`))).toEqual({ width: 96, height: 96 })
+  })
+
+  it('a disguised oversized root never reaches the decoder', async () => {
+    const decode = vi.fn(async () => ({}) as CanvasImageSource)
+    const doc = {
+      sheets: [{ name: 'A', rows: [], cols: [], merges: [], mergeRanges: [], drawings: [picture(0)] }],
+      images: [{ data: enc(`<!-- <svg width="1" height="1"> --><svg ${NS} width="20000" height="20000"/>`), mime: 'image/svg+xml' }],
+    } as unknown as XlsxDocument
+    const lease = await prepareSheetAssets(doc, { decodeImage: decode, profile: 'D' })
+    expect(decode).not.toHaveBeenCalled()
+    expect(lease.refusedImages).toBe(1)
+    lease.dispose()
+  })
+})

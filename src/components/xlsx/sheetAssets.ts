@@ -103,32 +103,73 @@ function imageIndexes(nodes: readonly XlsxDrawing[], out = new Set<number>()): S
 }
 
 const UNIT_PX: Record<string, number> = { '': 1, px: 1, pt: 4 / 3, pc: 16, in: 96, cm: 96 / 2.54, mm: 96 / 25.4 }
-/** Intrinsic raster size of an SVG document (CSS px), or null when it cannot be
- * proven from the root element (compressed, relative units without a viewBox). */
-export function svgIntrinsicSize(bytes: Uint8Array): { width: number; height: number } | null {
-  const text = new TextDecoder().decode(bytes.subarray(0, IMAGE_PROBE_BYTES))
-  const root = /<svg\b[^>]*>/i.exec(text)?.[0]
-  if (!root) return null
-  const attr = (name: string) => new RegExp(`\\s${name}\\s*=\\s*["']([^"']*)["']`, 'i').exec(root)?.[1]
-  const length = (value: string | undefined): number | null | undefined => {
-    if (value === undefined) return undefined
-    const match = /^\s*([0-9]*\.?[0-9]+(?:e[+-]?\d+)?)\s*(px|pt|pc|in|cm|mm)?\s*$/i.exec(value)
-    if (!match) return null // %, em, ...: relative to a context the decoder supplies
-    return Number(match[1]) * UNIT_PX[(match[2] ?? '').toLowerCase()]
+/** Index just past the doctype starting at `at` (internal subset and quotes honoured), or -1. */
+function skipDoctype(text: string, at: number): number {
+  let depth = 0, quote = ''
+  for (let i = at; i < text.length; i++) {
+    const c = text[i]
+    if (quote) { if (c === quote) quote = ''; continue }
+    if (c === '"' || c === "'") quote = c
+    else if (c === '[') depth++
+    else if (c === ']') depth--
+    else if (c === '>' && depth <= 0) return i + 1
   }
-  const box = attr('viewBox')?.trim().split(/[\s,]+/).map(Number)
-  const view = box && box.length === 4 && box.every(Number.isFinite) && box[2] > 0 && box[3] > 0 ? { width: box[2], height: box[3] } : null
-  const w = length(attr('width')), h = length(attr('height'))
-  // A relative length (%, em) has no intrinsic value without a viewBox.
-  if ((w === null || h === null) && !view) return null
-  let width = typeof w === 'number' ? w : w === null ? view!.width : undefined
-  let height = typeof h === 'number' ? h : h === null ? view!.height : undefined
-  // Browsers size an <svg> without width/height at 300x150 (or by its viewBox ratio).
-  if (width === undefined && height === undefined) { width = 300; height = view ? 300 * view.height / view.width : 150 }
-  else if (width === undefined) width = view ? height! * view.width / view.height : 300
-  else if (height === undefined) height = view ? width * view.height / view.width : 150
-  if (!(width! > 0) || !(height! > 0) || !Number.isFinite(width!) || !Number.isFinite(height!)) return null
-  return { width: Math.ceil(width!), height: Math.ceil(height!) }
+  return -1
+}
+/**
+ * Intrinsic raster size of an SVG document (CSS px), or null when it cannot be
+ * proven. The real root element is found by skipping the XML declaration,
+ * processing instructions, comments and a doctype (never a regex over markup
+ * that may sit inside them). The size must come from absolute `width` and
+ * `height` attributes on that root; anything CSS or the decoder's context can
+ * change withdraws the proof: a `style` attribute, any `<style>` element or
+ * `xml-stylesheet` instruction, relative units (%, em, ...), missing dimensions,
+ * entities, a prefixed root or compressed bytes.
+ */
+export function svgIntrinsicSize(bytes: Uint8Array): { width: number; height: number } | null {
+  let text: string
+  try { text = new TextDecoder('utf-8', { fatal: true }).decode(bytes) } catch { return null }
+  let i = text.charCodeAt(0) === 0xfeff ? 1 : 0
+  for (;;) {
+    while (i < text.length && /\s/.test(text[i])) i++
+    if (text.startsWith('<?', i)) {
+      const end = text.indexOf('?>', i + 2)
+      if (end < 0 || /^<\?xml-stylesheet\b/i.test(text.slice(i, end))) return null
+      i = end + 2
+    } else if (text.startsWith('<!--', i)) {
+      const end = text.indexOf('-->', i + 4)
+      if (end < 0) return null
+      i = end + 3
+    } else if (/^<!DOCTYPE\b/i.test(text.slice(i, i + 10))) {
+      i = skipDoctype(text, i)
+      if (i < 0) return null
+    } else break
+  }
+  const name = /^<([A-Za-z_][\w.:-]*)/.exec(text.slice(i, i + 64))
+  if (!name || name[1] !== 'svg') return null
+  // Root attributes, quote-aware, up to the end of the start tag.
+  const attrs = new Map<string, string>()
+  const pattern = /\s+([^\s=/>]+)\s*=\s*(?:"([^"]*)"|'([^']*)')/y
+  let at = i + name[0].length
+  for (;;) {
+    pattern.lastIndex = at
+    const match = pattern.exec(text)
+    if (!match) break
+    attrs.set(match[1].toLowerCase(), match[2] ?? match[3])
+    at = pattern.lastIndex
+  }
+  if (!/^\s*\/?>/.test(text.slice(at, at + 8))) return null
+  if (attrs.has('style')) return null
+  const rest = text.slice(at)
+  if (/<(?:[\w.-]+:)?style[\s>/]/i.test(rest) || /<\?xml-stylesheet\b/i.test(rest)) return null
+  const length = (value: string | undefined): number | null => {
+    if (value === undefined) return null
+    const match = /^\s*([0-9]*\.?[0-9]+(?:e[+-]?\d+)?)\s*(px|pt|pc|in|cm|mm)?\s*$/i.exec(value)
+    return match ? Number(match[1]) * UNIT_PX[(match[2] ?? '').toLowerCase()] : null
+  }
+  const width = length(attrs.get('width')), height = length(attrs.get('height'))
+  if (width === null || height === null || !(width > 0) || !(height > 0) || !Number.isFinite(width) || !Number.isFinite(height)) return null
+  return { width: Math.ceil(width), height: Math.ceil(height) }
 }
 
 function fits(width: number, height: number, limits: ImageLimits): number | null {
