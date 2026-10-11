@@ -212,7 +212,7 @@ describe('codex round-2 findings', () => {
     expect(sort.conditions).toMatchObject([{ sortBy: 'value', descending: true }])
   })
 
-  it('F1 direct sortState wins over nested with a duplicate flag', async () => {
+  it('F1 direct sortState wins over nested; both placements are valid so neither is malformed', async () => {
     const doc = await parseFiles(sheetFiles(sheetWrap(
       `<autoFilter ref="A1:C3"><sortState ref="A1:C3"><sortCondition ref="B1:B3"/></sortState></autoFilter><sortState ref="A1:C3"><sortCondition ref="A1:A3"/></sortState>`,
     )))
@@ -220,7 +220,9 @@ describe('codex round-2 findings', () => {
     expect(sort.placement).toBe('direct')
     expect(sort.conditions).toHaveLength(1)
     expect(sort.conditions[0].refVerbatim).toBe('A1:A3')
-    expect(sort.malformed).toBe('duplicate-sortState')
+    expect(sort.malformed).toBeUndefined()
+    expect(sort.flags).toBeUndefined()
+    expect(sort.omittedSortStates).toBe(1)
   })
 
   it('F2 retains sort-only tables in diagnostics', async () => {
@@ -367,16 +369,27 @@ describe('claude round-2 findings', () => {
     expect(summary).toContain('and 59 more table declarations')
   })
 
-  it('1A bounds retained column and condition records per document', async () => {
-    const ids = Array.from({ length: 9 }, (_, i) => i + 1)
+  it('1A bounds retained diagnostics per document by serialized size', async () => {
+    const ids = [1, 2, 3, 4]
     const tables: Record<string, string> = {}
     for (const i of ids) tables[`xl/tables/table${i}.xml`] = tableXml(i, `<autoFilter ref="A1:AMJ3">${cols(1024)}</autoFilter>`)
     const doc = await parseFiles(withTables(ids.map(i => `<tablePart r:id="rIdT${i}"/>`).join(''), relsFor(ids), tables))
     const entry = doc.declaredFilters![0]
-    const retained = entry.tableAutoFilters.reduce((sum, t) => sum + t.autoFilter!.columns.length, 0)
-    const omitted = entry.tableAutoFilters.reduce((sum, t) => sum + (t.autoFilter!.omittedColumns ?? 0), 0)
-    expect(retained).toBe(8192)
-    expect(retained + omitted).toBe(9 * 1024)
+    const retained = entry.tableAutoFilters.reduce((sum, t) => sum + (t.autoFilter?.columns.length ?? 0), 0)
+    const omitted = entry.tableAutoFilters.reduce((sum, t) => sum + (t.autoFilter?.omittedColumns ?? 0), 0)
+    expect(retained).toBeLessThan(4 * 1024)
+    expect(retained + omitted + (entry.omittedTables ?? 0) * 1024).toBe(4 * 1024)
+    expect(JSON.stringify(entry).length).toBeLessThan(270 * 1024)
+  })
+
+  it('1A charges long retained text against the document budget', async () => {
+    const longVal = 'v'.repeat(300)
+    const custom = `<customFilters>${Array.from({ length: 8 }, () => `<customFilter operator="${'o'.repeat(300)}" val="${longVal}"/>`).join('')}</customFilters>`
+    const wide = Array.from({ length: 1024 }, (_, i) => `<filterColumn colId="${i}">${custom}</filterColumn>`).join('')
+    const doc = await parseFiles(sheetFiles(sheetWrap(`<autoFilter ref="A1:AMJ3">${wide}</autoFilter>`)))
+    const auto = doc.declaredFilters![0].worksheetAutoFilter!
+    expect(auto.columns.length + (auto.omittedColumns ?? 0)).toBe(1024)
+    expect(JSON.stringify(doc.declaredFilters).length).toBeLessThan(270 * 1024)
   })
 
   it('1B truncates retained text with a flag and bounds the summary', async () => {
@@ -488,5 +501,37 @@ describe('claude round-2 findings', () => {
     const summary = summarizeDeclaredFiltering(doc.declaredFilters![0])
     expect(summary).toContain('(1 filtered column: Top 10)')
     expect(summary).not.toContain('unfiltered')
+  })
+})
+
+describe('pi round-3 findings', () => {
+  it('2 guard: customList is a sortCondition attribute per ISO/IEC 29500-1 CT_SortCondition', async () => {
+    // CT_SortCondition is a leaf element; customList is an optional ST_Xstring
+    // attribute (descending, sortBy, ref, customList, dxfId, iconSet, iconId).
+    const doc = await parseFiles(sheetFiles(sheetWrap(
+      `<sortState ref="A1:A3"><sortCondition ref="A1:A3" descending="1" customList="Low,Medium,High"/></sortState>`,
+    )))
+    expect(doc.declaredFilters![0].worksheetSortState!.conditions[0]).toMatchObject({ customListCount: 3, descending: true })
+  })
+
+  it('NIT1 flags only true repeats within one placement', async () => {
+    const doc = await parseFiles(sheetFiles(sheetWrap(
+      `<autoFilter ref="A1:C3"><sortState ref="A1:C3"><sortCondition ref="B1:B3"/></sortState><sortState ref="A1:C3"><sortCondition ref="C1:C3"/></sortState></autoFilter>`,
+    )))
+    const sort = doc.declaredFilters![0].worksheetSortState!
+    expect(sort.placement).toBe('nested')
+    expect(sort.flags).toEqual(['duplicate-sortState'])
+    expect(sort.omittedSortStates).toBeUndefined()
+  })
+
+  it('NIT4 flags an empty or unknown sortBy instead of repairing it', async () => {
+    const doc = await parseFiles(sheetFiles(sheetWrap(
+      `<sortState ref="A1:B3"><sortCondition ref="A1:A3" sortBy=""/><sortCondition ref="B1:B3" sortBy="strokeCount"/><sortCondition ref="A1:A3"/></sortState>`,
+    )))
+    const conditions = doc.declaredFilters![0].worksheetSortState!.conditions
+    expect(conditions[0]).toMatchObject({ sortBy: 'unknown', sortByVerbatim: '', malformed: 'invalid-sortBy' })
+    expect(conditions[1]).toMatchObject({ sortBy: 'unknown', sortByVerbatim: 'strokeCount', malformed: 'invalid-sortBy' })
+    expect(conditions[2].sortBy).toBe('value')
+    expect(conditions[2].malformed).toBeUndefined()
   })
 })
