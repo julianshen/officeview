@@ -222,6 +222,25 @@ describe('selection boundary regressions', () => {
     expect(shifted.contains({ row: 2999 * 3 + 2, col: 2999 * 5 })).toBe(true)
     expect(shifted.contains({ row: 2999 * 3 + 2, col: 2999 * 5 + 1 })).toBe(false)
   }, 120000)
+  it('bounds Ctrl toggle work: disjoint toggles reuse untouched parts instead of re-normalizing', () => {
+    const p = fixtureProjection([0, 1, 2, 3])
+    let state = emptyGridSelection()
+    const started = performance.now()
+    for (let i = 0; i < 4000; i++) state = selectCell(state, p, { row: i * 3, col: i * 4 }, { toggle: true })
+    const elapsed = performance.now() - started
+    expect(state.ranges).toHaveLength(4000)
+    const before = new Set<object>(state.ranges)
+    const next = selectCell(state, p, { row: 1, col: 1 }, { toggle: true })
+    expect(next.ranges).toHaveLength(4001)
+    expect(next.ranges.filter(part => before.has(part))).toHaveLength(4000)
+    // A merge touches only the parts sharing rows/columns with the target.
+    const merged = selectCell(next, p, { row: 1, col: 2 }, { toggle: true })
+    expect(merged.ranges).toHaveLength(4001)
+    expect(merged.ranges.filter(part => before.has(part))).toHaveLength(4000)
+    expect(new SourceSelection(merged.ranges).contains({ row: 1, col: 2 })).toBe(true)
+    // Generous wall-clock guard; quadratic re-normalization took several seconds.
+    expect(elapsed).toBeLessThan(3500)
+  }, 60000)
   it('charges the stored gesture prefix overlap against the per-selection byte bound', () => {
     const p = fixtureProjection([0, 1, 2, 3])
     // Nine distinct ~128 KiB row masks hidden under one Shift part: ranges shrink

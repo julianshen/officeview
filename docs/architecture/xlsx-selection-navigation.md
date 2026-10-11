@@ -27,7 +27,10 @@ The optional `GridSelection.gesture` stores mode, source anchor, the applied
 gesture `part` and only the prefix cells hidden under that part as plain
 serializable data. The full Ctrl prefix is `ranges \ part` plus that overlap,
 so thousands of Ctrl-clicks store an empty prefix rather than a second copy of
-`ranges`. Gestures without `part` carry a full legacy prefix and remain
+`ranges`. A Ctrl toggle disjoint from a module-normalized selection reuses
+every untouched part and merges only along identical rows/columns; per-toggle
+work is linear scans plus the frozen array copy, not a full re-normalization.
+Gestures without `part` carry a full legacy prefix and remain
 readable. Spread, structuredClone and worker commit/deltas retain
 it. Legacy selections without gesture metadata remain valid: Shift derives
 their prefix by subtracting only the anchor..active span (the active cell after
