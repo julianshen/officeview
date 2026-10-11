@@ -63,7 +63,7 @@ export interface SheetTileStats {
   /** Largest record count any single tile has built (§11.1 per-tile cap). */
   maxTileRecords: number
 }
-const TILE_BYTES = TILE_DEVICE_PX * TILE_DEVICE_PX * RGBA_BYTES
+export const TILE_BYTES = TILE_DEVICE_PX * TILE_DEVICE_PX * RGBA_BYTES
 
 /** Device scales tried, highest first, when the native DPR does not fit (§12.4). */
 const DEVICE_SCALE_STEPS = [3, 2.5, 2, 1.5, 1.25, 1, 0.75, 0.5]
@@ -74,11 +74,13 @@ export function paneSurfaceBytes(viewport: { width: number; height: number }, dp
 /**
  * Admission BEFORE any backing store is sized (§12.4): the largest device scale
  * not above `dpr` whose two pane surfaces, base tiles with a one-tile ring and
- * one in-flight replacement row/column fit the profile's bitmap budget; null when
+ * one in-flight replacement row/column fit the profile's bitmap budget (less any
+ * `reservedBytes` already held); null when
  * none fits (the caller shows a resource outcome instead of allocating).
  */
-export function admitDeviceScale(viewport: { width: number; height: number }, dpr: number, profile: ProfileId): number | null {
-  const budget = BITMAP_BUDGETS[profile]
+export function admitDeviceScale(viewport: { width: number; height: number }, dpr: number, profile: ProfileId, reservedBytes = 0): number | null {
+  // `reservedBytes`: other live bitmap stores of the viewer (print units).
+  const budget = BITMAP_BUDGETS[profile] - reservedBytes
   for (const scale of [dpr, ...DEVICE_SCALE_STEPS.filter(step => step < dpr)]) {
     let plan
     try { plan = bitmapPoolPlan({ cssWidth: viewport.width, cssHeight: viewport.height, dpr: scale }) } catch { continue }

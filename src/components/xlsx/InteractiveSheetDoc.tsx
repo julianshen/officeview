@@ -44,14 +44,14 @@ import { BITMAP_BUDGETS, type TileCacheStats } from '../../xlsx/view/tileCache'
 import { gridGeometryToViewport, gridSelectionOverlay, paintGridSelectionOverlay, paintSearchOverlay, type HighlightRect } from '../../core/overlay'
 import { normalizeWatermark, type WatermarkOptions } from '../../core/watermark'
 import type { FallbackFontsOptions } from '../../core/fonts/fallback'
-import { SheetImageCache, imageBudgetFor, prepareSheetAssets, type SheetAssetsLease } from './sheetAssets'
-import { getPaintables, type Paintable, type PaintableArray } from '../../render/paint'
+import { SheetImageCache, imageBudgetFor, preparePrintUnits, prepareSheetAssets, type PrintUnitsOptions, type SheetAssetsLease } from './sheetAssets'
+import type { Paintable, PaintableArray } from '../../render/paint'
 import { GridSemantics, type GridTransition } from './GridSemantics'
 import { GRID_HEADER_SIZE } from './GridHeaders'
 import { coarseSelectionRecords, overlayRecords, selectionContains } from './selectionOverlay'
 import { SheetNavigator } from './SheetNavigator'
 import type { HiddenCellInspection } from './ViewerStatus'
-import { SheetTileRenderer, admitDeviceScale, paneSurfaceBytes, type SheetFrame } from './sheetTiles'
+import { SheetTileRenderer, TILE_BYTES, admitDeviceScale, paneSurfaceBytes, type SheetFrame } from './sheetTiles'
 import { SearchBar, ZoomControls } from '../viewerControls'
 
 /** A committed sheet view (the S9.1 sort/filter commit seam). `revision` must
@@ -107,7 +107,7 @@ export interface InteractiveSheetDocProps {
   /** @internal Asset lease factory (tests inject delayed leases). */
   assetLoader?: typeof prepareSheetAssets
   /** @internal Static print unit factory (tests inject delayed units). */
-  printLoader?: typeof getPaintables
+  printLoader?: (doc: XlsxDocument, options: PrintUnitsOptions) => Promise<PaintableArray>
 }
 
 // Document identity alone owns zoom reset (§10.1): a stable id per document object.
@@ -256,7 +256,9 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
   const nativeDpr = Math.min(typeof window !== 'undefined' ? window.devicePixelRatio || 1 : 1, 3)
   // Admit the pane surfaces before sizing any canvas; a lower device scale keeps
   // the pane within the bitmap budget, and nothing fits → a visible resource outcome.
-  const admittedDpr = admitDeviceScale(viewport, nativeDpr, profile)
+  // Live print stores (while a print is prepared/open) are reserved beside the panes.
+  const [printReserved, setPrintReserved] = useState(0)
+  const admittedDpr = admitDeviceScale(viewport, nativeDpr, profile, printReserved)
   const dpr = admittedDpr ?? nativeDpr
   const resourceNotice = admittedDpr === null ? 'This view is too large for the display memory budget. Make the viewer smaller.'
     : admittedDpr < nativeDpr ? 'Display resolution reduced to fit the memory budget.' : ''
@@ -289,7 +291,9 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
   const overlayRef = useRef<HTMLCanvasElement | null>(null)
   const scrollerRef = useRef<HTMLDivElement | null>(null)
   const device = { width: Math.ceil(viewport.width * dpr), height: Math.ceil(viewport.height * dpr) }
-  const surfaceBytes = paneSurfaceBytes(viewport, dpr)
+  const surfaceBytes = paneSurfaceBytes(viewport, dpr) + printReserved
+  const latestGeometry = useRef({ viewport, dpr })
+  latestGeometry.current = { viewport, dpr }
   const rendererRef = useRef<SheetTileRenderer | null>(null)
   // Created lazily in effects: an unmount (or StrictMode's dev re-mount) disposes
   // it, and the next effect run starts a fresh pool instead of a closed one.
@@ -657,21 +661,30 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
   const printToken = useRef(0)
   const allowPrintRef = useRef(allowPrint)
   allowPrintRef.current = allowPrint
-  const releasePrint = () => { setPrintPages(null); printLease.current?.dispose(); printLease.current = null }
+  const releasePrint = () => { setPrintPages(null); setPrintReserved(0); printLease.current?.dispose(); printLease.current = null }
   const preparePrint = async () => {
     const token = ++printToken.current
-    const pages = await (props.printLoader ?? getPaintables)(doc, { ...(markKey ? { watermark } : {}), ...(fontKey ? { fallbackFonts } : {}) })
+    const loader = props.printLoader ?? preparePrintUnits
+    const pages = await loader(doc, {
+      ...(markKey ? { watermark } : {}), ...(fontKey ? { fallbackFonts } : {}), profile, imageCache: imageCacheFor(), assetLoader: loadAssets,
+    })
     if (token !== printToken.current || !allowPrintRef.current) { pages.dispose(); return }
+    // Admission against the CURRENT pane geometry (a resize may have landed during
+    // the await): print stores + pane surfaces + the pool's minimum tiles <= budget.
     rendererRef.current?.cache.invalidate(() => true)
-    let remaining = BITMAP_BUDGETS[profile] - paneSurfaceBytes(viewport, dpr)
+    const { viewport: current, dpr: scale } = latestGeometry.current
+    let remaining = BITMAP_BUDGETS[profile] - paneSurfaceBytes(current, scale) - 2 * TILE_BYTES
+    let reserved = 0
     const units = pages.map((page, index) => {
       const bytes = page.spec.widthPx * page.spec.heightPx * 4
       const admitted = bytes <= remaining
-      if (admitted) remaining -= bytes
+      if (admitted) { remaining -= bytes; reserved += bytes }
       return { name: doc.sheets[index]?.name ?? `Sheet ${index + 1}`, page: admitted ? page : null }
     })
     printLease.current?.dispose()
     printLease.current = pages
+    // Reserve before the stores exist: the pool and pane admission shrink first.
+    setPrintReserved(reserved)
     setPrintPages(units)
   }
   const printRefs = useRef<Array<HTMLCanvasElement | null>>([])

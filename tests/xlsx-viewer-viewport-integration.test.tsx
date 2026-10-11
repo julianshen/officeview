@@ -787,6 +787,78 @@ describe('live bitmap bytes stay admitted (S5.2 review round 3)', () => {
     return () => { Object.defineProperty(Element.prototype, 'clientWidth', cw); Object.defineProperty(Element.prototype, 'clientHeight', ch) }
   }
 
+  it('print decodes pictures only through the shared image admission', async () => {
+    const png = (salt: number) => {
+      const bytes = new Uint8Array(64)
+      bytes.set([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 13, 0x49, 0x48, 0x44, 0x52])
+      new DataView(bytes.buffer).setUint32(16, 4096)
+      new DataView(bytes.buffer).setUint32(20, 4096)
+      bytes.set([8, 6, 0, 0, 0], 24)
+      bytes[40] = salt
+      return bytes
+    }
+    const doc = await workbook([{ name: 'S1', rows: [{ r: 1, cells: [{ ref: 'A1', v: 'one' }] }] }, { name: 'S2', rows: [{ r: 1, cells: [{ ref: 'A1', v: 'two' }] }] }])
+    const source = { partPath: 'd', treePath: 't', element: 'pic', representation: 'native' as const }
+    const pic = (imageIndex: number) => ({ xEmu: 0, yEmu: 0, widthEmu: 95250, heightEmu: 95250, geometry: 'rect', imageIndex, source })
+    doc.images = Array.from({ length: 10 }, (_, i) => ({ data: png(i), mime: 'image/png' }))
+    ;(doc.sheets[0] as { drawings?: unknown[] }).drawings = [0, 1, 2, 3, 4].map(pic)
+    ;(doc.sheets[1] as { drawings?: unknown[] }).drawings = [5, 6, 7, 8, 9].map(pic)
+    // Every default decode (viewport, print or any other path) goes through here.
+    const decode = vi.fn(async () => { const c = document.createElement('canvas'); c.width = 1; c.height = 1; return c as unknown as ImageBitmap })
+    const g = globalThis as { createImageBitmap?: unknown }
+    const originalBitmap = g.createImageBitmap
+    g.createImageBitmap = decode
+    const print = vi.fn()
+    const original = window.print
+    window.print = print
+    try {
+      const { ui } = await mountSheet(doc)
+      act(() => { fireEvent.keyDown(ui.getByRole('region', { name: 'Spreadsheet viewer' }), { key: 'p', ctrlKey: true }) })
+      await waitFor(() => expect(print).toHaveBeenCalledTimes(1))
+      // 4096² pictures cost 64 MiB (+ transient) each against one 128 MiB budget.
+      expect(decode.mock.calls.length).toBeLessThanOrEqual(2)
+      act(() => { window.dispatchEvent(new Event('afterprint')) })
+    } finally { window.print = original; g.createImageBitmap = originalBitmap }
+  })
+
+  it('a resize while print units prepare is admitted against the current panes', async () => {
+    const { BITMAP_BUDGETS } = await import('../src/xlsx/view/tileCache')
+    const { columnToLetters } = await import('../src/xlsx/view/coordinates')
+    const { preparePrintUnits } = await import('../src/components/xlsx/sheetAssets')
+    const tall = (name: string) => ({ name, rows: [{ r: 800, cells: [{ ref: `${columnToLetters(15)}800`, v: name }] }] })
+    const size = { width: 644, height: 444 }
+    const restorePane = stubPane(size)
+    const tracker = trackCanvases()
+    let resume: (() => void) | undefined
+    const printLoader: typeof preparePrintUnits = async (d, options) => {
+      await new Promise<void>(done => { resume = done })
+      return preparePrintUnits(d, options)
+    }
+    const print = vi.fn()
+    const original = window.print
+    window.print = print
+    try {
+      const doc = await workbook([tall('S1'), tall('S2'), tall('S3')])
+      const ui = render(<InteractiveSheetDoc doc={doc} printLoader={printLoader} />)
+      await waitFor(() => expect((ui.getByTestId('officeview-sheet-base') as HTMLCanvasElement).width).toBeGreaterThan(0))
+      await settle()
+      act(() => { fireEvent.keyDown(ui.getByRole('region', { name: 'Spreadsheet viewer' }), { key: 'p', ctrlKey: true }) })
+      size.width = 3044; size.height = 2044
+      act(() => { window.dispatchEvent(new Event('resize')) })
+      await settle()
+      await act(async () => { resume?.(); await new Promise(done => setTimeout(done, 20)) })
+      await waitFor(() => expect(print).toHaveBeenCalledTimes(1))
+      await settle()
+      expect(tracker.state.peak).toBeLessThanOrEqual(BITMAP_BUDGETS.D)
+      // Scrolling while the print is open still respects the reservation.
+      const el = scroller(ui)
+      for (let step = 1; step <= 6; step++) { act(() => { el.scrollTop = step * 3000; fireEvent.scroll(el) }); await settle() }
+      expect(tracker.state.peak).toBeLessThanOrEqual(BITMAP_BUDGETS.D)
+      act(() => { window.dispatchEvent(new Event('afterprint')) })
+      ui.unmount()
+    } finally { window.print = original; tracker.restore(); restorePane() }
+  }, 60_000)
+
   it('a resize while the next sheet is loading admits retained tiles and pane surfaces together (no instrumentation)', async () => {
     const { BITMAP_BUDGETS } = await import('../src/xlsx/view/tileCache')
     const { prepareSheetAssets } = await import('../src/components/xlsx/sheetAssets')

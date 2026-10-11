@@ -23,7 +23,8 @@ import { withFallbackFonts } from '../../core/fonts/fallback'
 import type { FontDiagnostic } from '../../core/fonts/types'
 import { releaseDecodedImage, type ImageCandidates, type ImageDecodeFn } from '../../core/images'
 import { looksLikeSvg } from '../../core/svg'
-import { collectCachedPictures, decodeImageAssets, type PaintOptions } from '../../render/paint'
+import { collectCachedPictures, decodeImageAssets, sheetPaintable, type Paintable, type PaintableArray, type PaintOptions } from '../../render/paint'
+import { normalizeWatermark, type WatermarkOptions } from '../../core/watermark'
 import { IMAGE_PROBE_BYTES, imageLimitsFor, probeImageHeader, type ImageLimits } from '../../xlsx/storage/imageAdmission'
 
 /** The aggregate image budget of one viewer: two pictures at the per-image cap. */
@@ -235,4 +236,31 @@ export function prepareSheetAssets(doc: XlsxDocument, options: SheetAssetsOption
       }
     } catch (error) { releaseHeld(); lease.dispose(); throw error }
   })
+}
+
+export interface PrintUnitsOptions extends SheetAssetsOptions {
+  /** Lease factory; the viewer passes its own so print shares its image budget. */
+  assetLoader?: typeof prepareSheetAssets
+}
+/**
+ * Static print units for every sheet through the S2.3 budgeted path, with each
+ * sheet's pictures leased through the same admission and shared image budget
+ * as the viewport (never the unrestricted workbook-wide decode). Sheets are
+ * leased one at a time; release everything with dispose() after printing.
+ */
+export async function preparePrintUnits(doc: XlsxDocument, options: PrintUnitsOptions = {}): Promise<PaintableArray> {
+  const { assetLoader = prepareSheetAssets, ...lease } = options
+  const watermark = normalizeWatermark(options.watermark as WatermarkOptions | undefined)
+  const leases: SheetAssetsLease[] = []
+  const release = () => { for (const held of leases.splice(0)) held.dispose() }
+  try {
+    const units: Paintable[] = []
+    for (let sheetIndex = 0; sheetIndex < doc.sheets.length; sheetIndex++) {
+      const held = await assetLoader(doc, { ...lease, sheetIndex })
+      leases.push(held)
+      units.push(sheetPaintable(doc.sheets[sheetIndex], held.assets, watermark))
+    }
+    let released = false
+    return Object.assign(units, { fontDiagnostics: leases[0]?.fontDiagnostics ?? [], dispose: () => { if (!released) { released = true; release() } } })
+  } catch (error) { release(); throw error }
 }
