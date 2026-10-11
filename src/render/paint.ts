@@ -8,12 +8,12 @@ import type { FontDiagnostic } from '../core/fonts/types'
 import { collectDocImages, createMeasurer, layoutDocx, renderPages } from '../docx/layout'
 import { fontFamilyCss as fontFamilyCssDocx } from '../docx/styles'
 import { decodeImageAsset, releaseDecodedImage, type ImageCandidates, type ImageDecodeFn } from '../core/images'
-import { normalizeWatermark, type ResolvedWatermark, type WatermarkOptions } from '../core/watermark'
-import { computeMetrics, renderSheet } from '../xlsx/render'
+import { normalizeWatermark, paintWatermark, type ResolvedWatermark, type WatermarkOptions } from '../core/watermark'
+import { computeMetrics, renderSheet, type StaticExportLimit } from '../xlsx/render'
 import { renderSlide, slideMetrics } from '../pptx/render'
 import type { DocxDocument } from '../docx/types'
 import type { ContentImageAsset, DrawingContent, DrawingContentShape } from '../drawing/content'
-import type { XlsxDocument } from '../xlsx/types'
+import type { XlsxDocument, XlsxSheet } from '../xlsx/types'
 import type { PptxDocument } from '../pptx/types'
 
 export interface PageSpec {
@@ -39,6 +39,40 @@ export interface Paintable {
   spec: PageSpec
   /** Paints one white-background unit into a ctx scaled so 1 unit = 1 spec px. */
   paint: (ctx: CanvasRenderingContext2D) => void
+  /** Set when the unit is a typed refusal (spec §11.5 `large-export-limit`): the
+   * static bitmap cannot hold the sheet, so `paint` draws a notice instead of a
+   * partial grid that would look complete. */
+  refusal?: readonly StaticExportLimit[]
+}
+
+const REFUSAL_SPEC: PageSpec = { widthPx: 480, heightPx: 96 }
+/** A static unit that explains the refusal instead of painting a truncated grid. */
+function refusalPaintable(sheet: XlsxSheet, limits: readonly StaticExportLimit[], watermark?: ResolvedWatermark): Paintable {
+  // Same deduped diagnostics channel the renderer uses for unsupported formats.
+  sheet.diagnostics ??= []
+  for (const limit of limits) {
+    if (!sheet.diagnostics.some(d => d.feature === 'large-export-limit' && d.message === limit.message)) {
+      sheet.diagnostics.push({ kind: 'large-export-limit', feature: 'large-export-limit', message: limit.message })
+    }
+  }
+  return {
+    spec: { ...REFUSAL_SPEC },
+    refusal: limits,
+    paint: (ctx) => {
+      ctx.save()
+      try {
+        ctx.fillStyle = '#ffffff'
+        ctx.fillRect(0, 0, REFUSAL_SPEC.widthPx, REFUSAL_SPEC.heightPx)
+        if (watermark) paintWatermark(ctx, REFUSAL_SPEC, watermark)
+        ctx.fillStyle = '#444444'
+        ctx.textBaseline = 'alphabetic'
+        ctx.font = 'bold 13px sans-serif'
+        ctx.fillText(`Sheet "${sheet.name}" is too large for a static image.`, 12, 28)
+        ctx.font = '12px sans-serif'
+        limits.slice(0, 2).forEach((limit, index) => ctx.fillText(limit.message, 12, 52 + index * 20))
+      } finally { ctx.restore() }
+    },
+  }
 }
 
 async function measurerFromDoc(resolve: (family: string) => string): Promise<ReturnType<typeof createMeasurer>> {
@@ -207,8 +241,9 @@ export function getPaintables(
         const indexed = doc.images ?? []
         const decoded = await decodeImageAssets([...indexed, ...cached], options?.decodeImage)
         const decodedByObject = new Map(cached.map((image, index) => [image, decoded[indexed.length + index]]))
-        return withLease(doc.sheets.map((sheet) => {
+        return withLease(doc.sheets.map((sheet): Paintable => {
           const m = computeMetrics(sheet)
+          if (m.exportLimits?.length) return refusalPaintable(sheet, m.exportLimits, watermark)
           return {
             spec: { widthPx: m.widthPx, heightPx: m.heightPx },
             paint: (ctx) => renderSheet(sheet, ctx, m, watermark, { images: decoded, imageFor: image => decodedByObject.get(image), resolveFont: withFallbackFonts(lease.resolve, options?.fallbackFonts) }),

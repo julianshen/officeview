@@ -729,6 +729,7 @@ Current target browsers must be tested directly; support is not implied by API p
 11. Text conditions on text/mixed columns evaluate the formatted display text of numeric/date/boolean cells (so `contains "2"` matches 20); Excel's behavior for mixed columns is undocumented and it offers no Text Filters on pure number columns.
 12. Interactive sheet mode uses an absolute 25%–400% zoom with scroll, not the fit-to-width model used for page documents (§5.5).
 13. Text conditions match canonical forms (NFD, default-ignorables removed, full case folding, NFD) on extended-grapheme boundaries rather than Excel's host-collation comparison: `ß` equals `ss`, Danish `å` differs from `aa`, `?` consumes one canonical grapheme and `contains('e')` never matches inside `é`/`e\u0301` (§7.1; amended 2026-10-11).
+14. In sheet mode, unclipped text overflowing from a cell outside the viewport is painted only while every column between that cell and the viewport projects to at least four device pixels (§11.1); the static renderer and Excel let it overflow across narrower columns.
 
 Surface actionable differences in dialog/status/help copy and retain code comments/tests; do not burden ordinary navigation with implementation explanations.
 
