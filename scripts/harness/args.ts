@@ -28,6 +28,9 @@ export interface BenchArgs {
   channel: 'chromium' | 'chrome'
   /** Whole-collection time budget in minutes (kernel scenarios can be long). */
   timeoutMinutes: number
+  /** Scenario diagnostic: do not charge resident harness data to the worker
+   * budget. Such results are labelled and are never admitted-profile evidence. */
+  unadmitted: boolean
 }
 
 /**
@@ -66,7 +69,9 @@ export const HELP_TEXT = `interactive-viewer bench CLI (S0.3 scaffold — no vie
                fixture (an explicit different --fixture is an error).
   --rows N     reduced fixture rows for a scenario smoke run (default: full scale)
   --channel    chromium (bundled, default) | chrome (installed Google Chrome)
-  --timeout-min M  whole-collection budget in minutes (default 15)`
+  --timeout-min M  whole-collection budget in minutes (default 15)
+  --unadmitted     scenario diagnostic: resident harness data is not charged to
+               the worker budget; the result is labelled admitted=false`
 
 const OPERATOR_FLAGS: Record<string, keyof OperatorMetadata> = {
   'device-model': 'deviceModel',
@@ -75,7 +80,7 @@ const OPERATOR_FLAGS: Record<string, keyof OperatorMetadata> = {
   battery: 'batteryState',
 }
 
-const KNOWN_FLAGS = ['browser', 'profile', 'fixture', 'repeat', 'warmup', 'output', 'mode', 'baseline', 'serve', 'port', 'scenario', 'rows', 'channel', 'timeout-min']
+const KNOWN_FLAGS = ['browser', 'profile', 'fixture', 'repeat', 'warmup', 'output', 'mode', 'baseline', 'serve', 'port', 'scenario', 'rows', 'channel', 'timeout-min', 'unadmitted']
 
 export function parseArgs(argv: string[]): BenchArgs | { help: true } {
   const args: BenchArgs = {
@@ -94,6 +99,7 @@ export function parseArgs(argv: string[]): BenchArgs | { help: true } {
     rows: null,
     channel: 'chromium',
     timeoutMinutes: 15,
+    unadmitted: false,
   }
   let requestedMode: string = args.mode
   let explicitFixture: FixtureId | null = null
@@ -105,7 +111,7 @@ export function parseArgs(argv: string[]): BenchArgs | { help: true } {
     const [, name, inlineValue] = match
     if (!KNOWN_FLAGS.includes(name) && !(name in OPERATOR_FLAGS)) throw new Error(`unknown flag --${name}; see --help`)
     let value = inlineValue
-    if (name !== 'serve' && value === undefined) {
+    if (name !== 'serve' && name !== 'unadmitted' && value === undefined) {
       const next = argv[i + 1]
       if (next === undefined || next.startsWith('--')) throw new Error(`--${name} requires a value`)
       value = next
@@ -168,6 +174,10 @@ export function parseArgs(argv: string[]): BenchArgs | { help: true } {
         args.rows = rows
         break
       }
+      case 'unadmitted':
+        if (value !== undefined && value !== 'true' && value !== 'false' && value !== '') throw new Error(`--unadmitted takes no value (or true|false), got ${value}`)
+        args.unadmitted = value !== 'false'
+        break
       case 'channel':
         if (text !== 'chromium' && text !== 'chrome') throw new Error(`--channel must be chromium|chrome, got ${text}`)
         args.channel = text
@@ -188,6 +198,7 @@ export function parseArgs(argv: string[]): BenchArgs | { help: true } {
     args.fixture = fixture
     if (args.browser === 'safari-manual') throw new Error('--scenario applies to automated browsers only, not safari-manual')
   } else if (args.rows !== null) throw new Error('--rows applies to --scenario runs only')
+  else if (args.unadmitted) throw new Error('--unadmitted applies to --scenario runs only')
   if (args.channel === 'chrome' && args.browser !== 'chromium') throw new Error('--channel chrome applies to --browser chromium only')
   if (requestedMode === 'release' && !REAL_FIXTURES_AVAILABLE) {
     throw new Error('--mode release is refused: every fixture is still the 120x10 placeholder (real F1..F8 arrive with S0.2), and a placeholder measurement must not be labeled release evidence')

@@ -100,7 +100,7 @@ function inProcessChannel(): KernelChannel {
         let reply: KernelReply
         try {
           if (request.type === 'setup') {
-            runner = createScenarioRunner(request.scenario as never, request.rows ?? undefined, request.profile)
+            runner = createScenarioRunner(request.scenario as never, request.rows ?? undefined, request.profile, request.admitted)
             reply = { type: 'ready', id: request.id, info: runner.info, prep: await runner.prepare() }
           } else if (request.type === 'kernel') reply = { type: 'kernel', id: request.id, sample: await runner!.kernel() }
           else reply = { type: 'query', id: request.id, sample: await runner!.query() }
@@ -124,6 +124,15 @@ describe('profile and resident-memory admission', () => {
     expect(mobile.info.profile).toBe('M')
     expect(prep.metrics['prepared-columns-admitted']).toBe(0)
     expect(prep.notes.join(' ')).toMatch(/profile M: prepareColumns\(2,3,7,1,5,4,6,0\) -> quota/)
+  })
+
+  it('an unadmitted run does not charge the resident source and says so', async () => {
+    const runner = createScenarioRunner('text-sort-1m-natural', 2000, 'D', false)
+    expect(runner.info.admitted).toBe(false)
+    const prep = await runner.prepare()
+    expect(prep.notes.join(' ')).toMatch(/UNADMITTED/)
+    await runner.kernel()
+    expect((await runner.query()).extras['worker-pool-source-bytes']).toBe(0)
   })
 
   it('the 2-key 1M scenario keys are two numeric columns', () => {
@@ -156,7 +165,7 @@ describe('startKernelBench (page side)', () => {
     let t = 0
     const harness = createViewerHarness({ clock: () => (t += 5), raf: cb => setTimeout(cb, 0), environment: () => makeEnvironment(), timeoutMs: 2000 })
     const presented: QuerySample[] = []
-    const bench = await startKernelBench(harness, inProcessChannel(), 'sort-100k-1key', 302, 'D', q => presented.push(q), async () => {})
+    const bench = await startKernelBench(harness, inProcessChannel(), 'sort-100k-1key', 302, 'D', true, q => presented.push(q), async () => {})
     expect(bench.info).toMatchObject({ fixture: 'F2', rows: 302, bodyRows: 300 })
     await bench.run(1, 3)
     expect(presented).toHaveLength(4)
@@ -173,7 +182,7 @@ describe('startKernelBench (page side)', () => {
 
   it('surfaces worker errors instead of recording a sample', async () => {
     const harness = createViewerHarness({ environment: () => makeEnvironment() })
-    await expect(startKernelBench(harness, inProcessChannel(), 'sort-100k-1key', 1, 'D', () => {})).rejects.toThrow(/kernel worker: invalid scenario row count/)
+    await expect(startKernelBench(harness, inProcessChannel(), 'sort-100k-1key', 1, 'D', true, () => {})).rejects.toThrow(/kernel worker: invalid scenario row count/)
   })
 
   it('derives units from series names', () => {

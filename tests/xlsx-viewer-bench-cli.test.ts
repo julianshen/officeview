@@ -42,6 +42,7 @@ describe('parseArgs', () => {
       rows: null,
       channel: 'chromium',
       timeoutMinutes: 15,
+      unadmitted: false,
     })
   })
 
@@ -56,6 +57,8 @@ describe('parseArgs', () => {
     expect(() => args(['--scenario', 'sort-1m-1key', '--rows', '2'])).toThrow(/--rows/)
     expect(() => args(['--browser', 'webkit', '--channel', 'chrome'])).toThrow(/chromium only/)
     expect(() => args(['--timeout-min', '0'])).toThrow(/--timeout-min/)
+    expect(args(['--scenario', 'text-sort-1m-natural', '--unadmitted']).unadmitted).toBe(true)
+    expect(() => args(['--unadmitted'])).toThrow(/--scenario runs only/)
     expect(() => args(['--browser', 'safari-manual', '--serve', '--scenario', 'sort-1m-1key'])).toThrow(/automated browsers only/)
   })
 
@@ -232,14 +235,15 @@ describe('baseline handling', () => {
   })
 
   it('refuses cross-scenario baselines before launching and at comparison time', async () => {
-    const oneKey = { id: 'sort-100k-1key', kind: 'sort' as const, keys: [1], rows: 100_002 }
-    const eightKey = { id: 'sort-100k-8key', kind: 'sort' as const, keys: [2, 3, 7, 1, 5, 4, 6, 0], rows: 100_002 }
+    const oneKey = { id: 'sort-100k-1key', kind: 'sort' as const, keys: [1], rows: 100_002, admitted: true }
+    const eightKey = { id: 'sort-100k-8key', kind: 'sort' as const, keys: [2, 3, 7, 1, 5, 4, 6, 0], rows: 100_002, admitted: true }
     const baseline = await buildResult([makeSample([10, 20, 30])], { scenario: oneKey })
     expect(validateHarnessResult(baseline).ok).toBe(true)
     const expected = { browserLabel: 'chromium', profile: 'desktop', requestedFixtureId: 'F1', mode: 'smoke' }
-    expect(checkBaselineComparable(baseline, { ...expected, scenario: { id: 'sort-100k-1key', rows: 100_002 } })).toEqual([])
-    expect(checkBaselineComparable(baseline, { ...expected, scenario: { id: 'sort-100k-8key', rows: 100_002 } }).join()).toMatch(/scenario sort-100k-1key differs/)
-    expect(checkBaselineComparable(baseline, { ...expected, scenario: { id: 'sort-100k-1key', rows: 2002 } }).join()).toMatch(/rows 100002 differ/)
+    expect(checkBaselineComparable(baseline, { ...expected, scenario: { id: 'sort-100k-1key', rows: 100_002, admitted: true } })).toEqual([])
+    expect(checkBaselineComparable(baseline, { ...expected, scenario: { id: 'sort-100k-1key', rows: 100_002, admitted: false } }).join()).toMatch(/admitted=true differs/)
+    expect(checkBaselineComparable(baseline, { ...expected, scenario: { id: 'sort-100k-8key', rows: 100_002, admitted: true } }).join()).toMatch(/scenario sort-100k-1key differs/)
+    expect(checkBaselineComparable(baseline, { ...expected, scenario: { id: 'sort-100k-1key', rows: 2002, admitted: true } }).join()).toMatch(/rows 100002 differ/)
     expect(checkBaselineComparable(baseline, { ...expected, scenario: null }).join()).toMatch(/kernel scenario/)
     const current = await buildResult([makeSample([110, 120, 130])], { scenario: eightKey })
     expect(() => compareResults(baseline, current)).toThrow(/not comparable/)

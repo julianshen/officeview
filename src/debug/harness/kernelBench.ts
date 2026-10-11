@@ -43,6 +43,7 @@ export async function startKernelBench(
   scenario: string,
   rows: number | null,
   profile: 'D' | 'M',
+  admitted: boolean,
   present: (sample: QuerySample) => void,
   settle: () => Promise<void> = () => new Promise(resolve => setTimeout(resolve, SETTLE_MS)),
 ): Promise<KernelBench> {
@@ -67,7 +68,7 @@ export async function startKernelBench(
     })
   }
 
-  const ready = await call({ type: 'setup', scenario, rows, profile }, 'ready')
+  const ready = await call({ type: 'setup', scenario, rows, profile, admitted }, 'ready')
   for (const [name, value] of Object.entries(ready.prep.metrics)) harness.recordOneShot(`prep:${name}`, unitOf(name), 'operation', value)
 
   function record(name: string, unit: string, value: number, warmup: boolean): void {

@@ -37,6 +37,9 @@ export interface ScenarioInfo {
   id: ScenarioId
   /** Admission profile whose worker/prepared budgets the session enforces. */
   profile: ProfileId
+  /** False: resident harness data is NOT charged to the worker budget, so the
+   * run is not an admitted-profile measurement (diagnostic timing only). */
+  admitted: boolean
   /** Sort/filter key columns (empty for the value index). */
   keys: readonly number[]
   fixture: 'F2' | 'F4'
@@ -189,7 +192,7 @@ function viewportOf(view: { order: { displayToSource(row: number): number }; vis
   return rows
 }
 
-function sortRunner(def: ScenarioDef, rows: number, profile: ProfileId): ScenarioRunner {
+function sortRunner(def: ScenarioDef, rows: number, profile: ProfileId, admitted: boolean): ScenarioRunner {
   const handle = createFixture(def.fixture, { rowCount: rows })
   let store: SourceStore, cellAt: (row: number, col: number) => FixtureCell | null, residentMs: number | null = null, residentBytes = 0
   if (def.fixture === 'F4') {
@@ -208,16 +211,18 @@ function sortRunner(def: ScenarioDef, rows: number, profile: ProfileId): Scenari
     keys: Object.freeze(keys.map(col => Object.freeze({ col, order: 'asc' as const }))),
     caseSensitive: false,
   })
-  const host = new SessionHarness(store, def.fixture, profile, residentBytes)
+  const host = new SessionHarness(store, def.fixture, profile, admitted ? residentBytes : 0)
   const cols = def.fixture === 'F2' ? 8 : 1
   return {
-    info: { id: def.id, profile, keys, fixture: def.fixture, rows, cols, bodyRows: rows - spec.range.headerRows - spec.range.totalsRows, description: def.description },
+    info: { id: def.id, profile, admitted, keys, fixture: def.fixture, rows, cols, bodyRows: rows - spec.range.headerRows - spec.range.totalsRows, description: def.description },
     async prepare() {
       const metrics: Record<string, number> = {}, notes: string[] = []
       if (residentMs !== null) {
         metrics['resident-source-materialize'] = residentMs
         metrics['resident-source-bytes'] = residentBytes
-        notes.push(`F4 cells are materialized once (${residentBytes} B, charged to the worker pool source tier) so repeated sorts do not re-synthesize fixture strings`)
+        notes.push(admitted
+          ? `F4 cells are materialized once (${residentBytes} B, charged to the worker pool source tier) so repeated sorts do not re-synthesize fixture strings`
+          : `UNADMITTED run: F4 cells are materialized once (${residentBytes} B) but NOT charged to the worker budget; this is diagnostic timing, not an admitted-profile measurement`)
       }
       // The session's prepared-column cache is the "prepared complete columns"
       // boundary. Its profile budget may refuse; the session then reads the
@@ -274,7 +279,7 @@ function sortRunner(def: ScenarioDef, rows: number, profile: ProfileId): Scenari
 const BLANK: PreparedValue = Object.freeze({ kind: 'blank' })
 const NUMBER_TAG = 1, STRING_TAG = 2, BOOLEAN_TAG = 3, ERROR_TAG = 4
 
-function filterRunner(def: ScenarioDef, rows: number, profile: ProfileId): ScenarioRunner {
+function filterRunner(def: ScenarioDef, rows: number, profile: ProfileId, admitted: boolean): ScenarioRunner {
   const handle = createFixture('F2', { rowCount: rows })
   const store = handle.createStore()
   const col = 4
@@ -302,9 +307,9 @@ function filterRunner(def: ScenarioDef, rows: number, profile: ProfileId): Scena
     return { kind: 'complete', matches: row => matches(row) }
   }
   // The prepared rule lane (tags + numbers) is resident worker data.
-  const host = new SessionHarness(store, 'F2', profile, tags.byteLength + numbers.byteLength, filterEvaluator)
+  const host = new SessionHarness(store, 'F2', profile, admitted ? tags.byteLength + numbers.byteLength : 0, filterEvaluator)
   return {
-    info: { id: def.id, profile, keys: [col], fixture: 'F2', rows, cols: 8, bodyRows: rows - 2, description: def.description },
+    info: { id: def.id, profile, admitted, keys: [col], fixture: 'F2', rows, cols: 8, bodyRows: rows - 2, description: def.description },
     async prepare() {
       const started = now()
       for (let row = range.r0 + range.headerRows; row <= range.r1 - range.totalsRows; row++) {
@@ -345,7 +350,7 @@ function filterRunner(def: ScenarioDef, rows: number, profile: ProfileId): Scena
   }
 }
 
-function valueIndexRunner(def: ScenarioDef, rows: number, profile: ProfileId): ScenarioRunner {
+function valueIndexRunner(def: ScenarioDef, rows: number, profile: ProfileId, admitted: boolean): ScenarioRunner {
   const handle = createFixture('F4', { rowCount: rows })
   let store: SourceStore | null = null, residentBytes = 0
   const range = bodyRange(def, rows)
@@ -357,7 +362,7 @@ function valueIndexRunner(def: ScenarioDef, rows: number, profile: ProfileId): S
     // A fresh cache per run: no prior prepared index exists (spec §12.2 "cold").
     // Its budget is the profile's worker pool minus the resident source (§12.4).
     const started = now()
-    const cache = new ValueIndexCache({ limitBytes: WORKER_BUDGETS[profile] - residentBytes })
+    const cache = new ValueIndexCache({ limitBytes: WORKER_BUDGETS[profile] - (admitted ? residentBytes : 0) })
     const index = cache.open(identity, valueSourceFromStore(store!, 0, { r0: range.r0, r1: range.r1 }))
     const status = await index.build()
     if (status !== 'complete') throw new Error(`value index build ended ${status}`)
@@ -368,10 +373,10 @@ function valueIndexRunner(def: ScenarioDef, rows: number, profile: ProfileId): S
     return { ms, size, usedBytes, page: page.entries.slice(0, VIEWPORT_ROWS) as { label: string }[] }
   }
   return {
-    info: { id: def.id, profile, keys: [], fixture: 'F4', rows, cols: 1, bodyRows: rows, description: def.description },
+    info: { id: def.id, profile, admitted, keys: [], fixture: 'F4', rows, cols: 1, bodyRows: rows, description: def.description },
     async prepare() {
       const resident = residentF4(handle)
-      if (resident.bytes > WORKER_BUDGETS[profile]) throw new ResidentBudgetError(resident.bytes, WORKER_BUDGETS[profile])
+      if (admitted && resident.bytes > WORKER_BUDGETS[profile]) throw new ResidentBudgetError(resident.bytes, WORKER_BUDGETS[profile])
       store = resident.store
       residentBytes = resident.bytes
       return {
@@ -390,13 +395,13 @@ function valueIndexRunner(def: ScenarioDef, rows: number, profile: ProfileId): S
   }
 }
 
-export function createScenarioRunner(id: ScenarioId, rowsOverride?: number, profile: ProfileId = 'D'): ScenarioRunner {
+export function createScenarioRunner(id: ScenarioId, rowsOverride?: number, profile: ProfileId = 'D', admitted = true): ScenarioRunner {
   const def = SCENARIOS[id]
   const rows = rowsOverride ?? def.rows
   if (!Number.isSafeInteger(rows) || rows < 3) throw new RangeError(`invalid scenario row count ${rows}`)
   switch (def.kind) {
-    case 'sort': return sortRunner(def, rows, profile)
-    case 'filter': return filterRunner(def, rows, profile)
-    case 'value-index': return valueIndexRunner(def, rows, profile)
+    case 'sort': return sortRunner(def, rows, profile, admitted)
+    case 'filter': return filterRunner(def, rows, profile, admitted)
+    case 'value-index': return valueIndexRunner(def, rows, profile, admitted)
   }
 }

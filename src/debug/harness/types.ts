@@ -91,6 +91,8 @@ export interface ScenarioIdentity {
   kind: 'sort' | 'filter' | 'value-index'
   keys: number[]
   rows: number
+  /** False: resident harness data was not charged to the worker budget. */
+  admitted: boolean
 }
 
 export interface HarnessEnvironment {

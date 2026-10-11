@@ -63,6 +63,7 @@ function pageQuery(args: BenchArgs, label: string, extra: Record<string, string>
     commit: label,
     ...(args.scenario ? { scenario: args.scenario } : {}),
     ...(args.rows !== null ? { rows: String(args.rows) } : {}),
+    ...(args.unadmitted ? { unadmitted: '1' } : {}),
     ...extra,
   })
   const { deviceModel, osVersion, thermalState, batteryState } = args.operator
@@ -218,7 +219,7 @@ async function main(): Promise<void> {
   const label = commitLabel(identity)
   console.log(`interactive-viewer bench (S0.3 scaffold — measures the harness frame, claims no viewer SLA)`)
   console.log(`  browser=${args.browser} profile=${args.profile} fixture=${args.fixture} repeat=${args.repeat} warmup=${args.warmup} mode=${args.mode} port=${args.port} commit=${label}`)
-  if (args.scenario) console.log(`  scenario=${args.scenario} rows=${args.rows ?? 'full'} channel=${args.channel} timeout=${args.timeoutMinutes} min`)
+  if (args.scenario) console.log(`  scenario=${args.scenario}${args.unadmitted ? ' UNADMITTED' : ''} rows=${args.rows ?? 'full'} channel=${args.channel} timeout=${args.timeoutMinutes} min`)
   if (args.browser === 'safari-manual') {
     await serveForManualDevice(args, label, identity)
     return
@@ -235,7 +236,7 @@ async function main(): Promise<void> {
       profile: args.profile,
       requestedFixtureId: args.fixture,
       mode: args.mode,
-      scenario: args.scenario ? { id: args.scenario, rows: args.rows ?? SCENARIOS[args.scenario].rows } : null,
+      scenario: args.scenario ? { id: args.scenario, rows: args.rows ?? SCENARIOS[args.scenario].rows, admitted: !args.unadmitted } : null,
     })
     if (reasons.length > 0) throw new Error(`baseline ${args.baseline} is not comparable:\n  ${reasons.join('\n  ')}`)
   }

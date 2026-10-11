@@ -2,7 +2,7 @@
 import type { KernelSample, QuerySample, ScenarioInfo } from './kernelScenarios'
 
 export type KernelRequest =
-  | { type: 'setup'; id: number; scenario: string; rows: number | null; profile: 'D' | 'M' }
+  | { type: 'setup'; id: number; scenario: string; rows: number | null; profile: 'D' | 'M'; admitted: boolean }
   | { type: 'kernel'; id: number }
   | { type: 'query'; id: number }
 

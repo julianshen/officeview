@@ -46,16 +46,17 @@ async function bootKernelScenario(harness: ViewerHarness, search: string, presen
   const rowsText = query.get('rows')
   const rows = rowsText === null ? null : Number(rowsText)
   if (rows !== null && !(Number.isSafeInteger(rows) && rows >= 3)) throw new Error(`rows must be an integer >= 3, got ${rowsText}`)
+  const admitted = query.get('unadmitted') !== '1'
   const worker = new Worker(new URL('./harness/kernelWorker.ts', import.meta.url), { type: 'module' })
-  const bench = await startKernelBench(harness, worker as unknown as KernelChannel, scenario, rows, params.profile === 'mobile' ? 'M' : 'D', present)
+  const bench = await startKernelBench(harness, worker as unknown as KernelChannel, scenario, rows, params.profile === 'mobile' ? 'M' : 'D', admitted, present)
   const scale = bench.info.rows === def.rows ? 'full scale' : `REDUCED scale (${bench.info.rows} of ${def.rows} rows)`
   harness.setFixture({
     adapter: 'synthetic-fixture-store',
     bytes: 0,
     rows: bench.info.rows,
     cols: bench.info.cols,
-    scenario: { id: scenario, kind: def.kind, keys: [...bench.info.keys], rows: bench.info.rows },
-    note: `S8.4 kernel scenario ${scenario} (${scale}): ${def.description}. Delivered S7/S8 kernels in a module worker over the S0.2 ${def.fixture} fixture store; no XLSX import, no canvas viewport. ${bench.notes.join('; ')}`,
+    scenario: { id: scenario, kind: def.kind, keys: [...bench.info.keys], rows: bench.info.rows, admitted },
+    note: `S8.4 kernel scenario ${scenario} (${scale}${admitted ? '' : ', UNADMITTED: resident harness data not charged to the worker budget'}): ${def.description}. Delivered S7/S8 kernels in a module worker over the S0.2 ${def.fixture} fixture store; no XLSX import, no canvas viewport. ${bench.notes.join('; ')}`,
   }, null)
   window.__viewerKernelBench = bench
   return `${scenario} ready — ${bench.info.bodyRows} body rows`

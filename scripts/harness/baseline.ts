@@ -12,7 +12,7 @@ export interface BaselineExpectation {
   requestedFixtureId: string
   mode: string
   /** Scenario id and fixture rows of this run; null for S0.3 round-trip runs. */
-  scenario: { id: string; rows: number } | null
+  scenario: { id: string; rows: number; admitted: boolean } | null
 }
 
 export interface ComparisonRow {
@@ -56,6 +56,7 @@ export function checkBaselineComparable(baseline: HarnessResult, expected: Basel
     reasons.push(`baseline ${scenario ? `is kernel scenario ${scenario.id}` : 'is not a kernel scenario run'}, this run ${expected.scenario ? `is kernel scenario ${expected.scenario.id}` : 'is not'}`)
   } else if (scenario && expected.scenario) {
     if (scenario.id !== expected.scenario.id) reasons.push(`baseline scenario ${scenario.id} differs from this run's ${expected.scenario.id}`)
+    if (scenario.admitted !== expected.scenario.admitted) reasons.push(`baseline scenario admitted=${scenario.admitted} differs from this run's admitted=${expected.scenario.admitted}`)
     if (scenario.rows !== expected.scenario.rows) reasons.push(`baseline scenario rows ${scenario.rows} differ from this run's ${expected.scenario.rows}`)
   }
   return reasons

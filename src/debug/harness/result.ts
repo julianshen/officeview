@@ -309,7 +309,8 @@ function validateEnvironment(env: unknown, errors: string[]): void {
     const scenario = env.scenario
     if (!isPlainObject(scenario)) errors.push('environment.scenario: must be an object when present')
     else {
-      exactKeys(scenario, ['id', 'kind', 'keys', 'rows'], 'environment.scenario', errors)
+      exactKeys(scenario, ['id', 'kind', 'keys', 'rows', 'admitted'], 'environment.scenario', errors)
+      if (typeof scenario.admitted !== 'boolean') errors.push('environment.scenario.admitted: must be boolean')
       if (!boundedString(scenario.id, 64, 1)) errors.push('environment.scenario.id: must be a non-empty string')
       if (scenario.kind !== 'sort' && scenario.kind !== 'filter' && scenario.kind !== 'value-index') errors.push('environment.scenario.kind: must be sort|filter|value-index')
       if (!Array.isArray(scenario.keys) || scenario.keys.length > 8 || !scenario.keys.every(isCount)) errors.push('environment.scenario.keys: must be at most 8 column indexes')
