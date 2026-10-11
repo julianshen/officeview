@@ -5,11 +5,16 @@
  * per-sheet committed views, prepared columns and structural handles. Every
  * command after open reads this resident state; nothing reparses or clones the
  * workbook. Sort/filter build a private draft, pass the shared structural
- * guards and commit order/visibility/revisions in one synchronous step, so a
- * refusal or failure leaves every generation untouched.
+ * guards and commit order/visibility/counts/revisions in one synchronous step,
+ * so a refusal or failure leaves every generation untouched.
  *
- * Scheduling, cancellation fan-out and publication races beyond owner checks
- * belong to S4.2; LRU/eviction of inactive sheets belongs to S4.3.
+ * S4.2 scheduling: every long job (preparation, populated guard scans, sort
+ * kernels, visibility projection) yields on the shared CooperativeSlice budget
+ * and rechecks cancellation and its owner after every yield. Drafts are built
+ * privately, charged to a transient ledger while they live, and published only
+ * through commitDraft, which validates the captured base owner. Progress is
+ * reported from completed authoritative batches; the kernel decides whether it
+ * may still be published. LRU/eviction of inactive sheets belongs to S4.3.
  */
 import type {
   AxisMetrics, AxisSizeInterval, CacheIdentity, ColumnEntry, ColumnQuery, CompactSourceRowSet, FilterSpec,
@@ -18,9 +23,10 @@ import type {
 } from '../xlsx/view/contracts'
 import { MAX_COLS, MAX_ROWS, cellId, isValidCoordinate, type SourceRect, type SourceRow } from '../xlsx/view/coordinates'
 import { createIdentityOrder } from '../xlsx/view/order'
-import { normalizeFilter, projectVisibility, visibilityFromHidden, type CompactRowVisibility } from '../xlsx/view/visibility'
+import { CompactRowVisibility, isVisibleSource, normalizeFilter, visibilityFromHidden } from '../xlsx/view/visibility'
 import { createSheetMetrics } from '../xlsx/view/projection'
-import { hiddenSourceRowsFromDisplay, sortRowOrder, type SortOptions, type SortResult } from '../xlsx/view/sort'
+import { hiddenSourceRowsFromDisplay, sortRowOrder, type SortResult } from '../xlsx/view/sort'
+import { CooperativeSlice, type CooperativeOptions, type YieldFunction } from '../xlsx/view/scheduler'
 import { StructuralIndex, type PopulatedCellSource } from '../xlsx/view/structure'
 import { guardFilter, guardSort, type GuardOutcome } from '../xlsx/view/operationGuard'
 import { INITIAL_GENERATION as INITIAL_VALUE_GEN, isUint32Array, validateBitset } from './viewerProtocol'
@@ -135,6 +141,8 @@ export type FilterEvaluator = (input: {
   spec: FilterSpec
   nowMs: number
   signal: AbortSignal
+  /** The operation's shared yield budget (S4.2); S8 scans step it per row. */
+  cooperate?: CooperativeSlice<string>
 }) => Promise<FilterEvaluation>
 export interface PreparedBudget { maxColumns: number; maxBytes: number }
 /** Prepared-column working set per admission profile (§12.4 worker pool). Mobile
@@ -333,9 +341,15 @@ export type PrepareOutcome =
   | { kind: 'error'; error: SourceFailure }
   | { kind: 'quota'; limitBytes: number; requiredBytes: number; diagnostics?: readonly WorkerDiagnostic[] }
   | { kind: 'resource-limit'; message: string }
+/** Yield phases of the session's own kernels; sort phases come from sort.ts. */
+export type SessionPhase = 'prepare' | 'guard' | 'project'
 export interface SessionOptions {
-  /** Cooperative yield for long kernels; S4.2 replaces it with the scheduler. */
-  yield?: SortOptions['yield']
+  /** Injected host yield shared by every long kernel (S4.2 scheduler). */
+  yield?: YieldFunction<string>
+  /** Injected clock for the 10 ms yield budget (deterministic tests). */
+  now?: () => number
+  /** Kernel-assigned document epoch: one per open, never reused. */
+  epoch?: number
   locale?: string
   filterEvaluator?: FilterEvaluator
   /** Admission profile from the open command; selects PREPARED_BUDGETS. */
@@ -343,7 +357,9 @@ export interface SessionOptions {
   /** Explicit override of the profile budget (tests, embedders). */
   preparedBudget?: PreparedBudget
 }
-/** Private draft; commitView publishes it atomically. */
+/** Visible display slots and the logical row axis, committed with the view. */
+export interface ViewCounts { readonly visible: number; readonly total: number }
+/** Private draft; commitDraft publishes it atomically. */
 export interface ViewDraft {
   order: RowOrder
   visibility: CompactRowVisibility
@@ -351,11 +367,27 @@ export interface ViewDraft {
   filter: FilterSpec | null
   matches?: (row: SourceRow, filter: FilterSpec) => boolean
   selection?: GridSelection
+  /** Derived from visibility when omitted. */
+  counts?: ViewCounts
 }
 export interface CommittedView extends Required<Omit<ViewDraft, 'matches'>> {
   identity: CacheIdentity
   workbookOwner: WorkbookOwner
   geometry: SheetGeometry
+}
+/** Completed authoritative work, reported by long operations. The kernel decides
+ * whether it may still be published (owner, epoch and cancellation checks). */
+export interface OperationHooks {
+  progress?(completed: number, total: number): void
+}
+/** Sort/filter report three completed stages each (guard or rule evaluation,
+ * kernel or projection, projection or geometry guard) before committing. */
+export const VIEW_OPERATION_STAGES = 3
+export interface SessionMemoryStats {
+  /** Bytes charged by in-flight drafts and staged preparation right now. */
+  transientBytes: number
+  peakTransientBytes: number
+  preparedBytes: number
 }
 export type OperationOutcome =
   | { kind: 'committed'; view: CommittedView }
@@ -376,19 +408,32 @@ export interface SheetViewSnapshot {
   readonly filter: FilterSpec | null
   readonly selection: GridSelection
   readonly identity: CacheIdentity
+  readonly counts: ViewCounts
 }
 
+/** Immutable committed sheet record: a commit swaps the whole record, so no
+ * observer can ever read a mix of old and new order/mask/counts/revision. */
 interface SheetState {
   readonly sheetId: string
-  revision: number
-  valueGen: number
-  order: RowOrder
-  visibility: CompactRowVisibility
-  sort: SortSpec | null
-  filter: FilterSpec | null
-  matches?: (row: SourceRow, filter: FilterSpec) => boolean
-  selection: GridSelection
+  readonly revision: number
+  readonly valueGen: number
+  readonly order: RowOrder
+  readonly visibility: CompactRowVisibility
+  readonly counts: ViewCounts
+  readonly sort: SortSpec | null
+  readonly filter: FilterSpec | null
+  readonly matches?: (row: SourceRow, filter: FilterSpec) => boolean
+  readonly selection: GridSelection
 }
+const countsOf = (visibility: CompactRowVisibility): ViewCounts =>
+  Object.freeze({ visible: visibility.rank(visibility.logicalCount), total: MAX_ROWS })
+/** Mask-word write (bitwise on mask words only, never on a cell ID). */
+function setSlot(words: Uint32Array, slot: number, visible: boolean): void {
+  const word = Math.floor(slot / 32), bit = 2 ** (slot % 32)
+  words[word] = visible ? (words[word] | bit) >>> 0 : (words[word] & ~bit) >>> 0
+}
+/** One operation's share of the transient ledger. */
+interface Charge { set(bytes: number): void; release(): void }
 const EMPTY_SELECTION: GridSelection = Object.freeze({ active: null, anchor: null, ranges: Object.freeze([]) })
 const matchAll = () => true
 /** Deep-freezes plain selection data; typed arrays cannot be frozen and are
@@ -417,8 +462,10 @@ function guardOutcome(guard: Extract<GuardOutcome, { ok: false }>, diagnostics: 
 
 export class DocumentSession {
   private globalGen = 0
-  private readonly workbookValueGen = INITIAL_VALUE_GEN
-  private readonly fontGen = 0
+  private workbookValueGen = INITIAL_VALUE_GEN
+  private fontGen = 0
+  private transient = 0
+  private peakTransient = 0
   private readonly states = new Map<string, SheetState>()
   /** Insertion order is recency order (oldest first). */
   private readonly prepared = new Map<string, PreparedColumn>()
@@ -438,6 +485,8 @@ export class DocumentSession {
     this.activeSheetId = source.sheets[0].sheetId
   }
   get globalViewGen(): number { return this.globalGen }
+  /** Document epoch assigned by the kernel at open (1 when standalone). */
+  get epoch(): number { return this.options.epoch ?? 1 }
   private get budget(): PreparedBudget {
     return this.options.preparedBudget ?? PREPARED_BUDGETS[this.options.profile ?? 'D']
   }
@@ -449,11 +498,11 @@ export class DocumentSession {
     let state = this.states.get(sheetId)
     if (!state) {
       if (!this.hasSheet(sheetId)) throw new RangeError(`Unknown sheet ${sheetId}`)
-      state = {
+      const visibility = visibilityFromHidden(this.source.geometry(sheetId).baseHidden)
+      state = Object.freeze({
         sheetId, revision: 0, valueGen: INITIAL_VALUE_GEN, order: createIdentityOrder(),
-        visibility: visibilityFromHidden(this.source.geometry(sheetId).baseHidden),
-        sort: null, filter: null, selection: EMPTY_SELECTION,
-      }
+        visibility, counts: countsOf(visibility), sort: null, filter: null, selection: EMPTY_SELECTION,
+      })
       this.states.set(sheetId, state)
     }
     return state
@@ -483,7 +532,7 @@ export class DocumentSession {
     return Object.freeze({
       sheetId: state.sheetId, revision: state.revision, valueGen: state.valueGen, order: state.order,
       visibility: state.visibility, sort: state.sort, filter: state.filter, selection: state.selection,
-      identity: this.identity(sheetId),
+      identity: this.identity(sheetId), counts: state.counts,
     })
   }
   isCurrent(owner: CacheIdentity): boolean {
@@ -493,24 +542,127 @@ export class DocumentSession {
     if (!this.hasSheet(sheetId)) throw new RangeError(`Unknown sheet ${sheetId}`)
     this.activeSheetId = sheetId
   }
-  /** Atomic publication (§10.1): the sheet revision and the workbook-global
-   * generation advance together with order/visibility/spec in one step. */
+  /** Unconditional publication of a draft onto the current state (owner-free
+   * callers such as selection drafts); worker operations use commitDraft. */
   async commitView(sheetId: string, draft: ViewDraft): Promise<CommittedView> {
     if (this.closed) throw new RangeError('Session closed')
-    const state = this.state(sheetId)
-    const selection = draft.selection ? freezeSelection(draft.selection) : state.selection
-    state.order = draft.order
-    state.visibility = draft.visibility
-    state.sort = draft.sort
-    state.filter = draft.filter
-    state.matches = draft.matches
-    state.selection = selection
-    state.revision++
+    return this.install(sheetId, draft)
+  }
+  /** One validated view transaction (§§6, 10.1): publishes only when the session
+   * is open and `base` is still the sheet's current owner, so a draft built
+   * under a superseded value/font/view generation can never land. Returns null
+   * and changes nothing otherwise. */
+  commitDraft(base: CacheIdentity, draft: ViewDraft): CommittedView | null {
+    if (!this.isCurrent(base)) return null
+    return this.install(base.sheetId, draft)
+  }
+  /** The single synchronous commit step: one immutable record swap plus the
+   * workbook-global generation, with nothing awaited in between. */
+  private install(sheetId: string, draft: ViewDraft): CommittedView {
+    const previous = this.state(sheetId)
+    const next: SheetState = Object.freeze({
+      sheetId, revision: previous.revision + 1, valueGen: previous.valueGen,
+      order: draft.order, visibility: draft.visibility, counts: draft.counts ?? countsOf(draft.visibility),
+      sort: draft.sort, filter: draft.filter, matches: draft.matches,
+      selection: draft.selection ? freezeSelection(draft.selection) : previous.selection,
+    })
+    this.states.set(sheetId, next)
     this.globalGen++
     return Object.freeze({
       identity: this.identity(sheetId), workbookOwner: this.workbookOwner(), geometry: this.source.geometry(sheetId),
-      order: state.order, visibility: state.visibility, sort: state.sort, filter: state.filter, selection: state.selection,
+      order: next.order, visibility: next.visibility, counts: next.counts, sort: next.sort, filter: next.filter,
+      selection: next.selection,
     })
+  }
+  /** Source/evaluation value publication for one sheet (§10.1). The store has
+   * already published the new stamp; the session follows it so identity and
+   * store stay in lockstep. Prepared columns and structural handles of the dead
+   * stamp become unreachable and are dropped and uncharged here. */
+  publishValues(sheetId: string): void {
+    if (this.closed) throw new RangeError('Session closed')
+    const state = this.state(sheetId)
+    const stamp = this.source.store(sheetId).stamp
+    if (stamp.valueGen <= state.valueGen) throw new RangeError('A value publication must advance the source stamp')
+    this.states.set(sheetId, Object.freeze({ ...state, valueGen: stamp.valueGen }))
+    this.workbookValueGen++
+    for (const [key, column] of this.prepared) {
+      if (column.stamp.sheetId !== sheetId || sameStamp(column.stamp, stamp)) continue
+      this.prepared.delete(key)
+      this.preparedBytes -= column.bytes
+    }
+    this.structures.delete(sheetId)
+  }
+  /** Font readiness (§10.1): advances fontGen only; no view revision, order or
+   * mask changes, but every owner captured before it is superseded. */
+  publishFonts(): void {
+    if (this.closed) throw new RangeError('Session closed')
+    this.fontGen++
+  }
+  memoryStats(): SessionMemoryStats {
+    return { transientBytes: this.transient, peakTransientBytes: this.peakTransient, preparedBytes: this.preparedBytes }
+  }
+  /** A per-operation share of the transient ledger, released in the
+   * operation's finally on every outcome (commit, refusal, cancel, stale). */
+  private charge(): Charge {
+    let held = 0
+    return {
+      set: bytes => {
+        this.transient += bytes - held
+        held = bytes
+        this.peakTransient = Math.max(this.peakTransient, this.transient)
+      },
+      release: () => { this.transient -= held; held = 0 },
+    }
+  }
+  private slice(): CooperativeSlice<string> {
+    const options: CooperativeOptions<string> = {}
+    if (this.options.now) options.now = this.options.now
+    if (this.options.yield) options.yield = this.options.yield
+    return new CooperativeSlice<string>(options)
+  }
+  /** Shared post-yield recheck: cancellation first, then ownership. */
+  private halted(owner: CacheIdentity, signal: AbortSignal): { kind: 'cancelled' } | { kind: 'stale' } | null {
+    if (signal.aborted) return { kind: 'cancelled' }
+    if (!this.isCurrent(owner)) return { kind: 'stale' }
+    return null
+  }
+  /** Cooperative equivalent of projectVisibility (S2.1): rebuilds the display
+   * mask from the immutable snapshot, the draft order and the filter predicate,
+   * yielding on the shared budget per projected row and rechecking cancellation
+   * and ownership after every yield. Identical words to the synchronous form. */
+  private async projectDraft(
+    owner: CacheIdentity, filter: FilterSpec | null, order: RowOrder,
+    matches: (row: SourceRow, filter: FilterSpec) => boolean,
+    slice: CooperativeSlice<string>, signal: AbortSignal, charge: Charge, heldBytes: number,
+  ): Promise<{ kind: 'projected'; visibility: CompactRowVisibility } | { kind: 'cancelled' } | { kind: 'stale' }> {
+    const baseHidden = this.source.geometry(owner.sheetId).baseHidden
+    const words = visibilityFromHidden(baseHidden, MAX_ROWS).words.slice()
+    charge.set(heldBytes + words.byteLength)
+    for (const band of order.bands) {
+      if (band.r1 >= MAX_ROWS) throw new RangeError('Order exceeds visibility axis')
+      for (let offset = 0; offset < band.sourceAtOffset.length; offset++) {
+        setSlot(words, band.r0 + offset, !baseHidden.contains(band.sourceAtOffset[offset]))
+        if (slice.due()) {
+          await slice.pause('project')
+          const halt = this.halted(owner, signal)
+          if (halt) return halt
+        }
+      }
+    }
+    if (filter) {
+      if (filter.range.r1 >= MAX_ROWS) throw new RangeError('Filter exceeds visibility axis')
+      for (let row = filter.range.r0 + filter.range.headerRows; row <= filter.range.r1 - filter.range.totalsRows; row++) {
+        setSlot(words, order.sourceToDisplay(row), isVisibleSource(row, { baseHidden, filter }, matches))
+        if (slice.due()) {
+          await slice.pause('project')
+          const halt = this.halted(owner, signal)
+          if (halt) return halt
+        }
+      }
+    }
+    const visibility = new CompactRowVisibility(MAX_ROWS, words)
+    charge.set(heldBytes + visibility.words.byteLength + visibility.summaries.byteLength)
+    return { kind: 'projected', visibility }
   }
   /** Captures the aggregate owner an async whole-workbook index is built under. */
   beginWorkbookIndex(): WorkbookOwner { return this.workbookOwner() }
@@ -557,12 +709,17 @@ export class DocumentSession {
    * nothing is kept when admission fails. Room is made by dropping least-recently
    * used prepared columns outside the batch (rebuildable caches; S4.3 owns the
    * document-wide LRU across pages/views). */
-  prepareColumns(owner: CacheIdentity, cols: readonly number[], signal: AbortSignal): Promise<PrepareOutcome> {
-    const run = this.prepareQueue.then(() => this.prepareTransaction(owner, cols, signal))
+  prepareColumns(owner: CacheIdentity, cols: readonly number[], signal: AbortSignal, hooks: OperationHooks = {}): Promise<PrepareOutcome> {
+    const run = this.prepareQueue.then(() => this.prepareTransaction(owner, cols, signal, hooks))
     this.prepareQueue = run.catch(() => undefined)
     return run
   }
-  private async prepareTransaction(owner: CacheIdentity, cols: readonly number[], signal: AbortSignal): Promise<PrepareOutcome> {
+  /** Staged lanes are charged to the transient ledger while they are built and
+   * released on every outcome; admitted columns move to the prepared ledger.
+   * Each populated entry or blank run is one unit of the shared yield budget.
+   * Progress counts rows covered by completed pages (a resident column counts
+   * whole), over `batch × MAX_ROWS`. */
+  private async prepareTransaction(owner: CacheIdentity, cols: readonly number[], signal: AbortSignal, hooks: OperationHooks): Promise<PrepareOutcome> {
     if (!Array.isArray(cols) || !cols.every(col => isValidCoordinate(0, col))) {
       return { kind: 'error', error: failure('invalid-coordinate', 'Columns must be valid zero-based column indexes') }
     }
@@ -579,20 +736,35 @@ export class DocumentSession {
         diagnostics: [{ code: 'prepared-column-limit', message: `Profile working set holds at most ${budget.maxColumns} prepared columns` }],
       }
     }
+    const slice = this.slice()
+    const charge = this.charge()
+    try {
+      return await this.stageColumns(owner, batch, signal, hooks, slice, charge, budget)
+    } finally {
+      charge.release()
+      slice.dispose()
+    }
+  }
+  private async stageColumns(
+    owner: CacheIdentity, batch: readonly number[], signal: AbortSignal, hooks: OperationHooks,
+    slice: CooperativeSlice<string>, charge: Charge, budget: PreparedBudget,
+  ): Promise<PrepareOutcome> {
     const store = this.source.store(owner.sheetId)
     const stamp = store.stamp
     const keys = batch.map(col => this.preparedKey(stamp, col))
     let protectedBytes = 0
     for (const key of keys) protectedBytes += this.prepared.get(key)?.bytes ?? 0
     const staged: { key: string; column: PreparedColumn }[] = []
-    let stagedBytes = 0
+    let stagedBytes = 0, covered = 0
+    const total = batch.length * MAX_ROWS
     const quota = (required: number): PrepareOutcome => ({ kind: 'quota', limitBytes: budget.maxBytes, requiredBytes: required })
     for (let i = 0; i < batch.length; i++) {
       const col = batch[i], key = keys[i]
-      if (this.prepared.has(key)) continue
+      if (this.prepared.has(key)) { covered += MAX_ROWS; continue }
       const builder = new ColumnBuilder(col)
       // Reserve the column overhead before reading anything.
       if (protectedBytes + stagedBytes + builder.heldBytes > budget.maxBytes) return quota(protectedBytes + stagedBytes + builder.heldBytes)
+      charge.set(stagedBytes + builder.heldBytes)
       let cursor: string | undefined
       const seen = new Set<string>()
       do {
@@ -603,28 +775,44 @@ export class DocumentSession {
         if (this.closed) return { kind: 'stale' }
         if (page.error) return page.error.code === 'cancelled' ? { kind: 'cancelled' } : { kind: 'error', error: page.error }
         if (!sameStamp(page.stamp, stamp)) return { kind: 'stale' }
+        let pageEnd = -1
         for (const item of page.items) {
           if (item.kind === 'unknown') return { kind: 'incomplete', missing: [{ r0: item.r0, r1: item.r1, c0: col, c1: col }] }
           if (item.kind === 'error') return { kind: 'error', error: failure(item.code, 'Column source failed', item.retryable) }
-          if (item.kind !== 'cell' && item.kind !== 'unavailable') continue
-          const next = protectedBytes + stagedBytes + builder.heldBytes + builder.costOf(item)
-          if (next > budget.maxBytes) return quota(next)
-          builder.append(item)
+          pageEnd = 'row' in item ? item.row : item.r1
+          if (item.kind === 'cell' || item.kind === 'unavailable') {
+            const next = protectedBytes + stagedBytes + builder.heldBytes + builder.costOf(item)
+            if (next > budget.maxBytes) return quota(next)
+            builder.append(item)
+            charge.set(stagedBytes + builder.heldBytes)
+          }
+          if (slice.due()) {
+            await slice.pause('prepare')
+            const halt = this.halted(owner, signal)
+            if (halt) return halt
+          }
         }
         if (page.completeness !== 'complete') return { kind: 'incomplete', missing: [{ r0: 0, r1: MAX_ROWS - 1, c0: col, c1: col }] }
+        // Pages cover the full-axis query contiguously from row 0 (validated by
+        // the session paging contract), so the last entry ends the covered prefix.
+        if (pageEnd >= 0) hooks.progress?.(covered + pageEnd + 1, total)
         cursor = page.nextCursor
         if (cursor !== undefined) {
           if (seen.has(cursor)) return { kind: 'error', error: failure('invalid-cursor', 'Column cursor made no progress') }
           seen.add(cursor)
         }
       } while (cursor !== undefined)
+      covered += MAX_ROWS
       // Trimming spare capacity briefly holds both lane sets; that peak is charged too.
       const exactLanes = builder.count * PREPARED_ENTRY_LANE_BYTES
-      const peak = protectedBytes + stagedBytes + builder.heldBytes + (builder.capacity > builder.count ? exactLanes : 0)
+      const trim = builder.capacity > builder.count ? exactLanes : 0
+      const peak = protectedBytes + stagedBytes + builder.heldBytes + trim
       if (peak > budget.maxBytes) return quota(peak)
+      charge.set(stagedBytes + builder.heldBytes + trim)
       const column = builder.finish(stamp)
       staged.push({ key, column })
       stagedBytes += column.bytes
+      charge.set(stagedBytes)
     }
     if (signal.aborted) return { kind: 'cancelled' }
     if (!this.isCurrent(owner)) return { kind: 'stale' }
@@ -762,8 +950,9 @@ export class DocumentSession {
   }
   /** Populated-cell feed for outside-column guards over resident readRows pages.
    * Honors the caller's per-page limit: a store page larger than the limit is
-   * served in slices, resuming at an offset within that same store page. */
-  populatedSource(sheetId: string, signal: AbortSignal): PopulatedCellSource {
+   * served in slices, resuming at an offset within that same store page. With a
+   * slice, each served page (at most 200 source rows) steps the shared budget. */
+  populatedSource(sheetId: string, signal: AbortSignal, slice?: CooperativeSlice<string>): PopulatedCellSource {
     const store = this.source.store(sheetId)
     return {
       async iterate(range, cursor, limit) {
@@ -787,6 +976,7 @@ export class DocumentSession {
         const items = all.slice(skip, end)
         const nextCursor = end < all.length ? JSON.stringify([storeCursor ?? null, end])
           : page.nextCursor !== undefined ? JSON.stringify([page.nextCursor, 0]) : undefined
+        await slice?.step('guard', Math.max(1, items.length))
         return { items, completeness: 'complete', missing: [], ...(nextCursor !== undefined ? { nextCursor } : {}) }
       },
     }
@@ -794,67 +984,101 @@ export class DocumentSession {
   private coverageDiagnostics(sheetId: string): readonly WorkerDiagnostic[] {
     return this.source.coverageDiagnostics?.(sheetId) ?? []
   }
-  async sort(owner: CacheIdentity, spec: SortSpec | null, signal: AbortSignal): Promise<OperationOutcome> {
+  /** Sort draft: structural guard, cooperative key sort, cooperative mask
+   * projection, then one validated commit. The draft order/inverse and mask are
+   * charged to the transient ledger until the operation ends. */
+  async sort(owner: CacheIdentity, spec: SortSpec | null, signal: AbortSignal, hooks: OperationHooks = {}): Promise<OperationOutcome> {
     if (!this.isCurrent(owner)) return { kind: 'stale' }
     const state = this.state(owner.sheetId)
-    if (spec !== null) {
-      const guard = await guardSort(spec.range, await this.structure(owner.sheetId, signal), this.populatedSource(owner.sheetId, signal))
-      if (signal.aborted) return { kind: 'cancelled' }
-      if (!this.isCurrent(owner)) return { kind: 'stale' }
-      if (!guard.ok) return guardOutcome(guard, this.coverageDiagnostics(owner.sheetId))
+    const slice = this.slice()
+    const charge = this.charge()
+    try {
+      if (spec !== null) {
+        const guard = await guardSort(spec.range, await this.structure(owner.sheetId, signal), this.populatedSource(owner.sheetId, signal, slice))
+        // Hand over to the sort kernel's own budget at a yield.
+        await slice.flush('guard')
+        const halt = this.halted(owner, signal)
+        if (halt) return halt
+        if (!guard.ok) return guardOutcome(guard, this.coverageDiagnostics(owner.sheetId))
+      }
+      hooks.progress?.(1, VIEW_OPERATION_STAGES)
+      const store = this.preparedStore(owner.sheetId)
+      const result = await sortRowOrder(store, spec, {
+        signal, stamp: store.stamp, locale: this.options.locale,
+        hidden: hiddenSourceRowsFromDisplay(state.order, state.visibility),
+        residentWorkerBytes: this.preparedBytes + this.transient,
+        ...(this.options.yield ? { yield: this.options.yield } : {}),
+        ...(this.options.now ? { now: this.options.now } : {}),
+      })
+      if (result.kind !== 'complete') return sortFailure(result, spec)
+      // Guards and kernels awaited: continue only if nothing superseded the base.
+      const halt = this.halted(owner, signal)
+      if (halt) return halt
+      hooks.progress?.(2, VIEW_OPERATION_STAGES)
+      const orderBytes = result.ledger.orderBytes + result.ledger.inverseBytes
+      charge.set(orderBytes)
+      const projected = await this.projectDraft(owner, state.filter, result.order, state.matches ?? matchAll, slice, signal, charge, orderBytes)
+      if (projected.kind !== 'projected') return projected
+      hooks.progress?.(3, VIEW_OPERATION_STAGES)
+      const view = this.commitDraft(owner, {
+        order: result.order, visibility: projected.visibility, sort: spec, filter: state.filter, matches: state.matches,
+      })
+      return view ? { kind: 'committed', view } : { kind: 'stale' }
+    } finally {
+      charge.release()
+      slice.dispose()
     }
-    const store = this.preparedStore(owner.sheetId)
-    const result = await sortRowOrder(store, spec, {
-      signal, stamp: store.stamp, locale: this.options.locale,
-      hidden: hiddenSourceRowsFromDisplay(state.order, state.visibility),
-      ...(this.options.yield ? { yield: this.options.yield } : {}),
-    })
-    if (result.kind !== 'complete') return sortFailure(result, spec)
-    // Guards and kernels awaited: publish only if nothing committed meanwhile.
-    if (signal.aborted) return { kind: 'cancelled' }
-    if (!this.isCurrent(owner)) return { kind: 'stale' }
-    const geometry = this.source.geometry(owner.sheetId)
-    const { visibility } = projectVisibility(geometry.baseHidden, state.filter, result.order, state.matches ?? matchAll)
-    return { kind: 'committed', view: await this.commitView(owner.sheetId, {
-      order: result.order, visibility, sort: spec, filter: state.filter, matches: state.matches,
-    }) }
   }
-  async filter(owner: CacheIdentity, spec: FilterSpec | null, nowMs: number, signal: AbortSignal): Promise<OperationOutcome> {
+  /** Filter draft: rule evaluation, cooperative mask projection, the drawing
+   * geometry guard over before/after metrics, then one validated commit. */
+  async filter(owner: CacheIdentity, spec: FilterSpec | null, nowMs: number, signal: AbortSignal, hooks: OperationHooks = {}): Promise<OperationOutcome> {
     if (!this.isCurrent(owner)) return { kind: 'stale' }
     const state = this.state(owner.sheetId)
     let normalized: FilterSpec | null
     try { normalized = normalizeFilter(spec) } catch (cause) {
       return { kind: 'refused', refusal: { reason: 'invalid-rule', message: (cause as Error).message } }
     }
-    let matches: ((row: SourceRow, filter: FilterSpec) => boolean) | undefined
-    if (normalized) {
-      const evaluator = this.options.filterEvaluator
-      if (!evaluator) {
-        return { kind: 'refused', refusal: { reason: 'unsupported', message: 'Typed filter rule evaluation is not available yet (S8)' } }
+    const evaluator = this.options.filterEvaluator
+    if (normalized && !evaluator) {
+      return { kind: 'refused', refusal: { reason: 'unsupported', message: 'Typed filter rule evaluation is not available yet (S8)' } }
+    }
+    const slice = this.slice()
+    const charge = this.charge()
+    try {
+      let matches: ((row: SourceRow, filter: FilterSpec) => boolean) | undefined
+      if (normalized && evaluator) {
+        const evaluation = await evaluator({ store: this.preparedStore(owner.sheetId), spec: normalized, nowMs, signal, cooperate: slice })
+        if (evaluation.kind !== 'complete') return evaluation
+        const halt = this.halted(owner, signal)
+        if (halt) return halt
+        matches = evaluation.matches
       }
-      const evaluation = await evaluator({ store: this.preparedStore(owner.sheetId), spec: normalized, nowMs, signal })
-      if (evaluation.kind !== 'complete') return evaluation
-      if (signal.aborted) return { kind: 'cancelled' }
-      if (!this.isCurrent(owner)) return { kind: 'stale' }
-      matches = evaluation.matches
-    }
-    const geometry = this.source.geometry(owner.sheetId)
-    const candidate = projectVisibility(geometry.baseHidden, normalized, state.order, matches ?? matchAll)
-    const guardRange = normalized?.range ?? state.filter?.range
-    if (guardRange) {
-      const before = createSheetMetrics({ rows: geometry.rows, cols: geometry.cols, order: state.order, visibility: state.visibility })
-      const after = createSheetMetrics({ rows: geometry.rows, cols: geometry.cols, order: state.order, visibility: candidate.visibility })
-      const guard = await guardFilter({
-        range: guardRange, candidateVisibility: candidate.visibility, currentVisibility: state.visibility,
-        projectionBefore: before, projectionAfter: after, structure: await this.structure(owner.sheetId, signal),
+      hooks.progress?.(1, VIEW_OPERATION_STAGES)
+      const projected = await this.projectDraft(owner, normalized, state.order, matches ?? matchAll, slice, signal, charge, 0)
+      if (projected.kind !== 'projected') return projected
+      hooks.progress?.(2, VIEW_OPERATION_STAGES)
+      const geometry = this.source.geometry(owner.sheetId)
+      const guardRange = normalized?.range ?? state.filter?.range
+      if (guardRange) {
+        const before = createSheetMetrics({ rows: geometry.rows, cols: geometry.cols, order: state.order, visibility: state.visibility })
+        const after = createSheetMetrics({ rows: geometry.rows, cols: geometry.cols, order: state.order, visibility: projected.visibility })
+        const guard = await guardFilter({
+          range: guardRange, candidateVisibility: projected.visibility, currentVisibility: state.visibility,
+          projectionBefore: before, projectionAfter: after, structure: await this.structure(owner.sheetId, signal),
+        })
+        if (!guard.ok) return guardOutcome(guard, this.coverageDiagnostics(owner.sheetId))
+      }
+      const halt = this.halted(owner, signal)
+      if (halt) return halt
+      hooks.progress?.(3, VIEW_OPERATION_STAGES)
+      const view = this.commitDraft(owner, {
+        order: state.order, visibility: projected.visibility, sort: state.sort, filter: normalized, matches,
       })
-      if (!guard.ok) return guardOutcome(guard, this.coverageDiagnostics(owner.sheetId))
+      return view ? { kind: 'committed', view } : { kind: 'stale' }
+    } finally {
+      charge.release()
+      slice.dispose()
     }
-    if (signal.aborted) return { kind: 'cancelled' }
-    if (!this.isCurrent(owner)) return { kind: 'stale' }
-    return { kind: 'committed', view: await this.commitView(owner.sheetId, {
-      order: state.order, visibility: candidate.visibility, sort: state.sort, filter: normalized, matches,
-    }) }
   }
   /** Re-checks cancellation and the full owner after the await: a page computed
    * while a newer view committed is never published under the old owner. */
@@ -881,7 +1105,11 @@ function sortFailure(result: Exclude<SortResult, { kind: 'complete' }>, spec: So
     case 'cancelled': return { kind: 'cancelled' }
     case 'incomplete': return { kind: 'incomplete', missing: spec ? [{ r0: spec.range.r0, r1: spec.range.r1, c0: spec.range.c0, c1: spec.range.c1 }] : [] }
     case 'refused': return { kind: 'refused', refusal: result.refusal }
-    case 'error': return result.error.code === 'cancelled' ? { kind: 'cancelled' } : { kind: 'error', error: result.error }
+    case 'error':
+      if (result.error.code === 'cancelled') return { kind: 'cancelled' }
+      // The kernel's stamp check: the source owner moved mid-sort.
+      if (result.error.code === 'stale-source') return { kind: 'stale' }
+      return { kind: 'error', error: result.error }
     case 'resource-limit': return { kind: 'quota', requiredBytes: result.requiredBytes, limitBytes: result.limitBytes }
   }
 }

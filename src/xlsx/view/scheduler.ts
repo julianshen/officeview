@@ -98,6 +98,11 @@ export class CooperativeSlice<Phase extends string = string> {
     this.work = 0
     this.last = this.now()
   }
+  /** Yields if any work is unyielded: used at a handoff to another kernel with
+   * its own budget, so the combined stretch never exceeds one budget. */
+  async flush(phase: Phase): Promise<void> {
+    if (this.work > 0) await this.pause(phase)
+  }
   /** Charges `units` and yields when the budget is spent. */
   async step(phase: Phase, units = 1): Promise<void> {
     if (this.due(units)) await this.pause(phase)
