@@ -259,7 +259,8 @@ export type ColumnRule = ValuesFilter | TypedCondition | CompoundFilter
 export interface FilterSpec { range: FilterRange; columns: ReadonlyMap<SourceCol, ColumnRule> }
 /** owner names the same source/value ownership role as a row-set ref stamp (§7.4). */
 export interface PagedKeySetRef { refId: string; count: number; owner: SourceStamp }
-export interface ValueSearchPredicate { text: string; locale: string }
+/** Dropdown value search: contains, optionally with S8.1 `*`/`?`/`~` wildcards. */
+export interface ValueSearchPredicate { text: string; locale: string; wildcards?: boolean }
 export type ValueSelection =
   | { mode: 'include'; keys: PagedKeySetRef }
   | { mode: 'allExcept'; excluded: PagedKeySetRef }
