@@ -31,6 +31,7 @@ import { createIdentityOrder, createRowOrder } from '../xlsx/view/order'
 import { createIntervalSet, type CompactRowVisibility } from '../xlsx/view/visibility'
 import type { ProjectedSheetMetrics } from '../xlsx/view/projection'
 import { savedValuesStatus, type ValueStatus } from '../xlsx/view/values'
+import { SHEET_DEFAULT_COL_CSS, SHEET_DEFAULT_ROW_CSS, TEXT_OVERFLOW_REACH_CSS } from '../xlsx/view/viewport'
 import type { ViewerClient } from './viewerClient'
 import { initialIdentity, initialWorkbookOwner, visibilityFromDisplayBitsets, type CommandOf } from './viewerProtocol'
 import type { SheetGeometry, WorkbookSource } from './viewerSession'
@@ -45,9 +46,6 @@ export const MAX_PENDING_ROWS = 2048
 const PAGES_PER_RUN = 4
 /** Retry delay while the worker's import frontier has not reached a row. */
 const LOADING_RETRY_MS = 200
-const DEFAULT_ROW_CSS = 20, DEFAULT_COL_CSS = 64
-/** Same reach as the object planner's text-overflow dependency columns. */
-const OVERFLOW_REACH_CSS = 2048
 
 export type PagedCell = AuthoritativeCell & XlsxCell
 export interface RemoteSheetView {
@@ -113,25 +111,28 @@ export class RemoteWorkbook implements WorkbookSource {
   private readonly stores = new Map<string, RemoteSheetStore>()
   private readonly listeners = new Set<() => void>()
   private readonly structures = new Map<string, { gen: number; merges: readonly XlsxMergeRange[]; state: 'loading' | 'done'; timer?: ReturnType<typeof setTimeout> }>()
+  private readonly layouts: Map<string, SheetLayout>
+  private statusInFlight = false
   private owner: WorkbookOwner
   private statusMessage: string | undefined
   private statusRefresh = 0
   private closed = false
 
-  constructor(private readonly client: ViewerClient, private readonly open: RemoteOpen, private readonly onRelease: () => Promise<void> | void = () => {}) {
+  constructor(private readonly client: ViewerClient, open: RemoteOpen, private readonly onRelease: () => Promise<void> | void = () => {}) {
     this.docId = open.docId
     this.valuePolicy = open.valuePolicy
     this.sheets = open.sheets
     this.openDiagnostics = open.diagnostics.filter(d => d.code !== 'cached-value-policy')
     this.statusMessage = open.diagnostics.find(d => d.code === 'cached-value-policy')?.message
     this.owner = initialWorkbookOwner(open.docId, open.sheets)
+    this.layouts = new Map(open.layouts)
     for (const { sheetId } of open.sheets) this.identities.set(sheetId, initialIdentity(open.docId, sheetId))
   }
 
   get isClosed(): boolean { return this.closed }
   identity(sheetId: string): CacheIdentity { return this.identities.get(sheetId) ?? initialIdentity(this.docId, sheetId) }
   workbookOwner(): WorkbookOwner { return this.owner }
-  layout(sheetId: string): SheetLayout { return this.open.layouts.get(sheetId) ?? { rowOverrides: [], colOverrides: [], hidden: [] } }
+  layout(sheetId: string): SheetLayout { return this.layouts.get(sheetId) ?? { rowOverrides: [], colOverrides: [], hidden: [] } }
   /** The worker's committed view of a sheet (revision = its viewGen). */
   view(sheetId: string): RemoteSheetView {
     return this.views.get(sheetId) ?? { revision: this.identity(sheetId).viewGen, order: createIdentityOrder(), filter: null, sort: null }
@@ -149,8 +150,8 @@ export class RemoteWorkbook implements WorkbookSource {
     if (!geometry) {
       const layout = this.layout(sheetId)
       geometry = Object.freeze({
-        rows: createAxisMetrics({ logicalCount: MAX_ROWS, defaultSizeCss: DEFAULT_ROW_CSS, overrides: layout.rowOverrides }),
-        cols: createAxisMetrics({ logicalCount: MAX_COLS, defaultSizeCss: DEFAULT_COL_CSS, overrides: layout.colOverrides }),
+        rows: createAxisMetrics({ logicalCount: MAX_ROWS, defaultSizeCss: SHEET_DEFAULT_ROW_CSS, overrides: layout.rowOverrides }),
+        cols: createAxisMetrics({ logicalCount: MAX_COLS, defaultSizeCss: SHEET_DEFAULT_COL_CSS, overrides: layout.colOverrides }),
         rowOverrides: layout.rowOverrides, colOverrides: layout.colOverrides, baseHidden: createIntervalSet(layout.hidden),
       })
       this.geometries.set(sheetId, geometry)
@@ -162,10 +163,11 @@ export class RemoteWorkbook implements WorkbookSource {
     const counted = this.statusMessage?.match(/— (\d+) formulas? not recalculated/)
     // The progressive import learns its formula count as it runs; completions
     // carry the latest status, so an idle viewer asks with one tiny read.
-    if (!counted && !this.closed && Date.now() - this.statusRefresh > 500) {
+    if (!counted && !this.closed && !this.statusInFlight && Date.now() - this.statusRefresh > 500) {
       this.statusRefresh = Date.now()
-      const sheetId = this.sheets[0].sheetId
-      void this.store(sheetId).ensureComplete({ r0: 0, r1: 0, c0: 0, c1: 0 }, { signal: new AbortController().signal, stamp: this.store(sheetId).stamp })
+      this.statusInFlight = true
+      const store = this.store(this.sheets[0].sheetId)
+      void store.ensureComplete({ r0: 0, r1: 0, c0: 0, c1: 0 }, { signal: new AbortController().signal, stamp: store.stamp }).finally(() => { this.statusInFlight = false })
     }
     return { policy: 'cached', formulas: counted ? Number(counted[1]) : undefined, message: this.statusMessage ?? savedValuesStatus('cached') }
   }
@@ -188,16 +190,23 @@ export class RemoteWorkbook implements WorkbookSource {
     if (this.closed) return
     if (result.completeness === 'complete') {
       entry.state = 'done'
-      if (result.merges.length) {
-        entry.merges = result.merges.map(merge => ({ minRow: merge.range.r0, maxRow: merge.range.r1, minCol: merge.range.c0, maxCol: merge.range.c1 }))
-        entry.gen++
-        this.notify()
-      }
+      // Structure completes with the sheet: its final row metadata and used
+      // range replace the layout captured at open (a progressive import grows it).
+      const layout = await this.fetchLayout(sheetId)
+      if (this.closed) return
+      const relaid = layout !== undefined && JSON.stringify(layout) !== JSON.stringify(this.layout(sheetId))
+      if (relaid) { this.layouts.set(sheetId, layout); this.geometries.delete(sheetId); this.stores.get(sheetId)?.relayout() }
+      if (result.merges.length) entry.merges = result.merges.map(merge => ({ minRow: merge.range.r0, maxRow: merge.range.r1, minCol: merge.range.c0, maxCol: merge.range.c1 }))
+      if (relaid || result.merges.length) { entry.gen++; this.notify() }
       return
     }
     // Structure follows sheetData: wait for the import, unless it failed for good.
     if (result.error && !result.error.retryable && result.error.code !== 'incomplete') { entry.state = 'done'; return }
     entry.timer = setTimeout(() => { entry.timer = undefined; void this.loadStructure(sheetId) }, 500)
+  }
+  private async fetchLayout(sheetId: string): Promise<SheetLayout | undefined> {
+    const out = await this.request({ kind: 'read', requestId: this.nextRequestId(), owner: this.identity(sheetId), query: { op: 'layout' } })
+    return typeof out === 'object' && out.kind === 'complete' && out.result.kind === 'read' && out.result.result.op === 'layout' ? out.result.result.layout : undefined
   }
   subscribe(listener: () => void): () => void {
     this.listeners.add(listener)
@@ -308,15 +317,20 @@ interface RowEntry { chunks: Set<number>; cells: PagedCell[] }
 
 /** SourceStore proxy of one remote sheet plus its bounded painting row cache. */
 export class RemoteSheetStore implements SourceStore {
-  readonly extent: SourceStore['extent']
   private readonly rows = new Map<number, RowEntry>()
   private readonly loading = new Set<string>()
-  private cachedCells = 0
-  private retry: ReturnType<typeof setTimeout> | undefined
+  // Mutable counters live in one shared holder: find wraps stores with
+  // Object.create, and a primitive written through a wrapper would diverge.
+  private readonly state: { cachedCells: number; retry?: ReturnType<typeof setTimeout>; extent: SourceStore['extent'] } = { cachedCells: 0, extent: { rows: MAX_ROWS, cols: MAX_COLS } }
 
   constructor(private readonly workbook: RemoteWorkbook, readonly sheetId: string) {
-    const used = workbook.layout(sheetId).used
-    this.extent = { rows: MAX_ROWS, cols: MAX_COLS, ...(used ? { used } : {}) }
+    this.relayout()
+  }
+  get extent(): SourceStore['extent'] { return this.state.extent }
+  /** Re-reads the used range from the workbook's current layout. */
+  relayout(): void {
+    const used = this.workbook.layout(this.sheetId).used
+    this.state.extent = { rows: MAX_ROWS, cols: MAX_COLS, ...(used ? { used } : {}) }
   }
   get stamp(): SourceStamp {
     const identity = this.workbook.identity(this.sheetId)
@@ -435,7 +449,7 @@ export class RemoteSheetStore implements SourceStore {
   pendingIn(metrics: ProjectedSheetMetrics, box: LogicalCellBox): LogicalCellBox[] {
     const rows = metrics.rows.visibleBetween(box.y, box.y + box.height)
     if (rows.count === 0 || rows.count > MAX_PENDING_ROWS) return []
-    const cols = metrics.cols.visibleBetween(Math.max(0, box.x - OVERFLOW_REACH_CSS), box.x + box.width + OVERFLOW_REACH_CSS)
+    const cols = metrics.cols.visibleBetween(Math.max(0, box.x - TEXT_OVERFLOW_REACH_CSS), box.x + box.width + TEXT_OVERFLOW_REACH_CSS)
     let c0 = -1, c1 = -1
     for (const run of cols.runs) { if (c0 < 0) c0 = run.start; c1 = run.end }
     if (c0 < 0) return []
@@ -509,20 +523,20 @@ export class RemoteSheetStore implements SourceStore {
     const lo = k0 * ROW_CHUNK_COLS, hi = (k1 + 1) * ROW_CHUNK_COLS - 1
     const kept = entry.cells.filter(cell => cell.col < lo || cell.col > hi)
     const added = cells.map(cell => ({ ...cell, ref: formatA1(cell), value: cell.value ?? null, styleIndex: cell.styleIndex ?? 0 }) as PagedCell)
-    this.cachedCells += kept.length + added.length - entry.cells.length
+    this.state.cachedCells += kept.length + added.length - entry.cells.length
     entry.cells = [...kept, ...added].sort((a, b) => a.col - b.col)
     for (let k = k0; k <= k1; k++) entry.chunks.add(k)
     // Insertion order is recency order.
     this.rows.set(row, entry)
-    while (this.rows.size > ROW_CACHE_ROWS || this.cachedCells > ROW_CACHE_CELLS) {
+    while (this.rows.size > ROW_CACHE_ROWS || this.state.cachedCells > ROW_CACHE_CELLS) {
       const oldest = this.rows.keys().next().value as number
       if (oldest === row && this.rows.size === 1) break
-      this.cachedCells -= this.rows.get(oldest)!.cells.length
+      this.state.cachedCells -= this.rows.get(oldest)!.cells.length
       this.rows.delete(oldest)
     }
   }
   private scheduleRetry(): void {
-    if (this.retry !== undefined) return
-    this.retry = setTimeout(() => { this.retry = undefined; if (!this.workbook.isClosed) this.workbook.notify() }, LOADING_RETRY_MS)
+    if (this.state.retry !== undefined) return
+    this.state.retry = setTimeout(() => { this.state.retry = undefined; if (!this.workbook.isClosed) this.workbook.notify() }, LOADING_RETRY_MS)
   }
 }

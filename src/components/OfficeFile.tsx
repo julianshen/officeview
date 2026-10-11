@@ -139,7 +139,7 @@ export interface OfficeFileProps extends Omit<OfficeDocProps, 'document'> {
   className?: string
   /**
    * Resident viewer worker for large spreadsheets with `interactiveSheets`
-   * (experimental), e.g. `() => new Worker(new URL('officeview/worker',
+   * (experimental), e.g. `() => new Worker(new URL('officeview/dist/worker.js',
    * import.meta.url), { type: 'module' })`. A file admitted as large then
    * opens in that worker: pages stay there and the interactive viewer reads
    * bounded windows. Without it, large files keep compatibility mode. Each

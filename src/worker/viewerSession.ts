@@ -1622,6 +1622,7 @@ export class DocumentSession {
       case 'structural': result = { op: 'structural', result: await store.queryStructural(query.rect, options) }; break
       case 'complete': result = { op: 'complete', result: await store.ensureComplete(query.rect, options) }; break
       case 'scan': result = { op: 'scan', page: await this.scanPage(owner, store, query, signal) }; break
+      case 'layout': result = { op: 'layout', layout: this.layout(owner.sheetId) }; break
       default: result = { op: 'rows', page: failedPage(store.stamp, failure('unsupported', 'Unknown read operation')) }
     }
     if (signal.aborted) return { kind: 'cancelled' }

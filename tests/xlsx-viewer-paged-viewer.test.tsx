@@ -188,6 +188,8 @@ describe('S5.4 view commits run in the worker', () => {
     fireEvent.click(ui.getByRole('button', { name: 'Cycle sort column B' }))
     await waitFor(() => expect(ui.getByRole('columnheader', { name: /Column B; sort priority 1, ascending/ })).toBeTruthy())
     expect(h.posted.some(command => command.kind === 'sort')).toBe(true)
+    // The control learns the worker commit succeeded (not a stale/failed notice).
+    await waitFor(() => expect(ui.getByRole('status').textContent).toMatch(/View-only sort applied/))
     go(ui, 'A2')
     fireEvent.click(ui.getByRole('button', { name: /Filter column A/ }))
     await waitFor(() => expect(ui.getByRole('checkbox', { name: 'beta' })).toBeTruthy())
@@ -197,6 +199,7 @@ describe('S5.4 view commits run in the worker', () => {
     fireEvent.click(ui.getByRole('button', { name: 'OK' }))
     await waitFor(() => expect(ui.getByRole('button', { name: /Filter column A/ }).getAttribute('aria-pressed')).toBe('true'))
     await waitFor(() => expect(ui.getByRole('status').textContent).toMatch(/Visible body 2 \/ complete body 3/))
+    await waitFor(() => expect(ui.queryByRole('dialog', { name: 'Column filter' })).toBeNull())
     const filter = h.posted.find(command => command.kind === 'filter')
     expect(filter?.kind === 'filter' && filter.keySets?.length).toBe(1)
   })

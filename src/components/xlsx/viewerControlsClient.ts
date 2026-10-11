@@ -146,7 +146,7 @@ export async function viewerControls(options: ViewerControlsOptions, signal: Abo
     switch (commit.kind) {
       case 'committed': {
         const view = commit.view
-        return { kind: 'ready', publish: () => options.publish({ order: view.order, visibility: view.visibility ?? options.view().visibility, filter: view.filter, sort: view.sort }) }
+        return { kind: 'ready', committed: true, publish: () => options.publish({ order: view.order, visibility: view.visibility ?? options.view().visibility, filter: view.filter, sort: view.sort }) }
       }
       case 'error': return { kind: 'refused', refusal: { reason: 'source-error', code: 'page-error', retryable: true, message: commit.message } }
       default: return commit

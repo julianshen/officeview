@@ -395,12 +395,15 @@ export type SourceReadQuery =
   | { op: 'scan'; request: PopulatedQuery; cursor?: string }
   | { op: 'structural'; rect: SourceRect }
   | { op: 'complete'; rect: SourceRect }
+  /** The sheet's current compact layout (it grows while a paged import runs). */
+  | { op: 'layout' }
 export type SourceReadResult =
   | { op: 'cell'; read: CellRead }
   | { op: 'rows'; page: Page<SparseRowPage> }
   | { op: 'scan'; page: Page<AuthoritativeCell> }
   | { op: 'structural'; result: StructuralResult }
   | { op: 'complete'; result: RangeCompletion }
+  | { op: 'layout'; layout: SheetLayout }
 /** S5.4: committed value-list keys of a `values` rule, shipped with a worker
  * filter command because the dropdown's key store lives on the main thread.
  * `scope` is the exact value domain (valueScope); bounded by that store. */

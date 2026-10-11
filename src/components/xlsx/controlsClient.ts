@@ -44,7 +44,10 @@ export interface ControlsClient {
   filter(owner: CacheIdentity, spec: FilterSpec | null, signal: AbortSignal, progress?: (value: ControlProgress) => void, lease?: ValuesDraftPort): Promise<ControlResult>
   sort(owner: CacheIdentity, spec: SortSpec | null, signal: AbortSignal, progress?: (value: ControlProgress) => void): Promise<ControlResult>
 }
-export type StagedControl = ControlFailure | { kind: 'ready'; publish: () => ControlSnapshot | null }
+/** `committed`: the stage already committed in the worker that owns the view
+ * (S5.4) and its view was adopted, so the owner it was staged under is
+ * superseded by design; publication only reports it. */
+export type StagedControl = ControlFailure | { kind: 'ready'; publish: () => ControlSnapshot | null; committed?: true }
 export interface ControlsClientOptions {
   snapshot(): ControlSnapshot
   context(): FilterContext
@@ -91,8 +94,9 @@ export function createControlsClient(options: ControlsClientOptions): ControlsCl
       return { kind: 'unchanged', snapshot: before }
     }
     const staged = kind === 'filter' ? await options.stageFilter(spec as FilterSpec | null, owner, signal, progress) : await options.stageSort(spec as SortSpec | null, owner, signal, progress)
-    if (signal.aborted) return { kind: 'cancelled' }
-    if (!valid(owner, signal)) return { kind: 'stale' }
+    const committed = staged.kind === 'ready' && staged.committed === true
+    if (!committed && signal.aborted) return { kind: 'cancelled' }
+    if (!committed && !valid(owner, signal)) return { kind: 'stale' }
     if (staged.kind !== 'ready') return staged
     // No await between this ownership check and publication/lease transfer.
     const snapshot = staged.publish()

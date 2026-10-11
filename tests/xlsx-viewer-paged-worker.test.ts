@@ -237,6 +237,8 @@ describe('S5.4 bounded worker reads for the paged interactive viewer', () => {
     const { kernel, parse, owner } = await openPaged('corner', CORNER_ROWS)
     const active = completed(await run(kernel, { kind: 'activateSheet', requestId: rid(), owner: kernel.session('corner')!.workbookOwner(), sheetId: '1' }))
     expect(active).toMatchObject({ kind: 'activateSheet', sheetId: '1', layout: { rowOverrides: [], colOverrides: [], hidden: [], used: { r0: 0, r1: 1048575, c0: 0, c1: 16383 } } })
+    // The same layout is re-readable later (it grows while an import runs).
+    expect(readResult(await read(kernel, owner, { op: 'layout' }))).toEqual({ op: 'layout', layout: active.kind === 'activateSheet' ? active.layout : undefined })
     const cell = readResult(await read(kernel, owner, { op: 'cell', at: { row: 1048575, col: 16383 } }))
     expect(cell).toMatchObject({ op: 'cell', read: { kind: 'cell', cell: { row: 1048575, col: 16383, value: 'corner' } } })
     const rows = readResult(await read(kernel, owner, { op: 'rows', range: { r0: 1048570, r1: 1048575, c0: 16380, c1: 16383 } }))
