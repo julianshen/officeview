@@ -97,7 +97,8 @@ Every package is implemented on its own branch, reviewed by at least one agent f
 | S7.2 pure sort engine (`src/xlsx/view/sort.ts`; worker kernel/session/header integration open) | merged |
 | S1.1 streaming ZIP/XML | design spike in progress (no production code yet) |
 | S3.1/S3.2 structural index and operation guard (pure parts: `structure.ts`, `operationGuard.ts`; parser/drawing/spill wiring open) | merged |
-| S1.2, S1.3, S2.3, S4, S5, S6, S7.1, S8.2, S8.3, S9, S10, S11/S12 status, S13 | not started |
+| S4.1 resident worker protocol/session (`src/worker/viewer*.ts`; temporary object-backed source until S1.2) | merged |
+| S1.2, S1.3, S2.3, S4.2–S4.5, S5, S6, S7.1, S8.2, S8.3, S9, S10, S11/S12 status, S13 | not started |
 
 ## S0 — Freeze contracts, counterexamples and fixture/harness infrastructure
 
@@ -294,16 +295,18 @@ expect(await source.readCell({ row: 1_048_575, col: 16_383 }, readOptions)).toMa
 
 ### S4.1 Protocol and session ownership
 
+> **Status (2026-10-11):** merged (Claude implementation; codex, pi and opencode reviews over three rounds; every finding fixed). Interim limits: the temporary object-backed `SourceStore` (`src/worker/viewerObjectSource.ts`, replaced in S1.2) reports drawings, dynamic-array spill extents and unreadable table lists as `incomplete` coverage with a `coverage-unresolvable` diagnostic, so sort/filter on those sheets wait as incomplete until S3.1 parser wiring; `viewport`/`search` return `unsupported` until S5; typed filters need the S8 evaluator wiring; scheduling/cancellation beyond request abort is S4.2.
+
 **Files:** create `src/worker/viewerProtocol.ts`, `viewerSession.ts`, `viewerKernel.ts`, `viewerClient.ts`; modify `src/worker/office-worker.ts`, `worker-entry.ts`; test `tests/xlsx-viewer-worker.test.ts`, retain `tests/worker-render.test.ts`.
 
-- [ ] RED: open once, switch sheets, prepare/query repeatedly and assert parse count=1, no workbook clone per sort/filter and no detached source needed again. Two sheets reach local revision 1; assert their aggregate workbook index identity differs. Cross-document same-sheet IDs must not collide.
-- [ ] Run `bunx vitest run tests/xlsx-viewer-worker.test.ts tests/worker-render.test.ts`; expected current per-request parse or insufficient identity fails.
-- [ ] GREEN: resident document session owns source/pages, authoritative values, per-sheet views, prepared columns and cache handles. Send compact commands/ranges/query IDs and return typed permutations/masks/window records/diagnostics; make a single admitted initial compact transfer/copy, then reuse handles. Record actual ArrayBuffer copies and transfer ownership; 'typed' does not mean zero-copy.
-- [ ] Populate `commandKind` on every worker reply (S0.1 freeze addition to spec §10.2 that correlates the reply owner type with the command kind; refusals ride an `error` reply with code `operation-refused` and `retryable:false`).
-- [ ] Populate the S0.1 `space` tag (`source` or `display`) on every `BoundedRowBitset` (source membership versus `ViewCommitDelta.visibility`); the two spaces are deliberately not assignable to each other. Design note: `operation-refused` lives in the shared `SOURCE_ERROR_CODES` registry (reviewer-requested single registry); the generic error reply excludes it, so only sort/filter replies may carry it, with `retryable:false` and a `refusal` payload.
-- [ ] Add monotonically increasing workbook-wide `WorkbookOwner.globalViewGen` for every sheet view commit; per-sheet `viewGen` remains for local caches. Cache/publication identity includes docId, sheetId, valueGen, fontGen and viewGen; aggregate results capture `WorkbookOwner.globalViewGen` and the ordered `sheetVector` of every contributing sheet revision.
-- [ ] Run focused suite; expected once-only preparation, compact command payloads, two-sheet revision collision prevented, legacy one-shot DOCX/PPTX worker still passes.
-- [ ] Deliver a resident session PR; never call legacy full reparse for ordinary interactive commands.
+- [x] RED: open once, switch sheets, prepare/query repeatedly and assert parse count=1, no workbook clone per sort/filter and no detached source needed again. Two sheets reach local revision 1; assert their aggregate workbook index identity differs. Cross-document same-sheet IDs must not collide.
+- [x] Run `bunx vitest run tests/xlsx-viewer-worker.test.ts tests/worker-render.test.ts`; expected current per-request parse or insufficient identity fails.
+- [x] GREEN: resident document session owns source/pages, authoritative values, per-sheet views, prepared columns and cache handles. Send compact commands/ranges/query IDs and return typed permutations/masks/window records/diagnostics; make a single admitted initial compact transfer/copy, then reuse handles. Record actual ArrayBuffer copies and transfer ownership; 'typed' does not mean zero-copy.
+- [x] Populate `commandKind` on every worker reply (S0.1 freeze addition to spec §10.2 that correlates the reply owner type with the command kind; refusals ride an `error` reply with code `operation-refused` and `retryable:false`).
+- [x] Populate the S0.1 `space` tag (`source` or `display`) on every `BoundedRowBitset` (source membership versus `ViewCommitDelta.visibility`); the two spaces are deliberately not assignable to each other. Design note: `operation-refused` lives in the shared `SOURCE_ERROR_CODES` registry (reviewer-requested single registry); the generic error reply excludes it, so only sort/filter replies may carry it, with `retryable:false` and a `refusal` payload.
+- [x] Add monotonically increasing workbook-wide `WorkbookOwner.globalViewGen` for every sheet view commit; per-sheet `viewGen` remains for local caches. Cache/publication identity includes docId, sheetId, valueGen, fontGen and viewGen; aggregate results capture `WorkbookOwner.globalViewGen` and the ordered `sheetVector` of every contributing sheet revision.
+- [x] Run focused suite; expected once-only preparation, compact command payloads, two-sheet revision collision prevented, legacy one-shot DOCX/PPTX worker still passes.
+- [x] Deliver a resident session PR; never call legacy full reparse for ordinary interactive commands.
 
 Representative race assertion:
 
