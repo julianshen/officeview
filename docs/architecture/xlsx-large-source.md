@@ -573,3 +573,20 @@ changed except this file.
 Not measured in this spike: Safari/WebKit/Firefox and any mobile device; real archives above 4 GiB; OPFS/IndexedDB spool and
 quota; page encoding and storage throughput; main-thread impact (all runs are single-threaded processes, not Workers); Chrome
 RSS precision (process-tree RSS sampled at 250 ms, quoted only as deltas).
+
+## 7. Orchestrator decisions on the §6 open questions (2026-10-11)
+
+Decided by the orchestrator so S1.1 can start; anything touching the public API surface or dependencies is flagged for the user at the final PR.
+
+1. **Native inflater** stays behind the port and OFF by default; enabling it requires a real Safari/WebKit/Firefox bounded-write run (S10 receipt). Minimum-browser policy is not decided here.
+2. **pako** (`1.0.11`, already locked through JSZip) becomes a direct dependency with a local type declaration. Flagged for user visibility in the final PR.
+3. **CRC verification is on by default** in large mode.
+4. **Invalid UTF-8:** keep replacement-character behaviour with a diagnostic (matches current parser). UTF-16LE parts: refuse with a typed diagnostic in v1.
+5. **DOCTYPE:** rejected in large mode with a typed diagnostic.
+6. **Object/paged/refuse thresholds:** taken from spec §12.3/§12.4 values; S1.2 owns the numbers; the spike makes no claim.
+7. **Event consumers** live in `src/xlsx/storage/sheetRecords.ts`; S1.2 defines the `PageSink` payload against `contracts.ts` lanes.
+8. **Network spool:** memory below a threshold, OPFS where available, IndexedDB fallback; implemented in S1.3, measured in S10.
+9. **Public API:** the large path is additive. A new `OfficePackage.fromBlob` is NOT added in S1.1; S1.3 wires the large path behind the existing entry points and flags any API addition to the user.
+10. **`mc:AlternateContent` / out-of-order or duplicate `<row r>`/`<c r>`:** large mode takes the `Choice`-less `Fallback`-equivalent the current parser takes, and refuses (typed diagnostic, fall back to legacy path if within caps) on out-of-order or duplicate coordinates.
+11. Real-browser throughput with page encoding and storage included is an S10 gate; S1.1 asserts correctness and bounded memory only.
+12. **4 KiB inflater pushes with 256 KiB range reads are accepted** (hard ceiling 8,128 B per push). This deviates from the spec's 256 KiB "input chunk" wording; spec §12.3 gets a divergence note when S1.1 merges.
