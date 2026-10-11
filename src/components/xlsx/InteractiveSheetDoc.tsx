@@ -44,7 +44,7 @@ import type { TileCacheStats } from '../../xlsx/view/tileCache'
 import { gridGeometryToViewport, gridSelectionOverlay, paintGridSelectionOverlay, paintSearchOverlay, type HighlightRect } from '../../core/overlay'
 import { normalizeWatermark, type WatermarkOptions } from '../../core/watermark'
 import type { FallbackFontsOptions } from '../../core/fonts/fallback'
-import { prepareSheetAssets, type SheetAssetsLease } from './sheetAssets'
+import { SheetImageCache, imageBudgetFor, prepareSheetAssets, type SheetAssetsLease } from './sheetAssets'
 import { getPaintables, type Paintable, type PaintableArray } from '../../render/paint'
 import { GridSemantics, type GridTransition } from './GridSemantics'
 import { GRID_HEADER_SIZE } from './GridHeaders'
@@ -157,11 +157,20 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
   const [assets, setAssets] = useState<{ lease: SheetAssetsLease; fontGen: number; fontKey: string; sheetId: string } | null>(null)
   const fontGenRef = useRef<{ key: string; gen: number }>({ key: fontKey, gen: 0 })
   const loadAssets = props.assetLoader ?? prepareSheetAssets
+  // One image budget shared by every lease of this viewer (overlapping swaps included).
+  const imageCache = useRef<SheetImageCache | null>(null)
+  const imageCacheFor = () => {
+    if (!imageCache.current || imageCache.current.limitBytes !== imageBudgetFor(profile)) imageCache.current = new SheetImageCache(imageBudgetFor(profile))
+    return imageCache.current
+  }
+  // A sheet switch stops presenting the old sheet at once (no stale raster under the
+  // new sheet's headers), so its lease is released before the new sheet decodes.
+  useEffect(() => { setAssets(current => current && current.sheetId !== activeSheetId ? null : current) }, [activeSheetId])
   useEffect(() => {
     if (!activeSheetId) return
     let cancelled = false
     const sheetIndex = sheetIds.indexOf(activeSheetId)
-    void loadAssets(doc, { ...(fontKey ? { fallbackFonts } : {}), sheetIndex, profile }).then(next => {
+    void loadAssets(doc, { ...(fontKey ? { fallbackFonts } : {}), sheetIndex, profile, imageCache: imageCacheFor() }).then(next => {
       if (cancelled) { next.dispose(); return }
       if (fontGenRef.current.key !== fontKey || fontGenRef.current.gen === 0) fontGenRef.current = { key: fontKey, gen: fontGenRef.current.gen + 1 }
       setAssets({ lease: next, fontGen: fontGenRef.current.gen, fontKey, sheetId: activeSheetId })
@@ -313,8 +322,22 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
   // Base layer: keyed by owner/position/zoom/DPR/pane only; overlay changes never re-run it.
   useLayoutEffect(() => {
     const canvas = baseRef.current, frame = frameOf()
-    // Paint only with the active sheet's own lease; until it commits the last frame stays.
-    if (!canvas || !frame || !assets || assets.sheetId !== activeSheetId || admittedDpr === null) return
+    if (!canvas || !frame || admittedDpr === null) return
+    if (!assets || assets.sheetId !== activeSheetId) {
+      // The active sheet's lease is pending: present a declared loading state, never
+      // another sheet's (or an unleased) raster.
+      sizeCanvas(canvas, device.width, device.height)
+      const ctx = canvas.getContext('2d')
+      if (!ctx) return
+      ctx.setTransform(1, 0, 0, 1, 0, 0)
+      ctx.fillStyle = '#ffffff'
+      ctx.fillRect(0, 0, canvas.width, canvas.height)
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0)
+      ctx.fillStyle = '#666666'
+      ctx.font = '12px sans-serif'
+      ctx.fillText('Loading…', 8, 20)
+      return
+    }
     // The pool (and its admission) exists before the pane surface is sized.
     const renderer = rendererFor()
     sizeCanvas(canvas, device.width, device.height)
@@ -697,7 +720,7 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
         <div ref={paneRef} data-testid="officeview-sheet-pane" style={{ position: 'relative', flex: '1 1 auto', minHeight: 0, overflow: 'hidden', background: '#ffffff' }}>
           {entry && scroll && (
             <GridSemantics owner={identity} projection={entry.metrics} view={entry.view} selection={selection} window={scroll} viewport={viewport}
-              body={entry.body} onChange={onGridChange} announcement={[resourceNotice, selectionIncomplete.current ? 'Selection highlight is incomplete at this zoom; zoom in for detail.' : '', announcement].filter(Boolean).join(' ')} inspection={inspection} profile={profile} label={`Worksheet ${entry.sheet.name}`}
+              body={entry.body} onChange={onGridChange} announcement={[resourceNotice, assets?.sheetId !== activeSheetId ? 'Loading sheet…' : '', selectionIncomplete.current ? 'Selection highlight is incomplete at this zoom; zoom in for detail.' : '', announcement].filter(Boolean).join(' ')} inspection={inspection} profile={profile} label={`Worksheet ${entry.sheet.name}`}
               cellPresentation={at => {
                 const cell = cellAt(entry, at)
                 return { text: cell ? cellDisplayText(entry.sheet, cell) : '' }

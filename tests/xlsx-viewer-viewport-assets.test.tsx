@@ -82,3 +82,71 @@ describe('font lease swap', () => {
     expect(disposals).toEqual(['first', 'next'])
   })
 })
+
+describe('round 2: SVG bounds, shared image budget, stale sheet pixels', () => {
+  const svg = (w: number, h: number) => new TextEncoder().encode(`<svg xmlns="http://www.w3.org/2000/svg" width="${w}" height="${h}"><rect width="10" height="10"/></svg>`)
+  const svgDoc = (bytes: Uint8Array) => ({
+    sheets: [{ name: 'A', rows: [], cols: [], merges: [], mergeRanges: [], drawings: [picture(0)] }],
+    images: [{ data: bytes, mime: 'image/svg+xml' }],
+  }) as unknown as XlsxDocument
+
+  it('refuses an SVG whose rasterized size exceeds the per-image limits; admits a small one', async () => {
+    const decode = vi.fn(async () => ({}) as CanvasImageSource)
+    const big = await prepareSheetAssets(svgDoc(svg(20_000, 20_000)), { decodeImage: decode, profile: 'D' })
+    expect(decode).not.toHaveBeenCalled()
+    expect(big.refusedImages).toBe(1)
+    big.dispose()
+    const small = await prepareSheetAssets(svgDoc(svg(100, 100)), { decodeImage: decode, profile: 'D' })
+    expect(decode).toHaveBeenCalledTimes(1)
+    expect(small.decodedBytes).toBeGreaterThan(0)
+    small.dispose()
+  })
+
+  it('charges overlapping leases against one shared image budget and shares identical pictures', async () => {
+    const { SheetImageCache } = await import('../src/components/xlsx/sheetAssets')
+    const decode = vi.fn(async () => ({ close() {} }) as unknown as CanvasImageSource)
+    const doc = workbookWithImages()
+    const cache = new SheetImageCache(128 * 1024 * 1024)
+    const a = await prepareSheetAssets(doc, { decodeImage: decode, sheetIndex: 0, profile: 'D', imageCache: cache })
+    expect(decode).toHaveBeenCalledTimes(1)
+    // Same sheet (a font change): the retained picture is shared, not re-decoded.
+    const again = await prepareSheetAssets(doc, { decodeImage: decode, sheetIndex: 0, profile: 'D', imageCache: cache })
+    expect(decode).toHaveBeenCalledTimes(1)
+    // Another sheet while A is retained: its decode must fit what A leaves.
+    const b = await prepareSheetAssets(doc, { decodeImage: decode, sheetIndex: 1, profile: 'D', imageCache: cache })
+    expect(cache.peakBytes).toBeLessThanOrEqual(cache.limitBytes)
+    a.dispose(); again.dispose(); b.dispose()
+    await new Promise(resolve => setTimeout(resolve, 0))
+    expect(cache.chargedBytes).toBe(0)
+  })
+
+  it('a pending sheet switch never keeps presenting the previous sheet\'s pixels', async () => {
+    const { OfficePackage } = await import('../src/core/zip')
+    const { parseXlsx } = await import('../src/xlsx/parse')
+    const { buildXlsx } = await import('../src/testdata/ooxml-builders')
+    const doc = await parseXlsx(await OfficePackage.load(await buildXlsx([
+      { name: 'A', rows: [{ r: 1, cells: [{ ref: 'A1', v: 'AAAAAAAA' }] }] },
+      { name: 'B', rows: [{ r: 1, cells: [{ ref: 'A1', v: 'BBBBBBBB' }] }] },
+    ])))
+    let release: (() => void) | undefined
+    const loader: typeof prepareSheetAssets = async (d, options) => {
+      if (options?.sheetIndex === 1) await new Promise<void>(resolve => { release = resolve })
+      return prepareSheetAssets(d, options)
+    }
+    const { default: InteractiveSheetDoc } = await import('../src/components/xlsx/InteractiveSheetDoc')
+    const { fireEvent, waitFor: wait } = await import('@testing-library/react')
+    const ui = render(<InteractiveSheetDoc doc={doc} assetLoader={loader} />)
+    const base = () => ui.getByTestId('officeview-sheet-base') as HTMLCanvasElement
+    const pixels = () => [...base().getContext('2d')!.getImageData(0, 0, 120, 24).data].join()
+    await wait(() => expect(pixels()).not.toBe(new Array(120 * 24 * 4).fill(0).join()))
+    await act(async () => { await new Promise(resolve => setTimeout(resolve, 5)) })
+    const sheetA = pixels()
+    act(() => { fireEvent.change(ui.getByRole('combobox', { name: 'Worksheet' }), { target: { value: '2' } }) })
+    await act(async () => { await new Promise(resolve => setTimeout(resolve, 5)) })
+    expect(pixels()).not.toBe(sheetA)
+    expect(ui.getByRole('status').textContent).toContain('Loading sheet')
+    await act(async () => { release?.(); await new Promise(resolve => setTimeout(resolve, 5)) })
+    expect(ui.getByRole('status').textContent).not.toContain('Loading sheet')
+    ui.unmount()
+  })
+})
