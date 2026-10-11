@@ -12,7 +12,7 @@ import { initialIdentity, initialWorkbookOwner } from '../src/worker/viewerProto
 import { createSheetMetrics } from '../src/xlsx/view/projection'
 import { createAxisMetrics } from '../src/xlsx/view/axes'
 import { LayoutCache, type CellBodyLayout, type CellLayoutHost } from '../src/xlsx/view/textLayout'
-import { FIND_PAGE_HITS, WorkbookFind, hitGeometry, matchTarget } from '../src/xlsx/view/find'
+import { FIND_PAGE_HITS, FindController, WorkbookFind, hitGeometry, matchTarget } from '../src/xlsx/view/find'
 import { createFixture } from './helpers/xlsx-viewer-fixtures'
 import { drain, findInputOf, where, workbookOf } from './helpers/xlsx-find'
 
@@ -146,9 +146,12 @@ describe('workbook find on F1 without painting or a full bitmap', () => {
     }, ci('A1048576'), { now: () => 0 })
     const hits = await drain(session)
     expect(where(hits)).toEqual([[store.stamp.sheetId, MAX_ROWS - 1, 0]])
-    // Exactly one source read per populated cell, no coordinate walk, no layout.
-    expect(probe.cellAt).toBe(fixture.nnz())
-    expect(probe.isPopulated).toBe(0)
+    // One scan read per populated cell plus one readCell per EMITTED hit (hits are
+    // materialized lazily from compact keys); no coordinate walk, no layout.
+    expect(probe.cellAt).toBe(fixture.nnz() + hits.length)
+    expect(session.stats.hitsMaterialized).toBe(1)
+    // The fixture's readCell probes its one address; the scan itself never does.
+    expect(probe.isPopulated).toBe(hits.length)
     expect(session.stats.cellsVisited).toBe(fixture.nnz())
     // 25 bounded 4,096-cell source pages, one cooperative yield between each.
     expect(session.stats.scanPages).toBe(Math.ceil(fixture.nnz() / 4096))
@@ -219,5 +222,45 @@ describe('review: typed source failures (codex 5)', () => {
     expect(page.totalKnown).toBeUndefined()
     expect(page.incomplete).toEqual(['A'])
     expect(page.failures).toEqual([{ sheetId: 'A', ...error, range: { r0: 0, r1: 1, c0: 0, c1: 0 } }])
+  })
+})
+
+describe('review: bounded, cooperative sort-band buffering (codex 1)', () => {
+  const reversedBand = (rows: number) => {
+    const d = workbookOf([{ sheetId: 'A', cells: Array.from({ length: rows }, (_, row) => ({ row, col: 0, value: `hit ${row}` })) }])
+    const order = createRowOrder([{ r0: 0, r1: rows - 1, sourceAtOffset: Uint32Array.from({ length: rows }, (_, i) => rows - 1 - i) }])
+    return findInputOf(d, { orders: { A: order } }).input
+  }
+  it('holds band hits as compact keys, orders them cooperatively and materializes only the emitted page', async () => {
+    const phases: string[] = []
+    const session = new WorkbookFind(reversedBand(10_000), ci('hit'), { now: () => 0, yield: async phase => { phases.push(phase) } })
+    const page = await session.nextPage()
+    expect(page.hits.map(hit => hit.source.row).slice(0, 3)).toEqual([9999, 9998, 9997])
+    expect(page.hits.at(-1)!.source.row).toBe(9800)
+    expect(page.hits[0]).toMatchObject({ text: 'hit 9999', start: 0, end: 3, displaySlot: 0 })
+    expect(session.stats.hitsMaterialized).toBe(200)
+    expect(session.stats.bufferedHits).toBe(9800)
+    // 12 bytes per waiting hit (Uint32 sheet + Float64 display key), no hit objects.
+    expect(session.stats.bufferedBytes).toBeLessThanOrEqual(9800 * 12)
+    expect(phases).toContain('find-order')
+    const rest = await drain(session)
+    expect(rest).toHaveLength(9800)
+    expect(rest.at(-1)!.source.row).toBe(0)
+    expect(session.stats.hitsMaterialized).toBe(10_000)
+  })
+
+  it('refuses with a typed resource limit before buffering past its hit budget', async () => {
+    const session = new WorkbookFind(reversedBand(5000), ci('hit'), { hitBufferBudget: 1000 })
+    let code: string | undefined
+    try { await session.nextPage() } catch (error) { code = (error as { code?: string }).code }
+    expect(code).toBe('resource-limit')
+    expect(session.stats.maxBufferedHits).toBeLessThanOrEqual(1000)
+  })
+
+  it('the controller surfaces the resource limit instead of a silent empty result', async () => {
+    const input = reversedBand(5000)
+    const controller = new FindController({ currentOwner: () => input.owner })
+    await expect(controller.run(input, ci('hit'), { hitBufferBudget: 1000 })).rejects.toMatchObject({ code: 'resource-limit' })
+    expect(controller.running).toBe(false)
   })
 })

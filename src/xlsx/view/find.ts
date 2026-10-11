@@ -21,9 +21,12 @@
  * Ordering is workbook sheet order, then current display slot, then column;
  * source IDs are the stable identity. The scan visits source rows in order;
  * a permutation band maps source rows [r0,r1] onto display slots [r0,r1], so
- * hits are held only until their band (or row) is complete, then sorted by
- * slot and released. Scanning is lazy: a page scans only until it can fill
- * `pageSize` hits, so retained hits stay bounded by one page plus one band.
+ * hits are held only until their band (or row) is complete, then ordered
+ * cooperatively (sorted runs plus budgeted merge passes) and released. Waiting
+ * hits are compact display keys (8-12 bytes each) under a hard budget that
+ * refuses with FindError('resource-limit') before it is exceeded; a hit object
+ * (with its text, re-read through readCell) is built only when its page is
+ * emitted. Scanning is lazy: a page scans only until it can fill `pageSize`.
  *
  * Ownership: a session captures the aggregate WorkbookOwner (global view
  * generation, workbook value and font generations and the complete ordered
@@ -54,9 +57,12 @@ import { createScrollWindow, navigateTo, type HiddenTargetReason, type ViewportS
 export const FIND_PAGE_HITS = 200
 /** Source cells requested per scanPopulated page; one S4.2 yield budget. */
 export const FIND_SCAN_LIMIT = 4096
+/** Hits waiting for emission (held band + ready queue), 12 bytes each: 3 MiB. */
+export const FIND_HIT_BUFFER_BUDGET = 262_144
 const FULL_SHEET: SourceRect = Object.freeze({ r0: 0, r1: MAX_ROWS - 1, c0: 0, c1: MAX_COLS - 1 })
 
-export type FindErrorCode = 'stale' | 'cancelled' | 'closed'
+/** resource-limit: the bounded hit buffer would be exceeded (§11.4 bounded storage). */
+export type FindErrorCode = 'stale' | 'cancelled' | 'closed' | 'resource-limit'
 export class FindError extends Error {
   constructor(readonly code: FindErrorCode, message: string) {
     super(message)
@@ -77,10 +83,12 @@ export interface FindSheetInput {
 }
 /** `sheets` in workbook order; the owner is the aggregate state they belong to. */
 export interface FindInput { owner: WorkbookOwner; sheets: readonly FindSheetInput[] }
-export type FindPhase = 'find-scan'
+export type FindPhase = 'find-scan' | 'find-order' | 'find-page'
 export interface FindOptions extends CooperativeOptions<FindPhase> {
   pageSize?: number
   scanLimit?: number
+  /** Waiting-hit budget; exceeding it rejects with FindError('resource-limit'). */
+  hitBufferBudget?: number
   signal?: AbortSignal
   /** Host display formatter; defaults to the raw logical text. */
   textOf?: (cell: AuthoritativeCell, sheetId: string) => string
@@ -111,6 +119,10 @@ export interface FindStats {
   hitsRecorded: number
   maxBufferedHits: number
   bufferedHits: number
+  /** Retained bytes of waiting hits (compact keys only, never hit objects). */
+  bufferedBytes: number
+  /** Hit objects built: only for emitted pages. */
+  hitsMaterialized: number
   yields: number
 }
 
@@ -165,7 +177,43 @@ function bandOf(bands: readonly RowPermutationBand[], row: number): RowPermutati
   }
   return lo < bands.length && bands[lo].r0 <= row ? bands[lo] : undefined
 }
-const byDisplay = (a: FindHit, b: FindHit): number => a.displaySlot - b.displaySlot || a.source.col - b.source.col
+const ORDER_RUN = 4096
+
+/** Ready hits as parallel compact arrays: sheet index + display key
+ * (displaySlot * MAX_COLS + col, exact below 2^34). */
+class HitQueue {
+  private sheets = new Uint32Array(64)
+  private keys = new Float64Array(64)
+  private head = 0
+  private tail = 0
+  get size(): number { return this.tail - this.head }
+  push(sheet: number, keys: Float64Array, count: number): void {
+    if (this.tail + count > this.keys.length) {
+      const live = this.size, capacity = Math.max(64, 2 ** Math.ceil(Math.log2(live + count)))
+      const sheets = new Uint32Array(capacity), next = new Float64Array(capacity)
+      sheets.set(this.sheets.subarray(this.head, this.tail))
+      next.set(this.keys.subarray(this.head, this.tail))
+      this.sheets = sheets
+      this.keys = next
+      this.head = 0
+      this.tail = live
+    }
+    this.sheets.fill(sheet, this.tail, this.tail + count)
+    this.keys.set(keys.subarray(0, count), this.tail)
+    this.tail += count
+  }
+  shift(): { sheet: number; key: number } {
+    const entry = { sheet: this.sheets[this.head], key: this.keys[this.head] }
+    this.head++
+    if (this.head === this.tail) this.head = this.tail = 0
+    return entry
+  }
+  clear(): void {
+    this.sheets = new Uint32Array(64)
+    this.keys = new Float64Array(64)
+    this.head = this.tail = 0
+  }
+}
 
 interface ScanState {
   sheet: FindSheetInput
@@ -188,7 +236,7 @@ class FindSlice extends CooperativeSlice<FindPhase> {
  * a session never retains layouts or text beyond its bounded hit buffers.
  */
 export class WorkbookFind {
-  readonly stats: FindStats = { scanPages: 0, cellsVisited: 0, textsFormatted: 0, hitsRecorded: 0, maxBufferedHits: 0, bufferedHits: 0, yields: 0 }
+  readonly stats: FindStats = { scanPages: 0, cellsVisited: 0, textsFormatted: 0, hitsRecorded: 0, maxBufferedHits: 0, bufferedHits: 0, bufferedBytes: 0, hitsMaterialized: 0, yields: 0 }
   private readonly key: string
   private readonly needle: string
   private readonly pageSize: number
@@ -196,8 +244,11 @@ export class WorkbookFind {
   /** Requested, supplied sheets in owner (workbook) order; set by validate(). */
   private sheets: readonly FindSheetInput[] = []
   private readonly slice: FindSlice
-  private ready: FindHit[] = []
-  private held: FindHit[] = []
+  private readonly budget: number
+  private readonly ready = new HitQueue()
+  /** Display keys of the current band/row group, unsorted until it completes. */
+  private held = new Float64Array(64)
+  private heldCount = 0
   private scan: ScanState | undefined
   private nextSheet = 0
   private emitted = 0
@@ -221,6 +272,8 @@ export class WorkbookFind {
     this.scanLimit = options.scanLimit ?? FIND_SCAN_LIMIT
     if (!Number.isSafeInteger(this.pageSize) || this.pageSize <= 0) throw new RangeError('Invalid find page size')
     if (!Number.isSafeInteger(this.scanLimit) || this.scanLimit <= 0) throw new RangeError('Invalid find scan limit')
+    this.budget = options.hitBufferBudget ?? FIND_HIT_BUFFER_BUDGET
+    if (!Number.isSafeInteger(this.budget) || this.budget <= 0) throw new RangeError('Invalid find hit buffer budget')
     this.host = options.yield ? undefined : createHostYield()
     const inner = options.yield ?? this.host!.yield
     const wrapped = (phase: FindPhase) => new Promise<void>((resolve, reject) => {
@@ -276,19 +329,23 @@ export class WorkbookFind {
       this.validate()
       this.validated = true
     }
+    const hits: FindHit[] = []
     try {
       if (!this.needle) this.done = true
-      while (!this.done && this.ready.length < this.pageSize) await this.scanStep()
+      while (hits.length < this.pageSize) {
+        while (!this.done && this.ready.size < this.pageSize - hits.length) await this.scanStep()
+        if (!this.ready.size) break
+        const hit = await this.materialize()
+        if (hit) hits.push(hit)
+      }
     } catch (error) {
       throw this.translate(error)
     }
     this.guard()
-    const hits = this.ready.length <= this.pageSize ? this.ready : this.ready.slice(0, this.pageSize)
-    this.ready = this.ready.length <= this.pageSize ? [] : this.ready.slice(this.pageSize)
     this.emitted += hits.length
-    this.stats.bufferedHits = this.ready.length + this.held.length
+    this.account()
     this.stats.yields = this.slice.yields
-    const complete = this.done && this.ready.length === 0
+    const complete = this.done && this.ready.size === 0
     // A finished scan never yields again; its host ports go now, not at close.
     if (this.done) this.releaseHost()
     const incomplete = [...this.incompleteSheets]
@@ -307,9 +364,10 @@ export class WorkbookFind {
     this.closed = true
     void this.scan?.iterator?.return?.()
     this.scan = undefined
-    this.ready = []
-    this.held = []
-    this.stats.bufferedHits = 0
+    this.ready.clear()
+    this.held = new Float64Array(0)
+    this.heldCount = 0
+    this.account()
     this.options.signal?.removeEventListener('abort', this.onAbort)
     this.wake?.()
     this.releaseHost()
@@ -362,7 +420,7 @@ export class WorkbookFind {
         scan.cursor = cursor
         return
       }
-      this.release()
+      await this.release()
       this.scan = undefined
       return
     }
@@ -376,45 +434,117 @@ export class WorkbookFind {
     if (page.completeness !== 'complete' || page.error) this.incompleteSheets.add(scan.sheet.sheetId)
     if (page.error) this.fail({ sheetId: scan.sheet.sheetId, code: page.error.code, retryable: page.error.retryable, message: page.error.message, range: scan.range })
     for (const cell of page.items) {
-      this.visit(scan, cell)
+      const key = this.visit(scan, cell)
+      if (key !== undefined) {
+        const group = bandOf(scan.sheet.order.bands, cell.row) ?? cell.row
+        if (group !== scan.group) {
+          await this.release()
+          scan.group = group
+        }
+        this.hold(key)
+      }
       if (this.slice.due(1)) await this.slice.pause('find-scan')
     }
   }
 
-  private visit(scan: ScanState, cell: AuthoritativeCell): void {
+  /** Matches one scanned cell; returns its display key when it is a hit. */
+  private visit(scan: ScanState, cell: AuthoritativeCell): number | undefined {
     this.stats.cellsVisited++
     const { sheet } = scan
     const slot = sheet.order.sourceToDisplay(cell.row)
-    if (!sheet.visibility.visible(slot)) return
-    if (sheet.isColumnVisible && !sheet.isColumnVisible(cell.col)) return
+    if (!sheet.visibility.visible(slot)) return undefined
+    if (sheet.isColumnVisible && !sheet.isColumnVisible(cell.col)) return undefined
     if (cell.unavailable) {
       this.unavailable++
-      return
+      return undefined
     }
     let text: string
     if (this.options.textOf) {
       this.stats.textsFormatted++
       text = this.options.textOf(cell, sheet.sheetId)
     } else text = rawTextOf(cell.value)
-    const match = firstMatch(text, this.needle, this.query.caseSensitive)
-    if (!match) return
+    if (!firstMatch(text, this.needle, this.query.caseSensitive)) return undefined
     this.stats.hitsRecorded++
-    const group = bandOf(sheet.order.bands, cell.row) ?? cell.row
-    if (group !== scan.group) {
-      this.release()
-      scan.group = group
-    }
-    this.held.push({ sheetId: sheet.sheetId, cellId: cellId(cell.row, cell.col), source: { row: cell.row, col: cell.col }, text, start: match.start, end: match.end, displaySlot: slot })
-    this.stats.maxBufferedHits = Math.max(this.stats.maxBufferedHits, this.ready.length + this.held.length)
+    return slot * MAX_COLS + cell.col
   }
 
-  /** A band/row group is complete: its hits move to the ready queue in display order. */
-  private release(): void {
-    if (!this.held.length) return
-    this.held.sort(byDisplay)
-    for (const hit of this.held) this.ready.push(hit)
-    this.held = []
-    if (this.scan) this.scan.group = undefined
+  private hold(key: number): void {
+    if (this.heldCount + this.ready.size >= this.budget) {
+      throw new FindError('resource-limit', `Find would buffer more than ${this.budget} hits; narrow the search or the sheets`)
+    }
+    if (this.heldCount === this.held.length) {
+      const grown = new Float64Array(Math.min(this.budget, Math.max(64, this.held.length * 2)))
+      grown.set(this.held)
+      this.held = grown
+    }
+    this.held[this.heldCount++] = key
+    this.stats.maxBufferedHits = Math.max(this.stats.maxBufferedHits, this.heldCount + this.ready.size)
+    this.account()
+  }
+
+  private account(): void {
+    this.stats.bufferedHits = this.heldCount + this.ready.size
+    this.stats.bufferedBytes = 8 * this.heldCount + 12 * this.ready.size
+  }
+
+  /** A band/row group is complete: order its keys cooperatively (sorted 4,096-key
+   * runs, then budgeted merge passes) and append them to the ready queue. */
+  private async release(): Promise<void> {
+    const count = this.heldCount
+    if (!count || !this.scan) return
+    let source = this.held.subarray(0, count)
+    for (let lo = 0; lo < count; lo += ORDER_RUN) {
+      source.subarray(lo, Math.min(count, lo + ORDER_RUN)).sort()
+      await this.slice.step('find-order', Math.min(ORDER_RUN, count - lo))
+    }
+    if (count > ORDER_RUN) {
+      let target = new Float64Array(count)
+      for (let width = ORDER_RUN; width < count; width *= 2) {
+        for (let lo = 0; lo < count; lo += 2 * width) {
+          const mid = Math.min(count, lo + width), hi = Math.min(count, lo + 2 * width)
+          let i = lo, j = mid, k = lo
+          while (k < hi) {
+            target[k++] = j >= hi || (i < mid && source[i] <= source[j]) ? source[i++] : source[j++]
+            if (this.slice.due(1)) await this.slice.pause('find-order')
+          }
+        }
+        const swap = source
+        source = target
+        target = swap
+      }
+    }
+    this.ready.push(this.nextSheet - 1, source, count)
+    this.heldCount = 0
+    this.scan.group = undefined
+    this.account()
+  }
+
+  /** Builds the next ready hit from one source read: only emitted hits become
+   * objects. A changed or failed cell is stale or a typed failure, never a guess. */
+  private async materialize(): Promise<FindHit | undefined> {
+    const { sheet: index, key } = this.ready.shift()
+    this.account()
+    const sheet = this.sheets[index]
+    const slot = Math.floor(key / MAX_COLS), col = key - slot * MAX_COLS
+    const row = sheet.order.displayToSource(slot)
+    const stamp = { docId: sheet.identity.docId, sheetId: sheet.sheetId, valueGen: sheet.identity.valueGen }
+    const read = await sheet.store.readCell({ row, col }, { signal: this.options.signal ?? new AbortController().signal, stamp })
+    this.guard()
+    if (read.kind === 'error' && read.code === 'cancelled') throw new FindError('cancelled', 'Find cancelled')
+    if (read.kind === 'error' && read.code !== 'stale-source') {
+      this.fail({ sheetId: sheet.sheetId, code: read.code, retryable: read.retryable, message: `Cell ${row},${col} could not be read`, range: { r0: row, r1: row, c0: col, c1: col } })
+      return undefined
+    }
+    if (read.kind === 'unknown') {
+      this.fail({ sheetId: sheet.sheetId, code: 'incomplete', retryable: true, message: `Cell ${row},${col} is loading`, range: { r0: row, r1: row, c0: col, c1: col } })
+      return undefined
+    }
+    if (read.kind !== 'cell') throw new FindError('stale', `Source cell ${row},${col} of sheet ${sheet.sheetId} changed`)
+    const text = this.options.textOf ? this.options.textOf(read.cell, sheet.sheetId) : rawTextOf(read.cell.value)
+    const match = firstMatch(text, this.needle, this.query.caseSensitive)
+    if (!match) throw new FindError('stale', `Source cell ${row},${col} of sheet ${sheet.sheetId} changed`)
+    this.stats.hitsMaterialized++
+    return { sheetId: sheet.sheetId, cellId: cellId(row, col), source: { row, col }, text, start: match.start, end: match.end, displaySlot: slot }
   }
 }
 
@@ -579,10 +709,11 @@ export class FindController {
     try {
       page = await run.session.nextPage()
     } catch (error) {
-      if (!(error instanceof FindError)) throw error
+      this.end(run)
+      // A resource refusal is an outcome the UI must show, not an empty result.
+      if (!(error instanceof FindError) || error.code === 'resource-limit') throw error
       if (error.code === 'stale') this.stats.staleRejected++
       else this.stats.superseded++
-      this.end(run)
       return null
     }
     // The session's own last guard ran before this continuation: any owner
