@@ -25,8 +25,13 @@
  * exactly the rows hidden when it ran, and visibility is a source-row predicate,
  * so {sort spec, filter+matcher at sort time} reproduces the order; a digest by
  * source identity verifies it. Owner-free drafts (commitView with an arbitrary
- * order) have no recipe and are never evicted. A released session never
- * revives: no lazy state, activation, admission or publication after release.
+ * order) have no recipe and are never evicted. Every retained view is admitted
+ * under the hard limit (evicting first, else ViewQuotaError/quota with nothing
+ * changed); untouched sheets hold no mask until a view or operation needs one.
+ * A value publication drops an applied sort's buffers on resident and evicted
+ * views alike; the next ensureView re-derives it from the new values and
+ * reports `view-reapplied`. A released session never revives: no lazy state,
+ * activation, admission or publication after release.
  */
 import type {
   AxisMetrics, AxisSizeInterval, CacheIdentity, ColumnEntry, ColumnQuery, CompactSourceRowSet, FilterSpec,
@@ -435,6 +440,14 @@ export class ViewNotResidentError extends RangeError {
     this.name = 'ViewNotResidentError'
   }
 }
+/** A view's buffers could not be admitted under the document budget (S4.3);
+ * thrown by owner-free commits and the synchronous view(). Nothing changed. */
+export class ViewQuotaError extends RangeError {
+  constructor(readonly requiredBytes: number, readonly limitBytes: number) {
+    super(`Sheet view needs ${requiredBytes} bytes beyond the ${limitBytes}-byte worker budget`)
+    this.name = 'ViewQuotaError'
+  }
+}
 /** Per body row of a sort: index + scratch + order + inverse Uint32 lanes. */
 export const SORT_ROW_ESTIMATE_BYTES = 16
 /** Per body row and key: tag Uint8 + number Float64 + string id Uint32. */
@@ -613,26 +626,31 @@ export class DocumentSession {
     let state = this.states.get(sheetId)
     if (!state) {
       if (!this.hasSheet(sheetId)) throw new RangeError(`Unknown sheet ${sheetId}`)
-      const visibility = visibilityFromHidden(this.source.geometry(sheetId).baseHidden)
-      const fresh: ResidentState = Object.freeze({
-        sheetId, revision: 0, valueGen: INITIAL_VALUE_GEN, order: createIdentityOrder(),
-        visibility, counts: countsOf(visibility), sort: null, filter: null, selection: EMPTY_SELECTION,
+      // Compact until a view or operation needs the mask: the identity order is
+      // free and the counts follow from the authored hidden intervals.
+      let hidden = 0
+      for (const interval of this.source.geometry(sheetId).baseHidden.intervals) hidden += interval.r1 - interval.r0 + 1
+      state = Object.freeze({
+        sheetId, revision: 0, valueGen: INITIAL_VALUE_GEN, order: createIdentityOrder(), visibility: null,
+        counts: Object.freeze({ visible: MAX_ROWS - hidden, total: MAX_ROWS }), sort: null, filter: null, selection: EMPTY_SELECTION,
         recipe: Object.freeze({ sortFilter: null }), orderValueGen: INITIAL_VALUE_GEN,
       })
-      this.states.set(sheetId, fresh)
-      this.retainView(fresh)
-      state = fresh
+      this.states.set(sheetId, state)
     }
     return state
   }
-  /** Charges a resident view's buffers to the pool. Forced: the bytes were
-   * admitted as the operation's transient draft before this commit. */
+  /** Admits a resident view's buffers under the hard limit (evicting other
+   * entries first); throws ViewQuotaError and changes nothing when they cannot
+   * fit. Callers retain BEFORE installing the record, so a refusal is atomic.
+   * Operation commits uncharge their transient draft first, so the same bytes
+   * are re-admitted, never counted twice and never forced. */
   private retainView(state: ResidentState): void {
-    this.memory.retain(viewKey(state.sheetId), {
-      tier: 'view', bytes: orderBytes(state.order) + maskBytes(state.visibility), owner: state.sheetId,
-      evictable: state.recipe !== null,
+    const bytes = orderBytes(state.order) + maskBytes(state.visibility)
+    const entry = this.memory.retain(viewKey(state.sheetId), {
+      tier: 'view', bytes, owner: state.sheetId, evictable: state.recipe !== null,
       onRelease: reason => { if (reason === 'evicted') this.evictView(state.sheetId) },
-    }, { force: true })
+    })
+    if (!entry) throw new ViewQuotaError(bytes, this.memory.limitBytes)
   }
   /** Drops the buffers of the sheet's CURRENT record (a value publication may
    * have swapped the record since it was retained); the logical state stays. */
@@ -664,8 +682,8 @@ export class DocumentSession {
       throw new RangeError(`Sheet view ${sheetId} could not be rebuilt identically`)
     }
     const next: ResidentState = Object.freeze({ ...state, order: state.order, visibility })
-    this.states.set(sheetId, next)
     this.retainView(next)
+    this.states.set(sheetId, next)
     return next
   }
   identity(sheetId: string): CacheIdentity {
@@ -730,6 +748,7 @@ export class DocumentSession {
     if (isResidentState(state)) return { state }
     if (state.order !== null) {
       try { return { state: this.residentSync(sheetId) } } catch (cause) {
+        if (cause instanceof ViewQuotaError) return this.refusal(cause.requiredBytes)
         return { kind: 'error', error: failure('page-error', (cause as Error).message) }
       }
     }
@@ -780,8 +799,11 @@ export class DocumentSession {
       })
       // The rebuilt buffers move from the transient ledger to the retained view.
       charge.set(0)
+      try { this.retainView(next) } catch (cause) {
+        if (cause instanceof ViewQuotaError) return this.refusal(cause.requiredBytes)
+        throw cause
+      }
       this.states.set(sheetId, next)
-      this.retainView(next)
       return sameValues ? { state: next } : {
         state: next,
         diagnostics: [{ code: 'view-reapplied', message: 'The sort was re-applied to newer values after its evicted order could not be reproduced' }],
@@ -803,7 +825,8 @@ export class DocumentSession {
   }
   /** Unconditional publication of a draft onto the current state (owner-free
    * callers such as selection drafts); worker operations use commitDraft. Only
-   * an unchanged or identity order stays reproducible (and evictable). */
+   * an unchanged or identity order stays reproducible (and evictable). Rejects
+   * with ViewQuotaError, changing nothing, when the view cannot be admitted. */
   async commitView(sheetId: string, draft: ViewDraft): Promise<CommittedView> {
     if (this.closed) throw new RangeError('Session closed')
     const previous = this.state(sheetId)
@@ -815,7 +838,8 @@ export class DocumentSession {
    * is open and `base` is still the sheet's current owner, so a draft built
    * under a superseded value/font/view generation can never land. Returns null
    * and changes nothing otherwise. The recipe defaults to the previous one (a
-   * draft that keeps the committed order). */
+   * draft that keeps the committed order). Throws ViewQuotaError, changing
+   * nothing, when the view cannot be admitted under the document budget. */
   commitDraft(base: CacheIdentity, draft: ViewDraft, recipe?: ViewRecipe | null): CommittedView | null {
     if (!this.isCurrent(base)) return null
     const previous = this.state(base.sheetId)
@@ -836,8 +860,9 @@ export class DocumentSession {
       selection: draft.selection ? freezeSelection(draft.selection) : previous.selection,
       recipe, orderValueGen,
     })
-    this.states.set(sheetId, next)
+    // Admission first (throws ViewQuotaError): a refused commit changes nothing.
     this.retainView(next)
+    this.states.set(sheetId, next)
     this.globalGen++
     return Object.freeze({
       identity: this.identity(sheetId), workbookOwner: this.workbookOwner(), geometry: this.source.geometry(sheetId),
@@ -854,7 +879,15 @@ export class DocumentSession {
     const state = this.state(sheetId)
     const stamp = this.source.store(sheetId).stamp
     if (stamp.valueGen <= state.valueGen) throw new RangeError('A value publication must advance the source stamp')
-    this.states.set(sheetId, Object.freeze({ ...state, valueGen: stamp.valueGen }))
+    // One rule for resident and evicted views: an applied sort is re-derived
+    // from the new values on next use (ensureView reports `view-reapplied`), so
+    // its buffers are dropped here. Orders without a recipe are kept as is.
+    const rederive = state.order !== null && state.order.kind !== 'identity' && state.recipe !== null
+    if (rederive) this.memory.get(viewKey(sheetId))?.release()
+    this.states.set(sheetId, Object.freeze({
+      ...state, valueGen: stamp.valueGen,
+      ...(rederive || (state.order === null) ? { order: null, visibility: null, digest: undefined } : {}),
+    }))
     this.workbookValueGen++
     for (const [key, column] of [...this.prepared]) {
       if (column.stamp.sheetId !== sheetId || sameStamp(column.stamp, stamp)) continue
@@ -1107,8 +1140,8 @@ export class DocumentSession {
     for (const { key, column } of staged) {
       const entry = this.memory.retain(JSON.stringify(['prepared', key]), {
         tier: 'rebuildable', bytes: column.bytes, owner: owner.sheetId, onRelease: () => this.dropPrepared(key),
-      }, { force: true })
-      if (!entry) return { kind: 'stale' }
+      })
+      if (!entry) return this.prepareRefusal(column.bytes)
       this.prepared.set(key, column)
       this.preparedEntries.set(key, entry)
       this.preparedBytes += column.bytes
@@ -1243,7 +1276,8 @@ export class DocumentSession {
       const bytes = STRUCTURE_BASE_BYTES + index.recordCount * STRUCTURE_RECORD_BYTES
       const entry = this.memory.retain(structureKey(sheetId), {
         tier: 'rebuildable', bytes, owner: sheetId, onRelease: () => this.dropStructure(sheetId),
-      }, { force: true })
+      })
+      // Not admitted: the index still serves this operation, uncached.
       if (entry) {
         this.structures.set(sheetId, index)
         this.structureEntries.set(sheetId, entry)
@@ -1344,14 +1378,23 @@ export class DocumentSession {
       // commit never counts them twice. Recipe: the sort pinned exactly the rows
       // hidden by the filter it ran under.
       charge.set(0)
-      const view = this.commitDraft(owner, {
+      return this.commitOutcome(() => this.commitDraft(owner, {
         order: result.order, visibility: projected.visibility, sort: spec, filter: state.filter, matches: state.matches,
-      }, Object.freeze({ sortFilter: state.filter, sortMatches: state.matches }))
-      return view ? { kind: 'committed', view } : { kind: 'stale' }
+      }, Object.freeze({ sortFilter: state.filter, sortMatches: state.matches })))
     } finally {
       charge.release()
       slice.dispose()
       unpin()
+    }
+  }
+  /** Maps a validated commit to an outcome; an unadmittable view is quota. */
+  private commitOutcome(commit: () => CommittedView | null): OperationOutcome {
+    try {
+      const view = commit()
+      return view ? { kind: 'committed', view } : { kind: 'stale' }
+    } catch (cause) {
+      if (cause instanceof ViewQuotaError) return this.refusal(cause.requiredBytes)
+      throw cause
     }
   }
   /** Resident view without awaiting (no extra scheduling turn for the common
@@ -1445,10 +1488,9 @@ export class DocumentSession {
       // The draft mask becomes the retained view (no double count at commit).
       charge.set(0)
       metricsCharge.set(0)
-      const view = this.commitDraft(owner, {
+      return this.commitOutcome(() => this.commitDraft(owner, {
         order: state.order, visibility: projected.visibility, sort: state.sort, filter: normalized, matches,
-      })
-      return view ? { kind: 'committed', view } : { kind: 'stale' }
+      }))
     } finally {
       metricsCharge.release()
       charge.release()

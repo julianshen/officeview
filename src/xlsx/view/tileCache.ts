@@ -128,16 +128,16 @@ export class MemoryPool {
   get totalBytes(): number { return this.retained + this.transient }
   get transientBytes(): number { return this.transient }
 
-  /** Admits a retained entry. Without `force` it first evicts other entries so
-   * the total stays under the hard limit and returns null when it cannot; with
-   * `force` (bytes an operation already admitted transiently) it always lands.
-   * Either way the watermark pass runs afterwards, never evicting the new entry.
-   * Retaining an existing key replaces (and releases) the old entry. */
-  retain(key: string, init: PoolEntryInit, options: { force?: boolean } = {}): PoolEntry | null {
+  /** Admits a retained entry: first evicts other entries so the total stays
+   * under the hard limit, and returns null (changing nothing) when it cannot.
+   * There is no forced path: the hard limit holds for every admission. The
+   * watermark pass runs afterwards, never evicting the new entry. Retaining an
+   * existing key replaces (and releases) the old entry. */
+  retain(key: string, init: PoolEntryInit): PoolEntry | null {
     if (this.isClosed || !validBytes(init.bytes)) return null
     const previous = this.slots.get(key)
     const reclaimable = previous ? previous.init.bytes : 0
-    if (!options.force && !this.fit(init.bytes - reclaimable, previous)) return null
+    if (!this.fit(init.bytes - reclaimable, previous)) return null
     previous?.entry.release()
     const pool = this
     const slot: Slot = {

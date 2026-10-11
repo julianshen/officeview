@@ -9,7 +9,7 @@
 import { render, waitFor } from '@testing-library/react'
 import { readFileSync } from 'node:fs'
 import { describe, expect, it, vi } from 'vitest'
-import type { CacheIdentity, FilterSpec, RowOrder, SortSpec, WorkerReply } from '../src/xlsx/view/contracts'
+import type { CacheIdentity, FilterSpec, RowOrder, SortSpec, SourceStamp, SourceStore, WorkerReply } from '../src/xlsx/view/contracts'
 import type { XlsxDocument } from '../src/xlsx/types'
 import type { PptxDocument } from '../src/pptx/types'
 import {
@@ -21,7 +21,7 @@ import { createIdentityOrder, createRowOrder } from '../src/xlsx/view/order'
 import { createIntervalSet, visibilityFromHidden } from '../src/xlsx/view/visibility'
 import { GUARD_SCRATCH_BYTES } from '../src/xlsx/view/operationGuard'
 import {
-  DocumentSession, type FilterEvaluator, type OperationOutcome, type SessionOptions, type WorkbookSource,
+  DocumentSession, ViewNotResidentError, ViewQuotaError, type FilterEvaluator, type OperationOutcome, type SessionOptions, type WorkbookSource,
 } from '../src/worker/viewerSession'
 import { createObjectWorkbookSource } from '../src/worker/viewerObjectSource'
 import { ViewerKernel } from '../src/worker/viewerKernel'
@@ -76,6 +76,9 @@ describe('MemoryPool: one accounted document-wide budget', () => {
     expect(onRelease).toHaveBeenCalledTimes(1)
     expect(prep.live).toBe(false)
     expect(pool.stats().peakBytes).toBeLessThanOrEqual(1000)
+    // No forced admission exists: an oversized entry is refused outright.
+    expect(pool.retain('huge', { tier: 'view', bytes: 1001 })).toBeNull()
+    expect(pool.stats().totalBytes).toBeLessThanOrEqual(1000)
     // The owner's own release never calls back and is idempotent.
     active.release(); active.release(); fixed.release()
     expect(onRelease).toHaveBeenCalledTimes(1)
@@ -601,5 +604,149 @@ describe('image and font leases', () => {
       }
       expect(add).toHaveBeenCalledTimes(3)
     } finally { vi.unstubAllGlobals() }
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Review fixes: hard-limit admission, value publication, activation, lazy masks
+// ---------------------------------------------------------------------------
+
+/** Workbook source whose values change on publish(): each generation reads a
+ * different parsed document under one outer stamp sequence. */
+function versionedSource(docs: XlsxDocument[]) {
+  let gen = 0
+  const inners = docs.map(doc => createObjectWorkbookSource(doc, 'doc'))
+  const stores = new Map<string, SourceStore>()
+  const source: WorkbookSource = {
+    valuePolicy: inners[0].valuePolicy, sheets: inners[0].sheets, geometry: id => inners[0].geometry(id),
+    release: async () => { for (const inner of inners) await inner.release() },
+    store(sheetId) {
+      let store = stores.get(sheetId)
+      if (store) return store
+      const inner = () => inners[gen].store(sheetId)
+      const outer = (): SourceStamp => Object.freeze({ ...inner().stamp, valueGen: gen })
+      const fix = <O extends { stamp: SourceStamp }>(options: O): O =>
+        ({ ...options, stamp: options.stamp?.valueGen === gen ? inner().stamp : { ...inner().stamp, valueGen: -1 } })
+      const out = <T extends { stamp: SourceStamp }>(page: T): T => ({ ...page, stamp: outer() })
+      store = Object.create(inners[0].store(sheetId)) as SourceStore
+      Object.defineProperty(store, 'stamp', { get: outer })
+      store.queryColumn = (request, options) => inner().queryColumn(request, fix(options)).then(out)
+      store.readRows = (range, cursor, options) => inner().readRows(range, cursor, fix(options)).then(out)
+      store.queryStructural = (rect, options) => inner().queryStructural(rect, fix(options)).then(out)
+      stores.set(sheetId, store)
+      return store
+    },
+  }
+  return { source, publish() { gen++ } }
+}
+
+describe('S4.3 review fixes', () => {
+  it('an owner-free commit is admitted against the hard limit: evict first, then a typed quota with no state change', async () => {
+    const limit = 400_000
+    const session = objectSession(sparseDoc([fullCapacitySheet('A', 50, 1), fullCapacitySheet('B', 50, 2)]), { workerBudgetBytes: limit })
+    const rows = 200_000
+    const big = createRowOrder([{ r0: 0, r1: rows - 1, sourceAtOffset: Uint32Array.from({ length: rows }, (_v, i) => rows - 1 - i) }])
+    const draft = { order: big, visibility: visibilityFromHidden(createIntervalSet([])), sort: null, filter: null }
+    await expect(session.commitView('A', draft)).rejects.toBeInstanceOf(ViewQuotaError)
+    await expect(session.commitView('A', draft)).rejects.toMatchObject({ requiredBytes: expect.any(Number), limitBytes: limit })
+    expect(session.memoryStats().totalBytes).toBeLessThanOrEqual(limit)
+    expect(session.memoryStats().peakBytes).toBeLessThanOrEqual(limit)
+    expect(session.view('A')).toMatchObject({ revision: 0 })
+    expect(session.globalViewGen).toBe(0)
+    // A commit that fits evicts inactive views first and never exceeds the limit.
+    const small = createRowOrder([{ r0: 0, r1: 9_999, sourceAtOffset: Uint32Array.from({ length: 10_000 }, (_v, i) => 9_999 - i) }])
+    session.view('B')
+    await session.commitView('A', { ...draft, order: small })
+    expect(session.memoryStats().peakBytes).toBeLessThanOrEqual(limit)
+    await session.release()
+  })
+
+  it('touching sheets charges nothing until an operation or view needs a mask; masks are admitted, never forced', async () => {
+    const ids = ['A', 'B', 'C', 'D']
+    const session = objectSession(sparseDoc(ids.map((id, i) => fullCapacitySheet(id, 50, i))), { workerBudgetBytes: 300_000 })
+    for (const id of ids) { session.activate(id); session.identity(id) }
+    session.workbookOwner()
+    expect(session.memoryStats()).toMatchObject({ viewBytes: 0, retainedBytes: 0 })
+    for (const id of ids) {
+      session.activate(id)
+      expect(session.view(id).revision).toBe(0)
+      expect(session.memoryStats().totalBytes).toBeLessThanOrEqual(300_000)
+    }
+    expect(session.memoryStats().viewBytes).toBeGreaterThan(0)
+    expect(session.memoryStats().evictions).toBeGreaterThan(0)
+    // With the pool held by a non-evictable ballast, materializing refuses.
+    session.activate('A')
+    session.memory.trim(0)
+    expect(session.isResident('B')).toBe(false)
+    session.memory.retain('ballast', { tier: 'view', bytes: session.memory.limitBytes - session.memory.totalBytes, evictable: false })
+    expect(() => session.view('B')).toThrow(ViewQuotaError)
+    expect(session.isResident('B')).toBe(false)
+    expect(session.memoryStats().totalBytes).toBeLessThanOrEqual(300_000)
+    await session.release()
+  })
+
+  it('a value publication re-derives a sorted order identically whether the view stayed resident or was evicted', async () => {
+    const rows = 500
+    const docs = [
+      sparseDoc([fullCapacitySheet('A', rows, 1), fullCapacitySheet('B', rows, 2)]),
+      sparseDoc([fullCapacitySheet('A', rows, 9), fullCapacitySheet('B', rows, 2)]),
+    ]
+    const run = async (evict: boolean) => {
+      const versioned = versionedSource(docs)
+      const session = new DocumentSession('doc', versioned.source, { ...fast, filterEvaluator: thirds })
+      await committed(session.filter(session.identity('A'), filterOf(rows), 0, live()))
+      await committed(session.sort(session.identity('A'), sortOf(rows), live()))
+      const before = session.view('A')
+      if (evict) {
+        session.activate('B')
+        session.memory.trim(0)
+        expect(session.isResident('A')).toBe(false)
+      }
+      versioned.publish()
+      session.publishValues('A')
+      // Same rule on both paths: the applied sort is re-derived from the new values.
+      expect(session.isResident('A')).toBe(false)
+      expect(() => session.view('A')).toThrow(ViewNotResidentError)
+      const rebuilt = await session.ensureView('A', live())
+      if (rebuilt.kind !== 'resident') throw new Error(JSON.stringify(rebuilt))
+      expect(rebuilt.diagnostics?.map(d => d.code)).toEqual(['view-reapplied'])
+      expect(rebuilt.view.revision).toBe(before.revision)
+      expect(rebuilt.view.counts).toEqual(before.counts)
+      await session.release()
+      return { before: orderDigest(before.order), after: orderDigest(rebuilt.view.order) }
+    }
+    const resident = await run(false)
+    const evicted = await run(true)
+    expect(resident.after).toBe(evicted.after)
+    expect(resident.after).not.toBe(resident.before)
+    // Equal to a fresh filter→sort under the new values.
+    const fresh = objectSession(docs[1])
+    await committed(fresh.filter(fresh.identity('A'), filterOf(rows), 0, live()))
+    await committed(fresh.sort(fresh.identity('A'), sortOf(rows), live()))
+    expect(orderDigest(fresh.view('A').order)).toBe(resident.after)
+    await fresh.release()
+  })
+
+  it('activateSheet switches the active sheet only after the view rebuild succeeds', async () => {
+    const doc = sparseDoc([fullCapacitySheet('A', 5000, 1), fullCapacitySheet('B', 5000, 2)])
+    const kernel = new ViewerKernel({ parse: async () => doc }, { ...fast, filterEvaluator: thirds })
+    const replies: WorkerReply[] = []
+    const sink = (out: WorkerReply) => { replies.push(out) }
+    await kernel.handle({ kind: 'open', requestId: 'o', docId: 'doc', source: { kind: 'object', document: doc }, profile: 'D' }, sink)
+    const session = kernel.session('doc')!
+    await kernel.handle({ kind: 'sort', requestId: 's', owner: initialIdentity('doc', 'A'), spec: sortOf(5000, 'desc') }, sink)
+    await kernel.handle({ kind: 'activateSheet', requestId: 'b', owner: session.workbookOwner(), sheetId: 'B' }, sink)
+    session.memory.trim(0)
+    // Fill the pool with non-evictable ballast: A's rebuild cannot be admitted.
+    session.memory.retain('ballast', { tier: 'view', bytes: session.memory.limitBytes - session.memory.totalBytes, evictable: false })
+    await kernel.handle({ kind: 'activateSheet', requestId: 'a', owner: session.workbookOwner(), sheetId: 'A' }, sink)
+    expect(replies.at(-1)).toMatchObject({ requestId: 'a', kind: 'quota', resource: 'memory' })
+    expect(session.activeSheetId).toBe('B')
+    expect(session.isResident('B')).toBe(true)
+    expect(session.memoryStats().totalBytes).toBeLessThanOrEqual(session.memory.limitBytes)
+    session.memory.get('ballast')!.release()
+    await kernel.handle({ kind: 'activateSheet', requestId: 'a2', owner: session.workbookOwner(), sheetId: 'A' }, sink)
+    expect(replies.at(-1)).toMatchObject({ requestId: 'a2', kind: 'complete' })
+    expect(session.activeSheetId).toBe('A')
   })
 })
