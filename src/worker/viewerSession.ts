@@ -1109,6 +1109,8 @@ export class DocumentSession {
           expected = last + 1
           if (item.kind === 'unknown') return { kind: 'incomplete', missing: [{ r0: item.r0, r1: item.r1, c0: col, c1: col }] }
           if (item.kind === 'error') return { kind: 'error', error: failure(item.code, 'Column source failed', item.retryable) }
+          // Lanes are never requested here; treating one as a blank run would hide its values.
+          if (item.kind === 'lanes') return { kind: 'error', error: failure('page-error', 'Unrequested column lanes') }
           if (item.kind === 'cell' || item.kind === 'unavailable') {
             const next = protectedBytes + stagedBytes + builder.heldBytes + builder.costOf(item)
             if (next > budget.maxBytes) return quota(next)

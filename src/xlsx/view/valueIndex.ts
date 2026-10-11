@@ -1,4 +1,4 @@
-import type { ColumnEntry, FilterRange, PagedKeySetRef, SourceFailure, SourceStamp, SourceStore, ValueSearchPredicate, ValuesFilter } from './contracts'
+import type { ColumnEntry, ColumnLanes, FilterRange, PagedKeySetRef, SourceFailure, SourceStamp, SourceStore, ValueSearchPredicate, ValuesFilter } from './contracts'
 import type { ColumnClassification, PreparedValue } from './filter'
 import { FilterDiagnostic, TextFilterMatcher, WorkBudget, type FilterLimits } from './textFilter'
 import { canonicalSearchKey } from './canonicalText'
@@ -1241,9 +1241,9 @@ export async function compileValuesMembership(
   return { matches, bytes: keys.bytes, release: () => reservation?.close() }
 }
 
-/** Adapts SourceStore.queryColumn (cell-object pages) to typed lane pages until
- * the S1.2 typed-lanes queryColumn variant exists. One page per row band; the
- * owner is read live from the store. */
+/** Adapts SourceStore.queryColumn to typed lane pages. It asks for the typed
+ * lanes encoding (S1.2) and still accepts cell-object entries from stores that
+ * do not produce lanes. One page per row band; the owner is read live. */
 export function valueSourceFromStore(store: SourceStore, col: number, body: { r0: number; r1: number }, pageRows = 4096): ValueColumnSource {
   if (!Number.isSafeInteger(pageRows) || pageRows < 1 || body.r1 < body.r0 - 1) throw new RangeError('Invalid value source paging')
   const rows = body.r1 - body.r0 + 1
@@ -1258,7 +1258,7 @@ export function valueSourceFromStore(store: SourceStore, col: number, body: { r0
       const cursors = new Set<string>()
       let cursor: string | undefined, loading = false
       do {
-        const result = await store.queryColumn({ col, rows: { kind: 'intervals', intervals: [{ r0, r1 }] }, limit: count, cursor }, { signal, stamp })
+        const result = await store.queryColumn({ col, rows: { kind: 'intervals', intervals: [{ r0, r1 }] }, limit: count, cursor, encoding: 'lanes' }, { signal, stamp })
         checkSignal(signal, 'Value page read')
         if (!sameStamp(result.stamp, stamp) || !sameStamp(store.stamp, stamp)) throw new ValueIndexError('stale-source', 'Column page owner changed')
         if (result.error) return { kind: 'error', failure: { ...result.error } }
@@ -1281,6 +1281,40 @@ export function valueSourceFromStore(store: SourceStore, col: number, body: { r0
     },
   }
 }
+/** Lane tags share their numbers with SOURCE_* (contracts LANE_*), so they copy straight in. */
+function placeLanes(
+  lanes: ColumnLanes, r0: number,
+  tags: Uint8Array, numbers: Float64Array, styles: Uint32Array, texts: (string | undefined)[],
+): ValuePageRead | undefined {
+  const n = lanes.rows.length
+  if (lanes.tags.length !== n || lanes.numbers.length !== n || lanes.styles.length !== n || lanes.textStart.length !== n + 1) {
+    throw new ValueIndexError('page-error', 'Malformed column lanes')
+  }
+  tags.fill(SOURCE_BLANK, lanes.r0 - r0, lanes.r1 - r0 + 1)
+  let previous = -1
+  for (let i = 0; i < n; i++) {
+    const row = lanes.rows[i], tag = lanes.tags[i]
+    if (row <= previous || row < lanes.r0 || row > lanes.r1) throw new ValueIndexError('page-error', 'Column lanes rows out of order')
+    if (tag !== SOURCE_NUMBER && tag !== SOURCE_STRING && tag !== SOURCE_BOOLEAN && tag !== SOURCE_ERROR && tag !== SOURCE_BLANK && tag !== SOURCE_UNAVAILABLE) {
+      throw new ValueIndexError('page-error', 'Unknown column lane tag')
+    }
+    previous = row
+    const at = row - r0
+    tags[at] = tag
+    styles[at] = lanes.styles[i]
+    if (tag === SOURCE_NUMBER || tag === SOURCE_BOOLEAN) numbers[at] = lanes.numbers[i]
+    else if (tag === SOURCE_STRING || tag === SOURCE_ERROR) texts[at] = laneText(lanes, i)
+  }
+  return undefined
+}
+function laneText(lanes: ColumnLanes, i: number): string {
+  const start = lanes.textStart[i], end = lanes.textStart[i + 1]
+  if (!(start <= end) || end > lanes.text.length) throw new ValueIndexError('page-error', 'Column lane text out of range')
+  let out = ''
+  // Chunked so a long value never exceeds the engine's argument limit.
+  for (let at = start; at < end; at += 8192) out += String.fromCharCode(...lanes.text.subarray(at, Math.min(end, at + 8192)))
+  return out
+}
 function place(
   item: ColumnEntry, r0: number, r1: number, col: number,
   tags: Uint8Array, numbers: Float64Array, styles: Uint32Array, texts: (string | undefined)[],
@@ -1293,6 +1327,7 @@ function place(
   }
   for (let row = first; row <= last; row++) if (tags[row - r0]) throw new ValueIndexError('page-error', 'Overlapping column coverage')
   if (item.kind === 'blank') { tags.fill(SOURCE_BLANK, first - r0, last - r0 + 1); return }
+  if (item.kind === 'lanes') return placeLanes(item, r0, tags, numbers, styles, texts)
   const at = first - r0, cell = item.cell
   if (cell.row !== first || cell.col !== col || cell.id !== first * 16384 + col) throw new ValueIndexError('page-error', 'Cell identity does not match its column entry')
   styles[at] = cell.styleIndex ?? 0
