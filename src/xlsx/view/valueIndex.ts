@@ -6,7 +6,7 @@ import {
   sameStamp, valueKeyString, type LaneAccount, type ValueKeySet, type ValueRunStore,
 } from './valueRuns'
 import {
-  EXACT_SEARCH, SEARCH_HASH_CHUNK_BYTES, combineTextHash, foldVariantOf, isCertifiedSearchKeyStrategy, textChunkHash,
+  EXACT_SEARCH, foldVariantOf, isCertifiedSearchKeyStrategy, textContentHash,
   type SearchKeyOwner, type SearchKeyStore, type SearchKeyStrategy,
 } from './searchKeys'
 
@@ -479,20 +479,16 @@ export class ValueIndex implements LaneAccount {
    * chunk's scratch (encoded bytes plus the hasher's padded copy) is charged
    * before allocation, and cancellation is checked between chunks. */
   private async contentHash(signal: AbortSignal | undefined, pacer: Pacer): Promise<string> {
-    const chunks: string[] = [], texts = this.texts, scratch = this.reserve()
+    const scratch = this.reserve()
     try {
-      for (let start = 0; start < texts.length;) {
-        let end = start, size = 0
-        while (end < texts.length && (end === start || size + 4 + texts[end].length * 2 <= SEARCH_HASH_CHUNK_BYTES)) size += 4 + texts[end++].length * 2
-        scratch.charge(size * 2 + 128)
-        chunks.push(textChunkHash(texts, start, end))
-        scratch.release()
-        start = end
-        this.check(signal)
-        if (pacer.due) { await pacer.yield(); this.check(signal) }
-      }
+      return await textContentHash(this.texts, {
+        account: scratch,
+        afterChunk: async () => {
+          this.check(signal)
+          if (pacer.due) { await pacer.yield(); this.check(signal) }
+        },
+      })
     } finally { scratch.close() }
-    return combineTextHash(texts.length, chunks)
   }
   /** Computes (or adopts stored) search keys for the raw text dictionary.
    * Cancellable and resumable. Keys are an optimization only: storage

@@ -6,7 +6,7 @@ import {
   type ValueColumnSource, type ValueIndex, type ValueIndexIdentity, type ValuePageRead, type ValueSearchResult,
 } from '../src/xlsx/view/valueIndex'
 import {
-  EXACT_SEARCH, MemorySearchKeyStore, SEARCH_HASH_CHUNK_BYTES, createSearchKeyStrategy, foldVariantOf,
+  EXACT_SEARCH, MemorySearchKeyStore, SEARCH_HASH_CHUNK_BYTES, createSearchKeyStrategy, foldVariantOf, textContentHash,
   type SearchKeyOwner, type SearchKeyStrategy, type SearchKeyStrategySpec,
 } from '../src/xlsx/view/searchKeys'
 
@@ -347,6 +347,48 @@ describe('review round 3 findings', () => {
     await store.save(owner(strategy), run('first'))
     await Promise.all([store.save(owner(strategy), run('second')), store.save(owner(strategy), run('third-longer')), store.save(owner(strategy), run('x'))])
     expect(store.usedBytes).toBe(pool.usedBytes)
+    await store.delete(owner(strategy))
+    expect(store.usedBytes).toBe(0)
+    expect(pool.usedBytes).toBe(0)
+  })
+})
+
+describe('review round 4 findings', () => {
+  const recorder = () => {
+    const account = { live: 0, peak: 0, charge(bytes: number) { this.live += bytes; this.peak = Math.max(this.peak, this.live) }, release(bytes: number) { this.live -= bytes } }
+    return account
+  }
+  it('bounds hash scratch even for one value far larger than a chunk (codex r4 2)', async () => {
+    const huge = 'x'.repeat(4 * 1024 * 1024) + 'y', account = recorder()
+    let chunks = 0
+    const hash = await textContentHash(['a', huge, 'b'], { account, afterChunk: () => { chunks++ } })
+    expect(account.peak).toBeLessThanOrEqual(2 * SEARCH_HASH_CHUNK_BYTES + 128)
+    expect(account.live).toBe(0)
+    expect(chunks).toBeGreaterThanOrEqual(8)
+    expect(await textContentHash(['a', huge, 'b'], { account: recorder(), afterChunk: () => {} })).toBe(hash)
+    const changed = 'x'.repeat(4 * 1024 * 1024) + 'z'
+    expect(await textContentHash(['a', changed, 'b'], { account: recorder(), afterChunk: () => {} })).not.toBe(hash)
+    // Segment boundaries stay injective: moving a code unit across values changes the hash.
+    expect(await textContentHash(['ax', 'b'], { account: recorder(), afterChunk: () => {} }))
+      .not.toBe(await textContentHash(['a', 'xb'], { account: recorder(), afterChunk: () => {} }))
+  }, 60_000)
+  it('stops hashing a huge value at the first chunk boundary after cancellation (codex r4 2)', async () => {
+    const huge = 'x'.repeat(8 * 1024 * 1024)
+    let calls = 0
+    await expect(textContentHash([huge], { account: recorder(), afterChunk: () => { if (++calls === 2) throw new Error('stop') } })).rejects.toThrow('stop')
+    expect(calls).toBe(2)
+  }, 60_000)
+  it('reconciles a replaced run that was shed during its own admission (codex r4 1)', async () => {
+    const store = new MemorySearchKeyStore(), strategy = asciiCandidate()
+    const pool = new ValueIndexCache({ limitBytes: 300, searchKeys: { strategy, store } })
+    const run = (key: string) => ({ count: 1, hash: 'a'.repeat(64), keys: [key] })
+    await store.save(owner(strategy), run('k'))
+    const one = store.usedBytes
+    expect(pool.usedBytes).toBe(one)
+    await store.save(owner(strategy), run('j'))
+    expect(await store.load(owner(strategy))).toMatchObject({ keys: ['j'] })
+    expect(store.usedBytes).toBe(one)
+    expect(pool.usedBytes).toBe(one)
     await store.delete(owner(strategy))
     expect(store.usedBytes).toBe(0)
     expect(pool.usedBytes).toBe(0)

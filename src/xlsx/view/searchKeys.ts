@@ -126,6 +126,21 @@ export function textChunkHash(texts: readonly string[], start: number, end: numb
   return sha256HexJs(bytes)
 }
 export const combineTextHash = (count: number, chunks: readonly string[]): string => sha256HexJs(`${count}:${chunks.join(',')}`)
+/** Content hash of a text dictionary in byte-bounded chunks. Each chunk's
+ * scratch (encoded bytes plus the hasher's copy) is charged to account before
+ * allocation; afterChunk runs between chunks (cancellation checks, yields). */
+export async function textContentHash(texts: readonly string[], options: { account: LaneAccount; afterChunk: () => Promise<void> | void }): Promise<string> {
+  const chunks: string[] = []
+  for (let start = 0; start < texts.length;) {
+    let end = start, size = 0
+    while (end < texts.length && (end === start || size + 4 + texts[end].length * 2 <= SEARCH_HASH_CHUNK_BYTES)) size += 4 + texts[end++].length * 2
+    options.account.charge(size * 2 + 128)
+    try { chunks.push(textChunkHash(texts, start, end)) } finally { options.account.release(size * 2 + 128) }
+    start = end
+    await options.afterChunk()
+  }
+  return combineTextHash(texts.length, chunks)
+}
 export interface SearchKeyStore {
   /** null when absent; typed storage-error on failure. */
   load(owner: SearchKeyOwner, signal?: AbortSignal): Promise<SearchKeyRun | null>
