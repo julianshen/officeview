@@ -896,7 +896,9 @@ describe('review round 3 findings', () => {
     const source = fromCells(items(40)), index = new ValueIndexCache().open(identity(), source)
     await index.build()
     const draft = await ValueSelectionDraft.open(index, null, new MemoryValueRunStore())
-    const later = (action: () => void) => queueMicrotask(() => queueMicrotask(() => queueMicrotask(action)))
+    // Two nested microtasks land between the inner adoption and the outer
+    // continuation; a third would run after draft.search has returned.
+    const later = (action: () => void) => queueMicrotask(() => queueMicrotask(action))
     await expect(draft.search({ text: 'item', locale: 'en-US' }, {
       onProgress: p => { if (p.searched === p.total) later(() => { source.stamp = { ...STAMP, valueGen: 8 } }) },
     })).rejects.toMatchObject({ code: 'stale-source' })

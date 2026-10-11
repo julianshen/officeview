@@ -6,7 +6,7 @@ import {
   sameStamp, valueKeyString, type LaneAccount, type ValueKeySet, type ValueRunStore,
 } from './valueRuns'
 import {
-  EXACT_SEARCH, SEARCH_HASH_CHUNK, combineTextHash, foldVariantOf, isCertifiedSearchKeyStrategy, textChunkHash,
+  EXACT_SEARCH, SEARCH_HASH_CHUNK_BYTES, combineTextHash, foldVariantOf, isCertifiedSearchKeyStrategy, textChunkHash,
   type SearchKeyOwner, type SearchKeyStore, type SearchKeyStrategy,
 } from './searchKeys'
 
@@ -475,13 +475,23 @@ export class ValueIndex implements LaneAccount {
     this.retain(bytes)
     this.keyBytes += bytes
   }
-  /** Content hash of the raw text dictionary, in paced cancellable chunks. */
+  /** Content hash of the raw text dictionary in byte-bounded chunks. Each
+   * chunk's scratch (encoded bytes plus the hasher's padded copy) is charged
+   * before allocation, and cancellation is checked between chunks. */
   private async contentHash(signal: AbortSignal | undefined, pacer: Pacer): Promise<string> {
-    const chunks: string[] = [], texts = this.texts
-    for (let start = 0; start < texts.length; start += SEARCH_HASH_CHUNK) {
-      chunks.push(textChunkHash(texts, start, Math.min(texts.length, start + SEARCH_HASH_CHUNK)))
-      if (pacer.due) { await pacer.yield(); this.check(signal) }
-    }
+    const chunks: string[] = [], texts = this.texts, scratch = this.reserve()
+    try {
+      for (let start = 0; start < texts.length;) {
+        let end = start, size = 0
+        while (end < texts.length && (end === start || size + 4 + texts[end].length * 2 <= SEARCH_HASH_CHUNK_BYTES)) size += 4 + texts[end++].length * 2
+        scratch.charge(size * 2 + 128)
+        chunks.push(textChunkHash(texts, start, end))
+        scratch.release()
+        start = end
+        this.check(signal)
+        if (pacer.due) { await pacer.yield(); this.check(signal) }
+      }
+    } finally { scratch.close() }
     return combineTextHash(texts.length, chunks)
   }
   /** Computes (or adopts stored) search keys for the raw text dictionary.
@@ -837,6 +847,7 @@ export class ValueSelectionDraft {
   }
   /** Opens on the applied rule; a rule owned by another generation or column is stale. */
   static async open(index: ValueIndex, committed: ValuesFilter | null, store: ValueRunStore, signal?: AbortSignal): Promise<ValueSelectionDraft> {
+    checkSignal(signal, 'Value draft open')
     index.assertLive()
     const reservation = index.reserve()
     try {
@@ -969,11 +980,23 @@ export class ValueSelectionDraft {
       this.controllers.delete(controller)
     }
   }
+  /** Rechecks after an outer await: a cancel or owner change between the
+   * inner adoption and this continuation releases the result instead. */
+  private adopted(result: ValueSearchResult, signal: AbortSignal | undefined): ValueSearchResult {
+    try {
+      if (this.closed || signal?.aborted) throw new ValueIndexError('cancelled', 'Value draft search cancelled')
+      this.index.assertLive()
+    } catch (error) {
+      if (this.held.delete(result)) this.index.release(result)
+      throw error
+    }
+    return result
+  }
   /** Search changes only the displayed list. The previous displayed search is
    * released unless a Select All patch holds it. */
   async search(query: ValueSearchQuery, options: ValueSearchOptions = {}): Promise<ValueSearchResult> {
     this.open()
-    const result = await this.searchOwned(query, options)
+    const result = this.adopted(await this.searchOwned(query, options), options.signal)
     this.current = result
     this.releaseUnused()
     return result
@@ -986,7 +1009,7 @@ export class ValueSelectionDraft {
     for (const layer of this.layers) {
       if (layer.kind !== 'search' || layer.result.searchedEntries >= this.index.size) continue
       const previous = layer.result
-      const next = await this.searchOwned(previous.query, { ...options, resume: previous, label: undefined, limits: undefined })
+      const next = this.adopted(await this.searchOwned(previous.query, { ...options, resume: previous, label: undefined, limits: undefined }), options.signal)
       for (const other of this.layers) if (other.kind === 'search' && other.result === previous) other.result = next
       if (this.current === previous) this.current = next
       this.releaseUnused()
@@ -1146,10 +1169,14 @@ export async function compileValuesMembership(
   const owner = { docId: identity.docId, sheetId: identity.sheetId, valueGen: identity.valueGen }
   if (!sameStamp(ref.owner, owner)) throw new ValueIndexError('stale-source', 'Values rule belongs to another source generation')
   if (classification.kind === 'loading') throw new FilterDiagnostic('incomplete', 'Filter incomplete: column classification is loading')
+  checkSignal(options.signal, 'Values membership')
   const reservation = options.cache?.reserve()
   let keys: ValueKeySet
-  try { keys = await loadKeySet(store, ref, valueScope(identity), options.signal, reservation) }
-  catch (error) { reservation?.close(); throw error }
+  try {
+    keys = await loadKeySet(store, ref, valueScope(identity), options.signal, reservation)
+    // An empty ref performs no read; a final read may race an abort.
+    checkSignal(options.signal, 'Values membership')
+  } catch (error) { reservation?.close(); throw error }
   const include = rule.selection.mode === 'include', showBlanks = rule.showBlanks
   const numberKind = classification.kind === 'date' ? KEY_DATE : KEY_NUMBER
   const matches = (value: PreparedValue): boolean => {

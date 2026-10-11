@@ -302,9 +302,10 @@ describe('review round 3 findings', () => {
   it('charges hash scratch: no room for one chunk falls back to streaming (codex r3 2)', async () => {
     const values = big(256, 4096), probe = new ValueIndexCache(), sized = probe.open(identity(), new StringSource(values, 64))
     await sized.build()
-    const keys = values.length * (4096 * 2 + 48), store = new MemorySearchKeyStore({ account: new ValueIndexCache().reserve() })
-    // Room for the index and its keys, but not for one hash scratch chunk.
-    const cache = new ValueIndexCache({ limitBytes: probe.usedBytes + keys + 64 * 1024, searchKeys: { strategy: asciiCandidate(), store } })
+    // Tiny keys (8 units, never decisive) so only the hash scratch can overflow.
+    const tiny = createSearchKeyStrategy({ ...asciiSpec(), canonicalizerVersion: 'fake-prefix-1', searchKeyOf: text => text.slice(0, 8), matchKey: () => true })
+    const store = new MemorySearchKeyStore({ account: new ValueIndexCache().reserve() })
+    const cache = new ValueIndexCache({ limitBytes: probe.usedBytes + 64 * 1024, searchKeys: { strategy: tiny, store } })
     const index = cache.open(identity(), new StringSource(values, 64))
     await index.build()
     await index.search({ text: '0001', locale: 'en-US' })

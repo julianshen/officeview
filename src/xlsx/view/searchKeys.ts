@@ -109,7 +109,6 @@ export interface SearchKeyRun {
   readonly hash: string
   readonly keys: readonly (string | null)[]
 }
-export const SEARCH_HASH_CHUNK = 4096
 /** Upper bound of one hash scratch chunk (bytes of length-prefixed UTF-16). */
 export const SEARCH_HASH_CHUNK_BYTES = 1024 * 1024
 /** SHA-256 of length-prefixed UTF-16 code units; lone surrogates are hashed
@@ -187,11 +186,13 @@ export class MemorySearchKeyStore implements SearchKeyStore {
         resource: 'storage', requiredBytes: this.usedBytes - previous + bytes, limitBytes: this.limitBytes, retryable: false,
       })
     }
+    // Atomic replacement (no await): concurrent saves cannot strand charges.
     this.account?.charge(bytes)
     const copy = Object.freeze({ count: run.count, hash: run.hash, keys: Object.freeze(run.keys.slice()) })
-    if (previous) await this.delete(owner)
+    this.runs.delete(id)
     this.runs.set(id, { run: copy, bytes })
-    this.usedBytes += bytes
+    this.usedBytes += bytes - previous
+    if (previous) this.account?.release(previous)
     this.saves++
   }
   async delete(owner: SearchKeyOwner): Promise<void> { this.remove(searchKeyOwnerId(owner)) }
