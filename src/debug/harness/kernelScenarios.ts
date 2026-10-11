@@ -68,18 +68,8 @@ function bodyRange(def: ScenarioDef, rows: number): SortSpec['range'] {
     : { r0: 0, r1: rows - 1, c0: 0, c1: 0, headerRows: 0, totalsRows: 0 }
 }
 
-/** F2 fields lowest-cardinality first (flag, name, note, date, ratio, amount,
- * code, id): with a unique key first the comparator would never reach lanes 2–8. */
-const F2_EIGHT_KEYS = [2, 3, 7, 1, 5, 4, 6, 0]
-/** Two numeric F2 keys (date, amount): the most 1M-row columns the D prepared
- * budget admits (2 × ~22 MiB of 64 MiB), so the warm boundary is genuinely prepared. */
-const F2_TWO_KEYS = [1, 4]
-
 function keysOf(def: ScenarioDef): number[] {
-  if (def.fixture === 'F4') return [0]
-  if (def.id.endsWith('8key')) return F2_EIGHT_KEYS
-  if (def.id.endsWith('2key')) return F2_TWO_KEYS
-  return [1]
+  return [...def.keys]
 }
 
 /** Conservative retained bytes of one materialized fixture cell, on the same
@@ -140,6 +130,8 @@ function withSparseRows(store: SourceStore): SourceStore {
 function workbookSource(store: SourceStore, name: string, residentBytes: () => number): WorkbookSource {
   const geometry = buildGeometry([], [])
   return {
+    // Charged, pinned resident cells own their strings for the session lifetime.
+    retainsKeyStrings: () => residentBytes() > 0,
     bindMemory(pool) {
       const bytes = residentBytes()
       if (bytes <= 0) return
@@ -164,12 +156,63 @@ function displayText(value: FixtureCell['value'] | undefined): string {
   return text.length > 40 ? `${text.slice(0, 40)}…` : text
 }
 
+/** Counts raw source column queries: a genuinely prepared warm sort makes none. */
+function countingColumns(store: SourceStore): { store: SourceStore; reads: () => number; reset: () => void } {
+  let reads = 0
+  const queryColumn: SourceStore['queryColumn'] = (request, options) => { reads++; return store.queryColumn(request, options) }
+  return {
+    store: new Proxy(store, { get: (target, key, receiver) => (key === 'queryColumn' ? queryColumn : Reflect.get(target, key, receiver)) }),
+    reads: () => reads,
+    reset: () => { reads = 0 },
+  }
+}
+
 class SessionHarness {
   readonly session: DocumentSession
   owner: CacheIdentity
+  private readonly counter: ReturnType<typeof countingColumns>
+  readonly ownsStrings: boolean
   constructor(store: SourceStore, name: string, profile: ProfileId, residentBytes: number, filterEvaluator?: FilterEvaluator) {
-    this.session = new DocumentSession(store.stamp.docId, workbookSource(withSparseRows(store), name, () => residentBytes), { profile, locale: 'en', filterEvaluator })
+    this.counter = countingColumns(withSparseRows(store))
+    this.ownsStrings = residentBytes > 0
+    this.session = new DocumentSession(store.stamp.docId, workbookSource(this.counter.store, name, () => residentBytes), { profile, locale: 'en', filterEvaluator })
     this.owner = initialIdentity(store.stamp.docId, store.stamp.sheetId)
+  }
+  get sourceReads(): number { return this.counter.reads() }
+  resetReads(): void { this.counter.reset() }
+  /** Prepares key columns as one batch; if the batch is refused, stages them
+   * one column at a time (a batch's staging peak exceeds the retained
+   * capacity). Returns how many keys are prepared; source-read counts in the
+   * kernel/query extras verify that none was evicted afterwards. */
+  async prepareKeys(keys: readonly number[], notes: string[]): Promise<number> {
+    const batch = await this.session.prepareColumns(this.owner, keys, signal())
+    notes.push(`prepareColumns(${keys.join(',')}) -> ${batch.kind}${batch.kind === 'quota' ? ` (required ${batch.requiredBytes} B > limit ${batch.limitBytes} B)` : ''}`)
+    if (batch.kind === 'complete') return keys.length
+    // Staging one column can evict an earlier one (LRU) to fit the column
+    // count or bytes, so stop as soon as a staged key is no longer resident.
+    const staged: number[] = []
+    for (const col of keys) {
+      const outcome = await this.session.prepareColumns(this.owner, [col], signal())
+      notes.push(`staged prepareColumns(${col}) -> ${outcome.kind}`)
+      if (outcome.kind !== 'complete') break
+      staged.push(col)
+      const evicted: number[] = []
+      for (const done of staged) if (!(await this.isPrepared(done))) evicted.push(done)
+      if (evicted.length) {
+        notes.push(`staging column ${col} evicted prepared column(s) ${evicted.join(',')}`)
+        return staged.length - evicted.length
+      }
+    }
+    return staged.length
+  }
+  /** A one-row prepared-store read touches the raw source only when the column is not prepared. */
+  private async isPrepared(col: number): Promise<boolean> {
+    const before = this.counter.reads()
+    await this.session.preparedStore(this.sheetId).queryColumn(
+      { col, rows: { kind: 'intervals', intervals: [{ r0: 0, r1: 0 }] }, limit: 1 },
+      { signal: signal(), stamp: this.session.preparedStore(this.sheetId).stamp },
+    )
+    return this.counter.reads() === before
   }
   get sheetId(): string { return this.owner.sheetId }
   /** Aggregate worker pool accounting after an operation (resident + retained + transient peak). */
@@ -225,13 +268,14 @@ function sortRunner(def: ScenarioDef, rows: number, profile: ProfileId, admitted
           : `UNADMITTED run: F4 cells are materialized once (${residentBytes} B) but NOT charged to the worker budget; this is diagnostic timing, not an admitted-profile measurement`)
       }
       // The session's prepared-column cache is the "prepared complete columns"
-      // boundary. Its profile budget may refuse; the session then reads the
-      // source, which is a fallback diagnostic, not the warm boundary.
+      // boundary. Keys it cannot hold are read from the source: a FALLBACK
+      // diagnostic, not the warm boundary (source reads are recorded).
       const started = now()
-      const outcome = await host.session.prepareColumns(host.owner, keys, signal())
+      notes.push(`profile ${profile}`)
+      const prepared = await host.prepareKeys(keys, notes)
       metrics['prepare-columns'] = now() - started
-      notes.push(`profile ${profile}: prepareColumns(${keys.join(',')}) -> ${outcome.kind}${outcome.kind === 'quota' ? ` (required ${outcome.requiredBytes} B > limit ${outcome.limitBytes} B; sorts read the source store: FALLBACK, not the prepared warm boundary)` : ''}`)
-      metrics['prepared-columns-admitted'] = outcome.kind === 'complete' ? keys.length : 0
+      metrics['prepared-columns-admitted'] = prepared
+      if (prepared < keys.length) notes.push(`only ${prepared} of ${keys.length} key columns prepared: FALLBACK, not the prepared warm boundary`)
       return { metrics, notes }
     },
     async kernel() {
@@ -245,9 +289,11 @@ function sortRunner(def: ScenarioDef, rows: number, profile: ProfileId, admitted
       const started = now()
       mark = started
       let result: Awaited<ReturnType<typeof sortRowOrder>>
+      host.resetReads()
       try {
         result = await sortRowOrder(prepared, spec, {
           locale: 'en', residentWorkerBytes: host.session.memory.totalBytes, maxWorkerBytes: host.session.memory.limitBytes,
+          ...(host.ownsStrings ? { sourceRetainsStrings: true } : {}),
           yield: async (phase) => {
             const at = now()
             phases[phase] = (phases[phase] ?? 0) + (at - mark)
@@ -261,17 +307,21 @@ function sortRunner(def: ScenarioDef, rows: number, profile: ProfileId, admitted
       phases.tail = ended - mark
       const ms = ended - started
       if (result.kind !== 'complete') throw new Error(`sortRowOrder did not complete: ${JSON.stringify(result)}`)
-      const extras: Record<string, number> = { 'kernel-peak-bytes': result.ledger.peakBytes, 'kernel-aggregate-peak-bytes': result.ledger.aggregatePeakBytes }
+      const extras: Record<string, number> = {
+        'kernel-peak-bytes': result.ledger.peakBytes, 'kernel-aggregate-peak-bytes': result.ledger.aggregatePeakBytes,
+        'kernel-dictionary-bytes': result.ledger.dictionaryBytes, 'kernel-source-column-reads': host.sourceReads,
+      }
       for (const [phase, value] of Object.entries(phases)) extras[`kernel-phase:${phase}`] = value
       return { ms, extras }
     },
     async query() {
+      host.resetReads()
       const started = now()
       const outcome = await host.session.sort(host.owner, spec, signal())
       const ms = now() - started
       if (outcome.kind !== 'committed') throw new Error(`session.sort did not commit: ${JSON.stringify(outcome)}`)
       host.owner = outcome.view.identity
-      return { ms, visible: outcome.view.counts.visible, total: outcome.view.counts.total, viewport: viewportOf(outcome.view, cellAt, cols), extras: host.poolExtras() }
+      return { ms, visible: outcome.view.counts.visible, total: outcome.view.counts.total, viewport: viewportOf(outcome.view, cellAt, cols), extras: { ...host.poolExtras(), 'source-column-reads': host.sourceReads } }
     },
   }
 }

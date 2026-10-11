@@ -11,7 +11,7 @@ import { SCENARIOS, SCENARIO_IDS, isScenarioId } from '../src/debug/harness/scen
 
 describe('S8.4 scenario catalog', () => {
   it('maps each scenario to a frozen-profile threshold and an F2/F4 fixture', () => {
-    expect(SCENARIO_IDS).toHaveLength(8)
+    expect(SCENARIO_IDS).toHaveLength(9)
     expect(new Set(SCENARIO_IDS.map(id => SCENARIOS[id].threshold))).toEqual(new Set([
       'numeric-sort-100k', 'numeric-sort-1m', 'numeric-filter-1m', 'natural-text-sort-1m', 'cold-value-index-100k',
     ]))
@@ -115,15 +115,28 @@ function inProcessChannel(): KernelChannel {
 }
 
 describe('profile and resident-memory admission', () => {
-  it('runs the requested profile: M admits at most 4 prepared columns where D admits 8', async () => {
+  it('runs the requested profile: M holds at most 4 prepared columns where D holds 8, and source reads expose the rest', async () => {
     const desktop = createScenarioRunner('sort-100k-8key', 1002, 'D')
     expect(desktop.info.profile).toBe('D')
     expect((await desktop.prepare()).metrics['prepared-columns-admitted']).toBe(8)
+    expect((await desktop.kernel()).extras['kernel-source-column-reads']).toBe(0)
+    expect((await desktop.query()).extras['source-column-reads']).toBe(0)
     const mobile = createScenarioRunner('sort-100k-8key', 1002, 'M')
     const prep = await mobile.prepare()
     expect(mobile.info.profile).toBe('M')
-    expect(prep.metrics['prepared-columns-admitted']).toBe(0)
-    expect(prep.notes.join(' ')).toMatch(/profile M: prepareColumns\(2,3,7,1,5,4,6,0\) -> quota/)
+    const notes = prep.notes.join(' | ')
+    expect(notes).toMatch(/profile M/)
+    expect(notes).toMatch(/prepareColumns\(2,3,7,1,5,4,6,0\) -> quota/)
+    // Staged one column at a time: the fifth column evicts an earlier one, so four stay prepared.
+    expect(prep.metrics['prepared-columns-admitted']).toBe(4)
+    expect(notes).toMatch(/staging column 5 evicted prepared column\(s\) 2/)
+    expect(notes).toMatch(/FALLBACK/)
+    expect((await mobile.kernel()).extras['kernel-source-column-reads']).toBeGreaterThan(0)
+  })
+
+  it('every scenario declares its key configuration, matching the runner', () => {
+    for (const id of SCENARIO_IDS) expect(createScenarioRunner(id, 302).info.keys, id).toEqual([...SCENARIOS[id].keys])
+    expect(SCENARIOS['sort-1m-3key'].keys).toEqual([1, 4, 5])
   })
 
   it('an unadmitted run does not charge the resident source and says so', async () => {
@@ -131,7 +144,8 @@ describe('profile and resident-memory admission', () => {
     expect(runner.info.admitted).toBe(false)
     const prep = await runner.prepare()
     expect(prep.notes.join(' ')).toMatch(/UNADMITTED/)
-    await runner.kernel()
+    // Nothing charged the strings elsewhere, so the dictionary charges full copies.
+    expect((await runner.kernel()).extras['kernel-dictionary-bytes']).toBeGreaterThan(2000 * 16)
     expect((await runner.query()).extras['worker-pool-source-bytes']).toBe(0)
   })
 
@@ -146,6 +160,8 @@ describe('profile and resident-memory admission', () => {
     expect(resident).toBeGreaterThan(2000 * 64)
     const kernel = await runner.kernel()
     expect(kernel.extras['kernel-aggregate-peak-bytes']).toBeGreaterThanOrEqual(resident + kernel.extras['kernel-peak-bytes'])
+    // The charged resident source owns the strings: the dictionary charges 16 B references only.
+    expect(kernel.extras['kernel-dictionary-bytes']).toBe(2000 * 16)
     const query = await runner.query()
     expect(query.extras['worker-pool-source-bytes']).toBe(resident)
     expect(query.extras['worker-pool-peak-bytes']).toBeGreaterThanOrEqual(resident)
