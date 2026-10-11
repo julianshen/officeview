@@ -93,7 +93,7 @@ Every package is implemented on its own branch, reviewed by at least one agent f
 |---|---|
 | S0.1 contracts, S0.2 fixtures, S0.3 harness scaffold | merged |
 | S2.1 order/visibility/axes, S2.2 scroll window, S2.4 sheet zoom model (UI wiring open) | merged |
-| S8.1 typed filters, date lowering (`filter.ts`, `datePredicates.ts`, `textFilter.ts`; worker/mask publication open) | merged; known residual: uncertified text classes fail with typed `resource-limit` near 1,000 chars (see `docs/validation/s8-1-text-match-amendment-proposal.md`) |
+| S8.1 typed filters, date lowering (`filter.ts`, `datePredicates.ts`, `textFilter.ts`; worker/mask publication open) | merged; collator-based text matching to be replaced by canonical matching (S8.5, spec §7.1 amended 2026-10-11) |
 | S7.2 pure sort engine (`src/xlsx/view/sort.ts`; worker kernel/session/header integration open) | merged |
 | S1.1 streaming ZIP/XML | design spike in progress (no production code yet) |
 | S3.1/S3.2 structural index and operation guard (pure parts: `structure.ts`, `operationGuard.ts`; parser/drawing/spill wiring open) | merged |
@@ -488,6 +488,16 @@ expect(wide.contains({ row: 2, col: 0 })).toBe(false)
 - [ ] GREEN: parse declared range and rule kinds for diagnostics only per spec; preserve file-hidden snapshot and original stored order. Do not silently import unsupported filter state or invent funnel state from hidden rows. Clear restores load snapshot, including file-declared filtering effects.
 - [ ] Run focused command plus adapter parity and standard gates; expected supported saved effects render correctly through S2 hidden fix, no formula/table parser regression.
 - [ ] Deliver parser delta through the shared integration owner.
+
+### S8.5 Canonical text matching (spec §7.1 amendment, approved 2026-10-11)
+
+**Files:** modify `src/xlsx/view/textFilter.ts`, `filter.ts`; create `src/xlsx/view/canonicalText.ts` and generated pinned Unicode data (case folding incl. Turkic, default-ignorable set, extended-grapheme segmentation rules) under `src/xlsx/view/unicode/` with its generator script; test `tests/xlsx-viewer-canonical-text.test.ts`, update `tests/xlsx-viewer-filter.test.ts`.
+
+- [ ] RED: every row of the "verified differences" table in `docs/validation/s8-1-text-match-amendment-proposal.md` (Danish `aa`/`aA`, `å`/`aa`, `å`/`a\u200ba`, `a`/U+0363, `ß`/`ss`, `ﬁ`/`fi` with `?`, `contains('e','é')` vs `e\u0301`, `?` vs `é`/`e\u0301`, `?` vs lone U+200B), Turkish/Azeri dotted/dotless I incl. decomposed `I`+U+0307, emoji ZWJ sequences and flags as single graphemes, lone surrogates as single units, default-ignorables removed, `~` escapes unchanged.
+- [ ] GREEN: canonical pipeline (NFD → remove default-ignorables → locale-aware full case fold → NFD) over pinned data independent of the host's ICU; grapheme segmentation of the canonical form; equality/begins/ends/contains on grapheme boundaries with linear-time matching (e.g. KMP over grapheme-unit IDs) and wildcard `*`/`?` over grapheme units with memoized/DP or linear glob matching; remove the collator certificate and the cubic reference path from the filter (keep a slow test-only oracle built from the spec text for differential tests).
+- [ ] Derived canonical key per value is cacheable (S8.2 search-key port supplies `searchKeyOf`); raw values/semantic keys unchanged.
+- [ ] Differential/property tests: ≥100k seeded cases comparing the optimized matcher with the spec-text oracle over the S8.1 hostile pools; no `resource-limit` for ordinary text up to the §12 text-length targets; cost linear in text length.
+- [ ] Deliver with measured (non-browser, labelled) per-value cost for contains/equals/wildcard at 100–2000 characters, and remove the S8.1 residual from §0.4.
 
 ### S8.4 Performance threshold freeze (exit gate for S8)
 
