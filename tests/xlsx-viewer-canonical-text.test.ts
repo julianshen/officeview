@@ -64,7 +64,27 @@ describe('canonical search key', () => {
     ['tr', 'I', 'ı'], ['tr', 'İ', 'i'], ['tr', 'I\u0307', 'i'], ['tr', 'I\u0323\u0307', 'i\u0323'], ['tr', 'I\u0301\u0307', 'ı\u0301\u0307'],
     ['az', 'İSTANBUL', 'istanbul'], ['tr_TR', 'I', 'ı'], ['TR-tr', 'I', 'ı'], ['az-Latn-AZ', 'I', 'ı'],
     ['en-US', 'İ', 'i\u0307'], ['en-US', 'I', 'i'], ['de', 'I\u0307', 'i\u0307'], ['tk', 'I', 'i'],
+    // SpecialCasing Before_Dot/After_I on the sequence after ignorable removal:
+    // any intervening class other than 0 or 230 (e.g. U+0315 ccc 232) is allowed.
+    ['tr', 'I\u0315\u034f\u0307', 'i\u0315'], ['tr', 'I\u0315\u0307', 'i\u0315'], ['az', 'I\u034f\u0307', 'i'],
+    ['tr', 'I\u200b\u0307', 'i'], ['tr', 'I\u200d\u0307', 'ı\u200d\u0307'], ['tr', 'I\u0307\u0307', 'i\u0307'],
+    ['az', 'I\u0345\u0307', 'iι'], ['tr', 'I\u0315\u0301\u0307', 'ı\u0301\u0307\u0315'], ['tr', '\u0307I', '\u0307ı'],
   ])('applies locale-aware folding for %s %j', (locale, text, expected) => expect(hex(canonicalSearchKey(text, locale))).toBe(hex(expected)))
+  it('agrees with the independent CCC-based Turkic context oracle after ignorable removal', () => {
+    const pool = ['I', 'i', 'ı', 'İ', '\u0307', '\u0315', '\u0323', '\u0301', '\u0345', '\u031b', '\u0360', '\u1dce', '\u034f', '\u200b', '\u200d', '\u00ad', 'a', 'A', '\ufe0f']
+    let seed = 1130, checked = 0
+    const random = (length: number) => { seed = (seed * 48271) % 2147483647; return seed % length }
+    for (let index = 0; index < 50000; index++) {
+      let text = ''
+      for (let i = 1 + random(7); i > 0; i--) text += pool[random(pool.length)]
+      for (const locale of ['tr', 'az', 'en']) {
+        const actual = canonicalSearchKey(text, locale), expected = oracleCanonical(text, locale)
+        if (actual !== expected) throw new Error(JSON.stringify({ locale, text: hex(text), actual: hex(actual), expected: hex(expected) }))
+        checked++
+      }
+    }
+    expect(checked).toBe(150000)
+  })
   it('recognizes only Turkish and Azeri language subtags as Turkic', () => {
     expect(['tr', 'tr-TR', 'az', 'AZ-cyrl', 'tr_TR'].map(isTurkicLocale)).toEqual([true, true, true, true, true])
     expect(['en', 'tk', 'trv', 'de-TR', ''].map(isTurkicLocale)).toEqual([false, false, false, false, false])
@@ -166,31 +186,31 @@ describe('emoji, flags, lone surrogates and ignorables', () => {
   it('retains ZWJ, variation selectors and tag characters so emoji sequences stay single graphemes', () => {
     // Spec §7.1 (clarified 2026-10-11) exempts U+200D, U+FE00-FE0F,
     // U+E0100-E01EF and U+E0020-E007F from default-ignorable removal.
-    const family = '\u{1f468}‍\u{1f469}‍\u{1f467}'
+    const family = '\u{1f468}\u200d\u{1f469}\u200d\u{1f467}'
     expect(canonicalSearchKey(family, 'en')).toBe(family)
     expect(wild('?', family)).toBe(true)
     expect(wild('???', family)).toBe(false)
     expect(match('contains', '\u{1f469}', family)).toBe(false)
     expect(match('eq', family, '\u{1f468}\u{1f469}\u{1f467}')).toBe(false)
-    expect(match('eq', '❤️', '❤')).toBe(false)
-    expect(wild('?', '❤️')).toBe(true)
+    expect(match('eq', '❤\ufe0f', '❤')).toBe(false)
+    expect(wild('?', '❤\ufe0f')).toBe(true)
     const england = '\u{1f3f4}\u{e0067}\u{e0062}\u{e0065}\u{e006e}\u{e0067}\u{e007f}'
     expect(wild('?', england)).toBe(true)
     expect(match('eq', england, '\u{1f3f4}')).toBe(false)
     expect(match('contains', '\u{1f3f4}', england)).toBe(false)
     expect(canonicalSearchKey('辻\u{e0100}', 'en')).toBe('辻\u{e0100}')
     // Other default-ignorables are still removed.
-    expect(canonicalSearchKey('a​‌­͏⁠﻿b', 'en')).toBe('ab')
+    expect(canonicalSearchKey('a\u200b\u200c\u00ad\u034f\u2060\ufeffb', 'en')).toBe('ab')
   })
   it('treats a query whose canonical form is empty as no search term', () => {
     for (const op of ops) {
-      for (const pattern of ['', '​', '­⁠']) {
+      for (const pattern of ['', '\u200b', '\u00ad\u2060']) {
         for (const wildcards of [false, true]) {
-          for (const text of ['abc', '', '​', '\u{1f600}']) expect(matcher().match(op, pattern, wildcards, text)).toBe(true)
+          for (const text of ['abc', '', '\u200b', '\u{1f600}']) expect(matcher().match(op, pattern, wildcards, text)).toBe(true)
         }
       }
     }
-    expect(wild('?', '​')).toBe(false)
+    expect(wild('?', '\u200b')).toBe(false)
     expect(wild('*', 'abc')).toBe(true)
   })
   it('treats a lone surrogate as one unit, even before a combining mark', () => {
@@ -280,14 +300,51 @@ describe('cacheable search keys', () => {
   })
   it('matches a prepared predicate against canonical keys directly', () => {
     const predicate = matcher('de').prepare('contains', 'SS', false, new WorkBudget())
-    expect(predicate.key(canonicalSearchKey('Straße', 'de'), new WorkBudget())).toBe(true)
-    expect(predicate.key('strasse', new WorkBudget())).toBe(true)
+    expect(predicate.key(canonicalSearchKey('Straße', 'de'), 6, new WorkBudget())).toBe(true)
+    expect(predicate.key('strasse', 7, new WorkBudget())).toBe(true)
     expect(predicate('Straße', new WorkBudget())).toBe(true)
+  })
+})
+
+describe('one resource admission policy for raw and key paths', () => {
+  const mixed: ColumnClassification = { kind: 'text', hasNumeric: true }
+  const context = { locale: 'en-US', dateSystem: '1900' as const, timeZone: 'UTC', nowMs: 0 }
+  const outcome = (run: () => boolean) => { try { return run() } catch (error) { return error instanceof Error ? error.message : String(error) } }
+  it('preflights the raw length before the key hook on both paths', () => {
+    let hooked = 0
+    const searchKeyOf = (text: string, locale: string) => { hooked++; return canonicalSearchKey(text, locale) }
+    const plain = new FilterEngine(context), cached = new FilterEngine({ ...context, searchKeyOf })
+    const cases: [string, string][] = [['\u00e9'.repeat(32769), '\u00e9'], ['a' + '\u200b'.repeat(65536), 'a'], ['\u00e9'.repeat(65537), 'zzz'], ['x'.repeat(65536), '\u200b']]
+    for (const [text, first] of cases) {
+      for (const op of ops) {
+        const rule = { kind: 'text' as const, op, first, wildcards: false }
+        const a = outcome(() => plain.compileRule(rule, mixed)({ kind: 'string', value: text }))
+        const before = hooked
+        const b = outcome(() => cached.compileRule(rule, mixed)({ kind: 'string', value: text }))
+        expect(b).toBe(a)
+        if (text.length > 65536) { expect(a).toMatch(/resource/i); expect(hooked).toBe(before) }
+      }
+    }
+    expect(outcome(() => plain.compileRule({ kind: 'text', op: 'contains', first: '\u00e9', wildcards: false }, mixed)({ kind: 'string', value: '\u00e9'.repeat(32769) }))).toBe(true)
+  })
+  it('charges the raw length on the key path, never the key length', () => {
+    const key = canonicalSearchKey('\u00e9'.repeat(32769), 'en')
+    expect(key.length).toBe(65538)
+    expect(compileKeyMatcher('contains', '\u00e9', false, 'default')(key, 32769)).toBe(true)
+    expect(() => compileKeyMatcher('contains', 'a', false, 'default')('a', 65537)).toThrow(/resource/i)
+    const raw = { used: 0 }, viaKey = { used: 0 }
+    const predicate = matcher().prepare('contains', 'zzz', false, new WorkBudget())
+    predicate('\u00e9'.repeat(100), new WorkBudget({ work: raw }))
+    predicate.key(canonicalSearchKey('\u00e9'.repeat(100), 'en'), 100, new WorkBudget({ work: viaKey }))
+    expect(viaKey.used).toBe(raw.used)
+    expect(() => predicate.key('a', -1, new WorkBudget())).toThrow(RangeError)
   })
 })
 
 describe('key-level API for the S8.2 value search', () => {
   it('versions the key function by canonicalizer, Unicode data and fold variant', () => {
+    // v2: Turkic After_I/Before_Dot contexts use real combining classes.
+    expect(CANONICAL_KEY_VERSION).toBe(2)
     expect(canonicalKeyStrategyId('default')).toBe(`canonical-text/v${CANONICAL_KEY_VERSION}/unicode-16.0.0/default`)
     expect(canonicalKeyStrategyId('turkic')).toBe(`canonical-text/v${CANONICAL_KEY_VERSION}/unicode-16.0.0/turkic`)
     expect(['en-US', 'tr', 'az-Latn', 'de'].map(foldVariantOf)).toEqual(['default', 'turkic', 'turkic', 'default'])
@@ -297,10 +354,10 @@ describe('key-level API for the S8.2 value search', () => {
   })
   it('flags simple keys whose every code-unit position is a grapheme boundary', () => {
     for (const key of ['', 'abc', 'straße'.normalize('NFD'), '漢字', 'a\r', 'a\ud800b']) expect(isSimpleKey(key)).toBe(true)
-    for (const key of ['é', '\u{1f600}', '\u{1f1fa}\u{1f1f8}', '\r\n', '하', 'กำ', 'a‍']) expect(isSimpleKey(key)).toBe(false)
+    for (const key of ['e\u0301', '\u{1f600}', '\u{1f1fa}\u{1f1f8}', '\r\n', '\u1112\u1161', 'กำ', 'a\u200d']) expect(isSimpleKey(key)).toBe(false)
   })
   it('checks grapheme boundaries on keys', () => {
-    const key = canonicalSearchKey('Cafés \u{1f468}‍\u{1f469}', 'en')
+    const key = canonicalSearchKey('Cafés \u{1f468}\u200d\u{1f469}', 'en')
     expect([0, 3, 4, 5, 6, 7].map(at => isGraphemeBoundary(key, at))).toEqual([true, true, false, true, true, true])
     expect(isGraphemeBoundary(key, key.length)).toBe(true)
     expect(isGraphemeBoundary(key, key.length - 2)).toBe(false)
@@ -312,14 +369,14 @@ describe('key-level API for the S8.2 value search', () => {
     expect(key.includes('e')).toBe(true)
     expect(keyContains(key, 'e')).toBe(false)
     expect(keyBegins(key, 'e')).toBe(false)
-    expect(keyEnds(key, '́')).toBe(false)
+    expect(keyEnds(key, '\u0301')).toBe(false)
     expect(keyContains(canonicalSearchKey('Straße', 'de'), canonicalSearchKey('SE', 'de'))).toBe(true)
-    expect(keyContains('xáa', 'a')).toBe(true)
+    expect(keyContains('xa\u0301a', 'a')).toBe(true)
     expect(keyContains('abc', '')).toBe(true)
-    expect(keyContains('é', 'e', true)).toBe(true) // caller asserted simple: no verification
+    expect(keyContains('e\u0301', 'e', true)).toBe(true) // caller asserted simple: no verification
     const wildcard = compileKeyMatcher('eq', 'caf?', true, 'default')
-    expect(wildcard(canonicalSearchKey('CAFÉ', 'en'))).toBe(true)
-    expect(compileKeyMatcher('contains', 'e', false, 'default')(key)).toBe(false)
+    expect(wildcard(canonicalSearchKey('CAFE\u0301', 'en'), 4)).toBe(true)
+    expect(compileKeyMatcher('contains', 'e', false, 'default')(key, 1)).toBe(false)
   })
 })
 
@@ -387,6 +444,7 @@ describe('differential: optimized matcher versus the spec-text oracle', () => {
     '👨', '👩', '👧', '👨\u200d👩\u200d👧', '🇺', '🇸', '🇫', '🇷', '🇺🇸', '👍', '🏽', '👍🏽', '😀', '❤\ufe0f', '🏴',
     '한', '\u1112', '\u1161', '\u11ab', '가', 'क', '\u094d', 'ष', '\u093f', 'त', 'क\u094dष\u093f', 'ก', 'ำ', '\u0e31', '\u0e48', 'เ',
     '\ud800', '\udc00', '\ud83d', '\ude00', '*', '?', '~', ' ', 'x', 'Z',
+    'I\u0315\u034f\u0307', '\u0315', '\u0345', '\u031b', '\u0360', 'I\u200b\u0307', 'I\u200d\u0307',
   ]
   const locales = ['en-US', 'tr-TR', 'az', 'da-DK', 'de-DE', 'sv-SE', 'lt']
   it('agrees on at least 100,000 seeded inputs across all six operations', () => {
@@ -412,7 +470,7 @@ describe('differential: optimized matcher versus the spec-text oracle', () => {
         const actual = matchers[which].match(op, pattern, wildcards, text, { maxWork: Number.MAX_SAFE_INTEGER })
         const expected = oracleMatch(op, pattern, wildcards, text, locale)
         // Key path: searchKeyOf-style precomputed keys and the exported matchers.
-        const viaKey = compileKeyMatcher(op, pattern, wildcards, foldVariantOf(locale))(key)
+        const viaKey = compileKeyMatcher(op, pattern, wildcards, foldVariantOf(locale))(key, text.length)
         const viaLiteral = wildcards ? viaKey : (op === 'contains' ? keyContains(key, query) : op === 'begins' ? keyBegins(key, query) : op === 'ends' ? keyEnds(key, query) : viaKey)
         if (actual !== expected || viaKey !== expected || viaLiteral !== expected) throw new Error(JSON.stringify({ index, locale, op, pattern: hex(pattern), text: hex(text), wildcards, actual, viaKey, viaLiteral, expected }))
         checked++

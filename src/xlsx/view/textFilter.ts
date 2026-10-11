@@ -50,8 +50,15 @@ export class WorkBudget {
     this.work.used += amount
   }
   text(value: string): void {
-    if (value.length > this.maxTextLength) throw new FilterDiagnostic('resource-limit', 'Filter resource text length exceeded')
+    this.admit(value.length)
     this.charge(value.length)
+  }
+  /** Raw-length admission without charging: the single text-length policy,
+   * applied before any canonicalization or search-key computation. */
+  admit(length: number): void {
+    if (!Number.isSafeInteger(length) || length < 0) throw new RangeError('Invalid text length')
+    this.charge(0)
+    if (length > this.maxTextLength) throw new FilterDiagnostic('resource-limit', 'Filter resource text length exceeded')
   }
 }
 type Token = Readonly<{ kind: 'literal'; text: string } | { kind: 'star' } | { kind: 'one' }>
@@ -160,7 +167,9 @@ function leftmost(text: Int32Array, part: Segment, from: number, limit: number, 
  * locale), e.g. one supplied by a cache through the S8.2 searchKeyOf port. */
 export interface PreparedTextPredicate {
   (text: string, budget: WorkBudget): boolean
-  key(canonical: string, budget: WorkBudget): boolean
+  /** Same admission and charges as the raw call: `rawLength` is the raw value's
+   * UTF-16 length, admitted against maxTextLength and charged before the key. */
+  key(canonical: string, rawLength: number, budget: WorkBudget): boolean
 }
 
 /** Canonical text matching (spec §7.1): literal conditions compare canonical
@@ -249,18 +258,20 @@ export class TextFilterMatcher {
     const predicate = ((text: string, budget: WorkBudget) => {
       budget.charge(0)
       if (typeof text !== 'string') throw new RangeError('Invalid text condition')
-      if (inert) return true
-      // Preflight length before normalization makes any copies.
+      // Preflight raw length before normalization makes any copies.
       budget.text(text)
+      if (inert) return true
       const canonical = canonicalize(text, this.turkic)
       budget.charge(canonical.length)
       return evaluate(canonical, budget) !== negative
     }) as PreparedTextPredicate
-    predicate.key = (canonical, budget) => {
+    predicate.key = (canonical, rawLength, budget) => {
       budget.charge(0)
       if (typeof canonical !== 'string') throw new RangeError('Invalid text condition')
+      budget.admit(rawLength)
+      budget.charge(rawLength)
       if (inert) return true
-      budget.text(canonical)
+      budget.charge(canonical.length)
       return evaluate(canonical, budget) !== negative
     }
     return predicate
@@ -270,9 +281,10 @@ export class TextFilterMatcher {
 /** Key-level matcher for the S8.2 value search: evaluates a text condition
  * against canonical search keys (canonicalSearchKey with the same fold
  * variant), applying the grapheme-boundary and wildcard rules of spec §7.1.
- * Uses the default per-call allowances of a fresh WorkBudget per key. */
-export function compileKeyMatcher(op: TextOp, pattern: string, wildcards: boolean, variant: FoldVariant, limits?: FilterLimits): (key: string) => boolean {
+ * `rawLength` (the raw value's UTF-16 length) is admitted and charged exactly
+ * as on the raw path; each key gets a fresh WorkBudget with `limits`. */
+export function compileKeyMatcher(op: TextOp, pattern: string, wildcards: boolean, variant: FoldVariant, limits?: FilterLimits): (key: string, rawLength: number) => boolean {
   if (variant !== 'default' && variant !== 'turkic') throw new RangeError('Invalid fold variant')
   const predicate = new TextFilterMatcher(variant === 'turkic' ? 'tr' : 'und').prepare(op, pattern, wildcards, new WorkBudget(limits))
-  return key => predicate.key(key, new WorkBudget(limits))
+  return (key, rawLength) => predicate.key(key, rawLength, new WorkBudget(limits))
 }

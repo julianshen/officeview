@@ -162,7 +162,12 @@ export class FilterEngine {
     if (rule.kind !== 'text') throw new RangeError('Invalid condition kind')
     const prepared = this.text.prepare(rule.op, rule.first, rule.wildcards, compilation)
     const { searchKeyOf, locale } = this.context
-    const match = searchKeyOf ? (text: string, budget: WorkBudget) => prepared.key(searchKeyOf(text, locale), budget) : prepared
+    // One admission policy: the raw length is preflighted before the hook runs.
+    const match = searchKeyOf ? (text: string, budget: WorkBudget) => {
+      if (typeof text !== 'string') throw new RangeError('Invalid text condition')
+      budget.admit(text.length)
+      return prepared.key(searchKeyOf(text, locale), text.length, budget)
+    } : prepared
     return (value, budget) => {
       budget.charge(0)
       resolved(value)
