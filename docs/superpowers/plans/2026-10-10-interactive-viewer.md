@@ -93,7 +93,8 @@ Every package is implemented on its own branch, reviewed by at least one agent f
 |---|---|
 | S0.1 contracts, S0.2 fixtures, S0.3 harness scaffold | merged |
 | S2.1 order/visibility/axes, S2.2 scroll window, S2.4 sheet zoom model (UI wiring open) | merged |
-| S8.1 typed filters, date lowering (`filter.ts`, `datePredicates.ts`, `textFilter.ts`; worker/mask publication open) | merged; collator-based text matching to be replaced by canonical matching (S8.5, spec §7.1 amended 2026-10-11) |
+| S8.1 typed filters, date lowering (`filter.ts`, `datePredicates.ts`, `textFilter.ts`; worker/mask publication open) | merged; its collator text matching is replaced by S8.5 canonical matching |
+| S8.5 canonical text matching (`canonicalText.ts`, pinned Unicode 16.0 tables under `src/xlsx/view/unicode/`, `textFilter.ts`) | implemented on `feature/iv-s8-5`, pending review |
 | S7.2 pure sort engine (`src/xlsx/view/sort.ts`; worker kernel/session/header integration open) | merged |
 | S1.1 streaming ZIP/XML | design spike in progress (no production code yet) |
 | S3.1/S3.2 structural index and operation guard (pure parts: `structure.ts`, `operationGuard.ts`; parser/drawing/spill wiring open) | merged |
@@ -454,7 +455,7 @@ expect(wide.contains({ row: 2, col: 0 })).toBe(false)
 
 ### S8.1 Typed filters and day/period boundaries
 
-> **Status (2026-10-11):** pure filter/date engine merged (codex implementation; Claude round-3 fixes; reviews by Claude and opencode over four rounds; every finding fixed; 0 mismatches in ~1.85M fast-vs-reference comparisons across 34 locales). Known residual, user decision pending: cells whose text the collator certificate cannot certify (e.g. `ß`, NFD marks, Danish `aa`+`å`) fall back to the exact reference matcher and fail with typed `resource-limit` around 1,000 characters for plain `contains` under the default allowance; a canonical-form semantics amendment is proposed in `docs/validation/s8-1-text-match-amendment-proposal.md`. Mask publication through S3 guards, the formatted display-text lane and worker integration are NOT delivered.
+> **Status (2026-10-11):** pure filter/date engine merged (codex implementation; Claude round-3 fixes; reviews by Claude and opencode over four rounds; every finding fixed; 0 mismatches in ~1.85M fast-vs-reference comparisons across 34 locales). The collator certificate and its `resource-limit` residual for uncertifiable text (`ß`, NFD marks, Danish `aa`+`å`) are removed by S8.5, which replaces collator matching with the canonical form of the amended spec §7.1. Mask publication through S3 guards, the formatted display-text lane and worker integration are NOT delivered.
 
 **Files:** create `src/xlsx/view/filter.ts`, `datePredicates.ts`; extend worker kernel/session; consume existing `src/xlsx/formula/serial.ts`, `functions/wildcard.ts`; test `tests/xlsx-viewer-filter.test.ts`, `tests/xlsx-viewer-date-filter.test.ts`.
 
