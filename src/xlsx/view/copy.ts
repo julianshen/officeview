@@ -1,9 +1,15 @@
-import type { AuthoritativeCell, CacheIdentity, GridSelection, RowOrder, RowVisibility, SourceStore } from './contracts'
+import type { AuthoritativeCell, CacheIdentity, GridSelection, ProfileId, RowOrder, RowVisibility, SourceStore } from './contracts'
 import { cellId, validateSourceRect } from './coordinates'
 import { rowSetIntervals, sameIdentity, sameStamp } from '../../worker/viewerSession'
+import { MAIN_THREAD_BUDGETS } from './tileCache'
 import { copyText, type CopyOutcome } from '../../core/clipboard'
 
 export const CLIPBOARD_BYTES = 8 * 1024 * 1024
+/** The in-process SourceStore does not expose the S4.3 live reservation ledger.
+ * Reserve at most 3/8 of its main-thread profile for output buffers/projection:
+ * D=24 MiB, M=12 MiB. A worker caller can pass its admitted reservation instead. */
+export function copySessionBudget(profile: ProfileId): number { return MAIN_THREAD_BUDGETS[profile] * 3 / 8 }
+export const DEFAULT_COPY_SESSION_BYTES = copySessionBudget('D')
 const METADATA_BYTES = 4 * 1024 * 1024
 const BATCH_CELLS = 256
 export interface CopyInput {
@@ -71,10 +77,48 @@ function projectedRows(input: CopyInput, part: GridSelection['ranges'][number]):
   }
   return merged(out)
 }
+/** Range-count tree over at most 16,384 visible columns. Whole covered/empty
+ * subtrees stop traversal, so collecting the union visits output runs rather
+ * than rescanning every selection rectangle at every row boundary. */
+class ColumnCoverage {
+  private readonly counts: Int32Array
+  private readonly covered: Uint32Array
+  constructor(private readonly size: number) {
+    this.counts = new Int32Array(size * 4)
+    this.covered = new Uint32Array(size * 4)
+  }
+  change(run: Run, delta: number, node = 1, lo = 0, hi = this.size - 1): void {
+    if (run.lo <= lo && hi <= run.hi) this.counts[node] += delta
+    else {
+      const mid = Math.floor((lo + hi) / 2)
+      if (run.lo <= mid) this.change(run, delta, node * 2, lo, mid)
+      if (run.hi > mid) this.change(run, delta, node * 2 + 1, mid + 1, hi)
+    }
+    this.covered[node] = this.counts[node] > 0 ? hi - lo + 1 : lo === hi ? 0 : this.covered[node * 2] + this.covered[node * 2 + 1]
+  }
+  runs(): Run[] {
+    const out: Run[] = []
+    const visit = (node: number, lo: number, hi: number) => {
+      if (!this.covered[node]) return
+      if (this.covered[node] === hi - lo + 1) {
+        const last = out[out.length - 1]
+        if (last && last.hi + 1 === lo) last.hi = hi
+        else out.push({ lo, hi })
+        return
+      }
+      const mid = Math.floor((lo + hi) / 2)
+      visit(node * 2, lo, mid); visit(node * 2 + 1, mid + 1, hi)
+    }
+    visit(1, 0, this.size - 1)
+    return out
+  }
+}
 /** Union in visible-rank space: hidden gaps disappear, overlapping parts dedupe.
- * Disjoint rectangles use top-left order and a blank line between blocks. */
+ * Sort row events once; each changes column coverage in O(log C). Disjoint
+ * rectangles use top-left order and a blank line between blocks. */
 function blocksFor(input: CopyInput): Block[] {
-  const rectangles: Block[] = []
+  const events: { row: number; cols: Run; delta: number }[] = []
+  let columnCount = 0
   for (const part of input.selection.ranges) {
     const rows = projectedRows(input, part)
     const cols = merged(part.cols.flatMap(({ c0, c1 }) => {
@@ -82,27 +126,34 @@ function blocksFor(input: CopyInput): Block[] {
       const lo = input.columns.rank(c0), end = input.columns.rank(c1 + 1)
       return end > lo ? [{ lo, hi: end - 1 }] : []
     }))
-    if ((rectangles.length + rows.length * cols.length) * 64 > METADATA_BYTES) throw limit()
-    for (const r of rows) for (const c of cols) rectangles.push({ rows: r, cols: c })
+    if ((events.length + rows.length * cols.length * 2) * 32 > METADATA_BYTES) throw limit()
+    for (const r of rows) for (const c of cols) {
+      columnCount = Math.max(columnCount, c.hi + 1)
+      events.push({ row: r.lo, cols: c, delta: 1 }, { row: r.hi + 1, cols: c, delta: -1 })
+    }
   }
-  const edges = [...new Set(rectangles.flatMap(b => [b.rows.lo, b.rows.hi + 1]))].sort((a, b) => a - b)
+  if (!events.length) return []
+  events.sort((a, b) => a.row - b.row)
+  const coverage = new ColumnCoverage(columnCount)
   const blocks: Block[] = [], lastByColumns = new Map<string, Block>()
-  let work = 0
-  for (let i = 0; i < edges.length - 1; i++) {
+  let lowerBytes = 0
+  for (let i = 0; i < events.length;) {
     check(input)
-    const lo = edges[i], hi = edges[i + 1] - 1
-    work += rectangles.length
-    if (work > 2 ** 20) throw limit()
-    const cols = merged(rectangles.filter(b => b.rows.lo <= lo && b.rows.hi >= hi).map(b => b.cols))
-    for (const c of cols) {
-      const key = `${c.lo}:${c.hi}`, last = lastByColumns.get(key)
-      if (last && last.rows.hi + 1 === lo) last.rows.hi = hi
+    const lo = events[i].row
+    do { coverage.change(events[i].cols, events[i].delta); i++ } while (i < events.length && events[i].row === lo)
+    if (i === events.length) break
+    const hi = events[i].row - 1
+    for (const c of coverage.runs()) {
+      const key = `${c.lo}:${c.hi}`, last = lastByColumns.get(key), rows = hi - lo + 1, cols = c.hi - c.lo + 1
+      if (last && last.rows.hi + 1 === lo) { last.rows.hi = hi; lowerBytes += 2 * rows * cols }
       else {
+        lowerBytes += 2 * (rows * (cols - 1) + rows - 1) + (blocks.length ? 4 : 0)
         const block = { rows: { lo, hi }, cols: { ...c } }
         blocks.push(block); lastByColumns.set(key, block)
       }
     }
-    if (blocks.length * 128 > METADATA_BYTES) throw limit()
+    // Output-derived rejection, independent of the number of row edges visited.
+    if (lowerBytes > CLIPBOARD_BYTES || blocks.length * 128 > METADATA_BYTES) throw limit()
   }
   return blocks.sort((a, b) => a.rows.lo - b.rows.lo || a.cols.lo - b.cols.lo)
 }
@@ -160,7 +211,7 @@ export async function serializeSelection(input: CopyInput): Promise<CopyResult> 
       return sum + 2 * (r * (c - 1) + r - 1)
     }, Math.max(0, blocks.length - 1) * 4)
     if (lower > CLIPBOARD_BYTES) throw limit()
-    const sessionBytes = input.sessionBudgetBytes ?? 24 * 1024 * 1024
+    const sessionBytes = input.sessionBudgetBytes ?? DEFAULT_COPY_SESSION_BYTES
     const metadata = blocks.length * 128
     if (lower * 2 + metadata > sessionBytes) throw limit()
     const chunks: string[] = []

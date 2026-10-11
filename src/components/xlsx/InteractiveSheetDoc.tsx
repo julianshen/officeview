@@ -15,9 +15,11 @@
  * changes keep zoom and scroll. A committed view bumps that sheet's viewGen and
  * the workbook globalViewGen, which re-keys base tiles, find and hit geometry.
  *
- * TODO(S1.2/S4): source reads, geometry and find run in-thread over the interim
- * object source; the worker `viewport`/`search` commands replace them for the
- * paged source without changing this component's layers.
+ * Staged scope: OfficeDoc currently supplies only `doc`, never the paged `source`
+ * port. The interactive viewport and its copy controls are therefore absent on
+ * production paged sheets; this is not a clipboard refusal path. Worker viewport,
+ * search and source wiring remain a follow-up package. In-process source reads
+ * and geometry continue here until that integration.
  */
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type ReactElement } from 'react'
 import type { XlsxCell, XlsxDocument, XlsxSheet } from '../../xlsx/types'
@@ -51,10 +53,10 @@ import { GRID_HEADER_SIZE, columnHeaderHeight } from './GridHeaders'
 import { useControlMedia } from './controlMedia'
 import { FilterDropdown } from './FilterDropdown'
 import { SortDialog } from './SortDialog'
-import { viewerControls, type ViewerControls } from './viewerControlsClient'
+import { createViewerControlResources, viewerControls, type ViewerControlResources, type ViewerControls } from './viewerControlsClient'
 import type { ControlSnapshot } from './controlsClient'
 import { failureText } from './controlUi'
-import { copySelection } from '../../xlsx/view/copy'
+import { copySelection, copySessionBudget } from '../../xlsx/view/copy'
 import { LARGE_EXPORT_MESSAGE } from '../../render/paint'
 import { SAVED_VALUES_DIAGNOSTIC } from '../../xlsx/view/values'
 import type { WorkbookSource } from '../../worker/viewerSession'
@@ -505,6 +507,7 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
   }
   const goToHit = (hit: FindHit) => {
     if (!sheetIds.includes(hit.sheetId)) return
+    cancelCopy()
     const sheetEntry = entryFor(hit.sheetId)
     if (!windows.has(hit.sheetId)) windowFor(hit.sheetId, sheetEntry)
     const result = navigateToHit({ session, windows, viewport }, hit)
@@ -532,13 +535,21 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
   const [controls, setControls] = useState<ViewerControls | null>(null)
   const controlsReady = useRef<Promise<ViewerControls> | null>(null)
   const controlPorts = useRef(new Map<string, ViewerControls>()).current
+  const controlResources = useRef<ViewerControlResources | null>(null)
   useEffect(() => {
-    setControls(controlPorts.get(activeSheetId) ?? null)
-    if (controlPorts.has(activeSheetId)) return
+    const reused = controlPorts.get(activeSheetId)
+    setControls(reused ?? null)
+    if (reused) {
+      controlPorts.delete(activeSheetId); controlPorts.set(activeSheetId, reused)
+      controlsReady.current = Promise.resolve(reused)
+      return
+    }
     const abort = new AbortController()
-    const ready = viewerControls({ doc, source, sheetId: activeSheetId, snapshot: () => snapshot(activeSheetId),
+    const resources = controlResources.current ??= createViewerControlResources(profile)
+    const ready = viewerControls({ doc, source, resources, sheetId: activeSheetId, snapshot: () => snapshot(activeSheetId),
       view: () => ({ ...current.current.entryFor(activeSheetId).view, selection: session.get(activeSheetId).selection }),
       publish: draft => {
+        cancelCopy()
         const revision = current.current.identityOf(activeSheetId).viewGen + 1
         localViews.set(activeSheetId, { revision, ...draft })
         current.current.entryFor(activeSheetId)
@@ -547,11 +558,20 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
       },
     }, abort.signal)
     controlsReady.current = ready
-    void ready.then(port => { if (abort.signal.aborted) { port.dispose(); return }; controlPorts.set(activeSheetId, port); setControls(port) })
+    void ready.then(port => {
+      if (abort.signal.aborted) { port.dispose(); return }
+      controlPorts.set(activeSheetId, port)
+      // Retain the active port and one recent sheet, not a full index per visit.
+      while (controlPorts.size > 2) {
+        const oldest = controlPorts.keys().next().value!
+        controlPorts.get(oldest)!.dispose(); controlPorts.delete(oldest)
+      }
+      setControls(port)
+    })
       .catch(error => { if (!abort.signal.aborted) setAnnouncement(error instanceof Error ? error.message : 'Controls unavailable.') })
     return () => abort.abort()
   }, [activeSheetId, source])
-  useEffect(() => () => { for (const port of controlPorts.values()) port.dispose(); controlPorts.clear() }, [])
+  useEffect(() => () => { for (const port of controlPorts.values()) port.dispose(); controlPorts.clear(); controlResources.current?.dispose(); controlResources.current = null }, [])
   const [popup, setPopup] = useState<{ kind: 'filter' | 'sort'; col: number; invoker: HTMLElement } | null>(null)
   const closePopup = () => setPopup(null)
   const controlJob = useRef<AbortController | null>(null)
@@ -594,6 +614,7 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
     }
     if (start !== null) hiddenCols.push({ r0: start, r1: entry.metrics.cols.logicalCount - 1 })
     const result = await copySelection({ store: source.store(activeSheetId), owner: { ...identity }, currentOwner: () => current.current.identityOf(current.current.activeSheetId),
+      sessionBudgetBytes: copySessionBudget(profile),
       selection, order: entry.view.order, visibility: entry.view.visibility, columns: visibilityFromHidden(createIntervalSet(hiddenCols), entry.metrics.cols.logicalCount),
       allowed: () => current.current.allowCopy, signal: abort.signal, onPending: () => { if (token === copyToken.current) setAnnouncement('Copy is waiting for values; cancel to stop.') },
       format: cell => { const raw = cellAt(entry, cell); return cellDisplayText(entry.sheet, { value: cell.value, style: raw?.style }) },
@@ -850,6 +871,7 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
   }, [allowPrint])
 
   const onGridChange = (transition: GridTransition) => {
+    cancelCopy()
     session.setSelection(activeSheetId, transition.selection)
     setAnnouncement(transition.announcement)
     setInspection(undefined)
@@ -864,11 +886,13 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
     if (result.kind === 'hidden') { inspectHidden(activeSheetId, result.target, result.hiddenReason ?? 'authored-hidden'); return }
     setInspection(undefined)
     const moved = scrollNavigateTo(scroll, { metrics: entry.metrics, viewport, view: { ...entry.view, selection: result.selection } }, request, state.selection.active)
+    cancelCopy()
     session.setSelection(activeSheetId, result.selection)
     setWindow(activeSheetId, moved.window)
   }
   const onSheetChange = (sheetId: string) => {
     if (!sheetIds.includes(sheetId)) return
+    cancelCopy()
     entryFor(sheetId)
     setInspection(undefined)
     session.activate(sheetId)

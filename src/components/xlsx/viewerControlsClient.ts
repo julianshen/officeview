@@ -1,19 +1,47 @@
 /** In-process S9 transport: stage in a private, budgeted session and publish the
  * resulting order/mask together. The uploaded document and live view stay untouched
  * while a dialog is pending. Worker transports use the same ControlsClient port. */
-import type { CacheIdentity, FilterRange, SheetView } from '../../xlsx/view/contracts'
+import type { CacheIdentity, FilterRange, PagedKeySetRef, ProfileId, SheetView } from '../../xlsx/view/contracts'
 import type { XlsxCell, XlsxDocument } from '../../xlsx/types'
 import { cellDisplayText } from '../../xlsx/render'
 import { classifyColumn, FilterEngine, type FilterContext, type PreparedValue, type ColumnClassification } from '../../xlsx/view/filter'
 import { compileValuesMembership, ValueIndexCache, valueSourceFromStore, type ValueIndexIdentity, type ValueLanePage, ValueIndexError } from '../../xlsx/view/valueIndex'
 import { CompactRowVisibility, createRowVisibility } from '../../xlsx/view/visibility'
-import { MemoryValueRunStore } from '../../xlsx/view/valueRuns'
+import { MemoryValueRunStore, type ValueRunStore } from '../../xlsx/view/valueRuns'
 import { StructuralIndex } from '../../xlsx/view/structure'
 import { DocumentSession, type OperationOutcome, type WorkbookSource, sameStamp } from '../../worker/viewerSession'
 import { createControlsClient, type ControlSnapshot, type ControlsClient, type StagedControl, type ControlProgress, sameControlOwner } from './controlsClient'
 
+/** Document-owned committed keys survive port eviction. Both indexes and runs
+ * share one bounded ledger; indexes are rebuildable, committed keys are not. */
+export interface ViewerControlResources { cache: ValueIndexCache; runs: ValueRunStore; dispose(): void }
+export function createViewerControlResources(profile: ProfileId = 'D'): ViewerControlResources {
+  const cache = new ValueIndexCache({ limitBytes: (profile === 'M' ? 8 : 16) * 1024 * 1024 })
+  const store = new MemoryValueRunStore({ limitBytes: 8 * 1024 * 1024, account: cache.reserve() })
+  const refs = new Map<string, PagedKeySetRef>()
+  let closed = false
+  const runs: ValueRunStore = {
+    async put(...args) {
+      if (closed) throw new ValueIndexError('cancelled', 'Controls disposed.')
+      const ref = await store.put(...args)
+      if (closed) { await store.release(ref); throw new ValueIndexError('cancelled', 'Controls disposed.') }
+      refs.set(ref.refId, ref)
+      return ref
+    },
+    read: (...args) => store.read(...args),
+    async release(ref) { refs.delete(ref.refId); await store.release(ref) },
+  }
+  return { cache, runs, dispose() {
+    closed = true
+    cache.invalidate()
+    for (const ref of refs.values()) void store.release(ref)
+    refs.clear()
+  } }
+}
+
 export interface ViewerControlsOptions {
   doc: XlsxDocument
+  resources?: ViewerControlResources
   source: WorkbookSource
   sheetId: string
   snapshot(): ControlSnapshot
@@ -25,10 +53,14 @@ export async function viewerControls(options: ViewerControlsOptions, signal: Abo
   const { doc, source, sheetId } = options
   const sheet = doc.sheets[source.sheets.findIndex(s => s.sheetId === sheetId)], store = source.store(sheetId)
   const context = (): FilterContext => ({ locale: sheet.semantics?.locale ?? 'en-US', dateSystem: sheet.semantics?.dateSystem ?? '1900', timeZone: sheet.semantics?.timeZone ?? Intl.DateTimeFormat().resolvedOptions().timeZone, nowMs: Date.now() })
-  const cache = new ValueIndexCache({ limitBytes: 16 * 1024 * 1024 }), runs = new MemoryValueRunStore({ limitBytes: 8 * 1024 * 1024, account: cache.reserve() })
+  const resources = options.resources ?? createViewerControlResources()
+  const { cache, runs } = resources
   const stamp = { ...store.stamp }
-  const structure = new StructuralIndex(await store.queryStructural({ r0: 0, r1: 1048575, c0: 0, c1: 16383 }, { signal, stamp }))
-  signal.throwIfAborted()
+  let structure: StructuralIndex
+  try {
+    structure = new StructuralIndex(await store.queryStructural({ r0: 0, r1: 1048575, c0: 0, c1: 16383 }, { signal, stamp }))
+    signal.throwIfAborted()
+  } catch (error) { if (!options.resources) resources.dispose(); throw error }
   const styles = new Map<number, XlsxCell['style']>()
   for (const row of sheet.rows) for (const cell of row.cells) styles.set(cell.styleIndex, cell.style)
   const classifications = new Map<string, ColumnClassification>()
@@ -118,7 +150,11 @@ export async function viewerControls(options: ViewerControlsOptions, signal: Abo
     return resolved
   }
   client.values = async (owner, range, col, applied, abort) => { await classify(owner, range, col, abort); return values(owner, range, col, applied, abort) }
-  return { client, dispose() { cache.invalidate(); for (const rule of options.snapshot().filter?.columns.values() ?? []) if (rule.kind === 'values') { const ref = rule.selection.mode === 'include' ? rule.selection.keys : rule.selection.mode === 'allExcept' ? rule.selection.excluded : null; if (ref) void runs.release(ref) } } }
+  return { client, dispose() {
+    classifications.clear()
+    cache.invalidate(identity => identity.sheetId === sheetId)
+    if (!options.resources) resources.dispose()
+  } }
 }
 function failure(outcome: Exclude<OperationOutcome, { kind: 'committed' }>): StagedControl {
   if (outcome.kind === 'cancelled' || outcome.kind === 'stale' || outcome.kind === 'incomplete' || outcome.kind === 'refused') return outcome

@@ -1,6 +1,7 @@
 import { afterEach, expect, it, vi } from 'vitest'
 import { act, cleanup, fireEvent, render, waitFor } from '@testing-library/react'
 import InteractiveSheetDoc from '../src/components/xlsx/InteractiveSheetDoc'
+import * as controlsModule from '../src/components/xlsx/viewerControlsClient'
 import { workbookOf } from './helpers/xlsx-find'
 import { preparePrintUnits } from '../src/components/xlsx/sheetAssets'
 import { buildXlsx } from '../src/testdata/ooxml-builders'
@@ -132,4 +133,89 @@ it('replacing a document/source with reused wire ids cannot retain the old view 
   ui.rerender(<InteractiveSheetDoc doc={second} source={next} />)
   await waitFor(() => expect(ui.getByRole('gridcell', { name: /replacement/ })).toBeTruthy())
   expect((ui.getByRole('button', { name: 'Copy selection' }) as HTMLButtonElement).disabled).toBe(true)
+})
+
+
+it('keeps only the two most recently visited control ports and disposes evictions', async () => {
+  const original = controlsModule.viewerControls, ports: { sheet: string; dispose: ReturnType<typeof vi.fn> }[] = []
+  vi.spyOn(controlsModule, 'viewerControls').mockImplementation(async (...args) => {
+    const port = await original(...args), dispose = vi.fn(() => port.dispose())
+    ports.push({ sheet: args[0].sheetId, dispose })
+    return { client: port.client, dispose }
+  })
+  const doc = workbookOf(['A', 'B', 'C'].map(sheetId => ({ sheetId, cells: [{ row: 0, col: 0, value: 'Name' }, { row: 1, col: 0, value: sheetId }] })))
+  const ui = render(<InteractiveSheetDoc doc={doc} />)
+  const visit = async (sheet: string, count: number) => {
+    fireEvent.change(ui.getByRole('combobox', { name: 'Worksheet' }), { target: { value: sheet } })
+    await waitFor(() => expect(ports).toHaveLength(count))
+  }
+  await waitFor(() => expect(ports).toHaveLength(1))
+  await visit('B', 2); await visit('A', 2); await visit('C', 3)
+  expect(ports[1].dispose).toHaveBeenCalledTimes(1) // A was touched; B is oldest.
+  expect(ports[0].dispose).not.toHaveBeenCalled()
+  await visit('B', 4)
+  expect(ports[0].dispose).toHaveBeenCalledTimes(1)
+  ui.unmount()
+  for (const port of ports) expect(port.dispose).toHaveBeenCalledTimes(1)
+})
+
+it('preserves applied value keys when a sheet control port is evicted and recreated', async () => {
+  const doc = docOf()
+  doc.sheets.push(...['B', 'C'].map(sheetId => ({ ...doc.sheets[0], sheetId, name: `Sheet ${sheetId}` })))
+  const ui = render(<InteractiveSheetDoc doc={doc} />)
+  await waitFor(() => expect(ui.getByRole('status').textContent).not.toMatch(/Loading sheet/)); go(ui, 'A2')
+  fireEvent.click(ui.getByRole('button', { name: /Filter column A/ }))
+  await waitFor(() => expect(ui.getByRole('checkbox', { name: 'beta' })).toBeTruthy())
+  fireEvent.click(ui.getByRole('checkbox', { name: 'beta' }))
+  await waitFor(() => expect(ui.getByRole('button', { name: 'OK' }).hasAttribute('disabled')).toBe(false))
+  fireEvent.click(ui.getByRole('button', { name: 'OK' }))
+  await waitFor(() => expect(ui.getByRole('status').textContent).toMatch(/Visible body 1 \/ complete body 2/))
+  for (const sheet of ['B', 'C', 'A']) {
+    fireEvent.change(ui.getByRole('combobox', { name: 'Worksheet' }), { target: { value: sheet } })
+    await waitFor(() => expect(ui.getByRole('status').textContent).not.toMatch(/Loading sheet/))
+    go(ui, sheet === 'A' ? 'A3' : 'A2')
+    fireEvent.click(ui.getByRole('button', { name: /Filter column A/ }))
+    await waitFor(() => expect(ui.getByRole('checkbox', { name: 'beta' })).toBeTruthy())
+    if (sheet === 'A') {
+      expect((ui.getByRole('checkbox', { name: 'beta' }) as HTMLInputElement).checked).toBe(false)
+      expect((ui.getByRole('checkbox', { name: 'alpha' }) as HTMLInputElement).checked).toBe(true)
+      fireEvent.click(ui.getByRole('checkbox', { name: 'alpha' }))
+      await waitFor(() => expect(ui.getByRole('button', { name: 'OK' }).hasAttribute('disabled')).toBe(false))
+      fireEvent.click(ui.getByRole('button', { name: 'OK' }))
+      await waitFor(() => expect(ui.getByRole('status').textContent).toMatch(/Visible body 0 \/ complete body 2/))
+    } else fireEvent.click(ui.getByRole('button', { name: 'Cancel' }))
+  }
+})
+
+
+it.each(['Escape', 'replace'])('cancels pending copy synchronously on selection %s', async action => {
+  const { createObjectWorkbookSource } = await import('../src/xlsx/view/source')
+  const doc = docOf(), source = createObjectWorkbookSource(doc, 'clear'), store = source.store('A'), write = clipboard()
+  const read = store.readCell.bind(store)
+  let complete!: () => void, loaded = false, requestSignal!: AbortSignal
+  store.readCell = async (at, options) => loaded ? read(at, options) : { kind: 'unknown', pageId: 'p' }
+  store.ensureComplete = async (range, options) => {
+    requestSignal = options!.signal!
+    await new Promise<void>(resolve => { complete = resolve })
+    loaded = true
+    return { range, stamp: store.stamp, completeness: 'complete', missing: [] }
+  }
+  const ui = render(<InteractiveSheetDoc doc={doc} source={source} />)
+  await waitFor(() => expect(ui.getByRole('status').textContent).not.toMatch(/Loading sheet/))
+  const grid = go(ui, 'A2')
+  fireEvent.keyDown(grid, { key: 'c', ctrlKey: true })
+  await waitFor(() => expect(ui.getByRole('status').textContent).toMatch(/Copy is waiting/))
+  if (action === 'replace') fireEvent.change(ui.getByRole('textbox', { name: 'Go To cell' }), { target: { value: 'A3' } })
+  // Observe cancellation within the input event, before passive effects can run.
+  let abortedDuringEvent = false
+  const target = action === 'Escape' ? grid : ui.getByRole('button', { name: 'Go To' }).closest('form')!
+  const event = action === 'Escape' ? new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }) : new Event('submit', { bubbles: true, cancelable: true })
+  const observe = () => { abortedDuringEvent = requestSignal.aborted }
+  document.addEventListener(event.type, observe, { once: true })
+  act(() => { target.dispatchEvent(event); abortedDuringEvent ||= requestSignal.aborted })
+  document.removeEventListener(event.type, observe)
+  await act(async () => complete())
+  expect(abortedDuringEvent).toBe(true)
+  expect(write).not.toHaveBeenCalled()
+  expect(ui.getByRole('status').textContent).not.toContain('Selection copied.')
 })

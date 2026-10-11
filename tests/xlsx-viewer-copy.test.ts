@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
-import { serializeSelection, CLIPBOARD_BYTES, type CopyInput } from '../src/xlsx/view/copy'
+import { serializeSelection, CLIPBOARD_BYTES, copySessionBudget, type CopyInput } from '../src/xlsx/view/copy'
 import { createIdentityOrder, createRowOrder } from '../src/xlsx/view/order'
 import { createIntervalSet, visibilityFromHidden } from '../src/xlsx/view/visibility'
 import { cellId, MAX_ROWS, MAX_COLS } from '../src/xlsx/view/coordinates'
@@ -65,7 +65,7 @@ describe('displayed selection copy', () => {
     expect(await textOf(f)).toBe('corner')
     expect(f.store.readCell).toHaveBeenCalledTimes(1)
   })
-  it('accepts one million short rows with bounded concurrent reads and no row-count cap', async () => {
+  it('accepts one million short rows with serial value reads and no row-count cap', async () => {
     const f = input((r, c) => value(r, c, 'x'))
     f.selection.ranges = [part(0, 999999)]
     let active = 0, peak = 0, reads = 0
@@ -73,7 +73,7 @@ describe('displayed selection copy', () => {
     const out = await serializeSelection(f)
     expect(out).toMatchObject({ kind: 'ready', bytes: 3999998 })
     expect(reads).toBe(1000000)
-    expect(peak).toBeLessThanOrEqual(256)
+    expect(peak).toBe(1)
   }, 30000)
   it('keeps unknown values pending, then resumes; cancellation/stale ownership prevent publication', async () => {
     const f = input((r, c) => value(r, c, 'loaded'))
@@ -121,4 +121,33 @@ it('rejects unknown cells after the source confirmed complete coverage instead o
   f.store.ensureComplete = async range => ({ range, stamp: f.store.stamp, completeness: 'complete', missing: [] })
   expect(await serializeSelection(f)).toMatchObject({ kind: 'refused', code: 'page-error' })
   expect(reads).toBe(2)
+})
+
+describe('fragmented selections within the clipboard budget', () => {
+  it.each([1000, 4096])('copies %i disjoint singleton parts', async count => {
+    const f = input((r, c) => value(r, c, 'x'))
+    f.selection.ranges = Array.from({ length: count }, (_, i) => part(i * 2, i * 2))
+    expect(await textOf(f)).toBe(Array(count).fill('x').join('\n\n'))
+    expect(f.store.readCell).toHaveBeenCalledTimes(count)
+  })
+  it.each(['list', 'bitset'] as const)('copies 4096 fragmented rows from a %s', async kind => {
+    const f = input((r, c) => value(r, c, 'x'))
+    f.selection.ranges = [{ cols: [{ c0: 0, c1: 0 }], rows: kind === 'list'
+      ? { kind, r0: 0, r1: 8191, rows: Uint32Array.from({ length: 4096 }, (_, i) => i * 2) }
+      : { kind, space: 'source', r0: 0, r1: 8191, words: new Uint32Array(256).fill(0x55555555), count: 4096 } }]
+    expect(await textOf(f)).toBe(Array(4096).fill('x').join('\n\n'))
+    expect(f.store.readCell).toHaveBeenCalledTimes(4096)
+  })
+  it('copies 4096 parts whose row sets each contain disjoint members', async () => {
+    const f = input((r, c) => value(r, c, 'x'))
+    f.selection.ranges = Array.from({ length: 4096 }, (_, i) => ({ cols: [{ c0: 0, c1: 0 }], rows: { kind: 'list' as const, r0: i * 4, r1: i * 4 + 2, rows: Uint32Array.of(i * 4, i * 4 + 2) } }))
+    expect(await textOf(f)).toBe(Array(8192).fill('x').join('\n\n'))
+    expect(f.store.readCell).toHaveBeenCalledTimes(8192)
+  })
+})
+
+
+it('scales copy output/projection allowance with the S4.3 main-thread profile', () => {
+  expect(copySessionBudget('D')).toBe(24 * 1024 * 1024)
+  expect(copySessionBudget('M')).toBe(12 * 1024 * 1024)
 })
