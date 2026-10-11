@@ -113,6 +113,7 @@ Every package is implemented on its own branch, reviewed by at least one agent f
 | S5.3 global workbook find engine (`src/xlsx/view/find.ts`) | merged; OfficeDoc wiring and worker search command wait for S5.2 |
 | S1.2 sparse pages, external page storage, small/large adapter parity (`sourcePages.ts`, `pagedImport.ts`, `pagedSource.ts`, `overviewIndex.ts`, `viewerLargeSource.ts`) | merged; worker routes admitted-paged blobs to paged sources; exported entry keeps compatibility mode until the viewer is enabled |
 | S9.1 atomic filter dropdown and sort dialog (`FilterDropdown.tsx`, `SortDialog.tsx`, `controlsClient.ts`, header sort/funnel buttons) | merged; mounted by S5.2 |
+| S1.3 authoritative formula/cache/error/format value bridge (`values.ts`, `value-policy.ts`) | merged |
 | S5.2 | in progress (behind `interactiveSheets` flag) | (implementation or review rounds on their own branches) |
 | S1.2, S1.3, S4.4–S4.5, S5, S6, S9, S10 (physical-device receipts skipped for now by user decision), S11/S12 status, S13 | not started |
 
@@ -212,19 +213,21 @@ expect(await source.readCell({ row: 1_048_575, col: 16_383 }, readOptions)).toMa
 
 ### S1.3 Authoritative formula/cache/error/format bridge
 
+> **Status (2026-10-12):** merged (Claude implementation; opencode review; every finding fixed). One value authority for object and paged adapters; `engine` documents unchanged and byte-identical; `cached` documents never invoke the evaluator (evaluateWorkbookFormulas throws), uncached formulas are `unavailable`; sort and filter refuse `formula-value-unavailable` with count + first address in key/rule domains; saved-values notice counts formulas the engine would have evaluated at load (orchestrator decision); fixed the worker wrapping cached documents as engine. Policy and evaluation-bridge upgrade path in `docs/architecture/xlsx-large-source.md` §9.
+
 **Files:** create `src/xlsx/view/values.ts`; modify `src/xlsx/parse.ts`, `strings.ts`, narrowly `src/xlsx/formula/workbook.ts` only to expose the per-document value-policy flag (`engine` for small, `cached` for paged; no evaluator is wired to paged pages); test `tests/xlsx-viewer-values.test.ts`, `tests/xlsx-viewer-adapter-parity.test.ts`; retain native/formula suites.
 
-- [ ] RED: pin numbers/booleans/blanks/error tokens vs literal '#VALUE!' text, published calculated values (`engine` policy), file caches, absent formula caches, unsupported formula cache preservation, saved spill children, date styles and lone UTF-16 surrogates on both adapters, each under one declared value policy.
-- [ ] RED: value-policy cases (spec §4.4): a `cached` document never invokes the evaluator (spy on the engine); formula cells carry provenance `cached`; a cache-less formula in a key column refuses with `formula-value-unavailable` (count + first address) while the same formula outside the key/value domain does not; `engine` output for small documents is byte-identical to today; the “Showing saved values; formulas are not recalculated” status appears only for `cached` documents; cross-policy differences are enumerated, never asserted equal.
-- [ ] Run `bunx vitest run tests/xlsx-viewer-values.test.ts tests/xlsx-viewer-adapter-parity.test.ts`; expected a bad raw/formula fallback or altered string fails.
-- [ ] GREEN: value authority (dispatch each sub-item separately):
-  - [ ] `engine` documents: keep reading the existing engine's published `cell.value`/cache/error status and formatting/date semantics, unchanged.
-  - [ ] `cached` documents: store per-cell authority fields (value, provenance, `valueIsError`, `unavailable`) in pages; run no evaluator and add no new formula evaluator or function catalog.
-  - [ ] Add the typed `formula-value-unavailable` refusal reason and the saved-values status/accessible text.
-  - [ ] Record the policy decision, the enumerated engine-versus-cache differences and the out-of-scope evaluation-bridge upgrade path in `docs/architecture/xlsx-large-source.md`.
-- [ ] Preserve lossless UTF-16 in string tables and transport. Reuse existing format/date serial helpers, font/value generations and immutable source versioning.
-- [ ] Run focused tests plus `bunx vitest run tests/xlsx-native-display.test.ts tests/xlsx-native-strings.test.ts tests/xlsx-native-metadata.test.ts tests/xlsx-formula-calc-policy.test.ts tests/xlsx-formula-spills.test.ts`; expected authoritative engine parity, unchanged string/error distinctions and no source mutation.
-- [ ] Deliver value bridge and native evidence matrix. Import/value publication completion bumps `valueGen`; view operations never recalculate or rewrite formulas merely because display order changes.
+- [x] RED: pin numbers/booleans/blanks/error tokens vs literal '#VALUE!' text, published calculated values (`engine` policy), file caches, absent formula caches, unsupported formula cache preservation, saved spill children, date styles and lone UTF-16 surrogates on both adapters, each under one declared value policy.
+- [x] RED: value-policy cases (spec §4.4): a `cached` document never invokes the evaluator (spy on the engine); formula cells carry provenance `cached`; a cache-less formula in a key column refuses with `formula-value-unavailable` (count + first address) while the same formula outside the key/value domain does not; `engine` output for small documents is byte-identical to today; the “Showing saved values; formulas are not recalculated” status appears only for `cached` documents; cross-policy differences are enumerated, never asserted equal.
+- [x] Run `bunx vitest run tests/xlsx-viewer-values.test.ts tests/xlsx-viewer-adapter-parity.test.ts`; expected a bad raw/formula fallback or altered string fails.
+- [x] GREEN: value authority (dispatch each sub-item separately):
+  - [x] `engine` documents: keep reading the existing engine's published `cell.value`/cache/error status and formatting/date semantics, unchanged.
+  - [x] `cached` documents: store per-cell authority fields (value, provenance, `valueIsError`, `unavailable`) in pages; run no evaluator and add no new formula evaluator or function catalog.
+  - [x] Add the typed `formula-value-unavailable` refusal reason and the saved-values status/accessible text.
+  - [x] Record the policy decision, the enumerated engine-versus-cache differences and the out-of-scope evaluation-bridge upgrade path in `docs/architecture/xlsx-large-source.md`.
+- [x] Preserve lossless UTF-16 in string tables and transport. Reuse existing format/date serial helpers, font/value generations and immutable source versioning.
+- [x] Run focused tests plus `bunx vitest run tests/xlsx-native-display.test.ts tests/xlsx-native-strings.test.ts tests/xlsx-native-metadata.test.ts tests/xlsx-formula-calc-policy.test.ts tests/xlsx-formula-spills.test.ts`; expected authoritative engine parity, unchanged string/error distinctions and no source mutation.
+- [x] Deliver value bridge and native evidence matrix. Import/value publication completion bumps `valueGen`; view operations never recalculate or rewrite formulas merely because display order changes.
 
 ## S2 — Full logical axes and compact projection before any UI
 
