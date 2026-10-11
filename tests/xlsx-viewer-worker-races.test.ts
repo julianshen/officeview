@@ -778,20 +778,29 @@ describe('S4.2 review fixes', () => {
     }
   })
 
-  it('pi#2 the filter geometry guard steps the shared budget: one unit per mask word, changed slot, source word and band', async () => {
-    // Filter rows 0..1 hiding row 0: 32,768 mask words compared, 1 changed slot,
-    // 1 source word scanned, 1 covered band queried, no drawings.
-    const guardUnits = MAX_ROWS / 32 + 1 + 1 + 1
+  it('pi#2 the filter geometry guard steps the shared budget per row: 4,096 rows at most between yields', async () => {
+    // Filter rows 0..1 hiding row 0. Guard work in budget calls, in order: the
+    // changed slot (1 unit), then 32,768 mask words (32 rows each), 1 source word
+    // (32 rows), 1 covered band (1 unit); no drawings. The 2 projected rows share
+    // the operation budget first.
+    const guardCalls = [1, ...Array.from({ length: MAX_ROWS / 32 }, () => 32), 32, 1]
+    let work = 2, expectedYields = 0
+    for (const units of guardCalls) {
+      work += units
+      if (work >= YIELD_WORK_UNITS) { expectedYields++; work = 0 }
+    }
+    expect(expectedYields).toBe(256)
     const filter = { filterEvaluator: (async () => ({ kind: 'complete', matches: (row: number) => row !== 0 })) as FilterEvaluator }
     const fixed = await rig(objectDoc([{ sheetId: 'A', rows: descending(2) }]), filter)
     await send(fixed, { kind: 'filter', requestId: 'f', owner: initialIdentity('doc', 'A'), spec: filterSpec(1), nowMs: 0 })
     expect(lastReply(fixed.log, 'f')).toBe('f filter:complete rev1 g1')
-    // The 2 projected rows share the operation budget with the guard.
-    expect(fixed.steps.count('guard')).toBe(Math.floor((2 + guardUnits) / YIELD_WORK_UNITS))
-    expect(Math.max(...fixed.steps.gaps)).toBeLessThanOrEqual(YIELD_WORK_UNITS + 1)
+    // Frozen clock: a guard yield every 128 mask words (4,096 rows), not 131,072 rows.
+    expect(fixed.steps.count('guard')).toBe(expectedYields)
+    expect(Math.max(...fixed.steps.gaps)).toBeLessThanOrEqual(YIELD_WORK_UNITS / 32 + 2)
     const slow = await rig(objectDoc([{ sheetId: 'A', rows: descending(2) }]), { ...filter, tick: YIELD_INTERVAL_MS })
     await send(slow, { kind: 'filter', requestId: 'f', owner: initialIdentity('doc', 'A'), spec: filterSpec(1), nowMs: 0 })
-    expect(slow.steps.count('guard')).toBe(guardUnits)
+    // 10 ms per clock sample: every budget call yields.
+    expect(slow.steps.count('guard')).toBe(guardCalls.length)
   })
 
   it('pi#2 a cancel during the geometry guard stops it at its next yield', async () => {

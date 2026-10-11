@@ -22,9 +22,11 @@ export interface FilterGuardRequest {
   projectionBefore: ProjectedSheetMetrics
   projectionAfter: ProjectedSheetMetrics
   structure: StructuralIndex
-  /** Optional cooperative budget (S4.2): one unit per mask word compared,
-   * changed slot mapped, source word scanned, covered band queried and drawing
-   * measured. `pause` may throw to abandon the guard (cancellation). */
+  /** Optional cooperative budget (S4.2), charged per ROW: 32 units per mask word
+   * compared and per source word scanned (the rows each word covers), plus one
+   * unit per changed slot mapped, covered band queried and drawing measured, so
+   * a frozen clock still yields within 4,096 rows. `pause` may throw to abandon
+   * the guard (cancellation). */
   cooperate?: GuardCooperation
 }
 export interface GuardCooperation {
@@ -167,10 +169,13 @@ export async function guardFilter(request: FilterGuardRequest): Promise<GuardOut
   const count = projectionBefore.rows.logicalCount
   // Synchronous budget check per unit; only a spent budget awaits.
   const cooperate = request.cooperate
-  const due = (): boolean => cooperate !== undefined && cooperate.due(1)
+  const due = (units = 1): boolean => cooperate !== undefined && cooperate.due(units)
   // Changed display slots become a SOURCE-space bitset (band permutations map
   // display slots to arbitrary source rows); scanning it ascending yields merged
-  // changed intervals without sorting.
+  // changed intervals without sorting. Memory: a bounded constant 128 KiB
+  // (1,048,576 bits) that lives only for this call; it is deliberately not
+  // charged to the worker's transient ledger (the guard has no ledger access).
+  // TODO(S4.3): charge it through a ledger hook if the budget audit requires it.
   const sourceWords = new Uint32Array(Math.ceil(MAX_ROWS / 32))
   let firstWord = sourceWords.length, lastWord = -1
   const mark = (slot: number) => {
@@ -192,7 +197,7 @@ export async function guardFilter(request: FilterGuardRequest): Promise<GuardOut
           if (slot < count && Math.floor(diff / 2 ** bit) % 2 === 1) { mark(slot); if (due()) await cooperate!.pause() }
         }
       }
-      if (due()) await cooperate!.pause()
+      if (due(32)) await cooperate!.pause()
     }
   } else {
     for (let slot = 0; slot < count; slot++) {
@@ -215,7 +220,7 @@ export async function guardFilter(request: FilterGuardRequest): Promise<GuardOut
         else changed.push({ r0: source, r1: source })
       }
     }
-    if (due()) await cooperate!.pause()
+    if (due(32)) await cooperate!.pause()
   }
   for (const covered of mergeBands([band, ...changed])) {
     if (due()) await cooperate!.pause()
