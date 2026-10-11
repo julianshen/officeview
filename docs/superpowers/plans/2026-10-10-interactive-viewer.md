@@ -104,7 +104,8 @@ Every package is implemented on its own branch, reviewed by at least one agent f
 | S1.1a bounded ZIP reader, pull inflater, incremental XML tokenizer (`src/core/{zip-stream,inflater,xml-stream}.ts`, `pako` 1.0.11) | merged (opencode review; one disputed finding accepted by the reviewer) |
 | S2.3 full-coordinate renderer seam and explicit static budgets (`src/xlsx/view/viewport.ts`, `render.ts`, `paint.ts`) | merged |
 | S8.3 declared filter diagnostics (`src/xlsx/view/declaredFilters.ts`, parse.ts) | merged |
-| S1.1b, S8.2, S4.3, S6.1 | in progress (implementation or review rounds on their own branches) |
+| S8.2 semantic value index and searched Select All (`valueIndex.ts`, `valueRuns.ts`, `searchKeys.ts`) | merged |
+| S1.1b, S4.3, S6.1 | in progress (implementation or review rounds on their own branches) |
 | S1.2, S1.3, S4.3–S4.5, S5, S6, S9, S10 (physical-device receipts skipped for now by user decision), S11/S12 status, S13 | not started |
 
 ## S0 — Freeze contracts, counterexamples and fixture/harness infrastructure
@@ -483,14 +484,16 @@ expect(wide.contains({ row: 2, col: 0 })).toBe(false)
 
 ### S8.2 Semantic value index and searched Select All
 
+> **Status (2026-10-11):** merged (Claude implementation; codex and opencode reviews over seven rounds; every finding fixed). Complete query-backed value universe with typed semantic keys, all-minus-exclusions/include compaction, searched-subset Select All, async draft preparation, charged memory with typed quota errors, cancellable/resumable builds. Search uses the S8.5 canonical matcher; default `EXACT_SEARCH` (no resident keys; ≈0.12–0.2 µs/value, Bun, non-browser), canonical keys opt-in; no persistence in v1 (value-search spike). Worker/session wiring and `FilterEngine` values rules are not delivered (S4/S9).
+
 **Files:** create `src/xlsx/view/valueIndex.ts`; extend `storage/externalRuns.ts`, worker kernel/session; test `tests/xlsx-viewer-value-index.test.ts`.
 
-- [ ] RED: 100k and 1M distinct values, tagged numeric/text/boolean/error/date keys, same display with different serials, search match after displayed first 10k, unchanged OK, all-minus-exclusions, searched-subset Select All, unchecking one entry and cancel/reopen. Unknown pages must not make the value universe complete.
-- [ ] Run `bunx vitest run tests/xlsx-viewer-value-index.test.ts`; expected 10k construction cap or selected-string-array omission fails.
-- [ ] GREEN: lazy query-backed complete value universe with paged index, semantic key membership or all/query-minus-exclusions representation. 10k limits displayed entries only; dropdown search queries all values and Select All affects full universe or exact searched subset. Display dedupe never loses semantic keys. Represent blank separately and error identity explicitly.
-- [ ] Build in cancellable batches; cache by sheet/source values/range/column/classification generations; charged storage/worker memory with quota admission. Exclude display-only transforms from key identity. Reopen uses complete cache or resumes valid pages; cancel closes draft without changing committed rules.
-- [ ] Run focused suite and injected quota/cancel races; expected no undisplayed-value exclusion on unchanged OK, complete counts/search membership and no excessive strings/objects retained on main.
-- [ ] Deliver value-index PR with cold/warm allocation and source-read counts, not an implementation of a capped 10k semantic universe.
+- [x] RED: 100k and 1M distinct values, tagged numeric/text/boolean/error/date keys, same display with different serials, search match after displayed first 10k, unchanged OK, all-minus-exclusions, searched-subset Select All, unchecking one entry and cancel/reopen. Unknown pages must not make the value universe complete.
+- [x] Run `bunx vitest run tests/xlsx-viewer-value-index.test.ts`; expected 10k construction cap or selected-string-array omission fails.
+- [x] GREEN: lazy query-backed complete value universe with paged index, semantic key membership or all/query-minus-exclusions representation. 10k limits displayed entries only; dropdown search queries all values and Select All affects full universe or exact searched subset. Display dedupe never loses semantic keys. Represent blank separately and error identity explicitly.
+- [x] Build in cancellable batches; cache by sheet/source values/range/column/classification generations; charged storage/worker memory with quota admission. Exclude display-only transforms from key identity. Reopen uses complete cache or resumes valid pages; cancel closes draft without changing committed rules.
+- [x] Run focused suite and injected quota/cancel races; expected no undisplayed-value exclusion on unchanged OK, complete counts/search membership and no excessive strings/objects retained on main.
+- [x] Deliver value-index PR with cold/warm allocation and source-read counts, not an implementation of a capped 10k semantic universe.
 
 ### S8.3 Declared filter diagnostic parsing
 
