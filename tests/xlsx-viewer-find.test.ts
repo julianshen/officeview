@@ -195,3 +195,29 @@ describe('review: lowercase offset mapping (codex 7)', () => {
     expect(await one('İ😀', '😀')).toEqual([1, 3])
   })
 })
+
+describe('review: typed source failures (codex 5)', () => {
+  const failing = (error: { code: 'quota' | 'page-error'; retryable: boolean; message: string }) => {
+    const d = workbookOf([{ sheetId: 'A', cells: [{ row: 0, col: 0, value: 'hit' }, { row: 1, col: 0, value: 'hit' }] }])
+    const { input } = findInputOf(d)
+    const store = input.sheets[0].store
+    const broken: SourceStore = Object.create(store, {
+      scanPopulated: {
+        value: async function* (request: Parameters<SourceStore['scanPopulated']>[0], options: Parameters<SourceStore['scanPopulated']>[1]): AsyncIterable<Page<AuthoritativeCell>> {
+          for await (const page of store.scanPopulated(request, options)) yield { ...page, items: page.items.slice(0, 1), completeness: 'incomplete', error: { ...error } }
+        },
+      },
+    })
+    return new WorkbookFind({ ...input, sheets: [{ ...input.sheets[0], store: broken }] }, ci('hit'))
+  }
+  it.each([
+    { code: 'quota' as const, retryable: true, message: 'storage quota exceeded' },
+    { code: 'page-error' as const, retryable: false, message: 'corrupt page 7' },
+  ])('keeps $code with its message and retryability next to the partial hits', async error => {
+    const page = await failing(error).nextPage()
+    expect(page.hits).toHaveLength(1)
+    expect(page.totalKnown).toBeUndefined()
+    expect(page.incomplete).toEqual(['A'])
+    expect(page.failures).toEqual([{ sheetId: 'A', ...error, range: { r0: 0, r1: 1, c0: 0, c1: 0 } }])
+  })
+})

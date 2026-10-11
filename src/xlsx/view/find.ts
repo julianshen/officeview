@@ -42,7 +42,7 @@
 import type { XlsxCell } from '../types'
 import type {
   AuthoritativeCell, CacheIdentity, Page, RowOrder, RowPermutationBand, RowVisibility, ScrollWindow, SearchHit, SearchQuery,
-  SheetMetrics, SourceStamp, SourceStore, WorkbookOwner,
+  SheetMetrics, SourceErrorCode, SourceStamp, SourceStore, WorkbookOwner,
 } from './contracts'
 import { MAX_COLS, MAX_ROWS, cellId, type SourceCell, type SourceRect } from './coordinates'
 import { CooperativeSlice, type CooperativeOptions } from './scheduler'
@@ -99,7 +99,11 @@ export interface FindPage {
   unavailableCount: number
   /** Sheets with a loading/failed source page: results are not final (§10.4). */
   incomplete: readonly string[]
+  /** Typed source failures behind `incomplete`, for error/retry presentation. */
+  failures: readonly FindSourceFailure[]
 }
+/** A source failure kept with its query: hits found before/around it stay inspectable. */
+export interface FindSourceFailure { sheetId: string; code: SourceErrorCode; retryable: boolean; message: string; range?: SourceRect }
 export interface FindStats {
   scanPages: number
   cellsVisited: number
@@ -166,6 +170,7 @@ const byDisplay = (a: FindHit, b: FindHit): number => a.displaySlot - b.displayS
 interface ScanState {
   sheet: FindSheetInput
   stamp: SourceStamp
+  range?: SourceRect
   iterator?: AsyncIterator<Page<AuthoritativeCell>>
   cursor?: string
   last?: Page<AuthoritativeCell>
@@ -197,6 +202,8 @@ export class WorkbookFind {
   private emitted = 0
   private unavailable = 0
   private readonly incompleteSheets = new Set<string>()
+  private readonly failures: FindSourceFailure[] = []
+  private readonly failureKeys = new Set<string>()
   private validated = false
   private done = false
   private closed = false
@@ -262,6 +269,7 @@ export class WorkbookFind {
       ...(complete ? {} : { cursor: `${this.nextSheet}:${this.emitted}` }),
       unavailableCount: this.unavailable,
       incomplete,
+      failures: this.failures.slice(),
     }
   }
 
@@ -274,6 +282,14 @@ export class WorkbookFind {
     this.held = []
     this.stats.bufferedHits = 0
     this.slice.dispose()
+  }
+
+  private fail(failure: FindSourceFailure): void {
+    this.incompleteSheets.add(failure.sheetId)
+    const key = JSON.stringify([failure.sheetId, failure.code, failure.message])
+    if (this.failureKeys.has(key)) return
+    this.failureKeys.add(key)
+    this.failures.push(failure)
   }
 
   private translate(error: unknown): unknown {
@@ -295,7 +311,7 @@ export class WorkbookFind {
     }
     const scan = this.scan
     if (!scan.iterator) {
-      const range = scan.sheet.store.extent.used ?? FULL_SHEET
+      const range = scan.range ??= scan.sheet.store.extent.used ?? FULL_SHEET
       const signal = this.options.signal ?? new AbortController().signal
       scan.iterator = scan.sheet.store.scanPopulated({ range, limit: this.scanLimit, ...(scan.cursor !== undefined ? { cursor: scan.cursor } : {}) }, { signal, stamp: scan.stamp })[Symbol.asyncIterator]()
     }
@@ -322,6 +338,7 @@ export class WorkbookFind {
     }
     if (page.error?.code === 'cancelled') throw new FindError('cancelled', 'Find cancelled')
     if (page.completeness !== 'complete' || page.error) this.incompleteSheets.add(scan.sheet.sheetId)
+    if (page.error) this.fail({ sheetId: scan.sheet.sheetId, code: page.error.code, retryable: page.error.retryable, message: page.error.message, range: scan.range })
     for (const cell of page.items) {
       this.visit(scan, cell)
       if (this.slice.due(1)) await this.slice.pause('find-scan')
@@ -437,6 +454,7 @@ export interface FindPublication {
   totalKnown?: number
   unavailableCount: number
   incomplete: readonly string[]
+  failures: readonly FindSourceFailure[]
 }
 export interface FindControllerOptions {
   currentOwner: () => WorkbookOwner
@@ -501,7 +519,7 @@ export class FindController {
         const state: FindPublication = {
           key, owner: input.owner, query, hits: hits.slice(), complete: page.complete,
           ...(page.totalKnown !== undefined ? { totalKnown: page.totalKnown } : {}),
-          unavailableCount: page.unavailableCount, incomplete: page.incomplete,
+          unavailableCount: page.unavailableCount, incomplete: page.incomplete, failures: page.failures,
         }
         this.publish(state)
         if (page.complete) {
