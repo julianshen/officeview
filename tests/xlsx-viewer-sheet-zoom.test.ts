@@ -1,3 +1,5 @@
+import { gridHeaderBox } from '../src/components/xlsx/GridHeaders'
+import { recenterScrollWindow, hitTestViewport } from '../src/xlsx/view/scrollWindow'
 import { describe, expect, it } from 'vitest'
 import { MIN_ZOOM, MAX_ZOOM, clampZoom } from '../src/core/zoom'
 import { SHEET_MIN_ZOOM, SHEET_MAX_ZOOM } from '../src/xlsx/view/contracts'
@@ -240,5 +242,21 @@ describe('snapSheetZoom hardening', () => {
   it('keeps the step table immutable at runtime', () => {
     expect(Object.isFrozen(SHEET_ZOOM_STEPS)).toBe(true)
     expect(() => (SHEET_ZOOM_STEPS as number[]).push(5)).toThrow(TypeError)
+  })
+})
+
+describe('S6.2 sticky header geometry', () => {
+  it('shares zoom/recenter transforms with exact source hit tests, without applying DPR twice', () => {
+    const at = { row: 900000, col: 12000 }
+    for (const zoom of [0.25, 2]) for (const deviceScale of [1, 2]) {
+      const start = createScrollWindow(metrics, viewport, { zoom, deviceScale, offset: { x: metrics.cols.start(at.col), y: metrics.rows.start(at.row) } })
+      const window = recenterScrollWindow(start, metrics, viewport)
+      const row = gridHeaderBox(metrics, window, 'row', at.row), col = gridHeaderBox(metrics, window, 'column', at.col)
+      expect(row.height).toBe(20 * zoom)
+      expect(col.width).toBe(64 * zoom)
+      expect(row.y).toBe(0)
+      expect(col.x).toBe(0)
+      expect(hitTestViewport(window, metrics, viewport, { x: col.x + col.width / 2, y: row.y + row.height / 2 })).toEqual(at)
+    }
   })
 })

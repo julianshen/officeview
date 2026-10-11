@@ -22,6 +22,7 @@ import {
   type CaretPos,
   type SelectionRange,
 } from '../core/selection'
+import { isViewerUiTarget } from './xlsx/gridEvents'
 import type { PageOverlay } from '../core/overlay'
 import { copyText } from '../core/clipboard'
 import {
@@ -268,6 +269,17 @@ export function OfficeDoc({
   const gestureStart = useRef<{ transform: Transform; distance: number; center: Point } | null>(null)
   const panStart = useRef<{ transform: Transform; point: Point } | null>(null)
 
+  // React attaches wheel listeners as passive, so onWheel cannot stop the
+  // browser's own Ctrl/Cmd+wheel page zoom; a native listener can, including
+  // over viewer UI that ignores the legacy zoom gesture.
+  useEffect(() => {
+    const el = containerRef.current
+    if (!el) return
+    const suppressPageZoom = (e: WheelEvent) => { if (e.ctrlKey || e.metaKey) e.preventDefault() }
+    el.addEventListener('wheel', suppressPageZoom, { passive: false })
+    return () => el.removeEventListener('wheel', suppressPageZoom)
+  }, [])
+
   useEffect(() => {
     const el = containerRef.current
     if (!el) return
@@ -322,6 +334,7 @@ export function OfficeDoc({
   }
 
   const onPointerDown = (e: React.PointerEvent) => {
+    if (isViewerUiTarget(e.target)) return
     if (e.pointerType === 'mouse' && e.button !== 0) return
     const point = localPoint(e)
     pointers.current.set(e.pointerId, point)
@@ -359,6 +372,7 @@ export function OfficeDoc({
   }
 
   const onPointerMove = (e: React.PointerEvent) => {
+    // ownership was decided at pointerdown; a tracked finger may cross viewer UI
     if (!pointers.current.has(e.pointerId)) return
     const point = localPoint(e)
     pointers.current.set(e.pointerId, point)
@@ -402,12 +416,14 @@ export function OfficeDoc({
   const onWheel = (e: React.WheelEvent) => {
     // trackpad pinch and ctrl+wheel zoom; plain wheel keeps native scrolling
     if (!e.ctrlKey && !e.metaKey) return
+    if (isViewerUiTarget(e.target)) return
     e.preventDefault()
     const factor = Math.exp(-e.deltaY / 250)
     setTransform((t) => zoomAt(t, t.zoom * factor, localPoint(e), viewportRef.current))
   }
 
   const onDoubleClick = (e: React.MouseEvent) => {
+    if (isViewerUiTarget(e.target)) return
     const at = localPoint(e)
     // double-click on text selects a word; on blank space it zooms, so both
     // behaviours stay available
@@ -421,6 +437,7 @@ export function OfficeDoc({
   }
 
   const onClick = (e: React.MouseEvent) => {
+    if (isViewerUiTarget(e.target)) return
     if (e.detail < 3) return // double-click already handled words
     void caretFromEvent(e).then((caret) => caret && selectLineAt(caret))
   }
@@ -442,26 +459,28 @@ export function OfficeDoc({
       inputRef.current?.select()
       return
     }
-    if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'c') {
+    // Protection policy and Escape fall-through apply even when the event comes
+    // from viewer UI such as an owned grid; a control that consumed Escape
+    // already prevented it.
+    if (!allowCopy && (e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'c') {
       // when copying is off, swallow the shortcut rather than letting the
       // browser act on whatever happens to be selected around the canvas
-      if (!allowCopy) {
-        e.preventDefault()
-        return
-      }
-      if (selection && !isEmptyRange(selection)) {
-        e.preventDefault()
-        void doCopy()
-        return
-      }
+      e.preventDefault()
+      return
     }
     if (!allowPrint && (e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'p') {
       e.preventDefault()
       return
     }
-    if (e.key === 'Escape' && selection) {
+    if (e.key === 'Escape' && selection && !e.defaultPrevented) {
       setSelection(undefined)
       selectionAnchor.current = null
+      return
+    }
+    if (isViewerUiTarget(e.target)) return
+    if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'c' && selection && !isEmptyRange(selection)) {
+      e.preventDefault()
+      void doCopy()
       return
     }
     if (e.key === '+' || e.key === '=') { e.preventDefault(); zoomBy(1) }

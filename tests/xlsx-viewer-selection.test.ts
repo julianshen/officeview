@@ -1,3 +1,5 @@
+import { gridNavigationTransition } from '../src/components/xlsx/GridSemantics'
+import { gridFixture } from './helpers/xlsx-grid-fixture'
 import { describe, expect, it, vi } from 'vitest'
 import { serialize } from 'node:v8'
 import { createAxisMetrics } from '../src/xlsx/view/axes'
@@ -571,5 +573,23 @@ describe('pointer, modifier and header transitions', () => {
     const structure = new StructuralIndex({ stamp: { docId: 'd', sheetId: 's', valueGen: 0 }, completeness: 'complete', merges: [{ id: 'm', range: { r0: 1, r1: 2, c0: 0, c1: 1 }, anchor: { row: 1, col: 0 } }], spills: [], drawings: [], tables: [], missing: [] })
     const outcome = await guardSelectionSort(state, structure, { async iterate() { return { items: [], completeness: 'complete', missing: [] } } }, { r0: 2, r1: 2, c0: 0, c1: 0, headerRows: 0, totalsRows: 0 })
     expect(outcome).toMatchObject({ ok: false, refusal: { reason: 'merge' } })
+  })
+})
+
+describe('S6.2 keyboard adapter source membership', () => {
+  it('keeps a serializable Ctrl prefix through hidden-slot Shift and ordinary Home/End', () => {
+    const props = gridFixture()
+    let selection = selectCell(emptyGridSelection(), props.projection, { row: 10, col: 3 }, { toggle: true })
+    selection = selectCell(selection, props.projection, { row: 3, col: 0 }, { toggle: true })
+    const result = gridNavigationTransition({ ...props, selection: structuredClone(selection) }, 'ArrowDown', { extend: true })
+    const selected = new SourceSelection(result.selection.ranges)
+    expect(selected.contains({ row: 10, col: 3 })).toBe(true)
+    expect(selected.contains({ row: 3, col: 0 })).toBe(true)
+    expect(selected.contains({ row: 1, col: 0 })).toBe(false)
+    expect(selected.contains({ row: 2, col: 0 })).toBe(true)
+    const end = gridNavigationTransition({ ...props, ...result }, 'End')
+    expect(end.selection.active).toEqual({ row: 2, col: MAX_COLS - 1 })
+    const home = gridNavigationTransition({ ...props, ...end }, 'Home')
+    expect(home.selection.active).toEqual({ row: 2, col: 0 })
   })
 })
