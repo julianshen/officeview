@@ -299,6 +299,20 @@ describe('formula evaluation reserve (round-4 table)', () => {
   })
 })
 
+describe('compression ratio is a diagnostic, not a guard (orchestrator decision 4)', () => {
+  it('a part deflated far beyond 200:1 with declared and actual sizes inside the caps stays object and is diagnosed', async () => {
+    const bytes = xlsxBytes({ afterSheetData: `<extLst><ext uri="x">${'a'.repeat(1_500_000)}</ext></extLst>` })
+    const limits = importLimitsFor('D')
+    const inv = await readZipInventory(bytesRangeSource(bytes), inventoryLimits(limits))
+    const sheet = inv.find('xl/worksheets/sheet1.xml')!
+    expect(sheet.uncompressedSize / sheet.compressedSize).toBeGreaterThan(200)
+    expect(admit('D', bytes.length, inv, limits).mode).toBe('object-candidate')
+    const d = await g2(bytes, 'D')
+    expect(d.mode).toBe('object')
+    expect(d.mode === 'object' && d.counters.highRatioParts).toEqual(['xl/worksheets/sheet1.xml'])
+  })
+})
+
 describe('verification pass bounds', () => {
   it('lying declared sizes (1 MiB declared, inflating far beyond) are stopped by actual counting', async () => {
     const huge = '<row r="1"/>'.repeat(400_000)

@@ -73,6 +73,11 @@ interface Ctx {
 
 let swept = false
 
+function addDiagnostic(doc: XlsxDocument, feature: string, message: string): void {
+  doc.diagnostics ??= []
+  doc.diagnostics.push({ kind: 'large-source', feature, message })
+}
+
 function refusalFrom(admission: Exclude<SpreadsheetAdmission, { mode: 'object' }>): ImportRefusal {
   if (admission.mode === 'paged') {
     return new ImportRefusal('unsupported', 'paged-not-yet',
@@ -88,6 +93,9 @@ function admittedParser(bytes: Uint8Array, ctx: Ctx, decided?: SpreadsheetAdmiss
     if (admission.mode !== 'object') throw refusalFrom(admission)
     throwIfAborted(ctx.signal)
     const doc = await parseXlsx(pkg, { evaluation: admission.decision.evaluation })
+    for (const part of admission.decision.counters.highRatioParts) {
+      addDiagnostic(doc, 'high-compression-ratio', `${part} declares a compression ratio above ${ctx.limits.object.maxRatio}:1 (sizes verified exactly)`)
+    }
     const hit = evaluationHitCap(doc)
     // Rule 5: an evaluator resource hit reroutes to paged/`cached` before publication.
     if (hit) {

@@ -31,9 +31,9 @@ export function xlsxEntries(spec: PackageSpec): BuildEntry[] {
   return [...entries, ...(spec.extra ?? [])]
 }
 
-/** Stored entries: highly repetitive generated XML deflates beyond the 200:1 ratio cap, which real sheets do not. */
+/** Deflated entries (the builder default). Compression ratio alone never refuses a package. */
 export function xlsxBytes(spec: PackageSpec): Uint8Array {
-  return buildZip(xlsxEntries(spec).map((e) => ({ method: 0, ...e }))).bytes
+  return buildZip(xlsxEntries(spec)).bytes
 }
 
 export const repeat = (n: number, f: (i: number) => string) => { const out: string[] = []; for (let i = 0; i < n; i++) out.push(f(i)); return out.join('') }

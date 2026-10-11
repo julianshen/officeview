@@ -28,13 +28,15 @@ export interface AdmissionCounters {
   alternateContentSubtrees: number
   /** Structural domains whose metadata sat inside AlternateContent (never a known-empty result, §3.4). */
   structuralIncomplete: Array<'merges' | 'tables' | 'drawings' | 'columns' | 'rows'>
+  /** Parts above 1 MiB declaring more than maxRatio:1 (diagnostic only). */
+  highRatioParts: string[]
 }
 
 export function newAdmissionCounters(): AdmissionCounters {
   return {
     expandedBytes: 0, maxPartBytes: 0, elements: 0, attributes: 0, textChars: 0, rows: 0, cells: 0, uniqueStrings: 0,
     longestString: 0, merges: 0, styleRecords: 0, maxAttributesPerElement: 0, loadEvaluatedFormulas: 0, fullCalcOnLoad: false,
-    alternateContentSubtrees: 0, structuralIncomplete: [],
+    alternateContentSubtrees: 0, structuralIncomplete: [], highRatioParts: [],
   }
 }
 

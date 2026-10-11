@@ -44,7 +44,12 @@ async function refusal(p: Promise<unknown>): Promise<ImportRefusal> {
 }
 
 /** A spreadsheet bigger than the 64 KiB sniff prefix, so sequential input is spooled. */
-const MID_XLSX = () => xlsxBytes({ sheetData: valueCells(6000) })
+const MID_XLSX = () => {
+  // pseudo-random strings: still above 64 KiB once deflated
+  let x = 12345
+  const word = () => Array.from({ length: 20 }, () => { x = (x * 1103515245 + 12345) >>> 0; return String.fromCharCode(97 + (x >>> 27)) }).join('')
+  return xlsxBytes({ sheetData: valueCells(500), sharedStrings: Array.from({ length: 16_000 }, word) })
+}
 /** 125k metadata rows: paged on both profiles (the §4.3 counterexample). */
 const BIG_XLSX = () => xlsxBytes({ sheetData: metaRows(125_000) })
 
@@ -166,6 +171,19 @@ describe('classification and routing (RED test 15b)', () => {
     expect(err.code).toBe('resource-limit')
     expect(err.reason).toBe('limit')
     expect(err.message).toMatch(/package size \d+ exceeds the 1000 limit/)
+  })
+})
+
+describe('files the old path opened still open (orchestrator decisions)', () => {
+  it('decision 4: a highly compressed small spreadsheet opens, with a ratio diagnostic only', async () => {
+    vi.spyOn(Date, 'now').mockReturnValue(Date.UTC(2026, 9, 11, 12))
+    const bytes = xlsxBytes({ sheetData: valueCells(10), afterSheetData: `<extLst><ext uri="x">${'a'.repeat(1_500_000)}</ext></extLst>` })
+    const legacy = await detectAndParse(await OfficePackage.load(bytes)) as { sheets: unknown[] }
+    for (const source of [bytes, new Blob([bytes as BlobPart])]) {
+      const doc = await loadOfficeFile(source) as { sheets: unknown[]; diagnostics?: Array<{ feature: string }> }
+      expect(doc.sheets).toEqual(legacy.sheets)
+      expect(doc.diagnostics?.some((d) => d.feature === 'high-compression-ratio')).toBe(true)
+    }
   })
 })
 

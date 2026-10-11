@@ -52,7 +52,9 @@ export function inventoryLimits(limits: ImportLimits): ZipLimits {
     maxNameBytes: 1024,
     maxPartExpandedBytes: limits.paged.expandedBytes,
     maxTotalExpandedBytes: Number.MAX_SAFE_INTEGER,
-    maxRatio: limits.paged.maxRatio,
+    // Ratio alone never refuses: produced == declared is enforced exactly while
+    // inflating and the byte guards bound the declared sizes (decision 4).
+    maxRatio: Number.MAX_SAFE_INTEGER,
   }
 }
 
@@ -75,9 +77,6 @@ export function admit(profile: ProfileId, compressedBytes: number, inventory: Zi
   let objectReason: string | undefined
   const notObject = (reason: string) => { objectReason ??= reason }
   for (const entry of inventory.entries) {
-    if (entry.uncompressedSize > RATIO_FLOOR && entry.uncompressedSize > paged.maxRatio * entry.compressedSize) {
-      return refuse('declared compression ratio', Math.round(entry.uncompressedSize / Math.max(1, entry.compressedSize)), paged.maxRatio, entry.name)
-    }
     const info = classifyPart(entry.name)
     if (info.cls === 'media') continue
     expanded += entry.uncompressedSize
@@ -90,7 +89,6 @@ export function admit(profile: ProfileId, compressedBytes: number, inventory: Zi
       nonDrawing += entry.uncompressedSize
       if (entry.uncompressedSize > object.nonDrawingPartBytes) notObject(`part ${entry.name} declares ${entry.uncompressedSize} bytes (> ${object.nonDrawingPartBytes})`)
     }
-    if (entry.uncompressedSize > RATIO_FLOOR && entry.uncompressedSize > object.maxRatio * entry.compressedSize) notObject(`part ${entry.name} declares a ratio above ${object.maxRatio}:1`)
   }
   if (expanded > paged.expandedBytes) return refuse('declared expanded size', expanded, paged.expandedBytes)
   if (compressedBytes > object.compressedBytes) notObject(`package size ${compressedBytes} > ${object.compressedBytes}`)
@@ -116,6 +114,13 @@ export function admissionTotal(counters: AdmissionCounters, limits: ImportLimits
   const ev = limits.object.evaluation
   const n = counters.loadEvaluatedFormulas
   return predictedPeak(counters, limits) + n * ev.perFormulaBytes + (n > 0 ? ev.maxArrayCells * ev.perMaterializedCellBytes : 0)
+}
+
+/** Parts above 1 MiB whose declared ratio exceeds maxRatio: a diagnostic only. */
+export function highRatioParts(inventory: ZipInventory, maxRatio: number): string[] {
+  return inventory.entries
+    .filter((e) => e.uncompressedSize > RATIO_FLOOR && e.uncompressedSize > maxRatio * e.compressedSize)
+    .map((e) => e.name)
 }
 
 /** A counter crossed an object-path cap: not an error, the document goes to the paged path. */
@@ -158,6 +163,7 @@ export async function verifyObjectCandidate(src: RangeSource, inventory: ZipInve
   const o = limits.object
   const ledger = options.ledger ?? createQuotaLedger(quotaLimitsFor(options.profile ?? 'D'), { maxTotalExpandedBytes: Number.MAX_SAFE_INTEGER })
   const counters = newAdmissionCounters()
+  counters.highRatioParts = highRatioParts(inventory, o.maxRatio)
   let nonDrawing = 0
   try {
     for (const entry of verificationOrder(inventory)) {
