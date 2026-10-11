@@ -205,6 +205,38 @@ describe('OfficeDoc as the grid ancestor', () => {
     }
     cleanup()
   })
+  it('prevents browser page zoom for Ctrl/Cmd+wheel over the grid without zooming legacy pages', async () => {
+    const { ui, grid, cleanup } = await officeDocWithGrid()
+    const content = ui.container.querySelector('[data-testid="officeview-content"]') as HTMLElement
+    for (const modifier of ['ctrlKey', 'metaKey']) {
+      const event = new WheelEvent('wheel', { deltaY: -100, [modifier]: true, bubbles: true, cancelable: true })
+      act(() => { grid.dispatchEvent(event) })
+      expect(event.defaultPrevented).toBe(true)
+    }
+    await new Promise(resolve => setTimeout(resolve, 30))
+    expect(content.style.transform).toBe('none')
+    cleanup()
+  })
+  it('keeps a pinch that started on the page alive when a finger crosses viewer UI', async () => {
+    const { ui, grid, cleanup } = await officeDocWithGrid()
+    const region = ui.getByRole('region'), content = ui.container.querySelector('[data-testid="officeview-content"]') as HTMLElement
+    Object.defineProperty(region, 'clientWidth', { value: 400, configurable: true })
+    Object.defineProperty(region, 'clientHeight', { value: 800, configurable: true })
+    region.getBoundingClientRect = () => ({ left: 0, top: 0, width: 400, height: 800, right: 400, bottom: 800, x: 0, y: 0, toJSON: () => ({}) })
+    const touch = (id: number, x: number, y: number) => ({ pointerId: id, clientX: x, clientY: y, pointerType: 'touch', bubbles: true, isPrimary: id === 1 })
+    fireEvent.pointerDown(region, touch(1, 150, 400))
+    fireEvent.pointerDown(region, touch(2, 250, 400))
+    fireEvent.pointerMove(grid, touch(2, 350, 400))
+    await waitFor(() => expect(content.style.transform).toContain('scale(2)'))
+    // a gesture that starts on viewer UI still does not belong to the legacy viewer
+    fireEvent.pointerUp(region, touch(1, 150, 400)); fireEvent.pointerUp(region, touch(2, 350, 400))
+    const before = content.style.transform
+    fireEvent.pointerDown(grid, touch(3, 200, 400))
+    fireEvent.pointerMove(grid, touch(3, 100, 300))
+    await new Promise(resolve => setTimeout(resolve, 30))
+    expect(content.style.transform).toBe(before)
+    cleanup()
+  })
   it('falls an unhandled grid Escape through to the viewer selection clear', async () => {
     const { ui, canvas, grid, cleanup } = await officeDocWithGrid()
     const copyButton = () => ui.container.querySelector('[data-testid="officeview-copy-selection"]')

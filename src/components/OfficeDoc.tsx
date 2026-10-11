@@ -269,6 +269,17 @@ export function OfficeDoc({
   const gestureStart = useRef<{ transform: Transform; distance: number; center: Point } | null>(null)
   const panStart = useRef<{ transform: Transform; point: Point } | null>(null)
 
+  // React attaches wheel listeners as passive, so onWheel cannot stop the
+  // browser's own Ctrl/Cmd+wheel page zoom; a native listener can, including
+  // over viewer UI that ignores the legacy zoom gesture.
+  useEffect(() => {
+    const el = containerRef.current
+    if (!el) return
+    const suppressPageZoom = (e: WheelEvent) => { if (e.ctrlKey || e.metaKey) e.preventDefault() }
+    el.addEventListener('wheel', suppressPageZoom, { passive: false })
+    return () => el.removeEventListener('wheel', suppressPageZoom)
+  }, [])
+
   useEffect(() => {
     const el = containerRef.current
     if (!el) return
@@ -361,7 +372,7 @@ export function OfficeDoc({
   }
 
   const onPointerMove = (e: React.PointerEvent) => {
-    if (isViewerUiTarget(e.target)) return
+    // ownership was decided at pointerdown; a tracked finger may cross viewer UI
     if (!pointers.current.has(e.pointerId)) return
     const point = localPoint(e)
     pointers.current.set(e.pointerId, point)
@@ -403,9 +414,9 @@ export function OfficeDoc({
   }
 
   const onWheel = (e: React.WheelEvent) => {
-    if (isViewerUiTarget(e.target)) return
     // trackpad pinch and ctrl+wheel zoom; plain wheel keeps native scrolling
     if (!e.ctrlKey && !e.metaKey) return
+    if (isViewerUiTarget(e.target)) return
     e.preventDefault()
     const factor = Math.exp(-e.deltaY / 250)
     setTransform((t) => zoomAt(t, t.zoom * factor, localPoint(e), viewportRef.current))
