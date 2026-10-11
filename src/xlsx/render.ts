@@ -1032,10 +1032,12 @@ export function renderSheetViewport(
     const replay = (record: CellLayout) => {
       // Float64 local offset; the canvas only ever sees tile-local coordinates.
       const lx = record.logicalBounds.x - vx, ly = record.logicalBounds.y - vy
-      const rel = { width: plan.extent.width - record.logicalBounds.x, height: plan.extent.height - record.logicalBounds.y }
+      // Border strokes clamp to the sheet extent (paintCellLayout); expressed in the
+      // record's box-local frame.
+      const localExtent = { width: plan.extent.width - record.logicalBounds.x, height: plan.extent.height - record.logicalBounds.y }
       ctx.save()
       ctx.translate(lx, ly)
-      const border = paintCellLayout(ctx, record.body, rel)
+      const border = paintCellLayout(ctx, record.body, localExtent)
       ctx.restore()
       if (border) paintBorders.push(() => { ctx.save(); ctx.translate(lx, ly); border(); ctx.restore() })
     }
