@@ -448,27 +448,28 @@ export function OfficeDoc({
       inputRef.current?.select()
       return
     }
-    if (isViewerUiTarget(e.target)) return
-    if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'c') {
+    // Protection policy and Escape fall-through apply even when the event comes
+    // from viewer UI such as an owned grid; a control that consumed Escape
+    // already prevented it.
+    if (!allowCopy && (e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'c') {
       // when copying is off, swallow the shortcut rather than letting the
       // browser act on whatever happens to be selected around the canvas
-      if (!allowCopy) {
-        e.preventDefault()
-        return
-      }
-      if (selection && !isEmptyRange(selection)) {
-        e.preventDefault()
-        void doCopy()
-        return
-      }
+      e.preventDefault()
+      return
     }
     if (!allowPrint && (e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'p') {
       e.preventDefault()
       return
     }
-    if (e.key === 'Escape' && selection) {
+    if (e.key === 'Escape' && selection && !e.defaultPrevented) {
       setSelection(undefined)
       selectionAnchor.current = null
+      return
+    }
+    if (isViewerUiTarget(e.target)) return
+    if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'c' && selection && !isEmptyRange(selection)) {
+      e.preventDefault()
+      void doCopy()
       return
     }
     if (e.key === '+' || e.key === '=') { e.preventDefault(); zoomBy(1) }
