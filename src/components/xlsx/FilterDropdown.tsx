@@ -1,0 +1,125 @@
+import { useEffect, useRef, useState, type ReactElement } from 'react'
+import type { ColumnRule, FilterSpec } from '../../xlsx/view/contracts'
+import { FilterEngine, type ColumnClassification } from '../../xlsx/view/filter'
+import { columnToLetters } from '../../xlsx/view/coordinates'
+import type { DetectedRange } from '../../xlsx/view/rangeDetection'
+import { filterWithColumn, sameFilterRange, type DraftPage, type DraftQuery, type ValueDraftAction, type ValuesDraftPort } from './controlsClient'
+import { controlTarget, failureText, useControlLifetime, type ControlProps } from './controlUi'
+import { ConditionEditor, conditionInput, typedCondition } from './ConditionEditor'
+export interface FilterDropdownProps extends ControlProps { col: number; applied: FilterSpec | null; snapshotHidden?: boolean }
+export function FilterDropdown(props: FilterDropdownProps): ReactElement | null {
+  const life = useControlLifetime(props), session = useRef<ValuesDraftPort | null>(null), searchInput = useRef<HTMLInputElement>(null)
+  const [range, setRange] = useState<DetectedRange | null>(null), [page, setPage] = useState<DraftPage | null>(null), [query, setQuery] = useState<DraftQuery>({ text: '', offset: 0 })
+  const [busy, setBusy] = useState(true), [progress, setProgress] = useState('Loading values'), [error, setError] = useState(''), [inspection, setInspection] = useState(''), [includeBlanks, setIncludeBlanks] = useState(false)
+  const appliedRule = props.applied?.columns.get(props.col)
+  const initial = appliedRule?.kind === 'compound' ? appliedRule.first : appliedRule && appliedRule.kind !== 'values' ? appliedRule : undefined
+  const [method, setMethod] = useState<'values' | 'custom'>(initial ? 'custom' : 'values'), [first, setFirst] = useState(() => conditionInput(initial)), [second, setSecond] = useState(() => conditionInput(appliedRule?.kind === 'compound' ? appliedRule.second : undefined))
+  const [compound, setCompound] = useState(appliedRule?.kind === 'compound'), [connective, setConnective] = useState<'and' | 'or'>(appliedRule?.kind === 'compound' ? appliedRule.connective : 'and')
+  const classification: ColumnClassification = session.current?.identity.classification ?? { kind: 'loading', hasNumeric: false }
+  life.dispose.current = () => { session.current?.cancel(); session.current = null }
+  const noticeError = (message: string) => { setError(message); props.onNotice(message) }
+  const initialize = () => {
+    const job = life.begin(); setBusy(true); setError(''); setPage(null); setRange(null)
+    session.current?.cancel(); session.current = null
+    void (async () => {
+      const resolved = await props.client.resolve(job.owner, 'filter', job.signal, undefined, props.col)
+      if (!job.current()) return
+      if (resolved.kind !== 'complete') { noticeError(resolved.kind === 'refused' ? failureText(resolved) : 'Source range is incomplete; retry.'); setBusy(false); return }
+      if (props.col < resolved.range.c0 || props.col > resolved.range.c1) throw new RangeError('Column is outside the resolved filter range.')
+      setRange(resolved)
+      const rule = props.applied && sameFilterRange(props.applied.range, resolved.range) && appliedRule?.kind === 'values' ? appliedRule : null
+      const port = await props.client.values(job.owner, resolved.range, props.col, rule, job.signal)
+      if (!job.current()) { port.cancel(); return }
+      session.current = port
+      if (!initial) { const kind = port.identity.classification.kind === 'number' ? 'number' : port.identity.classification.kind === 'date' ? 'date' : 'text'; setFirst(conditionInput(undefined, kind)); setSecond(conditionInput(undefined, kind)) }
+      const result = await port.read({ text: '', offset: 0 }, job.signal, p => { if (job.current()) setProgress(`${p.message}: ${p.completed} / ${p.total}`) })
+      if (job.current()) { setQuery({ text: '', offset: 0 }); setPage(result); setBusy(false) }
+    })().catch(error => { if (job.current()) { noticeError(life.error(error)); setBusy(false) } })
+  }
+  useEffect(() => { if (props.open !== false) { initialize(); searchInput.current?.focus() } }, [props.open, life.ownerKey, props.col])
+  const refresh = (next: DraftQuery, action?: ValueDraftAction) => {
+    const port = session.current
+    if (!port) return
+    const job = life.begin(); setBusy(true); setError(''); setQuery(next)
+    void (action ? port.change(action, next, job.signal) : port.read(next, job.signal, p => { if (job.current()) setProgress(`${p.message}: ${p.completed} / ${p.total}`) }))
+      .then(result => { if (job.current()) { setPage(result); setBusy(false) } }).catch(error => { if (job.current()) { noticeError(life.error(error)); setBusy(false) } })
+  }
+  let custom: ColumnRule | undefined, validation = ''
+  if (method === 'custom' && classification.kind !== 'loading') {
+    try {
+      const one = typedCondition(first), two = compound ? typedCondition(second) : undefined
+      custom = two ? { kind: 'compound', connective, first: one, second: two } : one
+      new FilterEngine(props.client.context()).compileRule(custom, classification)
+    } catch (error) { validation = life.error(error) }
+  }
+  const apply = (shortcut?: 'clear' | 'clearAll' | 'asc' | 'desc') => {
+    if (busy || life.invalid || (!shortcut && (!range || !page?.complete || validation))) return
+    const job = life.begin(); setBusy(true); setError('')
+    void (async () => {
+      let outcome
+      if (shortcut === 'asc' || shortcut === 'desc') {
+        const detected = await props.client.resolve(job.owner, 'sort', job.signal, undefined, props.col)
+        if (!job.current()) return
+        if (detected.kind !== 'complete') { noticeError(detected.kind === 'refused' ? failureText(detected) : 'Source range is incomplete; retry.'); setBusy(false); return }
+        outcome = await props.client.sort(job.owner, { range: detected.range, keys: [{ col: props.col, order: shortcut }], caseSensitive: false }, job.signal)
+      } else {
+        let next: FilterSpec | null
+        if (shortcut === 'clearAll') next = null
+        else if (shortcut === 'clear') next = props.applied ? filterWithColumn(props.applied, props.applied.range, props.col, null) : null
+        else {
+          const rule = method === 'values' ? await session.current!.candidate(job.signal) : custom!
+          if (!job.current()) return
+          next = filterWithColumn(props.applied, range!.range, props.col, rule)
+        }
+        outcome = await props.client.filter(job.owner, next, job.signal, p => { if (job.current()) setProgress(`${p.message}: ${p.completed} / ${p.total}`) }, !shortcut && method === 'values' ? session.current! : undefined)
+      }
+      if (!job.accepts(outcome)) return
+      const replacement = !shortcut && props.applied && range && !sameFilterRange(props.applied.range, range.range)
+      const text = shortcut === 'asc' || shortcut === 'desc' ? 'View-only sort applied; formulas unchanged.' : shortcut ? `Filter cleared.${props.snapshotHidden ? " File's saved hidden rows remain hidden." : ''}` : `${outcome.kind === 'unchanged' ? 'Filter unchanged.' : 'Filter applied.'}${replacement ? ' Previous filter range replaced.' : ''}`
+      if (!life.result(outcome, text)) { setError(failureText(outcome as Parameters<typeof failureText>[0])); setBusy(false) }
+    })().catch(error => { if (job.current()) { noticeError(life.error(error)); setBusy(false) } })
+  }
+  if (props.open === false) return null
+  return <div role={props.embedded ? undefined : 'dialog'} aria-label={`Filter column ${columnToLetters(props.col)}`} data-officeview-ui="filter-dropdown"
+    onPointerDown={event => event.stopPropagation()} onDoubleClick={event => event.stopPropagation()}
+    onKeyDown={event => {
+      if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'f') return
+      event.stopPropagation()
+      if (event.key === 'Escape') { event.preventDefault(); life.cancel() }
+      else if (event.key === 'Enter' && event.target === searchInput.current) { event.preventDefault(); refresh({ ...query, offset: 0 }) }
+    }} style={{ position: 'relative', width: 'min(420px, calc(100vw - 16px))', maxHeight: '80vh', overflowY: 'auto', background: '#fff', border: '1px solid #888', padding: '12px 12px calc(12px + env(safe-area-inset-bottom))', boxSizing: 'border-box' }}>
+    <form onSubmit={event => { event.preventDefault(); apply() }}>
+      <h2>Filter column {columnToLetters(props.col)}</h2>
+      <div><button type="button" style={controlTarget} disabled={busy || !range || life.invalid} onClick={() => apply('asc')}>Sort ascending</button><button type="button" style={controlTarget} disabled={busy || !range || life.invalid} onClick={() => apply('desc')}>Sort descending</button></div>
+      <button type="button" style={controlTarget} disabled={busy || life.invalid} onClick={() => apply('clear')}>Clear column</button><button type="button" style={controlTarget} disabled={busy || life.invalid} onClick={() => apply('clearAll')}>Clear all filters</button>
+      {range && <p>{range.source.kind === 'table' ? `Table metadata: ${range.range.headerRows} header row(s), ${range.range.totalsRows} totals row(s).` : 'Resolved source range.'}{props.applied && !sameFilterRange(props.applied.range, range.range) ? ' OK will replace the previous filter range.' : ''}</p>}
+      <label>Filter method <select aria-label="Filter method" style={controlTarget} value={method} onChange={event => setMethod(event.target.value as 'values' | 'custom')}><option value="values">Values and blanks</option>{!['loading', 'empty'].includes(classification.kind) && <option value="custom">{classification.kind === 'date' ? 'Date filters' : classification.kind === 'number' ? 'Number filters' : 'Text / mixed filters'}</option>}</select></label>
+      {method === 'values' ? <>
+        <label>Search <input ref={searchInput} aria-label="Search all values" style={controlTarget} value={query.text} onChange={event => refresh({ text: event.target.value, offset: 0, wildcards: query.wildcards })} /></label>
+        <label style={{ ...controlTarget, display: 'flex', alignItems: 'center' }}><input type="checkbox" checked={Boolean(query.wildcards)} onChange={event => refresh({ ...query, offset: 0, wildcards: event.target.checked })} />Search with wildcards</label>
+        {page?.truncated && <p>Showing first 10,000; search all values.</p>}
+        <button type="button" style={controlTarget} disabled={busy || !page || life.invalid} onClick={() => refresh(query, { kind: 'all', selected: true, includeBlanks })}>Select All</button>
+        <button type="button" style={controlTarget} disabled={busy || !page || life.invalid} onClick={() => refresh(query, { kind: 'all', selected: false, includeBlanks })}>Deselect All</button>
+        {query.text && <label style={{ ...controlTarget, display: 'flex', alignItems: 'center' }}><input type="checkbox" checked={includeBlanks} onChange={event => setIncludeBlanks(event.target.checked)} />Include blanks in searched Select All</label>}
+        <div style={{ maxHeight: 280, overflowY: 'auto' }}>{page?.entries.map(entry => <label key={entry.ordinal} data-value-ordinal={entry.ordinal} style={{ ...controlTarget, display: 'flex', alignItems: 'center' }}>
+          <input type="checkbox" aria-label={`${entry.label}${entry.kind === 'error' ? ' (error)' : ''}`} checked={entry.selected === true} disabled={busy || entry.selected === 'pending' || life.invalid}
+            ref={input => { if (input) input.indeterminate = entry.selected === 'pending' }} onChange={event => refresh(query, { kind: 'toggle', ordinal: entry.ordinal, selected: event.target.checked })} />
+          <span>{entry.label}{entry.kind === 'error' ? ' (error)' : ''}{entry.selected === 'pending' ? ' — selection pending' : ''}</span>
+          <button type="button" aria-label={`Inspect value ${entry.ordinal + 1}`} style={controlTarget} onClick={() => { const job = life.begin(); void session.current!.inspect(entry.ordinal, job.signal).then(value => { if (job.current()) setInspection(value) }).catch(error => { if (job.current()) noticeError(life.error(error)) }) }}>Inspect</button>
+        </label>)}</div>
+        {page && <><label style={{ ...controlTarget, display: 'flex', alignItems: 'center' }}><input type="checkbox" aria-label="(Blanks)" checked={page.blanks} disabled={busy || life.invalid} onChange={event => refresh(query, { kind: 'blanks', selected: event.target.checked })} />(Blanks)</label>
+          <p>{page.count.count} selected values{page.count.pending ? `; ${page.count.pending} pending` : ''}; {page.count.complete ? 'complete universe' : 'universe incomplete'}.</p>
+          <button type="button" style={controlTarget} disabled={busy || query.offset === 0} onClick={() => refresh({ ...query, offset: Math.max(0, query.offset - 200) })}>Previous values</button><button type="button" style={controlTarget} disabled={busy || query.offset + 200 >= page.displayed} onClick={() => refresh({ ...query, offset: query.offset + 200 })}>Next values</button></>}
+      </> : <>
+        <ConditionEditor value={first} onChange={setFirst} classification={classification} index={1} invalid={Boolean(validation)} />
+        <label style={{ ...controlTarget, display: 'flex', alignItems: 'center' }}><input type="checkbox" aria-label="Use two conditions" checked={compound} onChange={event => setCompound(event.target.checked)} />Use two conditions</label>
+        {compound && <><label>Combine <select aria-label="Combine conditions" style={controlTarget} value={connective} onChange={event => setConnective(event.target.value as 'and' | 'or')}><option value="and">All (AND)</option><option value="or">Either (OR)</option></select></label><ConditionEditor value={second} onChange={setSecond} classification={classification} index={2} invalid={Boolean(validation)} /></>}
+        {classification.kind === 'date' && <p>Calendar dates in {props.client.context().timeZone}; periods include times and resolve at apply time.</p>}
+      </>}
+      {inspection && <pre>{inspection}</pre>}{validation && <p>{validation}</p>}{error && <p>{error}</p>}
+      {busy && <div role="progressbar" aria-label={progress}>{progress}</div>}
+      {!busy && (!page?.complete || error) && <button type="button" style={controlTarget} onClick={initialize}>Retry values</button>}
+      <button type="submit" style={controlTarget} disabled={busy || !range || !page?.complete || Boolean(validation) || life.invalid}>OK</button><button type="button" style={controlTarget} onClick={() => life.cancel()}>Cancel</button>
+    </form>
+  </div>
+}
