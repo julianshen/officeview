@@ -63,6 +63,7 @@ const CANCEL_MESSAGES: Readonly<Record<CancelReason, string>> = Object.freeze({
  * with its target's owner (bounded; oldest dropped first). */
 const FINISHED_OWNERS_LIMIT = 1024
 export interface KernelStats { opens: number; parses: number; sourceReads: number }
+export interface KernelLifecycleStats { sessions: number; inflight: number; opening: number; retainedBytes: number; transientBytes: number }
 interface InFlight {
   controller: AbortController
   owner: WorkerOwner
@@ -116,6 +117,17 @@ export class ViewerKernel {
 
   session(docId: string): DocumentSession | undefined { return this.sessions.get(docId) }
   ledger(): TransferLedger { return this.accounting.snapshot() }
+  /** S4.3 lifecycle ledger: open sessions, pending requests and the pooled
+   * bytes of every open document (a closed document contributes nothing). */
+  lifecycleStats(): KernelLifecycleStats {
+    let retainedBytes = 0, transientBytes = 0
+    for (const session of this.sessions.values()) {
+      const memory = session.memoryStats()
+      retainedBytes += memory.retainedBytes
+      transientBytes += memory.transientBytes
+    }
+    return { sessions: this.sessions.size, inflight: this.inflight.size, opening: this.opening.size, retainedBytes, transientBytes }
+  }
 
   /** Handles one command, emitting its replies through `post`. Never throws:
    * unexpected failures become an error reply for the command's owner. */
@@ -228,13 +240,23 @@ export class ViewerKernel {
       case 'open': return this.open(command, signal)
       case 'close': return this.close(command)
       case 'activateSheet': {
-        // Activation selects resident state only; it publishes nothing that depends
-        // on view generations, so the document owner is the relevant check.
+        // Activation selects resident state; it publishes nothing that depends on
+        // view generations, so the document owner is the relevant check. An
+        // evicted view (S4.3) is rebuilt under its unchanged identity first.
         const session = this.sessions.get(command.owner.docId)
         if (!session || session.isClosed) return errorReply(command, command.owner, 'stale-source', false, [{ code: 'unknown-document', message: 'Document is not open' }])
         if (!session.hasSheet(command.sheetId)) return errorReply(command, command.owner, 'stale-source', false, [{ code: 'unknown-sheet', message: `No sheet ${command.sheetId}` }])
         session.activate(command.sheetId)
-        return reply(command, command.owner, { kind: 'complete', result: { kind: 'activateSheet', sheetId: command.sheetId } })
+        const resident = await session.ensureView(command.sheetId, signal)
+        switch (resident.kind) {
+          case 'resident':
+            return reply(command, command.owner, { kind: 'complete', result: { kind: 'activateSheet', sheetId: command.sheetId } }, resident.diagnostics ?? [])
+          case 'cancelled': return reply(command, command.owner, { kind: 'cancelled' })
+          case 'stale': return errorReply(command, command.owner, 'stale-source', true, [{ code: 'view-rebuild-stale', message: 'The sheet view changed while it was being rebuilt' }])
+          case 'incomplete': return reply(command, command.owner, { kind: 'incomplete', missing: resident.missing })
+          case 'quota': return reply(command, command.owner, { kind: 'quota', resource: 'memory', limitBytes: resident.limitBytes, requiredBytes: resident.requiredBytes })
+          case 'error': return errorReply(command, command.owner, resident.error.code === 'operation-refused' ? 'page-error' : resident.error.code, resident.error.retryable, [{ code: 'view-rebuild-failed', message: resident.error.message }])
+        }
       }
       case 'prepareColumns': {
         const session = this.current(command.owner)
