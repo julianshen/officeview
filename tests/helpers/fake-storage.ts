@@ -76,7 +76,8 @@ export function fakeEnv(overrides: Partial<StorageEnv> = {}): StorageEnv {
  * sink that awaits a stream read between put() calls hits
  * TransactionInactiveError exactly as Chromium did in the §2.8 measurement.
  */
-export function fakeIndexedDb(): IDBFactory & { stores: Map<string, Map<number, Blob>>; transactions: Array<{ mode: string; puts: number }>; deleted: string[] } {
+export function fakeIndexedDb(options: { failDeletes?: number } = {}): IDBFactory & { stores: Map<string, Map<number, Blob>>; transactions: Array<{ mode: string; puts: number }>; deleted: string[] } {
+  let failDeletes = options.failDeletes ?? 0
   const stores = new Map<string, Map<number, Blob>>()
   const transactions: Array<{ mode: string; puts: number }> = []
   const deleted: string[] = []
@@ -153,8 +154,14 @@ export function fakeIndexedDb(): IDBFactory & { stores: Map<string, Map<number, 
       return req as unknown as IDBOpenDBRequest
     },
     deleteDatabase(name: string) {
-      const req = { onsuccess: null as null | (() => void), onerror: null, onblocked: null }
+      const req = { onsuccess: null as null | (() => void), onerror: null as null | (() => void), onblocked: null, error: null as unknown }
       later(() => {
+        if (failDeletes > 0) {
+          failDeletes--
+          req.error = new DOMException('blocked', 'UnknownError')
+          req.onerror?.()
+          return
+        }
         if (stores.delete(name)) deleted.push(name)
         req.onsuccess?.()
       })

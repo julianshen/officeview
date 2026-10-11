@@ -62,6 +62,21 @@ describe('header probe', () => {
     expect(probeImageHeader(tif)).toEqual({ format: 'tiff', width: 5000, height: 4000 })
   })
 
+  it('review MINOR 3: BMP width is unsigned (no 32-bit wrap); height sign only flips orientation', () => {
+    const bmp = (w: number, h: number) => {
+      const b = new Uint8Array(54)
+      b.set([0x42, 0x4d])
+      const v = new DataView(b.buffer)
+      v.setUint32(14, 40, true)
+      v.setUint32(18, w >>> 0, true)
+      v.setInt32(22, h, true)
+      return b
+    }
+    expect(probeImageHeader(bmp(0xffffff00, 10))).toEqual({ format: 'bmp', width: 0xffffff00, height: 10 })
+    expect(probeImageHeader(bmp(0xffffffff, 10))).toEqual({ format: 'bmp', width: 0xffffffff, height: 10 })
+    expect(probeImageHeader(bmp(300, -2_147_483_648))).toEqual({ format: 'bmp', width: 300, height: 2_147_483_648 })
+  })
+
   it('unknown and truncated headers are reported, never guessed', () => {
     expect(probeImageHeader(new Uint8Array(100).fill(7))).toEqual({ error: 'unknown-format' })
     expect(probeImageHeader(png(10, 10).subarray(0, 12))).toEqual({ error: 'truncated' })

@@ -235,6 +235,47 @@ describe('backpressure (RED test 16)', () => {
   })
 })
 
+describe('release after a failed delete (review NIT 6)', () => {
+  it('an IndexedDB release that fails can be retried', async () => {
+    const idb = fakeIndexedDb({ failDeletes: 1 })
+    const sink = await createIndexedDbBackend(idb).create(`${SPOOL_PREFIX}1-r`)
+    await sink.append(pattern(10))
+    const src = await sink.finish()
+    await expect(src.release()).rejects.toBeDefined()
+    expect(idb.stores.size).toBe(1)
+    await src.release()
+    expect(idb.stores.size).toBe(0)
+  })
+
+  it('the spool wrapper retries a failed backend release too', async () => {
+    let fail = true
+    const removed: string[] = []
+    const env = fakeEnv({
+      memoryLimitBytes: 1,
+      opfs: {
+        available: () => true,
+        async create(name) {
+          return {
+            kind: 'opfs' as const,
+            async append() {},
+            async finish() {
+              return { blob: new Blob([new Uint8Array(4)]), size: 4, kind: 'opfs' as const, async release() { if (fail) { fail = false; throw new Error('busy') } removed.push(name) } }
+            },
+            async abort() {},
+          }
+        },
+      },
+    })
+    const sink = await openSpool(env, { maxBytes: MiB, advertisedBytes: 4 }, signal())
+    await sink.append(pattern(4))
+    const src = await sink.finish()
+    await expect(src.release()).rejects.toThrow('busy')
+    await src.release()
+    await src.release()
+    expect(removed).toHaveLength(1)
+  })
+})
+
 describe('storage failure mid-write (RED test 17)', () => {
   it('QuotaExceededError from the backend is a typed quota failure and the partial file is removed', async () => {
     const opfs = fakeBackend('opfs', { failOnWrite: { at: 3, error: new DOMException('full', 'QuotaExceededError') } })

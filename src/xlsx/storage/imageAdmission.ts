@@ -111,9 +111,11 @@ export function probeImageHeader(b: Uint8Array): ProbeResult {
     if (b.length < 26) return { error: 'truncated' }
     const headerSize = le32(b, 14)
     if (headerSize === 12) return dims('bmp', le16(b, 18), le16(b, 20))
-    const w = le32(b, 18) | 0
+    // width is read unsigned (a negative width is invalid anyway, and |0 would
+    // wrap a huge width to a small one); a negative height only means top-down
+    const w = le32(b, 18)
     const h = le32(b, 22) | 0
-    return dims('bmp', Math.abs(w), Math.abs(h))
+    return dims('bmp', w, Math.abs(h))
   }
   if (b.length >= 12 && ascii(b, 0, 'RIFF') && ascii(b, 8, 'WEBP')) return webp(b)
   if (b.length >= 8 && (ascii(b, 0, 'II*\0') || ascii(b, 0, 'MM\0*'))) return tiff(b)

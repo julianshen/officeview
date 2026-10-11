@@ -229,8 +229,9 @@ export async function openSpool(env: StorageEnv, opts: SpoolOptions, signal: Abo
         kind: source.kind,
         async release() {
           if (released) return
-          released = true
+          // marked only after success, so a failed removal can be retried
           await source.release()
+          released = true
         },
       }
     },
@@ -408,8 +409,8 @@ export function createIndexedDbBackend(factory: IDBFactory, options: { batchByte
             kind: 'indexeddb',
             async release() {
               if (released) return
-              released = true
               await deleteDb(name)
+              released = true
             },
           }
         },
