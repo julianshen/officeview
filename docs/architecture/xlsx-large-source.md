@@ -1104,7 +1104,7 @@ the final PR. "(corrected)" marks entries that replace an earlier version; "(rou
    object path is bounded by a measured element/attribute/text envelope counted exactly in the verification pass (bytes are not a
    bound: the 125k metadata-row counterexample), secondary caps applied together, and an **evaluation reserve** for load-evaluated
    formulas with the evaluator capped; any evaluator resource hit reroutes to paged/`cached` before publication (the
-   `SEQUENCE(200000,1)` counterexample). All **proposed, to be frozen in S10**; the evaluator-change variant is open (§6.7).
+   `SEQUENCE(200000,1)` counterexample). All **proposed, to be frozen in S10**. **Evaluator variant (§6.7) decided (round 3): the recommended additive cumulative `maxMaterializedCells` counter in `src/xlsx/formula/*` with `A` = 16,384 (D) / 4,096 (M)** — it is sound for any number of formulas, whereas the interim per-formula cap limits D to about 47 array-capable formula parts. It is an additive internal option (default unchanged for existing callers) and the additive `parseXlsx` options argument stays a user-flagged item (§4.5 #7).
 7. **Event consumers** live in `src/xlsx/storage/sheetRecords.ts`; S1.2 defines the `PageSink` payload against `contracts.ts`
    lanes (S1.1 defines the port, §4.4).
 8. **Network spool (corrected, rounds 2 and 3):** S1.1 owns spooling and the entry-point wiring. A 64 KiB prefix gives a **hint**
