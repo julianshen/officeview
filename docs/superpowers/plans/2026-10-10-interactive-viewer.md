@@ -99,7 +99,8 @@ Every package is implemented on its own branch, reviewed by at least one agent f
 | S3.1/S3.2 structural index and operation guard (pure parts: `structure.ts`, `operationGuard.ts`; parser/drawing/spill wiring open) | merged |
 | S4.1 resident worker protocol/session (`src/worker/viewer*.ts`; temporary object-backed source until S1.2) | merged |
 | S7.1 range detection/header policy/admission (`src/xlsx/view/rangeDetection.ts`) | merged |
-| S1.1a, S2.3, S4.2, S8.2, S8.3, S8.5, value-search spike | in progress (implementation or review rounds on their own branches) |
+| S4.2 cooperative scheduling/cancellation/atomic publication (`src/xlsx/view/scheduler.ts`, worker session/kernel/client) | merged |
+| S1.1a, S2.3, S8.2, S8.3, S8.5, value-search spike | in progress (implementation or review rounds on their own branches) |
 | S1.1b, S1.2, S1.3, S4.3–S4.5, S5, S6, S9, S10 (physical-device receipts skipped for now by user decision), S11/S12 status, S13 | not started |
 
 ## S0 — Freeze contracts, counterexamples and fixture/harness infrastructure
@@ -323,14 +324,16 @@ expect(session.publishWorkbookIndex(staleA)).toBe(false)
 
 ### S4.2 Cooperative scheduling, cancellation and atomic publication
 
+> **Status (2026-10-11):** merged (Claude implementation; pi and opencode reviews over two rounds; every finding fixed). Shared cooperative scheduler (≤4,096 units or 10 ms) used by sort, preparation, guard scans and visibility projection; epoch/owner rechecks before every publication; one-transaction `commitDraft`; cancel reasons on replies; in-thread fallback for small documents, typed `worker-required`/`storage-required` refusal in large mode. Deferred with TODO markers: §10.2 viewport/active-cell priority (S5), 120 s query timeout, wire commands for value/font publication (S1.3/S4.3).
+
 **Files:** extend `viewerProtocol.ts`, `viewerSession.ts`, `viewerKernel.ts`, `viewerClient.ts`; test `tests/xlsx-viewer-worker-races.test.ts`.
 
-- [ ] RED: delayed query/sort/index result arrives after another view commit, sheet switch, value publication, font change, close or reopen. Assert stale results never replace current order, UI counts, search geometry or status; cancelling a command preserves the previous committed view.
-- [ ] Run `bunx vitest run tests/xlsx-viewer-worker-races.test.ts`; expected stale publication or uncancellable work fails.
-- [ ] GREEN: request IDs, document epoch, workbook/per-sheet generations and cancellation tokens guard every publication. Long jobs yield at least every 10ms or 4,096 rows, whichever arrives first, including preparation, scans, external runs and value indexes. Provide progress from completed authoritative batches, not an optimistic timer.
-- [ ] Build drafts privately, validate resource/structural/source completion, then commit order/visibility/metrics/revisions as one transaction. Cancel on range replacement, source close or superseding draft; acknowledge input immediately while worker work continues. Define no-worker support separately: small admitted fallback may share chunked TS kernels; large mode refuses unsupported mandatory worker/storage features visibly.
-- [ ] Run focused suite with deterministic scheduler; expected bounded yield counts, cancellation reclaim, no half-applied views and no stale status/progress publication.
-- [ ] Deliver scheduler/publication patch with reproducible race logs, not timing-based unit assertions.
+- [x] RED: delayed query/sort/index result arrives after another view commit, sheet switch, value publication, font change, close or reopen. Assert stale results never replace current order, UI counts, search geometry or status; cancelling a command preserves the previous committed view.
+- [x] Run `bunx vitest run tests/xlsx-viewer-worker-races.test.ts`; expected stale publication or uncancellable work fails.
+- [x] GREEN: request IDs, document epoch, workbook/per-sheet generations and cancellation tokens guard every publication. Long jobs yield at least every 10ms or 4,096 rows, whichever arrives first, including preparation, scans, external runs and value indexes. Provide progress from completed authoritative batches, not an optimistic timer.
+- [x] Build drafts privately, validate resource/structural/source completion, then commit order/visibility/metrics/revisions as one transaction. Cancel on range replacement, source close or superseding draft; acknowledge input immediately while worker work continues. Define no-worker support separately: small admitted fallback may share chunked TS kernels; large mode refuses unsupported mandatory worker/storage features visibly.
+- [x] Run focused suite with deterministic scheduler; expected bounded yield counts, cancellation reclaim, no half-applied views and no stale status/progress publication.
+- [x] Deliver scheduler/publication patch with reproducible race logs, not timing-based unit assertions.
 
 ### S4.3 LRU/resource close and font/image leases
 
