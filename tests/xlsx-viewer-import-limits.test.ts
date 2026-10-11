@@ -279,6 +279,9 @@ describe('formula evaluation reserve (round-4 table)', () => {
         const limits = importLimitsFor(profile)
         expect(d.evaluation.maxArrayCells).toBe(limits.object.evaluation.maxArrayCells)
         expect(d.evaluation.maxMaterializedCells).toBe(Math.floor((limits.object.budgetBytes - d.predictedPeak - n * 2048) / 2000))
+        // invariant (rule 4): accounted allocation stays within the object budget
+        expect(d.predictedPeak + n * 2048 + d.evaluation.maxMaterializedCells * 2000).toBeLessThanOrEqual(limits.object.budgetBytes)
+        expect(d.admissionTotal).toBeLessThanOrEqual(limits.object.budgetBytes)
       }
     })
   }
