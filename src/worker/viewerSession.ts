@@ -778,6 +778,8 @@ export class DocumentSession {
       const next: ResidentState = Object.freeze({
         ...state, order: result.order, visibility, digest: undefined, orderValueGen: state.valueGen,
       })
+      // The rebuilt buffers move from the transient ledger to the retained view.
+      charge.set(0)
       this.states.set(sheetId, next)
       this.retainView(next)
       return sameValues ? { state: next } : {
@@ -1338,7 +1340,10 @@ export class DocumentSession {
       const projected = await this.projectDraft(owner, state.filter, result.order, state.matches ?? matchAll, slice, signal, charge, orderBytes)
       if (projected.kind !== 'projected') return projected
       hooks.progress?.(3, VIEW_OPERATION_STAGES)
-      // Recipe: the sort pinned exactly the rows hidden by the filter it ran under.
+      // The draft's bytes become the retained view: uncharge them first so the
+      // commit never counts them twice. Recipe: the sort pinned exactly the rows
+      // hidden by the filter it ran under.
+      charge.set(0)
       const view = this.commitDraft(owner, {
         order: result.order, visibility: projected.visibility, sort: spec, filter: state.filter, matches: state.matches,
       }, Object.freeze({ sortFilter: state.filter, sortMatches: state.matches }))
@@ -1437,6 +1442,9 @@ export class DocumentSession {
       const halt = this.halted(owner, signal)
       if (halt) return halt
       hooks.progress?.(3, VIEW_OPERATION_STAGES)
+      // The draft mask becomes the retained view (no double count at commit).
+      charge.set(0)
+      metricsCharge.set(0)
       const view = this.commitDraft(owner, {
         order: state.order, visibility: projected.visibility, sort: state.sort, filter: normalized, matches,
       })
