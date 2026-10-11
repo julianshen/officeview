@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import type { FilterRange, SourceStamp, SourceStore, ColumnEntry, Page, ValuesFilter } from '../src/xlsx/view/contracts'
+import type { FilterRange, PagedKeySetRef, SourceStamp, SourceStore, ColumnEntry, Page, ValuesFilter } from '../src/xlsx/view/contracts'
 import { FilterEngine, rawValueKey, type ColumnClassification, type PreparedValue } from '../src/xlsx/view/filter'
 import {
   SOURCE_BLANK, SOURCE_BOOLEAN, SOURCE_ERROR, SOURCE_NUMBER, SOURCE_STRING, SOURCE_UNAVAILABLE, VALUE_DISPLAY_LIMIT,
@@ -164,7 +164,7 @@ describe('draft membership semantics', () => {
   it('keeps an untouched OK unrestricted without writing exclusions', async () => {
     const { index } = await built(cells)
     const store = new MemoryValueRunStore(), draft = await ValueSelectionDraft.open(index, null, store)
-    expect(draft.selectedCount()).toEqual({ count: 30, complete: true })
+    expect(draft.selectedCount()).toEqual({ count: 30, pending: 0, complete: true })
     expect(await draft.commit()).toEqual({ kind: 'unchanged', rule: null })
     expect(store.puts).toBe(0)
   })
@@ -229,7 +229,7 @@ describe('draft membership semantics', () => {
     await expect(draft.commit()).rejects.toMatchObject({ code: 'closed' })
     const reopened = await ValueSelectionDraft.open(index, committed, store)
     expect(reopened.isSelected(index.find(str('item-00004')))).toBe(false)
-    expect(reopened.selectedCount()).toEqual({ count: 29, complete: true })
+    expect(reopened.selectedCount()).toEqual({ count: 29, pending: 0, complete: true })
     expect(await reopened.commit()).toEqual({ kind: 'unchanged', rule: committed })
     expect(store.puts).toBe(puts)
   })
@@ -668,9 +668,16 @@ describe('review round 1 findings', () => {
     draft.selectAll(false, await draft.search({ text: 'alpha', locale: 'en-US' }))
     resolved = true
     expect(await index.build()).toBe('complete')
+    // Unsearched later values are pending, never guessed or matched synchronously.
+    expect(draft.isSelected(index.find(str('alpha-2')))).toBe('pending')
+    expect(draft.isSelected(index.find(str('alpha-1')))).toBe(false)
+    expect(draft.selectedCount()).toEqual({ count: 1, pending: 2, complete: false })
+    expect(draft.pending).toBe(true)
+    await draft.prepare()
+    expect(draft.pending).toBe(false)
     expect(draft.isSelected(index.find(str('alpha-2')))).toBe(false)
     expect(draft.isSelected(index.find(str('beta-2')))).toBe(true)
-    expect(draft.selectedCount()).toEqual({ count: 2, complete: true })
+    expect(draft.selectedCount()).toEqual({ count: 2, pending: 0, complete: true })
   })
   it('interrupts a build of immediately resolved pages with a scheduled abort and reports progress (codex 7)', async () => {
     const total = 200_000, rows = 1024, pages: (() => ValuePageRead)[] = []
@@ -752,4 +759,134 @@ describe('review round 1 findings', () => {
     setTimeout(() => search.abort(), 5)
     await expect(index.search({ text: 'v99', locale: 'en-US' }, { signal: search.signal, sliceMs: 4 })).rejects.toMatchObject({ code: 'cancelled' })
   }, 120_000)
+})
+
+describe('review round 2 findings', () => {
+  const loadingPair = (first: Cell[], later: Cell[]) => {
+    const state = { resolved: false }
+    const source = new FakeSource([() => lanes('p0', first), () => state.resolved ? lanes('p1', later) : { kind: 'unknown', pageId: 'p1' }])
+    return { source, state }
+  }
+  it('rechecks cancellation and ownership after the final search progress callback (codex r2 2)', async () => {
+    const { index } = await built(items(40))
+    const controller = new AbortController()
+    await expect(index.search({ text: 'item', locale: 'en-US' }, { signal: controller.signal, onProgress: p => { if (p.searched === p.total) controller.abort() } }))
+      .rejects.toMatchObject({ code: 'cancelled' })
+    const source = fromCells(items(40)), other = new ValueIndexCache().open(identity(), source)
+    await other.build()
+    await expect(other.search({ text: 'item', locale: 'en-US' }, { onProgress: p => { if (p.searched === p.total) source.stamp = { ...STAMP, valueGen: 8 } } }))
+      .rejects.toMatchObject({ code: 'stale-source' })
+  })
+  it('rechecks ownership after the final build progress callback (codex r2 2)', async () => {
+    const source = fromCells(items(8))
+    const index = new ValueIndexCache().open(identity(), source)
+    await expect(index.build({ onProgress: p => { if (p.completed === p.total) source.stamp = { ...STAMP, valueGen: 8 } } }))
+      .rejects.toMatchObject({ code: 'stale-source' })
+  })
+  it('rechecks ownership when draft.search resumes after a microtask owner change (codex r2 2)', async () => {
+    const source = fromCells(items(40)), index = new ValueIndexCache().open(identity(), source)
+    await index.build()
+    const draft = await ValueSelectionDraft.open(index, null, new MemoryValueRunStore())
+    const pending = draft.search({ text: 'item', locale: 'en-US' }, {
+      onProgress: p => { if (p.searched === p.total) queueMicrotask(() => { source.stamp = { ...STAMP, valueGen: 8 } }) },
+    })
+    await expect(pending).rejects.toMatchObject({ code: 'stale-source' })
+  })
+  it('charges actual numeric hash-table capacity for committed key sets (codex r2 3)', async () => {
+    const values = Array.from({ length: 40_000 }, (_, i) => i + 0.5)
+    const cache = new ValueIndexCache(), index = cache.open(identity(numeric), fromCells(values, 4096))
+    await index.build()
+    const store = new MemoryValueRunStore(), draft = await ValueSelectionDraft.open(index, null, store)
+    draft.selectAll(false)
+    for (let i = 0; i < 20_000; i++) draft.toggle(i, true)
+    const rule = (await draft.commit()).rule!
+    expect(rule).toMatchObject({ selection: { mode: 'allExcept', excluded: { count: 20_000 } } })
+    const base = cache.usedBytes
+    const reopened = await ValueSelectionDraft.open(index, rule, store)
+    let capacity = 64
+    while ((20_000 + 1) * 2 > capacity) capacity *= 2
+    expect(cache.usedBytes - base).toBeGreaterThanOrEqual(capacity * 12)
+    reopened.cancel()
+    expect(cache.usedBytes).toBe(base)
+  })
+  it('charges the in-memory value run store to a pool account (codex r2 3)', async () => {
+    const { index } = await built(items(100), mixed, 32)
+    const pool = new ValueIndexCache(), store = new MemoryValueRunStore({ account: pool.reserve() })
+    const draft = await ValueSelectionDraft.open(index, null, store)
+    draft.toggle(3, false)
+    const rule = (await draft.commit()).rule!
+    expect(store.usedBytes).toBeGreaterThan(0)
+    expect(pool.usedBytes).toBe(store.usedBytes)
+    await store.release((rule.selection as { excluded: PagedKeySetRef }).excluded)
+    expect(pool.usedBytes).toBe(0)
+  })
+  it('lets a draft adopt the search result of another draft with independent ownership (codex r2 4)', async () => {
+    const cache = new ValueIndexCache(), index = cache.open(identity(), fromCells(items(64), 16))
+    await index.build()
+    const base = cache.usedBytes
+    const a = await ValueSelectionDraft.open(index, null, new MemoryValueRunStore())
+    const shared = await a.search({ text: 'item-001', locale: 'en-US' })
+    const store = new MemoryValueRunStore(), b = await ValueSelectionDraft.open(index, null, store)
+    b.selectAll(false, shared)
+    a.cancel()
+    expect(cache.usedBytes - base).toBe(Math.ceil(64 / 32) * 4)
+    expect(b.isSelected(index.find(str('item-0012')))).toBe(false)
+    expect(index.page({ offset: 0, limit: 20, search: shared }).entries).toHaveLength(10)
+    const { rule } = await b.commit()
+    expect(rule).toMatchObject({ selection: { mode: 'allExcept', excluded: { count: 10 } } })
+    expect(cache.usedBytes).toBe(base)
+  })
+  it('never runs unbounded synchronous matching for later-merged values; prepare is async, paced and cancellable (codex r2 5)', async () => {
+    const { source, state } = loadingPair(['seed-a', 'seed-b'], items(30_000))
+    const index = new ValueIndexCache().open(identity(), source)
+    await index.build()
+    const draft = await ValueSelectionDraft.open(index, null, new MemoryValueRunStore())
+    draft.selectAll(false, await draft.search({ text: 'item-1', locale: 'en-US' }))
+    state.resolved = true
+    await index.build()
+    const started = performance.now()
+    expect(draft.selectedCount()).toEqual({ count: 2, pending: 30_000, complete: false })
+    expect(performance.now() - started).toBeLessThan(250)
+    const controller = new AbortController(), progress: number[] = []
+    setTimeout(() => controller.abort(), 5)
+    await expect(draft.prepare({ signal: controller.signal, sliceMs: 2, onProgress: p => progress.push(p.searched) })).rejects.toMatchObject({ code: 'cancelled' })
+    expect(progress.length).toBeGreaterThan(0)
+    expect(draft.pending).toBe(true)
+    await draft.prepare()
+    expect(draft.selectedCount()).toEqual({ count: 30_002 - 10_000, pending: 0, complete: true })
+  }, 60_000)
+  it('releases a late search result when the draft is cancelled during commit resume (codex r2 6)', async () => {
+    const { source, state } = loadingPair(items(10), items(3_000).map(value => value + 'z'))
+    const cache = new ValueIndexCache(), index = cache.open(identity(), source)
+    await index.build()
+    const base = cache.usedBytes
+    const draft = await ValueSelectionDraft.open(index, null, new MemoryValueRunStore())
+    draft.selectAll(false, await draft.search({ text: 'item', locale: 'en-US' }))
+    state.resolved = true
+    await index.build()
+    const growth = cache.usedBytes
+    const commit = draft.commit()
+    draft.cancel()
+    await expect(commit).rejects.toMatchObject({ code: 'cancelled' })
+    expect(growth).toBeGreaterThan(base)
+    expect(cache.usedBytes).toBe(index.ledger.chargedBytes)
+    draft.cancel()
+    expect(cache.usedBytes).toBe(index.ledger.chargedBytes)
+  })
+  it('releases transient charges when membership preparation fails (codex r2 7)', async () => {
+    const { source, state } = loadingPair(['seed-a'], ['x'.repeat(70_000)])
+    const cache = new ValueIndexCache(), index = cache.open(identity(), source)
+    await index.build()
+    const draft = await ValueSelectionDraft.open(index, null, new MemoryValueRunStore())
+    draft.selectAll(false, await draft.search({ text: 'zz', locale: 'en-US' }))
+    state.resolved = true
+    await index.build()
+    const before = cache.usedBytes
+    for (let i = 0; i < 50; i++) {
+      await expect(draft.prepare()).rejects.toMatchObject({ code: 'resource-limit' })
+      await expect(draft.commit()).rejects.toMatchObject({ code: 'resource-limit' })
+      draft.selectedCount()
+    }
+    expect(cache.usedBytes).toBe(before)
+  })
 })

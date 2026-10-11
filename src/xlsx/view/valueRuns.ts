@@ -177,7 +177,7 @@ export class MemoryValueRunStore implements ValueRunStore {
   usedBytes = 0
   puts = 0
   private readonly runs = new Map<string, StoredRun>()
-  constructor(options: { limitBytes?: number } = {}) {
+  constructor(options: { limitBytes?: number; account?: LaneAccount } = {}) {
     this.limitBytes = options.limitBytes ?? Infinity
     if (!(this.limitBytes >= 0)) throw new RangeError('Invalid value run store limit')
   }

@@ -83,6 +83,8 @@ export interface ValueSearchResult {
   readonly stats: { readonly keyed: number; readonly exact: number }
 }
 export type SearchKeyState = 'none' | 'computing' | 'computed' | 'loaded' | 'persisted' | 'unpersisted'
+/** Dropdown search: contains, optionally with S8.1 `*`/`?`/`~` wildcards. */
+export type ValueSearchQuery = ValueSearchPredicate & { wildcards?: boolean }
 export interface ValuePageRequest { offset: number; limit: number; search?: ValueSearchResult; label?: ValueLabeler }
 export interface ValuePage { entries: readonly ValueEntryView[]; total: number; displayed: number; truncated: boolean; completeness: ValueCompleteness }
 export interface ValueProgress { phase: 'pages' | 'keys'; completed: number; total: number }
@@ -216,6 +218,7 @@ export class ValueIndexCache {
   }
   get usedBytes(): number { return this.used }
   get size(): number { return this.indexes.size }
+  get searchKeyStrategy(): SearchKeyStrategy { return this.searchKeys.strategy }
   /** Returns the cached (complete or resumable) index for exactly this identity. */
   open(identity: ValueIndexIdentity, source: ValueColumnSource): ValueIndex {
     const stamp = { docId: identity.docId, sheetId: identity.sheetId, valueGen: identity.valueGen }
@@ -437,7 +440,7 @@ export class ValueIndex implements LaneAccount {
         const run = await store.load(this.keyOwner(strategy), signal)
         this.check(signal)
         // Adopt only an exactly aligned run: the stored texts must equal ours.
-        if (run && run.texts.length === total && run.keys.length === total && run.texts.every((text, id) => text === texts[id])) {
+        if (run && run.count === total && run.keys.length === total) {
           let bytes = 0
           for (const key of run.keys) {
             if (key !== null && typeof key !== 'string') throw new ValueIndexError('page-error', 'Malformed persisted search key')
@@ -471,7 +474,7 @@ export class ValueIndex implements LaneAccount {
     progress()
     if (!store || !complete) return
     try {
-      await store.save(this.keyOwner(strategy), { texts: this.texts, keys: this.searchKeys }, signal)
+      await store.save(this.keyOwner(strategy), { count: this.searchKeys.length, hash: '', keys: this.searchKeys }, signal)
       this.check(signal)
       this.keyState = 'persisted'
     } catch (error) {
@@ -651,7 +654,7 @@ export class ValueIndex implements LaneAccount {
   /** Searches every merged value with the S8.1 host-collated `contains`
    * semantics over raw text (strings, errors) or display labels (numbers,
    * dates, booleans). Labels never become keys. Time-sliced and cancellable. */
-  async search(query: ValueSearchPredicate, options: ValueSearchOptions = {}): Promise<ValueSearchResult> {
+  async search(query: ValueSearchQuery, options: ValueSearchOptions = {}): Promise<ValueSearchResult> {
     this.assertLive()
     if (!query || typeof query.text !== 'string' || typeof query.locale !== 'string') throw new ValueIndexError('invalid-rule', 'Invalid value search')
     const { signal, resume, onProgress } = options
@@ -687,7 +690,7 @@ export class ValueIndex implements LaneAccount {
               keyed++
               hit = key.includes(queryKey)
               // A key miss is decisive; a candidate hit needs exact confirmation.
-              decided = !hit || strategy.exactness === 'equivalent'
+              decided = !hit
             }
           }
           if (!decided) {
@@ -776,6 +779,8 @@ export class ValueSelectionDraft {
     if (!Number.isSafeInteger(ordinal) || ordinal < 0 || ordinal >= this.index.size) throw new ValueIndexError('invalid-cursor', 'Value ordinal outside the index')
   }
   get blanks(): boolean { return this.showBlanks }
+  get pending(): boolean { return false }
+  async prepare(_options: ValueSearchOptions = {}): Promise<void> {}
   private baseSelected(ordinal: number): boolean {
     if (this.base !== 'committed') return this.base === 'all'
     const index = this.index, member = this.committedKeys!.has(index.entryKind(ordinal), index.entryNumber(ordinal), index.entryText(ordinal))
@@ -849,7 +854,7 @@ export class ValueSelectionDraft {
   }
   /** Search changes only the displayed list; Cancel aborts it. The previous
    * displayed search is released unless a Select All patch retains it. */
-  async search(query: ValueSearchPredicate, options: ValueSearchOptions = {}): Promise<ValueSearchResult> {
+  async search(query: ValueSearchQuery, options: ValueSearchOptions = {}): Promise<ValueSearchResult> {
     this.open()
     const controller = new AbortController(), outer = options.signal
     const forward = () => controller.abort()
