@@ -286,3 +286,44 @@ describe('review: settling a pending yield (codex 4)', () => {
     expect(await page).toBe('cancelled')
   })
 })
+
+describe('review: every publication re-checks owner and cancellation (codex 3)', () => {
+  it('an owner change landing between the last source page and publication is never published', async () => {
+    const stalePublications: number[] = []
+    for (let depth = 0; depth < 12; depth++) {
+      const d = twoSheets()
+      const base = findInputOf(d).input
+      let current = base.owner
+      const flip = () => { current = { ...current, fontGen: 1 } }
+      const schedule = (n: number) => n ? queueMicrotask(() => schedule(n - 1)) : flip()
+      const lastSheet = base.sheets[1]
+      const store = lastSheet.store
+      const flipping: SourceStore = Object.create(store, {
+        scanPopulated: {
+          value: async function* (request: Parameters<SourceStore['scanPopulated']>[0], options: Parameters<SourceStore['scanPopulated']>[1]): AsyncIterable<Page<AuthoritativeCell>> {
+            yield* store.scanPopulated(request, options)
+            schedule(depth)
+          },
+        },
+      })
+      const input = { ...base, sheets: [base.sheets[0], { ...lastSheet, store: flipping }] }
+      const controller = new FindController({
+        currentOwner: () => current,
+        onPublish: state => { if (workbookFindKey(state.owner) !== workbookFindKey(current)) stalePublications.push(depth) },
+      })
+      await controller.run(input, ci('hit'))
+    }
+    expect(stalePublications).toEqual([])
+  })
+
+  it('a cached result is not published to a pre-aborted request', async () => {
+    const { input } = findInputOf(twoSheets())
+    const published: unknown[] = []
+    const controller = new FindController({ currentOwner: () => input.owner, onPublish: state => published.push(state) })
+    await controller.run(input, ci('hit'))
+    expect(published).toHaveLength(1)
+    expect(await controller.run(input, ci('hit'), { signal: AbortSignal.abort() })).toBeNull()
+    expect(published).toHaveLength(1)
+    expect(controller.stats.cacheHits).toBe(0)
+  })
+})

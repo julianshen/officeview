@@ -524,10 +524,7 @@ export class FindController {
     this.cancel()
     const token = this.generation
     const key = findCacheKey(input.owner, query)
-    if (workbookFindKey(this.options.currentOwner()) !== workbookFindKey(input.owner)) {
-      this.stats.staleRejected++
-      return null
-    }
+    if (!this.publishable(token, input.owner, options.signal)) return null
     const cached = this.cache.get(key)
     if (cached) {
       this.cache.delete(key)
@@ -547,10 +544,9 @@ export class FindController {
     try {
       for (;;) {
         const page = await session.nextPage()
-        if (token !== this.generation) {
-          this.stats.superseded++
-          return null
-        }
+        // The session's own last guard ran before this continuation: any owner
+        // change, abort or replacement in between must still block publication.
+        if (!this.publishable(token, input.owner, abort.signal)) return null
         hits.push(...page.hits)
         const state: FindPublication = {
           key, owner: input.owner, query, hits: hits.slice(), complete: page.complete,
@@ -573,6 +569,19 @@ export class FindController {
       session.close()
       if (this.active === abort) this.active = undefined
     }
+  }
+
+  /** Checked immediately before every publication, cached ones included (§10.1). */
+  private publishable(token: number, owner: WorkbookOwner, signal: AbortSignal | undefined): boolean {
+    if (token !== this.generation || signal?.aborted) {
+      this.stats.superseded++
+      return false
+    }
+    if (workbookFindKey(this.options.currentOwner()) !== workbookFindKey(owner)) {
+      this.stats.staleRejected++
+      return false
+    }
+    return true
   }
 
   private publish(state: FindPublication): void {
