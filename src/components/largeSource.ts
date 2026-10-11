@@ -257,7 +257,7 @@ export async function openSpreadsheetSource(blob: Blob, ctx: Ctx, storage?: Page
     return { kind: 'document', document: await parseSpreadsheet(await OfficePackage.load(bytes), bytes, ctx, decided) }
   }
   if (admission.mode !== 'paged') return legacy(admission)
-  const fallback = compatibilityFallbackAllowed(blob.size, ctx.limits)
+  const fallback = await compatibilityFallbackAllowed(blob, ctx.limits, ctx.signal)
   let session: PagedImportSession
   try {
     session = await openImportSession({ kind: 'blob', blob }, { docId: `doc-${Date.now().toString(36)}`, profile: ctx.profile, signal: ctx.signal, limits: ctx.options.limits, storage })

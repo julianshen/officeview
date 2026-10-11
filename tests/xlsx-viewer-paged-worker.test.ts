@@ -193,3 +193,17 @@ describe('coordinator decision on MINOR 1: the exported entry keeps the earlier 
     expect(doc.sheets[0].rows.flatMap(r => r.cells.map(c => c.value))).toEqual([1, 2])
   }, 60_000)
 })
+
+describe('review round 2 NIT 1: the fallback is also bounded by the declared expanded size', () => {
+  it('a small compressed package whose declared expanded size exceeds the object budget does not fall back to the legacy parse', async () => {
+    const parse = vi.fn(async (bytes: Uint8Array) => parseXlsx(await OfficePackage.load(bytes)))
+    const limits = { object: { rows: 1, budgetBytes: 1000 } }
+    const kernel = new ViewerKernel({ parse, importLimits: limits }, quiet)
+    const replies: WorkerReply[] = []
+    const bytes = xlsxBytes({ sheetData: '<row><c r="A1"><v>1</v></c></row><row><c r="A2"><v>2</v></c></row>' })
+    await kernel.handle({ kind: 'open', requestId: rid(), docId: 'exp', source: { kind: 'blob', blob: new Blob([bytes as BlobPart]) }, profile: 'D' }, out => { replies.push(out) })
+    expect(completed(replies.at(-1)!)).toMatchObject({ kind: 'open', valuePolicy: 'cached' })
+    expect(replies.at(-1)!.diagnostics).toContainEqual(expect.objectContaining({ code: 'paged-unsupported' }))
+    expect(parse).not.toHaveBeenCalled()
+  })
+})

@@ -431,3 +431,35 @@ describe('review round 1 (opencode) storage findings', () => {
     expect(b.bytes).toBe(encodePage(b.build()).length)
   })
 })
+
+describe('review round 2 findings', () => {
+  it('pi MINOR: the memory backend takes ownership of encoded bytes (no uncharged copy); held bytes equal stored bytes', async () => {
+    const backend = memoryPageBackend()
+    const bytes = new Uint8Array([1, 2, 3])
+    await backend.put('k', bytes)
+    expect(await backend.get('k')).toBe(bytes)
+    const store = new SourcePageStore({ docId: 'd', backend })
+    const session = await openImportSession(blobOf(xlsxBytes({ sheetData: rowsXml(300) })), { docId: 'd', profile: 'D', store, pageRows: 100 })
+    await session.done
+    expect(backend.heldBytes).toBe(store.stats.storedBytes + 3)
+    await session.release()
+  })
+
+  it('NIT 2: a session ledger that conflicts with the injected store ledger is refused deterministically', async () => {
+    const a = createQuotaLedger(quotaLimitsFor('D'), { maxTotalExpandedBytes: 1 << 30 })
+    const b = createQuotaLedger(quotaLimitsFor('D'), { maxTotalExpandedBytes: 1 << 30 })
+    const store = new SourcePageStore({ docId: 'd', backend: memoryPageBackend(), ledger: a })
+    await expect(openImportSession(blobOf(xlsxBytes({ sheetData: rowsXml(3) })), { docId: 'd', profile: 'D', store, ledger: b })).rejects.toThrow(/ledger/)
+    const same = await openImportSession(blobOf(xlsxBytes({ sheetData: rowsXml(3) })), { docId: 'd', profile: 'D', store, ledger: a })
+    expect(same.ledger).toBe(a)
+    await same.release()
+  })
+
+  it('NIT 3: ref-less <mergeCell> elements do not count against the structural cap', async () => {
+    const store = new SourcePageStore({ docId: 'd', backend: memoryPageBackend() })
+    const session = await openImportSession(blobOf(xlsxBytes({ sheetData: rowsXml(3), afterSheetData: '<mergeCells><mergeCell ref="A1:B2"/><mergeCell/><mergeCell/></mergeCells>' })), { docId: 'd', profile: 'D', store, limits: { paged: { structuralRecords: 1 } } })
+    expect(await session.done).toMatchObject({ kind: 'complete' })
+    expect(session.workbook.sheets[0].mergeRects).toEqual([{ r0: 0, r1: 1, c0: 0, c1: 1 }])
+    await session.release()
+  })
+})

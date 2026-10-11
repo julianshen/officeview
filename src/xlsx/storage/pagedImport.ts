@@ -17,7 +17,7 @@ import {
 } from '../view/declaredFilters'
 import { MAX_COLS, MAX_ROWS, parseA1, type SourceRect } from '../view/coordinates'
 import { createQuotaLedger, quotaLimitsFor, type QuotaLedger } from './quota'
-import { inventoryLimits } from './admission'
+import { classifyPart, inventoryLimits } from './admission'
 import { anchorCountEvents, newSheetMetadata, normalizeRowMetadata, sharedStringEvents, sheetRecordEvents, type SheetMetadata } from './sheetRecords'
 import { PageBuilder, SourcePageStore, browserPageStorageEnv, choosePageBackend, type PageStorageEnv, type StoredPage } from './sourcePages'
 import { importLimitsFor, type ImportLimits, type ImportLimitOverrides, type ImportOutcome, type ImportProgress, type ImportSession, type ImportedPage } from './importSession'
@@ -100,8 +100,13 @@ export async function openImportSession(source: Extract<SourceHandle, { kind: 'b
   else options.signal?.addEventListener('abort', forward, { once: true })
   const signal = controller.signal
   const src = blobRangeSource(source.blob)
+  // One ledger per import: options.ledger, else the injected store's own, else a
+  // fresh one. Two different ledgers would split the charges, so that is refused.
+  if (options.ledger && options.store?.ledger && options.store.ledger !== options.ledger) {
+    throw new RangeError('openImportSession: options.ledger differs from the injected store ledger')
+  }
   const ledger = options.ledger ?? options.store?.ledger ?? createQuotaLedger(quotaLimitsFor(options.profile), { maxTotalExpandedBytes: limits.paged.expandedBytes })
-  // An injected store is charged on the same ledger the session reports.
+  // An injected store without a ledger is charged on the session ledger.
   options.store?.attachLedger(ledger)
   const partOpts = (name: string, cap: number) => ({ signal, budget: ledger.partBudget(name, cap), rangeReadBytes: limits.rangeReadBytes, outputBufferBytes: limits.inflateOutputBytes })
   const inventory = await readZipInventory(src, inventoryLimits(limits), signal)
@@ -481,10 +486,21 @@ export function rangeOf(ref: string): SourceRect | null {
 
 /**
  * Whether a file the paged reader cannot serve may fall back to today's
- * legacy parse: only when the whole compressed package fits the object
- * path's buffer cap (G1). Beyond it the legacy path would hold an unbounded
- * object model, so the caller surfaces the typed incomplete/refused outcome.
+ * legacy parse (worker and internal entry only): the compressed package must
+ * fit the object path's buffer cap (G1) AND the declared expanded size of its
+ * non-media parts must fit the object-path memory budget. Beyond either the
+ * caller surfaces the typed incomplete/refused outcome. An unreadable central
+ * directory never allows the fallback.
  */
-export function compatibilityFallbackAllowed(compressedBytes: number, limits: ImportLimits): boolean {
-  return compressedBytes <= limits.object.compressedBytes
+export async function compatibilityFallbackAllowed(blob: Blob, limits: ImportLimits, signal?: AbortSignal): Promise<boolean> {
+  if (blob.size > limits.object.compressedBytes) return false
+  try {
+    const inventory = await readZipInventory(blobRangeSource(blob), inventoryLimits(limits), signal)
+    let declared = 0
+    for (const entry of inventory.entries) if (classifyPart(entry.name).cls !== 'media') declared += entry.uncompressedSize
+    return declared <= limits.object.budgetBytes
+  } catch (error) {
+    if (isPackageError(error) && error.code === 'cancelled') throw error
+    return false
+  }
 }

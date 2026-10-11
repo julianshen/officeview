@@ -35,7 +35,7 @@ export async function openLargeBlob(blob: Blob, docId: string, options: LargeOpe
   if (admission.mode === 'refuse') return { kind: 'refuse', code: admission.failure.code, message: admission.failure.message }
   if (admission.mode === 'object') return { kind: 'object', diagnostics: [] }
   if (admission.mode === 'legacy-fallback') return { kind: 'object', diagnostics: [{ code: COMPATIBILITY_DIAGNOSTIC, message: `Opened through the compatibility path (${admission.reason})` }] }
-  const fallback = compatibilityFallbackAllowed(blob.size, limits)
+  const fallback = await compatibilityFallbackAllowed(blob, limits, options.signal)
   let session
   try {
     session = await openImportSession({ kind: 'blob', blob }, { docId, profile: options.profile, signal: options.signal, limits: options.limits, storage: options.storage })
