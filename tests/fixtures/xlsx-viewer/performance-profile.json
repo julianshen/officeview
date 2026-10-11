@@ -6,10 +6,20 @@
   "evidence": {
     "doc": "docs/validation/interactive-viewer-performance.md",
     "results": "docs/validation/interactive-viewer-performance-results.json",
-    "commit": "e09d242dd752872499ea47fd99af8ea2a3a780aa",
+    "commit": "5c2b2026e9633ecd8a0bb3d2237161e9af3922f3",
     "browser": "Google Chrome 155.0.8059.39 (stable, Playwright 1.64 channel chrome, headless)",
     "machine": "Apple M4 Pro, 14 cores, 24 GiB, macOS 26.5.2 (25F84), AC power",
-    "profile": "D"
+    "profile": "D",
+    "commits": {
+      "sort-100k-1key": "e09d242dd752872499ea47fd99af8ea2a3a780aa",
+      "sort-100k-8key": "e09d242dd752872499ea47fd99af8ea2a3a780aa",
+      "sort-1m-1key": "e09d242dd752872499ea47fd99af8ea2a3a780aa",
+      "sort-1m-2key": "5c2b2026e9633ecd8a0bb3d2237161e9af3922f3",
+      "sort-1m-8key": "e09d242dd752872499ea47fd99af8ea2a3a780aa",
+      "filter-1m-numeric": "5c2b2026e9633ecd8a0bb3d2237161e9af3922f3",
+      "text-sort-1m-natural": "245c44067e5a98afa73450ad4e2a0bb17018fa4f",
+      "value-index-100k-cold": "5c2b2026e9633ecd8a0bb3d2237161e9af3922f3"
+    }
   },
   "thresholds": [
     {
@@ -63,10 +73,13 @@
         "frozenMs": 100,
         "basis": "spec",
         "outcome": "miss",
-        "justification": "Kept at spec: the 8-key p95 misses by >2x (1-key p95 316.8 ms also misses), so no loosening is permitted without a spec amendment and the miss is an S8.4 finding. Desktop D measurement (Chrome 155 headless, M4 Pro); see docs/validation/interactive-viewer-performance.md.",
+        "justification": "Kept at spec. Evidence is the genuinely prepared 8-key run (all 8 columns admitted by the D prepared cache); its p95 misses by >2x (1-key p95 316.8 ms also misses), so no loosening is permitted without a spec amendment; recorded S8.4 finding. Desktop D measurement (Chrome 155 headless, M4 Pro); see docs/validation/interactive-viewer-performance.md.",
         "measurement": {
           "scenario": "sort-100k-8key",
           "series": "query-completion",
+          "admitted": true,
+          "preparedColumns": 8,
+          "keys": 8,
           "summary": {
             "samples": 30,
             "warmupExcluded": 3,
@@ -94,16 +107,19 @@
         "frozenMs": 1000,
         "basis": "spec",
         "outcome": "miss",
-        "justification": "Kept at spec: the 8-key p95 misses by >2x (1-key p95 3783.6 ms also misses); recorded finding, no loosening. Desktop D measurement (Chrome 155 headless, M4 Pro); see docs/validation/interactive-viewer-performance.md.",
+        "justification": "Kept at spec. Evidence is the largest genuinely prepared key count at 1M rows: 2 numeric keys (date, amount); the D prepared cache (64 MiB) admits 2 x ~22 MiB and refuses 3 or more. COVERAGE GAP: 3-8 prepared keys at 1M rows are unmeasurable under the D budget; the 8-key run reads the source and is kept only as a fallback diagnostic. p95 misses by >2x (1-key 3783.6 ms also misses); recorded finding, no loosening. Desktop D measurement (Chrome 155 headless, M4 Pro); see docs/validation/interactive-viewer-performance.md.",
         "measurement": {
-          "scenario": "sort-1m-8key",
+          "scenario": "sort-1m-2key",
           "series": "query-completion",
+          "admitted": true,
+          "preparedColumns": 2,
+          "keys": 2,
           "summary": {
             "samples": 30,
             "warmupExcluded": 3,
-            "p50": 8464.6,
-            "p95": 8745.3,
-            "max": 8877
+            "p50": 4311.8,
+            "p95": 4374.8,
+            "max": 4383.8
           }
         }
       },
@@ -125,16 +141,19 @@
         "frozenMs": 100,
         "basis": "spec",
         "outcome": "pass",
-        "justification": "Kept at spec: passes with p95 71.3 ms (kernel p95 58.1 ms); not tightened because other admitted D machines must also meet it. Desktop D measurement (Chrome 155 headless, M4 Pro); see docs/validation/interactive-viewer-performance.md.",
+        "justification": "Kept at spec: passes with p95 72.0 ms (kernel p95 57.2 ms) with the 9.0 MiB prepared lane charged to the worker pool; not tightened because other admitted D machines must also meet it. Desktop D measurement (Chrome 155 headless, M4 Pro); see docs/validation/interactive-viewer-performance.md.",
         "measurement": {
           "scenario": "filter-1m-numeric",
           "series": "query-completion",
+          "admitted": true,
+          "preparedColumns": null,
+          "keys": null,
           "summary": {
             "samples": 30,
             "warmupExcluded": 3,
-            "p50": 70,
-            "p95": 71.3,
-            "max": 71.6
+            "p50": 70.2,
+            "p95": 72,
+            "max": 72.6
           }
         }
       },
@@ -156,16 +175,19 @@
         "frozenMs": 4000,
         "basis": "spec",
         "outcome": "miss",
-        "justification": "Kept at spec: p95 misses by >2x (kernel p95 8748.4 ms); loosening is not permitted without an amendment and collation semantics are never relaxed. Recorded finding; see headroom. Desktop D measurement (Chrome 155 headless, M4 Pro); see docs/validation/interactive-viewer-performance.md.",
+        "justification": "Kept at spec; MISS on two counts. (1) Admission: with the 239 MB resident F4 source charged to the D worker pool (512 MiB), sortRowOrder is refused with resource-limit (required 536,871,768 B > 536,870,912 B); no admitted-profile measurement exists. (2) Time: the cited run is UNADMITTED diagnostic timing (resident source not charged), p95 9159.1 ms, >2x the ceiling. The prepared cache also refuses 1M strings. Collation semantics are never relaxed; no loosening without an amendment. Desktop D measurement (Chrome 155 headless, M4 Pro); see docs/validation/interactive-viewer-performance.md.",
         "measurement": {
           "scenario": "text-sort-1m-natural",
           "series": "query-completion",
+          "admitted": false,
+          "preparedColumns": 0,
+          "keys": 1,
           "summary": {
             "samples": 30,
             "warmupExcluded": 3,
-            "p50": 8780.8,
-            "p95": 9048.1,
-            "max": 9181.1
+            "p50": 8976.6,
+            "p95": 9159.1,
+            "max": 9240.6
           }
         }
       },
@@ -187,16 +209,19 @@
         "frozenMs": 750,
         "basis": "spec",
         "outcome": "pass",
-        "justification": "Kept at spec: passes with p95 32.3 ms. The delivered index pages values in first-occurrence order (no collated ordering inside this boundary). Desktop D measurement (Chrome 155 headless, M4 Pro); see docs/validation/interactive-viewer-performance.md.",
+        "justification": "Kept at spec: passes with p95 28.0 ms with the 23.7 MB resident source deducted from the index budget. The delivered index pages values in first-occurrence order (no collated ordering inside this boundary). Desktop D measurement (Chrome 155 headless, M4 Pro); see docs/validation/interactive-viewer-performance.md.",
         "measurement": {
           "scenario": "value-index-100k-cold",
           "series": "query-completion",
+          "admitted": true,
+          "preparedColumns": null,
+          "keys": null,
           "summary": {
             "samples": 30,
             "warmupExcluded": 3,
-            "p50": 24.6,
-            "p95": 32.3,
-            "max": 32.5
+            "p50": 24.2,
+            "p95": 28,
+            "max": 28.2
           }
         }
       },
@@ -235,10 +260,28 @@
     "natural-text-sort-1m": {
       "ceilingMs": 4000,
       "specEstimateMs": 3100,
-      "measuredP95Ms": 9048.1,
-      "headroomMs": -5048.1,
+      "measuredP95Ms": 9159.1,
+      "headroomMs": -5159.1,
       "scenario": "text-sort-1m-natural",
-      "note": "Negative headroom: measured p95 exceeds the ceiling. Kernel phases (p50): dictionary collation rank 4816 ms, row merge 2619 ms, key read 707 ms."
+      "note": "Negative headroom from an UNADMITTED run (resident source not charged); the admitted run is refused by the D worker budget. Kernel phases (p50): dictionary collation rank 4936 ms, row merge 2676 ms, key read 723 ms."
     }
-  }
+  },
+  "diagnostics": [
+    {
+      "scenario": "sort-1m-8key",
+      "series": "query-completion",
+      "admitted": true,
+      "preparedColumns": 0,
+      "keys": 8,
+      "summary": {
+        "samples": 30,
+        "warmupExcluded": 3,
+        "p50": 8464.6,
+        "p95": 8745.3,
+        "max": 8877
+      },
+      "threshold": "numeric-sort-1m",
+      "reason": "FALLBACK diagnostic, not threshold evidence: prepareColumns of 8 x 1M columns is refused by the 64 MiB D prepared budget, so this sort reads the source inside the measured operation (key read 4.4 s of the kernel). It measures a different boundary from spec §12.2."
+    }
+  ]
 }
