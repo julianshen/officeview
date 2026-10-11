@@ -436,10 +436,10 @@ describe('resources, cancellation and ownership', () => {
   it('cancels searches and discards them when the draft is cancelled', async () => {
     const { index } = await built(items(15_000), mixed, 1024)
     const controller = new AbortController()
-    const pending = index.search({ text: 'item', locale: 'en-US' }, { signal: controller.signal, yield: async () => { controller.abort() } })
+    const pending = index.search({ text: 'item', locale: 'en-US' }, { signal: controller.signal, sliceMs: 0, yield: async () => { controller.abort() } })
     await expect(pending).rejects.toMatchObject({ code: 'cancelled' })
     const draft = await ValueSelectionDraft.open(index, null, new MemoryValueRunStore())
-    const inFlight = draft.search({ text: 'item', locale: 'en-US' }, { yield: async () => { draft.cancel() } })
+    const inFlight = draft.search({ text: 'item', locale: 'en-US' }, { sliceMs: 0, yield: async () => { draft.cancel() } })
     await expect(inFlight).rejects.toMatchObject({ code: 'cancelled' })
   })
   it('reports long text as a typed resource limit, never a silent truncation', async () => {
@@ -703,8 +703,10 @@ describe('review round 1 findings', () => {
   it('interrupts a search with a scheduled abort within a time slice and reports progress (codex 7)', async () => {
     const { index } = await built(items(15_000), mixed, 1024)
     const controller = new AbortController(), progress: number[] = []
-    setTimeout(() => controller.abort(), 5)
-    await expect(index.search({ text: 'item', locale: 'en-US' }, { signal: controller.signal, sliceMs: 4, onProgress: p => progress.push(p.searched) }))
+    setTimeout(() => controller.abort(), 0)
+    // sliceMs 0 yields every pacing stride; the canonical matcher may finish a
+    // 15k scan inside one 4 ms slice otherwise.
+    await expect(index.search({ text: 'item', locale: 'en-US' }, { signal: controller.signal, sliceMs: 0, onProgress: p => progress.push(p.searched) }))
       .rejects.toMatchObject({ code: 'cancelled' })
     expect(progress.length).toBeGreaterThan(0)
     expect(progress.at(-1)!).toBeLessThan(15_000)
@@ -848,8 +850,8 @@ describe('review round 2 findings', () => {
     expect(draft.selectedCount()).toEqual({ count: 2, pending: 30_000, complete: false })
     expect(performance.now() - started).toBeLessThan(250)
     const controller = new AbortController(), progress: number[] = []
-    setTimeout(() => controller.abort(), 5)
-    await expect(draft.prepare({ signal: controller.signal, sliceMs: 2, onProgress: p => progress.push(p.searched) })).rejects.toMatchObject({ code: 'cancelled' })
+    setTimeout(() => controller.abort(), 0)
+    await expect(draft.prepare({ signal: controller.signal, sliceMs: 0, onProgress: p => progress.push(p.searched) })).rejects.toMatchObject({ code: 'cancelled' })
     expect(progress.length).toBeGreaterThan(0)
     expect(draft.pending).toBe(true)
     await draft.prepare()
