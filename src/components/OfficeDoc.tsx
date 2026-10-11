@@ -22,6 +22,7 @@ import {
   type CaretPos,
   type SelectionRange,
 } from '../core/selection'
+import { isViewerUiTarget } from './xlsx/gridEvents'
 import type { PageOverlay } from '../core/overlay'
 import { copyText } from '../core/clipboard'
 import {
@@ -322,6 +323,7 @@ export function OfficeDoc({
   }
 
   const onPointerDown = (e: React.PointerEvent) => {
+    if (isViewerUiTarget(e.target)) return
     if (e.pointerType === 'mouse' && e.button !== 0) return
     const point = localPoint(e)
     pointers.current.set(e.pointerId, point)
@@ -359,6 +361,7 @@ export function OfficeDoc({
   }
 
   const onPointerMove = (e: React.PointerEvent) => {
+    if (isViewerUiTarget(e.target)) return
     if (!pointers.current.has(e.pointerId)) return
     const point = localPoint(e)
     pointers.current.set(e.pointerId, point)
@@ -400,6 +403,7 @@ export function OfficeDoc({
   }
 
   const onWheel = (e: React.WheelEvent) => {
+    if (isViewerUiTarget(e.target)) return
     // trackpad pinch and ctrl+wheel zoom; plain wheel keeps native scrolling
     if (!e.ctrlKey && !e.metaKey) return
     e.preventDefault()
@@ -408,6 +412,7 @@ export function OfficeDoc({
   }
 
   const onDoubleClick = (e: React.MouseEvent) => {
+    if (isViewerUiTarget(e.target)) return
     const at = localPoint(e)
     // double-click on text selects a word; on blank space it zooms, so both
     // behaviours stay available
@@ -421,6 +426,7 @@ export function OfficeDoc({
   }
 
   const onClick = (e: React.MouseEvent) => {
+    if (isViewerUiTarget(e.target)) return
     if (e.detail < 3) return // double-click already handled words
     void caretFromEvent(e).then((caret) => caret && selectLineAt(caret))
   }
@@ -442,6 +448,7 @@ export function OfficeDoc({
       inputRef.current?.select()
       return
     }
+    if (isViewerUiTarget(e.target)) return
     if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'c') {
       // when copying is off, swallow the shortcut rather than letting the
       // browser act on whatever happens to be selected around the canvas
