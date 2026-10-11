@@ -5,6 +5,7 @@ import {
   KEY_BOOLEAN, KEY_DATE, KEY_ERROR, KEY_NUMBER, KEY_STRING, NumberTable, ValueIndexError, loadKeySet,
   sameStamp, valueKeyString, type LaneAccount, type ValueKeySet, type ValueRunStore,
 } from './valueRuns'
+import { EXACT_SEARCH, type SearchKeyStore, type SearchKeyStrategy } from './searchKeys'
 
 export { ValueIndexError } from './valueRuns'
 
@@ -78,10 +79,13 @@ export interface ValueSearchResult {
   readonly count: number
   readonly searchedEntries: number
   readonly complete: boolean
+  /** Values decided through search keys vs the exact matcher (instrumentation). */
+  readonly stats: { readonly keyed: number; readonly exact: number }
 }
+export type SearchKeyState = 'none' | 'computing' | 'computed' | 'loaded' | 'persisted' | 'unpersisted'
 export interface ValuePageRequest { offset: number; limit: number; search?: ValueSearchResult; label?: ValueLabeler }
 export interface ValuePage { entries: readonly ValueEntryView[]; total: number; displayed: number; truncated: boolean; completeness: ValueCompleteness }
-export interface ValueProgress { phase: 'pages'; completed: number; total: number }
+export interface ValueProgress { phase: 'pages' | 'keys'; completed: number; total: number }
 export interface ValueSearchProgress { searched: number; total: number; matches: number }
 interface Pacing {
   /** Maximum uninterrupted work before an event-loop yield (default 8 ms). */
@@ -204,8 +208,10 @@ export class ValueIndexCache {
   readonly limitBytes: number
   private used = 0
   private readonly indexes = new Map<string, ValueIndex>()
-  constructor(options: { limitBytes?: number } = {}) {
+  readonly searchKeys: { strategy: SearchKeyStrategy; store?: SearchKeyStore }
+  constructor(options: { limitBytes?: number; searchKeys?: { strategy?: SearchKeyStrategy; store?: SearchKeyStore } } = {}) {
     this.limitBytes = options.limitBytes ?? 512 * MiB
+    this.searchKeys = { strategy: options.searchKeys?.strategy ?? EXACT_SEARCH, store: options.searchKeys?.store }
     if (!Number.isFinite(this.limitBytes) || this.limitBytes < 0) throw new RangeError('Invalid value index memory limit')
   }
   get usedBytes(): number { return this.used }
@@ -290,6 +296,9 @@ export class ValueIndex implements LaneAccount {
     this.numberKind = identity.classification.kind === 'date' ? KEY_DATE : KEY_NUMBER
   }
   get size(): number { return this.count }
+  get searchKeyStatus(): { strategyId: string; keyed: number; state: SearchKeyState; error?: ValueIndexError } {
+    return { strategyId: 'exact', keyed: 0, state: 'none' }
+  }
   get idle(): boolean { return !this.pins && !this.pending }
   get completeness(): ValueCompleteness {
     if (this.identity.classification.kind === 'loading' || !this.pages || this.unmerged) return 'loading'
@@ -615,6 +624,7 @@ export class ValueIndex implements LaneAccount {
       const result: ValueSearchResult = Object.freeze({
         query: Object.freeze({ text: query.text, locale: query.locale }), owner: this.stamp, matches, count,
         searchedEntries: end, complete: end === this.count && this.completeness === 'complete',
+        stats: Object.freeze({ keyed: 0, exact: end - from }),
       })
       this.results.set(result, { reservation, label: labelOption, limits })
       return result
