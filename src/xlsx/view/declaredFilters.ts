@@ -181,9 +181,10 @@ function cut(text: string, length: number): string {
 }
 /** Remaining serialized bytes for one document's retained records; shared by
  * every builder. A record is admitted while any budget remains and charged its
- * JSON size afterwards, so the overshoot is at most one record (each record's
- * text is already capped). Both adapters build identical records, so they
- * spend the budget identically. */
+ * final JSON size (finish-time flags reserved up front), so the overshoot is at
+ * most one record (each record's text is already capped) plus the small
+ * per-sheet wrapper and autoFilter/sortState shells built after exhaustion.
+ * Both adapters build identical records, so they spend the budget identically. */
 export interface DeclaredBudget {
   bytes: number
 }
@@ -196,6 +197,12 @@ function hasRoom(budget: DeclaredBudget | undefined): boolean {
 function charge(budget: DeclaredBudget | undefined, record: unknown): void {
   if (budget) budget.bytes -= JSON.stringify(record).length
 }
+/** Worst-case growth of a column record from the finish() colId pass, which
+ * adds at most one flag (out-of-range or duplicate) after admission. Reserved
+ * when the column is charged so the budget covers the final record. It is not
+ * refunded: a refund would reopen an exhausted budget after each autoFilter
+ * and let every later one overshoot by a record. */
+const FINISH_FLAG_RESERVE = JSON.stringify({ malformed: 'colId-out-of-range', flags: ['colId-out-of-range'] }).length
 
 /** Attribute record as either adapter sees it (tree attrs or SAX attributes). */
 export type DeclaredAttrs = Readonly<Record<string, unknown>>
@@ -308,6 +315,7 @@ export function declaredAutoFilterBuilder(attrs: DeclaredAttrs, budget?: Declare
       if (input.ruleCount > 1) flag(column, 'multiple-rule-elements')
       if (input.firstRule) column.rule = declaredRuleOf(input.firstRule)
       charge(budget, column)
+      if (budget && column.colId !== undefined) budget.bytes -= FINISH_FLAG_RESERVE
       out.columns.push(column)
     },
     finish() {
@@ -433,6 +441,10 @@ export function declaredContainerBuilder(budget?: DeclaredBudget): DeclaredConta
       if (direct && sorts.direct.repeats > 0) flag(direct, 'duplicate-sortState')
       if (nested && sorts.nested.repeats > 0) flag(nested, 'duplicate-sortState')
       if (direct && nested) direct.omittedSortStates = 1
+      // Records were charged as built; charge the final shells (refs, flags)
+      // once every container-level flag is in place.
+      if (out.autoFilter) charge(budget, { ...out.autoFilter, columns: [] })
+      if (out.sortState) charge(budget, { ...out.sortState, conditions: [] })
       const sortState = direct ?? nested
       if (sortState) out.sortState = sortState
       return out
@@ -480,13 +492,8 @@ export function declaredSheetBuilder(entry: DeclaredSheetFilters, budget: Declar
       }
       const table = build()
       if (!table) return
-      // Columns and conditions were charged as they were built; charge the
-      // table shell (attribution, refs) here.
-      charge(budget, {
-        ...table,
-        ...(table.autoFilter ? { autoFilter: { ...table.autoFilter, columns: [] } } : {}),
-        ...(table.sortState ? { sortState: { ...table.sortState, conditions: [] } } : {}),
-      })
+      // The container charged its records and shells; charge the attribution.
+      charge(budget, { table: table.table })
       entry.tableAutoFilters.push(table)
     },
   }
