@@ -92,7 +92,9 @@ published by this local state machine.
 The additive `core/overlay.gridSelectionOverlay` consumes only bounded S5
 viewport cell records plus bounded neighbor overscan. It returns separate fills
 and outline segments; endpoints snap to integer device pixels before edge
-cancellation. A selected record with positive size narrower or shorter than
+cancellation. `pixelScale` is required (no default): S5 must pass device
+pixels per record coordinate, i.e. sheet zoom × DPR for sheet-space records
+(DPR alone for already zoomed CSS coordinates). A selected record with positive size narrower or shorter than
 one device pixel still paints a 1 device-pixel fill and outline; sub-pixel
 neighbours that snap to the same pixel coalesce into one group, so low-zoom
 selections never vanish. Zero-size (hidden) records paint nothing.

@@ -33,9 +33,10 @@ export interface GridBorderSegment { x0: number; y0: number; x1: number; y1: num
 export interface GridSelectionGeometry { fills: readonly HighlightRect[]; borders: readonly GridBorderSegment[] }
 /** S5 supplies bounded projected cells plus neighbor overscan. Compute the outline
  * before clipping so neither shared cell edges nor viewport cuts become borders.
- * pixelScale is device pixels per record coordinate (sheet zoom × DPR for
- * sheet-space records, DPR for already zoomed CSS-space records). */
-export function gridSelectionOverlay(selection: { contains(at: { row: number; col: number }): boolean }, records: readonly GridOverlayRecord[], viewport: HighlightRect, pixelScale = 1): GridSelectionGeometry {
+ * pixelScale is required: device pixels per record coordinate. S5 must pass
+ * sheet zoom × DPR for sheet-space records (DPR alone for already zoomed
+ * CSS-space records); a missing or non-positive scale throws. */
+export function gridSelectionOverlay(selection: { contains(at: { row: number; col: number }): boolean }, records: readonly GridOverlayRecord[], viewport: HighlightRect, pixelScale: number): GridSelectionGeometry {
   if (!Number.isFinite(pixelScale) || pixelScale <= 0) throw new RangeError('Invalid overlay pixel scale')
   const snap = (value: number) => Math.round(value * pixelScale)
   const fills: HighlightRect[] = [], borders: GridBorderSegment[] = [], seen = new Set<string>()
