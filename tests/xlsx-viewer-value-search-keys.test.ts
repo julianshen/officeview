@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import type { FilterRange, SourceStamp } from '../src/xlsx/view/contracts'
+import type { FilterRange, SourceStamp, ValuePatch, ValueSearchPredicate } from '../src/xlsx/view/contracts'
 import type { ColumnClassification } from '../src/xlsx/view/filter'
 import {
   SOURCE_STRING, ValueIndexCache, valueScope,
@@ -117,6 +117,7 @@ describe('search-key strategies', () => {
     const values = seededValues(1_200, 17), exact = await index(values)
     const strategies = [asciiCandidate(), digits]
     const keyed = await Promise.all(strategies.map(strategy => index(values, { searchKeys: { strategy } })))
+    for (const built of keyed) await built.search({ text: 'a', locale: 'en-US' })
     keyed.forEach((built, at) => expect(built.searchKeyStatus).toMatchObject({ strategyId: strategies[at].id, state: 'computed', keyed: 1_200 }))
     let comparisons = 0
     const keyedDecisions = [0, 0]
@@ -151,13 +152,37 @@ describe('search-key strategies', () => {
   it('searches wildcard patterns through the exact matcher only', async () => {
     const values = ['item-105', 'item-15', 'item-1x5', 'item-25', 'a*b', 'a-b']
     const keyed = await index(values, { searchKeys: { strategy: asciiCandidate() } })
-    const star = await keyed.search({ text: 'item-1*5', locale: 'en-US', wildcards: true })
+    const predicate: ValueSearchPredicate = { text: 'item-1*5', locale: 'en-US', wildcards: true }
+    const star = await keyed.search(predicate)
     expect(matchedOrdinals(star)).toEqual([0, 1, 2])
     expect(star.stats.keyed).toBe(0)
+    const patch: ValuePatch = { domain: { kind: 'search', query: star.query, owner: star.owner }, selected: false }
+    expect(JSON.parse(JSON.stringify(patch.domain))).toMatchObject({ query: { text: 'item-1*5', locale: 'en-US', wildcards: true } })
     expect(matchedOrdinals(await keyed.search({ text: 'item-1?5', locale: 'en-US', wildcards: true }))).toEqual([0, 2])
     expect(matchedOrdinals(await keyed.search({ text: 'a~*b', locale: 'en-US', wildcards: true }))).toEqual([4])
     expect(matchedOrdinals(await keyed.search({ text: 'a*b', locale: 'en-US' }))).toEqual([4])
     await expect(keyed.search({ text: 'a~', locale: 'en-US', wildcards: true })).rejects.toMatchObject({ code: 'invalid-rule' })
+  })
+  it('builds keys lazily on the first plain search only, never in build() (spike decision)', async () => {
+    const calls = { n: 0 }, strategy = asciiCandidate(calls), probeCalls = calls.n
+    const values = seededValues(800, 83)
+    const cache = new ValueIndexCache({ searchKeys: { strategy } }), built = cache.open(identity(), new StringSource(values))
+    expect(await built.build()).toBe('complete')
+    expect(calls.n - probeCalls).toBe(0)
+    expect(built.searchKeyStatus).toMatchObject({ state: 'none', keyed: 0 })
+    await built.search({ text: '', locale: 'en-US' })
+    await built.search({ text: 'a*b', locale: 'en-US', wildcards: true })
+    await built.search({ text: 'a', locale: 'tr-TR' })
+    expect(built.searchKeyStatus).toMatchObject({ state: 'none', keyed: 0 })
+    expect(calls.n - probeCalls).toBe(0)
+    const progress: string[] = []
+    const first = await built.search({ text: 'a', locale: 'en-US' }, { onKeyProgress: p => progress.push(p.phase) })
+    expect(progress).toContain('keys')
+    expect(built.searchKeyStatus).toMatchObject({ state: 'computed', keyed: 800 })
+    expect(first.stats.keyed).toBe(values.filter(value => printable.test(value)).length)
+    expect(calls.n - probeCalls).toBe(801)
+    await built.search({ text: 'b', locale: 'en-US' })
+    expect(calls.n - probeCalls).toBe(802)
   })
   it('falls back to streaming keys under memory pressure with identical results', async () => {
     const values = seededValues(1_000, 61)
@@ -166,6 +191,8 @@ describe('search-key strategies', () => {
     const cache = new ValueIndexCache({ limitBytes: probe.usedBytes + 8 * 1024, searchKeys: { strategy: asciiCandidate() } })
     const streaming = cache.open(identity(), new StringSource(values))
     expect(await streaming.build()).toBe('complete')
+    expect(streaming.searchKeyStatus).toMatchObject({ state: 'none', keyed: 0 })
+    await streaming.search({ text: 'b', locale: 'en-US' })
     expect(streaming.searchKeyStatus).toMatchObject({ state: 'streaming', keyed: 0 })
     expect(cache.usedBytes).toBeLessThanOrEqual(cache.limitBytes)
     for (const text of ['a', 'Z1', 'é', '']) {
@@ -180,6 +207,8 @@ describe('search-key store port', () => {
   it('persists keys with a content hash after a complete build and reuses them on a cold index', async () => {
     const values = seededValues(2_000, 41), store = new MemorySearchKeyStore()
     const first = { n: 0 }, strategy = asciiCandidate(first), firstIndex = await index(values, { searchKeys: { strategy, store } })
+    expect(store.saves).toBe(0)
+    const firstHit = await firstIndex.search({ text: 'Ab', locale: 'en-US' })
     expect(firstIndex.searchKeyStatus).toMatchObject({ state: 'persisted', keyed: 2_000 })
     expect(store.saves).toBe(1)
     const stored = await store.load(owner(strategy))
@@ -187,9 +216,11 @@ describe('search-key store port', () => {
     expect('texts' in stored!).toBe(false)
     const second = { n: 0 }, secondStrategy = asciiCandidate(second), probeCalls = second.n
     const warm = await index(values, { searchKeys: { strategy: secondStrategy, store } })
+    const warmHit = await warm.search({ text: 'Ab', locale: 'en-US' })
     expect(warm.searchKeyStatus).toMatchObject({ state: 'loaded', keyed: 2_000 })
-    expect(second.n - probeCalls).toBe(0)
-    expect(matchedOrdinals(await warm.search({ text: 'Ab', locale: 'en-US' }))).toEqual(matchedOrdinals(await firstIndex.search({ text: 'Ab', locale: 'en-US' })))
+    // Only the query key is computed; value keys come from the store.
+    expect(second.n - probeCalls).toBe(1)
+    expect(matchedOrdinals(warmHit)).toEqual(matchedOrdinals(firstHit))
     expect(await store.load(owner(strategy, { valueGen: 4 }))).toBeNull()
   })
   it('discards persisted keys whose content hash differs and recomputes', async () => {
@@ -197,7 +228,8 @@ describe('search-key store port', () => {
     await store.save(owner(strategy), { count: 300, hash: '0'.repeat(64), keys: values.map(() => 'zzz') })
     const calls = { n: 0 }, counted = asciiCandidate(calls), probeCalls = calls.n
     const built = await index(values, { searchKeys: { strategy: counted, store } })
-    expect(calls.n - probeCalls).toBe(300)
+    await built.search({ text: 'q', locale: 'en-US' })
+    expect(calls.n - probeCalls).toBe(301)
     expect(built.searchKeyStatus.state).toBe('persisted')
     const exact = await index(values)
     for (const text of ['a', 'z', '1']) {
@@ -206,16 +238,17 @@ describe('search-key store port', () => {
   })
   it('hashes lone surrogates and code-unit order losslessly', async () => {
     const store = new MemorySearchKeyStore(), strategy = asciiCandidate()
-    await index(['\ud800', 'a'], { searchKeys: { strategy, store } })
+    await (await index(['\ud800', 'a'], { searchKeys: { strategy, store } })).search({ text: 'a', locale: 'en-US' })
     const first = (await store.load(owner(strategy)))!.hash
     const other = new MemorySearchKeyStore()
-    await index(['\udc00', 'a'], { searchKeys: { strategy, store: other } })
+    await (await index(['\udc00', 'a'], { searchKeys: { strategy, store: other } })).search({ text: 'a', locale: 'en-US' })
     expect((await other.load(owner(strategy)))!.hash).not.toBe(first)
   })
   it('reports a typed storage quota without changing results', async () => {
     const values = seededValues(400, 47), store = new MemorySearchKeyStore({ limitBytes: 128 })
     const built = await index(values, { searchKeys: { strategy: asciiCandidate(), store } })
     expect(built.completeness).toBe('complete')
+    await built.search({ text: 'q', locale: 'en-US' })
     expect(built.searchKeyStatus).toMatchObject({ state: 'unpersisted', keyed: 400, error: { code: 'quota', detail: { resource: 'storage', limitBytes: 128 } } })
     expect(store.usedBytes).toBe(0)
     const exact = await index(values)
@@ -226,6 +259,7 @@ describe('search-key store port', () => {
     const keyed = new ValueIndexCache({ searchKeys: { strategy, store } })
     const built = keyed.open(identity(), new StringSource(seededValues(1_000, 71)))
     await built.build()
+    built.release(await built.search({ text: 'q', locale: 'en-US' }))
     expect(store.usedBytes).toBeGreaterThan(0)
     expect(keyed.usedBytes).toBe(built.ledger.chargedBytes + store.usedBytes)
     keyed.invalidate()
@@ -234,20 +268,20 @@ describe('search-key store port', () => {
     expect(store.usedBytes).toBe(0)
     expect(keyed.usedBytes).toBe(0)
   })
-  it('computes keys in a cancellable, resumable phase with progress, exact meanwhile', async () => {
+  it('computes keys lazily in a cancellable, resumable phase with progress, exact meanwhile', async () => {
     const values = seededValues(1_500, 53), controller = new AbortController(), calls = { n: 0 }
     const strategy = createSearchKeyStrategy({ ...asciiSpec(), searchKeyOf: text => { if (++calls.n === 700) controller.abort(); return printable.test(text) ? text.toLowerCase() : null } })
     const cache = new ValueIndexCache({ searchKeys: { strategy } }), source = new StringSource(values)
     const built = cache.open(identity(), source), phases: string[] = []
-    await expect(built.build({ signal: controller.signal, sliceMs: 0, onProgress: p => phases.push(p.phase) })).rejects.toMatchObject({ code: 'cancelled' })
+    await built.build()
+    await expect(built.search({ text: 'a', locale: 'en-US' }, { signal: controller.signal, sliceMs: 0, onKeyProgress: p => phases.push(p.phase) })).rejects.toMatchObject({ code: 'cancelled' })
     expect(phases).toContain('keys')
     const partial = built.searchKeyStatus.keyed
     expect(partial).toBeGreaterThan(0)
     expect(partial).toBeLessThan(1_500)
     const exact = await index(values)
-    expect(matchedOrdinals(await built.search({ text: 'a', locale: 'en-US' }))).toEqual(matchedOrdinals(await exact.search({ text: 'a', locale: 'en-US' })))
     const reads = source.reads
-    expect(await cache.open(identity(), source).build()).toBe('complete')
+    expect(matchedOrdinals(await built.search({ text: 'a', locale: 'en-US' }))).toEqual(matchedOrdinals(await exact.search({ text: 'a', locale: 'en-US' })))
     expect(source.reads).toBe(reads)
     expect(built.searchKeyStatus).toMatchObject({ state: 'computed', keyed: 1_500 })
   })

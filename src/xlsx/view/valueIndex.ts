@@ -86,8 +86,8 @@ export interface ValueSearchResult {
   readonly stats: { readonly keyed: number; readonly exact: number }
 }
 export type SearchKeyState = 'none' | 'computing' | 'computed' | 'loaded' | 'persisted' | 'unpersisted' | 'streaming'
-/** Dropdown search: contains, optionally with S8.1 `*`/`?`/`~` wildcards. */
-export type ValueSearchQuery = ValueSearchPredicate & { wildcards?: boolean }
+/** Dropdown search predicate (contracts.ts), kept as a local alias. */
+export type ValueSearchQuery = ValueSearchPredicate
 export interface ValuePageRequest { offset: number; limit: number; search?: ValueSearchResult; label?: ValueLabeler }
 export interface ValuePage { entries: readonly ValueEntryView[]; total: number; displayed: number; truncated: boolean; completeness: ValueCompleteness }
 export interface ValueProgress { phase: 'pages' | 'keys'; completed: number; total: number }
@@ -107,6 +107,8 @@ export interface ValueSearchOptions extends Pacing {
   label?: ValueLabeler
   limits?: Omit<FilterLimits, 'signal'>
   onProgress?: (progress: ValueSearchProgress) => void
+  /** Progress of a lazy search-key build triggered by this search. */
+  onKeyProgress?: (progress: ValueProgress) => void
   /** Continue a result over ordinals merged after it was produced; its own
    * label/limits policy is reused unless overridden. */
   resume?: ValueSearchResult
@@ -316,6 +318,7 @@ export class ValueIndex implements LaneAccount {
   private keyError: ValueIndexError | undefined
   private keyBytes = 0
   private searching = 0
+  private keyRunning = false
   private readonly results = new WeakMap<ValueSearchResult, SearchRecord>()
   private readonly reservations = new Set<ValueReservation>()
   /** Snapshot of the cache's certified strategy; never changes for this index. */
@@ -408,7 +411,7 @@ export class ValueIndex implements LaneAccount {
   build(options: ValueBuildOptions = {}): Promise<ValueCompleteness> {
     try { this.assertLive() } catch (error) { return Promise.reject(error) }
     if (this.identity.classification.kind === 'loading') return Promise.resolve('loading')
-    if (this.pages && !this.unmerged && this.keysDone) return Promise.resolve(this.completeness)
+    if (this.pages && !this.unmerged) return Promise.resolve(this.completeness)
     if (this.pending) return this.pending
     this.pending = this.run(options).catch(error => {
       // Partial merges after a quota/owner failure cannot be resumed honestly.
@@ -461,7 +464,6 @@ export class ValueIndex implements LaneAccount {
     this.ledger.unknownPages = unknown
     progress()
     this.check(signal)
-    if (this.strategy !== EXACT_SEARCH) await this.keyPhase(signal, pacer, onProgress)
     return this.completeness
   }
   /** @internal Store owner of this index's keys. */
@@ -745,6 +747,13 @@ export class ValueIndex implements LaneAccount {
         const budget = new WorkBudget({ ...limits, signal })
         const contains = query.text === '' ? undefined : new TextFilterMatcher(query.locale).prepare('contains', query.text, wildcards, budget)
         const keysUsable = contains !== undefined && !wildcards && strategy !== EXACT_SEARCH && foldVariantOf(query.locale) === strategy.foldVariant
+        // Keys are built lazily by the first plain search (spike decision);
+        // a concurrent search scans with the keys that exist so far.
+        if (keysUsable && !this.keysDone && !this.keyRunning) {
+          this.keyRunning = true
+          try { await this.keyPhase(signal, pacer, options.onKeyProgress) } finally { this.keyRunning = false }
+          live()
+        }
         const queryKey = keysUsable ? strategy.searchKeyOf(query.text) : null
         if (queryKey !== null && typeof queryKey !== 'string') throw new ValueIndexError('invalid-rule', 'Search key function returned a non-string key')
         const streaming = this.keyState === 'streaming', keys = this.searchKeys
