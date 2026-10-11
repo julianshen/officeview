@@ -14,10 +14,13 @@ export type Pool = typeof POOLS[number]
 export type QuotaLimits = Readonly<Record<Pool, number>>
 
 const MiB = 1024 * 1024
-/** Proposed, to be frozen in S10. compressedSpool/pages are storage-backed. */
+/** Proposed, to be frozen in S10. compressedSpool/pages are storage-backed.
+ * pages covers the paged cell cap (2^25 D / 2^24 M) at the measured 26.9 B per
+ * stored cell (S1.2: F2 full, 8,238,808 cells, 211.0 MiB of pages); the
+ * earlier 128/64 MiB refused F2 with a quota error. */
 const QUOTA_LIMITS: Record<ProfileId, QuotaLimits> = {
-  D: { compressedSpool: 256 * MiB, expandedQueue: 8 * MiB, pages: 128 * MiB, sharedStrings: 64 * MiB, blobRecords: 32 * MiB, decodedBuffers: 128 * MiB, objectModel: 256 * MiB },
-  M: { compressedSpool: 128 * MiB, expandedQueue: 8 * MiB, pages: 64 * MiB, sharedStrings: 32 * MiB, blobRecords: 16 * MiB, decodedBuffers: 64 * MiB, objectModel: 128 * MiB },
+  D: { compressedSpool: 256 * MiB, expandedQueue: 8 * MiB, pages: 1024 * MiB, sharedStrings: 64 * MiB, blobRecords: 32 * MiB, decodedBuffers: 128 * MiB, objectModel: 256 * MiB },
+  M: { compressedSpool: 128 * MiB, expandedQueue: 8 * MiB, pages: 512 * MiB, sharedStrings: 32 * MiB, blobRecords: 16 * MiB, decodedBuffers: 64 * MiB, objectModel: 128 * MiB },
 }
 
 export function quotaLimitsFor(profile: ProfileId): QuotaLimits {

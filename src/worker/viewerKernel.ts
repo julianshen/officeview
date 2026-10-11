@@ -23,7 +23,7 @@
  * structured-clone/transfer semantics including buffer detachment).
  */
 import type {
-  CacheIdentity, OperationRefusal, SourceHandle, ViewCommitDelta, WorkerCommand, WorkerCommandKind,
+  CacheIdentity, OperationRefusal, ProfileId, SourceHandle, ViewCommitDelta, WorkerCommand, WorkerCommandKind,
   WorkerCommandOwner, WorkerDiagnostic, WorkerOwner, WorkerReply,
 } from '../xlsx/view/contracts'
 import type { XlsxDocument } from '../xlsx/types'
@@ -38,6 +38,11 @@ import {
 import { createObjectWorkbookSource } from './viewerObjectSource'
 import { MAX_ROWS } from '../xlsx/view/coordinates'
 
+/** A typed open refusal (admission or storage); the open replies with its code. */
+export class OpenRefusal extends Error {
+  constructor(readonly code: string, message: string) { super(message); this.name = 'OpenRefusal' }
+}
+const OPEN_FAILURE_CODES: ReadonlySet<string> = new Set(['resource-limit', 'unsupported', 'parse-error', 'storage-error', 'quota'])
 export type ReplySink = (reply: WorkerReply, transfer: ArrayBuffer[]) => void
 export interface ViewerKernelEnv {
   /** Parses package bytes once per open; the only parse entry point. */
@@ -50,6 +55,11 @@ export interface ViewerKernelEnv {
   /** 'in-thread' is the no-worker fallback for small admitted documents: the
    * same chunked kernels, but paged (large-mode) sources are refused. */
   host?: 'worker' | 'in-thread'
+  /** Blob opens run admission first (S1.2); false keeps the parse-only path. */
+  admitBlobs?: boolean
+  /** Paged-import storage and limit overrides (tests inject fakes). */
+  pageStorage?: import('../xlsx/storage/sourcePages').PageStorageEnv
+  importLimits?: import('../xlsx/storage/importSession').ImportLimitOverrides
 }
 /** Why an in-flight request was aborted; echoed as the cancelled diagnostic. */
 export type CancelReason = 'cancel-requested' | 'superseded' | 'range-replaced' | 'document-closed'
@@ -339,9 +349,16 @@ export class ViewerKernel {
     this.opening.add(command.docId)
     let source: WorkbookSource
     try {
-      source = await this.openSource(command.source, command.docId, signal)
+      source = await this.openSource(command.source, command.docId, signal, command.profile)
     } catch (cause) {
       if (signal.aborted) return reply(command, owner, { kind: 'cancelled' })
+      // Typed refusals (admission limits, storage, quota) reply with their code;
+      // nothing is opened and no blank document is published.
+      const code = (cause as { code?: unknown } | null)?.code
+      if (cause instanceof OpenRefusal || (typeof code === 'string' && OPEN_FAILURE_CODES.has(code))) {
+        const typed = String(code)
+        return errorReply(command, owner, typed, typed === 'storage-error' || typed === 'quota', [{ code: 'open-refused', message: (cause as Error).message }])
+      }
       throw cause
     } finally {
       this.opening.delete(command.docId)
@@ -357,20 +374,32 @@ export class ViewerKernel {
     }
     this.sessions.set(command.docId, session)
     this.stats.opens++
-    return reply(command, owner, { kind: 'complete', result: { kind: 'open', valuePolicy: source.valuePolicy, sheets: source.sheets } })
+    return reply(command, owner, { kind: 'complete', result: { kind: 'open', valuePolicy: source.valuePolicy, sheets: source.sheets } }, source.openDiagnostics ?? [])
   }
   /** Open is the only place source bytes are read or parsed. A blob is copied
    * into worker memory exactly once (accounted), parsed, then dropped. */
-  private async openSource(handle: SourceHandle, docId: string, signal: AbortSignal): Promise<WorkbookSource> {
+  private async openSource(handle: SourceHandle, docId: string, signal: AbortSignal, profile: ProfileId = 'D'): Promise<WorkbookSource> {
     if (this.env.openSource) return this.env.openSource(handle, docId, signal)
     switch (handle.kind) {
       case 'object': return createObjectWorkbookSource(handle.document, docId)
       case 'blob': {
+        let openDiagnostics: WorkerDiagnostic[] = []
+        if (this.env.admitBlobs !== false && this.env.host !== 'in-thread') {
+          // Admission reads only the central directory and (for object
+          // candidates) one bounded verification pass; a paged decision never
+          // copies the blob into worker memory (S1.2).
+          const { openLargeBlob } = await import('./viewerLargeSource')
+          const routed = await openLargeBlob(handle.blob, docId, { profile, signal, limits: this.env.importLimits, storage: this.env.pageStorage })
+          if (routed.kind === 'paged') return routed.source
+          if (routed.kind === 'refuse') throw new OpenRefusal(routed.code, routed.message)
+          openDiagnostics = routed.diagnostics
+        }
         this.stats.sourceReads++
         const bytes = await handle.blob.arrayBuffer()
         this.accounting.copy(bytes.byteLength)
         this.stats.parses++
-        return createObjectWorkbookSource(await this.env.parse(new Uint8Array(bytes)), docId)
+        const source = createObjectWorkbookSource(await this.env.parse(new Uint8Array(bytes)), docId)
+        return openDiagnostics.length ? { ...source, openDiagnostics } : source
       }
       default: throw new RangeError('Paged source handles are delivered by S1.2')
     }

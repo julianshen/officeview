@@ -33,6 +33,7 @@
  * reports `view-reapplied`. A released session never revives: no lazy state,
  * activation, admission or publication after release.
  */
+import type { DeclaredSheetFilters } from '../xlsx/view/declaredFilters'
 import type {
   AxisMetrics, AxisSizeInterval, CacheIdentity, ColumnEntry, ColumnQuery, CompactSourceRowSet, FilterSpec,
   GridSelection, GridSelectionPart, IntervalSet, OperationRefusal, Page, ProfileId, RowOrder, SingleCellPayload, SortSpec,
@@ -149,6 +150,10 @@ export interface WorkbookSource {
   coverageDiagnostics?(sheetId: string): readonly WorkerDiagnostic[]
   /** S4.3: decoded source pages register in the session pool's `source` tier. */
   bindMemory?(pool: MemoryPool): void
+  /** Notices attached to the open reply (e.g. compatibility mode). */
+  readonly openDiagnostics?: readonly WorkerDiagnostic[]
+  /** S8.3 declared file filter/sort diagnostics; both adapters build identical records. */
+  declaredFilters?(): readonly DeclaredSheetFilters[]
   release(): Promise<void>
 }
 
@@ -1111,6 +1116,8 @@ export class DocumentSession {
           expected = last + 1
           if (item.kind === 'unknown') return { kind: 'incomplete', missing: [{ r0: item.r0, r1: item.r1, c0: col, c1: col }] }
           if (item.kind === 'error') return { kind: 'error', error: failure(item.code, 'Column source failed', item.retryable) }
+          // Lanes are never requested here; treating one as a blank run would hide its values.
+          if (item.kind === 'lanes') return { kind: 'error', error: failure('page-error', 'Unrequested column lanes') }
           if (item.kind === 'cell' || item.kind === 'unavailable') {
             const next = protectedBytes + stagedBytes + builder.heldBytes + builder.costOf(item)
             if (next > budget.maxBytes) return quota(next)
