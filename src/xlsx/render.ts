@@ -18,7 +18,7 @@ import { formatCommon } from './formula/format'
 import { decodeSerial } from './formula/serial'
 import type { ResolvedSemantics } from './formula/types'
 import type { LogicalViewport, WorkerDiagnostic } from './view/contracts'
-import { isValidCoordinate } from './view/coordinates'
+import { MAX_COLS, isValidCoordinate } from './view/coordinates'
 import { RectangleIndex } from './view/structure'
 import { cellSourceRow, drawingExtent, planViewport, type SheetGeometryResult, type ViewportPlan, type ViewportProfile } from './view/viewport'
 
@@ -626,8 +626,9 @@ export function renderSheet(
   // Row bottoms extended by merge ranges anchored in the row: a row whose own
   // box sits above the viewport still paints when its merged range reaches in.
   const rowBottom = new Map<number, number>()
+  const edges = mergeEdges(sheet, m, colX, rowY)
   for (const r of ranges) {
-    const bottom = rowY[r.maxRow + 1] ?? m.heightPx
+    const bottom = edges.row(r.maxRow + 1)
     if (bottom > (rowBottom.get(r.minRow) ?? Number.NEGATIVE_INFINITY)) rowBottom.set(r.minRow, bottom)
   }
   const extent = { width: m.widthPx, height: m.heightPx }
@@ -647,8 +648,8 @@ export function renderSheet(
       const rng = merges.anchorAt(cell.row, cell.col)
       // geometry: anchor cells expand across their merge range
       const x = colX[cell.col]
-      const w = rng ? (colX[rng.maxCol + 1] ?? m.widthPx) - x : colWidthsPx[cell.col]
-      const hh = rng ? (rowY[rng.maxRow + 1] ?? m.heightPx) - y : h
+      const w = rng ? edges.col(rng.maxCol + 1) - x : colWidthsPx[cell.col]
+      const hh = rng ? edges.row(rng.maxRow + 1) - y : h
       // Collapsed (authored-hidden) rows/columns produce no fill or text (spec §5.3).
       if (!(w > 0 && hh > 0) || !intersects(x, y, w, hh)) continue
       const border = paintCellBody(ctx, sheet, cell, x, y, w, hh, measured, extent)
@@ -699,24 +700,56 @@ export function renderSheet(
 function staticAdmission(sheet: XlsxSheet, m: GridMetrics, viewport?: SheetViewport): StaticExportLimit[] {
   const coverage = gridCoverageLimits(sheet, m.rowHeightsPx.length, m.colWidthsPx.length)
   if (!viewport) return [...coverage, ...requestedRasterLimits(m)]
-  const colX = prefixSums(m.colWidthsPx), rowY = prefixSums(m.rowHeightsPx)
-  const nCols = m.colWidthsPx.length, nRows = m.rowHeightsPx.length
-  const gridWidth = colX[nCols], gridHeight = rowY[nRows]
+  const sum = (sizes: number[]) => sizes.reduce((a, b) => a + b, 0)
+  const gridWidth = sum(m.colWidthsPx), gridHeight = sum(m.rowHeightsPx)
+  // Merges the grid truncates are laid out at their true extent (mergeEdges), so
+  // only a window reaching past the grid where data or merges continue is refused.
   const limits = coverage.filter(limit => limit.resource === 'rows' ? viewport.y + viewport.height > gridHeight : viewport.x + viewport.width > gridWidth)
-  // A merge the grid truncates has no true extent here: its anchor would lay out
-  // against the bitmap edge. Refuse a window that touches its retained part.
-  for (const r of sheet.mergeRanges ?? []) {
-    if (!validMerge(r) || (r.maxRow < nRows && r.maxCol < nCols) || r.minRow >= nRows || r.minCol >= nCols) continue
-    const x = colX[r.minCol], y = rowY[r.minRow]
-    const right = r.maxCol < nCols ? colX[r.maxCol + 1] : gridWidth, bottom = r.maxRow < nRows ? rowY[r.maxRow + 1] : gridHeight
-    if (x < viewport.x + viewport.width && right > viewport.x && y < viewport.y + viewport.height && bottom > viewport.y) {
-      const resource = r.maxRow >= nRows ? 'rows' as const : 'cols' as const
-      const requested = resource === 'rows' ? r.maxRow + 1 : r.maxCol + 1, limit = resource === 'rows' ? nRows : nCols
-      limits.push({ code: 'large-export-limit', resource, requested, limit, message: `A merged range reaching ${resource === 'rows' ? 'row' : 'column'} ${requested} is truncated by the ${limit}-${resource === 'rows' ? 'row' : 'column'} static grid; render it through the interactive viewer` })
-      break
-    }
-  }
   return limits
+}
+
+/** Grid boundary positions for merge geometry. Inside the retained grid these are
+ * the prefix sums; past it (a merge the static grid truncates) the extent follows
+ * the same authored row/column rules, so an anchor lays out against its true
+ * merged box instead of the bitmap edge. Invalid edges keep the bitmap clamp. */
+function mergeEdges(sheet: XlsxSheet, m: GridMetrics, colX: number[], rowY: number[]) {
+  const nRows = m.rowHeightsPx.length, nCols = m.colWidthsPx.length
+  let rowsBeyond: Map<number, number> | undefined, colsBeyond: Map<number, number> | undefined
+  const beyondRows = () => {
+    if (!rowsBeyond) {
+      rowsBeyond = new Map()
+      const hidden = new Map<number, boolean>()
+      for (const row of sheet.rows) if (row.index >= nRows) hidden.set(row.index, (hidden.get(row.index) ?? true) && row.hidden === true)
+      for (const row of sheet.rows) {
+        if (!(row.index >= nRows) || !Number.isSafeInteger(row.index)) continue
+        if (hidden.get(row.index)) rowsBeyond.set(row.index, 0)
+        else if (row.customHeight && row.heightPt !== undefined && Number.isFinite(row.heightPt) && row.heightPt >= 0) rowsBeyond.set(row.index, Math.round(row.heightPt * (96 / 72)))
+      }
+    }
+    return rowsBeyond
+  }
+  const beyondCols = () => {
+    if (!colsBeyond) {
+      colsBeyond = new Map()
+      for (const spec of sheet.cols) {
+        if (!(spec.widthChars !== undefined || spec.hidden) || !Number.isSafeInteger(spec.min) || !Number.isSafeInteger(spec.max)) continue
+        const w = spec.hidden ? 0 : !Number.isFinite(spec.widthChars) || spec.widthChars! < 0 ? DEFAULT_COL_PX : Math.round(spec.widthChars! * CHAR_PX + 5)
+        for (let c = Math.max(nCols, spec.min); c <= Math.min(spec.max, MAX_COLS - 1); c++) colsBeyond.set(c, w)
+      }
+    }
+    return colsBeyond
+  }
+  const edge = (index: number, prefix: number[], n: number, size: number, beyond: () => Map<number, number>, clamp: number): number => {
+    if (index <= n) return prefix[index] ?? clamp
+    if (!Number.isSafeInteger(index)) return clamp
+    let total = prefix[n] + (index - n) * size
+    for (const [at, value] of beyond()) if (at < index) total += value - size
+    return total
+  }
+  return {
+    row: (index: number) => edge(index, rowY, nRows, DEFAULT_ROW_PX, beyondRows, m.heightPx),
+    col: (index: number) => edge(index, colX, nCols, DEFAULT_COL_PX, beyondCols, m.widthPx),
+  }
 }
 
 type MeasureCached = (font: string, text: string) => number
