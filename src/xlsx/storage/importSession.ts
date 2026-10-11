@@ -51,6 +51,8 @@ export interface ImportLimits {
     maxRatio: number
     drawingPartEnvelopeBytes: number
     minFreeStorageBytes: number
+    /** Per sheet: merges, table parts, drawing references and array formulas each (S1.2). */
+    structuralRecords: number
   }
   spool: { memoryLimitBytes: number; hardMemoryCapBytes: number; sniffPrefixBytes: number }
 }
@@ -90,6 +92,7 @@ const DESKTOP: ImportLimits = {
     maxRatio: 200,
     drawingPartEnvelopeBytes: 128 * MiB,
     minFreeStorageBytes: 64 * MiB,
+    structuralRecords: 1_048_576,
   },
   spool: { memoryLimitBytes: 32 * MiB, hardMemoryCapBytes: 64 * MiB, sniffPrefixBytes: 64 * KiB },
 }
@@ -165,7 +168,9 @@ export function detectProfile(): ProfileId {
   return 'D'
 }
 
-/** Why a load did not produce a document. `paged-not-yet` = admitted for the paged importer (S1.2). */
+/** Why a load did not produce a document. `paged-not-yet` is retained for type
+ * compatibility only: since S1.2 nothing produces it (paged admissions open a
+ * paged session internally, or the compatibility document on exported entries). */
 export type RefusalReason = 'paged-not-yet' | 'undetermined-format' | 'limit'
 
 /** Typed rejection of loadOfficeFile/<OfficeFile> for a spreadsheet that cannot load as an object document. */

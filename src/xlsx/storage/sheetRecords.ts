@@ -225,16 +225,22 @@ export function countingEvents(counters: AdmissionCounters, partId: string, opti
 
 const FORMULA_TEXT_LIMIT = 1 << 20
 
-/** Collects `si` strings (direct `t` plus `r/t`, never phonetic runs) and hands them out in fixed-size chunks. */
+/**
+ * Collects `si` strings and hands each out once complete. Mirrors parse.ts
+ * sharedStrings: every direct `t` is concatenated and decoded as one text,
+ * then the first `t` of each `r` run is decoded and appended, in that order
+ * whatever the document order; phonetic runs never count.
+ */
 export function sharedStringEvents(partId: string, onString: (text: string) => void, maxStringChars: number): XmlEvents {
   const stack: string[] = []
   let mcDepth = 0
   let inSi = false
   let inPhonetic = 0
-  let collecting = false
-  let current = ''
-  let decoder = new XstringDecoder()
-  let tSeenDirect = false
+  let collecting: 'direct' | 'run' | undefined
+  let direct = ''
+  let runs = ''
+  let directDecoder = new XstringDecoder()
+  let runDecoder = new XstringDecoder()
   let runTSeen = false
   return {
     open(qname, _names, _values, _count, selfClosing) {
@@ -243,17 +249,16 @@ export function sharedStringEvents(partId: string, onString: (text: string) => v
       else if (local === 'si') {
         if (mcDepth > 0) throw new PackageError('unsupported', 'si inside mc:AlternateContent is not supported; shared strings would be lost', partId)
         if (selfClosing) { onString(''); return }
-        inSi = true; current = ''; tSeenDirect = false
+        inSi = true; direct = ''; runs = ''; directDecoder = new XstringDecoder()
       } else if (inSi && local === 'rPh' && !selfClosing) inPhonetic++
       else if (inSi && local === 'r') runTSeen = false
       else if (inSi && inPhonetic === 0 && local === 't' && !selfClosing) {
         const parent = stack[stack.length - 1]
-        // parse.ts keeps the FIRST direct t and the first t of each run.
-        if (parent === 'si' ? !tSeenDirect : parent === 'r' && !runTSeen) {
-          if (parent === 'si') tSeenDirect = true
-          else runTSeen = true
-          collecting = true
-          decoder = new XstringDecoder()
+        if (parent === 'si') collecting = 'direct'
+        else if (parent === 'r' && !runTSeen) {
+          runTSeen = true
+          collecting = 'run'
+          runDecoder = new XstringDecoder()
         }
       }
       if (!selfClosing) stack.push(local)
@@ -263,13 +268,16 @@ export function sharedStringEvents(partId: string, onString: (text: string) => v
       stack.pop()
       if (local === 'AlternateContent' && mcDepth > 0) mcDepth--
       else if (local === 'rPh' && inPhonetic > 0) inPhonetic--
-      else if (local === 't' && collecting) { current += decoder.push('', true); collecting = false }
-      else if (local === 'si' && inSi) { inSi = false; onString(current) }
+      else if (local === 't' && collecting) {
+        if (collecting === 'run') runs += runDecoder.push('', true)
+        collecting = undefined
+      } else if (local === 'si' && inSi) { inSi = false; onString(direct + directDecoder.push('', true) + runs) }
     },
     text(text) {
       if (!collecting) return
-      current += decoder.push(text)
-      if (current.length > maxStringChars) throw new PackageError('resource-limit', `a shared string exceeds ${maxStringChars} characters`, partId)
+      if (collecting === 'direct') direct += directDecoder.push(text)
+      else runs += runDecoder.push(text)
+      if (direct.length + runs.length > maxStringChars) throw new PackageError('resource-limit', `a shared string exceeds ${maxStringChars} characters`, partId)
     },
   }
 }
@@ -328,6 +336,8 @@ export interface SheetRecordOptions {
   sharedStringCount: number
   dynamicIndices: ReadonlySet<number>
   maxTextChars: number
+  /** Cap on merges, tableParts and drawing references each (typed resource-limit). */
+  maxStructuralRecords?: number
   onCell(record: CellRecord): void
   /** Called after every complete row; the importer cuts pages at row boundaries. */
   onRowEnd(row: number): void
@@ -390,6 +400,10 @@ export function sheetRecordEvents(meta: SheetMetadata, options: SheetRecordOptio
   let ruleDepth = -1
   let sort: Sort | undefined, sortDepth = -1
 
+  const cap = options.maxStructuralRecords ?? Number.MAX_SAFE_INTEGER
+  const bounded = (list: unknown[], what: string) => {
+    if (list.length >= cap) throw new PackageError('resource-limit', `more than ${cap} ${what} in one sheet`, partId)
+  }
   const structural = (domain: SheetMetadata['structuralIncomplete'][number]) => {
     if (!meta.structuralIncomplete.includes(domain)) meta.structuralIncomplete.push(domain)
   }
@@ -526,12 +540,15 @@ export function sheetRecordEvents(meta: SheetMetadata, options: SheetRecordOptio
         })
       } else if (depth === 2 && local === 'mergeCell' && stack[1] === 'mergeCells') {
         const ref = attrMap(names, values, count).ref
+        bounded(meta.merges, 'merges')
         if (ref) meta.merges.push(ref)
       } else if (depth === 2 && local === 'tablePart' && stack[1] === 'tableParts') {
         const id = attrMap(names, values, count).id
+        bounded(meta.tablePartIds, 'table parts')
         meta.tablePartIds.push(typeof id === 'string' && id !== '' ? id : undefined)
       } else if (depth === 1 && local === 'drawing') {
         // legacyDrawing (comment VML) carries no anchors the structural query reports.
+        bounded(meta.drawingIds, 'drawing references')
         meta.drawingRefs++
         const id = attrMap(names, values, count).id
         meta.drawingIds.push(typeof id === 'string' && id !== '' ? id : undefined)

@@ -19,7 +19,7 @@ import { MAX_COLS, MAX_ROWS, cellId, isValidCoordinate, isValidSourceRect, type 
 import { INITIAL_GENERATION } from '../../worker/viewerProtocol'
 import { failedPage, failure, rowSetIntervals, sameStamp, type SheetGeometry, type WorkbookSource } from '../../worker/viewerSession'
 import type { MemoryPool } from './tileCache'
-import { LaneBuilder, READ_ROWS_MAX_CELLS, READ_ROWS_PAGE_ROWS, buildGeometry, intersects, parseRange } from './source'
+import { LaneBuilder, READ_ROWS_MAX_CELLS, READ_ROWS_PAGE_ROWS, buildGeometry, intersects, invalidMergeDiagnostic } from './source'
 import {
   F_CACHED, F_ERROR, K_BOOL, K_EMPTY, K_ERROR, K_NUMBER, K_SST, K_TEXT, recordPopulated, textAt,
   type CellPagePayload, type PageSummary,
@@ -54,6 +54,7 @@ export class PagedXlsxSheetAdapter implements SourceStore {
     if (this.sheet.metadata.drawingAnchors > 0) out.push({ code: 'coverage-unresolvable', message: 'Drawing anchors are not available to the source adapter until S3.1 parser wiring' })
     const dynamic = this.sheet.arrayCells.find(a => a.dynamic)
     if (dynamic) out.push({ code: 'coverage-unresolvable', message: 'Dynamic-array spill extents are not available to the source adapter until the S3.1 spill bridge', source: { row: dynamic.row, col: dynamic.col } })
+    if (this.sheet.invalidMerges) out.push(invalidMergeDiagnostic(this.sheet.invalidMerges))
     if (this.sheet.state === 'complete' && this.sheet.tables === undefined) out.push({ code: 'coverage-unresolvable', message: 'The workbook table inventory could not be read; table bands are unknown' })
     return out
   }
@@ -357,7 +358,7 @@ export class PagedXlsxSheetAdapter implements SourceStore {
       const c0 = Math.max(domain.c0, rect.c0), c1 = Math.min(domain.c1, rect.c1)
       if (r0 <= r1 && c0 <= c1) missing.push({ r0, r1, c0, c1 })
     }
-    const merges = sheet.metadata.merges.map(parseMergeRef).filter((m): m is NonNullable<typeof m> => m !== null)
+    const merges = sheet.mergeRects
       .map(m => ({ id: `merge:${m.r0}:${m.c0}:${m.r1}:${m.c1}`, range: m, anchor: { row: m.r0, col: m.c0 } }))
       .filter(m => isValidSourceRect(m.range) && intersects(m.range, rect))
     const tables = (sheet.tables ?? [])
@@ -366,11 +367,10 @@ export class PagedXlsxSheetAdapter implements SourceStore {
     const spills = []
     for (const a of sheet.arrayCells) {
       if (a.dynamic) addMissing({ r0: a.row, r1: MAX_ROWS - 1, c0: a.col, c1: MAX_COLS - 1 })
-      if (a.arrayRef === '') continue
-      const saved = parseRange(a.arrayRef)
+      if (!a.hasRef) continue
       const anchorRect = { r0: a.row, r1: a.row, c0: a.col, c1: a.col }
-      if (!intersects(saved ?? anchorRect, rect) && !intersects(anchorRect, rect)) continue
-      spills.push({ anchor: { row: a.row, col: a.col }, kind: a.dynamic ? 'dynamic' as const : 'fixed' as const, ...(saved ? { saved } : {}) })
+      if (!intersects(a.saved ?? anchorRect, rect) && !intersects(anchorRect, rect)) continue
+      spills.push({ anchor: { row: a.row, col: a.col }, kind: a.dynamic ? 'dynamic' as const : 'fixed' as const, ...(a.saved ? { saved: a.saved } : {}) })
     }
     if (sheet.metadata.drawingAnchors > 0 || sheet.tables === undefined) addMissing(rect)
     // Structure wrapped in mc:AlternateContent is unreadable, never known-empty (design note §3.4, RED 14a).
@@ -431,9 +431,6 @@ export class PagedXlsxSheetAdapter implements SourceStore {
   }
 }
 
-function parseMergeRef(ref: string): SourceRect | null {
-  return parseRange(ref)
-}
 function pageFailure(cause: unknown): SourceFailure {
   const code = (cause as { code?: unknown } | null)?.code
   if (code === 'storage-error' || code === 'quota' || code === 'parse-error' || code === 'cancelled') {

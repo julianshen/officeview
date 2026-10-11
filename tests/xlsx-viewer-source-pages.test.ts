@@ -330,6 +330,22 @@ describe('paged import session', () => {
     }
   })
 
+  it('review MINOR 2: structural lists are capped and merges are indexed once at import end', async () => {
+    const merges = repeat(3, (i) => `<mergeCell ref="A${i * 3 + 1}:B${i * 3 + 2}"/>`)
+    const capped = new SourcePageStore({ docId: 'd', backend: memoryPageBackend() })
+    const over = await openImportSession(blobOf(xlsxBytes({ sheetData: rowsXml(10), afterSheetData: `<mergeCells>${merges}</mergeCells>` })), { docId: 'd', profile: 'D', store: capped, limits: { paged: { structuralRecords: 2 } } })
+    expect(await over.done).toMatchObject({ kind: 'incomplete', failure: { code: 'resource-limit' } })
+    await over.release()
+    const store = new SourcePageStore({ docId: 'd', backend: memoryPageBackend() })
+    const session = await openImportSession(blobOf(xlsxBytes({ sheetData: rowsXml(10), afterSheetData: `<mergeCells>${merges}</mergeCells>` })), { docId: 'd', profile: 'D', store })
+    await session.done
+    const sheet = session.workbook.sheets[0]
+    // Ranges are parsed once; the raw strings are not retained for every query.
+    expect(sheet.mergeRects).toEqual([{ r0: 0, r1: 1, c0: 0, c1: 1 }, { r0: 3, r1: 4, c0: 0, c1: 1 }, { r0: 6, r1: 7, c0: 0, c1: 1 }])
+    expect(sheet.metadata.merges).toEqual([])
+    await session.release()
+  })
+
   it('RED 23: cancellation releases every reservation and removes stored pages; a stale owner cannot publish', async () => {
     const gated = gatedBackend(2)
     const ledger = createQuotaLedger(quotaLimitsFor('D'), { maxTotalExpandedBytes: 1 << 30 })

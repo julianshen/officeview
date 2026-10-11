@@ -15,7 +15,7 @@ import type { TableMetadata } from '../formula/types'
 import {
   collectDeclaredTable, createDeclaredBudget, declaredContainerBuilder, declaredSheetBuilder, hasDeclaredFiltering, type DeclaredSheetFilters,
 } from '../view/declaredFilters'
-import { MAX_COLS, MAX_ROWS } from '../view/coordinates'
+import { MAX_COLS, MAX_ROWS, parseA1, type SourceRect } from '../view/coordinates'
 import { createQuotaLedger, quotaLimitsFor, type QuotaLedger } from './quota'
 import { inventoryLimits } from './admission'
 import { anchorCountEvents, newSheetMetadata, normalizeRowMetadata, sharedStringEvents, sheetRecordEvents, type SheetMetadata } from './sheetRecords'
@@ -38,7 +38,11 @@ export interface PagedSheet {
   tables: TableMetadata[] | undefined
   declared?: DeclaredSheetFilters
   used?: { r0: number; r1: number; c0: number; c1: number }
-  arrayCells: { row: number; col: number; arrayRef: string; dynamic: boolean }[]
+  /** Array formulas with their saved extent parsed once (undefined: no/invalid ref). */
+  arrayCells: { row: number; col: number; saved?: SourceRect; hasRef: boolean; dynamic: boolean }[]
+  /** Merge ranges parsed once at the end of the sheet; unreadable refs are counted, not kept. */
+  mergeRects: SourceRect[]
+  invalidMerges: number
   failure?: SourceFailure
 }
 export interface PagedWorkbook {
@@ -135,7 +139,7 @@ export async function openImportSession(source: Extract<SourceHandle, { kind: 'b
     const relType = relTypes.get(relId) ?? ''
     const kind = relType.endsWith('/worksheet') ? 'worksheet' : relType !== '' ? 'other' : 'worksheet'
     const partPath = target.startsWith('/') ? target.slice(1) : `xl/${target.replace(/^\.\.\//, '')}`
-    sheets.push({ sheetId, name, workbookIndex, partPath, kind, state: 'pending', importedThroughRow: -1, metadata: newSheetMetadata(), tables: [], arrayCells: [] })
+    sheets.push({ sheetId, name, workbookIndex, partPath, kind, state: 'pending', importedThroughRow: -1, metadata: newSheetMetadata(), tables: [], arrayCells: [], mergeRects: [], invalidMerges: 0 })
     workbookIndex++
   }
   const store = options.store ?? new SourcePageStore({
@@ -261,6 +265,7 @@ export async function openImportSession(source: Extract<SourceHandle, { kind: 'b
         sharedStringCount: sstCount,
         dynamicIndices,
         maxTextChars: limits.maxTokenChars,
+        maxStructuralRecords: limits.paged.structuralRecords,
         declared: container,
         onCell(record) {
           builder.add(record.row, record.col, record.kind, record.styleIndex, record.num, record.text, record.cached, record.meta, record.valueIsError)
@@ -268,8 +273,11 @@ export async function openImportSession(source: Extract<SourceHandle, { kind: 'b
           if (record.row > r1) r1 = record.row
           if (record.col < c0) c0 = record.col
           if (record.col > c1) c1 = record.col
-          if (record.meta?.arrayRef !== undefined) sheet.arrayCells.push({ row: record.row, col: record.col, arrayRef: record.meta.arrayRef, dynamic: record.meta.dynamicArray === true })
-          else if (record.meta?.dynamicArray) sheet.arrayCells.push({ row: record.row, col: record.col, arrayRef: '', dynamic: true })
+          if (record.meta?.arrayRef !== undefined || record.meta?.dynamicArray) {
+            if (sheet.arrayCells.length >= limits.paged.structuralRecords) throw new PackageError('resource-limit', `more than ${limits.paged.structuralRecords} array formulas in one sheet`, sheet.partPath)
+            const ref = record.meta.arrayRef
+            sheet.arrayCells.push({ row: record.row, col: record.col, saved: ref === undefined ? undefined : rangeOf(ref) ?? undefined, hasRef: ref !== undefined, dynamic: record.meta.dynamicArray === true })
+          }
           if (++cellsSeen > limits.paged.cells) throw new PackageError('resource-limit', `more than ${limits.paged.cells} cells`, sheet.partPath)
         },
         onRowEnd(row) {
@@ -294,6 +302,12 @@ export async function openImportSession(source: Extract<SourceHandle, { kind: 'b
       await commitPending()
       if (r1 >= 0) sheet.used = { r0, r1, c0, c1 }
       normalizeRowMetadata(sheet.metadata)
+      for (const ref of sheet.metadata.merges) {
+        const rect = rangeOf(ref)
+        if (rect) sheet.mergeRects.push(rect)
+        else sheet.invalidMerges++
+      }
+      sheet.metadata.merges = []
       compressedRead += entry.compressedSize
       // Declared worksheet filters, then tables through the worksheet's own rels (parse.ts order).
       const state = container.finish()
@@ -449,5 +463,16 @@ export async function firstPageOrOutcome(session: PagedImportSession): Promise<I
     if (session.completeness !== 'loading') return session.done
     const settled = await Promise.race([session.done, session.workbook.changed().then(() => undefined)])
     if (settled) return settled
+  }
+}
+
+/** "A1" or "A1:B2" as an ordered inclusive rect; null when unreadable (same rule as the object adapter). */
+export function rangeOf(ref: string): SourceRect | null {
+  try {
+    const [first, last = first] = ref.split(':')
+    const a = parseA1(first), b = parseA1(last)
+    return { r0: Math.min(a.row, b.row), r1: Math.max(a.row, b.row), c0: Math.min(a.col, b.col), c1: Math.max(a.col, b.col) }
+  } catch {
+    return null
   }
 }

@@ -147,6 +147,16 @@ export class ObjectXlsxSheetAdapter implements SourceStore {
     this.dynamicAnchors = dynamic
     this.extent = Object.freeze(r1 < 0 ? { rows: MAX_ROWS, cols: MAX_COLS } : { rows: MAX_ROWS, cols: MAX_COLS, used: { r0, r1, c0, c1 } })
   }
+  /** parse.ts turns an unreadable merge ref into an A1 merge; when the raw refs
+   * are present, those are dropped (and diagnosed) exactly as the paged adapter does. */
+  private validMerges(): XlsxSheet['mergeRanges'] {
+    const raw = this.sheet.merges
+    if (raw.length !== this.sheet.mergeRanges.length) return this.sheet.mergeRanges
+    return this.sheet.mergeRanges.filter((_, i) => parseRange(raw[i]) !== null)
+  }
+  private get invalidMerges(): number {
+    return this.sheet.mergeRanges.length - this.validMerges().length
+  }
   /** Per-column caches retained by this store; it builds pages from the row index. */
   get cachedColumnCount(): number { return 0 }
   /** Coverage gaps this adapter can never close by waiting. */
@@ -158,6 +168,7 @@ export class ObjectXlsxSheetAdapter implements SourceStore {
     if (this.dynamicAnchors.length) {
       out.push({ code: 'coverage-unresolvable', message: 'Dynamic-array spill extents are not available to the source adapter until the S3.1 spill bridge', source: this.dynamicAnchors[0] })
     }
+    if (this.invalidMerges) out.push(invalidMergeDiagnostic(this.invalidMerges))
     if (this.tables === undefined) {
       out.push({ code: 'coverage-unresolvable', message: 'The workbook table inventory could not be read; table bands are unknown' })
     }
@@ -292,7 +303,7 @@ export class ObjectXlsxSheetAdapter implements SourceStore {
     const base = { stamp: this.stamp, merges: [], tables: [], spills: [], drawings: [] }
     const error = this.guard(options) ?? (isValidSourceRect(rect) ? undefined : failure('invalid-source-rect', 'Invalid range'))
     if (error) return { ...base, completeness: 'incomplete', missing: [rect], error }
-    const merges = this.sheet.mergeRanges
+    const merges = this.validMerges()
       .map(m => ({ id: `merge:${m.minRow}:${m.minCol}:${m.maxRow}:${m.maxCol}`, range: { r0: m.minRow, r1: m.maxRow, c0: m.minCol, c1: m.maxCol }, anchor: { row: m.minRow, col: m.minCol } }))
       .filter(m => isValidSourceRect(m.range) && intersects(m.range, rect))
     const tables = (this.tables ?? [])
@@ -416,6 +427,7 @@ export function buildGeometry(
 /** Wraps an already-parsed workbook by reference (no clone). Sheet ids use the
  * parser's stable workbook identity; documents are separated by docId. */
 export { toPayload, isUnavailable, isPopulated, intersects, parseRange }
+export const invalidMergeDiagnostic = (n: number): WorkerDiagnostic => ({ code: 'invalid-merge-ref', message: `Ignored ${n} merge${n === 1 ? '' : 's'} with an unreadable range` })
 export function createObjectWorkbookSource(doc: XlsxDocument, docId: string, options: ObjectSourceOptions = {}): WorkbookSource {
   const maxCells = options.readRowsMaxCells ?? READ_ROWS_MAX_CELLS
   const policy = options.valuePolicy ?? 'engine'

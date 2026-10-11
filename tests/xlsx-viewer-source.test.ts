@@ -12,7 +12,8 @@ import {
   type ColumnLanes, type OverviewGroup, type SourceStore,
 } from '../src/xlsx/view/contracts'
 import { SOURCE_BLANK, SOURCE_BOOLEAN, SOURCE_ERROR, SOURCE_NUMBER, SOURCE_STRING, SOURCE_UNAVAILABLE, valueSourceFromStore } from '../src/xlsx/view/valueIndex'
-import { xlsxBytes } from './helpers/xlsx-package'
+import { xlsxBytes, xlsxEntries } from './helpers/xlsx-package'
+import { buildZip } from './helpers/zip-builder'
 
 async function storeOf(sheetData: string, sharedStrings?: string[], policy: 'engine' | 'cached' = 'cached'): Promise<SourceStore> {
   const pkg = await OfficePackage.load(xlsxBytes({ sheetData, sharedStrings, styles: '<cellXfs count="3"><xf numFmtId="0"/><xf numFmtId="0"/><xf numFmtId="14"/></cellXfs>' }))
@@ -296,3 +297,31 @@ describe('small/large adapter parity (S1.2, same file, cached policy)', () => {
     })
   }
 })
+
+describe('review round 1 (opencode) parity findings', () => {
+  it('NIT 4: several direct <t> in one <si> concatenate on both adapters', async () => {
+    const withSst = xlsxBytesRaw('<si><t>ab</t><t>cd</t></si>', '<row r="1"><c r="A1" t="s"><v>0</v></c></row>')
+    const small = (await objectSource(withSst)).store('1'), large = (await pagedSource(withSst)).source.store('1')
+    const a = await small.readCell({ row: 0, col: 0 }, opts(small)), b = await large.readCell({ row: 0, col: 0 }, opts(large))
+    expect(b).toEqual(a)
+    expect(a).toMatchObject({ kind: 'cell', cell: { value: 'abcd' } })
+  })
+
+  it('NIT 5: a garbage merge ref is dropped by both adapters with the same typed diagnostic', async () => {
+    const bytes = xlsxBytes({ sheetData: rowsOf(3), afterSheetData: '<mergeCells count="2"><mergeCell ref="garbage"/><mergeCell ref="B1:C2"/></mergeCells>' })
+    const small = await objectSource(bytes), large = (await pagedSource(bytes)).source
+    for (const source of [small, large]) {
+      const store = source.store('1')
+      const s = await store.queryStructural(FULL, opts(store))
+      expect(s.merges.map((m) => m.id)).toEqual(['merge:0:1:1:2'])
+      expect(s.completeness).toBe('complete')
+      expect(source.coverageDiagnostics?.('1')).toContainEqual({ code: 'invalid-merge-ref', message: 'Ignored 1 merge with an unreadable range' })
+    }
+  })
+})
+const rowsOf = (n: number) => Array.from({ length: n }, (_, r) => `<row r="${r + 1}"><c r="A${r + 1}"><v>${r}</v></c></row>`).join('')
+function xlsxBytesRaw(siXml: string, sheetData: string): Uint8Array {
+  const entries = xlsxEntries({ sheetData })
+  entries.push({ name: 'xl/sharedStrings.xml', data: `<?xml version="1.0"?><sst xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">${siXml}</sst>` })
+  return buildZip(entries).bytes
+}
