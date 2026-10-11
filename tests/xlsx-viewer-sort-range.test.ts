@@ -253,29 +253,37 @@ describe('ambiguous and invalid inputs', () => {
     })
   })
   it('never coerces a disjoint selection into its bounding rectangle', async () => {
-    const { store, index } = await f5Setup()
-    const selection = sel(0, 3, [
+    const rows = headerGrid()
+    rows[100] = [fixtureCell(42)]
+    const store = gridStore(rows, 101)
+    const selection = sel(0, 1, [
       { rows: { kind: 'intervals', intervals: [{ r0: 0, r1: 1 }] }, cols: [{ c0: 0, c1: 1 }] },
       { rows: { kind: 'intervals', intervals: [{ r0: 100, r1: 100 }] }, cols: [{ c0: 0, c1: 0 }] },
     ])
-    const result = await detectOperationRange(request(store, index, selection))
-    expect(result.kind).toBe('complete')
-    if (result.kind === 'complete') {
-      expect(result.range).toEqual({ r0: 0, r1: 9, c0: 0, c1: 9, headerRows: 0, totalsRows: 0 })
-      expect(result.source).toEqual({ kind: 'region' })
-      expect(result.range.r1).toBeLessThan(100)
-    }
+    const result = await detectOperationRange(request(store, emptyIndex(store), selection))
+    expect(result).toEqual(done(store, { r0: 0, r1: 3, c0: 0, c1: 1, headerRows: 1, totalsRows: 0 }, { kind: 'region' }, 'heuristic'))
   })
   it('seeds region detection from the active cell for full-column selections', async () => {
-    const { store, index } = await f5Setup()
-    const selection = sel(0, 3, [
+    const store = gridStore(headerGrid())
+    const selection = sel(0, 1, [
       { rows: { kind: 'intervals', intervals: [{ r0: 0, r1: MAX_ROWS - 1 }] }, cols: [{ c0: 0, c1: 0 }] },
     ])
-    const result = await detectOperationRange(request(store, index, selection))
-    expect(result.kind).toBe('complete')
-    if (result.kind === 'complete') {
-      expect(result.range).toMatchObject({ r0: 0, r1: 9 })
-      expect(result.source).toEqual({ kind: 'region' })
+    expect(await detectOperationRange(request(store, emptyIndex(store), selection))).toEqual(
+      done(store, { r0: 0, r1: 3, c0: 0, c1: 1, headerRows: 1, totalsRows: 0 }, { kind: 'region' }, 'heuristic'),
+    )
+  })
+  it('refuses a malformed explicit selection part instead of falling back to region detection', async () => {
+    const store = gridStore(headerGrid())
+    const invalid = { kind: 'refused', refusal: { reason: 'invalid-range', message: expect.any(String) } }
+    const parts: GridSelection['ranges'][] = [
+      [{ rows: { kind: 'intervals', intervals: [{ r0: 2, r1: 1 }] }, cols: [{ c0: 0, c1: 1 }] }],
+      [{ rows: { kind: 'intervals', intervals: [{ r0: 0, r1: 2 }] }, cols: [{ c0: 0, c1: MAX_COLS }] }],
+      [{ rows: { kind: 'intervals', intervals: [{ r0: 0, r1: 2 }] }, cols: [] }],
+      [{ rows: { kind: 'intervals', intervals: [] }, cols: [{ c0: 0, c1: 1 }] }],
+      [{ rows: { kind: 'intervals', intervals: [{ r0: 0, r1: 1.5 }] }, cols: [{ c0: 0, c1: 1 }] }],
+    ]
+    for (const ranges of parts) {
+      expect(await detectOperationRange(request(store, emptyIndex(store), sel(1, 0, ranges)))).toEqual(invalid)
     }
   })
   it('uses an explicit contiguous selection as the operation range', async () => {
@@ -295,6 +303,43 @@ describe('ambiguous and invalid inputs', () => {
     expect(await detectOperationRange(request(store, index, sel(50, 50), { usedRange: badUsed }))).toEqual({
       kind: 'refused', refusal: { reason: 'invalid-range', message: expect.any(String) },
     })
+  })
+})
+
+describe('table overlap of derived ranges', () => {
+  const ambiguous = { kind: 'refused', refusal: { reason: 'ambiguous-selection', message: expect.any(String) } }
+  const withTables = (store: SourceStore, tables: StructuralResult['tables']) => new StructuralIndex({
+    stamp: store.stamp, completeness: 'complete', merges: [], spills: [], drawings: [], missing: [], tables,
+  })
+  it('refuses a current region that overlaps a table not containing the active cell', async () => {
+    const { store, index } = await f5Setup()
+    // F5's block 0..9 x 0..9 overlaps table-0 (rows 4..20, cols 0..3); (0,3) lies outside it.
+    expect(await detectOperationRange(request(store, index, sel(0, 3)))).toEqual(ambiguous)
+    expect(await admitSortRange(request(store, index, sel(0, 0)))).toEqual(ambiguous)
+  })
+  it('refuses a current region that fully contains a smaller table', async () => {
+    const store = gridStore(headerGrid())
+    const structure = withTables(store, [{ id: 'inner', range: { r0: 2, r1: 3, c0: 1, c1: 1 }, headerRows: 0, totalsRows: 0 }])
+    expect(await detectOperationRange(request(store, structure, sel(0, 0)))).toEqual(ambiguous)
+  })
+  it('refuses an explicit selection that partially overlaps a table', async () => {
+    const store = gridStore(headerGrid())
+    const structure = withTables(store, [{ id: 't', range: { r0: 2, r1: 3, c0: 0, c1: 1 }, headerRows: 0, totalsRows: 0 }])
+    const selection = sel(1, 0, [{ rows: { kind: 'intervals', intervals: [{ r0: 1, r1: 2 }] }, cols: [{ c0: 0, c1: 1 }] }])
+    expect(await detectOperationRange(request(store, structure, selection))).toEqual(ambiguous)
+  })
+  it('routes a used fallback that exactly equals a table through the table path', async () => {
+    const store = gridStore(headerGrid())
+    const table = { id: 't', range: { r0: 0, r1: 3, c0: 0, c1: 1 }, headerRows: 1 as const, totalsRows: 1 as const }
+    const structure = withTables(store, [table])
+    expect(await detectOperationRange(request(store, structure, sel(2, 5)))).toEqual(
+      done(store, { r0: 0, r1: 3, c0: 0, c1: 1, headerRows: 1, totalsRows: 1 }, { kind: 'table', id: 't' }, 'metadata'),
+    )
+  })
+  it('refuses a used fallback that overlaps a table without equalling it', async () => {
+    const store = gridStore(headerGrid())
+    const structure = withTables(store, [{ id: 't', range: { r0: 0, r1: 2, c0: 0, c1: 1 }, headerRows: 1, totalsRows: 0 }])
+    expect(await detectOperationRange(request(store, structure, sel(3, 5)))).toEqual(ambiguous)
   })
 })
 
@@ -402,9 +447,13 @@ describe('structural admission through the shared guard', () => {
     }
   })
   it('refuses intersecting merges through the guard', async () => {
-    const { store, index } = await f5Setup()
-    expect(await admitSortRange(request(store, index, sel(0, 0)))).toEqual({
-      kind: 'refused', refusal: { reason: 'merge', range: { r0: 0, r1: 1, c0: 0, c1: 1 } },
+    const store = gridStore(headerGrid())
+    const structure = new StructuralIndex({
+      stamp: store.stamp, completeness: 'complete', tables: [], spills: [], drawings: [], missing: [],
+      merges: [{ id: 'm', range: { r0: 2, r1: 2, c0: 5, c1: 6 }, anchor: { row: 2, col: 5 } }],
+    })
+    expect(await admitSortRange(request(store, structure, sel(1, 0)))).toEqual({
+      kind: 'refused', refusal: { reason: 'merge', range: { r0: 2, r1: 2, c0: 5, c1: 6 } },
     })
   })
   it('refuses child-only spills at derivation time', async () => {
