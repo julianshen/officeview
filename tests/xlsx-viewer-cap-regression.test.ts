@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'vitest'
 import { createCanvas } from 'canvas'
 import JSZip from 'jszip'
-import { computeMetrics, renderSheet, renderSheetViewport, STATIC_SHEET_BUDGET, StaticExportLimitError } from '../src/xlsx/render'
+import { computeMetrics, computePrintMetrics, renderPrintPage, renderSheet, renderSheetViewport, STATIC_SHEET_BUDGET, StaticExportLimitError } from '../src/xlsx/render'
 import { OfficePackage } from '../src/core/zip'
 import { parseXlsx } from '../src/xlsx/parse'
 import { buildXlsx } from '../src/testdata/ooxml-builders'
@@ -455,5 +455,55 @@ describe('review round 1 (Codex findings)', () => {
     const out = recorder()
     expect(() => renderSheet(sheet, out.ctx, { ...m, exportLimits: [] })).toThrow(StaticExportLimitError)
     expect(out.find('BeyondCap')).toEqual([])
+  })
+})
+
+describe('review round 2 (Codex findings)', () => {
+  const source = { partPath: 'd', treePath: 't', element: 'sp', representation: 'native' as const }
+  test('F4: overflow dependencies obey the four-device-pixel rule', () => {
+    // Column A is 5px wide: 2.5 device px at 50%. B and the visible pane are wide.
+    const sheet = sheetOf([{ index: 0, cells: [cell(0, 0, 'Overflow from tiny A'), cell(0, 1, 'B text'), cell(0, 3, 'D1')] }], [{ min: 0, max: 0, widthChars: 0 }])
+    const geometry = ready(sheet)
+    expect(geometry.metrics.cols.size(0)).toBe(5)
+    const plan = planViewport(geometry, { box: { x: 5 + 64 * 2, y: 0, width: 200, height: 100 }, zoom: 0.5, deviceScale: 1 })
+    if (plan.kind !== 'detail') throw new Error(`expected detail, got ${plan.kind}`)
+    const cols = plan.cells.map(placed => placed.source.col)
+    expect(cols).toContain(1)
+    expect(cols).toContain(3)
+    expect(cols).not.toContain(0)
+  })
+  test('F5: a group heavier than the record budget is coarse before any node is painted', () => {
+    let fills = 0
+    const child = (i: number) => Object.defineProperty({ xEmu: (i % 100) * 9525, yEmu: Math.floor(i / 100) * 9525, widthEmu: 9525, heightEmu: 9525, geometry: 'rect', source }, 'fill', { get() { fills++; return 'FF0000' }, enumerable: true })
+    const group = { xEmu: 0, yEmu: 0, widthEmu: 100 * 9525, heightEmu: 300 * 9525, geometry: 'rect', source,
+      group: { off: { x: 0, y: 0 }, ext: { width: 100 * 9525, height: 300 * 9525 }, chOff: { x: 0, y: 0 }, chExt: { width: 100 * 9525, height: 300 * 9525 } },
+      children: Array.from({ length: 25_000 }, (_, i) => child(i)) }
+    const sheet = { ...sheetOf([{ index: 0, cells: [] }]), drawings: [group] } as unknown as XlsxSheet
+    const geometry = ready(sheet)
+    fills = 0
+    const out = recorder(64, 20)
+    expect(renderSheetViewport(sheet, out.ctx, geometry, view(0, 0, 64, 20)).kind).toBe('coarse')
+    expect(fills).toBe(0)
+  })
+  test('F5: drawing queries are visit-bounded; far drawings are pruned without coarse fallback', () => {
+    const rect = (xPx: number) => ({ xEmu: xPx * 9525, yEmu: 0, widthEmu: 9525 * 10, heightEmu: 9525 * 10, geometry: 'rect', fill: 'FF0000', source })
+    const far = { ...sheetOf([{ index: 0, cells: [] }]), drawings: Array.from({ length: 50_000 }, (_, i) => rect(100_000 + i * 30)) } as unknown as XlsxSheet
+    expect(planViewport(ready(far), view(0, 0, 64, 20))).toMatchObject({ kind: 'detail', drawings: [] })
+    // Same rows, alternating far left/right: no bounding box prunes them, so the
+    // query exhausts its visit budget and the frame is coarse instead of scanning all.
+    const straddle = { ...sheetOf([{ index: 0, cells: [] }]), drawings: Array.from({ length: 50_000 }, (_, i) => rect(i % 2 ? 100_000 + i * 30 : -100_000 - i * 30)) } as unknown as XlsxSheet
+    expect(planViewport(ready(straddle), view(0, 0, 64, 20))).toMatchObject({ kind: 'coarse', diagnostics: [expect.objectContaining({ code: 'detail-limit' })] })
+  })
+  test('F7: a bounded request touching a merge truncated by the grid is refused', async () => {
+    const sheet = { ...sheetOf([{ index: 0, cells: [cell(0, 0, 'Anchor'), cell(0, 1, 'B1')] }]), merges: ['A1:A20001'], mergeRanges: [{ minRow: 0, minCol: 0, maxRow: 20_000, maxCol: 0 }] }
+    const touching = recorder(64, 20)
+    expect(() => renderSheet(sheet, touching.ctx, undefined, undefined, {}, { x: 0, y: 0, width: 64, height: 20 })).toThrow(StaticExportLimitError)
+    expect(touching.find('Anchor')).toEqual([])
+    const beside = recorder(64, 20)
+    expect(() => renderSheet(sheet, beside.ctx, undefined, undefined, {}, { x: 64, y: 0, width: 64, height: 20 })).not.toThrow()
+    expect(beside.find('B1')).toHaveLength(1)
+    const m = computeMetrics(sheet)
+    const print = computePrintMetrics(sheet, m, 96)
+    expect(() => renderPrintPage(sheet, recorder(64, 64).ctx, m, print, 0, 0)).toThrow(StaticExportLimitError)
   })
 })
