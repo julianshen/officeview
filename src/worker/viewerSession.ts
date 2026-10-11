@@ -13,7 +13,7 @@
  */
 import type {
   AuthoritativeCell, AxisMetrics, AxisSizeInterval, CacheIdentity, CellRead, ColumnEntry, ColumnQuery,
-  CompactSourceRowSet, FilterSpec, GridSelection, IntervalSet, OperationRefusal, OverviewGroup, Page,
+  CompactSourceRowSet, FilterSpec, ProfileId, GridSelection, IntervalSet, OperationRefusal, OverviewGroup, Page,
   PopulatedQuery, RangeCompletion, ReadOptions, RowOrder, SingleCellPayload, SortSpec, SourceFailure,
   SourceRowInterval, SourceStamp, SourceStore, SparseRowPage, StructuralResult, ValuePolicy, WorkbookOwner,
 } from '../xlsx/view/contracts'
@@ -29,7 +29,7 @@ import { createSheetMetrics } from '../xlsx/view/projection'
 import { hiddenSourceRowsFromDisplay, sortRowOrder, type SortOptions, type SortResult } from '../xlsx/view/sort'
 import { StructuralIndex, type PopulatedCellSource } from '../xlsx/view/structure'
 import { guardFilter, guardSort } from '../xlsx/view/operationGuard'
-import { INITIAL_GENERATION as INITIAL_VALUE_GEN, isUint32Array } from './viewerProtocol'
+import { INITIAL_GENERATION as INITIAL_VALUE_GEN, isUint32Array, validateBitset } from './viewerProtocol'
 
 const FULL_SHEET: SourceRect = Object.freeze({ r0: 0, r1: MAX_ROWS - 1, c0: 0, c1: MAX_COLS - 1 })
 const READ_ROWS_PAGE = 200
@@ -89,13 +89,17 @@ export function rowSetIntervals(rows: CompactSourceRowSet): SourceRowInterval[] 
       for (const interval of rows.intervals) push(interval.r0, interval.r1)
       return out
     case 'list':
+      if (!isValidCoordinate(rows.r0, 0) || !isValidCoordinate(rows.r1, 0) || rows.r0 > rows.r1 || !isUint32Array(rows.rows)) {
+        throw new RangeError('Invalid row list bounds')
+      }
       for (const row of rows.rows) {
         if (row < rows.r0 || row > rows.r1) throw new RangeError('List row outside bounds')
         push(row, row)
       }
       return out
     case 'bitset': {
-      if (rows.space !== 'source' || !isUint32Array(rows.words)) throw new RangeError('Row set bitset must be source space')
+      // Full encoding check first: axis bounds, word count, zero padding, popcount.
+      validateBitset(rows, 'source')
       for (let row = rows.r0; row <= rows.r1; row++) {
         const offset = row - rows.r0
         if ((rows.words[Math.floor(offset / 32)] >>> (offset % 32)) & 1) push(row, row)
@@ -114,6 +118,10 @@ interface ColumnSlice {
 }
 /** Bounded column page over a sparse sorted slice: populated entries plus explicit
  * blank runs covering every requested row, never a dense row list. */
+/** Column cursors are positional over the requested membership and identical for
+ * the store and the resident prepared view, so preparing a column between pages
+ * keeps an outstanding cursor valid. */
+const columnCursorPrefix = (col: number): string => `col${col}`
 function columnPage(
   slice: ColumnSlice, intervals: readonly SourceRowInterval[], limit: number, cursor: string | undefined, prefix: string,
 ): { items: ColumnEntry[]; nextCursor?: string } {
@@ -144,6 +152,12 @@ function columnPage(
     }
     items.push(slice.entries[k])
     row++
+  }
+  // Normalize past exhausted intervals so a cursor never names row 1,048,576
+  // (or any row outside its interval) and an exhausted query has no cursor.
+  while (at < intervals.length && row > intervals[at].r1) {
+    at++
+    if (at < intervals.length) row = intervals[at].r0
   }
   return at < intervals.length ? { items, nextCursor: `${prefix}:${at}:${row}` } : { items }
 }
@@ -188,7 +202,9 @@ class InterimObjectSheetStore implements SourceStore {
   private readonly rowIndexes: readonly number[]
   private readonly columns = new Map<number, ColumnSlice>()
   private released = false
-  constructor(readonly stamp: SourceStamp, private readonly sheet: XlsxSheet, private readonly tables: readonly TableMetadata[]) {
+  /** `tables` undefined means the workbook table inventory is unavailable (the
+   * parser's fail-closed signal), never "no tables". */
+  constructor(readonly stamp: SourceStamp, private readonly sheet: XlsxSheet, private readonly tables: readonly TableMetadata[] | undefined) {
     const rows = sheet.rows.filter(row => isValidCoordinate(row.index, 0) && row.cells.length)
       .sort((a, b) => a.index - b.index)
     this.rows = rows
@@ -272,7 +288,7 @@ class InterimObjectSheetStore implements SourceStore {
     }
     if (!intervals) return failedPage(this.stamp, failure('unsupported', 'Resident row-set refs are not resolvable by the interim adapter'))
     try {
-      const page = columnPage(this.column(request.col), intervals, request.limit, request.cursor, `objcol${request.col}`)
+      const page = columnPage(this.column(request.col), intervals, request.limit, request.cursor, columnCursorPrefix(request.col))
       return { ...page, completeness: 'complete', stamp: this.stamp }
     } catch (cause) {
       return failedPage(this.stamp, failure('invalid-cursor', (cause as Error).message))
@@ -306,12 +322,23 @@ class InterimObjectSheetStore implements SourceStore {
     const merges = this.sheet.mergeRanges
       .map(m => ({ id: `merge:${m.minRow}:${m.minCol}:${m.maxRow}:${m.maxCol}`, range: { r0: m.minRow, r1: m.maxRow, c0: m.minCol, c1: m.maxCol }, anchor: { row: m.minRow, col: m.minCol } }))
       .filter(m => isValidSourceRect(m.range) && intersects(m.range, rect))
-    const tables = this.tables
+    const tables = (this.tables ?? [])
       .map(t => ({ id: t.id, range: { r0: t.extent.firstRow, r1: t.extent.firstRow + t.extent.rows - 1, c0: t.extent.firstCol, c1: t.extent.firstCol + t.extent.cols - 1 }, headerRows: t.headerRowCount, totalsRows: t.totalsRowCount }))
       .filter(t => isValidSourceRect(t.range) && intersects(t.range, rect))
     const spills = []
+    const missing: SourceRect[] = []
+    const addMissing = (domain: SourceRect) => {
+      const r0 = Math.max(domain.r0, rect.r0), r1 = Math.min(domain.r1, rect.r1)
+      const c0 = Math.max(domain.c0, rect.c0), c1 = Math.min(domain.c1, rect.c1)
+      if (r0 <= r1 && c0 <= c1) missing.push({ r0, r1, c0, c1 })
+    }
     for (const row of this.rows) {
       for (const cell of row.cells) {
+        // A dynamic array's evaluated extent (its generated children) lives in the
+        // formula engine and is not bridged yet (S3.1 spill wiring); the saved
+        // footprint alone would let child rows escape the guards. Its potential
+        // domain, anchor to sheet edge, stays unknown until that bridge lands.
+        if (cell.dynamicArray) addMissing({ r0: cell.row, r1: MAX_ROWS - 1, c0: cell.col, c1: MAX_COLS - 1 })
         if (cell.arrayRef === undefined) continue
         const saved = parseRange(cell.arrayRef)
         const anchorRect = { r0: cell.row, r1: cell.row, c0: cell.col, c1: cell.col }
@@ -320,14 +347,11 @@ class InterimObjectSheetStore implements SourceStore {
       }
     }
     // Drawing anchors are not yet translated from parser output (S3.1 parser
-    // wiring). Report the domain as incomplete instead of a deceptively empty
-    // complete result, so guards wait/refuse rather than authorize.
-    const drawingsPending = (this.sheet.drawings?.length ?? 0) > 0
-    return {
-      ...base, merges, tables, spills,
-      completeness: drawingsPending ? 'incomplete' : 'complete',
-      missing: drawingsPending ? [rect] : [],
-    }
+    // wiring), and an unavailable table inventory cannot prove "no table". Both
+    // report the domain incomplete instead of a deceptively empty complete
+    // result, so guards wait/refuse rather than authorize.
+    if ((this.sheet.drawings?.length ?? 0) > 0 || this.tables === undefined) addMissing(rect)
+    return { ...base, merges, tables, spills, completeness: missing.length ? 'incomplete' : 'complete', missing }
   }
   async queryOverview(_request: unknown, options: ReadOptions): Promise<Page<OverviewGroup>> {
     return failedPage(this.stamp, this.guard(options) ?? failure('unsupported', 'Overview aggregates are owned by S1.2'))
@@ -417,7 +441,7 @@ export function createObjectWorkbookSource(doc: XlsxDocument, docId: string): Wo
       if (!store) {
         const { sheet } = find(sheetId)
         const stamp = Object.freeze({ docId, sheetId, valueGen: INITIAL_VALUE_GEN })
-        store = new InterimObjectSheetStore(stamp, sheet, (doc.tables ?? []).filter(table => table.sheetId === sheetId))
+        store = new InterimObjectSheetStore(stamp, sheet, doc.tables?.filter(table => table.sheetId === sheetId))
         stores.set(sheetId, store)
       }
       return store
@@ -452,11 +476,40 @@ export type FilterEvaluator = (input: {
   nowMs: number
   signal: AbortSignal
 }) => Promise<FilterEvaluation>
+export interface PreparedBudget { maxColumns: number; maxBytes: number }
+/** Prepared-column working set per admission profile (§12.4 worker pool). Mobile
+ * keeps fewer resident key columns; unprepared keys still stream from the store,
+ * so up-to-eight-key semantics are identical. */
+export const PREPARED_BUDGETS: Readonly<Record<ProfileId, PreparedBudget>> = Object.freeze({
+  D: Object.freeze({ maxColumns: 8, maxBytes: 64 * 1024 * 1024 }),
+  M: Object.freeze({ maxColumns: 4, maxBytes: 32 * 1024 * 1024 }),
+})
+/** Spec §3 invariant 5: requested columns are prepared in batches of at most eight. */
+export const MAX_PREPARE_BATCH = 8
+const PREPARED_COLUMN_OVERHEAD = 256
+/** Conservative resident estimate: entry/payload objects plus raw UTF-16 strings. */
+function preparedEntryBytes(entry: Extract<ColumnEntry, { kind: 'cell' | 'unavailable' }>): number {
+  const cell = entry.cell
+  const text = (value: unknown) => typeof value === 'string' ? value.length * 2 : 0
+  return 128 + text(cell.value) + text(cell.formula) + text(cell.arrayRef) + text(cell.formulaType)
+}
+export type PrepareOutcome =
+  | { kind: 'complete' }
+  | { kind: 'stale' }
+  | { kind: 'cancelled' }
+  | { kind: 'incomplete'; missing: readonly SourceRect[] }
+  | { kind: 'error'; error: SourceFailure }
+  | { kind: 'quota'; limitBytes: number; requiredBytes?: number }
+  | { kind: 'resource-limit'; message: string }
 export interface SessionOptions {
   /** Cooperative yield for long kernels; S4.2 replaces it with the scheduler. */
   yield?: SortOptions['yield']
   locale?: string
   filterEvaluator?: FilterEvaluator
+  /** Admission profile from the open command; selects PREPARED_BUDGETS. */
+  profile?: ProfileId
+  /** Explicit override of the profile budget (tests, embedders). */
+  preparedBudget?: PreparedBudget
 }
 /** Private draft; commitView publishes it atomically. */
 export interface ViewDraft {
@@ -492,7 +545,7 @@ interface SheetState {
   matches?: (row: SourceRow, filter: FilterSpec) => boolean
   selection: GridSelection
 }
-interface PreparedColumn extends ColumnSlice { stamp: SourceStamp }
+interface PreparedColumn extends ColumnSlice { stamp: SourceStamp; bytes: number }
 const EMPTY_SELECTION: GridSelection = Object.freeze({ active: null, anchor: null, ranges: Object.freeze([]) })
 const matchAll = () => true
 
@@ -501,7 +554,9 @@ export class DocumentSession {
   private readonly workbookValueGen = INITIAL_VALUE_GEN
   private readonly fontGen = 0
   private readonly states = new Map<string, SheetState>()
+  /** Insertion order is recency order (oldest first). */
   private readonly prepared = new Map<string, PreparedColumn>()
+  private preparedBytes = 0
   private readonly structures = new Map<string, StructuralIndex>()
   private published: WorkbookOwner | null = null
   private closed = false
@@ -512,6 +567,9 @@ export class DocumentSession {
     this.activeSheetId = source.sheets[0].sheetId
   }
   get globalViewGen(): number { return this.globalGen }
+  private get budget(): PreparedBudget {
+    return this.options.preparedBudget ?? PREPARED_BUDGETS[this.options.profile ?? 'D']
+  }
   get isClosed(): boolean { return this.closed }
   get publishedWorkbookIndex(): WorkbookOwner | null { return this.published }
   hasSheet(sheetId: string): boolean { return this.source.sheets.some(sheet => sheet.sheetId === sheetId) }
@@ -592,18 +650,38 @@ export class DocumentSession {
     return this.prepared.has(this.preparedKey(this.source.store(sheetId).stamp, col))
   }
   /** Resident prepared columns, value-owned: they survive view commits and are
-   * read from the store at most once per value generation. */
-  async prepareColumns(owner: CacheIdentity, cols: readonly number[], signal: AbortSignal): Promise<
-    { kind: 'complete' } | Exclude<OperationOutcome, { kind: 'committed' | 'refused' | 'quota' }>
-  > {
+   * read from the store at most once per value generation while they stay in
+   * the admitted working set. A batch is atomic: staged pages are charged
+   * against the profile budget BEFORE they are retained, and nothing is kept
+   * when admission fails. Room is made by dropping least-recently-used prepared
+   * columns outside the batch (they are rebuildable caches; S4.3 owns the full
+   * document-wide LRU across pages/views). */
+  async prepareColumns(owner: CacheIdentity, cols: readonly number[], signal: AbortSignal): Promise<PrepareOutcome> {
     if (!this.isCurrent(owner)) return { kind: 'stale' }
+    const batch = [...new Set(cols)]
+    if (batch.length > MAX_PREPARE_BATCH) {
+      return { kind: 'resource-limit', message: `At most ${MAX_PREPARE_BATCH} columns are prepared per batch` }
+    }
+    for (const col of batch) {
+      if (!isValidCoordinate(0, col)) return { kind: 'error', error: failure('invalid-coordinate', 'Invalid column') }
+    }
+    const budget = this.budget
+    if (batch.length > budget.maxColumns) return { kind: 'quota', limitBytes: budget.maxBytes }
     const store = this.source.store(owner.sheetId)
     const stamp = store.stamp
-    for (const col of cols) {
-      if (!isValidCoordinate(0, col)) return { kind: 'error', error: failure('invalid-coordinate', 'Invalid column') }
-      const key = this.preparedKey(stamp, col)
+    const keys = batch.map(col => this.preparedKey(stamp, col))
+    let protectedBytes = 0
+    for (const key of keys) {
+      const existing = this.prepared.get(key)
+      if (existing) protectedBytes += existing.bytes
+    }
+    const staged: { key: string; column: PreparedColumn }[] = []
+    let stagedBytes = 0
+    for (let i = 0; i < batch.length; i++) {
+      const col = batch[i], key = keys[i]
       if (this.prepared.has(key)) continue
       const rows: number[] = [], entries: Extract<ColumnEntry, { kind: 'cell' | 'unavailable' }>[] = []
+      let bytes = PREPARED_COLUMN_OVERHEAD
       let cursor: string | undefined
       const seen = new Set<string>()
       do {
@@ -611,12 +689,22 @@ export class DocumentSession {
           col, rows: { kind: 'intervals', intervals: [{ r0: 0, r1: MAX_ROWS - 1 }] }, limit: PREPARE_PAGE_LIMIT, cursor,
         }, { signal, stamp })
         if (signal.aborted) return { kind: 'cancelled' }
+        if (this.closed) return { kind: 'stale' }
         if (page.error) return page.error.code === 'cancelled' ? { kind: 'cancelled' } : { kind: 'error', error: page.error }
         if (!sameStamp(page.stamp, stamp)) return { kind: 'stale' }
         for (const item of page.items) {
           if (item.kind === 'unknown') return { kind: 'incomplete', missing: [{ r0: item.r0, r1: item.r1, c0: col, c1: col }] }
           if (item.kind === 'error') return { kind: 'error', error: failure(item.code, 'Column source failed', item.retryable) }
-          if (item.kind === 'cell' || item.kind === 'unavailable') { rows.push(item.row); entries.push(item) }
+          if (item.kind === 'cell' || item.kind === 'unavailable') {
+            bytes += preparedEntryBytes(item)
+            // Admission before retention: the staged peak may never exceed the
+            // budget left after the columns this batch must keep.
+            if (protectedBytes + stagedBytes + bytes > budget.maxBytes) {
+              return { kind: 'quota', limitBytes: budget.maxBytes, requiredBytes: protectedBytes + stagedBytes + bytes }
+            }
+            rows.push(item.row)
+            entries.push(item)
+          }
         }
         if (page.completeness !== 'complete') return { kind: 'incomplete', missing: [{ r0: 0, r1: MAX_ROWS - 1, c0: col, c1: col }] }
         cursor = page.nextCursor
@@ -625,9 +713,33 @@ export class DocumentSession {
           seen.add(cursor)
         }
       } while (cursor !== undefined)
-      this.prepared.set(key, { stamp, rows, entries })
+      staged.push({ key, column: { stamp, rows, entries, bytes } })
+      stagedBytes += bytes
+    }
+    if (!this.isCurrent(owner)) return { kind: 'stale' }
+    const keep = new Set(keys)
+    // Evict least-recently-used columns outside this batch until it fits.
+    for (const [key, column] of this.prepared) {
+      const fitsCount = this.prepared.size + staged.length <= budget.maxColumns
+      const fitsBytes = this.preparedBytes + stagedBytes <= budget.maxBytes
+      if (fitsCount && fitsBytes) break
+      if (keep.has(key)) continue
+      this.prepared.delete(key)
+      this.preparedBytes -= column.bytes
+    }
+    for (const key of keys) {
+      const existing = this.prepared.get(key)
+      if (existing) { this.prepared.delete(key); this.prepared.set(key, existing) }
+    }
+    for (const { key, column } of staged) {
+      this.prepared.set(key, column)
+      this.preparedBytes += column.bytes
     }
     return { kind: 'complete' }
+  }
+  /** Retained prepared working set (document-wide, all sheets). */
+  preparedStats(): { columns: number; bytes: number } {
+    return { columns: this.prepared.size, bytes: this.preparedBytes }
   }
   /** The sheet store with prepared columns served from resident memory. */
   preparedStore(sheetId: string): SourceStore {
@@ -645,8 +757,11 @@ export class DocumentSession {
       ensureComplete: (rect, options) => store.ensureComplete(rect, options),
       release: () => store.release(),
       async queryColumn(request, options) {
-        const prepared = session.prepared.get(session.preparedKey(store.stamp, request.col))
+        const key = session.preparedKey(store.stamp, request.col)
+        const prepared = session.prepared.get(key)
         if (!prepared) return store.queryColumn(request, options)
+        session.prepared.delete(key)
+        session.prepared.set(key, prepared)
         if (options.signal?.aborted) return failedPage(store.stamp, failure('cancelled', 'Request cancelled'))
         if (!options.stamp || !sameStamp(options.stamp, prepared.stamp)) return failedPage(store.stamp, failure('stale-source', 'Source owner changed', true))
         if (!Number.isSafeInteger(request.limit) || request.limit <= 0) return failedPage(store.stamp, failure('invalid-source-rect', 'Invalid limit'))
@@ -656,7 +771,7 @@ export class DocumentSession {
         }
         if (!intervals) return store.queryColumn(request, options)
         try {
-          return { ...columnPage(prepared, intervals, request.limit, request.cursor, `prep${request.col}`), completeness: 'complete', stamp: prepared.stamp }
+          return { ...columnPage(prepared, intervals, request.limit, request.cursor, columnCursorPrefix(request.col)), completeness: 'complete', stamp: prepared.stamp }
         } catch (cause) {
           return failedPage(store.stamp, failure('invalid-cursor', (cause as Error).message))
         }
@@ -748,16 +863,22 @@ export class DocumentSession {
       order: state.order, visibility: candidate.visibility, sort: state.sort, filter: normalized, matches,
     }) }
   }
-  async valueQuery(owner: CacheIdentity, query: ColumnQuery, signal: AbortSignal): Promise<Page<ColumnEntry> | { kind: 'stale' }> {
+  /** Re-checks cancellation and the full owner after the await: a page computed
+   * while a newer view committed is never published under the old owner. */
+  async valueQuery(owner: CacheIdentity, query: ColumnQuery, signal: AbortSignal): Promise<Page<ColumnEntry> | { kind: 'stale' } | { kind: 'cancelled' }> {
     if (!this.isCurrent(owner)) return { kind: 'stale' }
     const store = this.preparedStore(owner.sheetId)
-    return store.queryColumn(query, { signal, stamp: store.stamp })
+    const page = await store.queryColumn(query, { signal, stamp: store.stamp })
+    if (signal.aborted) return { kind: 'cancelled' }
+    if (!this.isCurrent(owner)) return { kind: 'stale' }
+    return page
   }
   async release(): Promise<void> {
     if (this.closed) return
     this.closed = true
     this.states.clear()
     this.prepared.clear()
+    this.preparedBytes = 0
     this.structures.clear()
     await this.source.release()
   }

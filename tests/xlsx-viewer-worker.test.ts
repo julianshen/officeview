@@ -36,6 +36,8 @@ function objectDoc(sheets: SheetInput[]): XlsxDocument {
       })),
       cols: [], merges: [], mergeRanges: sheet.merges ?? [],
     })),
+    // A fully inspected inventory with no table parts (undefined = unavailable).
+    tables: [],
   }
 }
 function deepFreeze<T>(value: T): T {
@@ -323,14 +325,16 @@ describe('resident viewer worker (S4.1)', () => {
     const client = createViewerClient(port, 'c')
     const opened = await client.send({ kind: 'open', requestId: client.nextRequestId(), docId: 'doc', source: { kind: 'object', document: doc }, profile: 'D' })
     expect(opened.kind).toBe('complete')
-    expect(kernel.ledger()).toEqual({ copies: 0, copiedBytes: 0, transfers: 0, transferredBytes: 0 })
+    expect(kernel.ledger()).toEqual({ copies: 0, copiedBytes: 0, transfers: 0, transferredBytes: 0, estimatedCopiedBytes: 0 })
     const owner = initialIdentity('doc', 'A')
     const cols = new Uint16Array([0])
     const prepared = await client.send({ kind: 'prepareColumns', requestId: client.nextRequestId(), owner, cols })
     expect(cols.byteLength).toBe(0) // ownership moved to the worker
-    expect(client.ledger()).toEqual({ copies: 0, copiedBytes: 0, transfers: 1, transferredBytes: 2 })
+    // One estimated copy: the object source document structured-cloned at open.
+    expect(client.ledger()).toMatchObject({ copies: 1, transfers: 1, transferredBytes: 2 })
+    expect(client.ledger().copiedBytes).toBe(client.ledger().estimatedCopiedBytes)
     expect(completed(prepared)).toMatchObject({ kind: 'prepareColumns' })
-    expect(kernel.ledger()).toEqual({ copies: 1, copiedBytes: 2, transfers: 1, transferredBytes: 2 })
+    expect(kernel.ledger()).toEqual({ copies: 1, copiedBytes: 2, transfers: 1, transferredBytes: 2, estimatedCopiedBytes: 0 })
     const before = kernel.ledger()
     const sorted = await client.send({ kind: 'sort', requestId: client.nextRequestId(), owner, spec: sortSpec(4, 0) })
     const delta = deltaOf(sorted)
@@ -339,7 +343,7 @@ describe('resident viewer worker (S4.1)', () => {
     expect(arrays.length).toBe(3)
     expect(kernel.ledger()).toEqual({
       copies: before.copies + arrays.length, copiedBytes: before.copiedBytes + bytes,
-      transfers: before.transfers + arrays.length, transferredBytes: before.transferredBytes + bytes,
+      transfers: before.transfers + arrays.length, transferredBytes: before.transferredBytes + bytes, estimatedCopiedBytes: 0,
     })
     const resident = kernel.session('doc')!.view('A').order.bands[0]
     expect(resident.sourceAtOffset.byteLength).toBe(20)
@@ -358,10 +362,10 @@ describe('resident viewer worker (S4.1)', () => {
     const kernel = new ViewerKernel({ parse }, quiet)
     const blob = new Blob([await workbookBytes()])
     completed(await run(kernel, { kind: 'open', requestId: rid(), docId: 'doc', source: { kind: 'blob', blob }, profile: 'D' }))
-    expect(kernel.ledger()).toEqual({ copies: 1, copiedBytes: blob.size, transfers: 0, transferredBytes: 0 })
+    expect(kernel.ledger()).toEqual({ copies: 1, copiedBytes: blob.size, transfers: 0, transferredBytes: 0, estimatedCopiedBytes: 0 })
     deltaOf(await run(kernel, { kind: 'sort', requestId: rid(), owner: initialIdentity('doc', '1'), spec: sortSpec(4, 1) }))
     // Plus the two 5-row Uint32 band copies (2 x 20B); no hidden rows, so no bitset.
-    expect(kernel.ledger()).toEqual({ copies: 3, copiedBytes: blob.size + 40, transfers: 2, transferredBytes: 40 })
+    expect(kernel.ledger()).toEqual({ copies: 3, copiedBytes: blob.size + 40, transfers: 2, transferredBytes: 40, estimatedCopiedBytes: 0 })
   })
 
   it('refuses guarded operations as operation-refused errors with the owner unchanged', async () => {
@@ -422,3 +426,196 @@ function draftOf(session: DocumentSession, sheetId: string): ViewDraft {
   const view = session.view(sheetId)
   return { order: view.order, visibility: view.visibility, sort: null, filter: null }
 }
+
+function deferred<T = void>() {
+  let resolve!: (value: T) => void
+  const promise = new Promise<T>(done => { resolve = done })
+  return { promise, resolve }
+}
+const tick = () => new Promise(resolve => setTimeout(resolve, 0))
+
+describe('S4.1 review findings (codex)', () => {
+  it('#1 refuses a sort over generated dynamic-spill children whose evaluated extent is not resolved', async () => {
+    // SEQUENCE(3,1) at A1 with saved footprint A1; A2:A3 are engine-generated children.
+    const doc = objectDoc([{ sheetId: 'A', rows: column([1, 2, 3]) }])
+    Object.assign(doc.sheets[0].rows[0].cells[0], { formula: '_xlfn.SEQUENCE(3,1)', dynamicArray: true, arrayRef: 'A1' })
+    const kernel = new ViewerKernel({ parse: async () => doc }, quiet)
+    completed(await run(kernel, { kind: 'open', requestId: rid(), docId: 'doc', source: { kind: 'object', document: doc }, profile: 'D' }))
+    const spec: SortSpec = { range: { r0: 1, r1: 2, c0: 0, c1: 0, headerRows: 0, totalsRows: 0 }, keys: [{ col: 0, order: 'desc' }], caseSensitive: false }
+    const out = await run(kernel, { kind: 'sort', requestId: rid(), owner: initialIdentity('doc', 'A'), spec })
+    expect(out).toMatchObject({ kind: 'error', code: 'operation-refused', retryable: false, refusal: { reason: 'incomplete' } })
+    expect(kernel.session('doc')!.globalViewGen).toBe(0)
+  })
+
+  it('#2 copies resident selection buffers into the delta and accounts them', async () => {
+    const doc = objectDoc([{ sheetId: 'A', rows: column([3, 1, 2]) }])
+    const kernel = new ViewerKernel({ parse: async () => doc }, quiet)
+    const port = connectInProcess(kernel)
+    const client = createViewerClient(port, 'sel')
+    completed(await client.send({ kind: 'open', requestId: client.nextRequestId(), docId: 'doc', source: { kind: 'object', document: doc }, profile: 'D' }))
+    const session = kernel.session('doc')!
+    const selection = { active: { row: 0, col: 0 }, anchor: { row: 0, col: 0 }, ranges: [{ rows: { kind: 'list' as const, r0: 0, r1: 2, rows: new Uint32Array([0, 2]) }, cols: [{ c0: 0, c1: 0 }] }] }
+    const committed = await session.commitView('A', { ...draftOf(session, 'A'), selection })
+    const before = kernel.ledger()
+    const first = deltaOf(await client.send({ kind: 'sort', requestId: client.nextRequestId(), owner: committed.identity, spec: sortSpec(2, 0) }))
+    const resident = session.view('A').selection.ranges[0].rows
+    expect(resident.kind === 'list' && resident.rows.length).toBe(2)
+    const sent = first.selection.ranges[0].rows
+    expect(sent.kind === 'list' && [...sent.rows]).toEqual([0, 2])
+    // 2 band arrays (12B each) + 8B selection rows; no hidden rows, so no bitset.
+    expect(kernel.ledger().copies - before.copies).toBe(3)
+    expect(kernel.ledger().copiedBytes - before.copiedBytes).toBe(32)
+    const second = deltaOf(await client.send({ kind: 'sort', requestId: client.nextRequestId(), owner: first.owner, spec: sortSpec(2, 0, 0, 'desc') }))
+    const again = second.selection.ranges[0].rows
+    expect(again.kind === 'list' && [...again.rows]).toEqual([0, 2])
+    client.dispose()
+  })
+
+  it('#3 a query that finishes after a newer commit replies stale, never complete for the old owner', async () => {
+    const doc = objectDoc([{ sheetId: 'A', rows: [[2, 'b'], [1, 'a']] }])
+    const tracked = instrumented(createObjectWorkbookSource(doc, 'doc'))
+    const gate = deferred()
+    const inner = tracked.wrapped.store('A')
+    const delayed = inner.queryColumn
+    inner.queryColumn = async (request, options) => {
+      if (request.col === 1) await gate.promise
+      return delayed(request, options)
+    }
+    const kernel = new ViewerKernel({ parse: async () => doc, openSource: async () => tracked.wrapped }, quiet)
+    completed(await run(kernel, { kind: 'open', requestId: rid(), docId: 'doc', source: { kind: 'object', document: doc }, profile: 'D' }))
+    const owner = initialIdentity('doc', 'A')
+    const query = run(kernel, { kind: 'valueQuery', requestId: rid(), owner, query: { col: 1, rows: { kind: 'intervals', intervals: [{ r0: 0, r1: 1 }] }, limit: 4 } })
+    await tick()
+    expect(deltaOf(await run(kernel, { kind: 'sort', requestId: rid(), owner, spec: sortSpec(1, 1) })).owner.viewGen).toBe(1)
+    gate.resolve()
+    expect(await query).toMatchObject({ kind: 'error', commandKind: 'valueQuery', code: 'stale-source', owner })
+  })
+
+  it('#4 the client never resolves a request from a reply with another command kind or owner', async () => {
+    const posted: { requestId: string }[] = []
+    let deliver: (event: { data: unknown }) => void = () => {}
+    const port = {
+      postMessage: (message: unknown) => { posted.push(message as { requestId: string }) },
+      addEventListener: (_type: 'message', listener: (event: { data: unknown }) => void) => { deliver = listener },
+      removeEventListener: () => {},
+    }
+    const client = createViewerClient(port)
+    const owner = initialIdentity('doc-a', 'A')
+    let settled: unknown = 'pending'
+    const pending = client.send({ kind: 'prepareColumns', requestId: 'x', owner, cols: new Uint16Array([0]) })
+    void pending.then(out => { settled = out })
+    deliver({ data: { kind: 'complete', commandKind: 'close', requestId: 'x', owner: { docId: 'other' }, diagnostics: [], result: { kind: 'close' } } })
+    deliver({ data: { kind: 'complete', commandKind: 'prepareColumns', requestId: 'x', owner: { ...owner, viewGen: 7 }, diagnostics: [], result: { kind: 'prepareColumns', cols: new Uint16Array([0]) } } })
+    await tick()
+    expect(settled).toBe('pending')
+    expect(client.rejectedReplies).toBe(2)
+    deliver({ data: { kind: 'complete', commandKind: 'prepareColumns', requestId: 'x', owner, diagnostics: [], result: { kind: 'prepareColumns', cols: new Uint16Array([0]) } } })
+    expect(await pending).toMatchObject({ kind: 'complete', commandKind: 'prepareColumns' })
+  })
+
+  it('#5 close during a pending open abandons the open instead of installing a session', async () => {
+    const doc = objectDoc([{ sheetId: 'A', rows: column([1]) }])
+    const gate = deferred()
+    let released = false
+    const source = createObjectWorkbookSource(doc, 'doc')
+    const kernel = new ViewerKernel({
+      parse: async () => doc,
+      openSource: async () => { await gate.promise; return { ...source, sheets: source.sheets, store: id => source.store(id), geometry: id => source.geometry(id), release: async () => { released = true } } },
+    }, quiet)
+    const opening = run(kernel, { kind: 'open', requestId: rid(), docId: 'doc', source: { kind: 'object', document: doc }, profile: 'D' })
+    await tick()
+    expect(await run(kernel, { kind: 'open', requestId: rid(), docId: 'doc', source: { kind: 'object', document: doc }, profile: 'D' })).toMatchObject({ kind: 'error' })
+    expect(await run(kernel, { kind: 'close', requestId: rid(), docId: 'doc' })).toMatchObject({ kind: 'complete', commandKind: 'close' })
+    gate.resolve()
+    expect(await opening).toMatchObject({ kind: 'cancelled', commandKind: 'open' })
+    expect(kernel.session('doc')).toBeUndefined()
+    expect(released).toBe(true)
+  })
+
+  it('#6 an unavailable table inventory blocks guarded operations instead of reporting complete', async () => {
+    const doc = objectDoc([{ sheetId: 'A', rows: column([2, 1]) }])
+    delete (doc as { tables?: unknown }).tables
+    const kernel = new ViewerKernel({ parse: async () => doc }, quiet)
+    completed(await run(kernel, { kind: 'open', requestId: rid(), docId: 'doc', source: { kind: 'object', document: doc }, profile: 'D' }))
+    const out = await run(kernel, { kind: 'sort', requestId: rid(), owner: initialIdentity('doc', 'A'), spec: sortSpec(1, 0) })
+    expect(out).toMatchObject({ kind: 'error', code: 'operation-refused', refusal: { reason: 'incomplete' } })
+    const structural = await createObjectWorkbookSource(doc, 'doc').store('A').queryStructural({ r0: 0, r1: 1, c0: 0, c1: 0 }, { signal: new AbortController().signal, stamp: { docId: 'doc', sheetId: 'A', valueGen: 0 } })
+    expect(structural.completeness).toBe('incomplete')
+  })
+
+  it('#7 prepared columns are admitted against the profile working set', async () => {
+    const row = Array.from({ length: 10 }, (_v, col) => col)
+    const doc = objectDoc([{ sheetId: 'A', rows: [row, row] }])
+    const cols = (...list: number[]) => new Uint16Array(list)
+    const open = async (profile: 'D' | 'M', options = {}) => {
+      const kernel = new ViewerKernel({ parse: async () => doc }, { ...quiet, ...options })
+      completed(await run(kernel, { kind: 'open', requestId: rid(), docId: 'doc', source: { kind: 'object', document: doc }, profile }))
+      return kernel
+    }
+    const owner = initialIdentity('doc', 'A')
+    const mobile = await open('M')
+    expect(await run(mobile, { kind: 'prepareColumns', requestId: rid(), owner, cols: cols(0, 1, 2, 3, 4, 5, 6, 7, 8) })).toMatchObject({ kind: 'error', code: 'resource-limit', retryable: false })
+    expect(await run(mobile, { kind: 'prepareColumns', requestId: rid(), owner, cols: cols(0, 1, 2, 3, 4) })).toMatchObject({ kind: 'quota', resource: 'memory' })
+    expect(mobile.session('doc')!.preparedStats().columns).toBe(0)
+    completed(await run(mobile, { kind: 'prepareColumns', requestId: rid(), owner, cols: cols(0, 1, 2, 3) }))
+    completed(await run(mobile, { kind: 'prepareColumns', requestId: rid(), owner, cols: cols(4, 5, 6, 7) }))
+    expect(mobile.session('doc')!.preparedStats().columns).toBe(4)
+    expect(mobile.session('doc')!.isPrepared('A', 7)).toBe(true)
+    expect(mobile.session('doc')!.isPrepared('A', 0)).toBe(false)
+    const desktop = await open('D')
+    completed(await run(desktop, { kind: 'prepareColumns', requestId: rid(), owner, cols: cols(0, 1, 2, 3, 4, 5, 6, 7) }))
+    expect(desktop.session('doc')!.preparedStats().columns).toBe(8)
+    const tiny = await open('D', { preparedBudget: { maxColumns: 8, maxBytes: 64 } })
+    expect(await run(tiny, { kind: 'prepareColumns', requestId: rid(), owner, cols: cols(0) })).toMatchObject({ kind: 'quota', resource: 'memory', limitBytes: 64 })
+    expect(tiny.session('doc')!.preparedStats()).toEqual({ columns: 0, bytes: 0 })
+  })
+
+  it('#8 the client accounts whole cloned backing buffers and the cloned source document', async () => {
+    const port = { postMessage: () => {}, addEventListener: () => {}, removeEventListener: () => {} }
+    const client = createViewerClient(port)
+    const big = new ArrayBuffer(1 << 20)
+    client.send({ kind: 'valueQuery', requestId: 'q', owner: initialIdentity('doc', 'A'), query: { col: 0, rows: { kind: 'list', r0: 0, r1: 1, rows: new Uint32Array(big, 0, 1) }, limit: 1 } }).catch(() => {})
+    expect(client.ledger()).toMatchObject({ copies: 1, copiedBytes: 1 << 20, transfers: 0 })
+    const doc = objectDoc([{ sheetId: 'A', rows: column([1]) }])
+    client.send({ kind: 'open', requestId: 'o', docId: 'doc', source: { kind: 'object', document: doc }, profile: 'D' }).catch(() => {})
+    const ledger = client.ledger()
+    expect(ledger.copies).toBe(2)
+    expect(ledger.estimatedCopiedBytes).toBeGreaterThan(0)
+    expect(ledger.copiedBytes).toBe((1 << 20) + ledger.estimatedCopiedBytes)
+    client.dispose()
+  })
+
+  it('#9 column cursors stay valid at the last row and across preparation', async () => {
+    const doc = objectDoc([{ sheetId: 'A', rows: [] }])
+    doc.sheets[0].rows = [{ index: 1_048_575, cells: [{ ref: 'A1048576', row: 1_048_575, col: 0, value: 9, styleIndex: 0, hasCachedValue: true }] }]
+    const store = createObjectWorkbookSource(doc, 'doc').store('A')
+    const options = { signal: new AbortController().signal, stamp: store.stamp }
+    const edge = await store.queryColumn({ col: 0, rows: { kind: 'intervals', intervals: [{ r0: 1_048_574, r1: 1_048_575 }] }, limit: 2 }, options)
+    expect(edge.error).toBeUndefined()
+    expect(edge.items.map(item => item.kind)).toEqual(['blank', 'cell'])
+    expect(edge.nextCursor).toBeUndefined()
+    const kernel = new ViewerKernel({ parse: async () => doc }, quiet)
+    completed(await run(kernel, { kind: 'open', requestId: rid(), docId: 'doc', source: { kind: 'object', document: doc }, profile: 'D' }))
+    const owner = initialIdentity('doc', 'A')
+    const query = (cursor?: string) => ({ col: 0, rows: { kind: 'intervals' as const, intervals: [{ r0: 1_048_570, r1: 1_048_575 }] }, limit: 1, cursor })
+    const first = completed(await run(kernel, { kind: 'valueQuery', requestId: rid(), owner, query: query() }))
+    const cursor = first.kind === 'valueQuery' ? first.page.nextCursor : undefined
+    expect(cursor).toBeDefined()
+    completed(await run(kernel, { kind: 'prepareColumns', requestId: rid(), owner, cols: new Uint16Array([0]) }))
+    const second = completed(await run(kernel, { kind: 'valueQuery', requestId: rid(), owner, query: query(cursor) }))
+    expect(second.kind === 'valueQuery' && second.page.error).toBeUndefined()
+    expect(second.kind === 'valueQuery' && second.page.items).toMatchObject([{ kind: 'cell', row: 1_048_575 }])
+  })
+
+  it('#10 malformed source bitsets are rejected before iteration', async () => {
+    const doc = objectDoc([{ sheetId: 'A', rows: column([1]) }])
+    const store = createObjectWorkbookSource(doc, 'doc').store('A')
+    const options = { signal: new AbortController().signal, stamp: store.stamp }
+    const beyond = { kind: 'bitset' as const, space: 'source' as const, r0: 1_048_545, r1: 1_048_576, words: new Uint32Array(1), count: 0 }
+    expect((await store.queryColumn({ col: 0, rows: beyond, limit: 4 }, options)).error?.code).toBe('invalid-source-rect')
+    const badCount = { kind: 'bitset' as const, space: 'source' as const, r0: 0, r1: 3, words: new Uint32Array([1]), count: 2 }
+    expect((await store.queryColumn({ col: 0, rows: badCount, limit: 4 }, options)).error?.code).toBe('invalid-source-rect')
+    const badList = { kind: 'list' as const, r0: 0, r1: 1_048_576, rows: new Uint32Array([0]) }
+    expect((await store.queryColumn({ col: 0, rows: badList, limit: 4 }, options)).error?.code).toBe('invalid-source-rect')
+  })
+})

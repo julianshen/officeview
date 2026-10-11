@@ -101,12 +101,16 @@ export interface TransferLedger {
   copiedBytes: number
   transfers: number
   transferredBytes: number
+  /** Portion of copiedBytes that is an estimate (structured clone of plain
+   * object graphs such as an object source document), not an exact byteLength. */
+  estimatedCopiedBytes: number
 }
 export class TransferAccounting {
-  private state: TransferLedger = { copies: 0, copiedBytes: 0, transfers: 0, transferredBytes: 0 }
-  copy(bytes: number): void {
+  private state: TransferLedger = { copies: 0, copiedBytes: 0, transfers: 0, transferredBytes: 0, estimatedCopiedBytes: 0 }
+  copy(bytes: number, estimated = false): void {
     this.state.copies++
     this.state.copiedBytes += bytes
+    if (estimated) this.state.estimatedCopiedBytes += bytes
   }
   transfer(buffers: readonly ArrayBuffer[]): void {
     for (const buffer of buffers) {
