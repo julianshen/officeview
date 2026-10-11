@@ -29,24 +29,72 @@ export function emptyOverlay(): PageOverlay {
 }
 
 export interface GridOverlayRecord { source: { row: number; col: number }; bounds: HighlightRect }
-/** Viewport-record seam: S5 supplies already projected records, never full-range geometry. */
-export function gridSelectionOverlay(selection: { contains(at: { row: number; col: number }): boolean }, records: readonly GridOverlayRecord[], viewport: HighlightRect): HighlightRect[] {
-  const out: HighlightRect[] = []
+export interface GridBorderSegment { x0: number; y0: number; x1: number; y1: number }
+export interface GridSelectionGeometry { fills: readonly HighlightRect[]; borders: readonly GridBorderSegment[] }
+/** S5 supplies bounded projected cells plus neighbor overscan. Compute the outline
+ * before clipping so neither shared cell edges nor viewport cuts become borders. */
+export function gridSelectionOverlay(selection: { contains(at: { row: number; col: number }): boolean }, records: readonly GridOverlayRecord[], viewport: HighlightRect): GridSelectionGeometry {
+  const fills: HighlightRect[] = [], borders: GridBorderSegment[] = [], seen = new Set<string>()
+  const horizontal = new Map<number, Map<number, number>>(), vertical = new Map<number, Map<number, number>>()
+  const edge = (map: Map<number, Map<number, number>>, at: number, lo: number, hi: number, sign: number) => {
+    const events = map.get(at) ?? new Map<number, number>()
+    events.set(lo, (events.get(lo) ?? 0) + sign)
+    events.set(hi, (events.get(hi) ?? 0) - sign)
+    map.set(at, events)
+  }
   for (const record of records) {
     if (!selection.contains(record.source)) continue
-    const { bounds } = record, x = Math.max(bounds.x, viewport.x), y = Math.max(bounds.y, viewport.y)
+    const { bounds } = record
+    if (bounds.width <= 0 || bounds.height <= 0) continue
+    const key = `${bounds.x}:${bounds.y}:${bounds.width}:${bounds.height}`
+    if (seen.has(key)) continue
+    seen.add(key)
+    edge(horizontal, bounds.y, bounds.x, bounds.x + bounds.width, -1)
+    edge(horizontal, bounds.y + bounds.height, bounds.x, bounds.x + bounds.width, 1)
+    edge(vertical, bounds.x, bounds.y, bounds.y + bounds.height, -1)
+    edge(vertical, bounds.x + bounds.width, bounds.y, bounds.y + bounds.height, 1)
+    const x = Math.max(bounds.x, viewport.x), y = Math.max(bounds.y, viewport.y)
     const width = Math.min(bounds.x + bounds.width, viewport.x + viewport.width) - x
     const height = Math.min(bounds.y + bounds.height, viewport.y + viewport.height) - y
-    if (width > 0 && height > 0) out.push({ x, y, width, height })
+    if (width > 0 && height > 0) fills.push({ x, y, width, height })
   }
-  return out
+  const outline = (map: Map<number, Map<number, number>>, across: boolean) => {
+    for (const [at, events] of map) {
+      const near = across ? viewport.y : viewport.x, far = near + (across ? viewport.height : viewport.width)
+      if (at < near || at > far) continue
+      let active = 0, previous: number | undefined
+      const spans: { lo: number; hi: number }[] = []
+      for (const [position, delta] of [...events].sort((a, b) => a[0] - b[0])) {
+        if (previous !== undefined && active && position > previous) {
+          const last = spans[spans.length - 1]
+          if (last && last.hi === previous) last.hi = position
+          else spans.push({ lo: previous, hi: position })
+        }
+        active += delta
+        previous = position
+      }
+      for (const span of spans) {
+        const start = across ? viewport.x : viewport.y, end = start + (across ? viewport.width : viewport.height)
+        const lo = Math.max(start, span.lo), hi = Math.min(end, span.hi)
+        if (lo < hi) borders.push(across ? { x0: lo, y0: at, x1: hi, y1: at } : { x0: at, y0: lo, x1: at, y1: hi })
+      }
+    }
+  }
+  outline(horizontal, true)
+  outline(vertical, false)
+  return { fills, borders }
 }
-export function paintGridSelectionOverlay(ctx: CanvasRenderingContext2D, rects: readonly HighlightRect[], scale = 1): void {
+export function paintGridSelectionOverlay(ctx: CanvasRenderingContext2D, geometry: GridSelectionGeometry, scale = 1): void {
   if (!Number.isFinite(scale) || scale <= 0) throw new RangeError('Invalid overlay scale')
   ctx.save()
   ctx.fillStyle = 'rgba(0, 128, 0, 0.12)'
   ctx.strokeStyle = '#008000'
   ctx.lineWidth = 2 / scale
-  for (const rect of rects) { ctx.fillRect(rect.x, rect.y, rect.width, rect.height); ctx.strokeRect(rect.x, rect.y, rect.width, rect.height) }
+  for (const rect of geometry.fills) ctx.fillRect(rect.x, rect.y, rect.width, rect.height)
+  if (geometry.borders.length) {
+    ctx.beginPath()
+    for (const edge of geometry.borders) { ctx.moveTo(edge.x0, edge.y0); ctx.lineTo(edge.x1, edge.y1) }
+    ctx.stroke()
+  }
   ctx.restore()
 }

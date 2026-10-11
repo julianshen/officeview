@@ -185,6 +185,8 @@ export function navigatorRequestFromA1(address: string, addressSpace: 'display' 
   return addressSpace === 'display' ? { addressSpace, at: { rowSlot: at.row, col: at.col } } : { addressSpace, at }
 }
 export interface NavigationContext { metrics: SheetMetrics; viewport: ViewportSize; view: Pick<SheetView, 'visibility' | 'baseHidden' | 'filter' | 'selection'> }
+export type ActiveNavigationContext = Pick<NavigationContext, 'metrics' | 'view'>
+export type HiddenTargetReason = 'authored-hidden' | 'filter-hidden'
 export type NavigationKey = 'ArrowLeft' | 'ArrowRight' | 'ArrowUp' | 'ArrowDown' | 'Enter' | 'PageUp' | 'PageDown' | 'Home' | 'End'
 interface NavigationBase { window: ScrollWindow; active: SourceCell | null; target: SourceCell | null; display: { rowSlot: DisplaySlot; col: number } | null; activate: boolean }
 export type NavigationResult =
@@ -218,7 +220,7 @@ function validatePixelPrecision(origin: number, viewportCss: number, zoom: numbe
   const pixelStep = 1 / zoom / Math.max(1, deviceScale)
   if (pixelStep < spacing) throw new RangeError('Scroll viewport pixel precision is not representable')
 }
-function sourceBodyBounds(context: NavigationContext): { first: number; last: number } {
+function sourceBodyBounds(context: ActiveNavigationContext): { first: number; last: number } {
   const filter = normalizeFilter(context.view.filter)
   return filter ? { first: filter.range.r0 + filter.range.headerRows, last: filter.range.r1 - filter.range.totalsRows }
     : { first: 0, last: context.metrics.rows.logicalCount - 1 }
@@ -237,7 +239,7 @@ function nearestColumn(axis: AxisMetrics, col: number): number | null {
 /** Source body membership is independent of where a permutation displays it.
  * Search only its display envelope, choosing the smaller of source membership
  * and visible display candidates so a tiny body in a large band stays bounded. */
-function bodyCandidate(context: NavigationContext, from: number, direction: -1 | 1): number | null {
+function bodyCandidate(context: ActiveNavigationContext, from: number, direction: -1 | 1): number | null {
   const { metrics, view } = context
   const bounds = sourceBodyBounds(context)
   bounds.last = Math.min(bounds.last, metrics.rows.logicalCount - 1)
@@ -279,7 +281,7 @@ function bodyCandidate(context: NavigationContext, from: number, direction: -1 |
 }
 /** Nearest visible display slot of any kind in display order, forward on ties.
  * Slots hidden by the mask or collapsed to zero height never qualify. */
-function nearestVisibleSlot(context: NavigationContext, slot: number): DisplaySlot | null {
+function nearestVisibleSlot(context: ActiveNavigationContext, slot: number): DisplaySlot | null {
   if (!context.metrics.rows.totalCss()) return null
   const forward = rowNeighbor(context, slot, 1)
   const backward = rowNeighbor(context, slot, -1)
@@ -287,7 +289,8 @@ function nearestVisibleSlot(context: NavigationContext, slot: number): DisplaySl
   if (backward === null) return forward
   return forward - slot <= slot - backward ? forward : backward
 }
-function retainActive(context: NavigationContext, active: SourceCell | null): SourceCell | null {
+/** Shared source-focus reconciliation for S2 scrolling and S6 selection. */
+export function retainActive(context: ActiveNavigationContext, active: SourceCell | null): SourceCell | null {
   if (!active || !isValidCoordinate(active.row, active.col)) return null
   const { metrics, view } = context
   if (active.row >= metrics.rows.logicalCount || active.col >= metrics.cols.logicalCount) return null
@@ -318,6 +321,17 @@ function validateTarget(metrics: SheetMetrics, target: SourceCell): void {
   validateCoordinate(target.row, target.col)
   if (target.row >= metrics.rows.logicalCount || target.col >= metrics.cols.logicalCount) throw new RangeError('Navigation target outside logical axes')
 }
+export function navigationTarget(metrics: SheetMetrics, request: NavigatorRequest): SourceCell {
+  if (request.addressSpace !== 'source' && request.addressSpace !== 'display') throw new RangeError('Invalid navigation address space')
+  const target = request.addressSpace === 'source' ? { ...request.at } : { row: metrics.order.displayToSource(request.at.rowSlot), col: request.at.col }
+  validateTarget(metrics, target)
+  return Object.freeze(target)
+}
+export function hiddenReasonForCell(context: ActiveNavigationContext, target: SourceCell, rowSlot = context.metrics.order.sourceToDisplay(target.row)): HiddenTargetReason {
+  const filter = normalizeFilter(context.view.filter), bounds = sourceBodyBounds(context)
+  return context.metrics.cols.size(target.col) === 0 ? 'authored-hidden'
+    : filter && target.row >= bounds.first && target.row <= bounds.last && !context.view.visibility.visible(rowSlot) ? 'filter-hidden' : 'authored-hidden'
+}
 function visibleResult(window: ScrollWindow, metrics: SheetMetrics, target: SourceCell): NavigationResult {
   return { kind: 'visible', window, active: Object.freeze({ ...target }), target: Object.freeze({ ...target }), display: { rowSlot: metrics.order.sourceToDisplay(target.row), col: target.col }, activate: true }
 }
@@ -336,18 +350,14 @@ function ensureVisible(window: ScrollWindow, context: NavigationContext, target:
  * relocates to a visible body row with forward tie preference (§§3,8.1). */
 export function navigateTo(window: ScrollWindow, context: NavigationContext, request: NavigatorRequest, currentActive: SourceCell | null = null): NavigationResult {
   state(window)
-  if (request.addressSpace !== 'source' && request.addressSpace !== 'display') throw new RangeError('Invalid navigation address space')
-  const target = request.addressSpace === 'source' ? { ...request.at } : { row: context.metrics.order.displayToSource(request.at.rowSlot), col: request.at.col }
-  validateTarget(context.metrics, target)
+  const target = navigationTarget(context.metrics, request)
   const box = context.metrics.sourceCellToLogical(target)
   if (box) return visibleResult(setScrollOffset(window, context.metrics, context.viewport, box), context.metrics, target)
   const rowSlot = context.metrics.order.sourceToDisplay(target.row)
-  const filter = normalizeFilter(context.view.filter), bounds = sourceBodyBounds(context)
-  const hiddenReason = context.metrics.cols.size(target.col) === 0 ? 'authored-hidden'
-    : filter && target.row >= bounds.first && target.row <= bounds.last && !context.view.visibility.visible(rowSlot) ? 'filter-hidden' : 'authored-hidden'
+  const hiddenReason = hiddenReasonForCell(context, target, rowSlot)
   return { kind: 'hidden', window, active: retainActive(context, currentActive), target, display: { rowSlot, col: target.col }, activate: false, hiddenReason }
 }
-function rowNeighbor(context: NavigationContext, slot: number, direction: -1 | 1): number | null {
+function rowNeighbor(context: ActiveNavigationContext, slot: number, direction: -1 | 1): number | null {
   const candidate = context.view.visibility.next(slot, direction)
   if (candidate === null) return null
   if (context.metrics.rows.size(candidate) > 0) return candidate

@@ -3,13 +3,36 @@ import { cleanup, fireEvent, render, waitFor } from '@testing-library/react'
 import { SheetNavigator } from '../src/components/xlsx/SheetNavigator'
 import { ViewerStatus } from '../src/components/xlsx/ViewerStatus'
 import { gridSelectionOverlay, paintGridSelectionOverlay } from '../src/core/overlay'
-import { SourceSelection } from '../src/xlsx/view/selection'
+import { SourceSelection, activeAnnouncement } from '../src/xlsx/view/selection'
+import { createSheetMetrics } from '../src/xlsx/view/projection'
+import { createAxisMetrics } from '../src/xlsx/view/axes'
 import type { CellRead, SourceStamp, ReadOptions } from '../src/xlsx/view/contracts'
 import type { SourceCell } from '../src/xlsx/view/coordinates'
 
 afterEach(cleanup)
 const sheets = [{ id: 'a', name: 'Data <img src=x>' }, { id: 'b', name: 'Second' }]
 describe('controlled S6.1 navigator/status shell', () => {
+  it('does not split surrogate pairs in announcements, values or formulas (review 7)', async () => {
+    const text = 'a'.repeat(255) + '😀', p = createSheetMetrics({ rows: createAxisMetrics({ logicalCount: 4, defaultSizeCss: 24 }), cols: createAxisMetrics({ logicalCount: 4, defaultSizeCss: 80 }) })
+    expect(activeAnnouncement(p, { row: 0, col: 0 }, text)).toBe('A1, value ' + 'a'.repeat(255))
+    const source = { stamp: { docId: 'doc', sheetId: 'a', valueGen: 1 }, async readCell(): Promise<CellRead> { return { kind: 'cell', cell: { id: 0, row: 0, col: 0, styleIndex: 0, value: text, formula: text } } } }
+    const ui = render(<ViewerStatus records={{ visible: 1, total: 1 }} inspection={{ target: { row: 0, col: 0 }, hiddenReason: 'authored-hidden', source }} />)
+    await waitFor(() => expect(ui.getByRole('status').textContent).toContain('formula'))
+    expect(ui.getByRole('status').textContent).not.toContain('\ud83d')
+  })
+  it('renders a safe notice for invalid counts instead of throwing (review 12)', () => {
+    const ui = render(<ViewerStatus records={{ visible: 3, total: 2 }} />)
+    expect(ui.getByRole('status').textContent).toContain('Record counts unavailable')
+  })
+  it('does not reread the same inspection when a parent recreates its source wrapper (review 12)', async () => {
+    const stamp = { docId: 'doc', sheetId: 'a', valueGen: 1 }, readCell = vi.fn(async (): Promise<CellRead> => ({ kind: 'blank' }))
+    const inspection = () => ({ target: { row: 0, col: 0 }, hiddenReason: 'authored-hidden', source: { stamp, readCell } })
+    const ui = render(<ViewerStatus records={{ visible: 1, total: 2 }} inspection={inspection()} />)
+    await waitFor(() => expect(readCell).toHaveBeenCalledOnce())
+    ui.rerender(<ViewerStatus records={{ visible: 2, total: 2 }} inspection={inspection()} />)
+    await new Promise(resolve => setTimeout(resolve, 0))
+    expect(readCell).toHaveBeenCalledOnce()
+  })
   it('emits explicit display/source Go To requests through full capacity', () => {
     const navigate = vi.fn(), change = vi.fn()
     const ui = render(<SheetNavigator documentId="doc" sheets={sheets} activeSheetId="a" onSheetChange={change} onNavigate={navigate} />)
@@ -106,15 +129,28 @@ describe('controlled S6.1 navigator/status shell', () => {
 })
 
 describe('viewport-only green grid overlay seam', () => {
+  it('draws only outer selection borders, cancelling shared cell edges (review 9)', () => {
+    const selection = new SourceSelection([{ rows: { kind: 'intervals', intervals: [{ r0: 0, r1: 0 }] }, cols: [{ c0: 0, c1: 1 }] }])
+    const records = [{ source: { row: 0, col: 0 }, bounds: { x: 0, y: 0, width: 10, height: 10 } }, { source: { row: 0, col: 1 }, bounds: { x: 10, y: 0, width: 10, height: 10 } }]
+    const geometry = gridSelectionOverlay(selection, records, { x: -1, y: -1, width: 30, height: 30 }) as unknown as { fills: unknown[]; borders: { x0: number; y0: number; x1: number; y1: number }[] }
+    expect(geometry.borders).toEqual(expect.arrayContaining([{ x0: 0, y0: 0, x1: 20, y1: 0 }, { x0: 0, y0: 10, x1: 20, y1: 10 }, { x0: 0, y0: 0, x1: 0, y1: 10 }, { x0: 20, y0: 0, x1: 20, y1: 10 }]))
+    expect(geometry.borders).toHaveLength(4)
+    const clipped = gridSelectionOverlay(selection, records, { x: 5, y: 2, width: 10, height: 6 }) as unknown as typeof geometry
+    expect(clipped.borders).toEqual([])
+    expect(clipped.fills).toHaveLength(2)
+  })
   it('clips selected viewport records and keeps the blue text selection separate', () => {
     const selection = new SourceSelection([{ rows: { kind: 'intervals', intervals: [{ r0: 3, r1: 3 }] }, cols: [{ c0: 0, c1: 0 }] }])
     const rects = gridSelectionOverlay(selection, [{ source: { row: 3, col: 0 }, bounds: { x: -5, y: 2, width: 20, height: 24 } }, { source: { row: 1, col: 0 }, bounds: { x: 15, y: 2, width: 20, height: 24 } }], { x: 0, y: 0, width: 10, height: 10 })
-    expect(rects).toEqual([{ x: 0, y: 2, width: 10, height: 8 }])
-    const ctx = { save: vi.fn(), restore: vi.fn(), fillRect: vi.fn(), strokeRect: vi.fn(), fillStyle: '', strokeStyle: '', lineWidth: 0 }
+    expect(rects.fills).toEqual([{ x: 0, y: 2, width: 10, height: 8 }])
+    expect(rects.borders).toEqual([{ x0: 0, y0: 2, x1: 10, y1: 2 }])
+    const ctx = { save: vi.fn(), restore: vi.fn(), fillRect: vi.fn(), strokeRect: vi.fn(), beginPath: vi.fn(), moveTo: vi.fn(), lineTo: vi.fn(), stroke: vi.fn(), fillStyle: '', strokeStyle: '', lineWidth: 0 }
     paintGridSelectionOverlay(ctx as unknown as CanvasRenderingContext2D, rects, 2)
     expect(ctx.strokeStyle).toBe('#008000')
     expect(ctx.lineWidth).toBe(1)
-    expect(ctx.strokeRect).toHaveBeenCalledWith(0, 2, 10, 8)
+    expect(ctx.strokeRect).not.toHaveBeenCalled()
+    expect(ctx.moveTo).toHaveBeenCalledWith(0, 2)
+    expect(ctx.lineTo).toHaveBeenCalledWith(10, 2)
     expect(ctx.restore).toHaveBeenCalledOnce()
   })
 })

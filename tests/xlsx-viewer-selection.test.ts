@@ -1,11 +1,18 @@
 import { describe, expect, it } from 'vitest'
 import { createAxisMetrics } from '../src/xlsx/view/axes'
 import { MAX_COLS, MAX_ROWS } from '../src/xlsx/view/coordinates'
-import { createRowOrder } from '../src/xlsx/view/order'
+import { createRowOrder, pinRowPermutation, hiddenSlotPins } from '../src/xlsx/view/order'
 import { createSheetMetrics } from '../src/xlsx/view/projection'
 import { emptyGridSelection, extendDisplayRange, selectCell, selectHeader, SourceSelection, selectionOperationRange, guardSelectionSort, guardSelectionFilter, reconcileSelection, moveActive, navigateTo, activeAnnouncement, recordBody, recordCounts, SheetNavigationSession, rowContains } from '../src/xlsx/view/selection'
 import { StructuralIndex } from '../src/xlsx/view/structure'
 import { createIntervalSet, visibilityFromHidden } from '../src/xlsx/view/visibility'
+
+function filteredFixture(rows: number[], hiddenSlots: number[]) {
+  const order = createRowOrder([{ r0: 0, r1: rows.length - 1, sourceAtOffset: Uint32Array.from(rows) }]), visibility = visibilityFromHidden(createIntervalSet(hiddenSlots.map(r0 => ({ r0, r1: r0 }))))
+  const projection = createSheetMetrics({ rows: createAxisMetrics({ logicalCount: MAX_ROWS, defaultSizeCss: 24 }), cols: createAxisMetrics({ logicalCount: MAX_COLS, defaultSizeCss: 80 }), order, visibility })
+  const view = { visibility, baseHidden: createIntervalSet([]), filter: { range: { r0: 0, r1: rows.length - 1, c0: 0, c1: 0, headerRows: 1 as const, totalsRows: 0 as const }, columns: new Map([[0, { kind: 'number' as const, op: 'gt' as const, first: 0 }]]) } }
+  return { projection, view }
+}
 
 function fixtureProjection(rows: number[], hiddenRows: number[] = [], hiddenCols: number[] = []) {
   return createSheetMetrics({
@@ -30,7 +37,10 @@ describe('source membership through display extension (AC-SEL-01)', () => {
     expect([...selection.sourceRows()]).toEqual([0, 1, 2])
     expect(selection.contains({ row: 3, col: 0 })).toBe(false)
     expect(selection.contains({ row: 1, col: 1 })).toBe(false)
-    fixtureProjection([0, 1, 2, 3])
+    const sorted = fixtureProjection([0, 1, 2, 3])
+    const state = { active: { row: 2, col: 2 }, anchor: { row: 0, col: 0 }, ranges: selection.ranges }
+    const reconciled = reconcileSelection(state, sorted, { r0: 0, r1: 3 }).selection
+    expect([...new SourceSelection(reconciled.ranges).sourceRows()]).toEqual([0, 1, 2])
     expect(selection.contains({ row: 2, col: 2 })).toBe(true)
   })
   it('retains full-axis identity ranges compactly and validates endpoints', () => {
@@ -43,19 +53,158 @@ describe('source membership through display extension (AC-SEL-01)', () => {
 })
 
 describe('selection boundary regressions', () => {
+  it('replaces only the most recent Ctrl part during repeated Shift extension (review 5)', () => {
+    const p = fixtureProjection([0, 1, 2, 3])
+    let state = selectCell(emptyGridSelection(), p, { row: 0, col: 0 }, { toggle: true })
+    state = selectCell(state, p, { row: 4, col: 2 }, { toggle: true })
+    state = selectCell(state, p, { row: 0, col: 0 }, { extend: true })
+    state = selectCell(state, p, { row: 7, col: 2 }, { extend: true })
+    const selection = new SourceSelection(state.ranges)
+    expect(selection.contains({ row: 0, col: 0 })).toBe(true)
+    expect(selection.contains({ row: 0, col: 1 })).toBe(false)
+    expect(selection.contains({ row: 7, col: 2 })).toBe(true)
+    state = selectCell(state, p, { row: 1, col: 2 }, { extend: true })
+    expect(new SourceSelection(state.ranges).contains({ row: 7, col: 2 })).toBe(false)
+    expect(new SourceSelection(state.ranges).contains({ row: 0, col: 0 })).toBe(true)
+  })
+  it('preserves row header anchors when col0 is hidden and Shift-click extends full rows (review 5)', () => {
+    const p = fixtureProjection([0, 1, 2, 3], [], [0])
+    let state = selectHeader(emptyGridSelection(), p, 'row', 5)
+    expect(state.anchor).toEqual({ row: 5, col: 1 })
+    state = selectCell(state, p, { row: 9, col: 3 }, { extend: true })
+    expect([...new SourceSelection(state.ranges).sourceRows()]).toEqual([5, 6, 7, 8, 9])
+    expect(new SourceSelection(state.ranges).contains({ row: 7, col: MAX_COLS - 1 })).toBe(true)
+  })
+  it('supports Shift across row and column headers through the visible projection (review 5)', () => {
+    const p = fixtureProjection([0, 3, 1, 2], [], [1])
+    let rows = selectHeader(emptyGridSelection(), p, 'row', 3)
+    rows = selectHeader(rows, p, 'row', 1, false, true)
+    expect([...new SourceSelection(rows.ranges).sourceRows()]).toEqual([1, 3])
+    expect(new SourceSelection(rows.ranges).contains({ row: 1, col: MAX_COLS - 1 })).toBe(true)
+    let cols = selectHeader(emptyGridSelection(), p, 'column', 0)
+    cols = selectHeader(cols, p, 'column', 3, false, true)
+    expect(cols.anchor?.col).toBe(0)
+    expect(new SourceSelection(cols.ranges).contains({ row: MAX_ROWS - 1, col: 2 })).toBe(true)
+    expect(new SourceSelection(cols.ranges).contains({ row: MAX_ROWS - 1, col: 1 })).toBe(false)
+  })
+  it('retains one selection truth and rejects stale projection revisions atomically (review 8)', () => {
+    const p = fixtureProjection([0, 1, 2, 3]), session = new SheetNavigationSession('doc')
+    const view = { sheetId: 's', revision: 5, order: p.order, baseHidden: createIntervalSet([]), visibility: visibilityFromHidden(createIntervalSet([])), sort: null, filter: null, selection: emptyGridSelection() }
+    session.register('s', { projection: p, body: null, view })
+    const selected = selectCell(emptyGridSelection(), p, { row: 2, col: 0 })
+    session.setSelection('s', selected)
+    expect(session.get('s').view.selection).toBe(selected)
+    const previous = session.get('s')
+    expect(() => session.updateProjection('s', fixtureProjection([0, 3, 1, 2]), null, { ...view, revision: 4 })).toThrow(expect.objectContaining({ code: 'stale-source' }))
+    expect(session.get('s')).toBe(previous)
+    session.updateProjection('s', p, null, { ...view, revision: 6 })
+    expect(session.get('s').view.selection).toBe(session.get('s').selection)
+    expect(session.get('s').selection.active).toEqual({ row: 2, col: 0 })
+  })
+  it('uses S2 authored-hidden relocation rather than inferring a filter from used-data bounds (review 4)', () => {
+    const state = selectCell(emptyGridSelection(), fixtureProjection([0, 1, 2, 3]), { row: 1, col: 0 })
+    expect(reconcileSelection(state, fixtureProjection([0, 1, 2, 3], [1, 2, 3]), { r0: 1, r1: 3 }).selection.active).toEqual({ row: 0, col: 0 })
+  })
+  it('reports the typed S2 filter-hidden reason and relocates through the actual display mask (review 4/6)', () => {
+    const f = filteredFixture([0, 3, 1, 2], [2])
+    const state = selectCell(emptyGridSelection(), fixtureProjection([0, 3, 1, 2]), { row: 1, col: 0 })
+    const result = navigateTo(state, f.projection, { addressSpace: 'source', at: { row: 1, col: 0 } }, { r0: 1, r1: 3 }, f.view)
+    expect(result.hiddenReason).toBe('filter-hidden')
+    expect(result.selection.active).toEqual({ row: 2, col: 0 })
+    expect(recordCounts(f.projection, { r0: 1, r1: 3 })).toEqual({ visible: 2, total: 3 })
+    const selection = extendDisplayRange(f.projection, { row: 0, col: 0 }, { row: 2, col: 0 })
+    expect([...selection.sourceRows()]).toEqual([0, 2, 3])
+  })
+  it('traverses a genuine hidden-pinned permutation and compares membership to a display oracle (review 6)', () => {
+    const visibility = visibilityFromHidden(createIntervalSet([{ r0: 1, r1: 1 }, { r0: 4, r1: 4 }]))
+    const band = pinRowPermutation(0, 5, hiddenSlotPins(visibility), Uint32Array.from([5, 3, 2, 0]))
+    const order = createRowOrder([{ r0: 0, r1: 5, sourceAtOffset: band.sourceAtOffset }])
+    const p = createSheetMetrics({ rows: createAxisMetrics({ logicalCount: MAX_ROWS, defaultSizeCss: 24 }), cols: createAxisMetrics({ logicalCount: MAX_COLS, defaultSizeCss: 80 }), order, visibility })
+    const selected = extendDisplayRange(p, { row: 5, col: 0 }, { row: 2, col: 0 })
+    const oracle = [0, 1, 2, 3].filter(slot => visibility.visible(slot)).map(slot => order.displayToSource(slot)).sort((a, b) => a - b)
+    expect([...selected.sourceRows()]).toEqual(oracle)
+    const state = selectCell(emptyGridSelection(), p, { row: 5, col: 0 })
+    expect(moveActive(state, p, 'down', { r0: 0, r1: 5 }).active?.row).toBe(3)
+  })
+  it('seeds arrow navigation on an empty sheet with no resolved body (review 3)', () => {
+    expect(moveActive(emptyGridSelection(), fixtureProjection([0, 1, 2, 3]), 'down', null).active).toEqual({ row: 0, col: 0 })
+  })
+  it('shares fragmented row membership across 200 Ctrl-column toggles (review 2)', () => {
+    const half = MAX_ROWS / 2, order = new Uint32Array(MAX_ROWS)
+    for (let i = 0; i < half; i++) { order[i] = i * 2; order[half + i] = i * 2 + 1 }
+    const p = fixtureProjection(Array.from(order))
+    let state = selectCell(emptyGridSelection(), p, { row: 0, col: 0 })
+    state = selectCell(state, p, { row: MAX_ROWS - 2, col: 400 }, { extend: true })
+    for (let col = 1; col < 400; col += 2) state = selectHeader(state, p, 'column', col, true)
+    const buffers = new Set(state.ranges.flatMap(part => part.rows.kind === 'bitset' ? [part.rows.words.buffer] : []))
+    expect(state.ranges.length).toBeLessThanOrEqual(3)
+    expect([...buffers].reduce((sum, buffer) => sum + buffer.byteLength, 0)).toBeLessThanOrEqual(262144)
+    const selection = new SourceSelection(state.ranges)
+    expect(selection.contains({ row: 10, col: 2 })).toBe(true)
+    expect(selection.contains({ row: 11, col: 2 })).toBe(false)
+    expect(selection.contains({ row: 11, col: 3 })).toBe(true)
+  }, 30000)
+  it('refuses excessive aggregate selection metadata atomically (review 2)', () => {
+    const p = fixtureProjection([0, 1, 2, 3])
+    let state = emptyGridSelection(), failed = false
+    for (let i = 0; i < 300; i++) {
+      const previous = state
+      try { state = selectCell(state, p, { row: i, col: i }, { toggle: true }) }
+      catch (error) { expect(error).toMatchObject({ code: 'resource-limit' }); expect(state).toBe(previous); failed = true; break }
+    }
+    expect(failed).toBe(true)
+  })
+  it('bounds retained selection buffers across sheets, not per sheet (review 2)', () => {
+    const p = fixtureProjection([0, 1, 2, 3]), session = new SheetNavigationSession('doc')
+    let stopped = false
+    for (let i = 0; i < 8; i++) {
+      const sheetId = String(i), selection = { active: { row: 0, col: 0 }, anchor: { row: 0, col: 0 }, ranges: [{ rows: { kind: 'bitset' as const, space: 'source' as const, r0: 0, r1: MAX_ROWS - 1, count: MAX_ROWS / 2, words: new Uint32Array(MAX_ROWS / 32).fill(0x55555555) }, cols: [{ c0: 0, c1: 0 }] }] }
+      const view = { sheetId, revision: 1, order: p.order, baseHidden: createIntervalSet([]), visibility: visibilityFromHidden(createIntervalSet([])), sort: null, filter: null, selection }
+      try { session.register(sheetId, { view, projection: p, body: null }) }
+      catch (error) { expect(error).toMatchObject({ code: 'resource-limit' }); expect(() => session.get(sheetId)).toThrow(); stopped = true; break }
+    }
+    expect(stopped).toBe(true)
+  })
+  it('clamps fragmented bitset bounds to actual source membership on a 1000-row projection (review 11)', () => {
+    const rows = Array.from({ length: 1000 }, (_, i) => i), random = (() => { let seed = 7; return (n: number) => { seed = seed * 48271 % 2147483647; return seed % n } })()
+    for (let i = 999; i > 0; i--) { const j = random(i + 1); [rows[i], rows[j]] = [rows[j], rows[i]] }
+    const p = createSheetMetrics({ rows: createAxisMetrics({ logicalCount: 1000, defaultSizeCss: 24 }), cols: createAxisMetrics({ logicalCount: 10, defaultSizeCss: 80 }), order: createRowOrder([{ r0: 0, r1: 999, sourceAtOffset: Uint32Array.from(rows) }]) })
+    const set = extendDisplayRange(p, { row: rows[0], col: 0 }, { row: rows[300], col: 0 }).ranges[0].rows
+    expect(set.kind).toBe('bitset')
+    if (set.kind !== 'bitset') throw new Error('Expected bitset')
+    expect(set.r1).toBeLessThan(1000)
+    expect(set.words.length).toBe(Math.ceil((set.r1 - set.r0 + 1) / 32))
+  })
+  it('returns a typed unsupported outcome for opaque row refs (review 10)', () => {
+    const ranges = [{ rows: { kind: 'ref' as const, refId: 'worker', count: 1, stamp: { docId: 'd', sheetId: 's', valueGen: 1 } }, cols: [{ c0: 0, c1: 0 }] }]
+    expect(() => new SourceSelection(ranges).contains({ row: 0, col: 0 })).toThrow(expect.objectContaining({ code: 'unsupported' }))
+    expect(() => [...new SourceSelection(ranges).sourceRows()]).toThrow(expect.objectContaining({ code: 'unsupported' }))
+    expect(() => selectCell({ active: null, anchor: null, ranges }, fixtureProjection([0, 1, 2, 3]), { row: 0, col: 0 }, { toggle: true })).toThrow(expect.objectContaining({ code: 'unsupported' }))
+  })
+  it('requires an S7-resolved operation range for single-cell and column-header selections (review 1)', () => {
+    const p = fixtureProjection([0, 1, 2, 3])
+    for (const selection of [selectCell(emptyGridSelection(), p, { row: 4, col: 2 }), selectHeader(emptyGridSelection(), p, 'column', 2)]) {
+      expect(selectionOperationRange(selection)).toMatchObject({ ok: false, refusal: { reason: 'ambiguous-selection' } })
+      const table = { r0: 0, r1: 8, c0: 2, c1: 2, headerRows: 1 as const, totalsRows: 1 as const }
+      expect(selectionOperationRange(selection, table)).toEqual({ ok: true, range: table })
+      expect(selectionOperationRange(selection, { ...table, c0: 3, c1: 3 })).toMatchObject({ ok: false, refusal: { reason: 'ambiguous-selection' } })
+    }
+  })
   it('matches an independent cell-set oracle over 200 toggle/Shift histories without overlap', () => {
     const order = [0, 3, 1, 2, 7, 6, 4, 5], projection = fixtureProjection(order)
-    let state = emptyGridSelection(), anchor: { row: number; col: number } | null = null, expected = new Set<number>(), seed = 61
+    let state = emptyGridSelection(), anchor: { row: number; col: number } | null = null, expected = new Set<number>(), prefix = new Set<number>(), seed = 61
     const random = (n: number) => { seed = seed * 48271 % 2147483647; return seed % n }
     for (let action = 0; action < 200; action++) {
       const at = { row: random(8), col: random(4) }, mode = random(3)
       if (mode === 1) {
         const id = at.row * 4 + at.col
+        prefix = new Set(expected)
+        prefix.delete(id)
         if (expected.has(id)) expected.delete(id); else expected.add(id)
         state = selectCell(state, projection, at, { toggle: true })
         anchor = at
       } else if (mode === 2 && anchor) {
-        expected = new Set()
+        expected = new Set(prefix)
         const first = order.indexOf(anchor.row), last = order.indexOf(at.row)
         for (let slot = Math.min(first, last); slot <= Math.max(first, last); slot++) {
           for (let col = Math.min(anchor.col, at.col); col <= Math.max(anchor.col, at.col); col++) expected.add(order[slot] * 4 + col)
@@ -63,6 +212,7 @@ describe('selection boundary regressions', () => {
         state = selectCell(state, projection, at, { extend: true })
       } else {
         expected = new Set([at.row * 4 + at.col])
+        prefix = new Set()
         state = selectCell(state, projection, at)
         anchor = at
       }
@@ -156,9 +306,9 @@ describe('focus, navigation and retained sheet state (AC-SEL-02, AC-CAP-02)', ()
     expect(result.announcement).toContain('A4')
   })
   it('uses null active/anchor when every body record is hidden, and never resurrects on Clear', () => {
-    const before = fixtureProjection([0, 3, 1, 2]), hidden = fixtureProjection([0, 3, 1, 2], [1, 2, 3])
+    const before = fixtureProjection([0, 3, 1, 2]), filtered = filteredFixture([0, 3, 1, 2], [1, 2, 3]), hidden = filtered.projection
     const state = selectCell(emptyGridSelection(), before, { row: 3, col: 0 })
-    const result = reconcileSelection(state, hidden, body)
+    const result = reconcileSelection(state, hidden, body, filtered.view)
     expect(result.selection.active).toBeNull()
     expect(result.selection.anchor).toBeNull()
     expect(result.selection.ranges).toBe(state.ranges)
@@ -181,7 +331,7 @@ describe('focus, navigation and retained sheet state (AC-SEL-02, AC-CAP-02)', ()
     const result = navigateTo(state, projection, { addressSpace: 'source', at: { row: 2, col: 0 } }, { r0: 1, r1: 2 })
     expect(result.kind).toBe('hidden')
     expect(result.target).toEqual({ row: 2, col: 0 })
-    expect(result.hiddenReason).toContain('row')
+    expect(result.hiddenReason).toBe('authored-hidden')
     expect(result.selection).toBe(state)
     expect(projection.sourceCellToLogical(result.target)).toBeNull()
     expect(navigateTo(emptyGridSelection(), projection, { addressSpace: 'source', at: result.target }, body).selection.active).toBeNull()
@@ -271,7 +421,7 @@ describe('pointer, modifier and header transitions', () => {
     const projection = fixtureProjection([0, 1, 2, 3]), state = selectCell(emptyGridSelection(), projection, { row: 2, col: 0 })
     expect(new SourceSelection(state.ranges).contains({ row: 2, col: 0 })).toBe(true)
     const structure = new StructuralIndex({ stamp: { docId: 'd', sheetId: 's', valueGen: 0 }, completeness: 'complete', merges: [{ id: 'm', range: { r0: 1, r1: 2, c0: 0, c1: 1 }, anchor: { row: 1, col: 0 } }], spills: [], drawings: [], tables: [], missing: [] })
-    const outcome = await guardSelectionSort(state, structure, { async iterate() { return { items: [], completeness: 'complete', missing: [] } } })
+    const outcome = await guardSelectionSort(state, structure, { async iterate() { return { items: [], completeness: 'complete', missing: [] } } }, { r0: 2, r1: 2, c0: 0, c1: 0, headerRows: 0, totalsRows: 0 })
     expect(outcome).toMatchObject({ ok: false, refusal: { reason: 'merge' } })
   })
 })
