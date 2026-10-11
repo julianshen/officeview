@@ -3,7 +3,11 @@ import type {
   CacheIdentity, FilterSpec, SortSpec, SourceStore, ViewCommitDelta, WorkbookOwner, WorkerCommand, WorkerReply,
 } from '../src/xlsx/view/contracts'
 import type { XlsxDocument, XlsxMergeRange } from '../src/xlsx/types'
-import { formatA1 } from '../src/xlsx/view/coordinates'
+import { formatA1, MAX_COLS, MAX_ROWS } from '../src/xlsx/view/coordinates'
+import { createAxisMetrics } from '../src/xlsx/view/axes'
+import { createRowOrder } from '../src/xlsx/view/order'
+import { createSheetMetrics } from '../src/xlsx/view/projection'
+import { emptyGridSelection, selectCell, SourceSelection } from '../src/xlsx/view/selection'
 import { buildXlsx } from '../src/testdata/ooxml-builders'
 import { OfficePackage } from '../src/core/zip'
 import { parseXlsx } from '../src/xlsx/parse'
@@ -471,6 +475,67 @@ describe('S4.1 review findings (codex)', () => {
     const again = second.selection.ranges[0].rows
     expect(again.kind === 'list' && [...again.rows]).toEqual([0, 2])
     client.dispose()
+  })
+
+  it('preserves serializable Shift gesture history in worker commit/delta (N2)', async () => {
+    const doc = objectDoc([{ sheetId: 'A', rows: column([3, 1, 2, 4, 5]) }])
+    const kernel = new ViewerKernel({ parse: async () => doc }, quiet)
+    completed(await run(kernel, { kind: 'open', requestId: rid(), docId: 'doc', source: { kind: 'object', document: doc }, profile: 'D' }))
+    const prefix = [{ rows: { kind: 'list' as const, r0: 0, r1: 0, rows: Uint32Array.of(0) }, cols: [{ c0: 0, c1: 0 }] }]
+    const selection = { active: { row: 4, col: 0 }, anchor: { row: 4, col: 0 }, ranges: [{ rows: { kind: 'list' as const, r0: 0, r1: 4, rows: Uint32Array.of(0, 4) }, cols: [{ c0: 0, c1: 0 }] }], gesture: { kind: 'cells' as const, anchor: { row: 4, col: 0 }, prefix } }
+    const session = kernel.session('doc')!
+    const committed = await session.commitView('A', { ...draftOf(session, 'A'), selection: structuredClone(selection) })
+    expect(committed.selection).toHaveProperty('gesture', selection.gesture)
+    const delta = deltaOf(await run(kernel, { kind: 'sort', requestId: rid(), owner: committed.identity, spec: sortSpec(2, 0) }))
+    expect(structuredClone(delta.selection)).toHaveProperty('gesture', selection.gesture)
+    // All gesture lanes are transferable copies; transferring cannot detach resident history.
+    const transferred = structuredClone(delta.selection, { transfer: transferablesOf(delta.selection) })
+    expect(transferred).toHaveProperty('gesture', selection.gesture)
+    expect(session.view('A').selection).toHaveProperty('gesture', selection.gesture)
+    expect(prefix[0].rows.rows.length).toBe(1)
+  })
+
+  it('copies the gesture part on commit like the prefix, leaving the caller object unfrozen', async () => {
+    const doc = objectDoc([{ sheetId: 'A', rows: column([3, 1, 2, 4, 5]) }])
+    const kernel = new ViewerKernel({ parse: async () => doc }, quiet)
+    completed(await run(kernel, { kind: 'open', requestId: rid(), docId: 'doc', source: { kind: 'object', document: doc }, profile: 'D' }))
+    const part = { rows: { kind: 'intervals' as const, intervals: [{ r0: 2, r1: 4 }] }, cols: [{ c0: 0, c1: 0 }] }
+    const selection = { active: { row: 4, col: 0 }, anchor: { row: 2, col: 0 }, ranges: [part], gesture: { kind: 'cells' as const, anchor: { row: 2, col: 0 }, prefix: [], part } }
+    const session = kernel.session('doc')!
+    const committed = await session.commitView('A', { ...draftOf(session, 'A'), selection })
+    expect(committed.selection.gesture!.part).toEqual(part)
+    expect(committed.selection.gesture!.part).not.toBe(part)
+    expect(Object.isFrozen(part)).toBe(false)
+    expect(Object.isFrozen(part.cols)).toBe(false)
+    const delta = deltaOf(await run(kernel, { kind: 'sort', requestId: rid(), owner: committed.identity, spec: sortSpec(2, 0) }))
+    expect(structuredClone(delta.selection).gesture!.part).toEqual(part)
+  })
+
+  it('round-trips a real compact gesture whose part shares ranges row buffers through worker commit/delta', async () => {
+    const doc = objectDoc([{ sheetId: 'A', rows: column([3, 1, 2, 4, 5]) }])
+    const kernel = new ViewerKernel({ parse: async () => doc }, quiet)
+    completed(await run(kernel, { kind: 'open', requestId: rid(), docId: 'doc', source: { kind: 'object', document: doc }, profile: 'D' }))
+    // Interleaved display order: a Shift across 100 slots selects 100 even source
+    // rows, a bitset part whose buffer is shared with the matching ranges entry.
+    const order = Array.from({ length: 200 }, (_, i) => i < 100 ? i * 2 : (i - 100) * 2 + 1)
+    const p = createSheetMetrics({ rows: createAxisMetrics({ logicalCount: MAX_ROWS, defaultSizeCss: 24 }), cols: createAxisMetrics({ logicalCount: MAX_COLS, defaultSizeCss: 80 }), order: createRowOrder([{ r0: 0, r1: 199, sourceAtOffset: Uint32Array.from(order) }]) })
+    let selection = selectCell(emptyGridSelection(), p, { row: 1, col: 3 }, { toggle: true })
+    selection = selectCell(selection, p, { row: 0, col: 0 }, { toggle: true })
+    selection = selectCell(selection, p, { row: 198, col: 0 }, { extend: true })
+    expect(selection.gesture!.part!.rows.kind).toBe('bitset')
+    expect(selection.ranges.some(range => range.rows === selection.gesture!.part!.rows)).toBe(true)
+    const session = kernel.session('doc')!
+    const committed = await session.commitView('A', { ...draftOf(session, 'A'), selection: structuredClone(selection) })
+    const expected = structuredClone(committed.selection)
+    const delta = deltaOf(await run(kernel, { kind: 'sort', requestId: rid(), owner: committed.identity, spec: sortSpec(2, 0) }))
+    const transferred = structuredClone(delta.selection, { transfer: transferablesOf(delta.selection) })
+    expect(transferred).toEqual(expected)
+    // Transferring the delta must not detach resident ranges or gesture lanes.
+    expect(session.view('A').selection).toEqual(expected)
+    const resumed = new SourceSelection(selectCell(transferred, p, { row: 2, col: 0 }, { extend: true }).ranges)
+    expect(resumed.contains({ row: 1, col: 3 })).toBe(true)
+    expect(resumed.contains({ row: 2, col: 0 })).toBe(true)
+    expect(resumed.contains({ row: 4, col: 0 })).toBe(false)
   })
 
   it('#3 a query that finishes after a newer commit replies stale, never complete for the old owner', async () => {
