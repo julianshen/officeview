@@ -5,6 +5,7 @@ import { FilterDiagnostic, TextFilterMatcher, WorkBudget, type FilterLimits } fr
 import { projectVisibility, normalizeFilter } from './visibility'
 
 export { FilterDiagnostic, WorkBudget } from './textFilter'
+export { canonicalSearchKey } from './canonicalText'
 export type { FilterLimits, FilterWork } from './textFilter'
 export type { NumberOp, TextOp, DateOp, CalendarDay, DatePreset, TypedCondition, CompoundFilter, ValuesFilter, ValueSelection, PagedKeySetRef, ColumnRule, FilterSpec } from './contracts'
 /** Prepared authority from a complete body-domain scan. Display text is a
@@ -16,7 +17,13 @@ export type PreparedValue =
   | { kind: 'error'; value: string }
   | { kind: 'blank' | 'unknown' | 'unavailable' }
 export interface ColumnClassification { kind: 'number' | 'date' | 'text' | 'empty' | 'loading'; hasNumeric: boolean }
-export interface FilterContext extends DateContext { locale: string }
+export interface FilterContext extends DateContext {
+  locale: string
+  /** S8.2 search-key port: must return canonicalSearchKey(text, locale), for
+   * example from a per-value cache keyed by valueGen and the locale's Turkic
+   * class. Absent, each evaluation canonicalizes the raw text. */
+  searchKeyOf?: (text: string, locale: string) => string
+}
 export type CompiledRule = (value: PreparedValue, limits?: FilterLimits) => boolean
 function resolved(value: PreparedValue): void {
   if (value.kind === 'unknown' || value.kind === 'unavailable') throw new FilterDiagnostic('incomplete', 'Filter incomplete: authoritative value is unresolved')
@@ -153,7 +160,9 @@ export class FilterEngine {
       }
     }
     if (rule.kind !== 'text') throw new RangeError('Invalid condition kind')
-    const match = this.text.prepare(rule.op, rule.first, rule.wildcards, compilation)
+    const prepared = this.text.prepare(rule.op, rule.first, rule.wildcards, compilation)
+    const { searchKeyOf, locale } = this.context
+    const match = searchKeyOf ? (text: string, budget: WorkBudget) => prepared.key(searchKeyOf(text, locale), budget) : prepared
     return (value, budget) => {
       budget.charge(0)
       resolved(value)
