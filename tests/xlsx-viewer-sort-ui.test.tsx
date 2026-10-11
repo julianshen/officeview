@@ -123,3 +123,43 @@ it('aborts a pending sort on Cancel even if the worker ignores cancellation unti
   expect(f.applied).not.toHaveBeenCalled()
   expect(f.fixture.publications).toBe(0)
 })
+
+import { GridSemantics } from '../src/components/xlsx/GridSemantics'
+it('keeps sort and funnel actions visible and pointer-usable in navigation mode without entering control mode', () => {
+  const p = gridFixture(), sort = vi.fn(), filter = vi.fn()
+  const ui = render(<GridSemantics {...p} onSortCycle={sort} onFilter={filter} />)
+  const grid = ui.getByRole('grid')
+  act(() => grid.focus())
+  const arrow = ui.getByRole('button', { name: 'Cycle sort column A' })
+  const funnel = ui.getByRole('button', { name: /Filter column A/ })
+  expect(arrow.tabIndex).toBe(-1)
+  expect(funnel.tabIndex).toBe(-1)
+  expect(arrow.closest('[hidden]')).toBeNull()
+  expect(funnel.closest('[hidden]')).toBeNull()
+  expect(fireEvent.mouseDown(arrow)).toBe(false)
+  act(() => arrow.focus())
+  expect(document.activeElement).toBe(grid)
+  fireEvent.click(arrow)
+  fireEvent.click(funnel)
+  expect(sort).toHaveBeenCalledWith(0, false, arrow)
+  expect(filter).toHaveBeenCalledWith(0, funnel)
+  expect(grid.tabIndex).toBe(0)
+  expect(grid.querySelectorAll('[role="gridcell"][tabindex]')).toHaveLength(0)
+  fireEvent.keyDown(grid, { key: 'F2' })
+  expect(ui.getByRole('button', { name: 'Select Column A' }).tabIndex).toBe(0)
+  expect(arrow.tabIndex).toBe(0)
+  expect(funnel.tabIndex).toBe(0)
+})
+
+it('shows the committed sort direction and pressed arrow/funnel state without focused headers', () => {
+  const p = gridFixture(), ui = render(<GridHeaders projection={p.projection} window={p.window} viewport={p.viewport} columns={[0]} selection={p.selection}
+    controlMode={false} onSortCycle={() => {}} onFilter={() => {}}
+    sort={{ range: { r0: 0, r1: 3, c0: 0, c1: 0, headerRows: 1, totalsRows: 0 }, keys: [{ col: 0, order: 'desc' }], caseSensitive: false }}
+    filter={{ range: { r0: 0, r1: 3, c0: 0, c1: 0, headerRows: 1, totalsRows: 0 }, columns: new Map([[0, { kind: 'number', op: 'gt', first: 0 }]]) }} />)
+  const arrow = ui.getByRole('button', { name: 'Cycle sort column A' }), funnel = ui.getByRole('button', { name: /Filter column A/ })
+  expect(arrow.getAttribute('aria-pressed')).toBe('true')
+  expect(arrow.textContent).toContain('↓')
+  expect(funnel.getAttribute('aria-pressed')).toBe('true')
+  expect(funnel.querySelector('svg')).toBeTruthy()
+  expect(ui.getByRole('columnheader', { name: /Column A/ }).getAttribute('aria-sort')).toBe('descending')
+})
