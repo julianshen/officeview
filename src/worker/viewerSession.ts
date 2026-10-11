@@ -23,7 +23,7 @@ import type {
 } from '../xlsx/view/contracts'
 import { MAX_COLS, MAX_ROWS, cellId, isValidCoordinate, type SourceRect, type SourceRow } from '../xlsx/view/coordinates'
 import { createIdentityOrder } from '../xlsx/view/order'
-import { CompactRowVisibility, isVisibleSource, normalizeFilter, visibilityFromHidden } from '../xlsx/view/visibility'
+import { normalizeFilter, projectVisibilitySteps, visibilityFromHidden, type CompactRowVisibility } from '../xlsx/view/visibility'
 import { createSheetMetrics } from '../xlsx/view/projection'
 import { hiddenSourceRowsFromDisplay, sortRowOrder, type SortResult } from '../xlsx/view/sort'
 import { CooperativeSlice, type CooperativeOptions, type YieldFunction } from '../xlsx/view/scheduler'
@@ -429,11 +429,6 @@ interface SheetState {
 }
 const countsOf = (visibility: CompactRowVisibility): ViewCounts =>
   Object.freeze({ visible: visibility.rank(visibility.logicalCount), total: MAX_ROWS })
-/** Mask-word write (bitwise on mask words only, never on a cell ID). */
-function setSlot(words: Uint32Array, slot: number, visible: boolean): void {
-  const word = Math.floor(slot / 32), bit = 2 ** (slot % 32)
-  words[word] = visible ? (words[word] | bit) >>> 0 : (words[word] & ~bit) >>> 0
-}
 /** Abandons a cooperative guard at a yield when its request was cancelled or
  * its owner superseded; caught by the operation and returned as its outcome. */
 class GuardHalt extends Error {
@@ -633,41 +628,27 @@ export class DocumentSession {
     if (!this.isCurrent(owner)) return { kind: 'stale' }
     return null
   }
-  /** Cooperative equivalent of projectVisibility (S2.1): rebuilds the display
-   * mask from the immutable snapshot, the draft order and the filter predicate,
-   * yielding on the shared budget per projected row and rechecking cancellation
-   * and ownership after every yield. Identical words to the synchronous form. */
+  /** Cooperative run of the single S2.1 projection (projectVisibilitySteps):
+   * yields on the shared budget per reported chunk of projected rows and
+   * rechecks cancellation and ownership after every yield. */
   private async projectDraft(
     owner: CacheIdentity, filter: FilterSpec | null, order: RowOrder,
     matches: (row: SourceRow, filter: FilterSpec) => boolean,
     slice: CooperativeSlice<string>, signal: AbortSignal, charge: Charge, heldBytes: number,
   ): Promise<{ kind: 'projected'; visibility: CompactRowVisibility } | { kind: 'cancelled' } | { kind: 'stale' }> {
     const baseHidden = this.source.geometry(owner.sheetId).baseHidden
-    const words = visibilityFromHidden(baseHidden, MAX_ROWS).words.slice()
-    charge.set(heldBytes + words.byteLength)
-    for (const band of order.bands) {
-      if (band.r1 >= MAX_ROWS) throw new RangeError('Order exceeds visibility axis')
-      for (let offset = 0; offset < band.sourceAtOffset.length; offset++) {
-        setSlot(words, band.r0 + offset, !baseHidden.contains(band.sourceAtOffset[offset]))
-        if (slice.due()) {
-          await slice.pause('project')
-          const halt = this.halted(owner, signal)
-          if (halt) return halt
-        }
+    // The draft mask words (one bit per display slot) live while projecting.
+    charge.set(heldBytes + Math.ceil(MAX_ROWS / 32) * 4)
+    const steps = projectVisibilitySteps(baseHidden, filter, order, matches, MAX_ROWS)
+    let next = steps.next()
+    for (; !next.done; next = steps.next()) {
+      if (slice.due(next.value)) {
+        await slice.pause('project')
+        const halt = this.halted(owner, signal)
+        if (halt) return halt
       }
     }
-    if (filter) {
-      if (filter.range.r1 >= MAX_ROWS) throw new RangeError('Filter exceeds visibility axis')
-      for (let row = filter.range.r0 + filter.range.headerRows; row <= filter.range.r1 - filter.range.totalsRows; row++) {
-        setSlot(words, order.sourceToDisplay(row), isVisibleSource(row, { baseHidden, filter }, matches))
-        if (slice.due()) {
-          await slice.pause('project')
-          const halt = this.halted(owner, signal)
-          if (halt) return halt
-        }
-      }
-    }
-    const visibility = new CompactRowVisibility(MAX_ROWS, words)
+    const visibility = next.value.visibility
     charge.set(heldBytes + visibility.words.byteLength + visibility.summaries.byteLength)
     return { kind: 'projected', visibility }
   }

@@ -152,19 +152,39 @@ export function isVisibleSource(sourceRow: SourceRow, view: Pick<SheetView, 'bas
   if (filter && sourceRow >= filter.range.r0 + filter.range.headerRows && sourceRow <= filter.range.r1 - filter.range.totalsRows) return matches(sourceRow, filter)
   return !view.baseHidden.contains(sourceRow)
 }
+/** Rows projected between cooperative reports; divides the 4,096-unit S4.2
+ * yield budget, so a consumer's budget boundaries stay exact. */
+export const PROJECTION_CHUNK = 256
 /** Rebuild from the immutable snapshot, never the previous mask. Visit only
- * affected source body rows/permutation bands, plus compact snapshot words (§5.2). */
-export function projectVisibility(baseHidden: IntervalSet, input: FilterSpec | null, order: RowOrder, matches: (row: SourceRow, filter: FilterSpec) => boolean, count = MAX_ROWS): { filter: FilterSpec | null; visibility: CompactRowVisibility } {
+ * affected source body rows/permutation bands, plus compact snapshot words (§5.2).
+ * The single implementation: a generator that yields the number of rows
+ * projected since its last report (at most PROJECTION_CHUNK) so a cooperative
+ * consumer (the worker session) can yield on its budget, and returns the
+ * result. projectVisibility drives it to completion synchronously. */
+export function* projectVisibilitySteps(baseHidden: IntervalSet, input: FilterSpec | null, order: RowOrder, matches: (row: SourceRow, filter: FilterSpec) => boolean, count = MAX_ROWS): Generator<number, { filter: FilterSpec | null; visibility: CompactRowVisibility }, void> {
   const filter = normalizeFilter(input), words = snapshotWords(baseHidden, count)
+  let pending = 0
   for (const band of order.bands) {
     if (band.r1 >= count) throw new RangeError('Order exceeds visibility axis')
-    for (let offset = 0; offset < band.sourceAtOffset.length; offset++) setBit(words, band.r0 + offset, !baseHidden.contains(band.sourceAtOffset[offset]))
+    for (let offset = 0; offset < band.sourceAtOffset.length; offset++) {
+      setBit(words, band.r0 + offset, !baseHidden.contains(band.sourceAtOffset[offset]))
+      if (++pending === PROJECTION_CHUNK) { yield pending; pending = 0 }
+    }
   }
   if (filter) {
     if (filter.range.r1 >= count) throw new RangeError('Filter exceeds visibility axis')
     for (let sourceRow = filter.range.r0 + filter.range.headerRows; sourceRow <= filter.range.r1 - filter.range.totalsRows; sourceRow++) {
       setBit(words, order.sourceToDisplay(sourceRow), isVisibleSource(sourceRow, { baseHidden, filter }, matches))
+      if (++pending === PROJECTION_CHUNK) { yield pending; pending = 0 }
     }
   }
+  if (pending) yield pending
   return { filter, visibility: new CompactRowVisibility(count, words) }
+}
+export function projectVisibility(baseHidden: IntervalSet, input: FilterSpec | null, order: RowOrder, matches: (row: SourceRow, filter: FilterSpec) => boolean, count = MAX_ROWS): { filter: FilterSpec | null; visibility: CompactRowVisibility } {
+  const steps = projectVisibilitySteps(baseHidden, input, order, matches, count)
+  for (;;) {
+    const next = steps.next()
+    if (next.done) return next.value
+  }
 }
