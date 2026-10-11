@@ -1,9 +1,10 @@
 import type { MouseEvent, ReactElement } from 'react'
-import type { GridSelection, ScrollWindow, SortSpec } from '../../xlsx/view/contracts'
+import type { GridSelection, ScrollWindow, SortSpec, FilterSpec, ColumnRule } from '../../xlsx/view/contracts'
 import type { ProjectedSheetMetrics } from '../../xlsx/view/projection'
 import { columnToLetters } from '../../xlsx/view/coordinates'
 import { logicalToViewport, type ViewportSize } from '../../xlsx/view/scrollWindow'
-import { rowContains } from '../../xlsx/view/selection'
+import { rowContains, boundedSelectionText } from '../../xlsx/view/selection'
+import { useControlMedia } from './controlMedia'
 
 export const GRID_HEADER_SIZE = 44
 export interface HeaderSelectionOptions { toggle: boolean; extend: boolean }
@@ -16,8 +17,15 @@ export interface GridHeadersProps {
   selection: GridSelection
   sort: SortSpec | null
   controlMode?: boolean
+  touchControls?: boolean
   onSelect?: (kind: 'row' | 'column', index: number, options: HeaderSelectionOptions, event: MouseEvent<HTMLButtonElement>) => void
   onSelectAll?: () => void
+  controlColumn?: number | null
+  filter?: FilterSpec | null
+  onSortCycle?: (col: number, shift: boolean, invoker: HTMLButtonElement) => void
+  onFilter?: (col: number, invoker: HTMLButtonElement) => void
+  onSortDialog?: (col: number, invoker: HTMLButtonElement) => void
+  onNotice?: (message: string) => void
 }
 /** Viewport CSS geometry, shared by both strips; DPR is applied by the painter,
  * not again to DOM CSS coordinates. ScrollWindow already includes recentering. */
@@ -57,6 +65,15 @@ export function cellSelected(ranges: readonly SelectionPart[], at: { row: number
   }
   return unknown ? undefined : false
 }
+export function columnRuleDescription(rule: ColumnRule): string {
+  if (rule.kind === 'compound') return boundedSelectionText(`${columnRuleDescription(rule.first)} ${rule.connective.toUpperCase()} ${columnRuleDescription(rule.second)}`)
+  if (rule.kind === 'values') return rule.selection.mode === 'allExcept' ? `All except ${rule.selection.excluded.count} values` : rule.selection.mode === 'include' ? `${rule.selection.keys.count} included values` : 'Complete value-query selection'
+  if (rule.kind === 'datePreset') return `Date period: ${rule.preset}`
+  const op: Record<string, string> = { gt: 'Greater than', gte: 'Greater than or equal', lt: 'Less than', lte: 'Less than or equal', eq: 'Equals', neq: 'Does not equal', between: 'Between', contains: 'Contains', 'not-contains': 'Does not contain', begins: 'Begins with', ends: 'Ends with', before: 'Before', after: 'After' }
+  const value = (input: typeof rule.first) => typeof input === 'object'
+    ? `${String(input.year).padStart(4, '0')}-${String(input.month).padStart(2, '0')}-${String(input.day).padStart(2, '0')}` : String(input)
+  return boundedSelectionText(`${op[rule.op]} ${value(rule.first)}${'second' in rule && rule.second !== undefined ? ` through ${value(rule.second)}` : ''}`)
+}
 function selectedColumn(props: GridHeadersProps, col: number): boolean | undefined {
   const parts = props.selection.ranges.filter(part => part.cols.some(c => col >= c.c0 && col <= c.c1))
   const last = props.projection.rows.logicalCount - 1, intervals: { lo: number; hi: number }[] = []
@@ -95,7 +112,11 @@ function selectedRow(props: GridHeadersProps, row: number): boolean | undefined 
 // A mouse press must not move focus onto a header control outside control mode.
 const keepGridFocus = (event: MouseEvent<HTMLButtonElement>) => { if (event.currentTarget.tabIndex < 0) event.preventDefault() }
 export function GridHeaders(props: GridHeadersProps): ReactElement {
-  return <div role="row" aria-rowindex={1} data-officeview-ui="grid-headers" onPointerDown={event => event.stopPropagation()} onDoubleClick={event => event.stopPropagation()} style={{ position: 'absolute', top: 0, left: 0, height: GRID_HEADER_SIZE, width: '100%', zIndex: 2, background: '#f3f4f6' }}>
+  const coarsePointer = useControlMedia('(pointer: coarse)'), touch = props.touchControls ?? coarsePointer
+  const actions = Boolean(props.onSortCycle || props.onFilter || props.onSortDialog)
+  const height = columnHeaderHeight(touch, actions, Boolean(props.onSortDialog))
+  const target = { minHeight: GRID_HEADER_SIZE, minWidth: touch ? GRID_HEADER_SIZE : 0, overflow: 'hidden', padding: 0, border: 0, background: 'transparent' }
+  return <div role="row" aria-rowindex={1} data-officeview-ui="grid-headers" onPointerDown={event => event.stopPropagation()} onDoubleClick={event => event.stopPropagation()} style={{ position: 'absolute', top: 0, left: 0, height, width: '100%', zIndex: 2, background: '#f3f4f6' }}>
     <div role="columnheader" aria-colindex={1} aria-label="Worksheet corner" style={{ position: 'absolute', left: 0, width: GRID_HEADER_SIZE, height: GRID_HEADER_SIZE, zIndex: 1 }}>
       <button type="button" aria-label="Select worksheet" tabIndex={props.controlMode ? 0 : -1} onMouseDown={keepGridFocus} onClick={props.onSelectAll} style={{ width: GRID_HEADER_SIZE, height: GRID_HEADER_SIZE }}>↖</button>
     </div>
@@ -104,14 +125,30 @@ export function GridHeaders(props: GridHeadersProps): ReactElement {
       const direction = priority < 0 ? undefined : props.sort!.keys[priority].order === 'asc' ? 'ascending' : 'descending'
       if (props.coarse) box.width = Math.min(GRID_HEADER_SIZE, props.viewport.width - box.x)
       const selected = selectedColumn(props, col), label = `Column ${columnToLetters(col)}${direction ? `; sort priority ${priority + 1}, ${direction}` : ''}`
+      const rule = props.filter?.columns.get(col), description = rule ? columnRuleDescription(rule) : 'No viewer filter'
+      const actions = Boolean(props.onSortCycle || props.onFilter || props.onSortDialog)
+      // A touch target keeps its 44px floor only while the column is that wide;
+      // narrower, it is clamped (and the header clips) so a neighbour's control
+      // never overlaps and steals the hit (spec §9.3 deterministic ownership).
+      const cellTarget = { ...target, minWidth: touch ? Math.min(GRID_HEADER_SIZE, box.width) : 0, width: touch ? box.width : box.width / (actions ? props.onSortDialog ? 4 : 3 : 1), flex: 'none' }
+      const iconClip = { display: 'block', width: touch ? box.width : undefined, overflow: 'hidden', textAlign: 'center' as const }
       return <div key={col} role="columnheader" aria-colindex={col + 2} aria-label={label} aria-selected={selected} aria-sort={priority === 0 ? direction : undefined}
-        style={{ position: 'absolute', left: GRID_HEADER_SIZE + box.x, width: box.width, height: box.height }}>
+        style={{ position: 'absolute', left: GRID_HEADER_SIZE + box.x, width: box.width, height, overflow: 'hidden', display: 'flex', flexDirection: touch ? 'column' : 'row', alignItems: 'stretch' }}>
         <button type="button" aria-label={`Select ${label}`} data-header-column={col} tabIndex={props.controlMode ? 0 : -1} onMouseDown={keepGridFocus}
-          onClick={event => props.onSelect?.('column', col, { toggle: event.ctrlKey || event.metaKey, extend: event.shiftKey }, event)}
-          style={{ minWidth: GRID_HEADER_SIZE, minHeight: GRID_HEADER_SIZE, width: '100%', border: 0, background: 'transparent', padding: 0 }}><span style={{ display: 'block', width: box.width, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{columnToLetters(col)}</span></button>
+          aria-description={actions ? description : undefined} title={`${label}; ${description}`}
+          onClick={event => { props.onNotice?.(`${label}; ${description}`); props.onSelect?.('column', col, { toggle: event.ctrlKey || event.metaKey, extend: event.shiftKey }, event) }}
+          style={cellTarget}><span style={{ ...iconClip, textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{columnToLetters(col)}</span></button>
+        {actions && <>
+          <button type="button" data-action-column={col} tabIndex={props.controlMode ? 0 : -1} onMouseDown={keepGridFocus} style={{ ...cellTarget, color: direction ? '#1459a6' : undefined }} disabled={!props.onSortCycle} aria-label={`Cycle sort column ${columnToLetters(col)}`} aria-description={direction ?? 'unsorted'} aria-pressed={Boolean(direction)} title={`${label}; ${direction ?? 'unsorted'}`} onClick={event => props.onSortCycle?.(col, event.shiftKey, event.currentTarget)}><span style={iconClip}>{direction === 'ascending' ? '↑' : direction === 'descending' ? '↓' : '↕'}</span></button>
+          <button type="button" data-action-column={col} tabIndex={props.controlMode ? 0 : -1} onMouseDown={keepGridFocus} style={{ ...cellTarget, color: rule ? '#1459a6' : undefined }} disabled={!props.onFilter} aria-label={`Filter column ${columnToLetters(col)} — ${description}`} aria-pressed={Boolean(rule)} title={description} onClick={event => { props.onNotice?.(`${label}; ${description}`); props.onFilter?.(col, event.currentTarget) }}><span style={iconClip}><svg aria-hidden="true" width="12" height="14" viewBox="0 0 12 14"><path d="M1 1h10L7 6v6l-2-1V6z" fill={rule ? 'currentColor' : 'none'} stroke="currentColor" /></svg></span></button>
+          {props.onSortDialog && <button type="button" data-action-column={col} tabIndex={props.controlMode ? 0 : -1} onMouseDown={keepGridFocus} style={cellTarget} aria-label={`More sort options for ${columnToLetters(col)}`} onClick={event => props.onSortDialog?.(col, event.currentTarget)}><span style={iconClip}>⋯</span></button>}
+        </>}
       </div>
     })}
   </div>
+}
+export function columnHeaderHeight(touch: boolean, actions: boolean, more: boolean): number {
+  return GRID_HEADER_SIZE * (touch && actions ? more ? 4 : 3 : 1)
 }
 export function GridRowHeader({ props, slot }: { props: GridHeadersProps; slot: number }): ReactElement {
   const row = props.projection.order.displayToSource(slot), box = viewportHeaderBox(props.projection, props.window, props.viewport, 'row', slot)

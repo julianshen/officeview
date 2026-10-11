@@ -12,6 +12,8 @@ export interface ViewerStatusProps {
   records: { visible: number; total: number; completeness?: Completeness }
   announcement?: string
   inspection?: HiddenCellInspection
+  countMode?: 'records' | 'body'
+  loadReport?: { status: 'ready'; notices?: readonly string[] } | { status: 'error'; message: string }
 }
 function inspectionText(read: CellRead | null): string {
   if (!read || read.kind === 'unknown') return 'Loading cell…'
@@ -20,7 +22,7 @@ function inspectionText(read: CellRead | null): string {
   const formula = read.cell.formula ? `; formula ${boundedSelectionText(read.cell.formula)}` : ''
   return read.kind === 'unavailable' ? `Formula value unavailable${formula}` : `Value ${boundedSelectionText(String(read.cell.value ?? ''))}${formula}`
 }
-export function ViewerStatus({ records, announcement, inspection }: ViewerStatusProps): ReactElement {
+export function ViewerStatus({ records, announcement, inspection, countMode, loadReport }: ViewerStatusProps): ReactElement {
   const validCounts = Number.isSafeInteger(records?.total) && records.total >= 0 && records.total <= MAX_ROWS && Number.isSafeInteger(records.visible) && records.visible >= 0 && records.visible <= records.total
   const source = inspection?.source, row = inspection?.target.row, col = inspection?.target.col
   const owner = source?.stamp
@@ -45,9 +47,10 @@ export function ViewerStatus({ records, announcement, inspection }: ViewerStatus
     }).catch(() => { if (alive && !controller.signal.aborted) setSnapshot({ key, read: { kind: 'error', code: 'page-error', retryable: true } }) })
     return () => { alive = false; controller.abort() }
   }, [key])
-  const counts = !validCounts ? 'Record counts unavailable' : records.total === 0 ? '0 records' : `${records.visible} of ${records.total} records`
+  const counts = !validCounts ? 'Record counts unavailable' : countMode === 'body' ? `Visible body ${records.visible} / ${records.completeness === 'complete' ? 'complete body' : 'body'} ${records.total}` : records.total === 0 ? '0 records' : `${records.visible} of ${records.total} records`
   return <div role="status" aria-live="polite" aria-atomic="true" data-officeview-ui="viewer-status">
     <span>{counts}{validCounts && records.completeness && records.completeness !== 'complete' ? ` (${records.completeness})` : ''}</span>
+    {(loadReport?.status === 'error' ? [loadReport.message] : loadReport?.notices ?? []).map((message, index) => <span key={index}> — {message}</span>)}
     {announcement && <span> — {announcement}</span>}
     {inspection && <span> — Original cell {formatA1(inspection.target)}; {inspection.hiddenReason}; read-only. {inspectionText(snapshot?.key === key ? snapshot.read : null)}</span>}
   </div>
