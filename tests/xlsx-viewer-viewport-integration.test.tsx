@@ -821,6 +821,38 @@ describe('live bitmap bytes stay admitted (S5.2 review round 3)', () => {
     } finally { window.print = original; g.createImageBitmap = originalBitmap }
   })
 
+  it('a picture refused by the shared budget during print is diagnosed, never a silent blank', async () => {
+    const png = (salt: number) => {
+      const bytes = new Uint8Array(64)
+      bytes.set([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 13, 0x49, 0x48, 0x44, 0x52])
+      new DataView(bytes.buffer).setUint32(16, 4096)
+      new DataView(bytes.buffer).setUint32(20, 4096)
+      bytes.set([8, 6, 0, 0, 0], 24)
+      bytes[40] = salt
+      return bytes
+    }
+    const doc = await workbook([{ name: 'S1', rows: [{ r: 1, cells: [{ ref: 'A1', v: 'one' }] }] }, { name: 'S2', rows: [{ r: 1, cells: [{ ref: 'A1', v: 'two' }] }] }])
+    const source = { partPath: 'd', treePath: 't', element: 'pic', representation: 'native' as const }
+    const pic = (imageIndex: number) => ({ xEmu: 0, yEmu: 0, widthEmu: 95250, heightEmu: 95250, geometry: 'rect', imageIndex, source })
+    doc.images = [{ data: png(1), mime: 'image/png' }, { data: png(2), mime: 'image/png' }]
+    ;(doc.sheets[0] as { drawings?: unknown[] }).drawings = [pic(0)]
+    ;(doc.sheets[1] as { drawings?: unknown[] }).drawings = [pic(1)]
+    const g = globalThis as { createImageBitmap?: unknown }
+    const originalBitmap = g.createImageBitmap
+    g.createImageBitmap = vi.fn(async () => { const c = document.createElement('canvas'); c.width = 1; c.height = 1; return c })
+    const print = vi.fn()
+    const original = window.print
+    window.print = print
+    try {
+      const { ui } = await mountSheet(doc)
+      act(() => { fireEvent.keyDown(ui.getByRole('region', { name: 'Spreadsheet viewer' }), { key: 'p', ctrlKey: true }) })
+      await waitFor(() => expect(print).toHaveBeenCalledTimes(1))
+      // S1's retained picture leaves no room for S2's: S2 says so on its page.
+      expect(ui.getByTestId('officeview-sheet-print-pages').textContent).toMatch(/Sheet “S2”: 1 picture is omitted from print/)
+      act(() => { window.dispatchEvent(new Event('afterprint')) })
+    } finally { window.print = original; g.createImageBitmap = originalBitmap }
+  })
+
   it('a resize while print units prepare is admitted against the current panes', async () => {
     const { BITMAP_BUDGETS } = await import('../src/xlsx/view/tileCache')
     const { columnToLetters } = await import('../src/xlsx/view/coordinates')

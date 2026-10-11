@@ -107,7 +107,7 @@ export interface InteractiveSheetDocProps {
   /** @internal Asset lease factory (tests inject delayed leases). */
   assetLoader?: typeof prepareSheetAssets
   /** @internal Static print unit factory (tests inject delayed units). */
-  printLoader?: (doc: XlsxDocument, options: PrintUnitsOptions) => Promise<PaintableArray>
+  printLoader?: (doc: XlsxDocument, options: PrintUnitsOptions) => Promise<PaintableArray & { refusedImages?: number[] }>
 }
 
 // Document identity alone owns zoom reset (§10.1): a stable id per document object.
@@ -656,7 +656,7 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
   // budget left beside the pane surfaces (tiles are released first); units that do
   // not fit are replaced by an explicit "omitted" notice, never silently dropped.
   // Every publication re-checks its request token, permission and mount (§10.1).
-  const [printPages, setPrintPages] = useState<ReadonlyArray<{ name: string; page: Paintable | null }> | null>(null)
+  const [printPages, setPrintPages] = useState<ReadonlyArray<{ name: string; page: Paintable | null; refusedImages: number }> | null>(null)
   const printLease = useRef<PaintableArray | null>(null)
   const printToken = useRef(0)
   const allowPrintRef = useRef(allowPrint)
@@ -679,7 +679,7 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
       const bytes = page.spec.widthPx * page.spec.heightPx * 4
       const admitted = bytes <= remaining
       if (admitted) { remaining -= bytes; reserved += bytes }
-      return { name: doc.sheets[index]?.name ?? `Sheet ${index + 1}`, page: admitted ? page : null }
+      return { name: doc.sheets[index]?.name ?? `Sheet ${index + 1}`, page: admitted ? page : null, refusedImages: pages.refusedImages?.[index] ?? 0 }
     })
     printLease.current?.dispose()
     printLease.current = pages
@@ -782,7 +782,7 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
         <div ref={paneRef} data-testid="officeview-sheet-pane" style={{ position: 'relative', flex: '1 1 auto', minHeight: 0, overflow: 'hidden', background: '#ffffff' }}>
           {entry && scroll && (
             <GridSemantics owner={identity} projection={entry.metrics} view={entry.view} selection={selection} window={scroll} viewport={viewport}
-              body={entry.body} onChange={onGridChange} announcement={[resourceNotice, assets?.sheetId !== activeSheetId ? 'Loading sheet…' : '', selectionIncomplete ? 'Selection highlight is incomplete at this zoom; zoom in for detail.' : '', announcement].filter(Boolean).join(' ')} inspection={inspection} profile={profile} label={`Worksheet ${entry.sheet.name}`}
+              body={entry.body} onChange={onGridChange} announcement={[resourceNotice, assets?.sheetId !== activeSheetId ? 'Loading sheet…' : '', assets && assets.sheetId === activeSheetId && assets.lease.refusedImages > 0 ? `${assets.lease.refusedImages} picture${assets.lease.refusedImages === 1 ? ' is' : 's are'} not shown (image memory budget).` : '', selectionIncomplete ? 'Selection highlight is incomplete at this zoom; zoom in for detail.' : '', announcement].filter(Boolean).join(' ')} inspection={inspection} profile={profile} label={`Worksheet ${entry.sheet.name}`}
               cellPresentation={at => {
                 const cell = cellAt(entry, at)
                 return { text: cell ? cellDisplayText(entry.sheet, cell) : '' }
@@ -803,7 +803,10 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
             {!printPages && <p data-testid="officeview-sheet-print-notice">To print this spreadsheet, press Ctrl/Cmd+P inside the viewer.</p>}
             <div data-testid="officeview-sheet-print-pages">
               {printPages?.map((unit, index) => unit.page
-                ? <canvas key={index} ref={el => { printRefs.current[index] = el }} style={{ display: 'block', maxWidth: '100%', breakAfter: 'page' }} />
+                ? <div key={index} style={{ breakAfter: 'page' }}>
+                    {unit.refusedImages > 0 && <p>Sheet “{unit.name}”: {unit.refusedImages} picture{unit.refusedImages === 1 ? ' is' : 's are'} omitted from print (image memory budget).</p>}
+                    <canvas ref={el => { printRefs.current[index] = el }} style={{ display: 'block', maxWidth: '100%' }} />
+                  </div>
                 : <p key={index}>Sheet “{unit.name}” is omitted from print: it exceeds the print memory budget.</p>)}
             </div>
           </div>
