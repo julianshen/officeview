@@ -14,6 +14,12 @@
  * DOCTYPE is refused (`unsupported`); `&` must start a reference of at most
  * 32 characters ending in `;` in text and attribute values (so `&#;`, `&#x;`
  * and over-long references are errors, while unknown `&name;` stays literal).
+ *
+ * Kept for parity (pinned by tests): raw characters outside the XML 1.0 Char
+ * production (C0 controls, U+FFFE/U+FFFF, lone surrogates) pass through text,
+ * CDATA and attribute values unchanged, exactly as the current parser keeps
+ * them; rejecting them here would make accept/reject depend on size routing.
+ * Numeric references to such characters are a parse-error on both paths.
  */
 import { PackageError, throwIfAborted } from './package-error'
 
