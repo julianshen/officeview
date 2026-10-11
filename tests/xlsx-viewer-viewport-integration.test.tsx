@@ -763,3 +763,62 @@ describe('incomplete selection state (S5.2 review round 3)', () => {
     expect(ui.getByRole('status').textContent).not.toContain('incomplete')
   }, 30_000)
 })
+
+describe('live bitmap bytes stay admitted (S5.2 review round 3)', () => {
+  /** Tracks every canvas backing store (panes, tiles, print) as it is sized. */
+  function trackCanvases() {
+    const proto = Object.getPrototypeOf(document.createElement('canvas')) as object
+    const w = Object.getOwnPropertyDescriptor(proto, 'width')!, hgt = Object.getOwnPropertyDescriptor(proto, 'height')!
+    const live = new Map<object, number>()
+    const state = { peak: 0, now: 0 }
+    const update = (canvas: object) => {
+      live.set(canvas, (w.get!.call(canvas) as number) * (hgt.get!.call(canvas) as number) * 4)
+      state.now = [...live.values()].reduce((a, b) => a + b, 0)
+      state.peak = Math.max(state.peak, state.now)
+    }
+    Object.defineProperty(proto, 'width', { configurable: true, get() { return w.get!.call(this) }, set(value: number) { w.set!.call(this, value); update(this) } })
+    Object.defineProperty(proto, 'height', { configurable: true, get() { return hgt.get!.call(this) }, set(value: number) { hgt.set!.call(this, value); update(this) } })
+    return { state, live, restore: () => { Object.defineProperty(proto, 'width', w); Object.defineProperty(proto, 'height', hgt) } }
+  }
+  function stubPane(size: { width: number; height: number }) {
+    const cw = Object.getOwnPropertyDescriptor(Element.prototype, 'clientWidth')!, ch = Object.getOwnPropertyDescriptor(Element.prototype, 'clientHeight')!
+    Object.defineProperty(Element.prototype, 'clientWidth', { configurable: true, get() { return (this as HTMLElement).dataset?.testid === 'officeview-sheet-pane' ? size.width : 0 } })
+    Object.defineProperty(Element.prototype, 'clientHeight', { configurable: true, get() { return (this as HTMLElement).dataset?.testid === 'officeview-sheet-pane' ? size.height : 0 } })
+    return () => { Object.defineProperty(Element.prototype, 'clientWidth', cw); Object.defineProperty(Element.prototype, 'clientHeight', ch) }
+  }
+
+  it('a resize while the next sheet is loading admits retained tiles and pane surfaces together (no instrumentation)', async () => {
+    const { BITMAP_BUDGETS } = await import('../src/xlsx/view/tileCache')
+    const { prepareSheetAssets } = await import('../src/components/xlsx/sheetAssets')
+    const size = { width: 644, height: 444 }
+    const restorePane = stubPane(size)
+    const tracker = trackCanvases()
+    let release: (() => void) | undefined
+    const loader: typeof prepareSheetAssets = async (d, options) => {
+      if (options?.sheetIndex === 1) await new Promise<void>(resolve => { release = resolve })
+      return prepareSheetAssets(d, options)
+    }
+    try {
+      const doc = await workbook()
+      const ui = render(<InteractiveSheetDoc doc={doc} assetLoader={loader} />)
+      await waitFor(() => expect((ui.getByTestId('officeview-sheet-base') as HTMLCanvasElement).width).toBeGreaterThan(0))
+      await settle()
+      // Fill the tile pool from many distinct positions.
+      const el = scroller(ui)
+      for (let step = 1; step <= 40; step++) {
+        act(() => { el.scrollTop = step * 1500; el.scrollLeft = (step % 7) * 1500; fireEvent.scroll(el) })
+        await settle()
+      }
+      act(() => { fireEvent.change(ui.getByRole('combobox', { name: 'Worksheet' }), { target: { value: '2' } }) })
+      await settle()
+      size.width = 3044; size.height = 2044
+      act(() => { window.dispatchEvent(new Event('resize')) })
+      await settle()
+      expect((ui.getByTestId('officeview-sheet-base') as HTMLCanvasElement).width).toBe(3000)
+      expect(tracker.state.peak).toBeLessThanOrEqual(BITMAP_BUDGETS.D)
+      await act(async () => { release?.(); await new Promise(resolve => setTimeout(resolve, 5)) })
+      expect(tracker.state.peak).toBeLessThanOrEqual(BITMAP_BUDGETS.D)
+      ui.unmount()
+    } finally { tracker.restore(); restorePane() }
+  }, 60_000)
+})

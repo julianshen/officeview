@@ -312,9 +312,11 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
     extent: { width: entry.metrics.cols.totalCss(), height: entry.metrics.rows.totalCss() },
     assets: assets?.lease.assets, layoutCache: entry.layoutCache, merges: entry.merges, ...(mark ? { watermark: mark } : {}),
   } : null
+  // Purely observational: it never creates or resizes the pool.
   const report = () => {
-    if (!props.onFrame || !scroll) return
-    const renderer = rendererFor(), stats = renderer.stats
+    const renderer = rendererRef.current
+    if (!props.onFrame || !scroll || !renderer) return
+    const stats = renderer.stats
     props.onFrame({
       basePaints: stats.basePaints, tileHits: stats.tileHits, prefetched: stats.prefetched, refused: stats.refused,
       overlayPaints: overlayPaints.current, lastRequests: stats.lastRequests.map(request => ({ ...request.box })),
@@ -329,7 +331,9 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
     if (!canvas || !frame || admittedDpr === null) return
     if (!assets || assets.sheetId !== activeSheetId) {
       // The active sheet's lease is pending: present a declared loading state, never
-      // another sheet's (or an unleased) raster.
+      // another sheet's (or an unleased) raster. The pool is re-admitted for the
+      // current surfaces (releasing tiles that no longer fit) before any sizing.
+      rendererFor()
       sizeCanvas(canvas, device.width, device.height)
       const ctx = canvas.getContext('2d')
       if (!ctx) return
@@ -500,6 +504,7 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
   useLayoutEffect(() => {
     const canvas = overlayRef.current
     if (!canvas || !entry || !scroll || admittedDpr === null) return
+    rendererFor() // admit retained tiles + surfaces before sizing this surface
     sizeCanvas(canvas, device.width, device.height)
     const ctx = canvas.getContext('2d')
     if (!ctx) return
