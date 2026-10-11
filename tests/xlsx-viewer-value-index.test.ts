@@ -3,11 +3,12 @@ import type { FilterRange, SourceStamp, SourceStore, ColumnEntry, Page, ValuesFi
 import { FilterEngine, rawValueKey, type ColumnClassification, type PreparedValue } from '../src/xlsx/view/filter'
 import {
   SOURCE_BLANK, SOURCE_BOOLEAN, SOURCE_ERROR, SOURCE_NUMBER, SOURCE_STRING, SOURCE_UNAVAILABLE, VALUE_DISPLAY_LIMIT,
-  ValueIndexCache, ValueIndexError, ValueSelectionDraft, compileValuesMembership, valueSourceFromStore,
+  ValueIndexCache, ValueIndexError, ValueSelectionDraft, compileValuesMembership, valueScope, valueSourceFromStore,
   type ValueColumnSource, type ValueIndex, type ValueIndexIdentity, type ValueLabeler, type ValueLanePage, type ValuePageRead,
 } from '../src/xlsx/view/valueIndex'
 import { MemoryValueRunStore } from '../src/xlsx/view/valueRuns'
 
+const MiB = 1024 * 1024
 const STAMP: SourceStamp = { docId: 'doc', sheetId: 's1', valueGen: 3 }
 const RANGE: FilterRange = { r0: 0, r1: 1_048_575, c0: 0, c1: 3, headerRows: 1, totalsRows: 0 }
 const mixed: ColumnClassification = { kind: 'text', hasNumeric: true }
@@ -62,8 +63,9 @@ const str = (value: string): PreparedValue => ({ kind: 'string', value })
 const num = (value: number): PreparedValue => ({ kind: 'number', value })
 async function membership(rule: ValuesFilter | null, store: MemoryValueRunStore, classification: ColumnClassification = mixed) {
   if (!rule) return () => true
-  return compileValuesMembership(rule, classification, store, STAMP)
+  return (await compileValuesMembership(rule, identity(classification), store)).matches
 }
+const keyAt = (index: ValueIndex) => (entry: { ordinal: number }): string => index.key(entry.ordinal)
 const items = (count: number): string[] => Array.from({ length: count }, (_, i) => `item-${String(i).padStart(5, '0')}`)
 
 describe('semantic value keys', () => {
@@ -79,9 +81,9 @@ describe('semantic value keys', () => {
     expect(keysOf(index)).toEqual(expect.arrayContaining(['e:#N/A', 'e:#DIV/0!', 's:#N/A', 'b:1', 's:TRUE', 'n:1.5', 's:1.5', 'n:0']))
     expect(keysOf(index)).not.toContain('n:-0')
     const page = index.page({ offset: 0, limit: 50, label })
-    expect(page.entries.find(entry => entry.key === 'n:1.5')?.count).toBe(2)
-    expect(page.entries.find(entry => entry.key === 'e:#N/A')).toMatchObject({ kind: 'error', label: '#N/A', count: 2 })
-    expect(page.entries.find(entry => entry.key === 's:#N/A')).toMatchObject({ kind: 'string', count: 1 })
+    expect(page.entries.find(entry => keyAt(index)(entry) === 'n:1.5')?.count).toBe(2)
+    expect(page.entries.find(entry => keyAt(index)(entry) === 'e:#N/A')).toMatchObject({ kind: 'error', label: '#N/A', count: 2 })
+    expect(page.entries.find(entry => keyAt(index)(entry) === 's:#N/A')).toMatchObject({ kind: 'string', count: 1 })
   })
   it('keeps distinct date serials with the same display label as distinct keys', async () => {
     const cells: Cell[] = [44927.25, 44927.75, 44927.25, 44928]
@@ -93,7 +95,7 @@ describe('semantic value keys', () => {
     expect(() => index.page({ offset: 0, limit: 10 })).toThrow(expect.objectContaining({ code: 'missing-display-text' }))
     await expect(index.search({ text: '2023', locale: 'en-US' })).rejects.toMatchObject({ code: 'missing-display-text' })
     const day = await index.search({ text: '2023-01-01', locale: 'en-US' }, { label })
-    expect(index.page({ offset: 0, limit: 10, search: day, label }).entries.map(entry => entry.key)).toEqual(['d:44927.25', 'd:44927.75'])
+    expect(index.page({ offset: 0, limit: 10, search: day, label }).entries.map(keyAt(index))).toEqual(['d:44927.25', 'd:44927.75'])
   })
   it('keys the cache by classification so the same serials are numeric keys under number classification', async () => {
     const cache = new ValueIndexCache(), source = fromCells([44927.25, 44927.75])
@@ -234,7 +236,7 @@ describe('draft membership semantics', () => {
   it('rejects a committed rule owned by another source generation', async () => {
     const { index } = await built(cells)
     const store = new MemoryValueRunStore()
-    const ref = await store.put({ count: 0, kinds: new Uint8Array(0), numbers: new Float64Array(0), texts: [] }, { ...STAMP, valueGen: 2 })
+    const ref = await store.put({ count: 0, kinds: new Uint8Array(0), numbers: new Float64Array(0), texts: [] }, { ...STAMP, valueGen: 2 }, valueScope(identity(mixed, { valueGen: 2 })))
     const stale: ValuesFilter = { kind: 'values', showBlanks: true, selection: { mode: 'allExcept', excluded: ref } }
     await expect(ValueSelectionDraft.open(index, stale, store)).rejects.toMatchObject({ code: 'stale-source' })
   })
@@ -258,9 +260,9 @@ describe('complete universe beyond the displayed prefix', () => {
     const hit = await index.search({ text: 'ITEM-12345', locale: 'en-US' })
     expect(hit.count).toBe(1)
     expect(hit.complete).toBe(true)
-    expect(index.page({ offset: 0, limit: 10, search: hit }).entries.map(entry => entry.key)).toEqual(['s:item-12345'])
+    expect(index.page({ offset: 0, limit: 10, search: hit }).entries.map(keyAt(index))).toEqual(['s:item-12345'])
     const accent = await index.search({ text: 'item-accent', locale: 'en-US' })
-    expect(index.page({ offset: 0, limit: 10, search: accent }).entries.map(entry => entry.key)).toEqual(['s:ÍTEM-ACCENT', 's:item-accent'].filter(key => engine.matchText('contains', 'item-accent', false, key.slice(2))))
+    expect(index.page({ offset: 0, limit: 10, search: accent }).entries.map(keyAt(index))).toEqual(['s:ÍTEM-ACCENT', 's:item-accent'].filter(key => engine.matchText('contains', 'item-accent', false, key.slice(2))))
     const subset = await index.search({ text: 'item-1', locale: 'en-US' })
     expect(subset.count).toBe(5_000)
     expect(index.page({ offset: 0, limit: 500, search: subset })).toMatchObject({ total: 5_000, displayed: 5_000, truncated: false })
@@ -339,12 +341,9 @@ describe('scale with typed lanes', () => {
     expect(index.size).toBe(100_004)
     expect(index.completeness).toBe('complete')
     expect(index.find(num(99_999 * 1.5))).toBeGreaterThan(VALUE_DISPLAY_LIMIT)
-    const started = performance.now()
     const hit = await index.search({ text: 'text-99998', locale: 'en-US' }, { label })
-    const elapsed = performance.now() - started
     expect(hit.count).toBe(1)
-    expect(index.page({ offset: 0, limit: 5, search: hit, label }).entries[0].key).toBe('s:text-99998')
-    expect(elapsed).toBeGreaterThan(0)
+    expect(keyAt(index)(index.page({ offset: 0, limit: 5, search: hit, label }).entries[0])).toBe('s:text-99998')
   }, 120_000)
   it('indexes 1M distinct numeric values with bounded typed allocations and a warm reopen', async () => {
     const total = 1_000_000, rows = 65_536, pages: (() => ValuePageRead)[] = []
@@ -447,7 +446,8 @@ describe('resources, cancellation and ownership', () => {
     const { index } = await built(['short', 'x'.repeat(70_000)])
     await expect(index.search({ text: 'zz', locale: 'en-US' })).rejects.toMatchObject({ code: 'resource-limit' })
     const page = index.page({ offset: 0, limit: 5 })
-    expect(page.entries[1]).toMatchObject({ labelTruncated: true, key: `s:${'x'.repeat(70_000)}` })
+    expect(page.entries[1]).toMatchObject({ labelTruncated: true })
+    expect(index.key(page.entries[1].ordinal)).toBe(`s:${'x'.repeat(70_000)}`)
     expect(page.entries[1].label.length).toBeLessThanOrEqual(256)
   })
   it('invalidates on generation change and rejects stale draft commits', async () => {
@@ -499,4 +499,223 @@ describe('SourceStore adapter', () => {
     expect(await index.build()).toBe('loading')
     expect(keysOf(index)).toEqual(['s:a', 'n:5', 'e:#N/A'])
   })
+})
+
+describe('review round 1 findings', () => {
+  it('binds search results to the producing index instance, not just the sheet owner (codex 1)', async () => {
+    const cache = new ValueIndexCache()
+    const a = cache.open(identity(mixed, { col: 2 }), fromCells(['alpha', 'beta']))
+    const b = cache.open(identity(mixed, { col: 3 }), fromCells(['beta', 'alpha']))
+    await a.build(); await b.build()
+    const fromA = await a.search({ text: 'alpha', locale: 'en-US' })
+    expect(() => b.page({ offset: 0, limit: 10, search: fromA })).toThrow(expect.objectContaining({ code: 'stale-source' }))
+    const draft = await ValueSelectionDraft.open(b, null, new MemoryValueRunStore())
+    expect(() => draft.selectAll(false, fromA)).toThrow(expect.objectContaining({ code: 'stale-source' }))
+    expect(() => a.page({ offset: 0, limit: 10, search: { ...fromA } })).toThrow(ValueIndexError)
+    expect(a.page({ offset: 0, limit: 10, search: fromA }).entries.map(keyAt(a))).toEqual(['s:alpha'])
+  })
+  it('binds stored key runs to their column scope (committed rule from another column is stale)', async () => {
+    const cache = new ValueIndexCache(), store = new MemoryValueRunStore()
+    const a = cache.open(identity(mixed, { col: 2 }), fromCells(['alpha', 'beta']))
+    const b = cache.open(identity(mixed, { col: 3 }), fromCells(['alpha', 'beta']))
+    await a.build(); await b.build()
+    const draft = await ValueSelectionDraft.open(a, null, store)
+    draft.toggle(a.find(str('alpha')), false)
+    const { rule } = await draft.commit()
+    await expect(ValueSelectionDraft.open(b, rule, store)).rejects.toMatchObject({ code: 'stale-source' })
+    await expect(compileValuesMembership(rule!, identity(mixed, { col: 3 }), store)).rejects.toMatchObject({ code: 'stale-source' })
+    await expect(compileValuesMembership(rule!, identity(date, { col: 2 }), store)).rejects.toMatchObject({ code: 'stale-source' })
+  })
+  it('rejects cached builds, searches, pages and commits once the live source owner changes (codex 2)', async () => {
+    const source = fromCells(items(8))
+    const cache = new ValueIndexCache(), index = cache.open(identity(), source)
+    await index.build()
+    const draft = await ValueSelectionDraft.open(index, null, new MemoryValueRunStore())
+    draft.toggle(0, false)
+    source.stamp = { ...STAMP, valueGen: 4 }
+    await expect(index.build()).rejects.toMatchObject({ code: 'stale-source' })
+    expect(index.disposed).toBe(true)
+    await expect(draft.commit()).rejects.toMatchObject({ code: 'stale-source' })
+    const second = fromCells(items(8)), other = new ValueIndexCache().open(identity(), second)
+    await other.build()
+    second.stamp = { ...STAMP, valueGen: 4 }
+    await expect(other.search({ text: 'item', locale: 'en-US' })).rejects.toMatchObject({ code: 'stale-source' })
+    const third = fromCells(items(8)), paged = new ValueIndexCache().open(identity(), third)
+    await paged.build()
+    third.stamp = { ...STAMP, valueGen: 4 }
+    expect(() => paged.page({ offset: 0, limit: 5 })).toThrow(expect.objectContaining({ code: 'stale-source' }))
+  })
+  it('detects an owner change during a commit store write before publication (codex 2)', async () => {
+    const source = fromCells(items(8)), index = new ValueIndexCache().open(identity(), source)
+    await index.build()
+    const store = new MemoryValueRunStore(), put = store.put.bind(store)
+    store.put = async (...args) => { source.stamp = { ...STAMP, valueGen: 9 }; return put(...args) }
+    const draft = await ValueSelectionDraft.open(index, null, store)
+    draft.toggle(0, false)
+    await expect(draft.commit()).rejects.toMatchObject({ code: 'stale-source' })
+    expect(store.refCount).toBe(0)
+  })
+  it('reads the adapter owner live from the store (codex 2)', () => {
+    const store = { stamp: STAMP } as { stamp: SourceStamp }
+    const source = valueSourceFromStore(store as unknown as SourceStore, 2, { r0: 1, r1: 4 }, 2)
+    store.stamp = { ...STAMP, valueGen: 7 }
+    expect(source.stamp.valueGen).toBe(7)
+  })
+  it('charges retained search layers, committed key sets and evaluators to the pool and releases them (codex 3, opencode 3)', async () => {
+    const cache = new ValueIndexCache({ limitBytes: 16 * MiB })
+    const index = cache.open(identity(), fromCells(items(6_000), 1024))
+    await index.build()
+    const base = cache.usedBytes
+    const draft = await ValueSelectionDraft.open(index, null, new MemoryValueRunStore())
+    for (let i = 0; i < 3; i++) draft.selectAll(i % 2 === 0, await draft.search({ text: `item-0000${i}`, locale: 'en-US' }))
+    expect(cache.usedBytes - base).toBeGreaterThanOrEqual(3 * Math.ceil(6_000 / 32) * 4)
+    draft.cancel()
+    expect(cache.usedBytes).toBe(base)
+    const store = new MemoryValueRunStore(), first = await ValueSelectionDraft.open(index, null, store)
+    first.selectAll(false)
+    for (let i = 0; i < 5_000; i++) first.toggle(i, true)
+    expect(cache.usedBytes - base).toBeGreaterThanOrEqual(5_000 * 48)
+    const rule = (await first.commit()).rule!
+    expect(cache.usedBytes).toBe(base)
+    const reopened = await ValueSelectionDraft.open(index, rule, store)
+    expect(cache.usedBytes - base).toBeGreaterThanOrEqual(5_000 * 24)
+    reopened.cancel()
+    expect(cache.usedBytes).toBe(base)
+    const evaluator = await compileValuesMembership(rule, identity(), store, { cache })
+    expect(evaluator.bytes).toBeGreaterThan(0)
+    expect(cache.usedBytes).toBe(base + evaluator.bytes)
+    evaluator.release()
+    expect(cache.usedBytes).toBe(base)
+  })
+  it('refuses unbounded retained search layers with a typed memory quota (codex 3)', async () => {
+    const probe = new ValueIndexCache(), sized = probe.open(identity(), fromCells(items(4_000), 1024))
+    await sized.build()
+    const cache = new ValueIndexCache({ limitBytes: probe.usedBytes + 10 * 500 })
+    const index = cache.open(identity(), fromCells(items(4_000), 1024))
+    await index.build()
+    const draft = await ValueSelectionDraft.open(index, null, new MemoryValueRunStore())
+    let failure: unknown
+    // Empty searches match everything cheaply; each still retains a bitset layer.
+    try { for (let i = 0; i < 40; i++) draft.selectAll(i % 2 === 0, await draft.search({ text: '', locale: 'en-US' })) } catch (error) { failure = error }
+    expect(failure).toMatchObject({ code: 'quota', detail: { resource: 'memory' } })
+    expect(cache.usedBytes).toBeLessThanOrEqual(cache.limitBytes)
+  })
+  it('keeps display pages bounded: ordinals and bounded labels only, no raw keys (codex 4, opencode 4)', async () => {
+    const long = (i: number) => String.fromCharCode(0x0410 + (i % 32)).repeat(65_536)
+    const { index } = await built(Array.from({ length: 600 }, (_, i) => long(i) + i), mixed, 128)
+    const page = index.page({ offset: 0, limit: 500 })
+    expect(page.entries).toHaveLength(500)
+    expect(Object.keys(page.entries[0]).sort()).toEqual(['count', 'kind', 'label', 'labelTruncated', 'ordinal'])
+    const bytes = page.entries.reduce((sum, entry) => sum + entry.label.length * 2 + 64, 0)
+    expect(bytes).toBeLessThan(512 * 1024)
+  })
+  it('keeps covered pages loading or failed when the source page is not complete (codex 5)', async () => {
+    const make = (completeness: 'loading' | 'incomplete') => ({
+      stamp: STAMP,
+      async queryColumn(): Promise<Page<ColumnEntry>> {
+        return { items: [{ kind: 'blank', r0: 1, r1: 2 }], completeness, stamp: STAMP }
+      },
+    } as unknown as SourceStore)
+    const loading = valueSourceFromStore(make('loading'), 2, { r0: 1, r1: 2 }, 2)
+    expect(await loading.readPage(0, new AbortController().signal)).toMatchObject({ kind: 'unknown' })
+    expect(await new ValueIndexCache().open(identity(), loading).build()).toBe('loading')
+    const incomplete = valueSourceFromStore(make('incomplete'), 2, { r0: 1, r1: 2 }, 2)
+    expect(await incomplete.readPage(0, new AbortController().signal)).toMatchObject({ kind: 'error', failure: { code: 'incomplete' } })
+  })
+  it('resumes a partial numeric search with its own formatter during commit (codex 6)', async () => {
+    let resolved = false
+    const source = new FakeSource([
+      () => lanes('p0', [10, 20, 'x']),
+      () => resolved ? lanes('p1', [210, 30]) : { kind: 'unknown', pageId: 'p1' },
+    ])
+    const index = new ValueIndexCache().open(identity(), source)
+    await index.build()
+    const store = new MemoryValueRunStore(), draft = await ValueSelectionDraft.open(index, null, store)
+    draft.selectAll(false, await draft.search({ text: '10', locale: 'en-US' }, { label }))
+    resolved = true
+    await index.build()
+    const { rule } = await draft.commit()
+    expect(rule).toMatchObject({ selection: { mode: 'allExcept', excluded: { count: 2 } } })
+    expect([num(10), num(210), num(20), num(30)].map(await membership(rule, store))).toEqual([false, false, true, true])
+  })
+  it('interrupts a build of immediately resolved pages with a scheduled abort and reports progress (codex 7)', async () => {
+    const total = 200_000, rows = 1024, pages: (() => ValuePageRead)[] = []
+    for (let start = 0; start < total; start += rows) {
+      const id = `p${pages.length}`
+      pages.push(() => {
+        const numbers = new Float64Array(rows)
+        for (let i = 0; i < rows; i++) numbers[i] = start + i
+        return { kind: 'values', pageId: id, count: rows, tags: new Uint8Array(rows).fill(SOURCE_NUMBER), numbers, texts: [] }
+      })
+    }
+    const source = new FakeSource(pages), controller = new AbortController(), progress: number[] = []
+    const index = new ValueIndexCache().open(identity(numeric), source)
+    setTimeout(() => controller.abort(), 0)
+    await expect(index.build({ signal: controller.signal, sliceMs: 0, onProgress: p => progress.push(p.completed) })).rejects.toMatchObject({ code: 'cancelled' })
+    expect(source.reads.length).toBeLessThan(pages.length)
+    expect(progress.length).toBeGreaterThan(0)
+    expect(progress).toEqual([...progress].sort((x, y) => x - y))
+    const done: { completed: number; total: number }[] = []
+    expect(await index.build({ onProgress: p => done.push(p) })).toBe('complete')
+    expect(done.at(-1)).toEqual({ phase: 'pages', completed: pages.length, total: pages.length })
+  })
+  it('interrupts a search with a scheduled abort within a time slice and reports progress (codex 7)', async () => {
+    const { index } = await built(items(15_000), mixed, 1024)
+    const controller = new AbortController(), progress: number[] = []
+    setTimeout(() => controller.abort(), 5)
+    await expect(index.search({ text: 'item', locale: 'en-US' }, { signal: controller.signal, sliceMs: 4, onProgress: p => progress.push(p.searched) }))
+      .rejects.toMatchObject({ code: 'cancelled' })
+    expect(progress.length).toBeGreaterThan(0)
+    expect(progress.at(-1)!).toBeLessThan(15_000)
+  })
+  it('honours cancellation before unchanged or normalized publication (codex 8)', async () => {
+    const { index } = await built(items(5))
+    const aborted = new AbortController()
+    aborted.abort()
+    const draft = await ValueSelectionDraft.open(index, null, new MemoryValueRunStore())
+    draft.selectAll(true)
+    await expect(draft.commit(aborted.signal)).rejects.toMatchObject({ code: 'cancelled' })
+    const unchanged = await ValueSelectionDraft.open(index, null, new MemoryValueRunStore())
+    await expect(unchanged.commit(aborted.signal)).rejects.toMatchObject({ code: 'cancelled' })
+    expect(unchanged.closed).toBe(false)
+  })
+  it('charges the texts reference slot for each interned string (opencode 6)', async () => {
+    const a = await built(['aaaaaaaaaa']), b = await built(['aaaaaaaaaa', 'bbbbbbbbbb'])
+    expect(b.index.ledger.chargedBytes - a.index.ledger.chargedBytes).toBe(10 * 2 + 40 + 128 + 8)
+  })
+  it('admits commit run buffers at 17 bytes per element (opencode 5)', async () => {
+    const values = items(4_000), probe = await built(values, mixed, 1024)
+    const count = 1_000, bitset = Math.ceil(4_000 / 32) * 4
+    const cache = new ValueIndexCache({ limitBytes: probe.cache.usedBytes + 2 * bitset + count * 13 })
+    const index = cache.open(identity(), fromCells(values, 1024))
+    await index.build()
+    const draft = await ValueSelectionDraft.open(index, null, new MemoryValueRunStore())
+    const subset = await draft.search({ text: 'item-01', locale: 'en-US' })
+    expect(subset.count).toBe(count)
+    draft.selectAll(false, subset)
+    await expect(draft.commit()).rejects.toMatchObject({ code: 'quota', detail: { resource: 'memory' } })
+  })
+  it('cancels and resumes a 1M distinct-string build at scale without rereading merged pages (opencode 7)', async () => {
+    const total = 1_000_000, rows = 65_536, pages: (() => ValuePageRead)[] = []
+    for (let start = 0; start < total; start += rows) {
+      const count = Math.min(rows, total - start), id = `p${pages.length}`
+      pages.push(() => {
+        const texts: string[] = new Array(count)
+        for (let i = 0; i < count; i++) texts[i] = `v${start + i}`
+        return { kind: 'values', pageId: id, count, tags: new Uint8Array(count).fill(SOURCE_STRING), numbers: new Float64Array(count), texts }
+      })
+    }
+    const controller = new AbortController()
+    const source = new FakeSource(pages, page => { if (page === 7) controller.abort() })
+    const cache = new ValueIndexCache(), index = cache.open(identity(), source)
+    await expect(index.build({ signal: controller.signal })).rejects.toMatchObject({ code: 'cancelled' })
+    expect(index.size).toBe(7 * rows)
+    expect(await cache.open(identity(), source).build()).toBe('complete')
+    expect(index.size).toBe(total)
+    expect(source.reads).toEqual([0, 1, 2, 3, 4, 5, 6, 7, ...Array.from({ length: pages.length - 7 }, (_, i) => i + 7)])
+    expect(index.key(total - 1)).toBe('s:v999999')
+    const search = new AbortController()
+    setTimeout(() => search.abort(), 5)
+    await expect(index.search({ text: 'v99', locale: 'en-US' }, { signal: search.signal, sliceMs: 4 })).rejects.toMatchObject({ code: 'cancelled' })
+  }, 120_000)
 })

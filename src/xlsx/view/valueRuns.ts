@@ -140,7 +140,7 @@ export function validateRun(run: ValueKeyRun): void {
 }
 export interface ValueRunStore {
   /** Stores an immutable copy; refusal is a typed storage quota error. */
-  put(run: ValueKeyRun, owner: SourceStamp, signal?: AbortSignal): Promise<PagedKeySetRef>
+  put(run: ValueKeyRun, owner: SourceStamp, scope: string, signal?: AbortSignal): Promise<PagedKeySetRef>
   /** Reads [offset, offset+limit) of the ref; a ref with another owner is stale. */
   read(ref: PagedKeySetRef, offset: number, limit: number, signal?: AbortSignal): Promise<ValueKeyRun>
   release(ref: PagedKeySetRef): Promise<void>
@@ -170,7 +170,7 @@ export class MemoryValueRunStore implements ValueRunStore {
     if (!(this.limitBytes >= 0)) throw new RangeError('Invalid value run store limit')
   }
   get refCount(): number { return this.runs.size }
-  async put(run: ValueKeyRun, owner: SourceStamp, signal?: AbortSignal): Promise<PagedKeySetRef> {
+  async put(run: ValueKeyRun, owner: SourceStamp, _scope: string, signal?: AbortSignal): Promise<PagedKeySetRef> {
     if (signal?.aborted) throw new ValueIndexError('cancelled', 'Value run write cancelled')
     validateRun(run)
     let bytes = 64

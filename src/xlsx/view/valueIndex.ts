@@ -76,12 +76,24 @@ export interface ValueSearchResult {
 }
 export interface ValuePageRequest { offset: number; limit: number; search?: ValueSearchResult; label?: ValueLabeler }
 export interface ValuePage { entries: readonly ValueEntryView[]; total: number; displayed: number; truncated: boolean; completeness: ValueCompleteness }
-export interface ValueBuildOptions { signal?: AbortSignal }
+export interface ValueProgress { phase: 'pages'; completed: number; total: number }
+export interface ValueSearchProgress { searched: number; total: number; matches: number }
+export interface ValueBuildOptions {
+  signal?: AbortSignal
+  onProgress?: (progress: ValueProgress) => void
+  /** Maximum uninterrupted work before an event-loop yield (default 8 ms). */
+  sliceMs?: number
+  now?: () => number
+  yield?: () => Promise<void>
+}
 export interface ValueSearchOptions {
   signal?: AbortSignal
   label?: ValueLabeler
   limits?: Omit<FilterLimits, 'signal'>
   yield?: () => Promise<void>
+  onProgress?: (progress: ValueSearchProgress) => void
+  sliceMs?: number
+  now?: () => number
   /** Continue a result over ordinals merged after it was produced. */
   resume?: ValueSearchResult
 }
@@ -117,6 +129,7 @@ function defaultYield(): Promise<void> {
   const host = globalThis as { setImmediate?: (callback: () => void) => unknown }
   return new Promise(resolve => host.setImmediate ? host.setImmediate(resolve) : setTimeout(resolve, 0))
 }
+export function valueScope(identity: ValueIndexIdentity): string { return identityKey(identity) }
 function identityKey(identity: ValueIndexIdentity): string {
   const { range } = identity
   return JSON.stringify([identity.docId, identity.sheetId, identity.valueGen, range.r0, range.r1, range.c0, range.c1,
@@ -669,7 +682,7 @@ export class ValueSelectionDraft {
       numbers[at] = index.entryText(ordinal) === undefined ? index.entryNumber(ordinal) : 0
       texts[at++] = index.entryText(ordinal)
     }
-    const ref = await this.store.put({ count, kinds, numbers, texts }, index.stamp, signal)
+    const ref = await this.store.put({ count, kinds, numbers, texts }, index.stamp, valueScope(index.identity), signal)
     if (this.closed || index.disposed) {
       await this.store.release(ref)
       throw new ValueIndexError(this.closed ? 'cancelled' : 'stale-source', 'Value draft changed owner during commit')
@@ -701,7 +714,16 @@ function committedRef(rule: ValuesFilter): PagedKeySetRef {
 
 /** Row-level evaluator for an applied values rule — the extension point for
  * FilterEngine (which still defers kind 'values' to this module). */
+export interface ValuesMembership { matches: (value: PreparedValue) => boolean; bytes: number; release(): void }
 export async function compileValuesMembership(
+  rule: ValuesFilter, identity: ValueIndexIdentity, store: ValueRunStore, options: { cache?: ValueIndexCache; signal?: AbortSignal } = {},
+): Promise<ValuesMembership> {
+  const classification = identity.classification, signal = options.signal
+  const owner = { docId: identity.docId, sheetId: identity.sheetId, valueGen: identity.valueGen }
+  const matches = await compileValuesMatcher(rule, classification, store, owner, signal)
+  return { matches, bytes: 0, release: () => {} }
+}
+async function compileValuesMatcher(
   rule: ValuesFilter, classification: ColumnClassification, store: ValueRunStore, owner: SourceStamp, signal?: AbortSignal,
 ): Promise<(value: PreparedValue) => boolean> {
   const ref = committedRef(rule)
