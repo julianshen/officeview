@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type ReactElement } from 'react'
+import { useEffect, useRef, useState, type ReactElement, type CSSProperties } from 'react'
 import type { ColumnRule, FilterSpec, SortSpec } from '../../xlsx/view/contracts'
 import { FilterEngine, type ColumnClassification } from '../../xlsx/view/filter'
 import { lowerDateCondition } from '../../xlsx/view/datePredicates'
@@ -7,9 +7,11 @@ import { columnToLetters } from '../../xlsx/view/coordinates'
 import type { DetectedRange } from '../../xlsx/view/rangeDetection'
 import { filterWithColumn, sameFilterRange, type DraftPage, type DraftQuery, type ValueDraftAction, type ValuesDraftPort } from './controlsClient'
 import { controlTarget, failureText, useControlLifetime, type ControlProps } from './controlUi'
+import { useControlMedia } from './controlMedia'
 import { ConditionEditor, conditionInput, typedCondition } from './ConditionEditor'
 export interface FilterDropdownProps extends ControlProps { col: number; applied: FilterSpec | null; snapshotHidden?: boolean; appliedSort?: SortSpec | null }
 export function FilterDropdown(props: FilterDropdownProps): ReactElement | null {
+  const bottomSheet = useControlMedia('(pointer: coarse), (max-width: 640px)')
   const life = useControlLifetime(props), session = useRef<ValuesDraftPort | null>(null), searchInput = useRef<HTMLInputElement>(null), changingRef = useRef(false)
   const [range, setRange] = useState<DetectedRange | null>(null), [page, setPage] = useState<DraftPage | null>(null), [query, setQuery] = useState<DraftQuery>({ text: '', offset: 0 })
   const [changing, setChanging] = useState(false)
@@ -101,7 +103,7 @@ export function FilterDropdown(props: FilterDropdownProps): ReactElement | null 
       event.stopPropagation()
       if (event.key === 'Escape') { event.preventDefault(); life.cancel() }
       else if (event.key === 'Enter' && event.target === searchInput.current) { event.preventDefault(); refresh({ ...query, offset: 0 }) }
-    }} style={{ position: 'relative', width: 'min(420px, calc(100vw - 16px))', maxHeight: '80vh', overflowY: 'auto', background: '#fff', border: '1px solid #888', padding: '12px 12px calc(12px + env(safe-area-inset-bottom))', boxSizing: 'border-box' }}>
+    }} style={{ position: bottomSheet ? 'fixed' : 'relative', bottom: bottomSheet ? 0 : undefined, left: bottomSheet ? 0 : undefined, zIndex: bottomSheet ? 4 : undefined, width: bottomSheet ? '100%' : 'min(420px, calc(100vw - 16px))', maxHeight: bottomSheet ? '85dvh' : '80vh', borderRadius: bottomSheet ? '12px 12px 0 0' : undefined, overflowY: 'auto', background: '#fff', border: '1px solid #888', padding: '12px', paddingBottom: 'calc(12px + var(--officeview-safe-bottom))', '--officeview-safe-bottom': 'env(safe-area-inset-bottom, 0px)', boxSizing: 'border-box' } as CSSProperties}>
     <form onSubmit={event => { event.preventDefault(); apply() }}>
       <h2>Filter column {columnToLetters(props.col)}</h2>
       <div><button type="button" style={controlTarget} disabled={busy || !range || life.invalid} onClick={() => apply('asc')}>Sort ascending</button><button type="button" style={controlTarget} disabled={busy || !range || life.invalid} onClick={() => apply('desc')}>Sort descending</button></div>

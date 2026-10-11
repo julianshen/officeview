@@ -376,3 +376,87 @@ it('keeps applied sort case sensitivity when using the dropdown sort shortcut', 
   expect(f.snapshot.sort?.caseSensitive).toBe(true)
   expect(f.snapshot.sort?.keys).toEqual([{ col: 0, order: 'asc' }])
 })
+
+it.each(['coarse pointer', 'narrow viewport'])('opens a full-width bottom sheet on a %s and returns focus on Cancel', async mode => {
+  const previous = window.matchMedia
+  window.matchMedia = vi.fn(query => ({ matches: query.includes(mode === 'coarse pointer' ? 'pointer: coarse' : 'max-width: 640px'), media: query, onchange: null,
+    addEventListener: vi.fn(), removeEventListener: vi.fn(), addListener: vi.fn(), removeListener: vi.fn(), dispatchEvent: () => true }))
+  const f = controlsFixture(10), invoker = document.createElement('button'), close = vi.fn()
+  document.body.append(invoker)
+  try {
+    const ui = render(<FilterDropdown owner={f.snapshot.owner} client={f.client} col={0} applied={null} invoker={invoker} onClose={close} onApplied={vi.fn()} onNotice={vi.fn()} />)
+    const popup = ui.getByRole('dialog', { name: 'Filter column A' })
+    expect(popup.style.position).toBe('fixed')
+    expect(popup.style.bottom).toBe('0px')
+    expect(popup.style.left).toBe('0px')
+    expect(popup.style.width).toBe('100%')
+    expect(popup.style.getPropertyValue('--officeview-safe-bottom')).toContain('safe-area-inset-bottom')
+    expect(popup.style.paddingBottom).toContain('--officeview-safe-bottom')
+    fireEvent.click(ui.getByRole('button', { name: 'Cancel' }))
+    expect(close).toHaveBeenCalledOnce()
+    expect(document.activeElement).toBe(invoker)
+    ui.unmount()
+  } finally { window.matchMedia = previous; invoker.remove() }
+})
+
+it('Deselect All then searched Select All and one exclusion commits only the remaining search match', async () => {
+  const f = controlsFixture(), ui = render(<FilterHarness fixture={f} />)
+  const ready = () => waitFor(() => expect((ui.getByRole('button', { name: 'OK' }) as HTMLButtonElement).disabled).toBe(false))
+  await ready()
+  fireEvent.click(ui.getByRole('button', { name: 'Deselect All' })); await ready()
+  fireEvent.change(ui.getByRole('textbox', { name: 'Search all values' }), { target: { value: 'beyond' } }); await ready()
+  fireEvent.click(ui.getByRole('button', { name: 'Select All' })); await ready()
+  fireEvent.click(ui.getByRole('checkbox', { name: 'beyond-B' })); await ready()
+  expect(f.publications).toBe(0)
+  fireEvent.click(ui.getByRole('button', { name: 'OK' }))
+  await waitFor(() => expect(f.publications).toBe(1))
+  const rule = f.snapshot.filter!.columns.get(0)!
+  expect(rule.kind).toBe('values')
+  if (rule.kind !== 'values') throw new Error('Expected values membership')
+  const membership = await compileValuesMembership(rule, f.options.domain(f.snapshot.owner, f.range, 0).identity, f.runs)
+  expect(membership.matches({ kind: 'string', value: 'beyond-A' })).toBe(true)
+  for (const value of ['beyond-B', 'item-10001', 'item-5']) expect(membership.matches({ kind: 'string', value })).toBe(false)
+  expect(membership.matches({ kind: 'blank' })).toBe(false)
+  expect(membership.matches({ kind: 'error', value: '#N/A' })).toBe(false)
+  expect(f.snapshot.records).toEqual({ visible: 1, total: 11020, completeness: 'complete' })
+})
+
+it('drops a delayed values page after valueGen changes and retains the retry notice', async () => {
+  const f = controlsFixture(10), base = f.client, notice = vi.fn(), close = vi.fn(), applied = vi.fn()
+  let hold = false, release!: () => void
+  const client: ControlsClient = { ...base, async values(...args) {
+    const port = await base.values(...args)
+    let last!: Awaited<ReturnType<typeof port.read>>
+    return { ...port, async read(...input) {
+      if (!hold) return last = await port.read(...input)
+      return new Promise(resolve => { release = () => resolve({ ...last, entries: [{ ...last.entries[0], label: 'OLD-PAGE' }] }) })
+    } }
+  } }
+  const props = { owner: f.snapshot.owner, client, col: 0, applied: null, onNotice: notice, onClose: close, onApplied: applied }
+  const ui = render(<FilterDropdown {...props} />)
+  await waitFor(() => expect(ui.getByRole('checkbox', { name: 'item-3' })).toBeTruthy())
+  hold = true
+  fireEvent.change(ui.getByRole('textbox', { name: 'Search all values' }), { target: { value: 'item' } })
+  expect(release).toBeTypeOf('function')
+  f.snapshot = { ...f.snapshot, owner: { ...f.snapshot.owner, valueGen: f.snapshot.owner.valueGen + 1 } }
+  ui.rerender(<FilterDropdown {...props} owner={f.snapshot.owner} />)
+  await act(async () => release())
+  expect(ui.queryByText('OLD-PAGE')).toBeNull()
+  expect(close).toHaveBeenCalledOnce()
+  expect(applied).not.toHaveBeenCalled()
+  expect(notice.mock.calls.at(-1)?.[0]).toBe('Source or view changed; reopen and retry.')
+  expect(f.publications).toBe(0)
+})
+
+it('respects no-header table metadata in the filter dropdown and includes the first row in body counts', async () => {
+  const f = controlsFixture(6, { kind: 'text', hasNumeric: true }, true), ui = render(<FilterHarness fixture={f} />)
+  await waitFor(() => expect(ui.getByRole('checkbox', { name: 'item-3' })).toBeTruthy())
+  expect(ui.getByText(/Table metadata: 0 header row/)).toBeTruthy()
+  fireEvent.click(ui.getByRole('checkbox', { name: 'item-3' }))
+  await waitFor(() => expect((ui.getByRole('button', { name: 'OK' }) as HTMLButtonElement).disabled).toBe(false))
+  fireEvent.click(ui.getByRole('button', { name: 'OK' }))
+  await waitFor(() => expect(f.publications).toBe(1))
+  expect(f.snapshot.filter?.range).toEqual(f.range)
+  expect(f.snapshot.filter?.range.headerRows).toBe(0)
+  expect(f.snapshot.records).toEqual({ visible: 5, total: 6, completeness: 'complete' })
+})
