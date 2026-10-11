@@ -96,7 +96,7 @@ Every package is implemented on its own branch, reviewed by at least one agent f
 | S8.1 typed filters, date lowering | implemented; two reviews requested changes; fixes in progress |
 | S7.2 pure sort engine (`src/xlsx/view/sort.ts`; worker kernel/session/header integration open) | merged |
 | S1.1 streaming ZIP/XML | design spike in progress (no production code yet) |
-| S3.1/S3.2 structural index and operation guard (pure parts) | not started (first attempt lost to an agent endpoint failure) |
+| S3.1/S3.2 structural index and operation guard (pure parts: `structure.ts`, `operationGuard.ts`; parser/drawing/spill wiring open) | merged |
 | S1.2, S1.3, S2.3, S4, S5, S6, S7.1, S8.2, S8.3, S9, S10, S11/S12 status, S13 | not started |
 
 ## S0 — Freeze contracts, counterexamples and fixture/harness infrastructure
@@ -264,27 +264,31 @@ expect(await source.readCell({ row: 1_048_575, col: 16_383 }, readOptions)).toMa
 
 ### S3.1 Structural metadata without per-cell coverage
 
+> **Status (2026-10-11):** pure structural index merged (`src/xlsx/view/structure.ts`; opencode fixes after codex-era review, Claude and opencode re-reviews, every finding fixed). Parser/`drawing.ts`/`types.ts` metadata extraction and the spill bridges are NOT delivered; only the checkboxes for the pure index are ticked.
+
 **Files:** create `src/xlsx/view/structure.ts`; modify `src/xlsx/parse.ts`, `drawing.ts`, `types.ts`; bridge `src/xlsx/formula/spills.ts`, `saved-spills.ts`; test `tests/xlsx-viewer-structure.test.ts`.
 
-- [ ] RED: a full-domain merge/style interval, spill child without formula, saved/dynamic spill bounds, table headerRows=0/totals rows, marker and absolute drawings. Assert range queries return anchors/children/overlap in bounded memory, never a map entry for every covered cell.
-- [ ] Run `bunx vitest run tests/xlsx-viewer-structure.test.ts`; expected giant merge memory/child classification or missing anchor metadata fails.
-- [ ] GREEN: build rectangle/interval indexes for merges, spills, tables, styled/hidden dimension overlays and cell-anchored drawing markers. Rectangles remain true two-dimensional row/column ranges; a flattened cell-ID interval hull must not introduce phantom covered cells for narrow-column giant rectangles. `queryStructural` returns immutable range records, metadataCoverage/completeness and source anchor identities; preserve from/to offsets/anchor kind and resolve one-cell extents sufficient for complete occupied geometry projection. Absolute drawings have explicit independent placement.
-- [ ] Add nonempty-row/column-chunk indexes supporting current-region and outsiderange safety queries; do not repeatedly scan all 16,384 columns per candidate row.
+- [x] RED: a full-domain merge/style interval, spill child without formula, saved/dynamic spill bounds, table headerRows=0/totals rows, marker and absolute drawings. Assert range queries return anchors/children/overlap in bounded memory, never a map entry for every covered cell.
+- [x] Run `bunx vitest run tests/xlsx-viewer-structure.test.ts`; expected giant merge memory/child classification or missing anchor metadata fails.
+- [x] GREEN: build rectangle/interval indexes for merges, spills, tables, styled/hidden dimension overlays and cell-anchored drawing markers. Rectangles remain true two-dimensional row/column ranges; a flattened cell-ID interval hull must not introduce phantom covered cells for narrow-column giant rectangles. `queryStructural` returns immutable range records, metadataCoverage/completeness and source anchor identities; preserve from/to offsets/anchor kind and resolve one-cell extents sufficient for complete occupied geometry projection. Absolute drawings have explicit independent placement.
+- [x] Add nonempty-row/column-chunk indexes supporting current-region and outsiderange safety queries; do not repeatedly scan all 16,384 columns per candidate row.
 - [ ] Run focused command plus existing merge/drawing/spill tests; expected exact hits, no per-cell coverage allocation and parser metadata remains compatible.
-- [ ] Deliver the shared structural API before selection, sorting or filtering consumes it.
+- [x] Deliver the shared structural API before selection, sorting or filtering consumes it.
 
 ### S3.2 Operation guard and drawing prefix impact
 
+> **Status (2026-10-11):** guard merged (`src/xlsx/view/operationGuard.ts`, 76 tests across both S3 files; Claude and opencode reviews, every finding fixed). Integration into worker commands/UI is owned by S4/S7/S8.
+
 **Files:** create `src/xlsx/view/operationGuard.ts`; test `tests/xlsx-viewer-operation-guard.test.ts`.
 
-- [ ] RED: allow read-only selection touching a spill child without its anchor; refuse sort×merge/spill and filter×merge/spill, including a distant blank merge/spill outside A:B within the affected row band and a cell-anchored drawing at source row 2 below filtered body rows 0–1. Pin operation refusal atomically: order/visibility/revisions/caches unchanged, status diagnostic emitted once.
-- [ ] Run `bunx vitest run tests/xlsx-viewer-operation-guard.test.ts`; expected naive row-span intersection accepts filter below-anchor displacement and fails.
-- [ ] GREEN: operation guard (dispatch each sub-item separately):
-  - [ ] Share one structural safety query among all consumers. Selection/highlighting is read-only and stays allowed on spill/merge children; deriving a sort/filter range from a selection queries the structural anchor/extent and refuses unsupported child-only ranges.
-  - [ ] Account for changing prefix geometry before/below retained cell anchors, not only operation-range intersection. v1 **refuses** every affected operation with a typed reason; drawing remapping is out of scope (spec §6.3 requires a separate reviewed contract). Absolute anchors follow the spec independently.
-- [ ] Structural guards query the entire affected body-row band across all 16,384 columns, even when keys/selected range are only A:B, because whole-row permutation/hiding affects distant blank/style-only merges and spills. Add a far-column blank merge/spill regression that cannot be found by the nonblank-data guard. Query all nonblank outsiderange columns anywhere in a sort band, including D values separated by blank C from selected A:B. Safe whole-row permutation may proceed only after this query completes authoritatively.
-- [ ] Run focused suite; expected anchored Y40→Y20 counterexample is refused with no view change, generated spill child is detected and isolated adjacent data never moves silently.
-- [ ] Deliver a reusable operation guard with typed refusal reasons and generation-aware query completion.
+- [x] RED: allow read-only selection touching a spill child without its anchor; refuse sort×merge/spill and filter×merge/spill, including a distant blank merge/spill outside A:B within the affected row band and a cell-anchored drawing at source row 2 below filtered body rows 0–1. Pin operation refusal atomically: order/visibility/revisions/caches unchanged, status diagnostic emitted once.
+- [x] Run `bunx vitest run tests/xlsx-viewer-operation-guard.test.ts`; expected naive row-span intersection accepts filter below-anchor displacement and fails.
+- [x] GREEN: operation guard (dispatch each sub-item separately):
+  - [x] Share one structural safety query among all consumers. Selection/highlighting is read-only and stays allowed on spill/merge children; deriving a sort/filter range from a selection queries the structural anchor/extent and refuses unsupported child-only ranges.
+  - [x] Account for changing prefix geometry before/below retained cell anchors, not only operation-range intersection. v1 **refuses** every affected operation with a typed reason; drawing remapping is out of scope (spec §6.3 requires a separate reviewed contract). Absolute anchors follow the spec independently.
+- [x] Structural guards query the entire affected body-row band across all 16,384 columns, even when keys/selected range are only A:B, because whole-row permutation/hiding affects distant blank/style-only merges and spills. Add a far-column blank merge/spill regression that cannot be found by the nonblank-data guard. Query all nonblank outsiderange columns anywhere in a sort band, including D values separated by blank C from selected A:B. Safe whole-row permutation may proceed only after this query completes authoritatively.
+- [x] Run focused suite; expected anchored Y40→Y20 counterexample is refused with no view change, generated spill child is detected and isolated adjacent data never moves silently.
+- [x] Deliver a reusable operation guard with typed refusal reasons and generation-aware query completion.
 
 ## S4 — Required resident worker, publication identity and lifecycle
 
