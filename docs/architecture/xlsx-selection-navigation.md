@@ -23,7 +23,9 @@ these flags. Shift replaces only the most recent gesture while retaining earlier
 Ctrl parts, even if those parts temporarily overlap the extended region.
 The optional `GridSelection.gesture` stores mode, source anchor and prefix as
 plain serializable data; spread, structuredClone and worker commit/deltas retain
-it. Legacy selections without gesture metadata remain valid. Header
+it. Legacy selections without gesture metadata remain valid: Shift derives
+their prefix by subtracting only the anchor..active span (the active cell after
+a Ctrl-click), so merged Ctrl parts keep their other cells. Header
 gestures retain row/column mode and source anchors; `selectHeader`'s sixth
 argument extends across headers through the visible projection. It selects
 full logical source rows/columns compactly.

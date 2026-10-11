@@ -320,13 +320,26 @@ function extendedPart(projection: ProjectedSheetMetrics, gesture: GridSelectionG
   if (gesture.kind === 'column') return { rows: { kind: 'intervals', intervals: [{ r0: 0, r1: projection.rows.logicalCount - 1 }] }, cols: displayColsBetween(projection, gesture.anchor.col, target.col) }
   return extendDisplayRange(projection, gesture.anchor, target).ranges[0]
 }
+/** Selections from producers without gesture metadata: the last gesture is the
+ * anchor..active span (the active cell itself after a Ctrl-click). Normalized
+ * parts may merge Ctrl cells, so subtract that span instead of dropping a part. */
+function legacyPrefix(state: GridSelection, projection: ProjectedSheetMetrics): readonly GridSelectionPart[] {
+  const active = state.active
+  if (!active) return state.ranges
+  const anchor = state.anchor ?? active
+  const visible = projection.sourceCellToLogical(anchor) && projection.sourceCellToLogical(active)
+  const span: GridSelectionPart = visible
+    ? extendDisplayRange(projection, anchor, active).ranges[0]
+    : { rows: { kind: 'intervals', intervals: [{ r0: active.row, r1: active.row }] }, cols: [{ c0: active.col, c1: active.col }] }
+  return subtract(state.ranges, span)
+}
 function extendGesture(state: GridSelection, projection: ProjectedSheetMetrics, target: SourceCell, kind?: 'row' | 'column'): GridSelection {
   const previous = state.gesture
   let anchor = previous?.anchor ?? state.anchor ?? state.active ?? target
   if (!previous || previous.kind === 'cells') {
     if (!projection.sourceCellToLogical(anchor)) anchor = state.active && projection.sourceCellToLogical(state.active) ? state.active : target
   }
-  const gesture: GridSelectionGesture = { kind: kind ?? previous?.kind ?? 'cells', anchor, prefix: previous?.prefix ?? state.ranges.slice(0, -1) }
+  const gesture: GridSelectionGesture = { kind: kind ?? previous?.kind ?? 'cells', anchor, prefix: previous?.prefix ?? legacyPrefix(state, projection) }
   const part = extendedPart(projection, gesture, target)
   return gestureSnapshot(target, anchor, [...subtract(gesture.prefix, part), part], gesture)
 }

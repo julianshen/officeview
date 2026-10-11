@@ -84,6 +84,21 @@ describe('selection boundary regressions', () => {
       expect([...new SourceSelection(shrunk.ranges).sourceRows()]).toEqual([0, 3, 4])
     }
   })
+  it('derives a legacy (gesture-less) Shift prefix by removing only the anchor..active part', () => {
+    const p = fixtureProjection([0, 1, 2, 3])
+    let state = selectCell(emptyGridSelection(), p, { row: 0, col: 0 }, { toggle: true })
+    state = selectCell(state, p, { row: 4, col: 0 }, { toggle: true })
+    expect(state.ranges).toHaveLength(1)
+    const { gesture: _dropped, ...legacy } = state
+    const next = selectCell(legacy, p, { row: 2, col: 0 }, { extend: true })
+    expect([...new SourceSelection(next.ranges).sourceRows()]).toEqual([0, 2, 3, 4])
+    // A legacy Shift range (anchor != active) is replaced, not kept, on the next Shift.
+    const ranged = selectCell(selectCell(emptyGridSelection(), p, { row: 0, col: 0 }), p, { row: 3, col: 1 }, { extend: true })
+    const { gesture: _range, ...legacyRange } = ranged
+    const shrunk = new SourceSelection(selectCell(legacyRange, p, { row: 1, col: 0 }, { extend: true }).ranges)
+    expect(shrunk.contains({ row: 1, col: 0 })).toBe(true)
+    expect(shrunk.contains({ row: 3, col: 1 })).toBe(false)
+  })
   it('serializes header mode and restores a temporarily overlapped Ctrl prefix (N2)', () => {
     const p = fixtureProjection([0, 1, 2, 3])
     let state = selectCell(emptyGridSelection(), p, { row: 0, col: 0 }, { toggle: true })
