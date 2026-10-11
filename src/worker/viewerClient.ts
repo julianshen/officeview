@@ -373,7 +373,11 @@ export class ViewerPublications {
 const READY: SheetStatus = Object.freeze({ kind: 'ready' })
 function noticeOf(out: WorkerReply): SheetNotice {
   switch (out.kind) {
-    case 'cancelled': return { requestId: out.requestId, kind: 'cancelled' }
+    case 'cancelled': {
+      // Keep the worker's cancel reason (superseded, range-replaced, ...).
+      const code = out.diagnostics[0]?.code
+      return code === undefined ? { requestId: out.requestId, kind: 'cancelled' } : { requestId: out.requestId, kind: 'cancelled', code }
+    }
     case 'incomplete': return { requestId: out.requestId, kind: 'incomplete' }
     case 'quota': return { requestId: out.requestId, kind: 'quota' }
     case 'error':
