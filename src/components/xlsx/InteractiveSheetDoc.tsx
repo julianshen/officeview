@@ -81,6 +81,7 @@ export interface SheetFrameStats {
   frameRecords: number
   frameGridlines: number
   prefetchRecords: number
+  maxTileRecords: number
   activeSheetId: string
   zoom: number
   identity: CacheIdentity
@@ -300,7 +301,7 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
       basePaints: stats.basePaints, tileHits: stats.tileHits, prefetched: stats.prefetched, refused: stats.refused,
       overlayPaints: overlayPaints.current, lastRequests: stats.lastRequests.map(request => ({ ...request.box })),
       tiles: renderer.cache.stats(), bitmapBytes: renderer.bitmapBytes(), peakBitmapBytes: stats.peakBitmapBytes,
-      budgetBytes: renderer.budgetBytes, frameRecords: stats.frameRecords, frameGridlines: stats.frameGridlines, prefetchRecords: stats.prefetchRecords, activeSheetId, zoom: scroll.zoom, identity,
+      budgetBytes: renderer.budgetBytes, frameRecords: stats.frameRecords, frameGridlines: stats.frameGridlines, prefetchRecords: stats.prefetchRecords, maxTileRecords: stats.maxTileRecords, activeSheetId, zoom: scroll.zoom, identity,
     })
   }
 

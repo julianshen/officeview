@@ -60,6 +60,8 @@ export interface SheetTileStats {
   frameRecords: number
   frameGridlines: number
   prefetchRecords: number
+  /** Largest record count any single tile has built (§11.1 per-tile cap). */
+  maxTileRecords: number
 }
 const TILE_BYTES = TILE_DEVICE_PX * TILE_DEVICE_PX * RGBA_BYTES
 
@@ -99,7 +101,7 @@ export function createCanvasTile(): CanvasTile {
 }
 
 export class SheetTileRenderer {
-  readonly stats: SheetTileStats = { basePaints: 0, tileHits: 0, prefetched: 0, refused: 0, lastRequests: [], peakBitmapBytes: 0, frameRecords: 0, frameGridlines: 0, prefetchRecords: 0 }
+  readonly stats: SheetTileStats = { basePaints: 0, tileHits: 0, prefetched: 0, refused: 0, lastRequests: [], peakBitmapBytes: 0, frameRecords: 0, frameGridlines: 0, prefetchRecords: 0, maxTileRecords: 0 }
   readonly budgetBytes: number
   readonly cache: TileCache
   private readonly pool: MemoryPool
@@ -216,6 +218,7 @@ export class SheetTileRenderer {
       })
       kind = result.kind
       if (result.kind === 'detail') work = { records: result.work.records, gridlines: result.work.gridlines }
+      this.stats.maxTileRecords = Math.max(this.stats.maxTileRecords, work.records)
     }
     surface.cost = work
     // A tile made coarse only because earlier tiles spent the frame budget is not

@@ -466,7 +466,9 @@ export function planViewport(geometry: SheetGeometryResult | undefined, viewport
   if (geometry.kind !== 'ready') return { kind: 'diagnostic', diagnostics: geometry.diagnostics }
   try {
     const base = VIEWPORT_DETAIL_LIMITS[profile], budget = options.frameBudget
-    const limits = budget ? { ...base, records: Math.max(0, Math.min(base.records, budget.records)), gridlines: Math.max(0, Math.min(base.gridlines, budget.gridlines)) } : base
+    // A budgeted plan is one tile of a frame: every record it builds, overflow
+    // dependencies included, also obeys the per-tile cap.
+    const limits = budget ? { ...base, records: Math.max(0, Math.min(base.records, base.tile.records, budget.records)), gridlines: Math.max(0, Math.min(base.gridlines, budget.gridlines)) } : base
     const plan = detailPlan(geometry, viewport, limits, options)
     if (budget && plan.kind === 'detail') {
       budget.records -= plan.work.records

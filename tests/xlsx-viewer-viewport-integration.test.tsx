@@ -503,6 +503,8 @@ describe('per-frame caps across tiles (S5.2 review round 1)', () => {
       expect(frame.frameRecords).toBeLessThanOrEqual(caps.records)
       expect(frame.frameGridlines).toBeLessThanOrEqual(caps.gridlines)
       expect(frame.prefetchRecords).toBeLessThanOrEqual(caps.records)
+      // Every record built for one tile (overflow dependencies included) obeys the per-tile cap.
+      expect(frame.maxTileRecords).toBeLessThanOrEqual(caps.tile.records)
     }
   }, 30_000)
 })
