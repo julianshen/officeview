@@ -4,22 +4,69 @@ Status: **proposal for review; not shipped semantics**. The authoritative spec
 is unchanged. This document adds no implementation or runtime dependency.
 
 The current implementation retains host `Intl.Collator` raw-slice equality and
-raw Unicode code-point wildcard units. Its per-alphabet optimization accepts an
-empirical compatibility assumption: equality remains context-independent for
-the actual needle/text alphabet after the runtime probes pass. Probes derive
-single-code-point equivalence classes and ignorables, check every pair and
-relevant triples, compare concatenations with their class representatives, and
-reject equal strings with different class sequences. Relevant triples comprise
-observed adjacency and exhaustive triples for alphabets of at most five points.
+raw Unicode code-point wildcard units. Its optimization accepts an empirical
+compatibility assumption: equality remains context-independent for the code
+points actually observed after the runtime probes pass. The certificate works
+as follows:
+
+- Each code point gets a class, cached per collator across cells: class 0 means
+  equal to the empty string (completely ignorable), otherwise equal code points
+  share an id. Classes are found by binary search over cached representatives.
+- Only raw windows of one to three ADJACENT code points that actually occur in
+  the text or a literal are probed. Each window must collate equal to the
+  concatenation of its class representatives, and no two windows with different
+  class sequences may collate equal (this catches Danish `aa`/`å`). Cost is
+  therefore bounded by the text length, not by the alphabet size; there is no
+  alphabet cap.
+- Combining marks, ZWJ and detected expansions (NFKD or upper-case expanding
+  code points such as `ß`, `ﬁ`) are inconclusive for the cell.
+
 This certificate is conditional on that accepted model, not a universal proof
 about every host collation sequence.
 
 Certification is lazy, independent of `process` metadata and runtime version
-pins, bounded to 40 distinct points and 90,000 comparison work units, and charged
-to the cell/whole-scan budget. Only certified profiles use class-ID KMP/DP.
-Combining-mark/ZWJ contexts, detected expansions, failed pair/triple independence,
-large alphabets, exhausted probe caps and substituted collators retain the exact
-reference fallback. The existing per-call resource limit remains explicit.
+pins, and only certified cells use class-ID KMP/DP. Substituted `Intl.Collator`
+constructors, prototype getters and instance comparators are detected and keep
+the reference.
+
+Limits of the certificate, all of which fall back to the exact reference path
+(never to a different answer):
+
+- **Window limit.** Windows span at most three adjacent raw code points. A
+  collation context that needs four or more raw code points to be visible
+  (including a single ignorable between three significant characters) is assumed
+  absent; the certificate cannot detect it.
+- **Ignorable runs.** Two or more adjacent completely-ignorable code points
+  (U+200B, U+00AD, U+FEFF, U+2060, ...) in the text or any literal make the cell
+  uncertified. Native context rules such as Catalan `l` + U+00B7 are broken by
+  ignorables placed between their characters. One ignorable is visible to a
+  window (`l`,ZWSP,`·` fails its representative check), but no window of three
+  spans both context characters across a run, so `l`,ZWSP,ZWSP,`·` would be
+  certified while the reference reports no match. Falling back is the simple
+  fail-closed answer; a long run is then handled at reference cost.
+- **Uncertified classes.** Cells containing combining marks or expansion code
+  points (for example ordinary German text with `ß`, or NFD text), detected
+  contractions (Danish `aa` with `å`), substituted collators, and exhausted probe
+  caps retain the reference. The existing per-call resource limit remains
+  explicit: those cells raise `resource-limit` once the cubic reference exceeds
+  its allowance (about 1,000 characters under the 10M default for plain
+  `contains`), rather than returning a wrong answer.
+
+Bounds: the probe work cap is 90,000 units plus 400 per code point of the cell
+(always charged to the cell and whole-scan budget), the class table is reset
+above 32,768 entries, and the comparison cache holds at most 65,536 results.
+
+Measured on Bun (host timing only; no real-browser measurement), plain
+`contains 'zzz'` miss, default allowance, fresh process per row, en-US, work
+units charged by the matcher:
+
+| Text | 100 | 300 | 1000 | 2000 |
+| --- | --- | --- | --- | --- |
+| Latin, 45 distinct, previous | 192,628 | 4,727,628 | resource-limit | resource-limit |
+| Latin, 45 distinct, observed adjacency (cold / warm) | 10,434 / 2,461 | 32,187 / 7,351 | 106,564 / 23,678 | 199,776 / 44,038 |
+| CJK, 150 distinct, previous | 192,571 | 4,727,571 | resource-limit | resource-limit |
+| CJK, 150 distinct, observed adjacency (cold / warm) | 11,783 / 2,865 | 37,924 / 8,865 | 132,160 / 29,812 | 277,627 / 61,389 |
+| German with `ß`, NFD marks, Danish `aa`+`å` | reference | reference | resource-limit | resource-limit |
 
 The tested significant-unit window attempt counted NFKD non-mark units, used an
 observed expansion factor, extended zero-unit endpoint plateaus, and compared
