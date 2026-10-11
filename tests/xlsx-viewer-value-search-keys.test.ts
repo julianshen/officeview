@@ -436,3 +436,48 @@ describe('S8.5 canonical keys', () => {
     expect(comparisons).toBeGreaterThanOrEqual(100_000)
   }, 300_000)
 })
+
+describe('review round 5 findings', () => {
+  const mixedSource = (texts: readonly string[], numbers: readonly number[]): ValueColumnSource => ({
+    stamp: STAMP, pageCount: 1,
+    async readPage() {
+      const count = texts.length + numbers.length, tags = new Uint8Array(count), lanes = new Float64Array(count), cells: string[] = []
+      texts.forEach((text, i) => { tags[i] = SOURCE_STRING; cells[i] = text })
+      numbers.forEach((value, i) => { tags[texts.length + i] = 1; lanes[texts.length + i] = value })
+      return { kind: 'values', pageId: 'p0', count, tags, numbers: lanes, texts: cells }
+    },
+  })
+  it.each([['exact', EXACT_SEARCH], ['canonical', canonicalKeyStrategy('default')]] as const)(
+    'treats canonical-empty queries as no search term (%s strategy, codex r5 1)', async (_name, strategy) => {
+      const cache = new ValueIndexCache({ searchKeys: { strategy } })
+      const index = cache.open(identity(), mixedSource(['alpha', 'x'.repeat(70_000)], [1.5, 2.5]))
+      await index.build()
+      for (const text of ['\u200b', '\u034f', '\u00ad', '\u200b\u00ad\u034f']) {
+        for (const wildcards of [false, true]) {
+          const result = await index.search({ text, locale: 'en-US', wildcards })
+          expect(result.count, JSON.stringify(text)).toBe(4)
+          expect(result.stats.keyed).toBe(0)
+        }
+      }
+      expect(index.searchKeyStatus.state).toBe('none')
+      await expect(index.search({ text: '\u200b*', locale: 'en-US', wildcards: true })).rejects.toMatchObject({ code: 'missing-display-text' })
+    })
+  it('preflights raw length before generating keys, resident and streaming (codex r5 2)', async () => {
+    const huge = '가'.repeat(1 << 20), seen = { max: 0 }
+    const spy = createSearchKeyStrategy({ ...asciiSpec(), canonicalizerVersion: 'spy-1', searchKeyOf: text => { seen.max = Math.max(seen.max, text.length); return printable.test(text) ? text.toLowerCase() : null } })
+    for (const strategy of [spy, canonicalKeyStrategy('default')]) {
+      const probe = new ValueIndexCache({ searchKeys: { strategy: EXACT_SEARCH } }), sized = probe.open(identity(), new StringSource(['alpha', huge]))
+      await sized.build()
+      await expect(sized.search({ text: 'al', locale: 'en-US' })).rejects.toMatchObject({ code: 'resource-limit' })
+      for (const room of [256 * 1024, 64]) {
+        seen.max = 0
+        const cache = new ValueIndexCache({ limitBytes: probe.usedBytes + room, searchKeys: { strategy } })
+        const index = cache.open(identity(), new StringSource(['alpha', huge]))
+        await index.build()
+        await expect(index.search({ text: 'al', locale: 'en-US' })).rejects.toMatchObject({ code: 'resource-limit' })
+        expect(cache.usedBytes).toBeLessThanOrEqual(cache.limitBytes)
+        if (strategy === spy) expect(seen.max).toBeLessThan(huge.length)
+      }
+    }
+  }, 60_000)
+})
