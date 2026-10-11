@@ -619,3 +619,21 @@ describe('resize admission (S5.2 review round 2)', () => {
     }
   })
 })
+
+describe('serialized find navigation (S5.2 review round 2)', () => {
+  it('two rapid Next clicks at a page boundary advance exactly two matches', async () => {
+    const rows = Array.from({ length: 450 }, (_, i) => ({ r: i + 1, cells: [{ ref: `A${i + 1}`, v: `hit ${i + 1}` }] }))
+    const doc = await workbook([{ name: 'S1', rows }])
+    const { ui } = await mountSheet(doc)
+    act(() => { fireEvent.change(ui.getByRole('searchbox', { name: 'Search document' }), { target: { value: 'hit' } }) })
+    const status = () => ui.getByTestId('officeview-search-status').textContent
+    await waitFor(() => expect(status()).toBe('1 of 200+'))
+    const next = ui.getByRole('button', { name: 'Next match' })
+    for (let i = 0; i < 199; i++) act(() => { fireEvent.click(next) })
+    await waitFor(() => expect(status()).toBe('200 of 200+'))
+    act(() => { fireEvent.click(next); fireEvent.click(next) })
+    await waitFor(() => expect(status()).toMatch(/^202 of /))
+    await settle()
+    expect(status()).toMatch(/^202 of /)
+  }, 30_000)
+})

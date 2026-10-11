@@ -372,8 +372,10 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
     runArgs.current = { input, query, options }
     void finder.run(input, { text: query, caseSensitive: false }, options).then(published => {
       if (cancelled) return
+      pageRef.current = published
+      activeRef.current = published && published.hits.length ? 0 : -1
       setPage(published)
-      setActiveHit(published && published.hits.length ? 0 : -1)
+      setActiveHit(activeRef.current)
       setSearching(false)
     }).catch(error => {
       if (cancelled) return
@@ -392,10 +394,17 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
   const learned = page && knownTotal.current?.key === page.key ? knownTotal.current.total : undefined
   const countLabel = page && !page.complete ? (learned !== undefined ? String(learned) : `${pageOffset + page.hits.length}+`) : undefined
   const searchNote = page ? findNote(page) : undefined
+  // Navigation is serialized: each step starts from the position the previous
+  // step committed (refs, not render closures), and a step whose search was
+  // replaced meanwhile publishes nothing (§10.1).
+  const pageRef = useRef(page), activeRef = useRef(activeHit), searchGen = useRef(0), navQueue = useRef<Promise<void>>(Promise.resolve())
+  pageRef.current = page
+  activeRef.current = activeHit
+  useEffect(() => { searchGen.current++ }, [query, ownerKey])
   /** Bring page `target` (or the last page) in, one bounded page at a time: forward
    * pulls continue the run; anything earlier restarts it from page 0. */
-  const loadPage = async (target: number | 'last'): Promise<FindPublication | null> => {
-    let current = page
+  const loadPage = async (from: FindPublication, target: number | 'last'): Promise<FindPublication | null> => {
+    let current: FindPublication | null = from
     const done = (candidate: FindPublication | null) => !candidate || (target === 'last' ? candidate.complete : candidate.pageIndex === target)
     if (done(current)) return current
     if (!current || (target !== 'last' && current.pageIndex > target) || !finder.running) {
@@ -406,16 +415,26 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
     while (current && !done(current) && finder.running) current = await finder.next()
     return current
   }
-  const stepHit = async (direction: 1 | -1) => {
-    if (!page || !page.hits.length) return
-    const next = activeHit + direction
-    if (next >= 0 && next < page.hits.length) { setActiveHit(next); return }
+  const step = async (direction: 1 | -1) => {
+    const generation = searchGen.current
+    const current = pageRef.current, active = activeRef.current
+    if (!current || !current.hits.length) return
+    const next = active + direction
+    if (next >= 0 && next < current.hits.length) { activeRef.current = next; setActiveHit(next); return }
     let target: FindPublication | null
-    if (direction > 0) target = page.complete ? await loadPage(0) : await loadPage(page.pageIndex + 1)
-    else target = page.pageIndex > 0 ? await loadPage(page.pageIndex - 1) : await loadPage('last')
-    if (!target || !target.hits.length) return
+    if (direction > 0) target = current.complete ? await loadPage(current, 0) : await loadPage(current, current.pageIndex + 1)
+    else target = current.pageIndex > 0 ? await loadPage(current, current.pageIndex - 1) : await loadPage(current, 'last')
+    if (generation !== searchGen.current || !target || !target.hits.length) return
+    const index = direction > 0 ? 0 : target.hits.length - 1
+    pageRef.current = target
+    activeRef.current = index
     setPage(target)
-    setActiveHit(direction > 0 ? 0 : target.hits.length - 1)
+    setActiveHit(index)
+  }
+  const stepHit = (direction: 1 | -1) => {
+    const run = navQueue.current.then(() => step(direction)).catch(() => undefined)
+    navQueue.current = run
+    return run
   }
   const goToHit = (hit: FindHit) => {
     if (!sheetIds.includes(hit.sheetId)) return
