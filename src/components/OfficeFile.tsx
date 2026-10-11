@@ -4,21 +4,14 @@
  * document model to <OfficeDoc>. Accepts a promise for async usage.
  */
 import { useEffect, useRef, useState, type CSSProperties, type ReactElement } from 'react'
-import { OfficePackage } from '../core/zip'
-import { parseDocx } from '../docx/parse'
-import type { DocxDocument } from '../docx/types'
-import { parseXlsx } from '../xlsx/parse'
-import type { XlsxDocument } from '../xlsx/types'
-import { parsePptx } from '../pptx/parse'
-import type { PptxDocument } from '../pptx/types'
 import { OfficeDoc, type OfficeDocProps } from './OfficeDoc'
-import { odfKind } from '../odf/container'
-import { parseOdt } from '../odt/parse'
-import { readSource, type ByteSource, type Progress, type ProtectionListener, type ProtectionPolicy, type WatermarkListener } from '../core/stream'
+import type { ByteSource, Progress, ProtectionListener, ProtectionPolicy, WatermarkListener } from '../core/stream'
 import { mergeWatermark, type WatermarkOptions } from '../core/watermark'
-import { parseRtf, isRtf } from '../rtf/parse'
+import type { PackageErrorCode } from '../core/package-error'
+import { documentNotices, loadOfficeSource, type AnyDoc } from './loadOfficeSource'
+import { ImportRefusal, type RefusalReason } from '../xlsx/storage/importSession'
 
-export type AnyDoc = DocxDocument | XlsxDocument | PptxDocument
+export type { AnyDoc } from './loadOfficeSource'
 
 export interface LoadProgress extends Progress {
   status: 'loading' | 'done' | 'error'
@@ -27,25 +20,11 @@ export interface LoadProgress extends Progress {
 
 export type OfficeFileState =
   | { status: 'loading' }
-  | { status: 'error'; message: string }
-  | { status: 'ready'; document: AnyDoc }
-
-async function detectAndParse(pkg: OfficePackage): Promise<AnyDoc> {
-  const ct = await pkg.xml('[Content_Types].xml')
-  const ctText = JSON.stringify(ct ?? {})
-  if (ctText.includes('wordprocessingml.document.main')) return parseDocx(pkg)
-  if (ctText.includes('spreadsheetml.sheet.main')) return parseXlsx(pkg)
-  if (ctText.includes('presentationml.presentation.main')) return parsePptx(pkg)
-  // fall back to probing known parts
-  if (pkg.has('word/document.xml')) return parseDocx(pkg)
-  if (pkg.has('xl/workbook.xml')) return parseXlsx(pkg)
-  if (pkg.has('ppt/presentation.xml')) return parsePptx(pkg)
-  // OpenDocument (Writer first — Calc/Impress route here when they land)
-  const kind = await odfKind(pkg)
-  if (kind === 'text') return parseOdt(pkg)
-  if (kind) throw new Error(`Unsupported OpenDocument type '${kind}' — only word-processing (.odt) documents render for now`)
-  throw new Error('Unrecognized office file: no word/xl/ppt content detected')
-}
+  /** `code`/`reason` are set when a spreadsheet was refused by admission
+   * (`reason: 'paged-not-yet'` = it needs the large-workbook viewer). */
+  | { status: 'error'; message: string; code?: PackageErrorCode; reason?: RefusalReason }
+  /** `notices`: user-visible load notices (e.g. saved values shown, data not shown). */
+  | { status: 'ready'; document: AnyDoc; notices?: readonly string[] }
 
 /**
  * Load an office file from any byte source — bytes in memory, a Blob, a
@@ -61,11 +40,10 @@ export async function loadOfficeFile(
     onWatermark?: WatermarkListener
   } = {},
 ): Promise<AnyDoc> {
-  const data = await readSource(source, options.onProgress, options.onProtection, options.onWatermark)
-  // RTF is plain text, not a zip, so it must be recognised before the bytes
-  // reach OfficePackage.load, which would throw on them.
-  if (isRtf(data)) return parseRtf(data)
-  return OfficePackage.load(data).then(detectAndParse)
+  // Spreadsheets go through admission (object / paged / refuse); every
+  // other format takes today's path unchanged. A spreadsheet that cannot load
+  // as an object document rejects with a typed ImportRefusal naming the limit.
+  return loadOfficeSource(source, options)
 }
 
 export function useOfficeFile(
@@ -86,8 +64,12 @@ export function useOfficeFile(
   useEffect(() => {
     let cancelled = false
     if (!source) return
+    // One controller per source: cleanup aborts the download, the spool,
+    // the verification pass and the parse, and the loader releases the spool.
+    const controller = new AbortController()
     setState({ status: 'loading' })
-    loadOfficeFile(source, {
+    loadOfficeSource(source, {
+      signal: controller.signal,
       onProgress: (p) => progressRef.current?.(p),
       // protection events from a cancelled load are dropped: the ref below
       // always points at the latest render's callback, which would otherwise
@@ -97,13 +79,18 @@ export function useOfficeFile(
       onWatermark: (m) => { if (!cancelled) watermarkRef.current?.(m) },
     })
       .then((document) => {
-        if (!cancelled) setState({ status: 'ready', document })
+        if (cancelled) return
+        const notices = documentNotices(document)
+        setState(notices.length > 0 ? { status: 'ready', document, notices } : { status: 'ready', document })
       })
       .catch((e: unknown) => {
-        if (!cancelled) setState({ status: 'error', message: e instanceof Error ? e.message : String(e) })
+        if (cancelled) return
+        const message = e instanceof Error ? e.message : String(e)
+        setState(e instanceof ImportRefusal ? { status: 'error', message, code: e.code, reason: e.reason } : { status: 'error', message })
       })
     return () => {
       cancelled = true
+      controller.abort()
     }
   }, [source])
   return state
@@ -163,7 +150,7 @@ export function OfficeFile({
     return <>{loading}</>
   }
   if (state.status === 'error') return error ? error(state.message) : <div role="alert">{state.message}</div>
-  return (
+  const doc = (
     <OfficeDoc
       document={state.document}
       allowCopy={effectiveAllowCopy}
@@ -171,6 +158,13 @@ export function OfficeFile({
       {...(effectiveWatermark ? { watermark: effectiveWatermark } : {})}
       {...rest}
     />
+  )
+  if (!state.notices) return doc
+  return (
+    <>
+      <div role="status" data-officeview-notice="">{state.notices.join(' · ')}</div>
+      {doc}
+    </>
   )
 }
 

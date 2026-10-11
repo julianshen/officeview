@@ -87,6 +87,8 @@ export type EvaluationValue = ElementValue | MatrixValue
 export type EvaluationMode = 'scalar' | 'array'
 export type ArrayLiteralElement = number | string | boolean | EvaluationError
 
+export interface MaterializationBudget { readonly limit: number; used: number }
+
 export interface EvaluationContext {
 
   /** Typed callbacks return tagged errors and ordinary strings as text. Legacy callbacks
@@ -142,6 +144,10 @@ export interface EvaluationContext {
    * shape claim): default 1048576 cells / 1048576 side. */
   maxArrayCells?: number
   maxArraySide?: number
+  /** Cumulative materialization budget shared by every cell of one workbook
+   * evaluation (the object is shared, never copied, so child contexts charge
+   * the same counter). Absent = no cumulative limit. */
+  materializationBudget?: MaterializationBudget
   /** Mode-boundary evaluator used by array functions; never recursive. */
   evaluateInMode?: (node: AstNode, mode: EvaluationMode) => EvaluationValue
   /** Settle a known/possible spill owner before reading its cell (C2 phase2). */

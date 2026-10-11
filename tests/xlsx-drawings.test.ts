@@ -409,13 +409,15 @@ describe('worksheet drawing anchors', () => {
     expect(m.heightPx).toBeGreaterThanOrEqual(100)
   })
 
-  test('keeps drawing-free hidden-width metrics and sanitizes invalid drawing-bearing dimensions', async () => {
+  test('collapses drawing-free hidden columns and sanitizes invalid drawing-bearing dimensions', async () => {
     const hidden = await fixture('', '<col min="1" max="1" width="5" hidden="1"/>', '', async zip => {
       let sheet = await zip.file('xl/worksheets/sheet1.xml')!.async('string')
       sheet = sheet.replace('<drawing r:id="rDraw"/>', '')
       zip.file('xl/worksheets/sheet1.xml', sheet)
     })
-    expect(computeMetrics((await parseXlsx(hidden)).sheets[0]).colWidthsPx[0]).toBe(64)
+    // Spec §5.3 / plan S2.3: authored-hidden columns collapse unconditionally,
+    // not only on drawing-bearing sheets (this used to pin the default 64px).
+    expect(computeMetrics((await parseXlsx(hidden)).sheets[0]).colWidthsPx[0]).toBe(0)
     for (const [cols, row] of [['<col min="1" max="1" width="NaN"/>', ''], ['', '<row r="1" ht="NaN" customHeight="1"/>']] as const) {
       const pkg = await fixture(absolute(shape(1001, 'FF0000', 0, 0, 20, 20), 0, 0, 20, 20), cols, row, async zip => {
         if (row) {

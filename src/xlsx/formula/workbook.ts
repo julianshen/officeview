@@ -39,6 +39,10 @@ export interface WorkbookEvaluationOptions {
   /** Application resource policy for spill publication (never a native claim). */
   maxArrayCells?: number
   maxArraySide?: number
+  /** Cumulative cap on cells materialized by array evaluation (results and
+   * array-mode references), charged before each materialization and never
+   * reset within one evaluation. Unset = no cumulative limit. */
+  maxMaterializedCells?: number
   /** Explicit locale override (wins over parsed file metadata). */
   locale?: string
   /** Explicit IANA timeZone override. */
@@ -830,6 +834,7 @@ export function evaluateWorkbookFormulas(
     semantics,
     maxArrayCells: options?.maxArrayCells,
     maxArraySide: options?.maxArraySide,
+    ...(options?.maxMaterializedCells !== undefined ? { materializationBudget: { limit: options.maxMaterializedCells, used: 0 } } : {}),
     getCellValue: (sheetName, col, row) => {
       const targetSheetName = sheetName ?? ctx.currentSheet
       if (!targetSheetName) return formulaError('#REF!')

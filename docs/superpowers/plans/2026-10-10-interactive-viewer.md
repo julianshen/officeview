@@ -102,8 +102,13 @@ Every package is implemented on its own branch, reviewed by at least one agent f
 | S7.1 range detection/header policy/admission (`src/xlsx/view/rangeDetection.ts`) | merged |
 | S4.2 cooperative scheduling/cancellation/atomic publication (`src/xlsx/view/scheduler.ts`, worker session/kernel/client) | merged |
 | S1.1a bounded ZIP reader, pull inflater, incremental XML tokenizer (`src/core/{zip-stream,inflater,xml-stream}.ts`, `pako` 1.0.11) | merged (opencode review; one disputed finding accepted by the reviewer) |
-| S1.1b, S2.3, S8.2, S8.3 | in progress (implementation or review rounds on their own branches) |
-| S1.2, S1.3, S4.3–S4.5, S5, S6, S9, S10 (physical-device receipts skipped for now by user decision), S11/S12 status, S13 | not started |
+| S2.3 full-coordinate renderer seam and explicit static budgets (`src/xlsx/view/viewport.ts`, `render.ts`, `paint.ts`) | merged |
+| S8.3 declared filter diagnostics (`src/xlsx/view/declaredFilters.ts`, parse.ts) | merged |
+| S8.2 semantic value index and searched Select All (`valueIndex.ts`, `valueRuns.ts`, `searchKeys.ts`) | merged |
+| S4.3 lifecycle, document-wide memory pool, LRU tiers, tile cache and leases (`tileCache.ts`, worker session/kernel) | merged |
+| S1.1b spool, admission gates, quota ledger, entry wiring (`spool.ts`, `storage/{quota,admission,importSession,sheetRecords,imageAdmission}.ts`, `largeSource.ts` lazy chunk) | merged; until S1.2 every 'paged' decision opens in compatibility mode with a notice |
+| S6.1, S5.1 | in progress (implementation or review rounds on their own branches) |
+| S1.2, S1.3, S4.4–S4.5, S5, S6, S9, S10 (physical-device receipts skipped for now by user decision), S11/S12 status, S13 | not started |
 
 ## S0 — Freeze contracts, counterexamples and fixture/harness infrastructure
 
@@ -158,6 +163,8 @@ expect(await source.readCell({ row: 1_048_575, col: 16_383 }, readOptions)).toMa
 ## S1 — Mandatory bounded import, source access and value fidelity
 
 ### S1.1 Package/XML streaming and admission
+
+> **Status (2026-10-11):** S1.1a (ZIP/inflate/XML core) and S1.1b (spool, admission G1/G2, quota ledger, evaluator materialization cap, entry wiring) merged after codex/pi/opencode reviews. Orchestrator rule applied: anything that opened before still opens — paged decisions use the legacy path with a 'compatibility mode' notice until S1.2; evaluator cap hits reopen with saved values; damaged-but-readable archives open with a 'may be damaged' notice; typed refusals only for produced≠declared size, truncated deflate and spool storage/quota. Eager bundle +2.7 KB gz; large path in a lazy chunk never loaded for DOCX/PPTX. Not delivered: RED 14a, 14b render wiring, 21, import progress (22), session-level 23 (S1.2).
 
 **Files:** create `src/core/zip-stream.ts`, `xml-stream.ts`, `src/xlsx/storage/importSession.ts`, `quota.ts`; modify `src/core/zip.ts`, `stream.ts`, `src/components/OfficeFile.tsx`; test `tests/xlsx-viewer-import.test.ts`, `tests/xlsx-viewer-import-limits.test.ts`, retain `tests/streaming.test.ts`/`officeview-streaming.test.tsx`.
 
@@ -241,15 +248,17 @@ expect(await source.readCell({ row: 1_048_575, col: 16_383 }, readOptions)).toMa
 
 ### S2.3 Remove cap aliasing from interactive path; explicit static budgets
 
+> **Status (2026-10-11):** merged (Claude implementation; codex, pi and opencode reviews over four rounds; every finding fixed; xlsx goldens unchanged). Interactive geometry uses full logical axes with per-frame admission from bounded metadata before any cell read (record/gridline budgets, four-device-pixel detail rule, bounded drawing queries, indexed merge lookup); `AxisMetricsError` codes map to diagnosed fallbacks. Static path: ordinary sheets inside the legacy 16,384×4,096 grid render exactly as before at any pixel size; only output the old path silently truncated gets a typed `large-export-limit` refusal; grid-truncated merges lay out at their true extent in bounded requests. Coarse layer is a placeholder until S5.1; new API (`renderSheetViewport`, `buildSheetGeometry`, `StaticExportLimitError`) not yet re-exported from `src/index.ts`; `parse.ts` row numbering for rows without `r` remains open.
+
 **Files:** modify `src/xlsx/render.ts`, `src/render/paint.ts`; create `src/xlsx/view/viewport.ts` boundary; test `tests/xlsx-viewer-cap-regression.test.ts`, extend `tests/xlsx-viewport.test.ts`, `tests/xlsx-print.test.ts`.
 
-- [ ] RED: current-row regression with source rows 0 and 16385, viewport at origin and at row 16385; assert 'BeyondCap' is absent at row-zero baseline, then visible only at its true offset or its sorted display slot. Repeat edge-column XFD and edge-row XFD1048576.
-- [ ] Run `bunx vitest run tests/xlsx-viewer-cap-regression.test.ts tests/xlsx-viewport.test.ts`; expected current fallback paints BeyondCap at Y≈16.67 and fails.
-- [ ] GREEN: interactive metrics use full logical axis/projection methods, not capped arrays; remove every `rowY[row.index] ?? 0`/`colX[col] ?? 0` alias in that path. Viewport reads only admitted logical bounds and fetched rows. If no geometry exists, return pending/diagnostic, never origin.
-- [ ] Map the typed `AxisMetricsError` codes thrown by S2.1 (contradictory overlapping overrides, unrepresentable Float64 geometry) to a diagnosed fallback in every caller (S2.3 renderer seam, S3 structure/guards); a thrown error must never reach the user as an unhandled exception or blank sheet.
-- [ ] Preserve small ordinary-sheet layout behavior; honor authored-hidden rows/cols unconditionally rather than drawing-gated. Keep static print/export separate with explicit pixel/page/operation budgets and diagnostic/refusal; it must not quietly clamp logical coordinates or emit a deceptively complete partial bitmap.
-- [ ] Run focused suites plus `bunx vitest run tests/xlsx.test.ts tests/xlsx-drawings.test.ts tests/xlsx-print.test.ts` and standard corpus gates; expected no-origin-alias passes, small default goldens unchanged, authored-hidden deltas named and reviewed.
-- [ ] Deliver full-coordinate renderer seam. This package is not complete if only model sorting bypasses `MAX_GRID_*` while painting still aliases high coordinates.
+- [x] RED: current-row regression with source rows 0 and 16385, viewport at origin and at row 16385; assert 'BeyondCap' is absent at row-zero baseline, then visible only at its true offset or its sorted display slot. Repeat edge-column XFD and edge-row XFD1048576.
+- [x] Run `bunx vitest run tests/xlsx-viewer-cap-regression.test.ts tests/xlsx-viewport.test.ts`; expected current fallback paints BeyondCap at Y≈16.67 and fails.
+- [x] GREEN: interactive metrics use full logical axis/projection methods, not capped arrays; remove every `rowY[row.index] ?? 0`/`colX[col] ?? 0` alias in that path. Viewport reads only admitted logical bounds and fetched rows. If no geometry exists, return pending/diagnostic, never origin.
+- [x] Map the typed `AxisMetricsError` codes thrown by S2.1 (contradictory overlapping overrides, unrepresentable Float64 geometry) to a diagnosed fallback in every caller (S2.3 renderer seam, S3 structure/guards); a thrown error must never reach the user as an unhandled exception or blank sheet.
+- [x] Preserve small ordinary-sheet layout behavior; honor authored-hidden rows/cols unconditionally rather than drawing-gated. Keep static print/export separate with explicit pixel/page/operation budgets and diagnostic/refusal; it must not quietly clamp logical coordinates or emit a deceptively complete partial bitmap.
+- [x] Run focused suites plus `bunx vitest run tests/xlsx.test.ts tests/xlsx-drawings.test.ts tests/xlsx-print.test.ts` and standard corpus gates; expected no-origin-alias passes, small default goldens unchanged, authored-hidden deltas named and reviewed.
+- [x] Deliver full-coordinate renderer seam. This package is not complete if only model sorting bypasses `MAX_GRID_*` while painting still aliases high coordinates.
 
 ### S2.4 Sheet scale/zoom model and legacy-path isolation
 
@@ -339,12 +348,14 @@ expect(session.publishWorkbookIndex(staleA)).toBe(false)
 
 ### S4.3 LRU/resource close and font/image leases
 
+> **Status (2026-10-11):** merged (Claude implementation; pi reviews over two rounds; every finding fixed). One `MemoryPool` per document (D 512 / M 256 MiB, minimum one sheet mask) with no force path; LRU tiers rebuildable→source→view; evicted inactive views rebuilt from recipes and verified against the committed-order digest; value publication re-derives sorted orders on all sheets (`view-reapplied`); closed sessions never revive; `TileCache` closes surfaces exactly once (not yet wired to paint, S5.2); image/font lease leak in `getPaintables` fixed. F7 ledger plateaus (12 sheets, 4 MiB budget). Browser retained-memory verification remains S10.
+
 **Files:** extend `viewerSession.ts`; create `src/xlsx/view/tileCache.ts`; integrate `src/core/images.ts`, `src/core/fonts/register.ts`, `src/render/paint.ts`; test `tests/xlsx-viewer-lifecycle.test.tsx`, retain `tests/fonts-index-lease.test.tsx`, `tests/cached-picture-pipeline.test.ts`.
 
-- [ ] RED: repeatedly open/close documents, change sheet/font/backend, cancel jobs, evict/reload pages and dispose while bitmap/font/image resources are in flight. Assert lease counts and retained owned bytes return to baseline, closed sessions cannot revive and previously active sheet views survive LRU eviction by source identity. F7 switches among many full-capacity sparse sheets with local sort/filter states; aggregate memory must plateau across sessions/sheets, not merely satisfy a per-sheet cap.
-- [ ] Run `bunx vitest run tests/xlsx-viewer-lifecycle.test.tsx tests/fonts-index-lease.test.tsx tests/cached-picture-pipeline.test.ts`; expected retained lease/session or stale publish fails.
-- [ ] GREEN: close removes listeners/pending entries/pages/external runs/column caches; close ImageBitmaps and GPU objects; retain/release existing image/font leases exactly once. LRU separates persisted source pages, retained compact sheet views and rebuildable layout/tile data. Inactive permutations/prefixes/prepared columns also count toward the single document-wide budget and may be externalized/evicted/rebuilt; never retain one 8MiB prefix per sheet without admission. Charge Wasm heaps, pending transfers and temporary buffers to the same worker budget.
-- [ ] Run focused command; expected cancellation/close recover allocations and cached/offscreen search records do not release fonts still needed by active paint.
+- [x] RED: repeatedly open/close documents, change sheet/font/backend, cancel jobs, evict/reload pages and dispose while bitmap/font/image resources are in flight. Assert lease counts and retained owned bytes return to baseline, closed sessions cannot revive and previously active sheet views survive LRU eviction by source identity. F7 switches among many full-capacity sparse sheets with local sort/filter states; aggregate memory must plateau across sessions/sheets, not merely satisfy a per-sheet cap.
+- [x] Run `bunx vitest run tests/xlsx-viewer-lifecycle.test.tsx tests/fonts-index-lease.test.tsx tests/cached-picture-pipeline.test.ts`; expected retained lease/session or stale publish fails.
+- [x] GREEN: close removes listeners/pending entries/pages/external runs/column caches; close ImageBitmaps and GPU objects; retain/release existing image/font leases exactly once. LRU separates persisted source pages, retained compact sheet views and rebuildable layout/tile data. Inactive permutations/prefixes/prepared columns also count toward the single document-wide budget and may be externalized/evicted/rebuilt; never retain one 8MiB prefix per sheet without admission. Charge Wasm heaps, pending transfers and temporary buffers to the same worker budget.
+- [x] Run focused command; expected cancellation/close recover allocations and cached/offscreen search records do not release fonts still needed by active paint.
 - [ ] Deliver lifecycle PR with repeated-open memory ledger; browser retained-memory verification remains S10.
 
 ## S5 — Visible rendering, shared canonical records and global search
@@ -479,24 +490,28 @@ expect(wide.contains({ row: 2, col: 0 })).toBe(false)
 
 ### S8.2 Semantic value index and searched Select All
 
+> **Status (2026-10-11):** merged (Claude implementation; codex and opencode reviews over seven rounds; every finding fixed). Complete query-backed value universe with typed semantic keys, all-minus-exclusions/include compaction, searched-subset Select All, async draft preparation, charged memory with typed quota errors, cancellable/resumable builds. Search uses the S8.5 canonical matcher; default `EXACT_SEARCH` (no resident keys; ≈0.12–0.2 µs/value, Bun, non-browser), canonical keys opt-in; no persistence in v1 (value-search spike). Worker/session wiring and `FilterEngine` values rules are not delivered (S4/S9).
+
 **Files:** create `src/xlsx/view/valueIndex.ts`; extend `storage/externalRuns.ts`, worker kernel/session; test `tests/xlsx-viewer-value-index.test.ts`.
 
-- [ ] RED: 100k and 1M distinct values, tagged numeric/text/boolean/error/date keys, same display with different serials, search match after displayed first 10k, unchanged OK, all-minus-exclusions, searched-subset Select All, unchecking one entry and cancel/reopen. Unknown pages must not make the value universe complete.
-- [ ] Run `bunx vitest run tests/xlsx-viewer-value-index.test.ts`; expected 10k construction cap or selected-string-array omission fails.
-- [ ] GREEN: lazy query-backed complete value universe with paged index, semantic key membership or all/query-minus-exclusions representation. 10k limits displayed entries only; dropdown search queries all values and Select All affects full universe or exact searched subset. Display dedupe never loses semantic keys. Represent blank separately and error identity explicitly.
-- [ ] Build in cancellable batches; cache by sheet/source values/range/column/classification generations; charged storage/worker memory with quota admission. Exclude display-only transforms from key identity. Reopen uses complete cache or resumes valid pages; cancel closes draft without changing committed rules.
-- [ ] Run focused suite and injected quota/cancel races; expected no undisplayed-value exclusion on unchanged OK, complete counts/search membership and no excessive strings/objects retained on main.
-- [ ] Deliver value-index PR with cold/warm allocation and source-read counts, not an implementation of a capped 10k semantic universe.
+- [x] RED: 100k and 1M distinct values, tagged numeric/text/boolean/error/date keys, same display with different serials, search match after displayed first 10k, unchanged OK, all-minus-exclusions, searched-subset Select All, unchecking one entry and cancel/reopen. Unknown pages must not make the value universe complete.
+- [x] Run `bunx vitest run tests/xlsx-viewer-value-index.test.ts`; expected 10k construction cap or selected-string-array omission fails.
+- [x] GREEN: lazy query-backed complete value universe with paged index, semantic key membership or all/query-minus-exclusions representation. 10k limits displayed entries only; dropdown search queries all values and Select All affects full universe or exact searched subset. Display dedupe never loses semantic keys. Represent blank separately and error identity explicitly.
+- [x] Build in cancellable batches; cache by sheet/source values/range/column/classification generations; charged storage/worker memory with quota admission. Exclude display-only transforms from key identity. Reopen uses complete cache or resumes valid pages; cancel closes draft without changing committed rules.
+- [x] Run focused suite and injected quota/cancel races; expected no undisplayed-value exclusion on unchanged OK, complete counts/search membership and no excessive strings/objects retained on main.
+- [x] Deliver value-index PR with cold/warm allocation and source-read counts, not an implementation of a capped 10k semantic universe.
 
 ### S8.3 Declared filter diagnostic parsing
 
+> **Status (2026-10-11):** merged (opencode implementation; Claude fixes; codex, Claude and pi reviews over four rounds; every finding fixed or disputed with primary-source evidence accepted by the reviewer). Declared autoFilter/sortState (worksheet and table, direct and nested) parsed as diagnostics only, bounded by a 256 KiB per-document byte budget, adapter-neutral builders ready for the large adapter. Small/large adapter parity is pending the large adapter (S1.2); Clear restores from the existing file-hidden snapshot.
+
 **Files:** modify `src/xlsx/parse.ts`, page importer metadata; test `tests/xlsx-viewer-declared-filters.test.ts`.
 
-- [ ] RED: package autoFilter refs/kinds, unsupported color/Top-10/average filters, supported filters saved only as hidden rows, sortState source order and unsupported dynamic preset. Small/large adapters must expose identical diagnostics.
-- [ ] Run `bunx vitest run tests/xlsx-viewer-declared-filters.test.ts`; expected missing/mismatched diagnostic or mistaken authored-view import fails.
-- [ ] GREEN: parse declared range and rule kinds for diagnostics only per spec; preserve file-hidden snapshot and original stored order. Do not silently import unsupported filter state or invent funnel state from hidden rows. Clear restores load snapshot, including file-declared filtering effects.
+- [x] RED: package autoFilter refs/kinds, unsupported color/Top-10/average filters, supported filters saved only as hidden rows, sortState source order and unsupported dynamic preset. Small/large adapters must expose identical diagnostics.
+- [x] Run `bunx vitest run tests/xlsx-viewer-declared-filters.test.ts`; expected missing/mismatched diagnostic or mistaken authored-view import fails.
+- [x] GREEN: parse declared range and rule kinds for diagnostics only per spec; preserve file-hidden snapshot and original stored order. Do not silently import unsupported filter state or invent funnel state from hidden rows. Clear restores load snapshot, including file-declared filtering effects.
 - [ ] Run focused command plus adapter parity and standard gates; expected supported saved effects render correctly through S2 hidden fix, no formula/table parser regression.
-- [ ] Deliver parser delta through the shared integration owner.
+- [x] Deliver parser delta through the shared integration owner.
 
 ### S8.5 Canonical text matching (spec §7.1 amendment, approved 2026-10-11)
 

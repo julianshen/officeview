@@ -11,11 +11,12 @@ import type {
 } from './formula/types'
 import { parseDefinedNames } from './formula/names'
 import { parseTableMetadata, isTablePartSource } from './formula/tables'
+import { collectDeclaredTable, createDeclaredBudget, declaredSheetBuilder, hasDeclaredFiltering, parseDeclaredContainer, type DeclaredSheetFilters } from './view/declaredFilters'
 import { parseWorksheetDrawings, collectXlsxImages } from './drawing'
 import { computeMetrics } from './render'
 import { resolvePartTarget } from '../drawing/parts'
 import { parseThemeContext, type ThemeContext } from '../drawing/style'
-import { evaluateWorkbookFormulas } from './formula/workbook'
+import { evaluateWorkbookFormulas, type WorkbookEvaluationOptions } from './formula/workbook'
 import { initializeSavedSpills } from './formula/saved-spills'
 import { dynamicMetadataIndices } from './metadata'
 import { decodeXlsxString } from './strings'
@@ -132,7 +133,15 @@ async function parseStyles(pkg: OfficePackage): Promise<Styles> {
   return styles
 }
 
-export async function parseXlsx(pkg: OfficePackage): Promise<XlsxDocument> {
+export interface ParseXlsxOptions {
+  /** Load-time evaluator resource caps (large-source admission, design note §4.3). Unset = today's behaviour. */
+  evaluation?: Pick<WorkbookEvaluationOptions, 'maxArrayCells' | 'maxArraySide' | 'maxMaterializedCells'>
+  /** 'cached' shows saved values only: no load-time evaluation, so a formula
+   * without a cached value stays unavailable (hasCachedValue false). Default 'engine'. */
+  valuePolicy?: 'engine' | 'cached'
+}
+
+export async function parseXlsx(pkg: OfficePackage, options: ParseXlsxOptions = {}): Promise<XlsxDocument> {
   const workbook = await pkg.xml('xl/workbook.xml')
   if (!workbook) throw new Error('xl/workbook.xml missing — not a valid xlsx?')
   const rels = await pkg.xml('xl/_rels/workbook.xml.rels')
@@ -227,10 +236,18 @@ export async function parseXlsx(pkg: OfficePackage): Promise<XlsxDocument> {
   const resolvedTables: TableMetadata[] = []
   let declaredTableParts = 0
   let tableInventoryComplete = true
+  const declaredFilters: DeclaredSheetFilters[] = []
+  // One retained-size budget for the whole document's declarations.
+  const declaredBudget = createDeclaredBudget()
+  const tableSourceChecks = new Map<string, boolean>()
   for (let i = 0; i < sheets.length; i++) {
     const sheetPath = sheetPartPaths[i]
     const identity = workbookSheets[i]
     if (!sheetPath || !identity) continue
+    const sheetEntry: DeclaredSheetFilters = {
+      sheetId: identity.sheetId, name: identity.name, workbookIndex: identity.workbookIndex, partPath: sheetPath, tableAutoFilters: [],
+    }
+    const sheetDeclared = declaredSheetBuilder(sheetEntry, declaredBudget)
     try {
       const wsRoot = await pkg.xml(sheetPath)
       // A referenced worksheet that cannot be inspected has unknown table
@@ -241,6 +258,13 @@ export async function parseXlsx(pkg: OfficePackage): Promise<XlsxDocument> {
         continue
       }
       const wsData = getChildren(wsRoot, 'worksheet')[0] ?? wsRoot
+      // S8.3: declared worksheet filter/sort state is diagnostics only. The
+      // worksheet XML is already in hand; stored order and hidden rows below
+      // are never touched by this. sortState is valid both as a direct child
+      // and nested inside <autoFilter>; direct wins with a duplicate flag.
+      const worksheetDeclared = parseDeclaredContainer(wsData, declaredBudget)
+      if (worksheetDeclared.autoFilter) sheetEntry.worksheetAutoFilter = worksheetDeclared.autoFilter
+      if (worksheetDeclared.sortState) sheetEntry.worksheetSortState = worksheetDeclared.sortState
       // Every tablePart element is a declaration (CT_TablePart requires
       // r:id): one without a resolvable id is unavailable inventory, never
       // evidence of zero declarations.
@@ -251,7 +275,10 @@ export async function parseXlsx(pkg: OfficePackage): Promise<XlsxDocument> {
           tablePartDecls.push(typeof rid === 'string' && rid !== '' ? rid : undefined)
         }
       }
-      if (tablePartDecls.length === 0) continue
+      if (tablePartDecls.length === 0) {
+        if (hasDeclaredFiltering(sheetEntry)) declaredFilters.push(sheetEntry)
+        continue
+      }
       declaredTableParts += tablePartDecls.length
       const slash = sheetPath.lastIndexOf('/')
       const wsRelsPath = `${slash < 0 ? '' : `${sheetPath.slice(0, slash)}/`}_rels/${slash < 0 ? sheetPath : sheetPath.slice(slash + 1)}.rels`
@@ -281,13 +308,23 @@ export async function parseXlsx(pkg: OfficePackage): Promise<XlsxDocument> {
         }
         const partPath = resolvePartTarget(sheetPath, rel.target)
         try {
-          const sourceText = await pkg.text(partPath)
-          if (!isTablePartSource(sourceText)) {
+          // The root-QName check depends only on the part's bytes, so repeated
+          // references to one part reuse it instead of re-parsing the text.
+          let sourceOk = tableSourceChecks.get(partPath)
+          if (sourceOk === undefined) {
+            sourceOk = isTablePartSource(await pkg.text(partPath))
+            tableSourceChecks.set(partPath, sourceOk)
+          }
+          if (!sourceOk) {
             tableInventoryComplete = false
             continue
           }
           const tableRoot = await pkg.xml(partPath)
           const tableNode = getChildren(tableRoot, 'table')[0] ?? tableRoot
+          // S8.3 diagnostics: declared table filter/sort state, parsed
+          // independently of metadata validity and attributed by part path
+          // (repeated references to one part are diagnosed once).
+          if (tableNode) collectDeclaredTable(sheetDeclared, tableNode, partPath)
           const meta = parseTableMetadata(tableNode, identity.sheetId, partPath)
           if (!meta) {
             tableInventoryComplete = false
@@ -300,10 +337,13 @@ export async function parseXlsx(pkg: OfficePackage): Promise<XlsxDocument> {
           tableInventoryComplete = false
         }
       }
+      if (hasDeclaredFiltering(sheetEntry)) declaredFilters.push(sheetEntry)
     } catch {
       // Worksheet-level discovery failure with declared parts is unavailable,
-      // never a false complete registry.
+      // never a false complete registry. Worksheet declarations already read
+      // survive independently of the table failure.
       tableInventoryComplete = false
+      if (hasDeclaredFiltering(sheetEntry)) declaredFilters.push(sheetEntry)
     }
   }
   // Completeness first: any failed discovery keeps the inventory
@@ -345,9 +385,10 @@ export async function parseXlsx(pkg: OfficePackage): Promise<XlsxDocument> {
     calc,
     calcChainPresent,
     semantics,
+    ...(declaredFilters.length > 0 ? { declaredFilters } : {}),
   }
   initializeSavedSpills(doc)
-  evaluateWorkbookFormulas(doc, { fullCalcOnLoad })
+  if (options.valuePolicy !== 'cached') evaluateWorkbookFormulas(doc, { fullCalcOnLoad, ...options.evaluation })
   return doc
 }
 

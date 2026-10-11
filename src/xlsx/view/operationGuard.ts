@@ -9,6 +9,9 @@ import { CompactRowVisibility } from './visibility'
 import type { ProjectedSheetMetrics } from './projection'
 import { findOutsideColumnData, type CellAnchoredDrawing, type PopulatedCellSource, type StructuralIndex } from './structure'
 
+/** Bytes of the filter guard's short-lived source-space bitmap: one bit per
+ * source row (128 KiB), charged through `FilterGuardRequest.scratch` (S4.3). */
+export const GUARD_SCRATCH_BYTES = Math.ceil(MAX_ROWS / 32) * 4
 export type GuardOutcome = { ok: true } | { ok: false; refusal: OperationRefusal }
 export interface SortGuardOptions { pageLimit?: number }
 /** Candidate filter plus the before/after geometry the caller built from it.
@@ -28,7 +31,12 @@ export interface FilterGuardRequest {
    * a frozen clock still yields within 4,096 rows. `pause` may throw to abandon
    * the guard (cancellation). */
   cooperate?: GuardCooperation
+  /** Optional worker ledger hook (S4.3): charged before the scratch bitmap is
+   * allocated, released (via the returned function) once it is dead, on every
+   * outcome. It may throw to refuse the allocation. */
+  scratch?: GuardScratchLedger
 }
+export interface GuardScratchLedger { charge(bytes: number): () => void }
 export interface GuardCooperation {
   due(units: number): boolean
   pause(): Promise<void>
@@ -103,124 +111,128 @@ export async function guardSort(
 ): Promise<GuardOutcome> {
   let band: SourceRowInterval | null
   try {
-    band = bodyBand(range)
-    // Validate before any structural work so a bad option is a typed refusal here,
-    // not a raw RangeError from the populated scan after the checks have run.
-    const pageLimit = options?.pageLimit
-    if (pageLimit !== undefined && (!Number.isSafeInteger(pageLimit) || pageLimit <= 0)) {
-      throw new RangeError('Invalid chunk page limit')
+      band = bodyBand(range)
+      // Validate before any structural work so a bad option is a typed refusal here,
+      // not a raw RangeError from the populated scan after the checks have run.
+      const pageLimit = options?.pageLimit
+      if (pageLimit !== undefined && (!Number.isSafeInteger(pageLimit) || pageLimit <= 0)) {
+        throw new RangeError('Invalid chunk page limit')
+      }
+    } catch (error) {
+      return invalidRange(error)
     }
-  } catch (error) {
-    return invalidRange(error)
-  }
-  if (band === null) return { ok: true }
-  if (structure.completeness !== 'complete') {
-    return { ok: false, refusal: incompleteRefusal(structure) }
-  }
-  const fullBand: SourceRect = { r0: band.r0, r1: band.r1, c0: 0, c1: MAX_COLS - 1 }
-  const merge = structure.firstWhere(fullBand, hit => hit.kind === 'merge')
-  if (merge !== undefined && merge.kind === 'merge') {
-    return { ok: false, refusal: { reason: 'merge', range: merge.record.range } }
-  }
-  const spill = structure.firstWhere(fullBand, hit => hit.kind === 'spill')
-  if (spill !== undefined && spill.kind === 'spill') {
-    return {
-      ok: false,
-      refusal: {
-        reason: spill.record.kind === 'fixed' ? 'fixed-array' : 'dynamic-spill',
-        range: spillRefusalRange(spill.record, fullBand),
-      },
+    if (band === null) return { ok: true }
+    if (structure.completeness !== 'complete') {
+      return { ok: false, refusal: incompleteRefusal(structure) }
     }
-  }
-  const drawing = structure.firstWhere(fullBand, hit => hit.kind === 'drawing')
-  if (drawing !== undefined && drawing.kind === 'drawing') {
-    return { ok: false, refusal: { reason: 'drawing-impact', drawingId: drawing.record.id } }
-  }
-  const built = await findOutsideColumnData(occupancy, band, range.c0, range.c1, options?.pageLimit)
-  if (built.kind === 'unknown') return { ok: false, refusal: { reason: 'incomplete', missing: built.missing } }
-  if (built.kind === 'occupied') {
-    return {
-      ok: false,
-      refusal: {
-        reason: 'outside-column-data',
-        range: { r0: built.at.row, r1: built.at.row, c0: built.at.col, c1: built.at.col },
-      },
+    const fullBand: SourceRect = { r0: band.r0, r1: band.r1, c0: 0, c1: MAX_COLS - 1 }
+    const merge = structure.firstWhere(fullBand, hit => hit.kind === 'merge')
+    if (merge !== undefined && merge.kind === 'merge') {
+      return { ok: false, refusal: { reason: 'merge', range: merge.record.range } }
     }
+    const spill = structure.firstWhere(fullBand, hit => hit.kind === 'spill')
+    if (spill !== undefined && spill.kind === 'spill') {
+      return {
+        ok: false,
+        refusal: {
+          reason: spill.record.kind === 'fixed' ? 'fixed-array' : 'dynamic-spill',
+          range: spillRefusalRange(spill.record, fullBand),
+        },
+      }
+    }
+    const drawing = structure.firstWhere(fullBand, hit => hit.kind === 'drawing')
+    if (drawing !== undefined && drawing.kind === 'drawing') {
+      return { ok: false, refusal: { reason: 'drawing-impact', drawingId: drawing.record.id } }
+    }
+    const built = await findOutsideColumnData(occupancy, band, range.c0, range.c1, options?.pageLimit)
+    if (built.kind === 'unknown') return { ok: false, refusal: { reason: 'incomplete', missing: built.missing } }
+    if (built.kind === 'occupied') {
+      return {
+        ok: false,
+        refusal: {
+          reason: 'outside-column-data',
+          range: { r0: built.at.row, r1: built.at.row, c0: built.at.col, c1: built.at.col },
+        },
+      }
+    }
+    return { ok: true }
   }
-  return { ok: true }
-}
-/** Filter hides rows in place. The guard refuses merge/spill intersections across
- * the body band plus every changed-height row band (all columns), then refuses
- * when changed row heights alter the start or occupied span of any cell-anchored
- * drawing — including changed rows above the anchor and within it, even when the
- * filter and anchor ranges do not intersect. Absolute anchors are static. */
-export async function guardFilter(request: FilterGuardRequest): Promise<GuardOutcome> {
-  const { range, candidateVisibility, currentVisibility, projectionBefore, projectionAfter, structure } = request
-  let band: SourceRowInterval | null
-  try {
-    band = bodyBand(range)
-  } catch (error) {
-    return invalidRange(error)
-  }
-  if (band === null) return { ok: true }
-  if (structure.completeness !== 'complete') {
-    return { ok: false, refusal: incompleteRefusal(structure) }
-  }
-  const count = projectionBefore.rows.logicalCount
-  // Synchronous budget check per unit; only a spent budget awaits.
-  const cooperate = request.cooperate
-  const due = (units = 1): boolean => cooperate !== undefined && cooperate.due(units)
-  // Changed display slots become a SOURCE-space bitset (band permutations map
-  // display slots to arbitrary source rows); scanning it ascending yields merged
-  // changed intervals without sorting. Memory: a bounded constant 128 KiB
-  // (1,048,576 bits) that lives only for this call; it is deliberately not
-  // charged to the worker's transient ledger (the guard has no ledger access).
-  // TODO(S4.3): charge it through a ledger hook if the budget audit requires it.
-  const sourceWords = new Uint32Array(Math.ceil(MAX_ROWS / 32))
-  let firstWord = sourceWords.length, lastWord = -1
-  const mark = (slot: number) => {
-    const source = projectionBefore.order.displayToSource(slot)
-    const word = Math.floor(source / 32)
-    sourceWords[word] = (sourceWords[word] | 2 ** (source % 32)) >>> 0
-    if (word < firstWord) firstWord = word
-    if (word > lastWord) lastWord = word
-  }
-  const beforeMask = currentVisibility instanceof CompactRowVisibility && currentVisibility.logicalCount === count ? currentVisibility : null
-  const afterMask = candidateVisibility instanceof CompactRowVisibility && candidateVisibility.logicalCount === count ? candidateVisibility : null
-  if (afterMask && (beforeMask || currentVisibility === null)) {
-    // Word-level diff: only differing words visit their slots.
-    for (let word = 0; word < afterMask.words.length; word++) {
-      const diff = ((beforeMask ? beforeMask.words[word] : 0xffffffff) ^ afterMask.words[word]) >>> 0
-      if (diff) {
+  /** Filter hides rows in place. The guard refuses merge/spill intersections across
+   * the body band plus every changed-height row band (all columns), then refuses
+   * when changed row heights alter the start or occupied span of any cell-anchored
+   * drawing — including changed rows above the anchor and within it, even when the
+   * filter and anchor ranges do not intersect. Absolute anchors are static. */
+  export async function guardFilter(request: FilterGuardRequest): Promise<GuardOutcome> {
+    const { range, candidateVisibility, currentVisibility, projectionBefore, projectionAfter, structure } = request
+    let band: SourceRowInterval | null
+    try {
+      band = bodyBand(range)
+    } catch (error) {
+      return invalidRange(error)
+    }
+    if (band === null) return { ok: true }
+    if (structure.completeness !== 'complete') {
+      return { ok: false, refusal: incompleteRefusal(structure) }
+    }
+    const count = projectionBefore.rows.logicalCount
+    // Synchronous budget check per unit; only a spent budget awaits.
+    const cooperate = request.cooperate
+    const due = (units = 1): boolean => cooperate !== undefined && cooperate.due(units)
+    // Changed display slots become a SOURCE-space bitset (band permutations map
+    // display slots to arbitrary source rows); scanning it ascending yields merged
+    // changed intervals without sorting. Memory: a bounded constant 128 KiB
+    // (1,048,576 bits) that lives only until the changed intervals are extracted;
+    // the caller's ledger hook charges it for exactly that span.
+    const releaseScratch = request.scratch?.charge(GUARD_SCRATCH_BYTES) ?? (() => {})
+    const changed: SourceRowInterval[] = []
+    let firstChanged = Number.POSITIVE_INFINITY
+    try {
+    const sourceWords = new Uint32Array(GUARD_SCRATCH_BYTES / 4)
+    let firstWord = sourceWords.length, lastWord = -1
+    const mark = (slot: number) => {
+      const source = projectionBefore.order.displayToSource(slot)
+      const word = Math.floor(source / 32)
+      sourceWords[word] = (sourceWords[word] | 2 ** (source % 32)) >>> 0
+      if (word < firstWord) firstWord = word
+      if (word > lastWord) lastWord = word
+    }
+    const beforeMask = currentVisibility instanceof CompactRowVisibility && currentVisibility.logicalCount === count ? currentVisibility : null
+    const afterMask = candidateVisibility instanceof CompactRowVisibility && candidateVisibility.logicalCount === count ? candidateVisibility : null
+    if (afterMask && (beforeMask || currentVisibility === null)) {
+      // Word-level diff: only differing words visit their slots.
+      for (let word = 0; word < afterMask.words.length; word++) {
+        const diff = ((beforeMask ? beforeMask.words[word] : 0xffffffff) ^ afterMask.words[word]) >>> 0
+        if (diff) {
+          for (let bit = 0; bit < 32; bit++) {
+            const slot = word * 32 + bit
+            if (slot < count && Math.floor(diff / 2 ** bit) % 2 === 1) { mark(slot); if (due()) await cooperate!.pause() }
+          }
+        }
+        if (due(32)) await cooperate!.pause()
+      }
+    } else {
+      for (let slot = 0; slot < count; slot++) {
+        const visibleBefore = currentVisibility?.visible(slot) ?? true
+        if (visibleBefore !== candidateVisibility.visible(slot)) mark(slot)
+        if (due()) await cooperate!.pause()
+      }
+    }
+    for (let word = firstWord; word <= lastWord; word++) {
+      const bits = sourceWords[word]
+      if (bits) {
         for (let bit = 0; bit < 32; bit++) {
-          const slot = word * 32 + bit
-          if (slot < count && Math.floor(diff / 2 ** bit) % 2 === 1) { mark(slot); if (due()) await cooperate!.pause() }
+          if (Math.floor(bits / 2 ** bit) % 2 !== 1) continue
+          const source = word * 32 + bit
+          if (source < firstChanged) firstChanged = source
+          const previous = changed[changed.length - 1]
+          if (previous && previous.r1 + 1 >= source) previous.r1 = source
+          else changed.push({ r0: source, r1: source })
         }
       }
       if (due(32)) await cooperate!.pause()
     }
-  } else {
-    for (let slot = 0; slot < count; slot++) {
-      const visibleBefore = currentVisibility?.visible(slot) ?? true
-      if (visibleBefore !== candidateVisibility.visible(slot)) mark(slot)
-      if (due()) await cooperate!.pause()
-    }
-  }
-  const changed: SourceRowInterval[] = []
-  let firstChanged = Number.POSITIVE_INFINITY
-  for (let word = firstWord; word <= lastWord; word++) {
-    const bits = sourceWords[word]
-    if (bits) {
-      for (let bit = 0; bit < 32; bit++) {
-        if (Math.floor(bits / 2 ** bit) % 2 !== 1) continue
-        const source = word * 32 + bit
-        if (source < firstChanged) firstChanged = source
-        const previous = changed[changed.length - 1]
-        if (previous && previous.r1 + 1 >= source) previous.r1 = source
-        else changed.push({ r0: source, r1: source })
-      }
-    }
-    if (due(32)) await cooperate!.pause()
+  } finally {
+    releaseScratch()
   }
   for (const covered of mergeBands([band, ...changed])) {
     if (due()) await cooperate!.pause()
