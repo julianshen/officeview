@@ -21,7 +21,7 @@
  * No resume token is carried across an `incomplete` outcome: a retry re-runs
  * detection from scratch once the caller has completed the missing ranges. */
 import type {
-  AuthoritativeCell, FilterRange, GridSelection, OperationRefusal, Page, ReadOptions,
+  AuthoritativeCell, CompactSourceRowSet, FilterRange, GridSelection, OperationRefusal, Page, ReadOptions,
   SourceFailure, SourceStamp, SourceStore, TableExtent,
 } from './contracts'
 import {
@@ -468,20 +468,75 @@ async function finishRect(
     overrideIgnored: table !== undefined && override !== null,
   }
 }
-/** A single contiguous multi-cell selection containing the active cell. Full
- * rows/columns keep region detection from the active cell (spec §6.1). A
- * single interval part that is malformed (empty, reversed, fractional or out of
- * domain) is refused rather than silently replaced by region detection;
- * multi-part or multi-interval selections are disjoint and seed from the
- * active cell instead. */
-function explicitRect(selection: GridSelection, active: SourceCell): SourceRect | null | 'invalid' {
+/** Membership of one selection axis: a single inclusive run, several runs
+ * (disjoint), malformed input, or a worker-resident ref this pure module
+ * cannot resolve. */
+type AxisRun = { lo: number; hi: number } | 'disjoint' | 'invalid' | 'unsupported'
+/** Ascending, non-overlapping inclusive spans; adjacent spans merge, so split
+ * encodings of one contiguous run are the same run. */
+function spanRun(spans: readonly { lo: number; hi: number }[], limit: number): AxisRun {
+  if (spans.length === 0) return 'invalid'
+  let disjoint = false
+  let lo = -1, hi = -2
+  for (const span of spans) {
+    if (!Number.isSafeInteger(span.lo) || !Number.isSafeInteger(span.hi)
+      || span.lo < 0 || span.lo > span.hi || span.hi >= limit || span.lo <= hi) return 'invalid'
+    if (lo < 0) lo = span.lo
+    else if (span.lo !== hi + 1) disjoint = true
+    hi = span.hi
+  }
+  return disjoint ? 'disjoint' : { lo, hi }
+}
+/** Normalizes every CompactSourceRowSet encoding (§4.1) to the same run, so
+ * equivalent intervals, lists and bitsets resolve identically (§6.1). */
+function rowRun(rows: CompactSourceRowSet): AxisRun {
+  if (rows.kind === 'ref') return 'unsupported'
+  if (rows.kind === 'intervals') return spanRun(rows.intervals.map(span => ({ lo: span.r0, hi: span.r1 })), MAX_ROWS)
+  if (!isValidCoordinate(rows.r0, 0) || !isValidCoordinate(rows.r1, 0) || rows.r0 > rows.r1) return 'invalid'
+  if (rows.kind === 'list') {
+    if (!(rows.rows instanceof Uint32Array) || rows.rows.length === 0) return 'invalid'
+    let previous = -1
+    for (const row of rows.rows) {
+      if (row < rows.r0 || row > rows.r1 || row <= previous) return 'invalid'
+      previous = row
+    }
+    const first = rows.rows[0], last = rows.rows[rows.rows.length - 1]
+    return last - first === rows.rows.length - 1 ? { lo: first, hi: last } : 'disjoint'
+  }
+  // Bitset: bit i (LSB-first per word) is row r0+i; padding must be zero and
+  // count must equal the popcount (shared encoding, §4.1). Mask-word bit tests
+  // only; cell IDs are never bit-packed here.
+  const span = rows.r1 - rows.r0 + 1
+  if (rows.space !== 'source' || !(rows.words instanceof Uint32Array) || rows.words.length !== Math.ceil(span / 32)) return 'invalid'
+  let count = 0, first = -1, last = -1
+  for (let index = 0; index < rows.words.length; index++) {
+    const word = rows.words[index]
+    if (word === 0) continue
+    for (let bit = 0; bit < 32; bit++) {
+      if (((word >>> bit) & 1) === 0) continue
+      const offset = index * 32 + bit
+      if (offset >= span) return 'invalid'
+      if (first < 0) first = offset
+      last = offset
+      count++
+    }
+  }
+  if (count === 0 || count !== rows.count) return 'invalid'
+  return count === last - first + 1 ? { lo: rows.r0 + first, hi: rows.r0 + last } : 'disjoint'
+}
+/** A single contiguous multi-cell selection containing the active cell, after
+ * normalizing its encoding. Full rows/columns keep region detection from the
+ * active cell (spec §6.1). Malformed membership is refused, a ref is
+ * unsupported here, and disjoint membership seeds from the active cell. */
+function explicitRect(selection: GridSelection, active: SourceCell): SourceRect | null | 'invalid' | 'unsupported' {
   if (selection.ranges.length !== 1) return null
   const part = selection.ranges[0]
-  if (part.rows.kind !== 'intervals') return null
-  if (part.rows.intervals.length === 0 || part.cols.length === 0) return 'invalid'
-  if (part.rows.intervals.length !== 1 || part.cols.length !== 1) return null
-  const rect = { r0: part.rows.intervals[0].r0, r1: part.rows.intervals[0].r1, c0: part.cols[0].c0, c1: part.cols[0].c1 }
-  if (!isValidSourceRectInput(rect)) return 'invalid'
+  const rows = rowRun(part.rows)
+  const cols = spanRun(part.cols.map(span => ({ lo: span.c0, hi: span.c1 })), MAX_COLS)
+  if (rows === 'invalid' || cols === 'invalid') return 'invalid'
+  if (rows === 'unsupported') return 'unsupported'
+  if (rows === 'disjoint' || cols === 'disjoint') return null
+  const rect = { r0: rows.lo, r1: rows.hi, c0: cols.lo, c1: cols.hi }
   if (rect.r0 === rect.r1 && rect.c0 === rect.c1) return null
   if ((rect.r0 === 0 && rect.r1 === MAX_ROWS - 1) || (rect.c0 === 0 && rect.c1 === MAX_COLS - 1)) return null
   if (active.row < rect.r0 || active.row > rect.r1 || active.col < rect.c0 || active.col > rect.c1) return null
@@ -559,6 +614,7 @@ async function detectRange(request: RangeDetectionRequest, pacer: Pacer, owner: 
   if (tableHit !== undefined && tableHit.kind === 'table') return finishTable(context, tableHit.record)
   const explicit = explicitRect(selection, active)
   if (explicit === 'invalid') return refused({ reason: 'invalid-range', message: 'Malformed explicit selection range' })
+  if (explicit === 'unsupported') return refused({ reason: 'unsupported', message: 'Row-set refs are resolved by the worker, not range detection' })
   if (explicit !== null) return finishDerived(context, explicit, { kind: 'explicit' })
   const region = await probeCurrentRegion(active, scanner, pageLimit)
   if (region.kind === 'incomplete') return { kind: 'incomplete', missing: region.missing }
