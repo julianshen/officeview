@@ -346,3 +346,33 @@ it.each(['search', 'wildcards', 'include blanks'])('protects an in-flight checkb
   expect(search.value).toBe('item')
   expect(f.publications).toBe(0)
 })
+
+it('permits a valid custom predicate when the values universe is incomplete', async () => {
+  const f = controlsFixture(10), base = f.client
+  const client: ControlsClient = { ...base, async values(...args) {
+    const port = await base.values(...args)
+    return { ...port, async read(...input) { const page = await port.read(...input); return { ...page, complete: false, count: { ...page.count, complete: false } } } }
+  } }
+  const ui = render(<FilterHarness fixture={f} client={client} />)
+  await waitFor(() => expect(ui.getByText(/universe incomplete/)).toBeTruthy())
+  expect((ui.getByRole('button', { name: 'OK' }) as HTMLButtonElement).disabled).toBe(true)
+  fireEvent.change(ui.getByRole('combobox', { name: 'Filter method' }), { target: { value: 'custom' } })
+  fireEvent.change(ui.getByRole('combobox', { name: 'Condition 1 operator' }), { target: { value: 'contains' } })
+  fireEvent.change(ui.getByRole('textbox', { name: 'Condition 1 first' }), { target: { value: 'item' } })
+  expect((ui.getByRole('button', { name: 'OK' }) as HTMLButtonElement).disabled).toBe(false)
+  fireEvent.click(ui.getByRole('button', { name: 'OK' }))
+  await waitFor(() => expect(f.publications).toBe(1))
+  expect(f.snapshot.filter?.columns.get(0)).toEqual({ kind: 'text', op: 'contains', first: 'item', wildcards: false })
+})
+
+it('keeps applied sort case sensitivity when using the dropdown sort shortcut', async () => {
+  const f = controlsFixture(10)
+  f.snapshot = { ...f.snapshot, sort: { range: f.range, keys: [{ col: 1, order: 'desc' }], caseSensitive: true } }
+  const props = { owner: f.snapshot.owner, client: f.client, col: 0, applied: null, appliedSort: f.snapshot.sort, onClose: vi.fn(), onNotice: vi.fn(), onApplied: vi.fn() }
+  const ui = render(<FilterDropdown {...props} />)
+  await waitFor(() => expect((ui.getByRole('button', { name: 'Sort ascending' }) as HTMLButtonElement).disabled).toBe(false))
+  fireEvent.click(ui.getByRole('button', { name: 'Sort ascending' }))
+  await waitFor(() => expect(f.publications).toBe(1))
+  expect(f.snapshot.sort?.caseSensitive).toBe(true)
+  expect(f.snapshot.sort?.keys).toEqual([{ col: 0, order: 'asc' }])
+})

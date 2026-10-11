@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type ReactElement } from 'react'
-import type { ColumnRule, FilterSpec } from '../../xlsx/view/contracts'
+import type { ColumnRule, FilterSpec, SortSpec } from '../../xlsx/view/contracts'
 import { FilterEngine, type ColumnClassification } from '../../xlsx/view/filter'
 import { lowerDateCondition } from '../../xlsx/view/datePredicates'
 import { decodeSerial } from '../../xlsx/formula/serial'
@@ -8,7 +8,7 @@ import type { DetectedRange } from '../../xlsx/view/rangeDetection'
 import { filterWithColumn, sameFilterRange, type DraftPage, type DraftQuery, type ValueDraftAction, type ValuesDraftPort } from './controlsClient'
 import { controlTarget, failureText, useControlLifetime, type ControlProps } from './controlUi'
 import { ConditionEditor, conditionInput, typedCondition } from './ConditionEditor'
-export interface FilterDropdownProps extends ControlProps { col: number; applied: FilterSpec | null; snapshotHidden?: boolean }
+export interface FilterDropdownProps extends ControlProps { col: number; applied: FilterSpec | null; snapshotHidden?: boolean; appliedSort?: SortSpec | null }
 export function FilterDropdown(props: FilterDropdownProps): ReactElement | null {
   const life = useControlLifetime(props), session = useRef<ValuesDraftPort | null>(null), searchInput = useRef<HTMLInputElement>(null), changingRef = useRef(false)
   const [range, setRange] = useState<DetectedRange | null>(null), [page, setPage] = useState<DraftPage | null>(null), [query, setQuery] = useState<DraftQuery>({ text: '', offset: 0 })
@@ -67,7 +67,7 @@ export function FilterDropdown(props: FilterDropdownProps): ReactElement | null 
     }
   }
   const apply = (shortcut?: 'clear' | 'clearAll' | 'asc' | 'desc') => {
-    if (busy || life.invalid || (!shortcut && (!range || !page?.complete || validation))) return
+    if (busy || life.invalid || (!shortcut && (!range || (method === 'values' && !page?.complete) || validation))) return
     const job = life.begin(); setBusy(true); setError('')
     void (async () => {
       let outcome
@@ -75,7 +75,7 @@ export function FilterDropdown(props: FilterDropdownProps): ReactElement | null 
         const detected = await props.client.resolve(job.owner, 'sort', job.signal, undefined, props.col)
         if (!job.current()) return
         if (detected.kind !== 'complete') { noticeError(detected.kind === 'refused' ? failureText(detected) : 'Source range is incomplete; retry.'); setBusy(false); return }
-        outcome = await props.client.sort(job.owner, { range: detected.range, keys: [{ col: props.col, order: shortcut }], caseSensitive: false }, job.signal)
+        outcome = await props.client.sort(job.owner, { range: detected.range, keys: [{ col: props.col, order: shortcut }], caseSensitive: props.appliedSort?.caseSensitive ?? false }, job.signal)
       } else {
         let next: FilterSpec | null
         if (shortcut === 'clearAll') next = null
@@ -134,7 +134,7 @@ export function FilterDropdown(props: FilterDropdownProps): ReactElement | null 
       {inspection && <pre>{inspection}</pre>}{validation && <p>{validation}</p>}{error && <p>{error}</p>}
       {busy && <div role="progressbar" aria-label={progress}>{progress}</div>}
       {!busy && (!page?.complete || error) && <button type="button" style={controlTarget} onClick={initialize}>Retry values</button>}
-      <button type="submit" style={controlTarget} disabled={busy || !range || !page?.complete || Boolean(validation) || life.invalid}>OK</button><button type="button" style={controlTarget} onClick={() => life.cancel()}>Cancel</button>
+      <button type="submit" style={controlTarget} disabled={busy || !range || (method === 'values' && !page?.complete) || Boolean(validation) || life.invalid}>OK</button><button type="button" style={controlTarget} onClick={() => life.cancel()}>Cancel</button>
     </form>
   </div>
 }
