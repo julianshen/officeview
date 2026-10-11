@@ -202,7 +202,12 @@ export class ViewerKernel {
     }
   }
   /** Compact transferable delta. Resident order/mask buffers stay with the
-   * session; the delta carries accounted copies that are then transferred. */
+   * session; the delta carries accounted copies that are then transferred.
+   * Wire conventions: `metrics` are SOURCE-space dimension overlays (immutable
+   * source dimensions; the client projects them through `bands`, as
+   * createSheetMetrics does); `visibility` lists display slots outside every
+   * bitset as visible; `counts.total` is the logical row axis (1,048,576), not a
+   * filter range, and `counts.visible` its visible display slots. */
   private delta(view: CommittedView): ViewCommitDelta {
     const bands = view.order.bands.map(band => {
       const sourceAtOffset = band.sourceAtOffset.slice()
