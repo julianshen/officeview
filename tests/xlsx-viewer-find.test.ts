@@ -39,6 +39,13 @@ describe('workbook find: global source scan', () => {
     expect(where(await drain(new WorkbookFind(findInputOf(d).input, ci('BÉTA'))))).toEqual([['A', 2, 0]])
   })
 
+  it('maps highlight offsets back to raw UTF-16 when lowercasing changes the length', async () => {
+    // 'İ' lowercases to two code units; the hit still names raw offsets [2,4) of 'xİab'.
+    const d = workbookOf([{ sheetId: 'A', cells: [{ row: 0, col: 0, value: 'xİab' }] }])
+    const [hit] = await drain(new WorkbookFind(findInputOf(d).input, ci('ab')))
+    expect(hit).toMatchObject({ start: 2, end: 4 })
+  })
+
   it('treats an empty query as no search term and matches error and boolean display text', async () => {
     const empty = await new WorkbookFind(findInputOf(doc()).input, ci('')).nextPage()
     expect(empty).toMatchObject({ complete: true, hits: [], totalKnown: 0 })
@@ -135,7 +142,8 @@ describe('workbook find on F1 without painting or a full bitmap', () => {
     const session = new WorkbookFind({
       owner,
       sheets: [{ sheetId, store, identity: { ...initialIdentity(docId, sheetId), valueGen }, order: createRowOrder([]), visibility: visibilityFromHidden(createIntervalSet([])) }],
-    }, ci('A1048576'))
+    // A frozen clock: only the 4,096-unit work budget yields, so counts are deterministic.
+    }, ci('A1048576'), { now: () => 0 })
     const hits = await drain(session)
     expect(where(hits)).toEqual([[store.stamp.sheetId, MAX_ROWS - 1, 0]])
     // Exactly one source read per populated cell, no coordinate walk, no layout.
