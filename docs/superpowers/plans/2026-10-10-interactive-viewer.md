@@ -110,7 +110,8 @@ Every package is implemented on its own branch, reviewed by at least one agent f
 | S6.1 selection state machine, navigator and status (`selection.ts`, `SheetNavigator.tsx`, `ViewerStatus.tsx`) | merged |
 | S5.1 canonical text/layout records and viewport queries (`textLayout.ts`, `viewport.ts`, render layout/paint split) | merged |
 | S6.2 virtual owned grid semantics, headers, event isolation (`GridSemantics.tsx`, `GridHeaders.tsx`, OfficeDoc guards) | merged; Ctrl/Cmd+wheel over any viewer now actually blocks browser page zoom (behaviour change, flagged) |
-| S1.2, S5.3, S9.1 | in progress (implementation or review rounds on their own branches) |
+| S5.3 global workbook find engine (`src/xlsx/view/find.ts`) | merged; OfficeDoc wiring and worker search command wait for S5.2 |
+| S1.2, S9.1 | in progress (implementation or review rounds on their own branches) |
 | S1.2, S1.3, S4.4–S4.5, S5, S6, S9, S10 (physical-device receipts skipped for now by user decision), S11/S12 status, S13 | not started |
 
 ## S0 — Freeze contracts, counterexamples and fixture/harness infrastructure
@@ -400,6 +401,8 @@ expect(session.publishWorkbookIndex(staleA)).toBe(false)
 - [ ] Deliver interactive viewport integration behind a feature flag until S6–S10 complete.
 
 ### S5.3 Global workbook find without a full bitmap
+
+> **Status (2026-10-11):** engine merged (Claude implementation; codex and opencode reviews over two rounds; every finding fixed). Find follows existing `core/search.ts` semantics (spec §11.4), scans visible authoritative cells in bounded cancellable batches, orders hits by display slot with a 262,144-hit buffer budget, pages one at a time, rejects stale/closed/cancelled publication, and reports typed source failures. Not delivered: OfficeDoc integration and worker `search` command (S5.2), browser far-corner smoke (S10).
 
 **Files:** create `src/xlsx/view/find.ts`; modify `src/core/search.ts`, `src/components/OfficeDoc.tsx`, `src/render/paint.ts`; test `tests/xlsx-viewer-find.test.ts`, `tests/xlsx-viewer-find-races.test.tsx`; retain `tests/officeview-search.test.tsx`.
 
