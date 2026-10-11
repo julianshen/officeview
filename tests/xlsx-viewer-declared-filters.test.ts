@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import JSZip from 'jszip'
 import { OfficePackage } from '../src/core/zip'
 import { parseXlsx } from '../src/xlsx/parse'
@@ -38,9 +38,17 @@ const sheetWrap = (inner: string): string =>
 
 describe('declared worksheet autoFilter', () => {
   it('parses ref and values filterColumn kinds as diagnostics only', async () => {
-    const doc = await parseFiles(sheetFiles(sheetWrap(
-      `<autoFilter ref="A1:C3"><filterColumn colId="0"><filters blank="1"><filter val="a"/><filter val="b"/></filters></filterColumn><filterColumn colId="2"><filters><filter val="x"/></filters></filterColumn></autoFilter>`,
-    )))
+    // Pin the clock so the volatile-function epoch matches across both parses.
+    vi.useFakeTimers({ toFake: ['Date'], now: Date.UTC(2026, 0, 1) })
+    let doc: XlsxDocument, plain: XlsxDocument
+    try {
+      doc = await parseFiles(sheetFiles(sheetWrap(
+        `<autoFilter ref="A1:C3"><filterColumn colId="0"><filters blank="1"><filter val="a"/><filter val="b"/></filters></filterColumn><filterColumn colId="2"><filters><filter val="x"/></filters></filterColumn></autoFilter>`,
+      )))
+      plain = await parseFiles(sheetFiles(sheetWrap('')))
+    } finally {
+      vi.useRealTimers()
+    }
     const declared = doc.declaredFilters
     expect(declared).toHaveLength(1)
     const auto = declared![0].worksheetAutoFilter
@@ -49,9 +57,10 @@ describe('declared worksheet autoFilter', () => {
     expect(auto?.columns).toHaveLength(2)
     expect(auto?.columns[0]).toMatchObject({ colId: 0, rule: { kind: 'values', valueCount: 2, hasBlank: true } })
     expect(auto?.columns[1]).toMatchObject({ colId: 2, rule: { kind: 'values', valueCount: 1, hasBlank: false } })
-    // Diagnostics only: stored row order untouched, no viewer rule state.
-    expect(doc.sheets[0].rows.map(row => row.index)).toEqual([0, 1, 2])
-    expect((doc.sheets[0] as unknown as Record<string, unknown>).filterSpec).toBeUndefined()
+    // Diagnostics only: nothing outside declaredFilters differs from the same
+    // sheet without the autoFilter (no viewer rule state, no row changes).
+    const { declaredFilters: _declared, ...rest } = doc
+    expect(rest).toEqual(plain)
   })
 
   it('classifies unsupported color, top-10, dynamic and custom rule kinds', async () => {
@@ -319,5 +328,165 @@ describe('adapter-neutral builders', () => {
     const entry = doc.declaredFilters![0]
     expect(auto.finish()).toEqual(entry.worksheetAutoFilter)
     expect(sort.finish()).toEqual(entry.worksheetSortState)
+  })
+})
+
+describe('claude round-2 findings', () => {
+  const NS = `xmlns="${NS_MAIN}" xmlns:r="${NS_R}"`
+  const relsFor = (ids: number[]): string =>
+    `<?xml version="1.0" encoding="UTF-8"?><Relationships xmlns="${NS_REL}">${ids.map(i => `<Relationship Id="rIdT${i}" Type="${NS_R}/table" Target="../tables/table${i}.xml"/>`).join('')}</Relationships>`
+  const tableXml = (i: number, inner: string, name = `T${i}`): string =>
+    `<?xml version="1.0" encoding="UTF-8"?><table xmlns="${NS_MAIN}" id="${i}" name="T${i}" displayName="${name}" ref="A1:B3" headerRowCount="1" totalsRowShown="0">${inner}<tableColumns count="2"><tableColumn id="1" name="A"/><tableColumn id="2" name="B"/></tableColumns></table>`
+  const withTables = (parts: string, rels: string, tables: Record<string, string>, sheetInner = ''): Record<string, string> => sheetFiles(
+    `<?xml version="1.0" encoding="UTF-8"?><worksheet ${NS}><sheetData><row r="1"><c r="A1"><v>1</v></c></row></sheetData>${sheetInner}<tableParts>${parts}</tableParts></worksheet>`,
+    { 'xl/worksheets/_rels/sheet1.xml.rels': rels, ...tables },
+  )
+  const cols = (n: number): string => Array.from({ length: n }, (_, i) => `<filterColumn colId="${i}"><filters><filter val="a"/></filters></filterColumn>`).join('')
+
+  it('1A de-duplicates repeated tablePart refs by part path without changing table metadata', async () => {
+    const parts = Array.from({ length: 40 }, () => '<tablePart r:id="rIdT1"/>').join('')
+    const doc = await parseFiles(withTables(parts, relsFor([1]), {
+      'xl/tables/table1.xml': tableXml(1, `<autoFilter ref="A1:B3">${cols(2)}</autoFilter>`),
+    }))
+    const entry = doc.declaredFilters![0]
+    expect(entry.tableAutoFilters).toHaveLength(1)
+    expect(entry.duplicateTableParts).toBe(39)
+    // Table inventory behavior is not the diagnostics' business.
+    expect(doc.tables).toHaveLength(40)
+  })
+
+  it('1A caps declared tables per sheet with an omission count', async () => {
+    const ids = Array.from({ length: 67 }, (_, i) => i + 1)
+    const tables: Record<string, string> = {}
+    for (const i of ids) tables[`xl/tables/table${i}.xml`] = tableXml(i, '<autoFilter ref="A1:B3"/>')
+    const doc = await parseFiles(withTables(ids.map(i => `<tablePart r:id="rIdT${i}"/>`).join(''), relsFor(ids), tables))
+    const entry = doc.declaredFilters![0]
+    expect(entry.tableAutoFilters).toHaveLength(64)
+    expect(entry.omittedTables).toBe(3)
+    const summary = summarizeDeclaredFiltering(entry)
+    expect(summary).toContain('and 59 more table declarations')
+  })
+
+  it('1A bounds retained column and condition records per document', async () => {
+    const ids = Array.from({ length: 9 }, (_, i) => i + 1)
+    const tables: Record<string, string> = {}
+    for (const i of ids) tables[`xl/tables/table${i}.xml`] = tableXml(i, `<autoFilter ref="A1:AMJ3">${cols(1024)}</autoFilter>`)
+    const doc = await parseFiles(withTables(ids.map(i => `<tablePart r:id="rIdT${i}"/>`).join(''), relsFor(ids), tables))
+    const entry = doc.declaredFilters![0]
+    const retained = entry.tableAutoFilters.reduce((sum, t) => sum + t.autoFilter!.columns.length, 0)
+    const omitted = entry.tableAutoFilters.reduce((sum, t) => sum + (t.autoFilter!.omittedColumns ?? 0), 0)
+    expect(retained).toBe(8192)
+    expect(retained + omitted).toBe(9 * 1024)
+  })
+
+  it('1B truncates retained text with a flag and bounds the summary', async () => {
+    const big = 'A'.repeat(200000)
+    const doc = await parseFiles(withTables('<tablePart r:id="rIdT1"/>', relsFor([1]), {
+      'xl/tables/table1.xml': tableXml(1, `<autoFilter ref="${big}"/>`, `N${'x'.repeat(200000)}`),
+    }, `<autoFilter ref="${big}"><filterColumn colId="0"><customFilters><customFilter operator="${'o'.repeat(5000)}" val="${'v'.repeat(5000)}"/></customFilters></filterColumn><filterColumn colId="1"><top10 val="${'9'.repeat(5000)}"/></filterColumn></autoFilter><sortState ref="${big}" sortMethod="${'s'.repeat(5000)}"><sortCondition ref="${big}" sortBy="${'q'.repeat(5000)}" dxfId="${'7'.repeat(5000)}"/></sortState>`))
+    const entry = doc.declaredFilters![0]
+    const auto = entry.worksheetAutoFilter!
+    expect(auto.malformed).toBe('invalid-ref')
+    expect(auto.refVerbatim!.length).toBeLessThanOrEqual(256)
+    expect(auto.truncated).toBe(true)
+    const custom = auto.columns[0].rule as { conditions: { operator: string; value: string }[]; truncated?: boolean }
+    expect(custom.conditions[0].value.length).toBeLessThanOrEqual(256)
+    expect(custom.conditions[0].operator.length).toBeLessThanOrEqual(256)
+    expect(custom.truncated).toBe(true)
+    expect((auto.columns[1].rule as { val?: string }).val!.length).toBeLessThanOrEqual(256)
+    const sort = entry.worksheetSortState!
+    expect(sort.refVerbatim!.length).toBeLessThanOrEqual(256)
+    expect(sort.sortMethod!.length).toBeLessThanOrEqual(256)
+    expect(sort.truncated).toBe(true)
+    const condition = sort.conditions[0]
+    expect(condition.sortByVerbatim!.length).toBeLessThanOrEqual(256)
+    expect(condition.refVerbatim!.length).toBeLessThanOrEqual(256)
+    expect(condition.dxfId!.length).toBeLessThanOrEqual(256)
+    expect(condition.truncated).toBe(true)
+    const table = entry.tableAutoFilters[0]
+    expect(table.table.displayName!.length).toBeLessThanOrEqual(256)
+    expect(table.table.truncated).toBe(true)
+    expect(table.autoFilter!.refVerbatim!.length).toBeLessThanOrEqual(256)
+    expect(summarizeDeclaredFiltering(entry).length).toBeLessThan(2048)
+    expect(JSON.stringify(entry).length).toBeLessThan(8192)
+  })
+
+  it('1B parses the ref from the full spelling, never the clipped one', async () => {
+    const doc = await parseFiles(sheetFiles(sheetWrap(`<autoFilter ref="A1:B3${'9'.repeat(400)}"/>`)))
+    const auto = doc.declaredFilters![0].worksheetAutoFilter!
+    expect(auto.range).toBeUndefined()
+    expect(auto.malformed).toBe('invalid-ref')
+  })
+
+  it('2 keeps the first column flag and records every flag', async () => {
+    const doc = await parseFiles(sheetFiles(sheetWrap(`<autoFilter ref="A1:B3"><filterColumn colId="x"><filters/><top10/></filterColumn></autoFilter>`)))
+    const column = doc.declaredFilters![0].worksheetAutoFilter!.columns[0]
+    expect(column.malformed).toBe('invalid-colId')
+    expect(column.flags).toEqual(['invalid-colId', 'multiple-rule-elements'])
+  })
+
+  it('3 describes sort-only tables and unreadable filters distinctly', async () => {
+    const doc = await parseFiles(withTables('<tablePart r:id="rIdT1"/><tablePart r:id="rIdT2"/>', relsFor([1, 2]), {
+      'xl/tables/table1.xml': tableXml(1, '<sortState ref="A2:B3"><sortCondition ref="A2:A3"/></sortState>'),
+      'xl/tables/table2.xml': tableXml(2, '<autoFilter ref="bad"/>'),
+    }))
+    const summary = summarizeDeclaredFiltering(doc.declaredFilters![0])
+    expect(summary).toContain('table "T1" has a stored sort on A2:B3')
+    expect(summary).not.toMatch(/T1" declares a filter/)
+    expect(summary).toContain('table "T2" has a file filter on an unreadable range "bad"')
+  })
+
+  it('3 describes nested worksheet sorts and sorts without a ref', async () => {
+    const nested = await parseFiles(sheetFiles(sheetWrap(`<autoFilter ref="A1:B3"><sortState ref="A2:B3"><sortCondition ref="B2:B3"/></sortState></autoFilter>`)))
+    expect(summarizeDeclaredFiltering(nested.declaredFilters![0])).toContain('a stored sort on A2:B3')
+    const noRef = await parseFiles(sheetFiles(sheetWrap(`<sortState><sortCondition ref="A1:A3"/></sortState>`)))
+    expect(summarizeDeclaredFiltering(noRef.declaredFilters![0])).toContain('a stored sort the viewer could not read')
+    const badRef = await parseFiles(sheetFiles(sheetWrap(`<autoFilter ref="$A$1:$B$3"/>`)))
+    expect(summarizeDeclaredFiltering(badRef.declaredFilters![0])).toContain('a file filter on an unreadable range "$A$1:$B$3"')
+  })
+
+  it('4 flags a second direct autoFilter or sortState', async () => {
+    const doc = await parseFiles(sheetFiles(sheetWrap(`<autoFilter ref="A1:A3"/><autoFilter ref="B1:B3"><filterColumn colId="0"><colorFilter/></filterColumn></autoFilter><sortState ref="A1:A3"/><sortState ref="B1:B3"/>`)))
+    const entry = doc.declaredFilters![0]
+    expect(entry.worksheetAutoFilter!.refVerbatim).toBe('A1:A3')
+    expect(entry.worksheetAutoFilter!.malformed).toBe('duplicate-autoFilter')
+    expect(entry.worksheetSortState!.refVerbatim).toBe('A1:A3')
+    expect(entry.worksheetSortState!.malformed).toBe('duplicate-sortState')
+  })
+
+  it('4 never loses the duplicate flag when the kept declaration is malformed', async () => {
+    const doc = await parseFiles(sheetFiles(sheetWrap(`<autoFilter/><autoFilter ref="B1:B3"/><sortState ref="bad"/><sortState ref="B1:B3"/>`)))
+    const entry = doc.declaredFilters![0]
+    expect(entry.worksheetAutoFilter!.malformed).toBe('missing-ref')
+    expect(entry.worksheetAutoFilter!.flags).toEqual(['missing-ref', 'duplicate-autoFilter'])
+    expect(entry.worksheetSortState!.malformed).toBe('invalid-ref')
+    expect(entry.worksheetSortState!.flags).toEqual(['invalid-ref', 'duplicate-sortState'])
+  })
+
+  it('4 flags duplicate table autoFilter and sortState', async () => {
+    const doc = await parseFiles(withTables('<tablePart r:id="rIdT1"/>', relsFor([1]), {
+      'xl/tables/table1.xml': tableXml(1, '<autoFilter ref="A1:B3"/><autoFilter ref="A1:A3"/><sortState ref="A1:B3"/><sortState ref="A1:A3"/>'),
+    }))
+    const table = doc.declaredFilters![0].tableAutoFilters[0]
+    expect(table.autoFilter!.flags).toEqual(['duplicate-autoFilter'])
+    expect(table.sortState!.flags).toEqual(['duplicate-sortState'])
+  })
+
+  it('5 records columnSort as an unsupported kind and sortMethod verbatim', async () => {
+    const doc = await parseFiles(sheetFiles(sheetWrap(`<sortState ref="A1:C3" columnSort="1" sortMethod="stroke"><sortCondition ref="A1:C1"/></sortState>`)))
+    const sort = doc.declaredFilters![0].worksheetSortState!
+    expect(sort).toMatchObject({ columnSort: true, sortMethod: 'stroke', unsupported: 'left-to-right' })
+    expect(summarizeDeclaredFiltering(doc.declaredFilters![0])).toContain('a stored left-to-right sort on A1:C3 (unsupported)')
+    const rows = await parseFiles(sheetFiles(sheetWrap(`<sortState ref="A1:C3" columnSort="0"><sortCondition ref="A1:A3"/></sortState>`)))
+    const rowSort = rows.declaredFilters![0].worksheetSortState!
+    expect(rowSort.columnSort).toBe(false)
+    expect(rowSort.unsupported).toBeUndefined()
+  })
+
+  it('7 counts only columns with a rule as filtered', async () => {
+    const doc = await parseFiles(sheetFiles(sheetWrap(`<autoFilter ref="A1:B3"><filterColumn colId="0" hiddenButton="1"/><filterColumn colId="1"><top10 val="3"/></filterColumn></autoFilter>`)))
+    const summary = summarizeDeclaredFiltering(doc.declaredFilters![0])
+    expect(summary).toContain('(1 filtered column: Top 10)')
+    expect(summary).not.toContain('unfiltered')
   })
 })
