@@ -112,19 +112,45 @@ export interface SparseRowPage {
 export interface ColumnQuery {
   col: SourceCol
   rows: CompactSourceRowSet
+  /** Entries per page; for 'lanes' it bounds the rows one lanes entry covers. */
   limit: number
   cursor?: string
+  /** 'lanes' asks for typed-lane entries (§4.1); default 'entries' never yields them. */
+  encoding?: 'entries' | 'lanes'
 }
-/** TODO(S1.2): a typed-lanes variant is REQUIRED before S7/S8 consume queryColumn (§4.1).
- * Freeze row/type/value lane encoding with the storage implementation first;
- * raw strings must use reversible UTF-16 code-unit indexes/offsets, not UTF-8
- * replacement. Current cell items and default blank runs remain bounded pages. */
+/** Type lane tags of a ColumnLanes entry. The numbers are shared with the
+ * S8.2 value index (SOURCE_* in valueIndex.ts), so lanes copy straight in. */
+export const LANE_NUMBER = 1
+export const LANE_STRING = 2
+export const LANE_BOOLEAN = 3
+export const LANE_ERROR = 4
+/** A present but value-less record (style-only cell); still blank for values. */
+export const LANE_BLANK = 5
+export const LANE_UNAVAILABLE = 7
+/** Typed lanes over inclusive [r0,r1] (§4.1): rows listed in `rows` (strictly
+ * ascending, inside [r0,r1]) carry one tag/number/style each; every other row
+ * of the run is blank (the default-blank run). Strings and error texts are raw
+ * UTF-16 code units, `text[textStart[i]..textStart[i+1])`, so lone surrogates
+ * survive; numbers hold finite numbers and booleans as 1/0. Requested only via
+ * ColumnQuery.encoding='lanes'; formulas stay on readCell/readRows. */
+export interface ColumnLanes {
+  kind: 'lanes'
+  r0: SourceRow
+  r1: SourceRow
+  rows: Uint32Array
+  tags: Uint8Array
+  numbers: Float64Array
+  styles: Uint32Array
+  text: Uint16Array
+  textStart: Uint32Array
+}
 export type ColumnEntry =
   | { kind: 'cell'; row: SourceRow; cell: SingleCellPayload }
   | { kind: 'blank'; r0: SourceRow; r1: SourceRow }
   | { kind: 'unknown'; r0: SourceRow; r1: SourceRow; pageId: string }
   | { kind: 'unavailable'; row: SourceRow; cell: SingleCellPayload; reason: 'formula-value-unavailable' }
   | { kind: 'error'; r0: SourceRow; r1: SourceRow; code: SourceErrorCode; retryable: boolean }
+  | ColumnLanes
 export interface PopulatedQuery { range: SourceRect; limit: number; cursor?: string }
 export interface SourceFailure { code: SourceErrorCode; retryable: boolean; message: string }
 export interface RangeCompletion {

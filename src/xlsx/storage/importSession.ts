@@ -3,9 +3,7 @@
  * by the entry points (design note §4.3-§4.5).
  *
  * S1.1b owns admission (object / paged / refuse) and the typed refusal; the
- * paged importer that commits pages to a PageSink is S1.2's, so a `paged`
- * decision currently surfaces as a typed `unsupported` refusal with reason
- * `paged-not-yet` and never as a blank or truncated document.
+ * paged importer (S1.2) lives in ./pagedImport and commits pages to a SourcePageStore.
  */
 import type { Completeness, ProfileId, SourceFailure, SourceStamp, WorkerDiagnostic } from '../view/contracts'
 import type { PackageErrorCode } from '../../core/package-error'
@@ -53,6 +51,8 @@ export interface ImportLimits {
     maxRatio: number
     drawingPartEnvelopeBytes: number
     minFreeStorageBytes: number
+    /** Per sheet: merges, table parts, drawing references and array formulas each (S1.2). */
+    structuralRecords: number
   }
   spool: { memoryLimitBytes: number; hardMemoryCapBytes: number; sniffPrefixBytes: number }
 }
@@ -92,6 +92,7 @@ const DESKTOP: ImportLimits = {
     maxRatio: 200,
     drawingPartEnvelopeBytes: 128 * MiB,
     minFreeStorageBytes: 64 * MiB,
+    structuralRecords: 1_048_576,
   },
   spool: { memoryLimitBytes: 32 * MiB, hardMemoryCapBytes: 64 * MiB, sniffPrefixBytes: 64 * KiB },
 }
@@ -167,7 +168,9 @@ export function detectProfile(): ProfileId {
   return 'D'
 }
 
-/** Why a load did not produce a document. `paged-not-yet` = admitted for the paged importer (S1.2). */
+/** Why a load did not produce a document. `paged-not-yet` is retained for type
+ * compatibility only: since S1.2 nothing produces it (paged admissions open a
+ * paged session internally, or the compatibility document on exported entries). */
 export type RefusalReason = 'paged-not-yet' | 'undetermined-format' | 'limit'
 
 /** Typed rejection of loadOfficeFile/<OfficeFile> for a spreadsheet that cannot load as an object document. */

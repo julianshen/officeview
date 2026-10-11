@@ -111,7 +111,8 @@ Every package is implemented on its own branch, reviewed by at least one agent f
 | S5.1 canonical text/layout records and viewport queries (`textLayout.ts`, `viewport.ts`, render layout/paint split) | merged |
 | S6.2 virtual owned grid semantics, headers, event isolation (`GridSemantics.tsx`, `GridHeaders.tsx`, OfficeDoc guards) | merged; Ctrl/Cmd+wheel over any viewer now actually blocks browser page zoom (behaviour change, flagged) |
 | S5.3 global workbook find engine (`src/xlsx/view/find.ts`) | merged; OfficeDoc wiring and worker search command wait for S5.2 |
-| S1.2, S9.1 | in progress (implementation or review rounds on their own branches) |
+| S1.2 sparse pages, external page storage, small/large adapter parity (`sourcePages.ts`, `pagedImport.ts`, `pagedSource.ts`, `overviewIndex.ts`, `viewerLargeSource.ts`) | merged; worker routes admitted-paged blobs to paged sources; exported entry keeps compatibility mode until the viewer is enabled |
+| S9.1, S5.2 | in progress (implementation or review rounds on their own branches) |
 | S1.2, S1.3, S4.4–S4.5, S5, S6, S9, S10 (physical-device receipts skipped for now by user decision), S11/S12 status, S13 | not started |
 
 ## S0 — Freeze contracts, counterexamples and fixture/harness infrastructure
@@ -188,6 +189,8 @@ expect(await source.readCell({ row: 1_048_575, col: 16_383 }, readOptions)).toMa
 - [ ] Deliver an import-only PR with byte/allocation evidence for F2, first-page readiness vs full-import throughput separately, and explicit browser-storage support/failure behavior.
 
 ### S1.2 Sparse pages, external storage and small/large adapter parity
+
+> **Status (2026-10-12):** merged (Claude implementation; opencode reviews over two rounds plus pi notes; every finding fixed). Typed ColumnLanes, object and paged adapters behind one SourceStore with parity tests, OPFS/IndexedDB/memory page backends (fakes in vitest), decoded-page cache in the MemoryPool source tier, one-level overview index, RED 14a/21/22/23. Proposed-until-S10 values: pages pool 1024/512 MiB, `paged.structuralRecords` 1,048,576, quota precheck 6 page bytes per compressed byte. Deferred: `externalRuns.ts` (sorted external runs), `styles.xml` on the paged path (styleIndex only), real-browser storage checks (S10).
 
 **Files:** create `src/xlsx/storage/sourcePages.ts`, `overviewIndex.ts`, `externalRuns.ts`, `src/xlsx/view/source.ts`; test `tests/xlsx-viewer-source.test.ts`, `tests/xlsx-viewer-source-pages.test.ts`, `tests/xlsx-viewer-overview.test.ts`.
 
