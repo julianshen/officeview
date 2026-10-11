@@ -98,7 +98,8 @@ Every package is implemented on its own branch, reviewed by at least one agent f
 | S1.1 streaming ZIP/XML | design note merged (`docs/architecture/xlsx-large-source.md`, reviewed by codex, pi and opencode over five rounds; user approved `pako`); implementation split into S1.1a (ZIP/inflate/XML tokenizer core) and S1.1b (spool, admission gates, entry wiring) |
 | S3.1/S3.2 structural index and operation guard (pure parts: `structure.ts`, `operationGuard.ts`; parser/drawing/spill wiring open) | merged |
 | S4.1 resident worker protocol/session (`src/worker/viewer*.ts`; temporary object-backed source until S1.2) | merged |
-| S1.2, S1.3, S2.3, S4.2–S4.5, S5, S6, S7.1, S8.2, S8.3, S9, S10, S11/S12 status, S13 | not started |
+| S7.1 range detection/header policy/admission (`src/xlsx/view/rangeDetection.ts`) | merged |
+| S1.2, S1.3, S2.3, S4.2–S4.5, S5, S6, S8.2, S8.3, S9, S10, S11/S12 status, S13 | not started |
 
 ## S0 — Freeze contracts, counterexamples and fixture/harness infrastructure
 
@@ -429,13 +430,15 @@ expect(wide.contains({ row: 2, col: 0 })).toBe(false)
 
 ### S7.1 Range detection/header policy/structural admission
 
+> **Status (2026-10-11):** merged (opencode implementation; Claude fixes; reviews by Claude, codex and pi over three rounds; every finding fixed). Region detection is a bounded async ring-growth probe (full-capacity dense column: ~93 MB peak vs 1.8 GB before) with a work budget; orchestrator decisions: a blank seed resolves to the sole current region in the used extent or refuses `ambiguous-selection`; any derived range intersecting a table it does not exactly equal, overlapping tables at the active cell, and a contiguous selection not containing the active cell refuse `ambiguous-selection`.
+
 **Files:** create `src/xlsx/view/rangeDetection.ts`; consume `structure.ts`, `operationGuard.ts`; test `tests/xlsx-viewer-sort-range.test.ts`.
 
-- [ ] RED: table→current-region→used-range precedence, table headerRows=0/1, totals rows, all-text data, explicit override, blank gap before D outsiderange values and a pending outsiderange page. Assert no commit before complete safety query.
-- [ ] Run `bunx vitest run tests/xlsx-viewer-sort-range.test.ts`; expected naive adjacent-only/header-always-true acceptance fails.
-- [ ] GREEN: derive source-coordinate whole-row band with explicit protected header/totals, allowed override and authoritative used extent. Query indexed nonblank content in every outside column anywhere in the band; refuse conflicting data, merges/spills or geometrically affected drawings through the shared guard.
-- [ ] Run focused suite; expected table metadata precedence, source ranges immutable, separated D data refuses atomically and pending checks wait/cancel without fake safe state.
-- [ ] Deliver range detector independently for engine/UI reuse.
+- [x] RED: table→current-region→used-range precedence, table headerRows=0/1, totals rows, all-text data, explicit override, blank gap before D outsiderange values and a pending outsiderange page. Assert no commit before complete safety query.
+- [x] Run `bunx vitest run tests/xlsx-viewer-sort-range.test.ts`; expected naive adjacent-only/header-always-true acceptance fails.
+- [x] GREEN: derive source-coordinate whole-row band with explicit protected header/totals, allowed override and authoritative used extent. Query indexed nonblank content in every outside column anywhere in the band; refuse conflicting data, merges/spills or geometrically affected drawings through the shared guard.
+- [x] Run focused suite; expected table metadata precedence, source ranges immutable, separated D data refuses atomically and pending checks wait/cancel without fake safe state.
+- [x] Deliver range detector independently for engine/UI reuse.
 
 ### S7.2 Worker sort kernel and cycle commands
 
