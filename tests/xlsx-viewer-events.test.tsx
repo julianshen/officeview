@@ -1,13 +1,14 @@
-import { useState } from 'react'
 import { describe, expect, it, vi } from 'vitest'
-import { act, fireEvent, render } from '@testing-library/react'
-import { GridSemantics, type GridPopup, type GridTransition } from '../src/components/xlsx/GridSemantics'
-import { gridFixture } from './helpers/xlsx-grid-fixture'
+import { useState } from 'react'
+import { createRoot } from 'react-dom/client'
+import { act, fireEvent, render, waitFor } from '@testing-library/react'
+import { GridSemantics, type GridPopup, type GridSemanticsProps, type GridTransition } from '../src/components/xlsx/GridSemantics'
 import { GridHeaders, GridRowHeader } from '../src/components/xlsx/GridHeaders'
-import { SourceSelection } from '../src/xlsx/view/selection'
+import { SourceSelection, emptyGridSelection } from '../src/xlsx/view/selection'
+import { gridFixture } from './helpers/xlsx-grid-fixture'
 
-function StatefulGrid({ parentKey = () => {} }: { parentKey?: (key: string) => void }) {
-  const [props, setProps] = useState(gridFixture), [popup, setPopup] = useState<GridPopup>()
+function StatefulGrid({ parentKey = () => {}, initial = {} }: { parentKey?: (key: string) => void; initial?: Partial<GridSemanticsProps> }) {
+  const [props, setProps] = useState(() => gridFixture(initial)), [popup, setPopup] = useState<GridPopup>()
   return <div onKeyDown={event => parentKey(event.key)}><GridSemantics {...props} onChange={(next: GridTransition) => setProps({ ...props, ...next })}
     popup={popup} onFilter={(_col, invoker) => setPopup({ invoker, close: () => setPopup(undefined), content: <form onSubmit={event => event.preventDefault()}><input autoFocus aria-label="Numeric filter" defaultValue="-10" /><label>Show blanks<input type="checkbox" /></label><button type="button" onClick={() => setPopup(undefined)}>Close filter</button></form> })} /></div>
 }
@@ -53,6 +54,31 @@ describe('grid keyboard and control ownership', () => {
     expect(document.getElementById(grid.getAttribute('aria-activedescendant')!)?.closest('[role="grid"]')).toBe(grid)
     expect(grid.querySelectorAll('[tabindex="0"]')).toHaveLength(0)
   })
+  it('keeps navigation on the grid after a pointer header selection', () => {
+    const ui = render(<StatefulGrid />), grid = ui.getByRole('grid')
+    const header = ui.getByRole('button', { name: 'Select Column C' })
+    // navigation-mode headers cancel mousedown focus; if focus still lands, the grid takes it back
+    expect(fireEvent.mouseDown(header)).toBe(false)
+    act(() => header.focus())
+    fireEvent.click(header, { detail: 1, clientX: 44 + 100, clientY: 10 })
+    expect(document.activeElement).toBe(grid)
+    expect(grid.tabIndex).toBe(0)
+    expect(grid.querySelectorAll('[tabindex="0"]')).toHaveLength(0)
+    const before = grid.getAttribute('aria-activedescendant')
+    fireEvent.keyDown(grid, { key: 'ArrowDown' })
+    expect(grid.getAttribute('aria-activedescendant')).not.toBe(before)
+    expect(document.getElementById(grid.getAttribute('aria-activedescendant')!)?.getAttribute('aria-label')).toMatch(/^C\d/)
+  })
+  it('does not enter control mode from incidental focus; only F2 does', () => {
+    const ui = render(<StatefulGrid />), grid = ui.getByRole('grid')
+    expect(grid.querySelectorAll('[role="gridcell"][tabindex]')).toHaveLength(0)
+    act(() => ui.getByRole('button', { name: 'Select row 1' }).focus())
+    expect(document.activeElement).toBe(grid)
+    expect(grid.tabIndex).toBe(0)
+    expect(grid.querySelectorAll('[tabindex="0"]')).toHaveLength(0)
+    fireEvent.keyDown(grid, { key: 'ArrowDown', shiftKey: true })
+    expect(ui.getByRole('gridcell', { name: 'A4, value 10; original A3' }).getAttribute('aria-selected')).toBe('true')
+  })
   it('applies Escape in popup → selection → parent order and retains native filter inputs', () => {
     const parent = vi.fn(), ui = render(<StatefulGrid parentKey={parent} />), grid = ui.getByRole('grid')
     grid.focus(); fireEvent.keyDown(grid, { key: 'ArrowDown', altKey: true })
@@ -92,6 +118,20 @@ describe('grid keyboard and control ownership', () => {
     expect(document.activeElement).toBe(grid)
     expect(document.getElementById(grid.getAttribute('aria-activedescendant')!)?.closest('[role="grid"]')).toBe(grid)
   })
+  it('does not pull focus back from outside the viewer when a popup closes', () => {
+    function ExternallyClosedPopup() {
+      const [popup, setPopup] = useState<GridPopup>()
+      return <><button onClick={() => setPopup(undefined)}>Elsewhere</button>
+        <GridSemantics {...gridFixture()} popup={popup} onFilter={(_col, invoker) => setPopup({ invoker, close: () => setPopup(undefined), content: <input autoFocus aria-label="Rule" /> })} /></>
+    }
+    const ui = render(<ExternallyClosedPopup />), grid = ui.getByRole('grid')
+    act(() => grid.focus()); fireEvent.keyDown(grid, { key: 'ArrowDown', altKey: true })
+    expect(ui.getByRole('dialog')).toBeTruthy()
+    const elsewhere = ui.getByRole('button', { name: 'Elsewhere' })
+    act(() => elsewhere.focus()); fireEvent.click(elsewhere)
+    expect(ui.queryByRole('dialog')).toBeNull()
+    expect(document.activeElement).toBe(elsewhere)
+  })
   it('does not restore a popup invoker captured from an older sheet generation', () => {
     function SheetChangingPopup() {
       const [props, setProps] = useState(gridFixture), [popup, setPopup] = useState<GridPopup>()
@@ -121,6 +161,91 @@ describe('grid keyboard and control ownership', () => {
     fireEvent.click(ui.getByRole('button', { name: 'Select Column A' }), { ctrlKey: true })
     expect(new SourceSelection(changes[2].selection.ranges).contains({ row: 1048575, col: 0 })).toBe(false)
     expect(new SourceSelection(changes[2].selection.ranges).contains({ row: 1048575, col: 2 })).toBe(true)
+  })
+})
+
+/** Mounts a real grid in its own React root inside OfficeDoc's region, the way
+ * S5 will nest it: native events reach OfficeDoc only if the grid lets them bubble. */
+async function officeDocWithGrid(options: { allowCopy?: boolean; allowPrint?: boolean } = {}) {
+  const { OfficeDoc } = await import('../src/components/OfficeDoc')
+  const { parseDocx } = await import('../src/docx/parse')
+  const { OfficePackage } = await import('../src/core/zip')
+  const { buildDocx } = await import('../src/testdata/ooxml-builders')
+  const doc = await parseDocx(await OfficePackage.load(await buildDocx([{ runs: [{ text: 'alpha beta gamma' }] }])))
+  const ui = render(<OfficeDoc document={doc} {...options} />)
+  await waitFor(() => expect(ui.container.querySelector('canvas')).toBeTruthy())
+  const canvas = ui.container.querySelector('canvas') as HTMLCanvasElement
+  canvas.getBoundingClientRect = () => ({ left: 0, top: 0, width: 816, height: 1056, right: 816, bottom: 1056, x: 0, y: 0, toJSON: () => ({}) }) as DOMRect
+  const host = document.createElement('div')
+  ui.getByRole('region').append(host)
+  const root = createRoot(host)
+  act(() => root.render(<StatefulGrid initial={{ selection: emptyGridSelection() }} />))
+  const grid = host.querySelector<HTMLElement>('[role="grid"]')!
+  return { ui, canvas, grid, cleanup: () => act(() => root.unmount()) }
+}
+
+describe('OfficeDoc as the grid ancestor', () => {
+  it('still swallows Ctrl/Cmd+P on the grid when printing is off', async () => {
+    const { grid, cleanup } = await officeDocWithGrid({ allowPrint: false })
+    act(() => grid.focus())
+    for (const modifier of ['metaKey', 'ctrlKey']) {
+      const event = new KeyboardEvent('keydown', { key: 'p', [modifier]: true, bubbles: true, cancelable: true })
+      act(() => { grid.dispatchEvent(event) })
+      expect(event.defaultPrevented).toBe(true)
+    }
+    cleanup()
+  })
+  it('still swallows Ctrl/Cmd+C on the grid when copying is off', async () => {
+    const { grid, cleanup } = await officeDocWithGrid({ allowCopy: false })
+    act(() => grid.focus())
+    for (const modifier of ['metaKey', 'ctrlKey']) {
+      const event = new KeyboardEvent('keydown', { key: 'c', [modifier]: true, bubbles: true, cancelable: true })
+      act(() => { grid.dispatchEvent(event) })
+      expect(event.defaultPrevented).toBe(true)
+    }
+    cleanup()
+  })
+  it('prevents browser page zoom for Ctrl/Cmd+wheel over the grid without zooming legacy pages', async () => {
+    const { ui, grid, cleanup } = await officeDocWithGrid()
+    const content = ui.container.querySelector('[data-testid="officeview-content"]') as HTMLElement
+    for (const modifier of ['ctrlKey', 'metaKey']) {
+      const event = new WheelEvent('wheel', { deltaY: -100, [modifier]: true, bubbles: true, cancelable: true })
+      act(() => { grid.dispatchEvent(event) })
+      expect(event.defaultPrevented).toBe(true)
+    }
+    await new Promise(resolve => setTimeout(resolve, 30))
+    expect(content.style.transform).toBe('none')
+    cleanup()
+  })
+  it('keeps a pinch that started on the page alive when a finger crosses viewer UI', async () => {
+    const { ui, grid, cleanup } = await officeDocWithGrid()
+    const region = ui.getByRole('region'), content = ui.container.querySelector('[data-testid="officeview-content"]') as HTMLElement
+    Object.defineProperty(region, 'clientWidth', { value: 400, configurable: true })
+    Object.defineProperty(region, 'clientHeight', { value: 800, configurable: true })
+    region.getBoundingClientRect = () => ({ left: 0, top: 0, width: 400, height: 800, right: 400, bottom: 800, x: 0, y: 0, toJSON: () => ({}) })
+    const touch = (id: number, x: number, y: number) => ({ pointerId: id, clientX: x, clientY: y, pointerType: 'touch', bubbles: true, isPrimary: id === 1 })
+    fireEvent.pointerDown(region, touch(1, 150, 400))
+    fireEvent.pointerDown(region, touch(2, 250, 400))
+    fireEvent.pointerMove(grid, touch(2, 350, 400))
+    await waitFor(() => expect(content.style.transform).toContain('scale(2)'))
+    // a gesture that starts on viewer UI still does not belong to the legacy viewer
+    fireEvent.pointerUp(region, touch(1, 150, 400)); fireEvent.pointerUp(region, touch(2, 350, 400))
+    const before = content.style.transform
+    fireEvent.pointerDown(grid, touch(3, 200, 400))
+    fireEvent.pointerMove(grid, touch(3, 100, 300))
+    await new Promise(resolve => setTimeout(resolve, 30))
+    expect(content.style.transform).toBe(before)
+    cleanup()
+  })
+  it('falls an unhandled grid Escape through to the viewer selection clear', async () => {
+    const { ui, canvas, grid, cleanup } = await officeDocWithGrid()
+    const copyButton = () => ui.container.querySelector('[data-testid="officeview-copy-selection"]')
+    fireEvent.doubleClick(canvas, { clientX: 160, clientY: 104, bubbles: true })
+    await waitFor(() => expect(copyButton()).toBeTruthy())
+    act(() => grid.focus())
+    fireEvent.keyDown(grid, { key: 'Escape' })
+    await waitFor(() => expect(copyButton()).toBeNull())
+    cleanup()
   })
 })
 

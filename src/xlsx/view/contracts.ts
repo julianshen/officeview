@@ -232,7 +232,11 @@ export interface GridSelection {
 export interface GridSelectionGesture {
   kind: 'cells' | 'row' | 'column'
   anchor: SourceCell
+  /** With `part`: only the prefix cells hidden under `part`; the full prefix is
+   * `ranges \ part` plus these. Without `part` (legacy): the full prefix. */
   prefix: readonly GridSelectionPart[]
+  /** The part the current gesture applied over the prefix. */
+  part?: GridSelectionPart
 }
 export interface GridSelectionPart { rows: CompactSourceRowSet; cols: readonly SourceColInterval[] }
 export interface SheetView {

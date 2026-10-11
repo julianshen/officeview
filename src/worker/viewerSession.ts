@@ -576,7 +576,7 @@ function freezeSelection(selection: GridSelection): GridSelection {
     active: selection.active ? { ...selection.active } : null,
     anchor: selection.anchor ? { ...selection.anchor } : null,
     ranges: parts(selection.ranges),
-    ...(selection.gesture ? { gesture: { ...selection.gesture, anchor: { ...selection.gesture.anchor }, prefix: parts(selection.gesture.prefix) } } : {}),
+    ...(selection.gesture ? { gesture: { ...selection.gesture, anchor: { ...selection.gesture.anchor }, prefix: parts(selection.gesture.prefix), ...(selection.gesture.part ? { part: parts([selection.gesture.part])[0] } : {}) } } : {}),
   }) as GridSelection
 }
 /** Guard refusals that are really waits or source failures are not refusals. */

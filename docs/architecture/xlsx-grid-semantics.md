@@ -9,8 +9,11 @@ address when different. Sort priority/direction is described on each key's
 header; only the primary key carries aria-sort. Native controls sit inside
 owned header cells, following the [WAI-ARIA grid pattern](https://www.w3.org/WAI/ARIA/apg/patterns/grid/).
 
-The owner includes docId/sheetId/valueGen/fontGen/viewGen and a React instance
-ID. Each active descendant names an owned cell. A pending offscreen active has
+Cell IDs combine the React instance ID, short FNV hashes of docId and sheetId,
+viewGen and the cell ID; a value/font republish keeps the same active
+descendant ID. Owner resets (popup close, control-mode exit) key on the full
+docId/sheetId/valueGen/fontGen/viewGen tuple. Each active descendant names an
+owned cell. A pending offscreen active has
 one bounded proxy; it is removed when the target pane arrives. A hidden/null
 active never exposes a stale descendant. Proxy CSS coordinates are bounded,
 not million-row CSS offsets. Semantic boxes and giant header cells are clipped
@@ -29,8 +32,12 @@ renderMode as the S5 painter (the standalone default profile is D). The desktop
 the same pane exceeds the M frame budget. S5 still owns real byte accounting,
 coarse paint summaries, worker/page reads and active-detail priority.
 
-Navigation mode has one Tab entry: the wrapper. Cells/header buttons have
-TabIndex -1. Grid-owned Arrow/Enter/Page/Home/End use S2 navigateKey; Shift uses
+Navigation mode has one Tab entry: the wrapper. Gridcells are not focusable
+(no tabIndex); header buttons have tabIndex -1 outside control mode. Only F2,
+or restoring a popup's header invoker, enters control mode. Any other focus
+landing inside the grid (mousedown, screen-reader cursor) returns to the
+wrapper; header mousedown is cancelled outside control mode and a pointer
+header selection refocuses the wrapper, so arrows keep working. Grid-owned Arrow/Enter/Page/Home/End use S2 navigateKey; Shift uses
 S6.1 source membership. The transition publishes window, selection and notice
 together so the new active ID is represented atomically. Ctrl+Home/End reach
 full-axis endpoints; plain Home/End stay on the current row. F2 enters the
@@ -40,7 +47,8 @@ host to open the active column filter. Ctrl/Cmd+F bubbles to workbook find.
 
 Escape closes a popup first, then clears grid selection, then falls through
 to the existing viewer. Every controlled popup-close transition restores its
-still-owned, same-generation invoker, otherwise the grid. Owner changes close
+still-owned, same-generation invoker, otherwise the grid, but only while focus
+is on body/null or inside the shell; focus the user moved elsewhere stays. Owner changes close
 old popup/control mode; a reused header DOM node from an older sheet generation
 is not a valid invoker. Popup content is host-owned: provide native initial
 focus and 44px field/checkbox-label targets. The shell supplies a semantic
@@ -55,10 +63,17 @@ overlapping button cannot steal an adjacent row/column. An orthogonally hidden
 axis uses bounded represented header boxes. Header pointerdown/double-click
 isolation also works when S5 mounts the strips directly.
 
-`gridEvents.isViewerUiTarget` is the legacy viewer guard. OfficeDoc's seven-line
-additive integration ignores editable targets/UI descendants and interactive
-grid roots for legacy key/pan/zoom/double-click gestures. Workbook find retains
-its original priority. It does not change the page painter or default canvas.
+`gridEvents.isViewerUiTarget` is the legacy viewer guard. OfficeDoc's additive
+integration ignores editable targets/UI descendants and interactive grid roots
+for legacy zoom keys, text copy, gesture starts (pointerdown), Ctrl+wheel
+zoom, double-click and triple-click. Workbook find, allowCopy/allowPrint
+shortcut protection and the unhandled-Escape fall-through run before the guard,
+so they also apply when the event comes from the grid. Pointermove follows
+pointers tracked at pointerdown, so a pan/pinch may cross viewer UI. A native
+non-passive wheel listener suppresses browser Ctrl/Cmd+wheel page zoom over
+the whole viewer (React's onWheel is passive and could not). Worker `ref` row
+sets render with unknown membership (aria-selected omitted); header fullness
+is a union over possibly overlapping S6.1 parts. It does not change the page painter or default canvas.
 Do not use this legacy guard to reject the entire grid in S5's own controller.
 
 ## Required S5.2 integration
@@ -93,6 +108,6 @@ feature path, leaving the default legacy path intact:
 
 Browser keyboard smoke was blocked in this environment: the CLI could not
 write its socket directory and the browser tool rejected local file URLs.
-There is no native-browser or screen-reader acceptance claim. A compiled
-synthetic smoke fixture and manual steps are retained under
-`/tmp/iv-s62-implementation`; it is a shell fixture, not an S5 painter oracle.
+There is no native-browser or screen-reader acceptance claim. The synthetic
+smoke fixture used then was scratch-only and was not retained; manual steps are
+in docs/validation/s6-2-implementation.md.

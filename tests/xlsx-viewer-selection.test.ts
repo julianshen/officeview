@@ -1,6 +1,7 @@
 import { gridNavigationTransition } from '../src/components/xlsx/GridSemantics'
 import { gridFixture } from './helpers/xlsx-grid-fixture'
 import { describe, expect, it, vi } from 'vitest'
+import { serialize } from 'node:v8'
 import { createAxisMetrics } from '../src/xlsx/view/axes'
 import { MAX_COLS, MAX_ROWS } from '../src/xlsx/view/coordinates'
 import { createRowOrder, pinRowPermutation, hiddenSlotPins } from '../src/xlsx/view/order'
@@ -85,6 +86,21 @@ describe('selection boundary regressions', () => {
       const shrunk = selectCell(structuredClone(next), p, { row: 3, col: 0 }, { extend: true })
       expect([...new SourceSelection(shrunk.ranges).sourceRows()]).toEqual([0, 3, 4])
     }
+  })
+  it('derives a legacy (gesture-less) Shift prefix by removing only the anchor..active part', () => {
+    const p = fixtureProjection([0, 1, 2, 3])
+    let state = selectCell(emptyGridSelection(), p, { row: 0, col: 0 }, { toggle: true })
+    state = selectCell(state, p, { row: 4, col: 0 }, { toggle: true })
+    expect(state.ranges).toHaveLength(1)
+    const { gesture: _dropped, ...legacy } = state
+    const next = selectCell(legacy, p, { row: 2, col: 0 }, { extend: true })
+    expect([...new SourceSelection(next.ranges).sourceRows()]).toEqual([0, 2, 3, 4])
+    // A legacy Shift range (anchor != active) is replaced, not kept, on the next Shift.
+    const ranged = selectCell(selectCell(emptyGridSelection(), p, { row: 0, col: 0 }), p, { row: 3, col: 1 }, { extend: true })
+    const { gesture: _range, ...legacyRange } = ranged
+    const shrunk = new SourceSelection(selectCell(legacyRange, p, { row: 1, col: 0 }, { extend: true }).ranges)
+    expect(shrunk.contains({ row: 1, col: 0 })).toBe(true)
+    expect(shrunk.contains({ row: 3, col: 1 })).toBe(false)
   })
   it('serializes header mode and restores a temporarily overlapped Ctrl prefix (N2)', () => {
     const p = fixtureProjection([0, 1, 2, 3])
@@ -193,6 +209,55 @@ describe('selection boundary regressions', () => {
     for (let i = 0; i < 1000; i++) expect(selected.contains({ row: i * 3, col: i * 7 })).toBe(true)
     expect(selected.contains({ row: 3, col: 0 })).toBe(false)
     expect(selectionBytes(state.ranges)).toBeLessThan(MAX_SELECTION_BYTES)
+  }, 30000)
+  it('stores the Ctrl gesture prefix compactly instead of duplicating ranges (3000 clicks)', () => {
+    const p = fixtureProjection([0, 1, 2, 3])
+    let state = emptyGridSelection()
+    for (let i = 0; i < 3000; i++) state = selectCell(state, p, { row: i * 3, col: i * 5 }, { toggle: true })
+    expect(state.ranges).toHaveLength(3000)
+    expect(state.gesture!.prefix).toHaveLength(0)
+    const payload = serialize(state).byteLength, rangesOnly = serialize({ ranges: state.ranges }).byteLength
+    expect(payload).toBeLessThan(rangesOnly * 1.1)
+    // Round-trip keeps the prefix: Shift replaces only the last click.
+    const shifted = new SourceSelection(selectCell(structuredClone(state), p, { row: 2999 * 3 + 2, col: 2999 * 5 }, { extend: true }).ranges)
+    for (const i of [0, 1, 1500, 2998, 2999]) expect(shifted.contains({ row: i * 3, col: i * 5 })).toBe(true)
+    expect(shifted.contains({ row: 2999 * 3 + 2, col: 2999 * 5 })).toBe(true)
+    expect(shifted.contains({ row: 2999 * 3 + 2, col: 2999 * 5 + 1 })).toBe(false)
+  }, 120000)
+  it('bounds Ctrl toggle work: disjoint toggles reuse untouched parts instead of re-normalizing', () => {
+    const p = fixtureProjection([0, 1, 2, 3])
+    let state = emptyGridSelection()
+    const started = performance.now()
+    for (let i = 0; i < 4000; i++) state = selectCell(state, p, { row: i * 3, col: i * 4 }, { toggle: true })
+    const elapsed = performance.now() - started
+    expect(state.ranges).toHaveLength(4000)
+    const before = new Set<object>(state.ranges)
+    const next = selectCell(state, p, { row: 1, col: 1 }, { toggle: true })
+    expect(next.ranges).toHaveLength(4001)
+    expect(next.ranges.filter(part => before.has(part))).toHaveLength(4000)
+    // A merge touches only the parts sharing rows/columns with the target.
+    const merged = selectCell(next, p, { row: 1, col: 2 }, { toggle: true })
+    expect(merged.ranges).toHaveLength(4001)
+    expect(merged.ranges.filter(part => before.has(part))).toHaveLength(4000)
+    expect(new SourceSelection(merged.ranges).contains({ row: 1, col: 2 })).toBe(true)
+    // Generous wall-clock guard; quadratic re-normalization took several seconds.
+    expect(elapsed).toBeLessThan(3500)
+  }, 60000)
+  it('charges the stored gesture prefix overlap against the per-selection byte bound', () => {
+    const p = fixtureProjection([0, 1, 2, 3])
+    // Nine distinct ~128 KiB row masks hidden under one Shift part: ranges shrink
+    // to that single part, but the stored overlap still exceeds 1 MiB.
+    const prefix = Array.from({ length: 9 }, (_, i) => {
+      const words = new Uint32Array(MAX_ROWS / 32).fill(0x55555555)
+      words[i] = 0x55555554
+      let count = 0
+      for (const word of words) for (let bits = word; bits; bits &= bits - 1) count++
+      return { rows: { kind: 'bitset' as const, space: 'source' as const, r0: 0, r1: MAX_ROWS - 2, words, count }, cols: [{ c0: i, c1: i }] }
+    })
+    const state = { active: { row: 0, col: 0 }, anchor: { row: 0, col: 0 }, ranges: [], gesture: { kind: 'cells' as const, anchor: { row: 0, col: 0 }, prefix } }
+    expect(() => selectCell(state, p, { row: MAX_ROWS - 1, col: 8 }, { extend: true })).toThrow(expect.objectContaining({ code: 'resource-limit' }))
+    // Without overlap the same Shift is admitted.
+    expect(selectCell({ ...state, gesture: { ...state.gesture, prefix: [] } }, p, { row: MAX_ROWS - 1, col: 8 }, { extend: true }).gesture!.prefix).toEqual([])
   }, 30000)
   it('admits all 16384 Ctrl column-header toggles compactly (N1)', () => {
     const p = fixtureProjection([0, 1, 2, 3])

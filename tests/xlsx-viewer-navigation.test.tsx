@@ -132,10 +132,10 @@ describe('viewport-only green grid overlay seam', () => {
   it('draws only outer selection borders, cancelling shared cell edges (review 9)', () => {
     const selection = new SourceSelection([{ rows: { kind: 'intervals', intervals: [{ r0: 0, r1: 0 }] }, cols: [{ c0: 0, c1: 1 }] }])
     const records = [{ source: { row: 0, col: 0 }, bounds: { x: 0, y: 0, width: 10, height: 10 } }, { source: { row: 0, col: 1 }, bounds: { x: 10, y: 0, width: 10, height: 10 } }]
-    const geometry = gridSelectionOverlay(selection, records, { x: -1, y: -1, width: 30, height: 30 }) as unknown as { fills: unknown[]; borders: { x0: number; y0: number; x1: number; y1: number }[] }
+    const geometry = gridSelectionOverlay(selection, records, { x: -1, y: -1, width: 30, height: 30 }, 1) as unknown as { fills: unknown[]; borders: { x0: number; y0: number; x1: number; y1: number }[] }
     expect(geometry.borders).toEqual(expect.arrayContaining([{ x0: 0, y0: 0, x1: 20, y1: 0 }, { x0: 0, y0: 10, x1: 20, y1: 10 }, { x0: 0, y0: 0, x1: 0, y1: 10 }, { x0: 20, y0: 0, x1: 20, y1: 10 }]))
     expect(geometry.borders).toHaveLength(4)
-    const clipped = gridSelectionOverlay(selection, records, { x: 5, y: 2, width: 10, height: 6 }) as unknown as typeof geometry
+    const clipped = gridSelectionOverlay(selection, records, { x: 5, y: 2, width: 10, height: 6 }, 1) as unknown as typeof geometry
     expect(clipped.borders).toEqual([])
     expect(clipped.fills).toHaveLength(2)
   })
@@ -161,9 +161,32 @@ describe('viewport-only green grid overlay seam', () => {
       ], { x: 1, y: 1, width: 2, height: 2 }, pixelScale).borders).toEqual([])
     }
   })
+  it('requires S5 callers to pass pixelScale (zoom × DPR) explicitly', () => {
+    const selected = { contains: () => true }
+    // @ts-expect-error pixelScale has no default; S5 must pass zoom × DPR.
+    expect(() => gridSelectionOverlay(selected, [], { x: 0, y: 0, width: 1, height: 1 })).toThrow(RangeError)
+  })
+  it('paints at least one device pixel for selected cells smaller than a pixel at low zoom', () => {
+    const selected = { contains: () => true }
+    const tiny = gridSelectionOverlay(selected, [{ source: { row: 0, col: 0 }, bounds: { x: 1, y: 1, width: 0.04, height: 0.02 } }], { x: 0, y: 0, width: 10, height: 10 }, 10)
+    expect(tiny.fills).toHaveLength(1)
+    expect(tiny.fills[0]).toMatchObject({ x: 1, y: 1 })
+    expect(tiny.fills[0].width * 10).toBeCloseTo(1)
+    expect(tiny.fills[0].height * 10).toBeCloseTo(1)
+    expect(tiny.borders).toHaveLength(4)
+    // Sub-pixel neighbours coalesce into one device-pixel group, not stacked fills.
+    const group = gridSelectionOverlay(selected, [
+      { source: { row: 0, col: 0 }, bounds: { x: 1, y: 1, width: 0.02, height: 0.02 } },
+      { source: { row: 0, col: 1 }, bounds: { x: 1.02, y: 1, width: 0.02, height: 0.02 } },
+    ], { x: 0, y: 0, width: 10, height: 10 }, 10)
+    expect(group.fills).toHaveLength(1)
+    expect(group.borders).toHaveLength(4)
+    // Zero-size (hidden) records still paint nothing.
+    expect(gridSelectionOverlay(selected, [{ source: { row: 0, col: 0 }, bounds: { x: 1, y: 1, width: 0, height: 5 } }], { x: 0, y: 0, width: 10, height: 10 }, 10)).toEqual({ fills: [], borders: [] })
+  })
   it('clips selected viewport records and keeps the blue text selection separate', () => {
     const selection = new SourceSelection([{ rows: { kind: 'intervals', intervals: [{ r0: 3, r1: 3 }] }, cols: [{ c0: 0, c1: 0 }] }])
-    const rects = gridSelectionOverlay(selection, [{ source: { row: 3, col: 0 }, bounds: { x: -5, y: 2, width: 20, height: 24 } }, { source: { row: 1, col: 0 }, bounds: { x: 15, y: 2, width: 20, height: 24 } }], { x: 0, y: 0, width: 10, height: 10 })
+    const rects = gridSelectionOverlay(selection, [{ source: { row: 3, col: 0 }, bounds: { x: -5, y: 2, width: 20, height: 24 } }, { source: { row: 1, col: 0 }, bounds: { x: 15, y: 2, width: 20, height: 24 } }], { x: 0, y: 0, width: 10, height: 10 }, 1)
     expect(rects.fills).toEqual([{ x: 0, y: 2, width: 10, height: 8 }])
     expect(rects.borders).toEqual([{ x0: 0, y0: 2, x1: 10, y1: 2 }])
     const ctx = { save: vi.fn(), restore: vi.fn(), fillRect: vi.fn(), strokeRect: vi.fn(), beginPath: vi.fn(), moveTo: vi.fn(), lineTo: vi.fn(), stroke: vi.fn(), fillStyle: '', strokeStyle: '', lineWidth: 0 }

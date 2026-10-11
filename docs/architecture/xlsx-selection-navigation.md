@@ -5,10 +5,12 @@ source cells. `extendDisplayRange` maps the visible display interval through
 the current projection; it stores exact source membership, never its enclosing
 rectangle. Identity/full-axis selections use intervals. Fragmented row sets
 use at most 128 KiB per source-tagged row mask, with no per-cell allocation.
-Equal row memberships share a part with merged column intervals. Per-sheet admission counts only normalized selection ranges: at most 1 MiB of
+Equal row memberships share a part with merged column intervals. Per-sheet admission counts normalized selection ranges plus stored gesture data: at most 1 MiB of
 typed buffers plus estimated metadata, with generous safety bounds of 4096
-parts and 16384 column intervals. Shared buffers are charged once; the Shift
-prefix does not double-count selected membership. Exceeding admission throws
+parts and 16384 column intervals. Shared buffers are charged once. The stored
+gesture part and prefix overlap are charged with the ranges (the overlap also
+counts toward the part bound), and the prefix never duplicates `ranges`.
+Exceeding admission throws
 `SelectionError` with `resource-limit` before publication; membership is never
 truncated. There is no document-wide selection ceiling. Session registration,
 selection retention and projection updates do not re-admit already-admitted
@@ -21,9 +23,18 @@ local intervals/bitsets and does not materialize an opaque ref.
 `selectCell` accepts `extend` and `toggle`; S6.2 maps Shift and Ctrl/Cmd onto
 these flags. Shift replaces only the most recent gesture while retaining earlier
 Ctrl parts, even if those parts temporarily overlap the extended region.
-The optional `GridSelection.gesture` stores mode, source anchor and prefix as
-plain serializable data; spread, structuredClone and worker commit/deltas retain
-it. Legacy selections without gesture metadata remain valid. Header
+The optional `GridSelection.gesture` stores mode, source anchor, the applied
+gesture `part` and only the prefix cells hidden under that part as plain
+serializable data. The full Ctrl prefix is `ranges \ part` plus that overlap,
+so thousands of Ctrl-clicks store an empty prefix rather than a second copy of
+`ranges`. A Ctrl toggle disjoint from a module-normalized selection reuses
+every untouched part and merges only along identical rows/columns; per-toggle
+work is linear scans plus the frozen array copy, not a full re-normalization.
+Gestures without `part` carry a full legacy prefix and remain
+readable. Spread, structuredClone and worker commit/deltas retain
+it. Legacy selections without gesture metadata remain valid: Shift derives
+their prefix by subtracting only the anchor..active span (the active cell after
+a Ctrl-click), so merged Ctrl parts keep their other cells. Header
 gestures retain row/column mode and source anchors; `selectHeader`'s sixth
 argument extends across headers through the visible projection. It selects
 full logical source rows/columns compactly.
@@ -92,12 +103,18 @@ published by this local state machine.
 The additive `core/overlay.gridSelectionOverlay` consumes only bounded S5
 viewport cell records plus bounded neighbor overscan. It returns separate fills
 and outline segments; endpoints snap to integer device pixels before edge
-cancellation. S5 passes device pixels per record coordinate as `pixelScale`
-(sheet zoom × DPR for sheet-space records, DPR for zoomed CSS coordinates).
+cancellation. `pixelScale` is required (no default): S5 must pass device
+pixels per record coordinate, i.e. sheet zoom × DPR for sheet-space records
+(DPR alone for already zoomed CSS coordinates). A selected record with positive size narrower or shorter than
+one device pixel still paints a 1 device-pixel fill and outline; sub-pixel
+neighbours that snap to the same pixel coalesce into one group, so low-zoom
+selections never vanish. Zero-size (hidden) records paint nothing.
 Shared cell edges cancel before viewport clipping, and
 clipping does not invent selection borders. Its paint helper uses a
 translucent green fill and 2 CSS-pixel border, independently of the existing
-blue text selection. S5 owns overview-group coalescing and detail admission;
+blue text selection. A widened sub-pixel cell can overlap a wider selected
+neighbour that snaps to the same pixel and leave a 1 device-pixel interior
+tick; S5 owns that overview-group coalescing as well as detail admission;
 this seam does not enumerate a selected logical rectangle. `navigateSelection`
 is the selection-specific navigation API; `navigateTo` remains a compatibility
 alias, and S2 continues to own ScrollWindow navigation.

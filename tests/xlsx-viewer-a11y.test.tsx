@@ -7,7 +7,6 @@ import { createSheetMetrics } from '../src/xlsx/view/projection'
 import { MAX_ROWS, MAX_COLS } from '../src/xlsx/view/coordinates'
 import { createScrollWindow, navigateTo } from '../src/xlsx/view/scrollWindow'
 import { emptyGridSelection, selectCell, selectHeader } from '../src/xlsx/view/selection'
-
 import { gridFixture } from './helpers/xlsx-grid-fixture'
 
 describe('owned virtual grid semantics (S6.2)', () => {
@@ -55,6 +54,17 @@ describe('owned virtual grid semantics (S6.2)', () => {
     ui.rerender(<GridSemantics {...props} selection={{ ...props.selection, active: null, anchor: null }} />)
     expect(ui.getByRole('grid').hasAttribute('aria-activedescendant')).toBe(false)
   })
+  it('keeps the active descendant ID across value/font republish and keeps it short for long doc IDs', () => {
+    const docId = `https://example.test/${'very long path/'.repeat(40)}book.xlsx?sig=abc%20def`
+    const props = gridFixture({ owner: { docId, sheetId: 'Sheet 1', valueGen: 1, fontGen: 1, viewGen: 1 } })
+    const ui = render(<GridSemantics {...props} />), grid = ui.getByRole('grid')
+    const before = grid.getAttribute('aria-activedescendant')!
+    expect(before.length).toBeLessThan(64)
+    expect(before).not.toMatch(/[%\s/]/)
+    ui.rerender(<GridSemantics {...props} owner={{ ...props.owner, valueGen: 7, fontGen: 3 }} />)
+    expect(grid.getAttribute('aria-activedescendant')).toBe(before)
+    expect(document.getElementById(before)?.closest('[role="grid"]')).toBe(grid)
+  })
   it('removes a stale descendant for an all-hidden filter body and preserves exact membership', () => {
     const props = gridFixture(), visibility = visibilityFromHidden(createIntervalSet([{ r0: 1, r1: 3 }]))
     const projection = createSheetMetrics({ rows: createAxisMetrics({ logicalCount: MAX_ROWS, defaultSizeCss: 24 }), cols: props.projection.cols, order: props.projection.order, visibility })
@@ -101,6 +111,46 @@ describe('owned virtual grid semantics (S6.2)', () => {
     expect(header.getAttribute('aria-label')).toContain('sort priority 1, descending')
     expect(ui.getByRole('columnheader', { name: /Column A/ }).getAttribute('aria-label')).toContain('sort priority 2, ascending')
     expect(ui.getByRole('columnheader', { name: /Column A/ }).hasAttribute('aria-sort')).toBe(false)
+  })
+  it('exposes full-row selection on the owned rowheader of its display slot', () => {
+    const props = gridFixture(), selection = selectHeader(props.selection, props.projection, 'row', 3)
+    const ui = render(<GridSemantics {...props} selection={selection} />)
+    // source row 3 sits in display slot 1, labelled Row 2
+    expect(ui.getByRole('rowheader', { name: 'Row 2' }).getAttribute('aria-selected')).toBe('true')
+    for (const name of ['Row 1', 'Row 4', 'Row 5']) expect(ui.getByRole('rowheader', { name }).getAttribute('aria-selected')).toBe('false')
+  })
+  it('does not double-count overlapping selection parts as a full header', () => {
+    const props = gridFixture()
+    // 600000 + 448576 rows sum to the axis length, but their union leaves a gap
+    const selection = { active: { row: 0, col: 2 }, anchor: { row: 0, col: 2 }, ranges: [
+      { rows: { kind: 'intervals' as const, intervals: [{ r0: 0, r1: 599999 }] }, cols: [{ c0: 2, c1: 2 }] },
+      { rows: { kind: 'intervals' as const, intervals: [{ r0: 400000, r1: 848575 }] }, cols: [{ c0: 2, c1: 2 }] },
+      // 10000 + 6384 columns on row 1 likewise sum to 16384 with gaps
+      { rows: { kind: 'intervals' as const, intervals: [{ r0: 0, r1: 0 }] }, cols: [{ c0: 0, c1: 1 }, { c0: 3, c1: 10000 }] },
+      { rows: { kind: 'intervals' as const, intervals: [{ r0: 0, r1: 0 }] }, cols: [{ c0: 5000, c1: 11383 }] },
+    ] }
+    const ui = render(<GridSemantics {...props} selection={selection} />)
+    expect(ui.getByRole('columnheader', { name: 'Column C' }).getAttribute('aria-selected')).toBe('false')
+    expect(ui.getByRole('rowheader', { name: 'Row 1' }).getAttribute('aria-selected')).toBe('false')
+    const full = { ...selection, ranges: [...selection.ranges, { rows: { kind: 'intervals' as const, intervals: [{ r0: 500000, r1: MAX_ROWS - 1 }] }, cols: [{ c0: 2, c1: 2 }] }] }
+    ui.rerender(<GridSemantics {...props} selection={full} />)
+    expect(ui.getByRole('columnheader', { name: 'Column C' }).getAttribute('aria-selected')).toBe('true')
+    const list = (rows: number[]) => ({ kind: 'list' as const, r0: rows[0], r1: rows[rows.length - 1], rows: Uint32Array.from(rows) })
+    const mixed = (tail: number[]) => ({ ...selection, ranges: [{ rows: { kind: 'intervals' as const, intervals: [{ r0: 0, r1: MAX_ROWS - 3 }] }, cols: [{ c0: 2, c1: 2 }] }, { rows: list(tail), cols: [{ c0: 2, c1: 2 }] }] })
+    ui.rerender(<GridSemantics {...props} selection={mixed([MAX_ROWS - 2, MAX_ROWS - 1])} />)
+    expect(ui.getByRole('columnheader', { name: 'Column C' }).getAttribute('aria-selected')).toBe('true')
+    ui.rerender(<GridSemantics {...props} selection={mixed([MAX_ROWS - 3, MAX_ROWS - 1])} />)
+    expect(ui.getByRole('columnheader', { name: 'Column C' }).getAttribute('aria-selected')).toBe('false')
+  })
+  it('renders worker row refs with unknown, not thrown, membership', () => {
+    const props = gridFixture(), stamp = { docId: 'doc', sheetId: 's', valueGen: 1 }
+    const selection = { ...props.selection, ranges: [{ rows: { kind: 'ref' as const, refId: 'r1', count: 5, stamp }, cols: [{ c0: 0, c1: 0 }] }] }
+    const ui = render(<GridSemantics {...props} selection={selection} />)
+    const active = ui.getByRole('gridcell', { name: 'A2, value 10; original A4' })
+    expect(active.hasAttribute('aria-selected')).toBe(false)
+    expect(ui.getByRole('columnheader', { name: 'Column A' }).hasAttribute('aria-selected')).toBe(false)
+    expect(ui.getByRole('rowheader', { name: 'Row 2' }).hasAttribute('aria-selected')).toBe(false)
+    expect(ui.getByRole('columnheader', { name: 'Column C' }).getAttribute('aria-selected')).toBe('false')
   })
   it('keeps an admitted 25% desktop viewport in detail and applies the mobile frame budget', () => {
     const props = gridFixture(), viewport = { width: 1440, height: 900 }
