@@ -48,7 +48,7 @@ export function GridSemantics(props: GridSemanticsProps): ReactElement {
   const instance = useId(), { projection, window, viewport, view } = props
   const { docId, sheetId, valueGen, fontGen, viewGen } = props.owner
   const prefix = `${instance}-${encodeURIComponent(JSON.stringify([docId, sheetId, valueGen, fontGen, viewGen]))}`
-  const gridRef = useRef<HTMLDivElement>(null), popupRef = useRef<HTMLDivElement>(null), previousPopup = useRef<{ popup: GridPopup; owner: string } | null>(null)
+  const wrapperRef = useRef<HTMLDivElement>(null), gridRef = useRef<HTMLDivElement>(null), popupRef = useRef<HTMLDivElement>(null), previousPopup = useRef<{ popup: GridPopup; owner: string } | null>(null)
   const previousOwner = useRef(prefix)
   const [controlMode, setControlModeState] = useState(false), [notice, setNotice] = useState('')
   // Focus handlers run before React re-renders, so they read the mode from a ref.
@@ -62,7 +62,11 @@ export function GridSemantics(props: GridSemanticsProps): ReactElement {
       setNotice('')
       previousOwner.current = prefix
     }
-    if (previousPopup.current && !props.popup) {
+    // A removed popup leaves focus on body; focus the user already moved
+    // outside the viewer is theirs to keep.
+    const focus = document.activeElement
+    const focusOwned = !focus || focus === document.body || Boolean(wrapperRef.current?.contains(focus))
+    if (previousPopup.current && !props.popup && focusOwned) {
       const { popup, owner } = previousPopup.current, invoker = popup.invoker
       if (owner === prefix && invoker?.isConnected && gridRef.current?.contains(invoker)) {
         // A header invoker is a native control, so restoring it re-enters control mode.
@@ -158,7 +162,7 @@ export function GridSemantics(props: GridSemanticsProps): ReactElement {
     onSelectAll: () => publish(() => ({ selection: { active, anchor: active, ranges: [{ rows: { kind: 'intervals', intervals: [{ r0: 0, r1: projection.rows.logicalCount - 1 }] }, cols: [{ c0: 0, c1: projection.cols.logicalCount - 1 }] }] }, window, announcement: 'Worksheet selected.' })),
   }
   const status = [props.announcement, current.announcement, notice, coarse ? 'Zoom in or inspect a cell for detail.' : ''].filter(Boolean).join(' ')
-  return <div onKeyDown={keyDown} onBlur={event => { if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setControlMode(false) }} style={{ position: 'relative', width: viewport.width + GRID_HEADER_SIZE, height: viewport.height + GRID_HEADER_SIZE }}>
+  return <div ref={wrapperRef} onKeyDown={keyDown} onBlur={event => { if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setControlMode(false) }} style={{ position: 'relative', width: viewport.width + GRID_HEADER_SIZE, height: viewport.height + GRID_HEADER_SIZE }}>
     <div ref={gridRef} role="grid" aria-label={props.label ?? 'Worksheet'} aria-rowcount={MAX_ROWS + 1} aria-colcount={MAX_COLS + 1}
       aria-multiselectable="true" aria-activedescendant={active ? `${prefix}-cell-${cellId(active.row, active.col)}` : undefined}
       aria-description={`Worksheet capacity ${MAX_ROWS} rows by ${MAX_COLS} columns.${coarse ? ' Coarse view. Zoom in or inspect a cell for detail.' : ''}`}

@@ -118,6 +118,20 @@ describe('grid keyboard and control ownership', () => {
     expect(document.activeElement).toBe(grid)
     expect(document.getElementById(grid.getAttribute('aria-activedescendant')!)?.closest('[role="grid"]')).toBe(grid)
   })
+  it('does not pull focus back from outside the viewer when a popup closes', () => {
+    function ExternallyClosedPopup() {
+      const [popup, setPopup] = useState<GridPopup>()
+      return <><button onClick={() => setPopup(undefined)}>Elsewhere</button>
+        <GridSemantics {...gridFixture()} popup={popup} onFilter={(_col, invoker) => setPopup({ invoker, close: () => setPopup(undefined), content: <input autoFocus aria-label="Rule" /> })} /></>
+    }
+    const ui = render(<ExternallyClosedPopup />), grid = ui.getByRole('grid')
+    act(() => grid.focus()); fireEvent.keyDown(grid, { key: 'ArrowDown', altKey: true })
+    expect(ui.getByRole('dialog')).toBeTruthy()
+    const elsewhere = ui.getByRole('button', { name: 'Elsewhere' })
+    act(() => elsewhere.focus()); fireEvent.click(elsewhere)
+    expect(ui.queryByRole('dialog')).toBeNull()
+    expect(document.activeElement).toBe(elsewhere)
+  })
   it('does not restore a popup invoker captured from an older sheet generation', () => {
     function SheetChangingPopup() {
       const [props, setProps] = useState(gridFixture), [popup, setPopup] = useState<GridPopup>()
