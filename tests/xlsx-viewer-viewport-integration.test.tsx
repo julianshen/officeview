@@ -506,3 +506,42 @@ describe('per-frame caps across tiles (S5.2 review round 1)', () => {
     }
   }, 30_000)
 })
+
+describe('bitmap admission before allocation (S5.2 review round 1)', () => {
+  it('admits a device scale whose surfaces and minimum tiles fit the pool, before any canvas is sized', async () => {
+    const { admitDeviceScale } = await import('../src/components/xlsx/sheetTiles')
+    expect(admitDeviceScale({ width: 1440, height: 900 }, 2, 'D')).toBe(2)
+    // 1500x1000 at DPR 3 needs ~108 MiB of pane surfaces alone; 1.25 is the largest fitting step.
+    expect(admitDeviceScale({ width: 1500, height: 1000 }, 3, 'M')).toBe(1.25)
+    expect(admitDeviceScale({ width: 100_000, height: 100_000 }, 1, 'M')).toBeNull()
+  })
+
+  it('a mobile pane at DPR 3 never allocates surfaces past the budget', async () => {
+    const { BITMAP_BUDGETS } = await import('../src/xlsx/view/tileCache')
+    const width = Object.getOwnPropertyDescriptor(Element.prototype, 'clientWidth')!
+    const height = Object.getOwnPropertyDescriptor(Element.prototype, 'clientHeight')!
+    const dpr = window.devicePixelRatio
+    const sizes: number[] = []
+    let owner: object | null = HTMLCanvasElement.prototype
+    while (owner && !Object.getOwnPropertyDescriptor(owner, 'width')) owner = Object.getPrototypeOf(owner)
+    const canvasWidth = Object.getOwnPropertyDescriptor(owner!, 'width')!
+    Object.defineProperty(Element.prototype, 'clientWidth', { configurable: true, get() { return (this as HTMLElement).dataset?.testid === 'officeview-sheet-pane' ? 1544 : 0 } })
+    Object.defineProperty(Element.prototype, 'clientHeight', { configurable: true, get() { return (this as HTMLElement).dataset?.testid === 'officeview-sheet-pane' ? 1044 : 0 } })
+    Object.defineProperty(owner!, 'width', { configurable: true, get() { return canvasWidth.get!.call(this) }, set(value: number) { sizes.push(value); canvasWidth.set!.call(this, value) } })
+    ;(window as { devicePixelRatio: number }).devicePixelRatio = 3
+    try {
+      const doc = await workbook()
+      const { ui, h } = await mountSheet(doc, { profile: 'M' })
+      const base = ui.getByTestId('officeview-sheet-base') as HTMLCanvasElement
+      expect(base.width).toBe(1875)
+      expect(Math.max(...sizes)).toBeLessThanOrEqual(1875)
+      expect(h.last().peakBitmapBytes).toBeLessThanOrEqual(BITMAP_BUDGETS.M)
+      expect(ui.getByRole('status').textContent).toContain('resolution reduced')
+    } finally {
+      Object.defineProperty(Element.prototype, 'clientWidth', width)
+      Object.defineProperty(Element.prototype, 'clientHeight', height)
+      Object.defineProperty(owner!, 'width', canvasWidth)
+      ;(window as { devicePixelRatio: number }).devicePixelRatio = dpr
+    }
+  })
+})

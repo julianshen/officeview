@@ -15,7 +15,7 @@ import { paintWatermark, type ResolvedWatermark } from '../../core/watermark'
 import type { LayoutCache } from '../../xlsx/view/textLayout'
 import { frameBudgetFor, type FrameBudget, type MergeQueryCache, type SheetGeometryResult } from '../../xlsx/view/viewport'
 import {
-  BITMAP_BUDGETS, MemoryPool, RGBA_BYTES, TILE_DEVICE_PX, TILE_PREFETCH_RING, TileCache,
+  BITMAP_BUDGETS, bitmapPoolPlan, MemoryPool, RGBA_BYTES, TILE_DEVICE_PX, TILE_PREFETCH_RING, TileCache,
   prefetchTiles, tileLogicalBox, tileRangeFor, type TileIndexRange, type TileKey, type TileSurface,
 } from '../../xlsx/view/tileCache'
 
@@ -62,6 +62,28 @@ export interface SheetTileStats {
   prefetchRecords: number
 }
 const TILE_BYTES = TILE_DEVICE_PX * TILE_DEVICE_PX * RGBA_BYTES
+
+/** Device scales tried, highest first, when the native DPR does not fit (§12.4). */
+const DEVICE_SCALE_STEPS = [3, 2.5, 2, 1.5, 1.25, 1, 0.75, 0.5]
+/** Pane surface bytes (base + overlay) at a device scale. */
+export function paneSurfaceBytes(viewport: { width: number; height: number }, dpr: number): number {
+  return bitmapPoolPlan({ cssWidth: viewport.width, cssHeight: viewport.height, dpr }).overlayBytes * 2
+}
+/**
+ * Admission BEFORE any backing store is sized (§12.4): the largest device scale
+ * not above `dpr` whose two pane surfaces, base tiles with a one-tile ring and
+ * one in-flight replacement row/column fit the profile's bitmap budget; null when
+ * none fits (the caller shows a resource outcome instead of allocating).
+ */
+export function admitDeviceScale(viewport: { width: number; height: number }, dpr: number, profile: ProfileId): number | null {
+  const budget = BITMAP_BUDGETS[profile]
+  for (const scale of [dpr, ...DEVICE_SCALE_STEPS.filter(step => step < dpr)]) {
+    let plan
+    try { plan = bitmapPoolPlan({ cssWidth: viewport.width, cssHeight: viewport.height, dpr: scale }) } catch { continue }
+    if (plan.overlayBytes * 2 + plan.baseBytes + plan.replacementBytes <= budget) return scale
+  }
+  return null
+}
 
 export function createCanvasTile(): CanvasTile {
   const canvas = globalThis.document.createElement('canvas')

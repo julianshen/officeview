@@ -40,7 +40,7 @@ import { LayoutCache } from '../../xlsx/view/textLayout'
 import { cellDisplayText } from '../../xlsx/render'
 import { createCellLayoutHost } from '../../xlsx/view/renderViewport'
 import { createObjectWorkbookSource } from '../../worker/viewerObjectSource'
-import { bitmapPoolPlan, type TileCacheStats } from '../../xlsx/view/tileCache'
+import type { TileCacheStats } from '../../xlsx/view/tileCache'
 import { gridGeometryToViewport, gridSelectionOverlay, paintGridSelectionOverlay, paintSearchOverlay, type HighlightRect } from '../../core/overlay'
 import { normalizeWatermark, type WatermarkOptions } from '../../core/watermark'
 import type { FallbackFontsOptions } from '../../core/fonts/fallback'
@@ -50,7 +50,7 @@ import { GRID_HEADER_SIZE } from './GridHeaders'
 import { coarseSelectionRecords, overlayRecords, selectionContains } from './selectionOverlay'
 import { SheetNavigator } from './SheetNavigator'
 import type { HiddenCellInspection } from './ViewerStatus'
-import { SheetTileRenderer, type SheetFrame } from './sheetTiles'
+import { SheetTileRenderer, admitDeviceScale, paneSurfaceBytes, type SheetFrame } from './sheetTiles'
 import { SearchBar, ZoomControls } from '../viewerControls'
 
 /** A committed sheet view (the S9.1 sort/filter commit seam). `revision` must
@@ -221,7 +221,13 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
     return () => ro.disconnect()
   }, [])
   const viewport: ViewportSize = useMemo(() => ({ width: Math.max(1, pane.width - GRID_HEADER_SIZE), height: Math.max(1, pane.height - GRID_HEADER_SIZE) }), [pane])
-  const dpr = Math.min(typeof window !== 'undefined' ? window.devicePixelRatio || 1 : 1, 3)
+  const nativeDpr = Math.min(typeof window !== 'undefined' ? window.devicePixelRatio || 1 : 1, 3)
+  // Admit the pane surfaces before sizing any canvas; a lower device scale keeps
+  // the pane within the bitmap budget, and nothing fits → a visible resource outcome.
+  const admittedDpr = admitDeviceScale(viewport, nativeDpr, profile)
+  const dpr = admittedDpr ?? nativeDpr
+  const resourceNotice = admittedDpr === null ? 'This view is too large for the display memory budget. Make the viewer smaller.'
+    : admittedDpr < nativeDpr ? 'Display resolution reduced to fit the memory budget.' : ''
 
   // ---- scroll window per sheet; zoom is retained per sheet in the session ----
   const windowFor = (sheetId: string, sheetEntry: SheetEntry): ScrollWindow => {
@@ -251,7 +257,7 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
   const overlayRef = useRef<HTMLCanvasElement | null>(null)
   const scrollerRef = useRef<HTMLDivElement | null>(null)
   const device = { width: Math.ceil(viewport.width * dpr), height: Math.ceil(viewport.height * dpr) }
-  const surfaceBytes = bitmapPoolPlan({ cssWidth: viewport.width, cssHeight: viewport.height, dpr }).overlayBytes * 2
+  const surfaceBytes = paneSurfaceBytes(viewport, dpr)
   const rendererRef = useRef<SheetTileRenderer | null>(null)
   // Created lazily in effects: an unmount (or StrictMode's dev re-mount) disposes
   // it, and the next effect run starts a fresh pool instead of a closed one.
@@ -285,12 +291,13 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
   // Base layer: keyed by owner/position/zoom/DPR/pane only; overlay changes never re-run it.
   useLayoutEffect(() => {
     const canvas = baseRef.current, frame = frameOf()
-    if (!canvas || !frame || !assets) return
+    if (!canvas || !frame || !assets || admittedDpr === null) return
+    // The pool (and its admission) exists before the pane surface is sized.
+    const renderer = rendererFor()
     if (canvas.width !== device.width) canvas.width = device.width
     if (canvas.height !== device.height) canvas.height = device.height
     const ctx = canvas.getContext('2d')
     if (!ctx) return
-    const renderer = rendererFor()
     biasRef.current = renderer.present(ctx, frame).bias
     report()
     // Bounded adjacent prefetch after the visible frame is up.
@@ -410,7 +417,7 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
   // Overlay layer: selection and search highlights in viewport space.
   useLayoutEffect(() => {
     const canvas = overlayRef.current
-    if (!canvas || !entry || !scroll) return
+    if (!canvas || !entry || !scroll || admittedDpr === null) return
     if (canvas.width !== device.width) canvas.width = device.width
     if (canvas.height !== device.height) canvas.height = device.height
     const ctx = canvas.getContext('2d')
@@ -607,7 +614,7 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
         <div ref={paneRef} data-testid="officeview-sheet-pane" style={{ position: 'relative', flex: '1 1 auto', minHeight: 0, overflow: 'hidden', background: '#ffffff' }}>
           {entry && scroll && (
             <GridSemantics owner={identity} projection={entry.metrics} view={entry.view} selection={selection} window={scroll} viewport={viewport}
-              body={entry.body} onChange={onGridChange} announcement={announcement} inspection={inspection} profile={profile} label={`Worksheet ${entry.sheet.name}`}
+              body={entry.body} onChange={onGridChange} announcement={[resourceNotice, announcement].filter(Boolean).join(' ')} inspection={inspection} profile={profile} label={`Worksheet ${entry.sheet.name}`}
               cellPresentation={at => {
                 const cell = cellAt(entry, at)
                 return { text: cell ? cellDisplayText(entry.sheet, cell) : '' }
