@@ -94,15 +94,16 @@ Every package is implemented on its own branch, reviewed by at least one agent f
 | S0.1 contracts, S0.2 fixtures, S0.3 harness scaffold | merged |
 | S2.1 order/visibility/axes, S2.2 scroll window, S2.4 sheet zoom model (UI wiring open) | merged |
 | S8.1 typed filters, date lowering (`filter.ts`, `datePredicates.ts`, `textFilter.ts`; worker/mask publication open) | merged; its collator text matching is replaced by S8.5 canonical matching |
-| S8.5 canonical text matching (`canonicalText.ts`, pinned Unicode 16.0 tables under `src/xlsx/view/unicode/`, `textFilter.ts`) | implemented on `feature/iv-s8-5`, pending review |
+| S8.5 canonical text matching (`canonicalText.ts`, pinned Unicode 16.0 tables under `src/xlsx/view/unicode/`, `textFilter.ts`) | merged (codex reviews over two rounds; Unicode 16.0 pinned data incl. combining classes; key strategy `canonical-text/v2`) |
 | S7.2 pure sort engine (`src/xlsx/view/sort.ts`; worker kernel/session/header integration open) | merged |
 | S1.1 streaming ZIP/XML | design note merged (`docs/architecture/xlsx-large-source.md`, reviewed by codex, pi and opencode over five rounds; user approved `pako`); implementation split into S1.1a (ZIP/inflate/XML tokenizer core) and S1.1b (spool, admission gates, entry wiring) |
 | S3.1/S3.2 structural index and operation guard (pure parts: `structure.ts`, `operationGuard.ts`; parser/drawing/spill wiring open) | merged |
 | S4.1 resident worker protocol/session (`src/worker/viewer*.ts`; temporary object-backed source until S1.2) | merged |
 | S7.1 range detection/header policy/admission (`src/xlsx/view/rangeDetection.ts`) | merged |
 | S4.2 cooperative scheduling/cancellation/atomic publication (`src/xlsx/view/scheduler.ts`, worker session/kernel/client) | merged |
-| S1.1a, S2.3, S8.2, S8.3, S8.5, value-search spike | in progress (implementation or review rounds on their own branches) |
-| S1.1b, S1.2, S1.3, S4.3–S4.5, S5, S6, S9, S10 (physical-device receipts skipped for now by user decision), S11/S12 status, S13 | not started |
+| S1.1a bounded ZIP reader, pull inflater, incremental XML tokenizer (`src/core/{zip-stream,inflater,xml-stream}.ts`, `pako` 1.0.11) | merged (opencode review; one disputed finding accepted by the reviewer) |
+| S1.1b, S2.3, S8.2, S8.3 | in progress (implementation or review rounds on their own branches) |
+| S1.2, S1.3, S4.3–S4.5, S5, S6, S9, S10 (physical-device receipts skipped for now by user decision), S11/S12 status, S13 | not started |
 
 ## S0 — Freeze contracts, counterexamples and fixture/harness infrastructure
 
@@ -499,13 +500,15 @@ expect(wide.contains({ row: 2, col: 0 })).toBe(false)
 
 ### S8.5 Canonical text matching (spec §7.1 amendment, approved 2026-10-11)
 
+> **Status (2026-10-11):** merged (Claude implementation; codex reviews over two rounds; every finding fixed: Turkic After_I/Before_Dot over the post-removal sequence with pinned combining classes, single raw-length admission on raw and key paths, independent test oracle). 0 mismatches in 600k differential comparisons; linear cost (≈2 µs per Latin value at 2,000 chars, Bun, non-browser).
+
 **Files:** modify `src/xlsx/view/textFilter.ts`, `filter.ts`; create `src/xlsx/view/canonicalText.ts` and generated pinned Unicode data (case folding incl. Turkic, default-ignorable set, extended-grapheme segmentation rules) under `src/xlsx/view/unicode/` with its generator script; test `tests/xlsx-viewer-canonical-text.test.ts`, update `tests/xlsx-viewer-filter.test.ts`.
 
-- [ ] RED: every row of the "verified differences" table in `docs/validation/s8-1-text-match-amendment-proposal.md` (Danish `aa`/`aA`, `å`/`aa`, `å`/`a\u200ba`, `a`/U+0363, `ß`/`ss`, `ﬁ`/`fi` with `?`, `contains('e','é')` vs `e\u0301`, `?` vs `é`/`e\u0301`, `?` vs lone U+200B), Turkish/Azeri dotted/dotless I incl. decomposed `I`+U+0307, emoji ZWJ sequences and flags as single graphemes, lone surrogates as single units, default-ignorables removed, `~` escapes unchanged.
-- [ ] GREEN: canonical pipeline (NFD → remove default-ignorables → locale-aware full case fold → NFD) over pinned data independent of the host's ICU; grapheme segmentation of the canonical form; equality/begins/ends/contains on grapheme boundaries with linear-time matching (e.g. KMP over grapheme-unit IDs) and wildcard `*`/`?` over grapheme units with memoized/DP or linear glob matching; remove the collator certificate and the cubic reference path from the filter (keep a slow test-only oracle built from the spec text for differential tests).
-- [ ] Derived canonical key per value is cacheable (S8.2 search-key port supplies `searchKeyOf`); raw values/semantic keys unchanged.
-- [ ] Differential/property tests: ≥100k seeded cases comparing the optimized matcher with the spec-text oracle over the S8.1 hostile pools; no `resource-limit` for ordinary text up to the §12 text-length targets; cost linear in text length.
-- [ ] Deliver with measured (non-browser, labelled) per-value cost for contains/equals/wildcard at 100–2000 characters, and remove the S8.1 residual from §0.4.
+- [x] RED: every row of the "verified differences" table in `docs/validation/s8-1-text-match-amendment-proposal.md` (Danish `aa`/`aA`, `å`/`aa`, `å`/`a\u200ba`, `a`/U+0363, `ß`/`ss`, `ﬁ`/`fi` with `?`, `contains('e','é')` vs `e\u0301`, `?` vs `é`/`e\u0301`, `?` vs lone U+200B), Turkish/Azeri dotted/dotless I incl. decomposed `I`+U+0307, emoji ZWJ sequences and flags as single graphemes, lone surrogates as single units, default-ignorables removed, `~` escapes unchanged.
+- [x] GREEN: canonical pipeline (NFD → remove default-ignorables → locale-aware full case fold → NFD) over pinned data independent of the host's ICU; grapheme segmentation of the canonical form; equality/begins/ends/contains on grapheme boundaries with linear-time matching (e.g. KMP over grapheme-unit IDs) and wildcard `*`/`?` over grapheme units with memoized/DP or linear glob matching; remove the collator certificate and the cubic reference path from the filter (keep a slow test-only oracle built from the spec text for differential tests).
+- [x] Derived canonical key per value is cacheable (S8.2 search-key port supplies `searchKeyOf`); raw values/semantic keys unchanged.
+- [x] Differential/property tests: ≥100k seeded cases comparing the optimized matcher with the spec-text oracle over the S8.1 hostile pools; no `resource-limit` for ordinary text up to the §12 text-length targets; cost linear in text length.
+- [x] Deliver with measured (non-browser, labelled) per-value cost for contains/equals/wildcard at 100–2000 characters, and remove the S8.1 residual from §0.4.
 
 ### S8.4 Performance threshold freeze (exit gate for S8)
 
