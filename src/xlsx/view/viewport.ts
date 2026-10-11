@@ -53,8 +53,8 @@ export const AXIS_ERROR_DIAGNOSTICS: Readonly<Record<AxisMetricsErrorCode, strin
  * gridline instances on desktop (D) and mobile (M). Beyond them a frame is coarse
  * before any cell is read; the coarse layer itself belongs to S5.1. */
 export const VIEWPORT_DETAIL_LIMITS = Object.freeze({
-  D: Object.freeze({ records: 20_000, gridlines: 4096 }),
-  M: Object.freeze({ records: 10_000, gridlines: 2048 }),
+  D: Object.freeze({ records: 20_000, gridlines: 4096, pages: 0, overviewGroups: 0 }),
+  M: Object.freeze({ records: 10_000, gridlines: 2048, pages: 0, overviewGroups: 0 }),
 })
 export type ViewportProfile = keyof typeof VIEWPORT_DETAIL_LIMITS
 
@@ -257,10 +257,13 @@ export interface ViewportDetail {
   /** Full logical sheet extent (the worksheet continues past the used range). */
   extent: { width: number; height: number }
   diagnostics: readonly WorkerDiagnostic[]
+  coarse: readonly CoarseGroup[]
+  active?: CellPlacement
 }
 export type ViewportPlan =
   | ViewportDetail
-  | { kind: 'pending' | 'diagnostic' | 'coarse'; diagnostics: readonly WorkerDiagnostic[] }
+  | { kind: 'coarse'; diagnostics: readonly WorkerDiagnostic[]; active?: CellPlacement }
+  | { kind: 'pending' | 'diagnostic'; diagnostics: readonly WorkerDiagnostic[] }
 
 export function axisDiagnostic(error: AxisMetricsError, axis: 'rows' | 'cols' | 'projection' | 'viewport'): WorkerDiagnostic {
   return { code: AXIS_ERROR_DIAGNOSTICS[error.code], message: `${axis}: ${error.message}` }
@@ -448,7 +451,7 @@ function firstCellAtOrAfter(cells: readonly XlsxCell[], col: number): number {
  * (O(log n)), projected device size per run, distinct boundary instances,
  * per-row column-index counts, and merge/drawing index queries. Only an admitted
  * frame resolves its source cells; source rows outside the window are never scanned. */
-export function planViewport(geometry: SheetGeometryResult | undefined, viewport: LogicalViewport, profile: ViewportProfile = 'D'): ViewportPlan {
+export function planViewport(geometry: SheetGeometryResult | undefined, viewport: LogicalViewport, profile: ViewportProfile = 'D', _options: { activeCell?: SourceCell } = {}): ViewportPlan {
   if (!geometry) return { kind: 'pending', diagnostics: [{ code: 'geometry-pending', message: 'sheet geometry has not been published' }] }
   if (geometry.kind !== 'ready') return { kind: 'diagnostic', diagnostics: geometry.diagnostics }
   try {
@@ -513,7 +516,7 @@ function detailPlan(geometry: SheetGeometry, viewport: LogicalViewport, limits: 
   const merges: MergePlacement[] = []
   let visibleC0 = MAX_COLS, visibleC1 = -1
   for (const run of colWindow.runs) { visibleC0 = Math.min(visibleC0, run.start); visibleC1 = Math.max(visibleC1, run.end) }
-  if (!slots.length || visibleC1 < 0) return { kind: 'detail', cells, merges, drawings: [], rowLines, colLines, extent, diagnostics }
+  if (!slots.length || visibleC1 < 0) return { kind: 'detail', cells, merges, drawings: [], rowLines, colLines, extent, diagnostics, coarse: [] }
   // Overflow dependencies: cells whose unclipped text may reach into the pane.
   // They obey the same detail admission: walking outward from the pane, columns
   // join only while every run projects to four device pixels, and a side whose
@@ -583,5 +586,30 @@ function detailPlan(geometry: SheetGeometry, viewport: LogicalViewport, limits: 
     }
   }
   cells.sort((a, b) => a.slot - b.slot || a.source.col - b.source.col)
-  return { kind: 'detail', cells, merges, drawings, rowLines, colLines, extent, diagnostics }
+  return { kind: 'detail', cells, merges, drawings, rowLines, colLines, extent, diagnostics, coarse: [] }
+}
+
+// ---- S5.1 boundary (deliberately wrong bodies; replaced below in GREEN) ----
+import type { CacheIdentity, CompactSourceRowSet, Completeness, LogicalCellBox, SourceFailure, SourceStore, ViewportCell, ViewportOverviewGroup } from './contracts'
+
+export interface ViewportWork {
+  pages: number; visitedRecords: number; records: number
+  layoutsBuilt: number; layoutsReused: number
+  gridlines: number; gridlineSpans: number; runsVisited: number
+  overviewGroups: number; overviewPages: number; semanticNodes: number; mergeQueries: number
+}
+export function emptyWork(): ViewportWork {
+  return { pages: 0, visitedRecords: 0, records: 0, layoutsBuilt: 0, layoutsReused: 0, gridlines: 0, gridlineSpans: 0, runsVisited: 0, overviewGroups: 0, overviewPages: 0, semanticNodes: 0, mergeQueries: 0 }
+}
+export interface CoarseGroup { groupId: string; bounds: LogicalCellBox; slots: { start: number; end: number }; cols: { c0: number; c1: number } }
+export function sourceSetsForSlots(_metrics: ProjectedSheetMetrics, start: number, end: number): CompactSourceRowSet[] | null {
+  return [{ kind: 'intervals', intervals: [{ r0: start, r1: end }] }]
+}
+export interface StoreViewportOptions { profile?: ViewportProfile; signal: AbortSignal; isCurrent?: (owner: CacheIdentity) => boolean; scope?: 'frame' | 'tile'; activeCell?: SourceCell }
+export type StoreViewportOutcome =
+  | { kind: 'viewport'; owner: CacheIdentity; completeness: Completeness; error?: SourceFailure; cells: readonly ViewportCell[]; groups: readonly ViewportOverviewGroup[]; coarse: readonly CoarseGroup[]; rowLines: readonly number[]; colLines: readonly number[]; active?: ViewportCell; work: ViewportWork; diagnostics: readonly WorkerDiagnostic[] }
+  | { kind: 'stale' | 'cancelled'; owner: CacheIdentity; work: ViewportWork; diagnostics: readonly WorkerDiagnostic[] }
+  | { kind: 'diagnostic'; diagnostics: readonly WorkerDiagnostic[] }
+export async function queryViewport(_store: SourceStore, _metrics: ProjectedSheetMetrics, _viewport: LogicalViewport, owner: CacheIdentity, _options: StoreViewportOptions): Promise<StoreViewportOutcome> {
+  return { kind: 'viewport', owner, completeness: 'loading', cells: [], groups: [], coarse: [], rowLines: [], colLines: [], work: emptyWork(), diagnostics: [] }
 }
