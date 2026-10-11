@@ -10,8 +10,9 @@ import { controlTarget, failureText, useControlLifetime, type ControlProps } fro
 import { ConditionEditor, conditionInput, typedCondition } from './ConditionEditor'
 export interface FilterDropdownProps extends ControlProps { col: number; applied: FilterSpec | null; snapshotHidden?: boolean }
 export function FilterDropdown(props: FilterDropdownProps): ReactElement | null {
-  const life = useControlLifetime(props), session = useRef<ValuesDraftPort | null>(null), searchInput = useRef<HTMLInputElement>(null)
+  const life = useControlLifetime(props), session = useRef<ValuesDraftPort | null>(null), searchInput = useRef<HTMLInputElement>(null), changingRef = useRef(false)
   const [range, setRange] = useState<DetectedRange | null>(null), [page, setPage] = useState<DraftPage | null>(null), [query, setQuery] = useState<DraftQuery>({ text: '', offset: 0 })
+  const [changing, setChanging] = useState(false)
   const [busy, setBusy] = useState(true), [progress, setProgress] = useState('Loading values'), [error, setError] = useState(''), [inspection, setInspection] = useState(''), [includeBlanks, setIncludeBlanks] = useState(false)
   const appliedRule = props.applied?.columns.get(props.col)
   const initial = appliedRule?.kind === 'compound' ? appliedRule.first : appliedRule && appliedRule.kind !== 'values' ? appliedRule : undefined
@@ -21,7 +22,7 @@ export function FilterDropdown(props: FilterDropdownProps): ReactElement | null 
   life.dispose.current = () => { session.current?.cancel(); session.current = null }
   const noticeError = (message: string) => { setError(message); props.onNotice(message) }
   const initialize = () => {
-    const job = life.begin(); setBusy(true); setError(''); setPage(null); setRange(null)
+    const job = life.begin(); changingRef.current = false; setChanging(false); setBusy(true); setError(''); setPage(null); setRange(null)
     setMethod(initial ? 'custom' : 'values'); setFirst(conditionInput(initial)); setSecond(conditionInput(appliedRule?.kind === 'compound' ? appliedRule.second : undefined))
     setCompound(appliedRule?.kind === 'compound'); setConnective(appliedRule?.kind === 'compound' ? appliedRule.connective : 'and'); setInspection(''); setIncludeBlanks(false)
     session.current?.cancel(); session.current = null
@@ -43,10 +44,11 @@ export function FilterDropdown(props: FilterDropdownProps): ReactElement | null 
   useEffect(() => { if (props.open !== false) { initialize(); searchInput.current?.focus() } }, [props.open, life.ownerKey, props.col])
   const refresh = (next: DraftQuery, action?: ValueDraftAction) => {
     const port = session.current
-    if (!port) return
+    if (!port || changingRef.current) return
+    if (action) { changingRef.current = true; setChanging(true) }
     const job = life.begin(); setBusy(true); setError(''); setQuery(next)
     void (action ? port.change(action, next, job.signal) : port.read(next, job.signal, p => { if (job.current()) setProgress(`${p.message}: ${p.completed} / ${p.total}`) }))
-      .then(result => { if (job.current()) { setPage(result); setBusy(false) } }).catch(error => { if (job.current()) { noticeError(life.error(error)); setBusy(false) } })
+      .then(result => { if (job.current()) { changingRef.current = false; setChanging(false); setPage(result); setBusy(false) } }).catch(error => { if (job.current()) { changingRef.current = false; setChanging(false); noticeError(life.error(error)); setBusy(false) } })
   }
   let custom: ColumnRule | undefined, validation = ''
   if (method === 'custom' && classification.kind !== 'loading') {
@@ -107,17 +109,17 @@ export function FilterDropdown(props: FilterDropdownProps): ReactElement | null 
       {range && <p>{range.source.kind === 'table' ? `Table metadata: ${range.range.headerRows} header row(s), ${range.range.totalsRows} totals row(s).` : 'Resolved source range.'}{props.applied && !sameFilterRange(props.applied.range, range.range) ? ' OK will replace the previous filter range.' : ''}</p>}
       <label>Filter method <select aria-label="Filter method" style={controlTarget} value={method} onChange={event => setMethod(event.target.value as 'values' | 'custom')}><option value="values">Values and blanks</option>{!['loading', 'empty'].includes(classification.kind) && <option value="custom">{classification.kind === 'date' ? 'Date filters' : classification.kind === 'number' ? 'Number filters' : 'Text / mixed filters'}</option>}</select></label>
       {method === 'values' ? <>
-        <label>Search <input ref={searchInput} aria-label="Search all values" style={controlTarget} value={query.text} onChange={event => refresh({ text: event.target.value, offset: 0, wildcards: query.wildcards })} /></label>
-        <label style={{ ...controlTarget, display: 'flex', alignItems: 'center' }}><input type="checkbox" checked={Boolean(query.wildcards)} onChange={event => refresh({ ...query, offset: 0, wildcards: event.target.checked })} />Search with wildcards</label>
+        <label>Search <input ref={searchInput} aria-label="Search all values" disabled={changing || life.invalid} style={controlTarget} value={query.text} onChange={event => refresh({ text: event.target.value, offset: 0, wildcards: query.wildcards })} /></label>
+        <label style={{ ...controlTarget, display: 'flex', alignItems: 'center' }}><input type="checkbox" disabled={changing || life.invalid} checked={Boolean(query.wildcards)} onChange={event => refresh({ ...query, offset: 0, wildcards: event.target.checked })} />Search with wildcards</label>
         {page?.truncated && <p>Showing first 10,000; search all values.</p>}
         <button type="button" style={controlTarget} disabled={busy || !page || life.invalid} onClick={() => refresh(query, { kind: 'all', selected: true, includeBlanks })}>Select All</button>
         <button type="button" style={controlTarget} disabled={busy || !page || life.invalid} onClick={() => refresh(query, { kind: 'all', selected: false, includeBlanks })}>Deselect All</button>
-        {query.text && <label style={{ ...controlTarget, display: 'flex', alignItems: 'center' }}><input type="checkbox" checked={includeBlanks} onChange={event => setIncludeBlanks(event.target.checked)} />Include blanks in searched Select All</label>}
+        {query.text && <label style={{ ...controlTarget, display: 'flex', alignItems: 'center' }}><input type="checkbox" disabled={changing || life.invalid} checked={includeBlanks} onChange={event => setIncludeBlanks(event.target.checked)} />Include blanks in searched Select All</label>}
         <div style={{ maxHeight: 280, overflowY: 'auto' }}>{page?.entries.map(entry => <label key={entry.ordinal} data-value-ordinal={entry.ordinal} style={{ ...controlTarget, display: 'flex', alignItems: 'center' }}>
           <input type="checkbox" aria-label={`${entry.label}${entry.kind === 'error' ? ' (error)' : ''}`} checked={entry.selected === true} disabled={busy || entry.selected === 'pending' || life.invalid}
             ref={input => { if (input) input.indeterminate = entry.selected === 'pending' }} onChange={event => refresh(query, { kind: 'toggle', ordinal: entry.ordinal, selected: event.target.checked })} />
           <span>{entry.label}{entry.kind === 'error' ? ' (error)' : ''}{entry.selected === 'pending' ? ' — selection pending' : ''}</span>
-          <button type="button" aria-label={`Inspect value ${entry.ordinal + 1}`} style={controlTarget} onClick={() => { const job = life.begin(); void session.current!.inspect(entry.ordinal, job.signal).then(value => { if (job.current()) setInspection(value) }).catch(error => { if (job.current()) noticeError(life.error(error)) }) }}>Inspect</button>
+          <button type="button" aria-label={`Inspect value ${entry.ordinal + 1}`} style={controlTarget} disabled={busy || life.invalid} onClick={() => { if (busy || life.invalid) return; const job = life.begin(); void session.current!.inspect(entry.ordinal, job.signal).then(value => { if (job.current()) setInspection(value) }).catch(error => { if (job.current()) noticeError(life.error(error)) }) }}>Inspect</button>
         </label>)}</div>
         {page && <><label style={{ ...controlTarget, display: 'flex', alignItems: 'center' }}><input type="checkbox" aria-label="(Blanks)" checked={page.blanks} disabled={busy || life.invalid} onChange={event => refresh(query, { kind: 'blanks', selected: event.target.checked })} />(Blanks)</label>
           <p>{page.count.count} selected values{page.count.pending ? `; ${page.count.pending} pending` : ''}; {page.count.complete ? 'complete universe' : 'universe incomplete'}.</p>

@@ -280,3 +280,69 @@ it('treats a canonical-empty search as no search for whole-domain Select All, in
   expect(await draft.candidate(signal())).toBeNull()
   draft.cancel()
 })
+
+function holdDraftCalls(base: ControlsClient, gate: { hold: boolean; release: (() => void)[] }): ControlsClient {
+  return { ...base, async values(...args) {
+    const port = await base.values(...args)
+    const wait = () => gate.hold ? new Promise<void>(resolve => gate.release.push(resolve)) : Promise.resolve()
+    return { ...port,
+      async read(...input) { await wait(); return port.read(...input) },
+      async change(...input) { await wait(); return port.change(...input) },
+    }
+  } }
+}
+async function releaseDraft(gate: { hold: boolean; release: (() => void)[] }) {
+  gate.hold = false
+  await act(async () => { for (const release of gate.release.splice(0)) release() })
+}
+
+it('disables Inspect during a read so inspection cannot abort the read or leave the dropdown busy', async () => {
+  const f = controlsFixture(10), gate = { hold: false, release: [] as (() => void)[] }
+  const ui = render(<FilterHarness fixture={f} client={holdDraftCalls(f.client, gate)} />)
+  await waitFor(() => expect(ui.getByRole('checkbox', { name: 'item-3' })).toBeTruthy())
+  gate.hold = true
+  fireEvent.change(ui.getByRole('textbox', { name: 'Search all values' }), { target: { value: 'item' } })
+  const inspect = ui.getByRole('button', { name: 'Inspect value 4' }) as HTMLButtonElement
+  expect(inspect.disabled).toBe(true)
+  fireEvent.click(inspect)
+  await releaseDraft(gate)
+  await waitFor(() => expect(ui.queryByRole('progressbar')).toBeNull())
+  expect((ui.getByRole('button', { name: 'OK' }) as HTMLButtonElement).disabled).toBe(false)
+})
+
+it('disables Inspect during OK without cancelling the atomic apply', async () => {
+  const f = controlsFixture(10)
+  let finish!: (stage: Awaited<ReturnType<typeof f.options.stageFilter>>) => void
+  const client = createControlsClient({ ...f.options, stageFilter: () => new Promise(resolve => { finish = resolve }) })
+  const ui = render(<FilterHarness fixture={f} client={client} />)
+  await waitFor(() => expect(ui.getByRole('checkbox', { name: 'item-3' })).toBeTruthy())
+  fireEvent.click(ui.getByRole('checkbox', { name: 'item-3' }))
+  await waitFor(() => expect((ui.getByRole('button', { name: 'OK' }) as HTMLButtonElement).disabled).toBe(false))
+  fireEvent.click(ui.getByRole('button', { name: 'OK' }))
+  await waitFor(() => expect(finish).toBeTypeOf('function'))
+  const inspect = ui.getByRole('button', { name: 'Inspect value 4' }) as HTMLButtonElement
+  expect(inspect.disabled).toBe(true)
+  fireEvent.click(inspect)
+  await act(async () => finish(await f.options.stageFilter({ range: f.range, columns: new Map([[0, { kind: 'text', op: 'contains', first: 'item', wildcards: false }]]) }, f.snapshot.owner, new AbortController().signal)))
+  await waitFor(() => expect(f.publications).toBe(1))
+})
+
+it.each(['search', 'wildcards', 'include blanks'])('protects an in-flight checkbox mutation from %s edits', async input => {
+  const f = controlsFixture(10), gate = { hold: false, release: [] as (() => void)[] }
+  const ui = render(<FilterHarness fixture={f} client={holdDraftCalls(f.client, gate)} />)
+  await waitFor(() => expect(ui.getByRole('checkbox', { name: 'item-3' })).toBeTruthy())
+  const search = ui.getByRole('textbox', { name: 'Search all values' }) as HTMLInputElement
+  fireEvent.change(search, { target: { value: 'item' } })
+  await waitFor(() => expect((ui.getByRole('button', { name: 'OK' }) as HTMLButtonElement).disabled).toBe(false))
+  gate.hold = true
+  fireEvent.click(ui.getByRole('checkbox', { name: 'item-3' }))
+  const control = input === 'search' ? search : ui.getByRole('checkbox', { name: input === 'wildcards' ? 'Search with wildcards' : 'Include blanks in searched Select All' }) as HTMLInputElement
+  expect(control.disabled).toBe(true)
+  if (input === 'search') fireEvent.change(control, { target: { value: 'beyond' } })
+  else fireEvent.click(control)
+  await releaseDraft(gate)
+  await waitFor(() => expect(ui.queryByRole('progressbar')).toBeNull())
+  expect((ui.getByRole('checkbox', { name: 'item-3' }) as HTMLInputElement).checked).toBe(false)
+  expect(search.value).toBe('item')
+  expect(f.publications).toBe(0)
+})
