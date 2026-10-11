@@ -104,6 +104,55 @@ function concat(chunks: Uint8Array[], total: number): Uint8Array {
   return out
 }
 
+type BlobHint = 'legacy' | 'spreadsheet'
+
+/**
+ * Eager hint for a local Blob, without the large-source chunk (decision D):
+ * the first bytes (RTF, ZIP signature) and the classic central directory's
+ * part names. Like the network prefix hint it only picks a path: DOCX/PPTX/
+ * other go to today's whole-file load, where the parse-time guard still
+ * sends any spreadsheet the legacy view finds through admission. A package
+ * naming `xl/workbook.xml` (or that cannot be read cheaply: ZIP64, a
+ * central directory above 1 MiB, no end record) gets the precise, lazy path.
+ */
+async function blobHint(blob: Blob): Promise<BlobHint> {
+  const read = async (a: number, b: number) => new Uint8Array(await blob.slice(a, b).arrayBuffer())
+  const head = await read(0, Math.min(blob.size, 4096))
+  if (isRtf(head) || head.length < 4 || head[0] !== 0x50 || head[1] !== 0x4b || head[2] !== 3 || head[3] !== 4) return 'legacy'
+  const tailStart = Math.max(0, blob.size - 65_557)
+  const tail = await read(tailStart, blob.size)
+  const u16 = (b: Uint8Array, i: number) => b[i] | (b[i + 1] << 8)
+  const u32 = (b: Uint8Array, i: number) => u16(b, i) + u16(b, i + 2) * 0x10000
+  let eocd = -1
+  for (let i = tail.length - 22; i >= 0; i--) {
+    if (u32(tail, i) === 0x06054b50 && u16(tail, i + 20) === tail.length - i - 22) { eocd = i; break }
+  }
+  if (eocd < 0) return 'spreadsheet'
+  const count = u16(tail, eocd + 10)
+  const cdSize = u32(tail, eocd + 12)
+  const cdOffset = u32(tail, eocd + 16)
+  if (count === 0xffff || cdSize === 0xffffffff || cdOffset === 0xffffffff || cdSize > 1 << 20 || cdOffset + cdSize > tailStart + eocd) return 'spreadsheet'
+  const cd = cdOffset >= tailStart ? tail.subarray(cdOffset - tailStart, cdOffset - tailStart + cdSize) : await read(cdOffset, cdOffset + cdSize)
+  const names = new Set<string>()
+  const decoder = new TextDecoder()
+  for (let p = 0, k = 0; k < count && p + 46 <= cd.length; k++) {
+    if (u32(cd, p) !== 0x02014b50) return 'spreadsheet'
+    const n = u16(cd, p + 28)
+    names.add(decoder.decode(cd.subarray(p + 46, p + 46 + n)))
+    p += 46 + n + u16(cd, p + 30) + u16(cd, p + 32)
+  }
+  return names.has('xl/workbook.xml') ? 'spreadsheet' : 'legacy'
+}
+
+/** Today's Blob path: one whole read, the legacy load, the parse-time guard. */
+async function loadBlobLegacy(blob: Blob, ctx: LoadCtx): Promise<AnyDoc> {
+  ctx.options.onProgress?.({ loaded: 0, total: blob.size })
+  const bytes = new Uint8Array(await blob.arrayBuffer())
+  throwIfAborted(ctx.signal)
+  ctx.options.onProgress?.({ loaded: bytes.length, total: blob.size })
+  return loadBytes(bytes, ctx)
+}
+
 /** Hold the 64 KiB prefix; a download that ends inside it is already in memory. */
 async function loadSequential(reader: ByteStreamReader, ctx: LoadCtx): Promise<AnyDoc> {
   const prefixBytes = ctx.limits.spool.sniffPrefixBytes
@@ -142,7 +191,9 @@ export async function loadOfficeSource(source: ByteSource, options: LoadSourceOp
   throwIfAborted(ctx.signal)
   switch (opened.kind) {
     case 'bytes': return loadBytes(opened.bytes, ctx)
-    case 'blob': return (await largeSource()).loadSeekable(opened.blob, ctx, loadBytes)
+    case 'blob':
+      if (await blobHint(opened.blob) === 'legacy') return loadBlobLegacy(opened.blob, ctx)
+      return (await largeSource()).loadSeekable(opened.blob, ctx, loadBytes)
     case 'stream': return loadSequential(opened.reader, ctx)
   }
 }
