@@ -195,4 +195,3 @@ export function prepareSheetAssets(doc: XlsxDocument, options: SheetAssetsOption
     } catch (error) { releaseHeld(); lease.dispose(); throw error }
   })
 }
-

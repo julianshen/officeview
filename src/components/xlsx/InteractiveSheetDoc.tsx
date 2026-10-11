@@ -187,7 +187,8 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
     if (previous && previous !== committedLease.current) previous.dispose()
   }, [assets])
   useEffect(() => () => { committedLease.current?.dispose(); committedLease.current = null }, [])
-  const fontGen = assets?.fontGen ?? 0
+  // The published font generation; a sheet switch (lease pending) never resets it.
+  const fontGen = fontGenRef.current.gen
 
   // ---- per-sheet committed views and geometry (one geometry per viewGen) ----
   const viewInput = (sheetId: string): SheetViewInput => views?.[sheetId] ?? { revision: 0 }
@@ -200,7 +201,7 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
     if (previous && input.revision < previous.revision) return previous // stale commit: never publish an older view
     const order = input.order ?? createIdentityOrder()
     const baseHidden = sheetBaseHidden(sheet)
-    const visibility = input.visibility ?? visibilityFromHidden(createIntervalSet(baseHidden.intervals.map(({ r0, r1 }) => ({ r0: order.sourceToDisplay(r0), r1: order.sourceToDisplay(r1) }))))
+    const visibility = input.visibility ?? visibilityFromHidden(createIntervalSet(displayIntervals(baseHidden.intervals, order)))
     const built = buildSheetGeometry(sheet, { order, ...(input.visibility ? { visibility } : {}) })
     if (built.kind !== 'ready') throw new Error(built.diagnostics.map(d => d.message).join('; ') || 'This sheet cannot be laid out')
     const selection = previous?.view.selection ?? emptyGridSelection()
@@ -303,8 +304,9 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
   const mark = useMemo(() => normalizeWatermark(watermark), [markKey]) // eslint-disable-line react-hooks/exhaustive-deps
   const biasRef = useRef({ x: 0, y: 0 })
   const overlayPaints = useRef(0)
-  // Set by the overlay pass; read by the next render's status (a declared coarse state).
-  const selectionIncomplete = useRef(false)
+  // Published by the overlay pass as state, so the status follows it (a declared
+  // coarse state); an empty selection always clears it.
+  const [selectionIncomplete, setSelectionIncomplete] = useState(false)
   const frameOf = (): SheetFrame | null => entry && scroll ? {
     sheet: entry.sheet, geometry: entry.geometry, identity, origin: scroll.logicalOrigin, viewport, zoom: scroll.zoom, dpr,
     extent: { width: entry.metrics.cols.totalCss(), height: entry.metrics.rows.totalCss() },
@@ -418,14 +420,17 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
   if (page?.complete && page.totalKnown !== undefined) knownTotal.current = { key: page.key, total: page.totalKnown }
   const learned = page && knownTotal.current?.key === page.key ? knownTotal.current.total : undefined
   const countLabel = page && !page.complete ? (learned !== undefined ? String(learned) : `${pageOffset + page.hits.length}+`) : undefined
-  const searchNote = page ? findNote(page) : undefined
   // Navigation is serialized: each step starts from the position the previous
   // step committed (refs, not render closures), and a step whose search was
   // replaced meanwhile publishes nothing (§10.1).
   const pageRef = useRef(page), activeRef = useRef(activeHit), searchGen = useRef(0), navQueue = useRef<Promise<void>>(Promise.resolve())
   pageRef.current = page
   activeRef.current = activeHit
-  useEffect(() => { searchGen.current++ }, [query, ownerKey])
+  useLayoutEffect(() => { searchGen.current++; setFindFailure(null) }, [query, ownerKey])
+  // A paging failure of the CURRENT search (e.g. FindError resource-limit) is shown
+  // with the results; the queue stays usable for later steps (§§10.4, 11.4).
+  const [findFailure, setFindFailure] = useState<{ generation: number; message: string } | null>(null)
+  const searchNote = [page ? findNote(page) : undefined, findFailure && findFailure.generation === searchGen.current ? `search stopped: ${findFailure.message}` : undefined].filter(Boolean).join('; ') || undefined
   /** Bring page `target` (or the last page) in, one bounded page at a time: forward
    * pulls continue the run; anything earlier restarts it from page 0. */
   const loadPage = async (from: FindPublication, target: number | 'last'): Promise<FindPublication | null> => {
@@ -440,8 +445,7 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
     while (current && !done(current) && finder.running) current = await finder.next()
     return current
   }
-  const step = async (direction: 1 | -1) => {
-    const generation = searchGen.current
+  const step = async (direction: 1 | -1, generation: number) => {
     const current = pageRef.current, active = activeRef.current
     if (!current || !current.hits.length) return
     const next = active + direction
@@ -457,7 +461,19 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
     setActiveHit(index)
   }
   const stepHit = (direction: 1 | -1) => {
-    const run = navQueue.current.then(() => step(direction)).catch(() => undefined)
+    // Ownership is captured when the step is ENQUEUED: a step queued for a search
+    // that has since been replaced is dropped before it runs.
+    const generation = searchGen.current
+    const run = navQueue.current.then(async () => {
+      if (generation !== searchGen.current) return
+      try {
+        setFindFailure(null)
+        await step(direction, generation)
+      } catch (error) {
+        if (generation !== searchGen.current) return
+        setFindFailure({ generation, message: error instanceof Error ? error.message.slice(0, 256) : 'Search paging failed.' })
+      }
+    })
     navQueue.current = run
     return run
   }
@@ -511,11 +527,12 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
       })
     }
     paintSearchOverlay(ctx, highlights, active)
-    if (selection.ranges.length) {
+    if (!selection.ranges.length) setSelectionIncomplete(false)
+    else {
       const records = overlayRecords(entry.metrics, pane, profile)
       // Past the per-cell cap the membership is coalesced into pixel groups, never dropped.
       const coarse = records ? null : coarseSelectionRecords(selection, entry.metrics, pane, scroll.zoom * dpr)
-      selectionIncomplete.current = Boolean(coarse?.incomplete)
+      setSelectionIncomplete(Boolean(coarse?.incomplete))
       const geometry = records
         ? gridSelectionOverlay({ contains: at => selectionContains(selection, at) }, records, pane, scroll.zoom * dpr)
         : gridSelectionOverlay({ contains: () => true }, coarse!.records, pane, scroll.zoom * dpr)
@@ -747,7 +764,7 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
         <div ref={paneRef} data-testid="officeview-sheet-pane" style={{ position: 'relative', flex: '1 1 auto', minHeight: 0, overflow: 'hidden', background: '#ffffff' }}>
           {entry && scroll && (
             <GridSemantics owner={identity} projection={entry.metrics} view={entry.view} selection={selection} window={scroll} viewport={viewport}
-              body={entry.body} onChange={onGridChange} announcement={[resourceNotice, assets?.sheetId !== activeSheetId ? 'Loading sheet…' : '', selectionIncomplete.current ? 'Selection highlight is incomplete at this zoom; zoom in for detail.' : '', announcement].filter(Boolean).join(' ')} inspection={inspection} profile={profile} label={`Worksheet ${entry.sheet.name}`}
+              body={entry.body} onChange={onGridChange} announcement={[resourceNotice, assets?.sheetId !== activeSheetId ? 'Loading sheet…' : '', selectionIncomplete ? 'Selection highlight is incomplete at this zoom; zoom in for detail.' : '', announcement].filter(Boolean).join(' ')} inspection={inspection} profile={profile} label={`Worksheet ${entry.sheet.name}`}
               cellPresentation={at => {
                 const cell = cellAt(entry, at)
                 return { text: cell ? cellDisplayText(entry.sheet, cell) : '' }
@@ -775,7 +792,7 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
         )}
       </div>
       {showSearch && (
-        <SearchBar inputRef={inputRef} query={query} onQuery={setQuery} count={matchCount} active={activeHit < 0 ? -1 : pageOffset + activeHit}
+        <SearchBar inputRef={inputRef} query={query} onQuery={text => { searchGen.current++; setQuery(text) }} count={matchCount} active={activeHit < 0 ? -1 : pageOffset + activeHit}
           countLabel={countLabel} note={searchNote}
           indexing={searching} onPrev={() => void stepHit(-1)} onNext={() => void stepHit(1)} />
       )}
@@ -784,6 +801,34 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
       )}
     </div>
   )
+}
+
+/** Source row intervals → display slot intervals under `order`. Outside permuted
+ * bands slots equal source rows; inside a band each source row maps to its own
+ * slot (a contiguous source run is not contiguous in display order). */
+function displayIntervals(intervals: readonly SourceRowInterval[], order: RowOrder): SourceRowInterval[] {
+  const bands = [...order.bands].sort((a, b) => a.r0 - b.r0)
+  const slots: Array<[number, number]> = []
+  for (const { r0, r1 } of intervals) {
+    let at = r0
+    for (const band of bands) {
+      if (band.r1 < at || band.r0 > r1) continue
+      if (band.r0 > at) slots.push([at, band.r0 - 1])
+      const b1 = Math.min(r1, band.r1)
+      for (let row = Math.max(at, band.r0); row <= b1; row++) { const slot = order.sourceToDisplay(row); slots.push([slot, slot]) }
+      at = b1 + 1
+      if (at > r1) break
+    }
+    if (at <= r1) slots.push([at, r1])
+  }
+  slots.sort((a, b) => a[0] - b[0])
+  const merged: SourceRowInterval[] = []
+  for (const [lo, hi] of slots) {
+    const last = merged[merged.length - 1]
+    if (last && lo <= last.r1 + 1) last.r1 = Math.max(last.r1, hi)
+    else merged.push({ r0: lo, r1: hi })
+  }
+  return merged
 }
 
 /** Resize a backing store without an intermediate W_new x H_old surface: release

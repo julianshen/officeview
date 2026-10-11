@@ -694,3 +694,72 @@ describe('print admission and ownership (S5.2 review round 2)', () => {
     } finally { window.print = original }
   })
 })
+
+// ---------------------------------------------------------------------------
+// Review round 3 (codex)
+// ---------------------------------------------------------------------------
+describe('find navigation ownership and failures (S5.2 review round 3)', () => {
+  const many = (n: number, text: string) => Array.from({ length: n }, (_, i) => ({ r: i + 1, cells: [{ ref: `A${i + 1}`, v: `${text} ${i + 1}` }] }))
+  const status = (ui: ReturnType<typeof render>) => ui.getByTestId('officeview-search-status').textContent
+
+  it('steps queued for a replaced search never move the replacement', async () => {
+    const doc = await workbook([{ name: 'S1', rows: [...many(450, 'hit'), ...Array.from({ length: 10 }, (_, i) => ({ r: 500 + i, cells: [{ ref: `B${500 + i}`, v: `other ${i}` }] }))] }])
+    const { ui } = await mountSheet(doc)
+    const input = ui.getByRole('searchbox', { name: 'Search document' })
+    act(() => { fireEvent.change(input, { target: { value: 'hit' } }) })
+    await waitFor(() => expect(status(ui)).toBe('1 of 200+'))
+    const next = ui.getByRole('button', { name: 'Next match' })
+    for (let i = 0; i < 199; i++) act(() => { fireEvent.click(next) })
+    await waitFor(() => expect(status(ui)).toBe('200 of 200+'))
+    // 50 clicks queue behind an asynchronous page load; the search is then replaced.
+    act(() => {
+      for (let i = 0; i < 50; i++) fireEvent.click(next)
+      fireEvent.change(input, { target: { value: 'other' } })
+    })
+    await waitFor(() => expect(status(ui)).toBe('1 of 10'))
+    await settle()
+    await settle()
+    expect(status(ui)).toBe('1 of 10')
+  }, 30_000)
+
+  it('reports a paging failure for the current search and keeps navigation usable', async () => {
+    const { FindController, FindError } = await import('../src/xlsx/view/find')
+    const doc = await workbook([{ name: 'S1', rows: many(450, 'hit') }])
+    const { ui } = await mountSheet(doc)
+    act(() => { fireEvent.change(ui.getByRole('searchbox', { name: 'Search document' }), { target: { value: 'hit' } }) })
+    await waitFor(() => expect(status(ui)).toBe('1 of 200+'))
+    const next = ui.getByRole('button', { name: 'Next match' })
+    for (let i = 0; i < 199; i++) act(() => { fireEvent.click(next) })
+    await waitFor(() => expect(status(ui)).toBe('200 of 200+'))
+    const spy = vi.spyOn(FindController.prototype, 'next').mockRejectedValueOnce(new FindError('resource-limit', 'too many waiting hits'))
+    try {
+      act(() => { fireEvent.click(next) })
+      await waitFor(() => expect(status(ui)).toMatch(/search stopped: too many waiting hits/))
+    } finally { spy.mockRestore() }
+    act(() => { fireEvent.click(next) })
+    await waitFor(() => expect(status(ui)).toMatch(/^201 of /))
+  }, 30_000)
+})
+
+describe('incomplete selection state (S5.2 review round 3)', () => {
+  it('clearing the selection also clears the incomplete-highlight notice', async () => {
+    // Narrow columns at 25% put the pane past the mobile per-cell cap (coarse path);
+    // ~100k hidden rows inside a reversed band exceed the membership work budget.
+    const doc = await workbook([{ name: 'S1', cols: '<col min="1" max="16384" width="1" customWidth="1"/>', rows: [{ r: 1, cells: [{ ref: 'A1', v: 'x' }] }] }])
+    // Source rows 20,001..119,998 are display slots 1..99,998 under the reversal.
+    for (let index = 20_001; index <= 119_998; index++) doc.sheets[0].rows.push({ index, hidden: true, cells: [] })
+    const order = createRowOrder([{ r0: 0, r1: 119_999, sourceAtOffset: Uint32Array.from({ length: 120_000 }, (_, i) => 119_999 - i) }])
+    const { ui, h } = await mountSheet(doc, { profile: 'M', views: { 1: { revision: 1, order } } })
+    const grid = ui.getByRole('grid')
+    for (let i = 0; i < 6; i++) act(() => { grid.focus(); fireEvent.keyDown(grid, { key: '-' }) })
+    await settle()
+    expect(h.last().zoom).toBe(0.25)
+    act(() => { fireEvent.click(ui.getByRole('button', { name: 'Select worksheet' })) })
+    await settle()
+    await waitFor(() => expect(ui.getByRole('status').textContent).toContain('Selection highlight is incomplete'))
+    act(() => { grid.focus(); fireEvent.keyDown(grid, { key: 'Escape' }) })
+    await settle()
+    expect(ui.getByRole('status').textContent).toContain('Selection cleared')
+    expect(ui.getByRole('status').textContent).not.toContain('incomplete')
+  }, 30_000)
+})
