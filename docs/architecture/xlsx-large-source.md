@@ -13,10 +13,10 @@ Rule for every number below: it is either **measured** (with the setup stated), 
 | Does the current path meet §4.3? | No. It reads the whole file into one buffer, decodes whole parts to strings, builds whole-part XML trees, and caches both for the package lifetime. Measured on F2: 135 s and about 7.2 GB peak RSS (Bun), against a 512 MiB worker budget. |
 | Can JSZip be made to comply? | No. `loadAsync` needs the whole archive in memory; the streaming internals have no cancel API (the repo already works around this in `zip.ts:91-101`). It stays for small documents and for docx/pptx/odt. |
 | Recommended ZIP layer | A small in-repo central-directory reader over lazy `Blob.slice().arrayBuffer()` range reads (about 150 lines, no dependency, ZIP64 and data descriptors handled). |
-| Recommended inflater | `pako@1.0.11`'s zlib port used through its **low-level pull API** (`lib/zlib/inflate.js`: caller-owned output buffer, `Z_STREAM_END` status, exact input consumption), not the high-level `Inflate` class. This gives a structural expansion bound per step, genuine end-of-stream and trailing-byte detection, and 256 KiB input chunks exactly as the spec says. Already in the lockfile through JSZip; it only becomes a direct dependency. Native `DecompressionStream('deflate-raw')` stays behind the same async-capable port as an optional accelerator, not the default (reasons in §2.4). |
+| Recommended inflater | `pako@1.0.11`'s zlib port used through its **low-level pull API** (`lib/zlib/inflate.js`: caller-owned output buffer, `Z_STREAM_END` status, exact input consumption), not the high-level `Inflate` class. This gives a structural expansion bound per step, genuine end-of-stream and trailing-byte detection, and 256 KiB input chunks exactly as the spec says. Already in the lockfile through JSZip; it only becomes a direct dependency. Native `DecompressionStream('deflate-raw')` is **excluded from the v1 port**: Bun and Node accept a final block followed by junk bytes, so termination cannot be proven on every engine (§2.4.2). |
 | Recommended XML layer | A minimal in-repo SAX-style tokenizer (about 200 lines for the prototype), now with bounded incremental reference recognition, duplicate-attribute rejection and a 31.4 M-comparison chunk-independence fuzz. `fast-xml-parser` has no usable streaming API; `saxes` is 2x slower and not a production dependency. |
 | Measured end to end (F2, 373 MB expanded, 8,238,808 cells) | 256 KiB range reads, pako low-level pull inflate (64 KiB output buffer), CRC and exact end-of-stream verified, TextDecoder, tokenizer, cell events: 138 MiB/s and 3.2 M cells/s (Bun/JSC), 91-92 MiB/s and 2.1 M cells/s (Node/V8). Targets are 20 MiB/s and 100k cells/s on D. This excludes page encoding and storage, which S1.2 owns and which will dominate. |
-| Admission and spooling | S1.1 also owns network spooling (memory, OPFS, IndexedDB) and the entry-point wiring, and proposes conservative object/paged/refuse thresholds (§4.3, **proposed, to be frozen in S10**). Public API additions are listed in §4.5 as user-flagged items. |
+| Admission and spooling | S1.1 also owns network spooling (memory, OPFS, IndexedDB; spreadsheets only, detected from a 64 KiB prefix before spooling) and the entry-point wiring, and proposes conservative object/paged/refuse thresholds based on a measured element/attribute/text cost model of the legacy parser (§4.3, **proposed, to be frozen in S10**). Public API additions are listed in §4.5 as user-flagged items. |
 
 ## 1. What the current path does and where it violates the spec
 
@@ -143,10 +143,9 @@ Conclusions that drive the design:
    input chunk is used as written and the 8 MiB queued-expanded bound is enforced by the caller's output buffer (64 KiB) plus
    the quota ledger, not by input slicing.
 2. For stream-style engines (native `DecompressionStream`) the only available control is the write size, because the engine owns
-   the output queue: Chromium inflated a whole write eagerly (measured), Node and Bun lazily. The native adapter therefore
-   must (a) write at most 4,096 compressed bytes at a time, (b) count output as it is read and cancel at the limit, and (c) be
-   treated as bounded only up to `write size x 1032 + engine carry`, i.e. the port has to *account* what it actually holds
-   rather than assume. 4 KiB writes cost almost nothing (Chrome native 1,298 MiB/s versus 1,578 at 256 KiB).
+   the output queue: Chromium inflated a whole write eagerly (measured), Node and Bun lazily. Together with the termination
+   result in §2.4.2 this is why native is excluded from the v1 port. (For the record: 4 KiB writes cost almost nothing, Chrome
+   native 1,298 MiB/s versus 1,578 at 256 KiB.)
 3. Do not rely on any engine's laziness. Node and Bun are lazy; Chromium is eager. WebKit and Firefox are **unmeasured**.
 4. fflate hands over one chunk of unbounded size (269,704,688 bytes in one callback), so it cannot enforce a limit even when the
    callback throws.
@@ -180,9 +179,41 @@ So an unterminated or truncated stream is reported as success, and trailing byte
 
 Required port semantics (see §4.1): a part is complete only if the inflater returned `Z_STREAM_END` **and** the compressed bytes
 it consumed equal the central-directory compressed size exactly (F2 sheet: 42,842,268 consumed = 42,842,268 declared,
-measured). Anything else is a typed `parse-error`. The same checks are required of the native adapter (`DecompressionStream`
-reports truncation as a stream error but does not report trailing bytes, so the adapter must be given exactly `csize` bytes
-and must verify the produced size and CRC).
+measured). Anything else is a typed `parse-error`.
+
+Not every negative zlib status is corruption (`bufnoprogress.mjs`, pako low-level, Node): a step with `avail_in = 0` in the
+middle of a stream returns `Z_BUF_ERROR` (-5) with no progress; that means *need input*, not damage. A step with
+`avail_out = 0` returned `Z_OK` after consuming 1 input byte into internal state. After the last compressed byte, further empty
+steps returned `Z_STREAM_END` again for a terminated stream. So the port maps statuses as follows, and truncation is decided only
+by the caller at the end of the entry's compressed range:
+
+| zlib status | Port status | Meaning |
+|---|---|---|
+| `Z_OK` (0) | `progress` | consumed and/or produced bytes |
+| `Z_BUF_ERROR` (-5), `avail_in === 0` | `need-input` | feed the next range read; not an error |
+| `Z_BUF_ERROR` (-5), `avail_out === 0` | `need-output` | drain the output buffer; not an error |
+| `Z_STREAM_END` (1) | `end` | final block decoded; caller checks consumed bytes, size and CRC |
+| `Z_DATA_ERROR` (-3), `Z_STREAM_ERROR` (-2), `Z_NEED_DICT` (2) | throws `parse-error` | corrupt or invalid raw stream |
+| `Z_MEM_ERROR` (-4) | throws `resource-limit` | allocation failure |
+| `need-input` while the entry's compressed range is exhausted | caller throws `parse-error` (truncated) | genuine truncation at final EOF |
+
+### 2.4.2 Native `DecompressionStream` termination differs per engine (measured)
+
+`native-term.mjs` (Bun, Node) and `nativeTerm()` in Chrome 155, each through `pipeThrough(new DecompressionStream('deflate-raw'))`:
+
+| Input | Bun 1.3.10 | Node 22.22.3 | Chrome 155 |
+|---|---|---|---|
+| Final stored block `ABC` + 3 junk bytes | **OK, "ABC"** | **OK, "ABC"** | TypeError |
+| `deflate("hello")` + `GARBAGE` | **OK, "hello"** | **OK, "hello"** | TypeError |
+| Non-final stored block only | TypeError | TypeError | TypeError |
+| Truncated deflate | TypeError | TypeError | TypeError |
+| Valid | OK | OK | OK |
+
+Bun and Node silently accept bytes after the final block; Chrome rejects them. Size and CRC checks cannot catch this (the junk is
+after the data), and an adapter cannot observe how many input bytes the engine actually consumed. **Decision: native
+`DecompressionStream` is excluded from the v1 `InflaterPort`.** Re-admission would need a spec amendment plus a strict runtime
+conformance probe (the five rows above, all with the Chrome results) that must pass on the running engine before it is used,
+and the same probe in the S10 browser matrix. WebKit and Firefox are unmeasured.
 
 Low-level API cost (F2, 64 KiB output buffer, 256 KiB input): 1,171 MiB/s Bun / 586 Node; with CRC 704 / 460; 16 KiB buffer
 1,118 / 566; 256 KiB buffer 1,184 / 620; peak RSS about 70 MB. It is as fast as the high-level class.
@@ -206,7 +237,7 @@ Low-level API cost (F2, 64 KiB output buffer, 256 KiB input): 1,171 MiB/s Bun / 
 Measured container results: the in-repo reader parsed F2/F4 central directories in 0.35-3 ms. fflate `Unzip` decoded F2 in 3.0 s
 on Bun (the JSC slowness again) and F4 in 0.36 s on Node.
 
-ZIP64 and EOCD validation matrix (`zip64-matrix.mjs`, Bun and Node, 18 of 18 cases pass). The first prototype was too
+ZIP64 and EOCD validation matrix (`zip64-matrix.mjs`, Bun and Node, **23 of 23** cases pass after the round-2 fixes). The first prototype was too
 generous and a review found two real defects, now fixed and re-tested:
 
 - It looked for the ZIP64 locator only inside the 64 KiB tail buffer, so a **valid ZIP64 archive with a 65,535-byte comment**
@@ -216,13 +247,18 @@ generous and a review found two real defects, now fixed and re-tested:
   disks at most 1; ZIP64 EOCD signature, record size at least 44 and inside the file; ZIP64 EOCD disk numbers 0; entries on
   this disk equal total entries (also for the classic EOCD); the central directory must end at or before the structure that
   follows it (ZIP64 EOCD or classic EOCD).
+- Round 2: the ZIP64 branch still accepted classic EOCD `diskNo = 1` or `cdDisk = 1` next to ZIP64 sentinels, and a locator with
+  total disks 0. Now the locator must declare **exactly one** disk, classic disk fields must be 0 or the `0xFFFF` sentinel, and
+  every non-sentinel classic value (entry counts, directory size and offset) must equal the ZIP64 record.
 
 | Case | Reader | `unzip -t` / Python `zipfile` |
 |---|---|---|
 | Valid classic; valid classic with 65,535-byte comment | accept, CRC and size of every entry verified | both OK |
 | Valid ZIP64 (central sentinels, ZIP64 extras, local extra of a different layout) | accept | both OK |
 | **Valid ZIP64 with 65,535-byte comment** | **accept** (was rejected) | both OK |
-| ZIP64: locator disks = 2; locator disk = 1; ZIP64 EOCD disk = 1; cd-disk = 3 | reject `unsupported` | n/a (forged) |
+| ZIP64: locator disks = 2; **locator disks = 0**; locator disk = 1; ZIP64 EOCD disk = 1; cd-disk = 3; **classic `diskNo = 1` with sentinels; classic `cdDisk = 1` with sentinels** | reject `unsupported` | n/a (forged) |
+| ZIP64 with a non-sentinel classic total that disagrees (5 vs 2) | reject `parse-error` | n/a |
+| ZIP64 with a non-sentinel classic total that agrees (2) | accept | both OK |
 | ZIP64: entries-this-disk != total; record size 10; record size 2^30; ZIP64 EOCD offset beyond locator; cdOff overlapping ZIP64 EOCD | reject `parse-error` | n/a |
 | Classic: disk 1; cd-disk 1; entries-this-disk != total; cdOff beyond EOCD | reject | n/a |
 
@@ -272,13 +308,12 @@ parsed a jsdom Blob correctly. Consequence: the range-source abstraction must be
   pin the exact version (`"pako": "1.0.11"`, not a range), wrap the three imports in one file, add a conformance test over the
   §2.4.1 termination table, and keep the port so a different inflater is a one-file swap. There are no bundled types and no
   `@types/pako` in `node_modules`: a local declaration for the three modules is needed in the implementation PR.
-- Native `DecompressionStream` is a second implementation of the same port (feature-detected), off by default until
-  Chromium, WebKit/Safari and Firefox bounded-write results exist. Its win (1.5-2 GiB/s) is irrelevant while the tokenizer tops
-  out near 140 MiB/s.
+- Native `DecompressionStream` is **not** part of the v1 port (§2.4.2: Bun and Node accept trailing junk after the final block).
+  Its speed (1.5-2 GiB/s) would be irrelevant anyway while the tokenizer tops out near 140 MiB/s.
 - fflate is rejected for the inflater (unbounded callback chunk, 8x slower on JSC) and for the container (no random access, no
   declared sizes for data-descriptor entries).
-- If zero new dependency declarations were required, native-only is viable on Chromium (measured) with writes of at most 4 KiB
-  and the output accounting described in §2.4, and unmeasured elsewhere.
+- A zero-dependency native-only design is therefore not viable: termination cannot be proven on Bun/Node-like engines, and
+  WebKit/Firefox are unmeasured.
 
 ### 2.8 Network spooling (S1.1 scope: plan S1.1 requires it)
 
@@ -416,11 +451,26 @@ treats different consumers differently:
 | Worksheet `sheetData` rows and cells | The tree is walked with `getChildren(data, 'sheetData')` / `getChildren(sheetData, 'row')` (`parse.ts:420-421`); nothing unwraps `AlternateContent`. Verified: a worksheet whose `sheetData` sits inside `mc:AlternateContent/mc:Choice` yields 0 `sheetData` nodes (`cur-probe.mjs`), so those cells are **silently dropped** and the sheet looks blank. | The tokenizer consumer tracks `AlternateContent` depth. If the subtree contains `sheetData`, `row` or `c`, the import ends `incomplete` with typed `unsupported` (a diagnostic with part id and offset), because spec §4.3.8 forbids publishing a complete blank source. Other content inside `AlternateContent` is skipped with a counted low-severity diagnostic. |
 | `sharedStrings.xml` `si` | Same tree walk (`parse.ts:40-58`); `si` inside `AlternateContent` is ignored. | Same rule as sheetData: `si` inside `AlternateContent` makes the import `incomplete`/`unsupported`. |
 | `styles.xml` (fonts, fills, borders, numFmts, cellXfs) | Tree walk in `parseStyles`; AlternateContent not unwrapped. | Skip with a counted diagnostic; `incomplete`/`unsupported` if the skipped subtree contains an element that populates `Styles`. |
-| Worksheet-level structure (cols, merges, hidden rows, tables, hyperlinks, `extLst`) | Same tree walk; unknown or wrapped elements ignored. | Collected from the worksheet token stream into compact records (§4.3.7). Wrapped elements: skipped with a counted diagnostic (same visible result as today, but reported). |
-| Drawings (`xl/drawings/*.xml`, anchors) | `selectedAlternative` (`xlsx/drawing.ts:154-171`) evaluates `Choice` branches in order, skipping any whose `Requires` prefixes are not supported (`['a','xdr','c','dgm','dsp','ink']`), takes the first available one, and only then the `Fallback` (`drawing.ts:163` Choice with supported `Requires`, `:168` Fallback); nesting is depth-limited (`MAX_COMPATIBILITY_DEPTH`). | **No reimplementation.** Drawing parts are small bounded parts that go through the existing tree path (`parseWorksheetDrawings`) under a per-part byte cap (proposed 8 MiB on D, 4 MiB on M, enforced while inflating); over the cap the drawing is omitted with a typed `resource-limit` diagnostic, never silently. |
+| Worksheet-level structure (cols, merges, hidden rows, tables, hyperlinks, `extLst`) | Same tree walk; unknown or wrapped elements ignored. | Collected from the worksheet token stream into compact records (§4.3.7). If an `AlternateContent` subtree contains a structure-bearing element (`mergeCells`/`mergeCell`, `tableParts`/`tablePart`, `drawing`, `legacyDrawing`, `cols`, row `hidden`/outline metadata), the affected `StructuralResult` domain is marked **incomplete** (see below). Purely ignorable content (unknown extension elements) is skipped with a counted diagnostic. |
+| Drawings (`xl/drawings/*.xml`, anchors) | `selectedAlternative` (`xlsx/drawing.ts:154-171`) evaluates `Choice` branches in order, skipping any whose `Requires` prefixes are not supported (`['a','xdr','c','dgm','dsp','ink']`), takes the first available one, and only then the `Fallback` (`drawing.ts:163` Choice with supported `Requires`, `:168` Fallback); nesting is depth-limited (`MAX_COMPATIBILITY_DEPTH`). | **No reimplementation.** Drawing parts go through the existing tree path (`parseWorksheetDrawings`) under a per-part byte cap (proposed 8 MiB on D, 4 MiB on M, enforced while inflating) and the §4.3 element model. Over the cap, the drawing's rendering is omitted with a typed `resource-limit` diagnostic, but its **anchors are still extracted** by a streaming pass over the anchor elements (`oneCellAnchor`/`twoCellAnchor`/`absoluteAnchor` with `from`/`to`/`ext`, a bounded record per anchor); if even that is impossible (anchor count over the cap, malformed part), the drawings domain is marked **incomplete**. |
+
+Structural completeness rule (spec §4.5). Merges, tables, spills and drawing anchors feed `StructuralResult` (`contracts.ts`:
+`completeness`, `merges`, `tables`, `spills`, `drawings`, `missing`). Anything the importer skipped or omitted that could carry
+structure must never turn into a *known-empty* guard result:
+
+- an `AlternateContent`-wrapped merge, table part or drawing reference, a drawing part over the cap whose anchors could not be
+  extracted, a table part over its cap, or a structure part that failed to parse sets the sheet's `StructuralResult.completeness`
+  to `'incomplete'`, lists the affected rectangle in `missing` (the whole sheet extent when the rectangle is unknown, which is the
+  case for wrapped merges and unreadable anchors), and attaches the typed `SourceFailure`;
+- the structural query then answers `incomplete` for any rect intersecting `missing`, so sort and filter over that domain are
+  blocked (spec §4.5 "incomplete structural metadata blocks affected sort/filter until complete"), while selection and
+  highlighting stay available;
+- an omitted drawing keeps its anchor and extent whenever the streaming anchor pass succeeded, so its row bounds still guard
+  sort/filter even though the picture itself is not rendered.
 
 Intentional differences from the current parser, to be listed in the implementation PR: (a) AlternateContent-wrapped
-`sheetData`/`si`/styles become `incomplete` instead of a silently blank result; (b) every skipped MC subtree is counted in a
+`sheetData`/`si`/styles become `incomplete` instead of a silently blank result, and wrapped or unreadable structure makes the
+structural domain `incomplete` instead of silently empty; (b) every skipped MC subtree is counted in a
 diagnostic; (c) drawing parts above the cap are diagnosed; (d) references longer than 32 characters and DTDs are typed errors
 (§3.3); (e) invalid UTF-8 is decoded with replacement characters only as an **external-input policy** (a counted diagnostic);
 the internal string representation stays UTF-16 code units and never goes through a lossy encoding. Prefix handling matches the
@@ -482,17 +532,19 @@ export function readZipInventory(src: RangeSource, limits: ZipLimits, signal?: A
 
 export interface ExpandedBudget { charge(bytes: number): void } // throws PackageError('resource-limit'); quota.ts implements it
 
-/** Pull-style inflater with caller-owned output. Sync ports (pako low-level) return values; async ports (native) return promises. */
-export interface InflateStep { status: 'more' | 'end'; inConsumed: number; outProduced: number }
+/** Pull-style inflater with caller-owned output. The v1 port is the synchronous pako low-level adapter; the signature allows
+ * promises so tests can drive an async double through the same conformance suite (native is excluded, §2.4.2). */
+export interface InflateStep { status: 'progress' | 'need-input' | 'need-output' | 'end'; inConsumed: number; outProduced: number }
 export interface InflateTotals { ended: boolean; totalIn: number; totalOut: number }
 export interface InflaterPort {
-  /** Consume input[inPos..], write AT MOST out.length bytes into out. Corrupt data throws PackageError('parse-error'). */
+  /** Consume input[inPos..], write AT MOST out.length bytes into out. Z_BUF_ERROR maps to need-input/need-output (not an error);
+   * corrupt data throws PackageError('parse-error'). */
   step(input: Uint8Array, inPos: number, out: Uint8Array): InflateStep | Promise<InflateStep>
   /** Called once when the entry's compressed range is exhausted. `ended` is true only if the final block was decoded. */
   finish(): InflateTotals | Promise<InflateTotals>
   dispose(): void | Promise<void>
 }
-export type InflaterFactory = () => InflaterPort // default: pako low-level; optional native adapter (writes <= 4096 B, exact csize input); tests inject bursty/async doubles
+export type InflaterFactory = () => InflaterPort // v1: pako low-level only; tests inject bursty/async doubles
 
 export interface PartReadOptions {
   signal: AbortSignal; budget: ExpandedBudget; verifyCrc?: boolean /* default true */
@@ -509,10 +561,10 @@ export function readPartBytes(src: RangeSource, entry: ZipEntryInfo, maxBytes: n
 
 Behavior: stored parts stream by range reads with the same budget; generator `return()`/abort calls `dispose` and stops range
 reads; the first byte beyond the declared size, the maximum part size or the ratio limit is a typed error raised **before** it is
-yielded. The default factory wraps `pako/lib/zlib/inflate.js` (`inflateInit2(strm, -15)`, `Z_NO_FLUSH`; `Z_STREAM_END` maps to
-`end`, other negative codes to `parse-error`, `finish()` reports `ended` from the last status). The native adapter implements the
-same port over `DecompressionStream`: it is given exactly `compressedSize` bytes, writes at most 4,096 at a time, and verifies
-output size and CRC itself, because the engine does not report trailing bytes.
+yielded. The default factory wraps `pako/lib/zlib/inflate.js` (`inflateInit2(strm, -15)`, `Z_NO_FLUSH`) with the status mapping
+of §2.4.1: `Z_BUF_ERROR` is `need-input`/`need-output`, never corruption; `openPart` raises truncation only when the inflater
+needs input and the entry's compressed range is exhausted; `finish()` reports `ended` only after `Z_STREAM_END`. Any compressed
+byte left in the entry's range after `end` is a `parse-error` (trailing data).
 
 ### 4.2 `src/core/xml-stream.ts`
 
@@ -532,15 +584,25 @@ export function localName(qname: string): string // cached prefix strip
 Grammar contract (chunk-independent, §3.3): references are `&` + at most 32 `[A-Za-z0-9#]` characters + `;`; bare `&`, over-long
 or unterminated references are `parse-error`; unknown `&name;` stays literal; duplicate attributes and DTDs are errors.
 
-### 4.2.1 `src/core/spool.ts` (network and non-seekable input; S1.1 scope)
+### 4.2.1 `src/core/spool.ts` (network and non-seekable spreadsheet input; S1.1 scope)
 
 ```ts
 export type SpoolKind = 'memory' | 'opfs' | 'indexeddb'
+/** The spooled bytes plus explicit cleanup ownership. Exactly one owner (the load attempt, then the session/document). */
+export interface SpooledSource {
+  readonly blob: Blob             // seekable; file-backed for opfs/indexeddb
+  readonly size: number           // actual bytes accepted, never the advertised length
+  readonly kind: SpoolKind
+  release(): Promise<void>        // idempotent; removes the OPFS file / IDB database / memory chunks
+}
 export interface SpoolSink {
   readonly kind: SpoolKind
-  append(chunk: Uint8Array, signal?: AbortSignal): Promise<void> // resolves only when the chunk is durably accepted: THIS is the backpressure point
-  finish(): Promise<Blob>   // seekable; file-backed for opfs/indexeddb. Never called on a partial spool.
-  abort(): Promise<void>    // removes every temporary byte (OPFS file, IDB database, memory)
+  /** Checks ACTUAL accepted bytes against maxBytes on every call (the advertised length is only a hint) and throws
+   * PackageError('resource-limit') before accepting the chunk that would cross it. Resolves when durably accepted:
+   * this is the backpressure point. */
+  append(chunk: Uint8Array, signal?: AbortSignal): Promise<void>
+  finish(): Promise<SpooledSource> // only on a complete download; the returned handle owns cleanup from here on
+  abort(): Promise<void>           // failure/cancel before finish(): removes every temporary byte
 }
 export interface StorageEnv {                     // injectable, so tests never touch a real browser
   memoryLimitBytes: number                        // proposed 32 MiB D / 16 MiB M (§4.3)
@@ -548,26 +610,41 @@ export interface StorageEnv {                     // injectable, so tests never 
   indexedDb?: { available(): boolean; create(name: string): Promise<SpoolSink> }
   estimate?(): Promise<{ quota: number; usage: number }>
 }
-export function openSpool(env: StorageEnv, hint: { expectedBytes?: number }, signal: AbortSignal): Promise<SpoolSink>
+export function openSpool(env: StorageEnv, opts: { maxBytes: number; advertisedBytes?: number }, signal: AbortSignal): Promise<SpoolSink>
 ```
+
+`maxBytes` is the paged-path compressed cap (256 MiB D / 128 MiB M, §4.3). `Content-Length` (or a `Blob.size` reported by a
+remote wrapper) is an **untrusted hint**: it only picks the starting backend, and every `append` re-checks the actual running
+total against both `maxBytes` and the current backend's limit.
 
 Selection (all steps typed, none silent):
 
-1. `expectedBytes` known and at most `memoryLimitBytes`: memory.
-2. Otherwise, or if an unknown-length memory spool crosses the limit (promotion copies at most `memoryLimitBytes` once): OPFS if
-   probed available, and `estimate()` shows at least `max(2 x expected, 64 MiB)` free.
-3. Else IndexedDB chunk blobs, written in transactions of at most 8 MiB collected before the transaction opens (measured: awaiting
-   between `put` calls auto-commits the transaction, §2.8), under the same quota check.
-4. Else, if the total is at most the hard in-memory cap (proposed 2 x `memoryLimitBytes`), memory.
-5. Else a typed failure: `quota` when a backend exists but space is insufficient, `storage-error` when none is available. No
-   truncated Blob is ever published, no unbounded RAM fallback, and the message tells the user what to do.
+1. Advertised length known and at most `memoryLimitBytes`: start in memory. If the actual total crosses `memoryLimitBytes`
+   (lying or absent length), promote once to a persistent backend (copying at most `memoryLimitBytes`), under the rules below.
+2. Persistent backend: OPFS if probed available and `estimate()` shows at least `max(2 x advertisedOrActual, 64 MiB)` free;
+   else IndexedDB chunk blobs, written in transactions of at most 8 MiB collected before the transaction opens (measured:
+   awaiting between `put` calls auto-commits the transaction, §2.8), under the same quota check.
+3. No persistent backend, or the quota check fails: continue in memory only while the actual total stays at or below the hard
+   in-memory cap (proposed 2 x `memoryLimitBytes`).
+4. Otherwise a typed failure: `quota` when a backend exists but space is insufficient, `storage-error` when none is available,
+   `resource-limit` when `maxBytes` is crossed. The partial spool is aborted (deleted); no truncated Blob is ever published and
+   there is no unbounded RAM fallback. The message tells the user what to do.
 
-Temp names are `officeview-spool-<random>`; `abort`/`release` remove them, and a best-effort sweep at session start removes
-`officeview-spool-*` entries older than 24 h left by crashed tabs (proposed). `stream.ts` gets
-`spoolSource(source, env, { signal, onProgress, onProtection, onWatermark }) -> { blob, size }`: it keeps the exact Response,
-Request, `{url, headers, credentials}` and cross-realm handling of `readSource`, calls the protection and watermark listeners
-before the first byte as today, reads one chunk ahead at most, and awaits `append` before the next read (so a slow sink pauses
-the download).
+Cleanup ownership, through every outcome:
+
+| Outcome | Who releases | When |
+|---|---|---|
+| Download failure, cancellation, `maxBytes`/quota failure before `finish()` | the load attempt | immediately, via `abort()` |
+| Admission refuses after `finish()` | the load attempt | immediately, `SpooledSource.release()` |
+| Cancellation or source replacement after `finish()` (stale owner) | `useOfficeFile` cleanup | immediately |
+| Object path succeeded | the loaded document's owner | on document close: `<OfficeFile>` unmount or source change; the legacy `OfficePackage` keeps the bytes until then |
+| Paged path succeeded | the `ImportSession` | `session.release()` (document close) releases the spool after the session's own pages |
+| Crash or tab kill | next session start | best-effort sweep of `officeview-spool-*` entries older than 24 h (proposed) |
+
+`stream.ts` gets `spoolSource(source, env, { signal, maxBytes, onProgress, onProtection, onWatermark }) -> SpooledSource`: it keeps
+the exact Response, Request, `{url, headers, credentials}` and cross-realm handling of `readSource`, calls the protection and
+watermark listeners before the first byte as today, reads one chunk ahead at most, and awaits `append` before the next read (so a
+slow sink pauses the download).
 
 ### 4.3 `src/xlsx/storage/quota.ts` and admission (proposed, to be frozen in S10)
 
@@ -585,21 +662,52 @@ export type Admission = { mode: 'object' | 'paged'; counters: AdmissionCounters 
 export function admit(profile: ProfileId, compressedBytes: number, inventory: ZipInventory): Admission
 ```
 
-The spec (§12.3, §12.4) gives only throughput and aggregate budgets, so this note proposes the numbers below. Derivation:
-the measured current object path costs a **tree amplification of about 33x** the expanded XML characters (heap, 50k-row prefix:
-+566 MB for 17.0 M chars) and about **910 bytes per populated cell** at peak (F2: 7,154 MiB peak RSS for 8,238,808 cells; JSC
-numbers, not yet browser heap). The object path may use at most half the worker budget (256 MiB on D, 128 MiB on M), which
-leaves the other half for the caller's document, columns and caches; 256 MiB / 33 gives about 7.7 MiB of expanded XML, rounded
-down for margin.
+The spec (§12.3, §12.4) gives only throughput and aggregate budgets, so this note proposes the numbers below.
+
+**Why bytes are not a bound.** An earlier revision bounded the object path by expanded XML bytes using a 33x amplification
+taken from F2. Review found a counterexample, re-measured here: a stored worksheet of 125,000 metadata-only rows
+(`<row r="N"/>`, 2,016,163 B of XML including the other parts, zero cells, zero strings) passed the old Mobile guards, yet the
+legacy parse grew peak RSS by **222 MB on Bun/JSC (113x the XML bytes) and 116 MB on Node/V8 (61x)**, with 89-92 MB (JSC) / 35 MB
+(V8) still retained afterwards. Across shapes, peak RSS per XML byte ranged from 12x to 191x, so bytes cannot bound the legacy
+parser. What it allocates scales with **elements, attributes and text**, which the verification pass can count exactly before
+anything is retained.
+
+**Measured element model** (`gen-shapes.py`, `legacy-measure.mjs`: legacy `OfficePackage.load` + `parseXlsx`, peak RSS delta over
+the pre-parse RSS, Bun 1.3.10 and Node 22.22.3). Inputs: 14 adversarial shapes built to stress one allocation kind each
+(metadata-only rows at 31k/125k/500k, rows with 8 attributes, 8-cell rows, cells with 6 attributes, 300k unknown empty elements,
+30k unknown elements with 16 attributes, 80k merges, 16,384 cols, 30k `cellXfs` records, 100k shared strings, one 2 M-character
+inline string, an empty sheet), the 9 real xlsx files of the fetched corpus, and the 5 committed small viewer fixtures: 28
+packages x 2 engines = 56 runs. The conservative envelope
+
+```
+predictedPeak = 64 MiB + 1,750 B x elements + 128 B x attributes + 64 B x textChars
+```
+
+is at or above the measured peak in **all 56 runs**; the tightest is 80k merges on JSC (169.7 MB measured, 207.3 MB predicted,
+ratio 0.82); the counterexample is 222.4 MB measured against 287.9 MB predicted. The 64 MiB constant covers heap-growth steps on
+small inputs (an empty sheet already costs 4-8 MB, 31k rows 89 MB on JSC). This is an empirical envelope with about 20% headroom on
+the worst shape, **not a proof**: the coefficients are JSC/V8 process measurements, browser heaps are unmeasured, and S10 must
+re-measure them in Chrome and Safari before freezing. It is enforceable, because every input to it is counted exactly by the
+verification pass before the legacy parser allocates anything, and the per-element cost is bounded by the attribute cap (128 per
+element), the token cap (1 MiB) and the depth cap (256).
+
+The object path may use at most half the worker budget (256 MiB on D, 128 MiB on M); the rest is left for the caller's document,
+columns and caches.
 
 | Guard (all must hold for **object**) | D | M | Basis |
 |---|---:|---:|---|
+| **`predictedPeak`** over all non-media XML parts (elements, attributes, text counted by the verification pass) | **≤ 256 MiB** | **≤ 128 MiB** | Measured envelope above. The 125k-row counterexample predicts 287.9 MiB: paged on both profiles |
 | Compressed package bytes | 32 MiB | 16 MiB | The legacy path holds the whole compressed buffer plus JSZip; equals the in-memory spool limit |
-| Sum of declared AND actual expanded bytes of non-media parts | 6 MiB | 3 MiB | 33x amplification keeps the tree at 198 / 99 MiB, under half the worker budget (extrapolated from JSC, to be verified in a browser) |
-| One part, declared and actual | 4 MiB | 2 MiB | Largest single tree |
-| Populated cells (exact count from the verification pass) | 100,000 | 50,000 | 910 B/cell gives 91 / 46 MB; also matches the F1 100,000-cell profile |
-| Unique shared strings; any one string or inline string | 50,000; 64 KiB | 25,000; 64 KiB | Soft threshold from spec §4.3.4 |
+| Sum of declared AND actual expanded bytes of non-media parts | 6 MiB | 3 MiB | Keeps the verification pass and the legacy strings small; no longer the memory bound |
+| One part, declared and actual | 4 MiB | 2 MiB | Largest single string handed to the legacy parser |
+| Rows; populated cells; unique shared strings; merges; style records (`xf`, `font`, `fill`, `border`, `numFmt`, `dxf`) | 100,000; 100,000; 50,000; 20,000; 20,000 | 50,000; 50,000; 25,000; 10,000; 10,000 | Secondary caps so no single allocation kind dominates; the element model is the binding guard in practice (M allows about 38,000 elements beyond the constant) |
+| Attributes per element; any one string or inline string | 128; 64 KiB | 128; 64 KiB | Tokenizer cap; spec §4.3.4 soft threshold |
 | Entries; per-part ratio (parts over 1 MiB expanded) | 1,024; 200:1 | 512; 200:1 | F2/F3/F4 sheets are 6:1 to 9:1 and shared strings 22:1; deflate's maximum is 1032:1 |
+
+How the measured shapes fall: 16,384 cols (97 MiB predicted) and 31k metadata rows (120 MiB) stay object on both profiles; 80k
+merges (207 MiB) and the 2 M-character string (186 MiB) are object on D and paged on M; 125k metadata rows (288 MiB), 30k
+8-cell rows (963 MiB), 100k shared strings (434 MiB) and 500k rows (960 MiB) are paged on both. The real corpus files and the
+small fixtures all predict 64-72 MiB and stay object.
 
 | Guard (all must hold for **paged**, otherwise refuse) | D | M | Basis |
 |---|---:|---:|---|
@@ -618,15 +726,16 @@ Pre-retention guards on the small (object) path, per spec §4.2 ("never build a 
 
 1. Declared central-directory sums and entry counts are checked before any data is read (declared sizes are untrusted).
 2. A **verification pass** inflates every non-media part once through `openPart` with a 6 MiB (D) / 3 MiB (M) `ExpandedBudget`
-   and runs the real tokenizer to count cells, unique strings, longest text run and elements. It checks CRC, exact size and
-   exact end of stream, and aborts at the first cap crossing. Cost on a cap-sized input: about 6 MiB at 90+ MiB/s, tens of ms
-   (extrapolated from the §3.2 throughput).
-3. Only after every counter passes does the legacy parser start (it reads the same parts again through JSZip; sizes are now
-   known to match). The only allocations before that decision are the compressed buffer (at most the cap), a 64 KiB inflate
-   buffer, the tokenizer carry (at most 1 MiB) and the counters, so **a restart never follows an oversized allocation**: when
-   a counter trips, the session switches to paged mode from the retained Blob with nothing large to discard, or refuses.
-4. There is no mid-parse switch: the verification pass is exact, so none is needed. The legacy parse's own peak is bounded by
-   the 33x derivation above and is checked by a browser measurement in S10.
+   and runs the real tokenizer over it, counting elements, attributes, text characters, rows, cells, unique strings, merges, style
+   records and the longest text run, and maintaining `predictedPeak` incrementally. It checks CRC, exact size and exact end of
+   stream, and **aborts at the first counter that crosses its cap**. Measured cost: the tokenizer runs at 90+ MiB/s, so a
+   cap-sized input takes tens of ms (extrapolated from §3.2).
+3. Only after every counter passes does the legacy parser start (it reads the same parts again through JSZip; sizes are now known
+   to match). Before that decision the only allocations are the compressed buffer (at most the cap), a 64 KiB inflate buffer, the
+   tokenizer carry (at most 1 MiB) and the counters, so **a restart never follows an oversized allocation**: when a counter trips,
+   the session switches to paged mode from the retained source with nothing large to discard, or refuses.
+4. No mid-parse switch is needed, because the pass is exact. The residual risk is the envelope's coefficients themselves
+   (browser heaps unmeasured), which S10 re-measures; a coefficient increase only moves more files to paged mode.
 
 ### 4.4 `src/xlsx/storage/importSession.ts`
 
@@ -661,29 +770,46 @@ the orchestrator decision). Order of work: inventory, then `workbook.xml`/rels/`
 
 ### 4.5 Entry-point wiring and user-flagged items
 
-`loadOfficeFile(source, options)` and `<OfficeFile>` keep their signatures. Behind them (`OfficeFile.tsx`, `stream.ts`):
+`loadOfficeFile(source, options)` and `<OfficeFile>` keep their signatures. **Format detection happens before any spooling**, so
+DOCX, PPTX, ODT, RTF and anything unrecognized keep today's whole-buffer path byte for byte (including its behavior for large
+remote files); only sources detected as spreadsheets enter the bounded path.
 
-1. **Classify the source.** Blob/File: use as the `RangeSource` directly (no spool, no read). `Uint8Array`/`ArrayBuffer`: wrap with
-   `bytesRangeSource`. `ReadableStream`, `Response`, `Request`, `{url, headers, credentials}`, or a promise of these: `spoolSource`
-   (§4.2.1), with the existing protection and watermark listeners fired before the first byte and `onProgress` driven by spooled
-   bytes.
-2. **RTF sniff** on the first bytes (unchanged), then ZIP inventory. Only a ZIP whose `[Content_Types].xml` (a bounded part) is
-   a spreadsheet goes through admission; every other format keeps today's whole-buffer path exactly as it is (docx, pptx, odt are
-   not bounded by S1.1; stated, not hidden).
-3. **Admission** (§4.3): `object` runs the verification pass and then the unchanged `OfficePackage` plus `parseXlsx`; `paged` opens
-   an `ImportSession`.
+1. **Seekable input** (Blob/File, `Uint8Array`/`ArrayBuffer`): read a 64 KiB prefix through the `RangeSource`, run the RTF check,
+   then the ZIP inventory and `[Content_Types].xml` (a bounded part) as today's `detectAndParse` does. Non-spreadsheet: the
+   existing path, unchanged.
+2. **Sequential input** (`ReadableStream`, `Response`, `Request`, `{url, headers, credentials}`, or a promise of these): start the
+   download exactly as `readSource` does today (same fetch, headers, credentials, protection and watermark listeners before the
+   first byte, same progress), hold the first chunks in memory up to a **64 KiB sniff prefix**, and classify it with
+   `sniffPackage(prefix)` (below). Non-spreadsheet or undetermined: continue with today's accumulate-everything path, the prefix
+   prepended, behavior unchanged. Spreadsheet: hand the prefix and the rest of the stream to `spoolSource` (§4.2.1).
+3. **Admission** (§4.3) for spreadsheets: `object` runs the verification pass and then the unchanged `OfficePackage` plus
+   `parseXlsx`; `paged` opens an `ImportSession`; `refuse` releases the spool and rejects with a typed error.
 4. **Result.** The internal entry returns `{ kind: 'document', document } | { kind: 'paged', session }`. Until the interactive
    viewer is wired (later packages), the exported `loadOfficeFile` and `<OfficeFile>` map `paged` and `refuse` to a typed
    rejection that names the applied limit.
 5. **Cancellation and staleness.** `useOfficeFile` creates one `AbortController` per source; cleanup aborts the download, the
-   spool, the verification pass and the session, in addition to the existing `cancelled` flag that already drops stale
-   protection/watermark/progress events and stale results. A replaced source cannot publish into the new owner.
+   spool, the verification pass and the session and releases the `SpooledSource` (§4.2.1 ownership table), in addition to the
+   existing `cancelled` flag that already drops stale protection/watermark/progress events and stale results.
+
+`sniffPackage(prefix)` (measured, `sniff.mjs`): walk local file headers from offset 0. If an entry is `[Content_Types].xml`,
+classify by its content types (deflated: inflate inside the prefix with the low-level port, output capped at 64 KiB; stored:
+read to `</Types>` when a data descriptor hides the size). If an earlier entry has a data descriptor and is deflated, inflate it
+inside the prefix to find its exact end (the port reports consumed bytes), skip the descriptor (12 or 16 bytes; a ZIP64 descriptor
+is 24, not yet handled), and continue. A part name under `xl/`, `word/` or `ppt/` also classifies. A stored entry with a data
+descriptor before the content types, or nothing conclusive inside the prefix, is `undetermined`, which keeps the legacy path.
+Results with prefixes of **4 KiB, 16 KiB and 64 KiB** over the 33 real packages available (9 xlsx, 11 docx, 10 pptx from the
+fetched corpus, plus the F2/F3/F4 spreadsheets): **33 of 33 classified correctly, 0 undetermined, 0 wrong** at every prefix size (6 corpus files
+start with `_rels/.rels` under a data descriptor and needed the inflate-to-skip step). The two non-ZIP Word lock files (`~$...`)
+in the corpus were classified `not-zip` and stay on the legacy path. A `Content-Type` response header is only a secondary hint and
+never overrides the sniff.
 
 User-flagged items (each needs explicit user visibility at the PR; none is added silently):
 
 1. New **direct dependency** `pako@1.0.11` (exact pin; license `MIT AND Zlib`), used through internal `lib/zlib/*` modules.
 2. **Behavior change for oversized xlsx**: input that today attempts a (possibly multi-GB) legacy parse will instead fail fast
-   with a typed error until the viewer lands; small inputs are unchanged.
+   with a typed error until the viewer lands; small inputs are unchanged. Non-spreadsheet formats are **not** affected
+   (format detection precedes spooling); a remote spreadsheet over the memory cap with no storage backend now fails with a
+   typed `storage-error`/`quota` instead of being accumulated in RAM.
 3. Any **new public export or `OfficeFileState` variant**: none is proposed in S1.1 (`ImportProgress`, `PackageError`, spool types
    stay internal). If implementation shows one is required, it is raised first.
 4. `OfficePackage.fromBlob`: **not added**. If the implementer concludes it is necessary, it is an API addition to be flagged
@@ -702,12 +828,12 @@ User-flagged items (each needs explicit user visibility at the PR; none is added
   `constants.js`. **No other new dependency.** The dependency change belongs to the implementation PR only.
 - XML: in-repo tokenizer; `fast-xml-parser` stays for small documents and every non-large caller.
 - JSZip and `OfficePackage` stay for small documents and for docx/pptx/odt, untouched.
-- Native `DecompressionStream` adapter behind the same `InflaterPort`, off by default, enabled only after cross-browser
-  bounded-write evidence. Only that adapter needs the 4 KiB write cap.
+- Native `DecompressionStream` is **excluded** from the v1 port (§2.4.2); re-admission needs a spec amendment and a strict
+  runtime conformance probe.
 - **Constant adjustment against spec §4.3.4** (not §12.3): the default path uses the spec's 256 KiB input chunks unchanged; the
   8 MiB queued-expanded bound is enforced by a 64 KiB caller-owned output buffer (no single step can produce more than
-  64 KiB, and the ledger charges every step before the bytes are yielded). Only the optional native adapter deviates (writes of at most 4,096 compressed
-  bytes, because the engine owns its output queue). The spec's divergence note belongs in §4.3.4.
+  64 KiB, and the ledger charges every step before the bytes are yielded). With native excluded there is no remaining deviation
+  from the 256 KiB constant; the §4.3.4 note only needs to record that the queue bound is enforced by the output buffer.
 
 ### 5.2 Risks
 
@@ -717,15 +843,16 @@ User-flagged items (each needs explicit user visibility at the PR; none is added
    class. Mitigation: exact pin, one wrapper file, a conformance test over the §2.4.1 table, the port.
 3. Throughput headroom is measured on a desktop M-class machine only; page-encode and storage cost is unmeasured and will
    dominate. Do not claim a throughput SLA from this note.
-4. Chromium's eager `DecompressionStream` behavior (measured) and the unmeasured WebKit/Firefox behavior are why native is not
-   the default.
+4. Native `DecompressionStream` varies per engine (Chromium eager and strict about trailing bytes; Bun/Node lazy and lenient;
+   WebKit/Firefox unmeasured), which is why it is excluded.
 5. Safari/WebKit: nothing here was run in Safari or WebKit. Bun/JSC numbers are an engine-family proxy only. OPFS/IndexedDB
    spooling was measured in Chromium only.
 6. Tokenizer correctness hazards (escape boundaries, CR handling, partial comments, reference carry) were found by experiment
    or review; the production suite must include the chunk-split property tests and the malformed fuzz, not only examples.
 7. Deliberate behavior differences from the current parser (listed in §3.4): DTD rejected, references over 32 characters,
    AlternateContent-wrapped data becomes `incomplete`, typed errors instead of tree garbage.
-8. The admission numbers derive from JSC measurements of the legacy path and a half-budget assumption; they are proposals.
+8. The admission envelope is empirical (56 runs, worst 0.82 of predicted) from JSC/V8 process measurements, not browser heaps
+   and not a proof; S10 re-measures it. A remote spreadsheet with no storage backend over the memory cap now fails (user-flagged).
 9. `OfficePackage` is a public export; any change to `zip.ts` must be additive.
 
 ### 5.3 What S1.1 RED tests must assert
@@ -752,7 +879,11 @@ ZIP reader:
    non-final stored block only gives `parse-error` (truncated); final block followed by trailing bytes inside the entry's
    range gives `parse-error`; consumed bytes less or more than `compressedSize` give `parse-error`; empty input, truncated
    deflate and random garbage give `parse-error`; a valid stream gives `ended: true`, `totalIn === compressedSize`. The
-   high-level `pako.Inflate` answers (`err: 0`) must NOT be the oracle.
+   high-level `pako.Inflate` answers (`err: 0`) must NOT be the oracle. **`Z_BUF_ERROR` is not corruption**: feeding a valid
+   stream in 1-byte and empty steps (so steps return `need-input`) and with a 1-byte output buffer (`need-output`) still
+   completes with the right bytes; truncation is reported only when the entry's range is exhausted without `end`.
+5a. **Native exclusion**: the inflater factory used in production never constructs `DecompressionStream`; a conformance probe
+   over the §2.4.2 table exists as a test utility and must report "fails" for an engine that accepts trailing bytes (simulated).
 6. **Output bound is structural**: a bursty fake port that tries to expand every step 1029x is clamped by the contract
    (`outProduced <= out.length`; a port that violates it is rejected); with the real port assert the maximum bytes produced
    by any single step equals the output buffer size, never a function of the input chunk size.
@@ -783,12 +914,27 @@ XML tokenizer:
     typed `unsupported` (and the current parser's silent-blank result is pinned as the documented difference); `si` inside
     `AlternateContent` likewise; skipped non-data MC subtrees are counted; drawing parts keep their existing Choice-before-Fallback
     behavior through the unchanged `selectedAlternative` and are diagnosed above the byte cap.
+14a. **Structural completeness**: an `AlternateContent`-wrapped `mergeCells`, `tablePart` or `drawing` reference, a drawing part
+    over its cap whose anchors cannot be streamed, and a malformed table part each make `queryStructural` return
+    `completeness: 'incomplete'` with the affected rect (or the sheet extent) in `missing` and a typed `error`; a sort/filter over
+    an intersecting range is refused with the structural reason; selection stays allowed. An over-cap drawing whose anchors were
+    streamed keeps its anchor and row bounds in `drawings`. None of these ever yields `completeness: 'complete'` with empty
+    `merges`/`tables`/`drawings`.
 
 Spool and entry points (separately from part parsing, plan S1.1):
 
 15. Backend selection with an injected `StorageEnv`: known small length uses memory; unknown length promotes to OPFS at the
     limit; no OPFS uses IndexedDB; neither and over the hard cap gives typed `storage-error`; insufficient `estimate()` gives
-    typed `quota`; **no truncated Blob is ever returned**.
+    typed `quota`; **no truncated Blob is ever returned**. **Lying length**: a source advertising 1 KiB that delivers 40 MiB is
+    promoted or refused by the actual count on the `append` that crosses the limit, and `maxBytes` is enforced on every append
+    whatever `Content-Length` said.
+15a. **Ownership**: `finish()` returns a `SpooledSource`; each row of the §4.2.1 ownership table has a test asserting the fake
+    env's temp storage is gone after the stated event (download error, cancel, refusal, stale owner, document close after the
+    object path, `session.release()` after the paged path) and that `release()` is idempotent.
+15b. **Format detection first**: a remote DOCX and PPTX larger than the memory cap with **no** storage backend load exactly as
+    today (legacy path, no spool created); an xlsx is detected from the first 64 KiB, including packages whose first entry is a
+    deflated `_rels/.rels` with a data descriptor and packages with a stored `[Content_Types].xml` under a data descriptor;
+    undetermined prefixes keep the legacy path.
 16. Backpressure and pause/resume: while `append` is pending the source reader is not read further (assert at most one chunk
     ahead); resuming continues without loss; a fake IndexedDB that auto-commits transactions fails the test if chunks are not
     batched into one transaction.
@@ -796,10 +942,12 @@ Spool and entry points (separately from part parsing, plan S1.1):
 18. Cancellation during download: reader `cancel()` is called, spool aborted and removed; a replaced source's late chunks are
     dropped and cleaned; protection and watermark listeners fire before the first byte and only for the live owner; HTTP
     headers, credentials and `Request` options are forwarded exactly as today (fetch spy); progress throttling unchanged.
-19. Admission (§4.3): boundary tests at each cap minus one, equal and plus one for D and M; a small file with lying declared
-    sizes (1 MB inflating to 1 GiB) is stopped by actual counting; when a cell or string counter trips, the legacy parser
-    (`OfficePackage.xml`/`parseXlsx` spies) is **not** invoked and the ledger peak stays at or below the object-path cap (no
-    restart after an oversized allocation); refusals name the cap, value and part.
+19. Admission (§4.3): boundary tests at each cap minus one, equal and plus one for D and M, including the `predictedPeak`
+    envelope; **the 125,000 metadata-only row counterexample is routed to paged on both profiles** (predicted 287.9 MiB); a small
+    file with lying declared sizes (1 MB inflating to 1 GiB) is stopped by actual counting; when any counter trips, the legacy
+    parser (`OfficePackage.xml`/`parseXlsx` spies) is **not** invoked and the ledger peak stays at or below the object-path cap
+    (no restart after an oversized allocation); refusals name the cap, value and part. A browser-heap check of the envelope is
+    an S10 measurement, not a unit test.
 
 Import session (large mode):
 
@@ -821,56 +969,57 @@ Import session (large mode):
 
 ## 6. Remaining open questions
 
-Resolved by the orchestrator: browser-floor policy (native stays off until Safari/WebKit/Firefox evidence), CRC on, DTD refusal,
-UTF-16LE refusal, event-consumer file, network spool owned by S1.1 (see §7). Still open:
+Resolved by the orchestrator: browser-floor policy, CRC on, DTD refusal, UTF-16LE refusal, event-consumer file, network spool
+owned by S1.1 (see §7). Still open:
 
-1. **Minimum supported Safari/iOS.** Native `DecompressionStream('deflate-raw')` needs Chrome 103+, Firefox 113+, Safari 16.4+
-   (MDN, **unverified here**). It stays off by default regardless, so this only decides whether native can ever be enabled.
-2. **Admission numbers (§4.3)** are proposals derived from JSC measurements and a half-worker-budget rule; they need approval
-   now and browser confirmation in S10.
-3. **What `<OfficeFile>` shows for `paged`/`refuse` before the viewer lands.** This note proposes a typed rejection naming the
-   limit (user-flagged behavior change in §4.5). Alternative: keep attempting the legacy parse below some hard legacy cap.
-4. **Safari spooling.** Whether OPFS via a worker `createSyncAccessHandle` is acceptable as the Safari route (main-thread
+1. **Admission envelope (§4.3).** The element/attribute/text model and caps are proposals from 56 JSC/V8 runs; they need approval
+   now and Chrome/Safari heap confirmation in S10.
+2. **What `<OfficeFile>` shows for `paged`/`refuse` before the viewer lands.** This note proposes a typed rejection naming the
+   limit (user-flagged behavior change in §4.5).
+3. **Safari spooling.** Whether OPFS via a worker `createSyncAccessHandle` is acceptable as the Safari route (main-thread
    `createWritable` availability in Safari is unverified), and the IndexedDB composed-Blob read path (unmeasured).
-5. **200:1 ratio cap** on parts over 1 MiB: confirm it is acceptable for real spreadsheets with long runs of blank styled cells
-   (measured fixtures are 6:1 to 22:1; the cap is a proposal).
-6. **Out-of-order or duplicate `<row r>`/`<c r>`**: decided as refuse-with-diagnostic and fall back to the legacy path within
-   caps; confirm that "within caps" uses the object-path caps of §4.3.
-7. **Real-browser performance** with page encoding and storage included remains an S10 gate; this note's numbers stop at the
-   cell-event level on a desktop machine.
+4. **200:1 ratio cap** on parts over 1 MiB: confirm it is acceptable for real spreadsheets with long runs of blank styled cells
+   (measured fixtures are 6:1 to 22:1).
+5. **Sniff coverage.** ZIP64 data descriptors (24 bytes) in the sniff walk and stored-with-descriptor entries before the content
+   types are `undetermined` (legacy path). Acceptable for v1?
+6. **Real-browser performance** with page encoding and storage included remains an S10 gate.
 
-## 7. Orchestrator decisions on the open questions (2026-10-11), corrected after review
+## 7. Orchestrator decisions on the open questions (2026-10-11), corrected after two reviews
 
 Decided by the orchestrator so S1.1 can start; anything touching the public API surface or dependencies is flagged for the user at
-the final PR. Entries marked (corrected) replace the first version of that decision.
+the final PR. "(corrected)" marks entries that replace an earlier version; "(round 2)" marks changes from the second review.
 
-1. **Native inflater** stays behind the port and OFF by default; enabling it requires a real Safari/WebKit/Firefox bounded-write run
-   (S10 receipt). Minimum-browser policy is not decided here.
-2. **pako** (`1.0.11`, already locked through JSZip) becomes a direct dependency (exact pin) with a local type declaration, and is
-   used through its low-level `lib/zlib/*` modules (§2.7). Flagged for user visibility in the final PR.
+1. **Native inflater (round 2):** `DecompressionStream` is **excluded from the v1 `InflaterPort`**: Bun and Node accept a final
+   block followed by junk bytes (Chrome rejects it), so exact termination cannot be proven on every engine (§2.4.2). Re-admission
+   needs a spec amendment and a strict runtime conformance probe passing on the running engine plus the S10 browser matrix.
+2. **pako** (`1.0.11`, already locked through JSZip) becomes a direct dependency (exact pin) with a local type declaration, used
+   through its low-level `lib/zlib/*` modules with the §2.4.1 status mapping. Flagged for user visibility in the final PR.
 3. **CRC verification is on by default** in large mode.
 4. **Invalid UTF-8:** keep replacement-character decoding with a counted diagnostic (matches the current parser). This is an
    **external-input decoding policy only**; the internal string representation stays UTF-16 code units and never passes through a
    lossy encoding (spec §4.3.6). UTF-16LE parts: refuse with a typed diagnostic in v1.
 5. **DOCTYPE:** rejected in large mode with a typed diagnostic.
-6. **Object/paged/refuse thresholds (corrected):** the spec gives no admission numbers, so §4.3 proposes conservative ones
-   derived from the 512/256 MiB worker budgets and the measurements, with pre-retention counters. They are **proposed, to be
-   frozen in S10**. S1.2 does not own them.
+6. **Object/paged/refuse thresholds (corrected, round 2):** the spec gives no admission numbers, so §4.3 proposes them. The object
+   path is bounded by a measured element/attribute/text envelope counted exactly in the verification pass (bytes are not a
+   bound: the 125k metadata-row counterexample), plus secondary caps; all **proposed, to be frozen in S10**.
 7. **Event consumers** live in `src/xlsx/storage/sheetRecords.ts`; S1.2 defines the `PageSink` payload against `contracts.ts`
    lanes (S1.1 defines the port, §4.4).
-8. **Network spool (corrected):** plan S1.1 requires spooling and entry-point wiring. S1.1 owns backend selection (memory under a
-   threshold, OPFS where available, IndexedDB fallback, typed failure otherwise; §4.2.1) and the wiring behind the existing entry
-   points (§4.5). Measured in Chromium here; Safari/Firefox and mobile quota are S10 evidence. It is not deferred to S1.3.
+8. **Network spool (corrected, round 2):** S1.1 owns spooling and the entry-point wiring. Format detection runs **before**
+   spooling (64 KiB prefix sniff, §4.5), so non-spreadsheet formats keep today's path unchanged. Spreadsheet spools enforce actual
+   bytes on every append and return a `SpooledSource` with explicit `release()` ownership through success, refusal, cancellation
+   and document close (§4.2.1). Backends: memory under a threshold, OPFS where available, IndexedDB fallback, typed failure
+   otherwise.
 9. **Public API (corrected):** the large path is additive behind the existing entry points. `OfficePackage.fromBlob` is not added
-   in S1.1; **any** public API addition (new export, `OfficeFileState` variant, `OfficePackage.fromBlob`, new option) is listed as
-   a user-flagged item (§4.5) and raised before it is written.
-10. **Markup Compatibility (corrected):** per-consumer behavior in §3.4 (data inside `AlternateContent` is `incomplete`/`unsupported`
-    rather than silently blank; drawings keep the existing Choice-before-Fallback code). Out-of-order or duplicate `<row r>`/`<c r>`:
+   in S1.1; **any** public API addition is listed as a user-flagged item (§4.5) and raised before it is written.
+10. **Markup Compatibility (corrected, round 2):** per-consumer behavior in §3.4. Data inside `AlternateContent` is
+    `incomplete`/`unsupported`; wrapped or unreadable structure (merges, tables, drawing references, over-cap drawings whose
+    anchors cannot be streamed) marks the `StructuralResult` domain `incomplete`, blocking sort/filter per spec §4.5, and is never
+    a known-empty result. Drawings keep the existing Choice-before-Fallback code. Out-of-order or duplicate `<row r>`/`<c r>`:
     refuse with a typed diagnostic, falling back to the legacy path if within the object-path caps.
 11. Real-browser throughput with page encoding and storage included is an S10 gate; S1.1 asserts correctness and bounded memory only.
-12. **Inflater constants (corrected):** the default path keeps the spec's 256 KiB input chunks; the bound comes from a caller-owned
-    output buffer (§2.4, §5.1). Only the optional native adapter writes at most 4,096 compressed bytes. This is a **spec §4.3.4**
-    adjustment (the chunk/queue constants live there), recorded as a divergence note in §4.3.4 when S1.1 merges, not in §12.3.
+12. **Inflater constants (corrected, round 2):** the v1 path keeps the spec's 256 KiB input chunks; the queue bound comes from a
+    caller-owned 64 KiB output buffer (§2.4, §5.1). With native excluded there is no write-size deviation; the spec §4.3.4 note only
+    records how the bound is enforced.
 
 ## 8. Reproduction and artifacts
 
@@ -881,9 +1030,11 @@ Experiments live outside the repo in `/tmp/iv-s11-spike` (ephemeral), and nothin
   `exp/cells.mjs` cell assembler; `exp/pako-low.mjs` low-level pull inflater.
 - `exp/inflate-bench.mjs`, `exp/low-bench.mjs`, `exp/bomb.mjs`, `exp/pako-push-max.mjs`, `exp/pako-term.mjs`, `exp/pako-low-test.mjs`,
   `exp/tok-bench.mjs`, `exp/e2e-low.mjs` (and the earlier `e2e-pako.mjs`), `exp/ss-fidelity.mjs`, `exp/parity.mjs`,
-  `exp/tok-fuzz.mjs`, `exp/limits.mjs`, `exp/zip64-matrix.mjs`, `exp/cur-probe.mjs`, `exp/current-path.mjs`, `exp/cdp-run.mjs` plus
+  `exp/tok-fuzz.mjs`, `exp/limits.mjs`, `exp/zip64-matrix.mjs`, `exp/cur-probe.mjs`, `exp/current-path.mjs`, `exp/native-term.mjs`,
+  `exp/bufnoprogress.mjs`, `exp/sniff.mjs`, `exp/gen-shapes.py` + `exp/legacy-measure.mjs` (element model; Node run via a
+  `bun build --target=node` bundle), `exp/cdp-run.mjs` plus
   `exp/web/bench.html` for the Chrome runs (headless Chrome over CDP, `DOM.setFileInputFiles` so the source is a real file-backed
-  `File`; includes the OPFS and IndexedDB spool probes).
+  `File`; includes the OPFS and IndexedDB spool probes and `nativeTerm()`).
 - Fixtures: `bun scripts/generate-viewer-fixtures.ts --out <dir> --fixtures F2,F3,F4 --scale full` (from
   `feature/interactive-viewer`; this branch's base does not yet contain the generator).
 - `fflate@0.8.3` was obtained with `npm pack` into `/tmp/iv-s11-spike/deps` for measurement only; nothing was installed in the
@@ -892,5 +1043,5 @@ Experiments live outside the repo in `/tmp/iv-s11-spike` (ephemeral), and nothin
 Not measured in this spike: Safari/WebKit/Firefox and any mobile device; real archives above 4 GiB; OPFS/IndexedDB in any browser
 other than headless Chromium 155; the IndexedDB composed-Blob read path; page encoding and storage throughput; main-thread impact
 (all runs are single-threaded processes, not Workers); Chrome RSS precision (process-tree RSS sampled at 250 ms, quoted only as
-deltas); browser heap for the admission derivation (the 33x and 910 B/cell figures are JSC process measurements of the legacy
-path).
+deltas); browser heap for the admission envelope (the element/attribute/text coefficients are Bun/JSC and Node/V8 process
+measurements of the legacy path); Safari/Firefox native `DecompressionStream` termination behavior.
