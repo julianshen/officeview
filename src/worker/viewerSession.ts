@@ -55,6 +55,8 @@ function sameWorkbookOwner(a: WorkbookOwner, b: WorkbookOwner): boolean {
 }
 export const failure = (code: SourceFailure['code'], message: string, retryable = false): SourceFailure =>
   Object.freeze({ code, retryable, message })
+/** §4.1 column page ordering violation; the session never stages such lanes. */
+const UNORDERED_PAGE = failure('page-error', 'Column pages must cover requested rows in ascending, contiguous order')
 export function failedPage<T>(stamp: SourceStamp, error: SourceFailure): Page<T> {
   return { items: [], completeness: 'incomplete', stamp, error }
 }
@@ -766,6 +768,8 @@ export class DocumentSession {
       if (protectedBytes + stagedBytes + builder.heldBytes > budget.maxBytes) return quota(protectedBytes + stagedBytes + builder.heldBytes)
       charge.set(stagedBytes + builder.heldBytes)
       let cursor: string | undefined
+      // Next row the full-axis query must cover (§4.1 column page ordering).
+      let expected = 0
       const seen = new Set<string>()
       do {
         const page = await store.queryColumn({
@@ -775,11 +779,14 @@ export class DocumentSession {
         if (this.closed) return { kind: 'stale' }
         if (page.error) return page.error.code === 'cancelled' ? { kind: 'cancelled' } : { kind: 'error', error: page.error }
         if (!sameStamp(page.stamp, stamp)) return { kind: 'stale' }
-        let pageEnd = -1
         for (const item of page.items) {
+          // The lanes are binary-searched later, so the order is enforced, not
+          // assumed: entries must cover rows ascending and contiguously.
+          const first = 'row' in item ? item.row : item.r0, last = 'row' in item ? item.row : item.r1
+          if (first !== expected || !(last >= first) || last >= MAX_ROWS) return { kind: 'error', error: UNORDERED_PAGE }
+          expected = last + 1
           if (item.kind === 'unknown') return { kind: 'incomplete', missing: [{ r0: item.r0, r1: item.r1, c0: col, c1: col }] }
           if (item.kind === 'error') return { kind: 'error', error: failure(item.code, 'Column source failed', item.retryable) }
-          pageEnd = 'row' in item ? item.row : item.r1
           if (item.kind === 'cell' || item.kind === 'unavailable') {
             const next = protectedBytes + stagedBytes + builder.heldBytes + builder.costOf(item)
             if (next > budget.maxBytes) return quota(next)
@@ -793,15 +800,15 @@ export class DocumentSession {
           }
         }
         if (page.completeness !== 'complete') return { kind: 'incomplete', missing: [{ r0: 0, r1: MAX_ROWS - 1, c0: col, c1: col }] }
-        // Pages cover the full-axis query contiguously from row 0 (validated by
-        // the session paging contract), so the last entry ends the covered prefix.
-        if (pageEnd >= 0) hooks.progress?.(covered + pageEnd + 1, total)
+        // Validated contiguous from row 0: `expected` is the covered prefix.
+        if (expected > 0) hooks.progress?.(covered + expected, total)
         cursor = page.nextCursor
         if (cursor !== undefined) {
           if (seen.has(cursor)) return { kind: 'error', error: failure('invalid-cursor', 'Column cursor made no progress') }
           seen.add(cursor)
         }
       } while (cursor !== undefined)
+      if (expected !== MAX_ROWS) return { kind: 'error', error: UNORDERED_PAGE }
       covered += MAX_ROWS
       // Trimming spare capacity briefly holds both lane sets; that peak is charged too.
       const exactLanes = builder.count * PREPARED_ENTRY_LANE_BYTES

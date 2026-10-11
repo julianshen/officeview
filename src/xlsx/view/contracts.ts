@@ -140,6 +140,12 @@ export interface SourceStore {
   readonly extent: { rows: 1048576; cols: 16384; used?: SourceRect }
   readCell(at: SourceCell, options: ReadOptions): Promise<CellRead>
   readRows(range: SourceRect, cursor: string | undefined, options: ReadOptions): Promise<Page<SparseRowPage>>
+  /** Ordering contract (§4.1; enforced by the worker session since S4.2): the
+   * items of a page, and of successive pages of one query, cover the requested
+   * membership in ASCENDING source-row order, contiguously and without overlap
+   * or duplicates (each cell/unavailable entry is one row; blank/unknown/error
+   * runs are inclusive [r0,r1]). Consumers binary-search lanes built from them;
+   * a page that violates this is rejected with a nonretryable `page-error`. */
   queryColumn(request: ColumnQuery, options: ReadOptions): Promise<Page<ColumnEntry>>
   scanPopulated(request: PopulatedQuery, options: ReadOptions): AsyncIterable<Page<AuthoritativeCell>>
   queryStructural(rect: SourceRect, options: ReadOptions): Promise<StructuralResult>
