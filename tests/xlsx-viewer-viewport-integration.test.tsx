@@ -637,3 +637,60 @@ describe('serialized find navigation (S5.2 review round 2)', () => {
     expect(status()).toMatch(/^202 of /)
   }, 30_000)
 })
+
+describe('print admission and ownership (S5.2 review round 2)', () => {
+  it('admits print backing stores in aggregate and refuses what does not fit, explicitly', async () => {
+    const { BITMAP_BUDGETS } = await import('../src/xlsx/view/tileCache')
+    const { columnToLetters } = await import('../src/xlsx/view/coordinates')
+    // 16 columns x 800 rows = 1024 x 16000 px per sheet: 65.5 MB each.
+    const tall = (name: string) => ({ name, rows: [{ r: 800, cells: [{ ref: `${columnToLetters(15)}800`, v: name }] }] })
+    const doc = await workbook([tall('S1'), tall('S2'), tall('S3')])
+    const print = vi.fn()
+    const original = window.print
+    window.print = print
+    try {
+      const { ui } = await mountSheet(doc)
+      act(() => { fireEvent.keyDown(ui.getByRole('region', { name: 'Spreadsheet viewer' }), { key: 'p', ctrlKey: true }) })
+      await waitFor(() => expect(print).toHaveBeenCalledTimes(1))
+      const pages = ui.getByTestId('officeview-sheet-print-pages')
+      const bytes = [...pages.querySelectorAll('canvas')].reduce((sum, c) => sum + (c as HTMLCanvasElement).width * (c as HTMLCanvasElement).height * 4, 0)
+      expect(bytes).toBeLessThanOrEqual(BITMAP_BUDGETS.D)
+      expect(pages.querySelectorAll('canvas').length).toBeLessThan(3)
+      expect(pages.textContent).toMatch(/omitted from print/)
+      act(() => { window.dispatchEvent(new Event('afterprint')) })
+    } finally { window.print = original }
+  }, 30_000)
+
+  it('a late print preparation after allowPrint turns off or unmount never prints and is released', async () => {
+    const doc = await workbook()
+    const print = vi.fn()
+    const original = window.print
+    window.print = print
+    const releases: string[] = []
+    let resolve: (() => void) | undefined
+    const { getPaintables } = await import('../src/render/paint')
+    const printLoader: typeof getPaintables = async (d, options) => {
+      await new Promise<void>(done => { resolve = done })
+      const pages = await getPaintables(d, options)
+      const dispose = pages.dispose
+      pages.dispose = () => { releases.push('pages'); dispose() }
+      return pages
+    }
+    try {
+      const h = harness()
+      const ui = render(<InteractiveSheetDoc doc={doc} onFrame={h.onFrame} printLoader={printLoader} />)
+      await waitFor(() => expect(h.last()?.basePaints ?? 0).toBeGreaterThan(0))
+      act(() => { fireEvent.keyDown(ui.getByRole('region', { name: 'Spreadsheet viewer' }), { key: 'p', metaKey: true }) })
+      ui.rerender(<InteractiveSheetDoc doc={doc} onFrame={h.onFrame} printLoader={printLoader} allowPrint={false} />)
+      await act(async () => { resolve?.(); await new Promise(done => setTimeout(done, 20)) })
+      expect(print).not.toHaveBeenCalled()
+      expect(releases).toEqual(['pages'])
+      ui.rerender(<InteractiveSheetDoc doc={doc} onFrame={h.onFrame} printLoader={printLoader} />)
+      act(() => { fireEvent.keyDown(ui.getByRole('region', { name: 'Spreadsheet viewer' }), { key: 'p', metaKey: true }) })
+      ui.unmount()
+      await act(async () => { resolve?.(); await new Promise(done => setTimeout(done, 20)) })
+      expect(print).not.toHaveBeenCalled()
+      expect(releases).toEqual(['pages', 'pages'])
+    } finally { window.print = original }
+  })
+})

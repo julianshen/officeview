@@ -40,7 +40,7 @@ import { LayoutCache } from '../../xlsx/view/textLayout'
 import { cellDisplayText } from '../../xlsx/render'
 import { createCellLayoutHost } from '../../xlsx/view/renderViewport'
 import { createObjectWorkbookSource } from '../../worker/viewerObjectSource'
-import type { TileCacheStats } from '../../xlsx/view/tileCache'
+import { BITMAP_BUDGETS, type TileCacheStats } from '../../xlsx/view/tileCache'
 import { gridGeometryToViewport, gridSelectionOverlay, paintGridSelectionOverlay, paintSearchOverlay, type HighlightRect } from '../../core/overlay'
 import { normalizeWatermark, type WatermarkOptions } from '../../core/watermark'
 import type { FallbackFontsOptions } from '../../core/fonts/fallback'
@@ -106,6 +106,8 @@ export interface InteractiveSheetDocProps {
   profile?: ProfileId
   /** @internal Asset lease factory (tests inject delayed leases). */
   assetLoader?: typeof prepareSheetAssets
+  /** @internal Static print unit factory (tests inject delayed units). */
+  printLoader?: typeof getPaintables
 }
 
 // Document identity alone owns zoom reset (§10.1): a stable id per document object.
@@ -624,37 +626,62 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
   // them into print-only canvases, prints, and releases them afterwards. A print
   // started from the browser menu shows an explicit print-only notice instead of
   // an unlabeled viewport subset.
-  const [printPages, setPrintPages] = useState<readonly Paintable[] | null>(null)
+  // Aggregate admission: the units' backing stores together must fit the bitmap
+  // budget left beside the pane surfaces (tiles are released first); units that do
+  // not fit are replaced by an explicit "omitted" notice, never silently dropped.
+  // Every publication re-checks its request token, permission and mount (§10.1).
+  const [printPages, setPrintPages] = useState<ReadonlyArray<{ name: string; page: Paintable | null }> | null>(null)
   const printLease = useRef<PaintableArray | null>(null)
+  const printToken = useRef(0)
+  const allowPrintRef = useRef(allowPrint)
+  allowPrintRef.current = allowPrint
+  const releasePrint = () => { setPrintPages(null); printLease.current?.dispose(); printLease.current = null }
   const preparePrint = async () => {
-    const pages = await getPaintables(doc, { ...(markKey ? { watermark } : {}), ...(fontKey ? { fallbackFonts } : {}) })
+    const token = ++printToken.current
+    const pages = await (props.printLoader ?? getPaintables)(doc, { ...(markKey ? { watermark } : {}), ...(fontKey ? { fallbackFonts } : {}) })
+    if (token !== printToken.current || !allowPrintRef.current) { pages.dispose(); return }
+    rendererRef.current?.cache.invalidate(() => true)
+    let remaining = BITMAP_BUDGETS[profile] - paneSurfaceBytes(viewport, dpr)
+    const units = pages.map((page, index) => {
+      const bytes = page.spec.widthPx * page.spec.heightPx * 4
+      const admitted = bytes <= remaining
+      if (admitted) remaining -= bytes
+      return { name: doc.sheets[index]?.name ?? `Sheet ${index + 1}`, page: admitted ? page : null }
+    })
     printLease.current?.dispose()
     printLease.current = pages
-    setPrintPages([...pages])
+    setPrintPages(units)
   }
   const printRefs = useRef<Array<HTMLCanvasElement | null>>([])
   useLayoutEffect(() => {
     if (!printPages) return
-    printPages.forEach((page, index) => {
+    const token = printToken.current
+    // One unit at a time: each admitted store is sized and painted in turn.
+    printPages.forEach((unit, index) => {
       const canvas = printRefs.current[index]
-      const ctx = canvas?.getContext('2d')
-      if (!canvas || !ctx) return
-      canvas.width = page.spec.widthPx
-      canvas.height = page.spec.heightPx
-      page.paint(ctx)
+      if (!unit.page || !canvas) return
+      sizeCanvas(canvas, unit.page.spec.widthPx, unit.page.spec.heightPx)
+      const ctx = canvas.getContext('2d')
+      if (ctx) unit.page.paint(ctx)
     })
-    window.print?.()
+    if (token === printToken.current && allowPrintRef.current) window.print?.()
   }, [printPages])
   useEffect(() => {
     if (!allowPrint) return
-    const release = () => { setPrintPages(null); printLease.current?.dispose(); printLease.current = null }
-    window.addEventListener('afterprint', release)
+    window.addEventListener('afterprint', releasePrint)
     const host = globalThis.document
     const media = host.createElement('style')
     media.setAttribute('data-officeview-sheet-print-media', '')
     media.textContent = '[data-officeview-sheet-print] { display: none; } @media print { [data-officeview-sheet-screen] { display: none !important; } [data-officeview-sheet-print] { display: block !important; } }'
     host.head.appendChild(media)
-    return () => { window.removeEventListener('afterprint', release); media.remove(); release() }
+    return () => {
+      // Permission withdrawn or unmounted: any in-flight preparation is now stale.
+      printToken.current++
+      window.removeEventListener('afterprint', releasePrint)
+      media.remove()
+      releasePrint()
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [allowPrint])
 
   // Print guard while this viewer is mounted (same rule as the page viewer).
@@ -740,7 +767,9 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
           <div data-officeview-sheet-print="" aria-hidden="true">
             {!printPages && <p data-testid="officeview-sheet-print-notice">To print this spreadsheet, press Ctrl/Cmd+P inside the viewer.</p>}
             <div data-testid="officeview-sheet-print-pages">
-              {printPages?.map((_, index) => <canvas key={index} ref={el => { printRefs.current[index] = el }} style={{ display: 'block', maxWidth: '100%', breakAfter: 'page' }} />)}
+              {printPages?.map((unit, index) => unit.page
+                ? <canvas key={index} ref={el => { printRefs.current[index] = el }} style={{ display: 'block', maxWidth: '100%', breakAfter: 'page' }} />
+                : <p key={index}>Sheet “{unit.name}” is omitted from print: it exceeds the print memory budget.</p>)}
             </div>
           </div>
         )}
