@@ -95,7 +95,7 @@ Every package is implemented on its own branch, reviewed by at least one agent f
 | S2.1 order/visibility/axes, S2.2 scroll window, S2.4 sheet zoom model (UI wiring open) | merged |
 | S8.1 typed filters, date lowering (`filter.ts`, `datePredicates.ts`, `textFilter.ts`; worker/mask publication open) | merged; collator-based text matching to be replaced by canonical matching (S8.5, spec §7.1 amended 2026-10-11) |
 | S7.2 pure sort engine (`src/xlsx/view/sort.ts`; worker kernel/session/header integration open) | merged |
-| S1.1 streaming ZIP/XML | design spike in progress (no production code yet) |
+| S1.1 streaming ZIP/XML | design note merged (`docs/architecture/xlsx-large-source.md`, reviewed by codex, pi and opencode over five rounds; user approved `pako`); implementation split into S1.1a (ZIP/inflate/XML tokenizer core) and S1.1b (spool, admission gates, entry wiring) |
 | S3.1/S3.2 structural index and operation guard (pure parts: `structure.ts`, `operationGuard.ts`; parser/drawing/spill wiring open) | merged |
 | S4.1 resident worker protocol/session (`src/worker/viewer*.ts`; temporary object-backed source until S1.2) | merged |
 | S1.2, S1.3, S2.3, S4.2–S4.5, S5, S6, S7.1, S8.2, S8.3, S9, S10, S11/S12 status, S13 | not started |
