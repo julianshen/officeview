@@ -410,13 +410,22 @@ describe('certified ASCII backend work', () => {
     const work = { used: 0 }
     expect(matcher.match('contains', 'zzz', false, text, { work, maxWork: Number.MAX_SAFE_INTEGER })).toBe(false)
     if (!matcher.certifiedAsciiProfile) skip('Actual alphabet exceeded the bounded certificate work cap; reference retained')
-    expect(work.used).toBeLessThan(100000)
+    // Includes the cold observed-adjacency certificate: about 120 units/char.
+    expect(work.used).toBeLessThan(150000)
   })
-  it('propagates all ignorable endpoint plateaus without quadratic wildcard work', () => {
-    const matcher = new TextFilterMatcher('en-US')
-    const work = { used: 0 }, text = 'a' + '\u200b'.repeat(2000) + 'b'
+  it('propagates single ignorables linearly and keeps runs exact through the reference', () => {
+    const matcher = new TextFilterMatcher('en-US'), reference = new ReferenceTextFilterMatcher('en-US')
+    const work = { used: 0 }, text = 'a\u200b'.repeat(1000) + 'b'
     expect(matcher.match('eq', 'a*b', true, text, { work, maxWork: Number.MAX_SAFE_INTEGER })).toBe(true)
-    expect(work.used).toBeLessThan(30000)
+    expect(matcher.certifiedAsciiProfile).toBe(true)
+    expect(work.used).toBeLessThan(150000)
+    // A run of two or more ignorables is outside the certificate window, so it
+    // must retain the exact (uncertified) reference path.
+    const run = 'a' + '\u200b'.repeat(40) + 'b'
+    for (const op of ['eq', 'neq', 'begins', 'ends', 'contains', 'not-contains'] as TextOp[]) {
+      expect(matcher.match(op, 'a*b', true, run, { maxWork: Number.MAX_SAFE_INTEGER })).toBe(reference.match(op, 'a*b', true, run, { maxWork: Number.MAX_SAFE_INTEGER }))
+    }
+    expect(matcher.certifiedAsciiProfile).toBe(false)
     expect(engine.matchText('eq', 'a?b', true, 'a\u200bb')).toBe(true)
     expect(engine.matchText('eq', 'a?b', true, 'a\u200b\u200bb')).toBe(true)
   })
@@ -646,7 +655,7 @@ describe('actual alphabet certification work', () => {
 })
 
 describe('bounded certificate ownership and measurements', () => {
-  it('reuses actual native profile probes but fails closed for huge alphabets', () => {
+  it('reuses actual native profile probes and certifies large alphabets by adjacency', () => {
     const matcher = new TextFilterMatcher('sv-SE'), text = 'é漢😀東à'.repeat(400)
     expect(matcher.certification.comparisons).toBe(0)
     matcher.match('contains', 'zzz', false, text)
@@ -657,8 +666,8 @@ describe('bounded certificate ownership and measurements', () => {
     expect(matcher.certification.cacheHits).toBeGreaterThan(0)
     expect(work.used).toBeLessThan(100000)
     const huge = Array.from({ length: 80 }, (_, index) => String.fromCodePoint(0x4e00 + index)).join('').repeat(25)
-    expect(() => matcher.match('contains', 'zzz', false, huge)).toThrow(/resource/i)
-    expect(matcher.certifiedAsciiProfile).toBe(false)
+    expect(matcher.match('contains', 'zzz', false, huge)).toBe(false)
+    expect(matcher.certifiedAsciiProfile).toBe(true)
   })
   it('detects native pair contractions and expansion/canonical boundary differences', () => {
     const da = new TextFilterMatcher('da-DK'), en = new TextFilterMatcher('en-US')
@@ -771,3 +780,91 @@ describe('native-looking bound comparator ownership', () => {
     } finally { vi.restoreAllMocks() }
   })
 })
+
+describe('ignorable runs between context characters stay exact', () => {
+  const ops: TextOp[] = ['eq', 'neq', 'begins', 'ends', 'contains', 'not-contains']
+  const all = { maxWork: Number.MAX_SAFE_INTEGER }
+  const agree = (locale: string, pattern: string, text: string) => {
+    const fast = new TextFilterMatcher(locale), reference = new ReferenceTextFilterMatcher(locale)
+    for (const op of ops) for (const wildcards of [false, true]) {
+      const actual = fast.match(op, pattern, wildcards, text, all), expected = reference.match(op, pattern, wildcards, text, all)
+      if (actual !== expected) throw new Error(JSON.stringify({ locale, op, pattern, text, wildcards, actual, expected }))
+    }
+  }
+  it.each([
+    ['en-US', 'l·', 'abl​​·cd'],
+    ['zh', 'l·', 'xl​⁠·y'],
+    ['de', 'l·', 'xl​﻿·y'],
+    ['en', 'l·', 'abl​­·cd'],
+    ['zh', 'el·', 'El​⁠·'],
+    ['kk', 'el·', 'El​⁠·'],
+    ['en-US', 'l​​·', 'abl·cd'],
+    ['en-US', 'l·', 'abl​·cd'],
+  ])('matches the reference for %s %j in %j', (locale, pattern, text) => agree(locale, pattern, text))
+  it('pins the native oracle that the certificate must not contradict', () => {
+    const reference = new ReferenceTextFilterMatcher('en-US'), fast = new TextFilterMatcher('en-US')
+    const text = 'abl​​·cd'
+    expect(reference.match('contains', 'l·', false, text)).toBe(false)
+    expect(fast.match('contains', 'l·', false, text)).toBe(false)
+    expect(fast.certifiedAsciiProfile).toBe(false)
+    expect(fast.match('contains', 'cd', false, 'abcd')).toBe(true)
+    expect(fast.certifiedAsciiProfile).toBe(true)
+  })
+  it('matches the reference over seeded ignorable-run fuzz in en, zh, de and kk', () => {
+    const pool = ['​', '­', '﻿', '⁠', '‍', '·', 'l', 'e', 'a', 'L', 'E']
+    const locales = ['en', 'zh', 'de', 'kk'].map(locale => [new TextFilterMatcher(locale), new ReferenceTextFilterMatcher(locale), locale] as const)
+    let seed = 4241, checked = 0
+    const random = (length: number) => { seed = (seed * 48271) % 2147483647; return seed % length }
+    const cases = Number(process.env.S8_IGNORABLE_FUZZ_CASES ?? 3000)
+    for (let index = 0; index < cases; index++) {
+      let text = '', pattern = ''
+      for (let i = 1 + random(9); i > 0; i--) text += pool[random(pool.length)]
+      for (let i = 1 + random(4); i > 0; i--) pattern += pool[random(pool.length)]
+      const [fast, reference, locale] = locales[index % locales.length]
+      for (const op of ops) for (const wildcards of [false, true]) {
+        const actual = fast.match(op, pattern, wildcards, text, all), expected = reference.match(op, pattern, wildcards, text, all)
+        if (actual !== expected) throw new Error(JSON.stringify({ index, locale, op, pattern, text, wildcards, actual, expected }))
+        checked++
+      }
+    }
+    expect(checked).toBe(cases * ops.length * 2)
+  })
+})
+
+describe('large alphabets are certified by observed adjacency', () => {
+  const latin = Array.from('abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789 .,;-').slice(0, 50)
+  const cjk = Array.from({ length: 150 }, (_, index) => String.fromCodePoint(0x4e00 + index * 7))
+  const sample = (pool: readonly string[], length: number) => {
+    let seed = 20261011, text = ''
+    for (let i = 0; i < length; i++) { seed = seed * 48271 % 2147483647; text += pool[seed % pool.length] }
+    return text
+  }
+  it.each([['latin', latin], ['cjk', cjk]] as const)('keeps %s text within the default allowance at 2000 characters', (_name, pool) => {
+    for (const locale of ['en-US', 'zh', 'sv-SE']) {
+      for (const length of [100, 300, 1000, 2000]) {
+        const matcher = new TextFilterMatcher(locale), work = { used: 0 }
+        expect(matcher.match('contains', 'zzz', false, sample(pool, length), { work })).toBe(false)
+        expect(matcher.certifiedAsciiProfile).toBe(true)
+        expect(work.used).toBeLessThan(DEFAULT_BUDGET / 5)
+      }
+    }
+  })
+  it('keeps certified large-alphabet answers equal to the reference', () => {
+    for (const [pool, locale] of [[latin, 'en-US'], [cjk, 'zh'], [latin, 'da-DK']] as const) {
+      const fast = new TextFilterMatcher(locale), reference = new ReferenceTextFilterMatcher(locale)
+      const text = sample(pool, 120)
+      for (const pattern of [text.slice(10, 14), text.slice(100), 'zzz', text.slice(3, 5) + '*' + text.slice(30, 33)]) {
+        for (const op of ['eq', 'neq', 'begins', 'ends', 'contains', 'not-contains'] as TextOp[]) {
+          expect(fast.match(op, pattern, true, text, { maxWork: Number.MAX_SAFE_INTEGER })).toBe(reference.match(op, pattern, true, text, { maxWork: Number.MAX_SAFE_INTEGER }))
+        }
+      }
+    }
+  })
+  it('still fails explicitly or exactly when a large alphabet is inconclusive', () => {
+    const da = new TextFilterMatcher('da-DK'), reference = new ReferenceTextFilterMatcher('da-DK')
+    const text = sample(latin, 200) + 'aa'
+    expect(da.match('contains', 'å', false, text)).toBe(reference.match('contains', 'å', false, text))
+    expect(da.certifiedAsciiProfile).toBe(false)
+  })
+})
+const DEFAULT_BUDGET = 10_000_000

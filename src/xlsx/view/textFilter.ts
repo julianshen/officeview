@@ -172,33 +172,56 @@ export class ReferenceTextFilterMatcher {
 }
 
 /** Certificates accept the empirical, context-independent equality model for
- * the actual alphabet, not a universal theorem about Intl. All raw pairs and
- * relevant triples (observed adjacency, plus exhaustive triples for tiny
- * alphabets) must agree with class concatenation and have no cross-length
- * equality collisions. Canonical/compatibility expansions and combining-mark
- * contexts are inconclusive. Only certified alphabets admit class-ID KMP/DP;
- * other inputs retain the exact raw-slice reference and its explicit budget.
- * An observed expansion factor alone cannot bound every future candidate end.
- * In particular, ignored plateaus have unbounded raw length, and ? consumes raw
- * code points. We therefore do not infer bounded windows for failed profiles.
+ * the code points actually observed, not a universal theorem about Intl.
+ * Every code point gets a class (0 = equal to the empty string, i.e. completely
+ * ignorable; otherwise equal code points share an id), cached per collator
+ * across cells. Cost is bounded by the text, not by alphabet size: only raw
+ * windows of up to three ADJACENT code points actually present in the text or
+ * a literal are probed, and each must equal the concatenation of its class
+ * representatives with no cross-signature equality collision among the
+ * windows. Canonical/compatibility expansions and combining-mark contexts are
+ * inconclusive, and so is any run of two or more adjacent ignorables: native
+ * context rules (e.g. Catalan l + U+00B7) look through a single ignorable but
+ * not through a run, and a window of three cannot see across a run. Only
+ * certified inputs admit class-ID KMP/DP; everything else retains the exact
+ * raw-slice reference and its explicit budget. An observed expansion factor
+ * alone cannot bound every future candidate end, and ignored plateaus have
+ * unbounded raw length, so no windows are inferred for failed profiles.
  */
 const COLLATOR_CONSTRUCTOR = Intl.Collator
 const COLLATOR_COMPARE_GETTER = Object.getOwnPropertyDescriptor(Intl.Collator.prototype, 'compare')?.get
-const MAX_ALPHABET = 40
+const UNSAFE = -1
+const MAX_CLASS_TABLE = 32768
 const MAX_PROBE_WORK = 90_000
-const MAX_PROBE_CACHE = 8192
-const MAX_PROFILES = 128
-const MAX_PROFILE_KEY = 8192
+/** Window and signature work grows with the text, so the probe cap does too. */
+const PROBE_WORK_PER_POINT = 400
+const MAX_PROBE_CACHE = 65536
+interface ClassTable {
+  /** Point to class id: 0 ignorable, UNSAFE for expansion/mark contexts. */
+  readonly ids: Map<string, number>
+  /** Representative per class id (index 0 is the empty string). */
+  readonly reps: string[]
+  /** Class ids ordered by collation, for binary-search insertion. */
+  readonly order: number[]
+}
 interface AlphabetProfile { readonly classes: ReadonlyMap<string, number> }
 interface ProbeCache {
   readonly comparisons: Map<string, number>
-  readonly profiles: Map<string, AlphabetProfile | null>
+  table: ClassTable
 }
 const probeCaches = new Map<string, ProbeCache>()
 class InconclusiveProbe extends Error {}
 function retain<K, V>(map: Map<K, V>, key: K, value: V, maximum: number): void {
   if (map.size >= maximum) map.delete(map.keys().next().value!)
   map.set(key, value)
+}
+const newTable = (): ClassTable => ({ ids: new Map(), reps: [''], order: [] })
+function unsafePoint(point: string): boolean {
+  // Combining marks/ZWJ attach across raw boundaries; expansion characters
+  // must fail even when their counterpart is absent from this text.
+  return /\p{M}|\u200d/u.test(point)
+    || [...point.normalize('NFKD')].filter(value => !/\p{M}/u.test(value)).length > 1
+    || [...point.toUpperCase()].length > 1
 }
 interface LiteralSearch { readonly ids: readonly number[]; readonly failure: readonly number[] }
 function prepareLiteral(ids: readonly number[], budget: WorkBudget): LiteralSearch {
@@ -249,47 +272,26 @@ export class TextFilterMatcher extends ReferenceTextFilterMatcher {
       || Object.getOwnPropertyDescriptor(Intl.Collator.prototype, 'compare')?.get !== COLLATOR_COMPARE_GETTER
       || this.collator.compare !== this.ownerCompare
       || this.collator.resolvedOptions !== this.ownerOptions) return undefined
-    const alphabet = new Set<string>(), triples = new Set<string>()
-    for (const run of [...runs, text]) {
-      let previous = '', before = ''
-      for (const point of run) {
-        budget.charge(1)
-        alphabet.add(point)
-        if (alphabet.size > MAX_ALPHABET) return undefined
-        if (before) triples.add(before + previous + point)
-        before = previous; previous = point
-      }
+    const strings = [...runs, text], arrays: string[][] = []
+    let total = 0
+    for (const value of strings) {
+      const points = Array.from(value)
+      budget.charge(points.length)
+      total += points.length
+      arrays.push(points)
     }
-    const points = [...alphabet].sort()
-    // Combining marks/ZWJ attach across raw boundaries; expansion characters
-    // must fail even when their counterpart is absent from this alphabet.
-    if (points.some(point => /\p{M}|\u200d/u.test(point)
-      || [...point.normalize('NFKD')].filter(value => !/\p{M}/u.test(value)).length > 1
-      || [...point.toUpperCase()].length > 1)) return undefined
-    if (points.length <= 5) for (const a of points) for (const b of points) for (const c of points) triples.add(a + b + c)
-    const key = JSON.stringify([points, [...triples].sort()])
     let cache = probeCaches.get(this.config)
     if (!cache) {
-      cache = { comparisons: new Map(), profiles: new Map() }
+      cache = { comparisons: new Map(), table: newTable() }
       retain(probeCaches, this.config, cache, 8)
     }
-    if (cache.profiles.has(key)) {
-      budget.charge(1)
-      this.certification.cacheHits++
-      this.certification.chargedWork++
-      const found = cache.profiles.get(key)
-      this.certifiedAsciiProfile = Boolean(found)
-      return found ?? undefined
-    }
-    const save = (profile: AlphabetProfile | null) => {
-      // Entry counts alone would retain megabytes of unique triple keys.
-      if (key.length <= MAX_PROFILE_KEY) retain(cache.profiles, key, profile, MAX_PROFILES)
-    }
+    if (cache.table.ids.size > MAX_CLASS_TABLE) cache.table = newTable()
+    const table = cache.table, limit = MAX_PROBE_WORK + PROBE_WORK_PER_POINT * total
     let probeWork = 0
     const compare = (a: string, b: string): number => {
-      const probeKey = JSON.stringify([a, b]), found = cache.comparisons.get(probeKey)
+      const probeKey = `${a.length}|${a}${b}`, found = cache.comparisons.get(probeKey)
       const amount = found === undefined ? 1 + a.length + b.length : 1
-      if (probeWork + amount > MAX_PROBE_WORK) throw new InconclusiveProbe()
+      if (probeWork + amount > limit) throw new InconclusiveProbe()
       budget.charge(amount)
       probeWork += amount
       this.certification.chargedWork += amount
@@ -299,46 +301,72 @@ export class TextFilterMatcher extends ReferenceTextFilterMatcher {
       retain(cache.comparisons, probeKey, value, MAX_PROBE_CACHE)
       return value
     }
-    try {
-      const classes = new Map<string, number>()
-      const sorted = points.slice().sort(compare)
-      let id = 0, last: string | undefined
-      for (const point of sorted) {
-        if (compare(point, '') === 0) classes.set(point, 0)
+    const classify = (point: string): number => {
+      const known = table.ids.get(point)
+      if (known !== undefined) return known
+      let id: number
+      if (unsafePoint(point)) id = UNSAFE
+      else if (compare(point, '') === 0) id = 0
+      else {
+        let low = 0, high = table.order.length, found = 0
+        while (low < high && !found) {
+          const middle = Math.floor((low + high) / 2), order = compare(point, table.reps[table.order[middle]])
+          if (order === 0) found = table.order[middle]
+          else if (order < 0) high = middle
+          else low = middle + 1
+        }
+        if (found) id = found
         else {
-          if (last === undefined || compare(last, point) !== 0) id++
-          classes.set(point, id); last = point
+          id = table.reps.length
+          table.reps.push(point)
+          table.order.splice(low, 0, id)
         }
       }
-      const representatives = new Map<number, string>()
-      for (const point of points) { const id = classes.get(point)!; if (id && !representatives.has(id)) representatives.set(id, point) }
-      const signature = (value: string) => [...value].map(point => classes.get(point)!).filter(id => id !== 0).join(',')
-      const candidates = new Set(['', ...points, ...triples])
-      for (const a of points) for (const b of points) candidates.add(a + b)
-      // A pair/triple equality must coincide exactly with its class sequence.
-      // Sorting makes every equality collision adjacent, without quadratic
-      // comparison of the already quadratic pair domain.
-      for (const candidate of candidates) {
-        const canonical = [...candidate].map(point => representatives.get(classes.get(point)!) ?? '').join('')
-        if (compare(candidate, canonical) !== 0) {
-          save(null)
-          return undefined
+      table.ids.set(point, id)
+      return id
+    }
+    try {
+      // Pass 1: classes, expansion/mark contexts, and ignorable runs. A run of
+      // two or more ignorables defeats the three-point windows below.
+      const identifiers: number[][] = []
+      for (const points of arrays) {
+        const ids: number[] = []
+        for (let i = 0; i < points.length; i++) {
+          const id = classify(points[i])
+          if (id === UNSAFE || (id === 0 && i > 0 && ids[i - 1] === 0)) return undefined
+          ids.push(id)
+        }
+        identifiers.push(ids)
+      }
+      if (table.ids.size > MAX_CLASS_TABLE * 2) return undefined
+      // Pass 2: windows of up to three adjacent code points that actually occur.
+      const windows = new Map<string, string>(), signatures = new Map<string, string>()
+      for (let which = 0; which < arrays.length; which++) {
+        const points = arrays[which], ids = identifiers[which]
+        for (let i = 0; i < points.length; i++) {
+          let window = '', signature = '', canonical = ''
+          for (let length = 1; length <= 3 && i + length <= points.length; length++) {
+            budget.charge(1)
+            window += points[i + length - 1]
+            const id = ids[i + length - 1]
+            if (id) { signature += ',' + id; canonical += table.reps[id] }
+            if (!windows.has(window)) windows.set(window, canonical)
+            if (!signatures.has(signature)) signatures.set(signature, canonical)
+          }
         }
       }
-      const ordered = [...candidates].sort(compare)
-      for (let i = 1; i < ordered.length; i++) {
-        if ((compare(ordered[i - 1], ordered[i]) === 0) !== (signature(ordered[i - 1]) === signature(ordered[i]))) {
-          save(null)
-          return undefined
-        }
+      // A window equality must coincide exactly with its class sequence.
+      for (const [window, canonical] of windows) {
+        if (window !== canonical && compare(window, canonical) !== 0) return undefined
       }
-      const result = { classes }
-      save(result)
+      // Distinct class sequences must never collate equal across lengths
+      // (e.g. Danish aa/å). Sorting makes every collision adjacent.
+      const ordered = [...signatures.values()].sort(compare)
+      for (let i = 1; i < ordered.length; i++) if (compare(ordered[i - 1], ordered[i]) === 0) return undefined
       this.certifiedAsciiProfile = true
-      return result
+      return { classes: table.ids }
     } catch (error) {
       if (!(error instanceof InconclusiveProbe)) throw error
-      save(null)
       return undefined
     }
   }
