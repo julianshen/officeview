@@ -4,8 +4,8 @@ import type { ProjectedSheetMetrics } from '../../xlsx/view/projection'
 import type { SourceCell } from '../../xlsx/view/coordinates'
 import { visibleLogicalViewport, navigateKey, navigateTo, hitTestViewport, type NavigationKey, type ViewportSize } from '../../xlsx/view/scrollWindow'
 import { MAX_ROWS, MAX_COLS, cellId } from '../../xlsx/view/coordinates'
-import { activeAnnouncement, boundedSelectionText, reconcileSelection, recordCounts, SourceSelection, emptyGridSelection, selectCell, selectHeader } from '../../xlsx/view/selection'
-import { GridHeaders, GridRowHeader, GRID_HEADER_SIZE, viewportHeaderBox } from './GridHeaders'
+import { activeAnnouncement, boundedSelectionText, reconcileSelection, recordCounts, emptyGridSelection, selectCell, selectHeader } from '../../xlsx/view/selection'
+import { GridHeaders, GridRowHeader, GRID_HEADER_SIZE, cellSelected, viewportHeaderBox } from './GridHeaders'
 import { ViewerStatus } from './ViewerStatus'
 
 export interface GridCellPresentation { text: string; state?: 'loading' | 'error' | 'unavailable' }
@@ -77,7 +77,7 @@ export function GridSemantics(props: GridSemanticsProps): ReactElement {
     previousPopup.current = props.popup ? { popup: props.popup, owner: previousPopup.current?.owner ?? prefix } : null
   }, [prefix, props.popup])
   const current = reconcileSelection(props.selection, projection, view), selection = current.selection
-  const membership = new SourceSelection(selection.ranges), pane = visibleLogicalViewport(window, viewport)
+  const pane = visibleLogicalViewport(window, viewport)
   const rowWindow = projection.rows.visibleBetween(pane.y, pane.y + pane.height), colWindow = projection.cols.visibleBetween(pane.x, pane.x + pane.width)
   const limits = FRAME_LIMITS[props.profile ?? 'D']
   let coarse = props.renderMode === 'coarse' || rowWindow.count * colWindow.count >= limits.cells || rowWindow.count + colWindow.count >= limits.lines
@@ -198,7 +198,7 @@ export function GridSemantics(props: GridSemanticsProps): ReactElement {
             const column = viewportHeaderBox(projection, window, viewport, 'column', col)
             const offscreen = extra || (slot === activeSlot && active?.col === col && !columns.includes(col))
             return <div key={col} role="gridcell" id={`${prefix}-cell-${cellId(row, col)}`} aria-colindex={col + 2}
-              aria-label={activeAnnouncement(projection, at, value.text)} aria-selected={membership.contains(at)} aria-description={value.state}
+              aria-label={activeAnnouncement(projection, at, value.text)} aria-selected={cellSelected(selection.ranges, at)} aria-description={value.state}
               style={offscreen ? { ...hiddenText, top: 0, left: 0 } : { position: 'absolute', top: 0, left: GRID_HEADER_SIZE + column.x, width: column.width, height: box.height }}><span style={hiddenText}>{boundedSelectionText(value.text)}</span></div>
           })}
         </div>
