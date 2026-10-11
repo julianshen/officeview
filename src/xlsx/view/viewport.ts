@@ -1222,8 +1222,14 @@ export type { RowPermutationBand }
 /** Worker reply adapter (spec §§4.1, 10.2): one `ViewportResult` per content
  * kind present (a mixed pane yields detail and overview). A content is complete
  * only when it holds no unknown/error record; otherwise it carries the frame's
- * non-complete state and error, so no loading record is published as complete. */
-export function toViewportResults(outcome: StoreViewport): ViewportResult[] {
+ * non-complete state and error, so no loading record is published as complete.
+ * `ViewportResult` has no slot for the exact active-cell record (spec §11.1), so
+ * it is carried beside the results; the worker `viewport` reply must publish it
+ * (inspector/status/accessible name) under the same owner. */
+export function toViewportResults(outcome: StoreViewport): { results: ViewportResult[]; active?: ViewportCell } {
+  return { results: viewportResults(outcome), ...(outcome.active ? { active: outcome.active } : {}) }
+}
+function viewportResults(outcome: StoreViewport): ViewportResult[] {
   const results: ViewportResult[] = []
   const pendingCells = outcome.cells.some(item => item.kind === 'unknown' || item.kind === 'error')
   const pendingGroups = outcome.groups.some(group => group.content === 'unknown')

@@ -128,18 +128,22 @@ export class LayoutCache {
 }
 
 export const DEFAULT_LAYOUT_CACHE_BYTES = 8 * 1024 * 1024
-/** Conservative retained-size estimate: UTF-16 strings at 2 bytes per unit plus
- * fixed object overheads for the body, each laid-out line and segment. */
+/** Conservative retained-size estimate: UTF-16 strings at 2 bytes per unit, the
+ * record's and each laid-out segment's grapheme-boundary arrays (charged 16 bytes per entry: slot plus boxed
+ * number in the worst case), a 128-byte fixed entry/map overhead, and object
+ * overheads for the body, each laid-out line and segment. */
 export function estimateLayoutBytes(key: string, body: CellBodyLayout): number {
-  let bytes = 256 + 2 * key.length + 2 * body.formattedText.length
+  let bytes = 128 + 256 + 2 * key.length + 2 * body.formattedText.length
   const text = body.text
   if (text) {
-    bytes += 128 + 2 * (text.text.length + text.font.length)
+    bytes += 128 + 2 * (text.text.length + text.font.length) + 16 * (text.text.length + 1)
     if (text.kind === 'layout') {
       bytes += 512 + 2 * text.text.length // body/paragraph copy of the source text
       for (const line of text.layout.lines) {
-        bytes += 96
-        for (const segment of line.segments) bytes += 160 + 2 * segment.text.length
+        bytes += 160 + 8 * line.segments.length
+        // Each segment holds its own transform, source-run list and grapheme
+        // boundaries (charged like the record's: 16 bytes per entry, plus slack).
+        for (const segment of line.segments) bytes += 384 + 2 * segment.text.length + 24 * (segment.text.length + 1)
       }
     }
   }

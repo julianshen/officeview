@@ -675,12 +675,46 @@ describe('review round 1 (opencode)', () => {
     const fixture = createFixture('F6')
     const store = fixture.createStore()
     const detail = viewportOf(await queryViewport(store, storeMetrics(), view(0, 0, 128, 40), storeOwner(store), { signal: signal() }))
-    expect(toViewportResults(detail)).toEqual([{ kind: 'viewport', completeness: 'complete', content: { kind: 'detail', cells: detail.cells } }])
+    expect(toViewportResults(detail).results).toEqual([{ kind: 'viewport', completeness: 'complete', content: { kind: 'detail', cells: detail.cells } }])
     const coarse = viewportOf(await queryViewport(store, storeMetrics({ rowCss: 0.5, colCss: 1 }), view(0, 0, 1440, 900, 0.25, 1), storeOwner(store), { signal: signal() }))
-    expect(toViewportResults(coarse)).toEqual([{ kind: 'viewport', completeness: 'complete', content: { kind: 'overview', groups: coarse.groups } }])
+    expect(toViewportResults(coarse).results).toEqual([{ kind: 'viewport', completeness: 'complete', content: { kind: 'overview', groups: coarse.groups } }])
     const pending = fixture.createStore({ pending: [{ r0: 0, r1: 100, c0: 0, c1: 100 }] })
     const loading = viewportOf(await queryViewport(pending, storeMetrics({ rowCss: 0.5, colCss: 1 }), view(0, 0, 1440, 900, 0.25, 1), storeOwner(pending), { signal: signal() }))
-    const [result] = toViewportResults(loading)
+    const [result] = toViewportResults(loading).results
     expect(result.completeness).toBe('loading')
+  })
+})
+
+describe('review round 2 (opencode)', () => {
+  /** Deterministic structure size: 2 B per UTF-16 unit, 8 B per number/boolean,
+   * 16 B per object/array plus 8 B per slot. Shared references count once. */
+  function structureSize(value: unknown, seen = new Set<object>()): number {
+    if (typeof value === 'string') return 2 * value.length
+    if (typeof value === 'number' || typeof value === 'boolean') return 8
+    if (value === null || typeof value !== 'object' || seen.has(value)) return 0
+    seen.add(value)
+    const entries = Array.isArray(value) ? value : Object.values(value)
+    return 16 + entries.reduce((sum: number, item) => sum + 8 + structureSize(item, seen), 0)
+  }
+  test('the byte estimate is conservative for long plain and wrapped text, including grapheme boundaries', () => {
+    const ctx = createCanvas(8, 8).getContext('2d') as unknown as CanvasRenderingContext2D
+    const host = createCellLayoutHost(ctx)
+    for (const placed of [
+      { cell: cell(0, 0, 'x'.repeat(10_000)), source: { row: 0, col: 0 }, x: 0, y: 0, width: 64, height: 20 },
+      { cell: cell(0, 1, 'wrapped words '.repeat(60), { numFmtId: 0, wrapText: true }), source: { row: 0, col: 1 }, x: 0, y: 0, width: 120, height: 400 },
+    ]) {
+      const cache = new LayoutCache()
+      const [record] = buildCellRecords([placed], OWNER, host, cache)
+      const actual = structureSize({ body: record.body, boundaries: record.text[0].runs[0].graphemeBoundaries })
+      expect(cache.stats.bytes).toBeGreaterThanOrEqual(actual)
+    }
+  })
+  test('the worker adapter carries the exact active record', async () => {
+    const fixture = createFixture('F1', { nnz: 50 })
+    const store = fixture.createStore()
+    const outcome = viewportOf(await queryViewport(store, storeMetrics({ rowCss: 0.5, colCss: 1 }), view(0, 0, 1440, 900, 0.25, 1), storeOwner(store), { signal: signal(), activeCell: { row: 0, col: 0 } }))
+    const mapped = toViewportResults(outcome)
+    expect(mapped.results[0].content.kind).toBe('overview')
+    expect(mapped.active).toMatchObject({ kind: 'cell', source: { row: 0, col: 0 } })
   })
 })
