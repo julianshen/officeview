@@ -41,8 +41,9 @@ export interface RangeDetectionRequest {
    * Tables keep their metadata and report the override as ignored. */
   override?: { headerRows: 0 | 1; totalsRows?: 0 } | null
   pageLimit?: number
-  /** Used extent hint for the blank-seed fallback; defaults to the store extent.
-   * Region growth never stops at it: data beyond the hint still joins. */
+  /** Used extent hint for the blank-seed fallback; defaults to the store extent,
+   * else the whole sheet. Region growth never stops at it: data beyond the hint
+   * still joins. */
   usedRange?: SourceRect
   /** Detection work cap: populated scan pages requested plus cells received
    * (default DEFAULT_DETECTION_WORK_BUDGET). Exceeding it refuses with
@@ -621,8 +622,10 @@ async function detectRange(request: RangeDetectionRequest, pacer: Pacer, owner: 
   if (region.kind === 'region') return finishDerived(context, region.rect, { kind: 'region' })
   // Blank seed: the used range applies only when it holds exactly one current
   // region; two blocks around a blank cell must never become one range (§6.1).
-  const used = request.usedRange ?? store.extent.used
-  if (used === undefined) return { kind: 'incomplete', missing: [{ ...FULL_DOMAIN }] }
+  // The hint is optional: without one, the same limit-1 probes run over the
+  // whole sheet (bounded by the work budget), so a proven-empty source refuses
+  // instead of waiting on a hint that may never arrive.
+  const used = request.usedRange ?? store.extent.used ?? FULL_DOMAIN
   if (!isValidSourceRectInput(used)) {
     return refused({ reason: 'invalid-range', message: 'Used range is outside the worksheet domain' })
   }
