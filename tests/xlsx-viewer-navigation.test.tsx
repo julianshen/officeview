@@ -139,6 +139,28 @@ describe('viewport-only green grid overlay seam', () => {
     expect(clipped.borders).toEqual([])
     expect(clipped.fills).toHaveLength(2)
   })
+  it('cancels floating-point shared edges on the device-pixel lattice (N4)', () => {
+    const selected = { contains: () => true }
+    const viewport = { x: -1, y: -1, width: 20, height: 20 }
+    for (const pixelScale of [10, 20]) {
+      const horizontal = gridSelectionOverlay(selected, [
+        { source: { row: 0, col: 0 }, bounds: { x: 0, y: 0, width: 0.1 + 0.2, height: 10 } },
+        { source: { row: 0, col: 1 }, bounds: { x: 0.3, y: 0, width: 10, height: 10 } },
+      ], viewport, pixelScale)
+      expect(horizontal.borders).toHaveLength(4)
+      expect(horizontal.borders.some(edge => edge.x0 === 0.3 && edge.x1 === 0.3)).toBe(false)
+      const vertical = gridSelectionOverlay(selected, [
+        { source: { row: 0, col: 0 }, bounds: { x: 0, y: 0, width: 10, height: 0.1 + 0.2 } },
+        { source: { row: 1, col: 0 }, bounds: { x: 0, y: 0.3, width: 10, height: 10 } },
+      ], viewport, pixelScale)
+      expect(vertical.borders).toHaveLength(4)
+      expect(vertical.borders.some(edge => edge.y0 === 0.3 && edge.y1 === 0.3)).toBe(false)
+      // Viewport cuts must still not acquire a false outline after snapping.
+      expect(gridSelectionOverlay(selected, [
+        { source: { row: 0, col: 0 }, bounds: { x: 0, y: 0, width: 10, height: 10 } },
+      ], { x: 1, y: 1, width: 2, height: 2 }, pixelScale).borders).toEqual([])
+    }
+  })
   it('clips selected viewport records and keeps the blue text selection separate', () => {
     const selection = new SourceSelection([{ rows: { kind: 'intervals', intervals: [{ r0: 3, r1: 3 }] }, cols: [{ c0: 0, c1: 0 }] }])
     const rects = gridSelectionOverlay(selection, [{ source: { row: 3, col: 0 }, bounds: { x: -5, y: 2, width: 20, height: 24 } }, { source: { row: 1, col: 0 }, bounds: { x: 15, y: 2, width: 20, height: 24 } }], { x: 0, y: 0, width: 10, height: 10 })

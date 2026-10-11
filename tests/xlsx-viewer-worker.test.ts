@@ -473,6 +473,24 @@ describe('S4.1 review findings (codex)', () => {
     client.dispose()
   })
 
+  it('preserves serializable Shift gesture history in worker commit/delta (N2)', async () => {
+    const doc = objectDoc([{ sheetId: 'A', rows: column([3, 1, 2, 4, 5]) }])
+    const kernel = new ViewerKernel({ parse: async () => doc }, quiet)
+    completed(await run(kernel, { kind: 'open', requestId: rid(), docId: 'doc', source: { kind: 'object', document: doc }, profile: 'D' }))
+    const prefix = [{ rows: { kind: 'list' as const, r0: 0, r1: 0, rows: Uint32Array.of(0) }, cols: [{ c0: 0, c1: 0 }] }]
+    const selection = { active: { row: 4, col: 0 }, anchor: { row: 4, col: 0 }, ranges: [{ rows: { kind: 'list' as const, r0: 0, r1: 4, rows: Uint32Array.of(0, 4) }, cols: [{ c0: 0, c1: 0 }] }], gesture: { kind: 'cells' as const, anchor: { row: 4, col: 0 }, prefix } }
+    const session = kernel.session('doc')!
+    const committed = await session.commitView('A', { ...draftOf(session, 'A'), selection: structuredClone(selection) })
+    expect(committed.selection).toHaveProperty('gesture', selection.gesture)
+    const delta = deltaOf(await run(kernel, { kind: 'sort', requestId: rid(), owner: committed.identity, spec: sortSpec(2, 0) }))
+    expect(structuredClone(delta.selection)).toHaveProperty('gesture', selection.gesture)
+    // All gesture lanes are transferable copies; transferring cannot detach resident history.
+    const transferred = structuredClone(delta.selection, { transfer: transferablesOf(delta.selection) })
+    expect(transferred).toHaveProperty('gesture', selection.gesture)
+    expect(session.view('A').selection).toHaveProperty('gesture', selection.gesture)
+    expect(prefix[0].rows.rows.length).toBe(1)
+  })
+
   it('#3 a query that finishes after a newer commit replies stale, never complete for the old owner', async () => {
     const doc = objectDoc([{ sheetId: 'A', rows: [[2, 'b'], [1, 'a']] }])
     const tracked = instrumented(createObjectWorkbookSource(doc, 'doc'))

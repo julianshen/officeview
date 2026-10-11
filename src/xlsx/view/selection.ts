@@ -1,15 +1,14 @@
-import type { CompactSourceRowSet, GridSelection, GridSelectionPart, SourceRowInterval, FilterRange, LogicalCellBox, SheetView, AxisMetrics } from './contracts'
+import type { CompactSourceRowSet, GridSelection, GridSelectionPart, GridSelectionGesture, SourceRowInterval, FilterRange, LogicalCellBox, SheetView, AxisMetrics } from './contracts'
 import { MAX_ROWS, formatA1, validateCoordinate, validateSourceRect, type SourceCell, type NavigatorRequest } from './coordinates'
 import type { ProjectedSheetMetrics } from './projection'
 import { guardSort, guardFilter, type GuardOutcome, type FilterGuardRequest, type SortGuardOptions } from './operationGuard'
 import type { StructuralIndex, PopulatedCellSource } from './structure'
 import { clampSheetZoom } from './sheetZoom'
 import { retainActive, navigationTarget, hiddenReasonForCell, type ActiveNavigationContext, type HiddenTargetReason } from './scrollWindow'
-import { createIntervalSet } from './visibility'
 
 export const MAX_SELECTION_BYTES = 1024 * 1024
-export const MAX_SELECTION_PARTS = 256
-export const MAX_SELECTION_COL_INTERVALS = 1024
+export const MAX_SELECTION_PARTS = 4096
+export const MAX_SELECTION_COL_INTERVALS = 16384
 export class SelectionError extends Error {
   constructor(readonly code: 'unsupported' | 'resource-limit' | 'stale-source', message: string) { super(message); this.name = 'SelectionError' }
 }
@@ -155,19 +154,13 @@ function displayColsBetween(projection: ProjectedSheetMetrics, anchor: number, t
     .map(run => ({ c0: Math.max(c0, run.start), c1: Math.min(c1, run.end) }))
 }
 
-interface SelectionGesture { kind: 'cells' | 'row' | 'column'; anchor: SourceCell; prefix: readonly GridSelectionPart[] }
-const gestures = new WeakMap<GridSelection, SelectionGesture>()
-function retainedRanges(state: GridSelection): readonly GridSelectionPart[] { return [...state.ranges, ...(gestures.get(state)?.prefix ?? [])] }
-function gestureSnapshot(active: SourceCell | null, anchor: SourceCell | null, ranges: readonly GridSelectionPart[], gesture: SelectionGesture): GridSelection {
+function gestureSnapshot(active: SourceCell | null, anchor: SourceCell | null, ranges: readonly GridSelectionPart[], gesture: GridSelectionGesture): GridSelection {
   const state = snapshot(active, anchor, ranges), prefix = normalizeParts(gesture.prefix)
-  assertSelectionBound([...state.ranges, ...prefix])
-  gestures.set(state, { ...gesture, anchor: { ...gesture.anchor }, prefix: Object.freeze(prefix) })
-  return state
+  return Object.freeze({ ...state, gesture: Object.freeze({ ...gesture, anchor: Object.freeze({ ...gesture.anchor }), prefix: Object.freeze(prefix) }) })
 }
 function copyGesture(before: GridSelection, after: GridSelection): GridSelection {
-  const gesture = gestures.get(before)
-  if (gesture && after.anchor) gestures.set(after, { ...gesture, anchor: after.anchor })
-  return after
+  const gesture = before.gesture
+  return gesture && after.anchor ? Object.freeze({ ...after, gesture: Object.freeze({ ...gesture, anchor: after.anchor }) }) : after
 }
 
 function snapshot(active: SourceCell | null, anchor: SourceCell | null, ranges: readonly GridSelectionPart[]): GridSelection {
@@ -254,6 +247,14 @@ function rowsKey(rows: CompactSourceRowSet): string {
   for (const value of rows.kind === 'list' ? rows.rows : rows.words) hash = Math.imul(hash ^ value, 16777619)
   return `${rows.kind}:${rows.r0}:${rows.r1}:${hash >>> 0}`
 }
+// Published row memberships are immutable. Cache only the small fingerprint;
+// WeakMap keys do not keep row buffers alive, and equality still checks collisions.
+const rowKeys = new WeakMap<object, string>()
+function cachedRowsKey(rows: CompactSourceRowSet): string {
+  let key = rowKeys.get(rows)
+  if (key === undefined) { key = rowsKey(rows); rowKeys.set(rows, key) }
+  return key
+}
 function sameRows(a: CompactSourceRowSet, b: CompactSourceRowSet): boolean {
   if (a === b) return true
   if (a.kind !== b.kind) return false
@@ -265,10 +266,9 @@ function sameRows(a: CompactSourceRowSet, b: CompactSourceRowSet): boolean {
 function normalizeParts(input: readonly GridSelectionPart[]): GridSelectionPart[] {
   let parts = [...input]
   while (true) {
-    const buckets = new Map<string, GridSelectionPart[]>(), keys = new WeakMap<object, string>()
+    const buckets = new Map<string, GridSelectionPart[]>()
     for (const part of parts) {
-      const key = keys.get(part.rows) ?? rowsKey(part.rows)
-      keys.set(part.rows, key)
+      const key = cachedRowsKey(part.rows)
       const bucket = buckets.get(key) ?? []
       const same = bucket.find(p => sameRows(p.rows, part.rows))
       if (same) same.cols = mergeCols([...same.cols, ...part.cols])
@@ -315,18 +315,18 @@ function togglePart(state: GridSelection, target: GridSelectionPart): readonly G
   const remaining = subtract(state.ranges, target)
   return uncovered.length ? [...remaining, target] : remaining
 }
-function extendedPart(projection: ProjectedSheetMetrics, gesture: SelectionGesture, target: SourceCell): GridSelectionPart {
+function extendedPart(projection: ProjectedSheetMetrics, gesture: GridSelectionGesture, target: SourceCell): GridSelectionPart {
   if (gesture.kind === 'row') return { rows: displayRowsBetween(projection, gesture.anchor.row, target.row), cols: [{ c0: 0, c1: projection.cols.logicalCount - 1 }] }
   if (gesture.kind === 'column') return { rows: { kind: 'intervals', intervals: [{ r0: 0, r1: projection.rows.logicalCount - 1 }] }, cols: displayColsBetween(projection, gesture.anchor.col, target.col) }
   return extendDisplayRange(projection, gesture.anchor, target).ranges[0]
 }
 function extendGesture(state: GridSelection, projection: ProjectedSheetMetrics, target: SourceCell, kind?: 'row' | 'column'): GridSelection {
-  const previous = gestures.get(state)
+  const previous = state.gesture
   let anchor = previous?.anchor ?? state.anchor ?? state.active ?? target
   if (!previous || previous.kind === 'cells') {
     if (!projection.sourceCellToLogical(anchor)) anchor = state.active && projection.sourceCellToLogical(state.active) ? state.active : target
   }
-  const gesture: SelectionGesture = { kind: kind ?? previous?.kind ?? 'cells', anchor, prefix: previous?.prefix ?? state.ranges.slice(0, -1) }
+  const gesture: GridSelectionGesture = { kind: kind ?? previous?.kind ?? 'cells', anchor, prefix: previous?.prefix ?? state.ranges.slice(0, -1) }
   const part = extendedPart(projection, gesture, target)
   return gestureSnapshot(target, anchor, [...subtract(gesture.prefix, part), part], gesture)
 }
@@ -345,7 +345,7 @@ export function selectHeader(state: GridSelection, projection: ProjectedSheetMet
   const col = kind === 'column' ? index : state.active && projection.cols.size(state.active.col) > 0 ? state.active.col : axisCandidate(projection.cols, 0, 1) ?? 0
   const at = { row, col }
   validateCell(projection, at)
-  if (extend && gestures.get(state)?.kind === kind && projection.sourceCellToLogical(at)) return extendGesture(state, projection, at, kind)
+  if (extend && state.gesture?.kind === kind && projection.sourceCellToLogical(at)) return extendGesture(state, projection, at, kind)
   const part: GridSelectionPart = kind === 'row'
     ? { rows: { kind: 'intervals', intervals: [{ r0: index, r1: index }] }, cols: [{ c0: 0, c1: projection.cols.logicalCount - 1 }] }
     : { rows: { kind: 'intervals', intervals: [{ r0: 0, r1: projection.rows.logicalCount - 1 }] }, cols: [{ c0: index, c1: index }] }
@@ -423,17 +423,10 @@ function axisCandidate(axis: AxisMetrics, index: number, direction: -1 | 1): num
   }
   return null
 }
-function activeContext(state: GridSelection, projection: ProjectedSheetMetrics, view?: SelectionNavigationView): ActiveNavigationContext {
-  const select = (rank: number) => rank < 0 ? null : projection.visibleRankToDisplay(rank)
-  return { metrics: projection, view: { selection: state, ...(view ?? {
-    filter: null, baseHidden: createIntervalSet([]), visibility: {
-      visible: (slot: number) => projection.rows.size(slot) > 0,
-      rank: (end: number) => lowerVisibleRank(projection, end), select,
-      next: (slot: number, direction: -1 | 1) => select(lowerVisibleRank(projection, slot + (direction > 0 ? 1 : 0)) - (direction < 0 ? 1 : 0)),
-    },
-  }) } }
+function activeContext(state: GridSelection, projection: ProjectedSheetMetrics, view: SelectionNavigationView): ActiveNavigationContext {
+  return { metrics: projection, view: { ...view, selection: state } }
 }
-export function reconcileSelection(state: GridSelection, projection: ProjectedSheetMetrics, _body: SourceRowInterval | null, view?: SelectionNavigationView): SelectionTransition {
+export function reconcileSelection(state: GridSelection, projection: ProjectedSheetMetrics, view: SelectionNavigationView): SelectionTransition {
   if (!state.active) return { selection: state, announcement: '' }
   const at = retainActive(activeContext(state, projection, view), state.active)
   if (at && at.row === state.active.row && at.col === state.active.col) {
@@ -443,8 +436,8 @@ export function reconcileSelection(state: GridSelection, projection: ProjectedSh
   if (!at) return { selection: Object.freeze({ active: null, anchor: null, ranges: state.ranges }), announcement: 'No visible records.' }
   return { selection: copyGesture(state, Object.freeze({ active: Object.freeze(at), anchor: Object.freeze(at), ranges: state.ranges })), announcement: `Active moved to ${activeAnnouncement(projection, at)}` }
 }
-export function moveActive(state: GridSelection, projection: ProjectedSheetMetrics, direction: 'up' | 'down' | 'left' | 'right' | 'enter' | 'home' | 'end', body: SourceRowInterval | null, extend = false, view?: SelectionNavigationView): GridSelection {
-  const current = reconcileSelection(state, projection, body, view).selection
+export function moveActive(state: GridSelection, projection: ProjectedSheetMetrics, direction: 'up' | 'down' | 'left' | 'right' | 'enter' | 'home' | 'end', body: SourceRowInterval | null, view: SelectionNavigationView, extend = false): GridSelection {
+  const current = reconcileSelection(state, projection, view).selection
   const full = projection.rows.logicalCount ? { r0: 0, r1: projection.rows.logicalCount - 1 } : null
   let row = current.active?.row ?? eligibleRow(projection, 0, 1, body ?? full), col = current.active?.col ?? axisCandidate(projection.cols, 0, 1)
   if (direction === 'home' || direction === 'end') {
@@ -458,12 +451,12 @@ export function moveActive(state: GridSelection, projection: ProjectedSheetMetri
   }
   return row === null || col === null ? current : selectCell(current, projection, { row, col }, { extend })
 }
-export function navigateSelection(state: GridSelection, projection: ProjectedSheetMetrics, request: NavigatorRequest, body: SourceRowInterval | null, view?: SelectionNavigationView): SelectionNavigationResult {
+export function navigateSelection(state: GridSelection, projection: ProjectedSheetMetrics, request: NavigatorRequest, view: SelectionNavigationView): SelectionNavigationResult {
   const target = navigationTarget(projection, request)
   const logical = projection.sourceCellToLogical(target)
   if (logical) return { kind: 'visible', target, logical, selection: selectCell(state, projection, target), announcement: activeAnnouncement(projection, target) }
   const hiddenReason = hiddenReasonForCell(activeContext(state, projection, view), target)
-  const current = reconcileSelection(state, projection, body, view)
+  const current = reconcileSelection(state, projection, view)
   return { kind: 'hidden', target, selection: current.selection, hiddenReason, announcement: `${activeAnnouncement(projection, target)}; ${hiddenReason.replace('-', ' ')}. Read-only inspection.` }
 }
 /** Compatibility alias; the selection-specific API is navigateSelection. */
@@ -505,22 +498,15 @@ export class SheetNavigationSession {
   activeSheetId: string | null = null
   private readonly sheets = new Map<string, RetainedSheetState>()
   constructor(public docId: string) {}
-  private admitSelection(id: string, selection: GridSelection): void {
-    assertSelectionBound(selection.ranges)
-    const selections = [...this.sheets].filter(([sheetId]) => sheetId !== id).map(([, state]) => state.selection)
-    selections.push(selection)
-    if (selectionBytes(selections.flatMap(state => [...retainedRanges(state)])) + (selections.length - 1) * 192 > MAX_SELECTION_BYTES) throw new SelectionError('resource-limit', 'Retained selections exceed the document selection budget')
-  }
   register(id: string, state: Omit<RetainedSheetState, 'selection' | 'zoom'> & Partial<Pick<RetainedSheetState, 'selection' | 'zoom'>>): void {
     if (!id || state.view.sheetId !== id || this.sheets.has(id)) throw new RangeError('Invalid or duplicate sheet registration')
-    const selection = state.projection ? reconcileSelection(state.selection ?? state.view.selection, state.projection, state.body, state.view).selection : state.selection ?? state.view.selection
-    this.admitSelection(id, selection)
+    const selection = state.projection ? reconcileSelection(state.selection ?? state.view.selection, state.projection, state.view).selection : state.selection ?? state.view.selection
     this.sheets.set(id, Object.freeze({ ...state, view: Object.freeze({ ...state.view, selection }), selection, zoom: clampSheetZoom(state.zoom ?? 1) }))
     if (this.activeSheetId === null) this.activeSheetId = id
   }
   activate(id: string): RetainedSheetState { const sheet = this.get(id); this.activeSheetId = id; return sheet }
   get(id: string): RetainedSheetState { const state = this.sheets.get(id); if (!state) throw new RangeError('Unknown sheet'); return state }
-  setSelection(id: string, selection: GridSelection): void { const state = this.get(id); this.admitSelection(id, selection); this.sheets.set(id, Object.freeze({ ...state, view: Object.freeze({ ...state.view, selection }), selection })) }
+  setSelection(id: string, selection: GridSelection): void { const state = this.get(id); this.sheets.set(id, Object.freeze({ ...state, view: Object.freeze({ ...state.view, selection }), selection })) }
   setZoom(id: string, zoom: number): void { this.sheets.set(id, Object.freeze({ ...this.get(id), zoom: clampSheetZoom(zoom) })) }
   /** S5/S4 may release inactive geometry without losing source membership/view/zoom. */
   detachProjection(id: string): void { this.sheets.set(id, Object.freeze({ ...this.get(id), projection: null })) }
@@ -528,8 +514,7 @@ export class SheetNavigationSession {
     if (view.sheetId !== id) throw new RangeError('View belongs to another sheet')
     const state = this.get(id)
     if (!Number.isSafeInteger(view.revision) || view.revision < state.view.revision) throw new SelectionError('stale-source', 'Stale sheet view revision; retry with the current view')
-    const result = reconcileSelection(state.selection, projection, body, view)
-    this.admitSelection(id, result.selection)
+    const result = reconcileSelection(state.selection, projection, view)
     this.sheets.set(id, Object.freeze({ ...state, projection, body, view: Object.freeze({ ...view, selection: result.selection }), selection: result.selection }))
     return result
   }

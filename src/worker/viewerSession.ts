@@ -18,7 +18,7 @@
  */
 import type {
   AxisMetrics, AxisSizeInterval, CacheIdentity, ColumnEntry, ColumnQuery, CompactSourceRowSet, FilterSpec,
-  GridSelection, IntervalSet, OperationRefusal, Page, ProfileId, RowOrder, SingleCellPayload, SortSpec,
+  GridSelection, GridSelectionPart, IntervalSet, OperationRefusal, Page, ProfileId, RowOrder, SingleCellPayload, SortSpec,
   SourceFailure, SourceRowInterval, SourceStamp, SourceStore, ValuePolicy, WorkbookOwner, WorkerDiagnostic,
 } from '../xlsx/view/contracts'
 import { MAX_COLS, MAX_ROWS, cellId, isValidCoordinate, type SourceRect, type SourceRow } from '../xlsx/view/coordinates'
@@ -446,10 +446,12 @@ function freezeSelection(selection: GridSelection): GridSelection {
     for (const entry of Object.values(value)) freeze(entry)
     return Object.freeze(value)
   }
+  const parts = (ranges: readonly GridSelectionPart[]) => ranges.map(range => ({ rows: { ...range.rows }, cols: range.cols.map(col => ({ ...col })) }))
   return freeze({
     active: selection.active ? { ...selection.active } : null,
     anchor: selection.anchor ? { ...selection.anchor } : null,
-    ranges: selection.ranges.map(range => ({ rows: { ...range.rows }, cols: range.cols.map(col => ({ ...col })) })),
+    ranges: parts(selection.ranges),
+    ...(selection.gesture ? { gesture: { ...selection.gesture, anchor: { ...selection.gesture.anchor }, prefix: parts(selection.gesture.prefix) } } : {}),
   }) as GridSelection
 }
 /** Guard refusals that are really waits or source failures are not refusals. */

@@ -32,8 +32,12 @@ export interface GridOverlayRecord { source: { row: number; col: number }; bound
 export interface GridBorderSegment { x0: number; y0: number; x1: number; y1: number }
 export interface GridSelectionGeometry { fills: readonly HighlightRect[]; borders: readonly GridBorderSegment[] }
 /** S5 supplies bounded projected cells plus neighbor overscan. Compute the outline
- * before clipping so neither shared cell edges nor viewport cuts become borders. */
-export function gridSelectionOverlay(selection: { contains(at: { row: number; col: number }): boolean }, records: readonly GridOverlayRecord[], viewport: HighlightRect): GridSelectionGeometry {
+ * before clipping so neither shared cell edges nor viewport cuts become borders.
+ * pixelScale is device pixels per record coordinate (sheet zoom × DPR for
+ * sheet-space records, DPR for already zoomed CSS-space records). */
+export function gridSelectionOverlay(selection: { contains(at: { row: number; col: number }): boolean }, records: readonly GridOverlayRecord[], viewport: HighlightRect, pixelScale = 1): GridSelectionGeometry {
+  if (!Number.isFinite(pixelScale) || pixelScale <= 0) throw new RangeError('Invalid overlay pixel scale')
+  const snap = (value: number) => Math.round(value * pixelScale)
   const fills: HighlightRect[] = [], borders: GridBorderSegment[] = [], seen = new Set<string>()
   const horizontal = new Map<number, Map<number, number>>(), vertical = new Map<number, Map<number, number>>()
   const edge = (map: Map<number, Map<number, number>>, at: number, lo: number, hi: number, sign: number) => {
@@ -46,20 +50,24 @@ export function gridSelectionOverlay(selection: { contains(at: { row: number; co
     if (!selection.contains(record.source)) continue
     const { bounds } = record
     if (bounds.width <= 0 || bounds.height <= 0) continue
-    const key = `${bounds.x}:${bounds.y}:${bounds.width}:${bounds.height}`
+    // Key edges in integer device pixels, using the same endpoints for fills.
+    const x0 = snap(bounds.x), y0 = snap(bounds.y), x1 = snap(bounds.x + bounds.width), y1 = snap(bounds.y + bounds.height)
+    if (x1 <= x0 || y1 <= y0) continue
+    const key = `${x0}:${y0}:${x1}:${y1}`
     if (seen.has(key)) continue
     seen.add(key)
-    edge(horizontal, bounds.y, bounds.x, bounds.x + bounds.width, -1)
-    edge(horizontal, bounds.y + bounds.height, bounds.x, bounds.x + bounds.width, 1)
-    edge(vertical, bounds.x, bounds.y, bounds.y + bounds.height, -1)
-    edge(vertical, bounds.x + bounds.width, bounds.y, bounds.y + bounds.height, 1)
-    const x = Math.max(bounds.x, viewport.x), y = Math.max(bounds.y, viewport.y)
-    const width = Math.min(bounds.x + bounds.width, viewport.x + viewport.width) - x
-    const height = Math.min(bounds.y + bounds.height, viewport.y + viewport.height) - y
+    edge(horizontal, y0, x0, x1, -1)
+    edge(horizontal, y1, x0, x1, 1)
+    edge(vertical, x0, y0, y1, -1)
+    edge(vertical, x1, y0, y1, 1)
+    const x = Math.max(x0 / pixelScale, viewport.x), y = Math.max(y0 / pixelScale, viewport.y)
+    const width = Math.min(x1 / pixelScale, viewport.x + viewport.width) - x
+    const height = Math.min(y1 / pixelScale, viewport.y + viewport.height) - y
     if (width > 0 && height > 0) fills.push({ x, y, width, height })
   }
   const outline = (map: Map<number, Map<number, number>>, across: boolean) => {
-    for (const [at, events] of map) {
+    for (const [pixel, events] of map) {
+      const at = pixel / pixelScale
       const near = across ? viewport.y : viewport.x, far = near + (across ? viewport.height : viewport.width)
       if (at < near || at > far) continue
       let active = 0, previous: number | undefined
@@ -75,7 +83,7 @@ export function gridSelectionOverlay(selection: { contains(at: { row: number; co
       }
       for (const span of spans) {
         const start = across ? viewport.x : viewport.y, end = start + (across ? viewport.width : viewport.height)
-        const lo = Math.max(start, span.lo), hi = Math.min(end, span.hi)
+        const lo = Math.max(start, span.lo / pixelScale), hi = Math.min(end, span.hi / pixelScale)
         if (lo < hi) borders.push(across ? { x0: lo, y0: at, x1: hi, y1: at } : { x0: at, y0: lo, x1: at, y1: hi })
       }
     }

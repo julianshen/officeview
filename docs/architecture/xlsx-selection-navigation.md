@@ -5,13 +5,14 @@ source cells. `extendDisplayRange` maps the visible display interval through
 the current projection; it stores exact source membership, never its enclosing
 rectangle. Identity/full-axis selections use intervals. Fragmented row sets
 use at most 128 KiB per source-tagged row mask, with no per-cell allocation.
-Equal row memberships share a part with merged column intervals. A retained
-selection, including its current Shift gesture's prior Ctrl parts, admits at
-most 1 MiB of typed buffers plus estimated metadata, 256 parts and 1024 column
-intervals. Buffers shared by parts are charged once. The document session also
-enforces the 1 MiB aggregate across retained sheets. Exceeding admission throws
+Equal row memberships share a part with merged column intervals. Per-sheet admission counts only normalized selection ranges: at most 1 MiB of
+typed buffers plus estimated metadata, with generous safety bounds of 4096
+parts and 16384 column intervals. Shared buffers are charged once; the Shift
+prefix does not double-count selected membership. Exceeding admission throws
 `SelectionError` with `resource-limit` before publication; membership is never
-truncated. S4/S5 still own admission of operation scratch and geometry.
+truncated. There is no document-wide selection ceiling. Session registration,
+selection retention and projection updates do not re-admit already-admitted
+membership. S4/S5 own operation scratch and geometry admission.
 Published selection data belongs to its view generation and must not be mutated.
 Worker-owned row refs return typed `unsupported` until a worker membership resolver
 is supplied; this module produces
@@ -19,7 +20,10 @@ local intervals/bitsets and does not materialize an opaque ref.
 
 `selectCell` accepts `extend` and `toggle`; S6.2 maps Shift and Ctrl/Cmd onto
 these flags. Shift replaces only the most recent gesture while retaining earlier
-Ctrl parts, even if those parts temporarily overlap the extended region. Header
+Ctrl parts, even if those parts temporarily overlap the extended region.
+The optional `GridSelection.gesture` stores mode, source anchor and prefix as
+plain serializable data; spread, structuredClone and worker commit/deltas retain
+it. Legacy selections without gesture metadata remain valid. Header
 gestures retain row/column mode and source anchors; `selectHeader`'s sixth
 argument extends across headers through the visible projection. It selects
 full logical source rows/columns compactly.
@@ -28,7 +32,10 @@ endpoints (Ctrl+Home/End). Keyboard PageUp/PageDown and ordinary Home/End use
 the existing S2 `scrollWindow.navigateKey`, then update source selection.
 
 After a sort/filter/geometry publication, call `reconcileSelection` with the
-actual `SelectionNavigationView`. It delegates focus reconciliation and typed
+required actual `SelectionNavigationView` (there is no body argument or
+unfiltered fallback). `moveActive` and `navigateSelection` also require that
+view; only `moveActive` takes a separate used-data body for empty-focus seeding.
+It delegates focus reconciliation and typed
 authored-hidden/filter-hidden reasons to the shared S2 helpers. Used-data body
 bounds do not imply that a filter exists. Hidden
 body active cells relocate to the nearest visible body row, forward on ties.
@@ -59,8 +66,8 @@ address-space request. Use the S6 state transition to update source selection;
 for visible targets, the existing S2 `scrollWindow.navigateTo` centers the
 viewport on the returned source target. Hidden targets preserve the viewport
 and feed the exact source target/reason into `ViewerStatus.inspection`.
-S2 supplies authored-hidden/filter-hidden diagnostics when its SheetView
-context is available; the pure selection transition reports hidden geometry.
+S2 supplies authored-hidden/filter-hidden diagnostics from the required SheetView
+context; the pure selection transition also reports hidden geometry.
 
 `ViewerStatus` is the single polite live region. Its hidden inspector calls
 `SourceStore.readCell` with the captured source stamp and an AbortSignal,
@@ -84,7 +91,10 @@ published by this local state machine.
 
 The additive `core/overlay.gridSelectionOverlay` consumes only bounded S5
 viewport cell records plus bounded neighbor overscan. It returns separate fills
-and outline segments; shared cell edges cancel before viewport clipping, and
+and outline segments; endpoints snap to integer device pixels before edge
+cancellation. S5 passes device pixels per record coordinate as `pixelScale`
+(sheet zoom × DPR for sheet-space records, DPR for zoomed CSS coordinates).
+Shared cell edges cancel before viewport clipping, and
 clipping does not invent selection borders. Its paint helper uses a
 translucent green fill and 2 CSS-pixel border, independently of the existing
 blue text selection. S5 owns overview-group coalescing and detail admission;
