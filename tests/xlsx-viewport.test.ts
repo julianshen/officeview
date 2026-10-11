@@ -2,7 +2,8 @@ import { describe, expect, test } from 'vitest'
 import { createCanvas, type Canvas } from 'canvas'
 import { OfficePackage } from '../src/core/zip'
 import { parseXlsx } from '../src/xlsx/parse'
-import { computeMetrics, renderSheet } from '../src/xlsx/render'
+import { computeMetrics, renderSheet, renderSheetViewport } from '../src/xlsx/render'
+import { buildSheetGeometry } from '../src/xlsx/view/viewport'
 import { buildXlsx } from '../src/testdata/ooxml-builders'
 
 async function bigSheet() {
@@ -65,6 +66,33 @@ describe('xlsx viewport culling', () => {
     }
     expect(diff).toBe(0)
     // And the merged text is really in the window (not vacuously white).
+    expect(Array.from(b.data).some(v => v < 250)).toBe(true)
+  })
+  test.each([
+    ['rows 50-60', (m: Awaited<ReturnType<typeof bigSheet>>['m']) => ({ x: 0, y: 735, width: m.widthPx, height: 165 })],
+    ['merge anchored above the pane', (m: Awaited<ReturnType<typeof bigSheet>>['m']) => ({ x: 0, y: m.rowHeightsPx.slice(0, 50).reduce((a, b) => a + b, 0), width: m.widthPx, height: 120 })],
+    ['an interior pane with partial cells', () => ({ x: 37, y: 411, width: 300, height: 157 })],
+  ])('interactive full-axis seam matches the static crop of an ordinary sheet (%s)', async (_name, pane) => {
+    const { sheet, m } = await bigSheet()
+    const box = pane(m)
+    const full = createCanvas(m.widthPx, m.heightPx)
+    renderSheet(sheet, full.getContext('2d') as never, m, undefined, {})
+    const geometry = buildSheetGeometry(sheet)
+    expect(geometry.kind).toBe('ready')
+    expect(geometry.diagnostics).toEqual([])
+    const view = createCanvas(box.width, box.height)
+    const result = renderSheetViewport(sheet, view.getContext('2d') as never, geometry, { box, zoom: 1, deviceScale: 1 }, {})
+    expect(result.kind).toBe('detail')
+    const a = pixels(full)
+    const b = pixels(view)
+    let diff = 0
+    for (let y = 0; y < box.height; y++) {
+      for (let x = 0; x < box.width; x++) {
+        const i = (y * box.width + x) * 4, j = ((box.y + y) * a.width + (box.x + x)) * 4
+        for (let k = 0; k < 3; k++) if (Math.abs(b.data[i + k] - a.data[j + k]) > 0) { diff++; break }
+      }
+    }
+    expect(diff).toBe(0)
     expect(Array.from(b.data).some(v => v < 250)).toBe(true)
   })
   test('omitted viewport paints the whole sheet as before', async () => {

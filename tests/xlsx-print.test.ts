@@ -2,8 +2,9 @@ import { describe, expect, test } from 'vitest'
 import { createCanvas } from 'canvas'
 import { OfficePackage } from '../src/core/zip'
 import { parseXlsx } from '../src/xlsx/parse'
-import { computeMetrics, computePrintMetrics, renderPrintPage, PAPER_SIZES_IN } from '../src/xlsx/render'
+import { computeMetrics, computePrintMetrics, renderPrintPage, PAPER_SIZES_IN, STATIC_SHEET_BUDGET, StaticExportLimitError } from '../src/xlsx/render'
 import { buildXlsx } from '../src/testdata/ooxml-builders'
+import type { XlsxSheet } from '../src/xlsx/types'
 
 async function printSheet(setup?: { paperSize?: number; orientation?: string; scale?: number; fitToWidth?: number; fitToHeight?: number; fitToPage?: boolean }) {
   const rows = []
@@ -67,6 +68,57 @@ describe('xlsx print setup', () => {
     let ink = 0
     for (let i = 0; i < data.length; i += 4) if (data[i] < 128) ink++
     expect(ink).toBeGreaterThan(100)
+  })
+  describe('explicit static print budgets', () => {
+    const handBuilt = (row: number, col: number): XlsxSheet => ({
+      name: 'Huge', cols: [], merges: [], mergeRanges: [],
+      rows: [{ index: 0, cells: [{ ref: 'A1', row: 0, col: 0, value: 'A1', styleIndex: 0 }] },
+        { index: row, cells: [{ ref: 'Far', row, col, value: 'Far', styleIndex: 0 }] }],
+    })
+    const counting = () => {
+      const canvas = createCanvas(64, 64), raw = canvas.getContext('2d')
+      let calls = 0
+      const ctx = new Proxy(raw, {
+        get(target, property) {
+          const value = Reflect.get(target, property, target)
+          return typeof value === 'function' ? (...args: unknown[]) => { calls++; return value.apply(target, args) } : value
+        },
+        set(target, property, value) { return Reflect.set(target, property, value, target) },
+      }) as unknown as CanvasRenderingContext2D
+      return { ctx, calls: () => calls }
+    }
+    test('a full-sheet run over the page budget is refused before painting', () => {
+      // Inside the 16,384 x 4,096 grid, but ~139k Letter pages at 100%.
+      const sheet = handBuilt(16_383, 4_095)
+      const m = computeMetrics(sheet)
+      expect(m.exportLimits).toBeUndefined()
+      const print = computePrintMetrics(sheet, m, 96)
+      expect(print.pagesWide * print.pagesTall).toBeGreaterThan(STATIC_SHEET_BUDGET.maxPrintPages)
+      expect(print.exportLimits).toEqual([expect.objectContaining({ code: 'large-export-limit', resource: 'pages', limit: STATIC_SHEET_BUDGET.maxPrintPages })])
+      const out = counting()
+      expect(() => renderPrintPage(sheet, out.ctx, m, print)).toThrow(StaticExportLimitError)
+      expect(out.calls()).toBe(0)
+    })
+    test('a sheet beyond the static grid cannot print as if complete', () => {
+      const sheet = handBuilt(16_385, 0)
+      const m = computeMetrics(sheet)
+      const print = computePrintMetrics(sheet, m, 96)
+      expect(print.exportLimits).toEqual([expect.objectContaining({ resource: 'rows', requested: 16_386, limit: STATIC_SHEET_BUDGET.maxGridRows })])
+      const out = counting()
+      expect(() => renderPrintPage(sheet, out.ctx, m, print)).toThrow(StaticExportLimitError)
+      expect(out.calls()).toBe(0)
+    })
+    test('a page outside the page grid is rejected instead of painting a blank page', async () => {
+      const sheet = await printSheet({ scale: 50 })
+      const m = computeMetrics(sheet)
+      const print = computePrintMetrics(sheet, m, 96)
+      expect(print.exportLimits).toBeUndefined()
+      const out = counting()
+      expect(() => renderPrintPage(sheet, out.ctx, m, print, print.pagesWide, 0)).toThrow(RangeError)
+      expect(() => renderPrintPage(sheet, out.ctx, m, print, 0, -1)).toThrow(RangeError)
+      expect(out.calls()).toBe(0)
+      expect(() => renderPrintPage(sheet, out.ctx, m, print, 0, 0)).not.toThrow()
+    })
   })
   test('paper size table covers common ids with letter default', () => {
     expect(PAPER_SIZES_IN[1]).toEqual([8.5, 11])
