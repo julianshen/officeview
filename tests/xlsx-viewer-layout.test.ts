@@ -5,7 +5,8 @@
  */
 import { describe, expect, test } from 'vitest'
 import { createCanvas } from 'canvas'
-import { computeMetrics, createCellLayoutHost, renderSheet, renderSheetViewport } from '../src/xlsx/render'
+import { computeMetrics, renderSheet } from '../src/xlsx/render'
+import { createCellLayoutHost, renderSheetViewport } from '../src/xlsx/view/renderViewport'
 import {
   buildSheetGeometry, planViewport, queryViewport, sourceSetsForSlots, toViewportResults, VIEWPORT_DETAIL_LIMITS,
   type SheetGeometry, type StoreViewportOutcome,

@@ -9,7 +9,8 @@
  */
 import type { XlsxSheet } from '../../xlsx/types'
 import type { CacheIdentity, LogicalViewport, ProfileId } from '../../xlsx/view/contracts'
-import { renderSheetViewport, type RenderSheetAssets } from '../../xlsx/render'
+import type { RenderSheetAssets } from '../../xlsx/render'
+import { renderSheetViewport } from '../../xlsx/view/renderViewport'
 import { paintWatermark, type ResolvedWatermark } from '../../core/watermark'
 import type { LayoutCache } from '../../xlsx/view/textLayout'
 import type { MergeQueryCache, SheetGeometryResult } from '../../xlsx/view/viewport'

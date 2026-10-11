@@ -348,7 +348,7 @@ describe('feature flag and document-owned zoom (S5.2)', () => {
 // ---------------------------------------------------------------------------
 // S5.1 seam: drawings are painted tile-local, never under a global translation
 // ---------------------------------------------------------------------------
-import { renderSheetViewport } from '../src/xlsx/render'
+import { renderSheetViewport } from '../src/xlsx/view/renderViewport'
 import { buildSheetGeometry } from '../src/xlsx/view/viewport'
 import type { XlsxSheet } from '../src/xlsx/types'
 
