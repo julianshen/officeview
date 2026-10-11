@@ -181,6 +181,8 @@ class Scanner {
       first = page
       break
     }
+    // An abort that landed while this page was in flight wins over its content.
+    this.options.signal.throwIfAborted()
     if (first === undefined) throw new RangeError('Populated scan ended without a page')
     if (first.error !== undefined) throw new ScanFailure(first.error)
     if (!sameStamp(first.stamp, this.options.stamp)) {
@@ -369,6 +371,7 @@ async function probeHeaderRows(store: SourceStore, options: ReadOptions, pacer: 
   for (;;) {
     await pacer.tick()
     const page = await store.readRows(band, cursor, options)
+    options.signal.throwIfAborted()
     if (page.error !== undefined) {
       return { kind: 'refused', refusal: { reason: 'source-error', code: page.error.code, retryable: page.error.retryable, message: page.error.message } }
     }
@@ -416,6 +419,8 @@ async function probeHeaderRows(store: SourceStore, options: ReadOptions, pacer: 
 interface DetectionContext {
   request: RangeDetectionRequest
   pacer: Pacer
+  /** Source owner captured before the first await; the result is stamped with it. */
+  owner: SourceStamp
 }
 /** Shared tail: resolve protected header/totals first, then refuse child-only
  * slices over the body band only (protected rows never move, §6.3), then the
@@ -457,7 +462,7 @@ async function finishRect(
   return {
     kind: 'complete',
     range: { r0: rect.r0, r1: rect.r1, c0: rect.c0, c1: rect.c1, headerRows, totalsRows },
-    stamp: { ...request.store.stamp },
+    stamp: context.owner,
     source,
     header,
     overrideIgnored: table !== undefined && override !== null,
@@ -517,7 +522,7 @@ function outsideRegion(used: SourceRect, region: SourceRect): SourceRect[] {
   if (region.c1 < used.c1) out.push({ r0, r1, c0: region.c1 + 1, c1: used.c1 })
   return out
 }
-async function detectRange(request: RangeDetectionRequest, pacer: Pacer): Promise<RangeDetection> {
+async function detectRange(request: RangeDetectionRequest, pacer: Pacer, owner: SourceStamp): Promise<RangeDetection> {
   const { store, structure, selection, options } = request
   if (request.pageLimit !== undefined && (!Number.isSafeInteger(request.pageLimit) || request.pageLimit <= 0)) {
     return refused({ reason: 'invalid-range', message: 'Invalid chunk page limit' })
@@ -540,12 +545,12 @@ async function detectRange(request: RangeDetectionRequest, pacer: Pacer): Promis
   }
   options.signal.throwIfAborted()
   // Nothing may authorize a range against another document or value generation.
-  if (!sameStamp(structure.stamp, store.stamp) || !sameStamp(options.stamp, store.stamp)) {
+  if (!sameStamp(structure.stamp, owner) || !sameStamp(options.stamp, owner)) {
     return sourceError({ code: 'stale-source', retryable: true, message: 'Structure, store and read stamps disagree' })
   }
   if (structure.completeness !== 'complete') return structuralWait(structure)
   const pageLimit = request.pageLimit ?? 4096
-  const context: DetectionContext = { request, pacer }
+  const context: DetectionContext = { request, pacer, owner }
   const scanner = new Scanner(store, options, pacer, request.workBudget ?? DEFAULT_DETECTION_WORK_BUDGET)
   const tableHit = structure.firstWhere(
     { r0: active.row, r1: active.row, c0: active.col, c1: active.col },
@@ -583,16 +588,29 @@ async function detectRange(request: RangeDetectionRequest, pacer: Pacer): Promis
   return finishDerived(context, sole.rect, { kind: 'used' })
 }
 /** Typed boundary: cancellation, scan failures and budget exhaustion become
- * outcomes; anything else is a programming/source-contract error and throws. */
-async function boundary(request: RangeDetectionRequest, run: (pacer: Pacer) => Promise<RangeDetection>): Promise<RangeDetection> {
+ * outcomes; anything else is a programming/source-contract error and throws.
+ * The source owner is captured before any await and revalidated after the
+ * last one (spec §10.1): an outcome computed while the store moved to another
+ * generation is about old data, so it refuses as stale instead of being
+ * attributed to the new owner. An abort that landed during the final await
+ * still cancels. */
+async function boundary(
+  request: RangeDetectionRequest, run: (pacer: Pacer, owner: SourceStamp) => Promise<RangeDetection>,
+): Promise<RangeDetection> {
+  const signal = request.options.signal
+  const owner: SourceStamp = Object.freeze({ ...request.store.stamp })
   let outcome: RangeDetection
   try {
-    outcome = await run(new Pacer(request.options.signal))
+    outcome = await run(new Pacer(signal), owner)
   } catch (error) {
-    if (request.options.signal?.aborted) outcome = { kind: 'cancelled' }
+    if (signal?.aborted) outcome = { kind: 'cancelled' }
     else if (error instanceof ScanFailure) outcome = sourceError(error.failure)
     else if (error instanceof WorkBudgetExceeded) outcome = refused({ reason: 'resource-limit', message: error.message })
     else throw error
+  }
+  if (signal?.aborted) outcome = { kind: 'cancelled' }
+  else if (!sameStamp(request.store.stamp, owner)) {
+    outcome = sourceError({ code: 'stale-source', retryable: true, message: 'Source generation changed during detection' })
   }
   return frozenCopy(outcome)
 }
@@ -600,14 +618,14 @@ async function boundary(request: RangeDetectionRequest, run: (pacer: Pacer) => P
  * region, or the single-region used fallback, with header protection and
  * child-only refusal. Never throws for domain inputs or source failures. */
 export async function detectOperationRange(request: RangeDetectionRequest): Promise<RangeDetection> {
-  return boundary(request, pacer => detectRange(request, pacer))
+  return boundary(request, (pacer, owner) => detectRange(request, pacer, owner))
 }
 /** Detect the range, then run the shared structural sort guard over it. A
  * refusal or wait propagates unchanged; a complete outcome means the range is
  * structurally admitted. Body value availability is checked by the S7.2 sort. */
 export async function admitSortRange(request: RangeDetectionRequest): Promise<RangeDetection> {
-  return boundary(request, async pacer => {
-    const detected = await detectRange(request, pacer)
+  return boundary(request, async (pacer, owner) => {
+    const detected = await detectRange(request, pacer, owner)
     if (detected.kind !== 'complete') return detected
     const pageLimit = request.pageLimit ?? 4096
     // The guard streams through its own unbudgeted scanner so S3's bounded
