@@ -348,3 +348,13 @@ describe('paged import session', () => {
     }
   })
 })
+
+import { importLimitsFor } from '../src/xlsx/storage/importSession'
+describe('page storage budget (measured: F2 full stores 8,238,808 cells in 211.0 MiB of pages, 26.9 B/cell)', () => {
+  it('the profile page budget covers the paged cell cap at the measured density, so F2 is not refused by quota', () => {
+    for (const profile of ['D', 'M'] as const) {
+      expect(quotaLimitsFor(profile).pages).toBeGreaterThanOrEqual(importLimitsFor(profile).paged.cells * 27)
+    }
+    expect(quotaLimitsFor('D').pages).toBeGreaterThan(211 * 1024 * 1024)
+  })
+})

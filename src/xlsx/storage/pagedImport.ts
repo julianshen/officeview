@@ -72,6 +72,8 @@ export interface PagedImportSession extends ImportSession {
 }
 
 const SST_CHUNK = 4096
+/** Page bytes per compressed package byte for the quota precheck (F2 measured 4.9; margin to 6). */
+const STORED_PER_COMPRESSED_BYTE = 6
 const SMALL_PART_BYTES = 4 * MiB
 const utf8 = new TextDecoder()
 
@@ -139,7 +141,7 @@ export async function openImportSession(source: Extract<SourceHandle, { kind: 'b
   }
   const store = options.store ?? new SourcePageStore({
     docId: options.docId,
-    backend: await choosePageBackend(options.storage ?? browserPageStorageEnv(), `${options.docId}-${Date.now().toString(36)}`, source.blob.size * 4, limits.spool.memoryLimitBytes),
+    backend: await choosePageBackend(options.storage ?? browserPageStorageEnv(), `${options.docId}-${Date.now().toString(36)}`, source.blob.size * STORED_PER_COMPRESSED_BYTE, limits.spool.memoryLimitBytes),
     ledger,
   })
   let notify: () => void = () => {}
