@@ -49,7 +49,7 @@ export interface SheetFrame {
   /** Worker-backed sheets (S5.4): logical boxes inside `box` whose records are
    * still loading. They paint a pending tone, never an asserted blank, and a
    * tile holding any is presented but not cached (it repaints once they land). */
-  pending?: (box: LogicalCellBox) => readonly LogicalCellBox[]
+  pending?: (box: LogicalCellBox, visible: boolean) => readonly LogicalCellBox[]
   /** Worker layout/merge generation of the geometry (tiles of an older one are dropped by the viewer). */
   structureGen?: number
 }
@@ -254,7 +254,7 @@ export class SheetTileRenderer {
     // the accessible grid. Asked even for a tile that ends up pending: a
     // worker plan with unresolved cells still needs its rows, or it never
     // resolves.
-    const pending = frame.pending?.(box) ?? []
+    const pending = frame.pending?.(box, visible) ?? []
     if (ctx) {
       const scale = frame.zoom * frame.dpr
       ctx.setTransform(scale, 0, 0, scale, 0, 0)

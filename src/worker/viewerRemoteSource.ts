@@ -175,12 +175,34 @@ export class RemoteWorkbook implements WorkbookSource {
     const limits = VIEWPORT_DETAIL_LIMITS[this.profile]
     return { tile: limits.tile.pages, frame: limits.pages }
   }
-  /** Page requests painting work holds (all sheets): row-cache runs and worker
-   * tile plans spend ONE §11.1 frame budget. A run holds one credit per page
-   * it has asked for; a tile plan holds the per-tile page cap the worker may
-   * spend on it. Credits return when the request settles. */
+  /** Page requests painting work holds (all sheets) right now: row-cache runs
+   * and worker tile plans. Credits return when a request settles. */
   pagesInFlight = 0
-  /** Takes `pages` credits if the frame budget still has them. */
+  private pageFrame: PageFrame = { used: 0, tiles: new Map() }
+  /** Starts a frame's cumulative page allowance (§11.1: per frame and per
+   * tile, D 32/8, M 16/4). Called once per presented frame. */
+  beginPageFrame(): void { this.pageFrame = { used: 0, tiles: new Map() } }
+  /** The frame whose allowance new painting requests spend. */
+  get currentPageFrame(): PageFrame { return this.pageFrame }
+  /**
+   * Admits `pages` page requests for `tile` against ONE budget shared by row
+   * reads and worker plans: the frame's and the tile's cumulative allowance
+   * (continuations included; nothing is recycled within a frame) and the
+   * outstanding requests across frames. Ring (prefetch) work stays within
+   * half the frame on both counts, so visible work always finds room.
+   */
+  admitPages(frame: PageFrame, tile: string, pages: number, ring: boolean, commit = true): boolean {
+    const limits = this.pageLimits
+    const ceiling = ring ? limits.frame / 2 : limits.frame
+    const tileUsed = frame.tiles.get(tile) ?? 0
+    if (this.pagesInFlight + pages > ceiling || frame.used + pages > ceiling || tileUsed + pages > limits.tile) return false
+    if (!commit) return true
+    this.pagesInFlight += pages
+    frame.used += pages
+    frame.tiles.set(tile, tileUsed + pages)
+    return true
+  }
+  /** Outstanding credits only: explicit reads (inspection, copy) outside any frame. */
   reservePages(pages: number): boolean {
     if (this.pagesInFlight + pages > this.pageLimits.frame) return false
     this.pagesInFlight += pages
@@ -514,6 +536,10 @@ export class RemoteWorkbook implements WorkbookSource {
 }
 
 interface RowEntry { chunks: Set<number>; cells: PagedCell[] }
+/** One frame's cumulative page spending, in total and per tile key. */
+export interface PageFrame { used: number; tiles: Map<string, number> }
+/** Where a painting run's pages are charged. */
+interface PageAdmission { frame: PageFrame; tile: string; ring: boolean }
 
 /** One byte ledger for the painting row caches of every sheet of a document
  * (§12.4). Insertion order is recency; charging past the limit evicts the
@@ -774,18 +800,21 @@ export class RemoteSheetStore implements SourceStore {
    * order; requests them as a side effect. Detail admission comes first (spec
    * §11.1): rows/columns projecting below four device pixels at `scale` are
    * summarized by the planner and never read. Requests are coalesced into runs
-   * and bounded per tile and per frame (in flight); the rest stay pending and
-   * are asked for once earlier loads land.
+   * and every page (continuations included) is admitted against the frame's
+   * shared per-tile/per-frame allowance (RemoteWorkbook.admitPages); a ring
+   * tile (`ring`) stays within the ring share. The rest stay pending and are
+   * asked for by a later frame.
    */
-  pendingIn(metrics: ProjectedSheetMetrics, box: LogicalCellBox, scale: number): LogicalCellBox[] {
+  pendingIn(metrics: ProjectedSheetMetrics, box: LogicalCellBox, scale: number, ring = false): LogicalCellBox[] {
     const found = this.uncoveredIn(metrics, box, scale)
     if (!found || 'oversized' in found) return []
     const { k0, k1, missing, out } = found
     if (missing.length) {
-      const limits = this.workbook.pageLimits
-      const budget = Math.min(limits.tile, limits.frame - this.workbook.pagesInFlight)
-      const runs = coalesce(missing).slice(0, Math.max(0, budget))
-      for (const run of runs) void this.loadRun(run.r0, run.r1, k0, k1, new AbortController().signal, this.stamp)
+      const admission: PageAdmission = { frame: this.workbook.currentPageFrame, tile: JSON.stringify(box), ring }
+      for (const run of coalesce(missing)) {
+        if (!this.workbook.admitPages(admission.frame, admission.tile, 1, ring, false)) break
+        void this.loadRun(run.r0, run.r1, k0, k1, new AbortController().signal, this.stamp, admission)
+      }
     }
     return out
   }
@@ -840,13 +869,14 @@ export class RemoteSheetStore implements SourceStore {
     const runs = coalesce(rows.filter(row => !this.known(row, k0, k1)), 0)
     await Promise.all(runs.map(run => this.loadRun(run.r0, run.r1, k0, k1, signal ?? new AbortController().signal, stamp)))
   }
-  private async loadRun(r0: number, r1: number, k0: number, k1: number, signal: AbortSignal, stamp: SourceStamp): Promise<void> {
+  private async loadRun(r0: number, r1: number, k0: number, k1: number, signal: AbortSignal, stamp: SourceStamp, admission?: PageAdmission): Promise<void> {
     const key = `${stamp.valueGen}:${r0}:${r1}:${k0}:${k1}`
     if (this.loading.has(key)) return
+    // A painting run spends its frame's allowance page by page; an explicit
+    // read (inspection, copy) holds an outstanding credit only.
+    const admit = () => admission ? this.workbook.admitPages(admission.frame, admission.tile, 1, admission.ring) : this.workbook.reservePages(1)
+    if (admission) { if (!admit()) return } else this.workbook.pagesInFlight++
     this.loading.add(key)
-    // The first page's credit was granted by the caller's budget (pendingIn)
-    // or is an explicit read (inspection, copy); continuations ask for more.
-    this.workbook.pagesInFlight++
     let held = 1
     const epoch = this.state.epoch
     const range = { r0, r1, c0: k0 * ROW_CHUNK_COLS, c1: Math.min(MAX_COLS - 1, (k1 + 1) * ROW_CHUNK_COLS - 1) }
@@ -859,7 +889,7 @@ export class RemoteSheetStore implements SourceStore {
       for (let pages = 0; pages < PAGES_PER_RUN; pages++) {
         // A continuation is another page request: without a credit the run
         // stops here, its later rows stay unknown and a later frame asks again.
-        if (pages > 0) { if (!this.workbook.reservePages(1)) break; held++ }
+        if (pages > 0) { if (!admit()) break; held++ }
         const page = await this.readRows(range, cursor, { signal, stamp })
         // A page for an older owner, a cleared cache or a closed document never lands.
         if (this.workbook.isClosed || epoch !== this.state.epoch || page.stamp.valueGen !== this.stamp.valueGen) return

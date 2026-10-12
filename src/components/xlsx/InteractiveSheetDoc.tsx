@@ -411,7 +411,7 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
       // command; worker plans are only for unknown or oversized tiles, and the
       // row reads `pending` requests keep blank cells known (S13.3).
       ...(workerPlans && remote ? { plan: tilePlanSource({ store: remote.store(activeSheetId), metrics: entry.metrics, scale: scroll.zoom * dpr, identity, extent: { width: entry.metrics.cols.totalCss(), height: entry.metrics.rows.totalCss() }, plans: workerPlans }) } : {}),
-      ...(remote ? { pending: (box: LogicalCellBox) => remote.store(activeSheetId).pendingIn(entry.metrics, box, scroll.zoom * dpr) } : {}),
+      ...(remote ? { pending: (box: LogicalCellBox, visible: boolean) => remote.store(activeSheetId).pendingIn(entry.metrics, box, scroll.zoom * dpr, !visible) } : {}),
     }
   }
   // Viewer-owned main pools (layout/merge caches, controls caches, owned DOM),

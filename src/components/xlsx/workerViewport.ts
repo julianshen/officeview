@@ -1,9 +1,9 @@
 /** Worker-owned bounded tile planning; host-owned canonical text layout/paint.
  * Plans share the existing wire byte cap and are charged to the main ledger.
  * Tiles the row cache already proves never ask the worker (tilePlanSource).
- * A tile plan holds the per-tile page cap from the SAME frame page budget the
- * row cache's reads spend (§11.1); ring tiles may only use half of it, so a
- * visible tile always finds room. */
+ * A tile plan spends the per-tile page cap from the SAME per-frame/per-tile
+ * allowance the row cache's reads spend (§11.1); ring work may only use half
+ * of the frame, so a visible tile always finds room. */
 import type { CacheIdentity, LogicalViewport, ViewportResult } from '../../xlsx/view/contracts'
 import type { RemoteWorkbook, RemoteSheetStore } from '../../worker/viewerRemoteSource'
 import { queryPayloadBytes, WORKER_QUERY_BYTES } from '../../worker/viewerQueryBudget'
@@ -39,6 +39,8 @@ export class WorkerViewportPlans {
   /** Retryable failures per tile key, for the backoff (bounded like entries). */
   private readonly failures = new Map<string, number>()
   beginFrame(owner: CacheIdentity, window: LogicalViewport): void {
+    // One presented frame: plans and row reads share its page allowance.
+    this.remote.beginPageFrame()
     this.select(owner, window)
     // Requests and failures off the pane and its prefetch ring are obsolete;
     // settled plans stay until the byte/entry caps or a scope change.
@@ -72,15 +74,18 @@ export class WorkerViewportPlans {
     const scope = this.select(owner, window)
     const key = JSON.stringify(window.box), existing = this.entries.get(key)
     if (existing) { this.entries.delete(key); this.entries.set(key, existing); return existing.plan ?? pending() }
-    // The worker may spend up to the per-tile page cap on this plan.
-    const pages = this.remote.pageLimits.tile
-    if (!visible && this.remote.pagesInFlight + pages > this.remote.pageLimits.frame / 2) return pending()
+    // The worker may spend up to the per-tile page cap on this plan, so it
+    // needs the tile's whole unspent allowance in this frame (a tile whose rows
+    // were already requested this frame gets no plan), within the ring share
+    // for a prefetch tile.
+    const pages = this.remote.pageLimits.tile, frame = this.remote.currentPageFrame
+    if (!this.remote.admitPages(frame, key, pages, !visible, false)) return pending()
     if (this.entries.size >= MAX_ENTRIES) {
       const oldest = [...this.entries].find(([, e]) => e.plan)
       if (oldest) this.drop(oldest[0], oldest[1])
       else return pending()
     }
-    if (!this.remote.reservePages(pages)) return pending()
+    this.remote.admitPages(frame, key, pages, !visible)
     const entry: Entry = { bytes: 0, controller: new AbortController() }
     this.entries.set(key, entry)
     // The request carries the frame owner its plan is stored under: a plan for

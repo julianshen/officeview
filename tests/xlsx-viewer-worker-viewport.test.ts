@@ -170,6 +170,88 @@ describe('one frame page budget for worker plans and row reads (r3 #2)', () => {
   })
 })
 
+describe('cumulative per-frame/per-tile page caps and the ring share (r4 #1, #2)', () => {
+  /** A sorted sheet whose display rows map to `sourceAt(displayRow)`. */
+  async function sortedHarness(rows: number, rank: (row: number) => number) {
+    const doc = workbookOf([{ sheetId: 's', cells: Array.from({ length: rows }, (_, row) => [{ row, col: 0, value: rank(row) }, { row, col: 1, value: `t${row}` }]).flat() }])
+    const h = await harness(doc)
+    const commit = await h.remote.sort(h.remote.identity('s'), { range: { r0: 0, r1: rows - 1, c0: 0, c1: 1, headerRows: 0, totalsRows: 0 }, keys: [{ col: 0, order: 'asc' }], caseSensitive: false }, new AbortController().signal)
+    if (commit.kind !== 'committed') throw new Error(`sort ${commit.kind}`)
+    const axes = h.remote.geometry('s')
+    const metrics = createSheetMetrics({ rows: axes.rows, cols: axes.cols, order: commit.view.order, visibility: visibilityFromHidden(createIntervalSet([])) })
+    const source = h.source.store('s'), readRows = source.readRows.bind(source)
+    const io = { pages: 0, gate: null as Promise<void> | null }
+    vi.spyOn(source, 'readRows').mockImplementation(async (...args) => { io.pages++; if (io.gate) await io.gate; return readRows(...args) })
+    return { ...h, metrics, owner: h.remote.identity('s'), store: h.remote.store('s'), io }
+  }
+  const settle = async (h: { port: { idle(): Promise<void> }; remote: RemoteWorkbook }) => {
+    for (let i = 0; i < 50 && (i < 5 || h.remote.pagesInFlight > 0); i++) { await h.port.idle(); await new Promise(resolve => setTimeout(resolve, 0)) }
+  }
+  // Display rows 0..63 come from clusters g*700 + k*32 (k < 16): each cluster
+  // coalesces into one run of 481 source rows, three 200-row pages each.
+  const clustered = (clusters: number) => {
+    const picked = new Map<number, number>()
+    for (let g = 0; g < clusters; g++) for (let k = 0; k < 16; k++) picked.set(g * 700 + k * 32, picked.size)
+    return (row: number) => picked.get(row) ?? 10_000 + row
+  }
+  // 40% zoom: a 512-device-pixel tile is 1280 logical px; rows are 8 device px.
+  const scale = 0.4, tileBox = (row: number) => ({ x: 0, y: row * 1280, width: 1280, height: 1280 })
+  const tileWindow = (row: number): LogicalViewport => ({ box: tileBox(row), zoom: scale, deviceScale: 1 })
+
+  it('#1: one tile spends at most the per-tile cap of source pages, continuations included', async () => {
+    const h = await sortedHarness(4096, clustered(4))
+    try {
+      h.remote.beginPageFrame()
+      h.store.pendingIn(h.metrics, tileBox(0), scale)
+      await settle(h)
+      expect(h.io.pages, 'source page requests for one tile').toBeLessThanOrEqual(h.remote.pageLimits.tile)
+      expect(h.io.pages).toBeGreaterThan(0)
+      expect(h.remote.pagesInFlight).toBe(0)
+    } finally { await h.remote.release() }
+  })
+
+  it('#1: two tiles of one frame, rows then plans, spend at most the frame cap; credits are not recycled within it', async () => {
+    const h = await sortedHarness(8192, clustered(8))
+    const plans = new WorkerViewportPlans(h.remote)
+    const plan = tilePlanSource({ store: h.store, metrics: h.metrics, scale, identity: h.owner, extent: extentOf(h.metrics), plans })
+    try {
+      plans.beginFrame(h.owner, { box: { x: 0, y: 0, width: 1280, height: 2560 }, zoom: scale, deviceScale: 1 })
+      for (const row of [0, 1]) { h.store.pendingIn(h.metrics, tileBox(row), scale); plan(tileWindow(row), true) }
+      await settle(h)
+      // Settled requests must not free allowance for this frame's later asks.
+      for (const row of [0, 1]) { h.store.pendingIn(h.metrics, tileBox(row), scale); plan(tileWindow(row), true) }
+      await settle(h)
+      expect(h.io.pages, 'source page requests for one frame').toBeLessThanOrEqual(h.remote.pageLimits.frame)
+      expect(h.io.pages).toBeGreaterThan(0)
+      // A new frame has its own allowance again.
+      plans.beginFrame(h.owner, { box: { x: 0, y: 0, width: 1280, height: 2560 }, zoom: scale, deviceScale: 1 })
+      const before = h.io.pages
+      h.store.pendingIn(h.metrics, tileBox(0), scale)
+      await settle(h)
+      expect(h.io.pages).toBeGreaterThan(before)
+    } finally { plans.dispose(); await h.remote.release() }
+  })
+
+  it('#2: held ring row reads and plans leave the visible share free; a cold visible tile still starts its reads', async () => {
+    const h = await sortedHarness(4096, row => (row * 31) % 4096)
+    const plans = new WorkerViewportPlans(h.remote)
+    const plan = tilePlanSource({ store: h.store, metrics: h.metrics, scale: 1, identity: h.owner, extent: extentOf(h.metrics), plans })
+    let open!: () => void
+    h.io.gate = new Promise<void>(resolve => { open = resolve })
+    const box = (x: number, y: number) => ({ x, y, width: 512, height: 512 })
+    try {
+      plans.beginFrame(h.owner, { box: { x: 512, y: 0, width: 512, height: 1536 }, zoom: 1, deviceScale: 1 })
+      // Prefetch order: each ring tile's rows, then its plan; all their I/O is held.
+      for (const y of [0, 512, 1024]) { h.store.pendingIn(h.metrics, box(0, y), 1, true); plan({ box: box(0, y), zoom: 1, deviceScale: 1 }, false) }
+      expect(h.remote.pagesInFlight, 'ring work stays within half the frame').toBeLessThanOrEqual(h.remote.pageLimits.frame / 2)
+      const held = h.remote.pagesInFlight
+      h.store.pendingIn(h.metrics, box(512, 0), 1, false)
+      plan({ box: box(512, 0), zoom: 1, deviceScale: 1 }, true)
+      expect(h.remote.pagesInFlight, 'the visible tile started its reads').toBeGreaterThan(held)
+    } finally { open(); await settle(h); plans.dispose(); await h.remote.release() }
+  })
+})
+
 describe('WorkerViewportPlans: owner scope and retry (MINOR-2, MINOR-3)', () => {
   const complete = { kind: 'complete', result: { kind: 'viewport', completeness: 'complete', content: { kind: 'detail', cells: [] } } } as never
 
@@ -195,7 +277,8 @@ describe('WorkerViewportPlans: owner scope and retry (MINOR-2, MINOR-3)', () => 
     const owner = h.session.identity('s'), window = windowOf(), extent = extentOf(metricsOf(h))
     const timeout = { kind: 'cancelled', diagnostics: [{ code: 'query-timeout', message: 'Query timed out after 120 seconds' }] } as never
     const spy = vi.spyOn(h.remote, 'viewport').mockResolvedValue(timeout)
-    const repaint = vi.fn(() => { plans.get(owner, window, extent, true) })
+    // A repaint is a new frame: it begins the frame, then asks for the tile.
+    const repaint = vi.fn(() => { plans.beginFrame(owner, window); plans.get(owner, window, extent, true) })
     const unsubscribe = h.remote.subscribe(repaint)
     vi.useFakeTimers()
     try {
@@ -230,7 +313,7 @@ describe('WorkerViewportPlans: owner scope and retry (MINOR-2, MINOR-3)', () => 
     const owner = h.session.identity('s'), window = windowOf(), extent = extentOf(metricsOf(h))
     const partial = (error?: object) => ({ kind: 'complete', diagnostics: [], result: { kind: 'viewport', completeness: error ? 'incomplete' : 'loading', content: { kind: 'detail', cells: [{ kind: 'error', source: { row: 0, col: 0 }, bounds: { x: 0, y: 0, width: 64, height: 20 } }] }, ...(error ? { error } : {}) } }) as never
     const spy = vi.spyOn(h.remote, 'viewport').mockResolvedValue(partial({ code: 'page-error', retryable: true, message: 'page failed' }))
-    const unsubscribe = h.remote.subscribe(() => { plans.get(owner, window, extent, true) })
+    const unsubscribe = h.remote.subscribe(() => { plans.beginFrame(owner, window); plans.get(owner, window, extent, true) })
     vi.useFakeTimers()
     try {
       plans.get(owner, window, extent, true)
@@ -260,7 +343,7 @@ describe('WorkerViewportPlans: owner scope and retry (MINOR-2, MINOR-3)', () => 
     const owner = h.session.identity('s'), window = windowOf(), extent = extentOf(metricsOf(h))
     const loading = { kind: 'complete', diagnostics: [], result: { kind: 'viewport', completeness: 'loading', content: { kind: 'detail', cells: [] } } } as never
     const spy = vi.spyOn(h.remote, 'viewport').mockResolvedValue(loading)
-    const unsubscribe = h.remote.subscribe(() => { plans.get(owner, window, extent, true) })
+    const unsubscribe = h.remote.subscribe(() => { plans.beginFrame(owner, window); plans.get(owner, window, extent, true) })
     vi.useFakeTimers()
     try {
       plans.get(owner, window, extent, true)
@@ -276,7 +359,7 @@ describe('WorkerViewportPlans: owner scope and retry (MINOR-2, MINOR-3)', () => 
     const owner = h.session.identity('s'), window = windowOf(), extent = extentOf(metricsOf(h))
     const terminal = { kind: 'error', code: 'page-error', retryable: false, diagnostics: [{ code: 'page-error', message: 'bad tile' }] } as never
     const spy = vi.spyOn(h.remote, 'viewport').mockResolvedValue(terminal)
-    const unsubscribe = h.remote.subscribe(() => { plans.get(owner, window, extent, true) })
+    const unsubscribe = h.remote.subscribe(() => { plans.beginFrame(owner, window); plans.get(owner, window, extent, true) })
     vi.useFakeTimers()
     try {
       plans.get(owner, window, extent, true)
