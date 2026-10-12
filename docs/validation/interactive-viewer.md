@@ -30,7 +30,7 @@ Packages are true XLSX files, routed to the page as `/__fixtures/<name>`.
 | Gate | Result |
 |---|---|
 | `bunx tsc --noEmit` | pass (no output) |
-| `bunx vitest run` | **184 files passed, 2 skipped; 5,279 tests passed, 10 skipped, 1 todo** (base `cfa5cb5`: 180 files / 5,265 tests, all passing) |
+| `bunx vitest run` | **186 files passed; 5,362 tests passed, 2 skipped, 1 todo** at the branch head (review round 1 included). An earlier run reported 184 files / 5,279 tests because two corpus-dependent files skipped before `corpus/` was populated. Base `cfa5cb5` without corpus: 180 files / 5,265 tests, all passing |
 | `bunx playwright test --config playwright.viewer.config.ts` | **27 passed, 1 skipped** (the skip is the Chromium-only long-task case on WebKit, by design). This includes 20 S10.1 scenarios, 10 each on Chromium and WebKit |
 | `bun run build` | pass; eager `dist/index.js` **38.32 kB gzip** (vite report), unchanged from base 38.32 kB, ceiling 38.72 kB |
 | Golden compare `--threshold 0 --max-ratio 0` | **every XLSX unit passes** (poi-47889 ×3, 56295, 59021, 59746_NoRowNums, 62272, 64508, 66365, link-external-workbook-a, xlsx-jdbc). 6 DOCX/PPTX units fail identically on base `cfa5cb5`, checked in a temporary base worktree: poi-55733.docx, poi-picture-transparency.pptx ×3, pydocx-blk-inner-content.docx, pypptx-test_slides.pptx. They are pre-existing and environmental, and no DOCX/PPTX/render file changed on this branch |
@@ -42,7 +42,7 @@ Each gap was first reproduced in a real browser, then pinned by a failing test (
 | # | Gap (where reproduced) | Requirement | Fix | Regression tests |
 |---|---|---|---|---|
 | G1 | Worker-backed F2 (100,010 rows): every header sort/filter refused "Source range is incomplete." forever, and no worker command was issued. The controls port snapshots structure once when the sheet opens. The worker answered `completeness: 'loading'` while its import ran, and the snapshot was never refreshed. | STORE-04, LIFE-03, SEM-01 | `viewerControlsClient.ts` re-queries a structural snapshot that was still loading before resolving a range. | `tests/xlsx-viewer-controls-structure.test.ts` (loading-first snapshot), browser F2 worker-backed scenario |
-| G2 | F2 resident (1,000 rows) and worker-backed (100,010 rows): a header sort with no selection resolved A1:H6, so the sort and record counts covered **5 body rows**. The shipped object/paged/remote stores continue `scanPopulated` by iteration without `nextCursor`. Range detection read one page and treated the missing cursor as "exhausted", so a full strip page proved a row blank. The S7.1 suite's synthetic store pages by cursor, which masked the bug. | SEM-01, STORE-04 (§6.1 current region) | `rangeDetection.ts` Scanner reads one page ahead and issues its own continuation token; gallop strips are sized in cells (lines × span, capped at 65,536). Measured on a 20,001-row table: **60,006 → 66** store pages. On worker-backed F2 at 100,010 rows: 597 scan reads instead of one probe per row. | `tests/xlsx-viewer-range-continuation.test.ts` (whole-table range, body active cell, page-count bound), browser F2 scenarios |
+| G2 | F2 resident (1,000 rows) and worker-backed (100,010 rows): a header sort with no selection resolved A1:H6, so the sort and record counts covered **5 body rows**. The shipped object/paged/remote stores continue `scanPopulated` by iteration without `nextCursor`. Range detection read one page and treated the missing cursor as "exhausted", so a full strip page proved a row blank. The S7.1 suite's synthetic store pages by cursor, which masked the bug. | SEM-01, STORE-04 (§6.1 current region) | `rangeDetection.ts` Scanner reads one page ahead and issues its own continuation token; gallop strips are sized in cells (lines × span, capped at 65,536). Observed during the investigation (not pinned; the committed test pins < 200 pages): **60,006 → 66** store pages on a 20,001-row table. On worker-backed F2 at 100,010 rows the investigation counted about 597 scan reads, instead of one probe per row. | `tests/xlsx-viewer-range-continuation.test.ts` (whole-table range, body active cell, page-count bound), browser F2 scenarios |
 | G3 | F2 (both paths): after Go To A1, the funnel on column D refused "Contiguous selection does not contain the active cell". The header gesture moves the active cell to its column but kept the old single-cell selection. S7.1 detection deliberately refuses that combination; its own test is unchanged. | SEM-02, A11Y-02 | `viewerControlsClient.ts` `rangeRequest` drops a single-cell selection for header gestures. | `tests/xlsx-viewer-controls-structure.test.ts` (header gesture after A1), browser F2 scenarios |
 | G4 | Chromium/WebKit, 400 px viewer pane: the column popup is anchored to the pane bottom and grew past the pane top. There `overflow:hidden` clipped Sort ascending/descending, Clear column and Clear all filters under the navigator, so they could not be clicked. | A11Y-02, SEM-09 | `GridSemantics.tsx` popup is bounded to `max-height:100%` of the pane and scrolls. | browser "column filter popup stays inside a short viewer pane…" |
 | G5 | Chromium, F7-shaped sheet: **one** authored 0.75 pt row (2 device px at DPR 2) in an ordinary 41-row viewport made the whole owned grid coarse: no column headers, rows or gridcells, only "Zoom in or inspect a cell for detail". The painter meanwhile kept every other row in detail. | A11Y-01, RENDER-01 | `GridSemantics.tsx`: only lines under 4 device px go unowned. The whole tree is coarse only when the window caps are exceeded or no detail line remains. A navigated cell on the tiny row stays the exact active descendant. | `tests/xlsx-viewer-a11y-subdetail.test.tsx`, browser F7 scenario (Row 11 owned, Row 10 summarized) |
@@ -106,41 +106,47 @@ Browser shorthand: **[B:C+W]** = Playwright scenario passing on Chromium and Pla
 | AC-RENDER-02 | F7, F8 | `xlsx-viewer-selection-overlay.test.ts`, `xlsx-viewer-viewport-integration.test.tsx`, static print/export suites | pass (unit) |
 | AC-PERF-01 | F1–F8 | S10.2: controlled Chrome/Safari/iPad p50/p95 receipts | **not-run** (out of S10.1 scope; Safari/iPad also blocked on hardware/automation). Blocking |
 | AC-PERF-02 | F2–F7 | complexity part: `xlsx-viewer-complexity.test.ts` (see below); per-pool memory receipts → S10.2 | complexity **pass**; memory **not-run**. Blocking |
-| AC-BACKEND-01 | — | TS resident baseline is the only backend; S11/S12 not executed | baseline pass; prototypes not-run (allowed status) |
+| AC-BACKEND-01 | — | TS resident baseline is the only backend. S11/S12 were not executed, and the S11 allowance ("record not-run when the baseline already meets targets") needs the S10.2 receipts first | **not-run** (pending S10.2 and S11). Blocking |
 | AC-REG-01 | F8, corpus | typecheck, full vitest, build, golden compare (all XLSX units pass; 6 non-XLSX failures pre-existing on base) | pass (code); native source/checkpoint evidence not-run |
 
 **Counts (34 acceptance cases):**
 
 | Status | Cases | Which |
 |---|---:|---|
-| pass | 18 | AC-CAP-01, STORE-04, VIEW-01–04, SEM-01, SEM-03, SEM-06, SEM-09, SEL-01, SEL-02, COPY-01, LIFE-01, SEARCH-01, RENDER-01, RENDER-02, BACKEND-01 (its prototype not-run is an allowed status) |
+| pass | 17 | AC-CAP-01, STORE-04, VIEW-01–04, SEM-01, SEM-03, SEM-06, SEM-09, SEL-01, SEL-02, COPY-01, LIFE-01, SEARCH-01, RENDER-01, RENDER-02 |
 | pass with a not-run leg | 9 | AC-CAP-02, CAP-03, STORE-01, STORE-02, SEM-02, SEM-04, SEM-07, SEM-08, REG-01 |
 | partial, blocking | 6 | AC-STORE-03, SEM-05, A11Y-01, A11Y-02, LIFE-02, PERF-02 |
-| not-run, blocking | 1 | AC-PERF-01 |
+| not-run, blocking | 2 | AC-PERF-01, BACKEND-01 |
 | fail | 0 | |
 
 ## Complexity audit (spec §3 invariants)
 
 The instruments live in `tests/xlsx-viewer-complexity.test.ts`.
 
-- **Allocation ledger:** proxies over every global typed-array constructor, plus `Map#set` and `Set#add` on collections constructed by officeview modules. jsdom's and React's own maps are excluded, because a real browser does not run them in JS.
-- **Self-check:** proves the ledger sees a row-sized `Uint32Array(1048576)` and 60,000 inserts into an `axes.ts`-built `Set`.
+What is instrumented, and what is not:
+
+- **Allocation ledger:** proxies over every global typed-array constructor and `Array(n)`, plus `Map#set` and `Set#add` on collections constructed by officeview modules. jsdom's and React's own maps are excluded, because a real browser does not run them in JS.
+- **Retained heap:** the V8 heap after a forced full collection, measured before and after each warmed-up window while the viewer stays mounted. Plain objects and literal arrays have no constructor to proxy, so this is what bounds them. Any per-row/per-cell object table or per-row array set that the window keeps reachable exceeds the 4 MiB bound.
+- **Self-checks:**
+  - The ledger sees a row-sized `Uint32Array(1048576)` and 60,000 inserts into an `axes.ts`-built `Set`.
+  - The review probe (a 65,536-entry plain-object cell table plus 1,024 plain row arrays) records 0 inserts and 0 typed elements, but retains about 7 MiB, which is over the bound.
+- **Residual (not bounded here):** transient garbage created and freed inside a window, and per-coordinate work that allocates nothing (pure loops). Visit counts cover those only at the instrumented boundaries: worker read rects and F6 provider visits.
 
 | Anti-pattern | Instrument | Observed | Bound (why) |
 |---|---|---|---|
 | Dense R×C allocation / row lanes | largest typed array during corner navigation, giant-merge paint, worker-backed sort, F6 window | 0 / 32 / 32,768 elements (the 32,768 is the visibility bitset words) | < 1,048,576 (one row lane); a cell lane would be 2^34 |
-| Per-blank-row/cell objects | officeview Map/Set inserts across those windows | 52 – 10,231 | < 50,000 (one entry per row would be ≥ 1,048,575) |
+| Per-blank-row/cell objects | officeview Map/Set inserts; retained heap after warmed-up windows | 34 – 10,231 inserts; retained 0 – ~2.1 MiB (the largest is the F6 25 % result holding up to 2,048 coarse groups) | < 50,000 inserts (one per row would be ≥ 1,048,575); < 4 MiB retained (the review probe retains ~7 MiB) |
 | All-column scans per row | every worker `read rows` rect | ≤ 1,024 columns × ≤ 4,096 rows per read | never 16,384 columns or the whole axis |
 | Full-sheet canvas / CSS | largest canvas backing store; scroller extent (browser) | ≤ 4096² px; canvases ≤ viewport × DPR; scroller < 1M × row height | a full-sheet canvas would be 2^34 px tall |
 | Merge coverage maps | inserts while painting and sort-guarding D1:D1048576 | < 50,000 | a coverage map holds 1,048,576 entries |
 | Per-command clone/reparse | worker `open` commands, kernel `parse` spy | 1 open, 0 parses for open + navigation + sort | one per document |
 | Lossy bitwise coordinate IDs | DOM `aria-activedescendant` cell ids | 2147483648, 4294967296, 17179869183 exact | signed/32-bit packing gives negative or 0 |
-| Range detection cost (G2) | store page count for a 20,001-row region | 66 pages (was 60,006) | < 200 (strip pages, not per-row probes) |
+| Range detection cost (G2) | store page count for a 20,001-row region | pinned bound only (66 pages observed in the investigation, 60,006 before) | < 200 (strip pages, not per-row probes) |
 | F6 geometry window | provider `cellAt` + `isPopulated` visits | ≤ 2 × visible cells at XFD1048576; 0 per-cell visits for the 25 % tiny-size frame | never proportional to 2^34 |
 
 ## Native Excel, Safari and devices
 
-- **Native Excel (AC-STORE-01/SEM-07/REG-01 native legs): not-run.** One automation attempt was made: `osascript` drove Microsoft Excel to create a workbook (number, `DATE()+0.5` with a datetime format, `=1/0`, a cached formula, a hidden row, Unicode text, XFD1048576) and to save it as `.xlsx`. The script reached the save step and then blocked for 120 s on a dialog that needed a user, most likely Excel's sandbox file-access grant: an Excel lock file appeared, but no workbook was written. A `quit saving no` was then sent to Excel. Excel process 699 stayed running afterwards, possibly the user's own session, so the user should check Excel for a leftover dialog or an untitled workbook. No native receipt is claimed.
+- **Native Excel (AC-STORE-01/SEM-07/REG-01 native legs): not-run.** One automation attempt was made: `osascript` drove Microsoft Excel to create a workbook (number, `DATE()+0.5` with a datetime format, `=1/0`, a cached formula, a hidden row, Unicode text, XFD1048576) and to save it as `.xlsx`. The script reached the save step and then blocked for 120 s on a dialog that needed a user, most likely Excel's sandbox file-access grant: an Excel lock file appeared, but no workbook was written. A `quit saving no` was then sent to Excel. Excel process 699 stayed running afterwards, possibly the user's own session, so the user should check Excel for a leftover dialog or an untitled workbook (the coordinator has told the user). No native receipt is claimed. **Any future native automation must run under a dedicated macOS user account or in a VM, never against the user's live Office session.** No further Excel attempts were made.
   - **Manual steps:**
     1. In Excel, build the cells above, plus a table (Insert ▸ Table over D1:E3, header row on). Save as `native-corner.xlsx` and close it.
     2. Reopen the file and confirm Excel shows no repair prompt. Take a screenshot.
@@ -157,11 +163,12 @@ These are mandatory cases whose evidence is incomplete. Nothing here is hidden a
 2. **AC-A11Y-01 / AC-A11Y-02:** the desktop screen-reader, iPad VoiceOver and real keyboard/touch/focus receipts (S10.3).
 3. **AC-PERF-01 / AC-PERF-02 (memory) / AC-LIFE-02 (real retained memory):** the controlled S10.2 Chrome, Safari and iPad receipts.
 4. **Native Excel checkpoint** for AC-STORE-01, AC-SEM-07 and AC-REG-01. The manual steps are above.
-5. **Full-scale browser runs** for F2 (1M × 8), F3 dense (256 × 16,384) and F4 (1M strings). Only reduced, labelled scales ran here.
+5. **AC-BACKEND-01:** the baseline status is pending the S10.2 receipts and the S11 decision.
+6. **Full-scale browser runs** for F2 (1M × 8), F3 dense (256 × 16,384) and F4 (1M strings). Only reduced, labelled scales ran here.
 
 ## Observations (not fixed; not reproduced as failures)
 
-- G2's read-ahead costs one extra `next()` per complete cursor-less page. On the worker path that is one more worker round trip; it is part of the 597 reads above. Detection keeps at most one read-ahead continuation open, because the worker caps open scans at 4 (`MAX_OPEN_SCANS`), shared with find. This is a cost note for the S8.6 owner, not a bug.
+- G2's read-ahead costs one extra `next()` per complete cursor-less page. On the worker path that is one more worker round trip; it is part of the roughly 597 reads observed above. Detection keeps at most one read-ahead continuation open, because the worker caps open scans at 4 (`MAX_OPEN_SCANS`), shared with find. This is a cost note for the S8.6 owner, not a bug.
 - Generated browser packages are cached under `$TMPDIR/officeview-viewer-e2e-v1`, keyed by file name. If the S0.2 builders change, bump the `-v1` suffix in `tests/browser/viewer-e2e.ts`.
 - `fromStoreScan` (`src/xlsx/view/structure.ts`) has the same first-page-only pattern as G2. It is used only by tests today. Any future production caller must follow iteration-continued pages.
 - On worker-backed F2, the saved-values status reads "0 formulas not recalculated (file too large)". The count follows the documented S1.3 definition (formulas the engine would have evaluated at load), and a cached `SUM` is not one of them. The wording is correct but may confuse users.
