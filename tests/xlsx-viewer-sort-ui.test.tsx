@@ -252,3 +252,54 @@ it.each([16, 40])('keeps touch header targets of a %ipx projected column out of 
   }
   expect(a.style.overflow).toBe('hidden')
 })
+import { emptyGridSelection, selectCell } from '../src/xlsx/view/selection'
+import { GRID_HEADER_SIZE } from '../src/components/xlsx/GridHeaders'
+describe('S13.2 item 5: 44px touch actions for legal narrow columns (spec §9.3, A11Y-02)', () => {
+  const narrow = (active: number) => {
+    const projection = createSheetMetrics({ rows: createAxisMetrics({ logicalCount: MAX_ROWS, defaultSizeCss: 24 }), cols: createAxisMetrics({ logicalCount: MAX_COLS, defaultSizeCss: 20 }) })
+    const viewport = { width: 200, height: 100 }
+    const handlers = { onSortCycle: vi.fn(), onFilter: vi.fn(), onSortDialog: vi.fn() }
+    const ui = render(<GridHeaders projection={projection} window={createScrollWindow(projection, viewport)} viewport={viewport} columns={[0, 1, 2]}
+      selection={selectCell(emptyGridSelection(), projection, { row: 0, col: active })} sort={null} touchControls {...handlers} />)
+    return { ui, handlers }
+  }
+  const box = (element: HTMLElement) => {
+    const left = parseFloat(element.style.left), top = parseFloat(element.style.top)
+    const width = Math.max(parseFloat(element.style.width) || 0, parseFloat(element.style.minWidth) || 0)
+    const height = Math.max(parseFloat(element.style.height) || 0, parseFloat(element.style.minHeight) || 0)
+    return { left, top, width, height }
+  }
+  it('a 20px active column under a coarse pointer gets ≥44x44 sort/filter/more targets that no neighbour target overlaps', () => {
+    const { ui, handlers } = narrow(1)
+    const actions = [ui.getByRole('button', { name: 'Cycle sort column B' }), ui.getByRole('button', { name: /^Filter column B/ }), ui.getByRole('button', { name: 'More sort options for B' })]
+    const columnBoxes = ['A', 'B', 'C'].map(letter => ui.getByRole('columnheader', { name: `Column ${letter}` })).map(header => ({ left: parseFloat(header.style.left), right: parseFloat(header.style.left) + parseFloat(header.style.width) }))
+    for (const action of actions) {
+      const target = box(action)
+      expect(target.width).toBeGreaterThanOrEqual(44)
+      expect(target.height).toBeGreaterThanOrEqual(44)
+      expect(action.dataset.actionColumn).toBe('1')
+      // The surface sits in the header strip's corner lane, which no column owns.
+      expect(target.left + target.width).toBeLessThanOrEqual(GRID_HEADER_SIZE)
+      for (const column of columnBoxes) expect(target.left + target.width <= column.left || target.left >= column.right).toBe(true)
+    }
+    // The targets of one column never overlap each other.
+    const boxes = actions.map(box).sort((a, b) => a.top - b.top)
+    for (let i = 1; i < boxes.length; i++) expect(boxes[i].top).toBeGreaterThanOrEqual(boxes[i - 1].top + boxes[i - 1].height)
+    fireEvent.click(actions[0])
+    expect(handlers.onSortCycle).toHaveBeenCalledWith(1, false, actions[0])
+    fireEvent.click(actions[1])
+    expect(handlers.onFilter).toHaveBeenCalledWith(1, actions[1])
+    // No sub-44px action target is left inside the narrow column headers.
+    for (const letter of ['A', 'B', 'C']) {
+      const header = ui.getByRole('columnheader', { name: `Column ${letter}` })
+      expect(header.querySelectorAll('[data-action-column]')).toHaveLength(0)
+    }
+  })
+  it('the surface follows the active column and keeps keyboard semantics', () => {
+    const { ui } = narrow(2)
+    expect(ui.queryByRole('button', { name: 'Cycle sort column B' })).toBeNull()
+    const sort = ui.getByRole('button', { name: 'Cycle sort column C' })
+    expect(sort.getAttribute('aria-pressed')).toBe('false')
+    expect(sort.tabIndex).toBe(-1)
+  })
+})
