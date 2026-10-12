@@ -8,6 +8,7 @@
  * this module; the watermark is stamped into the pane after the tiles.
  */
 import type { XlsxSheet } from '../../xlsx/types'
+import { SHAPE_ENTRY_BYTES, SHAPE_UNIT_BYTES } from '../../xlsx/view/mainLedger'
 import type { CacheIdentity, LogicalCellBox, LogicalViewport, ProfileId } from '../../xlsx/view/contracts'
 import type { RenderSheetAssets } from '../../xlsx/render'
 import { renderSheetViewport } from '../../xlsx/view/renderViewport'
@@ -213,6 +214,10 @@ export class SheetTileRenderer {
   }
 
   dispose(): void { this.cache.dispose() }
+  private shapeBytes = 0
+  /** S10.2 main ledger: browser text-shaping memory held by retained tile
+   * canvases (see SHAPE_ENTRY_BYTES); released when a tile is closed. */
+  textCacheBytes(): number { return this.shapeBytes }
 
   private key(frame: SheetFrame, col: number, row: number): TileKey {
     return { identity: frame.identity, backend: TILE_BACKEND, zoom: frame.zoom, dpr: frame.dpr, col, row }
@@ -239,6 +244,9 @@ export class SheetTileRenderer {
     const full = budget.records >= frameBudgetFor(this.profile).records && budget.gridlines >= frameBudgetFor(this.profile).gridlines
     let kind: string = 'pending'
     let work = { records: 0, gridlines: 0 }
+    // Distinct texts this tile's context shapes: the browser keeps each one
+    // (per font) while the canvas lives, outside the bitmap.
+    const shaped = ctx ? countShapedTexts(ctx) : null
     if (ctx) {
       const scale = frame.zoom * frame.dpr
       ctx.setTransform(scale, 0, 0, scale, 0, 0)
@@ -262,8 +270,32 @@ export class SheetTileRenderer {
     if (kind === 'coarse' && !full) return { surface, retained: false }
     const retained = this.cache.put(key, surface)
     if (!retained) this.stats.refused++
+    else if (shaped && shaped.bytes > 0) {
+      const bytes = shaped.bytes
+      this.shapeBytes += bytes
+      const close = surface.close.bind(surface)
+      let open = true
+      surface.close = () => { if (open) { open = false; this.shapeBytes -= bytes } close() }
+    }
     return { surface, retained }
   }
+}
+
+/** Counts the distinct (font, text) pairs a context draws or measures from now
+ * on, as estimated browser shaping bytes. */
+function countShapedTexts(ctx: CanvasRenderingContext2D): { readonly bytes: number } {
+  const seen = new Set<string>()
+  const out = { bytes: 0 }
+  const note = (text: string) => {
+    const key = `${ctx.font}\u0000${text}`
+    if (seen.has(key)) return
+    seen.add(key)
+    out.bytes += SHAPE_ENTRY_BYTES + SHAPE_UNIT_BYTES * text.length
+  }
+  const fillText = ctx.fillText.bind(ctx), measureText = ctx.measureText.bind(ctx)
+  ctx.fillText = (text: string, x: number, y: number, maxWidth?: number) => { note(text); if (maxWidth === undefined) fillText(text, x, y); else fillText(text, x, y, maxWidth) }
+  ctx.measureText = (text: string) => { note(text); return measureText(text) }
+  return out
 }
 
 /** Unknown records are loading, never blank (spec §§4.1, 10.4): a neutral tone

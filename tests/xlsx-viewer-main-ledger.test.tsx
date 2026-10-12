@@ -13,7 +13,7 @@ import { ViewerKernel } from '../src/worker/viewerKernel'
 import { OfficePackage } from '../src/core/zip'
 import { parseXlsx } from '../src/xlsx/parse'
 import type { WorkerCommand, WorkerReply } from '../src/xlsx/view/contracts'
-import { DOM_ELEMENT_BYTES, MainMemoryLedger, estimatePayloadBytes, leaseTargets } from '../src/xlsx/view/mainLedger'
+import { DOM_ELEMENT_BYTES, MainMemoryLedger, SHAPE_ENTRY_BYTES, estimatePayloadBytes, leaseTargets } from '../src/xlsx/view/mainLedger'
 import { openPagedWorkbook } from '../src/components/xlsx/pagedWorkbook'
 import { pagedWorkbookOf } from '../src/components/pagedDocument'
 import { pagedSheetGeometry } from '../src/components/xlsx/pagedGeometry'
@@ -259,6 +259,8 @@ describe('worker-backed document ledger', () => {
       expect(loaded.byPool.geometry).toBeGreaterThan(0)
       expect(loaded.byPool.dom).toBeGreaterThan(0)
       expect(loaded.byPool.dom % DOM_ELEMENT_BYTES).toBe(0)
+      // Retained tiles drew text: the browser's per-canvas shaping cache is charged.
+      expect(loaded.byPool.canvasText).toBeGreaterThanOrEqual(SHAPE_ENTRY_BYTES)
       fireEvent.click(ui.getByRole('button', { name: 'Cycle sort column B' }))
       await waitFor(() => expect(ui.getByRole('columnheader', { name: /Column B; sort priority 1, ascending/ })).toBeTruthy())
       await tick()
@@ -267,6 +269,7 @@ describe('worker-backed document ledger', () => {
       expect(sorted.peakBytes).toBeGreaterThanOrEqual(Object.values(sorted.byPool).reduce((a, b) => a + b, 0))
       ui.unmount()
       await waitFor(() => expect(found!.snapshot().byPool.dom).toBe(0))
+      expect(found!.snapshot().byPool.canvasText).toBe(0)
       return found!
     })()
     await flushReactRetention()

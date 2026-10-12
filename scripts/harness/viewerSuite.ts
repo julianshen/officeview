@@ -378,10 +378,21 @@ async function memorySession(context: BrowserContext, base: string, fixture: Vie
   // peak (a spike between samples is missed); it can prove a miss, not a pass.
   const liveHeapSamples: number[] = []
   const failed = (what: string) => (error: unknown) => { timeouts.push(`${what} failed: ${error instanceof Error ? error.message : String(error)}`) }
+  // Diagnostic only (VIEWER_SUITE_LIVE_DIAG, never in release): a second
+  // collect + read right after each sample, and the ledger at that moment, to
+  // tell a live spike from allocation between the collection and the read.
+  const liveDiag: { t: number; first: number; second: number | null; ledger: number | null }[] = []
+  const diagnose = Boolean(process.env.VIEWER_SUITE_LIVE_DIAG)
   const stopLive = startSampler(LIVE_SAMPLE_MS, async () => {
     await bounded('live gc', gcMain(), 10_000)
     const h = await bounded('live heap', heap(), 10_000)
     if (h) liveHeapSamples.push(heapBytes(h))
+    if (h && diagnose) {
+      await bounded('diag gc', gcMain(), 10_000)
+      const h2 = await bounded('diag heap', heap(), 10_000)
+      const ledger = await bounded('diag ledger', perf(page, p => p.mainLedger()?.bytes ?? null), 10_000)
+      liveDiag.push({ t: Date.now(), first: heapBytes(h), second: h2 ? heapBytes(h2) : null, ledger })
+    }
   }, failed('live sample'))
   // No-GC sampling (an upper bound, garbage included) and worker ledger polls.
   const stopPolls = startSampler(250, async () => {
@@ -396,6 +407,16 @@ async function memorySession(context: BrowserContext, base: string, fixture: Vie
   loaded = await checkpoint('loaded')
   if (ops === 'f2') {
     await page.evaluate(() => (window as unknown as W).__viewerPerf.scrollRun({ warmup: 0, frames: 120, dx: 0, dy: 60 }))
+    if (process.env.VIEWER_SUITE_LIVE_DIAG && cdp) {
+      // Diagnostic only (never in release): heap snapshot after the scroll.
+      await gcMain()
+      const chunks: string[] = []
+      const take = (e: { chunk: string }) => chunks.push(e.chunk)
+      cdp.on('HeapProfiler.addHeapSnapshotChunk', take)
+      await cdp.send('HeapProfiler.takeHeapSnapshot', { reportProgress: false })
+      cdp.off('HeapProfiler.addHeapSnapshotChunk', take)
+      writeFileSync(`${process.env.VIEWER_SUITE_LIVE_DIAG}-scroll.heapsnapshot`, chunks.join(''))
+    }
     const header = page.getByRole('columnheader', { name: /^Column G/ })
     const before = await header.getAttribute('aria-sort')
     await page.getByRole('button', { name: 'Cycle sort column G' }).click()
@@ -474,6 +495,7 @@ async function memorySession(context: BrowserContext, base: string, fixture: Vie
     },
   }
   log(`    memory ${fixture.key}: main ledger peak ${mib(afterOps.ledger?.peakBytes ?? null)}; main owned ${mib(summary.mainOwnedBytes)} (forced-GC live max ${mib(liveHeapSamples.length && baseline.heapBytes !== null ? Math.max(...liveHeapSamples) - baseline.heapBytes : null)} over ${liveHeapSamples.length} samples; peak no-GC ${mib(summary.mainPeakNoGcBytes)}), worker ledger ${mib(ledgerPeak)} / UASM ${mib(summary.workerUasmBytes)}, bitmap ${mib(summary.bitmapPeakBytes)}; after close main ${mib(summary.recovery.mainAfterCloseBytes)}, workers ${summary.recovery.workersTerminated}/${summary.recovery.workersCreated} terminated, canvases ${closed.canvas.count}`)
+  if (diagnose) writeFileSync(`${process.env.VIEWER_SUITE_LIVE_DIAG}-${fixture.key}.json`, JSON.stringify({ warm: warmHostSamples, liveDiag }))
   return { summary, warmHost: { fixture: warmFixture.key, scale: warmFixture.scale, samples: warmHostSamples }, checkpoints: { baseline, loaded, afterOps, closed }, polls, liveHeapSamples, liveSampleMs: LIVE_SAMPLE_MS, timeouts }
 }
 
@@ -527,6 +549,7 @@ export async function runViewerSuite(ctx: SuiteContext): Promise<{ receipt: View
   // Diagnostic iteration only (never in release): VIEWER_SUITE_ONLY=memory,ack …
   if (process.env.VIEWER_SUITE_HEARTBEAT) setInterval(() => log(`  heartbeat ${new Date().toISOString().slice(11, 19)}`), 30_000).unref()
   const only = args.mode === 'release' ? null : process.env.VIEWER_SUITE_ONLY?.split(',') ?? null
+  if (args.mode === 'release') delete process.env.VIEWER_SUITE_LIVE_DIAG
   const want = (name: string) => only === null || only.includes(name)
   const profileId = args.profile === 'desktop' ? 'D' : 'M'
   try {

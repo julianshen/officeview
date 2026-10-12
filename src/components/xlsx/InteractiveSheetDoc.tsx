@@ -201,7 +201,7 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
   const mainLedger = useMemo(() => remote?.mainLedger ?? new MainMemoryLedger(), [remote, source])
   // The viewer's own pools end with the viewer; lifetime charges (geometry,
   // views, replies, the resident document) end when nothing reaches them.
-  useEffect(() => () => { for (const pool of ['dom', 'layout', 'merges', 'controls', 'copy'] as const) mainLedger.releaseAll(pool) }, [mainLedger])
+  useEffect(() => () => { for (const pool of ['dom', 'canvasText', 'layout', 'merges', 'controls', 'copy'] as const) mainLedger.releaseAll(pool) }, [mainLedger])
   // A resident document's parsed model lives on the main thread while reachable.
   useMemo(() => { if (!remote) mainLedger.chargeWhileReachable('document', [doc], estimatePayloadBytes(doc)) }, [mainLedger, remote, doc])
   const onMainLedger = props.onMainLedger
@@ -413,6 +413,7 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
     mainLedger.set('merges', 'caches', merges)
     mainLedger.set('controls', 'resources', controlResources.current?.cache.usedBytes ?? 0)
     mainLedger.set('dom', 'grid', (paneRef.current?.getElementsByTagName('*').length ?? 0) * DOM_ELEMENT_BYTES)
+    mainLedger.set('canvasText', 'tiles', rendererRef.current?.textCacheBytes() ?? 0)
   }
   useEffect(() => { chargeMain() })
   // Purely observational: it never creates or resizes the pool.

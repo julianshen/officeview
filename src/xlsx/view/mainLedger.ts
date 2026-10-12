@@ -14,8 +14,8 @@
  * (DOM_ELEMENT_BYTES per owned element; see below). Canvas backing stores are
  * the bitmap pool's, not this one's (§12.4).
  */
-export type MainPool = 'rowCache' | 'viewBuffers' | 'replies' | 'copy' | 'controls' | 'layout' | 'merges' | 'dom' | 'geometry' | 'structure' | 'document'
-export const MAIN_POOLS: readonly MainPool[] = ['rowCache', 'viewBuffers', 'replies', 'copy', 'controls', 'layout', 'merges', 'dom', 'geometry', 'structure', 'document']
+export type MainPool = 'rowCache' | 'viewBuffers' | 'replies' | 'copy' | 'controls' | 'layout' | 'merges' | 'dom' | 'geometry' | 'structure' | 'document' | 'canvasText'
+export const MAIN_POOLS: readonly MainPool[] = ['rowCache', 'viewBuffers', 'replies', 'copy', 'controls', 'layout', 'merges', 'dom', 'geometry', 'structure', 'document', 'canvasText']
 
 /**
  * Estimated bytes per owned grid DOM element: the element, its attribute and
@@ -26,6 +26,18 @@ export const MAIN_POOLS: readonly MainPool[] = ['rowCache', 'viewBuffers', 'repl
  */
 export const DOM_ELEMENT_BYTES = 3200
 
+/**
+ * Main-heap bytes the browser keeps per distinct text a retained tile canvas
+ * has drawn: Chrome's per-font FrameShapeCache holds a shaped PlainTextNode for
+ * every (text, direction) a 2D context drew, for as long as the context lives.
+ * Calibrated from a Chrome 155 heap snapshot after the F2 scroll (8,905 entries
+ * in 111 caches, 14.9 MiB): PlainTextNode 1,240 B each, plus its hash-table
+ * slot (~330 B), ShapeResult and run records (~120 B) and ~8 B of glyph data
+ * per UTF-16 unit. Charged as SHAPE_ENTRY_BYTES + SHAPE_UNIT_BYTES x length.
+ */
+export const SHAPE_ENTRY_BYTES = 1700
+export const SHAPE_UNIT_BYTES = 8
+
 export interface MainLedgerSnapshot {
   bytes: number
   peakBytes: number
@@ -34,7 +46,7 @@ export interface MainLedgerSnapshot {
   atPeak: Record<MainPool, number>
 }
 
-const emptyPools = (): Record<MainPool, number> => ({ rowCache: 0, viewBuffers: 0, replies: 0, copy: 0, controls: 0, layout: 0, merges: 0, dom: 0, geometry: 0, structure: 0, document: 0 })
+const emptyPools = (): Record<MainPool, number> => ({ rowCache: 0, viewBuffers: 0, replies: 0, copy: 0, controls: 0, layout: 0, merges: 0, dom: 0, geometry: 0, structure: 0, document: 0, canvasText: 0 })
 
 /** The part of FinalizationRegistry the ledger uses (injectable for tests). */
 export interface CollectionWatcher { register(target: object, token: string): void }
