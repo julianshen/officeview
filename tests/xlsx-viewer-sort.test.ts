@@ -7,6 +7,7 @@ import { createIdentityOrder, createRowOrder } from '../src/xlsx/view/order'
 import { createAxisMetrics } from '../src/xlsx/view/axes'
 import { createSheetMetrics } from '../src/xlsx/view/projection'
 import { createFixture, createPrng, f8Cases, type FixtureCell } from './helpers/xlsx-viewer-fixtures'
+import { CooperativeSlice, YIELD_WORK_UNITS } from '../src/xlsx/view/scheduler'
 
 const fixtureCell = (value: FixtureCell['value'], error = false): FixtureCell => Object.freeze({ value, valueIsError: error, hasCachedValue: true, styleIndex: 0 })
 function dataStore(rows: readonly (readonly FixtureCell[])[]): SourceStore {
@@ -191,11 +192,21 @@ describe('sort ownership, bounded work and resource admission', () => {
     expect('order' in result).toBe(false)
   })
   it('cooperates on clock deadline and default macrotask scheduler allows queued abort', async () => {
-    const store = dataStore(Array.from({ length: 100 }, (_v, row) => [fixtureCell(100 - row)]))
-    let time = 0, yields = 0
-    expect((await sortRowOrder(store, specFor(100), { now: () => (time += 11), yield: async () => { yields++ } })).kind).toBe('complete')
-    // Clock deadlines are sampled at bounded batches, with a final publication pause.
-    expect(yields).toBeGreaterThan(1)
+    const rows = 1000, store = dataStore(Array.from({ length: rows }, (_v, row) => [fixtureCell(rows - row)]))
+    let time = 0, yields = 0, work = 0
+    const due = CooperativeSlice.prototype.due
+    const measured = vi.spyOn(CooperativeSlice.prototype, 'due').mockImplementation(function (this: CooperativeSlice, units = 1) {
+      work += units
+      return due.call(this, units)
+    })
+    try {
+      expect((await sortRowOrder(store, specFor(rows), { now: () => (time += 11), yield: async () => { yields++ } })).kind).toBe('complete')
+    } finally { measured.mockRestore() }
+    // Each +11 ms clock sample crosses the 10 ms deadline, at most 256 work
+    // units apart. This bound exceeds what work-limit yields alone can satisfy.
+    const minimumClockYields = Math.floor(work / 256)
+    expect(minimumClockYields).toBeGreaterThan(Math.ceil(work / YIELD_WORK_UNITS) + 1)
+    expect(yields).toBeGreaterThanOrEqual(minimumClockYields)
     const controller = new AbortController()
     const job = sortRowOrder(createFixture('F7', { rowCount: 10000 }).createStore(), specFor(10000), { signal: controller.signal })
     setTimeout(() => controller.abort(), 0)

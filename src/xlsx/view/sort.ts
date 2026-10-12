@@ -109,6 +109,7 @@ export type SortResult = SortFailure | {
 const CHUNK = 4096
 const MiB = 1024 * 1024
 const NUMBER = 1, STRING = 2, BOOLEAN = 3, ERROR = 4, BLANK = 5, UNKNOWN = 6, UNAVAILABLE = 7
+const COLUMN_TAGS = new Set([NUMBER, STRING, BOOLEAN, ERROR, BLANK, UNAVAILABLE])
 const sameStamp = (a: SourceStamp, b: SourceStamp): boolean =>
   a.docId === b.docId && a.sheetId === b.sheetId && a.valueGen === b.valueGen
 class Halt extends Error {
@@ -476,7 +477,7 @@ async function prepare(
               const row = item.rows[at], tag = item.tags[at], number = item.numbers[at]
               const from = item.textStart[at], to = item.textStart[at + 1]
               if (row <= previous || row < first || row > last || from > to || to > item.text.length
-                || ![NUMBER, STRING, BOOLEAN, ERROR, BLANK, UNAVAILABLE].includes(tag)
+                || !COLUMN_TAGS.has(tag)
                 || tag === NUMBER && !Number.isFinite(number) || tag === BOOLEAN && number !== 0 && number !== 1) throw sourceError('page-error', 'Malformed column lane record')
               previous = row
               const offset = row - r0

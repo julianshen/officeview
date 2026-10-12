@@ -88,6 +88,18 @@ multi-key comparisons without changing tag order, host ranks or source-row ties.
 Differential tests retain the frozen kernel and assert byte-identical permutation
 and inverse buffers across seeded 1–8-key mixed-value cases and full-size F2.
 
+The text discriminator's runtime probe compares all 100×100 decimal-number
+pairs and each claimed ASCII prefix with digit pairs (unequal digits are checked
+with opposing suffixes). This finite probe is an eligibility check, not exhaustive
+single-code-unit/pairwise proof for arbitrary strings. It discriminates unequal
+numeric runs of at most 15 digits after identical prefixes in strings of at most
+64 UTF-16 units. Other strings and numeric ties use `Intl.Collator`. Before ranks
+are published, every adjacent pair in the candidate sorted dictionary is checked
+against the host collator; any ordering disagreement triggers a host-only
+re-sort. Host comparisons alone define rank equality. This validation establishes
+the observed dictionary's order under the host's total-order contract, without
+assuming that the finite probe certifies unseen strings.
+
 These receipts cover **one M4 Pro laptop** and one headless browser session;
 **concurrent load is possible**, so no controlled machine-independent speedup or
 headed-browser guarantee is claimed. They use synthetic fixture stores and

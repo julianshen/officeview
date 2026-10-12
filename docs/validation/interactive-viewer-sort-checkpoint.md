@@ -27,8 +27,9 @@ Node numbers establish neither browser acceptance nor a p95 distribution.
    prefixes in strings of at most 64 UTF-16 units, over ` -.0–9A–Z_a–z`. Unicode, different prefixes,
    numeric ties and longer runs use the host collator. All ordering/rank equality
    remains authoritative to `Intl.Collator`.
-   - Exhaustive single-unit/pairwise claimed-set and numeric-prefix checks, plus
-     seeded compound strings and Unicode/leading-zero/large-number fallbacks.
+   - Runtime probe of 100×100 numeric pairs and claimed-prefix×digit pairs, plus
+     seeded compound-string and Unicode/leading-zero/large-number regressions;
+     this finite probe is not an exhaustive arbitrary-string equivalence proof.
    - Runtime finite certification is not treated as proof for arbitrary strings:
      the complete observed dictionary is checked in host order before publication.
      Every adjacent pair must be nondecreasing, and host equality alone defines
@@ -340,3 +341,34 @@ This finalization modifies the plan, performance doc, checkpoint record,
 performance profile and its test, and adds the retained r3 result JSON. Production
 code remains at the Chrome-measured commit. Final documentation/test changes are
 left uncommitted for the orchestrator, as required by the task's sandbox workflow.
+
+## Review follow-up (base a243e86)
+
+All four review nits are addressed. The clock-deadline test counts actual work
+and requires at least `floor(work / 256)` yields with its +11 ms fake-clock
+samples. Disabling clock deadlines temporarily produced only 2 yields against
+a computed minimum of 31, proving the stronger assertion detects that defect;
+the production scheduler was restored unchanged and the test is green.
+
+Prepared admission now computes the minimum count/bytes after removing only
+evictable non-batch columns before making any explicit LRU eviction. The new
+leased-A/idle-B/oversized-C regression first observed B dropped on a quota
+refusal; it now retains B and all retained-byte accounting. After the lease
+releases, preparation succeeds with normal LRU eviction. Lane-tag validation
+uses one private module-level Set instead of allocating an array per record;
+the mixed and malformed lane regressions pass before and after the refactor.
+
+The S8.6 text-sort plan bullet is marked as amended wording: runtime numeric/
+prefix probes are finite eligibility checks, and exactness for the observed
+dictionary comes from host-checked adjacent order and host-only re-sort on
+disagreement. The validation docs state these mechanisms explicitly. Retained
+Chrome evidence still describes `09adbb1`; this follow-up has not been
+remeasured in Chrome. No thresholds, budgets or spec contracts changed.
+
+Follow-up gates: library/script typechecks passed; thirteen focused suites
+**230 passed** (including frozen parity); full suite **5,271 passed**, nine
+failed, ten skipped, one todo, eight errors. All nine failure names match the
+HTTP/listen `EPERM` cases independently reproduced on pristine `a243e86`
+(21 passed, nine failed, eight errors). Build passed, eager Node gzip
+**38,027 B** within 38.43 KB; `git diff --check` passed. The seven changed
+source/test/doc files remain uncommitted for the orchestrator.

@@ -161,6 +161,30 @@ it('pins prepared readers against explicit LRU eviction and releases the pin', a
     expect(session.isPrepared(owner.sheetId, 0)).toBe(false)
   } finally { await session.release() }
 })
+
+it('retains idle prepared columns when a pinned lease makes batch admission impossible', async () => {
+  const values = ['a'.repeat(24_000), '', 'c'.repeat(24_000)]
+  const store = createFixture('F2', { rowCount: 20 }).createStore({ read: { cellAt: (row, col) => ({ value: col === 1 ? row : values[col], styleIndex: 0, hasCachedValue: true, valueIsError: false }) } })
+  const source: WorkbookSource = { valuePolicy: store.valuePolicy, sheets: [{ sheetId: store.stamp.sheetId, name: 'Admission' }], store: () => store,
+    geometry: () => buildGeometry([], []), coverageDiagnostics: () => [], release: async () => { await store.release() } }
+  const session = new DocumentSession(store.stamp.docId, source, { now: () => 0, yield: async () => {}, preparedBudget: { maxColumns: 3, maxBytes: 55_000 } })
+  const owner = initialIdentity(store.stamp.docId, store.stamp.sheetId), signal = new AbortController().signal
+  try {
+    expect(await session.prepareColumns(owner, [0, 1], signal)).toEqual({ kind: 'complete' })
+    const lease = (session.preparedStore(owner.sheetId) as PreparedSortStore)[PREPARED_SORT_READER]!(0, store.stamp)!
+    try {
+      const retained = session.preparedStats()
+      expect((await session.prepareColumns(owner, [2], signal)).kind).toBe('quota')
+      expect(session.isPrepared(owner.sheetId, 1)).toBe(true)
+      expect(session.preparedStats()).toEqual(retained)
+      expect(session.memoryStats().transientBytes).toBe(0)
+    } finally { lease.release() }
+    expect(await session.prepareColumns(owner, [2], signal)).toEqual({ kind: 'complete' })
+    expect(session.isPrepared(owner.sheetId, 0)).toBe(false)
+    expect(session.isPrepared(owner.sheetId, 2)).toBe(true)
+  } finally { await session.release() }
+})
+
 it('rejects malformed cell identities before making a trusted prepared reader', async () => {
   const raw = createFixture('F2', { rowCount: 3 }).createStore(), query = raw.queryColumn.bind(raw)
   const store: SourceStore = { ...raw, queryColumn: async (req, opts) => {

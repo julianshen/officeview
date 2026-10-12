@@ -1203,6 +1203,16 @@ export class DocumentSession {
     if (signal.aborted) return { kind: 'cancelled' }
     if (!this.isCurrent(owner)) return { kind: 'stale' }
     const keep = new Set(keys)
+    let minimumColumns = this.prepared.size + staged.length, minimumBytes = this.preparedBytes + stagedBytes
+    for (const [key, column] of this.prepared) {
+      if (keep.has(key) || this.preparedPins.has(key)) continue
+      minimumColumns--
+      minimumBytes -= column.bytes
+    }
+    // Refuse impossible admission before discarding useful idle columns.
+    if (minimumColumns > budget.maxColumns || minimumBytes > budget.maxBytes) {
+      return { kind: 'quota', limitBytes: budget.maxBytes, requiredBytes: minimumBytes, diagnostics: [{ code: 'prepared-column-limit', message: 'Prepared readers pin the working set' }] }
+    }
     // Evict least-recently-used columns outside this batch until it fits.
     for (const [key] of [...this.prepared]) {
       const fitsCount = this.prepared.size + staged.length <= budget.maxColumns
@@ -1210,9 +1220,6 @@ export class DocumentSession {
       if (fitsCount && fitsBytes) break
       if (keep.has(key) || this.preparedPins.has(key)) continue
       this.dropPrepared(key)
-    }
-    if (this.prepared.size + staged.length > budget.maxColumns || this.preparedBytes + stagedBytes > budget.maxBytes) {
-      return { kind: 'quota', limitBytes: budget.maxBytes, requiredBytes: this.preparedBytes + stagedBytes, diagnostics: [{ code: 'prepared-column-limit', message: 'Prepared readers pin the working set' }] }
     }
     for (const key of keys) {
       const existing = this.prepared.get(key)
