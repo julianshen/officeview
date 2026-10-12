@@ -116,7 +116,9 @@ Every package is implemented on its own branch, reviewed by at least one agent f
 | S1.3 authoritative formula/cache/error/format value bridge (`values.ts`, `value-policy.ts`) | merged |
 | S5.2 canvas tiles, overlays and OfficeDoc integration (`InteractiveSheetDoc.tsx` lazy chunk, `sheetAssets.ts`) | merged behind the `interactiveSheets` prop (default off; eager +0.21 KB gz); seams closed by S9.2 (grid copy, S9.1 controls) and left for S5.4 (worker-backed paged viewer), S10 (browser smoke, mouse-drag selection) and worker viewport/search commands |
 | S9.2 copy in displayed order and budgeted static print (`copy.ts`, `viewerControlsClient.ts`, clipboard/print policy) | merged (codex implementation; opencode reviews over two rounds); copy works on resident sheets — paged sheets wait for S5.4 |
-| S5.4, S8.4, S8.6 (sort performance), S10 (physical-device receipts skipped for now by user decision), S11/S12 status, S13 | not started |
+| S8.4 performance threshold freeze (`performance-profile.json`, harness kernel scenarios, `docs/validation/interactive-viewer-performance.md`) | merged; thresholds frozen at spec; sort misses carried by S8.6 |
+| S5.4 | in progress (codex review round 1 findings being fixed) |
+| S8.6 (sort performance), S10 (physical-device receipts skipped for now by user decision), S11/S12 status, S13 | not started |
 
 ## S0 — Freeze contracts, counterexamples and fixture/harness infrastructure
 
@@ -562,12 +564,14 @@ expect(wide.contains({ row: 2, col: 0 })).toBe(false)
 
 ### S8.4 Performance threshold freeze (exit gate for S8)
 
+> **Status (2026-10-12):** merged (Claude implementation; codex reviews over three rounds, every finding fixed, final verdict APPROVE). Chrome 155 headless, D profile, M4 Pro, n=30: 1M numeric filter 72 ms (pass, 100), cold 100k value index 33 ms (pass, 750), 100k 8-key sort 657 ms (miss, 100), 1M 3-key prepared sort 4,363 ms (miss, 1,000), 1M natural text sort 7,648 ms admitted (miss, 4,000; F4 headroom −3,648 ms). Every threshold frozen at its §12.2 value in `tests/fixtures/xlsx-viewer/performance-profile.json`; misses are findings carried by S8.6. 4–8-key 1M sorts exceed the 64 MiB prepared cache (fallback diagnostic only).
+
 **Files:** create `tests/fixtures/xlsx-viewer/performance-profile.json`; extend `scripts/bench-interactive-viewer.ts`; write `docs/validation/interactive-viewer-performance.md` (baseline section).
 
-- [ ] Run the real-browser harness (S0.3) on the D profile, Chrome, against the delivered S7/S8 kernels for the F2 numeric sort/filter, F4 natural text sort and cold 100k value-index operations, with the sample counts required by spec §12.6. Record kernel, query-completion and input-to-present times separately.
-- [ ] Open a reviewed PR that freezes each threshold in `performance-profile.json` as either the spec §12.2 value or a measured, justified replacement. Loosening any value more than 2× needs a specification amendment citing the browser measurements. Record the F4 headroom explicitly (spec estimates about 3.1 s against the 4 s ceiling).
+- [x] Run the real-browser harness (S0.3) on the D profile, Chrome, against the delivered S7/S8 kernels for the F2 numeric sort/filter, F4 natural text sort and cold 100k value-index operations, with the sample counts required by spec §12.6. Record kernel, query-completion and input-to-present times separately.
+- [x] Open a reviewed PR that freezes each threshold in `performance-profile.json` as either the spec §12.2 value or a measured, justified replacement. Loosening any value more than 2× needs a specification amendment citing the browser measurements. Record the F4 headroom explicitly (spec estimates about 3.1 s against the 4 s ceiling).
 - [ ] If a threshold is unmet, apply only the spec-permitted levers (ASCII/Latin-1 fast path proven identical to the host collator, run-merge sort, worker-parallel runs); never relax collation or semantics. Do not start S11/S12 as a substitute.
-- [ ] From this point S10.2 enforces the frozen values; before it, a miss is a recorded finding, not a failure.
+- [x] From this point S10.2 enforces the frozen values; before it, a miss is a recorded finding, not a failure.
 
 ### S8.6 Sort performance to the frozen thresholds
 
