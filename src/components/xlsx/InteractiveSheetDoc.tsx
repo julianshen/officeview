@@ -610,8 +610,11 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
       // Only the refresh this effect started, and only while it still owns the search.
       if (refreshing && runArgs.current === args) finder.cancel()
     }
+    // Re-bound to every published page and query: a new search with the same
+    // incomplete-sheet list must be refreshed with ITS arguments, and a page
+    // published after its sheets completed is checked at once.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [remote, incompleteKey, ownerKey])
+  }, [remote, incompleteKey, ownerKey, query, page])
   const pageOffset = page ? page.pageIndex * FIND_PAGE_HITS : 0
   const matchCount = page ? page.totalKnown ?? pageOffset + page.hits.length : 0
   // Partial results present a lower bound, never a final-looking count (§10.4).

@@ -27,6 +27,7 @@ vi.mock('../src/xlsx/storage/importSession', async original => {
 import { OfficeFile } from '../src/components/OfficeFile'
 import { ViewerKernel, type ViewerKernelEnv } from '../src/worker/viewerKernel'
 import { createObjectWorkbookSource } from '../src/worker/viewerObjectSource'
+import { RemoteWorkbook } from '../src/worker/viewerRemoteSource'
 import { OfficePackage } from '../src/core/zip'
 import { parseXlsx } from '../src/xlsx/parse'
 import type { WorkerCommand, WorkerReply } from '../src/xlsx/view/contracts'
@@ -95,6 +96,37 @@ describe('S13.3 r3: automatic search refresh', () => {
     act(() => h.release())
     await act(async () => { await new Promise(resolve => setTimeout(resolve, 20)) })
     expect(setters.calls - afterUnmount, 'state setters run after unmount').toBe(0)
+  })
+
+  it('r4 #3: a new query with the same incomplete sheets is refreshed with its own arguments', async () => {
+    const h = workerHarness()
+    const ui = render(<OfficeFile data={workbook()} interactiveSheets viewerWorker={() => h.port} />)
+    await waitFor(() => expect(ui.getByRole('gridcell', { name: /alpha/ })).toBeTruthy())
+    // The sheet's structure is still importing for both searches...
+    const structural = importingOnce(h, '1')
+    const original = structural.getMockImplementation()!
+    structural.mockImplementationOnce(original)
+    let loaded = false, remote: RemoteWorkbook | undefined
+    const loadState = RemoteWorkbook.prototype.loadState
+    vi.spyOn(RemoteWorkbook.prototype, 'loadState').mockImplementation(function (this: RemoteWorkbook, sheetId: string) {
+      remote = this
+      return loaded ? loadState.call(this, sheetId) : { completeness: 'loading' }
+    })
+    const box = ui.getByRole('searchbox', { name: 'Search document' })
+    fireEvent.change(box, { target: { value: 'alpha' } })
+    await waitFor(() => expect(ui.container.textContent).toMatch(/some sheets still loading/))
+    fireEvent.change(box, { target: { value: 'beta' } })
+    await waitFor(() => expect(h.searches()).toBe(2))
+    await waitFor(() => expect(ui.container.textContent).toMatch(/1 of 1/))
+    expect(ui.container.textContent).toMatch(/some sheets still loading/)
+    // ...then the import completes: beta's page is refreshed, not alpha's.
+    loaded = true
+    act(() => remote!.notify())
+    await waitFor(() => expect(h.searches()).toBe(3))
+    const last = h.posted.filter(command => command.kind === 'search').at(-1)
+    expect(last?.kind === 'search' && last.query.text).toBe('beta')
+    await waitFor(() => expect(ui.container.textContent).not.toMatch(/some sheets still loading/))
+    ui.unmount()
   })
 
   it('#5: a sheet ID containing "," refreshes as one sheet, with no phantom sheet lookups', async () => {
