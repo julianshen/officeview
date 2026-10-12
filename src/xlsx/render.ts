@@ -860,7 +860,8 @@ export function layoutCellBody(
   const fitsGeneral = cellTextRotation(cell.style?.textRotation) === undefined
     ? (text: string) => measured(font, text) <= Math.max(0, w - PADDING_L - PADDING_R)
     : undefined
-  const text = renderCellText(cell.value, cell.style, sheet.semantics, sheet, fitsGeneral)
+  const formatted = renderCellText(cell.value, cell.style, sheet.semantics, sheet, fitsGeneral)
+  const text = numericOverflowText(cell, formatted, font, w, measured)
   out.formattedText = text
   if (text !== '') {
     const color = cell.style?.color ? resolveColor(cell.style.color) : '#000000'
@@ -890,6 +891,29 @@ export function layoutCellBody(
   }
   if (cell.style?.borders) out.borders = cell.style.borders
   return out
+}
+
+/**
+ * Excel fidelity (S13 V4): a number/date/time whose formatted text does not
+ * fit the cell interior is shown as '#' repeated to fill it (at least one) —
+ * never clipped digits, never spilled into a neighbour. General has already
+ * dropped decimals and tried scientific notation and signals "nothing fits"
+ * with a single '#'. Text (and an authored '@' text format), booleans and
+ * errors keep their existing overflow/clip behaviour; wrapped and rotated
+ * cells keep their measured layout. Shrink-to-fit is not parsed, so it cannot
+ * be exempted. Measurement uses the same font string the cell paints with.
+ * Only the painted string changes: cellDisplayText (find, accessible value)
+ * keeps the real formatted value.
+ */
+function numericOverflowText(cell: XlsxCell, text: string, font: string, w: number, measured: MeasureCached): string {
+  if (typeof cell.value !== 'number' || text === '' || cell.valueIsError) return text
+  const style = cell.style
+  if (style?.wrapText === true || cellTextRotation(style?.textRotation) !== undefined) return text
+  if (style?.formatCode?.includes('@')) return text
+  const inner = Math.max(0, w - PADDING_L - PADDING_R)
+  if (text !== '#' && measured(font, text) <= inner) return text
+  const glyph = measured(font, '#')
+  return '#'.repeat(Math.max(1, glyph > 0 ? Math.floor(inner / glyph) : 1))
 }
 
 /** Replay one cell layout at its own coordinates; returns the deferred border. */

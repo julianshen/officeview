@@ -223,6 +223,10 @@ async function renderFixtureTexts(f: RenderFixture): Promise<{ texts: string[]; 
   const { createCanvas } = await import('canvas')
   const doc = await parseXlsx(await OfficePackage.load(await buildDateFixture(f)))
   const sheet = doc.sheets[0]
+  // Wide columns: these cases assert formatted strings, and with the host's
+  // fallback font a 10-character date overflows a default 64 px column, which
+  // now (S13 V4, Excel fidelity) paints as '#'s instead of the value.
+  sheet.cols = [{ min: 0, max: 2, widthChars: 18 }]
   const canvas = createCanvas(400, 200)
   const ctx = canvas.getContext('2d') as unknown as CanvasRenderingContext2D
   const texts: string[] = []
