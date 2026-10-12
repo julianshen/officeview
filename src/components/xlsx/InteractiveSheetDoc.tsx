@@ -565,31 +565,38 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
   // A finished page over sheets that were still importing says so instead of
   // pretending completeness ("some sheets still loading"). Re-run it once its
   // listed sheets complete, so the results catch up with the import (NIT-1).
-  const incompleteKey = page && !finder.running && page.complete && page.incomplete.length ? [...page.incomplete].sort().join(',') : ''
+  // Sheet IDs are arbitrary strings: the key is a lossless JSON array.
+  const incompleteKey = page && page.complete && page.incomplete.length ? JSON.stringify([...page.incomplete].sort()) : ''
   const refreshAttempt = useRef<{ args: object; key: string } | null>(null)
   useEffect(() => {
     if (!remote || !incompleteKey || !runArgs.current) return
     const args = runArgs.current
-    const listed = incompleteKey.split(',')
+    const listed = JSON.parse(incompleteKey) as string[]
+    // Cleared on cleanup (unmount, a new page or owner): a refresh that settles
+    // later publishes nothing, and one still running is cancelled.
+    let live = true, refreshing = false
     const check = () => {
-      if (runArgs.current !== args || finder.running) return
-      const done = listed.filter(sheetId => remote.loadState(sheetId).completeness === 'complete').sort().join(',')
-      if (!done) return
-      const key = `${incompleteKey}|${done}`
+      if (!live || runArgs.current !== args || finder.running) return
+      const done = listed.filter(sheetId => remote.loadState(sheetId).completeness === 'complete')
+      if (!done.length) return
+      const key = JSON.stringify([listed, done])
       if (refreshAttempt.current?.args === args && refreshAttempt.current.key === key) return
       refreshAttempt.current = { args, key }
+      refreshing = true
       setSearching(true)
       const input = findInput()
       void finder.run(input, { text: args.query, caseSensitive: false }, args.options).then(published => {
-        // A newer search (or a cleared query) owns the results now.
-        if (runArgs.current !== args) return
+        refreshing = false
+        // Unmounted, superseded, or a newer search (or a cleared query) owns the results now.
+        if (!live || runArgs.current !== args) return
         pageRef.current = published
         activeRef.current = published && published.hits.length ? 0 : -1
         setPage(published)
         setActiveHit(activeRef.current)
         setSearching(false)
       }).catch(error => {
-        if (runArgs.current !== args) return
+        refreshing = false
+        if (!live || runArgs.current !== args) return
         setSearching(false)
         setAnnouncement(error instanceof Error ? error.message.slice(0, 256) : 'Search failed.')
       })
@@ -597,7 +604,12 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
     // The import may already have finished before this page was published.
     const unsubscribe = remote.subscribe(check)
     check()
-    return unsubscribe
+    return () => {
+      live = false
+      unsubscribe()
+      // Only the refresh this effect started, and only while it still owns the search.
+      if (refreshing && runArgs.current === args) finder.cancel()
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [remote, incompleteKey, ownerKey])
   const pageOffset = page ? page.pageIndex * FIND_PAGE_HITS : 0
