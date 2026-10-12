@@ -317,15 +317,19 @@
   "diagnostics": [],
   "viewerEvidence": {
     "doc": "docs/validation/interactive-viewer-performance.md",
-    "results": "docs/validation/interactive-viewer-viewer-chrome-r8.json",
-    "hash": "912457dca979d7d1416eae556f87bbb57a2770ecfdab830f8ab6942cd6dfd247",
-    "commit": "fc554a4f550c5328681ec8d1a424d5241b384ccd",
+    "results": "docs/validation/interactive-viewer-viewer-chrome-r9.json",
+    "hash": "00694b392719b3b0b384089995ae985dc9479b46c1cb0f26fd57ef46494fb7d6",
+    "commit": "36e4f064e1ce50f8a340cad70b3987930f8b749f",
     "browser": "Google Chrome 155.0.8059.39 (stable, Playwright 1.64 channel chrome, headless)",
     "machine": "Apple M4 Pro, 14 logical cores, 24 GiB, macOS 26.5.2 (25F84)",
     "profile": "D",
     "mode": "release",
-    "desktopAdmitted": true,
-    "evidenceProblems": [],
+    "desktopAdmitted": false,
+    "evidenceProblems": [
+      "main-owned-memory: uncharged main memory in F2 at the loaded checkpoint (1.31 MiB of forced-GC heap above the warmed host is not in the ledger's current 6.71 MiB; allowance: the warmed host's open gap 0.62 MiB + probe noise 0.12 MiB)",
+      "main-owned-memory: uncharged main memory in F4 at the loaded checkpoint (1.26 MiB of forced-GC heap above the warmed host is not in the ledger's current 4.47 MiB; allowance: the warmed host's open gap 0.68 MiB + probe noise 0 MiB)",
+      "main-owned-memory: uncharged main memory in F4 at the afterOps checkpoint (1.34 MiB of forced-GC heap above the warmed host is not in the ledger's current 4.47 MiB; allowance: the warmed host's open gap 0.68 MiB + probe noise 0 MiB)"
+    ],
     "rows": {
       "warm-viewport-frame": {
         "outcome": "pass",
@@ -333,27 +337,27 @@
       },
       "input-acknowledgment": {
         "outcome": "pass-limited",
-        "value": 32.810000002384186
+        "value": 33.66500000655651
       },
       "progressive-first-viewport": {
         "outcome": "pass-limited",
-        "value": 667.765000000596
+        "value": 680.2150000035763
       },
       "import-expanded-throughput": {
         "outcome": "pass",
-        "value": 60.207538326311955
+        "value": 58.391991287981845
       },
       "import-cell-throughput": {
         "outcome": "pass",
-        "value": 925368.9909055313
+        "value": 897464.6623529248
       },
       "main-owned-memory": {
-        "outcome": "pass",
-        "value": 41607994
+        "outcome": "pending",
+        "value": 41898346
       },
       "worker-owned-memory": {
         "outcome": "pass",
-        "value": 239837068
+        "value": 239837254
       },
       "bitmap-retained": {
         "outcome": "pass",
@@ -361,6 +365,12 @@
       }
     },
     "superseded": [
+      {
+        "results": "docs/validation/interactive-viewer-viewer-chrome-r8.json",
+        "hash": "912457dca979d7d1416eae556f87bbb57a2770ecfdab830f8ab6942cd6dfd247",
+        "commit": "fc554a4f550c5328681ec8d1a424d5241b384ccd",
+        "note": "r8: admitted under the round-3 rules (live peak vs ledger peak only); it has no warm-open record, so it does not validate under the round-4 per-checkpoint gate."
+      },
       {
         "results": "docs/validation/interactive-viewer-viewer-chrome-r7.json",
         "hash": "442c20a6c987340eee44d24cae2372ed2b3782f6842ea6617855cc2a4a36a969",
@@ -404,6 +414,6 @@
         "note": "r1: input acknowledgment miss (header sort 11,897-13,316 ms)."
       }
     ],
-    "note": "S10.2 viewer receipt, desktop D admitted. Main peak from the main-thread ledger (lifetime charges; replies settled on adoption; tile canvases' text-shaping cache charged); every forced-GC live sample above an independently warmed host is covered, allowance = measured probe noise. The page stays idle after close. Mobile rows not-run (no physical iPad, user decision). Recorded on a shared machine; re-run the release command on a quiet machine."
+    "note": "S10.2 viewer receipt r9: desktop NOT admitted. Every row passes except main-owned-memory, which is pending: at the loaded (F2, F4) and after-ops (F4) checkpoints, forced-GC heap above the warmed host exceeds the ledger's current bytes by 0.57-0.66 MiB more than the warmed host's own open gap allows (round-4 per-checkpoint gate). Left pending rather than widening the allowance. Mobile rows not-run (user decision). Shared machine."
   }
 }

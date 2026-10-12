@@ -1,14 +1,50 @@
 # Interactive viewer — frozen thresholds, S8.6 kernel results and S10.2 viewer results
 
-**S10.2 desktop Chrome receipt r8: desktop D admitted.** All 13 desktop rows
-pass; two of them pass with a documented sample limitation (`pass-limited`).
+**S10.2 desktop Chrome receipt r9: desktop D NOT admitted (main-thread memory
+pending).** The other 12 desktop rows pass; two of them pass with a documented
+sample limitation (`pass-limited`).
 
-The receipt is `interactive-viewer-viewer-chrome-r8.json` (SHA-256
-`912457dc…6cdfd247`), taken at `fc554a4` on a clean tree. Every row is derived
-from validated raw records, and the evidence-problem list is empty.
+The receipt is `interactive-viewer-viewer-chrome-r9.json` (SHA-256
+`00694b39…46494fb7d6`), taken at `36e4f06` on a clean tree, on a shared
+machine (load 4.5–5.8).
 
-The main-thread memory row passes on the document's main-thread application
-ledger, under the round-3 rules:
+**Why the main row is pending.** Review round 4 added a per-checkpoint gate.
+At every checkpoint, the forced-GC heap above the warmed host, minus the
+ledger's *current* bytes there, may not exceed an allowance. The allowance is
+the warmed host's own open gap plus the probe noise. The warm document is
+measured still open after its operations, before the session, so steady
+uncharged memory can no longer hide in the headroom between the ledger peak and
+the live peak.
+
+r9 fails this gate:
+
+| Session | Allowance | Loaded gap | After-ops gap | Closed gap |
+|---|---:|---:|---:|---:|
+| F2 | 0.62 + 0.12 MiB | **1.31 MiB** | 0.63 MiB | 0.46 MiB |
+| F4 | 0.68 + 0.00 MiB | **1.26 MiB** | **1.34 MiB** | 0.34 MiB |
+
+The excess is 0.57–0.66 MiB. Not attributed yet:
+- **Compiled code.** Heap snapshots (F4, loaded minus baseline) show about
+  0.4 MiB more of it (`InstructionStream`, bytecode, feedback): full-scale code
+  paths the smoke-scale warm host does not compile.
+- **The F2 transient.** About 0.9 MiB more uncharged at F2 *loaded* than after
+  the operations.
+- **Plain JS objects.** About 0.5 MiB that the DOM calibration may only partly
+  cover.
+
+What closed most of the gap before r9:
+- the per-font hash tables of the shaping cache;
+- the base visibility words of every sheet (~132 KiB at 1,048,576 rows);
+- dropping the page's own wire instrumentation.
+
+What is left is reported here as **pending**, not absorbed by widening the
+allowance.
+
+r8 below remains the last receipt admitted under the round-3 rules. It has no
+warm-open record, so it does not validate under round 4.
+
+Under the round-3 rules (r8), the main-thread memory row passed on the
+document's main-thread application ledger:
 - the buffers review round 3 found uncharged or released early (geometry,
   structural index, resident document, adopted views, worker replies) are now
   charged until they are unreachable; the other pools are accounted explicitly
@@ -236,6 +272,18 @@ warms the host on the same page: it opens the reduced F2 (100,010 rows), scrolls
 sorts, opens and cancels the filter dialog, and closes it. It then takes 10
 forced-GC readings. Their median is the baseline; their spread is the measured
 probe noise.
+
+Since round 4 the session also records:
+- five forced-GC readings of the empty page before the warm-up (`empty`);
+- five readings of heap and ledger with the warm document still open after its
+  operations (`open`).
+
+**Baseline bound (review round 4, nit 9).** The warm-up leaves its own residue
+in the baseline: compiled code, the lazily loaded chunks and caches. It is
+measured, not assumed: in r9 the median rose 4.79 MiB (F2) and 4.73 MiB (F4)
+from the empty page. That residue is engine and code state of a smoke-scale
+document. An application object the warm document left behind would show up in
+its closed ledger, which is 0, and in the session's closed gap, which is gated.
 
 **The cross-check.** The row passes only if both hold:
 - the ledger peak is ≤ 64 MiB;
@@ -532,7 +580,7 @@ Fixes from the round-4 follow-ups (all change product code; r6 measures 14–15,
     cache, the adopted view, the value index (through the optional
     `SourceStore.settle` and `ValueLanePage.settle`) and the controls' page
     consumer. Payloads still held raw keep the reachability lease. F4 ledger
-    peak: 44.6 → 21.5 MiB. Tests in `tests/xlsx-viewer-main-ledger.test.tsx`
+    peak: 44.6 MiB (r5 receipt) → 21.5 MiB (r6 receipt); 20.7 MiB in r8. Tests in `tests/xlsx-viewer-main-ledger.test.tsx`
     (settle semantics; F4-like value list: five replies charged, five settled,
     each with the index charge in place, peak within one reply of the retained
     index; row pages; a committed view) are RED with settle disabled.
