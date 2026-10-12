@@ -1,44 +1,51 @@
 # Interactive viewer — frozen thresholds, S8.6 kernel results and S10.2 viewer results
 
-**S10.2 desktop Chrome receipt r9: desktop D NOT admitted (main-thread memory
+**S10.2 desktop Chrome receipt r10: desktop D NOT admitted (main-thread memory
 pending).** The other 12 desktop rows pass; two of them pass with a documented
 sample limitation (`pass-limited`).
 
-The receipt is `interactive-viewer-viewer-chrome-r9.json` (SHA-256
-`00694b39…46494fb7d6`), taken at `36e4f06` on a clean tree, on a shared
-machine (load 4.5–5.8).
+The receipt is `interactive-viewer-viewer-chrome-r10.json` (SHA-256
+`a7d9d511…c8ada2700`), taken at `e71d8ce` on a clean tree, on a shared
+machine (load 3.3–9.8).
 
-**Why the main row is pending.** Review round 4 added a per-checkpoint gate.
-At every checkpoint, the forced-GC heap above the warmed host, minus the
-ledger's *current* bytes there, may not exceed an allowance. The allowance is
-the warmed host's own open gap plus the probe noise. The warm document is
-measured still open after its operations, before the session, so steady
-uncharged memory can no longer hide in the headroom between the ledger peak and
-the live peak.
+**The round-4 gate.** At every checkpoint, the forced-GC heap above the warmed
+host, minus the ledger's *current* bytes there, minus that checkpoint's
+**measured compiled-code growth**, may not exceed an allowance:
+- **code growth** is taken from the heap snapshot's `code` nodes, relative to
+  the closed warmed host, and recorded in the receipt. A missing reading leaves
+  the row pending;
+- **the allowance** is the warmed host's own open gap, with its own code growth
+  excluded the same way, plus the probe noise.
 
-r9 fails this gate:
+Steady uncharged memory can no longer hide in the headroom between the ledger
+peak and the live peak.
 
-| Session | Allowance | Loaded gap | After-ops gap | Closed gap |
+| Session | Allowance | Loaded gap (code excluded) | After-ops gap | Closed gap |
 |---|---:|---:|---:|---:|
-| F2 | 0.62 + 0.12 MiB | **1.31 MiB** | 0.63 MiB | 0.46 MiB |
-| F4 | 0.68 + 0.00 MiB | **1.26 MiB** | **1.34 MiB** | 0.34 MiB |
+| F2 | 0.31 + 0.00 MiB | **0.66 MiB** (code 0.40) | 0.12 MiB (code 0.69) | 0.23 MiB (code 0.29) |
+| F4 | 0.36 + 0.00 MiB | **0.68 MiB** (code 0.40) | **0.51 MiB** (code 0.50) | 0.07 MiB (code 0.23) |
 
-The excess is 0.57–0.66 MiB. Not attributed yet:
-- **Compiled code.** Heap snapshots (F4, loaded minus baseline) show about
-  0.4 MiB more of it (`InstructionStream`, bytecode, feedback): full-scale code
-  paths the smoke-scale warm host does not compile.
-- **The F2 transient.** About 0.9 MiB more uncharged at F2 *loaded* than after
-  the operations.
-- **Plain JS objects.** About 0.5 MiB that the DOM calibration may only partly
-  cover.
+The residual is 0.15–0.35 MiB above the allowance.
 
-What closed most of the gap before r9:
-- the per-font hash tables of the shaping cache;
-- the base visibility words of every sheet (~132 KiB at 1,048,576 rows);
-- dropping the page's own wire instrumentation.
+**Attribution of the remainder.** Heap snapshots of F4, loaded minus baseline,
+total +5.36 MiB, which agrees with the heap readings' +5.54 MiB:
+- **native** +4.23 MiB, against 4.47 MiB of native charges (DOM, shaping
+  cache, view buffers);
+- **compiled code** +0.39 MiB, now excluded as measured;
+- **JS** +0.74 MiB, mostly React fibers (+2,461), React elements and props.
 
-What is left is reported here as **pending**, not absorbed by widening the
-allowance.
+The JS is per-element cost of the viewer's elements (header buttons with
+handlers, component wrappers, alternates) beyond the simple gridcell shape the
+DOM calibration measured. A recalibration with re-renders measured 3,125–3,216 B
+per element, so 3,200 B stands for that shape.
+
+It is not charged, so the row is reported **pending**, not absorbed by widening
+the allowance. Closing it needs a calibration on a viewer-representative
+element mix.
+
+Also changed before r10:
+- the dom pool counts every element the viewer renders, not only the pane;
+- r9 found 0.57–0.66 MiB above the allowance before code growth was measured.
 
 r8 below remains the last receipt admitted under the round-3 rules. It has no
 warm-open record, so it does not validate under round 4.
