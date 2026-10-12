@@ -79,7 +79,7 @@ Browser shorthand: **[B:C+W]** = Playwright scenario passing on Chromium and Pla
 | AC-CAP-03 | F2/F3/F4 quota variants | `xlsx-viewer-import-limits.test.ts`, `xlsx-viewer-source-pages.test.ts` (typed quota/incomplete/cancel) | pass (unit); real-browser quota-denial run not-run (S10.3) |
 | AC-STORE-01 | F8 | `xlsx-viewer-adapter-parity.test.ts`, `xlsx-viewer-values.test.ts`, `xlsx-viewer-source.test.ts`: object and paged adapters agree on values/errors/cache/formula/date/raw UTF-16; pending ≠ blank. Browser wkr: unknown rows paint "Loading…" (`xlsx-viewer-paged-viewer.test.tsx`) | pass; **native Excel checkpoint not-run** (see below) |
 | AC-STORE-02 | F1–F4 malformed variants | `xlsx-viewer-import.test.ts`, `xlsx-viewer-import-limits.test.ts` | pass (unit); peak/cleanup ledger in a browser → S10.2 |
-| AC-STORE-03 | F5 | `xlsx-viewer-structure.test.ts` (pure index). Browser F5: giant narrow-column merge and fixed array queried before consumers, child selection allowed **[B:C+W]** | **partial**: parser/drawing/dynamic-spill wiring (S3.1, unticked) is not delivered. Any sheet with a drawing or dynamic array reports incomplete structure (`source.ts` coverage diagnostics), so sort/filter there always refuse as incomplete. Blocking |
+| AC-STORE-03 | F5 | `xlsx-viewer-structure.test.ts` (pure index). Browser F5: giant narrow-column merge and fixed array queried before consumers, child selection allowed **[B:C+W]** | pass (S3.3): `xlsx-viewer-structure-metadata.test.ts` — drawing anchors (oneCell/twoCell/absolute), saved and engine spills, tables, giant merge; resident = paged structural results; fail-closed cases. Browser drawing/spill leg not-run |
 | AC-STORE-04 | F8, F7 | `xlsx-viewer-values.test.ts`, `xlsx-viewer-worker-races.test.ts`, `xlsx-viewer-saved-notices.test.tsx`; G1 regression | pass |
 | AC-VIEW-01 | F2, F7 | `xlsx-viewer-projection.test.ts`, `xlsx-viewer-sort.test.ts` | pass |
 | AC-VIEW-02 | F1, F2 | `xlsx-viewer-cap-regression.test.ts`, `xlsx-viewer-viewport-integration.test.tsx`. Browser F2 wkr: last body row sorted to display row 2 shows "original G100009" with source id preserved **[B:C+W]** | pass |
@@ -88,8 +88,8 @@ Browser shorthand: **[B:C+W]** = Playwright scenario passing on Chromium and Pla
 | AC-SEM-01 | F2, F5 | `xlsx-viewer-filter.test.ts`, `xlsx-viewer-projection.test.ts`. Browser F2 res+wkr: header protected, value filter, Cancel publishes nothing, Clear all restores **[B:C+W]** | pass |
 | AC-SEM-02 | F2, F4, F7 | `xlsx-viewer-sort.test.ts` (truth table, 1–8 keys, host collator) | pass (unit); 8-key browser leg not-run |
 | AC-SEM-03 | F5, F8 | `xlsx-viewer-sort-range.test.ts`, `xlsx-viewer-range-continuation.test.ts` (G2) | pass |
-| AC-SEM-04 | F5 | `xlsx-viewer-operation-guard.test.ts`. Browser F5: merge D1:D1048576 refuses both a region sort and an explicit A2:B7 sort ("Operation refused: merge"); view unchanged **[B:C+W]** | pass for merge/fixed array; drawing legs depend on S3.1 wiring (see AC-STORE-03) |
-| AC-SEM-05 | F5 | `xlsx-viewer-operation-guard.test.ts` (pure guard) | pass (unit); end-to-end drawing-anchor leg not-run: needs S3.1 drawing wiring. Blocking |
+| AC-SEM-04 | F5 | `xlsx-viewer-operation-guard.test.ts`. Browser F5: merge D1:D1048576 refuses both a region sort and an explicit A2:B7 sort ("Operation refused: merge"); view unchanged **[B:C+W]** | pass for merge/fixed array (browser); dynamic-spill and drawing refusals pass through `ViewerKernel` in both adapters (S3.3 `xlsx-viewer-structure-metadata.test.ts`); browser drawing leg not-run |
+| AC-SEM-05 | F5 | `xlsx-viewer-operation-guard.test.ts` (pure guard) | pass (S3.3): filter hiding a row above a drawing anchor refused, filters below anchors commit, absolute anchors never block — through `ViewerKernel`, object and paged. Browser leg not-run |
 | AC-SEM-06 | F2, F4, F8 | `xlsx-viewer-filter.test.ts`, `xlsx-viewer-canonical-text.test.ts`, `xlsx-viewer-filter-ui.test.tsx` | pass |
 | AC-SEM-07 | F8 | `xlsx-viewer-date-filter.test.ts` | pass (unit); native 1900/1904 workbook checkpoint not-run |
 | AC-SEM-08 | F4 | `xlsx-viewer-value-index.test.ts`, `xlsx-viewer-value-search-keys.test.ts`. Browser F4 (12,000 values): "Showing first 10,000", search finds item-11000 beyond 10k, searched Select All selects 1, first Select All covers all 12,000 **[B:C+W]** | pass (100k/1M universe at scale → S10.2) |
@@ -114,8 +114,8 @@ Browser shorthand: **[B:C+W]** = Playwright scenario passing on Chromium and Pla
 | Status | Cases | Which |
 |---|---:|---|
 | pass | 17 | AC-CAP-01, STORE-04, VIEW-01–04, SEM-01, SEM-03, SEM-06, SEM-09, SEL-01, SEL-02, COPY-01, LIFE-01, SEARCH-01, RENDER-01, RENDER-02 |
-| pass with a not-run leg | 9 | AC-CAP-02, CAP-03, STORE-01, STORE-02, SEM-02, SEM-04, SEM-07, SEM-08, REG-01 |
-| partial, blocking | 6 | AC-STORE-03, SEM-05, A11Y-01, A11Y-02, LIFE-02, PERF-02 |
+| pass with a not-run leg | 11 | AC-CAP-02, CAP-03, STORE-01, STORE-02, STORE-03, SEM-02, SEM-04, SEM-05, SEM-07, SEM-08, REG-01 |
+| partial, blocking | 4 | AC-A11Y-01, A11Y-02, LIFE-02, PERF-02 |
 | not-run, blocking | 2 | AC-PERF-01, BACKEND-01 |
 | fail | 0 | |
 
@@ -159,7 +159,7 @@ What is instrumented, and what is not:
 
 These are mandatory cases whose evidence is incomplete. Nothing here is hidden as a pass.
 
-1. **AC-STORE-03 / AC-SEM-04 drawing legs / AC-SEM-05:** the S3.1 parser/drawing/dynamic-spill wiring is not delivered. A sheet with any drawing or dynamic array has permanently incomplete structure, so its sort/filter refuse.
+1. ~~**AC-STORE-03 / AC-SEM-04 drawing legs / AC-SEM-05**~~ — resolved by S3.3 (merged 2026-10-12); only their browser legs remain not-run.
 2. **AC-A11Y-01 / AC-A11Y-02:** the desktop screen-reader, iPad VoiceOver and real keyboard/touch/focus receipts (S10.3).
 3. **AC-PERF-01 / AC-PERF-02 (memory) / AC-LIFE-02 (real retained memory):** the controlled S10.2 Chrome, Safari and iPad receipts.
 4. **Native Excel checkpoint** for AC-STORE-01, AC-SEM-07 and AC-REG-01. The manual steps are above.
