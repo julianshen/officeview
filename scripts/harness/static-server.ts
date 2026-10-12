@@ -36,6 +36,8 @@ export interface StaticServer { url: string; close(): Promise<void> }
 
 export async function startStaticServer(root: string, port: number, host = '127.0.0.1'): Promise<StaticServer> {
   const server: Server = createServer((req, res) => {
+    // No favicon: answer it empty instead of a 404 console error in every page.
+    if (new URL(req.url ?? '/', 'http://static.invalid').pathname === '/favicon.ico') { res.writeHead(204, { 'cross-origin-resource-policy': 'same-origin' }).end(); return }
     const path = resolveStaticPath(root, req.url ?? '/')
     if (!path) { res.writeHead(403).end(); return }
     readFile(path).then(body => {

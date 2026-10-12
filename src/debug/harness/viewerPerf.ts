@@ -148,8 +148,10 @@ export interface ReceiptMeasurements {
     mainRetainedBytes: number | null
     /** Forced-GC live samples during the operations: a LOWER bound of the live peak. */
     mainSampledLivePeakBytes: number | null
-    /** Application ledger high-water mark of main-owned live allocations; null: no complete ledger exists. */
+    /** Main ledger high-water mark (spec §12.4 peak including copies). */
     mainLedgerPeakBytes: number | null
+    /** Largest live heap above the post-close floor that the ledger peak does not cover. */
+    mainUnattributedBytes: number | null
     workerOwnedBytes: number | null
     bitmapPeakBytes: number | null
   }
@@ -241,10 +243,20 @@ function seriesSummary(series: string, values: number[], standard: number, probl
   return summarize(values, standard)
 }
 
+/** A scroll input with no present after it (the frame never showed it). */
+export const SCROLL_CENSORED_MS = 1_000
+/** Live main heap the ledger may leave unattributed (post-GC sampling noise, allocator slack). */
+export const ATTRIBUTION_TOLERANCE_BYTES = 2 * MiB
+/** Recovery cycles: the mean of the last three post-close readings may exceed the first three by at most this. */
+export const RECOVERY_GROWTH_BYTES = 2 * MiB
+export const RECOVERY_CYCLES = 10
+const strictlyIncreasing = (v: number[]) => v.every((x, i) => i === 0 || x > v[i - 1])
+const nondecreasing = (v: number[]) => v.every((x, i) => i === 0 || x >= v[i - 1])
+
 /** Every threshold input recomputed from the raw records; problems name what is missing or invalid. */
-export function deriveMeasurements(raw: Raw): { measurements: ReceiptMeasurements; problems: string[] } {
+export function deriveMeasurements(raw: Raw, fixtures: Record<string, ManifestFixture>): { measurements: ReceiptMeasurements; problems: string[] } {
   const problems: string[] = []
-  const m: ReceiptMeasurements = { scroll: {}, ack: {}, firstViewport: {}, import: {}, memory: { mainRetainedBytes: null, mainSampledLivePeakBytes: null, mainLedgerPeakBytes: null, workerOwnedBytes: null, bitmapPeakBytes: null } }
+  const m: ReceiptMeasurements = { scroll: {}, ack: {}, firstViewport: {}, import: {}, memory: { mainRetainedBytes: null, mainSampledLivePeakBytes: null, mainLedgerPeakBytes: null, mainUnattributedBytes: null, workerOwnedBytes: null, bitmapPeakBytes: null } }
 
   const scroll = obj(raw.scroll)
   for (const kind of ['ordinary', 'wrapped', 'styled'] as const) {
@@ -252,10 +264,14 @@ export function deriveMeasurements(raw: Raw): { measurements: ReceiptMeasurement
     const frames = nums(timeline?.frames), events = nums(timeline?.events), presents = nums(timeline?.presents)
     if (!run || !frames || !events || !presents) { problems.push(`scroll.${kind}: no raw timeline`); continue }
     if (run.importComplete !== true) problems.push(`scroll.${kind}: the fixture import did not complete before measuring`)
+    if (!strictlyIncreasing(frames)) { problems.push(`scroll.${kind}: frame timestamps are not strictly increasing`); continue }
+    if (!nondecreasing(events) || !nondecreasing(presents) || [...events, ...presents].some(t => t < 0)) { problems.push(`scroll.${kind}: input/present timestamps are negative or out of order`); continue }
     const intervals = frames.slice(1).map((t, i) => t - frames[i])
     const paired = pairInputsToPresents(events, presents)
+    // An input that never reached a present is a censored miss, never dropped.
+    const latencies = [...paired.latencies, ...Array(paired.unmatched).fill(SCROLL_CENSORED_MS) as number[]]
     m.scroll[kind] = {
-      inputToPaint: seriesSummary(`scroll.${kind}.inputToPaint`, paired.latencies, MIN_FRAMES, problems),
+      inputToPaint: seriesSummary(`scroll.${kind}.inputToPaint`, latencies, MIN_FRAMES, problems),
       frameInterval: seriesSummary(`scroll.${kind}.frameInterval`, intervals, MIN_FRAMES, problems),
     }
   }
@@ -264,10 +280,12 @@ export function deriveMeasurements(raw: Raw): { measurements: ReceiptMeasurement
   for (const [op, key] of [['sort', 'sort'], ['filter', 'filterApply'], ['find', 'find'], ['cancel', 'cancel']] as const) {
     const records = obj(ack?.[key])?.records
     if (!Array.isArray(records)) { problems.push(`ack.${op}: no raw records`); continue }
-    const values = records.map(r => {
-      const rec = obj(r), input = num(rec?.inputAt), present = num(rec?.presentAt)
+    const values = records.map((r, i) => {
+      const rec = obj(r), input = num(rec?.inputAt), mutation = num(rec?.mutationAt), present = num(rec?.presentAt)
       // No input seen, or no qualifying presented change: censored at the probe window.
-      return input !== null && input >= 0 && present !== null && rec?.what ? present - input : ACK_CENSORED_MS
+      if (input === null || input < 0 || present === null || mutation === null || !rec?.what) return ACK_CENSORED_MS
+      if (!(input <= mutation && mutation <= present)) { problems.push(`ack.${op}[${i}]: input -> mutation -> present out of order`); return ACK_CENSORED_MS }
+      return present - input
     })
     m.ack[op] = seriesSummary(`ack.${op}`, values, MIN_OPERATIONS, problems)
   }
@@ -277,56 +295,110 @@ export function deriveMeasurements(raw: Raw): { measurements: ReceiptMeasurement
     const runs = obj(fv?.[key])?.runs
     if (!Array.isArray(runs)) { problems.push(`firstViewport.${key}: no raw runs`); continue }
     const usable = runs.map(r => num(obj(r)?.firstUsable))
-    if (usable.some(v => v === null)) problems.push(`firstViewport.${key}: a run never reached a usable viewport`)
-    m.firstViewport[key] = seriesSummary(`firstViewport.${key}`, usable.filter((v): v is number => v !== null), MIN_OPERATIONS, problems)
+    if (usable.some(v => v === null || v < 0)) problems.push(`firstViewport.${key}: a run never reached a valid usable viewport`)
+    m.firstViewport[key] = seriesSummary(`firstViewport.${key}`, usable.filter((v): v is number => v !== null && v >= 0), MIN_OPERATIONS, problems)
   }
 
   const imp = obj(raw.import)
   for (const key of ['F1', 'F2', 'F3'] as const) {
-    const runs = obj(imp?.[key])?.runs
+    const runs = obj(imp?.[key])?.runs, expected = fixtures[key]
     if (!Array.isArray(runs)) { problems.push(`import.${key}: no raw runs`); continue }
-    const results = runs.map(r => (obj(r)?.outcome === 'complete' && Array.isArray(obj(r)?.events) ? importThroughput(obj(r)!.events as ImportEvent[]) : null))
-    if (results.some(t => t === null)) problems.push(`import.${key}: a run did not complete`)
-    const ok = results.filter((t): t is ImportThroughput => t !== null)
-    if (ok.length < MIN_IMPORT_RUNS) problems.push(`import.${key}: ${ok.length} complete runs, below ${MIN_IMPORT_RUNS}`)
+    const ok: ImportThroughput[] = []
+    runs.forEach((r, i) => {
+      const run = obj(r), events = Array.isArray(run?.events) ? run!.events as ImportEvent[] : null
+      const where = `import.${key}[${i}]`
+      if (run?.outcome !== 'complete' || !events?.length) { problems.push(`${where}: did not complete`); return }
+      const ts = events.map(e => e.t), bytes = events.map(e => e.expandedBytes), cells = events.map(e => e.populatedCells)
+      if (![...ts, ...bytes, ...cells].every(v => typeof v === 'number' && Number.isFinite(v) && v >= 0) || !nondecreasing(ts) || !nondecreasing(bytes) || !nondecreasing(cells)) { problems.push(`${where}: progress is not finite, nonnegative and monotonic`); return }
+      const done = events.at(-1)!
+      if (done.phase !== 'done') { problems.push(`${where}: no terminal done event`); return }
+      // The terminal workload must be the verified fixture's (spec §12.3/§12.5).
+      if (expected && done.populatedCells !== expected.nnz) { problems.push(`${where}: ${done.populatedCells} populated cells, the fixture holds ${expected.nnz}`); return }
+      if (expected && (done.expandedBytes > expected.uncompressedBytes || done.expandedBytes < expected.uncompressedBytes * 0.99)) { problems.push(`${where}: ${done.expandedBytes} expanded bytes, the fixture expands to ${expected.uncompressedBytes}`); return }
+      const throughput = importThroughput(events)
+      if (!throughput || throughput.windowMs <= 0) { problems.push(`${where}: no post-inventory window`); return }
+      ok.push(throughput)
+    })
+    if (ok.length < MIN_IMPORT_RUNS) problems.push(`import.${key}: ${ok.length} valid complete runs, below ${MIN_IMPORT_RUNS}`)
     // Lower-bound targets: the worst run is the reported value.
     if (ok.length) m.import[key] = { expandedMiBPerSec: Math.min(...ok.map(t => t.expandedMiBPerSec)), cellsPerSec: Math.min(...ok.map(t => t.cellsPerSec)), runs: ok.length }
   }
 
+  // Memory: both sessions must provide every pool's evidence at every checkpoint
+  // and a clean close; a maximum is only taken once nothing is missing.
   const memory = obj(raw.memory)
-  let retained: number | null = null, live: number | null = null, worker: number | null = null, bitmap: number | null = null
+  const perSession: { retained: number; live: number; ledger: number; unattributed: number; worker: number; bitmap: number }[] = []
   for (const key of ['F2', 'F4'] as const) {
+    const where = `memory.${key}`
     const session = obj(memory?.[key]), checkpoints = obj(session?.checkpoints)
-    if (!session || !checkpoints || session.stalled) { problems.push(`memory.${key}: no completed session`); continue }
-    if (Array.isArray(session.timeouts) && session.timeouts.length) problems.push(`memory.${key}: probes timed out (${(session.timeouts as string[]).join(', ')})`)
+    if (!session || !checkpoints || session.stalled) { problems.push(`${where}: no completed session`); continue }
+    const before = problems.length
+    if (!Array.isArray(session.timeouts)) problems.push(`${where}: no probe record`)
+    else if (session.timeouts.length) problems.push(`${where}: probes timed out or failed (${(session.timeouts as string[]).join(', ')})`)
     const base = num(obj(checkpoints.baseline)?.heapBytes)
-    if (base === null) { problems.push(`memory.${key}: no baseline heap`); continue }
-    for (const name of ['loaded', 'afterOps']) {
+    if (base === null) problems.push(`${where}: no baseline heap`)
+    let retained = -Infinity, worker = -Infinity, bitmap = -Infinity, ledgerPeak = -Infinity
+    for (const name of ['loaded', 'afterOps'] as const) {
       const cp = obj(checkpoints[name])
-      const heap = num(cp?.heapBytes)
-      if (heap === null) problems.push(`memory.${key}.${name}: no heap reading`)
-      else retained = Math.max(retained ?? -Infinity, heap - base)
-      const ws = obj(cp?.worker)
-      const sessions = ws?.kind === 'stats' && Array.isArray(ws.sessions) ? ws.sessions as Raw[] : []
-      for (const sess of sessions) { const peak = num(obj(sess.memory)?.peakBytes); if (peak !== null) worker = Math.max(worker ?? 0, peak) }
-      const uasm = obj(cp?.uasm)
-      if (uasm?.available === true) {
-        const w = num(uasm.worker), c = num(uasm.canvas)
-        if (w !== null) worker = Math.max(worker ?? 0, w)
-        if (c !== null) bitmap = Math.max(bitmap ?? 0, c)
-      }
-      const peakBitmap = num(obj(cp?.frame)?.peakBitmapBytes)
-      if (peakBitmap !== null) bitmap = Math.max(bitmap ?? 0, peakBitmap)
+      if (!cp) { problems.push(`${where}.${name}: missing checkpoint`); continue }
+      const heap = num(cp.heapBytes)
+      if (heap === null || base === null) problems.push(`${where}.${name}: no heap reading`)
+      else retained = Math.max(retained, heap - base)
+      const ws = obj(cp.worker)
+      const peaks = (ws?.kind === 'stats' && Array.isArray(ws.sessions) ? ws.sessions as Raw[] : []).map(x => num(obj(x.memory)?.peakBytes)).filter((v): v is number => v !== null)
+      if (!peaks.length) problems.push(`${where}.${name}: no worker ledger`)
+      else worker = Math.max(worker, ...peaks)
+      const uasm = obj(cp.uasm)
+      const uw = uasm?.available === true ? num(uasm.worker) : null, uc = uasm?.available === true ? num(uasm.canvas) : null
+      if (uw === null || uc === null) problems.push(`${where}.${name}: no measureUserAgentSpecificMemory reading`)
+      else { worker = Math.max(worker, uw); bitmap = Math.max(bitmap, uc) }
+      const peakBitmap = num(obj(cp.frame)?.peakBitmapBytes)
+      if (peakBitmap === null || peakBitmap <= 0) problems.push(`${where}.${name}: no bitmap ledger`)
+      else bitmap = Math.max(bitmap, peakBitmap)
+      const ledger = obj(cp.ledger), lp = num(ledger?.peakBytes)
+      if (lp === null) problems.push(`${where}.${name}: no main ledger snapshot`)
+      else ledgerPeak = Math.max(ledgerPeak, lp)
     }
-    for (const poll of Array.isArray(session.polls) ? session.polls as Raw[] : []) { const peak = num(poll.workerPeak); if (peak !== null) worker = Math.max(worker ?? 0, peak) }
+    for (const poll of Array.isArray(session.polls) ? session.polls as Raw[] : []) { const peak = num(poll.workerPeak); if (peak !== null) worker = Math.max(worker, peak) }
+    // Close / recovery leg (AC-LIFE-02).
+    const closed = obj(checkpoints.closed)
+    const closedHeap = num(closed?.heapBytes), frame = obj(closed?.frame), canvas = obj(closed?.canvas), closedLedger = obj(closed?.ledger)
+    if (!closed) problems.push(`${where}.closed: missing checkpoint`)
+    else {
+      const created = num(frame?.workersCreated), terminated = num(frame?.workersTerminated)
+      if (created === null || terminated === null || created < 1 || created !== terminated) problems.push(`${where}.closed: workers ${terminated}/${created} terminated`)
+      if (num(canvas?.count) !== 0) problems.push(`${where}.closed: ${String(canvas?.count)} canvases remain`)
+      if (num(closedLedger?.bytes) !== 0) problems.push(`${where}.closed: main ledger holds ${String(closedLedger?.bytes)} B after close`)
+      const cu = obj(closed.uasm)
+      if (cu?.available !== true || num(cu.worker) !== 0) problems.push(`${where}.closed: worker memory not shown released`)
+      const storage = num(obj(closed.storage)?.usage), baseStorage = num(obj(obj(checkpoints.baseline)?.storage)?.usage)
+      if (storage === null || baseStorage === null || storage > baseStorage) problems.push(`${where}.closed: page storage not back to baseline`)
+      if (closedHeap === null) problems.push(`${where}.closed: no heap reading`)
+    }
+    const cycles = nums(obj(session.summary)?.recovery && obj(obj(session.summary)!.recovery)?.cyclesMainOwnedBytes)
+    if (key === 'F2') {
+      if (!cycles || cycles.length < RECOVERY_CYCLES) problems.push(`${where}: ${cycles?.length ?? 0} recovery cycles, below ${RECOVERY_CYCLES}`)
+      else {
+        const mean = (v: number[]) => v.reduce((x, y) => x + y, 0) / v.length
+        const growth = mean(cycles.slice(-3)) - mean(cycles.slice(0, 3))
+        if (growth > RECOVERY_GROWTH_BYTES) problems.push(`${where}: main heap grows ${round(growth / MiB)} MiB over ${cycles.length} open/close cycles`)
+      }
+    }
     const liveSamples = nums(session.liveHeapSamples)
-    if (liveSamples && liveSamples.length) live = Math.max(live ?? -Infinity, ...liveSamples.map(v => v - base))
-    else problems.push(`memory.${key}: no forced-GC live samples`)
+    if (!liveSamples?.length) problems.push(`${where}: no forced-GC live samples`)
+    if (problems.length > before || base === null || closedHeap === null || !liveSamples?.length) continue
+    // Attribution: the live heap above the post-close floor (the host page with
+    // the viewer's code loaded and the document's ledger back at zero) must be
+    // covered by the ledger's high-water mark.
+    const floor = Math.min(closedHeap - base, ...(cycles ?? []))
+    const live = Math.max(...liveSamples) - base
+    perSession.push({ retained, live, ledger: ledgerPeak, unattributed: live - floor - ledgerPeak, worker, bitmap })
   }
-  m.memory = { mainRetainedBytes: retained, mainSampledLivePeakBytes: live, mainLedgerPeakBytes: null, workerOwnedBytes: worker, bitmapPeakBytes: bitmap }
-  // §12.4 budgets the main pool's PEAK including copies. Without a complete
-  // main-owned application ledger the peak is not demonstrated.
-  if (m.memory.mainLedgerPeakBytes === null) problems.push('main-owned-memory: no complete main-owned application ledger; the live peak is not demonstrated (row pending)')
+  if (perSession.length === 2) {
+    const max = (f: (s: typeof perSession[number]) => number) => Math.max(...perSession.map(f))
+    m.memory = { mainRetainedBytes: max(s => s.retained), mainSampledLivePeakBytes: max(s => s.live), mainLedgerPeakBytes: max(s => s.ledger), mainUnattributedBytes: max(s => s.unattributed), workerOwnedBytes: max(s => s.worker), bitmapPeakBytes: max(s => s.bitmap) }
+    if (m.memory.mainUnattributedBytes! > ATTRIBUTION_TOLERANCE_BYTES) problems.push(`main-owned-memory: unattributed main memory (${round(m.memory.mainUnattributedBytes! / MiB)} MiB of live heap above the post-close floor is not in the ledger peak; tolerance ${ATTRIBUTION_TOLERANCE_BYTES / MiB} MiB)`)
+  }
   return { measurements: m, problems }
 }
 
@@ -408,12 +480,15 @@ export function evaluateMeasurements(m: ReceiptMeasurements, environmentProfile:
   }
   {
     const b = SPEC_BUDGETS['main-owned-memory'], mem = m.memory
-    // Admission needs the ledger peak; the sampled live peak can only prove a miss.
-    const value = mem.mainLedgerPeakBytes ?? mem.mainSampledLivePeakBytes
-    const note = `retained ${mem.mainRetainedBytes === null ? 'n/a' : `${round(mem.mainRetainedBytes / MiB)} MiB`}; forced-GC sampled live peak (lower bound) ${mem.mainSampledLivePeakBytes === null ? 'n/a' : `${round(mem.mainSampledLivePeakBytes / MiB)} MiB`}`
+    const mib = (v: number | null) => (v === null ? 'n/a' : `${round(v / MiB)} MiB`)
+    // Admitted on the ledger peak, only when the ledger accounts for the live
+    // heap; a sampled live heap above the budget is a demonstrated miss.
+    const unattributed = mem.mainUnattributedBytes !== null && mem.mainUnattributedBytes > ATTRIBUTION_TOLERANCE_BYTES
+    const value = mem.mainLedgerPeakBytes === null ? null : Math.max(mem.mainLedgerPeakBytes, mem.mainSampledLivePeakBytes !== null && mem.mainSampledLivePeakBytes > b.desktop ? mem.mainSampledLivePeakBytes : 0)
+    const note = `ledger peak ${mib(mem.mainLedgerPeakBytes)}; forced-GC live peak ${mib(mem.mainSampledLivePeakBytes)}; unattributed ${mib(mem.mainUnattributedBytes)} (tolerance ${ATTRIBUTION_TOLERANCE_BYTES / MiB} MiB); retained ${mib(mem.mainRetainedBytes)}`
     push('main-owned-memory', b.kind, b.unit, b.desktop, b.mobile,
-      { value, limited: false, missing: value === null ? ['main live peak'] : [], note, ...(mem.mainLedgerPeakBytes === null ? { pending: 'pending: no complete main-owned application ledger, so the §12.4 peak is not demonstrated' } : {}) },
-      `S10.2 main heap probes (${b.spec})`)
+      { value, limited: false, missing: value === null ? ['main ledger peak'] : [], note, ...(unattributed ? { pending: 'pending: unattributed main memory' } : {}) },
+      `S10.2 main-thread application ledger, cross-checked with forced-GC heap samples (${b.spec})`)
   }
   for (const [key, field] of [['worker-owned-memory', 'workerOwnedBytes'], ['bitmap-retained', 'bitmapPeakBytes']] as const) {
     const b = SPEC_BUDGETS[key]
@@ -449,15 +524,16 @@ export function identityProblems(draft: ReceiptDraft, ctx: EvidenceContext): str
       if (got[field] !== expected[field]) problems.push(`fixture ${id}: ${field} ${String(got[field])} != manifest ${String(expected[field])}`)
     }
   }
-  const errors = Array.isArray(draft.raw?.errors) ? draft.raw.errors as unknown[] : []
-  for (const error of errors) if (typeof error === 'string' && /disconnected|crashed|abandoned|timed out/.test(error)) problems.push(`run error: ${error}`)
+  // Benign diagnostics are excluded by name at capture time; anything recorded here is a run error.
+  if (!Array.isArray(draft.raw?.errors)) problems.push('run error record missing')
+  else for (const error of draft.raw.errors as unknown[]) problems.push(`run error: ${String(error)}`)
   return problems
 }
 
 // ---- receipt ---------------------------------------------------------------------
 
 function assemble(draft: ReceiptDraft, ctx: EvidenceContext) {
-  const derived = deriveMeasurements(draft.raw ?? {})
+  const derived = deriveMeasurements(draft.raw ?? {}, ctx.fixtures)
   const evaluation = evaluateMeasurements(derived.measurements, draft.environment.profile, ctx.profile)
   const evidenceProblems = [...identityProblems(draft, ctx), ...derived.problems]
   const rowsOk = evaluation.filter(r => r.profile === 'desktop').every(r => r.outcome === 'pass' || r.outcome === 'pass-limited')

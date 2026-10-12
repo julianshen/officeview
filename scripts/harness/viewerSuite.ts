@@ -29,6 +29,7 @@ import type { AckKind, AckRecord, ScrollRunResult, ViewerPerf } from '../../src/
 import type { PerfReply } from '../../src/debug/viewerPerfWorker'
 import type { BenchArgs } from './args'
 import type { HarnessIdentity } from './identity'
+import { startSampler } from './sampler'
 import { startStaticServer } from './static-server'
 import { FIXTURE_MANIFEST_PATH, ensureViewerFixtures, type FixtureManifest, type ViewerFixture, type ViewerFixtureKey } from './viewerFixtures'
 
@@ -89,7 +90,9 @@ function machine(): { machine: string; os: string; extra: Record<string, unknown
 async function newPerfPage(context: BrowserContext, base: string, errors: string[]): Promise<Page> {
   const page = await context.newPage()
   page.on('pageerror', error => errors.push(`pageerror: ${error.message}`))
-  page.on('console', message => { if (message.type() === 'error') errors.push(`console: ${message.text().slice(0, 300)}`) })
+  // Every console error is a run error (the static server answers the favicon, the only former 404).
+  page.on('console', message => {
+    if (message.type() === 'error') errors.push(`console: ${message.text().slice(0, 300)}`) })
   await page.goto(`${base}${PAGE}`)
   await page.waitForFunction(() => (window as unknown as W).__viewerPerf?.booted === true, undefined, { timeout: 30_000 })
   return page
@@ -344,29 +347,23 @@ async function memorySession(context: BrowserContext, base: string, fixture: Vie
   // the live heap at each instant. Their maximum is a LOWER bound of the live
   // peak (a spike between samples is missed); it can prove a miss, not a pass.
   const liveHeapSamples: number[] = []
-  let liveBusy = false
-  const liveSampler = setInterval(() => {
-    if (liveBusy) return
-    liveBusy = true
-    void (async () => {
-      await bounded('live gc', gcMain(), 10_000)
-      const h = await bounded('live heap', heap(), 10_000)
-      if (h) liveHeapSamples.push(heapBytes(h))
-    })().finally(() => { liveBusy = false })
-  }, LIVE_SAMPLE_MS)
-  // Interval sampling with no join: a stop never waits on an in-flight sample.
-  let sampling = false
-  const sampler = setInterval(() => {
-    if (sampling) return
-    sampling = true
-    void Promise.all([bounded('poll heap', heap(), 10_000), bounded('poll worker stats', perf(page, p => p.workerStats()), 10_000)]).then(([h, w]) => {
-      const session = w && w.kind === 'stats' ? w.sessions[0]?.memory : undefined
-      polls.push({ t: Date.now(), heapBytes: h ? heapBytes(h) : null, workerPeak: session?.peakBytes ?? null, workerRetained: session?.retainedBytes ?? null })
-    }, () => {}).finally(() => { sampling = false })
-  }, 250)
+  const failed = (what: string) => (error: unknown) => { timeouts.push(`${what} failed: ${error instanceof Error ? error.message : String(error)}`) }
+  const stopLive = startSampler(LIVE_SAMPLE_MS, async () => {
+    await bounded('live gc', gcMain(), 10_000)
+    const h = await bounded('live heap', heap(), 10_000)
+    if (h) liveHeapSamples.push(heapBytes(h))
+  }, failed('live sample'))
+  // No-GC sampling (an upper bound, garbage included) and worker ledger polls.
+  const stopPolls = startSampler(250, async () => {
+    const [h, w] = await Promise.all([bounded('poll heap', heap(), 10_000), bounded('poll worker stats', perf(page, p => p.workerStats()), 10_000)])
+    const session = w && w.kind === 'stats' ? w.sessions[0]?.memory : undefined
+    polls.push({ t: Date.now(), heapBytes: h ? heapBytes(h) : null, workerPeak: session?.peakBytes ?? null, workerRetained: session?.retainedBytes ?? null })
+  }, failed('poll'))
+  let loaded: Awaited<ReturnType<typeof checkpoint>>, afterOps: Awaited<ReturnType<typeof checkpoint>>
+  try {
   await openFixture(page, fixture)
   await waitComplete(page)
-  const loaded = await checkpoint('loaded')
+  loaded = await checkpoint('loaded')
   if (ops === 'f2') {
     await page.evaluate(() => (window as unknown as W).__viewerPerf.scrollRun({ warmup: 0, frames: 120, dx: 0, dy: 60 }))
     const header = page.getByRole('columnheader', { name: /^Column G/ })
@@ -383,9 +380,12 @@ async function memorySession(context: BrowserContext, base: string, fixture: Vie
     await page.waitForTimeout(5000)
     await dialog.getByRole('button', { name: 'Cancel' }).click()
   }
-  const afterOps = await checkpoint('after-ops')
-  clearInterval(sampler)
-  clearInterval(liveSampler)
+  afterOps = await checkpoint('after-ops')
+  } finally {
+    // Every exit path stops both samplers.
+    stopLive()
+    stopPolls()
+  }
   await bounded('viewer close', perf(page, p => p.close()), 30_000)
   await new Promise(resolve => setTimeout(resolve, 500))
   const closed = await checkpoint('closed')
