@@ -121,7 +121,8 @@ Every package is implemented on its own branch, reviewed by at least one agent f
 | S10.1 end-to-end functional and complexity audit (`docs/validation/interactive-viewer.md`, browser e2e, complexity ledger) | merged; 7 release-blocking items listed in the evidence matrix |
 | S3.3 parser structural metadata (`anchorRecords.ts`, `drawingBounds.ts`, spill footprints) | merged; drawing/dynamic-array sheets sort and filter when the band is clear |
 | S8.6 sort performance (`sortPrefix.ts`, `sortPrepared.ts`, `sortText.ts`, compact prepared columns, batched cooperative checks) | merged (codex implementation; Claude reviews over two rounds); every frozen threshold met in Chrome, thresholds/budgets unchanged |
-| S10.3 (in progress), S10.2 (physical-device receipts skipped for now by user decision), S11/S12 status, S13 | not started / in progress as noted |
+| S10.3 accessibility/keyboard/capability verification | merged; VoiceOver/Safari/iPad not run (manual steps recorded) |
+| S10.2 (in progress), (physical-device receipts skipped for now by user decision), S11/S12 status, S13 | not started / in progress as noted |
 
 ## S0 — Freeze contracts, counterexamples and fixture/harness infrastructure
 
@@ -688,13 +689,15 @@ Import file-size, compressed/inflated-byte and storage quotas are explicit in th
 
 ### S10.3 Accessibility/mobile/browser support verification
 
+> **Status (2026-10-12):** merged (Claude implementation; codex reviews over three rounds, every finding fixed, final verdict APPROVE). Gaps fixed: Chromium keyboard trap (G6), storage-quota failure shown as incomplete with recovery guidance and no further polling (G7), throwing worker factory falls back to compatibility mode (G8), canvas context restore repaints (G9), Esc cancels a pending copy anywhere (G10); cancelled imports stay incomplete; font fallbacks and the sort popup name are announced. Keyboard and accessibility-tree evidence passes in Chromium and Playwright WebKit; capability matrix in `docs/validation/interactive-viewer.md`. Not run: macOS VoiceOver (manual steps recorded; AC-A11Y-01 stays blocking on it), real Safari (needs `safaridriver --enable`), iPad/physical devices (user decision). Known documented restriction: an OPFS write failure does not fall back to IndexedDB (default Playwright WebKit cannot open the largest worker-backed fixture).
+
 **Files:** extend browser suite; update `docs/validation/interactive-viewer.md`.
 
 - [ ] Run full keyboard interaction (active navigation, headers, Alt+Down, Enter, Space, Esc, find, multi-selection) in Chrome/Safari and touch sequences on iPad, including edge navigation after recenter.
 - [ ] Verify bounded owned grid semantics with desktop screen reader and iPad VoiceOver: role hierarchy, display-slot counts/indices, current active descendant, selected/sorted headers, announcements and focus return. Missing gridcell ownership blocks readiness even if canvas appears correct.
-- [ ] Test unavailable Worker, OffscreenCanvas, OPFS/IndexedDB quota denial, font failure and backend/device loss. Small admitted fallback retains correct behavior; unsupported mandatory large mode is visibly diagnosed and cannot claim full capacity/performance.
-- [ ] Run protection/event-isolation/zoom/non-XLSX component suites and actual browser scenarios after any fix; expected no hijacked editable input or lost focus, and all supported profiles have documented capability/admission behavior.
-- [ ] Deliver support/a11y receipts with known limitations tied to exact acceptance IDs; no unsupported browser receives an unqualified capacity claim.
+- [x] Test unavailable Worker, OffscreenCanvas, OPFS/IndexedDB quota denial, font failure and backend/device loss. Small admitted fallback retains correct behavior; unsupported mandatory large mode is visibly diagnosed and cannot claim full capacity/performance.
+- [x] Run protection/event-isolation/zoom/non-XLSX component suites and actual browser scenarios after any fix; expected no hijacked editable input or lost focus, and all supported profiles have documented capability/admission behavior.
+- [x] Deliver support/a11y receipts with known limitations tied to exact acceptance IDs; no unsupported browser receives an unqualified capacity claim.
 
 ## S11 — Bounded Rust/Wasm kernel experiment and go/no-go
 
