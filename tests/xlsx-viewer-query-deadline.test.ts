@@ -1,6 +1,6 @@
 // @vitest-environment node
 import { afterEach, expect, it, vi } from 'vitest'
-import { ViewerKernel } from '../src/worker/viewerKernel'
+import { FOREGROUND_YIELD_WAIT_MS, QUERY_DEADLINE_MS, ViewerKernel } from '../src/worker/viewerKernel'
 import { createObjectWorkbookSource } from '../src/worker/viewerObjectSource'
 import { initialIdentity } from '../src/worker/viewerProtocol'
 import type { WorkerReply } from '../src/xlsx/view/contracts'
@@ -254,3 +254,35 @@ it('S13.3 MINOR-1: a sort completes while overlapping viewport commands keep arr
     await kernel.handle({ kind: 'close', requestId: 'close', docId: 'doc' }, () => {})
   }
 }, 20_000)
+
+it('S13.3 MINOR-1: a slow foreground command parks background work for a bounded share per yield only', async () => {
+  vi.useFakeTimers()
+  const rows = 2000
+  const document = workbookOf([{ sheetId: 's', cells: Array.from({ length: rows }, (_, row) => ({ row, col: 0, value: (row * 7919) % rows })) }])
+  let ticks = 0, yields = 0
+  const kernel = new ViewerKernel({ parse: async () => document }, { now: () => ticks += 3, yield: async () => { yields++ } })
+  await kernel.handle({ kind: 'open', requestId: 'open', docId: 'doc', source: { kind: 'object', document }, profile: 'D' }, () => {})
+  const session = kernel.session('doc')!
+  let release!: () => void
+  const held = new Promise<void>(resolve => { release = resolve })
+  const viewport = session.viewport.bind(session)
+  vi.spyOn(session, 'viewport').mockImplementation(async (...args) => { await held; return viewport(...args) })
+  const owner = initialIdentity('doc', 's')
+  const slow = kernel.handle({ kind: 'viewport', requestId: 'slow', owner, window: { box: { x: 0, y: 0, width: 64, height: 100 }, zoom: 1, deviceScale: 1 } }, () => {})
+  const replies: WorkerReply[] = []
+  let done = false
+  const sort = kernel.handle({ kind: 'sort', requestId: 'sort', owner, spec: { range: { r0: 0, r1: rows - 1, c0: 0, c1: 0, headerRows: 0, totalsRows: 0 }, keys: [{ col: 0, order: 'asc' }], caseSensitive: false } }, out => replies.push(out)).then(() => { done = true })
+  try {
+    let waited = 0
+    while (!done && waited < QUERY_DEADLINE_MS / 2) { await vi.advanceTimersByTimeAsync(FOREGROUND_YIELD_WAIT_MS); waited += FOREGROUND_YIELD_WAIT_MS }
+    expect(done, 'the sort progresses although the foreground command never finishes').toBe(true)
+    expect(yields).toBeGreaterThan(1)
+    expect(replies.at(-1)).toMatchObject({ kind: 'complete' })
+    expect(waited, 'each yield waited at most one bounded share').toBeLessThanOrEqual(yields * FOREGROUND_YIELD_WAIT_MS)
+  } finally {
+    release()
+    await vi.advanceTimersByTimeAsync(0)
+    await slow; await sort
+    await kernel.handle({ kind: 'close', requestId: 'close', docId: 'doc' }, () => {})
+  }
+})
