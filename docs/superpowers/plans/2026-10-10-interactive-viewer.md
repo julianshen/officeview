@@ -124,6 +124,7 @@ Every package is implemented on its own branch, reviewed by at least one agent f
 | S10.3 accessibility/keyboard/capability verification | merged; VoiceOver/Safari/iPad not run (manual steps recorded) |
 | S13 integrator documentation (README "Interactive spreadsheet viewer", PLAN.md) | merged (codex draft; opencode reviews over two rounds, APPROVE); other S13 release gates open |
 | S13.1 worker bootstrap packaging fix; S13.2 paged drawings parity + 44px narrow-column touch actions (release-audit fixes) | merged 2026-10-13 (S13.1: codex impl, Claude+opencode reviews; S13.2: Claude impl, opencode 3 rounds; all findings fixed) |
+| S13 native Excel checkpoint (native-corner, native-1904, large/native-large: Excel-authored, adapter/date-filter/large-file parity, worker-backed browser legs) | merged 2026-10-13 (Claude impl; opencode 2 rounds, APPROVE); Excel for Windows not run |
 | S11/S12 decided not-run (decision records `docs/architecture/xlsx-wasm-decision.md`, `xlsx-gpu-decision.md`; evidence is desktop Chrome (headless) only; S10.2 receipt pending merge; revisit on Safari/mobile receipts) | decided, not executed (optional boundary) |
 | S10.2 (in progress: 12/13 desktop Chrome rows pass, header-sort acknowledgment fix under way), (physical-device receipts skipped for now by user decision), S13 release review | not started / in progress as noted |
 
