@@ -19,6 +19,14 @@ export class OfficePackage {
     return new OfficePackage(zip)
   }
 
+  /** A package over parts already read (and bounded) by the caller, e.g. the
+   * drawing parts of one sheet of a large file read through the range reader. */
+  static fromParts(parts: ReadonlyMap<string, Uint8Array>): OfficePackage {
+    const zip = new JSZip()
+    for (const [path, bytes] of parts) zip.file(path, bytes)
+    return new OfficePackage(zip)
+  }
+
   has(path: string): boolean {
     return this.zip.file(path) !== null
   }
