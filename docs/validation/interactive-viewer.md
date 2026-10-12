@@ -1,4 +1,4 @@
-# Interactive viewer: functional and complexity evidence (S10.1)
+# Interactive viewer: functional and complexity evidence (S10.1; S10.2 performance rows)
 
 **Branch:** `feature/iv-s10-1`, cut from `feature/interactive-viewer` at `cfa5cb5` (everything through S5.4, S9.2 and S8.4 merged). **Run date:** 2026-10-12. **Machine:** Apple M4 Pro, macOS 26.5.2. **Engines:** Playwright 1.64.0 with Chromium headless shell build 1248 and Playwright WebKit build 2370. WebKit results are labeled `webkit-playwright` and are **not** Safari evidence (spec §12.2).
 
@@ -100,12 +100,12 @@ Browser shorthand: **[B:C+W]** = Playwright scenario passing on Chromium and Pla
 | AC-A11Y-01 | F1, F3, F7 | `xlsx-viewer-a11y.test.tsx`, `xlsx-viewer-a11y-subdetail.test.tsx` (G5). Browser: `aria-rowcount` 1048577 / `aria-colcount` 16385, bounded owned tree (< 2,000 cells), header/cell index agreement **[B:C+W]** | pass (code); **desktop screen-reader and iPad VoiceOver receipts not-run** (S10.3). Blocking |
 | AC-A11Y-02 | F7 | `xlsx-viewer-events.test.tsx`, `xlsx-viewer-filter-ui.test.tsx`, `xlsx-viewer-sort-ui.test.tsx`; G4 browser regression | pass (code); actual keyboard/touch/focus receipts on Safari/iPad not-run (S10.3). Blocking |
 | AC-LIFE-01 | F7 | `xlsx-viewer-find-races.test.tsx`, `xlsx-viewer-worker-races.test.ts`, `xlsx-viewer-paged-viewer.test.tsx`. Browser F7: sheets A/B both at their first revision keep their own sort and data across switches; views never bump fontGen; sort/filter keep zoom **[B:C+W]** | pass |
-| AC-LIFE-02 | F7 multi-sheet | `xlsx-viewer-lifecycle.test.tsx` (F7 plateau, close returns ledgers to baseline) | pass (unit); real retained-memory/storage receipts → S10.2. Blocking |
+| AC-LIFE-02 | F7 multi-sheet; F2/F4 browser | `xlsx-viewer-lifecycle.test.tsx` (F7 plateau, close returns ledgers to baseline). S10.2 Chrome receipt `interactive-viewer-viewer-chrome-r1.json`: after close, workers 1/1 terminated, worker memory 0, DOM canvases 0, page storage 221 MB / 159 MB → 0. Main heap 16.3 MiB (F2) / 4.2 MiB (F4) above the empty host, not yet attributed; UASM Canvas reclaimed lazily | pass (unit); browser recovery **partial** (main-heap residue unattributed; F7 multi-sheet switching not browser-measured; Safari/iPad not-run). Blocking |
 | AC-SEARCH-01 | F1, F7, F8 | `xlsx-viewer-find.test.ts`, `xlsx-viewer-find-races.test.tsx`. Browser F1 res+wkr: find reaches the never-painted A1048576 with source id 17179852800 **[B:C+W]** | pass |
 | AC-RENDER-01 | F1, F3, F5, F6 | `xlsx-viewer-layout.test.ts`, `xlsx-viewer-overview.test.ts`, `xlsx-viewer-complexity.test.ts` (F6 window visits ≤ 2 × visible cells; 25 % tiny-size frame is analytic, 0 per-cell visits); G5 | pass |
 | AC-RENDER-02 | F7, F8 | `xlsx-viewer-selection-overlay.test.ts`, `xlsx-viewer-viewport-integration.test.tsx`, static print/export suites | pass (unit) |
-| AC-PERF-01 | F1–F8 | S10.2: controlled Chrome/Safari/iPad p50/p95 receipts | **not-run** (out of S10.1 scope; Safari/iPad also blocked on hardware/automation). Blocking |
-| AC-PERF-02 | F2–F7 | complexity part: `xlsx-viewer-complexity.test.ts` (see below); per-pool memory receipts → S10.2 | complexity **pass**; memory **not-run**. Blocking |
+| AC-PERF-01 | F1–F4 full scale + scroll mixes | S10.2 desktop Chrome release receipt (`interactive-viewer-performance.md` § S10.2). Rows that pass: warm frame (p95 ≤ 3.94 ms paint, 16.67 ms cadence); first viewport (F1 481 / F3 678 ms p95, F2 max 597 ms with n = 10); import throughput (≥ 58 MiB/s, ≥ 0.89M cells/s); the reused S8.6 kernel rows | **miss** on input acknowledgment: header sort on 1M rows shows nothing for 12–13 s. Desktop **not admitted**. Actual Safari not-run (admin `safaridriver`); iPad/mobile not-run by user decision. F5–F8 have no browser performance rows. Blocking |
+| AC-PERF-02 | F2–F7 | Complexity: `xlsx-viewer-complexity.test.ts` (see below). Per-pool memory, S10.2 Chrome: main 24.2 / 64 MiB; worker 228.7 / 512 MiB (ledger + measureUserAgentSpecificMemory); bitmap 113.2 / 128 MiB; browser process RSS recorded as informational | complexity **pass**; desktop memory **pass**; mobile M pools not-run (no device); GPU backend absent (Canvas2D only). Blocking only for mobile |
 | AC-BACKEND-01 | — | TS resident baseline is the only backend. S11/S12 were not executed, and the S11 allowance ("record not-run when the baseline already meets targets") needs the S10.2 receipts first | **not-run** (pending S10.2 and S11). Blocking |
 | AC-REG-01 | F8, corpus | typecheck, full vitest, build, golden compare (all XLSX units pass; 6 non-XLSX failures pre-existing on base) | pass (code); native source/checkpoint evidence not-run |
 
@@ -116,8 +116,8 @@ Browser shorthand: **[B:C+W]** = Playwright scenario passing on Chromium and Pla
 | pass | 17 | AC-CAP-01, STORE-04, VIEW-01–04, SEM-01, SEM-03, SEM-06, SEM-09, SEL-01, SEL-02, COPY-01, LIFE-01, SEARCH-01, RENDER-01, RENDER-02 |
 | pass with a not-run leg | 11 | AC-CAP-02, CAP-03, STORE-01, STORE-02, STORE-03, SEM-02, SEM-04, SEM-05, SEM-07, SEM-08, REG-01 |
 | partial, blocking | 4 | AC-A11Y-01, A11Y-02, LIFE-02, PERF-02 |
-| not-run, blocking | 2 | AC-PERF-01, BACKEND-01 |
-| fail | 0 | |
+| not-run, blocking | 1 | BACKEND-01 |
+| fail | 1 | AC-PERF-01 (S10.2: input-acknowledgment miss; desktop not admitted) |
 
 ## Complexity audit (spec §3 invariants)
 
@@ -161,10 +161,10 @@ These are mandatory cases whose evidence is incomplete. Nothing here is hidden a
 
 1. ~~**AC-STORE-03 / AC-SEM-04 drawing legs / AC-SEM-05**~~ — resolved by S3.3 (merged 2026-10-12); only their browser legs remain not-run.
 2. **AC-A11Y-01 / AC-A11Y-02:** the desktop screen-reader, iPad VoiceOver and real keyboard/touch/focus receipts (S10.3).
-3. **AC-PERF-01 / AC-PERF-02 (memory) / AC-LIFE-02 (real retained memory):** the controlled S10.2 Chrome, Safari and iPad receipts.
+3. **AC-PERF-01 / AC-PERF-02 (memory) / AC-LIFE-02 (real retained memory):** S10.2 delivered the desktop Chrome receipt (`interactive-viewer-viewer-chrome-r1.json`). Header-sort input acknowledgment misses (12–13 s on 1M rows); see the proposals in `interactive-viewer-performance.md`. Actual Safari and iPad receipts are still missing. The main-heap residue after close is not attributed yet.
 4. **Native Excel checkpoint** for AC-STORE-01, AC-SEM-07 and AC-REG-01. The manual steps are above.
 5. **AC-BACKEND-01:** the baseline status is pending the S10.2 receipts and the S11 decision.
-6. **Full-scale browser runs** for F2 (1M × 8), F3 dense (256 × 16,384) and F4 (1M strings). Only reduced, labelled scales ran here.
+6. ~~**Full-scale browser runs** for F2 (1M × 8), F3 dense (256 × 16,384) and F4 (1M strings)~~: S10.2 ran all three at full scale in Chrome (performance receipt). The S10.1 functional browser suite still uses reduced, labelled scales.
 
 ## Observations (not fixed; not reproduced as failures)
 

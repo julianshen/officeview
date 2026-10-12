@@ -78,8 +78,8 @@
         "specMs": 16.7,
         "frozenMs": 16.7,
         "basis": "spec",
-        "outcome": "unmeasured",
-        "justification": "Not an S8.4 operation: the harness has no viewport scroll scenario yet (S5 viewer not harnessed); frozen at spec, measured by S10.2.",
+        "outcome": "pass",
+        "justification": "Kept at spec. S10.2 Chrome 155 headless, desktop D, one M4 Pro laptop (shared machine; contention possible), production build, full-scale fixtures; receipt viewerEvidence.results. Sustained open-loop scroll, 300 measured frames per mix after 60 warmup: input-to-paint p95 ordinary 3.94 / wrapped 1.03 / styled 2.35 ms and rAF frame-interval p95 16.67 ms in every mix (0 long tasks). Passed only after two reproduced fixes (scroll-sync revert, per-call Intl.Segmenter). Wrapped mix is ASCII; a non-ASCII wrapped mix is informational (p95 16.67, max 33.3).",
         "measurement": null
       },
       "mobile": {
@@ -99,8 +99,8 @@
         "specMs": 50,
         "frozenMs": 50,
         "basis": "spec",
-        "outcome": "unmeasured",
-        "justification": "Not an S8.4 operation (needs the mounted viewer controls); frozen at spec, measured by S10.2.",
+        "outcome": "miss",
+        "justification": "Kept at spec. S10.2 Chrome 155 headless, desktop D, one M4 Pro laptop (shared machine; contention possible), production build, full-scale fixtures; receipt viewerEvidence.results. Header sort on F2 (1M rows) renders no pending state: the first acknowledgment is the result itself, 12.0-13.3 s after the click (5 samples, stopped early: all > 10x the ceiling). Phase: main-thread range admission (~4,010 worker strip reads). Filter apply 34.1 ms (n=10), find 14.0 ms and cancel 16.1 ms p95 pass. Fix is a proposal (S10.2 report), not applied.",
         "measurement": null
       },
       "mobile": {
@@ -290,8 +290,8 @@
         "specMs": 1500,
         "frozenMs": 1500,
         "basis": "spec",
-        "outcome": "unmeasured",
-        "justification": "Not an S8.4 operation (needs the S1 importer + S5 viewport in the harness); frozen at spec, measured by S10.2.",
+        "outcome": "pass",
+        "justification": "Kept at spec. S10.2 Chrome 155 headless, desktop D, one M4 Pro laptop (shared machine; contention possible), production build, full-scale fixtures; receipt viewerEvidence.results. Local File -> labelled usable viewport: F1 p95 481.4 ms (n=30), F3 p95 678.4 ms (n=30), F2 max 597.0 ms over 10 cold 1M-row samples (spec 12.6 limitation: p95 refused below 30). Fully imported later (F2 5.4 s p50).",
         "measurement": null
       },
       "mobile": {
@@ -314,5 +314,51 @@
       "note": "S8.6 admitted run at 09adbb1. Kernel phases p50: read 312.5 ms, dictionary 1647.9 ms, merge 243.4 ms. S8.4 headroom is retained under evidence.baseline.headroom."
     }
   },
-  "diagnostics": []
+  "diagnostics": [],
+  "viewerEvidence": {
+    "doc": "docs/validation/interactive-viewer-performance.md",
+    "results": "docs/validation/interactive-viewer-viewer-chrome-r1.json",
+    "hash": "9d5633d7ec121cbc755bce41298b3d7d8c937e2a8ee9f765def206bf9a37dbd6",
+    "commit": "2282115edbefe727a22d99a7bd5ef4ede2bc1788",
+    "browser": "Google Chrome 155.0.8059.39 (stable, Playwright 1.64 channel chrome, headless)",
+    "machine": "Apple M4 Pro, 14 logical cores, 24 GiB, macOS 26.5.2 (25F84)",
+    "profile": "D",
+    "mode": "release",
+    "desktopAdmitted": false,
+    "rows": {
+      "warm-viewport-frame": {
+        "outcome": "pass",
+        "value": 16.670000000000073
+      },
+      "input-acknowledgment": {
+        "outcome": "miss",
+        "value": 13316.280000001192
+      },
+      "progressive-first-viewport": {
+        "outcome": "pass-limited",
+        "value": 678.3500000089407
+      },
+      "import-expanded-throughput": {
+        "outcome": "pass",
+        "value": 58.16491712072255
+      },
+      "import-cell-throughput": {
+        "outcome": "pass",
+        "value": 893974.6111258077
+      },
+      "main-owned-memory": {
+        "outcome": "pass",
+        "value": 25369857
+      },
+      "worker-owned-memory": {
+        "outcome": "pass",
+        "value": 239837810
+      },
+      "bitmap-retained": {
+        "outcome": "pass",
+        "value": 118663680
+      }
+    },
+    "note": "S10.2 viewer receipt. Mobile rows not-run (no physical iPad, user decision). Contended shared machine: re-run the release command on a quiet machine before admission."
+  }
 }

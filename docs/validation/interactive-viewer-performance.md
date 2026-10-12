@@ -1,11 +1,264 @@
-# Interactive viewer — frozen thresholds and S8.6 desktop results
+# Interactive viewer — frozen thresholds, S8.6 kernel results and S10.2 viewer results
+
+**S10.2 (real-browser viewer gate, desktop Chrome): not admitted.** Twelve of the
+thirteen desktop D rows pass. The miss is **input acknowledgment**: a header
+sort on the 1M-row F2 shows nothing until its result arrives, 12.0–13.3 s after
+the click. The receipt is `interactive-viewer-viewer-chrome-r1.json` (SHA-256
+`9d5633d7…6bf9a37dbd6`), taken at `2282115` on a clean tree. Mobile rows are
+not-run: there was no physical iPad (user decision), so no mobile claim is made.
+Actual Safari was not run (it needs an admin `safaridriver --enable`). Every
+frozen threshold and budget is unchanged.
 
 S8.6 is complete for the measured desktop D kernel scenarios: all nine Chrome
 runs at `09adbb1fa156c54c12e2ada22ea80e89a175d525` pass their frozen thresholds.
 Worker parallelism is unnecessary: the plan makes it conditional on continued
-single-worker misses, and the optimized single-worker path passes. Every frozen
-threshold and memory budget is unchanged. Safari, mobile and full-viewer release
-acceptance remain separate, unmeasured gates.
+single-worker misses, and the optimized single-worker path passes. S10.2 reuses
+these kernel receipts and does not re-run them.
+
+## S10.2 real-browser viewer results (desktop D, Chrome)
+
+### Run identity
+
+| Item | Value |
+|---|---|
+| Receipt | `docs/validation/interactive-viewer-viewer-chrome-r1.json`. Its SHA-256 over canonical JSON is `9d5633d7ec121cbc755bce41298b3d7d8c937e2a8ee9f765def206bf9a37dbd6`. This is an integrity tag, not a signature |
+| Build | Commit `2282115edbefe727a22d99a7bd5ef4ede2bc1788`, clean tree. `vite.perf.config.ts` makes a production bundle (production React, minified, one worker chunk). It is served from loopback with COOP/COEP, so the page is cross-origin isolated |
+| Browser | Google Chrome 155.0.8059.39 stable, launched headless via Playwright 1.64 `channel: 'chrome'`, with `--js-flags=--expose-gc` |
+| Machine | Apple M4 Pro, 14 logical cores, 24 GiB, macOS 26.5.2 (25F84). On AC power, battery 100 %, no thermal or performance warning (`pmset`) |
+| Contention | The machine is shared, and other agents ran tests during the run. The receipt records 1/5/15-minute load averages: 3.53/2.72/2.53 at start and 1.99/2.38/2.48 at end. **The orchestrator re-runs the release command below on a quiet machine before admission** |
+| Profile | D: 1440×900 CSS, DPR 2, profile D resource limits |
+| Fixtures | True XLSX packages written by the S0.2 builders at full spec scale. Each run regenerates them if they are missing, and re-hashes every one |
+
+| Fixture | Bytes | Expanded XML | Populated cells | SHA-256 |
+|---|---:|---:|---:|---|
+| F1: 100,000 cells across full axes | 1,128,579 | 6,824,098 | 100,000 | `ee14ee40…` |
+| F2: 1,048,576 rows × 8 | 42,845,687 | 372,895,993 | 8,238,808 | `0299d5ee…` |
+| F3: dense 256 × 16,384 | 26,651,614 | 159,742,170 | 4,194,304 | `c857a27d…` |
+| F4: 1M unique strings | 9,903,757 | 144,369,495 | 1,000,000 | `84428a2d…` |
+| wrapped: 20,000 × 12, ASCII, wrapText | 1,187,446 | — | 240,000 | `a655f1dd…` |
+| wrapped-intl: 20,000 × 12, non-ASCII | 1,812,371 | — | 240,000 | `c80e7acc…` |
+| styled: 20,000 × 12, fills, fonts, borders, formats | 1,585,779 | — | 240,000 | `47bc300d…` |
+
+The full hashes are in the receipt's `fixtures`. Every fixture ran at full scale,
+including F2 at 1M rows, dense F3 and F4 at 1M strings, so no fixture needed a
+reduced scale. The whole release command took 12 minutes.
+
+### Release-mode decision
+
+`REAL_FIXTURES_AVAILABLE` stays `false`. It guards the S0.3 scaffold page, which
+still loads the 120×10 placeholder, and the S8.4 kernel scenarios, which run on
+synthetic fixture stores. Neither may be labelled release evidence. Release mode
+is admitted only for the viewer suite (`--suite viewer`, alias `--fixture all`),
+and only with installed Chrome (`--channel chrome`), `--profile desktop`,
+`--scale full` and `--repeat ≥ 30`. That suite opens true XLSX packages in the
+shipped component and records each package's hash. In release mode the CLI
+exits non-zero unless every desktop row passes and the tree is clean. It exits
+1 for this receipt.
+
+### Thresholds (all frozen values unchanged)
+
+| Row | Desktop limit | Measured | Outcome | Scale and samples |
+|---|---:|---:|---|---|
+| Warm viewport input-to-paint (p95) | 16.7 ms | ordinary 3.94, wrapped 1.03, styled 2.35 ms | **pass** | F2 1M, wrapped 20k, styled 20k; 300 frames each after 60 warmup |
+| Warm viewport frame interval (p95) | 16.7 ms | 16.67 ms in every mix; 0 long tasks | **pass** | same frames |
+| Input acknowledgment (p95) | 50 ms | sort **12,008–13,316 ms**; filter apply 34.1; find 14.0; cancel 16.1 | **miss** | F2 1M. Sort: 5 samples, stopped early because every sample was > 10× the limit. Filter apply: 10. Find and cancel: 30 |
+| 100k numeric sort, 1–8 keys | 100 ms | 67.4 ms | pass | S8.6 receipt, reused |
+| 1M numeric sort, 1–8 keys | 1,000 ms | 787.2 ms | pass | S8.6 receipt, reused |
+| 1M numeric filter | 100 ms | 72.6 ms | pass | S8.6 receipt, reused |
+| 1M natural text sort | 4,000 ms | 2,348.6 ms | pass | S8.6 receipt, reused |
+| Cold 100k-value index | 750 ms | 30.5 ms | pass | S8.6 receipt, reused |
+| First usable viewport | 1,500 ms | F1 p95 481.4; F3 p95 678.4; F2 max 597.0 ms | **pass (limited)** | F1 and F3: 30 samples each. F2: 10 cold 1M-row opens, p95 refused (§12.6) |
+| Expanded XML import throughput | ≥ 20 MiB/s | F1 58.2, F2 67.9, F3 61.6 MiB/s (worst of 3 runs) | pass | full scale |
+| Populated cell ingestion | ≥ 100k cells/s | F1 0.89M, F2 1.57M, F3 1.70M cells/s | pass | full scale |
+| Main-thread viewer-owned memory | 64 MiB | 24.2 MiB | pass | F2 and F4 sessions |
+| Worker-owned memory | 512 MiB | 228.7 MiB | pass | F2 session, after the sort |
+| Bitmap retained allocation | 128 MiB | 113.2 MiB (budget-accounted peak) | pass | every scroll session and both memory sessions |
+| Every mobile M row | spec values | — | **not-run** | no physical iPad (user decision) |
+
+### What each metric measures
+
+- **Warm viewport.** The viewer is fully imported and idle for 1 s first. Each
+  animation frame applies one native scroll step of 60 CSS px, open loop. There
+  are 60 warmup frames, then 300 measured frames.
+  - **Input-to-paint**: the native `scroll` event's `timeStamp` (a capturing
+    listener installed before React mounts) to the first base-layer present
+    after it. A present is classified from onFrame tile counters: visible tile
+    hits or paints, excluding prefetch-only and overlay-only reports.
+  - **Frame interval**: the rAF begin-frame deltas. They show whether the page
+    kept 60 fps.
+  - Both must be ≤ 16.7 ms.
+  - The receipt also keeps step-to-paint times, the coalesced event count, long
+    tasks and the raw timelines.
+- **Input acknowledgment.** The input event's `timeStamp` (pointerdown or
+  keydown) to the first frame that presents a qualifying DOM change. The probe
+  is armed before the input is sent.
+  - **Sort**: an `aria-sort`, `aria-busy`, progressbar or status change.
+  - **Filter apply**: the dialog closes, or a progressbar or status changes. All
+    10 samples were a progressbar update at about 31 ms.
+  - **Cancel**: the filter dialog is removed while its 1M-row value list loads.
+  - **Find**: the frame that echoes a keystroke while the previous query is
+    still searching the worker source.
+  - Every record keeps the mutation it saw and the status text before and after.
+    Each sort sample was the result's `aria-sort` change; none was unrelated
+    status churn.
+  - Opening the filter dialog (15.7 ms p50) is recorded separately. It is not
+    the apply row.
+- **First usable viewport.** The clock starts when a local `File` is available
+  through `<input type=file>`; that is the spec's local seekable Blob. It stops
+  at the first present with `pendingTiles === 0` and at least one record, while
+  the status is labelled. In every sample the label was "Visible body 0 /
+  complete body 0 — Showing saved values…", that is, while the progressive
+  import was still running.
+  - Every sample is a fresh page: a new worker, session and viewer.
+  - One discarded open warms the browser's module and code caches.
+  - The fully imported time is reported separately. Its p50/max: F1 674/700 ms,
+    F3 2,787/2,837 ms, F2 5,357/5,835 ms.
+- **Importer throughput.** A dedicated pass in a fresh worker runs the same
+  `openImportSession` as the paged route, from the same local `File`, with no
+  viewer attached. Throughput is taken from the inventory event to done, so it
+  counts every byte and cell after ZIP inventory. That is conservative: it
+  includes sharedStrings and styles. The sheet-page slope is kept as a
+  diagnostic (F2 68.5 MiB/s).
+- **Main viewer-owned memory.** The post-GC CDP `Runtime.getHeapUsage` (used +
+  embedder + ArrayBuffer backing) minus the same reading on the empty host page.
+  The reported value is the worst of the loaded and after-operations
+  checkpoints. GC runs through CDP, and through `gc()` in the worker via the
+  `__perf` channel. Canvas backing stores are outside these heaps and are charged
+  to the bitmap pool. The peak without GC, sampled every 250 ms, is an upper
+  bound that includes garbage: 91.9 MiB on F2.
+- **Worker-owned memory.** The larger of two readings:
+  - the worker session pool's peak in the S4.3 ledger, through a read-only
+    `__perf` side channel in `src/debug/viewerPerfWorker.ts`, which runs the
+    shipped kernel exactly as `dist/worker.js` does;
+  - `performance.measureUserAgentSpecificMemory()` for the
+    `DedicatedWorkerGlobalScope`. It is available because the page is
+    cross-origin isolated. Playwright's bundled headless shell and WebKit label
+    it unavailable.
+  - F2 after the sort: ledger 223.2 MiB, UASM 228.7 MiB. F4 after the value
+    list: 151.8 / 157.2 MiB.
+- **Bitmap pool.** The viewer's own accounted bitmap peak: pane, overlay, tiles
+  and the in-flight tile. It is cross-checked against UASM `Canvas` bytes (45.3
+  MiB on F2) and the DOM canvas backing stores (15.9 MiB, the two pane
+  surfaces). The 113.2 MiB peak is within the 128 MiB budget and close to the
+  §12.4 reference layout.
+
+### Memory recovery after close
+
+The viewer is unmounted, as a host would do it, then GC runs, then readings are
+taken.
+
+| | F2 (after scroll + sort) | F4 (after the 1M-string value list) |
+|---|---:|---:|
+| Workers created / terminated | 1 / 1 | 1 / 1 |
+| Worker UASM bytes after close | 0 | 0 |
+| DOM canvases after close | 0 | 0 |
+| Page storage (`navigator.storage.estimate`) | 221 MB while open → 0 | 159 MB while open → 0 |
+| Main heap owned after close (vs empty host) | 16.3 MiB | 4.2 MiB |
+| UASM `Canvas` still attributed after close | 15.2 MiB | 36.2 MiB |
+| Browser processes RSS (informational, all processes) | 0.99 → 1.57 → 1.10 GB | 0.99 → 1.44 → 1.10 GB |
+
+Workers, page storage and DOM surfaces return to zero. Two readings stay above
+the empty-page baseline:
+
+- The main heap. A separate repeated open/close probe on F2 levelled off at
+  about 3–6 MiB, which is loaded code and module-level caches. It grew by
+  about 0.2 MiB per round without a sort, which is inconclusive over three
+  rounds. The 16.3 MiB after a sort is not attributed yet.
+- UASM `Canvas` bytes. They are reclaimed lazily after the canvases are gone.
+
+Neither is a budget miss. Both are listed as follow-ups.
+
+### Fixes made (reproduced, regression-tested, semantics unchanged)
+
+1. **Scroll commit reverted newer scroller positions**: `[BEHAVIORAL] fix(S10.2)`
+   in `InteractiveSheetDoc.tsx`.
+   - The layout effect wrote a native-scroll window's physical position back to
+     the scroller. When the user had already scrolled further, the newer motion
+     was reverted and its event was dropped as an echo. Every other step was
+     lost and the base layer presented at half rate.
+   - F2 measurement: input-to-paint p95 19.7 → 2.9 ms; coalesced events 150/300
+     → 1/300.
+   - Recentered windows are still written.
+   - Test: `xlsx-viewer-viewport-integration.test.tsx`, "committing a native
+     scroll never reverts…". It is RED on the base (`expected 600 to be 1200`).
+2. **A new `Intl.Segmenter` per `graphemes()` call** in `src/core/text-recording.ts`.
+   - Wrapped-text tile prefetch spent 4.7 s of a 10 s profile constructing
+     segmenters. Frame-interval p95 was 83.3 ms, with 70 long tasks.
+   - Fix: one segmenter per host constructor, plus a fast path for printable
+     ASCII, which UAX #29 always segments per character.
+   - Results:
+     - cached segmenter alone: 33.3 ms, 5 long tasks;
+     - with the fast path: 16.67 ms, 0 long tasks;
+     - non-ASCII wrapped mix, informational: p95 16.67 ms, max 33.3 ms.
+   - Tests in `text-recording-graphemes.test.ts` compare against the host
+     segmenter. The reuse test is RED on the base (`expected 8 to be 1`).
+
+The earlier development-server measurement was dominated by React's
+development build. The release suite therefore always measures the production
+bundle.
+
+### The miss, attributed by phase (fix proposed, not applied)
+
+The header sort on F2 (one key, column G) runs in this order:
+
+- **Click → first worker command: about 12 s on the main thread.**
+  - `admitSortRange` makes about 4,010 strip reads (`scan`, 1024 × 9 cells) plus
+    2,006 single-column probes to the worker.
+  - Each strip costs two round trips: the remote store strips `nextCursor`, so
+    the detection `Scanner` reads one page ahead and then discards it.
+  - The range region is scanned about twice: detection, then the guard.
+  - Structured-clone deserialization of those pages takes about 3.8 s of main
+    thread, in chunks below 1 ms, so frames keep flowing.
+- **Worker `prepareColumns`**: 1.0 s on the first sort, cached afterwards.
+- **Worker sort**: 113–144 ms. This is the kernel boundary; S8.6 measured
+  787 ms for 8 keys.
+- **Commit and present**: under 30 ms.
+
+The UI renders no pending state during any of this, so the acknowledgment is the
+result. End-to-end sort input-to-present is about 12–13 s, against the spec's
+separately reported kernel boundary. Filter apply re-admits its range too: it is
+acknowledged in about 31 ms by a progressbar, and ends 2.8 s later.
+
+### Other observations
+
+- **Real wheel input (diagnostic).** `page.mouse.wheel` was sent back to back
+  over the grid: 300 events, input-to-paint p95 20.4 ms, max 23.4 ms. The viewer
+  registers a non-passive `wheel` listener on the scroller (for Ctrl/Cmd zoom),
+  so every wheel scroll waits for the main thread. Back-to-back CDP wheel events
+  also arrive faster than once per frame. This is informational and not a
+  threshold input.
+- **Wide F3 horizontal scroll (informational).** Input-to-paint p95 4.3 ms,
+  frame interval p95 16.67 ms.
+- **Abrupt page close.** In an early iteration, closing pages without unmounting
+  the viewer left page storage behind. The browser then stalled while about 30
+  paged F3 opens accumulated. The suite now unmounts before closing. A tab
+  killed by the user cannot run that cleanup; this is a storage-lifecycle
+  follow-up for S10.3/S4.
+- **No regression in reused rows.** The kernel rows are the unchanged S8.6
+  receipts. No earlier viewer-level baseline exists; the fixes above give the
+  before/after values for the rows they changed.
+
+### Reproducing (final release command)
+
+```sh
+bun install --frozen-lockfile
+bun scripts/bench-interactive-viewer.ts --browser chromium --channel chrome --profile desktop \
+  --fixture all --repeat 30 --mode release --port 4187 --output /tmp/officeview-viewer-desktop-chrome
+```
+
+- The command is self-contained:
+  - it builds the production perf page;
+  - it generates and hashes the full fixtures under `$TMPDIR/officeview-viewer-perf-v1`;
+  - it serves the page from loopback on `--port`. Avoid 4173, which the
+    Playwright webServer uses.
+- The run takes about 12 minutes.
+- Exit code 1 means the desktop release is not admitted. The receipt path and
+  every row are printed.
+- Playwright WebKit can run the same suite with `--browser webkit` in smoke mode
+  only, as labelled emulation. In this run, the worker route fell back there,
+  and worker probes were labelled unavailable.
+
+## S8.4/S8.6 kernel evidence
 
 Plan section **S8.4 Performance threshold freeze** (exit gate for S8). Spec
 §12.1 (freeze rule), §12.2 (profiles and thresholds), §12.6 (protocol).

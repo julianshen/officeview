@@ -123,3 +123,28 @@ describe('receipt hash', () => {
     expect((await verifyReceipt(tampered)).ok).toBe(false)
   })
 })
+
+describe('retained S10.2 Chrome receipt', () => {
+  it('verifies, is cited by the frozen profile, and agrees with it row by row without touching frozen values', async () => {
+    const evidence = profile.viewerEvidence as { results: string; hash: string; commit: string; desktopAdmitted: boolean; rows: Record<string, { outcome: string; value: number | null }> }
+    const receipt = JSON.parse(readFileSync(join(process.cwd(), evidence.results), 'utf8'))
+    expect(await verifyReceipt(receipt)).toEqual({ ok: true })
+    expect(receipt.hash).toBe(evidence.hash)
+    expect(receipt.environment.commit).toBe(evidence.commit)
+    expect(receipt.environment.dirty).toBe(false)
+    expect(receipt.desktopAdmitted).toBe(evidence.desktopAdmitted)
+    // The evaluation recomputed from the receipt's own measurements matches what it recorded.
+    expect(evaluateReceipt(receipt, profile)).toEqual(receipt.evaluation)
+    for (const [id, row] of Object.entries(evidence.rows)) {
+      const recorded = receipt.evaluation.find((r: { id: string; profile: string }) => r.id === id && r.profile === 'desktop')
+      expect(recorded.outcome, id).toBe(row.outcome)
+      expect(recorded.value, id).toBe(row.value)
+      const threshold = profile.thresholds.find((t: { id: string }) => t.id === id)
+      if (threshold) {
+        expect(threshold.desktop.frozenMs, id).toBe(threshold.desktop.specMs)
+        expect(threshold.desktop.outcome, id).toBe(row.outcome === 'miss' ? 'miss' : 'pass')
+      }
+    }
+    for (const row of receipt.evaluation.filter((r: { profile: string }) => r.profile === 'mobile')) expect(row.outcome).toBe('not-run')
+  })
+})
