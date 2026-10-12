@@ -294,6 +294,10 @@ async function viewerSuite(args: BenchArgs, identity: ReturnType<typeof gitIdent
     console.log(`  ${row.outcome.padEnd(12)} ${row.id.padEnd(28)} ${row.kind === 'floor' ? '>=' : '<='} ${limit.padEnd(14)} measured ${value}  [${row.note}]`)
   }
   console.log('mobile rows: not-run (no physical iPad/mobile receipt; skipped by user decision)')
+  if (receipt.evidenceProblems.length) {
+    console.log(`evidence problems (${receipt.evidenceProblems.length}; any one blocks admission):`)
+    for (const problem of receipt.evidenceProblems) console.log(`  - ${problem}`)
+  }
   console.log(`desktop release admission: ${receipt.desktopAdmitted ? 'ADMITTED' : 'NOT ADMITTED'}${args.mode === 'release' ? '' : ' (smoke run: informational)'}`)
   if (args.mode === 'release' && (!receipt.desktopAdmitted || identity.dirty)) process.exitCode = 1
 }

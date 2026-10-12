@@ -21,8 +21,8 @@ import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { cpus, loadavg, totalmem, freemem } from 'node:os'
 import { join, resolve } from 'node:path'
 import {
-  finalizeReceipt, importThroughput, pairInputsToPresents, summarize,
-  type ImportEvent, type ReceiptDraft, type ReceiptMeasurements, type SeriesSummary, type ViewerReceipt,
+  ACK_CENSORED_MS, RELEASE_IDENTITY, finalizeReceipt, importThroughput, pairInputsToPresents, summarize,
+  type ImportEvent, type ReceiptDraft, type SeriesSummary, type ViewerReceipt,
 } from '../../src/debug/harness/viewerPerf'
 import { MIN_FRAME_SAMPLES, MIN_OPERATION_SAMPLES } from '../../src/debug/harness/result'
 import type { AckKind, AckRecord, ScrollRunResult, ViewerPerf } from '../../src/debug/viewer-perf'
@@ -35,7 +35,7 @@ import { FIXTURE_MANIFEST_PATH, ensureViewerFixtures, type FixtureManifest, type
 const PAGE = '/src/debug/viewer-perf.html'
 const SCROLL_FRAMES = MIN_FRAME_SAMPLES
 const SCROLL_WARMUP = 60
-const ACK_TIMEOUT_MS = 15_000
+const ACK_TIMEOUT_MS = ACK_CENSORED_MS
 const OPEN_TIMEOUT_MS = 180_000
 /** Expensive 1M cold opens take fewer samples, labelled (spec §12.6). */
 const F2_VIEWPORT_SAMPLES = 10
@@ -45,6 +45,7 @@ const EARLY_MISS_SAMPLES = 5
 const FILTER_APPLY_SAMPLES = 10
 const MEMORY_SESSION_LIMIT_MS = 10 * 60_000
 const RECOVERY_CYCLES = 10
+const LIVE_SAMPLE_MS = 300
 
 type W = Window & { __viewerPerf: ViewerPerf }
 /** Runs a closure-free function against window.__viewerPerf in the page. */
@@ -338,6 +339,20 @@ async function memorySession(context: BrowserContext, base: string, fixture: Vie
   const baseline = await checkpoint('baseline')
   // Peak sampling during open/import (no forced GC: an upper bound, garbage included).
   const polls: { t: number; heapBytes: number | null; workerPeak: number | null; workerRetained: number | null }[] = []
+  // Forced-GC live samples through import, scroll, sort/value list and close:
+  // the live heap at each instant. Their maximum is a LOWER bound of the live
+  // peak (a spike between samples is missed); it can prove a miss, not a pass.
+  const liveHeapSamples: number[] = []
+  let liveBusy = false
+  const liveSampler = setInterval(() => {
+    if (liveBusy) return
+    liveBusy = true
+    void (async () => {
+      await bounded('live gc', gcMain(), 10_000)
+      const h = await bounded('live heap', heap(), 10_000)
+      if (h) liveHeapSamples.push(heapBytes(h))
+    })().finally(() => { liveBusy = false })
+  }, LIVE_SAMPLE_MS)
   // Interval sampling with no join: a stop never waits on an in-flight sample.
   let sampling = false
   const sampler = setInterval(() => {
@@ -369,6 +384,7 @@ async function memorySession(context: BrowserContext, base: string, fixture: Vie
   }
   const afterOps = await checkpoint('after-ops')
   clearInterval(sampler)
+  clearInterval(liveSampler)
   await bounded('viewer close', perf(page, p => p.close()), 30_000)
   await new Promise(resolve => setTimeout(resolve, 500))
   const closed = await checkpoint('closed')
@@ -420,8 +436,8 @@ async function memorySession(context: BrowserContext, base: string, fixture: Vie
       storageDeltaBytes: closed.storage.usage !== null && baseline.storage.usage !== null ? closed.storage.usage - baseline.storage.usage : null,
     },
   }
-  log(`    memory ${fixture.key}: main owned ${mib(summary.mainOwnedBytes)} (peak no-GC ${mib(summary.mainPeakNoGcBytes)}), worker ledger ${mib(ledgerPeak)} / UASM ${mib(summary.workerUasmBytes)}, bitmap ${mib(summary.bitmapPeakBytes)}; after close main ${mib(summary.recovery.mainAfterCloseBytes)}, workers ${summary.recovery.workersTerminated}/${summary.recovery.workersCreated} terminated, canvases ${closed.canvas.count}`)
-  return { summary, checkpoints: { baseline, loaded, afterOps, closed }, polls, timeouts }
+  log(`    memory ${fixture.key}: main owned ${mib(summary.mainOwnedBytes)} (forced-GC live max ${mib(liveHeapSamples.length && baseline.heapBytes !== null ? Math.max(...liveHeapSamples) - baseline.heapBytes : null)} over ${liveHeapSamples.length} samples; peak no-GC ${mib(summary.mainPeakNoGcBytes)}), worker ledger ${mib(ledgerPeak)} / UASM ${mib(summary.workerUasmBytes)}, bitmap ${mib(summary.bitmapPeakBytes)}; after close main ${mib(summary.recovery.mainAfterCloseBytes)}, workers ${summary.recovery.workersTerminated}/${summary.recovery.workersCreated} terminated, canvases ${closed.canvas.count}`)
+  return { summary, checkpoints: { baseline, loaded, afterOps, closed }, polls, liveHeapSamples, liveSampleMs: LIVE_SAMPLE_MS, timeouts }
 }
 
 // ---- formatting ----------------------------------------------------------------
@@ -456,7 +472,6 @@ export async function runViewerSuite(ctx: SuiteContext): Promise<{ receipt: View
   const contextOptions = { viewport, deviceScaleFactor: 2, isMobile: args.profile === 'mobile', hasTouch: args.profile === 'mobile' }
   const errors: string[] = []
   const raw: Record<string, unknown> = {}
-  const measurements: ReceiptMeasurements = {}
   // An unexpected disconnect (browser crash or an external kill on a shared
   // machine) ends the run loudly instead of leaving awaits pending forever.
   let closing = false
@@ -479,14 +494,12 @@ export async function runViewerSuite(ctx: SuiteContext): Promise<{ receipt: View
     if (want('firstViewport')) {
     log('first usable viewport (local File -> labelled usable frame)…')
     const fv: Record<string, unknown> = {}
-    measurements.firstViewport = {}
     for (const key of ['F1', 'F3', 'F2'] as const) {
       const context = await fresh()
       const samples = key === 'F2' ? Math.min(args.repeat, F2_VIEWPORT_SAMPLES) : args.repeat
       const run = await firstViewport(context, base, fixtures[key], samples, errors, log)
       await context.close()
       fv[key] = { ...run, samplesRequested: samples, limitation: key === 'F2' ? `1M-row cold opens: ${samples} samples, p95 refused below ${MIN_OPERATION_SAMPLES} (spec §12.6); max reported against the ceiling` : null }
-      measurements.firstViewport[key] = summarize(run.usable, MIN_OPERATION_SAMPLES)
     }
     raw.firstViewport = fv
     }
@@ -494,7 +507,6 @@ export async function runViewerSuite(ctx: SuiteContext): Promise<{ receipt: View
     if (want('scroll')) {
     log('sustained scroll (300 open-loop frames per mix)…')
     const scroll: Record<string, unknown> = {}
-    measurements.scroll = {}
     const mixes: [string, ViewerFixtureKey, { dx: number; dy: number }, boolean][] = [
       ['ordinary', 'F2', { dx: 0, dy: 60 }, true], ['wrapped', 'wrapped', { dx: 0, dy: 60 }, false], ['styled', 'styled', { dx: 0, dy: 60 }, false],
       // Informational (not threshold inputs): horizontal F3 and non-ASCII wrapped text.
@@ -507,7 +519,6 @@ export async function runViewerSuite(ctx: SuiteContext): Promise<{ receipt: View
       const inputToPaint = summarize(session.result.inputToPaint, MIN_FRAME_SAMPLES)
       const frameInterval = summarize(session.result.frameIntervals, MIN_FRAME_SAMPLES)
       scroll[kind] = { fixture: key, motion, importComplete: session.complete, ...session.result, inputToPaintSummary: inputToPaint, frameIntervalSummary: frameInterval, stepToPaintSummary: summarize(session.result.stepToPaint, MIN_FRAME_SAMPLES), wheel: session.wheel && { ...session.wheel, summary: summarize(session.wheel.latencies, MIN_FRAME_SAMPLES) }, bitmap: session.bitmap }
-      if (kind === 'ordinary' || kind === 'wrapped' || kind === 'styled') measurements.scroll[kind] = { inputToPaint, frameInterval }
       log(`    scroll ${kind}: input-to-paint ${fmt(inputToPaint)}; frame interval ${fmt(frameInterval)}; ${session.result.coalesced} coalesced, ${session.result.longTasks.length} long tasks${session.wheel ? `; wheel ${fmt(summarize(session.wheel.latencies, 1))}` : ''}`)
     }
     raw.scroll = scroll
@@ -520,12 +531,6 @@ export async function runViewerSuite(ctx: SuiteContext): Promise<{ receipt: View
       const ack = await ackSuite(context, base, fixtures.F2, args.repeat, errors, log)
       await context.close()
       raw.ack = ack
-      measurements.ack = {
-        sort: summarize(ack.sort.samples.concat(Array(ack.sort.censored).fill(ACK_TIMEOUT_MS)), MIN_OPERATION_SAMPLES),
-        filter: summarize(ack.filterApply.samples.concat(Array(ack.filterApply.censored).fill(ACK_TIMEOUT_MS)), MIN_OPERATION_SAMPLES),
-        find: summarize(ack.find.samples.concat(Array(ack.find.censored).fill(ACK_TIMEOUT_MS)), MIN_OPERATION_SAMPLES),
-        cancel: summarize(ack.cancel.samples.concat(Array(ack.cancel.censored).fill(ACK_TIMEOUT_MS)), MIN_OPERATION_SAMPLES),
-      }
     }
     }
 
@@ -536,12 +541,6 @@ export async function runViewerSuite(ctx: SuiteContext): Promise<{ receipt: View
       const imp = await importSuite(context, base, [fixtures.F1, fixtures.F2, fixtures.F3, fixtures.F4], profileId, 3, errors, log)
       await context.close()
       raw.import = imp
-      measurements.import = {}
-      for (const key of ['F1', 'F2', 'F3'] as const) {
-        const ok = imp[key].runs.map(r => r.throughput).filter((t): t is NonNullable<typeof t> => t !== null)
-        // Lower-bound targets: the worst of the runs is the reported value.
-        if (ok.length === imp[key].runs.length && ok.length > 0) measurements.import[key] = { expandedMiBPerSec: Math.min(...ok.map(t => t.expandedMiBPerSec)), cellsPerSec: Math.min(...ok.map(t => t.cellsPerSec)) }
-      }
     }
     }
 
@@ -549,7 +548,6 @@ export async function runViewerSuite(ctx: SuiteContext): Promise<{ receipt: View
     log('memory (ledger + CDP heap + measureUserAgentSpecificMemory), F2 and F4 sessions…')
     {
       const memory: Record<string, unknown> = {}
-      let main = Number.NEGATIVE_INFINITY, worker = 0, bitmap = 0
       for (const [key, ops] of [['F2', 'f2'], ['F4', 'f4']] as const) {
         const context = await fresh()
         // Watchdog: an intermittent stall of this session was seen on the shared
@@ -562,17 +560,11 @@ export async function runViewerSuite(ctx: SuiteContext): Promise<{ receipt: View
           errors.push(`memory ${key}: session exceeded ${MEMORY_SESSION_LIMIT_MS / 60_000} min and was abandoned`)
           log(`  ERROR: memory ${key} session exceeded ${MEMORY_SESSION_LIMIT_MS / 60_000} min; recorded not-run`)
           memory[key] = { stalled: true }
-          main = Number.NaN
           continue
         }
         memory[key] = session
-        main = Math.max(main, session.summary.mainOwnedBytes)
-        worker = Math.max(worker, session.summary.workerOwnedBytes)
-        bitmap = Math.max(bitmap, session.summary.bitmapPeakBytes)
       }
       raw.memory = memory
-      const complete = Object.values(memory).every(m => !(m as { stalled?: boolean }).stalled)
-      measurements.memory = complete ? { mainOwnedBytes: Number.isFinite(main) ? main : null, workerOwnedBytes: worker || null, bitmapPeakBytes: bitmap || null } : { mainOwnedBytes: null, workerOwnedBytes: null, bitmapPeakBytes: null }
     }
     }
   } finally {
@@ -590,14 +582,14 @@ export async function runViewerSuite(ctx: SuiteContext): Promise<{ receipt: View
       browserVersion: browser.version(), channel: args.channel, headless: true, profile: args.profile, viewport, dpr: 2,
       machine: env.machine, os: env.os, loadAverage: [...load0, ...loadavg()],
       contention: 'Shared development machine: other agents may run tests concurrently; loadAverage holds 1/5/15-minute averages at start then at end. Re-run on a quiet machine before admission.',
-      startedAt, finishedAt: new Date().toISOString(), build: 'vite.perf.config.ts production bundle, served from loopback with COOP/COEP', playwright: 'channel-launched headless', ...env.extra,
+      startedAt, finishedAt: new Date().toISOString(), build: RELEASE_IDENTITY.build, playwright: 'channel-launched headless', ...env.extra,
     },
     fixtures: Object.values(fixtures).map(f => ({ id: f.key, file: f.path.split('/').pop()!, bytes: f.bytes, sha256: f.sha256, contentSha256: f.contentSha256, uncompressedBytes: f.uncompressedBytes, nnz: f.nnz, rows: f.rows, cols: f.cols, scale: f.scale })),
-    measurements,
     raw,
   }
   const profileJson = JSON.parse(readFileSync(join(repoRoot, 'tests/fixtures/xlsx-viewer/performance-profile.json'), 'utf8'))
-  const receipt = await finalizeReceipt(draft, profileJson)
+  // Every threshold input is derived from `raw`; identity is checked against the full-scale manifest.
+  const receipt = await finalizeReceipt(draft, { profile: profileJson, fixtures: fixtureManifest.scales.full })
   const out = resolve(args.output)
   mkdirSync(out, { recursive: true })
   const path = join(out, `viewer-perf-${args.browser}-${args.profile}-${args.mode}-${ctx.label.slice(0, 12)}-${startedAt.replace(/[:.]/g, '-')}.json`)
