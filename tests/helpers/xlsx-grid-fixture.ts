@@ -15,4 +15,3 @@ export function gridFixture(overrides: Partial<GridSemanticsProps> = {}): GridSe
     view: { baseHidden: createIntervalSet([]), visibility, filter: null, sort: null }, selection,
     window: createScrollWindow(projection, viewport), viewport, body: { r0: 1, r1: 3 }, onChange: () => {}, cellPresentation: () => ({ text: '10' }), ...overrides }
 }
-

@@ -97,6 +97,10 @@ const createViewerWorker = () => new Worker(
 <OfficeFile data={file} interactiveSheets viewerWorker={createViewerWorker} />
 ```
 
+With Vite, set `worker: { format: 'es' }` in `vite.config`: the worker code-splits
+its lazy large-file modules, which Vite's default `iife` worker format rejects at
+build time. Other bundlers need module-worker (ES module) output for this entry.
+
 For an already-parsed model, use `<OfficeDoc document={doc} interactiveSheets />`.
 Small admitted files use the object path; each large document gets a worker,
 released on replacement/unmount. Without a usable factory, large files use

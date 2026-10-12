@@ -42,4 +42,3 @@ export const colName = (c: number) => { let s = ''; for (let n = c + 1; n > 0; n
 export const valueCells = (n: number) => `<row r="1">${repeat(n, (i) => `<c r="${colName(i % 16384)}${Math.floor(i / 16384) + 1}"><v>1</v></c>`)}</row>`
 export const formulaRows = (n: number, f: (i: number) => string, attrs = '', cached = false) =>
   repeat(n, (i) => `<row r="${i + 1}"><c r="A${i + 1}"><v>${i}</v></c><c r="B${i + 1}"${attrs}><f>${f(i)}</f>${cached ? '<v>1</v>' : ''}</c></row>`)
-
