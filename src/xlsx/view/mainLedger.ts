@@ -27,16 +27,27 @@ export const MAIN_POOLS: readonly MainPool[] = ['rowCache', 'viewBuffers', 'repl
 export const DOM_ELEMENT_BYTES = 3200
 
 /**
- * Main-heap bytes the browser keeps per distinct text a retained tile canvas
- * has drawn: Chrome's per-font FrameShapeCache holds a shaped PlainTextNode for
- * every (text, direction) a 2D context drew, for as long as the context lives.
- * Calibrated from a Chrome 155 heap snapshot after the F2 scroll (8,905 entries
- * in 111 caches, 14.9 MiB): PlainTextNode 1,240 B each, plus its hash-table
- * slot (~330 B), ShapeResult and run records (~120 B) and ~8 B of glyph data
- * per UTF-16 unit. Charged as SHAPE_ENTRY_BYTES + SHAPE_UNIT_BYTES x length.
+ * Main-heap bytes of Chrome's text-shaping cache held by a 2D context: one
+ * blink::FrameShapeCache per font a context used, holding a shaped
+ * PlainTextNode per distinct (text, direction) it drew or measured, for as long
+ * as the context lives. Calibrated from Chrome 155 heap snapshots:
+ * - after the F2 scroll: 111 caches, 8,905 entries, 14.9 MiB;
+ * - at F4 loaded: 25 caches, 327 entries.
+ * Per entry: PlainTextNode 1,240 B, ShapeResult and run records ~120 B, ~8 B of
+ * glyph data per UTF-16 unit. Per cache: its hash table, ~218 B per bucket, at
+ * least 64 buckets, grown to keep the load at or below 3/4.
  */
-export const SHAPE_ENTRY_BYTES = 1700
+export const SHAPE_ENTRY_BYTES = 1360
 export const SHAPE_UNIT_BYTES = 8
+export const SHAPE_BUCKET_BYTES = 218
+export const SHAPE_MIN_BUCKETS = 64
+/** Estimated shaping-cache bytes of one font's cache holding `entries` texts of `units` UTF-16 units in all. */
+export function shapeCacheBytes(entries: number, units: number): number {
+  if (entries <= 0) return 0
+  let buckets = SHAPE_MIN_BUCKETS
+  while (entries * 4 > buckets * 3) buckets *= 2
+  return entries * SHAPE_ENTRY_BYTES + units * SHAPE_UNIT_BYTES + buckets * SHAPE_BUCKET_BYTES
+}
 
 export interface MainLedgerSnapshot {
   bytes: number
@@ -74,15 +85,17 @@ export class MainMemoryLedger {
    * released only after every target has been garbage-collected. A consumer
    * that keeps a nested page (not the reply that carried it) keeps the charge.
    * Without a collection watcher (very old hosts) the charge is never released
-   * early: the ledger over-counts rather than under-counts.
+   * early: the ledger over-counts rather than under-counts. At least one target
+   * is required: a charge nothing holds could never end (or be settled).
    */
   chargeWhileReachable(pool: MainPool, targets: readonly object[], bytes: number): string {
+    if (targets.length === 0) throw new RangeError(`lifetime charge for ${pool} needs at least one target`)
     const token = `life${++lifetimeSerial}`
     const owner = token
     this.set(pool, owner, bytes)
-    if (targets.length) this.lifetimes.set(token, pool)
+    this.lifetimes.set(token, pool)
     for (const target of targets) if (!this.leases.has(target)) this.leases.set(target, token)
-    if (!this.watcher || targets.length === 0) return token
+    if (!this.watcher) return token
     this.alive.set(token, { pool, owner, remaining: targets.length })
     for (const target of targets) this.watcher.register(target, token)
     return token
@@ -167,9 +180,14 @@ export function estimatePayloadBytes(value: unknown, maxNodes = 200_000): number
 }
 
 /**
- * Objects a consumer may keep from a structured payload: the root and nested
- * objects/arrays/typed arrays down to `depth`, at most `max`. Registering them
- * all keeps a reply's charge until no part of it is reachable.
+ * Objects a consumer may keep from a structured payload, breadth-first: the
+ * root and nested objects/arrays/typed arrays down to `depth` levels, at most
+ * the first 8 elements of any array, and at most `max` objects in all. A charge
+ * registered on them lasts until every one of them is collected, so a consumer
+ * that keeps one of these sub-objects keeps the charge; an object outside the
+ * caps (deeper, past an array's eighth element, or past `max`) does not. Today
+ * no consumer keeps such a detached sub-object: the row cache, views and value
+ * index decode and settle, and a kept scan page is within the caps.
  */
 export function leaseTargets(value: unknown, depth = 4, max = 64): object[] {
   const out: object[] = []

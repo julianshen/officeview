@@ -13,7 +13,7 @@ import { ViewerKernel } from '../src/worker/viewerKernel'
 import { OfficePackage } from '../src/core/zip'
 import { parseXlsx } from '../src/xlsx/parse'
 import type { WorkerCommand, WorkerReply } from '../src/xlsx/view/contracts'
-import { DOM_ELEMENT_BYTES, MainMemoryLedger, SHAPE_ENTRY_BYTES, estimatePayloadBytes, leaseTargets } from '../src/xlsx/view/mainLedger'
+import { DOM_ELEMENT_BYTES, MainMemoryLedger, SHAPE_ENTRY_BYTES, estimatePayloadBytes, leaseTargets, shapeCacheBytes } from '../src/xlsx/view/mainLedger'
 import { openPagedWorkbook } from '../src/components/xlsx/pagedWorkbook'
 import { pagedWorkbookOf } from '../src/components/pagedDocument'
 import { pagedSheetGeometry } from '../src/components/xlsx/pagedGeometry'
@@ -54,6 +54,8 @@ async function flushReactRetention(): Promise<void> {
 }
 import { MergeQueryCache } from '../src/xlsx/view/viewport'
 import { ValueIndexCache, valueSourceFromStore } from '../src/xlsx/view/valueIndex'
+import { CELL_INDEX_ROW_BYTES, CELL_INDEX_SLOT_BYTES, buildSheetGeometry } from '../src/xlsx/view/viewport'
+import { RectangleIndex } from '../src/xlsx/view/structure'
 import type { MainPool } from '../src/xlsx/view/mainLedger'
 import { workbookOf } from './helpers/xlsx-find'
 import { xlsxBytes } from './helpers/xlsx-package'
@@ -168,6 +170,33 @@ describe('lifetime charges (review round 3, findings 1-3)', () => {
     await collect()
     expect(ledger.snapshot().byPool.replies).toBe(0)
     expect(ledger.snapshot().peakBytes).toBe(2_000_000)
+  })
+})
+
+describe('review round 4 (opencode): honest structure charges', () => {
+  it('shaping cache estimate: per entry plus a hash table of at least 64 buckets, grown at 3/4 load', () => {
+    expect(shapeCacheBytes(0, 0)).toBe(0)
+    expect(shapeCacheBytes(1, 5)).toBe(1360 + 40 + 64 * 218)
+    expect(shapeCacheBytes(48, 0)).toBe(48 * 1360 + 64 * 218)
+    expect(shapeCacheBytes(49, 0)).toBe(49 * 1360 + 128 * 218)
+    // The F2 snapshot: 111 caches of ~80 entries (~8 units each) -> within 5 % of 14.9 MiB.
+    const f2 = 111 * shapeCacheBytes(80, 80 * 8) / 1048576
+    expect(f2).toBeGreaterThan(14.9 * 0.95)
+    expect(f2).toBeLessThan(14.9 * 1.10)
+  })
+  it('a lifetime charge needs at least one target (nothing could ever end it)', () => {
+    expect(() => new MainMemoryLedger().chargeWhileReachable('replies', [], 10)).toThrow(RangeError)
+  })
+  it('resident geometry charges its per-row cell index, not 200 B per authored row', () => {
+    const rows = Array.from({ length: 1000 }, (_, r) => ({ index: r * 3, cells: [{ col: 0, value: r }, { col: 2, value: 'x' }] }))
+    const sheet = { name: 'S', rows, cols: [], merges: [], mergeRanges: [] } as never
+    const built = buildSheetGeometry(sheet)
+    if (built.kind !== 'ready') throw new Error('geometry')
+    expect(built.cellIndexBytes).toBe(1000 * CELL_INDEX_ROW_BYTES + 2000 * CELL_INDEX_SLOT_BYTES)
+  })
+  it('the merge index charges ~150 B measured per entry (160 B), plus its interval tree', () => {
+    const index = RectangleIndex.build(Array.from({ length: 100 }, (_, i) => ({ rect: { r0: i * 2, r1: i * 2 + 1, c0: 0, c1: 1 }, value: i })))
+    expect(index.estimatedBytes).toBeGreaterThanOrEqual(100 * 160)
   })
 })
 
@@ -349,6 +378,9 @@ describe('resident document ledger', () => {
       await waitFor(() => expect(found.at(-1)?.snapshot().byPool.dom ?? 0).toBeGreaterThan(0))
       expect(found.at(-1)!.snapshot().byPool.document).toBeGreaterThan(0)
       expect(found.at(-1)!.snapshot().byPool.geometry).toBeGreaterThan(0)
+      // A resident sort publishes main-built order buffers: charged while the view holds them.
+      fireEvent.click(ui.getByRole('button', { name: 'Cycle sort column A' }))
+      await waitFor(() => expect(found.at(-1)!.snapshot().byPool.viewBuffers).toBeGreaterThan(0))
       fireEvent.change(ui.getByRole('textbox', { name: 'Go To cell' }), { target: { value: 'A2' } })
       fireEvent.click(ui.getByRole('button', { name: 'Go To' }))
       fireEvent.click(ui.getByRole('button', { name: 'Copy selection' }))

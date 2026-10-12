@@ -6,7 +6,7 @@
  * disposal), and a fresh tile drawing the same text charges again.
  */
 import { describe, expect, it, vi } from 'vitest'
-import { SHAPE_ENTRY_BYTES, SHAPE_UNIT_BYTES } from '../src/xlsx/view/mainLedger'
+import { shapeCacheBytes } from '../src/xlsx/view/mainLedger'
 import { BITMAP_BUDGETS, TILE_DEVICE_PX } from '../src/xlsx/view/tileCache'
 
 // Each tile draws one text of its own and one text every tile shares (twice,
@@ -23,8 +23,8 @@ vi.mock('../src/xlsx/view/renderViewport', () => ({
 
 const { SheetTileRenderer, TILE_BYTES } = await import('../src/components/xlsx/sheetTiles')
 
-const entry = (text: string) => SHAPE_ENTRY_BYTES + SHAPE_UNIT_BYTES * text.length
-const tileBytes = (col: number) => entry(`tile ${col * TILE_DEVICE_PX},0`) + entry('shared')
+// One font per tile: two distinct texts in one shaping cache.
+const tileBytes = (col: number) => shapeCacheBytes(2, `tile ${col * TILE_DEVICE_PX},0`.length + 'shared'.length)
 
 function frameAt(col: number) {
   return {

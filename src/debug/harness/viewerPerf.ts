@@ -154,6 +154,13 @@ export interface ReceiptMeasurements {
     mainUnattributedBytes: number | null
     /** Forced-GC probe noise of the warmed host (sample spread): the only allowed residual. */
     mainProbeNoiseBytes: number | null
+    /** Largest amount by which a checkpoint's forced-GC heap above the warmed
+     * host exceeds the ledger's CURRENT bytes there plus the allowance (the
+     * warmed host's own open gap + noise); > 0 means steady uncharged memory. */
+    mainCheckpointExcessBytes: number | null
+    /** The warmed host's own gap, open and idle: forced-GC heap above the closed
+     * warm host minus its ledger's current bytes (the smaller session's). */
+    mainWarmOpenGapBytes: number | null
     workerOwnedBytes: number | null
     bitmapPeakBytes: number | null
   }
@@ -249,6 +256,8 @@ function seriesSummary(series: string, values: number[], standard: number, probl
 export const SCROLL_CENSORED_MS = 1_000
 /** Minimum forced-GC samples of the warmed host (baseline median and probe-noise spread). */
 export const MIN_WARM_HOST_SAMPLES = 5
+/** Minimum forced-GC samples of the warm document open and idle (review round 4). */
+export const MIN_WARM_OPEN_SAMPLES = 3
 /** Recovery cycles: the mean of the last three post-close readings may exceed the first three by at most this. */
 export const RECOVERY_GROWTH_BYTES = 2 * MiB
 export const RECOVERY_CYCLES = 10
@@ -258,7 +267,7 @@ const nondecreasing = (v: number[]) => v.every((x, i) => i === 0 || x >= v[i - 1
 /** Every threshold input recomputed from the raw records; problems name what is missing or invalid. */
 export function deriveMeasurements(raw: Raw, fixtures: Record<string, ManifestFixture>): { measurements: ReceiptMeasurements; problems: string[] } {
   const problems: string[] = []
-  const m: ReceiptMeasurements = { scroll: {}, ack: {}, firstViewport: {}, import: {}, memory: { mainRetainedBytes: null, mainSampledLivePeakBytes: null, mainLedgerPeakBytes: null, mainUnattributedBytes: null, mainProbeNoiseBytes: null, workerOwnedBytes: null, bitmapPeakBytes: null } }
+  const m: ReceiptMeasurements = { scroll: {}, ack: {}, firstViewport: {}, import: {}, memory: { mainRetainedBytes: null, mainSampledLivePeakBytes: null, mainLedgerPeakBytes: null, mainUnattributedBytes: null, mainProbeNoiseBytes: null, mainCheckpointExcessBytes: null, mainWarmOpenGapBytes: null, workerOwnedBytes: null, bitmapPeakBytes: null } }
 
   const scroll = obj(raw.scroll)
   for (const kind of ['ordinary', 'wrapped', 'styled'] as const) {
@@ -329,7 +338,7 @@ export function deriveMeasurements(raw: Raw, fixtures: Record<string, ManifestFi
   // Memory: both sessions must provide every pool's evidence at every checkpoint
   // and a clean close; a maximum is only taken once nothing is missing.
   const memory = obj(raw.memory)
-  const perSession: { retained: number; live: number; ledger: number; unattributed: number; noise: number; worker: number; bitmap: number }[] = []
+  const perSession: { retained: number; live: number; ledger: number; unattributed: number; noise: number; worker: number; bitmap: number; excess: number; warmOpenGap: number }[] = []
   for (const key of ['F2', 'F4'] as const) {
     const where = `memory.${key}`
     const session = obj(memory?.[key]), checkpoints = obj(session?.checkpoints)
@@ -390,7 +399,10 @@ export function deriveMeasurements(raw: Raw, fixtures: Record<string, ManifestFi
     if (!liveSamples?.length) problems.push(`${where}: no forced-GC live samples`)
     const warm = nums(obj(session.warmHost)?.samples)
     if (!warm || warm.length < MIN_WARM_HOST_SAMPLES) problems.push(`${where}: ${warm?.length ?? 0} warmed-host samples, below ${MIN_WARM_HOST_SAMPLES}`)
-    if (problems.length > before || base === null || closedHeap === null || !liveSamples?.length || !warm) continue
+    const warmOpenRaw = obj(session.warmHost)?.open
+    const warmOpen = Array.isArray(warmOpenRaw) ? (warmOpenRaw as Raw[]).map(o => ({ heapBytes: num(o.heapBytes), ledgerBytes: num(o.ledgerBytes) })).filter((o): o is { heapBytes: number; ledgerBytes: number } => o.heapBytes !== null && o.ledgerBytes !== null && o.ledgerBytes >= 0) : null
+    if (!warmOpen || warmOpen.length < MIN_WARM_OPEN_SAMPLES) problems.push(`${where}: ${warmOpen?.length ?? 0} warm-open samples (heap + ledger), below ${MIN_WARM_OPEN_SAMPLES}`)
+    if (problems.length > before || base === null || closedHeap === null || !liveSamples?.length || !warm || !warmOpen) continue
     // Attribution against a baseline established BEFORE and independently of
     // the measured session (the warmed host: same page, a small workbook opened,
     // exercised and closed). Only the measured forced-GC probe noise (the spread
@@ -400,11 +412,28 @@ export function deriveMeasurements(raw: Raw, fixtures: Record<string, ManifestFi
     const warmBase = sorted[Math.floor(sorted.length / 2)]
     const noise = sorted[sorted.length - 1] - sorted[0]
     const live = Math.max(...liveSamples) - warmBase
-    perSession.push({ retained, live, ledger: ledgerPeak, unattributed: live - ledgerPeak, noise, worker, bitmap })
+    // Per checkpoint (review round 4): the forced-GC heap above the warmed host
+    // against the ledger's CURRENT bytes there, so steady uncharged memory
+    // cannot hide in the headroom between the ledger peak and the live peak.
+    // The allowance is measured apart from the session: the warm document's own
+    // gap while open and idle (what an open viewer holds outside the ledger)
+    // plus the probe noise. The closed checkpoint (ledger 0) is gated too.
+    const openGaps = (warmOpen ?? []).map(o => o.heapBytes - o.ledgerBytes - warmBase).sort((x, y) => x - y)
+    const warmOpenGap = openGaps[Math.floor(openGaps.length / 2)]
+    const allowance = Math.max(0, warmOpenGap) + noise
+    let excess = -Infinity
+    for (const name of ['loaded', 'afterOps', 'closed'] as const) {
+      const cp = obj(checkpoints[name]), heap = num(cp?.heapBytes), current = num(obj(cp?.ledger)?.bytes)
+      if (heap === null || current === null) { problems.push(`${where}.${name}: no heap or ledger reading`); continue }
+      const gap = heap - warmBase - current
+      excess = Math.max(excess, gap - allowance)
+      if (gap > allowance) problems.push(`main-owned-memory: uncharged main memory in ${key} at the ${name} checkpoint (${round(gap / MiB)} MiB of forced-GC heap above the warmed host is not in the ledger's current ${round(current / MiB)} MiB; allowance: the warmed host's open gap ${round(Math.max(0, warmOpenGap) / MiB)} MiB + probe noise ${round(noise / MiB)} MiB)`)
+    }
+    perSession.push({ retained, live, ledger: ledgerPeak, unattributed: live - ledgerPeak, noise, worker, bitmap, excess, warmOpenGap })
   }
   if (perSession.length === 2) {
     const max = (f: (s: typeof perSession[number]) => number) => Math.max(...perSession.map(f))
-    m.memory = { mainRetainedBytes: max(s => s.retained), mainSampledLivePeakBytes: max(s => s.live), mainLedgerPeakBytes: max(s => s.ledger), mainUnattributedBytes: max(s => s.unattributed), mainProbeNoiseBytes: Math.min(...perSession.map(s => s.noise)), workerOwnedBytes: max(s => s.worker), bitmapPeakBytes: max(s => s.bitmap) }
+    m.memory = { mainRetainedBytes: max(s => s.retained), mainSampledLivePeakBytes: max(s => s.live), mainLedgerPeakBytes: max(s => s.ledger), mainUnattributedBytes: max(s => s.unattributed), mainProbeNoiseBytes: Math.min(...perSession.map(s => s.noise)), mainCheckpointExcessBytes: max(s => s.excess), mainWarmOpenGapBytes: Math.min(...perSession.map(s => s.warmOpenGap)), workerOwnedBytes: max(s => s.worker), bitmapPeakBytes: max(s => s.bitmap) }
     for (const [i, session] of perSession.entries()) {
       if (session.unattributed > session.noise) problems.push(`main-owned-memory: unattributed main memory in ${['F2', 'F4'][i]} (${round(session.unattributed / MiB)} MiB of live heap above the warmed host is not in the ledger peak; measured probe noise ${round(session.noise / MiB)} MiB)`)
     }
@@ -493,9 +522,10 @@ export function evaluateMeasurements(m: ReceiptMeasurements, environmentProfile:
     const mib = (v: number | null) => (v === null ? 'n/a' : `${round(v / MiB)} MiB`)
     // Admitted on the ledger peak, only when the ledger accounts for the live
     // heap; a sampled live heap above the budget is a demonstrated miss.
-    const unattributed = mem.mainUnattributedBytes !== null && mem.mainProbeNoiseBytes !== null && mem.mainUnattributedBytes > mem.mainProbeNoiseBytes
+    const unattributed = (mem.mainUnattributedBytes !== null && mem.mainProbeNoiseBytes !== null && mem.mainUnattributedBytes > mem.mainProbeNoiseBytes)
+      || (mem.mainCheckpointExcessBytes !== null && mem.mainCheckpointExcessBytes > 0)
     const value = mem.mainLedgerPeakBytes === null ? null : Math.max(mem.mainLedgerPeakBytes, mem.mainSampledLivePeakBytes !== null && mem.mainSampledLivePeakBytes > b.desktop ? mem.mainSampledLivePeakBytes : 0)
-    const note = `ledger peak ${mib(mem.mainLedgerPeakBytes)}; forced-GC live peak above the warmed host ${mib(mem.mainSampledLivePeakBytes)}; unattributed ${mib(mem.mainUnattributedBytes)} (allowed: measured probe noise ${mib(mem.mainProbeNoiseBytes)}); retained ${mib(mem.mainRetainedBytes)}`
+    const note = `ledger peak ${mib(mem.mainLedgerPeakBytes)}; forced-GC live peak above the warmed host ${mib(mem.mainSampledLivePeakBytes)}; unattributed ${mib(mem.mainUnattributedBytes)} (allowed: measured probe noise ${mib(mem.mainProbeNoiseBytes)}); checkpoint heap over the ledger's current bytes beyond the warmed host's open gap ${mib(mem.mainWarmOpenGapBytes)}: ${mib(mem.mainCheckpointExcessBytes)}; retained ${mib(mem.mainRetainedBytes)}`
     push('main-owned-memory', b.kind, b.unit, b.desktop, b.mobile,
       { value, limited: false, missing: value === null ? ['main ledger peak'] : [], note, ...(unattributed ? { pending: 'pending: unattributed main memory' } : {}) },
       `S10.2 main-thread application ledger, cross-checked with forced-GC heap samples (${b.spec})`)

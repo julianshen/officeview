@@ -8,7 +8,7 @@
  * this module; the watermark is stamped into the pane after the tiles.
  */
 import type { XlsxSheet } from '../../xlsx/types'
-import { SHAPE_ENTRY_BYTES, SHAPE_UNIT_BYTES } from '../../xlsx/view/mainLedger'
+import { shapeCacheBytes } from '../../xlsx/view/mainLedger'
 import type { CacheIdentity, LogicalCellBox, LogicalViewport, ProfileId } from '../../xlsx/view/contracts'
 import type { RenderSheetAssets } from '../../xlsx/render'
 import { renderSheetViewport } from '../../xlsx/view/renderViewport'
@@ -281,16 +281,21 @@ export class SheetTileRenderer {
   }
 }
 
-/** Counts the distinct (font, text) pairs a context draws or measures from now
- * on, as estimated browser shaping bytes. */
+/** Counts, per font, the distinct (direction, text) entries a context draws or
+ * measures from now on (the browser keeps one shaping cache per font a context
+ * used, keyed by text and direction), as estimated shaping bytes. */
 function countShapedTexts(ctx: CanvasRenderingContext2D): { readonly bytes: number } {
-  const seen = new Set<string>()
+  const fonts = new Map<string, { seen: Set<string>; units: number }>()
   const out = { bytes: 0 }
   const note = (text: string) => {
-    const key = `${ctx.font}\u0000${text}`
-    if (seen.has(key)) return
-    seen.add(key)
-    out.bytes += SHAPE_ENTRY_BYTES + SHAPE_UNIT_BYTES * text.length
+    let font = fonts.get(ctx.font)
+    if (!font) fonts.set(ctx.font, font = { seen: new Set(), units: 0 })
+    const key = `${ctx.direction}\u0000${text}`
+    if (font.seen.has(key)) return
+    out.bytes -= shapeCacheBytes(font.seen.size, font.units)
+    font.seen.add(key)
+    font.units += text.length
+    out.bytes += shapeCacheBytes(font.seen.size, font.units)
   }
   const fillText = ctx.fillText.bind(ctx), measureText = ctx.measureText.bind(ctx)
   ctx.fillText = (text: string, x: number, y: number, maxWidth?: number) => { note(text); if (maxWidth === undefined) fillText(text, x, y); else fillText(text, x, y, maxWidth) }

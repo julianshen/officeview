@@ -97,7 +97,8 @@ const checkpoint = (heapBytes: number, workerPeak: number, ledgerPeak: number) =
 /** Warmed host 5 MiB (+-20 KiB probe noise); live peak 30 MiB (25 above it); ledger peak 26 MiB: attributed with 1 MiB to spare. */
 const WARM = [5 * MiB - 20 * 1024, 5 * MiB, 5 * MiB + 20 * 1024, 5 * MiB - 10 * 1024, 5 * MiB + 10 * 1024]
 const memorySession = (cycles: number[] | null) => ({
-  warmHost: { fixture: 'F2', scale: 'F2 reduced', samples: [...WARM] },
+  // The warm document open and idle: 0.5 MiB of heap above the closed warm host outside its ledger.
+  warmHost: { fixture: 'F2', scale: 'F2 reduced', samples: [...WARM], empty: [4 * MiB, 4 * MiB, 4 * MiB], open: Array.from({ length: 3 }, () => ({ heapBytes: 15 * MiB, ledgerBytes: 9.5 * MiB })) },
   checkpoints: {
     baseline: { heapBytes: 5 * MiB, storage: { usage: 0, quota: 1e10 } },
     loaded: checkpoint(20 * MiB, 200 * MiB, 18 * MiB), afterOps: checkpoint(25 * MiB, 220 * MiB, 26 * MiB),
@@ -176,6 +177,47 @@ describe('evaluation from raw records', () => {
     expect(desktop(receipt, 'main-owned-memory').outcome).toBe('pending')
     expect(receipt.evidenceProblems.some(p => /unattributed main memory in F2 \(15 MiB/.test(p))).toBe(true)
     expect(receipt.desktopAdmitted).toBe(false)
+  })
+
+  it('(r4-1) steady uncharged memory cannot hide in the headroom between the ledger peak and the live peak', async () => {
+    const d = validDraft()
+    for (const key of ['F2', 'F4']) {
+      const session = (d.raw.memory as any)[key]
+      // A transient ledger peak far above the live peak (15 MiB of headroom)...
+      session.checkpoints.afterOps.ledger = ledgerAt(45 * MiB, 20 * MiB)
+      session.checkpoints.loaded.ledger = ledgerAt(18 * MiB, 15 * MiB)
+      session.checkpoints.closed.ledger = ledgerAt(45 * MiB, 0)
+      // ...and a steady uncharged 10 MiB in every record: the live peak (40) stays under it.
+      for (const name of ['loaded', 'afterOps', 'closed']) session.checkpoints[name].heapBytes += 10 * MiB
+      session.liveHeapSamples = session.liveHeapSamples.map((v: number) => v + 10 * MiB)
+      if (session.summary.recovery.cyclesMainOwnedBytes) session.summary.recovery.cyclesMainOwnedBytes = session.summary.recovery.cyclesMainOwnedBytes.map((v: number) => v + 10 * MiB)
+    }
+    const receipt = await finalizeReceipt(d, ctx)
+    expect(receipt.evidenceProblems.some(p => /unattributed main memory/.test(p))).toBe(false)
+    expect(receipt.evidenceProblems.some(p => /uncharged main memory in F2 at the loaded checkpoint/.test(p))).toBe(true)
+    expect(receipt.evidenceProblems.some(p => /uncharged main memory in F2 at the closed checkpoint \(10 MiB/.test(p))).toBe(true)
+    expect(desktop(receipt, 'main-owned-memory').outcome).toBe('pending')
+    expect(receipt.desktopAdmitted).toBe(false)
+  })
+
+  it('(r4-1) a session without warm-open samples (heap + ledger) is not admitted', async () => {
+    const d = validDraft()
+    delete (d.raw.memory as any).F4.warmHost.open
+    const receipt = await finalizeReceipt(d, ctx)
+    expect(receipt.evidenceProblems.some(p => /memory\.F4: 0 warm-open samples/.test(p))).toBe(true)
+    expect(receipt.desktopAdmitted).toBe(false)
+  })
+
+  it('(r4-1, on the cited receipt) a steady uncharged +10 MiB injected into its F2 session is refused', async () => {
+    const evidence = profile.viewerEvidence as { results: string }
+    const receipt = JSON.parse(readFileSync(join(process.cwd(), evidence.results), 'utf8')) as ViewerReceipt
+    const session = (receipt.raw as any).memory.F2
+    for (const name of ['loaded', 'afterOps', 'closed']) session.checkpoints[name].heapBytes += 10 * MiB
+    session.liveHeapSamples = session.liveHeapSamples.map((v: number) => v + 10 * MiB)
+    session.summary.recovery.cyclesMainOwnedBytes = session.summary.recovery.cyclesMainOwnedBytes.map((v: number) => v + 10 * MiB)
+    const verdict = await validateReceipt(receipt, ctx)
+    expect(verdict.admitted).toBe(false)
+    expect(verdict.problems.some(p => /uncharged main memory in F2 at the (loaded|afterOps|closed) checkpoint/.test(p))).toBe(true)
   })
 
   it('(r3-4b) an uncharged 1.5 MiB live allocation is not absorbed by a fixed tolerance', async () => {

@@ -47,6 +47,7 @@ const FILTER_APPLY_SAMPLES = 10
 const MEMORY_SESSION_LIMIT_MS = 10 * 60_000
 const RECOVERY_CYCLES = 10
 const WARM_HOST_SAMPLES = 10
+const WARM_OPEN_SAMPLES = 5
 const LIVE_SAMPLE_MS = 300
 
 type W = Window & { __viewerPerf: ViewerPerf }
@@ -325,8 +326,19 @@ async function memorySession(context: BrowserContext, base: string, fixture: Vie
     if (result === TIMEOUT) { timeouts.push(what); log(`      timeout: ${what}`); return null }
     return result
   }
+  const diagSnapshot = async (label: string) => {
+    if (!process.env.VIEWER_SUITE_LIVE_DIAG || !cdp) return
+    // Diagnostic only (never in release): a heap snapshot at this point.
+    const chunks: string[] = []
+    const take = (e: { chunk: string }) => chunks.push(e.chunk)
+    cdp.on('HeapProfiler.addHeapSnapshotChunk', take)
+    await cdp.send('HeapProfiler.takeHeapSnapshot', { reportProgress: false })
+    cdp.off('HeapProfiler.addHeapSnapshotChunk', take)
+    writeFileSync(`${process.env.VIEWER_SUITE_LIVE_DIAG}-${fixture.key}-${label}.heapsnapshot`, chunks.join(''))
+  }
   const checkpoint = async (name: string) => {
     log(`      checkpoint ${fixture.key}/${name} at ${new Date().toISOString().slice(11, 19)}`)
+    const instrumentation = await bounded(`${name} drop instrumentation`, perf(page, p => p.dropInstrumentation()))
     // Three full collections with pauses: lifetime charges end in
     // FinalizationRegistry callbacks, which run as tasks after a collection.
     await bounded(`${name} worker gc`, perf(page, p => p.workerGc()))
@@ -339,13 +351,27 @@ async function memorySession(context: BrowserContext, base: string, fixture: Vie
     const frame = (await bounded(`${name} frame`, perf(page, p => ({ peakBitmapBytes: p.peakBitmapBytes, bitmapBytes: p.lastFrame?.bitmapBytes ?? null, budgetBytes: p.lastFrame?.budgetBytes ?? null, workersCreated: p.workersCreated, workersTerminated: p.workersTerminated }))))
       ?? { peakBitmapBytes: 0, bitmapBytes: null, budgetBytes: null, workersCreated: -1, workersTerminated: -1 }
     const ledger = await bounded(`${name} main ledger`, perf(page, p => p.mainLedger()))
-    return { name, heap: h, heapBytes: h ? heapBytes(h) : null, ledger, worker, uasm: uasmSplit((uasm ?? { unavailable: 'probe timed out' }) as Uasm), canvas, storage, frame, browserProcessRssBytes: browserProcessRss() }
+    if (process.env.VIEWER_SUITE_LIVE_DIAG && cdp) {
+      // Diagnostic: the same reading after a heap snapshot's own precise collection.
+      await diagSnapshot(`cp-${name}`)
+      const after = await heap()
+      log(`      diag ${fixture.key}/${name}: heap ${h ? heapBytes(h) : 'n/a'} -> after snapshot ${heapBytes(after as Heap)} (used ${h?.usedSize} -> ${(after as Heap).usedSize}, embedder ${h?.embedderHeapUsedSize} -> ${(after as Heap).embedderHeapUsedSize})`)
+    }
+    return { name, instrumentation, heap: h, heapBytes: h ? heapBytes(h) : null, ledger, worker, uasm: uasmSplit((uasm ?? { unavailable: 'probe timed out' }) as Uasm), canvas, storage, frame, browserProcessRssBytes: browserProcessRss() }
   }
   // Warmed host, established independently of the measured session: the same
   // page opens a small paged workbook (F2 at smoke scale), runs the same code
   // paths (scroll, header sort, filter dialog), closes it, and only then is
   // sampled. The samples' median is the attribution baseline; their spread is
   // the forced-GC probe noise, the only tolerance the cross-check allows.
+  // The empty page before anything opens: how much the warm-up itself leaves
+  // in the baseline (code, caches) is recorded, not assumed (review round 4).
+  const warmEmptySamples: number[] = []
+  for (let i = 0; i < WARM_OPEN_SAMPLES; i++) {
+    for (let k = 0; k < 3; k++) { await bounded('empty gc', gcMain()); await new Promise(resolve => setTimeout(resolve, 100)) }
+    const h = await bounded('empty heap', heap())
+    if (h) warmEmptySamples.push(heapBytes(h))
+  }
   await openFixture(page, warmFixture)
   await waitComplete(page)
   await page.evaluate(() => (window as unknown as W).__viewerPerf.scrollRun({ warmup: 0, frames: 30, dx: 0, dy: 60 }))
@@ -363,6 +389,21 @@ async function memorySession(context: BrowserContext, base: string, fixture: Vie
     await page.waitForTimeout(500)
     await dialog.getByRole('button', { name: 'Cancel' }).click()
   }
+  // The warm document still open after its operations, idle: forced-GC heap
+  // next to the ledger's current bytes. Their gap above the closed warm host is
+  // what an open viewer holds outside the ledger, measured before and apart
+  // from the session, after the same code paths ran (so compiled code is in
+  // both it and the baseline); it bounds the session's per-checkpoint gap
+  // (review round 4).
+  const warmOpen: { heapBytes: number; ledgerBytes: number }[] = []
+  await bounded('warm open drop instrumentation', perf(page, p => p.dropInstrumentation()))
+  for (let i = 0; i < WARM_OPEN_SAMPLES; i++) {
+    for (let k = 0; k < 3; k++) { await bounded('warm open gc', gcMain()); await new Promise(resolve => setTimeout(resolve, 200)) }
+    const h = await bounded('warm open heap', heap())
+    const ledger = await bounded('warm open ledger', perf(page, p => p.mainLedger()?.bytes ?? null))
+    if (h && typeof ledger === 'number') warmOpen.push({ heapBytes: heapBytes(h), ledgerBytes: ledger })
+  }
+  await diagSnapshot('warm-open')
   await bounded('warm close', perf(page, p => p.close()), 30_000)
   const warmHostSamples: number[] = []
   for (let i = 0; i < WARM_HOST_SAMPLES; i++) {
@@ -405,18 +446,10 @@ async function memorySession(context: BrowserContext, base: string, fixture: Vie
   await openFixture(page, fixture)
   await waitComplete(page)
   loaded = await checkpoint('loaded')
+  await diagSnapshot('loaded')
   if (ops === 'f2') {
     await page.evaluate(() => (window as unknown as W).__viewerPerf.scrollRun({ warmup: 0, frames: 120, dx: 0, dy: 60 }))
-    if (process.env.VIEWER_SUITE_LIVE_DIAG && cdp) {
-      // Diagnostic only (never in release): heap snapshot after the scroll.
-      await gcMain()
-      const chunks: string[] = []
-      const take = (e: { chunk: string }) => chunks.push(e.chunk)
-      cdp.on('HeapProfiler.addHeapSnapshotChunk', take)
-      await cdp.send('HeapProfiler.takeHeapSnapshot', { reportProgress: false })
-      cdp.off('HeapProfiler.addHeapSnapshotChunk', take)
-      writeFileSync(`${process.env.VIEWER_SUITE_LIVE_DIAG}-scroll.heapsnapshot`, chunks.join(''))
-    }
+    if (process.env.VIEWER_SUITE_LIVE_DIAG) { await gcMain(); await diagSnapshot('scroll') }
     const header = page.getByRole('columnheader', { name: /^Column G/ })
     const before = await header.getAttribute('aria-sort')
     await page.getByRole('button', { name: 'Cycle sort column G' }).click()
@@ -496,7 +529,7 @@ async function memorySession(context: BrowserContext, base: string, fixture: Vie
   }
   log(`    memory ${fixture.key}: main ledger peak ${mib(afterOps.ledger?.peakBytes ?? null)}; main owned ${mib(summary.mainOwnedBytes)} (forced-GC live max ${mib(liveHeapSamples.length && baseline.heapBytes !== null ? Math.max(...liveHeapSamples) - baseline.heapBytes : null)} over ${liveHeapSamples.length} samples; peak no-GC ${mib(summary.mainPeakNoGcBytes)}), worker ledger ${mib(ledgerPeak)} / UASM ${mib(summary.workerUasmBytes)}, bitmap ${mib(summary.bitmapPeakBytes)}; after close main ${mib(summary.recovery.mainAfterCloseBytes)}, workers ${summary.recovery.workersTerminated}/${summary.recovery.workersCreated} terminated, canvases ${closed.canvas.count}`)
   if (diagnose) writeFileSync(`${process.env.VIEWER_SUITE_LIVE_DIAG}-${fixture.key}.json`, JSON.stringify({ warm: warmHostSamples, liveDiag }))
-  return { summary, warmHost: { fixture: warmFixture.key, scale: warmFixture.scale, samples: warmHostSamples }, checkpoints: { baseline, loaded, afterOps, closed }, polls, liveHeapSamples, liveSampleMs: LIVE_SAMPLE_MS, timeouts }
+  return { summary, warmHost: { fixture: warmFixture.key, scale: warmFixture.scale, samples: warmHostSamples, empty: warmEmptySamples, open: warmOpen }, checkpoints: { baseline, loaded, afterOps, closed }, polls, liveHeapSamples, liveSampleMs: LIVE_SAMPLE_MS, timeouts }
 }
 
 // ---- formatting ----------------------------------------------------------------

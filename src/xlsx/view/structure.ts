@@ -61,8 +61,10 @@ export class RectangleIndex<T> {
   private readonly sorted: readonly SortedEntry<T>[]
   private readonly maxR1: Float64Array
   readonly size: number
-  /** Retained bytes (S10.2 main ledger): one sorted entry record each plus the interval tree. */
-  get estimatedBytes(): number { return this.size * 72 + this.maxR1.byteLength }
+  /** Retained bytes (S10.2 main ledger): one sorted entry record each (the
+   * record, its array slot and the source rect it came from; ~150 B measured in
+   * review round 4, charged as 160 B) plus the interval tree. */
+  get estimatedBytes(): number { return this.size * 160 + this.maxR1.byteLength }
   private constructor(sorted: readonly SortedEntry<T>[], maxR1: Float64Array) {
     this.sorted = sorted
     this.maxR1 = maxR1

@@ -33,7 +33,7 @@ import { DOM_ELEMENT_BYTES, MainMemoryLedger, axisBytes, estimatePayloadBytes, p
 import { buildSheetGeometry, MergeQueryCache, sheetBaseHidden, type SheetGeometry } from '../../xlsx/view/viewport'
 import type { ProjectedSheetMetrics } from '../../xlsx/view/projection'
 import { createIdentityOrder } from '../../xlsx/view/order'
-import { createIntervalSet, visibilityFromHidden } from '../../xlsx/view/visibility'
+import { CompactRowVisibility, createIntervalSet, visibilityFromHidden } from '../../xlsx/view/visibility'
 import {
   createScrollWindow, navigateTo as scrollNavigateTo, refreshScrollWindow, scrollPhysicalTo, setScrollZoom, visibleLogicalViewport, type ViewportSize,
 } from '../../xlsx/view/scrollWindow'
@@ -199,6 +199,8 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
   // S10.2 §12.4: one main-thread ledger per document. A worker-backed workbook
   // owns it (row cache, view buffers, replies); a resident one gets its own.
   const mainLedger = useMemo(() => remote?.mainLedger ?? new MainMemoryLedger(), [remote, source])
+  // View buffers already charged in this ledger (a rebuilt entry may reuse them).
+  const viewCharged = useMemo(() => new WeakSet<object>(), [mainLedger])
   // The viewer's own pools end with the viewer; lifetime charges (geometry,
   // views, replies, the resident document) end when nothing reaches them.
   useEffect(() => () => { for (const pool of ['dom', 'canvasText', 'layout', 'merges', 'controls', 'copy'] as const) mainLedger.releaseAll(pool) }, [mainLedger])
@@ -261,6 +263,14 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
     const local = localViews.get(sheetId), external = views?.[sheetId]
     return local && (!external || local.revision >= external.revision) ? local : external ?? { revision: 0 }
   }
+  const chargeViewBuffers = (order: SheetView['order'] | null, visibility: SheetView['visibility'] | null) => {
+    const targets: object[] = []
+    let bytes = 0
+    const orderBytes = (order as { diagnostics?: { typedArrayBytes?: number } } | null)?.diagnostics?.typedArrayBytes ?? 0
+    if (order && orderBytes > 0 && !viewCharged.has(order)) { targets.push(order); bytes += orderBytes; viewCharged.add(order) }
+    if (visibility instanceof CompactRowVisibility && !viewCharged.has(visibility)) { targets.push(visibility); bytes += visibility.words.byteLength + visibility.summaries.byteLength; viewCharged.add(visibility) }
+    if (targets.length) mainLedger.chargeWhileReachable('viewBuffers', targets, bytes)
+  }
   const entryFor = (sheetId: string): SheetEntry => {
     const index = sheetIds.indexOf(sheetId)
     const sheet = doc.sheets[index]
@@ -274,10 +284,15 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
     const visibility = input.visibility ?? visibilityFromHidden(createIntervalSet(displayIntervals(baseHidden.intervals, order)))
     const built = remote ? pagedSheetGeometry(remote, sheetId, order, visibility) : buildSheetGeometry(sheet, { order, ...(input.visibility ? { visibility } : {}) })
     if (built.kind !== 'ready') throw new Error(built.diagnostics.map(d => d.message).join('; ') || 'This sheet cannot be laid out')
-    // Paged geometry charges itself; a resident one is charged here, for its lifetime.
-    // The resident row axis is internal to the build: bounded above by two
-    // segments (~200 B with summaries) per authored row.
-    if (!remote) mainLedger.chargeWhileReachable('geometry', [built], projectionBytes(built.metrics) + axisBytes(built.metrics.cols) + sheet.rows.length * 200 + built.merges.estimatedBytes)
+    // Paged geometry charges itself; a resident one is charged here, for its
+    // lifetime: the row projection (it keeps its own copied segments; the build's
+    // row axis is dropped), the column axis, the per-row cell index and merges.
+    if (!remote) mainLedger.chargeWhileReachable('geometry', [built], projectionBytes(built.metrics) + axisBytes(built.metrics.cols) + (built.cellIndexBytes ?? 0) + built.merges.estimatedBytes)
+    // Order and visibility buffers built on the main thread are charged once each,
+    // while a view holds them: a resident sort/filter's, and the base visibility
+    // words built here for any sheet (1,048,576 rows: ~132 KiB). A worker-backed
+    // view's adopted buffers are charged by the workbook (adopt).
+    chargeViewBuffers(remote ? null : order, remote && input.visibility ? null : visibility)
     const selection = previous?.view.selection ?? emptyGridSelection()
     const view: SheetView = { sheetId, revision: input.revision, order, baseHidden, visibility, sort: input.sort ?? null, filter: input.filter ?? null, selection }
     const used = remote?.layout(sheetId).used

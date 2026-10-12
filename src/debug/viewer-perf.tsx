@@ -86,6 +86,10 @@ export interface ViewerPerf {
   calibrateDom(cells: number): Promise<number>
   /** The open document's main-thread application ledger (null before a viewer mounts). */
   mainLedger(): MainLedgerSnapshot | null
+  /** Drops the page's own instrumentation (the wire timeline) before a memory
+   * checkpoint, so harness records are not read as viewer memory; returns how
+   * many records were dropped. */
+  dropInstrumentation(): { wire: number }
   workerStats(): Promise<PerfReply | null>
   workerGc(): Promise<boolean>
   /** Dedicated importer pass over #perf-import-file in a fresh perf worker (the viewer is not involved). */
@@ -131,6 +135,7 @@ const state: ViewerPerf = {
   ackArm(kind, timeoutMs) { pendingAck = ackProbe(kind, timeoutMs) },
   ackWait: () => pendingAck ?? Promise.reject(new Error('no acknowledgment probe armed')),
   mainLedger: () => currentLedger?.snapshot() ?? null,
+  dropInstrumentation() { const wire = state.wire.length; state.wire = []; return { wire } },
   calibrateDom,
   workerStats: () => probe(currentWorker, { __perf: 'stats' }),
   workerGc: async () => { const reply = await probe(currentWorker, { __perf: 'gc' }); return reply?.kind === 'gc' && reply.collected },
