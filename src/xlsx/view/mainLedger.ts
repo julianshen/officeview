@@ -1,0 +1,97 @@
+/**
+ * S10.2 / spec §12.4: the document-scoped main-thread application ledger.
+ *
+ * One ledger per open document holds every main-owned allocation the viewer
+ * keeps, by pool and owner, and its high-water mark. Charges are absolute
+ * (`set` replaces the owner's previous amount), so an owner that re-measures
+ * never double-counts itself; two owners holding copies of the same data (a
+ * transferred reply payload and the row cache decoded from it) both count, as
+ * both are live until the payload is released.
+ *
+ * Pools: the remote row cache, committed view buffers from worker deltas,
+ * in-flight reply payloads, copy sessions, controls value pages/runs, the
+ * layout and merge caches, and an estimate of the owned grid DOM
+ * (DOM_ELEMENT_BYTES per owned element; see below). Canvas backing stores are
+ * the bitmap pool's, not this one's (§12.4).
+ */
+export type MainPool = 'rowCache' | 'viewBuffers' | 'replies' | 'copy' | 'controls' | 'layout' | 'merges' | 'dom'
+export const MAIN_POOLS: readonly MainPool[] = ['rowCache', 'viewBuffers', 'replies', 'copy', 'controls', 'layout', 'merges', 'dom']
+
+/**
+ * Estimated bytes per owned grid DOM element: the element and its attribute
+ * strings in Blink, its style object and the React fiber that renders it. A
+ * documented estimate (measured in Chrome as embedder + JS heap growth per
+ * mounted grid cell), not an exact accounting.
+ */
+export const DOM_ELEMENT_BYTES = 1536
+
+export interface MainLedgerSnapshot {
+  bytes: number
+  peakBytes: number
+  byPool: Record<MainPool, number>
+  /** Pool totals at the moment the high-water mark was reached. */
+  atPeak: Record<MainPool, number>
+}
+
+const emptyPools = (): Record<MainPool, number> => ({ rowCache: 0, viewBuffers: 0, replies: 0, copy: 0, controls: 0, layout: 0, merges: 0, dom: 0 })
+
+export class MainMemoryLedger {
+  private readonly charges = new Map<string, { pool: MainPool; bytes: number }>()
+  private readonly pools = emptyPools()
+  private peakPools = emptyPools()
+  bytes = 0
+  peakBytes = 0
+
+  /** The owner's current bytes in `pool` (absolute); 0 releases it. */
+  set(pool: MainPool, owner: string, bytes: number): void {
+    if (!Number.isFinite(bytes) || bytes < 0) throw new RangeError(`ledger charge for ${pool}/${owner} must be a finite non-negative byte count`)
+    const key = `${pool}\u0000${owner}`
+    const old = this.charges.get(key)?.bytes ?? 0
+    if (bytes === 0) this.charges.delete(key)
+    else this.charges.set(key, { pool, bytes })
+    this.pools[pool] += bytes - old
+    this.bytes += bytes - old
+    if (this.bytes > this.peakBytes) { this.peakBytes = this.bytes; this.peakPools = { ...this.pools } }
+  }
+  release(pool: MainPool, owner: string): void { this.set(pool, owner, 0) }
+  /** Releases every owner of `pool` (or of every pool). */
+  releaseAll(pool?: MainPool): void {
+    for (const [key, charge] of [...this.charges]) if (pool === undefined || charge.pool === pool) this.set(charge.pool, key.slice(key.indexOf('\u0000') + 1), 0)
+  }
+  snapshot(): MainLedgerSnapshot {
+    return { bytes: this.bytes, peakBytes: this.peakBytes, byPool: { ...this.pools }, atPeak: { ...this.peakPools } }
+  }
+}
+
+/**
+ * Conservative byte estimate of a structured-clone payload (a worker reply):
+ * ArrayBuffer views by byteLength (each buffer once), strings at 2 B per code
+ * unit plus a header, numbers/booleans 8 B, objects/arrays a header plus their
+ * slots. Walks at most `maxNodes` values; the remainder is extrapolated from
+ * the average so huge payloads stay bounded in cost.
+ */
+export function estimatePayloadBytes(value: unknown, maxNodes = 200_000): number {
+  const seen = new Set<ArrayBufferLike>()
+  const stack: unknown[] = [value]
+  let bytes = 0, nodes = 0, pending = 0
+  while (stack.length) {
+    const v = stack.pop()
+    if (++nodes > maxNodes) { pending = stack.length + 1; break }
+    if (v === null || v === undefined) { bytes += 8; continue }
+    switch (typeof v) {
+      case 'string': bytes += 16 + v.length * 2; continue
+      case 'number': case 'boolean': case 'bigint': bytes += 8; continue
+      case 'object': break
+      default: bytes += 8; continue
+    }
+    if (ArrayBuffer.isView(v)) { if (!seen.has(v.buffer)) { seen.add(v.buffer); bytes += v.buffer.byteLength } continue }
+    if (v instanceof ArrayBuffer) { if (!seen.has(v)) { seen.add(v); bytes += v.byteLength } continue }
+    if (Array.isArray(v)) { bytes += 16 + v.length * 8; for (const item of v) stack.push(item); continue }
+    if (v instanceof Map) { bytes += 32 + v.size * 24; for (const [k, item] of v) { stack.push(k); stack.push(item) }; continue }
+    if (v instanceof Set) { bytes += 32 + v.size * 16; for (const item of v) stack.push(item); continue }
+    const entries = Object.entries(v as Record<string, unknown>)
+    bytes += 24 + entries.length * 16
+    for (const [, item] of entries) stack.push(item)
+  }
+  return pending ? Math.ceil(bytes + (bytes / nodes) * pending) : bytes
+}

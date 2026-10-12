@@ -29,6 +29,7 @@ import type {
 import { SHEET_MIN_ZOOM } from '../../xlsx/view/contracts'
 import type { NavigatorRequest, SourceCell } from '../../xlsx/view/coordinates'
 import { columnToLetters } from '../../xlsx/view/coordinates'
+import { DOM_ELEMENT_BYTES, MainMemoryLedger } from '../../xlsx/view/mainLedger'
 import { buildSheetGeometry, MergeQueryCache, sheetBaseHidden, type SheetGeometry } from '../../xlsx/view/viewport'
 import type { ProjectedSheetMetrics } from '../../xlsx/view/projection'
 import { createIdentityOrder } from '../../xlsx/view/order'
@@ -122,6 +123,8 @@ export interface InteractiveSheetDocProps {
   views?: Readonly<Record<string, SheetViewInput>>
   /** @internal Instrumentation for tests and the browser harness. */
   onFrame?: (stats: SheetFrameStats) => void
+  /** @internal S10.2 harness: read-only access to the document's main-thread ledger. */
+  onMainLedger?: (ledger: MainMemoryLedger) => void
   /** @internal Resource profile (desktop D / mobile M); default D. */
   profile?: ProfileId
   /** @internal Asset lease factory (tests inject delayed leases). */
@@ -193,6 +196,12 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
   useEffect(() => () => { void source.release() }, [source])
   // Worker-backed source: row loads, merges and adopted worker views re-render.
   const remote = isRemoteWorkbook(source) ? source : null
+  // S10.2 §12.4: one main-thread ledger per document. A worker-backed workbook
+  // owns it (row cache, view buffers, replies); a resident one gets its own.
+  const mainLedger = useMemo(() => remote?.mainLedger ?? new MainMemoryLedger(), [remote, source])
+  useEffect(() => () => { if (!remote) mainLedger.releaseAll() }, [mainLedger, remote])
+  const onMainLedger = props.onMainLedger
+  useEffect(() => { onMainLedger?.(mainLedger) }, [mainLedger, onMainLedger])
   const [loadTick, setLoadTick] = useState(0)
   useEffect(() => remote?.subscribe(() => setLoadTick(tick => tick + 1)), [remote])
   // Tiles painted under an older worker layout/merge generation are stale (§10.1).
@@ -379,8 +388,21 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
     structureGen: entry.structureGen,
     ...(remote ? { pending: (box: LogicalCellBox) => remote.store(activeSheetId).pendingIn(entry.metrics, box, scroll.zoom * dpr) } : {}),
   } : null
+  // Viewer-owned main pools (layout/merge caches, controls caches, owned DOM),
+  // re-measured after every present and render; the row cache, view buffers,
+  // replies and copy sessions charge themselves where they allocate.
+  const chargeMain = () => {
+    let layout = 0, merges = 0
+    for (const sheetEntry of entries.values()) { layout += sheetEntry.layoutCache.stats.bytes; merges += sheetEntry.merges.bytes }
+    mainLedger.set('layout', 'caches', layout)
+    mainLedger.set('merges', 'caches', merges)
+    mainLedger.set('controls', 'resources', controlResources.current?.cache.usedBytes ?? 0)
+    mainLedger.set('dom', 'grid', (paneRef.current?.getElementsByTagName('*').length ?? 0) * DOM_ELEMENT_BYTES)
+  }
+  useEffect(() => { chargeMain() })
   // Purely observational: it never creates or resizes the pool.
   const report = () => {
+    chargeMain()
     const renderer = rendererRef.current
     if (!props.onFrame || !scroll || !renderer) return
     const stats = renderer.stats
@@ -696,9 +718,10 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
     const result = await copySelection({ store: source.store(activeSheetId), owner: { ...identity }, currentOwner: () => current.current.identityOf(current.current.activeSheetId),
       sessionBudgetBytes: copySessionBudget(profile),
       selection, order: entry.view.order, visibility: entry.view.visibility, columns: visibilityFromHidden(createIntervalSet(hiddenCols), entry.metrics.cols.logicalCount),
-      allowed: () => current.current.allowCopy, signal: abort.signal, onPending: () => { if (token === copyToken.current) setAnnouncement('Copy is waiting for values; cancel to stop.') },
+      allowed: () => current.current.allowCopy, signal: abort.signal, onBytes: bytes => { if (token === copyToken.current) mainLedger.set('copy', 'session', bytes) }, onPending: () => { if (token === copyToken.current) setAnnouncement('Copy is waiting for values; cancel to stop.') },
       format: cell => { const style = remote ? remote.styleOf(cell.styleIndex) : cellAt(entry, cell)?.style; return cellDisplayText(entry.sheet, { value: cell.value, style }) },
     })
+    mainLedger.release('copy', 'session')
     if (token !== copyToken.current) return
     setCopyPending(false)
     setAnnouncement(result.kind === 'copied' ? 'Selection copied.' : result.kind === 'refused' ? result.message : result.kind === 'stale' ? 'Source or view changed; copy again.' : 'Copy cancelled.')

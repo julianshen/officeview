@@ -641,21 +641,29 @@ function tileOverflow(boxes: Iterable<{ x: number; y: number; width: number; hei
  * S5.1). Keys are the query rectangle and limit; the geometry object is the
  * generation (a new sheet/order/visibility builds a new geometry). */
 export class MergeQueryCache {
-  private readonly byGeometry = new WeakMap<SheetGeometry, Map<string, ReturnType<SheetGeometry['merges']['query']>>>()
+  private readonly byGeometry = new WeakMap<SheetGeometry, Map<string, { page: ReturnType<SheetGeometry['merges']['query']>; bytes: number }>>()
   hits = 0
   misses = 0
+  /** Estimated bytes of the retained pages (S10.2 main ledger), across geometries. */
+  bytes = 0
   constructor(readonly maxEntries = 64) {}
   query(geometry: SheetGeometry, rect: { r0: number; r1: number; c0: number; c1: number }, limit: number, work: ViewportWork): ReturnType<SheetGeometry['merges']['query']> {
     let entries = this.byGeometry.get(geometry)
     if (!entries) this.byGeometry.set(geometry, entries = new Map())
     const key = `${rect.r0},${rect.r1},${rect.c0},${rect.c1},${limit}`
     const hit = entries.get(key)
-    if (hit) { this.hits++; return hit }
+    if (hit) { this.hits++; return hit.page }
     this.misses++
     work.mergeQueries++
     const page = geometry.merges.query(rect, { limit })
-    entries.set(key, page)
-    if (entries.size > this.maxEntries) entries.delete(entries.keys().next().value!)
+    const bytes = 64 + page.items.length * 48
+    entries.set(key, { page, bytes })
+    this.bytes += bytes
+    if (entries.size > this.maxEntries) {
+      const oldest = entries.keys().next().value!
+      this.bytes -= entries.get(oldest)!.bytes
+      entries.delete(oldest)
+    }
     return page
   }
 }

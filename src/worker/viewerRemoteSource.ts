@@ -26,6 +26,7 @@ import type {
   ProfileId, GridSelection,
 } from '../xlsx/view/contracts'
 import type { RangeDetection } from '../xlsx/view/rangeDetection'
+import { MainMemoryLedger, estimatePayloadBytes } from '../xlsx/view/mainLedger'
 import type { XlsxCell, XlsxCellStyle, XlsxMergeRange } from '../xlsx/types'
 import { MAX_COLS, MAX_ROWS, formatA1, isValidCoordinate, type SourceCell, type SourceRect } from '../xlsx/view/coordinates'
 import { createAxisMetrics } from '../xlsx/view/axes'
@@ -122,6 +123,9 @@ export class RemoteWorkbook implements WorkbookSource {
   readonly stats: RemoteStats = { commands: {} }
   /** Document-wide row-cache ledger; insertion order is recency order. */
   readonly ledger: RowCacheLedger
+  /** S10.2 §12.4: the document's main-thread application ledger (row cache,
+   * adopted view buffers, in-flight replies; the viewer charges its own pools). */
+  readonly mainLedger = new MainMemoryLedger()
   private readonly identities = new Map<string, CacheIdentity>()
   private readonly views = new Map<string, RemoteSheetView>()
   private readonly geometries = new Map<string, SheetGeometry>()
@@ -149,7 +153,7 @@ export class RemoteWorkbook implements WorkbookSource {
     this.layouts = new Map(open.layouts)
     this.profile = open.profile ?? 'D'
     this.format = open.formatting ?? { dateSystem: '1900', styles: [] }
-    this.ledger = new RowCacheLedger(open.rowCacheBytes ?? rowCacheBudget(this.profile))
+    this.ledger = new RowCacheLedger(open.rowCacheBytes ?? rowCacheBudget(this.profile), this.mainLedger)
     for (const { sheetId } of open.sheets) this.identities.set(sheetId, initialIdentity(open.docId, sheetId))
   }
 
@@ -306,7 +310,15 @@ export class RemoteWorkbook implements WorkbookSource {
     const key = head.query ? `read:${head.query.op}` : head.kind
     this.stats.commands[key] = (this.stats.commands[key] ?? 0) + 1
     const unsubscribe = progress ? this.client.onProgress(head.requestId, p => progress(p.completed, p.total ?? p.completed)) : undefined
-    const sent: Promise<Settled<K>> = this.client.send<K>(command).then(reply => { this.capture(reply); return reply }, () => CLOSED)
+    const sent: Promise<Settled<K>> = this.client.send<K>(command).then(reply => {
+      // The reply payload is live from receipt until its consumer has taken
+      // what it keeps (the next task); any decoded copy is charged by its owner
+      // meanwhile, so the high-water mark sees both.
+      this.mainLedger.set('replies', head.requestId, estimatePayloadBytes(reply))
+      setTimeout(() => this.mainLedger.release('replies', head.requestId), 0)
+      this.capture(reply)
+      return reply
+    }, () => CLOSED)
     if (!signal) return sent.finally(() => unsubscribe?.())
     return new Promise<Settled<K>>(resolve => {
       const abort = () => {
@@ -375,6 +387,12 @@ export class RemoteWorkbook implements WorkbookSource {
     this.identities.set(sheetId, delta.owner)
     if (delta.workbookOwner.globalViewGen >= this.owner.globalViewGen) this.owner = delta.workbookOwner
     this.views.set(sheetId, view)
+    // Adopted view buffers replace the sheet's previous ones: the local band
+    // copies (with their display inverse, charged conservatively) and the
+    // visibility words plus block summaries.
+    const bandBytes = delta.bands.reduce((sum, band) => sum + band.sourceAtOffset.length * 4 * 2, 0)
+    const visibilityBytes = view.visibility ? view.visibility.words.byteLength + view.visibility.summaries.byteLength : 0
+    this.mainLedger.set('viewBuffers', sheetId, bandBytes + visibilityBytes)
     this.notify()
     return view
   }
@@ -390,6 +408,7 @@ export class RemoteWorkbook implements WorkbookSource {
     for (const entry of this.structures.values()) if (entry.timer) clearTimeout(entry.timer)
     // Owned caches go with the document: nothing answers from them after close.
     for (const store of this.stores.values()) store.clear()
+    this.mainLedger.releaseAll()
     try {
       await Promise.race([this.client.send({ kind: 'close', requestId: this.client.nextRequestId(), docId: this.docId }), new Promise(resolve => setTimeout(resolve, 1000))])
     } catch { /* the worker is gone */ }
@@ -408,7 +427,8 @@ export class RowCacheLedger {
   bytes = 0
   peakBytes = 0
   private readonly entries = new Map<string, { store: RemoteSheetStore; row: number; bytes: number }>()
-  constructor(readonly limitBytes: number) {}
+  constructor(readonly limitBytes: number, private readonly main?: MainMemoryLedger) {}
+  private report(): void { this.main?.set('rowCache', 'rows', this.bytes) }
   private key(store: RemoteSheetStore, row: number): string { return `${store.sheetId}\u0000${row}` }
   charge(store: RemoteSheetStore, row: number, bytes: number): void {
     const key = this.key(store, row)
@@ -423,6 +443,7 @@ export class RowCacheLedger {
       entry.store.drop(entry.row)
     }
     this.peakBytes = Math.max(this.peakBytes, this.bytes)
+    this.report()
   }
   touch(store: RemoteSheetStore, row: number): void {
     const key = this.key(store, row)
@@ -432,7 +453,7 @@ export class RowCacheLedger {
   release(store: RemoteSheetStore, row: number): void {
     const key = this.key(store, row)
     const entry = this.entries.get(key)
-    if (entry) { this.entries.delete(key); this.bytes -= entry.bytes }
+    if (entry) { this.entries.delete(key); this.bytes -= entry.bytes; this.report() }
   }
 }
 
