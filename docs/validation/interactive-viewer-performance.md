@@ -1,40 +1,36 @@
 # Interactive viewer — frozen thresholds, S8.6 kernel results and S10.2 viewer results
 
-**S10.2 desktop Chrome receipt r3: not admitted.** 12 of 13 desktop D rows pass;
-two of them pass with a documented sample limitation (`pass-limited`). The
-thirteenth row, the main-thread memory peak, is **pending**. Spec §12.4 budgets
-that pool's *peak including copies*, and the viewer has no complete main-owned
-application ledger, so that peak is not demonstrated.
+**S10.2 desktop Chrome receipt r4: desktop D admitted.** All 13 desktop rows
+pass; two of them pass with a documented sample limitation (`pass-limited`).
 
-What was measured:
-- The forced-GC live samples give a lower bound of **26.8 MiB** for the main
-  live peak, against a 64 MiB budget.
-- Retained memory after the operations was 23.1 MiB.
-- A miss would be proven if the sampled lower bound exceeded the budget; it did
-  not.
+The receipt is `interactive-viewer-viewer-chrome-r4.json` (SHA-256
+`b15c7e15…69162966`), taken at `ac4c1cd` on a clean tree. Every row is derived
+from validated raw records, and the evidence-problem list is empty.
 
-The receipt is `interactive-viewer-viewer-chrome-r3.json` (SHA-256
-`3374da7a…4e83e0040`), taken at `2ea32d2` on a clean tree. It validates from
-its raw records, and its only evidence problem is that pending row. Mobile rows
-were not run (no physical iPad, user decision), and actual Safari was not run.
+The main-thread memory row now passes on the document's main-thread
+application ledger:
+- the ledger's high-water mark is **22.5 MiB** against the 64 MiB budget;
+- forced-GC live heap samples cross-check it; no live heap is left unattributed
+  beyond the 2 MiB tolerance (see below).
+
+Caveats:
+- It was recorded on a shared machine (load 1.8–3.7), so a quiet re-run of the
+  release command is still required.
+- Mobile rows were not run (no physical iPad, user decision), and actual
+  Safari was not run.
+
 Every frozen threshold and budget is unchanged.
 
 History:
 - **r1** (`2282115`): not admitted. A header sort showed nothing for
   11,897–13,316 ms.
-- **r2** (`434e577`): marked admitted, but only under the earlier evaluator,
-  which trusted stored summaries.
-- **Quiet run** (`3ef1d88`): the orchestrator's quiet-machine run (load ~1.6)
-  matched r2.
-- **Review round 1** found that this admission was not evidence:
-  - Rows must be derived from raw records.
-  - Fixture identity must be verified.
-  - The main pool needs its peak, not retained memory.
-- **Under the hardened evaluator** below, r2 no longer validates:
-  - its stored measurements and verdict disagree with its raw records;
-  - it has no content fixture identity;
-  - it has no live heap samples;
-  - its main peak is pending.
+- **r2** (`434e577`): admitted only by the original evaluator, which trusted
+  stored summaries.
+- **Quiet run** (`3ef1d88`): the orchestrator's quiet-machine run matched r2.
+- **r3** (`2ea32d2`): not admitted. There was no main ledger yet, so the main
+  peak was pending.
+- **Under the current evaluator**, r1–r3 do not validate. They predate the
+  review rounds' raw-evidence rules and the ledger.
 
 S8.6 is complete for the measured desktop D kernel scenarios. All nine Chrome
 runs at `09adbb1fa156c54c12e2ada22ea80e89a175d525` pass their frozen thresholds.
@@ -42,17 +38,17 @@ S10.2 reuses those kernel receipts and does not re-run them.
 
 ## S10.2 real-browser viewer results (desktop D, Chrome)
 
-### Run identity (r3)
+### Run identity (r4)
 
 | Item | Value |
 |---|---|
-| Receipt | `docs/validation/interactive-viewer-viewer-chrome-r3.json`. SHA-256 over canonical JSON `3374da7ab4a5ffc6df55c15a073a239b00ab11c869f7efa9ba209ab4e83e0040`. Integrity only |
-| Build | Commit `2ea32d250cb8c713aefb13c9856b93f856c5ef1b`, clean tree. The `vite.perf.config.ts` production bundle, served from loopback with COOP/COEP |
+| Receipt | `docs/validation/interactive-viewer-viewer-chrome-r4.json`. SHA-256 over canonical JSON `b15c7e15462eecc48a75e78205622c13a4e63f3967320b1f30472fd269162966`. Integrity only |
+| Build | Commit `ac4c1cd3f5578c679fc6150b8012a8166528d4e4`, clean tree. The `vite.perf.config.ts` production bundle, served from loopback with COOP/COEP |
 | Browser | Google Chrome 155.0.8059.39 stable, Playwright 1.64 `channel: 'chrome'`, headless, `--js-flags=--expose-gc` |
 | Machine | Apple M4 Pro, 14 logical cores, 24 GiB, macOS 26.5.2 (25F84), AC power, no thermal or performance warning |
-| Contention | Shared machine. Load averages 1.66/2.03/2.14 at start and 2.33/2.59/2.43 at end |
+| Contention | Shared machine. Load averages 3.68/2.99/2.86 at start and 1.77/2.66/2.87 at end |
 | Profile | D: 1440×900 CSS, DPR 2 |
-| Duration | 8 min 34 s |
+| Duration | 8 min 46 s |
 
 ### Fixture identity
 
@@ -60,13 +56,12 @@ Fixtures are verified against the committed manifest
 `tests/fixtures/xlsx-viewer/viewer-perf-fixtures.json` (cache version 1):
 
 - The identity is a **content SHA-256** over the inflated ZIP entries, plus the
-  expanded byte count.
-- Deflate output differs between zlib builds (Bun and Node), so the compressed
-  file hash is recorded per run but is not the identity.
+  expanded byte count. Deflate output differs between the zlib builds of Bun
+  and Node, so the compressed-file hash is recorded per run but is not the
+  identity.
 - A cached package that does not match is regenerated. If the regenerated
   package still does not match, the run is refused.
 - Shape and populated counts come from the verified manifest entry.
-- The manifest was generated twice, and both outputs are byte-identical.
 
 | Fixture | Bytes (this run) | Expanded XML | Populated cells | Content SHA-256 |
 |---|---:|---:|---:|---|
@@ -85,101 +80,142 @@ synthetic-store kernel scenarios. Release mode is admitted only for the viewer
 suite (`--suite viewer`, alias `--fixture all`).
 
 The receipt hash is an integrity tag; evidence validity is checked separately
-(`src/debug/harness/viewerPerf.ts`, `validateReceipt`).
+(`validateReceipt` in `src/debug/harness/viewerPerf.ts`). Every threshold input
+is recomputed from raw records, and a receipt is admitted only when all of the
+following hold.
 
-**Derivation from raw records.** Every threshold input is recomputed from raw
-records, never taken from stored summaries:
-
-- scroll: the timelines (frames, events, presents);
-- acknowledgment: the per-sample records, with no qualifying presented change
-  counted as censored at 15 s;
-- first viewport: the per-run usable times;
-- import: the importer progress events;
-- memory: the checkpoints, polls and forced-GC live samples.
-
-**Admission requirements.** All of the following must hold:
-
-- Release identity: mode release; installed Chrome on channel `chrome`;
-  desktop 1440×900 at DPR 2; the production perf build; a full commit SHA; a
-  clean tree.
+**Identity**
+- Release mode, installed Chrome on channel `chrome`, desktop 1440×900 at DPR 2.
+- The production perf build, a full commit SHA and a clean tree.
 - The six required fixtures match the manifest.
-- Every required scenario completed, with no run errors.
-- The §12.6 minimums are met: 300 frames, 30 operations, 3 import runs.
-- Only two documented long-operation series may be limited, each to at least
-  10 samples: F2 cold first-viewport opens, and filter apply.
-- No desktop row is `miss`, `pending` or `not-run`.
 
-**Disagreement is a failure.** A receipt whose stored measurements, evaluation
-or verdict disagree with its raw records fails validation. The review's
-adversarial receipts are tests in `tests/xlsx-viewer-perf-receipt.test.ts`:
+**Timings**
+- Finite, nonnegative and ordered:
+  - frame timestamps strictly increasing;
+  - scroll events and presents nondecreasing;
+  - each acknowledgment's input ≤ mutation ≤ present.
+- A scroll input that never reached a present is a censored 1,000 ms miss.
+- An acknowledgment with no qualifying presented change is a censored 15 s
+  miss.
+- Neither is ever dropped.
 
-- a smoke-mode receipt with dirty WebKit identity, a bad commit, no fixtures
-  and no raw data;
-- a mismatched fixture;
-- one-sample series;
-- limited series below 10 samples;
-- 1,000 ms raw samples behind fast summaries;
-- censored acknowledgments;
-- run errors.
+**Imports**
+- Every run ends in a done event with exactly the fixture's populated cells.
+- Its expanded bytes are within 99–100 % of the fixture's.
+- Progress is finite, nonnegative and monotonic.
 
-### Thresholds (r3; all frozen values unchanged)
+**Memory**
+- Both sessions (F2, F4) provide, at both checkpoints:
+  - the worker ledger;
+  - `measureUserAgentSpecificMemory`;
+  - the bitmap ledger;
+  - the main ledger.
+- A maximum is taken only when nothing is missing.
+- The close leg shows:
+  - every worker terminated;
+  - no canvases;
+  - the main ledger at zero;
+  - worker memory released;
+  - storage back to baseline.
+- F2 records 10 open/close cycles, and the post-close heap grows by at most
+  2 MiB across them.
+
+**Run errors**
+- Any recorded run error blocks admission (page errors, console errors,
+  browser loss, stalled sessions, failed probes).
+- There is no allow-list. The static server answers the favicon that caused
+  the only former 404.
+
+**Samples**
+- The §12.6 minimums apply: 300 frames, 30 operations, 3 import runs.
+- The documented exceptions are F2 cold first-viewport opens and filter apply,
+  each with at least 10 samples.
+- No desktop row may be `miss`, `pending` or `not-run`.
+
+A receipt whose stored measurements, evaluation or verdict disagree with its
+raw records fails validation. Every adversarial receipt from review rounds 1
+and 2 is a test in `tests/xlsx-viewer-perf-receipt.test.ts`.
+
+### Thresholds (r4; all frozen values unchanged)
 
 | Row | Desktop limit | Measured (derived from raw) | Outcome | Scale and samples |
 |---|---:|---:|---|---|
-| Warm viewport input-to-paint (p95) | 16.7 ms | ordinary 4.05, wrapped 5.70, styled 2.21 ms | **pass** | F2 1M; wrapped 20k; styled 20k. 300 frames each after 60 warmup |
+| Warm viewport input-to-paint (p95) | 16.7 ms | ordinary 3.42, wrapped 5.58, styled 2.28 ms | **pass** | F2 1M; wrapped 20k; styled 20k. 300 frames each after 60 warmup |
 | Warm viewport frame interval (p95) | 16.7 ms | 16.67 ms in every mix; 0 long tasks | **pass** | same frames |
-| Input acknowledgment | 50 ms | sort p95 17.4; find p95 15.6; cancel p95 17.3; filter apply max 34.4 | **pass (limited)** | F2 1M. Sort, find and cancel: 30 samples each. Filter apply: 10 samples (documented exception) |
+| Input acknowledgment | 50 ms | sort p95 17.5; find p95 13.9; cancel p95 17.5; filter apply max 33.6 | **pass (limited)** | F2 1M. Sort, find and cancel: 30 samples each. Filter apply: 10 samples (documented exception) |
 | 100k / 1M numeric sort, 1M filter, 1M text sort, 100k index | 100 / 1,000 / 100 / 4,000 / 750 ms | 67.4 / 787.2 / 72.6 / 2,348.6 / 30.5 ms | pass | S8.6 receipts, reused |
-| First usable viewport | 1,500 ms | F1 p95 493.5; F3 p95 671.4; F2 max 597.4 ms | **pass (limited)** | F1 and F3: 30 samples each. F2: 10 cold 1M-row opens (documented exception) |
-| Expanded XML import throughput | ≥ 20 MiB/s | worst of 3 runs: F1 58.3, F2 68.2, F3 61.2 MiB/s | pass | full scale |
-| Populated cell ingestion | ≥ 100k cells/s | F1 0.90M, F2 1.58M, F3 1.68M cells/s | pass | full scale |
-| Main-thread viewer-owned memory (peak) | 64 MiB | forced-GC live lower bound 26.8 MiB; retained 23.1 MiB | **pending** | F2 and F4 sessions, 126 and 99 live samples |
+| First usable viewport | 1,500 ms | F1 p95 480.9; F3 p95 674.6; F2 max 601.6 ms | **pass (limited)** | F1 and F3: 30 samples each. F2: 10 cold 1M-row opens (documented exception) |
+| Expanded XML import throughput | ≥ 20 MiB/s | worst of 3 runs: F1 59.5, F2 69.7, F3 63.2 MiB/s | pass | full scale |
+| Populated cell ingestion | ≥ 100k cells/s | F1 0.91M, F2 1.61M, F3 1.74M cells/s | pass | full scale |
+| Main-thread viewer-owned memory (peak) | 64 MiB | ledger peak 22.5 MiB; live lower bound 27.3 MiB; unattributed 0.0 MiB | **pass** | F2 and F4 sessions, 126 and 106 live samples |
 | Worker-owned memory | 512 MiB | 228.7 MiB | pass | F2 after a sort |
 | Bitmap retained allocation | 128 MiB | 113.2 MiB | pass | all sessions |
 | Every mobile M row | spec values | — | **not-run** | no physical iPad (user decision) |
 
-### Main-thread peak: why the row is pending, and what would settle it
+### Main-thread peak: the application ledger and its cross-check
 
-Each memory session takes forced-GC samples of the live heap every 300 ms
-through open/import, scroll, a sort (F2) or the value list (F4), and close.
+**The ledger.** Each open document has one `MainMemoryLedger`
+(`src/xlsx/view/mainLedger.ts`).
+- A worker-backed workbook owns it; a resident document gets its own.
+- It charges every main-owned source at allocation or adoption, and releases
+  it on drop, close or replacement:
+  - **rowCache**: the remote row cache (`RowCacheLedger` reports every change);
+  - **viewBuffers**: adopted worker view deltas, i.e. the band copies (with
+    their display inverse, charged conservatively) plus visibility words and
+    summaries;
+  - **replies**: every worker reply payload (structured-clone estimate), from
+    receipt until the next task, so a reply and the cache decoded from it are
+    both counted while both are live;
+  - **copy**: the copy session's live bytes;
+  - **controls**: the value index and run cache's used bytes, on every charge
+    and release;
+  - **layout / merges**: `LayoutCache` bytes and the `MergeQueryCache`'s
+    retained pages;
+  - **dom**: owned elements × `DOM_ELEMENT_BYTES` (3,200 B).
+- The 3,200 B per element was calibrated in Chrome 155 with the perf page's
+  `calibrateDom`: React-rendered owned-gridcell-shaped elements measured
+  2,981–3,184 B each, post-GC heap including embedder.
+- The perf harness reads the ledger through the viewer's `@internal`
+  `onMainLedger` prop; it is not public API.
 
-| Reading (F2 session) | Value | What it shows |
-|---|---:|---|
-| Forced-GC live samples | max 26.8 MiB owned, over 126 samples | the live set at each instant: a lower bound (it misses spikes between samples) |
-| Retained after the operations | 23.1 MiB | the live set at the checkpoints |
-| No-GC 250 ms samples | max 40.6 MiB in r3; 99.0 MiB in r2, where no forced-GC sampler ran | includes garbage: an upper bound that is not a live-memory figure |
+**The cross-check.** The row passes only if both hold:
+- the ledger peak is ≤ 64 MiB;
+- every forced-GC live sample minus the empty-host baseline minus the
+  post-close floor exceeds the ledger peak by at most **2 MiB**.
 
-The live peak therefore lies at or above 26.8 MiB. Nothing measured bounds it
-from above by a live figure, so it is not demonstrated to be within 64 MiB.
+The post-close floor is the host page with the viewer's code loaded and the
+document's ledger back at zero: the minimum of the session's close checkpoint
+and its open/close cycles. Otherwise the row is pending ("unattributed main
+memory"). A ledger peak or a sampled live heap above the budget is a miss.
 
-Settling it needs a main-owned application ledger: one high-water mark over the
-live allocations the viewer holds. Its main sources were identified; some are
-already budgeted:
+| Session | Ledger peak | Pools at the peak | Live peak (forced-GC) | Post-close floor | Unattributed |
+|---|---:|---|---:|---:|---:|
+| F2: open, scroll, header sort | 22.5 MiB | viewBuffers 8.1, replies 8.0, dom 3.4, layout 2.6, rowCache 0.3 | 27.3 MiB | 4.8 MiB | 0.0 MiB |
+| F4: open, 1M-string value list | 21.5 MiB | controls 16.0, dom 3.5, replies 1.9 | 12.7 MiB | 6.1 MiB | −14.8 MiB (over-attributed) |
 
-- the remote row cache: `RowCacheLedger`, budget `MAIN_THREAD_BUDGETS / 4`, with
-  a peak;
-- copy sessions: `copySessionBudget`, 3/8 of the main budget;
-- committed view buffers from worker deltas: order bands, inverses, visibility
-  bitsets;
-- in-flight reply payloads: structured-clone row, scan and value pages;
-- controls caches: value pages and runs;
-- `LayoutCache` / `MergeQueryCache`;
-- the bounded owned grid DOM.
+On F2 the ledger covers the live heap with no margin; the 2 MiB tolerance is
+not used.
 
-A ledger that charges these and whose high-water mark is at least every
-forced-GC live sample minus the empty-host baseline would demonstrate the peak.
-It is a product change across the remote source, controls and viewer, and was
-not made in this package (proposal).
+**How this was reached.**
+- The first ledger run had two gaps:
+  - the DOM estimate was not yet calibrated;
+  - the controls cache was charged only when the viewer re-measured its pools.
+- F4 then left 4.6 MiB of live heap unattributed, and the row was pending.
+- Calibrating the DOM estimate and charging the controls cache at allocation
+  closed the gap (the commits that add them say so).
 
-### Header sort on F2 (1M rows), phase by phase (r1 → r3)
+The no-GC 250 ms samples (62.5 MiB on F2) include garbage and are not a live
+figure.
 
-| Phase | r1 (before) | r3 (after) |
+### Header sort on F2 (1M rows), phase by phase (r1 → r4)
+
+| Phase | r1 (before) | r4 (after) |
 |---|---:|---:|
-| Acknowledgment (input → presented pending state) | none until the result, 11,897–13,316 ms | p95 17.3 ms; the mutation is the sort button's `aria-busy` |
-| Range admission | about 12 s on the main thread: ~4,010 worker strip reads plus ~3.8 s of deserialization | `detectRange` inside the worker: p50 117, p95 123, max 227 ms |
-| Worker `prepareColumns` | 1.0 s on the first sort | 1,035 ms on the first sort only, 0 afterwards (cached) |
-| Worker sort (kernel boundary) | 113–144 ms | p50 94, max 131 ms |
-| End-to-end, click → `aria-sort` changes | p50 ≈ 12.0 s | p50 254, p95 296 ms (n=30). Max 1,446 ms is the first sort, which includes cold preparation |
+| Acknowledgment (input → presented pending state) | none until the result, 11,897–13,316 ms | p95 17.5 ms; the mutation is the sort button's `aria-busy` |
+| Range admission | about 12 s on the main thread: ~4,010 worker strip reads plus ~3.8 s of deserialization | `detectRange` inside the worker: p50 114, p95 121, max 234 ms |
+| Worker `prepareColumns` | 1.0 s on the first sort | 1,002 ms on the first sort only, 0 afterwards (cached) |
+| Worker sort (kernel boundary) | 113–144 ms | p50 87, max 145 ms |
+| End-to-end, click → `aria-sort` changes | p50 ≈ 12.0 s | p50 249, p95 284 ms (n=30). Max 1,436 ms is the first sort, which includes cold preparation |
 
 ### What each metric measures
 
@@ -211,8 +247,8 @@ not made in this package (proposal).
   0 — Showing saved values…", that is, during the progressive import.
   - Every sample is a fresh page.
   - One discarded open warms the module and code caches.
-  - The fully imported time is reported separately. Its p50/max: F1 673/704 ms,
-    F3 2,793/2,812 ms, F2 5,356/5,407 ms.
+  - The fully imported time is reported separately. Its p50/max: F1 673/679 ms,
+    F3 2,789/2,818 ms, F2 5,351/5,838 ms.
 - **Importer throughput.** A dedicated pass in a fresh worker runs the same
   `openImportSession` as the paged route, with no viewer attached. Throughput
   is taken from the inventory event to done, so it includes sharedStrings and
@@ -223,7 +259,7 @@ not made in this package (proposal).
     after-operations checkpoints.
   - **Sampled live peak**: the maximum of forced-GC samples every 300 ms
     through the operations. It is a lower bound of the peak.
-  - **Row outcome**: pending until a main-owned ledger exists (see above).
+  - **Ledger peak**: the admitted value; see above.
   - Canvas backing stores sit outside these heaps and are charged to the bitmap
     pool.
 - **Worker-owned memory.** The larger of two readings:
@@ -248,10 +284,11 @@ taken.
 | Worker memory after close (UASM) | 0 | 0 |
 | DOM canvases after close | 0 | 0 |
 | Page storage (`navigator.storage.estimate`) | 221.2 MB open → 0 | 159.1 MB open → 0 |
-| Main heap owned at the first close checkpoint | 16.1 MiB | 4.2 MiB |
-| Main heap owned after each of 10 more open/scroll/sort/close cycles | 4.77, 4.99, 5.20, 5.26, 5.26, 5.51, 5.28, 5.81, 5.73, 5.62 MiB | — |
-| UASM `Canvas` still attributed after close | 15.2 MiB | 36.2 MiB |
-| Browser processes RSS (informational, all processes) | 0.99 → 1.47 → 1.01 GB | 0.99 → 1.42 → 1.09 GB |
+| Main heap owned at the first close checkpoint | 16.1 MiB | 6.1 MiB |
+| Main heap owned after each of 10 more open/scroll/sort/close cycles | 4.83, 5.13, 5.07, 5.23, 5.29, 5.41, 5.35, 5.54, 5.56, 5.57 MiB | — |
+| Main ledger after close | 0 B | 0 B |
+| UASM `Canvas` still attributed after close | 15.2 MiB | 15.2 MiB |
+| Browser processes RSS (informational, all processes) | 1.00 → 1.59 → 1.11 GB | 0.99 → 1.42 → 1.09 GB |
 
 **Heap-snapshot diff (diagnosis, `.tmp/snap.ts`, not part of the receipt).** The
 diff compares the empty host page with the page after F2 open, scroll, sort and
@@ -328,16 +365,21 @@ leg passes.
    - Test in `xlsx-viewer-viewport-integration`: one tile per slice, and the
      same final batch. RED: a 4-tile jump.
 
-Harness fixes from review round 1 (they change no product behavior):
+Fixes from review rounds 1–3 (7 and 8 are harness-only; 9 adds product code):
 
 7. **Fixture identity.** A one-cell XLSX planted at `f2-full.xlsx` used to be
    reported as F2, 1,048,576 × 8 rows with 8,238,808 cells. Packages are now
    verified against the committed content manifest and regenerated or refused on
    mismatch (`tests/xlsx-viewer-perf-fixtures.test.ts`).
-8. **Evidence validation.** Rows are now derived from raw records, and identity,
-   scenario-success and sample-count rules are enforced. The main peak is
-   pending without a ledger (`tests/xlsx-viewer-perf-receipt.test.ts`, including
-   the reviewer's adversarial receipts).
+8. **Evidence validation.** Rows are now derived from raw records. Identity,
+   timing-order, import-workload, scenario-completeness, close/recovery,
+   run-error and sample-count rules are enforced. The probe samplers record
+   failures and always stop (`tests/xlsx-viewer-perf-receipt.test.ts` and
+   `tests/xlsx-viewer-perf-sampler.test.ts`, including both review rounds'
+   adversarial receipts).
+9. **Main-thread application ledger.** Product code, new behavior: one ledger
+   per document, charging the sources listed above
+   (`tests/xlsx-viewer-main-ledger.test.tsx`).
 
 Fix 1 predates the S10.3 merge (`a3e0a9e`). `InteractiveSheetDoc.tsx` merged
 without conflicts; only the docs conflicted. Fixes 3 and 6 were made on top of
@@ -357,7 +399,7 @@ the merged S10.3 code.
   suite now unmounts first. A tab the user kills cannot run that cleanup; this
   is a storage-lifecycle follow-up.
 - **Rows unaffected by the fixes.** The kernel rows are the unchanged S8.6
-  receipts. No earlier viewer-level baseline exists, so the r1 → r3 values in
+  receipts. No earlier viewer-level baseline exists, so the r1 → r4 values in
   this section are the before/after.
 
 ### Reproducing (final release command)
@@ -374,8 +416,7 @@ bun scripts/bench-interactive-viewer.ts --browser chromium --channel chrome --pr
   - it serves the page on `--port`. Avoid 4173, which the Playwright webServer
     uses.
 - The run takes about 8–12 minutes.
-- Exit code 0 means desktop admitted. It is 1 today, because the main-memory
-  peak is pending. The receipt path, every row and every evidence problem are
+- Exit code 0 means desktop admitted. It is 0 for r4. The receipt path, every row and every evidence problem are
   printed.
 - Fixtures are verified against `tests/fixtures/xlsx-viewer/viewer-perf-fixtures.json`.
   After a deliberate generator change, bump `FIXTURE_CACHE_VERSION` and run
