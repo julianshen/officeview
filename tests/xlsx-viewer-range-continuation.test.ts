@@ -12,7 +12,7 @@
  * These tests run the shipped object adapter over real parsed packages.
  */
 import { describe, expect, it } from 'vitest'
-import { admitSortRange, detectOperationRange } from '../src/xlsx/view/rangeDetection'
+import { admitSortRange, detectOperationRange, Scanner } from '../src/xlsx/view/rangeDetection'
 import { StructuralIndex } from '../src/xlsx/view/structure'
 import { createObjectWorkbookSource } from '../src/xlsx/view/source'
 import { OfficePackage } from '../src/core/zip'
@@ -73,4 +73,22 @@ describe('current-region growth cost', () => {
     // per side plus their read-ahead, never one probe per row.
     expect(pages).toBeLessThan(200)
   }, 60_000)
+})
+
+describe('detection scanner continuation scope', () => {
+  it('a continuation token resumed with another range or limit is a RangeError, like any PopulatedCellSource cursor', async () => {
+    const { store } = await objectStore(table(30, 8))
+    const options = { signal: new AbortController().signal, stamp: { ...store.stamp } }
+    const scanner = new Scanner(store, options, { tick: async () => {} } as never, Number.POSITIVE_INFINITY)
+    const rect = { r0: 0, r1: 30, c0: 0, c1: 7 }
+    const first = await scanner.page(rect, 8)
+    expect(first.nextCursor).toBeDefined()
+    await expect(scanner.page({ ...rect, r1: 20 }, 8, first.nextCursor)).rejects.toThrow(RangeError)
+    const again = await scanner.page(rect, 8)
+    await expect(scanner.page(rect, 4, again.nextCursor)).rejects.toThrow(RangeError)
+    const third = await scanner.page(rect, 8)
+    const next = await scanner.page(rect, 8, third.nextCursor)
+    expect(next.items[0]?.row).toBe(1) // the same scope continues where the first page stopped
+    scanner.close()
+  })
 })

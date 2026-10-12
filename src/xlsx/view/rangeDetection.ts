@@ -184,11 +184,14 @@ const MAX_HELD_SCANS = 1
  * the shipped object, paged and remote adapters do (spec §4.1). A missing
  * cursor therefore proves nothing: after an iteration page this scanner reads
  * one page ahead and, when more follows, hands out its own continuation token,
- * so callers can keep treating "no nextCursor" as exhausted. */
-class Scanner {
+ * so callers can keep treating "no nextCursor" as exhausted. Like every
+ * PopulatedCellSource cursor (structure.ts), a token is scoped to its range and
+ * limit; resuming it with another scope is a RangeError.
+ * @internal Exported for the S10.1 scope test only. */
+export class Scanner {
   private work = 0
   private serial = 0
-  private readonly held = new Map<string, { iterator: AsyncIterator<Page<AuthoritativeCell>>; ahead: IteratorResult<Page<AuthoritativeCell>> }>()
+  private readonly held = new Map<string, { iterator: AsyncIterator<Page<AuthoritativeCell>>; ahead: IteratorResult<Page<AuthoritativeCell>>; scope: string }>()
   constructor(
     private readonly store: SourceStore,
     private readonly options: ReadOptions,
@@ -200,10 +203,15 @@ class Scanner {
     this.work++
     await this.pacer.tick()
     const held = cursor === undefined ? undefined : this.held.get(cursor)
+    const scope = `${rect.r0}:${rect.r1}:${rect.c0}:${rect.c1}:${limit}`
     let iterator: AsyncIterator<Page<AuthoritativeCell>>
     let step: IteratorResult<Page<AuthoritativeCell>>
     if (held !== undefined) {
       this.held.delete(cursor!)
+      if (held.scope !== scope) {
+        void held.iterator.return?.()
+        throw new RangeError('Populated cursor resumed with a different range or limit')
+      }
       iterator = held.iterator
       step = held.ahead
     } else {
@@ -230,7 +238,7 @@ class Scanner {
     this.options.signal.throwIfAborted()
     if (ahead.done) return first
     const token = `detect:${++this.serial}`
-    this.held.set(token, { iterator, ahead })
+    this.held.set(token, { iterator, ahead, scope })
     while (this.held.size > MAX_HELD_SCANS) {
       const [oldest, scan] = this.held.entries().next().value!
       this.held.delete(oldest)
