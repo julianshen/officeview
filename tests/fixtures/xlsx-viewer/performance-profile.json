@@ -79,7 +79,7 @@
         "frozenMs": 16.7,
         "basis": "spec",
         "outcome": "pass",
-        "justification": "Kept at spec. S10.2 r4: Chrome 155 headless, desktop D, one M4 Pro laptop (shared machine), production build, manifest-verified full-scale fixtures; every row derived from validated raw records; receipt viewerEvidence.results (desktop admitted). 300 open-loop frames per mix after 60 warmup: input-to-paint p95 ordinary 3.42 / wrapped 5.58 / styled 2.28 ms; rAF frame-interval p95 16.67 ms in every mix, 0 long tasks.",
+        "justification": "Kept at spec. S10.2 r5: Chrome 155 headless, desktop D, one M4 Pro laptop (shared machine), production build, manifest-verified full-scale fixtures; every row derived from validated raw records; receipt viewerEvidence.results (desktop admitted). 300 open-loop frames per mix after 60 warmup: input-to-paint p95 ordinary 3.45 / wrapped 5.56 / styled 2.46 ms; rAF frame-interval p95 16.67 ms in every mix, 0 long tasks.",
         "measurement": null
       },
       "mobile": {
@@ -100,7 +100,7 @@
         "frozenMs": 50,
         "basis": "spec",
         "outcome": "pass",
-        "justification": "Kept at spec. S10.2 r4: Chrome 155 headless, desktop D, one M4 Pro laptop (shared machine), production build, manifest-verified full-scale fixtures; every row derived from validated raw records; receipt viewerEvidence.results (desktop admitted). Header sort on F2 (1M rows): pending state presented p95 17.5 ms (n=30); find p95 13.9 ms, cancel p95 17.5 ms (n=30); filter apply max 33.6 ms (n=10, the documented limited series).",
+        "justification": "Kept at spec. S10.2 r5: Chrome 155 headless, desktop D, one M4 Pro laptop (shared machine), production build, manifest-verified full-scale fixtures; every row derived from validated raw records; receipt viewerEvidence.results (desktop admitted). Header sort on F2 (1M rows): pending state presented p95 15.6 ms (n=30); find p95 13.7 ms, cancel p95 15.8 ms (n=30); filter apply max 32.8 ms (n=10, the documented limited series).",
         "measurement": null
       },
       "mobile": {
@@ -291,7 +291,7 @@
         "frozenMs": 1500,
         "basis": "spec",
         "outcome": "pass",
-        "justification": "Kept at spec. S10.2 r4: Chrome 155 headless, desktop D, one M4 Pro laptop (shared machine), production build, manifest-verified full-scale fixtures; every row derived from validated raw records; receipt viewerEvidence.results (desktop admitted). Local File -> labelled usable viewport: F1 p95 480.9 ms (n=30), F3 p95 674.6 ms (n=30), F2 max 601.6 ms over 10 cold 1M-row opens (the documented limited series; p95 refused below 30).",
+        "justification": "Kept at spec. S10.2 r5: Chrome 155 headless, desktop D, one M4 Pro laptop (shared machine), production build, manifest-verified full-scale fixtures; every row derived from validated raw records; receipt viewerEvidence.results (desktop admitted). Local File -> labelled usable viewport: F1 p95 479.6 ms (n=30), F3 p95 703.2 ms (n=30), F2 max 605.9 ms over 10 cold 1M-row opens (the documented limited series).",
         "measurement": null
       },
       "mobile": {
@@ -317,14 +317,14 @@
   "diagnostics": [],
   "viewerEvidence": {
     "doc": "docs/validation/interactive-viewer-performance.md",
-    "results": "docs/validation/interactive-viewer-viewer-chrome-r4.json",
-    "hash": "b15c7e15462eecc48a75e78205622c13a4e63f3967320b1f30472fd269162966",
-    "commit": "ac4c1cd3f5578c679fc6150b8012a8166528d4e4",
+    "results": "docs/validation/interactive-viewer-viewer-chrome-r5.json",
+    "hash": "a04bcd573a69bae14a440b51174a7ab69082c54cef772673ed46e64b2538cb92",
+    "commit": "116d957076cebf6d1a4fae15999a7bf611ea2441",
     "browser": "Google Chrome 155.0.8059.39 (stable, Playwright 1.64 channel chrome, headless)",
     "machine": "Apple M4 Pro, 14 logical cores, 24 GiB, macOS 26.5.2 (25F84)",
     "profile": "D",
     "mode": "release",
-    "desktopAdmitted": false,
+    "desktopAdmitted": true,
     "evidenceProblems": [],
     "rows": {
       "warm-viewport-frame": {
@@ -333,27 +333,27 @@
       },
       "input-acknowledgment": {
         "outcome": "pass-limited",
-        "value": 33.63500000536442
+        "value": 32.775000005960464
       },
       "progressive-first-viewport": {
         "outcome": "pass-limited",
-        "value": 674.6000000089407
+        "value": 703.1599999964237
       },
       "import-expanded-throughput": {
         "outcome": "pass",
-        "value": 59.456525894764596
+        "value": 58.81691944321908
       },
       "import-cell-throughput": {
         "outcome": "pass",
-        "value": 913826.1901988834
+        "value": 903995.6607818605
       },
       "main-owned-memory": {
         "outcome": "pass",
-        "value": 23558032
+        "value": 46802547
       },
       "worker-owned-memory": {
         "outcome": "pass",
-        "value": 239833502
+        "value": 239836026
       },
       "bitmap-retained": {
         "outcome": "pass",
@@ -361,6 +361,12 @@
       }
     },
     "superseded": [
+      {
+        "results": "docs/validation/interactive-viewer-viewer-chrome-r4.json",
+        "hash": "b15c7e15462eecc48a75e78205622c13a4e63f3967320b1f30472fd269162966",
+        "commit": "ac4c1cd3f5578c679fc6150b8012a8166528d4e4",
+        "note": "r4: admitted under the round-2 evaluator (post-close floor, fixed 2 MiB tolerance, timer-released replies); it has no warmed-host baseline and does not validate under the round-3 rules."
+      },
       {
         "results": "docs/validation/interactive-viewer-viewer-chrome-r3.json",
         "hash": "3374da7ab4a5ffc6df55c15a073a239b00ab11c869f7efa9ba209ab4e83e0040",
@@ -380,6 +386,6 @@
         "note": "r1: input acknowledgment miss (header sort 11,897-13,316 ms)."
       }
     ],
-    "note": "r4 was admitted under the round-2 evaluator; it carries no warmed-host baseline, so it does not validate under the round-3 attribution rule (pending r5)."
+    "note": "S10.2 viewer receipt, desktop D admitted. Main peak from the lifetime-charged main-thread ledger; every forced-GC live sample above an independently warmed host is covered, allowance = measured probe noise. Mobile rows not-run (no physical iPad, user decision). Recorded on a shared machine; re-run the release command on a quiet machine."
   }
 }
