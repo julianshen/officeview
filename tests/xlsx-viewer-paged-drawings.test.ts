@@ -293,4 +293,3 @@ describe('paged drawing reads: parse reuse and the document node budget', () => 
     await source.release()
   })
 })
-
