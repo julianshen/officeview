@@ -123,6 +123,7 @@ Every package is implemented on its own branch, reviewed by at least one agent f
 | S8.6 sort performance (`sortPrefix.ts`, `sortPrepared.ts`, `sortText.ts`, compact prepared columns, batched cooperative checks) | merged (codex implementation; Claude reviews over two rounds); every frozen threshold met in Chrome, thresholds/budgets unchanged |
 | S10.3 accessibility/keyboard/capability verification | merged; VoiceOver/Safari/iPad not run (manual steps recorded) |
 | S13 integrator documentation (README "Interactive spreadsheet viewer", PLAN.md) | merged (codex draft; opencode reviews over two rounds, APPROVE); other S13 release gates open |
+| S13.1 worker bootstrap packaging fix; S13.2 paged drawings parity + 44px narrow-column touch actions (release-audit fixes) | merged 2026-10-13 (S13.1: codex impl, Claude+opencode reviews; S13.2: Claude impl, opencode 3 rounds; all findings fixed) |
 | S11/S12 decided not-run (decision records `docs/architecture/xlsx-wasm-decision.md`, `xlsx-gpu-decision.md`; evidence is desktop Chrome (headless) only; S10.2 receipt pending merge; revisit on Safari/mobile receipts) | decided, not executed (optional boundary) |
 | S10.2 (in progress: 12/13 desktop Chrome rows pass, header-sort acknowledgment fix under way), (physical-device receipts skipped for now by user decision), S13 release review | not started / in progress as noted |
 
@@ -738,6 +739,8 @@ Import file-size, compressed/inflated-byte and storage quotas are explicit in th
 - [ ] If admitted, ship feature-detected fallback and rerun S10/default corpus/backend comparisons. A backend cannot become default before its decision receipt and complete fallback verification.
 
 ## S13 — Independent release review, documentation and readiness decision
+
+> **Status (2026-10-13):** release-audit fixes S13.1 merged (937f567: the `officeview/worker` bootstrap survives production consumer builds via `sideEffects: ["./dist/worker.js"]`, README Vite `worker.format: 'es'`, consumer-build regression test; codex implementation, Claude and opencode reviews, APPROVE) and S13.2 merged (02c6ad2: worker-backed paged sheets paint the same drawings as resident sheets with bounded, charged transfers and visible diagnostics; coarse-pointer columns under 44 px get a 44×44 header-corner action disclosure; Claude implementation, opencode reviews over three rounds, APPROVE). S13.3 (worker query bridges, 120 s deadline), S10.2, native Excel and S13 manual checks are in progress.
 
 > **Status (2026-10-12):** integrator documentation merged (bb4d8de; codex draft, opencode reviews over two rounds, every finding fixed). The release-review, gate and readiness bullets remain open.
 
