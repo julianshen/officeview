@@ -106,6 +106,32 @@ describe('interactive sheet viewport (S5.2)', () => {
     expect(h.last().prefetched).toBeGreaterThan(0)
   })
 
+  // S10.2: a costly ring (wrapped non-ASCII text measured 33 ms frames in
+  // Chrome) must not paint as one long task. Prefetch pauses between tiles once
+  // its time slice is spent, and the resumed batch keeps ONE detail budget, so
+  // the finished batch paints exactly what the unsliced batch painted.
+  it('prefetch pauses between ring tiles when its slice is spent and resumes the same batch', async () => {
+    const doc = await workbook()
+    const whole = await mountSheet(doc)
+    const expected = { prefetched: whole.h.last().prefetched, prefetchRecords: whole.h.last().prefetchRecords, tiles: whole.h.last().tiles }
+    whole.ui.unmount()
+    // Every clock read advances 20 ms: each slice is spent after one tile.
+    let now = 0
+    const clock = vi.spyOn(performance, 'now').mockImplementation(() => (now += 20))
+    const h = harness()
+    try {
+      render(<InteractiveSheetDoc doc={doc} onFrame={h.onFrame} />)
+      await waitFor(() => expect(h.last()?.basePaints ?? 0).toBeGreaterThan(0))
+      for (let i = 0; i < 60 && h.last().prefetched < expected.prefetched; i++) await act(async () => { await new Promise(resolve => setTimeout(resolve, 0)) })
+      await settle()
+    } finally { clock.mockRestore() }
+    // Consecutive reports never jump by more than one prefetched tile: one tile per slice.
+    const steps = h.frames.map(f => f.prefetched)
+    expect(Math.max(...steps.slice(1).map((v, i) => v - steps[i]))).toBe(1)
+    expect(steps.filter((v, i) => i > 0 && v > steps[i - 1]).length).toBe(expected.prefetched)
+    expect({ prefetched: h.last().prefetched, prefetchRecords: h.last().prefetchRecords, tiles: h.last().tiles }).toEqual(expected)
+  })
+
   it('scrolling issues bounded requests and revisiting cached tiles paints no base cells', async () => {
     const doc = await workbook()
     const { ui, h } = await mountSheet(doc)

@@ -176,6 +176,8 @@ interface SheetEntry {
 }
 /** Fallback pane when the host has not laid the viewer out (jsdom, hidden tab). */
 const FALLBACK_PANE = { width: 640, height: 400 }
+/** Prefetch slice: leaves most of a 16.7 ms frame to input and presentation. */
+const PREFETCH_SLICE_MS = 6
 
 function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): ReactElement {
   const { doc, docId, views, watermark, fallbackFonts, allowCopy = true, allowPrint = true, showSearch = true, showZoomControls = true } = props
@@ -421,8 +423,18 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
     if (!ctx) return
     biasRef.current = renderer.present(ctx, frame).bias
     report()
-    // Bounded adjacent prefetch after the visible frame is up.
-    const timer = setTimeout(() => { renderer.prefetch(frame); report() }, 0)
+    // Bounded adjacent prefetch after the visible frame is up, in slices of at
+    // most PREFETCH_SLICE_MS so a costly ring never blocks a frame; the batch
+    // (and its single detail budget) resumes until done or superseded.
+    const batch = renderer.beginPrefetch(frame)
+    let timer: ReturnType<typeof setTimeout>
+    const step = () => {
+      const until = performance.now() + PREFETCH_SLICE_MS
+      const done = renderer.prefetchSlice(batch, () => performance.now() >= until)
+      report()
+      if (!done) timer = setTimeout(step, 0)
+    }
+    timer = setTimeout(step, 0)
     return () => clearTimeout(timer)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [identityKey, scroll, viewport, dpr, assets, surfaceBytes, profile, mark, loadTick, entry?.structureGen])

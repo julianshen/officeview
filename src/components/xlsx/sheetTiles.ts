@@ -110,6 +110,9 @@ export function createCanvasTile(): CanvasTile {
   }
 }
 
+/** A resumable prefetch batch (see SheetTileRenderer.prefetchSlice). */
+export interface PrefetchBatch { readonly frame: SheetFrame; readonly budget: FrameBudget; painted: number; records: number; done: boolean }
+
 export class SheetTileRenderer {
   readonly stats: SheetTileStats = { basePaints: 0, tileHits: 0, prefetched: 0, refused: 0, lastRequests: [], peakBitmapBytes: 0, frameRecords: 0, frameGridlines: 0, prefetchRecords: 0, maxTileRecords: 0, pendingTiles: 0 }
   readonly budgetBytes: number
@@ -176,21 +179,37 @@ export class SheetTileRenderer {
 
   /** Paint up to `limit` missing ring tiles (bounded adjacent prefetch). */
   prefetch(frame: SheetFrame, limit = Number.POSITIVE_INFINITY): number {
+    const batch = this.beginPrefetch(frame)
+    this.prefetchSlice(batch, () => false, limit)
+    return batch.painted
+  }
+  /** Prefetch is its own bounded batch with its own per-frame budget; a batch
+   * may be painted in slices (S10.2) and keeps that ONE budget across them. */
+  beginPrefetch(frame: SheetFrame): PrefetchBatch {
+    return { frame, budget: frameBudgetFor(this.profile), painted: 0, records: 0, done: false }
+  }
+  /** Paints ring tiles in order until the batch ends or `shouldYield` asks to
+   * pause (checked only after a tile painted in this slice, so every slice
+   * progresses). Returns true once the batch is done. */
+  prefetchSlice(batch: PrefetchBatch, shouldYield: () => boolean, limit = Number.POSITIVE_INFINITY): boolean {
+    if (batch.done) return true
+    const { frame } = batch
     const { visible, ring } = this.ranges(frame)
-    // Prefetch is its own bounded batch with its own per-frame budget.
-    const budget = frameBudgetFor(this.profile)
-    let painted = 0, records = 0
+    let paintedNow = 0
     for (const { col, row } of prefetchTiles(visible, ring)) {
-      if (painted >= limit) break
+      if (batch.painted >= limit) break
       if (this.cache.get(this.key(frame, col, row))) continue
-      const tile = this.tile(frame, col, row, false, budget)
-      records += tile.surface.cost?.records ?? 0
+      if (paintedNow > 0 && shouldYield()) { this.stats.prefetchRecords = batch.records; return false }
+      const tile = this.tile(frame, col, row, false, batch.budget)
+      batch.records += tile.surface.cost?.records ?? 0
+      paintedNow++
       if (!tile.retained) { tile.surface.close(); break }
-      painted++
+      batch.painted++
       this.stats.prefetched++
     }
-    this.stats.prefetchRecords = records
-    return painted
+    batch.done = true
+    this.stats.prefetchRecords = batch.records
+    return true
   }
 
   dispose(): void { this.cache.dispose() }
