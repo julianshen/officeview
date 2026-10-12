@@ -909,6 +909,65 @@ the orchestrator decision). Order of work: inventory, then `workbook.xml`/rels/`
 (possible because of random access), then sheets by workbook order; the first pages are committed to the sink while
 `completeness` is still `'loading'`. No whole-file `ArrayBuffer`, no whole-part string, no tree.
 
+### 4.4.1 Oversized values and construction memory (S13.4, spec §4.3.4 and §12.4)
+
+**Blob records.** A page stores text in one UTF-16 text lane (`sourcePages.ts`). A value whose stored bytes, 2 per UTF-16 code
+unit, exceed the 64 KiB inline soft threshold (`ImportLimits.inlineStringSoftBytes`, exported as `INLINE_TEXT_SOFT_BYTES`) does
+not go in that lane. `PageBuilder.add` *spills* it:
+
+- The record keeps its kind (`K_TEXT`/`K_ERROR`) and its `F_ERROR` flag, gets `F_BLOB = 8`, and holds the value's ordinal in its
+  number lane. It adds no text units, so `PageBuilder.bytes` stays the exact encoded page size and the page stays bounded.
+- The page cut counts spilled bytes too (`bytes + spilledBytes >= targetPageBytes`), so oversized values cannot pile up behind
+  one page.
+- `SourcePageStore.commit` writes each value as its own record (`blob/<id>`, encoded like a one-string shared-string chunk) in the
+  same page backend, **before** the page. It then rewrites the ordinal to the document-wide blob id, so a committed page never
+  references a missing record. A record holds one value, so the tokenizer's `maxTokenChars` (1 Mi code units) caps it at
+  about 2 MiB.
+- Blob records are charged to the ledger's `blobRecords` pool. That pool is now storage-backed: running out is a typed `quota`
+  refusal, and the importer abandons the store as it does for pages.
+- Cleanup:
+  - Cancel and close remove the records with every page (`removeAll`).
+  - A page that fails after writing some of its records deletes them one by one (`PageBackend.delete`: memory map delete, OPFS
+    `removeEntry`, IndexedDB key delete). This covers a memory refusal, a parse error, a storage failure or a partial record left
+    by a failed write. The store also releases their charges and the summary charge and restores the ordinals, so storage, ledger
+    and pool return to their state before the page. A record the backend cannot delete keeps its charge.
+- Reads: `PagedXlsxSheetAdapter.valueOf` is the only place that turns a record into a value. It resolves `F_BLOB` through
+  `SourcePageStore.blob(id)`, which uses the same decoded cache as pages (pool `source` tier, coalesced, evictable, reloaded
+  identically). Cells, rows, scans, column lanes (value index and filters), find, copy and worker reads therefore see the same
+  raw UTF-16 value, lone surrogates included.
+
+**Units.** The spill threshold is in stored bytes. Admission (`admission.ts` `checkCaps`) compares the same field to the
+longest string's *character* count to route a file to the object or the paged path. That routing is unchanged: a string between
+32 Ki and 64 Ki characters can be object-admitted, and on the paged path it would spill.
+
+**Shared strings are not spilled.** A shared string over 64 KiB stays inline in its 4,096-string SST chunk. Shared strings
+follow §4.3.5 (integer ids, chunked paged payloads, bounded decoded LRU); §4.3.4's blob records cover values held by pages.
+
+**Construction memory** (`constructionMemory.ts`). Import and index construction memory is charged to the document
+`MemoryPool`. Each charge is made before the allocation it covers:
+
+- **Short-lived shares** (`pool.charge()`, released on completion, failure and cancel): the builder's arrays, built pages waiting
+  for their commit, pending shared-string chunks, and encode scratch for page, blob and string-chunk buffers.
+- **Lasting entry:** page summaries, one non-evictable `source`-tier entry per sheet.
+- **Refusal:** a pool that cannot fit a share throws `PackageError('resource-limit', …, reason 'memory-budget')`. The import ends
+  `incomplete` with the `import-memory-budget` diagnostic instead of over-allocating.
+- **Estimates, not heap measurements:**
+
+  | Item | Charge |
+  |---|---|
+  | Builder record | 64 B, plus 2 B per code unit of inline and spilled text, 2 B per formula-meta JSON character, 96 B per meta object |
+  | Built page waiting for commit | `payloadBytes` of its lanes plus its spilled values |
+  | Encode scratch | the exact buffer plus the meta JSON |
+  | Pending shared string | 2 B per code unit plus 32 B |
+  | Page summary | 192 B |
+
+  The meta JSON is built just before its charge. It is bounded by the metadata the page share already covers. S10 should
+  check these figures against a profile.
+- **Before the viewer exists:** the document pool exists only once the viewer session binds it, after the first page committed.
+  Until then a store charges a stand-in pool of the profile's worker budget (D 512 MiB, M 256 MiB). `bindMemory` moves every live
+  charge into the document pool and closes the stand-in. If the document pool cannot hold them, the bind does not throw (the
+  session must open); the import's next construction charge refuses with the typed failure.
+
 ### 4.5 Entry-point wiring and user-flagged items
 
 `loadOfficeFile(source, options)` and `<OfficeFile>` keep their signatures. Classification has two levels: a **hint** from the
