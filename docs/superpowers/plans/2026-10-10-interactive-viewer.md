@@ -122,7 +122,8 @@ Every package is implemented on its own branch, reviewed by at least one agent f
 | S3.3 parser structural metadata (`anchorRecords.ts`, `drawingBounds.ts`, spill footprints) | merged; drawing/dynamic-array sheets sort and filter when the band is clear |
 | S8.6 sort performance (`sortPrefix.ts`, `sortPrepared.ts`, `sortText.ts`, compact prepared columns, batched cooperative checks) | merged (codex implementation; Claude reviews over two rounds); every frozen threshold met in Chrome, thresholds/budgets unchanged |
 | S10.3 accessibility/keyboard/capability verification | merged; VoiceOver/Safari/iPad not run (manual steps recorded) |
-| S10.2 (in progress), (physical-device receipts skipped for now by user decision), S11/S12 status, S13 | not started / in progress as noted |
+| S13 integrator documentation (README "Interactive spreadsheet viewer", PLAN.md) | merged (codex draft; opencode reviews over two rounds, APPROVE); other S13 release gates open |
+| S10.2 (in progress: 12/13 desktop Chrome rows pass, header-sort acknowledgment fix under way), (physical-device receipts skipped for now by user decision), S11/S12 status, S13 release review | not started / in progress as noted |
 
 ## S0 — Freeze contracts, counterexamples and fixture/harness infrastructure
 
@@ -732,6 +733,8 @@ Import file-size, compressed/inflated-byte and storage quotas are explicit in th
 - [ ] If admitted, ship feature-detected fallback and rerun S10/default corpus/backend comparisons. A backend cannot become default before its decision receipt and complete fallback verification.
 
 ## S13 — Independent release review, documentation and readiness decision
+
+> **Status (2026-10-12):** integrator documentation merged (bb4d8de; codex draft, opencode reviews over two rounds, every finding fixed). The release-review, gate and readiness bullets remain open.
 
 **Files:** update `README.md`, `PLAN.md`, `docs/validation/interactive-viewer.md`, `interactive-viewer-performance.md`; optional approved decision docs from S11/S12; no new runtime scope.
 
