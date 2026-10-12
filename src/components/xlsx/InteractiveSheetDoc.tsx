@@ -719,9 +719,15 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
 
   // Keep the native scroller on the window's physical segment (Go To, keys, recenter).
   const syncing = useRef(false)
+  // The window the latest native scroll event produced. Committing it must not
+  // write the scroller back: the user may have scrolled further while the commit
+  // was pending, and writing the older position would revert that motion (its own
+  // scroll event then arrives as an echo and is dropped), losing every other step.
+  const nativeWindow = useRef<ScrollWindow | null>(null)
   useLayoutEffect(() => {
     const el = scrollerRef.current
     if (!el || !scroll) return
+    if (scroll === nativeWindow.current) return
     if (Math.abs(el.scrollLeft - scroll.physicalPosition.x) >= 0.5 || Math.abs(el.scrollTop - scroll.physicalPosition.y) >= 0.5) {
       syncing.current = true
       el.scrollLeft = scroll.physicalPosition.x
@@ -732,7 +738,10 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
     const el = scrollerRef.current
     if (!el || !entry || !scroll) return
     if (syncing.current) { syncing.current = false; if (Math.abs(el.scrollLeft - scroll.physicalPosition.x) < 0.5 && Math.abs(el.scrollTop - scroll.physicalPosition.y) < 0.5) return }
-    setWindow(activeSheetId, scrollPhysicalTo(scroll, entry.metrics, viewport, { x: el.scrollLeft, y: el.scrollTop }))
+    const next = scrollPhysicalTo(scroll, entry.metrics, viewport, { x: el.scrollLeft, y: el.scrollTop })
+    // A recentered window moved its physical segment: that one must be written.
+    nativeWindow.current = Math.abs(next.physicalPosition.x - el.scrollLeft) < 0.5 && Math.abs(next.physicalPosition.y - el.scrollTop) < 0.5 ? next : null
+    setWindow(activeSheetId, next)
   }
 
   // ---- zoom: Ctrl/Cmd+wheel, pinch and keys, about an anchor ----

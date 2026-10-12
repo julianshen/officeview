@@ -126,6 +126,29 @@ describe('interactive sheet viewport (S5.2)', () => {
     expect(h.last().basePaints).toBe(painted)
   })
 
+  // S10.2 reproduced in Chrome: under sustained scroll the commit for one native
+  // scroll event wrote that (older) position back to the scroller, reverting the
+  // motion that arrived meanwhile; its echo event was then dropped, so every
+  // other scroll step was lost and the viewer presented at half the frame rate.
+  it('committing a native scroll never reverts a newer native position that arrived before the commit', async () => {
+    const doc = await workbook()
+    const { ui, h } = await mountSheet(doc)
+    const el = scroller(ui)
+    // One act: the event for 600 is handled, then the user scrolls on to 1200
+    // before React commits the window built from 600.
+    act(() => { el.scrollTop = 600; fireEvent.scroll(el); el.scrollTop = 1200 })
+    expect(el.scrollTop).toBe(1200)
+    await settle()
+    // The newer position's own event is not mistaken for an echo: it moves the view.
+    const hits = h.last().tileHits, paints = h.last().basePaints
+    act(() => { fireEvent.scroll(el) })
+    await settle()
+    expect(el.scrollTop).toBe(1200)
+    expect(h.last().tileHits + h.last().basePaints).toBeGreaterThan(hits + paints)
+    const frame = h.last().lastRequests
+    for (const box of frame) expect(box.y + box.height).toBeGreaterThan(1200)
+  })
+
   it('Ctrl+wheel and keyboard zoom change absolute SheetZoom and request tiles at the new scale', async () => {
     const doc = await workbook()
     const { ui, h } = await mountSheet(doc)
