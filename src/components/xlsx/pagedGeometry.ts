@@ -15,13 +15,15 @@ export function pagedSheetGeometry(remote: RemoteWorkbook, sheetId: string, orde
   const axes = remote.geometry(sheetId)
   const store = remote.store(sheetId)
   const merges = remote.merges(sheetId).merges
+  const drawings = remote.drawings(sheetId)
   return Object.freeze({
     kind: 'ready' as const,
     metrics: createSheetMetrics({ rows: axes.rows, cols: axes.cols, order, visibility }),
-    diagnostics: Object.freeze([]),
+    diagnostics: Object.freeze([...drawings.diagnostics]),
     cellsOf: (sourceRow: number) => store.cellsOf(sourceRow),
     merges: RectangleIndex.build(merges.map(range => ({ rect: { r0: range.minRow, r1: range.maxRow, c0: range.minCol, c1: range.maxCol }, value: range }))),
-    // The paged reader keeps no drawing parts.
-    drawingsIn: () => [],
+    // S13.2: drawing content read from the worker once the sheet is complete
+    // (read at query time, so an evicted payload is not pinned by this geometry).
+    drawingsIn: (...query: Parameters<SheetGeometry['drawingsIn']>) => drawings.drawingsIn(...query),
   })
 }

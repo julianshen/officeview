@@ -52,6 +52,8 @@ import { guardFilter, guardSort, type GuardOutcome } from '../xlsx/view/operatio
 import { MemoryPool, WORKER_BUDGETS, type PoolEntry } from '../xlsx/view/tileCache'
 import { INITIAL_GENERATION as INITIAL_VALUE_GEN, isUint32Array, validateBitset } from './viewerProtocol'
 import { LaneBuilder } from '../xlsx/view/source'
+import { unavailableDrawings } from '../xlsx/view/drawingPayload'
+import type { ReadOptions, SheetDrawings } from '../xlsx/view/contracts'
 import { BOUNDED_SORT_LANES, type BoundedSortLaneStore } from '../xlsx/view/sortLanes'
 import { PREPARED_SORT_READER, type PreparedSortStore, type PreparedSortLease } from '../xlsx/view/sortPrepared'
 import { compactPreparedPage, preparedRowAt, preparedMetadataAt, visitPreparedRows, PREPARED_PAGE_ENTRIES, PREPARED_PAGE_OVERHEAD, PREPARED_ENCODING_OVERHEAD, TAG_NULL, TAG_NUMBER, TAG_STRING, TAG_BOOLEAN, F_CACHED_SET, F_CACHED, F_ERROR_SET, F_ERROR, F_PROV_ENGINE, F_PROV_CACHED, F_UNAVAILABLE, type PreparedPage } from './preparedColumn'
@@ -95,6 +97,11 @@ export const failure = (code: SourceFailure['code'], message: string, retryable 
   Object.freeze({ code, retryable, message })
 /** §4.1 column page ordering violation; the session never stages such lanes. */
 const UNORDERED_PAGE = failure('page-error', 'Column pages must cover requested rows in ascending, contiguous order')
+/** S13.2: a store that cannot serve drawing content says so (a visible
+ * diagnostic on the main thread), never an empty drawing layer. */
+function readSheetDrawings(store: SourceStore, options: ReadOptions, profile: ProfileId): Promise<SheetDrawings> {
+  return store.readDrawings ? store.readDrawings(options, profile) : Promise.resolve(unavailableDrawings('This source cannot serve drawing content; drawings are not shown'))
+}
 export function failedPage<T>(stamp: SourceStamp, error: SourceFailure): Page<T> {
   return { items: [], completeness: 'incomplete', stamp, error }
 }
@@ -1750,6 +1757,7 @@ export class DocumentSession {
     const options = { signal, stamp: { ...store.stamp } }
     let result: SourceReadResult
     switch (query?.op) {
+      case 'drawings': result = { op: 'drawings', result: await readSheetDrawings(store, options, this.options.profile ?? 'D') }; break
       case 'cell': result = { op: 'cell', read: await store.readCell(query.at, options) }; break
       case 'rows': result = { op: 'rows', page: await store.readRows(query.range, query.cursor, options) }; break
       case 'structural': result = { op: 'structural', result: await store.queryStructural(query.rect, options) }; break

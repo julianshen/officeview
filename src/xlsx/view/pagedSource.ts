@@ -29,6 +29,8 @@ import {
 import { addRecord, answerOverview, emptyAggregate, mergeAggregate, type AggregateOutcome } from '../storage/overviewIndex'
 import { isValueUnavailable, SAVED_VALUES_DIAGNOSTIC, SAVED_VALUES_STATUS, valueAuthority, valueStatus } from './values'
 import type { PagedImportSession, PagedSheet, PagedWorkbook } from '../storage/pagedImport'
+import type { ProfileId, SheetDrawings } from './contracts'
+import { unavailableDrawings } from './drawingPayload'
 
 type RowStatus = { kind: 'ready' } | { kind: 'unknown'; pageId: string } | { kind: 'error'; failure: SourceFailure }
 
@@ -53,7 +55,7 @@ export class PagedXlsxSheetAdapter implements SourceStore {
   readonly valuePolicy: ValuePolicy = 'cached'
   private released = false
   private drawingCache?: DrawingAnchor[]
-  constructor(readonly stamp: SourceStamp, private readonly workbook: PagedWorkbook, private readonly sheet: PagedSheet) {}
+  constructor(readonly stamp: SourceStamp, private readonly workbook: PagedWorkbook, private readonly sheet: PagedSheet, private readonly drawingPayloadBytes?: number) {}
 
   get extent(): SourceStore['extent'] {
     const used = this.sheet.state === 'complete' ? this.sheet.used : undefined
@@ -414,6 +416,35 @@ export class PagedXlsxSheetAdapter implements SourceStore {
     return this.drawingCache
   }
 
+  /** S13.2: the sheet's drawing content, read on demand once its metadata is final. */
+  async readDrawings(options: ReadOptions, profile: ProfileId): Promise<SheetDrawings> {
+    const error = this.guard(options)
+    if (error) return unavailableDrawings(`Drawings could not be read: ${error.message}`, error)
+    if (this.sheet.state !== 'complete') {
+      const pending = this.sheet.failure ? ended(this.sheet.failure)! : failure('incomplete', 'The sheet is still loading', true)
+      return unavailableDrawings(`Drawings are not available yet: ${pending.message}`, pending)
+    }
+    const meta = this.sheet.metadata
+    if (!meta.drawingIds.length && !meta.legacyDrawingIds?.length) return { completeness: 'complete', drawings: [], images: [], diagnostics: [], bytes: 0 }
+    const controller = new AbortController()
+    const abort = () => controller.abort()
+    options.signal.addEventListener('abort', abort, { once: true })
+    this.workbook.parts.signal.addEventListener('abort', abort, { once: true })
+    try {
+      const { loadPagedSheetDrawings, pagedDrawingLimits } = await import('../storage/pagedDrawings')
+      const geometry = buildGeometry(meta.rowHeights.map(h => ({ index: h.row, heightPt: h.heightPt })), meta.cols, meta.hiddenRows, { hiddenCols: true })
+      return await loadPagedSheetDrawings(this.workbook.parts, { name: this.sheet.name, partPath: this.sheet.partPath, drawingIds: meta.drawingIds, legacyDrawingIds: meta.legacyDrawingIds },
+        geometry, pagedDrawingLimits(profile, this.drawingPayloadBytes), controller.signal)
+    } catch (cause) {
+      if (controller.signal.aborted) return unavailableDrawings('Drawing read cancelled', failure('cancelled', 'Request cancelled', true))
+      const message = cause instanceof Error ? cause.message : String(cause)
+      return unavailableDrawings(`Drawings could not be read: ${message}`, failure(cause instanceof PackageError ? cause.code : 'parse-error', message))
+    } finally {
+      options.signal.removeEventListener('abort', abort)
+      this.workbook.parts.signal.removeEventListener('abort', abort)
+    }
+  }
+
   async queryOverview(request: OverviewQuery, options: ReadOptions): Promise<Page<OverviewGroup>> {
     const error = this.guard(options)
     if (error) return failedPage(this.stamp, error)
@@ -487,7 +518,11 @@ async function waitFor(workbook: PagedWorkbook, signal: AbortSignal | undefined)
 }
 
 /** WorkbookSource over a paged import session; release() ends the session and removes its pages. */
-export function createPagedWorkbookSource(session: PagedImportSession): WorkbookSource {
+export interface PagedSourceOptions {
+  /** Drawing transfer budget override (tests, embedders); default drawingPayloadBudget(profile). */
+  drawingPayloadBytes?: number
+}
+export function createPagedWorkbookSource(session: PagedImportSession, options: PagedSourceOptions = {}): WorkbookSource {
   const { workbook } = session
   const stores = new Map<string, PagedXlsxSheetAdapter>()
   const geometries = new Map<string, SheetGeometry>()
@@ -499,7 +534,7 @@ export function createPagedWorkbookSource(session: PagedImportSession): Workbook
   const storeFor = (sheetId: string): PagedXlsxSheetAdapter => {
     let store = stores.get(sheetId)
     if (!store) {
-      store = new PagedXlsxSheetAdapter(Object.freeze({ docId: workbook.docId, sheetId, valueGen: INITIAL_GENERATION }), workbook, find(sheetId))
+      store = new PagedXlsxSheetAdapter(Object.freeze({ docId: workbook.docId, sheetId, valueGen: INITIAL_GENERATION }), workbook, find(sheetId), options.drawingPayloadBytes)
       stores.set(sheetId, store)
     }
     return store
