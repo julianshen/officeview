@@ -43,7 +43,8 @@ const F2_VIEWPORT_SAMPLES = 10
 const EARLY_MISS_SAMPLES = 5
 /** Filter apply + clear re-admits the 1M-row range per sample: fewer, labelled samples. */
 const FILTER_APPLY_SAMPLES = 10
-const MEMORY_SESSION_LIMIT_MS = 6 * 60_000
+const MEMORY_SESSION_LIMIT_MS = 10 * 60_000
+const RECOVERY_CYCLES = 10
 
 type W = Window & { __viewerPerf: ViewerPerf }
 /** Runs a closure-free function against window.__viewerPerf in the page. */
@@ -371,6 +372,29 @@ async function memorySession(context: BrowserContext, base: string, fixture: Vie
   await bounded('viewer close', perf(page, p => p.close()), 30_000)
   await new Promise(resolve => setTimeout(resolve, 500))
   const closed = await checkpoint('closed')
+  // Repeated open/close (F2: open, scroll, header sort, close): post-GC main heap
+  // owned after each close. A real retention grows per cycle; engine slack
+  // (compiled code, script sources, timeline buffers) levels off.
+  const cycles: (number | null)[] = []
+  if (ops === 'f2') {
+    for (let i = 0; i < RECOVERY_CYCLES; i++) {
+      await openFixture(page, fixture)
+      await waitComplete(page)
+      await page.evaluate(() => (window as unknown as W).__viewerPerf.scrollRun({ warmup: 0, frames: 60, dx: 0, dy: 60 }))
+      const header = page.getByRole('columnheader', { name: /^Column G/ })
+      const before = await header.getAttribute('aria-sort')
+      await page.getByRole('button', { name: 'Cycle sort column G' }).click()
+      await page.waitForFunction(({ before }) => {
+        const h = [...document.querySelectorAll('[role=columnheader]')].find(x => /^Column G/.test(x.getAttribute('aria-label') ?? x.textContent ?? ''))
+        return (h?.getAttribute('aria-sort') ?? null) !== before
+      }, { before }, { timeout: 120_000 }).catch(() => {})
+      await bounded('cycle close', perf(page, p => p.close()), 30_000)
+      for (let k = 0; k < 3; k++) { await bounded('cycle gc', gcMain()); await new Promise(resolve => setTimeout(resolve, 200)) }
+      const h = await bounded('cycle heap', heap())
+      cycles.push(h && baseline.heapBytes !== null ? heapBytes(h) - baseline.heapBytes : null)
+    }
+    log(`      recovery cycles (MiB owned after each close): ${cycles.map(v => (v === null ? 'n/a' : (v / 2 ** 20).toFixed(2))).join(' ')}`)
+  }
   await page.close()
   const owned = (c: typeof baseline) => (c.heapBytes !== null && baseline.heapBytes !== null ? c.heapBytes - baseline.heapBytes : null)
   const ledgerPeak = Math.max(0, ...polls.map(p => p.workerPeak ?? 0), ...[loaded, afterOps].map(c => (c.worker && c.worker.kind === 'stats' ? c.worker.sessions[0]?.memory.peakBytes ?? 0 : 0)))
@@ -388,6 +412,7 @@ async function memorySession(context: BrowserContext, base: string, fixture: Vie
     browserProcessRss: { note: 'RSS of every launched browser process (all tabs/GPU/utility); informational, outside the app pools', baseline: baseline.browserProcessRssBytes, loaded: loaded.browserProcessRssBytes, afterOps: afterOps.browserProcessRssBytes, closed: closed.browserProcessRssBytes },
     recovery: {
       mainAfterCloseBytes: owned(closed),
+      cyclesMainOwnedBytes: cycles,
       canvasAfterClose: closed.canvas,
       workersCreated: closed.frame.workersCreated,
       workersTerminated: closed.frame.workersTerminated,
