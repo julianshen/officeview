@@ -103,6 +103,8 @@ export interface ViewerPerf {
    * checkpoint, so harness records are not read as viewer memory; returns how
    * many records were dropped. */
   dropInstrumentation(): { wire: number }
+  /** Layout-shift entries the page has buffered so far (null: API missing). */
+  layoutShifts(): number | null
   workerStats(): Promise<PerfReply | null>
   workerGc(): Promise<boolean>
   /** Dedicated importer pass over #perf-import-file in a fresh perf worker (the viewer is not involved). */
@@ -124,6 +126,15 @@ let presentLog: { at: number; pending: number; records: number }[] | null = null
 let wheelLog: number[] | null = null
 document.addEventListener('wheel', event => { wheelLog?.push(event.timeStamp) }, { capture: true, passive: true })
 let lastCounters: PresentCounters | null = null
+// Layout-shift entries the page's performance timeline buffers (capped at 150
+// by spec; page-owned, not the viewer's): counted so the memory gate can
+// exclude exactly their measured growth. null where the API is missing.
+let layoutShiftEntries: number | null = null
+const LAYOUT_SHIFT_BUFFER = 150
+try {
+  new PerformanceObserver(list => { layoutShiftEntries = (layoutShiftEntries ?? 0) + list.getEntries().length }).observe({ type: 'layout-shift', buffered: true })
+  layoutShiftEntries = 0
+} catch { layoutShiftEntries = null }
 
 const state: ViewerPerf = {
   booted: false,
@@ -149,6 +160,7 @@ const state: ViewerPerf = {
   ackWait: () => pendingAck ?? Promise.reject(new Error('no acknowledgment probe armed')),
   mainLedger: () => currentLedger?.snapshot() ?? null,
   dropInstrumentation() { const wire = state.wire.length; state.wire = []; return { wire } },
+  layoutShifts: () => layoutShiftEntries === null ? null : Math.min(layoutShiftEntries, LAYOUT_SHIFT_BUFFER),
   calibrateDom,
   calibrateGrid,
   workerStats: () => probe(currentWorker, { __perf: 'stats' }),

@@ -379,7 +379,8 @@ async function memorySession(context: BrowserContext, base: string, fixture: Vie
       ?? { peakBitmapBytes: 0, bitmapBytes: null, budgetBytes: null, workersCreated: -1, workersTerminated: -1 }
     const ledger = await bounded(`${name} main ledger`, perf(page, p => p.mainLedger()))
     const code = await bounded(`${name} code bytes`, codeBytes(`cp-${name}`), 180_000)
-    return { name, instrumentation, heap: h, heapBytes: medianHeap, heapReadings, codeBytes: code, ledger, worker, uasm: uasmSplit((uasm ?? { unavailable: 'probe timed out' }) as Uasm), canvas, storage, frame, browserProcessRssBytes: browserProcessRss() }
+    const layoutShifts = await bounded(`${name} layout shifts`, perf(page, p => p.layoutShifts()))
+    return { name, instrumentation, heap: h, heapBytes: medianHeap, heapReadings, codeBytes: code, layoutShifts, ledger, worker, uasm: uasmSplit((uasm ?? { unavailable: 'probe timed out' }) as Uasm), canvas, storage, frame, browserProcessRssBytes: browserProcessRss() }
   }
   // Warmed host, established independently of the measured session: the same
   // page opens a small paged workbook (F2 at smoke scale), runs the same code
@@ -426,6 +427,7 @@ async function memorySession(context: BrowserContext, base: string, fixture: Vie
     if (h && typeof ledger === 'number') warmOpen.push({ heapBytes: heapBytes(h), ledgerBytes: ledger })
   }
   const warmOpenCode = await bounded('warm open code bytes', codeBytes('warm-open'), 180_000)
+  const warmOpenLayoutShifts = await bounded('warm open layout shifts', perf(page, p => p.layoutShifts()))
   await bounded('warm close', perf(page, p => p.close()), 30_000)
   const warmHostSamples: number[] = []
   for (let i = 0; i < WARM_HOST_SAMPLES; i++) {
@@ -434,6 +436,7 @@ async function memorySession(context: BrowserContext, base: string, fixture: Vie
     if (h) warmHostSamples.push(heapBytes(h))
   }
   const warmCode = await bounded('warm code bytes', codeBytes('warm'), 180_000)
+  const warmLayoutShifts = await bounded('warm layout shifts', perf(page, p => p.layoutShifts()))
   const baseline = await checkpoint('baseline')
   // Peak sampling during open/import (no forced GC: an upper bound, garbage included).
   const polls: { t: number; heapBytes: number | null; workerPeak: number | null; workerRetained: number | null }[] = []
@@ -551,7 +554,7 @@ async function memorySession(context: BrowserContext, base: string, fixture: Vie
   }
   log(`    memory ${fixture.key}: main ledger peak ${mib(afterOps.ledger?.peakBytes ?? null)}; main owned ${mib(summary.mainOwnedBytes)} (forced-GC live max ${mib(liveHeapSamples.length && baseline.heapBytes !== null ? Math.max(...liveHeapSamples) - baseline.heapBytes : null)} over ${liveHeapSamples.length} samples; peak no-GC ${mib(summary.mainPeakNoGcBytes)}), worker ledger ${mib(ledgerPeak)} / UASM ${mib(summary.workerUasmBytes)}, bitmap ${mib(summary.bitmapPeakBytes)}; after close main ${mib(summary.recovery.mainAfterCloseBytes)}, workers ${summary.recovery.workersTerminated}/${summary.recovery.workersCreated} terminated, canvases ${closed.canvas.count}`)
   if (diagnose) writeFileSync(`${process.env.VIEWER_SUITE_LIVE_DIAG}-${fixture.key}.json`, JSON.stringify({ warm: warmHostSamples, liveDiag }))
-  return { summary, warmHost: { fixture: warmFixture.key, scale: warmFixture.scale, samples: warmHostSamples, empty: warmEmptySamples, open: warmOpen, codeBytes: warmCode, openCodeBytes: warmOpenCode }, checkpoints: { baseline, loaded, afterOps, closed }, polls, liveHeapSamples, liveSampleMs: LIVE_SAMPLE_MS, timeouts }
+  return { summary, warmHost: { fixture: warmFixture.key, scale: warmFixture.scale, samples: warmHostSamples, empty: warmEmptySamples, open: warmOpen, codeBytes: warmCode, openCodeBytes: warmOpenCode, layoutShifts: warmLayoutShifts, openLayoutShifts: warmOpenLayoutShifts }, checkpoints: { baseline, loaded, afterOps, closed }, polls, liveHeapSamples, liveSampleMs: LIVE_SAMPLE_MS, timeouts }
 }
 
 // ---- formatting ----------------------------------------------------------------

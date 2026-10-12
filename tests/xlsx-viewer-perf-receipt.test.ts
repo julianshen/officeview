@@ -7,7 +7,7 @@ import { describe, expect, it } from 'vitest'
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import {
-  ACK_CENSORED_MS, RELEASE_IDENTITY, SCROLL_CENSORED_MS, classifyPresent, finalizeReceipt, importThroughput, pairInputsToPresents, summarize, validateReceipt, verifyReceipt,
+  ACK_CENSORED_MS, LAYOUT_SHIFT_ENTRY_BYTES, RELEASE_IDENTITY, SCROLL_CENSORED_MS, classifyPresent, finalizeReceipt, importThroughput, pairInputsToPresents, summarize, validateReceipt, verifyReceipt,
   type EvidenceContext, type ReceiptDraft, type ViewerReceipt,
 } from '../src/debug/harness/viewerPerf'
 
@@ -95,7 +95,7 @@ const readingsAround = (h: number, spread = 40 * 1024) => [h - spread / 2, h, h 
 /** Shifts a checkpoint's reading and every repeated reading by `bytes`. */
 const bump = (cp: any, bytes: number) => { cp.heapBytes += bytes; if (cp.heapReadings) cp.heapReadings = cp.heapReadings.map((v: number) => v + bytes) }
 const checkpoint = (heapBytes: number, workerPeak: number, ledgerPeak: number) => ({
-  heapBytes, heapReadings: readingsAround(heapBytes), codeBytes: CODE, ledger: ledgerAt(ledgerPeak), worker: { kind: 'stats', sessions: [{ memory: { peakBytes: workerPeak } }] },
+  heapBytes, heapReadings: readingsAround(heapBytes), codeBytes: CODE, layoutShifts: 3, ledger: ledgerAt(ledgerPeak), worker: { kind: 'stats', sessions: [{ memory: { peakBytes: workerPeak } }] },
   uasm: { available: true, worker: workerPeak, canvas: 40 * MiB }, frame: { peakBitmapBytes: 100 * MiB, workersCreated: 1, workersTerminated: 0 },
   canvas: { count: 2, bytes: 1 }, storage: { usage: 200 * MiB, quota: 1e10 },
 })
@@ -103,11 +103,11 @@ const checkpoint = (heapBytes: number, workerPeak: number, ledgerPeak: number) =
 const WARM = [5 * MiB - 20 * 1024, 5 * MiB, 5 * MiB + 20 * 1024, 5 * MiB - 10 * 1024, 5 * MiB + 10 * 1024]
 const memorySession = (cycles: number[] | null) => ({
   // The warm document open and idle: 0.5 MiB of heap above the closed warm host outside its ledger.
-  warmHost: { fixture: 'F2', scale: 'F2 reduced', samples: [...WARM], empty: [4 * MiB, 4 * MiB, 4 * MiB], open: Array.from({ length: 3 }, () => ({ heapBytes: 15 * MiB, ledgerBytes: 9.5 * MiB })), codeBytes: CODE, openCodeBytes: CODE },
+  warmHost: { fixture: 'F2', scale: 'F2 reduced', samples: [...WARM], empty: [4 * MiB, 4 * MiB, 4 * MiB], open: Array.from({ length: 3 }, () => ({ heapBytes: 15 * MiB, ledgerBytes: 9.5 * MiB })), codeBytes: CODE, openCodeBytes: CODE, layoutShifts: 3, openLayoutShifts: 3 },
   checkpoints: {
     baseline: { heapBytes: 5 * MiB, storage: { usage: 0, quota: 1e10 } },
     loaded: checkpoint(20 * MiB, 200 * MiB, 18 * MiB), afterOps: checkpoint(25 * MiB, 220 * MiB, 26 * MiB),
-    closed: { heapBytes: 5 * MiB, heapReadings: readingsAround(5 * MiB), codeBytes: CODE, ledger: ledgerAt(26 * MiB, 0), uasm: { available: true, worker: 0, canvas: 0 }, frame: { workersCreated: 1, workersTerminated: 1, peakBitmapBytes: 100 * MiB }, canvas: { count: 0, bytes: 0 }, storage: { usage: 0, quota: 1e10 } },
+    closed: { heapBytes: 5 * MiB, heapReadings: readingsAround(5 * MiB), codeBytes: CODE, layoutShifts: 3, ledger: ledgerAt(26 * MiB, 0), uasm: { available: true, worker: 0, canvas: 0 }, frame: { workersCreated: 1, workersTerminated: 1, peakBitmapBytes: 100 * MiB }, canvas: { count: 0, bytes: 0 }, storage: { usage: 0, quota: 1e10 } },
   },
   summary: { recovery: { cyclesMainOwnedBytes: cycles } },
   polls: [{ workerPeak: 210 * MiB }], timeouts: [], liveHeapSamples: [12 * MiB, 30 * MiB, 18 * MiB],
@@ -257,6 +257,32 @@ describe('evaluation from raw records', () => {
     expect(receipt.evidenceProblems.some(p => /memory\.F2\.closed: 2 repeated heap readings, below 5/.test(p))).toBe(true)
     expect(desktop(receipt, 'main-owned-memory').outcome).toBe('pending')
     expect(receipt.desktopAdmitted).toBe(false)
+  })
+
+  it('(r4-4) measured growth of the page\'s layout-shift entries is excluded exactly; a 1 MiB leak beside it is still refused', async () => {
+    const atEdge = () => { const d = validDraft(); for (const key of ['F2', 'F4']) (d.raw.memory as any)[key].checkpoints.loaded.ledger = ledgerAt(18 * MiB, 14.5 * MiB); return d }
+    const grown = atEdge()
+    for (const key of ['F2', 'F4']) { const cp = (grown.raw.memory as any)[key].checkpoints.loaded; cp.layoutShifts += 147; bump(cp, 147 * LAYOUT_SHIFT_ENTRY_BYTES) }
+    const grownReceipt = await finalizeReceipt(grown, ctx)
+    expect(grownReceipt.evidenceProblems).toEqual([])
+    expect(grownReceipt.measurements.memory.mainLayoutShiftBytes).toBe(147 * LAYOUT_SHIFT_ENTRY_BYTES)
+    const leak = atEdge()
+    for (const key of ['F2', 'F4']) { const cp = (leak.raw.memory as any)[key].checkpoints.loaded; cp.layoutShifts += 147; bump(cp, 147 * LAYOUT_SHIFT_ENTRY_BYTES + 1 * MiB) }
+    const leakReceipt = await finalizeReceipt(leak, ctx)
+    expect(leakReceipt.evidenceProblems.some(p => /uncharged main memory in F2 at the loaded checkpoint .* MiB of layout-shift entries/.test(p))).toBe(true)
+    expect(desktop(leakReceipt, 'main-owned-memory').outcome).toBe('pending')
+    expect(leakReceipt.desktopAdmitted).toBe(false)
+  })
+
+  it('(r4-4) a missing layout-shift entry count leaves the row pending', async () => {
+    for (const drop of [(d: any) => { delete d.F2.checkpoints.loaded.layoutShifts }, (d: any) => { delete d.F4.warmHost.layoutShifts }]) {
+      const d = validDraft()
+      drop(d.raw.memory)
+      const receipt = await finalizeReceipt(d, ctx)
+      expect(receipt.evidenceProblems.some(p => /no layout-shift entry count/.test(p))).toBe(true)
+      expect(desktop(receipt, 'main-owned-memory').outcome).toBe('pending')
+      expect(receipt.desktopAdmitted).toBe(false)
+    }
   })
 
   it('(r4-2) a missing compiled-code measurement is never silently excluded: the row is not admitted', async () => {
