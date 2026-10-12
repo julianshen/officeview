@@ -19,7 +19,7 @@ import { activeCell, cellIdOf, counts, ensureFixtures, goTo, openViewer, status 
 import { createFixture } from '../helpers/xlsx-viewer-fixtures'
 
 const ROOT = fileURLToPath(new URL('../..', import.meta.url))
-const BASE = 'http://127.0.0.1:4173'
+const BASE = `http://127.0.0.1:${process.env.IV_HARNESS_PORT ?? 4173}`
 const PAGE = '/src/debug/interactive-viewer.html'
 const identity = gitIdentity(ROOT)
 const label = commitLabel(identity)

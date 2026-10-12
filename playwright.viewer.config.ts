@@ -18,7 +18,10 @@ import { join } from 'node:path'
 
 // The identity marker, not the page: vite answers 200 + index.html for any path,
 // so only /__harness-id (JSON, checked again by the spec) proves which server this is.
-const HARNESS_ID_URL = 'http://127.0.0.1:4173/__harness-id'
+// IV_HARNESS_PORT moves the server off 4173 when another checkout holds it
+// (interactive-viewer.spec.ts reads the same variable for its identity check).
+const PORT = Number(process.env.IV_HARNESS_PORT ?? 4173)
+const HARNESS_ID_URL = `http://127.0.0.1:${PORT}/__harness-id`
 function msPlaywrightDir(): string {
   const override = process.env.PLAYWRIGHT_BROWSERS_PATH
   if (override) return override
@@ -53,12 +56,12 @@ export default defineConfig({
   retries: 0,
   reporter: [['list']],
   use: {
-    baseURL: 'http://127.0.0.1:4173',
+    baseURL: `http://127.0.0.1:${PORT}`,
     trace: 'retain-on-failure',
   },
   projects,
   webServer: {
-    command: 'bunx vite --config vite.harness.config.ts --port 4173 --strictPort --host 127.0.0.1',
+    command: `bunx vite --config vite.harness.config.ts --port ${PORT} --strictPort --host 127.0.0.1`,
     url: HARNESS_ID_URL,
     // A reused server is accepted only if the spec's identity check passes
     // (same commit and checkout); a stale or foreign server fails that check.
