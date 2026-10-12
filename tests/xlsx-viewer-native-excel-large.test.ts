@@ -14,7 +14,10 @@
  * Privacy edit: the only change from Excel's bytes is the removal of Excel's
  * optional `<mc:AlternateContent><mc:Choice Requires="x15"><x15ac:absPath …/>`
  * block from xl/workbook.xml; every other zip entry keeps its raw bytes and
- * order. Excel's original native-large.xlsx: 1,800,677 bytes, SHA-256
+ * order. It lives in fixtures/xlsx-viewer/large/ because the directory-wide
+ * sweeps of fixtures/xlsx-viewer/ (small-document load parity, full-cell
+ * adapter parity) are for documents inside the object caps; this one opens in
+ * compatibility mode there by design. Excel's original native-large.xlsx: 1,800,677 bytes, SHA-256
  * 61a30b0bf2227f94a71849a625c7690335d4ce5ba9184dbc937d339414af8852.
  */
 import { createHash } from 'node:crypto'
@@ -37,7 +40,7 @@ import type { WorkbookSource } from '../src/worker/viewerSession'
 import type { CellRead, SourceStore } from '../src/xlsx/view/contracts'
 import { hasFormula } from '../src/xlsx/view/values'
 
-const BYTES = new Uint8Array(readFileSync(join(__dirname, 'fixtures', 'xlsx-viewer', 'native-large.xlsx')))
+const BYTES = new Uint8Array(readFileSync(join(__dirname, 'fixtures', 'xlsx-viewer', 'large', 'native-large.xlsx')))
 const opts = (store: SourceStore) => ({ signal: new AbortController().signal, stamp: { ...store.stamp } })
 function cellOf(read: CellRead) {
   expect(read.kind, JSON.stringify(read)).toBe('cell')

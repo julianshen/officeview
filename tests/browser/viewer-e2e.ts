@@ -33,7 +33,7 @@ export const GENERATED_FIXTURES = {
 } as const
 export type FixtureName = keyof typeof GENERATED_FIXTURES | 'f1-small.xlsx' | 'f3sparse-small.xlsx' | 'f4-small.xlsx' | 'f5-small.xlsx' | 'f8-small.xlsx'
   /** S13: written by native Microsoft Excel (see tests/xlsx-viewer-native-excel.test.ts). */
-  | 'native-corner.xlsx' | 'native-1904.xlsx' | 'native-large.xlsx'
+  | 'native-corner.xlsx' | 'native-1904.xlsx' | 'large/native-large.xlsx'
 
 const num = (value: number, styleIndex = 0): FixtureCell => ({ value, hasCachedValue: true, valueIsError: false, styleIndex })
 const text = (value: string, styleIndex = 0): FixtureCell => ({ value, hasCachedValue: true, valueIsError: false, styleIndex })

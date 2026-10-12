@@ -594,7 +594,7 @@ test.describe('S10.1 real interactive viewer', () => {
   // S13: native-large.xlsx (Excel 16 for macOS, 200,001 cells) crosses the
   // object caps, so plain ?worker=1 (no debug override) opens it worker-backed.
   test('native Excel native-large.xlsx worker-backed without override: corners, date display, descending header sort', async ({ page }) => {
-    await openViewer(page, 'native-large.xlsx', { worker: true })
+    await openViewer(page, 'large/native-large.xlsx', { worker: true })
     expect(await page.evaluate(() => window.__viewerE2E!.workersCreated)).toBe(1)
     expect((await counts(page)).open).toBe(1)
     await expect(page.getByRole('status').filter({ hasText: 'Showing saved values' }).first()).toBeVisible()
