@@ -207,11 +207,12 @@ describe('S13.5 formatted display-text lane is prepared on demand', () => {
     const owner1 = {}, owner2 = {}
     let fills = 0
     const fill = async (sink: { add(offset: number, text: string): void }) => { fills++; sink.add(0, 'abc'); sink.add(2, 'abc'); sink.add(3, 'de') }
-    const lane = await lanes.lane({ ...key, styleOwner: owner1 }, fill)
+    const { lane, release } = await lanes.lease({ ...key, styleOwner: owner1 }, fill)
+    release()
     expect([lane.text(0), lane.text(1), lane.text(2), lane.text(3)]).toEqual(['abc', undefined, 'abc', 'de'])
-    await lanes.lane({ ...key, styleOwner: owner1 }, fill)
+    void (await lanes.lease({ ...key, styleOwner: owner1 }, fill)).release()
     expect(fills).toBe(1)
-    await lanes.lane({ ...key, styleOwner: owner2 }, fill)
+    void (await lanes.lease({ ...key, styleOwner: owner2 }, fill)).release()
     expect(fills).toBe(2)
     expect(lanes.size).toBe(1)
     // The worker evaluator's style owner is its style table: another table rebuilds.
@@ -228,21 +229,30 @@ describe('S13.5 formatted display-text lane is prepared on demand', () => {
   it('(4) lane bytes are charged exactly and released; the cache never exceeds its limit', async () => {
     const lanes = new DisplayTextLaneCache()
     const key = { docId: 'd', sheetId: '1', valueGen: 1, styleOwner: {}, col: 2, r0: 1, r1: 10 }
-    await lanes.lane(key, async sink => { sink.add(0, 'abc'); sink.add(1, 'abc'); sink.add(5, 'xy') })
+    void (await lanes.lease(key, async sink => { sink.add(0, 'abc'); sink.add(1, 'abc'); sink.add(5, 'xy') })).release()
     const expected = PREPARED_COLUMN_OVERHEAD + 10 * 4 + (3 * 2 + PREPARED_STRING_OVERHEAD) + (2 * 2 + PREPARED_STRING_OVERHEAD)
     expect(lanes.bytes).toBe(expected)
     lanes.invalidate()
     expect(lanes.bytes).toBe(0)
     // Typed refusal: a lane that cannot fit refuses with quota and holds nothing.
     const tiny = new DisplayTextLaneCache({ limitBytes: PREPARED_COLUMN_OVERHEAD + 40 + 10 })
-    const refusal = await tiny.lane(key, async sink => { sink.add(0, 'abcdefgh') }).catch(error => error)
+    const refusal = await tiny.lease(key, async sink => { sink.add(0, 'abcdefgh') }).catch(error => error)
     expect(refusal).toMatchObject({ name: 'ValueIndexError', code: 'quota', detail: { resource: 'memory', limitBytes: PREPARED_COLUMN_OVERHEAD + 50 } })
     expect(refusal.detail.requiredBytes).toBeGreaterThan(PREPARED_COLUMN_OVERHEAD + 50)
     expect(tiny.bytes).toBe(0)
     // A second lane evicts the least recently used one rather than exceeding the limit.
     const two = new DisplayTextLaneCache({ limitBytes: 2 * (PREPARED_COLUMN_OVERHEAD + 40) + 60 })
-    await two.lane({ ...key, col: 1 }, async sink => { sink.add(0, 'a') })
-    await two.lane({ ...key, col: 2 }, async sink => { sink.add(0, 'b') })
+    void (await two.lease({ ...key, col: 1 }, async sink => { sink.add(0, 'a') })).release()
+    const held = await two.lease({ ...key, col: 2 }, async sink => { sink.add(0, 'b') })
+    expect(two.size).toBe(1)
+    expect(two.bytes).toBeLessThanOrEqual(two.limitBytes)
+    // A leased lane is never evicted for room: the next build refuses instead.
+    const blocked = await two.lease({ ...key, col: 3 }, async sink => { sink.add(0, 'c') }).catch(error => error)
+    expect(blocked).toMatchObject({ code: 'quota' })
+    expect(held.lane.text(0)).toBe('b')
+    expect(two.size).toBe(1)
+    held.release()
+    void (await two.lease({ ...key, col: 3 }, async sink => { sink.add(0, 'c') })).release()
     expect(two.size).toBe(1)
     expect(two.bytes).toBeLessThanOrEqual(two.limitBytes)
   })

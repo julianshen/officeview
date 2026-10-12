@@ -30,8 +30,12 @@ export interface DisplayLaneKey { docId: string; sheetId: string; valueGen: numb
 /** Formatted text by body offset (row - r0); undefined for text/blank/error cells. */
 export interface DisplayTextLane { readonly bytes: number; text(offset: number): string | undefined }
 export interface DisplayLaneSink { add(offset: number, text: string): void }
+/** A retained outer-pool entry; `pin` shields it from pool eviction while leased. */
+export interface DisplayLanePoolEntry { release(): void; pin?(): () => void }
 /** Retains `bytes` under `key` in an outer pool; onRelease runs on its eviction/close. */
-export type DisplayLaneRetain = (key: string, bytes: number, onRelease: () => void) => { release(): void } | null
+export type DisplayLaneRetain = (key: string, bytes: number, onRelease: () => void) => DisplayLanePoolEntry | null
+/** A lane in use by one evaluation: it is not evicted for room until released. */
+export interface DisplayLaneLease { readonly lane: DisplayTextLane; release(): void }
 export interface DisplayLaneAdmission {
   /** Aggregate cap for this request (the session's prepared-column budget). */
   limitBytes?: number
@@ -51,7 +55,8 @@ interface Entry {
   key: DisplayLaneKey
   lane: DisplayTextLane
   bytes: number
-  pooled?: { release(): void }
+  pins: number
+  pooled?: DisplayLanePoolEntry
 }
 
 export class DisplayTextLaneCache {
@@ -72,7 +77,9 @@ export class DisplayTextLaneCache {
   get bytes(): number { return this.held }
   get size(): number { return this.entries.size }
 
-  async lane(key: DisplayLaneKey, fill: (sink: DisplayLaneSink) => Promise<void>, admission: DisplayLaneAdmission = {}): Promise<DisplayTextLane> {
+  /** The lane of `key`, built by `fill` when absent. Hold the lease for the
+   * evaluation that reads it and release it in a finally. */
+  async lease(key: DisplayLaneKey, fill: (sink: DisplayLaneSink) => Promise<void>, admission: DisplayLaneAdmission = {}): Promise<DisplayLaneLease> {
     if (this.closed) throw new ValueIndexError('cancelled', 'Display text lanes closed')
     const count = key.r1 - key.r0 + 1
     if (!Number.isSafeInteger(count) || count < 0) throw new RangeError('Invalid display lane band')
@@ -83,15 +90,15 @@ export class DisplayTextLaneCache {
     if (hit) {
       this.entries.delete(id)
       this.entries.set(id, hit)
-      return hit.lane
+      return this.pin(hit)
     }
     const limit = Math.min(this.limitBytes, admission.limitBytes ?? Infinity)
     let building = 0, committed = false
     const reserve = (bytes: number) => {
-      // Admission precedes allocation; LRU lanes make room before a refusal.
-      for (const [other] of this.entries) {
+      // Admission precedes allocation; unleased LRU lanes make room before a refusal.
+      for (const [other, entry] of [...this.entries]) {
         if (this.held + bytes <= limit) break
-        this.drop(other)
+        if (entry.pins === 0) this.drop(other)
       }
       if (this.held + bytes > limit) {
         throw new ValueIndexError('quota', `Formatted display text needs more than the ${limit}-byte prepared-column budget; narrow the filter range or use a values filter.`,
@@ -121,7 +128,7 @@ export class DisplayTextLaneCache {
       if (this.closed) throw new ValueIndexError('cancelled', 'Display text lanes closed')
       const bytes = building
       const lane: DisplayTextLane = { bytes, text: offset => { const index = ids[offset]; return index ? strings[index] : undefined } }
-      const entry: Entry = { key: { ...key }, lane, bytes }
+      const entry: Entry = { key: { ...key }, lane, bytes, pins: 0 }
       // A concurrent build of the same key is replaced, never double-charged.
       this.drop(id)
       if (admission.retain) {
@@ -132,7 +139,7 @@ export class DisplayTextLaneCache {
       this.entries.set(id, entry)
       committed = true
       this.builds++
-      return lane
+      return this.pin(entry)
     } catch (error) {
       if (!committed) this.held -= building
       throw error
@@ -145,6 +152,20 @@ export class DisplayTextLaneCache {
   close(): void {
     this.invalidate()
     this.closed = true
+  }
+  private pin(entry: Entry): DisplayLaneLease {
+    entry.pins++
+    const unpinPool = entry.pooled?.pin?.()
+    let done = false
+    return {
+      lane: entry.lane,
+      release: () => {
+        if (done) return
+        done = true
+        entry.pins--
+        unpinPool?.()
+      },
+    }
   }
   /** The single uncharge point of a retained lane (owner drop or pool release). */
   private drop(id: string): void {

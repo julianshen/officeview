@@ -9,13 +9,13 @@ import { compileValuesMembership, ValueIndexCache, valueScope, valueSourceFromSt
 import { CompactRowVisibility, createRowVisibility } from '../../xlsx/view/visibility'
 import { MemoryValueRunStore, VALUE_RUN_PAGE, type ValueRunStore } from '../../xlsx/view/valueRuns'
 import { StructuralIndex } from '../../xlsx/view/structure'
-import { DocumentSession, type OperationOutcome, type WorkbookSource, sameStamp } from '../../worker/viewerSession'
+import { DocumentSession, PREPARED_BUDGETS, type OperationOutcome, type WorkbookSource, sameStamp } from '../../worker/viewerSession'
 import { DisplayTextLaneCache, needsDisplayText } from '../../worker/displayTextLane'
 import { createControlsClient, type ControlSnapshot, type ControlsClient, type StagedControl, type ControlProgress, sameControlOwner } from './controlsClient'
 
 /** Document-owned committed keys survive port eviction. Both indexes and runs
  * share one bounded ledger; indexes are rebuildable, committed keys are not. */
-export interface ViewerControlResources { cache: ValueIndexCache; runs: ValueRunStore; dispose(): void }
+export interface ViewerControlResources { cache: ValueIndexCache; runs: ValueRunStore; dispose(): void; profile?: ProfileId }
 export function createViewerControlResources(profile: ProfileId = 'D'): ViewerControlResources {
   const cache = new ValueIndexCache({ limitBytes: (profile === 'M' ? 8 : 16) * 1024 * 1024 })
   const store = new MemoryValueRunStore({ limitBytes: 8 * 1024 * 1024, account: cache.reserve() })
@@ -32,7 +32,7 @@ export function createViewerControlResources(profile: ProfileId = 'D'): ViewerCo
     read: (...args) => store.read(...args),
     async release(ref) { refs.delete(ref.refId); await store.release(ref) },
   }
-  return { cache, runs, dispose() {
+  return { cache, runs, profile, dispose() {
     closed = true
     cache.invalidate()
     for (const ref of refs.values()) void store.release(ref)
@@ -54,7 +54,7 @@ export interface ViewerControlsOptions {
   /** Resolved style of a style id when the document carries no cells (worker-backed sheets). */
   styleOf?: (index: number) => XlsxCell['style']
   /** Display-text lane cache (S13.5; tests, embedders). Default: one per port,
-   * bounded by the desktop prepared-column budget, closed on dispose. */
+   * bounded by the resources' profile prepared-column budget, closed on dispose. */
   displayLanes?: DisplayTextLaneCache
 }
 export type RemoteViewCommit =
@@ -100,7 +100,7 @@ export async function viewerControls(options: ViewerControlsOptions, signal: Abo
     const value = page.numbers[index]
     return cellDisplayText(sheet, { value: tag === 3 ? Boolean(value) : value, style: styleAt(page.styles?.[index] ?? 0) })
   }
-  const lanes = options.displayLanes ?? new DisplayTextLaneCache()
+  const lanes = options.displayLanes ?? new DisplayTextLaneCache({ limitBytes: PREPARED_BUDGETS[resources.profile ?? 'D'].maxBytes })
   // The style resolver is this port's style owner: lanes key by its identity.
   const styleOwner: object = options.styleOf ?? styles
   const pages = async (owner: CacheIdentity, range: FilterRange, col: number, abort: AbortSignal, accept: (page: ValueLanePage, firstRow: number) => Promise<void> | void) => {
@@ -181,10 +181,10 @@ export async function viewerControls(options: ViewerControlsOptions, signal: Abo
         await classify(owner, filter.range, col, request)
         const domain = identity(owner, filter.range, col)
         const match = rule.kind === 'values' ? (await compileValuesMembership(rule, domain, runs, { signal: request })).matches : new FilterEngine(filterContext).compileRule(rule, domain.classification, { signal: request })
-        let lane
+        let lease
         try {
-          lane = rule.kind !== 'values' && needsDisplayText(rule, domain.classification)
-            ? await lanes.lane({ docId: owner.docId, sheetId: owner.sheetId, valueGen: owner.valueGen, styleOwner, col, r0, r1 }, sink => pages(owner, filter.range, col, request, async (page, first) => {
+          lease = needsDisplayText(rule, domain.classification)
+            ? await lanes.lease({ docId: owner.docId, sheetId: owner.sheetId, valueGen: owner.valueGen, styleOwner, col, r0, r1 }, sink => pages(owner, filter.range, col, request, async (page, first) => {
               for (let i = 0; i < page.count; i++) {
                 request.throwIfAborted()
                 const text = display(page, i)
@@ -197,13 +197,15 @@ export async function viewerControls(options: ViewerControlsOptions, signal: Abo
           if (error instanceof ValueIndexError && error.code === 'quota') return { kind: 'refused', refusal: { reason: 'resource-limit', message: error.message } }
           throw error
         }
-        await pages(owner, filter.range, col, request, async (page, first) => {
-          for (let i = 0; i < page.count; i++) {
-            request.throwIfAborted()
-            if (!match(prepared(page, i, lane?.text(first + i - r0)))) flags[first + i - filter.range.r0] = 0
-            if (cooperate?.due(1)) await cooperate.pause('filter')
-          }
-        })
+        try {
+          await pages(owner, filter.range, col, request, async (page, first) => {
+            for (let i = 0; i < page.count; i++) {
+              request.throwIfAborted()
+              if (!match(prepared(page, i, lease?.lane.text(first + i - r0)))) flags[first + i - filter.range.r0] = 0
+              if (cooperate?.due(1)) await cooperate.pause('filter')
+            }
+          })
+        } finally { lease?.release() }
       }
       return { kind: 'complete', matches: row => Boolean(flags[row - filter.range.r0]) }
     } })

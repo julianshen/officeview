@@ -92,8 +92,8 @@ export function createWorkerFilterEvaluator(keysFor: (stamp: SourceStamp) => Rea
         const match = rule.kind === 'values'
           ? (await compileValuesMembership(rule, identity, shippedRuns(keysFor(stamp)), { signal })).matches
           : new FilterEngine(context).compileRule(rule, classification, { signal })
-        const lane = rule.kind !== 'values' && needsDisplayText(rule, classification)
-          ? await lanes.lane({ ...stamp, styleOwner, col, r0, r1 }, sink => pages(store, stamp, col, r0, r1, signal, async (page, first) => {
+        const lease = needsDisplayText(rule, classification)
+          ? await lanes.lease({ ...stamp, styleOwner, col, r0, r1 }, sink => pages(store, stamp, col, r0, r1, signal, async (page, first) => {
             for (let i = 0; i < page.count; i++) {
               if (signal.aborted) throw new ValueIndexError('cancelled', 'Filter cancelled')
               const text = display(page, i)
@@ -102,13 +102,15 @@ export function createWorkerFilterEvaluator(keysFor: (stamp: SourceStamp) => Rea
             }
           }), displayLanes)
           : undefined
-        await pages(store, stamp, col, r0, r1, signal, async (page, first) => {
-          for (let i = 0; i < page.count; i++) {
-            if (signal.aborted) throw new ValueIndexError('cancelled', 'Filter cancelled')
-            if (!match(prepared(page, i, lane?.text(first + i - r0)))) flags[first + i - spec.range.r0] = 0
-            if (cooperate?.due(1)) await cooperate.pause('filter')
-          }
-        })
+        try {
+          await pages(store, stamp, col, r0, r1, signal, async (page, first) => {
+            for (let i = 0; i < page.count; i++) {
+              if (signal.aborted) throw new ValueIndexError('cancelled', 'Filter cancelled')
+              if (!match(prepared(page, i, lease?.lane.text(first + i - r0)))) flags[first + i - spec.range.r0] = 0
+              if (cooperate?.due(1)) await cooperate.pause('filter')
+            }
+          })
+        } finally { lease?.release() }
       }
     } catch (cause) {
       return outcome(cause, spec)

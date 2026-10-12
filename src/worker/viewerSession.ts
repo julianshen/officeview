@@ -209,7 +209,7 @@ export type FilterEvaluator = (input: {
   cooperate?: CooperativeSlice<string>
   /** S13.5 admission of an on-demand display-text lane: the prepared-column
    * budget, and retention in the worker pool (dropped on eviction/close). */
-  displayLanes?: { limitBytes: number; retain(key: string, bytes: number, onRelease: () => void): { release(): void } | null }
+  displayLanes?: { limitBytes: number; retain(key: string, bytes: number, onRelease: () => void): { release(): void; pin(): () => void } | null }
 }) => Promise<FilterEvaluation>
 export interface PreparedBudget { maxColumns: number; maxBytes: number }
 /** Prepared-column working set per admission profile (§12.4 worker pool). Mobile
