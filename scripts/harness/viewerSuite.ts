@@ -337,15 +337,16 @@ async function memorySession(context: BrowserContext, base: string, fixture: Vie
   const baseline = await checkpoint('baseline')
   // Peak sampling during open/import (no forced GC: an upper bound, garbage included).
   const polls: { t: number; heapBytes: number | null; workerPeak: number | null; workerRetained: number | null }[] = []
-  let polling = true
-  const poller = (async () => {
-    while (polling) {
-      const [h, w] = await Promise.all([bounded('poll heap', heap(), 10_000), bounded('poll worker stats', perf(page, p => p.workerStats()), 10_000)])
+  // Interval sampling with no join: a stop never waits on an in-flight sample.
+  let sampling = false
+  const sampler = setInterval(() => {
+    if (sampling) return
+    sampling = true
+    void Promise.all([bounded('poll heap', heap(), 10_000), bounded('poll worker stats', perf(page, p => p.workerStats()), 10_000)]).then(([h, w]) => {
       const session = w && w.kind === 'stats' ? w.sessions[0]?.memory : undefined
       polls.push({ t: Date.now(), heapBytes: h ? heapBytes(h) : null, workerPeak: session?.peakBytes ?? null, workerRetained: session?.retainedBytes ?? null })
-      await new Promise(r => setTimeout(r, 250))
-    }
-  })()
+    }, () => {}).finally(() => { sampling = false })
+  }, 250)
   await openFixture(page, fixture)
   await waitComplete(page)
   const loaded = await checkpoint('loaded')
@@ -366,10 +367,9 @@ async function memorySession(context: BrowserContext, base: string, fixture: Vie
     await dialog.getByRole('button', { name: 'Cancel' }).click()
   }
   const afterOps = await checkpoint('after-ops')
-  polling = false
-  await poller
-  await perf(page, p => p.close())
-  await page.waitForTimeout(500)
+  clearInterval(sampler)
+  await bounded('viewer close', perf(page, p => p.close()), 30_000)
+  await new Promise(resolve => setTimeout(resolve, 500))
   const closed = await checkpoint('closed')
   await page.close()
   const owned = (c: typeof baseline) => (c.heapBytes !== null && baseline.heapBytes !== null ? c.heapBytes - baseline.heapBytes : null)
@@ -445,6 +445,7 @@ export async function runViewerSuite(ctx: SuiteContext): Promise<{ receipt: View
     return context
   }
   // Diagnostic iteration only (never in release): VIEWER_SUITE_ONLY=memory,ack …
+  if (process.env.VIEWER_SUITE_HEARTBEAT) setInterval(() => log(`  heartbeat ${new Date().toISOString().slice(11, 19)}`), 30_000).unref()
   const only = args.mode === 'release' ? null : process.env.VIEWER_SUITE_ONLY?.split(',') ?? null
   const want = (name: string) => only === null || only.includes(name)
   const profileId = args.profile === 'desktop' ? 'D' : 'M'

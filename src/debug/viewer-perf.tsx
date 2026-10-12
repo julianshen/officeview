@@ -417,6 +417,9 @@ function PerfPage(): JSX.Element {
       const hadWorker = currentWorker !== null
       setFile(null)
       input.value = ''
+      // Instrumentation residue must not count as viewer memory after close.
+      state.wire = []
+      state.lastFrame = null
       const started = performance.now()
       const wait = () => {
         if (!hadWorker || state.workersTerminated > terminated || performance.now() - started > 5000) resolve()
