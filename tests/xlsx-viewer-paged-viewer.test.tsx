@@ -86,10 +86,18 @@ describe('S5.4 routing: interactiveSheets mounts the worker-backed viewer for pa
   it('opens a paged admission in the worker (no main-thread parse, shell document) and shows notices once', async () => {
     const mainPlanner = vi.spyOn(viewportPlanner, 'planViewport')
     const h = workerHarness()
+    // Hold worker viewport replies: paint must fall back to the main-thread
+    // planner (S13.3 review round 2) instead of waiting on plans that never land.
+    h.hold(command => command.kind === 'viewport')
     const factory = vi.fn(() => h.port)
     const ui = render(<OfficeFile data={workbook()} interactiveSheets viewerWorker={factory} />)
     await waitFor(() => expect(ui.getByRole('gridcell', { name: /alpha/ })).toBeTruthy())
-    expect(mainPlanner).not.toHaveBeenCalled()
+    // The main-thread planner is the fallback, not the painter: it runs while
+    // worker plans are still pending, and must paint the same records (the
+    // previous never-called assertion encoded the exclusive-plans design that
+    // left blank cells "Loading…" forever).
+    expect(mainPlanner).toHaveBeenCalled()
+    act(() => h.release())
     expect(factory).toHaveBeenCalledTimes(1)
     const open = h.posted.find(command => command.kind === 'open')
     expect(open?.kind === 'open' && open.source.kind).toBe('blob')
@@ -475,5 +483,79 @@ describe('S5.4 review: lifecycle and publication', () => {
     const result = await client.sort(owner(), { range: { r0: 0, r1: 1, c0: 0, c1: 0, headerRows: 0, totalsRows: 0 }, keys: [{ col: 0, order: 'asc' }], caseSensitive: false }, new AbortController().signal)
     expect(result).toEqual({ kind: 'stale' })
     expect(publish).not.toHaveBeenCalled()
+  })
+})
+
+describe('S13.3 review round 2, NIT-1: a search over an importing sheet catches up', () => {
+  it('re-runs a finished search once its incomplete sheets have loaded', async () => {
+    const h = workerHarness()
+    const ui = render(<OfficeFile data={workbook()} interactiveSheets viewerWorker={() => h.port} />)
+    await waitFor(() => expect(ui.getByRole('gridcell', { name: /alpha/ })).toBeTruthy())
+    const open = h.posted.find(command => command.kind === 'open')!
+    if (open.kind !== 'open') throw new Error('Expected open command')
+    const store = h.kernel.session(open.docId)!.source.store('1')
+    // The first search sees the sheet's structure still importing.
+    const structural = store.queryStructural.bind(store)
+    vi.spyOn(store, 'queryStructural').mockImplementationOnce(async (rect, options) => ({ ...(await structural(rect, options)), completeness: 'incomplete' }))
+    const searches = () => h.posted.filter(command => command.kind === 'search').length
+    fireEvent.change(ui.getByRole('searchbox', { name: 'Search document' }), { target: { value: 'alpha' } })
+    // The sheet is already loaded on the main side, so the incomplete page is
+    // re-run and the "still loading" qualifier goes away instead of sticking.
+    await waitFor(() => expect(searches()).toBe(2))
+    await waitFor(() => expect(ui.container.textContent).toMatch(/1 of 1/))
+    expect(ui.container.textContent).not.toMatch(/some sheets still loading/)
+    expect(store.queryStructural).toHaveBeenCalledTimes(2)
+    await act(async () => { await new Promise(resolve => setTimeout(resolve, 50)) })
+    expect(searches(), 'one refresh, not a loop').toBe(2)
+    ui.unmount()
+  })
+})
+
+describe('S13.3 review round 2: worker tile plans keep row-cache semantics and warm paint', () => {
+  const viewportCommands = (h: ReturnType<typeof workerHarness>) => h.posted.filter(command => command.kind === 'viewport').length
+  const settled = async (ui: ReturnType<typeof render>, f: ReturnType<typeof frames>) => {
+    await waitFor(() => expect(ui.getByRole('gridcell', { name: /alpha/ })).toBeTruthy())
+    await waitFor(() => expect(f.last()?.pendingTiles).toBe(0))
+  }
+
+  it('MAJOR-1: blank visible cells read as blank, not Loading, once their rows are known', async () => {
+    const h = workerHarness(), f = frames()
+    const ui = render(<OfficeFile data={workbook()} interactiveSheets viewerWorker={() => h.port} {...internal({ onFrame: f.onFrame })} />)
+    await settled(ui, f)
+    // C1, D1, E1… are authored blank: once the bounded row reads land they are
+    // known blanks, never a permanent "Loading…".
+    await waitFor(() => expect(ui.queryAllByRole('gridcell', { name: /Loading/ })).toHaveLength(0))
+    const blank = ui.getAllByRole('gridcell').find(cell => /\bC1\b/.test(cell.getAttribute('aria-label') ?? cell.textContent ?? ''))
+    expect(blank, 'C1 is a visible gridcell').toBeTruthy()
+    expect(blank!.getAttribute('aria-label') ?? blank!.textContent).not.toMatch(/Loading/)
+    expect(h.reads('rows')).toBeGreaterThan(0)
+    ui.unmount()
+  })
+
+  it('MAJOR-2: ring tiles are prefetched and retained over the row cache', async () => {
+    const h = workerHarness(), f = frames()
+    const ui = render(<OfficeFile data={workbook()} interactiveSheets viewerWorker={() => h.port} {...internal({ onFrame: f.onFrame })} />)
+    await settled(ui, f)
+    await waitFor(() => expect(f.last()?.prefetched ?? 0).toBeGreaterThan(0))
+    const visible = f.last()!.lastRequests.length
+    expect(f.last()!.tiles.tiles).toBeGreaterThan(visible)
+    ui.unmount()
+  })
+
+  it('MAJOR-2: a warm area repaints at a new zoom with no viewport command and no pending tile', async () => {
+    const h = workerHarness(), f = frames()
+    const ui = render(<OfficeFile data={workbook()} interactiveSheets viewerWorker={() => h.port} {...internal({ onFrame: f.onFrame })} />)
+    await settled(ui, f)
+    await act(async () => { await new Promise(resolve => setTimeout(resolve, 20)) })
+    const commands = viewportCommands(h), seen = f.all.length
+    // Zooming in shows a subset of the rows already read: every visible tile
+    // is new (the tile cache is per zoom) but the row cache proves it.
+    act(() => { fireEvent.click(ui.getByRole('button', { name: 'Zoom in' })) })
+    await waitFor(() => expect(f.all.length).toBeGreaterThan(seen))
+    const first = f.all.slice(seen).find(stats => stats.zoom !== f.all[seen - 1].zoom)
+    expect(first, 'a frame at the new zoom').toBeTruthy()
+    expect(first!.pendingTiles, 'the first frame at the new zoom paints every tile at once').toBe(0)
+    expect(viewportCommands(h), 'tiles the row cache proves never ask the worker').toBe(commands)
+    ui.unmount()
   })
 })

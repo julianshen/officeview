@@ -1,13 +1,36 @@
 /** Worker-owned bounded tile planning; host-owned canonical text layout/paint.
  * Plans share the existing wire byte cap and are charged to the main ledger.
- * Only visible tiles request work; ring tiles may reuse an already loaded plan. */
+ * Tiles the row cache already proves never ask the worker (tilePlanSource);
+ * visible tiles request first and ring tiles only within a reserved share. */
 import type { CacheIdentity, LogicalViewport, ViewportResult } from '../../xlsx/view/contracts'
-import type { RemoteWorkbook } from '../../worker/viewerRemoteSource'
+import type { RemoteWorkbook, RemoteSheetStore } from '../../worker/viewerRemoteSource'
 import { queryPayloadBytes, WORKER_QUERY_BYTES } from '../../worker/viewerQueryBudget'
 import { emptyWork, type CellPlacement, type ViewportPlan } from '../../xlsx/view/viewport'
+import type { ProjectedSheetMetrics } from '../../xlsx/view/projection'
 import { formatA1 } from '../../xlsx/view/coordinates'
+import { TILE_DEVICE_PX, TILE_PREFETCH_RING } from '../../xlsx/view/tileCache'
 
 const pending = (): ViewportPlan => ({ kind: 'pending', diagnostics: [] })
+/** Four tile requests consume at most the profile's per-frame page budget
+ * (§11.1: 8 pages per tile, 32 per frame on D). */
+const MAX_IN_FLIGHT = 4
+/** Ring (prefetch) tiles may use only this many of those slots, so a visible
+ * tile always finds room. */
+const RING_IN_FLIGHT = 2
+/** At most this many tile entries (plans, failures, requests) are retained. */
+const MAX_ENTRIES = 32
+/** A retryable tile failure expires after a backoff that doubles per
+ * consecutive failure of the same tile, bounded by the maximum. */
+export const PLAN_RETRY_MS = 250
+export const PLAN_RETRY_MAX_MS = 4000
+/** Whether a settled tile outcome may be re-requested: anything but an
+ * explicitly terminal failure (a cancelled read, a timeout, a stale owner or a
+ * page error can clear; an error with retryable: false cannot). */
+function retryableOutcome(out: unknown): boolean {
+  if (typeof out !== 'object' || out === null) return true
+  if ((out as { kind?: string }).kind === 'error') return (out as { retryable?: boolean }).retryable !== false
+  return true
+}
 interface Entry { plan?: ViewportPlan; bytes: number; controller: AbortController; timer?: ReturnType<typeof setTimeout> }
 let serial = 0
 export class WorkerViewportPlans {
@@ -18,13 +41,21 @@ export class WorkerViewportPlans {
   private closed = false
   private readonly ledgerOwner = `viewport-plans:${++serial}`
   constructor(private readonly remote: RemoteWorkbook) {}
+  /** Retryable failures per tile key, for the backoff (bounded like entries). */
+  private readonly failures = new Map<string, number>()
   beginFrame(owner: CacheIdentity, window: LogicalViewport): void {
     this.select(owner, window)
-    const box = window.box
+    // Requests and failures off the pane and its prefetch ring are obsolete;
+    // settled plans stay until the byte/entry caps or a scope change.
+    const reach = TILE_PREFETCH_RING * TILE_DEVICE_PX / (window.zoom * window.deviceScale)
+    const box = { x: window.box.x - reach, y: window.box.y - reach, width: window.box.width + 2 * reach, height: window.box.height + 2 * reach }
     for (const [key, entry] of [...this.entries]) {
       if (entry.plan?.kind === 'detail' && !entry.plan.pending?.length && !entry.timer || entry.plan?.kind === 'coarse') continue
       const tile = JSON.parse(key) as LogicalViewport['box']
-      if (tile.x >= box.x + box.width || tile.x + tile.width <= box.x || tile.y >= box.y + box.height || tile.y + tile.height <= box.y) this.drop(key, entry)
+      if (tile.x >= box.x + box.width || tile.x + tile.width <= box.x || tile.y >= box.y + box.height || tile.y + tile.height <= box.y) {
+        this.drop(key, entry)
+        this.failures.delete(key)
+      }
     }
   }
   private select(owner: CacheIdentity, window: LogicalViewport): string {
@@ -32,14 +63,22 @@ export class WorkerViewportPlans {
     if (scope !== this.scope) { this.clear(); this.scope = scope }
     return scope
   }
+  /** Forgets a tile the row cache now proves: its plan (and bytes) or its
+   * request are no longer needed. */
+  release(owner: CacheIdentity, window: LogicalViewport): void {
+    if (this.closed) return
+    this.select(owner, window)
+    const key = JSON.stringify(window.box), entry = this.entries.get(key)
+    if (entry) this.drop(key, entry)
+    this.failures.delete(key)
+  }
   get(owner: CacheIdentity, window: LogicalViewport, extent: { width: number; height: number }, visible: boolean): ViewportPlan {
     if (this.closed || this.remote.isClosed) return pending()
     const scope = this.select(owner, window)
     const key = JSON.stringify(window.box), existing = this.entries.get(key)
     if (existing) { this.entries.delete(key); this.entries.set(key, existing); return existing.plan ?? pending() }
-    // Four tile requests consume at most the profile's per-frame page budget.
-    if (!visible || this.inFlight >= 4) return pending()
-    if (this.entries.size >= 32) {
+    if (this.inFlight >= (visible ? MAX_IN_FLIGHT : RING_IN_FLIGHT)) return pending()
+    if (this.entries.size >= MAX_ENTRIES) {
       const oldest = [...this.entries].find(([, e]) => e.plan)
       if (oldest) this.drop(oldest[0], oldest[1])
       else return pending()
@@ -47,16 +86,19 @@ export class WorkerViewportPlans {
     const entry: Entry = { bytes: 0, controller: new AbortController() }
     this.entries.set(key, entry)
     this.inFlight++
-    void this.remote.viewport(this.remote.identity(owner.sheetId), window, entry.controller.signal, 'tile').then(out => {
+    // The request carries the frame owner its plan is stored under: a plan for
+    // a newer worker view would otherwise be cached as this frame's (MINOR-3).
+    void this.remote.viewport(owner, window, entry.controller.signal, 'tile').then(out => {
       if (this.closed || this.remote.isClosed || scope !== this.scope || this.entries.get(key) !== entry || entry.controller.signal.aborted) return
       if (typeof out !== 'object' || out.kind !== 'complete') {
-        entry.plan = { kind: 'diagnostic', diagnostics: typeof out === 'object' ? out.diagnostics : [] }
+        this.fail(key, entry, typeof out === 'object' ? out.diagnostics : [], retryableOutcome(out))
         return
       }
+      this.failures.delete(key)
       if (out.result.content.kind === 'detail') this.remote.store(owner.sheetId).adoptViewport(out.result.content.cells)
       const plan = this.decode(out.result, extent)
       const bytes = queryPayloadBytes(plan, WORKER_QUERY_BYTES[this.remote.profile])
-      while (this.bytes + bytes > WORKER_QUERY_BYTES[this.remote.profile] || this.entries.size > 32) {
+      while (this.bytes + bytes > WORKER_QUERY_BYTES[this.remote.profile] || this.entries.size > MAX_ENTRIES) {
         const oldest = [...this.entries].find(([k, e]) => k !== key && e.plan)
         if (!oldest) break
         this.drop(oldest[0], oldest[1])
@@ -76,8 +118,25 @@ export class WorkerViewportPlans {
       if (out.result.completeness !== 'complete' && (!out.result.error || out.result.error.retryable) && this.remote.loadState(owner.sheetId).completeness !== 'incomplete') entry.timer = setTimeout(() => {
         if (this.entries.get(key) === entry) { this.drop(key, entry); this.remote.notify() }
       }, 100)
-    }).catch(() => { if (this.entries.get(key) === entry) entry.plan = { kind: 'diagnostic', diagnostics: [{ code: 'page-error', message: 'Viewport query failed' }] } }).finally(() => { this.inFlight--; if (!this.closed) this.remote.notify() })
+    }).catch(() => {
+      if (!this.closed && this.entries.get(key) === entry) this.fail(key, entry, [{ code: 'page-error', message: 'Viewport query failed' }], true)
+    }).finally(() => { this.inFlight--; if (!this.closed) this.remote.notify() })
     return pending()
+  }
+  /** A failed tile shows its diagnostic; a retryable one expires after a
+   * bounded backoff and the repaint that follows asks again (MINOR-2), so a
+   * transient timeout or page error does not stick while the tile stays on
+   * screen. A terminal failure stays until the tile leaves or the scope changes. */
+  private fail(key: string, entry: Entry, diagnostics: ViewportPlan['diagnostics'], retryable: boolean): void {
+    entry.plan = { kind: 'diagnostic', diagnostics }
+    if (!retryable) return
+    const attempt = (this.failures.get(key) ?? 0) + 1
+    this.failures.delete(key)
+    this.failures.set(key, attempt)
+    if (this.failures.size > MAX_ENTRIES) this.failures.delete(this.failures.keys().next().value as string)
+    entry.timer = setTimeout(() => {
+      if (this.entries.get(key) === entry) { this.drop(key, entry); this.remote.notify() }
+    }, Math.min(PLAN_RETRY_MAX_MS, PLAN_RETRY_MS * 2 ** (attempt - 1)))
   }
   private decode(result: ViewportResult, extent: { width: number; height: number }): ViewportPlan {
     const cells = result.content.kind === 'detail' ? result.content.cells : []
@@ -99,6 +158,31 @@ export class WorkerViewportPlans {
     this.bytes -= entry.bytes
     this.remote.mainLedger.set('layout', this.ledgerOwner, this.bytes)
   }
-  private clear(): void { for (const [key, entry] of [...this.entries]) this.drop(key, entry) }
+  private clear(): void { for (const [key, entry] of [...this.entries]) this.drop(key, entry); this.failures.clear() }
   dispose(): void { this.closed = true; this.clear() }
+}
+/** The frame's tile plan source (S13.3 review round 2). A tile the row cache
+ * already proves paints from the main-thread planner at once: no worker
+ * command, no wait (warm scroll and revisits, §12.2). A tile the row cache
+ * does not know asks the worker for its plan; until a detail plan lands it
+ * paints from the main-thread planner too, whose `pendingIn` requests the rows
+ * that make its cells (and the accessible grid) known, so a slow or failed
+ * plan never leaves blanks reading "Loading…" (MAJOR-1). Only a tile spanning
+ * more rows than the row cache may cover depends on the worker plan alone and
+ * shows its pending or diagnostic state. */
+export function tilePlanSource(options: {
+  store: RemoteSheetStore
+  metrics: ProjectedSheetMetrics
+  scale: number
+  identity: CacheIdentity
+  extent: { width: number; height: number }
+  plans: WorkerViewportPlans
+}): (window: LogicalViewport, visible: boolean) => ViewportPlan | undefined {
+  const { store, metrics, scale, identity, extent, plans } = options
+  return (window, visible) => {
+    const coverage = store.coverage(metrics, window.box, scale)
+    if (coverage === 'proven') { plans.release(identity, window); return undefined }
+    const plan = plans.get(identity, window, extent, visible)
+    return coverage === 'oversized' || plan.kind === 'detail' ? plan : undefined
+  }
 }

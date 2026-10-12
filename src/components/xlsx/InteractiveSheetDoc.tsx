@@ -21,11 +21,11 @@
  * filter via viewerControls' remote port) and are adopted here, and find and
  * copy read through the same source; the object path is unchanged.
  */
-import { WorkerViewportPlans } from './workerViewport'
+import { tilePlanSource, WorkerViewportPlans } from './workerViewport'
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type ReactElement } from 'react'
 import type { XlsxCell, XlsxDocument, XlsxSheet } from '../../xlsx/types'
 import type {
-  AuthoritativeCell, CacheIdentity, FilterSpec, GridSelection, LogicalViewport, ProfileId, RowOrder, RowVisibility, ScrollWindow, SheetView, SortSpec, SourceRowInterval, SourceStore, WorkbookOwner,
+  AuthoritativeCell, CacheIdentity, FilterSpec, GridSelection, LogicalCellBox, ProfileId, RowOrder, RowVisibility, ScrollWindow, SheetView, SortSpec, SourceRowInterval, SourceStore, WorkbookOwner,
 } from '../../xlsx/view/contracts'
 import { SHEET_MIN_ZOOM } from '../../xlsx/view/contracts'
 import type { NavigatorRequest, SourceCell } from '../../xlsx/view/coordinates'
@@ -401,13 +401,17 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
   useEffect(() => () => workerPlans?.dispose(), [workerPlans])
   const frameOf = (): SheetFrame | null => {
     if (!entry || !scroll) return null
-    workerPlans?.beginFrame(identity, { box: { ...scroll.logicalOrigin, width: viewport.width / scroll.zoom, height: viewport.height / scroll.zoom }, zoom: scroll.zoom, deviceScale: dpr })
     return {
       sheet: entry.sheet, geometry: entry.geometry, identity, origin: scroll.logicalOrigin, viewport, zoom: scroll.zoom, dpr,
       extent: { width: entry.metrics.cols.totalCss(), height: entry.metrics.rows.totalCss() },
       assets: assets?.lease.assets, layoutCache: entry.layoutCache, merges: entry.merges, ...(mark ? { watermark: mark } : {}),
       structureGen: entry.structureGen,
-      ...(workerPlans ? { plan: (window: LogicalViewport, visible: boolean) => workerPlans.get(identity, window, { width: entry.metrics.cols.totalCss(), height: entry.metrics.rows.totalCss() }, visible) } : {}),
+      // Row-cache proof gates worker requests: tiles the cache already proves
+      // paint from the main-thread planner with no worker wait and no worker
+      // command; worker plans are only for unknown or oversized tiles, and the
+      // row reads `pending` requests keep blank cells known (S13.3).
+      ...(workerPlans && remote ? { plan: tilePlanSource({ store: remote.store(activeSheetId), metrics: entry.metrics, scale: scroll.zoom * dpr, identity, extent: { width: entry.metrics.cols.totalCss(), height: entry.metrics.rows.totalCss() }, plans: workerPlans }) } : {}),
+      ...(remote ? { pending: (box: LogicalCellBox) => remote.store(activeSheetId).pendingIn(entry.metrics, box, scroll.zoom * dpr) } : {}),
     }
   }
   // Viewer-owned main pools (layout/merge caches, controls caches, owned DOM),
@@ -441,6 +445,10 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
   useLayoutEffect(() => {
     const canvas = baseRef.current, frame = frameOf()
     if (!canvas || !frame || admittedDpr === null) return
+    // Tile planning lifecycle runs here, post-commit: frameOf itself only
+    // describes the frame, so a render that never commits cannot cancel
+    // requests for frames that do.
+    if (scroll) workerPlans?.beginFrame(identity, { box: { ...scroll.logicalOrigin, width: viewport.width / scroll.zoom, height: viewport.height / scroll.zoom }, zoom: scroll.zoom, deviceScale: dpr })
     if (!assets || assets.sheetId !== activeSheetId) {
       // The active sheet's lease is pending: present a declared loading state, never
       // another sheet's (or an unleased) raster. The pool is re-admitted for the
@@ -554,6 +562,44 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
     return () => { cancelled = true }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [query, ownerKey])
+  // A finished page over sheets that were still importing says so instead of
+  // pretending completeness ("some sheets still loading"). Re-run it once its
+  // listed sheets complete, so the results catch up with the import (NIT-1).
+  const incompleteKey = page && !finder.running && page.complete && page.incomplete.length ? [...page.incomplete].sort().join(',') : ''
+  const refreshAttempt = useRef<{ args: object; key: string } | null>(null)
+  useEffect(() => {
+    if (!remote || !incompleteKey || !runArgs.current) return
+    const args = runArgs.current
+    const listed = incompleteKey.split(',')
+    const check = () => {
+      if (runArgs.current !== args || finder.running) return
+      const done = listed.filter(sheetId => remote.loadState(sheetId).completeness === 'complete').sort().join(',')
+      if (!done) return
+      const key = `${incompleteKey}|${done}`
+      if (refreshAttempt.current?.args === args && refreshAttempt.current.key === key) return
+      refreshAttempt.current = { args, key }
+      setSearching(true)
+      const input = findInput()
+      void finder.run(input, { text: args.query, caseSensitive: false }, args.options).then(published => {
+        // A newer search (or a cleared query) owns the results now.
+        if (runArgs.current !== args) return
+        pageRef.current = published
+        activeRef.current = published && published.hits.length ? 0 : -1
+        setPage(published)
+        setActiveHit(activeRef.current)
+        setSearching(false)
+      }).catch(error => {
+        if (runArgs.current !== args) return
+        setSearching(false)
+        setAnnouncement(error instanceof Error ? error.message.slice(0, 256) : 'Search failed.')
+      })
+    }
+    // The import may already have finished before this page was published.
+    const unsubscribe = remote.subscribe(check)
+    check()
+    return unsubscribe
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [remote, incompleteKey, ownerKey])
   const pageOffset = page ? page.pageIndex * FIND_PAGE_HITS : 0
   const matchCount = page ? page.totalKnown ?? pageOffset + page.hits.length : 0
   // Partial results present a lower bound, never a final-looking count (§10.4).

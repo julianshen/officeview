@@ -28,7 +28,8 @@ export interface CanvasTile extends TileSurface {
   cost?: { records: number; gridlines: number }
 }
 export interface SheetFrame {
-  plan?: (window: LogicalViewport, visible: boolean) => ViewportPlan
+  /** A prepared (worker) plan for a tile; undefined plans it on the main thread. */
+  plan?: (window: LogicalViewport, visible: boolean) => ViewportPlan | undefined
   sheet: XlsxSheet
   geometry: SheetGeometryResult
   identity: CacheIdentity
@@ -267,8 +268,10 @@ export class SheetTileRenderer {
       this.stats.maxTileRecords = Math.max(this.stats.maxTileRecords, work.records)
     }
     surface.cost = work
-    if (kind === 'pending' || kind === 'diagnostic') { if (visible) this.stats.pendingTiles++; return { surface, retained: false } }
+    // Asked even for a tile that is already pending: a worker plan with
+    // unresolved cells still needs its rows requested, or it never resolves.
     const pending = frame.pending?.(box) ?? []
+    if (kind === 'pending' || kind === 'diagnostic') { if (visible) this.stats.pendingTiles++; return { surface, retained: false } }
     if (pending.length) {
       if (visible) this.stats.pendingTiles++
       if (ctx) paintPending(ctx, box, pending)

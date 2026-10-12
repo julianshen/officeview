@@ -768,13 +768,40 @@ export class RemoteSheetStore implements SourceStore {
    * are asked for once earlier loads land.
    */
   pendingIn(metrics: ProjectedSheetMetrics, box: LogicalCellBox, scale: number): LogicalCellBox[] {
+    const found = this.uncoveredIn(metrics, box, scale)
+    if (!found || 'oversized' in found) return []
+    const { k0, k1, missing, out } = found
+    if (missing.length) {
+      const limits = this.workbook.pageLimits
+      const budget = Math.min(limits.tile, limits.frame - this.workbook.loadsInFlight)
+      const runs = coalesce(missing).slice(0, Math.max(0, budget))
+      for (const run of runs) void this.loadRun(run.r0, run.r1, k0, k1, new AbortController().signal, this.stamp)
+    }
+    return out
+  }
+  /** What the row cache can say about a box, without requesting anything:
+   * 'proven' when it already knows every detail cell (or the box has none),
+   * 'unknown' when `pendingIn` would read rows for it, and 'oversized' when it
+   * spans more rows than the row cache may cover, so only a worker plan can. */
+  coverage(metrics: ProjectedSheetMetrics, box: LogicalCellBox, scale: number): 'proven' | 'unknown' | 'oversized' {
+    const found = this.uncoveredIn(metrics, box, scale)
+    if (!found) return 'proven'
+    if ('oversized' in found) return 'oversized'
+    return found.missing.length ? 'unknown' : 'proven'
+  }
+  /** The pendingIn query without the loads: boxes and missing rows, null when
+   * the box has no detail rows or columns to read, or oversized when it spans
+   * more rows than the row cache may cover. */
+  private uncoveredIn(metrics: ProjectedSheetMetrics, box: LogicalCellBox, scale: number):
+    { k0: number; k1: number; missing: number[]; out: LogicalCellBox[] } | { oversized: true } | null {
     const detail = (sizeCss: number) => sizeCss * scale >= MIN_DETAIL_DEVICE_PX - 1e-9
     const rows = metrics.rows.visibleBetween(box.y, box.y + box.height)
-    if (rows.count === 0 || rows.count > MAX_PENDING_ROWS) return []
+    if (rows.count === 0) return null
+    if (rows.count > MAX_PENDING_ROWS) return { oversized: true }
     const cols = metrics.cols.visibleBetween(Math.max(0, box.x - TEXT_OVERFLOW_REACH_CSS), box.x + box.width + TEXT_OVERFLOW_REACH_CSS)
     let c0 = -1, c1 = -1
     for (const run of cols.runs) { if (!detail(run.sizeCss)) continue; if (c0 < 0) c0 = run.start; c1 = run.end }
-    if (c0 < 0) return []
+    if (c0 < 0) return null
     const k0 = Math.floor(c0 / ROW_CHUNK_COLS), k1 = Math.floor(c1 / ROW_CHUNK_COLS)
     const out: LogicalCellBox[] = []
     const missing: number[] = []
@@ -790,13 +817,7 @@ export class RemoteSheetStore implements SourceStore {
         else out.push({ x: box.x, y, width: box.width, height })
       }
     }
-    if (missing.length) {
-      const limits = this.workbook.pageLimits
-      const budget = Math.min(limits.tile, limits.frame - this.workbook.loadsInFlight)
-      const runs = coalesce(missing).slice(0, Math.max(0, budget))
-      for (const run of runs) void this.loadRun(run.r0, run.r1, k0, k1, new AbortController().signal, this.stamp)
-    }
-    return out
+    return { k0, k1, missing, out }
   }
   /** Loads the chunks covering [c0,c1] of `rows` (source rows) in runs. */
   async load(rows: readonly number[], c0: number, c1: number, signal?: AbortSignal, stamp: SourceStamp = this.stamp): Promise<void> {
