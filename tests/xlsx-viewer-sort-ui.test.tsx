@@ -253,13 +253,15 @@ it.each([16, 40])('keeps touch header targets of a %ipx projected column out of 
   expect(a.style.overflow).toBe('hidden')
 })
 import { emptyGridSelection, selectCell } from '../src/xlsx/view/selection'
+import { createIntervalSet, visibilityFromHidden } from '../src/xlsx/view/visibility'
 import { GRID_HEADER_SIZE } from '../src/components/xlsx/GridHeaders'
-describe('S13.2 item 5: 44px touch actions for legal narrow columns (spec §9.3, A11Y-02)', () => {
-  const narrow = (active: number) => {
-    const projection = createSheetMetrics({ rows: createAxisMetrics({ logicalCount: MAX_ROWS, defaultSizeCss: 24 }), cols: createAxisMetrics({ logicalCount: MAX_COLS, defaultSizeCss: 20 }) })
+describe('S13.2 item 5: 44px touch targets for legal narrow columns (spec §9.3, A11Y-02)', () => {
+  const narrowProjection = () => createSheetMetrics({ rows: createAxisMetrics({ logicalCount: MAX_ROWS, defaultSizeCss: 24 }), cols: createAxisMetrics({ logicalCount: MAX_COLS, defaultSizeCss: 20 }) })
+  const narrow = (active: number, controlMode = false) => {
+    const projection = narrowProjection()
     const viewport = { width: 200, height: 100 }
-    const handlers = { onSortCycle: vi.fn(), onFilter: vi.fn(), onSortDialog: vi.fn() }
-    const ui = render(<GridHeaders projection={projection} window={createScrollWindow(projection, viewport)} viewport={viewport} columns={[0, 1, 2]}
+    const handlers = { onSortCycle: vi.fn(), onFilter: vi.fn(), onSortDialog: vi.fn(), onSelect: vi.fn() }
+    const ui = render(<GridHeaders projection={projection} window={createScrollWindow(projection, viewport)} viewport={viewport} columns={[0, 1, 2]} controlMode={controlMode}
       selection={selectCell(emptyGridSelection(), projection, { row: 0, col: active })} sort={null} touchControls {...handlers} />)
     return { ui, handlers }
   }
@@ -269,37 +271,85 @@ describe('S13.2 item 5: 44px touch actions for legal narrow columns (spec §9.3,
     const height = Math.max(parseFloat(element.style.height) || 0, parseFloat(element.style.minHeight) || 0)
     return { left, top, width, height }
   }
-  it('a 20px active column under a coarse pointer gets ≥44x44 sort/filter/more targets that no neighbour target overlaps', () => {
+  const columnBoxes = (ui: ReturnType<typeof render>) => ['A', 'B', 'C'].map(letter => ui.getByRole('columnheader', { name: `Column ${letter}` }))
+    .map(header => ({ left: parseFloat(header.style.left), right: parseFloat(header.style.left) + parseFloat(header.style.width) }))
+  const outsideColumns = (ui: ReturnType<typeof render>, target: { left: number; width: number }) => {
+    // The corner lane: no column header box (all start at GRID_HEADER_SIZE) is overlapped.
+    expect(target.left + target.width).toBeLessThanOrEqual(GRID_HEADER_SIZE)
+    for (const column of columnBoxes(ui)) expect(target.left + target.width <= column.left || target.left >= column.right).toBe(true)
+  }
+
+  it('a 20px active column gets a ≥44x44 corner disclosure opening ≥44x44 select/sort/filter/more targets that no neighbour target overlaps', () => {
     const { ui, handlers } = narrow(1)
-    const actions = [ui.getByRole('button', { name: 'Cycle sort column B' }), ui.getByRole('button', { name: /^Filter column B/ }), ui.getByRole('button', { name: 'More sort options for B' })]
-    const columnBoxes = ['A', 'B', 'C'].map(letter => ui.getByRole('columnheader', { name: `Column ${letter}` })).map(header => ({ left: parseFloat(header.style.left), right: parseFloat(header.style.left) + parseFloat(header.style.width) }))
-    for (const action of actions) {
-      const target = box(action)
-      expect(target.width).toBeGreaterThanOrEqual(44)
-      expect(target.height).toBeGreaterThanOrEqual(44)
-      expect(action.dataset.actionColumn).toBe('1')
-      // The surface sits in the header strip's corner lane, which no column owns.
-      expect(target.left + target.width).toBeLessThanOrEqual(GRID_HEADER_SIZE)
-      for (const column of columnBoxes) expect(target.left + target.width <= column.left || target.left >= column.right).toBe(true)
+    const disclosure = ui.getByRole('button', { name: 'Actions for column B' })
+    expect(box(disclosure).width).toBeGreaterThanOrEqual(44)
+    expect(box(disclosure).height).toBeGreaterThanOrEqual(44)
+    outsideColumns(ui, box(disclosure))
+    expect(disclosure.getAttribute('aria-expanded')).toBe('false')
+    fireEvent.click(disclosure)
+    expect(disclosure.getAttribute('aria-expanded')).toBe('true')
+    const group = ui.getByRole('group', { name: 'Column B actions' })
+    expect(disclosure.getAttribute('aria-controls')).toBe(group.id)
+    const targets = [ui.getByRole('button', { name: 'Select whole column B' }), ui.getByRole('button', { name: 'Cycle sort column B' }), ui.getByRole('button', { name: /^Filter column B/ }), ui.getByRole('button', { name: 'More sort options for B' })]
+    for (const target of targets) {
+      expect(group.contains(target)).toBe(true)
+      const b = box(target)
+      expect(b.width).toBeGreaterThanOrEqual(44)
+      expect(b.height).toBeGreaterThanOrEqual(44)
+      outsideColumns(ui, { left: parseFloat(group.style.left) + b.left, width: b.width })
     }
-    // The targets of one column never overlap each other.
-    const boxes = actions.map(box).sort((a, b) => a.top - b.top)
-    for (let i = 1; i < boxes.length; i++) expect(boxes[i].top).toBeGreaterThanOrEqual(boxes[i - 1].top + boxes[i - 1].height)
-    fireEvent.click(actions[0])
-    expect(handlers.onSortCycle).toHaveBeenCalledWith(1, false, actions[0])
-    fireEvent.click(actions[1])
-    expect(handlers.onFilter).toHaveBeenCalledWith(1, actions[1])
+    const stacked = targets.map(box).sort((a, b) => a.top - b.top)
+    for (let i = 1; i < stacked.length; i++) expect(stacked[i].top).toBeGreaterThanOrEqual(stacked[i - 1].top + stacked[i - 1].height)
+    fireEvent.click(targets[1])
+    expect(handlers.onSortCycle).toHaveBeenCalledWith(1, false, targets[1])
+    // An action closes the group.
+    expect(ui.queryByRole('group', { name: 'Column B actions' })).toBeNull()
+    fireEvent.click(disclosure)
+    fireEvent.click(ui.getByRole('button', { name: 'Select whole column B' }))
+    expect(handlers.onSelect).toHaveBeenCalledWith('column', 1, { toggle: false, extend: false }, expect.anything())
     // No sub-44px action target is left inside the narrow column headers.
     for (const letter of ['A', 'B', 'C']) {
       const header = ui.getByRole('columnheader', { name: `Column ${letter}` })
       expect(header.querySelectorAll('[data-action-column]')).toHaveLength(0)
     }
   })
-  it('the surface follows the active column and keeps keyboard semantics', () => {
-    const { ui } = narrow(2)
-    expect(ui.queryByRole('button', { name: 'Cycle sort column B' })).toBeNull()
-    const sort = ui.getByRole('button', { name: 'Cycle sort column C' })
-    expect(sort.getAttribute('aria-pressed')).toBe('false')
-    expect(sort.tabIndex).toBe(-1)
+
+  it('follows the active column, closes on Escape with focus back on the disclosure in control mode', () => {
+    const { ui } = narrow(2, true)
+    expect(ui.queryByRole('button', { name: 'Actions for column B' })).toBeNull()
+    const disclosure = ui.getByRole('button', { name: 'Actions for column C' })
+    expect(disclosure.tabIndex).toBe(0)
+    act(() => disclosure.focus())
+    fireEvent.click(disclosure)
+    const select = ui.getByRole('button', { name: 'Select whole column C' })
+    expect(document.activeElement).toBe(select)
+    fireEvent.keyDown(select, { key: 'Escape' })
+    expect(ui.queryByRole('group', { name: 'Column C actions' })).toBeNull()
+    expect(document.activeElement).toBe(disclosure)
+  })
+
+  it('a tap outside closes the group', () => {
+    const { ui } = narrow(1)
+    fireEvent.click(ui.getByRole('button', { name: 'Actions for column B' }))
+    fireEvent.pointerDown(document.body)
+    expect(ui.queryByRole('group', { name: 'Column B actions' })).toBeNull()
+  })
+
+  it('selecting a narrow column from the lane selects that column in the grid (no re-hit-test of the lane position)', () => {
+    const previous = window.matchMedia
+    window.matchMedia = vi.fn(query => ({ matches: query.includes('pointer: coarse'), media: query, onchange: null,
+      addEventListener: vi.fn(), removeEventListener: vi.fn(), addListener: vi.fn(), removeListener: vi.fn(), dispatchEvent: () => true }))
+    try {
+      const projection = narrowProjection(), viewport = { width: 200, height: 100 }
+      const change = vi.fn()
+      const p = gridFixture({ projection, viewport, window: createScrollWindow(projection, viewport), view: { baseHidden: createIntervalSet([]), visibility: visibilityFromHidden(createIntervalSet([])), filter: null, sort: null }, selection: selectCell(emptyGridSelection(), projection, { row: 0, col: 1 }) })
+      const ui = render(<GridSemantics {...p} onChange={change} onSortCycle={vi.fn()} onFilter={vi.fn()} />)
+      fireEvent.click(ui.getByRole('button', { name: 'Actions for column B' }))
+      fireEvent.click(ui.getByRole('button', { name: 'Select whole column B' }), { detail: 1, clientX: 10, clientY: 100 })
+      expect(change).toHaveBeenCalled()
+      const selection = change.mock.calls.at(-1)![0].selection
+      expect(selection.ranges[0].cols).toEqual([{ c0: 1, c1: 1 }])
+      ui.unmount()
+    } finally { window.matchMedia = previous }
   })
 })

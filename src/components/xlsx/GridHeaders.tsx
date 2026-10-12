@@ -1,4 +1,4 @@
-import type { CSSProperties, MouseEvent, ReactElement } from 'react'
+import { useEffect, useId, useRef, useState, type CSSProperties, type MouseEvent, type ReactElement } from 'react'
 import type { GridSelection, ScrollWindow, SortSpec, FilterSpec, ColumnRule } from '../../xlsx/view/contracts'
 import type { ProjectedSheetMetrics } from '../../xlsx/view/projection'
 import { columnToLetters } from '../../xlsx/view/coordinates'
@@ -116,18 +116,56 @@ export function GridHeaders(props: GridHeadersProps): ReactElement {
   const actions = Boolean(props.onSortCycle || props.onFilter || props.onSortDialog)
   const height = columnHeaderHeight(touch, actions, Boolean(props.onSortDialog))
   const target = { minHeight: GRID_HEADER_SIZE, minWidth: touch ? GRID_HEADER_SIZE : 0, overflow: 'hidden', padding: 0, border: 0, background: 'transparent' }
-  // Touch actions of a column narrower than a 44px target cannot fit in its own
-  // header without overlapping a neighbour's (spec §9.3 deterministic
-  // ownership), so they move to the corner lane under "Select worksheet",
-  // which no column owns, for the active cell's column (tap a header to make
-  // it active). Each stays a native ≥44x44 button with the same name/state.
+  // Spec §9.3: 44px minimum control targets on mobile, with deterministic
+  // ownership. A column narrower than 44px cannot hold 44px targets without
+  // overlapping a neighbour's, so on a coarse pointer the active cell's narrow
+  // column gets a corner-lane disclosure ("Actions for column B", under
+  // "Select worksheet", in a lane no column owns) that opens its select, sort,
+  // filter and more-sort buttons as native ≥44x44 targets. The disclosure is
+  // a semantic button (aria-expanded/controls); Escape, an action or a tap
+  // outside closes it, and focus returns to it in control mode.
   const narrowTouch = (col: number) => touch && viewportHeaderBox(props.projection, props.window, props.viewport, 'column', col).width < GRID_HEADER_SIZE
   const activeCol = props.selection.active?.col
-  const laneCol = touch && actions && activeCol !== undefined && props.columns.includes(activeCol) && narrowTouch(activeCol) ? activeCol : undefined
+  const laneCol = touch && (actions || props.onSelect) && activeCol !== undefined && props.columns.includes(activeCol) && narrowTouch(activeCol) ? activeCol : undefined
+  const [openLane, setOpenLane] = useState<number | null>(null)
+  const laneOpen = laneCol !== undefined && openLane === laneCol
+  const laneButton = useRef<HTMLButtonElement | null>(null), laneGroup = useRef<HTMLDivElement | null>(null)
+  const laneId = `${useId()}-lane`
+  const closeLane = (refocus: boolean) => {
+    setOpenLane(null)
+    if (refocus && props.controlMode) laneButton.current?.focus()
+  }
+  useEffect(() => {
+    if (!laneOpen) return
+    // Control mode moves focus into the opened group; pointer use leaves it on the grid.
+    if (props.controlMode) laneGroup.current?.querySelector('button')?.focus()
+    const outside = (event: Event) => {
+      const target = event.target as Node | null
+      if (target && !laneGroup.current?.contains(target) && !laneButton.current?.contains(target)) setOpenLane(null)
+    }
+    document.addEventListener('pointerdown', outside, true)
+    return () => document.removeEventListener('pointerdown', outside, true)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [laneOpen])
+  const laneTarget = (index: number): CSSProperties => ({ ...target, position: 'absolute', left: 0, top: GRID_HEADER_SIZE * index, width: GRID_HEADER_SIZE, height: GRID_HEADER_SIZE, background: '#ffffff' })
   return <div role="row" aria-rowindex={1} data-officeview-ui="grid-headers" onPointerDown={event => event.stopPropagation()} onDoubleClick={event => event.stopPropagation()} style={{ position: 'absolute', top: 0, left: 0, height, width: '100%', zIndex: 2, background: '#f3f4f6' }}>
     <div role="columnheader" aria-colindex={1} aria-label="Worksheet corner" style={{ position: 'absolute', left: 0, width: GRID_HEADER_SIZE, height: laneCol === undefined ? GRID_HEADER_SIZE : height, zIndex: 1 }}>
       <button type="button" aria-label="Select worksheet" tabIndex={props.controlMode ? 0 : -1} onMouseDown={keepGridFocus} onClick={props.onSelectAll} style={{ width: GRID_HEADER_SIZE, height: GRID_HEADER_SIZE }}>↖</button>
-      {laneCol !== undefined && columnActions(props, laneCol, (index: number) => ({ ...target, position: 'absolute' as const, left: 0, top: GRID_HEADER_SIZE * (index + 1), width: GRID_HEADER_SIZE, height: GRID_HEADER_SIZE }))}
+      {laneCol !== undefined && <>
+        <button ref={laneButton} type="button" data-header-lane={laneCol} tabIndex={props.controlMode ? 0 : -1} onMouseDown={keepGridFocus}
+          aria-label={`Actions for column ${columnToLetters(laneCol)}`} aria-expanded={laneOpen} aria-controls={laneId}
+          onClick={() => setOpenLane(laneOpen ? null : laneCol)} onKeyDown={event => { if (event.key === 'Escape' && laneOpen) { event.preventDefault(); event.stopPropagation(); closeLane(true) } }}
+          style={{ ...target, position: 'absolute', left: 0, top: GRID_HEADER_SIZE, width: GRID_HEADER_SIZE, height: GRID_HEADER_SIZE }}>{columnToLetters(laneCol)}⋯</button>
+        {laneOpen && <div ref={laneGroup} id={laneId} role="group" aria-label={`Column ${columnToLetters(laneCol)} actions`} data-officeview-ui="header-lane"
+          onKeyDown={event => { if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); closeLane(true) } }}
+          onClickCapture={() => { setOpenLane(null) }}
+          style={{ position: 'absolute', left: 0, top: GRID_HEADER_SIZE * 2, width: GRID_HEADER_SIZE, zIndex: 3, boxShadow: '0 2px 6px rgba(0,0,0,.25)' }}>
+          {props.onSelect && <button type="button" data-header-column={laneCol} data-header-lane={laneCol} tabIndex={props.controlMode ? 0 : -1} onMouseDown={keepGridFocus}
+            aria-label={`Select whole column ${columnToLetters(laneCol)}`} style={laneTarget(0)}
+            onClick={event => props.onSelect?.('column', laneCol, { toggle: event.ctrlKey || event.metaKey, extend: event.shiftKey }, event)}>{columnToLetters(laneCol)}</button>}
+          {actions && columnActions(props, laneCol, index => laneTarget(index + (props.onSelect ? 1 : 0)))}
+        </div>}
+      </>}
     </div>
     {props.columns.map(col => {
       const box = viewportHeaderBox(props.projection, props.window, props.viewport, 'column', col), priority = props.sort?.keys.findIndex(key => key.col === col) ?? -1
