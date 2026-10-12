@@ -80,7 +80,7 @@ function voiceOverRunning(): boolean {
 }
 function voiceOverRunningPerSystemEvents(): boolean | string {
   try {
-    return osascript('tell application "System Events" to (name of processes) contains "VoiceOver"') === 'true'
+    return osascript('tell application "System Events" to (name of processes) contains "VoiceOver"', 2000) === 'true'
   } catch (error) {
     return `System Events query failed: ${error instanceof Error ? error.message.split('\n')[0] : String(error)}`
   }
@@ -101,15 +101,20 @@ async function startVoiceOver(): Promise<void> {
   }
 }
 
-/** Always leaves VoiceOver off: AppleScript quit, then the process is checked and stopped. */
+/**
+ * Always leaves VoiceOver off: AppleScript quit, then the process is checked
+ * and stopped. Every step is bounded (worst case about 8 s: quit 2 s, wait
+ * 2 s, pkill wait 2 s, System Events 2 s), inside the 10 s teardown deadline,
+ * and it runs first in the teardown.
+ */
 async function stopVoiceOver(): Promise<Record<string, unknown>> {
   const record: Record<string, unknown> = {}
-  try { osascript('tell application "VoiceOver" to quit') ; record.quit = 'applescript quit sent' } catch (error) { record.quit = `applescript quit failed: ${error instanceof Error ? error.message.split('\n')[0] : String(error)}` }
-  for (let i = 0; i < 20 && voiceOverRunning(); i++) await sleep(250)
+  try { osascript('tell application "VoiceOver" to quit', 2000); record.quit = 'applescript quit sent' } catch (error) { record.quit = `applescript quit failed: ${error instanceof Error ? error.message.split('\n')[0] : String(error)}` }
+  for (let i = 0; i < 8 && voiceOverRunning(); i++) await sleep(250)
   if (voiceOverRunning()) {
     tryRun('pkill', ['-x', 'VoiceOver'])
     record.pkill = true
-    for (let i = 0; i < 20 && voiceOverRunning(); i++) await sleep(250)
+    for (let i = 0; i < 8 && voiceOverRunning(); i++) await sleep(250)
   }
   record.runningAfter = voiceOverRunning()
   record.systemEventsSaysRunning = voiceOverRunningPerSystemEvents()

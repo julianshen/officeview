@@ -10,6 +10,7 @@
  */
 import { existsSync, mkdirSync, readFileSync } from 'node:fs'
 import { createServer, type Server } from 'node:http'
+import type { Socket } from 'node:net'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { writeFixturePackage } from '../generate-viewer-fixtures'
@@ -81,6 +82,10 @@ export async function startFixtureServer(root: string, port: number): Promise<Fi
       response.end(error instanceof Error ? error.message : String(error))
     }
   })
+  // Tracked so close() can drop idle keep-alive or stalled connections instead
+  // of waiting for clients to hang up (teardown must stay bounded).
+  const sockets = new Set<Socket>()
+  server.on('connection', socket => { sockets.add(socket); socket.once('close', () => sockets.delete(socket)) })
   await new Promise<void>((resolve, reject) => {
     server.once('error', reject)
     server.listen(port, '127.0.0.1', () => resolve())
@@ -90,6 +95,10 @@ export async function startFixtureServer(root: string, port: number): Promise<Fi
   return {
     port: bound,
     url: name => `http://127.0.0.1:${bound}/${encodeURIComponent(name)}`,
-    close: () => new Promise(resolve => server.close(() => resolve())),
+    close: () => new Promise(resolve => {
+      server.close(() => resolve())
+      server.closeAllConnections?.()
+      for (const socket of sockets) socket.destroy()
+    }),
   }
 }

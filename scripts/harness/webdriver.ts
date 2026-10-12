@@ -16,6 +16,11 @@ export const Keys = {
   Shift: '', Control: '', Alt: '', Meta: '', F2: '',
 } as const
 
+/** Per-request ceiling for ordinary commands (page scripts carry their own shorter waits). */
+export const COMMAND_TIMEOUT_MS = 120_000
+/** Ceiling for the session delete during teardown. */
+export const QUIT_TIMEOUT_MS = 3_000
+
 export class WebDriverError extends Error {
   constructor(readonly status: number, readonly error: string, message: string) {
     super(`${error}: ${message}`)
@@ -74,11 +79,13 @@ export class SafariDriver {
     }
   }
 
-  async command<T = unknown>(method: 'GET' | 'POST' | 'DELETE', path: string, body?: unknown): Promise<T> {
+  /** One WebDriver call; `timeoutMs` aborts a request that safaridriver never answers. */
+  async command<T = unknown>(method: 'GET' | 'POST' | 'DELETE', path: string, body?: unknown, timeoutMs = COMMAND_TIMEOUT_MS): Promise<T> {
     const response = await fetch(`${this.base}${path}`, {
       method,
       headers: body === undefined ? undefined : { 'content-type': 'application/json' },
       body: body === undefined ? undefined : JSON.stringify(body),
+      signal: AbortSignal.timeout(timeoutMs),
     })
     const text = await response.text()
     let json: { value?: unknown } = {}
@@ -157,9 +164,10 @@ export class SafariDriver {
     return Buffer.from(await this.command<string>('GET', this.s('/screenshot')), 'base64')
   }
 
+  /** Bounded: a wedged session delete is abandoned after QUIT_TIMEOUT_MS and the driver is killed anyway. */
   async quit(): Promise<void> {
     if (this.sessionId) {
-      try { await this.command('DELETE', this.s('')) } catch { /* already gone */ }
+      try { await this.command('DELETE', this.s(''), undefined, QUIT_TIMEOUT_MS) } catch { /* already gone, or wedged */ }
       this.sessionId = null
     }
     if (this.child && this.child.exitCode === null) this.child.kill('SIGTERM')
