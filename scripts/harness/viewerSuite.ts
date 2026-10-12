@@ -31,6 +31,7 @@ import type { BenchArgs } from './args'
 import type { HarnessIdentity } from './identity'
 import { startSampler } from './sampler'
 import { startStaticServer } from './static-server'
+import { measureCodeSpace } from './codeSpace'
 import { FIXTURE_MANIFEST_PATH, ensureViewerFixtures, type FixtureManifest, type ViewerFixture, type ViewerFixtureKey } from './viewerFixtures'
 
 const PAGE = '/src/debug/viewer-perf.html'
@@ -344,15 +345,16 @@ async function memorySession(context: BrowserContext, base: string, fixture: Vie
     const snap = JSON.parse(text)
     return { codeBytes: snapshotCodeBytes(snap), typeBytes: snapshotTypeBytes(snap) }
   }
+  // Compiled-code bytes for the gate: V8 per-space statistics from a
+  // memory-infra dump (no heap snapshot, so no DOM node ids or number-string
+  // cache entries are created by the measurement itself).
   const codeBytes = async (label: string): Promise<number | null> => {
     if (!cdp) return null
-    const chunks: string[] = []
-    const take = (e: { chunk: string }) => chunks.push(e.chunk)
-    cdp.on('HeapProfiler.addHeapSnapshotChunk', take)
-    try { await cdp.send('HeapProfiler.takeHeapSnapshot', { reportProgress: false }) } finally { cdp.off('HeapProfiler.addHeapSnapshotChunk', take) }
-    const text = chunks.join('')
-    if (process.env.VIEWER_SUITE_LIVE_DIAG) writeFileSync(`${process.env.VIEWER_SUITE_LIVE_DIAG}-${fixture.key}-${label}.heapsnapshot`, text)
-    return snapshotCodeBytes(JSON.parse(text))
+    const h = await heap()
+    if (!h) return null
+    const reading = await measureCodeSpace(cdp, h.usedSize)
+    if (!reading) timeouts.push(`${label}: code-space dump did not match the page's heap`)
+    return reading?.codeBytes ?? null
   }
   const diagSnapshot = async (label: string) => {
     if (!process.env.VIEWER_SUITE_LIVE_DIAG || !cdp) return
@@ -471,14 +473,18 @@ async function memorySession(context: BrowserContext, base: string, fixture: Vie
   const warmOpenLayoutShifts = await bounded('warm open layout shifts', perf(page, p => p.layoutShifts()))
   const warmOpenLayoutShiftSources = await bounded('warm open layout-shift sources', perf(page, p => p.layoutShiftSources()))
   await bounded('warm close', perf(page, p => p.close()), 30_000)
+  // The type split for the warm-up residue check: a heap snapshot of the closed
+  // warm host. Taken BEFORE the baseline readings, so whatever the snapshot
+  // itself adds to page tables is in the baseline too; no snapshot is taken
+  // during the measured session.
+  const warmSnapshot = await bounded('warm snapshot', snapshotStats('warm'), 180_000)
   const warmHostSamples: number[] = []
   for (let i = 0; i < WARM_HOST_SAMPLES; i++) {
     for (let k = 0; k < 3; k++) { await bounded('warm gc', gcMain()); await new Promise(resolve => setTimeout(resolve, 100)) }
     const h = await bounded('warm heap', heap())
     if (h) warmHostSamples.push(heapBytes(h))
   }
-  const warmSnapshot = await bounded('warm snapshot', snapshotStats('warm'), 180_000)
-  const warmCode = warmSnapshot?.codeBytes ?? null
+  const warmCode = await bounded('warm code bytes', codeBytes('warm'), 180_000)
   const warmLayoutShifts = await bounded('warm layout shifts', perf(page, p => p.layoutShifts()))
   const warmLayoutShiftSources = await bounded('warm layout-shift sources', perf(page, p => p.layoutShiftSources()))
   // Independent noise of the checkpoint procedure itself: the idle closed warm

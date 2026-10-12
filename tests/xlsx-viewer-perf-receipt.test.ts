@@ -103,7 +103,9 @@ const checkpoint = (heapBytes: number, workerPeak: number, ledgerPeak: number) =
 const WARM = [5 * MiB - 20 * 1024, 5 * MiB, 5 * MiB + 20 * 1024, 5 * MiB - 10 * 1024, 5 * MiB + 10 * 1024]
 const memorySession = (cycles: number[] | null) => ({
   // The warm document open and idle: 0.5 MiB of heap above the closed warm host outside its ledger.
-  warmHost: { fixture: 'F2', scale: 'F2 reduced', samples: [...WARM], empty: [4 * MiB, 4 * MiB, 4 * MiB], open: Array.from({ length: 3 }, () => ({ heapBytes: 15 * MiB, ledgerBytes: 9.5 * MiB })), codeBytes: CODE, openCodeBytes: CODE, layoutShifts: 3, openLayoutShifts: 3, layoutShiftSources: 6, openLayoutShiftSources: 6, checkpointNoise: [readingsAround(5 * MiB), readingsAround(5 * MiB), readingsAround(5 * MiB)] },
+  warmHost: { fixture: 'F2', scale: 'F2 reduced', samples: [...WARM], empty: [4 * MiB, 4 * MiB, 4 * MiB], open: Array.from({ length: 3 }, () => ({ heapBytes: 15 * MiB, ledgerBytes: 9.5 * MiB })), codeBytes: CODE, openCodeBytes: CODE, layoutShifts: 3, openLayoutShifts: 3, layoutShiftSources: 6, openLayoutShiftSources: 6, checkpointNoise: [readingsAround(5 * MiB), readingsAround(5 * MiB), readingsAround(5 * MiB)],
+    emptyTypeBytes: { code: 2 * MiB, string: 1 * MiB, native: 1 * MiB, object: 0.2 * MiB, array: 0.3 * MiB, 'native:dom': 0.01 * MiB },
+    typeBytes: { code: 4 * MiB, string: 1.5 * MiB, native: 2 * MiB, object: 0.2 * MiB, array: 0.3 * MiB, 'native:dom': 0.01 * MiB } },
   checkpoints: {
     baseline: { heapBytes: 5 * MiB, storage: { usage: 0, quota: 1e10 } },
     loaded: checkpoint(20 * MiB, 200 * MiB, 18 * MiB), afterOps: checkpoint(25 * MiB, 220 * MiB, 26 * MiB),
@@ -295,6 +297,40 @@ describe('evaluation from raw records', () => {
       expect(desktop(receipt, 'main-owned-memory').outcome, label).toBe('pending')
       expect(receipt.desktopAdmitted, label).toBe(false)
     }
+  })
+
+  it('(decision 6) codex\'s one-time warm-up allocation is refused: plain objects in the warm residue above independent noise', async () => {
+    // Engine/code kinds in the residue (code +2, strings +0.5, native +1 MiB) are allowed: the valid control admits.
+    expect((await finalizeReceipt(validDraft(), ctx)).desktopAdmitted).toBe(true)
+    // A 10 MiB object allocated during the warm-up and kept: it is in the warm
+    // host, the baseline and every session record, and in no ledger.
+    const d = validDraft()
+    for (const key of ['F2', 'F4']) {
+      const session = (d.raw.memory as any)[key]
+      session.warmHost.typeBytes = { ...session.warmHost.typeBytes, object: session.warmHost.typeBytes.object + 10 * MiB }
+      session.warmHost.samples = session.warmHost.samples.map((v: number) => v + 10 * MiB)
+      session.warmHost.open = session.warmHost.open.map((o: any) => ({ ...o, heapBytes: o.heapBytes + 10 * MiB }))
+      session.warmHost.checkpointNoise = session.warmHost.checkpointNoise.map((r: number[]) => r.map(v => v + 10 * MiB))
+      session.checkpoints.baseline.heapBytes += 10 * MiB
+      for (const name of ['loaded', 'afterOps', 'closed']) bump(session.checkpoints[name], 10 * MiB)
+      session.liveHeapSamples = session.liveHeapSamples.map((v: number) => v + 10 * MiB)
+      if (session.summary.recovery.cyclesMainOwnedBytes) session.summary.recovery.cyclesMainOwnedBytes = session.summary.recovery.cyclesMainOwnedBytes.map((v: number) => v + 10 * MiB)
+    }
+    const receipt = await finalizeReceipt(d, ctx)
+    expect(receipt.evidenceProblems.some(p => /unattributed warm-up allocation: 10 MiB/.test(p))).toBe(true)
+    expect(desktop(receipt, 'main-owned-memory').outcome).toBe('pending')
+    expect(receipt.desktopAdmitted).toBe(false)
+    // Arrays and native DOM count too; a missing type split leaves the row pending.
+    for (const kind of ['array', 'native:dom']) {
+      const k = validDraft()
+      ;(k.raw.memory as any).F2.warmHost.typeBytes = { ...(k.raw.memory as any).F2.warmHost.typeBytes, [kind]: 1 * MiB }
+      expect((await finalizeReceipt(k, ctx)).evidenceProblems.some(p => /unattributed warm-up allocation/.test(p)), kind).toBe(true)
+    }
+    const missing = validDraft()
+    delete (missing.raw.memory as any).F4.warmHost.emptyTypeBytes
+    const missingReceipt = await finalizeReceipt(missing, ctx)
+    expect(missingReceipt.evidenceProblems.some(p => /no heap-snapshot type split/.test(p))).toBe(true)
+    expect(desktop(missingReceipt, 'main-owned-memory').outcome).toBe('pending')
   })
 
   it('(r5-5) all new measurements missing yields pending with named problems, never a throw', async () => {

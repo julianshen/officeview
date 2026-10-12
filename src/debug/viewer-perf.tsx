@@ -27,7 +27,7 @@ import { classifyPresent, pairInputsToPresents, type PresentCounters } from './h
 import '../components/largeSource'
 import '../core/zip'
 import '../components/xlsx/pagedWorkbook'
-import '../components/xlsx/InteractiveSheetDoc'
+import InteractiveSheetDoc from '../components/xlsx/InteractiveSheetDoc'
 import { GridSemantics } from '../components/xlsx/GridSemantics'
 import { domClassCounts, type DomClassCounts } from '../components/xlsx/domCost'
 import { createAxisMetrics } from '../xlsx/view/axes'
@@ -97,6 +97,10 @@ export interface ViewerPerf {
    * for a `width` x `height` viewport, re-renders it `updates` times with a
    * moved selection, and returns its element counts by class; 0 x 0 unmounts. */
   calibrateGrid(width: number, height: number, updates?: number): Promise<DomClassCounts>
+  /** Real-viewer calibration: mounts the actual InteractiveSheetDoc (resident,
+   * 60 x 30 values) in a `width` x `height` box and scrolls it `updates`
+   * times; returns its DOM class counts and main ledger. 0 x 0 unmounts. */
+  calibrateViewer(width: number, height: number, updates?: number): Promise<{ counts: DomClassCounts; ledger: MainLedgerSnapshot | null }>
   /** The open document's main-thread application ledger (null before a viewer mounts). */
   mainLedger(): MainLedgerSnapshot | null
   /** Drops the page's own instrumentation (the wire timeline) before a memory
@@ -205,6 +209,7 @@ const state: ViewerPerf = {
   },
   calibrateDom,
   calibrateGrid,
+  calibrateViewer,
   workerStats: () => probe(currentWorker, { __perf: 'stats' }),
   workerGc: async () => { const reply = await probe(currentWorker, { __perf: 'gc' }); return reply?.kind === 'gc' && reply.collected },
   importRun,
@@ -296,6 +301,37 @@ function calibrateGrid(width: number, height: number, updates = 0): Promise<DomC
     setTimeout(step, 50)
   })
 }
+let viewerCalibration: { root: ReturnType<typeof createRoot>; host: HTMLElement; ledger: MainLedgerSnapshot | null; read: () => MainLedgerSnapshot | null } | null = null
+const calibrationDoc = (() => {
+  // Small on purpose: the regression isolates the DOM; the semantic grid renders
+  // one cell per visible coordinate whether or not it holds a value.
+  const rows = Array.from({ length: 60 }, (_, r) => ({ index: r, cells: Array.from({ length: 30 }, (_, c) => ({ ref: `R${r}C${c}`, row: r, col: c, styleIndex: 0, value: r === 0 ? `Field ${c}` : c % 3 === 0 ? `t${r}-${c}` : r * 30 + c, hasCachedValue: true })) }))
+  return { sheets: [{ name: 'Calibration', sheetId: 'cal', rows, cols: [], merges: [], mergeRanges: [] }], tables: [] }
+})()
+function calibrateViewer(width: number, height: number, updates = 0): Promise<{ counts: DomClassCounts; ledger: MainLedgerSnapshot | null }> {
+  viewerCalibration?.root.unmount(); viewerCalibration?.host.remove(); viewerCalibration = null
+  if (width <= 0 || height <= 0) return Promise.resolve({ counts: { cell: 0, header: 0, other: 0 }, ledger: null })
+  const host = document.createElement('div')
+  host.style.cssText = `position:absolute;left:0;top:0;width:${width}px;height:${height}px;display:flex;flex-direction:column`
+  document.body.append(host)
+  const root = createRoot(host)
+  let ledger: MainLedger | null = null
+  const internal = { onMainLedger: (l: MainLedger) => { ledger = l } } as Record<string, unknown>
+  root.render(<InteractiveSheetDoc doc={calibrationDoc as never} style={{ flex: '1 1 auto', minHeight: 0 }} {...internal} />)
+  viewerCalibration = { root, host, ledger: null, read: () => ledger?.snapshot() ?? null }
+  return new Promise(resolve => {
+    let pass = 0
+    const step = () => {
+      const scroller = host.querySelector<HTMLElement>('[data-testid=officeview-sheet-pane]')?.parentElement?.querySelector<HTMLElement>('[data-officeview-ui=scroll]') ?? null
+      if (pass >= updates || !scroller) { setTimeout(() => resolve({ counts: domClassCounts(host.firstElementChild ?? host), ledger: ledger?.snapshot() ?? null }), 500); return }
+      pass++
+      scroller.scrollTop += 200
+      setTimeout(step, 150)
+    }
+    setTimeout(step, 1500)
+  })
+}
+type MainLedger = MainMemoryLedger
 // ---- worker port: the shipped kernel behind a counting port ----
 let currentWorker: Worker | null = null
 let perfIds = 0

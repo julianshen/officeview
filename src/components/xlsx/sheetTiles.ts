@@ -8,7 +8,7 @@
  * this module; the watermark is stamped into the pane after the tiles.
  */
 import type { XlsxSheet } from '../../xlsx/types'
-import { shapeCacheBytes } from '../../xlsx/view/mainLedger'
+import { TILE_CANVAS_BYTES, shapeCacheBytes } from '../../xlsx/view/mainLedger'
 import type { CacheIdentity, LogicalCellBox, LogicalViewport, ProfileId } from '../../xlsx/view/contracts'
 import type { RenderSheetAssets } from '../../xlsx/render'
 import { renderSheetViewport } from '../../xlsx/view/renderViewport'
@@ -215,8 +215,10 @@ export class SheetTileRenderer {
 
   dispose(): void { this.cache.dispose() }
   private shapeBytes = 0
-  /** S10.2 main ledger: browser text-shaping memory held by retained tile
-   * canvases (see SHAPE_ENTRY_BYTES); released when a tile is closed. */
+  /** S10.2 main ledger: main-heap memory a retained tile canvas holds outside
+   * its bitmap: the canvas element and its 2D context (TILE_CANVAS_BYTES) plus
+   * the browser's text-shaping cache for what it drew (see SHAPE_ENTRY_BYTES);
+   * released when the tile is closed. */
   textCacheBytes(): number { return this.shapeBytes }
 
   private key(frame: SheetFrame, col: number, row: number): TileKey {
@@ -270,8 +272,8 @@ export class SheetTileRenderer {
     if (kind === 'coarse' && !full) return { surface, retained: false }
     const retained = this.cache.put(key, surface)
     if (!retained) this.stats.refused++
-    else if (shaped && shaped.bytes > 0) {
-      const bytes = shaped.bytes
+    else {
+      const bytes = TILE_CANVAS_BYTES + (shaped?.bytes ?? 0)
       this.shapeBytes += bytes
       const close = surface.close.bind(surface)
       let open = true

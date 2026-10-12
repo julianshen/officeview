@@ -167,6 +167,8 @@ export interface ReceiptMeasurements {
     /** Independent noise bound: max(idle probe noise, the checkpoint procedure's
      * spread on the idle closed warm host); the smaller session's. */
     mainIndependentNoiseBytes: number | null
+    /** Largest warm-up residue of plain JS objects, arrays and native DOM. */
+    mainWarmAppResidueBytes: number | null
     /** Largest spread of a gated checkpoint's repeated forced-GC readings. */
     mainCheckpointSpreadBytes: number | null
     /** Largest excluded growth of the page's layout-shift entries (count x LAYOUT_SHIFT_ENTRY_BYTES). */
@@ -284,10 +286,19 @@ export function snapshotTypeBytes(snapshot: unknown): Record<string, number> {
   const fields = s.snapshot?.meta?.node_fields, types = s.snapshot?.meta?.node_types?.[0], nodes = s.nodes
   const out: Record<string, number> = {}
   if (!Array.isArray(fields) || !Array.isArray(types) || !Array.isArray(nodes)) return out
-  const width = fields.length, type = fields.indexOf('type'), size = fields.indexOf('self_size')
-  for (let i = 0; i + width <= nodes.length; i += width) { const t = String(types[nodes[i + type]]); out[t] = (out[t] ?? 0) + nodes[i + size] }
+  const width = fields.length, type = fields.indexOf('type'), size = fields.indexOf('self_size'), name = fields.indexOf('name')
+  const strings = (snapshot as { strings?: string[] }).strings ?? []
+  for (let i = 0; i + width <= nodes.length; i += width) {
+    const t = String(types[nodes[i + type]])
+    out[t] = (out[t] ?? 0) + nodes[i + size]
+    // Native DOM nodes (elements, text, document fragments), detached or not.
+    if (t === 'native' && /^(Detached )?(<|#text|#comment|#document)/.test(strings[nodes[i + name]] ?? '')) out['native:dom'] = (out['native:dom'] ?? 0) + nodes[i + size]
+  }
   return out
 }
+/** Warm-up residue kinds the validator does not attribute to the engine:
+ * plain JS objects, JS arrays and native DOM nodes (review r5, decision 6). */
+export const WARM_APP_KINDS = ['object', 'array', 'native:dom'] as const
 /** Minimum forced-GC samples of the warm document open and idle (review round 4). */
 export const MIN_WARM_OPEN_SAMPLES = 3
 /** Minimum repeated forced-GC readings at each gated checkpoint (its own noise). */
@@ -318,7 +329,7 @@ const nondecreasing = (v: number[]) => v.every((x, i) => i === 0 || x >= v[i - 1
 /** Every threshold input recomputed from the raw records; problems name what is missing or invalid. */
 export function deriveMeasurements(raw: Raw, fixtures: Record<string, ManifestFixture>): { measurements: ReceiptMeasurements; problems: string[] } {
   const problems: string[] = []
-  const m: ReceiptMeasurements = { scroll: {}, ack: {}, firstViewport: {}, import: {}, memory: { mainRetainedBytes: null, mainSampledLivePeakBytes: null, mainLedgerPeakBytes: null, mainUnattributedBytes: null, mainProbeNoiseBytes: null, mainCheckpointExcessBytes: null, mainIndependentNoiseBytes: null, mainWarmOpenGapBytes: null, mainCodeGrowthBytes: null, mainCheckpointSpreadBytes: null, mainLayoutShiftBytes: null, workerOwnedBytes: null, bitmapPeakBytes: null } }
+  const m: ReceiptMeasurements = { scroll: {}, ack: {}, firstViewport: {}, import: {}, memory: { mainRetainedBytes: null, mainSampledLivePeakBytes: null, mainLedgerPeakBytes: null, mainUnattributedBytes: null, mainProbeNoiseBytes: null, mainCheckpointExcessBytes: null, mainIndependentNoiseBytes: null, mainWarmAppResidueBytes: null, mainWarmOpenGapBytes: null, mainCodeGrowthBytes: null, mainCheckpointSpreadBytes: null, mainLayoutShiftBytes: null, workerOwnedBytes: null, bitmapPeakBytes: null } }
 
   const scroll = obj(raw.scroll)
   for (const kind of ['ordinary', 'wrapped', 'styled'] as const) {
@@ -389,7 +400,7 @@ export function deriveMeasurements(raw: Raw, fixtures: Record<string, ManifestFi
   // Memory: both sessions must provide every pool's evidence at every checkpoint
   // and a clean close; a maximum is only taken once nothing is missing.
   const memory = obj(raw.memory)
-  const perSession: { retained: number; live: number; ledger: number; unattributed: number; noise: number; worker: number; bitmap: number; excess: number | null; warmOpenGap: number; code: number; gateMeasured: boolean; spread: number; shifts: number; independentNoise: number }[] = []
+  const perSession: { retained: number; live: number; ledger: number; unattributed: number; noise: number; worker: number; bitmap: number; excess: number | null; warmOpenGap: number; code: number; gateMeasured: boolean; spread: number; shifts: number; independentNoise: number; warmAppResidue: number | null }[] = []
   for (const key of ['F2', 'F4'] as const) {
     const where = `memory.${key}`
     const session = obj(memory?.[key]), checkpoints = obj(session?.checkpoints)
@@ -473,7 +484,7 @@ export function deriveMeasurements(raw: Raw, fixtures: Record<string, ManifestFi
     // checkpoint's own reading spread can only tighten that noise term.
     // Every input is bounds-checked; anything missing or impossible leaves the
     // gate unmeasured (row pending), never silently excluded.
-    let gateMeasured = true
+    let gateMeasured = true, warmAppResidue: number | null = null
     const block = (message: string) => { problems.push(`${where}: ${message}`); gateMeasured = false }
     const count = (v: unknown, max: number): number | null => { const n = num(v); return n !== null && Number.isInteger(n) && n >= 0 && n <= max ? n : null }
     const warmCode = num(wh?.codeBytes), warmOpenCode = num(wh?.openCodeBytes)
@@ -488,6 +499,18 @@ export function deriveMeasurements(raw: Raw, fixtures: Record<string, ManifestFi
     if (noiseRounds.length < MIN_WARM_NOISE_ROUNDS) block(`${noiseRounds.length} rounds of the checkpoint procedure on the idle warm host, below ${MIN_WARM_NOISE_ROUNDS}`)
     const procedureNoise = noiseRounds.length ? Math.max(...noiseRounds.map(r => Math.max(...r) - Math.min(...r))) : 0
     const independentNoise = Math.max(noise, procedureNoise)
+    // Warm-up residue (decision 6): the closed warm host minus the empty page,
+    // by heap-snapshot kind. Engine/code kinds (compiled code, script sources,
+    // binding templates, hidden classes, engine caches) are allowed; plain JS
+    // objects, arrays and native DOM above the independent noise are an
+    // unattributed warm-up allocation (it would sit in the baseline).
+    const emptyTypes = obj(wh?.emptyTypeBytes), warmTypes = obj(wh?.typeBytes)
+    if (!emptyTypes || !warmTypes) block('no heap-snapshot type split of the empty page and the warm host')
+    else {
+      const residue = WARM_APP_KINDS.reduce((sum, kind) => sum + ((num(warmTypes[kind]) ?? 0) - (num(emptyTypes[kind]) ?? 0)), 0)
+      warmAppResidue = residue
+      if (residue > independentNoise) block(`unattributed warm-up allocation: ${round(residue / MiB)} MiB of plain JS objects, arrays and native DOM in the warm host above the empty page (independent noise ${round(independentNoise / MiB)} MiB)`)
+    }
     const codeDelta = (bytes: number) => Math.max(0, bytes - (warmCode ?? bytes))
     const shiftDelta = (entries: number, sources: number) => Math.max(0, entries - (warmShifts ?? entries)) * LAYOUT_SHIFT_ENTRY_BYTES + Math.max(0, sources - (warmSources ?? sources)) * LAYOUT_SHIFT_SOURCE_BYTES
     const openGaps = warmOpen.map(o => o.heapBytes - o.ledgerBytes - warmBase - codeDelta(warmOpenCode ?? 0) - shiftDelta(warmOpenShifts ?? 0, warmOpenSources ?? 0)).sort((x, y) => x - y)
@@ -518,11 +541,11 @@ export function deriveMeasurements(raw: Raw, fixtures: Record<string, ManifestFi
       if (gap > allowance) problems.push(`main-owned-memory: uncharged main memory in ${key} at the ${name} checkpoint (${round(gap / MiB)} MiB of forced-GC heap above the warmed host is not in the ledger's current ${round(current / MiB)} MiB after excluding ${round(delta / MiB)} MiB of measured compiled-code growth and ${round(shiftBytes / MiB)} MiB of layout-shift entries; allowance: the warmed host's open gap ${round(openAllowance / MiB)} MiB + independent noise ${round(noiseTerm / MiB)} MiB (idle probe ${round(noise / MiB)} MiB, warm-host checkpoint procedure ${round(procedureNoise / MiB)} MiB, capped by this checkpoint's spread ${round(spread / MiB)} MiB))`)
     }
     if (excess === null) gateMeasured = false
-    perSession.push({ retained, live, ledger: ledgerPeak, unattributed: live - ledgerPeak, noise, worker, bitmap, excess, warmOpenGap, code: codeMax, gateMeasured, spread: spreadMax, shifts: shiftMax, independentNoise })
+    perSession.push({ retained, live, ledger: ledgerPeak, unattributed: live - ledgerPeak, noise, worker, bitmap, excess, warmOpenGap, code: codeMax, gateMeasured, spread: spreadMax, shifts: shiftMax, independentNoise, warmAppResidue })
   }
   if (perSession.length === 2) {
     const max = (f: (s: typeof perSession[number]) => number) => Math.max(...perSession.map(f))
-    m.memory = { mainRetainedBytes: max(s => s.retained), mainSampledLivePeakBytes: max(s => s.live), mainLedgerPeakBytes: max(s => s.ledger), mainUnattributedBytes: max(s => s.unattributed), mainProbeNoiseBytes: Math.min(...perSession.map(s => s.noise)), mainCheckpointExcessBytes: perSession.every(s => s.gateMeasured && s.excess !== null) ? Math.max(...perSession.map(s => s.excess as number)) : null, mainIndependentNoiseBytes: Math.min(...perSession.map(s => s.independentNoise)), mainWarmOpenGapBytes: Math.min(...perSession.map(s => s.warmOpenGap)), mainCodeGrowthBytes: perSession.every(s => s.gateMeasured) ? max(s => s.code) : null, mainCheckpointSpreadBytes: max(s => s.spread), mainLayoutShiftBytes: perSession.every(s => s.gateMeasured) ? max(s => s.shifts) : null, workerOwnedBytes: max(s => s.worker), bitmapPeakBytes: max(s => s.bitmap) }
+    m.memory = { mainRetainedBytes: max(s => s.retained), mainSampledLivePeakBytes: max(s => s.live), mainLedgerPeakBytes: max(s => s.ledger), mainUnattributedBytes: max(s => s.unattributed), mainProbeNoiseBytes: Math.min(...perSession.map(s => s.noise)), mainCheckpointExcessBytes: perSession.every(s => s.gateMeasured && s.excess !== null) ? Math.max(...perSession.map(s => s.excess as number)) : null, mainIndependentNoiseBytes: Math.min(...perSession.map(s => s.independentNoise)), mainWarmAppResidueBytes: perSession.every(s => s.warmAppResidue !== null) ? Math.max(...perSession.map(s => s.warmAppResidue as number)) : null, mainWarmOpenGapBytes: Math.min(...perSession.map(s => s.warmOpenGap)), mainCodeGrowthBytes: perSession.every(s => s.gateMeasured) ? max(s => s.code) : null, mainCheckpointSpreadBytes: max(s => s.spread), mainLayoutShiftBytes: perSession.every(s => s.gateMeasured) ? max(s => s.shifts) : null, workerOwnedBytes: max(s => s.worker), bitmapPeakBytes: max(s => s.bitmap) }
     for (const [i, session] of perSession.entries()) {
       if (session.unattributed > session.noise) problems.push(`main-owned-memory: unattributed main memory in ${['F2', 'F4'][i]} (${round(session.unattributed / MiB)} MiB of live heap above the warmed host is not in the ledger peak; measured probe noise ${round(session.noise / MiB)} MiB)`)
     }
