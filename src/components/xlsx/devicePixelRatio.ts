@@ -8,8 +8,9 @@ import { useEffect, useState } from 'react'
  *    standard change signal);
  *  - window and visualViewport `resize` (engines that pair a ratio change
  *    with a resize, and browser zoom);
- *  - a slow poll while the page is visible: Chrome's CDP device-metrics
- *    emulation changes the ratio and dispatches none of the above.
+ *  - a slow poll while the page is visible (suspended while hidden): Chrome's
+ *    CDP device-metrics emulation changes the ratio and dispatches none of
+ *    the above.
  * Setting the same value is a no-op, so unchanged reads never re-render.
  */
 export function useDevicePixelRatio(pollMs = 1000): number {
@@ -32,11 +33,21 @@ export function useDevicePixelRatio(pollMs = 1000): number {
     const viewport = window.visualViewport
     window.addEventListener('resize', update)
     viewport?.addEventListener('resize', update)
-    const timer = setInterval(() => { if (typeof document === 'undefined' || document.visibilityState !== 'hidden') update() }, pollMs)
+    // The poll runs only while the page is visible: a hidden page keeps no
+    // timer alive, and becoming visible re-reads once before polling again.
+    let timer: ReturnType<typeof setInterval> | undefined
+    const hidden = () => typeof document !== 'undefined' && document.visibilityState === 'hidden'
+    const schedule = () => {
+      if (hidden()) { clearInterval(timer); timer = undefined; return }
+      if (timer === undefined) { update(); timer = setInterval(update, pollMs) }
+    }
+    schedule()
+    document.addEventListener('visibilitychange', schedule)
     return () => {
       media?.removeEventListener('change', update)
       window.removeEventListener('resize', update)
       viewport?.removeEventListener('resize', update)
+      document.removeEventListener('visibilitychange', schedule)
       clearInterval(timer)
     }
   }, [pollMs])

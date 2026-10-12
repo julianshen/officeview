@@ -94,12 +94,42 @@ describe('useDevicePixelRatio (D-DPR)', () => {
     expect(probe.seen.length).toBe(renders)
   })
 
+  it('the poll is suspended while the page is hidden and resumes (with one re-read) when visible', () => {
+    vi.useFakeTimers()
+    let visibility: DocumentVisibilityState = 'visible'
+    Object.defineProperty(document, 'visibilityState', { configurable: true, get: () => visibility })
+    try {
+      const probe = mount()
+      expect(vi.getTimerCount()).toBe(1)
+      visibility = 'hidden'
+      act(() => { document.dispatchEvent(new Event('visibilitychange')) })
+      expect(vi.getTimerCount()).toBe(0) // no timer kept alive in a background tab
+      setRatio(2)
+      act(() => { vi.advanceTimersByTime(5000) })
+      expect(probe.latest()).toBe(1)
+      visibility = 'visible'
+      act(() => { document.dispatchEvent(new Event('visibilitychange')) })
+      expect(probe.latest()).toBe(2) // re-read on becoming visible
+      expect(vi.getTimerCount()).toBe(1)
+      setRatio(3)
+      act(() => { vi.advanceTimersByTime(1000) })
+      expect(probe.latest()).toBe(3)
+      probe.view.unmount()
+      expect(vi.getTimerCount()).toBe(0)
+    } finally {
+      // Drop the own-property override; the prototype getter takes over again.
+      delete (document as unknown as Record<string, unknown>).visibilityState
+    }
+  })
+
   it('unmount removes every listener and stops the poll', () => {
     vi.useFakeTimers()
     const probe = mount()
     const removeWindow = vi.spyOn(window, 'removeEventListener')
     const removeViewport = vi.spyOn(window.visualViewport!, 'removeEventListener')
+    const removeDocument = vi.spyOn(document, 'removeEventListener')
     probe.view.unmount()
+    expect(removeDocument).toHaveBeenCalledWith('visibilitychange', expect.any(Function))
     expect(liveQueries()).toEqual([])
     expect(removeWindow).toHaveBeenCalledWith('resize', expect.any(Function))
     expect(removeViewport).toHaveBeenCalledWith('resize', expect.any(Function))
