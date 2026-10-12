@@ -427,7 +427,9 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
     mainLedger.set('layout', 'caches', layout)
     mainLedger.set('merges', 'caches', merges)
     mainLedger.set('controls', 'resources', controlResources.current?.cache.usedBytes ?? 0)
-    mainLedger.set('dom', 'grid', (paneRef.current?.getElementsByTagName('*').length ?? 0) * DOM_ELEMENT_BYTES)
+    // Every element the viewer renders (its toolbar, navigation, headers and
+    // status as well as the pane), each with its React fiber and props.
+    mainLedger.set('dom', 'grid', ((rootRef.current ?? paneRef.current)?.getElementsByTagName('*').length ?? 0) * DOM_ELEMENT_BYTES)
     mainLedger.set('canvasText', 'tiles', rendererRef.current?.textCacheBytes() ?? 0)
   }
   useEffect(() => { chargeMain() })

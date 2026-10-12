@@ -83,7 +83,7 @@ export interface ViewerPerf {
   ackWait(): Promise<AckRecord>
   /** DOM cost calibration (S10.2 ledger estimate): mounts `cells` owned-gridcell-like
    * React elements (div + text span, as GridSemantics renders them) or unmounts them. */
-  calibrateDom(cells: number): Promise<number>
+  calibrateDom(cells: number, updates?: number): Promise<number>
   /** The open document's main-thread application ledger (null before a viewer mounts). */
   mainLedger(): MainLedgerSnapshot | null
   /** Drops the page's own instrumentation (the wire timeline) before a memory
@@ -167,7 +167,7 @@ window.__viewerPerf = state
 
 let currentLedger: MainMemoryLedger | null = null
 let calibration: { root: ReturnType<typeof createRoot>; host: HTMLElement } | null = null
-function calibrateDom(cells: number): Promise<number> {
+function calibrateDom(cells: number, updates = 0): Promise<number> {
   calibration?.root.unmount(); calibration?.host.remove(); calibration = null
   if (cells <= 0) return Promise.resolve(0)
   const host = document.createElement('div')
@@ -175,12 +175,24 @@ function calibrateDom(cells: number): Promise<number> {
   document.body.append(host)
   const root = createRoot(host)
   const hidden = { position: 'absolute', width: 1, height: 1, overflow: 'hidden', clipPath: 'inset(50%)', whiteSpace: 'nowrap' } as const
-  root.render(<div role="rowgroup">{Array.from({ length: cells }, (_, i) => (
-    <div key={i} role="gridcell" id={`cal-cell-${i * 16384 + 3}`} aria-colindex={(i % 40) + 2} aria-label={`C${i}, value ${i * 7.25}`} aria-selected={false} aria-description="value"
+  const tree = (pass: number) => <div role="rowgroup">{Array.from({ length: cells }, (_, i) => (
+    <div key={i} role="gridcell" id={`cal-cell-${i * 16384 + 3}`} aria-colindex={(i % 40) + 2} aria-label={`C${i}, value ${i * 7.25}`} aria-selected={pass % 2 === 1} aria-description="value"
       style={{ position: 'absolute', top: 0, left: 44 + (i % 40) * 64, width: 64, height: 20 }}><span style={hidden}>{String(i * 7.25)}</span></div>
-  ))}</div>)
+  ))}</div>
+  root.render(tree(0))
   calibration = { root, host }
-  return new Promise(resolve => setTimeout(() => resolve(host.getElementsByTagName('*').length), 100))
+  // `updates` re-renders change every cell's props, as scrolling and selection
+  // do in the viewer: React then keeps an alternate fiber per updated element.
+  return new Promise(resolve => {
+    let pass = 0
+    const step = () => {
+      if (pass >= updates) { setTimeout(() => resolve(host.getElementsByTagName('*').length), 100); return }
+      pass++
+      root.render(tree(pass))
+      setTimeout(step, 50)
+    }
+    setTimeout(step, 50)
+  })
 }
 // ---- worker port: the shipped kernel behind a counting port ----
 let currentWorker: Worker | null = null

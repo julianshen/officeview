@@ -21,7 +21,7 @@ import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { cpus, loadavg, totalmem, freemem } from 'node:os'
 import { join, resolve } from 'node:path'
 import {
-  ACK_CENSORED_MS, RELEASE_IDENTITY, finalizeReceipt, importThroughput, pairInputsToPresents, summarize,
+  ACK_CENSORED_MS, RELEASE_IDENTITY, finalizeReceipt, importThroughput, pairInputsToPresents, snapshotCodeBytes, summarize,
   type ImportEvent, type ReceiptDraft, type SeriesSummary, type ViewerReceipt,
 } from '../../src/debug/harness/viewerPerf'
 import { MIN_FRAME_SAMPLES, MIN_OPERATION_SAMPLES } from '../../src/debug/harness/result'
@@ -326,6 +326,21 @@ async function memorySession(context: BrowserContext, base: string, fixture: Vie
     if (result === TIMEOUT) { timeouts.push(what); log(`      timeout: ${what}`); return null }
     return result
   }
+  // Compiled code is engine memory the ledger does not own: each checkpoint
+  // measures the heap snapshot's 'code' bytes (bytecode, machine code,
+  // feedback), so the gate can exclude exactly the measured growth relative to
+  // the warmed host (review round 4 decision). The snapshot runs after the
+  // checkpoint's heap reading; with VIEWER_SUITE_LIVE_DIAG it is also kept.
+  const codeBytes = async (label: string): Promise<number | null> => {
+    if (!cdp) return null
+    const chunks: string[] = []
+    const take = (e: { chunk: string }) => chunks.push(e.chunk)
+    cdp.on('HeapProfiler.addHeapSnapshotChunk', take)
+    try { await cdp.send('HeapProfiler.takeHeapSnapshot', { reportProgress: false }) } finally { cdp.off('HeapProfiler.addHeapSnapshotChunk', take) }
+    const text = chunks.join('')
+    if (process.env.VIEWER_SUITE_LIVE_DIAG) writeFileSync(`${process.env.VIEWER_SUITE_LIVE_DIAG}-${fixture.key}-${label}.heapsnapshot`, text)
+    return snapshotCodeBytes(JSON.parse(text))
+  }
   const diagSnapshot = async (label: string) => {
     if (!process.env.VIEWER_SUITE_LIVE_DIAG || !cdp) return
     // Diagnostic only (never in release): a heap snapshot at this point.
@@ -351,13 +366,8 @@ async function memorySession(context: BrowserContext, base: string, fixture: Vie
     const frame = (await bounded(`${name} frame`, perf(page, p => ({ peakBitmapBytes: p.peakBitmapBytes, bitmapBytes: p.lastFrame?.bitmapBytes ?? null, budgetBytes: p.lastFrame?.budgetBytes ?? null, workersCreated: p.workersCreated, workersTerminated: p.workersTerminated }))))
       ?? { peakBitmapBytes: 0, bitmapBytes: null, budgetBytes: null, workersCreated: -1, workersTerminated: -1 }
     const ledger = await bounded(`${name} main ledger`, perf(page, p => p.mainLedger()))
-    if (process.env.VIEWER_SUITE_LIVE_DIAG && cdp) {
-      // Diagnostic: the same reading after a heap snapshot's own precise collection.
-      await diagSnapshot(`cp-${name}`)
-      const after = await heap()
-      log(`      diag ${fixture.key}/${name}: heap ${h ? heapBytes(h) : 'n/a'} -> after snapshot ${heapBytes(after as Heap)} (used ${h?.usedSize} -> ${(after as Heap).usedSize}, embedder ${h?.embedderHeapUsedSize} -> ${(after as Heap).embedderHeapUsedSize})`)
-    }
-    return { name, instrumentation, heap: h, heapBytes: h ? heapBytes(h) : null, ledger, worker, uasm: uasmSplit((uasm ?? { unavailable: 'probe timed out' }) as Uasm), canvas, storage, frame, browserProcessRssBytes: browserProcessRss() }
+    const code = await bounded(`${name} code bytes`, codeBytes(`cp-${name}`), 180_000)
+    return { name, instrumentation, heap: h, heapBytes: h ? heapBytes(h) : null, codeBytes: code, ledger, worker, uasm: uasmSplit((uasm ?? { unavailable: 'probe timed out' }) as Uasm), canvas, storage, frame, browserProcessRssBytes: browserProcessRss() }
   }
   // Warmed host, established independently of the measured session: the same
   // page opens a small paged workbook (F2 at smoke scale), runs the same code
@@ -403,7 +413,7 @@ async function memorySession(context: BrowserContext, base: string, fixture: Vie
     const ledger = await bounded('warm open ledger', perf(page, p => p.mainLedger()?.bytes ?? null))
     if (h && typeof ledger === 'number') warmOpen.push({ heapBytes: heapBytes(h), ledgerBytes: ledger })
   }
-  await diagSnapshot('warm-open')
+  const warmOpenCode = await bounded('warm open code bytes', codeBytes('warm-open'), 180_000)
   await bounded('warm close', perf(page, p => p.close()), 30_000)
   const warmHostSamples: number[] = []
   for (let i = 0; i < WARM_HOST_SAMPLES; i++) {
@@ -411,6 +421,7 @@ async function memorySession(context: BrowserContext, base: string, fixture: Vie
     const h = await bounded('warm heap', heap())
     if (h) warmHostSamples.push(heapBytes(h))
   }
+  const warmCode = await bounded('warm code bytes', codeBytes('warm'), 180_000)
   const baseline = await checkpoint('baseline')
   // Peak sampling during open/import (no forced GC: an upper bound, garbage included).
   const polls: { t: number; heapBytes: number | null; workerPeak: number | null; workerRetained: number | null }[] = []
@@ -446,7 +457,6 @@ async function memorySession(context: BrowserContext, base: string, fixture: Vie
   await openFixture(page, fixture)
   await waitComplete(page)
   loaded = await checkpoint('loaded')
-  await diagSnapshot('loaded')
   if (ops === 'f2') {
     await page.evaluate(() => (window as unknown as W).__viewerPerf.scrollRun({ warmup: 0, frames: 120, dx: 0, dy: 60 }))
     if (process.env.VIEWER_SUITE_LIVE_DIAG) { await gcMain(); await diagSnapshot('scroll') }
@@ -529,7 +539,7 @@ async function memorySession(context: BrowserContext, base: string, fixture: Vie
   }
   log(`    memory ${fixture.key}: main ledger peak ${mib(afterOps.ledger?.peakBytes ?? null)}; main owned ${mib(summary.mainOwnedBytes)} (forced-GC live max ${mib(liveHeapSamples.length && baseline.heapBytes !== null ? Math.max(...liveHeapSamples) - baseline.heapBytes : null)} over ${liveHeapSamples.length} samples; peak no-GC ${mib(summary.mainPeakNoGcBytes)}), worker ledger ${mib(ledgerPeak)} / UASM ${mib(summary.workerUasmBytes)}, bitmap ${mib(summary.bitmapPeakBytes)}; after close main ${mib(summary.recovery.mainAfterCloseBytes)}, workers ${summary.recovery.workersTerminated}/${summary.recovery.workersCreated} terminated, canvases ${closed.canvas.count}`)
   if (diagnose) writeFileSync(`${process.env.VIEWER_SUITE_LIVE_DIAG}-${fixture.key}.json`, JSON.stringify({ warm: warmHostSamples, liveDiag }))
-  return { summary, warmHost: { fixture: warmFixture.key, scale: warmFixture.scale, samples: warmHostSamples, empty: warmEmptySamples, open: warmOpen }, checkpoints: { baseline, loaded, afterOps, closed }, polls, liveHeapSamples, liveSampleMs: LIVE_SAMPLE_MS, timeouts }
+  return { summary, warmHost: { fixture: warmFixture.key, scale: warmFixture.scale, samples: warmHostSamples, empty: warmEmptySamples, open: warmOpen, codeBytes: warmCode, openCodeBytes: warmOpenCode }, checkpoints: { baseline, loaded, afterOps, closed }, polls, liveHeapSamples, liveSampleMs: LIVE_SAMPLE_MS, timeouts }
 }
 
 // ---- formatting ----------------------------------------------------------------

@@ -89,8 +89,9 @@ const importRun = (id: string) => {
   ] }
 }
 const ledgerAt = (peakBytes: number, bytes = peakBytes) => ({ bytes, peakBytes, byPool: {}, atPeak: {} })
+const CODE = 4 * MiB
 const checkpoint = (heapBytes: number, workerPeak: number, ledgerPeak: number) => ({
-  heapBytes, ledger: ledgerAt(ledgerPeak), worker: { kind: 'stats', sessions: [{ memory: { peakBytes: workerPeak } }] },
+  heapBytes, codeBytes: CODE, ledger: ledgerAt(ledgerPeak), worker: { kind: 'stats', sessions: [{ memory: { peakBytes: workerPeak } }] },
   uasm: { available: true, worker: workerPeak, canvas: 40 * MiB }, frame: { peakBitmapBytes: 100 * MiB, workersCreated: 1, workersTerminated: 0 },
   canvas: { count: 2, bytes: 1 }, storage: { usage: 200 * MiB, quota: 1e10 },
 })
@@ -98,11 +99,11 @@ const checkpoint = (heapBytes: number, workerPeak: number, ledgerPeak: number) =
 const WARM = [5 * MiB - 20 * 1024, 5 * MiB, 5 * MiB + 20 * 1024, 5 * MiB - 10 * 1024, 5 * MiB + 10 * 1024]
 const memorySession = (cycles: number[] | null) => ({
   // The warm document open and idle: 0.5 MiB of heap above the closed warm host outside its ledger.
-  warmHost: { fixture: 'F2', scale: 'F2 reduced', samples: [...WARM], empty: [4 * MiB, 4 * MiB, 4 * MiB], open: Array.from({ length: 3 }, () => ({ heapBytes: 15 * MiB, ledgerBytes: 9.5 * MiB })) },
+  warmHost: { fixture: 'F2', scale: 'F2 reduced', samples: [...WARM], empty: [4 * MiB, 4 * MiB, 4 * MiB], open: Array.from({ length: 3 }, () => ({ heapBytes: 15 * MiB, ledgerBytes: 9.5 * MiB })), codeBytes: CODE, openCodeBytes: CODE },
   checkpoints: {
     baseline: { heapBytes: 5 * MiB, storage: { usage: 0, quota: 1e10 } },
     loaded: checkpoint(20 * MiB, 200 * MiB, 18 * MiB), afterOps: checkpoint(25 * MiB, 220 * MiB, 26 * MiB),
-    closed: { heapBytes: 5 * MiB, ledger: ledgerAt(26 * MiB, 0), uasm: { available: true, worker: 0, canvas: 0 }, frame: { workersCreated: 1, workersTerminated: 1, peakBitmapBytes: 100 * MiB }, canvas: { count: 0, bytes: 0 }, storage: { usage: 0, quota: 1e10 } },
+    closed: { heapBytes: 5 * MiB, codeBytes: CODE, ledger: ledgerAt(26 * MiB, 0), uasm: { available: true, worker: 0, canvas: 0 }, frame: { workersCreated: 1, workersTerminated: 1, peakBitmapBytes: 100 * MiB }, canvas: { count: 0, bytes: 0 }, storage: { usage: 0, quota: 1e10 } },
   },
   summary: { recovery: { cyclesMainOwnedBytes: cycles } },
   polls: [{ workerPeak: 210 * MiB }], timeouts: [], liveHeapSamples: [12 * MiB, 30 * MiB, 18 * MiB],
@@ -198,6 +199,36 @@ describe('evaluation from raw records', () => {
     expect(receipt.evidenceProblems.some(p => /uncharged main memory in F2 at the closed checkpoint \(10 MiB/.test(p))).toBe(true)
     expect(desktop(receipt, 'main-owned-memory').outcome).toBe('pending')
     expect(receipt.desktopAdmitted).toBe(false)
+  })
+
+  it('(r4-2) measured compiled-code growth is excluded exactly, and a plain-object leak beside it is still refused', async () => {
+    // Loaded at the allowance edge: gap 20 - 5 - 14.5 = 0.5 MiB = the warm-open gap.
+    const atEdge = () => { const d = validDraft(); for (const key of ['F2', 'F4']) (d.raw.memory as any)[key].checkpoints.loaded.ledger = ledgerAt(18 * MiB, 14.5 * MiB); return d }
+    expect((await finalizeReceipt(atEdge(), ctx)).desktopAdmitted).toBe(true)
+    // +1 MiB of compiled code, measured: excluded, still admitted.
+    const code = atEdge()
+    for (const key of ['F2', 'F4']) { const cp = (code.raw.memory as any)[key].checkpoints.loaded; cp.heapBytes += 1 * MiB; cp.codeBytes += 1 * MiB }
+    const codeReceipt = await finalizeReceipt(code, ctx)
+    expect(codeReceipt.evidenceProblems).toEqual([])
+    expect(codeReceipt.measurements.memory.mainCodeGrowthBytes).toBe(1 * MiB)
+    // The same code growth plus a 1 MiB plain-object leak: refused.
+    const leak = atEdge()
+    for (const key of ['F2', 'F4']) { const cp = (leak.raw.memory as any)[key].checkpoints.loaded; cp.heapBytes += 2 * MiB; cp.codeBytes += 1 * MiB }
+    const leakReceipt = await finalizeReceipt(leak, ctx)
+    expect(leakReceipt.evidenceProblems.some(p => /uncharged main memory in F2 at the loaded checkpoint \(1\.5 MiB .* after excluding 1 MiB of measured compiled-code growth/.test(p))).toBe(true)
+    expect(desktop(leakReceipt, 'main-owned-memory').outcome).toBe('pending')
+    expect(leakReceipt.desktopAdmitted).toBe(false)
+  })
+
+  it('(r4-2) a missing compiled-code measurement is never silently excluded: the row is not admitted', async () => {
+    for (const drop of [(d: any) => { delete d.F2.checkpoints.afterOps.codeBytes }, (d: any) => { delete d.F4.warmHost.codeBytes }]) {
+      const d = validDraft()
+      drop(d.raw.memory)
+      const receipt = await finalizeReceipt(d, ctx)
+      expect(receipt.evidenceProblems.some(p => /no compiled-code measurement/.test(p))).toBe(true)
+      expect(desktop(receipt, 'main-owned-memory').outcome).toBe('pending')
+      expect(receipt.desktopAdmitted).toBe(false)
+    }
   })
 
   it('(r4-1) a session without warm-open samples (heap + ledger) is not admitted', async () => {
