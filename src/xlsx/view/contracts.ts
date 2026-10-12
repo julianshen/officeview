@@ -1,4 +1,5 @@
-import type { XlsxCell, XlsxCellStyle, XlsxDocument } from '../types'
+import type { XlsxCell, XlsxCellStyle, XlsxDocument, XlsxDrawing, XlsxImage } from '../types'
+import type { ThemeContext } from '../../drawing/style'
 import type { CellId, DisplaySlot, SourceCell, SourceCol, SourceRect, SourceRow } from './coordinates'
 
 /** Source-space contracts, spec §4.1; limits bound output, never semantic membership. */
@@ -179,6 +180,29 @@ export interface SourceStore {
   queryOverview(request: OverviewQuery, options: ReadOptions): Promise<Page<OverviewGroup>>
   ensureComplete(rect: SourceRect, options: ReadOptions): Promise<RangeCompletion>
   release(): Promise<void>
+  /** S13.2: the sheet's drawing content for painting (shapes, text, theme and
+   * pictures), bounded by the drawing transfer budget of `profile`. Optional:
+   * a store without it reports drawings as unsupported (a visible diagnostic).
+   * `memory` is the caller's transient share of the document pool: the store
+   * sizes it to its working set and refuses (a diagnostic) what does not fit. */
+  readDrawings?(options: ReadOptions, profile: ProfileId, memory?: DrawingMemory): Promise<SheetDrawings>
+}
+/** Absolute transient bytes of one drawing read; false when they cannot be admitted. */
+export interface DrawingMemory { set(bytes: number): boolean }
+
+/** S13.2: one sheet's paintable drawings as the resident parser produces them,
+ * with sheet-local picture indexes. Whatever the budget or a part cap kept out
+ * is named in `diagnostics` (never silently omitted); `bytes` are the binary
+ * asset bytes carried. An incomplete result carries the failure. */
+export interface SheetDrawings {
+  completeness: 'complete' | 'incomplete'
+  drawings: readonly XlsxDrawing[]
+  /** Indexed by each drawing's `imageIndex`. */
+  images: readonly XlsxImage[]
+  theme?: ThemeContext
+  diagnostics: readonly WorkerDiagnostic[]
+  bytes: number
+  error?: SourceFailure
 }
 
 /** Interval/range shapes only; no per-covered-cell expansion, spec §4.5. */
@@ -399,6 +423,8 @@ export type SourceReadQuery =
   | { op: 'layout' }
   /** Ends a scan continuation the caller abandoned (iterator return/cancel). */
   | { op: 'releaseScan'; cursor: string }
+  /** S13.2: the sheet's drawing content (SourceStore.readDrawings). */
+  | { op: 'drawings' }
 export type SourceReadResult =
   | { op: 'cell'; read: CellRead }
   | { op: 'rows'; page: Page<SparseRowPage> }
@@ -407,6 +433,7 @@ export type SourceReadResult =
   | { op: 'complete'; result: RangeCompletion }
   | { op: 'layout'; layout: SheetLayout }
   | { op: 'releaseScan'; released: boolean }
+  | { op: 'drawings'; result: SheetDrawings }
 /** S5.4: resolved cell styles (indexed by cell styleIndex) and the date system
  * of a paged workbook, published with open so worker-backed cells format like
  * resident ones. Bounded by the styles part's small-part cap. */

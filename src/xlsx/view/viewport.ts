@@ -354,21 +354,27 @@ export function buildSheetGeometry(sheet: XlsxSheet, options: SheetGeometryOptio
     }
     mergeEntries.push({ rect: { r0: range.minRow, r1: range.maxRow, c0: range.minCol, c1: range.maxCol }, value: range })
   }
-  const drawings = sheet.drawings ?? []
-  const boxes = drawings.map((node, index) => ({ ...drawingExtent([node]), index, weight: drawingWeight(node) }))
-    .filter(box => box.left <= box.right && box.top <= box.bottom)
-  const drawingIndex = BoxIndex.build(boxes)
+  const drawingsIn = drawingQuery(sheet.drawings ?? [])
   return Object.freeze({
     kind: 'ready' as const,
     metrics,
     diagnostics: Object.freeze(diagnostics),
     cellsOf: (sourceRow: number) => cellsByRow.get(sourceRow),
     merges: RectangleIndex.build(mergeEntries),
-    drawingsIn(left: number, top: number, right: number, bottom: number, budget: number) {
-      const hits = drawingIndex.query(left, top, right, bottom, budget)
-      return hits && hits.map(index => drawings[index])
-    },
+    drawingsIn,
   })
+}
+
+/** SheetGeometry.drawingsIn over top-level drawings in worksheet CSS px (both
+ * the resident and the paged geometry, S13.2). */
+export function drawingQuery(drawings: readonly XlsxDrawing[]): SheetGeometry['drawingsIn'] {
+  const boxes = drawings.map((node, index) => ({ ...drawingExtent([node]), index, weight: drawingWeight(node) }))
+    .filter(box => box.left <= box.right && box.top <= box.bottom)
+  const drawingIndex = BoxIndex.build(boxes)
+  return (left, top, right, bottom, budget) => {
+    const hits = drawingIndex.query(left, top, right, bottom, budget)
+    return hits && hits.map(index => drawings[index])
+  }
 }
 
 interface LocatedMerge { minRow: number; maxRow: number; range: XlsxMergeRange }

@@ -67,6 +67,7 @@ import type { HiddenCellInspection } from './ViewerStatus'
 import { SheetTileRenderer, TILE_BYTES, admitDeviceScale, paneSurfaceBytes, type SheetFrame } from './sheetTiles'
 import { SearchBar, ZoomControls } from '../viewerControls'
 import { isRemoteWorkbook } from '../../worker/viewerRemoteSource'
+import { documentWithDrawings, drawingNotices, sheetWithDrawings } from '../../worker/viewerRemoteDrawings'
 import { pagedSheetGeometry } from './pagedGeometry'
 
 /** A committed sheet view (the S9.1 sort/filter commit seam). `revision` must
@@ -147,6 +148,8 @@ function loadFailureNotice(message: string, code?: string): string {
     : ' Reopen the file to try again.'
   return `This sheet could not be fully loaded: ${message}.${recovery}`
 }
+/** Worker-backed (paged) sheets have no main-thread cells or static drawing paint to print. */
+const PAGED_PRINT_MESSAGE = 'This spreadsheet cannot be printed from the large-file view: neither its cells nor its drawings are printed. Copy a selected range instead.'
 const MAX_FONT_NOTICE_FAMILIES = 3
 function fontNotice(diagnostics: readonly FontDiagnostic[]): string[] {
   const families = [...new Set(diagnostics.map(d => d.family).filter((family): family is string => Boolean(family)))]
@@ -212,18 +215,21 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
   // A sheet switch stops presenting the old sheet at once (no stale raster under the
   // new sheet's headers), so its lease is released before the new sheet decodes.
   useEffect(() => { setAssets(current => current && current.sheetId !== activeSheetId ? null : current) }, [activeSheetId])
+  // A worker-backed sheet's drawing content arrives after its structure (S13.2);
+  // its pictures are leased like resident ones once it does.
+  const activeDrawings = remote && activeSheetId ? remote.drawings(activeSheetId) : null
   useEffect(() => {
     if (!activeSheetId) return
     let cancelled = false
     const sheetIndex = sheetIds.indexOf(activeSheetId)
-    void loadAssets(doc, { ...(fontKey ? { fallbackFonts } : {}), sheetIndex, profile, imageCache: imageCacheFor() }).then(next => {
+    void loadAssets(activeDrawings ? documentWithDrawings(doc, sheetIndex, activeDrawings) : doc, { ...(fontKey ? { fallbackFonts } : {}), sheetIndex, profile, imageCache: imageCacheFor() }).then(next => {
       if (cancelled) { next.dispose(); return }
       if (fontGenRef.current.key !== fontKey || fontGenRef.current.gen === 0) fontGenRef.current = { key: fontKey, gen: fontGenRef.current.gen + 1 }
       setAssets({ lease: next, fontGen: fontGenRef.current.gen, fontKey, sheetId: activeSheetId })
     })
     return () => { cancelled = true }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [doc, fontKey, activeSheetId, profile])
+  }, [doc, fontKey, activeSheetId, profile, activeDrawings?.gen])
   const committedLease = useRef<SheetAssetsLease | null>(null)
   useEffect(() => {
     const previous = committedLease.current
@@ -247,7 +253,7 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
   }
   const entryFor = (sheetId: string): SheetEntry => {
     const index = sheetIds.indexOf(sheetId)
-    const sheet = doc.sheets[index]
+    const sheet = remote ? sheetWithDrawings(doc.sheets[index], remote.drawings(sheetId)) : doc.sheets[index]
     const input = viewInput(sheetId)
     const previous = entries.get(sheetId)
     const structureGen = remote ? remote.merges(sheetId).gen : 0
@@ -699,6 +705,7 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
   // A worker-backed sheet is complete only once its import finished (LIFE-03).
   const loadState = remote?.loadState(activeSheetId)
   // Retained font diagnostics (§9.1): bounded and deduplicated by family.
+  const pagedDrawingNotices = activeDrawings ? drawingNotices(activeDrawings) : []
   const fontNotices = fontNotice(assets && assets.sheetId === activeSheetId ? assets.lease.fontDiagnostics : [])
 
   // Overlay layer: selection and search highlights in viewport space.
@@ -864,7 +871,7 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
   const preparePrint = async () => {
     if (!allowPrintRef.current) return
     // Static print needs every cell on the main thread; a worker-backed workbook never has them.
-    if (remote) { setAnnouncement(LARGE_EXPORT_MESSAGE); return }
+    if (remote) { setAnnouncement(PAGED_PRINT_MESSAGE); return }
     const token = ++printToken.current
     const loader = props.printLoader ?? preparePrintUnits
     let pages: Awaited<ReturnType<typeof loader>>
@@ -993,7 +1000,7 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
         <div ref={paneRef} data-testid="officeview-sheet-pane" style={{ position: 'relative', flex: '1 1 auto', minHeight: 0, overflow: 'hidden', background: '#ffffff' }}>
           {entry && scroll && (
             <GridSemantics owner={identity} projection={entry.metrics} view={entry.view} selection={selection} window={scroll} viewport={viewport}
-              body={entry.body} onChange={onGridChange} status={{ records: { ...snapshot(activeSheetId).records, completeness: loadState?.completeness ?? 'complete' }, countMode: 'body', loadReport: { status: 'ready', notices: [...notices, ...fontNotices, ...(loadState?.failure ? [loadFailureNotice(loadState.failure, loadState.code)] : [])] } }}
+              body={entry.body} onChange={onGridChange} status={{ records: { ...snapshot(activeSheetId).records, completeness: loadState?.completeness ?? 'complete' }, countMode: 'body', loadReport: { status: 'ready', notices: [...notices, ...fontNotices, ...pagedDrawingNotices, ...(loadState?.failure ? [loadFailureNotice(loadState.failure, loadState.code)] : [])] } }}
               onSortCycle={(col, shift) => void sortCycle(col, shift)} onFilter={(col, invoker) => { setPopup({ kind: 'filter', col, invoker }) }} onSortDialog={(col, invoker) => { setPopup({ kind: 'sort', col, invoker }) }} onNotice={setAnnouncement}
               popup={popup && controls ? { invoker: popup.invoker, close: closePopup, label: popup.kind === 'filter' ? 'Column filter' : 'Sort worksheet', content: popup.kind === 'filter' ? <FilterDropdown owner={identity} client={controls.client} applied={entry.view.filter} appliedSort={entry.view.sort} col={popup.col} invoker={popup.invoker} embedded onClose={closePopup} onApplied={() => rerender()} onNotice={setAnnouncement} /> : <SortDialog owner={identity} client={controls.client} applied={entry.view.sort} col={popup.col} invoker={popup.invoker} embedded onClose={closePopup} onApplied={() => rerender()} onNotice={setAnnouncement} /> } : undefined} announcement={[resourceNotice, assets?.sheetId !== activeSheetId ? 'Loading sheet…' : '', assets && assets.sheetId === activeSheetId && assets.lease.refusedImages > 0 ? `${assets.lease.refusedImages} picture${assets.lease.refusedImages === 1 ? ' is' : 's are'} not shown (image memory budget).` : '', selectionIncomplete ? 'Selection highlight is incomplete at this zoom; zoom in for detail.' : '', announcement].filter(Boolean).join(' ')} inspection={inspection} profile={profile} label={`Worksheet ${entry.sheet.name}`}
               cellPresentation={at => {
@@ -1015,7 +1022,7 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
         </div>
         {allowPrint && (
           <div data-officeview-sheet-print="" aria-hidden="true">
-            {!printPages && <p data-testid="officeview-sheet-print-notice">To print this spreadsheet, press Ctrl/Cmd+P inside the viewer.</p>}
+            {!printPages && <p data-testid="officeview-sheet-print-notice">{remote ? PAGED_PRINT_MESSAGE : 'To print this spreadsheet, press Ctrl/Cmd+P inside the viewer.'}</p>}
             <div data-testid="officeview-sheet-print-pages">
               {printPages?.map((unit, index) => unit.page
                 ? <div key={index} style={{ breakAfter: 'page' }}>

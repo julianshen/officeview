@@ -213,8 +213,10 @@ One grid Tab entry owns a bounded row/header/cell tree with active/selection/sor
 state. Arrows/Home/End/Ctrl-or-Cmd edges navigate; Enter moves down, Shift extends
 selection, F2 enters header controls, Alt+Down opens a filter, and Ctrl/Cmd+F opens
 find. Escape closes popups before clearing selection and restores focus. Touch
-targets aim for 44px, clamped to narrow/clipped headers' owned bounds; inputs keep
-native editing keys. **Behavior change:**
+header controls are 44px buttons; for the active cell's column narrower than that, a
+44px "Actions for column …" button in the header corner opens its select, sort and
+filter buttons (clipped headers keep their owned bounds); inputs keep native
+editing keys. **Behavior change:**
 Ctrl/Cmd+wheel blocks browser page zoom over every viewer, including its controls.
 
 OffscreenCanvas is optional for sheet mode; font failure uses diagnosed fallbacks,
