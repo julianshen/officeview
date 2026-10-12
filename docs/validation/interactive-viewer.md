@@ -161,6 +161,8 @@ These are mandatory cases whose evidence is incomplete. Nothing here is hidden a
 
 ## Observations (not fixed; not reproduced as failures)
 
+- G2's read-ahead costs one extra `next()` per complete cursor-less page. On the worker path that is one more worker round trip; it is part of the 597 reads above. Detection keeps at most one read-ahead continuation open, because the worker caps open scans at 4 (`MAX_OPEN_SCANS`), shared with find. This is a cost note for the S8.6 owner, not a bug.
+- Generated browser packages are cached under `$TMPDIR/officeview-viewer-e2e-v1`, keyed by file name. If the S0.2 builders change, bump the `-v1` suffix in `tests/browser/viewer-e2e.ts`.
 - `fromStoreScan` (`src/xlsx/view/structure.ts`) has the same first-page-only pattern as G2. It is used only by tests today. Any future production caller must follow iteration-continued pages.
 - On worker-backed F2, the saved-values status reads "0 formulas not recalculated (file too large)". The count follows the documented S1.3 definition (formulas the engine would have evaluated at load), and a cached `SUM` is not one of them. The wording is correct but may confuse users.
 - `queryViewport` documents itself as not yet wired to a worker `viewport` command (a TODO in `viewport.ts`). The worker-backed viewer paints from bounded `read rows` windows instead, and those windows are what the complexity audit measured.
