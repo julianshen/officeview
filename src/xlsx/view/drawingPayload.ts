@@ -15,10 +15,31 @@ import type { ThemeContext } from '../../drawing/style'
 import type { ProfileId, SheetDrawings, WorkerDiagnostic } from './contracts'
 import { collectXlsxImages } from '../drawingImages'
 import { MAIN_THREAD_BUDGETS } from './tileCache'
+import { DOCUMENT_DRAWING_NODE_LIMIT } from '../../drawing/parts'
 
 export const DRAWING_ASSET_REFUSED = 'drawing-asset-refused'
 export const DRAWING_PART_REFUSED = 'drawing-part-refused'
 export const DRAWINGS_UNAVAILABLE = 'drawings-unavailable'
+export const DRAWING_MEMORY_REFUSED = 'drawing-memory-refused'
+export const DRAWING_NODE_BUDGET = 'drawing-node-budget'
+/** Accounted bytes of one plain object/array of a drawing model (fields, strings: an estimate). */
+const OBJECT_BYTES = 128
+
+/** Estimated memory of a drawing model: every reachable object plus its binary buffers (each once). */
+export function drawingFootprint(value: unknown): number {
+  const seen = new Set<object>(), buffers = new Set<ArrayBufferLike>()
+  let bytes = 0
+  const visit = (item: unknown): void => {
+    if (typeof item === 'string') { bytes += item.length * 2; return }
+    if (typeof item !== 'object' || item === null || seen.has(item)) return
+    seen.add(item)
+    if (ArrayBuffer.isView(item)) { if (!buffers.has(item.buffer)) { buffers.add(item.buffer); bytes += item.buffer.byteLength }; return }
+    bytes += OBJECT_BYTES
+    for (const entry of Array.isArray(item) ? item : Object.values(item)) visit(entry)
+  }
+  visit(value)
+  return bytes
+}
 
 /** Binary bytes one sheet's drawings may carry to the main thread: a quarter
  * of the main-thread profile budget (D 16 MiB, M 8 MiB), like the row cache. */
@@ -83,6 +104,23 @@ export function sheetDrawingPayload(drawings: XlsxDrawing[], theme: ThemeContext
 }
 
 /** A typed outcome without drawings: the reason is always a diagnostic. */
-export function unavailableDrawings(message: string, error?: SheetDrawings['error']): SheetDrawings {
-  return { completeness: 'incomplete', drawings: [], images: [], diagnostics: [{ code: DRAWINGS_UNAVAILABLE, message }], bytes: 0, ...(error ? { error } : {}) }
+export function unavailableDrawings(message: string, error?: SheetDrawings['error'], code = DRAWINGS_UNAVAILABLE): SheetDrawings {
+  return { completeness: 'incomplete', drawings: [], images: [], diagnostics: [{ code, message }], bytes: 0, ...(error ? { error } : {}) }
+}
+
+/**
+ * The document drawing node budget (DOCUMENT_DRAWING_NODE_LIMIT) across one
+ * paged workbook, as the resident parse shares one package context across all
+ * sheets: a sheet's parse may use what the other sheets' latest parses left.
+ * Re-reading a sheet replaces its own share instead of adding to it.
+ */
+export class DrawingNodeLedger {
+  private readonly used = new Map<string, number>()
+  /** Nodes already used by every other sheet. */
+  start(sheetId: string): number {
+    let total = 0
+    for (const [id, nodes] of this.used) if (id !== sheetId) total += nodes
+    return Math.min(total, DOCUMENT_DRAWING_NODE_LIMIT)
+  }
+  record(sheetId: string, nodes: number): void { this.used.set(sheetId, nodes) }
 }

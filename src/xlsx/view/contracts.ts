@@ -182,9 +182,13 @@ export interface SourceStore {
   release(): Promise<void>
   /** S13.2: the sheet's drawing content for painting (shapes, text, theme and
    * pictures), bounded by the drawing transfer budget of `profile`. Optional:
-   * a store without it reports drawings as unsupported (a visible diagnostic). */
-  readDrawings?(options: ReadOptions, profile: ProfileId): Promise<SheetDrawings>
+   * a store without it reports drawings as unsupported (a visible diagnostic).
+   * `memory` is the caller's transient share of the document pool: the store
+   * sizes it to its working set and refuses (a diagnostic) what does not fit. */
+  readDrawings?(options: ReadOptions, profile: ProfileId, memory?: DrawingMemory): Promise<SheetDrawings>
 }
+/** Absolute transient bytes of one drawing read; false when they cannot be admitted. */
+export interface DrawingMemory { set(bytes: number): boolean }
 
 /** S13.2: one sheet's paintable drawings as the resident parser produces them,
  * with sheet-local picture indexes. Whatever the budget or a part cap kept out

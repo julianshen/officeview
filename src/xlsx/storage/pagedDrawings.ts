@@ -20,13 +20,13 @@ import { OfficePackage } from '../../core/zip'
 import { readPartBytes, type RangeSource, type ZipInventory } from '../../core/zip-stream'
 import { isPackageError } from '../../core/package-error'
 import { attrs, getChildren, parseXml, parseXmlOrdered, type XmlNode } from '../../core/xml'
-import { resolvePartTarget } from '../../drawing/parts'
+import { DOCUMENT_DRAWING_NODE_LIMIT, drawingPartContext, resolvePartTarget } from '../../drawing/parts'
 import { parseThemeContext, type ThemeContext } from '../../drawing/style'
 import { parseWorksheetDrawings } from '../drawing'
 import type { XlsxSheet } from '../types'
-import type { ProfileId, SheetDrawings, WorkerDiagnostic } from '../view/contracts'
+import type { DrawingMemory, ProfileId, SheetDrawings, WorkerDiagnostic } from '../view/contracts'
 import { placementAxes } from '../view/drawingBounds'
-import { DRAWING_PART_REFUSED, drawingPayloadBudget, sheetDrawingPayload } from '../view/drawingPayload'
+import { DRAWING_MEMORY_REFUSED, DRAWING_NODE_BUDGET, DRAWING_PART_REFUSED, drawingFootprint, drawingPayloadBudget, sheetDrawingPayload, unavailableDrawings } from '../view/drawingPayload'
 import type { SheetGeometry } from '../../worker/viewerSession'
 import { classifyPart } from './admission'
 import { importLimitsFor } from './importSession'
@@ -34,6 +34,9 @@ import { importLimitsFor } from './importSession'
 const R_NS = 'http://schemas.openxmlformats.org/officeDocument/2006/relationships'
 /** Refused parts named one by one in diagnostics; the rest are counted. */
 const NAMED_REFUSALS = 4
+/** Working-set estimate per inflated XML byte: its UTF-16 text plus the parsed tree. */
+export const XML_WORKING_SET_FACTOR = 8
+
 
 export interface PagedDrawingLimits {
   /** Per non-media part (drawing XML, charts, relationships, VML, ...). */
@@ -67,9 +70,13 @@ class RangePackage extends OfficePackage {
   private readBytes = 0
   private partsRead = 0
   private refusals = 0
+  /** Charged working-set estimate (inflated parts, parsed trees). */
+  workingSet = 0
+  /** A part did not fit the document pool: the whole read is refused, never partial. */
+  memoryRefused = false
   readonly diagnostics: WorkerDiagnostic[] = []
 
-  constructor(private readonly src: RangeSource, private readonly inventory: ZipInventory, private readonly limits: PagedDrawingLimits, private readonly signal: AbortSignal) {
+  constructor(private readonly src: RangeSource, private readonly inventory: ZipInventory, private readonly limits: PagedDrawingLimits, private readonly signal: AbortSignal, private readonly memory?: DrawingMemory) {
     super(new JSZip())
   }
   private cap(path: string): number { return classifyPart(path).cls === 'media' ? this.limits.mediaBytes : this.limits.partBytes }
@@ -120,10 +127,14 @@ class RangePackage extends OfficePackage {
     return this.inventory.entries.map(entry => entry.name).filter(name => !predicate || predicate(name))
   }
   private async read(path: string): Promise<Uint8Array | undefined> {
-    if (!this.has(path)) return undefined
+    if (this.memoryRefused || !this.has(path)) return undefined
     const entry = this.inventory.find(path)!
     if (this.readBytes + entry.uncompressedSize > this.limits.readBytes) { this.refuse(path, `the sheet's drawing parts exceed ${this.limits.readBytes} bytes`); return undefined }
     if (this.partsRead >= this.limits.maxParts) { this.refuse(path, `more than ${this.limits.maxParts} drawing parts`); return undefined }
+    // The worker pool admits the working set before anything is inflated.
+    const cost = entry.uncompressedSize * (classifyPart(path).cls === 'media' ? 1 : XML_WORKING_SET_FACTOR)
+    if (this.memory && !this.memory.set(this.workingSet + cost)) { this.memoryRefused = true; return undefined }
+    this.workingSet += cost
     // Charged before the read, so concurrent reads cannot overrun the budget.
     this.readBytes += entry.uncompressedSize
     this.partsRead++
@@ -147,10 +158,13 @@ export async function loadPagedSheetDrawings(
   geometry: SheetGeometry,
   limits: PagedDrawingLimits,
   signal: AbortSignal,
-): Promise<SheetDrawings> {
+  options: { memory?: DrawingMemory; startNodes?: number } = {},
+): Promise<PagedSheetDrawings> {
   const legacy = sheet.legacyDrawingIds ?? []
-  if (!sheet.drawingIds.length && !legacy.length) return sheetDrawingPayload([], undefined, [], limits.payloadBytes)
-  const pkg = new RangePackage(source.src, source.inventory, limits, signal)
+  if (!sheet.drawingIds.length && !legacy.length) return { drawings: sheetDrawingPayload([], undefined, [], limits.payloadBytes), nodes: 0, workingSet: 0 }
+  const pkg = new RangePackage(source.src, source.inventory, limits, signal, options.memory)
+  const context = drawingPartContext(pkg)
+  const startNodes = context.nodes = options.startNodes ?? 0
   // Theme: the workbook relationship, exactly as parse.ts finds it.
   let theme: ThemeContext = parseThemeContext()
   try {
@@ -172,5 +186,25 @@ export async function loadPagedSheetDrawings(
   const axes = placementAxes(geometry)
   await parseWorksheetDrawings(pkg, shell, sheet.partPath, worksheet, theme, { col: index => axes.cols.start(index), row: index => axes.rows.start(index) })
   if (signal.aborted) throw aborted(signal)
-  return sheetDrawingPayload(shell.drawings ?? [], theme, pkg.finish(), limits.payloadBytes)
+  const nodes = context.nodes - startNodes
+  if (pkg.memoryRefused) {
+    return { drawings: unavailableDrawings('This sheet\'s drawings need more worker memory than the document has free and are not shown', { code: 'resource-limit', retryable: false, message: 'worker memory budget' }, DRAWING_MEMORY_REFUSED), nodes, workingSet: pkg.workingSet }
+  }
+  const diagnostics = pkg.finish()
+  if (context.diagnostics.some(issue => issue.kind === 'node-budget' && issue.reason === 'document-budget')) {
+    diagnostics.push({ code: DRAWING_NODE_BUDGET, message: `Some drawings exceed the document's ${DOCUMENT_DRAWING_NODE_LIMIT}-node drawing budget and are not shown` })
+  }
+  const drawings = sheetDrawingPayload(shell.drawings ?? [], theme, diagnostics, limits.payloadBytes)
+  const workingSet = pkg.workingSet + drawingFootprint(drawings.drawings)
+  if (options.memory && !options.memory.set(workingSet)) {
+    return { drawings: unavailableDrawings('This sheet\'s drawings need more worker memory than the document has free and are not shown', { code: 'resource-limit', retryable: false, message: 'worker memory budget' }, DRAWING_MEMORY_REFUSED), nodes, workingSet: pkg.workingSet }
+  }
+  return { drawings, nodes, workingSet }
+}
+export interface PagedSheetDrawings {
+  drawings: SheetDrawings
+  /** Drawing nodes this parse used (for the document ledger). */
+  nodes: number
+  /** Charged working-set estimate at the end of the parse. */
+  workingSet: number
 }

@@ -16,8 +16,8 @@ import type {
   DrawingAnchor, RangeCompletion, ReadOptions, SingleCellPayload, SourceFailure, SourceRowInterval, SourceStamp, SourceStore,
   SparseRowPage, SpillExtent, StructuralResult, ValuePolicy, WorkerDiagnostic,
 } from './contracts'
-import type { ColumnLanes, ProfileId, SheetDrawings } from './contracts'
-import { drawingPayloadBudget, sheetDrawingPayload, unavailableDrawings } from './drawingPayload'
+import type { ColumnLanes, DrawingMemory, ProfileId, SheetDrawings } from './contracts'
+import { DRAWING_MEMORY_REFUSED, drawingFootprint, drawingPayloadBudget, sheetDrawingPayload, unavailableDrawings } from './drawingPayload'
 import { countLoadEvaluatedFormulas, documentValuePolicy, isValueUnavailable, laneValue, SAVED_VALUES_DIAGNOSTIC, valueAuthority, valueStatus } from './values'
 import type { XlsxCell, XlsxDocument, XlsxDrawing, XlsxRow, XlsxSheet } from '../types'
 import type { TableMetadata } from '../formula/types'
@@ -395,9 +395,13 @@ export class ObjectXlsxSheetAdapter implements SourceStore {
   }
   /** S13.2: the parsed drawings, cloned (the resident model keeps its own bytes
    * and workbook-wide picture indexes) and charged against the transfer budget. */
-  async readDrawings(options: ReadOptions, profile: ProfileId): Promise<SheetDrawings> {
+  async readDrawings(options: ReadOptions, profile: ProfileId, memory?: DrawingMemory): Promise<SheetDrawings> {
     const error = this.guard(options)
     if (error) return unavailableDrawings(`Drawings could not be read: ${error.message}`, error)
+    // The clone is this read's working set in the document pool.
+    if (memory && this.sheet.drawings?.length && !memory.set(drawingFootprint(this.sheet.drawings))) {
+      return unavailableDrawings('This sheet\'s drawings need more worker memory than the document has free and are not shown', failure('resource-limit', 'worker memory budget'), DRAWING_MEMORY_REFUSED)
+    }
     let drawings: XlsxDrawing[]
     try { drawings = this.sheet.drawings?.length ? structuredClone(this.sheet.drawings) : [] }
     catch (cause) { return unavailableDrawings(`Drawings could not be prepared: ${cause instanceof Error ? cause.message : String(cause)}`) }

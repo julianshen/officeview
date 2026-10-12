@@ -5,7 +5,7 @@
  * theme and pictures) from the worker; anything it cannot carry is an explicit
  * visible diagnostic, never a silent omission.
  */
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { OfficePackage } from '../src/core/zip'
 import { parseXlsx } from '../src/xlsx/parse'
 import type { XlsxDrawing, XlsxDocument } from '../src/xlsx/types'
@@ -19,8 +19,19 @@ import { buildSheetGeometry, drawingExtent, type SheetGeometry } from '../src/xl
 import { createIdentityOrder } from '../src/xlsx/view/order'
 import { createIntervalSet, visibilityFromHidden } from '../src/xlsx/view/visibility'
 import { buildZip, type BuildEntry } from './helpers/zip-builder'
+import { MemoryPool } from '../src/xlsx/view/tileCache'
+import { DrawingNodeLedger } from '../src/xlsx/view/drawingPayload'
+import { DOCUMENT_DRAWING_NODE_LIMIT } from '../src/drawing/parts'
+import { loadPagedSheetDrawings, pagedDrawingLimits } from '../src/xlsx/storage/pagedDrawings'
 import { xlsxEntries } from './helpers/xlsx-package'
 import { dataRows, EMU_PER_PX } from './helpers/xlsx-structure-fixtures'
+
+// Counts real parses (the wrapper calls through).
+const parses = vi.hoisted(() => ({ count: 0 }))
+vi.mock('../src/xlsx/storage/pagedDrawings', async original => {
+  const actual = await original<typeof import('../src/xlsx/storage/pagedDrawings')>()
+  return { ...actual, loadPagedSheetDrawings: (...args: Parameters<typeof actual.loadPagedSheetDrawings>) => { parses.count++; return actual.loadPagedSheetDrawings(...args) } }
+})
 
 const R_NS = 'http://schemas.openxmlformats.org/officeDocument/2006/relationships'
 const PKG_RELS = 'http://schemas.openxmlformats.org/package/2006/relationships'
@@ -86,17 +97,19 @@ function drawingWorkbook(spec: DrawingWorkbook): Uint8Array {
 const quiet = { yield: async () => {} }
 const box = [0, 0, 4000, 4000, 20000] as const
 const remotes: RemoteWorkbook[] = []
-afterEach(async () => { for (const remote of remotes.splice(0)) await remote.close() })
+afterEach(async () => { for (const remote of remotes.splice(0)) await remote.close(); kernels.length = 0 })
 
-async function openPaged(bytes: Uint8Array, sourceOptions?: Record<string, unknown>): Promise<RemoteWorkbook> {
+const kernels: ViewerKernel[] = []
+async function openPaged(bytes: Uint8Array, sourceOptions?: Record<string, unknown>, sessionOptions: Record<string, unknown> = {}): Promise<RemoteWorkbook> {
   const blob = new Blob([new Uint8Array(bytes)])
   const session = await openImportSession({ kind: 'blob', blob }, { docId: 'P', profile: 'D' })
   expect((await session.done).kind).toBe('complete')
   const source = (createPagedWorkbookSource as (...args: unknown[]) => ReturnType<typeof createPagedWorkbookSource>)(session, sourceOptions)
-  const kernel = new ViewerKernel({ parse: async () => { throw new Error('the paged source must serve this file') }, openSource: async () => source }, quiet)
+  const kernel = new ViewerKernel({ parse: async () => { throw new Error('the paged source must serve this file') }, openSource: async () => source }, { ...quiet, ...sessionOptions })
+  kernels.push(kernel)
   const client = createViewerClient(connectInProcess(kernel))
   const open = await openRemoteWorkbook(client, 'P', blob, 'D')
-  expect('layouts' in open).toBe(true)
+  if (!('layouts' in open)) throw new Error(JSON.stringify(open))
   const remote = new RemoteWorkbook(client, open as RemoteOpen)
   remotes.push(remote)
   remote.merges('1')
@@ -209,4 +222,75 @@ describe('paged drawings (RENDER-02 / AC-RENDER-01)', () => {
     expect(pictures.map(node => node.image?.data?.byteLength)).toEqual([PNG.byteLength, undefined])
     expect(pictures.map(node => node.imageIndex)).toEqual([0, undefined])
   })
+
+  it('charges the parse to the document pool and refuses, visibly, what does not fit', async () => {
+    const bytes = drawingWorkbook({ anchors: filledShape + themedShape, theme: true })
+    const remote = await openPaged(bytes, undefined, { workerBudgetBytes: 150_000 })
+    const geometry = await settledGeometry(remote)
+    expect(geometry.diagnostics.map(d => d.code)).toEqual(['drawing-memory-refused'])
+    expect(geometry.drawingsIn(...box)).toEqual([])
+    // The transient share ends with the read.
+    expect(kernels[0].lifecycleStats().transientBytes).toBe(0)
+  })
+
+  it('keeps the transient share released after a successful read too', async () => {
+    const remote = await openPaged(drawingWorkbook({ anchors: filledShape + picture, media: true }))
+    expect((await settledGeometry(remote)).drawingsIn(...box)).toHaveLength(2)
+    expect(kernels[0].lifecycleStats().transientBytes).toBe(0)
+  })
 })
+
+describe('paged drawing reads: parse reuse and the document node budget', () => {
+  async function pagedSource(bytes: Uint8Array) {
+    const session = await openImportSession({ kind: 'blob', blob: new Blob([new Uint8Array(bytes)]) }, { docId: 'Q', profile: 'D' })
+    expect((await session.done).kind).toBe('complete')
+    return { session, source: createPagedWorkbookSource(session) }
+  }
+  const read = (source: Awaited<ReturnType<typeof pagedSource>>['source'], memory?: { set(bytes: number): boolean }) => {
+    const store = source.store('1')
+    return store.readDrawings!({ signal: new AbortController().signal, stamp: store.stamp }, 'D', memory)
+  }
+
+  it('a repeated read clones the pooled payload instead of parsing again; without a pool it parses each time', async () => {
+    const bytes = drawingWorkbook({ anchors: filledShape + picture, media: true })
+    const { source } = await pagedSource(bytes)
+    const pool = new MemoryPool({ limitBytes: 64 * 1024 * 1024 })
+    source.bindMemory!(pool)
+    const before = parses.count
+    const first = await read(source)
+    const second = await read(source)
+    expect(parses.count - before).toBe(1)
+    expect(pool.stats().byTier.rebuildable).toBeGreaterThan(0)
+    // Each answer owns its buffers: transferring the first leaves the second whole.
+    structuredClone(first, { transfer: [first.drawings.find(d => d.image?.data)!.image!.data!.buffer as ArrayBuffer] })
+    expect(second.drawings.find(d => d.image?.data)!.image!.data!.byteLength).toBe(PNG.byteLength)
+    expect(second.drawings.map(key)).toEqual(first.drawings.map(key))
+    // Evicted (or never pooled): parsed again.
+    pool.trim(0)
+    await read(source)
+    expect(parses.count - before).toBe(2)
+    await source.release()
+  })
+
+  it('applies the drawing node budget per document: a sheet gets what the other sheets left, and says so when it runs out', async () => {
+    const ledger = new DrawingNodeLedger()
+    ledger.record('A', 9_000)
+    expect(ledger.start('B')).toBe(9_000)
+    expect(ledger.start('A')).toBe(0)
+    ledger.record('B', 2_000)
+    expect(ledger.start('A')).toBe(2_000)
+    ledger.record('A', 9_500)
+    expect(ledger.start('C')).toBe(DOCUMENT_DRAWING_NODE_LIMIT)
+
+    const bytes = drawingWorkbook({ anchors: filledShape + themedShape + picture, media: true })
+    const { session, source } = await pagedSource(bytes)
+    const sheet = session.workbook.sheets[0]
+    const result = await loadPagedSheetDrawings(session.workbook.parts, { name: sheet.name, partPath: sheet.partPath, drawingIds: sheet.metadata.drawingIds },
+      source.geometry('1'), pagedDrawingLimits('D'), new AbortController().signal, { startNodes: DOCUMENT_DRAWING_NODE_LIMIT - 1 })
+    expect(result.drawings.drawings).toHaveLength(1)
+    expect(result.nodes).toBe(1)
+    expect(result.drawings.diagnostics.map(d => d.code)).toContain('drawing-node-budget')
+    await source.release()
+  })
+})
+
