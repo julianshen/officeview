@@ -7,6 +7,7 @@ import { createIdentityOrder, createRowOrder } from '../src/xlsx/view/order'
 import { createAxisMetrics } from '../src/xlsx/view/axes'
 import { createSheetMetrics } from '../src/xlsx/view/projection'
 import { createFixture, createPrng, f8Cases, type FixtureCell } from './helpers/xlsx-viewer-fixtures'
+import { CooperativeSlice, YIELD_WORK_UNITS } from '../src/xlsx/view/scheduler'
 
 const fixtureCell = (value: FixtureCell['value'], error = false): FixtureCell => Object.freeze({ value, valueIsError: error, hasCachedValue: true, styleIndex: 0 })
 function dataStore(rows: readonly (readonly FixtureCell[])[]): SourceStore {
@@ -191,10 +192,21 @@ describe('sort ownership, bounded work and resource admission', () => {
     expect('order' in result).toBe(false)
   })
   it('cooperates on clock deadline and default macrotask scheduler allows queued abort', async () => {
-    const store = dataStore(Array.from({ length: 100 }, (_v, row) => [fixtureCell(100 - row)]))
-    let time = 0, yields = 0
-    expect((await sortRowOrder(store, specFor(100), { now: () => (time += 11), yield: async () => { yields++ } })).kind).toBe('complete')
-    expect(yields).toBeGreaterThan(100)
+    const rows = 1000, store = dataStore(Array.from({ length: rows }, (_v, row) => [fixtureCell(rows - row)]))
+    let time = 0, yields = 0, work = 0
+    const due = CooperativeSlice.prototype.due
+    const measured = vi.spyOn(CooperativeSlice.prototype, 'due').mockImplementation(function (this: CooperativeSlice, units = 1) {
+      work += units
+      return due.call(this, units)
+    })
+    try {
+      expect((await sortRowOrder(store, specFor(rows), { now: () => (time += 11), yield: async () => { yields++ } })).kind).toBe('complete')
+    } finally { measured.mockRestore() }
+    // Each +11 ms clock sample crosses the 10 ms deadline, at most 256 work
+    // units apart. This bound exceeds what work-limit yields alone can satisfy.
+    const minimumClockYields = Math.floor(work / 256)
+    expect(minimumClockYields).toBeGreaterThan(Math.ceil(work / YIELD_WORK_UNITS) + 1)
+    expect(yields).toBeGreaterThanOrEqual(minimumClockYields)
     const controller = new AbortController()
     const job = sortRowOrder(createFixture('F7', { rowCount: 10000 }).createStore(), specFor(10000), { signal: controller.signal })
     setTimeout(() => controller.abort(), 0)
@@ -299,8 +311,8 @@ describe('construction/accounting cancellation regressions', () => {
     let checks = 0
     const perPhase = new Map<string, number>()
     const result = await sortRowOrder(createFixture('F4', { rowCount: 16385 }).createStore(), specFor(16385), { now: () => { checks++; return 0 }, yield: async phase => {
-      // Clock sampling happens once per work unit, plus scheduler reset/initialization.
-      expect(checks).toBeLessThanOrEqual(4097)
+      // At most sixteen 256-unit samples per yield, plus reset/initialization.
+      expect(checks).toBeLessThanOrEqual(18)
       perPhase.set(phase, (perPhase.get(phase) ?? 0) + 1)
       checks = 0
     } })
@@ -360,18 +372,19 @@ describe('review behavior regressions', () => {
       vi.stubGlobal('MessageChannel', TestChannel)
       vi.stubGlobal('setTimeout', timers)
       try {
-        const store = dataStore([[fixtureCell(2)], [fixtureCell(1)]])
+        // Cross one amortized clock-check batch before the second-column failure.
+        const store = dataStore(Array.from({ length: 257 }, (_, row) => [fixtureCell(257 - row)]))
         let reads = 0
         const original = store.queryColumn.bind(store)
         const source: SourceStore = { ...store, queryColumn: async (request, options) => {
           if (outcome === 'error' && reads++) throw new Error('source failed after yield')
           return original(request, options)
         } }
-        const result = await sortRowOrder(source, specFor(2, [
+        const result = await sortRowOrder(source, specFor(257, [
           { col: 0, order: 'asc' }, { col: 1, order: 'asc' },
         ]), { now: () => (time += 11), signal: controller.signal })
         expect(result.kind).toBe(outcome)
-        if (result.kind === 'complete') expect(rowsOf(result)).toEqual([1, 0])
+        if (result.kind === 'complete') expect(rowsOf(result)).toEqual(Array.from({ length: 257 }, (_, row) => 256 - row))
         expect(timers).not.toHaveBeenCalled()
         expect(channels).toBe(1)
         expect(messages).toBeGreaterThan(0)

@@ -1,9 +1,14 @@
 import type {
-  SortSpec, SourceStore, RowOrder, RowVisibility, SourceStamp, SourceFailure, OperationRefusal, FilterRange,
+  SortSpec, SourceStore, RowOrder, RowVisibility, SourceStamp, SourceFailure, OperationRefusal, FilterRange, ColumnLanes,
 } from './contracts'
 import { createIdentityOrder, createRowOrder, pinRowPermutation, type CompactRowOrder } from './order'
 import { MAX_ROWS, MAX_COLS, CoordinateError, validateCoordinate, validateSourceRect } from './coordinates'
 import { CooperativeSlice } from './scheduler'
+import { mergeIndexRuns } from './sortMerge'
+import { numericTextKeys } from './sortText'
+import { BOUNDED_SORT_LANES, type BoundedSortLaneStore } from './sortLanes'
+import { buildSortPrefix, type SortPrefix } from './sortPrefix'
+import { PREPARED_SORT_READER, type PreparedSortStore } from './sortPrepared'
 
 declare const hiddenSourceBrand: unique symbol
 export interface HiddenSourceRows {
@@ -50,6 +55,9 @@ export interface SortLedger {
   fixedOverheadBytes: number
   indexBytes: number
   scratchBytes: number
+  runBytes: number
+  textKeyBytes: number
+  prefixBytes: number
   orderBytes: number
   inverseBytes: number
   retainedBytes: number
@@ -101,6 +109,7 @@ export type SortResult = SortFailure | {
 const CHUNK = 4096
 const MiB = 1024 * 1024
 const NUMBER = 1, STRING = 2, BOOLEAN = 3, ERROR = 4, BLANK = 5, UNKNOWN = 6, UNAVAILABLE = 7
+const COLUMN_TAGS = new Set([NUMBER, STRING, BOOLEAN, ERROR, BLANK, UNAVAILABLE])
 const sameStamp = (a: SourceStamp, b: SourceStamp): boolean =>
   a.docId === b.docId && a.sheetId === b.sheetId && a.valueGen === b.valueGen
 class Halt extends Error {
@@ -147,7 +156,7 @@ function emptyLedger(options: SortOptions): SortLedger {
   return {
     tagsBytes: 0, numbersBytes: 0, idsBytes: 0, ranksBytes: 0, dictionaryBytes: 0,
     dictionaryMapPeakBytes: 0, pagePeakBytes: 0, constructionCopiesBytes: 0, fixedOverheadBytes: 0,
-    indexBytes: 0, scratchBytes: 0, orderBytes: 0, inverseBytes: 0, retainedBytes: 0, peakBytes: 0,
+    indexBytes: 0, scratchBytes: 0, runBytes: 0, textKeyBytes: 0, prefixBytes: 0, orderBytes: 0, inverseBytes: 0, retainedBytes: 0, peakBytes: 0,
     residentWorkerBytes: options.residentWorkerBytes ?? 0, aggregatePeakBytes: options.residentWorkerBytes ?? 0,
   }
 }
@@ -172,6 +181,7 @@ class Budget {
     this.ledger.peakBytes = Math.max(this.ledger.peakBytes, this.live)
     this.ledger.aggregatePeakBytes = this.ledger.residentWorkerBytes + this.ledger.peakBytes
   }
+  canCharge(bytes: number): boolean { return this.ledger.residentWorkerBytes + this.live + bytes <= this.limit }
   release(bytes: number): void { this.live -= bytes }
   finish(): SortLedger { this.ledger.retainedBytes = this.live; return Object.freeze({ ...this.ledger }) }
 }
@@ -180,7 +190,7 @@ class Budget {
  * through `allocate` and closed in each public boundary's finally. */
 class Cooperative extends CooperativeSlice<SortPhase> {
   constructor(readonly store: SourceStore, readonly stamp: SourceStamp, readonly options: SortOptions) {
-    super(options, allocate)
+    super({ ...options, checkEvery: 256 }, allocate)
   }
   override check(): void {
     if (this.options.signal?.aborted) throw new Halt({ kind: 'cancelled' })
@@ -234,29 +244,18 @@ function sortCollator(locale: string, caseSensitive: boolean): Intl.Collator {
     throw sourceError('unsupported', error instanceof Error ? error.message : String(error))
   }
 }
-/** Stable bottom-up index merge: both initialization and comparison/output work yield.
- * Native Array/TypedArray.sort cannot provide an abort boundary. */
+/** Typed natural-run boundaries are transient, including during dictionary ranking. */
 async function mergeIndexes(
-  index: Uint32Array,
-  scratch: Uint32Array,
-  count: number,
-  compare: (a: number, b: number) => number,
-  cooperative: Cooperative,
-  phase: SortPhase,
+  index: Uint32Array, scratch: Uint32Array, count: number,
+  compare: (a: number, b: number) => number, cooperative: Cooperative, phase: SortPhase, budget: Budget,
 ): Promise<Uint32Array> {
-  let input = index, output = scratch
-  for (let width = 1; width < count; width *= 2) {
-    for (let start = 0; start < count; start += width * 2) {
-      const middle = Math.min(start + width, count), end = Math.min(start + width * 2, count)
-      let left = start, right = middle
-      for (let at = start; at < end; at++) {
-        output[at] = left < middle && (right >= end || compare(input[left], input[right]) <= 0) ? input[left++] : input[right++]
-        if (cooperative.due()) await cooperative.pause(phase)
-      }
-    }
-    const swap = input; input = output; output = swap
-  }
-  return input
+  if (count < 2) return index
+  const bytes = (Math.ceil(count / 2) + 1) * 4
+  budget.charge(bytes)
+  budget.ledger.runBytes = Math.max(budget.ledger.runBytes, bytes)
+  const starts = allocate(() => new Uint32Array(bytes / 4))
+  try { return await mergeIndexRuns(index, scratch, starts, count, compare, cooperative, phase) }
+  finally { budget.release(bytes) }
 }
 interface MutableLane {
   tags: Uint8Array
@@ -272,6 +271,7 @@ async function rankDictionary(
   compare: (a: string, b: string) => number,
   budget: Budget,
   cooperative: Cooperative,
+  collator?: Intl.Collator,
 ): Promise<Uint32Array> {
   const bytes = values.length * 4
   budget.charge(bytes * 3)
@@ -279,17 +279,51 @@ async function rankDictionary(
   const ranks = allocate(() => new Uint32Array(values.length))
   const index = allocate(() => new Uint32Array(values.length)), scratch = allocate(() => new Uint32Array(values.length))
   for (let id = 0; id < values.length; id++) { index[id] = id; if (cooperative.due()) await cooperative.pause('dictionary') }
-  const sorted = await mergeIndexes(
-    index, scratch, values.length, (a, b) => compare(values[a], values[b]), cooperative, 'dictionary',
-  )
-  let rank = 0
-  for (let at = 0; at < sorted.length; at++) {
-    if (at && compare(values[sorted[at - 1]], values[sorted[at]]) !== 0) rank++
-    ranks[sorted[at]] = rank
-    if (cooperative.due()) await cooperative.pause('dictionary')
-  }
+  const fast = collator && values.length >= 128 ? await numericTextKeys(values, collator, {
+    charge: bytes => { budget.charge(bytes); budget.ledger.textKeyBytes = Math.max(budget.ledger.textKeyBytes, bytes) },
+    release: bytes => budget.release(bytes), allocate,
+  }, cooperative, 'dictionary') : undefined
+  const compareIds = fast?.compare ?? ((a: number, b: number) => compare(values[a], values[b]))
+  try {
+    let sorted = await mergeIndexes(index, scratch, values.length, compareIds, cooperative, 'dictionary', budget)
+    const assignRanks = async (): Promise<boolean> => {
+      let rank = 0
+      for (let at = 0; at < sorted.length; at++) {
+        // Certify the COMPLETE observed domain, not just a finite alphabet.
+        // Host-sorted adjacency proves total ordering; host equality defines
+        // rank groups even if a candidate discriminator broke a tie.
+        const comparison = at ? compare(values[sorted[at - 1]], values[sorted[at]]) : 0
+        if (cooperative.due()) await cooperative.pause('dictionary')
+        if (comparison > 0) return false
+        if (comparison < 0) rank++
+        ranks[sorted[at]] = rank
+      }
+      return true
+    }
+    if (!(await assignRanks())) {
+      const other = sorted === index ? scratch : index
+      sorted = await mergeIndexes(sorted, other, values.length, (a, b) => compare(values[a], values[b]), cooperative, 'dictionary', budget)
+      if (!(await assignRanks())) throw sourceError('unsupported', 'Host collation did not define a consistent ordering')
+    }
+  } finally { fast?.dispose() }
   budget.release(bytes * 2)
   return ranks
+}
+/** Validate native view shape before charging/reading a typed source page. */
+function sortLaneBytes(item: ColumnLanes): number {
+  const views = [item.rows, item.tags, item.numbers, item.styles, item.text, item.textStart]
+  const names = ['Uint32Array', 'Uint8Array', 'Float64Array', 'Uint32Array', 'Uint16Array', 'Uint32Array']
+  for (let i = 0; i < views.length; i++) {
+    if (!ArrayBuffer.isView(views[i]) || Object.prototype.toString.call(views[i]) !== `[object ${names[i]}]`) throw sourceError('page-error', 'Malformed column lane buffers')
+  }
+  const n = item.rows.length
+  if (item.tags.length !== n || item.numbers.length !== n || item.styles.length !== n || item.textStart.length !== n + 1
+    || item.textStart[0] !== 0 || item.textStart[n] !== item.text.length) throw sourceError('page-error', 'Malformed column lane lengths')
+  // Count complete backing buffers, not only subviews that keep them alive.
+  const buffers = new Set(views.map(view => view.buffer))
+  let bytes = 0
+  for (const buffer of buffers) bytes += buffer.byteLength
+  return bytes
 }
 // Empty strings remain TEXT. Blank means an absent cell/run or a null value;
 // treating formula/explicit empty text as absent would lose its authoritative type.
@@ -301,10 +335,12 @@ async function prepare(
   cooperative: Cooperative,
   budget: Budget,
   locale: string,
+  forSort = false,
 ): Promise<PreparedSortKeys> {
   const r0 = spec.range.r0 + spec.range.headerRows, r1 = spec.range.r1 - spec.range.totalsRows
   const length = Math.max(0, r1 - r0 + 1), lanes: SortLane[] = []
   const collator = sortCollator(locale, spec.caseSensitive)
+  const typed = (store as BoundedSortLaneStore)[BOUNDED_SORT_LANES] === true && !cooperative.options.sourceRetainsStrings
   let incomplete = false, unavailableCount = 0, firstAddress: { row: number; col: number } | undefined
   // Read hidden keys too: a filter may reveal them later. Unknown/unavailable
   // values therefore conservatively block the same authoritative body domain.
@@ -341,15 +377,62 @@ async function prepare(
       allocate(() => dictionary.push(raw)); allocate(() => map.set(raw, id))
       return id
     }
+    function unavailable(row: number): void {
+      lane.tags[row - r0] = UNAVAILABLE; unavailableCount++
+      if (!firstAddress || row < firstAddress.row || row === firstAddress.row && key.col < firstAddress.col) firstAddress = { row, col: key.col }
+    }
+    function put(row: number, value: string | number | boolean | null, error: boolean): void {
+      const offset = row - r0
+      if (error) { lane.tags[offset] = ERROR; const id = intern(String(value), true); lane.ids![offset] = id }
+      else if (value === null) lane.tags[offset] = BLANK
+      else if (typeof value === 'number') {
+        if (Number.isFinite(value)) { lane.tags[offset] = NUMBER; lane.numbers[offset] = value }
+        else { lane.tags[offset] = ERROR; const id = intern('#NUM!', true); lane.ids![offset] = id }
+      } else if (typeof value === 'boolean') { lane.tags[offset] = BOOLEAN; lane.numbers[offset] = value ? 1 : 0 }
+      else if (typeof value === 'string') { lane.tags[offset] = STRING; const id = intern(value, false); lane.ids![offset] = id }
+      else throw sourceError('page-error', 'Unsupported authoritative key type')
+    }
+    const lease = (store as PreparedSortStore)[PREPARED_SORT_READER]?.(key.col, cooperative.stamp)
+    if (lease) {
+      try {
+        cooperative.check()
+        if (!sameStamp(lease.stamp, cooperative.stamp)) throw sourceError('stale-source', 'Prepared owner changed')
+        // Completeness of the trusted column proves every absent row is blank.
+        for (let at = 0; at < length; at++) {
+          lane.tags[at] = BLANK
+          if (cooperative.due()) await cooperative.pause('read')
+        }
+        let previous = r0 - 1
+        const read = await lease.read(r0, r1, (row, value, error, missing) => {
+          if (!Number.isSafeInteger(row) || row <= previous || row < r0 || row > r1) throw sourceError('page-error', 'Malformed prepared row order')
+          previous = row
+          if (missing) unavailable(row)
+          else put(row, value, error)
+        }, { due: () => cooperative.due(), pause: () => cooperative.pause('read') })
+        if (read === 'stale') throw sourceError('stale-source', 'Prepared owner changed')
+        cooperative.check()
+      } finally { lease.release() }
+    } else {
     for (let start = r0; start <= r1; start += CHUNK) {
       const end = Math.min(r1, start + CHUNK - 1)
       let cursor: string | undefined, pages = 0, cursorBytes = 0
       const cursors = allocate(() => new Set<string>())
       do {
         cooperative.check()
-        const page = await store.queryColumn({
-          col: key.col, rows: { kind: 'intervals', intervals: [{ r0: start, r1: end }] }, limit: CHUNK, cursor,
-        }, { stamp: cooperative.stamp, signal: cooperative.options.signal ?? allocate(() => new AbortController()).signal })
+        // Reserve the bounded producer's JS staging, native output and text
+        // before it allocates. A tight budget keeps the original cell path.
+        const producerBytes = (end - start + 1) * 384 + 65536
+        const producedTyped = typed && budget.canCharge(producerBytes)
+        if (producedTyped) {
+          budget.charge(producerBytes)
+          budget.ledger.pagePeakBytes = Math.max(budget.ledger.pagePeakBytes, producerBytes)
+        }
+        let page: Awaited<ReturnType<SourceStore['queryColumn']>>
+        try {
+          page = await store.queryColumn({
+            col: key.col, rows: { kind: 'intervals', intervals: [{ r0: start, r1: end }] }, limit: CHUNK, cursor, ...(producedTyped ? { encoding: 'lanes' as const } : {}),
+          }, { stamp: cooperative.stamp, signal: cooperative.options.signal ?? allocate(() => new AbortController()).signal })
+        } finally { if (producedTyped) budget.release(producerBytes) }
         cooperative.check()
         if (!sameStamp(page.stamp, cooperative.stamp)) throw sourceError('stale-source', 'Column page owner changed')
         if (page.error) throw new Halt({ kind: 'error', error: { ...page.error } })
@@ -359,7 +442,12 @@ async function prepare(
         let pageBytes = 256 * page.items.length
         budget.charge(pageBytes)
         for (const item of page.items) {
-          if (item.kind === 'cell' || item.kind === 'unavailable') {
+          if (item.kind === 'lanes') {
+            if (!producedTyped) throw sourceError('page-error', 'Unrequested column lanes')
+            const bytes = sortLaneBytes(item)
+            pageBytes += bytes
+            budget.charge(bytes)
+          } else if (item.kind === 'cell' || item.kind === 'unavailable') {
             const cell = item.cell
             const bytes = rawStringBytes(cell.value) + rawStringBytes(cell.formula)
               + rawStringBytes(cell.arrayRef) + rawStringBytes(cell.formulaType)
@@ -375,6 +463,47 @@ async function prepare(
           if (!Number.isSafeInteger(first) || !Number.isSafeInteger(last)
             || first < start || last > end || last < first) {
             throw sourceError('page-error', 'Column entry outside requested chunk')
+          }
+          if (item.kind === 'lanes') {
+            // The run proves completeness over absent rows too. Populate blanks
+            // first, then replace only validated, ordered native-lane records.
+            for (let row = first; row <= last; row++) {
+              if (lane.tags[row - r0]) throw sourceError('page-error', 'Overlapping column coverage')
+              lane.tags[row - r0] = BLANK
+              if (cooperative.due()) await cooperative.pause('read')
+            }
+            let previous = first - 1
+            for (let at = 0; at < item.rows.length; at++) {
+              const row = item.rows[at], tag = item.tags[at], number = item.numbers[at]
+              const from = item.textStart[at], to = item.textStart[at + 1]
+              if (row <= previous || row < first || row > last || from > to || to > item.text.length
+                || !COLUMN_TAGS.has(tag)
+                || tag === NUMBER && !Number.isFinite(number) || tag === BOOLEAN && number !== 0 && number !== 1) throw sourceError('page-error', 'Malformed column lane record')
+              previous = row
+              const offset = row - r0
+              lane.tags[offset] = tag
+              if (tag === NUMBER || tag === BOOLEAN) lane.numbers[offset] = number
+              else if (tag === UNAVAILABLE) {
+                unavailableCount++
+                if (!firstAddress || row < firstAddress.row || row === firstAddress.row && key.col < firstAddress.col) firstAddress = { row, col: key.col }
+              } else if (tag === STRING || tag === ERROR) {
+                const bytes = (to - from) * 2 + 24
+                budget.charge(bytes)
+                let value = ''
+                for (let pos = from; pos < to; pos += 256) {
+                  const end = Math.min(to, pos + 256)
+                  value = allocate(() => value + String.fromCharCode(...item.text.subarray(pos, end)))
+                  // Explicit boundary around every bounded decode block.
+                  cooperative.check()
+                  if (cooperative.due()) await cooperative.pause('read')
+                }
+                const id = intern(value, tag === ERROR)
+                lane.ids![offset] = id
+                budget.release(bytes)
+              }
+              if (cooperative.due()) await cooperative.pause('read')
+            }
+            continue
           }
           for (let row = first; row <= last; row++) {
             const offset = row - r0
@@ -396,29 +525,7 @@ async function prepare(
                 if (cell.row !== row || cell.col !== key.col || cell.id !== row * MAX_COLS + key.col) {
                   throw sourceError('page-error', 'Cell identity does not match its key entry')
                 }
-                if (cell.valueIsError) {
-                  lane.tags[offset] = ERROR
-                  const id = intern(String(value), true)
-                  lane.ids![offset] = id
-                }
-                else if (value === null) lane.tags[offset] = BLANK
-                else if (typeof value === 'number') {
-                  if (Number.isFinite(value)) { lane.tags[offset] = NUMBER; lane.numbers[offset] = value }
-                  else {
-                    // No finite engine representation: use the same raw error
-                    // dictionary entry as a real #NUM! cell, preserving source ties.
-                    lane.tags[offset] = ERROR
-                    const id = intern('#NUM!', true)
-                    lane.ids![offset] = id
-                  }
-                }
-                else if (typeof value === 'boolean') { lane.tags[offset] = BOOLEAN; lane.numbers[offset] = value ? 1 : 0 }
-                else if (typeof value === 'string') {
-                  lane.tags[offset] = STRING
-                  const id = intern(value, false)
-                  lane.ids![offset] = id
-                }
-                else throw sourceError('page-error', 'Unsupported authoritative key type')
+                put(row, value, Boolean(cell.valueIsError))
                 break
               }
             }
@@ -442,10 +549,28 @@ async function prepare(
         if (cooperative.due()) await cooperative.pause('read')
       }
     }
-    lane.stringRanks = await rankDictionary(lane.strings, collator.compare, budget, cooperative)
-    lane.errorRanks = await rankDictionary(lane.errors, (a, b) => a < b ? -1 : a > b ? 1 : 0, budget, cooperative)
+    }
+    // Intern maps are no longer needed once the column is complete. Drop them
+    // before rank/collation scratch so their payloads do not coexist at peak.
     stringIds = undefined; errorIds = undefined
     budget.release(mapBytes)
+    lane.stringRanks = await rankDictionary(lane.strings, collator.compare, budget, cooperative, collator)
+    lane.errorRanks = await rankDictionary(lane.errors, (a, b) => a < b ? -1 : a > b ? 1 : 0, budget, cooperative)
+    if (forSort) {
+      // The private operation lanes become direction-normalized keys. Public
+      // prepareSortKeys still publishes raw values; no extra per-row copy is needed.
+      const descending = key.order === 'desc'
+      for (let at = 0; at < length; at++) {
+        const tag = lane.tags[at]
+        if (tag === STRING) lane.numbers[at] = lane.stringRanks[lane.ids![at]]
+        else if (tag === ERROR) lane.numbers[at] = lane.errorRanks[lane.ids![at]]
+        if (descending && tag < ERROR) {
+          lane.tags[at] = 4 - tag
+          lane.numbers[at] = -lane.numbers[at]
+        }
+        if (cooperative.due()) await cooperative.pause('read')
+      }
+    }
     const publishedLane = Object.freeze({ ...lane, strings: Object.freeze(lane.strings), errors: Object.freeze(lane.errors) })
     allocate(() => lanes.push(publishedLane))
   }
@@ -473,19 +598,16 @@ export async function prepareSortKeys(
   } catch (error) { return failure(error, options) }
   finally { cooperative?.dispose() }
 }
-function compareRows(prepared: PreparedSortKeys, a: number, b: number): number {
+function compareRows(prepared: PreparedSortKeys, a: number, b: number, prefix?: SortPrefix): number {
   const first = a - prepared.r0, second = b - prepared.r0
-  for (let key = 0; key < prepared.lanes.length; key++) {
-    const lane = prepared.lanes[key], ta = lane.tags[first], tb = lane.tags[second]
-    let comparison = 0
-    if (ta !== tb) {
-      comparison = ta - tb
-      if (ta >= ERROR || tb >= ERROR) return comparison
-    } else if (ta === STRING) comparison = lane.stringRanks[lane.ids![first]] - lane.stringRanks[lane.ids![second]]
-    else if (ta === ERROR) comparison = lane.errorRanks[lane.ids![first]] - lane.errorRanks[lane.ids![second]]
-    else if (ta !== BLANK) comparison = lane.numbers[first] - lane.numbers[second]
-    if (comparison) return ta === ERROR || ta === BLANK
-      ? comparison : prepared.spec.keys[key].order === 'asc' ? comparison : -comparison
+  if (prefix) {
+    const comparison = prefix.codes[first] - prefix.codes[second]
+    if (comparison) return comparison
+  }
+  for (let key = prefix?.keys ?? 0; key < prepared.lanes.length; key++) {
+    const lane = prepared.lanes[key]
+    const comparison = lane.tags[first] - lane.tags[second] || lane.numbers[first] - lane.numbers[second]
+    if (comparison) return comparison
   }
   return a - b
 }
@@ -528,7 +650,7 @@ export async function sortRowOrder(store: SourceStore, input: SortSpec | null, o
     cooperative.check()
     let order: RowOrder = createIdentityOrder(), emptyBody = false
     if (spec !== null) {
-      const prepared = await prepare(store, spec, cooperative, budget, locale)
+      const prepared = await prepare(store, spec, cooperative, budget, locale, true)
       const length = Math.max(0, prepared.r1 - prepared.r0 + 1)
       if (length) {
         const pinned = options.hidden ? (row: number) => options.hidden!.hidden(row) : () => false
@@ -540,7 +662,13 @@ export async function sortRowOrder(store: SourceStore, input: SortSpec | null, o
           if (!pinned(row)) index[count++] = row
           if (cooperative.due()) await cooperative.pause('candidates')
         }
-        const sorted = await mergeIndexes(index, scratch, count, (a, b) => compareRows(prepared, a, b), cooperative, 'merge')
+        let prefix = await buildSortPrefix(prepared.lanes, length, {
+          canCharge: bytes => budget.canCharge(bytes), charge: bytes => budget.charge(bytes),
+          release: bytes => budget.release(bytes), allocate,
+        }, cooperative, 'read')
+        budget.ledger.prefixBytes = prefix?.bytes ?? 0
+        const sorted = await mergeIndexes(index, scratch, count, (a, b) => compareRows(prepared, a, b, prefix), cooperative, 'merge', budget)
+        if (prefix) { budget.release(prefix.bytes); prefix = undefined }
         if (length <= CHUNK) {
           // pinRowPermutation peak: candidates + rows + copied order + inverse;
           // createRowOrder then copies order/inverse again while that band lives.

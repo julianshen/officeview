@@ -51,6 +51,10 @@ import { StructuralIndex, type PopulatedCellSource } from '../xlsx/view/structur
 import { guardFilter, guardSort, type GuardOutcome } from '../xlsx/view/operationGuard'
 import { MemoryPool, WORKER_BUDGETS, type PoolEntry } from '../xlsx/view/tileCache'
 import { INITIAL_GENERATION as INITIAL_VALUE_GEN, isUint32Array, validateBitset } from './viewerProtocol'
+import { LaneBuilder } from '../xlsx/view/source'
+import { BOUNDED_SORT_LANES, type BoundedSortLaneStore } from '../xlsx/view/sortLanes'
+import { PREPARED_SORT_READER, type PreparedSortStore, type PreparedSortLease } from '../xlsx/view/sortPrepared'
+import { compactPreparedPage, preparedRowAt, preparedMetadataAt, visitPreparedRows, PREPARED_PAGE_ENTRIES, PREPARED_PAGE_OVERHEAD, PREPARED_ENCODING_OVERHEAD, TAG_NULL, TAG_NUMBER, TAG_STRING, TAG_BOOLEAN, F_CACHED_SET, F_CACHED, F_ERROR_SET, F_ERROR, F_PROV_ENGINE, F_PROV_CACHED, F_UNAVAILABLE, type PreparedPage } from './preparedColumn'
 import { filterValueDomain, scanValueDomain, type ValueStatus } from '../xlsx/view/values'
 
 const FULL_SHEET: SourceRect = Object.freeze({ r0: 0, r1: MAX_ROWS - 1, c0: 0, c1: MAX_COLS - 1 })
@@ -209,16 +213,13 @@ export const PREPARED_BUDGETS: Readonly<Record<ProfileId, PreparedBudget>> = Obj
 export const MAX_PREPARE_BATCH = 8
 /** Fixed per-column charge (descriptor, dictionary map, extras map). */
 export const PREPARED_COLUMN_OVERHEAD = 256
-/** Exact lane bytes per populated entry: row Uint32 + tag Uint8 + number Float64
- * + string id Uint32 + style Uint32 + flags Uint8. */
+/** Raw staging stride; retained pages use lossless variable-width lanes. */
 export const PREPARED_ENTRY_LANE_BYTES = 22
 /** Charge per unique dictionary string beyond its UTF-16 payload. */
 export const PREPARED_STRING_OVERHEAD = 48
 /** Charge per sparse extras record (formula metadata) beyond its strings. */
 export const PREPARED_EXTRA_OVERHEAD = 96
 
-const TAG_NULL = 0, TAG_NUMBER = 1, TAG_STRING = 2, TAG_BOOLEAN = 3
-const F_CACHED_SET = 1, F_CACHED = 2, F_ERROR_SET = 4, F_ERROR = 8, F_PROV_ENGINE = 16, F_PROV_CACHED = 32, F_UNAVAILABLE = 64
 type Extras = Pick<SingleCellPayload, 'formula' | 'sharedFormula' | 'arrayRef' | 'dynamicArray' | 'formulaType' | 'ca'>
 type PopulatedEntry = Extract<ColumnEntry, { kind: 'cell' | 'unavailable' }>
 /** Compact resident column: typed lanes plus a string dictionary and sparse
@@ -227,15 +228,11 @@ interface PreparedColumn {
   stamp: SourceStamp
   col: number
   count: number
-  rows: Uint32Array
-  tags: Uint8Array
-  numbers: Float64Array
-  stringIds: Uint32Array
-  styles: Uint32Array
-  flags: Uint8Array
+  pages: readonly PreparedPage[]
   strings: readonly string[]
   extras: ReadonlyMap<number, Extras>
   laneBytes: number
+  pageOverheadBytes: number
   stringBytes: number
   extraBytes: number
   bytes: number
@@ -243,6 +240,7 @@ interface PreparedColumn {
 export interface PreparedFootprint {
   entries: number
   laneBytes: number
+  pageOverheadBytes: number
   stringBytes: number
   uniqueStrings: number
   extraObjects: number
@@ -254,6 +252,10 @@ const text = (value: unknown) => typeof value === 'string' ? value.length * 2 : 
 class ColumnBuilder {
   capacity = 0
   count = 0
+  pageCount = 0
+  private readonly pages: PreparedPage[] = []
+  private pageBytes = 0
+  private laneBytes = 0
   rows = new Uint32Array(0)
   tags = new Uint8Array(0)
   numbers = new Float64Array(0)
@@ -268,13 +270,13 @@ class ColumnBuilder {
   constructor(readonly col: number) {}
   /** Bytes currently held, including spare capacity. */
   get heldBytes(): number {
-    return PREPARED_COLUMN_OVERHEAD + this.capacity * PREPARED_ENTRY_LANE_BYTES + this.stringBytes + this.extraBytes
+    return PREPARED_COLUMN_OVERHEAD + this.pageBytes + this.capacity * PREPARED_ENTRY_LANE_BYTES + this.stringBytes + this.extraBytes
   }
   /** Peak bytes above heldBytes if the entry were appended now. A growth step
    * allocates the new lanes (max(16, 2C) slots) while the old C slots are still
    * held for the copy, so the whole new allocation is the transient peak. */
   costOf(entry: PopulatedEntry): number {
-    let cost = this.count === this.capacity ? Math.max(16, this.capacity * 2) * PREPARED_ENTRY_LANE_BYTES : 0
+    let cost = this.pageCount === this.capacity ? Math.max(16, this.capacity * 2) * PREPARED_ENTRY_LANE_BYTES : 0
     const value = entry.cell.value
     if (typeof value === 'string' && !this.dictionary.has(value)) cost += value.length * 2 + PREPARED_STRING_OVERHEAD
     const cell = entry.cell
@@ -300,8 +302,8 @@ class ColumnBuilder {
     this.capacity = capacity
   }
   append(entry: PopulatedEntry): void {
-    if (this.count === this.capacity) this.grow()
-    const k = this.count++, cell = entry.cell, value = cell.value
+    if (this.pageCount === this.capacity) this.grow()
+    const global = this.count++, k = this.pageCount++, cell = entry.cell, value = cell.value
     this.rows[k] = entry.row
     this.styles[k] = cell.styleIndex
     if (value === null) this.tags[k] = TAG_NULL
@@ -333,31 +335,50 @@ class ColumnBuilder {
       if (cell.dynamicArray !== undefined) extra.dynamicArray = cell.dynamicArray
       if (cell.formulaType !== undefined) extra.formulaType = cell.formulaType
       if (cell.ca !== undefined) extra.ca = cell.ca
-      this.extras.set(k, Object.freeze(extra))
+      this.extras.set(global, Object.freeze(extra))
       this.extraBytes += PREPARED_EXTRA_OVERHEAD + text(cell.formula) + text(cell.arrayRef) + text(cell.formulaType) + text(cell.sharedFormula?.ref)
     }
   }
-  /** Exact-length lanes (one transient copy when capacity exceeds the count). */
+  get full(): boolean { return this.pageCount === PREPARED_PAGE_ENTRIES }
+  /** Old raw lanes coexist with encoded output. Metadata search scratch is
+   * bounded at sixteen pairs; the direct fallback costs at most 18 B/entry. */
+  get encodingPeakBytes(): number {
+    return this.pageCount ? this.pageCount * 18 + PREPARED_PAGE_OVERHEAD + PREPARED_ENCODING_OVERHEAD : 0
+  }
+  async compact(slice: CooperativeSlice<string>, halted: () => boolean): Promise<boolean> {
+    if (!this.pageCount) return true
+    const page = await compactPreparedPage({ ...this, count: this.pageCount }, slice, halted)
+    if (!page) return false
+    this.pages.push(page)
+    this.laneBytes += page.laneBytes
+    this.pageBytes += page.laneBytes + PREPARED_PAGE_OVERHEAD
+    this.pageCount = 0
+    this.capacity = 0
+    this.rows = new Uint32Array(0); this.tags = new Uint8Array(0); this.numbers = new Float64Array(0)
+    this.stringIds = new Uint32Array(0); this.styles = new Uint32Array(0); this.flags = new Uint8Array(0)
+    return true
+  }
   finish(stamp: SourceStamp): PreparedColumn {
-    const n = this.count
-    const exact = <T extends Uint8Array | Uint32Array | Float64Array>(lane: T): T => (lane.length === n ? lane : lane.slice(0, n)) as T
-    const laneBytes = n * PREPARED_ENTRY_LANE_BYTES
     return Object.freeze({
-      stamp, col: this.col, count: n,
-      rows: exact(this.rows), tags: exact(this.tags), numbers: exact(this.numbers),
-      stringIds: exact(this.stringIds), styles: exact(this.styles), flags: exact(this.flags),
+      stamp, col: this.col, count: this.count, pages: Object.freeze(this.pages),
       strings: Object.freeze(this.strings), extras: this.extras,
-      laneBytes, stringBytes: this.stringBytes, extraBytes: this.extraBytes,
-      bytes: PREPARED_COLUMN_OVERHEAD + laneBytes + this.stringBytes + this.extraBytes,
+      laneBytes: this.laneBytes, pageOverheadBytes: this.pages.length * PREPARED_PAGE_OVERHEAD,
+      stringBytes: this.stringBytes, extraBytes: this.extraBytes,
+      bytes: this.heldBytes,
     })
   }
 }
+function columnRowAt(column: PreparedColumn, k: number): number {
+  return preparedRowAt(column.pages[Math.floor(k / PREPARED_PAGE_ENTRIES)], k % PREPARED_PAGE_ENTRIES)
+}
 /** Rebuilds one bounded page entry from the lanes. */
 function preparedEntry(column: PreparedColumn, k: number): PopulatedEntry {
-  const row = column.rows[k], tag = column.tags[k], flags = column.flags[k]
-  const value = tag === TAG_NULL ? null : tag === TAG_NUMBER ? column.numbers[k]
-    : tag === TAG_BOOLEAN ? column.numbers[k] !== 0 : column.strings[column.stringIds[k]]
-  const cell: SingleCellPayload = { id: cellId(row, column.col), row, col: column.col, value, styleIndex: column.styles[k] }
+  const page = column.pages[Math.floor(k / PREPARED_PAGE_ENTRIES)], at = k % PREPARED_PAGE_ENTRIES
+  const row = preparedRowAt(page, at), m = preparedMetadataAt(page, at), code = page.codes[m]
+  const tag = code % 4, flags = Math.floor(code / 4), raw = page.values[at]
+  const value = tag === TAG_NULL ? null : tag === TAG_NUMBER ? raw
+    : tag === TAG_BOOLEAN ? raw !== 0 : column.strings[raw]
+  const cell: SingleCellPayload = { id: cellId(row, column.col), row, col: column.col, value, styleIndex: page.styles[m] }
   if (flags & F_CACHED_SET) cell.hasCachedValue = (flags & F_CACHED) !== 0
   if (flags & F_ERROR_SET) cell.valueIsError = (flags & F_ERROR) !== 0
   if (flags & F_PROV_ENGINE) cell.valueProvenance = 'engine'
@@ -376,8 +397,8 @@ function residualIntervals(intervals: readonly SourceRowInterval[], at: number, 
 }
 /** FNV-1a over the normalized query; ties a session cursor to its exact query and
  * source owner. (Bitwise arithmetic here hashes text, never a cell ID.) */
-function queryFingerprint(col: number, stamp: SourceStamp, intervals: readonly SourceRowInterval[]): string {
-  const textKey = JSON.stringify([col, stamp.docId, stamp.sheetId, stamp.valueGen, intervals.map(i => [i.r0, i.r1])])
+function queryFingerprint(col: number, stamp: SourceStamp, intervals: readonly SourceRowInterval[], encoding: 'entries' | 'lanes'): string {
+  const textKey = JSON.stringify([col, stamp.docId, stamp.sheetId, stamp.valueGen, intervals.map(i => [i.r0, i.r1]), encoding])
   let hash = 0x811c9dc5
   for (let i = 0; i < textKey.length; i++) {
     hash ^= textKey.charCodeAt(i)
@@ -628,6 +649,7 @@ export class DocumentSession {
   private readonly states = new Map<string, SheetState>()
   /** Insertion order is recency order (oldest first). */
   private readonly prepared = new Map<string, PreparedColumn>()
+  private readonly preparedPins = new Map<string, number>()
   private readonly preparedEntries = new Map<string, PoolEntry>()
   private preparedBytes = 0
   private structureBytes = 0
@@ -951,6 +973,9 @@ export class DocumentSession {
     this.workbookValueGen++
     for (const [key, column] of [...this.prepared]) {
       if (column.stamp.sheetId !== sheetId || sameStamp(column.stamp, stamp)) continue
+      // Invalidated leases are unreadable, but their storage stays charged
+      // until the final reader exits; a pin only shields pool eviction.
+      if (this.preparedPins.has(key)) continue
       this.dropPrepared(key)
     }
     this.dropStructure(sheetId)
@@ -1045,10 +1070,9 @@ export class DocumentSession {
   preparedFootprint(sheetId: string, col: number): PreparedFootprint | undefined {
     const column = this.prepared.get(this.preparedKey(this.source.store(sheetId).stamp, col))
     if (!column) return undefined
-    const laneBytes = column.rows.byteLength + column.tags.byteLength + column.numbers.byteLength
-      + column.stringIds.byteLength + column.styles.byteLength + column.flags.byteLength
+    const laneBytes = column.laneBytes
     return {
-      entries: column.count, laneBytes, stringBytes: column.stringBytes, uniqueStrings: column.strings.length,
+      entries: column.count, laneBytes, pageOverheadBytes: column.pageOverheadBytes, stringBytes: column.stringBytes, uniqueStrings: column.strings.length,
       extraObjects: column.extras.size, extraBytes: column.extraBytes, bytes: column.bytes,
     }
   }
@@ -1149,10 +1173,24 @@ export class DocumentSession {
           // Lanes are never requested here; treating one as a blank run would hide its values.
           if (item.kind === 'lanes') return { kind: 'error', error: failure('page-error', 'Unrequested column lanes') }
           if (item.kind === 'cell' || item.kind === 'unavailable') {
-            const next = protectedBytes + stagedBytes + builder.heldBytes + builder.costOf(item)
+            const cell = item.cell
+            if (cell.row !== item.row || cell.col !== col || cell.id !== cellId(item.row, col)
+              || cell.value !== null && !['number', 'string', 'boolean'].includes(typeof cell.value)) {
+              return { kind: 'error', error: failure('page-error', 'Malformed prepared cell identity/value') }
+            }
+            const staging = stagedBytes + builder.heldBytes + builder.costOf(item)
+            const next = protectedBytes + staging
             if (next > budget.maxBytes) return quota(next)
+            if (!charge.set(staging)) return this.prepareRefusal(staging)
             builder.append(item)
             if (!charge.set(stagedBytes + builder.heldBytes)) return this.prepareRefusal(stagedBytes + builder.heldBytes)
+            if (builder.full) {
+              const peak = protectedBytes + stagedBytes + builder.heldBytes + builder.encodingPeakBytes
+              if (peak > budget.maxBytes) return quota(peak)
+              if (!charge.set(stagedBytes + builder.heldBytes + builder.encodingPeakBytes)) return this.prepareRefusal(peak)
+              if (!(await builder.compact(slice, () => this.halted(owner, signal) !== null))) return this.halted(owner, signal) ?? { kind: 'stale' }
+              if (!charge.set(stagedBytes + builder.heldBytes)) return this.prepareRefusal(stagedBytes + builder.heldBytes)
+            }
           }
           if (slice.due()) {
             await slice.pause('prepare')
@@ -1171,12 +1209,11 @@ export class DocumentSession {
       } while (cursor !== undefined)
       if (expected !== MAX_ROWS) return { kind: 'error', error: UNORDERED_PAGE }
       covered += MAX_ROWS
-      // Trimming spare capacity briefly holds both lane sets; that peak is charged too.
-      const exactLanes = builder.count * PREPARED_ENTRY_LANE_BYTES
-      const trim = builder.capacity > builder.count ? exactLanes : 0
-      const peak = protectedBytes + stagedBytes + builder.heldBytes + trim
+      // Final partial page is encoded under the same old-plus-new reservation.
+      const peak = protectedBytes + stagedBytes + builder.heldBytes + builder.encodingPeakBytes
       if (peak > budget.maxBytes) return quota(peak)
-      if (!charge.set(stagedBytes + builder.heldBytes + trim)) return this.prepareRefusal(stagedBytes + builder.heldBytes + trim)
+      if (!charge.set(stagedBytes + builder.heldBytes + builder.encodingPeakBytes)) return this.prepareRefusal(peak)
+      if (!(await builder.compact(slice, () => this.halted(owner, signal) !== null))) return this.halted(owner, signal) ?? { kind: 'stale' }
       const column = builder.finish(stamp)
       staged.push({ key, column })
       stagedBytes += column.bytes
@@ -1185,12 +1222,22 @@ export class DocumentSession {
     if (signal.aborted) return { kind: 'cancelled' }
     if (!this.isCurrent(owner)) return { kind: 'stale' }
     const keep = new Set(keys)
+    let minimumColumns = this.prepared.size + staged.length, minimumBytes = this.preparedBytes + stagedBytes
+    for (const [key, column] of this.prepared) {
+      if (keep.has(key) || this.preparedPins.has(key)) continue
+      minimumColumns--
+      minimumBytes -= column.bytes
+    }
+    // Refuse impossible admission before discarding useful idle columns.
+    if (minimumColumns > budget.maxColumns || minimumBytes > budget.maxBytes) {
+      return { kind: 'quota', limitBytes: budget.maxBytes, requiredBytes: minimumBytes, diagnostics: [{ code: 'prepared-column-limit', message: 'Prepared readers pin the working set' }] }
+    }
     // Evict least-recently-used columns outside this batch until it fits.
     for (const [key] of [...this.prepared]) {
       const fitsCount = this.prepared.size + staged.length <= budget.maxColumns
       const fitsBytes = this.preparedBytes + stagedBytes <= budget.maxBytes
       if (fitsCount && fitsBytes) break
-      if (keep.has(key)) continue
+      if (keep.has(key) || this.preparedPins.has(key)) continue
       this.dropPrepared(key)
     }
     for (const key of keys) {
@@ -1224,20 +1271,92 @@ export class DocumentSession {
   private prepareRefusal(requiredBytes: number): PrepareOutcome {
     return this.closed ? { kind: 'stale' } : { kind: 'quota', limitBytes: this.memory.limitBytes, requiredBytes }
   }
+  /** Lease only complete, value-owned columns. The scalar port exposes no
+   * writable lane aliases; concurrent preparation must respect these pins. */
+  private preparedSortLease(sheetId: string, col: number, expected: SourceStamp): PreparedSortLease | undefined {
+    if (this.closed || !sameStamp(this.source.store(sheetId).stamp, expected)) return undefined
+    const key = this.preparedKey(expected, col), column = this.prepared.get(key), entry = this.preparedEntries.get(key)
+    if (!column || !entry?.live) return undefined
+    this.prepared.delete(key); this.prepared.set(key, column)
+    entry.touch()
+    const unpin = entry.pin()
+    this.preparedPins.set(key, (this.preparedPins.get(key) ?? 0) + 1)
+    let released = false
+    return {
+      stamp: Object.freeze({ ...column.stamp }),
+      read: async (r0, r1, put, cooperate) => {
+        const current = () => !released && !this.closed && entry.live && sameStamp(this.source.store(sheetId).stamp, expected)
+        if (!current()) return 'stale'
+        let units = 0
+        for (const page of column.pages) {
+          if (page.firstRow > r1) break
+          if (preparedRowAt(page, page.count - 1) < r0) continue
+          let low = 0, high = page.count
+          while (low < high) {
+            const mid = Math.floor((low + high) / 2)
+            if (preparedRowAt(page, mid) < r0) low = mid + 1
+            else high = mid
+          }
+          for (let at = low; at < page.count; at++) {
+            const row = preparedRowAt(page, at)
+            if (row > r1) break
+            if (++units === 256) { units = 0; if (!current()) return 'stale' }
+            const m = preparedMetadataAt(page, at), code = page.codes[m], tag = code % 4, flags = Math.floor(code / 4), raw = page.values[at]
+            const value = tag === TAG_NULL ? null : tag === TAG_NUMBER ? raw : tag === TAG_BOOLEAN ? raw !== 0 : column.strings[raw]
+            put(row, value, (flags & F_ERROR) !== 0, (flags & F_UNAVAILABLE) !== 0)
+            if (cooperate.due()) { await cooperate.pause(); if (!current()) return 'stale' }
+          }
+        }
+        return current() ? 'complete' : 'stale'
+      },
+      release: () => {
+        if (released) return
+        released = true
+        unpin()
+        const count = this.preparedPins.get(key) ?? 0
+        if (count <= 1) {
+          this.preparedPins.delete(key)
+          if (!this.closed && !sameStamp(this.source.store(sheetId).stamp, column.stamp)) this.dropPrepared(key)
+        }
+        else this.preparedPins.set(key, count - 1)
+      },
+    }
+  }
   /** Column page from resident lanes over a residual membership. */
   private preparedPage(column: PreparedColumn, residual: readonly SourceRowInterval[], limit: number): ColumnEntry[] {
     const items: ColumnEntry[] = []
-    let at = 0, row = residual[0]?.r0 ?? 0
-    while (at < residual.length && items.length < limit) {
-      const { r0, r1 } = residual[at]
-      if (row < r0) row = r0
-      if (row > r1) { at++; continue }
-      const k = lowerBound(column.rows, row, column.count)
-      const next = k < column.count && column.rows[k] <= r1 ? column.rows[k] : -1
-      if (next < 0) { items.push({ kind: 'blank', r0: row, r1 }); at++; continue }
-      if (next > row) { items.push({ kind: 'blank', r0: row, r1: next - 1 }); row = next; continue }
-      items.push(preparedEntry(column, k))
-      row++
+    visitPreparedRows(column.count, k => columnRowAt(column, k), residual, limit,
+      k => items.push(preparedEntry(column, k)),
+      (r0, r1) => items.push({ kind: 'blank', r0, r1 }),
+    )
+    return items
+  }
+  /** Bounded wire lanes avoid rebuilding cell objects for sort keys. Giant
+   * repeated strings stay on the cell path: never expand them per row into a
+   * multi-gigabyte UTF-16 buffer before the consumer can admit that allocation. */
+  private preparedLanes(column: PreparedColumn, residual: readonly SourceRowInterval[], limit: number): ColumnEntry[] {
+    const items: ColumnEntry[] = []
+    let left = Math.min(limit, PREPARED_PAGE_ENTRIES)
+    for (const interval of residual) {
+      if (!left) break
+      const r0 = interval.r0, r1 = Math.min(interval.r1, r0 + left - 1)
+      // Repeated ordinary text is cheaper as dictionary-backed cell entries
+      // than UTF-16 encoding/decoding on every sort. Numeric/error pages use lanes.
+      if (column.pages.some(page => page.plainText && page.firstRow <= r1 && preparedRowAt(page, page.count - 1) >= r0)) return this.preparedPage(column, residual, limit)
+      const builder = new LaneBuilder()
+      let textUnits = 0
+      visitPreparedRows(column.count, k => columnRowAt(column, k), [{ r0, r1 }], r1 - r0 + 1,
+        k => {
+          const page = column.pages[Math.floor(k / PREPARED_PAGE_ENTRIES)], at = k % PREPARED_PAGE_ENTRIES
+          const m = preparedMetadataAt(page, at), code = page.codes[m], tag = code % 4, flags = Math.floor(code / 4), raw = page.values[at]
+          const value = tag === TAG_NULL ? null : tag === TAG_NUMBER ? raw : tag === TAG_BOOLEAN ? raw !== 0 : column.strings[raw]
+          textUnits += typeof value === 'string' ? value.length : flags & F_ERROR ? String(value).length : 0
+          if (textUnits <= 32768) builder.add(preparedRowAt(page, at), value, (flags & F_ERROR) !== 0, page.styles[m], (flags & F_UNAVAILABLE) !== 0)
+        }, () => {},
+      )
+      if (textUnits > 32768) return this.preparedPage(column, residual, limit)
+      items.push(builder.build(r0, r1))
+      left -= r1 - r0 + 1
     }
     return items
   }
@@ -1252,7 +1371,9 @@ export class DocumentSession {
   preparedStore(sheetId: string): SourceStore {
     const store = this.source.store(sheetId)
     const session = this
-    return {
+    const prepared: BoundedSortLaneStore & PreparedSortStore = {
+      [PREPARED_SORT_READER]: (col, stamp) => session.preparedSortLease(sheetId, col, stamp),
+      [BOUNDED_SORT_LANES]: true,
       get stamp() { return store.stamp },
       get valuePolicy() { return store.valuePolicy },
       get extent() { return store.extent },
@@ -1265,6 +1386,7 @@ export class DocumentSession {
       release: () => store.release(),
       queryColumn: (request, options) => session.pagedColumn(store, request, options),
     }
+    return prepared
   }
   private async pagedColumn(store: SourceStore, request: ColumnQuery, options: { signal: AbortSignal; stamp: SourceStamp }): Promise<Page<ColumnEntry>> {
     const stamp = store.stamp
@@ -1278,7 +1400,7 @@ export class DocumentSession {
     }
     // Resident row-set refs are resolved only by the backend (S1.2).
     if (!intervals) return store.queryColumn(request, options)
-    const fingerprint = queryFingerprint(request.col, stamp, intervals)
+    const fingerprint = queryFingerprint(request.col, stamp, intervals, request.encoding ?? 'entries')
     let at = 0, row = intervals[0]?.r0 ?? 0
     if (request.cursor !== undefined) {
       const parts = request.cursor.split(':')
@@ -1299,7 +1421,7 @@ export class DocumentSession {
       this.prepared.delete(key)
       this.prepared.set(key, prepared)
       this.preparedEntries.get(key)?.touch()
-      items = this.preparedPage(prepared, residual, request.limit)
+      items = request.encoding === 'lanes' ? this.preparedLanes(prepared, residual, request.limit) : this.preparedPage(prepared, residual, request.limit)
     } else {
       const page = await store.queryColumn({ col: request.col, rows: { kind: 'intervals', intervals: residual }, limit: request.limit }, options)
       if (page.error) return { ...page, nextCursor: undefined }
@@ -1700,6 +1822,7 @@ export class DocumentSession {
     this.states.clear()
     this.prepared.clear()
     this.preparedEntries.clear()
+    this.preparedPins.clear()
     this.preparedBytes = 0
     this.structures.clear()
     this.structureEntries.clear()

@@ -58,11 +58,11 @@ export const SCENARIOS: Readonly<Record<ScenarioId, ScenarioDef>> = Object.freez
   },
   'sort-1m-3key': {
     id: 'sort-1m-3key', kind: 'sort', fixture: 'F2', keys: [1, 4, 5], rows: F2_FULL_ROWS, threshold: 'numeric-sort-1m',
-    description: 'F2 1,048,574 body rows, three keys (date, amount, ratio: numeric with #DIV/0! every 101st row); the 3-column batch exceeds the D staging budget, so the columns are staged one at a time and all three stay prepared',
+    description: 'F2 1,048,574 body rows, three keys (date, amount, ratio: numeric with #DIV/0! every 101st row); all three fit as one batch in the compact D prepared cache',
   },
   'sort-1m-8key': {
     id: 'sort-1m-8key', kind: 'sort', fixture: 'F2', keys: F2_EIGHT_KEYS, rows: F2_FULL_ROWS, threshold: 'numeric-sort-1m',
-    description: 'F2 1,048,574 body rows, eight keys over all F2 fields, lowest cardinality first; FALLBACK diagnostic: the D prepared budget cannot hold 8 x 1M columns, so unprepared keys are read from the source',
+    description: 'F2 1,048,574 body rows, eight keys over all F2 fields, lowest cardinality first; the compact D prepared cache admits all eight key columns as one batch',
   },
   'filter-1m-numeric': {
     id: 'filter-1m-numeric', kind: 'filter', fixture: 'F2', keys: [4], rows: F2_FULL_ROWS, threshold: 'numeric-filter-1m',

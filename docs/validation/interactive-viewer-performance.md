@@ -1,15 +1,24 @@
-# Interactive viewer — performance thresholds (S8.4 baseline)
+# Interactive viewer — frozen thresholds and S8.6 desktop results
+
+S8.6 is complete for the measured desktop D kernel scenarios: all nine Chrome
+runs at `09adbb1fa156c54c12e2ada22ea80e89a175d525` pass their frozen thresholds.
+Worker parallelism is unnecessary: the plan makes it conditional on continued
+single-worker misses, and the optimized single-worker path passes. Every frozen
+threshold and memory budget is unchanged. Safari, mobile and full-viewer release
+acceptance remain separate, unmeasured gates.
 
 Plan section **S8.4 Performance threshold freeze** (exit gate for S8). Spec
 §12.1 (freeze rule), §12.2 (profiles and thresholds), §12.6 (protocol).
 
 The frozen thresholds are in `tests/fixtures/xlsx-viewer/performance-profile.json`.
-`tests/xlsx-viewer-performance-profile.test.ts` checks its shape and
-cross-checks it against the retained results. The summary statistics behind
-every number below are in
-`docs/validation/interactive-viewer-performance-results.json`.
+`tests/xlsx-viewer-performance-profile.test.ts` checks its shape and cross-checks
+current measurements against hash-verified raw samples in
+`docs/validation/interactive-viewer-sort-chrome-r3.json`. The S8.4 summary remains
+unchanged in `interactive-viewer-performance-results.json`, cited by
+`evidence.baseline`; checkpoint-1/2 receipts and Node diagnostics remain linked
+from [the checkpoint record](interactive-viewer-sort-checkpoint.md).
 
-> **Headline.** Of the five S8.4 operations, the 1M numeric filter and the cold
+> **Historical S8.4 headline.** Of the five S8.4 operations, the 1M numeric filter and the cold
 > 100k value index pass on desktop D.
 > - The 100k and 1M numeric sorts miss their §12.2 desktop ceilings by more than
 >   2×, even with every key column prepared.
@@ -20,7 +29,86 @@ every number below are in
 > recorded finding, not a failure (plan S8.4). Unmet sort thresholds are carried
 > by plan **S8.6 (sort performance)**. This package writes no spec amendment.
 
-## Baseline
+## S8.6 final Chrome measurements
+
+Same nine full-scale scenarios and method: Chrome 155.0.8059.39, Playwright
+channel Chrome, **headless**, desktop D (1440×900 CSS, DPR 2), 30 measured
+iterations plus 3 excluded warmups. The source commit is `09adbb1`, with the
+complete build/environment identity, original samples and independently verified
+integrity hashes retained in `interactive-viewer-sort-chrome-r3.json`. Integrity
+hashes detect modification; they are not signatures or machine attestations.
+
+### Before/after query completion (p95 ms)
+
+| Scenario | S8.4 baseline | S8.6 r3 | Frozen target | Result / headroom |
+|---|---:|---:|---:|---|
+| 100k one key | 265.3 | 24.2 | 100 | pass / +75.8 |
+| 100k eight keys | 657.4 | 67.4 | 100 | pass / +32.6 |
+| 1M one key | 3101.6 | 345.2 | 1000 | pass / +654.8 |
+| 1M two keys | 3641.2 | 474.2 | 1000 | pass / +525.8 |
+| 1M three keys | 4362.5 | 546.5 | 1000 | pass / +453.5 |
+| 1M eight keys | 7643.4 (fallback) | 787.2 | 1000 | pass / +212.8 |
+| 1M natural text | 7648.4 (admitted) | 2348.6 | 4000 | pass / +1651.4 |
+| 1M numeric filter | 72.0 | 72.6 | 100 | pass / +27.4 |
+| Cold 100k value index | 33.2 | 30.5 | 750 | pass / +719.5 |
+
+Baseline 1M eight-key results had only two prepared columns and 1,536 raw reads,
+so that row compares different boundaries and establishes no controlled speedup
+ratio. R3 prepares all eight columns atomically, with zero raw reads in every
+F2 sort. Its retained cache is **26,469,195 B**, staging peak **26,613,567 B**,
+within the unchanged 64 MiB prepared budget. Text remains an admitted resident
+source path with 245 raw reads; its **239,052,798 B** resident source is charged.
+No arbitrary incompressible-data fit guarantee is inferred from F2 compaction.
+
+### Kernel phases (p50 ms, baseline → r3)
+
+| Scenario | Key read | Dictionary | Merge | Candidates + output + inverse | Aggregate peak r3 |
+|---|---:|---:|---:|---:|---:|
+| 100k one key | 44 → 2.2 | — | 170 → 13.4 | 28 → 2.7 | 3.7 MB |
+| 100k eight keys | 368 → 27.9 | — | 224 → 28.3 | 29 → 2.8 | 13.3 MB |
+| 1M one key | 501 → 21.7 | — | 2077 → 235.9 | 300 → 29.6 | 36.9 MB |
+| 1M two keys | 994 → 64.2 | — | 2124 → 321.3 | 297 → 31.6 | 53.6 MB |
+| 1M three keys | 1490 → 92.4 | — | 2236 → 345.8 | 298 → 31.9 | 72.6 MB |
+| 1M eight keys | 3816 → 299.6 | — → 0.2 | 2879 → 381.8 | 301 → 33.1 | 139.9 MB |
+| 1M natural text | 589 → 312.5 | 4289 → 1647.9 | 2079 → 243.4 | 284 → 27.1 | 405.8 MB |
+
+Phase values are diagnostic medians and do not add up to p95. The read phase
+also includes optional integer-prefix construction. R3 yielded-phase medians
+are 1.5 ms for 100k/eight keys, 18.8 ms for 1M/eight keys and 18.7 ms for text.
+The F4 admitted aggregate peak fell from 416,190,530 B to **405,811,010 B**;
+all reported sort aggregate peaks remain within the D worker's 512 MiB budget.
+
+### Implementation and evidence limits
+
+The optimized path amortizes cooperative checks within 256 work units, uses typed
+direction-normalized keys and natural-run merging, verifies the observed text
+dictionary under the host collator, compacts prepared pages losslessly and reads
+pinned prepared scalars directly. Low-cardinality integer prefixes reduce
+multi-key comparisons without changing tag order, host ranks or source-row ties.
+Differential tests retain the frozen kernel and assert byte-identical permutation
+and inverse buffers across seeded 1–8-key mixed-value cases and full-size F2.
+
+The text discriminator's runtime probe compares all 100×100 decimal-number
+pairs and each claimed ASCII prefix with digit pairs (unequal digits are checked
+with opposing suffixes). This finite probe is an eligibility check, not exhaustive
+single-code-unit/pairwise proof for arbitrary strings. It discriminates unequal
+numeric runs of at most 15 digits after identical prefixes in strings of at most
+64 UTF-16 units. Other strings and numeric ties use `Intl.Collator`. Before ranks
+are published, every adjacent pair in the candidate sorted dictionary is checked
+against the host collator; any ordering disagreement triggers a host-only
+re-sort. Host comparisons alone define rank equality. This validation establishes
+the observed dictionary's order under the host's total-order contract, without
+assuming that the finite probe certifies unseen strings.
+
+These receipts cover **one M4 Pro laptop** and one headless browser session;
+**concurrent load is possible**, so no controlled machine-independent speedup or
+headed-browser guarantee is claimed. They use synthetic fixture stores and
+dev-served modules, with a DOM status/text presentation rather than the canvas
+viewer. Runs are labelled smoke. XLSX import, first viewport, scrolling and
+input acknowledgment are outside these operation boundaries. No Safari or
+physical mobile results exist here, and their frozen thresholds stay unmeasured.
+
+## Historical S8.4 baseline
 
 ### Machine, browser, build
 
@@ -194,7 +282,7 @@ deliberately **not** taken: the spec levers and S8.6 address it.
 
 Passing values are not tightened. Other admitted D machines must also meet them.
 
-## Findings (for the orchestrator)
+## Historical S8.4 findings (resolved sort misses in S8.6)
 
 1. **Prepared numeric sorts miss by 2.7–6.6×.** The row merge costs about
    100 ns per comparison (2.1 s for 1M rows). The main suspect is the
@@ -220,7 +308,7 @@ Passing values are not tightened. Other admitted D machines must also meet them.
    the delivered `FilterEngine.compileFilter` over a prepared, charged lane. No
    production `filterEvaluator` is wired yet; re-measure when S5.2/S9 wire one.
 
-## Caveats
+## Historical S8.4 caveats
 
 - **Headless Chrome only**, launched by Playwright. No headed run, Safari or
   Firefox; §12.2 requires Safari desktop to be recorded separately.
@@ -240,7 +328,7 @@ Passing values are not tightened. Other admitted D machines must also meet them.
   `REAL_FIXTURES_AVAILABLE` is false. They carry fixture ids F2/F4, adapter
   `synthetic-fixture-store` and evidence `automated-browser`.
 
-## Reproducing
+## Reproducing the kernel scenarios
 
 ```sh
 bun install --frozen-lockfile
@@ -250,3 +338,20 @@ done
 ```
 
 `--rows N` runs a reduced-scale smoke, labelled REDUCED in `environment.note`.
+
+## S8.6 follow-up checkpoints
+
+The frozen S8.4 measurements above remain the baseline. Subsequent S8.6 source,
+Chrome receipts and iteration diagnostics are recorded in
+[interactive-viewer-sort-checkpoint.md](interactive-viewer-sort-checkpoint.md).
+Checkpoint 2 (`e1fa618`, Chrome 155, D, 30 + 3) passes the three-key prepared
+and natural-text sorts, while eight-key query p95 still misses at 159.7 ms for
+100k and 2076.6 ms for 1M. All eight F2 columns fit the unchanged 64 MiB prepared
+cache (26,469,195 B), with zero raw reads. The hash-verified samples are retained
+in [interactive-viewer-sort-chrome-r2.json](interactive-viewer-sort-chrome-r2.json).
+Checkpoint 3 reduces multi-key comparison and prepared extraction costs; its
+final Chrome receipts are retained in
+[interactive-viewer-sort-chrome-r3.json](interactive-viewer-sort-chrome-r3.json).
+All nine measured scenarios pass. The profile now cites these receipts and
+retains its S8.4 baseline pointer. No frozen thresholds or baseline result data
+were replaced, and no Safari/mobile/release acceptance is claimed.
