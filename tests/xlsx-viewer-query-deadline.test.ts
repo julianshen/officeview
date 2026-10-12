@@ -1,6 +1,6 @@
 // @vitest-environment node
 import { afterEach, expect, it, vi } from 'vitest'
-import { FOREGROUND_YIELD_WAIT_MS, QUERY_DEADLINE_MS, ViewerKernel } from '../src/worker/viewerKernel'
+import { FOREGROUND_YIELD_WAIT_MS, ViewerKernel } from '../src/worker/viewerKernel'
 import { createObjectWorkbookSource } from '../src/worker/viewerObjectSource'
 import { initialIdentity } from '../src/worker/viewerProtocol'
 import type { WorkerReply } from '../src/xlsx/view/contracts'
@@ -273,12 +273,23 @@ it('S13.3 MINOR-1: a slow foreground command parks background work for a bounded
   let done = false
   const sort = kernel.handle({ kind: 'sort', requestId: 'sort', owner, spec: { range: { r0: 0, r1: rows - 1, c0: 0, c1: 0, headerRows: 0, totalsRows: 0 }, keys: [{ col: 0, order: 'asc' }], caseSensitive: false } }, out => replies.push(out)).then(() => { done = true })
   try {
-    let waited = 0
-    while (!done && waited < QUERY_DEADLINE_MS / 2) { await vi.advanceTimersByTimeAsync(FOREGROUND_YIELD_WAIT_MS); waited += FOREGROUND_YIELD_WAIT_MS }
+    // The spec'd share is 250 ms per yield, pinned here independently of the
+    // constant: the sort is parked at a yield while the foreground command lives...
+    await vi.advanceTimersByTimeAsync(0)
+    const parked = yields
+    expect(parked, 'the sort reached a yield').toBeGreaterThan(0)
+    await vi.advanceTimersByTimeAsync(249)
+    expect(yields, 'still parked at 249 ms').toBe(parked)
+    // ...and resumes at 250 ms, running until its next yield.
+    await vi.advanceTimersByTimeAsync(1)
+    expect(yields, 'resumed at 250 ms').toBeGreaterThan(parked)
+    // Every later yield is bounded the same way: the sort finishes in at most
+    // 250 ms per yield, with no time jump past that bound.
+    let waited = 250
+    while (!done && waited < 60_000) { await vi.advanceTimersByTimeAsync(250); waited += 250 }
     expect(done, 'the sort progresses although the foreground command never finishes').toBe(true)
-    expect(yields).toBeGreaterThan(1)
     expect(replies.at(-1)).toMatchObject({ kind: 'complete' })
-    expect(waited, 'each yield waited at most one bounded share').toBeLessThanOrEqual(yields * FOREGROUND_YIELD_WAIT_MS)
+    expect(waited, 'each yield waited at most 250 ms').toBeLessThanOrEqual(yields * 250)
   } finally {
     release()
     await vi.advanceTimersByTimeAsync(0)
