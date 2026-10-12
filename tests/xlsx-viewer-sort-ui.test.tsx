@@ -211,7 +211,8 @@ it('reserves touch header chrome for visible 44px controls and retains source-sp
       expect(button.style.minHeight).toBe('44px')
       expect(button.closest('[hidden]')).toBeNull()
     }
-    expect((grid.querySelector('[aria-rowindex="2"]') as HTMLElement).style.top).toBe('132px')
+    // Rows follow the scroll window by transform (no layout shift).
+    expect((grid.querySelector('[aria-rowindex="2"]') as HTMLElement).style.transform).toBe('translateY(132px)')
     act(() => grid.focus())
     fireEvent.click(grid, { detail: 1, clientX: 54, clientY: 142 })
     expect(change).toHaveBeenCalledOnce()
@@ -244,8 +245,10 @@ it.each([16, 40])('keeps touch header targets of a %ipx projected column out of 
   const ui = render(<GridHeaders projection={projection} window={window} viewport={p.viewport} columns={[0, 1]} selection={p.selection}
     sort={null} onSortCycle={vi.fn()} onFilter={vi.fn()} onSortDialog={vi.fn()} touchControls />)
   const a = ui.getByRole('columnheader', { name: 'Column A' }), b = ui.getByRole('columnheader', { name: 'Column B' })
-  const right = parseFloat(a.style.left) + parseFloat(a.style.width)
-  expect(right).toBeLessThanOrEqual(parseFloat(b.style.left) + 1e-6)
+  // Header boxes are placed by translateX (no layout shift).
+  const x = (el: HTMLElement) => parseFloat(/translateX\(([-\d.]+)px\)/.exec(el.style.transform)![1])
+  const right = x(a) + parseFloat(a.style.width)
+  expect(right).toBeLessThanOrEqual(x(b) + 1e-6)
   // Deterministic hit ownership: no control of A may demand space past A's box.
   for (const button of a.querySelectorAll('button')) {
     expect(Math.max(parseFloat(button.style.width) || 0, parseFloat(button.style.minWidth) || 0)).toBeLessThanOrEqual(parseFloat(a.style.width) + 1e-6)

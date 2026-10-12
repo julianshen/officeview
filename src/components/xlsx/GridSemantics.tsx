@@ -217,8 +217,10 @@ export function GridSemantics(props: GridSemanticsProps): ReactElement {
         const cells = extra ? [active!.col] : [...columns]
         if (!extra && slot === activeSlot && active && !cells.includes(active.col)) cells.push(active.col)
         const box = viewportHeaderBox(projection, scroll, viewport, 'row', slot)
+        // Rows, cells and header controls follow the scroll window by transform:
+        // a transform is not a layout shift, so the viewer adds no CLS to its host.
         return <div key={slot} role="row" aria-rowindex={slot + 2} data-transient-active={extra ? 'true' : undefined}
-          style={extra ? { ...hiddenText, top: 0, left: 0, pointerEvents: 'none' } : { position: 'absolute', top: headerHeight + box.y, left: 0, height: box.height, width: '100%', pointerEvents: 'none' }}>
+          style={extra ? { ...hiddenText, top: 0, left: 0, pointerEvents: 'none' } : { position: 'absolute', top: 0, left: 0, transform: `translateY(${headerHeight + box.y}px)`, height: box.height, width: '100%', pointerEvents: 'none' }}>
           <GridRowHeader props={headerProps} slot={slot} />
           {cells.map(col => {
             const at = { row, col }, value = props.cellPresentation?.(at) ?? { text: '', state: 'loading' as const }
@@ -226,15 +228,17 @@ export function GridSemantics(props: GridSemanticsProps): ReactElement {
             const offscreen = extra || (slot === activeSlot && active?.col === col && !columns.includes(col))
             return <div key={col} role="gridcell" id={`${prefix}-cell-${cellId(row, col)}`} aria-colindex={col + 2}
               aria-label={activeAnnouncement(projection, at, value.text)} aria-selected={cellSelected(selection.ranges, at)} aria-description={value.state}
-              style={offscreen ? { ...hiddenText, top: 0, left: 0 } : { position: 'absolute', top: 0, left: GRID_HEADER_SIZE + column.x, width: column.width, height: box.height }}><span style={hiddenText}>{boundedSelectionText(value.text)}</span></div>
+              style={offscreen ? { ...hiddenText, top: 0, left: 0 } : { position: 'absolute', top: 0, left: 0, transform: `translateX(${GRID_HEADER_SIZE + column.x}px)`, width: column.width, height: box.height }}><span style={hiddenText}>{boundedSelectionText(value.text)}</span></div>
           })}
         </div>
       })}
     </div>
-    {/* Bounded by the pane (overflow:hidden): a taller popup scrolls instead of losing its top controls. */}
+    {/* Bounded by the pane (overflow:hidden): a taller popup scrolls instead of losing its top controls.
+        Anchored at the top: content that arrives later (a loading value list) grows the popup downward,
+        never moving what is already shown (no layout shift for the host page). */}
     {props.popup && <div ref={popupRef} role="dialog" aria-label={props.popup.label ?? 'Column filter'} data-officeview-ui="grid-popup"
       onPointerDown={event => event.stopPropagation()} onDoubleClick={event => event.stopPropagation()}
-      style={{ position: 'absolute', zIndex: 3, bottom: 0, maxWidth: '100%', maxHeight: '100%', overflowY: 'auto', boxSizing: 'border-box', paddingBottom: 'env(safe-area-inset-bottom)' }}>{props.popup.content}</div>}
+      style={{ position: 'absolute', zIndex: 3, top: 0, maxWidth: '100%', maxHeight: '100%', overflowY: 'auto', boxSizing: 'border-box', paddingBottom: 'env(safe-area-inset-bottom)' }}>{props.popup.content}</div>}
     <ViewerStatus {...props.status} records={props.status?.records ?? recordCounts(projection, props.body)} announcement={status} inspection={props.inspection ?? props.status?.inspection} />
   </div>
 }
