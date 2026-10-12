@@ -118,7 +118,8 @@ Every package is implemented on its own branch, reviewed by at least one agent f
 | S9.2 copy in displayed order and budgeted static print (`copy.ts`, `viewerControlsClient.ts`, clipboard/print policy) | merged (codex implementation; opencode reviews over two rounds); copy works on resident sheets — paged sheets wait for S5.4 |
 | S8.4 performance threshold freeze (`performance-profile.json`, harness kernel scenarios, `docs/validation/interactive-viewer-performance.md`) | merged; thresholds frozen at spec; sort misses carried by S8.6 |
 | S5.4 | in progress (codex review round 1 findings being fixed) |
-| S8.6 (sort performance), S10 (physical-device receipts skipped for now by user decision), S11/S12 status, S13 | not started |
+| S8.6 (sort performance) | completed for measured desktop kernel scenarios at 09adbb1; frozen thresholds unchanged |
+| S10 (physical-device receipts skipped for now by user decision), S11/S12 status, S13 | not started |
 
 ## S0 — Freeze contracts, counterexamples and fixture/harness infrastructure
 
@@ -575,17 +576,17 @@ expect(wide.contains({ row: 2, col: 0 })).toBe(false)
 
 ### S8.6 Sort performance to the frozen thresholds
 
-> Added 2026-10-12. S8.4's Chrome baseline (D profile, M4 Pro, headless, n=30) misses every sort threshold by more than 2×: 100k 8-key 759 ms vs 100 ms; 1M 2-key prepared 4,375 ms vs 1,000 ms; 1M natural text refused by the 512 MiB worker budget once resident input is charged (unadmitted diagnostic 9,159 ms vs 4,000 ms). Thresholds stay frozen; this package must meet them, or come back with measured evidence for a user-approved spec amendment. Phase timings put the row merge at about 2.5 s of 3.4 s for 1M one-key, and dictionary collation at about 4.8 s for F4. Depends on the S8.4 harness scenarios.
+> **Completed (2026-10-12):** single-worker Chrome 155 desktop D at `09adbb1`, n=30 + 3 warmups. All nine measured kernel scenarios pass unchanged frozen thresholds: 100k eight-key query p95 67.4 ms, 1M eight-key 787.2 ms, 1M natural text 2348.6 ms. Full F2 eight-key preparation retains 26,469,195 B within the unchanged 64 MiB cache. No parallel workers are needed. Raw verified receipts, S8.4 before/after tables, phases and measurement caveats are in `docs/validation/interactive-viewer-performance.md` and `interactive-viewer-sort-chrome-r3.json`. Safari/mobile/full-viewer release gates remain separate.
 
 **Files:** `src/xlsx/view/scheduler.ts`, `src/xlsx/view/sort.ts` (and new helpers beside it), worker kernel/session wiring for parallel runs, prepared-column storage; tests `tests/xlsx-viewer-sort*.test.ts`, extend `tests/xlsx-viewer-kernel-scenarios.test.ts`; update `docs/validation/interactive-viewer-performance.md` and `-results.json`.
 
-- [ ] Parity harness first: a differential test that runs the current kernel and every optimized path over a seeded fuzz corpus (numbers, dates, booleans, errors, blanks, mixed and multilingual text, duplicates, every key direction, 1–8 keys) and asserts byte-identical permutations, stable ties by source row ID, and identical error/blank placement. Each step below must keep it green.
-- [ ] Cooperative-check amortization (spec §12.1 clarification): batch the clock sample and cancellation/staleness check. Tests prove a check at least every 256 work units and at every pause, the §10.2 yield bound, and no change in output.
-- [ ] Merge phase: replace the per-comparison merge with a typed-array key/index representation; use run-merge (spec lever) to exploit presorted runs. Profile again before and after.
-- [ ] Text sort: ASCII/Latin-1 fast path proven identical to the host collator (spec lever) via exhaustive single-code-unit and pairwise checks plus the fuzz corpus; anything outside the proven set uses the existing path. Reduce the F4 dictionary/collation peak so the 1M text sort is admitted within the D budget with resident input charged.
-- [ ] Worker-parallel runs (spec lever) only if the single-worker path still misses: bounded parallelism within the §12.4 aggregate memory budget, deterministic merge, cancellation fan-out.
-- [ ] Prepared-column budget: make 1M × 8 keys fit by compacting prepared storage (for example per-column ranks or packed numeric lanes instead of tagged values). If it still cannot fit in 64 MiB, bring measurements and a proposed §12.4 amendment to the user; do not change budgets unilaterally.
-- [ ] Re-measure all S8.4 scenarios in Chrome with the same method and sample counts. Update the results JSON and the performance doc with before/after tables, and keep every threshold at its frozen value. Misses that remain are recorded findings for S10.2, with the evidence needed for any amendment.
+- [x] Parity harness first: a differential test that runs the current kernel and every optimized path over a seeded fuzz corpus (numbers, dates, booleans, errors, blanks, mixed and multilingual text, duplicates, every key direction, 1–8 keys) and asserts byte-identical permutations, stable ties by source row ID, and identical error/blank placement. Each step below must keep it green.
+- [x] Cooperative-check amortization (spec §12.1 clarification): batch the clock sample and cancellation/staleness check. Tests prove a check at least every 256 work units and at every pause, the §10.2 yield bound, and no change in output.
+- [x] Merge phase: replace the per-comparison merge with a typed-array key/index representation; use run-merge (spec lever) to exploit presorted runs. Profile again before and after.
+- [x] Text sort: ASCII/Latin-1 fast path proven identical to the host collator (spec lever) via exhaustive single-code-unit and pairwise checks plus the fuzz corpus; anything outside the proven set uses the existing path. Reduce the F4 dictionary/collation peak so the 1M text sort is admitted within the D budget with resident input charged.
+- [x] Worker-parallel runs (spec lever) only if the single-worker path still misses: bounded parallelism within the §12.4 aggregate memory budget, deterministic merge, cancellation fan-out. **Conditional step discharged without implementation:** the single-worker r3 runs pass every measured threshold, so parallelism is unnecessary.
+- [x] Prepared-column budget: make 1M × 8 keys fit by compacting prepared storage (for example per-column ranks or packed numeric lanes instead of tagged values). If it still cannot fit in 64 MiB, bring measurements and a proposed §12.4 amendment to the user; do not change budgets unilaterally.
+- [x] Re-measure all S8.4 scenarios in Chrome with the same method and sample counts. Update the results JSON and the performance doc with before/after tables, and keep every threshold at its frozen value. Misses that remain are recorded findings for S10.2, with the evidence needed for any amendment.
 
 ## S9 — Controls, copy/print policy and mobile interactions
 

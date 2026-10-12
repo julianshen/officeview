@@ -7,9 +7,9 @@ import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { SCENARIOS, isScenarioId } from '../src/debug/harness/scenarios'
+import { verifyHarnessResult, type HarnessResult } from '../src/debug/harness/result'
 
 const PROFILE_PATH = join(process.cwd(), 'tests/fixtures/xlsx-viewer/performance-profile.json')
-const RESULTS_PATH = join(process.cwd(), 'docs/validation/interactive-viewer-performance-results.json')
 const MIN_OPERATION_SAMPLES = 30
 
 /** Spec §12.2 acceptance table, copied verbatim (ms, p95). */
@@ -50,7 +50,7 @@ interface Profile {
   spec: string
   frozenAt: string
   maxLoosenRatio: number
-  evidence: { doc: string; commit: string; browser: string; machine: string; profile: string }
+  evidence: { doc: string; results: string; commit: string; commits: Record<string, string>; browser: string; machine: string; profile: string; baseline?: { results: string; commit: string } }
   thresholds: Threshold[]
   diagnostics: (Measurement & { threshold: string; reason: string })[]
   headroom: Record<string, { ceilingMs: number; specEstimateMs: number; measuredP95Ms: number; headroomMs: number; scenario: string }>
@@ -63,7 +63,21 @@ interface ResultRow {
   scenario: { id: string; keys: number[]; admitted?: boolean } | null
   series: Record<string, { samples: number; warmupExcluded: number; p50: number; p95: number | null; max: number }>
 }
-const results = JSON.parse(readFileSync(RESULTS_PATH, 'utf8')) as Record<string, ResultRow>
+const retained = JSON.parse(readFileSync(join(process.cwd(), profile.evidence.results), 'utf8')) as {
+  runs: Record<string, { result: HarnessResult }>
+}
+const results: Record<string, ResultRow> = Object.fromEntries(Object.entries(retained.runs).map(([id, receipt]) => {
+  const result = receipt.result, series: ResultRow['series'] = {}
+  for (const sample of result.samples) {
+    const metric = result.metrics[sample.name]
+    if (metric.status === 'ok' || metric.status === 'insufficient-samples') {
+      series[sample.name] = { samples: metric.samples, warmupExcluded: sample.warmupExcluded,
+        p50: metric.p50, p95: metric.status === 'ok' ? metric.p95 : null, max: metric.max }
+    }
+  }
+  return [id, { admitted: result.environment.scenario?.admitted ?? null, note: result.environment.note ?? '',
+    scenario: result.environment.scenario ?? null, series }]
+}))
 const WARM_SORTS = ['numeric-sort-100k', 'numeric-sort-1m']
 
 /** A frozen summary must be exactly the retained result it cites. */
@@ -105,6 +119,38 @@ function checkSummary(summary: Summary, where: string): void {
 }
 
 describe('performance-profile.json (S8.4 threshold freeze)', () => {
+  it('retains complete hash-verified S8.6 Chrome evidence without changing frozen values', async () => {
+    expect(profile.evidence.commit).toBe('09adbb1fa156c54c12e2ada22ea80e89a175d525')
+    expect(profile.evidence.results).toBe('docs/validation/interactive-viewer-sort-chrome-r3.json')
+    expect(profile.evidence.baseline?.results).toBe('docs/validation/interactive-viewer-performance-results.json')
+    const retained = JSON.parse(readFileSync(join(process.cwd(), profile.evidence.results), 'utf8')) as {
+      runs: Record<string, { run: { commit: string; repeat: number; warmup: number }; result: HarnessResult }>
+    }
+    expect(Object.keys(retained.runs).sort()).toEqual(Object.keys(SCENARIOS).sort())
+    for (const [id, receipt] of Object.entries(retained.runs)) {
+      const result = receipt.result
+      expect(await verifyHarnessResult(result), id).toEqual({ ok: true, errors: [] })
+      expect(receipt.run.commit, id).toBe(profile.evidence.commit)
+      expect(profile.evidence.commits[id], id).toBe(result.environment.buildCommit)
+      expect(result.environment.buildCommit, id).toBe(profile.evidence.commit)
+      expect(result.environment.scenario?.id, id).toBe(id)
+      expect(result.environment.scenario?.keys, id).toEqual([...SCENARIOS[id as keyof typeof SCENARIOS].keys])
+      expect(result.environment.source.rows, id).toBe(SCENARIOS[id as keyof typeof SCENARIOS].rows)
+      expect(result.environment.profile, id).toBe('desktop')
+      expect(result.environment.profileConformance.conforms, id).toBe(true)
+      expect(receipt.run.repeat, id).toBe(30)
+      expect(receipt.run.warmup, id).toBe(3)
+      const sample = result.samples.find(s => s.name === 'query-completion')!
+      expect(sample.values.length, id).toBe(30)
+      expect(sample.warmupExcluded, id).toBe(3)
+    }
+    for (const threshold of profile.thresholds) {
+      expect(threshold.desktop.frozenMs, threshold.id).toBe(SPEC_TABLE[threshold.id].desktop)
+      expect(threshold.mobile.frozenMs, threshold.id).toBe(SPEC_TABLE[threshold.id].mobile)
+    }
+    expect(profile.thresholds.find(t => t.id === 'numeric-sort-1m')!.desktop.measurement?.keys).toBe(8)
+  })
+
   it('declares its schema, spec source and evidence record', () => {
     expect(profile.schemaVersion).toBe(1)
     expect(profile.spec).toContain('§12.2')

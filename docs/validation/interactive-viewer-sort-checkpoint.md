@@ -1,6 +1,8 @@
-# S8.6 single-worker checkpoint
+# S8.6 single-worker checkpoints and final desktop results
 
-Worktree `feature/iv-s8-6`, base `fb39d72`. **S8.6 is in progress**, not complete.
+Worktree `feature/iv-s8-6`, base `fb39d72`. **S8.6 is complete for the measured
+desktop kernel scenarios** at `09adbb1`; final Chrome evidence follows the
+historical checkpoint records below.
 The Chrome S8.4 baseline/results and every frozen threshold remain unchanged.
 Node numbers establish neither browser acceptance nor a p95 distribution.
 
@@ -300,3 +302,41 @@ failure names match the localhost/listen `EPERM` cases reproduced on a pristine
 `dist/index.js` Node gzip is **38,026 B**, within 38.43 KB. Diff and new-file
 whitespace checks passed. Changes are uncommitted for the orchestrator checkpoint.
 S8.6 remains in progress pending Chrome; no sub-agents, spec edits or budget changes.
+
+## Final Chrome receipt and S8.6 completion (09adbb1)
+
+The orchestrator measured all nine full-scale scenarios on Chrome 155 desktop D
+at `09adbb1fa156c54c12e2ada22ea80e89a175d525`, with 30 measured samples and 3
+warmups. All query-completion thresholds pass: 100k eight-key **67.4 ms**, 1M
+eight-key **787.2 ms**, 1M natural text **2348.6 ms**. Original result hashes and
+derived sample summaries were independently verified, then retained without
+rewriting them in `interactive-viewer-sort-chrome-r3.json`.
+
+The final profile cites that evidence, preserves the S8.4 baseline pointer and
+historical diagnostic/headroom, and changes no spec/frozen thresholds or budgets.
+The profile test checks all nine result hashes, build/scenario/profile identity,
+sample counts, summary correspondence and genuine prepared-key coverage. Its
+RED assertion cited the old S8.4 commit instead of `09adbb1`; the updated profile
+and retained receipt are GREEN. Exact before/after timings, kernel phases and
+headroom are in `interactive-viewer-performance.md`.
+
+No parallel workers are needed: the plan's conditional single-worker-miss test
+is now false. All S8.6 bullets are checked with that decision stated explicitly.
+No further optimization or budget amendment was made. Headless Chrome on one
+M4 Pro laptop, possible concurrent load and synthetic fixtures limit these
+measurements; Safari/mobile and full-viewer release acceptance remain separate.
+
+Final gates: `bunx tsc --noEmit` and `bun run typecheck:scripts` passed; thirteen
+focused sort/scheduler/prepared/worker/kernel/profile suites **229 passed**;
+whole `bunx vitest run --configLoader runner --cache=false` **5,270 passed**,
+nine failed, ten skipped, one todo, eight errors. Every failure name matches the
+two localhost `EPERM` suites independently rerun on pristine `09adbb1`
+(21 passed, nine failed, eight errors). `bun run build` passed; eager Node gzip
+**38,026 B** ≤ 38.43 KB. Diff/new-artifact whitespace checks passed. Frozen
+values, freeze date, maximum loosening ratio and all mobile entries match
+`09adbb1` exactly; baseline result data remains unchanged.
+
+This finalization modifies the plan, performance doc, checkpoint record,
+performance profile and its test, and adds the retained r3 result JSON. Production
+code remains at the Chrome-measured commit. Final documentation/test changes are
+left uncommitted for the orchestrator, as required by the task's sandbox workflow.
