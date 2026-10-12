@@ -55,10 +55,20 @@ interface Ledger { typedElements: number; largestTyped: number; inserts: number;
 // before and after `run`, while the viewer stays mounted. A per-coordinate
 // object table or per-row array set survives the window and shows up here.
 v8.setFlagsFromString('--expose-gc')
-const collect = vm.runInNewContext('gc') as () => void
+/** Null where the runtime refuses to expose a collector: the retained-heap
+ * assertions are then skipped with a visible reason, never silently passed. */
+const collect: (() => void) | null = (() => {
+  try { return vm.runInNewContext('gc') as () => void } catch { return null }
+})()
+const HEAP_SKIP = 'retained-heap bound skipped: the runtime does not expose gc'
 function settledHeap(): number {
+  if (!collect) return 0
   for (let i = 0; i < 3; i++) collect()
   return process.memoryUsage().heapUsed
+}
+/** Asserts the retained-heap bound when a collector exists. */
+function expectRetainedBelow(ledger: Ledger, bound: number): void {
+  if (collect) expect(ledger.retainedBytes).toBeLessThan(bound)
 }
 /** Counts typed-array elements, `Array(n)` lengths and Map/Set insertions while
  * `run` executes, and the heap it leaves retained. */
@@ -216,6 +226,8 @@ const VIEWPORT_INSERTS = 50_000
 const VIEWPORT_RETAINED = 4 * 1024 * 1024
 
 describe('instrument self-check (the ledger is not vacuous)', () => {
+  // Where gc is unavailable, this skipped entry names why the heap bounds did not run.
+  if (!collect) it.skip(HEAP_SKIP, () => {})
   it('sees a row-sized typed lane and per-entry inserts into an officeview-built collection', async () => {
     const ledger = await measure(async () => {
       void new Uint32Array(ROW_LANE)
@@ -226,7 +238,7 @@ describe('instrument self-check (the ledger is not vacuous)', () => {
     expect(ledger.inserts).toBeGreaterThanOrEqual(VIEWPORT_INSERTS)
   })
 
-  it('sees a retained plain-object cell table and plain row arrays (no constructor to proxy)', async () => {
+  it.skipIf(!collect)('sees a retained plain-object cell table and plain row arrays (no constructor to proxy)', async () => {
     const kept: unknown[] = []
     const ledger = await measure(async () => {
       const cells: Record<string, { v: number }> = {}
@@ -267,7 +279,7 @@ describe('resident (object) viewer: navigation and paint stay viewport-bounded',
     expect(ledger.largestTyped).toBeLessThan(ROW_LANE)
     expect(ledger.typedElements).toBeLessThan(VIEWPORT_ALLOCATION)
     expect(ledger.inserts).toBeLessThan(VIEWPORT_INSERTS)
-    expect(ledger.retainedBytes).toBeLessThan(VIEWPORT_RETAINED)
+    expectRetainedBelow(ledger, VIEWPORT_RETAINED)
     const s = surfaces(ui.container)
     const pane = f.last()!
     // A full-sheet canvas would be 2^34 x 1280 px; every backing store here is a pane or tile.
@@ -305,7 +317,7 @@ describe('resident (object) viewer: navigation and paint stay viewport-bounded',
     })
     // A covered-cell map of this merge alone would hold 1,048,576 entries.
     expect(ledger.inserts).toBeLessThan(VIEWPORT_INSERTS)
-    expect(ledger.retainedBytes).toBeLessThan(VIEWPORT_RETAINED)
+    expectRetainedBelow(ledger, VIEWPORT_RETAINED)
     expect(ledger.largestTyped).toBeLessThan(ROW_LANE)
   })
 })
@@ -338,7 +350,7 @@ describe('worker-backed viewer: bounded reads, one parse, no per-command reparse
     // permutation lives in the worker; the adopted view is band-sized, 3,001 rows).
     expect(ledger.largestTyped).toBeLessThan(ROW_LANE)
     expect(ledger.inserts).toBeLessThan(VIEWPORT_INSERTS)
-    expect(ledger.retainedBytes).toBeLessThan(VIEWPORT_RETAINED)
+    expectRetainedBelow(ledger, VIEWPORT_RETAINED)
   }, 30_000)
 })
 
@@ -367,7 +379,7 @@ describe('F6 full-axis provider: the geometry window reads only what it shows', 
     expect(ledger.largestTyped).toBeLessThan(ROW_LANE)
     expect(ledger.typedElements).toBeLessThan(VIEWPORT_ALLOCATION)
     expect(ledger.inserts).toBeLessThan(VIEWPORT_INSERTS)
-    expect(ledger.retainedBytes).toBeLessThan(VIEWPORT_RETAINED)
+    expectRetainedBelow(ledger, VIEWPORT_RETAINED)
   })
 
   it('tiny sizes at 25% zoom: the whole pane is analytic coarse groups with no per-cell visit', async () => {
@@ -381,7 +393,7 @@ describe('F6 full-axis provider: the geometry window reads only what it shows', 
     // 41 million covered cells; the summary visits none of them one by one.
     expect(counts.cellAt).toBe(0)
     expect(ledger.inserts).toBeLessThan(VIEWPORT_INSERTS)
-    expect(ledger.retainedBytes).toBeLessThan(VIEWPORT_RETAINED)
+    expectRetainedBelow(ledger, VIEWPORT_RETAINED)
     expect(ledger.typedElements).toBeLessThan(VIEWPORT_ALLOCATION)
   })
 })
