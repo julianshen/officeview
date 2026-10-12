@@ -249,6 +249,12 @@ export class SheetTileRenderer {
     // Distinct texts this tile's context shapes: the browser keeps each one
     // (per font) while the canvas lives, outside the bitmap.
     const shaped = ctx ? countShapedTexts(ctx) : null
+    // Row reads are asked for before any worker plan: both spend one frame
+    // page budget, and the row cache's reads also make the cells known for
+    // the accessible grid. Asked even for a tile that ends up pending: a
+    // worker plan with unresolved cells still needs its rows, or it never
+    // resolves.
+    const pending = frame.pending?.(box) ?? []
     if (ctx) {
       const scale = frame.zoom * frame.dpr
       ctx.setTransform(scale, 0, 0, scale, 0, 0)
@@ -268,9 +274,6 @@ export class SheetTileRenderer {
       this.stats.maxTileRecords = Math.max(this.stats.maxTileRecords, work.records)
     }
     surface.cost = work
-    // Asked even for a tile that is already pending: a worker plan with
-    // unresolved cells still needs its rows requested, or it never resolves.
-    const pending = frame.pending?.(box) ?? []
     if (kind === 'pending' || kind === 'diagnostic') { if (visible) this.stats.pendingTiles++; return { surface, retained: false } }
     if (pending.length) {
       if (visible) this.stats.pendingTiles++

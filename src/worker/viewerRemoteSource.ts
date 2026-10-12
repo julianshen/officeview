@@ -175,8 +175,18 @@ export class RemoteWorkbook implements WorkbookSource {
     const limits = VIEWPORT_DETAIL_LIMITS[this.profile]
     return { tile: limits.tile.pages, frame: limits.pages }
   }
-  /** Requests currently in flight for painting loads (all sheets). */
-  loadsInFlight = 0
+  /** Page requests painting work holds (all sheets): row-cache runs and worker
+   * tile plans spend ONE §11.1 frame budget. A run holds one credit per page
+   * it has asked for; a tile plan holds the per-tile page cap the worker may
+   * spend on it. Credits return when the request settles. */
+  pagesInFlight = 0
+  /** Takes `pages` credits if the frame budget still has them. */
+  reservePages(pages: number): boolean {
+    if (this.pagesInFlight + pages > this.pageLimits.frame) return false
+    this.pagesInFlight += pages
+    return true
+  }
+  releasePages(pages: number): void { this.pagesInFlight -= pages }
   /** The active sheet keeps its cache; inactive sheets' caches are released. */
   activate(sheetId: string): void {
     for (const [id, store] of this.stores) if (id !== sheetId) store.clear()
@@ -773,7 +783,7 @@ export class RemoteSheetStore implements SourceStore {
     const { k0, k1, missing, out } = found
     if (missing.length) {
       const limits = this.workbook.pageLimits
-      const budget = Math.min(limits.tile, limits.frame - this.workbook.loadsInFlight)
+      const budget = Math.min(limits.tile, limits.frame - this.workbook.pagesInFlight)
       const runs = coalesce(missing).slice(0, Math.max(0, budget))
       for (const run of runs) void this.loadRun(run.r0, run.r1, k0, k1, new AbortController().signal, this.stamp)
     }
@@ -834,7 +844,10 @@ export class RemoteSheetStore implements SourceStore {
     const key = `${stamp.valueGen}:${r0}:${r1}:${k0}:${k1}`
     if (this.loading.has(key)) return
     this.loading.add(key)
-    this.workbook.loadsInFlight++
+    // The first page's credit was granted by the caller's budget (pendingIn)
+    // or is an explicit read (inspection, copy); continuations ask for more.
+    this.workbook.pagesInFlight++
+    let held = 1
     const epoch = this.state.epoch
     const range = { r0, r1, c0: k0 * ROW_CHUNK_COLS, c1: Math.min(MAX_COLS - 1, (k1 + 1) * ROW_CHUNK_COLS - 1) }
     let changed = false
@@ -844,6 +857,9 @@ export class RemoteSheetStore implements SourceStore {
       // row up to a page's last item, or the run end on the final page, is known.
       let covered = r0 - 1
       for (let pages = 0; pages < PAGES_PER_RUN; pages++) {
+        // A continuation is another page request: without a credit the run
+        // stops here, its later rows stay unknown and a later frame asks again.
+        if (pages > 0) { if (!this.workbook.reservePages(1)) break; held++ }
         const page = await this.readRows(range, cursor, { signal, stamp })
         // A page for an older owner, a cleared cache or a closed document never lands.
         if (this.workbook.isClosed || epoch !== this.state.epoch || page.stamp.valueGen !== this.stamp.valueGen) return
@@ -862,7 +878,7 @@ export class RemoteSheetStore implements SourceStore {
       }
     } finally {
       this.loading.delete(key)
-      this.workbook.loadsInFlight--
+      this.workbook.releasePages(held)
       if (changed) this.workbook.notify()
     }
   }

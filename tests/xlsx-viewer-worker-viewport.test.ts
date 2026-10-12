@@ -137,6 +137,39 @@ describe('tilePlanSource: worker plans only for tiles the row cache cannot prove
   })
 })
 
+describe('one frame page budget for worker plans and row reads (r3 #2)', () => {
+  it('cold tiles of a sorted sheet spend at most the frame page budget across plans, reads and continuations', async () => {
+    const rows = 4096
+    const doc = workbookOf([{ sheetId: 's', cells: Array.from({ length: rows }, (_, row) => [{ row, col: 0, value: (row * 7919) % rows }, { row, col: 1, value: `t${row}` }]).flat() }])
+    const h = await harness(doc)
+    const plans = new WorkerViewportPlans(h.remote)
+    try {
+      // A committed sort scatters each tile's display rows across the source.
+      const commit = await h.remote.sort(h.remote.identity('s'), { range: { r0: 0, r1: rows - 1, c0: 0, c1: 1, headerRows: 0, totalsRows: 0 }, keys: [{ col: 0, order: 'asc' }], caseSensitive: false }, new AbortController().signal)
+      expect(commit.kind).toBe('committed')
+      if (commit.kind !== 'committed') return
+      const owner = h.remote.identity('s'), axes = h.remote.geometry('s')
+      const metrics = createSheetMetrics({ rows: axes.rows, cols: axes.cols, order: commit.view.order, visibility: visibilityFromHidden(createIntervalSet([])) })
+      const store = h.remote.store('s')
+      let pages = 0
+      const source = h.source.store('s'), readRows = source.readRows.bind(source)
+      vi.spyOn(source, 'readRows').mockImplementation((...args) => { pages++; return readRows(...args) })
+      const plan = tilePlanSource({ store, metrics, scale: 1, identity: owner, extent: extentOf(metrics), plans })
+      plans.beginFrame(owner, windowOf({ x: 0, y: 0, width: 256, height: 1024 }))
+      // Each tile in the renderer's order: its row reads, then its plan.
+      for (let i = 0; i < 4; i++) {
+        const tile = { x: 0, y: i * 256, width: 256, height: 256 }
+        store.pendingIn(metrics, tile, 1)
+        plan(windowOf(tile), true)
+      }
+      for (let i = 0; i < 20; i++) { await h.port.idle(); await new Promise(resolve => setTimeout(resolve, 0)) }
+      expect(pages, 'source page requests for one frame').toBeLessThanOrEqual(h.remote.pageLimits.frame)
+      expect(h.remote.pagesInFlight, 'every credit came back').toBe(0)
+      expect(pages).toBeGreaterThan(0)
+    } finally { plans.dispose(); await h.remote.release() }
+  })
+})
+
 describe('WorkerViewportPlans: owner scope and retry (MINOR-2, MINOR-3)', () => {
   const complete = { kind: 'complete', result: { kind: 'viewport', completeness: 'complete', content: { kind: 'detail', cells: [] } } } as never
 
@@ -188,6 +221,52 @@ describe('WorkerViewportPlans: owner scope and retry (MINOR-2, MINOR-3)', () => 
       expect(plans.get(owner, window, extent, true).kind).toBe('detail')
       await vi.advanceTimersByTimeAsync(PLAN_RETRY_MAX_MS * 4)
       expect(spy).toHaveBeenCalledTimes(4)
+    } finally { vi.useRealTimers(); unsubscribe(); spy.mockRestore(); plans.dispose(); await h.remote.release() }
+  })
+
+  it('r3 #4: a partial result with a retryable page error backs off like a failure; a loading snapshot refreshes at 100 ms', async () => {
+    const h = await harness()
+    const plans = new WorkerViewportPlans(h.remote)
+    const owner = h.session.identity('s'), window = windowOf(), extent = extentOf(metricsOf(h))
+    const partial = (error?: object) => ({ kind: 'complete', diagnostics: [], result: { kind: 'viewport', completeness: error ? 'incomplete' : 'loading', content: { kind: 'detail', cells: [{ kind: 'error', source: { row: 0, col: 0 }, bounds: { x: 0, y: 0, width: 64, height: 20 } }] }, ...(error ? { error } : {}) } }) as never
+    const spy = vi.spyOn(h.remote, 'viewport').mockResolvedValue(partial({ code: 'page-error', retryable: true, message: 'page failed' }))
+    const unsubscribe = h.remote.subscribe(() => { plans.get(owner, window, extent, true) })
+    vi.useFakeTimers()
+    try {
+      plans.get(owner, window, extent, true)
+      await vi.advanceTimersByTimeAsync(0)
+      // Its error shading stays meanwhile.
+      expect(plans.get(owner, window, extent, true)).toMatchObject({ kind: 'detail', pending: [{ error: true }] })
+      await vi.advanceTimersByTimeAsync(PLAN_RETRY_MS - 1)
+      expect(spy).toHaveBeenCalledTimes(1)
+      await vi.advanceTimersByTimeAsync(1)
+      expect(spy).toHaveBeenCalledTimes(2)
+      await vi.advanceTimersByTimeAsync(2 * PLAN_RETRY_MS - 1)
+      expect(spy, 'the second partial failure waits twice as long').toHaveBeenCalledTimes(2)
+      await vi.advanceTimersByTimeAsync(1)
+      expect(spy).toHaveBeenCalledTimes(3)
+      // A terminal partial error is not retried.
+      spy.mockResolvedValue(partial({ code: 'page-error', retryable: false, message: 'bad page' }))
+      await vi.advanceTimersByTimeAsync(4 * PLAN_RETRY_MS)
+      expect(spy).toHaveBeenCalledTimes(4)
+      await vi.advanceTimersByTimeAsync(10 * PLAN_RETRY_MAX_MS)
+      expect(spy).toHaveBeenCalledTimes(4)
+    } finally { vi.useRealTimers(); unsubscribe(); spy.mockRestore(); plans.dispose(); await h.remote.release() }
+  })
+
+  it('r3 #4 control: an import-loading snapshot without an error still refreshes at the 100 ms cadence', async () => {
+    const h = await harness()
+    const plans = new WorkerViewportPlans(h.remote)
+    const owner = h.session.identity('s'), window = windowOf(), extent = extentOf(metricsOf(h))
+    const loading = { kind: 'complete', diagnostics: [], result: { kind: 'viewport', completeness: 'loading', content: { kind: 'detail', cells: [] } } } as never
+    const spy = vi.spyOn(h.remote, 'viewport').mockResolvedValue(loading)
+    const unsubscribe = h.remote.subscribe(() => { plans.get(owner, window, extent, true) })
+    vi.useFakeTimers()
+    try {
+      plans.get(owner, window, extent, true)
+      await vi.advanceTimersByTimeAsync(0)
+      await vi.advanceTimersByTimeAsync(100)
+      expect(spy).toHaveBeenCalledTimes(2)
     } finally { vi.useRealTimers(); unsubscribe(); spy.mockRestore(); plans.dispose(); await h.remote.release() }
   })
 
