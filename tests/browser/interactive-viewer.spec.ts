@@ -546,4 +546,42 @@ test.describe('S10.1 real interactive viewer', () => {
     await expect(page.getByRole('columnheader', { name: /^Column B/ })).not.toHaveAttribute('aria-sort', /ascending|descending/)
   })
 
+
+  // S13 native Excel checkpoint: a workbook written and reopened (no repair
+  // prompt) by Microsoft Excel 16 for macOS. Expected labels are the values
+  // Excel displayed. The file is far below every object cap, so ?worker=1 must
+  // still admit it resident: there is no knob that forces paged admission of a
+  // small file, and the paged adapter's agreement with Excel is covered by
+  // tests/xlsx-viewer-native-excel.test.ts instead.
+  for (const worker of [false, true]) {
+    test(`native Excel native-corner.xlsx ${worker ? '(?worker=1, admitted resident)' : 'resident'}: cached values, error, date display, Unicode, hidden row, far corner`, async ({ page }) => {
+      await openViewer(page, 'native-corner.xlsx', { worker })
+      expect((await counts(page)).open ?? 0).toBe(0)
+      await expect(page.getByRole('grid')).toHaveAttribute('aria-label', 'Worksheet 工作表1')
+      await expect(page.getByRole('alert')).toHaveCount(0)
+
+      const expectLabel = async (address: string, label: string) => {
+        await goTo(page, address)
+        await expect.poll(async () => (await activeCell(page))?.label ?? '').toBe(label)
+      }
+      await expectLabel('A1', 'A1, value 42')
+      await expectLabel('A2', 'A2, value 2024-01-15 12:00')
+      await expectLabel('A3', 'A3, value #DIV/0!')
+      await expectLabel('A4', 'A4, value 84')
+      await expectLabel('E3', 'E3, value 2')
+      // Row 5 is authored-hidden: no row header for it, and moving down from A4 skips to A6.
+      await expect(page.getByRole('rowheader', { name: 'Row 5', exact: true })).toHaveCount(0)
+      await goTo(page, 'A4')
+      await page.getByRole('grid').focus()
+      await page.keyboard.press('ArrowDown')
+      await expect.poll(async () => (await activeCell(page))?.label ?? '').toBe('A6, value Ünïcødé 漢字 🎉')
+      // Its source cell is reachable only through the read-only Original-cell inspector.
+      await goTo(page, 'A5', 'source')
+      await expect(page.getByRole('status').filter({ hasText: 'Original cell A5' })).toContainText('read-only')
+
+      await expectLabel('XFD1048576', 'XFD1048576, value corner')
+      expect(cellIdOf((await activeCell(page))!.id)).toBe(17179869183)
+      await expect(page.getByRole('rowheader', { name: 'Row 1048576' })).toBeVisible()
+    })
+  }
 })

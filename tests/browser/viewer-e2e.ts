@@ -32,6 +32,8 @@ export const GENERATED_FIXTURES = {
   'f7-two-sheets.xlsx': 'F7-shaped two sheets A/B with identical first revisions, hidden rows and a tiny row height',
 } as const
 export type FixtureName = keyof typeof GENERATED_FIXTURES | 'f1-small.xlsx' | 'f3sparse-small.xlsx' | 'f4-small.xlsx' | 'f5-small.xlsx' | 'f8-small.xlsx'
+  /** S13: written by native Microsoft Excel (see tests/xlsx-viewer-native-excel.test.ts). */
+  | 'native-corner.xlsx'
 
 const num = (value: number, styleIndex = 0): FixtureCell => ({ value, hasCachedValue: true, valueIsError: false, styleIndex })
 const text = (value: string, styleIndex = 0): FixtureCell => ({ value, hasCachedValue: true, valueIsError: false, styleIndex })
