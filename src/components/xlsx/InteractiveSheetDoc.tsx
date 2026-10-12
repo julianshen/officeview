@@ -29,7 +29,7 @@ import type {
 import { SHEET_MIN_ZOOM } from '../../xlsx/view/contracts'
 import type { NavigatorRequest, SourceCell } from '../../xlsx/view/coordinates'
 import { columnToLetters } from '../../xlsx/view/coordinates'
-import { DOM_ELEMENT_BYTES, MainMemoryLedger } from '../../xlsx/view/mainLedger'
+import { DOM_ELEMENT_BYTES, MainMemoryLedger, axisBytes, estimatePayloadBytes, projectionBytes } from '../../xlsx/view/mainLedger'
 import { buildSheetGeometry, MergeQueryCache, sheetBaseHidden, type SheetGeometry } from '../../xlsx/view/viewport'
 import type { ProjectedSheetMetrics } from '../../xlsx/view/projection'
 import { createIdentityOrder } from '../../xlsx/view/order'
@@ -199,7 +199,11 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
   // S10.2 §12.4: one main-thread ledger per document. A worker-backed workbook
   // owns it (row cache, view buffers, replies); a resident one gets its own.
   const mainLedger = useMemo(() => remote?.mainLedger ?? new MainMemoryLedger(), [remote, source])
-  useEffect(() => () => { if (!remote) mainLedger.releaseAll() }, [mainLedger, remote])
+  // The viewer's own pools end with the viewer; lifetime charges (geometry,
+  // views, replies, the resident document) end when nothing reaches them.
+  useEffect(() => () => { for (const pool of ['dom', 'layout', 'merges', 'controls', 'copy'] as const) mainLedger.releaseAll(pool) }, [mainLedger])
+  // A resident document's parsed model lives on the main thread while reachable.
+  useMemo(() => { if (!remote) mainLedger.chargeWhileReachable('document', [doc], estimatePayloadBytes(doc)) }, [mainLedger, remote, doc])
   const onMainLedger = props.onMainLedger
   useEffect(() => { onMainLedger?.(mainLedger) }, [mainLedger, onMainLedger])
   const [loadTick, setLoadTick] = useState(0)
@@ -270,6 +274,10 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
     const visibility = input.visibility ?? visibilityFromHidden(createIntervalSet(displayIntervals(baseHidden.intervals, order)))
     const built = remote ? pagedSheetGeometry(remote, sheetId, order, visibility) : buildSheetGeometry(sheet, { order, ...(input.visibility ? { visibility } : {}) })
     if (built.kind !== 'ready') throw new Error(built.diagnostics.map(d => d.message).join('; ') || 'This sheet cannot be laid out')
+    // Paged geometry charges itself; a resident one is charged here, for its lifetime.
+    // The resident row axis is internal to the build: bounded above by two
+    // segments (~200 B with summaries) per authored row.
+    if (!remote) mainLedger.chargeWhileReachable('geometry', [built], projectionBytes(built.metrics) + axisBytes(built.metrics.cols) + sheet.rows.length * 200 + built.merges.estimatedBytes)
     const selection = previous?.view.selection ?? emptyGridSelection()
     const view: SheetView = { sheetId, revision: input.revision, order, baseHidden, visibility, sort: input.sort ?? null, filter: input.filter ?? null, selection }
     const used = remote?.layout(sheetId).used
@@ -638,7 +646,7 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
     const abort = new AbortController()
     const resources = controlResources.current ??= createViewerControlResources(profile, bytes => mainLedger.set('controls', 'resources', bytes))
     const sheetId = activeSheetId
-    const ready = viewerControls({ doc, source, resources, sheetId, snapshot: () => snapshot(sheetId),
+    const ready = viewerControls({ doc, source, resources, sheetId, ledger: mainLedger, snapshot: () => snapshot(sheetId),
       view: () => ({ ...current.current.entryFor(sheetId).view, selection: session.get(sheetId).selection }),
       publish: draft => {
         cancelCopy()

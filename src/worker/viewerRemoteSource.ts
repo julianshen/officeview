@@ -26,7 +26,7 @@ import type {
   ProfileId, GridSelection,
 } from '../xlsx/view/contracts'
 import type { RangeDetection } from '../xlsx/view/rangeDetection'
-import { MainMemoryLedger, estimatePayloadBytes } from '../xlsx/view/mainLedger'
+import { MainMemoryLedger, axisBytes, estimatePayloadBytes, leaseTargets } from '../xlsx/view/mainLedger'
 import type { XlsxCell, XlsxCellStyle, XlsxMergeRange } from '../xlsx/types'
 import { MAX_COLS, MAX_ROWS, formatA1, isValidCoordinate, type SourceCell, type SourceRect } from '../xlsx/view/coordinates'
 import { createAxisMetrics } from '../xlsx/view/axes'
@@ -158,6 +158,10 @@ export class RemoteWorkbook implements WorkbookSource {
   }
 
   get isClosed(): boolean { return this.closed }
+  /** @internal S10.2 tests: document-owned buffers this workbook still holds. */
+  retainedResources(): { stores: number; views: number; geometries: number; layouts: number; structures: number } {
+    return { stores: this.stores.size, views: this.views.size, geometries: this.geometries.size, layouts: this.layouts.size, structures: this.structures.size }
+  }
   /** Resolved style of a cell style index (the paged reader keeps ids only). */
   styleOf(index: number | undefined): XlsxCellStyle | undefined { return this.format.styles[index ?? 0] }
   formatting(): WorkbookFormatting { return this.format }
@@ -198,6 +202,8 @@ export class RemoteWorkbook implements WorkbookSource {
         ...(layout.hiddenCols?.length ? { hiddenCols: layout.hiddenCols } : {}),
       })
       this.geometries.set(sheetId, geometry)
+      // Axis summaries and authored-hidden intervals live as long as anything holds this geometry.
+      this.mainLedger.chargeWhileReachable('geometry', [geometry], axisBytes(geometry.rows) + axisBytes(geometry.cols) + layout.hidden.length * 32 + (layout.hiddenCols?.length ?? 0) * 32)
     }
     return geometry
   }
@@ -311,11 +317,9 @@ export class RemoteWorkbook implements WorkbookSource {
     this.stats.commands[key] = (this.stats.commands[key] ?? 0) + 1
     const unsubscribe = progress ? this.client.onProgress(head.requestId, p => progress(p.completed, p.total ?? p.completed)) : undefined
     const sent: Promise<Settled<K>> = this.client.send<K>(command).then(reply => {
-      // The reply payload is live from receipt until its consumer has taken
-      // what it keeps (the next task); any decoded copy is charged by its owner
-      // meanwhile, so the high-water mark sees both.
-      this.mainLedger.set('replies', head.requestId, estimatePayloadBytes(reply))
-      setTimeout(() => this.mainLedger.release('replies', head.requestId), 0)
+      // Charged until no part of the payload is reachable: a consumer that keeps
+      // a page (a scan generator across tasks) keeps the charge.
+      this.mainLedger.chargeWhileReachable('replies', leaseTargets(reply), estimatePayloadBytes(reply))
       this.capture(reply)
       return reply
     }, () => CLOSED)
@@ -376,6 +380,10 @@ export class RemoteWorkbook implements WorkbookSource {
     if (this.closed || delta.owner.docId !== this.docId || delta.owner.sheetId !== sheetId) return null
     const previous = this.view(sheetId)
     if (delta.owner.viewGen <= this.identity(sheetId).viewGen) return null
+    // Staging: the local band copies coexist with the wire bands (reply), the
+    // previous view and the order being built from them.
+    const bandBytes = delta.bands.reduce((sum, band) => sum + band.sourceAtOffset.length * 4, 0)
+    this.mainLedger.set('viewBuffers', `staging:${sheetId}`, bandBytes)
     const view: RemoteSheetView = {
       revision: delta.owner.viewGen,
       // Wire bands may come from another realm: rebuild them as local arrays.
@@ -387,12 +395,12 @@ export class RemoteWorkbook implements WorkbookSource {
     this.identities.set(sheetId, delta.owner)
     if (delta.workbookOwner.globalViewGen >= this.owner.globalViewGen) this.owner = delta.workbookOwner
     this.views.set(sheetId, view)
-    // Adopted view buffers replace the sheet's previous ones: the local band
-    // copies (with their display inverse, charged conservatively) and the
-    // visibility words plus block summaries.
-    const bandBytes = delta.bands.reduce((sum, band) => sum + band.sourceAtOffset.length * 4 * 2, 0)
+    // The adopted view (order bands with their display inverse, visibility words
+    // and summaries) is charged for its own lifetime: the previous view stays
+    // charged until nothing holds it, so a replacement's overlap counts.
     const visibilityBytes = view.visibility ? view.visibility.words.byteLength + view.visibility.summaries.byteLength : 0
-    this.mainLedger.set('viewBuffers', sheetId, bandBytes + visibilityBytes)
+    this.mainLedger.chargeWhileReachable('viewBuffers', [view.order, ...(view.visibility ? [view.visibility] : [])], bandBytes * 2 + visibilityBytes)
+    this.mainLedger.release('viewBuffers', `staging:${sheetId}`)
     this.notify()
     return view
   }
@@ -407,8 +415,15 @@ export class RemoteWorkbook implements WorkbookSource {
     this.listeners.clear()
     for (const entry of this.structures.values()) if (entry.timer) clearTimeout(entry.timer)
     // Owned caches go with the document: nothing answers from them after close.
+    // Document-owned buffers are dropped here; their lifetime charges end when
+    // nothing (not even a host still holding this closed workbook) reaches them.
     for (const store of this.stores.values()) store.clear()
-    this.mainLedger.releaseAll()
+    this.stores.clear()
+    this.views.clear()
+    this.geometries.clear()
+    this.layouts.clear()
+    this.structures.clear()
+    this.failures.clear()
     try {
       await Promise.race([this.client.send({ kind: 'close', requestId: this.client.nextRequestId(), docId: this.docId }), new Promise(resolve => setTimeout(resolve, 1000))])
     } catch { /* the worker is gone */ }

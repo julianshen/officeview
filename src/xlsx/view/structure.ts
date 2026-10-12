@@ -61,6 +61,8 @@ export class RectangleIndex<T> {
   private readonly sorted: readonly SortedEntry<T>[]
   private readonly maxR1: Float64Array
   readonly size: number
+  /** Retained bytes (S10.2 main ledger): one sorted entry record each plus the interval tree. */
+  get estimatedBytes(): number { return this.size * 72 + this.maxR1.byteLength }
   private constructor(sorted: readonly SortedEntry<T>[], maxR1: Float64Array) {
     this.sorted = sorted
     this.maxR1 = maxR1
@@ -239,6 +241,11 @@ export class StructuralIndex {
   private readonly tables: RectangleIndex<TableExtent>
   private readonly spillEntries: RectangleIndex<SpillExtent>
   private readonly drawings: RectangleIndex<CellAnchoredDrawing>
+  /** Retained bytes (S10.2 main ledger): the four indexes, their frozen record copies, gaps. */
+  get estimatedBytes(): number {
+    return this.merges.estimatedBytes + this.tables.estimatedBytes + this.spillEntries.estimatedBytes + this.drawings.estimatedBytes
+      + this.recordCount * 96 + this.absoluteDrawings.length * 96 + this.missing.length * 48 + 256
+  }
   constructor(result: StructuralResult) {
     this.stamp = frozenClone(result.stamp)
     // A defined error poisons the result even when completeness claims otherwise:

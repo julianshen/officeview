@@ -9,6 +9,7 @@ import { compileValuesMembership, ValueIndexCache, valueScope, valueSourceFromSt
 import { CompactRowVisibility, createRowVisibility } from '../../xlsx/view/visibility'
 import { MemoryValueRunStore, VALUE_RUN_PAGE, type ValueRunStore } from '../../xlsx/view/valueRuns'
 import { StructuralIndex } from '../../xlsx/view/structure'
+import type { MainMemoryLedger } from '../../xlsx/view/mainLedger'
 import type { RangeDetection, RangeDetectionRequest } from '../../xlsx/view/rangeDetection'
 import { DocumentSession, type OperationOutcome, type WorkbookSource, sameStamp } from '../../worker/viewerSession'
 import { createControlsClient, type ControlSnapshot, type ControlsClient, type StagedControl, type ControlProgress, sameControlOwner } from './controlsClient'
@@ -53,6 +54,8 @@ export interface ViewerControlsOptions {
   remote?: RemoteViewPort
   /** Resolved style of a style id when the document carries no cells (worker-backed sheets). */
   styleOf?: (index: number) => XlsxCell['style']
+  /** S10.2: the document's main-thread ledger (structural snapshots are charged while reachable). */
+  ledger?: MainMemoryLedger
 }
 export type RemoteViewCommit =
   | { kind: 'committed'; view: Pick<SheetView, 'order' | 'filter' | 'sort'> & { visibility?: SheetView['visibility'] } }
@@ -74,6 +77,7 @@ export async function viewerControls(options: ViewerControlsOptions, signal: Abo
   let structure: StructuralIndex
   try {
     structure = new StructuralIndex(await store.queryStructural({ r0: 0, r1: 1048575, c0: 0, c1: 16383 }, { signal, stamp }))
+    options.ledger?.chargeWhileReachable('structure', [structure], structure.estimatedBytes)
     signal.throwIfAborted()
   } catch (error) { if (!options.resources) resources.dispose(); throw error }
   const styles = new Map<number, XlsxCell['style']>()
@@ -210,6 +214,7 @@ export async function viewerControls(options: ViewerControlsOptions, signal: Abo
     // a stuck snapshot would refuse every later sort/filter as incomplete.
     if (structure.completeness !== 'complete' && structure.failure === undefined) {
       structure = new StructuralIndex(await store.queryStructural({ r0: 0, r1: 1048575, c0: 0, c1: 16383 }, { signal: abort, stamp: { ...store.stamp } }))
+      options.ledger?.chargeWhileReachable('structure', [structure], structure.estimatedBytes)
       abort.throwIfAborted()
     }
     const resolved = await resolve(owner, kind, abort, override, col)

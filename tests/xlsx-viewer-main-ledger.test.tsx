@@ -5,6 +5,7 @@
  * reply and the cache decoded from it both count while both are live).
  */
 import { afterEach, describe, expect, it, vi } from 'vitest'
+import { useEffect, useState, type JSX } from 'react'
 import { act, cleanup, fireEvent, render, waitFor } from '@testing-library/react'
 import { OfficeFile } from '../src/components/OfficeFile'
 import InteractiveSheetDoc from '../src/components/xlsx/InteractiveSheetDoc'
@@ -12,7 +13,43 @@ import { ViewerKernel } from '../src/worker/viewerKernel'
 import { OfficePackage } from '../src/core/zip'
 import { parseXlsx } from '../src/xlsx/parse'
 import type { WorkerCommand, WorkerReply } from '../src/xlsx/view/contracts'
-import { DOM_ELEMENT_BYTES, MainMemoryLedger, estimatePayloadBytes } from '../src/xlsx/view/mainLedger'
+import { DOM_ELEMENT_BYTES, MainMemoryLedger, estimatePayloadBytes, leaseTargets } from '../src/xlsx/view/mainLedger'
+import { openPagedWorkbook } from '../src/components/xlsx/pagedWorkbook'
+import { pagedWorkbookOf } from '../src/components/pagedDocument'
+import { pagedSheetGeometry } from '../src/components/xlsx/pagedGeometry'
+import type { RemoteWorkbook } from '../src/worker/viewerRemoteSource'
+import { createIdentityOrder } from '../src/xlsx/view/order'
+import { createIntervalSet, visibilityFromHidden } from '../src/xlsx/view/visibility'
+import v8 from 'node:v8'
+import vm from 'node:vm'
+
+// Real collection: lifetime charges end only when V8 has collected every target.
+v8.setFlagsFromString('--expose_gc')
+const gc = vm.runInNewContext('gc') as () => void
+async function collect(): Promise<void> {
+  for (let i = 0; i < 6; i++) { gc(); await new Promise(resolve => setTimeout(resolve, 10)) }
+}
+/** React keeps the last root that ran passive effects in a module variable
+ * (rootWithPassiveNestedUpdates) and the last event's target fiber
+ * (return_targetInst; both found with heap snapshots) until another root
+ * commits one that does too. A host page keeps re-rendering after closing a
+ * document; tests mount and remove such a root before checking collection. */
+function PassiveUpdate(): JSX.Element {
+  const [n, setN] = useState(0)
+  useEffect(() => { if (n === 0) setN(1) }, [n])
+  return <div>{n}</div>
+}
+async function flushReactRetention(): Promise<void> {
+  cleanup()
+  // A passive effect that schedules an update moves React's module variable to this root.
+  const blank = render(<PassiveUpdate />)
+  await tick()
+  // React's event system also keeps the last event's target fiber
+  // (return_targetInst): one event in the blank root replaces it.
+  fireEvent.click(blank.container.firstChild as Element)
+  blank.unmount()
+  cleanup()
+}
 import { MergeQueryCache } from '../src/xlsx/view/viewport'
 import { ValueIndexCache } from '../src/xlsx/view/valueIndex'
 import { workbookOf } from './helpers/xlsx-find'
@@ -113,52 +150,122 @@ describe('controls value cache', () => {
   })
 })
 
+describe('lifetime charges (review round 3, findings 1-3)', () => {
+  it('a charge lasts while any target is reachable and ends only after collection, never on a timer', async () => {
+    const ledger = new MainMemoryLedger()
+    const holder: { reply: unknown; page: unknown } = { reply: { result: { result: { page: { items: [{ row: 1 }] } } } }, page: null }
+    ledger.chargeWhileReachable('replies', leaseTargets(holder.reply), 2_000_000)
+    // The consumer keeps only the nested page (a scan generator across tasks).
+    holder.page = (holder.reply as { result: { result: { page: unknown } } }).result.result.page
+    holder.reply = null
+    await new Promise(resolve => setTimeout(resolve, 20))
+    await collect()
+    expect(ledger.snapshot().byPool.replies).toBe(2_000_000)
+    holder.page = null
+    await collect()
+    expect(ledger.snapshot().byPool.replies).toBe(0)
+    expect(ledger.snapshot().peakBytes).toBe(2_000_000)
+  })
+})
+
+/** Opens a paged workbook over the in-process kernel and returns its RemoteWorkbook. */
+async function openRemote(): Promise<{ remote: RemoteWorkbook; release: () => Promise<void> }> {
+  const h = workerHarness()
+  const doc = await openPagedWorkbook(workbook(), { port: h.port, profile: 'D', signal: new AbortController().signal })
+  const handle = pagedWorkbookOf(doc)!
+  return { remote: handle.source as RemoteWorkbook, release: () => handle.release() }
+}
+
 describe('worker-backed document ledger', () => {
-  it('charges row cache, replies (released after their task) and adopted view buffers; close returns to zero', async () => {
-    const h = workerHarness()
-    let ledger: MainMemoryLedger | null = null
-    const internal = { onMainLedger: (l: MainMemoryLedger) => { ledger = l } } as object
-    const ui = render(<OfficeFile data={workbook()} interactiveSheets viewerWorker={() => h.port} {...internal} />)
-    await waitFor(() => expect(ui.getByRole('gridcell', { name: /value name 1\b/ })).toBeTruthy())
-    await tick()
-    const loaded = ledger!.snapshot()
-    expect(loaded.byPool.rowCache).toBeGreaterThan(0)
-    expect(loaded.byPool.dom).toBeGreaterThan(0)
-    expect(loaded.byPool.dom % DOM_ELEMENT_BYTES).toBe(0)
-    expect(loaded.byPool.replies).toBe(0)          // every reply released after its task
-    expect(loaded.peakBytes).toBeGreaterThan(loaded.bytes - loaded.byPool.dom) // replies + decoded rows overlapped
-    fireEvent.click(ui.getByRole('button', { name: 'Cycle sort column B' }))
-    await waitFor(() => expect(ui.getByRole('columnheader', { name: /Column B; sort priority 1, ascending/ })).toBeTruthy())
-    await tick()
-    const sorted = ledger!.snapshot()
-    expect(sorted.byPool.viewBuffers).toBeGreaterThan(0)
-    expect(sorted.byPool.layout).toBeGreaterThanOrEqual(0)
-    const peak = sorted.peakBytes
-    expect(peak).toBeGreaterThanOrEqual(Object.values(sorted.byPool).reduce((a, b) => a + b, 0))
-    ui.unmount()
-    await waitFor(() => expect(ledger!.snapshot().bytes).toBe(0))
-    expect(ledger!.snapshot().peakBytes).toBeGreaterThanOrEqual(peak) // the high-water mark survives close
+  it('charges geometry and projection buffers for their lifetime; a closed workbook drops them even while it is still held', async () => {
+    const { remote, release } = await openRemote()
+    const ledger = remote.mainLedger
+    let geometry: unknown = pagedSheetGeometry(remote, '1', createIdentityOrder(), visibilityFromHidden(createIntervalSet([])))
+    expect(ledger.snapshot().byPool.geometry).toBeGreaterThan(0)
+    expect(remote.retainedResources().geometries).toBe(1)
+    geometry = null
+    await release()
+    // Still holding `remote` (a host that keeps a closed document): it must hold nothing.
+    expect(remote.retainedResources()).toEqual({ stores: 0, views: 0, geometries: 0, layouts: 0, structures: 0 })
+    await collect()
+    expect(ledger.snapshot().bytes).toBe(0)
+    void geometry
+  })
+
+  it('a scan page kept by its consumer keeps its reply charged across tasks', async () => {
+    const { remote, release } = await openRemote()
+    const ledger = remote.mainLedger
+    await collect()
+    const before = ledger.snapshot().byPool.replies
+    let iterator: AsyncIterator<{ readonly items: readonly unknown[] }> | null = remote.store('1').scanPopulated({ range: { r0: 0, r1: 39, c0: 0, c1: 1 }, limit: 64 }, { signal: new AbortController().signal, stamp: { ...remote.store('1').stamp } })[Symbol.asyncIterator]()
+    let page: { readonly items: readonly unknown[] } | null = (await iterator!.next()).value
+    expect(page!.items.length).toBeGreaterThan(0)
+    await new Promise(resolve => setTimeout(resolve, 20))
+    await collect()
+    expect(ledger.snapshot().byPool.replies).toBeGreaterThan(before)
+    await iterator!.return?.()
+    page = null; iterator = null
+    await collect()
+    expect(ledger.snapshot().byPool.replies).toBe(before)
+    await release()
+  })
+
+  it('in the viewer: row cache, replies, view buffers, DOM; unmount releases the viewer pools, collection the rest', async () => {
+    // The render result lives only inside this function: a test frame holding
+    // it would itself keep the tree (and its buffers) reachable.
+    const ledger = await (async () => {
+      const h = workerHarness()
+      let found: MainMemoryLedger | null = null
+      const internal = { onMainLedger: (l: MainMemoryLedger) => { found = l } } as object
+      const ui = render(<OfficeFile data={workbook()} interactiveSheets viewerWorker={() => h.port} {...internal} />)
+      await waitFor(() => expect(ui.getByRole('gridcell', { name: /value name 1\b/ })).toBeTruthy())
+      await tick()
+      const loaded = found!.snapshot()
+      expect(loaded.byPool.rowCache).toBeGreaterThan(0)
+      expect(loaded.byPool.geometry).toBeGreaterThan(0)
+      expect(loaded.byPool.dom).toBeGreaterThan(0)
+      expect(loaded.byPool.dom % DOM_ELEMENT_BYTES).toBe(0)
+      fireEvent.click(ui.getByRole('button', { name: 'Cycle sort column B' }))
+      await waitFor(() => expect(ui.getByRole('columnheader', { name: /Column B; sort priority 1, ascending/ })).toBeTruthy())
+      await tick()
+      const sorted = found!.snapshot()
+      expect(sorted.byPool.viewBuffers).toBeGreaterThan(0)
+      expect(sorted.peakBytes).toBeGreaterThanOrEqual(Object.values(sorted.byPool).reduce((a, b) => a + b, 0))
+      ui.unmount()
+      await waitFor(() => expect(found!.snapshot().byPool.dom).toBe(0))
+      return found!
+    })()
+    await flushReactRetention()
+    await collect()
+    expect(ledger.snapshot().bytes).toBe(0)
   })
 })
 
 describe('resident document ledger', () => {
   const doc = () => workbookOf([{ sheetId: 'A', cells: [{ row: 0, col: 0, value: 'Name' }, { row: 1, col: 0, value: 'beta' }, { row: 2, col: 0, value: 'alpha' }] }])
-  it('charges the owned DOM and layout caches, and a copy session only while it runs; unmount and replacement return to zero', async () => {
+  it('charges the document, geometry, DOM and a copy session while it runs; unmount and replacement end the charges', async () => {
     Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText: vi.fn(async () => {}) } })
-    const ledgers: MainMemoryLedger[] = []
-    const copies: number[] = []
-    const ui = render(<InteractiveSheetDoc doc={doc()} {...({ onMainLedger: (l: MainMemoryLedger) => { ledgers.push(l); const set = l.set.bind(l); l.set = (pool, owner, bytes) => { if (pool === 'copy') copies.push(bytes); set(pool, owner, bytes) } } } as object)} />)
-    await waitFor(() => expect(ledgers.at(-1)?.snapshot().byPool.dom ?? 0).toBeGreaterThan(0))
-    fireEvent.change(ui.getByRole('textbox', { name: 'Go To cell' }), { target: { value: 'A2' } })
-    fireEvent.click(ui.getByRole('button', { name: 'Go To' }))
-    fireEvent.click(ui.getByRole('button', { name: 'Copy selection' }))
-    await waitFor(() => expect(copies.at(-1)).toBe(0))
-    expect(Math.max(...copies)).toBeGreaterThan(0)
-    const first = ledgers.at(-1)!
-    ui.rerender(<InteractiveSheetDoc doc={doc()} {...({ onMainLedger: (l: MainMemoryLedger) => { ledgers.push(l) } } as object)} />)
-    await waitFor(() => expect(ledgers.at(-1)).not.toBe(first))
-    expect(first.snapshot().bytes).toBe(0)            // the replaced document's ledger is released
-    ui.unmount()
-    expect(ledgers.at(-1)!.snapshot().bytes).toBe(0)
+    const ledgers = await (async () => {
+      const found: MainMemoryLedger[] = []
+      const copies: number[] = []
+      const ui = render(<InteractiveSheetDoc doc={doc()} {...({ onMainLedger: (l: MainMemoryLedger) => { found.push(l); const set = l.set.bind(l); l.set = (pool, owner, bytes) => { if (pool === 'copy') copies.push(bytes); set(pool, owner, bytes) } } } as object)} />)
+      await waitFor(() => expect(found.at(-1)?.snapshot().byPool.dom ?? 0).toBeGreaterThan(0))
+      expect(found.at(-1)!.snapshot().byPool.document).toBeGreaterThan(0)
+      expect(found.at(-1)!.snapshot().byPool.geometry).toBeGreaterThan(0)
+      fireEvent.change(ui.getByRole('textbox', { name: 'Go To cell' }), { target: { value: 'A2' } })
+      fireEvent.click(ui.getByRole('button', { name: 'Go To' }))
+      fireEvent.click(ui.getByRole('button', { name: 'Copy selection' }))
+      await waitFor(() => expect(copies.at(-1)).toBe(0))
+      expect(Math.max(...copies)).toBeGreaterThan(0)
+      const first = found.at(-1)!
+      ui.rerender(<InteractiveSheetDoc doc={doc()} {...({ onMainLedger: (l: MainMemoryLedger) => { found.push(l) } } as object)} />)
+      await waitFor(() => expect(found.at(-1)).not.toBe(first))
+      expect(first.snapshot().byPool.dom).toBe(0)
+      ui.unmount()
+      return found
+    })()
+    await flushReactRetention()
+    await collect()
+    for (const ledger of ledgers) expect(ledger.snapshot().bytes).toBe(0)
   })
 })
