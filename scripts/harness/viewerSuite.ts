@@ -46,6 +46,7 @@ const EARLY_MISS_SAMPLES = 5
 const FILTER_APPLY_SAMPLES = 10
 const MEMORY_SESSION_LIMIT_MS = 10 * 60_000
 const RECOVERY_CYCLES = 10
+const WARM_HOST_SAMPLES = 10
 const LIVE_SAMPLE_MS = 300
 
 type W = Window & { __viewerPerf: ViewerPerf }
@@ -308,7 +309,7 @@ function uasmSplit(u: Uasm) {
   return { available: true as const, total: u.bytes ?? 0, window, worker, canvas, other }
 }
 
-async function memorySession(context: BrowserContext, base: string, fixture: ViewerFixture, ops: 'f2' | 'f4', errors: string[], log: (m: string) => void) {
+async function memorySession(context: BrowserContext, base: string, fixture: ViewerFixture, warmFixture: ViewerFixture, ops: 'f2' | 'f4', errors: string[], log: (m: string) => void) {
   const page = await newPerfPage(context, base, errors)
   let cdp: CDPSession | null = null
   try { cdp = await context.newCDPSession(page) } catch { cdp = null }
@@ -339,6 +340,35 @@ async function memorySession(context: BrowserContext, base: string, fixture: Vie
       ?? { peakBitmapBytes: 0, bitmapBytes: null, budgetBytes: null, workersCreated: -1, workersTerminated: -1 }
     const ledger = await bounded(`${name} main ledger`, perf(page, p => p.mainLedger()))
     return { name, heap: h, heapBytes: h ? heapBytes(h) : null, ledger, worker, uasm: uasmSplit((uasm ?? { unavailable: 'probe timed out' }) as Uasm), canvas, storage, frame, browserProcessRssBytes: browserProcessRss() }
+  }
+  // Warmed host, established independently of the measured session: the same
+  // page opens a small paged workbook (F2 at smoke scale), runs the same code
+  // paths (scroll, header sort, filter dialog), closes it, and only then is
+  // sampled. The samples' median is the attribution baseline; their spread is
+  // the forced-GC probe noise, the only tolerance the cross-check allows.
+  await openFixture(page, warmFixture)
+  await waitComplete(page)
+  await page.evaluate(() => (window as unknown as W).__viewerPerf.scrollRun({ warmup: 0, frames: 30, dx: 0, dy: 60 }))
+  {
+    const header = page.getByRole('columnheader', { name: /^Column G/ })
+    const before = await header.getAttribute('aria-sort')
+    await page.getByRole('button', { name: 'Cycle sort column G' }).click()
+    await page.waitForFunction(({ before }) => {
+      const h = [...document.querySelectorAll('[role=columnheader]')].find(x => /^Column G/.test(x.getAttribute('aria-label') ?? x.textContent ?? ''))
+      return (h?.getAttribute('aria-sort') ?? null) !== before
+    }, { before }, { timeout: 120_000 }).catch(() => {})
+    const dialog = page.getByRole('dialog', { name: 'Column filter' })
+    await page.getByRole('button', { name: /^Filter column D/ }).click()
+    await dialog.waitFor({ state: 'visible', timeout: 30_000 })
+    await page.waitForTimeout(500)
+    await dialog.getByRole('button', { name: 'Cancel' }).click()
+  }
+  await bounded('warm close', perf(page, p => p.close()), 30_000)
+  const warmHostSamples: number[] = []
+  for (let i = 0; i < WARM_HOST_SAMPLES; i++) {
+    for (let k = 0; k < 3; k++) { await bounded('warm gc', gcMain()); await new Promise(resolve => setTimeout(resolve, 100)) }
+    const h = await bounded('warm heap', heap())
+    if (h) warmHostSamples.push(heapBytes(h))
   }
   const baseline = await checkpoint('baseline')
   // Peak sampling during open/import (no forced GC: an upper bound, garbage included).
@@ -438,7 +468,7 @@ async function memorySession(context: BrowserContext, base: string, fixture: Vie
     },
   }
   log(`    memory ${fixture.key}: main ledger peak ${mib(afterOps.ledger?.peakBytes ?? null)}; main owned ${mib(summary.mainOwnedBytes)} (forced-GC live max ${mib(liveHeapSamples.length && baseline.heapBytes !== null ? Math.max(...liveHeapSamples) - baseline.heapBytes : null)} over ${liveHeapSamples.length} samples; peak no-GC ${mib(summary.mainPeakNoGcBytes)}), worker ledger ${mib(ledgerPeak)} / UASM ${mib(summary.workerUasmBytes)}, bitmap ${mib(summary.bitmapPeakBytes)}; after close main ${mib(summary.recovery.mainAfterCloseBytes)}, workers ${summary.recovery.workersTerminated}/${summary.recovery.workersCreated} terminated, canvases ${closed.canvas.count}`)
-  return { summary, checkpoints: { baseline, loaded, afterOps, closed }, polls, liveHeapSamples, liveSampleMs: LIVE_SAMPLE_MS, timeouts }
+  return { summary, warmHost: { fixture: warmFixture.key, scale: warmFixture.scale, samples: warmHostSamples }, checkpoints: { baseline, loaded, afterOps, closed }, polls, liveHeapSamples, liveSampleMs: LIVE_SAMPLE_MS, timeouts }
 }
 
 // ---- formatting ----------------------------------------------------------------
@@ -460,6 +490,8 @@ export async function runViewerSuite(ctx: SuiteContext): Promise<{ receipt: View
   log(`verifying ${args.scale} fixtures against ${FIXTURE_MANIFEST_PATH} (regenerating any mismatch)…`)
   const fixtureManifest = JSON.parse(readFileSync(join(repoRoot, FIXTURE_MANIFEST_PATH), 'utf8')) as FixtureManifest
   const fixtures = await ensureViewerFixtures(args.scale, fixtureManifest)
+  // The memory sessions' warmed-host baseline opens the smoke-scale F2 first.
+  const warmFixtures = await ensureViewerFixtures('reduced', fixtureManifest, ['F2'])
   for (const f of Object.values(fixtures)) log(`  ${f.key}: ${f.bytes.toLocaleString('en-US')} B, content ${f.contentSha256.slice(0, 16)}…, ${f.scale}`)
   const server = await startStaticServer(join(repoRoot, '.tmp', 'viewer-perf-dist'), args.port)
   const base = server.url
@@ -555,7 +587,7 @@ export async function runViewerSuite(ctx: SuiteContext): Promise<{ receipt: View
         // machine; a stalled session is recorded (memory row not-run), never hung.
         let timer: ReturnType<typeof setTimeout> | undefined
         const stalled = new Promise<null>(resolve => { timer = setTimeout(() => resolve(null), MEMORY_SESSION_LIMIT_MS) })
-        const session = await Promise.race([memorySession(context, base, fixtures[key], ops, errors, log).catch((error: unknown) => { errors.push(`memory ${key}: ${error instanceof Error ? error.message : String(error)}`); return null }), stalled]).finally(() => clearTimeout(timer))
+        const session = await Promise.race([memorySession(context, base, fixtures[key], warmFixtures.F2, ops, errors, log).catch((error: unknown) => { errors.push(`memory ${key}: ${error instanceof Error ? error.message : String(error)}`); return null }), stalled]).finally(() => clearTimeout(timer))
         await context.close().catch(() => {})
         if (session === null) {
           errors.push(`memory ${key}: session exceeded ${MEMORY_SESSION_LIMIT_MS / 60_000} min and was abandoned`)

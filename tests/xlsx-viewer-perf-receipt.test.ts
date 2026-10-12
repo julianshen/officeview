@@ -94,12 +94,14 @@ const checkpoint = (heapBytes: number, workerPeak: number, ledgerPeak: number) =
   uasm: { available: true, worker: workerPeak, canvas: 40 * MiB }, frame: { peakBitmapBytes: 100 * MiB, workersCreated: 1, workersTerminated: 0 },
   canvas: { count: 2, bytes: 1 }, storage: { usage: 200 * MiB, quota: 1e10 },
 })
-/** Baseline 5 MiB; live peak 30 MiB (25 owned); post-close floor 4 MiB; ledger peak 22 MiB: 25 - 4 - 22 = -1, attributed. */
+/** Warmed host 5 MiB (+-20 KiB probe noise); live peak 30 MiB (25 above it); ledger peak 26 MiB: attributed with 1 MiB to spare. */
+const WARM = [5 * MiB - 20 * 1024, 5 * MiB, 5 * MiB + 20 * 1024, 5 * MiB - 10 * 1024, 5 * MiB + 10 * 1024]
 const memorySession = (cycles: number[] | null) => ({
+  warmHost: { fixture: 'F2', scale: 'F2 reduced', samples: [...WARM] },
   checkpoints: {
     baseline: { heapBytes: 5 * MiB, storage: { usage: 0, quota: 1e10 } },
-    loaded: checkpoint(20 * MiB, 200 * MiB, 18 * MiB), afterOps: checkpoint(25 * MiB, 220 * MiB, 22 * MiB),
-    closed: { heapBytes: 9 * MiB, ledger: ledgerAt(22 * MiB, 0), uasm: { available: true, worker: 0, canvas: 0 }, frame: { workersCreated: 1, workersTerminated: 1, peakBitmapBytes: 100 * MiB }, canvas: { count: 0, bytes: 0 }, storage: { usage: 0, quota: 1e10 } },
+    loaded: checkpoint(20 * MiB, 200 * MiB, 18 * MiB), afterOps: checkpoint(25 * MiB, 220 * MiB, 26 * MiB),
+    closed: { heapBytes: 5 * MiB, ledger: ledgerAt(26 * MiB, 0), uasm: { available: true, worker: 0, canvas: 0 }, frame: { workersCreated: 1, workersTerminated: 1, peakBitmapBytes: 100 * MiB }, canvas: { count: 0, bytes: 0 }, storage: { usage: 0, quota: 1e10 } },
   },
   summary: { recovery: { cyclesMainOwnedBytes: cycles } },
   polls: [{ workerPeak: 210 * MiB }], timeouts: [], liveHeapSamples: [12 * MiB, 30 * MiB, 18 * MiB],
@@ -136,29 +138,59 @@ describe('evaluation from raw records', () => {
     expect(desktop(receipt, 'numeric-sort-1m').source).toMatch(/S8\.6/)
     expect(desktop(receipt, 'import-expanded-throughput').outcome).toBe('pass')
     expect(desktop(receipt, 'worker-owned-memory').value).toBe(220 * MiB)
-    expect(desktop(receipt, 'main-owned-memory')).toMatchObject({ outcome: 'pass', value: 22 * MiB })
+    expect(desktop(receipt, 'main-owned-memory')).toMatchObject({ outcome: 'pass', value: 26 * MiB })
     expect(receipt.measurements.memory.mainUnattributedBytes).toBe(-1 * MiB)
+    expect(receipt.measurements.memory.mainProbeNoiseBytes).toBe(40 * 1024)
     expect(receipt.desktopAdmitted).toBe(true)
     for (const row of receipt.evaluation.filter(r => r.profile === 'mobile')) expect(row.outcome).toBe('not-run')
     expect(await validateReceipt(receipt, ctx)).toEqual({ admitted: true, problems: [] })
   })
 
-  it('a ledger that misses live heap beyond the tolerance leaves the row pending: unattributed main memory', async () => {
+  it('a ledger that misses live heap beyond the measured probe noise leaves the row pending: unattributed main memory', async () => {
     const d = validDraft()
-    ;(d.raw.memory as any).F4.liveHeapSamples = [40 * MiB] // 35 owned - floor 4 - ledger 22 = 9 MiB unattributed
+    ;(d.raw.memory as any).F4.liveHeapSamples = [40 * MiB] // 35 above the warmed host - ledger 26 = 9 MiB
     const receipt = await finalizeReceipt(d, ctx)
     expect(desktop(receipt, 'main-owned-memory').outcome).toBe('pending')
     expect(desktop(receipt, 'main-owned-memory').note).toMatch(/unattributed main memory/)
-    expect(receipt.evidenceProblems.some(p => /unattributed main memory \(9 MiB/.test(p))).toBe(true)
+    expect(receipt.evidenceProblems.some(p => /unattributed main memory in F4 \(9 MiB/.test(p))).toBe(true)
     expect(receipt.desktopAdmitted).toBe(false)
   })
 
-  it('within the tolerance the ledger peak is the admitted value', async () => {
+  it('a residual within the measured probe noise is the only allowance', async () => {
     const d = validDraft()
-    ;(d.raw.memory as any).F4.liveHeapSamples = [32.5 * MiB] // 27.5 - 4 - 22 = 1.5 MiB <= 2 MiB
+    ;(d.raw.memory as any).F4.liveHeapSamples = [31 * MiB + 30 * 1024] // 30 KiB over the ledger, noise 40 KiB
     const receipt = await finalizeReceipt(d, ctx)
     expect(desktop(receipt, 'main-owned-memory').outcome).toBe('pass')
     expect(receipt.desktopAdmitted).toBe(true)
+  })
+
+  it('(r3-4a) a stable uncharged 16 MiB allocation in every session record is not hidden as a floor', async () => {
+    const d = validDraft()
+    for (const key of ['F2', 'F4']) {
+      const session = (d.raw.memory as any)[key]
+      for (const name of ['loaded', 'afterOps', 'closed']) session.checkpoints[name].heapBytes += 16 * MiB
+      session.liveHeapSamples = session.liveHeapSamples.map((v: number) => v + 16 * MiB)
+      if (session.summary.recovery.cyclesMainOwnedBytes) session.summary.recovery.cyclesMainOwnedBytes = session.summary.recovery.cyclesMainOwnedBytes.map((v: number) => v + 16 * MiB)
+    }
+    const receipt = await finalizeReceipt(d, ctx)
+    expect(desktop(receipt, 'main-owned-memory').outcome).toBe('pending')
+    expect(receipt.evidenceProblems.some(p => /unattributed main memory in F2 \(15 MiB/.test(p))).toBe(true)
+    expect(receipt.desktopAdmitted).toBe(false)
+  })
+
+  it('(r3-4b) an uncharged 1.5 MiB live allocation is not absorbed by a fixed tolerance', async () => {
+    const d = validDraft()
+    ;(d.raw.memory as any).F2.liveHeapSamples = [31 * MiB + 1.5 * MiB] // 1.5 MiB over a ledger that covered 31 MiB
+    ;(d.raw.memory as any).F2.checkpoints.afterOps.ledger = ledgerAt(26 * MiB)
+    const receipt = await finalizeReceipt(d, ctx)
+    expect(desktop(receipt, 'main-owned-memory').outcome).toBe('pending')
+    expect(receipt.evidenceProblems.some(p => /unattributed main memory in F2 \(1\.5 MiB/.test(p))).toBe(true)
+  })
+
+  it('a session without warmed-host samples cannot be attributed', async () => {
+    const d = validDraft()
+    ;(d.raw.memory as any).F4.warmHost.samples = [5 * MiB]
+    expect((await finalizeReceipt(d, ctx)).evidenceProblems).toContain('memory.F4: 1 warmed-host samples, below 5')
   })
 
   it('a ledger peak or a sampled live heap above 64 MiB is a miss', async () => {

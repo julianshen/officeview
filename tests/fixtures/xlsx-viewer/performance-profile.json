@@ -324,7 +324,7 @@
     "machine": "Apple M4 Pro, 14 logical cores, 24 GiB, macOS 26.5.2 (25F84)",
     "profile": "D",
     "mode": "release",
-    "desktopAdmitted": true,
+    "desktopAdmitted": false,
     "evidenceProblems": [],
     "rows": {
       "warm-viewport-frame": {
@@ -380,6 +380,6 @@
         "note": "r1: input acknowledgment miss (header sort 11,897-13,316 ms)."
       }
     ],
-    "note": "S10.2 viewer receipt, desktop D admitted. Main peak from the main-thread application ledger, cross-checked against forced-GC live heap samples (2 MiB tolerance above the post-close floor). Mobile rows not-run (no physical iPad, user decision). Recorded on a shared machine; re-run the release command on a quiet machine."
+    "note": "r4 was admitted under the round-2 evaluator; it carries no warmed-host baseline, so it does not validate under the round-3 attribution rule (pending r5)."
   }
 }
