@@ -29,6 +29,8 @@ export interface GridSemanticsProps {
   children?: ReactNode
   label?: string
   onSortCycle?: (col: number, shift: boolean, invoker: HTMLElement) => void
+  /** Column whose header sort is pending: the grid is busy and its control shows it. */
+  pendingSortColumn?: number | null
   onSortDialog?: (col: number, invoker: HTMLElement) => void
   onNotice?: (message: string) => void
   status?: Pick<ViewerStatusProps, 'records' | 'countMode' | 'loadReport' | 'inspection'>
@@ -157,7 +159,7 @@ export function GridSemantics(props: GridSemanticsProps): ReactElement {
   const activeBox = active && projection.sourceCellToLogical(active)
   const activeColumnInPane = activeBox && activeBox.x < pane.x + pane.width && activeBox.x + activeBox.width > pane.x
   const headerColumns = coarse && active && activeColumnInPane ? [active.col] : columns
-  const headerProps = { projection, window: scroll, viewport, coarse, columns: headerColumns, selection, sort: view.sort, filter: view.filter, controlMode, touchControls, onSortCycle: props.onSortCycle, onFilter: props.onFilter, onSortDialog: props.onSortDialog, onNotice: props.onNotice,
+  const headerProps = { projection, window: scroll, viewport, coarse, columns: headerColumns, selection, sort: view.sort, filter: view.filter, controlMode, touchControls, onSortCycle: props.onSortCycle, pendingSortColumn: props.pendingSortColumn ?? null, onFilter: props.onFilter, onSortDialog: props.onSortDialog, onNotice: props.onNotice,
     onSelect: (kind: 'row' | 'column', index: number, options: { toggle: boolean; extend: boolean }, event: MouseEvent<HTMLButtonElement>) => {
       if (event.detail > 0 && !coarse && gridRef.current) {
         const bounds = gridRef.current.getBoundingClientRect()
@@ -188,7 +190,7 @@ export function GridSemantics(props: GridSemanticsProps): ReactElement {
   }
   const status = [props.announcement, current.announcement, notice, coarse || subDetail ? 'Zoom in or inspect a cell for detail.' : ''].filter(Boolean).join(' ')
   return <div ref={wrapperRef} onKeyDown={keyDown} onBlur={event => { if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setControlMode(false) }} style={{ position: 'relative', width: viewport.width + GRID_HEADER_SIZE, height: viewport.height + headerHeight }}>
-    <div ref={gridRef} role="grid" aria-label={props.label ?? 'Worksheet'} aria-rowcount={MAX_ROWS + 1} aria-colcount={MAX_COLS + 1}
+    <div ref={gridRef} role="grid" aria-label={props.label ?? 'Worksheet'} aria-busy={props.pendingSortColumn != null ? true : undefined} aria-rowcount={MAX_ROWS + 1} aria-colcount={MAX_COLS + 1}
       aria-multiselectable="true" aria-activedescendant={active ? `${prefix}-cell-${cellId(active.row, active.col)}` : undefined}
       aria-description={`Worksheet capacity ${MAX_ROWS} rows by ${MAX_COLS} columns.${coarse ? ' Coarse view. Zoom in or inspect a cell for detail.' : ''}`}
       tabIndex={controlMode ? -1 : 0} data-officeview-grid=""
