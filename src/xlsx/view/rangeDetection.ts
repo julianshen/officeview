@@ -171,8 +171,10 @@ class Pacer {
   }
 }
 
-/** Most iteration-continued scans one detection keeps open at a time. */
-const MAX_HELD_SCANS = 4
+/** Iteration-continued scans one detection keeps open: callers follow a token
+ * at once or abandon it, and on the remote store each held scan is also a
+ * worker continuation (MAX_OPEN_SCANS = 4 shared with find), so one suffices. */
+const MAX_HELD_SCANS = 1
 
 /** One budgeted, paced, typed view of store.scanPopulated. Error pages and
  * foreign page stamps raise ScanFailure.
