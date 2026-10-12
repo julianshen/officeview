@@ -14,7 +14,7 @@ import { writeFixturePackage } from '../generate-viewer-fixtures'
 import { colName, xlsxBytes } from '../../tests/helpers/xlsx-package'
 
 export type ViewerScale = 'full' | 'reduced'
-export type ViewerFixtureKey = 'F1' | 'F2' | 'F3' | 'F4' | 'wrapped' | 'styled'
+export type ViewerFixtureKey = 'F1' | 'F2' | 'F3' | 'F4' | 'wrapped' | 'wrappedIntl' | 'styled'
 export interface ViewerFixture {
   key: ViewerFixtureKey
   path: string
@@ -69,17 +69,19 @@ const STYLED_STYLES = `<numFmts count="1"><numFmt numFmtId="164" formatCode="&qu
 <xf numFmtId="0" fontId="2" fillId="2" borderId="1" xfId="0" applyFont="1" applyFill="1" applyBorder="1"/></cellXfs>`
 
 const WORDS = ['alpha', 'beta', 'gamma', 'delta', 'epsilon', 'zeta', 'theta', 'kappa', 'lambda', 'sigma', 'omega', 'quartz', 'harbor', 'meadow', 'lantern']
+/** Non-ASCII words (accents, CJK, emoji with ZWJ) so text layout segments graphemes. */
+const INTL_WORDS = ['café', 'naïve', 'Ångström', 'größe', '東京', '数据表', 'سلام', 'Δέλτα', 'жёлтый', '👩‍💻', 'emoji🙂', 'São', 'Zürich', 'piñata', 'façade']
 const esc = (text: string) => text.replace(/&/g, '&amp;').replace(/</g, '&lt;')
 
 /** Wrapped text: every cell holds ~110 characters in a 24-character column, wrapping to 4-5 lines in 64px rows. */
-function wrappedPackage(rows: number): { bytes: Uint8Array; nnz: number } {
+function wrappedPackage(rows: number, words: readonly string[] = WORDS): { bytes: Uint8Array; nnz: number } {
   const out: string[] = []
   for (let r = 1; r <= rows; r++) {
     const cells: string[] = []
     for (let c = 0; c < SCROLL_COLS; c++) {
-      const words: string[] = []
-      for (let w = 0; w < 16; w++) words.push(WORDS[(r * 7 + c * 3 + w * 5) % WORDS.length])
-      cells.push(`<c r="${colName(c)}${r}" t="inlineStr" s="1"><is><t>${esc(`R${r}C${c + 1} ${words.join(' ')}`)}</t></is></c>`)
+      const picked: string[] = []
+      for (let w = 0; w < 16; w++) picked.push(words[(r * 7 + c * 3 + w * 5) % words.length])
+      cells.push(`<c r="${colName(c)}${r}" t="inlineStr" s="1"><is><t>${esc(`R${r}C${c + 1} ${picked.join(' ')}`)}</t></is></c>`)
     }
     out.push(`<row r="${r}" ht="64" customHeight="1">${cells.join('')}</row>`)
   }
@@ -132,7 +134,7 @@ async function zipUncompressedBytes(path: string): Promise<number> {
 }
 
 /** Writes (or reuses) every package for `scale` and returns their measured identity. */
-export async function ensureViewerFixtures(scale: ViewerScale, keys: readonly ViewerFixtureKey[] = ['F1', 'F2', 'F3', 'F4', 'wrapped', 'styled']): Promise<Record<ViewerFixtureKey, ViewerFixture>> {
+export async function ensureViewerFixtures(scale: ViewerScale, keys: readonly ViewerFixtureKey[] = ['F1', 'F2', 'F3', 'F4', 'wrapped', 'wrappedIntl', 'styled']): Promise<Record<ViewerFixtureKey, ViewerFixture>> {
   const dir = fixtureDir()
   mkdirSync(dir, { recursive: true })
   const out = {} as Record<ViewerFixtureKey, ViewerFixture>
@@ -140,11 +142,11 @@ export async function ensureViewerFixtures(scale: ViewerScale, keys: readonly Vi
     const path = join(dir, `${key.toLowerCase()}-${scale}.xlsx`)
     let nnz: number
     let label: string
-    if (key === 'wrapped' || key === 'styled') {
+    if (key === 'wrapped' || key === 'wrappedIntl' || key === 'styled') {
       const rows = SCROLL_ROWS[scale]
-      label = `${key} scroll mix: ${rows.toLocaleString('en-US')} rows x ${SCROLL_COLS} columns${scale === 'reduced' ? ' (smoke scale)' : ''}`
+      label = `${key} scroll mix: ${rows.toLocaleString('en-US')} rows x ${SCROLL_COLS} columns${key === 'wrappedIntl' ? ', non-ASCII words' : key === 'wrapped' ? ', ASCII words' : ''}${scale === 'reduced' ? ' (smoke scale)' : ''}`
       nnz = rows * SCROLL_COLS
-      if (!existsSync(path)) writeFileSync(path, (key === 'wrapped' ? wrappedPackage : styledPackage)(rows).bytes)
+      if (!existsSync(path)) writeFileSync(path, (key === 'styled' ? styledPackage(rows) : wrappedPackage(rows, key === 'wrappedIntl' ? INTL_WORDS : WORDS)).bytes)
     } else {
       const def = SCALES[scale][key]
       label = def.label

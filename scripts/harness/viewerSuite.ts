@@ -41,6 +41,8 @@ const OPEN_TIMEOUT_MS = 180_000
 const F2_VIEWPORT_SAMPLES = 10
 /** Sort acknowledgment stops early once this many samples all exceed 10x the ceiling. */
 const EARLY_MISS_SAMPLES = 5
+/** Filter apply + clear re-admits the 1M-row range per sample: fewer, labelled samples. */
+const FILTER_APPLY_SAMPLES = 10
 
 type W = Window & { __viewerPerf: ViewerPerf }
 /** Runs a closure-free function against window.__viewerPerf in the page. */
@@ -57,6 +59,20 @@ export interface SuiteContext {
 
 function sh(command: string, argv: string[]): string {
   try { return execFileSync(command, argv, { encoding: 'utf8' }).trim() } catch { return 'unavailable' }
+}
+
+/** Resident set of every process descended from this one (the launched browser), in bytes. Informational. */
+function browserProcessRss(): number | null {
+  try {
+    const rows = execFileSync('ps', ['-A', '-o', 'pid=,ppid=,rss='], { encoding: 'utf8' }).trim().split('\n').map(line => line.trim().split(/\s+/).map(Number))
+    const children = new Map<number, number[]>()
+    for (const [pid, ppid] of rows) children.set(ppid, [...(children.get(ppid) ?? []), pid])
+    const rss = new Map(rows.map(([pid, , kb]) => [pid, kb * 1024]))
+    let total = 0
+    const stack = [...(children.get(process.pid) ?? [])]
+    while (stack.length) { const pid = stack.pop()!; total += rss.get(pid) ?? 0; stack.push(...(children.get(pid) ?? [])) }
+    return total
+  } catch { return null }
 }
 
 function machine(): { machine: string; os: string; extra: Record<string, unknown> } {
@@ -109,6 +125,8 @@ async function firstViewport(context: BrowserContext, base: string, fixture: Vie
     await openFixture(page, fixture)
     await waitComplete(page)
     runs.push(relMarks(await perf(page, p => p.marks)))
+    // Close the document first so its worker and page storage are released.
+    await perf(page, p => p.close())
     await page.close()
   }
   const usable = runs.map(r => r.firstUsable!).filter(v => v !== null)
@@ -201,7 +219,33 @@ async function ackSuite(context: BrowserContext, base: string, f2: ViewerFixture
     else cancel.samples.push(v2)
     await dialog.waitFor({ state: 'hidden', timeout: 30_000 })
   }
-  log(`    ack filter: p50 ${fmt(summarize(filter.samples, 1))}; cancel p50 ${fmt(summarize(cancel.samples, 1))}`)
+  log(`    ack filter-open: p50 ${fmt(summarize(filter.samples, 1))}; cancel p50 ${fmt(summarize(cancel.samples, 1))}`)
+
+  // Filter apply: OK on a one-value selection; the dialog closes (or a status /
+  // aria change) while the worker evaluates 1M rows. Each sample also clears.
+  const apply: AckSeries = { samples: [] as number[], records: [] as AckRecord[], censored: 0, note: `OK on a value selection -> first qualifying change; ${FILTER_APPLY_SAMPLES} samples (each apply + clear re-admits the 1M-row range)`, endToEnd: [] as number[] }
+  for (let i = 0; i < Math.min(repeat, FILTER_APPLY_SAMPLES); i++) {
+    await funnel.click()
+    await dialog.waitFor({ state: 'visible', timeout: 30_000 })
+    await dialog.getByRole('button', { name: 'Deselect All', exact: true }).click({ timeout: 60_000 })
+    await dialog.getByRole('checkbox', { name: 'alpha', exact: true }).check({ timeout: 60_000 })
+    const wait = await arm('apply')
+    const t0 = Date.now()
+    await dialog.getByRole('button', { name: 'OK' }).click()
+    const record = await wait()
+    await page.waitForFunction(() => /Visible body \d+ \/ complete body/.test(document.querySelector('[data-officeview-ui=viewer-status]')?.textContent ?? '') && !/Visible body (\d+) \/ complete body \1\b/.test(document.querySelector('[data-officeview-ui=viewer-status]')?.textContent ?? ''), undefined, { timeout: 120_000 }).catch(() => {})
+    apply.endToEnd!.push(Date.now() - t0)
+    apply.records.push(record)
+    const v = latency(record)
+    if (v === null) apply.censored++
+    else apply.samples.push(v)
+    await funnel.click()
+    await dialog.waitFor({ state: 'visible', timeout: 30_000 })
+    await dialog.getByRole('button', { name: 'Clear all filters' }).click({ timeout: 60_000 })
+    await page.waitForFunction(() => /Visible body (\d+) \/ complete body \1\b/.test(document.querySelector('[data-officeview-ui=viewer-status]')?.textContent ?? ''), undefined, { timeout: 120_000 }).catch(() => {})
+    await dialog.waitFor({ state: 'hidden', timeout: 30_000 }).catch(() => {})
+  }
+  log(`    ack filter-apply: ${apply.samples.length} samples p50 ${fmt(summarize(apply.samples, 1))}; end-to-end p50 ${fmt(summarize(apply.endToEnd!, 1))}`)
 
   // Find: each keystroke while the previous query's search runs over the worker source.
   const box = page.getByLabel('Search document')
@@ -221,7 +265,7 @@ async function ackSuite(context: BrowserContext, base: string, f2: ViewerFixture
   log(`    ack find: p50 ${fmt(summarize(find.samples, 1))}`)
   const wire = await perf(page, p => p.wire.filter(w => w.kind !== 'viewport').slice(-2000))
   await page.close()
-  return { sort, filter, cancel, find, wire }
+  return { sort, filterOpen: filter, filterApply: apply, cancel, find, wire }
 }
 
 async function importSuite(context: BrowserContext, base: string, fixtures: ViewerFixture[], profile: 'D' | 'M', runs: number, errors: string[], log: (m: string) => void) {
@@ -273,7 +317,7 @@ async function memorySession(context: BrowserContext, base: string, fixture: Vie
       heap(), perf(page, p => p.workerStats()), perf(page, p => p.measureMemory()), perf(page, p => p.canvasBytes()), perf(page, p => p.storageEstimate()),
       perf(page, p => ({ peakBitmapBytes: p.peakBitmapBytes, bitmapBytes: p.lastFrame?.bitmapBytes ?? null, budgetBytes: p.lastFrame?.budgetBytes ?? null, workersCreated: p.workersCreated, workersTerminated: p.workersTerminated })),
     ])
-    return { name, heap: h, heapBytes: h ? heapBytes(h) : null, worker, uasm: uasmSplit(uasm as Uasm), canvas, storage, frame }
+    return { name, heap: h, heapBytes: h ? heapBytes(h) : null, worker, uasm: uasmSplit(uasm as Uasm), canvas, storage, frame, browserProcessRssBytes: browserProcessRss() }
   }
   const baseline = await checkpoint('baseline')
   // Peak sampling during open/import (no forced GC: an upper bound, garbage included).
@@ -326,6 +370,7 @@ async function memorySession(context: BrowserContext, base: string, fixture: Vie
     bitmapLedgerPeakBytes: Math.max(loaded.frame.peakBitmapBytes, afterOps.frame.peakBitmapBytes),
     bitmapUasmCanvasBytes: loaded.uasm.available ? uasmCanvas : null,
     bitmapPeakBytes: Math.max(loaded.frame.peakBitmapBytes, afterOps.frame.peakBitmapBytes, uasmCanvas),
+    browserProcessRss: { note: 'RSS of every launched browser process (all tabs/GPU/utility); informational, outside the app pools', baseline: baseline.browserProcessRssBytes, loaded: loaded.browserProcessRssBytes, afterOps: afterOps.browserProcessRssBytes, closed: closed.browserProcessRssBytes },
     recovery: {
       mainAfterCloseBytes: owned(closed),
       canvasAfterClose: closed.canvas,
@@ -391,7 +436,9 @@ export async function runViewerSuite(ctx: SuiteContext): Promise<{ receipt: View
     const scroll: Record<string, unknown> = {}
     measurements.scroll = {}
     const mixes: [string, ViewerFixtureKey, { dx: number; dy: number }, boolean][] = [
-      ['ordinary', 'F2', { dx: 0, dy: 60 }, true], ['wrapped', 'wrapped', { dx: 0, dy: 60 }, false], ['styled', 'styled', { dx: 0, dy: 60 }, false], ['wide', 'F3', { dx: 120, dy: 0 }, false],
+      ['ordinary', 'F2', { dx: 0, dy: 60 }, true], ['wrapped', 'wrapped', { dx: 0, dy: 60 }, false], ['styled', 'styled', { dx: 0, dy: 60 }, false],
+      // Informational (not threshold inputs): horizontal F3 and non-ASCII wrapped text.
+      ['wide', 'F3', { dx: 120, dy: 0 }, false], ['wrapped-intl', 'wrappedIntl', { dx: 0, dy: 60 }, false],
     ]
     for (const [kind, key, motion, wheel] of mixes) {
       const context = await fresh()
@@ -413,7 +460,7 @@ export async function runViewerSuite(ctx: SuiteContext): Promise<{ receipt: View
       raw.ack = ack
       measurements.ack = {
         sort: summarize(ack.sort.samples.concat(Array(ack.sort.censored).fill(ACK_TIMEOUT_MS)), MIN_OPERATION_SAMPLES),
-        filter: summarize(ack.filter.samples.concat(Array(ack.filter.censored).fill(ACK_TIMEOUT_MS)), MIN_OPERATION_SAMPLES),
+        filter: summarize(ack.filterApply.samples.concat(Array(ack.filterApply.censored).fill(ACK_TIMEOUT_MS)), MIN_OPERATION_SAMPLES),
         find: summarize(ack.find.samples.concat(Array(ack.find.censored).fill(ACK_TIMEOUT_MS)), MIN_OPERATION_SAMPLES),
         cancel: summarize(ack.cancel.samples.concat(Array(ack.cancel.censored).fill(ACK_TIMEOUT_MS)), MIN_OPERATION_SAMPLES),
       }

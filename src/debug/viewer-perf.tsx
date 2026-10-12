@@ -89,7 +89,7 @@ export interface ViewerPerf {
   measureMemory(): Promise<unknown>
 }
 export interface WireRecord { requestId: string; kind: string; op?: string; detail?: string; postedAt: number; progress: number; repliedAt: number | null; reply: string | null }
-export type AckKind = 'status' | 'dialog-open' | 'dialog-close' | 'find'
+export type AckKind = 'status' | 'dialog-open' | 'dialog-close' | 'apply' | 'find'
 declare global { interface Window { __viewerPerf?: ViewerPerf } }
 
 const raf = () => new Promise<number>(resolve => requestAnimationFrame(resolve))
@@ -333,6 +333,9 @@ function describe(mutation: MutationRecord): string {
   const label = target ? `${target.tagName.toLowerCase()}${target.getAttribute('role') ? `[role=${target.getAttribute('role')}]` : ''}${target.getAttribute('data-officeview-ui') ? `[ui=${target.getAttribute('data-officeview-ui')}]` : ''}` : '?'
   return mutation.type === 'attributes' ? `${label} @${mutation.attributeName}` : `${label} ${mutation.type}`
 }
+function removesDialog(mutation: MutationRecord): boolean {
+  return mutation.type === 'childList' && [...mutation.removedNodes].some(node => node instanceof Element && (node.matches('[role=dialog]') || node.querySelector('[role=dialog]') !== null))
+}
 function qualifies(kind: AckKind, mutation: MutationRecord): boolean {
   const el = mutation.target instanceof Element ? mutation.target : mutation.target.parentElement
   if (!el) return false
@@ -341,7 +344,9 @@ function qualifies(kind: AckKind, mutation: MutationRecord): boolean {
   switch (kind) {
     case 'status': return inStatus || el.closest('[role=progressbar]') !== null
     case 'dialog-open': return mutation.type === 'childList' && [...mutation.addedNodes].some(node => node instanceof Element && (node.matches('[role=dialog]') || node.querySelector('[role=dialog]') !== null))
-    case 'dialog-close': return mutation.type === 'childList' && [...mutation.removedNodes].some(node => node instanceof Element && (node.matches('[role=dialog]') || node.querySelector('[role=dialog]') !== null))
+    case 'dialog-close': return removesDialog(mutation)
+    // Applying from a dialog: the dialog closing, or a status/aria change, acknowledges it.
+    case 'apply': return removesDialog(mutation) || inStatus
     case 'find': return inStatus || (el.closest('[data-officeview-ui]') !== null && mutation.type !== 'attributes')
   }
 }
