@@ -5,6 +5,8 @@
  */
 import { describe, expect, test } from 'vitest'
 import { createCanvas } from 'canvas'
+import { hitGeometry } from '../src/xlsx/view/find'
+import { cellTextOverflow } from '../src/xlsx/view/viewport'
 import { computeMetrics, renderSheet } from '../src/xlsx/render'
 import { createCellLayoutHost, renderSheetViewport } from '../src/xlsx/view/renderViewport'
 import {
@@ -98,6 +100,58 @@ describe('S13 text overflow stops at non-empty neighbours (static and viewer agr
     // Row 1 blocked at C ("x"); row 2 blocked at B (""); row 3 blocked at the C:D merge; row 4 runs on.
     expect(clips.slice(0, 3)).toEqual([colC, colB, colC])
     expect(clips[3]).toBeGreaterThan(colC)
+  })
+})
+
+describe('S13 one overflow geometry for paint, records and find', () => {
+  const long = 'abcdefghijklmnopqrstuvwxyz0123'
+  test('a centered record carries the painted (widened/cut) clip, not its cell box', () => {
+    const sheet = sheetOf([{ index: 0, cells: [cell(0, 1, long, { numFmtId: 0, horizontal: 'center' } as XlsxCellStyle), cell(0, 2, 'x')] }])
+    const result = renderSheetViewport(sheet, createCanvas(320, 40).getContext('2d') as never, ready(sheet), view(0, 0, 320, 40), {}, { owner: OWNER })
+    const record = result.records.find(r => r.source.col === 1)!
+    const body = record.body.text!
+    expect(body.kind).toBe('layout')
+    const painted = body.kind === 'layout' ? body.clip : null
+    // Box-local body clip translated to the record's logical box.
+    expect(record.text[0].clip).toEqual({ x: record.logicalBounds.x + painted!.x - record.body.x, y: record.logicalBounds.y + painted!.y - record.body.y, width: painted!.width, height: painted!.height })
+    expect(record.text[0].clip.x).toBeLessThan(64) // widened left into empty A
+    expect(record.text[0].clip.x + record.text[0].clip.width).toBeCloseTo(128, 9) // cut at C ("x")
+  })
+  test('find highlights only painted ink: a blocked plain suffix keeps its hit inside the clip', () => {
+    const sheet = sheetOf([{ index: 0, cells: [cell(0, 0, long), cell(0, 1, 'x')] }])
+    const geometry = ready(sheet)
+    const ctx = createCanvas(320, 40).getContext('2d') as never
+    const host = createCellLayoutHost(ctx, sheet)
+    const overflow = cellTextOverflow(geometry, { row: 0, col: 0 })
+    expect(overflow).toEqual({ left: 0, right: 0 })
+    const hit = { sheetId: 'Layout', cellId: 0, source: { row: 0, col: 0 }, text: long, start: 20, end: 26, displaySlot: 0 }
+    const result = hitGeometry(hit, sheet.rows[0].cells[0], geometry.metrics, OWNER, host, new LayoutCache(), overflow)!
+    expect(result.record.text[0].clip.x + result.record.text[0].clip.width).toBeLessThanOrEqual(64 + 1e-9)
+    for (const rect of result.rects) expect(rect.x + rect.width).toBeLessThanOrEqual(64 + 1e-9) // never over B
+    expect(result.rects.length).toBe(1) // the hit itself is preserved
+  })
+  test('viewer allowances stop at the real worksheet edges (A and XFD)', () => {
+    const sheet = sheetOf([{ index: 0, cells: [cell(0, 0, 'left'), cell(0, MAX_COLS - 1, 'right')] }])
+    const geometry = ready(sheet)
+    expect(cellTextOverflow(geometry, { row: 0, col: 0 })!.left).toBe(0)
+    expect(cellTextOverflow(geometry, { row: 0, col: MAX_COLS - 1 })!.right).toBe(0)
+    expect(Number.isFinite(cellTextOverflow(geometry, { row: 0, col: 0 })!.right)).toBe(true)
+  })
+  test('viewer paints overflow over an empty formatted neighbour (fills first)', () => {
+    const sheet = sheetOf([
+      { index: 0, cells: [cell(0, 0, long), cell(0, 1, null, { numFmtId: 0, fillColor: 'FFFF00' } as XlsxCellStyle)] },
+      { index: 1, cells: [cell(1, 4, 'end')] },
+    ])
+    const m = computeMetrics(sheet)
+    const { diff, result } = cropParity(sheet, { x: 0, y: 0, width: m.widthPx, height: m.heightPx })
+    expect(diff).toBe(0)
+    const pane = createCanvas(m.widthPx, m.heightPx)
+    renderSheetViewport(sheet, pane.getContext('2d') as never, ready(sheet), view(0, 0, m.widthPx, m.heightPx), {}, { owner: OWNER })
+    const data = pane.getContext('2d').getImageData(66, 0, 60, 20).data
+    let dark = 0
+    for (let i = 0; i < data.length; i += 4) if (data[i] < 100 && data[i + 1] < 100) dark++
+    expect(dark).toBeGreaterThan(20) // text ink inside yellow B1
+    expect(result.records.length).toBeGreaterThan(0)
   })
 })
 

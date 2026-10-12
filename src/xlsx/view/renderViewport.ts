@@ -107,7 +107,9 @@ export function renderSheetViewport(
     work.layoutsReused = cache.stats.reused - reused
     const coarse = plan.kind === 'detail' ? plan.coarse : plan.groups
     const paintBorders: Array<() => void> = []
-    const replay = (record: CellLayout) => {
+    // Two passes: every fill first, then text and borders, so overflow into an
+    // empty formatted neighbour is drawn over its fill (S13, as Excel does).
+    const replay = (record: CellLayout, phase: 'fill' | 'content') => {
       // Float64 local offset; the canvas only ever sees tile-local coordinates.
       const lx = record.logicalBounds.x - vx, ly = record.logicalBounds.y - vy
       // Border strokes clamp to the sheet extent (paintCellLayout); expressed in the
@@ -115,7 +117,7 @@ export function renderSheetViewport(
       const localExtent = { width: plan.extent.width - record.logicalBounds.x, height: plan.extent.height - record.logicalBounds.y }
       ctx.save()
       ctx.translate(lx, ly)
-      const border = paintCellLayout(ctx, record.body, localExtent)
+      const border = paintCellLayout(ctx, record.body, localExtent, phase)
       ctx.restore()
       if (border) paintBorders.push(() => { ctx.save(); ctx.translate(lx, ly); border(); ctx.restore() })
     }
@@ -123,7 +125,8 @@ export function renderSheetViewport(
       ctx.fillStyle = COARSE_FILL
       ctx.fillRect(group.bounds.x - vx, group.bounds.y - vy, group.bounds.width, group.bounds.height)
     }
-    for (const record of records) replay(record)
+    for (const record of records) replay(record, 'fill')
+    for (const record of records) replay(record, 'content')
     if (plan.kind === 'detail') {
       ctx.strokeStyle = '#d0d0d0'
       ctx.lineWidth = 1
@@ -160,7 +163,7 @@ export function renderSheetViewport(
       }
     }
     // The active cell keeps its exact record even inside a summarized region.
-    if (active && !records.some(record => record.id === active.id)) replay(active)
+    if (active && !records.some(record => record.id === active.id)) { replay(active, 'fill'); replay(active, 'content') }
     if (paintable && coarse.length) notice(COARSE_NOTICE)
     return { kind: plan.kind, diagnostics: plan.diagnostics, records, coarse, ...(active ? { active } : {}), work }
   } finally { ctx.restore() }

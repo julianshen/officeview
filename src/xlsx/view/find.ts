@@ -581,16 +581,22 @@ export interface HitGeometry { record: CellLayout; rects: Rect[] }
  * text, or a hit whose searched text differs from the record's formatted text,
  * highlights the whole text clip.
  */
-export function hitGeometry(hit: FindHit, cell: XlsxCell, metrics: SheetMetrics, owner: CacheIdentity, host: CellLayoutHost, cache: LayoutCache): HitGeometry | null {
+export function hitGeometry(hit: FindHit, cell: XlsxCell, metrics: SheetMetrics, owner: CacheIdentity, host: CellLayoutHost, cache: LayoutCache, overflow?: { left: number; right: number }): HitGeometry | null {
   const box = metrics.sourceCellToLogical(hit.source)
   if (!box) return null
-  const [record] = buildCellRecords([{ cell, source: hit.source, x: box.x, y: box.y, width: box.width, height: box.height }], owner, host, cache)
+  // `overflow` is the allowance the painter used (viewport.cellTextOverflow), so
+  // the record — and its clip — is the painted one.
+  const [record] = buildCellRecords([{ cell, source: hit.source, x: box.x, y: box.y, width: box.width, height: box.height, ...(overflow ? { overflow } : {}) }], owner, host, cache)
   const text = record.text[0]
   const body = record.body.text
   if (!text || !body) return { record, rects: [] }
   if (body.kind !== 'plain' || text.formattedText !== hit.text || !body.text.length) return { record, rects: [{ ...text.clip }] }
   const x0 = box.x + (body.tx - record.body.x), unit = body.width / body.text.length
-  return { record, rects: [{ x: x0 + unit * hit.start, y: box.y, width: unit * (hit.end - hit.start), height: box.height }] }
+  // Highlight only painted ink: intersect with the text clip. A match whose ink
+  // is fully clipped is still a hit; it highlights its own cell box.
+  const left = Math.max(x0 + unit * hit.start, text.clip.x), right = Math.min(x0 + unit * hit.end, text.clip.x + text.clip.width)
+  if (!(right > left)) return { record, rects: [{ x: box.x, y: box.y, width: box.width, height: box.height }] }
+  return { record, rects: [{ x: left, y: box.y, width: right - left, height: box.height }] }
 }
 
 export interface FindNavigation {

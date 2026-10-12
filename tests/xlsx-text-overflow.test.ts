@@ -91,21 +91,23 @@ describe('text overflow into empty neighbours only (static renderer)', () => {
 
 describe('textOverflowAllowance', () => {
   const colStart = (c: number) => c * W
-  const base = { occupied: [] as number[], merges: [] as Array<{ minCol: number; maxCol: number }>, colStart, lastCol: MAX_COLS - 1 }
+  const cellsAt = (...cols: number[]) => cols.map(col => ({ col, value: 'v' as XlsxCell['value'] }))
+  const base = { cells: [] as ReturnType<typeof cellsAt>, merges: [] as Array<{ minCol: number; maxCol: number }>, colStart, lastCol: MAX_COLS - 1 }
   it('right alignment overflows left until the previous value; center both ways', () => {
-    expect(textOverflowAllowance({ ...base, occupied: [0, 2, 5] }, 2)).toEqual({ left: 50, right: 100 }) // B empty; D,E empty, F value
-    expect(textOverflowAllowance({ ...base, occupied: [1, 2, 3] }, 2)).toEqual({ left: 0, right: 0 })
+    expect(textOverflowAllowance({ ...base, cells: cellsAt(0, 2, 5) }, 2)).toEqual({ left: 50, right: 100 }) // B empty; D,E empty, F value
+    expect(textOverflowAllowance({ ...base, cells: cellsAt(1, 2, 3) }, 2)).toEqual({ left: 0, right: 0 })
   })
-  it('stops at the sheet edge and at the left edge', () => {
+  it('formatting-only cells in between are skipped, not blockers', () => {
+    const cells = [{ col: 1, value: null }, { col: 2, value: 'v' as XlsxCell['value'] }, { col: 3, value: null }, { col: 4, value: 'x' as XlsxCell['value'] }]
+    expect(textOverflowAllowance({ ...base, cells }, 2)).toEqual({ left: 100, right: 50 })
+  })
+  it('stops at the worksheet edges (A on the left, the last column on the right)', () => {
     expect(textOverflowAllowance(base, MAX_COLS - 1).right).toBe(0)
     expect(textOverflowAllowance(base, 0).left).toBe(0)
     expect(textOverflowAllowance(base, 3).left).toBe(150)
   })
   it('a merged cell never overflows', () => {
     expect(textOverflowAllowance({ ...base, merges: [{ minCol: 2, maxCol: 3 }] }, 2)).toEqual({ left: 0, right: 0 })
-  })
-  it('outside the known window the run is unbounded (the viewer fetches a bounded envelope)', () => {
-    expect(textOverflowAllowance({ ...base, knownFrom: 1, knownTo: 4 }, 2)).toEqual({ left: Infinity, right: Infinity })
   })
 })
 
@@ -125,6 +127,34 @@ describe('explicit alignment layouts carry the allowance as their clip', () => {
   })
 })
 
+describe('review round 3 regressions', () => {
+  it('a numeric value is judged by its selected section, not by an "@" in another section', () => {
+    expect(paint([cellAt(0, 123456789, { style: { numFmtId: 164, formatCode: '0.00;[Red]-0.00;0;@' } as XlsxCellStyle })]).map(p => p.text)).toEqual(['######'])
+  })
+  it('a quoted or escaped "#" literal that fits is painted as authored', () => {
+    expect(paint([cellAt(0, 42, { style: { numFmtId: 164, formatCode: '"#"' } as XlsxCellStyle })]).map(p => p.text)).toEqual(['#'])
+    expect(paint([cellAt(0, 42, { style: { numFmtId: 164, formatCode: '\\#' } as XlsxCellStyle })]).map(p => p.text)).toEqual(['#'])
+  })
+  it('a number shown through a text ("@") section keeps text behaviour', () => {
+    expect(paint([cellAt(0, 123456789, { style: { numFmtId: 49, formatCode: '@' } as XlsxCellStyle })]).map(p => p.text)).not.toEqual(['######'])
+  })
+  it('fill alignment never overflows', () => {
+    const { ctx } = recorder()
+    const fill = layoutCellBody(ctx, sheetOf([]).sheet, cellAt(0, LONG, { style: { numFmtId: 0, horizontal: 'fill' } as XlsxCellStyle }), 0, 0, 50, 20, textMeasurer(ctx), { left: 0, right: 250 })
+    expect(fill.text?.kind === 'layout' && fill.text.clip).toMatchObject({ x: 0, width: 50 })
+  })
+  it('overflow text is painted after every fill, so a formatted empty neighbour does not erase it', () => {
+    const ops: string[] = []
+    const { sheet, widths } = sheetOf([cellAt(0, LONG), cellAt(1, null, { style: { numFmtId: 0, fillColor: 'FFFF00' } as XlsxCellStyle })])
+    const state = { font: '', fillStyle: '', measureText: (t: string) => ({ width: t.length * 7 }), fillRect: (x: number) => ops.push(`fillRect@${x}:${state.fillStyle}`), fillText: (t: string) => ops.push(`text:${t}`) }
+    const ctx = new Proxy(state, { get: (o, k) => k in o ? o[k as keyof typeof o] : () => {} }) as unknown as CanvasRenderingContext2D
+    renderSheet(sheet, ctx, { colWidthsPx: widths, rowHeightsPx: [20], widthPx: 300, heightPx: 20 })
+    const fillB = ops.findIndex(op => op.startsWith('fillRect@50:') && !op.endsWith('#ffffff'))
+    expect(fillB).toBeGreaterThan(-1)
+    expect(ops.indexOf(`text:${LONG}`)).toBeGreaterThan(fillB)
+  })
+})
+
 describe('shrink to fit', () => {
   const shrink = (extra: Partial<XlsxCellStyle> = {}) => ({ style: { numFmtId: 0, shrinkToFit: true, ...extra } as XlsxCellStyle })
   const pt = (font: string) => Number(/([\d.]+)pt/.exec(font)?.[1])
@@ -140,10 +170,28 @@ describe('shrink to fit', () => {
     expect(pt(p[0].font)).toBeLessThan(10)
   })
   it('text shrinks instead of overflowing', () => {
-    const p = paint([cellAt(0, LONG, shrink())])
-    expect(p[0].text).toBe(LONG)
-    expect(pt(p[0].font)).toBeLessThan(10)
+    const p = paint([cellAt(0, 'abcdefghij', shrink())]) // 70 px at 10 pt -> fits 44 px at 6.2 pt
+    expect(p[0].text).toBe('abcdefghij')
+    expect(pt(p[0].font)).toBeCloseTo(6.2, 9)
     expect(p[0].clip).toBeNull()
+  })
+  it('text that cannot fit even at the floor is held to its cell, never spilled', () => {
+    const p = paint([cellAt(0, LONG, shrink())]) // would need 3.6 pt
+    expect(pt(p[0].font)).toBe(4)
+    expect(p[0].clip).toEqual({ x0: 0, x1: 50 })
+  })
+  it('an authored size below the floor is never enlarged', () => {
+    const fits = paint([cellAt(0, 'abc', shrink({ fontSizePt: 2 }))])
+    expect(pt(fits[0].font)).toBe(2)
+    const tooLong = paint([cellAt(0, 'x'.repeat(40), shrink({ fontSizePt: 2 }))]) // 56 px at 2 pt
+    expect(pt(tooLong[0].font)).toBeLessThanOrEqual(2)
+    expect(tooLong[0].clip).toEqual({ x0: 0, x1: 50 })
+  })
+  it('numbers and dates that cannot fit at the floor show #', () => {
+    const { sheet } = sheetOf([cellAt(0, 45079, shrink({ formatCode: 'yyyy-mm-dd' }))])
+    const out = recorder()
+    renderSheet(sheet, out.ctx, { colWidthsPx: [20], rowHeightsPx: [20], widthPx: 20, heightPx: 20 }) // 14 px interior; date needs 3.0 pt
+    expect(out.painted.map(x => x.text)).toEqual(['##'])
   })
   it('text that already fits keeps its size', () => {
     expect(pt(paint([cellAt(0, 'ab', shrink())])[0].font)).toBe(10)

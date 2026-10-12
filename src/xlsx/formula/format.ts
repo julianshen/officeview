@@ -425,6 +425,24 @@ function renderDateTime(
   return { kind: 'text', text: out }
 }
 
+/**
+ * True when a NUMERIC value is shown through a text-format section ('@'),
+ * using formatCommon's own section selection (positive;negative;zero; the
+ * fourth, text section never applies to numbers). Quoted/escaped literals are
+ * tokens of their own, so an '@' inside quotes does not count. The renderer
+ * uses this to keep '#' overflow for numeric sections only.
+ */
+export function numericSectionIsText(value: number, format: string): boolean {
+  const { sections, error } = splitSections(format)
+  if (error) return false
+  const secList = sections.slice(0, 4)
+  let sectionIdx = 0
+  if (value < 0 && secList.length >= 2) sectionIdx = 1
+  else if (value === 0 && secList.length >= 3) sectionIdx = 2
+  const parsed = tokenize(secList[sectionIdx] ?? '')
+  return !parsed.unsupported && parsed.tokens.some(tk => tk.t === 'at')
+}
+
 export function formatCommon(
   value: ElementValue,
   format: string,

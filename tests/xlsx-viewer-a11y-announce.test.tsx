@@ -10,7 +10,7 @@
 import { describe, expect, it } from 'vitest'
 import { fireEvent, render } from '@testing-library/react'
 import { GridSemantics, gridNavigationTransition, type GridTransition } from '../src/components/xlsx/GridSemantics'
-import { selectCell } from '../src/xlsx/view/selection'
+import { selectCell, selectHeader } from '../src/xlsx/view/selection'
 import { gridFixture } from './helpers/xlsx-grid-fixture'
 
 describe('V1: a cell value is exposed once', () => {
@@ -59,5 +59,27 @@ describe('V2: range selection is announced', () => {
       expect(cell.getAttribute('aria-selected')).toBe('true')
       expect(cell.getAttribute('aria-description')).toContain('selected')
     }
+  })
+})
+
+describe('V2 review round 3: truthful extension wording and cardinality', () => {
+  it('extending a column-header selection announces whole columns, not a cell range', () => {
+    const props = gridFixture()
+    const columnA = selectHeader(props.selection, props.projection, 'column', 0)
+    const transition = gridNavigationTransition({ ...props, selection: columnA }, 'ArrowRight', { extend: true })
+    expect(transition.announcement).toMatch(/; selected columns A:C$/)
+  })
+  it('extending a row-header selection announces rows by their displayed labels', () => {
+    const props = gridFixture()
+    const row = selectHeader(props.selection, props.projection, 'row', 3) // source row 4 shows as row 2
+    const transition = gridNavigationTransition({ ...props, selection: row }, 'ArrowDown', { extend: true })
+    expect(transition.announcement).toMatch(/; selected rows 2:\d+$/)
+  })
+  it('a single-cell bitset selection is one cell: no "selected" description', () => {
+    const props = gridFixture()
+    const at = { row: 3, col: 0 }
+    const bitset = { active: at, anchor: at, ranges: [{ rows: { kind: 'bitset' as const, space: 'source' as const, r0: 3, r1: 3, words: Uint32Array.of(1), count: 1 }, cols: [{ c0: 0, c1: 0 }] }] }
+    const ui = render(<GridSemantics {...props} selection={bitset} />)
+    expect(ui.getByRole('gridcell', { name: 'A2, value 10; original A4' }).getAttribute('aria-description') ?? '').not.toContain('selected')
   })
 })

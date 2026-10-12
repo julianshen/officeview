@@ -207,8 +207,10 @@ export function buildCellRecords(placed: readonly PlacedCell[], owner: CacheIden
     const text: TextRecord[] = []
     const run = shapedRun(body)
     if (run && body.text) {
+      // The record's clip is the painted clip (S13: overflow widens or cuts it),
+      // translated from the box-local body into logical coordinates.
       const clip = body.text.kind === 'layout'
-        ? logicalBounds
+        ? { x: item.x + (body.text.clip.x - body.x), y: item.y + (body.text.clip.y - body.y), width: body.text.clip.width, height: body.text.clip.height }
         // Plain text overflows like the static renderer: its own ink band, cut
         // where a blocked neighbour stops the overflow (S13).
         : plainClip(item.x - body.x, body.text, item.y, item.height)

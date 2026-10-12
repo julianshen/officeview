@@ -20,6 +20,7 @@ import { evaluateWorkbookFormulas, markSavedValuesOnly, type WorkbookEvaluationO
 import { initializeSavedSpills } from './formula/saved-spills'
 import { dynamicMetadataIndices } from './metadata'
 import { decodeXlsxString } from './strings'
+import { formatA1 } from './view/coordinates'
 
 /** Convert "A1" / "BC23" to 0-based [row, col]. */
 export function parseRef(ref: string): [number, number] {
@@ -462,10 +463,17 @@ async function parseSheet(
     header: inches(ma.header, 0.3), footer: inches(ma.footer, 0.3),
   }
   const sheetData = getChildren(data, 'sheetData')[0]
+  // Excel's implicit positions: a <row> without r follows the previous row and
+  // a <c> without r follows the previous cell of its row (A1-relative start).
+  let previousRow = -1
   for (const rowNode of getChildren(sheetData, 'row')) {
     const ra = attrs(rowNode)
+    const explicitRow = ra.r !== undefined ? parseInt(ra.r as string, 10) - 1 : NaN
+    const rowIndex = Number.isInteger(explicitRow) && explicitRow >= 0 ? explicitRow : previousRow + 1
+    previousRow = rowIndex
+    let previousCol = -1
     const row: XlsxRow = {
-      index: parseInt(ra.r ?? '1', 10) - 1,
+      index: rowIndex,
       heightPt: ra.ht !== undefined ? parseFloat(ra.ht as string) : undefined,
       customHeight: ra.customHeight === '1',
       hidden: ra.hidden === '1' || ra.hidden === 'true',
@@ -473,8 +481,10 @@ async function parseSheet(
     }
     for (const cNode of getChildren(rowNode, 'c')) {
       const ca = attrs(cNode)
-      const ref = (ca.r as string) ?? ''
-      const [rowIdx, colIdx] = parseRef(ref)
+      const explicitRef = typeof ca.r === 'string' && /^[A-Z]+\d+$/.test(ca.r) ? ca.r : undefined
+      const [rowIdx, colIdx] = explicitRef ? parseRef(explicitRef) : [rowIndex, previousCol + 1]
+      const ref = explicitRef ?? formatA1({ row: rowIdx, col: colIdx })
+      previousCol = colIdx
       const t = ca.t as string | undefined
       const sIdx = parseInt(ca.s ?? '0', 10)
       let value: string | number | boolean | null = null

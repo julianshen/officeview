@@ -28,7 +28,7 @@ import type {
 } from '../../xlsx/view/contracts'
 import { SHEET_MIN_ZOOM } from '../../xlsx/view/contracts'
 import type { NavigatorRequest, SourceCell } from '../../xlsx/view/coordinates'
-import { buildSheetGeometry, MergeQueryCache, sheetBaseHidden, type SheetGeometry } from '../../xlsx/view/viewport'
+import { buildSheetGeometry, cellTextOverflow, MergeQueryCache, sheetBaseHidden, type SheetGeometry } from '../../xlsx/view/viewport'
 import type { ProjectedSheetMetrics } from '../../xlsx/view/projection'
 import { createIdentityOrder } from '../../xlsx/view/order'
 import { createIntervalSet, visibilityFromHidden } from '../../xlsx/view/visibility'
@@ -727,7 +727,7 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
         const box = entry.metrics.sourceCellToLogical(hit.source)
         if (!box || box.x >= pane.x + pane.width || box.x + box.width <= pane.x || box.y >= pane.y + pane.height || box.y + box.height <= pane.y) return
         const cell = cellAt(entry, hit.source)
-        const geometry = cell && hitGeometry(hit, cell, entry.metrics, identity, host, entry.layoutCache)
+        const geometry = cell && hitGeometry(hit, cell, entry.metrics, identity, host, entry.layoutCache, cellTextOverflow(entry.geometry, hit.source))
         if (!geometry) return
         const rects = geometry.rects.map(toViewport)
         highlights.push(...rects)

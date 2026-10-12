@@ -14,12 +14,12 @@ import type { ContentPaintAssets } from '../drawing/content'
 import { createTextBodyMeasurer, paintTextBody } from '../drawing/text-paint'
 import { graphemes } from '../core/text-recording'
 import { isFormulaError, isEvaluationError } from './formula/evaluator'
-import { formatCommon } from './formula/format'
+import { formatCommon, numericSectionIsText } from './formula/format'
 import { decodeSerial } from './formula/serial'
 import type { ResolvedSemantics } from './formula/types'
 import type { WorkerDiagnostic } from './view/contracts'
 import { MAX_COLS, isValidCoordinate } from './view/coordinates'
-import { cellBlocksOverflow, textOverflowAllowance, type OverflowAllowance, type RowOverflowInput } from './view/textOverflow'
+import { NO_OVERFLOW, alignmentOverflows, textOverflowAllowance, type OverflowAllowance, type RowOverflowInput } from './view/textOverflow'
 export { textOverflowAllowance, cellBlocksOverflow, type OverflowAllowance, type RowOverflowInput } from './view/textOverflow'
 import { RectangleIndex } from './view/structure'
 import { cellSourceRow, drawingExtent } from './view/sheetCells'
@@ -166,7 +166,7 @@ function layoutCellText(ctx: CanvasRenderingContext2D, text: string, style: Xlsx
     // One unwrapped, unrotated line may run into empty neighbours (S13); the
     // clip widens by the room it needs, up to the allowance.
     let clipX0 = x, clipX1 = x + w
-    if (overflow && !wrap && !stacked && !radians) {
+    if (overflow && !wrap && !stacked && !radians && alignmentOverflows(style?.horizontal)) {
       const placedBounds = textLayoutBounds(placed, measure)
       const band = overflowBand(x, w, placedBounds.x, placedBounds.width, overflow) ?? { x0: Math.min(x, placedBounds.x), x1: Math.max(x + w, placedBounds.x + placedBounds.width) }
       clipX0 = band.x0
@@ -469,7 +469,7 @@ function formatFiniteFallback(value: number): string {
  * with twelve integer digits use scientific notation. Cell painting supplies
  * a physical width test so the display can lose precision without changing
  * the stored value. This finite profile does not implement locale General. */
-function formatGeneral(value: number, fits: (text: string) => boolean = () => true): string {
+function formatGeneral(value: number, fits: (text: string) => boolean = () => true, noFit?: () => void): string {
   if (!Number.isFinite(value)) return String(value)
   if (value === 0) return '0'
   const negative = value < 0, absolute = Math.abs(value)
@@ -500,6 +500,7 @@ function formatGeneral(value: number, fits: (text: string) => boolean = () => tr
     const text = scientific(decimals)
     if (text.length - sign.length <= 11 && fits(text)) return text
   }
+  noFit?.()
   return '#'
 }
 
@@ -567,6 +568,7 @@ function renderCellText(
   semantics: ResolvedSemantics | undefined,
   sheet: XlsxSheet,
   fitsGeneral?: (text: string) => boolean,
+  generalNoFit?: () => void,
 ): string {
   const code = style?.formatCode
   if (code !== undefined && value !== null) {
@@ -574,7 +576,7 @@ function renderCellText(
     if (result.kind === 'text') return result.text
     if (!isEvaluationError(result)) noteFormatUnsupported(sheet, code, result.reason)
   }
-  if (typeof value === 'number' && (style?.numFmtId ?? 0) === 0) return formatGeneral(value, fitsGeneral)
+  if (typeof value === 'number' && (style?.numFmtId ?? 0) === 0) return formatGeneral(value, fitsGeneral, generalNoFit)
   return formatValue(value, style?.numFmtId ?? 0, semantics)
 }
 
@@ -661,12 +663,13 @@ export function renderSheet(
     if (bottom > (rowBottom.get(r.minRow) ?? Number.NEGATIVE_INFINITY)) rowBottom.set(r.minRow, bottom)
   }
   const extent = { width: m.widthPx, height: m.heightPx }
+  const laidOut: CellBodyLayout[] = []
   for (const row of sheet.rows) {
     // Neighbour occupancy for text overflow (S13), built once per row on demand.
     let rowOverflow: RowOverflowInput | undefined
     const overflowFor = (cell: XlsxCell): OverflowAllowance => {
       rowOverflow ??= {
-        occupied: row.cells.filter(cellBlocksOverflow).map(item => item.col).sort((a, b) => a - b),
+        cells: [...row.cells].sort((a, b) => a.col - b.col),
         merges: merges.inRow(cellSourceRow(row, cell)),
         colStart: edges.col,
         lastCol: MAX_COLS - 1,
@@ -692,9 +695,16 @@ export function renderSheet(
       const hh = rng ? edges.row(rng.maxRow + 1) - y : h
       // Collapsed (authored-hidden) rows/columns produce no fill or text (spec §5.3).
       if (!(w > 0 && hh > 0) || !intersects(x, y, w, hh)) continue
-      const border = paintCellBody(ctx, sheet, cell, x, y, w, hh, measured, extent, rng ? { left: 0, right: 0 } : overflowFor(cell))
-      if (border) paintBorders.push(border)
+      // Fills go down now; text after every fill, so overflow into an empty
+      // formatted neighbour stays visible (Excel draws it over the fill).
+      const layout = layoutCellBody(ctx, sheet, cell, x, y, w, hh, measured, rng ? NO_OVERFLOW : overflowFor(cell))
+      paintCellLayout(ctx, layout, extent, 'fill')
+      laidOut.push(layout)
     }
+  }
+  for (const layout of laidOut) {
+    const border = paintCellLayout(ctx, layout, extent, 'content')
+    if (border) paintBorders.push(border)
   }
 
   // grid lines, with merged interiors masked out. A vertical boundary at
@@ -853,21 +863,6 @@ function staticMergeIndex(ranges: readonly XlsxMergeRange[]) {
   }
 }
 
-/** Fill, text and (deferred) border of one cell box, shared by the static and
- * interactive paths so both lay a cell out identically. Borders stay inside
- * `extent` (the bitmap for static output, the logical sheet for the viewer). */
-function paintCellBody(
-  ctx: CanvasRenderingContext2D,
-  sheet: XlsxSheet,
-  cell: XlsxCell,
-  x: number, y: number, w: number, hh: number,
-  measured: MeasureCached,
-  extent: { width: number; height: number },
-  overflow?: OverflowAllowance,
-): (() => void) | undefined {
-  return paintCellLayout(ctx, layoutCellBody(ctx, sheet, cell, x, y, w, hh, measured, overflow), extent)
-}
-
 /** Host formatting and text layout of one cell in the box (x, y, w, hh): the
  * single source of a cell's display text and geometry for both paths. */
 /** @internal */
@@ -892,18 +887,26 @@ export function layoutCellBody(
   let font = fontAt(baseSize)
   // Shrink-to-fit keeps full General precision and scales the font instead.
   const fitsGeneral = !rotated && !shrinkable ? (text: string) => measured(font, text) <= inner : undefined
-  const formatted = renderCellText(cell.value, cell.style, sheet.semantics, sheet, fitsGeneral)
+  let generalNoFit = false
+  const formatted = renderCellText(cell.value, cell.style, sheet.semantics, sheet, fitsGeneral, () => { generalNoFit = true })
   let style = cell.style
   if (shrinkable && formatted !== '') {
+    // Never larger than authored. Above the floor the text fits; at the floor a
+    // number shows '#' and text is held to its own cell — it never spills.
     const size = shrunkFontSize(baseSize, inner, size => measured(fontAt(size), formatted))
-    // Below the minimum a number falls back to '#' at its own size; text stays at the minimum.
-    if (size !== baseSize && (size >= MIN_SHRINK_FONT_PT || typeof cell.value !== 'number')) {
-      const used = Math.max(size, MIN_SHRINK_FONT_PT)
-      font = fontAt(used)
-      style = { ...cell.style!, fontSizePt: used }
+    if (size < baseSize) {
+      if (size >= MIN_SHRINK_FONT_PT) {
+        font = fontAt(size)
+        style = { ...cell.style!, fontSizePt: size }
+      } else if (typeof cell.value !== 'number') {
+        const floor = Math.min(baseSize, MIN_SHRINK_FONT_PT)
+        font = fontAt(floor)
+        style = { ...cell.style!, fontSizePt: floor }
+        overflow = NO_OVERFLOW
+      }
     }
   }
-  const text = numericOverflowText(cell, formatted, font, w, measured)
+  const text = numericOverflowText(cell, formatted, font, w, measured, generalNoFit)
   out.formattedText = text
   if (text !== '') {
     const color = style?.color ? resolveColor(style.color) : '#000000'
@@ -971,25 +974,28 @@ function overflowBand(x: number, w: number, tx: number, textW: number, overflow:
  * Only the painted string changes: cellDisplayText (find, accessible value)
  * keeps the real formatted value.
  */
-function numericOverflowText(cell: XlsxCell, text: string, font: string, w: number, measured: MeasureCached): string {
+function numericOverflowText(cell: XlsxCell, text: string, font: string, w: number, measured: MeasureCached, generalNoFit: boolean): string {
   if (typeof cell.value !== 'number' || text === '' || cell.valueIsError) return text
   const style = cell.style
   if (style?.wrapText === true || cellTextRotation(style?.textRotation) !== undefined) return text
-  if (style?.formatCode?.includes('@')) return text
+  // Eligibility comes from the value type and the SELECTED format section, not
+  // from the output string: a number shown through an '@' section is text.
+  if (style?.formatCode !== undefined && numericSectionIsText(cell.value, style.formatCode)) return text
   const inner = Math.max(0, w - PADDING_L - PADDING_R)
-  if (text !== '#' && measured(font, text) <= inner) return text
+  if (!generalNoFit && measured(font, text) <= inner) return text
   const glyph = measured(font, '#')
   return '#'.repeat(Math.max(1, glyph > 0 ? Math.floor(inner / glyph) : 1))
 }
 
 /** Replay one cell layout at its own coordinates; returns the deferred border. */
 /** @internal */
-export function paintCellLayout(ctx: CanvasRenderingContext2D, layout: CellBodyLayout, extent: { width: number; height: number }): (() => void) | undefined {
+export function paintCellLayout(ctx: CanvasRenderingContext2D, layout: CellBodyLayout, extent: { width: number; height: number }, phase: 'all' | 'fill' | 'content' = 'all'): (() => void) | undefined {
   const { x, y, w, h: hh } = layout
-  if (layout.fill) {
+  if (layout.fill && phase !== 'content') {
     ctx.fillStyle = layout.fill
     ctx.fillRect(x, y, w, hh)
   }
+  if (phase === 'fill') return undefined
   const text = layout.text
   if (text) {
     ctx.fillStyle = text.color

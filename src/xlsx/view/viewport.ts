@@ -24,7 +24,7 @@ import { createSheetMetrics, type ProjectedSheetMetrics } from './projection'
 import { RectangleIndex } from './structure'
 import { cellSourceRow, drawingExtent } from './sheetCells'
 import { createIntervalSet } from './visibility'
-import { cellBlocksOverflow, textOverflowAllowance, type OverflowAllowance } from './textOverflow'
+import { NO_OVERFLOW, textOverflowAllowance, type OverflowAllowance, type RowOverflowInput } from './textOverflow'
 
 // Static-renderer helpers live in a leaf module so the eager static path never
 // reaches the viewport planner; re-exported for existing callers.
@@ -186,6 +186,22 @@ export interface SheetGeometry {
   /** Top-level drawings touching a logical CSS box, in authored paint order, or null
    * when their node weight or the index walk exceeds `budget` records. */
   drawingsIn(left: number, top: number, right: number, bottom: number, budget: number): readonly XlsxDrawing[] | null
+}
+/** One source row's overflow occupancy: its populated cells (ascending) and
+ * the merged ranges crossing it, against the real column axis and edges. */
+export function rowOverflowInput(geometry: SheetGeometry, sourceRow: number): RowOverflowInput {
+  const metrics = geometry.metrics
+  return {
+    cells: geometry.cellsOf(sourceRow) ?? [],
+    merges: isValidCoordinate(sourceRow, 0) ? geometry.merges.collect({ r0: sourceRow, r1: sourceRow, c0: 0, c1: MAX_COLS - 1 }) : [],
+    colStart: (col: number) => metrics.cols.start(col),
+    lastCol: metrics.cols.logicalCount - 1,
+  }
+}
+/** The overflow allowance the painter gives one cell (find geometry reuses it). */
+export function cellTextOverflow(geometry: SheetGeometryResult | undefined, source: SourceCell): OverflowAllowance | undefined {
+  if (geometry?.kind !== 'ready') return undefined
+  return textOverflowAllowance(rowOverflowInput(geometry, source.row), source.col)
 }
 export type SheetGeometryResult =
   | SheetGeometry
@@ -762,7 +778,7 @@ function detailPlan(geometry: SheetGeometry, viewport: LogicalViewport, limits: 
     const at = anchor ? firstCellAtOrAfter(anchor, range.minCol) : -1
     // An anchor whose own row/column lies outside the window still owns the merged paint.
     if (anchor && at < anchor.length && anchor[at].col === range.minCol) {
-      cells.push({ cell: anchor[at], source: { row: range.minRow, col: range.minCol }, slot: range.minRow, ...placement, merge: range, overflow: { left: 0, right: 0 } })
+      cells.push({ cell: anchor[at], source: { row: range.minRow, col: range.minCol }, slot: range.minRow, ...placement, merge: range, overflow: NO_OVERFLOW })
     }
   }
   const locator = new MergeLocator(covering, c0, c1)
@@ -772,19 +788,10 @@ function detailPlan(geometry: SheetGeometry, viewport: LogicalViewport, limits: 
     if (!rowCells) continue
     const top = metrics.rows.start(slot), rowHeight = metrics.rows.size(slot)
     const end = firstCellAtOrAfter(rowCells, c1 + 1), begin = firstCellAtOrAfter(rowCells, c0)
-    // Text overflow (S13): occupancy inside the fetched envelope [c0, c1];
-    // beyond it the pane is never reached, so the room there is unbounded.
-    let occupancy: Parameters<typeof textOverflowAllowance>[0] | undefined
-    const overflowAt = (col: number): OverflowAllowance => {
-      occupancy ??= {
-        occupied: rowCells.slice(begin, end).filter(cellBlocksOverflow).map(cell => cell.col),
-        merges: covering.filter(range => range.minRow <= source && source <= range.maxRow),
-        colStart: (c: number) => metrics.cols.start(c),
-        lastCol: metrics.cols.logicalCount - 1,
-        knownFrom: c0, knownTo: c1,
-      }
-      return textOverflowAllowance(occupancy, col)
-    }
+    // Text overflow (S13): the row's real occupancy, the same input find
+    // highlight geometry uses (rowOverflowInput), built once per row.
+    let occupancy: RowOverflowInput | undefined
+    const overflowAt = (col: number): OverflowAllowance => textOverflowAllowance(occupancy ??= rowOverflowInput(geometry, source), col)
     for (let index = begin; index < end; index++) {
       const item = rowCells[index]
       const col = item.col

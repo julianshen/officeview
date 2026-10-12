@@ -371,7 +371,9 @@ The harness fix (`6dd5240`) waits up to 30 s for a settled name and asserts that
     - it measures with the same font string the cell paints with;
     - the cell gets ⌊interior / width("#")⌋ `#`s, and at least one;
     - General keeps its order (fewer decimals, then scientific), and its "nothing fits" result now fills the cell too.
-  - Unchanged: text cells (which still overflow), `@`-formatted values, booleans, errors, wrapped and rotated cells. Shrink-to-fit is not parsed, so it cannot be exempted. The accessible and find value (`cellDisplayText`) stays the real value.
+  - Unchanged: text cells, booleans, errors, wrapped and rotated cells, and numbers shown through a text (`@`) section. The accessible and find value (`cellDisplayText`) stays the real value.
+  - At `3b759df` shrink-to-fit was not yet parsed. It is now (see below), and a shrink-to-fit number reaches `#` only when even the floor size does not fit.
+  - Since review round 3, `#` eligibility comes from the value type and the **selected** format section (`numericSectionIsText` in `formula/format.ts`), not from the output string. General's "nothing fits" outcome is a separate signal, so an authored literal `"#"` or `\#` paints as written.
   - Tests: `tests/xlsx-number-overflow.test.ts`, covering dates, times, negative numbers, percentages, General, a 1-glyph column, text and accessible value. It failed first with, e.g., `expected [ '2023-06-02' ] to deeply equal [ '########' ]`.
   - Two format tests now render with wide columns or narrower fake glyphs, so they keep asserting formats rather than overflow.
   - **Golden:** corpus compare after hydrating with `bun scripts/fetch-corpus.ts` changed exactly one XLSX golden: `poi-64508.xlsx.0` (2,720 / 44,800 px). Its `dd.mm.yyyy` date column used to spill garbled digits into the next column and now shows `######` in the cell. Re-recorded.
@@ -396,9 +398,26 @@ The harness fix (`6dd5240`) waits up to 30 s for a settled name and asserts that
   - Tests (same file): numbers, dates, text, text that already fits, the below-minimum `#`, and the accessible value.
 - **Goldens for these two rules:** after the fixes, the corpus compare changed three XLSX goldens, all re-recorded. In each, overlapping text from a cell is now clipped at its non-empty neighbour, as Excel does:
   - `poi-59021.xlsx.0` (1,004 / 20,480 px): "Abkhazia - Fixed" over "7840", and "10/02/2016" over F2, which holds an empty-string constant.
-  - `poi-64508.xlsx.0` (3,519 / 44,800 px): headers and "SI33738504"/"04656-2020"/barcodes over their neighbours.
+  - `poi-64508.xlsx.0` (3,519 / 44,800 px): headers and "SI33738548"/"04656-2020"/barcodes over their neighbours.
   - `poi-xlsx-jdbc.xlsx.0` (1,080 / 7,680 px): "A Very large string in a column" over "foo"/"bar".
   - The same six docx/pptx goldens still differ exactly as on the base commit (unrelated).
+- **Review round 3 fixes (Codex):**
+  - **One overflow geometry.**
+    - A text record's clip is now the painted clip, translated from the box-local body; centered and right-aligned text included.
+    - Find highlight geometry rebuilds the record with the same allowance the painter used (`viewport.cellTextOverflow`, which uses `rowOverflowInput` on the row's real cells and merges). It then intersects highlight rectangles with that clip.
+    - A match whose ink is fully clipped stays a hit and highlights its own cell.
+    - The viewer no longer uses an envelope: allowances end at the real worksheet edges (A and XFD).
+  - **Shrink-to-fit** never enlarges an authored size. At the 4 pt floor, numbers show `#` and text is held to its own cell; it never spills.
+  - **Fill, justify, distributed and center-across-selection alignments** never overflow (`alignmentOverflows`).
+  - **Paint order.** The static renderer and the viewer paint every fill first, then text and borders. Overflow into an empty formatted neighbour is drawn over its fill, as Excel does. The viewer test checks for text ink inside a yellow empty B1.
+  - **Selection wording and cardinality.**
+    - Extending a header selection announces "selected columns A:C" or "selected rows 2:3", plus any additional ranges.
+    - Cardinality uses each row-set's own count (intervals, list, bitset, ref), so a one-cell bitset stays quiet.
+  - **Implicit cell positions** (found while checking the paint-order change). The resident parser placed every `<c>` without `r` at A1 and every `<row>` without `r` at row 1, stacking the cells on top of each other. It now follows Excel: a ref-less row follows the previous row, and a ref-less cell follows the previous cell of its row (`tests/xlsx-implicit-refs.test.ts`).
+    - One existing assertion that pinned the legacy row index (0) for a ref-less row moved to Excel's position (1); its cell's explicit reference and the inconsistency diagnostic are unchanged.
+    - The streaming (worker) parser already refuses ref-less cells with a visible "unsupported" outcome.
+    - **Golden re-recorded:** `poi-59746_NoRowNums.xlsx.0`, the POI fixture for exactly this case. It was 64×20 px showing one garbled A1 cell and is now 704×300 px showing its 15×11 table.
+    - The three goldens above are unchanged by the round-3 fixes. The same six docx/pptx goldens still differ exactly as on base.
 
 ## Blocking for release
 
