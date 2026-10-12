@@ -118,7 +118,8 @@ Every package is implemented on its own branch, reviewed by at least one agent f
 | S9.2 copy in displayed order and budgeted static print (`copy.ts`, `viewerControlsClient.ts`, clipboard/print policy) | merged (codex implementation; opencode reviews over two rounds); copy works on resident sheets — paged sheets wait for S5.4 |
 | S8.4 performance threshold freeze (`performance-profile.json`, harness kernel scenarios, `docs/validation/interactive-viewer-performance.md`) | merged; thresholds frozen at spec; sort misses carried by S8.6 |
 | S5.4 worker-backed interactive viewer for paged workbooks (`viewerRemoteSource.ts`, `pagedWorkbook.ts`, `pagedGeometry.ts`, `pagedFormatting.ts`, worker `read` command, paged filter evaluator) | merged (Claude implementation; codex round 1, opencode round 2, APPROVE); needs a host-supplied `viewerWorker` |
-| S3.3 (parser structural metadata, added 2026-10-12), S8.6 (sort performance, in progress), S10.1 (in review), S10.2/S10.3 (physical-device receipts skipped for now by user decision), S11/S12 status, S13 | not started / in progress as noted |
+| S10.1 end-to-end functional and complexity audit (`docs/validation/interactive-viewer.md`, browser e2e, complexity ledger) | merged; 7 release-blocking items listed in the evidence matrix |
+| S3.3 (parser structural metadata, added 2026-10-12, in review), S8.6 (sort performance, in progress), S10.2/S10.3 (physical-device receipts skipped for now by user decision), S11/S12 status, S13 | not started / in progress as noted |
 
 ## S0 — Freeze contracts, counterexamples and fixture/harness infrastructure
 
@@ -640,14 +641,16 @@ expect(wide.contains({ row: 2, col: 0 })).toBe(false)
 
 ### S10.1 End-to-end functional and complexity audit
 
+> **Status (2026-10-12):** merged (Claude implementation; opencode reviews over two rounds, every finding fixed, final verdict APPROVE). Five reproduced gaps fixed (structural snapshot re-query while importing, range-detection read-ahead for cursorless scans, header clicks after Go To, filter popup bounded to the pane, sub-detail rows keep the grid's a11y tree). Evidence matrix `docs/validation/interactive-viewer.md`: 34 cases — 17 pass, 9 pass with a step not run, 6 partial, 2 not run, 0 fail. Blocking: drawing/dynamic-array metadata (S3.3), a11y receipts (S10.3), performance/memory/lifecycle and backend allowance (S10.2/S11), native Excel checkpoint (manual; automation only under a dedicated macOS user or VM), full-scale F2/F3/F4 browser runs.
+
 **Files:** expand `tests/browser/interactive-viewer.spec.ts`, `tests/xlsx-viewer-complexity.test.ts`; maintain fixture manifest; create `docs/validation/interactive-viewer.md`.
 
-- [ ] RED: encode F1 navigation/find/copy→sort/filter→clear, F2 sort/filter/cancel, F3 horizontal recenter/headers, F4 first/reopen/searched Select All, F5 giant merge/spill/drawing refusal, F7 same revision races/reload/fonts and F6 geometry window. The F6 test is not a whole-data sort performance claim.
-- [ ] Run `bunx vitest run tests/xlsx-viewer-complexity.test.ts` and `bunx playwright test --config playwright.viewer.config.ts`; expected failures surface unfinished full-domain paths, stale records or unbounded visit counts.
-- [ ] GREEN: fix only reproduced gaps. Audit absence of dense `R×C` allocation, per-blank-row/cell objects, all-column scans per row, full-sheet canvases, merge coverage maps, per-command workbook clone/reparse and lossy bitwise coordinate IDs. Instrument query/copy/transfer/layout counts meaningfully rather than tests mirroring implementation.
+- [x] RED: encode F1 navigation/find/copy→sort/filter→clear, F2 sort/filter/cancel, F3 horizontal recenter/headers, F4 first/reopen/searched Select All, F5 giant merge/spill/drawing refusal, F7 same revision races/reload/fonts and F6 geometry window. The F6 test is not a whole-data sort performance claim.
+- [x] Run `bunx vitest run tests/xlsx-viewer-complexity.test.ts` and `bunx playwright test --config playwright.viewer.config.ts`; expected failures surface unfinished full-domain paths, stale records or unbounded visit counts.
+- [x] GREEN: fix only reproduced gaps. Audit absence of dense `R×C` allocation, per-blank-row/cell objects, all-column scans per row, full-sheet canvases, merge coverage maps, per-command workbook clone/reparse and lossy bitwise coordinate IDs. Instrument query/copy/transfer/layout counts meaningfully rather than tests mirroring implementation.
 - [ ] Verify real XLSX corner fixture plus synthetic fully populated provider; compare both source adapters and native Excel cache/error/date/hidden/table examples. Record native workbook source/checkpoint/screenshots and absence of repair warnings; observational UI is not a code-test receipt.
 - [ ] Run focused failures again, then standard gates and browser suite; expected all required cases pass with reviewed goldens and retained protections/non-XLSX behavior.
-- [ ] Deliver independent functional/complexity evidence matrix by requirement ID and fixture; incomplete mandatory cases block release.
+- [x] Deliver independent functional/complexity evidence matrix by requirement ID and fixture; incomplete mandatory cases block release.
 
 ### S10.2 Real-browser performance, memory and device gate
 
