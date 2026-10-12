@@ -84,6 +84,12 @@ test.describe('S10.3 capability fallbacks', () => {
     await expect(line).toContainText('This sheet could not be fully loaded: browser storage quota exceeded while writing a source page', { timeout: 60_000 })
     await expect(line).toContainText('(incomplete)')
     await expect(line).not.toContainText('complete body')
+    await expect(line).toContainText('Free some browser storage for this site (or use a smaller file), then reopen the file.')
+    // The ended import is terminal: no further structural polling.
+    const structural = () => page.evaluate(() => window.__viewerE2E!.counts()['read:structural'] ?? 0)
+    const settled = await structural()
+    await page.waitForTimeout(3000)
+    expect(await structural()).toBe(settled)
   })
 
   test('without a viewer worker a large file is labelled compatibility mode', async ({ page }) => {

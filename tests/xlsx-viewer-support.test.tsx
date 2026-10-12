@@ -16,7 +16,7 @@
  *   the viewer still paints and keeps its owned grid.
  */
 import { describe, expect, it, vi } from 'vitest'
-import { act, render, waitFor } from '@testing-library/react'
+import { act, fireEvent, render, waitFor } from '@testing-library/react'
 import InteractiveSheetDoc, { type SheetFrameStats } from '../src/components/xlsx/InteractiveSheetDoc'
 import { prepareSheetAssets } from '../src/components/xlsx/sheetAssets'
 import type { XlsxDocument } from '../src/xlsx/types'
@@ -71,5 +71,29 @@ describe('font load failure', () => {
     expect(leases[0].fontDiagnostics).toEqual([expect.objectContaining({ kind: 'font-load-failed', family: 'Brand Sans' })])
     expect(ui.getByRole('gridcell', { name: /^B2, value 11/ })).toBeTruthy()
     expect(ui.getByRole('status').textContent).not.toMatch(/Loading sheet/)
+    // Retained, deduplicated font diagnostic on the status surface (§9.1).
+    await waitFor(() => expect(ui.getByRole('status').textContent).toMatch(/Font not available, shown with a fallback: Brand Sans/))
+  })
+
+  it('font notices are bounded: three families named, the rest counted, duplicates once', async () => {
+    const doc = workbook()
+    const face = (family: string, variant: 'regular' | 'bold') => ({ family, variant, partPath: `xl/fonts/${family}-${variant}.odttf`, relationshipId: 'rId1', bytes: new Uint8Array(16) })
+    doc.embeddedFonts = [face('F1', 'regular'), face('F1', 'bold'), face('F2', 'regular'), face('F3', 'regular'), face('F4', 'regular'), face('F5', 'regular')]
+    const assetLoader: typeof prepareSheetAssets = (d, options) => prepareSheetAssets(d, { ...options, registerFont: async () => { throw new Error('nope') } })
+    const ui = render(<InteractiveSheetDoc doc={doc} {...({ assetLoader } as object)} />)
+    await waitFor(() => expect(ui.getByRole('status').textContent).toMatch(/Fonts not available, shown with a fallback: F1, F2, F3 and 2 more/))
+    expect(ui.getByRole('status').textContent!.match(/F1/g)).toHaveLength(1)
+  })
+})
+
+describe('popup accessible names', () => {
+  it('the filter popup is "Column filter" and the sort popup is "Sort worksheet"', async () => {
+    const ui = render(<InteractiveSheetDoc doc={workbook()} />)
+    fireEvent.click(await waitFor(() => ui.getByRole('button', { name: /^Filter column A/ })))
+    expect((await waitFor(() => ui.getByRole('dialog'))).getAttribute('aria-label')).toBe('Column filter')
+    fireEvent.keyDown(ui.getByRole('dialog'), { key: 'Escape' })
+    await waitFor(() => expect(ui.queryByRole('dialog')).toBeNull())
+    fireEvent.click(ui.getByRole('button', { name: 'More sort options for A' }))
+    expect((await waitFor(() => ui.getByRole('dialog'))).getAttribute('aria-label')).toBe('Sort worksheet')
   })
 })

@@ -43,6 +43,12 @@ function lower(values: ArrayLike<number>, target: number, from = 0, to = values.
   return lo
 }
 
+/** A failure of an import that has ended: the import's own retryable flag
+ * means "reopening may succeed"; re-reading this source never can. */
+function ended(failure: SourceFailure | undefined): SourceFailure | undefined {
+  return failure && failure.retryable ? Object.freeze({ ...failure, retryable: false }) : failure
+}
+
 export class PagedXlsxSheetAdapter implements SourceStore {
   readonly valuePolicy: ValuePolicy = 'cached'
   private released = false
@@ -66,7 +72,7 @@ export class PagedXlsxSheetAdapter implements SourceStore {
   private guard(options: ReadOptions): SourceFailure | undefined {
     if (this.released) return failure('stale-source', 'Source released')
     // Abandoned or closed pages are gone: nothing may read as blank from here on.
-    if (!this.workbook.store.live) return this.workbook.failure ?? failure('stale-source', 'Source pages were released')
+    if (!this.workbook.store.live) return ended(this.workbook.failure) ?? failure('stale-source', 'Source pages were released')
     if (options.signal?.aborted) return failure('cancelled', 'Request cancelled')
     if (!options.stamp || !sameStamp(options.stamp, this.stamp)) return failure('stale-source', 'Source owner changed', true)
     return undefined
@@ -74,7 +80,7 @@ export class PagedXlsxSheetAdapter implements SourceStore {
   private status(row: number): RowStatus {
     if (row <= this.sheet.importedThroughRow) return { kind: 'ready' }
     if (this.sheet.state === 'incomplete' || this.workbook.completeness === 'incomplete') {
-      return { kind: 'error', failure: this.sheet.failure ?? this.workbook.failure ?? failure('incomplete', 'The import did not finish') }
+      return { kind: 'error', failure: ended(this.sheet.failure ?? this.workbook.failure) ?? failure('incomplete', 'The import did not finish') }
     }
     return { kind: 'unknown', pageId: `${this.sheet.sheetId}:pending:${this.sheet.importedThroughRow + 1}` }
   }

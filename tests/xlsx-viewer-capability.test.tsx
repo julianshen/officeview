@@ -17,6 +17,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { act, cleanup, fireEvent, render, waitFor } from '@testing-library/react'
 import { OfficeFile } from '../src/components/OfficeFile'
 import { ViewerKernel } from '../src/worker/viewerKernel'
+import { RemoteWorkbook } from '../src/worker/viewerRemoteSource'
 import { OfficePackage } from '../src/core/zip'
 import { parseXlsx } from '../src/xlsx/parse'
 import type { WorkerCommand, WorkerReply } from '../src/xlsx/view/contracts'
@@ -89,6 +90,8 @@ describe('storage quota denied during the worker import', () => {
     await waitFor(() => expect(status()).toMatch(/browser storage quota exceeded while writing a source page/), { timeout: 4000 })
     expect(status()).toMatch(/\(incomplete\)/)
     expect(status()).not.toMatch(/complete body/)
+    // The recovery path is stated: the import ended and removed its pages.
+    expect(status()).toMatch(/Free some browser storage for this site \(or use a smaller file\), then reopen the file\./)
   }, 10_000)
 })
 
@@ -109,5 +112,56 @@ describe('Esc cancels a pending copy (spec §9.3 fall-through)', () => {
     fireEvent.keyDown(cancel, { key: 'Escape' })
     await waitFor(() => expect(ui.queryByRole('button', { name: 'Cancel copy' })).toBeNull(), { timeout: 2000 })
     expect(ui.container.textContent).toMatch(/Copy cancelled\./)
+  })
+})
+
+/** A RemoteWorkbook over a scripted client: structural reads answer by `mode`. */
+function scriptedRemote() {
+  let mode: 'loading' | 'complete' | 'quota' = 'loading', next = 0
+  const commands: string[] = []
+  const stamp = { docId: 'd', sheetId: 's', valueGen: 0 }, layout = { rowOverrides: [], colOverrides: [], hidden: [] }
+  const client = {
+    nextRequestId: () => String(++next), dispose: () => {}, onProgress: () => () => {},
+    send: async (command: { kind: string; query?: { op: string; rect?: unknown } }) => {
+      commands.push(command.query?.op ?? command.kind)
+      if (command.kind === 'close') return { kind: 'complete', diagnostics: [] }
+      const op = command.query!.op
+      if (op === 'layout') return { kind: 'complete', diagnostics: [], result: { kind: 'read', result: { op, layout } } }
+      const result: Record<string, unknown> = { stamp, merges: [], tables: [], spills: [], drawings: [], completeness: mode === 'complete' ? 'complete' : mode === 'loading' ? 'loading' : 'incomplete', missing: mode === 'complete' ? [] : [command.query!.rect] }
+      // A worker that still flags the ended import's quota failure retryable.
+      if (mode === 'quota') result.error = { code: 'quota', retryable: true, message: 'quota ended import' }
+      return { kind: 'complete', diagnostics: [], result: { kind: 'read', result: { op, result } } }
+    },
+  }
+  const book = new RemoteWorkbook(client as never, { docId: 'd', valuePolicy: 'engine', sheets: [{ sheetId: 's', name: 'S' }], diagnostics: [], layouts: new Map([['s', layout]]) } as never)
+  return { book, commands, set: (value: typeof mode) => { mode = value } }
+}
+
+describe('RemoteWorkbook load state', () => {
+  afterEach(() => { vi.useRealTimers() })
+
+  it('a storage failure that ended the import stops structural polling (no reread can recover it)', async () => {
+    vi.useFakeTimers()
+    const r = scriptedRemote()
+    r.set('quota')
+    r.book.loadState('s')
+    await vi.advanceTimersByTimeAsync(0)
+    await vi.advanceTimersByTimeAsync(5000)
+    expect(r.commands.filter(op => op === 'structural')).toHaveLength(1)
+    expect(r.book.loadState('s')).toEqual({ completeness: 'incomplete', failure: 'quota ended import', code: 'quota' })
+    await r.book.close()
+  })
+
+  it('loading -> complete notifies subscribers even when layout and merges are unchanged', async () => {
+    vi.useFakeTimers()
+    const r = scriptedRemote(), notify = vi.fn()
+    r.book.subscribe(notify)
+    expect(r.book.loadState('s').completeness).toBe('loading')
+    await vi.advanceTimersByTimeAsync(0)
+    r.set('complete')
+    await vi.advanceTimersByTimeAsync(500)
+    expect(r.book.loadState('s').completeness).toBe('complete')
+    expect(notify).toHaveBeenCalledTimes(1)
+    await r.book.close()
   })
 })

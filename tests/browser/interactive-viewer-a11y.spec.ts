@@ -277,18 +277,35 @@ test.describe('S10.3 accessibility tree (Chromium AX layer over CDP)', () => {
         headerIndex: header.getAttribute('aria-rowindex'),
         corner: header.querySelector('[role=columnheader]')?.getAttribute('aria-colindex'),
         colIndex: [...header.querySelectorAll('[role=columnheader]')].slice(1, 4).map(h => [h.getAttribute('aria-label')?.split(';')[0], h.getAttribute('aria-colindex')]),
-        bodyRows: body.slice(0, 12).map(r => [r.getAttribute('aria-rowindex'), label(r), r.querySelector('[role=rowheader]')?.getAttribute('aria-colindex'), r.querySelector('[role=gridcell]')?.getAttribute('aria-colindex')]),
+        bodyRows: body.map(r => [r.getAttribute('aria-rowindex'), label(r), r.querySelector('[role=rowheader]')?.getAttribute('aria-colindex'), r.querySelector('[role=gridcell]')?.getAttribute('aria-colindex'), r.querySelector('[role=gridcell][aria-colindex="2"]')?.getAttribute('aria-label') ?? null]),
         duplicates: body.length - new Set(body.map(r => r.getAttribute('aria-rowindex'))).size,
         sorted: [...header.querySelectorAll('[aria-sort]')].map(h => [h.getAttribute('aria-label'), h.getAttribute('aria-sort')]),
       }
     })
     expect(dom).toMatchObject({ rowcount: '1048577', colcount: '16385', headerIndex: '1', corner: '1', duplicates: 0 })
     expect(dom.colIndex).toEqual([['Column A', '2'], ['Column B', '3'], ['Column C', '4']])
-    // Body rows: aria-rowindex = displaySlot + 2, row label = displaySlot + 1, rowheader col 1, first cell col 2.
-    for (const [index, label, headerCol, firstCol] of dom.bodyRows) {
-      expect(Number(index)).toBe(Number(label!.replace('Row ', '')) + 1)
+    // Fixture-derived expectations (f7 sheet A, score ascending = id descending).
+    // Body ids 1..40 sit in source rows 2..41; source row 8 (id 7) is authored-hidden
+    // and keeps its display slot 7, so slot 7 is a gap; slots 1-6 hold ids 40..35 and
+    // slots >= 8 hold ids 34, 33, ... The 0.75pt row (id 9) sorts to slot 33, outside
+    // this viewport. aria-rowindex = DisplaySlot + 2 and the label Row DisplaySlot + 1
+    // — VisibleRank indexing would close the gap and shift every row after it.
+    const expected = (slot: number) => {
+      const id = slot <= 6 ? 41 - slot : 42 - slot
+      return { index: String(slot + 2), label: `Row ${slot + 1}`, cellA: `A${slot + 1}, value ${id}; original A${id + 1}` }
+    }
+    const indices = dom.bodyRows.map(([index]) => Number(index))
+    expect(indices).toContain(8) // slot 6
+    expect(indices).toContain(10) // slot 8
+    expect(indices).not.toContain(9) // slot 7: the pinned hidden source row 8
+    for (const [index, label, headerCol, firstCol, cellA] of dom.bodyRows) {
+      const slot = Number(index) - 2
       expect(headerCol).toBe('1')
       expect(firstCol).toBe('2')
+      if (slot === 0) { expect(label).toBe('Row 1'); continue } // the protected header row
+      const want = expected(slot)
+      expect([index, label]).toEqual([want.index, want.label])
+      expect(cellA).toBe(want.cellA)
     }
     expect(dom.sorted).toEqual([['Column B; sort priority 1, ascending', 'ascending']])
     console.log(`[a11y-evidence] chromium AX: 1 grid "Worksheet A" (focused, multiselectable), rows=${rows.length}, columnheaders=${colHeaders.length}, rowheaders=${rowHeaders.length}, gridcells=${cells.length}, selected=4, activedescendant="${activeNode!.name?.value}", live=polite/atomic; DOM rowcount/colcount=${dom.rowcount}/${dom.colcount}, sorted=${JSON.stringify(dom.sorted)}`)

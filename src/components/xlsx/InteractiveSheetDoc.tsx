@@ -36,7 +36,7 @@ import {
   createScrollWindow, navigateTo as scrollNavigateTo, refreshScrollWindow, scrollPhysicalTo, setScrollZoom, visibleLogicalViewport, type ViewportSize,
 } from '../../xlsx/view/scrollWindow'
 import { keyboardSheetZoom, pinchSheetZoom, wheelSheetZoom } from '../../xlsx/view/sheetZoom'
-import { SheetNavigationSession, emptyGridSelection, navigateSelection, recordCounts } from '../../xlsx/view/selection'
+import { SheetNavigationSession, emptyGridSelection, navigateSelection, recordCounts, boundedSelectionText } from '../../xlsx/view/selection'
 import { FIND_PAGE_HITS, FindController, hitGeometry, navigateToHit, type FindHit, type FindInput, type FindOptions, type FindPublication } from '../../xlsx/view/find'
 import { LayoutCache } from '../../xlsx/view/textLayout'
 import { cellDisplayText } from '../../xlsx/render'
@@ -46,6 +46,7 @@ import { BITMAP_BUDGETS, type TileCacheStats } from '../../xlsx/view/tileCache'
 import { gridGeometryToViewport, gridSelectionOverlay, paintGridSelectionOverlay, paintSearchOverlay, type HighlightRect } from '../../core/overlay'
 import { normalizeWatermark, type WatermarkOptions } from '../../core/watermark'
 import type { FallbackFontsOptions } from '../../core/fonts/fallback'
+import type { FontDiagnostic } from '../../core/fonts/types'
 import { SheetImageCache, imageBudgetFor, preparePrintUnits, prepareSheetAssets, type PrintUnitsOptions, type SheetAssetsLease } from './sheetAssets'
 import type { Paintable, PaintableArray } from '../../render/paint'
 import { GridSemantics, type GridTransition } from './GridSemantics'
@@ -137,6 +138,23 @@ function documentIdOf(doc: object): string {
   return id
 }
 export function sheetIdOf(sheet: XlsxSheet, index: number): string { return sheet.sheetId ?? String(index + 1) }
+
+/** The failed-load notice with its recovery path: a storage failure ended the
+ * import and removed its pages, so only reopening after freeing space helps. */
+function loadFailureNotice(message: string, code?: string): string {
+  const recovery = code === 'quota' || code === 'storage-error'
+    ? ' Free some browser storage for this site (or use a smaller file), then reopen the file.'
+    : ' Reopen the file to try again.'
+  return `This sheet could not be fully loaded: ${message}.${recovery}`
+}
+const MAX_FONT_NOTICE_FAMILIES = 3
+function fontNotice(diagnostics: readonly FontDiagnostic[]): string[] {
+  const families = [...new Set(diagnostics.map(d => d.family).filter((family): family is string => Boolean(family)))]
+  if (!families.length) return []
+  const named = families.slice(0, MAX_FONT_NOTICE_FAMILIES).map(family => boundedSelectionText(family)).join(', ')
+  const more = families.length > MAX_FONT_NOTICE_FAMILIES ? ` and ${families.length - MAX_FONT_NOTICE_FAMILIES} more` : ''
+  return [`Font${families.length === 1 ? '' : 's'} not available, shown with a fallback: ${named}${more}`]
+}
 
 export default function InteractiveSheetDoc(props: InteractiveSheetDocProps): ReactElement {
   const docId = props.source?.store(props.source.sheets[0].sheetId).stamp.docId ?? documentIdOf(props.doc)
@@ -680,6 +698,8 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
   const notices = [...new Set([...(doc.diagnostics ?? []).filter(d => d.feature !== SAVED_VALUES_DIAGNOSTIC && ['alternate-content-data', 'large-file-compatibility', 'possibly-damaged'].includes(d.feature)).map(d => d.message), ...(source.openDiagnostics ?? []).filter(d => d.code !== SAVED_VALUES_DIAGNOSTIC).map(d => d.message), ...(valueNotice ? [valueNotice] : [])])]
   // A worker-backed sheet is complete only once its import finished (LIFE-03).
   const loadState = remote?.loadState(activeSheetId)
+  // Retained font diagnostics (§9.1): bounded and deduplicated by family.
+  const fontNotices = fontNotice(assets && assets.sheetId === activeSheetId ? assets.lease.fontDiagnostics : [])
 
   // Overlay layer: selection and search highlights in viewport space.
   useLayoutEffect(() => {
@@ -973,9 +993,9 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
         <div ref={paneRef} data-testid="officeview-sheet-pane" style={{ position: 'relative', flex: '1 1 auto', minHeight: 0, overflow: 'hidden', background: '#ffffff' }}>
           {entry && scroll && (
             <GridSemantics owner={identity} projection={entry.metrics} view={entry.view} selection={selection} window={scroll} viewport={viewport}
-              body={entry.body} onChange={onGridChange} status={{ records: { ...snapshot(activeSheetId).records, completeness: loadState?.completeness ?? 'complete' }, countMode: 'body', loadReport: { status: 'ready', notices: loadState?.failure ? [...notices, `This sheet could not be fully loaded: ${loadState.failure}`] : notices } }}
+              body={entry.body} onChange={onGridChange} status={{ records: { ...snapshot(activeSheetId).records, completeness: loadState?.completeness ?? 'complete' }, countMode: 'body', loadReport: { status: 'ready', notices: [...notices, ...fontNotices, ...(loadState?.failure ? [loadFailureNotice(loadState.failure, loadState.code)] : [])] } }}
               onSortCycle={(col, shift) => void sortCycle(col, shift)} onFilter={(col, invoker) => { setPopup({ kind: 'filter', col, invoker }) }} onSortDialog={(col, invoker) => { setPopup({ kind: 'sort', col, invoker }) }} onNotice={setAnnouncement}
-              popup={popup && controls ? { invoker: popup.invoker, close: closePopup, content: popup.kind === 'filter' ? <FilterDropdown owner={identity} client={controls.client} applied={entry.view.filter} appliedSort={entry.view.sort} col={popup.col} invoker={popup.invoker} embedded onClose={closePopup} onApplied={() => rerender()} onNotice={setAnnouncement} /> : <SortDialog owner={identity} client={controls.client} applied={entry.view.sort} col={popup.col} invoker={popup.invoker} embedded onClose={closePopup} onApplied={() => rerender()} onNotice={setAnnouncement} /> } : undefined} announcement={[resourceNotice, assets?.sheetId !== activeSheetId ? 'Loading sheet…' : '', assets && assets.sheetId === activeSheetId && assets.lease.refusedImages > 0 ? `${assets.lease.refusedImages} picture${assets.lease.refusedImages === 1 ? ' is' : 's are'} not shown (image memory budget).` : '', selectionIncomplete ? 'Selection highlight is incomplete at this zoom; zoom in for detail.' : '', announcement].filter(Boolean).join(' ')} inspection={inspection} profile={profile} label={`Worksheet ${entry.sheet.name}`}
+              popup={popup && controls ? { invoker: popup.invoker, close: closePopup, label: popup.kind === 'filter' ? 'Column filter' : 'Sort worksheet', content: popup.kind === 'filter' ? <FilterDropdown owner={identity} client={controls.client} applied={entry.view.filter} appliedSort={entry.view.sort} col={popup.col} invoker={popup.invoker} embedded onClose={closePopup} onApplied={() => rerender()} onNotice={setAnnouncement} /> : <SortDialog owner={identity} client={controls.client} applied={entry.view.sort} col={popup.col} invoker={popup.invoker} embedded onClose={closePopup} onApplied={() => rerender()} onNotice={setAnnouncement} /> } : undefined} announcement={[resourceNotice, assets?.sheetId !== activeSheetId ? 'Loading sheet…' : '', assets && assets.sheetId === activeSheetId && assets.lease.refusedImages > 0 ? `${assets.lease.refusedImages} picture${assets.lease.refusedImages === 1 ? ' is' : 's are'} not shown (image memory budget).` : '', selectionIncomplete ? 'Selection highlight is incomplete at this zoom; zoom in for detail.' : '', announcement].filter(Boolean).join(' ')} inspection={inspection} profile={profile} label={`Worksheet ${entry.sheet.name}`}
               cellPresentation={at => {
                 const cell = cellAt(entry, at)
                 if (!cell && remote && !remote.store(activeSheetId).isKnown(at)) return { text: 'Loading…' }

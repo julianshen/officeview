@@ -134,7 +134,7 @@ export class RemoteWorkbook implements WorkbookSource {
   private statusRefresh = 0
   private closed = false
   /** Per sheet: the worker's import failure reported on structural reads (quota, storage, damaged part). */
-  private readonly failures = new Map<string, string>()
+  private readonly failures = new Map<string, { code: string; message: string }>()
 
   constructor(private readonly client: ViewerClient, open: RemoteOpen, private readonly onRelease: () => Promise<void> | void = () => {}) {
     this.docId = open.docId
@@ -227,33 +227,37 @@ export class RemoteWorkbook implements WorkbookSource {
     const result = await store.queryStructural({ r0: 0, r1: MAX_ROWS - 1, c0: 0, c1: MAX_COLS - 1 }, { signal: new AbortController().signal, stamp: store.stamp })
     if (this.closed) return
     if (result.completeness === 'complete') {
-      entry.state = 'done'
-      if (this.failures.delete(sheetId)) this.notify()
       // Structure completes with the sheet: its final row metadata and used
       // range replace the layout captured at open (a progressive import grows it).
       const layout = await this.fetchLayout(sheetId)
       if (this.closed) return
       const relaid = layout !== undefined && this.setLayout(sheetId, layout)
       if (result.merges.length) entry.merges = result.merges.map(merge => ({ minRow: merge.range.r0, maxRow: merge.range.r1, minCol: merge.range.c0, maxCol: merge.range.c1 }))
-      if (relaid || result.merges.length) { entry.gen++; this.notify() }
+      if (relaid || result.merges.length) entry.gen++
+      entry.state = 'done'
+      this.failures.delete(sheetId)
+      // The load state changed (loading -> complete) even when geometry did not.
+      this.notify()
       return
     }
     // Structure follows sheetData: wait for the import, unless it failed for good.
     // A failure the worker reports (even a retryable quota/storage one) is shown
     // at once: the sheet is incomplete, never an empty complete body (LIFE-03).
-    const code = result.error?.code
-    if (result.error && code !== 'incomplete' && code !== 'cancelled' && code !== 'stale-source' && this.failures.get(sheetId) !== result.error.message) {
-      this.failures.set(sheetId, result.error.message)
+    const error = result.error, code = error?.code
+    if (error && code !== 'incomplete' && code !== 'cancelled' && code !== 'stale-source' && this.failures.get(sheetId)?.message !== error.message) {
+      this.failures.set(sheetId, { code: error.code, message: error.message })
       this.notify()
     }
-    if (result.error && !result.error.retryable && result.error.code !== 'incomplete') { entry.state = 'done'; return }
+    // A page write that failed ended the import and abandoned its pages: no
+    // reread can recover (only reopening can), so polling stops here too.
+    if (error && code !== 'incomplete' && (!error.retryable || code === 'quota' || code === 'storage-error')) { entry.state = 'done'; return }
     entry.timer = setTimeout(() => { entry.timer = undefined; void this.loadStructure(sheetId) }, 500)
   }
   /** Load state of a sheet's source: complete once its structure has arrived;
    * incomplete with the worker's message once the import reported a failure. */
-  loadState(sheetId: string): { completeness: 'complete' | 'loading' | 'incomplete'; failure?: string } {
+  loadState(sheetId: string): { completeness: 'complete' | 'loading' | 'incomplete'; failure?: string; code?: string } {
     const failure = this.failures.get(sheetId)
-    if (failure !== undefined) return { completeness: 'incomplete', failure }
+    if (failure !== undefined) return { completeness: 'incomplete', failure: failure.message, code: failure.code }
     return { completeness: this.merges(sheetId) && this.structures.get(sheetId)?.state === 'done' ? 'complete' : 'loading' }
   }
   /** Replaces a sheet's layout; true when it changed. Callers bump the
