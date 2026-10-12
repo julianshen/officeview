@@ -10,6 +10,7 @@ import { CompactRowVisibility, createRowVisibility } from '../../xlsx/view/visib
 import { MemoryValueRunStore, VALUE_RUN_PAGE, type ValueRunStore } from '../../xlsx/view/valueRuns'
 import { StructuralIndex } from '../../xlsx/view/structure'
 import { DocumentSession, type OperationOutcome, type WorkbookSource, sameStamp } from '../../worker/viewerSession'
+import { DisplayTextLaneCache, needsDisplayText } from '../../worker/displayTextLane'
 import { createControlsClient, type ControlSnapshot, type ControlsClient, type StagedControl, type ControlProgress, sameControlOwner } from './controlsClient'
 
 /** Document-owned committed keys survive port eviction. Both indexes and runs
@@ -52,6 +53,9 @@ export interface ViewerControlsOptions {
   remote?: RemoteViewPort
   /** Resolved style of a style id when the document carries no cells (worker-backed sheets). */
   styleOf?: (index: number) => XlsxCell['style']
+  /** Display-text lane cache (S13.5; tests, embedders). Default: one per port,
+   * bounded by the desktop prepared-column budget, closed on dispose. */
+  displayLanes?: DisplayTextLaneCache
 }
 export type RemoteViewCommit =
   | { kind: 'committed'; view: Pick<SheetView, 'order' | 'filter' | 'sort'> & { visibility?: SheetView['visibility'] } }
@@ -80,15 +84,25 @@ export async function viewerControls(options: ViewerControlsOptions, signal: Abo
   const styleAt = (index: number) => options.styleOf ? options.styleOf(index) : styles.get(index)
   const classifications = new Map<string, ColumnClassification>()
   const scope = (owner: CacheIdentity, range: FilterRange, col: number) => JSON.stringify([owner.valueGen, range, col])
-  const prepared = (page: ValueLanePage, index: number): PreparedValue => {
+  // Display text comes from an on-demand lane (S13.5), present only for a text
+  // rule on a text/mixed column; classification and other rules read raw values.
+  const prepared = (page: ValueLanePage, index: number, displayText?: string): PreparedValue => {
     const tag = page.tags[index], value = page.numbers[index], style = styleAt(page.styles?.[index] ?? 0)
     if (tag === 5) return { kind: 'blank' }
     if (tag === 7) return { kind: 'unavailable' }
     if (tag === 4) return { kind: 'error', value: page.texts[index]! }
     if (tag === 2) return { kind: 'string', value: page.texts[index]! }
-    const displayText = cellDisplayText(sheet, { value: tag === 3 ? Boolean(value) : value, style })
     return tag === 3 ? { kind: 'boolean', value: Boolean(value), displayText } : { kind: 'number', value, displayText, numFmtId: style?.numFmtId, formatCode: style?.formatCode }
   }
+  const display = (page: ValueLanePage, index: number): string | undefined => {
+    const tag = page.tags[index]
+    if (tag === 5 || tag === 7 || tag === 4 || tag === 2) return undefined
+    const value = page.numbers[index]
+    return cellDisplayText(sheet, { value: tag === 3 ? Boolean(value) : value, style: styleAt(page.styles?.[index] ?? 0) })
+  }
+  const lanes = options.displayLanes ?? new DisplayTextLaneCache()
+  // The style resolver is this port's style owner: lanes key by its identity.
+  const styleOwner: object = options.styleOf ?? styles
   const pages = async (owner: CacheIdentity, range: FilterRange, col: number, abort: AbortSignal, accept: (page: ValueLanePage, firstRow: number) => Promise<void> | void) => {
     const r0 = range.r0 + range.headerRows, r1 = range.r1 - range.totalsRows, size = 4096
     const laneSource = valueSourceFromStore(store, col, { r0, r1 }, size)
@@ -162,14 +176,31 @@ export async function viewerControls(options: ViewerControlsOptions, signal: Abo
     const borrowed: WorkbookSource = { ...source, bindMemory: undefined, release: async () => {} }
     const engine = new DocumentSession(owner.docId, borrowed, { filterEvaluator: async ({ spec: filter, signal: request, cooperate }) => {
       const flags = new Uint8Array(filter.range.r1 - filter.range.r0 + 1).fill(1)
+      const r0 = filter.range.r0 + filter.range.headerRows, r1 = filter.range.r1 - filter.range.totalsRows
       for (const [col, rule] of filter.columns) {
         await classify(owner, filter.range, col, request)
         const domain = identity(owner, filter.range, col)
         const match = rule.kind === 'values' ? (await compileValuesMembership(rule, domain, runs, { signal: request })).matches : new FilterEngine(filterContext).compileRule(rule, domain.classification, { signal: request })
+        let lane
+        try {
+          lane = rule.kind !== 'values' && needsDisplayText(rule, domain.classification)
+            ? await lanes.lane({ docId: owner.docId, sheetId: owner.sheetId, valueGen: owner.valueGen, styleOwner, col, r0, r1 }, sink => pages(owner, filter.range, col, request, async (page, first) => {
+              for (let i = 0; i < page.count; i++) {
+                request.throwIfAborted()
+                const text = display(page, i)
+                if (text !== undefined) sink.add(first + i - r0, text)
+                if (cooperate?.due(1)) await cooperate.pause('filter')
+              }
+            }))
+            : undefined
+        } catch (error) {
+          if (error instanceof ValueIndexError && error.code === 'quota') return { kind: 'refused', refusal: { reason: 'resource-limit', message: error.message } }
+          throw error
+        }
         await pages(owner, filter.range, col, request, async (page, first) => {
           for (let i = 0; i < page.count; i++) {
             request.throwIfAborted()
-            if (!match(prepared(page, i))) flags[first + i - filter.range.r0] = 0
+            if (!match(prepared(page, i, lane?.text(first + i - r0)))) flags[first + i - filter.range.r0] = 0
             if (cooperate?.due(1)) await cooperate.pause('filter')
           }
         })
@@ -217,6 +248,8 @@ export async function viewerControls(options: ViewerControlsOptions, signal: Abo
   client.values = async (owner, range, col, applied, abort) => { await classify(owner, range, col, abort); return values(owner, range, col, applied, abort) }
   return { client, dispose() {
     classifications.clear()
+    if (options.displayLanes) lanes.invalidate(key => key.sheetId === sheetId)
+    else lanes.close()
     cache.invalidate(identity => identity.sheetId === sheetId)
     if (!options.resources) resources.dispose()
   } }
