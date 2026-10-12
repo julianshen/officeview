@@ -207,6 +207,9 @@ export type FilterEvaluator = (input: {
   signal: AbortSignal
   /** The operation's shared yield budget (S4.2); S8 scans step it per row. */
   cooperate?: CooperativeSlice<string>
+  /** S13.5 admission of an on-demand display-text lane: the prepared-column
+   * budget, and retention in the worker pool (dropped on eviction/close). */
+  displayLanes?: { limitBytes: number; retain(key: string, bytes: number, onRelease: () => void): { release(): void } | null }
 }) => Promise<FilterEvaluation>
 export interface PreparedBudget { maxColumns: number; maxBytes: number }
 /** Prepared-column working set per admission profile (§12.4 worker pool). Mobile
@@ -1661,7 +1664,11 @@ export class DocumentSession {
             case 'error': return scan.error.code === 'stale-source' ? { kind: 'stale' } : { kind: 'error', error: scan.error }
           }
         }
-        const evaluation = await evaluator({ store: this.preparedStore(owner.sheetId), spec: normalized, nowMs, signal, cooperate: slice })
+        const displayLanes = {
+          limitBytes: this.budget.maxBytes,
+          retain: (key: string, bytes: number, onRelease: () => void) => this.memory.retain(JSON.stringify(['display-lane', key]), { tier: 'rebuildable', bytes, owner: owner.sheetId, onRelease }),
+        }
+        const evaluation = await evaluator({ store: this.preparedStore(owner.sheetId), spec: normalized, nowMs, signal, cooperate: slice, displayLanes })
         if (evaluation.kind !== 'complete') return evaluation
         const halt = this.halted(owner, signal)
         if (halt) return halt

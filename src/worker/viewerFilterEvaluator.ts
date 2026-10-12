@@ -19,6 +19,7 @@ import { cellDisplayText } from '../xlsx/render'
 import type { XlsxSheet } from '../xlsx/types'
 import type { FilterEvaluation, FilterEvaluator } from './viewerSession'
 import { semanticsFor } from '../xlsx/view/semanticsFor'
+import { DisplayTextLaneCache, needsDisplayText } from './displayTextLane'
 
 const LANE_PAGE_ROWS = 4096
 
@@ -37,26 +38,48 @@ function shippedRuns(keySets: ReadonlyMap<string, FilterKeySet>): ValueRunStore 
   }
 }
 
+type Prepare = (page: ValueLanePage, index: number, displayText?: string) => PreparedValue
 /** Prepared values exactly as the main-thread S9 transport builds them: the
- * workbook style table gives display text, number format and date semantics. */
-function preparer(formatting: WorkbookFormatting | undefined): (page: ValueLanePage, index: number) => PreparedValue {
-  const sheet = { name: '', rows: [], cols: [], merges: [], mergeRanges: [], semantics: semanticsFor(formatting?.dateSystem ?? '1900') } as XlsxSheet
+ * workbook style table gives number format and date semantics. Display text is
+ * passed in from an on-demand lane (S13.5); it is absent unless a text rule
+ * needs it. */
+function preparer(formatting: WorkbookFormatting | undefined): Prepare {
   const styles = formatting?.styles ?? []
-  return (page, index) => {
+  return (page, index, displayText) => {
     const tag = page.tags[index], value = page.numbers[index], style = styles[page.styles?.[index] ?? 0]
     if (tag === 5) return { kind: 'blank' }
     if (tag === 7) return { kind: 'unavailable' }
     if (tag === 4) return { kind: 'error', value: page.texts[index]! }
     if (tag === 2) return { kind: 'string', value: page.texts[index]! }
-    const displayText = cellDisplayText(sheet, { value: tag === 3 ? Boolean(value) : value, style })
     return tag === 3 ? { kind: 'boolean', value: Boolean(value), displayText } : { kind: 'number', value, displayText, numFmtId: style?.numFmtId, formatCode: style?.formatCode }
   }
 }
+/** Formatted display text of a numeric/boolean lane entry, or undefined for
+ * cells a text rule reads raw (strings) or never reads (blank/error/unavailable). */
+function displayFormatter(formatting: WorkbookFormatting | undefined): (page: ValueLanePage, index: number) => string | undefined {
+  const sheet = { name: '', rows: [], cols: [], merges: [], mergeRanges: [], semantics: semanticsFor(formatting?.dateSystem ?? '1900') } as XlsxSheet
+  const styles = formatting?.styles ?? []
+  return (page, index) => {
+    const tag = page.tags[index]
+    if (tag === 5 || tag === 7 || tag === 4 || tag === 2) return undefined
+    const value = page.numbers[index]
+    return cellDisplayText(sheet, { value: tag === 3 ? Boolean(value) : value, style: styles[page.styles?.[index] ?? 0] })
+  }
+}
+export interface WorkerFilterEvaluatorOptions {
+  /** Display-text lane cache (tests, embedders); one per evaluator otherwise. */
+  lanes?: DisplayTextLaneCache
+}
 
 /** `keysFor` returns the keys shipped with the command now being evaluated. */
-export function createWorkerFilterEvaluator(keysFor: (stamp: SourceStamp) => ReadonlyMap<string, FilterKeySet>, formatting?: WorkbookFormatting, locale = 'en-US'): FilterEvaluator {
+export function createWorkerFilterEvaluator(keysFor: (stamp: SourceStamp) => ReadonlyMap<string, FilterKeySet>, formatting?: WorkbookFormatting, locale = 'en-US', options: WorkerFilterEvaluatorOptions = {}): FilterEvaluator {
   const prepared = preparer(formatting)
-  return async ({ store, spec, nowMs, signal, cooperate }): Promise<FilterEvaluation> => {
+  const display = displayFormatter(formatting)
+  // The formatting (style table and date system) is this evaluator's style
+  // owner: lanes key by its identity, so another table never reuses a lane.
+  const styleOwner: object = formatting ?? preparer
+  const lanes = options.lanes ?? new DisplayTextLaneCache()
+  return async ({ store, spec, nowMs, signal, cooperate, displayLanes }): Promise<FilterEvaluation> => {
     const stamp = { ...store.stamp }
     const context: FilterContext = { locale, dateSystem: formatting?.dateSystem ?? '1900', timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone, nowMs }
     const r0 = spec.range.r0 + spec.range.headerRows, r1 = spec.range.r1 - spec.range.totalsRows
@@ -69,10 +92,20 @@ export function createWorkerFilterEvaluator(keysFor: (stamp: SourceStamp) => Rea
         const match = rule.kind === 'values'
           ? (await compileValuesMembership(rule, identity, shippedRuns(keysFor(stamp)), { signal })).matches
           : new FilterEngine(context).compileRule(rule, classification, { signal })
+        const lane = rule.kind !== 'values' && needsDisplayText(rule, classification)
+          ? await lanes.lane({ ...stamp, styleOwner, col, r0, r1 }, sink => pages(store, stamp, col, r0, r1, signal, async (page, first) => {
+            for (let i = 0; i < page.count; i++) {
+              if (signal.aborted) throw new ValueIndexError('cancelled', 'Filter cancelled')
+              const text = display(page, i)
+              if (text !== undefined) sink.add(first + i - r0, text)
+              if (cooperate?.due(1)) await cooperate.pause('filter')
+            }
+          }), displayLanes)
+          : undefined
         await pages(store, stamp, col, r0, r1, signal, async (page, first) => {
           for (let i = 0; i < page.count; i++) {
             if (signal.aborted) throw new ValueIndexError('cancelled', 'Filter cancelled')
-            if (!match(prepared(page, i))) flags[first + i - spec.range.r0] = 0
+            if (!match(prepared(page, i, lane?.text(first + i - r0)))) flags[first + i - spec.range.r0] = 0
             if (cooperate?.due(1)) await cooperate.pause('filter')
           }
         })
@@ -84,7 +117,7 @@ export function createWorkerFilterEvaluator(keysFor: (stamp: SourceStamp) => Rea
   }
 }
 
-async function classify(store: SourceStore, stamp: SourceStamp, col: number, r0: number, r1: number, signal: AbortSignal, prepared: (page: ValueLanePage, index: number) => PreparedValue): Promise<ColumnClassification> {
+async function classify(store: SourceStore, stamp: SourceStamp, col: number, r0: number, r1: number, signal: AbortSignal, prepared: Prepare): Promise<ColumnClassification> {
   let numeric = false, text = false, date = false, loading = false
   await pages(store, stamp, col, r0, r1, signal, page => {
     function* values() { for (let i = 0; i < page.count; i++) yield prepared(page, i) }
