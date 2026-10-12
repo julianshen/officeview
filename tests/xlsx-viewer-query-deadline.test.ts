@@ -217,3 +217,40 @@ it('cancels a retained search continuation while foreground work is pending', as
     expect(kernel.lifecycleStats()).toMatchObject({ inflight: 0, transientBytes: 0 })
   } finally { release(); await kernel.handle({ kind: 'close', requestId: 'close', docId: 'doc' }, () => {}); await pending; await viewport }
 })
+
+it('S13.3 MINOR-1: a sort completes while overlapping viewport commands keep arriving', async () => {
+  const rows = 4500
+  const document = workbookOf([{ sheetId: 's', cells: Array.from({ length: rows }, (_, row) => ({ row, col: 0, value: (row * 7919) % rows })) }])
+  let ticks = 0, yields = 0
+  // A fast virtual clock: the sort yields many times on the way.
+  const kernel = new ViewerKernel({ parse: async () => document }, { now: () => ticks += 3, yield: async () => { yields++ } })
+  await kernel.handle({ kind: 'open', requestId: 'open', docId: 'doc', source: { kind: 'object', document }, profile: 'D' }, () => {})
+  const session = kernel.session('doc')!
+  const viewport = session.viewport.bind(session)
+  // Each viewport takes a few milliseconds; a new one starts before the last
+  // ends, so foreground work never drains while "scrolling" continues.
+  vi.spyOn(session, 'viewport').mockImplementation(async (...args) => { await new Promise(resolve => setTimeout(resolve, 8)); return viewport(...args) })
+  const owner = initialIdentity('doc', 's')
+  let scrolling = true, open = 0, overlapped = 0, serial = 0
+  const scroll = (async () => {
+    for (let i = 0; scrolling && i < 1500; i++) {
+      open++
+      void kernel.handle({ kind: 'viewport', requestId: `v${serial++}`, owner, window: { box: { x: 0, y: (i % 50) * 20, width: 64, height: 100 }, zoom: 1, deviceScale: 1 } }, out => { if (out.kind !== 'progress') open-- })
+      await new Promise(resolve => setTimeout(resolve, 4))
+    }
+  })()
+  const replies: WorkerReply[] = []
+  try {
+    await kernel.handle({ kind: 'sort', requestId: 'sort', owner, spec: { range: { r0: 0, r1: rows - 1, c0: 0, c1: 0, headerRows: 0, totalsRows: 0 }, keys: [{ col: 0, order: 'asc' }], caseSensitive: false } }, out => {
+      if (out.kind !== 'progress' && scrolling && open > 0) overlapped++
+      replies.push(out)
+    })
+    expect(yields, 'the sort yielded to foreground work repeatedly').toBeGreaterThan(5)
+    expect(replies.at(-1)).toMatchObject({ kind: 'complete' })
+    expect(overlapped, 'the sort finished while viewport commands were still in flight').toBe(1)
+  } finally {
+    scrolling = false
+    await scroll
+    await kernel.handle({ kind: 'close', requestId: 'close', docId: 'doc' }, () => {})
+  }
+}, 20_000)

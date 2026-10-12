@@ -46,6 +46,10 @@ class KeySetQuota extends Error {
 }
 
 export const QUERY_DEADLINE_MS = 120_000
+/** Longest one cooperative yield of background work waits behind foreground
+ * (viewport/active-cell) commands: background keeps a minimum time share, so a
+ * slow foreground command cannot run its 120 s deadline out while it is parked. */
+export const FOREGROUND_YIELD_WAIT_MS = 250
 
 /** A typed open refusal (admission or storage); the open replies with its code. */
 export class OpenRefusal extends Error {
@@ -141,14 +145,30 @@ export class ViewerKernel {
   private readonly keySets = new Map<string, Map<string, { set: FilterKeySet; holders: number; charge: PoolCharge }>>()
   private readonly foreground = new Set<AbortSignal>()
   private readonly foregroundWaiters = new Set<() => void>()
+  /**
+   * Park a background kernel while foreground reads run (§10.2 priority), but
+   * only behind the commands in flight when it yielded, and for at most
+   * FOREGROUND_YIELD_WAIT_MS. Commands arriving later never extend this wait,
+   * so continuous scrolling cannot starve background work into its deadline
+   * (S13.3 MINOR-1): each yield waits for one bounded generation, then the
+   * kernel runs its next slice and the following yield takes a new snapshot.
+   */
   private async waitForForeground(signal: AbortSignal): Promise<void> {
-    while (this.foreground.size && !this.foreground.has(signal) && !signal.aborted) {
-      await awaitAbortable(new Promise<void>(resolve => {
-        const wake = () => { signal.removeEventListener('abort', wake); this.foregroundWaiters.delete(wake); resolve() }
-        this.foregroundWaiters.add(wake)
-        signal.addEventListener('abort', wake, { once: true })
-      }), signal)
-    }
+    const generation = [...this.foreground].filter(other => other !== signal)
+    const pendingIn = () => generation.some(other => this.foreground.has(other) && !other.aborted)
+    if (!pendingIn() || signal.aborted) return
+    let expired = false, timer: ReturnType<typeof setTimeout> | undefined, wakeAll: (() => void) | undefined
+    try {
+      timer = setTimeout(() => { expired = true; wakeAll?.() }, FOREGROUND_YIELD_WAIT_MS)
+      while (pendingIn() && !expired) {
+        await awaitAbortable(new Promise<void>(resolve => {
+          const wake = () => { signal.removeEventListener('abort', wake); this.foregroundWaiters.delete(wake); wakeAll = undefined; resolve() }
+          wakeAll = wake
+          this.foregroundWaiters.add(wake)
+          signal.addEventListener('abort', wake, { once: true })
+        }), signal)
+      }
+    } finally { clearTimeout(timer) }
   }
   private epochs = 0
   readonly stats: KernelStats = { opens: 0, parses: 0, sourceReads: 0 }
@@ -247,7 +267,9 @@ export class ViewerKernel {
       }
       if (entry) {
         this.foreground.delete(entry.controller.signal)
-        if (!this.foreground.size) for (const wake of [...this.foregroundWaiters]) wake()
+        // Wake on every removal, not just a full drain: parked kernels wait on
+        // the generation they found, and re-check it here.
+        for (const wake of [...this.foregroundWaiters]) wake()
         this.inflight.delete(command.requestId)
         this.finished.set(command.requestId, entry.owner)
         if (this.finished.size > FINISHED_OWNERS_LIMIT) this.finished.delete(this.finished.keys().next().value as string)
