@@ -124,7 +124,7 @@ export interface ReceiptEnvironment {
   finishedAt: string
   [extra: string]: unknown
 }
-export interface ReceiptFixture { id: string; file: string; bytes: number; sha256: string; uncompressedBytes: number; nnz: number; scale: string; route?: string }
+export interface ReceiptFixture { id: string; file: string; bytes: number; sha256: string; contentSha256?: string; uncompressedBytes: number; nnz: number; rows?: number; cols?: number; scale: string; route?: string }
 export type ScrollKind = 'ordinary' | 'wrapped' | 'styled'
 export type AckOp = 'sort' | 'filter' | 'find' | 'cancel'
 export type ViewportFixture = 'F1' | 'F2' | 'F3'

@@ -7,7 +7,8 @@
  * count, expanded XML bytes and populated cells of each workbook.
  */
 import { createHash } from 'node:crypto'
-import { createReadStream, existsSync, mkdirSync, statSync, writeFileSync } from 'node:fs'
+import { createInflateRaw } from 'node:zlib'
+import { createReadStream, existsSync, mkdirSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { writeFixturePackage } from '../generate-viewer-fixtures'
@@ -20,8 +21,12 @@ export interface ViewerFixture {
   path: string
   bytes: number
   sha256: string
+  /** Verified against the committed manifest. */
+  contentSha256: string
   uncompressedBytes: number
   nnz: number
+  rows: number
+  cols: number
   /** What was generated, at which scale (never implied full when reduced). */
   scale: string
 }
@@ -29,7 +34,8 @@ export interface ViewerFixture {
 /** Bump when a builder's output changes, so stale cached packages are not reused. */
 export const FIXTURE_CACHE_VERSION = 1
 export function fixtureDir(): string {
-  return join(tmpdir(), `officeview-viewer-perf-v${FIXTURE_CACHE_VERSION}`)
+  // Tests point the cache elsewhere; the release run uses the OS temp directory.
+  return process.env.OFFICEVIEW_VIEWER_FIXTURE_DIR ?? join(tmpdir(), `officeview-viewer-perf-v${FIXTURE_CACHE_VERSION}`)
 }
 
 const SCROLL_ROWS = { full: 20_000, reduced: 2_000 } as const
@@ -116,52 +122,122 @@ async function fileSha256(path: string): Promise<string> {
   return hash.digest('hex')
 }
 
-/** Uncompressed bytes from the ZIP central directory (sum of entry sizes). */
-async function zipUncompressedBytes(path: string): Promise<number> {
-  const { readFile } = await import('node:fs/promises')
-  const buf = await readFile(path)
-  let eocd = -1
-  for (let i = buf.length - 22; i >= Math.max(0, buf.length - 65_557); i--) if (buf.readUInt32LE(i) === 0x06054b50) { eocd = i; break }
-  if (eocd < 0) return 0
-  const count = buf.readUInt16LE(eocd + 10)
-  let offset = buf.readUInt32LE(eocd + 16), total = 0
-  for (let i = 0; i < count; i++) {
-    if (buf.readUInt32LE(offset) !== 0x02014b50) break
-    total += buf.readUInt32LE(offset + 24)
-    offset += 46 + buf.readUInt16LE(offset + 28) + buf.readUInt16LE(offset + 30) + buf.readUInt16LE(offset + 32)
-  }
-  return total
-}
+/** Committed identity of every generated package, per generator version. */
+export const FIXTURE_MANIFEST_PATH = 'tests/fixtures/xlsx-viewer/viewer-perf-fixtures.json'
+export interface FixtureManifestEntry { file: string; contentSha256: string; uncompressedBytes: number; /** Bun build output; informational (deflate bytes vary by zlib build). */ bytes: number; sha256: string; nnz: number; rows: number; cols: number; seed: number | null; params: Record<string, number>; label: string }
+export interface FixtureManifest { schema: 'officeview-viewer-perf-fixtures/1'; cacheVersion: number; scales: Record<ViewerScale, Record<ViewerFixtureKey, FixtureManifestEntry>> }
+export const FIXTURE_KEYS: readonly ViewerFixtureKey[] = ['F1', 'F2', 'F3', 'F4', 'wrapped', 'wrappedIntl', 'styled']
 
-/** Writes (or reuses) every package for `scale` and returns their measured identity. */
-export async function ensureViewerFixtures(scale: ViewerScale, keys: readonly ViewerFixtureKey[] = ['F1', 'F2', 'F3', 'F4', 'wrapped', 'wrappedIntl', 'styled']): Promise<Record<ViewerFixtureKey, ViewerFixture>> {
+/**
+ * SHA-256 over the package CONTENT: every entry's name and inflated bytes in
+ * central-directory order. Deflate output differs between zlib builds (Bun vs
+ * Node), so the compressed file hash cannot be the cross-runtime identity; the
+ * content digest is. Streams each entry; never holds a sheet in memory.
+ */
+export async function zipContentSha256(path: string): Promise<{ contentSha256: string; uncompressedBytes: number }> {
+  const { open } = await import('node:fs/promises')
+  const handle = await open(path, 'r')
+  try {
+    const size = (await handle.stat()).size
+    const tailLen = Math.min(size, 65_557)
+    const tail = Buffer.alloc(tailLen)
+    await handle.read(tail, 0, tailLen, size - tailLen)
+    let eocd = -1
+    for (let i = tailLen - 22; i >= 0; i--) if (tail.readUInt32LE(i) === 0x06054b50) { eocd = i; break }
+    if (eocd < 0) throw new Error(`${path}: not a ZIP package`)
+    const count = tail.readUInt16LE(eocd + 10), cdSize = tail.readUInt32LE(eocd + 12), cdOffset = tail.readUInt32LE(eocd + 16)
+    const cd = Buffer.alloc(cdSize)
+    await handle.read(cd, 0, cdSize, cdOffset)
+    const hash = createHash('sha256')
+    let offset = 0, total = 0
+    for (let i = 0; i < count; i++) {
+      if (cd.readUInt32LE(offset) !== 0x02014b50) throw new Error(`${path}: bad central directory`)
+      const method = cd.readUInt16LE(offset + 10), compressed = cd.readUInt32LE(offset + 20), uncompressed = cd.readUInt32LE(offset + 24)
+      const nameLen = cd.readUInt16LE(offset + 28), extraLen = cd.readUInt16LE(offset + 30), commentLen = cd.readUInt16LE(offset + 32), local = cd.readUInt32LE(offset + 42)
+      const name = cd.subarray(offset + 46, offset + 46 + nameLen)
+      offset += 46 + nameLen + extraLen + commentLen
+      const header = Buffer.alloc(30)
+      await handle.read(header, 0, 30, local)
+      const dataStart = local + 30 + header.readUInt16LE(26) + header.readUInt16LE(28)
+      hash.update(name); hash.update('\0')
+      const raw = createReadStream(path, { start: dataStart, end: dataStart + compressed - 1 })
+      const stream = method === 8 ? raw.pipe(createInflateRaw()) : raw
+      let seen = 0
+      for await (const chunk of stream) { hash.update(chunk as Buffer); seen += (chunk as Buffer).length }
+      if (seen !== uncompressed) throw new Error(`${path}: ${name.toString()} inflated to ${seen} B, directory says ${uncompressed}`)
+      total += uncompressed
+      hash.update('\0')
+    }
+    return { contentSha256: hash.digest('hex'), uncompressedBytes: total }
+  } finally { await handle.close() }
+}
+async function identityOf(path: string): Promise<{ bytes: number; sha256: string; contentSha256: string; uncompressedBytes: number }> {
+  const [sha256, content] = await Promise.all([fileSha256(path), zipContentSha256(path)])
+  return { bytes: statSync(path).size, sha256, ...content }
+}
+/** Writes one package from its generator definition; returns what the definition says it holds. */
+async function generate(path: string, key: ViewerFixtureKey, scale: ViewerScale): Promise<Omit<FixtureManifestEntry, 'file' | 'bytes' | 'sha256' | 'contentSha256' | 'uncompressedBytes'>> {
+  if (key === 'wrapped' || key === 'wrappedIntl' || key === 'styled') {
+    const rows = SCROLL_ROWS[scale]
+    writeFileSync(path, (key === 'styled' ? styledPackage(rows) : wrappedPackage(rows, key === 'wrappedIntl' ? INTL_WORDS : WORDS)).bytes)
+    const label = `${key} scroll mix: ${rows.toLocaleString('en-US')} rows x ${SCROLL_COLS} columns${key === 'wrappedIntl' ? ', non-ASCII words' : key === 'wrapped' ? ', ASCII words' : ''}${scale === 'reduced' ? ' (smoke scale)' : ''}`
+    return { nnz: rows * SCROLL_COLS, rows, cols: SCROLL_COLS, seed: null, params: { rows }, label }
+  }
+  const def = SCALES[scale][key]
+  const written = await writeFixturePackage(path, key, def.params)
+  const { createFixture } = await import('../../tests/helpers/xlsx-viewer-fixtures')
+  const handle = createFixture(key, def.params)
+  return { nnz: written.nnz, rows: handle.rowCount, cols: handle.colCount, seed: handle.seed, params: def.params, label: def.label }
+}
+const same = (a: { contentSha256: string; uncompressedBytes: number }, b: { contentSha256: string; uncompressedBytes: number }) =>
+  a.contentSha256 === b.contentSha256 && a.uncompressedBytes === b.uncompressedBytes
+
+/**
+ * Returns every package for `scale`, each verified against the committed
+ * manifest (SHA-256, bytes, expanded bytes). A cached file that does not match
+ * is regenerated; a regenerated file that still does not match means the
+ * generator changed, and the run is refused. Reported shape and populated
+ * counts come from the manifest entry the bytes were verified against, never
+ * from the current generator definition alone.
+ */
+export async function ensureViewerFixtures(scale: ViewerScale, manifest: FixtureManifest, keys: readonly ViewerFixtureKey[] = FIXTURE_KEYS): Promise<Record<ViewerFixtureKey, ViewerFixture>> {
+  if (manifest.cacheVersion !== FIXTURE_CACHE_VERSION) throw new Error(`fixture manifest is for cache version ${manifest.cacheVersion}, generator is ${FIXTURE_CACHE_VERSION}: regenerate the manifest`)
   const dir = fixtureDir()
   mkdirSync(dir, { recursive: true })
   const out = {} as Record<ViewerFixtureKey, ViewerFixture>
   for (const key of keys) {
-    const path = join(dir, `${key.toLowerCase()}-${scale}.xlsx`)
-    let nnz: number
-    let label: string
-    if (key === 'wrapped' || key === 'wrappedIntl' || key === 'styled') {
-      const rows = SCROLL_ROWS[scale]
-      label = `${key} scroll mix: ${rows.toLocaleString('en-US')} rows x ${SCROLL_COLS} columns${key === 'wrappedIntl' ? ', non-ASCII words' : key === 'wrapped' ? ', ASCII words' : ''}${scale === 'reduced' ? ' (smoke scale)' : ''}`
-      nnz = rows * SCROLL_COLS
-      if (!existsSync(path)) writeFileSync(path, (key === 'styled' ? styledPackage(rows) : wrappedPackage(rows, key === 'wrappedIntl' ? INTL_WORDS : WORDS)).bytes)
-    } else {
-      const def = SCALES[scale][key]
-      label = def.label
-      if (!existsSync(path)) await writeFixturePackage(path, key, def.params)
-      nnz = -1
+    const expected = manifest.scales[scale]?.[key]
+    if (!expected) throw new Error(`fixture manifest has no ${scale} entry for ${key}`)
+    const path = join(dir, expected.file)
+    let actual = existsSync(path) ? await identityOf(path) : null
+    if (!actual || !same(actual, expected)) {
+      const temp = `${path}.${process.pid}.tmp`
+      await generate(temp, key, scale)
+      actual = await identityOf(temp)
+      if (!same(actual, expected)) {
+        rmSync(temp, { force: true })
+        throw new Error(`${key} (${scale}): generated package content ${actual.contentSha256} does not match manifest ${expected.contentSha256}; the generator changed: bump FIXTURE_CACHE_VERSION and rewrite ${FIXTURE_MANIFEST_PATH}`)
+      }
+      renameSync(temp, path)
     }
-    const bytes = statSync(path).size
-    const [sha256, uncompressedBytes] = await Promise.all([fileSha256(path), zipUncompressedBytes(path)])
-    out[key] = { key, path, bytes, sha256, uncompressedBytes, nnz, scale: label }
-  }
-  // Builder nnz for the S0.2 fixtures (deterministic; computed only when needed).
-  for (const key of keys) {
-    if (out[key].nnz >= 0) continue
-    const { createFixture } = await import('../../tests/helpers/xlsx-viewer-fixtures')
-    out[key].nnz = createFixture(key as 'F1' | 'F2' | 'F3' | 'F4', SCALES[scale][key as 'F1'].params).nnz()
+    // The file's own bytes and hash are what this run opens; content identity
+    // and counts are the manifest entry those bytes were verified against.
+    out[key] = { key, path, bytes: actual.bytes, sha256: actual.sha256, contentSha256: expected.contentSha256, uncompressedBytes: expected.uncompressedBytes, nnz: expected.nnz, rows: expected.rows, cols: expected.cols, scale: expected.label }
   }
   return out
+}
+
+/** Regenerates every package into a fresh directory and returns the manifest that describes them. */
+export async function buildFixtureManifest(dir: string): Promise<FixtureManifest> {
+  mkdirSync(dir, { recursive: true })
+  const scales = {} as FixtureManifest['scales']
+  for (const scale of ['full', 'reduced'] as const) {
+    scales[scale] = {} as Record<ViewerFixtureKey, FixtureManifestEntry>
+    for (const key of FIXTURE_KEYS) {
+      const file = `${key.toLowerCase()}-${scale}.xlsx`
+      const facts = await generate(join(dir, file), key, scale)
+      scales[scale][key] = { file, ...(await identityOf(join(dir, file))), ...facts }
+    }
+  }
+  return { schema: 'officeview-viewer-perf-fixtures/1', cacheVersion: FIXTURE_CACHE_VERSION, scales }
 }

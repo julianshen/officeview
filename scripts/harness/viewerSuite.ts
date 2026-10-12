@@ -30,7 +30,7 @@ import type { PerfReply } from '../../src/debug/viewerPerfWorker'
 import type { BenchArgs } from './args'
 import type { HarnessIdentity } from './identity'
 import { startStaticServer } from './static-server'
-import { ensureViewerFixtures, type ViewerFixture, type ViewerFixtureKey } from './viewerFixtures'
+import { FIXTURE_MANIFEST_PATH, ensureViewerFixtures, type FixtureManifest, type ViewerFixture, type ViewerFixtureKey } from './viewerFixtures'
 
 const PAGE = '/src/debug/viewer-perf.html'
 const SCROLL_FRAMES = MIN_FRAME_SAMPLES
@@ -440,9 +440,10 @@ export async function runViewerSuite(ctx: SuiteContext): Promise<{ receipt: View
   const load0 = loadavg()
   log('building the production perf page (vite.perf.config.ts)…')
   execFileSync('bunx', ['vite', 'build', '--config', 'vite.perf.config.ts'], { cwd: repoRoot, stdio: 'inherit' })
-  log(`generating/hashing ${args.scale} fixtures…`)
-  const fixtures = await ensureViewerFixtures(args.scale)
-  for (const f of Object.values(fixtures)) log(`  ${f.key}: ${f.bytes.toLocaleString('en-US')} B, sha256 ${f.sha256.slice(0, 16)}…, ${f.scale}`)
+  log(`verifying ${args.scale} fixtures against ${FIXTURE_MANIFEST_PATH} (regenerating any mismatch)…`)
+  const fixtureManifest = JSON.parse(readFileSync(join(repoRoot, FIXTURE_MANIFEST_PATH), 'utf8')) as FixtureManifest
+  const fixtures = await ensureViewerFixtures(args.scale, fixtureManifest)
+  for (const f of Object.values(fixtures)) log(`  ${f.key}: ${f.bytes.toLocaleString('en-US')} B, content ${f.contentSha256.slice(0, 16)}…, ${f.scale}`)
   const server = await startStaticServer(join(repoRoot, '.tmp', 'viewer-perf-dist'), args.port)
   const base = server.url
   const engine = args.browser === 'webkit' ? webkit : chromium
@@ -591,7 +592,7 @@ export async function runViewerSuite(ctx: SuiteContext): Promise<{ receipt: View
       contention: 'Shared development machine: other agents may run tests concurrently; loadAverage holds 1/5/15-minute averages at start then at end. Re-run on a quiet machine before admission.',
       startedAt, finishedAt: new Date().toISOString(), build: 'vite.perf.config.ts production bundle, served from loopback with COOP/COEP', playwright: 'channel-launched headless', ...env.extra,
     },
-    fixtures: Object.values(fixtures).map(f => ({ id: f.key, file: f.path.split('/').pop()!, bytes: f.bytes, sha256: f.sha256, uncompressedBytes: f.uncompressedBytes, nnz: f.nnz, scale: f.scale })),
+    fixtures: Object.values(fixtures).map(f => ({ id: f.key, file: f.path.split('/').pop()!, bytes: f.bytes, sha256: f.sha256, contentSha256: f.contentSha256, uncompressedBytes: f.uncompressedBytes, nnz: f.nnz, rows: f.rows, cols: f.cols, scale: f.scale })),
     measurements,
     raw,
   }

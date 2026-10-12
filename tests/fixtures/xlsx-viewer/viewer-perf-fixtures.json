@@ -1,0 +1,214 @@
+{
+  "schema": "officeview-viewer-perf-fixtures/1",
+  "cacheVersion": 1,
+  "scales": {
+    "full": {
+      "F1": {
+        "file": "f1-full.xlsx",
+        "bytes": 1128579,
+        "sha256": "ee14ee4090401f254bc2db25c2a2d3b2aa10d97ea20288a50eab3704b8c0a15c",
+        "contentSha256": "3c01510c46ac6ed631c0c28a4075daa4f666e3a278fb72fed36dd11d015ce09e",
+        "uncompressedBytes": 6824098,
+        "nnz": 100000,
+        "rows": 1048576,
+        "cols": 16384,
+        "seed": 549484606,
+        "params": {
+          "nnz": 100000
+        },
+        "label": "F1 full: 100,000 populated cells across full axes (corners pinned)"
+      },
+      "F2": {
+        "file": "f2-full.xlsx",
+        "bytes": 42845687,
+        "sha256": "0299d5eec4c40890e7a11097a734dbc0bc363de1860ef347fe874a190f7f2862",
+        "contentSha256": "be745b16e3a4efb9d32ce81b13b040530f3819ead4629efee16c3c81303b0e73",
+        "uncompressedBytes": 372895993,
+        "nnz": 8238808,
+        "rows": 1048576,
+        "cols": 8,
+        "seed": 532706987,
+        "params": {},
+        "label": "F2 full: 1,048,576 rows x 8 fields"
+      },
+      "F3": {
+        "file": "f3-full.xlsx",
+        "bytes": 26651614,
+        "sha256": "c857a27dbdc2142c2936563857f68c51126d54e9eba952c8cbfcccc3535527bf",
+        "contentSha256": "6776557d22351966baf7d593023b8d5bf5589e918d1d8ff80bad140de6b58b9b",
+        "uncompressedBytes": 159742170,
+        "nnz": 4194304,
+        "rows": 256,
+        "cols": 16384,
+        "seed": 515929368,
+        "params": {},
+        "label": "F3 full: dense 256 rows x 16,384 columns (4,194,304 cells)"
+      },
+      "F4": {
+        "file": "f4-full.xlsx",
+        "bytes": 9903757,
+        "sha256": "84428a2da557297d3a20788dd2372bedb12056e85bd5c8092e89ea7ee430f1a3",
+        "contentSha256": "205c608438b2d34210328c0b68cf5e417567ea3c1754eefb6e8b50fb9d583cd3",
+        "uncompressedBytes": 144369495,
+        "nnz": 1000000,
+        "rows": 1000000,
+        "cols": 1,
+        "seed": 633372701,
+        "params": {},
+        "label": "F4 full: 1,000,000 unique strings"
+      },
+      "wrapped": {
+        "file": "wrapped-full.xlsx",
+        "bytes": 1187446,
+        "sha256": "a655f1dd52c3c6ada2490f90280c73fdf646b08b49aa87050dcd554c7697f50d",
+        "contentSha256": "978a3e8241b2c4aeb2547081a7aafb8340d5ebfeadb29c6f2c859cb9a4b0a5ca",
+        "uncompressedBytes": 40160689,
+        "nnz": 240000,
+        "rows": 20000,
+        "cols": 12,
+        "seed": null,
+        "params": {
+          "rows": 20000
+        },
+        "label": "wrapped scroll mix: 20,000 rows x 12 columns, ASCII words"
+      },
+      "wrappedIntl": {
+        "file": "wrappedintl-full.xlsx",
+        "bytes": 1812371,
+        "sha256": "c80e7acc12cbb1820df10df8c7c9b691b0fdab513870f3377b889e381d0c2db9",
+        "contentSha256": "152d6e1e2093b718b309364cb589038d83d6823559442641e3e7b068159f0bd8",
+        "uncompressedBytes": 49632702,
+        "nnz": 240000,
+        "rows": 20000,
+        "cols": 12,
+        "seed": null,
+        "params": {
+          "rows": 20000
+        },
+        "label": "wrappedIntl scroll mix: 20,000 rows x 12 columns, non-ASCII words"
+      },
+      "styled": {
+        "file": "styled-full.xlsx",
+        "bytes": 1585779,
+        "sha256": "47bc300d074000564bc597c518dbf10484e8797dd9237417ba67582db5761a32",
+        "contentSha256": "c829dce7961db416bef2fdc62cb962c68f573f7539f5c3b854981d5ac7df256d",
+        "uncompressedBytes": 11046750,
+        "nnz": 240000,
+        "rows": 20000,
+        "cols": 12,
+        "seed": null,
+        "params": {
+          "rows": 20000
+        },
+        "label": "styled scroll mix: 20,000 rows x 12 columns"
+      }
+    },
+    "reduced": {
+      "F1": {
+        "file": "f1-reduced.xlsx",
+        "bytes": 232376,
+        "sha256": "b45c276f5a597ccba6b4796e11ba4b0fae4a55b734d5c8378c1924fd72ee1802",
+        "contentSha256": "818ff1506a33d86705cd5ef1a34e0621fd456ab4ffec0c795b01b5fea00d1308",
+        "uncompressedBytes": 1387543,
+        "nnz": 20000,
+        "rows": 1048576,
+        "cols": 16384,
+        "seed": 549484606,
+        "params": {
+          "nnz": 20000
+        },
+        "label": "F1 reduced: 20,000 populated cells (smoke scale)"
+      },
+      "F2": {
+        "file": "f2-reduced.xlsx",
+        "bytes": 4050097,
+        "sha256": "13991706759aec40b9274792915780bb37f01acf570c1b9e83cb22a06e76be65",
+        "contentSha256": "6d64488339feeef07892681cf0d7c7ef1335707aaa779c40c2d281a8eb28141a",
+        "uncompressedBytes": 34236352,
+        "nnz": 785789,
+        "rows": 100010,
+        "cols": 8,
+        "seed": 532706987,
+        "params": {
+          "rowCount": 100010
+        },
+        "label": "F2 reduced: 100,010 rows x 8 (smoke scale)"
+      },
+      "F3": {
+        "file": "f3-reduced.xlsx",
+        "bytes": 846426,
+        "sha256": "1fce4fd6b1449991c7d63a159f7c1cd4bcb3a6f2004fd20424bf062b2c8ffab5",
+        "contentSha256": "2ae4b4cad88a526094f1f337d4a04d02868301df03af6d790f503f4d795cf7a9",
+        "uncompressedBytes": 4787351,
+        "nnz": 131072,
+        "rows": 8,
+        "cols": 16384,
+        "seed": 515929368,
+        "params": {
+          "rowCount": 8
+        },
+        "label": "F3 reduced: dense 8 rows x 16,384 columns (smoke scale)"
+      },
+      "F4": {
+        "file": "f4-reduced.xlsx",
+        "bytes": 122879,
+        "sha256": "be05af86a7e5ca174116a8bc067e0a5c329f87c1dc1b0551b1eae546ea28021e",
+        "contentSha256": "442474aaeaac5621a8f00e303344489ca68f3160e118a9dd85395be878010963",
+        "uncompressedBytes": 1667989,
+        "nnz": 12000,
+        "rows": 12000,
+        "cols": 1,
+        "seed": 633372701,
+        "params": {
+          "rowCount": 12000
+        },
+        "label": "F4 reduced: 12,000 unique strings (smoke scale)"
+      },
+      "wrapped": {
+        "file": "wrapped-reduced.xlsx",
+        "bytes": 121422,
+        "sha256": "bed8c5e1c301ade49b021ca95fb6cfdc3429dd9d640e80f9ba5e34f28dcb83ed",
+        "contentSha256": "ec0609c0217a22a8ef0675ed7b131d227cadf5516002a75f951062aa4cc6834a",
+        "uncompressedBytes": 3968264,
+        "nnz": 24000,
+        "rows": 2000,
+        "cols": 12,
+        "seed": null,
+        "params": {
+          "rows": 2000
+        },
+        "label": "wrapped scroll mix: 2,000 rows x 12 columns, ASCII words (smoke scale)"
+      },
+      "wrappedIntl": {
+        "file": "wrappedintl-reduced.xlsx",
+        "bytes": 183270,
+        "sha256": "a565c52b5420ce00de3fd888b7ca886cababfb22feab1b9f2d485faface4c541",
+        "contentSha256": "3e973e03dfab7e69a897f14c7cf5e73f8b6d2910e3bab12ee67ec0855d4f8cfb",
+        "uncompressedBytes": 4915477,
+        "nnz": 24000,
+        "rows": 2000,
+        "cols": 12,
+        "seed": null,
+        "params": {
+          "rows": 2000
+        },
+        "label": "wrappedIntl scroll mix: 2,000 rows x 12 columns, non-ASCII words (smoke scale)"
+      },
+      "styled": {
+        "file": "styled-reduced.xlsx",
+        "bytes": 159827,
+        "sha256": "88a5629e54d05bd4e8d9d2a28ca39946e07c3e7af5d3ac08d8b175ad7b4e0584",
+        "contentSha256": "1ca9e0a138c02470d3e12732ee196bc07d7760414b74898712a2ee1d8c9d859e",
+        "uncompressedBytes": 1076240,
+        "nnz": 24000,
+        "rows": 2000,
+        "cols": 12,
+        "seed": null,
+        "params": {
+          "rows": 2000
+        },
+        "label": "styled scroll mix: 2,000 rows x 12 columns (smoke scale)"
+      }
+    }
+  }
+}
