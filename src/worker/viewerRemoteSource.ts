@@ -23,8 +23,9 @@ import type {
   AuthoritativeCell, CacheIdentity, CellRead, ColumnEntry, ColumnQuery, FilterKeySet, FilterSpec, LogicalCellBox, OperationRefusal, Page,
   PopulatedQuery, RangeCompletion, ReadOptions, RowOrder, SheetLayout, SortSpec, SourceFailure, SourceReadQuery, SourceReadResult,
   SourceStamp, SourceStore, SparseRowPage, StructuralResult, ValuePolicy, ViewCommitDelta, WorkbookFormatting, WorkbookOwner, WorkerDiagnostic, WorkerReply,
-  ProfileId,
+  ProfileId, GridSelection,
 } from '../xlsx/view/contracts'
+import type { RangeDetection } from '../xlsx/view/rangeDetection'
 import type { XlsxCell, XlsxCellStyle, XlsxMergeRange } from '../xlsx/types'
 import { MAX_COLS, MAX_ROWS, formatA1, isValidCoordinate, type SourceCell, type SourceRect } from '../xlsx/view/coordinates'
 import { createAxisMetrics } from '../xlsx/view/axes'
@@ -552,6 +553,15 @@ export class RemoteSheetStore implements SourceStore {
   private async releaseScan(cursor: string): Promise<void> {
     if (this.workbook.isClosed) return
     await this.workbook.request({ kind: 'read', requestId: this.workbook.nextRequestId(), owner: this.workbook.identity(this.sheetId), query: { op: 'releaseScan', cursor } })
+  }
+  /** S10.2: range detection runs next to the worker's store; one read, no
+   * strip pages across the worker boundary. Failures become the detector's own
+   * typed outcomes (cancelled, or a source-error refusal). */
+  async detectRange(kind: 'sort' | 'filter', selection: GridSelection, override: { headerRows: 0 | 1; totalsRows?: 0 } | null, options: ReadOptions): Promise<RangeDetection> {
+    const out = await this.read({ op: 'detectRange', kind, selection, override }, options)
+    if ('code' in out) return out.code === 'cancelled' ? { kind: 'cancelled' } : { kind: 'refused', refusal: { reason: 'source-error', code: out.code, retryable: out.retryable, message: out.message } }
+    if (out.op !== 'detectRange') return { kind: 'refused', refusal: { reason: 'source-error', code: 'page-error', retryable: false, message: 'Unexpected read reply' } }
+    return out.detection
   }
   async queryStructural(rect: SourceRect, options: ReadOptions): Promise<StructuralResult> {
     const out = await this.read({ op: 'structural', rect }, options)

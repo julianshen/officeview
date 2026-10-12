@@ -1,4 +1,5 @@
 import type { XlsxCell, XlsxCellStyle, XlsxDocument } from '../types'
+import type { RangeDetection } from './rangeDetection'
 import type { CellId, DisplaySlot, SourceCell, SourceCol, SourceRect, SourceRow } from './coordinates'
 
 /** Source-space contracts, spec §4.1; limits bound output, never semantic membership. */
@@ -174,6 +175,9 @@ export interface SourceStore {
    * a page that violates this is rejected with a nonretryable `page-error`. */
   queryColumn(request: ColumnQuery, options: ReadOptions): Promise<Page<ColumnEntry>>
   scanPopulated(request: PopulatedQuery, options: ReadOptions): AsyncIterable<Page<AuthoritativeCell>>
+  /** Optional (S10.2): exactly scanPopulated's cells, order and page boundaries,
+   * coordinates only, so occupancy probes (range detection) skip payload decode. */
+  scanOccupied?(request: PopulatedQuery, options: ReadOptions): AsyncIterable<Page<SourceCell>>
   queryStructural(rect: SourceRect, options: ReadOptions): Promise<StructuralResult>
   /** Complete sources terminate with a complete coarse result or explicit resource/error (§4.1). */
   queryOverview(request: OverviewQuery, options: ReadOptions): Promise<Page<OverviewGroup>>
@@ -399,6 +403,10 @@ export type SourceReadQuery =
   | { op: 'layout' }
   /** Ends a scan continuation the caller abandoned (iterator return/cancel). */
   | { op: 'releaseScan'; cursor: string }
+  /** S10.2: operation range detection (sort admission includes the structural
+   * guard) run next to the store, so a paged sheet is not scanned strip by
+   * strip across the worker boundary. Same detectors, same outcome. */
+  | { op: 'detectRange'; kind: 'sort' | 'filter'; selection: GridSelection; override?: { headerRows: 0 | 1; totalsRows?: 0 } | null }
 export type SourceReadResult =
   | { op: 'cell'; read: CellRead }
   | { op: 'rows'; page: Page<SparseRowPage> }
@@ -407,6 +415,7 @@ export type SourceReadResult =
   | { op: 'complete'; result: RangeCompletion }
   | { op: 'layout'; layout: SheetLayout }
   | { op: 'releaseScan'; released: boolean }
+  | { op: 'detectRange'; detection: RangeDetection }
 /** S5.4: resolved cell styles (indexed by cell styleIndex) and the date system
  * of a paged workbook, published with open so worker-backed cells format like
  * resident ones. Bounded by the styles part's small-part cap. */

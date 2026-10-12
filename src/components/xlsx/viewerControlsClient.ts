@@ -9,6 +9,7 @@ import { compileValuesMembership, ValueIndexCache, valueScope, valueSourceFromSt
 import { CompactRowVisibility, createRowVisibility } from '../../xlsx/view/visibility'
 import { MemoryValueRunStore, VALUE_RUN_PAGE, type ValueRunStore } from '../../xlsx/view/valueRuns'
 import { StructuralIndex } from '../../xlsx/view/structure'
+import type { RangeDetection, RangeDetectionRequest } from '../../xlsx/view/rangeDetection'
 import { DocumentSession, type OperationOutcome, type WorkbookSource, sameStamp } from '../../worker/viewerSession'
 import { createControlsClient, type ControlSnapshot, type ControlsClient, type StagedControl, type ControlProgress, sameControlOwner } from './controlsClient'
 
@@ -198,6 +199,7 @@ export async function viewerControls(options: ViewerControlsOptions, signal: Abo
       const ranges = col !== undefined && isSingleCell(selection) ? [] : selection.ranges
       return { store, structure, selection: { ...selection, active, ranges } }
     },
+    ...(isRemoteStore(store) ? { detectRange: (kind: 'filter' | 'sort', request: RangeDetectionRequest) => store.detectRange(kind, request.selection, request.override ?? null, request.options) } : {}),
     domain: (owner, range, col) => ({ identity: identity(owner, range, col), source: valueSourceFromStore(store, col, { r0: range.r0 + range.headerRows, r1: range.r1 - range.totalsRows }), label: (kind, value, styleIndex) => cellDisplayText(sheet, { value: kind === 'boolean' ? Boolean(value) : value, style: styleAt(styleIndex) }) }),
     stageFilter: (spec, owner, abort, progress) => stage('filter', spec, owner, abort, progress), stageSort: (spec, owner, abort, progress) => stage('sort', spec, owner, abort, progress),
   })
@@ -230,4 +232,9 @@ function isSingleCell(selection: SheetView['selection']): boolean {
 function failure(outcome: Exclude<OperationOutcome, { kind: 'committed' }>): StagedControl {
   if (outcome.kind === 'cancelled' || outcome.kind === 'stale' || outcome.kind === 'incomplete' || outcome.kind === 'refused') return outcome
   return outcome.kind === 'error' ? { kind: 'refused', refusal: { reason: 'source-error', ...outcome.error } } : { kind: 'refused', refusal: { reason: 'resource-limit', message: 'View exceeds the session memory budget.' } }
+}
+
+/** A worker-backed sheet store that can run range detection next to its pages. */
+function isRemoteStore(store: unknown): store is { detectRange(kind: 'filter' | 'sort', selection: RangeDetectionRequest['selection'], override: RangeDetectionRequest['override'] | null, options: RangeDetectionRequest['options']): Promise<RangeDetection> } {
+  return typeof (store as { detectRange?: unknown }).detectRange === 'function'
 }

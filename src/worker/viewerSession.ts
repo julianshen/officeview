@@ -48,6 +48,7 @@ import { createSheetMetrics } from '../xlsx/view/projection'
 import { hiddenSourceRowsFromDisplay, sortRowOrder, type SortResult } from '../xlsx/view/sort'
 import { CooperativeSlice, type CooperativeOptions, type YieldFunction } from '../xlsx/view/scheduler'
 import { StructuralIndex, type PopulatedCellSource } from '../xlsx/view/structure'
+import { admitSortRange, detectOperationRange, type RangeDetection } from '../xlsx/view/rangeDetection'
 import { guardFilter, guardSort, type GuardOutcome } from '../xlsx/view/operationGuard'
 import { MemoryPool, WORKER_BUDGETS, type PoolEntry } from '../xlsx/view/tileCache'
 import { INITIAL_GENERATION as INITIAL_VALUE_GEN, isUint32Array, validateBitset } from './viewerProtocol'
@@ -1756,6 +1757,7 @@ export class DocumentSession {
       case 'complete': result = { op: 'complete', result: await store.ensureComplete(query.rect, options) }; break
       case 'scan': result = { op: 'scan', page: await this.scanPage(owner, store, query, signal) }; break
       case 'layout': result = { op: 'layout', layout: this.layout(owner.sheetId) }; break
+      case 'detectRange': result = { op: 'detectRange', detection: await detectRangeInStore(store, query, options) }; break
       default: result = { op: 'rows', page: failedPage(store.stamp, failure('unsupported', 'Unknown read operation')) }
     }
     if (signal.aborted) return { kind: 'cancelled' }
@@ -1844,4 +1846,13 @@ function sortFailure(result: Exclude<SortResult, { kind: 'complete' }>, spec: So
       return { kind: 'error', error: result.error }
     case 'resource-limit': return { kind: 'quota', requiredBytes: result.requiredBytes, limitBytes: result.limitBytes }
   }
+}
+
+/** S10.2: the range detectors run against the worker's own store (no strip
+ * pages cross the worker boundary). The structural snapshot is taken from the
+ * same store and stamp the detection reads; ownership is checked by the caller. */
+async function detectRangeInStore(store: SourceStore, query: Extract<SourceReadQuery, { op: 'detectRange' }>, options: { signal: AbortSignal; stamp: SourceStamp }): Promise<RangeDetection> {
+  const structure = new StructuralIndex(await store.queryStructural(FULL_SHEET, options))
+  const detect = query.kind === 'sort' ? admitSortRange : detectOperationRange
+  return detect({ store, structure, selection: query.selection, options, override: query.override ?? null })
 }
