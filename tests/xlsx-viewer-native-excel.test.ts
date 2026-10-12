@@ -10,6 +10,12 @@
  * object (resident) adapter and the paged adapter must agree with each other
  * AND with Excel. A failure here is a viewer/Excel disagreement to report, never
  * an expectation to relax.
+ *
+ * Privacy edit: the only change from Excel's bytes is the removal of Excel's
+ * optional `<mc:AlternateContent><mc:Choice Requires="x15"><x15ac:absPath …/>`
+ * element (the local save folder) from xl/workbook.xml. Every other zip entry
+ * keeps its raw bytes and order. Excel's original SHA-256 was
+ * 09104b6d0123eb53c9cd1a7ec900fce780d2c1520abc357f3049dc8631ede82c (10,603 bytes).
  */
 import { createHash } from 'node:crypto'
 import { readFileSync } from 'node:fs'
@@ -29,7 +35,7 @@ import type { WorkbookSource } from '../src/worker/viewerSession'
 import type { CellRead, ColumnLanes, SourceStore } from '../src/xlsx/view/contracts'
 
 const FIXTURE = join(__dirname, 'fixtures', 'xlsx-viewer', 'native-corner.xlsx')
-const SHA256 = '09104b6d0123eb53c9cd1a7ec900fce780d2c1520abc357f3049dc8631ede82c'
+const SHA256 = 'd263264a8648e8e6d4932bc94ee6dc63a7b69bc3978ea245f6a538b1364e6715'
 const bytes = new Uint8Array(readFileSync(FIXTURE))
 
 /** "Ünïcødé 漢字 🎉" as Excel stored it: precomposed (NFC) letters and the
@@ -55,9 +61,16 @@ function cellOf(read: CellRead) {
 }
 
 describe('native Excel checkpoint: native-corner.xlsx (Excel 16 macOS, zh-TW)', () => {
-  it('the fixture bytes are the ones Excel wrote (SHA-256 pinned)', () => {
-    expect(bytes.byteLength).toBe(10_603)
+  it('the fixture bytes are pinned (Excel\'s package minus the absPath element)', () => {
+    expect(bytes.byteLength).toBe(10_441)
     expect(createHash('sha256').update(bytes).digest('hex')).toBe(SHA256)
+  })
+
+  it('the privacy edit removed the save path and nothing the viewer reads', async () => {
+    const pkg = await OfficePackage.load(bytes)
+    const workbook = await pkg.text('xl/workbook.xml')
+    expect(workbook).not.toContain('absPath')
+    expect(workbook).toContain('<sheet name="工作表1" sheetId="1" r:id="rId1"/>')
   })
 
   it('both adapters agree with each other and with Excel on every authored cell', async () => {
