@@ -10,20 +10,14 @@ export class OfficePackage {
   private zip: JSZip
   private cache = new Map<string, unknown>()
 
-  private constructor(zip: JSZip) {
+  /** Protected: a subclass may serve parts from elsewhere (the paged drawing
+   * reader reads them on demand through the range reader, S13.2). */
+  protected constructor(zip: JSZip) {
     this.zip = zip
   }
 
   static async load(data: ArrayBuffer | Uint8Array): Promise<OfficePackage> {
     const zip = await JSZip.loadAsync(data)
-    return new OfficePackage(zip)
-  }
-
-  /** A package over parts already read (and bounded) by the caller, e.g. the
-   * drawing parts of one sheet of a large file read through the range reader. */
-  static fromParts(parts: ReadonlyMap<string, Uint8Array>): OfficePackage {
-    const zip = new JSZip()
-    for (const [path, bytes] of parts) zip.file(path, bytes)
     return new OfficePackage(zip)
   }
 

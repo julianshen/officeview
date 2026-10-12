@@ -1,22 +1,25 @@
 /**
  * Drawing content of one paged sheet (S13.2; spec RENDER-02, AC-RENDER-01).
  *
- * The paged import keeps placement-only anchors. When the viewer asks, this
- * reads the sheet's drawing parts through the range reader (never the whole
- * package): the worksheet's relationships, each referenced drawing/VML part and
- * the parts those reference (charts, diagrams, media, nested relationships),
- * plus the workbook theme. Every part is size-checked from the inventory before
- * it is inflated: drawing-family and other XML parts against the object path's
- * drawing part cap, media against the drawing transfer budget, all of them
- * against one per-sheet read budget. The bounded parts then go through the
- * resident DrawingML parser unchanged, so a paged sheet paints what the
- * resident sheet paints. Anchors are placed on the geometry the paged cells
- * paint with (O(log n) per marker). A part kept out is a diagnostic.
+ * The paged import keeps placement-only anchors. When the viewer asks, the
+ * resident DrawingML parser runs unchanged over a package view that reads parts
+ * on demand through the range reader (never the whole package, and only the
+ * parts the parser actually opens: the worksheet relationships, the drawing
+ * and VML parts it references, and the charts, diagrams, media and nested
+ * relationships those reference, plus the workbook theme). Every part is
+ * admitted from its inventory size before it is inflated: media against the
+ * drawing transfer budget, any other part against the object path's drawing
+ * part cap, all of them together against one per-sheet read budget. A part kept
+ * out reads as absent to the parser (as a missing part does on the resident
+ * path) and is named in a diagnostic. Anchors are placed on the geometry the
+ * paged cells paint with (O(log n) per marker), so a paged sheet paints what
+ * the resident sheet paints.
  */
+import JSZip from 'jszip'
 import { OfficePackage } from '../../core/zip'
 import { readPartBytes, type RangeSource, type ZipInventory } from '../../core/zip-stream'
 import { isPackageError } from '../../core/package-error'
-import { attrs, getChildren, parseXml, parseXmlOrdered } from '../../core/xml'
+import { attrs, getChildren, parseXml, parseXmlOrdered, type XmlNode } from '../../core/xml'
 import { resolvePartTarget } from '../../drawing/parts'
 import { parseThemeContext, type ThemeContext } from '../../drawing/style'
 import { parseWorksheetDrawings } from '../drawing'
@@ -29,11 +32,11 @@ import { classifyPart } from './admission'
 import { importLimitsFor } from './importSession'
 
 const R_NS = 'http://schemas.openxmlformats.org/officeDocument/2006/relationships'
-/** Relationship hops followed from a worksheet drawing reference (drawing → chart → chart rels → media). */
-const MAX_DEPTH = 4
+/** Refused parts named one by one in diagnostics; the rest are counted. */
+const NAMED_REFUSALS = 4
 
 export interface PagedDrawingLimits {
-  /** Per XML (or other non-media) part. */
+  /** Per non-media part (drawing XML, charts, relationships, VML, ...). */
   partBytes: number
   /** Per media part. */
   mediaBytes: number
@@ -55,15 +58,91 @@ export interface PagedDrawingSheet {
   legacyDrawingIds?: readonly (string | undefined)[]
 }
 
-function relsPathOf(part: string): string {
-  const slash = part.lastIndexOf('/')
-  return `${slash < 0 ? '' : `${part.slice(0, slash)}/`}_rels/${part.slice(slash + 1)}.rels`
-}
-const escapeAttr = (value: string) => value.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/"/g, '&quot;')
 const utf8 = new TextDecoder()
+/** OfficePackage over the range reader: bounded on-demand part reads, cached per part. */
+class RangePackage extends OfficePackage {
+  private readonly reads = new Map<string, Promise<Uint8Array | undefined>>()
+  private readonly trees = new Map<string, Promise<XmlNode | undefined>>()
+  private readonly ordered = new Map<string, Promise<XmlNode | undefined>>()
+  private readBytes = 0
+  private partsRead = 0
+  private refusals = 0
+  readonly diagnostics: WorkerDiagnostic[] = []
+
+  constructor(private readonly src: RangeSource, private readonly inventory: ZipInventory, private readonly limits: PagedDrawingLimits, private readonly signal: AbortSignal) {
+    super(new JSZip())
+  }
+  private cap(path: string): number { return classifyPart(path).cls === 'media' ? this.limits.mediaBytes : this.limits.partBytes }
+  private refuse(path: string, reason: string): void {
+    if (++this.refusals <= NAMED_REFUSALS) this.diagnostics.push({ code: DRAWING_PART_REFUSED, message: `Drawing part ${path} is not shown in the large-file view: ${reason}`, partId: path })
+  }
+  finish(): WorkerDiagnostic[] {
+    if (this.refusals > NAMED_REFUSALS) this.diagnostics.push({ code: DRAWING_PART_REFUSED, message: `${this.refusals - NAMED_REFUSALS} more drawing parts are not shown in the large-file view` })
+    return this.diagnostics
+  }
+  /** Present and within its own cap (a part beyond it reads as absent). */
+  override has(path: string): boolean {
+    const entry = this.inventory.find(path)
+    if (!entry) return false
+    if (entry.uncompressedSize <= this.cap(path)) return true
+    if (!this.reads.has(path)) {
+      this.reads.set(path, Promise.resolve(undefined))
+      this.refuse(path, `${entry.uncompressedSize} bytes exceed the ${this.cap(path)}-byte part limit`)
+    }
+    return false
+  }
+  override bytes(path: string, maxBytes?: number): Promise<Uint8Array | undefined> {
+    let pending = this.reads.get(path)
+    if (!pending) {
+      pending = this.read(path)
+      this.reads.set(path, pending)
+    }
+    return maxBytes === undefined ? pending : pending.then(bytes => {
+      if (bytes && bytes.byteLength > maxBytes) throw new Error('Part byte limit exceeded')
+      return bytes
+    })
+  }
+  override async text(path: string): Promise<string | undefined> {
+    const bytes = await this.bytes(path)
+    return bytes && utf8.decode(bytes)
+  }
+  override xml(path: string): Promise<XmlNode | undefined> {
+    let tree = this.trees.get(path)
+    if (!tree) this.trees.set(path, tree = this.text(path).then(text => text === undefined ? undefined : parseXml(text)))
+    return tree
+  }
+  override xmlOrdered(path: string): Promise<XmlNode | undefined> {
+    let tree = this.ordered.get(path)
+    if (!tree) this.ordered.set(path, tree = this.text(path).then(text => text === undefined ? undefined : parseXmlOrdered(text)))
+    return tree
+  }
+  override paths(predicate?: (p: string) => boolean): string[] {
+    return this.inventory.entries.map(entry => entry.name).filter(name => !predicate || predicate(name))
+  }
+  private async read(path: string): Promise<Uint8Array | undefined> {
+    if (!this.has(path)) return undefined
+    const entry = this.inventory.find(path)!
+    if (this.readBytes + entry.uncompressedSize > this.limits.readBytes) { this.refuse(path, `the sheet's drawing parts exceed ${this.limits.readBytes} bytes`); return undefined }
+    if (this.partsRead >= this.limits.maxParts) { this.refuse(path, `more than ${this.limits.maxParts} drawing parts`); return undefined }
+    // Charged before the read, so concurrent reads cannot overrun the budget.
+    this.readBytes += entry.uncompressedSize
+    this.partsRead++
+    try {
+      // The declared size was admitted; inflation is held to it exactly.
+      return await readPartBytes(this.src, entry, this.cap(path), { signal: this.signal, budget: { charge: () => {} } })
+    } catch (error) {
+      if (this.signal.aborted || (isPackageError(error) && error.code === 'cancelled')) throw error
+      this.refuse(path, error instanceof Error ? error.message : String(error))
+      return undefined
+    }
+  }
+}
+
+const escapeAttr = (value: string) => value.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/"/g, '&quot;')
+const aborted = (signal: AbortSignal) => signal.reason ?? new DOMException('Aborted', 'AbortError')
 
 export async function loadPagedSheetDrawings(
-  pkg: { src: RangeSource; inventory: ZipInventory },
+  source: { src: RangeSource; inventory: ZipInventory },
   sheet: PagedDrawingSheet,
   geometry: SheetGeometry,
   limits: PagedDrawingLimits,
@@ -71,78 +150,18 @@ export async function loadPagedSheetDrawings(
 ): Promise<SheetDrawings> {
   const legacy = sheet.legacyDrawingIds ?? []
   if (!sheet.drawingIds.length && !legacy.length) return sheetDrawingPayload([], undefined, [], limits.payloadBytes)
-  const diagnostics: WorkerDiagnostic[] = []
-  const parts = new Map<string, Uint8Array>()
-  let readBytes = 0, refusedParts = 0
-  const refuse = (name: string, reason: string) => {
-    refusedParts++
-    // Bounded: the first few parts are named, the rest are counted below.
-    if (refusedParts <= 4) diagnostics.push({ code: DRAWING_PART_REFUSED, message: `Drawing part ${name} is not shown in the large-file view: ${reason}`, partId: name })
-  }
-  /** Reads one part within its caps; undefined when absent or kept out. */
-  const read = async (name: string): Promise<Uint8Array | undefined> => {
-    if (parts.has(name)) return parts.get(name)
-    const entry = pkg.inventory.find(name)
-    if (!entry) return undefined
-    const cap = classifyPart(name).cls === 'media' ? limits.mediaBytes : limits.partBytes
-    if (entry.uncompressedSize > cap) { refuse(name, `${entry.uncompressedSize} bytes exceed the ${cap}-byte part limit`); return undefined }
-    if (readBytes + entry.uncompressedSize > limits.readBytes) { refuse(name, `the sheet's drawing parts exceed ${limits.readBytes} bytes`); return undefined }
-    if (parts.size >= limits.maxParts) { refuse(name, `more than ${limits.maxParts} drawing parts`); return undefined }
-    try {
-      // The declared size was admitted above; inflation is held to it exactly.
-      const bytes = await readPartBytes(pkg.src, entry, cap, { signal, budget: { charge: () => {} } })
-      readBytes += bytes.byteLength
-      parts.set(name, bytes)
-      return bytes
-    } catch (error) {
-      if (signal.aborted || (isPackageError(error) && error.code === 'cancelled')) throw error
-      refuse(name, error instanceof Error ? error.message : String(error))
-      return undefined
-    }
-  }
-  /** A part's internal relationships (id → resolved target present in the package). */
-  const relationships = async (owner: string): Promise<Map<string, { path: string; type: string }>> => {
-    const out = new Map<string, { path: string; type: string }>()
-    const rels = await read(relsPathOf(owner))
-    if (!rels) return out
-    try {
-      for (const a of getChildren(parseXml(utf8.decode(rels)), 'Relationship').map(attrs)) {
-        if (!a.Id || !a.Target || a.TargetMode === 'External') continue
-        const path = resolvePartTarget(owner, a.Target)
-        if (pkg.inventory.find(path)) out.set(a.Id, { path, type: a.Type ?? '' })
-      }
-    } catch { /* an unreadable part leaves its references unresolved; the parser diagnoses them */ }
-    return out
-  }
-
+  const pkg = new RangePackage(source.src, source.inventory, limits, signal)
   // Theme: the workbook relationship, exactly as parse.ts finds it.
-  const themePath = [...(await relationships('xl/workbook.xml')).values()].find(rel => rel.type.endsWith('/theme'))?.path
-  if (themePath) await read(themePath)
-
-  // The sheet's drawing and VML parts and everything they reach, breadth first.
-  // Only the worksheet's drawing references are followed (not its tables or comments).
-  const queue: Array<{ path: string; depth: number }> = []
-  const queued = new Set<string>()
-  const enqueue = (path: string, depth: number) => { if (!queued.has(path) && depth <= MAX_DEPTH) { queued.add(path); queue.push({ path, depth }) } }
-  const sheetRels = await relationships(sheet.partPath)
-  for (const id of [...sheet.drawingIds, ...legacy]) {
-    const rel = id === undefined ? undefined : sheetRels.get(id)
-    if (rel) enqueue(rel.path, 1)
-  }
-  for (let next = queue.shift(); next; next = queue.shift()) {
-    if (signal.aborted) throw signal.reason ?? new DOMException('Aborted', 'AbortError')
-    if (!await read(next.path)) continue
-    for (const rel of (await relationships(next.path)).values()) enqueue(rel.path, next.depth + 1)
-  }
-  if (refusedParts > 4) diagnostics.push({ code: DRAWING_PART_REFUSED, message: `${refusedParts - 4} more drawing parts are not shown in the large-file view` })
-  const officePackage = OfficePackage.fromParts(parts)
   let theme: ThemeContext = parseThemeContext()
-  if (themePath && parts.has(themePath)) {
-    try { theme = parseThemeContext(await officePackage.xmlOrdered(themePath)) }
-    catch { /* optional theme cannot invalidate usable drawings (parse.ts) */ }
+  try {
+    const rels = getChildren(await pkg.xml('xl/_rels/workbook.xml.rels'), 'Relationship').map(attrs)
+    const rel = rels.find(a => a.Type?.endsWith('/theme') && a.TargetMode !== 'External' && a.Target)
+    if (rel) theme = parseThemeContext(await pkg.xmlOrdered(resolvePartTarget('xl/workbook.xml', rel.Target!)))
+  } catch {
+    // An optional theme cannot invalidate usable drawings (parse.ts); a cancel still ends the read.
+    if (signal.aborted) throw aborted(signal)
   }
-
-  // The worksheet's drawing references, as parse.ts hands them to the parser.
+  // The worksheet's drawing references, handed to the parser as parse.ts hands them.
   const refs = [
     ...sheet.drawingIds.map(id => id === undefined ? '<drawing/>' : `<drawing r:id="${escapeAttr(id)}"/>`),
     ...legacy.map(id => id === undefined ? '<legacyDrawing/>' : `<legacyDrawing r:id="${escapeAttr(id)}"/>`),
@@ -151,7 +170,7 @@ export async function loadPagedSheetDrawings(
   const worksheet = getChildren(root, 'worksheet')[0] ?? root
   const shell: XlsxSheet = { name: sheet.name, sourcePartPath: sheet.partPath, rows: [], cols: [], merges: [], mergeRanges: [] }
   const axes = placementAxes(geometry)
-  await parseWorksheetDrawings(officePackage, shell, sheet.partPath, worksheet, theme, { col: index => axes.cols.start(index), row: index => axes.rows.start(index) })
-  if (signal.aborted) throw signal.reason ?? new DOMException('Aborted', 'AbortError')
-  return sheetDrawingPayload(shell.drawings ?? [], theme, diagnostics, limits.payloadBytes)
+  await parseWorksheetDrawings(pkg, shell, sheet.partPath, worksheet, theme, { col: index => axes.cols.start(index), row: index => axes.rows.start(index) })
+  if (signal.aborted) throw aborted(signal)
+  return sheetDrawingPayload(shell.drawings ?? [], theme, pkg.finish(), limits.payloadBytes)
 }

@@ -41,14 +41,15 @@ const filledShape = `<xdr:oneCellAnchor>${anchorFrom(0, 1)}<xdr:ext cx="${64 * E
 const themedShape = `<xdr:twoCellAnchor>${anchorFrom(2, 4, 3, 2)}<xdr:to><xdr:col>4</xdr:col><xdr:colOff>0</xdr:colOff><xdr:row>7</xdr:row><xdr:rowOff>0</xdr:rowOff></xdr:to><xdr:sp><xdr:nvSpPr><xdr:cNvPr id="3" name="Oval"/><xdr:cNvSpPr/></xdr:nvSpPr><xdr:spPr>${xfrm(80, 60)}<a:prstGeom prst="ellipse"><a:avLst/></a:prstGeom><a:solidFill><a:schemeClr val="accent1"/></a:solidFill></xdr:spPr></xdr:sp><xdr:clientData/></xdr:twoCellAnchor>`
 const picture = `<xdr:oneCellAnchor>${anchorFrom(5, 2)}<xdr:ext cx="${30 * EMU_PER_PX}" cy="${30 * EMU_PER_PX}"/><xdr:pic><xdr:nvPicPr><xdr:cNvPr id="4" name="Picture"/><xdr:cNvPicPr/></xdr:nvPicPr><xdr:blipFill><a:blip xmlns:r="${R_NS}" r:embed="rImg"/><a:stretch><a:fillRect/></a:stretch></xdr:blipFill><xdr:spPr>${xfrm(30, 30)}<a:prstGeom prst="rect"><a:avLst/></a:prstGeom></xdr:spPr></xdr:pic><xdr:clientData/></xdr:oneCellAnchor>`
 
-interface DrawingWorkbook { anchors: string; theme?: boolean; media?: boolean; secondImage?: boolean; vml?: boolean }
+interface DrawingWorkbook { anchors: string; theme?: boolean; media?: boolean; secondImage?: boolean; vml?: boolean; unusedMedia?: number }
 function drawingWorkbook(spec: DrawingWorkbook): Uint8Array {
   const extra: BuildEntry[] = [
     { name: 'xl/worksheets/_rels/sheet1.xml.rels', data: `<?xml version="1.0"?><Relationships xmlns="${PKG_RELS}"><Relationship Id="rD1" Type="${R_NS}/drawing" Target="../drawings/drawing1.xml"/>${spec.vml ? `<Relationship Id="rV1" Type="${R_NS}/vmlDrawing" Target="../drawings/vmlDrawing1.vml"/>` : ''}</Relationships>` },
     { name: 'xl/drawings/drawing1.xml', data: `<?xml version="1.0"?><xdr:wsDr xmlns:xdr="${XDR_NS}" xmlns:a="${A_NS}">${spec.anchors}</xdr:wsDr>` },
   ]
   if (spec.media) {
-    extra.push({ name: 'xl/drawings/_rels/drawing1.xml.rels', data: `<?xml version="1.0"?><Relationships xmlns="${PKG_RELS}"><Relationship Id="rImg" Type="${R_NS}/image" Target="../media/image1.png"/>${spec.secondImage ? `<Relationship Id="rImg2" Type="${R_NS}/image" Target="../media/image2.png"/>` : ''}</Relationships>` })
+    extra.push({ name: 'xl/drawings/_rels/drawing1.xml.rels', data: `<?xml version="1.0"?><Relationships xmlns="${PKG_RELS}"><Relationship Id="rImg" Type="${R_NS}/image" Target="../media/image1.png"/>${spec.secondImage ? `<Relationship Id="rImg2" Type="${R_NS}/image" Target="../media/image2.png"/>` : ''}${spec.unusedMedia ? `<Relationship Id="rUnused" Type="${R_NS}/image" Target="../media/unused.png"/>` : ''}</Relationships>` })
+    if (spec.unusedMedia) extra.push({ name: 'xl/media/unused.png', data: new Uint8Array(spec.unusedMedia) })
     extra.push({ name: 'xl/media/image1.png', data: PNG })
     if (spec.secondImage) extra.push({ name: 'xl/media/image2.png', data: PNG.slice() })
   }
@@ -161,6 +162,13 @@ describe('paged drawings (RENDER-02 / AC-RENDER-01)', () => {
     const actual = geometry.drawingsIn(...box)!
     expect(actual.map(node => node.source.element).sort()).toEqual(['pic', 'sp'])
     expect(actual.find(node => node.source.element === 'pic')!.image?.data).toBeUndefined()
+  })
+
+  it('reads only the parts the parser opens: an unused oversized relationship target costs nothing', async () => {
+    const bytes = drawingWorkbook({ anchors: filledShape + picture, media: true, unusedMedia: 4096 })
+    const geometry = await settledGeometry(await openPaged(bytes, { drawingPayloadBytes: PNG.byteLength + 10 }))
+    expect(geometry.diagnostics).toEqual([])
+    expect(geometry.drawingsIn(...box)!.find(node => node.source.element === 'pic')!.image?.data?.byteLength).toBe(PNG.byteLength)
   })
 
   it('withdraws pictures past the payload budget in paint order and says so', async () => {
