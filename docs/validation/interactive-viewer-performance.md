@@ -61,7 +61,7 @@ exits non-zero unless every desktop row passes and the tree is clean. It exits
 |---|---:|---:|---|---|
 | Warm viewport input-to-paint (p95) | 16.7 ms | ordinary 3.94, wrapped 1.03, styled 2.35 ms | **pass** | F2 1M, wrapped 20k, styled 20k; 300 frames each after 60 warmup |
 | Warm viewport frame interval (p95) | 16.7 ms | 16.67 ms in every mix; 0 long tasks | **pass** | same frames |
-| Input acknowledgment (p95) | 50 ms | sort **12,008–13,316 ms**; filter apply 34.1; find 14.0; cancel 16.1 | **miss** | F2 1M. Sort: 5 samples, stopped early because every sample was > 10× the limit. Filter apply: 10. Find and cancel: 30 |
+| Input acknowledgment | 50 ms | sort **12,008–13,316 ms** (all 5 samples); filter apply max 34.1 (n = 10); find p95 14.0; cancel p95 16.1 | **miss** | F2 1M. Two series are limited, so the row never claims a 30-sample p95. Sort has 5 samples: it stopped early because every sample exceeded 10× the limit, and any sample over 50 ms is already a miss. Filter apply has 10 samples, because each apply-and-clear re-admits the 1M-row range; it is judged on its maximum. Find and cancel have 30 samples each |
 | 100k numeric sort, 1–8 keys | 100 ms | 67.4 ms | pass | S8.6 receipt, reused |
 | 1M numeric sort, 1–8 keys | 1,000 ms | 787.2 ms | pass | S8.6 receipt, reused |
 | 1M numeric filter | 100 ms | 72.6 ms | pass | S8.6 receipt, reused |
@@ -203,10 +203,12 @@ The header sort on F2 (one key, column G) runs in this order:
 
 - **Click → first worker command: about 12 s on the main thread.**
   - `admitSortRange` makes about 4,010 strip reads (`scan`, 1024 × 9 cells) plus
-    2,006 single-column probes to the worker.
+    2,006 single-column probes to the worker. 4,010 strip reads is about twice
+    the 1M rows / 1,024 strips, and read-ahead accounts for that doubling.
   - Each strip costs two round trips: the remote store strips `nextCursor`, so
     the detection `Scanner` reads one page ahead and then discards it.
-  - The range region is scanned about twice: detection, then the guard.
+  - The guard (`guardSort`) runs after detection and may scan again; the data
+    here does not separate its share from detection's.
   - Structured-clone deserialization of those pages takes about 3.8 s of main
     thread, in chunks below 1 ms, so frames keep flowing.
 - **Worker `prepareColumns`**: 1.0 s on the first sort, cached afterwards.

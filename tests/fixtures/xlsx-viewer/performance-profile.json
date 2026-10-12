@@ -100,7 +100,7 @@
         "frozenMs": 50,
         "basis": "spec",
         "outcome": "miss",
-        "justification": "Kept at spec. S10.2 Chrome 155 headless, desktop D, one M4 Pro laptop (shared machine; contention possible), production build, full-scale fixtures; receipt viewerEvidence.results. Header sort on F2 (1M rows) renders no pending state: the first acknowledgment is the result itself, 12.0-13.3 s after the click (5 samples, stopped early: all > 10x the ceiling). Phase: main-thread range admission (~4,010 worker strip reads). Filter apply 34.1 ms (n=10), find 14.0 ms and cancel 16.1 ms p95 pass. Fix is a proposal (S10.2 report), not applied.",
+        "justification": "Kept at spec. S10.2 Chrome 155 headless, desktop D, one M4 Pro laptop (shared machine; contention possible), production build, full-scale fixtures; receipt viewerEvidence.results. Header sort on F2 (1M rows) renders no pending state: the first acknowledgment is the result itself, 12.0-13.3 s after the click (5 samples, stopped early: all > 10x the ceiling). Phase: main-thread range admission (~4,010 worker strip reads). Filter apply max 34.1 ms (n=10, limited), find p95 14.0 ms and cancel p95 16.1 ms (n=30) are within the ceiling. Fix is a proposal (S10.2 report), not applied.",
         "measurement": null
       },
       "mobile": {
