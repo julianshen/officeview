@@ -16,8 +16,8 @@ import { createControlsClient, type ControlSnapshot, type ControlsClient, type S
 /** Document-owned committed keys survive port eviction. Both indexes and runs
  * share one bounded ledger; indexes are rebuildable, committed keys are not. */
 export interface ViewerControlResources { cache: ValueIndexCache; runs: ValueRunStore; dispose(): void }
-export function createViewerControlResources(profile: ProfileId = 'D'): ViewerControlResources {
-  const cache = new ValueIndexCache({ limitBytes: (profile === 'M' ? 8 : 16) * 1024 * 1024 })
+export function createViewerControlResources(profile: ProfileId = 'D', onUsage?: (bytes: number) => void): ViewerControlResources {
+  const cache = new ValueIndexCache({ limitBytes: (profile === 'M' ? 8 : 16) * 1024 * 1024, ...(onUsage ? { onUsage } : {}) })
   const store = new MemoryValueRunStore({ limitBytes: 8 * 1024 * 1024, account: cache.reserve() })
   const refs = new Map<string, PagedKeySetRef>()
   let closed = false

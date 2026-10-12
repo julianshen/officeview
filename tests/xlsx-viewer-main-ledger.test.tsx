@@ -14,6 +14,7 @@ import { parseXlsx } from '../src/xlsx/parse'
 import type { WorkerCommand, WorkerReply } from '../src/xlsx/view/contracts'
 import { DOM_ELEMENT_BYTES, MainMemoryLedger, estimatePayloadBytes } from '../src/xlsx/view/mainLedger'
 import { MergeQueryCache } from '../src/xlsx/view/viewport'
+import { ValueIndexCache } from '../src/xlsx/view/valueIndex'
 import { workbookOf } from './helpers/xlsx-find'
 import { xlsxBytes } from './helpers/xlsx-package'
 
@@ -96,6 +97,19 @@ describe('MainMemoryLedger', () => {
     cache.query(geometry, { r0: 2, r1: 3, c0: 0, c1: 1 }, 10, work)
     cache.query(geometry, { r0: 4, r1: 5, c0: 0, c1: 1 }, 10, work)
     expect(cache.bytes).toBe(one * 2) // the oldest page was evicted
+  })
+})
+
+describe('controls value cache', () => {
+  it('reports its used bytes on every charge and release (allocation-time ledger charge)', () => {
+    const seen: number[] = []
+    const cache = new ValueIndexCache({ limitBytes: 1024, onUsage: bytes => seen.push(bytes) })
+    const reservation = cache.reserve()
+    reservation.charge(100)
+    reservation.charge(50)
+    reservation.release()
+    expect(seen).toEqual([100, 150, 0])
+    expect(cache.usedBytes).toBe(0)
   })
 })
 

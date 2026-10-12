@@ -238,7 +238,10 @@ export class ValueIndexCache {
    * plain path is ~0.12-0.2 us/value, so canonical keys (~2x on later
    * searches, ~76 MiB per 1M strings) are opt-in, e.g. a desktop profile with
    * pool headroom: { strategy: canonicalKeyStrategy(foldVariantOf(locale)) }. */
-  constructor(options: { limitBytes?: number; searchKeys?: { strategy?: SearchKeyStrategy; store?: SearchKeyStore } } = {}) {
+  /** S10.2 main ledger hook: the cache's used bytes after every charge/release. */
+  private readonly onUsage: ((bytes: number) => void) | undefined
+  constructor(options: { limitBytes?: number; searchKeys?: { strategy?: SearchKeyStrategy; store?: SearchKeyStore }; onUsage?: (bytes: number) => void } = {}) {
+    this.onUsage = options.onUsage
     this.limitBytes = options.limitBytes ?? 512 * MiB
     if (!Number.isFinite(this.limitBytes) || this.limitBytes < 0) throw new RangeError('Invalid value index memory limit')
     const strategy = options.searchKeys?.strategy ?? EXACT_SEARCH
@@ -292,9 +295,10 @@ export class ValueIndexCache {
       })
     }
     this.used += bytes
+    this.onUsage?.(this.used)
   }
   /** @internal */
-  release(bytes: number): void { this.used -= bytes }
+  release(bytes: number): void { this.used -= bytes; this.onUsage?.(this.used) }
   /** @internal */
   forget(key: string, index: ValueIndex): void {
     if (this.indexes.get(key) === index) this.indexes.delete(key)
