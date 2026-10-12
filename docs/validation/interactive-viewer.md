@@ -92,7 +92,7 @@ Browser shorthand: **[B:C+W]** = Playwright scenario passing on Chromium and Pla
 | AC-SEM-03 | F5, F8 | `xlsx-viewer-sort-range.test.ts`, `xlsx-viewer-range-continuation.test.ts` (G2) | pass |
 | AC-SEM-04 | F5 | `xlsx-viewer-operation-guard.test.ts`. Browser F5: merge D1:D1048576 refuses both a region sort and an explicit A2:B7 sort ("Operation refused: merge"); view unchanged **[B:C+W]** | pass for merge/fixed array (browser); dynamic-spill and drawing refusals pass through `ViewerKernel` in both adapters (S3.3 `xlsx-viewer-structure-metadata.test.ts`); browser drawing leg not-run |
 | AC-SEM-05 | F5 | `xlsx-viewer-operation-guard.test.ts` (pure guard) | pass (S3.3): filter hiding a row above a drawing anchor refused, filters below anchors commit, absolute anchors never block — through `ViewerKernel`, object and paged. Browser leg not-run |
-| AC-SEM-06 | F2, F4, F8 | `xlsx-viewer-filter.test.ts`, `xlsx-viewer-canonical-text.test.ts`, `xlsx-viewer-filter-ui.test.tsx` | pass |
+| AC-SEM-06 | F2, F4, F8 | `xlsx-viewer-filter.test.ts`, `xlsx-viewer-canonical-text.test.ts`, `xlsx-viewer-filter-ui.test.tsx`; S13.5 `xlsx-viewer-display-lane.test.ts` (on-demand formatted display-text lane, worker and main-thread paths) | pass (unit). Semantics unchanged: parity with the former eager preparation over 24 rule shapes × numeric/date/mixed columns. The formatted lane is now built only for a text condition on a text/mixed column. It is keyed by valueGen and style owner, reused across applies, and charged against its own aggregate ledger capped at the profile's prepared-column budget (64 MiB D / 32 MiB M). It does **not** share the `preparedBytes` counter of sort columns. On the worker it is also retained in the session pool and dropped on eviction/close. Exhaustion is a typed `resource-limit` refusal. Bun-only timing ([S13.5](#s135-on-demand-display-text-lane)); no browser leg |
 | AC-SEM-07 | F8 | `xlsx-viewer-date-filter.test.ts` | pass (unit); native leg **pass** for 1900 and 1904 workbooks saved by Excel (`xlsx-viewer-native-excel-dates.test.ts`): serials and display match Excel on both adapters, and the worker filter evaluator lowers eq/before/after/between (incl. the leap day and 23:59:59)/thisMonth/thisYear to [start, nextStart) over the native cells of both adapters. Midday/zone presets on a native file were checked only with an injected clock |
 | AC-SEM-08 | F4 | `xlsx-viewer-value-index.test.ts`, `xlsx-viewer-value-search-keys.test.ts`. Browser F4 (12,000 values): "Showing first 10,000", search finds item-11000 beyond 10k, searched Select All selects 1, first Select All covers all 12,000 **[B:C+W]** | pass (100k/1M universe at scale → S10.2) |
 | AC-SEM-09 | F4, F7 | `xlsx-viewer-filter-ui.test.tsx`. Browser F4/F2: reopen retains applied choice, Cancel publishes no generation (worker `filter` count unchanged) **[B:C+W]** | pass |
@@ -299,6 +299,29 @@ VoiceOver cannot be driven unattended (it needs System Settings/TCC grants and a
 
 - **Playwright WebKit cannot write OPFS pages from the worker** (recorded as a capacity restriction in the capability matrix). `choosePageBackend` (`sourcePages.ts`) picks OPFS when `getDirectory` works and does not fall back to IndexedDB when a write fails; an injected OPFS write failure confirms IndexedDB is never probed. Automatic write-failure failover is not required by §4.2 and is left to the storage owner.
 - A recorded load failure is cleared by a later complete structural read, but after a terminal storage failure no further read is issued (the import has ended), so that path is only reachable for non-storage failures.
+
+## S13.5 on-demand display-text lane
+
+Plan S8.1 ("Prepare the formatted display-text lane … only when a text condition targets a text/mixed column"), spec §7 and §12.4. Branch `feature/iv-s13-5`, cut at `4e4f0e1`.
+
+- **Before:** both filter preparers (`src/worker/viewerFilterEvaluator.ts` and `src/components/xlsx/viewerControlsClient.ts`) called `cellDisplayText` for every numeric/date/boolean value. They did so in classification and in every rule evaluation, whatever the rule kind.
+- **After:** classification, number/date conditions and value lists read raw values. A text condition (or a compound with a text child) on a text/mixed column reads display text from `src/worker/displayTextLane.ts`:
+  - the lane is keyed by (docId, sheetId, valueGen, style owner, column, body band);
+  - a lane of a dead valueGen or style owner is dropped on the next request;
+  - storage is one Uint32 id per row plus unique strings, charged like a prepared column;
+  - the aggregate cap is `PREPARED_BUDGETS[profile].maxBytes`, enforced by LRU eviction and then `ValueIndexError('quota')`, which surfaces as a `resource-limit` refusal;
+  - on the worker it is retained in the session pool (tier `rebuildable`, dropped on eviction/close); on the main thread it is dropped on port dispose.
+- **Not changed:** the dropdown's value-search labels were already formatted per entry on demand (`domain.label`) and stay so. Value-list membership uses raw keys and never needs the lane.
+
+**Bun microbenchmark (non-browser; not an SLA receipt).** Run with `bun scripts/bench-display-lane.ts [root] [label]` on the same machine, with a 1M-row object source and a cold evaluator per sample (median of 4). The base was measured with the same harness on `4e4f0e1`.
+
+| Case | Base `4e4f0e1` | S13.5 |
+|---|---:|---:|
+| Number `gt` on a 1M-row `0.00` column | 1,298 ms | 117–139 ms |
+| Date `between` on a 1M-row date column | 363 ms | 93–116 ms |
+| Text `contains` on a 1M-row mixed column, apply 1 / 2 / 3 (one evaluator) | 1,531 / 1,434 / 1,450 ms | 1,000–1,253 / 194–228 / 193–215 ms |
+
+The text lane for that mixed column charges 9.52 MiB (9,978,256 B) against the 64 MiB cap. Numeric/date filters charge nothing and make zero `cellDisplayText` calls; the tests pin this with a spy. Heap deltas around one apply were noise-dominated (transient page objects), so no retained-memory saving is claimed beyond the lane ledger.
 
 ## Blocking for release
 
