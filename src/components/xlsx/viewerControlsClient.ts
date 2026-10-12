@@ -189,12 +189,27 @@ export async function viewerControls(options: ViewerControlsOptions, signal: Abo
     } finally { await engine.release() }
   }
   const client = createControlsClient({ snapshot: options.snapshot, context, cache, runs,
-    rangeRequest: col => { const selection = options.view().selection; return { store, structure, selection: { ...selection, active: selection.active ? { ...selection.active, col: col ?? selection.active.col } : { row: store.extent.used?.r0 ?? 0, col: col ?? 0 } } } },
+    rangeRequest: col => {
+      const selection = options.view().selection
+      const active = selection.active ? { ...selection.active, col: col ?? selection.active.col } : { row: store.extent.used?.r0 ?? 0, col: col ?? 0 }
+      // A header gesture moves the active cell to its column. A leftover
+      // single-cell selection is no explicit range (S7.1), and kept here it
+      // would refuse as a selection that does not contain the active cell.
+      const ranges = col !== undefined && isSingleCell(selection) ? [] : selection.ranges
+      return { store, structure, selection: { ...selection, active, ranges } }
+    },
     domain: (owner, range, col) => ({ identity: identity(owner, range, col), source: valueSourceFromStore(store, col, { r0: range.r0 + range.headerRows, r1: range.r1 - range.totalsRows }), label: (kind, value, styleIndex) => cellDisplayText(sheet, { value: kind === 'boolean' ? Boolean(value) : value, style: styleAt(styleIndex) }) }),
     stageFilter: (spec, owner, abort, progress) => stage('filter', spec, owner, abort, progress), stageSort: (spec, owner, abort, progress) => stage('sort', spec, owner, abort, progress),
   })
   const resolve = client.resolve, values = client.values
   client.resolve = async (owner, kind, abort, override, col) => {
+    // A worker-backed sheet opens while its import still runs, so the snapshot
+    // taken above can be 'loading'. Re-query until it is complete (or failed);
+    // a stuck snapshot would refuse every later sort/filter as incomplete.
+    if (structure.completeness !== 'complete' && structure.failure === undefined) {
+      structure = new StructuralIndex(await store.queryStructural({ r0: 0, r1: 1048575, c0: 0, c1: 16383 }, { signal: abort, stamp: { ...store.stamp } }))
+      abort.throwIfAborted()
+    }
     const resolved = await resolve(owner, kind, abort, override, col)
     if (resolved.kind === 'complete' && kind === 'filter') await classify(owner, resolved.range, col ?? resolved.range.c0, abort)
     return resolved
@@ -205,6 +220,12 @@ export async function viewerControls(options: ViewerControlsOptions, signal: Abo
     cache.invalidate(identity => identity.sheetId === sheetId)
     if (!options.resources) resources.dispose()
   } }
+}
+function isSingleCell(selection: SheetView['selection']): boolean {
+  if (selection.ranges.length !== 1) return false
+  const { rows, cols } = selection.ranges[0]
+  const oneRow = rows.kind === 'intervals' ? rows.intervals.length === 1 && rows.intervals[0].r0 === rows.intervals[0].r1 : rows.kind === 'list' ? rows.rows.length === 1 : false
+  return oneRow && cols.length === 1 && cols[0].c0 === cols[0].c1
 }
 function failure(outcome: Exclude<OperationOutcome, { kind: 'committed' }>): StagedControl {
   if (outcome.kind === 'cancelled' || outcome.kind === 'stale' || outcome.kind === 'incomplete' || outcome.kind === 'refused') return outcome

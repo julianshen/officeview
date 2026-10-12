@@ -265,7 +265,7 @@ const STYLES_XML = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
   </cellXfs>
 </styleSheet>`
 
-interface SheetRowSpec {
+export interface SheetRowSpec {
   r: number
   ht?: number
   hidden?: boolean
@@ -277,7 +277,7 @@ interface SharedTable {
   strings: Iterable<string>
 }
 
-interface SheetSpec {
+export interface SheetSpec {
   name: string
   /** Row-major row iterator; must stream (no full row array) for large sheets. */
   rows: Iterable<SheetRowSpec>
@@ -419,7 +419,7 @@ const SMALL_PLANS: SmallPlan[] = [
 function smallSheet(plan: SmallPlan): SheetSpec {
   const handle = createFixture(plan.fixture, plan.params)
   if (plan.fixture === 'F1') {
-    const cells = handle.enumerateHead(100_000)
+    const cells = handle.enumerateHead(Math.max(100_000, handle.nnz()))
     const byRow = new Map<number, CellRef[]>()
     for (const ref of cells) {
       const list = byRow.get(ref.row) ?? []
@@ -480,6 +480,25 @@ function smallSheet(plan: SmallPlan): SheetSpec {
     rows,
     sharedTable: sharedStrings.length > 0 ? { count: sharedStrings.length, strings: sharedStrings } : undefined,
   }
+}
+
+/**
+ * One true XLSX package for a fixture at explicit (possibly reduced) params,
+ * for the S10.1 browser suite: F1 writes its sampled set (corners included),
+ * F2/F3/F4 stream every populated row. Deflated like the full-scale packages.
+ */
+export async function writeFixturePackage(path: string, id: 'F1' | 'F2' | 'F3' | 'F4', params: FixtureParams): Promise<{ bytes: number; uncompressedBytes: number; nnz: number }> {
+  const handle = createFixture(id, params)
+  const sheet: SheetSpec = id === 'F1'
+    ? smallSheet({ file: path, fixture: 'F1', params, description: '' })
+    : { name: id, rows: fullRows(handle) }
+  const result = await writePackage(path, [sheet], true)
+  return { ...result, nnz: handle.nnz() }
+}
+
+/** A multi-sheet package from explicit sheet specs (S10.1 F5/F7 browser workbooks). */
+export async function writeSheetsPackage(path: string, sheets: SheetSpec[]): Promise<{ bytes: number; uncompressedBytes: number }> {
+  return writePackage(path, sheets, true)
 }
 
 const FIXTURE_DESCRIPTIONS: Record<FixtureId, string> = {
