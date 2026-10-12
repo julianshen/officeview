@@ -286,3 +286,31 @@ test.describe('S10.3 accessibility tree (Chromium AX layer over CDP)', () => {
     console.log(`[a11y-evidence] chromium AX: 1 grid "Worksheet A" (focused, multiselectable), rows=${rows.length}, columnheaders=${colHeaders.length}, rowheaders=${rowHeaders.length}, gridcells=${cells.length}, selected=4, activedescendant="${activeNode!.name?.value}", live=polite/atomic; DOM rowcount/colcount=${dom.rowcount}/${dom.colcount}, sorted=${JSON.stringify(dom.sorted)}`)
   })
 })
+
+test.describe('S10.3 touch emulation (Chromium device emulation; not iPad evidence)', () => {
+  test.use({ viewport: { width: 1024, height: 768 }, deviceScaleFactor: 2, hasTouch: true, isMobile: true })
+  test('coarse pointer: 44px header/row targets, tap selects a cell, row-header taps are owned by their row', async ({ page, browserName }) => {
+    test.skip(browserName !== 'chromium', 'isMobile/coarse-pointer emulation is Chromium-only here')
+    await openViewer(page, 'f2-1k.xlsx')
+    expect(await page.evaluate(() => matchMedia('(pointer: coarse)').matches)).toBe(true)
+    const small = await page.evaluate(() => {
+      const pane = document.querySelector('[role=grid]')!.getBoundingClientRect()
+      return [...document.querySelectorAll<HTMLElement>('[role=grid] button')]
+        .map(b => ({ name: b.getAttribute('aria-label'), ...b.getBoundingClientRect().toJSON() }))
+        // A column cut by the pane edge is clamped to its visible width by design (§9.3 ownership).
+        .filter(b => b.width > 0 && b.right < pane.right - 1 && b.bottom < pane.bottom - 1)
+        .filter(b => b.height < 44 - 0.5 || b.width < 44 - 0.5)
+    })
+    // Every fully visible control keeps the 44px floor (default columns are 64px wide).
+    expect(small).toEqual([])
+    // The owned cell lies under the painted surface: tap its geometry, as a finger would.
+    const cell = (await page.getByRole('gridcell', { name: /^C5, / }).boundingBox())!
+    await page.touchscreen.tap(cell.x + cell.width / 2, cell.y + cell.height / 2)
+    await expect.poll(() => activeName(page)).toBe('C5')
+    // A tap near the top edge of row 6's header selects row 6, never its neighbour.
+    const header = (await page.getByRole('rowheader', { name: 'Row 6', exact: true }).boundingBox())!
+    await page.touchscreen.tap(header.x + header.width / 2, header.y + 2)
+    await expect(page.getByRole('rowheader', { name: 'Row 6', exact: true })).toHaveAttribute('aria-selected', 'true')
+    await expect(page.locator('[role=rowheader][aria-selected=true]')).toHaveCount(1)
+  })
+})
