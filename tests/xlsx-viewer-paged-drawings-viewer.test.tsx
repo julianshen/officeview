@@ -6,7 +6,7 @@
  * workbook theme, and what the large-file view cannot carry is a visible notice.
  */
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { cleanup, render, waitFor } from '@testing-library/react'
+import { cleanup, fireEvent, render, waitFor } from '@testing-library/react'
 import { OfficeFile } from '../src/components/OfficeFile'
 import { ViewerKernel } from '../src/worker/viewerKernel'
 import { OfficePackage } from '../src/core/zip'
@@ -101,5 +101,19 @@ describe('paged drawings in the worker-backed viewer', () => {
     const ui = render(<OfficeFile data={workbook()} interactiveSheets viewerWorker={() => h.port} />)
     await waitFor(() => expect(ui.getByRole('gridcell', { name: /alpha/ })).toBeTruthy())
     await waitFor(() => expect(ui.container.textContent).toMatch(/Drawing part xl\/media\/image1\.png is not shown in the large-file view/))
+  })
+
+  it('print of a worker-backed sheet is refused visibly, naming that drawings are not printed (never a silent omission)', async () => {
+    const h = workerPort()
+    const ui = render(<OfficeFile data={workbook()} interactiveSheets viewerWorker={() => h.port} />)
+    await waitFor(() => expect(ui.getByRole('gridcell', { name: /alpha/ })).toBeTruthy())
+    const print = vi.fn()
+    window.print = print
+    fireEvent.click(ui.getByRole('button', { name: 'Print' }))
+    await waitFor(() => expect(ui.container.textContent).toMatch(/cannot be printed from the large-file view.*drawings/))
+    expect(print).not.toHaveBeenCalled()
+    // The browser's own print shows the same statement, not an instruction that cannot work.
+    expect(ui.getByTestId('officeview-sheet-print-notice').textContent).toMatch(/cannot be printed from the large-file view.*drawings/)
+    expect(ui.queryAllByTestId('officeview-sheet-print-pages').flatMap(el => [...el.querySelectorAll('canvas')])).toHaveLength(0)
   })
 })

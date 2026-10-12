@@ -148,6 +148,8 @@ function loadFailureNotice(message: string, code?: string): string {
     : ' Reopen the file to try again.'
   return `This sheet could not be fully loaded: ${message}.${recovery}`
 }
+/** Worker-backed (paged) sheets have no main-thread cells or static drawing paint to print. */
+const PAGED_PRINT_MESSAGE = 'This spreadsheet cannot be printed from the large-file view: neither its cells nor its drawings are printed. Copy a selected range instead.'
 const MAX_FONT_NOTICE_FAMILIES = 3
 function fontNotice(diagnostics: readonly FontDiagnostic[]): string[] {
   const families = [...new Set(diagnostics.map(d => d.family).filter((family): family is string => Boolean(family)))]
@@ -869,7 +871,7 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
   const preparePrint = async () => {
     if (!allowPrintRef.current) return
     // Static print needs every cell on the main thread; a worker-backed workbook never has them.
-    if (remote) { setAnnouncement(LARGE_EXPORT_MESSAGE); return }
+    if (remote) { setAnnouncement(PAGED_PRINT_MESSAGE); return }
     const token = ++printToken.current
     const loader = props.printLoader ?? preparePrintUnits
     let pages: Awaited<ReturnType<typeof loader>>
@@ -1020,7 +1022,7 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
         </div>
         {allowPrint && (
           <div data-officeview-sheet-print="" aria-hidden="true">
-            {!printPages && <p data-testid="officeview-sheet-print-notice">To print this spreadsheet, press Ctrl/Cmd+P inside the viewer.</p>}
+            {!printPages && <p data-testid="officeview-sheet-print-notice">{remote ? PAGED_PRINT_MESSAGE : 'To print this spreadsheet, press Ctrl/Cmd+P inside the viewer.'}</p>}
             <div data-testid="officeview-sheet-print-pages">
               {printPages?.map((unit, index) => unit.page
                 ? <div key={index} style={{ breakAfter: 'page' }}>
