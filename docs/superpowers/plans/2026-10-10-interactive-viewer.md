@@ -761,7 +761,7 @@ Every stable acceptance case in specification §15 has an owner and evidence bel
 | AC-CAP-03 (CAP-03, STORE-01, LIFE-03) | S1.1–S1.2, S10 | F2/F3/F4 quota variants; import-limits/source-pages suites, typed incomplete/cancel/limit UI | mandatory |
 | AC-STORE-01 (STORE-01–03) | S1.2–S1.3 | F8; source/adapter-parity/values suites and native checkpoint, pending≠blank | mandatory |
 | AC-STORE-02 (STORE-02, PERF-02) | S1.1–S1.2, S10.2 | F1/F2/F3/F4 malformed variants; import-limits, actual byte/queue/peak/cleanup ledger | mandatory |
-| AC-STORE-03 (STORE-04) | S3.1 | F5; structure suite: giant narrow-column merges, headerRows0, saved/dynamic child, complete anchors | mandatory |
+| AC-STORE-03 (STORE-04) | S3.1, S3.3 | F5; structure + `tests/xlsx-viewer-structure-metadata.test.ts`: giant narrow-column merges, headerRows0, saved/dynamic child, complete anchors | mandatory |
 | AC-STORE-04 (STORE-03, LIFE-01) | S1.3, S4.2 | F8/F7; values + worker-races suites, valueGen invalidation, incomplete-evaluation admission, `cached` vs `engine` value policy, `formula-value-unavailable` refusal and no-evaluator spy | mandatory |
 | AC-VIEW-01 (VIEW-01) | S2.1, S7.2 | F2/F7; projection/order suite with bijection/pinned slots and measured allocations | mandatory |
 | AC-VIEW-02 (VIEW-02, RENDER-01) | S2.3, S5.1 | F1/F2; cap-regression/viewport suites: row16385 and max source row sorted to viewport | mandatory |
@@ -770,8 +770,8 @@ Every stable acceptance case in specification §15 has an owner and evidence bel
 | AC-SEM-01 (SEM-02) | S2.1, S8.1 | F2/F5; filter suite: Amount header, hidden body, totals/outside, replacement/Clear | mandatory |
 | AC-SEM-02 (SEM-01) | S7.2 | F2/F4/F7; sort truth table/stability/host collator for 1–8 keys, errors/blanks terminal | mandatory |
 | AC-SEM-03 (SEM-01) | S7.1–S7.2 | F5/F8; sort-range/integration suites: metadata/no-header/far D outsiderange/formulas intact | mandatory |
-| AC-SEM-04 (SEM-01, STORE-04) | S3.1–S3.2, S7–S8 | F5; operation-guard suite: full-column band even for A:B keys, distant blank merge/spill; readonly child selection allowed | mandatory |
-| AC-SEM-05 (SEM-01, STORE-04) | S3.2, S8.1 | F5; operation-guard suite: filter0–1 before anchor2, within/below/absolute anchors | mandatory |
+| AC-SEM-04 (SEM-01, STORE-04) | S3.1–S3.3, S7–S8 | F5; operation-guard + `tests/xlsx-viewer-structure-metadata.test.ts`: full-column band even for A:B keys, distant blank merge/spill; readonly child selection allowed | mandatory |
+| AC-SEM-05 (SEM-01, STORE-04) | S3.2–S3.3, S8.1 | F5; operation-guard + `tests/xlsx-viewer-structure-metadata.test.ts`: filter0–1 before anchor2, within/below/absolute anchors | mandatory |
 | AC-SEM-06 (SEM-03) | S8.1 | F2/F4/F8; filter suite: typed/wildcard/blank/error/compound AND/OR serialization/replay, text-evaluable semantics in mixed columns | mandatory |
 | AC-SEM-07 (SEM-03) | S8.1 | F8; date-filter + native/date suites: D+.5, period/day bounds, zones/DST, 1900/1904 | mandatory |
 | AC-SEM-08 (SEM-04) | S8.2, S9.1 | F4; value-index/filter-ui: 100k+/1M universe, beyond10k search, all/search-subset selections | mandatory |
