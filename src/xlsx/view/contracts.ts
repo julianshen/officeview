@@ -182,6 +182,11 @@ export interface SourceStore {
   /** Complete sources terminate with a complete coarse result or explicit resource/error (§4.1). */
   queryOverview(request: OverviewQuery, options: ReadOptions): Promise<Page<OverviewGroup>>
   ensureComplete(rect: SourceRect, options: ReadOptions): Promise<RangeCompletion>
+  /** Optional (S10.2 main ledger): the consumer has decoded `payload` (a page
+   * this store returned) into its own charged structure, or dropped it. A store
+   * whose payloads are charged while reachable ends that charge now. Call it
+   * only after the owner's own charge is in place. */
+  settle?(payload: object): void
   release(): Promise<void>
 }
 

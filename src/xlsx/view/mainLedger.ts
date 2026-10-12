@@ -54,6 +54,7 @@ export class MainMemoryLedger {
     const entry = this.alive.get(token)
     if (!entry || --entry.remaining > 0) return
     this.alive.delete(token)
+    this.lifetimes.delete(token)
     this.set(entry.pool, entry.owner, 0)
   }
   /**
@@ -67,11 +68,33 @@ export class MainMemoryLedger {
     const token = `life${++lifetimeSerial}`
     const owner = token
     this.set(pool, owner, bytes)
+    if (targets.length) this.lifetimes.set(token, pool)
+    for (const target of targets) if (!this.leases.has(target)) this.leases.set(target, token)
     if (!this.watcher || targets.length === 0) return token
     this.alive.set(token, { pool, owner, remaining: targets.length })
     for (const target of targets) this.watcher.register(target, token)
     return token
   }
+  /**
+   * Ends the lifetime charge that `target` (any registered target of it) holds,
+   * at once: its consumer has decoded the payload into its own structure and
+   * that owner now carries the charge. The consumer calls this AFTER charging
+   * the owner, so the bytes are never uncharged in between. A payload nobody
+   * settles (still held raw) keeps its reachability lease as a safety net.
+   * Later collection of the target is then a no-op.
+   */
+  settle(target: object): void {
+    const token = this.leases.get(target)
+    if (token === undefined) return
+    this.leases.delete(target)
+    const pool = this.lifetimes.get(token)
+    if (pool === undefined) return
+    this.lifetimes.delete(token)
+    this.alive.delete(token)
+    this.set(pool, token, 0)
+  }
+  private readonly leases = new WeakMap<object, string>()
+  private readonly lifetimes = new Map<string, MainPool>()
   private readonly pools = emptyPools()
   private peakPools = emptyPools()
   bytes = 0

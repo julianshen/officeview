@@ -51,7 +51,8 @@ async function flushReactRetention(): Promise<void> {
   cleanup()
 }
 import { MergeQueryCache } from '../src/xlsx/view/viewport'
-import { ValueIndexCache } from '../src/xlsx/view/valueIndex'
+import { ValueIndexCache, valueSourceFromStore } from '../src/xlsx/view/valueIndex'
+import type { MainPool } from '../src/xlsx/view/mainLedger'
 import { workbookOf } from './helpers/xlsx-find'
 import { xlsxBytes } from './helpers/xlsx-package'
 
@@ -168,6 +169,37 @@ describe('lifetime charges (review round 3, findings 1-3)', () => {
   })
 })
 
+describe('reply charges settle when the payload is adopted (round-4 follow-up 1)', () => {
+  it('settle ends a lifetime charge at once; a later collection is a no-op; unknown targets do nothing', async () => {
+    const ledger = new MainMemoryLedger()
+    let reply: { result: { page: { items: number[] } } } | null = { result: { page: { items: [1, 2, 3] } } }
+    ledger.chargeWhileReachable('replies', leaseTargets(reply), 5000)
+    ledger.chargeWhileReachable('replies', [{}], 7)
+    ledger.set('rowCache', 'rows', 4000)          // the owner charges first...
+    ledger.settle(reply.result.page)              // ...then the payload's charge ends
+    expect(ledger.snapshot().byPool.replies).toBe(7)
+    ledger.settle({})                             // not a registered target
+    ledger.settle(reply.result.page)              // settling twice is harmless
+    reply = null
+    await collect()
+    expect(ledger.snapshot().byPool).toMatchObject({ replies: 0, rowCache: 4000 })
+    expect(ledger.snapshot().peakBytes).toBe(9007)
+  })
+})
+
+/** Records every ledger change with the pool totals right after it. */
+function timeline(ledger: MainMemoryLedger): Array<{ pool: MainPool; delta: number; byPool: Record<MainPool, number> }> {
+  const events: Array<{ pool: MainPool; delta: number; byPool: Record<MainPool, number> }> = []
+  const set = ledger.set.bind(ledger)
+  ledger.set = (pool, owner, bytes) => {
+    const before = ledger.snapshot().byPool[pool]
+    set(pool, owner, bytes)
+    const after = ledger.snapshot().byPool
+    if (after[pool] !== before) events.push({ pool, delta: after[pool] - before, byPool: after })
+  }
+  return events
+}
+
 /** Opens a paged workbook over the in-process kernel and returns its RemoteWorkbook. */
 async function openRemote(): Promise<{ remote: RemoteWorkbook; release: () => Promise<void> }> {
   const h = workerHarness()
@@ -238,6 +270,66 @@ describe('worker-backed document ledger', () => {
     await flushReactRetention()
     await collect()
     expect(ledger.snapshot().bytes).toBe(0)
+  })
+})
+
+describe('worker-backed adoption settles replies without waiting for GC (round-4 follow-up 1)', () => {
+  it('value list (F4-like): each value reply is settled after the index charged its page; the peak stays near the retained index', async () => {
+    const { remote, release } = await openRemote()
+    const ledger = remote.mainLedger
+    const store = remote.store('1')
+    await collect()
+    const base = ledger.snapshot()
+    const events = timeline(ledger)
+    const cache = new ValueIndexCache({ limitBytes: 16 * 1024 * 1024, onUsage: bytes => ledger.set('controls', 'cache', bytes) })
+    const identity = { ...store.stamp, range: { r0: 0, r1: 39, c0: 0, c1: 1, headerRows: 0 as const, totalsRows: 0 as const }, col: 0, classification: { kind: 'text' as const, hasNumeric: false }, classificationGen: 0 }
+    const index = cache.open(identity, valueSourceFromStore(store, 0, { r0: 0, r1: 39 }, 8))
+    expect(await index.build()).toBe('complete')
+    const replies = events.filter(e => e.pool === 'replies')
+    const charged = replies.filter(e => e.delta > 0), settled = replies.filter(e => e.delta < 0)
+    expect(charged.length).toBe(5)                         // one valueQuery reply per 8-row page
+    expect(settled.length).toBe(5)                         // every one settled, no GC involved
+    // No window where neither is charged: each settle happens with the index's charge in place.
+    for (const e of settled) expect(e.byPool.controls).toBeGreaterThan(0)
+    // Without GC, the reply pool is back at its baseline (or lower, if old replies were collected).
+    expect(ledger.snapshot().byPool.replies).toBeLessThanOrEqual(base.byPool.replies)
+    // At most one page's reply is ever charged next to the index: the peak stays
+    // within one reply of the retained index instead of growing with every page.
+    const maxReply = Math.max(...charged.map(e => e.delta))
+    const peak = Math.max(...events.map(e => e.byPool.controls + e.byPool.replies - base.byPool.replies))
+    expect(peak).toBeLessThanOrEqual(ledger.snapshot().byPool.controls + maxReply)
+    await release()
+  })
+
+  it('row pages: the row cache charges its copies, then the page reply is settled', async () => {
+    const { remote, release } = await openRemote()
+    const ledger = remote.mainLedger
+    await collect()
+    const base = ledger.snapshot().byPool.replies
+    const events = timeline(ledger)
+    await remote.store('1').load(Array.from({ length: 40 }, (_, r) => r), 0, 1)
+    const settled = events.filter(e => e.pool === 'replies' && e.delta < 0)
+    expect(settled.length).toBeGreaterThan(0)
+    for (const e of settled) expect(e.byPool.rowCache).toBeGreaterThan(0)
+    expect(ledger.snapshot().byPool.replies).toBeLessThanOrEqual(base)
+    await release()
+  })
+
+  it('a committed sort view: the adopted view charges first, then its reply is settled', async () => {
+    const { remote, release } = await openRemote()
+    const ledger = remote.mainLedger
+    await collect()
+    const base = ledger.snapshot().byPool.replies
+    const events = timeline(ledger)
+    const spec = { range: { r0: 0, r1: 39, c0: 0, c1: 1, headerRows: 0 as const, totalsRows: 0 as const }, keys: [{ col: 1, order: 'asc' as const }], caseSensitive: false }
+    const commit = await remote.sort(remote.identity('1'), spec, new AbortController().signal)
+    expect(commit.kind).toBe('committed')
+    const settled = events.filter(e => e.pool === 'replies' && e.delta < 0)
+    expect(settled.length).toBeGreaterThan(0)
+    for (const e of settled) expect(e.byPool.viewBuffers).toBeGreaterThan(0)
+    // prepareColumns' reply carries nothing worth keeping; the view reply is settled.
+    expect(ledger.snapshot().byPool.replies - base).toBeLessThan(2048)
+    await release()
   })
 })
 

@@ -361,6 +361,8 @@ export class RemoteWorkbook implements WorkbookSource {
       case 'complete': {
         if (out.result.kind !== 'view') return { kind: 'error', message: 'Unexpected view reply' }
         const view = this.adopt(sheetId, out.result.delta, spec)
+        // The adopted view now carries the bytes (charged in adopt): end the reply's lease.
+        if (view) this.mainLedger.settle(out)
         return view ? { kind: 'committed', view } : { kind: 'stale' }
       }
       case 'cancelled': return { kind: 'cancelled' }
@@ -586,6 +588,8 @@ export class RemoteSheetStore implements SourceStore {
       if (!finished && cursor !== undefined) void this.releaseScan(cursor)
     }
   }
+  /** SourceStore.settle: a consumer decoded a page this store returned. */
+  settle(payload: object): void { this.workbook.mainLedger.settle(payload) }
   private async releaseScan(cursor: string): Promise<void> {
     if (this.workbook.isClosed) return
     await this.workbook.request({ kind: 'read', requestId: this.workbook.nextRequestId(), owner: this.workbook.identity(this.sheetId), query: { op: 'releaseScan', cursor } })
@@ -721,6 +725,8 @@ export class RemoteSheetStore implements SourceStore {
         const last = page.nextCursor === undefined ? r1 : page.items.length ? Math.min(r1, page.items[page.items.length - 1].row) : covered
         const byRow = new Map(page.items.map(item => [item.row, item.cells]))
         for (let row = covered + 1; row <= last; row++) changed = this.put(row, k0, k1, byRow.get(row) ?? []) || changed
+        // The row cache now holds (and charges) its own copies of these cells.
+        this.workbook.mainLedger.settle(page)
         covered = Math.max(covered, last)
         cursor = page.nextCursor
         if (cursor === undefined) break

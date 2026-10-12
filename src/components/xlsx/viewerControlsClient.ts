@@ -104,7 +104,9 @@ export async function viewerControls(options: ViewerControlsOptions, signal: Abo
         const page = await laneSource.readPage(index, abort)
         if (!sameControlOwner(owner, options.snapshot().owner) || !sameStamp(owner, store.stamp)) throw new ValueIndexError('stale-source', 'Source or view changed; retry.')
         if (page.kind === 'error') throw new ValueIndexError(page.failure.code, page.failure.message)
-        if (page.kind === 'values') { await accept(page, r0 + index * size); break }
+        // The consumer folds the page into its own (charged) state, then the
+        // reply it came from stops being charged.
+        if (page.kind === 'values') { try { await accept(page, r0 + index * size) } finally { page.settle?.() } break }
         if (complete) throw new ValueIndexError('page-error', 'Values stayed unknown after source completion.')
         const coverage = await store.ensureComplete({ r0: r0 + index * size, r1: Math.min(r1, r0 + (index + 1) * size - 1), c0: col, c1: col }, { stamp: owner, signal: abort })
         if (coverage.error) throw new ValueIndexError(coverage.error.code, coverage.error.message)
