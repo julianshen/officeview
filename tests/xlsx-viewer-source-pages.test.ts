@@ -260,7 +260,8 @@ describe('paged import session', () => {
   it('RED 22: expanded bytes equal the inflated part sizes; progress comes from completed batches with known totals', async () => {
     const bytes = xlsxBytes({ sheetData: rowsXml(800), sharedStrings: ['a', 'b'] })
     const inventory = await readZipInventory(bytesRangeSource(bytes), { maxEntries: 100, maxCentralDirectoryBytes: 1 << 20, maxNameBytes: 1024, maxPartExpandedBytes: 1 << 30, maxTotalExpandedBytes: 1 << 30, maxRatio: 1e9 })
-    const read = ['xl/workbook.xml', 'xl/_rels/workbook.xml.rels', 'xl/sharedStrings.xml', 'xl/worksheets/sheet1.xml']
+    // S5.4: the styles part is read too (paged cells format through its table).
+    const read = ['xl/workbook.xml', 'xl/_rels/workbook.xml.rels', 'xl/sharedStrings.xml', 'xl/styles.xml', 'xl/worksheets/sheet1.xml']
     const expected = read.reduce((n, name) => n + inventory.find(name)!.uncompressedSize, 0)
     const events: ImportProgress[] = []
     const store = new SourcePageStore({ docId: 'd', backend: memoryPageBackend() })
@@ -292,7 +293,7 @@ describe('paged import session', () => {
       ],
     })
     const inventory = await readZipInventory(bytesRangeSource(bytes), { maxEntries: 100, maxCentralDirectoryBytes: 1 << 20, maxNameBytes: 1024, maxPartExpandedBytes: 1 << 30, maxTotalExpandedBytes: 1 << 30, maxRatio: 1e9 })
-    const read = ['xl/workbook.xml', 'xl/_rels/workbook.xml.rels', 'xl/worksheets/sheet1.xml', 'xl/worksheets/_rels/sheet1.xml.rels', 'xl/tables/table1.xml', 'xl/drawings/drawing1.xml']
+    const read = ['xl/workbook.xml', 'xl/_rels/workbook.xml.rels', 'xl/styles.xml', 'xl/worksheets/sheet1.xml', 'xl/worksheets/_rels/sheet1.xml.rels', 'xl/tables/table1.xml', 'xl/drawings/drawing1.xml']
     const expected = read.reduce((n, name) => n + inventory.find(name)!.uncompressedSize, 0)
     const events: ImportProgress[] = []
     const store = new SourcePageStore({ docId: 'd', backend: memoryPageBackend() })

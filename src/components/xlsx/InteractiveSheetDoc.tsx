@@ -174,6 +174,8 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
   const remote = isRemoteWorkbook(source) ? source : null
   const [loadTick, setLoadTick] = useState(0)
   useEffect(() => remote?.subscribe(() => setLoadTick(tick => tick + 1)), [remote])
+  // Tiles painted under an older worker layout/merge generation are stale (§10.1).
+  const structureGens = useRef(new Map<string, number>()).current
 
   // ---- fonts/images: one lease per (fallback fonts, active sheet) ----
   // A font publication bumps fontGen (re-keys tiles, keeps zoom). Leases swap
@@ -244,7 +246,8 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
     const entry: SheetEntry = {
       sheet, revision: input.revision, structureGen, view, geometry: built, metrics: built.metrics, body: input.filter || input.sort ? { r0: (input.filter?.range ?? input.sort!.range).r0 + (input.filter?.range ?? input.sort!.range).headerRows, r1: (input.filter?.range ?? input.sort!.range).r1 - (input.filter?.range ?? input.sort!.range).totalsRows } : remote ? used ? { r0: used.r0, r1: used.r1 } : null : usedBody(sheet),
       // Layout records are keyed by complete identity; a new view gets its own merge cache.
-      layoutCache: previous?.layoutCache ?? new LayoutCache(), merges: new MergeQueryCache(),
+      // A worker layout/merge publication changes record boxes: fresh layouts then.
+      layoutCache: previous && previous.structureGen === structureGen ? previous.layoutCache : new LayoutCache(), merges: new MergeQueryCache(),
     }
     entries.set(sheetId, entry)
     if (!previous) session.register(sheetId, { view, projection: entry.metrics, body: entry.body })
@@ -313,7 +316,7 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
   // Refresh against the CURRENT projection/viewport (a view commit or resize keeps
   // the logical origin and zoom; refresh only clamps).
   const windowKey = useRef('')
-  const nextWindowKey = JSON.stringify([activeSheetId, entry?.revision, viewport.width, viewport.height, dpr])
+  const nextWindowKey = JSON.stringify([activeSheetId, entry?.revision, entry?.structureGen, viewport.width, viewport.height, dpr])
   if (entry && windowKey.current !== nextWindowKey) { windowKey.current = nextWindowKey; windowFor(activeSheetId, entry) }
   const scroll = entry ? windows.get(activeSheetId) ?? windowFor(activeSheetId, entry) : null
   const setWindow = (sheetId: string, next: ScrollWindow) => {
@@ -352,7 +355,8 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
     sheet: entry.sheet, geometry: entry.geometry, identity, origin: scroll.logicalOrigin, viewport, zoom: scroll.zoom, dpr,
     extent: { width: entry.metrics.cols.totalCss(), height: entry.metrics.rows.totalCss() },
     assets: assets?.lease.assets, layoutCache: entry.layoutCache, merges: entry.merges, ...(mark ? { watermark: mark } : {}),
-    ...(remote ? { pending: (box: LogicalCellBox) => remote.store(activeSheetId).pendingIn(entry.metrics, box) } : {}),
+    structureGen: entry.structureGen,
+    ...(remote ? { pending: (box: LogicalCellBox) => remote.store(activeSheetId).pendingIn(entry.metrics, box, scroll.zoom * dpr) } : {}),
   } : null
   // Purely observational: it never creates or resizes the pool.
   const report = () => {
@@ -390,6 +394,9 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
     }
     // The pool (and its admission) exists before the pane surface is sized.
     const renderer = rendererFor()
+    const seenGen = structureGens.get(activeSheetId)
+    if (seenGen !== undefined && seenGen !== frame.structureGen) renderer.cache.invalidate(key => key.identity.sheetId === activeSheetId)
+    structureGens.set(activeSheetId, frame.structureGen ?? 0)
     sizeCanvas(canvas, device.width, device.height)
     const ctx = canvas.getContext('2d')
     if (!ctx) return
@@ -399,7 +406,7 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
     const timer = setTimeout(() => { renderer.prefetch(frame); report() }, 0)
     return () => clearTimeout(timer)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [identityKey, scroll, viewport, dpr, assets, surfaceBytes, profile, mark, loadTick])
+  }, [identityKey, scroll, viewport, dpr, assets, surfaceBytes, profile, mark, loadTick, entry?.structureGen])
 
   // ---- find (workbook-wide, bounded pages) ----
   const [query, setQuery] = useState('')
@@ -439,6 +446,8 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
       textOf: (cell, sheetId) => {
         const sheetEntry = byId.get(sheetId)
         const styled = sheetEntry && cellAt(sheetEntry, cell)
+        // Worker-backed cells carry a style id; the workbook table resolves it.
+        if (sheetEntry && !styled && remote) return cellDisplayText(sheetEntry.sheet, { value: cell.value, style: remote.styleOf(cell.styleIndex) })
         return sheetEntry ? cellDisplayText(sheetEntry.sheet, styled ?? cell) : String(cell.value ?? '')
       },
     }
@@ -550,6 +559,8 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
     const e = current.current.entryFor(sheetId), body = e.body
     return { owner: current.current.identityOf(current.current.activeSheetId), filter: e.view.filter, sort: e.view.sort, records: { ...recordCounts(e.metrics, body), completeness: 'complete' } }
   }
+  // Only the active sheet keeps a worker row cache (§12.4).
+  useEffect(() => { remote?.activate(activeSheetId) }, [remote, activeSheetId])
   const [controls, setControls] = useState<ViewerControls | null>(null)
   const controlsReady = useRef<Promise<ViewerControls> | null>(null)
   const controlPorts = useRef(new Map<string, ViewerControls>()).current
@@ -575,7 +586,7 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
         rerender()
         return snapshot(sheetId)
       },
-      ...(remote ? { remote: {
+      ...(remote ? { styleOf: (index: number) => remote.styleOf(index), remote: {
         sort: (spec, signal, progress) => remote.sort(remote.identity(sheetId), spec, signal, progress),
         filter: (spec, keySets, signal, progress) => remote.filter(remote.identity(sheetId), spec, keySets, signal, progress),
       } } : {}),
@@ -640,7 +651,7 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
       sessionBudgetBytes: copySessionBudget(profile),
       selection, order: entry.view.order, visibility: entry.view.visibility, columns: visibilityFromHidden(createIntervalSet(hiddenCols), entry.metrics.cols.logicalCount),
       allowed: () => current.current.allowCopy, signal: abort.signal, onPending: () => { if (token === copyToken.current) setAnnouncement('Copy is waiting for values; cancel to stop.') },
-      format: cell => { const raw = cellAt(entry, cell); return cellDisplayText(entry.sheet, { value: cell.value, style: raw?.style }) },
+      format: cell => { const style = remote ? remote.styleOf(cell.styleIndex) : cellAt(entry, cell)?.style; return cellDisplayText(entry.sheet, { value: cell.value, style }) },
     })
     if (token !== copyToken.current) return
     setCopyPending(false)

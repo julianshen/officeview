@@ -57,8 +57,8 @@ function workerHarness() {
         else deliver()
       })
     },
-    addEventListener(_type: 'message', listener: (event: MessageEvent) => void) { listeners.add(listener) },
-    removeEventListener(_type: 'message', listener: (event: MessageEvent) => void) { listeners.delete(listener) },
+    addEventListener(type: string, listener: (event: MessageEvent) => void) { if (type === 'message') listeners.add(listener) },
+    removeEventListener(type: string, listener: (event: MessageEvent) => void) { if (type === 'message') listeners.delete(listener) },
     terminate: vi.fn(),
   }
   return {
@@ -249,5 +249,200 @@ describe('S5.4 remote source: cancellation and ownership on the main thread', ()
     expect(await store.readCell({ row: 0, col: 0 }, { signal: new AbortController().signal, stamp: store.stamp })).toMatchObject({ kind: 'cell', cell: { value: 'alpha' } })
     await remote.close()
     expect(h.posted.at(-1)?.kind).toBe('close')
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Review round 1 (codex) regressions
+// ---------------------------------------------------------------------------
+import InteractiveSheetDoc from '../src/components/xlsx/InteractiveSheetDoc'
+import { createControlsClient, type ControlsClientOptions } from '../src/components/xlsx/controlsClient'
+import { createRowOrder } from '../src/xlsx/view/order'
+import { createIntervalSet, visibilityFromHidden } from '../src/xlsx/view/visibility'
+import { createSheetMetrics } from '../src/xlsx/view/projection'
+import type { RemoteOpen } from '../src/worker/viewerRemoteSource'
+
+const DATE_STYLES = '<numFmts count="0"/><cellXfs count="2"><xf numFmtId="0"/><xf numFmtId="14" applyNumberFormat="1"/></cellXfs>'
+const DATED = '<row r="1"><c r="A1" s="1"><v>44927</v></c><c r="B1"><v>1</v></c></row><row r="2"><c r="A2" s="1"><v>44928</v></c><c r="B2"><v>2</v></c></row>'
+const HIDDEN_COLS = '<cols><col min="2" max="2" hidden="1" width="9" customWidth="1"/></cols>'
+const SECRET = '<row r="1"><c r="A1" t="inlineStr"><is><t>shown</t></is></c><c r="B1" t="inlineStr"><is><t>hidden-secret</t></is></c><c r="C1" t="inlineStr"><is><t>after</t></is></c></row>'
+  + '<row r="2"><c r="A2"><v>2</v></c></row>'
+const pkg = (spec: Parameters<typeof xlsxBytes>[0]) => xlsxBytes(spec)
+
+async function openRemote(h: ReturnType<typeof workerHarness>, bytes = xlsxBytes({ sheetData: CORNER }), extra: Partial<RemoteOpen> = {}) {
+  const client = new ViewerClient(h.port, 'review')
+  const opened = await openRemoteWorkbook(client, 'review-doc', new Blob([bytes as BlobPart]), 'D')
+  if (!('layouts' in opened)) throw new Error(`open failed: ${JSON.stringify(opened)}`)
+  return { client, remote: new RemoteWorkbook(client, { ...opened, ...extra }) }
+}
+async function residentCopy(bytes: Uint8Array, at: string): Promise<string> {
+  const write = clipboard()
+  const doc = await parseXlsx(await OfficePackage.load(bytes))
+  const ui = render(<InteractiveSheetDoc doc={doc} />)
+  const grid = go(ui, at)
+  fireEvent.keyDown(grid, { key: 'c', ctrlKey: true })
+  await waitFor(() => expect(write).toHaveBeenCalled())
+  ui.unmount()
+  return (write.mock.calls[0] as unknown as [string])[0]
+}
+
+describe('S5.4 review: worker-backed cells keep resident semantics', () => {
+  it('F1 formats paged cells with the workbook style table and date system (copy and find parity)', async () => {
+    const bytes = pkg({ sheetData: DATED, styles: DATE_STYLES })
+    const expected = await residentCopy(bytes, 'A1')
+    expect(expected).not.toBe('44927')
+    const h = workerHarness(), write = clipboard()
+    const ui = render(<OfficeFile data={new Blob([bytes as BlobPart])} interactiveSheets viewerWorker={() => h.port} />)
+    await waitFor(() => expect(ui.getByRole('gridcell', { name: new RegExp(expected.replace(/[/.]/g, '\\$&')) })).toBeTruthy())
+    const grid = go(ui, 'A1')
+    fireEvent.keyDown(grid, { key: 'c', ctrlKey: true })
+    await waitFor(() => expect(write).toHaveBeenCalledWith(expected))
+    fireEvent.change(ui.getByRole('searchbox', { name: 'Search document' }), { target: { value: expected } })
+    await waitFor(() => expect(ui.container.textContent).toMatch(/1 of 1/))
+  })
+
+  it('F2 authored-hidden columns stay collapsed: a row copy across them omits the hidden value', async () => {
+    const bytes = pkg({ sheetData: SECRET, beforeSheetData: HIDDEN_COLS })
+    const h = workerHarness(), write = clipboard()
+    const ui = render(<OfficeFile data={new Blob([bytes as BlobPart])} interactiveSheets viewerWorker={() => h.port} />)
+    await waitFor(() => expect(ui.getByRole('gridcell', { name: /shown/ })).toBeTruthy())
+    go(ui, 'A1')
+    const grid = ui.getByRole('grid')
+    fireEvent.keyDown(grid, { key: 'ArrowRight', shiftKey: true })
+    fireEvent.keyDown(grid, { key: 'c', ctrlKey: true })
+    await waitFor(() => expect(write).toHaveBeenCalled())
+    const text = (write.mock.calls[0] as unknown as [string])[0]
+    expect(text).not.toContain('hidden-secret')
+    expect(text).toBe('shown\tafter')
+    expect(ui.queryByRole('gridcell', { name: /hidden-secret/ })).toBeNull()
+  })
+})
+
+describe('S5.4 review: bounded main-thread caches and reads', () => {
+  it('F3 one document-wide byte ledger bounds the row cache; inactive sheets release theirs', async () => {
+    const long = 'x'.repeat(2000)
+    const rows = Array.from({ length: 40 }, (_, i) => `<row r="${i + 1}"><c r="A${i + 1}" t="inlineStr"><is><t>${long}</t></is></c></row>`).join('')
+    const h = workerHarness()
+    const { remote } = await openRemote(h, pkg({ sheetData: rows }), { rowCacheBytes: 64 * 1024 })
+    const store = remote.store('1')
+    for (let row = 0; row < 40; row++) {
+      expect(await store.readCell({ row, col: 0 }, { signal: new AbortController().signal, stamp: store.stamp })).toMatchObject({ kind: 'cell', cell: { value: long } })
+    }
+    expect(remote.ledger.peakBytes).toBeLessThanOrEqual(64 * 1024)
+    expect(remote.ledger.bytes).toBeLessThanOrEqual(64 * 1024)
+    expect(store.cachedRows).toBeGreaterThan(0)
+    remote.activate('another-sheet')
+    expect(store.cachedRows).toBe(0)
+    expect(remote.ledger.bytes).toBe(0)
+    await remote.close()
+  })
+
+  it('F4 tiles read only admitted detail rows, coalesced and capped per tile and per frame', async () => {
+    const h = workerHarness()
+    const { remote } = await openRemote(h)
+    const store = remote.store('1'), axes = remote.geometry('1')
+    const visibility = visibilityFromHidden(createIntervalSet([]))
+    // Sub-detail rows (20 CSS px at scale 0.1 = 2 device px) are summarized: no reads.
+    const identity = createSheetMetrics({ rows: axes.rows, cols: axes.cols, order: createRowOrder([]), visibility })
+    expect(store.pendingIn(identity, { x: 0, y: 0, width: 5000, height: 10_000 }, 0.1)).toEqual([])
+    expect(h.reads()).toBe(0)
+    // Scattered display order: 512 slots map to source rows 1,000 apart.
+    const scattered = Uint32Array.from({ length: 512 }, (_, i) => i * 1000 + 999 - (i % 2) * 999)
+    const order = createRowOrder([{ r0: 0, r1: 511_999, sourceAtOffset: Uint32Array.from({ length: 512_000 }, (_, d) => d < 512 ? scattered[d] : 0) }].map(band => {
+      // Complete permutation: the first 512 offsets show the scattered rows; the rest fill in ascending order.
+      const used = new Set(scattered), rest: number[] = []
+      for (let r = 0; r < 512_000; r++) if (!used.has(r)) rest.push(r)
+      return { ...band, sourceAtOffset: Uint32Array.from([...scattered, ...rest]) }
+    }))
+    const metrics = createSheetMetrics({ rows: axes.rows, cols: axes.cols, order, visibility })
+    h.hold(command => command.kind === 'read')
+    const before = h.reads('rows')
+    const pending = store.pendingIn(metrics, { x: 0, y: 0, width: 512, height: 512 * 20 }, 1)
+    expect(pending.length).toBeGreaterThan(0)
+    expect(h.reads('rows') - before).toBeLessThanOrEqual(remote.pageLimits.tile)
+    for (let tile = 1; tile < 8; tile++) store.pendingIn(metrics, { x: 0, y: tile * 512 * 20, width: 512, height: 512 * 20 }, 1)
+    expect(h.reads('rows') - before).toBeLessThanOrEqual(remote.pageLimits.frame)
+    h.release()
+    await remote.close()
+  })
+
+  it('F7 cache hits obey the source guards: aborted signal, foreign stamp and close', async () => {
+    const h = workerHarness()
+    const { remote } = await openRemote(h)
+    const store = remote.store('1')
+    expect(await store.readCell({ row: 0, col: 0 }, { signal: new AbortController().signal, stamp: store.stamp })).toMatchObject({ kind: 'cell', cell: { value: 'alpha' } })
+    const aborted = new AbortController(); aborted.abort()
+    expect(await store.readCell({ row: 0, col: 0 }, { signal: aborted.signal, stamp: store.stamp })).toMatchObject({ kind: 'error', code: 'cancelled' })
+    expect(await store.readCell({ row: 0, col: 0 }, { signal: new AbortController().signal, stamp: { ...store.stamp, docId: 'foreign' } })).toMatchObject({ kind: 'error', code: 'stale-source' })
+    const stamp = store.stamp
+    await remote.close()
+    expect(store.cachedRows).toBe(0)
+    expect(await store.readCell({ row: 0, col: 0 }, { signal: new AbortController().signal, stamp })).toMatchObject({ kind: 'error', code: 'stale-source' })
+    expect(store.cellsOf(0)).toBeUndefined()
+  })
+
+  it('F8 a column query never detaches the caller-owned membership buffer', async () => {
+    const h = workerHarness()
+    const { remote } = await openRemote(h)
+    const store = remote.store('1')
+    const rows = Uint32Array.of(0, 1, 2)
+    const page = await store.queryColumn({ col: 0, rows: { kind: 'list', r0: 0, r1: 2, rows }, limit: 10 }, { signal: new AbortController().signal, stamp: store.stamp })
+    expect(page.items.filter(item => item.kind === 'cell')).toHaveLength(3)
+    expect(rows.byteLength).toBe(12)
+    expect([...rows]).toEqual([0, 1, 2])
+    await remote.close()
+  })
+
+  it('F11 an abandoned scan iteration releases its worker continuation', async () => {
+    const h = workerHarness()
+    const { remote } = await openRemote(h)
+    const store = remote.store('1')
+    const iterator = store.scanPopulated({ range: { r0: 0, r1: 1048575, c0: 0, c1: 16383 }, limit: 1 }, { signal: new AbortController().signal, stamp: store.stamp })[Symbol.asyncIterator]()
+    expect((await iterator.next()).value?.items).toHaveLength(1)
+    expect(h.kernel.session('review-doc')!.openScans).toBe(1)
+    await iterator.return?.()
+    await waitFor(() => expect(h.kernel.session('review-doc')!.openScans).toBe(0))
+    expect(h.posted.some(command => command.kind === 'read' && command.query.op === 'releaseScan')).toBe(true)
+    await remote.close()
+  })
+})
+
+describe('S5.4 review: lifecycle and publication', () => {
+  it('F6 unmounting during a pending open closes the half-open document and terminates the worker', async () => {
+    const h = workerHarness()
+    h.hold(command => command.kind === 'open')
+    const ui = render(<OfficeFile data={workbook()} interactiveSheets viewerWorker={() => h.port} />)
+    await waitFor(() => expect(h.posted.some(command => command.kind === 'open')).toBe(true))
+    ui.unmount()
+    await waitFor(() => expect(h.port.terminate).toHaveBeenCalled())
+    expect(h.posted.some(command => command.kind === 'close')).toBe(true)
+  })
+
+  it('F9 a layout publication repaints tiles and refreshes the scroll extent', async () => {
+    const h = workerHarness(), f = frames()
+    const { remote } = await openRemote(h)
+    const ui = render(<InteractiveSheetDoc doc={{ sheets: [{ name: 'S', sheetId: '1', rows: [], cols: [], merges: [], mergeRanges: [] }] }} source={remote} onFrame={f.onFrame} />)
+    await waitFor(() => expect(ui.getByRole('gridcell', { name: /alpha/ })).toBeTruthy())
+    await waitFor(() => expect(f.last()?.pendingTiles).toBe(0))
+    const rowsBefore = ui.getAllByRole('row').length, paints = f.last()!.basePaints
+    act(() => remote.publishLayout('1', { ...remote.layout('1'), rowOverrides: [{ start: 0, end: 0, sizeCss: 200 }] }))
+    await waitFor(() => expect(f.last()!.basePaints).toBeGreaterThan(paints))
+    expect(f.last()!.tileHits).toBeGreaterThanOrEqual(0)
+    // The refreshed projection shows fewer rows in the same pane (row 1 is now 200px).
+    await waitFor(() => expect(ui.getAllByRole('row').length).toBeLessThan(rowsBefore))
+    await remote.close()
+  })
+
+  it('F10 a worker-committed stage still refuses publication when the source generation moved', async () => {
+    let valueGen = 0
+    const owner = () => ({ docId: 'd', sheetId: 's', valueGen, fontGen: 0, viewGen: 0 })
+    const publish = vi.fn(() => ({ owner: owner(), filter: null, sort: null, records: { visible: 1, total: 1, completeness: 'complete' as const } }))
+    const client = createControlsClient({
+      snapshot: () => ({ owner: owner(), filter: null, sort: null, records: { visible: 1, total: 1, completeness: 'complete' } }),
+      stageSort: async () => { valueGen++; return { kind: 'ready', committed: true, publish } },
+    } as unknown as ControlsClientOptions)
+    const result = await client.sort(owner(), { range: { r0: 0, r1: 1, c0: 0, c1: 0, headerRows: 0, totalsRows: 0 }, keys: [{ col: 0, order: 'asc' }], caseSensitive: false }, new AbortController().signal)
+    expect(result).toEqual({ kind: 'stale' })
+    expect(publish).not.toHaveBeenCalled()
   })
 })

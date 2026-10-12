@@ -127,8 +127,11 @@ export class ViewerKernel {
   /** Sources opened through the paged route: their views live here, so filter
    * rules are evaluated here too (S5.4); object sessions keep the S9 transport. */
   private readonly pagedSources = new WeakSet<WorkbookSource>()
-  /** Value-list keys shipped with in-flight filter commands, per document. */
-  private readonly keySets = new Map<string, Map<string, FilterKeySet>>()
+  /** Value-list keys shipped with in-flight filter commands, per document and
+   * reference-counted: overlapping commands (a superseded draft and its
+   * replacement) may ship the same committed ref, and one finishing must not
+   * remove the keys the other still evaluates. */
+  private readonly keySets = new Map<string, Map<string, { set: FilterKeySet; holders: number }>>()
   private epochs = 0
   readonly stats: KernelStats = { opens: 0, parses: 0, sourceReads: 0 }
 
@@ -259,6 +262,7 @@ export class ViewerKernel {
       case 'read': {
         // A read finishing after cancel, close, replacement or a newer commit is withheld (§10.1).
         if (signal.aborted) return reply(command, command.owner, { kind: 'cancelled' })
+        if (command.query?.op === 'releaseScan') return out
         return live(command.owner.docId) && entry.session!.isCurrent(command.owner)
           ? out : errorReply(command, command.owner, 'stale-source', true, [{ code: 'stale-owner', message: 'Command owner is not the current committed view' }])
       }
@@ -345,6 +349,11 @@ export class ViewerKernel {
         return reply(command, command.owner, { kind: 'complete', result: { kind: 'valueQuery', page } })
       }
       case 'read': {
+        if (command.query?.op === 'releaseScan') {
+          // Cleanup is document-owned: it must succeed after a newer commit too.
+          const released = this.sessions.get(command.owner.docId)?.releaseScan(command.query.cursor) ?? false
+          return reply(command, command.owner, { kind: 'complete', result: { kind: 'read', result: { op: 'releaseScan', released } } })
+        }
         const session = this.current(command.owner)
         if (!session) return errorReply(command, command.owner, 'stale-source', true, [{ code: 'stale-owner', message: 'Command owner is not the current committed view' }])
         const out = await session.read(command.owner, command.query, signal)
@@ -402,7 +411,7 @@ export class ViewerKernel {
     if (signal.aborted) { await source.release(); return reply(command, owner, { kind: 'cancelled' }) }
     let session: DocumentSession
     const evaluator = !this.options.filterEvaluator && this.pagedSources.has(source)
-      ? { filterEvaluator: createWorkerFilterEvaluator(stamp => this.keySets.get(stamp.docId) ?? new Map()) } : {}
+      ? { filterEvaluator: createWorkerFilterEvaluator(stamp => this.keysFor(stamp.docId), source.formatting?.()) } : {}
     try {
       session = new DocumentSession(command.docId, source, { ...this.options, ...evaluator, profile: command.profile, epoch: ++this.epochs })
     } catch (cause) {
@@ -412,7 +421,8 @@ export class ViewerKernel {
     }
     this.sessions.set(command.docId, session)
     this.stats.opens++
-    return reply(command, owner, { kind: 'complete', result: { kind: 'open', valuePolicy: source.valuePolicy, sheets: source.sheets } }, source.openDiagnostics ?? [])
+    const formatting = source.formatting?.()
+    return reply(command, owner, { kind: 'complete', result: { kind: 'open', valuePolicy: source.valuePolicy, sheets: source.sheets, ...(formatting ? { formatting } : {}) } }, source.openDiagnostics ?? [])
   }
   /** Open is the only place source bytes are read or parsed. A blob is copied
    * into worker memory exactly once (accounted), parsed, then dropped. */
@@ -489,7 +499,11 @@ export class ViewerKernel {
       if (typeof set?.refId !== 'string' || typeof set.scope !== 'string' || !run || !Number.isSafeInteger(run.count) || run.count < 0
         || !isTyped(run.kinds, 'Uint8Array') || !isTyped(run.numbers, 'Float64Array') || !Array.isArray(run.texts)
         || run.kinds.length < run.count || run.numbers.length < run.count || run.texts.length < run.count) continue
-      map.set(set.refId, set)
+      if (installed.includes(set.refId)) continue
+      const held = map.get(set.refId)
+      // A committed ref is immutable: a second holder shares the installed keys.
+      if (held) held.holders++
+      else map.set(set.refId, { set, holders: 1 })
       installed.push(set.refId)
     }
     return installed
@@ -497,8 +511,15 @@ export class ViewerKernel {
   private removeKeys(docId: string, refIds: readonly string[]): void {
     const map = this.keySets.get(docId)
     if (!map) return
-    for (const refId of refIds) map.delete(refId)
+    for (const refId of refIds) {
+      const held = map.get(refId)
+      if (held && --held.holders <= 0) map.delete(refId)
+    }
     if (!map.size) this.keySets.delete(docId)
+  }
+  private keysFor(docId: string): ReadonlyMap<string, FilterKeySet> {
+    const map = this.keySets.get(docId)
+    return new Map([...map?.entries() ?? []].map(([refId, held]) => [refId, held.set]))
   }
   private current(owner: CacheIdentity): DocumentSession | undefined {
     const session = this.sessions.get(owner.docId)

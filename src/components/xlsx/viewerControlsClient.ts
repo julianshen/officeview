@@ -50,6 +50,8 @@ export interface ViewerControlsOptions {
   /** Worker-owned sheet views (S5.4): sort/filter commit in the resident worker,
    * which then publishes its view to this side; nothing is staged here. */
   remote?: RemoteViewPort
+  /** Resolved style of a style id when the document carries no cells (worker-backed sheets). */
+  styleOf?: (index: number) => XlsxCell['style']
 }
 export type RemoteViewCommit =
   | { kind: 'committed'; view: Pick<SheetView, 'order' | 'filter' | 'sort'> & { visibility?: SheetView['visibility'] } }
@@ -75,10 +77,11 @@ export async function viewerControls(options: ViewerControlsOptions, signal: Abo
   } catch (error) { if (!options.resources) resources.dispose(); throw error }
   const styles = new Map<number, XlsxCell['style']>()
   for (const row of sheet.rows) for (const cell of row.cells) styles.set(cell.styleIndex, cell.style)
+  const styleAt = (index: number) => options.styleOf ? options.styleOf(index) : styles.get(index)
   const classifications = new Map<string, ColumnClassification>()
   const scope = (owner: CacheIdentity, range: FilterRange, col: number) => JSON.stringify([owner.valueGen, range, col])
   const prepared = (page: ValueLanePage, index: number): PreparedValue => {
-    const tag = page.tags[index], value = page.numbers[index], style = styles.get(page.styles?.[index] ?? 0)
+    const tag = page.tags[index], value = page.numbers[index], style = styleAt(page.styles?.[index] ?? 0)
     if (tag === 5) return { kind: 'blank' }
     if (tag === 7) return { kind: 'unavailable' }
     if (tag === 4) return { kind: 'error', value: page.texts[index]! }
@@ -187,7 +190,7 @@ export async function viewerControls(options: ViewerControlsOptions, signal: Abo
   }
   const client = createControlsClient({ snapshot: options.snapshot, context, cache, runs,
     rangeRequest: col => { const selection = options.view().selection; return { store, structure, selection: { ...selection, active: selection.active ? { ...selection.active, col: col ?? selection.active.col } : { row: store.extent.used?.r0 ?? 0, col: col ?? 0 } } } },
-    domain: (owner, range, col) => ({ identity: identity(owner, range, col), source: valueSourceFromStore(store, col, { r0: range.r0 + range.headerRows, r1: range.r1 - range.totalsRows }), label: (kind, value, styleIndex) => cellDisplayText(sheet, { value: kind === 'boolean' ? Boolean(value) : value, style: styles.get(styleIndex) }) }),
+    domain: (owner, range, col) => ({ identity: identity(owner, range, col), source: valueSourceFromStore(store, col, { r0: range.r0 + range.headerRows, r1: range.r1 - range.totalsRows }), label: (kind, value, styleIndex) => cellDisplayText(sheet, { value: kind === 'boolean' ? Boolean(value) : value, style: styleAt(styleIndex) }) }),
     stageFilter: (spec, owner, abort, progress) => stage('filter', spec, owner, abort, progress), stageSort: (spec, owner, abort, progress) => stage('sort', spec, owner, abort, progress),
   })
   const resolve = client.resolve, values = client.values

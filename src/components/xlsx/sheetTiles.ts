@@ -47,6 +47,8 @@ export interface SheetFrame {
    * still loading. They paint a pending tone, never an asserted blank, and a
    * tile holding any is presented but not cached (it repaints once they land). */
   pending?: (box: LogicalCellBox) => readonly LogicalCellBox[]
+  /** Worker layout/merge generation of the geometry (tiles of an older one are dropped by the viewer). */
+  structureGen?: number
 }
 export interface SheetTileStats {
   /** renderSheetViewport calls: the only base-cell painting. */

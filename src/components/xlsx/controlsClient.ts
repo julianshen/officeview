@@ -61,6 +61,10 @@ export interface ControlsClientOptions {
 export function sameControlOwner(a: CacheIdentity, b: CacheIdentity): boolean {
   return a.docId === b.docId && a.sheetId === b.sheetId && a.valueGen === b.valueGen && a.fontGen === b.fontGen && a.viewGen === b.viewGen
 }
+/** Same owner except the view generation (the only part a committed stage moves). */
+export function sameSourceOwner(a: CacheIdentity, b: CacheIdentity): boolean {
+  return a.docId === b.docId && a.sheetId === b.sheetId && a.valueGen === b.valueGen && a.fontGen === b.fontGen
+}
 export function sameFilterRange(a: FilterRange, b: FilterRange): boolean {
   return a.r0 === b.r0 && a.r1 === b.r1 && a.c0 === b.c0 && a.c1 === b.c1 && a.headerRows === b.headerRows && a.totalsRows === b.totalsRows
 }
@@ -97,6 +101,9 @@ export function createControlsClient(options: ControlsClientOptions): ControlsCl
     const committed = staged.kind === 'ready' && staged.committed === true
     if (!committed && signal.aborted) return { kind: 'cancelled' }
     if (!committed && !valid(owner, signal)) return { kind: 'stale' }
+    // A worker-committed stage moved only its own view generation: the source,
+    // value and font generations it was staged under must still be current.
+    if (committed && !sameSourceOwner(owner, options.snapshot().owner)) return { kind: 'stale' }
     if (staged.kind !== 'ready') return staged
     // No await between this ownership check and publication/lease transfer.
     const snapshot = staged.publish()

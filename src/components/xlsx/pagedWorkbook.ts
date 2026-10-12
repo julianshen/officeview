@@ -13,6 +13,7 @@ import { RemoteWorkbook, openRemoteWorkbook } from '../../worker/viewerRemoteSou
 import { ImportRefusal } from '../../xlsx/storage/importSession'
 import type { PackageErrorCode } from '../../core/package-error'
 import { PAGED_WORKBOOK, type PagedWorkbookHandle } from '../pagedDocument'
+import { semanticsFor } from '../../xlsx/view/semanticsFor'
 
 /** Open refusals that name a real limit; any other failure keeps compatibility mode. */
 const REFUSALS: ReadonlySet<string> = new Set(['storage-error', 'quota', 'resource-limit'])
@@ -41,13 +42,28 @@ export async function openPagedWorkbook(blob: Blob, options: PagedOpenOptions): 
     options.port.terminate?.()
     if (releaseSource) await options.release?.()
   }
-  let opened: Awaited<ReturnType<typeof openRemoteWorkbook>>
-  try {
-    opened = await openRemoteWorkbook(client, docId, blob, options.profile)
-  } catch (error) {
+  // Cancellation (unmount, replacement) and a dead worker end the open at once:
+  // close the half-open document, terminate the worker, never wait for a reply
+  // that may not come (§10.3).
+  const stop = new Promise<'aborted' | 'failed'>(resolve => {
+    if (options.signal.aborted) { resolve('aborted'); return }
+    options.signal.addEventListener('abort', () => resolve('aborted'), { once: true })
+    ;(options.port as { addEventListener?(type: 'error', listener: () => void): void }).addEventListener?.('error', () => resolve('failed'))
+  })
+  const outcome = await Promise.race([
+    openRemoteWorkbook(client, docId, blob, options.profile).then(value => ({ value }), (error: unknown) => ({ error })),
+    stop,
+  ])
+  if (outcome === 'aborted' || outcome === 'failed') {
+    try { options.port.postMessage({ kind: 'close', requestId: client.nextRequestId(), docId }, []) } catch { /* worker gone */ }
     await end(false)
-    throw error
+    return undefined
   }
+  if ('error' in outcome) {
+    await end(false)
+    throw outcome.error
+  }
+  const opened = outcome.value
   if (!('layouts' in opened)) {
     await end(false)
     const code = opened.kind === 'error' ? opened.code : ''
@@ -57,7 +73,7 @@ export async function openPagedWorkbook(blob: Blob, options: PagedOpenOptions): 
   const remote = new RemoteWorkbook(client, opened, () => end(true))
   if (options.signal.aborted) { await remote.close(); return undefined }
   const doc: XlsxDocument = {
-    sheets: opened.sheets.map((sheet, index) => ({ name: sheet.name, sheetId: sheet.sheetId, workbookIndex: index, rows: [], cols: [], merges: [], mergeRanges: [] })),
+    sheets: opened.sheets.map((sheet, index) => ({ name: sheet.name, sheetId: sheet.sheetId, workbookIndex: index, rows: [], cols: [], merges: [], mergeRanges: [], semantics: semanticsFor(opened.formatting?.dateSystem ?? '1900') })),
     ...(opened.valuePolicy === 'cached' ? { valuePolicy: 'cached' as const } : {}),
   }
   const handle: PagedWorkbookHandle = { source: remote, release: () => remote.close() }

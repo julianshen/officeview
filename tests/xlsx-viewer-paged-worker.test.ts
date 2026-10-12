@@ -37,7 +37,7 @@ describe('resident worker opens paged sources (S1.2)', () => {
     const blob = new Blob([xlsxBytes({ sheetData: rowsXml([3, 1, 4, 1, 5]) }) as BlobPart])
     const whole = vi.spyOn(blob, 'arrayBuffer')
     const open = completed(await run(kernel, { kind: 'open', requestId: rid(), docId: 'doc', source: { kind: 'blob', blob }, profile: 'D' }))
-    expect(open).toEqual({ kind: 'open', valuePolicy: 'cached', sheets: [{ sheetId: '1', name: 'S' }] })
+    expect(open).toMatchObject({ kind: 'open', valuePolicy: 'cached', sheets: [{ sheetId: '1', name: 'S' }], formatting: { dateSystem: '1900' } })
     expect(parse).not.toHaveBeenCalled()
     expect(whole).not.toHaveBeenCalled()
     const owner: CacheIdentity = initialIdentity('doc', '1')
@@ -311,5 +311,37 @@ describe('S5.4 bounded worker reads for the paged interactive viewer', () => {
     if (kept.kind !== 'view') throw new Error('view')
     // Only the two 1s stay visible: source rows 0, 2 and 4 are hidden.
     expect([kept.delta.visibility[0].r0, kept.delta.visibility[0].r1, kept.delta.visibility[0].words[0]]).toEqual([0, 4, 0b01010])
+  })
+})
+
+describe('S5.4 review: worker filter semantics and key lifetime', () => {
+  it('F1 date rules classify paged columns through the workbook style table', async () => {
+    const parse = vi.fn(async (bytes: Uint8Array) => parseXlsx(await OfficePackage.load(bytes)))
+    const kernel = new ViewerKernel({ parse, importLimits: PAGED }, quiet)
+    const styles = '<cellXfs count="2"><xf numFmtId="0"/><xf numFmtId="14" applyNumberFormat="1"/></cellXfs>'
+    const sheetData = '<row r="1"><c r="A1" s="1"><v>44927</v></c></row><row r="2"><c r="A2" s="1"><v>44928</v></c></row><row r="3"><c r="A3" s="1"><v>44929</v></c></row>'
+    const open = completed(await run(kernel, { kind: 'open', requestId: rid(), docId: 'dates', source: { kind: 'blob', blob: new Blob([xlsxBytes({ sheetData, styles }) as BlobPart]) }, profile: 'D' }))
+    expect(open.kind === 'open' && open.formatting?.styles[1]).toMatchObject({ numFmtId: 14 })
+    const owner = initialIdentity('dates', '1')
+    const spec: FilterSpec = { range: { r0: 0, r1: 2, c0: 0, c1: 0, headerRows: 0, totalsRows: 0 }, columns: new Map([[0, { kind: 'date', op: 'eq', first: { year: 2023, month: 1, day: 2 } }]]) }
+    const out = completed(await run(kernel, { kind: 'filter', requestId: rid(), owner, spec, nowMs: 0 }))
+    if (out.kind !== 'view') throw new Error('view')
+    // Only 2023-01-02 (serial 44928, source row 1) stays visible.
+    expect([out.delta.visibility[0].r0, out.delta.visibility[0].r1, out.delta.visibility[0].words[0]]).toEqual([0, 2, 0b010])
+  })
+
+  it('F5 a superseded filter finishing never removes the keys its replacement shares', async () => {
+    const { kernel, owner } = await openPaged('shared', rowsXml([3, 1, 4, 1, 5]))
+    const range = { r0: 0, r1: 4, c0: 0, c1: 1, headerRows: 0 as const, totalsRows: 0 as const }
+    const ref = { refId: 'keys-shared', count: 1, owner: { docId: 'shared', sheetId: '1', valueGen: 0 } }
+    const scope = valueScope({ docId: 'shared', sheetId: '1', valueGen: 0, range, col: 0, classification: { kind: 'number', hasNumeric: true }, classificationGen: 0 })
+    const keySets = () => [{ refId: 'keys-shared', scope, run: { count: 1, kinds: Uint8Array.of(KEY_NUMBER), numbers: Float64Array.of(1), texts: [undefined] } }]
+    const spec = (showBlanks: boolean): FilterSpec => ({ range, columns: new Map([[0, { kind: 'values', selection: { mode: 'include', keys: ref }, showBlanks }]]) })
+    const first: WorkerReply[] = [], second: WorkerReply[] = []
+    const a = kernel.handle({ kind: 'filter', requestId: rid(), owner, spec: spec(false), nowMs: 0, keySets: keySets() }, out => { first.push(out) })
+    const b = kernel.handle({ kind: 'filter', requestId: rid(), owner, spec: spec(true), nowMs: 0, keySets: keySets() }, out => { second.push(out) })
+    await Promise.all([a, b])
+    expect(first.at(-1)).toMatchObject({ kind: 'cancelled' })
+    expect(second.at(-1)).toMatchObject({ kind: 'complete' })
   })
 })

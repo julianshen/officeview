@@ -1,4 +1,4 @@
-import type { XlsxCell, XlsxDocument } from '../types'
+import type { XlsxCell, XlsxCellStyle, XlsxDocument } from '../types'
 import type { CellId, DisplaySlot, SourceCell, SourceCol, SourceRect, SourceRow } from './coordinates'
 
 /** Source-space contracts, spec §4.1; limits bound output, never semantic membership. */
@@ -397,6 +397,8 @@ export type SourceReadQuery =
   | { op: 'complete'; rect: SourceRect }
   /** The sheet's current compact layout (it grows while a paged import runs). */
   | { op: 'layout' }
+  /** Ends a scan continuation the caller abandoned (iterator return/cancel). */
+  | { op: 'releaseScan'; cursor: string }
 export type SourceReadResult =
   | { op: 'cell'; read: CellRead }
   | { op: 'rows'; page: Page<SparseRowPage> }
@@ -404,6 +406,14 @@ export type SourceReadResult =
   | { op: 'structural'; result: StructuralResult }
   | { op: 'complete'; result: RangeCompletion }
   | { op: 'layout'; layout: SheetLayout }
+  | { op: 'releaseScan'; released: boolean }
+/** S5.4: resolved cell styles (indexed by cell styleIndex) and the date system
+ * of a paged workbook, published with open so worker-backed cells format like
+ * resident ones. Bounded by the styles part's small-part cap. */
+export interface WorkbookFormatting {
+  dateSystem: '1900' | '1904'
+  styles: readonly XlsxCellStyle[]
+}
 /** S5.4: committed value-list keys of a `values` rule, shipped with a worker
  * filter command because the dropdown's key store lives on the main thread.
  * `scope` is the exact value domain (valueScope); bounded by that store. */
@@ -418,6 +428,8 @@ export interface SheetLayout {
   rowOverrides: readonly AxisSizeInterval[]
   colOverrides: readonly AxisSizeInterval[]
   hidden: readonly SourceRowInterval[]
+  /** Authored-hidden columns: zero width for paint, navigation, find and copy. */
+  hiddenCols?: readonly { start: number; end: number }[]
   used?: SourceRect
 }
 export type WorkerCommand =
@@ -463,7 +475,7 @@ export type WorkerReplyBase<K extends WorkerCommandKind> =
     diagnostics: readonly WorkerDiagnostic[]
   } : never
 export type WorkerResult =
-  | { kind: 'open'; valuePolicy: ValuePolicy; sheets: readonly { sheetId: string; name: string }[] }
+  | { kind: 'open'; valuePolicy: ValuePolicy; sheets: readonly { sheetId: string; name: string }[]; formatting?: WorkbookFormatting }
   | { kind: 'activateSheet'; sheetId: string; layout?: SheetLayout }
   | { kind: 'prepareColumns'; cols: Uint16Array }
   | { kind: 'view'; delta: ViewCommitDelta }

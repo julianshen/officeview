@@ -380,8 +380,10 @@ function sheetGeometry(sheet: XlsxSheet): SheetGeometry {
 /** Source-space geometry from authored rows (ascending) and column specs; shared by both adapters. */
 export function buildGeometry(
   rows: Iterable<{ index: number; heightPt?: number; hidden?: boolean }>,
-  specs: readonly { min: number; max: number; widthChars?: number }[],
+  specs: readonly { min: number; max: number; widthChars?: number; hidden?: boolean }[],
   hiddenIntervals: readonly SourceRowInterval[] = [],
+  /** S5.4 paged sources: authored-hidden columns collapse (zero width), as the object planner collapses them. */
+  options: { hiddenCols?: boolean } = {},
 ): SheetGeometry {
   const rowOverrides: AxisSizeInterval[] = []
   const hidden: SourceRowInterval[] = []
@@ -410,11 +412,22 @@ export function buildGeometry(
     if (colOverrides[i].start <= colOverrides[i - 1].end) colOverrides[i - 1] = { ...colOverrides[i - 1], end: colOverrides[i].start - 1 }
   }
   const cols = colOverrides.filter(interval => interval.start <= interval.end)
+  const hiddenCols: Array<{ start: number; end: number }> = []
+  if (options.hiddenCols) {
+    for (const spec of [...specs].filter(spec => spec.hidden).sort((a, b) => a.min - b.min)) {
+      const start = Math.max(0, spec.min), end = Math.min(MAX_COLS - 1, spec.max)
+      if (!Number.isSafeInteger(start) || !Number.isSafeInteger(end) || start > end) continue
+      const last = hiddenCols[hiddenCols.length - 1]
+      if (last && start <= last.end + 1) last.end = Math.max(last.end, end)
+      else hiddenCols.push({ start, end })
+    }
+  }
   return Object.freeze({
     rows: createAxisMetrics({ logicalCount: MAX_ROWS, defaultSizeCss: DEFAULT_ROW_CSS, overrides: rowOverrides }),
-    cols: createAxisMetrics({ logicalCount: MAX_COLS, defaultSizeCss: DEFAULT_COL_CSS, overrides: cols }),
+    cols: createAxisMetrics({ logicalCount: MAX_COLS, defaultSizeCss: DEFAULT_COL_CSS, overrides: cols, ...(hiddenCols.length ? { collapsed: hiddenCols } : {}) }),
     rowOverrides: Object.freeze(rowOverrides),
     colOverrides: Object.freeze(cols),
+    ...(hiddenCols.length ? { hiddenCols: Object.freeze(hiddenCols) } : {}),
     baseHidden: createIntervalSet(hiddenIntervals.length ? hiddenIntervals : hidden),
   })
 }

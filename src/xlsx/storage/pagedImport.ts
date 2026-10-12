@@ -3,6 +3,8 @@
  * eager bundle (which imports the limits and ImportRefusal from there) never
  * pulls in the ZIP/XML readers: only the lazy large-source chunk loads this.
  */
+import type { WorkbookFormatting } from '../view/contracts'
+import { DEFAULT_FORMATTING, workbookFormatting } from './pagedFormatting'
 import type { Completeness, ProfileId, SourceFailure, SourceHandle, SourceStamp, WorkerDiagnostic } from '../view/contracts'
 import { PackageError, isPackageError, throwIfAborted } from '../../core/package-error'
 import { blobRangeSource, openPart, readPartBytes, readZipInventory } from '../../core/zip-stream'
@@ -58,6 +60,8 @@ export interface PagedWorkbook {
   loadEvaluatedFormulas: number
   /** Resolves on every committed page and on completion (adapters wait on it). */
   changed(): Promise<void>
+  /** Style table and date system (S5.4), read before the first sheet. */
+  formatting: WorkbookFormatting
 }
 export interface PagedImportOptions {
   docId: string
@@ -166,7 +170,7 @@ export async function openImportSession(source: Extract<SourceHandle, { kind: 'b
   const pulse = () => { const fire = notify; changedPromise = new Promise<void>((resolve) => { notify = resolve }); fire() }
   const workbook: PagedWorkbook = {
     docId: options.docId, store, sheets, diagnostics: [], completeness: 'loading', loadEvaluatedFormulas: 0,
-    changed: () => changedPromise,
+    changed: () => changedPromise, formatting: DEFAULT_FORMATTING,
   }
   const stamp: SourceStamp = { docId: options.docId, sheetId: sheets[0]?.sheetId ?? '', valueGen: 0 }
   const plannedParts = ['xl/workbook.xml', 'xl/_rels/workbook.xml.rels', sstPath, metadataPath, ...sheets.map((s) => s.partPath)]
@@ -232,6 +236,13 @@ export async function openImportSession(source: Extract<SourceHandle, { kind: 'b
         if (isPackageError(error) && error.code === 'cancelled') throw error
         /* Unverified optional metadata never upgrades a fixed array (parse.ts). */
       }
+    }
+    try {
+      workbook.formatting = await workbookFormatting(workbookRoot, inventory.find('xl/styles.xml') ? await readPlanned('xl/styles.xml') : undefined)
+    } catch (error) {
+      if (isPackageError(error) && error.code === 'cancelled') throw error
+      // parse.ts tolerates an unreadable styles part: cells keep General format.
+      workbook.diagnostics.push({ code: 'styles-unreadable', message: `xl/styles.xml could not be read: ${(error as Error).message}` })
     }
     progress('styles')
     const declaredBudget = createDeclaredBudget()

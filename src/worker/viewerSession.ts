@@ -37,7 +37,7 @@ import type { DeclaredSheetFilters } from '../xlsx/view/declaredFilters'
 import type {
   AxisMetrics, AxisSizeInterval, CacheIdentity, ColumnEntry, ColumnQuery, CompactSourceRowSet, FilterSpec,
   AuthoritativeCell, GridSelection, GridSelectionPart, IntervalSet, OperationRefusal, Page, ProfileId, RowOrder, SingleCellPayload, SortSpec,
-  SheetLayout, SourceFailure, SourceReadQuery, SourceReadResult, SourceRowInterval, SourceStamp, SourceStore, ValuePolicy, WorkbookOwner, WorkerDiagnostic,
+  SheetLayout, SourceFailure, WorkbookFormatting, SourceReadQuery, SourceReadResult, SourceRowInterval, SourceStamp, SourceStore, ValuePolicy, WorkbookOwner, WorkerDiagnostic,
 } from '../xlsx/view/contracts'
 import { MAX_COLS, MAX_ROWS, cellId, isValidCoordinate, type SourceRect, type SourceRow } from '../xlsx/view/coordinates'
 import { createIdentityOrder } from '../xlsx/view/order'
@@ -150,6 +150,8 @@ export interface SheetGeometry {
   rowOverrides: readonly AxisSizeInterval[]
   colOverrides: readonly AxisSizeInterval[]
   baseHidden: IntervalSet
+  /** Authored-hidden (collapsed) column intervals, when the source reports them. */
+  hiddenCols?: readonly { start: number; end: number }[]
 }
 /** Resident workbook source boundary. S1 swaps the implementation (paged
  * adapters, blob/page handles) without changing the session. */
@@ -170,6 +172,8 @@ export interface WorkbookSource {
   valueStatus?(): ValueStatus
   /** S8.3 declared file filter/sort diagnostics; both adapters build identical records. */
   declaredFilters?(): readonly DeclaredSheetFilters[]
+  /** S5.4: style table and date system of a source whose cells carry style ids only. */
+  formatting?(): WorkbookFormatting
   release(): Promise<void>
 }
 
@@ -1604,6 +1608,7 @@ export class DocumentSession {
       rowOverrides: geometry.rowOverrides.map(interval => ({ ...interval })),
       colOverrides: geometry.colOverrides.map(interval => ({ ...interval })),
       hidden: geometry.baseHidden.intervals.map(interval => ({ ...interval })),
+      ...(geometry.hiddenCols?.length ? { hiddenCols: geometry.hiddenCols.map(interval => ({ ...interval })) } : {}),
       ...(used ? { used: { ...used } } : {}),
     }
   }
@@ -1628,6 +1633,16 @@ export class DocumentSession {
     if (signal.aborted) return { kind: 'cancelled' }
     if (!this.isCurrent(owner)) return { kind: 'stale' }
     return result
+  }
+  /** Open scan continuations (bounded by MAX_OPEN_SCANS). */
+  get openScans(): number { return this.scans.size }
+  /** Ends an abandoned continuation; owned by the document, not a view generation. */
+  releaseScan(cursor: string): boolean {
+    const scan = this.scans.get(cursor)
+    if (!scan) return false
+    scan.controller.abort()
+    this.scans.delete(cursor)
+    return true
   }
   private async scanPage(owner: CacheIdentity, store: SourceStore, query: Extract<SourceReadQuery, { op: 'scan' }>, signal: AbortSignal): Promise<Page<AuthoritativeCell>> {
     const request = { range: query.request.range, limit: Math.min(MAX_SCAN_PAGE, query.request.limit) }

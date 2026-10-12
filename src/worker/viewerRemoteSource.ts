@@ -22,26 +22,34 @@
 import type {
   AuthoritativeCell, CacheIdentity, CellRead, ColumnEntry, ColumnQuery, FilterKeySet, FilterSpec, LogicalCellBox, OperationRefusal, Page,
   PopulatedQuery, RangeCompletion, ReadOptions, RowOrder, SheetLayout, SortSpec, SourceFailure, SourceReadQuery, SourceReadResult,
-  SourceStamp, SourceStore, SparseRowPage, StructuralResult, ValuePolicy, ViewCommitDelta, WorkbookOwner, WorkerDiagnostic, WorkerReply,
+  SourceStamp, SourceStore, SparseRowPage, StructuralResult, ValuePolicy, ViewCommitDelta, WorkbookFormatting, WorkbookOwner, WorkerDiagnostic, WorkerReply,
+  ProfileId,
 } from '../xlsx/view/contracts'
-import type { XlsxCell, XlsxMergeRange } from '../xlsx/types'
+import type { XlsxCell, XlsxCellStyle, XlsxMergeRange } from '../xlsx/types'
 import { MAX_COLS, MAX_ROWS, formatA1, isValidCoordinate, type SourceCell, type SourceRect } from '../xlsx/view/coordinates'
 import { createAxisMetrics } from '../xlsx/view/axes'
 import { createIdentityOrder, createRowOrder } from '../xlsx/view/order'
 import { createIntervalSet, type CompactRowVisibility } from '../xlsx/view/visibility'
 import type { ProjectedSheetMetrics } from '../xlsx/view/projection'
 import { savedValuesStatus, type ValueStatus } from '../xlsx/view/values'
-import { SHEET_DEFAULT_COL_CSS, SHEET_DEFAULT_ROW_CSS, TEXT_OVERFLOW_REACH_CSS } from '../xlsx/view/viewport'
+import { MIN_DETAIL_DEVICE_PX, SHEET_DEFAULT_COL_CSS, SHEET_DEFAULT_ROW_CSS, TEXT_OVERFLOW_REACH_CSS, VIEWPORT_DETAIL_LIMITS } from '../xlsx/view/viewport'
+import { MAIN_THREAD_BUDGETS } from '../xlsx/view/tileCache'
 import type { ViewerClient } from './viewerClient'
 import { initialIdentity, initialWorkbookOwner, visibilityFromDisplayBitsets, type CommandOf } from './viewerProtocol'
 import type { SheetGeometry, WorkbookSource } from './viewerSession'
 
 export const ROW_CHUNK_COLS = 256
-/** Row-cache bounds (main-thread records only; the worker owns the pages). */
-export const ROW_CACHE_CELLS = 262_144
-export const ROW_CACHE_ROWS = 65_536
-/** Rows one tile may request; beyond it the frame is coarse and reads no cells. */
+/** One document-wide byte ledger for every sheet's painting row cache: a
+ * quarter of the main-thread profile budget (§12.4; D 16 MiB, M 8 MiB). */
+export function rowCacheBudget(profile: ProfileId): number { return MAIN_THREAD_BUDGETS[profile] / 4 }
+/** Accounted bytes of one cached cell: record overhead plus UTF-16 text. */
+export function cachedCellBytes(cell: { value: unknown; formula?: string }): number {
+  return 96 + (typeof cell.value === 'string' ? cell.value.length * 2 : 0) + (cell.formula ? cell.formula.length * 2 : 0)
+}
+/** Detail rows one tile may request; beyond it the frame is coarse and reads no cells. */
 export const MAX_PENDING_ROWS = 2048
+/** Source rows two missing runs may be apart and still share one bounded read. */
+const COALESCE_GAP_ROWS = 32
 /** Row pages one load run may pull before yielding to the next paint. */
 const PAGES_PER_RUN = 4
 /** Retry delay while the worker's import frontier has not reached a row. */
@@ -67,6 +75,10 @@ export interface RemoteOpen {
   sheets: readonly { sheetId: string; name: string }[]
   diagnostics: readonly WorkerDiagnostic[]
   layouts: ReadonlyMap<string, SheetLayout>
+  formatting?: WorkbookFormatting
+  profile?: ProfileId
+  /** @internal Row-cache ledger override (tests); default rowCacheBudget(profile). */
+  rowCacheBytes?: number
 }
 export interface RemoteStats { commands: Record<string, number> }
 
@@ -81,7 +93,7 @@ type RemoteKind = 'read' | 'valueQuery' | 'sort' | 'filter' | 'prepareColumns'
 export async function openRemoteWorkbook(client: ViewerClient, docId: string, blob: Blob, profile: 'D' | 'M'): Promise<WorkerReply<'open'> | RemoteOpen> {
   const open = await client.send({ kind: 'open', requestId: client.nextRequestId(), docId, source: { kind: 'blob', blob }, profile })
   if (open.kind !== 'complete' || open.result.kind !== 'open') return open
-  const { sheets, valuePolicy } = open.result
+  const { sheets, valuePolicy, formatting } = open.result
   const layouts = new Map<string, SheetLayout>()
   const owner = initialWorkbookOwner(docId, sheets)
   for (const sheet of [...sheets.slice(1), ...sheets.slice(0, 1)]) {
@@ -92,7 +104,7 @@ export async function openRemoteWorkbook(client: ViewerClient, docId: string, bl
     }
     layouts.set(sheet.sheetId, active.result.layout)
   }
-  return { docId, valuePolicy, sheets, diagnostics: open.diagnostics, layouts }
+  return { docId, valuePolicy, sheets, diagnostics: open.diagnostics, layouts, profile, ...(formatting ? { formatting } : {}) }
 }
 
 export function isRemoteWorkbook(source: WorkbookSource | undefined): source is RemoteWorkbook {
@@ -104,7 +116,11 @@ export class RemoteWorkbook implements WorkbookSource {
   readonly sheets: readonly { sheetId: string; name: string }[]
   readonly openDiagnostics: readonly WorkerDiagnostic[]
   readonly docId: string
+  readonly profile: ProfileId
+  private readonly format: WorkbookFormatting
   readonly stats: RemoteStats = { commands: {} }
+  /** Document-wide row-cache ledger; insertion order is recency order. */
+  readonly ledger: RowCacheLedger
   private readonly identities = new Map<string, CacheIdentity>()
   private readonly views = new Map<string, RemoteSheetView>()
   private readonly geometries = new Map<string, SheetGeometry>()
@@ -126,10 +142,27 @@ export class RemoteWorkbook implements WorkbookSource {
     this.statusMessage = open.diagnostics.find(d => d.code === 'cached-value-policy')?.message
     this.owner = initialWorkbookOwner(open.docId, open.sheets)
     this.layouts = new Map(open.layouts)
+    this.profile = open.profile ?? 'D'
+    this.format = open.formatting ?? { dateSystem: '1900', styles: [] }
+    this.ledger = new RowCacheLedger(open.rowCacheBytes ?? rowCacheBudget(this.profile))
     for (const { sheetId } of open.sheets) this.identities.set(sheetId, initialIdentity(open.docId, sheetId))
   }
 
   get isClosed(): boolean { return this.closed }
+  /** Resolved style of a cell style index (the paged reader keeps ids only). */
+  styleOf(index: number | undefined): XlsxCellStyle | undefined { return this.format.styles[index ?? 0] }
+  formatting(): WorkbookFormatting { return this.format }
+  /** Row pages one tile / one frame may have in flight (§11.1 page caps). */
+  get pageLimits(): { tile: number; frame: number } {
+    const limits = VIEWPORT_DETAIL_LIMITS[this.profile]
+    return { tile: limits.tile.pages, frame: limits.pages }
+  }
+  /** Requests currently in flight for painting loads (all sheets). */
+  loadsInFlight = 0
+  /** The active sheet keeps its cache; inactive sheets' caches are released. */
+  activate(sheetId: string): void {
+    for (const [id, store] of this.stores) if (id !== sheetId) store.clear()
+  }
   identity(sheetId: string): CacheIdentity { return this.identities.get(sheetId) ?? initialIdentity(this.docId, sheetId) }
   workbookOwner(): WorkbookOwner { return this.owner }
   layout(sheetId: string): SheetLayout { return this.layouts.get(sheetId) ?? { rowOverrides: [], colOverrides: [], hidden: [] } }
@@ -151,8 +184,9 @@ export class RemoteWorkbook implements WorkbookSource {
       const layout = this.layout(sheetId)
       geometry = Object.freeze({
         rows: createAxisMetrics({ logicalCount: MAX_ROWS, defaultSizeCss: SHEET_DEFAULT_ROW_CSS, overrides: layout.rowOverrides }),
-        cols: createAxisMetrics({ logicalCount: MAX_COLS, defaultSizeCss: SHEET_DEFAULT_COL_CSS, overrides: layout.colOverrides }),
+        cols: createAxisMetrics({ logicalCount: MAX_COLS, defaultSizeCss: SHEET_DEFAULT_COL_CSS, overrides: layout.colOverrides, ...(layout.hiddenCols?.length ? { collapsed: layout.hiddenCols } : {}) }),
         rowOverrides: layout.rowOverrides, colOverrides: layout.colOverrides, baseHidden: createIntervalSet(layout.hidden),
+        ...(layout.hiddenCols?.length ? { hiddenCols: layout.hiddenCols } : {}),
       })
       this.geometries.set(sheetId, geometry)
     }
@@ -160,6 +194,8 @@ export class RemoteWorkbook implements WorkbookSource {
   }
   valueStatus(): ValueStatus {
     if (this.valuePolicy !== 'cached') return { policy: this.valuePolicy, formulas: 0, message: undefined }
+    // Stated limit: the count is parsed from the worker's saved-values status
+    // text (savedValuesStatus wording); WorkerDiagnostic carries no number field.
     const counted = this.statusMessage?.match(/— (\d+) formulas? not recalculated/)
     // The progressive import learns its formula count as it runs; completions
     // carry the latest status, so an idle viewer asks with one tiny read.
@@ -194,8 +230,7 @@ export class RemoteWorkbook implements WorkbookSource {
       // range replace the layout captured at open (a progressive import grows it).
       const layout = await this.fetchLayout(sheetId)
       if (this.closed) return
-      const relaid = layout !== undefined && JSON.stringify(layout) !== JSON.stringify(this.layout(sheetId))
-      if (relaid) { this.layouts.set(sheetId, layout); this.geometries.delete(sheetId); this.stores.get(sheetId)?.relayout() }
+      const relaid = layout !== undefined && this.setLayout(sheetId, layout)
       if (result.merges.length) entry.merges = result.merges.map(merge => ({ minRow: merge.range.r0, maxRow: merge.range.r1, minCol: merge.range.c0, maxCol: merge.range.c1 }))
       if (relaid || result.merges.length) { entry.gen++; this.notify() }
       return
@@ -203,6 +238,22 @@ export class RemoteWorkbook implements WorkbookSource {
     // Structure follows sheetData: wait for the import, unless it failed for good.
     if (result.error && !result.error.retryable && result.error.code !== 'incomplete') { entry.state = 'done'; return }
     entry.timer = setTimeout(() => { entry.timer = undefined; void this.loadStructure(sheetId) }, 500)
+  }
+  /** Replaces a sheet's layout; true when it changed. Callers bump the
+   * structure generation so the viewer rebuilds geometry and drops tiles. */
+  private setLayout(sheetId: string, layout: SheetLayout): boolean {
+    if (JSON.stringify(layout) === JSON.stringify(this.layout(sheetId))) return false
+    this.layouts.set(sheetId, layout)
+    this.geometries.delete(sheetId)
+    this.stores.get(sheetId)?.relayout()
+    return true
+  }
+  /** Publishes a newer layout (the import's final metadata) and its generation. */
+  publishLayout(sheetId: string, layout: SheetLayout): void {
+    if (this.closed || !this.setLayout(sheetId, layout)) return
+    const entry = this.merges(sheetId) as { gen: number }
+    entry.gen++
+    this.notify()
   }
   private async fetchLayout(sheetId: string): Promise<SheetLayout | undefined> {
     const out = await this.request({ kind: 'read', requestId: this.nextRequestId(), owner: this.identity(sheetId), query: { op: 'layout' } })
@@ -305,6 +356,8 @@ export class RemoteWorkbook implements WorkbookSource {
     this.closed = true
     this.listeners.clear()
     for (const entry of this.structures.values()) if (entry.timer) clearTimeout(entry.timer)
+    // Owned caches go with the document: nothing answers from them after close.
+    for (const store of this.stores.values()) store.clear()
     try {
       await Promise.race([this.client.send({ kind: 'close', requestId: this.client.nextRequestId(), docId: this.docId }), new Promise(resolve => setTimeout(resolve, 1000))])
     } catch { /* the worker is gone */ }
@@ -315,13 +368,49 @@ export class RemoteWorkbook implements WorkbookSource {
 
 interface RowEntry { chunks: Set<number>; cells: PagedCell[] }
 
+/** One byte ledger for the painting row caches of every sheet of a document
+ * (§12.4). Insertion order is recency; charging past the limit evicts the
+ * least recently used rows of any sheet. A row larger than the whole budget is
+ * never cached (its reads go to the worker each time). */
+export class RowCacheLedger {
+  bytes = 0
+  peakBytes = 0
+  private readonly entries = new Map<string, { store: RemoteSheetStore; row: number; bytes: number }>()
+  constructor(readonly limitBytes: number) {}
+  private key(store: RemoteSheetStore, row: number): string { return `${store.sheetId}\u0000${row}` }
+  charge(store: RemoteSheetStore, row: number, bytes: number): void {
+    const key = this.key(store, row)
+    const old = this.entries.get(key)
+    if (old) { this.bytes -= old.bytes; this.entries.delete(key) }
+    this.entries.set(key, { store, row, bytes })
+    this.bytes += bytes
+    while (this.bytes > this.limitBytes) {
+      const [oldest, entry] = this.entries.entries().next().value as [string, { store: RemoteSheetStore; row: number; bytes: number }]
+      this.entries.delete(oldest)
+      this.bytes -= entry.bytes
+      entry.store.drop(entry.row)
+    }
+    this.peakBytes = Math.max(this.peakBytes, this.bytes)
+  }
+  touch(store: RemoteSheetStore, row: number): void {
+    const key = this.key(store, row)
+    const entry = this.entries.get(key)
+    if (entry) { this.entries.delete(key); this.entries.set(key, entry) }
+  }
+  release(store: RemoteSheetStore, row: number): void {
+    const key = this.key(store, row)
+    const entry = this.entries.get(key)
+    if (entry) { this.entries.delete(key); this.bytes -= entry.bytes }
+  }
+}
+
 /** SourceStore proxy of one remote sheet plus its bounded painting row cache. */
 export class RemoteSheetStore implements SourceStore {
   private readonly rows = new Map<number, RowEntry>()
   private readonly loading = new Set<string>()
-  // Mutable counters live in one shared holder: find wraps stores with
+  // Mutable state lives in one shared holder: find wraps stores with
   // Object.create, and a primitive written through a wrapper would diverge.
-  private readonly state: { cachedCells: number; retry?: ReturnType<typeof setTimeout>; extent: SourceStore['extent'] } = { cachedCells: 0, extent: { rows: MAX_ROWS, cols: MAX_COLS } }
+  private readonly state: { retry?: ReturnType<typeof setTimeout>; extent: SourceStore['extent']; epoch: number } = { extent: { rows: MAX_ROWS, cols: MAX_COLS }, epoch: 0 }
 
   constructor(private readonly workbook: RemoteWorkbook, readonly sheetId: string) {
     this.relayout()
@@ -337,13 +426,22 @@ export class RemoteSheetStore implements SourceStore {
     return { docId: identity.docId, sheetId: identity.sheetId, valueGen: identity.valueGen }
   }
   get valuePolicy(): ValuePolicy { return this.workbook.valuePolicy }
-
-  /** Sends one `read` for the current view owner; `undefined` result = settled failure. */
-  private async read(query: SourceReadQuery, options: ReadOptions): Promise<SourceReadResult | SourceFailure> {
-    const owner = this.workbook.identity(this.sheetId)
+  /** Source guards every call applies before any cache or command (§§4.1, 10.1). */
+  private guard(options: ReadOptions): SourceFailure | undefined {
+    if (this.workbook.isClosed) return failure('stale-source', 'The document was closed')
+    if (options.signal.aborted) return failure('cancelled', 'Read cancelled', true)
+    const owner = this.stamp
     if (options.stamp.docId !== owner.docId || options.stamp.sheetId !== owner.sheetId || options.stamp.valueGen !== owner.valueGen) {
       return failure('stale-source', 'Read stamp does not match the source owner', true)
     }
+    return undefined
+  }
+
+  /** Sends one `read` for the current view owner. */
+  private async read(query: SourceReadQuery, options: ReadOptions): Promise<SourceReadResult | SourceFailure> {
+    const refused = this.guard(options)
+    if (refused) return refused
+    const owner = this.workbook.identity(this.sheetId)
     const out = await this.workbook.request({ kind: 'read', requestId: this.workbook.nextRequestId(), owner, query }, options.signal)
     if (out === CANCELLED) return failure('cancelled', 'Read cancelled', true)
     if (out === CLOSED) return failure('stale-source', 'The document was closed')
@@ -362,14 +460,19 @@ export class RemoteSheetStore implements SourceStore {
 
   async readCell(at: SourceCell, options: ReadOptions): Promise<CellRead> {
     if (!isValidCoordinate(at.row, at.col)) return { kind: 'error', code: 'invalid-coordinate', retryable: false }
+    const refused = this.guard(options)
+    if (refused) return { kind: 'error', code: refused.code, retryable: refused.retryable }
     // Copy and inspection read cell by cell in row-major order: one bounded
-    // chunk page answers the following cells of the row locally.
+    // chunk page answers the following cells of the row locally. Stated limit:
+    // copy therefore costs one worker round trip per new row chunk.
     const chunk = Math.floor(at.col / ROW_CHUNK_COLS)
     if (!this.known(at.row, chunk, chunk)) await this.load([at.row], at.col, at.col, options.signal, options.stamp)
+    const after = this.guard(options)
+    if (after) return { kind: 'error', code: after.code, retryable: after.retryable }
     if (this.known(at.row, chunk, chunk)) {
       const cell = this.rows.get(at.row)!.cells.find(item => item.col === at.col)
       if (!cell) return { kind: 'blank' }
-      const { unavailable, ...payload } = cell
+      const { unavailable, ref: _ref, style: _style, ...payload } = cell
       return unavailable ? { kind: 'unavailable', cell: payload, reason: 'formula-value-unavailable' } : { kind: 'cell', cell: payload }
     }
     const out = await this.read({ op: 'cell', at }, options)
@@ -382,9 +485,13 @@ export class RemoteSheetStore implements SourceStore {
     return out.op === 'rows' ? out.page : this.failedPage(failure('page-error', 'Unexpected read reply'))
   }
   async queryColumn(request: ColumnQuery, options: ReadOptions): Promise<Page<ColumnEntry>> {
+    const refused = this.guard(options)
+    if (refused) return this.failedPage(refused)
     const owner = this.workbook.identity(this.sheetId)
-    if (options.stamp.valueGen !== owner.valueGen) return this.failedPage(failure('stale-source', 'Read stamp does not match the source owner', true))
-    const out = await this.workbook.request({ kind: 'valueQuery', requestId: this.workbook.nextRequestId(), owner, query: request }, options.signal)
+    // The caller's row membership is borrowed: the command carries its own copy
+    // (the client transfers whole-buffer typed arrays).
+    const query = structuredClone(request)
+    const out = await this.workbook.request({ kind: 'valueQuery', requestId: this.workbook.nextRequestId(), owner, query }, options.signal)
     if (out === CANCELLED) return this.failedPage(failure('cancelled', 'Query cancelled', true))
     if (out === CLOSED) return this.failedPage(failure('stale-source', 'The document was closed'))
     if (out.kind === 'complete' && out.result.kind === 'valueQuery') return out.result.page
@@ -392,16 +499,28 @@ export class RemoteSheetStore implements SourceStore {
     return this.failedPage(failure(out.kind === 'cancelled' ? 'cancelled' : 'incomplete', 'Value query did not complete', true))
   }
   async *scanPopulated(request: PopulatedQuery, options: ReadOptions): AsyncIterable<Page<AuthoritativeCell>> {
-    let cursor: string | undefined
-    for (;;) {
-      const out = await this.read({ op: 'scan', request, ...(cursor !== undefined ? { cursor } : {}) }, options)
-      if ('code' in out) { yield this.failedPage(out); return }
-      if (out.op !== 'scan') { yield this.failedPage(failure('page-error', 'Unexpected read reply')); return }
-      const { nextCursor, ...page } = out.page
-      yield page
-      if (nextCursor === undefined || page.completeness === 'incomplete') return
-      cursor = nextCursor
+    let cursor: string | undefined, finished = false
+    try {
+      for (;;) {
+        const out = await this.read({ op: 'scan', request: structuredClone(request), ...(cursor !== undefined ? { cursor } : {}) }, options)
+        // A failed or cancelled page already ended its continuation in the worker.
+        if ('code' in out) { finished = true; yield this.failedPage(out); return }
+        if (out.op !== 'scan') { finished = true; yield this.failedPage(failure('page-error', 'Unexpected read reply')); return }
+        const { nextCursor, ...page } = out.page
+        cursor = nextCursor
+        if (nextCursor === undefined || page.completeness === 'incomplete') finished = true
+        yield page
+        if (finished) return
+      }
+    } finally {
+      // An abandoned iteration (return(), a thrown consumer) releases its
+      // worker continuation instead of leaving it to the LRU cap (§11.4).
+      if (!finished && cursor !== undefined) void this.releaseScan(cursor)
     }
+  }
+  private async releaseScan(cursor: string): Promise<void> {
+    if (this.workbook.isClosed) return
+    await this.workbook.request({ kind: 'read', requestId: this.workbook.nextRequestId(), owner: this.workbook.identity(this.sheetId), query: { op: 'releaseScan', cursor } })
   }
   async queryStructural(rect: SourceRect, options: ReadOptions): Promise<StructuralResult> {
     const out = await this.read({ op: 'structural', rect }, options)
@@ -427,7 +546,9 @@ export class RemoteSheetStore implements SourceStore {
   /** Cached populated cells of a source row (ascending columns); only the
    * known chunks contribute. Unknown chunks are reported by `pendingIn`. */
   cellsOf(row: number): readonly PagedCell[] | undefined {
+    if (this.workbook.isClosed) return undefined
     const entry = this.rows.get(row)
+    if (entry) this.workbook.ledger.touch(this, row)
     return entry && entry.cells.length ? entry.cells : undefined
   }
   /** Whether the cell's row chunk has been read (blank or populated). */
@@ -436,27 +557,45 @@ export class RemoteSheetStore implements SourceStore {
     return this.known(at.row, chunk, chunk)
   }
   cellAt(at: SourceCell): PagedCell | undefined {
-    return this.rows.get(at.row)?.cells.find(cell => cell.col === at.col)
+    return this.workbook.isClosed ? undefined : this.rows.get(at.row)?.cells.find(cell => cell.col === at.col)
   }
+  /** Cached rows (tests and diagnostics). */
+  get cachedRows(): number { return this.rows.size }
   private known(row: number, k0: number, k1: number): boolean {
     const entry = this.rows.get(row)
     if (!entry) return false
     for (let k = k0; k <= k1; k++) if (!entry.chunks.has(k)) return false
     return true
   }
-  /** Logical boxes inside `box` whose rows are not yet known, in display order;
-   * requests them (bounded runs) as a side effect. Empty for coarse frames. */
-  pendingIn(metrics: ProjectedSheetMetrics, box: LogicalCellBox): LogicalCellBox[] {
+  /** Drops one row (ledger eviction). */
+  drop(row: number): void { this.rows.delete(row) }
+  /** Releases the whole cache (inactive sheet, close); in-flight loads land nowhere. */
+  clear(): void {
+    for (const row of this.rows.keys()) this.workbook.ledger.release(this, row)
+    this.rows.clear()
+    this.state.epoch++
+  }
+  /**
+   * Logical boxes inside `box` whose detail rows are not yet known, in display
+   * order; requests them as a side effect. Detail admission comes first (spec
+   * §11.1): rows/columns projecting below four device pixels at `scale` are
+   * summarized by the planner and never read. Requests are coalesced into runs
+   * and bounded per tile and per frame (in flight); the rest stay pending and
+   * are asked for once earlier loads land.
+   */
+  pendingIn(metrics: ProjectedSheetMetrics, box: LogicalCellBox, scale: number): LogicalCellBox[] {
+    const detail = (sizeCss: number) => sizeCss * scale >= MIN_DETAIL_DEVICE_PX - 1e-9
     const rows = metrics.rows.visibleBetween(box.y, box.y + box.height)
     if (rows.count === 0 || rows.count > MAX_PENDING_ROWS) return []
     const cols = metrics.cols.visibleBetween(Math.max(0, box.x - TEXT_OVERFLOW_REACH_CSS), box.x + box.width + TEXT_OVERFLOW_REACH_CSS)
     let c0 = -1, c1 = -1
-    for (const run of cols.runs) { if (c0 < 0) c0 = run.start; c1 = run.end }
+    for (const run of cols.runs) { if (!detail(run.sizeCss)) continue; if (c0 < 0) c0 = run.start; c1 = run.end }
     if (c0 < 0) return []
     const k0 = Math.floor(c0 / ROW_CHUNK_COLS), k1 = Math.floor(c1 / ROW_CHUNK_COLS)
     const out: LogicalCellBox[] = []
     const missing: number[] = []
     for (const run of rows.runs) {
+      if (!detail(run.sizeCss)) continue
       for (let slot = run.start; slot <= run.end; slot++) {
         const source = metrics.order.displayToSource(slot)
         if (this.known(source, k0, k1)) continue
@@ -467,25 +606,26 @@ export class RemoteSheetStore implements SourceStore {
         else out.push({ x: box.x, y, width: box.width, height })
       }
     }
-    if (missing.length) void this.load(missing, c0, c1)
+    if (missing.length) {
+      const limits = this.workbook.pageLimits
+      const budget = Math.min(limits.tile, limits.frame - this.workbook.loadsInFlight)
+      const runs = coalesce(missing).slice(0, Math.max(0, budget))
+      for (const run of runs) void this.loadRun(run.r0, run.r1, k0, k1, new AbortController().signal, this.stamp)
+    }
     return out
   }
-  /** Loads the chunks covering [c0,c1] of `rows` (source rows) in bounded runs. */
+  /** Loads the chunks covering [c0,c1] of `rows` (source rows) in runs. */
   async load(rows: readonly number[], c0: number, c1: number, signal?: AbortSignal, stamp: SourceStamp = this.stamp): Promise<void> {
     const k0 = Math.floor(c0 / ROW_CHUNK_COLS), k1 = Math.floor(c1 / ROW_CHUNK_COLS)
-    const sorted = [...new Set(rows)].filter(row => !this.known(row, k0, k1)).sort((a, b) => a - b)
-    const runs: Array<{ r0: number; r1: number }> = []
-    for (const row of sorted) {
-      const last = runs[runs.length - 1]
-      if (last && last.r1 + 1 === row) last.r1 = row
-      else runs.push({ r0: row, r1: row })
-    }
+    const runs = coalesce(rows.filter(row => !this.known(row, k0, k1)), 0)
     await Promise.all(runs.map(run => this.loadRun(run.r0, run.r1, k0, k1, signal ?? new AbortController().signal, stamp)))
   }
   private async loadRun(r0: number, r1: number, k0: number, k1: number, signal: AbortSignal, stamp: SourceStamp): Promise<void> {
     const key = `${stamp.valueGen}:${r0}:${r1}:${k0}:${k1}`
     if (this.loading.has(key)) return
     this.loading.add(key)
+    this.workbook.loadsInFlight++
+    const epoch = this.state.epoch
     const range = { r0, r1, c0: k0 * ROW_CHUNK_COLS, c1: Math.min(MAX_COLS - 1, (k1 + 1) * ROW_CHUNK_COLS - 1) }
     let changed = false
     try {
@@ -495,48 +635,62 @@ export class RemoteSheetStore implements SourceStore {
       let covered = r0 - 1
       for (let pages = 0; pages < PAGES_PER_RUN; pages++) {
         const page = await this.readRows(range, cursor, { signal, stamp })
-        // A page for an older owner never lands in the current cache.
-        if (this.workbook.isClosed || page.stamp.valueGen !== this.stamp.valueGen) return
+        // A page for an older owner, a cleared cache or a closed document never lands.
+        if (this.workbook.isClosed || epoch !== this.state.epoch || page.stamp.valueGen !== this.stamp.valueGen) return
         if (page.completeness !== 'complete') {
           if (page.completeness === 'loading') this.scheduleRetry()
           return
         }
         const last = page.nextCursor === undefined ? r1 : page.items.length ? Math.min(r1, page.items[page.items.length - 1].row) : covered
         const byRow = new Map(page.items.map(item => [item.row, item.cells]))
-        for (let row = covered + 1; row <= last; row++) {
-          this.put(row, k0, k1, byRow.get(row) ?? [])
-          changed = true
-        }
+        for (let row = covered + 1; row <= last; row++) changed = this.put(row, k0, k1, byRow.get(row) ?? []) || changed
         covered = Math.max(covered, last)
         cursor = page.nextCursor
         if (cursor === undefined) break
       }
     } finally {
       this.loading.delete(key)
+      this.workbook.loadsInFlight--
       if (changed) this.workbook.notify()
     }
   }
-  private put(row: number, k0: number, k1: number, cells: readonly AuthoritativeCell[]): void {
-    let entry = this.rows.get(row)
-    if (entry) this.rows.delete(row)
-    else entry = { chunks: new Set(), cells: [] }
+  /** Caches one row's chunk; false when the row alone exceeds the ledger. */
+  private put(row: number, k0: number, k1: number, cells: readonly AuthoritativeCell[]): boolean {
+    const entry = this.rows.get(row) ?? { chunks: new Set<number>(), cells: [] as PagedCell[] }
     const lo = k0 * ROW_CHUNK_COLS, hi = (k1 + 1) * ROW_CHUNK_COLS - 1
     const kept = entry.cells.filter(cell => cell.col < lo || cell.col > hi)
-    const added = cells.map(cell => ({ ...cell, ref: formatA1(cell), value: cell.value ?? null, styleIndex: cell.styleIndex ?? 0 }) as PagedCell)
-    this.state.cachedCells += kept.length + added.length - entry.cells.length
-    entry.cells = [...kept, ...added].sort((a, b) => a.col - b.col)
-    for (let k = k0; k <= k1; k++) entry.chunks.add(k)
-    // Insertion order is recency order.
-    this.rows.set(row, entry)
-    while (this.rows.size > ROW_CACHE_ROWS || this.state.cachedCells > ROW_CACHE_CELLS) {
-      const oldest = this.rows.keys().next().value as number
-      if (oldest === row && this.rows.size === 1) break
-      this.state.cachedCells -= this.rows.get(oldest)!.cells.length
-      this.rows.delete(oldest)
+    const added = cells.map(cell => {
+      const style = this.workbook.styleOf(cell.styleIndex)
+      return { ...cell, ref: formatA1(cell), value: cell.value ?? null, styleIndex: cell.styleIndex ?? 0, ...(style ? { style } : {}) } as PagedCell
+    })
+    const next = [...kept, ...added].sort((a, b) => a.col - b.col)
+    const bytes = 64 + next.reduce((sum, cell) => sum + cachedCellBytes(cell), 0)
+    if (bytes > this.workbook.ledger.limitBytes) {
+      this.workbook.ledger.release(this, row)
+      this.rows.delete(row)
+      return false
     }
+    entry.cells = next
+    for (let k = k0; k <= k1; k++) entry.chunks.add(k)
+    this.rows.set(row, entry)
+    this.workbook.ledger.charge(this, row, bytes)
+    return this.rows.has(row)
   }
   private scheduleRetry(): void {
     if (this.state.retry !== undefined) return
     this.state.retry = setTimeout(() => { this.state.retry = undefined; if (!this.workbook.isClosed) this.workbook.notify() }, LOADING_RETRY_MS)
   }
+}
+
+/** Ascending unique rows → runs, merging runs at most `gap` rows apart (one
+ * bounded read covers the gap; its rows become known too). */
+function coalesce(rows: readonly number[], gap = COALESCE_GAP_ROWS): Array<{ r0: number; r1: number }> {
+  const sorted = [...new Set(rows)].sort((a, b) => a - b)
+  const runs: Array<{ r0: number; r1: number }> = []
+  for (const row of sorted) {
+    const last = runs[runs.length - 1]
+    if (last && row - last.r1 <= gap + 1) last.r1 = row
+    else runs.push({ r0: row, r1: row })
+  }
+  return runs
 }

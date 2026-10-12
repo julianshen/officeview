@@ -10,7 +10,7 @@
  * for the import frontier through ensureComplete, never reads as blank. The
  * matcher is a source-row flag lane over the filter range only.
  */
-import type { FilterKeySet, FilterSpec, PagedKeySetRef, SourceStamp, SourceStore } from '../xlsx/view/contracts'
+import type { FilterKeySet, FilterSpec, PagedKeySetRef, SourceStamp, SourceStore, WorkbookFormatting } from '../xlsx/view/contracts'
 import { classifyColumn, FilterEngine, type ColumnClassification, type FilterContext, type PreparedValue } from '../xlsx/view/filter'
 import { FilterDiagnostic } from '../xlsx/view/textFilter'
 import { compileValuesMembership, valueSourceFromStore, type ValueIndexIdentity, type ValueLanePage } from '../xlsx/view/valueIndex'
@@ -18,9 +18,9 @@ import { ValueIndexError, type ValueKeyRun, type ValueRunStore } from '../xlsx/v
 import { cellDisplayText } from '../xlsx/render'
 import type { XlsxSheet } from '../xlsx/types'
 import type { FilterEvaluation, FilterEvaluator } from './viewerSession'
+import { semanticsFor } from '../xlsx/view/semanticsFor'
 
 const LANE_PAGE_ROWS = 4096
-const STYLELESS = { name: '', rows: [], cols: [], merges: [], mergeRanges: [] } as XlsxSheet
 
 /** Read-only key store over the keys shipped with one filter command. */
 function shippedRuns(keySets: ReadonlyMap<string, FilterKeySet>): ValueRunStore {
@@ -37,28 +37,33 @@ function shippedRuns(keySets: ReadonlyMap<string, FilterKeySet>): ValueRunStore 
   }
 }
 
-/** Saved values without a style table (paged sources keep style ids only): the
- * General display text, as the paged viewer paints it. */
-function prepared(page: ValueLanePage, index: number): PreparedValue {
-  const tag = page.tags[index], value = page.numbers[index]
-  if (tag === 5) return { kind: 'blank' }
-  if (tag === 7) return { kind: 'unavailable' }
-  if (tag === 4) return { kind: 'error', value: page.texts[index]! }
-  if (tag === 2) return { kind: 'string', value: page.texts[index]! }
-  const displayText = cellDisplayText(STYLELESS, { value: tag === 3 ? Boolean(value) : value, style: undefined })
-  return tag === 3 ? { kind: 'boolean', value: Boolean(value), displayText } : { kind: 'number', value, displayText }
+/** Prepared values exactly as the main-thread S9 transport builds them: the
+ * workbook style table gives display text, number format and date semantics. */
+function preparer(formatting: WorkbookFormatting | undefined): (page: ValueLanePage, index: number) => PreparedValue {
+  const sheet = { name: '', rows: [], cols: [], merges: [], mergeRanges: [], semantics: semanticsFor(formatting?.dateSystem ?? '1900') } as XlsxSheet
+  const styles = formatting?.styles ?? []
+  return (page, index) => {
+    const tag = page.tags[index], value = page.numbers[index], style = styles[page.styles?.[index] ?? 0]
+    if (tag === 5) return { kind: 'blank' }
+    if (tag === 7) return { kind: 'unavailable' }
+    if (tag === 4) return { kind: 'error', value: page.texts[index]! }
+    if (tag === 2) return { kind: 'string', value: page.texts[index]! }
+    const displayText = cellDisplayText(sheet, { value: tag === 3 ? Boolean(value) : value, style })
+    return tag === 3 ? { kind: 'boolean', value: Boolean(value), displayText } : { kind: 'number', value, displayText, numFmtId: style?.numFmtId, formatCode: style?.formatCode }
+  }
 }
 
 /** `keysFor` returns the keys shipped with the command now being evaluated. */
-export function createWorkerFilterEvaluator(keysFor: (stamp: SourceStamp) => ReadonlyMap<string, FilterKeySet>, locale = 'en-US'): FilterEvaluator {
+export function createWorkerFilterEvaluator(keysFor: (stamp: SourceStamp) => ReadonlyMap<string, FilterKeySet>, formatting?: WorkbookFormatting, locale = 'en-US'): FilterEvaluator {
+  const prepared = preparer(formatting)
   return async ({ store, spec, nowMs, signal, cooperate }): Promise<FilterEvaluation> => {
     const stamp = { ...store.stamp }
-    const context: FilterContext = { locale, dateSystem: '1900', timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone, nowMs }
+    const context: FilterContext = { locale, dateSystem: formatting?.dateSystem ?? '1900', timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone, nowMs }
     const r0 = spec.range.r0 + spec.range.headerRows, r1 = spec.range.r1 - spec.range.totalsRows
     const flags = new Uint8Array(Math.max(0, spec.range.r1 - spec.range.r0 + 1)).fill(1)
     try {
       for (const [col, rule] of spec.columns) {
-        const classification = await classify(store, stamp, col, r0, r1, signal)
+        const classification = await classify(store, stamp, col, r0, r1, signal, prepared)
         if (classification.kind === 'loading') return { kind: 'incomplete', missing: [{ r0, r1, c0: col, c1: col }] }
         const identity: ValueIndexIdentity = { ...stamp, range: spec.range, col, classification, classificationGen: stamp.valueGen }
         const match = rule.kind === 'values'
@@ -79,7 +84,7 @@ export function createWorkerFilterEvaluator(keysFor: (stamp: SourceStamp) => Rea
   }
 }
 
-async function classify(store: SourceStore, stamp: SourceStamp, col: number, r0: number, r1: number, signal: AbortSignal): Promise<ColumnClassification> {
+async function classify(store: SourceStore, stamp: SourceStamp, col: number, r0: number, r1: number, signal: AbortSignal, prepared: (page: ValueLanePage, index: number) => PreparedValue): Promise<ColumnClassification> {
   let numeric = false, text = false, date = false, loading = false
   await pages(store, stamp, col, r0, r1, signal, page => {
     function* values() { for (let i = 0; i < page.count; i++) yield prepared(page, i) }
