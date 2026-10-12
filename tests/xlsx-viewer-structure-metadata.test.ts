@@ -155,6 +155,7 @@ describe('S3.3 structural records from real XLSX bytes (resident and paged, iden
       ['wrapped anchor', structureBytes({ sheetData: dataRows(5), drawing: wrappedAnchor(oneCell(1, 1, 10, 10)) }), FULL],
       ['dangling drawing', structureBytes({ sheetData: dataRows(5), danglingDrawing: true }), FULL],
       ['drawing part with a foreign root', structureBytes({ sheetData: dataRows(5), drawingPart: '<?xml version="1.0"?><!-- not a drawing --><notADrawing/>' }), FULL],
+      ['anchors under a foreign root', structureBytes({ sheetData: dataRows(5), drawingPart: `<?xml version="1.0"?><foo xmlns:xdr="http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main">${oneCell(1, 1, 10, 10)}</foo>` }), FULL],
       ['dynamic without ref', structureBytes({ dynamic: true, sheetData: dataRows(5, r => r === 2 ? '<c r="D3" cm="1"><f t="array">_xlfn.SEQUENCE(2)</f><v>1</v></c>' : '') }), { r0: 2, r1: 1_048_575, c0: 3, c1: 16_383 }],
     ]
     for (const [name, bytes, missing] of cases) {
@@ -163,6 +164,7 @@ describe('S3.3 structural records from real XLSX bytes (resident and paged, iden
       expect(a.completeness, name).toBe('incomplete')
       expect(a.missing, name).toContainEqual(missing)
       expect(strip(b), name).toEqual(strip(a))
+      if (name.includes('foreign root')) expect(a.drawings, name).toEqual([])
       expect(cached.coverageDiagnostics?.('1').map(d => d.code), name).toContain('coverage-unresolvable')
       await paged.release()
     }

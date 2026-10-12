@@ -633,13 +633,16 @@ export function newSheetMetadata(): SheetMetadata {
 export function anchorRecordEvents(onAnchor: (name: string, parts: AnchorParts) => void, onUnreadable: () => void): XmlEvents {
   let depth = 0
   let anchor: { name: string; parts: AnchorParts } | undefined
+  /** A non-wsDr document element: one unreadable report, nothing beneath it is collected. */
+  let foreign = false
   let section: Record<string, string> | undefined
   let field: string | undefined
   let text = ''
   return {
     open(qname, names, values, count, selfClosing) {
       const local = localName(qname)
-      if (depth === 0 && local !== DRAWING_ROOT) onUnreadable()
+      if (depth === 0) { foreign = local !== DRAWING_ROOT; if (foreign) onUnreadable() }
+      if (foreign) { if (!selfClosing) depth++; return }
       if (depth === 1) {
         if (ANCHOR_ELEMENTS.has(local)) anchor = { name: local, parts: {} }
         else if (local === 'AlternateContent') onUnreadable()
