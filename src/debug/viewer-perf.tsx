@@ -423,6 +423,7 @@ function ackProbe(kind: AckKind, timeoutMs: number): Promise<AckRecord> {
 // ---- page ----
 function PerfPage(): JSX.Element {
   const [file, setFile] = useState<File | null>(null)
+  const [epoch, setEpoch] = useState(0)
   useEffect(() => {
     const input = document.getElementById('perf-file') as HTMLInputElement
     const onChange = () => {
@@ -448,12 +449,16 @@ function PerfPage(): JSX.Element {
       const started = performance.now()
       const wait = () => {
         if (!hadWorker || state.workersTerminated > terminated || performance.now() - started > 5000) {
-          // React's event system keeps the last event's target fiber (and so the
-          // closed viewer's tree) until the next event; a host's next interaction
-          // releases it. One click on the idle page stands for that interaction,
-          // so collection measures the viewer, not React's one-event retention.
-          document.querySelector<HTMLElement>('[data-testid=perf-idle]')?.click()
-          resolve()
+          // React keeps two references to an unmounted tree until the host does
+          // something (found with heap snapshots): an update queued as the
+          // viewer unmounted (a pane ResizeObserver notification) stays in
+          // React's concurrent update queue until the root renders again, and
+          // the event system keeps the last event's target fiber until the next
+          // event. A host keeps rendering and receiving input; one re-render and
+          // one click on the idle page stand for that, so collection measures
+          // the viewer rather than React's one-update / one-event retention.
+          setEpoch(epoch => epoch + 1)
+          setTimeout(() => { document.querySelector<HTMLElement>('[data-testid=perf-idle]')?.click(); setTimeout(resolve, 50) }, 50)
         } else setTimeout(wait, 20)
       }
       setTimeout(wait, 0)
@@ -463,7 +468,7 @@ function PerfPage(): JSX.Element {
   }, [])
   const factory = useMemo(() => countingWorker, [])
   const internal = { onFrame, onMainLedger: (ledger: MainMemoryLedger) => { currentLedger = ledger } } as Record<string, unknown>
-  if (!file) return <div data-testid="perf-idle" onClick={() => {}}>No workbook</div>
+  if (!file) return <div data-testid="perf-idle" data-epoch={epoch} onClick={() => {}}>No workbook</div>
   return (
     <OfficeFile
       data={file}

@@ -327,10 +327,10 @@ async function memorySession(context: BrowserContext, base: string, fixture: Vie
   }
   const checkpoint = async (name: string) => {
     log(`      checkpoint ${fixture.key}/${name} at ${new Date().toISOString().slice(11, 19)}`)
-    await bounded(`${name} main gc`, gcMain())
+    // Three full collections with pauses: lifetime charges end in
+    // FinalizationRegistry callbacks, which run as tasks after a collection.
     await bounded(`${name} worker gc`, perf(page, p => p.workerGc()))
-    await new Promise(resolve => setTimeout(resolve, 200))
-    await bounded(`${name} main gc 2`, gcMain())
+    for (let k = 0; k < 3; k++) { await bounded(`${name} main gc ${k}`, gcMain()); await new Promise(resolve => setTimeout(resolve, 200)) }
     const h = await bounded(`${name} heap`, heap())
     const worker = await bounded(`${name} worker stats`, perf(page, p => p.workerStats()))
     const uasm = await bounded(`${name} uasm`, perf(page, p => p.measureMemory()))
@@ -419,6 +419,12 @@ async function memorySession(context: BrowserContext, base: string, fixture: Vie
   await bounded('viewer close', perf(page, p => p.close()), 30_000)
   await new Promise(resolve => setTimeout(resolve, 500))
   const closed = await checkpoint('closed')
+  if (process.env.VIEWER_SUITE_SNAPSHOT && cdp && ops === 'f2') {
+    const chunks: string[] = []
+    cdp.on('HeapProfiler.addHeapSnapshotChunk', (e: { chunk: string }) => chunks.push(e.chunk))
+    await cdp.send('HeapProfiler.takeHeapSnapshot', { reportProgress: false })
+    writeFileSync(process.env.VIEWER_SUITE_SNAPSHOT, chunks.join(''))
+  }
   // Repeated open/close (F2: open, scroll, header sort, close): post-GC main heap
   // owned after each close. A real retention grows per cycle; engine slack
   // (compiled code, script sources, timeline buffers) levels off.
