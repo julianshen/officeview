@@ -331,3 +331,31 @@ describe('a failed page removes the blob records it already wrote (storage, ledg
     expect([...(await idb.get('1/p0'))!]).toEqual([2])
   })
 })
+
+describe('review round 1 (codex) MAJOR 5: rejected commits are validated before any write', () => {
+  const textPage = (pageId: string, r0: number, r1: number, text: string) => {
+    const b = new PageBuilder()
+    b.add(r0, 0, K_TEXT, 0, 0, text, true, undefined)
+    return { sheetId: '1', pageId, r0, r1, cellCount: 1, bytes: b.bytes, payload: b.build(), blobs: [...b.blobs] }
+  }
+  it('an overlapping page (same or new id) and a repeated shared-string chunk leave stored bytes, summaries, charges and blobs intact', async () => {
+    const rec = recordingBackend()
+    const ledger = createQuotaLedger(quotaLimitsFor('D'), { maxTotalExpandedBytes: 1 << 30 })
+    const pool = new MemoryPool({ limitBytes: 64 * 1024 * 1024 })
+    const store = new SourcePageStore({ docId: 'd', backend: rec.backend, ledger })
+    store.bindMemory(pool)
+    await store.commit(textPage('p0', 0, 0, 'a'.repeat(40_000)))
+    await store.commitStrings(0, ['s0'], 4)
+    const snapshot = () => ({ size: rec.inner.size, writes: rec.keys.length, current: ledger.snapshot().current, blobs: store.stats.blobs, pages: store.pages('1').map((p) => ({ ...p })), retained: pool.stats().retainedBytes })
+    const before = snapshot()
+    await expect(store.commit(textPage('p0', 0, 0, 'b'.repeat(40_000)))).rejects.toThrow(/overlaps/)
+    await expect(store.commit(textPage('p1', 0, 3, 'c'.repeat(40_000)))).rejects.toThrow(/overlaps/)
+    await expect(store.commit(textPage('p0', 5, 6, 'd'.repeat(40_000)))).rejects.toThrow(/already committed/)
+    await expect(store.commitStrings(0, ['other'], 4)).rejects.toThrow(/already committed/)
+    expect(snapshot()).toEqual(before)
+    expect(await store.blob(0)).toBe('a'.repeat(40_000))
+    expect(await store.sharedString(0)).toBe('s0')
+    const sheetPage = await store.page('1', 'p0')
+    expect(sheetPage.nums[0]).toBe(0)
+  })
+})

@@ -12,28 +12,36 @@
  * The document pool only exists once the viewer session binds it, after the
  * first page committed, so a store starts on a provisional pool of the
  * profile's worker budget. `rebind` moves every live charge into the document
- * pool; a pool that cannot hold them is not an error at bind time (the session
- * must still open) but makes the next construction charge refuse, ending the
- * import with the typed failure.
+ * pool atomically: either all of them move and the provisional pool closes, or
+ * none moves, the old ownership stays intact and bind throws the typed
+ * refusal (the viewer then refuses the open with resource-limit).
  *
- * Byte figures are estimates of JS heap held, documented here so the model can
- * be checked against a profile later (S10):
- * - builder: 64 B per record (six number-array slots and a string reference),
- *   2 B per UTF-16 code unit of text and spilled values, 2 B per formula-meta
- *   JSON character plus 96 B per meta object (the decoded-page allowance);
- * - a built page waiting for commit: payloadBytes of its typed lanes plus its
- *   spilled values;
- * - encode scratch: the exact encoded buffer plus the meta JSON string;
- * - a pending shared string: 2 B per code unit plus 32 B of string header.
+ * Byte figures are conservative estimates of JS heap held. They are pinned by
+ * tests/xlsx-viewer-construction-memory.test.ts against a Bun heap probe
+ * (scripts/construction-memory-probe.ts, heapSize + extraMemorySize after a
+ * full GC). Review measurements on Bun 1.3.10: 72.8 B per numeric builder
+ * record, 129 B per record holding a ~12-unit string, 194.5 B per summary; the
+ * constants add headroom for array-capacity growth (up to 1.5x):
+ * - builder: 96 B per record, 48 B per non-empty inline string plus 2 B per
+ *   UTF-16 code unit of text and spilled values, and per formula-meta object
+ *   192 B plus 2 B per character of its JSON (at least its strings' content);
+ * - a built page waiting for commit: payloadBytes, which counts the same meta
+ *   ownership, plus its spilled values;
+ * - encode scratch: the exact encoded buffer plus the meta JSON string, both
+ *   sized without allocating and charged before either exists;
+ * - a pending shared string: 2 B per code unit plus 64 B;
+ * - a page summary: 256 B.
+ * They are Bun/JSC figures, not a Chrome heap certification (S10.2).
  */
 import { PackageError } from '../../core/package-error'
 import type { MemoryPool, PoolCharge, PoolEntry } from '../view/tileCache'
 
-export const BUILDER_RECORD_BYTES = 64
-export const META_OBJECT_BYTES = 96
-export const PENDING_STRING_BYTES = 32
-/** One PageSummary: the object, its ids and its RectAggregate. */
-export const PAGE_SUMMARY_BYTES = 192
+export const BUILDER_RECORD_BYTES = 96
+export const TEXT_STRING_BYTES = 48
+export const META_OBJECT_BYTES = 192
+export const PENDING_STRING_BYTES = 64
+/** One PageSummary: the object, its ids, its RectAggregate and its index slot. */
+export const PAGE_SUMMARY_BYTES = 256
 /** Shares grow in steps so a per-record check rarely touches the pool. */
 const STEP_BYTES = 64 * 1024
 
@@ -57,9 +65,7 @@ export class ConstructionMemory {
   /** The store's own pool until a document pool is bound; closed on the first rebind. */
   private provisional: MemoryPool | undefined
   private readonly shares = new Set<Share>()
-  private readonly persistent = new Map<string, { what: string; bytes: number; entry: PoolEntry | null }>()
-  /** Set when a rebind could not move every charge: the next charge refuses. */
-  private refused: { what: string; bytes: number; limitBytes: number } | undefined
+  private readonly persistent = new Map<string, { what: string; bytes: number; entry: PoolEntry }>()
 
   constructor(provisional: MemoryPool, private readonly docId: string) {
     this.pool = provisional
@@ -76,12 +82,13 @@ export class ConstructionMemory {
     for (const p of this.persistent.values()) n += p.bytes
     return n
   }
+  persistentOf(key: string): number { return this.persistent.get(key)?.bytes ?? 0 }
 
   private usable(): void {
-    if (this.refused) throw memoryRefusal(this.refused.what, this.refused.bytes, this.refused.limitBytes)
     // A closed pool means the document was closed: the import is being torn down.
     if (this.pool.closed) throw new PackageError('cancelled', 'the document memory pool is closed')
   }
+  private entryKey(key: string): string { return `construction:${this.docId}:${key}` }
 
   share(what: string): ConstructionShare {
     const share: Share = { what, charge: this.pool.charge(), live: true }
@@ -109,32 +116,45 @@ export class ConstructionMemory {
   /** Charges a persistent, non-evictable entry at an absolute size (replacing its previous size). */
   persist(key: string, bytes: number, what: string): void {
     this.usable()
-    const previous = this.persistent.get(key)
-    const entry = this.pool.retain(`construction:${this.docId}:${key}`, { tier: 'source', bytes, evictable: false })
+    const entry = this.pool.retain(this.entryKey(key), { tier: 'source', bytes, evictable: false })
     if (!entry) {
       if (this.pool.closed) throw new PackageError('cancelled', 'the document memory pool is closed')
       throw memoryRefusal(what, bytes, this.pool.limitBytes)
     }
-    // retain() replaced the previous entry of this key in the same pool.
-    if (previous?.entry && previous.entry !== entry && previous.entry.live) previous.entry.release()
+    // retain() replaced (released) the previous entry of this key in the same pool.
     this.persistent.set(key, { what, bytes, entry })
   }
 
-  /** Moves every live charge into `pool`. Never throws; a shortfall refuses the next charge. */
+  /**
+   * Moves every live charge into `pool`, atomically. When the pool cannot hold
+   * all of them, the partial transfer is undone, the old ownership stays
+   * charged where it was and the typed memory-budget refusal is thrown.
+   */
   rebind(pool: MemoryPool): void {
     if (pool === this.pool) return
-    this.pool = pool
+    const charges: Array<[Share, PoolCharge]> = []
+    const entries: Array<[string, PoolEntry]> = []
+    const undo = () => {
+      for (const [, c] of charges) c.release()
+      for (const [, e] of entries) e.release()
+    }
     for (const share of this.shares) {
       const next = pool.charge()
-      if (!next.set(share.charge.bytes)) this.refused ??= { what: share.what, bytes: share.charge.bytes, limitBytes: pool.limitBytes }
-      share.charge.release()
-      share.charge = next
+      charges.push([share, next])
+      if (!next.set(share.charge.bytes)) { undo(); throw memoryRefusal(share.what, share.charge.bytes, pool.limitBytes) }
     }
     for (const [key, p] of this.persistent) {
-      p.entry?.release()
-      p.entry = pool.retain(`construction:${this.docId}:${key}`, { tier: 'source', bytes: p.bytes, evictable: false })
-      if (!p.entry) this.refused ??= { what: p.what, bytes: p.bytes, limitBytes: pool.limitBytes }
+      const next = pool.retain(this.entryKey(key), { tier: 'source', bytes: p.bytes, evictable: false })
+      if (!next) { undo(); throw memoryRefusal(p.what, p.bytes, pool.limitBytes) }
+      entries.push([key, next])
     }
+    for (const [share, next] of charges) { share.charge.release(); share.charge = next }
+    for (const [key, next] of entries) {
+      const p = this.persistent.get(key)!
+      p.entry.release()
+      p.entry = next
+    }
+    this.pool = pool
     // The provisional pool is private to the store; nothing else holds it.
     this.provisional?.close()
     this.provisional = undefined
@@ -144,7 +164,7 @@ export class ConstructionMemory {
   releaseAll(): void {
     for (const share of this.shares) { share.live = false; share.charge.release() }
     this.shares.clear()
-    for (const p of this.persistent.values()) p.entry?.release()
+    for (const p of this.persistent.values()) p.entry.release()
     this.persistent.clear()
   }
 }

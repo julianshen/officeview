@@ -15,7 +15,7 @@
  */
 import { PackageError, type PackageErrorCode } from '../../core/package-error'
 import { MemoryPool, WORKER_BUDGETS, type PoolEntry } from '../view/tileCache'
-import { BUILDER_RECORD_BYTES, ConstructionMemory, META_OBJECT_BYTES, PAGE_SUMMARY_BYTES, type ConstructionShare } from './constructionMemory'
+import { BUILDER_RECORD_BYTES, ConstructionMemory, META_OBJECT_BYTES, PAGE_SUMMARY_BYTES, TEXT_STRING_BYTES, type ConstructionShare } from './constructionMemory'
 import type { QuotaLedger, Reservation } from './quota'
 import type { ImportedPage, PageSink } from './importSession'
 import { addRecord, emptyAggregate, type RectAggregate } from './overviewIndex'
@@ -65,6 +65,8 @@ export interface CellPagePayload {
   textStart: Uint32Array
   /** Record index -> formula metadata, only for records with F_META. */
   meta: ReadonlyMap<number, FormulaMeta>
+  /** Length of JSON.stringify([...meta]) (0 without meta), known without building it. */
+  metaJsonLength?: number
 }
 export interface PageSummary {
   sheetId: string
@@ -80,6 +82,55 @@ export interface PageSummary {
 /** A built page and the oversized values its F_BLOB records reference by
  * ordinal (nums), in record order; commit stores them as blob records first. */
 export type StoredPage = ImportedPage & { payload: CellPagePayload; blobs?: readonly string[] }
+
+/**
+ * Length of JSON.stringify(value) for the JSON subset formula metadata uses
+ * (strings, finite numbers, booleans, null, arrays, plain objects with
+ * undefined members omitted), computed without allocating the JSON, so the
+ * encode buffer and meta string can be charged before they exist.
+ */
+export function jsonLength(value: unknown): number {
+  switch (typeof value) {
+    case 'string': {
+      let n = 2
+      for (let k = 0; k < value.length; k++) {
+        const c = value.charCodeAt(k)
+        if (c === 0x22 || c === 0x5c || c === 0x08 || c === 0x0c || c === 0x0a || c === 0x0d || c === 0x09) n += 2
+        else if (c < 0x20) n += 6
+        else if (c >= 0xd800 && c <= 0xdbff) {
+          const next = value.charCodeAt(k + 1)
+          if (next >= 0xdc00 && next <= 0xdfff) { n += 2; k++ } else n += 6
+        } else if (c >= 0xdc00 && c <= 0xdfff) n += 6
+        else n += 1
+      }
+      return n
+    }
+    case 'number': return Number.isFinite(value) ? String(value).length : 4
+    case 'boolean': return value ? 4 : 5
+    case 'object': {
+      if (value === null) return 4
+      if (Array.isArray(value)) {
+        let n = 2 + Math.max(0, value.length - 1)
+        for (const item of value) n += item === undefined || typeof item === 'function' ? 4 : jsonLength(item)
+        return n
+      }
+      let n = 2, members = 0
+      for (const [key, item] of Object.entries(value)) {
+        if (item === undefined || typeof item === 'function') continue
+        n += jsonLength(key) + 1 + jsonLength(item)
+        members++
+      }
+      return n + Math.max(0, members - 1)
+    }
+    default: return 4
+  }
+}
+const metaArrayLength = (meta: ReadonlyMap<number, FormulaMeta>): number => {
+  if (!meta.size) return 0
+  let n = 2 + meta.size - 1
+  for (const entry of meta) n += jsonLength(entry)
+  return n
+}
 
 export const recordPopulated = (p: CellPagePayload, i: number): boolean => p.kinds[i] !== K_EMPTY || (p.meta.get(i)?.formula !== undefined)
 
@@ -99,6 +150,8 @@ export class PageBuilder {
   private texts: string[] = []
   private meta = new Map<number, FormulaMeta>()
   private units = 0
+  /** Non-empty inline and spilled strings held (each costs a string header). */
+  private strings = 0
   /** Sum of JSON.stringify([index, meta]) lengths, for the exact meta lane size. */
   private metaChars = 0
   constructor(options: { inlineTextBytes?: number } = {}) {
@@ -111,7 +164,12 @@ export class PageBuilder {
   get spilledBytes(): number { return 2 * this.spilledUnits }
   /** Estimated heap held by this builder, for construction accounting (constructionMemory.ts). */
   get memoryBytes(): number {
-    return this.rows.length * BUILDER_RECORD_BYTES + 2 * (this.units + this.spilledUnits + this.metaChars) + this.meta.size * META_OBJECT_BYTES
+    return this.rows.length * BUILDER_RECORD_BYTES + this.strings * TEXT_STRING_BYTES + 2 * (this.units + this.spilledUnits + this.metaChars) + this.meta.size * META_OBJECT_BYTES
+  }
+  /** What add(…, text, …, meta) will add to memoryBytes, measured without allocating (charge it first). */
+  costOf(text: string, meta: FormulaMeta | undefined): number {
+    return BUILDER_RECORD_BYTES + (text.length ? TEXT_STRING_BYTES + 2 * text.length : 0)
+      + (meta ? META_OBJECT_BYTES + 2 * jsonLength([this.rows.length, meta]) : 0)
   }
   /** Exact encodePage() size of what has been added (the page target is charged on it). */
   get bytes(): number {
@@ -131,10 +189,11 @@ export class PageBuilder {
     this.rows.push(row); this.cols.push(col); this.kinds.push(kind); this.styles.push(styleIndex); this.nums.push(num)
     this.texts.push(text)
     this.units += text.length
+    if (text.length || spill) this.strings++
     this.flags.push((cached ? F_CACHED : 0) | (meta ? F_META : 0) | (error ? F_ERROR : 0) | (spill ? F_BLOB : 0))
     if (meta) {
       this.meta.set(i, meta)
-      this.metaChars += JSON.stringify([i, meta]).length
+      this.metaChars += jsonLength([i, meta])
     }
   }
   build(): CellPagePayload {
@@ -150,7 +209,7 @@ export class PageBuilder {
     return {
       rows: Uint32Array.from(this.rows), cols: Uint16Array.from(this.cols), kinds: Uint8Array.from(this.kinds),
       flags: Uint8Array.from(this.flags), styles: Uint32Array.from(this.styles), nums: Float64Array.from(this.nums),
-      text, textStart, meta: this.meta,
+      text, textStart, meta: this.meta, metaJsonLength: this.meta.size ? 2 + this.metaChars + (this.meta.size - 1) : 0,
     }
   }
 }
@@ -185,13 +244,15 @@ function encodedSize(n: number, units: number, metaLength: number): number {
  * the buffer is allocated, so the caller can charge or refuse them first. */
 export function encodePage(p: CellPagePayload, reserve?: (scratchBytes: number) => void): Uint8Array {
   const n = p.rows.length
-  // The meta JSON is built before `reserve` runs: it is needed to size the
-  // buffer, and it is bounded by the page's formula metadata, which the
-  // builder/pending-page share already charged (2 B per JSON character).
+  // Both the buffer and the meta JSON are sized and charged before either is allocated.
+  const metaLength = p.metaJsonLength ?? metaArrayLength(p.meta)
+  const scratch = (length: number) => 32 + [8 * n, 4 * n, 4 * n, 4 * (n + 1), 2 * n, 2 * p.text.length, n, n, 2 * length].reduce((sum, s) => sum + align8(s), 0) + 2 * length
+  reserve?.(scratch(metaLength))
   const metaJson = p.meta.size ? JSON.stringify([...p.meta]) : ''
+  // A payload whose recorded length disagrees is charged again at the real size.
+  if (metaJson.length !== metaLength) reserve?.(scratch(metaJson.length))
   const sizes = [8 * n, 4 * n, 4 * n, 4 * (n + 1), 2 * n, 2 * p.text.length, n, n, 2 * metaJson.length]
   const total = 32 + sizes.reduce((sum, s) => sum + align8(s), 0)
-  reserve?.(total + 2 * metaJson.length)
   const buffer = new ArrayBuffer(total)
   const head = new Uint32Array(buffer, 0, 8)
   head[0] = MAGIC; head[1] = n; head[2] = p.text.length; head[3] = metaJson.length
@@ -243,7 +304,7 @@ export function decodePage(bytes: Uint8Array): CellPagePayload {
     for (let k = 0; k < metaLength; k += 8192) json += String.fromCharCode(...metaUnits.subarray(k, Math.min(metaLength, k + 8192)))
     meta = new Map(JSON.parse(json) as [number, FormulaMeta][])
   }
-  return { rows, cols, kinds, flags, styles, nums, text, textStart, meta }
+  return { rows, cols, kinds, flags, styles, nums, text, textStart, meta, metaJsonLength: metaLength }
 }
 
 /** Shared strings: a chunk is a text lane plus offsets. */
@@ -525,11 +586,17 @@ export interface PageStoreStats {
   blobBytes: number
 }
 interface Resident<T> { value: T; bytes: number; entry?: PoolEntry }
-interface WrittenBlob { key: string; record: number; ordinal: number; bytes: number; counted: boolean; reservation: Reservation | undefined }
+interface WrittenBlob { key: string; record: number; ordinal: number; bytes: number; counted: boolean; reservation: Reservation | undefined; ram: () => void }
+/** Persistent pool entry for the records a RAM-backed (memory) backend retains. */
+const RAM_KEY = 'memory-backend'
 
-/** Decoded bytes of a payload (the typed arrays plus a per-meta allowance). */
-export const payloadBytes = (p: CellPagePayload): number =>
-  p.nums.byteLength + p.rows.byteLength + p.styles.byteLength + p.textStart.byteLength + p.cols.byteLength + p.text.byteLength + p.kinds.byteLength + p.flags.byteLength + p.meta.size * 96
+/** Typed-lane bytes of a payload. */
+const laneBytes = (p: CellPagePayload): number =>
+  p.nums.byteLength + p.rows.byteLength + p.styles.byteLength + p.textStart.byteLength + p.cols.byteLength + p.text.byteLength + p.kinds.byteLength + p.flags.byteLength
+/** Formula metadata a payload owns: per object plus 2 B per JSON character (at least its strings). */
+const metaBytes = (p: CellPagePayload): number => p.meta.size * META_OBJECT_BYTES + 2 * (p.metaJsonLength ?? metaArrayLength(p.meta))
+/** Heap held by a payload: its typed lanes and its formula metadata. */
+export const payloadBytes = (p: CellPagePayload): number => laneBytes(p) + metaBytes(p)
 
 export class SourcePageStore implements PageSink {
   readonly docId: string
@@ -546,6 +613,11 @@ export class SourcePageStore implements PageSink {
   private stringChunkSize = 0
   private stringCount = 0
   private blobCount = 0
+  /** Bytes the memory backend retains for this store (charged to the pool, see holdRam). */
+  private ramBytes = 0
+  private readonly committedChunks = new Set<number>()
+  /** Sheets with a commit in flight: one at a time per sheet, so validation precedes every write. */
+  private readonly committing = new Set<string>()
   private closed = false
   private abandoned = false
   private readonly counters: PageStoreStats = { committed: 0, storedBytes: 0, loads: 0, hits: 0, coalesced: 0, evictions: 0, residentBytes: 0, peakResidentBytes: 0, blobs: 0, blobBytes: 0 }
@@ -580,11 +652,46 @@ export class SourcePageStore implements PageSink {
     const at = this.reservations.indexOf(reservation)
     if (at >= 0) this.reservations.splice(at, 1)
   }
+  /**
+   * A memory backend keeps the encoded buffer it is given in RAM for the
+   * store's lifetime: charge it to the document pool (persistent, non-evictable)
+   * before handing it over, refusing typed when the pool cannot hold it. Other
+   * backends persist to browser storage and hold nothing. Returns the undo for
+   * a record that is deleted again (idempotent; a disposed store released all).
+   * While the write is in flight the buffer is also in the encode share, a
+   * brief conservative double count.
+   */
+  private holdRam(bytes: number): () => void {
+    if (this.backend.kind !== 'memory') return () => {}
+    this.construction.persist(RAM_KEY, this.ramBytes + bytes, 'source pages held in memory')
+    this.ramBytes += bytes
+    let undone = false
+    return () => {
+      if (undone || !this.live) return
+      undone = true
+      this.ramBytes -= bytes
+      try { this.construction.persist(RAM_KEY, this.ramBytes, 'source pages held in memory') } catch { /* pool closed */ }
+    }
+  }
 
   async commit(page: ImportedPage & { payload?: CellPagePayload; blobs?: readonly string[] }, docId = this.docId): Promise<void> {
     this.check(docId)
     if (!page.payload) throw new PackageError('parse-error', `page ${page.pageId} has no payload`)
     const list = this.index.get(page.sheetId) ?? []
+    // Every rejection happens before the first write, so a rejected page can
+    // never overwrite or orphan what an earlier page stored.
+    if (this.committing.has(page.sheetId)) throw new PackageError('parse-error', `page ${page.pageId} arrived while another page of sheet ${page.sheetId} is being committed`)
+    if (!(Number.isSafeInteger(page.r0) && Number.isSafeInteger(page.r1) && page.r0 >= 0 && page.r1 >= page.r0)) throw new PackageError('parse-error', `page ${page.pageId} has an invalid row range`)
+    if (list.length && list[list.length - 1].r1 >= page.r0) throw new PackageError('parse-error', `page ${page.pageId} overlaps the previous page`)
+    if (list.some((summary) => summary.pageId === page.pageId)) throw new PackageError('parse-error', `page ${page.pageId} is already committed`)
+    this.committing.add(page.sheetId)
+    try {
+      await this.commitChecked(page as ImportedPage & { payload: CellPagePayload; blobs?: readonly string[] }, list, docId)
+    } finally {
+      this.committing.delete(page.sheetId)
+    }
+  }
+  private async commitChecked(page: ImportedPage & { payload: CellPagePayload; blobs?: readonly string[] }, list: PageSummary[], docId: string): Promise<void> {
     // The summary is persistent index memory: charged before anything is written.
     const indexKey = `index:${page.sheetId}`
     this.construction.persist(indexKey, (list.length + 1) * PAGE_SUMMARY_BYTES, 'the page index')
@@ -592,12 +699,14 @@ export class SourcePageStore implements PageSink {
     const written: WrittenBlob[] = []
     const pageKey = `${page.sheetId}/${page.pageId}`
     let pageCharge: Reservation | undefined
+    let pageRam: () => void = () => {}
     let pageWritten = false
     let bytes: Uint8Array
     try {
       await this.commitBlobs(page.payload, page.blobs ?? [], page.pageId, docId, scratch, written)
       bytes = encodePage(page.payload, (n) => scratch.need(n))
       pageCharge = this.charge('pages', bytes.byteLength)
+      pageRam = this.holdRam(bytes.byteLength)
       pageWritten = true
       try {
         await this.backend.put(pageKey, bytes)
@@ -606,12 +715,15 @@ export class SourcePageStore implements PageSink {
       }
       // A store abandoned while the write was in flight never indexes the page.
       this.check(docId)
+      // Publication is the last step inside the rollback boundary.
+      list.push(summarize(page.sheetId, page.pageId, page.r0, page.r1, page.payload, bytes.byteLength))
+      this.index.set(page.sheetId, list)
     } catch (error) {
       if (this.live) {
         // The page was not indexed: storage, ledger and pool return to their pre-page state.
-        // A record the backend cannot delete keeps its charge: the ledger matches storage.
+        // A record the backend cannot delete keeps its charges: they match what is still held.
         const removed = !pageWritten || await this.backend.delete(pageKey).then(() => true, () => false)
-        if (removed) this.uncharge(pageCharge)
+        if (removed) { this.uncharge(pageCharge); pageRam() }
         await this.discardBlobs(page.payload, written)
         try { this.construction.persist(indexKey, list.length * PAGE_SUMMARY_BYTES, 'the page index') } catch { /* pool refused or closed */ }
       } else {
@@ -624,10 +736,6 @@ export class SourcePageStore implements PageSink {
     } finally {
       scratch.release()
     }
-    const summary = summarize(page.sheetId, page.pageId, page.r0, page.r1, page.payload, bytes.byteLength)
-    if (list.length && list[list.length - 1].r1 >= page.r0) throw new PackageError('parse-error', `page ${page.pageId} overlaps the previous page`)
-    list.push(summary)
-    this.index.set(page.sheetId, list)
     this.counters.committed++
     this.counters.storedBytes += bytes.byteLength
   }
@@ -648,9 +756,10 @@ export class SourcePageStore implements PageSink {
       const id = this.blobCount++
       const bytes = encodeStrings([text], (n) => scratch.need(n))
       // Tracked before the write: a failed put can still leave a partial record (an OPFS file).
-      const blob: WrittenBlob = { key: `blob/${id}`, record: i, ordinal, bytes: bytes.byteLength, counted: false, reservation: undefined }
+      const blob: WrittenBlob = { key: `blob/${id}`, record: i, ordinal, bytes: bytes.byteLength, counted: false, reservation: undefined, ram: () => {} }
       written.push(blob)
       blob.reservation = this.charge('blobRecords', bytes.byteLength)
+      blob.ram = this.holdRam(bytes.byteLength)
       try {
         await this.backend.put(blob.key, bytes)
       } catch (error) {
@@ -672,6 +781,7 @@ export class SourcePageStore implements PageSink {
       p.nums[blob.record] = blob.ordinal
       try { await this.backend.delete(blob.key) } catch { continue }
       this.uncharge(blob.reservation)
+      blob.ram()
       if (blob.counted) {
         this.counters.blobs--
         this.counters.blobBytes -= blob.bytes
@@ -681,17 +791,32 @@ export class SourcePageStore implements PageSink {
   /** Shared strings, in fixed-size chunks addressed by id. */
   async commitStrings(chunk: number, strings: readonly string[], chunkSize: number, docId = this.docId): Promise<void> {
     this.check(docId)
+    // Like pages: a chunk is never overwritten, so a rejected one cannot corrupt a stored one.
+    if (!Number.isSafeInteger(chunk) || chunk < 0 || this.committedChunks.has(chunk)) throw new PackageError('parse-error', `shared-string chunk ${chunk} is invalid or already committed`)
+    this.committedChunks.add(chunk)
+    const key = `sst/${chunk}`
     const scratch = this.construction.share('shared-string encoding')
     let stored = 0
+    let charge: Reservation | undefined
+    let ram: () => void = () => {}
+    let attempted = false
     try {
       const bytes = encodeStrings(strings, (n) => scratch.need(n))
-      this.charge('sharedStrings', bytes.byteLength)
-      await this.backend.put(`sst/${chunk}`, bytes)
+      charge = this.charge('sharedStrings', bytes.byteLength)
+      ram = this.holdRam(bytes.byteLength)
+      attempted = true
+      await this.backend.put(key, bytes)
       stored = bytes.byteLength
+      this.check(docId)
+    } catch (error) {
+      if (this.live) {
+        const removed = !attempted || await this.backend.delete(key).then(() => true, () => false)
+        if (removed) { this.uncharge(charge); ram(); this.committedChunks.delete(chunk) }
+      } else if (attempted) await this.backend.delete(key).catch(() => {})
+      throw error
     } finally {
       scratch.release()
     }
-    this.check(docId)
     this.counters.storedBytes += stored
     this.stringChunkSize = chunkSize
     this.stringCount = Math.max(this.stringCount, chunk * chunkSize + strings.length)
@@ -710,6 +835,7 @@ export class SourcePageStore implements PageSink {
   private async dispose(): Promise<void> {
     for (const r of this.reservations.splice(0)) r.release()
     this.construction.releaseAll()
+    this.ramBytes = 0
     for (const res of this.resident.values()) res.entry?.release()
     this.resident.clear()
     this.loading.clear()
@@ -722,6 +848,8 @@ export class SourcePageStore implements PageSink {
 
   /** Registers decoded pages in the document pool's `source` tier from now on. */
   bindMemory(pool: MemoryPool): void {
+    // Atomic: throws the typed memory-budget refusal and changes nothing when
+    // the pool cannot hold the construction charges and memory-held records.
     this.construction.rebind(pool)
     this.pool = pool
     for (const [key, res] of [...this.resident]) {
@@ -754,7 +882,11 @@ export class SourcePageStore implements PageSink {
       this.drop(key, true)
     }
   }
-  private async load<T extends CellPagePayload | StringChunk>(key: string, decode: (bytes: Uint8Array) => T, size: (value: T) => number): Promise<T> {
+  /**
+   * `size` is told whether the decoded value views the very buffer a memory
+   * backend retains (already charged by holdRam), so only the rest is charged.
+   */
+  private async load<T extends CellPagePayload | StringChunk>(key: string, decode: (bytes: Uint8Array) => T, size: (value: T, sharesHeldBuffer: boolean) => number): Promise<T> {
     if (!this.live) throw new PackageError('cancelled', 'source page store is closed')
     const hit = this.resident.get(key)
     if (hit) {
@@ -772,7 +904,8 @@ export class SourcePageStore implements PageSink {
       if (bytes === undefined) throw new PackageError('storage-error', `source page ${key} is missing from browser storage`)
       const value = decode(bytes)
       if (this.live && !this.resident.has(key)) {
-        const bytesHeld = size(value)
+        const view = 'rows' in value ? value.rows : value.text
+        const bytesHeld = size(value, this.backend.kind === 'memory' && view.buffer === bytes.buffer)
         this.resident.set(key, { value, bytes: bytesHeld })
         this.counters.residentBytes += bytesHeld
         if (this.counters.residentBytes > this.counters.peakResidentBytes) this.counters.peakResidentBytes = this.counters.residentBytes
@@ -788,19 +921,19 @@ export class SourcePageStore implements PageSink {
     try { return await promise } finally { this.loading.delete(key) }
   }
   page(sheetId: string, pageId: string): Promise<CellPagePayload> {
-    return this.load(`${sheetId}/${pageId}`, decodePage, payloadBytes)
+    return this.load(`${sheetId}/${pageId}`, decodePage, (p, shared) => shared ? metaBytes(p) : payloadBytes(p))
   }
   /** An oversized value by blob id, through the same bounded decoded cache as pages. */
   async blob(id: number): Promise<string> {
     if (!Number.isSafeInteger(id) || id < 0 || id >= this.blobCount) throw new PackageError('storage-error', `oversized cell value ${id} is not stored`)
-    const record = await this.load(`blob/${id}`, decodeStrings, (c) => c.text.byteLength + c.textStart.byteLength)
+    const record = await this.load(`blob/${id}`, decodeStrings, (c, shared) => shared ? 0 : c.text.byteLength + c.textStart.byteLength)
     if (record.textStart.length !== 2) throw new PackageError('parse-error', `oversized cell value ${id} is malformed`)
     return textAt(record, 0)
   }
   async sharedString(id: number): Promise<string | undefined> {
     if (!Number.isSafeInteger(id) || id < 0 || id >= this.stringCount || this.stringChunkSize === 0) return undefined
     const chunk = Math.floor(id / this.stringChunkSize)
-    const strings = await this.load(`sst/${chunk}`, decodeStrings, (c) => c.text.byteLength + c.textStart.byteLength)
+    const strings = await this.load(`sst/${chunk}`, decodeStrings, (c, shared) => shared ? 0 : c.text.byteLength + c.textStart.byteLength)
     return textAt(strings, id - chunk * this.stringChunkSize)
   }
 }

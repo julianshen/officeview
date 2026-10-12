@@ -145,15 +145,17 @@ describe('SourcePageStore as the import PageSink', () => {
   })
 
   it('coalesces concurrent loads, evicts under the MemoryPool and reloads the same bytes', async () => {
-    const store = new SourcePageStore({ docId: 'd', backend: memoryPageBackend() })
+    // A persistent backend (decoded pages are copies); the pool also holds the page index (S13.4).
+    const store = new SourcePageStore({ docId: 'd', backend: opfsPageBackend(fakeOpfsDirectory(), 'd') })
     for (let i = 0; i < 4; i++) await store.commit(imported(`p${i}`, i * 10, i * 10 + 9))
-    const pool = new MemoryPool({ limitBytes: 120, highWatermark: 1, lowWatermark: 1 })
+    const index = store.construction.persistentBytes
+    const pool = new MemoryPool({ limitBytes: index + 120, highWatermark: 1, lowWatermark: 1 })
     store.bindMemory(pool)
     const [a, b] = await Promise.all([store.page('1', 'p0'), store.page('1', 'p0')])
     expect(a).toBe(b)
     expect(store.stats).toMatchObject({ loads: 1, coalesced: 1 })
     for (let i = 1; i < 4; i++) await store.page('1', `p${i}`)
-    expect(pool.stats().byTier.source).toBeLessThanOrEqual(120)
+    expect(pool.stats().byTier.source - index).toBeLessThanOrEqual(120)
     expect(store.stats.evictions).toBeGreaterThan(0)
     const again = await store.page('1', 'p0')
     expect([...again.rows]).toEqual([...a.rows])
@@ -246,7 +248,7 @@ describe('paged import session', () => {
       async put(key, bytes) { if (++puts === 3) throw new DOMException('full', 'QuotaExceededError'); await inner.put(key, bytes) },
       get: (key) => inner.get(key),
       delete: (k) => inner.delete(k),
-    async removeAll() { removed = true; await inner.removeAll() },
+      async removeAll() { removed = true; await inner.removeAll() },
     }
     const store = new SourcePageStore({ docId: 'd', backend })
     const session = await openImportSession(blobOf(xlsxBytes({ sheetData: rowsXml(1000) })), { docId: 'd', profile: 'D', store, pageRows: 100 })

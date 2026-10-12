@@ -26,7 +26,7 @@ import { WORKER_BUDGETS } from '../view/tileCache'
 import { classifyPart, inventoryLimits } from './admission'
 import { anchorRecordEvents, newSheetMetadata, normalizeRowMetadata, sharedStringEvents, sheetRecordEvents, type SheetMetadata } from './sheetRecords'
 import { PageBuilder, SourcePageStore, browserPageStorageEnv, choosePageBackend, payloadBytes, type PageStorageEnv, type StoredPage } from './sourcePages'
-import { BUILDER_RECORD_BYTES, PENDING_STRING_BYTES } from './constructionMemory'
+import { PENDING_STRING_BYTES, TEXT_STRING_BYTES } from './constructionMemory'
 import { importLimitsFor, type ImportLimits, type ImportLimitOverrides, type ImportOutcome, type ImportProgress, type ImportSession, type ImportedPage } from './importSession'
 
 const MiB = 1024 * 1024
@@ -304,7 +304,8 @@ export async function openImportSession(source: Extract<SourceHandle, { kind: 'b
       // memory (§12.4), charged before they grow; the store charges encode scratch.
       const share = store.construction.share('page construction')
       let pendingBytes = 0
-      const pageCost = (page: StoredPage) => payloadBytes(page.payload) + 2 * (page.blobs ?? []).reduce((n, b) => n + b.length, 0)
+      // payloadBytes carries the page's formula-metadata ownership from the builder.
+      const pageCost = (page: StoredPage) => payloadBytes(page.payload) + (page.blobs ?? []).reduce((n, b) => n + TEXT_STRING_BYTES + 2 * b.length, 0)
       const account = (extra = 0) => share.need(builder.memoryBytes + pendingBytes + extra)
       const cut = (lastRow: number) => {
         // build() copies the builder into typed lanes of (about) the encoded size.
@@ -339,7 +340,8 @@ export async function openImportSession(source: Extract<SourceHandle, { kind: 'b
         maxStructuralRecords: limits.paged.structuralRecords,
         declared: container,
         onCell(record) {
-          account(BUILDER_RECORD_BYTES + 2 * record.text.length)
+          // Charged before the builder retains the record's text and formula metadata.
+          account(builder.costOf(record.text, record.meta))
           builder.add(record.row, record.col, record.kind, record.styleIndex, record.num, record.text, record.cached, record.meta, record.valueIsError)
           const meta = record.meta
           if ((meta?.formula !== undefined || meta?.sharedFormula !== undefined)

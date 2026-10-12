@@ -7,7 +7,8 @@
  */
 import { describe, expect, it } from 'vitest'
 import { openImportSession } from '../src/xlsx/storage/pagedImport'
-import { SourcePageStore, memoryPageBackend, type PageBackend } from '../src/xlsx/storage/sourcePages'
+import { SourcePageStore, memoryPageBackend, opfsPageBackend, type PageBackend } from '../src/xlsx/storage/sourcePages'
+import { fakeOpfsDirectory } from './helpers/fake-storage'
 import { createPagedWorkbookSource } from '../src/xlsx/view/pagedSource'
 import type { SourceStore } from '../src/xlsx/view/contracts'
 import { colName, repeat, xlsxBytes } from './helpers/xlsx-package'
@@ -82,7 +83,9 @@ describe('paged queryOverview', () => {
 describe('paged scan batches (1M×8 shape, reduced rows in CI)', () => {
   it('scans 8 columns in bounded batches with bounded decoded-page residency and exact totals', async () => {
     const rows = 20_000
-    const { store, sheet, source } = await paged(xlsxBytes({ sheetData: grid(rows, 8) }), memoryPageBackend(), 2_000, 256 * 1024)
+    // A persistent backend: decoded pages are fresh copies the LRU must bound
+    // (a memory backend's decoded views share its already-charged buffers).
+    const { store, sheet, source } = await paged(xlsxBytes({ sheetData: grid(rows, 8) }), opfsPageBackend(fakeOpfsDirectory(), 'd'), 2_000, 256 * 1024)
     // ten 2,000-row pages plus the empty tail page that proves rows 20,000+ blank
     expect(store.pages('1').map((p) => p.aggregate.records)).toEqual([...Array(10).fill(16_000), 0])
     let batches = 0, cells = 0, maxBatch = 0, sum = 0
