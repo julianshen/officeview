@@ -5,7 +5,7 @@
 import { createScenarioRunner } from '../src/debug/harness/kernelScenarios'
 
 console.log(JSON.stringify({ kind: 'environment', runtime: process.versions, platform: process.platform, arch: process.arch, samples: 3, warmup: 1 }))
-for (const id of ['sort-100k-8key', 'sort-1m-3key', 'text-sort-1m-natural'] as const) {
+for (const id of ['sort-100k-8key', 'sort-1m-3key', 'sort-1m-8key', 'text-sort-1m-natural'] as const) {
   const runner = createScenarioRunner(id)
   const prep = await runner.prepare()
   await runner.kernel()

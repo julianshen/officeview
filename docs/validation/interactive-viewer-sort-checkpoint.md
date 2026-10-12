@@ -121,3 +121,100 @@ bulk-copy implementation allowed a 392-unit check gap; long strings entered the
 fast path before the 64-unit cap; an empty protected body exceeded base admission
 by an unnecessary run-table allocation. Their regressions and the frozen parity
 corpus are all green in the final focused/full runs.
+
+## Checkpoint 2: prepared storage and extraction (base bc85bc5)
+
+The full F2 fixture now prepares **all eight columns atomically** in the unchanged
+64 MiB D cache. Retained storage is **26,469,195 B (25.24 MiB)**; the admitted
+staging peak is **26,613,567 B (25.38 MiB)**. All eight sort keys make zero raw
+source column reads. No budget amendment is needed for F2. This is lossless
+compaction, not a guarantee that arbitrary incompressible values fit this cache:
+those inputs retain the explicit quota/source-streaming behavior.
+
+The builder encodes bounded 4,096-populated-entry pages. Dense pages omit row
+IDs; scalar values use the smallest exact integer/Float32 lane, otherwise
+Float64. Float32 is selected only when `Object.is(Math.fround(value), value)`
+for every entry, so signed zero and double-only fractions survive. Sixteen-pair
+metadata dictionaries combine style/type/cache/error/provenance bits; varied
+metadata falls back to dense lanes. Raw strings and sparse formula extras stay
+exact. Both worker and prepared staging account old/new buffers before allocation;
+encoding can be cancelled/staled at its cooperative pauses.
+
+Prepared reads now binary-search once per membership interval and walk linearly.
+The deterministic read-bound test dropped from 10,978 reads to <=1,064 for 1,000
+rows. Numeric/error pages can serve the frozen `ColumnLanes` contract directly
+through an internal prepared-store capability. Ordinary text remains on the
+entry path because UTF-16 re-encoding was slower in the Node profile. Lane
+production caps row/text output and reserves staging before allocation; repeated
+giant strings fall back before allocation. Pinned-source string ownership keeps
+its original entry path. Typed cursors remain positional through eviction and
+reject changes in encoding. Typed shapes, tags, finite numbers, text offsets,
+coverage, cancellation and unavailable diagnostics are validated.
+
+Node diagnostic medians (three samples, one warmup, same method as checkpoint 1):
+
+| Scenario | bc85bc5 query | Compact + walk query | Final numeric-lane query |
+|---|---:|---:|---:|
+| 100k eight keys | 265.3 ms | 195.4 ms | 169.7 ms |
+| 1M three keys | 1320.3 ms | 967.8 ms | 869.9 ms |
+| 1M eight keys | not prepared (Chrome fallback below) | 2317.7 ms | 2122.0 ms |
+| 1M natural text | 2855.8 ms | 2954.9 ms | 2924.5 ms |
+
+Final sampled read/merge phases: 100k eight-key **74.9/69.1 ms**; 1M three-key
+**230.6/420.9 ms**; 1M eight-key **749.2/1067.5 ms**. These are Node diagnostics,
+not browser thresholds. Initial all-text lane encoding regressed mixed sorts;
+that path was narrowed before this checkpoint. The text sort code is unchanged.
+
+### Chrome results received for bc85bc5
+
+All nine source result hashes were independently verified. Original environments,
+raw samples, summaries and hashes are retained in
+`interactive-viewer-sort-chrome-r1.json`. The operator noted possible concurrent
+Playwright work; these are checkpoint evidence, not controlled release admission.
+
+| Scenario | Kernel/query p95 ms | Query result |
+|---|---:|---|
+| 100k one key | 53.7 / 58.3 | pass |
+| 100k eight keys | 254.9 / 258.0 | miss |
+| 1M one key | 626.8 / 653.5 | pass |
+| 1M two keys | 957.7 / 985.5 | pass, thin margin |
+| 1M three keys | 1222.9 / 1250.4 | miss |
+| 1M eight keys | 3048.3 / 3087.6 | fallback, 1,536 raw reads |
+| 1M natural text | 2408.6 / 2437.2 | pass |
+| 1M numeric filter | 58.9 / 71.6 | pass |
+| Cold 100k value index | 27.6 / 29.2 | pass |
+
+Those runs precede compaction and the extraction changes. The 4–8-key prepared
+coverage gap is now closed for F2. The three-key read miss has been addressed in
+code; post-change Chrome is still needed. Numeric eight-key Node cases remain
+above the frozen targets, with merge and extraction both material. The plan now
+justifies evaluating bounded parallel runs; do not report the remaining thresholds
+as achieved. Continue with a controlled Chrome remeasurement of this checkpoint,
+then bounded parallel/key-extraction work if required, with the same parity and
+aggregate-memory gates. Frozen profile values and the S8.4 baseline JSON remain
+unchanged; no mobile/release acceptance is claimed.
+
+After checkpointing, run the same nine scenarios with outputs separated:
+
+```sh
+for scenario in sort-100k-1key sort-100k-8key sort-1m-1key sort-1m-2key sort-1m-3key sort-1m-8key filter-1m-numeric text-sort-1m-natural value-index-100k-cold; do
+  bun scripts/bench-interactive-viewer.ts --scenario "$scenario" --channel chrome --repeat 30 --warmup 3 --timeout-min 14.5 --output ".tmp/viewer-bench/s8-6-r2-$scenario"
+done
+```
+
+Checkpoint-2 gates: library and script typechecks passed; twelve focused suites
+**218 passed** (including full-size eight-key frozen-kernel byte parity and exact
+mixed payloads); whole suite **5,259 passed**, nine failed, ten skipped, one todo,
+eight errors. Those are the identical localhost `EPERM` names reproduced on a
+pristine bc85bc5 archive (21 passed, nine failed, eight errors). Build passed;
+eager gzip **38,026 B**. Diff/new-file whitespace checks passed. Changes remain
+uncommitted for the requested checkpoint; no sub-agents or budget/spec edits.
+
+Additional RED/GREEN evidence: old full-size preparation refused at 80,742,522 B;
+raw page storage failed dense-row/width/dictionary assertions; compaction initially
+did not interrupt at a pause; row walking exceeded its linear access bound;
+typed sorts did not request lanes and silently treated malformed lanes as
+incomplete; ordinary text was needlessly encoded; producer staging was not
+pre-admitted; worker growth reserved only 608 B before a 1,312 B allocation peak.
+Each regression is green, alongside the frozen sort parity corpus. Pagination
+also stays valid through prepared eviction, while an encoding change is rejected.

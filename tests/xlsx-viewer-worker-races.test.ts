@@ -189,7 +189,8 @@ describe('S4.2 cooperative yields on the shared budget', () => {
     const r = await rig(objectDoc([{ sheetId: 'A', rows: descending(10_000) }]))
     await send(r, { kind: 'prepareColumns', requestId: 'p', owner: initialIdentity('doc', 'A'), cols: new Uint16Array([0]) })
     expect(lastReply(r.log, 'p')).toBe('p prepareColumns:complete')
-    expect(r.steps.count('prepare')).toBe(2)
+    // Two encoding passes add 20,000 units to the 10,001 source entries.
+    expect(r.steps.count('prepare')).toBe(Math.floor(30_001 / YIELD_WORK_UNITS))
     expect(Math.max(...r.steps.gaps)).toBeLessThanOrEqual(YIELD_WORK_UNITS + 1)
   })
 
@@ -197,11 +198,11 @@ describe('S4.2 cooperative yields on the shared budget', () => {
     // 3 ms per clock sample: the budget is spent on every 4th entry (12 ms).
     const slow = await rig(objectDoc([{ sheetId: 'A', rows: descending(10_000) }]), { tick: 3 })
     await send(slow, { kind: 'prepareColumns', requestId: 'p', owner: initialIdentity('doc', 'A'), cols: new Uint16Array([0]) })
-    expect(slow.steps.count('prepare')).toBe(Math.floor(10_001 / 4))
+    expect(slow.steps.count('prepare')).toBe(Math.floor(30_001 / 4))
     // 10 ms per sample: every entry spends the budget.
     const slower = await rig(objectDoc([{ sheetId: 'A', rows: descending(10_000) }]), { tick: 10 })
     await send(slower, { kind: 'prepareColumns', requestId: 'p', owner: initialIdentity('doc', 'A'), cols: new Uint16Array([0]) })
-    expect(slower.steps.count('prepare')).toBe(10_001)
+    expect(slower.steps.count('prepare')).toBe(30_001)
   })
 
   it('filter projection scans yield every 4,096 rows and equal the synchronous projection', async () => {

@@ -295,6 +295,8 @@ function sortRunner(def: ScenarioDef, rows: number, profile: ProfileId, admitted
       const prepared = await host.prepareKeys(keys, notes)
       metrics['prepare-columns'] = now() - started
       metrics['prepared-columns-admitted'] = prepared
+      metrics['prepared-retained-bytes'] = host.session.preparedStats().bytes
+      metrics['prepared-staging-peak-bytes'] = host.session.memoryStats().peakTransientBytes
       if (prepared < keys.length) notes.push(`only ${prepared} of ${keys.length} key columns prepared: FALLBACK, not the prepared warm boundary`)
       return { metrics, notes }
     },

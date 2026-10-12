@@ -16,7 +16,7 @@ import {
   visibilityFromDisplayBitsets,
 } from '../src/worker/viewerProtocol'
 import {
-  cacheKey, DocumentSession, PREPARED_COLUMN_OVERHEAD, PREPARED_ENTRY_LANE_BYTES, workbookIndexKey, type FilterEvaluator,
+  cacheKey, DocumentSession, PREPARED_COLUMN_OVERHEAD, workbookIndexKey, type FilterEvaluator,
   type ViewDraft, type WorkbookSource,
 } from '../src/worker/viewerSession'
 import { createObjectWorkbookSource, READ_ROWS_MAX_CELLS } from '../src/worker/viewerObjectSource'
@@ -892,12 +892,12 @@ describe('S4.1 round-2 findings (codex C / pi P)', () => {
     const session = kernel.session('doc')!
     const numeric = session.preparedFootprint('A', 0)!
     expect(numeric).toMatchObject({ entries: n, extraObjects: 0, stringBytes: 0 })
-    expect(numeric.laneBytes).toBe(n * PREPARED_ENTRY_LANE_BYTES)
-    expect(numeric.bytes).toBe(PREPARED_COLUMN_OVERHEAD + numeric.laneBytes)
+    expect(numeric.laneBytes).toBeLessThanOrEqual(n * 4 + 16)
+    expect(numeric.bytes).toBe(PREPARED_COLUMN_OVERHEAD + numeric.laneBytes + numeric.pageOverheadBytes)
     const text = session.preparedFootprint('A', 1)!
     expect(text.extraObjects).toBe(0)
     expect(text.uniqueStrings).toBe(10)
-    expect(text.bytes).toBe(PREPARED_COLUMN_OVERHEAD + text.laneBytes + text.stringBytes)
+    expect(text.bytes).toBe(PREPARED_COLUMN_OVERHEAD + text.laneBytes + text.pageOverheadBytes + text.stringBytes)
     expect(session.preparedStats().bytes).toBe(numeric.bytes + text.bytes)
     // Order of magnitude: compact lanes, not per-row payload objects (~tens of bytes per row).
     expect(numeric.bytes / n).toBeLessThan(32)
@@ -989,8 +989,9 @@ describe('S4.1 round-2 findings (codex C / pi P)', () => {
 describe('S4.1 round-3 findings (opencode)', () => {
   it('MINOR lane growth charges the transient peak of old plus new buffers', async () => {
     // 32 numeric rows: capacity grows 16 -> 32 at the 17th entry and needs no trim.
-    // Final retention is 256 + 32*22 = 960 B, but the growth peak holds the old
+    // Raw staging is 256 + 32*22 = 960 B, but the growth peak holds the old
     // 16-slot lanes (352 B) and the new 32-slot lanes (704 B) at once: 1,312 B.
+    // The roomy run also admits the later encoding output/scratch reservation.
     const doc = objectDoc([{ sheetId: 'A', rows: column(Array.from({ length: 32 }, (_v, i) => i)) }])
     const owner = initialIdentity('doc', 'A')
     const open = async (maxBytes: number) => {
@@ -1002,9 +1003,10 @@ describe('S4.1 round-3 findings (opencode)', () => {
     expect(await run(tight, { kind: 'prepareColumns', requestId: rid(), owner, cols: new Uint16Array([0]) }))
       .toMatchObject({ kind: 'quota', limitBytes: 1000, requiredBytes: 256 + 16 * 22 + 32 * 22 })
     expect(tight.session('doc')!.preparedStats()).toEqual({ columns: 0, bytes: 0 })
-    const roomy = await open(1312)
+    const roomy = await open(4096)
     completed(await run(roomy, { kind: 'prepareColumns', requestId: rid(), owner, cols: new Uint16Array([0]) }))
-    expect(roomy.session('doc')!.preparedStats()).toEqual({ columns: 1, bytes: 256 + 32 * 22 })
+    expect(roomy.session('doc')!.preparedStats()).toEqual({ columns: 1, bytes: roomy.session('doc')!.preparedFootprint('A', 0)!.bytes })
+    expect(roomy.session('doc')!.preparedStats().bytes).toBeLessThan(256 + 32 * 22)
   })
 
   it('NIT structural handles keep one entry per sheet and drop stale value generations', async () => {
