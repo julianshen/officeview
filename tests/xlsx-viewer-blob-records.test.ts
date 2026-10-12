@@ -6,7 +6,10 @@
  * blob is written remove every partial record with a typed outcome.
  */
 import { describe, expect, it } from 'vitest'
-import { SourcePageStore, memoryPageBackend, type PageBackend } from '../src/xlsx/storage/sourcePages'
+import {
+  F_BLOB, K_TEXT, PageBuilder, SourcePageStore, encodePage, indexedDbPageBackend, memoryPageBackend, opfsPageBackend, type PageBackend,
+} from '../src/xlsx/storage/sourcePages'
+import { fakeIndexedDb, fakeOpfsDirectory } from './helpers/fake-storage'
 import { openImportSession } from '../src/xlsx/storage/pagedImport'
 import { importLimitsFor } from '../src/xlsx/storage/importSession'
 import { createQuotaLedger, quotaLimitsFor } from '../src/xlsx/storage/quota'
@@ -178,5 +181,45 @@ describe('find and copy read the full blob value', () => {
     expect(out).toMatchObject({ kind: 'ready' })
     expect(out.kind === 'ready' && out.text === BIG).toBe(true)
     await source.release()
+  })
+})
+
+describe('blob records in the browser page backends', () => {
+  it('OPFS and IndexedDB store the blob next to the pages and remove it on release', async () => {
+    const dir = fakeOpfsDirectory()
+    const opfsStore = new SourcePageStore({ docId: 'd', backend: opfsPageBackend(dir, 'd') })
+    const a = await openImportSession(blobOf(xlsxBytes({ sheetData })), { docId: 'd', profile: 'D', store: opfsStore })
+    expect(await a.done).toMatchObject({ kind: 'complete' })
+    expect([...dir.files.keys()].some((name) => name.includes('blob'))).toBe(true)
+    const sheetA = createPagedWorkbookSource(a).store('1')
+    expect(await sheetA.readCell({ row: 1, col: 1 }, ro(sheetA))).toMatchObject({ cell: { value: BIG } })
+    await a.release()
+    expect(dir.files.size).toBe(0)
+
+    const idb = fakeIndexedDb()
+    const idbStore = new SourcePageStore({ docId: 'd', backend: indexedDbPageBackend(idb, 'd') })
+    const b = await openImportSession(blobOf(xlsxBytes({ sheetData })), { docId: 'd', profile: 'D', store: idbStore })
+    expect(await b.done).toMatchObject({ kind: 'complete' })
+    const sheetB = createPagedWorkbookSource(b).store('1')
+    expect(await sheetB.readCell({ row: 1, col: 1 }, ro(sheetB))).toMatchObject({ cell: { value: BIG } })
+    await b.release()
+    expect(idb.deleted).toContain('officeview-pages-d')
+  })
+})
+
+describe('PageBuilder spill', () => {
+  it('keeps the record kind, sets F_BLOB with an ordinal, adds no text units and keeps bytes exact', () => {
+    const b = new PageBuilder({ inlineTextBytes: 8 })
+    b.add(0, 0, K_TEXT, 0, 0, 'abcd', true, undefined)
+    b.add(0, 1, K_TEXT, 0, 0, 'abcde\ud800', true, undefined)
+    expect(b.blobs).toEqual(['abcde\ud800'])
+    expect(b.spilledBytes).toBe(12)
+    const page = b.build()
+    expect(page.text.length).toBe(4)
+    expect(page.flags[1] & F_BLOB).toBe(F_BLOB)
+    expect(page.flags[0] & F_BLOB).toBe(0)
+    expect(page.kinds[1]).toBe(K_TEXT)
+    expect(page.nums[1]).toBe(0)
+    expect(b.bytes).toBe(encodePage(page).length)
   })
 })
