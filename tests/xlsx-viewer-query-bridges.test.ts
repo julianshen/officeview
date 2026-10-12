@@ -442,7 +442,8 @@ it('paints worker-planned merged cells and overflowing text identically through 
     expect(plans.get(h.session.identity('1'), window, extent, true).kind).toBe('pending')
     await h.port.idle()
     for (let i = 0; i < 30; i++) await Promise.resolve()
-    await vi.waitFor(() => expect(plans.get(h.session.identity('1'), window, extent, true).kind).toBe('detail'))
+    // Each poll is a repaint, i.e. a new frame with its own page allowance (S13.3 r4).
+    await vi.waitFor(() => { plans.beginFrame(h.session.identity('1'), window); expect(plans.get(h.session.identity('1'), window, extent, true).kind).toBe('detail') })
     const plan = plans.get(h.session.identity('1'), window, extent, true)
     if (plan.kind === 'detail') expect(plan.merges).toHaveLength(1)
     const a = createCanvas(192, 80), b = createCanvas(192, 80)
