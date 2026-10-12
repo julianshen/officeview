@@ -50,10 +50,12 @@ it('keeps the README worker bootstrap in a Vite production consumer (worker.form
     const worker = files.find(name => /^viewer-worker-.*\.js$/.test(name))
     expect(worker, 'The module Worker must have an emitted entry').toBeDefined()
     const workerCode = await readFile(join(assets, worker!), 'utf8')
-    // The exact bootstrap statement from src/worker/worker-entry.ts, minified or not:
-    // `if (typeof window === 'undefined' && typeof scope.postMessage === 'function') scope.onmessage = ...`
+    // The exact bootstrap statement from src/worker/worker-entry.ts
+    // (`if (typeof window === 'undefined' && typeof scope.postMessage === 'function') scope.onmessage = ...`)
+    // as the library build ships it: dist/worker.js is minified by the library build and the
+    // consumer (minify: false) keeps that spelling, so only the minified form is pinned.
     expect(workerCode, 'The README production worker entry must install its message handler').toMatch(
-      /typeof window\s*(?:>\s*["']u["']|===?\s*["']undefined["'])\s*&&\s*typeof\s+([\w$]+)\.postMessage\s*===?\s*["']function["'][\s\S]{0,40}?\1\.onmessage\s*=/,
+      /typeof window\s*>\s*"u"\s*&&\s*typeof\s+([\w$]+)\.postMessage\s*==\s*"function"\s*&&\s*\(\s*\1\.onmessage\s*=/,
     )
 
     const main = files.find(name => /^index-.*\.js$/.test(name))
