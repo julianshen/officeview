@@ -102,7 +102,9 @@ Small admitted files use the object path; each large document gets a worker,
 released on replacement/unmount. Without a usable factory, large files use
 compatibility parsing with **“Large file — opened in compatibility mode”** and
 no large-mode memory/performance guarantee. `OfficeDoc` views an existing model;
-its earlier parsing/allocation cost still applies.
+its earlier parsing/allocation cost still applies. Pre-parsed models have no
+worker route: `OfficeDoc` has no `viewerWorker` prop and always uses the object
+path, so parse large workbooks from bytes through `OfficeFile`/`useOfficeFile`.
 
 #### Capacity, admission and storage
 
@@ -226,7 +228,9 @@ for the admitted paged route.
 
 `useOfficeFile(source, options)` accepts `interactiveSheets` and `viewerWorker`.
 Its `OfficeFileState` has `status: 'loading' | 'ready' | 'error'`: ready supplies
-`document` and optional `notices`; error supplies `message` and optional typed
+`document` and optional `notices` (render `notices` yourself — `OfficeFile`
+shows them only outside sheet mode, so a hook integrator who drops them hides
+messages such as the saved-values line); error supplies `message` and optional typed
 `code`/`reason` for admission refusals. `OfficeFile`'s `error` renderer receives
 the message string; use the hook when handling structured refusal metadata.
 
