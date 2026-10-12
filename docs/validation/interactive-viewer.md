@@ -154,7 +154,7 @@ What is instrumented, and what is not:
     2. Reopen the file and confirm Excel shows no repair prompt. Take a screenshot.
     3. Copy the file to `tests/fixtures/xlsx-viewer/native-corner.xlsx`, record its SHA-256, and add a parity case like `xlsx-viewer-adapter-parity.test.ts`: object and paged adapters agree, cache/error/date/hidden/table values match the screenshot.
     4. Open it in the e2e page (`?src=`), with and without `?worker=1` (the latter needs a cap-crossing copy).
-- **Safari desktop: partial (S13).** The user enabled remote automation. `scripts/harness/safari-check.ts` ran once in real Safari 26.5.2 while the Mac screen was locked: capability detection and the F2 storage import ran, the interactive flows did not (see [S13](#s13-runtime-and-manual-checks)). The Playwright WebKit runs above are not Safari evidence.
+- **Safari desktop: pass (S13), automated in real Safari 26.5.2 through safaridriver.** All 7 flows passed at `6dd5240`; see [S13](#s13-runtime-and-manual-checks), which also keeps the earlier locked-screen and harness-race runs. The Playwright WebKit runs above are not Safari evidence.
 - **iPad / physical devices: not-run** by user decision.
 
 ## S10.3 support and accessibility receipts
@@ -285,11 +285,11 @@ The other rows are checked after a pane width change of 100 px and back, so they
 
 **The 1 px nudge observation: not reproducible as a pane-width bug.** I tried to reproduce it, before and after the fix. Before the fix, 72 cycles of DPR 2 / 1.5 / 1, each with a 1 px pane nudge and back, produced 3 stale states. All 3 were old-DPR backing stores with the correct CSS width, which is D-DPR (or the two resizes coalescing into one observation). The earlier "CSS width stuck at 1397" state did not recur. After the fix, 60 cycles that waited for each leg plus 60 cycles with 0–57 ms gaps produced 0 stale states (canvas CSS width = pane `clientWidth` − 44, backing = `ceil(CSS × DPR)`). No `devicePixelContentBoxSize` change was made, and no regression test was added, since there is no reproduction. The probe was a throwaway and is not committed.
 
-### Actual Safari via safaridriver — partial (screen locked)
+### Actual Safari via safaridriver — pass (7/7 at `6dd5240`)
 
 **Script:** `bun scripts/harness/safari-check.ts` (W3C WebDriver over HTTP to `safaridriver -p 4451`; the harness vite server on 4191; a loopback fixture server on 4193). It writes the receipt and screenshots to `/tmp/officeview-safari-check/`. **Browser:** Safari 26.5.2 (safaridriver "Included with Safari 26.5.2 (21624.2.5.11.8)"), session `platformName: macOS`, `browserVersion: 26.5.2`. This is real Safari, not Playwright WebKit.
 
-The script ran twice, both times while the macOS screen was **locked** (`CGSSessionScreenIsLocked = true`). The first run failed on a harness bug before it reached the page: the W3C element-reference key was wrong. The bug is fixed, and that run's results are discarded. The second run's receipt is kept as `/tmp/officeview-safari-check/receipt-locked-screen-run.json`. In that run every WebDriver screenshot was black, and WebDriver clicks reported success but had no effect (Go To never moved the active cell). The likely cause is the locked screen; an unlocked rerun has to confirm it. Those interaction results say nothing about the viewer. The script now refuses to run on a locked screen.
+**Early runs (screen locked).** The script first ran twice while the macOS screen was **locked** (`CGSSessionScreenIsLocked = true`). The first run failed on a harness bug before it reached the page: the W3C element-reference key was wrong. The bug is fixed, and that run's results are discarded. The second run's receipt is kept as `/tmp/officeview-safari-check/receipt-locked-screen-run.json`. In that run every WebDriver screenshot was black, and WebDriver clicks reported success but had no effect (Go To never moved the active cell). The likely cause is the locked screen; an unlocked rerun has to confirm it. Those interaction results say nothing about the viewer. The script now refuses to run on a locked screen.
 
 | Step | Result |
 |---|---|
@@ -311,7 +311,25 @@ Both failures were harness bugs, confirmed by re-running those steps in real Saf
 - **"waiting for active cell A1":** Safari reserves Cmd+Home. The WebDriver Meta+Home navigated the tab to the Safari home page, so the page never saw the key. Ctrl+Home moved the active cell to A1 at once. Cmd+Down and Cmd+Right reached A1048576 and XFD1048576.
 - **"alpha checkbox not found":** the filter popup's buttons stay disabled until its value list loads (about 1.7 s for 100,010 rows), and a WebDriver click on a disabled button does nothing. The value checkboxes are named correctly (`aria-label="alpha"`).
 
-Fixed in `606db4c`: Ctrl+Home, and clicks wait for an enabled target. The full re-run after these fixes is pending (see the report).
+Fixed in `606db4c`: Ctrl+Home, and clicks wait for an enabled target.
+
+**Integrator re-runs at `1143e8b` (the user had cleared a stray macOS permission dialog first):**
+- **Run 1: 6 pass, 1 fail.** "F1 worker-backed paged … corner label XFD1048576, value Loading…" was a harness race: the step read the corner's name while the worker read was still in flight, and "Loading…" is the correct pending state.
+- **Run 2: 7 pass.**
+
+The harness fix (`6dd5240`) waits up to 30 s for a settled name and asserts that the labels went pending → value, never through a blank value.
+
+**Final run at `6dd5240`: 7/7 pass** (2026-10-12T18:32:21Z–18:32:39Z, Safari 26.5.2, safaridriver 21624.2.5.11.8, ports 4485–4487, receipt `/tmp/officeview-safari-check-final/receipt.json`). Every click was a real WebDriver click; no synthetic fallback was used. Key values:
+
+| Step | Result |
+|---|---|
+| Capabilities | Worker, OffscreenCanvas 2D, IndexedDB, OPFS (main-thread `createWritable`; worker `createSyncAccessHandle`): all present |
+| F1 resident | corner "XFD1048576, value 17179869183.00"; find reached A1048576 (id …17179852800); copy payload "A1048576" |
+| F1 worker-backed | same corner and copy; 1 worker, 1 `open` |
+| Keyboard | B3 → C3 → C4 (Enter) → A4 (Home) → A1 (Ctrl+Home) → A1048576 (Cmd+Down) → XFD1048576 (Cmd+Right) → XFC1048576; zoom 100% → 125% (`+`) → 100% (`0`) |
+| F2 worker-backed, 100,010 rows | sort G ascending then descending; G2 = "G2, value 200017.00; original G100009". In-page click → first status/`aria-sort` change: 1,538 ms (ascending) and 2,975 ms (descending); this is a WebDriver observation, not an S10.2 receipt. Filter D = alpha: "Visible body 24972 / complete body 100009"; Cancel left it unchanged; Clear all filters gave "Visible body 100009". Worker commands: open 1, sort 2, filter 2, prepareColumns 2 |
+| F3 worker-backed dense | recenter at XFD1/A1/XFD8/H3 with no orphan cells; ArrowLeft from XFD8 → "XFC8, value 1984.20" |
+| F2 storage, 160,000 rows | "Visible body 160000 / complete body 160000"; OPFS pages persisted, no write restriction |
 
 ### macOS VoiceOver — guided manual pass (real VoiceOver, real Safari 26.5.2)
 
@@ -347,18 +365,25 @@ Fixed in `606db4c`: Ctrl+Home, and clicks wait for an enabled target. The full r
   - So the handler works in Safari. Under VoiceOver the keystroke did not reach the page as Option+Down, most likely because VoiceOver handles it. That is not confirmed: no VoiceOver key trace was possible.
   - Keyboard alternative that VoiceOver users can reach: F2 (header control mode) → Tab to "Filter column X" → Enter (S10.3 receipt). Re-test Option+Down with VoiceOver's pass-through (pass next keystroke) on the next VoiceOver pass.
   - Separately, safaridriver's synthetic modified arrows arrive with control-character `key` values (Option+Down → `"\u001f"`, Shift+Right → `"\u001d"`; `code` is correct). That is a WebDriver synthesis artifact; real keys were correct. The Safari check therefore uses no modified arrows except Cmd+Arrow, which arrives correctly.
-- **V4 — "1.002023-06-02" in the date column: not Safari-specific, and not changed here.**
-  - Playwright Chromium and Playwright WebKit render it identically.
-  - Calibri is not installed, so the fallback serif makes "2023-06-02" about 68.2 px wide (measured in both engines) in a 64 px column.
-  - The renderer keeps the authored size, right-aligns the numeric text, and clips it at the cell's left edge (the documented legacy no-wrap rule in `render.ts`). The clipped first glyph sits on the A|B gridline next to column A's right-aligned "1.00", so the two read as one string.
-  - Excel would show `########` for a date that does not fit, so this is a renderer fidelity gap shared with the legacy path, not a Safari defect. It is logged under Observations for a follow-up, because changing it moves goldens.
+- **V4 — "1.002023-06-02" in the date column: not Safari-specific; fixed for Excel fidelity (`3b759df`).**
+  - Playwright Chromium and WebKit rendered it identically. With Calibri missing, "2023-06-02" measures about 68.2 px in a 64 px column. The renderer clipped it at the cell edge, so it read as joined to column A's "1.00".
+  - Excel instead shows `#` repeated across the cell for a number, date or time that does not fit. `layoutCellBody` (`src/xlsx/render.ts`), shared by the static and viewer renderers, now does the same:
+    - it measures with the same font string the cell paints with;
+    - the cell gets ⌊interior / width("#")⌋ `#`s, and at least one;
+    - General keeps its order (fewer decimals, then scientific), and its "nothing fits" result now fills the cell too.
+  - Unchanged: text cells (which still overflow), `@`-formatted values, booleans, errors, wrapped and rotated cells. Shrink-to-fit is not parsed, so it cannot be exempted. The accessible and find value (`cellDisplayText`) stays the real value.
+  - Tests: `tests/xlsx-number-overflow.test.ts`, covering dates, times, negative numbers, percentages, General, a 1-glyph column, text and accessible value. It failed first with, e.g., `expected [ '2023-06-02' ] to deeply equal [ '########' ]`.
+  - Two format tests now render with wide columns or narrower fake glyphs, so they keep asserting formats rather than overflow.
+  - **Golden:** corpus compare after hydrating with `bun scripts/fetch-corpus.ts` changed exactly one XLSX golden: `poi-64508.xlsx.0` (2,720 / 44,800 px). Its `dd.mm.yyyy` date column used to spill garbled digits into the next column and now shows `######` in the cell. Re-recorded.
+  - Six docx/pptx goldens also differ (`poi-55733.docx.0`, `poi-picture-transparency.pptx.1–3`, `pydocx-blk-inner-content.docx.0`, `pypptx-test_slides.pptx.0`). They fail identically on the base commit without this change, so they are unrelated and not re-recorded.
+  - With real Calibri metrics, a column that fits in Excel would also fit here. The harness has no Calibri, so this date column shows `#`s.
 
 ## Blocking for release
 
 These are mandatory cases whose evidence is incomplete. Nothing here is hidden as a pass.
 
 1. ~~**AC-STORE-03 / AC-SEM-04 drawing legs / AC-SEM-05**~~ — resolved by S3.3 (merged 2026-10-12); only their browser legs remain not-run.
-2. **AC-A11Y-01 / AC-A11Y-02:** S10.3 delivered the Chromium/WebKit keyboard and focus receipts and the Chromium AX-tree receipt. Still open: the **macOS VoiceOver** receipt (S13 script `scripts/harness/voiceover-check.ts` is ready; not run because the screen was locked), the **Safari desktop** interactive flows (S13 `scripts/harness/safari-check.ts`; needs a rerun with the screen unlocked), and **iPad touch/VoiceOver** (not-run by user decision).
+2. **AC-A11Y-01 / AC-A11Y-02:** S10.3 delivered the Chromium/WebKit keyboard and focus receipts and the Chromium AX-tree receipt. Still open: the **macOS VoiceOver** receipt (S13: one guided manual pass in Safari, with V1/V2 fixed but not yet re-heard; the automated `scripts/harness/voiceover-check.ts` is blocked by the `content of last phrase` AppleScript hang), ~~Safari desktop~~ (S13: 7/7 in real Safari 26.5.2), and **iPad touch/VoiceOver** (not-run by user decision).
 3. **AC-PERF-01 / AC-PERF-02 (memory) / AC-LIFE-02 (real retained memory):** the controlled S10.2 Chrome, Safari and iPad receipts.
 4. **Native Excel checkpoint** for AC-STORE-01, AC-SEM-07 and AC-REG-01. The manual steps are above.
 5. **AC-BACKEND-01:** S11/S12 decision records delivered (`docs/architecture/xlsx-wasm-decision.md`, `xlsx-gpu-decision.md`, both not-run on desktop Chrome (headless)-only evidence); the shipped TS/Canvas2D backends' S10.2 receipt is still pending merge; revisit when Safari and mobile receipts exist.
@@ -367,7 +392,7 @@ These are mandatory cases whose evidence is incomplete. Nothing here is hidden a
 
 ## Observations (not fixed; not reproduced as failures)
 
-- (S13 V4) A numeric or date value wider than its column (for example a date in a 64 px column when Calibri is missing) is clipped at the cell's left edge instead of showing `########` as Excel does, so it reads as joined to its left neighbour. This is shared by the legacy and viewer renderers on every engine; a fix would move goldens.
+- (S13) Text cells in `poi-64508.xlsx` still overflow into non-empty neighbours (for example "SI33738504" over column B). Excel clips text at a non-empty neighbour. This is separate from the V4 number rule and not fixed here.
 - (S13) A 1 px pane-width nudge at DPR 1.5 once seemed to leave the pane width stale (canvas CSS 1397 at `innerWidth` 1440). It was investigated and did not reproduce in 192 cycles; every stale state seen was D-DPR, now fixed. Details in the S13 section.
 - G2's read-ahead costs one extra `next()` per complete cursor-less page. On the worker path that is one more worker round trip; it is part of the roughly 597 reads observed above. Detection keeps at most one read-ahead continuation open, because the worker caps open scans at 4 (`MAX_OPEN_SCANS`), shared with find. This is a cost note for the S8.6 owner, not a bug.
 - Generated browser packages are cached under `$TMPDIR/officeview-viewer-e2e-v1`, keyed by file name. If the S0.2 builders change, bump the `-v1` suffix in `tests/browser/viewer-e2e.ts`.
