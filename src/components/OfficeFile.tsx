@@ -99,8 +99,12 @@ export function useOfficeFile(
         paged: async (blob, ctx, release) => {
           const factory = workerRef.current
           if (!factory) return undefined
+          // A factory that cannot construct a worker (no Worker global, CSP)
+          // is the same outcome as a dead worker: keep compatibility mode.
+          let port: ViewerWorkerPort
+          try { port = factory() } catch { return undefined }
           const { openPagedWorkbook } = await import('./xlsx/pagedWorkbook')
-          return openPagedWorkbook(blob, { port: factory(), profile: ctx.profile, signal: ctx.signal, ...(release ? { release } : {}) })
+          return openPagedWorkbook(blob, { port, profile: ctx.profile, signal: ctx.signal, ...(release ? { release } : {}) })
         },
       } : {}),
     })

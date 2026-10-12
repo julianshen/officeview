@@ -407,6 +407,15 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
     return () => clearTimeout(timer)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [identityKey, scroll, viewport, dpr, assets, surfaceBytes, profile, mark, loadTick, entry?.structureGen])
+  // A restored 2D context starts blank, and the cached tile canvases may have
+  // been lost with it: drop the tiles and repaint both layers at once.
+  const surfacesMounted = Boolean(entry && scroll)
+  useEffect(() => {
+    const surfaces = [baseRef.current, overlayRef.current].filter((canvas): canvas is HTMLCanvasElement => canvas !== null)
+    const restored = () => { rendererRef.current?.cache.invalidate(() => true); setLoadTick(tick => tick + 1) }
+    for (const canvas of surfaces) canvas.addEventListener('contextrestored', restored)
+    return () => { for (const canvas of surfaces) canvas.removeEventListener('contextrestored', restored) }
+  }, [surfacesMounted])
 
   // ---- find (workbook-wide, bounded pages) ----
   const [query, setQuery] = useState('')
@@ -669,6 +678,8 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
     return () => clearInterval(timer)
   }, [source])
   const notices = [...new Set([...(doc.diagnostics ?? []).filter(d => d.feature !== SAVED_VALUES_DIAGNOSTIC && ['alternate-content-data', 'large-file-compatibility', 'possibly-damaged'].includes(d.feature)).map(d => d.message), ...(source.openDiagnostics ?? []).filter(d => d.code !== SAVED_VALUES_DIAGNOSTIC).map(d => d.message), ...(valueNotice ? [valueNotice] : [])])]
+  // A worker-backed sheet is complete only once its import finished (LIFE-03).
+  const loadState = remote?.loadState(activeSheetId)
 
   // Overlay layer: selection and search highlights in viewport space.
   useLayoutEffect(() => {
@@ -790,7 +801,7 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
   const onKeyDown = (event: React.KeyboardEvent) => {
     const mod = event.metaKey || event.ctrlKey, key = event.key.toLowerCase()
     if (mod && key === 'f') { event.preventDefault(); inputRef.current?.focus(); inputRef.current?.select(); return }
-    if (key === 'Escape' && copyPending) { event.preventDefault(); cancelCopy(); setAnnouncement('Copy cancelled.'); return }
+    if (key === 'escape' && copyPending) { event.preventDefault(); cancelCopy(); setAnnouncement('Copy cancelled.'); return }
     if (allowCopy && mod && key === 'c' && ((event.target as HTMLElement).hasAttribute?.('data-officeview-grid') || event.target === event.currentTarget)) { event.preventDefault(); void copyGrid(); return }
     if (!allowCopy && mod && key === 'c') { event.preventDefault(); return }
     if (!allowPrint && mod && key === 'p') { event.preventDefault(); return }
@@ -962,7 +973,7 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
         <div ref={paneRef} data-testid="officeview-sheet-pane" style={{ position: 'relative', flex: '1 1 auto', minHeight: 0, overflow: 'hidden', background: '#ffffff' }}>
           {entry && scroll && (
             <GridSemantics owner={identity} projection={entry.metrics} view={entry.view} selection={selection} window={scroll} viewport={viewport}
-              body={entry.body} onChange={onGridChange} status={{ records: snapshot(activeSheetId).records, countMode: 'body', loadReport: { status: 'ready', notices } }}
+              body={entry.body} onChange={onGridChange} status={{ records: { ...snapshot(activeSheetId).records, completeness: loadState?.completeness ?? 'complete' }, countMode: 'body', loadReport: { status: 'ready', notices: loadState?.failure ? [...notices, `This sheet could not be fully loaded: ${loadState.failure}`] : notices } }}
               onSortCycle={(col, shift) => void sortCycle(col, shift)} onFilter={(col, invoker) => { setPopup({ kind: 'filter', col, invoker }) }} onSortDialog={(col, invoker) => { setPopup({ kind: 'sort', col, invoker }) }} onNotice={setAnnouncement}
               popup={popup && controls ? { invoker: popup.invoker, close: closePopup, content: popup.kind === 'filter' ? <FilterDropdown owner={identity} client={controls.client} applied={entry.view.filter} appliedSort={entry.view.sort} col={popup.col} invoker={popup.invoker} embedded onClose={closePopup} onApplied={() => rerender()} onNotice={setAnnouncement} /> : <SortDialog owner={identity} client={controls.client} applied={entry.view.sort} col={popup.col} invoker={popup.invoker} embedded onClose={closePopup} onApplied={() => rerender()} onNotice={setAnnouncement} /> } : undefined} announcement={[resourceNotice, assets?.sheetId !== activeSheetId ? 'Loading sheet…' : '', assets && assets.sheetId === activeSheetId && assets.lease.refusedImages > 0 ? `${assets.lease.refusedImages} picture${assets.lease.refusedImages === 1 ? ' is' : 's are'} not shown (image memory budget).` : '', selectionIncomplete ? 'Selection highlight is incomplete at this zoom; zoom in for detail.' : '', announcement].filter(Boolean).join(' ')} inspection={inspection} profile={profile} label={`Worksheet ${entry.sheet.name}`}
               cellPresentation={at => {
@@ -972,7 +983,8 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
               }}>
               <canvas ref={baseRef} data-testid="officeview-sheet-base" style={canvasStyle} />
               <canvas ref={overlayRef} data-testid="officeview-sheet-overlay" style={canvasStyle} />
-              <div ref={scrollerRef} data-testid="officeview-sheet-scroller" onScroll={onScroll}
+              {/* tabIndex -1: Chromium would make this scroller a second Tab stop inside the grid (spec §9.2: one Tab entry). */}
+              <div ref={scrollerRef} data-testid="officeview-sheet-scroller" tabIndex={-1} onScroll={onScroll}
                 onPointerDown={onPointerDown} onPointerMove={onPointerMove} onPointerUp={onPointerEnd} onPointerCancel={onPointerEnd}
                 style={{ position: 'absolute', inset: 0, overflow: 'auto', touchAction: 'pan-x pan-y', overscrollBehavior: 'contain' }}>
                 <div style={{ width: scroll.physicalExtent.width, height: scroll.physicalExtent.height }} />

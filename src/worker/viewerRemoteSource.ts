@@ -133,6 +133,8 @@ export class RemoteWorkbook implements WorkbookSource {
   private statusMessage: string | undefined
   private statusRefresh = 0
   private closed = false
+  /** Per sheet: the worker's import failure reported on structural reads (quota, storage, damaged part). */
+  private readonly failures = new Map<string, string>()
 
   constructor(private readonly client: ViewerClient, open: RemoteOpen, private readonly onRelease: () => Promise<void> | void = () => {}) {
     this.docId = open.docId
@@ -236,8 +238,22 @@ export class RemoteWorkbook implements WorkbookSource {
       return
     }
     // Structure follows sheetData: wait for the import, unless it failed for good.
+    // A failure the worker reports (even a retryable quota/storage one) is shown
+    // at once: the sheet is incomplete, never an empty complete body (LIFE-03).
+    const code = result.error?.code
+    if (result.error && code !== 'incomplete' && code !== 'cancelled' && code !== 'stale-source' && this.failures.get(sheetId) !== result.error.message) {
+      this.failures.set(sheetId, result.error.message)
+      this.notify()
+    }
     if (result.error && !result.error.retryable && result.error.code !== 'incomplete') { entry.state = 'done'; return }
     entry.timer = setTimeout(() => { entry.timer = undefined; void this.loadStructure(sheetId) }, 500)
+  }
+  /** Load state of a sheet's source: complete once its structure has arrived;
+   * incomplete with the worker's message once the import reported a failure. */
+  loadState(sheetId: string): { completeness: 'complete' | 'loading' | 'incomplete'; failure?: string } {
+    const failure = this.failures.get(sheetId)
+    if (failure !== undefined) return { completeness: 'incomplete', failure }
+    return { completeness: this.merges(sheetId) && this.structures.get(sheetId)?.state === 'done' ? 'complete' : 'loading' }
   }
   /** Replaces a sheet's layout; true when it changed. Callers bump the
    * structure generation so the viewer rebuilds geometry and drops tiles. */
