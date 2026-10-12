@@ -25,6 +25,7 @@ export const GENERATED_FIXTURES = {
   'f1-paged.xlsx': 'F1 sampled corners, nnz 120,000 (crosses the 100,000-cell object cap)',
   'f2-1k.xlsx': 'F2 tall table at 1,000 rows (reduced scale, object path)',
   'f2-paged.xlsx': 'F2 tall table at 100,010 rows (reduced scale; crosses the 100,000-row object cap)',
+  'f2-storage.xlsx': 'F2 tall table at 160,000 rows (reduced scale; its expected page bytes exceed the 32 MiB in-memory page store, so it needs OPFS/IndexedDB)',
   'f3-paged.xlsx': 'F3 dense wide table at 8 rows x 16,384 columns (reduced rows; 131,072 cells)',
   'f4-12k.xlsx': 'F4 string domain at 12,000 rows (reduced scale; > 10,000 unique values)',
   'f5-structure.xlsx': 'F5-shaped structure: giant narrow-column merge D1:D1048576, A1:B2 merge, fixed array C30:C32',
@@ -67,6 +68,7 @@ export async function ensureFixtures(): Promise<void> {
   await want('f1-paged.xlsx', path => writeFixturePackage(path, 'F1', { nnz: 120_000 }))
   await want('f2-1k.xlsx', path => writeFixturePackage(path, 'F2', { rowCount: 1000 }))
   await want('f2-paged.xlsx', path => writeFixturePackage(path, 'F2', { rowCount: 100_010 }))
+  await want('f2-storage.xlsx', path => writeFixturePackage(path, 'F2', { rowCount: 160_000 }))
   await want('f3-paged.xlsx', path => writeFixturePackage(path, 'F3', { rowCount: 8 }))
   await want('f4-12k.xlsx', path => writeFixturePackage(path, 'F4', { rowCount: 12_000 }))
   await want('f5-structure.xlsx', path => writeFileSync(path, f5Package()))
@@ -78,7 +80,14 @@ export function fixturePath(name: FixtureName): string {
   return name in GENERATED_FIXTURES ? join(GENERATED, name) : join(COMMITTED, name)
 }
 
-export interface OpenOptions { worker?: boolean; copy?: boolean }
+export interface OpenOptions {
+  worker?: boolean
+  copy?: boolean
+  /** Capabilities the viewer worker denies itself (src/debug/workerCaps.ts). */
+  workerCaps?: readonly string[]
+  /** false: return once the page has navigated (capability-failure scenarios). */
+  ready?: boolean
+}
 /** Opens a fixture in the real viewer page and waits for the record status. */
 export async function openViewer(page: Page, name: FixtureName, options: OpenOptions = {}): Promise<void> {
   await page.route(url => url.pathname.startsWith('/__fixtures/'), route => {
@@ -88,7 +97,9 @@ export async function openViewer(page: Page, name: FixtureName, options: OpenOpt
   const query = new URLSearchParams({ src: `/__fixtures/${name}` })
   if (options.worker) query.set('worker', '1')
   if (options.copy === false) query.set('copy', '0')
+  if (options.workerCaps?.length) query.set('wcaps', options.workerCaps.join(','))
   await page.goto(`/src/debug/viewer-e2e.html?${query}`)
+  if (options.ready === false) return
   await expect(page.getByRole('grid')).toBeVisible({ timeout: 60_000 })
   await expect(status(page)).toContainText('Visible body', { timeout: 60_000 })
 }
