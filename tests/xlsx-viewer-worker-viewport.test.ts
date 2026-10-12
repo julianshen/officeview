@@ -66,6 +66,8 @@ describe('row-cache coverage (RemoteSheetStore.coverage)', () => {
       // Below four device pixels nothing is read: the planner summarizes it.
       expect(h.store.coverage(metrics, { x: 0, y: 4000, width: 256, height: 200 }, 0.05)).toBe('proven')
       expect(h.store.coverage(metrics, { x: 0, y: 0, width: 256, height: 1_000_000 }, 1)).toBe('oversized')
+      // Thousands of subpixel rows are summarized, never read: nothing to wait for.
+      expect(h.store.coverage(metrics, { x: 0, y: 0, width: 25_600, height: 1_000_000 }, 0.1)).toBe('proven')
     } finally { await h.remote.release() }
   })
 })

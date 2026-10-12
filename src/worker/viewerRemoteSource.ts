@@ -797,11 +797,16 @@ export class RemoteSheetStore implements SourceStore {
     const detail = (sizeCss: number) => sizeCss * scale >= MIN_DETAIL_DEVICE_PX - 1e-9
     const rows = metrics.rows.visibleBetween(box.y, box.y + box.height)
     if (rows.count === 0) return null
-    if (rows.count > MAX_PENDING_ROWS) return { oversized: true }
     const cols = metrics.cols.visibleBetween(Math.max(0, box.x - TEXT_OVERFLOW_REACH_CSS), box.x + box.width + TEXT_OVERFLOW_REACH_CSS)
     let c0 = -1, c1 = -1
     for (const run of cols.runs) { if (!detail(run.sizeCss)) continue; if (c0 < 0) c0 = run.start; c1 = run.end }
     if (c0 < 0) return null
+    // Too many rows to cover only matters when some of them are detail rows;
+    // an all-subpixel band is summarized by the planner and never read.
+    if (rows.count > MAX_PENDING_ROWS) {
+      for (const run of rows.runs) if (detail(run.sizeCss)) return { oversized: true }
+      return null
+    }
     const k0 = Math.floor(c0 / ROW_CHUNK_COLS), k1 = Math.floor(c1 / ROW_CHUNK_COLS)
     const out: LogicalCellBox[] = []
     const missing: number[] = []

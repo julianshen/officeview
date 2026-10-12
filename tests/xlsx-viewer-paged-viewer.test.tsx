@@ -535,10 +535,15 @@ describe('S13.3 review round 2: worker tile plans keep row-cache semantics and w
   it('MAJOR-2: ring tiles are prefetched and retained over the row cache', async () => {
     const h = workerHarness(), f = frames()
     const ui = render(<OfficeFile data={workbook()} interactiveSheets viewerWorker={() => h.port} {...internal({ onFrame: f.onFrame })} />)
-    await settled(ui, f)
+    await waitFor(() => expect(ui.getByRole('gridcell', { name: /alpha/ })).toBeTruthy())
+    // Every visible tile of the settled first frame is retained...
+    const firstSettled = f.all.find(stats => stats.pendingTiles === 0 && stats.lastRequests.length > 0 && stats.prefetched === 0)
+    await waitFor(() => expect(f.last()?.pendingTiles).toBe(0))
+    // ...and the ring around them is painted and retained on top.
     await waitFor(() => expect(f.last()?.prefetched ?? 0).toBeGreaterThan(0))
-    const visible = f.last()!.lastRequests.length
-    expect(f.last()!.tiles.tiles).toBeGreaterThan(visible)
+    const visible = firstSettled?.lastRequests.length ?? f.all.reduce((most, stats) => Math.max(most, stats.lastRequests.length), 0)
+    expect(visible).toBeGreaterThan(0)
+    expect(f.last()!.tiles.tiles, 'ring tiles are retained beyond the visible ones').toBeGreaterThan(visible)
     ui.unmount()
   })
 
