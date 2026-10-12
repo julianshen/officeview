@@ -1,6 +1,6 @@
 {
   "extends": "./tsconfig.json",
   "compilerOptions": { "types": ["node"] },
-  "include": ["scripts/bench-interactive-viewer.ts", "scripts/bench-sort-kernel.ts", "scripts/harness", "scripts/generate-unicode-text-data.ts", "scripts/bench-canonical-text.ts", "vite.harness.config.ts"],
+  "include": ["scripts/bench-interactive-viewer.ts", "scripts/bench-sort-kernel.ts", "scripts/harness", "scripts/generate-unicode-text-data.ts", "scripts/bench-canonical-text.ts", "vite.harness.config.ts", "vite.perf.config.ts", "src/types"],
   "exclude": ["node_modules", "dist"]
 }

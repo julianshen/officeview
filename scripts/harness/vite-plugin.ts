@@ -13,6 +13,11 @@ export interface HarnessPluginOptions {
   collect: CollectorConfig | null
 }
 
+const ISOLATED_PATHS = ['/src/debug/viewer-perf.html', '/src/debug/viewerPerfWorker.ts']
+export function isCrossOriginIsolatedPath(url: string): boolean {
+  return ISOLATED_PATHS.includes(new URL(url, 'http://harness.invalid').pathname)
+}
+
 export function harnessPlugin(options: HarnessPluginOptions): Plugin {
   return {
     name: 'viewer-harness',
@@ -28,6 +33,16 @@ export function harnessPlugin(options: HarnessPluginOptions): Plugin {
         }
         res.writeHead(200, { 'content-type': 'application/json', 'cache-control': 'no-store' })
         res.end(JSON.stringify(identity))
+      })
+      // The S10.2 perf page and its worker are cross-origin isolated so Chrome's
+      // performance.measureUserAgentSpecificMemory() is available there. Only
+      // those two paths are affected; every other harness page is unchanged.
+      server.middlewares.use((req, res, next) => {
+        if (isCrossOriginIsolatedPath(req.url ?? '/')) {
+          res.setHeader('Cross-Origin-Opener-Policy', 'same-origin')
+          res.setHeader('Cross-Origin-Embedder-Policy', 'require-corp')
+        }
+        next()
       })
       if (options.collect) server.middlewares.use(createCollectorMiddleware(createCollector(options.collect)))
     },

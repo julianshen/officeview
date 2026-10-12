@@ -38,7 +38,7 @@ describe('summarize', () => {
   it('reports nearest-rank p95 only at or above the minimum sample count', () => {
     const values = Array.from({ length: 300 }, (_, i) => i + 1)
     expect(summarize(values, 300)).toMatchObject({ status: 'ok', samples: 300, p50: 150, p95: 285, max: 300, min: 1 })
-    const few = summarize([3, 1, 2], 30)
+    const few = summarize([3, 1, 2], 30) as { status: string; p95: number | null; p50: number }
     expect(few.status).toBe('insufficient-samples')
     expect(few.p95).toBeNull()
     expect(few.p50).toBe(2)
@@ -119,7 +119,7 @@ describe('receipt hash', () => {
   it('detects any modification of a finalized receipt', async () => {
     const receipt = await finalizeReceipt(draft(), profile)
     expect(await verifyReceipt(receipt)).toEqual({ ok: true })
-    const tampered = { ...receipt, measurements: { ...receipt.measurements, memory: { ...receipt.measurements.memory, mainOwnedBytes: 1 } } }
+    const tampered = { ...receipt, measurements: { ...receipt.measurements, memory: { ...receipt.measurements.memory!, mainOwnedBytes: 1 } } }
     expect((await verifyReceipt(tampered)).ok).toBe(false)
   })
 })
