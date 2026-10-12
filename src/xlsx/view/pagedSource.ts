@@ -430,6 +430,7 @@ export class PagedXlsxSheetAdapter implements SourceStore {
     const abort = () => controller.abort()
     options.signal.addEventListener('abort', abort, { once: true })
     this.workbook.parts.signal.addEventListener('abort', abort, { once: true })
+    if (options.signal.aborted || this.workbook.parts.signal.aborted) abort()
     try {
       const { loadPagedSheetDrawings, pagedDrawingLimits } = await import('../storage/pagedDrawings')
       const geometry = buildGeometry(meta.rowHeights.map(h => ({ index: h.row, heightPt: h.heightPt })), meta.cols, meta.hiddenRows, { hiddenCols: true })

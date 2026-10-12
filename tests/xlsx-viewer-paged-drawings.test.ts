@@ -32,6 +32,13 @@ const THEME = `<?xml version="1.0"?><a:theme xmlns:a="${A_NS}" name="T"><a:theme
 
 /** A legacy VML WordArt shape (resident parse.ts paints these from <legacyDrawing>). */
 const VML = `<xml xmlns:v="urn:schemas-microsoft-com:vml"><v:shape id="WordArt_1" style="position:absolute;margin-left:30pt;margin-top:20pt;width:150pt;height:40pt;" fillcolor="#00FF00" strokecolor="#000000"><v:fill color="#00FF00"/><v:stroke color="#000000" weight="1pt"/><v:textpath on="True" style="font-family:'Calibri';font-size:20pt;" string="Legacy"/></v:shape></xml>`
+const C_NS = 'http://schemas.openxmlformats.org/drawingml/2006/chart'
+const DGM_NS = 'http://schemas.openxmlformats.org/drawingml/2006/diagram'
+const DSP_NS = 'http://schemas.microsoft.com/office/drawing/2008/diagram'
+const CHART = `<?xml version="1.0"?><c:chartSpace xmlns:c="${C_NS}" xmlns:a="${A_NS}"><c:chart><c:plotArea><c:barChart><c:barDir val="col"/><c:grouping val="clustered"/><c:ser><c:spPr><a:solidFill><a:srgbClr val="00FF00"/></a:solidFill></c:spPr><c:val><c:numLit><c:pt idx="0"><c:v>4</c:v></c:pt><c:pt idx="1"><c:v>2</c:v></c:pt></c:numLit></c:val></c:ser></c:barChart></c:plotArea></c:chart></c:chartSpace>`
+const DIAGRAM_DATA = `<?xml version="1.0"?><dgm:dataModel xmlns:dgm="${DGM_NS}" xmlns:dsp="${DSP_NS}"><dgm:extLst><a:ext xmlns:a="${A_NS}" uri="http://schemas.microsoft.com/office/drawing/2008/diagram"><dsp:dataModelExt relId="rDsp"/></a:ext></dgm:extLst></dgm:dataModel>`
+const DIAGRAM_DRAWING = `<?xml version="1.0"?><dsp:drawing xmlns:dsp="${DSP_NS}" xmlns:a="${A_NS}"><dsp:spTree><dsp:sp><dsp:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="${40 * EMU_PER_PX}" cy="${30 * EMU_PER_PX}"/></a:xfrm><a:prstGeom prst="rect"/><a:solidFill><a:srgbClr val="FF00FF"/></a:solidFill></dsp:spPr></dsp:sp></dsp:spTree></dsp:drawing>`
+const frame = (id: number, name: string, graphic: string, col: number) => `<xdr:oneCellAnchor>${anchorFrom(col, 9)}<xdr:ext cx="${120 * EMU_PER_PX}" cy="${90 * EMU_PER_PX}"/><xdr:graphicFrame macro=""><xdr:nvGraphicFramePr><xdr:cNvPr id="${id}" name="${name}"/><xdr:cNvGraphicFramePr/></xdr:nvGraphicFramePr><xdr:xfrm><a:off x="0" y="0"/><a:ext cx="0" cy="0"/></xdr:xfrm><a:graphic><a:graphicData uri="${graphic.startsWith('<c:') ? C_NS : DGM_NS}">${graphic}</a:graphicData></a:graphic></xdr:graphicFrame><xdr:clientData/></xdr:oneCellAnchor>`
 const anchorFrom = (col: number, row: number, colOffPx = 0, rowOffPx = 0) =>
   `<xdr:from><xdr:col>${col}</xdr:col><xdr:colOff>${colOffPx * EMU_PER_PX}</xdr:colOff><xdr:row>${row}</xdr:row><xdr:rowOff>${rowOffPx * EMU_PER_PX}</xdr:rowOff></xdr:from>`
 const xfrm = (wPx: number, hPx: number) => `<a:xfrm><a:off x="0" y="0"/><a:ext cx="${wPx * EMU_PER_PX}" cy="${hPx * EMU_PER_PX}"/></a:xfrm>`
@@ -41,7 +48,7 @@ const filledShape = `<xdr:oneCellAnchor>${anchorFrom(0, 1)}<xdr:ext cx="${64 * E
 const themedShape = `<xdr:twoCellAnchor>${anchorFrom(2, 4, 3, 2)}<xdr:to><xdr:col>4</xdr:col><xdr:colOff>0</xdr:colOff><xdr:row>7</xdr:row><xdr:rowOff>0</xdr:rowOff></xdr:to><xdr:sp><xdr:nvSpPr><xdr:cNvPr id="3" name="Oval"/><xdr:cNvSpPr/></xdr:nvSpPr><xdr:spPr>${xfrm(80, 60)}<a:prstGeom prst="ellipse"><a:avLst/></a:prstGeom><a:solidFill><a:schemeClr val="accent1"/></a:solidFill></xdr:spPr></xdr:sp><xdr:clientData/></xdr:twoCellAnchor>`
 const picture = `<xdr:oneCellAnchor>${anchorFrom(5, 2)}<xdr:ext cx="${30 * EMU_PER_PX}" cy="${30 * EMU_PER_PX}"/><xdr:pic><xdr:nvPicPr><xdr:cNvPr id="4" name="Picture"/><xdr:cNvPicPr/></xdr:nvPicPr><xdr:blipFill><a:blip xmlns:r="${R_NS}" r:embed="rImg"/><a:stretch><a:fillRect/></a:stretch></xdr:blipFill><xdr:spPr>${xfrm(30, 30)}<a:prstGeom prst="rect"><a:avLst/></a:prstGeom></xdr:spPr></xdr:pic><xdr:clientData/></xdr:oneCellAnchor>`
 
-interface DrawingWorkbook { anchors: string; theme?: boolean; media?: boolean; secondImage?: boolean; vml?: boolean; unusedMedia?: number }
+interface DrawingWorkbook { anchors: string; theme?: boolean; media?: boolean; secondImage?: boolean; vml?: boolean; unusedMedia?: number; content?: boolean }
 function drawingWorkbook(spec: DrawingWorkbook): Uint8Array {
   const extra: BuildEntry[] = [
     { name: 'xl/worksheets/_rels/sheet1.xml.rels', data: `<?xml version="1.0"?><Relationships xmlns="${PKG_RELS}"><Relationship Id="rD1" Type="${R_NS}/drawing" Target="../drawings/drawing1.xml"/>${spec.vml ? `<Relationship Id="rV1" Type="${R_NS}/vmlDrawing" Target="../drawings/vmlDrawing1.vml"/>` : ''}</Relationships>` },
@@ -52,6 +59,13 @@ function drawingWorkbook(spec: DrawingWorkbook): Uint8Array {
     if (spec.unusedMedia) extra.push({ name: 'xl/media/unused.png', data: new Uint8Array(spec.unusedMedia) })
     extra.push({ name: 'xl/media/image1.png', data: PNG })
     if (spec.secondImage) extra.push({ name: 'xl/media/image2.png', data: PNG.slice() })
+  }
+  if (spec.content) {
+    extra.push({ name: 'xl/drawings/_rels/drawing1.xml.rels', data: `<?xml version="1.0"?><Relationships xmlns="${PKG_RELS}"><Relationship Id="rC1" Type="${R_NS}/chart" Target="../charts/chart1.xml"/><Relationship Id="rDm" Type="${R_NS}/diagramData" Target="../diagrams/data1.xml"/></Relationships>` })
+    extra.push({ name: 'xl/charts/chart1.xml', data: CHART })
+    extra.push({ name: 'xl/diagrams/data1.xml', data: DIAGRAM_DATA })
+    extra.push({ name: 'xl/diagrams/_rels/data1.xml.rels', data: `<?xml version="1.0"?><Relationships xmlns="${PKG_RELS}"><Relationship Id="rDsp" Type="http://schemas.microsoft.com/office/2007/relationships/diagramDrawing" Target="drawing1.xml"/></Relationships>` })
+    extra.push({ name: 'xl/diagrams/drawing1.xml', data: DIAGRAM_DRAWING })
   }
   if (spec.theme) extra.push({ name: 'xl/theme/theme1.xml', data: THEME })
   if (spec.vml) extra.push({ name: 'xl/drawings/vmlDrawing1.vml', data: VML })
@@ -137,6 +151,20 @@ describe('paged drawings (RENDER-02 / AC-RENDER-01)', () => {
     expect(expected.map(node => node.source.partPath)).toContain('xl/drawings/vmlDrawing1.vml')
     const geometry = await settledGeometry(await openPaged(bytes))
     expect(geometry.drawingsIn(...box)!.map(key)).toEqual(expected.map(key))
+    expect(geometry.diagnostics).toEqual([])
+  })
+
+  it('carries chart and SmartArt content across the worker boundary like the resident sheet', async () => {
+    const chart = frame(6, 'Chart 1', `<c:chart xmlns:c="${C_NS}" xmlns:r="${R_NS}" r:id="rC1"/>`, 0)
+    const smartArt = frame(7, 'Diagram 1', `<dgm:relIds xmlns:dgm="${DGM_NS}" xmlns:r="${R_NS}" r:dm="rDm"/>`, 4)
+    const bytes = drawingWorkbook({ anchors: chart + smartArt, content: true })
+    const { geometry: object } = await resident(bytes)
+    const expected = object.drawingsIn(...box)!
+    expect(expected.map(node => node.content?.kind)).toEqual(['chart', 'diagram'])
+    const geometry = await settledGeometry(await openPaged(bytes))
+    const actual = geometry.drawingsIn(...box)!
+    expect(actual.map(key)).toEqual(expected.map(key))
+    expect(actual.map(node => node.content)).toEqual(expected.map(node => node.content))
     expect(geometry.diagnostics).toEqual([])
   })
 

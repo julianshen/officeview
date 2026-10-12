@@ -96,6 +96,15 @@ describe('RemoteDrawingCache', () => {
     expect(t.pending).toHaveLength(20)
     expect(cache.get('1').state).toBe('failed')
     expect(drawingNotices(cache.get('1'))[0]).toMatch(/Drawings could not be loaded: Command owner/)
+    // Transient exhaustion is not final: showing the sheet later asks once more (rate-limited).
+    expect(t.pending).toHaveLength(20)
+    await vi.advanceTimersByTimeAsync(5000)
+    cache.get('1')
+    expect(t.pending).toHaveLength(21)
+    t.reply(20, payload([node('late', 0)]))
+    await vi.advanceTimersByTimeAsync(0)
+    expect(cache.get('1').state).toBe('ready')
+    expect(drawingNotices(cache.get('1'))).toEqual([])
   })
 
   it('keeps the source diagnostics of a non-retryable incomplete result', async () => {
@@ -106,6 +115,8 @@ describe('RemoteDrawingCache', () => {
     await tick()
     expect(cache.get('1').state).toBe('failed')
     expect(drawingNotices(cache.get('1'))).toEqual(['Drawings could not be read: boom'])
+    // A deterministic failure is not asked again.
+    expect(t.pending).toHaveLength(1)
   })
 
   it('ignores replies after close or reset', async () => {

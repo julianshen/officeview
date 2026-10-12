@@ -25,6 +25,9 @@ import type { CommandOf } from './viewerProtocol'
 /** Re-asks after a stale/cancelled/still-loading answer, a bounded number of times. */
 const RETRY_MS = 250
 const MAX_ATTEMPTS = 20
+/** After the attempts ran out on transient answers (e.g. a long burst of view
+ * commits), showing the sheet again asks once more, at most this often. */
+const REARM_MS = 5000
 
 export interface DrawingHost {
   identity(sheetId: string): CacheIdentity
@@ -60,6 +63,8 @@ interface Entry {
   /** Identifies the request whose reply may be adopted. */
   seq: number
   attempts: number
+  /** Set when the attempts ran out on transient answers: when get() may re-arm. */
+  rearmAt?: number
   controller?: AbortController
   timer?: ReturnType<typeof setTimeout>
   /** Derived sheet/document shells, memoized per generation. */
@@ -83,6 +88,12 @@ export class RemoteDrawingCache {
     } else {
       entry = { state: 'waiting', gen: 0, drawings: [], images: [], diagnostics: [], bytes: 0, drawingsIn: none, seq: 0, attempts: 0 }
       this.entries.set(sheetId, entry)
+    }
+    if (entry.state === 'failed' && entry.rearmAt !== undefined && Date.now() >= entry.rearmAt) {
+      // A transient failure is not final: the notice stays until a new answer replaces it.
+      entry.state = 'waiting'
+      entry.attempts = 0
+      entry.rearmAt = undefined
     }
     if (entry.state === 'waiting' && !entry.timer && this.host.loadState(sheetId).completeness === 'complete') void this.load(sheetId, entry)
     return entry
@@ -121,6 +132,7 @@ export class RemoteDrawingCache {
     entry.timer = undefined
     entry.state = 'waiting'
     entry.attempts = 0
+    entry.rearmAt = undefined
     entry.drawings = []
     entry.images = []
     entry.theme = undefined
@@ -158,6 +170,7 @@ export class RemoteDrawingCache {
       return
     }
     entry.state = 'failed'
+    entry.rearmAt = retryable ? Date.now() + REARM_MS : undefined
     entry.diagnostics = result?.diagnostics.length ? result.diagnostics
       : [{ code: DRAWINGS_UNAVAILABLE, message: `Drawings could not be loaded${out.kind === 'error' && out.diagnostics[0] ? `: ${out.diagnostics[0].message}` : ''}` }]
     entry.gen++
