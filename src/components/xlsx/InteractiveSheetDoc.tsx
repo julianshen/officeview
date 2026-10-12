@@ -52,6 +52,7 @@ import type { Paintable, PaintableArray } from '../../render/paint'
 import { GridSemantics, type GridTransition } from './GridSemantics'
 import { GRID_HEADER_SIZE, columnHeaderHeight } from './GridHeaders'
 import { useControlMedia } from './controlMedia'
+import { useDevicePixelRatio } from './devicePixelRatio'
 import { FilterDropdown } from './FilterDropdown'
 import { SortDialog } from './SortDialog'
 import { createViewerControlResources, viewerControls, type ViewerControlResources, type ViewerControls } from './viewerControlsClient'
@@ -311,7 +312,8 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
   const touchControls = useControlMedia('(pointer: coarse)')
   const headerHeight = columnHeaderHeight(touchControls, true, true)
   const viewport: ViewportSize = useMemo(() => ({ width: Math.max(1, pane.width - GRID_HEADER_SIZE), height: Math.max(1, pane.height - headerHeight) }), [pane, headerHeight])
-  const nativeDpr = Math.min(typeof window !== 'undefined' ? window.devicePixelRatio || 1 : 1, 3)
+  // Live ratio: a display move re-renders here, re-admits the pool and re-keys tiles (S13 D-DPR).
+  const nativeDpr = Math.min(useDevicePixelRatio(), 3)
   // Admit the pane surfaces before sizing any canvas; a lower device scale keeps
   // the pane within the bitmap budget, and nothing fits → a visible resource outcome.
   // Live print stores (while a print is prepared/open) are reserved beside the panes.
