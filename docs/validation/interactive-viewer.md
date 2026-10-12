@@ -309,7 +309,7 @@ Plan S8.1 ("Prepare the formatted display-text lane … only when a text conditi
   - the lane is keyed by (docId, sheetId, valueGen, style owner, column, body band);
   - a lane of a dead valueGen or style owner is dropped on the next request;
   - storage is one Uint32 id per row plus unique strings, charged like a prepared column;
-  - the aggregate cap is `PREPARED_BUDGETS[profile].maxBytes`, enforced by LRU eviction and then `ValueIndexError('quota')`, which surfaces as a `resource-limit` refusal;
+  - the aggregate cap is `PREPARED_BUDGETS[profile].maxBytes`, enforced by LRU eviction of unleased lanes and then `ValueIndexError('quota')`, which surfaces as a `resource-limit` refusal. A lane an evaluation is reading is leased: it is never evicted for room, and its worker-pool entry is pinned;
   - on the worker it is retained in the session pool (tier `rebuildable`, dropped on eviction/close); on the main thread it is dropped on port dispose.
 - **Not changed:** the dropdown's value-search labels were already formatted per entry on demand (`domain.label`) and stay so. Value-list membership uses raw keys and never needs the lane.
 
