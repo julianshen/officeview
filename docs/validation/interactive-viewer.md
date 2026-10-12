@@ -77,7 +77,7 @@ Browser shorthand: **[B:C+W]** = Playwright scenario passing on Chromium and Pla
 | Case | Fixture(s) | Evidence | Status |
 |---|---|---|---|
 | AC-CAP-01 | F1, F6, synthetic boundary rows | `xlsx-viewer-contracts.test.ts`; `xlsx-viewer-complexity.test.ts`: DOM active-descendant ids 2^31, 2^32 and 2^34−1 end to end. Browser F1 res+wkr: `aria-activedescendant` id 17179869183 **[B:C+W]** | pass |
-| AC-CAP-02 | F1, F3, F7 | `xlsx-viewer-scroll-window.test.ts`, `xlsx-viewer-navigation.test.tsx`, `xlsx-viewer-selection.test.ts`. Browser: F1 Go To XFD1048576 with header/row label agreement; F3 recenter, header/cell `aria-colindex` agreement and edge ArrowLeft after recenter; F7 Original-cell Go To on a hidden row opens the read-only inspector without moving the active descendant **[B:C+W]** | pass (zoom/DPR browser leg partial: zoom 125% exercised; **S13 DPR change — emulated (CDP) in installed Chrome, not a physical display move:** header/cell/gridline agreement holds once the viewer re-renders, but a DPR-only change does **not** re-rasterize by itself — open defect D-DPR, see [S13](#s13-runtime-and-manual-checks)) |
+| AC-CAP-02 | F1, F3, F7 | `xlsx-viewer-scroll-window.test.ts`, `xlsx-viewer-navigation.test.tsx`, `xlsx-viewer-selection.test.ts`. Browser: F1 Go To XFD1048576 with header/row label agreement; F3 recenter, header/cell `aria-colindex` agreement and edge ArrowLeft after recenter; F7 Original-cell Go To on a hidden row opens the read-only inspector without moving the active descendant **[B:C+W]** | pass (zoom/DPR browser leg partial: zoom 125% exercised; **S13 DPR change — emulated (CDP) in installed Chrome, not a physical display move:** header/cell/gridline agreement holds and, after the D-DPR fix, a DPR-only change re-rasterizes by itself — see [S13](#s13-runtime-and-manual-checks)) |
 | AC-CAP-03 | F2/F3/F4 quota variants | `xlsx-viewer-import-limits.test.ts`, `xlsx-viewer-source-pages.test.ts` (typed quota/incomplete/cancel). S10.3 browser: no OPFS/IndexedDB and zero quota are visible typed refusals with no grid; quota denied mid-import states the failure with an incomplete body (G7) **[B:C+W]**; `xlsx-viewer-capability.test.tsx` | pass (S10.3; was "pass (unit); browser leg not-run"). Quota is emulated by stubbing the worker's storage APIs, not by filling a real disk quota |
 | AC-STORE-01 | F8 | `xlsx-viewer-adapter-parity.test.ts`, `xlsx-viewer-values.test.ts`, `xlsx-viewer-source.test.ts`: object and paged adapters agree on values/errors/cache/formula/date/raw UTF-16; pending ≠ blank. Browser wkr: unknown rows paint "Loading…" (`xlsx-viewer-paged-viewer.test.tsx`) | pass; **native Excel checkpoint not-run** (see below) |
 | AC-STORE-02 | F1–F4 malformed variants | `xlsx-viewer-import.test.ts`, `xlsx-viewer-import-limits.test.ts` | pass (unit); peak/cleanup ledger in a browser → S10.2 |
@@ -254,7 +254,7 @@ VoiceOver cannot be driven unattended (it needs System Settings/TCC grants and a
 
 | Assertion | F1 resident | F1 worker-backed |
 |---|---|---|
-| **A DPR-only change re-rasterizes the viewer with no other input** | **FAIL** | **FAIL** |
+| **A DPR-only change re-rasterizes the viewer with no other input** | FAIL before the fix; **pass after** (2792×712, 2094×534, 1396×356) | FAIL before the fix; **pass after** (same) |
 | Backing store = CSS size × DPR (±1 px), base and overlay, at 2 / 1.5 / 1 (after a re-render) | pass: 2792×712, 2094×534, 1396×356 for CSS 1396×356 | pass (same) |
 | Tiles at the new DPR: each requested tile is 512 device px at zoom × DPR (logical box 204.8 / 273.07 / 409.6 at zoom 1.25) | pass | pass |
 | No stale-DPR tile presented once re-rendered: the first frame at the new DPR reuses 0 tiles, and every later frame paints only new-DPR tiles | pass | pass |
@@ -263,15 +263,27 @@ VoiceOver cannot be driven unattended (it needs System Settings/TCC grants and a
 | Bitmap budget: every frame's `bitmapBytes` and `peakBitmapBytes` ≤ 134,217,728 B; tile bytes = tiles × 1 MiB (peak observed 41,069,056 B at DPR 2) | pass | pass |
 | No console errors or page errors | pass | pass |
 
-**D-DPR (the FAIL row).** After each override, `devicePixelRatio` and `matchMedia('(resolution: …)').matches` changed at once. The viewer then reported no frame for the 5 s window, and the canvases kept the old backing size (for example 1396×356 at DPR 2). The cause is in `InteractiveSheetDoc.tsx`:
+**D-DPR (found by the FAIL row, now fixed).** After each override, `devicePixelRatio` and `matchMedia('(resolution: …)').matches` changed at once. Before the fix, the viewer then reported no frame for the 5 s window, and the canvases kept the old backing size (for example 1396×356 at DPR 2). The cause was in `InteractiveSheetDoc.tsx`:
 
-- the viewer reads `window.devicePixelRatio` only while rendering;
-- its only size input is a content-box `ResizeObserver` on the pane (`window` `resize` is used only when `ResizeObserver` is missing);
-- it registers no `(resolution)` media-query listener.
+- the viewer read `window.devicePixelRatio` only while rendering;
+- its only size input was a content-box `ResizeObserver` on the pane;
+- nothing listened for a `(resolution)` media-query change.
 
-A DPR-only change keeps the CSS size, so nothing wakes the viewer. The old raster stays on screen, scaled, until something unrelated re-renders it. The passing rows above re-render the viewer with a pane width change of 100 px and back, a resize the viewer does observe. That nudge touches none of the asserted state. An earlier 1 px nudge was sometimes absorbed at DPR 1.5 (the pane kept its old width state), so the spec waits for each leg to lay out.
+A DPR-only change keeps the CSS size, so nothing woke the viewer, and the old raster stayed on screen, scaled.
 
-*Emulation note:* under CDP, Chrome changed the DPR and media-query state but fired no `resize` and no media-query `change` events (headless and headed alike). Whether a physical display move fires them was not checked. It does not affect the verdict, because the viewer listens for neither. The FAIL test is left red on purpose (not `test.fail()`) until D-DPR is fixed. The fix is not part of S13.
+**Fix:** a new `src/components/xlsx/devicePixelRatio.ts` exports `useDevicePixelRatio`. The `InteractiveSheetDoc.tsx` change is the hook call plus its import. The hook re-reads the ratio when any of these fire:
+
+- a `(resolution: Xdppx)` media query, re-armed for each new ratio;
+- window `resize` and `visualViewport` `resize`;
+- a 1 s poll while the page is visible.
+
+Setting an unchanged value does not re-render. Unmounting removes every listener and clears the poll. A new ratio changes the pane surface bytes, so the tile pool is re-admitted (old-DPR tiles are released). `present()` also drops any tile keyed to another DPR. Unit tests: `tests/xlsx-viewer-dpr.test.tsx` (5 tests). Before the hook was implemented, a deliberately wrong boundary failed 4 of them with the intended assertions, for example `expected [] to deeply equal [ '(resolution: 1dppx)' ]` and `expected 1 to be 2`. All 4 browser tests now pass with unchanged bodies. The only spec edit is a file-level skip, so the webkit project no longer tries to launch with `channel: 'chrome'`.
+
+The other rows are checked after a pane width change of 100 px and back, so they also cover the resize path.
+
+*Emulation note:* under CDP, Chrome changed the DPR and media-query state but fired no `resize`, no media-query `change`, and no `device-pixel-content-box` ResizeObserver callback (checked with a probe). So in this spec it is the hook's visible-page poll that fires (logged page signals: `[]`). A real display move normally fires the media-query change. That path is covered by the unit tests only, because this machine has a single DPR 1 display.
+
+**The 1 px nudge observation: not reproducible as a pane-width bug.** I tried to reproduce it, before and after the fix. Before the fix, 72 cycles of DPR 2 / 1.5 / 1, each with a 1 px pane nudge and back, produced 3 stale states. All 3 were old-DPR backing stores with the correct CSS width, which is D-DPR (or the two resizes coalescing into one observation). The earlier "CSS width stuck at 1397" state did not recur. After the fix, 60 cycles that waited for each leg plus 60 cycles with 0–57 ms gaps produced 0 stale states (canvas CSS width = pane `clientWidth` − 44, backing = `ceil(CSS × DPR)`). No `devicePixelContentBoxSize` change was made, and no regression test was added, since there is no reproduction. The probe was a throwaway and is not committed.
 
 ### Actual Safari via safaridriver — partial (screen locked)
 
@@ -303,11 +315,11 @@ These are mandatory cases whose evidence is incomplete. Nothing here is hidden a
 4. **Native Excel checkpoint** for AC-STORE-01, AC-SEM-07 and AC-REG-01. The manual steps are above.
 5. **AC-BACKEND-01:** S11/S12 decision records delivered (`docs/architecture/xlsx-wasm-decision.md`, `xlsx-gpu-decision.md`, both not-run on desktop Chrome (headless)-only evidence); the shipped TS/Canvas2D backends' S10.2 receipt is still pending merge; revisit when Safari and mobile receipts exist.
 6. **Full-scale browser runs** for F2 (1M × 8), F3 dense (256 × 16,384) and F4 (1M strings). Only reduced, labelled scales ran here.
-7. **D-DPR (S13, open defect):** a runtime device-pixel-ratio change with an unchanged CSS size (a window moved between a DPR 1 and a DPR 2 display) does not re-rasterize the viewer. The old backing store stays on screen, scaled, until some unrelated input re-renders it. Found with emulation (CDP) in installed Chrome; see [S13](#s13-runtime-and-manual-checks).
+7. ~~**D-DPR (S13, defect)**~~ — fixed on `feature/iv-s13-manual` (`useDevicePixelRatio`); was: a runtime device-pixel-ratio change with an unchanged CSS size (a window moved between a DPR 1 and a DPR 2 display) does not re-rasterize the viewer. The old backing store stays on screen, scaled, until some unrelated input re-renders it. Found with emulation (CDP) in installed Chrome; see [S13](#s13-runtime-and-manual-checks).
 
 ## Observations (not fixed; not reproduced as failures)
 
-- (S13) In the DPR spec, a 1 px pane-width nudge at DPR 1.5 sometimes left the viewer's pane state stale: the canvas CSS width stayed at 1397 after `innerWidth` was back to 1440. That may be a second gap (pane size not refreshed after a 1 px resize at a fractional DPR), or a CDP artifact. It is not reproduced as a failure; the spec now uses a 100 px nudge that waits for each leg to lay out.
+- (S13) A 1 px pane-width nudge at DPR 1.5 once seemed to leave the pane width stale (canvas CSS 1397 at `innerWidth` 1440). It was investigated and did not reproduce in 192 cycles; every stale state seen was D-DPR, now fixed. Details in the S13 section.
 - G2's read-ahead costs one extra `next()` per complete cursor-less page. On the worker path that is one more worker round trip; it is part of the roughly 597 reads observed above. Detection keeps at most one read-ahead continuation open, because the worker caps open scans at 4 (`MAX_OPEN_SCANS`), shared with find. This is a cost note for the S8.6 owner, not a bug.
 - Generated browser packages are cached under `$TMPDIR/officeview-viewer-e2e-v1`, keyed by file name. If the S0.2 builders change, bump the `-v1` suffix in `tests/browser/viewer-e2e.ts`.
 - `fromStoreScan` (`src/xlsx/view/structure.ts`) has the same first-page-only pattern as G2. It is used only by tests today. Any future production caller must follow iteration-continued pages.
