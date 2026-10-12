@@ -277,7 +277,7 @@ A DPR-only change keeps the CSS size, so nothing wakes the viewer. The old raste
 
 **Script:** `bun scripts/harness/safari-check.ts` (W3C WebDriver over HTTP to `safaridriver -p 4451`; the harness vite server on 4191; a loopback fixture server on 4193). It writes the receipt and screenshots to `/tmp/officeview-safari-check/`. **Browser:** Safari 26.5.2 (safaridriver "Included with Safari 26.5.2 (21624.2.5.11.8)"), session `platformName: macOS`, `browserVersion: 26.5.2`. This is real Safari, not Playwright WebKit.
 
-The one full run happened while the macOS screen was **locked** (`CGSSessionScreenIsLocked = true`). Its receipt is kept as `/tmp/officeview-safari-check/receipt-locked-screen-run.json`. With the screen locked, every WebDriver screenshot was black, and WebDriver clicks reported success but never reached the page (Go To never moved the active cell). Those results say nothing about the viewer. The script now refuses to run on a locked screen.
+The script ran twice, both times while the macOS screen was **locked** (`CGSSessionScreenIsLocked = true`). The first run failed on a harness bug before it reached the page: the W3C element-reference key was wrong. The bug is fixed, and that run's results are discarded. The second run's receipt is kept as `/tmp/officeview-safari-check/receipt-locked-screen-run.json`. In that run every WebDriver screenshot was black, and WebDriver clicks reported success but had no effect (Go To never moved the active cell). The likely cause is the locked screen; an unlocked rerun has to confirm it. Those interaction results say nothing about the viewer. The script now refuses to run on a locked screen.
 
 | Step | Result |
 |---|---|
@@ -285,7 +285,7 @@ The one full run happened while the macOS screen was **locked** (`CGSSessionScre
 | Capability detection, dedicated worker: `OffscreenCanvas`, IndexedDB, OPFS `createSyncAccessHandle` (wrote and flushed 1 MiB) and `createWritable` both present | ran: all available |
 | F2 storage package (160,000 rows; pages exceed the 32 MiB memory store), worker-backed: the WebKit OPFS-write restriction | ran: the import **completed** ("Visible body 160000 / complete body 160000"). The page-write failure seen in Playwright WebKit (S10.3 capability matrix) did not happen in real Safari 26.5.2. The locked-run script waited for the wrong row count (159,999), so the receipt marks the step as a timeout, but its `statusAtTimeout` holds the line above. The count is fixed. |
 | Opens: F1 resident (no worker), F1/F2/F3 worker-backed (1 worker, 1 `open`), each reaching "complete body" | ran: opened |
-| Go To XFD1048576, find A1048576, copy payload, keyboard navigation, zoom, header sort, value filter apply/cancel/clear, F3 recenter | **not-run (invalid):** the locked screen swallowed the clicks. Rerun with the screen unlocked |
+| Go To XFD1048576, find A1048576, copy payload, keyboard navigation, zoom, header sort, value filter apply/cancel/clear, F3 recenter | **not-run (invalid):** the clicks returned success but had no effect, most likely because of the locked screen. Rerun with the screen unlocked |
 
 ### macOS VoiceOver — prepared, not run
 
@@ -307,6 +307,7 @@ These are mandatory cases whose evidence is incomplete. Nothing here is hidden a
 
 ## Observations (not fixed; not reproduced as failures)
 
+- (S13) In the DPR spec, a 1 px pane-width nudge at DPR 1.5 sometimes left the viewer's pane state stale: the canvas CSS width stayed at 1397 after `innerWidth` was back to 1440. That may be a second gap (pane size not refreshed after a 1 px resize at a fractional DPR), or a CDP artifact. It is not reproduced as a failure; the spec now uses a 100 px nudge that waits for each leg to lay out.
 - G2's read-ahead costs one extra `next()` per complete cursor-less page. On the worker path that is one more worker round trip; it is part of the roughly 597 reads observed above. Detection keeps at most one read-ahead continuation open, because the worker caps open scans at 4 (`MAX_OPEN_SCANS`), shared with find. This is a cost note for the S8.6 owner, not a bug.
 - Generated browser packages are cached under `$TMPDIR/officeview-viewer-e2e-v1`, keyed by file name. If the S0.2 builders change, bump the `-v1` suffix in `tests/browser/viewer-e2e.ts`.
 - `fromStoreScan` (`src/xlsx/view/structure.ts`) has the same first-page-only pattern as G2. It is used only by tests today. Any future production caller must follow iteration-continued pages.
