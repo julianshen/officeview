@@ -87,6 +87,8 @@ export interface OpenOptions {
   copy?: boolean
   /** Capabilities the viewer worker denies itself (src/debug/workerCaps.ts). */
   workerCaps?: readonly string[]
+  /** With `worker`: debug-only forced paged admission (src/debug/forcePaged.ts), so a small file opens worker-backed. */
+  paged?: boolean
   /** false: return once the page has navigated (capability-failure scenarios). */
   ready?: boolean
 }
@@ -99,6 +101,7 @@ export async function openViewer(page: Page, name: FixtureName, options: OpenOpt
   const query = new URLSearchParams({ src: `/__fixtures/${name}` })
   if (options.worker) query.set('worker', '1')
   if (options.copy === false) query.set('copy', '0')
+  if (options.paged) query.set('paged', '1')
   if (options.workerCaps?.length) query.set('wcaps', options.workerCaps.join(','))
   await page.goto(`/src/debug/viewer-e2e.html?${query}`)
   if (options.ready === false) return

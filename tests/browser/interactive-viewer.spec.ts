@@ -549,14 +549,19 @@ test.describe('S10.1 real interactive viewer', () => {
 
   // S13 native Excel checkpoint: a workbook written and reopened (no repair
   // prompt) by Microsoft Excel 16 for macOS. Expected labels are the values
-  // Excel displayed. The file is far below every object cap, so ?worker=1 must
-  // still admit it resident: there is no knob that forces paged admission of a
-  // small file, and the paged adapter's agreement with Excel is covered by
-  // tests/xlsx-viewer-native-excel.test.ts instead.
-  for (const worker of [false, true]) {
-    test(`native Excel native-corner.xlsx ${worker ? '(?worker=1, admitted resident)' : 'resident'}: cached values, error, date display, Unicode, hidden row, far corner`, async ({ page }) => {
-      await openViewer(page, 'native-corner.xlsx', { worker })
-      expect((await counts(page)).open ?? 0).toBe(0)
+  // Excel displayed. The file is far below every object cap, so plain
+  // ?worker=1 still admits it resident; ?paged=1 is the debug-only admission
+  // override of the e2e page (src/debug/forcePaged.ts) that sends it down the
+  // worker-backed paged path.
+  for (const leg of [
+    { name: 'resident', worker: false, paged: false },
+    { name: '?worker=1, admitted resident', worker: true, paged: false },
+    { name: 'worker-backed paged (?worker=1&paged=1)', worker: true, paged: true },
+  ] as const) {
+    test(`native Excel native-corner.xlsx ${leg.name}: cached values, error, date display, Unicode, hidden row, far corner`, async ({ page }) => {
+      await openViewer(page, 'native-corner.xlsx', { worker: leg.worker, paged: leg.paged })
+      expect((await counts(page)).open ?? 0).toBe(leg.paged ? 1 : 0)
+      if (leg.paged) await expect(page.getByRole('status').filter({ hasText: 'Showing saved values' }).first()).toBeVisible()
       await expect(page.getByRole('grid')).toHaveAttribute('aria-label', 'Worksheet 工作表1')
       await expect(page.getByRole('alert')).toHaveCount(0)
 
@@ -582,6 +587,7 @@ test.describe('S10.1 real interactive viewer', () => {
       await expectLabel('XFD1048576', 'XFD1048576, value corner')
       expect(cellIdOf((await activeCell(page))!.id)).toBe(17179869183)
       await expect(page.getByRole('rowheader', { name: 'Row 1048576' })).toBeVisible()
+      if (leg.paged) expect((await counts(page)).open).toBe(1) // one open, every read went to the worker
     })
   }
 })
