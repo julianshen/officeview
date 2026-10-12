@@ -1,53 +1,80 @@
 # Interactive viewer — frozen thresholds, S8.6 kernel results and S10.2 viewer results
 
-**S10.2 desktop Chrome receipt r15: desktop D NOT admitted (main-thread memory
-pending).** The other 12 desktop rows pass; two of them pass with a documented
-sample limitation (`pass-limited`).
+**S10.2 desktop Chrome receipt r16: desktop D admitted.** All 13 desktop rows
+pass; two of them pass with a documented sample limitation (`pass-limited`).
 
-The receipt is `interactive-viewer-viewer-chrome-r15.json` (SHA-256
-`cc2452d0…7b0f1458`), taken at `5cdbd23` on a clean tree, on a shared machine
-(load 3.4–5.1).
+The receipt is `interactive-viewer-viewer-chrome-r16.json` (SHA-256
+`200cc974…4c556affe`), taken at `4cbf66d` on a clean tree, on a shared machine
+(load 2.8–5.1). Every row is derived from validated raw records, and the
+evidence-problem list is empty.
 
-**The gate (rounds 4–5 and the final round).** At every checkpoint the gap is
-checked: the forced-GC heap above the warmed host, minus the ledger's
-*current* bytes there, minus two measured page-level exclusions.
-- **Compiled-code growth** comes from V8 per-space statistics in a memory-infra
-  trace dump (code and trusted spaces), not a heap snapshot. No heap snapshot
-  is taken during the measured session.
-- **Growth of the page's layout-shift entries** is excluded at per-structure
-  lower bounds.
-- **The allowance** is the warmed host's own open gap (never below 0) plus
-  independent noise: the larger of the idle probe noise and the checkpoint
+| Row | r16 |
+|---|---|
+| Warm viewport input-to-paint p95 | ordinary 6.72 / wrapped 7.03 / styled 5.44 ms; frame interval 16.67 ms |
+| Input acknowledgment (limited) | sort p95 17.1 (max 37.0); find 13.6; cancel 17.1; filter apply max 33.3 ms (n=10) |
+| First usable viewport (limited) | F1 p95 508.8; F3 p95 708.0; F2 max 633.0 ms (n=10) |
+| Import throughput | worst of 3 runs: F1 56.9, F2 57.6, F3 45.7 MiB/s; ≥ 0.87M cells/s |
+| Main-thread memory | ledger peak 41.4 / 64 MiB; live 23.4 MiB above the warmed host; largest checkpoint excess −0.15 MiB; warm-up objects/arrays/DOM 0.13 MiB |
+| Worker / bitmap | 228.7 / 113.2 MiB |
+| Mobile | not-run (user decision) |
+
+F2 filter apply end to end: 1,531 ms first, then 686–700 ms.
+
+**The memory gate (rounds 4–5, final round, user decision).** At every
+checkpoint the gap is checked: the forced-GC heap above the warmed host, minus
+the ledger's *current* bytes there, minus two measured page-level exclusions:
+- compiled-code growth, from V8 per-space statistics in a memory-infra dump
+  (no heap snapshot during the session);
+- growth of the page's layout-shift entries, at per-structure lower bounds.
+
+The allowance is:
+- the warmed host's own open gap (never below 0);
+- plus independent noise: the larger of the idle probe noise and the checkpoint
   procedure repeated on the idle warm host, about 0.003 MiB. A checkpoint's own
-  spread can only tighten it.
-- **Bounds checks** apply as in round 5. Checkpoints run with the samplers
-  paused, once the viewer is quiet.
-- **The warm-up residue** (closed warm host minus empty page, by heap-snapshot
-  kind) may contain only engine and code kinds. Plain JS objects, arrays and
-  native DOM above the noise are refused as "unattributed warm-up allocation".
-- **Charged since this round:** the tile canvases' own objects (element and 2D
-  context, 4,600 B per retained tile).
+  spread can only tighten it;
+- plus an explicit **engine-cache allowance of 0.25 MiB**
+  (`ENGINE_CACHE_ALLOWANCE_BYTES`, **user decision 2026-10-13**), recorded in
+  every receipt as `mainEngineCacheAllowanceBytes`.
 
-| Session | Loaded gap | After-ops gap | Closed gap | Warm-up objects + arrays + DOM |
-|---|---:|---:|---:|---:|
-| F2 | **0.05 MiB** | below 0 | **0.03 MiB** | **0.13 MiB** |
-| F4 | below 0 | below 0 | below 0 | **0.13 MiB** |
+The same 0.25 MiB applies to the warm-up residue check (plain JS objects, arrays
+and native DOM in the closed warm host above the empty page). Everything above
+it is still refused.
 
-**What remains, with owners:**
-- **Warm-up residue, 0.13 MiB:** arrays 103 KiB, plain objects 25 KiB, native
-  DOM 0. A diagnostic snapshot owner trace attributes the largest array to V8's
-  `smi_string_cache`, a strong-root engine cache that grew to 64 KiB.
-  - Objects and the other arrays: module-level state of the lazily loaded
-    chunks (closure contexts, exports, class prototypes). Not traced object by
-    object.
-  - The gate counts them because the snapshot type split cannot separate
-    engine-owned arrays from application arrays.
-- **F2 loaded 0.05 MiB and closed 0.03 MiB:** no heap snapshot is taken during
-  the session any more, so these could not be traced in the release run. In the
-  round-5 diagnostics the closed residue was Blink's `IdToNodeMap` and V8's
-  `smi_string_cache` capacity.
+Other rules:
+- inputs are bounds-checked;
+- checkpoints run with the samplers paused, once the viewer is quiet;
+- anything missing or impossible leaves the row pending.
 
-The row is **pending**; it was reported to the coordinator, not widened.
+The **64 MiB main-thread budget is unchanged**.
+
+**What the allowance covers** (measured owners). Before the allowance (r15)
+the residuals were:
+- F2 loaded 0.05 MiB;
+- F2 closed 0.03 MiB;
+- a warm-up residue of 0.13 MiB: arrays 103 KiB, plain objects 25 KiB.
+
+Diagnostic heap-snapshot owners:
+- V8's `smi_string_cache`, a strong-root number-to-string cache grown to
+  64 KiB;
+- Blink's `IdToNodeMap` (DOM node ids) capacity. Both grow and do not shrink.
+- module-level state of the lazily loaded chunks (closure contexts, exports,
+  class prototypes).
+
+The remainder was **not traced object by object** and is disclosed as such.
+
+In r16 the largest checkpoint excess is −0.15 MiB, so every checkpoint is
+within the allowance, and the warm-up residue is 0.13 MiB.
+
+Gate history:
+- r9: 0.57–0.66 MiB over the allowance;
+- r10: 0.15–0.35;
+- r11: 0.03 (the page's layout-shift buffer);
+- r12: 0.07–0.29 (per-cell paint layers);
+- r13: 0.08 (inside its own spread; spreads then came from the harness's own
+  samplers);
+- r14: 0.18 / 0.06 (snapshot-grown tables, uncharged tile canvas objects);
+- r15: 0.05 / 0.03 plus the 0.13 MiB warm-up residue;
+- r16: admitted with the allowance.
 
 **The viewer adds no layout shift (round 4, fix 18; round 5 held-list test).** Chrome's Layout
 Instability API showed two sources:

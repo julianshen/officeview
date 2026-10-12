@@ -123,7 +123,7 @@ Every package is implemented on its own branch, reviewed by at least one agent f
 | S8.6 sort performance (`sortPrefix.ts`, `sortPrepared.ts`, `sortText.ts`, compact prepared columns, batched cooperative checks) | merged (codex implementation; Claude reviews over two rounds); every frozen threshold met in Chrome, thresholds/budgets unchanged |
 | S10.3 accessibility/keyboard/capability verification | merged; VoiceOver/Safari/iPad not run (manual steps recorded) |
 | S13 integrator documentation (README "Interactive spreadsheet viewer", PLAN.md) | merged (codex draft; opencode reviews over two rounds, APPROVE); other S13 release gates open |
-| S10.2 (in progress: 12/13 desktop Chrome rows pass, header-sort acknowledgment fix under way), (physical-device receipts skipped for now by user decision), S11/S12 status, S13 release review | not started / in progress as noted |
+| S10.2 (desktop Chrome admitted in receipt r16; main-thread memory gate includes an explicit 0.25 MiB engine-cache allowance per gated checkpoint and warm-up check by user decision 2026-10-13, 64 MiB budget unchanged; quiet-machine re-run pending), (physical-device receipts skipped for now by user decision), S11/S12 status, S13 release review | in progress as noted |
 
 ## S0 — Freeze contracts, counterexamples and fixture/harness infrastructure
 
