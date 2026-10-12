@@ -30,18 +30,20 @@ export type DomClass = 'cell' | 'header' | 'other'
 /**
  * Per-element bytes by class: the element, its Blink layout/style objects, its
  * React fiber(s) with an alternate after re-renders, its React element and
- * props. Calibrated in Chrome 155 with the perf page's calibrateGrid, which
- * mounts the real GridSemantics tree (cells, header select/sort/filter/more
- * buttons with handlers, status and live regions):
+ * props. Rows are placed by transform (no layout shift), so each row is its own
+ * paint layer; rows count as 'other'.
+ * Calibrated in Chrome 155 with the perf page's calibrateGrid, which mounts the
+ * real GridSemantics tree (cells, header select/sort/filter/more buttons with
+ * handlers, status and live regions):
  * - 12 viewports from 400x300 to 2560x1440, rows and columns varied
  *   independently, 2 re-renders each with a moved selection;
  * - median of 3 forced-GC heap deltas per viewport;
- * - least-squares fit with a fixed term (~340 KiB, mostly the calibration's
+ * - least-squares fit with a fixed term (~390 KiB, mostly the calibration's
  *   own two 1M-row visibility bitsets).
- * The fit gave cell 3,783 B, header 4,540 B and other 5,215 B, with residuals
- * within +-113 KiB. Rounded up.
+ * The fit (after the layout-shift fix) gave cell 3,847 B, header 4,337 B and
+ * other 5,667 B, with residuals within +-104 KiB. Rounded up.
  */
-export const DOM_CLASS_BYTES: Readonly<Record<DomClass, number>> = Object.freeze({ cell: 3800, header: 4600, other: 5300 })
+export const DOM_CLASS_BYTES: Readonly<Record<DomClass, number>> = Object.freeze({ cell: 3900, header: 4400, other: 5700 })
 
 /**
  * Main-heap bytes of Chrome's text-shaping cache held by a 2D context: one

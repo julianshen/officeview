@@ -217,8 +217,10 @@ export function GridSemantics(props: GridSemanticsProps): ReactElement {
         const cells = extra ? [active!.col] : [...columns]
         if (!extra && slot === activeSlot && active && !cells.includes(active.col)) cells.push(active.col)
         const box = viewportHeaderBox(projection, scroll, viewport, 'row', slot)
-        // Rows, cells and header controls follow the scroll window by transform:
-        // a transform is not a layout shift, so the viewer adds no CLS to its host.
+        // Rows and header controls follow the scroll window by transform: a
+        // transform is not a layout shift, so the viewer adds no CLS to its host.
+        // Cells keep `left` inside their row (per-cell transforms would make every
+        // cell its own paint layer, ~1 KB each; their moves register no shift).
         return <div key={slot} role="row" aria-rowindex={slot + 2} data-transient-active={extra ? 'true' : undefined}
           style={extra ? { ...hiddenText, top: 0, left: 0, pointerEvents: 'none' } : { position: 'absolute', top: 0, left: 0, transform: `translateY(${headerHeight + box.y}px)`, height: box.height, width: '100%', pointerEvents: 'none' }}>
           <GridRowHeader props={headerProps} slot={slot} />
@@ -228,7 +230,7 @@ export function GridSemantics(props: GridSemanticsProps): ReactElement {
             const offscreen = extra || (slot === activeSlot && active?.col === col && !columns.includes(col))
             return <div key={col} role="gridcell" id={`${prefix}-cell-${cellId(row, col)}`} aria-colindex={col + 2}
               aria-label={activeAnnouncement(projection, at, value.text)} aria-selected={cellSelected(selection.ranges, at)} aria-description={value.state}
-              style={offscreen ? { ...hiddenText, top: 0, left: 0 } : { position: 'absolute', top: 0, left: 0, transform: `translateX(${GRID_HEADER_SIZE + column.x}px)`, width: column.width, height: box.height }}><span style={hiddenText}>{boundedSelectionText(value.text)}</span></div>
+              style={offscreen ? { ...hiddenText, top: 0, left: 0 } : { position: 'absolute', top: 0, left: GRID_HEADER_SIZE + column.x, width: column.width, height: box.height }}><span style={hiddenText}>{boundedSelectionText(value.text)}</span></div>
           })}
         </div>
       })}
