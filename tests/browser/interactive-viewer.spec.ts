@@ -590,4 +590,41 @@ test.describe('S10.1 real interactive viewer', () => {
       if (leg.paged) expect((await counts(page)).open).toBe(1) // one open, every read went to the worker
     })
   }
+
+  // S13: native-large.xlsx (Excel 16 for macOS, 200,001 cells) crosses the
+  // object caps, so plain ?worker=1 (no debug override) opens it worker-backed.
+  test('native Excel native-large.xlsx worker-backed without override: corners, date display, descending header sort', async ({ page }) => {
+    await openViewer(page, 'native-large.xlsx', { worker: true })
+    expect(await page.evaluate(() => window.__viewerE2E!.workersCreated)).toBe(1)
+    expect((await counts(page)).open).toBe(1)
+    await expect(page.getByRole('status').filter({ hasText: 'Showing saved values' }).first()).toBeVisible()
+    await expect(page.getByRole('alert')).toHaveCount(0)
+    const expectLabel = async (address: string, label: string) => {
+      await goTo(page, address)
+      await expect.poll(async () => (await activeCell(page))?.label ?? '', { timeout: 30_000 }).toBe(label)
+    }
+    await expectLabel('A50000', 'A50000, value 500001')
+    await expectLabel('D50000', 'D50000, value 2160-11-23 12:00')
+    await expectLabel('E50000', 'E50000, value last')
+    await expectLabel('D2', 'D2, value 2024-01-03 12:00')
+
+    await goTo(page, 'A1')
+    const sortA = page.getByRole('button', { name: 'Cycle sort column A' })
+    await sortA.click()
+    await expect(page.getByText('View-only sort applied; formulas unchanged.').first()).toBeAttached({ timeout: 60_000 })
+    await sortA.click()
+    await expect(page.getByRole('columnheader', { name: /^Column A/ })).toHaveAttribute('aria-sort', 'descending', { timeout: 60_000 })
+    await expectLabel('A1', 'A1, value 500001; original A50000')
+    await expectLabel('E1', 'E1, value last; original E50000')
+    expect((await counts(page)).open).toBe(1)
+  })
+
+  // S13: native-1904.xlsx (Excel 16 for macOS, date1904 on): the painted labels use the 1904 system.
+  test('native Excel native-1904.xlsx resident: 1904 serials display as Excel showed them', async ({ page }) => {
+    await openViewer(page, 'native-1904.xlsx')
+    for (const [address, text] of [['A2', '2024-01-15 12:00:00'], ['A4', '2024-01-16 23:59:59'], ['A5', '2024-02-29 06:00:00'], ['A6', '1904-01-01 00:00:00'], ['A7', '2023-12-31 12:00:00']] as const) {
+      await goTo(page, address)
+      await expect.poll(async () => (await activeCell(page))?.label ?? '').toBe(`${address}, value ${text}`)
+    }
+  })
 })
