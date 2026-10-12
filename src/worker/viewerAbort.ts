@@ -4,7 +4,7 @@ const deadlines = new WeakMap<AbortSignal, AbortSignal>()
 export function bindQueryDeadline(signal: AbortSignal, deadline: AbortSignal): void { deadlines.set(signal, deadline) }
 export function awaitQueryDeadline<T>(work: Promise<T>, signal: AbortSignal): Promise<T> {
   const deadline = deadlines.get(signal)
-  return awaitAbortable(work, deadline ?? signal, () => deadline !== undefined || signal.reason === 'query-timeout')
+  return deadline ? awaitAbortable(awaitAbortable(work, signal), deadline) : awaitAbortable(work, signal)
 }
 
 /** Abort settles the owner without waiting for a provider that ignores its signal.

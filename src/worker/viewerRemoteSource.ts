@@ -117,6 +117,7 @@ export function isRemoteWorkbook(source: WorkbookSource | undefined): source is 
 
 export class RemoteWorkbook implements WorkbookSource {
   queryNotice?: string
+  private noticeScope?: string
   private readonly latestQueries = new Map<string, string>()
   readonly valuePolicy: ValuePolicy
   readonly sheets: readonly { sheetId: string; name: string }[]
@@ -346,16 +347,17 @@ export class RemoteWorkbook implements WorkbookSource {
     const status = reply.diagnostics?.find(d => d.code === 'cached-value-policy')
     if (status && status.message !== this.statusMessage) { this.statusMessage = status.message; this.notify() }
     const timeout = reply.diagnostics.find(d => d.code === 'query-timeout')
-    if (!timeout || this.closed || this.latestQueries.get(scope) !== reply.requestId || !reply.owner) return
+    if (this.closed || this.latestQueries.get(scope) !== reply.requestId || !reply.owner) return
     const current = 'sheetId' in reply.owner ? this.identity(reply.owner.sheetId) : this.owner
     const matches = 'sheetId' in reply.owner && 'sheetId' in current
       ? reply.owner.docId === current.docId && reply.owner.sheetId === current.sheetId && reply.owner.viewGen === current.viewGen && reply.owner.valueGen === current.valueGen && reply.owner.fontGen === current.fontGen
       : 'sheetVector' in reply.owner && workbookFindKey(reply.owner) === workbookFindKey(this.owner)
-    if (matches) { this.queryNotice = timeout.message; this.notify() }
+    if (matches && timeout) { this.noticeScope = scope; this.queryNotice = timeout.message; this.notify() }
+    else if (matches && reply.kind === 'complete' && this.noticeScope === scope && this.queryNotice) { this.queryNotice = undefined; this.noticeScope = undefined; this.notify() }
   }
 
-  async viewport(owner: CacheIdentity, window: LogicalViewport, signal: AbortSignal): Promise<Settled<'viewport'>> {
-    return this.request({ kind: 'viewport', requestId: this.nextRequestId(), owner, window }, signal)
+  async viewport(owner: CacheIdentity, window: LogicalViewport, signal: AbortSignal, scope?: 'frame' | 'tile'): Promise<Settled<'viewport'>> {
+    return this.request({ kind: 'viewport', requestId: this.nextRequestId(), owner, window, ...(scope ? { scope } : {}) }, signal)
   }
 
   /** The worker owns raw search; the UI controller separately guards its local
@@ -682,9 +684,13 @@ export class RemoteSheetStore implements SourceStore {
     const refused = this.guard(options)
     if (refused) return this.failedPage(refused)
     if (!Array.isArray(request.groups) || request.groups.length > cap || queryPayloadBytes(request, budget) > budget) return this.failedPage(failure('resource-limit', 'Overview request exceeds its bounded wire budget'))
-    const out = await this.read({ op: 'overview', request: structuredClone(request) }, options)
-    if ('code' in out) return this.failedPage(out)
-    return out.op === 'overview' ? out.page : this.failedPage(failure('page-error', 'Unexpected overview reply'))
+    const charge = `overview-clone:${this.workbook.nextRequestId()}`
+    this.workbook.mainLedger.set('replies', charge, queryPayloadBytes(request, budget))
+    try {
+      const out = await this.read({ op: 'overview', request: structuredClone(request) }, options)
+      if ('code' in out) return this.failedPage(out)
+      return out.op === 'overview' ? out.page : this.failedPage(failure('page-error', 'Unexpected overview reply'))
+    } finally { this.workbook.mainLedger.release('replies', charge) }
   }
   async ensureComplete(rect: SourceRect, options: ReadOptions): Promise<RangeCompletion> {
     const out = await this.read({ op: 'complete', rect }, options)
@@ -696,6 +702,31 @@ export class RemoteSheetStore implements SourceStore {
 
   // ---- painting row cache ----
 
+  /** Adopt resolved viewport cells for accessibility/inspection. This proves
+   * only these coordinates, never the blank remainder of a row-cache chunk. */
+  adoptViewport(cells: readonly import('../xlsx/view/contracts').ViewportCell[]): void {
+    const rows = new Map<number, AuthoritativeCell[]>()
+    for (const item of cells) {
+      if (item.kind !== 'cell' && item.kind !== 'unavailable') continue
+      const row = rows.get(item.source.row) ?? []
+      row.push({ ...item.cell, ...(item.kind === 'unavailable' ? { unavailable: true } : {}) })
+      rows.set(item.source.row, row)
+    }
+    for (const [row, cells] of rows) {
+      const entry = this.rows.get(row) ?? { chunks: new Set<number>(), cells: [] as PagedCell[] }
+      const byCol = new Map(entry.cells.map(cell => [cell.col, cell]))
+      for (const cell of cells) {
+        const style = this.workbook.styleOf(cell.styleIndex)
+        byCol.set(cell.col, { ...cell, ref: formatA1(cell), value: cell.value ?? null, ...(style ? { style } : {}) } as PagedCell)
+      }
+      const next = [...byCol.values()].sort((a, b) => a.col - b.col)
+      const bytes = 64 + next.reduce((sum, cell) => sum + cachedCellBytes(cell), 0)
+      if (bytes > this.workbook.ledger.limitBytes) continue
+      entry.cells = next
+      this.rows.set(row, entry)
+      this.workbook.ledger.charge(this, row, bytes)
+    }
+  }
   /** Cached populated cells of a source row (ascending columns); only the
    * known chunks contribute. Unknown chunks are reported by `pendingIn`. */
   cellsOf(row: number): readonly PagedCell[] | undefined {

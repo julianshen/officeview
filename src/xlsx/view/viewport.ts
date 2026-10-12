@@ -195,6 +195,8 @@ export interface CellPlacement { cell: XlsxCell; source: SourceCell; x: number; 
 export interface MergePlacement { range: XlsxMergeRange; x: number; y: number; width: number; height: number }
 export interface ViewportDetail {
   kind: 'detail'
+  /** Explicit unresolved regions in a progressive worker-planned tile. */
+  pending?: readonly { bounds: LogicalCellBox; error: boolean }[]
   /** Row-major (display slot, column) paint order. */
   cells: readonly CellPlacement[]
   merges: readonly MergePlacement[]
@@ -870,6 +872,8 @@ export interface StoreViewportOptions {
   /** `tile` applies the per-tile record/page caps instead of the per-frame ones. */
   scope?: 'frame' | 'tile'
   activeCell?: SourceCell
+  /** Paint planners include canonical offscreen text dependencies. */
+  textDependencies?: boolean
 }
 export interface StoreViewport {
   kind: 'viewport'
@@ -901,9 +905,8 @@ class Cancelled extends Error {}
  * bounded `readRows` pages for detail and analytic `queryOverview` for coarse
  * groups. A frame that needs more pages than its budget declares the rest
  * loading; unknown summaries are loading, never blank; failures stay explicit.
- * TODO(S5.2): the object path's text-overflow dependency columns and drawing
- * admission are not yet mirrored here; this path is not wired to the worker yet,
- * and must gain both before the worker `viewport` command publishes it. */
+ * Overflow dependency columns follow the canonical object planner's bounded
+ * detail rule. Drawing assets remain the host's responsibility. */
 export async function queryViewport(store: SourceStore, metrics: ProjectedSheetMetrics, viewport: LogicalViewport, owner: CacheIdentity, options: StoreViewportOptions): Promise<StoreViewportOutcome> {
   const profile = VIEWPORT_DETAIL_LIMITS[options.profile ?? 'D']
   const limits = options.scope === 'tile' ? { ...profile, records: profile.tile.records, pages: profile.tile.pages } : profile
@@ -934,9 +937,26 @@ export async function queryViewport(store: SourceStore, metrics: ProjectedSheetM
       // Admission before any cell read, from geometry plus structural metadata:
       // a source may populate every cell, but a merged range is one record (its
       // anchor across the merged box), exactly as the object path counts records.
-      const structural = await structuralMerges(store, metrics, detail.rows.detail, detail.cols.detail, readOptions, merge, diagnostics)
+      const columns = new Set(detail.cols.detail)
+      // Canonical overflow dependencies obey the same four-device-pixel
+      // boundary rule as the object planner, and stop before sub-detail runs.
+      const dependencies = (from: number, to: number) => {
+        const axis = metrics.cols.visibleBetween(from, to)
+        return axis.count <= limits.gridlines ? [...axis.runs] : []
+      }
+      const left = options.textDependencies ? dependencies(Math.max(0, viewport.box.x - TEXT_OVERFLOW_REACH_CSS), Math.max(0, viewport.box.x)) : []
+      for (let i = left.length - 1; i >= 0 && !belowDetail(left[i].sizeCss, window.scale); i--) {
+        for (let col = left[i].start; col <= left[i].end; col++) columns.add(col)
+      }
+      const right = options.textDependencies ? dependencies(Math.min(window.extent.width, viewport.box.x + viewport.box.width), Math.min(window.extent.width, viewport.box.x + viewport.box.width + TEXT_OVERFLOW_REACH_CSS)) : []
+      for (const run of right) {
+        if (belowDetail(run.sizeCss, window.scale)) break
+        for (let col = run.start; col <= run.end; col++) columns.add(col)
+      }
+      const detailCols = [...columns].sort((a, b) => a - b)
+      const structural = await structuralMerges(store, metrics, detail.rows.detail, detailCols, readOptions, merge, diagnostics)
       if (options.signal.aborted) throw new Cancelled()
-      const boxes = candidateBoxes(metrics, detail.rows.detail, detail.cols.detail, structural, limits.records)
+      const boxes = candidateBoxes(metrics, detail.rows.detail, detailCols, structural, limits.records)
       const tiles = boxes !== null && tileOverflow(boxes, viewport, window.scale, profile.tile.records)
       if (boxes === null || tiles) {
         diagnostics.push({ code: 'detail-limit', message: tiles ? `more than ${profile.tile.records} records in one ${TILE_DEVICE_PX}-device-pixel tile` : `more than ${limits.records} candidate records in the frame` })
@@ -944,7 +964,7 @@ export async function queryViewport(store: SourceStore, metrics: ProjectedSheetM
         detail = null
       } else {
         if (coarse.length) diagnostics.push({ code: 'detail-coarse-region', message: `${coarse.length} sub-detail pixel group(s) summarized` })
-        cells = await readDetail(store, metrics, detail.rows.detail, detail.cols.detail, limits.pages, readOptions, work, merge)
+        cells = await readDetail(store, metrics, detail.rows.detail, detailCols, limits.pages, readOptions, work, merge)
         cells = await applyMerges(store, cells, structural, viewport, limits.pages, readOptions, work, merge, mergePlacements)
       }
     }

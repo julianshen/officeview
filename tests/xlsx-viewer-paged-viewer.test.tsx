@@ -84,16 +84,18 @@ const internal = (props: Record<string, unknown>) => props as object
 
 describe('S5.4 routing: interactiveSheets mounts the worker-backed viewer for paged admissions', () => {
   it('opens a paged admission in the worker (no main-thread parse, shell document) and shows notices once', async () => {
+    const mainPlanner = vi.spyOn(viewportPlanner, 'planViewport')
     const h = workerHarness()
     const factory = vi.fn(() => h.port)
     const ui = render(<OfficeFile data={workbook()} interactiveSheets viewerWorker={factory} />)
     await waitFor(() => expect(ui.getByRole('gridcell', { name: /alpha/ })).toBeTruthy())
+    expect(mainPlanner).not.toHaveBeenCalled()
     expect(factory).toHaveBeenCalledTimes(1)
     const open = h.posted.find(command => command.kind === 'open')
     expect(open?.kind === 'open' && open.source.kind).toBe('blob')
     expect(h.parse).not.toHaveBeenCalled()
-    // Cells came from bounded worker row reads, not from a main-thread document.
-    expect(h.reads('rows')).toBeGreaterThan(0)
+    // Paint and semantics consume bounded worker viewport records.
+    await waitFor(() => expect(h.posted.some(command => command.kind === 'viewport')).toBe(true))
     expect(ui.container.textContent).not.toMatch(/compatibility mode/)
     await waitFor(() => expect(ui.container.textContent).toMatch(/Showing saved values/))
     expect(ui.container.textContent?.match(/Showing saved values/g)).toHaveLength(1)
@@ -196,8 +198,8 @@ describe('S5.4 far corner and copy limits on a paged fixture', () => {
     const h = workerHarness(), write = clipboard()
     const ui = render(<OfficeFile data={workbook()} interactiveSheets viewerWorker={() => h.port} />)
     await waitFor(() => expect(ui.getByRole('gridcell', { name: /alpha/ })).toBeTruthy())
-    // The viewer is worker-backed: its visible cells came from worker row reads.
-    expect(h.reads('rows')).toBeGreaterThan(0)
+    // Visible records were planned by the worker; copy refusal starts no additional reads.
+    expect(h.posted.some(command => command.kind === 'viewport')).toBe(true)
     fireEvent.click(ui.getByRole('button', { name: 'Select worksheet' }))
     const before = h.reads()
     fireEvent.click(ui.getByRole('button', { name: 'Copy selection' }))
@@ -285,6 +287,7 @@ describe('S5.4 remote source: cancellation and ownership on the main thread', ()
 // ---------------------------------------------------------------------------
 import InteractiveSheetDoc from '../src/components/xlsx/InteractiveSheetDoc'
 import { createControlsClient, type ControlsClientOptions } from '../src/components/xlsx/controlsClient'
+import * as viewportPlanner from '../src/xlsx/view/viewport'
 import { createRowOrder } from '../src/xlsx/view/order'
 import { createIntervalSet, visibilityFromHidden } from '../src/xlsx/view/visibility'
 import { createSheetMetrics } from '../src/xlsx/view/projection'

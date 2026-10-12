@@ -21,10 +21,11 @@
  * filter via viewerControls' remote port) and are adopted here, and find and
  * copy read through the same source; the object path is unchanged.
  */
+import { WorkerViewportPlans } from './workerViewport'
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type ReactElement } from 'react'
 import type { XlsxCell, XlsxDocument, XlsxSheet } from '../../xlsx/types'
 import type {
-  AuthoritativeCell, CacheIdentity, FilterSpec, GridSelection, LogicalCellBox, ProfileId, RowOrder, RowVisibility, ScrollWindow, SheetView, SortSpec, SourceRowInterval, SourceStore, WorkbookOwner,
+  AuthoritativeCell, CacheIdentity, FilterSpec, GridSelection, LogicalViewport, ProfileId, RowOrder, RowVisibility, ScrollWindow, SheetView, SortSpec, SourceRowInterval, SourceStore, WorkbookOwner,
 } from '../../xlsx/view/contracts'
 import { SHEET_MIN_ZOOM } from '../../xlsx/view/contracts'
 import type { NavigatorRequest, SourceCell } from '../../xlsx/view/coordinates'
@@ -396,13 +397,19 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
   // Published by the overlay pass as state, so the status follows it (a declared
   // coarse state); an empty selection always clears it.
   const [selectionIncomplete, setSelectionIncomplete] = useState(false)
-  const frameOf = (): SheetFrame | null => entry && scroll ? {
-    sheet: entry.sheet, geometry: entry.geometry, identity, origin: scroll.logicalOrigin, viewport, zoom: scroll.zoom, dpr,
-    extent: { width: entry.metrics.cols.totalCss(), height: entry.metrics.rows.totalCss() },
-    assets: assets?.lease.assets, layoutCache: entry.layoutCache, merges: entry.merges, ...(mark ? { watermark: mark } : {}),
-    structureGen: entry.structureGen,
-    ...(remote ? { pending: (box: LogicalCellBox) => remote.store(activeSheetId).pendingIn(entry.metrics, box, scroll.zoom * dpr) } : {}),
-  } : null
+  const workerPlans = useMemo(() => remote ? new WorkerViewportPlans(remote) : null, [remote])
+  useEffect(() => () => workerPlans?.dispose(), [workerPlans])
+  const frameOf = (): SheetFrame | null => {
+    if (!entry || !scroll) return null
+    workerPlans?.beginFrame(identity, { box: { ...scroll.logicalOrigin, width: viewport.width / scroll.zoom, height: viewport.height / scroll.zoom }, zoom: scroll.zoom, deviceScale: dpr })
+    return {
+      sheet: entry.sheet, geometry: entry.geometry, identity, origin: scroll.logicalOrigin, viewport, zoom: scroll.zoom, dpr,
+      extent: { width: entry.metrics.cols.totalCss(), height: entry.metrics.rows.totalCss() },
+      assets: assets?.lease.assets, layoutCache: entry.layoutCache, merges: entry.merges, ...(mark ? { watermark: mark } : {}),
+      structureGen: entry.structureGen,
+      ...(workerPlans ? { plan: (window: LogicalViewport, visible: boolean) => workerPlans.get(identity, window, { width: entry.metrics.cols.totalCss(), height: entry.metrics.rows.totalCss() }, visible) } : {}),
+    }
+  }
   // Viewer-owned main pools (layout/merge caches, controls caches, owned DOM),
   // re-measured after every present and render; the row cache, view buffers,
   // replies and copy sessions charge themselves where they allocate.

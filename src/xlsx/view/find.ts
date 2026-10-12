@@ -278,7 +278,7 @@ export class WorkbookFind {
       this.wake = resolve
       inner(phase).then(resolve, reject)
     }).finally(() => { this.wake = undefined })
-    this.slice = new FindSlice({ ...(options.now ? { now: options.now } : {}), yield: wrapped }, () => this.guard())
+    this.slice = new FindSlice({ ...(options.awaitYield ? { awaitYield: options.awaitYield } : {}), ...(options.now ? { now: options.now } : {}), yield: wrapped }, () => this.guard())
     options.signal?.addEventListener('abort', this.onAbort, { once: true })
     if (options.signal?.aborted) this.lifetime.abort()
   }

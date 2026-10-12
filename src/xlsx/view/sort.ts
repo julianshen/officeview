@@ -34,6 +34,7 @@ export interface SortOptions {
   visibility?: never
   now?: () => number
   yield?: (phase: SortPhase) => Promise<void>
+  awaitYield?: (work: Promise<void>) => Promise<void>
   maxWorkerBytes?: number
   residentWorkerBytes?: number
   /** Ownership-aware accounting: the caller guarantees the store's raw TEXT

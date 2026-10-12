@@ -363,6 +363,7 @@ export class PagedXlsxSheetAdapter implements SourceStore {
       const status = this.status(row)
       if (status.kind === 'error') { yield { items, completeness: 'incomplete', stamp: this.stamp, error: status.failure }; return }
       if (status.kind === 'ready') continue
+      if (request.availability === 'loaded') { yield { items, completeness: 'loading', stamp: this.stamp }; return }
       // A scan waits for the import frontier instead of reporting rows it has not seen.
       const waited = await waitFor(this.workbook, options.signal)
       if (waited) { yield { items, completeness: 'incomplete', stamp: this.stamp, error: waited }; return }

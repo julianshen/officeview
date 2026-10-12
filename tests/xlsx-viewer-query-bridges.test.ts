@@ -22,6 +22,11 @@ import { parseXlsx } from '../src/xlsx/parse'
 import { xlsxBytes } from './helpers/xlsx-package'
 import { createAxisMetrics } from '../src/xlsx/view/axes'
 import { createIntervalSet } from '../src/xlsx/view/visibility'
+import { createCanvas } from 'canvas'
+import { WorkerViewportPlans } from '../src/components/xlsx/workerViewport'
+import { renderSheetViewport } from '../src/xlsx/view/renderViewport'
+import { buildSheetGeometry } from '../src/xlsx/view/viewport'
+import { boundedQueryStore } from '../src/worker/viewerQueryBudget'
 import { createRowOrder } from '../src/xlsx/view/order'
 
 const quiet = { yield: async () => {} }
@@ -38,7 +43,7 @@ async function harness(doc: XlsxDocument = document(), override?: WorkbookSource
   const open = await client.send({ kind: 'open', requestId: client.nextRequestId(), docId: 'doc', source: { kind: 'object', document: doc }, profile: 'D' })
   expect(open.kind).toBe('complete')
   const session = kernel.session('doc')!
-  const remote = new RemoteWorkbook(client, { docId: 'doc', valuePolicy: source.valuePolicy, sheets: source.sheets, diagnostics: [], layouts: new Map(source.sheets.map(s => [s.sheetId, session.layout(s.sheetId)])) })
+  const remote = new RemoteWorkbook(client, { docId: 'doc', valuePolicy: source.valuePolicy, sheets: source.sheets, diagnostics: [], formatting: source.formatting?.(), layouts: new Map(source.sheets.map(s => [s.sheetId, session.layout(s.sheetId)])) })
   return { doc, source, kernel, port, client, session, remote }
 }
 
@@ -270,7 +275,12 @@ it.each(['replaced', 'caller-cancelled'] as const)('does not publish an old time
     const old = store.queryOverview(query, { signal: controller.signal, stamp: store.stamp })
     for (let i = 0; i < 30; i++) await Promise.resolve()
     if (action === 'replaced') expect(await store.queryOverview(query, { signal: new AbortController().signal, stamp: store.stamp })).toMatchObject({ completeness: 'complete' })
-    else controller.abort()
+    else {
+      controller.abort()
+      expect(await old).toMatchObject({ completeness: 'incomplete', error: { code: 'cancelled' } })
+      for (let i = 0; i < 100; i++) await Promise.resolve()
+      expect(h.kernel.lifecycleStats()).toMatchObject({ inflight: 0, transientBytes: 0 })
+    }
     await vi.advanceTimersByTimeAsync(120_001)
     await old
     expect(h.remote.queryNotice, 'An obsolete request must not replace the current visible status').toBeUndefined()
@@ -289,7 +299,7 @@ it('returns resident-equivalent bounded viewport source records over the worker 
     const out = await h.client.send({ kind: 'viewport', requestId: h.client.nextRequestId(), owner, window })
     expect(out.kind, 'Worker viewport must resolve admitted detail records').toBe('complete')
     if (out.kind !== 'complete' || resident.kind !== 'viewport') return
-    expect(out.result).toMatchObject({ kind: 'viewport', completeness: 'complete', content: { kind: 'detail', cells: resident.cells } })
+    expect(out.result).toMatchObject({ kind: 'viewport', completeness: 'complete', content: { kind: 'detail', cells: resident.cells }, merges: resident.merges, coarse: resident.coarse, rowLines: resident.rowLines, colLines: resident.colLines, work: resident.work })
     expect(resident.cells.length).toBeLessThanOrEqual(20_000)
   } finally { await h.remote.release() }
 })
@@ -318,4 +328,213 @@ it('rejects stale sheet and workbook generations before viewport or search reads
     expect(viewport).toMatchObject({ kind: 'error', code: 'stale-source' })
     expect(search).toMatchObject({ kind: 'error', code: 'stale-source' })
   } finally { await h.remote.release() }
+})
+
+
+it('clears a same-scope timeout notice after a successful overview retry', async () => {
+  vi.useFakeTimers()
+  const h = await harness(), store = h.remote.store('s')
+  vi.spyOn(h.source.store('s'), 'queryOverview').mockImplementationOnce(() => new Promise(() => {}))
+  const query: OverviewQuery = { groups: [{ groupId: 'g', rows: { kind: 'intervals', intervals: [{ r0: 0, r1: 4 }] }, cols: [{ c0: 0, c1: 0 }] }], maxGroups: 1 }
+  const options = { signal: new AbortController().signal, stamp: store.stamp }
+  try {
+    const pending = store.queryOverview(query, options)
+    await vi.advanceTimersByTimeAsync(120_000)
+    await pending
+    expect(h.remote.queryNotice).toMatch(/timed out/)
+    expect(await store.queryOverview(query, options)).toMatchObject({ completeness: 'complete' })
+    expect(h.remote.queryNotice).toBeUndefined()
+  } finally { await h.remote.release(); vi.useRealTimers() }
+})
+
+it('counts unavailable uncached engine formulas and excludes authored hidden columns in worker search', async () => {
+  const doc = workbookOf([{ sheetId: 's', cells: [{ row: 0, col: 0, value: 'alpha' }, { row: 1, col: 0, value: { unavailable: true } }, { row: 0, col: 1, value: 'alpha-hidden' }] }])
+  doc.sheets[0].cols = [{ min: 1, max: 1, hidden: true }]
+  const h = await harness(doc)
+  try {
+    expect(h.source.valuePolicy).toBe('engine')
+    const out = await h.client.send({ kind: 'search', requestId: h.client.nextRequestId(), owner: h.session.workbookOwner(), query: { text: 'alpha', caseSensitive: false } })
+    expect(out).toMatchObject({ kind: 'complete', result: { unavailableCount: 1, items: [{ source: { row: 0, col: 0 } }] } })
+    if (out.kind === 'complete') expect(out.result.items).toHaveLength(1)
+  } finally { await h.remote.release() }
+})
+
+it('preserves optional occupancy and settlement capabilities in bounded stores', async () => {
+  const source = createObjectWorkbookSource(document(), 'doc'), store = source.store('s')
+  const settle = vi.fn(), scanOccupied = vi.fn(async function* () { yield { items: [{ row: 2, col: 0 }], stamp: store.stamp, completeness: 'complete' as const } })
+  const bounded = boundedQueryStore({ ...store, scanOccupied, settle }, 1024)
+  expect(bounded.scanOccupied).toBeTypeOf('function')
+  const pages = []
+  for await (const page of bounded.scanOccupied!({ range: { r0: 0, r1: 4, c0: 0, c1: 0 }, limit: 5 }, { signal: new AbortController().signal, stamp: store.stamp })) pages.push(page)
+  expect(pages[0].items).toEqual([{ row: 2, col: 0 }])
+  bounded.settle!(pages[0])
+  expect(settle).toHaveBeenCalledWith(pages[0])
+  await source.release()
+})
+
+it('charges the main-owned overview clone while its worker read is held', async () => {
+  const h = await harness()
+  let release!: () => void, began!: () => void
+  const held = new Promise<void>(r => { release = r }), started = new Promise<void>(r => { began = r })
+  const store = h.source.store('s'), original = store.queryOverview.bind(store)
+  vi.spyOn(store, 'queryOverview').mockImplementationOnce(async (q, o) => { began(); await held; return original(q, o) })
+  try {
+    const before = h.remote.mainLedger.snapshot().byPool.replies
+    const pending = h.remote.store('s').queryOverview({ groups: [{ groupId: 'g', rows: { kind: 'list', r0: 0, r1: 4, rows: Uint32Array.of(0, 1, 2, 3, 4) }, cols: [{ c0: 0, c1: 0 }] }], maxGroups: 1 }, { signal: new AbortController().signal, stamp: store.stamp })
+    await started
+    expect(h.remote.mainLedger.snapshot().byPool.replies).toBeGreaterThan(before)
+    release()
+    const page = await pending
+    h.remote.mainLedger.settle(page)
+    expect(h.remote.mainLedger.snapshot().byPool.replies).toBe(before)
+  } finally { release(); await h.remote.release() }
+})
+
+
+it('returns loaded hits promptly from a real paged import with a held backend page', async () => {
+  vi.useFakeTimers()
+  const bytes = xlsxBytes({ sheetData: [1, 2, 3].map(r => `<row r="${r}"><c r="A${r}" t="inlineStr"><is><t>alpha-${r}</t></is></c></row>`).join('') })
+  const backend = memoryPageBackend(), put = backend.put.bind(backend)
+  let release!: () => void, began!: () => void
+  const held = new Promise<void>(r => { release = r }), started = new Promise<void>(r => { began = r })
+  backend.put = async (key, value) => { if (key.endsWith('/p1')) { began(); await held } await put(key, value) }
+  const imported = await openImportSession({ kind: 'blob', blob: new Blob([bytes as BlobPart]) }, { docId: 'doc', profile: 'D', pageRows: 1, store: new SourcePageStore({ docId: 'doc', backend }) })
+  await started
+  const h = await harness(document(), createPagedWorkbookSource(imported))
+  try {
+    const replies: unknown[] = []
+    const pending = h.client.send({ kind: 'search', requestId: h.client.nextRequestId(), owner: h.session.workbookOwner(), query: { text: 'alpha', caseSensitive: false } }).then(out => { replies.push(out); return out })
+    await vi.advanceTimersByTimeAsync(60_000)
+    expect(replies, 'Loaded search hits must arrive before the pending import page is released').toHaveLength(1)
+    expect(await pending).toMatchObject({ kind: 'complete', result: { items: [{ source: { row: 0, col: 0 }, text: 'alpha-1' }], page: { incomplete: ['1'] } } })
+    const out = await pending
+    if (out.kind === 'complete') expect(out.result.page?.totalKnown).toBeUndefined()
+    release()
+    expect(await imported.done).toMatchObject({ kind: 'complete' })
+    const complete = await h.client.send({ kind: 'search', requestId: h.client.nextRequestId(), owner: h.session.workbookOwner(), query: { text: 'alpha', caseSensitive: false } })
+    expect(complete).toMatchObject({ kind: 'complete', result: { page: { incomplete: [], totalKnown: 3 } } })
+  } finally { release(); await imported.done; await h.remote.release(); vi.useRealTimers() }
+})
+
+
+it('includes bounded offscreen text dependencies in worker viewport plans', async () => {
+  const h = await harness(workbookOf([{ sheetId: 's', cells: [{ row: 0, col: 0, value: 'alpha overflowing toward the viewport' }, { row: 0, col: 8, value: 'right-aligned dependency' }] }]))
+  try {
+    const out = await h.remote.viewport(initialIdentity('doc', 's'), { box: { x: 256, y: 0, width: 64, height: 20 }, zoom: 1, deviceScale: 1 }, new AbortController().signal, 'tile')
+    expect(out).toMatchObject({ kind: 'complete', result: { content: { kind: 'detail' } } })
+    if (typeof out === 'object' && out.kind === 'complete' && out.result.content.kind === 'detail') expect(out.result.content.cells.map(cell => cell.source.col)).toEqual([0, 8])
+  } finally { await h.remote.release() }
+})
+
+
+it('paints worker-planned merged cells and overflowing text identically through canonical host layout', async () => {
+  const bytes = xlsxBytes({ sheetData: '<row r="1"><c r="A1" t="inlineStr"><is><t>alpha merged</t></is></c></row><row r="3"><c r="A3" t="inlineStr"><is><t>long alpha overflowing from outside the viewport</t></is></c></row>', afterSheetData: '<mergeCells count="1"><mergeCell ref="A1:B2"/></mergeCells>' })
+  const doc = await parseXlsx(await OfficePackage.load(bytes))
+  const h = await harness(doc), plans = new WorkerViewportPlans(h.remote)
+  const window = { box: { x: 64, y: 0, width: 192, height: 80 }, zoom: 1, deviceScale: 1 }
+  const geometry = buildSheetGeometry(doc.sheets[0])
+  expect(geometry.kind).toBe('ready')
+  if (geometry.kind !== 'ready') return
+  const extent = { width: geometry.metrics.cols.totalCss(), height: geometry.metrics.rows.totalCss() }
+  try {
+    h.remote.merges('1')
+    await h.port.idle()
+    expect(plans.get(h.session.identity('1'), window, extent, true).kind).toBe('pending')
+    await h.port.idle()
+    for (let i = 0; i < 30; i++) await Promise.resolve()
+    await vi.waitFor(() => expect(plans.get(h.session.identity('1'), window, extent, true).kind).toBe('detail'))
+    const plan = plans.get(h.session.identity('1'), window, extent, true)
+    if (plan.kind === 'detail') expect(plan.merges).toHaveLength(1)
+    const a = createCanvas(192, 80), b = createCanvas(192, 80)
+    const resident = renderSheetViewport(doc.sheets[0], a.getContext('2d') as unknown as CanvasRenderingContext2D, geometry, window)
+    const worker = renderSheetViewport(doc.sheets[0], b.getContext('2d') as unknown as CanvasRenderingContext2D, undefined, window, undefined, { preparedPlan: plan })
+    expect(worker.records).toEqual(resident.records)
+    expect([...b.getContext('2d').getImageData(0, 0, 192, 80).data]).toEqual([...a.getContext('2d').getImageData(0, 0, 192, 80).data])
+    expect(h.remote.mainLedger.snapshot().byPool.layout).toBeGreaterThan(0)
+    plans.dispose()
+    expect(h.remote.mainLedger.snapshot().byPool.layout).toBe(0)
+  } finally { plans.dispose(); await h.remote.release() }
+})
+
+
+it('bounds production tile requests and reclaims them on disposal even with a stalled provider', async () => {
+  const h = await harness(), plans = new WorkerViewportPlans(h.remote)
+  let began!: () => void
+  const started = new Promise<void>(r => { began = r })
+  vi.spyOn(h.source.store('s'), 'readRows').mockImplementation(() => { began(); return new Promise(() => {}) })
+  try {
+    for (let i = 0; i < 10; i++) plans.get(initialIdentity('doc', 's'), { box: { x: i * 512, y: 0, width: 512, height: 512 }, zoom: 1, deviceScale: 1 }, { width: 1_048_576, height: 20_971_520 }, true)
+    await started
+    expect(h.remote.stats.commands.viewport).toBe(4)
+    plans.dispose()
+    await h.port.idle()
+    expect(h.kernel.lifecycleStats()).toMatchObject({ inflight: 0, transientBytes: 0 })
+    expect(h.remote.mainLedger.snapshot().byPool.layout).toBe(0)
+  } finally { plans.dispose(); await h.remote.release() }
+})
+
+it('adopts known viewport cells without claiming unknown remainder columns are blank', async () => {
+  const h = await harness(), store = h.remote.store('s')
+  try {
+    const cell = await h.source.store('s').readCell({ row: 0, col: 0 }, { signal: new AbortController().signal, stamp: store.stamp })
+    expect(cell.kind).toBe('cell')
+    if (cell.kind !== 'cell') return
+    store.adoptViewport([{ ...cell, source: { row: 0, col: 0 }, bounds: { x: 0, y: 0, width: 64, height: 20 } }])
+    expect(store.cellAt({ row: 0, col: 0 })?.value).toBe('alpha-0')
+    const before = h.remote.stats.commands['read:rows'] ?? 0
+    await store.load([0], 1, 1)
+    expect(h.remote.stats.commands['read:rows']).toBe(before + 1)
+  } finally { await h.remote.release() }
+})
+
+
+it('cancels held viewport tiles that scrolling moved out of the current frame', async () => {
+  const h = await harness(), plans = new WorkerViewportPlans(h.remote), signals: AbortSignal[] = []
+  let began!: () => void
+  const started = new Promise<void>(r => { began = r })
+  vi.spyOn(h.source.store('s'), 'readRows').mockImplementation((_r, _c, options) => { signals.push(options.signal); if (signals.length === 4) began(); return new Promise(() => {}) })
+  const owner = initialIdentity('doc', 's'), extent = { width: 1_048_576, height: 20_971_520 }
+  try {
+    for (let i = 0; i < 4; i++) plans.get(owner, { box: { x: i * 512, y: 0, width: 512, height: 512 }, zoom: 1, deviceScale: 1 }, extent, true)
+    await started
+    plans.beginFrame(owner, { box: { x: 4096, y: 0, width: 512, height: 512 }, zoom: 1, deviceScale: 1 })
+    for (let i = 0; i < 60; i++) await Promise.resolve()
+    expect(signals.every(signal => signal.aborted), 'A current viewport must not wait behind four invisible stalled tiles').toBe(true)
+    await h.port.idle()
+    plans.get(owner, { box: { x: 4096, y: 0, width: 512, height: 512 }, zoom: 1, deviceScale: 1 }, extent, true)
+    expect(h.remote.stats.commands.viewport).toBe(5)
+  } finally { plans.dispose(); await h.port.idle(); await h.remote.release() }
+})
+
+
+it('keeps loaded viewport cells paintable beside explicit unknown rows', async () => {
+  vi.useFakeTimers()
+  const h = await harness(), plans = new WorkerViewportPlans(h.remote), store = h.source.store('s')
+  const original = store.readRows.bind(store)
+  vi.spyOn(store, 'readRows').mockImplementation(async (r, c, o) => { const page = await original(r, c, o); return { ...page, items: page.items.slice(0, 1), completeness: 'loading' } })
+  const owner = initialIdentity('doc', 's'), window = { box: { x: 0, y: 0, width: 64, height: 40 }, zoom: 1, deviceScale: 1 }, extent = { width: 1_048_576, height: 20_971_520 }
+  try {
+    plans.get(owner, window, extent, true)
+    await vi.advanceTimersByTimeAsync(0)
+    expect(plans.get(owner, window, extent, true)).toMatchObject({ kind: 'detail', cells: [{ cell: { value: 'alpha-0' } }], pending: [{ bounds: { y: 20 } }] })
+    const plan = plans.get(owner, window, extent, true), canvas = createCanvas(64, 40)
+    const painted = renderSheetViewport(h.doc.sheets[0], canvas.getContext('2d') as unknown as CanvasRenderingContext2D, undefined, window, undefined, { preparedPlan: plan })
+    expect(painted).toMatchObject({ pending: true, records: [{ body: { formattedText: 'alpha-0' } }] })
+    expect([...canvas.getContext('2d').getImageData(2, 35, 1, 1).data], 'Unknown rows must be shaded rather than asserted blank').toEqual([236, 239, 243, 255])
+  } finally { plans.dispose(); await h.remote.release(); vi.useRealTimers() }
+})
+
+it('stops automatic viewport retries after a nonretryable source failure', async () => {
+  vi.useFakeTimers()
+  const h = await harness(), plans = new WorkerViewportPlans(h.remote), store = h.source.store('s')
+  vi.spyOn(store, 'readRows').mockResolvedValue({ items: [], completeness: 'incomplete', stamp: store.stamp, error: { code: 'parse-error', retryable: false, message: 'Import failed' } })
+  const owner = initialIdentity('doc', 's'), window = { box: { x: 0, y: 0, width: 64, height: 40 }, zoom: 1, deviceScale: 1 }, extent = { width: 1_048_576, height: 20_971_520 }
+  const unsubscribe = h.remote.subscribe(() => plans.get(owner, window, extent, true))
+  try {
+    plans.get(owner, window, extent, true)
+    await vi.advanceTimersByTimeAsync(0)
+    const before = h.remote.stats.commands.viewport
+    await vi.advanceTimersByTimeAsync(1000)
+    expect(h.remote.stats.commands.viewport, 'A terminal failure must not create a new 100ms query loop').toBe(before)
+  } finally { unsubscribe(); plans.dispose(); await h.remote.release(); vi.useRealTimers() }
 })

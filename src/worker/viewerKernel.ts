@@ -139,6 +139,17 @@ export class ViewerKernel {
    * replacement) may ship the same committed ref, and one finishing must not
    * remove the keys the other still evaluates. */
   private readonly keySets = new Map<string, Map<string, { set: FilterKeySet; holders: number; charge: PoolCharge }>>()
+  private readonly foreground = new Set<AbortSignal>()
+  private readonly foregroundWaiters = new Set<() => void>()
+  private async waitForForeground(signal: AbortSignal): Promise<void> {
+    while (this.foreground.size && !this.foreground.has(signal) && !signal.aborted) {
+      await awaitAbortable(new Promise<void>(resolve => {
+        const wake = () => { signal.removeEventListener('abort', wake); this.foregroundWaiters.delete(wake); resolve() }
+        this.foregroundWaiters.add(wake)
+        signal.addEventListener('abort', wake, { once: true })
+      }), signal)
+    }
+  }
   private epochs = 0
   readonly stats: KernelStats = { opens: 0, parses: 0, sourceReads: 0 }
 
@@ -188,6 +199,7 @@ export class ViewerKernel {
       this.inflight.set(command.requestId, entry)
       const expired = new AbortController()
       bindQueryDeadline(entry.controller.signal, expired.signal)
+      if (command.kind === 'viewport' || command.kind === 'read' && command.query.op === 'cell') this.foreground.add(entry.controller.signal)
       if (command.kind !== 'open' && command.kind !== 'close') {
         const captured = entry
         deadline = setTimeout(() => { this.abort(captured, 'query-timeout'); expired.abort() }, QUERY_DEADLINE_MS)
@@ -234,6 +246,8 @@ export class ViewerKernel {
         entry.session?.releaseSearch(dispatched.result.nextCursor)
       }
       if (entry) {
+        this.foreground.delete(entry.controller.signal)
+        if (!this.foreground.size) for (const wake of [...this.foregroundWaiters]) wake()
         this.inflight.delete(command.requestId)
         this.finished.set(command.requestId, entry.owner)
         if (this.finished.size > FINISHED_OWNERS_LIMIT) this.finished.delete(this.finished.keys().next().value as string)
@@ -241,7 +255,6 @@ export class ViewerKernel {
     }
   }
   private abort(entry: InFlight, reason: CancelReason): void {
-    if (reason === 'query-timeout') entry.reason = reason
     if (entry.controller.signal.aborted) return
     entry.reason = reason
     entry.controller.abort(reason)
@@ -419,7 +432,7 @@ export class ViewerKernel {
       case 'viewport': {
         const session = this.current(command.owner)
         if (!session) return this.stale(command, command.owner)
-        const out = await session.viewport(command.owner, command.window, signal)
+        const out = await session.viewport(command.owner, command.window, signal, command.scope)
         return 'result' in out ? reply(command, command.owner, { kind: 'complete', result: out.result }, out.diagnostics) : this.failed(command, command.owner, out)
       }
       case 'search': {
@@ -473,7 +486,7 @@ export class ViewerKernel {
     const evaluator = !this.options.filterEvaluator && this.pagedSources.has(source)
       ? { filterEvaluator: createWorkerFilterEvaluator(stamp => this.keysFor(stamp.docId), source.formatting?.()) } : {}
     try {
-      session = new DocumentSession(command.docId, source, { ...this.options, ...evaluator, profile: command.profile, epoch: ++this.epochs })
+      session = new DocumentSession(command.docId, source, { ...this.options, ...evaluator, waitForForeground: signal => this.waitForForeground(signal), profile: command.profile, epoch: ++this.epochs })
     } catch (cause) {
       // Ownership never transferred: release what open acquired.
       await source.release()

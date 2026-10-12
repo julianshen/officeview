@@ -422,7 +422,7 @@ export class ObjectXlsxSheetAdapter implements SourceStore {
 }
 
 function sheetGeometry(sheet: XlsxSheet): SheetGeometry {
-  return buildGeometry([...sheet.rows].sort((a, b) => a.index - b.index), sheet.cols)
+  return buildGeometry([...sheet.rows].sort((a, b) => a.index - b.index), sheet.cols, [], { hiddenCols: true })
 }
 /** Source-space geometry from authored rows (ascending) and column specs; shared by both adapters. */
 export function buildGeometry(

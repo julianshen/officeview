@@ -14,7 +14,7 @@ import type { RenderSheetAssets } from '../../xlsx/render'
 import { renderSheetViewport } from '../../xlsx/view/renderViewport'
 import { paintWatermark, type ResolvedWatermark } from '../../core/watermark'
 import type { LayoutCache } from '../../xlsx/view/textLayout'
-import { frameBudgetFor, type FrameBudget, type MergeQueryCache, type SheetGeometryResult } from '../../xlsx/view/viewport'
+import { frameBudgetFor, type FrameBudget, type MergeQueryCache, type SheetGeometryResult, type ViewportPlan } from '../../xlsx/view/viewport'
 import {
   BITMAP_BUDGETS, bitmapPoolPlan, MemoryPool, RGBA_BYTES, TILE_DEVICE_PX, TILE_PREFETCH_RING, TileCache,
   prefetchTiles, tileLogicalBox, tileRangeFor, type TileIndexRange, type TileKey, type TileSurface,
@@ -28,6 +28,7 @@ export interface CanvasTile extends TileSurface {
   cost?: { records: number; gridlines: number }
 }
 export interface SheetFrame {
+  plan?: (window: LogicalViewport, visible: boolean) => ViewportPlan
   sheet: XlsxSheet
   geometry: SheetGeometryResult
   identity: CacheIdentity
@@ -251,14 +252,22 @@ export class SheetTileRenderer {
       const scale = frame.zoom * frame.dpr
       ctx.setTransform(scale, 0, 0, scale, 0, 0)
       this.stats.basePaints++
+      let plan = frame.plan?.(viewport, visible)
+      if (plan?.kind === 'detail') {
+        plan = { ...plan, work: { ...plan.work } }
+        if (plan.work.records > budget.records || plan.work.gridlines > budget.gridlines) {
+          plan = { kind: 'coarse', diagnostics: [], groups: [{ groupId: 'frame-budget', bounds: box, slots: { start: 0, end: 0 }, cols: { c0: 0, c1: 0 } }], extent: frame.extent, work: { ...plan.work, records: 0, gridlines: 0 } }
+        } else { budget.records -= plan.work.records; budget.gridlines -= plan.work.gridlines }
+      }
       const result = renderSheetViewport(frame.sheet, ctx, frame.geometry, viewport, frame.assets, {
-        profile: this.profile, owner: frame.identity, cache: frame.layoutCache, merges: frame.merges, frameBudget: budget,
+        preparedPlan: plan, profile: this.profile, owner: frame.identity, cache: frame.layoutCache, merges: frame.merges, frameBudget: budget,
       })
-      kind = result.kind
+      kind = result.pending ? 'pending' : result.kind
       if (result.kind === 'detail') work = { records: result.work.records, gridlines: result.work.gridlines }
       this.stats.maxTileRecords = Math.max(this.stats.maxTileRecords, work.records)
     }
     surface.cost = work
+    if (kind === 'pending' || kind === 'diagnostic') { if (visible) this.stats.pendingTiles++; return { surface, retained: false } }
     const pending = frame.pending?.(box) ?? []
     if (pending.length) {
       if (visible) this.stats.pendingTiles++

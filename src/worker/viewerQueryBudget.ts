@@ -26,7 +26,7 @@ export function queryPayloadBytes(value: unknown, limit: number): number {
   return bytes
 }
 
-export function boundedQueryStore(store: SourceStore, budget: number, emitted?: (bytes: number) => void, maxRecords = 20_000, fullDomain = false): SourceStore {
+export function boundedQueryStore(store: SourceStore, budget: number, emitted?: (bytes: number) => void, maxRecords = 20_000, fullDomain = false, loadedOnly = false): SourceStore {
   const checked = <T>(value: T, emission = false): T => {
     const bytes = queryPayloadBytes(value, budget)
     if (bytes > budget) throw new FindError('resource-limit', 'Source query page exceeds its bounded byte budget')
@@ -52,11 +52,18 @@ export function boundedQueryStore(store: SourceStore, budget: number, emitted?: 
     queryOverview: async (request, options) => checked(await store.queryOverview(request, options)),
     ensureComplete: (rect, options) => store.ensureComplete(rect, options),
     async *scanPopulated(request, options) {
-      for await (const page of store.scanPopulated(request, options)) {
+      for await (const page of store.scanPopulated(loadedOnly ? { ...request, availability: 'loaded' } : request, options)) {
         if (page.items.length > 4096) throw new FindError('resource-limit', 'Source scan exceeds the 4096-cell page limit')
-        yield checked(page)
+        yield checked({ ...page, items: page.items.map(cell => store.valuePolicy === 'engine' && cell.formula !== undefined && cell.value === null && cell.hasCachedValue === false && !cell.unavailable ? { ...cell, unavailable: true } : cell) })
       }
     },
+    ...(store.scanOccupied ? { async *scanOccupied(request, options) {
+      for await (const page of store.scanOccupied!(loadedOnly ? { ...request, availability: 'loaded' } : request, options)) {
+        if (page.items.length > 4096) throw new FindError('resource-limit', 'Source occupancy scan exceeds its page limit')
+        yield checked(page)
+      }
+    } } satisfies Pick<SourceStore, 'scanOccupied'> : {}),
+    ...(store.settle ? { settle: (payload: object) => store.settle!(payload) } : {}),
     release: () => store.release(),
   }
 }

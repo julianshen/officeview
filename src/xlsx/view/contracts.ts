@@ -153,7 +153,11 @@ export type ColumnEntry =
   | { kind: 'unavailable'; row: SourceRow; cell: SingleCellPayload; reason: 'formula-value-unavailable' }
   | { kind: 'error'; r0: SourceRow; r1: SourceRow; code: SourceErrorCode; retryable: boolean }
   | ColumnLanes
-export interface PopulatedQuery { range: SourceRect; limit: number; cursor?: string }
+export interface PopulatedQuery {
+  range: SourceRect; limit: number; cursor?: string
+  /** Snapshot the loaded frontier; terminate with loading instead of waiting for import. */
+  availability?: 'loaded'
+}
 export interface SourceFailure { code: SourceErrorCode; retryable: boolean; message: string }
 export interface RangeCompletion {
   range: SourceRect
@@ -382,6 +386,11 @@ export type ViewportResult = (
   /** Mixed detail/coarse panes and exact active inspection share the same owner. */
   groups?: readonly ViewportOverviewGroup[]
   active?: ViewportCell
+  merges?: import('./viewport').StoreViewport['merges']
+  coarse?: import('./viewport').StoreViewport['coarse']
+  rowLines?: readonly number[]
+  colLines?: readonly number[]
+  work?: import('./viewport').ViewportWork
 }
 
 /** Every asynchronous publication captures the relevant complete owner, spec §10.1. */
@@ -463,7 +472,7 @@ export type WorkerCommand =
   | { kind: 'prepareColumns'; requestId: string; owner: CacheIdentity; cols: Uint16Array }
   | { kind: 'sort'; requestId: string; owner: CacheIdentity; spec: SortSpec | null }
   | { kind: 'filter'; requestId: string; owner: CacheIdentity; spec: FilterSpec | null; nowMs: number; keySets?: readonly FilterKeySet[] }
-  | { kind: 'viewport'; requestId: string; owner: CacheIdentity; window: LogicalViewport }
+  | { kind: 'viewport'; requestId: string; owner: CacheIdentity; window: LogicalViewport; scope?: 'frame' | 'tile' }
   | { kind: 'valueQuery'; requestId: string; owner: CacheIdentity; query: ColumnQuery }
   | { kind: 'search'; requestId: string; owner: WorkbookOwner; query: SearchQuery; cursor?: string }
   | { kind: 'read'; requestId: string; owner: CacheIdentity; query: SourceReadQuery }

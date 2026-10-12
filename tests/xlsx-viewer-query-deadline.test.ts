@@ -27,7 +27,7 @@ it('times out a never-resolving preparation read at 120 seconds and releases its
   try {
     await vi.advanceTimersByTimeAsync(119_999)
     expect(replies.filter(reply => reply.kind !== 'progress')).toHaveLength(0)
-    await vi.advanceTimersByTimeAsync(2)
+    await vi.advanceTimersByTimeAsync(1)
     expect(replies.filter(reply => reply.kind !== 'progress'), 'A stalled query must emit one terminal timeout reply').toMatchObject([
       { kind: 'cancelled', diagnostics: [{ code: 'query-timeout', message: expect.stringMatching(/120 seconds/) }] },
     ])
@@ -119,4 +119,101 @@ it.each(['evaluator', 'yield'] as const)('reclaims session leases when the timed
     kernel.session('doc')!.memory.trim(0)
     expect(kernel.session('doc')!.isResident('other'), 'A timed-out evaluator must unpin its inactive view').toBe(false)
   } finally { await kernel.handle({ kind: 'close', requestId: 'close', docId: 'doc' }, () => {}) }
+})
+
+
+it('cancels a signal-ignoring read promptly without relabeling it as a timeout', async () => {
+  vi.useFakeTimers()
+  const document = workbookOf([{ sheetId: 's', cells: [{ row: 0, col: 0, value: 5 }] }])
+  const source = createObjectWorkbookSource(document, 'doc')
+  vi.spyOn(source.store('s'), 'queryColumn').mockImplementation(() => new Promise(() => {}))
+  const kernel = new ViewerKernel({ parse: async () => document, openSource: async () => source }, { yield: async () => {} })
+  await kernel.handle({ kind: 'open', requestId: 'open', docId: 'doc', source: { kind: 'object', document }, profile: 'D' }, () => {})
+  const replies: WorkerReply[] = []
+  const pending = kernel.handle({ kind: 'prepareColumns', requestId: 'held', owner: initialIdentity('doc', 's'), cols: Uint16Array.of(0) }, out => replies.push(out))
+  try {
+    for (let i = 0; i < 30; i++) await Promise.resolve()
+    expect(kernel.lifecycleStats().transientBytes).toBeGreaterThan(0)
+    await kernel.handle({ kind: 'cancel', requestId: 'cancel', targetRequestId: 'held' }, () => {})
+    for (let i = 0; i < 60; i++) await Promise.resolve()
+    expect(replies.at(-1)).toMatchObject({ kind: 'cancelled', diagnostics: [{ code: 'cancel-requested' }] })
+    expect(kernel.lifecycleStats()).toMatchObject({ inflight: 0, transientBytes: 0 })
+    await vi.advanceTimersByTimeAsync(120_000)
+    expect(replies.filter(r => r.kind !== 'progress')).toHaveLength(1)
+    expect(replies.at(-1)?.diagnostics.some(d => d.code === 'query-timeout')).toBe(false)
+    await pending
+  } finally { await kernel.handle({ kind: 'close', requestId: 'close', docId: 'doc' }, () => {}) }
+})
+
+
+it('gives a current viewport priority over a background search at its next cooperative yield', async () => {
+  const document = workbookOf([{ sheetId: 's', cells: Array.from({ length: 4500 }, (_, row) => ({ row, col: 0, value: 'alpha' })) }])
+  const source = createObjectWorkbookSource(document, 'doc')
+  let resume!: () => void, began!: () => void, releaseViewport!: () => void, viewportBegan!: () => void
+  const yielded = new Promise<void>(r => { began = r }), held = new Promise<void>(r => { resume = r })
+  const viewportStarted = new Promise<void>(r => { viewportBegan = r }), viewportHeld = new Promise<void>(r => { releaseViewport = r })
+  const original = source.store('s').readRows.bind(source.store('s'))
+  vi.spyOn(source.store('s'), 'readRows').mockImplementationOnce(async (q, c, o) => { viewportBegan(); await viewportHeld; return original(q, c, o) })
+  const formatted = vi.spyOn(source, 'displayText')
+  let first = true, ticks = 0
+  const kernel = new ViewerKernel({ parse: async () => document, openSource: async () => source }, { now: () => ticks += 11, yield: async phase => { if (phase === 'find-scan' && first) { first = false; began(); await held } } })
+  await kernel.handle({ kind: 'open', requestId: 'open', docId: 'doc', source: { kind: 'object', document }, profile: 'D' }, () => {})
+  const searchReplies: WorkerReply[] = [], viewportReplies: WorkerReply[] = []
+  const search = kernel.handle({ kind: 'search', requestId: 'search', owner: kernel.session('doc')!.workbookOwner(), query: { text: 'alpha', caseSensitive: false } }, r => searchReplies.push(r))
+  await yielded
+  const viewport = kernel.handle({ kind: 'viewport', requestId: 'viewport', owner: initialIdentity('doc', 's'), window: { box: { x: 0, y: 0, width: 64, height: 100 }, zoom: 1, deviceScale: 1 } }, r => viewportReplies.push(r))
+  try {
+    await viewportStarted
+    const before = formatted.mock.calls.length
+    resume()
+    for (let i = 0; i < 200; i++) await Promise.resolve()
+    expect(formatted.mock.calls.length, 'Background work cannot resume past its yield while viewport is pending').toBe(before)
+    expect(searchReplies, 'Background search must remain paused while the foreground viewport is pending').toHaveLength(0)
+    releaseViewport()
+    await viewport
+    expect(viewportReplies.at(-1)).toMatchObject({ kind: 'complete' })
+    await search
+    expect(searchReplies.at(-1)).toMatchObject({ kind: 'complete' })
+  } finally { resume(); releaseViewport(); await kernel.handle({ kind: 'close', requestId: 'close', docId: 'doc' }, () => {}); await search; await viewport }
+})
+
+
+it('cancels a retained search continuation while foreground work is pending', async () => {
+  const document = workbookOf([{ sheetId: 's', cells: Array.from({ length: 4500 }, (_, row) => ({ row, col: 0, value: 'hit' })) }])
+  const source = createObjectWorkbookSource(document, 'doc')
+  let continuation = false, ticks = 0, began!: () => void, viewportBegan!: () => void, release!: () => void
+  const started = new Promise<void>(r => { began = r }), viewportStarted = new Promise<void>(r => { viewportBegan = r }), held = new Promise<void>(r => { release = r })
+  const kernel = new ViewerKernel({ parse: async () => document, openSource: async () => source }, { now: () => ticks += 11, yield: async () => { if (continuation) began() } })
+  await kernel.handle({ kind: 'open', requestId: 'open', docId: 'doc', source: { kind: 'object', document }, profile: 'D' }, () => {})
+  const owner = kernel.session('doc')!.workbookOwner(), query = { text: 'hit', caseSensitive: false }
+  let cursor: string | undefined
+  for (let i = 0; i < 20; i++) {
+    const replies: WorkerReply[] = []
+    await kernel.handle({ kind: 'search', requestId: `page-${i}`, owner, query, ...(cursor ? { cursor } : {}) }, r => replies.push(r))
+    const out = replies.at(-1)!
+    expect(out.kind).toBe('complete')
+    if (out.kind !== 'complete' || out.result.kind !== 'search') throw new Error('Search failed')
+    cursor = out.result.nextCursor
+  }
+  const searchBytes = kernel.lifecycleStats().transientBytes
+  const original = source.store('s').readRows.bind(source.store('s'))
+  vi.spyOn(source.store('s'), 'readRows').mockImplementationOnce(async (q, c, o) => { viewportBegan(); await held; return original(q, c, o) })
+  const viewport = kernel.handle({ kind: 'viewport', requestId: 'viewport', owner: initialIdentity('doc', 's'), window: { box: { x: 0, y: 0, width: 64, height: 100 }, zoom: 1, deviceScale: 1 } }, () => {})
+  await viewportStarted
+  const viewportBytes = kernel.lifecycleStats().transientBytes - searchBytes
+  continuation = true
+  const replies: WorkerReply[] = []
+  const pending = kernel.handle({ kind: 'search', requestId: 'next', owner, query, cursor }, r => replies.push(r))
+  try {
+    await started
+    for (let i = 0; i < 60; i++) await Promise.resolve()
+    await kernel.handle({ kind: 'cancel', requestId: 'cancel', targetRequestId: 'next' }, () => {})
+    for (let i = 0; i < 100; i++) await Promise.resolve()
+    expect(replies.at(-1)).toMatchObject({ kind: 'cancelled', diagnostics: [{ code: 'cancel-requested' }] })
+    await pending
+    expect(kernel.lifecycleStats()).toMatchObject({ inflight: 1, transientBytes: viewportBytes })
+    release()
+    await viewport
+    expect(kernel.lifecycleStats()).toMatchObject({ inflight: 0, transientBytes: 0 })
+  } finally { release(); await kernel.handle({ kind: 'close', requestId: 'close', docId: 'doc' }, () => {}); await pending; await viewport }
 })
