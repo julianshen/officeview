@@ -24,7 +24,8 @@ import { isLoadEvaluated } from '../view/values'
 import { createQuotaLedger, quotaLimitsFor, type QuotaLedger } from './quota'
 import { classifyPart, inventoryLimits } from './admission'
 import { anchorRecordEvents, newSheetMetadata, normalizeRowMetadata, sharedStringEvents, sheetRecordEvents, type SheetMetadata } from './sheetRecords'
-import { PageBuilder, SourcePageStore, browserPageStorageEnv, choosePageBackend, type PageStorageEnv, type StoredPage } from './sourcePages'
+import { PageBuilder, SourcePageStore, browserPageStorageEnv, choosePageBackend, payloadBytes, type PageStorageEnv, type StoredPage } from './sourcePages'
+import { BUILDER_RECORD_BYTES, PENDING_STRING_BYTES } from './constructionMemory'
 import { importLimitsFor, type ImportLimits, type ImportLimitOverrides, type ImportOutcome, type ImportProgress, type ImportSession, type ImportedPage } from './importSession'
 
 const MiB = 1024 * 1024
@@ -217,22 +218,40 @@ export async function openImportSession(source: Extract<SourceHandle, { kind: 'b
     if (sstPath) {
       const entry = inventory.find(sstPath)!
       let chunk: string[] = []
+      let chunkBytes = 0
       let chunkIndex = 0
-      const pending: Array<{ index: number; strings: string[] }> = []
+      const pending: Array<{ index: number; strings: string[]; bytes: number }> = []
+      // Strings waiting for their chunk commit are construction memory (§12.4).
+      const share = store.construction.share('pending shared strings')
+      let pendingBytes = 0
       const events = sharedStringEvents(sstPath, (text) => {
+        const cost = 2 * text.length + PENDING_STRING_BYTES
+        share.need(pendingBytes + cost)
+        pendingBytes += cost
+        chunkBytes += cost
         chunk.push(text)
         sstCount++
         if (sstCount > limits.paged.uniqueStrings) throw new PackageError('resource-limit', `more than ${limits.paged.uniqueStrings} shared strings`, sstPath)
-        if (chunk.length === SST_CHUNK) { pending.push({ index: chunkIndex++, strings: chunk }); chunk = [] }
+        if (chunk.length === SST_CHUNK) { pending.push({ index: chunkIndex++, strings: chunk, bytes: chunkBytes }); chunk = []; chunkBytes = 0 }
       }, limits.maxTokenChars)
-      const flush = async () => { for (const c of pending.splice(0)) await store.commitStrings(c.index, c.strings, SST_CHUNK, options.docId) }
-      try {
-        await tokenizeBytes(openPart(src, entry, partOpts(sstPath, limits.paged.sharedStringsBytes)), events, { signal, limits: { maxTokenChars: limits.maxTokenChars }, afterChunk: flush })
-      } finally {
-        ledger.drainQueue()
+      const flush = async () => {
+        for (const c of pending.splice(0)) {
+          await store.commitStrings(c.index, c.strings, SST_CHUNK, options.docId)
+          pendingBytes -= c.bytes
+          share.need(pendingBytes)
+        }
       }
-      if (chunk.length) pending.push({ index: chunkIndex++, strings: chunk })
-      await flush()
+      try {
+        try {
+          await tokenizeBytes(openPart(src, entry, partOpts(sstPath, limits.paged.sharedStringsBytes)), events, { signal, limits: { maxTokenChars: limits.maxTokenChars }, afterChunk: flush })
+        } finally {
+          ledger.drainQueue()
+        }
+        if (chunk.length) pending.push({ index: chunkIndex++, strings: chunk, bytes: chunkBytes })
+        await flush()
+      } finally {
+        share.release()
+      }
       compressedRead += entry.compressedSize
       progress('sharedStrings')
     }
@@ -278,10 +297,21 @@ export async function openImportSession(source: Extract<SourceHandle, { kind: 'b
       let pageSeq = 0
       let r0 = MAX_ROWS, r1 = -1, c0 = MAX_COLS, c1 = -1
       const pending: StoredPage[] = []
+      // Builder buffers and built pages waiting for their commit are construction
+      // memory (§12.4), charged before they grow; the store charges encode scratch.
+      const share = store.construction.share('page construction')
+      let pendingBytes = 0
+      const pageCost = (page: StoredPage) => payloadBytes(page.payload) + 2 * (page.blobs ?? []).reduce((n, b) => n + b.length, 0)
+      const account = (extra = 0) => share.need(builder.memoryBytes + pendingBytes + extra)
       const cut = (lastRow: number) => {
+        // build() copies the builder into typed lanes of (about) the encoded size.
+        account(builder.bytes)
         const payload = builder.build()
-        pending.push({ sheetId: sheet.sheetId, pageId: `p${pageSeq++}`, r0: pageStart, r1: lastRow, cellCount: payload.rows.length, bytes: builder.bytes, payload, blobs: builder.blobs })
+        const page: StoredPage = { sheetId: sheet.sheetId, pageId: `p${pageSeq++}`, r0: pageStart, r1: lastRow, cellCount: payload.rows.length, bytes: builder.bytes, payload, blobs: builder.blobs }
+        pending.push(page)
+        pendingBytes += pageCost(page)
         builder = newBuilder()
+        account()
         pageStart = lastRow + 1
         rowsInPage = 0
       }
@@ -289,6 +319,8 @@ export async function openImportSession(source: Extract<SourceHandle, { kind: 'b
         for (const page of pending.splice(0)) {
           throwIfAborted(signal)
           await store.commit(page, options.docId)
+          pendingBytes -= pageCost(page)
+          account()
           sheet.importedThroughRow = page.r1
           populatedCells += page.cellCount
           options.onCommit?.(page)
@@ -304,6 +336,7 @@ export async function openImportSession(source: Extract<SourceHandle, { kind: 'b
         maxStructuralRecords: limits.paged.structuralRecords,
         declared: container,
         onCell(record) {
+          account(BUILDER_RECORD_BYTES + 2 * record.text.length)
           builder.add(record.row, record.col, record.kind, record.styleIndex, record.num, record.text, record.cached, record.meta, record.valueIsError)
           const meta = record.meta
           if ((meta?.formula !== undefined || meta?.sharedFormula !== undefined)
@@ -327,19 +360,24 @@ export async function openImportSession(source: Extract<SourceHandle, { kind: 'b
         },
       })
       try {
-        await tokenizeBytes(openPart(src, entry, partOpts(sheet.partPath, limits.paged.expandedBytes)), events, {
-          signal, limits: { maxTokenChars: limits.maxTokenChars }, afterChunk: commitPending,
-        })
-      } catch (error) {
-        sheet.state = 'incomplete'
-        sheet.failure = asFailure(error)
-        throw error
+        try {
+          await tokenizeBytes(openPart(src, entry, partOpts(sheet.partPath, limits.paged.expandedBytes)), events, {
+            signal, limits: { maxTokenChars: limits.maxTokenChars }, afterChunk: commitPending,
+          })
+        } catch (error) {
+          sheet.state = 'incomplete'
+          sheet.failure = asFailure(error)
+          throw error
+        } finally {
+          ledger.drainQueue()
+        }
+        // The last page covers the tail: every row after it is known blank.
+        cut(MAX_ROWS - 1)
+        await commitPending()
       } finally {
-        ledger.drainQueue()
+        // Completion, failure and cancellation all return the construction share.
+        share.release()
       }
-      // The last page covers the tail: every row after it is known blank.
-      cut(MAX_ROWS - 1)
-      await commitPending()
       if (r1 >= 0) sheet.used = { r0, r1, c0, c1 }
       normalizeRowMetadata(sheet.metadata)
       for (const ref of sheet.metadata.merges) {
@@ -424,7 +462,9 @@ export async function openImportSession(source: Extract<SourceHandle, { kind: 'b
       completeness = 'incomplete'
       workbook.completeness = 'incomplete'
       workbook.failure = failure
-      workbook.diagnostics.push({ code: `import-${failure.code}`, message: failure.message })
+      // A construction peak the worker pool cannot hold has its own typed diagnostic (§12.4).
+      const memory = isPackageError(error) && error.reason === 'memory-budget'
+      workbook.diagnostics.push({ code: memory ? 'import-memory-budget' : `import-${failure.code}`, message: failure.message })
       // A failed page write leaves nothing trustworthy behind: remove every page.
       if (failure.code === 'storage-error' || failure.code === 'quota') await store.abandon(options.docId).catch(() => {})
       return { kind: 'incomplete', failure, stamp }

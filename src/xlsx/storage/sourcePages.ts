@@ -14,7 +14,8 @@
  * reloads the same bytes from the backend under the same source identity.
  */
 import { PackageError, type PackageErrorCode } from '../../core/package-error'
-import type { MemoryPool, PoolEntry } from '../view/tileCache'
+import { MemoryPool, WORKER_BUDGETS, type PoolEntry } from '../view/tileCache'
+import { BUILDER_RECORD_BYTES, ConstructionMemory, META_OBJECT_BYTES, PAGE_SUMMARY_BYTES, type ConstructionShare } from './constructionMemory'
 import type { QuotaLedger, Reservation } from './quota'
 import type { ImportedPage, PageSink } from './importSession'
 import { addRecord, emptyAggregate, type RectAggregate } from './overviewIndex'
@@ -106,6 +107,10 @@ export class PageBuilder {
   get blobs(): readonly string[] { return this.spilled }
   /** Stored bytes of the spilled values (2 per UTF-16 code unit). */
   get spilledBytes(): number { return 2 * this.spilledUnits }
+  /** Estimated heap held by this builder, for construction accounting (constructionMemory.ts). */
+  get memoryBytes(): number {
+    return this.rows.length * BUILDER_RECORD_BYTES + 2 * (this.units + this.spilledUnits + this.metaChars) + this.meta.size * META_OBJECT_BYTES
+  }
   /** Exact encodePage() size of what has been added (the page target is charged on it). */
   get bytes(): number {
     const n = this.rows.length
@@ -174,11 +179,14 @@ function encodedSize(n: number, units: number, metaLength: number): number {
   return 32 + [8 * n, 4 * n, 4 * n, 4 * (n + 1), 2 * n, 2 * units, n, n, 2 * metaLength].reduce((sum, size) => sum + align8(size), 0)
 }
 
-export function encodePage(p: CellPagePayload): Uint8Array {
+/** `reserve` is told the scratch bytes (encoded buffer plus meta JSON) before
+ * the buffer is allocated, so the caller can charge or refuse them first. */
+export function encodePage(p: CellPagePayload, reserve?: (scratchBytes: number) => void): Uint8Array {
   const n = p.rows.length
   const metaJson = p.meta.size ? JSON.stringify([...p.meta]) : ''
   const sizes = [8 * n, 4 * n, 4 * n, 4 * (n + 1), 2 * n, 2 * p.text.length, n, n, 2 * metaJson.length]
   const total = 32 + sizes.reduce((sum, s) => sum + align8(s), 0)
+  reserve?.(total + 2 * metaJson.length)
   const buffer = new ArrayBuffer(total)
   const head = new Uint32Array(buffer, 0, 8)
   head[0] = MAGIC; head[1] = n; head[2] = p.text.length; head[3] = metaJson.length
@@ -235,10 +243,12 @@ export function decodePage(bytes: Uint8Array): CellPagePayload {
 
 /** Shared strings: a chunk is a text lane plus offsets. */
 export interface StringChunk { text: Uint16Array; textStart: Uint32Array }
-export function encodeStrings(strings: readonly string[]): Uint8Array {
+export function encodeStrings(strings: readonly string[], reserve?: (scratchBytes: number) => void): Uint8Array {
   let units = 0
   for (const s of strings) units += s.length
-  const buffer = new ArrayBuffer(8 + align8(4 * (strings.length + 1)) + 2 * units)
+  const total = 8 + align8(4 * (strings.length + 1)) + 2 * units
+  reserve?.(total)
+  const buffer = new ArrayBuffer(total)
   const head = new Uint32Array(buffer, 0, 2)
   head[0] = strings.length; head[1] = units
   const starts = new Uint32Array(buffer, 8, strings.length + 1)
@@ -468,6 +478,8 @@ export interface SourcePageStoreOptions {
   ledger?: QuotaLedger
   /** Decoded-page budget used until a MemoryPool is bound (default 32 MiB). */
   cacheBytes?: number
+  /** Provisional construction budget until the document pool is bound (default: the desktop worker budget). */
+  memoryBudgetBytes?: number
 }
 export interface PageStoreStats {
   committed: number
@@ -496,6 +508,8 @@ export class SourcePageStore implements PageSink {
   private readonly reservations: Reservation[] = []
   private readonly resident = new Map<string, Resident<CellPagePayload | StringChunk>>()
   private readonly loading = new Map<string, Promise<CellPagePayload | StringChunk>>()
+  /** Import/index construction charges (§12.4); see constructionMemory.ts. */
+  readonly construction: ConstructionMemory
   private pool: MemoryPool | undefined
   private cacheBytes: number
   private stringChunkSize = 0
@@ -510,6 +524,7 @@ export class SourcePageStore implements PageSink {
     this.backend = options.backend
     this.chargedTo = options.ledger
     this.cacheBytes = options.cacheBytes ?? 32 * 1024 * 1024
+    this.construction = new ConstructionMemory(new MemoryPool({ limitBytes: options.memoryBudgetBytes ?? WORKER_BUDGETS.D }), options.docId)
   }
   get backendKind(): PageBackendKind { return this.backend.kind }
   get ledger(): QuotaLedger | undefined { return this.chargedTo }
@@ -529,18 +544,34 @@ export class SourcePageStore implements PageSink {
   async commit(page: ImportedPage & { payload?: CellPagePayload; blobs?: readonly string[] }, docId = this.docId): Promise<void> {
     this.check(docId)
     if (!page.payload) throw new PackageError('parse-error', `page ${page.pageId} has no payload`)
-    await this.commitBlobs(page.payload, page.blobs ?? [], page.pageId, docId)
-    const bytes = encodePage(page.payload)
-    this.charge('pages', bytes.byteLength)
+    const list = this.index.get(page.sheetId) ?? []
+    // The summary is persistent index memory: charged before anything is written.
+    const indexKey = `index:${page.sheetId}`
+    this.construction.persist(indexKey, (list.length + 1) * PAGE_SUMMARY_BYTES, 'the page index')
+    const scratch = this.construction.share('page encoding')
+    let bytes: Uint8Array
     try {
-      await this.backend.put(`${page.sheetId}/${page.pageId}`, bytes)
+      await this.commitBlobs(page.payload, page.blobs ?? [], page.pageId, docId, scratch)
+      bytes = encodePage(page.payload, (n) => scratch.need(n))
+      this.charge('pages', bytes.byteLength)
+      try {
+        await this.backend.put(`${page.sheetId}/${page.pageId}`, bytes)
+      } catch (error) {
+        throw storageError(error, 'writing a source page')
+      }
     } catch (error) {
-      throw storageError(error, 'writing a source page')
+      // The page was not indexed: return its summary charge. A disposed store
+      // already released everything and must not charge again.
+      if (this.live) {
+        try { this.construction.persist(indexKey, list.length * PAGE_SUMMARY_BYTES, 'the page index') } catch { /* pool refused or closed */ }
+      }
+      throw error
+    } finally {
+      scratch.release()
     }
     // A store abandoned while the write was in flight never indexes the page.
     this.check(docId)
     const summary = summarize(page.sheetId, page.pageId, page.r0, page.r1, page.payload, bytes.byteLength)
-    const list = this.index.get(page.sheetId) ?? []
     if (list.length && list[list.length - 1].r1 >= page.r0) throw new PackageError('parse-error', `page ${page.pageId} overlaps the previous page`)
     list.push(summary)
     this.index.set(page.sheetId, list)
@@ -554,7 +585,7 @@ export class SourcePageStore implements PageSink {
    * value, bounded by the tokenizer's maxTokenChars, and is charged to the
    * storage-backed blobRecords pool; abandon/close remove them with the pages.
    */
-  private async commitBlobs(p: CellPagePayload, blobs: readonly string[], pageId: string, docId: string): Promise<void> {
+  private async commitBlobs(p: CellPagePayload, blobs: readonly string[], pageId: string, docId: string, scratch: ConstructionShare): Promise<void> {
     const ids = new Map<number, number>()
     for (let i = 0; i < p.flags.length; i++) {
       if ((p.flags[i] & F_BLOB) === 0) continue
@@ -562,7 +593,7 @@ export class SourcePageStore implements PageSink {
       const text = blobs[ordinal]
       if (text === undefined || ids.has(ordinal)) throw new PackageError('parse-error', `page ${pageId} references a missing oversized value`)
       const id = this.blobCount++
-      const bytes = encodeStrings([text])
+      const bytes = encodeStrings([text], (n) => scratch.need(n))
       this.charge('blobRecords', bytes.byteLength)
       try {
         await this.backend.put(`blob/${id}`, bytes)
@@ -580,13 +611,20 @@ export class SourcePageStore implements PageSink {
   /** Shared strings, in fixed-size chunks addressed by id. */
   async commitStrings(chunk: number, strings: readonly string[], chunkSize: number, docId = this.docId): Promise<void> {
     this.check(docId)
-    const bytes = encodeStrings(strings)
-    this.charge('sharedStrings', bytes.byteLength)
-    await this.backend.put(`sst/${chunk}`, bytes)
+    const scratch = this.construction.share('shared-string encoding')
+    let stored = 0
+    try {
+      const bytes = encodeStrings(strings, (n) => scratch.need(n))
+      this.charge('sharedStrings', bytes.byteLength)
+      await this.backend.put(`sst/${chunk}`, bytes)
+      stored = bytes.byteLength
+    } finally {
+      scratch.release()
+    }
     this.check(docId)
+    this.counters.storedBytes += stored
     this.stringChunkSize = chunkSize
     this.stringCount = Math.max(this.stringCount, chunk * chunkSize + strings.length)
-    this.counters.storedBytes += bytes.byteLength
   }
   get sharedStringCount(): number { return this.stringCount }
 
@@ -601,6 +639,7 @@ export class SourcePageStore implements PageSink {
   }
   private async dispose(): Promise<void> {
     for (const r of this.reservations.splice(0)) r.release()
+    this.construction.releaseAll()
     for (const res of this.resident.values()) res.entry?.release()
     this.resident.clear()
     this.loading.clear()
@@ -613,6 +652,7 @@ export class SourcePageStore implements PageSink {
 
   /** Registers decoded pages in the document pool's `source` tier from now on. */
   bindMemory(pool: MemoryPool): void {
+    this.construction.rebind(pool)
     this.pool = pool
     for (const [key, res] of [...this.resident]) {
       if (!res.entry) res.entry = this.retain(key, res.bytes)
