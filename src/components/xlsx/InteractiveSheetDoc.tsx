@@ -53,7 +53,7 @@ import { SheetImageCache, imageBudgetFor, preparePrintUnits, prepareSheetAssets,
 import type { Paintable, PaintableArray } from '../../render/paint'
 import { GridSemantics, type GridTransition } from './GridSemantics'
 import { GRID_HEADER_SIZE, columnHeaderHeight } from './GridHeaders'
-import { useControlMedia } from './controlMedia'
+import { useControlMedia, useLive } from './controlMedia'
 import { FilterDropdown } from './FilterDropdown'
 import { SortDialog } from './SortDialog'
 import { createViewerControlResources, viewerControls, type ViewerControlResources, type ViewerControls } from './viewerControlsClient'
@@ -312,10 +312,17 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
   // ---- pane size and device scale ----
   const paneRef = useRef<HTMLDivElement | null>(null)
   const [pane, setPane] = useState(FALLBACK_PANE)
-  useEffect(() => {
+  const live = useLive()
+  // A layout effect: its cleanup disconnects the observer inside the commit
+  // that removes the pane, before the browser can report the removal. A report
+  // already queued for a detached pane is ignored, so no update is ever queued
+  // for an unmounted viewer (React would keep it, and the tree, until the
+  // host's root renders again).
+  useLayoutEffect(() => {
     const el = paneRef.current
     if (!el) return
     const update = () => {
+      if (!live.current || !el.isConnected) return
       const width = el.clientWidth || FALLBACK_PANE.width, height = el.clientHeight || FALLBACK_PANE.height
       setPane(current => current.width === width && current.height === height ? current : { width, height })
     }
@@ -327,7 +334,7 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
     const ro = new ResizeObserver(update)
     ro.observe(el)
     return () => ro.disconnect()
-  }, [])
+  }, [live])
   const touchControls = useControlMedia('(pointer: coarse)')
   const headerHeight = columnHeaderHeight(touchControls, true, true)
   const viewport: ViewportSize = useMemo(() => ({ width: Math.max(1, pane.width - GRID_HEADER_SIZE), height: Math.max(1, pane.height - headerHeight) }), [pane, headerHeight])
@@ -737,6 +744,7 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
   const [valueNotice, setValueNotice] = useState(() => source.valueStatus?.().message)
   useEffect(() => {
     const refresh = () => {
+      if (!live.current) return false
       const status = source.valueStatus?.()
       setValueNotice(status?.message)
       return status?.policy === 'cached' && status.formulas === undefined && !status.ended
@@ -744,7 +752,7 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
     if (!refresh()) return
     const timer = setInterval(() => { if (!refresh()) clearInterval(timer) }, 100)
     return () => clearInterval(timer)
-  }, [source])
+  }, [source, live])
   const notices = [...new Set([...(doc.diagnostics ?? []).filter(d => d.feature !== SAVED_VALUES_DIAGNOSTIC && ['alternate-content-data', 'large-file-compatibility', 'possibly-damaged'].includes(d.feature)).map(d => d.message), ...(source.openDiagnostics ?? []).filter(d => d.code !== SAVED_VALUES_DIAGNOSTIC).map(d => d.message), ...(valueNotice ? [valueNotice] : [])])]
   // A worker-backed sheet is complete only once its import finished (LIFE-03).
   const loadState = remote?.loadState(activeSheetId)

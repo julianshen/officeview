@@ -29,11 +29,13 @@ const gc = vm.runInNewContext('gc') as () => void
 async function collect(): Promise<void> {
   for (let i = 0; i < 6; i++) { gc(); await new Promise(resolve => setTimeout(resolve, 10)) }
 }
-/** React keeps the last root that ran passive effects in a module variable
- * (rootWithPassiveNestedUpdates) and the last event's target fiber
- * (return_targetInst; both found with heap snapshots) until another root
- * commits one that does too. A host page keeps re-rendering after closing a
- * document; tests mount and remove such a root before checking collection. */
+/** React's DEVELOPMENT build keeps owner stacks (_debugStack) on fibers, and
+ * the last event's target fiber (return_targetInst) and the last root with
+ * passive updates stay referenced until the next event/commit; through the
+ * owner stack's closures they reach the unmounted viewer (heap snapshots).
+ * The production build detaches those fibers. These dev-build tests flush that
+ * dev-only retention; the production behaviour (collection with no further
+ * render or event) is tested in xlsx-viewer-unmount-gc.test.tsx. */
 function PassiveUpdate(): JSX.Element {
   const [n, setN] = useState(0)
   useEffect(() => { if (n === 0) setN(1) }, [n])
