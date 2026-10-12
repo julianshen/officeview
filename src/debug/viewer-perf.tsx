@@ -143,7 +143,11 @@ const state: ViewerPerf = {
     const api = (performance as unknown as { measureUserAgentSpecificMemory?: () => Promise<unknown> }).measureUserAgentSpecificMemory
     if (!globalThis.crossOriginIsolated) return { unavailable: 'page is not crossOriginIsolated' }
     if (typeof api !== 'function') return { unavailable: 'performance.measureUserAgentSpecificMemory is not implemented' }
-    try { return await api.call(performance) } catch (error) { return { unavailable: error instanceof Error ? error.message : String(error) } }
+    // Chrome may defer the result to a later GC; a bounded wait keeps a hung
+    // probe labelled unavailable instead of stalling the run.
+    try {
+      return await Promise.race([api.call(performance), new Promise(resolve => setTimeout(() => resolve({ unavailable: 'measureUserAgentSpecificMemory did not resolve within 30 s' }), 30_000))])
+    } catch (error) { return { unavailable: error instanceof Error ? error.message : String(error) } }
   },
 }
 window.__viewerPerf = state
@@ -167,7 +171,8 @@ function probe(worker: Worker | null, request: { __perf: PerfRequest['__perf'] }
     }
     // A worker that fails to load or throws never replies: report it, never hang.
     const onError = (event: ErrorEvent) => done({ __perfReply: id, kind: 'error', message: `worker error: ${event.message || 'failed to load'}` })
-    const timer = setTimeout(() => done({ __perfReply: id, kind: 'error', message: 'worker probe timed out after 600 s' }), 600_000)
+    const limitMs = request.__perf === 'import' ? 600_000 : 30_000
+    const timer = setTimeout(() => done({ __perfReply: id, kind: 'error', message: `worker probe timed out after ${limitMs / 1000} s` }), limitMs)
     worker.addEventListener('message', listener)
     worker.addEventListener('error', onError)
     worker.postMessage({ ...request, id }, transfer)

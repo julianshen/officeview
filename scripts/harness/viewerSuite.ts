@@ -43,6 +43,7 @@ const F2_VIEWPORT_SAMPLES = 10
 const EARLY_MISS_SAMPLES = 5
 /** Filter apply + clear re-admits the 1M-row range per sample: fewer, labelled samples. */
 const FILTER_APPLY_SAMPLES = 10
+const MEMORY_SESSION_LIMIT_MS = 6 * 60_000
 
 type W = Window & { __viewerPerf: ViewerPerf }
 /** Runs a closure-free function against window.__viewerPerf in the page. */
@@ -308,16 +309,30 @@ async function memorySession(context: BrowserContext, base: string, fixture: Vie
   try { cdp = await context.newCDPSession(page) } catch { cdp = null }
   const gcMain = async () => { if (cdp) await cdp.send('HeapProfiler.collectGarbage') }
   const heap = async (): Promise<Heap | null> => (cdp ? (await cdp.send('Runtime.getHeapUsage')) as Heap : null)
+  // Every probe is bounded: a probe that does not answer is recorded as a timeout
+  // (named in the receipt), never a fabricated 0 and never a stalled run.
+  const timeouts: string[] = []
+  const bounded = async <T>(what: string, promise: Promise<T>, ms = 60_000): Promise<T | null> => {
+    let timer: ReturnType<typeof setTimeout> | undefined
+    const TIMEOUT = Symbol('timeout')
+    const result = await Promise.race([promise, new Promise<typeof TIMEOUT>(resolve => { timer = setTimeout(() => resolve(TIMEOUT), ms) })]).finally(() => clearTimeout(timer))
+    if (result === TIMEOUT) { timeouts.push(what); log(`      timeout: ${what}`); return null }
+    return result
+  }
   const checkpoint = async (name: string) => {
-    await gcMain()
-    await perf(page, p => p.workerGc())
-    await page.waitForTimeout(200)
-    await gcMain()
-    const [h, worker, uasm, canvas, storage, frame] = await Promise.all([
-      heap(), perf(page, p => p.workerStats()), perf(page, p => p.measureMemory()), perf(page, p => p.canvasBytes()), perf(page, p => p.storageEstimate()),
-      perf(page, p => ({ peakBitmapBytes: p.peakBitmapBytes, bitmapBytes: p.lastFrame?.bitmapBytes ?? null, budgetBytes: p.lastFrame?.budgetBytes ?? null, workersCreated: p.workersCreated, workersTerminated: p.workersTerminated })),
-    ])
-    return { name, heap: h, heapBytes: h ? heapBytes(h) : null, worker, uasm: uasmSplit(uasm as Uasm), canvas, storage, frame, browserProcessRssBytes: browserProcessRss() }
+    log(`      checkpoint ${fixture.key}/${name} at ${new Date().toISOString().slice(11, 19)}`)
+    await bounded(`${name} main gc`, gcMain())
+    await bounded(`${name} worker gc`, perf(page, p => p.workerGc()))
+    await new Promise(resolve => setTimeout(resolve, 200))
+    await bounded(`${name} main gc 2`, gcMain())
+    const h = await bounded(`${name} heap`, heap())
+    const worker = await bounded(`${name} worker stats`, perf(page, p => p.workerStats()))
+    const uasm = await bounded(`${name} uasm`, perf(page, p => p.measureMemory()))
+    const canvas = (await bounded(`${name} canvas`, perf(page, p => p.canvasBytes()))) ?? { count: -1, bytes: -1 }
+    const storage = (await bounded(`${name} storage`, perf(page, p => p.storageEstimate()), 15_000)) ?? { usage: null, quota: null }
+    const frame = (await bounded(`${name} frame`, perf(page, p => ({ peakBitmapBytes: p.peakBitmapBytes, bitmapBytes: p.lastFrame?.bitmapBytes ?? null, budgetBytes: p.lastFrame?.budgetBytes ?? null, workersCreated: p.workersCreated, workersTerminated: p.workersTerminated }))))
+      ?? { peakBitmapBytes: 0, bitmapBytes: null, budgetBytes: null, workersCreated: -1, workersTerminated: -1 }
+    return { name, heap: h, heapBytes: h ? heapBytes(h) : null, worker, uasm: uasmSplit((uasm ?? { unavailable: 'probe timed out' }) as Uasm), canvas, storage, frame, browserProcessRssBytes: browserProcessRss() }
   }
   const baseline = await checkpoint('baseline')
   // Peak sampling during open/import (no forced GC: an upper bound, garbage included).
@@ -325,7 +340,7 @@ async function memorySession(context: BrowserContext, base: string, fixture: Vie
   let polling = true
   const poller = (async () => {
     while (polling) {
-      const [h, w] = await Promise.all([heap(), perf(page, p => p.workerStats())])
+      const [h, w] = await Promise.all([bounded('poll heap', heap(), 10_000), bounded('poll worker stats', perf(page, p => p.workerStats()), 10_000)])
       const session = w && w.kind === 'stats' ? w.sessions[0]?.memory : undefined
       polls.push({ t: Date.now(), heapBytes: h ? heapBytes(h) : null, workerPeak: session?.peakBytes ?? null, workerRetained: session?.retainedBytes ?? null })
       await new Promise(r => setTimeout(r, 250))
@@ -381,7 +396,7 @@ async function memorySession(context: BrowserContext, base: string, fixture: Vie
     },
   }
   log(`    memory ${fixture.key}: main owned ${mib(summary.mainOwnedBytes)} (peak no-GC ${mib(summary.mainPeakNoGcBytes)}), worker ledger ${mib(ledgerPeak)} / UASM ${mib(summary.workerUasmBytes)}, bitmap ${mib(summary.bitmapPeakBytes)}; after close main ${mib(summary.recovery.mainAfterCloseBytes)}, workers ${summary.recovery.workersTerminated}/${summary.recovery.workersCreated} terminated, canvases ${closed.canvas.count}`)
-  return { summary, checkpoints: { baseline, loaded, afterOps, closed }, polls }
+  return { summary, checkpoints: { baseline, loaded, afterOps, closed }, polls, timeouts }
 }
 
 // ---- formatting ----------------------------------------------------------------
@@ -510,15 +525,27 @@ export async function runViewerSuite(ctx: SuiteContext): Promise<{ receipt: View
       let main = Number.NEGATIVE_INFINITY, worker = 0, bitmap = 0
       for (const [key, ops] of [['F2', 'f2'], ['F4', 'f4']] as const) {
         const context = await fresh()
-        const session = await memorySession(context, base, fixtures[key], ops, errors, log)
-        await context.close()
+        // Watchdog: an intermittent stall of this session was seen on the shared
+        // machine; a stalled session is recorded (memory row not-run), never hung.
+        let timer: ReturnType<typeof setTimeout> | undefined
+        const stalled = new Promise<null>(resolve => { timer = setTimeout(() => resolve(null), MEMORY_SESSION_LIMIT_MS) })
+        const session = await Promise.race([memorySession(context, base, fixtures[key], ops, errors, log).catch((error: unknown) => { errors.push(`memory ${key}: ${error instanceof Error ? error.message : String(error)}`); return null }), stalled]).finally(() => clearTimeout(timer))
+        await context.close().catch(() => {})
+        if (session === null) {
+          errors.push(`memory ${key}: session exceeded ${MEMORY_SESSION_LIMIT_MS / 60_000} min and was abandoned`)
+          log(`  ERROR: memory ${key} session exceeded ${MEMORY_SESSION_LIMIT_MS / 60_000} min; recorded not-run`)
+          memory[key] = { stalled: true }
+          main = Number.NaN
+          continue
+        }
         memory[key] = session
         main = Math.max(main, session.summary.mainOwnedBytes)
         worker = Math.max(worker, session.summary.workerOwnedBytes)
         bitmap = Math.max(bitmap, session.summary.bitmapPeakBytes)
       }
       raw.memory = memory
-      measurements.memory = { mainOwnedBytes: Number.isFinite(main) ? main : null, workerOwnedBytes: worker || null, bitmapPeakBytes: bitmap || null }
+      const complete = Object.values(memory).every(m => !(m as { stalled?: boolean }).stalled)
+      measurements.memory = complete ? { mainOwnedBytes: Number.isFinite(main) ? main : null, workerOwnedBytes: worker || null, bitmapPeakBytes: bitmap || null } : { mainOwnedBytes: null, workerOwnedBytes: null, bitmapPeakBytes: null }
     }
     }
   } finally {
