@@ -145,6 +145,14 @@ test.describe('S10.3 keyboard and focus (real viewer)', () => {
     expect(await focusedLabel(page)).toBe('grid')
     expect(await descendantValid(page)).toBe(true)
     expect(await activeName(page)).toBe('D2')
+    // Enter on the column's select control selects the whole column (aria-selected on its header).
+    await page.keyboard.press('F2')
+    expect(await focusedLabel(page)).toBe('Select Column D; sort priority 1, descending') // the name carries sort state
+    await page.keyboard.press('Enter')
+    await expect(header).toHaveAttribute('aria-selected', 'true')
+    await expect(page.locator('[role=columnheader][aria-selected=true]')).toHaveCount(1)
+    await page.keyboard.press('Escape')
+    expect(await focusedLabel(page)).toBe('grid')
   })
 
   test('workbook find and editable inputs are never hijacked by grid or zoom keys', async ({ page }) => {

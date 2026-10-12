@@ -228,6 +228,7 @@ export class RemoteWorkbook implements WorkbookSource {
     if (this.closed) return
     if (result.completeness === 'complete') {
       entry.state = 'done'
+      if (this.failures.delete(sheetId)) this.notify()
       // Structure completes with the sheet: its final row metadata and used
       // range replace the layout captured at open (a progressive import grows it).
       const layout = await this.fetchLayout(sheetId)
