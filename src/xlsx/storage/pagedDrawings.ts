@@ -39,13 +39,48 @@ const NAMED_REFUSALS = 4
  * parts in JavaScriptCore (380-560 B per element at 60k-120k elements), rounded
  * up; charged per tree actually built, on top of the part's bytes and text. */
 export const XML_ELEMENT_BYTES = 640
-/** Element start tags in an XML byte stream (`<` not opening an end tag, PI, comment or doctype). */
+/** Element start tags in an XML byte stream. Skips end tags, processing
+ * instructions, comments, CDATA sections and doctype declarations (their
+ * content is never counted), and `<` inside quoted attribute values. */
 export function countXmlElements(bytes: Uint8Array): number {
-  let count = 0
-  for (let i = 0; i < bytes.length; i++) {
-    if (bytes[i] !== 0x3c) continue
+  const LT = 0x3c, GT = 0x3e, SLASH = 0x2f, QUESTION = 0x3f, BANG = 0x21, DQ = 0x22, SQ = 0x27, LSQB = 0x5b, RSQB = 0x5d
+  const startsWith = (at: number, text: string) => { for (let k = 0; k < text.length; k++) if (bytes[at + k] !== text.charCodeAt(k)) return false; return true }
+  /** Index just past `terminator` from `from`, or the end. */
+  const skipTo = (from: number, terminator: string) => {
+    for (let i = from; i < bytes.length; i++) if (startsWith(i, terminator)) return i + terminator.length
+    return bytes.length
+  }
+  let count = 0, i = 0
+  while (i < bytes.length) {
+    if (bytes[i] !== LT) { i++; continue }
     const next = bytes[i + 1]
-    if (next !== 0x2f && next !== 0x3f && next !== 0x21) count++
+    if (next === BANG) {
+      if (startsWith(i, '<!--')) i = skipTo(i + 4, '-->')
+      else if (startsWith(i, '<![CDATA[')) i = skipTo(i + 9, ']]>')
+      else {
+        // A declaration (doctype); an internal subset [ ... ] may hold `>`.
+        let depth = 0, quote = 0
+        for (i += 2; i < bytes.length; i++) {
+          const c = bytes[i]
+          if (quote) { if (c === quote) quote = 0 }
+          else if (c === DQ || c === SQ) quote = c
+          else if (c === LSQB) depth++
+          else if (c === RSQB) depth--
+          else if (c === GT && depth <= 0) { i++; break }
+        }
+      }
+      continue
+    }
+    if (next === QUESTION) { i = skipTo(i + 2, '?>'); continue }
+    if (next !== SLASH) count++
+    // Skip the rest of the tag; quoted attribute values may contain `<` or `>`.
+    let quote = 0
+    for (i++; i < bytes.length; i++) {
+      const c = bytes[i]
+      if (quote) { if (c === quote) quote = 0 }
+      else if (c === DQ || c === SQ) quote = c
+      else if (c === GT) { i++; break }
+    }
   }
   return count
 }

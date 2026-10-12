@@ -22,7 +22,7 @@ import { buildZip, type BuildEntry } from './helpers/zip-builder'
 import { MemoryPool } from '../src/xlsx/view/tileCache'
 import { DrawingNodeLedger } from '../src/xlsx/view/drawingPayload'
 import { DOCUMENT_DRAWING_NODE_LIMIT } from '../src/drawing/parts'
-import { loadPagedSheetDrawings, pagedDrawingLimits } from '../src/xlsx/storage/pagedDrawings'
+import { countXmlElements, loadPagedSheetDrawings, pagedDrawingLimits } from '../src/xlsx/storage/pagedDrawings'
 import { xlsxEntries } from './helpers/xlsx-package'
 import { dataRows, EMU_PER_PX } from './helpers/xlsx-structure-fixtures'
 
@@ -292,6 +292,18 @@ describe('paged drawing reads: parse reuse and the document node budget', () => 
     // A parsed ordered-tree element retains ~380-560 B in JSC (measured); the
     // drawing part alone must be charged at least that, plus its text.
     expect(Math.max(...charged)).toBeGreaterThanOrEqual(elements * 560 + part.length)
+  })
+
+  it.each([
+    ['plain and self-closing', '<a><b/><c x="1"></c></a>', 3],
+    ['comment content', '<a><!-- <b> <c/> --></a>', 1],
+    ['CDATA content', '<a><![CDATA[<b><c/>]]></a>', 1],
+    ['processing instructions', '<?xml version="1.0"?><?pi <b>?><a/>', 1],
+    ['doctype with an internal subset', '<!DOCTYPE a [<!ELEMENT a ANY> <!ATTLIST a x CDATA "<b>">]><a/>', 1],
+    ['quoted attribute values', `<a x="<b>" y='<c/>'><d/></a>`, 2],
+    ['end tags only', '</a></b>', 0],
+  ])('counts element start tags only (%s)', (_, xml, expected) => {
+    expect(countXmlElements(new TextEncoder().encode(xml))).toBe(expected)
   })
 
   it('stops the parse once the pool refuses a part (later anchors are not parsed and the read is refused)', async () => {
