@@ -79,7 +79,7 @@
         "frozenMs": 16.7,
         "basis": "spec",
         "outcome": "pass",
-        "justification": "Kept at spec. S10.2 Chrome 155 headless, desktop D, one M4 Pro laptop (shared machine; contention possible), production build, full-scale fixtures; receipt viewerEvidence.results. Sustained open-loop scroll, 300 measured frames per mix after 60 warmup: input-to-paint p95 ordinary 3.94 / wrapped 1.03 / styled 2.35 ms and rAF frame-interval p95 16.67 ms in every mix (0 long tasks). Passed only after two reproduced fixes (scroll-sync revert, per-call Intl.Segmenter). Wrapped mix is ASCII; a non-ASCII wrapped mix is informational (p95 16.67, max 33.3).",
+        "justification": "Kept at spec. S10.2 r2: Chrome 155 headless, desktop D, one M4 Pro laptop (shared machine; contention possible), production build, full-scale fixtures; receipt viewerEvidence.results. 300 open-loop frames per mix after 60 warmup: input-to-paint p95 ordinary 4.95 / wrapped 5.58 / styled 2.13 ms; rAF frame-interval p95 16.67 ms in every mix, 0 long tasks. Passed after reproduced fixes (scroll-sync revert, per-call Intl.Segmenter, sliced prefetch). Non-ASCII wrapped mix informational: p95 16.67, max 16.7 ms.",
         "measurement": null
       },
       "mobile": {
@@ -99,8 +99,8 @@
         "specMs": 50,
         "frozenMs": 50,
         "basis": "spec",
-        "outcome": "miss",
-        "justification": "Kept at spec. S10.2 Chrome 155 headless, desktop D, one M4 Pro laptop (shared machine; contention possible), production build, full-scale fixtures; receipt viewerEvidence.results. Header sort on F2 (1M rows) renders no pending state: the first acknowledgment is the result itself, 12.0-13.3 s after the click (5 samples, stopped early: all > 10x the ceiling). Phase: main-thread range admission (~4,010 worker strip reads). Filter apply max 34.1 ms (n=10, limited), find p95 14.0 ms and cancel p95 16.1 ms (n=30) are within the ceiling. Fix is a proposal (S10.2 report), not applied.",
+        "outcome": "pass",
+        "justification": "Kept at spec. S10.2 r2: Chrome 155 headless, desktop D, one M4 Pro laptop (shared machine; contention possible), production build, full-scale fixtures; receipt viewerEvidence.results. Header sort on F2 (1M rows): pending state (aria-busy) presented p95 17.3 ms (n=30; r1 had none for 12-13 s); find p95 15.5 ms and cancel p95 16.9 ms (n=30); filter apply max 33.5 ms (n=10, limited: each apply re-runs a 2.7 s worker filter). Row is pass-limited in the receipt because of the 10-sample filter series.",
         "measurement": null
       },
       "mobile": {
@@ -291,7 +291,7 @@
         "frozenMs": 1500,
         "basis": "spec",
         "outcome": "pass",
-        "justification": "Kept at spec. S10.2 Chrome 155 headless, desktop D, one M4 Pro laptop (shared machine; contention possible), production build, full-scale fixtures; receipt viewerEvidence.results. Local File -> labelled usable viewport: F1 p95 481.4 ms (n=30), F3 p95 678.4 ms (n=30), F2 max 597.0 ms over 10 cold 1M-row samples (spec 12.6 limitation: p95 refused below 30). Fully imported later (F2 5.4 s p50).",
+        "justification": "Kept at spec. S10.2 r2: Chrome 155 headless, desktop D, one M4 Pro laptop (shared machine; contention possible), production build, full-scale fixtures; receipt viewerEvidence.results. Local File -> labelled usable viewport: F1 p95 489.2 ms (n=30), F3 p95 672.4 ms (n=30), F2 max 600.6 ms over 10 cold 1M-row samples (spec 12.6 limitation: p95 refused below 30). Fully imported later (F2 5.3 s p50).",
         "measurement": null
       },
       "mobile": {
@@ -317,47 +317,54 @@
   "diagnostics": [],
   "viewerEvidence": {
     "doc": "docs/validation/interactive-viewer-performance.md",
-    "results": "docs/validation/interactive-viewer-viewer-chrome-r1.json",
-    "hash": "9d5633d7ec121cbc755bce41298b3d7d8c937e2a8ee9f765def206bf9a37dbd6",
-    "commit": "2282115edbefe727a22d99a7bd5ef4ede2bc1788",
+    "results": "docs/validation/interactive-viewer-viewer-chrome-r2.json",
+    "hash": "9e3ee2c831583f87cd8ac9bfc45aa780f23d184557a3651e22d73bd27c6dc612",
+    "commit": "434e5777e23d3346e5964ebfe447fad576bf59ea",
     "browser": "Google Chrome 155.0.8059.39 (stable, Playwright 1.64 channel chrome, headless)",
     "machine": "Apple M4 Pro, 14 logical cores, 24 GiB, macOS 26.5.2 (25F84)",
     "profile": "D",
     "mode": "release",
-    "desktopAdmitted": false,
+    "desktopAdmitted": true,
     "rows": {
       "warm-viewport-frame": {
         "outcome": "pass",
         "value": 16.670000000000073
       },
       "input-acknowledgment": {
-        "outcome": "miss",
-        "value": 13316.280000001192
+        "outcome": "pass-limited",
+        "value": 33.54000000655651
       },
       "progressive-first-viewport": {
         "outcome": "pass-limited",
-        "value": 678.3500000089407
+        "value": 672.4299999922514
       },
       "import-expanded-throughput": {
         "outcome": "pass",
-        "value": 58.16491712072255
+        "value": 58.08702462974514
       },
       "import-cell-throughput": {
         "outcome": "pass",
-        "value": 893974.6111258077
+        "value": 892777.4305437976
       },
       "main-owned-memory": {
         "outcome": "pass",
-        "value": 25369857
+        "value": 24531691
       },
       "worker-owned-memory": {
         "outcome": "pass",
-        "value": 239837810
+        "value": 239834318
       },
       "bitmap-retained": {
         "outcome": "pass",
         "value": 118663680
       }
+    },
+    "superseded": {
+      "results": "docs/validation/interactive-viewer-viewer-chrome-r1.json",
+      "hash": "9d5633d7ec121cbc755bce41298b3d7d8c937e2a8ee9f765def206bf9a37dbd6",
+      "commit": "2282115edbefe727a22d99a7bd5ef4ede2bc1788",
+      "desktopAdmitted": false,
+      "note": "r1: input acknowledgment miss (header sort 11,897-13,316 ms); superseded by r2 after the fixes."
     },
     "note": "S10.2 viewer receipt. Mobile rows not-run (no physical iPad, user decision). Contended shared machine: re-run the release command on a quiet machine before admission."
   }
