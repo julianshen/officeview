@@ -18,12 +18,13 @@ export type MainPool = 'rowCache' | 'viewBuffers' | 'replies' | 'copy' | 'contro
 export const MAIN_POOLS: readonly MainPool[] = ['rowCache', 'viewBuffers', 'replies', 'copy', 'controls', 'layout', 'merges', 'dom']
 
 /**
- * Estimated bytes per owned grid DOM element: the element and its attribute
- * strings in Blink, its style object and the React fiber that renders it. A
- * documented estimate (measured in Chrome as embedder + JS heap growth per
- * mounted grid cell), not an exact accounting.
+ * Estimated bytes per owned grid DOM element: the element, its attribute and
+ * aria strings, its inline style, the text node and the React fiber that
+ * renders it. Calibrated in Chrome 155 with the perf page's calibrateDom
+ * (owned-gridcell-shaped div + text span, post-GC heap delta incl. embedder):
+ * 2,981-3,184 B per element over 1,001-8,001 elements; rounded up.
  */
-export const DOM_ELEMENT_BYTES = 1536
+export const DOM_ELEMENT_BYTES = 3200
 
 export interface MainLedgerSnapshot {
   bytes: number

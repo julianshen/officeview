@@ -334,7 +334,8 @@ async function memorySession(context: BrowserContext, base: string, fixture: Vie
     const storage = (await bounded(`${name} storage`, perf(page, p => p.storageEstimate()), 15_000)) ?? { usage: null, quota: null }
     const frame = (await bounded(`${name} frame`, perf(page, p => ({ peakBitmapBytes: p.peakBitmapBytes, bitmapBytes: p.lastFrame?.bitmapBytes ?? null, budgetBytes: p.lastFrame?.budgetBytes ?? null, workersCreated: p.workersCreated, workersTerminated: p.workersTerminated }))))
       ?? { peakBitmapBytes: 0, bitmapBytes: null, budgetBytes: null, workersCreated: -1, workersTerminated: -1 }
-    return { name, heap: h, heapBytes: h ? heapBytes(h) : null, worker, uasm: uasmSplit((uasm ?? { unavailable: 'probe timed out' }) as Uasm), canvas, storage, frame, browserProcessRssBytes: browserProcessRss() }
+    const ledger = await bounded(`${name} main ledger`, perf(page, p => p.mainLedger()))
+    return { name, heap: h, heapBytes: h ? heapBytes(h) : null, ledger, worker, uasm: uasmSplit((uasm ?? { unavailable: 'probe timed out' }) as Uasm), canvas, storage, frame, browserProcessRssBytes: browserProcessRss() }
   }
   const baseline = await checkpoint('baseline')
   // Peak sampling during open/import (no forced GC: an upper bound, garbage included).
@@ -436,7 +437,7 @@ async function memorySession(context: BrowserContext, base: string, fixture: Vie
       storageDeltaBytes: closed.storage.usage !== null && baseline.storage.usage !== null ? closed.storage.usage - baseline.storage.usage : null,
     },
   }
-  log(`    memory ${fixture.key}: main owned ${mib(summary.mainOwnedBytes)} (forced-GC live max ${mib(liveHeapSamples.length && baseline.heapBytes !== null ? Math.max(...liveHeapSamples) - baseline.heapBytes : null)} over ${liveHeapSamples.length} samples; peak no-GC ${mib(summary.mainPeakNoGcBytes)}), worker ledger ${mib(ledgerPeak)} / UASM ${mib(summary.workerUasmBytes)}, bitmap ${mib(summary.bitmapPeakBytes)}; after close main ${mib(summary.recovery.mainAfterCloseBytes)}, workers ${summary.recovery.workersTerminated}/${summary.recovery.workersCreated} terminated, canvases ${closed.canvas.count}`)
+  log(`    memory ${fixture.key}: main ledger peak ${mib(afterOps.ledger?.peakBytes ?? null)}; main owned ${mib(summary.mainOwnedBytes)} (forced-GC live max ${mib(liveHeapSamples.length && baseline.heapBytes !== null ? Math.max(...liveHeapSamples) - baseline.heapBytes : null)} over ${liveHeapSamples.length} samples; peak no-GC ${mib(summary.mainPeakNoGcBytes)}), worker ledger ${mib(ledgerPeak)} / UASM ${mib(summary.workerUasmBytes)}, bitmap ${mib(summary.bitmapPeakBytes)}; after close main ${mib(summary.recovery.mainAfterCloseBytes)}, workers ${summary.recovery.workersTerminated}/${summary.recovery.workersCreated} terminated, canvases ${closed.canvas.count}`)
   return { summary, checkpoints: { baseline, loaded, afterOps, closed }, polls, liveHeapSamples, liveSampleMs: LIVE_SAMPLE_MS, timeouts }
 }
 

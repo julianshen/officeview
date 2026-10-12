@@ -20,6 +20,7 @@ import { useEffect, useMemo, useState, type JSX } from 'react'
 import { createRoot } from 'react-dom/client'
 import { OfficeFile, type ViewerWorkerPort } from '../components/OfficeFile'
 import type { SheetFrameStats } from '../components/xlsx/InteractiveSheetDoc'
+import type { MainLedgerSnapshot, MainMemoryLedger } from '../xlsx/view/mainLedger'
 import type { PerfReply, PerfRequest } from './viewerPerfWorker'
 import { classifyPresent, pairInputsToPresents, type PresentCounters } from './harness/viewerPerf'
 // Statically named so the locked-down harness server serves the on-demand modules.
@@ -80,6 +81,11 @@ export interface ViewerPerf {
   ackArm(kind: AckKind, timeoutMs: number): void
   /** Resolves when the armed probe saw a qualifying mutation presented, or on timeout. */
   ackWait(): Promise<AckRecord>
+  /** DOM cost calibration (S10.2 ledger estimate): mounts `cells` owned-gridcell-like
+   * React elements (div + text span, as GridSemantics renders them) or unmounts them. */
+  calibrateDom(cells: number): Promise<number>
+  /** The open document's main-thread application ledger (null before a viewer mounts). */
+  mainLedger(): MainLedgerSnapshot | null
   workerStats(): Promise<PerfReply | null>
   workerGc(): Promise<boolean>
   /** Dedicated importer pass over #perf-import-file in a fresh perf worker (the viewer is not involved). */
@@ -124,6 +130,8 @@ const state: ViewerPerf = {
   },
   ackArm(kind, timeoutMs) { pendingAck = ackProbe(kind, timeoutMs) },
   ackWait: () => pendingAck ?? Promise.reject(new Error('no acknowledgment probe armed')),
+  mainLedger: () => currentLedger?.snapshot() ?? null,
+  calibrateDom,
   workerStats: () => probe(currentWorker, { __perf: 'stats' }),
   workerGc: async () => { const reply = await probe(currentWorker, { __perf: 'gc' }); return reply?.kind === 'gc' && reply.collected },
   importRun,
@@ -152,6 +160,23 @@ const state: ViewerPerf = {
 }
 window.__viewerPerf = state
 
+let currentLedger: MainMemoryLedger | null = null
+let calibration: { root: ReturnType<typeof createRoot>; host: HTMLElement } | null = null
+function calibrateDom(cells: number): Promise<number> {
+  calibration?.root.unmount(); calibration?.host.remove(); calibration = null
+  if (cells <= 0) return Promise.resolve(0)
+  const host = document.createElement('div')
+  host.style.cssText = 'position:absolute;left:0;top:0;width:1px;height:1px;overflow:hidden'
+  document.body.append(host)
+  const root = createRoot(host)
+  const hidden = { position: 'absolute', width: 1, height: 1, overflow: 'hidden', clipPath: 'inset(50%)', whiteSpace: 'nowrap' } as const
+  root.render(<div role="rowgroup">{Array.from({ length: cells }, (_, i) => (
+    <div key={i} role="gridcell" id={`cal-cell-${i * 16384 + 3}`} aria-colindex={(i % 40) + 2} aria-label={`C${i}, value ${i * 7.25}`} aria-selected={false} aria-description="value"
+      style={{ position: 'absolute', top: 0, left: 44 + (i % 40) * 64, width: 64, height: 20 }}><span style={hidden}>{String(i * 7.25)}</span></div>
+  ))}</div>)
+  calibration = { root, host }
+  return new Promise(resolve => setTimeout(() => resolve(host.getElementsByTagName('*').length), 100))
+}
 // ---- worker port: the shipped kernel behind a counting port ----
 let currentWorker: Worker | null = null
 let perfIds = 0
@@ -431,7 +456,7 @@ function PerfPage(): JSX.Element {
     return () => input.removeEventListener('change', onChange)
   }, [])
   const factory = useMemo(() => countingWorker, [])
-  const internal = { onFrame } as Record<string, unknown>
+  const internal = { onFrame, onMainLedger: (ledger: MainMemoryLedger) => { currentLedger = ledger } } as Record<string, unknown>
   if (!file) return <div data-testid="perf-idle">No workbook</div>
   return (
     <OfficeFile
