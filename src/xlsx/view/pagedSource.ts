@@ -29,6 +29,9 @@ import {
 import { addRecord, answerOverview, emptyAggregate, mergeAggregate, type AggregateOutcome } from '../storage/overviewIndex'
 import { isValueUnavailable, SAVED_VALUES_DIAGNOSTIC, SAVED_VALUES_STATUS, valueAuthority, valueStatus } from './values'
 import type { PagedImportSession, PagedSheet, PagedWorkbook } from '../storage/pagedImport'
+import type { XlsxSheet } from '../types'
+import { cellDisplayText } from '../render'
+import { semanticsFor } from './semanticsFor'
 
 type RowStatus = { kind: 'ready' } | { kind: 'unknown'; pageId: string } | { kind: 'error'; failure: SourceFailure }
 
@@ -497,6 +500,7 @@ async function waitFor(workbook: PagedWorkbook, signal: AbortSignal | undefined)
 /** WorkbookSource over a paged import session; release() ends the session and removes its pages. */
 export function createPagedWorkbookSource(session: PagedImportSession): WorkbookSource {
   const { workbook } = session
+  const displaySheet: XlsxSheet = { name: '', rows: [], cols: [], merges: [], mergeRanges: [], semantics: semanticsFor(workbook.formatting.dateSystem) }
   const stores = new Map<string, PagedXlsxSheetAdapter>()
   const geometries = new Map<string, SheetGeometry>()
   const find = (sheetId: string) => {
@@ -537,6 +541,7 @@ export function createPagedWorkbookSource(session: PagedImportSession): Workbook
     },
     coverageDiagnostics: sheetId => storeFor(sheetId).coverageDiagnostics(),
     formatting: () => workbook.formatting,
+    displayText: cell => cellDisplayText(displaySheet, { value: cell.value, style: workbook.formatting.styles[cell.styleIndex] }),
     declaredFilters: () => workbook.sheets.flatMap(s => s.declared ? [s.declared] : []),
     bindMemory(pool: MemoryPool) { workbook.store.bindMemory(pool) },
     async release() {

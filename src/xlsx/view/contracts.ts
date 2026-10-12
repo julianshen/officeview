@@ -1,5 +1,6 @@
 import type { XlsxCell, XlsxCellStyle, XlsxDocument } from '../types'
 import type { RangeDetection } from './rangeDetection'
+import type { FindPage } from './find'
 import type { CellId, DisplaySlot, SourceCell, SourceCol, SourceRect, SourceRow } from './coordinates'
 
 /** Source-space contracts, spec §4.1; limits bound output, never semantic membership. */
@@ -374,9 +375,14 @@ export type ViewportContent =
 export type CompleteViewportContent =
   | { kind: 'detail'; cells: readonly Exclude<ViewportCell, { kind: 'unknown' | 'error' }>[] }
   | { kind: 'overview'; groups: readonly Exclude<ViewportOverviewGroup, { content: 'unknown' }>[] }
-export type ViewportResult =
+export type ViewportResult = (
   | { kind: 'viewport'; completeness: 'complete'; content: CompleteViewportContent; error?: never }
   | { kind: 'viewport'; completeness: 'loading' | 'incomplete'; content: ViewportContent; error?: SourceFailure }
+) & {
+  /** Mixed detail/coarse panes and exact active inspection share the same owner. */
+  groups?: readonly ViewportOverviewGroup[]
+  active?: ViewportCell
+}
 
 /** Every asynchronous publication captures the relevant complete owner, spec §10.1. */
 export interface CacheIdentity { docId: string; sheetId: string; valueGen: number; fontGen: number; viewGen: number }
@@ -404,6 +410,9 @@ export type SourceReadQuery =
   | { op: 'scan'; request: PopulatedQuery; cursor?: string }
   | { op: 'structural'; rect: SourceRect }
   | { op: 'complete'; rect: SourceRect }
+  | { op: 'overview'; request: OverviewQuery }
+  /** Document-owned cleanup of an abandoned worker search continuation. */
+  | { op: 'releaseSearch'; cursor: string }
   /** The sheet's current compact layout (it grows while a paged import runs). */
   | { op: 'layout' }
   /** Ends a scan continuation the caller abandoned (iterator return/cancel). */
@@ -418,6 +427,8 @@ export type SourceReadResult =
   | { op: 'scan'; page: Page<AuthoritativeCell> }
   | { op: 'structural'; result: StructuralResult }
   | { op: 'complete'; result: RangeCompletion }
+  | { op: 'overview'; page: Page<OverviewGroup> }
+  | { op: 'releaseSearch'; released: boolean }
   | { op: 'layout'; layout: SheetLayout }
   | { op: 'releaseScan'; released: boolean }
   | { op: 'detectRange'; detection: RangeDetection }
@@ -495,7 +506,7 @@ export type WorkerResult =
   | { kind: 'view'; delta: ViewCommitDelta }
   | ViewportResult
   | { kind: 'valueQuery'; page: Page<ColumnEntry> }
-  | { kind: 'search'; items: readonly SearchHit[]; nextCursor?: string; unavailableCount: number }
+  | { kind: 'search'; items: readonly SearchHit[]; nextCursor?: string; unavailableCount: number; page?: FindPage }
   | { kind: 'read'; result: SourceReadResult }
   | { kind: 'close' }
 /** Cancel is non-completing: it terminates with cancelled/error, not complete (§10.2).

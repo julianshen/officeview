@@ -12,14 +12,9 @@
  * on the same column; close cancels everything of its document. Cancelled
  * replies name their reason in a diagnostic.
  *
- * TODO(S4.2-deferred): the spec §10.2 initial query timeout (120 s in
- * deterministic harnesses and the interactive long-operation policy, then abort
- * with an explicit incomplete/cancelled outcome) is not implemented; requests
- * run until they finish, are cancelled or superseded, or their document closes.
- * S5.4: the paged interactive viewer reads through `read` (one bounded store
- * call per command, owned by the committed view) and keeps the object planner
- * and FindController on the main thread; `viewport`/`search` still reply
- * `unsupported` (see dispatch).
+ * Queries abort with a terminal, diagnosed cancellation after 120 seconds.
+ * Paged reads, overview, viewport and workbook search use bounded resident
+ * commands; continuations and projections stay in the worker.
  *
  * No worker globals: worker-entry.ts is a thin adapter, and tests drive the
  * kernel in-process (directly, or through connectInProcess, which reproduces
@@ -37,10 +32,20 @@ import {
 import {
   DocumentSession, VIEW_OPERATION_STAGES, type CommittedView, type OperationOutcome, type PrepareOutcome, type SessionOptions,
   type WorkbookSource,
+  workbookIndexKey,
 } from './viewerSession'
 import { createObjectWorkbookSource } from './viewerObjectSource'
 import { createWorkerFilterEvaluator } from './viewerFilterEvaluator'
 import { MAX_ROWS } from '../xlsx/view/coordinates'
+import { awaitAbortable, bindQueryDeadline } from './viewerAbort'
+import { queryPayloadBytes } from './viewerQueryBudget'
+import type { PoolCharge } from '../xlsx/view/tileCache'
+
+class KeySetQuota extends Error {
+  constructor(readonly requiredBytes: number, readonly limitBytes: number) { super('Filter keys exceed the worker memory budget') }
+}
+
+export const QUERY_DEADLINE_MS = 120_000
 
 /** A typed open refusal (admission or storage); the open replies with its code. */
 export class OpenRefusal extends Error {
@@ -66,12 +71,13 @@ export interface ViewerKernelEnv {
   importLimits?: import('../xlsx/storage/importSession').ImportLimitOverrides
 }
 /** Why an in-flight request was aborted; echoed as the cancelled diagnostic. */
-export type CancelReason = 'cancel-requested' | 'superseded' | 'range-replaced' | 'document-closed'
+export type CancelReason = 'cancel-requested' | 'superseded' | 'range-replaced' | 'document-closed' | 'query-timeout'
 const CANCEL_MESSAGES: Readonly<Record<CancelReason, string>> = Object.freeze({
   'cancel-requested': 'Cancelled by request',
   superseded: 'Superseded by a newer view draft on the same sheet',
   'range-replaced': 'Replaced by a newer query on the same column',
   'document-closed': 'The document was closed',
+  'query-timeout': 'Query timed out after 120 seconds. Retry or choose a smaller range.',
 })
 /** Recently finished request owners kept so a late cancel can still answer
  * with its target's owner (bounded; oldest dropped first). */
@@ -104,6 +110,7 @@ function documentOf(command: Exclude<WorkerCommand, { kind: 'cancel' | 'open' }>
  * drafts per sheet, value queries per column (range replacement). A stale
  * command never supersedes a current one. */
 function supersessionKey(command: Exclude<WorkerCommand, { kind: 'cancel' }>, session: DocumentSession | undefined): string | undefined {
+  if (session && command.kind === 'search' && workbookIndexKey(command.owner) === workbookIndexKey(session.workbookOwner())) return JSON.stringify(['search', session.epoch, command.owner.docId])
   if (!session || (command.kind !== 'sort' && command.kind !== 'filter' && command.kind !== 'valueQuery')) return undefined
   if (!session.isCurrent(command.owner)) return undefined
   const scope = [session.epoch, command.owner.docId, command.owner.sheetId]
@@ -131,7 +138,7 @@ export class ViewerKernel {
    * reference-counted: overlapping commands (a superseded draft and its
    * replacement) may ship the same committed ref, and one finishing must not
    * remove the keys the other still evaluates. */
-  private readonly keySets = new Map<string, Map<string, { set: FilterKeySet; holders: number }>>()
+  private readonly keySets = new Map<string, Map<string, { set: FilterKeySet; holders: number; charge: PoolCharge }>>()
   private epochs = 0
   readonly stats: KernelStats = { opens: 0, parses: 0, sourceReads: 0 }
 
@@ -160,6 +167,9 @@ export class ViewerKernel {
       post(out, transfer)
     }
     let entry: InFlight | undefined
+    let deadline: ReturnType<typeof setTimeout> | undefined
+    let report: ReturnType<ViewerKernel['reporter']> | undefined
+    let dispatched: WorkerReply | undefined
     try {
       if (command.kind === 'cancel') { emit(this.cancel(command)); return }
       if (this.inflight.has(command.requestId)) {
@@ -171,14 +181,30 @@ export class ViewerKernel {
       const key = supersessionKey(command, session)
       if (key !== undefined) {
         for (const other of this.inflight.values()) {
-          if (other.key === key) this.abort(other, command.kind === 'valueQuery' ? 'range-replaced' : 'superseded')
+          if (other.key === key && (command.kind !== 'search' || command.cursor === undefined)) this.abort(other, command.kind === 'valueQuery' ? 'range-replaced' : 'superseded')
         }
       }
       entry = { controller: new AbortController(), owner: capturedOwner(command), kind: command.kind, session, key }
       this.inflight.set(command.requestId, entry)
-      const report = this.reporter(command, entry, emit)
-      const out = await this.dispatch(command, entry.controller.signal, report)
-      await this.env.afterDispatch?.(command)
+      const expired = new AbortController()
+      bindQueryDeadline(entry.controller.signal, expired.signal)
+      if (command.kind !== 'open' && command.kind !== 'close') {
+        const captured = entry
+        deadline = setTimeout(() => { this.abort(captured, 'query-timeout'); expired.abort() }, QUERY_DEADLINE_MS)
+      }
+      report = this.reporter(command, entry, emit)
+      const work = this.dispatch(command, entry.controller.signal, report)
+      const out = command.kind === 'open' || command.kind === 'close' ? await work : await awaitAbortable(work, expired.signal)
+      dispatched = out
+      const after = this.env.afterDispatch?.(command)
+      if (after) {
+        try { await awaitAbortable(Promise.resolve(after), expired.signal) }
+        catch (cause) {
+          // A landed view commit is irreversible. Deliver its actual current
+          // outcome even if its instrumentation/publication wait expires.
+          if (!(expired.signal.aborted && out.kind === 'complete' && out.result.kind === 'view')) throw cause
+        }
+      }
       const final = this.finalCheck(command, out, entry)
       report.close()
       const source = docId ? this.sessions.get(docId)?.source : undefined
@@ -190,10 +216,23 @@ export class ViewerKernel {
       ] } : final
       emit(this.withReason(diagnosed, entry))
     } catch (cause) {
+      if (entry?.controller.signal.aborted) {
+        emit(this.withReason(reply(command as never, entry.owner as never, { kind: 'cancelled' }), entry))
+        return
+      }
+      if (cause instanceof KeySetQuota) {
+        emit(reply(command as never, capturedOwner(command) as never, { kind: 'quota', resource: 'memory', requiredBytes: cause.requiredBytes, limitBytes: cause.limitBytes }))
+        return
+      }
       emit(errorReply(command, capturedOwner(command) as never, 'page-error', false, [{
         code: 'worker-exception', message: cause instanceof Error ? cause.message : String(cause),
       }]))
     } finally {
+      clearTimeout(deadline)
+      report?.close()
+      if (entry?.controller.signal.aborted && dispatched?.kind === 'complete' && dispatched.result.kind === 'search' && dispatched.result.nextCursor) {
+        entry.session?.releaseSearch(dispatched.result.nextCursor)
+      }
       if (entry) {
         this.inflight.delete(command.requestId)
         this.finished.set(command.requestId, entry.owner)
@@ -202,9 +241,10 @@ export class ViewerKernel {
     }
   }
   private abort(entry: InFlight, reason: CancelReason): void {
+    if (reason === 'query-timeout') entry.reason = reason
     if (entry.controller.signal.aborted) return
     entry.reason = reason
-    entry.controller.abort()
+    entry.controller.abort(reason)
   }
   /** Progress publication guard (§10.4): only completed-batch counts, strictly
    * increasing, never after cancellation, after the terminal reply, outside the
@@ -255,6 +295,7 @@ export class ViewerKernel {
         return live(command.owner.docId) ? out : errorReply(command, command.owner, 'stale-source', false, [{ code: 'unknown-document', message: 'Document closed' }])
       }
       case 'prepareColumns':
+      case 'viewport':
       case 'valueQuery': {
         if (signal.aborted) return reply(command, command.owner, { kind: 'cancelled' })
         return live(command.owner.docId) && entry.session!.isCurrent(command.owner) ? out : this.stale(command, command.owner)
@@ -262,9 +303,14 @@ export class ViewerKernel {
       case 'read': {
         // A read finishing after cancel, close, replacement or a newer commit is withheld (§10.1).
         if (signal.aborted) return reply(command, command.owner, { kind: 'cancelled' })
-        if (command.query?.op === 'releaseScan') return out
+        if (command.query?.op === 'releaseScan' || command.query?.op === 'releaseSearch') return out
         return live(command.owner.docId) && entry.session!.isCurrent(command.owner)
           ? out : errorReply(command, command.owner, 'stale-source', true, [{ code: 'stale-owner', message: 'Command owner is not the current committed view' }])
+      }
+      case 'search': {
+        if (signal.aborted) return reply(command, command.owner, { kind: 'cancelled' })
+        return live(command.owner.docId) && workbookIndexKey(command.owner) === workbookIndexKey(entry.session!.workbookOwner())
+          ? out : errorReply(command, command.owner, 'stale-source', true, [{ code: 'stale-owner', message: 'Workbook search owner changed' }])
       }
       default:
         return out
@@ -324,13 +370,19 @@ export class ViewerKernel {
         if (!session) return this.stale(command, command.owner)
         report(0, VIEW_OPERATION_STAGES)
         const hooks = { progress: report }
-        const shipped = command.kind === 'filter' ? this.installKeys(command.owner.docId, command.keySets) : []
+        let shipped: string[] = []
+        const incoming = session.memory.charge()
         let outcome: OperationOutcome
         try {
+          if (command.kind === 'filter' && command.keySets?.length) {
+            const bytes = queryPayloadBytes(command.keySets, session.memory.limitBytes)
+            if (!incoming.set(bytes)) throw new KeySetQuota(bytes, session.memory.limitBytes)
+            shipped = this.installKeys(command.owner.docId, command.keySets)
+          }
           outcome = command.kind === 'sort'
             ? await session.sort(command.owner, command.spec, signal, hooks)
             : await session.filter(command.owner, command.spec, command.nowMs, signal, hooks)
-        } finally { this.removeKeys(command.owner.docId, shipped) }
+        } finally { this.removeKeys(command.owner.docId, shipped); incoming.release() }
         if (outcome.kind === 'committed') {
           return reply(command, command.owner, { kind: 'complete', result: { kind: 'view', delta: this.delta(outcome.view) } } as ReplyBody<typeof command.kind>)
         }
@@ -349,10 +401,11 @@ export class ViewerKernel {
         return reply(command, command.owner, { kind: 'complete', result: { kind: 'valueQuery', page } })
       }
       case 'read': {
-        if (command.query?.op === 'releaseScan') {
+        if (command.query?.op === 'releaseScan' || command.query?.op === 'releaseSearch') {
           // Cleanup is document-owned: it must succeed after a newer commit too.
-          const released = this.sessions.get(command.owner.docId)?.releaseScan(command.query.cursor) ?? false
-          return reply(command, command.owner, { kind: 'complete', result: { kind: 'read', result: { op: 'releaseScan', released } } })
+          const session = this.sessions.get(command.owner.docId)
+          const released = command.query.op === 'releaseScan' ? session?.releaseScan(command.query.cursor) ?? false : session?.releaseSearch(command.query.cursor) ?? false
+          return reply(command, command.owner, { kind: 'complete', result: { kind: 'read', result: { op: command.query.op, released } } })
         }
         const session = this.current(command.owner)
         if (!session) return errorReply(command, command.owner, 'stale-source', true, [{ code: 'stale-owner', message: 'Command owner is not the current committed view' }])
@@ -363,12 +416,19 @@ export class ViewerKernel {
         }
         return reply(command, command.owner, { kind: 'complete', result: { kind: 'read', result: out } })
       }
-      case 'viewport':
-      case 'search':
-        // Not used by the S5.4 paged viewer, which reads row/scan pages through
-        // `read` and plans/finds on the main thread. A worker-side planner (and
-        // the §10.2 viewport-over-background scheduler priority) would land here.
-        return errorReply(command, command.owner as never, 'unsupported', false, [{ code: `${command.kind}-not-implemented`, message: `${command.kind} is delivered by S5` }])
+      case 'viewport': {
+        const session = this.current(command.owner)
+        if (!session) return this.stale(command, command.owner)
+        const out = await session.viewport(command.owner, command.window, signal)
+        return 'result' in out ? reply(command, command.owner, { kind: 'complete', result: out.result }, out.diagnostics) : this.failed(command, command.owner, out)
+      }
+      case 'search': {
+        const session = this.sessions.get(command.owner.docId)
+        if (!session) return errorReply(command, command.owner, 'stale-source', false)
+        const out = await session.search(command.owner, command.query, command.cursor, signal)
+        if ('kind' in out) return this.failed(command, command.owner, out)
+        return reply(command, command.owner, { kind: 'complete', result: { kind: 'search', items: out.hits, unavailableCount: out.unavailableCount, page: out, ...(out.cursor ? { nextCursor: out.cursor } : {}) } })
+      }
       default: {
         // Unknown kinds (malformed or newer clients) get a typed error, never undefined.
         const unknown = command as unknown as { kind: unknown; requestId: string; owner?: WorkerOwner; docId?: unknown }
@@ -494,26 +554,33 @@ export class ViewerKernel {
     let map = this.keySets.get(docId)
     if (!map) this.keySets.set(docId, map = new Map())
     const installed: string[] = []
-    for (const set of keySets) {
-      const run = set?.run
-      if (typeof set?.refId !== 'string' || typeof set.scope !== 'string' || !run || !Number.isSafeInteger(run.count) || run.count < 0
-        || !isTyped(run.kinds, 'Uint8Array') || !isTyped(run.numbers, 'Float64Array') || !Array.isArray(run.texts)
-        || run.kinds.length < run.count || run.numbers.length < run.count || run.texts.length < run.count) continue
-      if (installed.includes(set.refId)) continue
-      const held = map.get(set.refId)
-      // A committed ref is immutable: a second holder shares the installed keys.
-      if (held) held.holders++
-      else map.set(set.refId, { set, holders: 1 })
-      installed.push(set.refId)
-    }
-    return installed
+    try {
+      for (const set of keySets) {
+        const run = set?.run
+        if (typeof set?.refId !== 'string' || typeof set.scope !== 'string' || !run || !Number.isSafeInteger(run.count) || run.count < 0
+          || !isTyped(run.kinds, 'Uint8Array') || !isTyped(run.numbers, 'Float64Array') || !Array.isArray(run.texts)
+          || run.kinds.length < run.count || run.numbers.length < run.count || run.texts.length < run.count) continue
+        if (installed.includes(set.refId)) continue
+        const held = map.get(set.refId)
+        // A committed ref is immutable: a second holder shares the installed keys.
+        if (held) held.holders++
+        else {
+          const session = this.sessions.get(docId)!
+          const charge = session.memory.charge(), bytes = queryPayloadBytes(set, session.memory.limitBytes)
+          if (!charge.set(bytes)) { charge.release(); throw new KeySetQuota(bytes, session.memory.limitBytes) }
+          map.set(set.refId, { set, holders: 1, charge })
+        }
+        installed.push(set.refId)
+      }
+      return installed
+    } catch (cause) { this.removeKeys(docId, installed); throw cause }
   }
   private removeKeys(docId: string, refIds: readonly string[]): void {
     const map = this.keySets.get(docId)
     if (!map) return
     for (const refId of refIds) {
       const held = map.get(refId)
-      if (held && --held.holders <= 0) map.delete(refId)
+      if (held && --held.holders <= 0) { held.charge.release(); map.delete(refId) }
     }
     if (!map.size) this.keySets.delete(docId)
   }
@@ -525,16 +592,16 @@ export class ViewerKernel {
     const session = this.sessions.get(owner.docId)
     return session && session.isCurrent(owner) ? session : undefined
   }
-  private stale<K extends 'prepareColumns' | 'sort' | 'filter' | 'valueQuery'>(command: CommandOf<K>, owner: CacheIdentity): WorkerReply<K> {
+  private stale<K extends 'prepareColumns' | 'sort' | 'filter' | 'valueQuery' | 'viewport'>(command: CommandOf<K>, owner: CacheIdentity): WorkerReply<K> {
     return errorReply(command, owner as WorkerCommandOwner<K>, 'stale-source', true, [{ code: 'stale-owner', message: 'Command owner is not the current committed view' }])
   }
-  private failed<K extends 'prepareColumns' | 'sort' | 'filter'>(
-    command: CommandOf<K>, owner: CacheIdentity,
+  private failed<K extends 'prepareColumns' | 'sort' | 'filter' | 'viewport' | 'search'>(
+    command: CommandOf<K>, owner: WorkerCommandOwner<K>,
     outcome: Exclude<OperationOutcome, { kind: 'committed' | 'refused' }> | Exclude<PrepareOutcome, { kind: 'complete' | 'resource-limit' }>,
   ): WorkerReply<K> {
     const own = owner as WorkerCommandOwner<K>
     switch (outcome.kind) {
-      case 'stale': return this.stale(command, owner)
+      case 'stale': return errorReply(command, own, 'stale-source', true, [{ code: 'stale-owner', message: 'Command owner is not current' }])
       case 'cancelled': return reply(command, own, { kind: 'cancelled' } as unknown as ReplyBody<K>)
       case 'incomplete':
         return reply(command, own, { kind: 'incomplete', missing: outcome.missing } as unknown as ReplyBody<K>,

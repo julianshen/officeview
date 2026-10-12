@@ -20,6 +20,8 @@ export interface CooperativeOptions<Phase extends string = string> {
   yield?: YieldFunction<Phase>
   /** Opt-in for unit-at-a-time kernels (§12.1). Other callers keep per-call checks. */
   checkEvery?: 1 | 256
+  /** Owner boundary may interrupt a stalled host/injected yield. */
+  awaitYield?: (work: Promise<void>) => Promise<void>
 }
 export interface HostYield { yield: () => Promise<void>; dispose: () => void }
 type Allocate = <T>(create: () => T) => T
@@ -84,7 +86,8 @@ export class CooperativeSlice<Phase extends string = string> {
     this.now = options.now ?? (() => performance.now())
     this.last = this.now()
     const host = options.yield ? undefined : createHostYield(allocate)
-    this.schedule = options.yield ?? host!.yield
+    const schedule = options.yield ?? host!.yield
+    this.schedule = options.awaitYield ? phase => options.awaitYield!(schedule(phase)) : schedule
     this.dispose = host?.dispose ?? (() => {})
   }
   /** Yields taken so far (diagnostic; tests bound it). */

@@ -35,12 +35,8 @@
  * cancellation and the host's current owner; a mismatch rejects with
  * FindError('stale') so no page from an older owner is ever published.
  *
- * Seams (documented, not wired here): the resident worker has no `search`
- * command handler yet (contracts §10.2 defines it; S4 owns the kernel), and
- * OfficeDoc's large-mode canvas path is S5.2. OfficeDoc keeps its existing
- * paint-replay search for every format until S5.2 mounts the sheet viewport;
- * at that point it should drive FindController with the session's owner and
- * call navigateToHit/hitGeometry for the focused hit only.
+ * The controller can use the same bounded page interface locally or through
+ * the resident worker. Materialize hit geometry only for the focused hit.
  */
 import type { XlsxCell } from '../types'
 import type {
@@ -649,13 +645,15 @@ export interface FindControllerOptions {
   onPublish?: (state: FindPublication) => void
   /** Complete single-page results kept by aggregate key (LRU), at most a page each. */
   cacheEntries?: number
+  createSession?: (input: FindInput, query: SearchQuery, options: FindOptions) => FindSession
 }
+export interface FindSession { nextPage(): Promise<FindPage>; close(): void }
 interface FindRun {
   token: number
   key: string
   input: FindInput
   query: SearchQuery
-  session: WorkbookFind
+  session: FindSession
   abort: AbortController
   detach: () => void
   pageIndex: number
@@ -713,7 +711,8 @@ export class FindController {
     const outer = options.signal
     const onOuter = () => abort.abort()
     outer?.addEventListener('abort', onOuter, { once: true })
-    const session = new WorkbookFind(input, query, { ...options, signal: abort.signal, currentOwner: this.options.currentOwner })
+    const sessionOptions = { ...options, signal: abort.signal, currentOwner: this.options.currentOwner }
+    const session = this.options.createSession?.(input, query, sessionOptions) ?? new WorkbookFind(input, query, sessionOptions)
     this.current = { token, key, input, query, session, abort, detach: () => outer?.removeEventListener('abort', onOuter), pageIndex: 0 }
     return this.pull(this.current)
   }

@@ -1,0 +1,122 @@
+// @vitest-environment node
+import { afterEach, expect, it, vi } from 'vitest'
+import { ViewerKernel } from '../src/worker/viewerKernel'
+import { createObjectWorkbookSource } from '../src/worker/viewerObjectSource'
+import { initialIdentity } from '../src/worker/viewerProtocol'
+import type { WorkerReply } from '../src/xlsx/view/contracts'
+import { workbookOf } from './helpers/xlsx-find'
+
+afterEach(() => vi.useRealTimers())
+
+it('times out a never-resolving preparation read at 120 seconds and releases its operation charge', async () => {
+  vi.useFakeTimers()
+  const document = workbookOf([{ sheetId: 's', cells: [{ row: 0, col: 0, value: 5 }] }])
+  const source = createObjectWorkbookSource(document, 'doc')
+  let readSignal: AbortSignal | undefined
+  vi.spyOn(source.store('s'), 'queryColumn').mockImplementation((_query, options) => {
+    readSignal = options.signal
+    return new Promise(() => {})
+  })
+  const kernel = new ViewerKernel({ parse: async () => document, openSource: async () => source }, { yield: async () => {} })
+  await kernel.handle({ kind: 'open', requestId: 'open', docId: 'doc', source: { kind: 'object', document }, profile: 'D' }, () => {})
+  const replies: WorkerReply[] = []
+  const pending = kernel.handle({ kind: 'prepareColumns', requestId: 'stalled', owner: initialIdentity('doc', 's'), cols: Uint16Array.of(0) }, out => replies.push(out))
+  for (let i = 0; i < 30; i++) await Promise.resolve()
+  expect(readSignal).toBeDefined()
+  expect(kernel.lifecycleStats().transientBytes).toBeGreaterThan(0)
+  try {
+    await vi.advanceTimersByTimeAsync(119_999)
+    expect(replies.filter(reply => reply.kind !== 'progress')).toHaveLength(0)
+    await vi.advanceTimersByTimeAsync(2)
+    expect(replies.filter(reply => reply.kind !== 'progress'), 'A stalled query must emit one terminal timeout reply').toMatchObject([
+      { kind: 'cancelled', diagnostics: [{ code: 'query-timeout', message: expect.stringMatching(/120 seconds/) }] },
+    ])
+    await pending
+    expect(readSignal!.aborted).toBe(true)
+    expect(kernel.lifecycleStats()).toMatchObject({ inflight: 0, transientBytes: 0 })
+    expect(kernel.session('doc')!.isPrepared('s', 0)).toBe(false)
+  } finally {
+    await kernel.handle({ kind: 'close', requestId: 'close', docId: 'doc' }, () => {})
+  }
+})
+
+it('keeps the deadline armed until a staged search reply is emitted and releases an unpublished cursor', async () => {
+  vi.useFakeTimers()
+  const document = workbookOf([{ sheetId: 's', cells: Array.from({ length: 450 }, (_, row) => ({ row, col: 0, value: 'hit' })) }])
+  let began!: () => void, release!: () => void
+  const started = new Promise<void>(resolve => { began = resolve })
+  const held = new Promise<void>(resolve => { release = resolve })
+  const kernel = new ViewerKernel({ parse: async () => document, afterDispatch: async command => { if (command.kind === 'search') { began(); await held } } }, { yield: async () => {} })
+  await kernel.handle({ kind: 'open', requestId: 'open', docId: 'doc', source: { kind: 'object', document }, profile: 'D' }, () => {})
+  const replies: WorkerReply[] = []
+  const pending = kernel.handle({ kind: 'search', requestId: 'held', owner: kernel.session('doc')!.workbookOwner(), query: { text: 'hit', caseSensitive: false } }, out => replies.push(out))
+  try {
+    await started
+    expect(kernel.lifecycleStats().transientBytes).toBeGreaterThan(0)
+    await vi.advanceTimersByTimeAsync(120_001)
+    expect(replies, 'A staged but unpublished query must still time out').toMatchObject([{ kind: 'cancelled', diagnostics: [{ code: 'query-timeout' }] }])
+    await pending
+    expect(kernel.lifecycleStats()).toMatchObject({ inflight: 0, transientBytes: 0 })
+    release()
+    for (let i = 0; i < 30; i++) await Promise.resolve()
+    expect(replies).toHaveLength(1)
+  } finally { release(); await kernel.handle({ kind: 'close', requestId: 'close', docId: 'doc' }, () => {}); await pending }
+})
+
+it('suppresses a late page after timeout and accepts another request without waiting for that provider', async () => {
+  vi.useFakeTimers()
+  const document = workbookOf([{ sheetId: 's', cells: [{ row: 0, col: 0, value: 5 }] }])
+  const source = createObjectWorkbookSource(document, 'doc'), store = source.store('s')
+  const original = store.queryColumn.bind(store)
+  let resolve!: () => void
+  const blocked = new Promise<void>(done => { resolve = done })
+  const spy = vi.spyOn(store, 'queryColumn').mockImplementationOnce(async (query, options) => {
+    await blocked
+    return original(query, { ...options, signal: new AbortController().signal })
+  })
+  const kernel = new ViewerKernel({ parse: async () => document, openSource: async () => source }, { yield: async () => {} })
+  await kernel.handle({ kind: 'open', requestId: 'open', docId: 'doc', source: { kind: 'object', document }, profile: 'D' }, () => {})
+  const replies: WorkerReply[] = [], owner = initialIdentity('doc', 's')
+  const pending = kernel.handle({ kind: 'prepareColumns', requestId: 'first', owner, cols: Uint16Array.of(0) }, out => replies.push(out))
+  try {
+    await vi.advanceTimersByTimeAsync(120_001)
+    expect(replies.filter(out => out.kind !== 'progress')).toMatchObject([{ kind: 'cancelled' }])
+    await pending
+    const again: WorkerReply[] = []
+    await kernel.handle({ kind: 'prepareColumns', requestId: 'second', owner, cols: Uint16Array.of(0) }, out => again.push(out))
+    expect(again.at(-1)).toMatchObject({ kind: 'complete' })
+    resolve()
+    for (let i = 0; i < 30; i++) await Promise.resolve()
+    expect(replies.filter(out => out.kind !== 'progress')).toHaveLength(1)
+    expect(kernel.lifecycleStats()).toMatchObject({ inflight: 0, transientBytes: 0 })
+  } finally { resolve(); spy.mockRestore(); await kernel.handle({ kind: 'close', requestId: 'close', docId: 'doc' }, () => {}) }
+})
+
+it.each(['evaluator', 'yield'] as const)('reclaims session leases when the timed-out %s ignores cancellation', async blocked => {
+  vi.useFakeTimers()
+  const document = workbookOf([
+    { sheetId: 's', cells: [{ row: 0, col: 0, value: 1 }] },
+    { sheetId: 'other', cells: Array.from({ length: blocked === 'yield' ? 5000 : 1 }, (_, row) => ({ row, col: 0, value: row })) },
+  ])
+  let began!: () => void
+  const started = new Promise<void>(resolve => { began = resolve })
+  const kernel = new ViewerKernel({ parse: async () => document }, {
+    yield: async () => { if (blocked === 'yield') { began(); await new Promise(() => {}) } },
+    filterEvaluator: async () => { began(); return new Promise(() => {}) },
+  })
+  await kernel.handle({ kind: 'open', requestId: 'open', docId: 'doc', source: { kind: 'object', document }, profile: 'D' }, () => {})
+  const owner = initialIdentity('doc', 'other'), replies: WorkerReply[] = []
+  const pending = blocked === 'yield'
+    ? kernel.handle({ kind: 'prepareColumns', requestId: 'blocked', owner, cols: Uint16Array.of(0) }, out => replies.push(out))
+    : kernel.handle({ kind: 'filter', requestId: 'blocked', owner, nowMs: 0, spec: { range: { r0: 0, r1: 0, c0: 0, c1: 0, headerRows: 0, totalsRows: 0 }, columns: new Map([[0, { kind: 'number', op: 'gt', first: 0 }]]) }, keySets: [{ refId: 'keys', scope: 'domain', run: { count: 1, kinds: Uint8Array.of(1), numbers: Float64Array.of(1), texts: [undefined] } }] }, out => replies.push(out))
+  try {
+    await started
+    if (blocked === 'evaluator') expect(kernel.lifecycleStats().transientBytes, 'Shipped filter keys must be charged while their evaluator is stalled').toBeGreaterThan(0)
+    await vi.advanceTimersByTimeAsync(120_001)
+    await pending
+    expect(replies.at(-1)).toMatchObject({ kind: 'cancelled', diagnostics: [{ code: 'query-timeout' }] })
+    expect(kernel.lifecycleStats().transientBytes, 'A timeout must unwind operation charges and shipped-key leases').toBe(0)
+    kernel.session('doc')!.memory.trim(0)
+    expect(kernel.session('doc')!.isResident('other'), 'A timed-out evaluator must unpin its inactive view').toBe(false)
+  } finally { await kernel.handle({ kind: 'close', requestId: 'close', docId: 'doc' }, () => {}) }
+})

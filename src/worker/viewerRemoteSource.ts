@@ -23,7 +23,7 @@ import type {
   AuthoritativeCell, CacheIdentity, CellRead, ColumnEntry, ColumnQuery, FilterKeySet, FilterSpec, LogicalCellBox, OperationRefusal, Page,
   PopulatedQuery, RangeCompletion, ReadOptions, RowOrder, SheetLayout, SortSpec, SourceFailure, SourceReadQuery, SourceReadResult,
   SourceStamp, SourceStore, SparseRowPage, StructuralResult, ValuePolicy, ViewCommitDelta, WorkbookFormatting, WorkbookOwner, WorkerDiagnostic, WorkerReply,
-  ProfileId, GridSelection,
+  ProfileId, GridSelection, OverviewGroup, OverviewQuery, LogicalViewport, SearchQuery,
 } from '../xlsx/view/contracts'
 import type { RangeDetection } from '../xlsx/view/rangeDetection'
 import { MainMemoryLedger, axisBytes, estimatePayloadBytes, leaseTargets } from '../xlsx/view/mainLedger'
@@ -39,6 +39,8 @@ import { MAIN_THREAD_BUDGETS } from '../xlsx/view/tileCache'
 import type { ViewerClient } from './viewerClient'
 import { initialIdentity, initialWorkbookOwner, visibilityFromDisplayBitsets, type CommandOf } from './viewerProtocol'
 import type { SheetGeometry, WorkbookSource } from './viewerSession'
+import { FindError, workbookFindKey, type FindOptions, type FindPage, type FindSession } from '../xlsx/view/find'
+import { queryPayloadBytes, WORKER_QUERY_BYTES } from './viewerQueryBudget'
 
 export const ROW_CHUNK_COLS = 256
 /** One document-wide byte ledger for every sheet's painting row cache: a
@@ -88,7 +90,7 @@ const failure = (code: SourceFailure['code'], message: string, retryable = false
 const CLOSED: unique symbol = Symbol('closed')
 const CANCELLED: unique symbol = Symbol('cancelled')
 type Settled<K extends RemoteKind> = WorkerReply<K> | typeof CLOSED | typeof CANCELLED
-type RemoteKind = 'read' | 'valueQuery' | 'sort' | 'filter' | 'prepareColumns'
+type RemoteKind = 'read' | 'valueQuery' | 'sort' | 'filter' | 'prepareColumns' | 'viewport' | 'search'
 
 /** Opens `blob` in the worker behind `client`: open, then one activation per
  * sheet (each publishes its compact layout), then the first sheet again. */
@@ -114,6 +116,8 @@ export function isRemoteWorkbook(source: WorkbookSource | undefined): source is 
 }
 
 export class RemoteWorkbook implements WorkbookSource {
+  queryNotice?: string
+  private readonly latestQueries = new Map<string, string>()
   readonly valuePolicy: ValuePolicy
   readonly sheets: readonly { sheetId: string; name: string }[]
   readonly openDiagnostics: readonly WorkerDiagnostic[]
@@ -312,20 +316,24 @@ export class RemoteWorkbook implements WorkbookSource {
   async request<K extends RemoteKind>(command: CommandOf<K>, signal?: AbortSignal, progress?: (completed: number, total: number) => void): Promise<Settled<K>> {
     if (this.closed) return CLOSED
     if (signal?.aborted) return CANCELLED
-    const head = command as unknown as { kind: K; requestId: string; query?: { op: string } }
-    const key = head.query ? `read:${head.query.op}` : head.kind
+    const head = command as unknown as { kind: K; requestId: string; owner: CacheIdentity | WorkbookOwner; query?: { op: string } }
+    const key = head.kind === 'read' ? `read:${head.query?.op}` : head.kind
+    const scope = JSON.stringify([head.owner.docId, 'sheetId' in head.owner ? head.owner.sheetId : null, key])
+    this.latestQueries.set(scope, head.requestId)
+    if ((head.kind === 'search' || head.kind === 'sort' || head.kind === 'filter') && this.queryNotice) { this.queryNotice = undefined; this.notify() }
     this.stats.commands[key] = (this.stats.commands[key] ?? 0) + 1
     const unsubscribe = progress ? this.client.onProgress(head.requestId, p => progress(p.completed, p.total ?? p.completed)) : undefined
     const sent: Promise<Settled<K>> = this.client.send<K>(command).then(reply => {
       // Charged until no part of the payload is reachable: a consumer that keeps
       // a page (a scan generator across tasks) keeps the charge.
       this.mainLedger.chargeWhileReachable('replies', leaseTargets(reply), estimatePayloadBytes(reply))
-      this.capture(reply)
+      this.capture(reply, scope)
       return reply
     }, () => CLOSED)
     if (!signal) return sent.finally(() => unsubscribe?.())
     return new Promise<Settled<K>>(resolve => {
       const abort = () => {
+        if (this.latestQueries.get(scope) === head.requestId) this.latestQueries.delete(scope)
         resolve(CANCELLED)
         if (!this.closed) void this.client.send({ kind: 'cancel', requestId: this.client.nextRequestId(), targetRequestId: head.requestId }).catch(() => {})
       }
@@ -334,9 +342,65 @@ export class RemoteWorkbook implements WorkbookSource {
     })
   }
   nextRequestId(): string { return this.client.nextRequestId() }
-  private capture(reply: WorkerReply): void {
+  private capture(reply: WorkerReply, scope: string): void {
     const status = reply.diagnostics?.find(d => d.code === 'cached-value-policy')
     if (status && status.message !== this.statusMessage) { this.statusMessage = status.message; this.notify() }
+    const timeout = reply.diagnostics.find(d => d.code === 'query-timeout')
+    if (!timeout || this.closed || this.latestQueries.get(scope) !== reply.requestId || !reply.owner) return
+    const current = 'sheetId' in reply.owner ? this.identity(reply.owner.sheetId) : this.owner
+    const matches = 'sheetId' in reply.owner && 'sheetId' in current
+      ? reply.owner.docId === current.docId && reply.owner.sheetId === current.sheetId && reply.owner.viewGen === current.viewGen && reply.owner.valueGen === current.valueGen && reply.owner.fontGen === current.fontGen
+      : 'sheetVector' in reply.owner && workbookFindKey(reply.owner) === workbookFindKey(this.owner)
+    if (matches) { this.queryNotice = timeout.message; this.notify() }
+  }
+
+  async viewport(owner: CacheIdentity, window: LogicalViewport, signal: AbortSignal): Promise<Settled<'viewport'>> {
+    return this.request({ kind: 'viewport', requestId: this.nextRequestId(), owner, window }, signal)
+  }
+
+  /** The worker owns raw search; the UI controller separately guards its local
+   * font/layout owner before accepting the returned source identities. */
+  findSession(hostOwner: WorkbookOwner, query: SearchQuery, options: FindOptions): FindSession {
+    const owner = this.workbookOwner(), controller = new AbortController()
+    if (workbookFindKey({ ...hostOwner, fontGen: owner.fontGen }) !== workbookFindKey(owner)) throw new FindError('stale', 'Host and worker search owners differ')
+    let cursor: string | undefined, closed = false
+    const abort = () => controller.abort()
+    options.signal?.addEventListener('abort', abort, { once: true })
+    if (options.signal?.aborted) abort()
+    const guard = () => {
+      if (closed || this.closed) throw new FindError('closed', 'Search closed')
+      if (controller.signal.aborted) throw new FindError('cancelled', 'Search cancelled')
+      if (workbookFindKey(owner) !== workbookFindKey(this.owner) || options.currentOwner && workbookFindKey(options.currentOwner()) !== workbookFindKey(hostOwner)) throw new FindError('stale', 'Search owner changed')
+    }
+    return {
+      nextPage: async (): Promise<FindPage> => {
+        guard()
+        const out = await this.request({ kind: 'search', requestId: this.nextRequestId(), owner, query, ...(cursor ? { cursor } : {}) }, controller.signal)
+        if (typeof out === 'object' && out.kind === 'complete') cursor = out.result.nextCursor
+        guard()
+        if (out === CANCELLED) throw new FindError('cancelled', 'Search cancelled')
+        if (out === CLOSED) throw new FindError('closed', 'Search closed')
+        if (out.kind === 'cancelled') {
+          const timeout = out.diagnostics.find(d => d.code === 'query-timeout')
+          if (timeout) throw new FindError('resource-limit', timeout.message)
+          throw new FindError('cancelled', 'Search cancelled')
+        }
+        if (out.kind === 'error' && out.code === 'stale-source') throw new FindError('stale', 'Search owner changed')
+        if (out.kind === 'complete' && out.result.page) {
+          cursor = out.result.nextCursor
+          return { ...out.result.page, owner: hostOwner }
+        }
+        throw new Error(out.diagnostics[0]?.message ?? 'Worker search could not complete. Retry or narrow the search.')
+      },
+      close: () => {
+        if (closed) return
+        closed = true
+        controller.abort()
+        options.signal?.removeEventListener('abort', abort)
+        if (cursor && !this.closed) void this.request({ kind: 'read', requestId: this.nextRequestId(), owner: this.identity(this.sheets[0].sheetId), query: { op: 'releaseSearch', cursor } })
+        cursor = undefined
+      },
+    }
   }
 
   /** Worker sort: prepare the key columns (best effort; unprepared keys stream), then commit. */
@@ -346,6 +410,8 @@ export class RemoteWorkbook implements WorkbookSource {
       const prepared = await this.request({ kind: 'prepareColumns', requestId: this.nextRequestId(), owner, cols }, signal)
       if (prepared === CANCELLED) return { kind: 'cancelled' }
       if (prepared === CLOSED) return { kind: 'stale' }
+      if (prepared.kind === 'cancelled') return prepared.diagnostics.some(d => d.code === 'query-timeout')
+        ? { kind: 'error', message: prepared.diagnostics[0].message } : { kind: 'cancelled' }
       if (prepared.kind === 'error' && prepared.code === 'stale-source') return { kind: 'stale' }
     }
     return this.commit(await this.request({ kind: 'sort', requestId: this.nextRequestId(), owner, spec }, signal, progress), owner.sheetId, { sort: spec })
@@ -365,7 +431,7 @@ export class RemoteWorkbook implements WorkbookSource {
         if (view) this.mainLedger.settle(out)
         return view ? { kind: 'committed', view } : { kind: 'stale' }
       }
-      case 'cancelled': return { kind: 'cancelled' }
+      case 'cancelled': return out.diagnostics.some(d => d.code === 'query-timeout') ? { kind: 'error', message: out.diagnostics[0].message } : { kind: 'cancelled' }
       case 'incomplete': return { kind: 'incomplete' }
       case 'quota': return { kind: 'refused', refusal: { reason: 'resource-limit', message: 'View exceeds the worker memory budget.' } }
       case 'error':
@@ -425,6 +491,7 @@ export class RemoteWorkbook implements WorkbookSource {
     this.geometries.clear()
     this.layouts.clear()
     this.structures.clear()
+    this.latestQueries.clear()
     this.failures.clear()
     try {
       await Promise.race([this.client.send({ kind: 'close', requestId: this.client.nextRequestId(), docId: this.docId }), new Promise(resolve => setTimeout(resolve, 1000))])
@@ -517,7 +584,7 @@ export class RemoteSheetStore implements SourceStore {
     if (out === CLOSED) return failure('stale-source', 'The document was closed')
     switch (out.kind) {
       case 'complete': return out.result.kind === 'read' ? out.result.result : failure('page-error', 'Unexpected read reply')
-      case 'cancelled': return failure('cancelled', 'Read cancelled', true)
+      case 'cancelled': return failure('cancelled', out.diagnostics[0]?.message ?? 'Read cancelled', true)
       case 'incomplete': return failure('incomplete', 'Source range is incomplete', true)
       case 'quota': return failure('quota', 'Worker memory budget exceeded')
       case 'error': return failure(out.code, out.diagnostics[0]?.message ?? `Read failed (${out.code})`, out.retryable)
@@ -609,10 +676,15 @@ export class RemoteSheetStore implements SourceStore {
     const error = 'code' in out ? out : failure('page-error', 'Unexpected read reply')
     return { stamp: this.stamp, completeness: 'incomplete', merges: [], tables: [], spills: [], drawings: [], missing: [rect], error }
   }
-  async queryOverview(): Promise<Page<never>> {
-    // Coarse frames paint declared neutral summaries on the main thread; the
-    // worker overview query is not part of this transport.
-    return this.failedPage(failure('unsupported', 'Overview summaries are not served by the paged viewer transport'))
+  async queryOverview(request: OverviewQuery, options: ReadOptions): Promise<Page<OverviewGroup>> {
+    const budget = WORKER_QUERY_BYTES[this.workbook.profile]
+    const cap = VIEWPORT_DETAIL_LIMITS[this.workbook.profile].overviewGroups
+    const refused = this.guard(options)
+    if (refused) return this.failedPage(refused)
+    if (!Array.isArray(request.groups) || request.groups.length > cap || queryPayloadBytes(request, budget) > budget) return this.failedPage(failure('resource-limit', 'Overview request exceeds its bounded wire budget'))
+    const out = await this.read({ op: 'overview', request: structuredClone(request) }, options)
+    if ('code' in out) return this.failedPage(out)
+    return out.op === 'overview' ? out.page : this.failedPage(failure('page-error', 'Unexpected overview reply'))
   }
   async ensureComplete(rect: SourceRect, options: ReadOptions): Promise<RangeCompletion> {
     const out = await this.read({ op: 'complete', rect }, options)

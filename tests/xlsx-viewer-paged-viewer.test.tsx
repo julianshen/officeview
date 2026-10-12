@@ -147,6 +147,33 @@ describe('S5.4 bounded worker reads: pending, cancellation and replacement', () 
 })
 
 describe('S5.4 far corner and copy limits on a paged fixture', () => {
+  it('shows the worker query deadline in the viewer status and preserves the rendered sheet', async () => {
+    const h = workerHarness()
+    const ui = render(<OfficeFile data={workbook()} interactiveSheets viewerWorker={() => h.port} />)
+    await waitFor(() => expect(ui.getByRole('gridcell', { name: /alpha/ })).toBeTruthy())
+    const open = h.posted.find(command => command.kind === 'open')!
+    if (open.kind !== 'open') throw new Error('Expected open command')
+    const session = h.kernel.session(open.docId)!
+    let began!: () => void, readSignal: AbortSignal | undefined
+    const started = new Promise<void>(resolve => { began = resolve })
+    vi.spyOn(session.source.store('1'), 'scanPopulated').mockImplementation(async function* (_query, options) {
+      readSignal = options.signal
+      began()
+      await new Promise(() => {})
+    })
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] })
+    try {
+      fireEvent.change(ui.getByRole('searchbox', { name: 'Search document' }), { target: { value: 'alpha' } })
+      await act(async () => { await started })
+      await act(async () => { await vi.advanceTimersByTimeAsync(120_001) })
+      expect(ui.container.textContent).toMatch(/Query timed out after 120 seconds/)
+      expect(ui.container.textContent?.match(/Query timed out after 120 seconds/g)).toHaveLength(1)
+      expect(readSignal!.aborted).toBe(true)
+      expect(ui.getByRole('gridcell', { name: /alpha/ })).toBeTruthy()
+      expect(h.kernel.lifecycleStats()).toMatchObject({ inflight: 0, transientBytes: 0 })
+    } finally { ui.unmount(); vi.useRealTimers() }
+  })
+
   it('reaches XFD1048576 by Go To, find and copy through worker reads', async () => {
     const h = workerHarness(), write = clipboard()
     const ui = render(<OfficeFile data={workbook()} interactiveSheets viewerWorker={() => h.port} />)
@@ -157,10 +184,11 @@ describe('S5.4 far corner and copy limits on a paged fixture', () => {
     await waitFor(() => expect(write).toHaveBeenCalledWith('corner'))
     go(ui, 'A1')
     await waitFor(() => expect(ui.getByRole('gridcell', { name: /alpha/ })).toBeTruthy())
-    const scans = h.reads('scan')
+    const searches = h.posted.filter(command => command.kind === 'search').length
     fireEvent.change(ui.getByRole('searchbox', { name: 'Search document' }), { target: { value: 'corner' } })
     await waitFor(() => expect(ui.container.textContent).toMatch(/1 of 1/))
-    expect(h.reads('scan')).toBeGreaterThan(scans)
+    expect(h.posted.filter(command => command.kind === 'search').length).toBeGreaterThan(searches)
+    expect(h.reads('scan')).toBe(0)
     await waitFor(() => expect(ui.getByRole('gridcell', { name: /corner/ })).toBeTruthy())
   })
 
