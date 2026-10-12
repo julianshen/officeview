@@ -31,6 +31,12 @@ export interface SortOptions {
   yield?: (phase: SortPhase) => Promise<void>
   maxWorkerBytes?: number
   residentWorkerBytes?: number
+  /** Ownership-aware accounting: the caller guarantees the store's raw TEXT
+   * key strings stay retained and already charged in `residentWorkerBytes`
+   * (pinned, non-evictable source) for the whole operation. The dictionary then
+   * charges only its own reference slot, not a second copy of each string's
+   * UTF-16/header bytes. Error texts and ordering are unaffected. */
+  sourceRetainsStrings?: boolean
 }
 export interface SortLedger {
   tagsBytes: number
@@ -325,7 +331,8 @@ async function prepare(
       if (existing !== undefined) return existing
       // Conservative app ledger: raw UTF-16 + 24B string header + 16B array
       // capacity/reference + 128B Map entry/capacity. Host overhead is measured separately.
-      const retained = raw.length * 2 + 40
+      // A source that already owns and charges the string leaves only the 16B slot.
+      const retained = !error && cooperative.options.sourceRetainsStrings === true ? 16 : raw.length * 2 + 40
       budget.charge(retained + 128)
       budget.ledger.dictionaryBytes += retained
       mapBytes += 128

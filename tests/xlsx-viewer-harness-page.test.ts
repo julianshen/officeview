@@ -189,6 +189,15 @@ describe('warmup', () => {
     expect(result.samples.find((s) => s.name === 'input-to-present')).toMatchObject({ values: [], warmupExcluded: 1 })
     expect(result.metrics['input-to-present'].status).toBe('unavailable')
   })
+
+  it('counts one-shot warmup runs without adding their values, and keeps unit/kind checks', async () => {
+    const harness = makeHarness()
+    harness.recordWarmup('kernel', 'ms', 'operation')
+    harness.recordOneShot('kernel', 'ms', 'operation', 7)
+    expect(() => harness.recordWarmup('kernel', 'bytes', 'operation')).toThrow(/unit/)
+    const result = await harness.exportResult()
+    expect(result.samples.find((s) => s.name === 'kernel')).toMatchObject({ values: [7], warmupExcluded: 1 })
+  })
 })
 
 describe('sample bookkeeping', () => {
@@ -389,6 +398,13 @@ describe('gatherEnvironment', () => {
   it('carries the fixture id only for real fixture content', () => {
     const env = gatherEnvironment(baseContext, params('?fixture=F2'), { adapter: 'xlsx', bytes: 1, rows: null, cols: null })
     expect(env).toMatchObject({ requestedFixtureId: 'F2', fixtureId: 'F2' })
+  })
+
+  it('describes a kernel scenario by its fixture note instead of the scaffold text', () => {
+    const env = gatherEnvironment(baseContext, params('?fixture=F2'), { adapter: 'synthetic-fixture-store', bytes: 0, rows: 10, cols: 8, note: 'S8.4 kernel scenario sort-1m-1key' })
+    expect(env.note).toBe('S8.4 kernel scenario sort-1m-1key')
+    expect(env.backend).not.toMatch(/placeholder/)
+    expect(gatherEnvironment(baseContext, params(), placeholder).note).toMatch(/S0.3 scaffold/)
   })
 
   it('does not claim a fresh browser context (the page cannot verify it)', () => {

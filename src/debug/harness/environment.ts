@@ -145,14 +145,18 @@ export function gatherEnvironment(ctx: BrowserContext, params: HarnessParams, fi
       note: `${params.cache} state requested by the URL; the page cannot verify browser cache or process state`,
     },
     source,
-    backend: 'canvas2d-placeholder',
+    // A kernel scenario has no render backend; its fixture note says what ran.
+    backend: placeholder ? 'canvas2d-placeholder' : 'none (worker kernel scenario)',
     requestedFixtureId: params.fixture,
     fixtureId: placeholder ? null : params.fixture,
     evidence: deriveEvidence({ source, browser: browserFacts }),
     operator: params.operator,
     profile: params.profile,
     mode: params.mode,
-    note: 'S0.3 scaffold: synthetic placeholder fixture rendered by a minimal canvas grid; interactive viewer kernels are not implemented yet',
+    ...(fixture?.scenario ? { scenario: { ...fixture.scenario, keys: [...fixture.scenario.keys] } } : {}),
+    note: placeholder || !fixture?.note
+      ? 'S0.3 scaffold: synthetic placeholder fixture rendered by a minimal canvas grid; interactive viewer kernels are not implemented yet'
+      : fixture.note,
   }
 }
 

@@ -1,0 +1,288 @@
+{
+  "schemaVersion": 1,
+  "spec": "docs/superpowers/specs/2026-10-10-interactive-viewer.md §12.2 (freeze rule §12.1, protocol §12.6)",
+  "frozenAt": "2026-10-12",
+  "maxLoosenRatio": 2,
+  "evidence": {
+    "doc": "docs/validation/interactive-viewer-performance.md",
+    "results": "docs/validation/interactive-viewer-performance-results.json",
+    "commit": "12822737eb43b1050a70e7dcc4c549e445ce9e9d",
+    "browser": "Google Chrome 155.0.8059.39 (stable, Playwright 1.64 channel chrome, headless)",
+    "machine": "Apple M4 Pro, 14 cores, 24 GiB, macOS 26.5.2 (25F84), AC power",
+    "profile": "D",
+    "commits": {
+      "sort-100k-1key": "12822737eb43b1050a70e7dcc4c549e445ce9e9d",
+      "sort-100k-8key": "12822737eb43b1050a70e7dcc4c549e445ce9e9d",
+      "sort-1m-1key": "12822737eb43b1050a70e7dcc4c549e445ce9e9d",
+      "sort-1m-2key": "12822737eb43b1050a70e7dcc4c549e445ce9e9d",
+      "sort-1m-3key": "12822737eb43b1050a70e7dcc4c549e445ce9e9d",
+      "sort-1m-8key": "12822737eb43b1050a70e7dcc4c549e445ce9e9d",
+      "filter-1m-numeric": "12822737eb43b1050a70e7dcc4c549e445ce9e9d",
+      "text-sort-1m-natural": "12822737eb43b1050a70e7dcc4c549e445ce9e9d",
+      "value-index-100k-cold": "12822737eb43b1050a70e7dcc4c549e445ce9e9d"
+    }
+  },
+  "thresholds": [
+    {
+      "id": "warm-viewport-frame",
+      "operation": "Warm viewport frame, ordinary/wrapped fixture mix",
+      "boundary": "Frame production/presentation under sustained scroll, including query/layout/paint scheduling",
+      "desktop": {
+        "specMs": 16.7,
+        "frozenMs": 16.7,
+        "basis": "spec",
+        "outcome": "unmeasured",
+        "justification": "Not an S8.4 operation: the harness has no viewport scroll scenario yet (S5 viewer not harnessed); frozen at spec, measured by S10.2.",
+        "measurement": null
+      },
+      "mobile": {
+        "specMs": 33.3,
+        "frozenMs": 33.3,
+        "basis": "spec",
+        "outcome": "unmeasured",
+        "justification": "No physical iPad/mobile device run exists (skipped by user decision); frozen at the spec value, no device SLA is claimed.",
+        "measurement": null
+      }
+    },
+    {
+      "id": "input-acknowledgment",
+      "operation": "Input acknowledgment",
+      "boundary": "Input event to pending/focus/status visual acknowledgment",
+      "desktop": {
+        "specMs": 50,
+        "frozenMs": 50,
+        "basis": "spec",
+        "outcome": "unmeasured",
+        "justification": "Not an S8.4 operation (needs the mounted viewer controls); frozen at spec, measured by S10.2.",
+        "measurement": null
+      },
+      "mobile": {
+        "specMs": 50,
+        "frozenMs": 50,
+        "basis": "spec",
+        "outcome": "unmeasured",
+        "justification": "No physical iPad/mobile device run exists (skipped by user decision); frozen at the spec value, no device SLA is claimed.",
+        "measurement": null
+      }
+    },
+    {
+      "id": "numeric-sort-100k",
+      "operation": "100k numeric sort, up to 8 keys",
+      "boundary": "Prepared complete columns -> atomic view ready (worker DocumentSession.sort commit); input-to-present reported too",
+      "desktop": {
+        "specMs": 100,
+        "frozenMs": 100,
+        "basis": "spec",
+        "outcome": "miss",
+        "justification": "Kept at spec. Evidence is the genuinely prepared 8-key run (8 of 8 columns prepared, zero source column reads); p95 657.4 ms (6.6x); 1-key p95 265.3 ms. Loosening >2x needs a spec amendment; recorded S8.4 finding. Unmet sort thresholds are carried by plan S8.6 (sort performance). Desktop D measurement (Chrome 155 headless, M4 Pro); see docs/validation/interactive-viewer-performance.md.",
+        "measurement": {
+          "scenario": "sort-100k-8key",
+          "series": "query-completion",
+          "admitted": true,
+          "preparedColumns": 8,
+          "keys": 8,
+          "summary": {
+            "samples": 30,
+            "warmupExcluded": 3,
+            "p50": 650,
+            "p95": 657.4,
+            "max": 657.7
+          }
+        }
+      },
+      "mobile": {
+        "specMs": 300,
+        "frozenMs": 300,
+        "basis": "spec",
+        "outcome": "unmeasured",
+        "justification": "No physical iPad/mobile device run exists (skipped by user decision); frozen at the spec value, no device SLA is claimed.",
+        "measurement": null
+      }
+    },
+    {
+      "id": "numeric-sort-1m",
+      "operation": "1M numeric sort, up to 8 keys",
+      "boundary": "Prepared complete columns -> atomic view ready; cold column preparation reported separately",
+      "desktop": {
+        "specMs": 1000,
+        "frozenMs": 1000,
+        "basis": "spec",
+        "outcome": "miss",
+        "justification": "Kept at spec. Evidence is the largest genuinely prepared key count at 1M rows: 3 keys (date, amount, ratio), staged one column at a time because a 3-column batch's staging peak exceeds the 64 MiB D prepared budget while the 3 retained columns fit; zero source column reads. COVERAGE GAP: 4-8 prepared keys at 1M rows are unmeasurable under the D budget; the 8-key run is a fallback diagnostic only. p95 4362.5 ms (4.4x); 2-key 3641.2 ms, 1-key 3101.6 ms. No loosening. Unmet sort thresholds are carried by plan S8.6 (sort performance). Desktop D measurement (Chrome 155 headless, M4 Pro); see docs/validation/interactive-viewer-performance.md.",
+        "measurement": {
+          "scenario": "sort-1m-3key",
+          "series": "query-completion",
+          "admitted": true,
+          "preparedColumns": 3,
+          "keys": 3,
+          "summary": {
+            "samples": 30,
+            "warmupExcluded": 3,
+            "p50": 4267.7,
+            "p95": 4362.5,
+            "max": 4375.9
+          }
+        }
+      },
+      "mobile": {
+        "specMs": 3000,
+        "frozenMs": 3000,
+        "basis": "spec",
+        "outcome": "unmeasured",
+        "justification": "No physical iPad/mobile device run exists (skipped by user decision); frozen at the spec value, no device SLA is claimed.",
+        "measurement": null
+      }
+    },
+    {
+      "id": "numeric-filter-1m",
+      "operation": "1M numeric filter",
+      "boundary": "Prepared columns -> mask/count/metrics publication, all body rows (worker DocumentSession.filter commit)",
+      "desktop": {
+        "specMs": 100,
+        "frozenMs": 100,
+        "basis": "spec",
+        "outcome": "pass",
+        "justification": "Kept at spec: p95 72 ms (kernel p95 59.1 ms) with the 9.0 MiB prepared lane charged to the worker pool; not tightened because other admitted D machines must also meet it. Desktop D measurement (Chrome 155 headless, M4 Pro); see docs/validation/interactive-viewer-performance.md.",
+        "measurement": {
+          "scenario": "filter-1m-numeric",
+          "series": "query-completion",
+          "admitted": true,
+          "preparedColumns": null,
+          "keys": null,
+          "summary": {
+            "samples": 30,
+            "warmupExcluded": 3,
+            "p50": 71.1,
+            "p95": 72,
+            "max": 72.1
+          }
+        }
+      },
+      "mobile": {
+        "specMs": 300,
+        "frozenMs": 300,
+        "basis": "spec",
+        "outcome": "unmeasured",
+        "justification": "No physical iPad/mobile device run exists (skipped by user decision); frozen at the spec value, no device SLA is claimed.",
+        "measurement": null
+      }
+    },
+    {
+      "id": "natural-text-sort-1m",
+      "operation": "1M natural text sort",
+      "boundary": "Host Intl.Collator semantics, source-ID stable ties; prepared -> atomic view ready",
+      "desktop": {
+        "specMs": 4000,
+        "frozenMs": 4000,
+        "basis": "spec",
+        "outcome": "miss",
+        "justification": "Kept at spec. ADMITTED run: the 239 MB resident F4 source is charged to the D worker pool and the sort charges only its own dictionary references (ownership-aware accounting); kernel aggregate peak 416,190,530 B within 512 MiB. The prepared cache cannot hold 1M strings, so keys are read from the resident source. p95 7648.4 ms (1.9x): recorded finding; collation semantics are never relaxed and loosening >2x needs an amendment. Unmet sort thresholds are carried by plan S8.6 (sort performance). Desktop D measurement (Chrome 155 headless, M4 Pro); see docs/validation/interactive-viewer-performance.md.",
+        "measurement": {
+          "scenario": "text-sort-1m-natural",
+          "series": "query-completion",
+          "admitted": true,
+          "preparedColumns": 0,
+          "keys": 1,
+          "summary": {
+            "samples": 30,
+            "warmupExcluded": 3,
+            "p50": 7523.4,
+            "p95": 7648.4,
+            "max": 7748.2
+          }
+        }
+      },
+      "mobile": {
+        "specMs": 10000,
+        "frozenMs": 10000,
+        "basis": "spec",
+        "outcome": "unmeasured",
+        "justification": "No physical iPad/mobile device run exists (skipped by user decision); frozen at the spec value, no device SLA is claimed.",
+        "measurement": null
+      }
+    },
+    {
+      "id": "cold-value-index-100k",
+      "operation": "Cold 100k-value semantic index/query first page",
+      "boundary": "Complete column without prior prepared index -> first bounded page plus complete-domain membership capability",
+      "desktop": {
+        "specMs": 750,
+        "frozenMs": 750,
+        "basis": "spec",
+        "outcome": "pass",
+        "justification": "Kept at spec: p95 33.2 ms with the 23.7 MB resident source deducted from the index budget. The delivered index pages values in first-occurrence order (no collated ordering inside this boundary). Desktop D measurement (Chrome 155 headless, M4 Pro); see docs/validation/interactive-viewer-performance.md.",
+        "measurement": {
+          "scenario": "value-index-100k-cold",
+          "series": "query-completion",
+          "admitted": true,
+          "preparedColumns": null,
+          "keys": null,
+          "summary": {
+            "samples": 30,
+            "warmupExcluded": 3,
+            "p50": 25.8,
+            "p95": 33.2,
+            "max": 34.2
+          }
+        }
+      },
+      "mobile": {
+        "specMs": 2000,
+        "frozenMs": 2000,
+        "basis": "spec",
+        "outcome": "unmeasured",
+        "justification": "No physical iPad/mobile device run exists (skipped by user decision); frozen at the spec value, no device SLA is claimed.",
+        "measurement": null
+      }
+    },
+    {
+      "id": "progressive-first-viewport",
+      "operation": "Progressive first usable viewport",
+      "boundary": "Local File/Blob or complete package availability -> labelled usable first viewport for F1/F2/F3",
+      "desktop": {
+        "specMs": 1500,
+        "frozenMs": 1500,
+        "basis": "spec",
+        "outcome": "unmeasured",
+        "justification": "Not an S8.4 operation (needs the S1 importer + S5 viewport in the harness); frozen at spec, measured by S10.2.",
+        "measurement": null
+      },
+      "mobile": {
+        "specMs": 3000,
+        "frozenMs": 3000,
+        "basis": "spec",
+        "outcome": "unmeasured",
+        "justification": "No physical iPad/mobile device run exists (skipped by user decision); frozen at the spec value, no device SLA is claimed.",
+        "measurement": null
+      }
+    }
+  ],
+  "headroom": {
+    "natural-text-sort-1m": {
+      "ceilingMs": 4000,
+      "specEstimateMs": 3100,
+      "measuredP95Ms": 7648.4,
+      "headroomMs": -3648.4,
+      "scenario": "text-sort-1m-natural",
+      "note": "Admitted run. Kernel phases (p50): dictionary collation rank 4289 ms, row merge 2078 ms, key read 589 ms."
+    }
+  },
+  "diagnostics": [
+    {
+      "scenario": "sort-1m-8key",
+      "series": "query-completion",
+      "admitted": true,
+      "preparedColumns": 2,
+      "keys": 8,
+      "summary": {
+        "samples": 30,
+        "warmupExcluded": 3,
+        "p50": 7382.5,
+        "p95": 7643.4,
+        "max": 7655.5
+      },
+      "threshold": "numeric-sort-1m",
+      "reason": "FALLBACK diagnostic, not threshold evidence: the D prepared budget holds only 2 of these 8 1M-row key columns after staging (the string lanes are larger than the numeric ones that allow 3), so the remaining keys are read from the source inside the measured operation (1536 source column queries per kernel run). It measures a different boundary from spec §12.2."
+    }
+  ]
+}

@@ -156,6 +156,10 @@ export interface WorkbookSource {
   /** Value policy status (§4.4): the saved-values message exists only for
    * cached documents; a paged import learns its formula count as it runs. */
   valueStatus?(): ValueStatus
+  /** Ownership-aware sort accounting (§12.4): true only when the sheet's raw
+   * text cells stay retained AND charged to this session's pool (pinned) for
+   * the session's lifetime, so a sort need not charge a second copy. */
+  retainsKeyStrings?(sheetId: string): boolean
   /** S8.3 declared file filter/sort diagnostics; both adapters build identical records. */
   declaredFilters?(): readonly DeclaredSheetFilters[]
   release(): Promise<void>
@@ -802,6 +806,7 @@ export class DocumentSession {
         signal, stamp: store.stamp, locale: this.options.locale,
         hidden: hiddenSourceRowsFromDisplay(identityOrder, sortMask),
         residentWorkerBytes: this.memory.totalBytes, maxWorkerBytes: this.memory.limitBytes,
+        ...(this.source.retainsKeyStrings?.(sheetId) === true ? { sourceRetainsStrings: true } : {}),
         ...(this.options.yield ? { yield: this.options.yield } : {}),
         ...(this.options.now ? { now: this.options.now } : {}),
       })
@@ -1399,6 +1404,7 @@ export class DocumentSession {
         signal, stamp: store.stamp, locale: this.options.locale,
         hidden: hiddenSourceRowsFromDisplay(state.order, state.visibility),
         residentWorkerBytes: this.memory.totalBytes, maxWorkerBytes: this.memory.limitBytes,
+        ...(this.source.retainsKeyStrings?.(owner.sheetId) === true ? { sourceRetainsStrings: true } : {}),
         ...(this.options.yield ? { yield: this.options.yield } : {}),
         ...(this.options.now ? { now: this.options.now } : {}),
       })

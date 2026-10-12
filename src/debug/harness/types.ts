@@ -82,6 +82,19 @@ export interface OperatorMetadata {
   batteryState: string | null
 }
 
+/**
+ * Structured identity of an S8.4 kernel scenario run: results of different
+ * operations, key configurations, row counts or profiles are never comparable.
+ */
+export interface ScenarioIdentity {
+  id: string
+  kind: 'sort' | 'filter' | 'value-index'
+  keys: number[]
+  rows: number
+  /** False: resident harness data was not charged to the worker budget. */
+  admitted: boolean
+}
+
 export interface HarnessEnvironment {
   buildCommit: string
   hardware: {
@@ -118,6 +131,8 @@ export interface HarnessEnvironment {
   profile: HarnessProfile
   mode: HarnessMode
   note: string
+  /** Present only for kernel scenario runs (absent in S0.3 round-trip results). */
+  scenario?: ScenarioIdentity
 }
 
 export interface HarnessResult {

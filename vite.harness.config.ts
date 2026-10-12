@@ -29,6 +29,9 @@ const collect: CollectorConfig | null = env.HARNESS_COLLECT_TOKEN
 if (collect && !collect.outputDir) throw new Error('HARNESS_COLLECT_TOKEN requires HARNESS_OUTPUT')
 
 export default mergeConfig(baseConfig, {
+  // The S8.4 kernel scenarios reuse the S0.2 fixture builders, whose module
+  // imports node:crypto for digests the harness never computes.
+  resolve: { alias: { 'node:crypto': fileURLToPath(new URL('./src/debug/harness/nodeCryptoShim.ts', import.meta.url)) } },
   plugins: [harnessPlugin({ root: fileURLToPath(new URL('.', import.meta.url)), collect })],
   // LAN-mode lockdown: the harness page only needs its own directory (plus the
   // node_modules its react/jszip imports resolve to). Everything else in the

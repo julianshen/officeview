@@ -11,6 +11,8 @@ export interface BaselineExpectation {
   profile: string
   requestedFixtureId: string
   mode: string
+  /** Scenario id and fixture rows of this run; null for S0.3 round-trip runs. */
+  scenario: { id: string; rows: number; admitted: boolean } | null
 }
 
 export interface ComparisonRow {
@@ -49,6 +51,14 @@ export function checkBaselineComparable(baseline: HarnessResult, expected: Basel
   if (env.profile !== expected.profile) reasons.push(`baseline profile ${env.profile} differs from this run's ${expected.profile}`)
   if (env.requestedFixtureId !== expected.requestedFixtureId) reasons.push(`baseline fixture ${env.requestedFixtureId} differs from this run's ${expected.requestedFixtureId}`)
   if (env.mode !== expected.mode) reasons.push(`baseline mode ${env.mode} differs from this run's ${expected.mode}`)
+  const scenario = env.scenario ?? null
+  if ((scenario === null) !== (expected.scenario === null)) {
+    reasons.push(`baseline ${scenario ? `is kernel scenario ${scenario.id}` : 'is not a kernel scenario run'}, this run ${expected.scenario ? `is kernel scenario ${expected.scenario.id}` : 'is not'}`)
+  } else if (scenario && expected.scenario) {
+    if (scenario.id !== expected.scenario.id) reasons.push(`baseline scenario ${scenario.id} differs from this run's ${expected.scenario.id}`)
+    if (scenario.admitted !== expected.scenario.admitted) reasons.push(`baseline scenario admitted=${scenario.admitted} differs from this run's admitted=${expected.scenario.admitted}`)
+    if (scenario.rows !== expected.scenario.rows) reasons.push(`baseline scenario rows ${scenario.rows} differ from this run's ${expected.scenario.rows}`)
+  }
   return reasons
 }
 
@@ -57,6 +67,12 @@ function p50Of(metric: HarnessMetric | undefined): number | null {
 }
 
 export function compareResults(baseline: HarnessResult, current: HarnessResult): BaselineComparison {
+  // Different operations, key sets, row counts or profiles measure different
+  // things: refuse instead of printing a misleading delta.
+  const left = baseline.environment.scenario ?? null, right = current.environment.scenario ?? null
+  if (JSON.stringify(left) !== JSON.stringify(right) || baseline.environment.profile !== current.environment.profile) {
+    throw new Error(`baseline is not comparable: scenario ${JSON.stringify(left)} / profile ${baseline.environment.profile} vs ${JSON.stringify(right)} / profile ${current.environment.profile}`)
+  }
   const rows: ComparisonRow[] = []
   for (const [name, metric] of Object.entries(current.metrics)) {
     const baselineP50 = p50Of(baseline.metrics[name])

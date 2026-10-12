@@ -786,3 +786,32 @@ function preparedLaneTypeContract(lane: import('../src/xlsx/view/sort').SortLane
   void unbranded
 }
 void preparedLaneTypeContract
+
+describe('ownership-aware string accounting (S8.4)', () => {
+  const values = ['item-10', 'item-2', 'beta-long-'.repeat(20), 'item-2', 'alpha']
+  const rows = values.map(v => Object.freeze([fixtureCell(v)])).concat([Object.freeze([fixtureCell('#N/A', true)])])
+  const unique = [...new Set(values)]
+
+  it('charges each unique text key once in the dictionary unless the source owns the strings', async () => {
+    const store = dataStore(Object.freeze(rows))
+    const own = await sortRowOrder(store, specFor(rows.length), { ...quiet, sourceRetainsStrings: true })
+    const copy = await sortRowOrder(store, specFor(rows.length), quiet)
+    // Ordering is identical; only the ledger differs.
+    expect(rowsOf(own)).toEqual(rowsOf(copy))
+    if (own.kind !== 'complete' || copy.kind !== 'complete') throw new Error('incomplete')
+    const errorBytes = '#N/A'.length * 2 + 40
+    expect(copy.ledger.dictionaryBytes).toBe(unique.reduce((sum, v) => sum + v.length * 2 + 40, 0) + errorBytes)
+    // The source owns the text keys: only the 16 B reference slot each; error texts keep the full charge.
+    expect(own.ledger.dictionaryBytes).toBe(unique.length * 16 + errorBytes)
+    expect(own.ledger.peakBytes).toBeLessThan(copy.ledger.peakBytes)
+  })
+
+  it('admits a sort the double-counting ledger would refuse, at the same budget', async () => {
+    const store = dataStore(Object.freeze(rows))
+    const copy = await sortRowOrder(store, specFor(rows.length), quiet)
+    if (copy.kind !== 'complete') throw new Error('incomplete')
+    const limit = copy.ledger.peakBytes - 1
+    expect((await sortRowOrder(store, specFor(rows.length), { ...quiet, maxWorkerBytes: limit })).kind).toBe('resource-limit')
+    expect((await sortRowOrder(store, specFor(rows.length), { ...quiet, maxWorkerBytes: limit, sourceRetainsStrings: true })).kind).toBe('complete')
+  })
+})

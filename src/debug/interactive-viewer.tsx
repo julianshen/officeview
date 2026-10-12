@@ -21,12 +21,45 @@ import { parseHarnessParams } from './harness/environment'
 import { fixtureLoader } from './harness/fixture'
 import { createViewerHarness, type ViewerHarness } from './harness/harness'
 import { postResult } from './harness/collect'
+import { startKernelBench, type KernelBench, type KernelChannel } from './harness/kernelBench'
+import type { QuerySample } from './harness/kernelScenarios'
+import { SCENARIOS, isScenarioId } from './harness/scenarios'
 import type { HarnessResult } from './harness/types'
 
 declare global {
   interface Window {
     __viewerHarness?: ViewerHarness
+    __viewerKernelBench?: KernelBench
   }
+}
+
+/** S8.4 kernel scenario mode (?scenario=…[&rows=N]): the kernels run in a
+ * module worker over an S0.2 fixture store instead of the placeholder grid. */
+async function bootKernelScenario(harness: ViewerHarness, search: string, present: (sample: QuerySample) => void): Promise<string | null> {
+  const query = new URLSearchParams(search)
+  const scenario = query.get('scenario')
+  if (scenario === null) return null
+  if (!isScenarioId(scenario)) throw new Error(`unknown scenario ${scenario}`)
+  const def = SCENARIOS[scenario]
+  const params = parseHarnessParams(search)
+  if (params.fixture !== def.fixture) throw new Error(`scenario ${scenario} runs fixture ${def.fixture}, but the URL requested ${params.fixture}`)
+  const rowsText = query.get('rows')
+  const rows = rowsText === null ? null : Number(rowsText)
+  if (rows !== null && !(Number.isSafeInteger(rows) && rows >= 3)) throw new Error(`rows must be an integer >= 3, got ${rowsText}`)
+  const admitted = query.get('unadmitted') !== '1'
+  const worker = new Worker(new URL('./harness/kernelWorker.ts', import.meta.url), { type: 'module' })
+  const bench = await startKernelBench(harness, worker as unknown as KernelChannel, scenario, rows, params.profile === 'mobile' ? 'M' : 'D', admitted, present)
+  const scale = bench.info.rows === def.rows ? 'full scale' : `REDUCED scale (${bench.info.rows} of ${def.rows} rows)`
+  harness.setFixture({
+    adapter: 'synthetic-fixture-store',
+    bytes: 0,
+    rows: bench.info.rows,
+    cols: bench.info.cols,
+    scenario: { id: scenario, kind: def.kind, keys: [...bench.info.keys], rows: bench.info.rows, admitted },
+    note: `S8.4 kernel scenario ${scenario} (${scale}${admitted ? '' : ', UNADMITTED: resident harness data not charged to the worker budget'}): ${def.description}. Delivered S7/S8 kernels in a module worker over the S0.2 ${def.fixture} fixture store; no XLSX import, no canvas viewport. ${bench.notes.join('; ')}`,
+  }, null)
+  window.__viewerKernelBench = bench
+  return `${scenario} ready — ${bench.info.bodyRows} body rows`
 }
 
 const MAX_CANVAS_DIMENSION = 2560
@@ -86,6 +119,7 @@ function HarnessPage(): JSX.Element {
   const [error, setError] = useState<string | null>(null)
   const harnessRef = useRef<ViewerHarness | null>(null)
   const canvasRef = useRef<HTMLCanvasElement | null>(null)
+  const viewportRef = useRef<HTMLPreElement | null>(null)
 
   useEffect(() => {
     let cancelled = false
@@ -100,6 +134,19 @@ function HarnessPage(): JSX.Element {
         return
       }
       try {
+        const scenarioStatus = await bootKernelScenario(harness, window.location.search, sample => {
+          const target = viewportRef.current
+          if (target) target.textContent = `visible ${sample.visible} / total ${sample.total}\n${sample.viewport.map(row => row.join('\t')).join('\n')}`
+        })
+        if (cancelled) return
+        if (scenarioStatus !== null) {
+          harness.startLongTaskCollection()
+          harness.booted = true
+          window.__viewerHarness = harness
+          setStatus('ready')
+          setFixtureNote(scenarioStatus)
+          return
+        }
         const { info, grid } = await fixtureLoader.loadPlaceholder()
         if (cancelled) return
         harness.setFixture(info, grid)
@@ -147,6 +194,7 @@ function HarnessPage(): JSX.Element {
       </p>
       {error ? <p style={{ color: '#c00' }}>error: {error}</p> : null}
       <canvas ref={canvasRef} style={{ border: '1px solid #999', display: status === 'ready' ? 'block' : 'none' }} />
+      <pre ref={viewportRef} style={{ fontSize: 11, maxHeight: 480, overflow: 'hidden' }} />
       <p>
         <button onClick={handleExport} disabled={status !== 'ready'}>
           Export result
