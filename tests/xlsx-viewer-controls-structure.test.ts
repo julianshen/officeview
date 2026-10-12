@@ -59,4 +59,26 @@ describe('viewer controls structural snapshot', () => {
     expect(calls()).toBe(2)
     controls.dispose()
   })
+
+  /**
+   * S10.1 reproduced gap (Chromium/WebKit, F2 resident and worker-backed): after
+   * Go To A1, the funnel on column D refused "Contiguous selection does not
+   * contain the active cell". A header gesture moves the active cell to its
+   * column but kept the old single-cell selection, which detection (S7.1,
+   * deliberately) treats as an explicit selection away from the active cell.
+   */
+  it('a header gesture on another column ignores a leftover single-cell selection', async () => {
+    const wide: XlsxDocument = { ...doc, sheets: [{ ...doc.sheets[0], rows: [0, 1, 2, 3].map(r => ({ index: r, cells: [0, 1, 2].map(c => num(r, c, r === 0 ? `h${c}` : r * 10 + c)) })) }] }
+    const source = createObjectWorkbookSource(wide, 'doc-1')
+    const order = createIdentityOrder()
+    const a1 = { rows: { kind: 'intervals' as const, intervals: [{ r0: 0, r1: 0 }] }, cols: [{ c0: 0, c1: 0 }] }
+    const view: SheetView = { sheetId: '1', revision: 0, order, baseHidden: createIntervalSet([]), visibility: visibilityFromHidden(createIntervalSet([])), sort: null, filter: null,
+      selection: { active: { row: 0, col: 0 }, anchor: { row: 0, col: 0 }, ranges: [a1] } }
+    const owner = { docId: 'doc-1', sheetId: '1', valueGen: 0, fontGen: 0, viewGen: 0 }
+    const snapshot = () => ({ owner, filter: null, sort: null, records: { visible: 3, total: 3, completeness: 'complete' as const } })
+    const controls = await viewerControls({ doc: wide, source, sheetId: '1', snapshot, view: () => view, publish: snapshot }, new AbortController().signal)
+    const resolved = await controls.client.resolve(owner, 'filter', new AbortController().signal, undefined, 2)
+    expect(resolved).toMatchObject({ kind: 'complete', range: { r0: 0, r1: 3, c0: 0, c1: 2, headerRows: 1 } })
+    controls.dispose()
+  })
 })
