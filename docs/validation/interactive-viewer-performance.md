@@ -1,65 +1,65 @@
 # Interactive viewer — frozen thresholds, S8.6 kernel results and S10.2 viewer results
 
-**S10.2 desktop Chrome receipt r11: desktop D NOT admitted (main-thread memory
-pending by 0.03 MiB).** The other 12 desktop rows pass; two of them pass with
+**S10.2 desktop Chrome receipt r13: desktop D NOT admitted (main-thread memory
+pending by 0.08 MiB).** The other 12 desktop rows pass; two of them pass with
 a documented sample limitation (`pass-limited`).
 
-The receipt is `interactive-viewer-viewer-chrome-r11.json` (SHA-256
-`4d0f459f…19c8bfd40`), taken at `6d4d577` on a clean tree, on a shared machine
-(load 3.4–6.1).
+The receipt is `interactive-viewer-viewer-chrome-r13.json` (SHA-256
+`831e0e3d…4930734a`), taken at `752ccad` on a clean tree, on a shared machine
+(load 5.0–6.8).
 
 **The round-4 gate.** At every checkpoint the gap is checked: the forced-GC heap
 above the warmed host, minus the ledger's *current* bytes there, minus that
-checkpoint's **measured compiled-code growth**.
-- The heap reading is the **median of 5 repeated forced-GC readings**, all
+checkpoint's measured compiled-code growth (heap-snapshot `code` nodes), minus
+its measured growth of the page's buffered layout-shift entries (860 B each).
+- The heap reading is the median of 5 repeated forced-GC readings, all
   recorded.
-- Code growth is taken from heap-snapshot `code` nodes, relative to the closed
-  warmed host.
-- The allowance is the warmed host's own open gap (code growth excluded the
-  same way, never below 0) plus the larger of the idle probe noise and **that
-  checkpoint's reading spread**.
-- A missing code reading or fewer than 5 readings leaves the row pending.
-
-**DOM/React cost by element class.** The ledger's DOM pool is charged per
-element class: cell (inside a gridcell), header (inside a row/column header:
-select/sort/filter/more buttons) and other (everything else the viewer
-renders). The per-class costs come from the perf page's `calibrateGrid`, which
-mounts the real GridSemantics tree:
-- 12 viewports from 400×300 to 2560×1440, with rows and columns varied
-  independently;
-- 2 re-renders each, the median of 3 forced-GC deltas, and a least-squares fit
-  with a fixed term;
-- result: cell 3,783 B, header 4,540 B, other 5,215 B (residuals within
-  ±113 KiB), charged rounded up as 3,800 / 4,600 / 5,300 B.
+- The allowance is the warmed host's own open gap (never below 0) plus the
+  larger of the idle probe noise and that checkpoint's reading spread.
+- A missing code reading, layout-shift count or repeated readings leaves the
+  row pending.
 
 | Session | Open gap | Loaded gap / spread | After-ops gap / spread | Closed gap / spread |
 |---|---:|---:|---:|---:|
-| F2 | −0.17 MiB | 0.16 / 0.30 MiB | −0.77 / 0.44 MiB | **0.16 / 0.13 MiB** |
-| F4 | −0.22 MiB | −0.23 / 0.37 MiB | 0.20 / 0.34 MiB | −0.11 / 0.18 MiB |
+| F2 | −0.25 MiB | **0.61 / 0.54 MiB** | −0.61 / 0.37 MiB | 0.00 / 0.24 MiB |
+| F4 | −0.25 MiB | 0.14 / 0.37 MiB | −0.12 / 0.27 MiB | −0.10 / 0.17 MiB |
 
-All gaps are net of measured code growth (0.21–0.69 MiB).
+Only F2 loaded exceeds its allowance, by 0.08 MiB, within the repeatability the
+same checkpoint showed (0.54 MiB). It is left **pending**, not widened.
 
-Every open checkpoint passes. The F2 closed checkpoint keeps 0.16 MiB with the
-ledger at 0, against an allowance of 0.13 MiB, which is its own reading spread
-(the warm-open gap is negative). It is 0.03 MiB over.
+**The viewer adds no layout shift (round 4, fix 18).** Chrome's Layout
+Instability API showed two sources:
+- scrolling moved every semantic grid row through its `top` style: CLS 0.99
+  over 60 frames;
+- the filter dialog grew as its value list arrived: CLS 0.016 at full scale.
 
-**Attribution of the closed remainder.** A heap snapshot of the closed F2 page,
-compared with the closed warmed host (non-code), shows:
-- +117 `LayoutShift` entries;
-- +585 `LayoutShiftAttribution` entries;
-- +1,170 `DOMRectReadOnly`;
-- one grown cppgc hash table (+0.10 MiB).
+Those shifts are what filled the page's layout-shift buffer, the r11 closed
+residue. The fix:
+- rows and column-header controls are placed by transform; cells keep `left`
+  inside their row;
+- the column popup is anchored at the top;
+- the filter dialog reserves space for what its value list fills in.
 
-That is Chrome's layout-shift performance-timeline buffer, which the spec caps
-at 150 entries. It belongs to the page's `Performance` object, not to the
-viewer, and nothing in page script can clear it. The session's DOM movement
-filled it the rest of the way to its cap.
+`tests/browser/viewer-layout-shift.spec.ts` asserts a summed non-recent shift
+of at most 0.001 over open, scroll, sort, a throttled filter dialog and close.
+It fails on the code before the fix (0.695, then 0.026). At full scale the
+remaining shift is 4.3e-7, from the sort glyph.
 
-It is bounded, but the gate neither measures nor excludes it, so the row is
-reported **pending** rather than widened. The options are listed in the round-4
-report:
-- measure the buffered layout-shift entries and exclude them like code;
-- or stop the viewer's DOM moves from registering as layout shifts.
+Placing every cell by transform as well (r12) made each cell a paint layer, so
+r12 failed. Cells went back to `left`.
+
+**DOM/React cost by element class.** Calibrated with the real GridSemantics
+tree (`calibrateGrid`) over 12 viewports, with 2 re-renders and a least-squares
+fit with a fixed term:
+- measured: cell 3,847 B, header 4,337 B, other 5,667 B (residuals within
+  ±104 KiB);
+- charged rounded up: 3,900 / 4,400 / 5,700 B.
+
+History of this gate:
+- r9: 0.57–0.66 MiB over the allowance, before code growth was measured.
+- r10: 0.15–0.35 MiB over, before the class calibration.
+- r11: 0.03 MiB over, the page's layout-shift buffer.
+- r12: 0.40–0.72 MiB over, from the per-cell paint layers.
 
 r8 below remains the last receipt admitted under the round-3 rules. It has no
 warm-open record, so it does not validate under round 4.
@@ -594,7 +594,7 @@ harness-only):
     re-rendered and clicked the perf page after close; r6 removes that, see 15.) `VIEWER_SUITE_SNAPSHOT` writes a heap snapshot for diagnosis
     only; it adds nothing to the receipt and was unset for r5–r8.
 
-Fixes from the round-4 follow-ups (all change product code; r6 measures 14–15, r8 measures 16–17):
+Fixes from the round-4 follow-ups (all change product code; r6 measures 14–15, r8 measures 16–17, r13 measures 18):
 
 14. **Reply charges settle on adoption.** `MainMemoryLedger.settle` ends a
     reply's charge once its consumer has charged the decoded copy: the row
@@ -639,6 +639,12 @@ Fixes from the round-4 follow-ups (all change product code; r6 measures 14–15,
     What remains is inherent in the current design: one pass over the column
     from page storage, plus the projection. Caching the evaluated column (a
     prepared value lane) would remove that pass; it was not done here.
+18. **The viewer adds no layout shift to its host page.** Rows and column-header
+    controls are positioned by transform; cells keep `left` inside their row;
+    the column popup is anchored at the top; the filter dialog reserves space for
+    what its value list fills in. Test: `tests/browser/viewer-layout-shift.spec.ts`
+    (Chromium, CLS ≤ 0.001 over open, scroll, sort, throttled filter, close),
+    which fails on the old code (0.695, then 0.026).
 17. **The tile canvases' text-shaping cache is charged** (`canvasText`; see the
     ledger section). The viewer ledger test checks the pool is charged once
     tiles drew text and released on unmount.
