@@ -131,8 +131,12 @@ class Check {
     return found
   }
 
-  /** A real WebDriver click; a synthetic el.click() fallback is recorded, never hidden. */
+  /** A real WebDriver click on an element that exists and is enabled (popup
+   * controls stay disabled while their value list loads, and a click on a
+   * disabled button is a silent no-op); a synthetic el.click() fallback is
+   * recorded, never hidden. */
   async click(body: string, describe: string, detail: Record<string, unknown>, ...args: unknown[]): Promise<void> {
+    await this.until(`const el = (() => { ${body} })(); return Boolean(el && !el.disabled)`, 60_000, `${describe} to be enabled`, ...args)
     const el = await this.element(body, describe, ...args)
     try {
       await this.driver.click(el)
@@ -282,7 +286,9 @@ async function main(): Promise<number> {
       detail.focused = await check.focusGrid()
       const steps: Array<[string, string[], string]> = [
         [Keys.ArrowDown, [], 'B3'], [Keys.ArrowRight, [], 'C3'], [Keys.Enter, [], 'C4'], [Keys.Home, [], 'A4'],
-        [Keys.Home, [Keys.Meta], 'A1'], [Keys.ArrowDown, [Keys.Meta], 'A1048576'], [Keys.ArrowRight, [Keys.Meta], 'XFD1048576'], [Keys.ArrowLeft, [], 'XFC1048576'],
+        // Ctrl+Home, not Cmd+Home: Safari reserves Cmd+Home (it navigated this
+        // tab to the Safari home page in the S13 run); the viewer accepts both.
+        [Keys.Home, [Keys.Control], 'A1'], [Keys.ArrowDown, [Keys.Meta], 'A1048576'], [Keys.ArrowRight, [Keys.Meta], 'XFD1048576'], [Keys.ArrowLeft, [], 'XFC1048576'],
       ]
       const seen: string[] = []
       for (const [key, modifiers, want] of steps) {
