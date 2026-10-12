@@ -107,6 +107,27 @@ describe('RemoteDrawingCache', () => {
     expect(drawingNotices(cache.get('1'))).toEqual([])
   })
 
+  it('a re-arm asks exactly once more, and re-arms stop at a total attempt cap', async () => {
+    vi.useFakeTimers()
+    const t = host()
+    const cache = new RemoteDrawingCache(t.h, 1000)
+    const stale = (index: number) => t.pending[index].resolve({ commandKind: 'read', requestId: 'x', owner: identity('1'), diagnostics: [{ code: 'stale-owner', message: 'stale' }], kind: 'error', code: 'stale-source', retryable: true } as WorkerReply<'read'>)
+    cache.get('1')
+    for (let i = 0; i < 20; i++) { stale(i); await vi.advanceTimersByTimeAsync(300) }
+    expect(cache.get('1').state).toBe('failed')
+    expect(t.pending).toHaveLength(20)
+    // Each re-arm (at most every 5 s) is one read; a transient answer fails again at once.
+    for (let rearm = 0; rearm < 30; rearm++) {
+      await vi.advanceTimersByTimeAsync(5000)
+      cache.get('1')
+      const count = t.pending.length
+      if (count > 20 + rearm) { stale(count - 1); await vi.advanceTimersByTimeAsync(300) }
+      expect(cache.get('1').state).toBe('failed')
+    }
+    // 20 + 20 re-arms = the 40-read total cap; nothing more is asked.
+    expect(t.pending).toHaveLength(40)
+  })
+
   it('keeps the source diagnostics of a non-retryable incomplete result', async () => {
     const t = host()
     const cache = new RemoteDrawingCache(t.h, 1000)

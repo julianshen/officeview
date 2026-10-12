@@ -59,7 +59,7 @@ const filledShape = `<xdr:oneCellAnchor>${anchorFrom(0, 1)}<xdr:ext cx="${64 * E
 const themedShape = `<xdr:twoCellAnchor>${anchorFrom(2, 4, 3, 2)}<xdr:to><xdr:col>4</xdr:col><xdr:colOff>0</xdr:colOff><xdr:row>7</xdr:row><xdr:rowOff>0</xdr:rowOff></xdr:to><xdr:sp><xdr:nvSpPr><xdr:cNvPr id="3" name="Oval"/><xdr:cNvSpPr/></xdr:nvSpPr><xdr:spPr>${xfrm(80, 60)}<a:prstGeom prst="ellipse"><a:avLst/></a:prstGeom><a:solidFill><a:schemeClr val="accent1"/></a:solidFill></xdr:spPr></xdr:sp><xdr:clientData/></xdr:twoCellAnchor>`
 const picture = `<xdr:oneCellAnchor>${anchorFrom(5, 2)}<xdr:ext cx="${30 * EMU_PER_PX}" cy="${30 * EMU_PER_PX}"/><xdr:pic><xdr:nvPicPr><xdr:cNvPr id="4" name="Picture"/><xdr:cNvPicPr/></xdr:nvPicPr><xdr:blipFill><a:blip xmlns:r="${R_NS}" r:embed="rImg"/><a:stretch><a:fillRect/></a:stretch></xdr:blipFill><xdr:spPr>${xfrm(30, 30)}<a:prstGeom prst="rect"><a:avLst/></a:prstGeom></xdr:spPr></xdr:pic><xdr:clientData/></xdr:oneCellAnchor>`
 
-interface DrawingWorkbook { anchors: string; theme?: boolean; media?: boolean; secondImage?: boolean; vml?: boolean; unusedMedia?: number; content?: boolean }
+interface DrawingWorkbook { anchors: string; theme?: boolean; media?: boolean; secondImage?: boolean; vml?: boolean; unusedMedia?: number; content?: boolean; mediaBytes?: number }
 function drawingWorkbook(spec: DrawingWorkbook): Uint8Array {
   const extra: BuildEntry[] = [
     { name: 'xl/worksheets/_rels/sheet1.xml.rels', data: `<?xml version="1.0"?><Relationships xmlns="${PKG_RELS}"><Relationship Id="rD1" Type="${R_NS}/drawing" Target="../drawings/drawing1.xml"/>${spec.vml ? `<Relationship Id="rV1" Type="${R_NS}/vmlDrawing" Target="../drawings/vmlDrawing1.vml"/>` : ''}</Relationships>` },
@@ -68,7 +68,7 @@ function drawingWorkbook(spec: DrawingWorkbook): Uint8Array {
   if (spec.media) {
     extra.push({ name: 'xl/drawings/_rels/drawing1.xml.rels', data: `<?xml version="1.0"?><Relationships xmlns="${PKG_RELS}"><Relationship Id="rImg" Type="${R_NS}/image" Target="../media/image1.png"/>${spec.secondImage ? `<Relationship Id="rImg2" Type="${R_NS}/image" Target="../media/image2.png"/>` : ''}${spec.unusedMedia ? `<Relationship Id="rUnused" Type="${R_NS}/image" Target="../media/unused.png"/>` : ''}</Relationships>` })
     if (spec.unusedMedia) extra.push({ name: 'xl/media/unused.png', data: new Uint8Array(spec.unusedMedia) })
-    extra.push({ name: 'xl/media/image1.png', data: PNG })
+    extra.push({ name: 'xl/media/image1.png', data: spec.mediaBytes ? Uint8Array.from({ length: spec.mediaBytes }, (_, i) => PNG[i] ?? 0) : PNG })
     if (spec.secondImage) extra.push({ name: 'xl/media/image2.png', data: PNG.slice() })
   }
   if (spec.content) {
@@ -270,6 +270,38 @@ describe('paged drawing reads: parse reuse and the document node budget', () => 
     await read(source)
     expect(parses.count - before).toBe(2)
     await source.release()
+  })
+
+  async function loadFirstSheet(bytes: Uint8Array, memory: { set(bytes: number): boolean }) {
+    const { session, source } = await pagedSource(bytes)
+    const sheet = session.workbook.sheets[0]
+    const result = await loadPagedSheetDrawings(session.workbook.parts, { name: sheet.name, partPath: sheet.partPath, drawingIds: sheet.metadata.drawingIds },
+      source.geometry('1'), pagedDrawingLimits('D'), new AbortController().signal, { memory })
+    await source.release()
+    return result
+  }
+
+  it('charges a node-dense XML part by its elements (calibrated tree cost), not by a flat byte multiple', async () => {
+    const shapes = Array.from({ length: 400 }, (_, i) => filledShape.replace('id="2" name="Box"', `id="${i + 10}" name="Box ${i}"`)).join('')
+    const part = `<?xml version="1.0"?><xdr:wsDr xmlns:xdr="${XDR_NS}" xmlns:a="${A_NS}">${shapes}</xdr:wsDr>`
+    let elements = 0
+    for (let i = 0; i < part.length; i++) if (part[i] === '<' && part[i + 1] !== '/' && part[i + 1] !== '?' && part[i + 1] !== '!') elements++
+    const charged: number[] = []
+    const result = await loadFirstSheet(drawingWorkbook({ anchors: shapes }), { set: bytes => { charged.push(bytes); return true } })
+    expect(result.drawings.drawings).toHaveLength(400)
+    // A parsed ordered-tree element retains ~380-560 B in JSC (measured); the
+    // drawing part alone must be charged at least that, plus its text.
+    expect(Math.max(...charged)).toBeGreaterThanOrEqual(elements * 560 + part.length)
+  })
+
+  it('stops the parse once the pool refuses a part (later anchors are not parsed and the read is refused)', async () => {
+    const shapes = Array.from({ length: 20 }, (_, i) => filledShape.replace('id="2" name="Box"', `id="${i + 10}" name="Box ${i}"`)).join('')
+    let accepted = 0
+    const memory = { set: (bytes: number) => { if (bytes - accepted >= 1_000_000) return false; accepted = bytes; return true } }
+    const result = await loadFirstSheet(drawingWorkbook({ anchors: picture + shapes, media: true, mediaBytes: 2_000_000 }), memory)
+    expect(result.drawings.diagnostics.map(d => d.code)).toEqual(['drawing-memory-refused'])
+    // Only the picture's own node was reserved before the media read was refused.
+    expect(result.nodes).toBeLessThanOrEqual(1)
   })
 
   it('applies the drawing node budget per document: a sheet gets what the other sheets left, and says so when it runs out', async () => {

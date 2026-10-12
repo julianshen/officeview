@@ -26,8 +26,10 @@ import type { CommandOf } from './viewerProtocol'
 const RETRY_MS = 250
 const MAX_ATTEMPTS = 20
 /** After the attempts ran out on transient answers (e.g. a long burst of view
- * commits), showing the sheet again asks once more, at most this often. */
+ * commits), showing the sheet again asks once more, at most this often, until
+ * the sheet's total attempts reach MAX_TOTAL_ATTEMPTS (then the failure stays). */
 const REARM_MS = 5000
+const MAX_TOTAL_ATTEMPTS = 40
 
 export interface DrawingHost {
   identity(sheetId: string): CacheIdentity
@@ -62,7 +64,10 @@ interface Entry {
   drawingsIn: SheetGeometry['drawingsIn']
   /** Identifies the request whose reply may be adopted. */
   seq: number
+  /** Reads sent since the last reset (never reset by a re-arm). */
   attempts: number
+  /** Retries continue while attempts are below this. */
+  limit: number
   /** Set when the attempts ran out on transient answers: when get() may re-arm. */
   rearmAt?: number
   controller?: AbortController
@@ -86,13 +91,13 @@ export class RemoteDrawingCache {
       this.entries.delete(sheetId)
       this.entries.set(sheetId, entry)
     } else {
-      entry = { state: 'waiting', gen: 0, drawings: [], images: [], diagnostics: [], bytes: 0, drawingsIn: none, seq: 0, attempts: 0 }
+      entry = { state: 'waiting', gen: 0, drawings: [], images: [], diagnostics: [], bytes: 0, drawingsIn: none, seq: 0, attempts: 0, limit: MAX_ATTEMPTS }
       this.entries.set(sheetId, entry)
     }
     if (entry.state === 'failed' && entry.rearmAt !== undefined && Date.now() >= entry.rearmAt) {
       // A transient failure is not final: the notice stays until a new answer replaces it.
       entry.state = 'waiting'
-      entry.attempts = 0
+      entry.limit = entry.attempts + 1
       entry.rearmAt = undefined
     }
     if (entry.state === 'waiting' && !entry.timer && this.host.loadState(sheetId).completeness === 'complete') void this.load(sheetId, entry)
@@ -132,6 +137,7 @@ export class RemoteDrawingCache {
     entry.timer = undefined
     entry.state = 'waiting'
     entry.attempts = 0
+    entry.limit = MAX_ATTEMPTS
     entry.rearmAt = undefined
     entry.drawings = []
     entry.images = []
@@ -164,13 +170,13 @@ export class RemoteDrawingCache {
     // A foreign/stale owner, a cancelled read or a sheet still loading is asked
     // again; anything else (or too many attempts) is a visible failure.
     const retryable = !owned || (result ? result.error?.retryable === true : out.kind === 'cancelled' || (out.kind === 'error' && out.retryable))
-    if (retryable && entry.attempts < MAX_ATTEMPTS) {
+    if (retryable && entry.attempts < entry.limit) {
       entry.state = 'waiting'
       entry.timer = setTimeout(() => { entry.timer = undefined; if (entry.seq === seq) void this.load(sheetId, entry) }, RETRY_MS)
       return
     }
     entry.state = 'failed'
-    entry.rearmAt = retryable ? Date.now() + REARM_MS : undefined
+    entry.rearmAt = retryable && entry.attempts < MAX_TOTAL_ATTEMPTS ? Date.now() + REARM_MS : undefined
     entry.diagnostics = result?.diagnostics.length ? result.diagnostics
       : [{ code: DRAWINGS_UNAVAILABLE, message: `Drawings could not be loaded${out.kind === 'error' && out.diagnostics[0] ? `: ${out.diagnostics[0].message}` : ''}` }]
     entry.gen++

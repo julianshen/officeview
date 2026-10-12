@@ -328,6 +328,20 @@ describe('S13.2 item 5: 44px touch targets for legal narrow columns (spec §9.3,
     expect(document.activeElement).toBe(disclosure)
   })
 
+  it('the group closes when the active column changes and stays closed when it returns', () => {
+    const projection = narrowProjection(), viewport = { width: 200, height: 100 }
+    const props = (col: number) => ({ projection, window: createScrollWindow(projection, viewport), viewport, columns: [0, 1, 2], sort: null, touchControls: true,
+      onSortCycle: vi.fn(), onFilter: vi.fn(), onSelect: vi.fn(), selection: selectCell(emptyGridSelection(), projection, { row: 0, col }) })
+    const ui = render(<GridHeaders {...props(1)} />)
+    fireEvent.click(ui.getByRole('button', { name: 'Actions for column B' }))
+    expect(ui.getByRole('group', { name: 'Column B actions' })).toBeTruthy()
+    ui.rerender(<GridHeaders {...props(2)} />)
+    expect(ui.queryByRole('group', { name: 'Column C actions' })).toBeNull()
+    ui.rerender(<GridHeaders {...props(1)} />)
+    expect(ui.queryByRole('group', { name: 'Column B actions' })).toBeNull()
+    expect(ui.getByRole('button', { name: 'Actions for column B' }).getAttribute('aria-expanded')).toBe('false')
+  })
+
   it('a tap outside closes the group', () => {
     const { ui } = narrow(1)
     fireEvent.click(ui.getByRole('button', { name: 'Actions for column B' }))

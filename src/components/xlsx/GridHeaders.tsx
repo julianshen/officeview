@@ -128,7 +128,11 @@ export function GridHeaders(props: GridHeadersProps): ReactElement {
   const activeCol = props.selection.active?.col
   const laneCol = touch && (actions || props.onSelect) && activeCol !== undefined && props.columns.includes(activeCol) && narrowTouch(activeCol) ? activeCol : undefined
   const [openLane, setOpenLane] = useState<number | null>(null)
-  const laneOpen = laneCol !== undefined && openLane === laneCol
+  // The group belongs to one lane column: another active column closes it, and
+  // returning to the first one does not reopen it (state adjusted during render).
+  const [laneFor, setLaneFor] = useState(laneCol)
+  if (laneFor !== laneCol) { setLaneFor(laneCol); setOpenLane(null) }
+  const laneOpen = laneCol !== undefined && laneFor === laneCol && openLane === laneCol
   const laneButton = useRef<HTMLButtonElement | null>(null), laneGroup = useRef<HTMLDivElement | null>(null)
   const laneId = `${useId()}-lane`
   const closeLane = (refocus: boolean) => {

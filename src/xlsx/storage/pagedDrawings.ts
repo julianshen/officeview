@@ -34,8 +34,21 @@ import { importLimitsFor } from './importSession'
 const R_NS = 'http://schemas.openxmlformats.org/officeDocument/2006/relationships'
 /** Refused parts named one by one in diagnostics; the rest are counted. */
 const NAMED_REFUSALS = 4
-/** Working-set estimate per inflated XML byte: its UTF-16 text plus the parsed tree. */
-export const XML_WORKING_SET_FACTOR = 8
+/** Retained bytes per element of a parsed (ordered or plain) XML tree, attributes
+ * included. Calibrated from heap measurements of parseXmlOrdered over drawing
+ * parts in JavaScriptCore (380-560 B per element at 60k-120k elements), rounded
+ * up; charged per tree actually built, on top of the part's bytes and text. */
+export const XML_ELEMENT_BYTES = 640
+/** Element start tags in an XML byte stream (`<` not opening an end tag, PI, comment or doctype). */
+export function countXmlElements(bytes: Uint8Array): number {
+  let count = 0
+  for (let i = 0; i < bytes.length; i++) {
+    if (bytes[i] !== 0x3c) continue
+    const next = bytes[i + 1]
+    if (next !== 0x2f && next !== 0x3f && next !== 0x21) count++
+  }
+  return count
+}
 
 
 export interface PagedDrawingLimits {
@@ -70,10 +83,16 @@ class RangePackage extends OfficePackage {
   private readBytes = 0
   private partsRead = 0
   private refusals = 0
-  /** Charged working-set estimate (inflated parts, parsed trees). */
+  /** Charged working-set estimate (inflated parts, their text, parsed trees). */
   workingSet = 0
   /** A part did not fit the document pool: the whole read is refused, never partial. */
   memoryRefused = false
+  /** Drawing nodes the parse had reserved when the pool refused. */
+  nodesAtRefusal = 0
+  private readonly texts = new Map<string, Promise<string | undefined>>()
+  private settleRefusal: () => void = () => {}
+  /** Settles when the pool refuses, so the caller stops waiting on the parse. */
+  readonly refusal = new Promise<void>(resolve => { this.settleRefusal = resolve })
   readonly diagnostics: WorkerDiagnostic[] = []
 
   constructor(private readonly src: RangeSource, private readonly inventory: ZipInventory, private readonly limits: PagedDrawingLimits, private readonly signal: AbortSignal, private readonly memory?: DrawingMemory) {
@@ -109,19 +128,39 @@ class RangePackage extends OfficePackage {
       return bytes
     })
   }
-  override async text(path: string): Promise<string | undefined> {
-    const bytes = await this.bytes(path)
-    return bytes && utf8.decode(bytes)
+  override text(path: string): Promise<string | undefined> {
+    let text = this.texts.get(path)
+    if (!text) this.texts.set(path, text = this.bytes(path).then(bytes => bytes && utf8.decode(bytes)))
+    return text
   }
   override xml(path: string): Promise<XmlNode | undefined> {
     let tree = this.trees.get(path)
-    if (!tree) this.trees.set(path, tree = this.text(path).then(text => text === undefined ? undefined : parseXml(text)))
+    if (!tree) this.trees.set(path, tree = this.tree(path, parseXml))
     return tree
   }
   override xmlOrdered(path: string): Promise<XmlNode | undefined> {
     let tree = this.ordered.get(path)
-    if (!tree) this.ordered.set(path, tree = this.text(path).then(text => text === undefined ? undefined : parseXmlOrdered(text)))
+    if (!tree) this.ordered.set(path, tree = this.tree(path, parseXmlOrdered))
     return tree
+  }
+  /** Every tree built is admitted first, by its element count. */
+  private async tree(path: string, parse: (text: string) => XmlNode): Promise<XmlNode | undefined> {
+    const bytes = await this.bytes(path)
+    if (!bytes || !this.admit(countXmlElements(bytes) * XML_ELEMENT_BYTES)) return undefined
+    const text = await this.text(path)
+    return text === undefined ? undefined : parse(text)
+  }
+  /** Grows the pool share by `cost`; on refusal the read is refused as a whole and
+   * the parse winds down: no further part reads and no further drawing nodes. */
+  private admit(cost: number): boolean {
+    if (this.memoryRefused) return false
+    if (!this.memory || this.memory.set(this.workingSet + cost)) { this.workingSet += cost; return true }
+    this.memoryRefused = true
+    const context = drawingPartContext(this)
+    this.nodesAtRefusal = context.nodes
+    context.nodes = DOCUMENT_DRAWING_NODE_LIMIT
+    this.settleRefusal()
+    return false
   }
   override paths(predicate?: (p: string) => boolean): string[] {
     return this.inventory.entries.map(entry => entry.name).filter(name => !predicate || predicate(name))
@@ -131,10 +170,8 @@ class RangePackage extends OfficePackage {
     const entry = this.inventory.find(path)!
     if (this.readBytes + entry.uncompressedSize > this.limits.readBytes) { this.refuse(path, `the sheet's drawing parts exceed ${this.limits.readBytes} bytes`); return undefined }
     if (this.partsRead >= this.limits.maxParts) { this.refuse(path, `more than ${this.limits.maxParts} drawing parts`); return undefined }
-    // The worker pool admits the working set before anything is inflated.
-    const cost = entry.uncompressedSize * (classifyPart(path).cls === 'media' ? 1 : XML_WORKING_SET_FACTOR)
-    if (this.memory && !this.memory.set(this.workingSet + cost)) { this.memoryRefused = true; return undefined }
-    this.workingSet += cost
+    // The pool admits the inflated bytes (and, for XML, their UTF-16 text) before anything is inflated.
+    if (!this.admit(entry.uncompressedSize * (classifyPart(path).cls === 'media' ? 1 : 3))) return undefined
     // Charged before the read, so concurrent reads cannot overrun the budget.
     this.readBytes += entry.uncompressedSize
     this.partsRead++
@@ -184,9 +221,12 @@ export async function loadPagedSheetDrawings(
   const worksheet = getChildren(root, 'worksheet')[0] ?? root
   const shell: XlsxSheet = { name: sheet.name, sourcePartPath: sheet.partPath, rows: [], cols: [], merges: [], mergeRanges: [] }
   const axes = placementAxes(geometry)
-  await parseWorksheetDrawings(pkg, shell, sheet.partPath, worksheet, theme, { col: index => axes.cols.start(index), row: index => axes.rows.start(index) })
+  const parsed = parseWorksheetDrawings(pkg, shell, sheet.partPath, worksheet, theme, { col: index => axes.cols.start(index), row: index => axes.rows.start(index) })
+  // A pool refusal ends the read at once; the parse it leaves behind reads no parts and reserves no nodes.
+  parsed.catch(() => {})
+  await Promise.race([parsed, pkg.refusal])
   if (signal.aborted) throw aborted(signal)
-  const nodes = context.nodes - startNodes
+  const nodes = (pkg.memoryRefused ? pkg.nodesAtRefusal : context.nodes) - startNodes
   if (pkg.memoryRefused) {
     return { drawings: unavailableDrawings('This sheet\'s drawings need more worker memory than the document has free and are not shown', { code: 'resource-limit', retryable: false, message: 'worker memory budget' }, DRAWING_MEMORY_REFUSED), nodes, workingSet: pkg.workingSet }
   }
