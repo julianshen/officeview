@@ -39,7 +39,8 @@ const COL_PADDING_CSS = 5
 export const MIN_DETAIL_DEVICE_PX = 4
 /** Float tolerance for that rule: 0.4 CSS px x 10 computes 3.9999999999999996. */
 const DETAIL_EPSILON = 1e-9
-function belowDetail(sizeCss: number, scale: number): boolean {
+/** The one detail rule shared by the painter and the owned a11y tree (GridSemantics). */
+export function belowDetail(sizeCss: number, scale: number): boolean {
   return sizeCss * scale < MIN_DETAIL_DEVICE_PX - DETAIL_EPSILON
 }
 /** How far (logical CSS px) left/right of the pane unclipped cell text is fetched

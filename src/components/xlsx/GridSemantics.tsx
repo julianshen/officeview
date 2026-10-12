@@ -5,6 +5,7 @@ import type { SourceCell } from '../../xlsx/view/coordinates'
 import { visibleLogicalViewport, navigateKey, navigateTo, hitTestViewport, type NavigationKey, type ViewportSize } from '../../xlsx/view/scrollWindow'
 import { MAX_ROWS, MAX_COLS, cellId } from '../../xlsx/view/coordinates'
 import { activeAnnouncement, boundedSelectionText, reconcileSelection, recordCounts, emptyGridSelection, selectCell, selectHeader } from '../../xlsx/view/selection'
+import { belowDetail } from '../../xlsx/view/viewport'
 import { GridHeaders, GridRowHeader, GRID_HEADER_SIZE, cellSelected, viewportHeaderBox, columnHeaderHeight } from './GridHeaders'
 import { ViewerStatus, type ViewerStatusProps, type HiddenCellInspection } from './ViewerStatus'
 import { useControlMedia } from './controlMedia'
@@ -102,11 +103,13 @@ export function GridSemantics(props: GridSemanticsProps): ReactElement {
   let slots: number[] = [], columns: number[] = []
   let subDetail = false
   if (!coarse) {
-    // A line under 4 device px is painted as a coarse pixel group (§11.1) and
-    // owns no row/cell here; every other line keeps its owned semantics. One
+    // A line below the painter's detail rule (belowDetail: 4 device px) is
+    // painted as a coarse pixel group (§11.1) and owns no row/cell here;
+    // every other line keeps its owned semantics. One
     // tiny authored row must not strip the whole viewport (A11Y-01). The window
     // counts above already bound how many lines this can visit.
-    const detail = (size: number) => size * scroll.zoom * scroll.deviceScale >= 4
+    const scale = scroll.zoom * scroll.deviceScale // the painter's scale expression (viewport.ts detailScale)
+    const detail = (size: number) => !belowDetail(size, scale)
     for (const run of rowWindow.runs) for (let slot = run.start; slot <= run.end; slot++) if (detail(projection.rows.size(slot))) slots.push(slot); else subDetail = true
     for (const run of colWindow.runs) for (let col = run.start; col <= run.end; col++) if (detail(projection.cols.size(col))) columns.push(col); else subDetail = true
     if (!slots.length || !columns.length) { coarse = true; slots = []; columns = [] }

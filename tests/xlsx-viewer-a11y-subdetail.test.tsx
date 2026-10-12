@@ -53,4 +53,19 @@ describe('owned grid with one sub-detail row', () => {
     expect(ui.getByRole('grid').getAttribute('aria-activedescendant')).toBe(active.id)
     expect(ui.getAllByRole('gridcell').length).toBeGreaterThan(10)
   })
+
+  it('shares the painter\'s detail boundary: a 1pt row at 120% x DPR 2.5 (3.9999999999999996 px) is detail in both', () => {
+    // viewport.ts paints a line in detail at >= 4 - 1e-9 device px; ownership must agree.
+    const projection = createSheetMetrics({
+      rows: createAxisMetrics({ logicalCount: MAX_ROWS, defaultSizeCss: 20, overrides: [{ start: 2, end: 2, sizeCss: 4 / 3 }] }),
+      cols: createAxisMetrics({ logicalCount: MAX_COLS, defaultSizeCss: 80 }),
+      visibility,
+    })
+    expect((4 / 3) * 1.2 * 2.5).toBeLessThan(4) // the old size*zoom*dpr product sits just under the nominal threshold
+    const viewport = { width: 400, height: 200 }
+    const selection = selectCell(emptyGridSelection(), projection, { row: 0, col: 0 })
+    const props = gridFixture()
+    const ui = render(<GridSemantics {...props} projection={projection} view={{ ...props.view, visibility }} viewport={viewport} window={createScrollWindow(projection, viewport, { zoom: 1.2, deviceScale: 2.5 })} selection={selection} body={{ r0: 0, r1: 20 }} />)
+    expect(ui.getAllByRole('row').map(row => row.getAttribute('aria-rowindex'))).toContain('4')
+  })
 })
