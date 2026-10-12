@@ -156,6 +156,24 @@ class Check {
     return this.activeName(address)
   }
 
+  /**
+   * Waits (bounded) until the active cell's name is no longer pending. A
+   * worker-backed cell legitimately reads "…, value Loading…" until its page
+   * arrives; the labels seen on the way are returned so the caller can check
+   * the transition was pending → value and never a blank value.
+   */
+  async settledName(address: string, timeoutMs = 30_000): Promise<{ label: string; sequence: string[] }> {
+    const sequence: string[] = []
+    const started = Date.now()
+    for (;;) {
+      const label = await this.page<string | null>(`const a = active(); return a && a.label.split(',')[0] === arguments[0] ? a.label : null`, address)
+      if (label !== null && sequence[sequence.length - 1] !== label) sequence.push(label)
+      if (label !== null && !/value Loading…/.test(label)) return { label, sequence }
+      if (Date.now() - started > timeoutMs) throw new Error(`active cell ${address} still pending after ${timeoutMs} ms; seen ${JSON.stringify(sequence)}`)
+      await new Promise(resolve => setTimeout(resolve, 150))
+    }
+  }
+
   activeName(address: string, timeoutMs = 30_000): Promise<string> {
     return this.until<string>(`const a = active(); return a && a.label.split(',')[0] === arguments[0] && a.label`, timeoutMs, `active cell ${address}`, address)
   }
@@ -264,8 +282,16 @@ async function main(): Promise<number> {
         const workers = await check.page<{ created: number; open: number }>(`return { created: e2e().workersCreated, open: e2e().counts().open ?? 0 }`)
         detail.workers = workers
         if (fixture.worker ? workers.open !== 1 : workers.created !== 0) throw new Error(`unexpected worker use ${JSON.stringify(workers)}`)
-        const corner = await check.goTo('XFD1048576', detail)
+        await check.goTo('XFD1048576', detail)
+        // The worker read may still be in flight: "Loading…" is the correct
+        // pending state, so wait for the value, then check the transition.
+        const settled = await check.settledName('XFD1048576')
+        const corner = settled.label
         detail.corner = corner
+        detail.cornerSequence = settled.sequence
+        const blank = settled.sequence.find(label => /, value\s*$/.test(label) || /, value ;/.test(label))
+        if (blank) throw new Error(`corner showed a blank value on the way: ${blank}`)
+        if (settled.sequence.some(label => !/value (Loading…|17179869183)/.test(label))) throw new Error(`unexpected corner labels ${JSON.stringify(settled.sequence)}`)
         if (!/^XFD1048576, value 17179869183/.test(corner)) throw new Error(`corner label ${corner}`)
         const grid = await check.page<Record<string, string | null>>(`const g = document.querySelector('[role=grid]'); const a = active(); return { rowcount: g.getAttribute('aria-rowcount'), colcount: g.getAttribute('aria-colcount'), id: a && a.id, name: g.getAttribute('aria-label') }`)
         detail.grid = grid
