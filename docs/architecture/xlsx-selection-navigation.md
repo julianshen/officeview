@@ -70,8 +70,8 @@ highlight merge/spill children and never edits cells.
 ## Historical S6.1 snapshot: S5 integration requirements
 
 At the S6.1 design snapshot, there was no interactive S5 viewport and `OfficeDoc`
-was unchanged. The integration is now mounted through `OfficeDoc` when
-`interactiveSheets` is enabled (default off). The requirements below record
+was unchanged. As of S13 (S6.1 landed in 6731c54), the integration is mounted
+through `OfficeDoc` when `interactiveSheets` is enabled (default off). The requirements below record
 the original seam for the S5 owner. `SheetNavigator` is a controlled shell:
 its sheet-change and Go To callbacks belong to the viewport.
 The existing S2 `navigatorRequestFromA1` supplies the displayed/original

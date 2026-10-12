@@ -7,7 +7,7 @@ import { build } from 'vite'
 import { expect, it } from 'vitest'
 import libraryConfig from '../vite.config'
 
-it('keeps the README worker bootstrap in a production consumer while tree-shaking an unused main entry', async () => {
+it('keeps the README worker bootstrap in a Vite production consumer (worker.format es) while tree-shaking the unused main entry', async () => {
   const root = fileURLToPath(new URL('..', import.meta.url))
   // Canonical paths avoid /tmp -> /private/tmp mismatches in Vite's HTML entry.
   const temporary = await realpath(await mkdtemp(join(tmpdir(), 'officeview-worker-package-')))
@@ -16,7 +16,8 @@ it('keeps the README worker bootstrap in a production consumer while tree-shakin
     await mkdir(pkg)
     await writeFile(join(pkg, 'package.json'), await readFile(join(root, 'package.json')))
     const dependencies = dirname(dirname(fileURLToPath(import.meta.resolve('react/package.json'))))
-    await symlink(dependencies, join(pkg, 'node_modules'), 'dir')
+    // 'junction' needs no elevated rights on Windows and is a plain symlink elsewhere.
+    await symlink(dependencies, join(pkg, 'node_modules'), 'junction')
     await build({
       ...libraryConfig,
       configFile: false,
@@ -27,34 +28,45 @@ it('keeps the README worker bootstrap in a production consumer while tree-shakin
 
     const consumer = join(temporary, 'consumer')
     await mkdir(join(consumer, 'node_modules'), { recursive: true })
-    await symlink(pkg, join(consumer, 'node_modules/officeview'), 'dir')
-    await symlink(join(dependencies, 'react'), join(consumer, 'node_modules/react'), 'dir')
-    await symlink(join(dependencies, 'react-dom'), join(consumer, 'node_modules/react-dom'), 'dir')
-    await writeFile(join(consumer, 'index.html'), '<script type="module" src="/main.js"></script>')
-    await writeFile(join(consumer, 'main.js'), "import 'officeview'\nnew Worker(new URL('./viewer-worker.js', import.meta.url), { type: 'module' })\n")
-    await writeFile(join(consumer, 'viewer-worker.js'), "import 'officeview/worker'\n")
-    await build({
-      configFile: false,
-      root: consumer,
-      logLevel: 'silent',
-      build: { minify: false },
-      worker: { format: 'es' },
-    })
+    await symlink(pkg, join(consumer, 'node_modules/officeview'), 'junction')
+    await symlink(join(dependencies, 'react'), join(consumer, 'node_modules/react'), 'junction')
+    await symlink(join(dependencies, 'react-dom'), join(consumer, 'node_modules/react-dom'), 'junction')
+    await writeFile(join(consumer, 'index.html'), '<script type="module" src="/main.ts"></script>')
+    // The README factory, with a named import whose binding is never used, so the
+    // main entry must tree-shake away while the worker entry keeps its side effect.
+    await writeFile(join(consumer, 'main.ts'), [
+      "import { OfficeFile } from 'officeview'",
+      "void OfficeFile",
+      "new Worker(new URL('./viewer-worker.ts', import.meta.url), { type: 'module' })",
+      '',
+    ].join('\n'))
+    await writeFile(join(consumer, 'viewer-worker.ts'), "import 'officeview/worker'\n")
+    const consumerConfig = { configFile: false as const, root: consumer, logLevel: 'silent' as const, build: { minify: false } }
+
+    await build({ ...consumerConfig, worker: { format: 'es' } })
 
     const assets = join(consumer, 'dist/assets')
     const files = await readdir(assets)
     const worker = files.find(name => /^viewer-worker-.*\.js$/.test(name))
     expect(worker, 'The module Worker must have an emitted entry').toBeDefined()
     const workerCode = await readFile(join(assets, worker!), 'utf8')
-    expect(workerCode, 'The README production worker entry must install its message handler').toMatch(/\.onmessage\s*=/)
-    expect(workerCode).toMatch(/typeof window/)
-    expect(workerCode).toMatch(/\.postMessage\(/)
+    // The exact bootstrap statement from src/worker/worker-entry.ts, minified or not:
+    // `if (typeof window === 'undefined' && typeof scope.postMessage === 'function') scope.onmessage = ...`
+    expect(workerCode, 'The README production worker entry must install its message handler').toMatch(
+      /typeof window\s*(?:>\s*["']u["']|===?\s*["']undefined["'])\s*&&\s*typeof\s+([\w$]+)\.postMessage\s*===?\s*["']function["'][\s\S]{0,40}?\1\.onmessage\s*=/,
+    )
 
     const main = files.find(name => /^index-.*\.js$/.test(name))
     expect(main).toBeDefined()
     const mainCode = await readFile(join(assets, main!), 'utf8')
-    // Only Vite's preload helper and the Worker factory should remain in main.
-    expect(Buffer.byteLength(mainCode)).toBeLessThan(2_000)
+    // The unused named import is tree-shaken: no officeview code or chunk reaches main.
+    expect(mainCode).not.toMatch(/OfficeFile|OfficeDoc|interactiveSheets/)
+    // Other emitted chunks belong to the worker graph; main must not load any of them.
+    expect(mainCode).not.toMatch(/(?:from\s*|import\s*\(\s*)["']\.\/[^"']+\.js["']/)
+
+    // README requirement: Vite's default worker format (iife) cannot code-split the
+    // kept worker graph, so the documented Vite setup sets worker.format to 'es'.
+    await expect(build(consumerConfig)).rejects.toThrow(/worker\.format/)
   } finally {
     await rm(temporary, { recursive: true, force: true })
   }
