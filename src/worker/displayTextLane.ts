@@ -129,8 +129,14 @@ export class DisplayTextLaneCache {
       const bytes = building
       const lane: DisplayTextLane = { bytes, text: offset => { const index = ids[offset]; return index ? strings[index] : undefined } }
       const entry: Entry = { key: { ...key }, lane, bytes, pins: 0 }
-      // A concurrent build of the same key is replaced, never double-charged.
-      this.drop(id)
+      // A concurrent build of the same key committed first: reuse it (it may be
+      // leased) and discard this one, so a key is built and charged once.
+      const raced = this.entries.get(id)
+      if (raced) {
+        this.held -= building
+        committed = true
+        return this.pin(raced)
+      }
       if (admission.retain) {
         const pooled = admission.retain(id, bytes, () => this.drop(id))
         if (!pooled) throw new ValueIndexError('quota', 'The worker memory budget cannot retain the formatted display text.', { resource: 'memory', requiredBytes: bytes })

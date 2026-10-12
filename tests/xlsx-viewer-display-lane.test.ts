@@ -257,6 +257,22 @@ describe('S13.5 formatted display-text lane is prepared on demand', () => {
     expect(two.bytes).toBeLessThanOrEqual(two.limitBytes)
   })
 
+  it('(4) concurrent builds of one key keep a single charged lane', async () => {
+    const lanes = new DisplayTextLaneCache()
+    const key = { docId: 'd', sheetId: '1', valueGen: 1, styleOwner: {}, col: 2, r0: 1, r1: 10 }
+    let open!: () => void
+    const gate = new Promise<void>(resolve => { open = resolve })
+    const fill = async (sink: { add(offset: number, text: string): void }) => { await gate; sink.add(0, 'abc') }
+    const first = lanes.lease(key, fill), second = lanes.lease(key, fill)
+    open()
+    const [a, b] = await Promise.all([first, second])
+    expect(lanes.builds).toBe(1)
+    expect(lanes.size).toBe(1)
+    expect(lanes.bytes).toBe(PREPARED_COLUMN_OVERHEAD + 10 * 4 + 3 * 2 + PREPARED_STRING_OVERHEAD)
+    expect(a.lane).toBe(b.lane)
+    a.release(); b.release()
+  })
+
   it('(4) worker session: the lane is retained in the worker pool, refused by the prepared budget, dropped at close', async () => {
     const source = createObjectWorkbookSource(makeDoc(), 'doc-1')
     const lanes = new DisplayTextLaneCache()
