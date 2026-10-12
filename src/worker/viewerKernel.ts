@@ -146,15 +146,19 @@ export class ViewerKernel {
   private readonly foreground = new Set<AbortSignal>()
   private readonly foregroundWaiters = new Set<() => void>()
   /**
-   * Park a background kernel while foreground reads run (§10.2 priority), but
-   * only behind the commands in flight when it yielded, and for at most
+   * Park a background kernel while foreground reads run (§10.2 priority);
+   * foreground signals pass straight through. A background kernel waits only
+   * behind the commands in flight when it yielded, and for at most
    * FOREGROUND_YIELD_WAIT_MS. Commands arriving later never extend this wait,
    * so continuous scrolling cannot starve background work into its deadline
    * (S13.3 MINOR-1): each yield waits for one bounded generation, then the
    * kernel runs its next slice and the following yield takes a new snapshot.
    */
   private async waitForForeground(signal: AbortSignal): Promise<void> {
-    const generation = [...this.foreground].filter(other => other !== signal)
+    // Foreground work never parks behind other foreground work: a viewport's
+    // own cooperative projection yields through this hook as well.
+    if (this.foreground.has(signal)) return
+    const generation = [...this.foreground]
     const pendingIn = () => generation.some(other => this.foreground.has(other) && !other.aborted)
     if (!pendingIn() || signal.aborted) return
     let expired = false, timer: ReturnType<typeof setTimeout> | undefined, wakeAll: (() => void) | undefined

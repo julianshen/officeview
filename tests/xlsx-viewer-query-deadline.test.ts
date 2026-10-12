@@ -286,3 +286,41 @@ it('S13.3 MINOR-1: a slow foreground command parks background work for a bounded
     await kernel.handle({ kind: 'close', requestId: 'close', docId: 'doc' }, () => {})
   }
 })
+
+it('S13.3 r3: a viewport whose projection yields never parks behind another held viewport', async () => {
+  vi.useFakeTimers()
+  const rows = 2000
+  // An authored-hidden row under a sorted order makes the viewport's
+  // visibility projection cooperative: it yields through the scheduler hook.
+  const document = workbookOf([{ sheetId: 's', hiddenRows: [7], cells: Array.from({ length: rows }, (_, row) => ({ row, col: 0, value: (row * 7919) % rows })) }])
+  let ticks = 0, projectionYields = 0
+  const kernel = new ViewerKernel({ parse: async () => document }, { now: () => ticks += 11, yield: async phase => { if (phase === 'query-projection') projectionYields++ } })
+  await kernel.handle({ kind: 'open', requestId: 'open', docId: 'doc', source: { kind: 'object', document }, profile: 'D' }, () => {})
+  const sorted: WorkerReply[] = []
+  await kernel.handle({ kind: 'sort', requestId: 'sort', owner: initialIdentity('doc', 's'), spec: { range: { r0: 0, r1: rows - 1, c0: 0, c1: 0, headerRows: 0, totalsRows: 0 }, keys: [{ col: 0, order: 'asc' }], caseSensitive: false } }, out => sorted.push(out))
+  const done = sorted.at(-1)
+  if (done?.kind !== 'complete' || done.result.kind !== 'view') throw new Error('sort failed')
+  const owner = done.result.delta.owner
+  const session = kernel.session('doc')!
+  let release!: () => void
+  const held = new Promise<void>(resolve => { release = resolve })
+  const viewport = session.viewport.bind(session)
+  vi.spyOn(session, 'viewport').mockImplementationOnce(async (...args) => { await held; return viewport(...args) })
+  const window = { box: { x: 0, y: 0, width: 64, height: 100 }, zoom: 1, deviceScale: 1 }
+  const slow = kernel.handle({ kind: 'viewport', requestId: 'held', owner, window }, () => {})
+  const replies: WorkerReply[] = []
+  const free = kernel.handle({ kind: 'viewport', requestId: 'free', owner, window }, out => replies.push(out))
+  try {
+    // No timer advances: only microtasks run.
+    await vi.advanceTimersByTimeAsync(0)
+    expect(projectionYields, 'the free viewport projected cooperatively').toBeGreaterThan(0)
+    expect(replies.at(-1), 'a runnable viewport replies without waiting for the held one').toMatchObject({ kind: 'complete' })
+  } finally {
+    release()
+    let settled = 0
+    void Promise.all([slow, free]).then(() => { settled = 1 })
+    for (let i = 0; i < 2000 && !settled; i++) await vi.advanceTimersByTimeAsync(FOREGROUND_YIELD_WAIT_MS)
+    await slow; await free
+    await kernel.handle({ kind: 'close', requestId: 'close', docId: 'doc' }, () => {})
+  }
+})
