@@ -317,16 +317,17 @@
   "diagnostics": [],
   "viewerEvidence": {
     "doc": "docs/validation/interactive-viewer-performance.md",
-    "results": "docs/validation/interactive-viewer-viewer-chrome-r13.json",
-    "hash": "831e0e3d7b24d6b20f778dc76d3ef2719aacc3650eeba8c6807bb3364930734a",
-    "commit": "752ccade93dd8f9e3ddf4d748b968c148c4f283f",
+    "results": "docs/validation/interactive-viewer-viewer-chrome-r14.json",
+    "hash": "91328cfdcb8c27538446482aa6c55d637457ff62c4d68f53b7ce44ad8f189ab9",
+    "commit": "1e13f7bf9a8b0e4c653a11ecec3cae575ab938c5",
     "browser": "Google Chrome 155.0.8059.39 (stable, Playwright 1.64 channel chrome, headless)",
     "machine": "Apple M4 Pro, 14 logical cores, 24 GiB, macOS 26.5.2 (25F84)",
     "profile": "D",
     "mode": "release",
     "desktopAdmitted": false,
     "evidenceProblems": [
-      "main-owned-memory: uncharged main memory in F2 at the loaded checkpoint (0.61 MiB of forced-GC heap above the warmed host is not in the ledger's current 7.76 MiB after excluding 0.38 MiB of measured compiled-code growth and 0 MiB of layout-shift entries; allowance: the warmed host's open gap 0 MiB + the larger of the idle probe noise 0 MiB and this checkpoint's reading spread 0.54 MiB)"
+      "main-owned-memory: uncharged main memory in F2 at the loaded checkpoint (0.18 MiB of forced-GC heap above the warmed host is not in the ledger's current 7.76 MiB after excluding 0.4 MiB of measured compiled-code growth and 0 MiB of layout-shift entries; allowance: the warmed host's open gap 0 MiB + independent noise 0 MiB (idle probe 0 MiB, warm-host checkpoint procedure 0 MiB, capped by this checkpoint's spread 0 MiB))",
+      "main-owned-memory: uncharged main memory in F2 at the closed checkpoint (0.06 MiB of forced-GC heap above the warmed host is not in the ledger's current 0 MiB after excluding 0.27 MiB of measured compiled-code growth and 0 MiB of layout-shift entries; allowance: the warmed host's open gap 0 MiB + independent noise 0 MiB (idle probe 0 MiB, warm-host checkpoint procedure 0 MiB, capped by this checkpoint's spread 0 MiB))"
     ],
     "rows": {
       "warm-viewport-frame": {
@@ -335,19 +336,19 @@
       },
       "input-acknowledgment": {
         "outcome": "pass-limited",
-        "value": 34.25
+        "value": 34.00499999523163
       },
       "progressive-first-viewport": {
         "outcome": "pass-limited",
-        "value": 694.505000025034
+        "value": 795.9099999964237
       },
       "import-expanded-throughput": {
         "outcome": "pass",
-        "value": 56.79158232640647
+        "value": 53.13456617508563
       },
       "import-cell-throughput": {
         "outcome": "pass",
-        "value": 872866.9314544676
+        "value": 816659.8610485666
       },
       "main-owned-memory": {
         "outcome": "pending",
@@ -355,7 +356,7 @@
       },
       "worker-owned-memory": {
         "outcome": "pass",
-        "value": 239836906
+        "value": 239836422
       },
       "bitmap-retained": {
         "outcome": "pass",
@@ -363,6 +364,12 @@
       }
     },
     "superseded": [
+      {
+        "results": "docs/validation/interactive-viewer-viewer-chrome-r13.json",
+        "hash": "831e0e3d7b24d6b20f778dc76d3ef2719aacc3650eeba8c6807bb3364930734a",
+        "commit": "752ccade93dd8f9e3ddf4d748b968c148c4f283f",
+        "note": "r13: not admitted; its allowance used the session's own reading spread (codex round 5) and its checkpoints ran beside the harness samplers."
+      },
       {
         "results": "docs/validation/interactive-viewer-viewer-chrome-r12.json",
         "hash": "37db4aa3cc8fb206b00d993aff2562bff6ffd2707e0922e0d85b3b37a4b86f12",
@@ -436,6 +443,6 @@
         "note": "r1: input acknowledgment miss (header sort 11,897-13,316 ms)."
       }
     ],
-    "note": "S10.2 viewer receipt r13: desktop NOT admitted. Every row passes except main-owned-memory, pending by 0.08 MiB: the F2 loaded checkpoint has 0.61 MiB outside the ledger (code growth and layout-shift entries excluded as measured) against an allowance of 0.54 MiB (its own reading spread; warm-open gap negative). Every other checkpoint passes; the viewer adds no layout shift. Left pending rather than widened. Mobile rows not-run (user decision). Shared machine (load 6+)."
+    "note": "S10.2 viewer receipt r14: desktop NOT admitted. Every row passes except main-owned-memory, pending: with independent noise (~0) and quiet, sampler-free checkpoints, F2 loaded keeps 0.18 MiB and F2 closed 0.06 MiB outside the ledger (measured code growth excluded); F4 is fully attributed. The F2 closed residue is attributed to Blink IdToNodeMap and V8 smi-string-cache capacity grown by the harness's own heap snapshots; the loaded remainder is not attributed. Left pending. Mobile not-run (user decision). Shared machine."
   }
 }

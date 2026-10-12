@@ -1,33 +1,56 @@
 # Interactive viewer — frozen thresholds, S8.6 kernel results and S10.2 viewer results
 
-**S10.2 desktop Chrome receipt r13: desktop D NOT admitted (main-thread memory
-pending by 0.08 MiB).** The other 12 desktop rows pass; two of them pass with
-a documented sample limitation (`pass-limited`).
+**S10.2 desktop Chrome receipt r14: desktop D NOT admitted (main-thread memory
+pending).** The other 12 desktop rows pass; two of them pass with a documented
+sample limitation (`pass-limited`).
 
-The receipt is `interactive-viewer-viewer-chrome-r13.json` (SHA-256
-`831e0e3d…4930734a`), taken at `752ccad` on a clean tree, on a shared machine
-(load 5.0–6.8).
+The receipt is `interactive-viewer-viewer-chrome-r14.json` (SHA-256
+`91328cfd…f189ab9`), taken at `1e13f7b` on a clean tree, on a shared machine
+(load 4.7–6.9).
 
-**The round-4 gate.** At every checkpoint the gap is checked: the forced-GC heap
-above the warmed host, minus the ledger's *current* bytes there, minus that
-checkpoint's measured compiled-code growth (heap-snapshot `code` nodes), minus
-its measured growth of the page's buffered layout-shift entries (860 B each).
-- The heap reading is the median of 5 repeated forced-GC readings, all
-  recorded.
-- The allowance is the warmed host's own open gap (never below 0) plus the
-  larger of the idle probe noise and that checkpoint's reading spread.
-- A missing code reading, layout-shift count or repeated readings leaves the
-  row pending.
+**The gate (rounds 4–5).** At every checkpoint the gap is checked: the forced-GC
+heap above the warmed host, minus the ledger's *current* bytes there, minus two
+measured page-level exclusions.
+- **Exclusions:**
+  - compiled-code growth (heap-snapshot `code` bytes);
+  - growth of the page's buffered layout-shift entries, counted as entries and
+    sources at per-structure lower bounds (145 B per entry, 144 B per source).
+- **Bounds checks:** at most 150 entries, at most 5 sources per entry, code
+  within the measured heap, and the reported heap equal to the median of its
+  readings.
+- **The allowance** is the warmed host's own open gap (never below 0) plus
+  **independent** noise:
+  - the larger of the idle probe noise and the spread of the checkpoint
+    procedure repeated on the idle closed warm host (3 rounds × 5 readings);
+  - a checkpoint's own spread can only tighten this term.
+- **Checkpoints** run with the harness samplers paused and once the viewer is
+  quiet: nothing presented for 1 s and no worker request open. The session
+  spreads seen up to r13 (0.12–0.54 MiB) were the samplers' own page calls; in
+  r14 every checkpoint spread is 0.
 
-| Session | Open gap | Loaded gap / spread | After-ops gap / spread | Closed gap / spread |
-|---|---:|---:|---:|---:|
-| F2 | −0.25 MiB | **0.61 / 0.54 MiB** | −0.61 / 0.37 MiB | 0.00 / 0.24 MiB |
-| F4 | −0.25 MiB | 0.14 / 0.37 MiB | −0.12 / 0.27 MiB | −0.10 / 0.17 MiB |
+Anything missing or impossible leaves the row pending.
 
-Only F2 loaded exceeds its allowance, by 0.08 MiB, within the repeatability the
-same checkpoint showed (0.54 MiB). It is left **pending**, not widened.
+| Session | Open gap | Independent noise | Loaded gap | After-ops gap | Closed gap |
+|---|---:|---:|---:|---:|---:|
+| F2 | −0.21 MiB | 0.003 MiB | **0.18 MiB** | −0.83 MiB | **0.06 MiB** |
+| F4 | −0.25 MiB | 0.003 MiB | −0.21 MiB | −0.11 MiB | −0.11 MiB |
 
-**The viewer adds no layout shift (round 4, fix 18).** Chrome's Layout
+All gaps are net of measured code growth (0.27–0.66 MiB).
+
+**What remains:**
+- **F2 closed, 0.06 MiB.** Heap snapshots attribute it to two capacities that
+  grew during the session and do not shrink: Blink's `IdToNodeMap` (DOM node
+  ids, +64 KiB) and V8's `smi_string_cache` (+64 KiB, partly offset). Both are
+  page/engine tables, and the checkpoints' own heap snapshots, taken over the
+  session's larger DOM, are what grew them. It is an artifact of the
+  instrument, but the gate neither measures nor excludes it.
+- **F2 loaded, 0.18 MiB.** Not attributed. The snapshot type split shows native
+  over-charged by ~0.5 MiB and JS objects/strings uncharged by ~0.7 MiB: the
+  per-class DOM calibration's error on the real viewer tree.
+
+The row is **pending**; nothing was widened.
+
+**The viewer adds no layout shift (round 4, fix 18; round 5 held-list test).** Chrome's Layout
 Instability API showed two sources:
 - scrolling moved every semantic grid row through its `top` style: CLS 0.99
   over 60 frames;
