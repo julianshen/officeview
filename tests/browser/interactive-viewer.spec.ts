@@ -378,7 +378,7 @@ test.describe('S10.1 real interactive viewer', () => {
       await goTo(page, 'A1')
       await page.getByRole('button', { name: /^Filter column D/ }).click()
       const dialog = page.getByRole('dialog', { name: 'Column filter' })
-      await dialog.getByRole('button', { name: 'Deselect All' }).click()
+      await dialog.getByRole('button', { name: 'Deselect All', exact: true }).click()
       await dialog.getByRole('checkbox', { name: 'alpha', exact: true }).check()
       await dialog.getByRole('button', { name: 'OK' }).click()
       await expect(status(page)).toContainText(`Visible body ${alpha} / complete body ${path.rows - 1}`, { timeout: 60_000 })
@@ -405,4 +405,145 @@ test.describe('S10.1 real interactive viewer', () => {
       }
     })
   }
+
+  for (const path of [{ name: 'f3sparse-small.xlsx', worker: false }, { name: 'f3-paged.xlsx', worker: true }] as const) {
+    test(`F3 ${path.worker ? 'worker-backed dense 8x16384' : 'resident sparse-wide'}: horizontal recenter keeps headers and cells in agreement`, async ({ page }) => {
+      await openViewer(page, path.name, { worker: path.worker })
+      if (path.worker) expect((await counts(page)).open).toBe(1)
+      const agree = async () => page.evaluate(() => {
+        // Every rendered body cell's column index has a rendered column header at the same index.
+        const headers = new Set([...document.querySelectorAll('[role=columnheader]')].map(h => h.getAttribute('aria-colindex')))
+        const cells = [...document.querySelectorAll('[role=gridcell]')]
+        return { cells: cells.length, headers: headers.size, orphans: cells.filter(c => !headers.has(c.getAttribute('aria-colindex'))).length }
+      })
+      for (const address of ['XFD1', 'A1', 'XFD8', 'H3']) {
+        await goTo(page, address)
+        await expect.poll(async () => (await activeCell(page))?.label.split(',')[0] ?? '').toBe(address)
+        const letters = address.replace(/\d+$/, '')
+        await expect(page.getByRole('columnheader', { name: new RegExp(`^Column ${letters}\\b`) })).toBeVisible()
+        const state = await agree()
+        expect(state.orphans).toBe(0)
+        // Viewport-only DOM: a bounded owned tree, never a row of 16,384 cells.
+        expect(state.cells).toBeLessThan(2000)
+        expect(state.headers).toBeLessThan(200)
+      }
+      // Keyboard edge navigation after recenter: Left from XFD8 reaches XFC8.
+      await goTo(page, 'XFD8')
+      await expect.poll(async () => (await activeCell(page))?.label.split(',')[0] ?? '').toBe('XFD8')
+      await page.getByRole('grid').focus()
+      await page.keyboard.press('ArrowLeft')
+      await expect.poll(async () => (await activeCell(page))?.label.split(',')[0] ?? '').toBe('XFC8')
+      if (path.worker) {
+        const cell = await activeCell(page)
+        expect(cell!.label).toMatch(/^XFC8, value \S/) // dense: a populated, loaded value at the far edge
+      }
+    })
+  }
+
+  test('F4 12,000 unique strings: searched Select All past 10,000, reopen retains, Select All restores', async ({ page }) => {
+    await openViewer(page, 'f4-12k.xlsx')
+    await expect(status(page)).toContainText('Visible body 12000 / complete body 12000')
+    const dialog = page.getByRole('dialog', { name: 'Column filter' })
+    await page.getByRole('button', { name: /^Filter column A/ }).click()
+    await expect(dialog.getByText('Showing first 10,000; search all values.')).toBeVisible({ timeout: 30_000 })
+    await dialog.getByRole('button', { name: 'Deselect All', exact: true }).click()
+    await expect(dialog.getByText(/^0 selected values/)).toBeVisible()
+    // item-11000 lies beyond the first 10,000 displayed values; search finds it.
+    await dialog.getByRole('textbox', { name: 'Search all values' }).fill('item-11000')
+    await expect(dialog.getByRole('checkbox', { name: 'item-11000', exact: true })).toBeVisible({ timeout: 30_000 })
+    await dialog.getByRole('button', { name: 'Select All', exact: true }).click()
+    await expect(dialog.getByText(/^1 selected values; complete universe/)).toBeVisible()
+    await dialog.getByRole('button', { name: 'OK' }).click()
+    await expect(status(page)).toContainText('Visible body 1 / complete body 12000', { timeout: 30_000 })
+    // Reopen: the applied choice is retained; Cancel publishes nothing.
+    await page.getByRole('button', { name: /^Filter column A/ }).click()
+    await expect(dialog.getByText(/^1 selected values; complete universe/)).toBeVisible({ timeout: 30_000 })
+    await dialog.getByRole('button', { name: 'Cancel' }).click()
+    await expect(status(page)).toContainText('Visible body 1 / complete body 12000')
+    // First (unsearched) Select All covers the whole 12,000-value universe, not the 10,000 shown.
+    await page.getByRole('button', { name: /^Filter column A/ }).click()
+    await dialog.getByRole('button', { name: 'Select All', exact: true }).click()
+    await expect(dialog.getByText(/^12000 selected values; complete universe/)).toBeVisible({ timeout: 30_000 })
+    await dialog.getByRole('button', { name: 'OK' }).click()
+    await expect(status(page)).toContainText('Visible body 12000 / complete body 12000', { timeout: 30_000 })
+  })
+
+  test('F5 structure: giant narrow-column merge and fixed array refuse sorts; child selection allowed', async ({ page }) => {
+    await openViewer(page, 'f5-structure.xlsx')
+    const before = await page.getByRole('gridcell', { name: /^A2, value / }).getAttribute('aria-label')
+    // Header sort from A1: the current region reaches the fixed array C30:C32 and the
+    // giant merge D1:D1048576, so the whole-row sort is refused, never partially applied.
+    await page.getByRole('button', { name: 'Cycle sort column A' }).click()
+    await expect(status(page)).toContainText('Operation refused: merge', { timeout: 30_000 })
+    await expect(page.getByRole('columnheader', { name: /^Column A/ })).not.toHaveAttribute('aria-sort', /ascending|descending/)
+    expect(await page.getByRole('gridcell', { name: /^A2, value / }).getAttribute('aria-label')).toBe(before)
+    // An explicit A2:B7 selection: narrow keys, but the merge D1:D1048576 spans the
+    // moved row band, so the band guard refuses too (AC-SEM-04).
+    await goTo(page, 'A2')
+    await page.getByRole('grid').focus()
+    for (let i = 0; i < 5; i++) await page.keyboard.press('Shift+ArrowDown')
+    await page.keyboard.press('Shift+ArrowRight')
+    await page.getByRole('button', { name: 'Cycle sort column A' }).click()
+    await expect(status(page)).toContainText('Operation refused: merge', { timeout: 30_000 })
+    expect(await page.getByRole('gridcell', { name: /^A2, value / }).getAttribute('aria-label')).toBe(before)
+    // Selecting a read-only array child is allowed.
+    await goTo(page, 'C31')
+    await expect.poll(async () => (await activeCell(page))?.label ?? '').toBe('C31, value 2')
+  })
+
+  test('F7 two sheets with identical first revisions: views, zoom and hidden-row inspection stay per sheet; reload resets', async ({ page }) => {
+    await openViewer(page, 'f7-two-sheets.xlsx')
+    // Reproduced gap: the 0.75pt row 10 (2 device px at DPR 2) made the whole
+    // owned grid coarse. Now only that row is summarized; the rest stay owned.
+    await expect(page.getByRole('rowheader', { name: 'Row 11' })).toBeVisible()
+    await expect(page.getByRole('rowheader', { name: 'Row 10', exact: true })).toHaveCount(0)
+    expect(await page.getByRole('gridcell').count()).toBeGreaterThan(20)
+    const sheet = page.getByRole('combobox', { name: 'Worksheet' })
+    const zoomLabel = page.getByRole('button', { name: 'Reset zoom' })
+    await page.getByRole('button', { name: 'Zoom in' }).click()
+    const zoomed = await zoomLabel.textContent()
+    expect(zoomed).not.toBe('100%')
+    const fontGen = await page.evaluate(() => window.__viewerE2E!.lastFrame!.identity.fontGen)
+    await goTo(page, 'A1') // zoom anchors at the pane centre; bring column A back into view
+
+    // Sheet A: sort score ascending (score falls as id rises, so id 40 leads).
+    await page.getByRole('button', { name: 'Cycle sort column B' }).click()
+    await expect(page.getByRole('columnheader', { name: /^Column B/ })).toHaveAttribute('aria-sort', 'ascending', { timeout: 30_000 })
+    await goTo(page, 'A2')
+    await expect.poll(async () => (await activeCell(page))?.label ?? '').toBe('A2, value 40; original A41')
+    expect(await zoomLabel.textContent()).toBe(zoomed) // a committed view keeps zoom (§10.1)
+
+    // Sheet B (also revision 1 after its own sort) must not adopt A's view or caches.
+    await sheet.selectOption({ label: 'B' })
+    await expect(page.getByRole('grid')).toHaveAttribute('aria-label', 'Worksheet B')
+    await expect(page.getByRole('columnheader', { name: /^Column B/ })).not.toHaveAttribute('aria-sort', /ascending|descending/)
+    await goTo(page, 'A1')
+    await page.getByRole('button', { name: 'Cycle sort column A' }).click()
+    await page.getByRole('button', { name: 'Cycle sort column A' }).click()
+    await expect(page.getByRole('columnheader', { name: /^Column A/ })).toHaveAttribute('aria-sort', 'descending', { timeout: 30_000 })
+    await goTo(page, 'B2')
+    await expect.poll(async () => (await activeCell(page))?.label ?? '').toBe('B2, value 1000; original B41')
+
+    // Back to A: its own sort and data, not B's.
+    await sheet.selectOption({ label: 'A' })
+    await expect(page.getByRole('grid')).toHaveAttribute('aria-label', 'Worksheet A')
+    await expect(page.getByRole('columnheader', { name: /^Column B/ })).toHaveAttribute('aria-sort', 'ascending')
+    await goTo(page, 'C2')
+    await expect.poll(async () => (await activeCell(page))?.label ?? '').toBe('C2, value s0-40; original C41')
+    expect(await page.evaluate(() => window.__viewerE2E!.lastFrame!.identity.fontGen)).toBe(fontGen) // views never bump fonts
+
+    // Authored-hidden source row 8 (id 7): Original-cell Go To opens the read-only
+    // inspector without unhiding it or making it the active descendant.
+    const activeBefore = await activeCell(page)
+    await goTo(page, 'A8', 'source')
+    await expect(page.getByRole('status').filter({ hasText: 'Original cell A8' })).toContainText('read-only')
+    expect((await activeCell(page))?.id).toBe(activeBefore?.id)
+
+    // Reload replaces the document: zoom resets to 100% and no view survives.
+    await page.reload()
+    await expect(status(page)).toContainText('Visible body', { timeout: 60_000 })
+    await expect(zoomLabel).toHaveText('100%')
+    await expect(page.getByRole('columnheader', { name: /^Column B/ })).not.toHaveAttribute('aria-sort', /ascending|descending/)
+  })
+
 })
