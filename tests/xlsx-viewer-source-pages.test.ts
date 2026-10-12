@@ -135,7 +135,7 @@ describe('SourcePageStore as the import PageSink', () => {
     let release!: () => void
     const gate = new Promise<void>((resolve) => { release = resolve })
     const inner = memoryPageBackend()
-    const slow: PageBackend = { kind: 'memory', put: async (k, b) => { await gate; await inner.put(k, b) }, get: (k) => inner.get(k), removeAll: () => inner.removeAll() }
+    const slow: PageBackend = { kind: 'memory', put: async (k, b) => { await gate; await inner.put(k, b) }, get: (k) => inner.get(k), delete: (k) => inner.delete(k), removeAll: () => inner.removeAll() }
     const store = new SourcePageStore({ docId: 'd', backend: slow })
     const pending = store.commit(imported('p0', 0, 9))
     await store.abandon('d')
@@ -196,6 +196,7 @@ function gatedBackend(openAfter: number) {
     kind: 'memory',
     async put(key, bytes) { if (++puts > openAfter) await gate; await inner.put(key, bytes) },
     get: (key) => inner.get(key),
+    delete: (k) => inner.delete(k),
     async removeAll() { removed++; await inner.removeAll() },
   }
   return { backend, release: () => release(), get removed() { return removed }, get size() { return inner.size } }
@@ -244,7 +245,8 @@ describe('paged import session', () => {
       kind: 'memory',
       async put(key, bytes) { if (++puts === 3) throw new DOMException('full', 'QuotaExceededError'); await inner.put(key, bytes) },
       get: (key) => inner.get(key),
-      async removeAll() { removed = true; await inner.removeAll() },
+      delete: (k) => inner.delete(k),
+    async removeAll() { removed = true; await inner.removeAll() },
     }
     const store = new SourcePageStore({ docId: 'd', backend })
     const session = await openImportSession(blobOf(xlsxBytes({ sheetData: rowsXml(1000) })), { docId: 'd', profile: 'D', store, pageRows: 100 })
@@ -264,7 +266,7 @@ describe('paged import session', () => {
       kind: 'memory',
       async put(key, bytes) { if (++puts === 3) throw new DOMException('full', 'QuotaExceededError'); await inner.put(key, bytes) },
       get: (key) => inner.get(key),
-      removeAll: () => inner.removeAll(),
+      delete: (k) => inner.delete(k), removeAll: () => inner.removeAll(),
     }
     const store = new SourcePageStore({ docId: 'd', backend })
     const session = await openImportSession(blobOf(xlsxBytes({ sheetData: rowsXml(1000) })), { docId: 'd', profile: 'D', store, pageRows: 100 })

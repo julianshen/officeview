@@ -26,7 +26,7 @@ function gatedBackend(openAfter: number) {
     kind: 'memory',
     async put(key, bytes) { if (++puts > openAfter) { blocked(); await gate } await inner.put(key, bytes) },
     get: (key) => inner.get(key),
-    removeAll: () => inner.removeAll(),
+    delete: (k) => inner.delete(k), removeAll: () => inner.removeAll(),
   }
   return { backend, release: () => release(), reached, inner }
 }

@@ -63,7 +63,7 @@ describe('paged queryOverview', () => {
     const inner = memoryPageBackend()
     let failReads = false
     const backend: PageBackend = {
-      kind: 'memory', put: (k, b) => inner.put(k, b), removeAll: () => inner.removeAll(),
+      kind: 'memory', put: (k, b) => inner.put(k, b), delete: (k) => inner.delete(k), removeAll: () => inner.removeAll(),
       async get(key) { if (failReads) throw Object.assign(new Error('disk gone'), { code: 'storage-error' }); return inner.get(key) },
     }
     const { sheet, source } = await paged(xlsxBytes({ sheetData: grid(300, 2) }), backend)
@@ -109,7 +109,7 @@ describe('review MINOR 3: paged queries stop at the next page once cancelled', (
   it('readRows, queryColumn, overview and scanPopulated abort after the page in flight', async () => {
     const inner = memoryPageBackend()
     let onGet: (() => void) | undefined
-    const backend: PageBackend = { kind: 'memory', put: (k, b) => inner.put(k, b), removeAll: () => inner.removeAll(), async get(k) { onGet?.(); return inner.get(k) } }
+    const backend: PageBackend = { kind: 'memory', put: (k, b) => inner.put(k, b), delete: (k) => inner.delete(k), removeAll: () => inner.removeAll(), async get(k) { onGet?.(); return inner.get(k) } }
     const { store, sheet, source } = await paged(xlsxBytes({ sheetData: grid(1000, 2) }), backend, 100, 1)
     const run = async (label: string, query: (signal: AbortSignal) => Promise<{ error?: { code: string } }>) => {
       const controller = new AbortController()

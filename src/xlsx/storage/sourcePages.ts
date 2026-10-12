@@ -285,6 +285,8 @@ export interface PageBackend {
   put(key: string, bytes: Uint8Array): Promise<void>
   get(key: string): Promise<Uint8Array | undefined>
   /** Removes every stored page of this backend's owner. Idempotent. */
+  /** Removes one record (a failed page's blob records). Idempotent: a missing key is not an error. */
+  delete(key: string): Promise<void>
   removeAll(): Promise<void>
 }
 
@@ -305,6 +307,7 @@ export function memoryPageBackend(): PageBackend & { readonly size: number; read
     get heldBytes() { let n = 0; for (const b of pages.values()) n += b.byteLength; return n },
     async put(key, bytes) { pages.set(key, bytes) },
     async get(key) { return pages.get(key) },
+    async delete(key) { pages.delete(key) },
     async removeAll() { pages.clear() },
   }
 }
@@ -355,6 +358,13 @@ export function opfsPageBackend(dir: OpfsDir, owner: string): PageBackend {
         if ((error as { name?: unknown } | null)?.name === 'NotFoundError') return undefined
         throw storageError(error, 'reading a source page')
       }
+    },
+    async delete(key) {
+      const name = fileName(key)
+      try { await dir.removeEntry(name) } catch (error) {
+        if ((error as { name?: unknown } | null)?.name !== 'NotFoundError') throw storageError(error, 'removing a source record')
+      }
+      written.delete(name)
     },
     async removeAll() {
       const names = new Set(written)
@@ -412,6 +422,21 @@ export function indexedDbPageBackend(factory: IDBFactory, owner: string): PageBa
         return blob === undefined ? undefined : new Uint8Array(await blob.arrayBuffer())
       } catch (error) {
         throw storageError(error, 'reading a source page')
+      }
+    },
+    async delete(key) {
+      try {
+        const d = await open()
+        const tx = d.transaction(PAGE_STORE, 'readwrite')
+        const done = new Promise<void>((resolve, reject) => {
+          tx.oncomplete = () => resolve()
+          tx.onerror = () => reject(tx.error)
+          tx.onabort = () => reject(tx.error ?? new DOMException('transaction aborted', 'AbortError'))
+        })
+        tx.objectStore(PAGE_STORE).delete(key)
+        await done
+      } catch (error) {
+        throw storageError(error, 'removing a source record')
       }
     },
     async removeAll() {
@@ -500,6 +525,7 @@ export interface PageStoreStats {
   blobBytes: number
 }
 interface Resident<T> { value: T; bytes: number; entry?: PoolEntry }
+interface WrittenBlob { key: string; record: number; ordinal: number; bytes: number; counted: boolean; reservation: Reservation | undefined }
 
 /** Decoded bytes of a payload (the typed arrays plus a per-meta allowance). */
 export const payloadBytes = (p: CellPagePayload): number =>
@@ -542,8 +568,17 @@ export class SourcePageStore implements PageSink {
     if (this.abandoned || this.closed) throw new PackageError('cancelled', 'source page store is closed')
     if (docId !== this.docId) throw new PackageError('cancelled', `page for document ${docId} rejected by the store of ${this.docId}`)
   }
-  private charge(pool: 'pages' | 'sharedStrings' | 'blobRecords', bytes: number): void {
-    if (this.chargedTo) this.reservations.push(this.chargedTo.reserve(pool, bytes))
+  private charge(pool: 'pages' | 'sharedStrings' | 'blobRecords', bytes: number): Reservation | undefined {
+    if (!this.chargedTo) return undefined
+    const reservation = this.chargedTo.reserve(pool, bytes)
+    this.reservations.push(reservation)
+    return reservation
+  }
+  private uncharge(reservation: Reservation | undefined): void {
+    if (!reservation) return
+    reservation.release()
+    const at = this.reservations.indexOf(reservation)
+    if (at >= 0) this.reservations.splice(at, 1)
   }
 
   async commit(page: ImportedPage & { payload?: CellPagePayload; blobs?: readonly string[] }, docId = this.docId): Promise<void> {
@@ -554,31 +589,41 @@ export class SourcePageStore implements PageSink {
     const indexKey = `index:${page.sheetId}`
     this.construction.persist(indexKey, (list.length + 1) * PAGE_SUMMARY_BYTES, 'the page index')
     const scratch = this.construction.share('page encoding')
+    const written: WrittenBlob[] = []
+    const pageKey = `${page.sheetId}/${page.pageId}`
+    let pageCharge: Reservation | undefined
+    let pageWritten = false
     let bytes: Uint8Array
     try {
-      await this.commitBlobs(page.payload, page.blobs ?? [], page.pageId, docId, scratch)
+      await this.commitBlobs(page.payload, page.blobs ?? [], page.pageId, docId, scratch, written)
       bytes = encodePage(page.payload, (n) => scratch.need(n))
-      this.charge('pages', bytes.byteLength)
+      pageCharge = this.charge('pages', bytes.byteLength)
+      pageWritten = true
       try {
-        await this.backend.put(`${page.sheetId}/${page.pageId}`, bytes)
+        await this.backend.put(pageKey, bytes)
       } catch (error) {
         throw storageError(error, 'writing a source page')
       }
+      // A store abandoned while the write was in flight never indexes the page.
+      this.check(docId)
     } catch (error) {
-      // The page was not indexed: return its summary charge. A disposed store
-      // already released everything and must not charge again. Blob records
-      // this commit already wrote stay in storage, unreferenced, until close
-      // (backends remove whole owners only), so their blobRecords charge stays
-      // too: the ledger keeps matching what storage holds.
       if (this.live) {
+        // The page was not indexed: storage, ledger and pool return to their pre-page state.
+        // A record the backend cannot delete keeps its charge: the ledger matches storage.
+        const removed = !pageWritten || await this.backend.delete(pageKey).then(() => true, () => false)
+        if (removed) this.uncharge(pageCharge)
+        await this.discardBlobs(page.payload, written)
         try { this.construction.persist(indexKey, list.length * PAGE_SUMMARY_BYTES, 'the page index') } catch { /* pool refused or closed */ }
+      } else {
+        // Abandoned/closed meanwhile: dispose already released every charge and
+        // removed every record, but a write still in flight lands afterwards.
+        for (const blob of written) await this.backend.delete(blob.key).catch(() => {})
+        if (pageWritten) await this.backend.delete(pageKey).catch(() => {})
       }
       throw error
     } finally {
       scratch.release()
     }
-    // A store abandoned while the write was in flight never indexes the page.
-    this.check(docId)
     const summary = summarize(page.sheetId, page.pageId, page.r0, page.r1, page.payload, bytes.byteLength)
     if (list.length && list[list.length - 1].r1 >= page.r0) throw new PackageError('parse-error', `page ${page.pageId} overlaps the previous page`)
     list.push(summary)
@@ -593,7 +638,7 @@ export class SourcePageStore implements PageSink {
    * value, bounded by the tokenizer's maxTokenChars, and is charged to the
    * storage-backed blobRecords pool; abandon/close remove them with the pages.
    */
-  private async commitBlobs(p: CellPagePayload, blobs: readonly string[], pageId: string, docId: string, scratch: ConstructionShare): Promise<void> {
+  private async commitBlobs(p: CellPagePayload, blobs: readonly string[], pageId: string, docId: string, scratch: ConstructionShare, written: WrittenBlob[]): Promise<void> {
     const ids = new Map<number, number>()
     for (let i = 0; i < p.flags.length; i++) {
       if ((p.flags[i] & F_BLOB) === 0) continue
@@ -602,19 +647,36 @@ export class SourcePageStore implements PageSink {
       if (text === undefined || ids.has(ordinal)) throw new PackageError('parse-error', `page ${pageId} references a missing oversized value`)
       const id = this.blobCount++
       const bytes = encodeStrings([text], (n) => scratch.need(n))
-      this.charge('blobRecords', bytes.byteLength)
+      // Tracked before the write: a failed put can still leave a partial record (an OPFS file).
+      const blob: WrittenBlob = { key: `blob/${id}`, record: i, ordinal, bytes: bytes.byteLength, counted: false, reservation: undefined }
+      written.push(blob)
+      blob.reservation = this.charge('blobRecords', bytes.byteLength)
       try {
-        await this.backend.put(`blob/${id}`, bytes)
+        await this.backend.put(blob.key, bytes)
       } catch (error) {
         throw storageError(error, 'writing an oversized cell value')
       }
       this.check(docId)
       this.counters.blobs++
-      this.counters.blobBytes += bytes.byteLength
+      this.counters.blobBytes += blob.bytes
+      blob.counted = true
       ids.set(ordinal, id)
       p.nums[i] = id
     }
     if (ids.size !== blobs.length) throw new PackageError('parse-error', `page ${pageId} carries unreferenced oversized values`)
+  }
+  /** Removes a failed page's blob records and releases their charges. A record
+   * the backend cannot delete keeps its charge: the ledger matches storage. */
+  private async discardBlobs(p: CellPagePayload, written: readonly WrittenBlob[]): Promise<void> {
+    for (const blob of written) {
+      p.nums[blob.record] = blob.ordinal
+      try { await this.backend.delete(blob.key) } catch { continue }
+      this.uncharge(blob.reservation)
+      if (blob.counted) {
+        this.counters.blobs--
+        this.counters.blobBytes -= blob.bytes
+      }
+    }
   }
   /** Shared strings, in fixed-size chunks addressed by id. */
   async commitStrings(chunk: number, strings: readonly string[], chunkSize: number, docId = this.docId): Promise<void> {

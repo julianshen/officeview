@@ -7,13 +7,14 @@
  */
 import { describe, expect, it } from 'vitest'
 import {
-  F_BLOB, K_TEXT, PageBuilder, SourcePageStore, encodePage, indexedDbPageBackend, memoryPageBackend, opfsPageBackend, type PageBackend,
+  F_BLOB, K_NUMBER, K_TEXT, PageBuilder, SourcePageStore, encodePage, indexedDbPageBackend, memoryPageBackend, opfsPageBackend, type PageBackend,
 } from '../src/xlsx/storage/sourcePages'
 import { fakeIndexedDb, fakeOpfsDirectory } from './helpers/fake-storage'
 import { openImportSession } from '../src/xlsx/storage/pagedImport'
 import { importLimitsFor } from '../src/xlsx/storage/importSession'
 import { createQuotaLedger, quotaLimitsFor } from '../src/xlsx/storage/quota'
 import { createPagedWorkbookSource } from '../src/xlsx/view/pagedSource'
+import { MemoryPool } from '../src/xlsx/view/tileCache'
 import { WorkbookFind } from '../src/xlsx/view/find'
 import { serializeSelection } from '../src/xlsx/view/copy'
 import { createIdentityOrder } from '../src/xlsx/view/order'
@@ -43,7 +44,7 @@ function recordingBackend(hooks: { beforePut?: (key: string) => Promise<void> | 
     kind: 'memory',
     async put(key, bytes) { await hooks.beforePut?.(key); keys.push(key); await inner.put(key, bytes) },
     get: (key) => inner.get(key),
-    removeAll: () => inner.removeAll(),
+    delete: (k) => inner.delete(k), removeAll: () => inner.removeAll(),
   }
   return { backend, keys, inner }
 }
@@ -221,5 +222,112 @@ describe('PageBuilder spill', () => {
     expect(page.kinds[1]).toBe(K_TEXT)
     expect(page.nums[1]).toBe(0)
     expect(b.bytes).toBe(encodePage(page).length)
+  })
+})
+
+describe('a failed page removes the blob records it already wrote (storage, ledger and pool return to the pre-page state)', () => {
+  const big = (fill: string) => fill.repeat(40 * KiB)
+  /** A page of `numbers` numeric records followed by the given oversized texts. */
+  function pageOf(pageId: string, r0: number, numbers: number, texts: string[]) {
+    const b = new PageBuilder()
+    for (let i = 0; i < numbers; i++) b.add(r0, i % 16_000, K_NUMBER, 0, i, '', true, undefined)
+    texts.forEach((t, i) => b.add(r0 + 1, i, K_TEXT, 0, 0, t, true, undefined))
+    return { sheetId: '1', pageId, r0, r1: r0 + 1, cellCount: b.records, bytes: b.bytes, payload: b.build(), blobs: [...b.blobs] }
+  }
+  async function setup(backend: PageBackend, poolBytes = 256 * 1024 * 1024) {
+    const ledger = createQuotaLedger(quotaLimitsFor('D'), { maxTotalExpandedBytes: 1 << 30 })
+    const pool = new MemoryPool({ limitBytes: poolBytes })
+    const store = new SourcePageStore({ docId: 'd', backend, ledger })
+    store.bindMemory(pool)
+    await store.commit(pageOf('p0', 0, 4, [big('h')]))
+    const snapshot = () => ({ current: ledger.snapshot().current, stats: { ...store.stats, loads: 0 }, pool: { retained: pool.stats().retainedBytes, transient: pool.stats().transientBytes }, pages: store.pages('1').length })
+    return { store, ledger, pool, before: snapshot(), snapshot }
+  }
+
+  it('memory refusal while encoding the page after its blobs were written', async () => {
+    const rec = recordingBackend()
+    // Room for the head page and the blob scratch, not for the large page's encode buffer.
+    const { store, before, snapshot } = await setup(rec.backend, 512 * 1024)
+    const sizeBefore = rec.inner.size
+    const page = pageOf('p1', 10, 40_000, [big('a'), big('b')])
+    const ordinals = [...page.payload.nums.subarray(40_000)]
+    await expect(store.commit(page)).rejects.toMatchObject({ code: 'resource-limit', reason: 'memory-budget' })
+    expect(rec.keys.filter((k) => k.startsWith('blob/'))).toHaveLength(3)
+    expect(rec.inner.size).toBe(sizeBefore)
+    expect(snapshot()).toEqual(before)
+    // The payload is restored too: its F_BLOB records hold their ordinals again.
+    expect([...page.payload.nums.subarray(40_000)]).toEqual(ordinals)
+  })
+
+  it('parse errors: a missing referenced value, or an unreferenced one, after earlier blobs were written', async () => {
+    const rec = recordingBackend()
+    const { store, before, snapshot } = await setup(rec.backend)
+    const sizeBefore = rec.inner.size
+    const missing = pageOf('p1', 10, 2, [big('a'), big('b')])
+    await expect(store.commit({ ...missing, blobs: missing.blobs.slice(0, 1) })).rejects.toMatchObject({ code: 'parse-error' })
+    expect(rec.inner.size).toBe(sizeBefore)
+    expect(snapshot()).toEqual(before)
+    const extra = pageOf('p1', 10, 2, [big('c')])
+    await expect(store.commit({ ...extra, blobs: [...extra.blobs, big('d')] })).rejects.toMatchObject({ code: 'parse-error' })
+    expect(rec.inner.size).toBe(sizeBefore)
+    expect(snapshot()).toEqual(before)
+  })
+
+  it('a storage failure on the page write after its blobs: the blobs and the page charge are removed', async () => {
+    const rec = recordingBackend({ beforePut(key) { if (key === '1/p1') throw new DOMException('disk', 'UnknownError') } })
+    const { store, before, snapshot } = await setup(rec.backend)
+    const sizeBefore = rec.inner.size
+    await expect(store.commit(pageOf('p1', 10, 2, [big('a'), big('b')]))).rejects.toMatchObject({ code: 'storage-error' })
+    expect(rec.inner.size).toBe(sizeBefore)
+    expect(snapshot()).toEqual(before)
+  })
+
+  it('a partial record left by a failed blob write is deleted and uncharged', async () => {
+    let n = 0
+    const rec = recordingBackend()
+    const partial: PageBackend = {
+      ...rec.backend,
+      async put(key, bytes) { if (key.startsWith('blob/') && ++n === 3) { await rec.inner.put(key, bytes); throw new DOMException('disk', 'UnknownError') } await rec.backend.put(key, bytes) },
+    }
+    const { store, before, snapshot } = await setup(partial)
+    const sizeBefore = rec.inner.size
+    await expect(store.commit(pageOf('p1', 10, 2, [big('a'), big('b')]))).rejects.toMatchObject({ code: 'storage-error' })
+    expect(rec.inner.size).toBe(sizeBefore)
+    expect(snapshot()).toEqual(before)
+  })
+
+  it('cancellation mid-page (abandon during a blob write) removes every record and releases every charge', async () => {
+    let release!: () => void
+    const gate = new Promise<void>((resolve) => { release = resolve })
+    let reached!: () => void
+    const started = new Promise<void>((resolve) => { reached = resolve })
+    let n = 0
+    const rec = recordingBackend({ async beforePut(key) { if (key.startsWith('blob/') && ++n === 3) { reached(); await gate } } })
+    const { store, ledger, pool } = await setup(rec.backend)
+    const pending = store.commit(pageOf('p1', 10, 2, [big('a'), big('b')]))
+    await started
+    await store.abandon('d')
+    release()
+    await expect(pending).rejects.toMatchObject({ code: 'cancelled' })
+    expect(rec.inner.size).toBe(0)
+    expect(Object.values(ledger.snapshot().current).every((v) => v === 0)).toBe(true)
+    expect(pool.stats().totalBytes).toBe(0)
+  })
+
+  it('OPFS and IndexedDB delete single records', async () => {
+    const dir = fakeOpfsDirectory()
+    const opfs = opfsPageBackend(dir, 'd')
+    await opfs.put('blob/0', new Uint8Array([1]))
+    await opfs.put('1/p0', new Uint8Array([2]))
+    await opfs.delete('blob/0')
+    await opfs.delete('blob/0')
+    expect(await opfs.get('blob/0')).toBeUndefined()
+    expect(dir.files.size).toBe(1)
+    const idb = indexedDbPageBackend(fakeIndexedDb(), 'd')
+    await idb.put('blob/0', new Uint8Array([1]))
+    await idb.put('1/p0', new Uint8Array([2]))
+    await idb.delete('blob/0')
+    expect(await idb.get('blob/0')).toBeUndefined()
+    expect([...(await idb.get('1/p0'))!]).toEqual([2])
   })
 })
