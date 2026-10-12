@@ -169,6 +169,8 @@ export interface ReceiptMeasurements {
     mainIndependentNoiseBytes: number | null
     /** Largest warm-up residue of plain JS objects, arrays and native DOM. */
     mainWarmAppResidueBytes: number | null
+    /** The explicit engine-cache allowance applied (user decision 2026-10-13). */
+    mainEngineCacheAllowanceBytes: number | null
     /** Largest spread of a gated checkpoint's repeated forced-GC readings. */
     mainCheckpointSpreadBytes: number | null
     /** Largest excluded growth of the page's layout-shift entries (count x LAYOUT_SHIFT_ENTRY_BYTES). */
@@ -320,6 +322,17 @@ export const LAYOUT_SHIFT_ENTRY_BYTES = 145
 export const LAYOUT_SHIFT_SOURCE_BYTES = 38 + 2 * 53
 /** Minimum rounds of the checkpoint procedure on the idle warm host. */
 export const MIN_WARM_NOISE_ROUNDS = 3
+/**
+ * Explicit engine-cache allowance per gated checkpoint and for the warm-up
+ * residue check: USER DECISION 2026-10-13. After every measured exclusion, the
+ * remaining residuals (r15: F2 loaded 0.05 MiB, F2 closed 0.03 MiB, warm-up
+ * arrays/objects 0.13 MiB) were traced to engine/page caches whose capacity
+ * grows and does not shrink (V8 smi_string_cache, Blink IdToNodeMap) and to
+ * lazily loaded module state, with an untraced remainder. The allowance is
+ * fixed and recorded in every receipt (mainEngineCacheAllowanceBytes);
+ * anything above it is still refused. The 64 MiB budget is unchanged.
+ */
+export const ENGINE_CACHE_ALLOWANCE_BYTES = 262_144
 /** Recovery cycles: the mean of the last three post-close readings may exceed the first three by at most this. */
 export const RECOVERY_GROWTH_BYTES = 2 * MiB
 export const RECOVERY_CYCLES = 10
@@ -329,7 +342,7 @@ const nondecreasing = (v: number[]) => v.every((x, i) => i === 0 || x >= v[i - 1
 /** Every threshold input recomputed from the raw records; problems name what is missing or invalid. */
 export function deriveMeasurements(raw: Raw, fixtures: Record<string, ManifestFixture>): { measurements: ReceiptMeasurements; problems: string[] } {
   const problems: string[] = []
-  const m: ReceiptMeasurements = { scroll: {}, ack: {}, firstViewport: {}, import: {}, memory: { mainRetainedBytes: null, mainSampledLivePeakBytes: null, mainLedgerPeakBytes: null, mainUnattributedBytes: null, mainProbeNoiseBytes: null, mainCheckpointExcessBytes: null, mainIndependentNoiseBytes: null, mainWarmAppResidueBytes: null, mainWarmOpenGapBytes: null, mainCodeGrowthBytes: null, mainCheckpointSpreadBytes: null, mainLayoutShiftBytes: null, workerOwnedBytes: null, bitmapPeakBytes: null } }
+  const m: ReceiptMeasurements = { scroll: {}, ack: {}, firstViewport: {}, import: {}, memory: { mainRetainedBytes: null, mainSampledLivePeakBytes: null, mainLedgerPeakBytes: null, mainUnattributedBytes: null, mainProbeNoiseBytes: null, mainCheckpointExcessBytes: null, mainIndependentNoiseBytes: null, mainWarmAppResidueBytes: null, mainEngineCacheAllowanceBytes: null, mainWarmOpenGapBytes: null, mainCodeGrowthBytes: null, mainCheckpointSpreadBytes: null, mainLayoutShiftBytes: null, workerOwnedBytes: null, bitmapPeakBytes: null } }
 
   const scroll = obj(raw.scroll)
   for (const kind of ['ordinary', 'wrapped', 'styled'] as const) {
@@ -509,7 +522,7 @@ export function deriveMeasurements(raw: Raw, fixtures: Record<string, ManifestFi
     else {
       const residue = WARM_APP_KINDS.reduce((sum, kind) => sum + ((num(warmTypes[kind]) ?? 0) - (num(emptyTypes[kind]) ?? 0)), 0)
       warmAppResidue = residue
-      if (residue > independentNoise) block(`unattributed warm-up allocation: ${round(residue / MiB)} MiB of plain JS objects, arrays and native DOM in the warm host above the empty page (independent noise ${round(independentNoise / MiB)} MiB)`)
+      if (residue > independentNoise + ENGINE_CACHE_ALLOWANCE_BYTES) block(`unattributed warm-up allocation: ${round(residue / MiB)} MiB of plain JS objects, arrays and native DOM in the warm host above the empty page (allowance: independent noise ${round(independentNoise / MiB)} MiB + engine-cache allowance ${round(ENGINE_CACHE_ALLOWANCE_BYTES / MiB)} MiB, user decision 2026-10-13)`)
     }
     const codeDelta = (bytes: number) => Math.max(0, bytes - (warmCode ?? bytes))
     const shiftDelta = (entries: number, sources: number) => Math.max(0, entries - (warmShifts ?? entries)) * LAYOUT_SHIFT_ENTRY_BYTES + Math.max(0, sources - (warmSources ?? sources)) * LAYOUT_SHIFT_SOURCE_BYTES
@@ -531,21 +544,22 @@ export function deriveMeasurements(raw: Raw, fixtures: Record<string, ManifestFi
       if (sources > shifts * LAYOUT_SHIFT_MAX_SOURCES) { block(`${name}: layout-shift sources exceed ${LAYOUT_SHIFT_MAX_SOURCES} per entry`); continue }
       if (current === null) { problems.push(`${where}.${name}: no ledger reading`); continue }
       const noiseTerm = Math.min(independentNoise, spread)
-      const allowance = openAllowance + noiseTerm
+      // + the explicit engine-cache allowance (user decision 2026-10-13).
+      const allowance = openAllowance + noiseTerm + ENGINE_CACHE_ALLOWANCE_BYTES
       spreadMax = Math.max(spreadMax, spread)
       const delta = codeDelta(code), shiftBytes = shiftDelta(shifts, sources)
       codeMax = Math.max(codeMax, delta)
       shiftMax = Math.max(shiftMax, shiftBytes)
       const gap = heap - warmBase - current - delta - shiftBytes
       excess = Math.max(excess ?? -Infinity, gap - allowance)
-      if (gap > allowance) problems.push(`main-owned-memory: uncharged main memory in ${key} at the ${name} checkpoint (${round(gap / MiB)} MiB of forced-GC heap above the warmed host is not in the ledger's current ${round(current / MiB)} MiB after excluding ${round(delta / MiB)} MiB of measured compiled-code growth and ${round(shiftBytes / MiB)} MiB of layout-shift entries; allowance: the warmed host's open gap ${round(openAllowance / MiB)} MiB + independent noise ${round(noiseTerm / MiB)} MiB (idle probe ${round(noise / MiB)} MiB, warm-host checkpoint procedure ${round(procedureNoise / MiB)} MiB, capped by this checkpoint's spread ${round(spread / MiB)} MiB))`)
+      if (gap > allowance) problems.push(`main-owned-memory: uncharged main memory in ${key} at the ${name} checkpoint (${round(gap / MiB)} MiB of forced-GC heap above the warmed host is not in the ledger's current ${round(current / MiB)} MiB after excluding ${round(delta / MiB)} MiB of measured compiled-code growth and ${round(shiftBytes / MiB)} MiB of layout-shift entries; allowance: the warmed host's open gap ${round(openAllowance / MiB)} MiB + independent noise ${round(noiseTerm / MiB)} MiB (idle probe ${round(noise / MiB)} MiB, warm-host checkpoint procedure ${round(procedureNoise / MiB)} MiB, capped by this checkpoint's spread ${round(spread / MiB)} MiB) + engine-cache allowance ${round(ENGINE_CACHE_ALLOWANCE_BYTES / MiB)} MiB (user decision 2026-10-13))`)
     }
     if (excess === null) gateMeasured = false
     perSession.push({ retained, live, ledger: ledgerPeak, unattributed: live - ledgerPeak, noise, worker, bitmap, excess, warmOpenGap, code: codeMax, gateMeasured, spread: spreadMax, shifts: shiftMax, independentNoise, warmAppResidue })
   }
   if (perSession.length === 2) {
     const max = (f: (s: typeof perSession[number]) => number) => Math.max(...perSession.map(f))
-    m.memory = { mainRetainedBytes: max(s => s.retained), mainSampledLivePeakBytes: max(s => s.live), mainLedgerPeakBytes: max(s => s.ledger), mainUnattributedBytes: max(s => s.unattributed), mainProbeNoiseBytes: Math.min(...perSession.map(s => s.noise)), mainCheckpointExcessBytes: perSession.every(s => s.gateMeasured && s.excess !== null) ? Math.max(...perSession.map(s => s.excess as number)) : null, mainIndependentNoiseBytes: Math.min(...perSession.map(s => s.independentNoise)), mainWarmAppResidueBytes: perSession.every(s => s.warmAppResidue !== null) ? Math.max(...perSession.map(s => s.warmAppResidue as number)) : null, mainWarmOpenGapBytes: Math.min(...perSession.map(s => s.warmOpenGap)), mainCodeGrowthBytes: perSession.every(s => s.gateMeasured) ? max(s => s.code) : null, mainCheckpointSpreadBytes: max(s => s.spread), mainLayoutShiftBytes: perSession.every(s => s.gateMeasured) ? max(s => s.shifts) : null, workerOwnedBytes: max(s => s.worker), bitmapPeakBytes: max(s => s.bitmap) }
+    m.memory = { mainRetainedBytes: max(s => s.retained), mainSampledLivePeakBytes: max(s => s.live), mainLedgerPeakBytes: max(s => s.ledger), mainUnattributedBytes: max(s => s.unattributed), mainProbeNoiseBytes: Math.min(...perSession.map(s => s.noise)), mainCheckpointExcessBytes: perSession.every(s => s.gateMeasured && s.excess !== null) ? Math.max(...perSession.map(s => s.excess as number)) : null, mainIndependentNoiseBytes: Math.min(...perSession.map(s => s.independentNoise)), mainWarmAppResidueBytes: perSession.every(s => s.warmAppResidue !== null) ? Math.max(...perSession.map(s => s.warmAppResidue as number)) : null, mainEngineCacheAllowanceBytes: ENGINE_CACHE_ALLOWANCE_BYTES, mainWarmOpenGapBytes: Math.min(...perSession.map(s => s.warmOpenGap)), mainCodeGrowthBytes: perSession.every(s => s.gateMeasured) ? max(s => s.code) : null, mainCheckpointSpreadBytes: max(s => s.spread), mainLayoutShiftBytes: perSession.every(s => s.gateMeasured) ? max(s => s.shifts) : null, workerOwnedBytes: max(s => s.worker), bitmapPeakBytes: max(s => s.bitmap) }
     for (const [i, session] of perSession.entries()) {
       if (session.unattributed > session.noise) problems.push(`main-owned-memory: unattributed main memory in ${['F2', 'F4'][i]} (${round(session.unattributed / MiB)} MiB of live heap above the warmed host is not in the ledger peak; measured probe noise ${round(session.noise / MiB)} MiB)`)
     }
@@ -639,7 +653,7 @@ export function evaluateMeasurements(m: ReceiptMeasurements, environmentProfile:
       // Never silently excluded: without a measured code growth the gate cannot run.
       || (mem.mainLedgerPeakBytes !== null && mem.mainCodeGrowthBytes === null)
     const value = mem.mainLedgerPeakBytes === null ? null : Math.max(mem.mainLedgerPeakBytes, mem.mainSampledLivePeakBytes !== null && mem.mainSampledLivePeakBytes > b.desktop ? mem.mainSampledLivePeakBytes : 0)
-    const note = `ledger peak ${mib(mem.mainLedgerPeakBytes)}; forced-GC live peak above the warmed host ${mib(mem.mainSampledLivePeakBytes)}; unattributed ${mib(mem.mainUnattributedBytes)} (allowed: measured probe noise ${mib(mem.mainProbeNoiseBytes)}); checkpoint heap over the ledger's current bytes (less measured code growth ${mib(mem.mainCodeGrowthBytes)}) beyond the warmed host's open gap ${mib(mem.mainWarmOpenGapBytes)}: ${mib(mem.mainCheckpointExcessBytes)}; retained ${mib(mem.mainRetainedBytes)}`
+    const note = `ledger peak ${mib(mem.mainLedgerPeakBytes)}; forced-GC live peak above the warmed host ${mib(mem.mainSampledLivePeakBytes)}; unattributed ${mib(mem.mainUnattributedBytes)} (allowed: measured probe noise ${mib(mem.mainProbeNoiseBytes)}); checkpoint heap over the ledger's current bytes (less measured code growth ${mib(mem.mainCodeGrowthBytes)}) beyond the warmed host's open gap ${mib(mem.mainWarmOpenGapBytes)}, independent noise ${mib(mem.mainIndependentNoiseBytes)} and engine-cache allowance ${mib(mem.mainEngineCacheAllowanceBytes)} (user decision 2026-10-13): ${mib(mem.mainCheckpointExcessBytes)}; warm-up objects/arrays/DOM ${mib(mem.mainWarmAppResidueBytes)}; retained ${mib(mem.mainRetainedBytes)}`
     push('main-owned-memory', b.kind, b.unit, b.desktop, b.mobile,
       { value, limited: false, missing: value === null ? ['main ledger peak'] : [], note, ...(unattributed ? { pending: 'pending: unattributed main memory' } : {}) },
       `S10.2 main-thread application ledger, cross-checked with forced-GC heap samples (${b.spec})`)

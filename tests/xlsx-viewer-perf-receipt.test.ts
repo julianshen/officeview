@@ -7,7 +7,7 @@ import { describe, expect, it } from 'vitest'
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import {
-  ACK_CENSORED_MS, LAYOUT_SHIFT_ENTRY_BYTES, LAYOUT_SHIFT_SOURCE_BYTES, RELEASE_IDENTITY, SCROLL_CENSORED_MS, classifyPresent, finalizeReceipt, importThroughput, pairInputsToPresents, summarize, validateReceipt, verifyReceipt,
+  ACK_CENSORED_MS, ENGINE_CACHE_ALLOWANCE_BYTES, LAYOUT_SHIFT_ENTRY_BYTES, LAYOUT_SHIFT_SOURCE_BYTES, RELEASE_IDENTITY, SCROLL_CENSORED_MS, classifyPresent, finalizeReceipt, importThroughput, pairInputsToPresents, summarize, validateReceipt, verifyReceipt,
   type EvidenceContext, type ReceiptDraft, type ViewerReceipt,
 } from '../src/debug/harness/viewerPerf'
 
@@ -254,7 +254,7 @@ describe('evaluation from raw records', () => {
       const cp = session.checkpoints.loaded
       cp.ledger = ledgerAt(18 * MiB, 14.5 * MiB)
       cp.heapReadings = readingsAround(cp.heapBytes, 0.3 * MiB)
-      bump(cp, 0.25 * MiB)
+      bump(cp, ENGINE_CACHE_ALLOWANCE_BYTES + 0.25 * MiB)
     }
     const ok = await finalizeReceipt(d, ctx)
     expect(ok.evidenceProblems).toEqual([])
@@ -266,7 +266,7 @@ describe('evaluation from raw records', () => {
       session.warmHost.checkpointNoise = [readingsAround(5 * MiB, 0.3 * MiB), readingsAround(5 * MiB), readingsAround(5 * MiB)]
       const cp = session.checkpoints.loaded
       cp.ledger = ledgerAt(18 * MiB, 14.5 * MiB)
-      bump(cp, 0.25 * MiB)
+      bump(cp, ENGINE_CACHE_ALLOWANCE_BYTES + 0.25 * MiB)
     }
     expect((await finalizeReceipt(tight, ctx)).desktopAdmitted).toBe(false)
   })
@@ -297,6 +297,27 @@ describe('evaluation from raw records', () => {
       expect(desktop(receipt, 'main-owned-memory').outcome, label).toBe('pending')
       expect(receipt.desktopAdmitted, label).toBe(false)
     }
+  })
+
+  it('(user decision 2026-10-13) a 0.25 MiB engine-cache allowance per checkpoint: r15\'s residuals admit, a 0.26 MiB steady leak does not', async () => {
+    // r15 recomputed under the allowance: its residuals (0.05 / 0.03 MiB, warm-up 0.13 MiB) are within it.
+    const r15 = JSON.parse(readFileSync(join(process.cwd(), 'docs/validation/interactive-viewer-viewer-chrome-r15.json'), 'utf8')) as ViewerReceipt
+    const recomputed = await finalizeReceipt({ schema: r15.schema, mode: r15.mode, environment: r15.environment, fixtures: r15.fixtures, raw: r15.raw } as ReceiptDraft, ctx)
+    expect(recomputed.evidenceProblems).toEqual([])
+    expect(recomputed.measurements.memory.mainEngineCacheAllowanceBytes).toBe(ENGINE_CACHE_ALLOWANCE_BYTES)
+    expect(ENGINE_CACHE_ALLOWANCE_BYTES).toBe(262_144)
+    // A steady uncharged 0.26 MiB at near-zero noise (readings agree to 1 KiB): refused.
+    const quiet = () => { const d = validDraft(); for (const key of ['F2', 'F4']) { const session = (d.raw.memory as any)[key]; session.warmHost.samples = [5 * MiB, 5 * MiB + 512, 5 * MiB - 512, 5 * MiB, 5 * MiB]; session.warmHost.checkpointNoise = session.warmHost.checkpointNoise.map(() => readingsAround(5 * MiB, 1024)); session.warmHost.open = session.warmHost.open.map((o: any) => ({ ...o, heapBytes: o.heapBytes - 0.5 * MiB })); for (const name of ['loaded', 'afterOps', 'closed']) { const cp = session.checkpoints[name]; cp.heapReadings = readingsAround(cp.heapBytes, 1024) } } return d }
+    expect((await finalizeReceipt(quiet(), ctx)).desktopAdmitted).toBe(true)
+    const leak = quiet()
+    for (const key of ['F2', 'F4']) {
+      const session = (leak.raw.memory as any)[key]
+      for (const name of ['loaded', 'afterOps', 'closed']) bump(session.checkpoints[name], 0.26 * MiB)
+      session.liveHeapSamples = session.liveHeapSamples.map((v: number) => v + 0.26 * MiB)
+    }
+    const receipt = await finalizeReceipt(leak, ctx)
+    expect(receipt.evidenceProblems.some(p => /uncharged main memory in F2 at the closed checkpoint \(0\.26 MiB/.test(p))).toBe(true)
+    expect(receipt.desktopAdmitted).toBe(false)
   })
 
   it('(decision 6) codex\'s one-time warm-up allocation is refused: plain objects in the warm residue above independent noise', async () => {
@@ -360,7 +381,7 @@ describe('evaluation from raw records', () => {
     expect(receipt.desktopAdmitted).toBe(false)
   })
 
-  it('(r4-4, r5-4) layout-shift growth is excluded by per-structure lower bounds of what was counted; codex\'s 80 KiB beside 147 one-source entries is refused', async () => {
+  it('(r4-4, r5-4) layout-shift growth is excluded by per-structure lower bounds of what was counted; codex\'s 80 KiB beside 147 one-source entries is refused beyond the engine-cache allowance', async () => {
     const atEdge = () => { const d = validDraft(); for (const key of ['F2', 'F4']) (d.raw.memory as any)[key].checkpoints.loaded.ledger = ledgerAt(18 * MiB, 14.5 * MiB); return d }
     const grown = atEdge()
     const grownBytes = 147 * LAYOUT_SHIFT_ENTRY_BYTES + 147 * LAYOUT_SHIFT_SOURCE_BYTES // one source each, as counted
@@ -369,7 +390,7 @@ describe('evaluation from raw records', () => {
     expect(grownReceipt.evidenceProblems).toEqual([])
     expect(grownReceipt.measurements.memory.mainLayoutShiftBytes).toBe(grownBytes)
     const leak = atEdge()
-    for (const key of ['F2', 'F4']) { const cp = (leak.raw.memory as any)[key].checkpoints.loaded; cp.layoutShifts += 147; cp.layoutShiftSources += 147; bump(cp, grownBytes + 80 * 1024) }
+    for (const key of ['F2', 'F4']) { const cp = (leak.raw.memory as any)[key].checkpoints.loaded; cp.layoutShifts += 147; cp.layoutShiftSources += 147; bump(cp, grownBytes + ENGINE_CACHE_ALLOWANCE_BYTES + 80 * 1024) }
     const leakReceipt = await finalizeReceipt(leak, ctx)
     expect(leakReceipt.evidenceProblems.some(p => /uncharged main memory in F2 at the loaded checkpoint .* MiB of layout-shift entries/.test(p))).toBe(true)
     expect(desktop(leakReceipt, 'main-owned-memory').outcome).toBe('pending')
