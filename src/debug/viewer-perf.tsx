@@ -447,8 +447,14 @@ function PerfPage(): JSX.Element {
       state.lastFrame = null
       const started = performance.now()
       const wait = () => {
-        if (!hadWorker || state.workersTerminated > terminated || performance.now() - started > 5000) resolve()
-        else setTimeout(wait, 20)
+        if (!hadWorker || state.workersTerminated > terminated || performance.now() - started > 5000) {
+          // React's event system keeps the last event's target fiber (and so the
+          // closed viewer's tree) until the next event; a host's next interaction
+          // releases it. One click on the idle page stands for that interaction,
+          // so collection measures the viewer, not React's one-event retention.
+          document.querySelector<HTMLElement>('[data-testid=perf-idle]')?.click()
+          resolve()
+        } else setTimeout(wait, 20)
       }
       setTimeout(wait, 0)
     })
@@ -457,7 +463,7 @@ function PerfPage(): JSX.Element {
   }, [])
   const factory = useMemo(() => countingWorker, [])
   const internal = { onFrame, onMainLedger: (ledger: MainMemoryLedger) => { currentLedger = ledger } } as Record<string, unknown>
-  if (!file) return <div data-testid="perf-idle">No workbook</div>
+  if (!file) return <div data-testid="perf-idle" onClick={() => {}}>No workbook</div>
   return (
     <OfficeFile
       data={file}
