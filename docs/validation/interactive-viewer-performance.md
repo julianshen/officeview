@@ -59,7 +59,7 @@ History of this gate:
 - r9: 0.57–0.66 MiB over the allowance, before code growth was measured.
 - r10: 0.15–0.35 MiB over, before the class calibration.
 - r11: 0.03 MiB over, the page's layout-shift buffer.
-- r12: 0.40–0.72 MiB over, from the per-cell paint layers.
+- r12: 0.07–0.29 MiB over (F4 loaded 0.07, F4 after-ops 0.15, F2 loaded 0.29), from the per-cell paint layers.
 
 r8 below remains the last receipt admitted under the round-3 rules. It has no
 warm-open record, so it does not validate under round 4.
@@ -299,12 +299,28 @@ Since round 4 the session also records:
 - five readings of heap and ledger with the warm document still open after its
   operations (`open`).
 
-**Baseline bound (review round 4, nit 9).** The warm-up leaves its own residue
-in the baseline: compiled code, the lazily loaded chunks and caches. It is
-measured, not assumed: in r9 the median rose 4.79 MiB (F2) and 4.73 MiB (F4)
-from the empty page. That residue is engine and code state of a smoke-scale
-document. An application object the warm document left behind would show up in
-its closed ledger, which is 0, and in the session's closed gap, which is gated.
+**Warm-up residue (review rounds 4–5).** The warm-up leaves its own residue in
+the baseline. Since round 5 it is measured by kind: heap-snapshot totals by
+node type on the empty page and on the closed warm host, recorded as
+`emptyTypeBytes` and `typeBytes`.
+
+In a smoke diagnostic the median rose 4.65 MiB from the empty page:
+- compiled code: 2.74 MiB;
+- native: 1.32 MiB, of which 0.75 MiB is `ExternalStringData`, the lazily loaded
+  chunks' script sources;
+- strings: 0.41 MiB, of which one 0.31 MiB string is Playwright's injected
+  script source;
+- hidden classes (Map/DescriptorArray): 0.16 MiB;
+- Blink binding templates (`FunctionTemplateInfo`): 0.14 MiB;
+- V8/Blink caches: double-string cache, font shape cache, ~0.11 MiB;
+- arrays 0.11 MiB, closures 0.07 MiB, plain objects 0.03 MiB.
+
+No application data structure appears among the identified owners. **Limitation
+(not resolved):** the validator does not refuse a one-time allocation retained
+during the warm-up. Such an object sits in the baseline and is subtracted with
+it; the recorded per-type residue makes it visible in the receipt, but nothing
+refuses it. Warming up in a separate page would not warm the measured page's
+code and caches, which is the warm-up's purpose.
 
 **The cross-check.** The row passes only if both hold:
 - the ledger peak is ≤ 64 MiB;
@@ -639,15 +655,16 @@ Fixes from the round-4 follow-ups (all change product code; r6 measures 14–15,
     What remains is inherent in the current design: one pass over the column
     from page storage, plus the projection. Caching the evaluated column (a
     prepared value lane) would remove that pass; it was not done here.
+17. **The tile canvases' text-shaping cache is charged** (`canvasText`; see the
+    ledger section). The viewer ledger test checks the pool is charged once
+    tiles drew text and released on unmount.
 18. **The viewer adds no layout shift to its host page.** Rows and column-header
     controls are positioned by transform; cells keep `left` inside their row;
     the column popup is anchored at the top; the filter dialog reserves space for
     what its value list fills in. Test: `tests/browser/viewer-layout-shift.spec.ts`
-    (Chromium, CLS ≤ 0.001 over open, scroll, sort, throttled filter, close),
-    which fails on the old code (0.695, then 0.026).
-17. **The tile canvases' text-shaping cache is charged** (`canvasText`; see the
-    ledger section). The viewer ledger test checks the pool is charged once
-    tiles drew text and released on unmount.
+    (Chromium, CLS ≤ 0.001 over open, scroll, sort, a filter dialog whose value
+    list is held until 900 ms after the click, and close), which fails on the
+    old code (0.695 from rows; the held-list leg fails on the old dialog).
 
 Fix 1 predates the S10.3 merge (`a3e0a9e`). `InteractiveSheetDoc.tsx` merged
 without conflicts; only the docs conflicted. Fixes 3 and 6 were made on top of

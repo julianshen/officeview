@@ -380,6 +380,27 @@ describe('worker-backed adoption settles replies without waiting for GC (round-4
   })
 })
 
+describe('DOM a child commits on its own is charged when it lands (codex round 5, finding 1)', () => {
+  it('the filter popup\'s value list, rendered by the popup\'s own state, is in the dom pool while idle', async () => {
+    const cells = [{ row: 0, col: 0, value: 'Name' }, ...Array.from({ length: 310 }, (_, i) => ({ row: i + 1, col: 0, value: `value ${String(i).padStart(3, '0')}` }))]
+    const ledger = await (async () => {
+      let found: MainMemoryLedger | null = null
+      const ui = render(<InteractiveSheetDoc doc={workbookOf([{ sheetId: 'A', cells }])} {...({ onMainLedger: (l: MainMemoryLedger) => { found = l } } as object)} />)
+      await waitFor(() => expect(found?.snapshot().byPool.dom ?? 0).toBeGreaterThan(0))
+      fireEvent.click(ui.getByRole('button', { name: /^Filter column A/ }))
+      await waitFor(() => expect(ui.container.querySelectorAll('[data-value-ordinal]').length).toBeGreaterThanOrEqual(200), { timeout: 20_000 })
+      await new Promise(resolve => setTimeout(resolve, 250))
+      const root = ui.container.querySelector('[data-officeview-sheet-screen]')!.parentElement!
+      // No parent render since the values landed: the charge still matches the rendered tree.
+      expect(found!.snapshot().byPool.dom).toBe(domClassBytes(domClassCounts(root)))
+      expect(domClassCounts(root).other).toBeGreaterThan(600)
+      ui.unmount()
+      return found!
+    })()
+    expect(ledger.snapshot().byPool.dom).toBe(0)
+  }, 30_000)
+})
+
 describe('resident document ledger', () => {
   const doc = () => workbookOf([{ sheetId: 'A', cells: [{ row: 0, col: 0, value: 'Name' }, { row: 1, col: 0, value: 'beta' }, { row: 2, col: 0, value: 'alpha' }] }])
   it('charges the document, geometry, DOM and a copy session while it runs; unmount and replacement end the charges', async () => {

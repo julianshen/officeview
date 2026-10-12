@@ -21,7 +21,7 @@ import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { cpus, loadavg, totalmem, freemem } from 'node:os'
 import { join, resolve } from 'node:path'
 import {
-  ACK_CENSORED_MS, RELEASE_IDENTITY, finalizeReceipt, importThroughput, pairInputsToPresents, snapshotCodeBytes, summarize,
+  ACK_CENSORED_MS, RELEASE_IDENTITY, finalizeReceipt, importThroughput, pairInputsToPresents, snapshotCodeBytes, snapshotTypeBytes, summarize,
   type ImportEvent, type ReceiptDraft, type SeriesSummary, type ViewerReceipt,
 } from '../../src/debug/harness/viewerPerf'
 import { MIN_FRAME_SAMPLES, MIN_OPERATION_SAMPLES } from '../../src/debug/harness/result'
@@ -49,6 +49,7 @@ const RECOVERY_CYCLES = 10
 const WARM_HOST_SAMPLES = 10
 const WARM_OPEN_SAMPLES = 5
 const CHECKPOINT_READINGS = 5
+const WARM_NOISE_ROUNDS = 3
 const LIVE_SAMPLE_MS = 300
 
 type W = Window & { __viewerPerf: ViewerPerf }
@@ -332,6 +333,17 @@ async function memorySession(context: BrowserContext, base: string, fixture: Vie
   // feedback), so the gate can exclude exactly the measured growth relative to
   // the warmed host (review round 4 decision). The snapshot runs after the
   // checkpoint's heap reading; with VIEWER_SUITE_LIVE_DIAG it is also kept.
+  const snapshotStats = async (label: string): Promise<{ codeBytes: number | null; typeBytes: Record<string, number> } | null> => {
+    if (!cdp) return null
+    const chunks: string[] = []
+    const take = (e: { chunk: string }) => chunks.push(e.chunk)
+    cdp.on('HeapProfiler.addHeapSnapshotChunk', take)
+    try { await cdp.send('HeapProfiler.takeHeapSnapshot', { reportProgress: false }) } finally { cdp.off('HeapProfiler.addHeapSnapshotChunk', take) }
+    const text = chunks.join('')
+    if (process.env.VIEWER_SUITE_LIVE_DIAG) writeFileSync(`${process.env.VIEWER_SUITE_LIVE_DIAG}-${fixture.key}-${label}.heapsnapshot`, text)
+    const snap = JSON.parse(text)
+    return { codeBytes: snapshotCodeBytes(snap), typeBytes: snapshotTypeBytes(snap) }
+  }
   const codeBytes = async (label: string): Promise<number | null> => {
     if (!cdp) return null
     const chunks: string[] = []
@@ -352,23 +364,47 @@ async function memorySession(context: BrowserContext, base: string, fixture: Vie
     cdp.off('HeapProfiler.addHeapSnapshotChunk', take)
     writeFileSync(`${process.env.VIEWER_SUITE_LIVE_DIAG}-${fixture.key}-${label}.heapsnapshot`, chunks.join(''))
   }
+  // The checkpoint procedure's repeated readings: k times three full
+  // collections 200 ms apart, then one heap reading. The same procedure runs on
+  // the idle closed warm host to measure its noise independently (review r5).
+  const repeatedReadings = async (label: string): Promise<number[]> => {
+    const out: number[] = []
+    for (let r = 0; r < CHECKPOINT_READINGS; r++) {
+      for (let k = 0; k < 3; k++) { await bounded(`${label} gc ${r}.${k}`, gcMain()); await new Promise(resolve => setTimeout(resolve, 200)) }
+      const h = await bounded(`${label} heap ${r}`, heap())
+      if (h) out.push(heapBytes(h))
+    }
+    return out
+  }
+  // The background samplers (live forced-GC samples, no-GC/worker polls) pause
+  // while a checkpoint measures: their own page calls allocate and would show
+  // up as checkpoint reading spread (review r5: diagnosed as harness noise).
+  let samplersPaused = false, samplersInFlight = 0
+  const sampled = (probe: () => Promise<void>) => async () => {
+    if (samplersPaused) return
+    samplersInFlight++
+    try { await probe() } finally { samplersInFlight-- }
+  }
+  const pauseSamplers = async () => {
+    samplersPaused = true
+    const started = Date.now()
+    while (samplersInFlight > 0 && Date.now() - started < 30_000) await new Promise(resolve => setTimeout(resolve, 20))
+  }
   const checkpoint = async (name: string) => {
     log(`      checkpoint ${fixture.key}/${name} at ${new Date().toISOString().slice(11, 19)}`)
+    await pauseSamplers()
+    try { return await measureCheckpoint(name) } finally { samplersPaused = false }
+  }
+  const measureCheckpoint = async (name: string) => {
+    // At rest: nothing presented for 1 s and no worker request open.
+    const quiet = await bounded(`${name} quiet`, perf(page, p => p.quiet(1000, 20_000)), 30_000)
     const instrumentation = await bounded(`${name} drop instrumentation`, perf(page, p => p.dropInstrumentation()))
     // Three full collections with pauses: lifetime charges end in
     // FinalizationRegistry callbacks, which run as tasks after a collection.
     await bounded(`${name} worker gc`, perf(page, p => p.workerGc()))
     for (let k = 0; k < 3; k++) { await bounded(`${name} main gc ${k}`, gcMain()); await new Promise(resolve => setTimeout(resolve, 200)) }
+    const heapReadings = await repeatedReadings(name)
     const h = await bounded(`${name} heap`, heap())
-    // The checkpoint's own repeatability (review round 4 decision): k forced-GC
-    // readings with the same procedure; the median is the reading, the spread
-    // its measured noise. All readings are recorded.
-    const heapReadings: number[] = h ? [heapBytes(h)] : []
-    for (let r = 1; r < CHECKPOINT_READINGS; r++) {
-      for (let k = 0; k < 3; k++) { await bounded(`${name} main gc ${r}.${k}`, gcMain()); await new Promise(resolve => setTimeout(resolve, 200)) }
-      const again = await bounded(`${name} heap ${r}`, heap())
-      if (again) heapReadings.push(heapBytes(again))
-    }
     const sortedReadings = [...heapReadings].sort((x, y) => x - y)
     const medianHeap = sortedReadings.length ? sortedReadings[Math.floor(sortedReadings.length / 2)] : null
     const worker = await bounded(`${name} worker stats`, perf(page, p => p.workerStats()))
@@ -380,7 +416,8 @@ async function memorySession(context: BrowserContext, base: string, fixture: Vie
     const ledger = await bounded(`${name} main ledger`, perf(page, p => p.mainLedger()))
     const code = await bounded(`${name} code bytes`, codeBytes(`cp-${name}`), 180_000)
     const layoutShifts = await bounded(`${name} layout shifts`, perf(page, p => p.layoutShifts()))
-    return { name, instrumentation, heap: h, heapBytes: medianHeap, heapReadings, codeBytes: code, layoutShifts, ledger, worker, uasm: uasmSplit((uasm ?? { unavailable: 'probe timed out' }) as Uasm), canvas, storage, frame, browserProcessRssBytes: browserProcessRss() }
+    const layoutShiftSources = await bounded(`${name} layout-shift sources`, perf(page, p => p.layoutShiftSources()))
+    return { name, instrumentation, heap: h, heapBytes: medianHeap, heapReadings, codeBytes: code, layoutShifts, layoutShiftSources, quiet, ledger, worker, uasm: uasmSplit((uasm ?? { unavailable: 'probe timed out' }) as Uasm), canvas, storage, frame, browserProcessRssBytes: browserProcessRss() }
   }
   // Warmed host, established independently of the measured session: the same
   // page opens a small paged workbook (F2 at smoke scale), runs the same code
@@ -395,6 +432,9 @@ async function memorySession(context: BrowserContext, base: string, fixture: Vie
     const h = await bounded('empty heap', heap())
     if (h) warmEmptySamples.push(heapBytes(h))
   }
+  // The empty page's compiled code and heap-snapshot totals by node type, so
+  // the warm-up's own residue is measured by kind, not assumed (review r5).
+  const emptySnapshot = await bounded('empty snapshot', snapshotStats('empty'), 180_000)
   await openFixture(page, warmFixture)
   await waitComplete(page)
   await page.evaluate(() => (window as unknown as W).__viewerPerf.scrollRun({ warmup: 0, frames: 30, dx: 0, dy: 60 }))
@@ -419,6 +459,7 @@ async function memorySession(context: BrowserContext, base: string, fixture: Vie
   // both it and the baseline); it bounds the session's per-checkpoint gap
   // (review round 4).
   const warmOpen: { heapBytes: number; ledgerBytes: number }[] = []
+  const warmOpenQuiet = await bounded('warm open quiet', perf(page, p => p.quiet(1000, 20_000)), 30_000)
   await bounded('warm open drop instrumentation', perf(page, p => p.dropInstrumentation()))
   for (let i = 0; i < WARM_OPEN_SAMPLES; i++) {
     for (let k = 0; k < 3; k++) { await bounded('warm open gc', gcMain()); await new Promise(resolve => setTimeout(resolve, 200)) }
@@ -428,6 +469,7 @@ async function memorySession(context: BrowserContext, base: string, fixture: Vie
   }
   const warmOpenCode = await bounded('warm open code bytes', codeBytes('warm-open'), 180_000)
   const warmOpenLayoutShifts = await bounded('warm open layout shifts', perf(page, p => p.layoutShifts()))
+  const warmOpenLayoutShiftSources = await bounded('warm open layout-shift sources', perf(page, p => p.layoutShiftSources()))
   await bounded('warm close', perf(page, p => p.close()), 30_000)
   const warmHostSamples: number[] = []
   for (let i = 0; i < WARM_HOST_SAMPLES; i++) {
@@ -435,8 +477,14 @@ async function memorySession(context: BrowserContext, base: string, fixture: Vie
     const h = await bounded('warm heap', heap())
     if (h) warmHostSamples.push(heapBytes(h))
   }
-  const warmCode = await bounded('warm code bytes', codeBytes('warm'), 180_000)
+  const warmSnapshot = await bounded('warm snapshot', snapshotStats('warm'), 180_000)
+  const warmCode = warmSnapshot?.codeBytes ?? null
   const warmLayoutShifts = await bounded('warm layout shifts', perf(page, p => p.layoutShifts()))
+  const warmLayoutShiftSources = await bounded('warm layout-shift sources', perf(page, p => p.layoutShiftSources()))
+  // Independent noise of the checkpoint procedure itself: the idle closed warm
+  // host, measured WARM_NOISE_ROUNDS times with exactly the checkpoint's k readings.
+  const warmCheckpointNoise: number[][] = []
+  for (let round = 0; round < WARM_NOISE_ROUNDS; round++) warmCheckpointNoise.push(await repeatedReadings(`warm noise ${round}`))
   const baseline = await checkpoint('baseline')
   // Peak sampling during open/import (no forced GC: an upper bound, garbage included).
   const polls: { t: number; heapBytes: number | null; workerPeak: number | null; workerRetained: number | null }[] = []
@@ -450,7 +498,7 @@ async function memorySession(context: BrowserContext, base: string, fixture: Vie
   // tell a live spike from allocation between the collection and the read.
   const liveDiag: { t: number; first: number; second: number | null; ledger: number | null }[] = []
   const diagnose = Boolean(process.env.VIEWER_SUITE_LIVE_DIAG)
-  const stopLive = startSampler(LIVE_SAMPLE_MS, async () => {
+  const stopLive = startSampler(LIVE_SAMPLE_MS, sampled(async () => {
     await bounded('live gc', gcMain(), 10_000)
     const h = await bounded('live heap', heap(), 10_000)
     if (h) liveHeapSamples.push(heapBytes(h))
@@ -460,13 +508,13 @@ async function memorySession(context: BrowserContext, base: string, fixture: Vie
       const ledger = await bounded('diag ledger', perf(page, p => p.mainLedger()?.bytes ?? null), 10_000)
       liveDiag.push({ t: Date.now(), first: heapBytes(h), second: h2 ? heapBytes(h2) : null, ledger })
     }
-  }, failed('live sample'))
+  }), failed('live sample'))
   // No-GC sampling (an upper bound, garbage included) and worker ledger polls.
-  const stopPolls = startSampler(250, async () => {
+  const stopPolls = startSampler(250, sampled(async () => {
     const [h, w] = await Promise.all([bounded('poll heap', heap(), 10_000), bounded('poll worker stats', perf(page, p => p.workerStats()), 10_000)])
     const session = w && w.kind === 'stats' ? w.sessions[0]?.memory : undefined
     polls.push({ t: Date.now(), heapBytes: h ? heapBytes(h) : null, workerPeak: session?.peakBytes ?? null, workerRetained: session?.retainedBytes ?? null })
-  }, failed('poll'))
+  }), failed('poll'))
   let loaded: Awaited<ReturnType<typeof checkpoint>>, afterOps: Awaited<ReturnType<typeof checkpoint>>
   try {
   await openFixture(page, fixture)
@@ -554,7 +602,7 @@ async function memorySession(context: BrowserContext, base: string, fixture: Vie
   }
   log(`    memory ${fixture.key}: main ledger peak ${mib(afterOps.ledger?.peakBytes ?? null)}; main owned ${mib(summary.mainOwnedBytes)} (forced-GC live max ${mib(liveHeapSamples.length && baseline.heapBytes !== null ? Math.max(...liveHeapSamples) - baseline.heapBytes : null)} over ${liveHeapSamples.length} samples; peak no-GC ${mib(summary.mainPeakNoGcBytes)}), worker ledger ${mib(ledgerPeak)} / UASM ${mib(summary.workerUasmBytes)}, bitmap ${mib(summary.bitmapPeakBytes)}; after close main ${mib(summary.recovery.mainAfterCloseBytes)}, workers ${summary.recovery.workersTerminated}/${summary.recovery.workersCreated} terminated, canvases ${closed.canvas.count}`)
   if (diagnose) writeFileSync(`${process.env.VIEWER_SUITE_LIVE_DIAG}-${fixture.key}.json`, JSON.stringify({ warm: warmHostSamples, liveDiag }))
-  return { summary, warmHost: { fixture: warmFixture.key, scale: warmFixture.scale, samples: warmHostSamples, empty: warmEmptySamples, open: warmOpen, codeBytes: warmCode, openCodeBytes: warmOpenCode, layoutShifts: warmLayoutShifts, openLayoutShifts: warmOpenLayoutShifts }, checkpoints: { baseline, loaded, afterOps, closed }, polls, liveHeapSamples, liveSampleMs: LIVE_SAMPLE_MS, timeouts }
+  return { summary, warmHost: { fixture: warmFixture.key, scale: warmFixture.scale, samples: warmHostSamples, open: warmOpen, codeBytes: warmCode, openCodeBytes: warmOpenCode, layoutShifts: warmLayoutShifts, openLayoutShifts: warmOpenLayoutShifts, layoutShiftSources: warmLayoutShiftSources, openLayoutShiftSources: warmOpenLayoutShiftSources, checkpointNoise: warmCheckpointNoise, openQuiet: warmOpenQuiet, empty: warmEmptySamples, emptyCodeBytes: emptySnapshot?.codeBytes ?? null, emptyTypeBytes: emptySnapshot?.typeBytes ?? null, typeBytes: warmSnapshot?.typeBytes ?? null }, checkpoints: { baseline, loaded, afterOps, closed }, polls, liveHeapSamples, liveSampleMs: LIVE_SAMPLE_MS, timeouts }
 }
 
 // ---- formatting ----------------------------------------------------------------

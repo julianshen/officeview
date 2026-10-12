@@ -52,17 +52,25 @@ test.describe('S10.2 viewer layout stability', () => {
     await page.getByRole('button', { name: 'Cycle sort column B' }).click()
     await expect.poll(() => header.getAttribute('aria-sort'), { timeout: 60_000 }).not.toBe(before)
     await phase('filter')
-    // A slowed main thread makes the value list arrive well after the 500 ms
-    // recent-input window, as a 1M-row column does at full scale: whatever the
-    // dialog moves when its values land then counts as layout shift.
-    const cdp = await page.context().newCDPSession(page)
-    await cdp.send('Emulation.setCPUThrottlingRate', { rate: 20 })
+    // The value list is held back until well after the 500 ms recent-input
+    // window (a deterministic test hook on the perf page's worker port), so
+    // whatever the dialog moves when its values land counts as layout shift.
+    await page.evaluate(() => (window as unknown as W).__viewerPerf.holdReplies(['valueQuery']))
+    const clickedAt = Date.now()
     await page.getByRole('button', { name: /^Filter column A/ }).click()
     const dialog = page.getByRole('dialog', { name: 'Column filter' })
     await dialog.waitFor({ state: 'visible' })
-    await expect(dialog.getByRole('progressbar')).toHaveCount(0, { timeout: 60_000 })
-    await page.waitForTimeout(600)
-    await cdp.send('Emulation.setCPUThrottlingRate', { rate: 1 })
+    await expect(dialog.getByRole('progressbar')).toHaveCount(1)
+    await page.waitForTimeout(Math.max(0, 900 - (Date.now() - clickedAt)))
+    const released = await page.evaluate(() => (window as unknown as W).__viewerPerf.holdReplies(null))
+    expect(released, 'value-list replies were held and released').toBeGreaterThan(0)
+    expect(Date.now() - clickedAt).toBeGreaterThan(500)
+    // Values actually arrived: entries are listed and Select All is usable.
+    await expect.poll(() => dialog.locator('[data-value-ordinal]').count(), { timeout: 60_000 }).toBeGreaterThan(0)
+    await expect(dialog.getByRole('button', { name: 'Select All', exact: true })).toBeEnabled()
+    await page.waitForTimeout(300)
+    const filterShift = await page.evaluate(() => (window as unknown as W).__shifts.filter(s => s.phase === 'filter' && !s.recent).reduce((sum, s) => sum + s.value, 0))
+    expect(filterShift, 'shift when the held value list landed').toBeLessThanOrEqual(0.001)
     await dialog.getByRole('button', { name: 'Cancel' }).click()
     await dialog.waitFor({ state: 'hidden' })
     await phase('scroll-horizontal')

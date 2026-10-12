@@ -105,6 +105,15 @@ export interface ViewerPerf {
   dropInstrumentation(): { wire: number }
   /** Layout-shift entries the page has buffered so far (null: API missing). */
   layoutShifts(): number | null
+  /** Their attribution sources (each holds two DOMRectReadOnly). */
+  layoutShiftSources(): number | null
+  /** Resolves true once the viewer has presented nothing for `idleMs` and no
+   * worker request is open (false after `timeoutMs`): memory checkpoints are
+   * taken at rest, not while prefetch or row loads still allocate. */
+  quiet(idleMs: number, timeoutMs: number): Promise<boolean>
+  /** Holds worker replies of these command kinds until called with null, which
+   * releases every held reply in order (test hook). */
+  holdReplies(kinds: string[] | null): number
   workerStats(): Promise<PerfReply | null>
   workerGc(): Promise<boolean>
   /** Dedicated importer pass over #perf-import-file in a fresh perf worker (the viewer is not involved). */
@@ -130,9 +139,22 @@ let lastCounters: PresentCounters | null = null
 // by spec; page-owned, not the viewer's): counted so the memory gate can
 // exclude exactly their measured growth. null where the API is missing.
 let layoutShiftEntries: number | null = null
+let layoutShiftSources = 0
+let openRequests: Map<string, WireRecord> | null = null
+let lastFrameAt = 0
+// Reply kinds currently held back from the viewer, and the held deliveries.
+let heldKinds: Set<string> | null = null
+const held: (() => void)[] = []
 const LAYOUT_SHIFT_BUFFER = 150
 try {
-  new PerformanceObserver(list => { layoutShiftEntries = (layoutShiftEntries ?? 0) + list.getEntries().length }).observe({ type: 'layout-shift', buffered: true })
+  new PerformanceObserver(list => {
+    for (const entry of list.getEntries() as unknown as { sources?: readonly unknown[] }[]) {
+      // The buffer keeps the first LAYOUT_SHIFT_BUFFER entries only.
+      if ((layoutShiftEntries ?? 0) >= LAYOUT_SHIFT_BUFFER) break
+      layoutShiftEntries = (layoutShiftEntries ?? 0) + 1
+      layoutShiftSources += entry.sources?.length ?? 0
+    }
+  }).observe({ type: 'layout-shift', buffered: true })
   layoutShiftEntries = 0
 } catch { layoutShiftEntries = null }
 
@@ -160,7 +182,27 @@ const state: ViewerPerf = {
   ackWait: () => pendingAck ?? Promise.reject(new Error('no acknowledgment probe armed')),
   mainLedger: () => currentLedger?.snapshot() ?? null,
   dropInstrumentation() { const wire = state.wire.length; state.wire = []; return { wire } },
-  layoutShifts: () => layoutShiftEntries === null ? null : Math.min(layoutShiftEntries, LAYOUT_SHIFT_BUFFER),
+  layoutShifts: () => layoutShiftEntries,
+  layoutShiftSources: () => layoutShiftEntries === null ? null : layoutShiftSources,
+  holdReplies(kinds) {
+    if (kinds) { heldKinds = new Set(kinds); return 0 }
+    heldKinds = null
+    const release = held.splice(0)
+    for (const deliver of release) deliver()
+    return release.length
+  },
+  quiet(idleMs, timeoutMs) {
+    const started = performance.now()
+    return new Promise(resolve => {
+      const check = () => {
+        const now = performance.now()
+        if (now - lastFrameAt >= idleMs && (openRequests?.size ?? 0) === 0) { resolve(true); return }
+        if (now - started > timeoutMs) { resolve(false); return }
+        setTimeout(check, 50)
+      }
+      check()
+    })
+  },
   calibrateDom,
   calibrateGrid,
   workerStats: () => probe(currentWorker, { __perf: 'stats' }),
@@ -288,6 +330,9 @@ function countingWorker(): ViewerWorkerPort {
   currentWorker = worker
   state.workersCreated++
   const open = new Map<string, WireRecord>()
+  openRequests = open
+  const requestKinds = new Map<string, string>()
+  const gatedListeners = new Map<unknown, (event: MessageEvent) => void>()
   worker.addEventListener('message', event => {
     const data = event.data as { requestId?: unknown; kind?: unknown }
     if (typeof data?.requestId !== 'string') return
@@ -303,6 +348,7 @@ function countingWorker(): ViewerWorkerPort {
       const command = message as { kind?: string; requestId?: unknown }
       const kind = String(command.kind)
       state.commands[kind] = (state.commands[kind] ?? 0) + 1
+      if (typeof command.requestId === 'string') requestKinds.set(command.requestId, kind)
       if (typeof command.requestId === 'string' && state.wire.length < 20_000) {
         const query = (command as { query?: { op?: string; request?: { limit?: number; range?: { r0: number; r1: number; c0: number; c1: number } }; range?: { r0: number; r1: number; c0: number; c1: number } } }).query
         const rect = query?.request?.range ?? query?.range
@@ -316,8 +362,24 @@ function countingWorker(): ViewerWorkerPort {
       }
       worker.postMessage(message, transfer)
     },
-    addEventListener: (type, listener) => worker.addEventListener(type, listener),
-    removeEventListener: (type, listener) => worker.removeEventListener(type, listener),
+    // Message listeners go through a holding gate (holdReplies): a held reply
+    // kind reaches the viewer only when released (layout-stability test hook).
+    addEventListener: (type, listener) => {
+      if (type !== 'message') { worker.addEventListener(type, listener); return }
+      const gated = (event: MessageEvent) => {
+        const data = event.data as { requestId?: unknown; kind?: unknown }
+        const kind = typeof data?.requestId === 'string' ? requestKinds.get(data.requestId) : undefined
+        if (heldKinds && kind && heldKinds.has(kind)) { held.push(() => (listener as (event: MessageEvent) => void)(event)); return }
+        ;(listener as (event: MessageEvent) => void)(event)
+      }
+      gatedListeners.set(listener, gated)
+      worker.addEventListener('message', gated)
+    },
+    removeEventListener: (type, listener) => {
+      if (type !== 'message') { worker.removeEventListener(type, listener); return }
+      const gated = gatedListeners.get(listener)
+      if (gated) { worker.removeEventListener('message', gated); gatedListeners.delete(listener) }
+    },
     terminate() {
       state.workersTerminated++
       if (currentWorker === worker) currentWorker = null
@@ -341,6 +403,7 @@ async function importRun(profile: 'D' | 'M'): Promise<PerfReply> {
 // ---- frames: present detection and first usable viewport ----
 function onFrame(stats: SheetFrameStats): void {
   state.lastFrame = stats
+  lastFrameAt = performance.now()
   state.peakBitmapBytes = Math.max(state.peakBitmapBytes, stats.peakBitmapBytes)
   const counters: PresentCounters = { basePaints: stats.basePaints, tileHits: stats.tileHits, prefetched: stats.prefetched, overlayPaints: stats.overlayPaints }
   const present = classifyPresent(lastCounters, counters)

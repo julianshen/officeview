@@ -923,6 +923,16 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
   // Ctrl/Cmd+wheel anywhere over the viewer (headers, navigator) never zooms the
   // browser page; React's wheel listeners are passive, so this one is native.
   const rootRef = useRef<HTMLDivElement | null>(null)
+  // DOM a child commits on its own (a popup's value list arriving through its
+  // own state) is charged when it lands, not at the next parent render: one
+  // MutationObserver callback per task re-counts the viewer's elements by class.
+  useLayoutEffect(() => {
+    const el = rootRef.current
+    if (!el || typeof MutationObserver === 'undefined') return
+    const observer = new MutationObserver(() => { if (live.current && el.isConnected) mainLedger.set('dom', 'grid', domClassBytes(domClassCounts(el))) })
+    observer.observe(el, { childList: true, subtree: true })
+    return () => observer.disconnect()
+  }, [mainLedger, live])
   useEffect(() => {
     const el = rootRef.current
     if (!el) return

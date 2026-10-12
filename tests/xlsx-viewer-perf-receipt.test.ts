@@ -7,7 +7,7 @@ import { describe, expect, it } from 'vitest'
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import {
-  ACK_CENSORED_MS, LAYOUT_SHIFT_ENTRY_BYTES, RELEASE_IDENTITY, SCROLL_CENSORED_MS, classifyPresent, finalizeReceipt, importThroughput, pairInputsToPresents, summarize, validateReceipt, verifyReceipt,
+  ACK_CENSORED_MS, LAYOUT_SHIFT_ENTRY_BYTES, LAYOUT_SHIFT_SOURCE_BYTES, RELEASE_IDENTITY, SCROLL_CENSORED_MS, classifyPresent, finalizeReceipt, importThroughput, pairInputsToPresents, summarize, validateReceipt, verifyReceipt,
   type EvidenceContext, type ReceiptDraft, type ViewerReceipt,
 } from '../src/debug/harness/viewerPerf'
 
@@ -95,7 +95,7 @@ const readingsAround = (h: number, spread = 40 * 1024) => [h - spread / 2, h, h 
 /** Shifts a checkpoint's reading and every repeated reading by `bytes`. */
 const bump = (cp: any, bytes: number) => { cp.heapBytes += bytes; if (cp.heapReadings) cp.heapReadings = cp.heapReadings.map((v: number) => v + bytes) }
 const checkpoint = (heapBytes: number, workerPeak: number, ledgerPeak: number) => ({
-  heapBytes, heapReadings: readingsAround(heapBytes), codeBytes: CODE, layoutShifts: 3, ledger: ledgerAt(ledgerPeak), worker: { kind: 'stats', sessions: [{ memory: { peakBytes: workerPeak } }] },
+  heapBytes, heapReadings: readingsAround(heapBytes), codeBytes: CODE, layoutShifts: 3, layoutShiftSources: 6, ledger: ledgerAt(ledgerPeak), worker: { kind: 'stats', sessions: [{ memory: { peakBytes: workerPeak } }] },
   uasm: { available: true, worker: workerPeak, canvas: 40 * MiB }, frame: { peakBitmapBytes: 100 * MiB, workersCreated: 1, workersTerminated: 0 },
   canvas: { count: 2, bytes: 1 }, storage: { usage: 200 * MiB, quota: 1e10 },
 })
@@ -103,11 +103,11 @@ const checkpoint = (heapBytes: number, workerPeak: number, ledgerPeak: number) =
 const WARM = [5 * MiB - 20 * 1024, 5 * MiB, 5 * MiB + 20 * 1024, 5 * MiB - 10 * 1024, 5 * MiB + 10 * 1024]
 const memorySession = (cycles: number[] | null) => ({
   // The warm document open and idle: 0.5 MiB of heap above the closed warm host outside its ledger.
-  warmHost: { fixture: 'F2', scale: 'F2 reduced', samples: [...WARM], empty: [4 * MiB, 4 * MiB, 4 * MiB], open: Array.from({ length: 3 }, () => ({ heapBytes: 15 * MiB, ledgerBytes: 9.5 * MiB })), codeBytes: CODE, openCodeBytes: CODE, layoutShifts: 3, openLayoutShifts: 3 },
+  warmHost: { fixture: 'F2', scale: 'F2 reduced', samples: [...WARM], empty: [4 * MiB, 4 * MiB, 4 * MiB], open: Array.from({ length: 3 }, () => ({ heapBytes: 15 * MiB, ledgerBytes: 9.5 * MiB })), codeBytes: CODE, openCodeBytes: CODE, layoutShifts: 3, openLayoutShifts: 3, layoutShiftSources: 6, openLayoutShiftSources: 6, checkpointNoise: [readingsAround(5 * MiB), readingsAround(5 * MiB), readingsAround(5 * MiB)] },
   checkpoints: {
     baseline: { heapBytes: 5 * MiB, storage: { usage: 0, quota: 1e10 } },
     loaded: checkpoint(20 * MiB, 200 * MiB, 18 * MiB), afterOps: checkpoint(25 * MiB, 220 * MiB, 26 * MiB),
-    closed: { heapBytes: 5 * MiB, heapReadings: readingsAround(5 * MiB), codeBytes: CODE, layoutShifts: 3, ledger: ledgerAt(26 * MiB, 0), uasm: { available: true, worker: 0, canvas: 0 }, frame: { workersCreated: 1, workersTerminated: 1, peakBitmapBytes: 100 * MiB }, canvas: { count: 0, bytes: 0 }, storage: { usage: 0, quota: 1e10 } },
+    closed: { heapBytes: 5 * MiB, heapReadings: readingsAround(5 * MiB), codeBytes: CODE, layoutShifts: 3, layoutShiftSources: 6, ledger: ledgerAt(26 * MiB, 0), uasm: { available: true, worker: 0, canvas: 0 }, frame: { workersCreated: 1, workersTerminated: 1, peakBitmapBytes: 100 * MiB }, canvas: { count: 0, bytes: 0 }, storage: { usage: 0, quota: 1e10 } },
   },
   summary: { recovery: { cyclesMainOwnedBytes: cycles } },
   polls: [{ workerPeak: 210 * MiB }], timeouts: [], liveHeapSamples: [12 * MiB, 30 * MiB, 18 * MiB],
@@ -224,50 +224,116 @@ describe('evaluation from raw records', () => {
     expect(leakReceipt.desktopAdmitted).toBe(false)
   })
 
-  it('(r4-3) each checkpoint\'s own reading spread enters its allowance, and a steady 1 MiB leak is still refused at a 0.3 MiB spread', async () => {
-    // At the allowance edge (gap 0.5 MiB = the warm-open gap), with a noisy checkpoint: readings spread 0.3 MiB.
-    const noisy = () => {
-      const d = validDraft()
-      for (const key of ['F2', 'F4']) {
-        const cp = (d.raw.memory as any)[key].checkpoints.loaded
-        cp.ledger = ledgerAt(18 * MiB, 14.5 * MiB)
-        cp.heapReadings = readingsAround(cp.heapBytes, 0.3 * MiB)
+  it('(r5-2) a session\'s own reading spread never widens the allowance: codex\'s +0.5 MiB steady control at a 0.54 MiB spread is refused', async () => {
+    const d = validDraft()
+    for (const key of ['F2', 'F4']) {
+      const session = (d.raw.memory as any)[key]
+      session.warmHost.open = session.warmHost.open.map((o: any) => ({ ...o, heapBytes: o.heapBytes - 0.5 * MiB })) // warm-open gap 0
+      for (const name of ['loaded', 'afterOps', 'closed']) {
+        const cp = session.checkpoints[name]
+        cp.heapReadings = readingsAround(cp.heapBytes, 0.54 * MiB)
+        bump(cp, 0.5 * MiB)
       }
-      return d
+      session.liveHeapSamples = session.liveHeapSamples.map((v: number) => v + 0.5 * MiB)
     }
-    // 0.25 MiB more heap is within the checkpoint's own 0.3 MiB spread: admitted.
-    const within = noisy()
-    for (const key of ['F2', 'F4']) bump((within.raw.memory as any)[key].checkpoints.loaded, 0.25 * MiB)
-    const withinReceipt = await finalizeReceipt(within, ctx)
-    expect(withinReceipt.evidenceProblems).toEqual([])
-    expect(withinReceipt.measurements.memory.mainCheckpointSpreadBytes).toBeCloseTo(0.3 * MiB, -2)
-    // A steady 1 MiB leak in every reading: refused despite the spread.
-    const leak = noisy()
-    for (const key of ['F2', 'F4']) bump((leak.raw.memory as any)[key].checkpoints.loaded, 1 * MiB)
-    const leakReceipt = await finalizeReceipt(leak, ctx)
-    expect(leakReceipt.evidenceProblems.some(p => /uncharged main memory in F2 at the loaded checkpoint .* reading spread 0\.3 MiB/.test(p))).toBe(true)
-    expect(desktop(leakReceipt, 'main-owned-memory').outcome).toBe('pending')
-    expect(leakReceipt.desktopAdmitted).toBe(false)
+    // the closed checkpoint (ledger 0) holds 0.5 MiB uncharged
+    const receipt = await finalizeReceipt(d, ctx)
+    expect(receipt.evidenceProblems.some(p => /uncharged main memory in F2 at the closed checkpoint \(0\.5 MiB/.test(p))).toBe(true)
+    expect(desktop(receipt, 'main-owned-memory').outcome).toBe('pending')
+    expect(receipt.desktopAdmitted).toBe(false)
+  })
+
+  it('(r5-2) the allowance\'s noise is the independent bound (idle probe, warm-host checkpoint procedure), capped by a tighter session spread', async () => {
+    // Warm-host procedure noise 0.3 MiB: a 0.25 MiB residue at a checkpoint whose own spread is 0.3 MiB is within it.
+    const d = validDraft()
+    for (const key of ['F2', 'F4']) {
+      const session = (d.raw.memory as any)[key]
+      session.warmHost.checkpointNoise = [readingsAround(5 * MiB, 0.3 * MiB), readingsAround(5 * MiB), readingsAround(5 * MiB)]
+      const cp = session.checkpoints.loaded
+      cp.ledger = ledgerAt(18 * MiB, 14.5 * MiB)
+      cp.heapReadings = readingsAround(cp.heapBytes, 0.3 * MiB)
+      bump(cp, 0.25 * MiB)
+    }
+    const ok = await finalizeReceipt(d, ctx)
+    expect(ok.evidenceProblems).toEqual([])
+    expect(ok.measurements.memory.mainIndependentNoiseBytes).toBeCloseTo(0.3 * MiB, -2)
+    // The same residue at a checkpoint whose readings agree to 40 KiB: the spread tightens the term and it is refused.
+    const tight = validDraft()
+    for (const key of ['F2', 'F4']) {
+      const session = (tight.raw.memory as any)[key]
+      session.warmHost.checkpointNoise = [readingsAround(5 * MiB, 0.3 * MiB), readingsAround(5 * MiB), readingsAround(5 * MiB)]
+      const cp = session.checkpoints.loaded
+      cp.ledger = ledgerAt(18 * MiB, 14.5 * MiB)
+      bump(cp, 0.25 * MiB)
+    }
+    expect((await finalizeReceipt(tight, ctx)).desktopAdmitted).toBe(false)
+  })
+
+  it('(r5-2) fewer than 3 rounds of the checkpoint procedure on the warm host leaves the row pending', async () => {
+    const d = validDraft()
+    ;(d.raw.memory as any).F4.warmHost.checkpointNoise = [readingsAround(5 * MiB)]
+    const receipt = await finalizeReceipt(d, ctx)
+    expect(receipt.evidenceProblems.some(p => /1 rounds of the checkpoint procedure/.test(p))).toBe(true)
+    expect(desktop(receipt, 'main-owned-memory').outcome).toBe('pending')
+  })
+
+  it('(r5-3) impossible exclusion inputs are refused, not subtracted: >150 shift entries, more than 5 sources per entry, code bytes beyond the heap, a reported median that is not the median', async () => {
+    const cases: Array<[string, (s: any) => void, RegExp]> = [
+      ['12,193 shift entries', s => { s.checkpoints.loaded.layoutShifts = 12_193; bump(s.checkpoints.loaded, 10 * MiB) }, /no valid layout-shift entry\/source counts/],
+      ['fractional entries', s => { s.checkpoints.loaded.layoutShifts = 3.5 }, /no valid layout-shift entry\/source counts/],
+      ['sources beyond 5 per entry', s => { s.checkpoints.loaded.layoutShiftSources = 3 * 5 + 1 }, /sources exceed 5 per entry/],
+      ['100 MiB of code', s => { s.checkpoints.loaded.codeBytes = 100 * MiB; bump(s.checkpoints.loaded, 10 * MiB) }, /compiled-code bytes outside the measured heap/],
+      ['negative code', s => { s.checkpoints.loaded.codeBytes = -1 }, /compiled-code bytes outside the measured heap/],
+      ['warm code beyond its heap', s => { s.warmHost.codeBytes = 100 * MiB }, /warmed-host compiled-code bytes outside its measured heap/],
+      ['median mismatch', s => { s.checkpoints.loaded.heapBytes -= 1 * MiB }, /recorded heap reading is not the median/],
+    ]
+    for (const [label, mutate, problem] of cases) {
+      const d = validDraft()
+      mutate((d.raw.memory as any).F2)
+      const receipt = await finalizeReceipt(d, ctx)
+      expect(receipt.evidenceProblems.some(p => problem.test(p)), label).toBe(true)
+      expect(desktop(receipt, 'main-owned-memory').outcome, label).toBe('pending')
+      expect(receipt.desktopAdmitted, label).toBe(false)
+    }
+  })
+
+  it('(r5-5) all new measurements missing yields pending with named problems, never a throw', async () => {
+    const d = validDraft()
+    for (const key of ['F2', 'F4']) for (const name of ['loaded', 'afterOps', 'closed']) {
+      const cp = (d.raw.memory as any)[key].checkpoints[name]
+      delete cp.codeBytes; delete cp.layoutShifts; delete cp.layoutShiftSources; delete cp.heapReadings
+    }
+    const receipt = await finalizeReceipt(d, ctx)
+    expect(receipt.evidenceProblems.some(p => /valid repeated heap readings/.test(p))).toBe(true)
+    expect(desktop(receipt, 'main-owned-memory').outcome).toBe('pending')
+    expect(receipt.measurements.memory.mainCheckpointExcessBytes).toBeNull()
+    for (const name of ['r9', 'r10', 'r11']) {
+      const old = JSON.parse(readFileSync(join(process.cwd(), `docs/validation/interactive-viewer-viewer-chrome-${name}.json`), 'utf8')) as ViewerReceipt
+      const verdict = await validateReceipt(old, ctx)
+      expect(verdict.admitted, name).toBe(false)
+      expect(verdict.problems.length, name).toBeGreaterThan(0)
+    }
   })
 
   it('(r4-3) a checkpoint without its repeated readings leaves the row pending', async () => {
     const d = validDraft()
     ;(d.raw.memory as any).F2.checkpoints.closed.heapReadings = [5 * MiB, 5 * MiB]
     const receipt = await finalizeReceipt(d, ctx)
-    expect(receipt.evidenceProblems.some(p => /memory\.F2\.closed: 2 repeated heap readings, below 5/.test(p))).toBe(true)
+    expect(receipt.evidenceProblems.some(p => /memory\.F2: closed: 2 valid repeated heap readings, below 5/.test(p))).toBe(true)
     expect(desktop(receipt, 'main-owned-memory').outcome).toBe('pending')
     expect(receipt.desktopAdmitted).toBe(false)
   })
 
-  it('(r4-4) measured growth of the page\'s layout-shift entries is excluded exactly; a 1 MiB leak beside it is still refused', async () => {
+  it('(r4-4, r5-4) layout-shift growth is excluded by per-structure lower bounds of what was counted; codex\'s 80 KiB beside 147 one-source entries is refused', async () => {
     const atEdge = () => { const d = validDraft(); for (const key of ['F2', 'F4']) (d.raw.memory as any)[key].checkpoints.loaded.ledger = ledgerAt(18 * MiB, 14.5 * MiB); return d }
     const grown = atEdge()
-    for (const key of ['F2', 'F4']) { const cp = (grown.raw.memory as any)[key].checkpoints.loaded; cp.layoutShifts += 147; bump(cp, 147 * LAYOUT_SHIFT_ENTRY_BYTES) }
+    const grownBytes = 147 * LAYOUT_SHIFT_ENTRY_BYTES + 147 * LAYOUT_SHIFT_SOURCE_BYTES // one source each, as counted
+    for (const key of ['F2', 'F4']) { const cp = (grown.raw.memory as any)[key].checkpoints.loaded; cp.layoutShifts += 147; cp.layoutShiftSources += 147; bump(cp, grownBytes) }
     const grownReceipt = await finalizeReceipt(grown, ctx)
     expect(grownReceipt.evidenceProblems).toEqual([])
-    expect(grownReceipt.measurements.memory.mainLayoutShiftBytes).toBe(147 * LAYOUT_SHIFT_ENTRY_BYTES)
+    expect(grownReceipt.measurements.memory.mainLayoutShiftBytes).toBe(grownBytes)
     const leak = atEdge()
-    for (const key of ['F2', 'F4']) { const cp = (leak.raw.memory as any)[key].checkpoints.loaded; cp.layoutShifts += 147; bump(cp, 147 * LAYOUT_SHIFT_ENTRY_BYTES + 1 * MiB) }
+    for (const key of ['F2', 'F4']) { const cp = (leak.raw.memory as any)[key].checkpoints.loaded; cp.layoutShifts += 147; cp.layoutShiftSources += 147; bump(cp, grownBytes + 80 * 1024) }
     const leakReceipt = await finalizeReceipt(leak, ctx)
     expect(leakReceipt.evidenceProblems.some(p => /uncharged main memory in F2 at the loaded checkpoint .* MiB of layout-shift entries/.test(p))).toBe(true)
     expect(desktop(leakReceipt, 'main-owned-memory').outcome).toBe('pending')
@@ -279,7 +345,7 @@ describe('evaluation from raw records', () => {
       const d = validDraft()
       drop(d.raw.memory)
       const receipt = await finalizeReceipt(d, ctx)
-      expect(receipt.evidenceProblems.some(p => /no layout-shift entry count/.test(p))).toBe(true)
+      expect(receipt.evidenceProblems.some(p => /no valid layout-shift entry\/source counts/.test(p))).toBe(true)
       expect(desktop(receipt, 'main-owned-memory').outcome).toBe('pending')
       expect(receipt.desktopAdmitted).toBe(false)
     }
