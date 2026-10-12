@@ -299,11 +299,59 @@ The script ran twice, both times while the macOS screen was **locked** (`CGSSess
 | Opens: F1 resident (no worker), F1/F2/F3 worker-backed (1 worker, 1 `open`), each reaching "complete body" | ran: opened |
 | Go To XFD1048576, find A1048576, copy payload, keyboard navigation, zoom, header sort, value filter apply/cancel/clear, F3 recenter | **not-run (invalid):** the clicks returned success but had no effect, most likely because of the locked screen. Rerun with the screen unlocked |
 
-### macOS VoiceOver — prepared, not run
+**Unlocked run (integrator, at `da9eac8`; receipt in `/tmp/officeview-safari-check-unlocked/`): 5 pass, 2 fail.**
 
-**Script:** `bun scripts/harness/voiceover-check.ts` (`--preflight` only checks and never starts VoiceOver). Safari is driven through safaridriver while VoiceOver reads the page. After each step the script polls `content of last phrase` over AppleScript. Each step is matched against the spec §9 announcements: grid name "Worksheet F2", counts 1048577 / 16385, "B3, value …" / "C3, value …", selected state, "Column filter" popup name, "Select Column C" / "Cycle sort column C", ascending sort. VoiceOver is always quit in a `finally` block, checked with `pgrep` and System Events, and `pkill`ed if still running. The receipt goes to `/tmp/officeview-voiceover-check/receipt.json`.
+Passed:
+- capabilities;
+- F1 resident and worker-backed: Go To XFD1048576, find the never-painted corner, copy payload;
+- F3 dense recenter;
+- the F2 storage import of 160,000 rows.
 
-**Not run:** the screen was locked, so VoiceOver would have read the lock screen. The preflight refused, as designed. On macOS 26 the "Allow VoiceOver to be controlled with AppleScript" setting sits in a TCC-protected container, so the preflight cannot read it. The script confirms it with the first AppleScript call after VoiceOver starts, and stops VoiceOver if that call is refused. AC-A11Y-01's screen-reader leg stays open.
+Both failures were harness bugs, confirmed by re-running those steps in real Safari:
+- **"waiting for active cell A1":** Safari reserves Cmd+Home. The WebDriver Meta+Home navigated the tab to the Safari home page, so the page never saw the key. Ctrl+Home moved the active cell to A1 at once. Cmd+Down and Cmd+Right reached A1048576 and XFD1048576.
+- **"alpha checkbox not found":** the filter popup's buttons stay disabled until its value list loads (about 1.7 s for 100,010 rows), and a WebDriver click on a disabled button does nothing. The value checkboxes are named correctly (`aria-label="alpha"`).
+
+Fixed in `606db4c`: Ctrl+Home, and clicks wait for an enabled target. The full re-run after these fixes is pending (see the report).
+
+### macOS VoiceOver — guided manual pass (real VoiceOver, real Safari 26.5.2)
+
+**Automated script:** `bun scripts/harness/voiceover-check.ts` (`--preflight` only checks and never starts VoiceOver). It is still not usable: VoiceOver starts, but `tell application "VoiceOver" to return content of last phrase` hangs until the osascript timeout. The user is re-checking the AppleScript/Automation permissions. No automated VoiceOver receipt is claimed.
+
+**Guided pass (run by the integrator with the user at the machine).** Fixture `f2-1k` (resident), real keyboard, VoiceOver on, macOS VoiceOver UI in Traditional Chinese. Evidence is the VoiceOver caption panel, cropped to the panel only, in [`voiceover-s13/`](voiceover-s13/). In the captions, 第N欄 = column N and 第N列 = row N, both chrome-inclusive. These ran **before** the V1/V2 fixes below.
+
+| Step | VoiceOver said | Result |
+|---|---|---|
+| Down onto A2 ([01](voiceover-s13/01-down-a2.png)) | "A2, value 1.00 1.00, column 2, row 3" | pass for name and chrome-inclusive indices; **V1**: value spoken twice |
+| B3 date cell ([09](voiceover-s13/09-b3-date.png)) | "B3, value 2023-06-09 2023-06-09, column 3, row 4" | pass for indices; **V1** |
+| Right ([02](voiceover-s13/02-right.png)) | "C3, value TRUE TRUE, column 4, row 4" | pass for movement; **V1** |
+| Shift+Right ([03](voiceover-s13/03-shift-right-d3.png)) | "D3, value beta beta, column 5, row 4" | movement passes; **V2**: no selection announced |
+| Ctrl+Home ([04](voiceover-s13/04-ctrl-home-status.png)) | live status "Visible body 1000 / complete body 1000 — A1, value id" | pass |
+| Option+Down on a cell ([05](voiceover-s13/05-option-down-no-popup.png)) | status only, no "Column filter" popup | **V3**, see below |
+| Escape ([06](voiceover-s13/06-escape.png)) | "A2, value 1.00 1.00" | pass |
+| Tab out of the grid ([07](voiceover-s13/07-tab-1.png), [08](voiceover-s13/08-tab-2.png)) | "Search document, Search…, search text field", then the buttons | pass (one Tab stop) |
+
+**Findings, resolved on this branch:**
+
+- **V1 — every value spoken twice: real defect, fixed.**
+  - Cause: the gridcell's `aria-label` already carries the value, and its visually hidden text child was still exposed, so VoiceOver read the name and then the contents.
+  - Fix: the text child is `aria-hidden` (`GridSemantics.tsx`). The accessible name is unchanged ("B3, value …"), so the S10.3 name contract and Chromium AX tests still pass.
+  - Test: `tests/xlsx-viewer-a11y-announce.test.tsx`, which failed first with `expected [ '10' ] to deeply equal []`.
+- **V2 — no selection announced on extension: real gap against spec §9.2, fixed.** §9.2 says cell names carry selection descriptions and the live region reports selection.
+  - Shift+Arrow and Shift+click now announce the range, e.g. "D3, value beta; selected B3:D3".
+  - Cells of a multi-cell selection get an `aria-description` of "selected". A single active cell does not, to avoid noise.
+  - Tests are in the same file. They failed first with `expected 'C2, value 10; original C4' to be '…; selected A2:C2'`.
+  - Not yet re-heard with VoiceOver.
+- **V3 — Option+Down did not open the filter under VoiceOver: not reproduced as a viewer defect.**
+  - With VoiceOver **off**, I sent real OS key events (System Events `key code 125 using option down`) to a normal Safari 26.5.2 window. A key probe page recorded `key: "ArrowDown", code: "ArrowDown", altKey: true`.
+  - On the viewer, with the grid focused via the e2e page's new `focus=grid`, the same keystroke opened "Filter column B".
+  - So the handler works in Safari. Under VoiceOver the keystroke did not reach the page as Option+Down, most likely because VoiceOver handles it. That is not confirmed: no VoiceOver key trace was possible.
+  - Keyboard alternative that VoiceOver users can reach: F2 (header control mode) → Tab to "Filter column X" → Enter (S10.3 receipt). Re-test Option+Down with VoiceOver's pass-through (pass next keystroke) on the next VoiceOver pass.
+  - Separately, safaridriver's synthetic modified arrows arrive with control-character `key` values (Option+Down → `"\u001f"`, Shift+Right → `"\u001d"`; `code` is correct). That is a WebDriver synthesis artifact; real keys were correct. The Safari check therefore uses no modified arrows except Cmd+Arrow, which arrives correctly.
+- **V4 — "1.002023-06-02" in the date column: not Safari-specific, and not changed here.**
+  - Playwright Chromium and Playwright WebKit render it identically.
+  - Calibri is not installed, so the fallback serif makes "2023-06-02" about 68.2 px wide (measured in both engines) in a 64 px column.
+  - The renderer keeps the authored size, right-aligns the numeric text, and clips it at the cell's left edge (the documented legacy no-wrap rule in `render.ts`). The clipped first glyph sits on the A|B gridline next to column A's right-aligned "1.00", so the two read as one string.
+  - Excel would show `########` for a date that does not fit, so this is a renderer fidelity gap shared with the legacy path, not a Safari defect. It is logged under Observations for a follow-up, because changing it moves goldens.
 
 ## Blocking for release
 
@@ -319,6 +367,7 @@ These are mandatory cases whose evidence is incomplete. Nothing here is hidden a
 
 ## Observations (not fixed; not reproduced as failures)
 
+- (S13 V4) A numeric or date value wider than its column (for example a date in a 64 px column when Calibri is missing) is clipped at the cell's left edge instead of showing `########` as Excel does, so it reads as joined to its left neighbour. This is shared by the legacy and viewer renderers on every engine; a fix would move goldens.
 - (S13) A 1 px pane-width nudge at DPR 1.5 once seemed to leave the pane width stale (canvas CSS 1397 at `innerWidth` 1440). It was investigated and did not reproduce in 192 cycles; every stale state seen was D-DPR, now fixed. Details in the S13 section.
 - G2's read-ahead costs one extra `next()` per complete cursor-less page. On the worker path that is one more worker round trip; it is part of the roughly 597 reads observed above. Detection keeps at most one read-ahead continuation open, because the worker caps open scans at 4 (`MAX_OPEN_SCANS`), shared with find. This is a cost note for the S8.6 owner, not a bug.
 - Generated browser packages are cached under `$TMPDIR/officeview-viewer-e2e-v1`, keyed by file name. If the S0.2 builders change, bump the `-v1` suffix in `tests/browser/viewer-e2e.ts`.
