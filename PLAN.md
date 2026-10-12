@@ -1,5 +1,16 @@
 # PLAN: WordArt Compatibility in OfficeView
 
+## Interactive spreadsheet viewer status
+
+The separate interactive spreadsheet viewer is implemented behind the
+default-off `interactiveSheets` flag; large paged viewing uses a host-supplied
+worker. Integrator usage, resource/copy/print limits and capability restrictions
+are documented in [README](README.md#interactive-spreadsheet-viewer).
+Desktop Chrome kernel thresholds pass in retained receipts; Safari, physical
+iPad and VoiceOver evidence and the final release decision remain open.
+See the [interactive viewer plan](docs/superpowers/plans/2026-10-10-interactive-viewer.md)
+for its requirement matrix. The WordArt plan below retains its existing scope.
+
 ## Objective
 Support the reviewed WordArt appearance, eleven implemented text-warp presets, and format adapters across PowerPoint (`.pptx`), Word (`.docx`), and Excel (`.xlsx`) documents in OfficeView. Native Office font fitting and universal raster parity remain unverified.
 This encompasses:
