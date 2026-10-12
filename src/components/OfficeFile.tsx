@@ -10,6 +10,7 @@ import { mergeWatermark, type WatermarkOptions } from '../core/watermark'
 import type { PackageErrorCode } from '../core/package-error'
 import { documentNotices, loadOfficeSource, type AnyDoc } from './loadOfficeSource'
 import { ImportRefusal, type RefusalReason } from '../xlsx/storage/importSession'
+import { pagedWorkbookOf } from './pagedDocument'
 
 export type { AnyDoc } from './loadOfficeSource'
 
@@ -46,12 +47,23 @@ export async function loadOfficeFile(
   return loadOfficeSource(source, options)
 }
 
+/** A dedicated worker (or MessagePort) running officeview's dist/worker.js. */
+export interface ViewerWorkerPort {
+  postMessage(message: unknown, transfer: Transferable[]): void
+  addEventListener(type: 'message', listener: (event: MessageEvent) => void): void
+  removeEventListener(type: 'message', listener: (event: MessageEvent) => void): void
+  terminate?(): void
+}
+
 export function useOfficeFile(
   source: ByteSource | null | undefined,
   options: {
     onProgress?: (p: Progress) => void
     onProtection?: ProtectionListener
     onWatermark?: WatermarkListener
+    /** With `viewerWorker`, a large (paged) spreadsheet opens in that worker for the interactive viewer. */
+    interactiveSheets?: boolean
+    viewerWorker?: () => ViewerWorkerPort
   } = {},
 ): OfficeFileState {
   const [state, setState] = useState<OfficeFileState>({ status: 'loading' })
@@ -61,9 +73,15 @@ export function useOfficeFile(
   protectionRef.current = options.onProtection
   const watermarkRef = useRef(options.onWatermark)
   watermarkRef.current = options.onWatermark
+  const workerRef = useRef(options.viewerWorker)
+  workerRef.current = options.viewerWorker
+  // Paged admissions route to the worker only with the flag AND a worker;
+  // otherwise the load is exactly today's (compatibility mode for large files).
+  const pagedRoute = Boolean(options.interactiveSheets && options.viewerWorker)
   useEffect(() => {
     let cancelled = false
     if (!source) return
+    let loaded: AnyDoc | undefined
     // One controller per source: cleanup aborts the download, the spool,
     // the verification pass and the parse, and the loader releases the spool.
     const controller = new AbortController()
@@ -77,9 +95,19 @@ export function useOfficeFile(
       // in <OfficeFile>) and let a stale download overwrite the live policy.
       onProtection: (p) => { if (!cancelled) protectionRef.current?.(p) },
       onWatermark: (m) => { if (!cancelled) watermarkRef.current?.(m) },
+      ...(pagedRoute ? {
+        paged: async (blob, ctx, release) => {
+          const factory = workerRef.current
+          if (!factory) return undefined
+          const { openPagedWorkbook } = await import('./xlsx/pagedWorkbook')
+          return openPagedWorkbook(blob, { port: factory(), profile: ctx.profile, signal: ctx.signal, ...(release ? { release } : {}) })
+        },
+      } : {}),
     })
       .then((document) => {
-        if (cancelled) return
+        // A worker-backed document belongs to this load: released with it.
+        if (cancelled) { void pagedWorkbookOf(document)?.release(); return }
+        loaded = document
         const notices = documentNotices(document)
         setState(notices.length > 0 ? { status: 'ready', document, notices } : { status: 'ready', document })
       })
@@ -91,8 +119,9 @@ export function useOfficeFile(
     return () => {
       cancelled = true
       controller.abort()
+      void pagedWorkbookOf(loaded)?.release()
     }
-  }, [source])
+  }, [source, pagedRoute])
   return state
 }
 
@@ -108,6 +137,15 @@ export interface OfficeFileProps extends Omit<OfficeDocProps, 'document'> {
   error?: (message: string) => ReactElement
   style?: CSSProperties
   className?: string
+  /**
+   * Resident viewer worker for large spreadsheets with `interactiveSheets`
+   * (experimental), e.g. `() => new Worker(new URL('officeview/dist/worker.js',
+   * import.meta.url), { type: 'module' })`. A file admitted as large then
+   * opens in that worker: pages stay there and the interactive viewer reads
+   * bounded windows. Without it, large files keep compatibility mode. Each
+   * large document gets its own worker, terminated when the document closes.
+   */
+  viewerWorker?: () => ViewerWorkerPort
 }
 
 export function OfficeFile({
@@ -117,6 +155,7 @@ export function OfficeFile({
   allowCopy = true,
   allowPrint = true,
   watermark,
+  viewerWorker,
   ...rest
 }: OfficeFileProps): ReactElement {
   const [progress, setProgress] = useState<Progress | undefined>(undefined)
@@ -137,6 +176,8 @@ export function OfficeFile({
     onProgress: (p) => setProgress(p),
     onProtection: (policy) => setHeaderPolicy({ source: data, policy }),
     onWatermark: (mark) => setHeaderMark({ source: data, mark }),
+    interactiveSheets: rest.interactiveSheets,
+    viewerWorker,
   })
   const serverPolicy = headerPolicy && headerPolicy.source === data ? headerPolicy.policy : undefined
   const effectiveAllowCopy = allowCopy && (serverPolicy?.allowCopy ?? true)

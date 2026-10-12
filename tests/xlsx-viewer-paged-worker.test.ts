@@ -37,7 +37,7 @@ describe('resident worker opens paged sources (S1.2)', () => {
     const blob = new Blob([xlsxBytes({ sheetData: rowsXml([3, 1, 4, 1, 5]) }) as BlobPart])
     const whole = vi.spyOn(blob, 'arrayBuffer')
     const open = completed(await run(kernel, { kind: 'open', requestId: rid(), docId: 'doc', source: { kind: 'blob', blob }, profile: 'D' }))
-    expect(open).toEqual({ kind: 'open', valuePolicy: 'cached', sheets: [{ sheetId: '1', name: 'S' }] })
+    expect(open).toMatchObject({ kind: 'open', valuePolicy: 'cached', sheets: [{ sheetId: '1', name: 'S' }], formatting: { dateSystem: '1900' } })
     expect(parse).not.toHaveBeenCalled()
     expect(whole).not.toHaveBeenCalled()
     const owner: CacheIdentity = initialIdentity('doc', '1')
@@ -205,5 +205,143 @@ describe('review round 2 NIT 1: the fallback is also bounded by the declared exp
     expect(completed(replies.at(-1)!)).toMatchObject({ kind: 'open', valuePolicy: 'cached' })
     expect(replies.at(-1)!.diagnostics).toContainEqual(expect.objectContaining({ code: 'paged-unsupported' }))
     expect(parse).not.toHaveBeenCalled()
+  })
+})
+
+// ---------------------------------------------------------------------------
+// S5.4: bounded worker commands behind the paged interactive viewer
+// ---------------------------------------------------------------------------
+import { KEY_NUMBER } from '../src/xlsx/view/valueRuns'
+import { valueScope } from '../src/xlsx/view/valueIndex'
+import type { FilterSpec, SourceReadQuery } from '../src/xlsx/view/contracts'
+import { READ_ROWS_PAGE_ROWS } from '../src/xlsx/view/source'
+
+const CORNER_ROWS = '<row r="1"><c r="A1"><v>1</v></c></row><row r="2"><c r="A2"><v>2</v></c></row>'
+  + '<row r="1048576"><c r="XFD1048576" t="inlineStr"><is><t>corner</t></is></c></row>'
+async function openPaged(docId: string, sheetData: string) {
+  const parse = vi.fn(async (bytes: Uint8Array) => parseXlsx(await OfficePackage.load(bytes)))
+  const kernel = new ViewerKernel({ parse, importLimits: PAGED }, quiet)
+  completed(await run(kernel, { kind: 'open', requestId: rid(), docId, source: { kind: 'blob', blob: new Blob([xlsxBytes({ sheetData }) as BlobPart]) }, profile: 'D' }))
+  await kernel.session(docId)!.source.store('1').ensureComplete({ r0: 0, r1: 1048575, c0: 0, c1: 16383 }, { signal: new AbortController().signal, stamp: { docId, sheetId: '1', valueGen: 0 } })
+  return { kernel, parse, owner: initialIdentity(docId, '1') }
+}
+const read = (kernel: ViewerKernel, owner: CacheIdentity, query: SourceReadQuery) => run(kernel, { kind: 'read', requestId: rid(), owner, query })
+function readResult(out: WorkerReply<'read'>) {
+  const result = completed(out)
+  if (result.kind !== 'read') throw new Error(`expected read, got ${result.kind}`)
+  return result.result
+}
+
+describe('S5.4 bounded worker reads for the paged interactive viewer', () => {
+  it('activation publishes the compact sheet layout; cell, row and scan reads reach XFD1048576', async () => {
+    const { kernel, parse, owner } = await openPaged('corner', CORNER_ROWS)
+    const active = completed(await run(kernel, { kind: 'activateSheet', requestId: rid(), owner: kernel.session('corner')!.workbookOwner(), sheetId: '1' }))
+    expect(active).toMatchObject({ kind: 'activateSheet', sheetId: '1', layout: { rowOverrides: [], colOverrides: [], hidden: [], used: { r0: 0, r1: 1048575, c0: 0, c1: 16383 } } })
+    // The same layout is re-readable later (it grows while an import runs).
+    expect(readResult(await read(kernel, owner, { op: 'layout' }))).toEqual({ op: 'layout', layout: active.kind === 'activateSheet' ? active.layout : undefined })
+    const cell = readResult(await read(kernel, owner, { op: 'cell', at: { row: 1048575, col: 16383 } }))
+    expect(cell).toMatchObject({ op: 'cell', read: { kind: 'cell', cell: { row: 1048575, col: 16383, value: 'corner' } } })
+    const rows = readResult(await read(kernel, owner, { op: 'rows', range: { r0: 1048570, r1: 1048575, c0: 16380, c1: 16383 } }))
+    expect(rows.op === 'rows' && rows.page.completeness).toBe('complete')
+    expect(rows.op === 'rows' && rows.page.items.map(item => [item.row, item.cells.map(c => c.value)])).toEqual([[1048575, ['corner']]])
+    const first = readResult(await read(kernel, owner, { op: 'scan', request: { range: { r0: 0, r1: 1048575, c0: 0, c1: 16383 }, limit: 2 } }))
+    expect(first.op === 'scan' && first.page.items.map(c => c.value)).toEqual([1, 2])
+    const cursor = first.op === 'scan' ? first.page.nextCursor : undefined
+    expect(cursor).toEqual(expect.any(String))
+    const rest = readResult(await read(kernel, owner, { op: 'scan', request: { range: { r0: 0, r1: 1048575, c0: 0, c1: 16383 }, limit: 2 }, cursor }))
+    expect(rest.op === 'scan' && rest.page.items.map(c => c.value)).toEqual(['corner'])
+    expect(rest.op === 'scan' && rest.page.nextCursor).toBeUndefined()
+    expect(parse).not.toHaveBeenCalled()
+  })
+
+  it('a whole-sheet row read is one bounded page with a continuation, never the full sheet', async () => {
+    const values = Array.from({ length: READ_ROWS_PAGE_ROWS + 50 }, (_, i) => i)
+    const { kernel, owner } = await openPaged('bounded', rowsXml(values))
+    const page = readResult(await read(kernel, owner, { op: 'rows', range: { r0: 0, r1: 1048575, c0: 0, c1: 16383 } }))
+    if (page.op !== 'rows') throw new Error('rows')
+    expect(page.page.items.length).toBeLessThanOrEqual(READ_ROWS_PAGE_ROWS)
+    expect(page.page.nextCursor).toEqual(expect.any(String))
+    // An invalid rectangle is a typed failure, not a thrown worker exception.
+    const bad = readResult(await read(kernel, owner, { op: 'rows', range: { r0: 5, r1: 1, c0: 0, c1: 0 } }))
+    expect(bad.op === 'rows' && bad.page.error?.code).toBe('invalid-source-rect')
+  })
+
+  it('reads are owned by the committed view: stale after a commit, cancelled on cancel, withheld after close', async () => {
+    const { kernel, owner } = await openPaged('owned', rowsXml([3, 1, 4, 1, 5]))
+    completed(await run(kernel, { kind: 'prepareColumns', requestId: rid(), owner, cols: new Uint16Array([0]) }))
+    const sorted = completed(await run(kernel, { kind: 'sort', requestId: rid(), owner, spec: { range: { r0: 0, r1: 4, c0: 0, c1: 1, headerRows: 0, totalsRows: 0 }, keys: [{ col: 0, order: 'asc' }], caseSensitive: false } }))
+    const next = sorted.kind === 'view' ? sorted.delta.owner : owner
+    expect(await read(kernel, owner, { op: 'cell', at: { row: 0, col: 0 } })).toMatchObject({ kind: 'error', code: 'stale-source' })
+    expect(readResult(await read(kernel, next, { op: 'cell', at: { row: 0, col: 0 } }))).toMatchObject({ read: { kind: 'cell', cell: { value: 3 } } })
+
+    const cancelId = rid()
+    const replies: WorkerReply[] = []
+    const cancelling = new ViewerKernel({ parse: async () => { throw new Error('no parse') }, importLimits: PAGED, afterDispatch: async command => {
+      if (command.kind === 'read') await cancelling.handle({ kind: 'cancel', requestId: rid(), targetRequestId: cancelId }, () => {})
+    } }, quiet)
+    completed(await run(cancelling, { kind: 'open', requestId: rid(), docId: 'c', source: { kind: 'blob', blob: new Blob([xlsxBytes({ sheetData: rowsXml([1, 2]) }) as BlobPart]) }, profile: 'D' }))
+    await cancelling.handle({ kind: 'read', requestId: cancelId, owner: initialIdentity('c', '1'), query: { op: 'cell', at: { row: 0, col: 0 } } }, out => { replies.push(out) })
+    expect(replies.at(-1)).toMatchObject({ kind: 'cancelled', commandKind: 'read' })
+
+    const closing = new ViewerKernel({ parse: async () => { throw new Error('no parse') }, importLimits: PAGED, afterDispatch: async command => {
+      if (command.kind === 'read') await closing.handle({ kind: 'close', requestId: rid(), docId: 'x' }, () => {})
+    } }, quiet)
+    completed(await run(closing, { kind: 'open', requestId: rid(), docId: 'x', source: { kind: 'blob', blob: new Blob([xlsxBytes({ sheetData: rowsXml([1, 2]) }) as BlobPart]) }, profile: 'D' }))
+    const late = await read(closing, initialIdentity('x', '1'), { op: 'rows', range: { r0: 0, r1: 0, c0: 0, c1: 0 } })
+    expect(late.kind).not.toBe('complete')
+  })
+
+  it('commits typed and value-list filters through the worker on a paged sheet (keys shipped with the command)', async () => {
+    const { kernel, owner } = await openPaged('filter', rowsXml([3, 1, 4, 1, 5]))
+    const range = { r0: 0, r1: 4, c0: 0, c1: 1, headerRows: 0 as const, totalsRows: 0 as const }
+    const typed: FilterSpec = { range, columns: new Map([[0, { kind: 'number', op: 'gt', first: 2 }]]) }
+    const out = completed(await run(kernel, { kind: 'filter', requestId: rid(), owner, spec: typed, nowMs: 0 }))
+    if (out.kind !== 'view') throw new Error('view')
+    expect(out.delta.counts.visible).toBe(1048576 - 2)
+    expect(out.delta.visibility).toHaveLength(1)
+    expect([out.delta.visibility[0].r0, out.delta.visibility[0].r1, out.delta.visibility[0].words[0]]).toEqual([0, 3, 0b0101])
+
+    const ref = { refId: 'keys-1', count: 1, owner: { docId: 'filter', sheetId: '1', valueGen: 0 } }
+    const scope = valueScope({ docId: 'filter', sheetId: '1', valueGen: 0, range, col: 0, classification: { kind: 'number', hasNumeric: true }, classificationGen: 0 })
+    const values: FilterSpec = { range, columns: new Map([[0, { kind: 'values', selection: { mode: 'include', keys: ref }, showBlanks: false }]]) }
+    const refused = await run(kernel, { kind: 'filter', requestId: rid(), owner: out.delta.owner, spec: values, nowMs: 0 })
+    expect(refused.kind).toBe('error')
+    const kept = completed(await run(kernel, { kind: 'filter', requestId: rid(), owner: out.delta.owner, spec: values, nowMs: 0,
+      keySets: [{ refId: 'keys-1', scope, run: { count: 1, kinds: Uint8Array.of(KEY_NUMBER), numbers: Float64Array.of(1), texts: [undefined] } }] }))
+    if (kept.kind !== 'view') throw new Error('view')
+    // Only the two 1s stay visible: source rows 0, 2 and 4 are hidden.
+    expect([kept.delta.visibility[0].r0, kept.delta.visibility[0].r1, kept.delta.visibility[0].words[0]]).toEqual([0, 4, 0b01010])
+  })
+})
+
+describe('S5.4 review: worker filter semantics and key lifetime', () => {
+  it('F1 date rules classify paged columns through the workbook style table', async () => {
+    const parse = vi.fn(async (bytes: Uint8Array) => parseXlsx(await OfficePackage.load(bytes)))
+    const kernel = new ViewerKernel({ parse, importLimits: PAGED }, quiet)
+    const styles = '<cellXfs count="2"><xf numFmtId="0"/><xf numFmtId="14" applyNumberFormat="1"/></cellXfs>'
+    const sheetData = '<row r="1"><c r="A1" s="1"><v>44927</v></c></row><row r="2"><c r="A2" s="1"><v>44928</v></c></row><row r="3"><c r="A3" s="1"><v>44929</v></c></row>'
+    const open = completed(await run(kernel, { kind: 'open', requestId: rid(), docId: 'dates', source: { kind: 'blob', blob: new Blob([xlsxBytes({ sheetData, styles }) as BlobPart]) }, profile: 'D' }))
+    expect(open.kind === 'open' && open.formatting?.styles[1]).toMatchObject({ numFmtId: 14 })
+    const owner = initialIdentity('dates', '1')
+    const spec: FilterSpec = { range: { r0: 0, r1: 2, c0: 0, c1: 0, headerRows: 0, totalsRows: 0 }, columns: new Map([[0, { kind: 'date', op: 'eq', first: { year: 2023, month: 1, day: 2 } }]]) }
+    const out = completed(await run(kernel, { kind: 'filter', requestId: rid(), owner, spec, nowMs: 0 }))
+    if (out.kind !== 'view') throw new Error('view')
+    // Only 2023-01-02 (serial 44928, source row 1) stays visible.
+    expect([out.delta.visibility[0].r0, out.delta.visibility[0].r1, out.delta.visibility[0].words[0]]).toEqual([0, 2, 0b010])
+  })
+
+  it('F5 a superseded filter finishing never removes the keys its replacement shares', async () => {
+    const { kernel, owner } = await openPaged('shared', rowsXml([3, 1, 4, 1, 5]))
+    const range = { r0: 0, r1: 4, c0: 0, c1: 1, headerRows: 0 as const, totalsRows: 0 as const }
+    const ref = { refId: 'keys-shared', count: 1, owner: { docId: 'shared', sheetId: '1', valueGen: 0 } }
+    const scope = valueScope({ docId: 'shared', sheetId: '1', valueGen: 0, range, col: 0, classification: { kind: 'number', hasNumeric: true }, classificationGen: 0 })
+    const keySets = () => [{ refId: 'keys-shared', scope, run: { count: 1, kinds: Uint8Array.of(KEY_NUMBER), numbers: Float64Array.of(1), texts: [undefined] } }]
+    const spec = (showBlanks: boolean): FilterSpec => ({ range, columns: new Map([[0, { kind: 'values', selection: { mode: 'include', keys: ref }, showBlanks }]]) })
+    const first: WorkerReply[] = [], second: WorkerReply[] = []
+    const a = kernel.handle({ kind: 'filter', requestId: rid(), owner, spec: spec(false), nowMs: 0, keySets: keySets() }, out => { first.push(out) })
+    const b = kernel.handle({ kind: 'filter', requestId: rid(), owner, spec: spec(true), nowMs: 0, keySets: keySets() }, out => { second.push(out) })
+    await Promise.all([a, b])
+    expect(first.at(-1)).toMatchObject({ kind: 'cancelled' })
+    expect(second.at(-1)).toMatchObject({ kind: 'complete' })
   })
 })

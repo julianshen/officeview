@@ -502,12 +502,13 @@ export function createPagedWorkbookSource(session: PagedImportSession): Workbook
       let geometry = geometries.get(sheetId)
       if (!geometry) {
         // Row metadata arrives with the rows; cache only once the sheet is complete.
-        geometry = buildGeometry(sheet.metadata.rowHeights.map(h => ({ index: h.row, heightPt: h.heightPt })), sheet.metadata.cols, sheet.metadata.hiddenRows)
+        geometry = buildGeometry(sheet.metadata.rowHeights.map(h => ({ index: h.row, heightPt: h.heightPt })), sheet.metadata.cols, sheet.metadata.hiddenRows, { hiddenCols: true })
         if (sheet.state === 'complete') geometries.set(sheetId, geometry)
       }
       return geometry
     },
     coverageDiagnostics: sheetId => storeFor(sheetId).coverageDiagnostics(),
+    formatting: () => workbook.formatting,
     declaredFilters: () => workbook.sheets.flatMap(s => s.declared ? [s.declared] : []),
     bindMemory(pool: MemoryPool) { workbook.store.bindMemory(pool) },
     async release() {

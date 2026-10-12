@@ -16,14 +16,17 @@
  * deterministic harnesses and the interactive long-operation policy, then abort
  * with an explicit incomplete/cancelled outcome) is not implemented; requests
  * run until they finish, are cancelled or superseded, or their document closes.
- * TODO(S5): viewport/search reply `unsupported` until S5 (see dispatch).
+ * S5.4: the paged interactive viewer reads through `read` (one bounded store
+ * call per command, owned by the committed view) and keeps the object planner
+ * and FindController on the main thread; `viewport`/`search` still reply
+ * `unsupported` (see dispatch).
  *
  * No worker globals: worker-entry.ts is a thin adapter, and tests drive the
  * kernel in-process (directly, or through connectInProcess, which reproduces
  * structured-clone/transfer semantics including buffer detachment).
  */
 import type {
-  CacheIdentity, OperationRefusal, ProfileId, SourceHandle, ViewCommitDelta, WorkerCommand, WorkerCommandKind,
+  CacheIdentity, FilterKeySet, OperationRefusal, ProfileId, SourceHandle, ViewCommitDelta, WorkerCommand, WorkerCommandKind,
   WorkerCommandOwner, WorkerDiagnostic, WorkerOwner, WorkerReply,
 } from '../xlsx/view/contracts'
 import type { XlsxDocument } from '../xlsx/types'
@@ -36,6 +39,7 @@ import {
   type WorkbookSource,
 } from './viewerSession'
 import { createObjectWorkbookSource } from './viewerObjectSource'
+import { createWorkerFilterEvaluator } from './viewerFilterEvaluator'
 import { MAX_ROWS } from '../xlsx/view/coordinates'
 
 /** A typed open refusal (admission or storage); the open replies with its code. */
@@ -120,6 +124,14 @@ export class ViewerKernel {
   private readonly opening = new Set<string>()
   private readonly finished = new Map<string, WorkerOwner>()
   private readonly accounting = new TransferAccounting()
+  /** Sources opened through the paged route: their views live here, so filter
+   * rules are evaluated here too (S5.4); object sessions keep the S9 transport. */
+  private readonly pagedSources = new WeakSet<WorkbookSource>()
+  /** Value-list keys shipped with in-flight filter commands, per document and
+   * reference-counted: overlapping commands (a superseded draft and its
+   * replacement) may ship the same committed ref, and one finishing must not
+   * remove the keys the other still evaluates. */
+  private readonly keySets = new Map<string, Map<string, { set: FilterKeySet; holders: number }>>()
   private epochs = 0
   readonly stats: KernelStats = { opens: 0, parses: 0, sourceReads: 0 }
 
@@ -247,6 +259,13 @@ export class ViewerKernel {
         if (signal.aborted) return reply(command, command.owner, { kind: 'cancelled' })
         return live(command.owner.docId) && entry.session!.isCurrent(command.owner) ? out : this.stale(command, command.owner)
       }
+      case 'read': {
+        // A read finishing after cancel, close, replacement or a newer commit is withheld (§10.1).
+        if (signal.aborted) return reply(command, command.owner, { kind: 'cancelled' })
+        if (command.query?.op === 'releaseScan') return out
+        return live(command.owner.docId) && entry.session!.isCurrent(command.owner)
+          ? out : errorReply(command, command.owner, 'stale-source', true, [{ code: 'stale-owner', message: 'Command owner is not the current committed view' }])
+      }
       default:
         return out
     }
@@ -270,7 +289,7 @@ export class ViewerKernel {
           case 'resident':
             if (session.isClosed) return errorReply(command, command.owner, 'stale-source', false, [{ code: 'unknown-document', message: 'Document closed' }])
             session.activate(command.sheetId)
-            return reply(command, command.owner, { kind: 'complete', result: { kind: 'activateSheet', sheetId: command.sheetId } }, resident.diagnostics ?? [])
+            return reply(command, command.owner, { kind: 'complete', result: { kind: 'activateSheet', sheetId: command.sheetId, layout: session.layout(command.sheetId) } }, resident.diagnostics ?? [])
           case 'cancelled': return reply(command, command.owner, { kind: 'cancelled' })
           case 'stale': return errorReply(command, command.owner, 'stale-source', true, [{ code: 'view-rebuild-stale', message: 'The sheet view changed while it was being rebuilt' }])
           case 'incomplete': return reply(command, command.owner, { kind: 'incomplete', missing: resident.missing })
@@ -305,9 +324,13 @@ export class ViewerKernel {
         if (!session) return this.stale(command, command.owner)
         report(0, VIEW_OPERATION_STAGES)
         const hooks = { progress: report }
-        const outcome = command.kind === 'sort'
-          ? await session.sort(command.owner, command.spec, signal, hooks)
-          : await session.filter(command.owner, command.spec, command.nowMs, signal, hooks)
+        const shipped = command.kind === 'filter' ? this.installKeys(command.owner.docId, command.keySets) : []
+        let outcome: OperationOutcome
+        try {
+          outcome = command.kind === 'sort'
+            ? await session.sort(command.owner, command.spec, signal, hooks)
+            : await session.filter(command.owner, command.spec, command.nowMs, signal, hooks)
+        } finally { this.removeKeys(command.owner.docId, shipped) }
         if (outcome.kind === 'committed') {
           return reply(command, command.owner, { kind: 'complete', result: { kind: 'view', delta: this.delta(outcome.view) } } as ReplyBody<typeof command.kind>)
         }
@@ -325,11 +348,26 @@ export class ViewerKernel {
         if (!session.isCurrent(command.owner)) return this.stale(command, command.owner)
         return reply(command, command.owner, { kind: 'complete', result: { kind: 'valueQuery', page } })
       }
+      case 'read': {
+        if (command.query?.op === 'releaseScan') {
+          // Cleanup is document-owned: it must succeed after a newer commit too.
+          const released = this.sessions.get(command.owner.docId)?.releaseScan(command.query.cursor) ?? false
+          return reply(command, command.owner, { kind: 'complete', result: { kind: 'read', result: { op: 'releaseScan', released } } })
+        }
+        const session = this.current(command.owner)
+        if (!session) return errorReply(command, command.owner, 'stale-source', true, [{ code: 'stale-owner', message: 'Command owner is not the current committed view' }])
+        const out = await session.read(command.owner, command.query, signal)
+        if ('kind' in out) {
+          return out.kind === 'cancelled' ? reply(command, command.owner, { kind: 'cancelled' })
+            : errorReply(command, command.owner, 'stale-source', true, [{ code: 'stale-owner', message: 'Command owner is not the current committed view' }])
+        }
+        return reply(command, command.owner, { kind: 'complete', result: { kind: 'read', result: out } })
+      }
       case 'viewport':
       case 'search':
-        // TODO(S5): canonical viewport records (S5.1/S5.2) and global find (S5.3);
-        // the §10.2 scheduler priority for current viewport/active-cell work over
-        // background queries lands with them.
+        // Not used by the S5.4 paged viewer, which reads row/scan pages through
+        // `read` and plans/finds on the main thread. A worker-side planner (and
+        // the §10.2 viewport-over-background scheduler priority) would land here.
         return errorReply(command, command.owner as never, 'unsupported', false, [{ code: `${command.kind}-not-implemented`, message: `${command.kind} is delivered by S5` }])
       default: {
         // Unknown kinds (malformed or newer clients) get a typed error, never undefined.
@@ -372,8 +410,10 @@ export class ViewerKernel {
     }
     if (signal.aborted) { await source.release(); return reply(command, owner, { kind: 'cancelled' }) }
     let session: DocumentSession
+    const evaluator = !this.options.filterEvaluator && this.pagedSources.has(source)
+      ? { filterEvaluator: createWorkerFilterEvaluator(stamp => this.keysFor(stamp.docId), source.formatting?.()) } : {}
     try {
-      session = new DocumentSession(command.docId, source, { ...this.options, profile: command.profile, epoch: ++this.epochs })
+      session = new DocumentSession(command.docId, source, { ...this.options, ...evaluator, profile: command.profile, epoch: ++this.epochs })
     } catch (cause) {
       // Ownership never transferred: release what open acquired.
       await source.release()
@@ -381,7 +421,8 @@ export class ViewerKernel {
     }
     this.sessions.set(command.docId, session)
     this.stats.opens++
-    return reply(command, owner, { kind: 'complete', result: { kind: 'open', valuePolicy: source.valuePolicy, sheets: source.sheets } }, source.openDiagnostics ?? [])
+    const formatting = source.formatting?.()
+    return reply(command, owner, { kind: 'complete', result: { kind: 'open', valuePolicy: source.valuePolicy, sheets: source.sheets, ...(formatting ? { formatting } : {}) } }, source.openDiagnostics ?? [])
   }
   /** Open is the only place source bytes are read or parsed. A blob is copied
    * into worker memory exactly once (accounted), parsed, then dropped. */
@@ -397,7 +438,7 @@ export class ViewerKernel {
           // copies the blob into worker memory (S1.2).
           const { openLargeBlob } = await import('./viewerLargeSource')
           const routed = await openLargeBlob(handle.blob, docId, { profile, signal, limits: this.env.importLimits, storage: this.env.pageStorage })
-          if (routed.kind === 'paged') return routed.source
+          if (routed.kind === 'paged') { this.pagedSources.add(routed.source); return routed.source }
           if (routed.kind === 'refuse') throw new OpenRefusal(routed.code, routed.message)
           openDiagnostics = routed.diagnostics
         }
@@ -446,6 +487,39 @@ export class ViewerKernel {
     }
     this.abort(target, 'cancel-requested')
     return reply(command, target.owner, { kind: 'cancelled' })
+  }
+  /** Installs well-formed shipped keys for one filter command; returns their ids. */
+  private installKeys(docId: string, keySets: readonly FilterKeySet[] | undefined): string[] {
+    if (!Array.isArray(keySets) || !keySets.length) return []
+    let map = this.keySets.get(docId)
+    if (!map) this.keySets.set(docId, map = new Map())
+    const installed: string[] = []
+    for (const set of keySets) {
+      const run = set?.run
+      if (typeof set?.refId !== 'string' || typeof set.scope !== 'string' || !run || !Number.isSafeInteger(run.count) || run.count < 0
+        || !isTyped(run.kinds, 'Uint8Array') || !isTyped(run.numbers, 'Float64Array') || !Array.isArray(run.texts)
+        || run.kinds.length < run.count || run.numbers.length < run.count || run.texts.length < run.count) continue
+      if (installed.includes(set.refId)) continue
+      const held = map.get(set.refId)
+      // A committed ref is immutable: a second holder shares the installed keys.
+      if (held) held.holders++
+      else map.set(set.refId, { set, holders: 1 })
+      installed.push(set.refId)
+    }
+    return installed
+  }
+  private removeKeys(docId: string, refIds: readonly string[]): void {
+    const map = this.keySets.get(docId)
+    if (!map) return
+    for (const refId of refIds) {
+      const held = map.get(refId)
+      if (held && --held.holders <= 0) map.delete(refId)
+    }
+    if (!map.size) this.keySets.delete(docId)
+  }
+  private keysFor(docId: string): ReadonlyMap<string, FilterKeySet> {
+    const map = this.keySets.get(docId)
+    return new Map([...map?.entries() ?? []].map(([refId, held]) => [refId, held.set]))
   }
   private current(owner: CacheIdentity): DocumentSession | undefined {
     const session = this.sessions.get(owner.docId)
@@ -516,6 +590,8 @@ export class ViewerKernel {
     }
   }
 }
+/** Realm-independent typed-array tag check (commands are structured clones). */
+const isTyped = (value: unknown, tag: 'Uint8Array' | 'Float64Array'): boolean => Object.prototype.toString.call(value) === `[object ${tag}]`
 function refusalDiagnostics(refusal: OperationRefusal): WorkerDiagnostic[] {
   const message = 'message' in refusal ? refusal.message : `Operation refused: ${refusal.reason}`
   return [{ code: `refused-${refusal.reason}`, message }]

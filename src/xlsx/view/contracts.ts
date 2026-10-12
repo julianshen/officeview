@@ -1,4 +1,4 @@
-import type { XlsxCell, XlsxDocument } from '../types'
+import type { XlsxCell, XlsxCellStyle, XlsxDocument } from '../types'
 import type { CellId, DisplaySlot, SourceCell, SourceCol, SourceRect, SourceRow } from './coordinates'
 
 /** Source-space contracts, spec §4.1; limits bound output, never semantic membership. */
@@ -385,15 +385,63 @@ export type SourceHandle =
   | { kind: 'object'; document: XlsxDocument }
 export type ProfileId = 'D' | 'M'
 export interface SearchQuery { text: string; caseSensitive: boolean; sheetIds?: readonly string[] }
+/** S5.4 bounded source reads of worker-owned (paged) sheets: one store call per
+ * command, owned by the sheet's current committed CacheIdentity. `rows` serves
+ * viewport records and copy reads, `scan` find paging (`cursor` continues the
+ * worker-resident scan the previous page opened), `cell` Go To/inspection. */
+export type SourceReadQuery =
+  | { op: 'cell'; at: SourceCell }
+  | { op: 'rows'; range: SourceRect; cursor?: string }
+  | { op: 'scan'; request: PopulatedQuery; cursor?: string }
+  | { op: 'structural'; rect: SourceRect }
+  | { op: 'complete'; rect: SourceRect }
+  /** The sheet's current compact layout (it grows while a paged import runs). */
+  | { op: 'layout' }
+  /** Ends a scan continuation the caller abandoned (iterator return/cancel). */
+  | { op: 'releaseScan'; cursor: string }
+export type SourceReadResult =
+  | { op: 'cell'; read: CellRead }
+  | { op: 'rows'; page: Page<SparseRowPage> }
+  | { op: 'scan'; page: Page<AuthoritativeCell> }
+  | { op: 'structural'; result: StructuralResult }
+  | { op: 'complete'; result: RangeCompletion }
+  | { op: 'layout'; layout: SheetLayout }
+  | { op: 'releaseScan'; released: boolean }
+/** S5.4: resolved cell styles (indexed by cell styleIndex) and the date system
+ * of a paged workbook, published with open so worker-backed cells format like
+ * resident ones. Bounded by the styles part's small-part cap. */
+export interface WorkbookFormatting {
+  dateSystem: '1900' | '1904'
+  styles: readonly XlsxCellStyle[]
+}
+/** S5.4: committed value-list keys of a `values` rule, shipped with a worker
+ * filter command because the dropdown's key store lives on the main thread.
+ * `scope` is the exact value domain (valueScope); bounded by that store. */
+export interface FilterKeySet {
+  refId: string
+  scope: string
+  run: { count: number; kinds: Uint8Array; numbers: Float64Array; texts: readonly (string | undefined)[] }
+}
+/** Compact source-space layout published with an activated sheet (S5.4): the
+ * main thread builds the same axis metrics and base visibility as the worker. */
+export interface SheetLayout {
+  rowOverrides: readonly AxisSizeInterval[]
+  colOverrides: readonly AxisSizeInterval[]
+  hidden: readonly SourceRowInterval[]
+  /** Authored-hidden columns: zero width for paint, navigation, find and copy. */
+  hiddenCols?: readonly { start: number; end: number }[]
+  used?: SourceRect
+}
 export type WorkerCommand =
   | { kind: 'open'; requestId: string; docId: string; source: SourceHandle; profile: ProfileId }
   | { kind: 'activateSheet'; requestId: string; owner: WorkbookOwner; sheetId: string }
   | { kind: 'prepareColumns'; requestId: string; owner: CacheIdentity; cols: Uint16Array }
   | { kind: 'sort'; requestId: string; owner: CacheIdentity; spec: SortSpec | null }
-  | { kind: 'filter'; requestId: string; owner: CacheIdentity; spec: FilterSpec | null; nowMs: number }
+  | { kind: 'filter'; requestId: string; owner: CacheIdentity; spec: FilterSpec | null; nowMs: number; keySets?: readonly FilterKeySet[] }
   | { kind: 'viewport'; requestId: string; owner: CacheIdentity; window: LogicalViewport }
   | { kind: 'valueQuery'; requestId: string; owner: CacheIdentity; query: ColumnQuery }
   | { kind: 'search'; requestId: string; owner: WorkbookOwner; query: SearchQuery; cursor?: string }
+  | { kind: 'read'; requestId: string; owner: CacheIdentity; query: SourceReadQuery }
   | { kind: 'cancel'; requestId: string; targetRequestId: string }
   | { kind: 'close'; requestId: string; docId: string }
 
@@ -427,13 +475,14 @@ export type WorkerReplyBase<K extends WorkerCommandKind> =
     diagnostics: readonly WorkerDiagnostic[]
   } : never
 export type WorkerResult =
-  | { kind: 'open'; valuePolicy: ValuePolicy; sheets: readonly { sheetId: string; name: string }[] }
-  | { kind: 'activateSheet'; sheetId: string }
+  | { kind: 'open'; valuePolicy: ValuePolicy; sheets: readonly { sheetId: string; name: string }[]; formatting?: WorkbookFormatting }
+  | { kind: 'activateSheet'; sheetId: string; layout?: SheetLayout }
   | { kind: 'prepareColumns'; cols: Uint16Array }
   | { kind: 'view'; delta: ViewCommitDelta }
   | ViewportResult
   | { kind: 'valueQuery'; page: Page<ColumnEntry> }
   | { kind: 'search'; items: readonly SearchHit[]; nextCursor?: string; unavailableCount: number }
+  | { kind: 'read'; result: SourceReadResult }
   | { kind: 'close' }
 /** Cancel is non-completing: it terminates with cancelled/error, not complete (§10.2).
  * Sort/filter publish one view delta; other completions match their command. */

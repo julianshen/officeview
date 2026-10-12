@@ -64,7 +64,12 @@ export interface LoadSourceOptions {
   limits?: ImportLimitOverrides
   /** Observes every spool handed out, for ownership checks. */
   onSpooled?: (source: SpooledSource) => void
+  /** S5.4: opens a paged admission in the resident viewer worker and returns its
+   * shell document; undefined keeps the compatibility parse. `release` hands over
+   * a spooled source, which the route then owns. Absent: today's behaviour. */
+  paged?: PagedRoute
 }
+export type PagedRoute = (blob: Blob, ctx: { profile: ProfileId; signal: AbortSignal }, release?: () => Promise<void>) => Promise<XlsxDocument | undefined>
 
 export interface LoadCtx {
   signal: AbortSignal

@@ -28,7 +28,7 @@ export type {
 } from '../xlsx/view/contracts'
 
 export const VIEWER_COMMAND_KINDS: readonly WorkerCommandKind[] = Object.freeze([
-  'open', 'activateSheet', 'prepareColumns', 'sort', 'filter', 'viewport', 'valueQuery', 'search', 'cancel', 'close',
+  'open', 'activateSheet', 'prepareColumns', 'sort', 'filter', 'viewport', 'valueQuery', 'search', 'read', 'cancel', 'close',
 ])
 const COMMAND_KINDS: ReadonlySet<string> = new Set(VIEWER_COMMAND_KINDS)
 const REPLY_KINDS: ReadonlySet<string> = new Set(['progress', 'complete', 'cancelled', 'incomplete', 'quota', 'error'])

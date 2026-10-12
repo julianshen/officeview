@@ -88,12 +88,15 @@ export async function parseSpreadsheet(pkg: OfficePackage, bytes: Uint8Array, ct
   switch (admission.mode) {
     case 'refuse':
       throw refusalFrom(admission)
-    case 'paged':
+    case 'paged': {
       // The exported entry returns an XlsxDocument, which no paged session can
-      // be; paged sessions open through openSpreadsheetSource (internal entry,
-      // used by the resident viewer) and here keep the compatibility parse with
-      // its notice (decision A) until a paged consumer renders them.
-      return compatibilityParse(pkg, 'large', admission.reason, ctx)
+      // be: without a paged route (interactive viewer + worker, S5.4) it keeps
+      // the compatibility parse with its notice (decision A). Seekable and
+      // spooled inputs try the route before reading the whole file.
+      const routed = decided ? undefined : await ctx.options.paged?.(new Blob([bytes as BlobPart]), { profile: ctx.profile, signal: ctx.signal })
+      throwIfAborted(ctx.signal)
+      return routed ?? compatibilityParse(pkg, 'large', admission.reason, ctx)
+    }
     case 'legacy-fallback':
       return compatibilityParse(pkg, admission.kind, admission.reason, ctx)
     case 'object':
@@ -141,6 +144,11 @@ export async function loadSeekable(blob: Blob, ctx: Ctx, loadBytes: LoadBytes): 
   if (kind === 'xlsx') {
     decided = await admitSpreadsheet(blobRangeSource(blob), ctx.profile, ctx.limits, ctx.signal)
     if (settledEarly(decided)) throw refusalFrom(decided)
+    if (decided.mode === 'paged' && ctx.options.paged) {
+      const routed = await ctx.options.paged(blob, { profile: ctx.profile, signal: ctx.signal })
+      throwIfAborted(ctx.signal)
+      if (routed) return routed
+    }
   }
   const bytes = await readWhole(blob, ctx)
   progress?.({ loaded: bytes.length, total: blob.size })
@@ -169,6 +177,7 @@ export async function continueSequential(reader: ByteStreamReader, chunks: Uint8
     return loadBytes(concat(chunks, held), ctx)
   }
   const spooled = await spool(reader, chunks, hint, ctx)
+  let handedOver = false
   try {
     ctx.options.onSpooled?.(spooled)
     const kind = await classifySeekable(blobRangeSource(spooled.blob), ctx)
@@ -176,6 +185,16 @@ export async function continueSequential(reader: ByteStreamReader, chunks: Uint8
     if (kind === 'xlsx') {
       decided = await admitSpreadsheet(blobRangeSource(spooled.blob), ctx.profile, ctx.limits, ctx.signal)
       if (settledEarly(decided)) throw refusalFrom(decided)
+      if (decided.mode === 'paged' && ctx.options.paged) {
+        // The worker reads the spooled Blob; the route owns the spool from here.
+        handedOver = true
+        let routed: XlsxDocument | undefined
+        try {
+          routed = await ctx.options.paged(spooled.blob, { profile: ctx.profile, signal: ctx.signal }, () => spooled.release())
+        } finally { handedOver = routed !== undefined }
+        throwIfAborted(ctx.signal)
+        if (routed) return routed
+      }
     }
     // Object path or a non-spreadsheet: today's in-memory legacy load. The
     // OfficePackage keeps these bytes, so the spool is released right away.
@@ -183,7 +202,7 @@ export async function continueSequential(reader: ByteStreamReader, chunks: Uint8
     await spooled.release()
     return await loadBytes(bytes, ctx, decided)
   } finally {
-    await spooled.release()
+    if (!handedOver) await spooled.release()
   }
 }
 
