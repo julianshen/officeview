@@ -79,7 +79,7 @@
         "frozenMs": 16.7,
         "basis": "spec",
         "outcome": "pass",
-        "justification": "Kept at spec. S10.2 r5: Chrome 155 headless, desktop D, one M4 Pro laptop (shared machine), production build, manifest-verified full-scale fixtures; every row derived from validated raw records; receipt viewerEvidence.results (desktop admitted). 300 open-loop frames per mix after 60 warmup: input-to-paint p95 ordinary 3.45 / wrapped 5.56 / styled 2.46 ms; rAF frame-interval p95 16.67 ms in every mix, 0 long tasks.",
+        "justification": "Kept at spec. S10.2 r6: Chrome 155 headless, desktop D, one M4 Pro laptop (shared machine), production build, manifest-verified full-scale fixtures; every row derived from validated raw records; receipt viewerEvidence.results (desktop admitted). 300 open-loop frames per mix after 60 warmup: input-to-paint p95 ordinary 4.16 / wrapped 5.75 / styled 2.06 ms; rAF frame-interval p95 16.67 ms in every mix, 0 long tasks.",
         "measurement": null
       },
       "mobile": {
@@ -100,7 +100,7 @@
         "frozenMs": 50,
         "basis": "spec",
         "outcome": "pass",
-        "justification": "Kept at spec. S10.2 r5: Chrome 155 headless, desktop D, one M4 Pro laptop (shared machine), production build, manifest-verified full-scale fixtures; every row derived from validated raw records; receipt viewerEvidence.results (desktop admitted). Header sort on F2 (1M rows): pending state presented p95 15.6 ms (n=30); find p95 13.7 ms, cancel p95 15.8 ms (n=30); filter apply max 32.8 ms (n=10, the documented limited series).",
+        "justification": "Kept at spec. S10.2 r6: Chrome 155 headless, desktop D, one M4 Pro laptop (shared machine), production build, manifest-verified full-scale fixtures; every row derived from validated raw records; receipt viewerEvidence.results (desktop admitted). Header sort on F2 (1M rows): pending state presented p95 16.7 ms (n=30); find p95 14.1 ms, cancel p95 17.2 ms (n=30); filter apply max 32.7 ms (n=10, the documented limited series).",
         "measurement": null
       },
       "mobile": {
@@ -291,7 +291,7 @@
         "frozenMs": 1500,
         "basis": "spec",
         "outcome": "pass",
-        "justification": "Kept at spec. S10.2 r5: Chrome 155 headless, desktop D, one M4 Pro laptop (shared machine), production build, manifest-verified full-scale fixtures; every row derived from validated raw records; receipt viewerEvidence.results (desktop admitted). Local File -> labelled usable viewport: F1 p95 479.6 ms (n=30), F3 p95 703.2 ms (n=30), F2 max 605.9 ms over 10 cold 1M-row opens (the documented limited series).",
+        "justification": "Kept at spec. S10.2 r6: Chrome 155 headless, desktop D, one M4 Pro laptop (shared machine), production build, manifest-verified full-scale fixtures; every row derived from validated raw records; receipt viewerEvidence.results (desktop admitted). Local File -> labelled usable viewport: F1 p95 480.5 ms (n=30), F3 p95 672.6 ms (n=30), F2 max 600.3 ms over 10 cold 1M-row opens (the documented limited series).",
         "measurement": null
       },
       "mobile": {
@@ -317,9 +317,9 @@
   "diagnostics": [],
   "viewerEvidence": {
     "doc": "docs/validation/interactive-viewer-performance.md",
-    "results": "docs/validation/interactive-viewer-viewer-chrome-r5.json",
-    "hash": "a04bcd573a69bae14a440b51174a7ab69082c54cef772673ed46e64b2538cb92",
-    "commit": "116d957076cebf6d1a4fae15999a7bf611ea2441",
+    "results": "docs/validation/interactive-viewer-viewer-chrome-r6.json",
+    "hash": "beebadaa3bf2a9606db835168dc5ede82e24e30d7f0479bf66a973c9779083ea",
+    "commit": "d50a7858825b6767f130aa0b147a4f611a8a9796",
     "browser": "Google Chrome 155.0.8059.39 (stable, Playwright 1.64 channel chrome, headless)",
     "machine": "Apple M4 Pro, 14 logical cores, 24 GiB, macOS 26.5.2 (25F84)",
     "profile": "D",
@@ -333,27 +333,27 @@
       },
       "input-acknowledgment": {
         "outcome": "pass-limited",
-        "value": 32.775000005960464
+        "value": 32.695000007748604
       },
       "progressive-first-viewport": {
         "outcome": "pass-limited",
-        "value": 703.1599999964237
+        "value": 672.5900000035763
       },
       "import-expanded-throughput": {
         "outcome": "pass",
-        "value": 58.81691944321908
+        "value": 58.546995675052
       },
       "import-cell-throughput": {
         "outcome": "pass",
-        "value": 903995.6607818605
+        "value": 899847.0260441897
       },
       "main-owned-memory": {
         "outcome": "pass",
-        "value": 46802547
+        "value": 27756410
       },
       "worker-owned-memory": {
         "outcome": "pass",
-        "value": 239836026
+        "value": 239835108
       },
       "bitmap-retained": {
         "outcome": "pass",
@@ -361,6 +361,12 @@
       }
     },
     "superseded": [
+      {
+        "results": "docs/validation/interactive-viewer-viewer-chrome-r5.json",
+        "hash": "a04bcd573a69bae14a440b51174a7ab69082c54cef772673ed46e64b2538cb92",
+        "commit": "116d957076cebf6d1a4fae15999a7bf611ea2441",
+        "note": "r5: admitted under the round-3 rules, but reply charges ended only on collection (F4 ledger over-counted value-list replies) and the perf page closed with a re-render plus one click to release React-held updates; superseded by r6 (replies settled on adoption, idle close)."
+      },
       {
         "results": "docs/validation/interactive-viewer-viewer-chrome-r4.json",
         "hash": "b15c7e15462eecc48a75e78205622c13a4e63f3967320b1f30472fd269162966",
@@ -386,6 +392,6 @@
         "note": "r1: input acknowledgment miss (header sort 11,897-13,316 ms)."
       }
     ],
-    "note": "S10.2 viewer receipt, desktop D admitted. Main peak from the lifetime-charged main-thread ledger; every forced-GC live sample above an independently warmed host is covered, allowance = measured probe noise. Mobile rows not-run (no physical iPad, user decision). Recorded on a shared machine; re-run the release command on a quiet machine."
+    "note": "S10.2 viewer receipt, desktop D admitted. Main peak from the main-thread ledger (lifetime charges; reply charges settled when the payload is adopted); every forced-GC live sample above an independently warmed host is covered, allowance = measured probe noise. The page stays idle after close. Mobile rows not-run (no physical iPad, user decision). Recorded on a shared machine; re-run the release command on a quiet machine."
   }
 }
