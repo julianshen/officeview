@@ -33,6 +33,13 @@ export const F_CACHED = 1
 export const F_META = 2
 /** t="e": valueIsError, also when the error cell has no <v> (value null). */
 export const F_ERROR = 4
+/** The value is a blob record (spec §4.3.4): nums holds the document's blob
+ * id and the text lane holds nothing for this record. */
+export const F_BLOB = 8
+/** §4.3.4 initial profile: 64 KiB inline-string soft threshold, the same
+ * constant as ImportLimits.inlineStringSoftBytes. Measured in stored UTF-16
+ * bytes (2 per code unit), which is what the value would add to the text lane. */
+export const INLINE_TEXT_SOFT_BYTES = 64 * 1024
 
 /** Formula metadata of one record; strings round-trip through JSON (lone surrogates are escaped). */
 export interface FormulaMeta {
@@ -67,12 +74,19 @@ export interface PageSummary {
   aggregate: RectAggregate
   bytes: number
 }
-export type StoredPage = ImportedPage & { payload: CellPagePayload }
+/** A built page and the oversized values its F_BLOB records reference by
+ * ordinal (nums), in record order; commit stores them as blob records first. */
+export type StoredPage = ImportedPage & { payload: CellPagePayload; blobs?: readonly string[] }
 
 export const recordPopulated = (p: CellPagePayload, i: number): boolean => p.kinds[i] !== K_EMPTY || (p.meta.get(i)?.formula !== undefined)
 
-/** Builds one page; rows must be appended in ascending order. */
+/** Builds one page; rows must be appended in ascending order. A text value
+ * over the inline soft threshold is spilled: the record keeps its kind and
+ * error flag, gets F_BLOB and its ordinal in `blobs`, and adds no text units. */
 export class PageBuilder {
+  private readonly inlineTextBytes: number
+  private spilled: string[] = []
+  private spilledUnits = 0
   private rows: number[] = []
   private cols: number[] = []
   private kinds: number[] = []
@@ -84,7 +98,14 @@ export class PageBuilder {
   private units = 0
   /** Sum of JSON.stringify([index, meta]) lengths, for the exact meta lane size. */
   private metaChars = 0
+  constructor(options: { inlineTextBytes?: number } = {}) {
+    this.inlineTextBytes = options.inlineTextBytes ?? INLINE_TEXT_SOFT_BYTES
+  }
   get records(): number { return this.rows.length }
+  /** Oversized values held for this page, in F_BLOB ordinal order. */
+  get blobs(): readonly string[] { return this.spilled }
+  /** Stored bytes of the spilled values (2 per UTF-16 code unit). */
+  get spilledBytes(): number { return 2 * this.spilledUnits }
   /** Exact encodePage() size of what has been added (the page target is charged on it). */
   get bytes(): number {
     const n = this.rows.length
@@ -93,10 +114,17 @@ export class PageBuilder {
   }
   add(row: number, col: number, kind: number, styleIndex: number, num: number, text: string, cached: boolean, meta: FormulaMeta | undefined, error = kind === K_ERROR): void {
     const i = this.rows.length
+    const spill = 2 * text.length > this.inlineTextBytes
+    if (spill) {
+      num = this.spilled.length
+      this.spilled.push(text)
+      this.spilledUnits += text.length
+      text = ''
+    }
     this.rows.push(row); this.cols.push(col); this.kinds.push(kind); this.styles.push(styleIndex); this.nums.push(num)
     this.texts.push(text)
     this.units += text.length
-    this.flags.push((cached ? F_CACHED : 0) | (meta ? F_META : 0) | (error ? F_ERROR : 0))
+    this.flags.push((cached ? F_CACHED : 0) | (meta ? F_META : 0) | (error ? F_ERROR : 0) | (spill ? F_BLOB : 0))
     if (meta) {
       this.meta.set(i, meta)
       this.metaChars += JSON.stringify([i, meta]).length
@@ -450,6 +478,9 @@ export interface PageStoreStats {
   evictions: number
   residentBytes: number
   peakResidentBytes: number
+  /** Oversized-value blob records written (spec §4.3.4) and their stored bytes. */
+  blobs: number
+  blobBytes: number
 }
 interface Resident<T> { value: T; bytes: number; entry?: PoolEntry }
 
@@ -469,9 +500,10 @@ export class SourcePageStore implements PageSink {
   private cacheBytes: number
   private stringChunkSize = 0
   private stringCount = 0
+  private blobCount = 0
   private closed = false
   private abandoned = false
-  private readonly counters: PageStoreStats = { committed: 0, storedBytes: 0, loads: 0, hits: 0, coalesced: 0, evictions: 0, residentBytes: 0, peakResidentBytes: 0 }
+  private readonly counters: PageStoreStats = { committed: 0, storedBytes: 0, loads: 0, hits: 0, coalesced: 0, evictions: 0, residentBytes: 0, peakResidentBytes: 0, blobs: 0, blobBytes: 0 }
 
   constructor(options: SourcePageStoreOptions) {
     this.docId = options.docId
@@ -490,13 +522,14 @@ export class SourcePageStore implements PageSink {
     if (this.abandoned || this.closed) throw new PackageError('cancelled', 'source page store is closed')
     if (docId !== this.docId) throw new PackageError('cancelled', `page for document ${docId} rejected by the store of ${this.docId}`)
   }
-  private charge(pool: 'pages' | 'sharedStrings', bytes: number): void {
+  private charge(pool: 'pages' | 'sharedStrings' | 'blobRecords', bytes: number): void {
     if (this.chargedTo) this.reservations.push(this.chargedTo.reserve(pool, bytes))
   }
 
-  async commit(page: ImportedPage & { payload?: CellPagePayload }, docId = this.docId): Promise<void> {
+  async commit(page: ImportedPage & { payload?: CellPagePayload; blobs?: readonly string[] }, docId = this.docId): Promise<void> {
     this.check(docId)
     if (!page.payload) throw new PackageError('parse-error', `page ${page.pageId} has no payload`)
+    await this.commitBlobs(page.payload, page.blobs ?? [], page.pageId, docId)
     const bytes = encodePage(page.payload)
     this.charge('pages', bytes.byteLength)
     try {
@@ -513,6 +546,36 @@ export class SourcePageStore implements PageSink {
     this.index.set(page.sheetId, list)
     this.counters.committed++
     this.counters.storedBytes += bytes.byteLength
+  }
+  /**
+   * Stores the page's oversized values as blob records before the page itself,
+   * so a committed page never references a missing record, and rewrites each
+   * F_BLOB record's ordinal to its document-wide blob id. Each record holds one
+   * value, bounded by the tokenizer's maxTokenChars, and is charged to the
+   * storage-backed blobRecords pool; abandon/close remove them with the pages.
+   */
+  private async commitBlobs(p: CellPagePayload, blobs: readonly string[], pageId: string, docId: string): Promise<void> {
+    const ids = new Map<number, number>()
+    for (let i = 0; i < p.flags.length; i++) {
+      if ((p.flags[i] & F_BLOB) === 0) continue
+      const ordinal = p.nums[i]
+      const text = blobs[ordinal]
+      if (text === undefined || ids.has(ordinal)) throw new PackageError('parse-error', `page ${pageId} references a missing oversized value`)
+      const id = this.blobCount++
+      const bytes = encodeStrings([text])
+      this.charge('blobRecords', bytes.byteLength)
+      try {
+        await this.backend.put(`blob/${id}`, bytes)
+      } catch (error) {
+        throw storageError(error, 'writing an oversized cell value')
+      }
+      this.check(docId)
+      this.counters.blobs++
+      this.counters.blobBytes += bytes.byteLength
+      ids.set(ordinal, id)
+      p.nums[i] = id
+    }
+    if (ids.size !== blobs.length) throw new PackageError('parse-error', `page ${pageId} carries unreferenced oversized values`)
   }
   /** Shared strings, in fixed-size chunks addressed by id. */
   async commitStrings(chunk: number, strings: readonly string[], chunkSize: number, docId = this.docId): Promise<void> {
@@ -616,6 +679,13 @@ export class SourcePageStore implements PageSink {
   }
   page(sheetId: string, pageId: string): Promise<CellPagePayload> {
     return this.load(`${sheetId}/${pageId}`, decodePage, payloadBytes)
+  }
+  /** An oversized value by blob id, through the same bounded decoded cache as pages. */
+  async blob(id: number): Promise<string> {
+    if (!Number.isSafeInteger(id) || id < 0 || id >= this.blobCount) throw new PackageError('storage-error', `oversized cell value ${id} is not stored`)
+    const record = await this.load(`blob/${id}`, decodeStrings, (c) => c.text.byteLength + c.textStart.byteLength)
+    if (record.textStart.length !== 2) throw new PackageError('parse-error', `oversized cell value ${id} is malformed`)
+    return textAt(record, 0)
   }
   async sharedString(id: number): Promise<string | undefined> {
     if (!Number.isSafeInteger(id) || id < 0 || id >= this.stringCount || this.stringChunkSize === 0) return undefined

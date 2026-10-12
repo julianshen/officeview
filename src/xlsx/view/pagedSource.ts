@@ -23,7 +23,7 @@ import { failedPage, failure, rowSetIntervals, sameStamp, type SheetGeometry, ty
 import type { MemoryPool, PoolEntry } from './tileCache'
 import { LaneBuilder, READ_ROWS_MAX_CELLS, READ_ROWS_PAGE_ROWS, buildGeometry, intersects, invalidMergeDiagnostic } from './source'
 import {
-  F_CACHED, F_ERROR, K_BOOL, K_EMPTY, K_ERROR, K_NUMBER, K_SST, K_TEXT, recordPopulated, textAt,
+  F_BLOB, F_CACHED, F_ERROR, K_BOOL, K_EMPTY, K_ERROR, K_NUMBER, K_SST, K_TEXT, recordPopulated, textAt,
   type CellPagePayload, type PageSummary,
 } from '../storage/sourcePages'
 import { addRecord, answerOverview, emptyAggregate, mergeAggregate, type AggregateOutcome } from '../storage/overviewIndex'
@@ -119,7 +119,9 @@ export class PagedXlsxSheetAdapter implements SourceStore {
       case K_EMPTY: return null
       case K_NUMBER: return p.nums[i]
       case K_SST: return (await this.workbook.store.sharedString(p.nums[i])) ?? ''
-      case K_TEXT: case K_ERROR: return textAt(p, i)
+      // An oversized value is a blob record (§4.3.4), resolved lazily here so
+      // every reader (cells, rows, scans, lanes, find, copy) sees the same value.
+      case K_TEXT: case K_ERROR: return (p.flags[i] & F_BLOB) !== 0 ? this.workbook.store.blob(p.nums[i]) : textAt(p, i)
       case K_BOOL: return p.nums[i] === 1
       default: throw new RangeError('Unknown page value kind')
     }

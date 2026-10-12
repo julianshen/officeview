@@ -271,7 +271,8 @@ export async function openImportSession(source: Extract<SourceHandle, { kind: 'b
       }
       const declaredEntry: DeclaredSheetFilters = { sheetId: sheet.sheetId, name: sheet.name, workbookIndex: sheet.workbookIndex, partPath: sheet.partPath, tableAutoFilters: [] }
       const container = declaredContainerBuilder(declaredBudget)
-      let builder = new PageBuilder()
+      const newBuilder = () => new PageBuilder({ inlineTextBytes: limits.inlineStringSoftBytes })
+      let builder = newBuilder()
       let pageStart = sheet.importedThroughRow + 1
       let rowsInPage = 0
       let pageSeq = 0
@@ -279,8 +280,8 @@ export async function openImportSession(source: Extract<SourceHandle, { kind: 'b
       const pending: StoredPage[] = []
       const cut = (lastRow: number) => {
         const payload = builder.build()
-        pending.push({ sheetId: sheet.sheetId, pageId: `p${pageSeq++}`, r0: pageStart, r1: lastRow, cellCount: payload.rows.length, bytes: builder.bytes, payload })
-        builder = new PageBuilder()
+        pending.push({ sheetId: sheet.sheetId, pageId: `p${pageSeq++}`, r0: pageStart, r1: lastRow, cellCount: payload.rows.length, bytes: builder.bytes, payload, blobs: builder.blobs })
+        builder = newBuilder()
         pageStart = lastRow + 1
         rowsInPage = 0
       }
@@ -321,7 +322,8 @@ export async function openImportSession(source: Extract<SourceHandle, { kind: 'b
         onRowEnd(row) {
           rowsInPage++
           if (row >= MAX_ROWS - 1) return
-          if (builder.bytes >= limits.targetPageBytes || rowsInPage >= pageRows) cut(row)
+          // Spilled values count toward the cut too, so oversized values cannot pile up behind one page.
+          if (builder.bytes + builder.spilledBytes >= limits.targetPageBytes || rowsInPage >= pageRows) cut(row)
         },
       })
       try {

@@ -27,7 +27,9 @@ export function quotaLimitsFor(profile: ProfileId): QuotaLimits {
   return QUOTA_LIMITS[profile]
 }
 
-const STORAGE_POOLS: ReadonlySet<Pool> = new Set<Pool>(['compressedSpool', 'pages'])
+// blobRecords are oversized cell values written to the page backend (spec
+// §4.3.4), so exhausting them is a storage quota refusal like pages.
+const STORAGE_POOLS: ReadonlySet<Pool> = new Set<Pool>(['compressedSpool', 'pages', 'blobRecords'])
 
 export interface Reservation {
   readonly pool: Pool

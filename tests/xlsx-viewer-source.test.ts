@@ -272,6 +272,22 @@ describe('small/large adapter parity (S1.2, same file, cached policy)', () => {
     expect(await expectParity('edge', EDGE)).toBeGreaterThan(20)
   })
 
+  it('S13.4: oversized values stored as blob records read identically to the object adapter (raw UTF-16, errors, lanes)', async () => {
+    const big = (fill: string) => `${fill.repeat(70 * 1024)}_xD800_${fill.repeat(30 * 1024)}`
+    const bytes = xlsxBytes({
+      sharedStrings: ['short'],
+      sheetData: [
+        `<row r="1"><c r="A1" t="inlineStr"><is><t>${big('a')}</t></is></c><c r="B1" t="s"><v>0</v></c></row>`,
+        `<row r="2"><c r="A2" t="str"><f>REPT("b",3)</f><v>${big('b')}</v></c><c r="B2" t="e"><v>${big('c')}</v></c></row>`,
+        `<row r="3"><c r="A3"><v>${big('d')}</v></c><c r="B3"><v>4</v></c></row>`,
+      ].join(''),
+    })
+    const probe = await pagedSource(bytes)
+    expect(probe.session.workbook.store.stats.blobs).toBe(4)
+    await probe.source.release()
+    expect(await expectParity('oversized', bytes)).toBe(6)
+  })
+
   const fixtureDir = join(HERE, 'fixtures', 'xlsx-viewer')
   for (const file of readdirSync(fixtureDir).filter(f => f.endsWith('.xlsx'))) {
     it(`generated fixture ${file}`, async () => {
