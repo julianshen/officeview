@@ -66,15 +66,14 @@ the 1M-row F2 is ~12 s of detection with **no frozen row** covering it (non-kern
 separately reported kernel boundary. Phase attribution (S10.2 doc "The miss, attributed by phase"):
 
 - **Click → first worker command: ~12 s on the main thread.**
-  `admitSortRange` issues ~4,010 strip `scan` reads (1024×9 cells) plus 2,006
-  single-column probes. The strip count is ~2× the 1M/1024 strips because the remote store strips `nextCursor`, so the
-  detection `Scanner` reads one page ahead and discards it (S10.2 commit `9085cf9` attributes the doubling to
-  read-ahead only). The guard (`guardSort`) runs after detection and may scan again; the data does not separate its
-  share. Structured-clone deserialization of those pages costs ~3.8 s of main thread.
+  `admitSortRange` issues ~4,010 strip `scan` reads (1024×9 cells) plus 2,006 single-column probes. The strip count
+  is ~2× the 1M/1024 strips because the remote store strips `nextCursor`, so the detection `Scanner` reads one page
+  ahead and discards it (S10.2 commit `9085cf9` attributes the doubling to read-ahead only). The guard (`guardSort`)
+  runs after detection and may scan again; the data does not separate its share. Structured-clone deserialization of
+  those pages costs ~3.8 s of main thread.
 - **Worker `prepareColumns`: ~1.0 s on the first sort**, cached afterwards.
-  Cold column preparation has no frozen row (spec §12.2 reports it separately); ~1.0 s, paid only by the first sort
-  (~7.5% of the 13.3 s first sample). A port could only shrink its compute share; the ~12 s detection share is
-  untouched.
+  Cold column preparation has no frozen row (spec §12.2 reports it separately) and is ~7.5% of the 13.3 s first
+  sample. A port could only shrink its compute share; the ~12 s detection share is untouched.
 - **Worker sort: 113–144 ms** — the kernel boundary itself, inside the 1,000 ms
   kernel row.
 - Commit and present: < 30 ms.

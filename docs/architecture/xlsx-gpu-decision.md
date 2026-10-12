@@ -60,7 +60,8 @@ excluded causes in trigger 1.
 ## 4. Why WebGPU would not move the miss, and what it would cost (**unmeasured** — no prototype built)
 
 The one S10.2 miss is sort acknowledgment (11,897–13,316 ms), attributed to main-thread range-detection
-RPC/deserialization plus (until `76a84d3` is receipted) missing pending UI — no paint phase is on that path, and commit-and-present measures < 30 ms.
+RPC/deserialization plus (until `76a84d3` is receipted) missing pending UI — no paint phase is on that path, and
+commit-and-present measures < 30 ms.
 A GPU renderer leaves the miss untouched while adding: device init plus cold shader compile on first paint;
 atlas/texture memory (per §12.4 both backends count only at a switch peak, so the real pressure is the switch/fallback
 peak on top of a 113.2 MiB Canvas2D peak, not steady-state addition); text parity re-proof (fallback fonts, grapheme
