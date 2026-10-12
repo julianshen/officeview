@@ -1,54 +1,53 @@
 # Interactive viewer — frozen thresholds, S8.6 kernel results and S10.2 viewer results
 
-**S10.2 desktop Chrome receipt r14: desktop D NOT admitted (main-thread memory
+**S10.2 desktop Chrome receipt r15: desktop D NOT admitted (main-thread memory
 pending).** The other 12 desktop rows pass; two of them pass with a documented
 sample limitation (`pass-limited`).
 
-The receipt is `interactive-viewer-viewer-chrome-r14.json` (SHA-256
-`91328cfd…f189ab9`), taken at `1e13f7b` on a clean tree, on a shared machine
-(load 4.7–6.9).
+The receipt is `interactive-viewer-viewer-chrome-r15.json` (SHA-256
+`cc2452d0…7b0f1458`), taken at `5cdbd23` on a clean tree, on a shared machine
+(load 3.4–5.1).
 
-**The gate (rounds 4–5).** At every checkpoint the gap is checked: the forced-GC
-heap above the warmed host, minus the ledger's *current* bytes there, minus two
-measured page-level exclusions.
-- **Exclusions:**
-  - compiled-code growth (heap-snapshot `code` bytes);
-  - growth of the page's buffered layout-shift entries, counted as entries and
-    sources at per-structure lower bounds (145 B per entry, 144 B per source).
-- **Bounds checks:** at most 150 entries, at most 5 sources per entry, code
-  within the measured heap, and the reported heap equal to the median of its
-  readings.
+**The gate (rounds 4–5 and the final round).** At every checkpoint the gap is
+checked: the forced-GC heap above the warmed host, minus the ledger's
+*current* bytes there, minus two measured page-level exclusions.
+- **Compiled-code growth** comes from V8 per-space statistics in a memory-infra
+  trace dump (code and trusted spaces), not a heap snapshot. No heap snapshot
+  is taken during the measured session.
+- **Growth of the page's layout-shift entries** is excluded at per-structure
+  lower bounds.
 - **The allowance** is the warmed host's own open gap (never below 0) plus
-  **independent** noise:
-  - the larger of the idle probe noise and the spread of the checkpoint
-    procedure repeated on the idle closed warm host (3 rounds × 5 readings);
-  - a checkpoint's own spread can only tighten this term.
-- **Checkpoints** run with the harness samplers paused and once the viewer is
-  quiet: nothing presented for 1 s and no worker request open. The session
-  spreads seen up to r13 (0.12–0.54 MiB) were the samplers' own page calls; in
-  r14 every checkpoint spread is 0.
+  independent noise: the larger of the idle probe noise and the checkpoint
+  procedure repeated on the idle warm host, about 0.003 MiB. A checkpoint's own
+  spread can only tighten it.
+- **Bounds checks** apply as in round 5. Checkpoints run with the samplers
+  paused, once the viewer is quiet.
+- **The warm-up residue** (closed warm host minus empty page, by heap-snapshot
+  kind) may contain only engine and code kinds. Plain JS objects, arrays and
+  native DOM above the noise are refused as "unattributed warm-up allocation".
+- **Charged since this round:** the tile canvases' own objects (element and 2D
+  context, 4,600 B per retained tile).
 
-Anything missing or impossible leaves the row pending.
+| Session | Loaded gap | After-ops gap | Closed gap | Warm-up objects + arrays + DOM |
+|---|---:|---:|---:|---:|
+| F2 | **0.05 MiB** | below 0 | **0.03 MiB** | **0.13 MiB** |
+| F4 | below 0 | below 0 | below 0 | **0.13 MiB** |
 
-| Session | Open gap | Independent noise | Loaded gap | After-ops gap | Closed gap |
-|---|---:|---:|---:|---:|---:|
-| F2 | −0.21 MiB | 0.003 MiB | **0.18 MiB** | −0.83 MiB | **0.06 MiB** |
-| F4 | −0.25 MiB | 0.003 MiB | −0.21 MiB | −0.11 MiB | −0.11 MiB |
+**What remains, with owners:**
+- **Warm-up residue, 0.13 MiB:** arrays 103 KiB, plain objects 25 KiB, native
+  DOM 0. A diagnostic snapshot owner trace attributes the largest array to V8's
+  `smi_string_cache`, a strong-root engine cache that grew to 64 KiB.
+  - Objects and the other arrays: module-level state of the lazily loaded
+    chunks (closure contexts, exports, class prototypes). Not traced object by
+    object.
+  - The gate counts them because the snapshot type split cannot separate
+    engine-owned arrays from application arrays.
+- **F2 loaded 0.05 MiB and closed 0.03 MiB:** no heap snapshot is taken during
+  the session any more, so these could not be traced in the release run. In the
+  round-5 diagnostics the closed residue was Blink's `IdToNodeMap` and V8's
+  `smi_string_cache` capacity.
 
-All gaps are net of measured code growth (0.27–0.66 MiB).
-
-**What remains:**
-- **F2 closed, 0.06 MiB.** Heap snapshots attribute it to two capacities that
-  grew during the session and do not shrink: Blink's `IdToNodeMap` (DOM node
-  ids, +64 KiB) and V8's `smi_string_cache` (+64 KiB, partly offset). Both are
-  page/engine tables, and the checkpoints' own heap snapshots, taken over the
-  session's larger DOM, are what grew them. It is an artifact of the
-  instrument, but the gate neither measures nor excludes it.
-- **F2 loaded, 0.18 MiB.** Not attributed. The snapshot type split shows native
-  over-charged by ~0.5 MiB and JS objects/strings uncharged by ~0.7 MiB: the
-  per-class DOM calibration's error on the real viewer tree.
-
-The row is **pending**; nothing was widened.
+The row is **pending**; it was reported to the coordinator, not widened.
 
 **The viewer adds no layout shift (round 4, fix 18; round 5 held-list test).** Chrome's Layout
 Instability API showed two sources:

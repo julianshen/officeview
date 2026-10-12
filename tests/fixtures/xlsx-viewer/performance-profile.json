@@ -317,17 +317,19 @@
   "diagnostics": [],
   "viewerEvidence": {
     "doc": "docs/validation/interactive-viewer-performance.md",
-    "results": "docs/validation/interactive-viewer-viewer-chrome-r14.json",
-    "hash": "91328cfdcb8c27538446482aa6c55d637457ff62c4d68f53b7ce44ad8f189ab9",
-    "commit": "1e13f7bf9a8b0e4c653a11ecec3cae575ab938c5",
+    "results": "docs/validation/interactive-viewer-viewer-chrome-r15.json",
+    "hash": "cc2452d04c20f22fec9300ba825a8c89da742e6cfa7a8934261aa98b7b0f1458",
+    "commit": "5cdbd2386d3e749cd51bcf391a669d38b51ef5ab",
     "browser": "Google Chrome 155.0.8059.39 (stable, Playwright 1.64 channel chrome, headless)",
     "machine": "Apple M4 Pro, 14 logical cores, 24 GiB, macOS 26.5.2 (25F84)",
     "profile": "D",
     "mode": "release",
     "desktopAdmitted": false,
     "evidenceProblems": [
-      "main-owned-memory: uncharged main memory in F2 at the loaded checkpoint (0.18 MiB of forced-GC heap above the warmed host is not in the ledger's current 7.76 MiB after excluding 0.4 MiB of measured compiled-code growth and 0 MiB of layout-shift entries; allowance: the warmed host's open gap 0 MiB + independent noise 0 MiB (idle probe 0 MiB, warm-host checkpoint procedure 0 MiB, capped by this checkpoint's spread 0 MiB))",
-      "main-owned-memory: uncharged main memory in F2 at the closed checkpoint (0.06 MiB of forced-GC heap above the warmed host is not in the ledger's current 0 MiB after excluding 0.27 MiB of measured compiled-code growth and 0 MiB of layout-shift entries; allowance: the warmed host's open gap 0 MiB + independent noise 0 MiB (idle probe 0 MiB, warm-host checkpoint procedure 0 MiB, capped by this checkpoint's spread 0 MiB))"
+      "memory.F2: unattributed warm-up allocation: 0.13 MiB of plain JS objects, arrays and native DOM in the warm host above the empty page (independent noise 0 MiB)",
+      "main-owned-memory: uncharged main memory in F2 at the loaded checkpoint (0.05 MiB of forced-GC heap above the warmed host is not in the ledger's current 7.85 MiB after excluding 0.37 MiB of measured compiled-code growth and 0 MiB of layout-shift entries; allowance: the warmed host's open gap 0 MiB + independent noise 0 MiB (idle probe 0 MiB, warm-host checkpoint procedure 0 MiB, capped by this checkpoint's spread 0 MiB))",
+      "main-owned-memory: uncharged main memory in F2 at the closed checkpoint (0.03 MiB of forced-GC heap above the warmed host is not in the ledger's current 0 MiB after excluding 0.25 MiB of measured compiled-code growth and 0 MiB of layout-shift entries; allowance: the warmed host's open gap 0 MiB + independent noise 0 MiB (idle probe 0 MiB, warm-host checkpoint procedure 0 MiB, capped by this checkpoint's spread 0 MiB))",
+      "memory.F4: unattributed warm-up allocation: 0.13 MiB of plain JS objects, arrays and native DOM in the warm host above the empty page (independent noise 0 MiB)"
     ],
     "rows": {
       "warm-viewport-frame": {
@@ -336,27 +338,27 @@
       },
       "input-acknowledgment": {
         "outcome": "pass-limited",
-        "value": 34.00499999523163
+        "value": 33.66499999165535
       },
       "progressive-first-viewport": {
         "outcome": "pass-limited",
-        "value": 795.9099999964237
+        "value": 691.4050000011921
       },
       "import-expanded-throughput": {
         "outcome": "pass",
-        "value": 53.13456617508563
+        "value": 57.567931606683565
       },
       "import-cell-throughput": {
         "outcome": "pass",
-        "value": 816659.8610485666
+        "value": 884799.150742136
       },
       "main-owned-memory": {
         "outcome": "pending",
-        "value": 42999346
+        "value": 43445546
       },
       "worker-owned-memory": {
         "outcome": "pass",
-        "value": 239836422
+        "value": 239837330
       },
       "bitmap-retained": {
         "outcome": "pass",
@@ -364,6 +366,12 @@
       }
     },
     "superseded": [
+      {
+        "results": "docs/validation/interactive-viewer-viewer-chrome-r14.json",
+        "hash": "91328cfdcb8c27538446482aa6c55d637457ff62c4d68f53b7ce44ad8f189ab9",
+        "commit": "1e13f7bf9a8b0e4c653a11ecec3cae575ab938c5",
+        "note": "r14: not admitted; its gated code bytes came from heap snapshots that grew page tables, and tile canvas objects were uncharged."
+      },
       {
         "results": "docs/validation/interactive-viewer-viewer-chrome-r13.json",
         "hash": "831e0e3d7b24d6b20f778dc76d3ef2719aacc3650eeba8c6807bb3364930734a",
@@ -443,6 +451,6 @@
         "note": "r1: input acknowledgment miss (header sort 11,897-13,316 ms)."
       }
     ],
-    "note": "S10.2 viewer receipt r14: desktop NOT admitted. Every row passes except main-owned-memory, pending: with independent noise (~0) and quiet, sampler-free checkpoints, F2 loaded keeps 0.18 MiB and F2 closed 0.06 MiB outside the ledger (measured code growth excluded); F4 is fully attributed. The F2 closed residue is attributed to Blink IdToNodeMap and V8 smi-string-cache capacity grown by the harness's own heap snapshots; the loaded remainder is not attributed. Left pending. Mobile not-run (user decision). Shared machine."
+    "note": "S10.2 viewer receipt r15: desktop NOT admitted. Every row passes except main-owned-memory, pending: F2 loaded 0.05 MiB and F2 closed 0.03 MiB outside the ledger, and a 0.13 MiB warm-up residue of plain objects/arrays/native DOM in both sessions, each above the independent noise (~0.003 MiB). Reported to the coordinator with owners; not widened. Mobile not-run (user decision). Shared machine."
   }
 }
