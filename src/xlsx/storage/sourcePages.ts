@@ -348,6 +348,8 @@ export interface PageBackend {
   /** Removes every stored page of this backend's owner. Idempotent. */
   /** Removes one record (a failed page's blob records). Idempotent: a missing key is not an error. */
   delete(key: string): Promise<void>
+  /** Keys this owner currently holds, at most `max` (the orphan sweep). Optional for test fakes. */
+  list?(max: number): Promise<string[]>
   removeAll(): Promise<void>
 }
 
@@ -369,6 +371,7 @@ export function memoryPageBackend(): PageBackend & { readonly size: number; read
     async put(key, bytes) { pages.set(key, bytes) },
     async get(key) { return pages.get(key) },
     async delete(key) { pages.delete(key) },
+    async list(max) { return [...pages.keys()].slice(0, max) },
     async removeAll() { pages.clear() },
   }
 }
@@ -384,6 +387,9 @@ interface OpfsFile {
 }
 export const PAGE_PREFIX = 'officeview-pages-'
 const escapeName = (text: string): string => text.replace(/[^A-Za-z0-9.]/g, (c) => `_${c.charCodeAt(0).toString(16).padStart(4, '0')}`)
+const unescapeName = (text: string): string => text.replace(/_([0-9a-f]{4})/g, (_, hex: string) => String.fromCharCode(parseInt(hex, 16)))
+/** Owners whose backend this process opened and has not removed: the sweep never touches them. */
+const liveOwners = new Set<string>()
 /** One flat file per page, named `${PAGE_PREFIX}${owner}-${key}` so removeAll can find them. */
 export function opfsPageBackend(dir: OpfsDir, owner: string): PageBackend {
   // Injective names: every character outside [A-Za-z0-9.] becomes _hhhh (its
@@ -391,6 +397,7 @@ export function opfsPageBackend(dir: OpfsDir, owner: string): PageBackend {
   // owner contains no '-', so one owner's prefix never matches another's files.
   const prefix = `${PAGE_PREFIX}${escapeName(owner)}-`
   const written = new Set<string>()
+  liveOwners.add(owner)
   const fileName = (key: string) => `${prefix}${escapeName(key)}`
   return {
     kind: 'opfs',
@@ -427,7 +434,18 @@ export function opfsPageBackend(dir: OpfsDir, owner: string): PageBackend {
       }
       written.delete(name)
     },
+    async list(max) {
+      const out: string[] = []
+      if (dir.keys) {
+        for await (const name of dir.keys()) {
+          if (out.length >= max) break
+          if (name.startsWith(prefix)) out.push(unescapeName(name.slice(prefix.length)))
+        }
+      } else for (const name of written) if (out.length < max) out.push(unescapeName(name.slice(prefix.length)))
+      return out
+    },
     async removeAll() {
+      liveOwners.delete(owner)
       const names = new Set(written)
       if (dir.keys) for await (const name of dir.keys()) if (name.startsWith(prefix)) names.add(name)
       for (const name of names) {
@@ -444,6 +462,7 @@ const PAGE_STORE = 'pages'
 /** One database per owner; each put is its own transaction, awaited to completion. */
 export function indexedDbPageBackend(factory: IDBFactory, owner: string): PageBackend {
   const name = `${PAGE_PREFIX}${owner}`
+  liveOwners.add(owner)
   let db: Promise<IDBDatabase> | undefined
   const open = () => db ??= new Promise<IDBDatabase>((resolve, reject) => {
     const req = factory.open(name, 1)
@@ -500,7 +519,22 @@ export function indexedDbPageBackend(factory: IDBFactory, owner: string): PageBa
         throw storageError(error, 'removing a source record')
       }
     },
+    async list(max) {
+      try {
+        const d = await open()
+        const tx = d.transaction(PAGE_STORE, 'readonly')
+        const req = tx.objectStore(PAGE_STORE).getAllKeys(null, max)
+        const keys = await new Promise<IDBValidKey[]>((resolve, reject) => {
+          req.onsuccess = () => resolve(req.result)
+          req.onerror = () => reject(req.error)
+        })
+        return keys.map(String)
+      } catch (error) {
+        throw storageError(error, 'listing source records')
+      }
+    },
     async removeAll() {
+      liveOwners.delete(owner)
       if (db) {
         try { (await db).close() } catch { /* never opened */ }
         db = undefined
@@ -512,6 +546,78 @@ export function indexedDbPageBackend(factory: IDBFactory, owner: string): PageBa
       })
     },
   }
+}
+
+/** Same age rule as the spool sweep (core/spool.ts): a leftover older than this belongs to a dead session. */
+export const PAGE_OWNER_MAX_AGE_MS = 24 * 3600_000
+/** Entries a sweep examines per backend at most (bounded work at session start). */
+export const SWEEP_MAX_ENTRIES = 4096
+/** A page-storage owner: `${docId}-${creation time in base 36}`; the sweep reads the age back. */
+export function pageOwner(docId: string, now = Date.now()): string { return `${docId}-${now.toString(36)}` }
+function ownerCreated(owner: string): number | undefined {
+  const at = owner.lastIndexOf('-')
+  if (at < 0 || !/^[0-9a-z]+$/.test(owner.slice(at + 1))) return undefined
+  const created = parseInt(owner.slice(at + 1), 36)
+  return Number.isSafeInteger(created) ? created : undefined
+}
+/**
+ * Removes page storage left by crashed or killed sessions: OPFS files and
+ * IndexedDB databases of owners older than `maxAgeMs` (the spool's 24 h rule),
+ * never an owner this process holds. Bounded (at most SWEEP_MAX_ENTRIES
+ * examined per backend), cancellable between entries, best effort (a failed
+ * removal is left for the next sweep), and it charges nothing: it keeps nothing.
+ */
+export async function sweepLeftoverPages(env: PageStorageEnv, options: { now?: number; maxAgeMs?: number; signal?: AbortSignal; maxEntries?: number } = {}): Promise<number> {
+  const now = options.now ?? Date.now()
+  const maxAge = options.maxAgeMs ?? PAGE_OWNER_MAX_AGE_MS
+  const maxEntries = options.maxEntries ?? SWEEP_MAX_ENTRIES
+  const stale = (owner: string) => {
+    if (liveOwners.has(owner)) return false
+    const created = ownerCreated(owner)
+    return created !== undefined && created <= now && now - created > maxAge
+  }
+  let removed = 0
+  if (env.opfs) {
+    try {
+      const dir = await env.opfs()
+      if (dir.keys) {
+        const names: string[] = []
+        let seen = 0
+        for await (const name of dir.keys()) {
+          if (++seen > maxEntries || options.signal?.aborted) break
+          if (!name.startsWith(PAGE_PREFIX)) continue
+          const rest = name.slice(PAGE_PREFIX.length)
+          const dash = rest.indexOf('-')
+          if (dash > 0 && stale(unescapeName(rest.slice(0, dash)))) names.push(name)
+        }
+        for (const name of names) {
+          if (options.signal?.aborted) break
+          try { await dir.removeEntry(name); removed++ } catch { /* in use or already gone */ }
+        }
+      }
+    } catch { /* no OPFS this time */ }
+  }
+  const factory = env.indexedDb as (IDBFactory & { databases?(): Promise<{ name?: string }[]> }) | undefined
+  if (factory?.databases && !options.signal?.aborted) {
+    try {
+      const dbs = (await factory.databases()).slice(0, maxEntries)
+      for (const { name } of dbs) {
+        if (options.signal?.aborted) break
+        if (!name?.startsWith(PAGE_PREFIX) || !stale(name.slice(PAGE_PREFIX.length))) continue
+        try {
+          await new Promise<void>((resolve, reject) => {
+            const req = factory.deleteDatabase(name)
+            req.onsuccess = () => resolve()
+            req.onerror = () => reject(req.error)
+            // Still open somewhere: never wait on it; the next sweep retries.
+            req.onblocked = () => reject(new DOMException('blocked', 'InvalidStateError'))
+          })
+          removed++
+        } catch { /* blocked: left for the next sweep */ }
+      }
+    } catch { /* databases() unavailable */ }
+  }
+  return removed
 }
 
 export interface PageStorageEnv {
@@ -616,6 +722,10 @@ export class SourcePageStore implements PageSink {
   /** Bytes the memory backend retains for this store (charged to the pool, see holdRam). */
   private ramBytes = 0
   private readonly committedChunks = new Set<number>()
+  /** Keys whose write has started but whose page/chunk is not yet published or rolled back. */
+  private readonly inFlight = new Set<string>()
+  /** Blob ids a rollback deleted (ids are never reused; everything else below blobCount is referenced). */
+  private readonly discardedBlobs = new Set<number>()
   /** Sheets with a commit in flight: one at a time per sheet, so validation precedes every write. */
   private readonly committing = new Set<string>()
   private closed = false
@@ -708,6 +818,7 @@ export class SourcePageStore implements PageSink {
       pageCharge = this.charge('pages', bytes.byteLength)
       pageRam = this.holdRam(bytes.byteLength)
       pageWritten = true
+      this.inFlight.add(pageKey)
       try {
         await this.backend.put(pageKey, bytes)
       } catch (error) {
@@ -735,6 +846,8 @@ export class SourcePageStore implements PageSink {
       throw error
     } finally {
       scratch.release()
+      this.inFlight.delete(pageKey)
+      for (const blob of written) this.inFlight.delete(blob.key)
     }
     this.counters.committed++
     this.counters.storedBytes += bytes.byteLength
@@ -758,6 +871,7 @@ export class SourcePageStore implements PageSink {
       // Tracked before the write: a failed put can still leave a partial record (an OPFS file).
       const blob: WrittenBlob = { key: `blob/${id}`, record: i, ordinal, bytes: bytes.byteLength, counted: false, reservation: undefined, ram: () => {} }
       written.push(blob)
+      this.inFlight.add(blob.key)
       blob.reservation = this.charge('blobRecords', bytes.byteLength)
       blob.ram = this.holdRam(bytes.byteLength)
       try {
@@ -780,6 +894,7 @@ export class SourcePageStore implements PageSink {
     for (const blob of written) {
       p.nums[blob.record] = blob.ordinal
       try { await this.backend.delete(blob.key) } catch { continue }
+      this.discardedBlobs.add(Number(blob.key.slice(5)))
       this.uncharge(blob.reservation)
       blob.ram()
       if (blob.counted) {
@@ -805,6 +920,7 @@ export class SourcePageStore implements PageSink {
       charge = this.charge('sharedStrings', bytes.byteLength)
       ram = this.holdRam(bytes.byteLength)
       attempted = true
+      this.inFlight.add(key)
       await this.backend.put(key, bytes)
       stored = bytes.byteLength
       this.check(docId)
@@ -816,12 +932,51 @@ export class SourcePageStore implements PageSink {
       throw error
     } finally {
       scratch.release()
+      this.inFlight.delete(key)
     }
     this.counters.storedBytes += stored
     this.stringChunkSize = chunkSize
     this.stringCount = Math.max(this.stringCount, chunk * chunkSize + strings.length)
   }
   get sharedStringCount(): number { return this.stringCount }
+
+  /** Whether `key` belongs to this store's committed index or to a write in flight. */
+  private referenced(key: string): boolean {
+    if (this.inFlight.has(key)) return true
+    const slash = key.indexOf('/')
+    if (slash < 0) return false
+    const head = key.slice(0, slash), tail = key.slice(slash + 1)
+    if (head === 'blob' || head === 'sst') {
+      if (!/^(0|[1-9][0-9]*)$/.test(tail)) return false
+      const n = Number(tail)
+      return head === 'sst' ? this.committedChunks.has(n) : n < this.blobCount && !this.discardedBlobs.has(n)
+    }
+    return (this.index.get(head) ?? []).some((summary) => summary.pageId === tail)
+  }
+  /**
+   * Store-open orphan sweep: deletes records this owner holds that the
+   * committed index does not reference, e.g. a blob written by a session that
+   * crashed before its page landed. Bounded (SWEEP_MAX_ENTRIES keys), cancellable
+   * between deletions, best effort; the key listing is a transient charge and
+   * nothing it removes was charged to this store, so it leaves no charge behind.
+   */
+  async sweepUnreferenced(signal?: AbortSignal): Promise<number> {
+    if (!this.backend.list || !this.live) return 0
+    const share = this.construction.share('orphan sweep listing')
+    let removed = 0
+    try {
+      try { share.need(SWEEP_MAX_ENTRIES * 128) } catch { return 0 }
+      const keys = await this.backend.list(SWEEP_MAX_ENTRIES)
+      for (const key of keys) {
+        if (signal?.aborted || !this.live) break
+        if (this.referenced(key)) continue
+        try { await this.backend.delete(key); removed++ } catch { /* left for the next sweep */ }
+      }
+    } finally {
+      share.release()
+    }
+    return removed
+  }
 
   async abandon(docId: string): Promise<void> {
     if (docId !== this.docId) return

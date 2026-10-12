@@ -25,7 +25,7 @@ import { createQuotaLedger, quotaLimitsFor, type QuotaLedger } from './quota'
 import { WORKER_BUDGETS } from '../view/tileCache'
 import { classifyPart, inventoryLimits } from './admission'
 import { anchorRecordEvents, newSheetMetadata, normalizeRowMetadata, sharedStringEvents, sheetRecordEvents, type SheetMetadata } from './sheetRecords'
-import { PageBuilder, SourcePageStore, browserPageStorageEnv, choosePageBackend, payloadBytes, type PageStorageEnv, type StoredPage } from './sourcePages'
+import { PageBuilder, SourcePageStore, browserPageStorageEnv, choosePageBackend, pageOwner, payloadBytes, sweepLeftoverPages, type PageStorageEnv, type StoredPage } from './sourcePages'
 import { PENDING_STRING_BYTES, TEXT_STRING_BYTES } from './constructionMemory'
 import { importLimitsFor, type ImportLimits, type ImportLimitOverrides, type ImportOutcome, type ImportProgress, type ImportSession, type ImportedPage } from './importSession'
 
@@ -93,6 +93,7 @@ export interface PagedImportSession extends ImportSession {
 }
 
 const SST_CHUNK = 4096
+let swept = false
 /** Page bytes per compressed package byte for the quota precheck (F2 measured 4.9; margin to 6). */
 const STORED_PER_COMPRESSED_BYTE = 6
 const SMALL_PART_BYTES = 4 * MiB
@@ -169,9 +170,15 @@ export async function openImportSession(source: Extract<SourceHandle, { kind: 'b
     sheets.push({ sheetId, name, workbookIndex, partPath, kind, state: 'pending', importedThroughRow: -1, metadata: newSheetMetadata(), tables: [], arrayCells: [], drawingAnchors: { records: [], unresolved: 0 }, mergeRects: [], invalidMerges: 0 })
     workbookIndex++
   }
+  const storageEnv = options.storage ?? browserPageStorageEnv()
+  // Once per process: page storage left by crashed sessions (OPFS/IndexedDB owners older than 24 h).
+  if (!swept) {
+    swept = true
+    void sweepLeftoverPages(storageEnv).catch(() => {})
+  }
   const store = options.store ?? new SourcePageStore({
     docId: options.docId,
-    backend: await choosePageBackend(options.storage ?? browserPageStorageEnv(), `${options.docId}-${Date.now().toString(36)}`, source.blob.size * STORED_PER_COMPRESSED_BYTE, limits.spool.memoryLimitBytes),
+    backend: await choosePageBackend(storageEnv, pageOwner(options.docId), source.blob.size * STORED_PER_COMPRESSED_BYTE, limits.spool.memoryLimitBytes),
     ledger,
     // Construction is charged against the profile's worker budget until the viewer binds the document pool.
     memoryBudgetBytes: WORKER_BUDGETS[options.profile],
@@ -216,6 +223,9 @@ export async function openImportSession(source: Extract<SourceHandle, { kind: 'b
   progress('inventory')
 
   const run = async (): Promise<ImportOutcome> => {
+    // Store open: records this owner holds but its index does not reference
+    // (left by a crashed session that reused the owner) are removed first.
+    await store.sweepUnreferenced(signal)
     // Shared strings, chunked into the store.
     let sstCount = 0
     if (sstPath) {

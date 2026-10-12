@@ -464,7 +464,9 @@ describe('review round 2 findings', () => {
     const store = new SourcePageStore({ docId: 'd', backend })
     const session = await openImportSession(blobOf(xlsxBytes({ sheetData: rowsXml(300) })), { docId: 'd', profile: 'D', store, pageRows: 100 })
     await session.done
-    expect(backend.heldBytes).toBe(store.stats.storedBytes + 3)
+    // S13.4: the store-open sweep removed 'k', a record this owner's index never referenced.
+    expect(await backend.get('k')).toBeUndefined()
+    expect(backend.heldBytes).toBe(store.stats.storedBytes)
     await session.release()
   })
 

@@ -7,7 +7,7 @@
  */
 import { describe, expect, it } from 'vitest'
 import {
-  F_BLOB, K_NUMBER, K_TEXT, PageBuilder, SourcePageStore, encodePage, indexedDbPageBackend, memoryPageBackend, opfsPageBackend, type PageBackend,
+  F_BLOB, K_NUMBER, K_TEXT, PageBuilder, SourcePageStore, encodePage, indexedDbPageBackend, memoryPageBackend, opfsPageBackend, pageOwner, sweepLeftoverPages, type PageBackend,
 } from '../src/xlsx/storage/sourcePages'
 import { fakeIndexedDb, fakeOpfsDirectory } from './helpers/fake-storage'
 import { openImportSession } from '../src/xlsx/storage/pagedImport'
@@ -357,5 +357,80 @@ describe('review round 1 (codex) MAJOR 5: rejected commits are validated before 
     expect(await store.sharedString(0)).toBe('s0')
     const sheetPage = await store.page('1', 'p0')
     expect(sheetPage.nums[0]).toBe(0)
+  })
+})
+
+describe('crash-orphan sweep', () => {
+  const HOUR = 3600_000
+  async function writeRaw(dir: ReturnType<typeof fakeOpfsDirectory>, name: string) {
+    const handle = await dir.getFileHandle(name, { create: true }) as { createWritable(): Promise<{ write(b: Uint8Array): Promise<void>; close(): Promise<void> }> }
+    const w = await handle.createWritable()
+    await w.write(new Uint8Array([1, 2, 3]))
+    await w.close()
+  }
+  const opfsName = (owner: string, key: string) => `officeview-pages-${owner.replace(/[^A-Za-z0-9.]/g, (c) => `_${c.charCodeAt(0).toString(16).padStart(4, '0')}`)}-${key.replace(/[^A-Za-z0-9.]/g, (c) => `_${c.charCodeAt(0).toString(16).padStart(4, '0')}`)}`
+
+  it('session start removes OPFS files and IndexedDB databases of dead owners older than 24 h, never fresh, live or foreign entries', async () => {
+    const now = Date.UTC(2026, 9, 13)
+    const dir = fakeOpfsDirectory()
+    const dead = pageOwner('doc-a', now - 25 * HOUR), fresh = pageOwner('doc-b', now - HOUR), liveOld = pageOwner('doc-c', now - 30 * HOUR)
+    await writeRaw(dir, opfsName(dead, 'blob/0'))
+    await writeRaw(dir, opfsName(dead, '1/p0'))
+    await writeRaw(dir, opfsName(fresh, '1/p0'))
+    await writeRaw(dir, 'unrelated.bin')
+    const live = opfsPageBackend(dir, liveOld)
+    await live.put('1/p0', new Uint8Array([9]))
+    const idb = fakeIndexedDb()
+    for (const owner of [dead, fresh]) await new Promise<void>((resolve) => { const req = idb.open(`officeview-pages-${owner}`, 1); req.onsuccess = () => resolve() })
+    const removed = await sweepLeftoverPages({ opfs: async () => dir, indexedDb: idb }, { now })
+    expect(removed).toBe(3)
+    expect([...dir.files.keys()].sort()).toEqual([opfsName(fresh, '1/p0'), opfsName(liveOld, '1/p0'), 'unrelated.bin'].sort())
+    expect(idb.deleted).toEqual([`officeview-pages-${dead}`])
+    // Bounded and cancellable: an aborted sweep removes nothing.
+    await writeRaw(dir, opfsName(dead, 'blob/1'))
+    const aborted = new AbortController()
+    aborted.abort()
+    expect(await sweepLeftoverPages({ opfs: async () => dir }, { now, signal: aborted.signal })).toBe(0)
+    expect(await sweepLeftoverPages({ opfs: async () => dir }, { now, maxEntries: 1 })).toBe(0)
+    await live.removeAll()
+  })
+
+  it('simulated crash (blob written, page not), then reopen of the same owner: the orphan is removed and the ledger matches storage', async () => {
+    const dir = fakeOpfsDirectory()
+    const owner = 'doc-crash'
+    // Session A: p0 lands, then the process dies while p1's page write is pending (its blob is already stored).
+    const crashing = opfsPageBackend(dir, owner)
+    const hung: PageBackend = { ...crashing, put: (key, bytes) => key === '1/p1' ? new Promise<void>(() => {}) : crashing.put(key, bytes) }
+    const a = new SourcePageStore({ docId: 'd', backend: hung })
+    const page = (pageId: string, r0: number, text: string) => {
+      const b = new PageBuilder()
+      b.add(r0, 0, K_TEXT, 0, 0, text, true, undefined)
+      return { sheetId: '1', pageId, r0, r1: r0, cellCount: 1, bytes: b.bytes, payload: b.build(), blobs: [...b.blobs] }
+    }
+    await a.commit(page('p0', 0, 'a'.repeat(40_000)))
+    void a.commit(page('p1', 1, 'b'.repeat(40_000)))
+    await new Promise((resolve) => setTimeout(resolve, 20))
+    expect(dir.files.size).toBe(3) // blob/0, 1/p0, blob/1 — blob/1 is unreferenced by any committed index once A is gone
+
+    // Session B reopens the same owner: the store-open sweep keeps nothing B's index does not reference.
+    const ledger = createQuotaLedger(quotaLimitsFor('D'), { maxTotalExpandedBytes: 1 << 30 })
+    const pool = new MemoryPool({ limitBytes: 64 * 1024 * 1024 })
+    const b = new SourcePageStore({ docId: 'd', backend: opfsPageBackend(dir, owner), ledger })
+    b.bindMemory(pool)
+    expect(await b.sweepUnreferenced()).toBe(3)
+    expect(dir.files.size).toBe(0)
+    expect(Object.values(ledger.snapshot().current).every((v) => v === 0)).toBe(true)
+    expect(pool.stats().totalBytes).toBe(0)
+
+    // Through an import (the sweep runs at store open), storage holds exactly what B committed and charged.
+    await writeRaw(dir, opfsName(owner, 'blob/7'))
+    const session = await openImportSession(blobOf(xlsxBytes({ sheetData })), { docId: 'd', profile: 'D', store: b, ledger })
+    expect(await session.done).toMatchObject({ kind: 'complete' })
+    expect([...dir.files.keys()].some((name) => name.endsWith('blob_002f7'))).toBe(false)
+    expect(dir.files.size).toBe(b.pages('1').length + b.stats.blobs)
+    expect(ledger.snapshot().current.pages + ledger.snapshot().current.blobRecords).toBe(b.stats.storedBytes + b.stats.blobBytes)
+    // A sweep of a live store never removes its own records.
+    expect(await b.sweepUnreferenced()).toBe(0)
+    await session.release()
   })
 })

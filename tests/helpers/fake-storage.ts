@@ -129,6 +129,10 @@ export function fakeIndexedDb(options: { failDeletes?: number } = {}): IDBFactor
               data.delete(key)
               return request(() => undefined)
             },
+            getAllKeys(_query: unknown, count?: number) {
+              if (!active) throw new DOMException('transaction committed', 'TransactionInactiveError')
+              return request(() => [...data.keys()].slice(0, count ?? Infinity))
+            },
             getAll() {
               if (!active) throw new DOMException('transaction committed', 'TransactionInactiveError')
               return request(() => [...data.keys()].sort((a, b) => a - b).map((k) => data.get(k)!))
