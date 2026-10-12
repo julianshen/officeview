@@ -80,6 +80,8 @@ export type RangeDetection =
 export const DEFAULT_DETECTION_WORK_BUDGET = 2 ** 24
 /** Largest gallop strip, in lines; also capped by the caller's page limit. */
 const STRIP_MAX_LINES = 1024
+/** Largest gallop strip page, in cells (a page proves at least the lines it fully covers). */
+const STRIP_MAX_CELLS = 65_536
 const YIELD_EVERY_PAGES = 16
 const YIELD_EVERY_MS = 4
 const FULL_DOMAIN: SourceRect = { r0: 0, r1: MAX_ROWS - 1, c0: 0, c1: MAX_COLS - 1 }
@@ -169,10 +171,22 @@ class Pacer {
   }
 }
 
+/** Most iteration-continued scans one detection keeps open at a time. */
+const MAX_HELD_SCANS = 4
+
 /** One budgeted, paced, typed view of store.scanPopulated. Error pages and
- * foreign page stamps raise ScanFailure; nothing is retained between pages. */
+ * foreign page stamps raise ScanFailure.
+ *
+ * A store may continue a scan by cursor (one page per call, `nextCursor` set)
+ * or by iteration (further pages from the same AsyncIterable, no cursor), as
+ * the shipped object, paged and remote adapters do (spec §4.1). A missing
+ * cursor therefore proves nothing: after an iteration page this scanner reads
+ * one page ahead and, when more follows, hands out its own continuation token,
+ * so callers can keep treating "no nextCursor" as exhausted. */
 class Scanner {
   private work = 0
+  private serial = 0
+  private readonly held = new Map<string, { iterator: AsyncIterator<Page<AuthoritativeCell>>; ahead: IteratorResult<Page<AuthoritativeCell>> }>()
   constructor(
     private readonly store: SourceStore,
     private readonly options: ReadOptions,
@@ -183,27 +197,49 @@ class Scanner {
     if (this.work + 1 > this.budget) throw new WorkBudgetExceeded(`Detection exceeded its work budget of ${this.budget}`)
     this.work++
     await this.pacer.tick()
-    const request = cursor === undefined ? { range: rect, limit } : { range: rect, limit, cursor }
-    let first: Page<AuthoritativeCell> | undefined
-    for await (const page of this.store.scanPopulated(request, this.options)) {
-      first = page
-      break
+    const held = cursor === undefined ? undefined : this.held.get(cursor)
+    let iterator: AsyncIterator<Page<AuthoritativeCell>>
+    let step: IteratorResult<Page<AuthoritativeCell>>
+    if (held !== undefined) {
+      this.held.delete(cursor!)
+      iterator = held.iterator
+      step = held.ahead
+    } else {
+      const request = cursor === undefined ? { range: rect, limit } : { range: rect, limit, cursor }
+      iterator = this.store.scanPopulated(request, this.options)[Symbol.asyncIterator]()
+      step = await iterator.next()
     }
     // An abort that landed while this page was in flight wins over its content.
-    this.options.signal.throwIfAborted()
-    if (first === undefined) throw contractViolation('Populated scan ended without a page')
-    if (first.error !== undefined) throw new ScanFailure(first.error)
+    if (this.options.signal.aborted) { void iterator.return?.(); this.options.signal.throwIfAborted() }
+    if (step.done) throw contractViolation('Populated scan ended without a page')
+    const first = step.value
+    if (first.error !== undefined) { void iterator.return?.(); throw new ScanFailure(first.error) }
     if (!sameStamp(first.stamp, this.options.stamp)) {
+      void iterator.return?.()
       throw new ScanFailure({ code: 'stale-source', retryable: true, message: 'Populated scan page belongs to another source stamp' })
     }
     this.work += first.items.length
     for (const cell of first.items) {
-      if (!isValidCoordinate(cell.row, cell.col)) throw contractViolation('Populated cell outside the worksheet domain')
-      if (cell.row < rect.r0 || cell.row > rect.r1 || cell.col < rect.c0 || cell.col > rect.c1) {
-        throw contractViolation('Populated cell outside the requested range')
-      }
+      const outside = !isValidCoordinate(cell.row, cell.col) ? 'worksheet domain' : cell.row < rect.r0 || cell.row > rect.r1 || cell.col < rect.c0 || cell.col > rect.c1 ? 'requested range' : null
+      if (outside !== null) { void iterator.return?.(); throw contractViolation(`Populated cell outside the ${outside}`) }
     }
-    return first
+    if (first.nextCursor !== undefined || first.completeness === 'incomplete') { void iterator.return?.(); return first }
+    const ahead = await iterator.next()
+    this.options.signal.throwIfAborted()
+    if (ahead.done) return first
+    const token = `detect:${++this.serial}`
+    this.held.set(token, { iterator, ahead })
+    while (this.held.size > MAX_HELD_SCANS) {
+      const [oldest, scan] = this.held.entries().next().value!
+      this.held.delete(oldest)
+      void scan.iterator.return?.()
+    }
+    return { ...first, nextCursor: token }
+  }
+  /** Releases continuations a caller abandoned (e.g. an existence probe that found a cell). */
+  close(): void {
+    for (const scan of this.held.values()) void scan.iterator.return?.()
+    this.held.clear()
   }
   /** Existence probe: follows cursors until a cell or exhaustion. A found cell
    * is decisive even on a loading page; without one, a loading page is unknown. */
@@ -315,16 +351,25 @@ async function probeCurrentRegion(seed: SourceCell, scanner: Scanner, pageLimit:
     const lines = Math.min(gallop[side], available)
     if (lines > 1) {
       // One page over a strip of lines; seen[] marks occupied lines by offset.
+      // A strip holds up to lines x span cells: a page of `lines` items would
+      // cover a few lines of a dense table, so growth would cost probes per row.
       const rect = strip(side, line, line + dir * (lines - 1), lo, hi)
-      const page = await scanner.page(rect, lines)
+      const page = await scanner.page(rect, Math.min(lines * (hi - lo + 1), STRIP_MAX_CELLS))
       const seen = new Uint8Array(lines)
-      for (const cell of page.items) seen[dir * ((rowSide(side) ? cell.row : cell.col) - line)] = 1
+      let reached = 0
+      for (const cell of page.items) {
+        const offset = dir * ((rowSide(side) ? cell.row : cell.col) - line)
+        seen[offset] = 1
+        reached = Math.max(reached, offset + 1)
+      }
       let prefix = 0
       while (prefix < lines && seen[prefix] === 1) prefix++
       const exhausted = page.nextCursor === undefined && page.completeness === 'complete'
       if (prefix > 0) {
         grow(side, prefix)
-        gallop[side] = prefix === lines ? Math.min(lines * 2, cap) : 1
+        // A page cut short by its size limit, occupied up to where it stopped,
+        // says nothing against the next lines: keep the strip size.
+        gallop[side] = prefix === lines ? Math.min(lines * 2, cap) : !exhausted && prefix === reached ? lines : 1
         verified[side] = exhausted && prefix < lines ? { line: line + dir * prefix, lo, hi } : null
         return 'grew'
       }
@@ -617,55 +662,60 @@ async function detectRange(request: RangeDetectionRequest, pacer: Pacer, owner: 
   const pageLimit = request.pageLimit ?? 4096
   const context: DetectionContext = { request, pacer, owner }
   const scanner = new Scanner(store, options, pacer, request.workBudget ?? DEFAULT_DETECTION_WORK_BUDGET)
-  const activeRect = { r0: active.row, r1: active.row, c0: active.col, c1: active.col }
-  const tableHit = structure.firstWhere(activeRect, hit => hit.kind === 'table')
-  if (tableHit !== undefined && tableHit.kind === 'table') {
-    // Overlapping tables are illegal in Excel but constructible in a malformed
-    // file; index order must not silently pick one of them.
-    const rival = structure.firstWhere(activeRect, hit => hit.kind === 'table' && hit.record !== tableHit.record)
-    if (rival !== undefined) {
-      return refused({ reason: 'ambiguous-selection', message: 'More than one table contains the active cell' })
+  // Probes may stop following a continuation early (a found cell decides).
+  try {
+    const activeRect = { r0: active.row, r1: active.row, c0: active.col, c1: active.col }
+    const tableHit = structure.firstWhere(activeRect, hit => hit.kind === 'table')
+    if (tableHit !== undefined && tableHit.kind === 'table') {
+      // Overlapping tables are illegal in Excel but constructible in a malformed
+      // file; index order must not silently pick one of them.
+      const rival = structure.firstWhere(activeRect, hit => hit.kind === 'table' && hit.record !== tableHit.record)
+      if (rival !== undefined) {
+        return refused({ reason: 'ambiguous-selection', message: 'More than one table contains the active cell' })
+      }
+      return finishTable(context, tableHit.record)
     }
-    return finishTable(context, tableHit.record)
-  }
-  const explicit = explicitRect(selection, active)
-  if (explicit === 'invalid') return refused({ reason: 'invalid-range', message: 'Malformed explicit selection range' })
-  if (explicit === 'ambiguous') {
-    return refused({ reason: 'ambiguous-selection', message: 'Contiguous selection does not contain the active cell' })
-  }
-  if (explicit === 'unsupported') return refused({ reason: 'unsupported', message: 'Row-set refs are resolved by the worker, not range detection' })
-  if (explicit !== null) return finishDerived(context, explicit, { kind: 'explicit' })
-  const region = await probeCurrentRegion(active, scanner, pageLimit)
-  if (region.kind === 'incomplete') return { kind: 'incomplete', missing: region.missing }
-  if (region.kind === 'region') return finishDerived(context, region.rect, { kind: 'region' })
-  // Blank seed: the used range applies only when it holds exactly one current
-  // region; two blocks around a blank cell must never become one range (§6.1).
-  // The hint is optional: without one, the same limit-1 probes run over the
-  // whole sheet (bounded by the work budget), so a proven-empty source refuses
-  // instead of waiting on a hint that may never arrive.
-  const used = request.usedRange ?? store.extent.used ?? FULL_DOMAIN
-  if (!isValidSourceRectInput(used)) {
-    return refused({ reason: 'invalid-range', message: 'Used range is outside the worksheet domain' })
-  }
-  const first = await scanner.first(used)
-  if (first === 'unknown') return { kind: 'incomplete', missing: [{ ...used }] }
-  if (first === 'blank') {
-    return refused({ reason: 'ambiguous-selection', message: 'Blank active cell and no data in the used range' })
-  }
-  const sole = await probeCurrentRegion(first, scanner, pageLimit)
-  if (sole.kind === 'incomplete') return { kind: 'incomplete', missing: sole.missing }
-  if (sole.kind === 'blank') throw contractViolation('Populated cell vanished during detection')
-  // A region that outgrew the hint proves the hint stale, so the sole-region
-  // check then covers the whole sheet (still limit-1 probes, at most four).
-  const inside = sole.rect.r0 >= used.r0 && sole.rect.r1 <= used.r1 && sole.rect.c0 >= used.c0 && sole.rect.c1 <= used.c1
-  for (const rect of outsideRegion(inside ? used : FULL_DOMAIN, sole.rect)) {
-    const answer = await scanner.exists(rect)
-    if (answer === 'unknown') return { kind: 'incomplete', missing: [rect] }
-    if (answer === 'occupied') {
-      return refused({ reason: 'ambiguous-selection', message: 'Blank active cell and the used range holds more than one region' })
+    const explicit = explicitRect(selection, active)
+    if (explicit === 'invalid') return refused({ reason: 'invalid-range', message: 'Malformed explicit selection range' })
+    if (explicit === 'ambiguous') {
+      return refused({ reason: 'ambiguous-selection', message: 'Contiguous selection does not contain the active cell' })
     }
+    if (explicit === 'unsupported') return refused({ reason: 'unsupported', message: 'Row-set refs are resolved by the worker, not range detection' })
+    if (explicit !== null) return finishDerived(context, explicit, { kind: 'explicit' })
+    const region = await probeCurrentRegion(active, scanner, pageLimit)
+    if (region.kind === 'incomplete') return { kind: 'incomplete', missing: region.missing }
+    if (region.kind === 'region') return finishDerived(context, region.rect, { kind: 'region' })
+    // Blank seed: the used range applies only when it holds exactly one current
+    // region; two blocks around a blank cell must never become one range (§6.1).
+    // The hint is optional: without one, the same limit-1 probes run over the
+    // whole sheet (bounded by the work budget), so a proven-empty source refuses
+    // instead of waiting on a hint that may never arrive.
+    const used = request.usedRange ?? store.extent.used ?? FULL_DOMAIN
+    if (!isValidSourceRectInput(used)) {
+      return refused({ reason: 'invalid-range', message: 'Used range is outside the worksheet domain' })
+    }
+    const first = await scanner.first(used)
+    if (first === 'unknown') return { kind: 'incomplete', missing: [{ ...used }] }
+    if (first === 'blank') {
+      return refused({ reason: 'ambiguous-selection', message: 'Blank active cell and no data in the used range' })
+    }
+    const sole = await probeCurrentRegion(first, scanner, pageLimit)
+    if (sole.kind === 'incomplete') return { kind: 'incomplete', missing: sole.missing }
+    if (sole.kind === 'blank') throw contractViolation('Populated cell vanished during detection')
+    // A region that outgrew the hint proves the hint stale, so the sole-region
+    // check then covers the whole sheet (still limit-1 probes, at most four).
+    const inside = sole.rect.r0 >= used.r0 && sole.rect.r1 <= used.r1 && sole.rect.c0 >= used.c0 && sole.rect.c1 <= used.c1
+    for (const rect of outsideRegion(inside ? used : FULL_DOMAIN, sole.rect)) {
+      const answer = await scanner.exists(rect)
+      if (answer === 'unknown') return { kind: 'incomplete', missing: [rect] }
+      if (answer === 'occupied') {
+        return refused({ reason: 'ambiguous-selection', message: 'Blank active cell and the used range holds more than one region' })
+      }
+    }
+    return finishDerived(context, sole.rect, { kind: 'used' })
+  } finally {
+    scanner.close()
   }
-  return finishDerived(context, sole.rect, { kind: 'used' })
 }
 /** Typed boundary: cancellation, scan failures (including contract-violating
  * pages, as page-error) and budget exhaustion become outcomes; anything else
@@ -712,7 +762,10 @@ export async function admitSortRange(request: RangeDetectionRequest): Promise<Ra
     // The guard streams through its own unbudgeted scanner so S3's bounded
     // outside-column search keeps typed failures and cooperative pacing.
     const guardScanner = new Scanner(request.store, request.options, pacer, Number.POSITIVE_INFINITY)
-    const guard = await guardSort(detected.range, request.structure, guardScanner.asPopulatedSource(pageLimit), { pageLimit: request.pageLimit })
+    let guard: Awaited<ReturnType<typeof guardSort>>
+    try {
+      guard = await guardSort(detected.range, request.structure, guardScanner.asPopulatedSource(pageLimit), { pageLimit: request.pageLimit })
+    } finally { guardScanner.close() }
     if (!guard.ok) return translateRefusal(guard.refusal)
     return detected
   })
