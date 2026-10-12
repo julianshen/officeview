@@ -108,7 +108,7 @@ Browser shorthand: **[B:C+W]** = Playwright scenario passing on Chromium and Pla
 | AC-RENDER-02 | F7, F8 | `xlsx-viewer-selection-overlay.test.ts`, `xlsx-viewer-viewport-integration.test.tsx`, static print/export suites | pass (unit) |
 | AC-PERF-01 | F1–F8 | S10.2: controlled Chrome/Safari/iPad p50/p95 receipts | **not-run** (out of S10.1 scope; Safari/iPad also blocked on hardware/automation). Blocking |
 | AC-PERF-02 | F2–F7 | complexity part: `xlsx-viewer-complexity.test.ts` (see below); per-pool memory receipts → S10.2 | complexity **pass**; memory **not-run**. Blocking |
-| AC-BACKEND-01 | — | TS resident baseline is the only backend. S11/S12 were not executed, and the S11 allowance ("record not-run when the baseline already meets targets") needs the S10.2 receipts first. S10.3 fallback leg for the Canvas2D reference: `contextrestored` drops tiles and repaints both layers (G9, emulated events) **[B:C+W]** | **not-run** (pending S10.2 and S11); device-loss leg pass (emulated). Blocking |
+| AC-BACKEND-01 | — | TS resident baseline is the only backend. S11/S12 are decided not-run on desktop Chrome (headless)-only evidence: `docs/architecture/xlsx-wasm-decision.md` (nine S8.6 scenarios against the five frozen kernel thresholds pass; the S10.2 ack miss is detection I/O, not kernel CPU) and `docs/architecture/xlsx-gpu-decision.md` (every paint row and the 128 MiB bitmap budget pass; the one paint bottleneck was fixed in place). Revisit when Safari and mobile receipts exist. S10.3 fallback leg for the Canvas2D reference: `contextrestored` drops tiles and repaints both layers (G9, emulated events) **[B:C+W]** | **not-run** (blocking: baseline S10.2 receipt pending merge; S11/S12 decisions recorded as not-run); device-loss leg pass (emulated). Blocking |
 | AC-REG-01 | F8, corpus | typecheck, full vitest, build, golden compare (all XLSX units pass; 6 non-XLSX failures pre-existing on base) | pass (code); native source/checkpoint evidence not-run |
 
 **Counts (34 acceptance cases):**
@@ -252,7 +252,7 @@ These are mandatory cases whose evidence is incomplete. Nothing here is hidden a
 2. **AC-A11Y-01 / AC-A11Y-02:** S10.3 delivered the Chromium/WebKit keyboard and focus receipts and the Chromium AX-tree receipt. Still open: the **macOS VoiceOver** receipt (manual steps in the S10.3 section), **Safari desktop** (needs admin `safaridriver --enable`), and **iPad touch/VoiceOver** (not-run by user decision).
 3. **AC-PERF-01 / AC-PERF-02 (memory) / AC-LIFE-02 (real retained memory):** the controlled S10.2 Chrome, Safari and iPad receipts.
 4. **Native Excel checkpoint** for AC-STORE-01, AC-SEM-07 and AC-REG-01. The manual steps are above.
-5. **AC-BACKEND-01:** the baseline status is pending the S10.2 receipts and the S11 decision.
+5. **AC-BACKEND-01:** S11/S12 decision records delivered (`docs/architecture/xlsx-wasm-decision.md`, `xlsx-gpu-decision.md`, both not-run on desktop Chrome (headless)-only evidence); the shipped TS/Canvas2D backends' S10.2 receipt is still pending merge; revisit when Safari and mobile receipts exist.
 6. **Full-scale browser runs** for F2 (1M × 8), F3 dense (256 × 16,384) and F4 (1M strings). Only reduced, labelled scales ran here.
 
 ## Observations (not fixed; not reproduced as failures)
