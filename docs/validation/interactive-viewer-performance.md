@@ -9,8 +9,10 @@ from validated raw records, and the evidence-problem list is empty.
 
 The main-thread memory row passes on the document's main-thread application
 ledger, under the round-3 rules:
-- every main-owned buffer is charged for its real lifetime, until it is
-  unreachable (see below);
+- the buffers review round 3 found uncharged or released early (geometry,
+  structural index, resident document, adopted views, worker replies) are now
+  charged until they are unreachable; the other pools are accounted explicitly
+  at allocation and release (see below);
 - the ledger's high-water mark is **44.6 MiB** against the 64 MiB budget (F4);
 - the cross-check baseline is a host warmed on the same page before the
   measured session. Every forced-GC live sample above it is covered by the
@@ -153,7 +155,7 @@ and 2 is a test in `tests/xlsx-viewer-perf-receipt.test.ts`.
 |---|---:|---:|---|---|
 | Warm viewport input-to-paint (p95) | 16.7 ms | ordinary 3.45, wrapped 5.56, styled 2.46 ms | **pass** | F2 1M; wrapped 20k; styled 20k. 300 frames each after 60 warmup |
 | Warm viewport frame interval (p95) | 16.7 ms | 16.67 ms in every mix; 0 long tasks | **pass** | same frames |
-| Input acknowledgment | 50 ms | sort p95 15.6; find p95 13.7; cancel p95 15.8; filter apply max 32.8 | **pass (limited)** | F2 1M. Sort, find and cancel: 30 samples each. Filter apply: 10 samples (documented exception) |
+| Input acknowledgment | 50 ms | sort p95 15.6 (max 52.5, one of 30); find p95 13.7; cancel p95 15.8; filter apply max 32.8 | **pass (limited)** | F2 1M. Sort, find and cancel: 30 samples each. Filter apply: 10 samples (documented exception) |
 | 100k / 1M numeric sort, 1M filter, 1M text sort, 100k index | 100 / 1,000 / 100 / 4,000 / 750 ms | 67.4 / 787.2 / 72.6 / 2,348.6 / 30.5 ms | pass | S8.6 receipts, reused |
 | First usable viewport | 1,500 ms | F1 p95 479.6; F3 p95 703.2 (max 1,425.5); F2 max 605.9 ms | **pass (limited)** | F1 and F3: 30 samples each. F2: 10 cold 1M-row opens (documented exception) |
 | Expanded XML import throughput | ≥ 20 MiB/s | worst of 3 runs: F1 58.8, F2 67.8, F3 61.7 MiB/s | pass | full scale |
@@ -168,10 +170,12 @@ and 2 is a test in `tests/xlsx-viewer-perf-receipt.test.ts`.
 **The ledger.** Each open document has one `MainMemoryLedger`
 (`src/xlsx/view/mainLedger.ts`).
 - A worker-backed workbook owns it; a resident document gets its own.
-- Since review round 3 every main-owned buffer is charged **for its real
-  lifetime**. A charge made with `chargeWhileReachable` is released by a
-  `FinalizationRegistry` only once the object is unreachable, not when the code
-  is done with it. Pools:
+- Since review round 3 the geometry, structure and document pools, adopted
+  views and worker replies are charged **for their real lifetime**: a charge
+  made with `chargeWhileReachable` is released by a `FinalizationRegistry` only
+  once the object is unreachable, not when the code is done with it. The other
+  pools (rowCache, controls, layout, merges, copy, dom) are accounted
+  explicitly at allocation and release. Pools:
   - **rowCache**: the remote row cache (`RowCacheLedger` reports every change);
   - **viewBuffers**: adopted worker view deltas: band copies (with their display
     inverse, charged conservatively), visibility words and summaries. Each
@@ -192,9 +196,9 @@ and 2 is a test in `tests/xlsx-viewer-perf-receipt.test.ts`.
     retained pages;
   - **dom**: owned elements × `DOM_ELEMENT_BYTES` (3,200 B).
 - `close()` drops every store, view, geometry, layout, structure and failure it
-  holds; nothing is released by bookkeeping alone. The ledger returns to zero
-  because the buffers become unreachable and are collected
-  (`tests/xlsx-viewer-main-ledger.test.tsx` checks this under real GC).
+  holds. The lifetime-charged pools reach zero only once those buffers are
+  collected (`tests/xlsx-viewer-main-ledger.test.tsx` checks this under real
+  GC); the explicitly accounted pools are released on unmount and close.
 - The 3,200 B per element was calibrated in Chrome 155 with the perf page's
   `calibrateDom`: React-rendered owned-gridcell-shaped elements measured
   2,981–3,184 B each, post-GC heap including embedder.
@@ -346,8 +350,10 @@ React, not the viewer:
 - the last event's `return_targetInst` kept the fiber of the last clicked
   element.
 
-Both are released by React's next render or event in the host, which is what a
-real page does; the perf page now closes that way. The viewer's own state is
+Both were no longer reachable after one re-render and one event in the host
+page, which is what a real page does; the perf page now closes that way. That
+React releases them on its next render or event is inferred from this, not
+traced in React's source. The viewer's own state is
 dropped by `close()` (see the ledger section); the remaining React-held window
 is recorded as a follow-up below, not fixed in product code.
 
@@ -438,8 +444,8 @@ harness-only):
     call. New pools: geometry, structure, document. Tests in
     `tests/xlsx-viewer-main-ledger.test.tsx`.
 11. **`close()` drops buffers.** A closed workbook clears its stores, views,
-    geometries, layouts, structures and failures; the ledger reaches zero only
-    through collection. Tested under real GC (`--expose_gc`) in the same file.
+    geometries, layouts, structures and failures; its lifetime-charged pools
+    reach zero only through collection. Tested under real GC (`--expose_gc`) in the same file.
 12. **Warmed-host attribution.** The post-close floor and fixed 2 MiB tolerance
     are gone. The baseline is a host warmed before the measured session; the
     only allowance is its measured probe noise. RED tests: a stable 16 MiB and a
@@ -460,6 +466,12 @@ the merged S10.3 code.
   (for Ctrl/Cmd zoom) puts wheel scrolls on the main thread. Back-to-back CDP
   wheel events also arrive faster than once per frame. This is not a threshold
   input.
+- **Filter apply end to end (informational, not a threshold input).** On F2
+  the acknowledgment passes (max 32.8 ms), but the applied result takes about
+  2.8 s: filter-apply end-to-end 2,780–2,800 ms (n=10). The worker `filter`
+  replies alternate between about 121 ms and about 2.7 s (p95 2,739 ms, n=20).
+  The 100 ms "1M numeric filter" row is the S8.6 kernel-boundary receipt,
+  reused; it is not a viewer end-to-end figure. A follow-up is proposed.
 - **Wide F3 horizontal scroll (informational).** Input-to-paint p95 4.3 ms,
   frame interval p95 16.67 ms.
 - **Abrupt page close.** In an early iteration, closing pages without
