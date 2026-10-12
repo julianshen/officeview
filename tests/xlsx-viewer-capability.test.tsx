@@ -18,6 +18,10 @@ import { act, cleanup, fireEvent, render, waitFor } from '@testing-library/react
 import { OfficeFile } from '../src/components/OfficeFile'
 import { ViewerKernel } from '../src/worker/viewerKernel'
 import { RemoteWorkbook } from '../src/worker/viewerRemoteSource'
+import { Blob as NodeBlob } from 'node:buffer'
+import { openImportSession } from '../src/xlsx/storage/pagedImport'
+import { createPagedWorkbookSource } from '../src/xlsx/view/pagedSource'
+import { SourcePageStore, memoryPageBackend } from '../src/xlsx/storage/sourcePages'
 import { OfficePackage } from '../src/core/zip'
 import { parseXlsx } from '../src/xlsx/parse'
 import type { WorkerCommand, WorkerReply } from '../src/xlsx/view/contracts'
@@ -116,8 +120,8 @@ describe('Esc cancels a pending copy (spec §9.3 fall-through)', () => {
 })
 
 /** A RemoteWorkbook over a scripted client: structural reads answer by `mode`. */
-function scriptedRemote() {
-  let mode: 'loading' | 'complete' | 'quota' = 'loading', next = 0
+function scriptedRemote(policy: 'engine' | 'cached' = 'engine', structural?: () => Record<string, unknown>) {
+  let mode: 'loading' | 'complete' | 'quota' | 'real' = 'loading', next = 0
   const commands: string[] = []
   const stamp = { docId: 'd', sheetId: 's', valueGen: 0 }, layout = { rowOverrides: [], colOverrides: [], hidden: [] }
   const client = {
@@ -127,13 +131,14 @@ function scriptedRemote() {
       if (command.kind === 'close') return { kind: 'complete', diagnostics: [] }
       const op = command.query!.op
       if (op === 'layout') return { kind: 'complete', diagnostics: [], result: { kind: 'read', result: { op, layout } } }
+      if (mode === 'real' && op === 'structural') return { kind: 'complete', diagnostics: [], result: { kind: 'read', result: { op, result: { ...structural!(), stamp } } } }
       const result: Record<string, unknown> = { stamp, merges: [], tables: [], spills: [], drawings: [], completeness: mode === 'complete' ? 'complete' : mode === 'loading' ? 'loading' : 'incomplete', missing: mode === 'complete' ? [] : [command.query!.rect] }
       // A worker that still flags the ended import's quota failure retryable.
       if (mode === 'quota') result.error = { code: 'quota', retryable: true, message: 'quota ended import' }
       return { kind: 'complete', diagnostics: [], result: { kind: 'read', result: { op, result } } }
     },
   }
-  const book = new RemoteWorkbook(client as never, { docId: 'd', valuePolicy: 'engine', sheets: [{ sheetId: 's', name: 'S' }], diagnostics: [], layouts: new Map([['s', layout]]) } as never)
+  const book = new RemoteWorkbook(client as never, { docId: 'd', valuePolicy: policy, sheets: [{ sheetId: 's', name: 'S' }], diagnostics: [], layouts: new Map([['s', layout]]) } as never)
   return { book, commands, set: (value: typeof mode) => { mode = value } }
 }
 
@@ -162,6 +167,48 @@ describe('RemoteWorkbook load state', () => {
     await vi.advanceTimersByTimeAsync(500)
     expect(r.book.loadState('s').completeness).toBe('complete')
     expect(notify).toHaveBeenCalledTimes(1)
+    await r.book.close()
+  })
+
+  it('under the cached value policy, a terminal failure stops the saved-values status probe', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-10-12T00:00:00Z'))
+    const r = scriptedRemote('cached')
+    r.set('quota')
+    r.book.loadState('s')
+    await vi.advanceTimersByTimeAsync(0)
+    const reads = () => r.commands.filter(op => op === 'complete').length
+    const before = reads()
+    for (let i = 0; i < 5; i++) { await vi.advanceTimersByTimeAsync(600); r.book.valueStatus(); await vi.advanceTimersByTimeAsync(0) }
+    expect(reads()).toBe(before)
+    expect(r.book.valueStatus()).toMatchObject({ policy: 'cached', formulas: undefined, ended: true })
+    await r.book.close()
+  })
+
+  it('a cancelled import (the real paged structural reply) stays incomplete with its notice, never complete', async () => {
+    // The structural reply a real cancelled paged import produces.
+    const inner = memoryPageBackend()
+    let release!: () => void, entered!: () => void, puts = 0
+    const gate = new Promise<void>(resolve => { release = resolve }), waiting = new Promise<void>(resolve => { entered = resolve })
+    const backend = { kind: 'memory' as const, async put(key: string, bytes: Uint8Array) { if (++puts === 2) { entered(); await gate } await inner.put(key, bytes) }, get: (key: string) => inner.get(key), removeAll: () => inner.removeAll() }
+    const sheetData = Array.from({ length: 1000 }, (_, i) => `<row r="${i + 1}"><c r="A${i + 1}"><v>${i}</v></c></row>`).join('')
+    const session = await openImportSession({ kind: 'blob', blob: new NodeBlob([xlsxBytes({ sheetData })]) as unknown as Blob }, { docId: 'c', profile: 'D', store: new SourcePageStore({ docId: 'c', backend }), pageRows: 100 })
+    await waiting
+    const cancelling = session.cancel(); release(); await cancelling
+    expect(await session.done).toEqual({ kind: 'cancelled' })
+    const sheet = createPagedWorkbookSource(session).store('1')
+    const real = JSON.parse(JSON.stringify(await sheet.queryStructural({ r0: 0, r1: 1048575, c0: 0, c1: 16383 }, { stamp: sheet.stamp, signal: new AbortController().signal })))
+    expect(real).toMatchObject({ completeness: 'incomplete', error: { code: 'cancelled', retryable: false } })
+    await session.release()
+
+    vi.useFakeTimers()
+    const r = scriptedRemote('cached', () => real)
+    r.set('real')
+    r.book.loadState('s')
+    await vi.advanceTimersByTimeAsync(0)
+    expect(r.book.loadState('s')).toEqual({ completeness: 'incomplete', failure: real.error.message, code: 'cancelled' })
+    await vi.advanceTimersByTimeAsync(2000)
+    expect(r.commands.filter(op => op === 'structural')).toHaveLength(1)
     await r.book.close()
   })
 })

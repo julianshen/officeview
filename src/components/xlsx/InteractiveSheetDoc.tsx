@@ -689,7 +689,7 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
     const refresh = () => {
       const status = source.valueStatus?.()
       setValueNotice(status?.message)
-      return status?.policy === 'cached' && status.formulas === undefined
+      return status?.policy === 'cached' && status.formulas === undefined && !status.ended
     }
     if (!refresh()) return
     const timer = setInterval(() => { if (!refresh()) clearInterval(timer) }, 100)

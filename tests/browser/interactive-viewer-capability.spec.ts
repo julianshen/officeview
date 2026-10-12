@@ -85,11 +85,12 @@ test.describe('S10.3 capability fallbacks', () => {
     await expect(line).toContainText('(incomplete)')
     await expect(line).not.toContainText('complete body')
     await expect(line).toContainText('Free some browser storage for this site (or use a smaller file), then reopen the file.')
-    // The ended import is terminal: no further structural polling.
-    const structural = () => page.evaluate(() => window.__viewerE2E!.counts()['read:structural'] ?? 0)
-    const settled = await structural()
+    // The ended import is terminal: no further structural polling, and the
+    // viewer's saved-values status loop stops probing (cached policy).
+    const reads = () => page.evaluate(() => { const c = window.__viewerE2E!.counts(); return [c['read:structural'] ?? 0, c['read:complete'] ?? 0] })
+    const settled = await reads()
     await page.waitForTimeout(3000)
-    expect(await structural()).toBe(settled)
+    expect(await reads()).toEqual(settled)
   })
 
   test('without a viewer worker a large file is labelled compatibility mode', async ({ page }) => {

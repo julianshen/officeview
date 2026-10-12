@@ -115,6 +115,8 @@ export interface ValueStatus {
   /** Formulas the engine would have evaluated at load (`isLoadEvaluated`); undefined while a paged import still runs. */
   formulas: number | undefined
   message: string | undefined
+  /** The paged import ended without completing: `formulas` will never arrive. */
+  ended?: boolean
 }
 export const valueStatus = (policy: ValuePolicy, formulas: number | undefined): ValueStatus =>
   ({ policy, formulas, message: savedValuesStatus(policy, formulas) })

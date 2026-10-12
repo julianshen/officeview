@@ -135,6 +135,8 @@ export class RemoteWorkbook implements WorkbookSource {
   private closed = false
   /** Per sheet: the worker's import failure reported on structural reads (quota, storage, damaged part). */
   private readonly failures = new Map<string, { code: string; message: string }>()
+  /** Sheets whose structure arrived complete (the only path to "complete"). */
+  private readonly completed = new Set<string>()
 
   constructor(private readonly client: ViewerClient, open: RemoteOpen, private readonly onRelease: () => Promise<void> | void = () => {}) {
     this.docId = open.docId
@@ -201,13 +203,14 @@ export class RemoteWorkbook implements WorkbookSource {
     const counted = this.statusMessage?.match(/— (\d+) formulas? not recalculated/)
     // The progressive import learns its formula count as it runs; completions
     // carry the latest status, so an idle viewer asks with one tiny read.
-    if (!counted && !this.closed && !this.statusInFlight && Date.now() - this.statusRefresh > 500) {
+    // An ended import (failure or cancellation) never learns more: no probe.
+    if (!counted && !this.closed && !this.failures.size && !this.statusInFlight && Date.now() - this.statusRefresh > 500) {
       this.statusRefresh = Date.now()
       this.statusInFlight = true
       const store = this.store(this.sheets[0].sheetId)
       void store.ensureComplete({ r0: 0, r1: 0, c0: 0, c1: 0 }, { signal: new AbortController().signal, stamp: store.stamp }).finally(() => { this.statusInFlight = false })
     }
-    return { policy: 'cached', formulas: counted ? Number(counted[1]) : undefined, message: this.statusMessage ?? savedValuesStatus('cached') }
+    return { policy: 'cached', formulas: counted ? Number(counted[1]) : undefined, message: this.statusMessage ?? savedValuesStatus('cached'), ...(this.failures.size ? { ended: true } : {}) }
   }
   /** Merged ranges of a sheet from one whole-sheet structural read (bounded by
    * the sheet's merge records). `gen` grows when they arrive; until then, and
@@ -235,6 +238,7 @@ export class RemoteWorkbook implements WorkbookSource {
       if (result.merges.length) entry.merges = result.merges.map(merge => ({ minRow: merge.range.r0, maxRow: merge.range.r1, minCol: merge.range.c0, maxCol: merge.range.c1 }))
       if (relaid || result.merges.length) entry.gen++
       entry.state = 'done'
+      this.completed.add(sheetId)
       this.failures.delete(sheetId)
       // The load state changed (loading -> complete) even when geometry did not.
       this.notify()
@@ -244,7 +248,10 @@ export class RemoteWorkbook implements WorkbookSource {
     // A failure the worker reports (even a retryable quota/storage one) is shown
     // at once: the sheet is incomplete, never an empty complete body (LIFE-03).
     const error = result.error, code = error?.code
-    if (error && code !== 'incomplete' && code !== 'cancelled' && code !== 'stale-source' && this.failures.get(sheetId)?.message !== error.message) {
+    // A request-level cancel is retryable; a cancelled import is not and is
+    // recorded like any other terminal failure (never "complete").
+    const recorded = error && code !== 'incomplete' && code !== 'stale-source' && !(code === 'cancelled' && error.retryable)
+    if (recorded && this.failures.get(sheetId)?.message !== error.message) {
       this.failures.set(sheetId, { code: error.code, message: error.message })
       this.notify()
     }
@@ -258,7 +265,10 @@ export class RemoteWorkbook implements WorkbookSource {
   loadState(sheetId: string): { completeness: 'complete' | 'loading' | 'incomplete'; failure?: string; code?: string } {
     const failure = this.failures.get(sheetId)
     if (failure !== undefined) return { completeness: 'incomplete', failure: failure.message, code: failure.code }
-    return { completeness: this.merges(sheetId) && this.structures.get(sheetId)?.state === 'done' ? 'complete' : 'loading' }
+    this.merges(sheetId)
+    if (this.completed.has(sheetId)) return { completeness: 'complete' }
+    // Done without completing (a terminal error left unrecorded): never complete.
+    return { completeness: this.structures.get(sheetId)?.state === 'done' ? 'incomplete' : 'loading' }
   }
   /** Replaces a sheet's layout; true when it changed. Callers bump the
    * structure generation so the viewer rebuilds geometry and drops tiles. */
