@@ -936,6 +936,26 @@ not go in that lane. `PageBuilder.add` *spills* it:
   identically). Cells, rows, scans, column lanes (value index and filters), find, copy and worker reads therefore see the same
   raw UTF-16 value, lone surrogates included.
 
+**Crash orphans.** A process that dies between a blob write and its page write (or at any other point) leaves records that no
+live index references. They are removed in two places:
+
+- **At session start, across owners** (`sweepLeftoverPages`, once per process from `openImportSession`). This follows the
+  spool sweep's owner-lifetime rule. A page-storage owner is named `${docId}-${creation time in base 36}` (`pageOwner`).
+  OPFS files and IndexedDB databases whose owner is older than 24 h are removed, except an owner this process holds.
+  Fresh owners (possibly another tab's), foreign names and unparseable owners are left alone.
+- **At store open, within the owner** (`SourcePageStore.sweepUnreferenced`, run before the import's first write). The store
+  deletes every key its backend lists for the owner that the committed index does not reference. That covers pages not in
+  the index, blob ids at or beyond the store's counter or rolled back, and shared-string chunks never committed. Writes in
+  flight are never touched.
+
+Both sweeps are bounded: at most 4,096 entries examined per backend, and a store listing at most 4,096 keys. Both are
+cancellable between entries and best effort: a failed or blocked removal waits for the next sweep, and an IndexedDB delete
+that is blocked is never waited on. They charge nothing they keep. The key listing is a transient construction share released
+at the end, and the removed records were never charged to the new ledger, so ledger and storage agree afterwards.
+
+What this does not cover: a crashed session's owner younger than 24 h survives until a later session sweeps it. The 24 h rule
+is how the sweep avoids deleting another live tab's storage.
+
 **Units.** The spill threshold is in stored bytes. Admission (`admission.ts` `checkCaps`) compares the same field to the
 longest string's *character* count to route a file to the object or the paged path. That routing is unchanged: a string between
 32 Ki and 64 Ki characters can be object-admitted, and on the paged path it would spill.
