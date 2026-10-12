@@ -26,6 +26,7 @@ import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { createFixture } from '../../tests/helpers/xlsx-viewer-fixtures'
 import { ensureServedFixtures, startFixtureServer, type FixtureServer, type ServedFixture } from './fixture-server'
+import { installTeardown } from './cleanup'
 import { gitIdentity } from './identity'
 import { ensureHarnessServer, type ServerHandle } from './vite-server'
 import { Keys, SAFARI_ENABLE_HELP, SCREEN_LOCKED_HELP, SafariDriver, looksLikeAutomationDisabled, macScreenLocked, type ElementRef } from './webdriver'
@@ -190,6 +191,12 @@ async function main(): Promise<number> {
   const driver = new SafariDriver(DRIVER_PORT)
   let harness: ServerHandle | null = null
   let fixtures: FixtureServer | null = null
+  // One teardown for the finally block and for Ctrl+C / SIGTERM / SIGHUP.
+  const teardown = installTeardown(async () => {
+    await driver.quit()
+    await fixtures?.close()
+    harness?.stop()
+  })
   try {
     try {
       await driver.start()
@@ -406,9 +413,8 @@ async function main(): Promise<number> {
     writeReceipt({ setupError: message, steps: [] })
     return 2
   } finally {
-    await driver.quit()
-    await fixtures?.close()
-    harness?.stop()
+    await teardown.run()
+    teardown.dispose()
   }
 }
 

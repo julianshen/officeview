@@ -44,18 +44,24 @@ export class SafariDriver {
   sessionId: string | null = null
   capabilities: Record<string, unknown> = {}
 
-  constructor(readonly port: number) {}
+  constructor(readonly port: number, private readonly binary = '/usr/bin/safaridriver') {}
 
   get base(): string { return `http://127.0.0.1:${this.port}` }
 
   /** Starts `safaridriver -p <port>` and waits until /status answers. */
   async start(timeoutMs = 15_000): Promise<void> {
-    this.child = spawn('/usr/bin/safaridriver', ['-p', String(this.port)], { stdio: ['ignore', 'pipe', 'pipe'] })
+    if (process.platform !== 'darwin') throw new Error(`safaridriver needs macOS (this is ${process.platform})`)
+    this.child = spawn(this.binary, ['-p', String(this.port)], { stdio: ['ignore', 'pipe', 'pipe'] })
+    // A missing binary or a spawn failure arrives as an 'error' event; without
+    // a listener it would crash the process instead of reaching the caller.
+    let spawnError: Error | null = null
+    this.child.once('error', error => { spawnError = error })
     const capture = (chunk: Buffer) => { this.output = (this.output + chunk.toString()).slice(-4096) }
     this.child.stdout?.on('data', capture)
     this.child.stderr?.on('data', capture)
     const started = Date.now()
     for (;;) {
+      if (spawnError) { this.child = null; throw new Error(`safaridriver failed to start (${this.binary}): ${(spawnError as Error).message}`) }
       if (this.child.exitCode !== null) throw new Error(`safaridriver exited (${this.child.exitCode}): ${this.output.trim()}`)
       try {
         const response = await fetch(`${this.base}/status`)

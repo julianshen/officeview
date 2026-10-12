@@ -48,14 +48,24 @@ export async function ensureServedFixtures(names: readonly ServedFixture[]): Pro
 }
 
 export interface FixtureServer {
+  /** The bound port (the requested one, or the OS choice for port 0). */
+  port: number
   url(name: ServedFixture): string
   close(): Promise<void>
 }
 
 export async function startFixtureServer(root: string, port: number): Promise<FixtureServer> {
   const server: Server = createServer((request, response) => {
-    const name = decodeURIComponent(new URL(request.url ?? '/', 'http://x').pathname.slice(1))
     response.setHeader('access-control-allow-origin', '*')
+    let name: string
+    try {
+      name = decodeURIComponent(new URL(request.url ?? '/', 'http://x').pathname.slice(1))
+    } catch {
+      // A malformed path (e.g. a broken percent escape) is the client's error, never a crash.
+      response.statusCode = 400
+      response.end('malformed request path')
+      return
+    }
     if (!(name in SERVED_FIXTURES) || request.method !== 'GET') {
       response.statusCode = 404
       response.end('not a served fixture')
@@ -75,8 +85,11 @@ export async function startFixtureServer(root: string, port: number): Promise<Fi
     server.once('error', reject)
     server.listen(port, '127.0.0.1', () => resolve())
   })
+  const address = server.address()
+  const bound = typeof address === 'object' && address ? address.port : port
   return {
-    url: name => `http://127.0.0.1:${port}/${encodeURIComponent(name)}`,
+    port: bound,
+    url: name => `http://127.0.0.1:${bound}/${encodeURIComponent(name)}`,
     close: () => new Promise(resolve => server.close(() => resolve())),
   }
 }

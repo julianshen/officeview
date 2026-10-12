@@ -28,6 +28,7 @@ import { mkdirSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { ensureServedFixtures, startFixtureServer, type FixtureServer } from './fixture-server'
+import { installTeardown } from './cleanup'
 import { gitIdentity } from './identity'
 import { ensureHarnessServer, type ServerHandle } from './vite-server'
 import { Keys, SAFARI_ENABLE_HELP, SCREEN_LOCKED_HELP, SafariDriver, looksLikeAutomationDisabled, macScreenLocked, type ElementRef } from './webdriver'
@@ -171,6 +172,16 @@ async function main(): Promise<number> {
   let fixtures: FixtureServer | null = null
   let voiceOverStarted = false
   const steps: StepResult[] = []
+  // One teardown for the finally block and for Ctrl+C / SIGTERM / SIGHUP:
+  // VoiceOver off (and verified) first, then Safari and the servers.
+  const teardown = installTeardown(async () => {
+    if (voiceOverStarted || voiceOverRunning()) receipt.voiceOverStop = await stopVoiceOver()
+    await driver.quit()
+    await fixtures?.close()
+    harness?.stop()
+    writeReceipt({ ran: voiceOverStarted, steps })
+    if (voiceOverRunning()) console.error('WARNING: VoiceOver is still running. Press Cmd+F5 to turn it off.')
+  })
   try {
     try {
       await driver.start()
@@ -241,12 +252,8 @@ async function main(): Promise<number> {
     console.error(receipt.error)
     return 2
   } finally {
-    if (voiceOverStarted || voiceOverRunning()) receipt.voiceOverStop = await stopVoiceOver()
-    await driver.quit()
-    await fixtures?.close()
-    harness?.stop()
-    writeReceipt({ ran: voiceOverStarted, steps })
-    if (voiceOverRunning()) console.error('WARNING: VoiceOver is still running. Press Cmd+F5 to turn it off.')
+    await teardown.run()
+    teardown.dispose()
   }
 }
 
