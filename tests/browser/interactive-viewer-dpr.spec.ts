@@ -10,12 +10,13 @@
  * a physical move was not possible.
  *
  * Two questions per fixture (F1 resident and F1 worker-backed paged):
- *  1. Does a DPR-only change re-rasterize the viewer by itself? The viewer's
- *     only size input is a content-box ResizeObserver on the pane (window
- *     `resize` only when ResizeObserver is absent) and it registers no
- *     `(resolution)` media-query listener, so a DPR change with an unchanged
- *     CSS size has nothing to wake it. This test is expected to FAIL until
- *     that gap is fixed; it is deliberately not marked test.fail().
+ *  1. Does a DPR-only change re-rasterize the viewer by itself? Before the
+ *     D-DPR fix the viewer's only size input was a content-box ResizeObserver
+ *     on the pane, so a DPR change with an unchanged CSS size woke nothing and
+ *     this test failed. useDevicePixelRatio (src/components/xlsx/
+ *     devicePixelRatio.ts) now follows the ratio. Under CDP emulation Chrome
+ *     dispatches no resize/media-query event, so here it is the hook's
+ *     visible-page poll that fires (the logged page signals stay empty).
  *  2. Once the viewer does render at the new DPR (driven here by a 100 px pane
  *     width change and back, the input it does listen to), are the raster, tile keys,
  *     alignment, view state, budget and console all correct?
@@ -32,6 +33,8 @@ const NUDGE_PX = 100
 const LABEL = 'emulated runtime DPR change (CDP) in desktop Chrome — not a physical display move'
 
 test.use({ viewport: VIEW, deviceScaleFactor: 1, channel: 'chrome' })
+// File-level so the webkit project never launches with channel 'chrome' (an unsupported pair).
+test.skip(({ browserName }) => browserName !== 'chromium', 'CDP device-metrics emulation and channel chrome are Chromium-only')
 test.beforeAll(async () => { await ensureFixtures() })
 
 interface DprProbe {
