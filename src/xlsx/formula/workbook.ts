@@ -155,6 +155,38 @@ interface DocSpillState {
 }
 const docSpillStates = new WeakMap<XlsxDocument, DocSpillState>()
 
+/** Engine-published spill footprint of one owner: the bounding box of its anchor and live generated cells. */
+export interface EngineSpillFootprint { anchor: { row: number; col: number }; r0: number; r1: number; c0: number; c1: number }
+/** Structural spill bridge (viewer S3.3): per-sheet footprints of the owners
+ * that published generated cells in the last evaluation, as rectangles only.
+ * Undefined when this document was never evaluated (no ownership is known). */
+export function engineSpillFootprints(doc: XlsxDocument): ReadonlyMap<XlsxSheet, readonly EngineSpillFootprint[]> | undefined {
+  const state = docSpillStates.get(doc)
+  if (!state) return undefined
+  const owners = new Map<string, { sheet: XlsxSheet; footprint: EngineSpillFootprint }>()
+  for (const g of state.generated) {
+    let entry = owners.get(g.ownerKey)
+    if (!entry) {
+      // Owner keys are spillCellKey(anchor): `${sheetId}!${col}:${row}`; spills stay on their anchor's sheet.
+      const m = /!(\d+):(\d+)$/.exec(g.ownerKey)
+      if (!m) continue
+      const col = Number(m[1]), row = Number(m[2])
+      entry = { sheet: g.sheet, footprint: { anchor: { row, col }, r0: row, r1: row, c0: col, c1: col } }
+      owners.set(g.ownerKey, entry)
+    }
+    const f = entry.footprint
+    f.r0 = Math.min(f.r0, g.cell.row); f.r1 = Math.max(f.r1, g.cell.row)
+    f.c0 = Math.min(f.c0, g.cell.col); f.c1 = Math.max(f.c1, g.cell.col)
+  }
+  const out = new Map<XlsxSheet, EngineSpillFootprint[]>()
+  for (const { sheet, footprint } of owners.values()) {
+    const list = out.get(sheet)
+    if (list) list.push(footprint)
+    else out.set(sheet, [footprint])
+  }
+  return out
+}
+
 /** Snapshot/restore the full cell content (everything except its coordinates). */
 function snapshotCell(cell: XlsxCell): CellContent {
   const { ref: _ref, col: _col, row: _row, ...rest } = cell

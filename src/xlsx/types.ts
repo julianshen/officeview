@@ -112,6 +112,16 @@ export interface XlsxPageMargins {
   footer: number
 }
 
+/** A worksheet drawing marker: zero-based cell plus EMU offsets inside it. */
+export interface XlsxAnchorMarker { col: number; row: number; colOffEmu: number; rowOffEmu: number }
+/** Raw anchor placement as authored; occupied bounds are resolved later against sheet geometry. */
+export type XlsxDrawingAnchorRecord =
+  | { id: string; kind: 'oneCell'; from: XlsxAnchorMarker; cx: number; cy: number }
+  | { id: string; kind: 'twoCell'; from: XlsxAnchorMarker; to: XlsxAnchorMarker }
+  | { id: string; kind: 'absolute'; x: number; y: number; cx: number; cy: number }
+/** `unresolved` counts anchors or drawing parts whose placement could not be read (fail-closed). */
+export interface XlsxDrawingAnchors { records: XlsxDrawingAnchorRecord[]; unresolved: number }
+
 export interface XlsxSheet {
   drawingCoverage?: DrawingCoverageEntry[]
   name: string
@@ -131,6 +141,10 @@ export interface XlsxSheet {
   mergeRanges: XlsxMergeRange[]
   drawings?: XlsxDrawing[]
   drawingMarkers?: { maxCol: number; maxRow: number }
+  /** Bounded DrawingML anchor metadata for the viewer's structural guards
+   * (S3.3): one record per anchor, independent of content/image parsing.
+   * Undefined means never extracted (hand-built sheets), never "no anchors". */
+  drawingAnchors?: XlsxDrawingAnchors
   drawingDiagnostics?: ContentDiagnostic[]
   /** Render-time unsupported-format diagnostics (same shape as doc.diagnostics),
    * deduped across repeated paints. No product warning UI. */

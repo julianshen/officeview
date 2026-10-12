@@ -9,6 +9,7 @@
 import { PackageError } from '../../core/package-error'
 import { localName, XstringDecoder, type XmlEvents } from '../../core/xml-stream'
 import { isLoadEvaluated, MAX_LOAD_FORMULA_CHARS } from '../view/values'
+import { ANCHOR_ELEMENTS, DRAWING_ROOT, type AnchorParts } from '../anchorRecords'
 
 export interface AdmissionCounters {
   expandedBytes: number
@@ -306,8 +307,6 @@ export interface SheetMetadata {
   tablePartIds: (string | undefined)[]
   drawingRefs: number
   drawingIds: (string | undefined)[]
-  /** Anchors found in the referenced drawing parts; unreadable parts count as one (fail-closed). */
-  drawingAnchors: number
   structuralIncomplete: Array<'merges' | 'tables' | 'drawings' | 'columns' | 'rows'>
   /** Cells whose coordinates fall outside the sheet (invisible in both adapters). */
   skippedCells: number
@@ -624,19 +623,45 @@ export function sheetRecordEvents(meta: SheetMetadata, options: SheetRecordOptio
 }
 
 export function newSheetMetadata(): SheetMetadata {
-  return { rowHeights: [], hiddenRows: [], cols: [], merges: [], tablePartIds: [], drawingRefs: 0, drawingIds: [], drawingAnchors: 0, structuralIncomplete: [], skippedCells: 0 }
+  return { rowHeights: [], hiddenRows: [], cols: [], merges: [], tablePartIds: [], drawingRefs: 0, drawingIds: [], structuralIncomplete: [], skippedCells: 0 }
 }
 
-const ANCHORS = new Set(['twoCellAnchor', 'oneCellAnchor', 'absoluteAnchor'])
-/** Counts top-level anchors of a drawing part without retaining it. */
-export function anchorCountEvents(onAnchor: () => void): XmlEvents {
+/** Streams a drawing part's top-level anchors into placement-only parts (S3.3):
+ * first xdr:from/xdr:to/xdr:ext/xdr:pos child of each anchor, nothing else is
+ * retained. A top-level mc:AlternateContent, or a document element other than
+ * wsDr, reports `onUnreadable` (fail-closed), matching the object parser. */
+export function anchorRecordEvents(onAnchor: (name: string, parts: AnchorParts) => void, onUnreadable: () => void): XmlEvents {
   let depth = 0
+  let anchor: { name: string; parts: AnchorParts } | undefined
+  /** A non-wsDr document element: one unreadable report, nothing beneath it is collected. */
+  let foreign = false
+  let section: Record<string, string> | undefined
+  let field: string | undefined
+  let text = ''
   return {
-    open(qname, _n, _v, _c, selfClosing) {
-      if (depth === 1 && ANCHORS.has(localName(qname))) onAnchor()
+    open(qname, names, values, count, selfClosing) {
+      const local = localName(qname)
+      if (depth === 0) { foreign = local !== DRAWING_ROOT; if (foreign) onUnreadable() }
+      if (foreign) { if (!selfClosing) depth++; return }
+      if (depth === 1) {
+        if (ANCHOR_ELEMENTS.has(local)) anchor = { name: local, parts: {} }
+        else if (local === 'AlternateContent') onUnreadable()
+        if (selfClosing && anchor) { onAnchor(anchor.name, anchor.parts); anchor = undefined }
+      } else if (anchor && depth === 2) {
+        if ((local === 'from' || local === 'to') && !anchor.parts[local]) section = anchor.parts[local] = {}
+        else if ((local === 'ext' || local === 'pos') && !anchor.parts[local]) anchor.parts[local] = attrMap(names, values, count)
+      } else if (section && depth === 3 && !selfClosing && !(local in section)) {
+        field = local
+        text = ''
+      }
       if (!selfClosing) depth++
     },
-    close() { depth-- },
-    text() {},
+    close() {
+      depth--
+      if (depth === 3 && field !== undefined && section) { section[field] = text; field = undefined }
+      else if (depth === 2) section = undefined
+      else if (depth === 1 && anchor) { onAnchor(anchor.name, anchor.parts); anchor = undefined }
+    },
+    text(chunk) { if (field !== undefined) text += chunk },
   }
 }

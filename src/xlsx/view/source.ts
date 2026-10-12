@@ -4,20 +4,24 @@
  * `ObjectXlsxSheetAdapter` wraps the current parser output BY REFERENCE (no
  * clone, no mutation) for admitted small files: it indexes only populated
  * rows, keeps no per-column caches, and bounds every page by rows AND cells.
- * Coverage it cannot resolve (drawing anchors, dynamic-array evaluated extents,
+ * Structure comes from parser metadata (S3.3): merges, tables, saved array
+ * extents, engine spill footprints and drawing anchors. Coverage it cannot
+ * resolve (unreadable drawing anchors, a dynamic array with no known extent,
  * an unavailable table inventory) is reported incomplete with a diagnostic.
  * The paged adapter for large files lives in ./pagedSource and answers the same
  * questions from stored pages; adapter parity is asserted within one value policy.
  */
 import type {
   AuthoritativeCell, AxisSizeInterval, CellRead, ColumnEntry, ColumnQuery, OverviewGroup, OverviewQuery, Page, PopulatedQuery,
-  RangeCompletion, ReadOptions, SingleCellPayload, SourceFailure, SourceRowInterval, SourceStamp, SourceStore,
-  SparseRowPage, StructuralResult, ValuePolicy, WorkerDiagnostic,
+  DrawingAnchor, RangeCompletion, ReadOptions, SingleCellPayload, SourceFailure, SourceRowInterval, SourceStamp, SourceStore,
+  SparseRowPage, SpillExtent, StructuralResult, ValuePolicy, WorkerDiagnostic,
 } from './contracts'
 import type { ColumnLanes } from './contracts'
 import { countLoadEvaluatedFormulas, documentValuePolicy, isValueUnavailable, laneValue, SAVED_VALUES_DIAGNOSTIC, valueAuthority, valueStatus } from './values'
 import type { XlsxCell, XlsxDocument, XlsxRow, XlsxSheet } from '../types'
 import type { TableMetadata } from '../formula/types'
+import { engineSpillFootprints, type EngineSpillFootprint } from '../formula/workbook'
+import { resolveDrawingAnchors } from './drawingBounds'
 import { MAX_COLS, MAX_ROWS, cellId, isValidCoordinate, isValidSourceRect, parseA1, type SourceRect } from './coordinates'
 import { createAxisMetrics } from './axes'
 import { createIntervalSet } from './visibility'
@@ -114,15 +118,19 @@ export class ObjectXlsxSheetAdapter implements SourceStore {
   private readonly rows: readonly XlsxRow[]
   private readonly rowIndexes: readonly number[]
   private readonly dynamicAnchors: readonly { row: number; col: number }[]
+  private drawingCache?: DrawingAnchor[]
   private released = false
   /** `tables` undefined means the workbook table inventory is unavailable (the
-   * parser's fail-closed signal), never "no tables". */
+   * parser's fail-closed signal), never "no tables". `engineSpills` are the
+   * engine's published footprints for this sheet; undefined under the `engine`
+   * policy means no evaluation state is known, so dynamic extents stay unknown. */
   constructor(
     readonly stamp: SourceStamp,
     private readonly sheet: XlsxSheet,
     private readonly tables: readonly TableMetadata[] | undefined,
     private readonly maxCells: number,
     readonly valuePolicy: ValuePolicy = 'engine',
+    private readonly engineSpills?: readonly EngineSpillFootprint[],
   ) {
     const rows = sheet.rows.filter(row => isValidCoordinate(row.index, 0) && row.cells.length)
       .sort((a, b) => a.index - b.index)
@@ -153,14 +161,31 @@ export class ObjectXlsxSheetAdapter implements SourceStore {
   }
   /** Per-column caches retained by this store; it builds pages from the row index. */
   get cachedColumnCount(): number { return 0 }
+  /** Drawing anchors whose placement is unknown: unreadable anchors/parts, or
+   * parsed drawings on a sheet whose anchors were never extracted. */
+  private get unresolvedDrawings(): number {
+    const anchors = this.sheet.drawingAnchors
+    return anchors === undefined ? this.sheet.drawings?.length ?? 0 : anchors.unresolved
+  }
+  /** Dynamic anchors whose spill extent is unknown (no saved ref, no engine footprint). */
+  private unknownSpills(): { row: number; col: number }[] {
+    const footprints = this.valuePolicy === 'cached' ? [] : this.engineSpills
+    return this.dynamicAnchors.filter(at => {
+      const cell = this.cellIn(this.rows[lowerBound(this.rowIndexes, at.row)], at.col)
+      const saved = cell?.arrayRef === undefined ? null : parseRange(cell.arrayRef)
+      if (footprints === undefined) return true
+      return saved === null && !footprints.some(f => f.anchor.row === at.row && f.anchor.col === at.col)
+    })
+  }
   /** Coverage gaps this adapter can never close by waiting. */
   coverageDiagnostics(): WorkerDiagnostic[] {
     const out: WorkerDiagnostic[] = []
-    if ((this.sheet.drawings?.length ?? 0) > 0) {
-      out.push({ code: 'coverage-unresolvable', message: 'Drawing anchors are not available to the source adapter until S3.1 parser wiring' })
+    if (this.unresolvedDrawings > 0) {
+      out.push({ code: 'coverage-unresolvable', message: 'Some drawing anchors could not be read; their placement is unknown' })
     }
-    if (this.dynamicAnchors.length) {
-      out.push({ code: 'coverage-unresolvable', message: 'Dynamic-array spill extents are not available to the source adapter until the S3.1 spill bridge', source: this.dynamicAnchors[0] })
+    const unknown = this.unknownSpills()
+    if (unknown.length) {
+      out.push({ code: 'coverage-unresolvable', message: 'A dynamic-array spill has no known extent', source: unknown[0] })
     }
     if (this.invalidMerges) out.push(invalidMergeDiagnostic(this.invalidMerges))
     if (this.tables === undefined) {
@@ -303,31 +328,47 @@ export class ObjectXlsxSheetAdapter implements SourceStore {
     const tables = (this.tables ?? [])
       .map(t => ({ id: t.id, range: { r0: t.extent.firstRow, r1: t.extent.firstRow + t.extent.rows - 1, c0: t.extent.firstCol, c1: t.extent.firstCol + t.extent.cols - 1 }, headerRows: t.headerRowCount, totalsRows: t.totalsRowCount }))
       .filter(t => isValidSourceRect(t.range) && intersects(t.range, rect))
-    const spills = []
+    const spills: SpillExtent[] = []
     const missing: SourceRect[] = []
     const addMissing = (domain: SourceRect) => {
       const r0 = Math.max(domain.r0, rect.r0), r1 = Math.min(domain.r1, rect.r1)
       const c0 = Math.max(domain.c0, rect.c0), c1 = Math.min(domain.c1, rect.c1)
       if (r0 <= r1 && c0 <= c1) missing.push({ r0, r1, c0, c1 })
     }
-    // A dynamic array's evaluated extent (its generated children) lives in the
-    // formula engine and is not bridged yet (S3.1 spill wiring); the saved
-    // footprint alone would let child rows escape the guards. Its potential
-    // domain, anchor to sheet edge, stays unknown until that bridge lands.
-    for (const anchor of this.dynamicAnchors) addMissing({ r0: anchor.row, r1: MAX_ROWS - 1, c0: anchor.col, c1: MAX_COLS - 1 })
+    // A dynamic array with no known extent may reach anywhere from its anchor to
+    // the sheet edge: that domain stays unknown, never assumed empty.
+    for (const anchor of this.unknownSpills()) addMissing({ r0: anchor.row, r1: MAX_ROWS - 1, c0: anchor.col, c1: MAX_COLS - 1 })
+    // Under `cached` the saved footprint is the published extent; under `engine`
+    // the engine's footprint is, and the saved one stays in the union because a
+    // retained (not recalculated) owner still shows its saved followers.
+    const footprints = new Map<number, SourceRect>()
+    if (this.valuePolicy === 'engine') for (const f of this.engineSpills ?? []) footprints.set(cellId(f.anchor.row, f.anchor.col), { r0: f.r0, r1: f.r1, c0: f.c0, c1: f.c1 })
+    const add = (spill: SpillExtent) => {
+      const anchorRect = { r0: spill.anchor.row, r1: spill.anchor.row, c0: spill.anchor.col, c1: spill.anchor.col }
+      if ([spill.saved, spill.evaluated, anchorRect].some(extent => extent !== undefined && intersects(extent, rect))) spills.push(spill)
+    }
     for (const row of this.rows) {
       for (const cell of row.cells) {
-        if (cell.arrayRef === undefined) continue
-        const saved = parseRange(cell.arrayRef)
-        const anchorRect = { r0: cell.row, r1: cell.row, c0: cell.col, c1: cell.col }
-        if (!intersects(saved ?? anchorRect, rect) && !intersects(anchorRect, rect)) continue
-        spills.push({ anchor: { row: cell.row, col: cell.col }, kind: cell.dynamicArray ? 'dynamic' as const : 'fixed' as const, ...(saved ? { saved } : {}) })
+        if (cell.arrayRef === undefined && !(cell.dynamicArray && footprints.has(cellId(cell.row, cell.col)))) continue
+        const saved = cell.arrayRef === undefined ? null : parseRange(cell.arrayRef)
+        const anchor = { row: cell.row, col: cell.col }
+        const evaluated = cell.dynamicArray ? (this.valuePolicy === 'cached' ? saved ?? undefined : footprints.get(cellId(cell.row, cell.col))) : undefined
+        footprints.delete(cellId(cell.row, cell.col))
+        add({ anchor, kind: cell.dynamicArray ? 'dynamic' : 'fixed', ...(saved ? { saved } : {}), ...(evaluated ? { evaluated } : {}) })
       }
     }
-    // Drawing anchors are not yet translated from parser output (S3.1 parser
-    // wiring), and an unavailable table inventory cannot prove "no table".
-    if ((this.sheet.drawings?.length ?? 0) > 0 || this.tables === undefined) addMissing(rect)
-    return { ...base, merges, tables, spills, completeness: missing.length ? 'incomplete' : 'complete', missing }
+    // Owners the engine spilled without file array metadata (explicit dynamic mode).
+    for (const [id, evaluated] of footprints) add({ anchor: { row: Math.floor(id / MAX_COLS), col: id % MAX_COLS }, kind: 'dynamic', evaluated })
+    // Unreadable drawing anchors and an unavailable table inventory cannot prove "none here".
+    if (this.unresolvedDrawings > 0 || this.tables === undefined) addMissing(rect)
+    const drawings = this.drawings().filter(d => d.kind === 'absolute' || intersects(d.bounds, rect))
+    return { ...base, merges, tables, spills, drawings, completeness: missing.length ? 'incomplete' : 'complete', missing }
+  }
+  /** Resolved once: the parsed sheet behind this adapter never changes. */
+  private drawings(): DrawingAnchor[] {
+    this.drawingCache ??= resolveDrawingAnchors(this.sheet.drawingAnchors?.records ?? [],
+      buildGeometry([...this.sheet.rows].sort((a, b) => a.index - b.index), this.sheet.cols, [], { hiddenCols: true }))
+    return this.drawingCache
   }
   /** One lanes run per interval slice; a page covers at most `limit` rows. */
   private lanesPage(request: ColumnQuery, intervals: readonly SourceRowInterval[], at: number, row: number, prefix: string): Page<ColumnEntry> {
@@ -451,6 +492,8 @@ export function createObjectWorkbookSource(doc: XlsxDocument, docId: string, opt
     ids.add(sheetId)
   }
   const stores = new Map<string, ObjectXlsxSheetAdapter>()
+  let footprints: ReturnType<typeof engineSpillFootprints> | null = null
+  const spillFootprints = () => footprints === null ? (footprints = engineSpillFootprints(doc)) : footprints
   const geometries = new Map<string, SheetGeometry>()
   const find = (sheetId: string) => {
     const found = sheets.find(entry => entry.sheetId === sheetId)
@@ -462,7 +505,7 @@ export function createObjectWorkbookSource(doc: XlsxDocument, docId: string, opt
     if (!store) {
       const { sheet } = find(sheetId)
       const stamp = Object.freeze({ docId, sheetId, valueGen: INITIAL_GENERATION })
-      store = new ObjectXlsxSheetAdapter(stamp, sheet, doc.tables?.filter(table => table.sheetId === sheetId), maxCells, policy)
+      store = new ObjectXlsxSheetAdapter(stamp, sheet, doc.tables?.filter(table => table.sheetId === sheetId), maxCells, policy, spillFootprints()?.get(sheet) ?? (spillFootprints() ? [] : undefined))
       stores.set(sheetId, store)
     }
     return store

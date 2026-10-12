@@ -10,7 +10,8 @@ import { contentDiagnostic, drawingPartContext, DOCUMENT_DRAWING_NODE_LIMIT, DRA
 import { parseGroupShapeProperties, resolveDrawingStyle, type DrawingStyle, type ThemeContext } from '../drawing/style'
 import { parseTextBody, textFontDefaults } from '../drawing/text-parse'
 import { parseVmlContainer, type VmlNode } from '../drawing/vml'
-import type { XlsxDrawing, XlsxImage, XlsxSheet } from './types'
+import type { XlsxDrawing, XlsxDrawingAnchors, XlsxImage, XlsxSheet } from './types'
+import { ANCHOR_ELEMENTS, DRAWING_ROOT, anchorId, anchorRecord, rootLocalName } from './anchorRecords'
 
 function vmlNodeToXlsx(node: VmlNode, owner: string): XlsxDrawing | undefined {
   if (node.kind === 'shape') {
@@ -405,20 +406,45 @@ async function parseObjects(pkg: OfficePackage, owner: string, container: XmlNod
   return out
 }
 
+/** Placement-only anchor records for the viewer's structural guards (S3.3), read
+ * before and independently of content parsing; a top-level anchor wrapped in
+ * mc:AlternateContent is counted unresolved, never assumed absent. */
+function collectAnchorRecords(drawingRoot: XmlNode, owner: string, anchors: XlsxDrawingAnchors): void {
+  let index = 0
+  for (const [name, anchor] of orderedChildren(drawingRoot)) {
+    if (name === 'AlternateContent') { anchors.unresolved++; continue }
+    if (!ANCHOR_ELEMENTS.has(name)) continue
+    const fields = (node: XmlNode | undefined) => node && Object.fromEntries(['col', 'row', 'colOff', 'rowOff'].map(key => [key, textOf(child(node, key))]))
+    const record = anchorRecord(name, anchorId(owner, index++), {
+      from: fields(child(anchor, 'from')), to: fields(child(anchor, 'to')), ext: child(anchor, 'ext') && attrs(child(anchor, 'ext')), pos: child(anchor, 'pos') && attrs(child(anchor, 'pos')),
+    })
+    if (record) anchors.records.push(record)
+    else anchors.unresolved++
+  }
+}
+
 /** Resolve each worksheet-owned drawing relationship and retain anchor order. */
 export async function parseWorksheetDrawings(pkg: OfficePackage, sheet: XlsxSheet, worksheetPath: string, root: XmlNode, theme: ThemeContext): Promise<void> {
   const context = drawingPartContext(pkg), start = context.diagnostics.length
   const imageSelections = new Map<string, ImageSelection>()
   sheet.drawingCoverage = []
+  const anchors: XlsxDrawingAnchors = sheet.drawingAnchors = { records: [], unresolved: 0 }
+  const anchoredParts = new Set<string>()
   for (const drawingRef of getChildren(root, 'drawing')) {
     const id = attrs(drawingRef).id
-    if (!id) continue
+    if (!id) { anchors.unresolved++; continue }
     const owner = await referencedPart(pkg, worksheetPath, id)
-    if (!owner) continue
+    if (!owner) { anchors.unresolved++; continue }
     let drawingRoot: XmlNode | undefined
     try { drawingRoot = await pkg.xmlOrdered(owner) }
-    catch { contentDiagnostic(context, 'malformed-part', owner, undefined, { identity: id, reason: 'invalid-drawing-xml' }); continue }
-    if (!drawingRoot) continue
+    catch { anchors.unresolved++; contentDiagnostic(context, 'malformed-part', owner, undefined, { identity: id, reason: 'invalid-drawing-xml' }); continue }
+    if (!drawingRoot) { anchors.unresolved++; continue }
+    if (!anchoredParts.has(owner)) {
+      anchoredParts.add(owner)
+      // A well-formed part whose document element is not wsDr holds no readable anchors: unknown, not "none".
+      if (rootLocalName((await pkg.text(owner)) ?? '') === DRAWING_ROOT) collectAnchorRecords(drawingRoot, owner, anchors)
+      else anchors.unresolved++
+    }
     // Resolve relationships through the shared cached optional-part path.
     await partRelationships(pkg, owner)
     let anchorIndex = 0
