@@ -79,7 +79,7 @@
         "frozenMs": 16.7,
         "basis": "spec",
         "outcome": "pass",
-        "justification": "Kept at spec. S10.2 r2: Chrome 155 headless, desktop D, one M4 Pro laptop (shared machine; contention possible), production build, full-scale fixtures; receipt viewerEvidence.results. 300 open-loop frames per mix after 60 warmup: input-to-paint p95 ordinary 4.95 / wrapped 5.58 / styled 2.13 ms; rAF frame-interval p95 16.67 ms in every mix, 0 long tasks. Passed after reproduced fixes (scroll-sync revert, per-call Intl.Segmenter, sliced prefetch). Non-ASCII wrapped mix informational: p95 16.67, max 16.7 ms.",
+        "justification": "Kept at spec. S10.2 r3: Chrome 155 headless, desktop D, one M4 Pro laptop (shared machine), production build, manifest-verified full-scale fixtures; rows derived from raw records; receipt viewerEvidence.results. The receipt is NOT admitted (main-memory peak pending), which does not affect this time row. 300 open-loop frames per mix after 60 warmup: input-to-paint p95 ordinary 4.05 / wrapped 5.70 / styled 2.21 ms; rAF frame-interval p95 16.67 ms in every mix, 0 long tasks.",
         "measurement": null
       },
       "mobile": {
@@ -100,7 +100,7 @@
         "frozenMs": 50,
         "basis": "spec",
         "outcome": "pass",
-        "justification": "Kept at spec. S10.2 r2: Chrome 155 headless, desktop D, one M4 Pro laptop (shared machine; contention possible), production build, full-scale fixtures; receipt viewerEvidence.results. Header sort on F2 (1M rows): pending state (aria-busy) presented p95 17.3 ms (n=30; r1 had none for 12-13 s); find p95 15.5 ms and cancel p95 16.9 ms (n=30); filter apply max 33.5 ms (n=10, limited: each apply re-runs a 2.7 s worker filter). Row is pass-limited in the receipt because of the 10-sample filter series.",
+        "justification": "Kept at spec. S10.2 r3: Chrome 155 headless, desktop D, one M4 Pro laptop (shared machine), production build, manifest-verified full-scale fixtures; rows derived from raw records; receipt viewerEvidence.results. The receipt is NOT admitted (main-memory peak pending), which does not affect this time row. Header sort on F2 (1M rows): pending state presented p95 17.4 ms (n=30); find p95 15.6 ms, cancel p95 17.3 ms (n=30); filter apply max 34.4 ms (n=10, the documented limited series).",
         "measurement": null
       },
       "mobile": {
@@ -291,7 +291,7 @@
         "frozenMs": 1500,
         "basis": "spec",
         "outcome": "pass",
-        "justification": "Kept at spec. S10.2 r2: Chrome 155 headless, desktop D, one M4 Pro laptop (shared machine; contention possible), production build, full-scale fixtures; receipt viewerEvidence.results. Local File -> labelled usable viewport: F1 p95 489.2 ms (n=30), F3 p95 672.4 ms (n=30), F2 max 600.6 ms over 10 cold 1M-row samples (spec 12.6 limitation: p95 refused below 30). Fully imported later (F2 5.3 s p50).",
+        "justification": "Kept at spec. S10.2 r3: Chrome 155 headless, desktop D, one M4 Pro laptop (shared machine), production build, manifest-verified full-scale fixtures; rows derived from raw records; receipt viewerEvidence.results. The receipt is NOT admitted (main-memory peak pending), which does not affect this time row. Local File -> labelled usable viewport: F1 p95 493.5 ms (n=30), F3 p95 671.4 ms (n=30), F2 max 597.4 ms over 10 cold 1M-row opens (the documented limited series; p95 refused below 30).",
         "measurement": null
       },
       "mobile": {
@@ -317,14 +317,17 @@
   "diagnostics": [],
   "viewerEvidence": {
     "doc": "docs/validation/interactive-viewer-performance.md",
-    "results": "docs/validation/interactive-viewer-viewer-chrome-r2.json",
-    "hash": "9e3ee2c831583f87cd8ac9bfc45aa780f23d184557a3651e22d73bd27c6dc612",
-    "commit": "434e5777e23d3346e5964ebfe447fad576bf59ea",
+    "results": "docs/validation/interactive-viewer-viewer-chrome-r3.json",
+    "hash": "3374da7ab4a5ffc6df55c15a073a239b00ab11c869f7efa9ba209ab4e83e0040",
+    "commit": "2ea32d250cb8c713aefb13c9856b93f856c5ef1b",
     "browser": "Google Chrome 155.0.8059.39 (stable, Playwright 1.64 channel chrome, headless)",
     "machine": "Apple M4 Pro, 14 logical cores, 24 GiB, macOS 26.5.2 (25F84)",
     "profile": "D",
     "mode": "release",
-    "desktopAdmitted": true,
+    "desktopAdmitted": false,
+    "evidenceProblems": [
+      "main-owned-memory: no complete main-owned application ledger; the live peak is not demonstrated (row pending)"
+    ],
     "rows": {
       "warm-viewport-frame": {
         "outcome": "pass",
@@ -332,40 +335,47 @@
       },
       "input-acknowledgment": {
         "outcome": "pass-limited",
-        "value": 33.54000000655651
+        "value": 34.394999995827675
       },
       "progressive-first-viewport": {
         "outcome": "pass-limited",
-        "value": 672.4299999922514
+        "value": 671.4000000059605
       },
       "import-expanded-throughput": {
         "outcome": "pass",
-        "value": 58.08702462974514
+        "value": 58.31348984015745
       },
       "import-cell-throughput": {
         "outcome": "pass",
-        "value": 892777.4305437976
+        "value": 896258.1223152941
       },
       "main-owned-memory": {
-        "outcome": "pass",
-        "value": 24531691
+        "outcome": "pending",
+        "value": 28112958
       },
       "worker-owned-memory": {
         "outcome": "pass",
-        "value": 239834318
+        "value": 239835590
       },
       "bitmap-retained": {
         "outcome": "pass",
         "value": 118663680
       }
     },
-    "superseded": {
-      "results": "docs/validation/interactive-viewer-viewer-chrome-r1.json",
-      "hash": "9d5633d7ec121cbc755bce41298b3d7d8c937e2a8ee9f765def206bf9a37dbd6",
-      "commit": "2282115edbefe727a22d99a7bd5ef4ede2bc1788",
-      "desktopAdmitted": false,
-      "note": "r1: input acknowledgment miss (header sort 11,897-13,316 ms); superseded by r2 after the fixes."
-    },
-    "note": "S10.2 viewer receipt. Mobile rows not-run (no physical iPad, user decision). Contended shared machine: re-run the release command on a quiet machine before admission."
+    "superseded": [
+      {
+        "results": "docs/validation/interactive-viewer-viewer-chrome-r2.json",
+        "hash": "9e3ee2c831583f87cd8ac9bfc45aa780f23d184557a3651e22d73bd27c6dc612",
+        "commit": "434e5777e23d3346e5964ebfe447fad576bf59ea",
+        "note": "r2 was admitted by the earlier summary-trusting evaluator; it does not validate under the raw-derived evaluator (no content fixture identity, no live heap samples, main-memory peak pending)."
+      },
+      {
+        "results": "docs/validation/interactive-viewer-viewer-chrome-r1.json",
+        "hash": "9d5633d7ec121cbc755bce41298b3d7d8c937e2a8ee9f765def206bf9a37dbd6",
+        "commit": "2282115edbefe727a22d99a7bd5ef4ede2bc1788",
+        "note": "r1: input acknowledgment miss (header sort 11,897-13,316 ms)."
+      }
+    ],
+    "note": "S10.2 viewer receipt. Not admitted: no complete main-owned application ledger, so the spec 12.4 main peak is not demonstrated (forced-GC live lower bound 26.8 MiB vs 64 MiB). Mobile rows not-run (no physical iPad, user decision). Recorded on a shared machine."
   }
 }

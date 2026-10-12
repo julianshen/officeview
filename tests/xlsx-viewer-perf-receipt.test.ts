@@ -220,3 +220,31 @@ describe('receipt hash', () => {
     expect((await verifyReceipt({ ...receipt, mode: 'smoke' })).ok).toBe(false)
   })
 })
+
+describe('retained S10.2 Chrome receipt (r3)', () => {
+  it('validates from its raw records, is cited by the profile, and is honestly not admitted (main peak pending)', async () => {
+    const evidence = profile.viewerEvidence as { results: string; hash: string; commit: string; desktopAdmitted: boolean; evidenceProblems: string[]; rows: Record<string, { outcome: string; value: number | null }> }
+    const receipt = JSON.parse(readFileSync(join(process.cwd(), evidence.results), 'utf8')) as ViewerReceipt
+    expect(receipt.hash).toBe(evidence.hash)
+    expect(receipt.environment.commit).toBe(evidence.commit)
+    const verdict = await validateReceipt(receipt, ctx)
+    // Everything recomputed from raw agrees with the stored rows; the only problem is the missing main ledger.
+    expect(verdict.problems).toEqual(['main-owned-memory: no complete main-owned application ledger; the live peak is not demonstrated (row pending)'])
+    expect(verdict.admitted).toBe(false)
+    expect(receipt.desktopAdmitted).toBe(false)
+    expect(evidence.desktopAdmitted).toBe(false)
+    expect(evidence.evidenceProblems).toEqual(receipt.evidenceProblems)
+    for (const [id, row] of Object.entries(evidence.rows)) {
+      const recorded = receipt.evaluation.find(r => r.id === id && r.profile === 'desktop')!
+      expect(recorded.outcome, id).toBe(row.outcome)
+      expect(recorded.value, id).toBe(row.value)
+      const threshold = profile.thresholds.find((t: { id: string }) => t.id === id)
+      if (threshold) {
+        expect(threshold.desktop.frozenMs, id).toBe(threshold.desktop.specMs)
+        expect(threshold.desktop.outcome, id).toBe(row.outcome === 'miss' ? 'miss' : 'pass')
+      }
+    }
+    expect(receipt.evaluation.find(r => r.id === 'main-owned-memory' && r.profile === 'desktop')!.outcome).toBe('pending')
+    for (const row of receipt.evaluation.filter(r => r.profile === 'mobile')) expect(row.outcome).toBe('not-run')
+  })
+})
