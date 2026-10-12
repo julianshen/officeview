@@ -222,9 +222,10 @@ export function GridSemantics(props: GridSemanticsProps): ReactElement {
         </div>
       })}
     </div>
+    {/* Bounded by the pane (overflow:hidden): a taller popup scrolls instead of losing its top controls. */}
     {props.popup && <div ref={popupRef} role="dialog" aria-label="Column filter" data-officeview-ui="grid-popup"
       onPointerDown={event => event.stopPropagation()} onDoubleClick={event => event.stopPropagation()}
-      style={{ position: 'absolute', zIndex: 3, bottom: 0, maxWidth: '100%', paddingBottom: 'env(safe-area-inset-bottom)' }}>{props.popup.content}</div>}
+      style={{ position: 'absolute', zIndex: 3, bottom: 0, maxWidth: '100%', maxHeight: '100%', overflowY: 'auto', boxSizing: 'border-box', paddingBottom: 'env(safe-area-inset-bottom)' }}>{props.popup.content}</div>}
     <ViewerStatus {...props.status} records={props.status?.records ?? recordCounts(projection, props.body)} announcement={status} inspection={props.inspection ?? props.status?.inspection} />
   </div>
 }
