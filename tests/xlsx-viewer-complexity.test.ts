@@ -2,11 +2,14 @@
  * S10.1 complexity audit (spec §3 invariants 1–7; AC-CAP-01, AC-VIEW-03,
  * AC-RENDER-01, AC-PERF-02 "bounded complexity").
  *
- * The instruments sit at boundaries the implementation cannot route around,
- * not inside it:
- *  - an allocation ledger over the global typed-array constructors and
- *    Map#set / Set#add (a dense R×C lane, a per-blank-row/cell object table or
- *    a merge coverage map has to allocate or insert per coordinate);
+ * The instruments sit at boundaries, not inside the implementation:
+ *  - an allocation ledger over the global typed-array constructors, `Array(n)`
+ *    and Map#set / Set#add on officeview-built collections;
+ *  - the V8 heap retained after a full collection across each warmed-up window,
+ *    which is what bounds plain objects and literal arrays (no constructor to
+ *    proxy): a per-row/per-cell object table or per-row array set stays
+ *    reachable and exceeds the bound (self-checked with the review probe).
+ *    Residual: transient garbage freed inside the window is not bounded here;
  *  - canvas backing-store sizes (no full-sheet canvas) and the owned DOM size;
  *  - the worker port: every command, every read rect (no all-column read per
  *    row, no unbounded row band) and the kernel's parse spy (no per-command
@@ -15,6 +18,8 @@
  * Bounds are derived from the viewport/window, never from the implementation's
  * internal counts; the "would be" figures name what each anti-pattern costs.
  */
+import v8 from 'node:v8'
+import vm from 'node:vm'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { createElement } from 'react'
 import { act, cleanup, fireEvent, render, waitFor } from '@testing-library/react'
@@ -44,10 +49,22 @@ afterEach(() => { cleanup(); vi.restoreAllMocks() })
 // ---------------------------------------------------------------- instruments
 
 const TYPED = ['Float64Array', 'Float32Array', 'Uint32Array', 'Int32Array', 'Uint16Array', 'Int16Array', 'Uint8Array', 'Uint8ClampedArray', 'Int8Array', 'BigInt64Array', 'BigUint64Array'] as const
-interface Ledger { typedElements: number; largestTyped: number; inserts: number }
-/** Counts typed-array elements constructed and Map/Set insertions while `run` executes. */
+interface Ledger { typedElements: number; largestTyped: number; inserts: number; arrayElements: number; retainedBytes: number }
+// Plain objects and literal arrays have no constructor to proxy, so their cost
+// is bounded by what stays reachable: the V8 heap after a full collection,
+// before and after `run`, while the viewer stays mounted. A per-coordinate
+// object table or per-row array set survives the window and shows up here.
+v8.setFlagsFromString('--expose-gc')
+const collect = vm.runInNewContext('gc') as () => void
+function settledHeap(): number {
+  for (let i = 0; i < 3; i++) collect()
+  return process.memoryUsage().heapUsed
+}
+/** Counts typed-array elements, `Array(n)` lengths and Map/Set insertions while
+ * `run` executes, and the heap it leaves retained. */
 async function measure(run: () => Promise<void>): Promise<Ledger> {
-  const ledger: Ledger = { typedElements: 0, largestTyped: 0, inserts: 0 }
+  const ledger: Ledger = { typedElements: 0, largestTyped: 0, inserts: 0, arrayElements: 0, retainedBytes: 0 }
+  const heapBefore = settledHeap()
   const scope = globalThis as unknown as Record<string, unknown>
   const saved = TYPED.map(name => [name, scope[name]] as const)
   for (const [name, ctor] of saved) {
@@ -60,6 +77,19 @@ async function measure(run: () => Promise<void>): Promise<Ledger> {
       },
     })
   }
+  const savedArray = Array
+  scope.Array = new Proxy(Array, {
+    construct(target, args, newTarget) {
+      const made = Reflect.construct(target, args, newTarget === scope.Array ? target : newTarget) as unknown[]
+      ledger.arrayElements += made.length
+      return made
+    },
+    apply(target, thisArg, args) {
+      const made = Reflect.apply(target, thisArg, args) as unknown[]
+      ledger.arrayElements += made.length
+      return made
+    },
+  })
   const mapSet = Map.prototype.set, setAdd = Set.prototype.add
   // Only collections constructed by officeview's own modules count: jsdom's CSS
   // engine and React keep their own maps, which a real browser does not run in JS.
@@ -83,9 +113,11 @@ async function measure(run: () => Promise<void>): Promise<Ledger> {
     Error.stackTraceLimit = traceLimit
     for (const [name, ctor] of saved) scope[name] = ctor
     for (const [name, ctor] of savedCollections) scope[name] = ctor
+    scope.Array = savedArray
     Map.prototype.set = mapSet
     Set.prototype.add = setAdd
   }
+  ledger.retainedBytes = Math.max(0, settledHeap() - heapBefore)
   return ledger
 }
 
@@ -176,6 +208,12 @@ function table(rows: number): string {
 const ROW_LANE = MAX_ROWS
 const VIEWPORT_ALLOCATION = 1 << 19
 const VIEWPORT_INSERTS = 50_000
+// Retained heap after a warmed-up window (jsdom/React noise settles near
+// 0.3 MiB per gesture round; the largest viewport result, 2,048 coarse groups,
+// is ~2 MiB). The review probe below, a 65,536-entry plain-object cell table plus
+// 1,024 plain row arrays, retains ~7 MiB and must exceed it; a per-row table over
+// the 1,048,576-row axis would be larger still.
+const VIEWPORT_RETAINED = 4 * 1024 * 1024
 
 describe('instrument self-check (the ledger is not vacuous)', () => {
   it('sees a row-sized typed lane and per-entry inserts into an officeview-built collection', async () => {
@@ -187,6 +225,21 @@ describe('instrument self-check (the ledger is not vacuous)', () => {
     expect(ledger.largestTyped).toBe(ROW_LANE)
     expect(ledger.inserts).toBeGreaterThanOrEqual(VIEWPORT_INSERTS)
   })
+
+  it('sees a retained plain-object cell table and plain row arrays (no constructor to proxy)', async () => {
+    const kept: unknown[] = []
+    const ledger = await measure(async () => {
+      const cells: Record<string, { v: number }> = {}
+      for (let i = 0; i < 65_536; i++) cells[`c${i}`] = { v: i }
+      const rows: number[][] = []
+      for (let r = 0; r < 1024; r++) { const row: number[] = []; for (let c = 0; c < 64; c++) row.push(r * 64 + c + 0.5); rows.push(row) }
+      kept.push(cells, rows)
+    })
+    expect(ledger.inserts).toBe(0)
+    expect(ledger.typedElements).toBe(0)
+    expect(ledger.retainedBytes).toBeGreaterThan(VIEWPORT_RETAINED)
+    expect(kept).toHaveLength(2)
+  })
 })
 
 describe('resident (object) viewer: navigation and paint stay viewport-bounded', () => {
@@ -195,6 +248,16 @@ describe('resident (object) viewer: navigation and paint stay viewport-bounded',
     const f = frames()
     const ui = render(createElement(OfficeDoc, { document: doc, interactiveSheets: true, ...internal({ onFrame: f.onFrame }) }))
     await waitFor(() => expect(ui.getByRole('gridcell', { name: /origin/ })).toBeTruthy())
+    // Warm-up: the same gestures three times, so first-use module/JIT state and
+    // the bounded tile/layout caches are full before the measured window.
+    for (let round = 0; round < 3; round++) {
+      go(ui, 'XFD1048576')
+      await waitFor(() => expect(ui.getByRole('gridcell', { name: /corner/ })).toBeTruthy())
+      go(ui, 'A1048576')
+      await waitFor(() => expect(activeId(ui)).toBe((MAX_ROWS - 1) * MAX_COLS))
+      go(ui, 'A1')
+      await waitFor(() => expect(ui.getByRole('gridcell', { name: /origin/ })).toBeTruthy())
+    }
     const ledger = await measure(async () => {
       go(ui, 'XFD1048576')
       await waitFor(() => expect(ui.getByRole('gridcell', { name: /corner/ })).toBeTruthy())
@@ -204,6 +267,7 @@ describe('resident (object) viewer: navigation and paint stay viewport-bounded',
     expect(ledger.largestTyped).toBeLessThan(ROW_LANE)
     expect(ledger.typedElements).toBeLessThan(VIEWPORT_ALLOCATION)
     expect(ledger.inserts).toBeLessThan(VIEWPORT_INSERTS)
+    expect(ledger.retainedBytes).toBeLessThan(VIEWPORT_RETAINED)
     const s = surfaces(ui.container)
     const pane = f.last()!
     // A full-sheet canvas would be 2^34 x 1280 px; every backing store here is a pane or tile.
@@ -241,6 +305,7 @@ describe('resident (object) viewer: navigation and paint stay viewport-bounded',
     })
     // A covered-cell map of this merge alone would hold 1,048,576 entries.
     expect(ledger.inserts).toBeLessThan(VIEWPORT_INSERTS)
+    expect(ledger.retainedBytes).toBeLessThan(VIEWPORT_RETAINED)
     expect(ledger.largestTyped).toBeLessThan(ROW_LANE)
   })
 })
@@ -273,6 +338,7 @@ describe('worker-backed viewer: bounded reads, one parse, no per-command reparse
     // permutation lives in the worker; the adopted view is band-sized, 3,001 rows).
     expect(ledger.largestTyped).toBeLessThan(ROW_LANE)
     expect(ledger.inserts).toBeLessThan(VIEWPORT_INSERTS)
+    expect(ledger.retainedBytes).toBeLessThan(VIEWPORT_RETAINED)
   }, 30_000)
 })
 
@@ -301,6 +367,7 @@ describe('F6 full-axis provider: the geometry window reads only what it shows', 
     expect(ledger.largestTyped).toBeLessThan(ROW_LANE)
     expect(ledger.typedElements).toBeLessThan(VIEWPORT_ALLOCATION)
     expect(ledger.inserts).toBeLessThan(VIEWPORT_INSERTS)
+    expect(ledger.retainedBytes).toBeLessThan(VIEWPORT_RETAINED)
   })
 
   it('tiny sizes at 25% zoom: the whole pane is analytic coarse groups with no per-cell visit', async () => {
@@ -314,6 +381,7 @@ describe('F6 full-axis provider: the geometry window reads only what it shows', 
     // 41 million covered cells; the summary visits none of them one by one.
     expect(counts.cellAt).toBe(0)
     expect(ledger.inserts).toBeLessThan(VIEWPORT_INSERTS)
+    expect(ledger.retainedBytes).toBeLessThan(VIEWPORT_RETAINED)
     expect(ledger.typedElements).toBeLessThan(VIEWPORT_ALLOCATION)
   })
 })
