@@ -23,7 +23,7 @@
  * No resume token is carried across an `incomplete` outcome: a retry re-runs
  * detection from scratch once the caller has completed the missing ranges. */
 import type {
-  AuthoritativeCell, CompactSourceRowSet, FilterRange, GridSelection, OperationRefusal, Page, ReadOptions,
+  CompactSourceRowSet, FilterRange, GridSelection, OperationRefusal, Page, ReadOptions,
   SourceFailure, SourceStamp, SourceStore, TableExtent,
 } from './contracts'
 import {
@@ -191,21 +191,21 @@ const MAX_HELD_SCANS = 1
 export class Scanner {
   private work = 0
   private serial = 0
-  private readonly held = new Map<string, { iterator: AsyncIterator<Page<AuthoritativeCell>>; ahead: IteratorResult<Page<AuthoritativeCell>>; scope: string }>()
+  private readonly held = new Map<string, { iterator: AsyncIterator<Page<SourceCell>>; ahead: IteratorResult<Page<SourceCell>>; scope: string }>()
   constructor(
     private readonly store: SourceStore,
     private readonly options: ReadOptions,
     private readonly pacer: Pacer,
     private readonly budget: number,
   ) {}
-  async page(rect: SourceRect, limit: number, cursor?: string): Promise<Page<AuthoritativeCell>> {
+  async page(rect: SourceRect, limit: number, cursor?: string): Promise<Page<SourceCell>> {
     if (this.work + 1 > this.budget) throw new WorkBudgetExceeded(`Detection exceeded its work budget of ${this.budget}`)
     this.work++
     await this.pacer.tick()
     const held = cursor === undefined ? undefined : this.held.get(cursor)
     const scope = `${rect.r0}:${rect.r1}:${rect.c0}:${rect.c1}:${limit}`
-    let iterator: AsyncIterator<Page<AuthoritativeCell>>
-    let step: IteratorResult<Page<AuthoritativeCell>>
+    let iterator: AsyncIterator<Page<SourceCell>>
+    let step: IteratorResult<Page<SourceCell>>
     if (held !== undefined) {
       this.held.delete(cursor!)
       if (held.scope !== scope) {
@@ -216,7 +216,9 @@ export class Scanner {
       step = held.ahead
     } else {
       const request = cursor === undefined ? { range: rect, limit } : { range: rect, limit, cursor }
-      iterator = this.store.scanPopulated(request, this.options)[Symbol.asyncIterator]()
+      // Occupancy is all detection reads: a store with a coordinate-only scan
+      // (same cells and pages) skips payload decode.
+      iterator = (this.store.scanOccupied ? this.store.scanOccupied(request, this.options) : this.store.scanPopulated(request, this.options))[Symbol.asyncIterator]()
       step = await iterator.next()
     }
     // An abort that landed while this page was in flight wins over its content.
