@@ -195,6 +195,13 @@ export async function viewerControls(options: ViewerControlsOptions, signal: Abo
   })
   const resolve = client.resolve, values = client.values
   client.resolve = async (owner, kind, abort, override, col) => {
+    // A worker-backed sheet opens while its import still runs, so the snapshot
+    // taken above can be 'loading'. Re-query until it is complete (or failed);
+    // a stuck snapshot would refuse every later sort/filter as incomplete.
+    if (structure.completeness !== 'complete' && structure.failure === undefined) {
+      structure = new StructuralIndex(await store.queryStructural({ r0: 0, r1: 1048575, c0: 0, c1: 16383 }, { signal: abort, stamp: { ...store.stamp } }))
+      abort.throwIfAborted()
+    }
     const resolved = await resolve(owner, kind, abort, override, col)
     if (resolved.kind === 'complete' && kind === 'filter') await classify(owner, resolved.range, col ?? resolved.range.c0, abort)
     return resolved
