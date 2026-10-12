@@ -77,7 +77,7 @@ Browser shorthand: **[B:C+W]** = Playwright scenario passing on Chromium and Pla
 | Case | Fixture(s) | Evidence | Status |
 |---|---|---|---|
 | AC-CAP-01 | F1, F6, synthetic boundary rows | `xlsx-viewer-contracts.test.ts`; `xlsx-viewer-complexity.test.ts`: DOM active-descendant ids 2^31, 2^32 and 2^34−1 end to end. Browser F1 res+wkr: `aria-activedescendant` id 17179869183 **[B:C+W]** | pass |
-| AC-CAP-02 | F1, F3, F7 | `xlsx-viewer-scroll-window.test.ts`, `xlsx-viewer-navigation.test.tsx`, `xlsx-viewer-selection.test.ts`. Browser: F1 Go To XFD1048576 with header/row label agreement; F3 recenter, header/cell `aria-colindex` agreement and edge ArrowLeft after recenter; F7 Original-cell Go To on a hidden row opens the read-only inspector without moving the active descendant **[B:C+W]** | pass (zoom/DPR browser leg partial: zoom 125% exercised, DPR change not exercised) |
+| AC-CAP-02 | F1, F3, F7 | `xlsx-viewer-scroll-window.test.ts`, `xlsx-viewer-navigation.test.tsx`, `xlsx-viewer-selection.test.ts`. Browser: F1 Go To XFD1048576 with header/row label agreement; F3 recenter, header/cell `aria-colindex` agreement and edge ArrowLeft after recenter; F7 Original-cell Go To on a hidden row opens the read-only inspector without moving the active descendant **[B:C+W]** | pass (zoom/DPR browser leg partial: zoom 125% exercised; **S13 DPR change — emulated (CDP) in installed Chrome, not a physical display move:** header/cell/gridline agreement holds once the viewer re-renders, but a DPR-only change does **not** re-rasterize by itself — open defect D-DPR, see [S13](#s13-runtime-and-manual-checks)) |
 | AC-CAP-03 | F2/F3/F4 quota variants | `xlsx-viewer-import-limits.test.ts`, `xlsx-viewer-source-pages.test.ts` (typed quota/incomplete/cancel). S10.3 browser: no OPFS/IndexedDB and zero quota are visible typed refusals with no grid; quota denied mid-import states the failure with an incomplete body (G7) **[B:C+W]**; `xlsx-viewer-capability.test.tsx` | pass (S10.3; was "pass (unit); browser leg not-run"). Quota is emulated by stubbing the worker's storage APIs, not by filling a real disk quota |
 | AC-STORE-01 | F8 | `xlsx-viewer-adapter-parity.test.ts`, `xlsx-viewer-values.test.ts`, `xlsx-viewer-source.test.ts`: object and paged adapters agree on values/errors/cache/formula/date/raw UTF-16; pending ≠ blank. Browser wkr: unknown rows paint "Loading…" (`xlsx-viewer-paged-viewer.test.tsx`) | pass; **native Excel checkpoint not-run** (see below) |
 | AC-STORE-02 | F1–F4 malformed variants | `xlsx-viewer-import.test.ts`, `xlsx-viewer-import-limits.test.ts` | pass (unit); peak/cleanup ledger in a browser → S10.2 |
@@ -154,7 +154,7 @@ What is instrumented, and what is not:
     2. Reopen the file and confirm Excel shows no repair prompt. Take a screenshot.
     3. Copy the file to `tests/fixtures/xlsx-viewer/native-corner.xlsx`, record its SHA-256, and add a parity case like `xlsx-viewer-adapter-parity.test.ts`: object and paged adapters agree, cache/error/date/hidden/table values match the screenshot.
     4. Open it in the e2e page (`?src=`), with and without `?worker=1` (the latter needs a cap-crossing copy).
-- **Safari desktop: not-run** (also in S10.3). `safaridriver` exists, but remote automation requires a one-time `safaridriver --enable` (admin prompt) plus Develop ▸ Allow Remote Automation, which needs the user. The Playwright WebKit runs above are not Safari evidence.
+- **Safari desktop: partial (S13).** The user enabled remote automation. `scripts/harness/safari-check.ts` ran once in real Safari 26.5.2 while the Mac screen was locked: capability detection and the F2 storage import ran, the interactive flows did not (see [S13](#s13-runtime-and-manual-checks)). The Playwright WebKit runs above are not Safari evidence.
 - **iPad / physical devices: not-run** by user decision.
 
 ## S10.3 support and accessibility receipts
@@ -244,16 +244,66 @@ VoiceOver cannot be driven unattended (it needs System Settings/TCC grants and a
 - **Playwright WebKit cannot write OPFS pages from the worker** (recorded as a capacity restriction in the capability matrix). `choosePageBackend` (`sourcePages.ts`) picks OPFS when `getDirectory` works and does not fall back to IndexedDB when a write fails; an injected OPFS write failure confirms IndexedDB is never probed. Automatic write-failure failover is not required by §4.2 and is left to the storage owner.
 - A recorded load failure is cleared by a later complete structural read, but after a terminal storage failure no further read is issued (the import has ended), so that path is only reachable for non-storage failures.
 
+## S13 runtime and manual checks
+
+**Branch:** `feature/iv-s13-manual` (cut from `feature/interactive-viewer` at `d4acf78`). **Run date:** 2026-10-12/13. **Machine:** macOS 26.5.2 (25F84), one external 1920×1080 display at DPR 1.
+
+### Runtime DPR change — emulated (CDP) in desktop Chrome, not a physical display move
+
+**Spec:** `tests/browser/interactive-viewer-dpr.spec.ts`. **Browser:** installed Google Chrome 155.0.8059.39 (`channel: 'chrome'`). The spec checks that CDP `Browser.getVersion` equals the `/Applications/Google Chrome.app` bundle version. **Run:** `IV_HARNESS_PORT=4191 bunx playwright test --config playwright.viewer.config.ts tests/browser/interactive-viewer-dpr.spec.ts --project chromium`. **Method:** `Emulation.setDeviceMetricsOverride` at a constant 1440×900 CSS viewport, `deviceScaleFactor` 1 → 2 → 1.5 → 1. Before the change each run sets up find (`A1048576`), Go To C3, a Shift selection to D4 and zoom 125%. Fixtures: `f1-small.xlsx` (resident) and `f1-paged.xlsx` (worker-backed). The machine has one DPR 1 display, so no physical display move was possible.
+
+| Assertion | F1 resident | F1 worker-backed |
+|---|---|---|
+| **A DPR-only change re-rasterizes the viewer with no other input** | **FAIL** | **FAIL** |
+| Backing store = CSS size × DPR (±1 px), base and overlay, at 2 / 1.5 / 1 (after a re-render) | pass: 2792×712, 2094×534, 1396×356 for CSS 1396×356 | pass (same) |
+| Tiles at the new DPR: each requested tile is 512 device px at zoom × DPR (logical box 204.8 / 273.07 / 409.6 at zoom 1.25) | pass | pass |
+| No stale-DPR tile presented once re-rendered: the first frame at the new DPR reuses 0 tiles, and every later frame paints only new-DPR tiles | pass | pass |
+| Gridline alignment: the darkest device column/row lies within ±1.5 device px of the empty cell G12's DOM (hit-test) right and bottom edges (expected x 450 / 337.5 / 225, found 450 / 337 / 225; cell centre stays white) | pass | pass |
+| State kept: active cell, selected cells, first row/column header, zoom text, find text, status text | pass | pass |
+| Bitmap budget: every frame's `bitmapBytes` and `peakBitmapBytes` ≤ 134,217,728 B; tile bytes = tiles × 1 MiB (peak observed 41,069,056 B at DPR 2) | pass | pass |
+| No console errors or page errors | pass | pass |
+
+**D-DPR (the FAIL row).** After each override, `devicePixelRatio` and `matchMedia('(resolution: …)').matches` changed at once. The viewer then reported no frame for the 5 s window, and the canvases kept the old backing size (for example 1396×356 at DPR 2). The cause is in `InteractiveSheetDoc.tsx`:
+
+- the viewer reads `window.devicePixelRatio` only while rendering;
+- its only size input is a content-box `ResizeObserver` on the pane (`window` `resize` is used only when `ResizeObserver` is missing);
+- it registers no `(resolution)` media-query listener.
+
+A DPR-only change keeps the CSS size, so nothing wakes the viewer. The old raster stays on screen, scaled, until something unrelated re-renders it. The passing rows above re-render the viewer with a pane width change of 100 px and back, a resize the viewer does observe. That nudge touches none of the asserted state. An earlier 1 px nudge was sometimes absorbed at DPR 1.5 (the pane kept its old width state), so the spec waits for each leg to lay out.
+
+*Emulation note:* under CDP, Chrome changed the DPR and media-query state but fired no `resize` and no media-query `change` events (headless and headed alike). Whether a physical display move fires them was not checked. It does not affect the verdict, because the viewer listens for neither. The FAIL test is left red on purpose (not `test.fail()`) until D-DPR is fixed. The fix is not part of S13.
+
+### Actual Safari via safaridriver — partial (screen locked)
+
+**Script:** `bun scripts/harness/safari-check.ts` (W3C WebDriver over HTTP to `safaridriver -p 4451`; the harness vite server on 4191; a loopback fixture server on 4193). It writes the receipt and screenshots to `/tmp/officeview-safari-check/`. **Browser:** Safari 26.5.2 (safaridriver "Included with Safari 26.5.2 (21624.2.5.11.8)"), session `platformName: macOS`, `browserVersion: 26.5.2`. This is real Safari, not Playwright WebKit.
+
+The one full run happened while the macOS screen was **locked** (`CGSSessionScreenIsLocked = true`). Its receipt is kept as `/tmp/officeview-safari-check/receipt-locked-screen-run.json`. With the screen locked, every WebDriver screenshot was black, and WebDriver clicks reported success but never reached the page (Go To never moved the active cell). Those results say nothing about the viewer. The script now refuses to run on a locked screen.
+
+| Step | Result |
+|---|---|
+| Capability detection, main thread: `Worker`, `OffscreenCanvas` with a 2D context, IndexedDB open, `navigator.storage.getDirectory`, estimate (quota 82,463,372,084 B); **OPFS `createWritable` on the main thread wrote 3 bytes** | ran: all available |
+| Capability detection, dedicated worker: `OffscreenCanvas`, IndexedDB, OPFS `createSyncAccessHandle` (wrote and flushed 1 MiB) and `createWritable` both present | ran: all available |
+| F2 storage package (160,000 rows; pages exceed the 32 MiB memory store), worker-backed: the WebKit OPFS-write restriction | ran: the import **completed** ("Visible body 160000 / complete body 160000"). The page-write failure seen in Playwright WebKit (S10.3 capability matrix) did not happen in real Safari 26.5.2. The locked-run script waited for the wrong row count (159,999), so the receipt marks the step as a timeout, but its `statusAtTimeout` holds the line above. The count is fixed. |
+| Opens: F1 resident (no worker), F1/F2/F3 worker-backed (1 worker, 1 `open`), each reaching "complete body" | ran: opened |
+| Go To XFD1048576, find A1048576, copy payload, keyboard navigation, zoom, header sort, value filter apply/cancel/clear, F3 recenter | **not-run (invalid):** the locked screen swallowed the clicks. Rerun with the screen unlocked |
+
+### macOS VoiceOver — prepared, not run
+
+**Script:** `bun scripts/harness/voiceover-check.ts` (`--preflight` only checks and never starts VoiceOver). Safari is driven through safaridriver while VoiceOver reads the page. After each step the script polls `content of last phrase` over AppleScript. Each step is matched against the spec §9 announcements: grid name "Worksheet F2", counts 1048577 / 16385, "B3, value …" / "C3, value …", selected state, "Column filter" popup name, "Select Column C" / "Cycle sort column C", ascending sort. VoiceOver is always quit in a `finally` block, checked with `pgrep` and System Events, and `pkill`ed if still running. The receipt goes to `/tmp/officeview-voiceover-check/receipt.json`.
+
+**Not run:** the screen was locked, so VoiceOver would have read the lock screen. The preflight refused, as designed. On macOS 26 the "Allow VoiceOver to be controlled with AppleScript" setting sits in a TCC-protected container, so the preflight cannot read it. The script confirms it with the first AppleScript call after VoiceOver starts, and stops VoiceOver if that call is refused. AC-A11Y-01's screen-reader leg stays open.
+
 ## Blocking for release
 
 These are mandatory cases whose evidence is incomplete. Nothing here is hidden as a pass.
 
 1. ~~**AC-STORE-03 / AC-SEM-04 drawing legs / AC-SEM-05**~~ — resolved by S3.3 (merged 2026-10-12); only their browser legs remain not-run.
-2. **AC-A11Y-01 / AC-A11Y-02:** S10.3 delivered the Chromium/WebKit keyboard and focus receipts and the Chromium AX-tree receipt. Still open: the **macOS VoiceOver** receipt (manual steps in the S10.3 section), **Safari desktop** (needs admin `safaridriver --enable`), and **iPad touch/VoiceOver** (not-run by user decision).
+2. **AC-A11Y-01 / AC-A11Y-02:** S10.3 delivered the Chromium/WebKit keyboard and focus receipts and the Chromium AX-tree receipt. Still open: the **macOS VoiceOver** receipt (S13 script `scripts/harness/voiceover-check.ts` is ready; not run because the screen was locked), the **Safari desktop** interactive flows (S13 `scripts/harness/safari-check.ts`; needs a rerun with the screen unlocked), and **iPad touch/VoiceOver** (not-run by user decision).
 3. **AC-PERF-01 / AC-PERF-02 (memory) / AC-LIFE-02 (real retained memory):** the controlled S10.2 Chrome, Safari and iPad receipts.
 4. **Native Excel checkpoint** for AC-STORE-01, AC-SEM-07 and AC-REG-01. The manual steps are above.
 5. **AC-BACKEND-01:** S11/S12 decision records delivered (`docs/architecture/xlsx-wasm-decision.md`, `xlsx-gpu-decision.md`, both not-run on desktop Chrome (headless)-only evidence); the shipped TS/Canvas2D backends' S10.2 receipt is still pending merge; revisit when Safari and mobile receipts exist.
 6. **Full-scale browser runs** for F2 (1M × 8), F3 dense (256 × 16,384) and F4 (1M strings). Only reduced, labelled scales ran here.
+7. **D-DPR (S13, open defect):** a runtime device-pixel-ratio change with an unchanged CSS size (a window moved between a DPR 1 and a DPR 2 display) does not re-rasterize the viewer. The old backing store stays on screen, scaled, until some unrelated input re-renders it. Found with emulation (CDP) in installed Chrome; see [S13](#s13-runtime-and-manual-checks).
 
 ## Observations (not fixed; not reproduced as failures)
 
