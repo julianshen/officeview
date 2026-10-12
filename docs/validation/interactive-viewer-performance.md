@@ -69,8 +69,11 @@ one fresh browser context and one page load per scenario.
   - Keys are prepared as one batch. If the D prepared cache (64 MiB) refuses the
     batch, the columns are staged one at a time, and staging stops at the first
     LRU eviction.
-  - Kernel and query runs record raw source column reads. Every threshold
-    sort's evidence shows **0** reads.
+  - Kernel and query runs record raw source column reads. Every *numeric*
+    threshold sort's evidence shows **0** reads. The 1M natural-text sort is
+    the exception: its text key is not prepared (0 of 1 columns), so the
+    kernel reads the source (245 raw column reads in the retained evidence).
+    Its §12.2 boundary (query completion, admitted) still applies.
   - At 1M rows, a 3-column *batch* exceeds the staging budget, but 3 staged
     retained numeric columns fit (about 66 MB). So `sort-1m-3key` is the 1M
     evidence, and `sort-1m-8key` is a **fallback diagnostic**: only 2 of its 8
