@@ -257,3 +257,17 @@ done
 ```
 
 `--rows N` runs a reduced-scale smoke, labelled REDUCED in `environment.note`.
+
+## S8.6 follow-up checkpoints
+
+The frozen S8.4 measurements above remain the baseline. Subsequent S8.6 source,
+Chrome receipts and iteration diagnostics are recorded in
+[interactive-viewer-sort-checkpoint.md](interactive-viewer-sort-checkpoint.md).
+Checkpoint 2 (`e1fa618`, Chrome 155, D, 30 + 3) passes the three-key prepared
+and natural-text sorts, while eight-key query p95 still misses at 159.7 ms for
+100k and 2076.6 ms for 1M. All eight F2 columns fit the unchanged 64 MiB prepared
+cache (26,469,195 B), with zero raw reads. The hash-verified samples are retained
+in [interactive-viewer-sort-chrome-r2.json](interactive-viewer-sort-chrome-r2.json).
+Checkpoint 3 reduces multi-key comparison and prepared extraction costs;
+browser remeasurement is pending. No frozen thresholds or baseline results were
+replaced, and no Safari/mobile/release acceptance is claimed.

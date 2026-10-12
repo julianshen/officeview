@@ -53,6 +53,7 @@ import { MemoryPool, WORKER_BUDGETS, type PoolEntry } from '../xlsx/view/tileCac
 import { INITIAL_GENERATION as INITIAL_VALUE_GEN, isUint32Array, validateBitset } from './viewerProtocol'
 import { LaneBuilder } from '../xlsx/view/source'
 import { BOUNDED_SORT_LANES, type BoundedSortLaneStore } from '../xlsx/view/sortLanes'
+import { PREPARED_SORT_READER, type PreparedSortStore, type PreparedSortLease } from '../xlsx/view/sortPrepared'
 import { compactPreparedPage, preparedRowAt, preparedMetadataAt, visitPreparedRows, PREPARED_PAGE_ENTRIES, PREPARED_PAGE_OVERHEAD, PREPARED_ENCODING_OVERHEAD, TAG_NULL, TAG_NUMBER, TAG_STRING, TAG_BOOLEAN, F_CACHED_SET, F_CACHED, F_ERROR_SET, F_ERROR, F_PROV_ENGINE, F_PROV_CACHED, F_UNAVAILABLE, type PreparedPage } from './preparedColumn'
 import { filterValueDomain, scanValueDomain, type ValueStatus } from '../xlsx/view/values'
 
@@ -632,6 +633,7 @@ export class DocumentSession {
   private readonly states = new Map<string, SheetState>()
   /** Insertion order is recency order (oldest first). */
   private readonly prepared = new Map<string, PreparedColumn>()
+  private readonly preparedPins = new Map<string, number>()
   private readonly preparedEntries = new Map<string, PoolEntry>()
   private preparedBytes = 0
   private structureBytes = 0
@@ -952,6 +954,9 @@ export class DocumentSession {
     this.workbookValueGen++
     for (const [key, column] of [...this.prepared]) {
       if (column.stamp.sheetId !== sheetId || sameStamp(column.stamp, stamp)) continue
+      // Invalidated leases are unreadable, but their storage stays charged
+      // until the final reader exits; a pin only shields pool eviction.
+      if (this.preparedPins.has(key)) continue
       this.dropPrepared(key)
     }
     this.dropStructure(sheetId)
@@ -1149,6 +1154,11 @@ export class DocumentSession {
           // Lanes are never requested here; treating one as a blank run would hide its values.
           if (item.kind === 'lanes') return { kind: 'error', error: failure('page-error', 'Unrequested column lanes') }
           if (item.kind === 'cell' || item.kind === 'unavailable') {
+            const cell = item.cell
+            if (cell.row !== item.row || cell.col !== col || cell.id !== cellId(item.row, col)
+              || cell.value !== null && !['number', 'string', 'boolean'].includes(typeof cell.value)) {
+              return { kind: 'error', error: failure('page-error', 'Malformed prepared cell identity/value') }
+            }
             const staging = stagedBytes + builder.heldBytes + builder.costOf(item)
             const next = protectedBytes + staging
             if (next > budget.maxBytes) return quota(next)
@@ -1198,8 +1208,11 @@ export class DocumentSession {
       const fitsCount = this.prepared.size + staged.length <= budget.maxColumns
       const fitsBytes = this.preparedBytes + stagedBytes <= budget.maxBytes
       if (fitsCount && fitsBytes) break
-      if (keep.has(key)) continue
+      if (keep.has(key) || this.preparedPins.has(key)) continue
       this.dropPrepared(key)
+    }
+    if (this.prepared.size + staged.length > budget.maxColumns || this.preparedBytes + stagedBytes > budget.maxBytes) {
+      return { kind: 'quota', limitBytes: budget.maxBytes, requiredBytes: this.preparedBytes + stagedBytes, diagnostics: [{ code: 'prepared-column-limit', message: 'Prepared readers pin the working set' }] }
     }
     for (const key of keys) {
       const existing = this.prepared.get(key)
@@ -1231,6 +1244,57 @@ export class DocumentSession {
   }
   private prepareRefusal(requiredBytes: number): PrepareOutcome {
     return this.closed ? { kind: 'stale' } : { kind: 'quota', limitBytes: this.memory.limitBytes, requiredBytes }
+  }
+  /** Lease only complete, value-owned columns. The scalar port exposes no
+   * writable lane aliases; concurrent preparation must respect these pins. */
+  private preparedSortLease(sheetId: string, col: number, expected: SourceStamp): PreparedSortLease | undefined {
+    if (this.closed || !sameStamp(this.source.store(sheetId).stamp, expected)) return undefined
+    const key = this.preparedKey(expected, col), column = this.prepared.get(key), entry = this.preparedEntries.get(key)
+    if (!column || !entry?.live) return undefined
+    this.prepared.delete(key); this.prepared.set(key, column)
+    entry.touch()
+    const unpin = entry.pin()
+    this.preparedPins.set(key, (this.preparedPins.get(key) ?? 0) + 1)
+    let released = false
+    return {
+      stamp: Object.freeze({ ...column.stamp }),
+      read: async (r0, r1, put, cooperate) => {
+        const current = () => !released && !this.closed && entry.live && sameStamp(this.source.store(sheetId).stamp, expected)
+        if (!current()) return 'stale'
+        let units = 0
+        for (const page of column.pages) {
+          if (page.firstRow > r1) break
+          if (preparedRowAt(page, page.count - 1) < r0) continue
+          let low = 0, high = page.count
+          while (low < high) {
+            const mid = Math.floor((low + high) / 2)
+            if (preparedRowAt(page, mid) < r0) low = mid + 1
+            else high = mid
+          }
+          for (let at = low; at < page.count; at++) {
+            const row = preparedRowAt(page, at)
+            if (row > r1) break
+            if (++units === 256) { units = 0; if (!current()) return 'stale' }
+            const m = preparedMetadataAt(page, at), code = page.codes[m], tag = code % 4, flags = Math.floor(code / 4), raw = page.values[at]
+            const value = tag === TAG_NULL ? null : tag === TAG_NUMBER ? raw : tag === TAG_BOOLEAN ? raw !== 0 : column.strings[raw]
+            put(row, value, (flags & F_ERROR) !== 0, (flags & F_UNAVAILABLE) !== 0)
+            if (cooperate.due()) { await cooperate.pause(); if (!current()) return 'stale' }
+          }
+        }
+        return current() ? 'complete' : 'stale'
+      },
+      release: () => {
+        if (released) return
+        released = true
+        unpin()
+        const count = this.preparedPins.get(key) ?? 0
+        if (count <= 1) {
+          this.preparedPins.delete(key)
+          if (!this.closed && !sameStamp(this.source.store(sheetId).stamp, column.stamp)) this.dropPrepared(key)
+        }
+        else this.preparedPins.set(key, count - 1)
+      },
+    }
   }
   /** Column page from resident lanes over a residual membership. */
   private preparedPage(column: PreparedColumn, residual: readonly SourceRowInterval[], limit: number): ColumnEntry[] {
@@ -1281,7 +1345,8 @@ export class DocumentSession {
   preparedStore(sheetId: string): SourceStore {
     const store = this.source.store(sheetId)
     const session = this
-    const prepared: BoundedSortLaneStore = {
+    const prepared: BoundedSortLaneStore & PreparedSortStore = {
+      [PREPARED_SORT_READER]: (col, stamp) => session.preparedSortLease(sheetId, col, stamp),
       [BOUNDED_SORT_LANES]: true,
       get stamp() { return store.stamp },
       get valuePolicy() { return store.valuePolicy },
@@ -1646,6 +1711,7 @@ export class DocumentSession {
     this.states.clear()
     this.prepared.clear()
     this.preparedEntries.clear()
+    this.preparedPins.clear()
     this.preparedBytes = 0
     this.structures.clear()
     this.structureEntries.clear()

@@ -218,3 +218,85 @@ incomplete; ordinary text was needlessly encoded; producer staging was not
 pre-admitted; worker growth reserved only 608 B before a 1,312 B allocation peak.
 Each regression is green, alongside the frozen sort parity corpus. Pagination
 also stays valid through prepared eviction, while an encoding change is rejected.
+
+## Checkpoint 3: integer prefixes and pinned prepared scalar reads (base e1fa618)
+
+Chrome 155 checkpoint-2 receipts (D, 30 samples + 3 warmups) are retained with
+their original samples, environment, identity and independently verified hashes
+in `interactive-viewer-sort-chrome-r2.json`.
+
+| Scenario | Kernel/query p95 ms | Query target ms | Result |
+|---|---:|---:|---|
+| 100k one key | 31.6 / 35.2 | 100 | pass |
+| 100k eight keys | 156.5 / 159.7 | 100 | miss |
+| 1M one key | 465.1 / 497.8 | 1000 | pass |
+| 1M two keys | 615.3 / 633.8 | 1000 | pass |
+| 1M three keys | 716.4 / 742.8 | 1000 | pass |
+| 1M eight keys | 2058.8 / 2076.6 | 1000 | miss |
+| 1M natural text | 2450.2 / 2510.8 | 4000 | pass |
+| 1M numeric filter | 57.8 / 71.4 | 100 | pass |
+| Cold 100k value index | 26.8 / 33.4 | 750 | pass |
+
+All eight full-size F2 columns are now prepared, with zero raw column reads.
+The remaining misses motivated further comparison/extraction work:
+
+1. A UInt32 mixed-radix prefix encodes up to four leading direction-normalized
+   integer key lanes, including their tags. Tags remain the major digit within
+   each key. Every multiplication is bounded before storage; fractional values,
+   wide ranges and insufficient admission keep the original comparison path.
+   Equal codes continue with the remaining keys and then source-row ties.
+   Construction checks/yields cooperatively, reserves 4 bytes/row plus bounded
+   descriptor scratch, and releases it before output allocation (also on abort).
+2. An internal prepared scalar lease bypasses per-query wire pages and cell
+   reconstruction. Both source cell identity/value and complete coverage are
+   validated during preparation. The lease pins its pool entry and explicit
+   prepared LRU entry; its stamp is copied, and session closure/source changes
+   reject the read. Value-invalidated storage remains charged until its last
+   reader releases. It exposes scalar callbacks, never writable buffer aliases.
+   The same classifier handles trusted scalars and ordinary source cells.
+   Absent rows remain blank; errors, unavailable counts, UTF-16 strings and
+   source-stable ties retain their exact semantics. Public source contracts are
+   unchanged. Concurrent preparation refuses a working set blocked by pins.
+
+Final Node v22.22.3 medians (one warmup, three samples), with full raw diagnostics
+in `interactive-viewer-sort-node-r3.json`:
+
+| Scenario | e1fa618 query ms | Checkpoint-3 kernel/query ms | Aggregate peak B |
+|---|---:|---:|---:|
+| 100k eight keys | 169.7 | 85.6 / 84.0 | 13,344,643 |
+| 1M three keys | 869.9 | 574.1 / 621.8 | 72,579,015 |
+| 1M eight keys | 2122.0 | 871.2 / 931.8 | 139,857,683 |
+| 1M natural text | 2924.5 | 2861.5 / 2940.7 | 405,811,010 |
+
+These are iteration diagnostics, not Chrome p95 acceptance. Prepared storage
+remains 26,469,195 B for the eight-column F2 case; all budgets and thresholds
+stay frozen. Parallel workers are deferred pending Chrome remeasurement of this
+single-worker comparison reduction. No browser pass is claimed for this source.
+
+RED/GREEN evidence in `/tmp/iv-s86`: prefix order initially returned no prefix;
+an interrupted code build leaked 36,012 B; prepared sorting made four wire
+queries instead of zero; a malformed source cell identity was admitted; a
+session closed during a prepared read returned complete instead of stale;
+value invalidation uncharged 674 B while two readers still held the column.
+Regressions cover exact tag/value order, overflow/fraction/budget fallback,
+256-unit checks/4,096-unit yields, cancellation cleanup, mixed scalar parity,
+LRU pins/idempotent release, identity rejection, closure during a read and
+invalidation with multiple outstanding leases.
+
+Checkpoint the source and run the same nine Chrome scenarios on the D machine,
+keeping outputs separate from prior receipts:
+
+```sh
+for scenario in sort-100k-1key sort-100k-8key sort-1m-1key sort-1m-2key sort-1m-3key sort-1m-8key filter-1m-numeric text-sort-1m-natural value-index-100k-cold; do
+  bun scripts/bench-interactive-viewer.ts --scenario "$scenario" --channel chrome --port 4181 --repeat 30 --warmup 3 --timeout-min 14.5 --output ".tmp/viewer-bench/s8-6-r3-$scenario"
+done
+```
+
+Checkpoint-3 gates after the invalidation regression: library and script
+typechecks passed; twelve focused suites **220 passed**; whole suite
+**5,269 passed**, nine failed, ten skipped, one todo, eight errors. All nine
+failure names match the localhost/listen `EPERM` cases reproduced on a pristine
+`e1fa618` archive (21 passed, nine failed, eight errors). Build passed; eager
+`dist/index.js` Node gzip is **38,026 B**, within 38.43 KB. Diff and new-file
+whitespace checks passed. Changes are uncommitted for the orchestrator checkpoint.
+S8.6 remains in progress pending Chrome; no sub-agents, spec edits or budget changes.

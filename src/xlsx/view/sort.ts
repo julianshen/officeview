@@ -7,6 +7,8 @@ import { CooperativeSlice } from './scheduler'
 import { mergeIndexRuns } from './sortMerge'
 import { numericTextKeys } from './sortText'
 import { BOUNDED_SORT_LANES, type BoundedSortLaneStore } from './sortLanes'
+import { buildSortPrefix, type SortPrefix } from './sortPrefix'
+import { PREPARED_SORT_READER, type PreparedSortStore } from './sortPrepared'
 
 declare const hiddenSourceBrand: unique symbol
 export interface HiddenSourceRows {
@@ -55,6 +57,7 @@ export interface SortLedger {
   scratchBytes: number
   runBytes: number
   textKeyBytes: number
+  prefixBytes: number
   orderBytes: number
   inverseBytes: number
   retainedBytes: number
@@ -152,7 +155,7 @@ function emptyLedger(options: SortOptions): SortLedger {
   return {
     tagsBytes: 0, numbersBytes: 0, idsBytes: 0, ranksBytes: 0, dictionaryBytes: 0,
     dictionaryMapPeakBytes: 0, pagePeakBytes: 0, constructionCopiesBytes: 0, fixedOverheadBytes: 0,
-    indexBytes: 0, scratchBytes: 0, runBytes: 0, textKeyBytes: 0, orderBytes: 0, inverseBytes: 0, retainedBytes: 0, peakBytes: 0,
+    indexBytes: 0, scratchBytes: 0, runBytes: 0, textKeyBytes: 0, prefixBytes: 0, orderBytes: 0, inverseBytes: 0, retainedBytes: 0, peakBytes: 0,
     residentWorkerBytes: options.residentWorkerBytes ?? 0, aggregatePeakBytes: options.residentWorkerBytes ?? 0,
   }
 }
@@ -373,6 +376,42 @@ async function prepare(
       allocate(() => dictionary.push(raw)); allocate(() => map.set(raw, id))
       return id
     }
+    function unavailable(row: number): void {
+      lane.tags[row - r0] = UNAVAILABLE; unavailableCount++
+      if (!firstAddress || row < firstAddress.row || row === firstAddress.row && key.col < firstAddress.col) firstAddress = { row, col: key.col }
+    }
+    function put(row: number, value: string | number | boolean | null, error: boolean): void {
+      const offset = row - r0
+      if (error) { lane.tags[offset] = ERROR; const id = intern(String(value), true); lane.ids![offset] = id }
+      else if (value === null) lane.tags[offset] = BLANK
+      else if (typeof value === 'number') {
+        if (Number.isFinite(value)) { lane.tags[offset] = NUMBER; lane.numbers[offset] = value }
+        else { lane.tags[offset] = ERROR; const id = intern('#NUM!', true); lane.ids![offset] = id }
+      } else if (typeof value === 'boolean') { lane.tags[offset] = BOOLEAN; lane.numbers[offset] = value ? 1 : 0 }
+      else if (typeof value === 'string') { lane.tags[offset] = STRING; const id = intern(value, false); lane.ids![offset] = id }
+      else throw sourceError('page-error', 'Unsupported authoritative key type')
+    }
+    const lease = (store as PreparedSortStore)[PREPARED_SORT_READER]?.(key.col, cooperative.stamp)
+    if (lease) {
+      try {
+        cooperative.check()
+        if (!sameStamp(lease.stamp, cooperative.stamp)) throw sourceError('stale-source', 'Prepared owner changed')
+        // Completeness of the trusted column proves every absent row is blank.
+        for (let at = 0; at < length; at++) {
+          lane.tags[at] = BLANK
+          if (cooperative.due()) await cooperative.pause('read')
+        }
+        let previous = r0 - 1
+        const read = await lease.read(r0, r1, (row, value, error, missing) => {
+          if (!Number.isSafeInteger(row) || row <= previous || row < r0 || row > r1) throw sourceError('page-error', 'Malformed prepared row order')
+          previous = row
+          if (missing) unavailable(row)
+          else put(row, value, error)
+        }, { due: () => cooperative.due(), pause: () => cooperative.pause('read') })
+        if (read === 'stale') throw sourceError('stale-source', 'Prepared owner changed')
+        cooperative.check()
+      } finally { lease.release() }
+    } else {
     for (let start = r0; start <= r1; start += CHUNK) {
       const end = Math.min(r1, start + CHUNK - 1)
       let cursor: string | undefined, pages = 0, cursorBytes = 0
@@ -485,29 +524,7 @@ async function prepare(
                 if (cell.row !== row || cell.col !== key.col || cell.id !== row * MAX_COLS + key.col) {
                   throw sourceError('page-error', 'Cell identity does not match its key entry')
                 }
-                if (cell.valueIsError) {
-                  lane.tags[offset] = ERROR
-                  const id = intern(String(value), true)
-                  lane.ids![offset] = id
-                }
-                else if (value === null) lane.tags[offset] = BLANK
-                else if (typeof value === 'number') {
-                  if (Number.isFinite(value)) { lane.tags[offset] = NUMBER; lane.numbers[offset] = value }
-                  else {
-                    // No finite engine representation: use the same raw error
-                    // dictionary entry as a real #NUM! cell, preserving source ties.
-                    lane.tags[offset] = ERROR
-                    const id = intern('#NUM!', true)
-                    lane.ids![offset] = id
-                  }
-                }
-                else if (typeof value === 'boolean') { lane.tags[offset] = BOOLEAN; lane.numbers[offset] = value ? 1 : 0 }
-                else if (typeof value === 'string') {
-                  lane.tags[offset] = STRING
-                  const id = intern(value, false)
-                  lane.ids![offset] = id
-                }
-                else throw sourceError('page-error', 'Unsupported authoritative key type')
+                put(row, value, Boolean(cell.valueIsError))
                 break
               }
             }
@@ -530,6 +547,7 @@ async function prepare(
         if (!lane.tags[row - r0]) incomplete = true
         if (cooperative.due()) await cooperative.pause('read')
       }
+    }
     }
     // Intern maps are no longer needed once the column is complete. Drop them
     // before rank/collation scratch so their payloads do not coexist at peak.
@@ -579,9 +597,14 @@ export async function prepareSortKeys(
   } catch (error) { return failure(error, options) }
   finally { cooperative?.dispose() }
 }
-function compareRows(prepared: PreparedSortKeys, a: number, b: number): number {
+function compareRows(prepared: PreparedSortKeys, a: number, b: number, prefix?: SortPrefix): number {
   const first = a - prepared.r0, second = b - prepared.r0
-  for (const lane of prepared.lanes) {
+  if (prefix) {
+    const comparison = prefix.codes[first] - prefix.codes[second]
+    if (comparison) return comparison
+  }
+  for (let key = prefix?.keys ?? 0; key < prepared.lanes.length; key++) {
+    const lane = prepared.lanes[key]
     const comparison = lane.tags[first] - lane.tags[second] || lane.numbers[first] - lane.numbers[second]
     if (comparison) return comparison
   }
@@ -638,7 +661,13 @@ export async function sortRowOrder(store: SourceStore, input: SortSpec | null, o
           if (!pinned(row)) index[count++] = row
           if (cooperative.due()) await cooperative.pause('candidates')
         }
-        const sorted = await mergeIndexes(index, scratch, count, (a, b) => compareRows(prepared, a, b), cooperative, 'merge', budget)
+        let prefix = await buildSortPrefix(prepared.lanes, length, {
+          canCharge: bytes => budget.canCharge(bytes), charge: bytes => budget.charge(bytes),
+          release: bytes => budget.release(bytes), allocate,
+        }, cooperative, 'read')
+        budget.ledger.prefixBytes = prefix?.bytes ?? 0
+        const sorted = await mergeIndexes(index, scratch, count, (a, b) => compareRows(prepared, a, b, prefix), cooperative, 'merge', budget)
+        if (prefix) { budget.release(prefix.bytes); prefix = undefined }
         if (length <= CHUNK) {
           // pinRowPermutation peak: candidates + rows + copied order + inverse;
           // createRowOrder then copies order/inverse again while that band lives.

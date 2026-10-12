@@ -73,3 +73,16 @@ it('preserves the base admission limit for an empty protected body', async () =>
   if (old.kind !== 'complete') throw new Error(old.kind)
   expect((await sortRowOrder(store, spec, { ...opts, maxWorkerBytes: old.ledger.peakBytes })).kind).toBe('complete')
 })
+it('preserves full multi-key permutations with an integer/collated prefix and fractional tail', async () => {
+  const n = 5003
+  const cells = Array.from({ length: n }, (_, row) => [row % 2 === 0, ['A', 'a', 'é', 'e\u0301', 'ß'][row % 5], row % 7, 45000 + row % 365, row / 11, '#N/A', row % 9, row % 13])
+  const store = createFixture('F2', { rowCount: n }).createStore({ read: { cellAt: (row, col) => ({ value: cells[row][col], styleIndex: col === 3 ? 3 : 0, valueIsError: col === 5, hasCachedValue: true }) } })
+  for (const locale of ['en', 'sv', 'tr']) for (const desc of [false, true]) for (const count of [4, 5, 8]) {
+    const spec: SortSpec = { range: { r0: 0, r1: n - 1, c0: 0, c1: 7, headerRows: 1, totalsRows: 1 }, keys: Array.from({ length: count }, (_, col) => ({ col, order: (col % 2 === 0) === desc ? 'desc' : 'asc' })), caseSensitive: desc }
+    const opts = { locale, now: () => 0, yield: async () => {}, hidden: { hidden: (row: number) => row % 17 === 0 } as NonNullable<Parameters<typeof sortRowOrder>[2]>['hidden'] }
+    const current = await sortRowOrder(store, spec, opts), old = await baseline(store, spec, opts)
+    expect(permutation(current)).toEqual(permutation(old))
+    if (current.kind !== 'complete') throw new Error(current.kind)
+    expect(current.ledger.prefixBytes).toBeGreaterThan(0)
+  }
+}, 30_000)
