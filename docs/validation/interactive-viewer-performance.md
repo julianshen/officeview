@@ -1,5 +1,10 @@
 # Interactive viewer — performance thresholds (S8.4 baseline)
 
+S8.6 implementation is in progress. The retained Chrome results below are still
+the S8.4 baseline, not measurements of the optimized kernel. See the
+[S8.6 checkpoint](interactive-viewer-sort-checkpoint.md) for Node diagnostics,
+parity evidence, remaining work and the Chrome handoff.
+
 Plan section **S8.4 Performance threshold freeze** (exit gate for S8). Spec
 §12.1 (freeze rule), §12.2 (profiles and thresholds), §12.6 (protocol).
 

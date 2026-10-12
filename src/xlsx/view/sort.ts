@@ -4,6 +4,8 @@ import type {
 import { createIdentityOrder, createRowOrder, pinRowPermutation, type CompactRowOrder } from './order'
 import { MAX_ROWS, MAX_COLS, CoordinateError, validateCoordinate, validateSourceRect } from './coordinates'
 import { CooperativeSlice } from './scheduler'
+import { mergeIndexRuns } from './sortMerge'
+import { numericTextKeys } from './sortText'
 
 declare const hiddenSourceBrand: unique symbol
 export interface HiddenSourceRows {
@@ -50,6 +52,8 @@ export interface SortLedger {
   fixedOverheadBytes: number
   indexBytes: number
   scratchBytes: number
+  runBytes: number
+  textKeyBytes: number
   orderBytes: number
   inverseBytes: number
   retainedBytes: number
@@ -147,7 +151,7 @@ function emptyLedger(options: SortOptions): SortLedger {
   return {
     tagsBytes: 0, numbersBytes: 0, idsBytes: 0, ranksBytes: 0, dictionaryBytes: 0,
     dictionaryMapPeakBytes: 0, pagePeakBytes: 0, constructionCopiesBytes: 0, fixedOverheadBytes: 0,
-    indexBytes: 0, scratchBytes: 0, orderBytes: 0, inverseBytes: 0, retainedBytes: 0, peakBytes: 0,
+    indexBytes: 0, scratchBytes: 0, runBytes: 0, textKeyBytes: 0, orderBytes: 0, inverseBytes: 0, retainedBytes: 0, peakBytes: 0,
     residentWorkerBytes: options.residentWorkerBytes ?? 0, aggregatePeakBytes: options.residentWorkerBytes ?? 0,
   }
 }
@@ -180,7 +184,7 @@ class Budget {
  * through `allocate` and closed in each public boundary's finally. */
 class Cooperative extends CooperativeSlice<SortPhase> {
   constructor(readonly store: SourceStore, readonly stamp: SourceStamp, readonly options: SortOptions) {
-    super(options, allocate)
+    super({ ...options, checkEvery: 256 }, allocate)
   }
   override check(): void {
     if (this.options.signal?.aborted) throw new Halt({ kind: 'cancelled' })
@@ -234,29 +238,18 @@ function sortCollator(locale: string, caseSensitive: boolean): Intl.Collator {
     throw sourceError('unsupported', error instanceof Error ? error.message : String(error))
   }
 }
-/** Stable bottom-up index merge: both initialization and comparison/output work yield.
- * Native Array/TypedArray.sort cannot provide an abort boundary. */
+/** Typed natural-run boundaries are transient, including during dictionary ranking. */
 async function mergeIndexes(
-  index: Uint32Array,
-  scratch: Uint32Array,
-  count: number,
-  compare: (a: number, b: number) => number,
-  cooperative: Cooperative,
-  phase: SortPhase,
+  index: Uint32Array, scratch: Uint32Array, count: number,
+  compare: (a: number, b: number) => number, cooperative: Cooperative, phase: SortPhase, budget: Budget,
 ): Promise<Uint32Array> {
-  let input = index, output = scratch
-  for (let width = 1; width < count; width *= 2) {
-    for (let start = 0; start < count; start += width * 2) {
-      const middle = Math.min(start + width, count), end = Math.min(start + width * 2, count)
-      let left = start, right = middle
-      for (let at = start; at < end; at++) {
-        output[at] = left < middle && (right >= end || compare(input[left], input[right]) <= 0) ? input[left++] : input[right++]
-        if (cooperative.due()) await cooperative.pause(phase)
-      }
-    }
-    const swap = input; input = output; output = swap
-  }
-  return input
+  if (count < 2) return index
+  const bytes = (Math.ceil(count / 2) + 1) * 4
+  budget.charge(bytes)
+  budget.ledger.runBytes = Math.max(budget.ledger.runBytes, bytes)
+  const starts = allocate(() => new Uint32Array(bytes / 4))
+  try { return await mergeIndexRuns(index, scratch, starts, count, compare, cooperative, phase) }
+  finally { budget.release(bytes) }
 }
 interface MutableLane {
   tags: Uint8Array
@@ -272,6 +265,7 @@ async function rankDictionary(
   compare: (a: string, b: string) => number,
   budget: Budget,
   cooperative: Cooperative,
+  collator?: Intl.Collator,
 ): Promise<Uint32Array> {
   const bytes = values.length * 4
   budget.charge(bytes * 3)
@@ -279,15 +273,33 @@ async function rankDictionary(
   const ranks = allocate(() => new Uint32Array(values.length))
   const index = allocate(() => new Uint32Array(values.length)), scratch = allocate(() => new Uint32Array(values.length))
   for (let id = 0; id < values.length; id++) { index[id] = id; if (cooperative.due()) await cooperative.pause('dictionary') }
-  const sorted = await mergeIndexes(
-    index, scratch, values.length, (a, b) => compare(values[a], values[b]), cooperative, 'dictionary',
-  )
-  let rank = 0
-  for (let at = 0; at < sorted.length; at++) {
-    if (at && compare(values[sorted[at - 1]], values[sorted[at]]) !== 0) rank++
-    ranks[sorted[at]] = rank
-    if (cooperative.due()) await cooperative.pause('dictionary')
-  }
+  const fast = collator && values.length >= 128 ? await numericTextKeys(values, collator, {
+    charge: bytes => { budget.charge(bytes); budget.ledger.textKeyBytes = Math.max(budget.ledger.textKeyBytes, bytes) },
+    release: bytes => budget.release(bytes), allocate,
+  }, cooperative, 'dictionary') : undefined
+  const compareIds = fast?.compare ?? ((a: number, b: number) => compare(values[a], values[b]))
+  try {
+    let sorted = await mergeIndexes(index, scratch, values.length, compareIds, cooperative, 'dictionary', budget)
+    const assignRanks = async (): Promise<boolean> => {
+      let rank = 0
+      for (let at = 0; at < sorted.length; at++) {
+        // Certify the COMPLETE observed domain, not just a finite alphabet.
+        // Host-sorted adjacency proves total ordering; host equality defines
+        // rank groups even if a candidate discriminator broke a tie.
+        const comparison = at ? compare(values[sorted[at - 1]], values[sorted[at]]) : 0
+        if (cooperative.due()) await cooperative.pause('dictionary')
+        if (comparison > 0) return false
+        if (comparison < 0) rank++
+        ranks[sorted[at]] = rank
+      }
+      return true
+    }
+    if (!(await assignRanks())) {
+      const other = sorted === index ? scratch : index
+      sorted = await mergeIndexes(sorted, other, values.length, (a, b) => compare(values[a], values[b]), cooperative, 'dictionary', budget)
+      if (!(await assignRanks())) throw sourceError('unsupported', 'Host collation did not define a consistent ordering')
+    }
+  } finally { fast?.dispose() }
   budget.release(bytes * 2)
   return ranks
 }
@@ -301,6 +313,7 @@ async function prepare(
   cooperative: Cooperative,
   budget: Budget,
   locale: string,
+  forSort = false,
 ): Promise<PreparedSortKeys> {
   const r0 = spec.range.r0 + spec.range.headerRows, r1 = spec.range.r1 - spec.range.totalsRows
   const length = Math.max(0, r1 - r0 + 1), lanes: SortLane[] = []
@@ -442,10 +455,27 @@ async function prepare(
         if (cooperative.due()) await cooperative.pause('read')
       }
     }
-    lane.stringRanks = await rankDictionary(lane.strings, collator.compare, budget, cooperative)
-    lane.errorRanks = await rankDictionary(lane.errors, (a, b) => a < b ? -1 : a > b ? 1 : 0, budget, cooperative)
+    // Intern maps are no longer needed once the column is complete. Drop them
+    // before rank/collation scratch so their payloads do not coexist at peak.
     stringIds = undefined; errorIds = undefined
     budget.release(mapBytes)
+    lane.stringRanks = await rankDictionary(lane.strings, collator.compare, budget, cooperative, collator)
+    lane.errorRanks = await rankDictionary(lane.errors, (a, b) => a < b ? -1 : a > b ? 1 : 0, budget, cooperative)
+    if (forSort) {
+      // The private operation lanes become direction-normalized keys. Public
+      // prepareSortKeys still publishes raw values; no extra per-row copy is needed.
+      const descending = key.order === 'desc'
+      for (let at = 0; at < length; at++) {
+        const tag = lane.tags[at]
+        if (tag === STRING) lane.numbers[at] = lane.stringRanks[lane.ids![at]]
+        else if (tag === ERROR) lane.numbers[at] = lane.errorRanks[lane.ids![at]]
+        if (descending && tag < ERROR) {
+          lane.tags[at] = 4 - tag
+          lane.numbers[at] = -lane.numbers[at]
+        }
+        if (cooperative.due()) await cooperative.pause('read')
+      }
+    }
     const publishedLane = Object.freeze({ ...lane, strings: Object.freeze(lane.strings), errors: Object.freeze(lane.errors) })
     allocate(() => lanes.push(publishedLane))
   }
@@ -475,17 +505,9 @@ export async function prepareSortKeys(
 }
 function compareRows(prepared: PreparedSortKeys, a: number, b: number): number {
   const first = a - prepared.r0, second = b - prepared.r0
-  for (let key = 0; key < prepared.lanes.length; key++) {
-    const lane = prepared.lanes[key], ta = lane.tags[first], tb = lane.tags[second]
-    let comparison = 0
-    if (ta !== tb) {
-      comparison = ta - tb
-      if (ta >= ERROR || tb >= ERROR) return comparison
-    } else if (ta === STRING) comparison = lane.stringRanks[lane.ids![first]] - lane.stringRanks[lane.ids![second]]
-    else if (ta === ERROR) comparison = lane.errorRanks[lane.ids![first]] - lane.errorRanks[lane.ids![second]]
-    else if (ta !== BLANK) comparison = lane.numbers[first] - lane.numbers[second]
-    if (comparison) return ta === ERROR || ta === BLANK
-      ? comparison : prepared.spec.keys[key].order === 'asc' ? comparison : -comparison
+  for (const lane of prepared.lanes) {
+    const comparison = lane.tags[first] - lane.tags[second] || lane.numbers[first] - lane.numbers[second]
+    if (comparison) return comparison
   }
   return a - b
 }
@@ -528,7 +550,7 @@ export async function sortRowOrder(store: SourceStore, input: SortSpec | null, o
     cooperative.check()
     let order: RowOrder = createIdentityOrder(), emptyBody = false
     if (spec !== null) {
-      const prepared = await prepare(store, spec, cooperative, budget, locale)
+      const prepared = await prepare(store, spec, cooperative, budget, locale, true)
       const length = Math.max(0, prepared.r1 - prepared.r0 + 1)
       if (length) {
         const pinned = options.hidden ? (row: number) => options.hidden!.hidden(row) : () => false
@@ -540,7 +562,7 @@ export async function sortRowOrder(store: SourceStore, input: SortSpec | null, o
           if (!pinned(row)) index[count++] = row
           if (cooperative.due()) await cooperative.pause('candidates')
         }
-        const sorted = await mergeIndexes(index, scratch, count, (a, b) => compareRows(prepared, a, b), cooperative, 'merge')
+        const sorted = await mergeIndexes(index, scratch, count, (a, b) => compareRows(prepared, a, b), cooperative, 'merge', budget)
         if (length <= CHUNK) {
           // pinRowPermutation peak: candidates + rows + copied order + inverse;
           // createRowOrder then copies order/inverse again while that band lives.

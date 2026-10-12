@@ -194,7 +194,8 @@ describe('sort ownership, bounded work and resource admission', () => {
     const store = dataStore(Array.from({ length: 100 }, (_v, row) => [fixtureCell(100 - row)]))
     let time = 0, yields = 0
     expect((await sortRowOrder(store, specFor(100), { now: () => (time += 11), yield: async () => { yields++ } })).kind).toBe('complete')
-    expect(yields).toBeGreaterThan(100)
+    // Clock deadlines are sampled at bounded batches, with a final publication pause.
+    expect(yields).toBeGreaterThan(1)
     const controller = new AbortController()
     const job = sortRowOrder(createFixture('F7', { rowCount: 10000 }).createStore(), specFor(10000), { signal: controller.signal })
     setTimeout(() => controller.abort(), 0)
@@ -299,8 +300,8 @@ describe('construction/accounting cancellation regressions', () => {
     let checks = 0
     const perPhase = new Map<string, number>()
     const result = await sortRowOrder(createFixture('F4', { rowCount: 16385 }).createStore(), specFor(16385), { now: () => { checks++; return 0 }, yield: async phase => {
-      // Clock sampling happens once per work unit, plus scheduler reset/initialization.
-      expect(checks).toBeLessThanOrEqual(4097)
+      // At most sixteen 256-unit samples per yield, plus reset/initialization.
+      expect(checks).toBeLessThanOrEqual(18)
       perPhase.set(phase, (perPhase.get(phase) ?? 0) + 1)
       checks = 0
     } })
@@ -360,18 +361,19 @@ describe('review behavior regressions', () => {
       vi.stubGlobal('MessageChannel', TestChannel)
       vi.stubGlobal('setTimeout', timers)
       try {
-        const store = dataStore([[fixtureCell(2)], [fixtureCell(1)]])
+        // Cross one amortized clock-check batch before the second-column failure.
+        const store = dataStore(Array.from({ length: 257 }, (_, row) => [fixtureCell(257 - row)]))
         let reads = 0
         const original = store.queryColumn.bind(store)
         const source: SourceStore = { ...store, queryColumn: async (request, options) => {
           if (outcome === 'error' && reads++) throw new Error('source failed after yield')
           return original(request, options)
         } }
-        const result = await sortRowOrder(source, specFor(2, [
+        const result = await sortRowOrder(source, specFor(257, [
           { col: 0, order: 'asc' }, { col: 1, order: 'asc' },
         ]), { now: () => (time += 11), signal: controller.signal })
         expect(result.kind).toBe(outcome)
-        if (result.kind === 'complete') expect(rowsOf(result)).toEqual([1, 0])
+        if (result.kind === 'complete') expect(rowsOf(result)).toEqual(Array.from({ length: 257 }, (_, row) => 256 - row))
         expect(timers).not.toHaveBeenCalled()
         expect(channels).toBe(1)
         expect(messages).toBeGreaterThan(0)

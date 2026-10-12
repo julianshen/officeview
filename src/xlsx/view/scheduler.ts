@@ -18,6 +18,8 @@ export type YieldFunction<Phase extends string = string> = (phase: Phase) => Pro
 export interface CooperativeOptions<Phase extends string = string> {
   now?: () => number
   yield?: YieldFunction<Phase>
+  /** Opt-in for unit-at-a-time kernels (§12.1). Other callers keep per-call checks. */
+  checkEvery?: 1 | 256
 }
 export interface HostYield { yield: () => Promise<void>; dispose: () => void }
 type Allocate = <T>(create: () => T) => T
@@ -64,7 +66,7 @@ export function createHostYield(allocate: Allocate = create => create()): HostYi
 
 /**
  * One operation's yield budget. `due(units)` charges completed work and samples
- * the clock once; a caller that sees `true` awaits `pause(phase)`. `check()` is
+ * the clock at the selected check interval; a caller that sees `true` awaits `pause(phase)`. `check()` is
  * an override hook run around every pause (the sort engine throws its typed
  * cancellation/stale outcomes from it).
  */
@@ -72,10 +74,13 @@ export class CooperativeSlice<Phase extends string = string> {
   private work = 0
   private last: number
   private taken = 0
+  private unchecked = 0
+  private readonly checkEvery: number
   readonly now: () => number
   readonly schedule: YieldFunction<Phase>
   readonly dispose: () => void
   constructor(options: CooperativeOptions<Phase>, allocate?: Allocate) {
+    this.checkEvery = options.checkEvery === 256 ? 256 : 1
     this.now = options.now ?? (() => performance.now())
     this.last = this.now()
     const host = options.yield ? undefined : createHostYield(allocate)
@@ -86,9 +91,14 @@ export class CooperativeSlice<Phase extends string = string> {
   get yields(): number { return this.taken }
   check(): void {}
   due(units = 1): boolean {
-    this.check()
     this.work += units
-    return this.work >= YIELD_WORK_UNITS || this.now() - this.last >= YIELD_INTERVAL_MS
+    this.unchecked += units
+    if (this.unchecked < this.checkEvery && this.work < YIELD_WORK_UNITS) return false
+    this.unchecked = 0
+    this.check()
+    if (this.checkEvery === 1 && this.work >= YIELD_WORK_UNITS) return true
+    const now = this.now()
+    return this.work >= YIELD_WORK_UNITS || now - this.last >= YIELD_INTERVAL_MS
   }
   async pause(phase: Phase): Promise<void> {
     this.check()
@@ -96,6 +106,7 @@ export class CooperativeSlice<Phase extends string = string> {
     this.check()
     this.taken++
     this.work = 0
+    this.unchecked = 0
     this.last = this.now()
   }
   /** Yields if any work is unyielded: used at a handoff to another kernel with
