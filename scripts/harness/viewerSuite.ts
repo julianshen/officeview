@@ -416,9 +416,25 @@ export async function runViewerSuite(ctx: SuiteContext): Promise<{ receipt: View
   const errors: string[] = []
   const raw: Record<string, unknown> = {}
   const measurements: ReceiptMeasurements = {}
-  const fresh = () => browser.newContext(contextOptions)
+  // An unexpected disconnect (browser crash or an external kill on a shared
+  // machine) ends the run loudly instead of leaving awaits pending forever.
+  let closing = false
+  browser.on('disconnected', () => {
+    if (closing) return
+    log('  ERROR: the browser disconnected unexpectedly; no receipt is written')
+    process.exit(3)
+  })
+  const fresh = async () => {
+    const context = await browser.newContext(contextOptions)
+    context.on('page', page => page.on('crash', () => { errors.push('page crashed'); log('  ERROR: a page crashed') }))
+    return context
+  }
+  // Diagnostic iteration only (never in release): VIEWER_SUITE_ONLY=memory,ack …
+  const only = args.mode === 'release' ? null : process.env.VIEWER_SUITE_ONLY?.split(',') ?? null
+  const want = (name: string) => only === null || only.includes(name)
   const profileId = args.profile === 'desktop' ? 'D' : 'M'
   try {
+    if (want('firstViewport')) {
     log('first usable viewport (local File -> labelled usable frame)…')
     const fv: Record<string, unknown> = {}
     measurements.firstViewport = {}
@@ -431,7 +447,9 @@ export async function runViewerSuite(ctx: SuiteContext): Promise<{ receipt: View
       measurements.firstViewport[key] = summarize(run.usable, MIN_OPERATION_SAMPLES)
     }
     raw.firstViewport = fv
+    }
 
+    if (want('scroll')) {
     log('sustained scroll (300 open-loop frames per mix)…')
     const scroll: Record<string, unknown> = {}
     measurements.scroll = {}
@@ -451,7 +469,9 @@ export async function runViewerSuite(ctx: SuiteContext): Promise<{ receipt: View
       log(`    scroll ${kind}: input-to-paint ${fmt(inputToPaint)}; frame interval ${fmt(frameInterval)}; ${session.result.coalesced} coalesced, ${session.result.longTasks.length} long tasks${session.wheel ? `; wheel ${fmt(summarize(session.wheel.latencies, 1))}` : ''}`)
     }
     raw.scroll = scroll
+    }
 
+    if (want('ack')) {
     log('input acknowledgment on F2 while the worker runs…')
     {
       const context = await fresh()
@@ -465,7 +485,9 @@ export async function runViewerSuite(ctx: SuiteContext): Promise<{ receipt: View
         cancel: summarize(ack.cancel.samples.concat(Array(ack.cancel.censored).fill(ACK_TIMEOUT_MS)), MIN_OPERATION_SAMPLES),
       }
     }
+    }
 
+    if (want('import')) {
     log('importer throughput (paged importer alone, in a worker)…')
     {
       const context = await fresh()
@@ -479,7 +501,9 @@ export async function runViewerSuite(ctx: SuiteContext): Promise<{ receipt: View
         if (ok.length === imp[key].runs.length && ok.length > 0) measurements.import[key] = { expandedMiBPerSec: Math.min(...ok.map(t => t.expandedMiBPerSec)), cellsPerSec: Math.min(...ok.map(t => t.cellsPerSec)) }
       }
     }
+    }
 
+    if (want('memory')) {
     log('memory (ledger + CDP heap + measureUserAgentSpecificMemory), F2 and F4 sessions…')
     {
       const memory: Record<string, unknown> = {}
@@ -496,7 +520,9 @@ export async function runViewerSuite(ctx: SuiteContext): Promise<{ receipt: View
       raw.memory = memory
       measurements.memory = { mainOwnedBytes: Number.isFinite(main) ? main : null, workerOwnedBytes: worker || null, bitmapPeakBytes: bitmap || null }
     }
+    }
   } finally {
+    closing = true
     await browser.close().catch(() => {})
     await server.close()
   }
