@@ -100,12 +100,16 @@ export function GridSemantics(props: GridSemanticsProps): ReactElement {
   const limits = FRAME_LIMITS[props.profile ?? 'D']
   let coarse = props.renderMode === 'coarse' || rowWindow.count * colWindow.count >= limits.cells || rowWindow.count + colWindow.count >= limits.lines
   let slots: number[] = [], columns: number[] = []
+  let subDetail = false
   if (!coarse) {
-    for (const run of rowWindow.runs) for (let slot = run.start; slot <= run.end; slot++) slots.push(slot)
-    for (const run of colWindow.runs) for (let col = run.start; col <= run.end; col++) columns.push(col)
-    coarse = slots.some(slot => projection.rows.size(slot) * scroll.zoom * scroll.deviceScale < 4)
-      || columns.some(col => projection.cols.size(col) * scroll.zoom * scroll.deviceScale < 4)
-    if (coarse) { slots = []; columns = [] }
+    // A line under 4 device px is painted as a coarse pixel group (§11.1) and
+    // owns no row/cell here; every other line keeps its owned semantics. One
+    // tiny authored row must not strip the whole viewport (A11Y-01). The window
+    // counts above already bound how many lines this can visit.
+    const detail = (size: number) => size * scroll.zoom * scroll.deviceScale >= 4
+    for (const run of rowWindow.runs) for (let slot = run.start; slot <= run.end; slot++) if (detail(projection.rows.size(slot))) slots.push(slot); else subDetail = true
+    for (const run of colWindow.runs) for (let col = run.start; col <= run.end; col++) if (detail(projection.cols.size(col))) columns.push(col); else subDetail = true
+    if (!slots.length || !columns.length) { coarse = true; slots = []; columns = [] }
   }
   const active = selection.active && projection.sourceCellToLogical(selection.active) ? selection.active : null
   const activeSlot = active ? projection.order.sourceToDisplay(active.row) : null
@@ -179,7 +183,7 @@ export function GridSemantics(props: GridSemanticsProps): ReactElement {
     },
     onSelectAll: () => publish(() => ({ selection: { active, anchor: active, ranges: [{ rows: { kind: 'intervals', intervals: [{ r0: 0, r1: projection.rows.logicalCount - 1 }] }, cols: [{ c0: 0, c1: projection.cols.logicalCount - 1 }] }] }, window: scroll, announcement: 'Worksheet selected.' })),
   }
-  const status = [props.announcement, current.announcement, notice, coarse ? 'Zoom in or inspect a cell for detail.' : ''].filter(Boolean).join(' ')
+  const status = [props.announcement, current.announcement, notice, coarse || subDetail ? 'Zoom in or inspect a cell for detail.' : ''].filter(Boolean).join(' ')
   return <div ref={wrapperRef} onKeyDown={keyDown} onBlur={event => { if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setControlMode(false) }} style={{ position: 'relative', width: viewport.width + GRID_HEADER_SIZE, height: viewport.height + headerHeight }}>
     <div ref={gridRef} role="grid" aria-label={props.label ?? 'Worksheet'} aria-rowcount={MAX_ROWS + 1} aria-colcount={MAX_COLS + 1}
       aria-multiselectable="true" aria-activedescendant={active ? `${prefix}-cell-${cellId(active.row, active.col)}` : undefined}
