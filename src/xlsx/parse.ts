@@ -69,7 +69,7 @@ interface Styles {
   fonts: Array<{ bold: boolean; italic: boolean; sizePt?: number; color?: string }>
   fills: Array<{ rgb?: string; pattern?: string }>
   borders: Array<{ left?: string; right?: string; top?: string; bottom?: string }>
-  xfs: Array<{ numFmtId: number; fontId: number; fillId: number; borderId: number; textRotation?: number; horizontal?: string; vertical?: string; wrapText?: boolean }>
+  xfs: Array<{ numFmtId: number; fontId: number; fillId: number; borderId: number; textRotation?: number; horizontal?: string; vertical?: string; wrapText?: boolean; shrinkToFit?: boolean }>
 }
 
 async function parseStyles(pkg: OfficePackage): Promise<Styles> {
@@ -118,6 +118,7 @@ async function parseStyles(pkg: OfficePackage): Promise<Styles> {
       const horizontal = typeof align.horizontal === 'string' && align.horizontal !== '' ? align.horizontal : undefined
       const vertical = typeof align.vertical === 'string' && align.vertical !== '' ? align.vertical : undefined
       const wrapText = align.wrapText === '1' || align.wrapText === 'true' ? true : align.wrapText === '0' || align.wrapText === 'false' ? false : undefined
+      const shrinkToFit = align.shrinkToFit === '1' || align.shrinkToFit === 'true' ? true : align.shrinkToFit === '0' || align.shrinkToFit === 'false' ? false : undefined
       styles.xfs.push({
         numFmtId: parseInt(a.numFmtId ?? '0', 10),
         fontId: parseInt(a.fontId ?? '0', 10),
@@ -127,6 +128,7 @@ async function parseStyles(pkg: OfficePackage): Promise<Styles> {
         horizontal,
         vertical,
         wrapText,
+        shrinkToFit,
       })
     }
   }
@@ -566,6 +568,7 @@ async function parseSheet(
           horizontal: xf.horizontal,
           vertical: xf.vertical,
           wrapText: xf.wrapText,
+          ...(xf.shrinkToFit !== undefined ? { shrinkToFit: xf.shrinkToFit } : {}),
         }
       }
       row.cells.push(cell)

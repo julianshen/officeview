@@ -377,6 +377,28 @@ The harness fix (`6dd5240`) waits up to 30 s for a settled name and asserts that
   - **Golden:** corpus compare after hydrating with `bun scripts/fetch-corpus.ts` changed exactly one XLSX golden: `poi-64508.xlsx.0` (2,720 / 44,800 px). Its `dd.mm.yyyy` date column used to spill garbled digits into the next column and now shows `######` in the cell. Re-recorded.
   - Six docx/pptx goldens also differ (`poi-55733.docx.0`, `poi-picture-transparency.pptx.1–3`, `pydocx-blk-inner-content.docx.0`, `pypptx-test_slides.pptx.0`). They fail identically on the base commit without this change, so they are unrelated and not re-recorded.
   - With real Calibri metrics, a column that fits in Excel would also fit here. The harness has no Calibri, so this date column shows `#`s.
+- **Text overflow into non-empty neighbours: fixed for Excel fidelity.** Excel lets text overflow only into empty adjacent cells: rightward for left/General alignment, leftward for right alignment, both ways for center. It clips at the first non-empty cell.
+  - What blocks: a value, a formula (even one returning ""), an empty-string constant, and any merged cell, including a merge anchored in another row. The sheet edge stops it too.
+  - Hidden (zero-width) columns are skipped: they neither block nor add room. Merged cells never overflow. Formatting-only cells count as empty.
+  - Rule and placement:
+    - `src/xlsx/view/textOverflow.ts` holds the pure rule, `textOverflowAllowance`.
+    - The static renderer computes each row's occupancy once.
+    - The viewer planner (`viewport.ts`) computes it inside its fetched overflow envelope. Beyond the envelope the room is unbounded, because the pane never reaches there.
+    - `layoutCellBody` turns the allowance into a horizontal clip: `clipX` on plain text, a widened `clip` on unwrapped explicit layouts.
+    - The allowance is part of the viewer's layout-cache key.
+  - Tests:
+    - `tests/xlsx-text-overflow.test.ts` covers left/right/center; blocking by a value, by `""` (formula and constant) and by a merge; the sheet and left edges; hidden columns; formatting-only cells. It failed first with `expected null to deeply equal { x0: 0, x1: 100 }` and similar.
+    - A viewer/static parity crop in `tests/xlsx-viewer-layout.test.ts` gives diff 0, with clips at the expected column edges.
+- **Shrink-to-fit: implemented.** `alignment@shrinkToFit` is now parsed (`parse.ts`, `pagedFormatting.ts`; `XlsxCellStyle.shrinkToFit`).
+  - For unwrapped, unrotated cells, the font scales down in 0.1 pt steps until the formatted text fits the interior. General keeps full precision rather than dropping decimals.
+  - A number shows `#` only when even the 4 pt minimum does not fit; text stays at the minimum.
+  - Find and accessible values (`cellDisplayText`) are unchanged.
+  - Tests (same file): numbers, dates, text, text that already fits, the below-minimum `#`, and the accessible value.
+- **Goldens for these two rules:** after the fixes, the corpus compare changed three XLSX goldens, all re-recorded. In each, overlapping text from a cell is now clipped at its non-empty neighbour, as Excel does:
+  - `poi-59021.xlsx.0` (1,004 / 20,480 px): "Abkhazia - Fixed" over "7840", and "10/02/2016" over F2, which holds an empty-string constant.
+  - `poi-64508.xlsx.0` (3,519 / 44,800 px): headers and "SI33738504"/"04656-2020"/barcodes over their neighbours.
+  - `poi-xlsx-jdbc.xlsx.0` (1,080 / 7,680 px): "A Very large string in a column" over "foo"/"bar".
+  - The same six docx/pptx goldens still differ exactly as on the base commit (unrelated).
 
 ## Blocking for release
 
@@ -392,7 +414,6 @@ These are mandatory cases whose evidence is incomplete. Nothing here is hidden a
 
 ## Observations (not fixed; not reproduced as failures)
 
-- (S13) Text cells in `poi-64508.xlsx` still overflow into non-empty neighbours (for example "SI33738504" over column B). Excel clips text at a non-empty neighbour. This is separate from the V4 number rule and not fixed here.
 - (S13) A 1 px pane-width nudge at DPR 1.5 once seemed to leave the pane width stale (canvas CSS 1397 at `innerWidth` 1440). It was investigated and did not reproduce in 192 cycles; every stale state seen was D-DPR, now fixed. Details in the S13 section.
 - G2's read-ahead costs one extra `next()` per complete cursor-less page. On the worker path that is one more worker round trip; it is part of the roughly 597 reads observed above. Detection keeps at most one read-ahead continuation open, because the worker caps open scans at 4 (`MAX_OPEN_SCANS`), shared with find. This is a cost note for the S8.6 owner, not a bug.
 - Generated browser packages are cached under `$TMPDIR/officeview-viewer-e2e-v1`, keyed by file name. If the S0.2 builders change, bump the `-v1` suffix in `tests/browser/viewer-e2e.ts`.

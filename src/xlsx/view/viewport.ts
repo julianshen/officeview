@@ -24,6 +24,7 @@ import { createSheetMetrics, type ProjectedSheetMetrics } from './projection'
 import { RectangleIndex } from './structure'
 import { cellSourceRow, drawingExtent } from './sheetCells'
 import { createIntervalSet } from './visibility'
+import { cellBlocksOverflow, textOverflowAllowance, type OverflowAllowance } from './textOverflow'
 
 // Static-renderer helpers live in a leaf module so the eager static path never
 // reaches the viewport planner; re-exported for existing callers.
@@ -191,7 +192,9 @@ export type SheetGeometryResult =
   | { readonly kind: 'diagnostic'; readonly diagnostics: readonly WorkerDiagnostic[] }
 
 /** Logical CSS box of one painted record; merge anchors span their whole range. */
-export interface CellPlacement { cell: XlsxCell; source: SourceCell; x: number; y: number; width: number; height: number; merge?: XlsxMergeRange }
+export interface CellPlacement { cell: XlsxCell; source: SourceCell; x: number; y: number; width: number; height: number; merge?: XlsxMergeRange
+  /** Room the text may use past the box into empty neighbours (S13). */
+  overflow?: OverflowAllowance }
 export interface MergePlacement { range: XlsxMergeRange; x: number; y: number; width: number; height: number }
 export interface ViewportDetail {
   kind: 'detail'
@@ -759,7 +762,7 @@ function detailPlan(geometry: SheetGeometry, viewport: LogicalViewport, limits: 
     const at = anchor ? firstCellAtOrAfter(anchor, range.minCol) : -1
     // An anchor whose own row/column lies outside the window still owns the merged paint.
     if (anchor && at < anchor.length && anchor[at].col === range.minCol) {
-      cells.push({ cell: anchor[at], source: { row: range.minRow, col: range.minCol }, slot: range.minRow, ...placement, merge: range })
+      cells.push({ cell: anchor[at], source: { row: range.minRow, col: range.minCol }, slot: range.minRow, ...placement, merge: range, overflow: { left: 0, right: 0 } })
     }
   }
   const locator = new MergeLocator(covering, c0, c1)
@@ -768,15 +771,28 @@ function detailPlan(geometry: SheetGeometry, viewport: LogicalViewport, limits: 
     const rowCells = geometry.cellsOf(source)
     if (!rowCells) continue
     const top = metrics.rows.start(slot), rowHeight = metrics.rows.size(slot)
-    const end = firstCellAtOrAfter(rowCells, c1 + 1)
-    for (let index = firstCellAtOrAfter(rowCells, c0); index < end; index++) {
+    const end = firstCellAtOrAfter(rowCells, c1 + 1), begin = firstCellAtOrAfter(rowCells, c0)
+    // Text overflow (S13): occupancy inside the fetched envelope [c0, c1];
+    // beyond it the pane is never reached, so the room there is unbounded.
+    let occupancy: Parameters<typeof textOverflowAllowance>[0] | undefined
+    const overflowAt = (col: number): OverflowAllowance => {
+      occupancy ??= {
+        occupied: rowCells.slice(begin, end).filter(cellBlocksOverflow).map(cell => cell.col),
+        merges: covering.filter(range => range.minRow <= source && source <= range.maxRow),
+        colStart: (c: number) => metrics.cols.start(c),
+        lastCol: metrics.cols.logicalCount - 1,
+        knownFrom: c0, knownTo: c1,
+      }
+      return textOverflowAllowance(occupancy, col)
+    }
+    for (let index = begin; index < end; index++) {
       const item = rowCells[index]
       const col = item.col
       work.visitedRecords++
       const colWidth = metrics.cols.size(col)
       // Collapsed rows/columns produce no fill, text or hit target (spec §5.3).
       if (colWidth <= 0 || !colIsDetail(col) || locator.at(source, col)) continue
-      cells.push({ cell: item, source: { row: source, col }, slot, x: metrics.cols.start(col), y: top, width: colWidth, height: rowHeight })
+      cells.push({ cell: item, source: { row: source, col }, slot, x: metrics.cols.start(col), y: top, width: colWidth, height: rowHeight, overflow: overflowAt(col) })
     }
   }
   if (tileOverflow(cells, viewport, scale, limits.tile.records)) {

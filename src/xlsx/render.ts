@@ -19,6 +19,8 @@ import { decodeSerial } from './formula/serial'
 import type { ResolvedSemantics } from './formula/types'
 import type { WorkerDiagnostic } from './view/contracts'
 import { MAX_COLS, isValidCoordinate } from './view/coordinates'
+import { cellBlocksOverflow, textOverflowAllowance, type OverflowAllowance, type RowOverflowInput } from './view/textOverflow'
+export { textOverflowAllowance, cellBlocksOverflow, type OverflowAllowance, type RowOverflowInput } from './view/textOverflow'
 import { RectangleIndex } from './view/structure'
 import { cellSourceRow, drawingExtent } from './view/sheetCells'
 import type { CellBodyLayout } from './view/textLayout'
@@ -114,7 +116,7 @@ function alignedLayout(layout: TextLayout, bounds: ReturnType<typeof textLayoutB
  * Layout and paint are separate so the viewer can cache the layout (computed
  * in a box at the origin) and replay it; the static path runs both back to back
  * at absolute coordinates, exactly as before. */
-function layoutCellText(ctx: CanvasRenderingContext2D, text: string, style: XlsxCellStyle | undefined, numeric: boolean, x: number, y: number, w: number, h: number, color: string, center = false): Extract<NonNullable<CellBodyLayout['text']>, { kind: 'layout' }> {
+function layoutCellText(ctx: CanvasRenderingContext2D, text: string, style: XlsxCellStyle | undefined, numeric: boolean, x: number, y: number, w: number, h: number, color: string, center = false, overflow?: OverflowAllowance): Extract<NonNullable<CellBodyLayout['text']>, { kind: 'layout' }> {
   const mapped = cellTextRotation(style?.textRotation), stacked = mapped && 'stacked' in mapped
   const radians = mapped && 'radians' in mapped ? mapped.radians : 0
   const defaultHorizontal = numeric ? 'right' : center ? 'center' : 'left'
@@ -161,9 +163,18 @@ function layoutCellText(ctx: CanvasRenderingContext2D, text: string, style: Xlsx
     }
     const bounds = textLayoutBounds(layout, measure)
     const placed = alignedLayout(layout, bounds, { x, y, w, h }, horizontal, vertical)
+    // One unwrapped, unrotated line may run into empty neighbours (S13); the
+    // clip widens by the room it needs, up to the allowance.
+    let clipX0 = x, clipX1 = x + w
+    if (overflow && !wrap && !stacked && !radians) {
+      const placedBounds = textLayoutBounds(placed, measure)
+      const band = overflowBand(x, w, placedBounds.x, placedBounds.width, overflow) ?? { x0: Math.min(x, placedBounds.x), x1: Math.max(x + w, placedBounds.x + placedBounds.width) }
+      clipX0 = band.x0
+      clipX1 = band.x1
+    }
     // Coordinates in the placed layout are box-local to (x, y) and already include
     // the final merged bounds. Paint and recording replay this exact geometry.
-    return { kind: 'layout', text, font: '', color, body, layout: placed, clip: { x, y, width: w, height: h },
+    return { kind: 'layout', text, font: '', color, body, layout: placed, clip: { x: clipX0, y, width: clipX1 - clipX0, height: h },
       ...(stacked ? { stacked: true } : radians ? { rotation: radians } : {}), wrap, lines: placed.lines.length }
   } finally { ctx.restore() }
 }
@@ -651,6 +662,17 @@ export function renderSheet(
   }
   const extent = { width: m.widthPx, height: m.heightPx }
   for (const row of sheet.rows) {
+    // Neighbour occupancy for text overflow (S13), built once per row on demand.
+    let rowOverflow: RowOverflowInput | undefined
+    const overflowFor = (cell: XlsxCell): OverflowAllowance => {
+      rowOverflow ??= {
+        occupied: row.cells.filter(cellBlocksOverflow).map(item => item.col).sort((a, b) => a - b),
+        merges: merges.inRow(cellSourceRow(row, cell)),
+        colStart: edges.col,
+        lastCol: MAX_COLS - 1,
+      }
+      return textOverflowAllowance(rowOverflow, cell.col)
+    }
     for (const cell of row.cells) {
       // Only coordinates inside the grid have geometry; admission refused any
       // populated cell beyond it that this request needs, so nothing here falls
@@ -670,7 +692,7 @@ export function renderSheet(
       const hh = rng ? edges.row(rng.maxRow + 1) - y : h
       // Collapsed (authored-hidden) rows/columns produce no fill or text (spec §5.3).
       if (!(w > 0 && hh > 0) || !intersects(x, y, w, hh)) continue
-      const border = paintCellBody(ctx, sheet, cell, x, y, w, hh, measured, extent)
+      const border = paintCellBody(ctx, sheet, cell, x, y, w, hh, measured, extent, rng ? { left: 0, right: 0 } : overflowFor(cell))
       if (border) paintBorders.push(border)
     }
   }
@@ -823,6 +845,8 @@ function staticMergeIndex(ranges: readonly XlsxMergeRange[]) {
   }
   const index = RectangleIndex.build(entries)
   return {
+    /** Ranges intersecting one row (text overflow blockers). */
+    inRow: (row: number) => isValidCoordinate(row, 0) ? index.collect({ r0: row, r1: row, c0: 0, c1: MAX_COLS - 1 }) : [],
     anchorAt: (row: number, col: number) => anchor.get(`${row}:${col}`),
     covers: (row: number, col: number) => isValidCoordinate(row, col)
       && index.firstWhere({ r0: row, r1: row, c0: col, c1: col }, r => r.minRow !== row || r.minCol !== col) !== undefined,
@@ -839,8 +863,9 @@ function paintCellBody(
   x: number, y: number, w: number, hh: number,
   measured: MeasureCached,
   extent: { width: number; height: number },
+  overflow?: OverflowAllowance,
 ): (() => void) | undefined {
-  return paintCellLayout(ctx, layoutCellBody(ctx, sheet, cell, x, y, w, hh, measured), extent)
+  return paintCellLayout(ctx, layoutCellBody(ctx, sheet, cell, x, y, w, hh, measured, overflow), extent)
 }
 
 /** Host formatting and text layout of one cell in the box (x, y, w, hh): the
@@ -852,30 +877,47 @@ export function layoutCellBody(
   cell: XlsxCell,
   x: number, y: number, w: number, hh: number,
   measured: MeasureCached,
+  /** Room the text may use past the box (textOverflowAllowance). Absent: plain
+   * text is unbounded and laid-out text clips to the box, as before S13. */
+  overflow?: OverflowAllowance,
 ): CellBodyLayout {
   const out: CellBodyLayout = { x, y, w, h: hh, formattedText: '' }
   if (cell.style?.fillColor) out.fill = resolveColor(cell.style.fillColor)
   // text (right-align numbers, left-align strings; alignment spans the merge)
-  const font = `${cell.style?.italic ? 'italic ' : ''}${cell.style?.bold ? 'bold ' : ''}${cell.style?.fontSizePt ?? 10}pt "Calibri"`
-  const fitsGeneral = cellTextRotation(cell.style?.textRotation) === undefined
-    ? (text: string) => measured(font, text) <= Math.max(0, w - PADDING_L - PADDING_R)
-    : undefined
+  const fontAt = (sizePt: number) => `${cell.style?.italic ? 'italic ' : ''}${cell.style?.bold ? 'bold ' : ''}${sizePt}pt "Calibri"`
+  const baseSize = cell.style?.fontSizePt ?? 10
+  const rotated = cellTextRotation(cell.style?.textRotation) !== undefined
+  const inner = Math.max(0, w - PADDING_L - PADDING_R)
+  const shrinkable = cell.style?.shrinkToFit === true && cell.style.wrapText !== true && !rotated
+  let font = fontAt(baseSize)
+  // Shrink-to-fit keeps full General precision and scales the font instead.
+  const fitsGeneral = !rotated && !shrinkable ? (text: string) => measured(font, text) <= inner : undefined
   const formatted = renderCellText(cell.value, cell.style, sheet.semantics, sheet, fitsGeneral)
+  let style = cell.style
+  if (shrinkable && formatted !== '') {
+    const size = shrunkFontSize(baseSize, inner, size => measured(fontAt(size), formatted))
+    // Below the minimum a number falls back to '#' at its own size; text stays at the minimum.
+    if (size !== baseSize && (size >= MIN_SHRINK_FONT_PT || typeof cell.value !== 'number')) {
+      const used = Math.max(size, MIN_SHRINK_FONT_PT)
+      font = fontAt(used)
+      style = { ...cell.style!, fontSizePt: used }
+    }
+  }
   const text = numericOverflowText(cell, formatted, font, w, measured)
   out.formattedText = text
   if (text !== '') {
-    const color = cell.style?.color ? resolveColor(cell.style.color) : '#000000'
+    const color = style?.color ? resolveColor(style.color) : '#000000'
     // OOXML often authors default alignment fields on every cell. Those
     // retain ordinary placement; real alignment/wrapping/rotation needs
     // the measured local layout (including explicit no-wrap for255).
-    const explicit = (cell.style?.horizontal !== undefined && cell.style.horizontal !== 'general')
-      || (cell.style?.vertical !== undefined && cell.style.vertical !== 'bottom')
-      || cell.style?.wrapText === true || cellTextRotation(cell.style?.textRotation) !== undefined
+    const explicit = (style?.horizontal !== undefined && style.horizontal !== 'general')
+      || (style?.vertical !== undefined && style.vertical !== 'bottom')
+      || style?.wrapText === true || rotated
     const isCenter = cell.valueIsError ?? (cell.formula !== undefined && isFormulaError(cell.value))
     if (explicit) {
       ctx.fillStyle = color
       ctx.font = font
-      out.text = { ...layoutCellText(ctx, text, cell.style, typeof cell.value === 'number', x, y, w, hh, color, isCenter), font }
+      out.text = { ...layoutCellText(ctx, text, style, typeof cell.value === 'number', x, y, w, hh, color, isCenter, overflow), font }
     } else {
       // Preserve accepted ordinary default horizontal layout exactly.
       ctx.font = font
@@ -885,12 +927,35 @@ export function layoutCellBody(
         : isCenter
           ? x + (w - textW) / 2
           : x + PADDING_L
-      const ty = y + hh - (hh - (cell.style?.fontSizePt ?? 10) * (96 / 72)) / 2
+      const ty = y + hh - (hh - (style?.fontSizePt ?? 10) * (96 / 72)) / 2
       out.text = { kind: 'plain', text, font, color, tx, ty, width: textW }
+      // Text reaching past the room its empty neighbours give is clipped there.
+      const band = overflowBand(x, w, tx, textW, overflow)
+      if (band) out.text.clipX = band
     }
   }
   if (cell.style?.borders) out.borders = cell.style.borders
   return out
+}
+
+/** Smallest shrink-to-fit size; below it a number shows '#' (Excel's own floor is lower). */
+const MIN_SHRINK_FONT_PT = 4
+/** The font size (0.1 pt steps) at which the text fits `inner`; `base` when it already fits. */
+function shrunkFontSize(base: number, inner: number, widthAt: (sizePt: number) => number): number {
+  const natural = widthAt(base)
+  if (natural <= inner) return base
+  let size = natural > 0 ? Math.floor(base * inner / natural * 10) / 10 : 0
+  while (size >= MIN_SHRINK_FONT_PT && widthAt(size) > inner) size = Math.round((size - 0.1) * 10) / 10
+  return size
+}
+
+/** The horizontal clip [x0, x1] for text spanning [tx, tx + textW] in the box
+ * [x, x + w], or undefined when the allowance covers it (no clip, as before). */
+function overflowBand(x: number, w: number, tx: number, textW: number, overflow: OverflowAllowance | undefined): { x0: number; x1: number } | undefined {
+  if (!overflow) return undefined
+  const needLeft = Math.max(0, x - tx), needRight = Math.max(0, tx + textW - (x + w))
+  if (needLeft <= overflow.left && needRight <= overflow.right) return undefined
+  return { x0: x - Math.min(needLeft, overflow.left), x1: x + w + Math.min(needRight, overflow.right) }
 }
 
 /**
@@ -900,8 +965,9 @@ export function layoutCellBody(
  * dropped decimals and tried scientific notation and signals "nothing fits"
  * with a single '#'. Text (and an authored '@' text format), booleans and
  * errors keep their existing overflow/clip behaviour; wrapped and rotated
- * cells keep their measured layout. Shrink-to-fit is not parsed, so it cannot
- * be exempted. Measurement uses the same font string the cell paints with.
+ * cells keep their measured layout. A shrink-to-fit cell reaches this only
+ * when even the minimum font size does not fit. Measurement uses the same
+ * font string the cell paints with.
  * Only the painted string changes: cellDisplayText (find, accessible value)
  * keeps the real formatted value.
  */
@@ -929,7 +995,16 @@ export function paintCellLayout(ctx: CanvasRenderingContext2D, layout: CellBodyL
     ctx.fillStyle = text.color
     ctx.font = text.font
     if (text.kind === 'layout') paintCellText(ctx, text)
-    else { ctx.textBaseline = 'alphabetic'; ctx.fillText(text.text, text.tx, text.ty) }
+    else if (text.clipX) {
+      // Horizontal clip only: plain text keeps its unclipped vertical extent.
+      ctx.save()
+      ctx.beginPath()
+      ctx.rect(text.clipX.x0, y - hh * 8, text.clipX.x1 - text.clipX.x0, hh * 17)
+      ctx.clip()
+      ctx.textBaseline = 'alphabetic'
+      ctx.fillText(text.text, text.tx, text.ty)
+      ctx.restore()
+    } else { ctx.textBaseline = 'alphabetic'; ctx.fillText(text.text, text.tx, text.ty) }
   }
   // borders (anchor draws the merged rect's outline)
   const b = layout.borders

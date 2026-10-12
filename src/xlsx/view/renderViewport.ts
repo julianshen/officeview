@@ -20,7 +20,7 @@ export function createCellLayoutHost(ctx: CanvasRenderingContext2D, sheet: Parti
   const measured = textMeasurer(ctx)
   // Format diagnostics land on the caller's sheet when one is given.
   const target = sheet as XlsxSheet
-  return { layoutBody: (cell, w, h) => layoutCellBody(ctx, target, cell, 0, 0, w, h, measured) }
+  return { layoutBody: (cell, w, h, overflow) => layoutCellBody(ctx, target, cell, 0, 0, w, h, measured, overflow) }
 }
 
 export interface ViewportPaintResult {

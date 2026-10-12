@@ -26,7 +26,9 @@ export interface CellBodyLayout {
   /** Display text after host formatting (General width fitting included). */
   formattedText: string
   text?:
-    | { kind: 'plain'; text: string; font: string; color: string; tx: number; ty: number; width: number }
+    | { kind: 'plain'; text: string; font: string; color: string; tx: number; ty: number; width: number
+      /** Horizontal clip where blocked neighbours stop overflow (S13); absent: unclipped. */
+      clipX?: { x0: number; x1: number } }
     | { kind: 'layout'; text: string; font: string; color: string; body: PptxTextBody; layout: TextLayout; clip: Rect;
       rotation?: number; stacked?: boolean; wrap: boolean; lines: number }
   borders?: XlsxCellStyle['borders']
@@ -34,7 +36,7 @@ export interface CellBodyLayout {
 
 /** The host owns measurement and formatting (spec §11.2: no second text model). */
 export interface CellLayoutHost {
-  layoutBody(cell: XlsxCell, width: number, height: number): CellBodyLayout
+  layoutBody(cell: XlsxCell, width: number, height: number, overflow?: { left: number; right: number }): CellBodyLayout
 }
 
 export interface FillRecord { color: string | null }
@@ -67,7 +69,9 @@ export interface CellLayout {
 }
 
 /** A cell the planner admitted, in logical CSS geometry. */
-export interface PlacedCell { cell: XlsxCell; source: SourceCell; x: number; y: number; width: number; height: number; merge?: XlsxMergeRange }
+export interface PlacedCell { cell: XlsxCell; source: SourceCell; x: number; y: number; width: number; height: number; merge?: XlsxMergeRange
+  /** Room the text may use past the box into empty neighbours (S13); a layout key. */
+  overflow?: { left: number; right: number } }
 
 export function cellIdOf(source: SourceCell): CellId {
   return source.row * MAX_COLS + source.col
@@ -107,7 +111,7 @@ export class LayoutCache {
       this.stats.reused++
       return hit
     }
-    const built = host.layoutBody(placed.cell, placed.width, placed.height)
+    const built = host.layoutBody(placed.cell, placed.width, placed.height, placed.overflow)
     this.stats.built++
     const bytes = estimateLayoutBytes(key, built)
     this.entries.set(key, built)
@@ -157,9 +161,9 @@ function styleKey(style: XlsxCellStyle | undefined): string {
   if (key === undefined) styleKeys.set(style, key = JSON.stringify(style))
   return key
 }
-function layoutKey({ cell, source, width, height }: PlacedCell): string {
+function layoutKey({ cell, source, width, height, overflow }: PlacedCell): string {
   const value = cell.value === null ? 'n' : `${typeof cell.value}:${String(cell.value)}`
-  return `${source.row},${source.col}|${width}|${height}|${cell.valueIsError === undefined ? '' : cell.valueIsError ? 1 : 0}${cell.formula === undefined ? '' : 'f'}|${styleKey(cell.style)}|${value}`
+  return `${source.row},${source.col}|${width}|${height}|${overflow ? `${overflow.left}:${overflow.right}` : ''}|${cell.valueIsError === undefined ? '' : cell.valueIsError ? 1 : 0}${cell.formula === undefined ? '' : 'f'}|${styleKey(cell.style)}|${value}`
 }
 
 /** Raw logical text of a value: what search/copy see before display formatting. */
@@ -205,8 +209,9 @@ export function buildCellRecords(placed: readonly PlacedCell[], owner: CacheIden
     if (run && body.text) {
       const clip = body.text.kind === 'layout'
         ? logicalBounds
-        // Plain text overflows like the static renderer; its clip is its own ink band.
-        : { x: item.x + (body.text.tx - body.x), y: item.y, width: body.text.width, height: item.height }
+        // Plain text overflows like the static renderer: its own ink band, cut
+        // where a blocked neighbour stops the overflow (S13).
+        : plainClip(item.x - body.x, body.text, item.y, item.height)
       text.push({ cellId: id, source: item.source, rawText: rawTextOf(item.cell.value), formattedText: body.formattedText, logicalBounds, clip, runs: [run], valueGen: owner.valueGen, fontGen: owner.fontGen })
     }
     const borders: BorderRecord[] = []
@@ -219,6 +224,12 @@ export function buildCellRecords(placed: readonly PlacedCell[], owner: CacheIden
     })
   }
   return records
+}
+
+function plainClip(dx: number, text: { tx: number; width: number; clipX?: { x0: number; x1: number } }, y: number, height: number) {
+  const x0 = text.clipX ? Math.max(text.tx, text.clipX.x0) : text.tx
+  const x1 = text.clipX ? Math.min(text.tx + text.width, text.clipX.x1) : text.tx + text.width
+  return { x: dx + x0, y, width: Math.max(0, x1 - x0), height }
 }
 
 /** Store-path detail cells as host cells at their logical boxes: resolved and

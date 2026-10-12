@@ -78,6 +78,29 @@ function cropParity(sheet: XlsxSheet, box: { x: number; y: number; width: number
   return { diff: diffPixels(a, b), result, ink: Array.from(b).some(v => v < 200) }
 }
 
+describe('S13 text overflow stops at non-empty neighbours (static and viewer agree)', () => {
+  test('long text clipped by a value, by "" and by a merge: viewer crop equals the static crop', () => {
+    const long = 'overflowing text that runs well past its column'
+    const sheet = sheetOf([
+      { index: 0, cells: [cell(0, 0, long), cell(0, 2, 'x')] },
+      { index: 1, cells: [cell(1, 0, long), cell(1, 1, '')] },
+      { index: 2, cells: [cell(2, 0, long)] },
+      { index: 3, cells: [cell(3, 0, long)] },
+      // Extends the static grid to E5 so the crop compares grid with grid.
+      { index: 4, cells: [cell(4, 4, 'end')] },
+    ], [], { mergeRanges: [{ minRow: 2, maxRow: 2, minCol: 2, maxCol: 3 }], merges: ['C3:D3'] })
+    const m = computeMetrics(sheet)
+    const { diff, ink, result } = cropParity(sheet, { x: 0, y: 0, width: m.widthPx, height: m.heightPx })
+    expect(ink).toBe(true)
+    expect(diff).toBe(0)
+    const clips = result.records.filter(r => r.source.col === 0).map(r => Math.round(r.text[0].clip.x + r.text[0].clip.width))
+    const colB = 64, colC = 128
+    // Row 1 blocked at C ("x"); row 2 blocked at B (""); row 3 blocked at the C:D merge; row 4 runs on.
+    expect(clips.slice(0, 3)).toEqual([colC, colB, colC])
+    expect(clips[3]).toBeGreaterThan(colC)
+  })
+})
+
 describe('canonical records (object sheet)', () => {
   test('each painted cell has one record with source identity, Float64 bounds and the painted text', () => {
     const sheet = sheetOf([
