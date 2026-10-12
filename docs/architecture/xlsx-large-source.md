@@ -947,26 +947,39 @@ follow §4.3.5 (integer ids, chunked paged payloads, bounded decoded LRU); §4.3
 `MemoryPool`. Each charge is made before the allocation it covers:
 
 - **Short-lived shares** (`pool.charge()`, released on completion, failure and cancel): the builder's arrays, built pages waiting
-  for their commit, pending shared-string chunks, and encode scratch for page, blob and string-chunk buffers.
-- **Lasting entry:** page summaries, one non-evictable `source`-tier entry per sheet.
+  for their commit (including the formula metadata they own), pending shared-string chunks, and encode scratch for page, blob
+  and string-chunk buffers. Each record is charged with `PageBuilder.costOf(text, meta)` before the builder keeps it.
+- **Lasting entries** (non-evictable, `source` tier):
+  - page summaries, one entry per sheet;
+  - every buffer a RAM-backed (memory) page backend keeps (pages, shared-string chunks, blob records). The buffer is charged
+    before it is handed over and uncharged when the record is deleted or the store closes. A decoded view of such a buffer is
+    charged only for what it adds (its formula metadata), never a second time for the shared bytes.
+- **Validation before writes:** a page whose rows overlap the previous page, a repeated page id, a second commit in flight
+  for the same sheet and a repeated shared-string chunk are all rejected before anything is written. Publication into the
+  index is the last step inside the rollback boundary.
 - **Refusal:** a pool that cannot fit a share throws `PackageError('resource-limit', …, reason 'memory-budget')`. The import ends
   `incomplete` with the `import-memory-budget` diagnostic instead of over-allocating.
-- **Estimates, not heap measurements:**
+- **Conservative estimates, pinned by a Bun heap probe:**
 
   | Item | Charge |
   |---|---|
-  | Builder record | 64 B, plus 2 B per code unit of inline and spilled text, 2 B per formula-meta JSON character, 96 B per meta object |
-  | Built page waiting for commit | `payloadBytes` of its lanes plus its spilled values |
-  | Encode scratch | the exact buffer plus the meta JSON |
-  | Pending shared string | 2 B per code unit plus 32 B |
-  | Page summary | 192 B |
+  | Builder record | 96 B, plus 48 B per non-empty inline or spilled string and 2 B per code unit, plus 192 B and 2 B per JSON character per formula-meta object |
+  | Built page waiting for commit | `payloadBytes` (lanes plus the same formula-meta charge) plus its spilled values |
+  | Encode scratch | the exact buffer plus the meta JSON, sized with `jsonLength` (no allocation) and charged before either exists |
+  | Pending shared string | 2 B per code unit plus 64 B |
+  | Page summary | 256 B |
 
-  The meta JSON is built just before its charge. It is bounded by the metadata the page share already covers. S10 should
-  check these figures against a profile.
+  `scripts/construction-memory-probe.ts` measures, on Bun, the live heap (`heapSize + extraMemorySize` after a full GC) of
+  each modelled structure at array-capacity transitions. `tests/xlsx-viewer-construction-memory.test.ts` asserts the model
+  is at least the measurement and at most twice it. On Bun 1.3.10 it measured 72.7–83.7 B per numeric builder record
+  (model 96), 128–132 B per short-text record (model 168), 192–196 B per summary (model 256), and 67.6–67.7 B per pending shared
+  string (model 101.8). These are Bun/JSC figures, not a Chrome heap certification (S10.2).
 - **Before the viewer exists:** the document pool exists only once the viewer session binds it, after the first page committed.
   Until then a store charges a stand-in pool of the profile's worker budget (D 512 MiB, M 256 MiB). `bindMemory` moves every live
-  charge into the document pool and closes the stand-in. If the document pool cannot hold them, the bind does not throw (the
-  session must open); the import's next construction charge refuses with the typed failure.
+  charge into the document pool, atomically, and closes the stand-in. If the document pool cannot hold all of them, nothing
+  moves, the old ownership stays charged where it was, and `bindMemory` throws the typed `memory-budget` refusal. The
+  viewer session therefore refuses to open, and the worker kernel replies `resource-limit` with the `import-memory-budget`
+  diagnostic. This also applies to a store whose import has already completed.
 
 ### 4.5 Entry-point wiring and user-flagged items
 
