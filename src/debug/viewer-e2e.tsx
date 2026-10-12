@@ -11,6 +11,8 @@
  *                 so a paged admission opens worker-backed (S5.4); without it a
  *                 large file keeps compatibility mode, as for any host
  *   copy=0        allowCopy={false}
+ *   wcaps=a,b     capabilities the viewer worker denies itself (workerCaps.ts),
+ *                 passed as the Worker name since init scripts never reach it
  *
  * Instrumentation lives at public boundaries only: the worker port (commands
  * by kind / read op, transferred bytes, workers created/terminated), the
@@ -100,7 +102,8 @@ function transferSize(transfer: Transferable[]): number {
 
 /** A real dedicated module worker behind a counting port. */
 function countingWorker(): ViewerWorkerPort {
-  const worker = new Worker(new URL('./viewerWorker.ts', import.meta.url), { type: 'module' })
+  const caps = params.get('wcaps')
+  const worker = new Worker(new URL('./viewerWorker.ts', import.meta.url), { name: caps ? `caps:${caps}` : '', type: 'module' })
   state.workersCreated++
   worker.addEventListener('message', (event) => { state.replies++; if (params.get('log') === '1') console.log('reply', JSON.stringify(event.data).slice(0, 400)) })
   return {
