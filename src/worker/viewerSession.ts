@@ -56,7 +56,7 @@ import { LaneBuilder } from '../xlsx/view/source'
 import { BOUNDED_SORT_LANES, type BoundedSortLaneStore } from '../xlsx/view/sortLanes'
 import { PREPARED_SORT_READER, type PreparedSortStore, type PreparedSortLease } from '../xlsx/view/sortPrepared'
 import { compactPreparedPage, preparedRowAt, preparedMetadataAt, visitPreparedRows, PREPARED_PAGE_ENTRIES, PREPARED_PAGE_OVERHEAD, PREPARED_ENCODING_OVERHEAD, TAG_NULL, TAG_NUMBER, TAG_STRING, TAG_BOOLEAN, F_CACHED_SET, F_CACHED, F_ERROR_SET, F_ERROR, F_PROV_ENGINE, F_PROV_CACHED, F_UNAVAILABLE, type PreparedPage } from './preparedColumn'
-import { filterValueDomain, scanValueDomain, type ValueStatus } from '../xlsx/view/values'
+import { filterValueDomain, scanValueDomain, type ValueDomainScan, type ValueStatus } from '../xlsx/view/values'
 
 const FULL_SHEET: SourceRect = Object.freeze({ r0: 0, r1: MAX_ROWS - 1, c0: 0, c1: MAX_COLS - 1 })
 const PREPARE_PAGE_LIMIT = 4096
@@ -436,6 +436,7 @@ export interface SessionOptions {
 }
 /** Scanned value-domain entries per shared-budget charge (filter precheck). */
 const DOMAIN_SCAN_CHARGE = 256
+const DOMAIN_SCAN_CACHE = 64
 /** Visible display slots and the logical row axis, committed with the view. */
 export interface ViewCounts { readonly visible: number; readonly total: number }
 /** Private draft; commitDraft publishes it atomically. */
@@ -650,6 +651,8 @@ export class DocumentSession {
   private readonly states = new Map<string, SheetState>()
   /** Insertion order is recency order (oldest first). */
   private readonly prepared = new Map<string, PreparedColumn>()
+  /** Completed filter value-domain scans by (stamp, domain); see filter(). */
+  private readonly domainScans = new Map<string, Extract<ValueDomainScan, { kind: 'clear' | 'refused' }>>()
   private readonly preparedPins = new Map<string, number>()
   private readonly preparedEntries = new Map<string, PoolEntry>()
   private preparedBytes = 0
@@ -1424,7 +1427,7 @@ export class DocumentSession {
       this.preparedEntries.get(key)?.touch()
       items = request.encoding === 'lanes' ? this.preparedLanes(prepared, residual, request.limit) : this.preparedPage(prepared, residual, request.limit)
     } else {
-      const page = await store.queryColumn({ col: request.col, rows: { kind: 'intervals', intervals: residual }, limit: request.limit }, options)
+      const page = await store.queryColumn({ col: request.col, rows: { kind: 'intervals', intervals: residual }, limit: request.limit, ...(request.encoding ? { encoding: request.encoding } : {}) }, options)
       if (page.error) return { ...page, nextCursor: undefined }
       if (!sameStamp(page.stamp, stamp)) return failedPage(stamp, failure('stale-source', 'Column page owner changed', true))
       items = page.items
@@ -1626,7 +1629,14 @@ export class DocumentSession {
         // unavailable cells elsewhere never block. Checked before any rule runs.
         // Engine documents have no unavailable values (§4.4): nothing to scan.
         const domain = this.source.store(owner.sheetId).valuePolicy === 'cached' ? filterValueDomain(normalized) : null
-        if (domain) {
+        // A completed scan of a domain is fixed for its value generation: a
+        // repeated filter over the same columns and band reuses its outcome
+        // rather than re-reading every row (clear or refused only; incomplete,
+        // cancelled and failed scans are never kept).
+        const domainKey = domain ? JSON.stringify([this.source.store(owner.sheetId).stamp, domain]) : ''
+        const knownScan = domain ? this.domainScans.get(domainKey) : undefined
+        if (knownScan && knownScan.kind === 'refused') return { kind: 'refused', refusal: knownScan.refusal }
+        if (domain && !knownScan) {
           const store = this.preparedStore(owner.sheetId)
           // Its own yield budget, charged in batches of scanned entries (like
           // the guard's 32-row words) and created on first charge: a small
@@ -1647,6 +1657,10 @@ export class DocumentSession {
           } finally { scanSlice?.dispose() }
           const halt = this.halted(owner, signal)
           if (halt) return halt
+          if (scan.kind === 'clear' || scan.kind === 'refused') {
+            if (this.domainScans.size >= DOMAIN_SCAN_CACHE) this.domainScans.delete(this.domainScans.keys().next().value!)
+            this.domainScans.set(domainKey, scan)
+          }
           switch (scan.kind) {
             case 'clear': break
             case 'refused': return { kind: 'refused', refusal: scan.refusal }

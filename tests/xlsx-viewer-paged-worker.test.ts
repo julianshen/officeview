@@ -345,3 +345,45 @@ describe('S5.4 review: worker filter semantics and key lifetime', () => {
     expect(second.at(-1)).toMatchObject({ kind: 'complete' })
   })
 })
+
+describe('S10.2: repeated worker filters do not re-read the column (filter apply ~2.8 s on F2)', () => {
+  it('pages are read as typed lanes, and a repeated identical value filter reads the column once, not three times', async () => {
+    const rows = Array.from({ length: 9000 }, (_, r) => `<row r="${r + 1}"><c r="A${r + 1}" t="inlineStr"><is><t>${['alpha', 'beta', 'gamma'][r % 3]}</t></is></c></row>`).join('')
+    const { kernel, owner: start } = await openPaged('repeat', rows)
+    const store = kernel.session('repeat')!.source.store('1')
+    const requests: Array<{ encoding?: string }> = []
+    const proto = Object.getPrototypeOf(store) as { queryColumn: (...args: unknown[]) => unknown }
+    const original = proto.queryColumn
+    const spy = vi.spyOn(proto, 'queryColumn').mockImplementation(function (this: unknown, ...args: unknown[]) {
+      requests.push(args[0] as { encoding?: string })
+      return original.apply(this, args)
+    })
+    try {
+      const range = { r0: 0, r1: 8999, c0: 0, c1: 0, headerRows: 0 as const, totalsRows: 0 as const }
+      const scope = valueScope({ docId: 'repeat', sheetId: '1', valueGen: 0, range, col: 0, classification: { kind: 'text', hasNumeric: false }, classificationGen: 0 })
+      const apply = async (owner: CacheIdentity, n: number) => {
+        const ref = { refId: `keys-${n}`, count: 1, owner: { docId: 'repeat', sheetId: '1', valueGen: 0 } }
+        const spec: FilterSpec = { range, columns: new Map([[0, { kind: 'values', selection: { mode: 'include', keys: ref }, showBlanks: false }]]) }
+        const out = completed(await run(kernel, { kind: 'filter', requestId: rid(), owner, spec, nowMs: 0, keySets: [{ refId: `keys-${n}`, scope, run: { count: 1, kinds: Uint8Array.of(2), numbers: Float64Array.of(0), texts: ['alpha'] } }] }))
+        if (out.kind !== 'view') throw new Error('view')
+        return out.delta
+      }
+      const before = requests.length
+      const first = await apply(start, 1)
+      const firstReads = requests.length - before
+      const cleared = completed(await run(kernel, { kind: 'filter', requestId: rid(), owner: first.owner, spec: null, nowMs: 0 }))
+      if (cleared.kind !== 'view') throw new Error('view')
+      const mark = requests.length
+      const second = await apply(cleared.delta.owner, 2)
+      const secondReads = requests.length - mark
+      expect(second.counts.visible).toBe(first.counts.visible)
+      // 9,000 rows = 3 lane pages per column pass. The first apply makes three
+      // passes (unavailable-value guard, classification, rule evaluation); the
+      // repeat reuses the guard's and the classification's outcome.
+      expect(firstReads).toBe(9)
+      expect(secondReads).toBe(3)
+      // Every page crosses as typed lanes, never as one object per cell.
+      expect(requests.filter(request => request.encoding !== 'lanes')).toEqual([])
+    } finally { spy.mockRestore() }
+  })
+})
