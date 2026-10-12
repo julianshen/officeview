@@ -90,8 +90,12 @@ const importRun = (id: string) => {
 }
 const ledgerAt = (peakBytes: number, bytes = peakBytes) => ({ bytes, peakBytes, byPool: {}, atPeak: {} })
 const CODE = 4 * MiB
+/** Five repeated forced-GC readings around `h` (median h, spread 40 KiB). */
+const readingsAround = (h: number, spread = 40 * 1024) => [h - spread / 2, h, h + spread / 2, h - spread / 4, h + spread / 4]
+/** Shifts a checkpoint's reading and every repeated reading by `bytes`. */
+const bump = (cp: any, bytes: number) => { cp.heapBytes += bytes; if (cp.heapReadings) cp.heapReadings = cp.heapReadings.map((v: number) => v + bytes) }
 const checkpoint = (heapBytes: number, workerPeak: number, ledgerPeak: number) => ({
-  heapBytes, codeBytes: CODE, ledger: ledgerAt(ledgerPeak), worker: { kind: 'stats', sessions: [{ memory: { peakBytes: workerPeak } }] },
+  heapBytes, heapReadings: readingsAround(heapBytes), codeBytes: CODE, ledger: ledgerAt(ledgerPeak), worker: { kind: 'stats', sessions: [{ memory: { peakBytes: workerPeak } }] },
   uasm: { available: true, worker: workerPeak, canvas: 40 * MiB }, frame: { peakBitmapBytes: 100 * MiB, workersCreated: 1, workersTerminated: 0 },
   canvas: { count: 2, bytes: 1 }, storage: { usage: 200 * MiB, quota: 1e10 },
 })
@@ -103,7 +107,7 @@ const memorySession = (cycles: number[] | null) => ({
   checkpoints: {
     baseline: { heapBytes: 5 * MiB, storage: { usage: 0, quota: 1e10 } },
     loaded: checkpoint(20 * MiB, 200 * MiB, 18 * MiB), afterOps: checkpoint(25 * MiB, 220 * MiB, 26 * MiB),
-    closed: { heapBytes: 5 * MiB, codeBytes: CODE, ledger: ledgerAt(26 * MiB, 0), uasm: { available: true, worker: 0, canvas: 0 }, frame: { workersCreated: 1, workersTerminated: 1, peakBitmapBytes: 100 * MiB }, canvas: { count: 0, bytes: 0 }, storage: { usage: 0, quota: 1e10 } },
+    closed: { heapBytes: 5 * MiB, heapReadings: readingsAround(5 * MiB), codeBytes: CODE, ledger: ledgerAt(26 * MiB, 0), uasm: { available: true, worker: 0, canvas: 0 }, frame: { workersCreated: 1, workersTerminated: 1, peakBitmapBytes: 100 * MiB }, canvas: { count: 0, bytes: 0 }, storage: { usage: 0, quota: 1e10 } },
   },
   summary: { recovery: { cyclesMainOwnedBytes: cycles } },
   polls: [{ workerPeak: 210 * MiB }], timeouts: [], liveHeapSamples: [12 * MiB, 30 * MiB, 18 * MiB],
@@ -170,7 +174,7 @@ describe('evaluation from raw records', () => {
     const d = validDraft()
     for (const key of ['F2', 'F4']) {
       const session = (d.raw.memory as any)[key]
-      for (const name of ['loaded', 'afterOps', 'closed']) session.checkpoints[name].heapBytes += 16 * MiB
+      for (const name of ['loaded', 'afterOps', 'closed']) bump(session.checkpoints[name], 16 * MiB)
       session.liveHeapSamples = session.liveHeapSamples.map((v: number) => v + 16 * MiB)
       if (session.summary.recovery.cyclesMainOwnedBytes) session.summary.recovery.cyclesMainOwnedBytes = session.summary.recovery.cyclesMainOwnedBytes.map((v: number) => v + 16 * MiB)
     }
@@ -189,7 +193,7 @@ describe('evaluation from raw records', () => {
       session.checkpoints.loaded.ledger = ledgerAt(18 * MiB, 15 * MiB)
       session.checkpoints.closed.ledger = ledgerAt(45 * MiB, 0)
       // ...and a steady uncharged 10 MiB in every record: the live peak (40) stays under it.
-      for (const name of ['loaded', 'afterOps', 'closed']) session.checkpoints[name].heapBytes += 10 * MiB
+      for (const name of ['loaded', 'afterOps', 'closed']) bump(session.checkpoints[name], 10 * MiB)
       session.liveHeapSamples = session.liveHeapSamples.map((v: number) => v + 10 * MiB)
       if (session.summary.recovery.cyclesMainOwnedBytes) session.summary.recovery.cyclesMainOwnedBytes = session.summary.recovery.cyclesMainOwnedBytes.map((v: number) => v + 10 * MiB)
     }
@@ -207,17 +211,52 @@ describe('evaluation from raw records', () => {
     expect((await finalizeReceipt(atEdge(), ctx)).desktopAdmitted).toBe(true)
     // +1 MiB of compiled code, measured: excluded, still admitted.
     const code = atEdge()
-    for (const key of ['F2', 'F4']) { const cp = (code.raw.memory as any)[key].checkpoints.loaded; cp.heapBytes += 1 * MiB; cp.codeBytes += 1 * MiB }
+    for (const key of ['F2', 'F4']) { const cp = (code.raw.memory as any)[key].checkpoints.loaded; bump(cp, 1 * MiB); cp.codeBytes += 1 * MiB }
     const codeReceipt = await finalizeReceipt(code, ctx)
     expect(codeReceipt.evidenceProblems).toEqual([])
     expect(codeReceipt.measurements.memory.mainCodeGrowthBytes).toBe(1 * MiB)
     // The same code growth plus a 1 MiB plain-object leak: refused.
     const leak = atEdge()
-    for (const key of ['F2', 'F4']) { const cp = (leak.raw.memory as any)[key].checkpoints.loaded; cp.heapBytes += 2 * MiB; cp.codeBytes += 1 * MiB }
+    for (const key of ['F2', 'F4']) { const cp = (leak.raw.memory as any)[key].checkpoints.loaded; bump(cp, 2 * MiB); cp.codeBytes += 1 * MiB }
     const leakReceipt = await finalizeReceipt(leak, ctx)
     expect(leakReceipt.evidenceProblems.some(p => /uncharged main memory in F2 at the loaded checkpoint \(1\.5 MiB .* after excluding 1 MiB of measured compiled-code growth/.test(p))).toBe(true)
     expect(desktop(leakReceipt, 'main-owned-memory').outcome).toBe('pending')
     expect(leakReceipt.desktopAdmitted).toBe(false)
+  })
+
+  it('(r4-3) each checkpoint\'s own reading spread enters its allowance, and a steady 1 MiB leak is still refused at a 0.3 MiB spread', async () => {
+    // At the allowance edge (gap 0.5 MiB = the warm-open gap), with a noisy checkpoint: readings spread 0.3 MiB.
+    const noisy = () => {
+      const d = validDraft()
+      for (const key of ['F2', 'F4']) {
+        const cp = (d.raw.memory as any)[key].checkpoints.loaded
+        cp.ledger = ledgerAt(18 * MiB, 14.5 * MiB)
+        cp.heapReadings = readingsAround(cp.heapBytes, 0.3 * MiB)
+      }
+      return d
+    }
+    // 0.25 MiB more heap is within the checkpoint's own 0.3 MiB spread: admitted.
+    const within = noisy()
+    for (const key of ['F2', 'F4']) bump((within.raw.memory as any)[key].checkpoints.loaded, 0.25 * MiB)
+    const withinReceipt = await finalizeReceipt(within, ctx)
+    expect(withinReceipt.evidenceProblems).toEqual([])
+    expect(withinReceipt.measurements.memory.mainCheckpointSpreadBytes).toBeCloseTo(0.3 * MiB, -2)
+    // A steady 1 MiB leak in every reading: refused despite the spread.
+    const leak = noisy()
+    for (const key of ['F2', 'F4']) bump((leak.raw.memory as any)[key].checkpoints.loaded, 1 * MiB)
+    const leakReceipt = await finalizeReceipt(leak, ctx)
+    expect(leakReceipt.evidenceProblems.some(p => /uncharged main memory in F2 at the loaded checkpoint .* reading spread 0\.3 MiB/.test(p))).toBe(true)
+    expect(desktop(leakReceipt, 'main-owned-memory').outcome).toBe('pending')
+    expect(leakReceipt.desktopAdmitted).toBe(false)
+  })
+
+  it('(r4-3) a checkpoint without its repeated readings leaves the row pending', async () => {
+    const d = validDraft()
+    ;(d.raw.memory as any).F2.checkpoints.closed.heapReadings = [5 * MiB, 5 * MiB]
+    const receipt = await finalizeReceipt(d, ctx)
+    expect(receipt.evidenceProblems.some(p => /memory\.F2\.closed: 2 repeated heap readings, below 5/.test(p))).toBe(true)
+    expect(desktop(receipt, 'main-owned-memory').outcome).toBe('pending')
+    expect(receipt.desktopAdmitted).toBe(false)
   })
 
   it('(r4-2) a missing compiled-code measurement is never silently excluded: the row is not admitted', async () => {
@@ -243,7 +282,7 @@ describe('evaluation from raw records', () => {
     const evidence = profile.viewerEvidence as { results: string }
     const receipt = JSON.parse(readFileSync(join(process.cwd(), evidence.results), 'utf8')) as ViewerReceipt
     const session = (receipt.raw as any).memory.F2
-    for (const name of ['loaded', 'afterOps', 'closed']) session.checkpoints[name].heapBytes += 10 * MiB
+    for (const name of ['loaded', 'afterOps', 'closed']) bump(session.checkpoints[name], 10 * MiB)
     session.liveHeapSamples = session.liveHeapSamples.map((v: number) => v + 10 * MiB)
     session.summary.recovery.cyclesMainOwnedBytes = session.summary.recovery.cyclesMainOwnedBytes.map((v: number) => v + 10 * MiB)
     const verdict = await validateReceipt(receipt, ctx)

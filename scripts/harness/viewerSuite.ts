@@ -48,6 +48,7 @@ const MEMORY_SESSION_LIMIT_MS = 10 * 60_000
 const RECOVERY_CYCLES = 10
 const WARM_HOST_SAMPLES = 10
 const WARM_OPEN_SAMPLES = 5
+const CHECKPOINT_READINGS = 5
 const LIVE_SAMPLE_MS = 300
 
 type W = Window & { __viewerPerf: ViewerPerf }
@@ -359,6 +360,17 @@ async function memorySession(context: BrowserContext, base: string, fixture: Vie
     await bounded(`${name} worker gc`, perf(page, p => p.workerGc()))
     for (let k = 0; k < 3; k++) { await bounded(`${name} main gc ${k}`, gcMain()); await new Promise(resolve => setTimeout(resolve, 200)) }
     const h = await bounded(`${name} heap`, heap())
+    // The checkpoint's own repeatability (review round 4 decision): k forced-GC
+    // readings with the same procedure; the median is the reading, the spread
+    // its measured noise. All readings are recorded.
+    const heapReadings: number[] = h ? [heapBytes(h)] : []
+    for (let r = 1; r < CHECKPOINT_READINGS; r++) {
+      for (let k = 0; k < 3; k++) { await bounded(`${name} main gc ${r}.${k}`, gcMain()); await new Promise(resolve => setTimeout(resolve, 200)) }
+      const again = await bounded(`${name} heap ${r}`, heap())
+      if (again) heapReadings.push(heapBytes(again))
+    }
+    const sortedReadings = [...heapReadings].sort((x, y) => x - y)
+    const medianHeap = sortedReadings.length ? sortedReadings[Math.floor(sortedReadings.length / 2)] : null
     const worker = await bounded(`${name} worker stats`, perf(page, p => p.workerStats()))
     const uasm = await bounded(`${name} uasm`, perf(page, p => p.measureMemory()))
     const canvas = (await bounded(`${name} canvas`, perf(page, p => p.canvasBytes()))) ?? { count: -1, bytes: -1 }
@@ -367,7 +379,7 @@ async function memorySession(context: BrowserContext, base: string, fixture: Vie
       ?? { peakBitmapBytes: 0, bitmapBytes: null, budgetBytes: null, workersCreated: -1, workersTerminated: -1 }
     const ledger = await bounded(`${name} main ledger`, perf(page, p => p.mainLedger()))
     const code = await bounded(`${name} code bytes`, codeBytes(`cp-${name}`), 180_000)
-    return { name, instrumentation, heap: h, heapBytes: h ? heapBytes(h) : null, codeBytes: code, ledger, worker, uasm: uasmSplit((uasm ?? { unavailable: 'probe timed out' }) as Uasm), canvas, storage, frame, browserProcessRssBytes: browserProcessRss() }
+    return { name, instrumentation, heap: h, heapBytes: medianHeap, heapReadings, codeBytes: code, ledger, worker, uasm: uasmSplit((uasm ?? { unavailable: 'probe timed out' }) as Uasm), canvas, storage, frame, browserProcessRssBytes: browserProcessRss() }
   }
   // Warmed host, established independently of the measured session: the same
   // page opens a small paged workbook (F2 at smoke scale), runs the same code

@@ -13,7 +13,7 @@ import { ViewerKernel } from '../src/worker/viewerKernel'
 import { OfficePackage } from '../src/core/zip'
 import { parseXlsx } from '../src/xlsx/parse'
 import type { WorkerCommand, WorkerReply } from '../src/xlsx/view/contracts'
-import { DOM_ELEMENT_BYTES, MainMemoryLedger, SHAPE_ENTRY_BYTES, estimatePayloadBytes, leaseTargets, shapeCacheBytes } from '../src/xlsx/view/mainLedger'
+import { MainMemoryLedger, SHAPE_ENTRY_BYTES, estimatePayloadBytes, leaseTargets, shapeCacheBytes } from '../src/xlsx/view/mainLedger'
 import { openPagedWorkbook } from '../src/components/xlsx/pagedWorkbook'
 import { pagedWorkbookOf } from '../src/components/pagedDocument'
 import { pagedSheetGeometry } from '../src/components/xlsx/pagedGeometry'
@@ -56,6 +56,8 @@ import { MergeQueryCache } from '../src/xlsx/view/viewport'
 import { ValueIndexCache, valueSourceFromStore } from '../src/xlsx/view/valueIndex'
 import { CELL_INDEX_ROW_BYTES, CELL_INDEX_SLOT_BYTES, buildSheetGeometry } from '../src/xlsx/view/viewport'
 import { RectangleIndex } from '../src/xlsx/view/structure'
+import { domClassBytes, domClassCounts } from '../src/components/xlsx/domCost'
+import { DOM_CLASS_BYTES } from '../src/xlsx/view/mainLedger'
 import type { MainPool } from '../src/xlsx/view/mainLedger'
 import { workbookOf } from './helpers/xlsx-find'
 import { xlsxBytes } from './helpers/xlsx-package'
@@ -184,6 +186,15 @@ describe('review round 4 (opencode): honest structure charges', () => {
     expect(f2).toBeGreaterThan(14.9 * 0.95)
     expect(f2).toBeLessThan(14.9 * 1.10)
   })
+  it('DOM elements are counted by class: inside gridcells, inside row/column headers, and the rest', () => {
+    const root = document.createElement('div')
+    root.innerHTML = '<div role="grid"><div role="row"><div role="columnheader"><button><span>A</span></button><button>f</button></div>'
+      + '<div role="rowheader"><button>1</button></div><div role="gridcell"><span>1</span></div><div role="gridcell"><span>2</span></div></div></div><p role="status">x</p>'
+    const counts = domClassCounts(root)
+    expect(counts).toEqual({ cell: 4, header: 6, other: 3 })
+    expect(domClassBytes(counts)).toBe(4 * DOM_CLASS_BYTES.cell + 6 * DOM_CLASS_BYTES.header + 3 * DOM_CLASS_BYTES.other)
+    expect(domClassCounts(null)).toEqual({ cell: 0, header: 0, other: 0 })
+  })
   it('a lifetime charge needs at least one target (nothing could ever end it)', () => {
     expect(() => new MainMemoryLedger().chargeWhileReachable('replies', [], 10)).toThrow(RangeError)
   })
@@ -287,7 +298,9 @@ describe('worker-backed document ledger', () => {
       expect(loaded.byPool.rowCache).toBeGreaterThan(0)
       expect(loaded.byPool.geometry).toBeGreaterThan(0)
       expect(loaded.byPool.dom).toBeGreaterThan(0)
-      expect(loaded.byPool.dom % DOM_ELEMENT_BYTES).toBe(0)
+      // Charged by class over everything the viewer renders.
+      const root = ui.container.querySelector('[data-officeview-sheet-screen]')!.parentElement!
+      expect(loaded.byPool.dom).toBe(domClassBytes(domClassCounts(root)))
       // Retained tiles drew text: the browser's per-canvas shaping cache is charged.
       expect(loaded.byPool.canvasText).toBeGreaterThanOrEqual(SHAPE_ENTRY_BYTES)
       fireEvent.click(ui.getByRole('button', { name: 'Cycle sort column B' }))

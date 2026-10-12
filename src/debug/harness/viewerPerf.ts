@@ -164,6 +164,8 @@ export interface ReceiptMeasurements {
     /** Largest measured compiled-code growth over the warmed host at a gated
      * checkpoint (excluded from the gap; heap snapshot 'code' nodes). */
     mainCodeGrowthBytes: number | null
+    /** Largest spread of a gated checkpoint's repeated forced-GC readings. */
+    mainCheckpointSpreadBytes: number | null
     workerOwnedBytes: number | null
     bitmapPeakBytes: number | null
   }
@@ -273,6 +275,8 @@ export function snapshotCodeBytes(snapshot: unknown): number | null {
 }
 /** Minimum forced-GC samples of the warm document open and idle (review round 4). */
 export const MIN_WARM_OPEN_SAMPLES = 3
+/** Minimum repeated forced-GC readings at each gated checkpoint (its own noise). */
+export const MIN_CHECKPOINT_READINGS = 5
 /** Recovery cycles: the mean of the last three post-close readings may exceed the first three by at most this. */
 export const RECOVERY_GROWTH_BYTES = 2 * MiB
 export const RECOVERY_CYCLES = 10
@@ -282,7 +286,7 @@ const nondecreasing = (v: number[]) => v.every((x, i) => i === 0 || x >= v[i - 1
 /** Every threshold input recomputed from the raw records; problems name what is missing or invalid. */
 export function deriveMeasurements(raw: Raw, fixtures: Record<string, ManifestFixture>): { measurements: ReceiptMeasurements; problems: string[] } {
   const problems: string[] = []
-  const m: ReceiptMeasurements = { scroll: {}, ack: {}, firstViewport: {}, import: {}, memory: { mainRetainedBytes: null, mainSampledLivePeakBytes: null, mainLedgerPeakBytes: null, mainUnattributedBytes: null, mainProbeNoiseBytes: null, mainCheckpointExcessBytes: null, mainWarmOpenGapBytes: null, mainCodeGrowthBytes: null, workerOwnedBytes: null, bitmapPeakBytes: null } }
+  const m: ReceiptMeasurements = { scroll: {}, ack: {}, firstViewport: {}, import: {}, memory: { mainRetainedBytes: null, mainSampledLivePeakBytes: null, mainLedgerPeakBytes: null, mainUnattributedBytes: null, mainProbeNoiseBytes: null, mainCheckpointExcessBytes: null, mainWarmOpenGapBytes: null, mainCodeGrowthBytes: null, mainCheckpointSpreadBytes: null, workerOwnedBytes: null, bitmapPeakBytes: null } }
 
   const scroll = obj(raw.scroll)
   for (const kind of ['ordinary', 'wrapped', 'styled'] as const) {
@@ -353,7 +357,7 @@ export function deriveMeasurements(raw: Raw, fixtures: Record<string, ManifestFi
   // Memory: both sessions must provide every pool's evidence at every checkpoint
   // and a clean close; a maximum is only taken once nothing is missing.
   const memory = obj(raw.memory)
-  const perSession: { retained: number; live: number; ledger: number; unattributed: number; noise: number; worker: number; bitmap: number; excess: number; warmOpenGap: number; code: number; codeMeasured: boolean }[] = []
+  const perSession: { retained: number; live: number; ledger: number; unattributed: number; noise: number; worker: number; bitmap: number; excess: number; warmOpenGap: number; code: number; gateMeasured: boolean; spread: number }[] = []
   for (const key of ['F2', 'F4'] as const) {
     const where = `memory.${key}`
     const session = obj(memory?.[key]), checkpoints = obj(session?.checkpoints)
@@ -439,28 +443,37 @@ export function deriveMeasurements(raw: Raw, fixtures: Record<string, ManifestFi
     // The allowance is measured apart from the session: the warm document's own
     // gap while open and idle (what an open viewer holds outside the ledger)
     // plus the probe noise. The closed checkpoint (ledger 0) is gated too.
-    let codeMeasured = true
-    if (warmCode === null || warmOpenCode === null) { problems.push(`${where}: no compiled-code measurement of the warmed host`); codeMeasured = false }
+    let gateMeasured = true
+    if (warmCode === null || warmOpenCode === null) { problems.push(`${where}: no compiled-code measurement of the warmed host`); gateMeasured = false }
     const codeDelta = (bytes: number) => Math.max(0, bytes - (warmCode ?? bytes))
     const openGaps = (warmOpen ?? []).map(o => o.heapBytes - o.ledgerBytes - warmBase - codeDelta(warmOpenCode ?? warmCode ?? 0)).sort((x, y) => x - y)
     const warmOpenGap = openGaps[Math.floor(openGaps.length / 2)]
-    const allowance = Math.max(0, warmOpenGap) + noise
-    let excess = -Infinity, codeMax = 0
+    const openAllowance = Math.max(0, warmOpenGap)
+    let excess = -Infinity, codeMax = 0, spreadMax = 0
     for (const name of ['loaded', 'afterOps', 'closed'] as const) {
-      const cp = obj(checkpoints[name]), heap = num(cp?.heapBytes), current = num(obj(cp?.ledger)?.bytes), code = num(cp?.codeBytes)
-      if (code === null) { problems.push(`${where}.${name}: no compiled-code measurement`); codeMeasured = false; continue }
-      if (heap === null || current === null) { problems.push(`${where}.${name}: no heap or ledger reading`); continue }
+      const cp = obj(checkpoints[name]), current = num(obj(cp?.ledger)?.bytes), code = num(cp?.codeBytes)
+      const readings = nums(cp?.heapReadings)
+      if (code === null) { problems.push(`${where}.${name}: no compiled-code measurement`); gateMeasured = false; continue }
+      // The checkpoint's reading is the median of its repeated forced-GC
+      // readings and its own noise their spread; the allowance takes the larger
+      // of that spread and the idle warm host's probe noise.
+      if (!readings || readings.length < MIN_CHECKPOINT_READINGS) { problems.push(`${where}.${name}: ${readings?.length ?? 0} repeated heap readings, below ${MIN_CHECKPOINT_READINGS}`); gateMeasured = false; continue }
+      if (current === null) { problems.push(`${where}.${name}: no ledger reading`); continue }
+      const ordered = [...readings].sort((x, y) => x - y)
+      const heap = ordered[Math.floor(ordered.length / 2)], spread = ordered[ordered.length - 1] - ordered[0]
+      const allowance = openAllowance + Math.max(noise, spread)
+      spreadMax = Math.max(spreadMax, spread)
       const delta = codeDelta(code)
       codeMax = Math.max(codeMax, delta)
       const gap = heap - warmBase - current - delta
       excess = Math.max(excess, gap - allowance)
-      if (gap > allowance) problems.push(`main-owned-memory: uncharged main memory in ${key} at the ${name} checkpoint (${round(gap / MiB)} MiB of forced-GC heap above the warmed host is not in the ledger's current ${round(current / MiB)} MiB after excluding ${round(delta / MiB)} MiB of measured compiled-code growth; allowance: the warmed host's open gap ${round(Math.max(0, warmOpenGap) / MiB)} MiB + probe noise ${round(noise / MiB)} MiB)`)
+      if (gap > allowance) problems.push(`main-owned-memory: uncharged main memory in ${key} at the ${name} checkpoint (${round(gap / MiB)} MiB of forced-GC heap above the warmed host is not in the ledger's current ${round(current / MiB)} MiB after excluding ${round(delta / MiB)} MiB of measured compiled-code growth; allowance: the warmed host's open gap ${round(openAllowance / MiB)} MiB + the larger of the idle probe noise ${round(noise / MiB)} MiB and this checkpoint's reading spread ${round(spread / MiB)} MiB)`)
     }
-    perSession.push({ retained, live, ledger: ledgerPeak, unattributed: live - ledgerPeak, noise, worker, bitmap, excess, warmOpenGap, code: codeMax, codeMeasured })
+    perSession.push({ retained, live, ledger: ledgerPeak, unattributed: live - ledgerPeak, noise, worker, bitmap, excess, warmOpenGap, code: codeMax, gateMeasured, spread: spreadMax })
   }
   if (perSession.length === 2) {
     const max = (f: (s: typeof perSession[number]) => number) => Math.max(...perSession.map(f))
-    m.memory = { mainRetainedBytes: max(s => s.retained), mainSampledLivePeakBytes: max(s => s.live), mainLedgerPeakBytes: max(s => s.ledger), mainUnattributedBytes: max(s => s.unattributed), mainProbeNoiseBytes: Math.min(...perSession.map(s => s.noise)), mainCheckpointExcessBytes: max(s => s.excess), mainWarmOpenGapBytes: Math.min(...perSession.map(s => s.warmOpenGap)), mainCodeGrowthBytes: perSession.every(s => s.codeMeasured) ? max(s => s.code) : null, workerOwnedBytes: max(s => s.worker), bitmapPeakBytes: max(s => s.bitmap) }
+    m.memory = { mainRetainedBytes: max(s => s.retained), mainSampledLivePeakBytes: max(s => s.live), mainLedgerPeakBytes: max(s => s.ledger), mainUnattributedBytes: max(s => s.unattributed), mainProbeNoiseBytes: Math.min(...perSession.map(s => s.noise)), mainCheckpointExcessBytes: max(s => s.excess), mainWarmOpenGapBytes: Math.min(...perSession.map(s => s.warmOpenGap)), mainCodeGrowthBytes: perSession.every(s => s.gateMeasured) ? max(s => s.code) : null, mainCheckpointSpreadBytes: max(s => s.spread), workerOwnedBytes: max(s => s.worker), bitmapPeakBytes: max(s => s.bitmap) }
     for (const [i, session] of perSession.entries()) {
       if (session.unattributed > session.noise) problems.push(`main-owned-memory: unattributed main memory in ${['F2', 'F4'][i]} (${round(session.unattributed / MiB)} MiB of live heap above the warmed host is not in the ledger peak; measured probe noise ${round(session.noise / MiB)} MiB)`)
     }

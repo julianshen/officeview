@@ -28,6 +28,14 @@ import '../components/largeSource'
 import '../core/zip'
 import '../components/xlsx/pagedWorkbook'
 import '../components/xlsx/InteractiveSheetDoc'
+import { GridSemantics } from '../components/xlsx/GridSemantics'
+import { domClassCounts, type DomClassCounts } from '../components/xlsx/domCost'
+import { createAxisMetrics } from '../xlsx/view/axes'
+import { createSheetMetrics } from '../xlsx/view/projection'
+import { createIdentityOrder } from '../xlsx/view/order'
+import { createIntervalSet, visibilityFromHidden } from '../xlsx/view/visibility'
+import { createScrollWindow } from '../xlsx/view/scrollWindow'
+import { emptyGridSelection, selectCell } from '../xlsx/view/selection'
 
 export interface ScrollRunOptions { warmup: number; frames: number; dx: number; dy: number }
 export interface ScrollRunResult {
@@ -84,6 +92,11 @@ export interface ViewerPerf {
   /** DOM cost calibration (S10.2 ledger estimate): mounts `cells` owned-gridcell-like
    * React elements (div + text span, as GridSemantics renders them) or unmounts them. */
   calibrateDom(cells: number, updates?: number): Promise<number>
+  /** Viewer-representative DOM calibration: mounts the real GridSemantics tree
+   * (cells, header select/sort/filter/more controls, status and live regions)
+   * for a `width` x `height` viewport, re-renders it `updates` times with a
+   * moved selection, and returns its element counts by class; 0 x 0 unmounts. */
+  calibrateGrid(width: number, height: number, updates?: number): Promise<DomClassCounts>
   /** The open document's main-thread application ledger (null before a viewer mounts). */
   mainLedger(): MainLedgerSnapshot | null
   /** Drops the page's own instrumentation (the wire timeline) before a memory
@@ -137,6 +150,7 @@ const state: ViewerPerf = {
   mainLedger: () => currentLedger?.snapshot() ?? null,
   dropInstrumentation() { const wire = state.wire.length; state.wire = []; return { wire } },
   calibrateDom,
+  calibrateGrid,
   workerStats: () => probe(currentWorker, { __perf: 'stats' }),
   workerGc: async () => { const reply = await probe(currentWorker, { __perf: 'gc' }); return reply?.kind === 'gc' && reply.collected },
   importRun,
@@ -187,6 +201,40 @@ function calibrateDom(cells: number, updates = 0): Promise<number> {
     let pass = 0
     const step = () => {
       if (pass >= updates) { setTimeout(() => resolve(host.getElementsByTagName('*').length), 100); return }
+      pass++
+      root.render(tree(pass))
+      setTimeout(step, 50)
+    }
+    setTimeout(step, 50)
+  })
+}
+let gridCalibration: { root: ReturnType<typeof createRoot>; host: HTMLElement } | null = null
+function calibrateGrid(width: number, height: number, updates = 0): Promise<DomClassCounts> {
+  gridCalibration?.root.unmount(); gridCalibration?.host.remove(); gridCalibration = null
+  if (width <= 0 || height <= 0) return Promise.resolve({ cell: 0, header: 0, other: 0 })
+  const host = document.createElement('div')
+  host.style.cssText = `position:absolute;left:0;top:0;width:${width}px;height:${height}px;overflow:hidden`
+  document.body.append(host)
+  const root = createRoot(host)
+  const projection = createSheetMetrics({ rows: createAxisMetrics({ logicalCount: 1048576, defaultSizeCss: 20 }), cols: createAxisMetrics({ logicalCount: 16384, defaultSizeCss: 64 }), order: createIdentityOrder(), visibility: visibilityFromHidden(createIntervalSet([])) })
+  const viewport = { width, height }
+  const window = createScrollWindow(projection, viewport)
+  const props = {
+    owner: { docId: 'calibration', sheetId: 's', valueGen: 0, fontGen: 0, viewGen: 0 }, projection,
+    view: { baseHidden: createIntervalSet([]), visibility: visibilityFromHidden(createIntervalSet([])), filter: null, sort: null },
+    window, viewport, body: { r0: 0, r1: 1048575 }, onChange: () => {},
+    cellPresentation: (at: { row: number; col: number }) => ({ text: String(at.row * 7.25 + at.col) }),
+    onSortCycle: () => {}, onFilter: () => {}, onSortDialog: () => {}, onNotice: () => {}, pendingSortColumn: null,
+    status: { records: { visible: 1048575, complete: 1048575, completeness: 'complete' as const }, countMode: 'body' as const, loadReport: { status: 'ready' as const, notices: ['Showing saved values.'] } },
+    announcement: '', label: 'Worksheet Calibration', profile: 'D' as const,
+  }
+  const tree = (pass: number) => <GridSemantics {...(props as unknown as Parameters<typeof GridSemantics>[0])} selection={selectCell(emptyGridSelection(), projection, { row: pass, col: pass % 3 })} />
+  root.render(tree(0))
+  gridCalibration = { root, host }
+  return new Promise(resolve => {
+    let pass = 0
+    const step = () => {
+      if (pass >= updates) { setTimeout(() => resolve(domClassCounts(host)), 100); return }
       pass++
       root.render(tree(pass))
       setTimeout(step, 50)

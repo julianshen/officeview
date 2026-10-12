@@ -29,7 +29,7 @@ import type {
 import { SHEET_MIN_ZOOM } from '../../xlsx/view/contracts'
 import type { NavigatorRequest, SourceCell } from '../../xlsx/view/coordinates'
 import { columnToLetters } from '../../xlsx/view/coordinates'
-import { DOM_ELEMENT_BYTES, MainMemoryLedger, axisBytes, estimatePayloadBytes, projectionBytes } from '../../xlsx/view/mainLedger'
+import { MainMemoryLedger, axisBytes, estimatePayloadBytes, projectionBytes } from '../../xlsx/view/mainLedger'
 import { buildSheetGeometry, MergeQueryCache, sheetBaseHidden, type SheetGeometry } from '../../xlsx/view/viewport'
 import type { ProjectedSheetMetrics } from '../../xlsx/view/projection'
 import { createIdentityOrder } from '../../xlsx/view/order'
@@ -54,6 +54,7 @@ import type { Paintable, PaintableArray } from '../../render/paint'
 import { GridSemantics, type GridTransition } from './GridSemantics'
 import { GRID_HEADER_SIZE, columnHeaderHeight } from './GridHeaders'
 import { useControlMedia, useLive } from './controlMedia'
+import { domClassBytes, domClassCounts } from './domCost'
 import { FilterDropdown } from './FilterDropdown'
 import { SortDialog } from './SortDialog'
 import { createViewerControlResources, viewerControls, type ViewerControlResources, type ViewerControls } from './viewerControlsClient'
@@ -429,7 +430,7 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
     mainLedger.set('controls', 'resources', controlResources.current?.cache.usedBytes ?? 0)
     // Every element the viewer renders (its toolbar, navigation, headers and
     // status as well as the pane), each with its React fiber and props.
-    mainLedger.set('dom', 'grid', ((rootRef.current ?? paneRef.current)?.getElementsByTagName('*').length ?? 0) * DOM_ELEMENT_BYTES)
+    mainLedger.set('dom', 'grid', domClassBytes(domClassCounts(rootRef.current ?? paneRef.current)))
     mainLedger.set('canvasText', 'tiles', rendererRef.current?.textCacheBytes() ?? 0)
   }
   useEffect(() => { chargeMain() })
