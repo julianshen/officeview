@@ -3,7 +3,7 @@ import type { CacheIdentity, GridSelection, SheetView, ScrollWindow, SourceRowIn
 import type { ProjectedSheetMetrics } from '../../xlsx/view/projection'
 import type { SourceCell } from '../../xlsx/view/coordinates'
 import { visibleLogicalViewport, navigateKey, navigateTo, hitTestViewport, type NavigationKey, type ViewportSize } from '../../xlsx/view/scrollWindow'
-import { MAX_ROWS, MAX_COLS, cellId } from '../../xlsx/view/coordinates'
+import { MAX_ROWS, MAX_COLS, cellId, formatA1 } from '../../xlsx/view/coordinates'
 import { activeAnnouncement, boundedSelectionText, reconcileSelection, recordCounts, emptyGridSelection, selectCell, selectHeader } from '../../xlsx/view/selection'
 import { belowDetail } from '../../xlsx/view/viewport'
 import { GridHeaders, GridRowHeader, GRID_HEADER_SIZE, cellSelected, viewportHeaderBox, columnHeaderHeight } from './GridHeaders'
@@ -44,8 +44,27 @@ export function gridNavigationTransition(props: GridSemanticsProps, key: Navigat
   const selection = reconcileSelection(props.selection, props.projection, props.view).selection
   const result = navigateKey(props.window, { metrics: props.projection, viewport: props.viewport, view: { ...props.view, selection } }, key, selection.active, options)
   if (result.kind !== 'visible') return { window: result.window, selection, announcement: 'No visible records.' }
-  return { window: result.window, selection: selectCell(selection, props.projection, result.target, { extend: options.extend }),
-    announcement: activeAnnouncement(props.projection, result.target, props.cellPresentation?.(result.target).text) }
+  const next = selectCell(selection, props.projection, result.target, { extend: options.extend })
+  return { window: result.window, selection: next, announcement: targetAnnouncement(props.projection, next, result.target, props.cellPresentation?.(result.target).text, options.extend) }
+}
+/** The active-cell announcement; an extension also names the selected range
+ * (spec §9.2: the live region reports selection), e.g. "C3, value 5; selected B2:C3". */
+function targetAnnouncement(projection: ProjectedSheetMetrics, selection: GridSelection, target: SourceCell, text: string | undefined, extend?: boolean): string {
+  const base = activeAnnouncement(projection, target, text)
+  const anchor = selection.anchor
+  if (!extend || !anchor || (anchor.row === target.row && anchor.col === target.col)) return base
+  const display = (at: SourceCell) => formatA1({ row: projection.order.sourceToDisplay(at.row), col: at.col })
+  return `${base}; selected ${display(anchor)}:${display(target)}`
+}
+/** More than one cell selected: the cells then describe themselves as selected
+ * (a lone active cell is always aria-selected, so saying it would be noise). */
+function multiCellSelection(selection: GridSelection): boolean {
+  if (selection.ranges.length !== 1) return selection.ranges.length > 1
+  const part = selection.ranges[0], rows = part.rows
+  if (part.cols.length !== 1 || part.cols[0].c0 !== part.cols[0].c1) return true
+  if (rows.kind === 'intervals') return rows.intervals.length !== 1 || rows.intervals[0].r0 !== rows.intervals[0].r1
+  if (rows.kind === 'list') return rows.rows.length !== 1
+  return true
 }
 // Spec §12.3 frame/gridline admission; S5 passes the same profile/render mode.
 const FRAME_LIMITS = { D: { cells: 20000, lines: 4096 }, M: { cells: 10000, lines: 2048 } } as const
@@ -96,6 +115,7 @@ export function GridSemantics(props: GridSemanticsProps): ReactElement {
     previousPopup.current = props.popup ? { popup: props.popup, owner: previousPopup.current?.owner ?? ownerKey } : null
   }, [ownerKey, props.popup])
   const current = reconcileSelection(props.selection, projection, view), selection = current.selection
+  const multiSelected = multiCellSelection(selection)
   const pane = visibleLogicalViewport(scroll, viewport)
   const rowWindow = projection.rows.visibleBetween(pane.y, pane.y + pane.height), colWindow = projection.cols.visibleBetween(pane.x, pane.x + pane.width)
   const limits = FRAME_LIMITS[props.profile ?? 'D']
@@ -206,7 +226,10 @@ export function GridSemantics(props: GridSemanticsProps): ReactElement {
         const target = hitTestViewport(scroll, projection, viewport, { x: event.clientX - bounds.left - GRID_HEADER_SIZE, y: event.clientY - bounds.top - headerHeight })
         if (!target) return
         event.currentTarget.focus()
-        publish(() => ({ selection: selectCell(selection, projection, target, { extend: event.shiftKey, toggle: event.ctrlKey || event.metaKey }), window: scroll, announcement: activeAnnouncement(projection, target, props.cellPresentation?.(target).text) }))
+        publish(() => {
+          const next = selectCell(selection, projection, target, { extend: event.shiftKey, toggle: event.ctrlKey || event.metaKey })
+          return { selection: next, window: scroll, announcement: targetAnnouncement(projection, next, target, props.cellPresentation?.(target).text, event.shiftKey) }
+        })
       }} style={{ position: 'relative', width: '100%', height: '100%', overflow: 'hidden' }}>
       <div aria-hidden="true" style={{ position: 'absolute', left: GRID_HEADER_SIZE, top: headerHeight, width: viewport.width, height: viewport.height }}>{props.children}</div>
       <GridHeaders {...headerProps} />
@@ -222,9 +245,10 @@ export function GridSemantics(props: GridSemanticsProps): ReactElement {
             const at = { row, col }, value = props.cellPresentation?.(at) ?? { text: '', state: 'loading' as const }
             const column = viewportHeaderBox(projection, scroll, viewport, 'column', col)
             const offscreen = extra || (slot === activeSlot && active?.col === col && !columns.includes(col))
+            const isSelected = cellSelected(selection.ranges, at)
             return <div key={col} role="gridcell" id={`${prefix}-cell-${cellId(row, col)}`} aria-colindex={col + 2}
-              aria-label={activeAnnouncement(projection, at, value.text)} aria-selected={cellSelected(selection.ranges, at)} aria-description={value.state}
-              style={offscreen ? { ...hiddenText, top: 0, left: 0 } : { position: 'absolute', top: 0, left: GRID_HEADER_SIZE + column.x, width: column.width, height: box.height }}><span style={hiddenText}>{boundedSelectionText(value.text)}</span></div>
+              aria-label={activeAnnouncement(projection, at, value.text)} aria-selected={isSelected} aria-description={[value.state, multiSelected && isSelected ? 'selected' : ''].filter(Boolean).join(', ') || undefined}
+              style={offscreen ? { ...hiddenText, top: 0, left: 0 } : { position: 'absolute', top: 0, left: GRID_HEADER_SIZE + column.x, width: column.width, height: box.height }}><span style={hiddenText} aria-hidden="true">{boundedSelectionText(value.text)}</span></div>
           })}
         </div>
       })}
