@@ -12,7 +12,7 @@ import { useControlMedia } from './controlMedia'
 
 export interface GridCellPresentation { text: string; state?: 'loading' | 'error' | 'unavailable' }
 export interface GridTransition { selection: GridSelection; window: ScrollWindow; announcement: string }
-export interface GridPopup { content: ReactNode; invoker: HTMLElement | null; close: () => void }
+export interface GridPopup { content: ReactNode; invoker: HTMLElement | null; close: () => void; /** Accessible name of the popup (default "Column filter"). */ label?: string }
 export interface GridSemanticsProps {
   owner: CacheIdentity
   projection: ProjectedSheetMetrics
@@ -230,7 +230,7 @@ export function GridSemantics(props: GridSemanticsProps): ReactElement {
       })}
     </div>
     {/* Bounded by the pane (overflow:hidden): a taller popup scrolls instead of losing its top controls. */}
-    {props.popup && <div ref={popupRef} role="dialog" aria-label="Column filter" data-officeview-ui="grid-popup"
+    {props.popup && <div ref={popupRef} role="dialog" aria-label={props.popup.label ?? 'Column filter'} data-officeview-ui="grid-popup"
       onPointerDown={event => event.stopPropagation()} onDoubleClick={event => event.stopPropagation()}
       style={{ position: 'absolute', zIndex: 3, bottom: 0, maxWidth: '100%', maxHeight: '100%', overflowY: 'auto', boxSizing: 'border-box', paddingBottom: 'env(safe-area-inset-bottom)' }}>{props.popup.content}</div>}
     <ViewerStatus {...props.status} records={props.status?.records ?? recordCounts(projection, props.body)} announcement={status} inspection={props.inspection ?? props.status?.inspection} />

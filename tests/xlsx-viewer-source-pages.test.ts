@@ -257,6 +257,24 @@ describe('paged import session', () => {
     expect((await sheet.readCell({ row: 999, col: 0 }, ro(sheet))).kind).toBe('error')
   })
 
+  it('S10.3: reads after an import ended by a quota failure are not retryable (only reopening can recover)', async () => {
+    const inner = memoryPageBackend()
+    let puts = 0
+    const backend: PageBackend = {
+      kind: 'memory',
+      async put(key, bytes) { if (++puts === 3) throw new DOMException('full', 'QuotaExceededError'); await inner.put(key, bytes) },
+      get: (key) => inner.get(key),
+      removeAll: () => inner.removeAll(),
+    }
+    const store = new SourcePageStore({ docId: 'd', backend })
+    const session = await openImportSession(blobOf(xlsxBytes({ sheetData: rowsXml(1000) })), { docId: 'd', profile: 'D', store, pageRows: 100 })
+    expect(await session.done).toMatchObject({ kind: 'incomplete', failure: { code: 'quota', retryable: true } }) // reopening may succeed
+    const sheet = createPagedWorkbookSource(session).store('1')
+    expect(await sheet.readCell({ row: 999, col: 0 }, ro(sheet))).toMatchObject({ kind: 'error', code: 'quota', retryable: false })
+    const structure = await sheet.queryStructural({ r0: 0, r1: 1048575, c0: 0, c1: 16383 }, ro(sheet))
+    expect(structure).toMatchObject({ completeness: 'incomplete', error: { code: 'quota', retryable: false } })
+  })
+
   it('RED 22: expanded bytes equal the inflated part sizes; progress comes from completed batches with known totals', async () => {
     const bytes = xlsxBytes({ sheetData: rowsXml(800), sharedStrings: ['a', 'b'] })
     const inventory = await readZipInventory(bytesRangeSource(bytes), { maxEntries: 100, maxCentralDirectoryBytes: 1 << 20, maxNameBytes: 1024, maxPartExpandedBytes: 1 << 30, maxTotalExpandedBytes: 1 << 30, maxRatio: 1e9 })

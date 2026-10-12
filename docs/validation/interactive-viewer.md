@@ -2,7 +2,7 @@
 
 **Branch:** `feature/iv-s10-1`, cut from `feature/interactive-viewer` at `cfa5cb5` (everything through S5.4, S9.2 and S8.4 merged). **Run date:** 2026-10-12. **Machine:** Apple M4 Pro, macOS 26.5.2. **Engines:** Playwright 1.64.0 with Chromium headless shell build 1248 and Playwright WebKit build 2370. WebKit results are labeled `webkit-playwright` and are **not** Safari evidence (spec §12.2).
 
-This page is the S10.1 functional/complexity matrix only. Performance and memory receipts belong to S10.2. Screen-reader, device and capability-fallback receipts belong to S10.3. Their acceptance cases are listed here as **not-run**, with the reason. They stay blocking until those packages deliver them. A passing vitest suite counts as code-test evidence. Watching the UI is not a receipt.
+This page is the S10.1 functional/complexity matrix, extended by S10.3 (branch `feature/iv-s10-3`, cut at `65a112b`, run 2026-10-12, same machine and engines) with keyboard, accessibility-tree, touch-emulation and capability-failure receipts: see [S10.3 support and accessibility receipts](#s103-support-and-accessibility-receipts). Performance and memory receipts belong to S10.2. Acceptance legs that were not executed are listed as **not-run**, with the reason, and stay blocking. A passing vitest suite counts as code-test evidence. Watching the UI is not a receipt.
 
 ## How to reproduce
 
@@ -11,7 +11,7 @@ bun install --frozen-lockfile
 bunx tsc --noEmit
 bunx vitest run                                                    # whole suite
 bunx vitest run tests/xlsx-viewer-complexity.test.ts               # complexity audit
-bunx playwright test --config playwright.viewer.config.ts          # real browsers, both source paths
+bunx playwright test --config playwright.viewer.config.ts          # real browsers, both source paths (+ S10.3 a11y/capability specs)
 bun run build                                                      # eager dist/index.js size
 bun scripts/fetch-corpus.ts && bun scripts/golden-corpus.ts compare --threshold 0 --max-ratio 0
 ```
@@ -33,6 +33,7 @@ Packages are true XLSX files, routed to the page as `/__fixtures/<name>`.
 | `bunx vitest run` | **186 files passed; 5,362 tests passed, 2 skipped, 1 todo** at the branch head (review round 1 included). An earlier run reported 184 files / 5,279 tests because two corpus-dependent files skipped before `corpus/` was populated. Base `cfa5cb5` without corpus: 180 files / 5,265 tests, all passing |
 | `bunx playwright test --config playwright.viewer.config.ts` | **27 passed, 1 skipped** (the skip is the Chromium-only long-task case on WebKit, by design). This includes 20 S10.1 scenarios, 10 each on Chromium and WebKit |
 | `bun run build` | pass; eager `dist/index.js` **38.32 kB gzip** (vite report), unchanged from base 38.32 kB, ceiling 38.72 kB |
+| **S10.3 head** (`feature/iv-s10-3`) | `tsc` pass; `vitest run` **189 files, 5,388 passed, 2 skipped, 1 todo** (adds `xlsx-viewer-capability.test.tsx`, `xlsx-viewer-support.test.tsx`); Playwright **53 passed, 3 skipped** (skips: Chromium-only long-task, CDP AX tree and touch emulation on WebKit, by design); build eager `dist/index.js` **38.34 kB gzip** (ceiling 38.72); golden compare: every XLSX unit passes, the same 6 pre-existing DOCX/PPTX failures |
 | Golden compare `--threshold 0 --max-ratio 0` | **every XLSX unit passes** (poi-47889 ×3, 56295, 59021, 59746_NoRowNums, 62272, 64508, 66365, link-external-workbook-a, xlsx-jdbc). 6 DOCX/PPTX units fail identically on base `cfa5cb5`, checked in a temporary base worktree: poi-55733.docx, poi-picture-transparency.pptx ×3, pydocx-blk-inner-content.docx, pypptx-test_slides.pptx. They are pre-existing and environmental, and no DOCX/PPTX/render file changed on this branch |
 
 ## Reproduced gaps and fixes
@@ -57,6 +58,7 @@ No reproduced gap fell in `src/xlsx/view/sort.ts` or `scheduler.ts`. Both files 
 | `f1-paged.xlsx` | `writeFixturePackage('F1', { nnz: 120000 })` | F1 at 120,000 NNZ (crosses the 100,000-cell object cap) | worker-backed |
 | `f2-1k.xlsx` | `writeFixturePackage('F2', { rowCount: 1000 })` | reduced F2 | resident |
 | `f2-paged.xlsx` | `writeFixturePackage('F2', { rowCount: 100010 })` | reduced F2 (crosses the 100,000-row cap) | worker-backed |
+| `f2-storage.xlsx` (S10.3) | `writeFixturePackage('F2', { rowCount: 160000 })` | reduced F2; page bytes exceed the 32 MiB memory page store | worker-backed (storage/quota scenarios) |
 | `f3sparse-small.xlsx` | committed S0.2 | F3 sparse-wide 256 × 512 | resident |
 | `f3-paged.xlsx` | `writeFixturePackage('F3', { rowCount: 8 })` | dense 8 × 16,384 = 131,072 cells | worker-backed |
 | `f4-12k.xlsx` | `writeFixturePackage('F4', { rowCount: 12000 })` | reduced F4, > 10,000 unique values | resident |
@@ -76,7 +78,7 @@ Browser shorthand: **[B:C+W]** = Playwright scenario passing on Chromium and Pla
 |---|---|---|---|
 | AC-CAP-01 | F1, F6, synthetic boundary rows | `xlsx-viewer-contracts.test.ts`; `xlsx-viewer-complexity.test.ts`: DOM active-descendant ids 2^31, 2^32 and 2^34−1 end to end. Browser F1 res+wkr: `aria-activedescendant` id 17179869183 **[B:C+W]** | pass |
 | AC-CAP-02 | F1, F3, F7 | `xlsx-viewer-scroll-window.test.ts`, `xlsx-viewer-navigation.test.tsx`, `xlsx-viewer-selection.test.ts`. Browser: F1 Go To XFD1048576 with header/row label agreement; F3 recenter, header/cell `aria-colindex` agreement and edge ArrowLeft after recenter; F7 Original-cell Go To on a hidden row opens the read-only inspector without moving the active descendant **[B:C+W]** | pass (zoom/DPR browser leg partial: zoom 125% exercised, DPR change not exercised) |
-| AC-CAP-03 | F2/F3/F4 quota variants | `xlsx-viewer-import-limits.test.ts`, `xlsx-viewer-source-pages.test.ts` (typed quota/incomplete/cancel) | pass (unit); real-browser quota-denial run not-run (S10.3) |
+| AC-CAP-03 | F2/F3/F4 quota variants | `xlsx-viewer-import-limits.test.ts`, `xlsx-viewer-source-pages.test.ts` (typed quota/incomplete/cancel). S10.3 browser: no OPFS/IndexedDB and zero quota are visible typed refusals with no grid; quota denied mid-import states the failure with an incomplete body (G7) **[B:C+W]**; `xlsx-viewer-capability.test.tsx` | pass (S10.3; was "pass (unit); browser leg not-run"). Quota is emulated by stubbing the worker's storage APIs, not by filling a real disk quota |
 | AC-STORE-01 | F8 | `xlsx-viewer-adapter-parity.test.ts`, `xlsx-viewer-values.test.ts`, `xlsx-viewer-source.test.ts`: object and paged adapters agree on values/errors/cache/formula/date/raw UTF-16; pending ≠ blank. Browser wkr: unknown rows paint "Loading…" (`xlsx-viewer-paged-viewer.test.tsx`) | pass; **native Excel checkpoint not-run** (see below) |
 | AC-STORE-02 | F1–F4 malformed variants | `xlsx-viewer-import.test.ts`, `xlsx-viewer-import-limits.test.ts` | pass (unit); peak/cleanup ledger in a browser → S10.2 |
 | AC-STORE-03 | F5 | `xlsx-viewer-structure.test.ts` (pure index). Browser F5: giant narrow-column merge and fixed array queried before consumers, child selection allowed **[B:C+W]** | pass (S3.3): `xlsx-viewer-structure-metadata.test.ts` — drawing anchors (oneCell/twoCell/absolute), saved and engine spills, tables, giant merge; resident = paged structural results; fail-closed cases. Browser drawing/spill leg not-run |
@@ -97,8 +99,8 @@ Browser shorthand: **[B:C+W]** = Playwright scenario passing on Chromium and Pla
 | AC-SEL-01 | F7 | `xlsx-viewer-selection.test.ts` ([0,3,1,2] Shift cases), `xlsx-viewer-copy.test.ts` | pass (unit) |
 | AC-SEL-02 | F7 | `xlsx-viewer-selection.test.ts`, `xlsx-viewer-a11y.test.tsx`. Browser F7 hidden-row inspection keeps the active descendant **[B:C+W]** | pass |
 | AC-COPY-01 | F7, F8 | `xlsx-viewer-copy.test.ts`, `xlsx-viewer-policy.test.tsx`. Browser F1 res+wkr: clipboard receives exactly "A1048576" after find **[B:C+W]** | pass |
-| AC-A11Y-01 | F1, F3, F7 | `xlsx-viewer-a11y.test.tsx`, `xlsx-viewer-a11y-subdetail.test.tsx` (G5). Browser: `aria-rowcount` 1048577 / `aria-colcount` 16385, bounded owned tree (< 2,000 cells), header/cell index agreement **[B:C+W]** | pass (code); **desktop screen-reader and iPad VoiceOver receipts not-run** (S10.3). Blocking |
-| AC-A11Y-02 | F7 | `xlsx-viewer-events.test.tsx`, `xlsx-viewer-filter-ui.test.tsx`, `xlsx-viewer-sort-ui.test.tsx`; G4 browser regression | pass (code); actual keyboard/touch/focus receipts on Safari/iPad not-run (S10.3). Blocking |
+| AC-A11Y-01 | F1, F2, F3, F7 | `xlsx-viewer-a11y.test.tsx`, `xlsx-viewer-a11y-subdetail.test.tsx` (G5), `xlsx-viewer-support.test.tsx` (G6). Browser: `aria-rowcount` 1048577 / `aria-colcount` 16385, bounded owned tree (< 2,000 cells), header/cell index agreement **[B:C+W]**. S10.3: one Tab stop (G6 fixed) and edge navigation after recenter **[B:C+W]**; Chromium AX tree over CDP — grid → row → rowheader/columnheader/gridcell hierarchy, valid active-descendant relation to a named owned gridcell, `selected` on 4 cells, polite/atomic live status; DOM `aria-rowindex` = displaySlot+2 after a sort with a hidden row, `aria-colindex` = sourceCol+2, `aria-sort` on the priority-1 header **[B:C]** | pass with not-run legs: **macOS VoiceOver receipt not-run** (cannot be driven unattended; manual steps below); **iPad VoiceOver not-run** (user decision). Blocking only on the screen-reader receipt |
+| AC-A11Y-02 | F2, F7 | `xlsx-viewer-events.test.tsx`, `xlsx-viewer-filter-ui.test.tsx`, `xlsx-viewer-sort-ui.test.tsx`; G4 browser regression; `xlsx-viewer-capability.test.tsx` (G10 Esc). S10.3 browser: arrows/Enter/Home/Ctrl edges, Shift and Ctrl/Cmd+click multi-selection, Esc order (popup → selection), Alt+Down filter with focus return to the grid, F2 control mode with Enter/Space on native header controls and focus return to the popup invoker, Ctrl/Cmd+F find, no zoom/navigation hijack of the search and Go To inputs **[B:C+W]**; coarse-pointer emulation: every fully visible control ≥ 44 px, tap selects, row-header tap owned by its row **[B:C, emulation]** | pass with not-run legs: **Safari desktop not-run** (needs admin `safaridriver --enable`; WebKit runs are Playwright emulation); **iPad touch not-run** (user decision). Not blocking on code; the real-device legs stay listed under *Blocking* |
 | AC-LIFE-01 | F7 | `xlsx-viewer-find-races.test.tsx`, `xlsx-viewer-worker-races.test.ts`, `xlsx-viewer-paged-viewer.test.tsx`. Browser F7: sheets A/B both at their first revision keep their own sort and data across switches; views never bump fontGen; sort/filter keep zoom **[B:C+W]** | pass |
 | AC-LIFE-02 | F7 multi-sheet; F2/F4 browser | `xlsx-viewer-lifecycle.test.tsx` (F7 plateau, close returns ledgers to baseline). S10.2 Chrome receipt `interactive-viewer-viewer-chrome-r1.json`: after close, workers 1/1 terminated, worker memory 0, DOM canvases 0, page storage 221 MB / 159 MB → 0. Main heap 16.3 MiB (F2) / 4.2 MiB (F4) above the empty host, not yet attributed; UASM Canvas reclaimed lazily | pass (unit); browser recovery **partial** (main-heap residue unattributed; F7 multi-sheet switching not browser-measured; Safari/iPad not-run). Blocking |
 | AC-SEARCH-01 | F1, F7, F8 | `xlsx-viewer-find.test.ts`, `xlsx-viewer-find-races.test.tsx`. Browser F1 res+wkr: find reaches the never-painted A1048576 with source id 17179852800 **[B:C+W]** | pass |
@@ -106,16 +108,16 @@ Browser shorthand: **[B:C+W]** = Playwright scenario passing on Chromium and Pla
 | AC-RENDER-02 | F7, F8 | `xlsx-viewer-selection-overlay.test.ts`, `xlsx-viewer-viewport-integration.test.tsx`, static print/export suites | pass (unit) |
 | AC-PERF-01 | F1–F4 full scale + scroll mixes | S10.2 desktop Chrome release receipt (`interactive-viewer-performance.md` § S10.2). Rows that pass: warm frame (p95 ≤ 3.94 ms paint, 16.67 ms cadence); first viewport (F1 481 / F3 678 ms p95, F2 max 597 ms with n = 10); import throughput (≥ 58 MiB/s, ≥ 0.89M cells/s); the reused S8.6 kernel rows | **miss** on input acknowledgment: header sort on 1M rows shows nothing for 12–13 s. Desktop **not admitted**. Actual Safari not-run (admin `safaridriver`); iPad/mobile not-run by user decision. F5–F8 have no browser performance rows. Blocking |
 | AC-PERF-02 | F2–F7 | Complexity: `xlsx-viewer-complexity.test.ts` (see below). Per-pool memory, S10.2 Chrome: main 24.2 / 64 MiB; worker 228.7 / 512 MiB (ledger + measureUserAgentSpecificMemory); bitmap 113.2 / 128 MiB; browser process RSS recorded as informational | complexity **pass**; desktop memory **pass**; mobile M pools not-run (no device); GPU backend absent (Canvas2D only). Blocking only for mobile |
-| AC-BACKEND-01 | — | TS resident baseline is the only backend. S11/S12 were not executed, and the S11 allowance ("record not-run when the baseline already meets targets") needs the S10.2 receipts first | **not-run** (pending S10.2 and S11). Blocking |
+| AC-BACKEND-01 | — | TS resident baseline is the only backend. S11/S12 were not executed, and the S11 allowance ("record not-run when the baseline already meets targets") needs the S10.2 receipts first. S10.3 fallback leg for the Canvas2D reference: `contextrestored` drops tiles and repaints both layers (G9, emulated events) **[B:C+W]** | **not-run** (pending S10.2 and S11); device-loss leg pass (emulated). Blocking |
 | AC-REG-01 | F8, corpus | typecheck, full vitest, build, golden compare (all XLSX units pass; 6 non-XLSX failures pre-existing on base) | pass (code); native source/checkpoint evidence not-run |
 
 **Counts (34 acceptance cases):**
 
 | Status | Cases | Which |
 |---|---:|---|
-| pass | 17 | AC-CAP-01, STORE-04, VIEW-01–04, SEM-01, SEM-03, SEM-06, SEM-09, SEL-01, SEL-02, COPY-01, LIFE-01, SEARCH-01, RENDER-01, RENDER-02 |
-| pass with a not-run leg | 11 | AC-CAP-02, CAP-03, STORE-01, STORE-02, STORE-03, SEM-02, SEM-04, SEM-05, SEM-07, SEM-08, REG-01 |
-| partial, blocking | 4 | AC-A11Y-01, A11Y-02, LIFE-02, PERF-02 |
+| pass | 18 | AC-CAP-01, CAP-03, STORE-04, VIEW-01–04, SEM-01, SEM-03, SEM-06, SEM-09, SEL-01, SEL-02, COPY-01, LIFE-01, SEARCH-01, RENDER-01, RENDER-02 |
+| pass with a not-run leg | 12 | AC-CAP-02, STORE-01, STORE-02, STORE-03, SEM-02, SEM-04, SEM-05, SEM-07, SEM-08, REG-01, A11Y-02 (Safari/iPad legs), A11Y-01 (screen-reader legs, still blocking) |
+| partial, blocking | 2 | AC-LIFE-02, PERF-02 |
 | not-run, blocking | 1 | BACKEND-01 |
 | fail | 1 | AC-PERF-01 (S10.2: input-acknowledgment miss; desktop not admitted) |
 
@@ -152,15 +154,102 @@ What is instrumented, and what is not:
     2. Reopen the file and confirm Excel shows no repair prompt. Take a screenshot.
     3. Copy the file to `tests/fixtures/xlsx-viewer/native-corner.xlsx`, record its SHA-256, and add a parity case like `xlsx-viewer-adapter-parity.test.ts`: object and paged adapters agree, cache/error/date/hidden/table values match the screenshot.
     4. Open it in the e2e page (`?src=`), with and without `?worker=1` (the latter needs a cap-crossing copy).
-- **Safari desktop: not-run.** `safaridriver` exists, but remote automation requires a one-time `safaridriver --enable` (admin prompt) plus Develop ▸ Allow Remote Automation, which needs the user. The Playwright WebKit runs above are not Safari evidence.
+- **Safari desktop: not-run** (also in S10.3). `safaridriver` exists, but remote automation requires a one-time `safaridriver --enable` (admin prompt) plus Develop ▸ Allow Remote Automation, which needs the user. The Playwright WebKit runs above are not Safari evidence.
 - **iPad / physical devices: not-run** by user decision.
+
+## S10.3 support and accessibility receipts
+
+**Branch:** `feature/iv-s10-3` (cut at `65a112b`). **Specs:** `tests/browser/interactive-viewer-a11y.spec.ts`, `tests/browser/interactive-viewer-capability.spec.ts`; vitest `tests/xlsx-viewer-capability.test.tsx`, `tests/xlsx-viewer-support.test.tsx`. Same page (`src/debug/viewer-e2e.html`), engines and labels as S10.1: **[C]** Chromium headless shell, **[W]** Playwright WebKit (`webkit-playwright`, never Safari evidence).
+
+**Capability denial.** Main-thread capabilities are removed with Playwright init scripts. Init scripts never reach a dedicated worker, so the page passes worker-side denials in the Worker `name` (`?wcaps=` → `caps:<flags>`), and `src/debug/workerCaps.ts` applies them before the worker entry evaluates: `no-offscreen`, `no-fonts`, `no-storage` (OPFS `getDirectory` rejects, no IndexedDB), `quota-zero` (`estimate()` reports 0 free), `idb-quota` (no OPFS; every IndexedDB `put` throws `QuotaExceededError`). Storage scenarios use `f2-storage.xlsx` (F2 at 160,000 rows, 6.5 MB compressed; its expected page bytes (6 × compressed, 38,944,548 B) exceed the 32 MiB in-memory page store, so it needs OPFS or IndexedDB).
+
+### Reproduced gaps and fixes (S10.3)
+
+Each gap was reproduced in a real browser (G10 by reading the handler), pinned by a test that failed for the intended reason, then fixed. For G6 the browser spec itself was RED first. For G7–G9 the browser reproduction was an exploratory probe on the e2e page ("Worker is not defined"; "Visible body 0 / complete body 0" with cells "Loading…"; a pane left blank), the vitest regressions were RED first, and the browser scenarios were committed with the fixes.
+
+| # | Gap (where reproduced) | Requirement | Fix | Regression tests |
+|---|---|---|---|---|
+| G6 | **Chromium keyboard trap.** Chromium makes an `overflow:auto` element without a tabindex keyboard-focusable. The pan scroller sits inside the grid, whose focus capture sends inner focus back to the grid wrapper, so Tab cycled grid → scroller → grid forever: focus could not leave the viewer by keyboard. Observed focus sequence: `grid, scroller, grid, scroller, …`. WebKit was unaffected. | A11Y-01 (one Tab entry), A11Y-02 | `InteractiveSheetDoc.tsx`: the scroller has `tabIndex={-1}`. | browser "one Tab stop…" **[C+W]** (RED on Chromium: focus stayed in the grid after Tab); `xlsx-viewer-support.test.tsx` (every scroll container inside the grid is out of the tab order; RED: `expected null to be '-1'`) |
+| G7 | **Quota denied mid-import masqueraded as an empty sheet.** With `idb-quota`, every worker read answered `incomplete` with `{code:'quota', message:'browser storage quota exceeded while writing a source page'}`. The status read "Visible body 0 / complete body 0", cells stayed "Loading…" for good, and no notice said why. | AC-CAP-03 (no empty-cell lie), LIFE-03 | `viewerRemoteSource.ts`: `RemoteWorkbook` records the failure reported on structural reads and exposes `loadState()` (complete / loading / incomplete + message). `InteractiveSheetDoc.tsx`: the status uses it ("body N (loading)" until the import completes; "(incomplete) — This sheet could not be fully loaded: … Free some browser storage for this site (or use a smaller file), then reopen the file." on a storage failure). Review round 1: a storage failure is terminal — `pagedSource.ts` reports reads after an ended import as not retryable (the import's own flag still means "reopening may succeed"), and `RemoteWorkbook` stops structural polling (it observed 11 reads in 5 s before); every load-state change notifies subscribers, including loading → complete with unchanged geometry. | browser "quota denied while the worker writes pages…" **[C+W]**; `xlsx-viewer-capability.test.tsx` (the observed reply shape; RED: status "complete body 2" with no failure text). Round 1: `xlsx-viewer-capability.test.tsx` RemoteWorkbook cases (RED: 11 structural reads, expected 1; 0 notifications on completion), `xlsx-viewer-source-pages.test.ts` "reads after an import ended by a quota failure are not retryable" (RED: `retryable: true`), browser structural-read count flat for 3 s **[C+W]** |
+| G8 | **Worker unavailable failed the document.** With no `Worker` global, the host `viewerWorker` factory threw and a large file failed with "Worker is not defined". A worker that dies, or no worker at all, keeps compatibility mode. | §4.2 transition policy, LIFE-03 | `OfficeFile.tsx`: a factory that throws returns "no paged route", so the file keeps compatibility mode with its notice. | browser "Worker unavailable…" **[C+W]**; `xlsx-viewer-capability.test.tsx` (RED: received "Worker is not defined") |
+| G9 | **Canvas context loss left a blank pane.** Nothing listened for `contextrestored`: a restored 2D context (and possibly its cached tile canvases) stayed blank until the next scroll. | AC-BACKEND-01 (device-loss fallback), RENDER-01 | `InteractiveSheetDoc.tsx`: on `contextrestored` of either canvas, drop all cached tiles and repaint both layers. | browser "canvas context loss (emulated)…" **[C+W]** (pixel alpha 0 → 255, `basePaints` grows); `xlsx-viewer-support.test.tsx` (RED: `expected 6 to be greater than 6` basePaints) |
+| G10 | **Esc never cancelled a pending copy** outside the grid: the root handler compared the lower-cased key with `'Escape'`. | A11Y-02 (§9.3 Esc fall-through) | `InteractiveSheetDoc.tsx`: compare with `'escape'`. | `xlsx-viewer-capability.test.tsx` (copy waiting on held worker reads; Esc on "Cancel copy"; RED: the button stayed) |
+
+Not a gap (designed): committing a sort from a header control ends control mode and returns focus to the grid with a valid active descendant, because the committed view is a new owner (GridSemantics resets control mode on owner change). Focus is never lost to `<body>`; re-enter with F2.
+
+### Keyboard and focus receipts **[C+W]**
+
+| Scenario | Result |
+|---|---|
+| One Tab stop: Print → grid → out of the viewer; Shift+Tab returns | pass (after G6) |
+| ArrowDown, ArrowRight, Enter (moves down), Home, Ctrl/Cmd+Home; live status names each new active cell; descendant valid each step | pass |
+| Edge navigation across recentered segments: Ctrl/Cmd+ArrowDown → A1048576, ArrowUp → A1048575, Ctrl/Cmd+ArrowRight → XFD1048575, ArrowLeft → XFC1048575 with matching row/column headers | pass |
+| Shift+Arrow range B2:C4 (6 `aria-selected` cells) plus Ctrl/Cmd+click E6 (7) with grid focus kept | pass |
+| Alt+Down opens the active column's filter with focus inside; Esc closes only the popup (selection kept, focus to grid, valid descendant); second Esc clears selection and the descendant ("Selection cleared.") | pass |
+| F2 → "Select Column D" (Enter selects the column: only its header has `aria-selected=true`); Tab → "Cycle sort column D"; Enter → ascending; F2/Tab/Space → descending (`aria-label` "Column D; sort priority 1, descending"); Tab → filter button, Enter opens, Esc returns focus to that invoker, Esc returns to the grid. Popup names: the filter popup is "Column filter", the sort popup "Sort worksheet" (round 1; was "Column filter" for both; `xlsx-viewer-support.test.tsx`) | pass |
+| Ctrl/Cmd+F focuses find; typing `-0+=` and ArrowDown/Home in find, and `0-`/ArrowUp in Go To, edit the input only (zoom stays 100%, active cell unchanged); on the grid `+` zooms and `0` resets | pass |
+| Coarse pointer (Chromium `isMobile`/`hasTouch` emulation, 1024×768 DPR 2): every fully visible grid control ≥ 44 × 44 px (pane-clipped edge columns are clamped by design), tap selects C5, a tap 2 px inside row 6's header selects only row 6 | pass **[C, emulation]** |
+
+### Accessibility tree receipt **[C]**
+
+Chromium's AX layer read with `Accessibility.getFullAXTree` (what a screen reader is given), F7 sheet A after a score sort (hidden source row 8, so display slots differ from source rows) and a Shift selection:
+
+```
+1 grid "Worksheet A" (focused, multiselectable), rows=19, columnheaders=23, rowheaders=18,
+gridcells=396, selected=4, activedescendant="B3, value 1; original B40", live=polite/atomic;
+DOM rowcount/colcount=1048577/16385, sorted=[["Column B; sort priority 1, ascending","ascending"]]
+```
+
+Asserted: exactly one grid; every row's semantic parent is the grid; every gridcell/rowheader/columnheader's parent is a row; one header row holding the corner and column headers; each body row owns exactly one rowheader; the `activedescendant` relation resolves to an owned gridcell whose AX name equals the DOM label and carries "original …"; 4 cells expose `selected`; the status is a polite, atomic live region. CDP exposes no AX property for ARIA indices, so they were read from the owned DOM: header row `aria-rowindex=1`, corner `aria-colindex=1`, columns A–C at 2–4, rowheaders at column 1, first cells at column 2. Round 1: body rows are checked against fixture-derived values, not self-consistency — after the sort, slots 1–6 hold ids 40..35 and slots ≥ 8 hold 34, 33, …, slot 7 is the pinned hidden source row 8, so `aria-rowindex` 8 and 10 are present and 9 is absent, each row is labelled "Row slot+1", and column A reads "A<slot+1>, value <id>; original A<id+1>" (VisibleRank indexing would close the gap and fail).
+
+### Capability matrix
+
+| Capability removed | Small admitted file | Large (paged) file | Result |
+|---|---|---|---|
+| `Worker` (main thread) | `f1-small`: resident, Go To XFD1048576 exact, no worker created **[C+W]** | `f1-paged`: compatibility mode with "Large file — opened in compatibility mode", corner reachable, no alert (after G8) **[C+W]** | pass |
+| `OffscreenCanvas` (main + worker) | — | `f1-paged`: worker-backed (1 worker, 1 open), corner exact, no compatibility notice **[C+W]** | pass |
+| Fonts: no `FontFace`/`document.fonts` (main) and no `FontFace`/`self.fonts` (worker) | — | `f1-paged`: corner exact, owned grid, base painted **[C+W]**; vitest: a face whose registration throws yields a `font-load-failed` diagnostic, the viewer paints and keeps its grid | pass. Round 1: the status shows "Font not available, shown with a fallback: Brand Sans" (deduplicated by family, at most 3 named + "and N more"; `xlsx-viewer-support.test.tsx`, RED: status had counts only) |
+| OPFS + IndexedDB, and zero quota | `f1-paged` (page bytes within the 32 MiB memory store): worker-backed from bounded memory pages **[C+W]** | `f2-storage`: visible typed refusal "…needs browser storage (OPFS or IndexedDB)…" / "browser storage has 0 bytes free; about 38944548 are needed…", no grid, worker terminated **[C+W]** | pass |
+| IndexedDB quota during import (OPFS denied) | — | `f2-storage`: "(incomplete) — This sheet could not be fully loaded: browser storage quota exceeded while writing a source page"; never "complete body" (after G7) **[C+W]** | pass |
+| *(none denied)* Playwright WebKit, large file | — | `f2-storage` worker-backed on default Playwright WebKit (build 2370): OPFS is chosen, its page writes fail, and the sheet shows "Visible body 0 / body 0 (incomplete) — This sheet could not be fully loaded: browser storage failed while writing a source page. Free some browser storage for this site (or use a smaller file), then reopen the file." No IndexedDB fallback is attempted (`sourcePages.ts` `choosePageBackend`). Files whose pages fit the 32 MiB memory store (every S10.1 fixture) are unaffected; real Safari not-run | **documented capacity restriction** (Playwright WebKit, worker-backed files > ~5.6 MB compressed): visibly diagnosed, no capacity claim |
+| No viewer worker supplied | — | `f2-storage`: compatibility mode with its notice **[C+W]** | pass |
+| Canvas 2D context loss | `f2-1k`: visible canvases cleared, `contextlost`/`contextrestored` dispatched; the pane is repainted after restore (pixel alpha 0 → 255, `basePaints` grows) and the viewer keeps working (after G9) **[C+W]**. Tile-cache invalidation itself is pinned by the vitest (detached tile canvases are not reachable from the page) | — | pass (emulated: a 2D context loss cannot be triggered from page script; real GPU-process loss not-run) |
+
+No unsupported profile receives a capacity claim: refused files show no grid; compatibility mode is labelled; an incomplete import says so.
+
+### Manual macOS VoiceOver steps (not-run)
+
+VoiceOver cannot be driven unattended (it needs System Settings/TCC grants and a user session), so no screen-reader receipt is claimed. To produce it:
+
+1. `bun install --frozen-lockfile`, then `bunx vite --config vite.harness.config.ts --port 4173 --strictPort --host 127.0.0.1`.
+2. Serve a fixture to the page: copy `tests/fixtures/xlsx-viewer/f1-small.xlsx` (or a generated one from `$TMPDIR/officeview-viewer-e2e-v1/`) into `src/debug/` and open `http://127.0.0.1:4173/src/debug/viewer-e2e.html?src=/src/debug/f1-small.xlsx` in Safari and in Chrome.
+3. Start VoiceOver (Cmd+F5). Tab to the grid. Expect: "Worksheet F1, grid"; the capacity description; the active cell announced as "A1, value …".
+4. Arrow Right/Down: each move announces the new cell name. Shift+Arrow: the extension target is announced and VO reports "selected".
+5. Go To `XFD1048576`, focus the grid: VO reads "XFD1048576, value 17179869183"; VO+Right/Left within the row reads neighbouring owned cells and their column headers ("Column XFD"); row header "Row 1048576".
+6. On `f7-two-sheets.xlsx` (generated), sort column B: the column header reads "Column B; sort priority 1, ascending" and VO reports sort state; cell names append "original A41"-style source addresses.
+7. F2: VO lands on "Select Column …, button"; Tab through sort/filter buttons; Enter opens "Column filter, dialog"; Esc returns to the invoker; Esc returns to the grid and the active cell is re-announced.
+8. Esc with a selection: VO announces "Selection cleared." from the status live region.
+9. Record VO output (VoiceOver Utility ▸ Verbosity, or a screen recording with captions), macOS/Safari/Chrome builds, and the commit, and attach them here as the AC-A11Y-01 screen-reader receipt.
+
+### Not-run (S10.3)
+
+- **macOS VoiceOver** (both browsers): not automatable unattended; steps above. AC-A11Y-01 stays blocking on it.
+- **Safari desktop**: needs admin `safaridriver --enable`; not attempted. WebKit results are Playwright emulation.
+- **iPad, physical devices, iPad VoiceOver, real touch**: not-run by user decision. Touch rows above are Chromium emulation only.
+- **Real GPU/device loss**: not triggerable for a 2D canvas from page script; emulated with events.
+- **Real disk-quota exhaustion**: quota was emulated by stubbing the worker's storage APIs.
+
+### Observations (S10.3, not fixed)
+
+- **Playwright WebKit cannot write OPFS pages from the worker** (recorded as a capacity restriction in the capability matrix). `choosePageBackend` (`sourcePages.ts`) picks OPFS when `getDirectory` works and does not fall back to IndexedDB when a write fails; an injected OPFS write failure confirms IndexedDB is never probed. Automatic write-failure failover is not required by §4.2 and is left to the storage owner.
+- A recorded load failure is cleared by a later complete structural read, but after a terminal storage failure no further read is issued (the import has ended), so that path is only reachable for non-storage failures.
 
 ## Blocking for release
 
 These are mandatory cases whose evidence is incomplete. Nothing here is hidden as a pass.
 
 1. ~~**AC-STORE-03 / AC-SEM-04 drawing legs / AC-SEM-05**~~ — resolved by S3.3 (merged 2026-10-12); only their browser legs remain not-run.
-2. **AC-A11Y-01 / AC-A11Y-02:** the desktop screen-reader, iPad VoiceOver and real keyboard/touch/focus receipts (S10.3).
+2. **AC-A11Y-01 / AC-A11Y-02:** S10.3 delivered the Chromium/WebKit keyboard and focus receipts and the Chromium AX-tree receipt. Still open: the **macOS VoiceOver** receipt (manual steps in the S10.3 section), **Safari desktop** (needs admin `safaridriver --enable`), and **iPad touch/VoiceOver** (not-run by user decision).
 3. **AC-PERF-01 / AC-PERF-02 (memory) / AC-LIFE-02 (real retained memory):** S10.2 delivered the desktop Chrome receipt (`interactive-viewer-viewer-chrome-r1.json`). Header-sort input acknowledgment misses (12–13 s on 1M rows); see the proposals in `interactive-viewer-performance.md`. Actual Safari and iPad receipts are still missing. The main-heap residue after close is not attributed yet.
 4. **Native Excel checkpoint** for AC-STORE-01, AC-SEM-07 and AC-REG-01. The manual steps are above.
 5. **AC-BACKEND-01:** the baseline status is pending the S10.2 receipts and the S11 decision.
