@@ -39,7 +39,9 @@ export const F_ERROR = 4
 export const F_BLOB = 8
 /** §4.3.4 initial profile: 64 KiB inline-string soft threshold, the same
  * constant as ImportLimits.inlineStringSoftBytes. Measured in stored UTF-16
- * bytes (2 per code unit), which is what the value would add to the text lane. */
+ * bytes (2 per code unit), which is what the value would add to the text lane.
+ * admission.ts checkCaps compares the same field to a character count to route
+ * object vs paged; that routing is unchanged and independent of the spill. */
 export const INLINE_TEXT_SOFT_BYTES = 64 * 1024
 
 /** Formula metadata of one record; strings round-trip through JSON (lone surrogates are escaped). */
@@ -183,6 +185,9 @@ function encodedSize(n: number, units: number, metaLength: number): number {
  * the buffer is allocated, so the caller can charge or refuse them first. */
 export function encodePage(p: CellPagePayload, reserve?: (scratchBytes: number) => void): Uint8Array {
   const n = p.rows.length
+  // The meta JSON is built before `reserve` runs: it is needed to size the
+  // buffer, and it is bounded by the page's formula metadata, which the
+  // builder/pending-page share already charged (2 B per JSON character).
   const metaJson = p.meta.size ? JSON.stringify([...p.meta]) : ''
   const sizes = [8 * n, 4 * n, 4 * n, 4 * (n + 1), 2 * n, 2 * p.text.length, n, n, 2 * metaJson.length]
   const total = 32 + sizes.reduce((sum, s) => sum + align8(s), 0)
@@ -561,7 +566,10 @@ export class SourcePageStore implements PageSink {
       }
     } catch (error) {
       // The page was not indexed: return its summary charge. A disposed store
-      // already released everything and must not charge again.
+      // already released everything and must not charge again. Blob records
+      // this commit already wrote stay in storage, unreferenced, until close
+      // (backends remove whole owners only), so their blobRecords charge stays
+      // too: the ledger keeps matching what storage holds.
       if (this.live) {
         try { this.construction.persist(indexKey, list.length * PAGE_SUMMARY_BYTES, 'the page index') } catch { /* pool refused or closed */ }
       }

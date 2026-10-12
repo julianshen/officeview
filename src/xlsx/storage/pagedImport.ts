@@ -22,6 +22,7 @@ import {
 import { MAX_COLS, MAX_ROWS, parseA1, type SourceRect } from '../view/coordinates'
 import { isLoadEvaluated } from '../view/values'
 import { createQuotaLedger, quotaLimitsFor, type QuotaLedger } from './quota'
+import { WORKER_BUDGETS } from '../view/tileCache'
 import { classifyPart, inventoryLimits } from './admission'
 import { anchorRecordEvents, newSheetMetadata, normalizeRowMetadata, sharedStringEvents, sheetRecordEvents, type SheetMetadata } from './sheetRecords'
 import { PageBuilder, SourcePageStore, browserPageStorageEnv, choosePageBackend, payloadBytes, type PageStorageEnv, type StoredPage } from './sourcePages'
@@ -172,6 +173,8 @@ export async function openImportSession(source: Extract<SourceHandle, { kind: 'b
     docId: options.docId,
     backend: await choosePageBackend(options.storage ?? browserPageStorageEnv(), `${options.docId}-${Date.now().toString(36)}`, source.blob.size * STORED_PER_COMPRESSED_BYTE, limits.spool.memoryLimitBytes),
     ledger,
+    // Construction is charged against the profile's worker budget until the viewer binds the document pool.
+    memoryBudgetBytes: WORKER_BUDGETS[options.profile],
   })
   let notify: () => void = () => {}
   let changedPromise = new Promise<void>((resolve) => { notify = resolve })
