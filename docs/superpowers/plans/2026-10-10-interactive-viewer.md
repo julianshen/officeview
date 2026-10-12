@@ -123,7 +123,8 @@ Every package is implemented on its own branch, reviewed by at least one agent f
 | S8.6 sort performance (`sortPrefix.ts`, `sortPrepared.ts`, `sortText.ts`, compact prepared columns, batched cooperative checks) | merged (codex implementation; Claude reviews over two rounds); every frozen threshold met in Chrome, thresholds/budgets unchanged |
 | S10.3 accessibility/keyboard/capability verification | merged; VoiceOver/Safari/iPad not run (manual steps recorded) |
 | S13 integrator documentation (README "Interactive spreadsheet viewer", PLAN.md) | merged (codex draft; opencode reviews over two rounds, APPROVE); other S13 release gates open |
-| S10.2 (in progress: 12/13 desktop Chrome rows pass, header-sort acknowledgment fix under way), (physical-device receipts skipped for now by user decision), S11/S12 not-run (decision records `docs/architecture/xlsx-wasm-decision.md`, `xlsx-gpu-decision.md`; desktop-evidenced, pending-merge S10.2 receipt; revisit on mobile receipts), S13 release review | not started / in progress as noted |
+| S11/S12 decided not-run (decision records `docs/architecture/xlsx-wasm-decision.md`, `xlsx-gpu-decision.md`; desktop headless Chrome evidence; S10.2 receipt pending merge; revisit on Safari/mobile receipts) | decided, not executed (optional boundary) |
+| S10.2 (in progress: 12/13 desktop Chrome rows pass, header-sort acknowledgment fix under way), (physical-device receipts skipped for now by user decision), S13 release review | not started / in progress as noted |
 
 ## S0 — Freeze contracts, counterexamples and fixture/harness infrastructure
 
@@ -704,7 +705,7 @@ Import file-size, compressed/inflated-byte and storage quotas are explicit in th
 
 ### S11.1 Interchangeable kernel proof, not a rewrite
 
-> **Status (2026-10-12):** not-run under the optional execution boundary above (no prototype built, experiment checkboxes below intentionally not executed). Decision record `docs/architecture/xlsx-wasm-decision.md`: all nine S8.6 kernel rows pass their frozen thresholds on desktop D Chrome, and the one S10.2 end-to-end miss (12 s sort acknowledgment) is measured main-thread detection I/O plus missing pending UI, not kernel CPU — a Wasm port would not move it. Desktop-evidenced only (S10.2 receipt pending merge; mobile rows not run); re-open triggers are in the decision doc.
+> **Status (2026-10-12):** not-run under the optional execution boundary above (no prototype built, experiment checkboxes below intentionally not executed; the `src/xlsx/backends/kernel.ts` / `tsKernel.ts` seams were not created). Decision record `docs/architecture/xlsx-wasm-decision.md`: nine S8.6 scenarios against the five frozen kernel thresholds pass on desktop D headless Chrome (S8.6 synthetic-fixture smoke receipts), and the one S10.2 end-to-end miss (~12 s input-to-present; r1 receipt frames it as 11.9–13.3 s acknowledgment, pending state since added at S10.2 HEAD without a new receipt yet) is measured main-thread detection I/O, not kernel CPU — a Wasm port would not move it. Desktop Chrome (headless) only (S10.2 receipt pending merge; mobile rows not run); re-open triggers are in the decision doc. Refresh this status from the final merged S10.2 receipt.
 
 **Optional execution boundary:** Record `not-run` with current TS measurements when baseline already meets targets and no measured CPU bottleneck warrants a port. If invoked, timebox to 3–5 engineering days, at most two optimization iterations, numeric sort/filter/metrics plus text-interop parity only; stop/admit against the documented gate, not an expanding rewrite.
 
@@ -722,7 +723,7 @@ Import file-size, compressed/inflated-byte and storage quotas are explicit in th
 
 ### S12.1 Canonical-record GPU prototype with Canvas2D fallback
 
-> **Status (2026-10-12):** not-run under the optional execution boundary above (no prototype built, experiment checkboxes below intentionally not executed). Decision record `docs/architecture/xlsx-gpu-decision.md`: every paint row and the 128 MiB bitmap budget pass on desktop D Chrome (warm input-to-paint p95 ≤ 3.94 ms, frame interval 16.67 ms, 0 long tasks), and the one found paint bottleneck was fixed in place. Desktop-evidenced only (S10.2 receipt pending merge; mobile/iPad rows not run by user decision); re-open triggers are in the decision doc, including mandatory revisit when mobile receipts exist.
+> **Status (2026-10-12):** not-run under the optional execution boundary above (no prototype built, experiment checkboxes below intentionally not executed; nothing under `src/xlsx/backends/*` or `experiments/` was created). Decision record `docs/architecture/xlsx-gpu-decision.md`: every paint row and the 128 MiB bitmap budget pass on desktop D headless Chrome, and the one found paint bottleneck was fixed in place. Desktop Chrome (headless) only (S10.2 receipt pending merge; mobile/iPad rows not run by user decision); re-open triggers are in the decision doc, including mandatory revisit when mobile receipts exist. Refresh this status from the final merged S10.2 receipt.
 
 **Optional execution boundary:** Record `not-run` when the compliant Canvas2D baseline has no measured paint bottleneck justifying another backend. If invoked, timebox to 4–7 engineering days and at most two optimization iterations; one viewport pipeline with fills/lines/text/image parity, no parser/formula migration. Any unsupported drawing/font/warp coverage retains reference fallback and cannot silently become default.
 
