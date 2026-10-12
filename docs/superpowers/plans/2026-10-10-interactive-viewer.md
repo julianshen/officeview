@@ -118,7 +118,7 @@ Every package is implemented on its own branch, reviewed by at least one agent f
 | S9.2 copy in displayed order and budgeted static print (`copy.ts`, `viewerControlsClient.ts`, clipboard/print policy) | merged (codex implementation; opencode reviews over two rounds); copy works on resident sheets — paged sheets wait for S5.4 |
 | S8.4 performance threshold freeze (`performance-profile.json`, harness kernel scenarios, `docs/validation/interactive-viewer-performance.md`) | merged; thresholds frozen at spec; sort misses carried by S8.6 |
 | S5.4 worker-backed interactive viewer for paged workbooks (`viewerRemoteSource.ts`, `pagedWorkbook.ts`, `pagedGeometry.ts`, `pagedFormatting.ts`, worker `read` command, paged filter evaluator) | merged (Claude implementation; codex round 1, opencode round 2, APPROVE); needs a host-supplied `viewerWorker` |
-| S8.6 (sort performance), S10 (physical-device receipts skipped for now by user decision), S11/S12 status, S13 | not started |
+| S3.3 (parser structural metadata, added 2026-10-12), S8.6 (sort performance, in progress), S10.1 (in review), S10.2/S10.3 (physical-device receipts skipped for now by user decision), S11/S12 status, S13 | not started / in progress as noted |
 
 ## S0 — Freeze contracts, counterexamples and fixture/harness infrastructure
 
@@ -318,6 +318,17 @@ expect(await source.readCell({ row: 1_048_575, col: 16_383 }, readOptions)).toMa
 - [x] Structural guards query the entire affected body-row band across all 16,384 columns, even when keys/selected range are only A:B, because whole-row permutation/hiding affects distant blank/style-only merges and spills. Add a far-column blank merge/spill regression that cannot be found by the nonblank-data guard. Query all nonblank outsiderange columns anywhere in a sort band, including D values separated by blank C from selected A:B. Safe whole-row permutation may proceed only after this query completes authoritatively.
 - [x] Run focused suite; expected anchored Y40→Y20 counterexample is refused with no view change, generated spill child is detected and isolated adjacent data never moves silently.
 - [x] Deliver a reusable operation guard with typed refusal reasons and generation-aware query completion.
+
+### S3.3 Parser structural metadata extraction and wiring
+
+> Added 2026-10-12. S3.1 delivered only the pure structural index; parser/`drawing.ts`/`types.ts` metadata extraction and the spill bridges were never delivered. S10.1 found that, as a result, a sheet with any drawing or dynamic array can never be sorted or filtered (AC-STORE-03, AC-SEM-05, drawing parts of AC-SEM-04 blocking). Must land before S10.2/S13.
+
+**Files:** modify `src/xlsx/parse.ts`, `src/xlsx/drawing.ts`, `src/xlsx/types.ts`, `src/xlsx/storage/*` (paged import), bridge `src/xlsx/formula/spills.ts`, `saved-spills.ts`, worker session structure publication; tests `tests/xlsx-viewer-structure.test.ts`, `tests/xlsx-viewer-operation-guard.test.ts`, extend paged/resident parity tests.
+
+- [ ] RED: real XLSX fixtures with cell-anchored (oneCell/twoCell) and absolute drawings, saved dynamic-array spills (`cm`/metadata), engine-evaluated spills, tables with headerRowCount=0/totals rows, and giant merges produce structural records in both the resident and paged adapters, with identical results. A sort/filter whose affected row band contains no drawing anchor or spill is allowed; one that would displace an anchor or split a spill is refused with the S3.2 typed reason.
+- [ ] GREEN: extract bounded drawing anchor metadata (no image decode), spill anchors/extents (saved and engine), and table regions during parse and paged import. Feed them to the S3.1 index and the S3.2 guard through the worker session; never a per-cell coverage map. Unknown or partially imported structure keeps the operation pending or refused, never silently allowed.
+- [ ] Run S3/S7/S8 focused suites, the paged parity suites and the S10.1 browser scenarios with drawing/spill fixtures. Expect exact allow/refuse decisions and parser metadata that stays compatible with existing static rendering (XLSX goldens unchanged).
+- [ ] Update `docs/validation/interactive-viewer.md` rows AC-STORE-03, AC-SEM-04 and AC-SEM-05.
 
 ## S4 — Required resident worker, publication identity and lifecycle
 
