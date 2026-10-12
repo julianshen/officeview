@@ -14,6 +14,8 @@ import { resolvePartTarget } from '../../drawing/parts'
 import { dynamicMetadataIndices } from '../metadata'
 import { isTablePartSource, parseTableMetadata } from '../formula/tables'
 import type { TableMetadata } from '../formula/types'
+import type { XlsxDrawingAnchors } from '../types'
+import { anchorId, anchorRecord } from '../anchorRecords'
 import {
   collectDeclaredTable, createDeclaredBudget, declaredContainerBuilder, declaredSheetBuilder, hasDeclaredFiltering, type DeclaredSheetFilters,
 } from '../view/declaredFilters'
@@ -21,7 +23,7 @@ import { MAX_COLS, MAX_ROWS, parseA1, type SourceRect } from '../view/coordinate
 import { isLoadEvaluated } from '../view/values'
 import { createQuotaLedger, quotaLimitsFor, type QuotaLedger } from './quota'
 import { classifyPart, inventoryLimits } from './admission'
-import { anchorCountEvents, newSheetMetadata, normalizeRowMetadata, sharedStringEvents, sheetRecordEvents, type SheetMetadata } from './sheetRecords'
+import { anchorRecordEvents, newSheetMetadata, normalizeRowMetadata, sharedStringEvents, sheetRecordEvents, type SheetMetadata } from './sheetRecords'
 import { PageBuilder, SourcePageStore, browserPageStorageEnv, choosePageBackend, type PageStorageEnv, type StoredPage } from './sourcePages'
 import { importLimitsFor, type ImportLimits, type ImportLimitOverrides, type ImportOutcome, type ImportProgress, type ImportSession, type ImportedPage } from './importSession'
 
@@ -43,6 +45,8 @@ export interface PagedSheet {
   used?: { r0: number; r1: number; c0: number; c1: number }
   /** Array formulas with their saved extent parsed once (undefined: no/invalid ref). */
   arrayCells: { row: number; col: number; saved?: SourceRect; hasRef: boolean; dynamic: boolean }[]
+  /** Placement-only drawing anchors (S3.3), read once the sheet's relationships are known. */
+  drawingAnchors: XlsxDrawingAnchors
   /** Merge ranges parsed once at the end of the sheet; unreadable refs are counted, not kept. */
   mergeRects: SourceRect[]
   invalidMerges: number
@@ -157,7 +161,7 @@ export async function openImportSession(source: Extract<SourceHandle, { kind: 'b
     const relType = relTypes.get(relId) ?? ''
     const kind = relType.endsWith('/worksheet') ? 'worksheet' : relType !== '' ? 'other' : 'worksheet'
     const partPath = target.startsWith('/') ? target.slice(1) : `xl/${target.replace(/^\.\.\//, '')}`
-    sheets.push({ sheetId, name, workbookIndex, partPath, kind, state: 'pending', importedThroughRow: -1, metadata: newSheetMetadata(), tables: [], arrayCells: [], mergeRects: [], invalidMerges: 0 })
+    sheets.push({ sheetId, name, workbookIndex, partPath, kind, state: 'pending', importedThroughRow: -1, metadata: newSheetMetadata(), tables: [], arrayCells: [], drawingAnchors: { records: [], unresolved: 0 }, mergeRects: [], invalidMerges: 0 })
     workbookIndex++
   }
   const store = options.store ?? new SourcePageStore({
@@ -184,6 +188,8 @@ export async function openImportSession(source: Extract<SourceHandle, { kind: 'b
     if (entry && !planned.has(name)) { planned.add(name); expandedTotal += entry.uncompressedSize }
   }
   const partTexts = new Map<string, string | undefined>()
+  /** Drawing parts tokenized once and shared by every sheet that references them. */
+  const drawingParts = new Map<string, XlsxDrawingAnchors>()
   const readPlanned = async (name: string): Promise<string | undefined> => {
     // Each discovered part is inflated once, however often it is referenced.
     if (partTexts.has(name)) return partTexts.get(name)
@@ -343,23 +349,39 @@ export async function openImportSession(source: Extract<SourceHandle, { kind: 'b
       if (state.sortState) declaredEntry.worksheetSortState = state.sortState
       const wsRels = await worksheetRels(sheet, readPlanned)
       sheet.tables = await resolveTables(sheet, wsRels, declaredEntry, declaredBudget, readPlanned)
+      // Placement-only anchor records (S3.3), as drawing.ts reads them: an
+      // unresolvable or unreadable part counts unresolved, never "no anchors".
+      const anchoredParts = new Set<string>()
       for (const id of sheet.metadata.drawingIds) {
         const rel = id === undefined ? undefined : wsRels?.get(id)
         const drawing = rel && rel.type.endsWith('/drawing') ? inventory.find(resolvePartTarget(sheet.partPath, rel.target)) : undefined
-        if (!drawing) { sheet.metadata.drawingAnchors++; continue }
-        if (planned.has(drawing.name) && partTexts.has(drawing.name)) continue
-        plan(drawing.name)
-        partTexts.set(drawing.name, undefined)
-        try {
-          let anchors = 0
-          await tokenizeBytes(openPart(src, drawing, partOpts(drawing.name, limits.paged.drawingPartEnvelopeBytes)), anchorCountEvents(() => { anchors++ }), { signal, limits: { maxTokenChars: limits.maxTokenChars } })
-          sheet.metadata.drawingAnchors += anchors
-        } catch (error) {
-          if (isPackageError(error) && error.code === 'cancelled') throw error
-          sheet.metadata.drawingAnchors++
-        } finally {
-          ledger.drainQueue()
+        if (!drawing) { sheet.metadata.drawingAnchors++; sheet.drawingAnchors.unresolved++; continue }
+        if (anchoredParts.has(drawing.name)) continue
+        anchoredParts.add(drawing.name)
+        let parsed = drawingParts.get(drawing.name)
+        if (!parsed) {
+          plan(drawing.name)
+          parsed = { records: [], unresolved: 0 }
+          let index = 0
+          const found = parsed
+          try {
+            await tokenizeBytes(openPart(src, drawing, partOpts(drawing.name, limits.paged.drawingPartEnvelopeBytes)), anchorRecordEvents((name, parts) => {
+              const record = found.records.length < limits.paged.structuralRecords ? anchorRecord(name, anchorId(drawing.name, index), parts) : undefined
+              index++
+              if (record) found.records.push(record)
+              else found.unresolved++
+            }, () => { found.unresolved++ }), { signal, limits: { maxTokenChars: limits.maxTokenChars } })
+          } catch (error) {
+            if (isPackageError(error) && error.code === 'cancelled') throw error
+            parsed = { records: [], unresolved: 1 }
+          } finally {
+            ledger.drainQueue()
+          }
+          drawingParts.set(drawing.name, parsed)
         }
+        sheet.metadata.drawingAnchors += parsed.records.length + parsed.unresolved
+        sheet.drawingAnchors.records.push(...parsed.records)
+        sheet.drawingAnchors.unresolved += parsed.unresolved
       }
       if (hasDeclaredFiltering(declaredEntry)) sheet.declared = declaredEntry
       for (const domain of sheet.metadata.structuralIncomplete) {

@@ -11,10 +11,11 @@
  * same file parsed with valuePolicy 'cached' (adapter parity, §4.2).
  */
 import type {
-  AuthoritativeCell, CellRead, ColumnEntry, ColumnQuery, OverviewGroup, OverviewQuery, Page, PopulatedQuery,
+  AuthoritativeCell, CellRead, ColumnEntry, ColumnQuery, DrawingAnchor, OverviewGroup, OverviewQuery, Page, PopulatedQuery,
   RangeCompletion, ReadOptions, SingleCellPayload, SourceFailure, SourceRowInterval, SourceStamp, SourceStore,
-  SparseRowPage, StructuralResult, ValuePolicy, WorkerDiagnostic,
+  SparseRowPage, SpillExtent, StructuralResult, ValuePolicy, WorkerDiagnostic,
 } from './contracts'
+import { resolveDrawingAnchors } from './drawingBounds'
 import { PackageError } from '../../core/package-error'
 import { MAX_COLS, MAX_ROWS, cellId, isValidCoordinate, isValidSourceRect, type SourceRect } from './coordinates'
 import { INITIAL_GENERATION } from '../../worker/viewerProtocol'
@@ -45,6 +46,7 @@ function lower(values: ArrayLike<number>, target: number, from = 0, to = values.
 export class PagedXlsxSheetAdapter implements SourceStore {
   readonly valuePolicy: ValuePolicy = 'cached'
   private released = false
+  private drawingCache?: DrawingAnchor[]
   constructor(readonly stamp: SourceStamp, private readonly workbook: PagedWorkbook, private readonly sheet: PagedSheet) {}
 
   get extent(): SourceStore['extent'] {
@@ -53,9 +55,10 @@ export class PagedXlsxSheetAdapter implements SourceStore {
   }
   coverageDiagnostics(): WorkerDiagnostic[] {
     const out: WorkerDiagnostic[] = []
-    if (this.sheet.metadata.drawingAnchors > 0) out.push({ code: 'coverage-unresolvable', message: 'Drawing anchors are not available to the source adapter until S3.1 parser wiring' })
-    const dynamic = this.sheet.arrayCells.find(a => a.dynamic)
-    if (dynamic) out.push({ code: 'coverage-unresolvable', message: 'Dynamic-array spill extents are not available to the source adapter until the S3.1 spill bridge', source: { row: dynamic.row, col: dynamic.col } })
+    if (this.sheet.drawingAnchors.unresolved > 0) out.push({ code: 'coverage-unresolvable', message: 'Some drawing anchors could not be read; their placement is unknown' })
+    // No evaluator runs (`cached`): a dynamic array's saved ref is its published extent; without one it is unknown.
+    const dynamic = this.sheet.arrayCells.find(a => a.dynamic && a.saved === undefined)
+    if (dynamic) out.push({ code: 'coverage-unresolvable', message: 'A dynamic-array spill has no known extent', source: { row: dynamic.row, col: dynamic.col } })
     if (this.sheet.invalidMerges) out.push(invalidMergeDiagnostic(this.sheet.invalidMerges))
     if (this.sheet.state === 'complete' && this.sheet.tables === undefined) out.push({ code: 'coverage-unresolvable', message: 'The workbook table inventory could not be read; table bands are unknown' })
     return out
@@ -375,23 +378,34 @@ export class PagedXlsxSheetAdapter implements SourceStore {
     const tables = (sheet.tables ?? [])
       .map(t => ({ id: t.id, range: { r0: t.extent.firstRow, r1: t.extent.firstRow + t.extent.rows - 1, c0: t.extent.firstCol, c1: t.extent.firstCol + t.extent.cols - 1 }, headerRows: t.headerRowCount, totalsRows: t.totalsRowCount }))
       .filter(t => isValidSourceRect(t.range) && intersects(t.range, rect))
-    const spills = []
+    const spills: SpillExtent[] = []
     for (const a of sheet.arrayCells) {
-      if (a.dynamic) addMissing({ r0: a.row, r1: MAX_ROWS - 1, c0: a.col, c1: MAX_COLS - 1 })
+      // Saved values are authoritative (`cached`): the saved ref is a dynamic
+      // array's published extent; without a readable one it may reach the sheet edge.
+      if (a.dynamic && a.saved === undefined) addMissing({ r0: a.row, r1: MAX_ROWS - 1, c0: a.col, c1: MAX_COLS - 1 })
       if (!a.hasRef) continue
       const anchorRect = { r0: a.row, r1: a.row, c0: a.col, c1: a.col }
       if (!intersects(a.saved ?? anchorRect, rect) && !intersects(anchorRect, rect)) continue
-      spills.push({ anchor: { row: a.row, col: a.col }, kind: a.dynamic ? 'dynamic' as const : 'fixed' as const, ...(a.saved ? { saved: a.saved } : {}) })
+      spills.push({ anchor: { row: a.row, col: a.col }, kind: a.dynamic ? 'dynamic' : 'fixed', ...(a.saved ? { saved: a.saved } : {}), ...(a.dynamic && a.saved ? { evaluated: a.saved } : {}) })
     }
-    if (sheet.metadata.drawingAnchors > 0 || sheet.tables === undefined) addMissing(rect)
+    // Unreadable drawing anchors and an unavailable table inventory cannot prove "none here".
+    if (sheet.drawingAnchors.unresolved > 0 || sheet.tables === undefined) addMissing(rect)
+    const drawings = this.drawings().filter(d => d.kind === 'absolute' || intersects(d.bounds, rect))
     // Structure wrapped in mc:AlternateContent is unreadable, never known-empty (design note §3.4, RED 14a).
     if (sheet.metadata.structuralIncomplete.length) {
       return {
-        ...base, merges, tables, spills, completeness: 'incomplete', missing: [rect],
+        ...base, merges, tables, spills, drawings, completeness: 'incomplete', missing: [rect],
         error: failure('unsupported', `${sheet.metadata.structuralIncomplete.join(', ')} metadata is wrapped in mc:AlternateContent and cannot be read`),
       }
     }
-    return { ...base, merges, tables, spills, completeness: missing.length ? 'incomplete' : 'complete', missing }
+    return { ...base, merges, tables, spills, drawings, completeness: missing.length ? 'incomplete' : 'complete', missing }
+  }
+  /** Resolved once the sheet is complete (its row/column metadata is final), against the geometry the source publishes. */
+  private drawings(): DrawingAnchor[] {
+    const meta = this.sheet.metadata
+    this.drawingCache ??= resolveDrawingAnchors(this.sheet.drawingAnchors.records,
+      buildGeometry(meta.rowHeights.map(h => ({ index: h.row, heightPt: h.heightPt })), meta.cols, meta.hiddenRows, { hiddenCols: true }))
+    return this.drawingCache
   }
 
   async queryOverview(request: OverviewQuery, options: ReadOptions): Promise<Page<OverviewGroup>> {
