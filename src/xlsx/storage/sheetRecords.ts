@@ -9,7 +9,7 @@
 import { PackageError } from '../../core/package-error'
 import { localName, XstringDecoder, type XmlEvents } from '../../core/xml-stream'
 import { isLoadEvaluated, MAX_LOAD_FORMULA_CHARS } from '../view/values'
-import { ANCHOR_ELEMENTS, type AnchorParts } from '../anchorRecords'
+import { ANCHOR_ELEMENTS, DRAWING_ROOT, type AnchorParts } from '../anchorRecords'
 
 export interface AdmissionCounters {
   expandedBytes: number
@@ -307,8 +307,6 @@ export interface SheetMetadata {
   tablePartIds: (string | undefined)[]
   drawingRefs: number
   drawingIds: (string | undefined)[]
-  /** Anchors found in the referenced drawing parts; unreadable parts count as one (fail-closed). */
-  drawingAnchors: number
   structuralIncomplete: Array<'merges' | 'tables' | 'drawings' | 'columns' | 'rows'>
   /** Cells whose coordinates fall outside the sheet (invisible in both adapters). */
   skippedCells: number
@@ -625,13 +623,13 @@ export function sheetRecordEvents(meta: SheetMetadata, options: SheetRecordOptio
 }
 
 export function newSheetMetadata(): SheetMetadata {
-  return { rowHeights: [], hiddenRows: [], cols: [], merges: [], tablePartIds: [], drawingRefs: 0, drawingIds: [], drawingAnchors: 0, structuralIncomplete: [], skippedCells: 0 }
+  return { rowHeights: [], hiddenRows: [], cols: [], merges: [], tablePartIds: [], drawingRefs: 0, drawingIds: [], structuralIncomplete: [], skippedCells: 0 }
 }
 
 /** Streams a drawing part's top-level anchors into placement-only parts (S3.3):
  * first xdr:from/xdr:to/xdr:ext/xdr:pos child of each anchor, nothing else is
- * retained. A top-level mc:AlternateContent reports `onUnreadable` (fail-closed),
- * matching the object parser. */
+ * retained. A top-level mc:AlternateContent, or a document element other than
+ * wsDr, reports `onUnreadable` (fail-closed), matching the object parser. */
 export function anchorRecordEvents(onAnchor: (name: string, parts: AnchorParts) => void, onUnreadable: () => void): XmlEvents {
   let depth = 0
   let anchor: { name: string; parts: AnchorParts } | undefined
@@ -641,6 +639,7 @@ export function anchorRecordEvents(onAnchor: (name: string, parts: AnchorParts) 
   return {
     open(qname, names, values, count, selfClosing) {
       const local = localName(qname)
+      if (depth === 0 && local !== DRAWING_ROOT) onUnreadable()
       if (depth === 1) {
         if (ANCHOR_ELEMENTS.has(local)) anchor = { name: local, parts: {} }
         else if (local === 'AlternateContent') onUnreadable()

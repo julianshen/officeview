@@ -13,6 +13,14 @@ export interface AnchorParts {
 }
 export const ANCHOR_ELEMENTS: ReadonlySet<string> = new Set(['oneCellAnchor', 'twoCellAnchor', 'absoluteAnchor'])
 
+/** Local name of a drawing part's document element; only `wsDr` holds anchors. */
+export const DRAWING_ROOT = 'wsDr'
+/** Document element local name of an XML text (prolog, comments and doctype skipped). */
+export function rootLocalName(xml: string): string | undefined {
+  const m = /^(?:\uFEFF)?(?:\s|<\?[\s\S]*?\?>|<!--[\s\S]*?-->|<!DOCTYPE[^>]*>)*<(?:[A-Za-z_][\w.-]*:)?([A-Za-z_][\w.-]*)/.exec(xml)
+  return m?.[1]
+}
+
 /** Stable anchor identity: the drawing part plus the anchor's index among its top-level anchors. */
 export const anchorId = (partPath: string, index: number): string => `${partPath}#${index}`
 

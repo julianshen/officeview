@@ -154,6 +154,7 @@ describe('S3.3 structural records from real XLSX bytes (resident and paged, iden
       ['invalid anchor', structureBytes({ sheetData: dataRows(5), drawing: '<xdr:oneCellAnchor><xdr:from><xdr:col>1</xdr:col><xdr:colOff>0</xdr:colOff><xdr:row>1</xdr:row><xdr:rowOff>0</xdr:rowOff></xdr:from><xdr:clientData/></xdr:oneCellAnchor>' }), FULL],
       ['wrapped anchor', structureBytes({ sheetData: dataRows(5), drawing: wrappedAnchor(oneCell(1, 1, 10, 10)) }), FULL],
       ['dangling drawing', structureBytes({ sheetData: dataRows(5), danglingDrawing: true }), FULL],
+      ['drawing part with a foreign root', structureBytes({ sheetData: dataRows(5), drawingPart: '<?xml version="1.0"?><!-- not a drawing --><notADrawing/>' }), FULL],
       ['dynamic without ref', structureBytes({ dynamic: true, sheetData: dataRows(5, r => r === 2 ? '<c r="D3" cm="1"><f t="array">_xlfn.SEQUENCE(2)</f><v>1</v></c>' : '') }), { r0: 2, r1: 1_048_575, c0: 3, c1: 16_383 }],
     ]
     for (const [name, bytes, missing] of cases) {
@@ -165,6 +166,48 @@ describe('S3.3 structural records from real XLSX bytes (resident and paged, iden
       expect(cached.coverageDiagnostics?.('1').map(d => d.code), name).toContain('coverage-unresolvable')
       await paged.release()
     }
+  })
+})
+
+describe('S3.3 fail-closed sources without a known anchor or spill extent', () => {
+  it('paged: anchors beyond the structural record cap are unresolved, not dropped', async () => {
+    const bytes = structureBytes({ sheetData: dataRows(5), drawing: oneCell(1, 1, 10, 10, 2) + oneCell(1, 3, 10, 10, 3) })
+    const store = new SourcePageStore({ docId: 'doc', backend: memoryPageBackend() })
+    const session = await openImportSession({ kind: 'blob', blob: new Blob([bytes as BlobPart]) }, { docId: 'doc', profile: 'D', store, limits: { paged: { structuralRecords: 1 } } })
+    expect((await session.done).kind).toBe('complete')
+    const paged = createPagedWorkbookSource(session)
+    const result = await structural(paged)
+    expect(result.completeness).toBe('incomplete')
+    expect(result.missing).toContainEqual(FULL)
+    expect(result.drawings.map(d => d.id)).toEqual([`${DRAWING_PART}#0`])
+    expect(paged.coverageDiagnostics?.('1').map(d => d.code)).toContain('coverage-unresolvable')
+    await paged.release()
+  })
+
+  it('object, engine policy without evaluation state: a dynamic array extent stays unknown even with a saved ref', async () => {
+    const doc = await parseXlsx(await OfficePackage.load(structureBytes({ sheetData: dataRows(5) })))
+    // A hand-built dynamic anchor the engine never evaluated (no spill state for this document).
+    const cell = doc.sheets[0].rows[2].cells[0]
+    Object.assign(cell, { formula: '_xlfn.SEQUENCE(2)', dynamicArray: true, arrayRef: 'A3:A4' })
+    // A new document object carries no engine spill state (that state is keyed by document identity).
+    const fresh = { ...doc, sheets: doc.sheets.map(sheet => ({ ...sheet })) }
+    const source = createObjectWorkbookSource(fresh, 'doc')
+    expect(source.valuePolicy).toBe('engine')
+    const result = await structural(source)
+    expect(result.completeness).toBe('incomplete')
+    expect(result.missing).toContainEqual({ r0: 2, r1: 1_048_575, c0: 0, c1: 16_383 })
+    expect(source.coverageDiagnostics?.('1')).toContainEqual(expect.objectContaining({ code: 'coverage-unresolvable', source: { row: 2, col: 0 } }))
+  })
+
+  it('object: a sheet with parsed drawings but no extracted anchors is unresolved', async () => {
+    const doc = await parseXlsx(await OfficePackage.load(DRAWINGS), { valuePolicy: 'cached' })
+    expect(doc.sheets[0].drawings?.length).toBeGreaterThan(0)
+    delete doc.sheets[0].drawingAnchors
+    const source = createObjectWorkbookSource(doc, 'doc')
+    const result = await structural(source)
+    expect(result.completeness).toBe('incomplete')
+    expect(result.missing).toContainEqual(FULL)
+    expect(source.coverageDiagnostics?.('1').map(d => d.code)).toContain('coverage-unresolvable')
   })
 })
 

@@ -34,6 +34,8 @@ export interface StructureSpec {
   beforeSheetData?: string
   /** wsDr children; omitted means no drawing part. */
   drawing?: string
+  /** Raw drawing part text, replacing the generated wsDr wrapper. */
+  drawingPart?: string
   /** `<drawing r:id>` without a resolvable relationship. */
   danglingDrawing?: boolean
   /** Full `<table ...>` part bodies, attached through tableParts. */
@@ -47,11 +49,11 @@ export function structureBytes(spec: StructureSpec): Uint8Array {
   const rels: string[] = []
   const extra: BuildEntry[] = []
   let after = spec.afterSheetData ?? ''
-  if (spec.drawing !== undefined || spec.danglingDrawing) {
+  if (spec.drawing !== undefined || spec.drawingPart !== undefined || spec.danglingDrawing) {
     after += `<drawing xmlns:r="${R_NS}" r:id="rD1"/>`
     if (!spec.danglingDrawing) {
       rels.push(`<Relationship Id="rD1" Type="${R_NS}/drawing" Target="../drawings/drawing1.xml"/>`)
-      extra.push({ name: DRAWING_PART, data: `<?xml version="1.0"?><xdr:wsDr xmlns:xdr="${XDR_NS}" xmlns:a="${A_NS}">${spec.drawing}</xdr:wsDr>` })
+      extra.push({ name: DRAWING_PART, data: spec.drawingPart ?? `<?xml version="1.0"?><xdr:wsDr xmlns:xdr="${XDR_NS}" xmlns:a="${A_NS}">${spec.drawing}</xdr:wsDr>` })
     }
   }
   if (spec.tables?.length) {

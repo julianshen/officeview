@@ -355,7 +355,7 @@ export async function openImportSession(source: Extract<SourceHandle, { kind: 'b
       for (const id of sheet.metadata.drawingIds) {
         const rel = id === undefined ? undefined : wsRels?.get(id)
         const drawing = rel && rel.type.endsWith('/drawing') ? inventory.find(resolvePartTarget(sheet.partPath, rel.target)) : undefined
-        if (!drawing) { sheet.metadata.drawingAnchors++; sheet.drawingAnchors.unresolved++; continue }
+        if (!drawing) { sheet.drawingAnchors.unresolved++; continue }
         if (anchoredParts.has(drawing.name)) continue
         anchoredParts.add(drawing.name)
         let parsed = drawingParts.get(drawing.name)
@@ -379,7 +379,6 @@ export async function openImportSession(source: Extract<SourceHandle, { kind: 'b
           }
           drawingParts.set(drawing.name, parsed)
         }
-        sheet.metadata.drawingAnchors += parsed.records.length + parsed.unresolved
         sheet.drawingAnchors.records.push(...parsed.records)
         sheet.drawingAnchors.unresolved += parsed.unresolved
       }

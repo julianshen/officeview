@@ -11,7 +11,7 @@ import { parseGroupShapeProperties, resolveDrawingStyle, type DrawingStyle, type
 import { parseTextBody, textFontDefaults } from '../drawing/text-parse'
 import { parseVmlContainer, type VmlNode } from '../drawing/vml'
 import type { XlsxDrawing, XlsxDrawingAnchors, XlsxImage, XlsxSheet } from './types'
-import { ANCHOR_ELEMENTS, anchorId, anchorRecord } from './anchorRecords'
+import { ANCHOR_ELEMENTS, DRAWING_ROOT, anchorId, anchorRecord, rootLocalName } from './anchorRecords'
 
 function vmlNodeToXlsx(node: VmlNode, owner: string): XlsxDrawing | undefined {
   if (node.kind === 'shape') {
@@ -439,7 +439,12 @@ export async function parseWorksheetDrawings(pkg: OfficePackage, sheet: XlsxShee
     try { drawingRoot = await pkg.xmlOrdered(owner) }
     catch { anchors.unresolved++; contentDiagnostic(context, 'malformed-part', owner, undefined, { identity: id, reason: 'invalid-drawing-xml' }); continue }
     if (!drawingRoot) { anchors.unresolved++; continue }
-    if (!anchoredParts.has(owner)) { anchoredParts.add(owner); collectAnchorRecords(drawingRoot, owner, anchors) }
+    if (!anchoredParts.has(owner)) {
+      anchoredParts.add(owner)
+      // A well-formed part whose document element is not wsDr holds no readable anchors: unknown, not "none".
+      if (rootLocalName((await pkg.text(owner)) ?? '') === DRAWING_ROOT) collectAnchorRecords(drawingRoot, owner, anchors)
+      else anchors.unresolved++
+    }
     // Resolve relationships through the shared cached optional-part path.
     await partRelationships(pkg, owner)
     let anchorIndex = 0
