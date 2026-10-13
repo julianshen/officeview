@@ -189,24 +189,32 @@ export interface SheetGeometry {
 }
 /** Rows whose occupancy is memoized per geometry (most recently used kept). */
 const OVERFLOW_ROW_CACHE = 4096
-const overflowRows = new WeakMap<SheetGeometry, Map<number, RowOverflowInput>>()
+interface OverflowRowMemo { snapshot: symbol | undefined; input: RowOverflowInput }
+const overflowRows = new WeakMap<SheetGeometry, Map<number, OverflowRowMemo>>()
+// Paged caches replace cell arrays on put and remove them on drop/clear. Weak
+// snapshot keys validate occupancy without keeping evicted cells or text alive.
+const overflowSnapshots = new WeakMap<readonly XlsxCell[], symbol>()
 /** One source row's overflow occupancy (sorted visible blocking columns and the
  * merged ranges crossing it, against the real column axis and edges). Built
- * once per row and geometry and reused across frames, tiles and find, so a
+ * once per row snapshot and geometry and reused across frames, tiles and find, so a
  * wide styled row costs O(cells) once and every allowance O(log n). */
 export function rowOverflowInput(geometry: SheetGeometry, sourceRow: number): RowOverflowInput {
   let rows = overflowRows.get(geometry)
   if (!rows) overflowRows.set(geometry, rows = new Map())
+  const cells = geometry.cellsOf(sourceRow)
+  let snapshot = cells && overflowSnapshots.get(cells)
+  if (cells && !snapshot) overflowSnapshots.set(cells, snapshot = Symbol())
   const hit = rows.get(sourceRow)
-  if (hit) { rows.delete(sourceRow); rows.set(sourceRow, hit); return hit }
+  if (hit && hit.snapshot === snapshot) { rows.delete(sourceRow); rows.set(sourceRow, hit); return hit.input }
   const metrics = geometry.metrics
   const input = rowOverflowFromCells(
-    geometry.cellsOf(sourceRow) ?? [],
+    cells ?? [],
     isValidCoordinate(sourceRow, 0) ? geometry.merges.collect({ r0: sourceRow, r1: sourceRow, c0: 0, c1: MAX_COLS - 1 }) : [],
     (col: number) => metrics.cols.start(col),
     metrics.cols.logicalCount - 1,
   )
-  rows.set(sourceRow, input)
+  rows.delete(sourceRow)
+  rows.set(sourceRow, { snapshot, input })
   if (rows.size > OVERFLOW_ROW_CACHE) rows.delete(rows.keys().next().value!)
   return input
 }
