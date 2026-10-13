@@ -18,10 +18,11 @@
  *
  * Byte figures are conservative estimates of JS heap held. They are pinned by
  * tests/xlsx-viewer-construction-memory.test.ts against a Bun heap probe
- * (scripts/construction-memory-probe.ts, heapSize + extraMemorySize after a
- * full GC). Review measurements on Bun 1.3.10: 72.8 B per numeric builder
- * record, 129 B per record holding a ~12-unit string, 194.5 B per summary; the
- * constants add headroom for array-capacity growth (up to 1.5x):
+ * (scripts/construction-memory-probe.ts, heapSize after a full GC; heapSize
+ * already includes extraMemorySize). Review measurements on Bun 1.3.10:
+ * 72.6-83.7 B per numeric builder record, 123.6-127.3 B per record holding a
+ * ~12-unit string, 187.4-191.6 B per summary; the constants add headroom for
+ * array-capacity growth (up to 1.5x):
  * - builder: 96 B per record, 48 B per non-empty inline string plus 2 B per
  *   UTF-16 code unit of text and spilled values, and per formula-meta object
  *   192 B plus 2 B per character of its JSON (at least its strings' content);

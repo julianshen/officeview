@@ -1008,11 +1008,15 @@ follow §4.3.5 (integer ids, chunked paged payloads, bounded decoded LRU); §4.3
   | Pending shared string | 2 B per code unit plus 64 B |
   | Page summary | 256 B |
 
-  `scripts/construction-memory-probe.ts` measures, on Bun, the live heap (`heapSize + extraMemorySize` after a full GC) of
-  each modelled structure at array-capacity transitions. `tests/xlsx-viewer-construction-memory.test.ts` asserts the model
-  is at least the measurement and at most twice it. On Bun 1.3.10 it measured 72.7–83.7 B per numeric builder record
-  (model 96), 128–132 B per short-text record (model 168), 192–196 B per summary (model 256), and 67.6–67.7 B per pending shared
-  string (model 101.8). These are Bun/JSC figures, not a Chrome heap certification (S10.2).
+  `scripts/construction-memory-probe.ts` measures, on Bun, the live heap (`heapSize` after a full GC; it already includes
+  `extraMemorySize`, which the probe reports separately for diagnosis only) of each modelled structure at array-capacity
+  transitions. Before each baseline it lets the previous case's leftovers be reclaimed (readings stable within 4 KiB), so
+  they cannot be reclaimed mid-measurement and understate a delta. `tests/xlsx-viewer-construction-memory.test.ts`
+  asserts the model is at least the measurement and at most twice it. On Bun 1.3.10 (18 probe runs, 6 in parallel) it
+  measured 72.6–83.7 B per numeric builder record (model 96), 123.6–127.3 B per short-text record (model 168), 187.4–191.6 B
+  per summary (model 256), 62.8 B per pending shared string (model 101.7–101.8), 301–323 B per dead owner with one file
+  (model 542) and 134–144 B per file of owners holding 64 (model 213–214). These are Bun/JSC figures, not a Chrome heap
+  certification (S10.2).
 - **Before the viewer exists:** the document pool exists only once the viewer session binds it, after the first page committed.
   Until then a store charges a stand-in pool of the profile's worker budget (D 512 MiB, M 256 MiB). `bindMemory` moves every live
   charge into the document pool, atomically, and closes the stand-in. If the document pool cannot hold all of them, nothing

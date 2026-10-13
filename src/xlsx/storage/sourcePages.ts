@@ -626,7 +626,7 @@ export function ownerLocks(manager: LockManagerLike): OwnerLocks {
 }
 /** Heap model of the sweep's working set (Map entry, names array and owner
  * string per owner; array slot and string per name), plus 2 B per code unit.
- * Pinned by scripts/construction-memory-probe.ts ('leftover-sweep'). */
+ * Pinned by scripts/construction-memory-probe.ts ('leftover-sweep', 'leftover-sweep-grouped'). */
 export const SWEEP_OWNER_BYTES = 256
 export const SWEEP_NAME_BYTES = 48
 /**
