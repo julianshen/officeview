@@ -1152,7 +1152,7 @@ export class SourcePageStore implements PageSink {
    * rollback deletes the record by key: until both settled the owner must not
    * pass to anyone else, or a recovering holder of the same owner could lose a
    * new record to the old rollback. So close/abandon return once storage is
-   * removed (cancellation never waits on the backend), but the owner's lock is
+   * removed (cancellation never waits on writes already in flight), but the owner's lock is
    * kept until every started commit settled and storage is removed once more;
    * `ownerReleased` resolves then. A backend that never completes keeps the
    * owner locked until its realm ends, as a crash would.

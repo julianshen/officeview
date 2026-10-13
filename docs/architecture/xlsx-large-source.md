@@ -943,8 +943,8 @@ leaves records that no live index references.
   part makes two opens of one docId in the same millisecond use different storage.
 - **Web Locks.** An OPFS/IndexedDB owner's exclusive Web Lock (`navigator.locks`, `${PAGE_PREFIX}lock-${owner}`, held
   through `OwnerLocks`) is acquired before the first write and released only after the store's storage is removed and
-  no write it started can still land. Close/abandon return once storage is removed (cancellation never waits on the
-  backend), but a put already handed to OPFS/IndexedDB cannot be withdrawn and its rollback deletes by key; the lock is
+  no write it started can still land. Close/abandon return once storage is removed (cancellation never waits on writes
+  already in flight), but a put already handed to OPFS/IndexedDB cannot be withdrawn and its rollback deletes by key; the lock is
   kept until every started commit and orphan-sweep delete settled and storage is removed once more
   (`SourcePageStore.ownerReleased`). Otherwise a recovering holder of the same owner could lose a new record to the old
   rollback. A backend that never completes keeps the owner locked until its realm ends, as a crash would. The lock is
