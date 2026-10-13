@@ -11,12 +11,18 @@
  *
  * Storage is one Uint32 dictionary id per body row plus each unique display
  * string, charged like a prepared column (PREPARED_COLUMN_OVERHEAD and
- * PREPARED_STRING_OVERHEAD). The cache keeps its own aggregate ledger bounded by
- * the prepared-column budget of the profile (PREPARED_BUDGETS); growth beyond it
- * first evicts least-recently-used lanes, then refuses with a typed quota error.
- * An optional pool adapter retains each completed lane in the session's worker
- * pool so it counts in the document aggregate and is dropped on pool eviction
- * or session close.
+ * PREPARED_STRING_OVERHEAD). Every byte is admitted through a budget before it
+ * is allocated and released when the lane is dropped:
+ * - worker: the session's prepared-column budget, the SAME counter as the sort
+ *   and filter prepared columns (passed per request). The session evicts across
+ *   both kinds by recency and evicts a lane through its retain callback; this
+ *   cache never evicts on its behalf. A retained lane's bytes move onto its
+ *   pool entry, which uncharges them.
+ * - main thread / standalone: a budget given to the constructor (the controls
+ *   caches' main-ledger share), or a local ledger of `limitBytes`. This cache
+ *   then evicts its own unleased least-recently-used lanes before refusing.
+ * Refusal is ValueIndexError('quota'). A lane an evaluation reads is leased and
+ * never evicted for room.
  */
 import type { ColumnRule } from '../xlsx/view/contracts'
 import type { ColumnClassification } from '../xlsx/view/filter'
@@ -30,15 +36,18 @@ export interface DisplayLaneKey { docId: string; sheetId: string; valueGen: numb
 /** Formatted text by body offset (row - r0); undefined for text/blank/error cells. */
 export interface DisplayTextLane { readonly bytes: number; text(offset: number): string | undefined }
 export interface DisplayLaneSink { add(offset: number, text: string): void }
-/** A retained outer-pool entry; `pin` shields it from pool eviction while leased. */
+/** Byte admission: `reserve` throws ValueIndexError('quota') and changes nothing when the bytes cannot fit. */
+export interface DisplayLaneBudget { reserve(bytes: number): void; release(bytes: number): void }
+/** A retained outer-pool entry; `pin` shields it from eviction while leased. */
 export interface DisplayLanePoolEntry { release(): void; pin?(): () => void }
-/** Retains `bytes` under `key` in an outer pool; onRelease runs on its eviction/close. */
+/** Retains a completed lane under `key` and takes over the charge of its
+ * reserved bytes; onRelease runs when the owner evicts it or closes. */
 export type DisplayLaneRetain = (key: string, bytes: number, onRelease: () => void) => DisplayLanePoolEntry | null
 /** A lane in use by one evaluation: it is not evicted for room until released. */
 export interface DisplayLaneLease { readonly lane: DisplayTextLane; release(): void }
 export interface DisplayLaneAdmission {
-  /** Aggregate cap for this request (the session's prepared-column budget). */
-  limitBytes?: number
+  /** The session's shared prepared-column budget; the session owns eviction. */
+  budget?: DisplayLaneBudget
   retain?: DisplayLaneRetain
 }
 
@@ -56,23 +65,42 @@ interface Entry {
   lane: DisplayTextLane
   bytes: number
   pins: number
+  budget: DisplayLaneBudget
   pooled?: DisplayLanePoolEntry
 }
 
+/** A fixed-size ledger for standalone use (tests, embedders without a budget). */
+function localBudget(limitBytes: number): DisplayLaneBudget {
+  let used = 0
+  return {
+    reserve(bytes) {
+      if (used + bytes > limitBytes) {
+        throw new ValueIndexError('quota', `Formatted display text needs more than the ${limitBytes}-byte display-lane budget; narrow the filter range or use a values filter.`,
+          { resource: 'memory', requiredBytes: used + bytes, limitBytes })
+      }
+      used += bytes
+    },
+    release(bytes) { used -= bytes },
+  }
+}
+
 export class DisplayTextLaneCache {
-  limitBytes: number
+  /** Cap of the local ledger (unused when a budget is given). */
+  readonly limitBytes: number
   /** Completed builds (observability for tests and measurements). */
   builds = 0
   /** Map insertion order is recency order (oldest first). */
   private readonly entries = new Map<string, Entry>()
   private readonly styleIds = new WeakMap<object, number>()
   private nextStyleId = 1
-  /** Retained lanes plus builds in progress. */
+  private readonly own: DisplayLaneBudget
+  /** Charged bytes of retained lanes plus builds in progress. */
   private held = 0
   private closed = false
 
-  constructor(options: { limitBytes?: number } = {}) {
+  constructor(options: { limitBytes?: number; budget?: DisplayLaneBudget } = {}) {
     this.limitBytes = options.limitBytes ?? PREPARED_BUDGETS.D.maxBytes
+    this.own = options.budget ?? localBudget(this.limitBytes)
   }
   get bytes(): number { return this.held }
   get size(): number { return this.entries.size }
@@ -81,6 +109,7 @@ export class DisplayTextLaneCache {
    * evaluation that reads it and release it in a finally. */
   async lease(key: DisplayLaneKey, fill: (sink: DisplayLaneSink) => Promise<void>, admission: DisplayLaneAdmission = {}): Promise<DisplayLaneLease> {
     if (this.closed) throw new ValueIndexError('cancelled', 'Display text lanes closed')
+    if (admission.retain && !admission.budget) throw new RangeError('A retained display lane needs the budget its retainer uncharges')
     const count = key.r1 - key.r0 + 1
     if (!Number.isSafeInteger(count) || count < 0) throw new RangeError('Invalid display lane band')
     // Lanes of a dead value generation or style owner are unreachable.
@@ -92,17 +121,15 @@ export class DisplayTextLaneCache {
       this.entries.set(id, hit)
       return this.pin(hit)
     }
-    const limit = Math.min(this.limitBytes, admission.limitBytes ?? Infinity)
+    const budget = admission.budget ?? this.own
+    // A session budget evicts across prepared columns and lanes itself.
+    const evictsOwn = admission.budget === undefined
     let building = 0, committed = false
     const reserve = (bytes: number) => {
-      // Admission precedes allocation; unleased LRU lanes make room before a refusal.
-      for (const [other, entry] of [...this.entries]) {
-        if (this.held + bytes <= limit) break
-        if (entry.pins === 0) this.drop(other)
-      }
-      if (this.held + bytes > limit) {
-        throw new ValueIndexError('quota', `Formatted display text needs more than the ${limit}-byte prepared-column budget; narrow the filter range or use a values filter.`,
-          { resource: 'memory', requiredBytes: building + bytes, limitBytes: limit })
+      for (;;) {
+        try { budget.reserve(bytes); break } catch (error) {
+          if (!(error instanceof ValueIndexError && error.code === 'quota') || !evictsOwn || !this.evictOne(budget)) throw error
+        }
       }
       this.held += bytes
       building += bytes
@@ -126,17 +153,13 @@ export class DisplayTextLaneCache {
         },
       })
       if (this.closed) throw new ValueIndexError('cancelled', 'Display text lanes closed')
-      const bytes = building
-      const lane: DisplayTextLane = { bytes, text: offset => { const index = ids[offset]; return index ? strings[index] : undefined } }
-      const entry: Entry = { key: { ...key }, lane, bytes, pins: 0 }
       // A concurrent build of the same key committed first: reuse it (it may be
       // leased) and discard this one, so a key is built and charged once.
       const raced = this.entries.get(id)
-      if (raced) {
-        this.held -= building
-        committed = true
-        return this.pin(raced)
-      }
+      if (raced) return this.pin(raced)
+      const bytes = building
+      const lane: DisplayTextLane = { bytes, text: offset => { const index = ids[offset]; return index ? strings[index] : undefined } }
+      const entry: Entry = { key: { ...key }, lane, bytes, pins: 0, budget }
       if (admission.retain) {
         const pooled = admission.retain(id, bytes, () => this.drop(id))
         if (!pooled) throw new ValueIndexError('quota', 'The worker memory budget cannot retain the formatted display text.', { resource: 'memory', requiredBytes: bytes })
@@ -146,18 +169,28 @@ export class DisplayTextLaneCache {
       committed = true
       this.builds++
       return this.pin(entry)
-    } catch (error) {
-      if (!committed) this.held -= building
-      throw error
+    } finally {
+      if (!committed) {
+        this.held -= building
+        budget.release(building)
+      }
     }
   }
-  /** Drops (and uncharges) every lane, or those matching the predicate. */
+  /** Drops (and uncharges) every lane, or those matching the predicate. A
+   * leased lane is dropped too: its owner is dead or the cache is closing. */
   invalidate(predicate?: (key: DisplayLaneKey) => boolean): void {
     for (const [id, entry] of [...this.entries]) if (!predicate || predicate(entry.key)) this.drop(id)
   }
   close(): void {
     this.invalidate()
     this.closed = true
+  }
+  /** Evicts the least-recently-used unleased lane charged to `budget`. */
+  private evictOne(budget: DisplayLaneBudget): boolean {
+    for (const [id, entry] of this.entries) {
+      if (entry.pins === 0 && entry.budget === budget) { this.drop(id); return true }
+    }
+    return false
   }
   private pin(entry: Entry): DisplayLaneLease {
     entry.pins++
@@ -179,7 +212,9 @@ export class DisplayTextLaneCache {
     if (!entry) return
     this.entries.delete(id)
     this.held -= entry.bytes
-    entry.pooled?.release()
+    // A retained lane's bytes moved onto its pool entry, which uncharges them.
+    if (entry.pooled) entry.pooled.release()
+    else entry.budget.release(entry.bytes)
   }
   private keyOf(key: DisplayLaneKey): string {
     let style = this.styleIds.get(key.styleOwner)
