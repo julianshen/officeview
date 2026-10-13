@@ -538,7 +538,7 @@ export class RemoteWorkbook implements WorkbookSource {
 interface RowEntry { chunks: Set<number>; cells: PagedCell[] }
 /** Per-frame page budgets are shared across sheet stores, so tile identity
  * includes the sheet as well as the complete logical box. */
-export const pageTileKey = (sheetId: string, box: LogicalCellBox): string => JSON.stringify([sheetId, box])
+export const pageTileKey = (sheetId: string, box: LogicalCellBox): string => JSON.stringify([sheetId, box.x, box.y, box.width, box.height])
 /** One frame's cumulative page spending, in total and per tile key. */
 export interface PageFrame { used: number; tiles: Map<string, number> }
 /** Where a painting run's pages are charged. */

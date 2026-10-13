@@ -13,7 +13,7 @@ import { describe, expect, it, vi } from 'vitest'
 import { createCanvas } from 'canvas'
 import { ViewerClient } from '../src/worker/viewerClient'
 import { connectInProcess, ViewerKernel } from '../src/worker/viewerKernel'
-import { RemoteWorkbook } from '../src/worker/viewerRemoteSource'
+import { pageTileKey, RemoteWorkbook } from '../src/worker/viewerRemoteSource'
 import type { RemoteSheetStore } from '../src/worker/viewerRemoteSource'
 import { createObjectWorkbookSource } from '../src/worker/viewerObjectSource'
 import { PLAN_RETRY_MAX_MS, PLAN_RETRY_MS, WorkerViewportPlans, tilePlanSource } from '../src/components/xlsx/workerViewport'
@@ -198,18 +198,16 @@ describe('cumulative per-frame/per-tile page caps and the ring share (r4 #1, #2)
   const scale = 0.4, tileBox = (row: number) => ({ x: 0, y: row * 1280, width: 1280, height: 1280 })
   const tileWindow = (row: number): LogicalViewport => ({ box: tileBox(row), zoom: scale, deviceScale: 1 })
 
-  it('charges identical logical boxes independently for each sheet in row reads and worker plans', async () => {
+  it('charges identical logical boxes independently per sheet while enforcing the shared frame cap', async () => {
     const rows = 4096
     const rank = clustered(8)
     const cells = Array.from({ length: rows }, (_, row) => [
       { row, col: 0, value: rank(row) }, { row, col: 1, value: `t${row}` },
     ]).flat()
-    const h = await harness(workbookOf([
-      { sheetId: 's', cells },
-      { sheetId: 's1', cells },
-    ]))
+    const sheetIds = ['s', 's1', 's2', 's3', 's4']
+    const h = await harness(workbookOf(sheetIds.map(sheetId => ({ sheetId, cells }))))
     const sheets = [] as { store: RemoteSheetStore; metrics: ProjectedSheetMetrics; owner: CacheIdentity; calls: { count: number } }[]
-    for (const sheetId of ['s', 's1']) {
+    for (const sheetId of sheetIds) {
       const commit = await h.remote.sort(h.remote.identity(sheetId), { range: { r0: 0, r1: rows - 1, c0: 0, c1: 1, headerRows: 0, totalsRows: 0 }, keys: [{ col: 0, order: 'asc' }], caseSensitive: false }, new AbortController().signal)
       if (commit.kind !== 'committed') throw new Error(`sort ${sheetId} ${commit.kind}`)
       const axes = h.remote.geometry(sheetId)
@@ -222,19 +220,51 @@ describe('cumulative per-frame/per-tile page caps and the ring share (r4 #1, #2)
       h.remote.beginPageFrame()
       for (const sheet of sheets) sheet.store.pendingIn(sheet.metrics, tileBox(0), scale)
       await settle(h)
-      expect(sheets.map(sheet => sheet.calls.count), 'each sheet spends the full per-tile source-read allowance').toEqual([
-        h.remote.pageLimits.tile, h.remote.pageLimits.tile,
-      ])
-      expect(sheets.reduce((total, sheet) => total + sheet.calls.count, 0)).toBeLessThanOrEqual(h.remote.pageLimits.frame)
+      const framePages = () => sheets.reduce((total, sheet) => total + sheet.calls.count, 0)
+      expect(sheets.every(sheet => sheet.calls.count <= h.remote.pageLimits.tile), 'each sheet stays within its per-tile allowance').toBe(true)
+      expect(framePages(), 'five sheets share one cumulative frame allowance').toBeLessThanOrEqual(h.remote.pageLimits.frame)
+      expect(framePages()).toBeGreaterThan(h.remote.pageLimits.tile * 2)
+      for (const sheet of sheets) sheet.store.pendingIn(sheet.metrics, tileBox(0), scale)
+      await settle(h)
+      expect(framePages(), 'repeats and continuations do not recycle frame allowance').toBeLessThanOrEqual(h.remote.pageLimits.frame)
+      expect(h.remote.pagesInFlight, 'every row-read credit came back').toBe(0)
 
       const plans = new WorkerViewportPlans(h.remote)
       const viewport = vi.spyOn(h.remote, 'viewport').mockImplementation(() => new Promise(() => {}))
       try {
         h.remote.beginPageFrame()
         for (const sheet of sheets) plans.get(sheet.owner, tileWindow(0), extentOf(sheet.metrics), true)
-        expect(viewport, 'worker plans for the same tile on both sheets').toHaveBeenCalledTimes(2)
+        expect(viewport, 'five eight-page plans cannot all start in one frame').toHaveBeenCalledTimes(4)
       } finally { viewport.mockRestore(); plans.dispose() }
     } finally { await h.remote.release() }
+  })
+
+  it('uses a canonical tuple key and shares worker admission for reordered equal boxes', async () => {
+    const h = await sortedHarness(4096, clustered(8))
+    const plans = new WorkerViewportPlans(h.remote)
+    const plan = tilePlanSource({ store: h.store, metrics: h.metrics, scale, identity: h.owner, extent: extentOf(h.metrics), plans })
+    const reorderedBox = { height: 1280, width: 1280, y: 0, x: 0 }
+    try {
+      expect(pageTileKey(h.owner.sheetId, tileBox(0))).toBe(pageTileKey(h.owner.sheetId, reorderedBox))
+      expect(pageTileKey('other-sheet', tileBox(0))).not.toBe(pageTileKey(h.owner.sheetId, tileBox(0)))
+      expect(pageTileKey(h.owner.sheetId, tileBox(1))).not.toBe(pageTileKey(h.owner.sheetId, tileBox(0)))
+      expect(pageTileKey(h.owner.sheetId, { ...tileBox(0), width: 1281 })).not.toBe(pageTileKey(h.owner.sheetId, tileBox(0)))
+      h.remote.beginPageFrame()
+      h.store.pendingIn(h.metrics, tileBox(0), scale)
+      h.store.pendingIn(h.metrics, reorderedBox, scale)
+      await settle(h)
+      expect(h.io.pages, 'equal boxes with reordered properties share the per-tile allowance').toBeGreaterThan(0)
+      expect(h.io.pages).toBeLessThanOrEqual(h.remote.pageLimits.tile)
+      expect(h.remote.pagesInFlight).toBe(0)
+
+      const viewport = vi.spyOn(h.remote, 'viewport').mockImplementation(() => new Promise(() => {}))
+      try {
+        plans.beginFrame(h.owner, tileWindow(0))
+        plan(tileWindow(0), true)
+        plan({ box: reorderedBox, zoom: scale, deviceScale: 1 }, true)
+        expect(viewport, 'equal boxes with reordered properties share one worker plan').toHaveBeenCalledTimes(1)
+      } finally { viewport.mockRestore() }
+    } finally { plans.dispose(); await h.remote.release() }
   })
 
   it('#1: one tile spends at most the per-tile cap of source pages, continuations included', async () => {
