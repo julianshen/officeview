@@ -224,7 +224,17 @@ export interface DisplayLaneAdmissionPort {
   retain(key: string, bytes: number, onRelease: () => void): { release(): void; pin(): () => void } | null
 }
 /** A retained display-text lane in the prepared working set (S13.5). */
-interface DisplayLaneRecord { bytes: number; pins: number; used: number; evict: () => void }
+interface DisplayLaneRecord {
+  bytes: number
+  pins: number
+  used: number
+  evict: () => void
+  /** Session close while leased: moves the bytes from the closing pool entry to
+   * a transient charge, held (with the prepared counter) until the last lease
+   * ends; then `retire` drops the lane from its cache's lookup. */
+  hold: () => void
+  retire: () => void
+}
 /** Prepared-column working set per admission profile (§12.4 worker pool). Mobile
  * keeps fewer resident key columns; unprepared keys still stream from the store,
  * so up-to-eight-key semantics are identical. */
@@ -682,9 +692,8 @@ export class DocumentSession {
   private preparedBytes = 0
   /** Display-text lanes' share of preparedBytes (retained and building). */
   private displayLaneBytes = 0
-  /** Lane bytes under construction, also held in the transient laneShare. */
+  /** Lane bytes under construction, also held in each filter's transient lane share. */
   private displayLaneBuilding = 0
-  private laneShare: PoolCharge | null = null
   /** Lane builds in progress; each holds one maxColumns slot (retained lanes hold theirs in displayLanes). */
   private displayLaneBuildSlots = 0
   private readonly displayLanes = new Map<string, DisplayLaneRecord>()
@@ -1392,12 +1401,20 @@ export class DocumentSession {
     return true
   }
   /** S13.5: the display-lane port of one filter operation (see FilterEvaluator).
-   * Bytes under construction are in preparedBytes and a transient pool share;
-   * `retain` moves a completed lane's bytes onto its pool entry, after which
-   * that entry (released by its owner, evicted here or by the pool, or closed)
-   * is their single uncharge point. */
+   * Bytes under construction are in preparedBytes and this operation's
+   * transient pool share; `retain` moves a completed lane's bytes onto its pool
+   * entry, after which that entry (released by its owner, evicted here or by
+   * the pool) is their single uncharge point. Session close refuses new
+   * reservations at once but never uncharges bytes a build or reader still
+   * holds: a build's share ends with the build (a closed pool cannot shrink a
+   * share, so it is released whole when the operation's builds have ended), and
+   * a leased lane is held by its record until its last lease ends. */
   private displayLaneAdmission(sheetId: string): DisplayLaneAdmissionPort {
-    const share = () => (this.laneShare ??= this.memory.charge())
+    let share: PoolCharge | null = null, building = 0
+    const setShare = (bytes: number) => (share ??= this.memory.charge()).set(bytes)
+    const shrinkShare = () => {
+      if (building === 0) { share?.release(); share = null } else share?.set(building)
+    }
     return {
       budget: {
         reserve: bytes => {
@@ -1406,21 +1423,22 @@ export class DocumentSession {
             throw new ValueIndexError('quota', `Formatted display text does not fit the ${this.budget.maxBytes}-byte prepared-column budget beside the pinned working set; narrow the filter range or use a values filter.`,
               { resource: 'memory', requiredBytes: this.preparedBytes + this.preparedStaging + bytes, limitBytes: this.budget.maxBytes })
           }
-          if (!share().set(this.displayLaneBuilding + bytes)) {
+          if (!setShare(building + bytes)) {
             throw new ValueIndexError('quota', 'The worker memory budget cannot hold the formatted display text.',
               { resource: 'memory', requiredBytes: this.memory.totalBytes + bytes, limitBytes: this.memory.limitBytes })
           }
+          building += bytes
           this.displayLaneBuilding += bytes
           this.displayLaneBytes += bytes
           this.preparedBytes += bytes
         },
+        // Also after close: the build has ended, so its bytes are free now.
         release: bytes => {
-          // release() zeroes every counter itself.
-          if (this.closed) return
+          building -= bytes
           this.displayLaneBuilding -= bytes
           this.displayLaneBytes -= bytes
           this.preparedBytes -= bytes
-          share().set(this.displayLaneBuilding)
+          shrinkShare()
         },
         acquireSlot: () => {
           if (this.closed) throw new ValueIndexError('cancelled', 'Session closed')
@@ -1430,33 +1448,49 @@ export class DocumentSession {
           }
           this.displayLaneBuildSlots++
         },
-        releaseSlot: () => { if (!this.closed) this.displayLaneBuildSlots-- },
+        releaseSlot: () => { this.displayLaneBuildSlots-- },
       },
       retain: (key, bytes, onRelease) => {
         if (this.closed) return null
         const id = JSON.stringify(['display-lane', key])
         // The transient share shrinks first so the retained entry can take its
         // room; the build's slot moves to the retained record below.
+        building -= bytes
         this.displayLaneBuilding -= bytes
-        share().set(this.displayLaneBuilding)
+        shrinkShare()
         let live = true
+        let held: PoolCharge | null = null
+        // The lane's single uncharge point (owner release, eviction, pool close,
+        // or the last lease after a session close).
         const forget = () => {
           if (!live) return
           live = false
           this.displayLanes.delete(id)
-          if (this.closed) return
           this.displayLaneBytes -= bytes
           this.preparedBytes -= bytes
+          held?.release()
+          held = null
         }
         const entry = this.memory.retain(id, { tier: 'rebuildable', bytes, owner: sheetId, onRelease: () => { forget(); onRelease() } })
         if (!entry) {
           // Back to the build's charge; the caller's refusal path releases all
           // of it, so a restore the full pool cannot re-admit changes nothing.
+          building += bytes
           this.displayLaneBuilding += bytes
-          share().set(this.displayLaneBuilding)
+          setShare(building)
           return null
         }
-        const record: DisplayLaneRecord = { bytes, pins: 0, used: ++this.useClock, evict: () => { forget(); entry.release(); onRelease() } }
+        const record: DisplayLaneRecord = {
+          bytes, pins: 0, used: ++this.useClock,
+          evict: () => { forget(); entry.release(); onRelease() },
+          hold: () => {
+            // Same total: the retained bytes become a transient charge.
+            held = this.memory.charge()
+            entry.release()
+            held.set(bytes)
+          },
+          retire: onRelease,
+        }
         this.displayLanes.set(id, record)
         this.displayLaneBuildSlots--
         return {
@@ -2042,20 +2076,22 @@ export class DocumentSession {
    * in-flight operations release their transient shares in their own finally. */
   async release(): Promise<void> {
     if (this.closed) return
+    // Closed first: every new reservation, slot and retain is refused from here.
     this.closed = true
+    // Lanes a reader still leases keep their bytes charged (pool and prepared
+    // counter) until that reader's last lease ends, after the pool is closed.
+    const leased = [...this.displayLanes.values()].filter(lane => lane.pins > 0)
+    for (const lane of leased) lane.hold()
     this.memory.close()
+    for (const lane of leased) lane.retire()
     this.states.clear()
     this.prepared.clear()
     this.preparedEntries.clear()
     this.preparedPins.clear()
     this.preparedUse.clear()
-    this.displayLanes.clear()
-    this.preparedBytes = 0
-    this.displayLaneBytes = 0
-    this.displayLaneBuilding = 0
-    this.displayLaneBuildSlots = 0
-    this.laneShare?.release()
-    this.laneShare = null
+    // What stays charged is display-lane bytes still held: leased lanes and
+    // builds in progress, each released by its reader or build.
+    this.preparedBytes = this.displayLaneBytes
     this.structures.clear()
     this.structureEntries.clear()
     this.structureBytes = 0

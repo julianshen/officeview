@@ -270,3 +270,159 @@ describe('codex r3 #1: raw staging and display-lane construction share one prepa
     }
   })
 })
+
+describe('codex r3 #2: a lane a real reader holds stays charged through session close', () => {
+  /** Pauses the third col-4 lanes read: classification, lane build, then the matching read that holds the lease. */
+  const thirdLaneRead = () => {
+    let reads = 0
+    return (_s: string, q: ColumnQuery) => q.col === 4 && q.encoding === 'lanes' && ++reads === 3
+  }
+
+  it('close after abort (kernel order) keeps the held lane in the pool and prepared counter until the reader exits (exact review repro)', async () => {
+    const { source, gate: g } = gated(makeDoc(), thirdLaneRead())
+    const lanes = new DisplayTextLaneCache()
+    const s = session(source, { maxColumns: 4, maxBytes: 8192 }, lanes)
+    const controller = new AbortController()
+    const pending = s.filter(s.identity('s'), textSpec, 0, controller.signal)
+    await g.reached
+    expect(lanes.bytes).toBe(LANE)
+    expect(s.preparedStats().bytes).toBe(LANE)
+    controller.abort()
+    await s.release()
+    // Closed: new work is refused at once ...
+    expect((await s.filter(s.identity('s'), textSpec, 0, signal())).kind).not.toBe('committed')
+    // ... but the reader still holds the lane, so its bytes stay charged.
+    expect(lanes.bytes).toBe(LANE)
+    expect(s.preparedStats().bytes).toBe(LANE)
+    expect(s.memoryStats().totalBytes).toBeGreaterThanOrEqual(LANE)
+    // Repeated close changes nothing.
+    await s.release()
+    expect(s.preparedStats().bytes).toBe(LANE)
+    expect(s.memoryStats().totalBytes).toBeGreaterThanOrEqual(LANE)
+    g.open()
+    expect((await pending).kind).toBe('cancelled')
+    expect(lanes.bytes).toBe(0)
+    expect(s.preparedStats()).toEqual({ columns: 0, bytes: 0 })
+    expect(s.memoryStats().totalBytes).toBe(0)
+  })
+
+  it('a retired (invalidated) lease held across close stays charged until it ends', async () => {
+    const lanes = new DisplayTextLaneCache()
+    const reading = gate()
+    let laneBytes = 0
+    const holding: FilterEvaluator = async input => {
+      const lease = await lanes.lease({ ...input.store.stamp, styleOwner: formatting, col: 4, r0: 1, r1: 10 }, async sink => { sink.add(0, 'x'.repeat(500)) }, input.displayLanes)
+      laneBytes = lease.lane.bytes
+      // Invalidated for lookup while still read: retired, still charged.
+      lanes.invalidate()
+      try { await reading.hold() } finally { lease.release() }
+      return { kind: 'complete', matches: () => true }
+    }
+    const s = session(createObjectWorkbookSource(makeDoc(), 'd'), { maxColumns: 4, maxBytes: 8192 }, lanes, holding)
+    const controller = new AbortController()
+    const pending = s.filter(s.identity('s'), { ...textSpec, columns: new Map([[0, { kind: 'number', op: 'gt', first: 0 }]]) }, 0, controller.signal)
+    await reading.reached
+    expect(lanes.size).toBe(0)
+    expect(s.preparedStats().bytes).toBe(laneBytes)
+    controller.abort()
+    await s.release()
+    expect(s.preparedStats().bytes).toBe(laneBytes)
+    expect(s.memoryStats().totalBytes).toBeGreaterThanOrEqual(laneBytes)
+    reading.open()
+    await pending
+    expect(lanes.bytes).toBe(0)
+    expect(s.preparedStats().bytes).toBe(0)
+    expect(s.memoryStats().totalBytes).toBe(0)
+  })
+
+  it('a lane still being built at close keeps its staged bytes charged until the build ends, and cannot grow', async () => {
+    const lanes = new DisplayTextLaneCache()
+    const filling = gate()
+    let grow: unknown
+    const building: FilterEvaluator = async input => {
+      const result = await lanes.lease({ ...input.store.stamp, styleOwner: formatting, col: 4, r0: 1, r1: 10 }, async sink => {
+        sink.add(0, 'x'.repeat(500))
+        await filling.hold()
+        // Closed meanwhile: the next reservation is refused.
+        try { sink.add(1, 'y'.repeat(500)) } catch (error) { grow = error; throw error }
+      }, input.displayLanes).then(lease => { lease.release(); return 'leased' }, error => error)
+      return result === 'leased' ? { kind: 'complete', matches: () => true } : { kind: 'cancelled' }
+    }
+    const s = session(createObjectWorkbookSource(makeDoc(), 'd'), { maxColumns: 4, maxBytes: 8192 }, lanes, building)
+    const controller = new AbortController()
+    const pending = s.filter(s.identity('s'), { ...textSpec, columns: new Map([[0, { kind: 'number', op: 'gt', first: 0 }]]) }, 0, controller.signal)
+    await filling.reached
+    const staged = lanes.bytes
+    expect(staged).toBe(PREPARED_COLUMN_OVERHEAD + 10 * 4 + 500 * 2 + PREPARED_STRING_OVERHEAD)
+    expect(s.preparedStats().bytes).toBe(staged)
+    controller.abort()
+    await s.release()
+    expect(s.preparedStats().bytes).toBe(staged)
+    expect(s.memoryStats().totalBytes).toBeGreaterThanOrEqual(staged)
+    filling.open()
+    await pending
+    expect(grow).toMatchObject({ code: 'cancelled' })
+    expect(lanes.bytes).toBe(0)
+    expect(s.preparedStats().bytes).toBe(0)
+    expect(s.memoryStats().totalBytes).toBe(0)
+  })
+
+  it('a failing reader also returns the held charge after close', async () => {
+    const lanes = new DisplayTextLaneCache()
+    const reading = gate()
+    const failing: FilterEvaluator = async input => {
+      const lease = await lanes.lease({ ...input.store.stamp, styleOwner: formatting, col: 4, r0: 1, r1: 10 }, async sink => { sink.add(0, 'x') }, input.displayLanes)
+      try { await reading.hold(); throw new Error('reader failed') } finally { lease.release() }
+    }
+    const s = session(createObjectWorkbookSource(makeDoc(), 'd'), { maxColumns: 4, maxBytes: 8192 }, lanes, failing)
+    const pending = s.filter(s.identity('s'), { ...textSpec, columns: new Map([[0, { kind: 'number', op: 'gt', first: 0 }]]) }, 0, signal()).catch(error => error)
+    await reading.reached
+    const held = lanes.bytes
+    await s.release()
+    expect(s.memoryStats().totalBytes).toBeGreaterThanOrEqual(held)
+    reading.open()
+    await pending
+    expect(lanes.bytes).toBe(0)
+    expect(s.preparedStats().bytes).toBe(0)
+    expect(s.memoryStats().totalBytes).toBe(0)
+  })
+
+  it('kernel close and document replacement: the old pool keeps the held lane until its reader exits; the new document builds its own', async () => {
+    const { ViewerKernel } = await import('../src/worker/viewerKernel')
+    const { initialIdentity } = await import('../src/worker/viewerProtocol')
+    const doc = makeDoc()
+    const lanes = new DisplayTextLaneCache()
+    const { source: first, gate: g } = gated(doc, thirdLaneRead())
+    let opened = 0
+    const kernel = new ViewerKernel(
+      { parse: async () => doc, openSource: async () => (opened++ === 0 ? first : createObjectWorkbookSource(doc, 'd')) },
+      { now: () => 0, yield: async () => {}, preparedBudget: { maxColumns: 4, maxBytes: 8192 }, filterEvaluator: createWorkerFilterEvaluator(() => new Map(), formatting, 'en-US', { lanes }) },
+    )
+    const replies: { requestId: string; kind: string; result?: { kind: string } }[] = []
+    const send = (command: object) => kernel.handle(command as never, out => { replies.push(out as never) })
+    // The final reply of a request (after any progress replies).
+    const outcome = (requestId: string) => replies.filter(reply => reply.requestId === requestId && reply.kind !== 'progress').at(-1)
+    await send({ kind: 'open', requestId: 'o1', docId: 'd', source: { kind: 'object', document: doc }, profile: 'D' })
+    const old = kernel.session('d')!
+    const filtering = send({ kind: 'filter', requestId: 'f1', owner: initialIdentity('d', 's'), spec: textSpec, nowMs: 0 })
+    await g.reached
+    await send({ kind: 'close', requestId: 'c1', docId: 'd' })
+    expect(outcome('c1')).toMatchObject({ kind: 'complete' })
+    expect(old.memoryStats().totalBytes).toBeGreaterThanOrEqual(LANE)
+    expect(old.preparedStats().bytes).toBe(LANE)
+    // Replacement under the same docId: its own pool, and its own lane build.
+    await send({ kind: 'open', requestId: 'o2', docId: 'd', source: { kind: 'object', document: doc }, profile: 'D' })
+    await send({ kind: 'filter', requestId: 'f2', owner: initialIdentity('d', 's'), spec: textSpec, nowMs: 0 })
+    expect(outcome('f2')).toMatchObject({ kind: 'complete' })
+    expect(lanes.builds).toBe(2)
+    expect(old.memoryStats().totalBytes).toBeGreaterThanOrEqual(LANE)
+    g.open()
+    await filtering
+    expect(outcome('f1')?.kind).not.toBe('complete')
+    expect(old.memoryStats().totalBytes).toBe(0)
+    expect(old.preparedStats().bytes).toBe(0)
+    expect(kernel.session('d')!.preparedStats().bytes).toBe(LANE)
+    await send({ kind: 'close', requestId: 'c2', docId: 'd' })
+    expect(lanes.bytes).toBe(0)
+  })
+})
