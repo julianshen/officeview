@@ -498,3 +498,69 @@ describe('codex r4 #1: an idle retained lane counts against raw staging (no leas
     await s.release()
   })
 })
+
+describe('codex r4 #2: a raw prepared column a real sort still leases stays charged through session close', () => {
+  const rowsN = 4096
+  function sortDoc(): XlsxDocument {
+    const rows = Array.from({ length: rowsN + 1 }, (_v, r) => ({ index: r, cells: [{ row: r, col: 0, ref: '', value: r === 0 ? 'H' : rowsN - r }] }))
+    return { sheets: [{ name: 'S', sheetId: 's', workbookIndex: 0, rows, cols: [], merges: [], mergeRanges: [], semantics: semanticsFor('1900') }], tables: [] } as unknown as XlsxDocument
+  }
+  const sortSpec = { range: { r0: 0, r1: rowsN, c0: 0, c1: 0, headerRows: 1, totalsRows: 0 }, keys: [{ col: 0, order: 'asc' as const }], caseSensitive: false }
+  /** A session whose sort pauses at its first read-phase yield (after it leased the prepared column). */
+  async function heldSort(fail = false) {
+    const g = gate()
+    const s = new DocumentSession('d', createObjectWorkbookSource(sortDoc(), 'd'), {
+      now: () => 0,
+      yield: async phase => { if (phase === 'read' && !g.held) { await g.hold(); if (fail) throw new Error('reader failed') } },
+    })
+    expect(await s.prepareColumns(s.identity('s'), [0], signal())).toEqual({ kind: 'complete' })
+    const bytes = s.preparedStats().bytes
+    const controller = new AbortController()
+    const pending = s.sort(s.identity('s'), sortSpec, controller.signal).then(result => result, error => ({ kind: 'thrown', error }))
+    await g.reached
+    return { s, g, bytes, controller, pending }
+  }
+
+  for (const end of ['cancel', 'normal', 'error'] as const) {
+    it(`close while the sort reads keeps the column charged until the lease drains (${end})`, async () => {
+      const { s, g, bytes, controller, pending } = await heldSort(end === 'error')
+      expect(bytes).toBeGreaterThan(0)
+      if (end === 'cancel') controller.abort()
+      // Close does not wait for the paused (signal-ignoring) reader.
+      await s.release()
+      expect(s.preparedStats().bytes).toBe(bytes)
+      expect(s.memoryStats().totalBytes).toBeGreaterThanOrEqual(bytes)
+      await s.release()
+      expect(s.preparedStats().bytes).toBe(bytes)
+      expect(s.memoryStats().totalBytes).toBeGreaterThanOrEqual(bytes)
+      g.open()
+      expect((await pending).kind).not.toBe('committed')
+      expect(s.preparedStats()).toEqual({ columns: 0, bytes: 0 })
+      expect(s.memoryStats().totalBytes).toBe(0)
+    })
+  }
+
+  it('the preparedStore sort port: a lease taken by sortRowOrder is held through close, and a new session is independent', async () => {
+    const { sortRowOrder } = await import('../src/xlsx/view/sort')
+    const doc = sortDoc()
+    const s = new DocumentSession('d', createObjectWorkbookSource(doc, 'd'), { now: () => 0, yield: async () => {} })
+    expect(await s.prepareColumns(s.identity('s'), [0], signal())).toEqual({ kind: 'complete' })
+    const bytes = s.preparedStats().bytes
+    const g = gate()
+    const controller = new AbortController()
+    const pending = sortRowOrder(s.preparedStore('s'), sortSpec, { signal: controller.signal, now: () => 0, yield: async phase => { if (phase === 'read' && !g.held) await g.hold() } })
+    await g.reached
+    controller.abort()
+    await s.release()
+    expect(s.preparedStats().bytes).toBe(bytes)
+    expect(s.memoryStats().totalBytes).toBeGreaterThanOrEqual(bytes)
+    // A replacement session of the same document has its own ledger.
+    const next = new DocumentSession('d', createObjectWorkbookSource(doc, 'd'), { now: () => 0, yield: async () => {} })
+    expect(next.memoryStats().totalBytes).toBe(0)
+    g.open()
+    expect((await pending).kind).toBe('cancelled')
+    expect(s.preparedStats()).toEqual({ columns: 0, bytes: 0 })
+    expect(s.memoryStats().totalBytes).toBe(0)
+    await next.release()
+  })
+})

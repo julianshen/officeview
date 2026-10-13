@@ -686,6 +686,10 @@ export class DocumentSession {
   /** Completed filter value-domain scans by (stamp, domain); see filter(). */
   private readonly domainScans = new Map<string, Extract<ValueDomainScan, { kind: 'clear' | 'refused' }>>()
   private readonly preparedPins = new Map<string, number>()
+  /** Columns a sort reader still leased at session close: their bytes moved from
+   * the closing pool entry to a transient charge (and stay in preparedBytes)
+   * until the last lease ends. */
+  private readonly closingPins = new Map<string, { bytes: number; held: PoolCharge }>()
   private readonly preparedEntries = new Map<string, PoolEntry>()
   /** Prepared working set (§12.4): prepared columns plus S13.5 display-text
    * lanes, retained and under construction. One counter, one budget. */
@@ -1560,7 +1564,13 @@ export class DocumentSession {
         const count = this.preparedPins.get(key) ?? 0
         if (count <= 1) {
           this.preparedPins.delete(key)
-          if (!this.closed && !sameStamp(this.source.store(sheetId).stamp, column.stamp)) this.dropPrepared(key)
+          // The single uncharge point of a column leased across session close.
+          const closing = this.closingPins.get(key)
+          if (closing) {
+            this.closingPins.delete(key)
+            closing.held.release()
+            this.preparedBytes -= closing.bytes
+          } else if (!this.closed && !sameStamp(this.source.store(sheetId).stamp, column.stamp)) this.dropPrepared(key)
         }
         else this.preparedPins.set(key, count - 1)
       },
@@ -2087,16 +2097,31 @@ export class DocumentSession {
     // counter) until that reader's last lease ends, after the pool is closed.
     const leased = [...this.displayLanes.values()].filter(lane => lane.pins > 0)
     for (const lane of leased) lane.hold()
+    // Likewise a prepared column a sort reader still leases: same bytes, moved
+    // from its pool entry (released without onRelease) to a transient charge
+    // that the closed pool keeps until the lease's release() returns it.
+    let closingBytes = 0
+    for (const key of this.preparedPins.keys()) {
+      const column = this.prepared.get(key), entry = this.preparedEntries.get(key)
+      if (!column || !entry) continue
+      const held = this.memory.charge()
+      entry.release()
+      held.set(column.bytes)
+      this.prepared.delete(key)
+      this.preparedEntries.delete(key)
+      this.closingPins.set(key, { bytes: column.bytes, held })
+      closingBytes += column.bytes
+    }
     this.memory.close()
     for (const lane of leased) lane.retire()
     this.states.clear()
     this.prepared.clear()
     this.preparedEntries.clear()
-    this.preparedPins.clear()
     this.preparedUse.clear()
-    // What stays charged is display-lane bytes still held: leased lanes and
-    // builds in progress, each released by its reader or build.
-    this.preparedBytes = this.displayLaneBytes
+    // What stays charged is what readers and builds still hold: leased lanes,
+    // lane builds in progress and leased raw columns (preparedPins keeps their
+    // lease counts), each released by its reader or build.
+    this.preparedBytes = this.displayLaneBytes + closingBytes
     this.structures.clear()
     this.structureEntries.clear()
     this.structureBytes = 0
