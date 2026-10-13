@@ -217,6 +217,20 @@ describe('cumulative per-frame/per-tile page caps and the ring share (r4 #1, #2)
       sheets.push({ store: h.remote.store(sheetId), metrics, owner: h.remote.identity(sheetId), calls })
     }
     try {
+      const plans = new WorkerViewportPlans(h.remote)
+      const complete = { kind: 'complete', result: { kind: 'viewport', completeness: 'complete', content: { kind: 'detail', cells: [] } } } as never
+      const viewport = vi.spyOn(h.remote, 'viewport').mockResolvedValue(complete)
+      try {
+        h.remote.beginPageFrame()
+        for (const sheet of sheets.slice(0, 4)) plans.get(sheet.owner, tileWindow(0), extentOf(sheet.metrics), true)
+        await settle(h)
+        expect(viewport, 'the first four plans returned their in-flight credits').toHaveBeenCalledTimes(4)
+        expect(h.remote.pagesInFlight, 'all completed plan credits were returned before the fifth ask').toBe(0)
+        plans.get(sheets[4].owner, tileWindow(0), extentOf(sheets[4].metrics), true)
+        expect(viewport, 'five eight-page plans cannot all start in one cumulative frame').toHaveBeenCalledTimes(4)
+        expect(h.remote.pagesInFlight).toBe(0)
+      } finally { viewport.mockRestore(); plans.dispose() }
+
       h.remote.beginPageFrame()
       for (const sheet of sheets) sheet.store.pendingIn(sheet.metrics, tileBox(0), scale)
       await settle(h)
@@ -228,14 +242,6 @@ describe('cumulative per-frame/per-tile page caps and the ring share (r4 #1, #2)
       await settle(h)
       expect(framePages(), 'repeats and continuations do not recycle frame allowance').toBeLessThanOrEqual(h.remote.pageLimits.frame)
       expect(h.remote.pagesInFlight, 'every row-read credit came back').toBe(0)
-
-      const plans = new WorkerViewportPlans(h.remote)
-      const viewport = vi.spyOn(h.remote, 'viewport').mockImplementation(() => new Promise(() => {}))
-      try {
-        h.remote.beginPageFrame()
-        for (const sheet of sheets) plans.get(sheet.owner, tileWindow(0), extentOf(sheet.metrics), true)
-        expect(viewport, 'five eight-page plans cannot all start in one frame').toHaveBeenCalledTimes(4)
-      } finally { viewport.mockRestore(); plans.dispose() }
     } finally { await h.remote.release() }
   })
 
@@ -251,9 +257,13 @@ describe('cumulative per-frame/per-tile page caps and the ring share (r4 #1, #2)
       expect(pageTileKey(h.owner.sheetId, { ...tileBox(0), width: 1281 })).not.toBe(pageTileKey(h.owner.sheetId, tileBox(0)))
       h.remote.beginPageFrame()
       h.store.pendingIn(h.metrics, tileBox(0), scale)
+      await settle(h)
+      const pagesAfterOriginalBox = h.io.pages
+      expect(pagesAfterOriginalBox, 'the first box spends the tile allowance').toBe(h.remote.pageLimits.tile)
+      expect(h.remote.pagesInFlight).toBe(0)
       h.store.pendingIn(h.metrics, reorderedBox, scale)
       await settle(h)
-      expect(h.io.pages, 'equal boxes with reordered properties share the per-tile allowance').toBeGreaterThan(0)
+      expect(h.io.pages, 'equal boxes with reordered properties share the per-tile allowance').toBe(pagesAfterOriginalBox)
       expect(h.io.pages).toBeLessThanOrEqual(h.remote.pageLimits.tile)
       expect(h.remote.pagesInFlight).toBe(0)
 
