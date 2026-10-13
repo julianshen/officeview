@@ -20,7 +20,8 @@ import { evaluateWorkbookFormulas, markSavedValuesOnly, type WorkbookEvaluationO
 import { initializeSavedSpills } from './formula/saved-spills'
 import { dynamicMetadataIndices } from './metadata'
 import { decodeXlsxString } from './strings'
-import { formatA1 } from './view/coordinates'
+import { MAX_COLS, MAX_ROWS, formatA1 } from './view/coordinates'
+import { PackageError } from '../core/package-error'
 
 /** Convert "A1" / "BC23" to 0-based [row, col]. */
 export function parseRef(ref: string): [number, number] {
@@ -465,11 +466,19 @@ async function parseSheet(
   const sheetData = getChildren(data, 'sheetData')[0]
   // Excel's implicit positions: a <row> without r follows the previous row and
   // a <c> without r follows the previous cell of its row (A1-relative start).
+  // An implicit position past the worksheet (more ref-less rows or cells than
+  // it has) is a typed refusal, like the paged reader's, never a thrown
+  // coordinate error. A row number repeated explicitly is merged into its
+  // first record (later cells replace same-column ones) with a sheet
+  // diagnostic; the paged reader refuses such a file instead (documented).
   let previousRow = -1
+  const rowsByIndex = new Map<number, XlsxRow>()
   for (const rowNode of getChildren(sheetData, 'row')) {
     const ra = attrs(rowNode)
     const explicitRow = ra.r !== undefined ? parseInt(ra.r as string, 10) - 1 : NaN
-    const rowIndex = Number.isInteger(explicitRow) && explicitRow >= 0 ? explicitRow : previousRow + 1
+    const explicit = Number.isInteger(explicitRow) && explicitRow >= 0
+    const rowIndex = explicit ? explicitRow : previousRow + 1
+    if (!explicit && rowIndex >= MAX_ROWS) throw new PackageError('unsupported', `a worksheet row without a row number follows row ${rowIndex}, past the last worksheet row`, path)
     previousRow = rowIndex
     let previousCol = -1
     const row: XlsxRow = {
@@ -483,6 +492,9 @@ async function parseSheet(
       const ca = attrs(cNode)
       const explicitRef = typeof ca.r === 'string' && /^[A-Z]+\d+$/.test(ca.r) ? ca.r : undefined
       const [rowIdx, colIdx] = explicitRef ? parseRef(explicitRef) : [rowIndex, previousCol + 1]
+      if (!explicitRef && (rowIdx >= MAX_ROWS || colIdx >= MAX_COLS)) {
+        throw new PackageError('unsupported', `row ${rowIndex + 1} has a cell without a reference past the last worksheet column`, path)
+      }
       const ref = explicitRef ?? formatA1({ row: rowIdx, col: colIdx })
       previousCol = colIdx
       const t = ca.t as string | undefined
@@ -583,6 +595,15 @@ async function parseSheet(
       }
       row.cells.push(cell)
     }
+    const earlier = rowsByIndex.get(row.index)
+    if (earlier) {
+      const replaced = new Set(row.cells.map(cell => cell.col))
+      earlier.cells = [...earlier.cells.filter(cell => !replaced.has(cell.col)), ...row.cells].sort((a, b) => a.col - b.col)
+      const diagnostic = { kind: 'parse', feature: 'duplicate-row', message: `row ${row.index + 1} appears more than once; its cells were merged` }
+      if (!sheet.diagnostics?.some(d => d.feature === diagnostic.feature && d.message === diagnostic.message)) (sheet.diagnostics ??= []).push(diagnostic)
+      continue
+    }
+    rowsByIndex.set(row.index, row)
     sheet.rows.push(row)
   }
   await parseWorksheetDrawings(pkg, sheet, path, data, theme)

@@ -24,7 +24,7 @@ import { createSheetMetrics, type ProjectedSheetMetrics } from './projection'
 import { RectangleIndex } from './structure'
 import { cellSourceRow, drawingExtent } from './sheetCells'
 import { createIntervalSet } from './visibility'
-import { NO_OVERFLOW, textOverflowAllowance, type OverflowAllowance, type RowOverflowInput } from './textOverflow'
+import { NO_OVERFLOW, rowOverflowFromCells, textOverflowAllowance, type OverflowAllowance, type RowOverflowInput } from './textOverflow'
 
 // Static-renderer helpers live in a leaf module so the eager static path never
 // reaches the viewport planner; re-exported for existing callers.
@@ -187,16 +187,28 @@ export interface SheetGeometry {
    * when their node weight or the index walk exceeds `budget` records. */
   drawingsIn(left: number, top: number, right: number, bottom: number, budget: number): readonly XlsxDrawing[] | null
 }
-/** One source row's overflow occupancy: its populated cells (ascending) and
- * the merged ranges crossing it, against the real column axis and edges. */
+/** Rows whose occupancy is memoized per geometry (most recently used kept). */
+const OVERFLOW_ROW_CACHE = 4096
+const overflowRows = new WeakMap<SheetGeometry, Map<number, RowOverflowInput>>()
+/** One source row's overflow occupancy (sorted visible blocking columns and the
+ * merged ranges crossing it, against the real column axis and edges). Built
+ * once per row and geometry and reused across frames, tiles and find, so a
+ * wide styled row costs O(cells) once and every allowance O(log n). */
 export function rowOverflowInput(geometry: SheetGeometry, sourceRow: number): RowOverflowInput {
+  let rows = overflowRows.get(geometry)
+  if (!rows) overflowRows.set(geometry, rows = new Map())
+  const hit = rows.get(sourceRow)
+  if (hit) { rows.delete(sourceRow); rows.set(sourceRow, hit); return hit }
   const metrics = geometry.metrics
-  return {
-    cells: geometry.cellsOf(sourceRow) ?? [],
-    merges: isValidCoordinate(sourceRow, 0) ? geometry.merges.collect({ r0: sourceRow, r1: sourceRow, c0: 0, c1: MAX_COLS - 1 }) : [],
-    colStart: (col: number) => metrics.cols.start(col),
-    lastCol: metrics.cols.logicalCount - 1,
-  }
+  const input = rowOverflowFromCells(
+    geometry.cellsOf(sourceRow) ?? [],
+    isValidCoordinate(sourceRow, 0) ? geometry.merges.collect({ r0: sourceRow, r1: sourceRow, c0: 0, c1: MAX_COLS - 1 }) : [],
+    (col: number) => metrics.cols.start(col),
+    metrics.cols.logicalCount - 1,
+  )
+  rows.set(sourceRow, input)
+  if (rows.size > OVERFLOW_ROW_CACHE) rows.delete(rows.keys().next().value!)
+  return input
 }
 /** The overflow allowance the painter gives one cell (find geometry reuses it). */
 export function cellTextOverflow(geometry: SheetGeometryResult | undefined, source: SourceCell): OverflowAllowance | undefined {

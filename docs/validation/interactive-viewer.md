@@ -415,9 +415,22 @@ The harness fix (`6dd5240`) waits up to 30 s for a settled name and asserts that
     - Cardinality uses each row-set's own count (intervals, list, bitset, ref), so a one-cell bitset stays quiet.
   - **Implicit cell positions** (found while checking the paint-order change). The resident parser placed every `<c>` without `r` at A1 and every `<row>` without `r` at row 1, stacking the cells on top of each other. It now follows Excel: a ref-less row follows the previous row, and a ref-less cell follows the previous cell of its row (`tests/xlsx-implicit-refs.test.ts`).
     - One existing assertion that pinned the legacy row index (0) for a ref-less row moved to Excel's position (1); its cell's explicit reference and the inconsistency diagnostic are unchanged.
-    - The streaming (worker) parser already refuses ref-less cells with a visible "unsupported" outcome.
+    - The streaming (worker) parser already refuses a ref-less row (`a worksheet row has no valid row number`) or cell with a visible "unsupported" outcome.
     - **Golden re-recorded:** `poi-59746_NoRowNums.xlsx.0`, the POI fixture for exactly this case. It was 64×20 px showing one garbled A1 cell and is now 704×300 px showing its 15×11 table.
     - The three goldens above are unchanged by the round-3 fixes. The same six docx/pptx goldens still differ exactly as on base.
+- **Review round 4 fixes (pi):**
+  - **Implicit positions are bounded.** An implicit position past the worksheet is a typed `PackageError('unsupported', …, part)` refusal, like the paged reader's, never an uncaught `CoordinateError`. That covers a 16,385th ref-less cell in a row, a ref-less row after row 1,048,576, or a ref-less cell in a row beyond the sheet. One full row of 16,384 ref-less cells still parses. Excel reports such a file as needing repair, so no clamp is attempted. Regression: `tests/xlsx-implicit-refs-bounds.test.ts`, the reviewer's repro.
+  - **Duplicate explicit rows.** A repeated `<row r>` is merged into its first record, with later cells replacing same-column ones, and the sheet gets a `duplicate-row` diagnostic. The paged reader refuses the same file (`worksheet rows are out of order or duplicated`). This divergence is intentional: refusing would break resident files that open today.
+  - **Allowance cost.**
+    - Occupancy is reduced once per row to the sorted, visible blocking columns (`rowOverflowFromCells`).
+    - The viewer memoizes it per geometry and source row (4,096 most recent rows), reused across frames, tiles and find.
+    - Each allowance is a binary search plus the row's merges.
+    - Index reads for one allowance no longer grow with the formatting-only cells before the blocker. The reviewer's 16,384-wide styled row case is now bounded (`text-overflow allowance cost on a wide styled row`).
+  - **Merges per source row.** The static renderer keys each cell's occupancy on that cell's own source row, so a malformed row whose cells name other rows uses the right merges.
+  - **Reviewer's unconfirmed suspicions:**
+    - *Active-record z-order (confirmed and fixed).* The exact active record kept inside a coarse region was replayed after gridlines and drawings, and its border was never painted. It now joins the records' layer, and a coarse frame paints its border. Test: `review round 4: the exact active record…` in `tests/xlsx-viewer-layout.test.ts`.
+    - *`laidOut` retention (not changed).* The static renderer keeps one layout per painted cell between its fill and content passes. That is bounded by the cells of the admitted raster (static admission already caps the raster), and avoiding it would mean laying every cell out twice.
+    - *Lowercase or alternate-content refs (not changed).* A lowercase `r` (`a1`) is treated as missing by both the resident and paged readers (same `[A-Z]+` rule), so they agree. Excel writes upper case.
 
 ## Blocking for release
 

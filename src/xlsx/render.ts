@@ -19,8 +19,8 @@ import { decodeSerial } from './formula/serial'
 import type { ResolvedSemantics } from './formula/types'
 import type { WorkerDiagnostic } from './view/contracts'
 import { MAX_COLS, isValidCoordinate } from './view/coordinates'
-import { NO_OVERFLOW, alignmentOverflows, textOverflowAllowance, type OverflowAllowance, type RowOverflowInput } from './view/textOverflow'
-export { textOverflowAllowance, cellBlocksOverflow, type OverflowAllowance, type RowOverflowInput } from './view/textOverflow'
+import { NO_OVERFLOW, alignmentOverflows, rowOverflowFromCells, textOverflowAllowance, type OverflowAllowance, type RowOverflowInput } from './view/textOverflow'
+export { textOverflowAllowance, rowOverflowFromCells, cellBlocksOverflow, type OverflowAllowance, type RowOverflowInput } from './view/textOverflow'
 import { RectangleIndex } from './view/structure'
 import { cellSourceRow, drawingExtent } from './view/sheetCells'
 import type { CellBodyLayout } from './view/textLayout'
@@ -665,16 +665,14 @@ export function renderSheet(
   const extent = { width: m.widthPx, height: m.heightPx }
   const laidOut: CellBodyLayout[] = []
   for (const row of sheet.rows) {
-    // Neighbour occupancy for text overflow (S13), built once per row on demand.
-    let rowOverflow: RowOverflowInput | undefined
+    // Neighbour occupancy for text overflow (S13), built once per source row on
+    // demand: a malformed row whose cells name other rows keys each by its own.
+    const rowOverflow = new Map<number, RowOverflowInput>()
     const overflowFor = (cell: XlsxCell): OverflowAllowance => {
-      rowOverflow ??= {
-        cells: [...row.cells].sort((a, b) => a.col - b.col),
-        merges: merges.inRow(cellSourceRow(row, cell)),
-        colStart: edges.col,
-        lastCol: MAX_COLS - 1,
-      }
-      return textOverflowAllowance(rowOverflow, cell.col)
+      const source = cellSourceRow(row, cell)
+      let input = rowOverflow.get(source)
+      if (!input) rowOverflow.set(source, input = rowOverflowFromCells(row.cells.filter(item => cellSourceRow(row, item) === source), merges.inRow(source), edges.col, MAX_COLS - 1))
+      return textOverflowAllowance(input, cell.col)
     }
     for (const cell of row.cells) {
       // Only coordinates inside the grid have geometry; admission refused any

@@ -393,6 +393,23 @@ describe('detail admission (SheetZoom x DPR, no font-size floor)', () => {
     expect(out.find('Zoom in or inspect a cell for detail')).toHaveLength(1)
     expect(result.kind).toBe('detail')
   })
+  test('review round 4: the exact active record in a coarse region paints under gridlines and drawings, with its border', () => {
+    const rows: XlsxRow[] = Array.from({ length: 10 }, (_, index) => ({ index, heightPt: 0.75, customHeight: true, cells: [cell(index, 0, `tiny${index}`, index === 3 ? { numFmtId: 0, fillColor: 'FFFF00FF', borders: { left: 'thin' } } as XlsxCellStyle : undefined)] }))
+    rows.push({ index: 10, cells: [cell(10, 0, 'Normal')] })
+    const sheet = sheetOf(rows)
+    const ops: string[] = []
+    const state: Record<string, unknown> = { fillStyle: '', strokeStyle: '', font: '', lineWidth: 1,
+      fillRect: () => ops.push(`fill:${String(state.fillStyle)}`), stroke: () => ops.push(`stroke:${String(state.strokeStyle)}`),
+      measureText: (t: string) => ({ width: t.length * 6, actualBoundingBoxAscent: 8, actualBoundingBoxDescent: 2, fontBoundingBoxAscent: 9, fontBoundingBoxDescent: 3 }) }
+    const ctx = new Proxy(state, { get: (o, k) => k in o ? o[k as string] : () => {} }) as unknown as CanvasRenderingContext2D
+    const result = renderSheetViewport(sheet, ctx, ready(sheet), view(0, 0, 1280, 800, 0.25, 1), {}, { owner: OWNER, activeCell: { row: 3, col: 0 } })
+    expect(result.active?.source).toEqual({ row: 3, col: 0 })
+    const activeFill = ops.findIndex(op => /fill:#?ff00ff/i.test(op))
+    const gridlines = ops.indexOf('stroke:#d0d0d0')
+    expect(activeFill).toBeGreaterThan(-1)
+    expect(gridlines).toBeGreaterThan(activeFill) // drawn before gridlines (and drawings), like every record
+    expect(ops.slice(gridlines + 1).some(op => op.startsWith('stroke:'))).toBe(true) // its border is painted afterwards
+  })
   test('the active cell keeps one exact detail record in a coarse frame', () => {
     const rows: XlsxRow[] = Array.from({ length: 50 }, (_, index) => ({ index, heightPt: 0.75, customHeight: true, cells: [cell(index, 0, `v${index}`)] }))
     const sheet = sheetOf(rows)

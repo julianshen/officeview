@@ -125,8 +125,13 @@ export function renderSheetViewport(
       ctx.fillStyle = COARSE_FILL
       ctx.fillRect(group.bounds.x - vx, group.bounds.y - vy, group.bounds.width, group.bounds.height)
     }
+    // The active cell keeps its exact record even inside a summarized region;
+    // it joins the records' layer: under gridlines, borders and drawings.
+    const extraActive = active && !records.some(record => record.id === active.id) ? active : undefined
     for (const record of records) replay(record, 'fill')
+    if (extraActive) replay(extraActive, 'fill')
     for (const record of records) replay(record, 'content')
+    if (extraActive) replay(extraActive, 'content')
     if (plan.kind === 'detail') {
       ctx.strokeStyle = '#d0d0d0'
       ctx.lineWidth = 1
@@ -162,8 +167,8 @@ export function renderSheetViewport(
         paintSheetDrawings(sheet, plan.drawings.map(node => ({ ...node, xEmu: node.xEmu - dx, yEmu: node.yEmu - dy })), ctx, prepared)
       }
     }
-    // The active cell keeps its exact record even inside a summarized region.
-    if (active && !records.some(record => record.id === active.id)) { replay(active, 'fill'); replay(active, 'content') }
+    // A coarse frame draws no gridlines; the active record's border still paints.
+    if (plan.kind !== 'detail') for (const paint of paintBorders) paint()
     if (paintable && coarse.length) notice(COARSE_NOTICE)
     return { kind: plan.kind, diagnostics: plan.diagnostics, records, coarse, ...(active ? { active } : {}), work }
   } finally { ctx.restore() }

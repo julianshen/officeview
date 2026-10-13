@@ -14,7 +14,7 @@
  * padding is 3 px a side; default columns here are 50 px.
  */
 import { describe, expect, it } from 'vitest'
-import { cellDisplayText, layoutCellBody, renderSheet, textMeasurer, textOverflowAllowance } from '../src/xlsx/render'
+import { cellDisplayText, layoutCellBody, renderSheet, rowOverflowFromCells, textMeasurer, textOverflowAllowance } from '../src/xlsx/render'
 import { MAX_COLS } from '../src/xlsx/view/coordinates'
 import type { XlsxCell, XlsxCellStyle, XlsxMergeRange, XlsxSheet } from '../src/xlsx/types'
 
@@ -92,22 +92,55 @@ describe('text overflow into empty neighbours only (static renderer)', () => {
 describe('textOverflowAllowance', () => {
   const colStart = (c: number) => c * W
   const cellsAt = (...cols: number[]) => cols.map(col => ({ col, value: 'v' as XlsxCell['value'] }))
-  const base = { cells: [] as ReturnType<typeof cellsAt>, merges: [] as Array<{ minCol: number; maxCol: number }>, colStart, lastCol: MAX_COLS - 1 }
+  const input = (cells: Array<{ col: number; value: XlsxCell['value'] }> = [], merges: Array<{ minCol: number; maxCol: number }> = []) => rowOverflowFromCells(cells, merges, colStart, MAX_COLS - 1)
   it('right alignment overflows left until the previous value; center both ways', () => {
-    expect(textOverflowAllowance({ ...base, cells: cellsAt(0, 2, 5) }, 2)).toEqual({ left: 50, right: 100 }) // B empty; D,E empty, F value
-    expect(textOverflowAllowance({ ...base, cells: cellsAt(1, 2, 3) }, 2)).toEqual({ left: 0, right: 0 })
+    expect(textOverflowAllowance(input(cellsAt(0, 2, 5)), 2)).toEqual({ left: 50, right: 100 }) // B empty; D,E empty, F value
+    expect(textOverflowAllowance(input(cellsAt(1, 2, 3)), 2)).toEqual({ left: 0, right: 0 })
   })
-  it('formatting-only cells in between are skipped, not blockers', () => {
-    const cells = [{ col: 1, value: null }, { col: 2, value: 'v' as XlsxCell['value'] }, { col: 3, value: null }, { col: 4, value: 'x' as XlsxCell['value'] }]
-    expect(textOverflowAllowance({ ...base, cells }, 2)).toEqual({ left: 100, right: 50 })
+  it('formatting-only cells in between are skipped, not blockers (unsorted input too)', () => {
+    const cells = [{ col: 4, value: 'x' as XlsxCell['value'] }, { col: 1, value: null }, { col: 2, value: 'v' as XlsxCell['value'] }, { col: 3, value: null }]
+    expect(textOverflowAllowance(input(cells), 2)).toEqual({ left: 100, right: 50 })
   })
   it('stops at the worksheet edges (A on the left, the last column on the right)', () => {
-    expect(textOverflowAllowance(base, MAX_COLS - 1).right).toBe(0)
-    expect(textOverflowAllowance(base, 0).left).toBe(0)
-    expect(textOverflowAllowance(base, 3).left).toBe(150)
+    expect(textOverflowAllowance(input(), MAX_COLS - 1).right).toBe(0)
+    expect(textOverflowAllowance(input(), 0).left).toBe(0)
+    expect(textOverflowAllowance(input(), 3).left).toBe(150)
   })
   it('a merged cell never overflows', () => {
-    expect(textOverflowAllowance({ ...base, merges: [{ minCol: 2, maxCol: 3 }] }, 2)).toEqual({ left: 0, right: 0 })
+    expect(textOverflowAllowance(input([], [{ minCol: 2, maxCol: 3 }]), 2)).toEqual({ left: 0, right: 0 })
+  })
+})
+
+/** Review round 4 finding 2 (adapted from the reviewer's repro): an allowance
+ * must not scan formatting-only cells. Counts the index reads one allowance
+ * performs on its (once-per-row) input. */
+describe('text-overflow allowance cost on a wide styled row', () => {
+  const lastCol = 16_384
+  function readsFor(cells: Array<{ col: number; value: XlsxCell['value'] }>, at: number): number {
+    const built = rowOverflowFromCells(cells, [], (c: number) => c * 64, lastCol)
+    let reads = 0
+    const counted = new Proxy(built.blockers as number[], {
+      get: (t, k) => { if (typeof k === 'string' && /^\d+$/.test(k)) reads++; return (t as unknown as Record<string, unknown>)[k as never] },
+    })
+    textOverflowAllowance({ ...built, blockers: counted }, at)
+    return reads
+  }
+  it('one allowance does not grow with the formatting-only cells before the blocker', () => {
+    const counts: number[] = []
+    for (const n of [1_000, 2_000, 4_000, 8_000, 16_383]) {
+      const cells: Array<{ col: number; value: XlsxCell['value'] }> = Array.from({ length: n }, (_, i) => ({ col: i, value: null }))
+      cells.push({ col: n, value: 'blocker' })
+      counts.push(readsFor(cells, 0))
+    }
+    expect(counts[counts.length - 1] / counts[0], `reads ${counts.join(', ')}`).toBeLessThan(4)
+  })
+  it('a whole viewport of text cells in a styled row stays bounded', () => {
+    const styled: Array<{ col: number; value: XlsxCell['value'] }> = Array.from({ length: lastCol - 1 }, (_, i) => ({ col: i + 1, value: null }))
+    const cells = [...styled, { col: lastCol - 1, value: 'blocker' as XlsxCell['value'] }]
+    for (let k = 0; k < 64; k++) cells[k * 16] = { col: k * 16 + 1, value: 'text' }
+    let total = 0
+    for (let k = 0; k < 64; k++) total += readsFor(cells, k * 16 + 1)
+    expect(total, `64 allowances cost ${total} index reads`).toBeLessThan(64 * 32)
   })
 })
 
@@ -124,6 +157,19 @@ describe('explicit alignment layouts carry the allowance as their clip', () => {
     expect(clip!.x).toBeGreaterThanOrEqual(0)
     expect(clip!.x).toBeLessThan(50)
     expect(clip!.x + clip!.width).toBeCloseTo(100, 9)
+  })
+})
+
+describe('review round 4 regressions', () => {
+  it('each cell of a malformed row uses the merges of its OWN source row', () => {
+    // <row r="1"> holding C3 (another row) first, then A1. B1:B2 is merged.
+    const merge: XlsxMergeRange = { minRow: 0, maxRow: 1, minCol: 1, maxCol: 1 }
+    const cells = [{ ...cellAt(2, LONG), ref: 'C3', row: 2 }, { ...cellAt(0, LONG), ref: 'A1', row: 0 }]
+    const sheet: XlsxSheet = { name: 'S', cols: [], merges: [], mergeRanges: [merge], rows: [{ index: 0, cells }] }
+    const out = recorder()
+    renderSheet(sheet, out.ctx, { colWidthsPx: Array(6).fill(W), rowHeightsPx: [20, 20, 20], widthPx: 300, heightPx: 60 })
+    const a1 = out.painted.filter(p => p.text === LONG).find(p => p.clip?.x0 === 0)
+    expect(a1?.clip).toEqual({ x0: 0, x1: 50 }) // blocked by the B1:B2 merge on row 1
   })
 })
 
