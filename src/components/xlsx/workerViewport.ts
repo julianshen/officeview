@@ -5,7 +5,7 @@
  * allowance the row cache's reads spend (§11.1); ring work may only use half
  * of the frame, so a visible tile always finds room. */
 import type { CacheIdentity, LogicalViewport, ViewportResult } from '../../xlsx/view/contracts'
-import type { RemoteWorkbook, RemoteSheetStore } from '../../worker/viewerRemoteSource'
+import { pageTileKey, type RemoteWorkbook, type RemoteSheetStore } from '../../worker/viewerRemoteSource'
 import { queryPayloadBytes, WORKER_QUERY_BYTES } from '../../worker/viewerQueryBudget'
 import { emptyWork, type CellPlacement, type ViewportPlan } from '../../xlsx/view/viewport'
 import type { ProjectedSheetMetrics } from '../../xlsx/view/projection'
@@ -79,13 +79,14 @@ export class WorkerViewportPlans {
     // were already requested this frame gets no plan), within the ring share
     // for a prefetch tile.
     const pages = this.remote.pageLimits.tile, frame = this.remote.currentPageFrame
-    if (!this.remote.admitPages(frame, key, pages, !visible, false)) return pending()
+    const budgetKey = pageTileKey(owner.sheetId, window.box)
+    if (!this.remote.admitPages(frame, budgetKey, pages, !visible, false)) return pending()
     if (this.entries.size >= MAX_ENTRIES) {
       const oldest = [...this.entries].find(([, e]) => e.plan)
       if (oldest) this.drop(oldest[0], oldest[1])
       else return pending()
     }
-    this.remote.admitPages(frame, key, pages, !visible)
+    this.remote.admitPages(frame, budgetKey, pages, !visible)
     const entry: Entry = { bytes: 0, controller: new AbortController() }
     this.entries.set(key, entry)
     // The request carries the frame owner its plan is stored under: a plan for

@@ -536,6 +536,9 @@ export class RemoteWorkbook implements WorkbookSource {
 }
 
 interface RowEntry { chunks: Set<number>; cells: PagedCell[] }
+/** Per-frame page budgets are shared across sheet stores, so tile identity
+ * includes the sheet as well as the complete logical box. */
+export const pageTileKey = (sheetId: string, box: LogicalCellBox): string => JSON.stringify([sheetId, box])
 /** One frame's cumulative page spending, in total and per tile key. */
 export interface PageFrame { used: number; tiles: Map<string, number> }
 /** Where a painting run's pages are charged. */
@@ -810,7 +813,7 @@ export class RemoteSheetStore implements SourceStore {
     if (!found || 'oversized' in found) return []
     const { k0, k1, missing, out } = found
     if (missing.length) {
-      const admission: PageAdmission = { frame: this.workbook.currentPageFrame, tile: JSON.stringify(box), ring }
+      const admission: PageAdmission = { frame: this.workbook.currentPageFrame, tile: pageTileKey(this.sheetId, box), ring }
       for (const run of coalesce(missing)) {
         if (!this.workbook.admitPages(admission.frame, admission.tile, 1, ring, false)) break
         void this.loadRun(run.r0, run.r1, k0, k1, new AbortController().signal, this.stamp, admission)

@@ -198,6 +198,45 @@ describe('cumulative per-frame/per-tile page caps and the ring share (r4 #1, #2)
   const scale = 0.4, tileBox = (row: number) => ({ x: 0, y: row * 1280, width: 1280, height: 1280 })
   const tileWindow = (row: number): LogicalViewport => ({ box: tileBox(row), zoom: scale, deviceScale: 1 })
 
+  it('charges identical logical boxes independently for each sheet in row reads and worker plans', async () => {
+    const rows = 4096
+    const rank = clustered(8)
+    const cells = Array.from({ length: rows }, (_, row) => [
+      { row, col: 0, value: rank(row) }, { row, col: 1, value: `t${row}` },
+    ]).flat()
+    const h = await harness(workbookOf([
+      { sheetId: 's', cells },
+      { sheetId: 's1', cells },
+    ]))
+    const sheets = [] as { store: RemoteSheetStore; metrics: ProjectedSheetMetrics; owner: CacheIdentity; calls: { count: number } }[]
+    for (const sheetId of ['s', 's1']) {
+      const commit = await h.remote.sort(h.remote.identity(sheetId), { range: { r0: 0, r1: rows - 1, c0: 0, c1: 1, headerRows: 0, totalsRows: 0 }, keys: [{ col: 0, order: 'asc' }], caseSensitive: false }, new AbortController().signal)
+      if (commit.kind !== 'committed') throw new Error(`sort ${sheetId} ${commit.kind}`)
+      const axes = h.remote.geometry(sheetId)
+      const metrics = createSheetMetrics({ rows: axes.rows, cols: axes.cols, order: commit.view.order, visibility: visibilityFromHidden(createIntervalSet([])) })
+      const source = h.source.store(sheetId), readRows = source.readRows.bind(source), calls = { count: 0 }
+      vi.spyOn(source, 'readRows').mockImplementation((...args) => { calls.count++; return readRows(...args) })
+      sheets.push({ store: h.remote.store(sheetId), metrics, owner: h.remote.identity(sheetId), calls })
+    }
+    try {
+      h.remote.beginPageFrame()
+      for (const sheet of sheets) sheet.store.pendingIn(sheet.metrics, tileBox(0), scale)
+      await settle(h)
+      expect(sheets.map(sheet => sheet.calls.count), 'each sheet spends the full per-tile source-read allowance').toEqual([
+        h.remote.pageLimits.tile, h.remote.pageLimits.tile,
+      ])
+      expect(sheets.reduce((total, sheet) => total + sheet.calls.count, 0)).toBeLessThanOrEqual(h.remote.pageLimits.frame)
+
+      const plans = new WorkerViewportPlans(h.remote)
+      const viewport = vi.spyOn(h.remote, 'viewport').mockImplementation(() => new Promise(() => {}))
+      try {
+        h.remote.beginPageFrame()
+        for (const sheet of sheets) plans.get(sheet.owner, tileWindow(0), extentOf(sheet.metrics), true)
+        expect(viewport, 'worker plans for the same tile on both sheets').toHaveBeenCalledTimes(2)
+      } finally { viewport.mockRestore(); plans.dispose() }
+    } finally { await h.remote.release() }
+  })
+
   it('#1: one tile spends at most the per-tile cap of source pages, continuations included', async () => {
     const h = await sortedHarness(4096, clustered(4))
     try {
