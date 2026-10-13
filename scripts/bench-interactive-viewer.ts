@@ -20,6 +20,11 @@
  *
  * This scaffold measures the harness frame only. It claims no viewer SLA. The
  * logic lives in scripts/harness/* (unit-tested); this file only orchestrates.
+ *
+ * --suite viewer (alias --fixture all) runs the S10.2 real-viewer suite instead
+ * (scripts/harness/viewerSuite.ts): a production build of the viewer, true XLSX
+ * fixtures, one hash-tagged receipt with every threshold row evaluated. In
+ * --mode release the process exits non-zero unless every desktop row passes.
  */
 import { chromium, webkit } from '@playwright/test'
 import { randomBytes } from 'node:crypto'
@@ -36,6 +41,7 @@ import { commitLabel, gitIdentity } from './harness/identity'
 import { detectLanIp } from './harness/lan'
 import { retagResult } from './harness/retag'
 import { ensureHarnessServer } from './harness/vite-server'
+import { runViewerSuite } from './harness/viewerSuite'
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 const HARNESS_PAGE_PATH = '/src/debug/interactive-viewer.html'
@@ -217,6 +223,10 @@ async function main(): Promise<void> {
   const args = parsed
   const identity = gitIdentity(REPO_ROOT)
   const label = commitLabel(identity)
+  if (args.suite === 'viewer') {
+    await viewerSuite(args, identity, label)
+    return
+  }
   console.log(`interactive-viewer bench (S0.3 scaffold — measures the harness frame, claims no viewer SLA)`)
   console.log(`  browser=${args.browser} profile=${args.profile} fixture=${args.fixture} repeat=${args.repeat} warmup=${args.warmup} mode=${args.mode} port=${args.port} commit=${label}`)
   if (args.scenario) console.log(`  scenario=${args.scenario}${args.unadmitted ? ' UNADMITTED' : ''} rows=${args.rows ?? 'full'} channel=${args.channel} timeout=${args.timeoutMinutes} min`)
@@ -269,6 +279,27 @@ async function main(): Promise<void> {
     server.stop()
   }
   console.log(`  vite dev server ${server.reused ? 'reused (identity verified)' : 'started and stopped'}`)
+}
+
+async function viewerSuite(args: BenchArgs, identity: ReturnType<typeof gitIdentity>, label: string): Promise<void> {
+  console.log(`interactive-viewer S10.2 viewer suite: browser=${args.browser} channel=${args.channel} profile=${args.profile} scale=${args.scale} repeat=${args.repeat} mode=${args.mode} commit=${label}`)
+  if (identity.dirty) console.log('  WARNING: the checkout is dirty; the receipt records dirty=true and cannot be release evidence for a commit')
+  const { receipt, path } = await runViewerSuite({ args, repoRoot: REPO_ROOT, label, identity, log: message => console.log(message) })
+  console.log(`receipt: ${path}`)
+  console.log(`  sha256 ${receipt.hash}`)
+  console.log('threshold rows (desktop):')
+  for (const row of receipt.evaluation.filter(r => r.profile === 'desktop')) {
+    const value = row.value === null ? 'n/a' : row.unit === 'bytes' ? `${(row.value / 2 ** 20).toFixed(1)} MiB` : `${Math.round(row.value * 100) / 100} ${row.unit}`
+    const limit = row.unit === 'bytes' ? `${(row.limit / 2 ** 20).toFixed(0)} MiB` : `${row.limit} ${row.unit}`
+    console.log(`  ${row.outcome.padEnd(12)} ${row.id.padEnd(28)} ${row.kind === 'floor' ? '>=' : '<='} ${limit.padEnd(14)} measured ${value}  [${row.note}]`)
+  }
+  console.log('mobile rows: not-run (no physical iPad/mobile receipt; skipped by user decision)')
+  if (receipt.evidenceProblems.length) {
+    console.log(`evidence problems (${receipt.evidenceProblems.length}; any one blocks admission):`)
+    for (const problem of receipt.evidenceProblems) console.log(`  - ${problem}`)
+  }
+  console.log(`desktop release admission: ${receipt.desktopAdmitted ? 'ADMITTED' : 'NOT ADMITTED'}${args.mode === 'release' ? '' : ' (smoke run: informational)'}`)
+  if (args.mode === 'release' && (!receipt.desktopAdmitted || identity.dirty)) process.exitCode = 1
 }
 
 main().catch((error: unknown) => {

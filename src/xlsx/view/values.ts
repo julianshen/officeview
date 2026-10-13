@@ -159,7 +159,8 @@ export async function scanValueDomain(
     const seen = new Set<string>()
     do {
       if (options.signal.aborted) return { kind: 'cancelled' }
-      const page = await store.queryColumn({ col, rows: { kind: 'intervals', intervals: [{ r0: domain.r0, r1: domain.r1 }] }, limit: SCAN_PAGE_LIMIT, cursor }, options)
+      // Typed lanes (S1.2): the scan only reads tags, so no per-cell objects are built.
+      const page = await store.queryColumn({ col, rows: { kind: 'intervals', intervals: [{ r0: domain.r0, r1: domain.r1 }] }, limit: SCAN_PAGE_LIMIT, cursor, encoding: 'lanes' }, options)
       if (options.signal.aborted) return { kind: 'cancelled' }
       if (page.error) return page.error.code === 'cancelled' ? { kind: 'cancelled' } : { kind: 'error', error: page.error }
       const stamp = page.stamp, owner = options.stamp

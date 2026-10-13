@@ -22,6 +22,7 @@ import { semanticsFor } from '../xlsx/view/semanticsFor'
 import { DisplayTextLaneCache, needsDisplayText } from './displayTextLane'
 
 const LANE_PAGE_ROWS = 4096
+const CLASSIFICATION_CACHE = 64
 
 /** Read-only key store over the keys shipped with one filter command. */
 function shippedRuns(keySets: ReadonlyMap<string, FilterKeySet>): ValueRunStore {
@@ -74,6 +75,22 @@ export interface WorkerFilterEvaluatorOptions {
 /** `keysFor` returns the keys shipped with the command now being evaluated. */
 export function createWorkerFilterEvaluator(keysFor: (stamp: SourceStamp) => ReadonlyMap<string, FilterKeySet>, formatting?: WorkbookFormatting, locale = 'en-US', options: WorkerFilterEvaluatorOptions = {}): FilterEvaluator {
   const prepared = preparer(formatting)
+  // A column's classification over a body band depends only on its values, so
+  // it is fixed for a value generation: repeated filters on the same column
+  // (apply, clear, apply) classify once instead of re-reading 1M rows each time.
+  // Bounded like the main thread's classification cache; 'loading' is never kept.
+  const classifications = new Map<string, ColumnClassification>()
+  const classifyCached = async (store: SourceStore, stamp: SourceStamp, col: number, r0: number, r1: number, signal: AbortSignal): Promise<ColumnClassification> => {
+    const key = JSON.stringify([stamp.docId, stamp.sheetId, stamp.valueGen, col, r0, r1])
+    const known = classifications.get(key)
+    if (known) return known
+    const classification = await classify(store, stamp, col, r0, r1, signal, prepared)
+    if (classification.kind !== 'loading') {
+      if (classifications.size >= CLASSIFICATION_CACHE) classifications.delete(classifications.keys().next().value!)
+      classifications.set(key, classification)
+    }
+    return classification
+  }
   const display = displayFormatter(formatting)
   // The formatting (style table and date system) is this evaluator's style
   // owner: lanes key by its identity, so another table never reuses a lane.
@@ -86,7 +103,7 @@ export function createWorkerFilterEvaluator(keysFor: (stamp: SourceStamp) => Rea
     const flags = new Uint8Array(Math.max(0, spec.range.r1 - spec.range.r0 + 1)).fill(1)
     try {
       for (const [col, rule] of spec.columns) {
-        const classification = await classify(store, stamp, col, r0, r1, signal, prepared)
+        const classification = await classifyCached(store, stamp, col, r0, r1, signal)
         if (classification.kind === 'loading') return { kind: 'incomplete', missing: [{ r0, r1, c0: col, c1: col }] }
         const identity: ValueIndexIdentity = { ...stamp, range: spec.range, col, classification, classificationGen: stamp.valueGen }
         const match = rule.kind === 'values'

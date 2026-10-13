@@ -29,6 +29,8 @@ export interface GridSemanticsProps {
   children?: ReactNode
   label?: string
   onSortCycle?: (col: number, shift: boolean, invoker: HTMLElement) => void
+  /** Column whose header sort is pending: the grid is busy and its control shows it. */
+  pendingSortColumn?: number | null
   onSortDialog?: (col: number, invoker: HTMLElement) => void
   onNotice?: (message: string) => void
   status?: Pick<ViewerStatusProps, 'records' | 'countMode' | 'loadReport' | 'inspection'>
@@ -157,7 +159,7 @@ export function GridSemantics(props: GridSemanticsProps): ReactElement {
   const activeBox = active && projection.sourceCellToLogical(active)
   const activeColumnInPane = activeBox && activeBox.x < pane.x + pane.width && activeBox.x + activeBox.width > pane.x
   const headerColumns = coarse && active && activeColumnInPane ? [active.col] : columns
-  const headerProps = { projection, window: scroll, viewport, coarse, columns: headerColumns, selection, sort: view.sort, filter: view.filter, controlMode, touchControls, onSortCycle: props.onSortCycle, onFilter: props.onFilter, onSortDialog: props.onSortDialog, onNotice: props.onNotice,
+  const headerProps = { projection, window: scroll, viewport, coarse, columns: headerColumns, selection, sort: view.sort, filter: view.filter, controlMode, touchControls, onSortCycle: props.onSortCycle, pendingSortColumn: props.pendingSortColumn ?? null, onFilter: props.onFilter, onSortDialog: props.onSortDialog, onNotice: props.onNotice,
     onSelect: (kind: 'row' | 'column', index: number, options: { toggle: boolean; extend: boolean }, event: MouseEvent<HTMLButtonElement>) => {
       // A corner-lane button (S13.2) names its column; only strip buttons are re-hit-tested.
       if (event.detail > 0 && !coarse && gridRef.current && event.currentTarget.dataset.headerLane === undefined) {
@@ -189,7 +191,7 @@ export function GridSemantics(props: GridSemanticsProps): ReactElement {
   }
   const status = [props.announcement, current.announcement, notice, coarse || subDetail ? 'Zoom in or inspect a cell for detail.' : ''].filter(Boolean).join(' ')
   return <div ref={wrapperRef} onKeyDown={keyDown} onBlur={event => { if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setControlMode(false) }} style={{ position: 'relative', width: viewport.width + GRID_HEADER_SIZE, height: viewport.height + headerHeight }}>
-    <div ref={gridRef} role="grid" aria-label={props.label ?? 'Worksheet'} aria-rowcount={MAX_ROWS + 1} aria-colcount={MAX_COLS + 1}
+    <div ref={gridRef} role="grid" aria-label={props.label ?? 'Worksheet'} aria-busy={props.pendingSortColumn != null ? true : undefined} aria-rowcount={MAX_ROWS + 1} aria-colcount={MAX_COLS + 1}
       aria-multiselectable="true" aria-activedescendant={active ? `${prefix}-cell-${cellId(active.row, active.col)}` : undefined}
       aria-description={`Worksheet capacity ${MAX_ROWS} rows by ${MAX_COLS} columns.${coarse ? ' Coarse view. Zoom in or inspect a cell for detail.' : ''}`}
       tabIndex={controlMode ? -1 : 0} data-officeview-grid=""
@@ -216,8 +218,12 @@ export function GridSemantics(props: GridSemanticsProps): ReactElement {
         const cells = extra ? [active!.col] : [...columns]
         if (!extra && slot === activeSlot && active && !cells.includes(active.col)) cells.push(active.col)
         const box = viewportHeaderBox(projection, scroll, viewport, 'row', slot)
+        // Rows and header controls follow the scroll window by transform: a
+        // transform is not a layout shift, so the viewer adds no CLS to its host.
+        // Cells keep `left` inside their row (per-cell transforms would make every
+        // cell its own paint layer, ~1 KB each; their moves register no shift).
         return <div key={slot} role="row" aria-rowindex={slot + 2} data-transient-active={extra ? 'true' : undefined}
-          style={extra ? { ...hiddenText, top: 0, left: 0, pointerEvents: 'none' } : { position: 'absolute', top: headerHeight + box.y, left: 0, height: box.height, width: '100%', pointerEvents: 'none' }}>
+          style={extra ? { ...hiddenText, top: 0, left: 0, pointerEvents: 'none' } : { position: 'absolute', top: 0, left: 0, transform: `translateY(${headerHeight + box.y}px)`, height: box.height, width: '100%', pointerEvents: 'none' }}>
           <GridRowHeader props={headerProps} slot={slot} />
           {cells.map(col => {
             const at = { row, col }, value = props.cellPresentation?.(at) ?? { text: '', state: 'loading' as const }
@@ -230,10 +236,12 @@ export function GridSemantics(props: GridSemanticsProps): ReactElement {
         </div>
       })}
     </div>
-    {/* Bounded by the pane (overflow:hidden): a taller popup scrolls instead of losing its top controls. */}
+    {/* Bounded by the pane (overflow:hidden): a taller popup scrolls instead of losing its top controls.
+        Anchored at the top: content that arrives later (a loading value list) grows the popup downward,
+        never moving what is already shown (no layout shift for the host page). */}
     {props.popup && <div ref={popupRef} role="dialog" aria-label={props.popup.label ?? 'Column filter'} data-officeview-ui="grid-popup"
       onPointerDown={event => event.stopPropagation()} onDoubleClick={event => event.stopPropagation()}
-      style={{ position: 'absolute', zIndex: 3, bottom: 0, maxWidth: '100%', maxHeight: '100%', overflowY: 'auto', boxSizing: 'border-box', paddingBottom: 'env(safe-area-inset-bottom)' }}>{props.popup.content}</div>}
+      style={{ position: 'absolute', zIndex: 3, top: 0, maxWidth: '100%', maxHeight: '100%', overflowY: 'auto', boxSizing: 'border-box', paddingBottom: 'env(safe-area-inset-bottom)' }}>{props.popup.content}</div>}
     <ViewerStatus {...props.status} records={props.status?.records ?? recordCounts(projection, props.body)} announcement={status} inspection={props.inspection ?? props.status?.inspection} />
   </div>
 }

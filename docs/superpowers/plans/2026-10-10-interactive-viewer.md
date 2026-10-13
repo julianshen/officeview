@@ -126,7 +126,8 @@ Every package is implemented on its own branch, reviewed by at least one agent f
 | S13.1 worker bootstrap packaging fix; S13.2 paged drawings parity + 44px narrow-column touch actions (release-audit fixes) | merged 2026-10-13 (S13.1: codex impl, Claude+opencode reviews; S13.2: Claude impl, opencode 3 rounds; all findings fixed) |
 | S13 native Excel checkpoint (native-corner, native-1904, large/native-large: Excel-authored, adapter/date-filter/large-file parity, worker-backed browser legs) | merged 2026-10-13 (Claude impl; opencode 2 rounds, APPROVE); Excel for Windows not run |
 | S11/S12 decided not-run (decision records `docs/architecture/xlsx-wasm-decision.md`, `xlsx-gpu-decision.md`; evidence is desktop Chrome (headless) only; S10.2 receipt pending merge; revisit on Safari/mobile receipts) | decided, not executed (optional boundary) |
-| S10.2 (in progress: 12/13 desktop Chrome rows pass, header-sort acknowledgment fix under way), (physical-device receipts skipped for now by user decision), S13 release review | not started / in progress as noted |
+| S10.2 real-browser performance/memory gate (desktop Chrome receipt r16, main-thread ledger, worker range detection, header-sort pending acknowledgment) | merged 2026-10-13 (Claude impl; codex/opencode reviews r1–r7, APPROVE; merge resolution by codex, Claude review APPROVE). r16 admitted on a shared machine under the user-approved 0.25 MiB engine-cache allowance (user decision 2026-10-13; 64 MiB budget unchanged); quiet-machine release re-run still pending; actual Safari not run; mobile/iPad not run |
+| S10.2 physical-device receipts (skipped for now by user decision), S13 release review | not started / in progress as noted |
 
 ## S0 — Freeze contracts, counterexamples and fixture/harness infrastructure
 
@@ -662,6 +663,8 @@ expect(wide.contains({ row: 2, col: 0 })).toBe(false)
 - [x] Deliver independent functional/complexity evidence matrix by requirement ID and fixture; incomplete mandatory cases block release.
 
 ### S10.2 Real-browser performance, memory and device gate
+
+> **Status (2026-10-13):** merged (Claude implementation; codex/opencode reviews over seven rounds, every finding fixed, final verdict APPROVE; integration conflict resolution by codex reviewed by Claude, APPROVE). Desktop Chrome receipt r16 (`docs/validation/interactive-viewer-viewer-chrome-r16.json`, `docs/validation/interactive-viewer-performance.md`) admitted 13/13 rows, recorded on a shared machine; the main-thread memory gate uses the user-approved 0.25 MiB engine-cache allowance per gated checkpoint and warm-up check (user decision 2026-10-13; 64 MiB budget unchanged). Still open: a quiet-machine release re-run, actual desktop Safari collection, and mobile/iPad receipts (not run, user decision). Checkboxes below stay unticked until those legs exist.
 
 **Files:** finish `scripts/bench-interactive-viewer.ts`, browser performance scenarios, result schema/thresholds under `tests/fixtures/xlsx-viewer/performance-profile.json`; write `docs/validation/interactive-viewer-performance.md`.
 

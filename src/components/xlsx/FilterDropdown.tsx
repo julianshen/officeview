@@ -10,6 +10,9 @@ import { controlTarget, failureText, useControlLifetime, type ControlProps } fro
 import { useControlMedia } from './controlMedia'
 import { ConditionEditor, conditionInput, typedCondition } from './ConditionEditor'
 export interface FilterDropdownProps extends ControlProps { col: number; applied: FilterSpec | null; snapshotHidden?: boolean; appliedSort?: SortSpec | null }
+/** Reserved height of the loaded page's controls ((Blanks), the selected-count
+ * line, Previous/Next values) so their arrival moves nothing below them. */
+const PAGE_BLOCK_MIN_HEIGHT = 160
 export function FilterDropdown(props: FilterDropdownProps): ReactElement | null {
   const bottomSheet = useControlMedia('(pointer: coarse), (max-width: 640px)')
   const life = useControlLifetime(props), session = useRef<ValuesDraftPort | null>(null), searchInput = useRef<HTMLInputElement>(null), changingRef = useRef(false)
@@ -113,24 +116,25 @@ export function FilterDropdown(props: FilterDropdownProps): ReactElement | null 
       <h2>Filter column {columnToLetters(props.col)}</h2>
       <div><button type="button" style={controlTarget} disabled={busy || !range || life.invalid} onClick={() => apply('asc')}>Sort ascending</button><button type="button" style={controlTarget} disabled={busy || !range || life.invalid} onClick={() => apply('desc')}>Sort descending</button></div>
       <button type="button" style={controlTarget} disabled={busy || life.invalid} onClick={() => apply('clear')}>Clear column</button><button type="button" style={controlTarget} disabled={busy || life.invalid} onClick={() => apply('clearAll')}>Clear all filters</button>
-      {range && <p>{range.source.kind === 'table' ? `Table metadata: ${range.range.headerRows} header row(s), ${range.range.totalsRows} totals row(s).` : 'Resolved source range.'}{props.applied && !sameFilterRange(props.applied.range, range.range) ? ' OK will replace the previous filter range.' : ''}</p>}
+      {/* Space reserved for what the value list's arrival fills in, so nothing below moves (no layout shift). */}
+      <p style={{ minHeight: '2.6em' }}>{range && <>{range.source.kind === 'table' ? `Table metadata: ${range.range.headerRows} header row(s), ${range.range.totalsRows} totals row(s).` : 'Resolved source range.'}{props.applied && !sameFilterRange(props.applied.range, range.range) ? ' OK will replace the previous filter range.' : ''}</>}</p>
       <label>Filter method <select aria-label="Filter method" style={controlTarget} value={method} onChange={event => setMethod(event.target.value as 'values' | 'custom')}><option value="values">Values and blanks</option>{(method === 'custom' || !['loading', 'empty'].includes(classification.kind)) && <option value="custom">{classification.kind === 'loading' ? 'Custom filters (classification pending)' : classification.kind === 'date' ? 'Date filters' : classification.kind === 'number' ? 'Number filters' : 'Text / mixed filters'}</option>}</select></label>
       {method === 'values' ? <>
         <label>Search <input ref={searchInput} aria-label="Search all values" disabled={changing || life.invalid} style={controlTarget} value={query.text} onChange={event => refresh({ text: event.target.value, offset: 0, wildcards: query.wildcards })} /></label>
         <label style={{ ...controlTarget, display: 'flex', alignItems: 'center' }}><input type="checkbox" disabled={changing || life.invalid} checked={Boolean(query.wildcards)} onChange={event => refresh({ ...query, offset: 0, wildcards: event.target.checked })} />Search with wildcards</label>
-        {page?.truncated && <p>Showing first 10,000; search all values.</p>}
+        <p style={{ minHeight: '1.3em' }}>{page?.truncated ? 'Showing first 10,000; search all values.' : ''}</p>
         <button type="button" style={controlTarget} disabled={busy || !page || life.invalid} onClick={() => refresh(query, { kind: 'all', selected: true, includeBlanks })}>Select All</button>
         <button type="button" style={controlTarget} disabled={busy || !page || life.invalid} onClick={() => refresh(query, { kind: 'all', selected: false, includeBlanks })}>Deselect All</button>
         {query.text && <label style={{ ...controlTarget, display: 'flex', alignItems: 'center' }}><input type="checkbox" disabled={changing || life.invalid} checked={includeBlanks} onChange={event => setIncludeBlanks(event.target.checked)} />Include blanks in searched Select All</label>}
-        <div style={{ maxHeight: 280, overflowY: 'auto' }}>{page?.entries.map(entry => <label key={entry.ordinal} data-value-ordinal={entry.ordinal} style={{ ...controlTarget, display: 'flex', alignItems: 'center' }}>
+        <div style={{ height: 280, overflowY: 'auto' }}>{page?.entries.map(entry => <label key={entry.ordinal} data-value-ordinal={entry.ordinal} style={{ ...controlTarget, display: 'flex', alignItems: 'center' }}>
           <input type="checkbox" aria-label={`${entry.label}${entry.kind === 'error' ? ' (error)' : ''}`} checked={entry.selected === true} disabled={busy || entry.selected === 'pending' || life.invalid}
             ref={input => { if (input) input.indeterminate = entry.selected === 'pending' }} onChange={event => refresh(query, { kind: 'toggle', ordinal: entry.ordinal, selected: event.target.checked })} />
           <span>{entry.label}{entry.kind === 'error' ? ' (error)' : ''}{entry.selected === 'pending' ? ' — selection pending' : ''}</span>
           <button type="button" aria-label={`Inspect value ${entry.ordinal + 1}`} style={controlTarget} disabled={busy || life.invalid} onClick={() => { if (busy || life.invalid) return; const job = life.begin(); void session.current!.inspect(entry.ordinal, job.signal).then(value => { if (job.current()) setInspection(value) }).catch(error => { if (job.current()) noticeError(life.error(error)) }) }}>Inspect</button>
         </label>)}</div>
-        {page && <><label style={{ ...controlTarget, display: 'flex', alignItems: 'center' }}><input type="checkbox" aria-label="(Blanks)" checked={page.blanks} disabled={busy || life.invalid} onChange={event => refresh(query, { kind: 'blanks', selected: event.target.checked })} />(Blanks)</label>
+        <div style={{ minHeight: PAGE_BLOCK_MIN_HEIGHT }}>{page && <><label style={{ ...controlTarget, display: 'flex', alignItems: 'center' }}><input type="checkbox" aria-label="(Blanks)" checked={page.blanks} disabled={busy || life.invalid} onChange={event => refresh(query, { kind: 'blanks', selected: event.target.checked })} />(Blanks)</label>
           <p>{page.count.count} selected values{page.count.pending ? `; ${page.count.pending} pending` : ''}; {page.count.complete ? 'complete universe' : 'universe incomplete'}.</p>
-          <button type="button" style={controlTarget} disabled={busy || query.offset === 0} onClick={() => refresh({ ...query, offset: Math.max(0, query.offset - 200) })}>Previous values</button><button type="button" style={controlTarget} disabled={busy || query.offset + 200 >= page.displayed} onClick={() => refresh({ ...query, offset: query.offset + 200 })}>Next values</button></>}
+          <button type="button" style={controlTarget} disabled={busy || query.offset === 0} onClick={() => refresh({ ...query, offset: Math.max(0, query.offset - 200) })}>Previous values</button><button type="button" style={controlTarget} disabled={busy || query.offset + 200 >= page.displayed} onClick={() => refresh({ ...query, offset: query.offset + 200 })}>Next values</button></>}</div>
       </> : <>
         <ConditionEditor value={first} onChange={setFirst} classification={classification} index={1} invalid={Boolean(validation)} />
         <label style={{ ...controlTarget, display: 'flex', alignItems: 'center' }}><input type="checkbox" aria-label="Use two conditions" checked={compound} onChange={event => setCompound(event.target.checked)} />Use two conditions</label>
@@ -139,8 +143,10 @@ export function FilterDropdown(props: FilterDropdownProps): ReactElement | null 
       </>}
       {periods.map(period => <p key={period}>{period}</p>)}
       {inspection && <pre>{inspection}</pre>}{validation && <p>{validation}</p>}{error && <p>{error}</p>}
-      {busy && <div role="progressbar" aria-label={progress}>{progress}</div>}
-      {!busy && (!page?.complete || error) && <button type="button" style={controlTarget} onClick={initialize}>Retry values</button>}
+      <div style={{ minHeight: controlTarget.minHeight }}>
+        {busy && <div role="progressbar" aria-label={progress}>{progress}</div>}
+        {!busy && (!page?.complete || error) && <button type="button" style={controlTarget} onClick={initialize}>Retry values</button>}
+      </div>
       <button type="submit" style={controlTarget} disabled={busy || !canApply || life.invalid}>OK</button><button type="button" style={controlTarget} onClick={() => life.cancel()}>Cancel</button>
     </form>
   </div>

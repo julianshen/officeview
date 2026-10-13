@@ -6,7 +6,7 @@
  *  - IntersectionObserver-based lazy rendering (only visible pages paint)
  *  - touch scrolling is native (overflow scroll), no custom gesture code needed
  */
-import { lazy, Suspense, useEffect, useMemo, useRef, useState, type CSSProperties, type ReactElement } from 'react'
+import { lazy, Suspense, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type ReactElement } from 'react'
 import { getPaintables, type PageSpec, type Paintable, type PaintableArray } from '../render/paint'
 import type { WatermarkOptions } from '../core/watermark'
 import type { FallbackFontsOptions } from '../core/fonts/fallback'
@@ -296,10 +296,14 @@ function LegacyOfficeDoc({
     return () => el.removeEventListener('wheel', suppressPageZoom)
   }, [])
 
-  useEffect(() => {
+  // Layout effect: the observer is disconnected inside the commit that removes
+  // the container, and a report for a detached container is ignored, so no
+  // update is queued for an unmounted document.
+  useLayoutEffect(() => {
     const el = containerRef.current
     if (!el) return
     const update = () => {
+      if (!el.isConnected) return
       setContainerWidth(el.clientWidth)
       setViewportHeight(el.clientHeight)
     }

@@ -8,6 +8,7 @@
  * this module; the watermark is stamped into the pane after the tiles.
  */
 import type { XlsxSheet } from '../../xlsx/types'
+import { TILE_CANVAS_BYTES, shapeCacheBytes } from '../../xlsx/view/mainLedger'
 import type { CacheIdentity, LogicalCellBox, LogicalViewport, ProfileId } from '../../xlsx/view/contracts'
 import type { RenderSheetAssets } from '../../xlsx/render'
 import { renderSheetViewport } from '../../xlsx/view/renderViewport'
@@ -110,6 +111,9 @@ export function createCanvasTile(): CanvasTile {
   }
 }
 
+/** A resumable prefetch batch (see SheetTileRenderer.prefetchSlice). */
+export interface PrefetchBatch { readonly frame: SheetFrame; readonly budget: FrameBudget; painted: number; records: number; done: boolean }
+
 export class SheetTileRenderer {
   readonly stats: SheetTileStats = { basePaints: 0, tileHits: 0, prefetched: 0, refused: 0, lastRequests: [], peakBitmapBytes: 0, frameRecords: 0, frameGridlines: 0, prefetchRecords: 0, maxTileRecords: 0, pendingTiles: 0 }
   readonly budgetBytes: number
@@ -176,24 +180,46 @@ export class SheetTileRenderer {
 
   /** Paint up to `limit` missing ring tiles (bounded adjacent prefetch). */
   prefetch(frame: SheetFrame, limit = Number.POSITIVE_INFINITY): number {
+    const batch = this.beginPrefetch(frame)
+    this.prefetchSlice(batch, () => false, limit)
+    return batch.painted
+  }
+  /** Prefetch is its own bounded batch with its own per-frame budget; a batch
+   * may be painted in slices (S10.2) and keeps that ONE budget across them. */
+  beginPrefetch(frame: SheetFrame): PrefetchBatch {
+    return { frame, budget: frameBudgetFor(this.profile), painted: 0, records: 0, done: false }
+  }
+  /** Paints ring tiles in order until the batch ends or `shouldYield` asks to
+   * pause (checked only after a tile painted in this slice, so every slice
+   * progresses). Returns true once the batch is done. */
+  prefetchSlice(batch: PrefetchBatch, shouldYield: () => boolean, limit = Number.POSITIVE_INFINITY): boolean {
+    if (batch.done) return true
+    const { frame } = batch
     const { visible, ring } = this.ranges(frame)
-    // Prefetch is its own bounded batch with its own per-frame budget.
-    const budget = frameBudgetFor(this.profile)
-    let painted = 0, records = 0
+    let paintedNow = 0
     for (const { col, row } of prefetchTiles(visible, ring)) {
-      if (painted >= limit) break
+      if (batch.painted >= limit) break
       if (this.cache.get(this.key(frame, col, row))) continue
-      const tile = this.tile(frame, col, row, false, budget)
-      records += tile.surface.cost?.records ?? 0
+      if (paintedNow > 0 && shouldYield()) { this.stats.prefetchRecords = batch.records; return false }
+      const tile = this.tile(frame, col, row, false, batch.budget)
+      batch.records += tile.surface.cost?.records ?? 0
+      paintedNow++
       if (!tile.retained) { tile.surface.close(); break }
-      painted++
+      batch.painted++
       this.stats.prefetched++
     }
-    this.stats.prefetchRecords = records
-    return painted
+    batch.done = true
+    this.stats.prefetchRecords = batch.records
+    return true
   }
 
   dispose(): void { this.cache.dispose() }
+  private shapeBytes = 0
+  /** S10.2 main ledger: main-heap memory a retained tile canvas holds outside
+   * its bitmap: the canvas element and its 2D context (TILE_CANVAS_BYTES) plus
+   * the browser's text-shaping cache for what it drew (see SHAPE_ENTRY_BYTES);
+   * released when the tile is closed. */
+  textCacheBytes(): number { return this.shapeBytes }
 
   private key(frame: SheetFrame, col: number, row: number): TileKey {
     return { identity: frame.identity, backend: TILE_BACKEND, zoom: frame.zoom, dpr: frame.dpr, col, row }
@@ -220,6 +246,9 @@ export class SheetTileRenderer {
     const full = budget.records >= frameBudgetFor(this.profile).records && budget.gridlines >= frameBudgetFor(this.profile).gridlines
     let kind: string = 'pending'
     let work = { records: 0, gridlines: 0 }
+    // Distinct texts this tile's context shapes: the browser keeps each one
+    // (per font) while the canvas lives, outside the bitmap.
+    const shaped = ctx ? countShapedTexts(ctx) : null
     if (ctx) {
       const scale = frame.zoom * frame.dpr
       ctx.setTransform(scale, 0, 0, scale, 0, 0)
@@ -243,8 +272,37 @@ export class SheetTileRenderer {
     if (kind === 'coarse' && !full) return { surface, retained: false }
     const retained = this.cache.put(key, surface)
     if (!retained) this.stats.refused++
+    else {
+      const bytes = TILE_CANVAS_BYTES + (shaped?.bytes ?? 0)
+      this.shapeBytes += bytes
+      const close = surface.close.bind(surface)
+      let open = true
+      surface.close = () => { if (open) { open = false; this.shapeBytes -= bytes } close() }
+    }
     return { surface, retained }
   }
+}
+
+/** Counts, per font, the distinct (direction, text) entries a context draws or
+ * measures from now on (the browser keeps one shaping cache per font a context
+ * used, keyed by text and direction), as estimated shaping bytes. */
+function countShapedTexts(ctx: CanvasRenderingContext2D): { readonly bytes: number } {
+  const fonts = new Map<string, { seen: Set<string>; units: number }>()
+  const out = { bytes: 0 }
+  const note = (text: string) => {
+    let font = fonts.get(ctx.font)
+    if (!font) fonts.set(ctx.font, font = { seen: new Set(), units: 0 })
+    const key = `${ctx.direction}\u0000${text}`
+    if (font.seen.has(key)) return
+    out.bytes -= shapeCacheBytes(font.seen.size, font.units)
+    font.seen.add(key)
+    font.units += text.length
+    out.bytes += shapeCacheBytes(font.seen.size, font.units)
+  }
+  const fillText = ctx.fillText.bind(ctx), measureText = ctx.measureText.bind(ctx)
+  ctx.fillText = (text: string, x: number, y: number, maxWidth?: number) => { note(text); if (maxWidth === undefined) fillText(text, x, y); else fillText(text, x, y, maxWidth) }
+  ctx.measureText = (text: string) => { note(text); return measureText(text) }
+  return out
 }
 
 /** Unknown records are loading, never blank (spec §§4.1, 10.4): a neutral tone
