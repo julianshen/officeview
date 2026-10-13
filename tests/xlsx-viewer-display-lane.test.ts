@@ -11,7 +11,10 @@ import * as render from '../src/xlsx/render'
 import { createWorkerFilterEvaluator } from '../src/worker/viewerFilterEvaluator'
 import { DisplayTextLaneCache, needsDisplayText } from '../src/worker/displayTextLane'
 import { DocumentSession, PREPARED_COLUMN_OVERHEAD, PREPARED_STRING_OVERHEAD, type FilterEvaluation } from '../src/worker/viewerSession'
-import { viewerControls } from '../src/components/xlsx/viewerControlsClient'
+import { createViewerControlResources, viewerControls, type ViewerControlResources } from '../src/components/xlsx/viewerControlsClient'
+import { MainMemoryLedger } from '../src/xlsx/view/mainLedger'
+import { ValueIndexCache } from '../src/xlsx/view/valueIndex'
+import type { FilterEvaluator } from '../src/worker/viewerSession'
 import { createObjectWorkbookSource } from '../src/xlsx/view/source'
 import { createIdentityOrder } from '../src/xlsx/view/order'
 import { createIntervalSet, visibilityFromHidden } from '../src/xlsx/view/visibility'
@@ -89,7 +92,7 @@ function bumpable(store: SourceStore): { store: SourceStore; bump(): void } {
   })
   return { store: proxy, bump: () => { gen++ } }
 }
-function controlsHarness(doc: XlsxDocument, lanes?: DisplayTextLaneCache) {
+function controlsHarness(doc: XlsxDocument, lanes?: DisplayTextLaneCache, resources?: ViewerControlResources) {
   const source = createObjectWorkbookSource(doc, 'doc-1')
   const order = createIdentityOrder()
   let view: SheetView = { sheetId: '1', revision: 0, order, baseHidden: createIntervalSet([]), visibility: visibilityFromHidden(createIntervalSet([])), sort: null, filter: null, selection: emptyGridSelection() }
@@ -103,7 +106,7 @@ function controlsHarness(doc: XlsxDocument, lanes?: DisplayTextLaneCache) {
     viewGen++
     return snapshot()
   }
-  return { source, snapshot, owner, view: () => view, open: () => viewerControls({ doc, source, sheetId: '1', snapshot, view: () => view, publish, ...(lanes ? { displayLanes: lanes } : {}) }, new AbortController().signal) }
+  return { source, snapshot, owner, view: () => view, open: () => viewerControls({ doc, source, sheetId: '1', snapshot, view: () => view, publish, ...(lanes ? { displayLanes: lanes } : {}), ...(resources ? { resources } : {}) }, new AbortController().signal) }
 }
 
 beforeEach(() => { displayCalls.mockClear() })
@@ -352,5 +355,116 @@ describe('S13.5 formatted display-text lane is prepared on demand', () => {
       }
     }
     expect(compared).toBe(3 * rules.length)
+  })
+
+  describe('one prepared-column budget for display lanes and prepared columns (worker)', () => {
+    const textSpec = spec(2, text('contains', '2'))
+    const signal = () => new AbortController().signal
+    // A long literal format makes the lane larger than a prepared column's
+    // staging peak, so "one fits, both do not" is reachable on a small sheet.
+    const formatting: WorkbookFormatting = { dateSystem: '1900', styles: styles.map((style, i) => i === 0 ? { numFmtId: 0, formatCode: `"${'w'.repeat(2000)}"0` } : style) }
+    /** Bytes of one prepared column 0 and of the column-2 lane, measured alone. */
+    async function sizes() {
+      const probe = new DocumentSession('probe', createObjectWorkbookSource(makeDoc(), 'probe'), { filterEvaluator: createWorkerFilterEvaluator(() => new Map(), formatting) })
+      expect(await probe.prepareColumns(probe.identity('1'), [0], signal())).toEqual({ kind: 'complete' })
+      const column = probe.preparedStats().bytes
+      await probe.release()
+      const lanes = new DisplayTextLaneCache()
+      const other = new DocumentSession('probe2', createObjectWorkbookSource(makeDoc(), 'probe2'), { filterEvaluator: createWorkerFilterEvaluator(() => new Map(), formatting, 'en-US', { lanes }) })
+      expect((await other.filter(other.identity('1'), textSpec, nowMs, signal())).kind).toBe('committed')
+      const lane = lanes.bytes
+      await other.release()
+      return { column, lane }
+    }
+
+    it('lane bytes are counted in the session prepared counter and released with the lane', async () => {
+      const lanes = new DisplayTextLaneCache()
+      const session = new DocumentSession('doc-1', createObjectWorkbookSource(makeDoc(), 'doc-1'), { filterEvaluator: createWorkerFilterEvaluator(() => new Map(), formatting, 'en-US', { lanes }) })
+      expect((await session.filter(session.identity('1'), textSpec, nowMs, signal())).kind).toBe('committed')
+      expect(lanes.bytes).toBeGreaterThan(0)
+      expect(session.preparedStats()).toEqual({ columns: 0, bytes: lanes.bytes })
+      expect(session.memoryStats().preparedBytes).toBe(lanes.bytes)
+      lanes.invalidate()
+      expect(session.preparedStats().bytes).toBe(0)
+      await session.release()
+    })
+
+    it('a lane evicts the least recently used prepared column when both cannot fit, and vice versa', async () => {
+      const { column, lane } = await sizes()
+      const lanes = new DisplayTextLaneCache()
+      const session = new DocumentSession('doc-1', createObjectWorkbookSource(makeDoc(), 'doc-1'), {
+        preparedBudget: { maxColumns: 8, maxBytes: column + lane - 1 },
+        filterEvaluator: createWorkerFilterEvaluator(() => new Map(), formatting, 'en-US', { lanes }),
+      })
+      expect(await session.prepareColumns(session.identity('1'), [0], signal())).toEqual({ kind: 'complete' })
+      expect(session.preparedStats()).toEqual({ columns: 1, bytes: column })
+      // The lane needs room: the idle prepared column is evicted for it.
+      expect((await session.filter(session.identity('1'), textSpec, nowMs, signal())).kind).toBe('committed')
+      expect(session.preparedStats()).toEqual({ columns: 0, bytes: lane })
+      expect(lanes.size).toBe(1)
+      // Preparing the column again evicts the idle lane.
+      expect(await session.prepareColumns(session.identity('1'), [0], signal())).toEqual({ kind: 'complete' })
+      expect(session.preparedStats()).toEqual({ columns: 1, bytes: column })
+      expect(lanes.size).toBe(0)
+      expect(lanes.bytes).toBe(0)
+      await session.release()
+    })
+
+    it('a leased lane is never evicted: preparation refuses with quota and keeps the lane', async () => {
+      const { column, lane } = await sizes()
+      const lanes = new DisplayTextLaneCache()
+      let held: { release(): void } | undefined
+      // An evaluator that keeps its lane leased after the filter returns.
+      const inner = createWorkerFilterEvaluator(() => new Map(), formatting, 'en-US', { lanes })
+      const holding: FilterEvaluator = async input => {
+        const result = await inner(input)
+        held = await lanes.lease({ ...input.store.stamp, styleOwner: formatting, col: 2, r0: 1, r1: N }, async () => { throw new Error('must be a hit') }, input.displayLanes)
+        return result
+      }
+      const session = new DocumentSession('doc-1', createObjectWorkbookSource(makeDoc(), 'doc-1'), { preparedBudget: { maxColumns: 8, maxBytes: column + lane - 1 }, filterEvaluator: holding })
+      expect((await session.filter(session.identity('1'), textSpec, nowMs, signal())).kind).toBe('committed')
+      expect(held).toBeDefined()
+      expect(await session.prepareColumns(session.identity('1'), [0], signal())).toMatchObject({ kind: 'quota', limitBytes: column + lane - 1 })
+      expect(lanes.size).toBe(1)
+      expect(session.preparedStats()).toEqual({ columns: 0, bytes: lane })
+      held!.release()
+      expect(await session.prepareColumns(session.identity('1'), [0], signal())).toEqual({ kind: 'complete' })
+      expect(lanes.size).toBe(0)
+      await session.release()
+    })
+  })
+
+  describe('main-thread lane charges the controls share of the main ledger', () => {
+    it('charges the controls pool while retained and releases it on dispose', async () => {
+      const ledger = new MainMemoryLedger()
+      const resources = createViewerControlResources('D', bytes => ledger.set('controls', 'resources', bytes))
+      const harness = controlsHarness(makeDoc(), undefined, resources)
+      const controls = await harness.open()
+      const before = ledger.snapshot().byPool.controls
+      expect((await controls.client.filter(harness.owner(), spec(2, text('contains', '2')), new AbortController().signal)).kind).toBe('committed')
+      const lane = PREPARED_COLUMN_OVERHEAD + N * 4
+      expect(ledger.snapshot().byPool.controls - before).toBeGreaterThan(lane)
+      expect(resources.cache.usedBytes).toBe(ledger.snapshot().byPool.controls)
+      // The cap is the controls caches' share, not the main budget: 16 MiB on D, 8 MiB on M.
+      expect(resources.cache.limitBytes).toBe(16 * 1024 * 1024)
+      expect(createViewerControlResources('M').cache.limitBytes).toBe(8 * 1024 * 1024)
+      controls.dispose()
+      expect(ledger.snapshot().byPool.controls).toBe(before)
+      resources.dispose()
+    })
+
+    it('a lane that exceeds the controls share is a typed resource-limit refusal and charges nothing', async () => {
+      const ledger = new MainMemoryLedger()
+      const base = createViewerControlResources('D')
+      const resources: ViewerControlResources = { ...base, cache: new ValueIndexCache({ limitBytes: PREPARED_COLUMN_OVERHEAD + 8, onUsage: bytes => ledger.set('controls', 'resources', bytes) }) }
+      const harness = controlsHarness(makeDoc(), undefined, resources)
+      const controls = await harness.open()
+      const outcome = await controls.client.filter(harness.owner(), spec(2, text('contains', '2')), new AbortController().signal)
+      expect(outcome).toMatchObject({ kind: 'refused', refusal: { reason: 'resource-limit' } })
+      expect(ledger.snapshot().byPool.controls).toBe(0)
+      expect(displayCalls).not.toHaveBeenCalled()
+      controls.dispose()
+      base.dispose()
+    })
   })
 })
