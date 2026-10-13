@@ -426,3 +426,75 @@ describe('codex r3 #2: a lane a real reader holds stays charged through session 
     expect(lanes.bytes).toBe(0)
   })
 })
+
+describe('codex r4 #1: an idle retained lane counts against raw staging (no leased overrun via a cache hit)', () => {
+  /** Pauses the first raw read of column 3 and, once armed, the matching col-4 lanes read of a filter. */
+  function twoGates(doc: XlsxDocument) {
+    const original = createObjectWorkbookSource(doc, 'd'), target = original.store('s')
+    const raw = gate(), matching = gate()
+    let armed = false
+    const store = new Proxy(target, {
+      get(t, prop) {
+        if (prop === 'queryColumn') {
+          return async (query: ColumnQuery, options: never) => {
+            if (armed && !matching.held && query.col === 4 && query.encoding === 'lanes') await matching.hold()
+            if (!raw.held && query.col === 3 && query.encoding !== 'lanes') await raw.hold()
+            return t.queryColumn(query, options)
+          }
+        }
+        const value = Reflect.get(t, prop)
+        return typeof value === 'function' ? value.bind(t) : value
+      },
+    })
+    return { source: { ...original, store: () => store } as WorkbookSource, raw, matching, arm: () => { armed = true } }
+  }
+
+  it('raw staging beside an idle lane evicts it first: live lane plus staging bytes and slots stay within the budget (idle-staging repro)', async () => {
+    const limit = 8192
+    const { source, raw } = twoGates(makeDoc())
+    const lanes = new DisplayTextLaneCache()
+    const s = session(source, { maxColumns: 4, maxBytes: limit }, lanes)
+    expect((await s.filter(s.identity('s'), textSpec, 0, signal())).kind).toBe('committed')
+    expect(lanes.bytes).toBe(LANE)
+    const prep = s.prepareColumns(s.identity('s'), [0, 1, 2, 3], signal())
+    await raw.reached
+    const staged = s.memoryStats().transientBytes
+    expect(staged).toBe(3 * RAW_COLUMN + PREPARED_COLUMN_OVERHEAD)
+    expect(staged + lanes.bytes).toBeLessThanOrEqual(limit)
+    // Four staging columns already fill maxColumns: no retained lane beside them.
+    expect(lanes.size).toBe(0)
+    expect(s.preparedStats()).toEqual({ columns: 0, bytes: 0 })
+    raw.open()
+    expect(await prep).toEqual({ kind: 'complete' })
+    expect(s.preparedStats()).toEqual({ columns: 4, bytes: 4 * RAW_COLUMN })
+    await s.release()
+  })
+
+  it('the same text filter re-applied mid-staging cannot lease the formerly idle lane past the budget (cache-hit repro)', async () => {
+    const limit = 8192
+    const { source, raw, matching, arm } = twoGates(makeDoc())
+    const lanes = new DisplayTextLaneCache()
+    const s = session(source, { maxColumns: 4, maxBytes: limit }, lanes)
+    const controller = new AbortController()
+    expect((await s.filter(s.identity('s'), textSpec, 0, controller.signal)).kind).toBe('committed')
+    const prep = s.prepareColumns(s.identity('s'), [0, 1, 2, 3], controller.signal)
+    await raw.reached
+    const staged = s.memoryStats().transientBytes
+    arm()
+    const filtering = s.filter(s.identity('s'), textSpec, 0, controller.signal)
+    // Either the filter reaches its matching read holding a lane lease, or it ends first.
+    const ended = await Promise.race([matching.reached.then(() => null), filtering])
+    expect(staged + lanes.bytes).toBeLessThanOrEqual(limit)
+    expect(lanes.size + 4).toBeLessThanOrEqual(4)
+    if (ended) expect(ended.kind).not.toBe('committed')
+    matching.open()
+    raw.open()
+    expect(await prep).toEqual({ kind: 'complete' })
+    await filtering
+    // Afterwards the lane is rebuilt by evicting idle raw columns: same result as before.
+    const again = await s.filter(s.identity('s'), textSpec, 0, signal())
+    expect(again.kind).toBe('committed')
+    expect(s.preparedStats().bytes).toBeLessThanOrEqual(limit)
+    await s.release()
+  })
+})

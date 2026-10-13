@@ -1208,7 +1208,10 @@ export class DocumentSession {
     // Staging `bytes` in `columns` dense lanes must fit beside what this batch
     // cannot evict, re-read at every step: this batch's resident columns,
     // pinned columns, and leased, retired-but-leased or building display lanes
-    // (a lane admitted while this batch runs bounds the rest of it).
+    // (a lane admitted while this batch runs bounds the rest of it). Idle
+    // columns and unleased lanes are evicted (LRU) before the staging grows, so
+    // retained plus staged bytes and slots never pass the budget: a later cache
+    // hit pins an entry that already fits beside the staging.
     const stage = (bytes: number, columns: number): PrepareOutcome | null => {
       const floor = this.unevictablePrepared(keep)
       if (floor.bytes + bytes > budget.maxBytes) return quota(floor.bytes + bytes)
@@ -1217,6 +1220,8 @@ export class DocumentSession {
       }
       this.preparedStaging = bytes
       this.preparedStagingColumns = columns
+      // The floor fits, so evicting every idle entry would do: this cannot fail.
+      if (!this.makePreparedRoom(0, keep)) return quota(this.preparedBytes + bytes)
       return null
     }
     for (let i = 0; i < batch.length; i++) {
