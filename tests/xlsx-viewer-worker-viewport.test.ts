@@ -354,10 +354,12 @@ describe('WorkerViewportPlans: owner scope and retry (MINOR-2, MINOR-3)', () => 
     const h = await harness()
     const plans = new WorkerViewportPlans(h.remote)
     const owner = h.session.identity('s'), window = windowOf(), extent = extentOf(metricsOf(h))
+    let retryWindow = window
+    const reorderedWindow = { ...window, box: { height: window.box.height, width: window.box.width, y: window.box.y, x: window.box.x } }
     const timeout = { kind: 'cancelled', diagnostics: [{ code: 'query-timeout', message: 'Query timed out after 120 seconds' }] } as never
     const spy = vi.spyOn(h.remote, 'viewport').mockResolvedValue(timeout)
     // A repaint is a new frame: it begins the frame, then asks for the tile.
-    const repaint = vi.fn(() => { plans.beginFrame(owner, window); plans.get(owner, window, extent, true) })
+    const repaint = vi.fn(() => { plans.beginFrame(owner, retryWindow); plans.get(owner, retryWindow, extent, true) })
     const unsubscribe = h.remote.subscribe(repaint)
     vi.useFakeTimers()
     try {
@@ -367,6 +369,7 @@ describe('WorkerViewportPlans: owner scope and retry (MINOR-2, MINOR-3)', () => 
       expect(spy).toHaveBeenCalledTimes(1)
       // The tile stays on screen with nothing else repainting it: the expiry
       // itself drives the retry.
+      retryWindow = reorderedWindow
       await vi.advanceTimersByTimeAsync(PLAN_RETRY_MS - 1)
       expect(spy).toHaveBeenCalledTimes(1)
       await vi.advanceTimersByTimeAsync(1)
@@ -384,6 +387,27 @@ describe('WorkerViewportPlans: owner scope and retry (MINOR-2, MINOR-3)', () => 
       await vi.advanceTimersByTimeAsync(PLAN_RETRY_MAX_MS * 4)
       expect(spy).toHaveBeenCalledTimes(4)
     } finally { vi.useRealTimers(); unsubscribe(); spy.mockRestore(); plans.dispose(); await h.remote.release() }
+  })
+
+  it('reuses and releases finished plans through equal boxes with reordered properties', async () => {
+    const h = await harness()
+    const plans = new WorkerViewportPlans(h.remote)
+    const owner = h.session.identity('s'), window = windowOf(), extent = extentOf(metricsOf(h))
+    const reordered = { ...window, box: { height: window.box.height, width: window.box.width, y: window.box.y, x: window.box.x } }
+    const spy = vi.spyOn(h.remote, 'viewport').mockResolvedValue(complete)
+    try {
+      plans.get(owner, window, extent, true)
+      await new Promise(resolve => setTimeout(resolve, 0))
+      plans.beginFrame(owner, window)
+      expect(plans.get(owner, reordered, extent, true).kind, 'reordered equal boxes reuse the settled plan').toBe('detail')
+      expect(spy).toHaveBeenCalledTimes(1)
+
+      plans.release(owner, reordered)
+      plans.beginFrame(owner, window)
+      plans.get(owner, reordered, extent, true)
+      await new Promise(resolve => setTimeout(resolve, 0))
+      expect(spy, 'release through a reordered box removes the cached entry').toHaveBeenCalledTimes(2)
+    } finally { spy.mockRestore(); plans.dispose(); await h.remote.release() }
   })
 
   it('r3 #4: a partial result with a retryable page error backs off like a failure; a loading snapshot refreshes at 100 ms', async () => {

@@ -48,8 +48,8 @@ export class WorkerViewportPlans {
     const box = { x: window.box.x - reach, y: window.box.y - reach, width: window.box.width + 2 * reach, height: window.box.height + 2 * reach }
     for (const [key, entry] of [...this.entries]) {
       if (entry.plan?.kind === 'detail' && !entry.plan.pending?.length && !entry.timer || entry.plan?.kind === 'coarse') continue
-      const tile = JSON.parse(key) as LogicalViewport['box']
-      if (tile.x >= box.x + box.width || tile.x + tile.width <= box.x || tile.y >= box.y + box.height || tile.y + tile.height <= box.y) {
+      const [, x, y, width, height] = JSON.parse(key) as [string, number, number, number, number]
+      if (x >= box.x + box.width || x + width <= box.x || y >= box.y + box.height || y + height <= box.y) {
         this.drop(key, entry)
         this.failures.delete(key)
       }
@@ -65,14 +65,14 @@ export class WorkerViewportPlans {
   release(owner: CacheIdentity, window: LogicalViewport): void {
     if (this.closed) return
     this.select(owner, window)
-    const key = JSON.stringify(window.box), entry = this.entries.get(key)
+    const key = pageTileKey(owner.sheetId, window.box), entry = this.entries.get(key)
     if (entry) this.drop(key, entry)
     this.failures.delete(key)
   }
   get(owner: CacheIdentity, window: LogicalViewport, extent: { width: number; height: number }, visible: boolean): ViewportPlan {
     if (this.closed || this.remote.isClosed) return pending()
     const scope = this.select(owner, window)
-    const key = JSON.stringify(window.box), existing = this.entries.get(key)
+    const key = pageTileKey(owner.sheetId, window.box), existing = this.entries.get(key)
     if (existing) { this.entries.delete(key); this.entries.set(key, existing); return existing.plan ?? pending() }
     // The worker may spend up to the per-tile page cap on this plan, so it
     // needs the tile's whole unspent allowance in this frame (a tile whose rows
