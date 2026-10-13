@@ -936,25 +936,31 @@ not go in that lane. `PageBuilder.add` *spills* it:
   identically). Cells, rows, scans, column lanes (value index and filters), find, copy and worker reads therefore see the same
   raw UTF-16 value, lone surrogates included.
 
-**Crash orphans.** A process that dies between a blob write and its page write (or at any other point) leaves records that no
-live index references. They are removed in two places:
+**Crash orphans and owner exclusion.** A process that dies between a blob write and its page write (or at any other point)
+leaves records that no live index references.
 
-- **At session start, across owners** (`sweepLeftoverPages`, once per process from `openImportSession`). This follows the
-  spool sweep's owner-lifetime rule. A page-storage owner is named `${docId}-${creation time in base 36}` (`pageOwner`).
-  OPFS files and IndexedDB databases whose owner is older than 24 h are removed, except an owner this process holds.
-  Fresh owners (possibly another tab's), foreign names and unparseable owners are left alone.
-- **At store open, within the owner** (`SourcePageStore.sweepUnreferenced`, run before the import's first write). The store
-  deletes every key its backend lists for the owner that the committed index does not reference. That covers pages not in
-  the index, blob ids at or beyond the store's counter or rolled back, and shared-string chunks never committed. Writes in
-  flight are never touched.
+- **Owners.** A page-storage owner is `${docId}-${creation time in base 36}.${64 random bits}` (`pageOwner`). The random
+  part makes two opens of one docId in the same millisecond use different storage.
+- **Web Locks.** An OPFS/IndexedDB owner's exclusive Web Lock (`navigator.locks`, `${PAGE_PREFIX}lock-${owner}`, held
+  through `OwnerLocks`) is acquired before the first write and released only after the store's storage is removed. The
+  lock is origin-wide, so it holds across tabs, workers and the main thread.
+- **At session start, across owners** (`sweepLeftoverPages`, once per process). It considers owners older than 24 h (an extra
+  guard) and deletes one only while holding that owner's lock itself (`ifAvailable`). A live tab or worker never lets it
+  have that lock, whatever the owner's age or clock adjustments. **Without Web Locks no other owner is ever swept**: no owner
+  can be proven dead, so leftovers stay until a browser with Web Locks sweeps them.
+- **At store open, within the owner** (`SourcePageStore.sweepUnreferenced`). It runs only when the store exclusively holds
+  the owner: its lock, or a memory backend, which is private to the realm. It deletes keys the committed index does not
+  reference. Keys are namespaced unambiguously (`page/<sheet>/<page>` with `/` and `%` escaped, `blob/<id>`, `sst/<chunk>`),
+  so a sheet named `sst` or `blob` is never mistaken for another namespace. Writes in flight are never touched.
+- **Bounds and failure.** At most 4,096 entries are examined per backend, counting every directory entry, not just owner
+  matches. Listing and deletion are cancellable and best effort. A listing failure skips cleanup with a
+  `storage-cleanup-skipped` diagnostic and never fails the import. The listing is a transient charge; nothing removed was
+  charged, so ledger and storage agree afterwards.
 
-Both sweeps are bounded: at most 4,096 entries examined per backend, and a store listing at most 4,096 keys. Both are
-cancellable between entries and best effort: a failed or blocked removal waits for the next sweep, and an IndexedDB delete
-that is blocked is never waited on. They charge nothing they keep. The key listing is a transient construction share released
-at the end, and the removed records were never charged to the new ledger, so ledger and storage agree afterwards.
-
-What this does not cover: a crashed session's owner younger than 24 h survives until a later session sweeps it. The 24 h rule
-is how the sweep avoids deleting another live tab's storage.
+**Decoded cache entries.** A decoded page or chunk is charged a fixed object overhead even when its bytes view a buffer a
+memory backend already holds and charges: 2,048 B per page and 1,280 B per chunk, covering the payload object, typed-array
+views, metadata Map, resident record and pool entry. The probe's `decoded-pages`/`decoded-chunks` cases pin these. The pool's
+byte bound therefore also bounds the number of entries.
 
 **Units.** The spill threshold is in stored bytes. Admission (`admission.ts` `checkCaps`) compares the same field to the
 longest string's *character* count to route a file to the object or the paged path. That routing is unchanged: a string between
@@ -985,7 +991,7 @@ follow §4.3.5 (integer ids, chunked paged payloads, bounded decoded LRU); §4.3
   |---|---|
   | Builder record | 96 B, plus 48 B per non-empty inline or spilled string and 2 B per code unit, plus 192 B and 2 B per JSON character per formula-meta object |
   | Built page waiting for commit | `payloadBytes` (lanes plus the same formula-meta charge) plus its spilled values |
-  | Encode scratch | the exact buffer plus the meta JSON, sized with `jsonLength` (no allocation) and charged before either exists |
+  | Encode scratch | the exact buffer plus the meta JSON, sized with `jsonLength` from the metadata as it is at encode time (no cached length; no allocation) and charged before either exists |
   | Pending shared string | 2 B per code unit plus 64 B |
   | Page summary | 256 B |
 
