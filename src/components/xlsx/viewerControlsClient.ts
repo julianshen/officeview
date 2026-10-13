@@ -269,7 +269,9 @@ export async function viewerControls(options: ViewerControlsOptions, signal: Abo
   return { client, dispose() {
     classifications.clear()
     if (options.displayLanes) lanes.invalidate(key => key.sheetId === sheetId)
-    else { lanes.close(); laneAccount?.close() }
+    // A lane still read by an in-flight filter keeps its controls charge until
+    // that reader exits; the account closes once the cache is drained.
+    else lanes.close(() => laneAccount?.close())
     cache.invalidate(identity => identity.sheetId === sheetId)
     if (!options.resources) resources.dispose()
   } }

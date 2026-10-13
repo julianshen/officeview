@@ -217,9 +217,10 @@ export type FilterEvaluator = (input: {
 }) => Promise<FilterEvaluation>
 export interface PreparedBudget { maxColumns: number; maxBytes: number }
 export interface DisplayLaneAdmissionPort {
-  /** Throws ValueIndexError('quota') and changes nothing when the bytes cannot fit. */
-  budget: { reserve(bytes: number): void; release(bytes: number): void }
-  /** Moves a completed lane's reserved bytes onto a pool entry (its uncharge point). */
+  /** Throws ValueIndexError('quota') and changes nothing when the bytes (or a
+   * dense-lane slot under maxColumns) cannot fit. */
+  budget: { reserve(bytes: number): void; release(bytes: number): void; acquireSlot(): void; releaseSlot(): void }
+  /** Moves a completed lane's reserved bytes and slot onto a pool entry (its uncharge point). */
   retain(key: string, bytes: number, onRelease: () => void): { release(): void; pin(): () => void } | null
 }
 /** A retained display-text lane in the prepared working set (S13.5). */
@@ -684,6 +685,8 @@ export class DocumentSession {
   /** Lane bytes under construction, also held in the transient laneShare. */
   private displayLaneBuilding = 0
   private laneShare: PoolCharge | null = null
+  /** Lane builds in progress; each holds one maxColumns slot (retained lanes hold theirs in displayLanes). */
+  private displayLaneBuildSlots = 0
   private readonly displayLanes = new Map<string, DisplayLaneRecord>()
   /** Shared recency of prepared columns and lanes (eviction order). */
   private useClock = 0
@@ -1261,26 +1264,20 @@ export class DocumentSession {
     if (signal.aborted) return { kind: 'cancelled' }
     if (!this.isCurrent(owner)) return { kind: 'stale' }
     const keep = new Set(keys)
-    let minimumColumns = this.prepared.size + staged.length, minimumBytes = this.preparedBytes + stagedBytes
+    let minimumColumns = this.prepared.size + staged.length + this.laneSlots(), minimumBytes = this.preparedBytes + stagedBytes
     for (const [key, column] of this.prepared) {
       if (keep.has(key) || this.preparedPins.has(key)) continue
       minimumColumns--
       minimumBytes -= column.bytes
     }
-    for (const lane of this.displayLanes.values()) if (lane.pins === 0) minimumBytes -= lane.bytes
+    for (const lane of this.displayLanes.values()) if (lane.pins === 0) { minimumColumns--; minimumBytes -= lane.bytes }
     // Refuse impossible admission before discarding useful idle columns.
     if (minimumColumns > budget.maxColumns || minimumBytes > budget.maxBytes) {
       return { kind: 'quota', limitBytes: budget.maxBytes, requiredBytes: minimumBytes, diagnostics: [{ code: 'prepared-column-limit', message: 'Prepared readers pin the working set' }] }
     }
-    // Evict least-recently-used columns outside this batch until the column
-    // count fits, then columns or display lanes by shared recency until the
-    // bytes fit (lanes are not columns: they never count against maxColumns).
-    for (const [key] of [...this.prepared]) {
-      if (this.prepared.size + staged.length <= budget.maxColumns) break
-      if (keep.has(key) || this.preparedPins.has(key)) continue
-      this.dropPrepared(key)
-    }
-    if (!this.makePreparedRoom(stagedBytes, keep)) {
+    // Evict columns outside this batch or display lanes, least recently used
+    // first across both, until the bytes and the dense-lane count fit.
+    if (!this.makePreparedRoom(stagedBytes, keep, staged.length)) {
       return { kind: 'quota', limitBytes: budget.maxBytes, requiredBytes: this.preparedBytes + stagedBytes, diagnostics: [{ code: 'prepared-column-limit', message: 'Prepared readers pin the working set' }] }
     }
     for (const key of keys) {
@@ -1319,17 +1316,24 @@ export class DocumentSession {
     for (const lane of this.displayLanes.values()) if (lane.pins === 0) bytes -= lane.bytes
     return bytes
   }
-  /** Makes `bytes` more fit the prepared budget by evicting unpinned columns
-   * (outside `keep`) and unleased lanes, least recently used first across both
-   * kinds. Evicts nothing and returns false when even all of them would not do. */
-  private makePreparedRoom(bytes: number, keep: ReadonlySet<string>): boolean {
-    const limit = this.budget.maxBytes
-    if (this.preparedBytes + bytes <= limit) return true
-    let evictable = 0
-    for (const [key, column] of this.prepared) if (!keep.has(key) && !this.preparedPins.has(key)) evictable += column.bytes
-    for (const lane of this.displayLanes.values()) if (lane.pins === 0) evictable += lane.bytes
-    if (this.preparedBytes - evictable + bytes > limit) return false
-    while (this.preparedBytes + bytes > limit) {
+  /** Dense lanes held against maxColumns besides prepared columns: retained
+   * (including retired-but-leased) display lanes and lane builds in progress. */
+  private laneSlots(): number {
+    return this.displayLanes.size + this.displayLaneBuildSlots
+  }
+  /** Makes `bytes` and `columns` more dense lanes fit the prepared budget
+   * (maxBytes and maxColumns) by evicting unpinned columns (outside `keep`) and
+   * unleased display lanes, least recently used first across both kinds.
+   * Evicts nothing and returns false when even all of them would not do. */
+  private makePreparedRoom(bytes: number, keep: ReadonlySet<string>, columns = 0): boolean {
+    const limit = this.budget.maxBytes, maxColumns = this.budget.maxColumns
+    const fits = () => this.preparedBytes + bytes <= limit && this.prepared.size + this.laneSlots() + columns <= maxColumns
+    if (fits()) return true
+    let evictable = 0, evictableCount = 0
+    for (const [key, column] of this.prepared) if (!keep.has(key) && !this.preparedPins.has(key)) { evictable += column.bytes; evictableCount++ }
+    for (const lane of this.displayLanes.values()) if (lane.pins === 0) { evictable += lane.bytes; evictableCount++ }
+    if (this.preparedBytes - evictable + bytes > limit || this.prepared.size + this.laneSlots() - evictableCount + columns > maxColumns) return false
+    while (!fits()) {
       let oldest: { used: number; drop: () => void } | null = null
       for (const [key] of this.prepared) {
         if (keep.has(key) || this.preparedPins.has(key)) continue
@@ -1375,11 +1379,21 @@ export class DocumentSession {
           this.preparedBytes -= bytes
           share().set(this.displayLaneBuilding)
         },
+        acquireSlot: () => {
+          if (this.closed) throw new ValueIndexError('cancelled', 'Session closed')
+          if (!this.makePreparedRoom(0, new Set(), 1)) {
+            throw new ValueIndexError('quota', `Formatted display text needs a prepared-column slot, but ${this.budget.maxColumns} are pinned; retry when the running operation ends.`,
+              { resource: 'memory', limitBytes: this.budget.maxBytes })
+          }
+          this.displayLaneBuildSlots++
+        },
+        releaseSlot: () => { if (!this.closed) this.displayLaneBuildSlots-- },
       },
       retain: (key, bytes, onRelease) => {
         if (this.closed) return null
         const id = JSON.stringify(['display-lane', key])
-        // The transient share shrinks first so the retained entry can take its room.
+        // The transient share shrinks first so the retained entry can take its
+        // room; the build's slot moves to the retained record below.
         this.displayLaneBuilding -= bytes
         share().set(this.displayLaneBuilding)
         let live = true
@@ -1401,6 +1415,7 @@ export class DocumentSession {
         }
         const record: DisplayLaneRecord = { bytes, pins: 0, used: ++this.useClock, evict: () => { forget(); entry.release(); onRelease() } }
         this.displayLanes.set(id, record)
+        this.displayLaneBuildSlots--
         return {
           release: () => { forget(); entry.release() },
           pin: () => {
@@ -1995,6 +2010,7 @@ export class DocumentSession {
     this.preparedBytes = 0
     this.displayLaneBytes = 0
     this.displayLaneBuilding = 0
+    this.displayLaneBuildSlots = 0
     this.laneShare?.release()
     this.laneShare = null
     this.structures.clear()

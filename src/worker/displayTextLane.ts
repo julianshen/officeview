@@ -36,8 +36,16 @@ export interface DisplayLaneKey { docId: string; sheetId: string; valueGen: numb
 /** Formatted text by body offset (row - r0); undefined for text/blank/error cells. */
 export interface DisplayTextLane { readonly bytes: number; text(offset: number): string | undefined }
 export interface DisplayLaneSink { add(offset: number, text: string): void }
-/** Byte admission: `reserve` throws ValueIndexError('quota') and changes nothing when the bytes cannot fit. */
-export interface DisplayLaneBudget { reserve(bytes: number): void; release(bytes: number): void }
+/** Byte admission: `reserve` throws ValueIndexError('quota') and changes nothing
+ * when the bytes cannot fit. A budget that also bounds dense lanes by count
+ * (the worker's prepared maxColumns) takes one slot per build before any byte,
+ * kept by the retained lane; `releaseSlot` returns an unretained build's slot. */
+export interface DisplayLaneBudget {
+  reserve(bytes: number): void
+  release(bytes: number): void
+  acquireSlot?(): void
+  releaseSlot?(): void
+}
 /** A retained outer-pool entry; `pin` shields it from eviction while leased. */
 export interface DisplayLanePoolEntry { release(): void; pin?(): () => void }
 /** Retains a completed lane under `key` and takes over the charge of its
@@ -67,6 +75,8 @@ interface Entry {
   pins: number
   budget: DisplayLaneBudget
   pooled?: DisplayLanePoolEntry
+  /** Dropped from lookup while leased: still charged until the last lease ends. */
+  retired: boolean
 }
 
 /** A fixed-size ledger for standalone use (tests, embedders without a budget). */
@@ -94,9 +104,10 @@ export class DisplayTextLaneCache {
   private readonly styleIds = new WeakMap<object, number>()
   private nextStyleId = 1
   private readonly own: DisplayLaneBudget
-  /** Charged bytes of retained lanes plus builds in progress. */
+  /** Charged bytes of retained and retired-but-leased lanes plus builds in progress. */
   private held = 0
   private closed = false
+  private drained: (() => void) | null = null
 
   constructor(options: { limitBytes?: number; budget?: DisplayLaneBudget } = {}) {
     this.limitBytes = options.limitBytes ?? PREPARED_BUDGETS.D.maxBytes
@@ -124,7 +135,7 @@ export class DisplayTextLaneCache {
     const budget = admission.budget ?? this.own
     // A session budget evicts across prepared columns and lanes itself.
     const evictsOwn = admission.budget === undefined
-    let building = 0, committed = false
+    let building = 0, committed = false, slot = false
     const reserve = (bytes: number) => {
       for (;;) {
         try { budget.reserve(bytes); break } catch (error) {
@@ -135,6 +146,9 @@ export class DisplayTextLaneCache {
       building += bytes
     }
     try {
+      budget.acquireSlot?.()
+      slot = budget.acquireSlot !== undefined
+      // The IDs are admitted before they are allocated (and before any fill).
       reserve(PREPARED_COLUMN_OVERHEAD + count * DISPLAY_LANE_SLOT_BYTES)
       const ids = new Uint32Array(count)
       const strings: string[] = ['']
@@ -159,7 +173,7 @@ export class DisplayTextLaneCache {
       if (raced) return this.pin(raced)
       const bytes = building
       const lane: DisplayTextLane = { bytes, text: offset => { const index = ids[offset]; return index ? strings[index] : undefined } }
-      const entry: Entry = { key: { ...key }, lane, bytes, pins: 0, budget }
+      const entry: Entry = { key: { ...key }, lane, bytes, pins: 0, budget, retired: false }
       if (admission.retain) {
         const pooled = admission.retain(id, bytes, () => this.drop(id))
         if (!pooled) throw new ValueIndexError('quota', 'The worker memory budget cannot retain the formatted display text.', { resource: 'memory', requiredBytes: bytes })
@@ -173,6 +187,8 @@ export class DisplayTextLaneCache {
       if (!committed) {
         this.held -= building
         budget.release(building)
+        if (slot) budget.releaseSlot?.()
+        this.checkDrained()
       }
     }
   }
@@ -181,9 +197,19 @@ export class DisplayTextLaneCache {
   invalidate(predicate?: (key: DisplayLaneKey) => boolean): void {
     for (const [id, entry] of [...this.entries]) if (!predicate || predicate(entry.key)) this.drop(id)
   }
-  close(): void {
-    this.invalidate()
+  /** Drops every lane and refuses new ones. A lane still leased stays charged
+   * until its last lease ends; `onDrained` runs once nothing is charged. */
+  close(onDrained?: () => void): void {
     this.closed = true
+    this.drained = onDrained ?? null
+    this.invalidate()
+    this.checkDrained()
+  }
+  private checkDrained(): void {
+    if (!this.drained || this.held !== 0) return
+    const done = this.drained
+    this.drained = null
+    done()
   }
   /** Evicts the least-recently-used unleased lane charged to `budget`. */
   private evictOne(budget: DisplayLaneBudget): boolean {
@@ -203,18 +229,27 @@ export class DisplayTextLaneCache {
         done = true
         entry.pins--
         unpinPool?.()
+        if (entry.retired && entry.pins === 0) this.uncharge(entry)
       },
     }
   }
-  /** The single uncharge point of a retained lane (owner drop or pool release). */
+  /** Removes a lane from lookup (owner drop, invalidation, pool release). A
+   * leased lane is retired: its reader still holds the bytes, so they stay
+   * charged until the last lease ends. */
   private drop(id: string): void {
     const entry = this.entries.get(id)
     if (!entry) return
     this.entries.delete(id)
+    if (entry.pins > 0) { entry.retired = true; return }
+    this.uncharge(entry)
+  }
+  /** The single uncharge point of a lane's bytes (and its count slot). */
+  private uncharge(entry: Entry): void {
     this.held -= entry.bytes
-    // A retained lane's bytes moved onto its pool entry, which uncharges them.
+    // A retained lane's bytes (and slot) moved onto its pool entry, which uncharges them.
     if (entry.pooled) entry.pooled.release()
-    else entry.budget.release(entry.bytes)
+    else { entry.budget.release(entry.bytes); entry.budget.releaseSlot?.() }
+    this.checkDrained()
   }
   private keyOf(key: DisplayLaneKey): string {
     let style = this.styleIds.get(key.styleOwner)
