@@ -63,7 +63,7 @@ const filledShape = `<xdr:oneCellAnchor>${anchorFrom(0, 1)}<xdr:ext cx="${64 * E
 const themedShape = `<xdr:twoCellAnchor>${anchorFrom(2, 4, 3, 2)}<xdr:to><xdr:col>4</xdr:col><xdr:colOff>0</xdr:colOff><xdr:row>7</xdr:row><xdr:rowOff>0</xdr:rowOff></xdr:to><xdr:sp><xdr:nvSpPr><xdr:cNvPr id="3" name="Oval"/><xdr:cNvSpPr/></xdr:nvSpPr><xdr:spPr>${xfrm(80, 60)}<a:prstGeom prst="ellipse"><a:avLst/></a:prstGeom><a:solidFill><a:schemeClr val="accent1"/></a:solidFill></xdr:spPr></xdr:sp><xdr:clientData/></xdr:twoCellAnchor>`
 const picture = `<xdr:oneCellAnchor>${anchorFrom(5, 2)}<xdr:ext cx="${30 * EMU_PER_PX}" cy="${30 * EMU_PER_PX}"/><xdr:pic><xdr:nvPicPr><xdr:cNvPr id="4" name="Picture"/><xdr:cNvPicPr/></xdr:nvPicPr><xdr:blipFill><a:blip xmlns:r="${R_NS}" r:embed="rImg"/><a:stretch><a:fillRect/></a:stretch></xdr:blipFill><xdr:spPr>${xfrm(30, 30)}<a:prstGeom prst="rect"><a:avLst/></a:prstGeom></xdr:spPr></xdr:pic><xdr:clientData/></xdr:oneCellAnchor>`
 
-interface DrawingWorkbook { secondSheet?: boolean; anchors: string; theme?: boolean; media?: boolean; secondImage?: boolean; vml?: boolean; unusedMedia?: number; content?: boolean; mediaBytes?: number }
+interface DrawingWorkbook { secondSheet?: boolean; secondAnchors?: string; anchors: string; theme?: boolean; media?: boolean; secondImage?: boolean; vml?: boolean; unusedMedia?: number; content?: boolean; mediaBytes?: number }
 function drawingWorkbook(spec: DrawingWorkbook): Uint8Array {
   const extra: BuildEntry[] = [
     { name: 'xl/worksheets/_rels/sheet1.xml.rels', data: `<?xml version="1.0"?><Relationships xmlns="${PKG_RELS}"><Relationship Id="rD1" Type="${R_NS}/drawing" Target="../drawings/drawing1.xml"/>${spec.vml ? `<Relationship Id="rV1" Type="${R_NS}/vmlDrawing" Target="../drawings/vmlDrawing1.vml"/>` : ''}</Relationships>` },
@@ -101,7 +101,10 @@ function drawingWorkbook(spec: DrawingWorkbook): Uint8Array {
     const rels = entries.find(e => e.name === 'xl/_rels/workbook.xml.rels')!
     rels.data = String(rels.data).replace('</Relationships>', `<Relationship Id="rSecond" Type="${R_NS}/worksheet" Target="worksheets/sheet2.xml"/></Relationships>`)
     entries.push({ name: 'xl/worksheets/sheet2.xml', data: entries.find(e => e.name === 'xl/worksheets/sheet1.xml')!.data })
-    entries.push({ name: 'xl/worksheets/_rels/sheet2.xml.rels', data: extra[0].data })
+    entries.push({ name: 'xl/worksheets/_rels/sheet2.xml.rels', data: String(extra[0].data).replace('drawing1.xml', 'drawing2.xml') })
+    entries.push({ name: 'xl/drawings/drawing2.xml', data: `<?xml version="1.0"?><xdr:wsDr xmlns:xdr="${XDR_NS}" xmlns:a="${A_NS}">${spec.secondAnchors ?? spec.anchors}</xdr:wsDr>` })
+    const drawingRels = extra.find(e => e.name === 'xl/drawings/_rels/drawing1.xml.rels')
+    if (drawingRels) entries.push({ name: 'xl/drawings/_rels/drawing2.xml.rels', data: drawingRels.data })
   }
   return buildZip(entries).bytes
 }
@@ -392,34 +395,46 @@ describe('paged drawing main-ledger attribution', () => {
   })
 
   it('releases an evicted real drawing payload through collection and returns to baseline on cache close', async () => {
-    const remote = await openPaged(drawingWorkbook({ anchors: picture, media: true, secondSheet: true }))
+    const remote = await openPaged(drawingWorkbook({ anchors: picture, media: true, secondSheet: true, secondAnchors: picture + filledShape }))
     remote.merges('2')
     for (let i = 0; i < 100 && remote.loadState('2').completeness !== 'complete'; i++) await new Promise(resolve => setTimeout(resolve, 2))
     expect(remote.loadState('2').completeness).toBe('complete')
     await collectDrawingReplies()
     const base = remote.mainLedger.snapshot().bytes
-    // A small cache exercises eviction without changing production budgets.
+    // Expected costs come from the actual transport replies, independently
+    // of ledger attribution. A small cache exercises eviction without
+    // changing production budgets; both pictures together exceed this cap.
+    const expectedBytes = new Map<string, number>()
     const cache = new RemoteDrawingCache({
       identity: id => remote.identity(id), loadState: id => remote.loadState(id),
-      request: (command, signal) => remote.request(command, signal),
+      request: async (command, signal) => {
+        const reply = await remote.request(command, signal)
+        expect(reply).toMatchObject({ kind: 'complete', result: { kind: 'read', result: { op: 'drawings' } } })
+        expectedBytes.set(command.owner.sheetId, estimatePayloadBytes(reply))
+        return reply
+      },
       nextRequestId: () => remote.nextRequestId(), changed: () => {},
     }, PNG.byteLength)
     const first = cache.get('1')
     for (let i = 0; i < 200 && first.state !== 'ready'; i++) await new Promise(resolve => setTimeout(resolve, 2))
     expect(first.state).toBe('ready')
     await collectDrawingReplies()
-    const one = drawingBytes(remote)
-    expect(one).toBeGreaterThan(PNG.byteLength)
-    expect(remote.mainLedger.snapshot().bytes - base).toBe(one)
+    const firstCost = expectedBytes.get('1')!
+    expect(firstCost).toBeGreaterThan(PNG.byteLength)
+    expect(drawingBytes(remote)).toBe(firstCost)
+    expect(remote.mainLedger.snapshot().bytes - base).toBe(firstCost)
     const second = cache.get('2')
     for (let i = 0; i < 200 && second.state !== 'ready'; i++) await new Promise(resolve => setTimeout(resolve, 2))
     expect(second.state).toBe('ready')
+    const secondCost = expectedBytes.get('2')!
+    expect(secondCost).toBeGreaterThan(PNG.byteLength)
+    expect(secondCost).not.toBe(firstCost)
     expect(first.state).toBe('waiting')
     expect(first.drawings).toHaveLength(0)
     expect(cache.retainedBytes).toBe(PNG.byteLength)
     await collectDrawingReplies()
-    expect(drawingBytes(remote)).toBe(one)
-    expect(remote.mainLedger.snapshot().bytes - base).toBe(one)
+    expect(drawingBytes(remote)).toBe(secondCost)
+    expect(remote.mainLedger.snapshot().bytes - base).toBe(secondCost)
     expect(remote.mainLedger.snapshot().byPool.replies).toBe(0)
     cache.close()
     await collectDrawingReplies()
