@@ -267,12 +267,23 @@ describe('review round 1 (codex) MAJOR 4: the estimate model is conservative aga
     const probe = spawnSync('bun', [join(dirname(fileURLToPath(import.meta.url)), '..', 'scripts', 'construction-memory-probe.ts')], { encoding: 'utf8', timeout: 120_000 })
     expect(probe.status, probe.stderr).toBe(0)
     const results = JSON.parse(probe.stdout.trim().split('\n').at(-1)!) as { name: string; count: number; observed: number; model: number }[]
-    expect(new Set(results.map((r) => r.name))).toEqual(new Set(['builder-numeric', 'builder-text', 'builder-formula', 'summaries', 'decoded-pages', 'decoded-chunks', 'leftover-sweep', 'pending-strings']))
+    expect(new Set(results.map((r) => r.name))).toEqual(new Set(['builder-numeric', 'builder-text', 'builder-formula', 'summaries', 'decoded-pages', 'decoded-chunks', 'leftover-sweep', 'leftover-sweep-grouped', 'pending-strings']))
     for (const r of results) {
       expect(r.model, `${r.name} x${r.count}`).toBeGreaterThanOrEqual(r.observed)
       expect(r.model, `${r.name} x${r.count}`).toBeLessThanOrEqual(2 * r.observed)
     }
   }, 150_000)
+})
+
+describe('review round 4 (codex) NIT 2: the probe reads live heap once (heapSize already includes extraMemorySize)', () => {
+  it('a 1 MiB buffer kept across the measurement reads as 1 MiB, not twice it', () => {
+    const probe = spawnSync('bun', [join(dirname(fileURLToPath(import.meta.url)), '..', 'scripts', 'construction-memory-probe.ts'), 'control'], { encoding: 'utf8', timeout: 60_000 })
+    expect(probe.status, probe.stderr).toBe(0)
+    const [r] = JSON.parse(probe.stdout.trim().split('\n').at(-1)!) as { name: string; observed: number; model: number }[]
+    expect(r.name).toBe('control')
+    expect(r.observed, 'observed bytes').toBeGreaterThanOrEqual(r.model)
+    expect(r.observed, 'observed bytes').toBeLessThanOrEqual(1.1 * r.model)
+  }, 90_000)
 })
 
 describe('review round 2 (codex) findings 4 and 5', () => {
