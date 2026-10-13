@@ -393,6 +393,24 @@ interface OpfsFile {
   getFile(): Promise<Blob>
 }
 export const PAGE_PREFIX = 'officeview-pages-'
+/**
+ * Visits at most `max` directory entries, checking the bound and `signal`
+ * before each next() (never pulling an entry it will not examine), and closes
+ * the iterator when it stops early. `visit` returning false stops it too.
+ */
+async function eachEntry(names: AsyncIterable<string>, max: number, signal: AbortSignal | undefined, visit: (name: string) => boolean | void): Promise<void> {
+  const it = names[Symbol.asyncIterator]()
+  let exhausted = false
+  try {
+    for (let examined = 0; examined < max && !signal?.aborted; examined++) {
+      const next = await it.next()
+      if (next.done) { exhausted = true; return }
+      if (visit(next.value) === false) return
+    }
+  } finally {
+    if (!exhausted) try { await it.return?.() } catch { /* closing is best effort */ }
+  }
+}
 const escapeName = (text: string): string => text.replace(/[^A-Za-z0-9.]/g, (c) => `_${c.charCodeAt(0).toString(16).padStart(4, '0')}`)
 const unescapeName = (text: string): string => text.replace(/_([0-9a-f]{4})/g, (_, hex: string) => String.fromCharCode(parseInt(hex, 16)))
 /** One flat file per page, named `${PAGE_PREFIX}${owner}-${key}` so removeAll can find them. */
@@ -440,13 +458,11 @@ export function opfsPageBackend(dir: OpfsDir, owner: string): PageBackend {
     },
     async list(max, signal) {
       const out: string[] = []
-      let examined = 0
       // The OPFS root is shared with other owners and the spool: every entry examined counts.
       const names = dir.keys ? dir.keys() : (async function* () { yield* written })()
-      for await (const name of names) {
-        if (++examined > max || signal?.aborted) break
+      await eachEntry(names, max, signal, (name) => {
         if (name.startsWith(prefix)) out.push(unescapeName(name.slice(prefix.length)))
-      }
+      })
       return out
     },
     async removeAll() {
@@ -633,19 +649,17 @@ export async function sweepLeftoverPages(env: PageStorageEnv, options: { now?: n
       const dir = await env.opfs()
       if (dir.keys) {
         const byOwner = new Map<string, string[]>()
-        let seen = 0
-        for await (const name of dir.keys()) {
-          if (++seen > maxEntries || options.signal?.aborted) break
-          if (!name.startsWith(PAGE_PREFIX)) continue
+        await eachEntry(dir.keys(), maxEntries, options.signal, (name) => {
+          if (!name.startsWith(PAGE_PREFIX)) return
           const rest = name.slice(PAGE_PREFIX.length)
           const dash = rest.indexOf('-')
-          if (dash <= 0) continue
+          if (dash <= 0) return
           const owner = unescapeName(rest.slice(0, dash))
-          if (!old(owner)) continue
+          if (!old(owner)) return
           let names = byOwner.get(owner)
           if (!names) byOwner.set(owner, names = [])
           names.push(name)
-        }
+        })
         for (const [owner, names] of byOwner) {
           if (options.signal?.aborted) break
           await locks.tryWith(owner, async () => {

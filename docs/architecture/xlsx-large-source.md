@@ -958,7 +958,8 @@ leaves records that no live index references.
   reference. Keys are namespaced unambiguously (`page/<sheet>/<page>` with `/` and `%` escaped, `blob/<id>`, `sst/<chunk>`),
   so a sheet named `sst` or `blob` is never mistaken for another namespace. Writes in flight are never touched.
 - **Bounds and failure.** At most 4,096 entries are examined per backend, counting every directory entry, not just owner
-  matches. Listing and deletion are cancellable and best effort. A listing failure skips cleanup with a
+  matches. The bound and the cancellation signal are checked before each entry is pulled, and an enumeration that stops
+  early closes its iterator. Listing and deletion are cancellable and best effort. A listing failure skips cleanup with a
   `storage-cleanup-skipped` diagnostic and never fails the import. The listing is a transient charge; nothing removed was
   charged, so ledger and storage agree afterwards.
 

@@ -651,3 +651,66 @@ describe('review round 3 (codex) MAJOR 1: the owner lock outlives every started 
     expect({ blobs: store.stats.blobs, blobBytes: store.stats.blobBytes }).toEqual(headBlobs)
   })
 })
+
+describe('review round 3 (codex) NIT 3: enumeration never pulls past its bound or after cancellation', () => {
+  const HOUR = 3600_000
+  const esc = (t: string) => t.replace(/[^A-Za-z0-9.]/g, (c) => `_${c.charCodeAt(0).toString(16).padStart(4, '0')}`)
+  /** A directory of `names` whose keys() iterator counts next() and return() calls. */
+  function countingDir(names: string[]) {
+    const dir = fakeOpfsDirectory()
+    const counts = { next: 0, returned: 0 }
+    const keys = (): AsyncIterableIterator<string> => {
+      let i = 0
+      const it: AsyncIterableIterator<string> = {
+        async next() { counts.next++; return i < names.length ? { value: names[i++], done: false } : { value: undefined, done: true } },
+        async return() { counts.returned++; return { value: undefined, done: true } },
+        [Symbol.asyncIterator]() { return it },
+      }
+      return it
+    }
+    return { dir: { ...dir, keys }, counts }
+  }
+  const foreign = (n: number) => Array.from({ length: n }, (_, i) => `foreign-${i}`)
+
+  it('OPFS list: exactly max next() calls with foreign entries, the iterator closed early; none when already aborted; matches counted across owners', async () => {
+    const owner = 'owner-x'
+    const mine = (key: string) => `officeview-pages-${esc(owner)}-${esc(key)}`
+    const other = (key: string) => `officeview-pages-${esc('owner-y')}-${esc(key)}`
+    const names = [mine('blob/0'), other('blob/0'), ...foreign(5000), mine('blob/1')]
+    const { dir, counts } = countingDir(names)
+    const backend = opfsPageBackend(dir, owner)
+    expect(await backend.list!(4096)).toEqual(['blob/0'])
+    expect(counts).toEqual({ next: 4096, returned: 1 })
+    const aborted = new AbortController()
+    aborted.abort()
+    counts.next = 0
+    counts.returned = 0
+    expect(await backend.list!(10_000, aborted.signal)).toEqual([])
+    expect(counts.next).toBe(0)
+    // Another owner's entry counts against the bound too: two entries examined, one match.
+    counts.next = 0
+    expect(await backend.list!(2)).toEqual(['blob/0'])
+    expect(counts.next).toBe(2)
+    // A full pass ends on done without an early return.
+    counts.next = 0
+    counts.returned = 0
+    expect(await backend.list!(10_000)).toEqual(['blob/0', 'blob/1'])
+    expect(counts).toEqual({ next: names.length + 1, returned: 0 })
+  })
+
+  it('global sweep: exactly maxEntries next() calls, the iterator closed early; none when already aborted', async () => {
+    const now = Date.UTC(2026, 9, 13)
+    const dead = pageOwner('doc', now - 26 * HOUR)
+    const deadName = `officeview-pages-${esc(dead)}-${esc('blob/0')}`
+    const { dir, counts } = countingDir([...foreign(5000), deadName])
+    const locks = ownerLocks(fakeLockManager())
+    expect(await sweepLeftoverPages({ opfs: async () => dir, locks }, { now, maxEntries: 4096 })).toBe(0)
+    expect(counts).toEqual({ next: 4096, returned: 1 })
+    const aborted = new AbortController()
+    aborted.abort()
+    counts.next = 0
+    counts.returned = 0
+    expect(await sweepLeftoverPages({ opfs: async () => dir, locks }, { now, signal: aborted.signal })).toBe(0)
+    expect(counts.next).toBe(0)
+  })
+})
