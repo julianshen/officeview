@@ -30,8 +30,11 @@ the ledger's *current* bytes there, minus two measured page-level exclusions:
 The allowance is:
 - the warmed host's own open gap (never below 0);
 - plus independent noise: the larger of the idle probe noise and the checkpoint
-  procedure repeated on the idle warm host, about 0.003 MiB. A checkpoint's own
-  spread can only tighten it;
+  procedure repeated on the idle warm host. The receipt records the smaller
+  session's value (F4, 0.003 MiB). F2's own idle probe noise was 0.21 MiB, but
+  F2's checkpoint spreads were 0, which tighten the term to 0. The effective
+  noise term was therefore 0 for both sessions, and the allowance was exactly
+  the 0.25 MiB below. A checkpoint's own spread can only tighten the term;
 - plus an explicit **engine-cache allowance of 0.25 MiB**
   (`ENGINE_CACHE_ALLOWANCE_BYTES`, **user decision 2026-10-13**), recorded in
   every receipt as `mainEngineCacheAllowanceBytes`.
@@ -47,11 +50,24 @@ Other rules:
 
 The **64 MiB main-thread budget is unchanged**.
 
+**Tile canvas objects (real-viewer calibration).** Each retained tile's
+canvas element and 2D context are charged at `TILE_CANVAS_BYTES` = 4,600 B.
+`bun scripts/calibrate-viewer-tiles.ts` measures the real InteractiveSheetDoc:
+- it scrolls through tiles that draw gridlines only (the workbook holds one
+  value), from 21 to 97 retained tiles;
+- it attributes the heap growth the ledger does not explain to the added tiles;
+- result: 4,411, 2,281, 2,117, 2,901 and 2,662 B per tile over 5 rounds
+  (median 2,662; the first round includes first-run effects).
+
+The about:blank measurement (3,695–4,529 B per canvas) is the higher bound, and
+the constant covers both.
+
 **What the allowance covers** (measured owners). Before the allowance (r15)
 the residuals were:
 - F2 loaded 0.05 MiB;
 - F2 closed 0.03 MiB;
-- a warm-up residue of 0.13 MiB: arrays 103 KiB, plain objects 25 KiB.
+- a warm-up residue of 0.13 MiB: arrays 103 KiB, plain objects 25 KiB (r16:
+  105.8 KiB and 26.0 KiB).
 
 Diagnostic heap-snapshot owners:
 - V8's `smi_string_cache`, a strong-root number-to-string cache grown to

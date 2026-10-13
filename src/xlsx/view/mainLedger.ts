@@ -56,18 +56,21 @@ export const DOM_CLASS_BYTES: Readonly<Record<DomClass, number>> = Object.freeze
  * glyph data per UTF-16 unit. Per cache: its hash table, ~218 B per bucket, at
  * least 64 buckets, grown to keep the load at or below 3/4.
  */
-/**
- * Main-heap bytes of one tile canvas outside its pixels: the element, its 2D
- * context and the context's resource bookkeeping. Measured in Chrome 155 (about:blank,
- * 512x512 canvases with a 2D context, one fill and one stroke each, held):
- * 4,529 B per canvas at 100 canvases, 3,695-3,706 B at 200-400. Charged at the
- * higher figure, rounded up.
- */
-export const TILE_CANVAS_BYTES = 4600
 export const SHAPE_ENTRY_BYTES = 1360
 export const SHAPE_UNIT_BYTES = 8
 export const SHAPE_BUCKET_BYTES = 218
 export const SHAPE_MIN_BUCKETS = 64
+/**
+ * Main-heap bytes of one retained tile canvas outside its pixels: the element,
+ * its 2D context and the context's resource bookkeeping. Measured in Chrome 155:
+ * - in the REAL viewer (scripts/calibrate-viewer-tiles.ts: InteractiveSheetDoc
+ *   scrolled through text-free tiles, heap growth the ledger does not explain
+ *   per added tile): 2,117-4,411 B per tile over 5 rounds, median 2,662 B;
+ * - on about:blank (512x512 canvases with a 2D context, one fill and one stroke
+ *   each, held): 4,529 B per canvas at 100 canvases, 3,695-3,706 B at 200-400.
+ * Charged at the highest figure, rounded up.
+ */
+export const TILE_CANVAS_BYTES = 4600
 /** Estimated shaping-cache bytes of one font's cache holding `entries` texts of `units` UTF-16 units in all. */
 export function shapeCacheBytes(entries: number, units: number): number {
   if (entries <= 0) return 0

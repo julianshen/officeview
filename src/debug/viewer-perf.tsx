@@ -97,10 +97,12 @@ export interface ViewerPerf {
    * for a `width` x `height` viewport, re-renders it `updates` times with a
    * moved selection, and returns its element counts by class; 0 x 0 unmounts. */
   calibrateGrid(width: number, height: number, updates?: number): Promise<DomClassCounts>
-  /** Real-viewer calibration: mounts the actual InteractiveSheetDoc (resident,
-   * 60 x 30 values) in a `width` x `height` box and scrolls it `updates`
-   * times; returns its DOM class counts and main ledger. 0 x 0 unmounts. */
-  calibrateViewer(width: number, height: number, updates?: number): Promise<{ counts: DomClassCounts; ledger: MainLedgerSnapshot | null }>
+  /** Real-viewer calibration (scripts/calibrate-viewer-tiles.ts): mounts the
+   * actual InteractiveSheetDoc (resident, one value at A1) in a `width` x
+   * `height` box and scrolls it `updates` steps of 600 px (negative: keep the
+   * mounted viewer and scroll further); returns its DOM class counts, main
+   * ledger and retained tile count. 0 x 0 unmounts. */
+  calibrateViewer(width: number, height: number, updates?: number): Promise<{ counts: DomClassCounts; ledger: MainLedgerSnapshot | null; tiles: number | null }>
   /** The open document's main-thread application ledger (null before a viewer mounts). */
   mainLedger(): MainLedgerSnapshot | null
   /** Drops the page's own instrumentation (the wire timeline) before a memory
@@ -301,34 +303,40 @@ function calibrateGrid(width: number, height: number, updates = 0): Promise<DomC
     setTimeout(step, 50)
   })
 }
-let viewerCalibration: { root: ReturnType<typeof createRoot>; host: HTMLElement; ledger: MainLedgerSnapshot | null; read: () => MainLedgerSnapshot | null } | null = null
+let viewerCalibration: { root: ReturnType<typeof createRoot>; host: HTMLElement; ledger: MainLedgerSnapshot | null; read: () => MainLedgerSnapshot | null; tiles: number | null; live: MainMemoryLedger | null } | null = null
 const calibrationDoc = (() => {
-  // Small on purpose: the regression isolates the DOM; the semantic grid renders
-  // one cell per visible coordinate whether or not it holds a value.
-  const rows = Array.from({ length: 60 }, (_, r) => ({ index: r, cells: Array.from({ length: 30 }, (_, c) => ({ ref: `R${r}C${c}`, row: r, col: c, styleIndex: 0, value: r === 0 ? `Field ${c}` : c % 3 === 0 ? `t${r}-${c}` : r * 30 + c, hasCachedValue: true })) }))
+  // One populated cell: every other tile draws gridlines only, so tile cost
+  // is isolated from the shaping cache (no text to shape).
+  const rows = [{ index: 0, cells: [{ ref: 'A1', row: 0, col: 0, styleIndex: 0, value: 'x', hasCachedValue: true }] }]
   return { sheets: [{ name: 'Calibration', sheetId: 'cal', rows, cols: [], merges: [], mergeRanges: [] }], tables: [] }
 })()
-function calibrateViewer(width: number, height: number, updates = 0): Promise<{ counts: DomClassCounts; ledger: MainLedgerSnapshot | null }> {
-  viewerCalibration?.root.unmount(); viewerCalibration?.host.remove(); viewerCalibration = null
-  if (width <= 0 || height <= 0) return Promise.resolve({ counts: { cell: 0, header: 0, other: 0 }, ledger: null })
-  const host = document.createElement('div')
-  host.style.cssText = `position:absolute;left:0;top:0;width:${width}px;height:${height}px;display:flex;flex-direction:column`
-  document.body.append(host)
-  const root = createRoot(host)
-  let ledger: MainLedger | null = null
-  const internal = { onMainLedger: (l: MainLedger) => { ledger = l } } as Record<string, unknown>
-  root.render(<InteractiveSheetDoc doc={calibrationDoc as never} style={{ flex: '1 1 auto', minHeight: 0 }} {...internal} />)
-  viewerCalibration = { root, host, ledger: null, read: () => ledger?.snapshot() ?? null }
+function calibrateViewer(width: number, height: number, updates = 0): Promise<{ counts: DomClassCounts; ledger: MainLedgerSnapshot | null; tiles: number | null }> {
+  // updates < 0: keep the mounted viewer and scroll it -updates more steps.
+  if (updates >= 0) { viewerCalibration?.root.unmount(); viewerCalibration?.host.remove(); viewerCalibration = null }
+  if (updates >= 0 && (width <= 0 || height <= 0)) return Promise.resolve({ counts: { cell: 0, header: 0, other: 0 }, ledger: null, tiles: null })
+  if (!viewerCalibration) {
+    const host = document.createElement('div')
+    host.style.cssText = `position:absolute;left:0;top:0;width:${width}px;height:${height}px;display:flex;flex-direction:column`
+    document.body.append(host)
+    const root = createRoot(host)
+    const cal = { root, host, ledger: null as MainLedgerSnapshot | null, read: () => null as MainLedgerSnapshot | null, tiles: null as number | null, live: null as MainLedger | null }
+    const internal = { onMainLedger: (l: MainLedger) => { cal.live = l }, onFrame: (stats: SheetFrameStats) => { cal.tiles = stats.tiles.tiles } } as Record<string, unknown>
+    root.render(<InteractiveSheetDoc doc={calibrationDoc as never} style={{ flex: '1 1 auto', minHeight: 0 }} {...internal} />)
+    cal.read = () => cal.live?.snapshot() ?? null
+    viewerCalibration = cal
+  }
+  const cal = viewerCalibration
+  const steps = Math.abs(updates)
   return new Promise(resolve => {
     let pass = 0
     const step = () => {
-      const scroller = host.querySelector<HTMLElement>('[data-testid=officeview-sheet-pane]')?.parentElement?.querySelector<HTMLElement>('[data-officeview-ui=scroll]') ?? null
-      if (pass >= updates || !scroller) { setTimeout(() => resolve({ counts: domClassCounts(host.firstElementChild ?? host), ledger: ledger?.snapshot() ?? null }), 500); return }
+      const scroller = cal.host.querySelector<HTMLElement>('[data-testid=officeview-sheet-scroller]')
+      if (pass >= steps || !scroller) { setTimeout(() => resolve({ counts: domClassCounts(cal.host.firstElementChild ?? cal.host), ledger: cal.read(), tiles: cal.tiles }), 800); return }
       pass++
-      scroller.scrollTop += 200
-      setTimeout(step, 150)
+      scroller.scrollTop += 600
+      setTimeout(step, 250)
     }
-    setTimeout(step, 1500)
+    setTimeout(step, updates >= 0 ? 1500 : 50)
   })
 }
 type MainLedger = MainMemoryLedger

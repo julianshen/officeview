@@ -371,7 +371,7 @@
         "results": "docs/validation/interactive-viewer-viewer-chrome-r14.json",
         "hash": "91328cfdcb8c27538446482aa6c55d637457ff62c4d68f53b7ce44ad8f189ab9",
         "commit": "1e13f7bf9a8b0e4c653a11ecec3cae575ab938c5",
-        "note": "r14: not admitted; its gated code bytes came from heap snapshots that grew page tables, and tile canvas objects were uncharged."
+        "note": "r14: not admitted; its gated code bytes came from heap snapshots that grew page tables, and tile canvas objects were uncharged. Its raw records recompute to admitted under the current rules (allowance included); it is superseded because its ledger under-charges tile canvas objects (charged since 5cdbd23)."
       },
       {
         "results": "docs/validation/interactive-viewer-viewer-chrome-r13.json",
