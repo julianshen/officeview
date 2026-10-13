@@ -389,6 +389,28 @@ describe('S13.5 formatted display-text lane is prepared on demand', () => {
       await session.release()
     })
 
+    it('worker-pool eviction of a lane uncharges the prepared counter exactly once', async () => {
+      const lanes = new DisplayTextLaneCache()
+      const session = new DocumentSession('doc-1', createObjectWorkbookSource(makeDoc(), 'doc-1'), { filterEvaluator: createWorkerFilterEvaluator(() => new Map(), formatting, 'en-US', { lanes }) })
+      expect(await session.prepareColumns(session.identity('1'), [0], signal())).toEqual({ kind: 'complete' })
+      const column = session.preparedStats().bytes
+      expect((await session.filter(session.identity('1'), textSpec, nowMs, signal())).kind).toBe('committed')
+      expect(session.preparedStats().bytes).toBe(column + lanes.bytes)
+      const retained = session.memoryStats().retainedBytes
+      // Aggregate pressure: the pool evicts its rebuildable entries on its own.
+      const pool = (session as unknown as { memory: { trim(target: number): number } }).memory
+      pool.trim(0)
+      expect(lanes.size).toBe(0)
+      expect(lanes.bytes).toBe(0)
+      expect(session.preparedStats()).toEqual({ columns: 0, bytes: 0 })
+      expect(session.memoryStats().retainedBytes).toBeLessThan(retained)
+      // The next text filter rebuilds the lane under the same counter.
+      expect((await session.filter(session.identity('1'), textSpec, nowMs, signal())).kind).toBe('committed')
+      expect(session.preparedStats().bytes).toBe(lanes.bytes)
+      expect(lanes.builds).toBe(2)
+      await session.release()
+    })
+
     it('a lane evicts the least recently used prepared column when both cannot fit, and vice versa', async () => {
       const { column, lane } = await sizes()
       const lanes = new DisplayTextLaneCache()

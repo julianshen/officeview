@@ -1393,7 +1393,8 @@ export class DocumentSession {
         }
         const entry = this.memory.retain(id, { tier: 'rebuildable', bytes, owner: sheetId, onRelease: () => { forget(); onRelease() } })
         if (!entry) {
-          // Back to the build's charge; the caller releases it on refusal.
+          // Back to the build's charge; the caller's refusal path releases all
+          // of it, so a restore the full pool cannot re-admit changes nothing.
           this.displayLaneBuilding += bytes
           share().set(this.displayLaneBuilding)
           return null
