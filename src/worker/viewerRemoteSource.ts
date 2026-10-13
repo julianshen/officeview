@@ -333,7 +333,7 @@ export class RemoteWorkbook implements WorkbookSource {
     const sent: Promise<Settled<K>> = this.client.send<K>(command).then(reply => {
       // Charged until no part of the payload is reachable: a consumer that keeps
       // a page (a scan generator across tasks) keeps the charge.
-      this.mainLedger.chargeWhileReachable('replies', leaseTargets(reply), estimatePayloadBytes(reply))
+      this.mainLedger.chargeWhileReachable(head.kind === 'read' && head.query?.op === 'drawings' ? 'drawings' : 'replies', leaseTargets(reply), estimatePayloadBytes(reply))
       this.capture(reply)
       return reply
     }, () => CLOSED)

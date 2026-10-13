@@ -3,13 +3,15 @@
 Status: decision record, no prototype. Scope: plan S12 (`docs/superpowers/plans/2026-10-10-interactive-viewer.md`),
 spec §11.1, §11.2, §12.2, §12.4, §13.2, BACKEND-01–02 (`docs/superpowers/specs/2026-10-10-interactive-viewer.md`;
 §13.2 makes any font/clip/rotation/grapheme mismatch an admission failure). Rule for every number below: **measured**
-(source cited) or **unmeasured** (labelled). Paint figures cite branch `feature/iv-s10-2`
+(source cited) or **unmeasured** (labelled). Historical paint figures cite merged S10.2 r1
 (`docs/validation/interactive-viewer-performance.md`, receipt
-`docs/validation/interactive-viewer-viewer-chrome-r1.json`), which is **pending
-merge**; that run was headless Chrome 155 (receipt `environment.headless = true`) on a shared machine (load
+`docs/validation/interactive-viewer-viewer-chrome-r1.json`); that historical run was headless Chrome 155
+(receipt `environment.headless = true`) on a shared machine (load
 3.53/2.72/2.53 at start, 1.99/2.38/2.48 at end) with a quiet-machine re-run pending. Canvas2D acceleration mode is not
 recorded in the receipt (unmeasured; spec §12.2 requires the Canvas/GPU backend). Nothing here is a Safari, iPad, or
 mobile result — no Safari/iPad receipts exist (actual Safari not run; no physical iPad, user decision).
+S10.2 merged 2026-10-13; historical r16 (`docs/validation/interactive-viewer-viewer-chrome-r16.json`) admits desktop D
+13/13, including sort acknowledgment p95 17.1 ms (max 37.0 ms). The final release receipt must use the final tree.
 
 ## 0. Summary
 
@@ -17,7 +19,7 @@ mobile result — no Safari/iPad receipts exist (actual Safari not run; no physi
 |---|---|
 | Decision | S12 not run: Canvas2D meets every paint row and budget; the one paint bottleneck was fixed in place |
 | Evidence | Warm input-to-paint p95 ≤ 3.94 ms, frame interval 16.67 ms with 0 long tasks, bitmap 113.2 vs 128 MiB (headless Chrome 155) |
-| Binding cost of the miss | ~12 s detection I/O on sort ack; paint uninvolved (commit-and-present < 30 ms) |
+| Historical r1 bottleneck | ~12 s detection I/O and missing pending UI on sort ack; paint uninvolved (commit-and-present < 30 ms). r16 acknowledgment now passes |
 | Revisit | A paint row misses with paint-attributed cause; Safari/mobile receipts arrive; the quiet re-run moves a paint row |
 
 ## 1. Hypothesis a WebGPU renderer would test
@@ -29,7 +31,7 @@ parity and a working fallback.
 ## 2. Paint measurements vs frozen budget
 
 Frozen rows: `tests/fixtures/xlsx-viewer/performance-profile.json` (`warm-viewport-frame` 16.7 ms). S10.2 receipt
-(pending merge), desktop D headless Chrome, 300 measured frames after 60 warmup:
+(historical r1), desktop D headless Chrome, 300 measured frames after 60 warmup:
 
 | Mix | Input-to-paint p95 | Frame-interval p95 | Long tasks |
 |---|---:|---:|---|
@@ -59,10 +61,11 @@ excluded causes in trigger 1.
 
 ## 4. Why WebGPU would not move the miss, and what it would cost (**unmeasured** — no prototype built)
 
-The one S10.2 miss is sort acknowledgment (11,897–13,316 ms), attributed to main-thread range-detection
-RPC/deserialization plus (until `76a84d3` is receipted) missing pending UI — no paint phase is on that path, and
-commit-and-present measures < 30 ms.
-A GPU renderer leaves the miss untouched while adding: device init plus cold shader compile on first paint;
+The historical S10.2 r1 miss was sort acknowledgment (11,897–13,316 ms), attributed to main-thread range-detection
+RPC/deserialization and missing pending UI. No paint phase was on that path; commit-and-present measured < 30 ms.
+Worker range detection and pending UI addressed these causes in the merged TypeScript baseline; historical r16
+acknowledgment passes (p95 17.1 ms, max 37.0 ms).
+A GPU renderer would not address those causes and would add: device init plus cold shader compile on first paint;
 atlas/texture memory (per §12.4 both backends count only at a switch peak, so the real pressure is the switch/fallback
 peak on top of a 113.2 MiB Canvas2D peak, not steady-state addition); text parity re-proof (fallback fonts, grapheme
 segmentation, warps, watermark, overlays) with the Canvas2D reference kept anyway as fallback. The Canvas2D fallback
@@ -89,5 +92,5 @@ Re-open triggers (any one justifies running S12 later):
    paint-attributed cause.
 
 This decision is desktop Chrome (headless) only — revisit when Safari and mobile receipts exist, and if the
-quiet-machine S10.2 re-run moves any paint row. These docs and the plan status must be refreshed from the final merged
-S10.2 receipt.
+quiet-machine S10.2 re-run moves any paint row. The r1 measurements above remain historical; the final release
+receipt must use the final tree.
