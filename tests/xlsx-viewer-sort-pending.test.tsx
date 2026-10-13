@@ -8,6 +8,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { act, cleanup, fireEvent, render, waitFor } from '@testing-library/react'
 import InteractiveSheetDoc from '../src/components/xlsx/InteractiveSheetDoc'
+import { GRID_HEADER_SIZE } from '../src/components/xlsx/GridHeaders'
 import * as controlsModule from '../src/components/xlsx/viewerControlsClient'
 import { workbookOf } from './helpers/xlsx-find'
 
@@ -55,6 +56,71 @@ describe('header sort pending acknowledgment', () => {
     await waitFor(() => expect(ui.getByRole('columnheader', { name: /Column B; sort priority 1, ascending/ })).toBeTruthy())
     expect(pending(ui)).toEqual({ status: false, busy: false, header: false })
     expect(statusText(ui)).toMatch(/View-only sort applied/)
+  })
+
+  it('acknowledges a pending narrow-column sort in the 44px coarse-pointer corner lane and restores committed feedback', async () => {
+    const previous = window.matchMedia
+    window.matchMedia = vi.fn(query => ({ matches: query.includes('pointer: coarse'), media: query, onchange: null,
+      addEventListener: vi.fn(), removeEventListener: vi.fn(), addListener: vi.fn(), removeListener: vi.fn(), dispatchEvent: () => true }))
+    try {
+      const release = gateResolve()
+      const doc = workbookOf([sheet('A')])
+      doc.sheets[0].cols = [{ min: 1, max: 2, widthChars: 2 }]
+      const ui = render(<InteractiveSheetDoc doc={doc} />)
+      await waitFor(() => expect(statusText(ui)).not.toMatch(/Loading sheet/))
+      fireEvent.change(ui.getByRole('textbox', { name: 'Go To cell' }), { target: { value: 'B1' } })
+      fireEvent.click(ui.getByRole('button', { name: 'Go To' }))
+      const grid = ui.getByRole('grid')
+      act(() => grid.focus())
+      const disclosure = ui.getByRole('button', { name: 'Actions for column B' })
+      fireEvent.click(disclosure)
+      const sort = ui.getByRole('button', { name: 'Cycle sort column B' })
+      expect(sort.tabIndex).toBe(-1)
+      expect(fireEvent.mouseDown(sort)).toBe(false)
+      expect(document.activeElement).toBe(grid)
+      act(() => { fireEvent.click(sort) })
+      // The action closes the lane; reopening must show the existing pending job.
+      fireEvent.click(disclosure)
+      const pendingSort = ui.getByRole('button', { name: 'Cycle sort column B' })
+      expect(pending(ui)).toEqual({ status: true, busy: true, header: true })
+      expect(pendingSort.getAttribute('aria-description')).toBe('sorting')
+      expect(pendingSort.title).toBe('Column B; sorting')
+      expect(pendingSort.textContent).toBe('…')
+      expect(pendingSort.getAttribute('aria-pressed')).toBe('false')
+      expect(pendingSort.getAttribute('data-action-column')).toBe('1')
+      expect(document.activeElement).toBe(grid)
+      const group = ui.getByRole('group', { name: 'Column B actions' })
+      const targets = [...group.querySelectorAll('button')]
+      const boxes = targets.map(button => ({
+        left: parseFloat(group.style.left) + parseFloat(button.style.left), top: parseFloat(button.style.top),
+        width: Math.max(parseFloat(button.style.width), parseFloat(button.style.minWidth)),
+        height: Math.max(parseFloat(button.style.height), parseFloat(button.style.minHeight)),
+      }))
+      for (const box of boxes) {
+        expect(box.width).toBeGreaterThanOrEqual(44)
+        expect(box.height).toBeGreaterThanOrEqual(44)
+        expect(box.left + box.width).toBeLessThanOrEqual(GRID_HEADER_SIZE)
+        for (const header of ui.getAllByRole('columnheader').filter(h => h.hasAttribute('aria-sort') || /^Column /.test(h.getAttribute('aria-label') ?? ''))) {
+          const left = parseFloat(header.style.left) + parseFloat(/translateX\(([-\d.]+)px\)/.exec(header.style.transform)![1])
+          expect(box.left + box.width).toBeLessThanOrEqual(left)
+        }
+      }
+      const header = ui.getByRole('columnheader', { name: 'Column B' })
+      expect(parseFloat(header.style.width)).toBeLessThan(44)
+      expect(header.querySelectorAll('[data-action-column]')).toHaveLength(0)
+      for (let i = 1; i < boxes.length; i++) expect(boxes[i].top).toBeGreaterThanOrEqual(boxes[i - 1].top + boxes[i - 1].height)
+      await act(async () => { release() })
+      await waitFor(() => expect(ui.getByRole('columnheader', { name: /Column B; sort priority 1, ascending/ })).toBeTruthy())
+      const committed = ui.getByRole('button', { name: 'Cycle sort column B' })
+      expect(pending(ui)).toEqual({ status: false, busy: false, header: false })
+      expect(committed.getAttribute('aria-description')).toBe('ascending')
+      expect(committed.title).toBe('Column B; sort priority 1, ascending; ascending')
+      expect(committed.textContent).toBe('↑')
+      expect(committed.getAttribute('aria-pressed')).toBe('true')
+      expect(committed.tabIndex).toBe(-1)
+      expect(document.activeElement).toBe(grid)
+      expect(statusText(ui)).toMatch(/View-only sort applied/)
+    } finally { window.matchMedia = previous }
   })
 
   it('clears on failure with the failure announced', async () => {

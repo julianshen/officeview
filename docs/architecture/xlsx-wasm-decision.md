@@ -7,19 +7,20 @@ or **unmeasured** (labelled). Kernel figures cite merged sources in this worktre
 (`docs/validation/interactive-viewer-performance.md` §"S8.6 final Chrome measurements",
 `tests/fixtures/xlsx-viewer/performance-profile.json`
 `desktop.measurement`,
-`docs/validation/interactive-viewer-sort-chrome-r3.json`). Viewer figures cite
-branch `feature/iv-s10-2` (`docs/validation/interactive-viewer-performance.md`, receipt
-`docs/validation/interactive-viewer-viewer-chrome-r1.json`), which is **pending merge**; that run was shared-machine
-(load 3.53/2.72/2.53 at start, 1.99/2.38/2.48 at end) with a quiet-machine re-run pending. Nothing here is a Safari,
-iPad, or mobile result.
+`docs/validation/interactive-viewer-sort-chrome-r3.json`). Viewer figures cite the merged S10.2 receipts
+(`docs/validation/interactive-viewer-performance.md`). Historical r1
+(`docs/validation/interactive-viewer-viewer-chrome-r1.json`) explains the original detection bottleneck; merged r16
+(`docs/validation/interactive-viewer-viewer-chrome-r16.json`) admits desktop D 13/13, including sort acknowledgment
+p95 17.1 ms (max 37.0 ms). Both are shared-machine evidence; a quiet-machine re-run remains pending.
+Nothing here is a Safari, iPad, or mobile result. The final release receipt must use the final tree.
 
 ## 0. Summary
 
 | Question | Answer |
 |---|---|
-| Decision | S11 not run: the TS kernel meets every frozen target and the end-to-end miss is detection I/O, not kernel CPU |
+| Decision | S11 not run: the TS kernel meets every frozen target and the historical end-to-end delay was detection I/O, not kernel CPU |
 | Evidence | Nine S8.6 scenarios against the five frozen kernel thresholds, all passing on desktop D headless Chrome (merged receipt) |
-| Binding cost of the miss | ~12 s main-thread range detection (page RPC/deserialization), no frozen row; kernel slice 113–144 ms |
+| Historical r1 bottleneck | ~12 s main-thread range detection (page RPC/deserialization), no frozen row; kernel slice 113–144 ms. r16 acknowledgment now passes |
 | Revisit | A kernel row misses on a required profile; mobile/Safari receipts arrive; the quiet S10.2 re-run changes phase attribution |
 
 ## 1. Hypothesis a Wasm kernel would test
@@ -59,10 +60,11 @@ S8.6 evidence boundary (merged perf doc §"Implementation and evidence limits", 
 conditions above): one M4 Pro laptop with possible concurrent load, synthetic fixture stores, dev-served modules,
 smoke-labelled runs; no Safari or physical mobile results, whose frozen thresholds stay unmeasured.
 
-## 3. Where the remaining end-to-end miss actually goes
+## 3. Historical r1 end-to-end bottleneck and current r16 evidence
 
-S10.2 receipt (pending merge): 12/13 desktop rows pass. Framed end to end rather than by row: sort input-to-present on
-the 1M-row F2 is ~12 s of detection with **no frozen row** covering it (non-kernel work), against the spec's
+Historical S10.2 r1 receipt: 12/13 desktop rows passed. The following phase attribution describes r1, before worker
+range detection and pending UI; it is not a current failure. Merged r16 passes 13/13 desktop rows. Framed end to end
+rather than by row: sort input-to-present on the 1M-row F2 was ~12 s of detection with **no frozen row** covering it (non-kernel work), against the spec's
 separately reported kernel boundary. Phase attribution (S10.2 doc "The miss, attributed by phase"):
 
 - **Click → first worker command: ~12 s on the main thread.**
@@ -78,18 +80,18 @@ separately reported kernel boundary. Phase attribution (S10.2 doc "The miss, att
   kernel row.
 - Commit and present: < 30 ms.
 
-Sort acknowledgment samples are [13316.3, 12007.5, 11896.7, 12047.5, 11976.0] ms (receipt `measurements.ack.sort`),
-i.e. 11,897–13,316 ms / 11.9–13.3 s. S10.2 HEAD (`76a84d3`) adds a synchronous pending state on header sort, so the
-ack row will likely pass on re-run — but no new receipt exists yet, and the ~12 s input-to-present stands regardless.
-Filter apply already acknowledges in ~31 ms via a progressbar; its end-to-end cost is range re-admission (~2.8 s;
-S10.2 doc), which is detection I/O, not kernel. These docs and the plan status must be refreshed from the final merged
-S10.2 receipt.
+Historical r1 sort acknowledgment samples were [13316.3, 12007.5, 11896.7, 12047.5, 11976.0] ms
+(receipt `measurements.ack.sort`): 11.9–13.3 s because the header had no pending UI. The merged viewer now
+acknowledges synchronously and performs range detection in the worker. Historical r16 acknowledgment passes:
+sort p95 17.1 ms (max 37.0 ms); filter apply max 33.3 ms (n=10). Filter apply end to end is 1.531 s first,
+0.686–0.700 s after (performance doc r16 summary). These are separately reported pipeline costs, not a kernel miss.
 
 ## 4. Why Wasm would not move that, and what it would cost (**unmeasured** — no prototype built)
 
-The ~12 s is page RPC round trips plus deserialization plus (until `76a84d3` is receipted) missing pending state — no
-kernel compute. Porting sort/filter to Wasm leaves all of it untouched and can only shrink the 113–144 ms sort slice
-and at most the compute share of the ~1.0 s first-sort `prepareColumns`. The tightest kernel row (1M 8-key sort,
+The historical r1 ~12 s was page RPC round trips plus deserialization and missing pending state — no kernel
+compute. Those causes were addressed by worker range detection and pending UI in the merged TypeScript baseline,
+with r16 acknowledgment passing. A Wasm port would only have shrunk the historical 113–144 ms sort slice and
+at most the compute share of the ~1.0 s first-sort `prepareColumns`. The tightest kernel row (1M 8-key sort,
 21.3%) is still compute with measured headroom, not a bottleneck.
 
 A port would add: Wasm bundle bytes plus cold download/compile/init on every first open; linear-memory copies of every
@@ -102,8 +104,8 @@ full parity-vector rerun for no threshold headroom gained.
 
 ## 5. Decision
 
-**S11 not run**, under the plan's optional execution boundary: the baseline meets every kernel target and the one
-end-to-end miss is measured detection I/O, not kernel CPU.
+**S11 not run**, under the plan's optional execution boundary: the baseline meets every kernel target and the historical
+end-to-end bottleneck was detection I/O, not kernel CPU; merged r16 acknowledgment passes.
 
 Re-open triggers (any one justifies running S11 later):
 

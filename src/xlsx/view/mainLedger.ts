@@ -9,13 +9,13 @@
  * both are live until the payload is released.
  *
  * Pools: the remote row cache, committed view buffers from worker deltas,
- * in-flight reply payloads, copy sessions, controls value pages/runs, the
+ * in-flight reply payloads (drawing replies attributed separately), copy sessions, controls value pages/runs, the
  * layout and merge caches, and an estimate of the owned grid DOM
  * (DOM_ELEMENT_BYTES per owned element; see below). Canvas backing stores are
  * the bitmap pool's, not this one's (§12.4).
  */
-export type MainPool = 'rowCache' | 'viewBuffers' | 'replies' | 'copy' | 'controls' | 'layout' | 'merges' | 'dom' | 'geometry' | 'structure' | 'document' | 'canvasText'
-export const MAIN_POOLS: readonly MainPool[] = ['rowCache', 'viewBuffers', 'replies', 'copy', 'controls', 'layout', 'merges', 'dom', 'geometry', 'structure', 'document', 'canvasText']
+export type MainPool = 'rowCache' | 'viewBuffers' | 'replies' | 'drawings' | 'copy' | 'controls' | 'layout' | 'merges' | 'dom' | 'geometry' | 'structure' | 'document' | 'canvasText'
+export const MAIN_POOLS: readonly MainPool[] = ['rowCache', 'viewBuffers', 'replies', 'drawings', 'copy', 'controls', 'layout', 'merges', 'dom', 'geometry', 'structure', 'document', 'canvasText']
 
 /**
  * Estimated bytes per owned grid DOM element: the element, its attribute and
@@ -87,7 +87,7 @@ export interface MainLedgerSnapshot {
   atPeak: Record<MainPool, number>
 }
 
-const emptyPools = (): Record<MainPool, number> => ({ rowCache: 0, viewBuffers: 0, replies: 0, copy: 0, controls: 0, layout: 0, merges: 0, dom: 0, geometry: 0, structure: 0, document: 0, canvasText: 0 })
+const emptyPools = (): Record<MainPool, number> => ({ rowCache: 0, viewBuffers: 0, replies: 0, drawings: 0, copy: 0, controls: 0, layout: 0, merges: 0, dom: 0, geometry: 0, structure: 0, document: 0, canvasText: 0 })
 
 /** The part of FinalizationRegistry the ledger uses (injectable for tests). */
 export interface CollectionWatcher { register(target: object, token: string): void }
