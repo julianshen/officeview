@@ -25,7 +25,7 @@ import { createQuotaLedger, quotaLimitsFor, type QuotaLedger } from './quota'
 import { WORKER_BUDGETS } from '../view/tileCache'
 import { classifyPart, inventoryLimits } from './admission'
 import { anchorRecordEvents, newSheetMetadata, normalizeRowMetadata, sharedStringEvents, sheetRecordEvents, type SheetMetadata } from './sheetRecords'
-import { PageBuilder, SourcePageStore, browserPageStorageEnv, choosePageBackend, pageOwner, payloadBytes, sweepLeftoverPages, type PageStorageEnv, type StoredPage } from './sourcePages'
+import { PageBuilder, SourcePageStore, browserPageStorageEnv, choosePageBackend, pageOwner, payloadBytes, type PageStorageEnv, type StoredPage } from './sourcePages'
 import { PENDING_STRING_BYTES, TEXT_STRING_BYTES } from './constructionMemory'
 import { importLimitsFor, type ImportLimits, type ImportLimitOverrides, type ImportOutcome, type ImportProgress, type ImportSession, type ImportedPage } from './importSession'
 
@@ -192,8 +192,7 @@ export async function openImportSession(source: Extract<SourceHandle, { kind: 'b
   // closing the store releases the share and so stops the sweep.
   if (!swept) {
     swept = true
-    const share = store.construction.share('leftover page sweep')
-    void sweepLeftoverPages(storageEnv, { reserve: (bytes) => share.need(bytes) }).catch(() => {}).finally(() => share.release())
+    void store.sweepLeftovers(storageEnv)
   }
   let notify: () => void = () => {}
   let changedPromise = new Promise<void>((resolve) => { notify = resolve })

@@ -1133,6 +1133,15 @@ export class SourcePageStore implements PageSink {
     return { removed }
   }
 
+  /**
+   * The once-per-process leftover sweep (sweepLeftoverPages), detached from
+   * the import: its owner grouping is construction memory of this store (§12.4).
+   * Never rejects.
+   */
+  sweepLeftovers(env: PageStorageEnv, options: { now?: number; maxAgeMs?: number } = {}): Promise<number> {
+    const share = this.construction.share('leftover page sweep')
+    return sweepLeftoverPages(env, { ...options, reserve: (bytes) => share.need(bytes) }).catch(() => 0).finally(() => share.release())
+  }
   async abandon(docId: string): Promise<void> {
     if (docId !== this.docId) return
     this.abandoned = true
