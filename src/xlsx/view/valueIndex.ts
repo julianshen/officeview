@@ -298,7 +298,10 @@ export class ValueIndexCache {
         index = new ValueIndex(identity, source, this, key, INDEX_ADMISSION)
         this.indexes.set(key, index)
         return index
-      } catch (cause) { this.release(bytes); throw cause }
+      } catch (cause) {
+        try { this.release(bytes) } catch { /* Preserve the constructor failure after refund notification. */ }
+        throw cause
+      }
     }
     this.indexes.set(key, index)
     return index
@@ -331,7 +334,13 @@ export class ValueIndexCache {
     }
     if (this.beforeGrowth && !this.beforeGrowth(this.used + bytes)) throw new ValueIndexError('quota', 'Main document memory quota exceeded')
     this.used += bytes
-    this.onUsage?.(this.used)
+    try { this.onUsage?.(this.used) } catch (cause) {
+      // Admission/eviction already finished. Refund only this unpublished growth,
+      // keeping earlier indexes and any independent reservations intact.
+      this.used -= bytes
+      try { this.onUsage?.(this.used) } catch { /* The original observer failure remains the operation error. */ }
+      throw cause
+    }
   }
   /** @internal */
   release(bytes: number): void { this.used -= bytes; this.onUsage?.(this.used) }
@@ -399,7 +408,10 @@ export class ValueIndex implements LaneAccount {
       this.scope = key
       this.source = source
       this.numberKind = identity.classification.kind === 'date' ? KEY_DATE : KEY_NUMBER
-    } catch (cause) { if (!admitted) cache.release(bytes); throw cause }
+    } catch (cause) {
+      if (!admitted) try { cache.release(bytes) } catch { /* Preserve the constructor failure after refund notification. */ }
+      throw cause
+    }
   }
   get size(): number { return this.count }
   get searchKeyStatus(): { strategyId: string; keyed: number; state: SearchKeyState; error?: ValueIndexError } {

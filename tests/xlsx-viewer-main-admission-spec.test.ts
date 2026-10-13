@@ -3,12 +3,13 @@ import { DocumentSession } from '../src/worker/viewerSession'
 import { MainControlMemory } from '../src/xlsx/view/mainControlMemory'
 import { MainMemoryLedger, estimatePayloadBytes } from '../src/xlsx/view/mainLedger'
 import { createObjectWorkbookSource } from '../src/xlsx/view/source'
+import { classifyColumn } from '../src/xlsx/view/filter'
 import { semanticsFor } from '../src/xlsx/view/semanticsFor'
 import { createViewerControlResources, viewerControls } from '../src/components/xlsx/viewerControlsClient'
 import { createIdentityOrder } from '../src/xlsx/view/order'
 import { createIntervalSet, visibilityFromHidden } from '../src/xlsx/view/visibility'
 import { emptyGridSelection } from '../src/xlsx/view/selection'
-import { ValueIndexCache, valueSourceFromStore } from '../src/xlsx/view/valueIndex'
+import { ValueIndex, ValueIndexCache, valueScope, valueSourceFromStore } from '../src/xlsx/view/valueIndex'
 
 function workbook() {
   return { sheets: ['s', 'other'].map(sheetId => ({ name: sheetId, sheetId, workbookIndex: sheetId === 's' ? 0 : 1,
@@ -221,4 +222,149 @@ test('index disposal drops its Boolean lane before the release observer runs', a
   index.dispose()
   expect(observed).toBe(true)
   await source.release()
+})
+
+async function observerDomain() {
+  const doc: any = { sheets: [{ name: 'S', sheetId: 's', workbookIndex: 0,
+    rows: [{ index: 0, cells: [{ row: 0, col: 0, ref: 'A1', value: true, styleIndex: 0 }] }],
+    cols: [], merges: [], mergeRanges: [], semantics: semanticsFor('1900') }], tables: [] }
+  const source = createObjectWorkbookSource(doc, 'd'), store = source.store('s')
+  const body = { r0: 0, r1: 1, c0: 0, c1: 0, headerRows: 0 as const, totalsRows: 0 as const }
+  const read = await store.readCell({ row: 0, col: 0 }, { stamp: store.stamp, signal: signal() })
+  if (read.kind !== 'cell' || typeof read.cell.value !== 'boolean') throw new Error('Expected actual Boolean source cell')
+  const classification = classifyColumn([{ kind: 'boolean', value: read.cell.value }], true)
+  const identity = { ...store.stamp, range: body, col: 0, classification, classificationGen: 0 }
+  return { doc, source, identity, values: valueSourceFromStore(store, 0, body) }
+}
+for (const profile of ['D', 'M'] as const) for (const route of ['open', 'constructor'] as const) {
+  test(`${profile} ${route} initial usage observer failures refund the same main owner and permit retry`, async () => {
+    const { doc, source, identity, values } = await observerDomain(), original = JSON.stringify(doc), ledger = new MainMemoryLedger()
+    const primary = new Error('initial observer fault'), secondary = new Error('rollback observer fault'), calls: number[] = []
+    let enabled = true
+    const resources = createViewerControlResources(profile, bytes => { calls.push(bytes); if (enabled) throw bytes ? primary : secondary }, ledger)
+    const cache = resources.cache, baseline = ledger.bytes, initial = 1032 + valueScope(identity).length * 2
+    const create = () => route === 'open' ? cache.open(identity, values) : new ValueIndex(identity, values, cache, valueScope(identity))
+    try {
+      for (let attempt = 0; attempt < 3; attempt++) {
+        let error: unknown; try { create() } catch (cause) { error = cause }
+        expect(error).toBe(primary)
+        expect(cache.usedBytes).toBe(0); expect(cache.size).toBe(0)
+        expect(ledger.ownerBytes('controls', resources.cacheOwner)).toBe(0)
+        expect(ledger.bytes).toBe(baseline)
+        expect(calls.slice(-2)).toEqual([initial, 0])
+      }
+      enabled = false
+      const index = create()
+      expect(cache.usedBytes).toBe(1112); expect(index.ledger.chargedBytes).toBe(1112)
+      expect(ledger.ownerBytes('controls', resources.cacheOwner)).toBe(1112)
+      if (route === 'open') {
+        enabled = true
+        const count = calls.length
+        expect(create()).toBe(index); expect(calls.length).toBe(count)
+        enabled = false
+      }
+      index.dispose()
+      expect(cache.usedBytes).toBe(0); expect(cache.size).toBe(0); expect(ledger.bytes).toBe(baseline)
+      expect(JSON.stringify(doc)).toBe(original)
+    } finally { enabled = false; resources.dispose(); await source.release() }
+    expect(ledger.ownerBytes('controls', resources.cacheOwner)).toBe(0)
+  })
+}
+
+for (const route of ['open', 'constructor'] as const) test(`${route} preserves a later constructor error when its rollback observer also throws`, async () => {
+  const { source, identity, values } = await observerDomain(), ledger = new MainMemoryLedger()
+  const primary = new Error('later result registry constructor fault'), secondary = new Error('refund observer fault')
+  let refundFault = true
+  const resources = createViewerControlResources('D', bytes => { if (!bytes && refundFault) throw secondary }, ledger)
+  const cache = resources.cache, baseline = ledger.bytes, Native = WeakMap
+  globalThis.WeakMap = new Proxy(Native, { construct() { throw primary } })
+  try {
+    let error: unknown
+    try { if (route === 'open') cache.open(identity, values); else new ValueIndex(identity, values, cache, valueScope(identity)) } catch (cause) { error = cause }
+    expect(error).toBe(primary)
+    expect(cache.usedBytes).toBe(0); expect(cache.size).toBe(0)
+    expect(ledger.ownerBytes('controls', resources.cacheOwner)).toBe(0); expect(ledger.bytes).toBe(baseline)
+  } finally { globalThis.WeakMap = Native; refundFault = false }
+  const retry = cache.open(identity, values); expect(cache.usedBytes).toBe(1112); retry.dispose()
+  resources.dispose(); await source.release()
+})
+
+test('initial admission rejects quota and false or throwing growth before mutation without refunding a pinned live index', async () => {
+  const { source, identity, values } = await observerDomain(), calls: number[] = [], growthError = new Error('growth fault')
+  let mode = 'allow'
+  const cache = new ValueIndexCache({ onUsage: bytes => calls.push(bytes), beforeGrowth: () => {
+    if (mode === 'throw') throw growthError
+    return mode !== 'refuse'
+  } })
+  const first = cache.open(identity, values), initial = cache.usedBytes
+  first.pin(1)
+  for (const failure of ['refuse', 'throw']) {
+    mode = failure
+    let error: any; try { cache.open({ ...identity, classificationGen: 1 }, values) } catch (cause) { error = cause }
+    expect(failure === 'throw' ? error : error?.code).toBe(failure === 'throw' ? growthError : 'quota')
+    expect(cache.usedBytes).toBe(initial); expect(cache.size).toBe(1); expect(first.disposed).toBe(false)
+    expect(first.ledger.chargedBytes).toBe(initial); expect(calls).toEqual([initial])
+  }
+  const bounded = new ValueIndexCache({ limitBytes: initial, onUsage: bytes => calls.push(bytes) }), pinned = bounded.open(identity, values)
+  pinned.pin(1)
+  const notificationCount = calls.length
+  expect(() => bounded.open({ ...identity, classificationGen: 1 }, values)).toThrow()
+  expect(bounded.usedBytes).toBe(initial); expect(bounded.size).toBe(1); expect(calls.length).toBe(notificationCount)
+  pinned.pin(-1); bounded.invalidate()
+  mode = 'allow'
+  const second = cache.open({ ...identity, classificationGen: 1 }, values)
+  expect(cache.usedBytes).toBe(2 * initial); expect(first.disposed).toBe(false)
+  second.dispose(); expect(cache.usedBytes).toBe(initial); first.pin(-1); first.dispose(); expect(cache.usedBytes).toBe(0)
+  await source.release()
+})
+
+test('initial observer rollback preserves actual idle eviction and its separately held cache reservation', async () => {
+  const { source, identity, values } = await observerDomain(), ledger = new MainMemoryLedger(), calls: number[] = [], fault = new Error('new index observer fault')
+  let failAt = -1
+  const resources = createViewerControlResources('D', bytes => { calls.push(bytes); if (bytes === failAt) throw fault }, ledger), cache = resources.cache
+  const first = cache.open(identity, values), initial = cache.usedBytes, held = cache.reserve()
+  // Synthetic cache pressure backed by an actual held buffer, not UI work.
+  held.charge(cache.limitBytes - initial)
+  let buffer: Uint8Array | undefined = new Uint8Array(cache.limitBytes - initial)
+  expect(buffer.byteLength).toBe(held.bytes)
+  failAt = cache.limitBytes
+  let error: unknown; try { cache.open({ ...identity, classificationGen: 1 }, values) } catch (cause) { error = cause }
+  expect(error).toBe(fault)
+  expect(first.disposed).toBe(true); expect(cache.size).toBe(0)
+  expect(cache.usedBytes).toBe(held.bytes)
+  expect(ledger.ownerBytes('controls', resources.cacheOwner)).toBe(held.bytes)
+  expect(calls.slice(-3)).toEqual([held.bytes, cache.limitBytes, held.bytes])
+  failAt = -1
+  const retry = cache.open({ ...identity, classificationGen: 1 }, values)
+  expect(cache.usedBytes).toBe(cache.limitBytes); retry.dispose()
+  buffer = undefined; held.close(); expect(cache.usedBytes).toBe(0)
+  resources.dispose(); await source.release()
+})
+
+test('observer and later constructor failures preserve a prior pinned index and its authoritative main charge', async () => {
+  const { source, identity, values } = await observerDomain(), ledger = new MainMemoryLedger()
+  const observerFault = new Error('additional index observer fault'), constructorFault = new Error('additional index constructor fault')
+  let failAt = -1
+  const resources = createViewerControlResources('D', bytes => { if (bytes === failAt) throw observerFault }, ledger), cache = resources.cache
+  const first = cache.open(identity, values), initial = cache.usedBytes, baseline = ledger.bytes
+  first.pin(1)
+  failAt = 2 * initial
+  let error: unknown; try { cache.open({ ...identity, classificationGen: 1 }, values) } catch (cause) { error = cause }
+  expect(error).toBe(observerFault)
+  expect(cache.size).toBe(1); expect(cache.usedBytes).toBe(initial); expect(first.disposed).toBe(false)
+  expect(ledger.bytes).toBe(baseline); expect(ledger.ownerBytes('controls', resources.cacheOwner)).toBe(initial)
+  failAt = initial
+  const Native = WeakMap
+  globalThis.WeakMap = new Proxy(Native, { construct() { throw constructorFault } })
+  try { cache.open({ ...identity, classificationGen: 2 }, values) } catch (cause) { error = cause }
+  finally { globalThis.WeakMap = Native }
+  expect(error).toBe(constructorFault)
+  expect(cache.size).toBe(1); expect(cache.usedBytes).toBe(initial); expect(first.disposed).toBe(false)
+  expect(ledger.bytes).toBe(baseline); expect(ledger.ownerBytes('controls', resources.cacheOwner)).toBe(initial)
+  expect(cache.open(identity, values)).toBe(first)
+  failAt = -1
+  const retry = cache.open({ ...identity, classificationGen: 1 }, values)
+  expect(cache.usedBytes).toBe(2 * initial); retry.dispose()
+  first.pin(-1); first.dispose(); expect(cache.usedBytes).toBe(0)
+  resources.dispose(); await source.release()
 })
