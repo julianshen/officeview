@@ -15,7 +15,7 @@
  */
 import { describe, expect, it } from 'vitest'
 import { cellDisplayText, layoutCellBody, renderSheet, rowOverflowFromCells, textMeasurer, textOverflowAllowance } from '../src/xlsx/render'
-import { MAX_COLS } from '../src/xlsx/view/coordinates'
+import { formatA1, MAX_COLS } from '../src/xlsx/view/coordinates'
 import type { XlsxCell, XlsxCellStyle, XlsxMergeRange, XlsxSheet } from '../src/xlsx/types'
 
 const W = 50
@@ -182,6 +182,21 @@ describe('review round 4 regressions', () => {
     renderSheet(sheet, out.ctx, { colWidthsPx: Array(6).fill(W), rowHeightsPx: [20, 20, 20], widthPx: 300, heightPx: 60 })
     const a1 = out.painted.filter(p => p.text === LONG).find(p => p.clip?.x0 === 0)
     expect(a1?.clip).toEqual({ x0: 0, x1: 50 }) // blocked by the B1:B2 merge on row 1
+  })
+})
+
+describe('review round 5: mixed-source grouping cost', () => {
+  it.each([128, 256, 512])('partitions %i diagonal explicit refs in linear source-ref reads', count => {
+    let reads = 0
+    const cells = Array.from({ length: count }, (_, row) => {
+      const ref = formatA1({ row, col: row })
+      return { ...cellAt(row, LONG), row, get ref() { reads++; return ref } }
+    })
+    const sheet: XlsxSheet = { name: 'S', cols: [], merges: [], mergeRanges: [], rows: [{ index: 0, cells }] }
+    const out = recorder()
+    renderSheet(sheet, out.ctx, { colWidthsPx: Array(count).fill(4), rowHeightsPx: Array(count).fill(4), widthPx: count * 4, heightPx: count * 4 })
+    expect(out.painted).toHaveLength(count)
+    expect(reads, `${count} cells cost ${reads} source-ref reads`).toBeLessThanOrEqual(count * 6)
   })
 })
 

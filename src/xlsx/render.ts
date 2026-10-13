@@ -665,13 +665,19 @@ export function renderSheet(
   const extent = { width: m.widthPx, height: m.heightPx }
   const laidOut: CellBodyLayout[] = []
   for (const row of sheet.rows) {
-    // Neighbour occupancy for text overflow (S13), built once per source row on
-    // demand: a malformed row whose cells name other rows keys each by its own.
-    const rowOverflow = new Map<number, RowOverflowInput>()
-    const overflowFor = (cell: XlsxCell): OverflowAllowance => {
+    // A malformed row may name many source rows. Partition once so occupancy
+    // construction never rescans the container for each source row.
+    const sourceCells = new Map<number, XlsxCell[]>()
+    for (const cell of row.cells) {
       const source = cellSourceRow(row, cell)
+      let cells = sourceCells.get(source)
+      if (!cells) sourceCells.set(source, cells = [])
+      cells.push(cell)
+    }
+    const rowOverflow = new Map<number, RowOverflowInput>()
+    const overflowFor = (cell: XlsxCell, source: number): OverflowAllowance => {
       let input = rowOverflow.get(source)
-      if (!input) rowOverflow.set(source, input = rowOverflowFromCells(row.cells.filter(item => cellSourceRow(row, item) === source), merges.inRow(source), edges.col, MAX_COLS - 1))
+      if (!input) rowOverflow.set(source, input = rowOverflowFromCells(sourceCells.get(source)!, merges.inRow(source), edges.col, MAX_COLS - 1))
       return textOverflowAllowance(input, cell.col)
     }
     for (const cell of row.cells) {
@@ -695,7 +701,7 @@ export function renderSheet(
       if (!(w > 0 && hh > 0) || !intersects(x, y, w, hh)) continue
       // Fills go down now; text after every fill, so overflow into an empty
       // formatted neighbour stays visible (Excel draws it over the fill).
-      const layout = layoutCellBody(ctx, sheet, cell, x, y, w, hh, measured, rng ? NO_OVERFLOW : overflowFor(cell))
+      const layout = layoutCellBody(ctx, sheet, cell, x, y, w, hh, measured, rng ? NO_OVERFLOW : overflowFor(cell, source))
       paintCellLayout(ctx, layout, extent, 'fill')
       laidOut.push(layout)
     }
