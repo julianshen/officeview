@@ -18,7 +18,8 @@
  *   both kinds by recency and evicts a lane through its retain callback; this
  *   cache never evicts on its behalf. A retained lane's bytes move onto its
  *   pool entry, which uncharges them. The running prepare batch's raw staging
- *   counts in the same admission, so the two never overlap past the budget.
+ *   counts in the same admission and evicts idle lanes before it grows, so
+ *   staging, retained and leased lanes never overlap past the budget.
  *   Session close keeps a leased lane (and a lane still building) charged
  *   until its reader or build ends.
  * - main thread / standalone: a budget given to the constructor (the controls
