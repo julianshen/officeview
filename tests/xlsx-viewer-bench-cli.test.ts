@@ -43,6 +43,8 @@ describe('parseArgs', () => {
       channel: 'chromium',
       timeoutMinutes: 15,
       unadmitted: false,
+      suite: 'harness',
+      scale: 'full',
     })
   })
 
@@ -101,6 +103,19 @@ describe('parseArgs', () => {
   it('refuses --mode release while only placeholder fixtures exist', () => {
     expect(() => args(['--mode', 'release'])).toThrow(/placeholder/)
     expect(() => args(['--mode=release', '--browser', 'safari-manual', '--serve'])).toThrow(/placeholder/)
+    expect(() => args(['--mode', 'release', '--scenario', 'sort-1m-1key', '--channel', 'chrome'])).toThrow(/placeholder/)
+  })
+
+  it('admits --mode release only for the S10.2 viewer suite on installed Chrome, desktop, full scale', () => {
+    // The plan's command: --fixture all is the viewer suite.
+    expect(args(['--browser', 'chromium', '--channel', 'chrome', '--profile', 'desktop', '--fixture', 'all', '--repeat', '30', '--mode', 'release'])).toMatchObject({ suite: 'viewer', mode: 'release', scale: 'full', repeat: 30 })
+    expect(args(['--suite', 'viewer'])).toMatchObject({ suite: 'viewer', mode: 'smoke', repeat: 30 })
+    expect(() => args(['--suite', 'viewer', '--mode', 'release'])).toThrow(/channel chrome/)
+    expect(() => args(['--suite', 'viewer', '--mode', 'release', '--channel', 'chrome', '--profile', 'mobile'])).toThrow(/physical iPad/)
+    expect(() => args(['--suite', 'viewer', '--mode', 'release', '--channel', 'chrome', '--scale', 'reduced'])).toThrow(/scale full/)
+    expect(() => args(['--suite', 'viewer', '--mode', 'release', '--channel', 'chrome', '--repeat', '10'])).toThrow(/repeat >= 30/)
+    expect(() => args(['--suite', 'viewer', '--scenario', 'sort-1m-1key'])).toThrow(/own fixture set/)
+    expect(() => args(['--scale', 'reduced'])).toThrow(/suite viewer/)
   })
 
   it('--baseline applies to automated browsers only', () => {

@@ -23,6 +23,7 @@ export interface GridHeadersProps {
   controlColumn?: number | null
   filter?: FilterSpec | null
   onSortCycle?: (col: number, shift: boolean, invoker: HTMLButtonElement) => void
+  pendingSortColumn?: number | null
   onFilter?: (col: number, invoker: HTMLButtonElement) => void
   onSortDialog?: (col: number, invoker: HTMLButtonElement) => void
   onNotice?: (message: string) => void
@@ -184,7 +185,7 @@ export function GridHeaders(props: GridHeadersProps): ReactElement {
       const cellTarget = { ...target, minWidth: touch ? Math.min(GRID_HEADER_SIZE, box.width) : 0, width: touch ? box.width : box.width / (actions ? props.onSortDialog ? 4 : 3 : 1), flex: 'none' }
       const iconClip = { display: 'block', width: touch ? box.width : undefined, overflow: 'hidden', textAlign: 'center' as const }
       return <div key={col} role="columnheader" aria-colindex={col + 2} aria-label={label} aria-selected={selected} aria-sort={priority === 0 ? direction : undefined}
-        style={{ position: 'absolute', left: GRID_HEADER_SIZE + box.x, width: box.width, height, overflow: 'hidden', display: 'flex', flexDirection: touch ? 'column' : 'row', alignItems: 'stretch' }}>
+        style={{ position: 'absolute', left: 0, transform: `translateX(${GRID_HEADER_SIZE + box.x}px)`, width: box.width, height, overflow: 'hidden', display: 'flex', flexDirection: touch ? 'column' : 'row', alignItems: 'stretch' }}>
         <button type="button" aria-label={`Select ${label}`} data-header-column={col} tabIndex={props.controlMode ? 0 : -1} onMouseDown={keepGridFocus}
           aria-description={actions ? description : undefined} title={`${label}; ${description}`}
           onClick={event => { props.onNotice?.(`${label}; ${description}`); props.onSelect?.('column', col, { toggle: event.ctrlKey || event.metaKey, extend: event.shiftKey }, event) }}
@@ -201,7 +202,7 @@ function columnActions(props: GridHeadersProps, col: number, style: (index: numb
   const label = `Column ${columnToLetters(col)}${direction ? `; sort priority ${priority + 1}, ${direction}` : ''}`
   const rule = props.filter?.columns.get(col), description = rule ? columnRuleDescription(rule) : 'No viewer filter'
   return <>
-    <button type="button" data-action-column={col} tabIndex={props.controlMode ? 0 : -1} onMouseDown={keepGridFocus} style={{ ...style(0), color: direction ? '#1459a6' : undefined }} disabled={!props.onSortCycle} aria-label={`Cycle sort column ${columnToLetters(col)}`} aria-description={direction ?? 'unsorted'} aria-pressed={Boolean(direction)} title={`${label}; ${direction ?? 'unsorted'}`} onClick={event => props.onSortCycle?.(col, event.shiftKey, event.currentTarget)}><span style={iconClip}>{direction === 'ascending' ? '↑' : direction === 'descending' ? '↓' : '↕'}</span></button>
+    <button type="button" data-action-column={col} tabIndex={props.controlMode ? 0 : -1} onMouseDown={keepGridFocus} style={{ ...style(0), color: direction ? '#1459a6' : undefined }} disabled={!props.onSortCycle} aria-label={`Cycle sort column ${columnToLetters(col)}`} aria-busy={props.pendingSortColumn === col ? true : undefined} aria-description={props.pendingSortColumn === col ? 'sorting' : direction ?? 'unsorted'} aria-pressed={Boolean(direction)} title={`${label}; ${props.pendingSortColumn === col ? 'sorting' : direction ?? 'unsorted'}`} onClick={event => props.onSortCycle?.(col, event.shiftKey, event.currentTarget)}><span style={iconClip}>{props.pendingSortColumn === col ? '…' : direction === 'ascending' ? '↑' : direction === 'descending' ? '↓' : '↕'}</span></button>
     <button type="button" data-action-column={col} tabIndex={props.controlMode ? 0 : -1} onMouseDown={keepGridFocus} style={{ ...style(1), color: rule ? '#1459a6' : undefined }} disabled={!props.onFilter} aria-label={`Filter column ${columnToLetters(col)} — ${description}`} aria-pressed={Boolean(rule)} title={description} onClick={event => { props.onNotice?.(`${label}; ${description}`); props.onFilter?.(col, event.currentTarget) }}><span style={iconClip}><svg aria-hidden="true" width="12" height="14" viewBox="0 0 12 14"><path d="M1 1h10L7 6v6l-2-1V6z" fill={rule ? 'currentColor' : 'none'} stroke="currentColor" /></svg></span></button>
     {props.onSortDialog && <button type="button" data-action-column={col} tabIndex={props.controlMode ? 0 : -1} onMouseDown={keepGridFocus} style={style(2)} aria-label={`More sort options for ${columnToLetters(col)}`} onClick={event => props.onSortDialog?.(col, event.currentTarget)}><span style={iconClip}>⋯</span></button>}
   </>

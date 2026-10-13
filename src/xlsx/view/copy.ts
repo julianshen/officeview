@@ -26,6 +26,8 @@ export interface CopyInput {
   onPending?: () => void
   /** Peak output buffers plus compact projection, independent of the row count. */
   sessionBudgetBytes?: number
+  /** S10.2 main ledger: the session's live bytes by the same formula as the budget. */
+  onBytes?: (bytes: number) => void
 }
 export type CopyResult = { kind: 'ready'; text: string; bytes: number } | { kind: 'refused'; code: string; message: string } | { kind: 'cancelled' | 'stale' | 'denied' }
 interface Run { lo: number; hi: number }
@@ -220,7 +222,7 @@ export async function serializeSelection(input: CopyInput): Promise<CopyResult> 
       const next = units + text.length
       if (next * 2 > CLIPBOARD_BYTES || next * 4 + metadata > sessionBytes) throw limit()
       units = next; buffer += text
-      if (buffer.length >= 65536) { chunks.push(buffer); buffer = '' }
+      if (buffer.length >= 65536) { chunks.push(buffer); buffer = ''; input.onBytes?.(units * 4 + metadata) }
     }
     for (let b = 0; b < blocks.length; b++) {
       if (b) append('\n\n')
@@ -240,6 +242,7 @@ export async function serializeSelection(input: CopyInput): Promise<CopyResult> 
           if (units * 4 + batchBytes + metadata > sessionBytes || units * 2 + batchBytes > CLIPBOARD_BYTES) throw limit()
           values.push(text)
         }
+        input.onBytes?.(units * 4 + batchBytes + metadata)
         check(input)
         for (let i = 0; i < n; i++) {
           const index = offset + i
@@ -251,6 +254,8 @@ export async function serializeSelection(input: CopyInput): Promise<CopyResult> 
     }
     if (buffer) chunks.push(buffer)
     check(input)
+    // The joined text and its chunks are both live until the chunks are dropped.
+    input.onBytes?.(units * 4 + metadata)
     return { kind: 'ready', text: chunks.join(''), bytes: units * 2 }
   } catch (error) {
     if (error instanceof CopyFailure) {

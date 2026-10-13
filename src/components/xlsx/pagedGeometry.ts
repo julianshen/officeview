@@ -10,20 +10,27 @@ import { createSheetMetrics } from '../../xlsx/view/projection'
 import { RectangleIndex } from '../../xlsx/view/structure'
 import type { SheetGeometry } from '../../xlsx/view/viewport'
 import type { RemoteWorkbook } from '../../worker/viewerRemoteSource'
+import { projectionBytes } from '../../xlsx/view/mainLedger'
 
 export function pagedSheetGeometry(remote: RemoteWorkbook, sheetId: string, order: RowOrder, visibility: RowVisibility): SheetGeometry {
   const axes = remote.geometry(sheetId)
   const store = remote.store(sheetId)
   const merges = remote.merges(sheetId).merges
   const drawings = remote.drawings(sheetId)
-  return Object.freeze({
+  const metrics = createSheetMetrics({ rows: axes.rows, cols: axes.cols, order, visibility })
+  const mergeIndex = RectangleIndex.build(merges.map(range => ({ rect: { r0: range.minRow, r1: range.maxRow, c0: range.minCol, c1: range.maxCol }, value: range })))
+  const geometry = Object.freeze({
     kind: 'ready' as const,
-    metrics: createSheetMetrics({ rows: axes.rows, cols: axes.cols, order, visibility }),
+    metrics,
     diagnostics: Object.freeze([...drawings.diagnostics]),
     cellsOf: (sourceRow: number) => store.cellsOf(sourceRow),
-    merges: RectangleIndex.build(merges.map(range => ({ rect: { r0: range.minRow, r1: range.maxRow, c0: range.minCol, c1: range.maxCol }, value: range }))),
-    // S13.2: drawing content read from the worker once the sheet is complete
-    // (read at query time, so an evicted payload is not pinned by this geometry).
+    merges: mergeIndex,
+    // Read at query time so geometry does not pin an evicted drawing payload.
     drawingsIn: (...query: Parameters<SheetGeometry['drawingsIn']>) => drawings.drawingsIn(...query),
   })
+  // Projection buffers (dense prefixes of permuted bands) and the merge index
+  // are charged for as long as this geometry (a sheet's current or previous
+  // view, active or not) is reachable.
+  remote.mainLedger.chargeWhileReachable('geometry', [geometry], projectionBytes(metrics) + mergeIndex.estimatedBytes)
+  return geometry
 }

@@ -17,7 +17,7 @@ import type {
 } from './contracts'
 import { resolveDrawingAnchors } from './drawingBounds'
 import { PackageError } from '../../core/package-error'
-import { MAX_COLS, MAX_ROWS, cellId, isValidCoordinate, isValidSourceRect, type SourceRect } from './coordinates'
+import { MAX_COLS, MAX_ROWS, cellId, isValidCoordinate, isValidSourceRect, type SourceCell, type SourceRect } from './coordinates'
 import { INITIAL_GENERATION } from '../../worker/viewerProtocol'
 import { failedPage, failure, rowSetIntervals, sameStamp, type SheetGeometry, type WorkbookSource } from '../../worker/viewerSession'
 import type { MemoryPool, PoolEntry } from './tileCache'
@@ -323,14 +323,21 @@ export class PagedXlsxSheetAdapter implements SourceStore {
     }
   }
 
-  async *scanPopulated(request: PopulatedQuery, options: ReadOptions): AsyncIterable<Page<AuthoritativeCell>> {
+  scanPopulated(request: PopulatedQuery, options: ReadOptions): AsyncIterable<Page<AuthoritativeCell>> {
+    return this.scan(request, options, (p, i) => this.rowCell(p, i))
+  }
+  /** Same cells, order and pages as scanPopulated; coordinates only, no payload decode. */
+  scanOccupied(request: PopulatedQuery, options: ReadOptions): AsyncIterable<Page<SourceCell>> {
+    return this.scan(request, options, (p, i) => ({ row: p.rows[i], col: p.cols[i] }))
+  }
+  private async *scan<T>(request: PopulatedQuery, options: ReadOptions, item: (p: CellPagePayload, i: number) => T | Promise<T>): AsyncIterable<Page<T>> {
     const error = this.guard(options)
     if (error) { yield failedPage(this.stamp, error); return }
     const range = request.range
     if (!isValidSourceRect(range) || !Number.isSafeInteger(request.limit) || request.limit <= 0) {
       yield failedPage(this.stamp, failure('invalid-source-rect', 'Invalid populated query')); return
     }
-    let items: AuthoritativeCell[] = []
+    let items: T[] = []
     let row = range.r0
     for (;;) {
       try {
@@ -339,7 +346,8 @@ export class PagedXlsxSheetAdapter implements SourceStore {
           const p = await this.load(page, options.signal)
           for (let i = lower(p.rows, row); i < p.rows.length && p.rows[i] <= range.r1; i++) {
             if (p.cols[i] < range.c0 || p.cols[i] > range.c1 || !recordPopulated(p, i)) continue
-            items.push(await this.rowCell(p, i))
+            const next = item(p, i)
+            items.push(next instanceof Promise ? await next : next)
             if (items.length === request.limit) {
               yield { items, completeness: 'complete', stamp: this.stamp }
               items = []

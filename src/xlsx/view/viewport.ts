@@ -182,6 +182,9 @@ export interface SheetGeometry {
   /** Populated cells of one source row, ascending by column; undefined for blank rows. */
   cellsOf(sourceRow: number): readonly XlsxCell[] | undefined
   readonly merges: RectangleIndex<XlsxMergeRange>
+  /** Resident builds (S10.2 main ledger): retained bytes of the per-row cell
+   * index (one Map entry and one array per populated row, one slot per cell). */
+  readonly cellIndexBytes?: number
   /** Top-level drawings touching a logical CSS box, in authored paint order, or null
    * when their node weight or the index walk exceeds `budget` records. */
   drawingsIn(left: number, top: number, right: number, bottom: number, budget: number): readonly XlsxDrawing[] | null
@@ -290,11 +293,15 @@ function buildAxis(axis: 'rows' | 'cols', logicalCount: number, defaultSizeCss: 
 /** Build the full-capacity geometry for a small object sheet. Authored-hidden rows
  * and columns collapse unconditionally (spec §5.3), with or without drawings,
  * unless a canonical visibility mask is supplied for rows. */
+/** Retained bytes per populated row and per cell slot of a resident cell index
+ * (Map entry + array header + backing store; review round 4 measurement). */
+export const CELL_INDEX_ROW_BYTES = 136
+export const CELL_INDEX_SLOT_BYTES = 8
 export function buildSheetGeometry(sheet: XlsxSheet, options: SheetGeometryOptions = {}): SheetGeometryResult {
   const diagnostics: WorkerDiagnostic[] = []
   const cellsByRow = new Map<number, XlsxCell[]>()
   const rowOverrides: AxisSizeInterval[] = []
-  let skippedRows = 0, skippedCells = 0, inconsistent = 0
+  let skippedRows = 0, skippedCells = 0, inconsistent = 0, indexedCells = 0
   for (const row of sheet.rows) {
     const rowValid = isValidCoordinate(row.index, 0)
     if (!rowValid) skippedRows++
@@ -309,6 +316,7 @@ export function buildSheetGeometry(sheet: XlsxSheet, options: SheetGeometryOptio
       let cells = cellsByRow.get(source)
       if (!cells) cellsByRow.set(source, cells = [])
       cells.push(item)
+      indexedCells++
     }
   }
   // Stable: equal columns keep authored order, exactly as the static loop paints them.
@@ -360,6 +368,9 @@ export function buildSheetGeometry(sheet: XlsxSheet, options: SheetGeometryOptio
     metrics,
     diagnostics: Object.freeze(diagnostics),
     cellsOf: (sourceRow: number) => cellsByRow.get(sourceRow),
+    // ~136 B per populated row (Map entry, array header and backing store) and
+    // 8 B per cell slot; the cells themselves belong to the document's charge.
+    cellIndexBytes: cellsByRow.size * CELL_INDEX_ROW_BYTES + indexedCells * CELL_INDEX_SLOT_BYTES,
     merges: RectangleIndex.build(mergeEntries),
     drawingsIn,
   })
@@ -647,21 +658,29 @@ function tileOverflow(boxes: Iterable<{ x: number; y: number; width: number; hei
  * S5.1). Keys are the query rectangle and limit; the geometry object is the
  * generation (a new sheet/order/visibility builds a new geometry). */
 export class MergeQueryCache {
-  private readonly byGeometry = new WeakMap<SheetGeometry, Map<string, ReturnType<SheetGeometry['merges']['query']>>>()
+  private readonly byGeometry = new WeakMap<SheetGeometry, Map<string, { page: ReturnType<SheetGeometry['merges']['query']>; bytes: number }>>()
   hits = 0
   misses = 0
+  /** Estimated bytes of the retained pages (S10.2 main ledger), across geometries. */
+  bytes = 0
   constructor(readonly maxEntries = 64) {}
   query(geometry: SheetGeometry, rect: { r0: number; r1: number; c0: number; c1: number }, limit: number, work: ViewportWork): ReturnType<SheetGeometry['merges']['query']> {
     let entries = this.byGeometry.get(geometry)
     if (!entries) this.byGeometry.set(geometry, entries = new Map())
     const key = `${rect.r0},${rect.r1},${rect.c0},${rect.c1},${limit}`
     const hit = entries.get(key)
-    if (hit) { this.hits++; return hit }
+    if (hit) { this.hits++; return hit.page }
     this.misses++
     work.mergeQueries++
     const page = geometry.merges.query(rect, { limit })
-    entries.set(key, page)
-    if (entries.size > this.maxEntries) entries.delete(entries.keys().next().value!)
+    const bytes = 64 + page.items.length * 48
+    entries.set(key, { page, bytes })
+    this.bytes += bytes
+    if (entries.size > this.maxEntries) {
+      const oldest = entries.keys().next().value!
+      this.bytes -= entries.get(oldest)!.bytes
+      entries.delete(oldest)
+    }
     return page
   }
 }

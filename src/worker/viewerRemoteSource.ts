@@ -23,8 +23,10 @@ import type {
   AuthoritativeCell, CacheIdentity, CellRead, ColumnEntry, ColumnQuery, FilterKeySet, FilterSpec, LogicalCellBox, OperationRefusal, Page,
   PopulatedQuery, RangeCompletion, ReadOptions, RowOrder, SheetLayout, SortSpec, SourceFailure, SourceReadQuery, SourceReadResult,
   SourceStamp, SourceStore, SparseRowPage, StructuralResult, ValuePolicy, ViewCommitDelta, WorkbookFormatting, WorkbookOwner, WorkerDiagnostic, WorkerReply,
-  ProfileId,
+  ProfileId, GridSelection,
 } from '../xlsx/view/contracts'
+import type { RangeDetection } from '../xlsx/view/rangeDetection'
+import { MainMemoryLedger, axisBytes, estimatePayloadBytes, leaseTargets } from '../xlsx/view/mainLedger'
 import type { XlsxCell, XlsxCellStyle, XlsxMergeRange } from '../xlsx/types'
 import { MAX_COLS, MAX_ROWS, formatA1, isValidCoordinate, type SourceCell, type SourceRect } from '../xlsx/view/coordinates'
 import { createAxisMetrics } from '../xlsx/view/axes'
@@ -123,6 +125,9 @@ export class RemoteWorkbook implements WorkbookSource {
   readonly stats: RemoteStats = { commands: {} }
   /** Document-wide row-cache ledger; insertion order is recency order. */
   readonly ledger: RowCacheLedger
+  /** S10.2 §12.4: the document's main-thread application ledger (row cache,
+   * adopted view buffers, in-flight replies; the viewer charges its own pools). */
+  readonly mainLedger = new MainMemoryLedger()
   private readonly identities = new Map<string, CacheIdentity>()
   private readonly views = new Map<string, RemoteSheetView>()
   private readonly geometries = new Map<string, SheetGeometry>()
@@ -152,7 +157,7 @@ export class RemoteWorkbook implements WorkbookSource {
     this.layouts = new Map(open.layouts)
     this.profile = open.profile ?? 'D'
     this.format = open.formatting ?? { dateSystem: '1900', styles: [] }
-    this.ledger = new RowCacheLedger(open.rowCacheBytes ?? rowCacheBudget(this.profile))
+    this.ledger = new RowCacheLedger(open.rowCacheBytes ?? rowCacheBudget(this.profile), this.mainLedger)
     for (const { sheetId } of open.sheets) this.identities.set(sheetId, initialIdentity(open.docId, sheetId))
     this.drawingCache = new RemoteDrawingCache({
       identity: sheetId => this.identity(sheetId), loadState: sheetId => this.loadState(sheetId), nextRequestId: () => this.nextRequestId(),
@@ -165,6 +170,10 @@ export class RemoteWorkbook implements WorkbookSource {
   drawings(sheetId: string): PagedSheetDrawings { return this.drawingCache.get(sheetId) }
 
   get isClosed(): boolean { return this.closed }
+  /** @internal S10.2 tests: document-owned buffers this workbook still holds. */
+  retainedResources(): { stores: number; views: number; geometries: number; layouts: number; structures: number } {
+    return { stores: this.stores.size, views: this.views.size, geometries: this.geometries.size, layouts: this.layouts.size, structures: this.structures.size }
+  }
   /** Resolved style of a cell style index (the paged reader keeps ids only). */
   styleOf(index: number | undefined): XlsxCellStyle | undefined { return this.format.styles[index ?? 0] }
   formatting(): WorkbookFormatting { return this.format }
@@ -205,6 +214,8 @@ export class RemoteWorkbook implements WorkbookSource {
         ...(layout.hiddenCols?.length ? { hiddenCols: layout.hiddenCols } : {}),
       })
       this.geometries.set(sheetId, geometry)
+      // Axis summaries and authored-hidden intervals live as long as anything holds this geometry.
+      this.mainLedger.chargeWhileReachable('geometry', [geometry], axisBytes(geometry.rows) + axisBytes(geometry.cols) + layout.hidden.length * 32 + (layout.hiddenCols?.length ?? 0) * 32)
     }
     return geometry
   }
@@ -319,7 +330,13 @@ export class RemoteWorkbook implements WorkbookSource {
     const key = head.query ? `read:${head.query.op}` : head.kind
     this.stats.commands[key] = (this.stats.commands[key] ?? 0) + 1
     const unsubscribe = progress ? this.client.onProgress(head.requestId, p => progress(p.completed, p.total ?? p.completed)) : undefined
-    const sent: Promise<Settled<K>> = this.client.send<K>(command).then(reply => { this.capture(reply); return reply }, () => CLOSED)
+    const sent: Promise<Settled<K>> = this.client.send<K>(command).then(reply => {
+      // Charged until no part of the payload is reachable: a consumer that keeps
+      // a page (a scan generator across tasks) keeps the charge.
+      this.mainLedger.chargeWhileReachable('replies', leaseTargets(reply), estimatePayloadBytes(reply))
+      this.capture(reply)
+      return reply
+    }, () => CLOSED)
     if (!signal) return sent.finally(() => unsubscribe?.())
     return new Promise<Settled<K>>(resolve => {
       const abort = () => {
@@ -358,6 +375,8 @@ export class RemoteWorkbook implements WorkbookSource {
       case 'complete': {
         if (out.result.kind !== 'view') return { kind: 'error', message: 'Unexpected view reply' }
         const view = this.adopt(sheetId, out.result.delta, spec)
+        // The adopted view now carries the bytes (charged in adopt): end the reply's lease.
+        if (view) this.mainLedger.settle(out)
         return view ? { kind: 'committed', view } : { kind: 'stale' }
       }
       case 'cancelled': return { kind: 'cancelled' }
@@ -377,6 +396,10 @@ export class RemoteWorkbook implements WorkbookSource {
     if (this.closed || delta.owner.docId !== this.docId || delta.owner.sheetId !== sheetId) return null
     const previous = this.view(sheetId)
     if (delta.owner.viewGen <= this.identity(sheetId).viewGen) return null
+    // Staging: the local band copies coexist with the wire bands (reply), the
+    // previous view and the order being built from them.
+    const bandBytes = delta.bands.reduce((sum, band) => sum + band.sourceAtOffset.length * 4, 0)
+    this.mainLedger.set('viewBuffers', `staging:${sheetId}`, bandBytes)
     const view: RemoteSheetView = {
       revision: delta.owner.viewGen,
       // Wire bands may come from another realm: rebuild them as local arrays.
@@ -388,6 +411,12 @@ export class RemoteWorkbook implements WorkbookSource {
     this.identities.set(sheetId, delta.owner)
     if (delta.workbookOwner.globalViewGen >= this.owner.globalViewGen) this.owner = delta.workbookOwner
     this.views.set(sheetId, view)
+    // The adopted view (order bands with their display inverse, visibility words
+    // and summaries) is charged for its own lifetime: the previous view stays
+    // charged until nothing holds it, so a replacement's overlap counts.
+    const visibilityBytes = view.visibility ? view.visibility.words.byteLength + view.visibility.summaries.byteLength : 0
+    this.mainLedger.chargeWhileReachable('viewBuffers', [view.order, ...(view.visibility ? [view.visibility] : [])], bandBytes * 2 + visibilityBytes)
+    this.mainLedger.release('viewBuffers', `staging:${sheetId}`)
     this.notify()
     return view
   }
@@ -403,7 +432,15 @@ export class RemoteWorkbook implements WorkbookSource {
     for (const entry of this.structures.values()) if (entry.timer) clearTimeout(entry.timer)
     this.drawingCache.close()
     // Owned caches go with the document: nothing answers from them after close.
+    // Document-owned buffers are dropped here; their lifetime charges end when
+    // nothing (not even a host still holding this closed workbook) reaches them.
     for (const store of this.stores.values()) store.clear()
+    this.stores.clear()
+    this.views.clear()
+    this.geometries.clear()
+    this.layouts.clear()
+    this.structures.clear()
+    this.failures.clear()
     try {
       await Promise.race([this.client.send({ kind: 'close', requestId: this.client.nextRequestId(), docId: this.docId }), new Promise(resolve => setTimeout(resolve, 1000))])
     } catch { /* the worker is gone */ }
@@ -422,7 +459,8 @@ export class RowCacheLedger {
   bytes = 0
   peakBytes = 0
   private readonly entries = new Map<string, { store: RemoteSheetStore; row: number; bytes: number }>()
-  constructor(readonly limitBytes: number) {}
+  constructor(readonly limitBytes: number, private readonly main?: MainMemoryLedger) {}
+  private report(): void { this.main?.set('rowCache', 'rows', this.bytes) }
   private key(store: RemoteSheetStore, row: number): string { return `${store.sheetId}\u0000${row}` }
   charge(store: RemoteSheetStore, row: number, bytes: number): void {
     const key = this.key(store, row)
@@ -437,6 +475,7 @@ export class RowCacheLedger {
       entry.store.drop(entry.row)
     }
     this.peakBytes = Math.max(this.peakBytes, this.bytes)
+    this.report()
   }
   touch(store: RemoteSheetStore, row: number): void {
     const key = this.key(store, row)
@@ -446,7 +485,7 @@ export class RowCacheLedger {
   release(store: RemoteSheetStore, row: number): void {
     const key = this.key(store, row)
     const entry = this.entries.get(key)
-    if (entry) { this.entries.delete(key); this.bytes -= entry.bytes }
+    if (entry) { this.entries.delete(key); this.bytes -= entry.bytes; this.report() }
   }
 }
 
@@ -564,9 +603,20 @@ export class RemoteSheetStore implements SourceStore {
       if (!finished && cursor !== undefined) void this.releaseScan(cursor)
     }
   }
+  /** SourceStore.settle: a consumer decoded a page this store returned. */
+  settle(payload: object): void { this.workbook.mainLedger.settle(payload) }
   private async releaseScan(cursor: string): Promise<void> {
     if (this.workbook.isClosed) return
     await this.workbook.request({ kind: 'read', requestId: this.workbook.nextRequestId(), owner: this.workbook.identity(this.sheetId), query: { op: 'releaseScan', cursor } })
+  }
+  /** S10.2: range detection runs next to the worker's store; one read, no
+   * strip pages across the worker boundary. Failures become the detector's own
+   * typed outcomes (cancelled, or a source-error refusal). */
+  async detectRange(kind: 'sort' | 'filter', selection: GridSelection, override: { headerRows: 0 | 1; totalsRows?: 0 } | null, options: ReadOptions): Promise<RangeDetection> {
+    const out = await this.read({ op: 'detectRange', kind, selection, override }, options)
+    if ('code' in out) return out.code === 'cancelled' ? { kind: 'cancelled' } : { kind: 'refused', refusal: { reason: 'source-error', code: out.code, retryable: out.retryable, message: out.message } }
+    if (out.op !== 'detectRange') return { kind: 'refused', refusal: { reason: 'source-error', code: 'page-error', retryable: false, message: 'Unexpected read reply' } }
+    return out.detection
   }
   async queryStructural(rect: SourceRect, options: ReadOptions): Promise<StructuralResult> {
     const out = await this.read({ op: 'structural', rect }, options)
@@ -690,6 +740,8 @@ export class RemoteSheetStore implements SourceStore {
         const last = page.nextCursor === undefined ? r1 : page.items.length ? Math.min(r1, page.items[page.items.length - 1].row) : covered
         const byRow = new Map(page.items.map(item => [item.row, item.cells]))
         for (let row = covered + 1; row <= last; row++) changed = this.put(row, k0, k1, byRow.get(row) ?? []) || changed
+        // The row cache now holds (and charges) its own copies of these cells.
+        this.workbook.mainLedger.settle(page)
         covered = Math.max(covered, last)
         cursor = page.nextCursor
         if (cursor === undefined) break
