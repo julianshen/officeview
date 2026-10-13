@@ -5,7 +5,7 @@
  * are persistent. A pool that cannot hold the construction peak refuses the
  * import with a typed memory diagnostic instead of over-allocating.
  */
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { spawnSync } from 'node:child_process'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -267,7 +267,7 @@ describe('review round 1 (codex) MAJOR 4: the estimate model is conservative aga
     const probe = spawnSync('bun', [join(dirname(fileURLToPath(import.meta.url)), '..', 'scripts', 'construction-memory-probe.ts')], { encoding: 'utf8', timeout: 120_000 })
     expect(probe.status, probe.stderr).toBe(0)
     const results = JSON.parse(probe.stdout.trim().split('\n').at(-1)!) as { name: string; count: number; observed: number; model: number }[]
-    expect(new Set(results.map((r) => r.name))).toEqual(new Set(['builder-numeric', 'builder-text', 'builder-formula', 'summaries', 'decoded-pages', 'decoded-chunks', 'pending-strings']))
+    expect(new Set(results.map((r) => r.name))).toEqual(new Set(['builder-numeric', 'builder-text', 'builder-formula', 'summaries', 'decoded-pages', 'decoded-chunks', 'leftover-sweep', 'pending-strings']))
     for (const r of results) {
       expect(r.model, `${r.name} x${r.count}`).toBeGreaterThanOrEqual(r.observed)
       expect(r.model, `${r.name} x${r.count}`).toBeLessThanOrEqual(2 * r.observed)
@@ -309,5 +309,43 @@ describe('review round 2 (codex) findings 4 and 5', () => {
     expect(asked).toHaveLength(1)
     expect(asked[0]).toBeGreaterThan(2 * 2 * 400_000)
     scratch.release()
+  })
+})
+
+describe('review round 3 (codex) MINOR 2: the detached leftover sweep charges its owner grouping', () => {
+  const HOUR = 3600_000
+  const esc = (t: string) => t.replace(/[^A-Za-z0-9.]/g, (c) => `_${c.charCodeAt(0).toString(16).padStart(4, '0')}`)
+  /** 4,096 dead owners (one leftover file each) and a lock manager holding the sweep at its first lock attempt. */
+  async function leftovers() {
+    const { fakeLockManager } = await import('./helpers/fake-storage')
+    const { ownerLocks, pageOwner } = await import('../src/xlsx/storage/sourcePages')
+    const now = Date.now()
+    const dir = fakeOpfsDirectory()
+    for (let i = 0; i < 4096; i++) dir.files.set(`officeview-pages-${esc(pageOwner(`doc${i}`, now - 26 * HOUR))}-${esc('page/1/p0')}`, [])
+    const mgr = fakeLockManager()
+    let open!: () => void
+    const gate = new Promise<void>((resolve) => { open = resolve })
+    let reached!: () => void
+    const held = new Promise<void>((resolve) => { reached = resolve })
+    const gated = { request: async <T>(name: string, options: { mode?: 'exclusive' | 'shared'; ifAvailable?: boolean }, callback: (lock: unknown) => Promise<T> | T) => { reached(); await gate; return mgr.request(name, options, callback) } }
+    return { dir, locks: ownerLocks(gated), open: () => open(), held }
+  }
+
+  it('the grouping is charged to the store construction share while the sweep awaits a lock, and released when it ends', async () => {
+    vi.resetModules()
+    const { openImportSession: open } = await import('../src/xlsx/storage/pagedImport')
+    const env = await leftovers()
+    const session = await open(blobOf(xlsxBytes({ sheetData: rowsXml(2) })), { docId: 'd', profile: 'D', storage: { opfs: async () => env.dir, locks: env.locks } })
+    await env.held
+    const store = (session as unknown as { workbook: { store: SourcePageStore } }).workbook.store
+    expect(await session.done).toMatchObject({ kind: 'complete' })
+    // At least 2 B per code unit of each retained file name and owner, charged before they are retained.
+    const names = [...env.dir.files.keys()]
+    const strings = names.reduce((n, name) => n + 2 * name.length, 0)
+    expect(store.construction.transientBytes).toBeGreaterThanOrEqual(strings)
+    env.open()
+    await vi.waitFor(() => expect(env.dir.files.size).toBe(0))
+    await vi.waitFor(() => expect(store.construction.transientBytes).toBe(0))
+    await session.release()
   })
 })

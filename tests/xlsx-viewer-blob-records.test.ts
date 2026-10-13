@@ -714,3 +714,34 @@ describe('review round 3 (codex) NIT 3: enumeration never pulls past its bound o
     expect(counts.next).toBe(0)
   })
 })
+
+describe('review round 3 (codex) MINOR 2: leftover-sweep admission', () => {
+  const HOUR = 3600_000
+  const esc = (t: string) => t.replace(/[^A-Za-z0-9.]/g, (c) => `_${c.charCodeAt(0).toString(16).padStart(4, '0')}`)
+  it('reserves before retaining each grouped name; a refusal stops collecting, the charged owners are still swept, nothing throws', async () => {
+    const now = Date.UTC(2026, 9, 13)
+    const dir = fakeOpfsDirectory()
+    const owners = [0, 1, 2].map((i) => pageOwner(`doc${i}`, now - 26 * HOUR))
+    for (const owner of owners) dir.files.set(`officeview-pages-${esc(owner)}-${esc('blob/0')}`, [])
+    const asked: number[] = []
+    let limit = Infinity
+    const reserve = (bytes: number) => {
+      if (bytes > limit) throw new Error('memory-budget')
+      asked.push(bytes)
+    }
+    const locks = ownerLocks(fakeLockManager())
+    // Learn one owner's charge, then admit exactly one owner.
+    const probeDir = fakeOpfsDirectory()
+    probeDir.files.set([...dir.files.keys()][0], [])
+    expect(await sweepLeftoverPages({ opfs: async () => probeDir, locks }, { now, reserve })).toBe(1)
+    // The grouping was reserved before it was retained.
+    expect(asked.length, 'reservations made').toBeGreaterThan(0)
+    const one = asked.at(-1)!
+    expect(one).toBeGreaterThan(2 * [...dir.files.keys()][0].length)
+    limit = one
+    asked.length = 0
+    expect(await sweepLeftoverPages({ opfs: async () => dir, locks }, { now, reserve })).toBe(1)
+    expect(dir.files.size).toBe(2)
+    expect(Math.max(...asked)).toBeLessThanOrEqual(one)
+  })
+})

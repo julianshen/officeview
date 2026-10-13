@@ -171,11 +171,6 @@ export async function openImportSession(source: Extract<SourceHandle, { kind: 'b
     workbookIndex++
   }
   const storageEnv = options.storage ?? browserPageStorageEnv()
-  // Once per process: page storage left by crashed sessions (OPFS/IndexedDB owners older than 24 h).
-  if (!swept) {
-    swept = true
-    void sweepLeftoverPages(storageEnv).catch(() => {})
-  }
   let store = options.store
   if (!store) {
     const owner = pageOwner(options.docId)
@@ -191,6 +186,14 @@ export async function openImportSession(source: Extract<SourceHandle, { kind: 'b
       memoryBudgetBytes: WORKER_BUDGETS[options.profile],
       ownerLock,
     })
+  }
+  // Once per process: page storage left by crashed sessions (OPFS/IndexedDB owners older than 24 h).
+  // Detached, but its working set is construction memory of this store (§12.4);
+  // closing the store releases the share and so stops the sweep.
+  if (!swept) {
+    swept = true
+    const share = store.construction.share('leftover page sweep')
+    void sweepLeftoverPages(storageEnv, { reserve: (bytes) => share.need(bytes) }).catch(() => {}).finally(() => share.release())
   }
   let notify: () => void = () => {}
   let changedPromise = new Promise<void>((resolve) => { notify = resolve })

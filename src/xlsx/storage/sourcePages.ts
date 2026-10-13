@@ -624,17 +624,37 @@ export function ownerLocks(manager: LockManagerLike): OwnerLocks {
     },
   }
 }
+/** Heap model of the sweep's working set (Map entry, names array and owner
+ * string per owner; array slot and string per name), plus 2 B per code unit.
+ * Pinned by scripts/construction-memory-probe.ts ('leftover-sweep'). */
+export const SWEEP_OWNER_BYTES = 256
+export const SWEEP_NAME_BYTES = 48
 /**
  * Removes page storage left by crashed or killed sessions: OPFS files and
  * IndexedDB databases of owners older than `maxAgeMs` (the spool's 24 h rule),
  * never an owner this process holds. Bounded (at most SWEEP_MAX_ENTRIES
  * examined per backend), cancellable between entries, best effort (a failed
- * removal is left for the next sweep), and it charges nothing: it keeps nothing.
+ * removal is left for the next sweep).
+ *
+ * The names it groups by owner stay reachable while it awaits each owner's
+ * lock, so `reserve(totalBytes)` (a construction share's need) is called with
+ * the running total before each is retained. A refusal stops collecting: the
+ * owners already charged are still swept, the rest wait for a later sweep. A
+ * refusal while sweeping (the share was released) stops the sweep.
  */
-export async function sweepLeftoverPages(env: PageStorageEnv, options: { now?: number; maxAgeMs?: number; signal?: AbortSignal; maxEntries?: number } = {}): Promise<number> {
+export async function sweepLeftoverPages(env: PageStorageEnv, options: { now?: number; maxAgeMs?: number; signal?: AbortSignal; maxEntries?: number; reserve?: (totalBytes: number) => void } = {}): Promise<number> {
   const now = options.now ?? Date.now()
   const maxAge = options.maxAgeMs ?? PAGE_OWNER_MAX_AGE_MS
   const maxEntries = options.maxEntries ?? SWEEP_MAX_ENTRIES
+  let charged = 0
+  /** False (nothing retained) when the working set cannot grow by `bytes`. */
+  const admit = (bytes: number): boolean => {
+    try { options.reserve?.(charged + bytes) } catch { return false }
+    charged += bytes
+    return true
+  }
+  /** Whether what is retained is still charged (a released share refuses). */
+  const stillCharged = (): boolean => admit(0)
   // Without Web Locks no owner can be proven dead: other owners are never swept.
   const locks = env.locks
   if (!locks) return 0
@@ -657,11 +677,12 @@ export async function sweepLeftoverPages(env: PageStorageEnv, options: { now?: n
           const owner = unescapeName(rest.slice(0, dash))
           if (!old(owner)) return
           let names = byOwner.get(owner)
+          if (!admit((names ? 0 : SWEEP_OWNER_BYTES + 2 * owner.length) + SWEEP_NAME_BYTES + 2 * name.length)) return false
           if (!names) byOwner.set(owner, names = [])
           names.push(name)
         })
         for (const [owner, names] of byOwner) {
-          if (options.signal?.aborted) break
+          if (options.signal?.aborted || !stillCharged()) break
           await locks.tryWith(owner, async () => {
             for (const name of names) {
               if (options.signal?.aborted) break
@@ -675,9 +696,11 @@ export async function sweepLeftoverPages(env: PageStorageEnv, options: { now?: n
   const factory = env.indexedDb as (IDBFactory & { databases?(): Promise<{ name?: string }[]> }) | undefined
   if (factory?.databases && !options.signal?.aborted) {
     try {
-      const dbs = (await factory.databases()).slice(0, maxEntries)
+      let dbs = (await factory.databases()).slice(0, maxEntries)
+      // The listing is the browser's; the retained slice is charged like the OPFS grouping.
+      if (!admit(dbs.reduce((n, { name }) => n + SWEEP_NAME_BYTES + 2 * (name?.length ?? 0), 0))) dbs = []
       for (const { name } of dbs) {
-        if (options.signal?.aborted) break
+        if (options.signal?.aborted || !stillCharged()) break
         if (!name?.startsWith(PAGE_PREFIX) || name.startsWith(`${PAGE_PREFIX}lock-`)) continue
         const owner = name.slice(PAGE_PREFIX.length)
         if (!old(owner)) continue

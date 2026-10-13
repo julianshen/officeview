@@ -13,7 +13,7 @@
 import { heapStats } from 'bun:jsc'
 import {
   DECODED_CHUNK_OVERHEAD_BYTES, DECODED_PAGE_OVERHEAD_BYTES, PageBuilder, K_EMPTY, K_NUMBER, K_TEXT, decodePage, decodeStrings, encodePage, encodeStrings,
-  summarize, type PageSummary,
+  ownerLocks, pageOwner, summarize, sweepLeftoverPages, type PageSummary,
 } from '../src/xlsx/storage/sourcePages'
 import { MemoryPool } from '../src/xlsx/view/tileCache'
 import { PAGE_SUMMARY_BYTES, PENDING_STRING_BYTES } from '../src/xlsx/storage/constructionMemory'
@@ -29,8 +29,10 @@ const live = (): number => {
 const flat = (s: string): string => { s.charCodeAt(s.length - 1); return s }
 
 interface Result { name: string; count: number; observed: number; model: number }
-/** `baseline`: a heap reading taken inside the case after setup that must not be counted. */
-type Case = (n: number) => { keep: unknown; model: number; baseline?: number }
+/** `baseline`: a heap reading taken inside the case after setup that must not be counted;
+ * `finish`: runs after the measurement (an async case is measured mid-flight). */
+type Run = { keep: unknown; model: number; baseline?: number; finish?: () => Promise<void> }
+type Case = (n: number) => Run | Promise<Run>
 
 const CASES: Record<string, { sizes: number[]; run: Case }> = {
   'builder-numeric': {
@@ -99,6 +101,32 @@ const CASES: Record<string, { sizes: number[]; run: Case }> = {
       return { keep: [held, resident, pool], model: n * DECODED_CHUNK_OVERHEAD_BYTES, baseline: before }
     },
   },
+  // The detached leftover sweep, held at its first lock attempt with n dead owners
+  // (one file each), so its grouping is live. The directory hands out fresh flat
+  // name strings as OPFS does; model = what the sweep reserved.
+  'leftover-sweep': {
+    sizes: [1024, 4096],
+    run: async (n) => {
+      const esc = (t: string) => t.replace(/[^A-Za-z0-9.]/g, (c) => `_${c.charCodeAt(0).toString(16).padStart(4, '0')}`)
+      const now = Date.now()
+      const owners = Array.from({ length: n }, (_, i) => esc(pageOwner(`document-${i}`, now - 26 * 3600_000)))
+      const dir = {
+        getFileHandle: async () => { throw new Error('unused') },
+        removeEntry: async () => {},
+        async *keys() { for (const owner of owners) yield flat(`officeview-pages-${owner}-page_002f1_002fp0`) },
+      }
+      let open!: () => void
+      const gate = new Promise<void>((resolve) => { open = resolve })
+      let reached!: () => void
+      const held = new Promise<void>((resolve) => { reached = resolve })
+      const locks = ownerLocks({ request: async (_name, _options, callback) => { reached(); await gate; return callback({}) } })
+      let model = 0
+      const before = live()
+      const sweep = sweepLeftoverPages({ opfs: async () => dir, locks }, { now, reserve: (bytes) => { model = bytes } })
+      await held
+      return { keep: sweep, model, baseline: before, finish: async () => { open(); await sweep } }
+    },
+  },
   'pending-strings': {
     sizes: [65_537, 100_000],
     run: (n) => {
@@ -121,14 +149,19 @@ const sink: unknown[] = []
 for (const [name, { sizes, run }] of Object.entries(CASES)) {
   if (wanted.length && !wanted.includes(name)) continue
   for (const count of sizes) {
+    // Synchronous cases never yield (an await between setup and reading changes what the GC keeps).
     // Warm the code path so JIT/compiler allocations are not attributed.
-    sink.push(run(Math.min(count, 2048)).keep)
+    const warm = run(Math.min(count, 2048))
+    if (warm instanceof Promise) await warm.then(async (w) => { sink.push(w.keep); await w.finish?.() })
+    else sink.push(warm.keep)
     sink.length = 0
     const start = live()
-    const { keep, model, baseline } = run(count)
+    const ran = run(count)
+    const { keep, model, baseline, finish } = ran instanceof Promise ? await ran : ran
     const observed = live() - (baseline ?? start)
     sink.push(keep)
     results.push({ name, count, observed, model })
+    if (finish) await finish()
     sink.length = 0
   }
 }

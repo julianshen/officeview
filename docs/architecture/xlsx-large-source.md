@@ -960,8 +960,13 @@ leaves records that no live index references.
 - **Bounds and failure.** At most 4,096 entries are examined per backend, counting every directory entry, not just owner
   matches. The bound and the cancellation signal are checked before each entry is pulled, and an enumeration that stops
   early closes its iterator. Listing and deletion are cancellable and best effort. A listing failure skips cleanup with a
-  `storage-cleanup-skipped` diagnostic and never fails the import. The listing is a transient charge; nothing removed was
-  charged, so ledger and storage agree afterwards.
+  `storage-cleanup-skipped` diagnostic and never fails the import. The store-open listing is a transient charge; nothing
+  removed was charged, so ledger and storage agree afterwards.
+- **Sweep memory.** The session-start sweep runs detached, but the file names it groups by owner stay reachable while it
+  awaits each owner's lock. That working set is a construction share of the opening store (`leftover page sweep`),
+  reserved before each name is retained (`SWEEP_OWNER_BYTES` per owner, `SWEEP_NAME_BYTES` per name, plus 2 B per code
+  unit; pinned against a Bun heap probe, not a Chrome measurement). A refusal stops collecting: owners already charged are
+  still swept and the rest wait for a later sweep. Closing the store releases the share, which stops the sweep.
 
 **Decoded cache entries.** A decoded page or chunk is charged a fixed object overhead even when its bytes view a buffer a
 memory backend already holds and charges: 2,048 B per page and 1,280 B per chunk, covering the payload object, typed-array
