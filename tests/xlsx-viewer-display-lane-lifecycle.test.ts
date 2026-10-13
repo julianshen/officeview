@@ -14,7 +14,7 @@ import { createWorkerFilterEvaluator } from '../src/worker/viewerFilterEvaluator
 import { DocumentSession, PREPARED_COLUMN_OVERHEAD, PREPARED_STRING_OVERHEAD, type FilterEvaluator, type WorkbookSource } from '../src/worker/viewerSession'
 import { createObjectWorkbookSource } from '../src/xlsx/view/source'
 import { semanticsFor } from '../src/xlsx/view/semanticsFor'
-import type { ColumnQuery, FilterSpec, SourceStore, WorkbookFormatting } from '../src/xlsx/view/contracts'
+import type { ColumnQuery, FilterSpec, SortSpec, SourceStore, WorkbookFormatting } from '../src/xlsx/view/contracts'
 import type { XlsxCellStyle, XlsxDocument } from '../src/xlsx/types'
 
 const n = 64
@@ -505,7 +505,7 @@ describe('codex r4 #2: a raw prepared column a real sort still leases stays char
     const rows = Array.from({ length: rowsN + 1 }, (_v, r) => ({ index: r, cells: [{ row: r, col: 0, ref: '', value: r === 0 ? 'H' : rowsN - r }] }))
     return { sheets: [{ name: 'S', sheetId: 's', workbookIndex: 0, rows, cols: [], merges: [], mergeRanges: [], semantics: semanticsFor('1900') }], tables: [] } as unknown as XlsxDocument
   }
-  const sortSpec = { range: { r0: 0, r1: rowsN, c0: 0, c1: 0, headerRows: 1, totalsRows: 0 }, keys: [{ col: 0, order: 'asc' as const }], caseSensitive: false }
+  const sortSpec: SortSpec = { range: { r0: 0, r1: rowsN, c0: 0, c1: 0, headerRows: 1, totalsRows: 0 }, keys: [{ col: 0, order: 'asc' }], caseSensitive: false }
   /** A session whose sort pauses at its first read-phase yield (after it leased the prepared column). */
   async function heldSort(fail = false) {
     const g = gate()

@@ -1,3 +1,4 @@
+import { adoptAllocation, type AllocationContext, type AllocationReservation } from './allocationAccount'
 import type { ColumnEntry, ColumnLanes, FilterRange, PagedKeySetRef, SourceFailure, SourceStamp, SourceStore, ValueSearchPredicate, ValuesFilter } from './contracts'
 import type { ColumnClassification, PreparedValue } from './filter'
 import { FilterDiagnostic, TextFilterMatcher, WorkBudget, type FilterLimits } from './textFilter'
@@ -72,7 +73,7 @@ export interface ValueIndexLedger {
   chargedBytes: number
   peakBytes: number
 }
-export type ValueLabeler = (kind: 'number' | 'date' | 'boolean', value: number, style: number) => string
+export type ValueLabeler = (kind: 'number' | 'date' | 'boolean', value: number, style: number, allocation?: LaneAccount) => string
 export type ValueEntryKind = 'number' | 'date' | 'string' | 'boolean' | 'error'
 /** Bounded display record; the exact key is inspected through ValueIndex.key. */
 export interface ValueEntryView { ordinal: number; kind: ValueEntryKind; label: string; labelTruncated: boolean; count: number }
@@ -93,7 +94,7 @@ export interface ValueSearchResult {
 export type SearchKeyState = 'none' | 'computing' | 'computed' | 'loaded' | 'persisted' | 'unpersisted' | 'streaming'
 /** Dropdown search predicate (contracts.ts), kept as a local alias. */
 export type ValueSearchQuery = ValueSearchPredicate
-export interface ValuePageRequest { offset: number; limit: number; search?: ValueSearchResult; label?: ValueLabeler }
+export interface ValuePageRequest { allocation?: AllocationContext; offset: number; limit: number; search?: ValueSearchResult; label?: ValueLabeler }
 export interface ValuePage { entries: readonly ValueEntryView[]; total: number; displayed: number; truncated: boolean; completeness: ValueCompleteness }
 export interface ValueProgress { phase: 'pages' | 'keys'; completed: number; total: number }
 export interface ValueSearchProgress { searched: number; total: number; matches: number }
@@ -108,6 +109,7 @@ export interface ValueBuildOptions extends Pacing {
   onProgress?: (progress: ValueProgress) => void
 }
 export interface ValueSearchOptions extends Pacing {
+  allocation?: AllocationContext
   signal?: AbortSignal
   label?: ValueLabeler
   limits?: Omit<FilterLimits, 'signal'>
@@ -211,6 +213,12 @@ export class ValueReservation implements LaneAccount {
   private released = false
   constructor(private readonly cache: ValueIndexCache, private readonly owner: ValueIndex | null) {}
   get closed(): boolean { return this.released }
+  get canAdopt(): boolean { return this.cache.canAdopt }
+  adopt(targets: readonly object[], bytes = this.bytes): void {
+    if (this.released || bytes > this.bytes) throw new ValueIndexError('closed', 'Invalid reservation adoption')
+    this.cache.adopt(targets, bytes)
+    this.bytes -= bytes
+  }
   charge(bytes: number): void {
     if (this.released) throw new ValueIndexError('closed', 'Reservation already released')
     this.cache.charge(this.owner, bytes)
@@ -231,6 +239,10 @@ export class ValueReservation implements LaneAccount {
 /** Aggregate worker-memory pool for every cached index plus retained search
  * results, draft patches/key sets, evaluators and transient commit buffers;
  * idle LRU indexes are evicted before admission fails. */
+// Index object, lane headers, stamp/ledger, empty arrays/maps/sets, weak-result
+// registry and one cache-map entry; source/identity/strategy stay borrowed.
+const INDEX_ADMISSION = Symbol('admitted value index')
+const valueIndexInitialBytes = (scope: string): number => 1024 + scope.length * 2 + 8
 export class ValueIndexCache {
   readonly limitBytes: number
   private used = 0
@@ -243,8 +255,19 @@ export class ValueIndexCache {
    * searches, ~76 MiB per 1M strings) are opt-in, e.g. a desktop profile with
    * pool headroom: { strategy: canonicalKeyStrategy(foldVariantOf(locale)) }. */
   /** S10.2 main ledger hook: the cache's used bytes after every charge/release. */
+  private readonly adoption: ((targets: readonly object[], bytes: number) => void) | undefined
+  get canAdopt(): boolean { return this.adoption !== undefined }
+  /** @internal Move cache bytes onto a surviving rule/page owner atomically. */
+  adopt(targets: readonly object[], bytes: number): void {
+    if (!this.adoption) throw new ValueIndexError('invalid-rule', 'Cache has no lifetime account')
+    this.adoption(targets, bytes)
+    this.release(bytes)
+  }
+  private readonly beforeGrowth: ((bytes: number) => boolean) | undefined
   private readonly onUsage: ((bytes: number) => void) | undefined
-  constructor(options: { limitBytes?: number; searchKeys?: { strategy?: SearchKeyStrategy; store?: SearchKeyStore }; onUsage?: (bytes: number) => void } = {}) {
+  constructor(options: { limitBytes?: number; searchKeys?: { strategy?: SearchKeyStrategy; store?: SearchKeyStore }; onUsage?: (bytes: number) => void; beforeGrowth?: (bytes: number) => boolean; adopt?: (targets: readonly object[], bytes: number) => void } = {}) {
+    this.adoption = options.adopt
+    this.beforeGrowth = options.beforeGrowth
     this.onUsage = options.onUsage
     this.limitBytes = options.limitBytes ?? 512 * MiB
     if (!Number.isFinite(this.limitBytes) || this.limitBytes < 0) throw new RangeError('Invalid value index memory limit')
@@ -268,13 +291,21 @@ export class ValueIndexCache {
     if (index && !index.disposed) {
       this.indexes.delete(key)
       index.attach(source)
-    } else index = new ValueIndex(identity, source, this, key)
+    } else {
+      const bytes = valueIndexInitialBytes(key)
+      this.charge(null, bytes)
+      try {
+        index = new ValueIndex(identity, source, this, key, INDEX_ADMISSION)
+        this.indexes.set(key, index)
+        return index
+      } catch (cause) { this.release(bytes); throw cause }
+    }
     this.indexes.set(key, index)
     return index
   }
   /** Owner changes: disposes matching indexes and deletes their stored keys. */
   invalidate(predicate: (identity: ValueIndexIdentity) => boolean = () => true): void {
-    for (const index of [...this.indexes.values()]) {
+    for (const index of this.indexes.values()) {
       if (!predicate(index.identity)) continue
       index.dispose()
       if (this.keyStore && this.strategy !== EXACT_SEARCH) this.keyStore.delete(index.keyOwner()).catch(() => {})
@@ -286,7 +317,7 @@ export class ValueIndexCache {
     // Shed in order of rebuild cost: stored keys, idle resident keys, idle indexes.
     if (this.used + bytes > this.limitBytes) this.keyStore?.shed?.(this.used + bytes - this.limitBytes)
     for (const pass of [0, 1]) {
-      for (const index of [...this.indexes.values()]) {
+      for (const index of this.indexes.values()) {
         if (this.used + bytes <= this.limitBytes) break
         if (index === owner || !index.idle) continue
         if (pass === 0) index.dropSearchKeys()
@@ -298,6 +329,7 @@ export class ValueIndexCache {
         resource: 'memory', requiredBytes: this.used + bytes, limitBytes: this.limitBytes, retryable: false,
       })
     }
+    if (this.beforeGrowth && !this.beforeGrowth(this.used + bytes)) throw new ValueIndexError('quota', 'Main document memory quota exceeded')
     this.used += bytes
     this.onUsage?.(this.used)
   }
@@ -319,7 +351,7 @@ interface SearchRecord {
 }
 
 export class ValueIndex implements LaneAccount {
-  readonly ledger: ValueIndexLedger = { sourcePageReads: 0, mergedPages: 0, unknownPages: 0, allocations: 0, allocatedBytes: 0, chargedBytes: 0, peakBytes: 0 }
+  readonly ledger: ValueIndexLedger
   readonly stamp: SourceStamp
   readonly scope: string
   blankCount = 0
@@ -331,32 +363,43 @@ export class ValueIndex implements LaneAccount {
   private pages: Uint8Array | undefined
   private unmerged = 0
   private count = 0
-  private kinds = new Uint8Array(0)
-  private numbers = new Float64Array(0)
-  private styles = new Uint32Array(0)
-  private counts = new Uint32Array(0)
-  private texts: string[] = []
+  private kinds: Uint8Array
+  private numbers: Float64Array
+  private styles: Uint32Array
+  private counts: Uint32Array
+  private texts: string[]
   private numberIds: NumberTable | undefined
-  private readonly booleanIds = new Int32Array([-1, -1])
-  private strings = new Map<string, number>()
-  private errors = new Map<string, number>()
+  private booleanIds: Int32Array | undefined
+  private strings: Map<string, number>
+  private errors: Map<string, number>
   private readonly numberKind: number
-  private searchKeys: (string | null)[] = []
+  private searchKeys: (string | null)[]
   private keyState: SearchKeyState = 'none'
   private keyError: ValueIndexError | undefined
   private keyBytes = 0
   private searching = 0
   private keyRunning = false
-  private readonly results = new WeakMap<ValueSearchResult, SearchRecord>()
-  private readonly reservations = new Set<ValueReservation>()
+  private readonly results: WeakMap<ValueSearchResult, SearchRecord>
+  private readonly reservations: Set<ValueReservation>
+  private escapedResults: Map<ValueReservation, readonly object[]> | undefined
   /** Snapshot of the cache's certified strategy; never changes for this index. */
   readonly strategy: SearchKeyStrategy
-  constructor(readonly identity: ValueIndexIdentity, source: ValueColumnSource, private readonly cache: ValueIndexCache, key: string) {
-    this.stamp = Object.freeze({ docId: identity.docId, sheetId: identity.sheetId, valueGen: identity.valueGen })
-    this.strategy = cache.searchKeyStrategy
-    this.scope = key
-    this.source = source
-    this.numberKind = identity.classification.kind === 'date' ? KEY_DATE : KEY_NUMBER
+  constructor(readonly identity: ValueIndexIdentity, source: ValueColumnSource, private readonly cache: ValueIndexCache, key: string, admission?: typeof INDEX_ADMISSION) {
+    const admitted = admission === INDEX_ADMISSION
+    const bytes = valueIndexInitialBytes(key)
+    if (!admitted) cache.charge(this, bytes)
+    try {
+      this.ledger = { sourcePageReads: 0, mergedPages: 0, unknownPages: 0, allocations: 1, allocatedBytes: 8, chargedBytes: bytes, peakBytes: bytes }
+      this.kinds = new Uint8Array(0); this.numbers = new Float64Array(0); this.styles = new Uint32Array(0); this.counts = new Uint32Array(0)
+      this.booleanIds = new Int32Array([-1, -1])
+      this.texts = []; this.strings = new Map(); this.errors = new Map(); this.searchKeys = []
+      this.results = new WeakMap(); this.reservations = new Set()
+      this.stamp = Object.freeze({ docId: identity.docId, sheetId: identity.sheetId, valueGen: identity.valueGen })
+      this.strategy = cache.searchKeyStrategy
+      this.scope = key
+      this.source = source
+      this.numberKind = identity.classification.kind === 'date' ? KEY_DATE : KEY_NUMBER
+    } catch (cause) { if (!admitted) cache.release(bytes); throw cause }
   }
   get size(): number { return this.count }
   get searchKeyStatus(): { strategyId: string; keyed: number; state: SearchKeyState; error?: ValueIndexError } {
@@ -394,8 +437,13 @@ export class ValueIndex implements LaneAccount {
     const record = this.results.get(target)
     if (!record || record.reservation.closed) return
     if (--record.holders > 0) return
-    record.reservation.close()
+    this.retireResult(record.reservation)
     this.reservations.delete(record.reservation)
+  }
+  private retireResult(reservation: ValueReservation): void {
+    const targets = this.escapedResults?.get(reservation)
+    if (targets) { reservation.adopt(targets); this.escapedResults!.delete(reservation) }
+    reservation.close()
   }
   /** Adds an independent holder to an owned, live search result. */
   acquire(result: ValueSearchResult): void {
@@ -420,13 +468,14 @@ export class ValueIndex implements LaneAccount {
   dispose(): void {
     if (this.disposed) return
     this.disposed = true
-    this.cache.release(this.ledger.chargedBytes)
-    this.ledger.chargedBytes = 0
-    for (const reservation of this.reservations) reservation.close()
+    const bytes = this.ledger.chargedBytes
+    for (const reservation of this.reservations) this.retireResult(reservation)
     this.reservations.clear()
     this.cache.forget(this.scope, this)
     this.kinds = new Uint8Array(0); this.numbers = new Float64Array(0); this.styles = new Uint32Array(0); this.counts = new Uint32Array(0)
-    this.texts = []; this.strings = new Map(); this.errors = new Map(); this.numberIds = undefined; this.searchKeys = []; this.keyBytes = 0
+    this.texts = []; this.strings = new Map(); this.errors = new Map(); this.numberIds = undefined; this.booleanIds = undefined; this.searchKeys = []; this.keyBytes = 0
+    this.ledger.chargedBytes = 0
+    this.cache.release(bytes)
   }
   /** Throws stale-source (and disposes) once invalidated or the live source
    * owner differs; every cached path and publication checks this. */
@@ -469,6 +518,7 @@ export class ValueIndex implements LaneAccount {
       if (this.pages[page] === MERGED) continue
       this.check(signal)
       const read = await source.readPage(page, readSignal)
+      try {
       this.ledger.sourcePageReads++
       this.check(signal)
       if (read.kind === 'error') {
@@ -482,7 +532,7 @@ export class ValueIndex implements LaneAccount {
         this.ledger.mergedPages++
       }
       // Merged into (and charged by) this index, or dropped: the source payload's charge ends.
-      if (read.kind === 'values') read.settle?.()
+      } finally { if (read.kind === 'values') read.settle?.() }
       if (pacer.due) {
         progress()
         await pacer.yield()
@@ -664,8 +714,8 @@ export class ValueIndex implements LaneAccount {
         }
         case SOURCE_BOOLEAN: {
           const bit = numbers[i] ? 1 : 0
-          ordinal = this.booleanIds[bit]
-          if (ordinal < 0) ordinal = this.booleanIds[bit] = this.append(KEY_BOOLEAN, bit, style)
+          ordinal = this.booleanIds![bit]
+          if (ordinal < 0) ordinal = this.booleanIds![bit] = this.append(KEY_BOOLEAN, bit, style)
           break
         }
         case SOURCE_STRING: ordinal = this.intern(this.strings, KEY_STRING, texts[i]!, style); break
@@ -697,21 +747,21 @@ export class ValueIndex implements LaneAccount {
       case 'number':
         if (!Number.isFinite(value.value)) return this.errors.get('#NUM!') ?? -1
         return this.numberIds ? this.numberIds.get(value.value === 0 ? 0 : value.value) : -1
-      case 'boolean': return this.booleanIds[value.value ? 1 : 0]
+      case 'boolean': return this.booleanIds![value.value ? 1 : 0]
       case 'string': return this.strings.get(value.value) ?? -1
       case 'error': return this.errors.get(value.value) ?? -1
       default: return -1
     }
   }
-  private searchText(ordinal: number, label: ValueLabeler): string {
+  private searchText(ordinal: number, label: ValueLabeler, account?: LaneAccount): string {
     const kind = this.kinds[ordinal]
     if (kind === KEY_STRING || kind === KEY_ERROR) return this.texts[this.numbers[ordinal]]
-    return label(kind === KEY_DATE ? 'date' : kind === KEY_BOOLEAN ? 'boolean' : 'number', this.numbers[ordinal], this.styles[ordinal])
+    return label(kind === KEY_DATE ? 'date' : kind === KEY_BOOLEAN ? 'boolean' : 'number', this.numbers[ordinal], this.styles[ordinal], account)
   }
-  private view(ordinal: number, label: ValueLabeler): ValueEntryView {
+  private view(ordinal: number, label: ValueLabeler, account?: LaneAccount): ValueEntryView {
     const kind = this.kinds[ordinal]
     const name: ValueEntryKind = kind === KEY_NUMBER ? 'number' : kind === KEY_DATE ? 'date' : kind === KEY_BOOLEAN ? 'boolean' : kind === KEY_STRING ? 'string' : 'error'
-    return { ordinal, kind: name, ...boundedLabel(this.searchText(ordinal, label)), count: this.counts[ordinal] }
+    return { ordinal, kind: name, ...boundedLabel(this.searchText(ordinal, label, account)), count: this.counts[ordinal] }
   }
   /** @internal Only results produced by this instance (and still held) are accepted. */
   ownsSearch(result: ValueSearchResult): void {
@@ -732,8 +782,11 @@ export class ValueIndex implements LaneAccount {
     if (search) this.ownsSearch(search)
     const label = request.label ?? defaultLabel
     const total = search ? search.count : this.count, displayed = Math.min(total, VALUE_DISPLAY_LIMIT)
-    const end = Math.min(displayed, offset + limit), entries: ValueEntryView[] = []
-    if (!search) for (let ordinal = offset; ordinal < end; ordinal++) entries.push(this.view(ordinal, label))
+    const end = Math.min(displayed, offset + limit), account = request.allocation?.reserve()
+    account?.charge(160 + Math.max(0, end - offset) * (160 + VALUE_LABEL_LIMIT * 2))
+    try {
+    const entries: ValueEntryView[] = []
+    if (!search) for (let ordinal = offset; ordinal < end; ordinal++) entries.push(this.view(ordinal, label, account))
     else if (offset < end) {
       let rank = 0
       const set = search.matches
@@ -744,12 +797,15 @@ export class ValueIndex implements LaneAccount {
         if (rank + ones <= offset) { rank += ones; continue }
         for (let bit = 0; bit < 32 && rank < end; bit++) {
           if (!(bits & (1 << bit))) continue
-          if (rank >= offset) entries.push(this.view(word * 32 + bit, label))
+          if (rank >= offset) entries.push(this.view(word * 32 + bit, label, account))
           rank++
         }
       }
     }
-    return { entries, total, displayed, truncated: total > VALUE_DISPLAY_LIMIT, completeness: this.completeness }
+    const result = { entries, total, displayed, truncated: total > VALUE_DISPLAY_LIMIT, completeness: this.completeness }
+    if (account) adoptAllocation(account, result)
+    return result
+    } finally { account?.release() }
   }
   /** Searches every merged value with the S8.1 host-collated `contains`
    * semantics (optionally with `*`/`?`/`~` wildcards) over raw text (strings,
@@ -778,8 +834,7 @@ export class ValueIndex implements LaneAccount {
     const from = resume?.searchedEntries ?? 0, end = this.count, pacer = new Pacer(options)
     const live = () => { checkSignal(signal, 'Value search'); this.assertLive() }
     const reservation = this.reserve()
-    reservation.charge(words(end) * 4)
-    this.reservations.add(reservation)
+    reservation.charge(words(end) * 4 + (reservation.canAdopt ? 1024 : 0))
     // A running scan holds resident keys: not idle for key dropping/eviction.
     this.searching++
     try {
@@ -837,7 +892,11 @@ export class ValueIndex implements LaneAccount {
               }
             }
             // A key miss is decisive; a candidate (or unkeyed value) is confirmed exactly.
-            if (candidate) { exact++; hit = contains(this.searchText(ordinal, label), budget) } else hit = false
+            if (candidate) {
+              const format = options.allocation?.reserve()
+              try { exact++; hit = contains(this.searchText(ordinal, label, format), budget) }
+              finally { format?.release() }
+            } else hit = false
           } else exact++
           if (hit) { setBit(matches, ordinal); count++ }
           if ((ordinal - from) % PACE_STRIDE === PACE_STRIDE - 1 && pacer.due) {
@@ -857,6 +916,11 @@ export class ValueIndex implements LaneAccount {
         searchedEntries: end, complete: end === this.count && this.completeness === 'complete',
         stats: Object.freeze({ keyed, exact }),
       })
+      if (reservation.canAdopt) {
+        this.escapedResults ??= new Map()
+        this.escapedResults.set(reservation, [result, result.matches, result.matches.buffer, result.query])
+      }
+      this.reservations.add(reservation)
       this.results.set(result, { reservation, holders: 1, label: labelOption, limits })
       return result
     } catch (error) {
@@ -1074,10 +1138,10 @@ export class ValueSelectionDraft {
   }
   /** Final membership; pending marks values a partial patch leaves undecided.
    * The caller releases both bitsets' charge. */
-  private membership(): { bits: Uint32Array; pending: Uint32Array; bytes: number } {
+  private membership(account: ValueReservation = this.reservation): { bits: Uint32Array; pending: Uint32Array; bytes: number } {
     const index = this.index, size = index.size, length = words(size)
-    const bytes = length * 8
-    this.reservation.charge(bytes)
+    const bytes = length * 8 + (account.canAdopt ? 128 : 0)
+    account.charge(bytes)
     try {
       const bits = new Uint32Array(length), pending = new Uint32Array(length)
       if (this.base === 'all') { bits.fill(0xffffffff); if (size % 32) bits[length - 1] = 2 ** (size % 32) - 1 }
@@ -1102,7 +1166,7 @@ export class ValueSelectionDraft {
       }
       return { bits, pending, bytes }
     } catch (error) {
-      this.reservation.release(bytes)
+      account.release(bytes)
       throw error
     }
   }
@@ -1149,9 +1213,9 @@ export class ValueSelectionDraft {
     if (!this.dirty) { this.close(); return { kind: 'unchanged', rule: this.committed } }
     await this.prepare({ signal })
     this.ready(signal)
-    const { bits, pending, bytes } = this.membership(), size = index.size
-    let transient = bytes
+    const transient = index.reserve()
     try {
+      const { bits, pending } = this.membership(transient), size = index.size
       if (pending.some(word => word !== 0)) throw new ValueIndexError('incomplete', 'Value selection is still pending')
       let selected = 0
       for (const word of bits) selected += popcount(word)
@@ -1161,8 +1225,7 @@ export class ValueSelectionDraft {
         return { kind: 'committed', rule: null }
       }
       const include = size - selected > selected, count = include ? selected : size - selected
-      this.reservation.charge(count * RUN_ELEMENT_BYTES)
-      transient += count * RUN_ELEMENT_BYTES
+      transient.charge(count * RUN_ELEMENT_BYTES + (transient.canAdopt ? 256 : 0))
       const kinds = new Uint8Array(count), numbers = new Float64Array(count), texts: (string | undefined)[] = new Array(count)
       let at = 0
       for (let ordinal = 0; ordinal < size; ordinal++) {
@@ -1176,11 +1239,18 @@ export class ValueSelectionDraft {
         await this.store.release(ref)
         throw error
       }
-      this.close()
-      const selection = include ? { mode: 'include' as const, keys: ref } : { mode: 'allExcept' as const, excluded: ref }
-      return { kind: 'committed', rule: { kind: 'values', selection, showBlanks: this.showBlanks } }
+      const metadata = index.reserve()
+      try {
+        if (metadata.canAdopt) metadata.charge(256)
+        const selection = include ? { mode: 'include' as const, keys: ref } : { mode: 'allExcept' as const, excluded: ref }
+        const rule = { kind: 'values' as const, selection, showBlanks: this.showBlanks }
+        if (metadata.canAdopt) metadata.adopt([rule, selection])
+        this.close()
+        return { kind: 'committed', rule }
+      } catch (error) { await this.store.release(ref); throw error }
+      finally { metadata.close() }
     } finally {
-      if (!this.closed) this.reservation.release(transient)
+      transient.close()
     }
   }
   private close(): void {
@@ -1228,7 +1298,7 @@ export async function compileValuesMembership(
   if (classification.kind === 'loading') throw new FilterDiagnostic('incomplete', 'Filter incomplete: column classification is loading')
   checkSignal(options.signal, 'Values membership')
   const reservation = options.cache?.reserve()
-  let keys: ValueKeySet
+  let keys: ValueKeySet | undefined
   try {
     keys = await loadKeySet(store, ref, valueScope(identity), options.signal, reservation)
     // An empty ref performs no read; a final read may race an abort.
@@ -1237,6 +1307,7 @@ export async function compileValuesMembership(
   const include = rule.selection.mode === 'include', showBlanks = rule.showBlanks
   const numberKind = classification.kind === 'date' ? KEY_DATE : KEY_NUMBER
   const matches = (value: PreparedValue): boolean => {
+    if (!keys) throw new ValueIndexError('closed', 'Values membership released')
     let member: boolean
     switch (value.kind) {
       case 'unknown': case 'unavailable': throw new FilterDiagnostic('incomplete', 'Filter incomplete: authoritative value is unresolved')
@@ -1248,13 +1319,13 @@ export async function compileValuesMembership(
     }
     return include ? member : !member
   }
-  return { matches, bytes: keys.bytes, release: () => reservation?.close() }
+  return { matches, bytes: keys.bytes, release: () => { keys = undefined; reservation?.close() } }
 }
 
 /** Adapts SourceStore.queryColumn to typed lane pages. It asks for the typed
  * lanes encoding (S1.2) and still accepts cell-object entries from stores that
  * do not produce lanes. One page per row band; the owner is read live. */
-export function valueSourceFromStore(store: SourceStore, col: number, body: { r0: number; r1: number }, pageRows = 4096): ValueColumnSource {
+export function valueSourceFromStore(store: SourceStore, col: number, body: { r0: number; r1: number }, pageRows = 4096, allocation?: AllocationContext): ValueColumnSource {
   if (!Number.isSafeInteger(pageRows) || pageRows < 1 || body.r1 < body.r0 - 1) throw new RangeError('Invalid value source paging')
   const rows = body.r1 - body.r0 + 1
   return {
@@ -1264,11 +1335,14 @@ export function valueSourceFromStore(store: SourceStore, col: number, body: { r0
       const stamp = store.stamp
       const r0 = body.r0 + page * pageRows, r1 = Math.min(body.r1, r0 + pageRows - 1), count = r1 - r0 + 1
       if (!Number.isSafeInteger(page) || page < 0 || count < 1) throw new ValueIndexError('invalid-cursor', 'Value page outside the source')
-      const tags = new Uint8Array(count), numbers = new Float64Array(count), styles = new Uint32Array(count), texts: (string | undefined)[] = []
+      const account = allocation?.reserve()
+      account?.charge(count * 21 + 512 + stamp.sheetId.length * 2)
+      const consumed: object[] = []
+      try {
+      const tags = new Uint8Array(count), numbers = new Float64Array(count), styles = new Uint32Array(count), texts: (string | undefined)[] = allocation ? new Array(count) : []
       const cursors = new Set<string>()
       // Source payloads this page was decoded from: their charges end when the
       // consumer settles the page (after merging it), or now if it is dropped.
-      const consumed: object[] = []
       const settle = () => { for (const payload of consumed.splice(0)) store.settle?.(payload) }
       const drop = <T>(out: T): T => { settle(); return out }
       let cursor: string | undefined, loading = false
@@ -1282,7 +1356,7 @@ export function valueSourceFromStore(store: SourceStore, col: number, body: { r0
         if (result.completeness === 'incomplete') return drop({ kind: 'error', failure: { code: 'incomplete', retryable: true, message: 'Column page is incomplete' } })
         if (result.completeness !== 'complete') loading = true
         for (const item of result.items) {
-          const outcome = place(item, r0, r1, col, tags, numbers, styles, texts)
+          const outcome = place(item, r0, r1, col, tags, numbers, styles, texts, account)
           if (outcome) return drop(outcome)
         }
         cursor = result.nextCursor
@@ -1293,14 +1367,18 @@ export function valueSourceFromStore(store: SourceStore, col: number, body: { r0
       } while (cursor !== undefined)
       if (loading) return drop({ kind: 'unknown', pageId: `${stamp.sheetId}:${col}:${r0}` })
       if (tags.includes(0)) throw new ValueIndexError('page-error', 'Complete column page left rows uncovered')
-      return { kind: 'values', pageId: `${stamp.sheetId}:${col}:${r0}`, count, tags, numbers, texts, styles, settle }
+      const page: ValueLanePage = { kind: 'values', pageId: `${stamp.sheetId}:${col}:${r0}`, count, tags, numbers, texts, styles, settle }
+      if (account) adoptAllocation(account, page)
+      return page
+      } catch (error) { for (const payload of consumed) store.settle?.(payload); throw error }
+      finally { account?.release() }
     },
   }
 }
 /** Lane tags share their numbers with SOURCE_* (contracts LANE_*), so they copy straight in. */
 function placeLanes(
   lanes: ColumnLanes, r0: number,
-  tags: Uint8Array, numbers: Float64Array, styles: Uint32Array, texts: (string | undefined)[],
+  tags: Uint8Array, numbers: Float64Array, styles: Uint32Array, texts: (string | undefined)[], account?: AllocationReservation,
 ): ValuePageRead | undefined {
   const n = lanes.rows.length
   if (lanes.tags.length !== n || lanes.numbers.length !== n || lanes.styles.length !== n || lanes.textStart.length !== n + 1) {
@@ -1319,21 +1397,28 @@ function placeLanes(
     tags[at] = tag
     styles[at] = lanes.styles[i]
     if (tag === SOURCE_NUMBER || tag === SOURCE_BOOLEAN) numbers[at] = lanes.numbers[i]
-    else if (tag === SOURCE_STRING || tag === SOURCE_ERROR) texts[at] = laneText(lanes, i)
+    else if (tag === SOURCE_STRING || tag === SOURCE_ERROR) texts[at] = laneText(lanes, i, account)
   }
   return undefined
 }
-function laneText(lanes: ColumnLanes, i: number): string {
+function laneText(lanes: ColumnLanes, i: number, account?: AllocationReservation): string {
   const start = lanes.textStart[i], end = lanes.textStart[i + 1]
   if (!(start <= end) || end > lanes.text.length) throw new ValueIndexError('page-error', 'Column lane text out of range')
+  const units = end - start
+  if (!units) return ''
+  const peak = units * 6 + Math.min(units, 8192) * 16 + 96
+  account?.charge(peak)
+  try {
   let out = ''
   // Chunked so a long value never exceeds the engine's argument limit.
   for (let at = start; at < end; at += 8192) out += String.fromCharCode(...lanes.text.subarray(at, Math.min(end, at + 8192)))
+  account?.release(peak - units * 2 - 16)
   return out
+  } catch (error) { account?.release(peak); throw error }
 }
 function place(
   item: ColumnEntry, r0: number, r1: number, col: number,
-  tags: Uint8Array, numbers: Float64Array, styles: Uint32Array, texts: (string | undefined)[],
+  tags: Uint8Array, numbers: Float64Array, styles: Uint32Array, texts: (string | undefined)[], account?: AllocationReservation,
 ): ValuePageRead | undefined {
   if (item.kind === 'unknown') return { kind: 'unknown', pageId: item.pageId }
   if (item.kind === 'error') return { kind: 'error', failure: { code: item.code, retryable: item.retryable, message: 'Column value source failed' } }
@@ -1343,7 +1428,7 @@ function place(
   }
   for (let row = first; row <= last; row++) if (tags[row - r0]) throw new ValueIndexError('page-error', 'Overlapping column coverage')
   if (item.kind === 'blank') { tags.fill(SOURCE_BLANK, first - r0, last - r0 + 1); return }
-  if (item.kind === 'lanes') return placeLanes(item, r0, tags, numbers, styles, texts)
+  if (item.kind === 'lanes') return placeLanes(item, r0, tags, numbers, styles, texts, account)
   const at = first - r0, cell = item.cell
   if (cell.row !== first || cell.col !== col || cell.id !== first * 16384 + col) throw new ValueIndexError('page-error', 'Cell identity does not match its column entry')
   styles[at] = cell.styleIndex ?? 0

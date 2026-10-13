@@ -130,6 +130,32 @@ export class MainMemoryLedger {
     for (const target of targets) this.watcher.register(target, token)
     return token
   }
+  /** Transfers already-admitted bytes without a double charge or refund gap. */
+  adoptWhileReachable(fromPool: MainPool, fromOwner: string, pool: MainPool, targets: readonly object[], bytes: number, commit?: () => void): string {
+    const key = `${fromPool}\u0000${fromOwner}`, charge = this.charges.get(key)
+    if (!targets.length || !Number.isSafeInteger(bytes) || bytes < 0 || !charge || bytes > charge.bytes) throw new RangeError('Invalid lifetime adoption')
+    const token = `life${++lifetimeSerial}`
+    // Register and publish while the existing reservation still covers every
+    // byte. A failure leaves that reservation untouched for its own cleanup.
+    if (this.watcher) for (const target of targets) this.watcher.register(target, token)
+    commit?.()
+    const remaining = charge.bytes - bytes
+    if (remaining) this.charges.set(key, { pool: fromPool, bytes: remaining })
+    else this.charges.delete(key)
+    this.charges.set(`${pool}\u0000${token}`, { pool, bytes })
+    this.pools[fromPool] -= bytes
+    this.pools[pool] += bytes
+    // Total and high-water bytes never change during ownership adoption.
+    this.lifetimes.set(token, pool)
+    for (const target of targets) if (!this.leases.has(target)) this.leases.set(target, token)
+    if (this.watcher) this.alive.set(token, { pool, owner: token, remaining: targets.length })
+    return token
+  }
+  /** Whether an allocation already has a live reachability owner. */
+  hasLifetime(target: object): boolean {
+    const token = this.leases.get(target)
+    return token !== undefined && this.lifetimes.has(token)
+  }
   /**
    * Ends the lifetime charge that `target` (any registered target of it) holds,
    * at once: its consumer has decoded the payload into its own structure and
@@ -166,6 +192,7 @@ export class MainMemoryLedger {
     this.bytes += bytes - old
     if (this.bytes > this.peakBytes) { this.peakBytes = this.bytes; this.peakPools = { ...this.pools } }
   }
+  ownerBytes(pool: MainPool, owner: string): number { return this.charges.get(`${pool}\u0000${owner}`)?.bytes ?? 0 }
   release(pool: MainPool, owner: string): void { this.set(pool, owner, 0) }
   /** Releases every owner of `pool` (or of every pool). */
   releaseAll(pool?: MainPool): void {

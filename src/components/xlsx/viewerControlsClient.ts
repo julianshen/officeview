@@ -8,19 +8,32 @@ import { classifyColumn, FilterEngine, type FilterContext, type PreparedValue, t
 import { compileValuesMembership, ValueIndexCache, valueScope, valueSourceFromStore, type ValueIndexIdentity, type ValueLanePage, ValueIndexError } from '../../xlsx/view/valueIndex'
 import { CompactRowVisibility, createRowVisibility } from '../../xlsx/view/visibility'
 import { MemoryValueRunStore, VALUE_RUN_PAGE, type ValueRunStore } from '../../xlsx/view/valueRuns'
-import { StructuralIndex } from '../../xlsx/view/structure'
-import type { MainMemoryLedger } from '../../xlsx/view/mainLedger'
+import type { StructuralIndex } from '../../xlsx/view/structure'
+import { MainControlMemory, controlSourceStore, controlStructure, controlView } from '../../xlsx/view/mainControlMemory'
+import { MainMemoryLedger, estimatePayloadBytes } from '../../xlsx/view/mainLedger'
 import type { RangeDetection, RangeDetectionRequest } from '../../xlsx/view/rangeDetection'
 import { DocumentSession, type OperationOutcome, type WorkbookSource, sameStamp } from '../../worker/viewerSession'
 import { DisplayTextLaneCache, needsDisplayText } from '../../worker/displayTextLane'
 import { createControlsClient, type ControlSnapshot, type ControlsClient, type StagedControl, type ControlProgress, sameControlOwner } from './controlsClient'
 
-/** Document-owned committed keys survive port eviction. Both indexes and runs
+/** onUsage observes usage; pass a ledger as the third factory argument for accounting.
+ * Ledger-writing legacy callbacks must migrate rather than mirror that account.
+ * Document-owned committed keys survive port eviction. Both indexes and runs
  * share one bounded ledger; indexes are rebuildable, committed keys are not. */
-export interface ViewerControlResources { cache: ValueIndexCache; runs: ValueRunStore; dispose(): void }
-export function createViewerControlResources(profile: ProfileId = 'D', onUsage?: (bytes: number) => void): ViewerControlResources {
-  const cache = new ValueIndexCache({ limitBytes: (profile === 'M' ? 8 : 16) * 1024 * 1024, ...(onUsage ? { onUsage } : {}) })
-  const store = new MemoryValueRunStore({ limitBytes: 8 * 1024 * 1024, account: cache.reserve() })
+export interface ViewerControlResources { cache: ValueIndexCache; runs: ValueRunStore; readonly memory: MainControlMemory; readonly closed: boolean; readonly cacheOwner: string; adoptCache(targets: readonly object[], bytes: number, commit: () => void): void; bindLedger(ledger: MainMemoryLedger, usage?: 'observer'): void; dispose(): void }
+export function createViewerControlResources(profile: ProfileId = 'D', onUsage?: (bytes: number) => void, ledger?: MainMemoryLedger): ViewerControlResources {
+  let memory = new MainControlMemory(ledger ?? new MainMemoryLedger(), profile)
+  const headerAccount = memory.reserve()
+  headerAccount.charge(1024)
+  let account = memory.reserve(), bound = ledger !== undefined, activated = false
+  const cache = new ValueIndexCache({ limitBytes: (profile === 'M' ? 8 : 16) * 1024 * 1024,
+    beforeGrowth: bytes => !closed && account.trySet(bytes),
+    adopt: (targets, bytes) => account.adopt(targets, bytes),
+    onUsage: bytes => { account.trySet(bytes); onUsage?.(bytes) },
+  })
+  const store = new MemoryValueRunStore({ limitBytes: 8 * 1024 * 1024, account: cache.reserve(), readerAllocation: {
+    get closed() { return memory.closed }, get limitBytes() { return memory.limitBytes }, reserve: () => memory.reserve(), canReserve: bytes => memory.canReserve(bytes), owns: target => memory.owns(target),
+  } })
   const refs = new Map<string, PagedKeySetRef>()
   let closed = false
   const runs: ValueRunStore = {
@@ -34,12 +47,27 @@ export function createViewerControlResources(profile: ProfileId = 'D', onUsage?:
     read: (...args) => store.read(...args),
     async release(ref) { refs.delete(ref.refId); await store.release(ref) },
   }
-  return { cache, runs, dispose() {
+  const resource: ViewerControlResources = { cache, runs, get closed() { return closed }, adoptCache: (targets, bytes, commit) => account.adopt(targets, bytes, commit), get cacheOwner() { return account.owner }, get memory() { activated = true; return memory }, bindLedger(ledger, usage) {
+    if (memory.ledger === ledger) return
+    if (onUsage && usage !== 'observer') throw new RangeError('Declare resourceUsage: observer, or pass the ledger to createViewerControlResources instead of a ledger-writing onUsage callback')
+    if (bound || activated || cache.usedBytes) throw new RangeError('Controls resources belong to another main ledger')
+    const rebound = new MainControlMemory(ledger, profile), header = rebound.reserve()
+    header.charge(1024)
+    try { header.adopt([resource, cache, store, refs, runs]); memory.ledger.settle(resource) }
+    finally { header.release() }
+    account.release()
+    memory = rebound
+    account = memory.reserve()
+    bound = true
+  }, dispose() {
     closed = true
+    memory.close()
     cache.invalidate()
     for (const ref of refs.values()) void store.release(ref)
     refs.clear()
   } }
+  headerAccount.adopt([resource, cache, store, refs, runs])
+  return resource
 }
 
 export interface ViewerControlsOptions {
@@ -60,6 +88,8 @@ export interface ViewerControlsOptions {
   displayLanes?: DisplayTextLaneCache
   /** S10.2: the document's main-thread ledger (structural snapshots are charged while reachable). */
   ledger?: MainMemoryLedger
+  /** Explicit migration for callback-only resources: callbacks remain observers. */
+  resourceUsage?: 'observer'
 }
 export type RemoteViewCommit =
   | { kind: 'committed'; view: Pick<SheetView, 'order' | 'filter' | 'sort'> & { visibility?: SheetView['visibility'] } }
@@ -73,21 +103,46 @@ export interface RemoteViewPort {
 export interface ViewerControls { client: ControlsClient; dispose(): void }
 export async function viewerControls(options: ViewerControlsOptions, signal: AbortSignal): Promise<ViewerControls> {
   const { doc, source, sheetId } = options
-  const sheet = doc.sheets[source.sheets.findIndex(s => s.sheetId === sheetId)], store = source.store(sheetId)
+  const sheet = doc.sheets[source.sheets.findIndex(s => s.sheetId === sheetId)]
   const context = (): FilterContext => ({ locale: sheet.semantics?.locale ?? 'en-US', dateSystem: sheet.semantics?.dateSystem ?? '1900', timeZone: sheet.semantics?.timeZone ?? Intl.DateTimeFormat().resolvedOptions().timeZone, nowMs: Date.now() })
-  const resources = options.resources ?? createViewerControlResources()
+  const resources = options.resources ?? createViewerControlResources('D', undefined, options.ledger)
+  if (options.ledger) resources.bindLedger(options.ledger, options.resourceUsage)
+  if (resources.closed) throw new ValueIndexError('cancelled', 'Controls resources disposed')
+  let disposed = false
+  const memory = resources.memory
+  if (!options.ledger && !memory.owns(doc)) {
+    const ownedDoc = memory.reserve()
+    try {
+      ownedDoc.charge(estimatePayloadBytes(doc))
+      memory.ledger.adoptWhileReachable('controls', ownedDoc.owner, 'document', [doc], ownedDoc.bytes)
+    } finally { ownedDoc.release() }
+  }
+  const store = controlSourceStore(source.store(sheetId), memory)
   const { cache, runs } = resources
   const stamp = { ...store.stamp }
   let structure: StructuralIndex
   try {
-    structure = new StructuralIndex(await store.queryStructural({ r0: 0, r1: 1048575, c0: 0, c1: 16383 }, { signal, stamp }))
-    options.ledger?.chargeWhileReachable('structure', [structure], structure.estimatedBytes)
+    const result = await store.queryStructural({ r0: 0, r1: 1048575, c0: 0, c1: 16383 }, { signal, stamp })
+    signal.throwIfAborted()
+    structure = controlStructure(result, memory)
     signal.throwIfAborted()
   } catch (error) { if (!options.resources) resources.dispose(); throw error }
-  const styles = new Map<number, XlsxCell['style']>()
-  for (const row of sheet.rows) for (const cell of row.cells) styles.set(cell.styleIndex, cell.style)
+  const portMetadata = memory.reserve()
+  let styles: Map<number, XlsxCell['style']>, classifications: Map<string, ColumnClassification>, jobs: Set<AbortController>
+  try {
+    // Lookup maps, their style references, and resolver/page/evaluator closures.
+    portMetadata.charge(2048)
+    styles = new Map<number, XlsxCell['style']>()
+    for (const row of sheet.rows) for (const cell of row.cells) {
+      if (!styles.has(cell.styleIndex)) portMetadata.charge(48)
+      styles.set(cell.styleIndex, cell.style)
+    }
+    classifications = new Map<string, ColumnClassification>()
+    jobs = new Set<AbortController>()
+    portMetadata.adopt([styles, classifications, jobs])
+  } catch (error) { if (!options.resources) resources.dispose(); throw error }
+  finally { portMetadata.release() }
   const styleAt = (index: number) => options.styleOf ? options.styleOf(index) : styles.get(index)
-  const classifications = new Map<string, ColumnClassification>()
   const scope = (owner: CacheIdentity, range: FilterRange, col: number) => JSON.stringify([owner.valueGen, range, col])
   // Display text comes from an on-demand lane (S13.5), present only for a text
   // rule on a text/mixed column; classification and other rules read raw values.
@@ -99,11 +154,22 @@ export async function viewerControls(options: ViewerControlsOptions, signal: Abo
     if (tag === 2) return { kind: 'string', value: page.texts[index]! }
     return tag === 3 ? { kind: 'boolean', value: Boolean(value), displayText } : { kind: 'number', value, displayText, numFmtId: style?.numFmtId, formatCode: style?.formatCode }
   }
-  const display = (page: ValueLanePage, index: number): string | undefined => {
+  const display = (page: ValueLanePage, index: number, accept: (text: string) => void): void => {
     const tag = page.tags[index]
     if (tag === 5 || tag === 7 || tag === 4 || tag === 2) return undefined
     const value = page.numbers[index]
-    return cellDisplayText(sheet, { value: tag === 3 ? Boolean(value) : value, style: styleAt(page.styles?.[index] ?? 0) })
+    const scratch = laneAccount ? null : memory.reserve()
+    try {
+      const text = cellDisplayText(sheet, { value: tag === 3 ? Boolean(value) : value, style: styleAt(page.styles?.[index] ?? 0) }, {
+        allocate: bytes => { if (scratch) scratch.charge(bytes); else { laneAccount!.charge(bytes); formatCredit += bytes } },
+        release: bytes => { if (scratch) scratch.release(bytes); else { laneAccount!.release(bytes); formatCredit -= bytes } },
+        retain: (targets, bytes, commit) => {
+          if (scratch) scratch.adopt(targets, bytes, commit)
+          else { resources.adoptCache(targets, bytes, commit); laneAccount!.release(bytes); formatCredit -= bytes }
+        },
+      })
+      accept(text)
+    } finally { scratch?.release(); if (formatCredit) { laneAccount!.release(formatCredit); formatCredit = 0 } }
   }
   // The lane shares the controls caches' main-thread share (§12.4): its bytes
   // are charged to the value-index cache's ledger (16 MiB D / 8 MiB M, with
@@ -111,30 +177,41 @@ export async function viewerControls(options: ViewerControlsOptions, signal: Abo
   // ledger's 'controls' pool for exactly as long as the lane is retained. Idle
   // indexes are shed first; then this cache evicts its own unleased lanes.
   const laneAccount = options.displayLanes ? null : cache.reserve()
+  // Canonical formatting and sink.add run synchronously. Its admitted credit
+  // moves into the lane without charging the same retained string twice.
+  let formatCredit = 0
   const lanes = options.displayLanes ?? new DisplayTextLaneCache({
     limitBytes: cache.limitBytes,
-    budget: { reserve: bytes => laneAccount!.charge(bytes), release: bytes => laneAccount!.release(bytes) },
+    budget: { reserve: bytes => {
+      const credit = Math.min(formatCredit, bytes)
+      formatCredit -= credit
+      laneAccount!.charge(bytes - credit)
+    }, release: bytes => laneAccount!.release(bytes) },
   })
   // The style resolver is this port's style owner: lanes key by its identity.
   const styleOwner: object = options.styleOf ?? styles
   const pages = async (owner: CacheIdentity, range: FilterRange, col: number, abort: AbortSignal, accept: (page: ValueLanePage, firstRow: number) => Promise<void> | void) => {
     const r0 = range.r0 + range.headerRows, r1 = range.r1 - range.totalsRows, size = 4096
-    const laneSource = valueSourceFromStore(store, col, { r0, r1 }, size)
+    const laneSource = valueSourceFromStore(store, col, { r0, r1 }, size, memory)
     for (let index = 0; index < laneSource.pageCount; index++) {
       abort.throwIfAborted()
       let complete = false
       for (;;) {
+        if (disposed || resources.closed) throw new ValueIndexError('cancelled', 'Controls disposed')
         const page = await laneSource.readPage(index, abort)
+        try {
+        if (disposed || resources.closed) throw new ValueIndexError('cancelled', 'Controls disposed')
         if (!sameControlOwner(owner, options.snapshot().owner) || !sameStamp(owner, store.stamp)) throw new ValueIndexError('stale-source', 'Source or view changed; retry.')
         if (page.kind === 'error') throw new ValueIndexError(page.failure.code, page.failure.message)
         // The consumer folds the page into its own (charged) state, then the
         // reply it came from stops being charged.
-        if (page.kind === 'values') { try { await accept(page, r0 + index * size) } finally { page.settle?.() } break }
+        if (page.kind === 'values') { await accept(page, r0 + index * size); break }
         if (complete) throw new ValueIndexError('page-error', 'Values stayed unknown after source completion.')
         const coverage = await store.ensureComplete({ r0: r0 + index * size, r1: Math.min(r1, r0 + (index + 1) * size - 1), c0: col, c1: col }, { stamp: owner, signal: abort })
         if (coverage.error) throw new ValueIndexError(coverage.error.code, coverage.error.message)
         complete = coverage.completeness === 'complete'
         if (!complete) throw new ValueIndexError('incomplete', 'Source values are still loading; retry.')
+        } finally { if (page.kind === 'values') page.settle?.() }
       }
     }
   }
@@ -185,31 +262,39 @@ export async function viewerControls(options: ViewerControlsOptions, signal: Abo
       default: return commit
     }
   }
-  const stage = async (kind: 'filter' | 'sort', spec: Parameters<ControlsClient['filter']>[1] | Parameters<ControlsClient['sort']>[1], owner: CacheIdentity, abort: AbortSignal, progress?: (value: ControlProgress) => void): Promise<StagedControl> => {
+  const stageOwned = async (kind: 'filter' | 'sort', spec: Parameters<ControlsClient['filter']>[1] | Parameters<ControlsClient['sort']>[1], owner: CacheIdentity, abort: AbortSignal, progress?: (value: ControlProgress) => void): Promise<StagedControl> => {
+    if (disposed || resources.closed) return { kind: 'cancelled' }
     if (options.remote) return stageRemote(options.remote, kind, spec, owner, abort, progress)
     const before = options.view(), filterContext = context()
+    if (before.visibility instanceof CompactRowVisibility) controlView(memory, before.order, before.visibility)
     // Borrow the source: closing a private draft releases only its own caches.
-    const borrowed: WorkbookSource = { ...source, bindMemory: undefined, release: async () => {} }
-    const engine = new DocumentSession(owner.docId, borrowed, { filterEvaluator: async ({ spec: filter, signal: request, cooperate }) => {
+    const borrowed: WorkbookSource = { ...source, store: id => controlSourceStore(source.store(id), memory), bindMemory: undefined, release: async () => {} }
+    const flagsAccount = memory.reserve(), sessionMetadata = memory.reserve()
+    // Session/pool descriptors, their empty maps, and bounded draft/guard records.
+    sessionMetadata.charge(4096)
+    let engine: DocumentSession
+    try { engine = new DocumentSession(owner.docId, borrowed, { profile: memory.profile, workerBudgetBytes: memory.limitBytes, allocation: memory, filterEvaluator: async ({ spec: filter, signal: request, cooperate }) => {
+      flagsAccount.charge(filter.range.r1 - filter.range.r0 + 1 + 128)
       const flags = new Uint8Array(filter.range.r1 - filter.range.r0 + 1).fill(1)
       const r0 = filter.range.r0 + filter.range.headerRows, r1 = filter.range.r1 - filter.range.totalsRows
       for (const [col, rule] of filter.columns) {
         await classify(owner, filter.range, col, request)
         const domain = identity(owner, filter.range, col)
-        const match = rule.kind === 'values' ? (await compileValuesMembership(rule, domain, runs, { signal: request })).matches : new FilterEngine(filterContext).compileRule(rule, domain.classification, { signal: request })
+        const membership = rule.kind === 'values' ? await compileValuesMembership(rule, domain, runs, { cache, signal: request }) : undefined
+        const match = membership?.matches ?? new FilterEngine(filterContext).compileRule(rule, domain.classification, { signal: request })
         let lease
         try {
           lease = needsDisplayText(rule, domain.classification)
             ? await lanes.lease({ docId: owner.docId, sheetId: owner.sheetId, valueGen: owner.valueGen, styleOwner, col, r0, r1 }, sink => pages(owner, filter.range, col, request, async (page, first) => {
               for (let i = 0; i < page.count; i++) {
                 request.throwIfAborted()
-                const text = display(page, i)
-                if (text !== undefined) sink.add(first + i - r0, text)
+                display(page, i, text => sink.add(first + i - r0, text))
                 if (cooperate?.due(1)) await cooperate.pause('filter')
               }
             }))
             : undefined
         } catch (error) {
+          membership?.release()
           if (error instanceof ValueIndexError && error.code === 'quota') return { kind: 'refused', refusal: { reason: 'resource-limit', message: error.message } }
           throw error
         }
@@ -221,23 +306,57 @@ export async function viewerControls(options: ViewerControlsOptions, signal: Abo
               if (cooperate?.due(1)) await cooperate.pause('filter')
             }
           })
-        } finally { lease?.release() }
+        } finally { lease?.release(); membership?.release() }
       }
       return { kind: 'complete', matches: row => Boolean(flags[row - filter.range.r0]) }
-    } })
+    } }) } catch (error) { sessionMetadata.release(); throw error }
     try {
       if (store.stamp.valueGen > engine.identity(sheetId).valueGen) engine.publishValues(sheetId)
-      const visibility = before.visibility instanceof CompactRowVisibility ? before.visibility : createRowVisibility(1048576, slot => before.visibility.visible(slot))
+      let visibility: CompactRowVisibility
+      if (before.visibility instanceof CompactRowVisibility) visibility = before.visibility
+      else {
+        const converted = memory.reserve()
+        try {
+          converted.charge(2 * Math.ceil(1048576 / 32) * 4 + 4 * (Math.ceil(1048576 / 1024) + 1))
+          visibility = createRowVisibility(1048576, slot => before.visibility.visible(slot))
+          converted.adopt([visibility, visibility.words, visibility.words.buffer, visibility.summaries, visibility.summaries.buffer], visibility.words.byteLength + visibility.summaries.byteLength)
+        } finally { converted.release() }
+      }
       engine.commitDraft(engine.identity(sheetId), { ...before, visibility, matches: row => before.visibility.visible(before.order.sourceToDisplay(row)) })
       const hooks = { progress: (completed: number, total: number) => progress?.({ completed, total, message: kind === 'sort' ? 'Sorting view' : 'Filtering view' }) }
       const outcome = kind === 'sort' ? await engine.sort(engine.identity(sheetId), spec as Parameters<ControlsClient['sort']>[1], abort, hooks)
         : await engine.filter(engine.identity(sheetId), spec as Parameters<ControlsClient['filter']>[1], Date.now(), abort, hooks)
+      if (disposed || resources.closed || abort.aborted) return { kind: 'cancelled' }
       if (outcome.kind !== 'committed') return failure(outcome)
       const draft = outcome.view
-      return { kind: 'ready', publish: () => options.publish(draft) }
-    } finally { await engine.release() }
+      return { kind: 'ready', publish: () => disposed || resources.closed ? null : options.publish(draft) }
+    } catch (error) {
+      if (error instanceof ValueIndexError && error.code === 'quota') return { kind: 'refused', refusal: { reason: 'resource-limit', message: error.message } }
+      throw error
+    } finally {
+      await engine.release()
+      flagsAccount.release()
+      sessionMetadata.adopt([engine, engine.memory])
+      sessionMetadata.release()
+    }
   }
-  const client = createControlsClient({ snapshot: options.snapshot, context, cache, runs,
+  const stage: typeof stageOwned = async (kind, spec, owner, outer, progress) => {
+    if (disposed || resources.closed) return { kind: 'cancelled' }
+    const metadata = memory.reserve()
+    metadata.charge(256)
+    const controller = new AbortController(), forward = () => controller.abort()
+    if (outer.aborted) controller.abort()
+    outer.addEventListener('abort', forward, { once: true })
+    jobs.add(controller)
+    try { return await stageOwned(kind, spec, owner, controller.signal, progress) }
+    finally {
+      outer.removeEventListener('abort', forward)
+      jobs.delete(controller)
+      metadata.adopt([controller, controller.signal])
+      metadata.release()
+    }
+  }
+  const client = createControlsClient({ allocation: memory, snapshot: options.snapshot, context, cache, runs,
     rangeRequest: col => {
       const selection = options.view().selection
       const active = selection.active ? { ...selection.active, col: col ?? selection.active.col } : { row: store.extent.used?.r0 ?? 0, col: col ?? 0 }
@@ -248,25 +367,42 @@ export async function viewerControls(options: ViewerControlsOptions, signal: Abo
       return { store, structure, selection: { ...selection, active, ranges } }
     },
     ...(isRemoteStore(store) ? { detectRange: (kind: 'filter' | 'sort', request: RangeDetectionRequest) => store.detectRange(kind, request.selection, request.override ?? null, request.options) } : {}),
-    domain: (owner, range, col) => ({ identity: identity(owner, range, col), source: valueSourceFromStore(store, col, { r0: range.r0 + range.headerRows, r1: range.r1 - range.totalsRows }), label: (kind, value, styleIndex) => cellDisplayText(sheet, { value: kind === 'boolean' ? Boolean(value) : value, style: styleAt(styleIndex) }) }),
+    domain: (owner, range, col) => ({ identity: identity(owner, range, col), source: valueSourceFromStore(store, col, { r0: range.r0 + range.headerRows, r1: range.r1 - range.totalsRows }, 4096, memory), label: (kind, value, styleIndex, account) => cellDisplayText(sheet, { value: kind === 'boolean' ? Boolean(value) : value, style: styleAt(styleIndex) }, account ? {
+      allocate: bytes => account.charge(bytes), release: bytes => account.release(bytes),
+      retain: (targets, bytes, commit) => {
+        const held = account as import('../../xlsx/view/allocationAccount').AllocationReservation
+        if (held.adopt) held.adopt(targets, bytes, commit)
+        else commit()
+      },
+    } : undefined) }),
     stageFilter: (spec, owner, abort, progress) => stage('filter', spec, owner, abort, progress), stageSort: (spec, owner, abort, progress) => stage('sort', spec, owner, abort, progress),
   })
   const resolve = client.resolve, values = client.values
   client.resolve = async (owner, kind, abort, override, col) => {
+    if (disposed || resources.closed) throw new ValueIndexError('cancelled', 'Controls disposed')
     // A worker-backed sheet opens while its import still runs, so the snapshot
     // taken above can be 'loading'. Re-query until it is complete (or failed);
     // a stuck snapshot would refuse every later sort/filter as incomplete.
     if (structure.completeness !== 'complete' && structure.failure === undefined) {
-      structure = new StructuralIndex(await store.queryStructural({ r0: 0, r1: 1048575, c0: 0, c1: 16383 }, { signal: abort, stamp: { ...store.stamp } }))
-      options.ledger?.chargeWhileReachable('structure', [structure], structure.estimatedBytes)
+      const result = await store.queryStructural({ r0: 0, r1: 1048575, c0: 0, c1: 16383 }, { signal: abort, stamp: { ...store.stamp } })
       abort.throwIfAborted()
+      if (disposed || resources.closed) throw new ValueIndexError('cancelled', 'Controls disposed')
+      structure = controlStructure(result, memory)
+        abort.throwIfAborted()
     }
     const resolved = await resolve(owner, kind, abort, override, col)
     if (resolved.kind === 'complete' && kind === 'filter') await classify(owner, resolved.range, col ?? resolved.range.c0, abort)
     return resolved
   }
-  client.values = async (owner, range, col, applied, abort) => { await classify(owner, range, col, abort); return values(owner, range, col, applied, abort) }
+  client.values = async (owner, range, col, applied, abort) => {
+    if (disposed || resources.closed) throw new ValueIndexError('cancelled', 'Controls disposed')
+    await classify(owner, range, col, abort)
+    if (disposed || resources.closed) throw new ValueIndexError('cancelled', 'Controls disposed')
+    return values(owner, range, col, applied, abort)
+  }
   return { client, dispose() {
+    disposed = true
+    for (const job of jobs) job.abort()
     classifications.clear()
     if (options.displayLanes) lanes.invalidate(key => key.sheetId === sheetId)
     // A lane still read by an in-flight filter keeps its controls charge until

@@ -1,3 +1,5 @@
+import { controlStructure, controlSourceStore, controlView } from '../xlsx/view/mainControlMemory'
+import type { AllocationContext } from '../xlsx/view/allocationAccount'
 /**
  * Resident document session (spec §§4.1, 6.3, 10.1–10.2; plan S4.1).
  *
@@ -451,6 +453,8 @@ export type PrepareOutcome =
 /** Yield phases of the session's own kernels; sort phases come from sort.ts. */
 export type SessionPhase = 'prepare' | 'guard' | 'project'
 export interface SessionOptions {
+  /** Optional account for local main-owned sessions only. */
+  allocation?: AllocationContext
   /** Injected host yield shared by every long kernel (S4.2 scheduler). */
   yield?: YieldFunction<string>
   /** Injected clock for the 10 ms yield budget (deterministic tests). */
@@ -642,7 +646,7 @@ class GuardHalt extends Error {
 }
 /** One operation's share of the document pool's transient ledger; `set` is
  * absolute and false when the bytes cannot be admitted. */
-interface Charge { set(bytes: number): boolean; release(): void }
+interface Charge { set(bytes: number): boolean; release(): void; adopt?(targets: readonly object[], bytes: number): void }
 /** Abandons a guard whose scratch buffer could not be admitted. */
 class QuotaHalt extends Error {
   constructor(readonly requiredBytes: number) { super('quota') }
@@ -734,12 +738,13 @@ export class DocumentSession {
   constructor(readonly docId: string, readonly source: WorkbookSource, private readonly options: SessionOptions = {}) {
     if (!source.sheets.length) throw new RangeError('Workbook has no sheets')
     this.activeSheetId = source.sheets[0].sheetId
-    const limitBytes = options.workerBudgetBytes ?? WORKER_BUDGETS[options.profile ?? 'D']
+    if (options.allocation) this.source = { ...source, store: id => controlSourceStore(source.store(id), options.allocation!), bindMemory: undefined, release: async () => {} }
+    const limitBytes = options.allocation?.limitBytes ?? options.workerBudgetBytes ?? WORKER_BUDGETS[options.profile ?? 'D']
     // Below one full-axis mask no sheet could ever be viewed: refuse up front.
     if (!(limitBytes >= MIN_WORKER_BUDGET_BYTES)) throw new WorkerBudgetError(limitBytes)
-    this.memory = new MemoryPool({ limitBytes })
+    this.memory = new MemoryPool({ limitBytes, ...(options.allocation ? { allocation: options.allocation } : {}) })
     this.memory.protect(this.activeSheetId)
-    source.bindMemory?.(this.memory)
+    this.source.bindMemory?.(this.memory)
   }
   get globalViewGen(): number { return this.globalGen }
   /** Document epoch assigned by the kernel at open (1 when standalone). */
@@ -776,9 +781,10 @@ export class DocumentSession {
    * Operation commits uncharge their transient draft first, so the same bytes
    * are re-admitted, never counted twice and never forced. */
   private retainView(state: ResidentState): void {
+    if (this.options.allocation) controlView(this.options.allocation, state.order, state.visibility)
     const bytes = orderBytes(state.order) + maskBytes(state.visibility)
     const entry = this.memory.retain(viewKey(state.sheetId), {
-      tier: 'view', bytes, owner: state.sheetId, evictable: state.recipe !== null,
+      mainOwned: false, tier: 'view', bytes, owner: state.sheetId, evictable: state.recipe !== null,
       onRelease: reason => { if (reason === 'evicted') this.evictView(state.sheetId) },
     })
     if (!entry) throw new ViewQuotaError(bytes, this.memory.limitBytes)
@@ -804,13 +810,27 @@ export class DocumentSession {
     const state = this.states.get(sheetId)
     return state !== undefined && isResidentState(state)
   }
+  /** Local masks own both the construction words and the constructor's copy.
+   * Keep the output reservation through adoption; retainView then sees the same owner. */
+  private localVisibility(build: () => CompactRowVisibility): CompactRowVisibility {
+    const memory = this.options.allocation
+    if (!memory) return build()
+    const account = memory.reserve()
+    const words = Math.ceil(MAX_ROWS / 32) * 4
+    try {
+      account.charge(words * 2 + 4 * (Math.ceil(MAX_ROWS / 1024) + 1) + 1024)
+      const visibility = build()
+      account.adopt([visibility, visibility.words, visibility.words.buffer, visibility.summaries, visibility.summaries.buffer], maskBytes(visibility) + 1024)
+      return visibility
+    } finally { account.release() }
+  }
   /** Synchronous materialization: a mask-only eviction is rebuilt in place; an
    * evicted order needs the async ensureView. */
   private residentSync(sheetId: string): ResidentState {
     const state = this.state(sheetId)
     if (isResidentState(state)) return state
     if (state.order === null) throw new ViewNotResidentError(sheetId)
-    const visibility = projectVisibility(this.source.geometry(sheetId).baseHidden, state.filter, state.order, state.matches ?? matchAll).visibility
+    const visibility = this.localVisibility(() => projectVisibility(this.source.geometry(sheetId).baseHidden, state.filter, state.order!, state.matches ?? matchAll).visibility)
     if (visibility.rank(visibility.logicalCount) !== state.counts.visible) {
       throw new RangeError(`Sheet view ${sheetId} could not be rebuilt identically`)
     }
@@ -889,6 +909,7 @@ export class DocumentSession {
     if (state.order !== null) {
       try { return { state: this.residentSync(sheetId) } } catch (cause) {
         if (cause instanceof ViewQuotaError) return this.refusal(cause.requiredBytes)
+        if (cause instanceof ValueIndexError && cause.code === 'quota') return this.refusal(cause.detail?.requiredBytes ?? MIN_WORKER_BUDGET_BYTES)
         return { kind: 'error', error: failure('page-error', (cause as Error).message) }
       }
     }
@@ -898,16 +919,17 @@ export class DocumentSession {
     try {
       const identityOrder = createIdentityOrder()
       // The rows the sort pinned: hidden under the filter active when it ran.
-      const sortMask = recipe.sortFilter
+      const sortMask = this.localVisibility(() => recipe.sortFilter
         ? projectVisibility(geometry.baseHidden, recipe.sortFilter, identityOrder, recipe.sortMatches ?? matchAll).visibility
-        : visibilityFromHidden(geometry.baseHidden)
-      if (!charge.set(maskBytes(sortMask))) return this.refusal(maskBytes(sortMask))
+        : visibilityFromHidden(geometry.baseHidden))
+      if (!charge.set(this.options.allocation ? 0 : maskBytes(sortMask))) return this.refusal(maskBytes(sortMask))
       this.memory.trim(Math.max(0, this.memory.limitBytes - this.sortEstimate(state.sort)))
       const store = this.preparedStore(sheetId)
       const result = await sortRowOrder(store, state.sort, {
         signal, stamp: store.stamp, locale: this.options.locale,
         hidden: hiddenSourceRowsFromDisplay(identityOrder, sortMask),
         residentWorkerBytes: this.memory.totalBytes, maxWorkerBytes: this.memory.limitBytes,
+        ...(this.options.allocation ? { allocation: this.options.allocation } : {}),
         ...(this.source.retainsKeyStrings?.(sheetId) === true ? { sourceRetainsStrings: true } : {}),
         ...(this.options.yield ? { yield: this.options.yield } : {}),
         ...(this.options.now ? { now: this.options.now } : {}),
@@ -928,10 +950,10 @@ export class DocumentSession {
       if (sameValues && state.digest !== undefined && orderDigest(result.order) !== state.digest) {
         return { kind: 'error', error: failure('page-error', `Sheet view ${sheetId} rebuilt a different order`) }
       }
-      if (!charge.set(maskBytes(sortMask) + result.ledger.orderBytes + result.ledger.inverseBytes)) {
+      if (!charge.set(this.options.allocation ? 0 : maskBytes(sortMask) + result.ledger.orderBytes + result.ledger.inverseBytes)) {
         return this.refusal(result.ledger.orderBytes + result.ledger.inverseBytes)
       }
-      const visibility = projectVisibility(geometry.baseHidden, state.filter, result.order, state.matches ?? matchAll).visibility
+      const visibility = this.localVisibility(() => projectVisibility(geometry.baseHidden, state.filter, result.order, state.matches ?? matchAll).visibility)
       if (visibility.rank(visibility.logicalCount) !== state.counts.visible) {
         return { kind: 'error', error: failure('page-error', `Sheet view ${sheetId} rebuilt different visible rows`) }
       }
@@ -951,6 +973,9 @@ export class DocumentSession {
         state: next,
         diagnostics: [{ code: 'view-reapplied', message: 'The sort was re-applied to newer values after its evicted order could not be reproduced' }],
       }
+    } catch (cause) {
+      if (cause instanceof ValueIndexError && cause.code === 'quota') return this.refusal(cause.detail?.requiredBytes ?? MIN_WORKER_BUDGET_BYTES)
+      throw cause
     } finally {
       charge.release()
     }
@@ -1068,6 +1093,7 @@ export class DocumentSession {
         this.peakTransient = Math.max(this.peakTransient, this.memory.transientBytes)
         return true
       },
+      adopt: (targets, bytes) => share.adopt(targets, bytes),
       release: () => share.release(),
     }
   }
@@ -1094,7 +1120,7 @@ export class DocumentSession {
     const baseHidden = this.source.geometry(owner.sheetId).baseHidden
     // The draft mask words (one bit per display slot) live while projecting.
     const maskWords = Math.ceil(MAX_ROWS / 32) * 4
-    if (!charge.set(heldBytes + maskWords)) return this.refusal(heldBytes + maskWords)
+    if (!charge.set(heldBytes + maskWords + (this.options.allocation ? maskWords + 4 * (Math.ceil(MAX_ROWS / 1024) + 1) + 1024 : 0))) return this.refusal(heldBytes + maskWords)
     const steps = projectVisibilitySteps(baseHidden, filter, order, matches, MAX_ROWS)
     let next = steps.next()
     for (; !next.done; next = steps.next()) {
@@ -1105,7 +1131,7 @@ export class DocumentSession {
       }
     }
     const visibility = next.value.visibility
-    if (!charge.set(heldBytes + maskBytes(visibility))) return this.refusal(heldBytes + maskBytes(visibility))
+    if (!charge.set(heldBytes + maskBytes(visibility) + (this.options.allocation ? 1024 : 0))) return this.refusal(heldBytes + maskBytes(visibility))
     return { kind: 'projected', visibility }
   }
   /** Captures the aggregate owner an async whole-workbook index is built under. */
@@ -1707,13 +1733,14 @@ export class DocumentSession {
     const stamp = store.stamp
     const cached = this.structures.get(sheetId)
     if (cached && sameStamp(cached.stamp, stamp)) return cached
-    const index = new StructuralIndex(await store.queryStructural(FULL_SHEET, { signal, stamp }))
+    const result = await store.queryStructural(FULL_SHEET, { signal, stamp })
+    const index = this.options.allocation ? controlStructure(result, this.options.allocation) : new StructuralIndex(result)
     // Cache only a complete index for the generation it was queried under.
     if (index.completeness === 'complete' && sameStamp(index.stamp, stamp) && !this.closed) {
       this.dropStructure(sheetId)
       const bytes = STRUCTURE_BASE_BYTES + index.recordCount * STRUCTURE_RECORD_BYTES
       const entry = this.memory.retain(structureKey(sheetId), {
-        tier: 'rebuildable', bytes, owner: sheetId, onRelease: () => this.dropStructure(sheetId),
+        mainOwned: !this.options.allocation, tier: 'rebuildable', bytes, owner: sheetId, onRelease: () => this.dropStructure(sheetId),
       })
       // Not admitted: the index still serves this operation, uncached.
       if (entry) {
@@ -1799,6 +1826,7 @@ export class DocumentSession {
         signal, stamp: store.stamp, locale: this.options.locale,
         hidden: hiddenSourceRowsFromDisplay(state.order, state.visibility),
         residentWorkerBytes: this.memory.totalBytes, maxWorkerBytes: this.memory.limitBytes,
+        ...(this.options.allocation ? { allocation: this.options.allocation } : {}),
         ...(this.source.retainsKeyStrings?.(owner.sheetId) === true ? { sourceRetainsStrings: true } : {}),
         ...(this.options.yield ? { yield: this.options.yield } : {}),
         ...(this.options.now ? { now: this.options.now } : {}),
@@ -1809,13 +1837,14 @@ export class DocumentSession {
       if (halt) return halt
       hooks.progress?.(2, VIEW_OPERATION_STAGES)
       const orderBytes = result.ledger.orderBytes + result.ledger.inverseBytes
-      if (!charge.set(orderBytes)) return this.refusal(orderBytes)
-      const projected = await this.projectDraft(owner, state.filter, result.order, state.matches ?? matchAll, slice, signal, charge, orderBytes)
+      if (!charge.set(this.options.allocation ? 0 : orderBytes)) return this.refusal(orderBytes)
+      const projected = await this.projectDraft(owner, state.filter, result.order, state.matches ?? matchAll, slice, signal, charge, this.options.allocation ? 0 : orderBytes)
       if (projected.kind !== 'projected') return projected
       hooks.progress?.(3, VIEW_OPERATION_STAGES)
       // The draft's bytes become the retained view: uncharge them first so the
       // commit never counts them twice. Recipe: the sort pinned exactly the rows
       // hidden by the filter it ran under.
+      charge.adopt?.([projected.visibility, projected.visibility.words, projected.visibility.words.buffer, projected.visibility.summaries, projected.visibility.summaries.buffer], maskBytes(projected.visibility) + (this.options.allocation ? 1024 : 0))
       charge.set(0)
       return this.commitOutcome(() => this.commitDraft(owner, {
         order: result.order, visibility: projected.visibility, sort: spec, filter: state.filter, matches: state.matches,
@@ -1971,6 +2000,7 @@ export class DocumentSession {
       if (halt) return halt
       hooks.progress?.(3, VIEW_OPERATION_STAGES)
       // The draft mask becomes the retained view (no double count at commit).
+      charge.adopt?.([projected.visibility, projected.visibility.words, projected.visibility.words.buffer, projected.visibility.summaries, projected.visibility.summaries.buffer], maskBytes(projected.visibility) + (this.options.allocation ? 1024 : 0))
       charge.set(0)
       metricsCharge.set(0)
       return this.commitOutcome(() => this.commitDraft(owner, {
@@ -2105,8 +2135,7 @@ export class DocumentSession {
       const column = this.prepared.get(key), entry = this.preparedEntries.get(key)
       if (!column || !entry) continue
       const held = this.memory.charge()
-      entry.release()
-      held.set(column.bytes)
+      held.take(entry)
       this.prepared.delete(key)
       this.preparedEntries.delete(key)
       this.closingPins.set(key, { bytes: column.bytes, held })

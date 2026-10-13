@@ -459,19 +459,19 @@ describe('S13.5 formatted display-text lane is prepared on demand', () => {
   describe('main-thread lane charges the controls share of the main ledger', () => {
     it('charges the controls pool while retained and releases it on dispose', async () => {
       const ledger = new MainMemoryLedger()
-      const resources = createViewerControlResources('D', bytes => ledger.set('controls', 'resources', bytes))
+      const resources = createViewerControlResources('D', undefined, ledger)
       const harness = controlsHarness(makeDoc(), undefined, resources)
       const controls = await harness.open()
       const before = ledger.snapshot().byPool.controls
       expect((await controls.client.filter(harness.owner(), spec(2, text('contains', '2')), new AbortController().signal)).kind).toBe('committed')
       const lane = PREPARED_COLUMN_OVERHEAD + N * 4
       expect(ledger.snapshot().byPool.controls - before).toBeGreaterThan(lane)
-      expect(resources.cache.usedBytes).toBe(ledger.snapshot().byPool.controls)
+      expect(resources.cache.usedBytes).toBe(ledger.ownerBytes('controls', resources.cacheOwner))
       // The cap is the controls caches' share, not the main budget: 16 MiB on D, 8 MiB on M.
       expect(resources.cache.limitBytes).toBe(16 * 1024 * 1024)
       expect(createViewerControlResources('M').cache.limitBytes).toBe(8 * 1024 * 1024)
       controls.dispose()
-      expect(ledger.snapshot().byPool.controls).toBe(before)
+      expect(ledger.ownerBytes('controls', resources.cacheOwner)).toBe(0)
       resources.dispose()
     })
 

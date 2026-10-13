@@ -17,6 +17,16 @@ import type { ElementValue, FormatResult, ResolvedSemantics } from './types'
 import { isEvaluationError } from './evaluator'
 import { decodeSerial, timeOfDayParts, weekdayIndex } from './serial'
 
+/** Internal, synchronous preallocation observer used by guarded copy. */
+export interface FormatAllocation { allocate(bytes: number): void; release(bytes: number): void; borrowed?(text: string): void; retain?(targets: readonly object[], bytes: number, commit: () => void): void }
+/** Old and new UTF-16 builders coexist at concat; tokens/source remain borrowed. */
+function appendText(out: string, text: string, allocation?: FormatAllocation): string {
+  allocation?.allocate(2 * (out.length + text.length))
+  const next = out + text
+  allocation?.release(out.length * 2)
+  return next
+}
+
 type Tok =
   | { t: 'lit'; text: string }
   | { t: 'ph'; ch: '0' | '#' } // digit placeholder
@@ -34,10 +44,11 @@ const WEEKDAYS = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Frida
 const WEEKDAYS_SHORT = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
 
 /** Half-away-from-zero decimal rounding on the shortest decimal representation. */
-export function roundHalfAwayDecimal(x: number, decimals: number): number {
+export function roundHalfAwayDecimal(x: number, decimals: number, allocation?: FormatAllocation): number {
   if (!Number.isFinite(x)) return x
   if (x === 0) return 0
   const neg = x < 0
+  allocation?.allocate(512) // finite Number repr (<= 25 units), captures and digit scratch
   const str = String(neg ? -x : x) // shortest repr of |x|
   const m = /^(\d+)(?:\.(\d+))?(?:e([+-]?\d+))?$/.exec(str)
   if (!m) return x
@@ -55,18 +66,22 @@ export function roundHalfAwayDecimal(x: number, decimals: number): number {
   const keep = point + decimals // digits kept; digit index `keep` is first dropped
   if (keep < 0) return 0 // SPEC F5 fix: keep==0 has its leading digit at the round boundary
   const up = keep < digits.length && digits[keep] >= '5'
+  allocation?.allocate(2 * Math.max(0, keep))
   let kept = keep >= digits.length ? digits.padEnd(keep, '0') : digits.slice(0, keep)
   if (up) {
     // increment the kept digit string (BigInt for safety)
+    // Two BigInt magnitudes plus decimal output fit four bytes per digit.
+    allocation?.allocate(4 * (kept.length + 1))
     kept = (BigInt(kept) + 1n).toString()
   }
   // value = int(kept) * 10^(point - keep) = int(kept) * 10^(-decimals)
-  const mag = stringTimesPow10(kept, point - keep)
+  const mag = stringTimesPow10(kept, point - keep, allocation)
   return neg ? -mag : mag
 }
 
 /** exact decimal-string times 10^e, converted to Number (lossless for modest sizes). */
-function stringTimesPow10(intStr: string, e: number): number {
+function stringTimesPow10(intStr: string, e: number, allocation?: FormatAllocation): number {
+  allocation?.allocate(4 * (intStr.length + Math.abs(e) + 2))
   if (e >= 0) return Number(intStr.padEnd(intStr.length + e, '0'))
   const cut = intStr.length + e
   if (cut >= 1) return Number(`${intStr.slice(0, cut)}.${intStr.slice(cut)}`)
@@ -74,7 +89,8 @@ function stringTimesPow10(intStr: string, e: number): number {
 }
 
 /** digits of a non-negative rounded value at fixed decimals (expands e-notation). */
-function digitsAt(rounded: number, decimals: number): { intDigits: string; fracDigits: string } {
+function digitsAt(rounded: number, decimals: number, allocation?: FormatAllocation): { intDigits: string; fracDigits: string } {
+  allocation?.allocate(256) // finite repr, mantissa slices and exponent captures
   let s = String(rounded)
   if (s.startsWith('-')) s = s.slice(1)
   let intPart = s
@@ -88,8 +104,10 @@ function digitsAt(rounded: number, decimals: number): { intDigits: string; fracD
     const pointPos = (dot >= 0 ? dot : mant.length) + exp
     if (pointPos <= 0) {
       intPart = '0'
+      allocation?.allocate(4 * (-pointPos + raw.length))
       fracPart = '0'.repeat(-pointPos) + raw
     } else if (pointPos >= raw.length) {
+      allocation?.allocate(2 * pointPos)
       intPart = raw.padEnd(pointPos, '0')
       fracPart = ''
     } else {
@@ -100,6 +118,7 @@ function digitsAt(rounded: number, decimals: number): { intDigits: string; fracD
     const dot = s.indexOf('.')
     if (dot >= 0) { intPart = s.slice(0, dot); fracPart = s.slice(dot + 1) }
   }
+  allocation?.allocate(4 * (fracPart.length + decimals) + 2 * decimals)
   fracPart = (fracPart + '0'.repeat(decimals)).slice(0, decimals)
   return { intDigits: intPart, fracDigits: fracPart }
 }
@@ -108,7 +127,7 @@ function isDateLetter(ch: string): boolean {
   return ch === 'y' || ch === 'm' || ch === 'd' || ch === 'h' || ch === 's'
 }
 
-function splitSections(format: string): { sections: string[]; error?: string } {
+function splitSections(format: string, allocation?: FormatAllocation): { sections: string[]; error?: string } {
   const sections: string[] = []
   let cur = ''
   let i = 0
@@ -117,32 +136,37 @@ function splitSections(format: string): { sections: string[]; error?: string } {
     if (ch === '"') {
       const end = format.indexOf('"', i + 1)
       if (end < 0) return { sections: [], error: 'unterminated quoted literal' }
-      cur += format.slice(i, end + 1)
+      allocation?.allocate(2 * (end + 1 - i))
+      cur = appendText(cur, format.slice(i, end + 1), allocation)
       i = end + 1
       continue
     }
     if (ch === '\\') {
       if (i + 1 >= format.length) return { sections: [], error: 'trailing escape' }
-      cur += ch + format[i + 1]
+      allocation?.allocate(4)
+      cur = appendText(cur, ch + format[i + 1], allocation)
       i += 2
       continue
     }
     if (ch === '[') {
       const end = format.indexOf(']', i + 1)
       if (end < 0) return { sections: [], error: 'unterminated bracket token' }
-      cur += format.slice(i, end + 1)
+      allocation?.allocate(2 * (end + 1 - i))
+      cur = appendText(cur, format.slice(i, end + 1), allocation)
       i = end + 1
       continue
     }
     if (ch === ';') {
+      allocation?.allocate(8)
       sections.push(cur)
       cur = ''
       i += 1
       continue
     }
-    cur += ch
+    cur = appendText(cur, ch, allocation)
     i += 1
   }
+  allocation?.allocate(8)
   sections.push(cur)
   return { sections }
 }
@@ -157,14 +181,16 @@ function bracketReason(content: string): string {
 }
 
 /** Tokenize one numeric/date section. Returns null on unsupported constructs. */
-function tokenize(section: string): { tokens: Tok[]; unsupported?: string } {
+function tokenize(section: string, allocation?: FormatAllocation): { tokens: Tok[]; unsupported?: string } {
   const tokens: Tok[] = []
   let i = 0
   while (i < section.length) {
+    allocation?.allocate(64) // token object and array slot, before any push
     const ch = section[i]
     if (ch === '"') {
       const end = section.indexOf('"', i + 1)
       if (end < 0) return { tokens: [], unsupported: 'unterminated quoted literal' }
+      allocation?.allocate(2 * (end - i - 1))
       tokens.push({ t: 'lit', text: section.slice(i + 1, end) })
       i = end + 1
       continue
@@ -178,6 +204,7 @@ function tokenize(section: string): { tokens: Tok[]; unsupported?: string } {
     if (ch === '[') {
       const end = section.indexOf(']', i + 1)
       if (end < 0) return { tokens: [], unsupported: 'unterminated bracket token' }
+      allocation?.allocate(4 * (end - i - 1))
       return { tokens: [], unsupported: bracketReason(section.slice(i + 1, end)) }
     }
     if (ch === '0' || ch === '#') {
@@ -193,6 +220,7 @@ function tokenize(section: string): { tokens: Tok[]; unsupported?: string } {
     if (ch === '%') { tokens.push({ t: 'pct' }); i += 1; continue }
     if (ch === '@') { tokens.push({ t: 'at' }); i += 1; continue }
     if (ch === 'G') {
+      allocation?.allocate(28)
       if (section.slice(i, i + 7).toLowerCase() === 'general') {
         return { tokens: [], unsupported: "'General' token" }
       }
@@ -212,6 +240,7 @@ function tokenize(section: string): { tokens: Tok[]; unsupported?: string } {
       continue
     }
     if ((ch === 'a' || ch === 'A' || ch === 'p' || ch === 'P')) {
+      allocation?.allocate(20)
       const run = section.slice(i, i + 5)
       if (run.toLowerCase() === 'am/pm') {
         tokens.push({ t: 'am' })
@@ -282,11 +311,12 @@ function analyzeNumeric(tokens: Tok[]): {
  * fractional-only value (<1, integer digit string "0") is suppressed in '#'.
  * '0' placeholders always emit (pad with '0', hold positions).
  */
-function perPhChars(intDigits: string, intTokens: readonly Tok[]): string[] {
+function perPhChars(intDigits: string, intTokens: readonly Tok[], allocation?: FormatAllocation): string[] {
   const phs: Tok[] = []
-  for (const tk of intTokens) if (tk.t === 'ph') phs.push(tk)
+  for (const tk of intTokens) if (tk.t === 'ph') { allocation?.allocate(8); phs.push(tk) }
   const n = intDigits.length
   const intIsFractionalZero = !/[1-9]/.test(intDigits) // e.g. value 0.47 -> "0"
+  allocation?.allocate(phs.length * 8 + intDigits.length * 2)
   const chars = phs.map((ph, i) => {
     const idx = n - phs.length + i
     if (i === 0 && n > phs.length) return intDigits.slice(0, n - phs.length + 1)
@@ -314,26 +344,27 @@ function perPhChars(intDigits: string, intTokens: readonly Tok[]): string[] {
  * last placeholder remain scaling commas (emit nothing; divisor in
  * analyzeNumeric). Literal runs inside the field are preserved.
  */
-function renderInteger(intDigits: string, intTokens: readonly Tok[], grouping: boolean): string {
-  const chars = perPhChars(intDigits, intTokens)
+function renderInteger(intDigits: string, intTokens: readonly Tok[], grouping: boolean, allocation?: FormatAllocation): string {
+  const chars = perPhChars(intDigits, intTokens, allocation)
   let out = ''
   let phIdx = 0
   for (let i = 0; i < intTokens.length; i++) {
     const tk = intTokens[i]
-    if (tk.t === 'lit') { out += tk.text; continue }
-    if (tk.t === 'ph') { out += chars[phIdx++] ?? ''; continue }
+    if (tk.t === 'lit') { out = appendText(out, tk.text, allocation); continue }
+    if (tk.t === 'ph') { out = appendText(out, chars[phIdx++] ?? '', allocation); continue }
     if (tk.t === 'comma') { continue }
-    if (tk.t === 'pct') { out += '%'; continue }
+    if (tk.t === 'pct') { out = appendText(out, '%', allocation); continue }
     return '' // '@'/'dt'/'am' rejected by caller
   }
   if (grouping) {
+    allocation?.allocate(4 * (out.length + Math.floor(out.length / 3)))
     out = out.replace(/\d+/g, (run) => run.replace(/\B(?=(\d{3})+(?!\d))/g, ','))
   }
   return out
 }
 
 function renderDateTime(
-  serial: number, tokens: Tok[], semantics: ResolvedSemantics,
+  serial: number, tokens: Tok[], semantics: ResolvedSemantics, allocation?: FormatAllocation,
 ): FormatResult {
   const system = semantics.dateSystem
   const abs = Math.abs(serial)
@@ -350,6 +381,7 @@ function renderDateTime(
 
   // month/minute disambiguation: m/mm adjacent to h (skipping literal
   // separators) or to s = minute
+  allocation?.allocate(tokens.length * 8)
   const kinds: ('minute' | 'month' | 'other')[] = tokens.map((tk) =>
     tk.t === 'dt' && tk.ch === 'm' ? 'month' : 'other',
   )
@@ -373,12 +405,13 @@ function renderDateTime(
   let out = ''
   for (let i = 0; i < tokens.length; i++) {
     const tk = tokens[i]
-    if (tk.t === 'lit') { out += tk.text; continue }
-    if (tk.t === 'comma') { out += ','; continue } // literal separator in date sections
-    if (tk.t === 'dot') { out += '.'; continue }
+    allocation?.allocate(64) // bounded date digits/padding and names
+    if (tk.t === 'lit') { out = appendText(out, tk.text, allocation); continue }
+    if (tk.t === 'comma') { out = appendText(out, ',', allocation); continue } // literal separator in date sections
+    if (tk.t === 'dot') { out = appendText(out, '.', allocation); continue }
     if (tk.t === 'am') {
       const h12 = ((tod.hour + 11) % 12) + 1
-      out += (tod.hour >= 12 ? 'PM' : 'AM')
+      out = appendText(out, (tod.hour >= 12 ? 'PM' : 'AM'), allocation)
       void h12
       continue
     }
@@ -386,18 +419,18 @@ function renderDateTime(
     switch (tk.ch) {
       case 'y': {
         const y = String(civil.year)
-        out += tk.len >= 3 ? y : y.slice(-2).padStart(2, '0')
+        out = appendText(out, tk.len >= 3 ? y : y.slice(-2).padStart(2, '0'), allocation)
         break
       }
       case 'm': {
         if (kinds[i] === 'minute') {
-          out += tk.len >= 2 ? String(tod.minute).padStart(2, '0') : String(tod.minute)
+          out = appendText(out, tk.len >= 2 ? String(tod.minute).padStart(2, '0') : String(tod.minute), allocation)
         } else if (tk.len >= 4) {
-          out += MONTHS[civil.month - 1]
+          out = appendText(out, MONTHS[civil.month - 1], allocation)
         } else if (tk.len === 3) {
-          out += MONTHS_SHORT[civil.month - 1]
+          out = appendText(out, MONTHS_SHORT[civil.month - 1], allocation)
         } else {
-          out += tk.len === 2 ? String(civil.month).padStart(2, '0') : String(civil.month)
+          out = appendText(out, tk.len === 2 ? String(civil.month).padStart(2, '0') : String(civil.month), allocation)
         }
         break
       }
@@ -405,19 +438,19 @@ function renderDateTime(
         if (tk.len >= 3) {
           const w = weekdayIndex(dayPart, system)
           if (isEvaluationError(w)) return w
-          out += tk.len >= 4 ? WEEKDAYS[w] : WEEKDAYS_SHORT[w]
+          out = appendText(out, tk.len >= 4 ? WEEKDAYS[w] : WEEKDAYS_SHORT[w], allocation)
         } else {
-          out += tk.len === 2 ? String(civil.day).padStart(2, '0') : String(civil.day)
+          out = appendText(out, tk.len === 2 ? String(civil.day).padStart(2, '0') : String(civil.day), allocation)
         }
         break
       }
       case 'h': {
         const h = hasAm ? ((tod.hour + 11) % 12) + 1 : tod.hour
-        out += tk.len >= 2 ? String(h).padStart(2, '0') : String(h)
+        out = appendText(out, tk.len >= 2 ? String(h).padStart(2, '0') : String(h), allocation)
         break
       }
       case 's': {
-        out += tk.len >= 2 ? String(tod.second).padStart(2, '0') : String(tod.second)
+        out = appendText(out, tk.len >= 2 ? String(tod.second).padStart(2, '0') : String(tod.second), allocation)
         break
       }
     }
@@ -429,10 +462,12 @@ export function formatCommon(
   value: ElementValue,
   format: string,
   semantics: ResolvedSemantics,
+  allocation?: FormatAllocation,
 ): FormatResult {
   if (isEvaluationError(value)) return value // tagged errors propagate
-  const { sections, error: splitErr } = splitSections(format)
+  const { sections, error: splitErr } = splitSections(format, allocation)
   if (splitErr) return { kind: 'unsupported', reason: splitErr }
+  allocation?.allocate(Math.min(sections.length, 4) * 8)
   const secList = sections.slice(0, 4)
 
   // SPEC F8: text/boolean/null values take the FOURTH (text) section when it
@@ -444,15 +479,15 @@ export function formatCommon(
     const textSec = secList.length >= 4 ? secList[3] : null
     if (textSec !== null) {
       if (textSec === '') return { kind: 'text', text: '' } // empty text section hides
-      const t = tokenize(textSec)
+      const t = tokenize(textSec, allocation)
       if (t.unsupported) return { kind: 'unsupported', reason: t.unsupported }
       let outText = ''
       let sawAt = false
       for (const tk of t.tokens) {
-        if (tk.t === 'lit') { outText += tk.text; continue }
+        if (tk.t === 'lit') { outText = appendText(outText, tk.text, allocation); continue }
         if (tk.t === 'at') {
           sawAt = true
-          outText += typeof value === 'boolean' ? (value ? 'TRUE' : 'FALSE') : value ?? ''
+          outText = appendText(outText, typeof value === 'boolean' ? (value ? 'TRUE' : 'FALSE') : value ?? '', allocation)
           continue
         }
         if (tk.t === 'ph' || tk.t === 'comma' || tk.t === 'dot' || tk.t === 'pct') {
@@ -464,6 +499,7 @@ export function formatCommon(
       return { kind: 'text', text: outText }
     }
     const asText = typeof value === 'boolean' ? (value ? 'TRUE' : 'FALSE') : value ?? ''
+    if (typeof value === 'string') allocation?.borrowed?.(value)
     return { kind: 'text', text: asText }
   }
 
@@ -481,18 +517,18 @@ export function formatCommon(
     sectionIdx = 2
   }
   const section = secList[sectionIdx]
-  const parsed = tokenize(section)
+  const parsed = tokenize(section, allocation)
   if (parsed.unsupported) return { kind: 'unsupported', reason: parsed.unsupported }
   const tokens = parsed.tokens
 
   if (hasDateTokens(tokens)) {
     if (v < 0) {
       // measured 1904 row: negative serials format as '-' + format(|serial|)
-      const r = formatCommon(magnitude, format, semantics)
-      if (r.kind === 'text') return { kind: 'text', text: '-' + r.text }
+      const r = formatCommon(magnitude, format, semantics, allocation)
+      if (r.kind === 'text') { allocation?.allocate(2 * (r.text.length + 1)); return { kind: 'text', text: '-' + r.text } }
       return r
     }
-    return renderDateTime(v, tokens, semantics)
+    return renderDateTime(v, tokens, semantics, allocation)
   }
 
   // numeric rendering: percent multiplies; trailing scaling commas divide
@@ -507,26 +543,29 @@ export function formatCommon(
       reason: 'numeric-limit: percent/scaling arithmetic exceeded the finite formatter range for a finite input (exact Excel result unmeasured at this boundary; policy: diagnosed unsupported, cache retention is owner-side)',
     }
   }
-  const rounded = roundHalfAwayDecimal(scaled, decimals)
+  const rounded = roundHalfAwayDecimal(scaled, decimals, allocation)
   if (!Number.isFinite(rounded)) {
     return {
       kind: 'unsupported',
       reason: 'numeric-limit: rounded value exceeded the finite formatter range (exact Excel result unmeasured at this boundary; policy: diagnosed unsupported, cache retention is owner-side)',
     }
   }
-  const { intDigits, fracDigits } = digitsAt(rounded, decimals)
+  const { intDigits, fracDigits } = digitsAt(rounded, decimals, allocation)
   const dotIdx = tokens.findIndex((tk) => tk.t === 'dot')
+  allocation?.allocate(tokens.length * 8)
   const intTokens = dotIdx >= 0 ? tokens.slice(0, dotIdx) : tokens
   const fracTokens = dotIdx >= 0 ? tokens.slice(dotIdx + 1) : []
-  const intStr = renderInteger(intDigits, intTokens, grouping)
+  const intStr = renderInteger(intDigits, intTokens, grouping, allocation)
 
+  allocation?.allocate(2 * (negativePrefix.length + intStr.length))
   let out = negativePrefix + intStr
   if (dotIdx >= 0) {
-    out += '.'
+    out = appendText(out, '.', allocation)
     // SPEC F6: fraction '#/'0' emission with the same optional-# trailing rule.
     // QUALITY Q3 fix: suffix significance is computed in ONE right-to-left
     // pass (linear) instead of scanning the remaining suffix per placeholder
     // (which was O(n^2) in the number of optional fraction placeholders).
+    allocation?.allocate(fracTokens.length * 16)
     const fracPhs = fracTokens.filter((tk) => tk.t === 'ph') as Extract<Tok, { t: 'ph' }>[]
     let placed = 0
     const fracChars: string[] = new Array(fracPhs.length)
@@ -544,14 +583,14 @@ export function formatCommon(
     }
     for (const tk of fracTokens) {
       if (tk.t === 'ph') {
-        out += fracChars[placed] ?? ''
+        out = appendText(out, fracChars[placed] ?? '', allocation)
         placed++
         continue
       }
-      if (tk.t === 'lit') { out += tk.text; continue }
-      if (tk.t === 'dot') { out += '.'; continue }
+      if (tk.t === 'lit') { out = appendText(out, tk.text, allocation); continue }
+      if (tk.t === 'dot') { out = appendText(out, '.', allocation); continue }
       if (tk.t === 'comma') { continue } // scaling comma emits nothing
-      if (tk.t === 'pct') { out += '%'; continue }
+      if (tk.t === 'pct') { out = appendText(out, '%', allocation); continue }
       return { kind: 'unsupported', reason: 'unexpected token after decimal point' }
     }
   } else {

@@ -1,3 +1,4 @@
+import { allocationTargets, type AllocationContext } from './allocationAccount'
 import type { PagedKeySetRef, SourceErrorCode, SourceStamp } from './contracts'
 
 /** Exact semantic value-key runs and their storage port (spec §§7.3–7.4, 12.4).
@@ -64,8 +65,10 @@ export class NumberTable {
   size = 0
   constructor(private readonly account?: LaneAccount, capacity = 64) {
     account?.charge(capacity * 12)
-    this.keys = new Float64Array(capacity)
-    this.ids = new Int32Array(capacity).fill(-1)
+    try {
+      this.keys = new Float64Array(capacity)
+      this.ids = new Int32Array(capacity).fill(-1)
+    } catch (error) { account?.release(capacity * 12); throw error }
     this.mask = capacity - 1
   }
   get bytes(): number { return this.keys.length * 12 }
@@ -89,8 +92,11 @@ export class NumberTable {
     const capacity = this.keys.length * 2, oldBytes = this.bytes
     this.account?.charge(capacity * 12)
     const keys = this.keys, ids = this.ids
-    this.keys = new Float64Array(capacity)
-    this.ids = new Int32Array(capacity).fill(-1)
+    let nextKeys: Float64Array, nextIds: Int32Array
+    try { nextKeys = new Float64Array(capacity); nextIds = new Int32Array(capacity).fill(-1) }
+    catch (error) { this.account?.release(capacity * 12); throw error }
+    this.keys = nextKeys
+    this.ids = nextIds
     this.mask = capacity - 1
     this.size = 0
     for (let slot = 0; slot < ids.length; slot++) if (ids[slot] >= 0) this.set(keys[slot], ids[slot])
@@ -106,19 +112,27 @@ export const keySetElementBytes = (kind: number, text: string | undefined): numb
 export class ValueKeySet {
   private readonly numbers: NumberTable
   private readonly dates: NumberTable
-  private readonly booleans = new Uint8Array(2)
-  private readonly strings = new Set<string>()
-  private readonly errors = new Set<string>()
+  private readonly booleans: Uint8Array
+  private readonly strings: Set<string>
+  private readonly errors: Set<string>
   private readonly ledger: LaneAccount
   size = 0
   bytes = 0
   constructor(account?: LaneAccount) {
+    account?.charge(640)
+    this.bytes = 640
     this.ledger = {
       charge: bytes => { account?.charge(bytes); this.bytes += bytes },
       release: bytes => { account?.release(bytes); this.bytes -= bytes },
     }
-    this.numbers = new NumberTable(this.ledger)
-    this.dates = new NumberTable(this.ledger)
+    try {
+      this.strings = new Set<string>()
+      this.errors = new Set<string>()
+      this.ledger.charge(2)
+      this.booleans = new Uint8Array(2)
+      this.numbers = new NumberTable(this.ledger)
+      this.dates = new NumberTable(this.ledger)
+    } catch (error) { this.ledger.release(this.bytes); throw error }
   }
   add(kind: number, value: number, text: string | undefined): void {
     if (this.has(kind, value, text)) return
@@ -171,6 +185,7 @@ export async function loadKeySet(store: ValueRunStore, ref: PagedKeySetRef, scop
   let offset = 0
   while (offset < ref.count) {
     const run = await store.read(ref, offset, Math.min(VALUE_RUN_PAGE, ref.count - offset), scope, signal)
+    if (signal?.aborted) throw new ValueIndexError('cancelled', 'Value membership cancelled')
     if (run.count === 0) throw new ValueIndexError('page-error', 'Value key run ended early')
     validateRun(run)
     for (let i = 0; i < run.count; i++) set.add(run.kinds[i], run.numbers[i], run.texts[i])
@@ -179,7 +194,8 @@ export async function loadKeySet(store: ValueRunStore, ref: PagedKeySetRef, scop
   if (set.size !== ref.count) throw new ValueIndexError('page-error', 'Value key run contains duplicate keys')
   return set
 }
-interface StoredRun { run: ValueKeyRun; owner: SourceStamp; scope: string; bytes: number }
+interface StoredRun { run: ValueKeyRun; owner: SourceStamp; scope: string; bytes: number; readers: number; retired: boolean }
+interface ReaderToken { stored: StoredRun; remaining: number }
 export class MemoryValueRunStore implements ValueRunStore {
   readonly limitBytes: number
   usedBytes = 0
@@ -187,17 +203,26 @@ export class MemoryValueRunStore implements ValueRunStore {
   private readonly runs = new Map<string, StoredRun>()
   /** RAM-backed: retained bytes are charged to account (a worker pool) when given. */
   private readonly account: LaneAccount | undefined
-  constructor(options: { limitBytes?: number; account?: LaneAccount } = {}) {
+  private readonly readerAllocation: AllocationContext | undefined
+  private readonly readerWatcher: { register(target: object, token: ReaderToken): void } | undefined
+  constructor(options: { limitBytes?: number; account?: LaneAccount; readerAllocation?: AllocationContext } = {}) {
     this.limitBytes = options.limitBytes ?? Infinity
     if (!(this.limitBytes >= 0)) throw new RangeError('Invalid value run store limit')
     this.account = options.account
+    this.readerAllocation = options.readerAllocation
+    const Registry = (globalThis as unknown as { FinalizationRegistry?: new (cleanup: (token: ReaderToken) => void) => { register(target: object, token: ReaderToken): void } }).FinalizationRegistry
+    if (options.readerAllocation && Registry) this.readerWatcher = new Registry(token => {
+      if (--token.remaining > 0) return
+      token.stored.readers--
+      if (token.stored.retired && token.stored.readers === 0) this.drop(token.stored)
+    })
   }
   get refCount(): number { return this.runs.size }
   async put(run: ValueKeyRun, owner: SourceStamp, scope: string, signal?: AbortSignal): Promise<PagedKeySetRef> {
     if (signal?.aborted) throw new ValueIndexError('cancelled', 'Value run write cancelled')
     validateRun(run)
     if (typeof scope !== 'string') throw new ValueIndexError('invalid-rule', 'Value run scope is required')
-    let bytes = 64 + scope.length * 2
+    let bytes = 512 + scope.length * 2 + run.count * 8
     for (let i = 0; i < run.count; i++) bytes += runElementBytes(run.kinds[i], run.texts[i])
     if (this.usedBytes + bytes > this.limitBytes) {
       throw new ValueIndexError('quota', 'Value run storage quota exceeded', {
@@ -205,12 +230,13 @@ export class MemoryValueRunStore implements ValueRunStore {
       })
     }
     this.account?.charge(bytes)
-    const copy: ValueKeyRun = Object.freeze({
+    let copy: ValueKeyRun
+    try { copy = Object.freeze({
       count: run.count, kinds: run.kinds.slice(0, run.count), numbers: run.numbers.slice(0, run.count),
       texts: Object.freeze(Array.from({ length: run.count }, (_, i) => run.texts[i])),
-    })
+    }) } catch (error) { this.account?.release(bytes); throw error }
     const refId = `values-${++this.puts}`
-    this.runs.set(refId, { run: copy, owner: { ...owner }, scope, bytes })
+    this.runs.set(refId, { run: copy, owner: { ...owner }, scope, bytes, readers: 0, retired: false })
     this.usedBytes += bytes
     return Object.freeze({ refId, count: run.count, owner: Object.freeze({ ...owner }) })
   }
@@ -224,12 +250,31 @@ export class MemoryValueRunStore implements ValueRunStore {
       throw new ValueIndexError('invalid-cursor', 'Invalid value run page')
     }
     const end = Math.min(stored.run.count, offset + limit)
-    return { count: Math.max(0, end - offset), kinds: stored.run.kinds.slice(offset, end), numbers: stored.run.numbers.slice(offset, end), texts: stored.run.texts.slice(offset, end) }
+    const count = Math.max(0, end - offset), account = this.readerAllocation?.reserve()
+    account?.charge(count * 17 + 256)
+    try {
+      const page = { count, kinds: stored.run.kinds.slice(offset, end), numbers: stored.run.numbers.slice(offset, end), texts: stored.run.texts.slice(offset, end) }
+      const heldBytes = account?.bytes ?? 0
+      const targets = account ? allocationTargets(page, [], account) : []
+      account?.adopt(targets, heldBytes + targets.length * 64 + 128)
+      if (account && page.texts.some(text => text !== undefined)) {
+        // String aliases keep the original stored owner until every escaped
+        // page/container/lane target dies; the run remains charged once.
+        stored.readers++
+        const token = { stored, remaining: targets.length }
+        for (const target of targets) this.readerWatcher?.register(target, token)
+      }
+      return page
+    } finally { account?.release() }
   }
   async release(ref: PagedKeySetRef): Promise<void> {
     const stored = this.runs.get(ref.refId)
     if (!stored) return
     this.runs.delete(ref.refId)
+    stored.retired = true
+    if (!stored.readers) this.drop(stored)
+  }
+  private drop(stored: StoredRun): void {
     this.usedBytes -= stored.bytes
     this.account?.release(stored.bytes)
   }
