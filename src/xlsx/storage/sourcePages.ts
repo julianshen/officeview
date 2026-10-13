@@ -744,8 +744,9 @@ export interface SourcePageStoreOptions {
   /** Provisional construction budget until the document pool is bound (default: the desktop worker budget). */
   memoryBudgetBytes?: number
   /** Release of the owner's Web Lock, held by the caller for this store's lifetime
-   * (released after the store's storage is removed). Required for an
-   * OPFS/IndexedDB store to sweep within its owner. */
+   * (released once the store's storage is removed and no write it started can
+   * still land; see `ownerReleased`). Required for an OPFS/IndexedDB store to
+   * sweep within its owner. */
   ownerLock?: () => void
 }
 export interface PageStoreStats {
@@ -812,6 +813,12 @@ export class SourcePageStore implements PageSink {
   private closed = false
   private abandoned = false
   private ownerLock: (() => void) | undefined
+  /** Started commits (write, publication or rollback), settled or not; see dispose. */
+  private readonly operations = new Set<Promise<unknown>>()
+  private disposing: Promise<void> | undefined
+  private released!: () => void
+  /** Resolves once the owner's lock release was handed to the lock manager (see dispose); never rejects. */
+  readonly ownerReleased: Promise<void> = new Promise<void>((resolve) => { this.released = resolve })
   private readonly counters: PageStoreStats = { committed: 0, storedBytes: 0, loads: 0, hits: 0, coalesced: 0, evictions: 0, residentBytes: 0, peakResidentBytes: 0, blobs: 0, blobBytes: 0 }
 
   constructor(options: SourcePageStoreOptions) {
@@ -879,10 +886,17 @@ export class SourcePageStore implements PageSink {
     if (list.some((summary) => summary.pageId === page.pageId)) throw new PackageError('parse-error', `page ${page.pageId} is already committed`)
     this.committing.add(page.sheetId)
     try {
-      await this.commitChecked(page as ImportedPage & { payload: CellPagePayload; blobs?: readonly string[] }, list, docId)
+      await this.track(this.commitChecked(page as ImportedPage & { payload: CellPagePayload; blobs?: readonly string[] }, list, docId))
     } finally {
       this.committing.delete(page.sheetId)
     }
+  }
+  /** Registers a started storage mutation until it settled, rollback included. */
+  private track<T>(operation: Promise<T>): Promise<T> {
+    const settled = operation.then(() => {}, () => {})
+    this.operations.add(settled)
+    void settled.then(() => this.operations.delete(settled))
+    return operation
   }
   private async commitChecked(page: ImportedPage & { payload: CellPagePayload; blobs?: readonly string[] }, list: PageSummary[], docId: string): Promise<void> {
     // The summary is persistent index memory: charged before anything is written.
@@ -923,7 +937,12 @@ export class SourcePageStore implements PageSink {
       } else {
         // Abandoned/closed meanwhile: dispose already released every charge and
         // removed every record, but a write still in flight lands afterwards.
-        for (const blob of written) await this.backend.delete(blob.key).catch(() => {})
+        // The owner stays locked until this rollback settled (see dispose).
+        for (const blob of written) {
+          page.payload.nums[blob.record] = blob.ordinal
+          if (blob.counted) { this.counters.blobs--; this.counters.blobBytes -= blob.bytes }
+          await this.backend.delete(blob.key).catch(() => {})
+        }
         if (pageWritten) await this.backend.delete(pageKey).catch(() => {})
       }
       throw error
@@ -992,6 +1011,9 @@ export class SourcePageStore implements PageSink {
     // Like pages: a chunk is never overwritten, so a rejected one cannot corrupt a stored one.
     if (!Number.isSafeInteger(chunk) || chunk < 0 || this.committedChunks.has(chunk)) throw new PackageError('parse-error', `shared-string chunk ${chunk} is invalid or already committed`)
     this.committedChunks.add(chunk)
+    await this.track(this.commitChunk(chunk, strings, chunkSize, docId))
+  }
+  private async commitChunk(chunk: number, strings: readonly string[], chunkSize: number, docId: string): Promise<void> {
     const key = `sst/${chunk}`
     const scratch = this.construction.share('shared-string encoding')
     let stored = 0
@@ -1046,16 +1068,20 @@ export class SourcePageStore implements PageSink {
    * failure skips the sweep (`skipped`), never failing the import. The listing
    * is a transient charge and nothing removed was charged, so no charge remains.
    */
-  async sweepUnreferenced(signal?: AbortSignal): Promise<{ removed: number; skipped?: string }> {
-    if (!this.backend.list || !this.live) return { removed: 0 }
-    if (this.backend.kind !== 'memory' && !this.ownerLock) return { removed: 0, skipped: 'the store does not hold its owner lock' }
+  sweepUnreferenced(signal?: AbortSignal): Promise<{ removed: number; skipped?: string }> {
+    if (!this.backend.list || !this.live) return Promise.resolve({ removed: 0 })
+    if (this.backend.kind !== 'memory' && !this.ownerLock) return Promise.resolve({ removed: 0, skipped: 'the store does not hold its owner lock' })
+    // Its deletes are by key too: the owner stays locked until they settled (see dispose).
+    return this.track(this.sweepOwned(this.backend.list.bind(this.backend), signal))
+  }
+  private async sweepOwned(list: NonNullable<PageBackend['list']>, signal?: AbortSignal): Promise<{ removed: number; skipped?: string }> {
     const share = this.construction.share('orphan sweep listing')
     let removed = 0
     try {
       try { share.need(SWEEP_MAX_ENTRIES * 128) } catch { return { removed: 0, skipped: 'no memory for the listing' } }
       let keys: string[]
       try {
-        keys = await this.backend.list(SWEEP_MAX_ENTRIES, signal)
+        keys = await list(SWEEP_MAX_ENTRIES, signal)
       } catch (error) {
         return { removed: 0, skipped: `listing failed: ${error instanceof Error ? error.message : String(error)}` }
       }
@@ -1079,7 +1105,22 @@ export class SourcePageStore implements PageSink {
     this.closed = true
     await this.dispose()
   }
-  private async dispose(): Promise<void> {
+  /** Once per store: overlapping and repeated close/abandon share one disposal. */
+  private dispose(): Promise<void> {
+    return this.disposing ??= this.disposeOnce()
+  }
+  /**
+   * Releases every charge and removes the owner's storage. A write started
+   * before (an OPFS/IndexedDB put cannot be withdrawn) may still land, and its
+   * rollback deletes the record by key: until both settled the owner must not
+   * pass to anyone else, or a recovering holder of the same owner could lose a
+   * new record to the old rollback. So close/abandon return once storage is
+   * removed (cancellation never waits on the backend), but the owner's lock is
+   * kept until every started commit settled and storage is removed once more;
+   * `ownerReleased` resolves then. A backend that never completes keeps the
+   * owner locked until its realm ends, as a crash would.
+   */
+  private async disposeOnce(): Promise<void> {
     for (const r of this.reservations.splice(0)) r.release()
     this.construction.releaseAll()
     this.ramBytes = 0
@@ -1088,13 +1129,20 @@ export class SourcePageStore implements PageSink {
     this.loading.clear()
     this.index.clear()
     this.counters.residentBytes = 0
+    const release = () => {
+      // Only now may a sweep in another realm (or a recovering store) take the owner.
+      const unlock = this.ownerLock
+      this.ownerLock = undefined
+      unlock?.()
+      this.released()
+    }
+    // No new commit starts once closed/abandoned, so this set only shrinks.
+    const started = [...this.operations]
     try {
       await this.backend.removeAll()
     } finally {
-      // Only now may a sweep in another realm take the owner (its storage is gone).
-      const release = this.ownerLock
-      this.ownerLock = undefined
-      release?.()
+      if (started.length === 0) release()
+      else void Promise.all(started).then(() => this.backend.removeAll()).catch(() => {}).finally(release)
     }
   }
 

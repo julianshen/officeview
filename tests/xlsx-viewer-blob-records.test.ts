@@ -521,3 +521,133 @@ describe('crash-orphan sweep (Web Locks ownership, codex round 2)', () => {
   })
 })
 const textAtPage = (p: { text: Uint16Array; textStart: Uint32Array }) => String.fromCharCode(...p.text.subarray(p.textStart[0], p.textStart[1]))
+
+describe('review round 3 (codex) MAJOR 1: the owner lock outlives every started write and its rollback', () => {
+  const textPage = (pageId: string, r0: number, text: string) => {
+    const b = new PageBuilder()
+    b.add(r0, 0, K_TEXT, 0, 0, text, true, undefined)
+    return { sheetId: '1', pageId, r0, r1: r0, cellCount: 1, bytes: b.bytes, payload: b.build(), blobs: [...b.blobs] }
+  }
+  /** The lock manager frees a released lock asynchronously (as navigator.locks does). */
+  const lockReleased = () => new Promise((resolve) => setTimeout(resolve, 0))
+  /** An OPFS backend whose page puts wait for `open()` before touching storage. */
+  function gatedOpfs(dir: ReturnType<typeof fakeOpfsDirectory>, owner: string) {
+    const inner = opfsPageBackend(dir, owner)
+    let open!: () => void
+    const gate = new Promise<void>((resolve) => { open = resolve })
+    let reached!: () => void
+    const started = new Promise<void>((resolve) => { reached = resolve })
+    const backend: PageBackend = { ...inner, put: async (key, bytes) => { if (key.startsWith('page/')) { reached(); await gate } await inner.put(key, bytes) } }
+    return { backend, open: () => open(), started }
+  }
+
+  it.each(['close', 'abandon'] as const)("%s while a page write is pending: close returns, the owner stays held until the write and its rollback settled, then a recovering holder's page survives", async (how) => {
+    const mgr = fakeLockManager()
+    const dir = fakeOpfsDirectory()
+    // One recovery owner reused by the next store of the same document (the crash/recovery case).
+    const owner = pageOwner('doc', Date.now())
+    const gated = gatedOpfs(dir, owner)
+    const ledger = createQuotaLedger(quotaLimitsFor('D'), { maxTotalExpandedBytes: 1 << 30 })
+    const pool = new MemoryPool({ limitBytes: 64 * 1024 * 1024 })
+    const a = new SourcePageStore({ docId: 'd', backend: gated.backend, ledger, ownerLock: await ownerLocks(mgr).hold(owner) })
+    a.bindMemory(pool)
+    const pending = a.commit(textPage('p0', 0, `old${'o'.repeat(40_000)}`))
+    void pending.catch(() => {})
+    await gated.started
+    // Cancellation is not held hostage by the backend: close/abandon return while the put is pending.
+    await (how === 'close' ? a.close() : a.abandon('d'))
+    expect(Object.values(ledger.snapshot().current).every((v) => v === 0)).toBe(true)
+    expect(pool.stats().totalBytes).toBe(0)
+    // ...but the owner is still A's: its started write can still land and be rolled back.
+    await expect(ownerLocks(mgr).hold(owner)).rejects.toMatchObject({ code: 'storage-error' })
+    expect(mgr.held.size).toBe(1)
+    gated.open()
+    await expect(pending).rejects.toMatchObject({ code: 'cancelled' })
+    await a.ownerReleased
+    await lockReleased()
+    expect(mgr.held.size).toBe(0)
+    expect(dir.files.size).toBe(0)
+    // The recovering holder of the same owner: its page is never removed by A's rollback.
+    const b = new SourcePageStore({ docId: 'd', backend: opfsPageBackend(dir, owner), ownerLock: await ownerLocks(mgr).hold(owner) })
+    expect(await b.sweepUnreferenced()).toEqual({ removed: 0 })
+    await b.commit(textPage('p0', 0, 'new'))
+    await new Promise((resolve) => setTimeout(resolve, 10))
+    expect(textAtPage(await b.page('1', 'p0'))).toBe('new')
+    await b.close()
+    expect(mgr.held.size).toBe(0)
+  })
+
+  it('overlapping and repeated disposal share one disposal; a write landing after the first removal is removed before release', async () => {
+    const mgr = fakeLockManager()
+    const dir = fakeOpfsDirectory()
+    const owner = pageOwner('doc', Date.now())
+    const gated = gatedOpfs(dir, owner)
+    let removals = 0
+    const counting: PageBackend = { ...gated.backend, removeAll: async () => { removals++; await gated.backend.removeAll() } }
+    // A rollback whose delete fails leaves the landed file to the final removal.
+    const stubborn: PageBackend = { ...counting, delete: async () => { throw new DOMException('busy', 'UnknownError') } }
+    const a = new SourcePageStore({ docId: 'd', backend: stubborn, ownerLock: await ownerLocks(mgr).hold(owner) })
+    const pending = a.commit(textPage('p0', 0, 'x'.repeat(40_000)))
+    void pending.catch(() => {})
+    await gated.started
+    await Promise.all([a.close(), a.abandon('d'), a.close()])
+    expect(removals).toBe(1)
+    expect(mgr.held.size).toBe(1)
+    gated.open()
+    await expect(pending).rejects.toMatchObject({ code: 'cancelled' })
+    await a.ownerReleased
+    await lockReleased()
+    await a.close()
+    expect(removals).toBe(2)
+    expect(dir.files.size).toBe(0)
+    expect(mgr.held.size).toBe(0)
+  })
+
+  it("an orphan sweep's delete pending at close keeps the owner held until it settled", async () => {
+    const mgr = fakeLockManager()
+    const dir = fakeOpfsDirectory()
+    const owner = pageOwner('doc', Date.now())
+    const inner = opfsPageBackend(dir, owner)
+    await inner.put('blob/9', new Uint8Array([1]))
+    let open!: () => void
+    const gate = new Promise<void>((resolve) => { open = resolve })
+    let reached!: () => void
+    const started = new Promise<void>((resolve) => { reached = resolve })
+    const slowDelete: PageBackend = { ...inner, delete: async (key) => { reached(); await gate; await inner.delete(key) } }
+    const a = new SourcePageStore({ docId: 'd', backend: slowDelete, ownerLock: await ownerLocks(mgr).hold(owner) })
+    const sweep = a.sweepUnreferenced()
+    await started
+    await a.close()
+    await expect(ownerLocks(mgr).hold(owner)).rejects.toMatchObject({ code: 'storage-error' })
+    open()
+    await sweep
+    await a.ownerReleased
+    await lockReleased()
+    expect(mgr.held.size).toBe(0)
+  })
+
+  it('a cancelled page restores its F_BLOB ordinals like any other rollback', async () => {
+    const rec = recordingBackend()
+    let open!: () => void
+    const gate = new Promise<void>((resolve) => { open = resolve })
+    let reached!: () => void
+    const started = new Promise<void>((resolve) => { reached = resolve })
+    const backend: PageBackend = { ...rec.backend, put: async (key, bytes) => { if (key === 'page/1/p1') { reached(); await gate } await rec.backend.put(key, bytes) } }
+    const store = new SourcePageStore({ docId: 'd', backend })
+    await store.commit(textPage('p0', 0, 'a'.repeat(40_000)))
+    const headBlobs = { blobs: store.stats.blobs, blobBytes: store.stats.blobBytes }
+    // The second page's blob gets id 1 while its record holds ordinal 0.
+    const page = textPage('p1', 1, 'b'.repeat(40_000))
+    const ordinals = [...page.payload.nums]
+    const pending = store.commit(page)
+    void pending.catch(() => {})
+    await started
+    await store.close()
+    open()
+    await expect(pending).rejects.toMatchObject({ code: 'cancelled' })
+    expect([...page.payload.nums]).toEqual(ordinals)
+    expect(rec.inner.size).toBe(0)
+    // Its blob is no longer counted as stored: p0's blob only.
+    expect({ blobs: store.stats.blobs, blobBytes: store.stats.blobBytes }).toEqual(headBlobs)
+  })
+})
