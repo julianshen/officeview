@@ -326,13 +326,20 @@ and 2 is a test in `tests/xlsx-viewer-perf-receipt.test.ts`.
     adoption is charged while staged, and each adopted view is charged until it
     is unreachable, so an old view and its successor overlap in the ledger
     exactly as they do in the heap;
-  - **replies**: every worker reply payload (structured-clone estimate). The
-    charge ends when the consumer has decoded the payload into its own charged
+  - **replies**: worker reply payloads other than `read { op: 'drawings' }`
+    (structured-clone estimate). The charge ends when the consumer has decoded
+    the payload into its own charged
     structure (`settle`, called after that owner's charge: the row cache after
     `put`, the adopted view, the value index after merging a page), so there is
     no window where neither is charged. A payload nobody settles (still held
     raw, e.g. a scan page kept across tasks) stays charged until its buffers are
     unreachable (`leaseTargets`);
+  - **drawings**: `read { op: 'drawings' }` reply payloads, attributed separately
+    from generic replies. The same `estimatePayloadBytes(reply)` and
+    `leaseTargets(reply)` charge the same bytes for the same lifetime, including
+    nested drawing/image arrays retained by the paged drawing cache; eviction
+    and close drop those references, and collection releases the charge. This
+    changes only attribution, not the ledger total or any budget;
   - **geometry**: worker-backed axes (`axisBytes`), paged sheet projections and
     merge indexes, resident geometry (projection, column axis, rows, merges);
   - **structure**: the controls' structural index;
