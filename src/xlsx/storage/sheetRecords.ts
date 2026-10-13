@@ -307,6 +307,9 @@ export interface SheetMetadata {
   tablePartIds: (string | undefined)[]
   drawingRefs: number
   drawingIds: (string | undefined)[]
+  /** `<legacyDrawing r:id>` (VML) references, painted by the drawing content
+   * reader (S13.2); they carry no anchors the structural query reports. */
+  legacyDrawingIds?: (string | undefined)[]
   structuralIncomplete: Array<'merges' | 'tables' | 'drawings' | 'columns' | 'rows'>
   /** Cells whose coordinates fall outside the sheet (invisible in both adapters). */
   skippedCells: number
@@ -550,6 +553,11 @@ export function sheetRecordEvents(meta: SheetMetadata, options: SheetRecordOptio
         meta.drawingRefs++
         const id = attrMap(names, values, count).id
         meta.drawingIds.push(typeof id === 'string' && id !== '' ? id : undefined)
+      } else if (depth === 1 && local === 'legacyDrawing') {
+        const ids = meta.legacyDrawingIds ??= []
+        bounded(ids, 'legacy drawing references')
+        const id = attrMap(names, values, count).id
+        ids.push(typeof id === 'string' && id !== '' ? id : undefined)
       } else if (options.declared && depth === 1 && local === 'autoFilter') {
         auto = options.declared.autoFilter(attrMap(names, values, count))
         autoSkip = auto === undefined

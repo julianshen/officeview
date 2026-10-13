@@ -39,6 +39,8 @@ import { MAIN_THREAD_BUDGETS } from '../xlsx/view/tileCache'
 import type { ViewerClient } from './viewerClient'
 import { initialIdentity, initialWorkbookOwner, visibilityFromDisplayBitsets, type CommandOf } from './viewerProtocol'
 import type { SheetGeometry, WorkbookSource } from './viewerSession'
+import { RemoteDrawingCache, type PagedSheetDrawings } from './viewerRemoteDrawings'
+import { drawingPayloadBudget } from '../xlsx/view/drawingPayload'
 
 export const ROW_CHUNK_COLS = 256
 /** One document-wide byte ledger for every sheet's painting row cache: a
@@ -142,6 +144,8 @@ export class RemoteWorkbook implements WorkbookSource {
   private readonly failures = new Map<string, { code: string; message: string }>()
   /** Sheets whose structure arrived complete (the only path to "complete"). */
   private readonly completed = new Set<string>()
+  /** S13.2: each sheet's drawing content, read once its structure is complete. */
+  private readonly drawingCache: RemoteDrawingCache
 
   constructor(private readonly client: ViewerClient, open: RemoteOpen, private readonly onRelease: () => Promise<void> | void = () => {}) {
     this.docId = open.docId
@@ -155,7 +159,15 @@ export class RemoteWorkbook implements WorkbookSource {
     this.format = open.formatting ?? { dateSystem: '1900', styles: [] }
     this.ledger = new RowCacheLedger(open.rowCacheBytes ?? rowCacheBudget(this.profile), this.mainLedger)
     for (const { sheetId } of open.sheets) this.identities.set(sheetId, initialIdentity(open.docId, sheetId))
+    this.drawingCache = new RemoteDrawingCache({
+      identity: sheetId => this.identity(sheetId), loadState: sheetId => this.loadState(sheetId), nextRequestId: () => this.nextRequestId(),
+      request: (command, signal) => this.request(command, signal),
+      // Adopted/evicted content re-keys the sheet's geometry and tiles.
+      changed: sheetId => { (this.merges(sheetId) as { gen: number }).gen++; this.notify() },
+    }, 2 * drawingPayloadBudget(this.profile))
   }
+  /** S13.2: the sheet's drawing content (viewerRemoteDrawings.ts). */
+  drawings(sheetId: string): PagedSheetDrawings { return this.drawingCache.get(sheetId) }
 
   get isClosed(): boolean { return this.closed }
   /** @internal S10.2 tests: document-owned buffers this workbook still holds. */
@@ -251,6 +263,7 @@ export class RemoteWorkbook implements WorkbookSource {
       entry.state = 'done'
       this.completed.add(sheetId)
       this.failures.delete(sheetId)
+      this.drawingCache.structureComplete(sheetId)
       // The load state changed (loading -> complete) even when geometry did not.
       this.notify()
       return
@@ -295,6 +308,7 @@ export class RemoteWorkbook implements WorkbookSource {
     if (this.closed || !this.setLayout(sheetId, layout)) return
     const entry = this.merges(sheetId) as { gen: number }
     entry.gen++
+    this.drawingCache.invalidate(sheetId)
     this.notify()
   }
   private async fetchLayout(sheetId: string): Promise<SheetLayout | undefined> {
@@ -416,6 +430,7 @@ export class RemoteWorkbook implements WorkbookSource {
     this.closed = true
     this.listeners.clear()
     for (const entry of this.structures.values()) if (entry.timer) clearTimeout(entry.timer)
+    this.drawingCache.close()
     // Owned caches go with the document: nothing answers from them after close.
     // Document-owned buffers are dropped here; their lifetime charges end when
     // nothing (not even a host still holding this closed workbook) reaches them.

@@ -7,7 +7,7 @@ import type { WorkbookFormatting } from '../view/contracts'
 import { DEFAULT_FORMATTING, workbookFormatting } from './pagedFormatting'
 import type { Completeness, ProfileId, SourceFailure, SourceHandle, SourceStamp, WorkerDiagnostic } from '../view/contracts'
 import { PackageError, isPackageError, throwIfAborted } from '../../core/package-error'
-import { blobRangeSource, openPart, readPartBytes, readZipInventory } from '../../core/zip-stream'
+import { blobRangeSource, openPart, readPartBytes, readZipInventory, type RangeSource, type ZipInventory } from '../../core/zip-stream'
 import { tokenizeBytes } from '../../core/xml-stream'
 import { attrs, getChildren, parseXml } from '../../core/xml'
 import { resolvePartTarget } from '../../drawing/parts'
@@ -66,6 +66,9 @@ export interface PagedWorkbook {
   changed(): Promise<void>
   /** Style table and date system (S5.4), read before the first sheet. */
   formatting: WorkbookFormatting
+  /** The package behind the import, for on-demand bounded part reads (S13.2:
+   * a sheet's drawing content is read when the viewer asks for it). */
+  readonly parts: { readonly src: RangeSource; readonly inventory: ZipInventory; readonly signal: AbortSignal }
 }
 export interface PagedImportOptions {
   docId: string
@@ -175,6 +178,7 @@ export async function openImportSession(source: Extract<SourceHandle, { kind: 'b
   const workbook: PagedWorkbook = {
     docId: options.docId, store, sheets, diagnostics: [], completeness: 'loading', loadEvaluatedFormulas: 0,
     changed: () => changedPromise, formatting: DEFAULT_FORMATTING,
+    parts: { src, inventory, signal },
   }
   const stamp: SourceStamp = { docId: options.docId, sheetId: sheets[0]?.sheetId ?? '', valueGen: 0 }
   const plannedParts = ['xl/workbook.xml', 'xl/_rels/workbook.xml.rels', sstPath, metadataPath, ...sheets.map((s) => s.partPath)]

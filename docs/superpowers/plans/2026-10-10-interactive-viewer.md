@@ -123,7 +123,11 @@ Every package is implemented on its own branch, reviewed by at least one agent f
 | S8.6 sort performance (`sortPrefix.ts`, `sortPrepared.ts`, `sortText.ts`, compact prepared columns, batched cooperative checks) | merged (codex implementation; Claude reviews over two rounds); every frozen threshold met in Chrome, thresholds/budgets unchanged |
 | S10.3 accessibility/keyboard/capability verification | merged; VoiceOver/Safari/iPad not run (manual steps recorded) |
 | S13 integrator documentation (README "Interactive spreadsheet viewer", PLAN.md) | merged (codex draft; opencode reviews over two rounds, APPROVE); other S13 release gates open |
-| S10.2 (desktop Chrome admitted in receipt r16; main-thread memory gate includes an explicit 0.25 MiB engine-cache allowance per gated checkpoint and warm-up check by user decision 2026-10-13, 64 MiB budget unchanged; quiet-machine re-run pending), (physical-device receipts skipped for now by user decision), S11/S12 status, S13 release review | in progress as noted |
+| S13.1 worker bootstrap packaging fix; S13.2 paged drawings parity + 44px narrow-column touch actions (release-audit fixes) | merged 2026-10-13 (S13.1: codex impl, Claude+opencode reviews; S13.2: Claude impl, opencode 3 rounds; all findings fixed) |
+| S13 native Excel checkpoint (native-corner, native-1904, large/native-large: Excel-authored, adapter/date-filter/large-file parity, worker-backed browser legs) | merged 2026-10-13 (Claude impl; opencode 2 rounds, APPROVE); Excel for Windows not run |
+| S11/S12 decided not-run (decision records `docs/architecture/xlsx-wasm-decision.md`, `xlsx-gpu-decision.md`; evidence is desktop Chrome (headless) only; S10.2 receipt pending merge; revisit on Safari/mobile receipts) | decided, not executed (optional boundary) |
+| S10.2 real-browser performance/memory gate (desktop Chrome receipt r16, main-thread ledger, worker range detection, header-sort pending acknowledgment) | merged 2026-10-13 (Claude impl; codex/opencode reviews r1–r7, APPROVE; merge resolution by codex, Claude review APPROVE). r16 admitted on a shared machine under the user-approved 0.25 MiB engine-cache allowance (user decision 2026-10-13; 64 MiB budget unchanged); quiet-machine release re-run still pending; actual Safari not run; mobile/iPad not run |
+| S10.2 physical-device receipts (skipped for now by user decision), S13 release review | not started / in progress as noted |
 
 ## S0 — Freeze contracts, counterexamples and fixture/harness infrastructure
 
@@ -660,6 +664,8 @@ expect(wide.contains({ row: 2, col: 0 })).toBe(false)
 
 ### S10.2 Real-browser performance, memory and device gate
 
+> **Status (2026-10-13):** merged (Claude implementation; codex/opencode reviews over seven rounds, every finding fixed, final verdict APPROVE; integration conflict resolution by codex reviewed by Claude, APPROVE). Desktop Chrome receipt r16 (`docs/validation/interactive-viewer-viewer-chrome-r16.json`, `docs/validation/interactive-viewer-performance.md`) admitted 13/13 rows, recorded on a shared machine; the main-thread memory gate uses the user-approved 0.25 MiB engine-cache allowance per gated checkpoint and warm-up check (user decision 2026-10-13; 64 MiB budget unchanged). Still open: a quiet-machine release re-run, actual desktop Safari collection, and mobile/iPad receipts (not run, user decision). Checkboxes below stay unticked until those legs exist.
+
 **Files:** finish `scripts/bench-interactive-viewer.ts`, browser performance scenarios, result schema/thresholds under `tests/fixtures/xlsx-viewer/performance-profile.json`; write `docs/validation/interactive-viewer-performance.md`.
 
 - [ ] Define controlled desktop profile: Apple M4 Pro, ≥8GiB available RAM, current Chrome and actual Safari. Mobile profile: iPad A14 with 4GiB RAM, actual Safari. Pin fixture seed, local-source bytes, viewport (desktop 1440×900, mobile 1024×768 CSS px), DPR=2, fonts, zoom=1 and cache states; record actual device/browser versions on each run. Alternative hardware cannot silently inherit these thresholds.
@@ -704,6 +710,8 @@ Import file-size, compressed/inflated-byte and storage quotas are explicit in th
 
 ### S11.1 Interchangeable kernel proof, not a rewrite
 
+> **Status (2026-10-12):** not-run under the optional execution boundary above (no prototype built, experiment checkboxes below intentionally not executed; the `src/xlsx/backends/kernel.ts` / `tsKernel.ts` seams were not created). Decision record `docs/architecture/xlsx-wasm-decision.md`: nine S8.6 scenarios against the five frozen kernel thresholds pass on desktop D headless Chrome (S8.6 synthetic-fixture smoke receipts), and the one S10.2 end-to-end miss (~12 s input-to-present; r1 receipt frames it as 11.9–13.3 s acknowledgment, pending state since added at S10.2 HEAD without a new receipt yet) is measured main-thread detection I/O, not kernel CPU — a Wasm port would not move it. Desktop Chrome (headless) only (S10.2 receipt pending merge; mobile rows not run); re-open triggers are in the decision doc. Refresh this status from the final merged S10.2 receipt.
+
 **Optional execution boundary:** Record `not-run` with current TS measurements when baseline already meets targets and no measured CPU bottleneck warrants a port. If invoked, timebox to 3–5 engineering days, at most two optimization iterations, numeric sort/filter/metrics plus text-interop parity only; stop/admit against the documented gate, not an expanding rewrite.
 
 **Files:** create `src/xlsx/backends/kernel.ts`, `tsKernel.ts`; experiment `experiments/xlsx-wasm/Cargo.toml`, `src/lib.rs`, `README.md`, `bench.ts`; only if admitted add `src/xlsx/backends/wasmKernel.ts`; tests `tests/xlsx-viewer-kernel-parity.test.ts`.
@@ -720,6 +728,8 @@ Import file-size, compressed/inflated-byte and storage quotas are explicit in th
 
 ### S12.1 Canonical-record GPU prototype with Canvas2D fallback
 
+> **Status (2026-10-12):** not-run under the optional execution boundary above (no prototype built, experiment checkboxes below intentionally not executed; nothing under `src/xlsx/backends/*` or `experiments/` was created). Decision record `docs/architecture/xlsx-gpu-decision.md`: every paint row and the 128 MiB bitmap budget pass on desktop D headless Chrome, and the one found paint bottleneck was fixed in place. Desktop Chrome (headless) only (S10.2 receipt pending merge; mobile/iPad rows not run by user decision); re-open triggers are in the decision doc, including mandatory revisit when Safari and mobile receipts exist. Refresh this status from the final merged S10.2 receipt.
+
 **Optional execution boundary:** Record `not-run` when the compliant Canvas2D baseline has no measured paint bottleneck justifying another backend. If invoked, timebox to 4–7 engineering days and at most two optimization iterations; one viewport pipeline with fills/lines/text/image parity, no parser/formula migration. Any unsupported drawing/font/warp coverage retains reference fallback and cannot silently become default.
 
 **Files:** experiment `experiments/xlsx-webgpu/README.md`, `renderer.ts`, `atlas.ts`, `bench.ts`; potential shipped `src/xlsx/backends/gpuRenderer.ts`, `canvasRenderer.ts`, `renderer.ts`; test `tests/xlsx-viewer-renderer-parity.test.ts`; browser `tests/browser/interactive-viewer-backends.spec.ts`.
@@ -733,6 +743,8 @@ Import file-size, compressed/inflated-byte and storage quotas are explicit in th
 - [ ] If admitted, ship feature-detected fallback and rerun S10/default corpus/backend comparisons. A backend cannot become default before its decision receipt and complete fallback verification.
 
 ## S13 — Independent release review, documentation and readiness decision
+
+> **Status (2026-10-13):** release-audit fixes S13.1 merged (937f567: the `officeview/worker` bootstrap survives production consumer builds via `sideEffects: ["./dist/worker.js"]`, README Vite `worker.format: 'es'`, consumer-build regression test; codex implementation, Claude and opencode reviews, APPROVE) and S13.2 merged (02c6ad2: worker-backed paged sheets paint the same drawings as resident sheets with bounded, charged transfers and visible diagnostics; coarse-pointer columns under 44 px get a 44×44 header-corner action disclosure; Claude implementation, opencode reviews over three rounds, APPROVE). S13.3 (worker query bridges, 120 s deadline), S10.2, native Excel and S13 manual checks are in progress.
 
 > **Status (2026-10-12):** integrator documentation merged (bb4d8de; codex draft, opencode reviews over two rounds, every finding fixed). The release-review, gate and readiness bullets remain open.
 
@@ -756,7 +768,7 @@ Every stable acceptance case in specification §15 has an owner and evidence bel
 | AC-CAP-03 (CAP-03, STORE-01, LIFE-03) | S1.1–S1.2, S10 | F2/F3/F4 quota variants; import-limits/source-pages suites, typed incomplete/cancel/limit UI | mandatory |
 | AC-STORE-01 (STORE-01–03) | S1.2–S1.3 | F8; source/adapter-parity/values suites and native checkpoint, pending≠blank | mandatory |
 | AC-STORE-02 (STORE-02, PERF-02) | S1.1–S1.2, S10.2 | F1/F2/F3/F4 malformed variants; import-limits, actual byte/queue/peak/cleanup ledger | mandatory |
-| AC-STORE-03 (STORE-04) | S3.1 | F5; structure suite: giant narrow-column merges, headerRows0, saved/dynamic child, complete anchors | mandatory |
+| AC-STORE-03 (STORE-04) | S3.1, S3.3 | F5; structure + `tests/xlsx-viewer-structure-metadata.test.ts`: giant narrow-column merges, headerRows0, saved/dynamic child, complete anchors | mandatory |
 | AC-STORE-04 (STORE-03, LIFE-01) | S1.3, S4.2 | F8/F7; values + worker-races suites, valueGen invalidation, incomplete-evaluation admission, `cached` vs `engine` value policy, `formula-value-unavailable` refusal and no-evaluator spy | mandatory |
 | AC-VIEW-01 (VIEW-01) | S2.1, S7.2 | F2/F7; projection/order suite with bijection/pinned slots and measured allocations | mandatory |
 | AC-VIEW-02 (VIEW-02, RENDER-01) | S2.3, S5.1 | F1/F2; cap-regression/viewport suites: row16385 and max source row sorted to viewport | mandatory |
@@ -765,8 +777,8 @@ Every stable acceptance case in specification §15 has an owner and evidence bel
 | AC-SEM-01 (SEM-02) | S2.1, S8.1 | F2/F5; filter suite: Amount header, hidden body, totals/outside, replacement/Clear | mandatory |
 | AC-SEM-02 (SEM-01) | S7.2 | F2/F4/F7; sort truth table/stability/host collator for 1–8 keys, errors/blanks terminal | mandatory |
 | AC-SEM-03 (SEM-01) | S7.1–S7.2 | F5/F8; sort-range/integration suites: metadata/no-header/far D outsiderange/formulas intact | mandatory |
-| AC-SEM-04 (SEM-01, STORE-04) | S3.1–S3.2, S7–S8 | F5; operation-guard suite: full-column band even for A:B keys, distant blank merge/spill; readonly child selection allowed | mandatory |
-| AC-SEM-05 (SEM-01, STORE-04) | S3.2, S8.1 | F5; operation-guard suite: filter0–1 before anchor2, within/below/absolute anchors | mandatory |
+| AC-SEM-04 (SEM-01, STORE-04) | S3.1–S3.3, S7–S8 | F5; operation-guard + `tests/xlsx-viewer-structure-metadata.test.ts`: full-column band even for A:B keys, distant blank merge/spill; readonly child selection allowed | mandatory |
+| AC-SEM-05 (SEM-01, STORE-04) | S3.2–S3.3, S8.1 | F5; operation-guard + `tests/xlsx-viewer-structure-metadata.test.ts`: filter0–1 before anchor2, within/below/absolute anchors | mandatory |
 | AC-SEM-06 (SEM-03) | S8.1 | F2/F4/F8; filter suite: typed/wildcard/blank/error/compound AND/OR serialization/replay, text-evaluable semantics in mixed columns | mandatory |
 | AC-SEM-07 (SEM-03) | S8.1 | F8; date-filter + native/date suites: D+.5, period/day bounds, zones/DST, 1900/1904 | mandatory |
 | AC-SEM-08 (SEM-04) | S8.2, S9.1 | F4; value-index/filter-ui: 100k+/1M universe, beyond10k search, all/search-subset selections | mandatory |

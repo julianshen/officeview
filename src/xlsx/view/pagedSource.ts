@@ -20,7 +20,7 @@ import { PackageError } from '../../core/package-error'
 import { MAX_COLS, MAX_ROWS, cellId, isValidCoordinate, isValidSourceRect, type SourceCell, type SourceRect } from './coordinates'
 import { INITIAL_GENERATION } from '../../worker/viewerProtocol'
 import { failedPage, failure, rowSetIntervals, sameStamp, type SheetGeometry, type WorkbookSource } from '../../worker/viewerSession'
-import type { MemoryPool } from './tileCache'
+import type { MemoryPool, PoolEntry } from './tileCache'
 import { LaneBuilder, READ_ROWS_MAX_CELLS, READ_ROWS_PAGE_ROWS, buildGeometry, intersects, invalidMergeDiagnostic } from './source'
 import {
   F_CACHED, F_ERROR, K_BOOL, K_EMPTY, K_ERROR, K_NUMBER, K_SST, K_TEXT, recordPopulated, textAt,
@@ -29,6 +29,8 @@ import {
 import { addRecord, answerOverview, emptyAggregate, mergeAggregate, type AggregateOutcome } from '../storage/overviewIndex'
 import { isValueUnavailable, SAVED_VALUES_DIAGNOSTIC, SAVED_VALUES_STATUS, valueAuthority, valueStatus } from './values'
 import type { PagedImportSession, PagedSheet, PagedWorkbook } from '../storage/pagedImport'
+import type { DrawingMemory, ProfileId, SheetDrawings } from './contracts'
+import { DRAWING_MEMORY_REFUSED, DrawingNodeLedger, drawingFootprint, unavailableDrawings } from './drawingPayload'
 
 type RowStatus = { kind: 'ready' } | { kind: 'unknown'; pageId: string } | { kind: 'error'; failure: SourceFailure }
 
@@ -53,7 +55,10 @@ export class PagedXlsxSheetAdapter implements SourceStore {
   readonly valuePolicy: ValuePolicy = 'cached'
   private released = false
   private drawingCache?: DrawingAnchor[]
-  constructor(readonly stamp: SourceStamp, private readonly workbook: PagedWorkbook, private readonly sheet: PagedSheet) {}
+  /** S13.2: the parsed drawing payload, retained (evictable) in the document pool so
+   * repeated reads (stale retries, re-shown sheets) clone instead of re-parsing. */
+  private drawingsCache?: { entry: PoolEntry; result: SheetDrawings }
+  constructor(readonly stamp: SourceStamp, private readonly workbook: PagedWorkbook, private readonly sheet: PagedSheet, private readonly drawingState: PagedDrawingState = { nodes: new DrawingNodeLedger() }) {}
 
   get extent(): SourceStore['extent'] {
     const used = this.sheet.state === 'complete' ? this.sheet.used : undefined
@@ -422,6 +427,64 @@ export class PagedXlsxSheetAdapter implements SourceStore {
     return this.drawingCache
   }
 
+  /** S13.2: the sheet's drawing content, read on demand once its metadata is final. */
+  async readDrawings(options: ReadOptions, profile: ProfileId, memory?: DrawingMemory): Promise<SheetDrawings> {
+    const error = this.guard(options)
+    if (error) return unavailableDrawings(`Drawings could not be read: ${error.message}`, error)
+    if (this.sheet.state !== 'complete') {
+      const pending = this.sheet.failure ? ended(this.sheet.failure)! : failure('incomplete', 'The sheet is still loading', true)
+      return unavailableDrawings(`Drawings are not available yet: ${pending.message}`, pending)
+    }
+    const meta = this.sheet.metadata
+    if (!meta.drawingIds.length && !meta.legacyDrawingIds?.length) return { completeness: 'complete', drawings: [], images: [], diagnostics: [], bytes: 0 }
+    const cached = this.drawingsCache
+    if (cached?.entry.live) {
+      cached.entry.touch()
+      // The reply's buffers are transferred: it is a clone, charged while it lives.
+      if (memory && !memory.set(cached.entry.bytes)) return memoryRefusal()
+      return structuredClone(cached.result)
+    }
+    const controller = new AbortController()
+    const abort = () => controller.abort()
+    options.signal.addEventListener('abort', abort, { once: true })
+    this.workbook.parts.signal.addEventListener('abort', abort, { once: true })
+    if (options.signal.aborted || this.workbook.parts.signal.aborted) abort()
+    try {
+      const { loadPagedSheetDrawings, pagedDrawingLimits } = await import('../storage/pagedDrawings')
+      const geometry = buildGeometry(meta.rowHeights.map(h => ({ index: h.row, heightPt: h.heightPt })), meta.cols, meta.hiddenRows, { hiddenCols: true })
+      const nodes = this.drawingState.nodes, sheetId = this.sheet.sheetId
+      const parsed = await loadPagedSheetDrawings(this.workbook.parts, { name: this.sheet.name, partPath: this.sheet.partPath, drawingIds: meta.drawingIds, legacyDrawingIds: meta.legacyDrawingIds },
+        geometry, pagedDrawingLimits(profile, this.drawingState.payloadBytes), controller.signal, { memory, startNodes: nodes.start(sheetId) })
+      nodes.record(sheetId, parsed.nodes)
+      return this.retainDrawings(parsed.drawings, parsed.workingSet, memory)
+    } catch (cause) {
+      if (controller.signal.aborted) return unavailableDrawings('Drawing read cancelled', failure('cancelled', 'Request cancelled', true))
+      const message = cause instanceof Error ? cause.message : String(cause)
+      return unavailableDrawings(`Drawings could not be read: ${message}`, failure(cause instanceof PackageError ? cause.code : 'parse-error', message))
+    } finally {
+      options.signal.removeEventListener('abort', abort)
+      this.workbook.parts.signal.removeEventListener('abort', abort)
+    }
+  }
+
+  /** Keeps a complete payload in the pool (when one is bound and it fits) and
+   * answers with a clone; otherwise the parsed payload itself is the answer. */
+  private retainDrawings(result: SheetDrawings, workingSet: number, memory?: DrawingMemory): SheetDrawings {
+    const pool = this.drawingState.pool
+    if (result.completeness !== 'complete' || !pool || pool.closed) return result
+    const bytes = drawingFootprint(result)
+    const holder: { entry?: PoolEntry } = {}
+    holder.entry = pool.retain(`drawings:${this.stamp.docId}:${this.sheet.sheetId}`, {
+      tier: 'rebuildable', bytes, owner: this.sheet.sheetId,
+      onRelease: () => { if (this.drawingsCache?.entry === holder.entry) this.drawingsCache = undefined },
+    }) ?? undefined
+    if (!holder.entry) return result
+    // The clone sits beside the retained copy until the reply is sent.
+    if (memory && !memory.set(workingSet + bytes)) { holder.entry.release(); return result }
+    this.drawingsCache = { entry: holder.entry, result }
+    return structuredClone(result)
+  }
+
   async queryOverview(request: OverviewQuery, options: ReadOptions): Promise<Page<OverviewGroup>> {
     const error = this.guard(options)
     if (error) return failedPage(this.stamp, error)
@@ -467,7 +530,21 @@ export class PagedXlsxSheetAdapter implements SourceStore {
   }
   async release(): Promise<void> {
     this.released = true
+    this.drawingsCache?.entry.release()
+    this.drawingsCache = undefined
   }
+}
+
+/** Per-document drawing state shared by a paged source's sheet adapters (S13.2). */
+export interface PagedDrawingState {
+  /** Transfer budget override (tests, embedders). */
+  payloadBytes?: number
+  /** The document pool, once the session binds it. */
+  pool?: MemoryPool
+  nodes: DrawingNodeLedger
+}
+function memoryRefusal(): SheetDrawings {
+  return unavailableDrawings('This sheet\'s drawings need more worker memory than the document has free and are not shown', failure('resource-limit', 'worker memory budget'), DRAWING_MEMORY_REFUSED)
 }
 
 function pageFailure(cause: unknown): SourceFailure {
@@ -495,10 +572,15 @@ async function waitFor(workbook: PagedWorkbook, signal: AbortSignal | undefined)
 }
 
 /** WorkbookSource over a paged import session; release() ends the session and removes its pages. */
-export function createPagedWorkbookSource(session: PagedImportSession): WorkbookSource {
+export interface PagedSourceOptions {
+  /** Drawing transfer budget override (tests, embedders); default drawingPayloadBudget(profile). */
+  drawingPayloadBytes?: number
+}
+export function createPagedWorkbookSource(session: PagedImportSession, options: PagedSourceOptions = {}): WorkbookSource {
   const { workbook } = session
   const stores = new Map<string, PagedXlsxSheetAdapter>()
   const geometries = new Map<string, SheetGeometry>()
+  const drawingState: PagedDrawingState = { nodes: new DrawingNodeLedger(), ...(options.drawingPayloadBytes !== undefined ? { payloadBytes: options.drawingPayloadBytes } : {}) }
   const find = (sheetId: string) => {
     const found = workbook.sheets.find(s => s.sheetId === sheetId)
     if (!found) throw new RangeError(`Unknown sheet ${sheetId}`)
@@ -507,7 +589,7 @@ export function createPagedWorkbookSource(session: PagedImportSession): Workbook
   const storeFor = (sheetId: string): PagedXlsxSheetAdapter => {
     let store = stores.get(sheetId)
     if (!store) {
-      store = new PagedXlsxSheetAdapter(Object.freeze({ docId: workbook.docId, sheetId, valueGen: INITIAL_GENERATION }), workbook, find(sheetId))
+      store = new PagedXlsxSheetAdapter(Object.freeze({ docId: workbook.docId, sheetId, valueGen: INITIAL_GENERATION }), workbook, find(sheetId), drawingState)
       stores.set(sheetId, store)
     }
     return store
@@ -538,7 +620,7 @@ export function createPagedWorkbookSource(session: PagedImportSession): Workbook
     coverageDiagnostics: sheetId => storeFor(sheetId).coverageDiagnostics(),
     formatting: () => workbook.formatting,
     declaredFilters: () => workbook.sheets.flatMap(s => s.declared ? [s.declared] : []),
-    bindMemory(pool: MemoryPool) { workbook.store.bindMemory(pool) },
+    bindMemory(pool: MemoryPool) { workbook.store.bindMemory(pool); drawingState.pool = pool },
     async release() {
       await Promise.all([...stores.values()].map(store => store.release()))
       stores.clear()

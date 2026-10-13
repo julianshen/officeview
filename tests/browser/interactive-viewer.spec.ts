@@ -546,4 +546,85 @@ test.describe('S10.1 real interactive viewer', () => {
     await expect(page.getByRole('columnheader', { name: /^Column B/ })).not.toHaveAttribute('aria-sort', /ascending|descending/)
   })
 
+
+  // S13 native Excel checkpoint: a workbook written and reopened (no repair
+  // prompt) by Microsoft Excel 16 for macOS. Expected labels are the values
+  // Excel displayed. The file is far below every object cap, so plain
+  // ?worker=1 still admits it resident; ?paged=1 is the debug-only admission
+  // override of the e2e page (src/debug/forcePaged.ts) that sends it down the
+  // worker-backed paged path.
+  for (const leg of [
+    { name: 'resident', worker: false, paged: false },
+    { name: '?worker=1, admitted resident', worker: true, paged: false },
+    { name: 'worker-backed paged (?worker=1&paged=1)', worker: true, paged: true },
+  ] as const) {
+    test(`native Excel native-corner.xlsx ${leg.name}: cached values, error, date display, Unicode, hidden row, far corner`, async ({ page }) => {
+      await openViewer(page, 'native-corner.xlsx', { worker: leg.worker, paged: leg.paged })
+      expect((await counts(page)).open ?? 0).toBe(leg.paged ? 1 : 0)
+      if (leg.paged) await expect(page.getByRole('status').filter({ hasText: 'Showing saved values' }).first()).toBeVisible()
+      await expect(page.getByRole('grid')).toHaveAttribute('aria-label', 'Worksheet 工作表1')
+      await expect(page.getByRole('alert')).toHaveCount(0)
+
+      const expectLabel = async (address: string, label: string) => {
+        await goTo(page, address)
+        await expect.poll(async () => (await activeCell(page))?.label ?? '').toBe(label)
+      }
+      await expectLabel('A1', 'A1, value 42')
+      await expectLabel('A2', 'A2, value 2024-01-15 12:00')
+      await expectLabel('A3', 'A3, value #DIV/0!')
+      await expectLabel('A4', 'A4, value 84')
+      await expectLabel('E3', 'E3, value 2')
+      // Row 5 is authored-hidden: no row header for it, and moving down from A4 skips to A6.
+      await expect(page.getByRole('rowheader', { name: 'Row 5', exact: true })).toHaveCount(0)
+      await goTo(page, 'A4')
+      await page.getByRole('grid').focus()
+      await page.keyboard.press('ArrowDown')
+      await expect.poll(async () => (await activeCell(page))?.label ?? '').toBe('A6, value Ünïcødé 漢字 🎉')
+      // Its source cell is reachable only through the read-only Original-cell inspector.
+      await goTo(page, 'A5', 'source')
+      await expect(page.getByRole('status').filter({ hasText: 'Original cell A5' })).toContainText('read-only')
+
+      await expectLabel('XFD1048576', 'XFD1048576, value corner')
+      expect(cellIdOf((await activeCell(page))!.id)).toBe(17179869183)
+      await expect(page.getByRole('rowheader', { name: 'Row 1048576' })).toBeVisible()
+      if (leg.paged) expect((await counts(page)).open).toBe(1) // one open, every read went to the worker
+    })
+  }
+
+  // S13: native-large.xlsx (Excel 16 for macOS, 200,001 cells) crosses the
+  // object caps, so plain ?worker=1 (no debug override) opens it worker-backed.
+  test('native Excel native-large.xlsx worker-backed without override: corners, date display, descending header sort', async ({ page }) => {
+    await openViewer(page, 'large/native-large.xlsx', { worker: true })
+    expect(await page.evaluate(() => window.__viewerE2E!.workersCreated)).toBe(1)
+    expect((await counts(page)).open).toBe(1)
+    await expect(page.getByRole('status').filter({ hasText: 'Showing saved values' }).first()).toBeVisible()
+    await expect(page.getByRole('alert')).toHaveCount(0)
+    const expectLabel = async (address: string, label: string) => {
+      await goTo(page, address)
+      await expect.poll(async () => (await activeCell(page))?.label ?? '', { timeout: 30_000 }).toBe(label)
+    }
+    await expectLabel('A50000', 'A50000, value 500001')
+    await expectLabel('D50000', 'D50000, value 2160-11-23 12:00')
+    await expectLabel('E50000', 'E50000, value last')
+    await expectLabel('D2', 'D2, value 2024-01-03 12:00')
+
+    await goTo(page, 'A1')
+    const sortA = page.getByRole('button', { name: 'Cycle sort column A' })
+    await sortA.click()
+    await expect(page.getByText('View-only sort applied; formulas unchanged.').first()).toBeAttached({ timeout: 60_000 })
+    await sortA.click()
+    await expect(page.getByRole('columnheader', { name: /^Column A/ })).toHaveAttribute('aria-sort', 'descending', { timeout: 60_000 })
+    await expectLabel('A1', 'A1, value 500001; original A50000')
+    await expectLabel('E1', 'E1, value last; original E50000')
+    expect((await counts(page)).open).toBe(1)
+  })
+
+  // S13: native-1904.xlsx (Excel 16 for macOS, date1904 on): the painted labels use the 1904 system.
+  test('native Excel native-1904.xlsx resident: 1904 serials display as Excel showed them', async ({ page }) => {
+    await openViewer(page, 'native-1904.xlsx')
+    for (const [address, text] of [['A2', '2024-01-15 12:00:00'], ['A4', '2024-01-16 23:59:59'], ['A5', '2024-02-29 06:00:00'], ['A6', '1904-01-01 00:00:00'], ['A7', '2023-12-31 12:00:00']] as const) {
+      await goTo(page, address)
+      await expect.poll(async () => (await activeCell(page))?.label ?? '').toBe(`${address}, value ${text}`)
+    }
+  })
 })

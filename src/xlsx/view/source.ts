@@ -16,9 +16,10 @@ import type {
   DrawingAnchor, RangeCompletion, ReadOptions, SingleCellPayload, SourceFailure, SourceRowInterval, SourceStamp, SourceStore,
   SparseRowPage, SpillExtent, StructuralResult, ValuePolicy, WorkerDiagnostic,
 } from './contracts'
-import type { ColumnLanes } from './contracts'
+import type { ColumnLanes, DrawingMemory, ProfileId, SheetDrawings } from './contracts'
+import { DRAWING_MEMORY_REFUSED, drawingFootprint, drawingPayloadBudget, sheetDrawingPayload, unavailableDrawings } from './drawingPayload'
 import { countLoadEvaluatedFormulas, documentValuePolicy, isValueUnavailable, laneValue, SAVED_VALUES_DIAGNOSTIC, valueAuthority, valueStatus } from './values'
-import type { XlsxCell, XlsxDocument, XlsxRow, XlsxSheet } from '../types'
+import type { XlsxCell, XlsxDocument, XlsxDrawing, XlsxRow, XlsxSheet } from '../types'
 import type { TableMetadata } from '../formula/types'
 import { engineSpillFootprints, type EngineSpillFootprint } from '../formula/workbook'
 import { resolveDrawingAnchors } from './drawingBounds'
@@ -36,6 +37,8 @@ export const READ_ROWS_PAGE_ROWS = 200
 export const READ_ROWS_MAX_CELLS = 262_144
 export interface ObjectSourceOptions {
   readRowsMaxCells?: number
+  /** Drawing transfer budget override (S13.2); default drawingPayloadBudget(profile). */
+  drawingPayloadBytes?: number
   /** Fixed at admission (§4.4); 'cached' wraps a doc parsed with valuePolicy 'cached'. */
   valuePolicy?: ValuePolicy
 }
@@ -131,6 +134,7 @@ export class ObjectXlsxSheetAdapter implements SourceStore {
     private readonly maxCells: number,
     readonly valuePolicy: ValuePolicy = 'engine',
     private readonly engineSpills?: readonly EngineSpillFootprint[],
+    private readonly drawingPayloadBytes?: number,
   ) {
     const rows = sheet.rows.filter(row => isValidCoordinate(row.index, 0) && row.cells.length)
       .sort((a, b) => a.index - b.index)
@@ -389,6 +393,21 @@ export class ObjectXlsxSheetAdapter implements SourceStore {
     }
     return { items, completeness: 'complete', stamp: this.stamp, ...(at < intervals.length ? { nextCursor: `${prefix}:${at}:${row}` } : {}) }
   }
+  /** S13.2: the parsed drawings, cloned (the resident model keeps its own bytes
+   * and workbook-wide picture indexes) and charged against the transfer budget. */
+  async readDrawings(options: ReadOptions, profile: ProfileId, memory?: DrawingMemory): Promise<SheetDrawings> {
+    const error = this.guard(options)
+    if (error) return unavailableDrawings(`Drawings could not be read: ${error.message}`, error)
+    // The clone is this read's working set in the document pool.
+    if (memory && this.sheet.drawings?.length && !memory.set(drawingFootprint(this.sheet.drawings))) {
+      return unavailableDrawings('This sheet\'s drawings need more worker memory than the document has free and are not shown', failure('resource-limit', 'worker memory budget'), DRAWING_MEMORY_REFUSED)
+    }
+    let drawings: XlsxDrawing[]
+    try { drawings = this.sheet.drawings?.length ? structuredClone(this.sheet.drawings) : [] }
+    catch (cause) { return unavailableDrawings(`Drawings could not be prepared: ${cause instanceof Error ? cause.message : String(cause)}`) }
+    return sheetDrawingPayload(drawings, this.sheet.drawingTheme, [], this.drawingPayloadBytes ?? drawingPayloadBudget(profile))
+  }
+
   async queryOverview(request: OverviewQuery, options: ReadOptions): Promise<Page<OverviewGroup>> {
     const error = this.guard(options)
     if (error) return failedPage(this.stamp, error)
@@ -505,7 +524,7 @@ export function createObjectWorkbookSource(doc: XlsxDocument, docId: string, opt
     if (!store) {
       const { sheet } = find(sheetId)
       const stamp = Object.freeze({ docId, sheetId, valueGen: INITIAL_GENERATION })
-      store = new ObjectXlsxSheetAdapter(stamp, sheet, doc.tables?.filter(table => table.sheetId === sheetId), maxCells, policy, spillFootprints()?.get(sheet) ?? (spillFootprints() ? [] : undefined))
+      store = new ObjectXlsxSheetAdapter(stamp, sheet, doc.tables?.filter(table => table.sheetId === sheetId), maxCells, policy, spillFootprints()?.get(sheet) ?? (spillFootprints() ? [] : undefined), options.drawingPayloadBytes)
       stores.set(sheetId, store)
     }
     return store

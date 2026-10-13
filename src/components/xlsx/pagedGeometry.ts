@@ -16,16 +16,17 @@ export function pagedSheetGeometry(remote: RemoteWorkbook, sheetId: string, orde
   const axes = remote.geometry(sheetId)
   const store = remote.store(sheetId)
   const merges = remote.merges(sheetId).merges
+  const drawings = remote.drawings(sheetId)
   const metrics = createSheetMetrics({ rows: axes.rows, cols: axes.cols, order, visibility })
   const mergeIndex = RectangleIndex.build(merges.map(range => ({ rect: { r0: range.minRow, r1: range.maxRow, c0: range.minCol, c1: range.maxCol }, value: range })))
   const geometry = Object.freeze({
     kind: 'ready' as const,
     metrics,
-    diagnostics: Object.freeze([]),
+    diagnostics: Object.freeze([...drawings.diagnostics]),
     cellsOf: (sourceRow: number) => store.cellsOf(sourceRow),
     merges: mergeIndex,
-    // The paged reader keeps no drawing parts.
-    drawingsIn: () => [],
+    // Read at query time so geometry does not pin an evicted drawing payload.
+    drawingsIn: (...query: Parameters<SheetGeometry['drawingsIn']>) => drawings.drawingsIn(...query),
   })
   // Projection buffers (dense prefixes of permuted bands) and the merge index
   // are charged for as long as this geometry (a sheet's current or previous

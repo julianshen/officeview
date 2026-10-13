@@ -161,7 +161,8 @@ export function GridSemantics(props: GridSemanticsProps): ReactElement {
   const headerColumns = coarse && active && activeColumnInPane ? [active.col] : columns
   const headerProps = { projection, window: scroll, viewport, coarse, columns: headerColumns, selection, sort: view.sort, filter: view.filter, controlMode, touchControls, onSortCycle: props.onSortCycle, pendingSortColumn: props.pendingSortColumn ?? null, onFilter: props.onFilter, onSortDialog: props.onSortDialog, onNotice: props.onNotice,
     onSelect: (kind: 'row' | 'column', index: number, options: { toggle: boolean; extend: boolean }, event: MouseEvent<HTMLButtonElement>) => {
-      if (event.detail > 0 && !coarse && gridRef.current) {
+      // A corner-lane button (S13.2) names its column; only strip buttons are re-hit-tested.
+      if (event.detail > 0 && !coarse && gridRef.current && event.currentTarget.dataset.headerLane === undefined) {
         const bounds = gridRef.current.getBoundingClientRect()
         const point = { x: event.clientX - bounds.left - GRID_HEADER_SIZE, y: event.clientY - bounds.top - headerHeight }
         if (kind === 'row' ? point.y < 0 || point.y >= viewport.height : point.x < 0 || point.x >= viewport.width) return

@@ -24,10 +24,10 @@ function cellAt(axis: AxisMetrics, emu: number, last: number): number {
   return axis.locate(Math.max(0, css)) ?? last
 }
 
-export function resolveDrawingAnchors(records: readonly XlsxDrawingAnchorRecord[], geometry: SheetGeometry): DrawingAnchor[] {
-  if (!records.length) return []
-  // Placement axes: authored heights/widths with authored-hidden rows (and, when
-  // the source reports them, columns) collapsed.
+/** Placement axes: authored heights/widths with authored-hidden rows (and, when
+ * the source reports them, columns) collapsed. Also places paged drawing content
+ * (S13.2), so structural bounds and painted drawables agree. */
+export function placementAxes(geometry: SheetGeometry): { rows: AxisMetrics; cols: AxisMetrics } {
   const rows = createAxisMetrics({
     logicalCount: MAX_ROWS, defaultSizeCss: geometry.rows.defaultSizeCss, overrides: geometry.rowOverrides,
     collapsed: geometry.baseHidden.intervals.map(interval => ({ start: interval.r0, end: interval.r1 })),
@@ -36,6 +36,12 @@ export function resolveDrawingAnchors(records: readonly XlsxDrawingAnchorRecord[
     logicalCount: MAX_COLS, defaultSizeCss: geometry.cols.defaultSizeCss, overrides: geometry.colOverrides,
     ...(geometry.hiddenCols?.length ? { collapsed: geometry.hiddenCols } : {}),
   })
+  return { rows, cols }
+}
+
+export function resolveDrawingAnchors(records: readonly XlsxDrawingAnchorRecord[], geometry: SheetGeometry): DrawingAnchor[] {
+  if (!records.length) return []
+  const { rows, cols } = placementAxes(geometry)
   const x = (m: XlsxAnchorMarker) => cols.start(m.col) * EMU_PER_CSS + m.colOffEmu
   const y = (m: XlsxAnchorMarker) => rows.start(m.row) * EMU_PER_CSS + m.rowOffEmu
   return records.map((record): DrawingAnchor => {

@@ -67,11 +67,13 @@ they never become implicit 1x1/headerless full-column operations. Explicit
 resolved ranges must contain the active source cell. Selection itself can
 highlight merge/spill children and never edits cells.
 
-## S5 integration still required
+## Historical S6.1 snapshot: S5 integration requirements
 
-There is no interactive S5 viewport in this checkout. `OfficeDoc` and its
-legacy page renderer are therefore unchanged. `SheetNavigator` is a controlled
-shell: its sheet-change and Go To callbacks belong to that future viewport.
+At the S6.1 design snapshot, there was no interactive S5 viewport and `OfficeDoc`
+was unchanged. As of S13 (S6.1 landed in 6731c54), the integration is mounted
+through `OfficeDoc` when `interactiveSheets` is enabled (default off). The requirements below record
+the original seam for the S5 owner. `SheetNavigator` is a controlled shell:
+its sheet-change and Go To callbacks belong to the viewport.
 The existing S2 `navigatorRequestFromA1` supplies the displayed/original
 address-space request. Use the S6 state transition to update source selection;
 for visible targets, the existing S2 `scrollWindow.navigateTo` centers the
