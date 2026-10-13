@@ -966,7 +966,9 @@ leaves records that no live index references.
   awaits each owner's lock. That working set is a construction share of the opening store (`leftover page sweep`),
   reserved before each name is retained (`SWEEP_OWNER_BYTES` per owner, `SWEEP_NAME_BYTES` per name, plus 2 B per code
   unit; pinned against a Bun heap probe, not a Chrome measurement). A refusal stops collecting: owners already charged are
-  still swept and the rest wait for a later sweep. Closing the store releases the share, which stops the sweep.
+  still swept and the rest wait for a later sweep. Closing or abandoning the store stops the sweep: its share then refuses,
+  which is checked after every await, before each owner lock, removal and deletion, so only a removal or deletion already
+  started may land. The share stays charged until the sweep has returned, because its grouping is reachable until then.
 
 **Decoded cache entries.** A decoded page or chunk is charged a fixed object overhead even when its bytes view a buffer a
 memory backend already holds and charges: 2,048 B per page and 1,280 B per chunk, covering the payload object, typed-array

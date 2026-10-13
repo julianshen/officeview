@@ -189,7 +189,7 @@ export async function openImportSession(source: Extract<SourceHandle, { kind: 'b
   }
   // Once per process: page storage left by crashed sessions (OPFS/IndexedDB owners older than 24 h).
   // Detached, but its working set is construction memory of this store (§12.4);
-  // closing the store releases the share and so stops the sweep.
+  // closing the store stops the sweep, whose charge lasts until it returned.
   if (!swept) {
     swept = true
     void store.sweepLeftovers(storageEnv)

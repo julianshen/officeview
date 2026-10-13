@@ -640,7 +640,9 @@ export const SWEEP_NAME_BYTES = 48
  * lock, so `reserve(totalBytes)` (a construction share's need) is called with
  * the running total before each is retained. A refusal stops collecting: the
  * owners already charged are still swept, the rest wait for a later sweep. A
- * refusal while sweeping (the share was released) stops the sweep.
+ * refusal while sweeping (the share's store was disposed) stops the sweep: it
+ * is checked again after every await, before each lock, removal and deletion,
+ * so only a removal or deletion already started may still land.
  */
 export async function sweepLeftoverPages(env: PageStorageEnv, options: { now?: number; maxAgeMs?: number; signal?: AbortSignal; maxEntries?: number; reserve?: (totalBytes: number) => void } = {}): Promise<number> {
   const now = options.now ?? Date.now()
@@ -655,6 +657,8 @@ export async function sweepLeftoverPages(env: PageStorageEnv, options: { now?: n
   }
   /** Whether what is retained is still charged (a released share refuses). */
   const stillCharged = (): boolean => admit(0)
+  /** Checked after every await, before the next lock, removal or deletion. */
+  const stop = (): boolean => options.signal?.aborted === true || !stillCharged()
   // Without Web Locks no owner can be proven dead: other owners are never swept.
   const locks = env.locks
   if (!locks) return 0
@@ -682,10 +686,11 @@ export async function sweepLeftoverPages(env: PageStorageEnv, options: { now?: n
           names.push(name)
         })
         for (const [owner, names] of byOwner) {
-          if (options.signal?.aborted || !stillCharged()) break
+          if (stop()) break
           await locks.tryWith(owner, async () => {
             for (const name of names) {
-              if (options.signal?.aborted) break
+              // Also after the lock wait and each removal: disposal may have come meanwhile.
+              if (stop()) break
               try { await dir.removeEntry(name); removed++ } catch { /* already gone */ }
             }
           }).catch(() => false)
@@ -700,11 +705,12 @@ export async function sweepLeftoverPages(env: PageStorageEnv, options: { now?: n
       // The listing is the browser's; the retained slice is charged like the OPFS grouping.
       if (!admit(dbs.reduce((n, { name }) => n + SWEEP_NAME_BYTES + 2 * (name?.length ?? 0), 0))) dbs = []
       for (const { name } of dbs) {
-        if (options.signal?.aborted || !stillCharged()) break
+        if (stop()) break
         if (!name?.startsWith(PAGE_PREFIX) || name.startsWith(`${PAGE_PREFIX}lock-`)) continue
         const owner = name.slice(PAGE_PREFIX.length)
         if (!old(owner)) continue
         await locks.tryWith(owner, async () => {
+          if (stop()) return
           await new Promise<void>((resolve, reject) => {
             const req = factory.deleteDatabase(name)
             req.onsuccess = () => { removed++; resolve() }
@@ -1136,10 +1142,12 @@ export class SourcePageStore implements PageSink {
   /**
    * The once-per-process leftover sweep (sweepLeftoverPages), detached from
    * the import: its owner grouping is construction memory of this store (§12.4).
-   * Never rejects.
+   * Closing/abandoning the store stops it at its next check (before each lock,
+   * removal and deletion) but its charge lasts until it returned, since the
+   * grouping stays reachable until then. Never rejects.
    */
   sweepLeftovers(env: PageStorageEnv, options: { now?: number; maxAgeMs?: number } = {}): Promise<number> {
-    const share = this.construction.share('leftover page sweep')
+    const share = this.construction.share('leftover page sweep', { untilReleased: true })
     return sweepLeftoverPages(env, { ...options, reserve: (bytes) => share.need(bytes) }).catch(() => 0).finally(() => share.release())
   }
   async abandon(docId: string): Promise<void> {

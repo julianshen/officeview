@@ -7,7 +7,7 @@
  */
 import { describe, expect, it } from 'vitest'
 import {
-  F_BLOB, K_NUMBER, K_TEXT, PageBuilder, SourcePageStore, encodePage, indexedDbPageBackend, memoryPageBackend, opfsPageBackend, ownerLocks, pageOwner, sweepLeftoverPages, type PageBackend,
+  F_BLOB, K_NUMBER, K_TEXT, PageBuilder, SourcePageStore, encodePage, indexedDbPageBackend, memoryPageBackend, opfsPageBackend, ownerLocks, pageOwner, sweepLeftoverPages, type OwnerLocks, type PageBackend,
 } from '../src/xlsx/storage/sourcePages'
 import { fakeIndexedDb, fakeLockManager, fakeOpfsDirectory } from './helpers/fake-storage'
 import { openImportSession } from '../src/xlsx/storage/pagedImport'
@@ -743,5 +743,151 @@ describe('review round 3 (codex) MINOR 2: leftover-sweep admission', () => {
     expect(await sweepLeftoverPages({ opfs: async () => dir, locks }, { now, reserve })).toBe(1)
     expect(dir.files.size).toBe(2)
     expect(Math.max(...asked)).toBeLessThanOrEqual(one)
+  })
+})
+
+describe('review round 4 (codex) MINOR 1: the leftover sweep stays charged until it settles; disposing its store stops it', () => {
+  const HOUR = 3600_000
+  const now = Date.UTC(2026, 9, 13)
+  const esc = (t: string) => t.replace(/[^A-Za-z0-9.]/g, (c) => `_${c.charCodeAt(0).toString(16).padStart(4, '0')}`)
+  const gate = () => {
+    let open!: () => void
+    let reached!: () => void
+    const opened = new Promise<void>((resolve) => { open = resolve })
+    const atGate = new Promise<void>((resolve) => { reached = resolve })
+    return { open, atGate, pass: async () => { reached(); await opened } }
+  }
+  const tick = () => new Promise<void>((resolve) => setTimeout(resolve, 0))
+  /** A store whose construction charges are visible in `pool`. */
+  const boundStore = () => {
+    const store = new SourcePageStore({ docId: 'd', backend: memoryPageBackend() })
+    const pool = new MemoryPool({ limitBytes: 64 * 1024 * 1024 })
+    store.bindMemory(pool)
+    return { store, pool }
+  }
+  /** Locks whose first acquisition (optionally) waits at `atLock`. */
+  const pausedLocks = (atLock?: ReturnType<typeof gate>): OwnerLocks => {
+    let first = true
+    return {
+      hold: async () => () => {},
+      tryWith: async (_owner, fn) => {
+        if (first && atLock) { first = false; await atLock.pass() }
+        await fn()
+        return true
+      },
+    }
+  }
+  /** 100 OPFS names of one dead owner; the first removal (optionally) waits at `atRemove`. */
+  const deadOwnerDir = (atRemove?: ReturnType<typeof gate>) => {
+    const owner = pageOwner('old', now - 26 * HOUR)
+    const names = Array.from({ length: 100 }, (_, i) => `officeview-pages-${esc(owner)}-${esc(`page/1/p${i}`)}`)
+    const counts = { started: 0, landed: 0 }
+    const dir = {
+      getFileHandle: async (): Promise<never> => { throw new Error('unused') },
+      async removeEntry() {
+        counts.started++
+        if (counts.started === 1 && atRemove) await atRemove.pass()
+        counts.landed++
+      },
+      async *keys() { yield* names },
+    }
+    return { dir, counts }
+  }
+  /** 100 dead owners' IndexedDB databases; the first deletion (optionally) waits at `atDelete`. */
+  const deadOwnerDbs = (atDelete?: ReturnType<typeof gate>) => {
+    const names = Array.from({ length: 100 }, (_, i) => `officeview-pages-${pageOwner(`old${i}`, now - 26 * HOUR)}`)
+    const counts = { started: 0, landed: 0 }
+    const factory = {
+      databases: async () => names.map((name) => ({ name, version: 1 })),
+      deleteDatabase() {
+        counts.started++
+        const req = {} as { onsuccess?: () => void; onerror?: () => void; onblocked?: () => void; error: null }
+        const wait = counts.started === 1 && atDelete ? atDelete.pass() : Promise.resolve()
+        void wait.then(() => { counts.landed++; req.onsuccess?.() })
+        return req
+      },
+    } as unknown as IDBFactory
+    return { factory, counts }
+  }
+
+  it('OPFS, paused acquiring the owner lock: close keeps the grouping charged, no name is deleted afterwards, the charge ends when the sweep settles', async () => {
+    const { store, pool } = boundStore()
+    const atLock = gate()
+    const { dir, counts } = deadOwnerDir()
+    const sweep = store.sweepLeftovers({ opfs: async () => dir, locks: pausedLocks(atLock) }, { now })
+    await atLock.atGate
+    const charged = pool.stats().transientBytes
+    expect(charged, 'grouping of 100 names charged').toBeGreaterThan(100 * 2 * 60)
+    const closing = store.close()
+    await tick()
+    expect(pool.stats().transientBytes, 'still charged while the sweep holds its grouping').toBe(charged)
+    atLock.open()
+    expect(await sweep).toBe(0)
+    await closing
+    expect(counts.started, 'deletions after the store was disposed').toBe(0)
+    expect(pool.stats().transientBytes).toBe(0)
+  })
+
+  it('OPFS, paused in the first removeEntry: that removal lands, no further one starts, the charge ends when the sweep settles', async () => {
+    const { store, pool } = boundStore()
+    const atRemove = gate()
+    const { dir, counts } = deadOwnerDir(atRemove)
+    const sweep = store.sweepLeftovers({ opfs: async () => dir, locks: pausedLocks() }, { now })
+    await atRemove.atGate
+    const charged = pool.stats().transientBytes
+    expect(charged).toBeGreaterThan(0)
+    const closing = store.close()
+    await tick()
+    expect(pool.stats().transientBytes, 'still charged while a removal is pending').toBe(charged)
+    atRemove.open()
+    expect(await sweep).toBe(1)
+    await closing
+    expect(counts).toEqual({ started: 1, landed: 1 })
+    expect(pool.stats().transientBytes).toBe(0)
+  })
+
+  it('IndexedDB, paused acquiring the first owner lock: close keeps the listing charged and no database is deleted afterwards', async () => {
+    const { store, pool } = boundStore()
+    const atLock = gate()
+    const { factory, counts } = deadOwnerDbs()
+    const sweep = store.sweepLeftovers({ indexedDb: factory, locks: pausedLocks(atLock) }, { now })
+    await atLock.atGate
+    const charged = pool.stats().transientBytes
+    expect(charged).toBeGreaterThan(0)
+    const closing = store.close()
+    await tick()
+    expect(pool.stats().transientBytes).toBe(charged)
+    atLock.open()
+    expect(await sweep).toBe(0)
+    await closing
+    expect(counts.started, 'deletions after the store was disposed').toBe(0)
+    expect(pool.stats().transientBytes).toBe(0)
+  })
+
+  it('IndexedDB, paused in the first deleteDatabase: that deletion lands, no further one starts, the charge ends when the sweep settles', async () => {
+    const { store, pool } = boundStore()
+    const atDelete = gate()
+    const { factory, counts } = deadOwnerDbs(atDelete)
+    const sweep = store.sweepLeftovers({ indexedDb: factory, locks: pausedLocks() }, { now })
+    await atDelete.atGate
+    const charged = pool.stats().transientBytes
+    expect(charged).toBeGreaterThan(0)
+    const closing = store.close()
+    await tick()
+    expect(pool.stats().transientBytes).toBe(charged)
+    atDelete.open()
+    expect(await sweep).toBe(1)
+    await closing
+    expect(counts).toEqual({ started: 1, landed: 1 })
+    expect(pool.stats().transientBytes).toBe(0)
+  })
+
+  it('without disposal the sweep still removes every dead name and releases its charge', async () => {
+    const { store, pool } = boundStore()
+    const { dir, counts } = deadOwnerDir()
+    expect(await store.sweepLeftovers({ opfs: async () => dir, locks: pausedLocks() }, { now })).toBe(100)
+    expect(counts.landed).toBe(100)
+    expect(pool.stats().transientBytes).toBe(0)
+    await store.close()
   })
 })

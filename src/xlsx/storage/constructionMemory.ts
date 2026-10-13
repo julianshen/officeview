@@ -58,7 +58,7 @@ export interface ConstructionShare {
   release(): void
 }
 
-interface Share { what: string; charge: PoolCharge; live: boolean }
+interface Share { what: string; charge: PoolCharge; live: boolean; untilReleased: boolean }
 
 export class ConstructionMemory {
   private pool: MemoryPool
@@ -90,8 +90,14 @@ export class ConstructionMemory {
   }
   private entryKey(key: string): string { return `construction:${this.docId}:${key}` }
 
-  share(what: string): ConstructionShare {
-    const share: Share = { what, charge: this.pool.charge(), live: true }
+  /**
+   * `untilReleased`: for a holder that outlives close/abandon (the detached
+   * leftover sweep keeps its grouping reachable until it returns). releaseAll
+   * then refuses its later needs, which stops the holder at its next check,
+   * but keeps its charge until the holder releases it.
+   */
+  share(what: string, options: { untilReleased?: boolean } = {}): ConstructionShare {
+    const share: Share = { what, charge: this.pool.charge(), live: true, untilReleased: options.untilReleased ?? false }
     this.shares.add(share)
     const owner = this
     return {
@@ -105,7 +111,7 @@ export class ConstructionMemory {
         throw memoryRefusal(what, bytes, owner.pool.limitBytes)
       },
       release() {
-        if (!share.live) return
+        if (!owner.shares.has(share)) return
         share.live = false
         share.charge.release()
         owner.shares.delete(share)
@@ -160,10 +166,14 @@ export class ConstructionMemory {
     this.provisional = undefined
   }
 
-  /** Close/abandon: every transient share and persistent entry is released. */
+  /** Close/abandon: every transient share (except an untilReleased one's charge) and persistent entry is released. */
   releaseAll(): void {
-    for (const share of this.shares) { share.live = false; share.charge.release() }
-    this.shares.clear()
+    for (const share of [...this.shares]) {
+      share.live = false
+      if (share.untilReleased) continue
+      share.charge.release()
+      this.shares.delete(share)
+    }
     for (const p of this.persistent.values()) p.entry.release()
     this.persistent.clear()
   }
