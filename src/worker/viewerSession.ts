@@ -688,6 +688,15 @@ export class DocumentSession {
   /** Lane builds in progress; each holds one maxColumns slot (retained lanes hold theirs in displayLanes). */
   private displayLaneBuildSlots = 0
   private readonly displayLanes = new Map<string, DisplayLaneRecord>()
+  /** Raw columns of the running prepare batch under construction (bytes held
+   * in its transient charge, and dense lanes counted against maxColumns). Not in
+   * preparedBytes until commit, but every prepared admission counts them, so a
+   * lane build and raw staging never overlap past the budget (§12.4 peaks).
+   * Prepare batches are serialized, so one batch owns these at a time. */
+  private preparedStaging = 0
+  private preparedStagingColumns = 0
+  /** Resident columns of the running batch: never evicted for a lane. */
+  private stagingKeep: ReadonlySet<string> = new Set()
   /** Shared recency of prepared columns and lanes (eviction order). */
   private useClock = 0
   private readonly preparedUse = new Map<string, number>()
@@ -1166,6 +1175,10 @@ export class DocumentSession {
     try {
       return await this.stageColumns(owner, batch, signal, hooks, slice, charge, budget)
     } finally {
+      // Every outcome (commit, quota, cancel, stale, error) ends the staging.
+      this.preparedStaging = 0
+      this.preparedStagingColumns = 0
+      this.stagingKeep = new Set()
       charge.release()
       slice.dispose()
     }
@@ -1177,20 +1190,34 @@ export class DocumentSession {
     const store = this.source.store(owner.sheetId)
     const stamp = store.stamp
     const keys = batch.map(col => this.preparedKey(stamp, col))
-    // Bytes this batch cannot evict: its own resident columns, and lanes that
-    // are leased or still being built.
-    let protectedBytes = this.unevictableLaneBytes()
-    for (const key of keys) protectedBytes += this.prepared.get(key)?.bytes ?? 0
+    const keep = new Set(keys)
+    this.stagingKeep = keep
     const staged: { key: string; column: PreparedColumn }[] = []
     let stagedBytes = 0, covered = 0
     const total = batch.length * MAX_ROWS
     const quota = (required: number): PrepareOutcome => ({ kind: 'quota', limitBytes: budget.maxBytes, requiredBytes: required })
+    // Staging `bytes` in `columns` dense lanes must fit beside what this batch
+    // cannot evict, re-read at every step: this batch's resident columns,
+    // pinned columns, and leased, retired-but-leased or building display lanes
+    // (a lane admitted while this batch runs bounds the rest of it).
+    const stage = (bytes: number, columns: number): PrepareOutcome | null => {
+      const floor = this.unevictablePrepared(keep)
+      if (floor.bytes + bytes > budget.maxBytes) return quota(floor.bytes + bytes)
+      if (floor.columns + columns > budget.maxColumns) {
+        return { kind: 'quota', limitBytes: budget.maxBytes, requiredBytes: floor.bytes + bytes, diagnostics: [{ code: 'prepared-column-limit', message: 'Prepared readers and display lanes pin the working set' }] }
+      }
+      this.preparedStaging = bytes
+      this.preparedStagingColumns = columns
+      return null
+    }
     for (let i = 0; i < batch.length; i++) {
       const col = batch[i], key = keys[i]
       if (this.prepared.has(key)) { covered += MAX_ROWS; continue }
       const builder = new ColumnBuilder(col)
-      // Reserve the column overhead before reading anything.
-      if (protectedBytes + stagedBytes + builder.heldBytes > budget.maxBytes) return quota(protectedBytes + stagedBytes + builder.heldBytes)
+      // Reserve the column overhead (and its dense-lane slot) before reading anything.
+      const building = staged.length + 1
+      const reserved = stage(stagedBytes + builder.heldBytes, building)
+      if (reserved) return reserved
       if (!charge.set(stagedBytes + builder.heldBytes)) return this.prepareRefusal(stagedBytes + builder.heldBytes)
       let cursor: string | undefined
       // Next row the full-axis query must cover (§4.1 column page ordering).
@@ -1221,16 +1248,19 @@ export class DocumentSession {
               return { kind: 'error', error: failure('page-error', 'Malformed prepared cell identity/value') }
             }
             const staging = stagedBytes + builder.heldBytes + builder.costOf(item)
-            const next = protectedBytes + staging
-            if (next > budget.maxBytes) return quota(next)
+            const grown = stage(staging, building)
+            if (grown) return grown
             if (!charge.set(staging)) return this.prepareRefusal(staging)
             builder.append(item)
+            stage(stagedBytes + builder.heldBytes, building)
             if (!charge.set(stagedBytes + builder.heldBytes)) return this.prepareRefusal(stagedBytes + builder.heldBytes)
             if (builder.full) {
-              const peak = protectedBytes + stagedBytes + builder.heldBytes + builder.encodingPeakBytes
-              if (peak > budget.maxBytes) return quota(peak)
-              if (!charge.set(stagedBytes + builder.heldBytes + builder.encodingPeakBytes)) return this.prepareRefusal(peak)
+              const peak = stagedBytes + builder.heldBytes + builder.encodingPeakBytes
+              const encoding = stage(peak, building)
+              if (encoding) return encoding
+              if (!charge.set(peak)) return this.prepareRefusal(peak)
               if (!(await builder.compact(slice, () => this.halted(owner, signal) !== null))) return this.halted(owner, signal) ?? { kind: 'stale' }
+              stage(stagedBytes + builder.heldBytes, building)
               if (!charge.set(stagedBytes + builder.heldBytes)) return this.prepareRefusal(stagedBytes + builder.heldBytes)
             }
           }
@@ -1252,18 +1282,23 @@ export class DocumentSession {
       if (expected !== MAX_ROWS) return { kind: 'error', error: UNORDERED_PAGE }
       covered += MAX_ROWS
       // Final partial page is encoded under the same old-plus-new reservation.
-      const peak = protectedBytes + stagedBytes + builder.heldBytes + builder.encodingPeakBytes
-      if (peak > budget.maxBytes) return quota(peak)
-      if (!charge.set(stagedBytes + builder.heldBytes + builder.encodingPeakBytes)) return this.prepareRefusal(peak)
+      const peak = stagedBytes + builder.heldBytes + builder.encodingPeakBytes
+      const encoding = stage(peak, building)
+      if (encoding) return encoding
+      if (!charge.set(peak)) return this.prepareRefusal(peak)
       if (!(await builder.compact(slice, () => this.halted(owner, signal) !== null))) return this.halted(owner, signal) ?? { kind: 'stale' }
       const column = builder.finish(stamp)
       staged.push({ key, column })
       stagedBytes += column.bytes
+      stage(stagedBytes, staged.length)
       if (!charge.set(stagedBytes)) return this.prepareRefusal(stagedBytes)
     }
     if (signal.aborted) return { kind: 'cancelled' }
     if (!this.isCurrent(owner)) return { kind: 'stale' }
-    const keep = new Set(keys)
+    // Commit (no await from here): the staged columns are admitted below as
+    // `stagedBytes` and `staged.length`, not as staging as well.
+    this.preparedStaging = 0
+    this.preparedStagingColumns = 0
     let minimumColumns = this.prepared.size + staged.length + this.laneSlots(), minimumBytes = this.preparedBytes + stagedBytes
     for (const [key, column] of this.prepared) {
       if (keep.has(key) || this.preparedPins.has(key)) continue
@@ -1310,11 +1345,19 @@ export class DocumentSession {
     this.preparedEntries.delete(key)
     entry?.release()
   }
-  /** Leased or building lane bytes: never evictable for room. */
-  private unevictableLaneBytes(): number {
-    let bytes = this.displayLaneBytes
-    for (const lane of this.displayLanes.values()) if (lane.pins === 0) bytes -= lane.bytes
-    return bytes
+  /** Whether a prepared column may be evicted for room: not pinned by a reader,
+   * not in `keep`, and not a resident column of the running prepare batch. */
+  private evictableColumn(key: string, keep: ReadonlySet<string>): boolean {
+    return !keep.has(key) && !this.stagingKeep.has(key) && !this.preparedPins.has(key)
+  }
+  /** The prepared working set nothing can evict for room right now (bytes and
+   * dense lanes): pinned and kept columns, leased (also retired) lanes and lane
+   * builds. Raw staging is excluded; its owner adds it. */
+  private unevictablePrepared(keep: ReadonlySet<string>): { bytes: number; columns: number } {
+    let bytes = this.preparedBytes, columns = this.prepared.size + this.laneSlots()
+    for (const [key, column] of this.prepared) if (this.evictableColumn(key, keep)) { bytes -= column.bytes; columns-- }
+    for (const lane of this.displayLanes.values()) if (lane.pins === 0) { bytes -= lane.bytes; columns-- }
+    return { bytes, columns }
   }
   /** Dense lanes held against maxColumns besides prepared columns: retained
    * (including retired-but-leased) display lanes and lane builds in progress. */
@@ -1322,21 +1365,21 @@ export class DocumentSession {
     return this.displayLanes.size + this.displayLaneBuildSlots
   }
   /** Makes `bytes` and `columns` more dense lanes fit the prepared budget
-   * (maxBytes and maxColumns) by evicting unpinned columns (outside `keep`) and
-   * unleased display lanes, least recently used first across both kinds.
-   * Evicts nothing and returns false when even all of them would not do. */
+   * (maxBytes and maxColumns) beside the running batch's raw staging, by
+   * evicting unpinned columns (outside `keep` and the batch) and unleased
+   * display lanes, least recently used first across both kinds. Evicts nothing
+   * and returns false when even all of them would not do. */
   private makePreparedRoom(bytes: number, keep: ReadonlySet<string>, columns = 0): boolean {
     const limit = this.budget.maxBytes, maxColumns = this.budget.maxColumns
-    const fits = () => this.preparedBytes + bytes <= limit && this.prepared.size + this.laneSlots() + columns <= maxColumns
+    const extraBytes = this.preparedStaging + bytes, extraColumns = this.preparedStagingColumns + columns
+    const fits = () => this.preparedBytes + extraBytes <= limit && this.prepared.size + this.laneSlots() + extraColumns <= maxColumns
     if (fits()) return true
-    let evictable = 0, evictableCount = 0
-    for (const [key, column] of this.prepared) if (!keep.has(key) && !this.preparedPins.has(key)) { evictable += column.bytes; evictableCount++ }
-    for (const lane of this.displayLanes.values()) if (lane.pins === 0) { evictable += lane.bytes; evictableCount++ }
-    if (this.preparedBytes - evictable + bytes > limit || this.prepared.size + this.laneSlots() - evictableCount + columns > maxColumns) return false
+    const floor = this.unevictablePrepared(keep)
+    if (floor.bytes + extraBytes > limit || floor.columns + extraColumns > maxColumns) return false
     while (!fits()) {
       let oldest: { used: number; drop: () => void } | null = null
       for (const [key] of this.prepared) {
-        if (keep.has(key) || this.preparedPins.has(key)) continue
+        if (!this.evictableColumn(key, keep)) continue
         const used = this.preparedUse.get(key) ?? 0
         if (!oldest || used < oldest.used) oldest = { used, drop: () => this.dropPrepared(key) }
       }
@@ -1361,7 +1404,7 @@ export class DocumentSession {
           if (this.closed) throw new ValueIndexError('cancelled', 'Session closed')
           if (!this.makePreparedRoom(bytes, new Set())) {
             throw new ValueIndexError('quota', `Formatted display text does not fit the ${this.budget.maxBytes}-byte prepared-column budget beside the pinned working set; narrow the filter range or use a values filter.`,
-              { resource: 'memory', requiredBytes: this.preparedBytes + bytes, limitBytes: this.budget.maxBytes })
+              { resource: 'memory', requiredBytes: this.preparedBytes + this.preparedStaging + bytes, limitBytes: this.budget.maxBytes })
           }
           if (!share().set(this.displayLaneBuilding + bytes)) {
             throw new ValueIndexError('quota', 'The worker memory budget cannot hold the formatted display text.',
