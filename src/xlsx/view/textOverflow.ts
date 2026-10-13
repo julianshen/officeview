@@ -11,7 +11,7 @@ export interface OverflowAllowance { left: number; right: number }
 /** One row's neighbour occupancy for textOverflowAllowance, built once per
  * row (rowOverflowInput) so that each allowance is a binary search. */
 export interface RowOverflowInput {
-  /** Visible (non-zero-width) columns whose cell blocks overflow, ascending. */
+  /** Visible (non-zero-width) columns whose cell blocks overflow, ascending and unique. */
   blockers: readonly number[]
   /** Merged ranges that intersect the row and have visible width. */
   merges: readonly { minCol: number; maxCol: number }[]
@@ -43,6 +43,11 @@ export function rowOverflowFromCells(cells: readonly Pick<XlsxCell, 'col' | 'val
     blockers.push(cell.col)
   }
   if (!sorted) blockers.sort((a, b) => a - b)
+  let unique = 0
+  for (const col of blockers) {
+    if (unique === 0 || col !== blockers[unique - 1]) blockers[unique++] = col
+  }
+  blockers.length = unique
   return { blockers, merges: merges.filter(m => visible(m.minCol, m.maxCol)), colStart, lastCol }
 }
 

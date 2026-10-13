@@ -101,6 +101,18 @@ describe('textOverflowAllowance', () => {
     const cells = [{ col: 4, value: 'x' as XlsxCell['value'] }, { col: 1, value: null }, { col: 2, value: 'v' as XlsxCell['value'] }, { col: 3, value: null }]
     expect(textOverflowAllowance(input(cells), 2)).toEqual({ left: 100, right: 50 })
   })
+  it('duplicate source columns do not block right-aligned text from overflowing left', () => {
+    const cells = [cellAt(2, LONG, { style: { numFmtId: 0, horizontal: 'right' } as XlsxCellStyle }), cellAt(2, 'duplicate'), cellAt(4, 'blocker')]
+    expect(textOverflowAllowance(input(cells), 2)).toEqual({ left: 100, right: 50 })
+    const { ctx } = recorder()
+    const layout = layoutCellBody(ctx, sheetOf(cells).sheet, cells[0], 100, 0, 50, 20, textMeasurer(ctx), textOverflowAllowance(input(cells), 2))
+    const clip = layout.text?.kind === 'layout' ? layout.text.clip : null
+    expect(clip!.x).toBeLessThan(100)
+    expect(clip!.x + clip!.width).toBeCloseTo(150, 9)
+  })
+  it('unsorted repeated columns use the nearest strictly different blocker on both sides', () => {
+    expect(textOverflowAllowance(input(cellsAt(5, 2, 0, 2, 5, 0, 2)), 2)).toEqual({ left: 50, right: 100 })
+  })
   it('stops at the worksheet edges (A on the left, the last column on the right)', () => {
     expect(textOverflowAllowance(input(), MAX_COLS - 1).right).toBe(0)
     expect(textOverflowAllowance(input(), 0).left).toBe(0)
