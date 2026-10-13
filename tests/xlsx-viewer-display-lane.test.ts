@@ -10,7 +10,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import * as render from '../src/xlsx/render'
 import { createWorkerFilterEvaluator } from '../src/worker/viewerFilterEvaluator'
 import { DisplayTextLaneCache, needsDisplayText } from '../src/worker/displayTextLane'
-import { DocumentSession, PREPARED_COLUMN_OVERHEAD, PREPARED_STRING_OVERHEAD, type FilterEvaluation } from '../src/worker/viewerSession'
+import { DocumentSession, MIN_WORKER_BUDGET_BYTES, PREPARED_COLUMN_OVERHEAD, PREPARED_STRING_OVERHEAD, type FilterEvaluation } from '../src/worker/viewerSession'
 import { createViewerControlResources, viewerControls, type ViewerControlResources } from '../src/components/xlsx/viewerControlsClient'
 import { MainMemoryLedger } from '../src/xlsx/view/mainLedger'
 import { ValueIndexCache } from '../src/xlsx/view/valueIndex'
@@ -487,6 +487,123 @@ describe('S13.5 formatted display-text lane is prepared on demand', () => {
       expect(displayCalls).not.toHaveBeenCalled()
       controls.dispose()
       base.dispose()
+    })
+  })
+
+  describe('codex precheck #1/#3/#4: one admission, staged before allocation, retired leases stay charged', () => {
+    const signal = () => new AbortController().signal
+    const textSpec = spec(2, text('contains', '2'))
+    type Port = Parameters<FilterEvaluator>[0]['displayLanes']
+    /** A session whose evaluator hands its display-lane port to `use` (the real session path). */
+    function withPort(options: ConstructorParameters<typeof DocumentSession>[2], use: (port: Port) => Promise<void>) {
+      const session = new DocumentSession('doc-1', createObjectWorkbookSource(makeDoc(), 'doc-1'), {
+        ...options,
+        filterEvaluator: async input => { await use(input.displayLanes); return { kind: 'complete', matches: () => true } },
+      })
+      return { session, run: () => session.filter(session.identity('1'), spec(0, { kind: 'number', op: 'gt', first: 0 }), nowMs, signal()) }
+    }
+    const laneKey = (valueGen: number, r1 = 10) => ({ docId: 'doc-1', sheetId: '1', valueGen, styleOwner: formatting, col: 2, r0: 1, r1 })
+    const fillText = (text: string) => async (sink: { add(offset: number, text: string): void }) => { sink.add(0, text) }
+
+    it('#3 worker: the lane IDs are admitted against the worker pool before any allocation or fill', async () => {
+      const lanes = new DisplayTextLaneCache()
+      const limit = 2 * 1024 * 1024
+      expect(limit).toBeGreaterThan(MIN_WORKER_BUDGET_BYTES)
+      let filled = 0, refusal: unknown, transientInFill = 0
+      const { session, run } = withPort({ workerBudgetBytes: limit }, async port => {
+        // 1M rows of IDs (4 MB) cannot fit a 2 MiB worker pool.
+        refusal = await lanes.lease(laneKey(0, 1_000_000), async () => { filled++ }, port).catch(error => error)
+        // A lane that fits holds its staged IDs in the worker pool while it is filled.
+        const held = await lanes.lease(laneKey(0, 1000), async sink => { transientInFill = session.memoryStats().transientBytes; sink.add(0, 'a') }, port)
+        held.release()
+      })
+      expect((await run()).kind).toBe('committed')
+      expect(refusal).toMatchObject({ name: 'ValueIndexError', code: 'quota' })
+      expect(filled).toBe(0)
+      expect(transientInFill).toBeGreaterThanOrEqual(PREPARED_COLUMN_OVERHEAD + 1000 * 4)
+      expect(session.memoryStats().peakBytes).toBeLessThanOrEqual(limit)
+      await session.release()
+    })
+
+    it('#4 local budget: an invalidated lane still leased keeps its bytes and its room until the last lease ends', async () => {
+      const one = PREPARED_COLUMN_OVERHEAD + 10 * 4 + 800 * 2 + PREPARED_STRING_OVERHEAD
+      const lanes = new DisplayTextLaneCache({ limitBytes: one + 100 })
+      const old = await lanes.lease(laneKey(1), fillText('a'.repeat(800)))
+      // gen 2 retires gen 1 for lookup, but gen 1 is still being read: no room.
+      const blocked = await lanes.lease(laneKey(2), fillText('b'.repeat(800))).catch(error => error)
+      expect(blocked).toMatchObject({ code: 'quota' })
+      expect(old.lane.text(0)).toBe('a'.repeat(800))
+      expect(lanes.bytes).toBe(one)
+      old.release()
+      expect(lanes.bytes).toBe(0)
+      const fresh = await lanes.lease(laneKey(2), fillText('b'.repeat(800)))
+      expect(lanes.bytes).toBe(one)
+      fresh.release()
+
+      // With room for both, both are charged while both are read.
+      const wide = new DisplayTextLaneCache({ limitBytes: 3 * one })
+      const a = await wide.lease(laneKey(1), fillText('a'.repeat(800)))
+      const b = await wide.lease({ ...laneKey(1), styleOwner: {} }, fillText('b'.repeat(800)))
+      expect(wide.size).toBe(1)
+      expect(wide.bytes).toBe(2 * one)
+      a.release()
+      expect(wide.bytes).toBe(one)
+      // close retires a leased lane too; its bytes (and the owner's account,
+      // closed on drain) end with the lease.
+      let drained = 0
+      wide.close(() => { drained++ })
+      expect(wide.bytes).toBe(one)
+      expect(drained).toBe(0)
+      b.release()
+      expect(wide.bytes).toBe(0)
+      expect(drained).toBe(1)
+    })
+
+    it('#4 worker session: a retired leased lane stays in the prepared counter until its reader exits', async () => {
+      const lanes = new DisplayTextLaneCache()
+      let during = 0, afterOld = 0, laneBytes = 0
+      const { session, run } = withPort({}, async port => {
+        const old = await lanes.lease(laneKey(1), fillText('a'.repeat(800)), port)
+        laneBytes = old.lane.bytes
+        const next = await lanes.lease(laneKey(2), fillText('b'.repeat(800)), port)
+        during = session.preparedStats().bytes
+        old.release()
+        afterOld = session.preparedStats().bytes
+        next.release()
+      })
+      expect((await run()).kind).toBe('committed')
+      expect(during).toBe(2 * laneBytes)
+      expect(afterOld).toBe(laneBytes)
+      await session.release()
+    })
+
+    it('#1 lanes count against maxColumns: a lane evicts the LRU column, a leased lane makes preparation refuse', async () => {
+      const lanes = new DisplayTextLaneCache()
+      const session = new DocumentSession('doc-1', createObjectWorkbookSource(makeDoc(), 'doc-1'), {
+        preparedBudget: { maxColumns: 2, maxBytes: 64 * 1024 * 1024 },
+        filterEvaluator: createWorkerFilterEvaluator(() => new Map(), formatting, 'en-US', { lanes }),
+      })
+      expect(await session.prepareColumns(session.identity('1'), [0, 1], signal())).toEqual({ kind: 'complete' })
+      expect((await session.filter(session.identity('1'), textSpec, nowMs, signal())).kind).toBe('committed')
+      expect(session.preparedStats().columns + lanes.size).toBeLessThanOrEqual(2)
+      expect(session.preparedStats().columns).toBe(1)
+      // Preparing two columns again evicts the idle lane.
+      expect(await session.prepareColumns(session.identity('1'), [0, 1], signal())).toEqual({ kind: 'complete' })
+      expect(lanes.size).toBe(0)
+      await session.release()
+
+      // A leased lane holds its slot: two more columns cannot be admitted.
+      const held = new DisplayTextLaneCache()
+      let refused: unknown
+      const { session: pinned, run } = withPort({ preparedBudget: { maxColumns: 2, maxBytes: 64 * 1024 * 1024 } }, async port => {
+        const lease = await held.lease(laneKey(0), fillText('x'), port)
+        refused = await pinned.prepareColumns(pinned.identity('1'), [0, 1], signal())
+        lease.release()
+      })
+      expect((await run()).kind).toBe('committed')
+      expect(refused).toMatchObject({ kind: 'quota' })
+      expect(pinned.preparedStats().columns).toBe(0)
+      await pinned.release()
     })
   })
 })
