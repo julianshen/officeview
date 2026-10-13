@@ -17,7 +17,10 @@
  *   and filter prepared columns (passed per request). The session evicts across
  *   both kinds by recency and evicts a lane through its retain callback; this
  *   cache never evicts on its behalf. A retained lane's bytes move onto its
- *   pool entry, which uncharges them.
+ *   pool entry, which uncharges them. The running prepare batch's raw staging
+ *   counts in the same admission, so the two never overlap past the budget.
+ *   Session close keeps a leased lane (and a lane still building) charged
+ *   until its reader or build ends.
  * - main thread / standalone: a budget given to the constructor (the controls
  *   caches' main-ledger share), or a local ledger of `limitBytes`. This cache
  *   then evicts its own unleased least-recently-used lanes before refusing.
