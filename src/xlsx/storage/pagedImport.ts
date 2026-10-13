@@ -439,17 +439,23 @@ export async function openImportSession(source: Extract<SourceHandle, { kind: 'b
           parsed = { records: [], unresolved: 0 }
           let index = 0
           const found = parsed
+          const markerShare = store.construction.share('streamed drawing marker fields', { untilReleased: true })
+          let markerEvents: ReturnType<typeof anchorRecordEvents> | undefined
           try {
-            await tokenizeBytes(openPart(src, drawing, partOpts(drawing.name, limits.paged.drawingPartEnvelopeBytes)), anchorRecordEvents((name, parts) => {
+            markerEvents = anchorRecordEvents((name, parts) => {
               const record = found.records.length < limits.paged.structuralRecords ? anchorRecord(name, anchorId(drawing.name, index), parts) : undefined
               index++
               if (record) found.records.push(record)
               else found.unresolved++
-            }, () => { found.unresolved++ }), { signal, limits: { maxTokenChars: limits.maxTokenChars } })
+            }, () => { found.unresolved++ }, { need: (bytes) => markerShare.need(bytes) })
+            await tokenizeBytes(openPart(src, drawing, partOpts(drawing.name, limits.paged.drawingPartEnvelopeBytes)), markerEvents, { signal, limits: { maxTokenChars: limits.maxTokenChars } })
           } catch (error) {
             if (isPackageError(error) && error.code === 'cancelled') throw error
             parsed = { records: [], unresolved: 1 }
+            if (isPackageError(error) && error.reason === 'memory-budget') workbook.diagnostics.push({ code: 'import-memory-budget', message: error.message, partId: drawing.name })
           } finally {
+            markerEvents?.dispose()
+            markerShare.release()
             ledger.drainQueue()
           }
           drawingParts.set(drawing.name, parsed)
