@@ -988,6 +988,16 @@ follow §4.3.5 (integer ids, chunked paged payloads, bounded decoded LRU); §4.3
 - **Short-lived shares** (`pool.charge()`, released on completion, failure and cancel): the builder's arrays, built pages waiting
   for their commit (including the formula metadata they own), pending shared-string chunks, and encode scratch for page, blob
   and string-chunk buffers. Each record is charged with `PageBuilder.costOf(text, meta)` before the builder keeps it.
+- **Streamed drawing marker fields:** a part-local share admits anchor/section/map holders, property slots and every
+  simultaneously retained field/name/attribute (48 B string header plus 2 B per UTF-16 unit). Concatenation admits both old
+  and replacement strings before appending; closed fields remain charged through the synchronous `anchorRecord`/`Number`
+  conversion. Consumer references are dropped before refund, and `finally` disposes the consumer before releasing its share.
+  If close interrupts a withheld input read, the charge stays until that reader returns; later needs refuse as cancelled.
+  These are conservative ownership estimates, not measured string representation or browser heap figures. A real 2,097,153-unit
+  leading-zero marker exposed the prior omission: it reached Number with 0 B transient construction ownership under supported
+  1 MiB provisional/bound pools. `xlsx-viewer-marker-construction.test.ts` now pins refusal there and live ownership under
+  roomy/default D/M pools. Drawing-only refusal adds `import-memory-budget` and unresolved structural coverage while A1 remains
+  readable; the separate lazy whole-part drawing path and profile envelopes are unchanged.
 - **Lasting entries** (non-evictable, `source` tier):
   - page summaries, one entry per sheet;
   - every buffer a RAM-backed (memory) page backend keeps (pages, shared-string chunks, blob records). The buffer is charged

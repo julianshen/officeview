@@ -15,14 +15,16 @@ const MiB = 1048576
 const giant = '0'.repeat(2 * MiB) + '1'
 const R = 'http://schemas.openxmlformats.org/officeDocument/2006/relationships'
 const part = 'xl/drawings/drawing1.xml'
-function fixture(col: string, sharedStrings?: string[]) {
-  const drawing = `<wsDr><oneCellAnchor><from><col>${col}</col><colOff>0</colOff><row>1</row><rowOff>0</rowOff></from><ext cx="609600" cy="476250"/></oneCellAnchor></wsDr>`
+function drawingFixture(drawing: string, sharedStrings?: string[], method?: number) {
   return buildZip(xlsxEntries({ sheetData: '<row r="1"><c r="A1"><v>1</v></c></row>', sharedStrings,
     afterSheetData: `<drawing xmlns:r="${R}" r:id="rD"/>`, extra: [
       { name: 'xl/worksheets/_rels/sheet1.xml.rels', data: `<Relationships><Relationship Id="rD" Type="${R}/drawing" Target="../drawings/drawing1.xml"/></Relationships>` },
-      { name: part, data: drawing },
+      { name: part, data: drawing, method },
     ],
-  })).bytes
+  }))
+}
+function fixture(col: string, sharedStrings?: string[]) {
+  return drawingFixture(`<wsDr><oneCellAnchor><from><col>${col}</col><colOff>0</colOff><row>1</row><rowOff>0</rowOff></from><ext cx="609600" cy="476250"/></oneCellAnchor></wsDr>`, sharedStrings).bytes
 }
 async function run(col: string, mode: 'provisional' | 'bound' | 'document' = 'provisional', profile: 'D' | 'M' = 'D', budget = MiB, sharedStrings?: string[]) {
   const bytes = fixture(col, sharedStrings)
@@ -58,7 +60,7 @@ async function run(col: string, mode: 'provisional' | 'bound' | 'document' = 'pr
     const cell = await sheet.readCell({ row: 0, col: 0 }, options)
     const structural = await sheet.queryStructural({ r0: 0, r1: 1048575, c0: 0, c1: 16383 }, options)
     expect(store.construction.transientBytes).toBe(0)
-    return { outcome, cell, structural, anchors: session.workbook.sheets[0].drawingAnchors, diagnostics: session.diagnostics, errors, conversions }
+    return { outcome, cell, structural, coverage: source.coverageDiagnostics?.('1'), anchors: session.workbook.sheets[0].drawingAnchors, diagnostics: session.diagnostics, errors, conversions }
   } finally {
     globalThis.Number = nativeNumber
     XmlTokenizer.prototype.write = write
@@ -87,6 +89,7 @@ describe('streamed drawing marker construction ownership', () => {
     expect(r.cell).toMatchObject({ kind: 'cell', cell: { value: 1 } })
     expect(r.structural.completeness).toBe('incomplete')
     expect(r.structural.missing.length).toBeGreaterThan(0)
+    expect(r.coverage).toEqual(expect.arrayContaining([expect.objectContaining({ code: 'coverage-unresolvable' })]))
     expect(r.anchors).toMatchObject({ records: [], unresolved: 1 })
     expect(r.diagnostics).toEqual(expect.arrayContaining([expect.objectContaining({ code: 'import-memory-budget' })]))
   })
@@ -119,6 +122,22 @@ function consumer(limit = Infinity, onAnchor: (name: string, parts: AnchorParts)
 }
 
 describe('marker pre-retention and lifecycle', () => {
+  it('consumer and anchor holder construction admits exact fit and refuses one-under before publication', () => {
+    expect(() => consumer(255)).toThrow(expect.objectContaining({ reason: 'memory-budget' }))
+    const oracle = consumer()
+    oracle.tokenizer.write('<wsDr><oneCellAnchor/>')
+    const peak = Math.max(...oracle.requests)
+    let calls = 0
+    const exact = consumer(peak, () => { calls++ })
+    exact.tokenizer.write('<wsDr><oneCellAnchor/></wsDr>')
+    expect(calls).toBe(1)
+    const refused = consumer(peak - 1, () => { calls++ })
+    refused.tokenizer.write('<wsDr>')
+    expect(() => refused.events.open('oneCellAnchor', [], [], 0, true)).toThrow(expect.objectContaining({ reason: 'memory-budget' }))
+    refused.tokenizer.write('</wsDr>')
+    expect(calls).toBe(1)
+    oracle.events.dispose(); exact.events.dispose(); refused.events.dispose()
+  })
   it('concat admits the old and replacement text together, and a one-under refusal retains only the old text', () => {
     const oracle = consumer()
     oracle.tokenizer.write(startField)
@@ -241,5 +260,63 @@ describe('marker pre-retention and lifecycle', () => {
     expect(() => events.text('late', true)).toThrow(expect.objectContaining({ code: 'cancelled' }))
     share.release()
     expect(store.construction.transientBytes).toBe(0)
+  })
+})
+
+
+describe('real drawing import teardown and metadata refusal', () => {
+  it('a roomy bound pool admits the giant with its ownership live through Number', async () => {
+    const r = await run(giant, 'bound', 'D', 16 * MiB)
+    expect(r.conversions).toHaveLength(2)
+    for (const c of r.conversions) expect(c.transient).toBeGreaterThan(2 * c.chars)
+    expect(r.anchors.records[0]).toMatchObject({ from: { col: 1 } })
+  })
+  it.each(['cancel', 'close'] as const)('%s during a real stored-ZIP drawing read keeps ownership until held input returns', async (mode) => {
+    const zip = drawingFixture(startField + giant + endField, undefined, 0)
+    const layout = zip.entries.at(-1)!
+    let release!: () => void, reached!: () => void
+    const gate = new Promise<void>((resolve) => { release = resolve })
+    const held = new Promise<void>((resolve) => { reached = resolve })
+    class GatedBlob extends Blob {
+      override slice(start?: number, end?: number, contentType?: string): Blob {
+        const slice = super.slice(start, end, contentType)
+        if (start === layout.dataStart + 262144) {
+          const read = slice.arrayBuffer.bind(slice)
+          slice.arrayBuffer = async () => { reached(); await gate; return read() }
+        }
+        return slice
+      }
+    }
+    const store = new SourcePageStore({ docId: mode, backend: memoryPageBackend(), memoryBudgetBytes: 16 * MiB })
+    const session = await openImportSession({ kind: 'blob', blob: new GatedBlob([zip.bytes as BlobPart]) }, { docId: mode, profile: 'D', store })
+    try {
+      await held
+      const before = store.construction.transientBytes
+      expect(before).toBeGreaterThan(400_000)
+      const cancelled = mode === 'cancel' ? session.cancel() : store.close()
+      if (mode === 'close') await cancelled
+      expect(store.construction.transientBytes).toBe(before)
+      release()
+      await cancelled
+      expect(await session.done).toEqual({ kind: 'cancelled' })
+      expect(store.construction.transientBytes).toBe(0)
+    } finally { release(); await session.release(); await session.release() }
+    expect(store.construction.persistentBytes).toBe(0)
+  })
+  it.each(['token', 'envelope', 'foreign'] as const)('real %s failure leaves FULL metadata incomplete and A1 readable', async (failure) => {
+    const xml = failure === 'foreign' ? '<foreign><oneCellAnchor/></foreign>' : startField + '0'.repeat(100_000) + (failure === 'token' ? '&bad' : endField)
+    const zip = drawingFixture(xml)
+    const store = new SourcePageStore({ docId: failure, backend: memoryPageBackend(), memoryBudgetBytes: 16 * MiB })
+    const session = await openImportSession({ kind: 'blob', blob: new Blob([zip.bytes as BlobPart]) }, { docId: failure, profile: 'D', store,
+      ...(failure === 'envelope' ? { limits: { paged: { drawingPartEnvelopeBytes: 80_000 } } } : {}),
+    })
+    try {
+      expect((await session.done).kind).toBe('complete')
+      const sheet = createPagedWorkbookSource(session).store('1'), opts = { signal: new AbortController().signal, stamp: sheet.stamp }
+      expect(await sheet.readCell({ row: 0, col: 0 }, opts)).toMatchObject({ kind: 'cell', cell: { value: 1 } })
+      expect(await sheet.queryStructural({ r0: 0, r1: 1048575, c0: 0, c1: 16383 }, opts)).toMatchObject({ completeness: 'incomplete' })
+      expect(session.workbook.sheets[0].drawingAnchors.unresolved).toBeGreaterThan(0)
+      expect(store.construction.transientBytes).toBe(0)
+    } finally { await session.release() }
   })
 })
