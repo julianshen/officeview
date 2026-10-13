@@ -11,13 +11,13 @@ import { MemoryValueRunStore, VALUE_RUN_PAGE, type ValueRunStore } from '../../x
 import { StructuralIndex } from '../../xlsx/view/structure'
 import type { MainMemoryLedger } from '../../xlsx/view/mainLedger'
 import type { RangeDetection, RangeDetectionRequest } from '../../xlsx/view/rangeDetection'
-import { DocumentSession, PREPARED_BUDGETS, type OperationOutcome, type WorkbookSource, sameStamp } from '../../worker/viewerSession'
+import { DocumentSession, type OperationOutcome, type WorkbookSource, sameStamp } from '../../worker/viewerSession'
 import { DisplayTextLaneCache, needsDisplayText } from '../../worker/displayTextLane'
 import { createControlsClient, type ControlSnapshot, type ControlsClient, type StagedControl, type ControlProgress, sameControlOwner } from './controlsClient'
 
 /** Document-owned committed keys survive port eviction. Both indexes and runs
  * share one bounded ledger; indexes are rebuildable, committed keys are not. */
-export interface ViewerControlResources { cache: ValueIndexCache; runs: ValueRunStore; dispose(): void; profile?: ProfileId }
+export interface ViewerControlResources { cache: ValueIndexCache; runs: ValueRunStore; dispose(): void }
 export function createViewerControlResources(profile: ProfileId = 'D', onUsage?: (bytes: number) => void): ViewerControlResources {
   const cache = new ValueIndexCache({ limitBytes: (profile === 'M' ? 8 : 16) * 1024 * 1024, ...(onUsage ? { onUsage } : {}) })
   const store = new MemoryValueRunStore({ limitBytes: 8 * 1024 * 1024, account: cache.reserve() })
@@ -34,7 +34,7 @@ export function createViewerControlResources(profile: ProfileId = 'D', onUsage?:
     read: (...args) => store.read(...args),
     async release(ref) { refs.delete(ref.refId); await store.release(ref) },
   }
-  return { cache, runs, profile, dispose() {
+  return { cache, runs, dispose() {
     closed = true
     cache.invalidate()
     for (const ref of refs.values()) void store.release(ref)
@@ -56,7 +56,7 @@ export interface ViewerControlsOptions {
   /** Resolved style of a style id when the document carries no cells (worker-backed sheets). */
   styleOf?: (index: number) => XlsxCell['style']
   /** Display-text lane cache (S13.5; tests, embedders). Default: one per port,
-   * bounded by the resources' profile prepared-column budget, closed on dispose. */
+   * charged to the controls caches' main-thread share, closed on dispose. */
   displayLanes?: DisplayTextLaneCache
   /** S10.2: the document's main-thread ledger (structural snapshots are charged while reachable). */
   ledger?: MainMemoryLedger
@@ -105,7 +105,16 @@ export async function viewerControls(options: ViewerControlsOptions, signal: Abo
     const value = page.numbers[index]
     return cellDisplayText(sheet, { value: tag === 3 ? Boolean(value) : value, style: styleAt(page.styles?.[index] ?? 0) })
   }
-  const lanes = options.displayLanes ?? new DisplayTextLaneCache({ limitBytes: PREPARED_BUDGETS[resources.profile ?? 'D'].maxBytes })
+  // The lane shares the controls caches' main-thread share (§12.4): its bytes
+  // are charged to the value-index cache's ledger (16 MiB D / 8 MiB M, with
+  // value indexes and committed key runs), which reports into the main
+  // ledger's 'controls' pool for exactly as long as the lane is retained. Idle
+  // indexes are shed first; then this cache evicts its own unleased lanes.
+  const laneAccount = options.displayLanes ? null : cache.reserve()
+  const lanes = options.displayLanes ?? new DisplayTextLaneCache({
+    limitBytes: cache.limitBytes,
+    budget: { reserve: bytes => laneAccount!.charge(bytes), release: bytes => laneAccount!.release(bytes) },
+  })
   // The style resolver is this port's style owner: lanes key by its identity.
   const styleOwner: object = options.styleOf ?? styles
   const pages = async (owner: CacheIdentity, range: FilterRange, col: number, abort: AbortSignal, accept: (page: ValueLanePage, firstRow: number) => Promise<void> | void) => {
@@ -260,7 +269,7 @@ export async function viewerControls(options: ViewerControlsOptions, signal: Abo
   return { client, dispose() {
     classifications.clear()
     if (options.displayLanes) lanes.invalidate(key => key.sheetId === sheetId)
-    else lanes.close()
+    else { lanes.close(); laneAccount?.close() }
     cache.invalidate(identity => identity.sheetId === sheetId)
     if (!options.resources) resources.dispose()
   } }
