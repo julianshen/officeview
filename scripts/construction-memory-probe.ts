@@ -11,7 +11,11 @@
  * not a Chrome heap measurement.
  */
 import { heapStats } from 'bun:jsc'
-import { PageBuilder, K_EMPTY, K_NUMBER, K_TEXT, summarize, type PageSummary } from '../src/xlsx/storage/sourcePages'
+import {
+  DECODED_CHUNK_OVERHEAD_BYTES, DECODED_PAGE_OVERHEAD_BYTES, PageBuilder, K_EMPTY, K_NUMBER, K_TEXT, decodePage, decodeStrings, encodePage, encodeStrings,
+  summarize, type PageSummary,
+} from '../src/xlsx/storage/sourcePages'
+import { MemoryPool } from '../src/xlsx/view/tileCache'
 import { PAGE_SUMMARY_BYTES, PENDING_STRING_BYTES } from '../src/xlsx/storage/constructionMemory'
 
 declare const Bun: { gc(force: boolean): void }
@@ -25,7 +29,8 @@ const live = (): number => {
 const flat = (s: string): string => { s.charCodeAt(s.length - 1); return s }
 
 interface Result { name: string; count: number; observed: number; model: number }
-type Case = (n: number) => { keep: unknown; model: number }
+/** `baseline`: a heap reading taken inside the case after setup that must not be counted. */
+type Case = (n: number) => { keep: unknown; model: number; baseline?: number }
 
 const CASES: Record<string, { sizes: number[]; run: Case }> = {
   'builder-numeric': {
@@ -61,6 +66,39 @@ const CASES: Record<string, { sizes: number[]; run: Case }> = {
       return { keep: list, model: n * PAGE_SUMMARY_BYTES }
     },
   },
+  // Decoded pages/chunks viewing buffers a memory backend already holds (the
+  // buffers are created before the measurement): the decoded objects, a
+  // resident-cache record and a pool entry each, as SourcePageStore keeps them.
+  'decoded-pages': {
+    sizes: [1000, 5000],
+    run: (n) => {
+      const b = new PageBuilder()
+      b.add(0, 0, K_NUMBER, 0, 1, '', true, undefined)
+      const held = Array.from({ length: n }, () => encodePage(b.build()))
+      const before = live()
+      const pool = new MemoryPool({ limitBytes: 1 << 30 })
+      const resident = new Map<string, { value: unknown; bytes: number; entry: unknown }>()
+      held.forEach((bytes, i) => {
+        const key = flat(`page/1/p${i}`)
+        resident.set(key, { value: decodePage(bytes), bytes: DECODED_PAGE_OVERHEAD_BYTES, entry: pool.retain(key, { tier: 'source', bytes: DECODED_PAGE_OVERHEAD_BYTES }) })
+      })
+      return { keep: [held, resident, pool], model: n * DECODED_PAGE_OVERHEAD_BYTES, baseline: before }
+    },
+  },
+  'decoded-chunks': {
+    sizes: [1000, 5000],
+    run: (n) => {
+      const held = Array.from({ length: n }, (_, i) => encodeStrings([flat(`v${i}`)]))
+      const before = live()
+      const pool = new MemoryPool({ limitBytes: 1 << 30 })
+      const resident = new Map<string, { value: unknown; bytes: number; entry: unknown }>()
+      held.forEach((bytes, i) => {
+        const key = flat(`blob/${i}`)
+        resident.set(key, { value: decodeStrings(bytes), bytes: DECODED_CHUNK_OVERHEAD_BYTES, entry: pool.retain(key, { tier: 'source', bytes: DECODED_CHUNK_OVERHEAD_BYTES }) })
+      })
+      return { keep: [held, resident, pool], model: n * DECODED_CHUNK_OVERHEAD_BYTES, baseline: before }
+    },
+  },
   'pending-strings': {
     sizes: [65_537, 100_000],
     run: (n) => {
@@ -86,9 +124,9 @@ for (const [name, { sizes, run }] of Object.entries(CASES)) {
     // Warm the code path so JIT/compiler allocations are not attributed.
     sink.push(run(Math.min(count, 2048)).keep)
     sink.length = 0
-    const before = live()
-    const { keep, model } = run(count)
-    const observed = live() - before
+    const start = live()
+    const { keep, model, baseline } = run(count)
+    const observed = live() - (baseline ?? start)
     sink.push(keep)
     results.push({ name, count, observed, model })
     sink.length = 0

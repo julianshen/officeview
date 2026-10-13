@@ -65,8 +65,6 @@ export interface CellPagePayload {
   textStart: Uint32Array
   /** Record index -> formula metadata, only for records with F_META. */
   meta: ReadonlyMap<number, FormulaMeta>
-  /** Length of JSON.stringify([...meta]) (0 without meta), known without building it. */
-  metaJsonLength?: number
 }
 export interface PageSummary {
   sheetId: string
@@ -209,7 +207,7 @@ export class PageBuilder {
     return {
       rows: Uint32Array.from(this.rows), cols: Uint16Array.from(this.cols), kinds: Uint8Array.from(this.kinds),
       flags: Uint8Array.from(this.flags), styles: Uint32Array.from(this.styles), nums: Float64Array.from(this.nums),
-      text, textStart, meta: this.meta, metaJsonLength: this.meta.size ? 2 + this.metaChars + (this.meta.size - 1) : 0,
+      text, textStart, meta: this.meta,
     }
   }
 }
@@ -244,13 +242,14 @@ function encodedSize(n: number, units: number, metaLength: number): number {
  * the buffer is allocated, so the caller can charge or refuse them first. */
 export function encodePage(p: CellPagePayload, reserve?: (scratchBytes: number) => void): Uint8Array {
   const n = p.rows.length
-  // Both the buffer and the meta JSON are sized and charged before either is allocated.
-  const metaLength = p.metaJsonLength ?? metaArrayLength(p.meta)
+  // Both the buffer and the meta JSON are sized and charged before either is
+  // allocated, from the metadata as it is now (FormulaMeta objects are mutable,
+  // so a cached length could be stale).
+  const metaLength = metaArrayLength(p.meta)
   const scratch = (length: number) => 32 + [8 * n, 4 * n, 4 * n, 4 * (n + 1), 2 * n, 2 * p.text.length, n, n, 2 * length].reduce((sum, s) => sum + align8(s), 0) + 2 * length
   reserve?.(scratch(metaLength))
   const metaJson = p.meta.size ? JSON.stringify([...p.meta]) : ''
-  // A payload whose recorded length disagrees is charged again at the real size.
-  if (metaJson.length !== metaLength) reserve?.(scratch(metaJson.length))
+  if (metaJson.length !== metaLength) throw new PackageError('parse-error', 'formula metadata changed while its page was encoded')
   const sizes = [8 * n, 4 * n, 4 * n, 4 * (n + 1), 2 * n, 2 * p.text.length, n, n, 2 * metaJson.length]
   const total = 32 + sizes.reduce((sum, s) => sum + align8(s), 0)
   const buffer = new ArrayBuffer(total)
@@ -304,7 +303,7 @@ export function decodePage(bytes: Uint8Array): CellPagePayload {
     for (let k = 0; k < metaLength; k += 8192) json += String.fromCharCode(...metaUnits.subarray(k, Math.min(metaLength, k + 8192)))
     meta = new Map(JSON.parse(json) as [number, FormulaMeta][])
   }
-  return { rows, cols, kinds, flags, styles, nums, text, textStart, meta, metaJsonLength: metaLength }
+  return { rows, cols, kinds, flags, styles, nums, text, textStart, meta }
 }
 
 /** Shared strings: a chunk is a text lane plus offsets. */
@@ -348,8 +347,9 @@ export interface PageBackend {
   /** Removes every stored page of this backend's owner. Idempotent. */
   /** Removes one record (a failed page's blob records). Idempotent: a missing key is not an error. */
   delete(key: string): Promise<void>
-  /** Keys this owner currently holds, at most `max` (the orphan sweep). Optional for test fakes. */
-  list?(max: number): Promise<string[]>
+  /** Keys this owner holds, examining at most `max` entries of the underlying
+   * store (not `max` matches), stopping early when `signal` aborts. Optional for test fakes. */
+  list?(max: number, signal?: AbortSignal): Promise<string[]>
   removeAll(): Promise<void>
 }
 
@@ -371,7 +371,14 @@ export function memoryPageBackend(): PageBackend & { readonly size: number; read
     async put(key, bytes) { pages.set(key, bytes) },
     async get(key) { return pages.get(key) },
     async delete(key) { pages.delete(key) },
-    async list(max) { return [...pages.keys()].slice(0, max) },
+    async list(max, signal) {
+      const out: string[] = []
+      for (const key of pages.keys()) {
+        if (out.length >= max || signal?.aborted) break
+        out.push(key)
+      }
+      return out
+    },
     async removeAll() { pages.clear() },
   }
 }
@@ -388,8 +395,6 @@ interface OpfsFile {
 export const PAGE_PREFIX = 'officeview-pages-'
 const escapeName = (text: string): string => text.replace(/[^A-Za-z0-9.]/g, (c) => `_${c.charCodeAt(0).toString(16).padStart(4, '0')}`)
 const unescapeName = (text: string): string => text.replace(/_([0-9a-f]{4})/g, (_, hex: string) => String.fromCharCode(parseInt(hex, 16)))
-/** Owners whose backend this process opened and has not removed: the sweep never touches them. */
-const liveOwners = new Set<string>()
 /** One flat file per page, named `${PAGE_PREFIX}${owner}-${key}` so removeAll can find them. */
 export function opfsPageBackend(dir: OpfsDir, owner: string): PageBackend {
   // Injective names: every character outside [A-Za-z0-9.] becomes _hhhh (its
@@ -397,7 +402,6 @@ export function opfsPageBackend(dir: OpfsDir, owner: string): PageBackend {
   // owner contains no '-', so one owner's prefix never matches another's files.
   const prefix = `${PAGE_PREFIX}${escapeName(owner)}-`
   const written = new Set<string>()
-  liveOwners.add(owner)
   const fileName = (key: string) => `${prefix}${escapeName(key)}`
   return {
     kind: 'opfs',
@@ -434,18 +438,18 @@ export function opfsPageBackend(dir: OpfsDir, owner: string): PageBackend {
       }
       written.delete(name)
     },
-    async list(max) {
+    async list(max, signal) {
       const out: string[] = []
-      if (dir.keys) {
-        for await (const name of dir.keys()) {
-          if (out.length >= max) break
-          if (name.startsWith(prefix)) out.push(unescapeName(name.slice(prefix.length)))
-        }
-      } else for (const name of written) if (out.length < max) out.push(unescapeName(name.slice(prefix.length)))
+      let examined = 0
+      // The OPFS root is shared with other owners and the spool: every entry examined counts.
+      const names = dir.keys ? dir.keys() : (async function* () { yield* written })()
+      for await (const name of names) {
+        if (++examined > max || signal?.aborted) break
+        if (name.startsWith(prefix)) out.push(unescapeName(name.slice(prefix.length)))
+      }
       return out
     },
     async removeAll() {
-      liveOwners.delete(owner)
       const names = new Set(written)
       if (dir.keys) for await (const name of dir.keys()) if (name.startsWith(prefix)) names.add(name)
       for (const name of names) {
@@ -462,7 +466,6 @@ const PAGE_STORE = 'pages'
 /** One database per owner; each put is its own transaction, awaited to completion. */
 export function indexedDbPageBackend(factory: IDBFactory, owner: string): PageBackend {
   const name = `${PAGE_PREFIX}${owner}`
-  liveOwners.add(owner)
   let db: Promise<IDBDatabase> | undefined
   const open = () => db ??= new Promise<IDBDatabase>((resolve, reject) => {
     const req = factory.open(name, 1)
@@ -534,7 +537,6 @@ export function indexedDbPageBackend(factory: IDBFactory, owner: string): PageBa
       }
     },
     async removeAll() {
-      liveOwners.delete(owner)
       if (db) {
         try { (await db).close() } catch { /* never opened */ }
         db = undefined
@@ -552,13 +554,59 @@ export function indexedDbPageBackend(factory: IDBFactory, owner: string): PageBa
 export const PAGE_OWNER_MAX_AGE_MS = 24 * 3600_000
 /** Entries a sweep examines per backend at most (bounded work at session start). */
 export const SWEEP_MAX_ENTRIES = 4096
-/** A page-storage owner: `${docId}-${creation time in base 36}`; the sweep reads the age back. */
-export function pageOwner(docId: string, now = Date.now()): string { return `${docId}-${now.toString(36)}` }
+/** A page-storage owner: `${docId}-${creation time in base 36}.${64 random bits in hex}`.
+ * The random part makes owners collision-resistant (two opens of one docId in
+ * the same millisecond never share storage); the sweep reads the age back. */
+export function pageOwner(docId: string, now = Date.now(), random: () => Uint8Array = () => crypto.getRandomValues(new Uint8Array(8))): string {
+  const hex = [...random()].map((b) => b.toString(16).padStart(2, '0')).join('')
+  return `${docId}-${now.toString(36)}.${hex}`
+}
 function ownerCreated(owner: string): number | undefined {
-  const at = owner.lastIndexOf('-')
-  if (at < 0 || !/^[0-9a-z]+$/.test(owner.slice(at + 1))) return undefined
-  const created = parseInt(owner.slice(at + 1), 36)
+  const match = /-([0-9a-z]+)\.[0-9a-f]{16}$/.exec(owner)
+  if (!match) return undefined
+  const created = parseInt(match[1], 36)
   return Number.isSafeInteger(created) ? created : undefined
+}
+/** The Web Locks name an owner is held under for its whole lifetime. */
+export const ownerLockName = (owner: string): string => `${PAGE_PREFIX}lock-${owner}`
+
+/** The subset of the Web Locks API (navigator.locks) used here; origin-wide, so shared by every tab and worker. */
+export interface LockManagerLike {
+  request<T>(name: string, options: { mode?: 'exclusive' | 'shared'; ifAvailable?: boolean }, callback: (lock: unknown) => Promise<T> | T): Promise<T>
+}
+/**
+ * Cross-realm owner exclusion. An owner's lock is held from before its first
+ * write until its storage is removed; the sweep deletes another owner's
+ * storage only while it holds that owner's lock itself (ifAvailable), which a
+ * live tab or worker never lets it have.
+ */
+export interface OwnerLocks {
+  /** Acquires the owner's exclusive lock (refusing if anyone holds it); resolves with its release. */
+  hold(owner: string): Promise<() => void>
+  /** Runs `fn` holding the owner's lock if nobody else holds it; false (fn not run) otherwise. */
+  tryWith(owner: string, fn: () => Promise<void>): Promise<boolean>
+}
+export function ownerLocks(manager: LockManagerLike): OwnerLocks {
+  return {
+    hold(owner) {
+      return new Promise((resolve, reject) => {
+        let release!: () => void
+        const held = new Promise<void>((r) => { release = r })
+        manager.request(ownerLockName(owner), { mode: 'exclusive', ifAvailable: true }, async (lock) => {
+          if (!lock) { reject(new PackageError('storage-error', `page storage owner ${owner} is already in use`)); return }
+          resolve(release)
+          await held
+        }).catch(reject)
+      })
+    },
+    tryWith(owner, fn) {
+      return manager.request(ownerLockName(owner), { mode: 'exclusive', ifAvailable: true }, async (lock) => {
+        if (!lock) return false
+        await fn()
+        return true
+      })
+    },
+  }
 }
 /**
  * Removes page storage left by crashed or killed sessions: OPFS files and
@@ -571,8 +619,11 @@ export async function sweepLeftoverPages(env: PageStorageEnv, options: { now?: n
   const now = options.now ?? Date.now()
   const maxAge = options.maxAgeMs ?? PAGE_OWNER_MAX_AGE_MS
   const maxEntries = options.maxEntries ?? SWEEP_MAX_ENTRIES
-  const stale = (owner: string) => {
-    if (liveOwners.has(owner)) return false
+  // Without Web Locks no owner can be proven dead: other owners are never swept.
+  const locks = env.locks
+  if (!locks) return 0
+  // Age is an extra guard; the lock is the proof that no tab or worker holds the owner.
+  const old = (owner: string) => {
     const created = ownerCreated(owner)
     return created !== undefined && created <= now && now - created > maxAge
   }
@@ -581,18 +632,28 @@ export async function sweepLeftoverPages(env: PageStorageEnv, options: { now?: n
     try {
       const dir = await env.opfs()
       if (dir.keys) {
-        const names: string[] = []
+        const byOwner = new Map<string, string[]>()
         let seen = 0
         for await (const name of dir.keys()) {
           if (++seen > maxEntries || options.signal?.aborted) break
           if (!name.startsWith(PAGE_PREFIX)) continue
           const rest = name.slice(PAGE_PREFIX.length)
           const dash = rest.indexOf('-')
-          if (dash > 0 && stale(unescapeName(rest.slice(0, dash)))) names.push(name)
+          if (dash <= 0) continue
+          const owner = unescapeName(rest.slice(0, dash))
+          if (!old(owner)) continue
+          let names = byOwner.get(owner)
+          if (!names) byOwner.set(owner, names = [])
+          names.push(name)
         }
-        for (const name of names) {
+        for (const [owner, names] of byOwner) {
           if (options.signal?.aborted) break
-          try { await dir.removeEntry(name); removed++ } catch { /* in use or already gone */ }
+          await locks.tryWith(owner, async () => {
+            for (const name of names) {
+              if (options.signal?.aborted) break
+              try { await dir.removeEntry(name); removed++ } catch { /* already gone */ }
+            }
+          }).catch(() => false)
         }
       }
     } catch { /* no OPFS this time */ }
@@ -603,17 +664,18 @@ export async function sweepLeftoverPages(env: PageStorageEnv, options: { now?: n
       const dbs = (await factory.databases()).slice(0, maxEntries)
       for (const { name } of dbs) {
         if (options.signal?.aborted) break
-        if (!name?.startsWith(PAGE_PREFIX) || !stale(name.slice(PAGE_PREFIX.length))) continue
-        try {
+        if (!name?.startsWith(PAGE_PREFIX) || name.startsWith(`${PAGE_PREFIX}lock-`)) continue
+        const owner = name.slice(PAGE_PREFIX.length)
+        if (!old(owner)) continue
+        await locks.tryWith(owner, async () => {
           await new Promise<void>((resolve, reject) => {
             const req = factory.deleteDatabase(name)
-            req.onsuccess = () => resolve()
+            req.onsuccess = () => { removed++; resolve() }
             req.onerror = () => reject(req.error)
             // Still open somewhere: never wait on it; the next sweep retries.
             req.onblocked = () => reject(new DOMException('blocked', 'InvalidStateError'))
           })
-          removed++
-        } catch { /* blocked: left for the next sweep */ }
+        }).catch(() => false)
       }
     } catch { /* databases() unavailable */ }
   }
@@ -624,6 +686,8 @@ export interface PageStorageEnv {
   opfs?: () => Promise<OpfsDir>
   indexedDb?: IDBFactory
   estimate?(): Promise<{ quota: number; usage: number }>
+  /** Web Locks (navigator.locks); without them no other owner is ever swept. */
+  locks?: OwnerLocks
 }
 /** Run-time probe; nothing is assumed about a browser. */
 export function browserPageStorageEnv(): PageStorageEnv {
@@ -634,6 +698,8 @@ export function browserPageStorageEnv(): PageStorageEnv {
     env.opfs = () => storage.getDirectory() as unknown as Promise<OpfsDir>
   }
   if (typeof indexedDB !== 'undefined') env.indexedDb = indexedDB
+  const locks = (nav as (Navigator & { locks?: LockManagerLike }) | undefined)?.locks
+  if (locks && typeof locks.request === 'function') env.locks = ownerLocks(locks)
   if (storage && typeof storage.estimate === 'function') {
     env.estimate = async () => {
       const e = await storage.estimate()
@@ -677,6 +743,10 @@ export interface SourcePageStoreOptions {
   cacheBytes?: number
   /** Provisional construction budget until the document pool is bound (default: the desktop worker budget). */
   memoryBudgetBytes?: number
+  /** Release of the owner's Web Lock, held by the caller for this store's lifetime
+   * (released after the store's storage is removed). Required for an
+   * OPFS/IndexedDB store to sweep within its owner. */
+  ownerLock?: () => void
 }
 export interface PageStoreStats {
   committed: number
@@ -693,6 +763,17 @@ export interface PageStoreStats {
 }
 interface Resident<T> { value: T; bytes: number; entry?: PoolEntry }
 interface WrittenBlob { key: string; record: number; ordinal: number; bytes: number; counted: boolean; reservation: Reservation | undefined; ram: () => void }
+/** `/` and `%` escaped, so a segment never contains a raw separator (injective for any code units). */
+const keySegment = (text: string): string => text.replace(/[%/]/g, (c) => (c === '%' ? '%25' : '%2F'))
+const unkeySegment = (text: string): string => text.replace(/%2F|%25/g, (c) => (c === '%2F' ? '/' : '%'))
+/** Record keys live in disjoint namespaces: `page/<sheet>/<page>`, `blob/<id>`, `sst/<chunk>`.
+ * Any sheet or page id (e.g. a sheet called "sst" or "blob") maps to its own key. */
+export const pageRecordKey = (sheetId: string, pageId: string): string => `page/${keySegment(sheetId)}/${keySegment(pageId)}`
+/** Decoded-object overhead of one cached page/chunk (payload object, typed-array views,
+ * meta Map, resident record, pool entry), charged even when its backing is shared.
+ * Pinned by scripts/construction-memory-probe.ts ('decoded-pages'). */
+export const DECODED_PAGE_OVERHEAD_BYTES = 2048
+export const DECODED_CHUNK_OVERHEAD_BYTES = 1280
 /** Persistent pool entry for the records a RAM-backed (memory) backend retains. */
 const RAM_KEY = 'memory-backend'
 
@@ -700,7 +781,7 @@ const RAM_KEY = 'memory-backend'
 const laneBytes = (p: CellPagePayload): number =>
   p.nums.byteLength + p.rows.byteLength + p.styles.byteLength + p.textStart.byteLength + p.cols.byteLength + p.text.byteLength + p.kinds.byteLength + p.flags.byteLength
 /** Formula metadata a payload owns: per object plus 2 B per JSON character (at least its strings). */
-const metaBytes = (p: CellPagePayload): number => p.meta.size * META_OBJECT_BYTES + 2 * (p.metaJsonLength ?? metaArrayLength(p.meta))
+const metaBytes = (p: CellPagePayload): number => p.meta.size * META_OBJECT_BYTES + 2 * metaArrayLength(p.meta)
 /** Heap held by a payload: its typed lanes and its formula metadata. */
 export const payloadBytes = (p: CellPagePayload): number => laneBytes(p) + metaBytes(p)
 
@@ -730,6 +811,7 @@ export class SourcePageStore implements PageSink {
   private readonly committing = new Set<string>()
   private closed = false
   private abandoned = false
+  private ownerLock: (() => void) | undefined
   private readonly counters: PageStoreStats = { committed: 0, storedBytes: 0, loads: 0, hits: 0, coalesced: 0, evictions: 0, residentBytes: 0, peakResidentBytes: 0, blobs: 0, blobBytes: 0 }
 
   constructor(options: SourcePageStoreOptions) {
@@ -737,6 +819,7 @@ export class SourcePageStore implements PageSink {
     this.backend = options.backend
     this.chargedTo = options.ledger
     this.cacheBytes = options.cacheBytes ?? 32 * 1024 * 1024
+    this.ownerLock = options.ownerLock
     this.construction = new ConstructionMemory(new MemoryPool({ limitBytes: options.memoryBudgetBytes ?? WORKER_BUDGETS.D }), options.docId)
   }
   get backendKind(): PageBackendKind { return this.backend.kind }
@@ -807,7 +890,7 @@ export class SourcePageStore implements PageSink {
     this.construction.persist(indexKey, (list.length + 1) * PAGE_SUMMARY_BYTES, 'the page index')
     const scratch = this.construction.share('page encoding')
     const written: WrittenBlob[] = []
-    const pageKey = `${page.sheetId}/${page.pageId}`
+    const pageKey = pageRecordKey(page.sheetId, page.pageId)
     let pageCharge: Reservation | undefined
     let pageRam: () => void = () => {}
     let pageWritten = false
@@ -943,30 +1026,39 @@ export class SourcePageStore implements PageSink {
   /** Whether `key` belongs to this store's committed index or to a write in flight. */
   private referenced(key: string): boolean {
     if (this.inFlight.has(key)) return true
-    const slash = key.indexOf('/')
-    if (slash < 0) return false
-    const head = key.slice(0, slash), tail = key.slice(slash + 1)
-    if (head === 'blob' || head === 'sst') {
-      if (!/^(0|[1-9][0-9]*)$/.test(tail)) return false
-      const n = Number(tail)
-      return head === 'sst' ? this.committedChunks.has(n) : n < this.blobCount && !this.discardedBlobs.has(n)
+    const parts = key.split('/')
+    if (parts.length === 3 && parts[0] === 'page') {
+      const sheetId = unkeySegment(parts[1]), pageId = unkeySegment(parts[2])
+      return pageRecordKey(sheetId, pageId) === key && (this.index.get(sheetId) ?? []).some((summary) => summary.pageId === pageId)
     }
-    return (this.index.get(head) ?? []).some((summary) => summary.pageId === tail)
+    if (parts.length === 2 && (parts[0] === 'blob' || parts[0] === 'sst') && /^(0|[1-9][0-9]*)$/.test(parts[1])) {
+      const n = Number(parts[1])
+      return parts[0] === 'sst' ? this.committedChunks.has(n) : n < this.blobCount && !this.discardedBlobs.has(n)
+    }
+    return false
   }
   /**
    * Store-open orphan sweep: deletes records this owner holds that the
-   * committed index does not reference, e.g. a blob written by a session that
-   * crashed before its page landed. Bounded (SWEEP_MAX_ENTRIES keys), cancellable
-   * between deletions, best effort; the key listing is a transient charge and
-   * nothing it removes was charged to this store, so it leaves no charge behind.
+   * committed index does not reference. Only within an owner this store
+   * exclusively holds: its Web Lock for OPFS/IndexedDB, or a memory backend
+   * (private to this realm); otherwise another writer could share the owner.
+   * Bounded (SWEEP_MAX_ENTRIES examined), cancellable, best effort: a listing
+   * failure skips the sweep (`skipped`), never failing the import. The listing
+   * is a transient charge and nothing removed was charged, so no charge remains.
    */
-  async sweepUnreferenced(signal?: AbortSignal): Promise<number> {
-    if (!this.backend.list || !this.live) return 0
+  async sweepUnreferenced(signal?: AbortSignal): Promise<{ removed: number; skipped?: string }> {
+    if (!this.backend.list || !this.live) return { removed: 0 }
+    if (this.backend.kind !== 'memory' && !this.ownerLock) return { removed: 0, skipped: 'the store does not hold its owner lock' }
     const share = this.construction.share('orphan sweep listing')
     let removed = 0
     try {
-      try { share.need(SWEEP_MAX_ENTRIES * 128) } catch { return 0 }
-      const keys = await this.backend.list(SWEEP_MAX_ENTRIES)
+      try { share.need(SWEEP_MAX_ENTRIES * 128) } catch { return { removed: 0, skipped: 'no memory for the listing' } }
+      let keys: string[]
+      try {
+        keys = await this.backend.list(SWEEP_MAX_ENTRIES, signal)
+      } catch (error) {
+        return { removed: 0, skipped: `listing failed: ${error instanceof Error ? error.message : String(error)}` }
+      }
       for (const key of keys) {
         if (signal?.aborted || !this.live) break
         if (this.referenced(key)) continue
@@ -975,7 +1067,7 @@ export class SourcePageStore implements PageSink {
     } finally {
       share.release()
     }
-    return removed
+    return { removed }
   }
 
   async abandon(docId: string): Promise<void> {
@@ -996,7 +1088,14 @@ export class SourcePageStore implements PageSink {
     this.loading.clear()
     this.index.clear()
     this.counters.residentBytes = 0
-    await this.backend.removeAll()
+    try {
+      await this.backend.removeAll()
+    } finally {
+      // Only now may a sweep in another realm take the owner (its storage is gone).
+      const release = this.ownerLock
+      this.ownerLock = undefined
+      release?.()
+    }
   }
 
   pages(sheetId: string): readonly PageSummary[] { return this.index.get(sheetId) ?? [] }
@@ -1076,19 +1175,19 @@ export class SourcePageStore implements PageSink {
     try { return await promise } finally { this.loading.delete(key) }
   }
   page(sheetId: string, pageId: string): Promise<CellPagePayload> {
-    return this.load(`${sheetId}/${pageId}`, decodePage, (p, shared) => shared ? metaBytes(p) : payloadBytes(p))
+    return this.load(pageRecordKey(sheetId, pageId), decodePage, (p, shared) => DECODED_PAGE_OVERHEAD_BYTES + (shared ? metaBytes(p) : payloadBytes(p)))
   }
   /** An oversized value by blob id, through the same bounded decoded cache as pages. */
   async blob(id: number): Promise<string> {
     if (!Number.isSafeInteger(id) || id < 0 || id >= this.blobCount) throw new PackageError('storage-error', `oversized cell value ${id} is not stored`)
-    const record = await this.load(`blob/${id}`, decodeStrings, (c, shared) => shared ? 0 : c.text.byteLength + c.textStart.byteLength)
+    const record = await this.load(`blob/${id}`, decodeStrings, (c, shared) => DECODED_CHUNK_OVERHEAD_BYTES + (shared ? 0 : c.text.byteLength + c.textStart.byteLength))
     if (record.textStart.length !== 2) throw new PackageError('parse-error', `oversized cell value ${id} is malformed`)
     return textAt(record, 0)
   }
   async sharedString(id: number): Promise<string | undefined> {
     if (!Number.isSafeInteger(id) || id < 0 || id >= this.stringCount || this.stringChunkSize === 0) return undefined
     const chunk = Math.floor(id / this.stringChunkSize)
-    const strings = await this.load(`sst/${chunk}`, decodeStrings, (c, shared) => shared ? 0 : c.text.byteLength + c.textStart.byteLength)
+    const strings = await this.load(`sst/${chunk}`, decodeStrings, (c, shared) => DECODED_CHUNK_OVERHEAD_BYTES + (shared ? 0 : c.text.byteLength + c.textStart.byteLength))
     return textAt(strings, id - chunk * this.stringChunkSize)
   }
 }

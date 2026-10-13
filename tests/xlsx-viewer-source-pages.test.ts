@@ -6,7 +6,7 @@
  */
 import { describe, expect, it } from 'vitest'
 import {
-  K_BOOL, K_EMPTY, K_ERROR, K_NUMBER, K_SST, K_TEXT, PageBuilder, SourcePageStore, choosePageBackend, decodePage, encodePage,
+  DECODED_PAGE_OVERHEAD_BYTES, K_BOOL, K_EMPTY, K_ERROR, K_NUMBER, K_SST, K_TEXT, PageBuilder, SourcePageStore, choosePageBackend, decodePage, encodePage,
   indexedDbPageBackend, memoryPageBackend, opfsPageBackend, textAt, type PageBackend,
 } from '../src/xlsx/storage/sourcePages'
 import { createQuotaLedger, quotaLimitsFor } from '../src/xlsx/storage/quota'
@@ -149,13 +149,15 @@ describe('SourcePageStore as the import PageSink', () => {
     const store = new SourcePageStore({ docId: 'd', backend: opfsPageBackend(fakeOpfsDirectory(), 'd') })
     for (let i = 0; i < 4; i++) await store.commit(imported(`p${i}`, i * 10, i * 10 + 9))
     const index = store.construction.persistentBytes
-    const pool = new MemoryPool({ limitBytes: index + 120, highWatermark: 1, lowWatermark: 1 })
+    // Room for about two decoded pages (each charges its object overhead plus its lanes).
+    const room = 2 * DECODED_PAGE_OVERHEAD_BYTES + 400
+    const pool = new MemoryPool({ limitBytes: index + room, highWatermark: 1, lowWatermark: 1 })
     store.bindMemory(pool)
     const [a, b] = await Promise.all([store.page('1', 'p0'), store.page('1', 'p0')])
     expect(a).toBe(b)
     expect(store.stats).toMatchObject({ loads: 1, coalesced: 1 })
     for (let i = 1; i < 4; i++) await store.page('1', `p${i}`)
-    expect(pool.stats().byTier.source - index).toBeLessThanOrEqual(120)
+    expect(pool.stats().byTier.source - index).toBeLessThanOrEqual(room)
     expect(store.stats.evictions).toBeGreaterThan(0)
     const again = await store.page('1', 'p0')
     expect([...again.rows]).toEqual([...a.rows])

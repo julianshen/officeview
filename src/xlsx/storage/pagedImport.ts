@@ -176,13 +176,22 @@ export async function openImportSession(source: Extract<SourceHandle, { kind: 'b
     swept = true
     void sweepLeftoverPages(storageEnv).catch(() => {})
   }
-  const store = options.store ?? new SourcePageStore({
-    docId: options.docId,
-    backend: await choosePageBackend(storageEnv, pageOwner(options.docId), source.blob.size * STORED_PER_COMPRESSED_BYTE, limits.spool.memoryLimitBytes),
-    ledger,
-    // Construction is charged against the profile's worker budget until the viewer binds the document pool.
-    memoryBudgetBytes: WORKER_BUDGETS[options.profile],
-  })
+  let store = options.store
+  if (!store) {
+    const owner = pageOwner(options.docId)
+    const backend = await choosePageBackend(storageEnv, owner, source.blob.size * STORED_PER_COMPRESSED_BYTE, limits.spool.memoryLimitBytes)
+    // Browser storage is shared by every tab and worker: hold the owner's Web Lock
+    // for the store's lifetime so no other realm's sweep can take it.
+    const ownerLock = backend.kind !== 'memory' && storageEnv.locks ? await storageEnv.locks.hold(owner) : undefined
+    store = new SourcePageStore({
+      docId: options.docId,
+      backend,
+      ledger,
+      // Construction is charged against the profile's worker budget until the viewer binds the document pool.
+      memoryBudgetBytes: WORKER_BUDGETS[options.profile],
+      ownerLock,
+    })
+  }
   let notify: () => void = () => {}
   let changedPromise = new Promise<void>((resolve) => { notify = resolve })
   const pulse = () => { const fire = notify; changedPromise = new Promise<void>((resolve) => { notify = resolve }); fire() }
@@ -225,7 +234,12 @@ export async function openImportSession(source: Extract<SourceHandle, { kind: 'b
   const run = async (): Promise<ImportOutcome> => {
     // Store open: records this owner holds but its index does not reference
     // (left by a crashed session that reused the owner) are removed first.
-    await store.sweepUnreferenced(signal)
+    const sweep = await store.sweepUnreferenced(signal)
+    // Best-effort janitor: a failed sweep is a diagnostic, never an import failure.
+    // (A store without its owner lock skips by design and reports nothing.)
+    if (sweep.skipped && !sweep.skipped.startsWith('the store does not hold')) {
+      workbook.diagnostics.push({ code: 'storage-cleanup-skipped', message: `Leftover page records were not cleaned up: ${sweep.skipped}` })
+    }
     // Shared strings, chunked into the store.
     let sstCount = 0
     if (sstPath) {

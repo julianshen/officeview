@@ -233,3 +233,23 @@ export function fakeOpfsDirectory(options: { failOnWrite?: { at: number; error: 
     },
   }
 }
+
+/**
+ * An origin-wide Web Locks double (navigator.locks): one instance is shared by
+ * every simulated realm (tab/worker), exactly like the browser's lock manager.
+ * Exclusive locks with ifAvailable only, which is all the page store uses.
+ */
+export function fakeLockManager() {
+  const held = new Set<string>()
+  return {
+    held,
+    async request<T>(name: string, options: { mode?: 'exclusive' | 'shared'; ifAvailable?: boolean }, callback: (lock: unknown) => Promise<T> | T): Promise<T> {
+      if (held.has(name)) {
+        if (options.ifAvailable) return callback(null)
+        throw new Error('fakeLockManager only supports ifAvailable for contended locks')
+      }
+      held.add(name)
+      try { return await callback({ name, mode: options.mode ?? 'exclusive' }) } finally { held.delete(name) }
+    },
+  }
+}

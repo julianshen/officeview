@@ -7,9 +7,9 @@
  */
 import { describe, expect, it } from 'vitest'
 import {
-  F_BLOB, K_NUMBER, K_TEXT, PageBuilder, SourcePageStore, encodePage, indexedDbPageBackend, memoryPageBackend, opfsPageBackend, pageOwner, sweepLeftoverPages, type PageBackend,
+  F_BLOB, K_NUMBER, K_TEXT, PageBuilder, SourcePageStore, encodePage, indexedDbPageBackend, memoryPageBackend, opfsPageBackend, ownerLocks, pageOwner, sweepLeftoverPages, type PageBackend,
 } from '../src/xlsx/storage/sourcePages'
-import { fakeIndexedDb, fakeOpfsDirectory } from './helpers/fake-storage'
+import { fakeIndexedDb, fakeLockManager, fakeOpfsDirectory } from './helpers/fake-storage'
 import { openImportSession } from '../src/xlsx/storage/pagedImport'
 import { importLimitsFor } from '../src/xlsx/storage/importSession'
 import { createQuotaLedger, quotaLimitsFor } from '../src/xlsx/storage/quota'
@@ -155,7 +155,7 @@ describe('cancellation and quota failure while a blob is written remove partial 
     const store = new SourcePageStore({ docId: 'd', backend: rec.backend, ledger })
     const session = await openImportSession(blobOf(xlsxBytes({ sheetData })), { docId: 'd', profile: 'D', store, ledger, pageRows: 1 })
     expect(await session.done).toMatchObject({ kind: 'incomplete', failure: { code: 'quota' } })
-    expect(rec.keys.some((k) => k.startsWith('1/'))).toBe(true) // a head page had landed
+    expect(rec.keys.some((k) => k.startsWith('page/1/'))).toBe(true) // a head page had landed
     expect(rec.inner.size).toBe(0)
     expect(Object.values(ledger.snapshot().current).every((v) => v === 0)).toBe(true)
   })
@@ -274,7 +274,7 @@ describe('a failed page removes the blob records it already wrote (storage, ledg
   })
 
   it('a storage failure on the page write after its blobs: the blobs and the page charge are removed', async () => {
-    const rec = recordingBackend({ beforePut(key) { if (key === '1/p1') throw new DOMException('disk', 'UnknownError') } })
+    const rec = recordingBackend({ beforePut(key) { if (key === 'page/1/p1') throw new DOMException('disk', 'UnknownError') } })
     const { store, before, snapshot } = await setup(rec.backend)
     const sizeBefore = rec.inner.size
     await expect(store.commit(pageOf('p1', 10, 2, [big('a'), big('b')]))).rejects.toMatchObject({ code: 'storage-error' })
@@ -360,77 +360,164 @@ describe('review round 1 (codex) MAJOR 5: rejected commits are validated before 
   })
 })
 
-describe('crash-orphan sweep', () => {
+describe('crash-orphan sweep (Web Locks ownership, codex round 2)', () => {
   const HOUR = 3600_000
+  const esc = (t: string) => t.replace(/[^A-Za-z0-9.]/g, (c) => `_${c.charCodeAt(0).toString(16).padStart(4, '0')}`)
+  const opfsName = (owner: string, key: string) => `officeview-pages-${esc(owner)}-${esc(key)}`
   async function writeRaw(dir: ReturnType<typeof fakeOpfsDirectory>, name: string) {
     const handle = await dir.getFileHandle(name, { create: true }) as { createWritable(): Promise<{ write(b: Uint8Array): Promise<void>; close(): Promise<void> }> }
     const w = await handle.createWritable()
     await w.write(new Uint8Array([1, 2, 3]))
     await w.close()
   }
-  const opfsName = (owner: string, key: string) => `officeview-pages-${owner.replace(/[^A-Za-z0-9.]/g, (c) => `_${c.charCodeAt(0).toString(16).padStart(4, '0')}`)}-${key.replace(/[^A-Za-z0-9.]/g, (c) => `_${c.charCodeAt(0).toString(16).padStart(4, '0')}`)}`
+  const textPage = (sheetId: string, pageId: string, r0: number, text: string) => {
+    const b = new PageBuilder()
+    b.add(r0, 0, K_TEXT, 0, 0, text, true, undefined)
+    return { sheetId, pageId, r0, r1: r0, cellCount: 1, bytes: b.bytes, payload: b.build(), blobs: [...b.blobs] }
+  }
 
-  it('session start removes OPFS files and IndexedDB databases of dead owners older than 24 h, never fresh, live or foreign entries', async () => {
+  it('owners are collision-resistant and held exclusively across realms', async () => {
     const now = Date.UTC(2026, 9, 13)
+    expect(pageOwner('doc', now)).not.toBe(pageOwner('doc', now))
+    const mgr = fakeLockManager()
+    const realmA = ownerLocks(mgr), realmB = ownerLocks(mgr)
+    const owner = pageOwner('doc', now)
+    const release = await realmA.hold(owner)
+    await expect(realmB.hold(owner)).rejects.toMatchObject({ code: 'storage-error' })
+    expect(await realmB.tryWith(owner, async () => {})).toBe(false)
+    release()
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    expect(await realmB.tryWith(owner, async () => {})).toBe(true)
+  })
+
+  it("session start: realm B never deletes realm A's live storage (even 25 h old); dead owners go; no Web Locks means no sweep", async () => {
+    const now = Date.UTC(2026, 9, 13)
+    const mgr = fakeLockManager()
     const dir = fakeOpfsDirectory()
-    const dead = pageOwner('doc-a', now - 25 * HOUR), fresh = pageOwner('doc-b', now - HOUR), liveOld = pageOwner('doc-c', now - 30 * HOUR)
-    await writeRaw(dir, opfsName(dead, 'blob/0'))
-    await writeRaw(dir, opfsName(dead, '1/p0'))
-    await writeRaw(dir, opfsName(fresh, '1/p0'))
-    await writeRaw(dir, 'unrelated.bin')
-    const live = opfsPageBackend(dir, liveOld)
-    await live.put('1/p0', new Uint8Array([9]))
     const idb = fakeIndexedDb()
+    // Realm A: a live session whose owner looks 25 h old (long-lived tab or a forward clock jump).
+    const liveOld = pageOwner('doc-a', now - 25 * HOUR)
+    const releaseA = await ownerLocks(mgr).hold(liveOld)
+    const a = new SourcePageStore({ docId: 'a', backend: opfsPageBackend(dir, liveOld), ownerLock: releaseA })
+    await a.commit(textPage('1', 'p0', 0, 'live'))
+    // Leftovers of a dead session, and a fresh owner of another live tab.
+    const dead = pageOwner('doc-b', now - 26 * HOUR), fresh = pageOwner('doc-c', now - HOUR)
+    await writeRaw(dir, opfsName(dead, 'blob/0'))
+    await writeRaw(dir, opfsName(dead, 'page/1/p0'))
+    await writeRaw(dir, opfsName(fresh, 'page/1/p0'))
+    await writeRaw(dir, 'unrelated.bin')
     for (const owner of [dead, fresh]) await new Promise<void>((resolve) => { const req = idb.open(`officeview-pages-${owner}`, 1); req.onsuccess = () => resolve() })
-    const removed = await sweepLeftoverPages({ opfs: async () => dir, indexedDb: idb }, { now })
-    expect(removed).toBe(3)
-    expect([...dir.files.keys()].sort()).toEqual([opfsName(fresh, '1/p0'), opfsName(liveOld, '1/p0'), 'unrelated.bin'].sort())
+
+    expect(await sweepLeftoverPages({ opfs: async () => dir, indexedDb: idb }, { now })).toBe(0) // no Web Locks: nothing is provably dead
+    expect(await sweepLeftoverPages({ opfs: async () => dir, indexedDb: idb, locks: ownerLocks(mgr) }, { now })).toBe(3)
     expect(idb.deleted).toEqual([`officeview-pages-${dead}`])
-    // Bounded and cancellable: an aborted sweep removes nothing.
+    expect([...dir.files.keys()].some((n) => n.includes(esc(dead)))).toBe(false)
+    expect([...dir.files.keys()].some((n) => n.includes(esc(fresh)))).toBe(true)
+    expect(dir.files.has('unrelated.bin')).toBe(true)
+    // A's page survived realm B's sweep.
+    expect(textAtPage(await a.page('1', 'p0'))).toBe('live')
+    // Cancelled and bounded sweeps remove nothing.
     await writeRaw(dir, opfsName(dead, 'blob/1'))
     const aborted = new AbortController()
     aborted.abort()
-    expect(await sweepLeftoverPages({ opfs: async () => dir }, { now, signal: aborted.signal })).toBe(0)
-    expect(await sweepLeftoverPages({ opfs: async () => dir }, { now, maxEntries: 1 })).toBe(0)
-    await live.removeAll()
+    expect(await sweepLeftoverPages({ opfs: async () => dir, locks: ownerLocks(mgr) }, { now, signal: aborted.signal })).toBe(0)
+    expect(await sweepLeftoverPages({ opfs: async () => dir, locks: ownerLocks(mgr) }, { now, maxEntries: 1 })).toBe(0)
+    await a.close()
+    expect(mgr.held.size).toBe(0)
   })
 
-  it('simulated crash (blob written, page not), then reopen of the same owner: the orphan is removed and the ledger matches storage', async () => {
+  it("store-open cleanup never touches another writer's records: without the owner lock it skips", async () => {
+    const mgr = fakeLockManager()
     const dir = fakeOpfsDirectory()
-    const owner = 'doc-crash'
-    // Session A: p0 lands, then the process dies while p1's page write is pending (its blob is already stored).
-    const crashing = opfsPageBackend(dir, owner)
-    const hung: PageBackend = { ...crashing, put: (key, bytes) => key === '1/p1' ? new Promise<void>(() => {}) : crashing.put(key, bytes) }
-    const a = new SourcePageStore({ docId: 'd', backend: hung })
-    const page = (pageId: string, r0: number, text: string) => {
-      const b = new PageBuilder()
-      b.add(r0, 0, K_TEXT, 0, 0, text, true, undefined)
-      return { sheetId: '1', pageId, r0, r1: r0, cellCount: 1, bytes: b.bytes, payload: b.build(), blobs: [...b.blobs] }
-    }
-    await a.commit(page('p0', 0, 'a'.repeat(40_000)))
-    void a.commit(page('p1', 1, 'b'.repeat(40_000)))
-    await new Promise((resolve) => setTimeout(resolve, 20))
-    expect(dir.files.size).toBe(3) // blob/0, 1/p0, blob/1 — blob/1 is unreferenced by any committed index once A is gone
+    const owner = pageOwner('doc', Date.now())
+    let release!: () => void
+    const gate = new Promise<void>((resolve) => { release = resolve })
+    const inner = opfsPageBackend(dir, owner)
+    const slowPage: PageBackend = { ...inner, put: async (key, bytes) => { if (key.startsWith('page/')) await gate; await inner.put(key, bytes) } }
+    const a = new SourcePageStore({ docId: 'a', backend: slowPage, ownerLock: await ownerLocks(mgr).hold(owner) })
+    const pending = a.commit(textPage('1', 'p0', 0, 'x'.repeat(40_000)))
+    await new Promise((resolve) => setTimeout(resolve, 10))
+    // A second store on the same owner (the collision codex reproduced) cannot get the lock, so it cannot sweep.
+    await expect(ownerLocks(mgr).hold(owner)).rejects.toMatchObject({ code: 'storage-error' })
+    const b = new SourcePageStore({ docId: 'b', backend: opfsPageBackend(dir, owner) })
+    expect(await b.sweepUnreferenced()).toMatchObject({ removed: 0, skipped: expect.stringContaining('owner lock') })
+    release()
+    await pending
+    expect(await a.blob(0)).toBe('x'.repeat(40_000))
+    await a.close()
+  })
 
-    // Session B reopens the same owner: the store-open sweep keeps nothing B's index does not reference.
+  it('simulated crash (blob written, page not): once the dead realm\'s lock is gone the next holder removes the orphan; ledger matches storage', async () => {
+    const mgr = fakeLockManager()
+    const dir = fakeOpfsDirectory()
+    const owner = pageOwner('doc', Date.now())
+    const crashing = opfsPageBackend(dir, owner)
+    const hung: PageBackend = { ...crashing, put: (key, bytes) => key === 'page/1/p1' ? new Promise<void>(() => {}) : crashing.put(key, bytes) }
+    const releaseA = await ownerLocks(mgr).hold(owner)
+    const a = new SourcePageStore({ docId: 'd', backend: hung, ownerLock: releaseA })
+    await a.commit(textPage('1', 'p0', 0, 'a'.repeat(40_000)))
+    void a.commit(textPage('1', 'p1', 1, 'b'.repeat(40_000)))
+    await new Promise((resolve) => setTimeout(resolve, 20))
+    expect(dir.files.size).toBe(3)
+    // The process dies: the browser drops its locks; nothing ran its cleanup.
+    releaseA()
+    await new Promise((resolve) => setTimeout(resolve, 0))
     const ledger = createQuotaLedger(quotaLimitsFor('D'), { maxTotalExpandedBytes: 1 << 30 })
     const pool = new MemoryPool({ limitBytes: 64 * 1024 * 1024 })
-    const b = new SourcePageStore({ docId: 'd', backend: opfsPageBackend(dir, owner), ledger })
+    const b = new SourcePageStore({ docId: 'd', backend: opfsPageBackend(dir, owner), ledger, ownerLock: await ownerLocks(mgr).hold(owner) })
     b.bindMemory(pool)
-    expect(await b.sweepUnreferenced()).toBe(3)
+    expect(await b.sweepUnreferenced()).toEqual({ removed: 3 })
     expect(dir.files.size).toBe(0)
     expect(Object.values(ledger.snapshot().current).every((v) => v === 0)).toBe(true)
     expect(pool.stats().totalBytes).toBe(0)
-
-    // Through an import (the sweep runs at store open), storage holds exactly what B committed and charged.
+    // Then an import through the store: storage holds exactly what it committed and charged.
     await writeRaw(dir, opfsName(owner, 'blob/7'))
     const session = await openImportSession(blobOf(xlsxBytes({ sheetData })), { docId: 'd', profile: 'D', store: b, ledger })
     expect(await session.done).toMatchObject({ kind: 'complete' })
     expect([...dir.files.keys()].some((name) => name.endsWith('blob_002f7'))).toBe(false)
     expect(dir.files.size).toBe(b.pages('1').length + b.stats.blobs)
     expect(ledger.snapshot().current.pages + ledger.snapshot().current.blobRecords).toBe(b.stats.storedBytes + b.stats.blobBytes)
-    // A sweep of a live store never removes its own records.
-    expect(await b.sweepUnreferenced()).toBe(0)
+    expect(await b.sweepUnreferenced()).toEqual({ removed: 0 })
+    await session.release()
+    expect(mgr.held.size).toBe(0)
+  })
+
+  it('pages of sheets named like reserved namespaces ("sst", "blob", ids with "/") are never classified as orphans', async () => {
+    const store = new SourcePageStore({ docId: 'd', backend: memoryPageBackend() })
+    const num = (sheetId: string, pageId: string, value: number) => {
+      const b = new PageBuilder()
+      b.add(0, 0, K_NUMBER, 0, value, '', true, undefined)
+      return { sheetId, pageId, r0: 0, r1: 0, cellCount: 1, bytes: b.bytes, payload: b.build() }
+    }
+    await store.commit(num('sst', 'p0', 42))
+    await store.commit(num('blob', '0', 43))
+    await store.commit(num('a/b', 'c', 44))
+    await store.commit(num('a', 'b/c', 45))
+    expect(await store.sweepUnreferenced()).toEqual({ removed: 0 })
+    expect((await store.page('sst', 'p0')).nums[0]).toBe(42)
+    expect((await store.page('blob', '0')).nums[0]).toBe(43)
+    expect((await store.page('a/b', 'c')).nums[0]).toBe(44)
+    expect((await store.page('a', 'b/c')).nums[0]).toBe(45)
+  })
+
+  it('listing is bounded by entries examined (not owner matches) and cancellable; a listing failure skips cleanup without failing the import', async () => {
+    const dir = fakeOpfsDirectory()
+    for (let i = 0; i < 5000; i++) await writeRaw(dir, `foreign-${i}`)
+    const backend = opfsPageBackend(dir, 'owner-x')
+    await backend.put('blob/0', new Uint8Array([1]))
+    expect(await backend.list!(4096)).toEqual([])
+    expect(await backend.list!(10_000)).toEqual(['blob/0'])
+    const aborted = new AbortController()
+    aborted.abort()
+    expect(await backend.list!(10_000, aborted.signal)).toEqual([])
+
+    const inner = memoryPageBackend()
+    const flaky: PageBackend = { ...inner, list: async () => { throw new Error('temporary enumeration failure') } }
+    const store = new SourcePageStore({ docId: 'd', backend: flaky })
+    const session = await openImportSession(blobOf(xlsxBytes({ sheetData: '<row r="1"><c r="A1"><v>1</v></c></row>' })), { docId: 'd', profile: 'D', store })
+    expect(await session.done).toMatchObject({ kind: 'complete' })
+    expect(session.diagnostics.map((d) => d.code)).toContain('storage-cleanup-skipped')
     await session.release()
   })
 })
+const textAtPage = (p: { text: Uint16Array; textStart: Uint32Array }) => String.fromCharCode(...p.text.subarray(p.textStart[0], p.textStart[1]))

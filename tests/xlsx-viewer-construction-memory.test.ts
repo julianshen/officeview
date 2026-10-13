@@ -10,7 +10,7 @@ import { spawnSync } from 'node:child_process'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { PAGE_SUMMARY_BYTES } from '../src/xlsx/storage/constructionMemory'
-import { PageBuilder, K_EMPTY, SourcePageStore, encodePage, jsonLength, memoryPageBackend, opfsPageBackend, payloadBytes, type PageBackend } from '../src/xlsx/storage/sourcePages'
+import { DECODED_CHUNK_OVERHEAD_BYTES, DECODED_PAGE_OVERHEAD_BYTES, PageBuilder, K_EMPTY, K_NUMBER, SourcePageStore, encodePage, jsonLength, memoryPageBackend, opfsPageBackend, payloadBytes, type PageBackend } from '../src/xlsx/storage/sourcePages'
 import { fakeOpfsDirectory } from './helpers/fake-storage'
 import { createPagedWorkbookSource } from '../src/xlsx/view/pagedSource'
 import { DocumentSession, MIN_WORKER_BUDGET_BYTES } from '../src/worker/viewerSession'
@@ -177,10 +177,10 @@ describe('review round 1 (codex) construction-memory findings', () => {
     expect(await b.done).toMatchObject({ kind: 'complete' })
     expect(backend.heldBytes).toBeGreaterThan(1_200_000)
     expect(pool.stats().retainedBytes).toBe(store.pages('1').length * PAGE_SUMMARY_BYTES + backend.heldBytes)
-    // Decoded views share the held buffers: reading them charges no second copy.
+    // Decoded views share the held buffers: reading a page and its blob charges only their decoded-object overhead.
     const sheet = createPagedWorkbookSource(b).store('1')
     expect(await sheet.readCell({ row: 3, col: 0 }, { signal: new AbortController().signal, stamp: { ...sheet.stamp } })).toMatchObject({ cell: { value: big(3) } })
-    expect(pool.stats().byTier.source - (store.pages('1').length * PAGE_SUMMARY_BYTES + backend.heldBytes)).toBeLessThan(1024)
+    expect(pool.stats().byTier.source - (store.pages('1').length * PAGE_SUMMARY_BYTES + backend.heldBytes)).toBe(DECODED_PAGE_OVERHEAD_BYTES + DECODED_CHUNK_OVERHEAD_BYTES)
     await b.release()
     expect(pool.stats().totalBytes).toBe(0)
   })
@@ -250,7 +250,6 @@ describe('review round 1 (codex) construction-memory findings', () => {
     const bytes = encodePage(page, (n) => { if (asked < 0) asked = n })
     const json = JSON.stringify([...page.meta])
     expect(asked).toBe(bytes.length + 2 * json.length)
-    expect(page.metaJsonLength).toBe(json.length)
   })
 
   it('jsonLength equals JSON.stringify for the formula-metadata subset (escapes, lone surrogates, pairs, numbers)', () => {
@@ -268,10 +267,47 @@ describe('review round 1 (codex) MAJOR 4: the estimate model is conservative aga
     const probe = spawnSync('bun', [join(dirname(fileURLToPath(import.meta.url)), '..', 'scripts', 'construction-memory-probe.ts')], { encoding: 'utf8', timeout: 120_000 })
     expect(probe.status, probe.stderr).toBe(0)
     const results = JSON.parse(probe.stdout.trim().split('\n').at(-1)!) as { name: string; count: number; observed: number; model: number }[]
-    expect(new Set(results.map((r) => r.name))).toEqual(new Set(['builder-numeric', 'builder-text', 'builder-formula', 'summaries', 'pending-strings']))
+    expect(new Set(results.map((r) => r.name))).toEqual(new Set(['builder-numeric', 'builder-text', 'builder-formula', 'summaries', 'decoded-pages', 'decoded-chunks', 'pending-strings']))
     for (const r of results) {
       expect(r.model, `${r.name} x${r.count}`).toBeGreaterThanOrEqual(r.observed)
       expect(r.model, `${r.name} x${r.count}`).toBeLessThanOrEqual(2 * r.observed)
     }
   }, 150_000)
+})
+
+describe('review round 2 (codex) findings 4 and 5', () => {
+  it('MAJOR 4: decoded pages sharing a memory backend buffer still charge their own objects, so the pool evicts them', async () => {
+    const store = new SourcePageStore({ docId: 'd', backend: memoryPageBackend() })
+    for (let i = 0; i < 1000; i++) {
+      const b = new PageBuilder()
+      b.add(i, 0, K_NUMBER, 0, i, '', true, undefined)
+      await store.commit({ sheetId: '1', pageId: `p${i}`, r0: i, r1: i, cellCount: 1, bytes: b.bytes, payload: b.build() })
+    }
+    const kept = store.construction.persistentBytes
+    const room = 128 * 1024
+    const pool = new MemoryPool({ limitBytes: kept + room, highWatermark: 1, lowWatermark: 1 })
+    store.bindMemory(pool)
+    for (let i = 0; i < 1000; i++) await store.page('1', `p${i}`)
+    expect(store.stats.evictions).toBeGreaterThan(0)
+    expect(store.stats.residentBytes).toBeLessThanOrEqual(room)
+    expect(store.stats.residentBytes).toBeGreaterThanOrEqual(Math.floor(room / DECODED_PAGE_OVERHEAD_BYTES / 2) * DECODED_PAGE_OVERHEAD_BYTES)
+    expect(pool.stats().byTier.source - kept).toBeLessThanOrEqual(room)
+  })
+
+  it('MINOR 5: metadata mutated after build is sized from its current state before the JSON exists', () => {
+    const b = new PageBuilder()
+    b.add(0, 0, K_EMPTY, 0, 0, '', false, { formula: 'x' })
+    const page = b.build()
+    ;(page.meta.get(0) as { formula: string }).formula = '漢'.repeat(400_000)
+    const pool = new MemoryPool({ limitBytes: 256 * 1024 })
+    const share = new SourcePageStore({ docId: 'd', backend: memoryPageBackend() })
+    share.bindMemory(pool)
+    const scratch = share.construction.share('test')
+    const asked: number[] = []
+    expect(() => encodePage(page, (n) => { asked.push(n); scratch.need(n) })).toThrow(expect.objectContaining({ reason: 'memory-budget' }))
+    // One reservation, at the real size (the 400,000-unit formula), refused before any JSON was built.
+    expect(asked).toHaveLength(1)
+    expect(asked[0]).toBeGreaterThan(2 * 2 * 400_000)
+    scratch.release()
+  })
 })
