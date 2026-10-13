@@ -12,7 +12,7 @@ export interface OverflowAllowance { left: number; right: number }
  * row (rowOverflowInput) so that each allowance is a binary search. */
 export interface RowOverflowInput {
   /** Visible (non-zero-width) columns whose cell blocks overflow, ascending and unique. */
-  blockers: readonly number[]
+  blockers: readonly number[] | Uint16Array
   /** Merged ranges that intersect the row and have visible width. */
   merges: readonly { minCol: number; maxCol: number }[]
   /** Left edge of a column in px; colStart(c + 1) - colStart(c) is its width. */
