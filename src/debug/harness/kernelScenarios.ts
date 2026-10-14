@@ -127,7 +127,8 @@ function withSparseRows(store: SourceStore): SourceStore {
 /** A plain-object view of a store. NOT a Proxy: the kernels read `stamp` on
  * every cooperative check (per comparison), and each Proxy layer measurably
  * slows them (a harness artifact, not kernel cost). Fixture stamps are
- * constant for the store's lifetime, so a data property is exact. */
+ * constant for the store's lifetime, so a data property is exact. This
+ * kernel-only fixture facade does not expose optional drawing capabilities. */
 function plainStore(store: SourceStore): SourceStore {
   return {
     stamp: store.stamp,

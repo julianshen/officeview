@@ -205,14 +205,14 @@ describe('formula-value-unavailable refusals are limited to the key/value domain
 describe('engine documents are unchanged', () => {
   it('explicit engine policy is byte-identical to the default parse and the adapter reads the published cell.value', async () => {
     const sheet = TABLE + '<row r="5"><c r="A5" t="e"><v>#DIV/0!</v></c><c r="B5" t="str"><v>#VALUE!</v></c><c r="C5" t="b"><v>0</v></c><c r="D5" s="0"/></row>'
-    // parse.ts samples Date.now() into the workbook semantics; pin it so the two parses are comparable.
+    // Engine semantics sample the clock lazily; keep it pinned through serialization.
     const clock = vi.spyOn(Date, 'now').mockReturnValue(1_700_000_000_000)
     let plain, explicit
     try {
       plain = await load(sheet)
       explicit = await load(sheet, 'engine')
+      expect(JSON.stringify(explicit)).toBe(JSON.stringify(plain))
     } finally { clock.mockRestore() }
-    expect(JSON.stringify(explicit)).toBe(JSON.stringify(plain))
     const store = createObjectWorkbookSource(plain, 'doc').store('1')
     for (const row of plain.sheets[0].rows) for (const cell of row.cells) {
       const read = await store.readCell({ row: cell.row, col: cell.col }, opts(store))

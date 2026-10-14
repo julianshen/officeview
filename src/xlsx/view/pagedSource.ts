@@ -31,6 +31,9 @@ import { isValueUnavailable, SAVED_VALUES_DIAGNOSTIC, SAVED_VALUES_STATUS, value
 import type { PagedImportSession, PagedSheet, PagedWorkbook } from '../storage/pagedImport'
 import type { DrawingMemory, ProfileId, SheetDrawings } from './contracts'
 import { DRAWING_MEMORY_REFUSED, DrawingNodeLedger, drawingFootprint, unavailableDrawings } from './drawingPayload'
+import type { XlsxSheet } from '../types'
+import { cellDisplayText } from '../render'
+import { semanticsFor } from './semanticsFor'
 
 type RowStatus = { kind: 'ready' } | { kind: 'unknown'; pageId: string } | { kind: 'error'; failure: SourceFailure }
 
@@ -365,6 +368,7 @@ export class PagedXlsxSheetAdapter implements SourceStore {
       const status = this.status(row)
       if (status.kind === 'error') { yield { items, completeness: 'incomplete', stamp: this.stamp, error: status.failure }; return }
       if (status.kind === 'ready') continue
+      if (request.availability === 'loaded') { yield { items, completeness: 'loading', stamp: this.stamp }; return }
       // A scan waits for the import frontier instead of reporting rows it has not seen.
       const waited = await waitFor(this.workbook, options.signal)
       if (waited) { yield { items, completeness: 'incomplete', stamp: this.stamp, error: waited }; return }
@@ -578,6 +582,7 @@ export interface PagedSourceOptions {
 }
 export function createPagedWorkbookSource(session: PagedImportSession, options: PagedSourceOptions = {}): WorkbookSource {
   const { workbook } = session
+  const displaySheet: XlsxSheet = { name: '', rows: [], cols: [], merges: [], mergeRanges: [], semantics: semanticsFor(workbook.formatting.dateSystem) }
   const stores = new Map<string, PagedXlsxSheetAdapter>()
   const geometries = new Map<string, SheetGeometry>()
   const drawingState: PagedDrawingState = { nodes: new DrawingNodeLedger(), ...(options.drawingPayloadBytes !== undefined ? { payloadBytes: options.drawingPayloadBytes } : {}) }
@@ -619,6 +624,7 @@ export function createPagedWorkbookSource(session: PagedImportSession, options: 
     },
     coverageDiagnostics: sheetId => storeFor(sheetId).coverageDiagnostics(),
     formatting: () => workbook.formatting,
+    displayText: cell => cellDisplayText(displaySheet, { value: cell.value, style: workbook.formatting.styles[cell.styleIndex] }),
     declaredFilters: () => workbook.sheets.flatMap(s => s.declared ? [s.declared] : []),
     bindMemory(pool: MemoryPool) { workbook.store.bindMemory(pool); drawingState.pool = pool },
     async release() {

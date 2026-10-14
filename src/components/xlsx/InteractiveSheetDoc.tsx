@@ -21,6 +21,7 @@
  * filter via viewerControls' remote port) and are adopted here, and find and
  * copy read through the same source; the object path is unchanged.
  */
+import { tilePlanSource, WorkerViewportPlans } from './workerViewport'
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type ReactElement } from 'react'
 import type { XlsxCell, XlsxDocument, XlsxSheet } from '../../xlsx/types'
 import type {
@@ -320,7 +321,7 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
   const identityOf = (sheetId: string): CacheIdentity => ({ docId, sheetId, valueGen: source.store(sheetId).stamp.valueGen, fontGen, viewGen: revisionOf(sheetId) })
   const globalViewGen = sheetIds.reduce((sum, id) => sum + revisionOf(id), 0)
   const ownerOf = (): WorkbookOwner => ({
-    docId, globalViewGen, workbookValueGen: 0, fontGen,
+    docId, globalViewGen: remote?.workbookOwner().globalViewGen ?? globalViewGen, workbookValueGen: remote?.workbookOwner().workbookValueGen ?? 0, fontGen,
     sheetVector: sheetIds.map(sheetId => ({ sheetId, revision: revisionOf(sheetId), valueGen: source.store(sheetId).stamp.valueGen })),
   })
   const ownerRef = useRef(ownerOf)
@@ -418,13 +419,23 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
   // Published by the overlay pass as state, so the status follows it (a declared
   // coarse state); an empty selection always clears it.
   const [selectionIncomplete, setSelectionIncomplete] = useState(false)
-  const frameOf = (): SheetFrame | null => entry && scroll ? {
-    sheet: entry.sheet, geometry: entry.geometry, identity, origin: scroll.logicalOrigin, viewport, zoom: scroll.zoom, dpr,
-    extent: { width: entry.metrics.cols.totalCss(), height: entry.metrics.rows.totalCss() },
-    assets: assets?.lease.assets, layoutCache: entry.layoutCache, merges: entry.merges, ...(mark ? { watermark: mark } : {}),
-    structureGen: entry.structureGen,
-    ...(remote ? { pending: (box: LogicalCellBox) => remote.store(activeSheetId).pendingIn(entry.metrics, box, scroll.zoom * dpr) } : {}),
-  } : null
+  const workerPlans = useMemo(() => remote ? new WorkerViewportPlans(remote) : null, [remote])
+  useEffect(() => () => workerPlans?.dispose(), [workerPlans])
+  const frameOf = (): SheetFrame | null => {
+    if (!entry || !scroll) return null
+    return {
+      sheet: entry.sheet, geometry: entry.geometry, identity, origin: scroll.logicalOrigin, viewport, zoom: scroll.zoom, dpr,
+      extent: { width: entry.metrics.cols.totalCss(), height: entry.metrics.rows.totalCss() },
+      assets: assets?.lease.assets, layoutCache: entry.layoutCache, merges: entry.merges, ...(mark ? { watermark: mark } : {}),
+      structureGen: entry.structureGen,
+      // Row-cache proof gates worker requests: tiles the cache already proves
+      // paint from the main-thread planner with no worker wait and no worker
+      // command; worker plans are only for unknown or oversized tiles, and the
+      // row reads `pending` requests keep blank cells known (S13.3).
+      ...(workerPlans && remote ? { plan: tilePlanSource({ store: remote.store(activeSheetId), metrics: entry.metrics, scale: scroll.zoom * dpr, identity, extent: { width: entry.metrics.cols.totalCss(), height: entry.metrics.rows.totalCss() }, plans: workerPlans }) } : {}),
+      ...(remote ? { pending: (box: LogicalCellBox, visible: boolean) => remote.store(activeSheetId).pendingIn(entry.metrics, box, scroll.zoom * dpr, !visible) } : {}),
+    }
+  }
   // Viewer-owned main pools (layout/merge caches, controls caches, owned DOM),
   // re-measured after every present and render; the row cache, view buffers,
   // replies and copy sessions charge themselves where they allocate.
@@ -458,6 +469,10 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
   useLayoutEffect(() => {
     const canvas = baseRef.current, frame = frameOf()
     if (!canvas || !frame || admittedDpr === null) return
+    // Tile planning lifecycle runs here, post-commit: frameOf itself only
+    // describes the frame, so a render that never commits cannot cancel
+    // requests for frames that do.
+    if (scroll) workerPlans?.beginFrame(identity, { box: { ...scroll.logicalOrigin, width: viewport.width / scroll.zoom, height: viewport.height / scroll.zoom }, zoom: scroll.zoom, deviceScale: dpr })
     if (!assets || assets.sheetId !== activeSheetId) {
       // The active sheet's lease is pending: present a declared loading state, never
       // another sheet's (or an unleased) raster. The pool is re-admitted for the
@@ -520,12 +535,14 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
   const inspectHidden = (sheetId: string, target: SourceCell, reason: string) =>
     setInspection({ target, hiddenReason: reason === 'filter-hidden' ? 'hidden by filter' : 'authored hidden', source: source.store(sheetId) })
   const inputRef = useRef<HTMLInputElement | null>(null)
-  const finder = useMemo(() => new FindController({ currentOwner: () => ownerRef.current() }), [])
+  const finder = useMemo(() => new FindController({ currentOwner: () => ownerRef.current(),
+    ...(remote ? { createSession: (input, query, options) => remote.findSession(input.owner, query, options) } : {}),
+  }), [remote])
   useEffect(() => () => finder.dispose(), [finder])
   const cellAt = (sheetEntry: SheetEntry, at: SourceCell): XlsxCell | undefined => sheetEntry.geometry.cellsOf(at.row)?.find(cell => cell.col === at.col)
   const findInput = (): FindInput => ({
     owner: ownerOf(),
-    sheets: sheetIds.map(sheetId => {
+    sheets: remote ? [] : sheetIds.map(sheetId => {
       const sheetEntry = entryFor(sheetId)
       return {
         sheetId, store: withUnavailableFormulas(source.store(sheetId)), identity: identityOf(sheetId), order: sheetEntry.view.order, visibility: sheetEntry.view.visibility,
@@ -542,7 +559,7 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
     let cancelled = false
     setSearching(true)
     const input = findInput()
-    const byId = new Map(sheetIds.map(id => [id, entryFor(id)]))
+    const byId = new Map(remote ? [] : sheetIds.map(id => [id, entryFor(id)]))
     const options: FindOptions = {
       // The same canonical display text the cell paints (authored formats, semantics).
       textOf: (cell, sheetId) => {
@@ -569,6 +586,59 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
     return () => { cancelled = true }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [query, ownerKey])
+  // A finished page over sheets that were still importing says so instead of
+  // pretending completeness ("some sheets still loading"). Re-run it once its
+  // listed sheets complete, so the results catch up with the import (NIT-1).
+  // Sheet IDs are arbitrary strings: the key is a lossless JSON array.
+  const incompleteKey = page && page.complete && page.incomplete.length ? JSON.stringify([...page.incomplete].sort()) : ''
+  const refreshAttempt = useRef<{ args: object; key: string } | null>(null)
+  useEffect(() => {
+    if (!remote || !incompleteKey || !runArgs.current) return
+    const args = runArgs.current
+    const listed = JSON.parse(incompleteKey) as string[]
+    // Cleared on cleanup (unmount, a new page or owner): a refresh that settles
+    // later publishes nothing, and one still running is cancelled.
+    let live = true, refreshing = false
+    const check = () => {
+      if (!live || runArgs.current !== args || finder.running) return
+      const done = listed.filter(sheetId => remote.loadState(sheetId).completeness === 'complete')
+      if (!done.length) return
+      const key = JSON.stringify([listed, done])
+      if (refreshAttempt.current?.args === args && refreshAttempt.current.key === key) return
+      refreshAttempt.current = { args, key }
+      refreshing = true
+      setSearching(true)
+      const input = findInput()
+      void finder.run(input, { text: args.query, caseSensitive: false }, args.options).then(published => {
+        refreshing = false
+        // Unmounted, superseded, or a newer search (or a cleared query) owns the results now.
+        if (!live || runArgs.current !== args) return
+        pageRef.current = published
+        activeRef.current = published && published.hits.length ? 0 : -1
+        setPage(published)
+        setActiveHit(activeRef.current)
+        setSearching(false)
+      }).catch(error => {
+        refreshing = false
+        if (!live || runArgs.current !== args) return
+        setSearching(false)
+        setAnnouncement(error instanceof Error ? error.message.slice(0, 256) : 'Search failed.')
+      })
+    }
+    // The import may already have finished before this page was published.
+    const unsubscribe = remote.subscribe(check)
+    check()
+    return () => {
+      live = false
+      unsubscribe()
+      // Only the refresh this effect started, and only while it still owns the search.
+      if (refreshing && runArgs.current === args) finder.cancel()
+    }
+    // Re-bound to every published page and query: a new search with the same
+    // incomplete-sheet list must be refreshed with ITS arguments, and a page
+    // published after its sheets completed is checked at once.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [remote, incompleteKey, ownerKey, query, page])
   const pageOffset = page ? page.pageIndex * FIND_PAGE_HITS : 0
   const matchCount = page ? page.totalKnown ?? pageOffset + page.hits.length : 0
   // Partial results present a lower bound, never a final-looking count (§10.4).
@@ -1098,7 +1168,7 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
             <GridSemantics owner={identity} projection={entry.metrics} view={entry.view} selection={selection} window={scroll} viewport={viewport}
               body={entry.body} onChange={onGridChange} status={{ records: { ...snapshot(activeSheetId).records, completeness: loadState?.completeness ?? 'complete' }, countMode: 'body', loadReport: { status: 'ready', notices: [...notices, ...fontNotices, ...pagedDrawingNotices, ...(loadState?.failure ? [loadFailureNotice(loadState.failure, loadState.code)] : [])] } }}
               onSortCycle={(col, shift) => void sortCycle(col, shift)} pendingSortColumn={sortPending?.col ?? null} onFilter={(col, invoker) => { setPopup({ kind: 'filter', col, invoker }) }} onSortDialog={(col, invoker) => { setPopup({ kind: 'sort', col, invoker }) }} onNotice={setAnnouncement}
-              popup={popup && controls ? { invoker: popup.invoker, close: closePopup, label: popup.kind === 'filter' ? 'Column filter' : 'Sort worksheet', content: popup.kind === 'filter' ? <FilterDropdown owner={identity} client={controls.client} applied={entry.view.filter} appliedSort={entry.view.sort} col={popup.col} invoker={popup.invoker} embedded onClose={closePopup} onApplied={() => rerender()} onNotice={setAnnouncement} /> : <SortDialog owner={identity} client={controls.client} applied={entry.view.sort} col={popup.col} invoker={popup.invoker} embedded onClose={closePopup} onApplied={() => rerender()} onNotice={setAnnouncement} /> } : undefined} announcement={[sortPending ? `Sorting column ${columnToLetters(sortPending.col)}…` : '', resourceNotice, assets?.sheetId !== activeSheetId ? 'Loading sheet…' : '', assets && assets.sheetId === activeSheetId && assets.lease.refusedImages > 0 ? `${assets.lease.refusedImages} picture${assets.lease.refusedImages === 1 ? ' is' : 's are'} not shown (image memory budget).` : '', selectionIncomplete ? 'Selection highlight is incomplete at this zoom; zoom in for detail.' : '', announcement].filter(Boolean).join(' ')} inspection={inspection} profile={profile} label={`Worksheet ${entry.sheet.name}`}
+              popup={popup && controls ? { invoker: popup.invoker, close: closePopup, label: popup.kind === 'filter' ? 'Column filter' : 'Sort worksheet', content: popup.kind === 'filter' ? <FilterDropdown owner={identity} client={controls.client} applied={entry.view.filter} appliedSort={entry.view.sort} col={popup.col} invoker={popup.invoker} embedded onClose={closePopup} onApplied={() => rerender()} onNotice={setAnnouncement} /> : <SortDialog owner={identity} client={controls.client} applied={entry.view.sort} col={popup.col} invoker={popup.invoker} embedded onClose={closePopup} onApplied={() => rerender()} onNotice={setAnnouncement} /> } : undefined} announcement={[sortPending ? `Sorting column ${columnToLetters(sortPending.col)}…` : '', resourceNotice, assets?.sheetId !== activeSheetId ? 'Loading sheet…' : '', assets && assets.sheetId === activeSheetId && assets.lease.refusedImages > 0 ? `${assets.lease.refusedImages} picture${assets.lease.refusedImages === 1 ? ' is' : 's are'} not shown (image memory budget).` : '', selectionIncomplete ? 'Selection highlight is incomplete at this zoom; zoom in for detail.' : '', remote?.queryNotice === announcement ? '' : remote?.queryNotice, announcement].filter(Boolean).join(' ')} inspection={inspection} profile={profile} label={`Worksheet ${entry.sheet.name}`}
               cellPresentation={at => {
                 const cell = cellAt(entry, at)
                 if (!cell && remote && !remote.store(activeSheetId).isKnown(at)) return { text: 'Loading…' }

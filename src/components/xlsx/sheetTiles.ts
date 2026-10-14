@@ -14,7 +14,7 @@ import type { RenderSheetAssets } from '../../xlsx/render'
 import { renderSheetViewport } from '../../xlsx/view/renderViewport'
 import { paintWatermark, type ResolvedWatermark } from '../../core/watermark'
 import type { LayoutCache } from '../../xlsx/view/textLayout'
-import { frameBudgetFor, type FrameBudget, type MergeQueryCache, type SheetGeometryResult } from '../../xlsx/view/viewport'
+import { frameBudgetFor, type FrameBudget, type MergeQueryCache, type SheetGeometryResult, type ViewportPlan } from '../../xlsx/view/viewport'
 import {
   BITMAP_BUDGETS, bitmapPoolPlan, MemoryPool, RGBA_BYTES, TILE_DEVICE_PX, TILE_PREFETCH_RING, TileCache,
   prefetchTiles, tileLogicalBox, tileRangeFor, type TileIndexRange, type TileKey, type TileSurface,
@@ -28,6 +28,8 @@ export interface CanvasTile extends TileSurface {
   cost?: { records: number; gridlines: number }
 }
 export interface SheetFrame {
+  /** A prepared (worker) plan for a tile; undefined plans it on the main thread. */
+  plan?: (window: LogicalViewport, visible: boolean) => ViewportPlan | undefined
   sheet: XlsxSheet
   geometry: SheetGeometryResult
   identity: CacheIdentity
@@ -47,7 +49,7 @@ export interface SheetFrame {
   /** Worker-backed sheets (S5.4): logical boxes inside `box` whose records are
    * still loading. They paint a pending tone, never an asserted blank, and a
    * tile holding any is presented but not cached (it repaints once they land). */
-  pending?: (box: LogicalCellBox) => readonly LogicalCellBox[]
+  pending?: (box: LogicalCellBox, visible: boolean) => readonly LogicalCellBox[]
   /** Worker layout/merge generation of the geometry (tiles of an older one are dropped by the viewer). */
   structureGen?: number
 }
@@ -249,19 +251,32 @@ export class SheetTileRenderer {
     // Distinct texts this tile's context shapes: the browser keeps each one
     // (per font) while the canvas lives, outside the bitmap.
     const shaped = ctx ? countShapedTexts(ctx) : null
+    // Row reads are asked for before any worker plan: both spend one frame
+    // page budget, and the row cache's reads also make the cells known for
+    // the accessible grid. Asked even for a tile that ends up pending: a
+    // worker plan with unresolved cells still needs its rows, or it never
+    // resolves.
+    const pending = frame.pending?.(box, visible) ?? []
     if (ctx) {
       const scale = frame.zoom * frame.dpr
       ctx.setTransform(scale, 0, 0, scale, 0, 0)
       this.stats.basePaints++
+      let plan = frame.plan?.(viewport, visible)
+      if (plan?.kind === 'detail') {
+        plan = { ...plan, work: { ...plan.work } }
+        if (plan.work.records > budget.records || plan.work.gridlines > budget.gridlines) {
+          plan = { kind: 'coarse', diagnostics: [], groups: [{ groupId: 'frame-budget', bounds: box, slots: { start: 0, end: 0 }, cols: { c0: 0, c1: 0 } }], extent: frame.extent, work: { ...plan.work, records: 0, gridlines: 0 } }
+        } else { budget.records -= plan.work.records; budget.gridlines -= plan.work.gridlines }
+      }
       const result = renderSheetViewport(frame.sheet, ctx, frame.geometry, viewport, frame.assets, {
-        profile: this.profile, owner: frame.identity, cache: frame.layoutCache, merges: frame.merges, frameBudget: budget,
+        preparedPlan: plan, profile: this.profile, owner: frame.identity, cache: frame.layoutCache, merges: frame.merges, frameBudget: budget,
       })
-      kind = result.kind
+      kind = result.pending ? 'pending' : result.kind
       if (result.kind === 'detail') work = { records: result.work.records, gridlines: result.work.gridlines }
       this.stats.maxTileRecords = Math.max(this.stats.maxTileRecords, work.records)
     }
     surface.cost = work
-    const pending = frame.pending?.(box) ?? []
+    if (kind === 'pending' || kind === 'diagnostic') { if (visible) this.stats.pendingTiles++; return { surface, retained: false } }
     if (pending.length) {
       if (visible) this.stats.pendingTiles++
       if (ctx) paintPending(ctx, box, pending)

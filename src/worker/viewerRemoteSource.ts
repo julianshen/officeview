@@ -23,7 +23,7 @@ import type {
   AuthoritativeCell, CacheIdentity, CellRead, ColumnEntry, ColumnQuery, FilterKeySet, FilterSpec, LogicalCellBox, OperationRefusal, Page,
   PopulatedQuery, RangeCompletion, ReadOptions, RowOrder, SheetLayout, SortSpec, SourceFailure, SourceReadQuery, SourceReadResult,
   SourceStamp, SourceStore, SparseRowPage, StructuralResult, ValuePolicy, ViewCommitDelta, WorkbookFormatting, WorkbookOwner, WorkerDiagnostic, WorkerReply,
-  ProfileId, GridSelection,
+  ProfileId, GridSelection, OverviewGroup, OverviewQuery, LogicalViewport, SearchQuery,
 } from '../xlsx/view/contracts'
 import type { RangeDetection } from '../xlsx/view/rangeDetection'
 import { MainMemoryLedger, axisBytes, estimatePayloadBytes, leaseTargets } from '../xlsx/view/mainLedger'
@@ -41,6 +41,8 @@ import { initialIdentity, initialWorkbookOwner, visibilityFromDisplayBitsets, ty
 import type { SheetGeometry, WorkbookSource } from './viewerSession'
 import { RemoteDrawingCache, type PagedSheetDrawings } from './viewerRemoteDrawings'
 import { drawingPayloadBudget } from '../xlsx/view/drawingPayload'
+import { FindError, workbookFindKey, type FindOptions, type FindPage, type FindSession } from '../xlsx/view/find'
+import { queryPayloadBytes, WORKER_QUERY_BYTES } from './viewerQueryBudget'
 
 export const ROW_CHUNK_COLS = 256
 /** One document-wide byte ledger for every sheet's painting row cache: a
@@ -90,7 +92,7 @@ const failure = (code: SourceFailure['code'], message: string, retryable = false
 const CLOSED: unique symbol = Symbol('closed')
 const CANCELLED: unique symbol = Symbol('cancelled')
 type Settled<K extends RemoteKind> = WorkerReply<K> | typeof CLOSED | typeof CANCELLED
-type RemoteKind = 'read' | 'valueQuery' | 'sort' | 'filter' | 'prepareColumns'
+type RemoteKind = 'read' | 'valueQuery' | 'sort' | 'filter' | 'prepareColumns' | 'viewport' | 'search'
 
 /** Opens `blob` in the worker behind `client`: open, then one activation per
  * sheet (each publishes its compact layout), then the first sheet again. */
@@ -116,6 +118,9 @@ export function isRemoteWorkbook(source: WorkbookSource | undefined): source is 
 }
 
 export class RemoteWorkbook implements WorkbookSource {
+  queryNotice?: string
+  private noticeScope?: string
+  private readonly latestQueries = new Map<string, string>()
   readonly valuePolicy: ValuePolicy
   readonly sheets: readonly { sheetId: string; name: string }[]
   readonly openDiagnostics: readonly WorkerDiagnostic[]
@@ -182,8 +187,40 @@ export class RemoteWorkbook implements WorkbookSource {
     const limits = VIEWPORT_DETAIL_LIMITS[this.profile]
     return { tile: limits.tile.pages, frame: limits.pages }
   }
-  /** Requests currently in flight for painting loads (all sheets). */
-  loadsInFlight = 0
+  /** Page requests painting work holds (all sheets) right now: row-cache runs
+   * and worker tile plans. Credits return when a request settles. */
+  pagesInFlight = 0
+  private pageFrame: PageFrame = { used: 0, tiles: new Map() }
+  /** Starts a frame's cumulative page allowance (§11.1: per frame and per
+   * tile, D 32/8, M 16/4). Called once per presented frame. */
+  beginPageFrame(): void { this.pageFrame = { used: 0, tiles: new Map() } }
+  /** The frame whose allowance new painting requests spend. */
+  get currentPageFrame(): PageFrame { return this.pageFrame }
+  /**
+   * Admits `pages` page requests for `tile` against ONE budget shared by row
+   * reads and worker plans: the frame's and the tile's cumulative allowance
+   * (continuations included; nothing is recycled within a frame) and the
+   * outstanding requests across frames. Ring (prefetch) work stays within
+   * half the frame on both counts, so visible work always finds room.
+   */
+  admitPages(frame: PageFrame, tile: string, pages: number, ring: boolean, commit = true): boolean {
+    const limits = this.pageLimits
+    const ceiling = ring ? limits.frame / 2 : limits.frame
+    const tileUsed = frame.tiles.get(tile) ?? 0
+    if (this.pagesInFlight + pages > ceiling || frame.used + pages > ceiling || tileUsed + pages > limits.tile) return false
+    if (!commit) return true
+    this.pagesInFlight += pages
+    frame.used += pages
+    frame.tiles.set(tile, tileUsed + pages)
+    return true
+  }
+  /** Outstanding credits only: explicit reads (inspection, copy) outside any frame. */
+  reservePages(pages: number): boolean {
+    if (this.pagesInFlight + pages > this.pageLimits.frame) return false
+    this.pagesInFlight += pages
+    return true
+  }
+  releasePages(pages: number): void { this.pagesInFlight -= pages }
   /** The active sheet keeps its cache; inactive sheets' caches are released. */
   activate(sheetId: string): void {
     for (const [id, store] of this.stores) if (id !== sheetId) store.clear()
@@ -326,20 +363,24 @@ export class RemoteWorkbook implements WorkbookSource {
   async request<K extends RemoteKind>(command: CommandOf<K>, signal?: AbortSignal, progress?: (completed: number, total: number) => void): Promise<Settled<K>> {
     if (this.closed) return CLOSED
     if (signal?.aborted) return CANCELLED
-    const head = command as unknown as { kind: K; requestId: string; query?: { op: string } }
-    const key = head.query ? `read:${head.query.op}` : head.kind
+    const head = command as unknown as { kind: K; requestId: string; owner: CacheIdentity | WorkbookOwner; query?: { op: string } }
+    const key = head.kind === 'read' ? `read:${head.query?.op}` : head.kind
+    const scope = JSON.stringify([head.owner.docId, 'sheetId' in head.owner ? head.owner.sheetId : null, key])
+    this.latestQueries.set(scope, head.requestId)
+    if ((head.kind === 'search' || head.kind === 'sort' || head.kind === 'filter') && this.queryNotice) { this.queryNotice = undefined; this.notify() }
     this.stats.commands[key] = (this.stats.commands[key] ?? 0) + 1
     const unsubscribe = progress ? this.client.onProgress(head.requestId, p => progress(p.completed, p.total ?? p.completed)) : undefined
     const sent: Promise<Settled<K>> = this.client.send<K>(command).then(reply => {
       // Charged until no part of the payload is reachable: a consumer that keeps
       // a page (a scan generator across tasks) keeps the charge.
       this.mainLedger.chargeWhileReachable(head.kind === 'read' && head.query?.op === 'drawings' ? 'drawings' : 'replies', leaseTargets(reply), estimatePayloadBytes(reply))
-      this.capture(reply)
+      this.capture(reply, scope)
       return reply
     }, () => CLOSED)
     if (!signal) return sent.finally(() => unsubscribe?.())
     return new Promise<Settled<K>>(resolve => {
       const abort = () => {
+        if (this.latestQueries.get(scope) === head.requestId) this.latestQueries.delete(scope)
         resolve(CANCELLED)
         if (!this.closed) void this.client.send({ kind: 'cancel', requestId: this.client.nextRequestId(), targetRequestId: head.requestId }).catch(() => {})
       }
@@ -348,9 +389,66 @@ export class RemoteWorkbook implements WorkbookSource {
     })
   }
   nextRequestId(): string { return this.client.nextRequestId() }
-  private capture(reply: WorkerReply): void {
+  private capture(reply: WorkerReply, scope: string): void {
     const status = reply.diagnostics?.find(d => d.code === 'cached-value-policy')
     if (status && status.message !== this.statusMessage) { this.statusMessage = status.message; this.notify() }
+    const timeout = reply.diagnostics.find(d => d.code === 'query-timeout')
+    if (this.closed || this.latestQueries.get(scope) !== reply.requestId || !reply.owner) return
+    const current = 'sheetId' in reply.owner ? this.identity(reply.owner.sheetId) : this.owner
+    const matches = 'sheetId' in reply.owner && 'sheetId' in current
+      ? reply.owner.docId === current.docId && reply.owner.sheetId === current.sheetId && reply.owner.viewGen === current.viewGen && reply.owner.valueGen === current.valueGen && reply.owner.fontGen === current.fontGen
+      : 'sheetVector' in reply.owner && workbookFindKey(reply.owner) === workbookFindKey(this.owner)
+    if (matches && timeout) { this.noticeScope = scope; this.queryNotice = timeout.message; this.notify() }
+    else if (matches && reply.kind === 'complete' && this.noticeScope === scope && this.queryNotice) { this.queryNotice = undefined; this.noticeScope = undefined; this.notify() }
+  }
+
+  async viewport(owner: CacheIdentity, window: LogicalViewport, signal: AbortSignal, scope?: 'frame' | 'tile'): Promise<Settled<'viewport'>> {
+    return this.request({ kind: 'viewport', requestId: this.nextRequestId(), owner, window, ...(scope ? { scope } : {}) }, signal)
+  }
+
+  /** The worker owns raw search; the UI controller separately guards its local
+   * font/layout owner before accepting the returned source identities. */
+  findSession(hostOwner: WorkbookOwner, query: SearchQuery, options: FindOptions): FindSession {
+    const owner = this.workbookOwner(), controller = new AbortController()
+    if (workbookFindKey({ ...hostOwner, fontGen: owner.fontGen }) !== workbookFindKey(owner)) throw new FindError('stale', 'Host and worker search owners differ')
+    let cursor: string | undefined, closed = false
+    const abort = () => controller.abort()
+    options.signal?.addEventListener('abort', abort, { once: true })
+    if (options.signal?.aborted) abort()
+    const guard = () => {
+      if (closed || this.closed) throw new FindError('closed', 'Search closed')
+      if (controller.signal.aborted) throw new FindError('cancelled', 'Search cancelled')
+      if (workbookFindKey(owner) !== workbookFindKey(this.owner) || options.currentOwner && workbookFindKey(options.currentOwner()) !== workbookFindKey(hostOwner)) throw new FindError('stale', 'Search owner changed')
+    }
+    return {
+      nextPage: async (): Promise<FindPage> => {
+        guard()
+        const out = await this.request({ kind: 'search', requestId: this.nextRequestId(), owner, query, ...(cursor ? { cursor } : {}) }, controller.signal)
+        if (typeof out === 'object' && out.kind === 'complete') cursor = out.result.nextCursor
+        guard()
+        if (out === CANCELLED) throw new FindError('cancelled', 'Search cancelled')
+        if (out === CLOSED) throw new FindError('closed', 'Search closed')
+        if (out.kind === 'cancelled') {
+          const timeout = out.diagnostics.find(d => d.code === 'query-timeout')
+          if (timeout) throw new FindError('resource-limit', timeout.message)
+          throw new FindError('cancelled', 'Search cancelled')
+        }
+        if (out.kind === 'error' && out.code === 'stale-source') throw new FindError('stale', 'Search owner changed')
+        if (out.kind === 'complete' && out.result.page) {
+          cursor = out.result.nextCursor
+          return { ...out.result.page, owner: hostOwner }
+        }
+        throw new Error(out.diagnostics[0]?.message ?? 'Worker search could not complete. Retry or narrow the search.')
+      },
+      close: () => {
+        if (closed) return
+        closed = true
+        controller.abort()
+        options.signal?.removeEventListener('abort', abort)
+        if (cursor && !this.closed) void this.request({ kind: 'read', requestId: this.nextRequestId(), owner: this.identity(this.sheets[0].sheetId), query: { op: 'releaseSearch', cursor } })
+        cursor = undefined
+      },
+    }
   }
 
   /** Worker sort: prepare the key columns (best effort; unprepared keys stream), then commit. */
@@ -360,6 +458,8 @@ export class RemoteWorkbook implements WorkbookSource {
       const prepared = await this.request({ kind: 'prepareColumns', requestId: this.nextRequestId(), owner, cols }, signal)
       if (prepared === CANCELLED) return { kind: 'cancelled' }
       if (prepared === CLOSED) return { kind: 'stale' }
+      if (prepared.kind === 'cancelled') return prepared.diagnostics.some(d => d.code === 'query-timeout')
+        ? { kind: 'error', message: prepared.diagnostics[0].message } : { kind: 'cancelled' }
       if (prepared.kind === 'error' && prepared.code === 'stale-source') return { kind: 'stale' }
     }
     return this.commit(await this.request({ kind: 'sort', requestId: this.nextRequestId(), owner, spec }, signal, progress), owner.sheetId, { sort: spec })
@@ -379,7 +479,7 @@ export class RemoteWorkbook implements WorkbookSource {
         if (view) this.mainLedger.settle(out)
         return view ? { kind: 'committed', view } : { kind: 'stale' }
       }
-      case 'cancelled': return { kind: 'cancelled' }
+      case 'cancelled': return out.diagnostics.some(d => d.code === 'query-timeout') ? { kind: 'error', message: out.diagnostics[0].message } : { kind: 'cancelled' }
       case 'incomplete': return { kind: 'incomplete' }
       case 'quota': return { kind: 'refused', refusal: { reason: 'resource-limit', message: 'View exceeds the worker memory budget.' } }
       case 'error':
@@ -440,6 +540,7 @@ export class RemoteWorkbook implements WorkbookSource {
     this.geometries.clear()
     this.layouts.clear()
     this.structures.clear()
+    this.latestQueries.clear()
     this.failures.clear()
     try {
       await Promise.race([this.client.send({ kind: 'close', requestId: this.client.nextRequestId(), docId: this.docId }), new Promise(resolve => setTimeout(resolve, 1000))])
@@ -450,6 +551,13 @@ export class RemoteWorkbook implements WorkbookSource {
 }
 
 interface RowEntry { chunks: Set<number>; cells: PagedCell[] }
+/** Per-frame page budgets are shared across sheet stores, so tile identity
+ * includes the sheet as well as the complete logical box. */
+export const pageTileKey = (sheetId: string, box: LogicalCellBox): string => JSON.stringify([sheetId, box.x, box.y, box.width, box.height])
+/** One frame's cumulative page spending, in total and per tile key. */
+export interface PageFrame { used: number; tiles: Map<string, number> }
+/** Where a painting run's pages are charged. */
+interface PageAdmission { frame: PageFrame; tile: string; ring: boolean }
 
 /** One byte ledger for the painting row caches of every sheet of a document
  * (§12.4). Insertion order is recency; charging past the limit evicts the
@@ -532,7 +640,7 @@ export class RemoteSheetStore implements SourceStore {
     if (out === CLOSED) return failure('stale-source', 'The document was closed')
     switch (out.kind) {
       case 'complete': return out.result.kind === 'read' ? out.result.result : failure('page-error', 'Unexpected read reply')
-      case 'cancelled': return failure('cancelled', 'Read cancelled', true)
+      case 'cancelled': return failure('cancelled', out.diagnostics[0]?.message ?? 'Read cancelled', true)
       case 'incomplete': return failure('incomplete', 'Source range is incomplete', true)
       case 'quota': return failure('quota', 'Worker memory budget exceeded')
       case 'error': return failure(out.code, out.diagnostics[0]?.message ?? `Read failed (${out.code})`, out.retryable)
@@ -624,10 +732,19 @@ export class RemoteSheetStore implements SourceStore {
     const error = 'code' in out ? out : failure('page-error', 'Unexpected read reply')
     return { stamp: this.stamp, completeness: 'incomplete', merges: [], tables: [], spills: [], drawings: [], missing: [rect], error }
   }
-  async queryOverview(): Promise<Page<never>> {
-    // Coarse frames paint declared neutral summaries on the main thread; the
-    // worker overview query is not part of this transport.
-    return this.failedPage(failure('unsupported', 'Overview summaries are not served by the paged viewer transport'))
+  async queryOverview(request: OverviewQuery, options: ReadOptions): Promise<Page<OverviewGroup>> {
+    const budget = WORKER_QUERY_BYTES[this.workbook.profile]
+    const cap = VIEWPORT_DETAIL_LIMITS[this.workbook.profile].overviewGroups
+    const refused = this.guard(options)
+    if (refused) return this.failedPage(refused)
+    if (!Array.isArray(request.groups) || request.groups.length > cap || queryPayloadBytes(request, budget) > budget) return this.failedPage(failure('resource-limit', 'Overview request exceeds its bounded wire budget'))
+    const charge = `overview-clone:${this.workbook.nextRequestId()}`
+    this.workbook.mainLedger.set('replies', charge, queryPayloadBytes(request, budget))
+    try {
+      const out = await this.read({ op: 'overview', request: structuredClone(request) }, options)
+      if ('code' in out) return this.failedPage(out)
+      return out.op === 'overview' ? out.page : this.failedPage(failure('page-error', 'Unexpected overview reply'))
+    } finally { this.workbook.mainLedger.release('replies', charge) }
   }
   async ensureComplete(rect: SourceRect, options: ReadOptions): Promise<RangeCompletion> {
     const out = await this.read({ op: 'complete', rect }, options)
@@ -639,6 +756,31 @@ export class RemoteSheetStore implements SourceStore {
 
   // ---- painting row cache ----
 
+  /** Adopt resolved viewport cells for accessibility/inspection. This proves
+   * only these coordinates, never the blank remainder of a row-cache chunk. */
+  adoptViewport(cells: readonly import('../xlsx/view/contracts').ViewportCell[]): void {
+    const rows = new Map<number, AuthoritativeCell[]>()
+    for (const item of cells) {
+      if (item.kind !== 'cell' && item.kind !== 'unavailable') continue
+      const row = rows.get(item.source.row) ?? []
+      row.push({ ...item.cell, ...(item.kind === 'unavailable' ? { unavailable: true } : {}) })
+      rows.set(item.source.row, row)
+    }
+    for (const [row, cells] of rows) {
+      const entry = this.rows.get(row) ?? { chunks: new Set<number>(), cells: [] as PagedCell[] }
+      const byCol = new Map(entry.cells.map(cell => [cell.col, cell]))
+      for (const cell of cells) {
+        const style = this.workbook.styleOf(cell.styleIndex)
+        byCol.set(cell.col, { ...cell, ref: formatA1(cell), value: cell.value ?? null, ...(style ? { style } : {}) } as PagedCell)
+      }
+      const next = [...byCol.values()].sort((a, b) => a.col - b.col)
+      const bytes = 64 + next.reduce((sum, cell) => sum + cachedCellBytes(cell), 0)
+      if (bytes > this.workbook.ledger.limitBytes) continue
+      entry.cells = next
+      this.rows.set(row, entry)
+      this.workbook.ledger.charge(this, row, bytes)
+    }
+  }
   /** Cached populated cells of a source row (ascending columns); only the
    * known chunks contribute. Unknown chunks are reported by `pendingIn`. */
   cellsOf(row: number): readonly PagedCell[] | undefined {
@@ -676,17 +818,52 @@ export class RemoteSheetStore implements SourceStore {
    * order; requests them as a side effect. Detail admission comes first (spec
    * §11.1): rows/columns projecting below four device pixels at `scale` are
    * summarized by the planner and never read. Requests are coalesced into runs
-   * and bounded per tile and per frame (in flight); the rest stay pending and
-   * are asked for once earlier loads land.
+   * and every page (continuations included) is admitted against the frame's
+   * shared per-tile/per-frame allowance (RemoteWorkbook.admitPages); a ring
+   * tile (`ring`) stays within the ring share. The rest stay pending and are
+   * asked for by a later frame.
    */
-  pendingIn(metrics: ProjectedSheetMetrics, box: LogicalCellBox, scale: number): LogicalCellBox[] {
+  pendingIn(metrics: ProjectedSheetMetrics, box: LogicalCellBox, scale: number, ring = false): LogicalCellBox[] {
+    const found = this.uncoveredIn(metrics, box, scale)
+    if (!found || 'oversized' in found) return []
+    const { k0, k1, missing, out } = found
+    if (missing.length) {
+      const admission: PageAdmission = { frame: this.workbook.currentPageFrame, tile: pageTileKey(this.sheetId, box), ring }
+      for (const run of coalesce(missing)) {
+        if (!this.workbook.admitPages(admission.frame, admission.tile, 1, ring, false)) break
+        void this.loadRun(run.r0, run.r1, k0, k1, new AbortController().signal, this.stamp, admission)
+      }
+    }
+    return out
+  }
+  /** What the row cache can say about a box, without requesting anything:
+   * 'proven' when it already knows every detail cell (or the box has none),
+   * 'unknown' when `pendingIn` would read rows for it, and 'oversized' when it
+   * spans more rows than the row cache may cover, so only a worker plan can. */
+  coverage(metrics: ProjectedSheetMetrics, box: LogicalCellBox, scale: number): 'proven' | 'unknown' | 'oversized' {
+    const found = this.uncoveredIn(metrics, box, scale)
+    if (!found) return 'proven'
+    if ('oversized' in found) return 'oversized'
+    return found.missing.length ? 'unknown' : 'proven'
+  }
+  /** The pendingIn query without the loads: boxes and missing rows, null when
+   * the box has no detail rows or columns to read, or oversized when it spans
+   * more rows than the row cache may cover. */
+  private uncoveredIn(metrics: ProjectedSheetMetrics, box: LogicalCellBox, scale: number):
+    { k0: number; k1: number; missing: number[]; out: LogicalCellBox[] } | { oversized: true } | null {
     const detail = (sizeCss: number) => sizeCss * scale >= MIN_DETAIL_DEVICE_PX - 1e-9
     const rows = metrics.rows.visibleBetween(box.y, box.y + box.height)
-    if (rows.count === 0 || rows.count > MAX_PENDING_ROWS) return []
+    if (rows.count === 0) return null
     const cols = metrics.cols.visibleBetween(Math.max(0, box.x - TEXT_OVERFLOW_REACH_CSS), box.x + box.width + TEXT_OVERFLOW_REACH_CSS)
     let c0 = -1, c1 = -1
     for (const run of cols.runs) { if (!detail(run.sizeCss)) continue; if (c0 < 0) c0 = run.start; c1 = run.end }
-    if (c0 < 0) return []
+    if (c0 < 0) return null
+    // Too many rows to cover only matters when some of them are detail rows;
+    // an all-subpixel band is summarized by the planner and never read.
+    if (rows.count > MAX_PENDING_ROWS) {
+      for (const run of rows.runs) if (detail(run.sizeCss)) return { oversized: true }
+      return null
+    }
     const k0 = Math.floor(c0 / ROW_CHUNK_COLS), k1 = Math.floor(c1 / ROW_CHUNK_COLS)
     const out: LogicalCellBox[] = []
     const missing: number[] = []
@@ -702,13 +879,7 @@ export class RemoteSheetStore implements SourceStore {
         else out.push({ x: box.x, y, width: box.width, height })
       }
     }
-    if (missing.length) {
-      const limits = this.workbook.pageLimits
-      const budget = Math.min(limits.tile, limits.frame - this.workbook.loadsInFlight)
-      const runs = coalesce(missing).slice(0, Math.max(0, budget))
-      for (const run of runs) void this.loadRun(run.r0, run.r1, k0, k1, new AbortController().signal, this.stamp)
-    }
-    return out
+    return { k0, k1, missing, out }
   }
   /** Loads the chunks covering [c0,c1] of `rows` (source rows) in runs. */
   async load(rows: readonly number[], c0: number, c1: number, signal?: AbortSignal, stamp: SourceStamp = this.stamp): Promise<void> {
@@ -716,11 +887,15 @@ export class RemoteSheetStore implements SourceStore {
     const runs = coalesce(rows.filter(row => !this.known(row, k0, k1)), 0)
     await Promise.all(runs.map(run => this.loadRun(run.r0, run.r1, k0, k1, signal ?? new AbortController().signal, stamp)))
   }
-  private async loadRun(r0: number, r1: number, k0: number, k1: number, signal: AbortSignal, stamp: SourceStamp): Promise<void> {
+  private async loadRun(r0: number, r1: number, k0: number, k1: number, signal: AbortSignal, stamp: SourceStamp, admission?: PageAdmission): Promise<void> {
     const key = `${stamp.valueGen}:${r0}:${r1}:${k0}:${k1}`
     if (this.loading.has(key)) return
+    // A painting run spends its frame's allowance page by page; an explicit
+    // read (inspection, copy) holds an outstanding credit only.
+    const admit = () => admission ? this.workbook.admitPages(admission.frame, admission.tile, 1, admission.ring) : this.workbook.reservePages(1)
+    if (admission) { if (!admit()) return } else this.workbook.pagesInFlight++
     this.loading.add(key)
-    this.workbook.loadsInFlight++
+    let held = 1
     const epoch = this.state.epoch
     const range = { r0, r1, c0: k0 * ROW_CHUNK_COLS, c1: Math.min(MAX_COLS - 1, (k1 + 1) * ROW_CHUNK_COLS - 1) }
     let changed = false
@@ -730,6 +905,9 @@ export class RemoteSheetStore implements SourceStore {
       // row up to a page's last item, or the run end on the final page, is known.
       let covered = r0 - 1
       for (let pages = 0; pages < PAGES_PER_RUN; pages++) {
+        // A continuation is another page request: without a credit the run
+        // stops here, its later rows stay unknown and a later frame asks again.
+        if (pages > 0) { if (!admit()) break; held++ }
         const page = await this.readRows(range, cursor, { signal, stamp })
         // A page for an older owner, a cleared cache or a closed document never lands.
         if (this.workbook.isClosed || epoch !== this.state.epoch || page.stamp.valueGen !== this.stamp.valueGen) return
@@ -748,7 +926,7 @@ export class RemoteSheetStore implements SourceStore {
       }
     } finally {
       this.loading.delete(key)
-      this.workbook.loadsInFlight--
+      this.workbook.releasePages(held)
       if (changed) this.workbook.notify()
     }
   }

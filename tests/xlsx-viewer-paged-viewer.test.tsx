@@ -84,16 +84,26 @@ const internal = (props: Record<string, unknown>) => props as object
 
 describe('S5.4 routing: interactiveSheets mounts the worker-backed viewer for paged admissions', () => {
   it('opens a paged admission in the worker (no main-thread parse, shell document) and shows notices once', async () => {
+    const mainPlanner = vi.spyOn(viewportPlanner, 'planViewport')
     const h = workerHarness()
+    // Hold worker viewport replies: paint must fall back to the main-thread
+    // planner (S13.3 review round 2) instead of waiting on plans that never land.
+    h.hold(command => command.kind === 'viewport')
     const factory = vi.fn(() => h.port)
     const ui = render(<OfficeFile data={workbook()} interactiveSheets viewerWorker={factory} />)
     await waitFor(() => expect(ui.getByRole('gridcell', { name: /alpha/ })).toBeTruthy())
+    // The main-thread planner is the fallback, not the painter: it runs while
+    // worker plans are still pending, and must paint the same records (the
+    // previous never-called assertion encoded the exclusive-plans design that
+    // left blank cells "Loading…" forever).
+    expect(mainPlanner).toHaveBeenCalled()
+    act(() => h.release())
     expect(factory).toHaveBeenCalledTimes(1)
     const open = h.posted.find(command => command.kind === 'open')
     expect(open?.kind === 'open' && open.source.kind).toBe('blob')
     expect(h.parse).not.toHaveBeenCalled()
-    // Cells came from bounded worker row reads, not from a main-thread document.
-    expect(h.reads('rows')).toBeGreaterThan(0)
+    // Paint and semantics consume bounded worker viewport records.
+    await waitFor(() => expect(h.posted.some(command => command.kind === 'viewport')).toBe(true))
     expect(ui.container.textContent).not.toMatch(/compatibility mode/)
     await waitFor(() => expect(ui.container.textContent).toMatch(/Showing saved values/))
     expect(ui.container.textContent?.match(/Showing saved values/g)).toHaveLength(1)
@@ -147,6 +157,33 @@ describe('S5.4 bounded worker reads: pending, cancellation and replacement', () 
 })
 
 describe('S5.4 far corner and copy limits on a paged fixture', () => {
+  it('shows the worker query deadline in the viewer status and preserves the rendered sheet', async () => {
+    const h = workerHarness()
+    const ui = render(<OfficeFile data={workbook()} interactiveSheets viewerWorker={() => h.port} />)
+    await waitFor(() => expect(ui.getByRole('gridcell', { name: /alpha/ })).toBeTruthy())
+    const open = h.posted.find(command => command.kind === 'open')!
+    if (open.kind !== 'open') throw new Error('Expected open command')
+    const session = h.kernel.session(open.docId)!
+    let began!: () => void, readSignal: AbortSignal | undefined
+    const started = new Promise<void>(resolve => { began = resolve })
+    vi.spyOn(session.source.store('1'), 'scanPopulated').mockImplementation(async function* (_query, options) {
+      readSignal = options.signal
+      began()
+      await new Promise(() => {})
+    })
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] })
+    try {
+      fireEvent.change(ui.getByRole('searchbox', { name: 'Search document' }), { target: { value: 'alpha' } })
+      await act(async () => { await started })
+      await act(async () => { await vi.advanceTimersByTimeAsync(120_001) })
+      expect(ui.container.textContent).toMatch(/Query timed out after 120 seconds/)
+      expect(ui.container.textContent?.match(/Query timed out after 120 seconds/g)).toHaveLength(1)
+      expect(readSignal!.aborted).toBe(true)
+      expect(ui.getByRole('gridcell', { name: /alpha/ })).toBeTruthy()
+      expect(h.kernel.lifecycleStats()).toMatchObject({ inflight: 0, transientBytes: 0 })
+    } finally { ui.unmount(); vi.useRealTimers() }
+  })
+
   it('reaches XFD1048576 by Go To, find and copy through worker reads', async () => {
     const h = workerHarness(), write = clipboard()
     const ui = render(<OfficeFile data={workbook()} interactiveSheets viewerWorker={() => h.port} />)
@@ -157,10 +194,11 @@ describe('S5.4 far corner and copy limits on a paged fixture', () => {
     await waitFor(() => expect(write).toHaveBeenCalledWith('corner'))
     go(ui, 'A1')
     await waitFor(() => expect(ui.getByRole('gridcell', { name: /alpha/ })).toBeTruthy())
-    const scans = h.reads('scan')
+    const searches = h.posted.filter(command => command.kind === 'search').length
     fireEvent.change(ui.getByRole('searchbox', { name: 'Search document' }), { target: { value: 'corner' } })
     await waitFor(() => expect(ui.container.textContent).toMatch(/1 of 1/))
-    expect(h.reads('scan')).toBeGreaterThan(scans)
+    expect(h.posted.filter(command => command.kind === 'search').length).toBeGreaterThan(searches)
+    expect(h.reads('scan')).toBe(0)
     await waitFor(() => expect(ui.getByRole('gridcell', { name: /corner/ })).toBeTruthy())
   })
 
@@ -168,8 +206,8 @@ describe('S5.4 far corner and copy limits on a paged fixture', () => {
     const h = workerHarness(), write = clipboard()
     const ui = render(<OfficeFile data={workbook()} interactiveSheets viewerWorker={() => h.port} />)
     await waitFor(() => expect(ui.getByRole('gridcell', { name: /alpha/ })).toBeTruthy())
-    // The viewer is worker-backed: its visible cells came from worker row reads.
-    expect(h.reads('rows')).toBeGreaterThan(0)
+    // Visible records were planned by the worker; copy refusal starts no additional reads.
+    expect(h.posted.some(command => command.kind === 'viewport')).toBe(true)
     fireEvent.click(ui.getByRole('button', { name: 'Select worksheet' }))
     const before = h.reads()
     fireEvent.click(ui.getByRole('button', { name: 'Copy selection' }))
@@ -257,6 +295,7 @@ describe('S5.4 remote source: cancellation and ownership on the main thread', ()
 // ---------------------------------------------------------------------------
 import InteractiveSheetDoc from '../src/components/xlsx/InteractiveSheetDoc'
 import { createControlsClient, type ControlsClientOptions } from '../src/components/xlsx/controlsClient'
+import * as viewportPlanner from '../src/xlsx/view/viewport'
 import { createRowOrder } from '../src/xlsx/view/order'
 import { createIntervalSet, visibilityFromHidden } from '../src/xlsx/view/visibility'
 import { createSheetMetrics } from '../src/xlsx/view/projection'
@@ -444,5 +483,84 @@ describe('S5.4 review: lifecycle and publication', () => {
     const result = await client.sort(owner(), { range: { r0: 0, r1: 1, c0: 0, c1: 0, headerRows: 0, totalsRows: 0 }, keys: [{ col: 0, order: 'asc' }], caseSensitive: false }, new AbortController().signal)
     expect(result).toEqual({ kind: 'stale' })
     expect(publish).not.toHaveBeenCalled()
+  })
+})
+
+describe('S13.3 review round 2, NIT-1: a search over an importing sheet catches up', () => {
+  it('re-runs a finished search once its incomplete sheets have loaded', async () => {
+    const h = workerHarness()
+    const ui = render(<OfficeFile data={workbook()} interactiveSheets viewerWorker={() => h.port} />)
+    await waitFor(() => expect(ui.getByRole('gridcell', { name: /alpha/ })).toBeTruthy())
+    const open = h.posted.find(command => command.kind === 'open')!
+    if (open.kind !== 'open') throw new Error('Expected open command')
+    const store = h.kernel.session(open.docId)!.source.store('1')
+    // The first search sees the sheet's structure still importing.
+    const structural = store.queryStructural.bind(store)
+    vi.spyOn(store, 'queryStructural').mockImplementationOnce(async (rect, options) => ({ ...(await structural(rect, options)), completeness: 'incomplete' }))
+    const searches = () => h.posted.filter(command => command.kind === 'search').length
+    fireEvent.change(ui.getByRole('searchbox', { name: 'Search document' }), { target: { value: 'alpha' } })
+    // The sheet is already loaded on the main side, so the incomplete page is
+    // re-run and the "still loading" qualifier goes away instead of sticking.
+    await waitFor(() => expect(searches()).toBe(2))
+    await waitFor(() => expect(ui.container.textContent).toMatch(/1 of 1/))
+    expect(ui.container.textContent).not.toMatch(/some sheets still loading/)
+    expect(store.queryStructural).toHaveBeenCalledTimes(2)
+    await act(async () => { await new Promise(resolve => setTimeout(resolve, 50)) })
+    expect(searches(), 'one refresh, not a loop').toBe(2)
+    ui.unmount()
+  })
+})
+
+describe('S13.3 review round 2: worker tile plans keep row-cache semantics and warm paint', () => {
+  const viewportCommands = (h: ReturnType<typeof workerHarness>) => h.posted.filter(command => command.kind === 'viewport').length
+  const settled = async (ui: ReturnType<typeof render>, f: ReturnType<typeof frames>) => {
+    await waitFor(() => expect(ui.getByRole('gridcell', { name: /alpha/ })).toBeTruthy())
+    await waitFor(() => expect(f.last()?.pendingTiles).toBe(0))
+  }
+
+  it('MAJOR-1: blank visible cells read as blank, not Loading, once their rows are known', async () => {
+    const h = workerHarness(), f = frames()
+    const ui = render(<OfficeFile data={workbook()} interactiveSheets viewerWorker={() => h.port} {...internal({ onFrame: f.onFrame })} />)
+    await settled(ui, f)
+    // C1, D1, E1… are authored blank: once the bounded row reads land they are
+    // known blanks, never a permanent "Loading…".
+    await waitFor(() => expect(ui.queryAllByRole('gridcell', { name: /Loading/ })).toHaveLength(0))
+    const blank = ui.getAllByRole('gridcell').find(cell => /\bC1\b/.test(cell.getAttribute('aria-label') ?? cell.textContent ?? ''))
+    expect(blank, 'C1 is a visible gridcell').toBeTruthy()
+    expect(blank!.getAttribute('aria-label') ?? blank!.textContent).not.toMatch(/Loading/)
+    expect(h.reads('rows')).toBeGreaterThan(0)
+    ui.unmount()
+  })
+
+  it('MAJOR-2: ring tiles are prefetched and retained over the row cache', async () => {
+    const h = workerHarness(), f = frames()
+    const ui = render(<OfficeFile data={workbook()} interactiveSheets viewerWorker={() => h.port} {...internal({ onFrame: f.onFrame })} />)
+    await waitFor(() => expect(ui.getByRole('gridcell', { name: /alpha/ })).toBeTruthy())
+    // Every visible tile of the settled first frame is retained...
+    const firstSettled = f.all.find(stats => stats.pendingTiles === 0 && stats.lastRequests.length > 0 && stats.prefetched === 0)
+    await waitFor(() => expect(f.last()?.pendingTiles).toBe(0))
+    // ...and the ring around them is painted and retained on top.
+    await waitFor(() => expect(f.last()?.prefetched ?? 0).toBeGreaterThan(0))
+    const visible = firstSettled?.lastRequests.length ?? f.all.reduce((most, stats) => Math.max(most, stats.lastRequests.length), 0)
+    expect(visible).toBeGreaterThan(0)
+    expect(f.last()!.tiles.tiles, 'ring tiles are retained beyond the visible ones').toBeGreaterThan(visible)
+    ui.unmount()
+  })
+
+  it('MAJOR-2: a warm area repaints at a new zoom with no viewport command and no pending tile', async () => {
+    const h = workerHarness(), f = frames()
+    const ui = render(<OfficeFile data={workbook()} interactiveSheets viewerWorker={() => h.port} {...internal({ onFrame: f.onFrame })} />)
+    await settled(ui, f)
+    await act(async () => { await new Promise(resolve => setTimeout(resolve, 20)) })
+    const commands = viewportCommands(h), seen = f.all.length
+    // Zooming in shows a subset of the rows already read: every visible tile
+    // is new (the tile cache is per zoom) but the row cache proves it.
+    act(() => { fireEvent.click(ui.getByRole('button', { name: 'Zoom in' })) })
+    await waitFor(() => expect(f.all.length).toBeGreaterThan(seen))
+    const first = f.all.slice(seen).find(stats => stats.zoom !== f.all[seen - 1].zoom)
+    expect(first, 'a frame at the new zoom').toBeTruthy()
+    expect(first!.pendingTiles, 'the first frame at the new zoom paints every tile at once').toBe(0)
+    expect(viewportCommands(h), 'tiles the row cache proves never ask the worker').toBe(commands)
+    ui.unmount()
   })
 })

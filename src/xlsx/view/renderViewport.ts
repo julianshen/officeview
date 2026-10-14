@@ -24,6 +24,7 @@ export function createCellLayoutHost(ctx: CanvasRenderingContext2D, sheet: Parti
 }
 
 export interface ViewportPaintResult {
+  pending?: boolean
   kind: ViewportPlan['kind']; diagnostics: readonly WorkerDiagnostic[]
   /** Canonical records the frame painted (spec §11.2), in paint order. */
   records: readonly CellLayout[]
@@ -34,6 +35,8 @@ export interface ViewportPaintResult {
   work: ViewportWork
 }
 export interface ViewportPaintOptions {
+  /** Worker-planned records; canonical layout and paint remain on this host. */
+  preparedPlan?: ViewportPlan
   profile?: ViewportProfile
   /** Publication owner of the records; layouts are cached under it. */
   owner?: CacheIdentity
@@ -75,7 +78,7 @@ export function renderSheetViewport(
   prepared?: RenderSheetAssets,
   options: ViewportPaintOptions = {},
 ): ViewportPaintResult {
-  const plan = planViewport(geometry, viewport, options.profile, { activeCell: options.activeCell, merges: options.merges, frameBudget: options.frameBudget })
+  const plan = options.preparedPlan ?? planViewport(geometry, viewport, options.profile, { activeCell: options.activeCell, merges: options.merges, frameBudget: options.frameBudget })
   const { x: vx, y: vy, width, height } = viewport.box
   const paintable = Number.isFinite(width) && Number.isFinite(height) && width > 0 && height > 0
   const owner = options.owner ?? { docId: '', sheetId: sheet.sheetId ?? sheet.name, valueGen: 0, fontGen: 0, viewGen: 0 }
@@ -161,8 +164,21 @@ export function renderSheetViewport(
     }
     // The active cell keeps its exact record even inside a summarized region.
     if (active && !records.some(record => record.id === active.id)) replay(active)
+    let pendingNotice = false
+    if (plan.kind === 'detail') for (const region of plan.pending ?? []) {
+      const box = region.bounds
+      ctx.fillStyle = COARSE_FILL
+      ctx.fillRect(box.x - vx, box.y - vy, box.width, box.height)
+      if (!pendingNotice && box.x < vx + width && box.x + box.width > vx && box.y < vy + height && box.y + box.height > vy) {
+        ctx.fillStyle = '#666666'
+        ctx.font = '12px sans-serif'
+        ctx.textBaseline = 'alphabetic'
+        ctx.fillText(region.error ? 'Cells could not be loaded' : 'Loading…', Math.max(8, box.x - vx + 8), Math.max(16, box.y - vy + 16))
+        pendingNotice = true
+      }
+    }
     if (paintable && coarse.length) notice(COARSE_NOTICE)
-    return { kind: plan.kind, diagnostics: plan.diagnostics, records, coarse, ...(active ? { active } : {}), work }
+    return { kind: plan.kind, ...(plan.kind === 'detail' && plan.pending?.length ? { pending: true } : {}), diagnostics: plan.diagnostics, records, coarse, ...(active ? { active } : {}), work }
   } finally { ctx.restore() }
 }
 

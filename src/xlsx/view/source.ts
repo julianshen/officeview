@@ -31,6 +31,7 @@ import {
   failedPage, failure, lowerBound, rowSetIntervals, sameStamp, type SheetGeometry, type WorkbookSource,
 } from '../../worker/viewerSession'
 import { addRecord, answerOverview, emptyAggregate, type OverviewCellSource } from '../storage/overviewIndex'
+import { cellDisplayText } from '../render'
 
 /** Row-page bounds: at most 200 rows and 262,144 cells (matches the fixture store). */
 export const READ_ROWS_PAGE_ROWS = 200
@@ -205,6 +206,11 @@ export class ObjectXlsxSheetAdapter implements SourceStore {
   }
   private cellIn(row: XlsxRow, col: number): XlsxCell | undefined {
     return row.cells.find(cell => cell.col === col && cell.row === row.index)
+  }
+  displayText(cell: AuthoritativeCell): string {
+    const k = lowerBound(this.rowIndexes, cell.row)
+    const original = this.rowIndexes[k] === cell.row ? this.cellIn(this.rows[k], cell.col) : undefined
+    return cellDisplayText(this.sheet, { value: cell.value, style: original?.style })
   }
   async readCell(at: { row: number; col: number }, options: ReadOptions): Promise<CellRead> {
     const error = this.guard(options)
@@ -435,7 +441,7 @@ export class ObjectXlsxSheetAdapter implements SourceStore {
 }
 
 function sheetGeometry(sheet: XlsxSheet): SheetGeometry {
-  return buildGeometry([...sheet.rows].sort((a, b) => a.index - b.index), sheet.cols)
+  return buildGeometry([...sheet.rows].sort((a, b) => a.index - b.index), sheet.cols, [], { hiddenCols: true })
 }
 /** Source-space geometry from authored rows (ascending) and column specs; shared by both adapters. */
 export function buildGeometry(
@@ -536,6 +542,7 @@ export function createObjectWorkbookSource(doc: XlsxDocument, docId: string, opt
     ...(status.message === undefined ? {} : { openDiagnostics: Object.freeze([{ code: SAVED_VALUES_DIAGNOSTIC, message: status.message }]) }),
     sheets: Object.freeze(sheets.map(({ sheet, sheetId }) => Object.freeze({ sheetId, name: sheet.name }))),
     store: storeFor,
+    displayText: (cell, sheetId) => storeFor(sheetId).displayText(cell),
     geometry(sheetId) {
       let geometry = geometries.get(sheetId)
       if (!geometry) {

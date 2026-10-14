@@ -329,8 +329,8 @@ describe('S4.2 stale results never replace the current view', () => {
       's sort:progress 1/3',
       '> close',
       'c close:complete',
-      '> release key read',
       's sort:cancelled document-closed',
+      '> release key read',
     ])
     expect(r.sources[0].releases).toBe(1)
     expect(r.kernel.session('doc')).toBeUndefined()
@@ -442,8 +442,8 @@ describe('S4.2 cancellation and reclaim', () => {
       's1 sort:progress 1/3',
       '> superseding sort',
       's2 sort:progress 0/3',
-      's2 sort:progress 1/3',
       's1 sort:cancelled superseded',
+      's2 sort:progress 1/3',
       's2 sort:progress 2/3',
       's2 sort:progress 3/3',
       's2 sort:complete rev1 g1',
@@ -479,8 +479,8 @@ describe('S4.2 cancellation and reclaim', () => {
     await older
     expect(r.log.events.slice(1)).toEqual([
       '> replace range',
-      'q2 valueQuery:complete',
       'q1 valueQuery:cancelled range-replaced',
+      'q2 valueQuery:complete',
       'q3 valueQuery:complete',
     ])
   })

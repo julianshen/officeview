@@ -38,6 +38,7 @@ import type {
   AxisMetrics, AxisSizeInterval, CacheIdentity, ColumnEntry, ColumnQuery, CompactSourceRowSet, FilterSpec,
   AuthoritativeCell, GridSelection, GridSelectionPart, IntervalSet, OperationRefusal, Page, ProfileId, RowOrder, SingleCellPayload, SortSpec,
   SheetLayout, SourceFailure, WorkbookFormatting, SourceReadQuery, SourceReadResult, SourceRowInterval, SourceStamp, SourceStore, ValuePolicy, WorkbookOwner, WorkerDiagnostic,
+  LogicalViewport, SearchQuery, ViewportResult, RowVisibility,
 } from '../xlsx/view/contracts'
 import { MAX_COLS, MAX_ROWS, cellId, isValidCoordinate, type SourceRect, type SourceRow } from '../xlsx/view/coordinates'
 import { createIdentityOrder } from '../xlsx/view/order'
@@ -59,6 +60,12 @@ import { BOUNDED_SORT_LANES, type BoundedSortLaneStore } from '../xlsx/view/sort
 import { PREPARED_SORT_READER, type PreparedSortStore, type PreparedSortLease } from '../xlsx/view/sortPrepared'
 import { compactPreparedPage, preparedRowAt, preparedMetadataAt, visitPreparedRows, PREPARED_PAGE_ENTRIES, PREPARED_PAGE_OVERHEAD, PREPARED_ENCODING_OVERHEAD, TAG_NULL, TAG_NUMBER, TAG_STRING, TAG_BOOLEAN, F_CACHED_SET, F_CACHED, F_ERROR_SET, F_ERROR, F_PROV_ENGINE, F_PROV_CACHED, F_UNAVAILABLE, type PreparedPage } from './preparedColumn'
 import { filterValueDomain, scanValueDomain, type ValueDomainScan, type ValueStatus } from '../xlsx/view/values'
+import { awaitQueryDeadline, interruptibleStore } from './viewerAbort'
+import { WorkbookFind, FindError, FIND_HIT_BUFFER_BUDGET, type FindPage, type FindSheetInput } from '../xlsx/view/find'
+import { queryViewport, toViewportResults, VIEWPORT_DETAIL_LIMITS } from '../xlsx/view/viewport'
+import { axisBytes, projectionBytes } from '../xlsx/view/mainLedger'
+import { boundedQueryStore, queryPayloadBytes, WORKER_QUERY_BYTES } from './viewerQueryBudget'
+import type { ProjectedSheetMetrics } from '../xlsx/view/projection'
 
 const FULL_SHEET: SourceRect = Object.freeze({ r0: 0, r1: MAX_ROWS - 1, c0: 0, c1: MAX_COLS - 1 })
 const PREPARE_PAGE_LIMIT = 4096
@@ -190,6 +197,8 @@ export interface WorkbookSource {
   declaredFilters?(): readonly DeclaredSheetFilters[]
   /** S5.4: style table and date system of a source whose cells carry style ids only. */
   formatting?(): WorkbookFormatting
+  /** The canonical logical display text, without materializing cell layouts. */
+  displayText?(cell: AuthoritativeCell, sheetId: string): string
   release(): Promise<void>
 }
 
@@ -426,6 +435,8 @@ export type PrepareOutcome =
 /** Yield phases of the session's own kernels; sort phases come from sort.ts. */
 export type SessionPhase = 'prepare' | 'guard' | 'project'
 export interface SessionOptions {
+  /** Pause background kernels at bounded yields while foreground reads run. */
+  waitForForeground?: (signal: AbortSignal) => Promise<void>
   /** Injected host yield shared by every long kernel (S4.2 scheduler). */
   yield?: YieldFunction<string>
   /** Injected clock for the 10 ms yield budget (deterministic tests). */
@@ -651,6 +662,21 @@ function guardOutcome(guard: Extract<GuardOutcome, { ok: false }>, diagnostics: 
 }
 
 export class DocumentSession {
+  private readonly projections = new Map<string, { key: string; geometry: SheetGeometry; metrics: ProjectedSheetMetrics; entry: PoolEntry; readers: number; retired: boolean }>()
+  private searchState?: {
+    key: string; cursor?: string; engine?: WorkbookFind; controller: AbortController;
+    charge: Charge; unpins: (() => void)[]; busy: boolean; stopped: boolean;
+    emittedBytes: number; bytes: number; incomplete: Set<string>;
+  }
+  private searchSerial = 0
+  private projectionSerial = 0
+  private readonly interruptible = new WeakMap<SourceStore, SourceStore>()
+  private store(sheetId: string): SourceStore {
+    const source = this.source.store(sheetId)
+    let store = this.interruptible.get(source)
+    if (!store) { store = interruptibleStore(source); this.interruptible.set(source, store) }
+    return store
+  }
   private globalGen = 0
   private workbookValueGen = INITIAL_VALUE_GEN
   private fontGen = 0
@@ -856,10 +882,11 @@ export class DocumentSession {
       const store = this.preparedStore(sheetId)
       const result = await sortRowOrder(store, state.sort, {
         signal, stamp: store.stamp, locale: this.options.locale,
+        awaitYield: work => this.afterYield(work, signal),
         hidden: hiddenSourceRowsFromDisplay(identityOrder, sortMask),
         residentWorkerBytes: this.memory.totalBytes, maxWorkerBytes: this.memory.limitBytes,
         ...(this.source.retainsKeyStrings?.(sheetId) === true ? { sourceRetainsStrings: true } : {}),
-        ...(this.options.yield ? { yield: this.options.yield } : {}),
+        ...(this.options.yield ? { yield: phase => awaitQueryDeadline(this.options.yield!(phase), signal) } : {}),
         ...(this.options.now ? { now: this.options.now } : {}),
       })
       if (result.kind !== 'complete') {
@@ -955,6 +982,7 @@ export class DocumentSession {
     })
     // Admission first (throws ViewQuotaError): a refused commit changes nothing.
     this.retainView(next)
+    this.stopSearch()
     this.states.set(sheetId, next)
     this.globalGen++
     return Object.freeze({
@@ -970,8 +998,9 @@ export class DocumentSession {
   publishValues(sheetId: string): void {
     if (this.closed) throw new RangeError('Session closed')
     const state = this.state(sheetId)
-    const stamp = this.source.store(sheetId).stamp
+    const stamp = this.store(sheetId).stamp
     if (stamp.valueGen <= state.valueGen) throw new RangeError('A value publication must advance the source stamp')
+    this.stopSearch()
     // One rule for resident and evicted views: an applied sort is re-derived
     // from the new values on next use (ensureView reports `view-reapplied`), so
     // its buffers are dropped here. Orders without a recipe are kept as is.
@@ -996,6 +1025,7 @@ export class DocumentSession {
   publishFonts(): void {
     if (this.closed) throw new RangeError('Session closed')
     this.fontGen++
+    this.stopSearch()
   }
   /** Document-wide ledger (one pool across sheets and operations). */
   memoryStats(): SessionMemoryStats {
@@ -1009,20 +1039,29 @@ export class DocumentSession {
   }
   /** A per-operation share of the pool's transient ledger, released in the
    * operation's finally on every outcome (commit, refusal, cancel, stale).
-   * Growing a charge evicts retained caches first; false when it cannot fit. */
+   * Growing a charge evicts retained caches first; false when it cannot fit.
+   * A late provider cannot revive a share after cancellation unwinds it. */
   private charge(): Charge {
     const share = this.memory.charge()
+    let released = false
     return {
       set: bytes => {
-        if (!share.set(bytes)) return false
+        if (released || !share.set(bytes)) return false
         this.peakTransient = Math.max(this.peakTransient, this.memory.transientBytes)
         return true
       },
-      release: () => share.release(),
+      release: () => { released = true; share.release() },
     }
   }
-  private slice(): CooperativeSlice<string> {
-    const options: CooperativeOptions<string> = {}
+  private async afterYield(work: Promise<void>, signal: AbortSignal): Promise<void> {
+    try {
+      await awaitQueryDeadline(work, signal)
+      if (this.options.waitForForeground) await awaitQueryDeadline(this.options.waitForForeground(signal), signal)
+    } catch (cause) { if (!signal.aborted) throw cause }
+    // Each kernel's post-yield guard translates abort into its typed outcome.
+  }
+  private slice(signal: AbortSignal): CooperativeSlice<string> {
+    const options: CooperativeOptions<string> = { awaitYield: work => this.afterYield(work, signal) }
     if (this.options.now) options.now = this.options.now
     if (this.options.yield) options.yield = this.options.yield
     return new CooperativeSlice<string>(options)
@@ -1070,16 +1109,16 @@ export class DocumentSession {
     return JSON.stringify([stamp.docId, stamp.sheetId, stamp.valueGen, col])
   }
   isPrepared(sheetId: string, col: number): boolean {
-    return this.prepared.has(this.preparedKey(this.source.store(sheetId).stamp, col))
+    return this.prepared.has(this.preparedKey(this.store(sheetId).stamp, col))
   }
   /** Resident prepared columns of a sheet's current value generation, ascending. */
   preparedColumns(sheetId: string): number[] {
-    const stamp = this.source.store(sheetId).stamp
+    const stamp = this.store(sheetId).stamp
     return [...this.prepared.values()].filter(column => sameStamp(column.stamp, stamp)).map(column => column.col).sort((a, b) => a - b)
   }
   /** Measured retention of one prepared column (lane byteLengths + charges). */
   preparedFootprint(sheetId: string, col: number): PreparedFootprint | undefined {
-    const column = this.prepared.get(this.preparedKey(this.source.store(sheetId).stamp, col))
+    const column = this.prepared.get(this.preparedKey(this.store(sheetId).stamp, col))
     if (!column) return undefined
     const laneBytes = column.laneBytes
     return {
@@ -1132,7 +1171,7 @@ export class DocumentSession {
     }
     // Admitted: acknowledge with zero completed batches over the batch total.
     hooks.progress?.(0, batch.length * MAX_ROWS)
-    const slice = this.slice()
+    const slice = this.slice(signal)
     const charge = this.charge()
     try {
       return await this.stageColumns(owner, batch, signal, hooks, slice, charge, budget)
@@ -1145,7 +1184,7 @@ export class DocumentSession {
     owner: CacheIdentity, batch: readonly number[], signal: AbortSignal, hooks: OperationHooks,
     slice: CooperativeSlice<string>, charge: Charge, budget: PreparedBudget,
   ): Promise<PrepareOutcome> {
-    const store = this.source.store(owner.sheetId)
+    const store = this.store(owner.sheetId)
     const stamp = store.stamp
     const keys = batch.map(col => this.preparedKey(stamp, col))
     let protectedBytes = 0
@@ -1285,7 +1324,7 @@ export class DocumentSession {
   /** Lease only complete, value-owned columns. The scalar port exposes no
    * writable lane aliases; concurrent preparation must respect these pins. */
   private preparedSortLease(sheetId: string, col: number, expected: SourceStamp): PreparedSortLease | undefined {
-    if (this.closed || !sameStamp(this.source.store(sheetId).stamp, expected)) return undefined
+    if (this.closed || !sameStamp(this.store(sheetId).stamp, expected)) return undefined
     const key = this.preparedKey(expected, col), column = this.prepared.get(key), entry = this.preparedEntries.get(key)
     if (!column || !entry?.live) return undefined
     this.prepared.delete(key); this.prepared.set(key, column)
@@ -1296,7 +1335,7 @@ export class DocumentSession {
     return {
       stamp: Object.freeze({ ...column.stamp }),
       read: async (r0, r1, put, cooperate) => {
-        const current = () => !released && !this.closed && entry.live && sameStamp(this.source.store(sheetId).stamp, expected)
+        const current = () => !released && !this.closed && entry.live && sameStamp(this.store(sheetId).stamp, expected)
         if (!current()) return 'stale'
         let units = 0
         for (const page of column.pages) {
@@ -1327,7 +1366,7 @@ export class DocumentSession {
         const count = this.preparedPins.get(key) ?? 0
         if (count <= 1) {
           this.preparedPins.delete(key)
-          if (!this.closed && !sameStamp(this.source.store(sheetId).stamp, column.stamp)) this.dropPrepared(key)
+          if (!this.closed && !sameStamp(this.store(sheetId).stamp, column.stamp)) this.dropPrepared(key)
         }
         else this.preparedPins.set(key, count - 1)
       },
@@ -1379,8 +1418,11 @@ export class DocumentSession {
    * cursor therefore stays valid when its column is prepared or evicted between
    * pages, whatever cursor encoding the store uses (§4.1 cursors are opaque).
    */
+  /** Value-query facade for worker sort/filter kernels, not a general
+   * capability proxy. Drawing reads bypass it; main-thread value readers use
+   * their original source store for payload settlement. */
   preparedStore(sheetId: string): SourceStore {
-    const store = this.source.store(sheetId)
+    const store = this.store(sheetId)
     const session = this
     const prepared: BoundedSortLaneStore & PreparedSortStore = {
       [PREPARED_SORT_READER]: (col, stamp) => session.preparedSortLease(sheetId, col, stamp),
@@ -1460,7 +1502,7 @@ export class DocumentSession {
   /** Structural handles are value-owned and shared by every guard (§6.3). Only a
    * complete index is cached; incomplete coverage is re-queried next time. */
   private async structure(sheetId: string, signal: AbortSignal): Promise<StructuralIndex> {
-    const store = this.source.store(sheetId)
+    const store = this.store(sheetId)
     const stamp = store.stamp
     const cached = this.structures.get(sheetId)
     if (cached && sameStamp(cached.stamp, stamp)) return cached
@@ -1495,7 +1537,7 @@ export class DocumentSession {
    * served in slices, resuming at an offset within that same store page. With a
    * slice, each served page (at most 200 source rows) steps the shared budget. */
   populatedSource(sheetId: string, signal: AbortSignal, slice?: CooperativeSlice<string>): PopulatedCellSource {
-    const store = this.source.store(sheetId)
+    const store = this.store(sheetId)
     return {
       async iterate(range, cursor, limit) {
         if (limit !== undefined && (!Number.isSafeInteger(limit) || limit <= 0)) throw new RangeError('Invalid populated page limit')
@@ -1536,7 +1578,7 @@ export class DocumentSession {
     const state = resident.state
     // The captured view must not be evicted while this draft reads it.
     const unpin = this.pinView(owner.sheetId)
-    const slice = this.slice()
+    const slice = this.slice(signal)
     const charge = this.charge()
     try {
       if (spec !== null) {
@@ -1554,10 +1596,11 @@ export class DocumentSession {
       this.memory.trim(Math.max(0, this.memory.limitBytes - this.sortEstimate(spec)))
       const result = await sortRowOrder(store, spec, {
         signal, stamp: store.stamp, locale: this.options.locale,
+        awaitYield: work => this.afterYield(work, signal),
         hidden: hiddenSourceRowsFromDisplay(state.order, state.visibility),
         residentWorkerBytes: this.memory.totalBytes, maxWorkerBytes: this.memory.limitBytes,
         ...(this.source.retainsKeyStrings?.(owner.sheetId) === true ? { sourceRetainsStrings: true } : {}),
-        ...(this.options.yield ? { yield: this.options.yield } : {}),
+        ...(this.options.yield ? { yield: phase => awaitQueryDeadline(this.options.yield!(phase), signal) } : {}),
         ...(this.options.now ? { now: this.options.now } : {}),
       })
       if (result.kind !== 'complete') return sortFailure(result, spec)
@@ -1625,7 +1668,7 @@ export class DocumentSession {
     if ('kind' in resident) return resident
     const state = resident.state
     const unpin = this.pinView(owner.sheetId)
-    const slice = this.slice()
+    const slice = this.slice(signal)
     const charge = this.charge()
     const metricsCharge = this.charge()
     try {
@@ -1635,12 +1678,12 @@ export class DocumentSession {
         // columns' body refuses the filter with its count and first address;
         // unavailable cells elsewhere never block. Checked before any rule runs.
         // Engine documents have no unavailable values (§4.4): nothing to scan.
-        const domain = this.source.store(owner.sheetId).valuePolicy === 'cached' ? filterValueDomain(normalized) : null
+        const domain = this.store(owner.sheetId).valuePolicy === 'cached' ? filterValueDomain(normalized) : null
         // A completed scan of a domain is fixed for its value generation: a
         // repeated filter over the same columns and band reuses its outcome
         // rather than re-reading every row (clear or refused only; incomplete,
         // cancelled and failed scans are never kept).
-        const domainKey = domain ? JSON.stringify([this.source.store(owner.sheetId).stamp, domain]) : ''
+        const domainKey = domain ? JSON.stringify([this.store(owner.sheetId).stamp, domain]) : ''
         const knownScan = domain ? this.domainScans.get(domainKey) : undefined
         if (knownScan && knownScan.kind === 'refused') return { kind: 'refused', refusal: knownScan.refusal }
         if (domain && !knownScan) {
@@ -1656,7 +1699,7 @@ export class DocumentSession {
             scan = await scanValueDomain(store, domain, { signal, stamp: store.stamp }, async units => {
               pending += units
               if (pending < DOMAIN_SCAN_CHARGE) return
-              scanSlice ??= this.slice()
+              scanSlice ??= this.slice(signal)
               const due = scanSlice.due(pending)
               pending = 0
               if (due) await scanSlice.pause('filter-domain')
@@ -1676,7 +1719,7 @@ export class DocumentSession {
             case 'error': return scan.error.code === 'stale-source' ? { kind: 'stale' } : { kind: 'error', error: scan.error }
           }
         }
-        const evaluation = await evaluator({ store: this.preparedStore(owner.sheetId), spec: normalized, nowMs, signal, cooperate: slice })
+        const evaluation = await awaitQueryDeadline(evaluator({ store: this.preparedStore(owner.sheetId), spec: normalized, nowMs, signal, cooperate: slice }), signal)
         if (evaluation.kind !== 'complete') return evaluation
         const halt = this.halted(owner, signal)
         if (halt) return halt
@@ -1749,11 +1792,196 @@ export class DocumentSession {
     if (!this.isCurrent(owner)) return { kind: 'stale' }
     return page
   }
+  /** Reuse one admitted projection per current sheet geometry/owner. Its charge
+   * includes borrowed order/mask/axes, so eviction of a view cannot uncharge
+   * buffers still held by a cached or in-flight projection. */
+  private async queryVisibility(view: SheetViewSnapshot, geometry: SheetGeometry, signal: AbortSignal): Promise<CompactRowVisibility> {
+    if (view.filter !== null) return view.visibility
+    if (view.order.kind === 'identity' || !geometry.baseHidden.intervals.length) return visibilityFromHidden(geometry.baseHidden)
+    const steps = projectVisibilitySteps(geometry.baseHidden, null, view.order, matchAll)
+    const slice = this.slice(signal)
+    try {
+      for (;;) {
+        if (signal.aborted) throw new FindError('cancelled', 'Query cancelled')
+        if (!this.isCurrent(view.identity)) throw new FindError('stale', 'Query owner changed')
+        const next = steps.next()
+        if (next.done) return next.value.visibility
+        if (slice.due(next.value)) await slice.pause('query-projection')
+      }
+    } finally { slice.dispose() }
+  }
+  async viewport(owner: CacheIdentity, window: LogicalViewport, signal: AbortSignal, scope?: 'frame' | 'tile'): Promise<{ result: ViewportResult; diagnostics: readonly WorkerDiagnostic[] } | Halt> {
+    if (!this.isCurrent(owner)) return { kind: 'stale' }
+    const ready = await this.ensureView(owner.sheetId, signal)
+    if (ready.kind !== 'resident') return ready
+    const halted = this.halted(owner, signal)
+    if (halted) return halted
+    const geometry = this.source.geometry(owner.sheetId), view = ready.view
+    const profile = this.options.profile ?? 'D', budget = WORKER_QUERY_BYTES[profile], workspace = 2 * budget
+    const charge = this.charge()
+    const unpinView = this.pinView(owner.sheetId)
+    let unpinProjection: (() => void) | undefined
+    try {
+      if (!charge.set(workspace)) return this.refusal(workspace)
+      const key = cacheKey(owner)
+      let cached = this.projections.get(owner.sheetId)
+      if (cached && (cached.key !== key || cached.geometry !== geometry || !cached.entry.live)) {
+        cached.retired = true
+        if (!cached.readers) cached.entry.release()
+        this.projections.delete(owner.sheetId); cached = undefined
+      }
+      if (!cached) {
+        const borrowed = orderBytes(view.order) + maskBytes(view.visibility) + axisBytes(geometry.rows) + axisBytes(geometry.cols)
+        const upper = metricsUpperBound(view.order) + (2 * geometry.rowOverrides.length + 2 * view.order.bands.length + 1) * 160 + borrowed
+        if (!charge.set(workspace + upper)) return this.refusal(workspace + upper)
+        const visibility = await this.queryVisibility(view, geometry, signal)
+        const halt = this.halted(owner, signal)
+        if (halt) return halt
+        const raced = this.projections.get(owner.sheetId)
+        if (raced?.key === key && raced.geometry === geometry && raced.entry.live) {
+          cached = raced
+          charge.set(workspace)
+        } else {
+          const metrics = createSheetMetrics({ rows: geometry.rows, cols: geometry.cols, order: view.order, visibility })
+          const bytes = projectionBytes(metrics) + borrowed
+          charge.set(workspace)
+          const entry = this.memory.retain(JSON.stringify(['viewport', key, ++this.projectionSerial]), { tier: 'rebuildable', owner: owner.sheetId, bytes, onRelease: () => {
+            const current = this.projections.get(owner.sheetId)
+            if (current?.key === key && current.geometry === geometry) this.projections.delete(owner.sheetId)
+          } })
+          if (!entry?.live) return this.refusal(bytes)
+          cached = { key, geometry, metrics, entry, readers: 0, retired: false }
+          this.projections.set(owner.sheetId, cached)
+        }
+      }
+      cached.readers++
+      const borrowed = cached, unpin = cached.entry.pin()
+      unpinProjection = () => { unpin(); borrowed.readers--; if (borrowed.retired && !borrowed.readers) borrowed.entry.release() }
+      const store = boundedQueryStore(this.preparedStore(owner.sheetId), budget, undefined, VIEWPORT_DETAIL_LIMITS[profile].records)
+      const out = await queryViewport(store, cached.metrics, window, owner, { profile, signal, scope, textDependencies: true, isCurrent: captured => this.isCurrent(captured) })
+      if (out.kind === 'diagnostic') return { kind: 'error', error: failure('invalid-coordinate', out.diagnostics[0]?.message ?? 'Invalid viewport') }
+      if (out.kind !== 'viewport') return { kind: out.kind }
+      if (queryPayloadBytes(out, budget) > budget) return { kind: 'error', error: failure('resource-limit', 'Viewport reply exceeds its bounded byte budget') }
+      const { results, active } = toViewportResults(out)
+      const result = { ...results[0], merges: out.merges, coarse: out.coarse, rowLines: out.rowLines, colLines: out.colLines, work: out.work, completeness: out.completeness, ...(out.error ? { error: out.error } : {}), ...(results.length > 1 ? { groups: out.groups } : {}), ...(active ? { active } : {}) } as ViewportResult
+      return { result, diagnostics: out.diagnostics }
+    } catch (cause) {
+      if (signal.aborted || cause instanceof FindError && cause.code === 'cancelled') return { kind: 'cancelled' }
+      if (cause instanceof FindError && cause.code === 'stale') return { kind: 'stale' }
+      if (cause instanceof FindError && cause.code === 'resource-limit') return { kind: 'error', error: failure('resource-limit', cause.message) }
+      throw cause
+    } finally { unpinProjection?.(); unpinView(); charge.release() }
+  }
+  /** One resident bounded search per document. Cursors are one-use capabilities
+   * of the full workbook owner/query; replacement, abort and close reclaim it. */
+  async search(owner: WorkbookOwner, query: SearchQuery, cursor: string | undefined, signal: AbortSignal): Promise<FindPage | Halt> {
+    if (this.closed || !sameWorkbookOwner(owner, this.workbookOwner())) return { kind: 'stale' }
+    const key = JSON.stringify([workbookIndexKey(owner), query.text, query.caseSensitive, query.sheetIds ?? null])
+    let state = this.searchState
+    if (cursor !== undefined) {
+      if (!state || state.key !== key || state.cursor !== cursor || state.busy) return { kind: 'error', error: failure('invalid-cursor', 'Search cursor expired or does not belong to this query') }
+    } else {
+      this.stopSearch()
+      state = { key, controller: new AbortController(), charge: this.charge(), unpins: [], busy: false, stopped: false, emittedBytes: 0, bytes: 0, incomplete: new Set() }
+      this.searchState = state
+    }
+    const current = state!
+    current.busy = true
+    current.cursor = undefined
+    current.emittedBytes = 0
+    const abort = () => this.stopSearch(current)
+    signal.addEventListener('abort', abort, { once: true })
+    const profile = this.options.profile ?? 'D', budget = WORKER_QUERY_BYTES[profile]
+    try {
+      if (!current.engine) {
+        current.bytes = 2 * budget + 32 * FIND_HIT_BUFFER_BUDGET
+        if (!current.charge.set(current.bytes)) { this.stopSearch(current); return this.refusal(current.bytes) }
+        const sheets: FindSheetInput[] = []
+        for (const { sheetId } of this.source.sheets) {
+          if (query.sheetIds && !query.sheetIds.includes(sheetId)) continue
+          // Importing sheets remain searchable. A nonblocking structural probe
+          // marks the result provisional until authored visibility is final.
+          const store = this.preparedStore(sheetId)
+          const structure = await store.queryStructural({ r0: 0, r1: 0, c0: 0, c1: 0 }, { signal, stamp: store.stamp })
+          if (structure.completeness !== 'complete') current.incomplete.add(sheetId)
+          const ready = await this.ensureView(sheetId, signal)
+          if (ready.kind !== 'resident') { this.stopSearch(current); return ready }
+          if (current.stopped || signal.aborted) return { kind: 'cancelled' }
+          if (!sameWorkbookOwner(owner, this.workbookOwner())) { this.stopSearch(current); return { kind: 'stale' } }
+          const view = ready.view, geometry = this.source.geometry(sheetId)
+          current.unpins.push(this.pinView(sheetId))
+          current.bytes += orderBytes(view.order) + maskBytes(view.visibility)
+          if (!current.charge.set(current.bytes)) { this.stopSearch(current); return this.refusal(current.bytes) }
+          const visibility = await this.queryVisibility(view, geometry, signal)
+          if (current.stopped || signal.aborted) return { kind: 'cancelled' }
+          sheets.push({ sheetId, identity: view.identity, order: view.order, visibility,
+            isColumnVisible: col => geometry.cols.size(col) > 0,
+            store: boundedQueryStore(this.preparedStore(sheetId), budget / 2, bytes => {
+              current.emittedBytes += bytes
+              if (current.emittedBytes > budget) throw new FindError('resource-limit', 'Search hit page exceeds its bounded byte budget')
+            }, 20_000, true, true),
+          })
+        }
+        current.engine = new WorkbookFind({ owner, sheets }, query, {
+          signal: current.controller.signal, currentOwner: () => this.workbookOwner(),
+          awaitYield: work => this.afterYield(work, current.controller.signal),
+          ...(this.options.yield ? { yield: phase => awaitQueryDeadline(this.options.yield!(phase), current.controller.signal) } : {}), ...(this.options.now ? { now: this.options.now } : {}),
+          ...(this.source.displayText ? { textOf: (cell, id) => this.source.displayText!(cell, id) } : {}),
+        })
+      }
+      if (signal.aborted) { this.stopSearch(current); return { kind: 'cancelled' } }
+      let page = await current.engine.nextPage()
+      // Metadata may arrive between continuation requests, or during this scan.
+      // Revalidate publication against the latest geometry rather than retaining
+      // a hidden-row/column snapshot from the first materialization.
+      const visible = new Map<string, { visibility: RowVisibility; geometry: SheetGeometry }>()
+      for (const sheetId of new Set(page.hits.map(hit => hit.sheetId))) {
+        const view = this.view(sheetId), geometry = this.source.geometry(sheetId)
+        visible.set(sheetId, { visibility: await this.queryVisibility(view, geometry, signal), geometry })
+      }
+      const hits = page.hits.filter(hit => {
+        const now = visible.get(hit.sheetId)!
+        return now.visibility.visible(hit.displaySlot) && now.geometry.cols.size(hit.source.col) > 0
+      })
+      const incomplete = [...new Set([...page.incomplete, ...current.incomplete])]
+      const { totalKnown, ...partial } = page
+      page = { ...partial, hits, incomplete, ...(!incomplete.length && hits.length === partial.hits.length && totalKnown !== undefined ? { totalKnown } : {}) }
+      if (current.stopped || signal.aborted) return { kind: 'cancelled' }
+      if (!sameWorkbookOwner(owner, this.workbookOwner())) { this.stopSearch(current); return { kind: 'stale' } }
+      if (queryPayloadBytes(page, budget) > budget) throw new FindError('resource-limit', 'Search reply exceeds its bounded byte budget')
+      if (page.complete) this.stopSearch(current)
+      else current.cursor = `find:${this.epoch}:${++this.searchSerial}`
+      return { ...page, ...(current.cursor ? { cursor: current.cursor } : {}) }
+    } catch (cause) {
+      this.stopSearch(current)
+      if (signal.aborted || cause instanceof FindError && (cause.code === 'closed' || cause.code === 'cancelled')) return { kind: 'cancelled' }
+      if (cause instanceof FindError && cause.code === 'stale') return { kind: 'stale' }
+      if (cause instanceof FindError && cause.code === 'resource-limit') return { kind: 'error', error: failure('resource-limit', cause.message) }
+      throw cause
+    } finally {
+      signal.removeEventListener('abort', abort)
+      current.busy = false
+      if (current.stopped) { current.charge.release(); for (const unpin of current.unpins.splice(0)) unpin() }
+    }
+  }
+  private stopSearch(state = this.searchState): void {
+    if (!state || state.stopped) return
+    state.stopped = true
+    state.controller.abort()
+    state.engine?.close()
+    if (!state.busy) { state.charge.release(); for (const unpin of state.unpins.splice(0)) unpin() }
+    if (this.searchState === state) this.searchState = undefined
+  }
+  releaseSearch(cursor: string): boolean {
+    if (!this.searchState || this.searchState.cursor !== cursor) return false
+    this.stopSearch()
+    return true
+  }
   /** Compact source-space layout of a sheet (S5.4): what the main thread needs
    * to build the same axis metrics and base visibility as this session. */
   layout(sheetId: string): SheetLayout {
     const geometry = this.source.geometry(sheetId)
-    const used = this.source.store(sheetId).extent.used
+    const used = this.store(sheetId).extent.used
     return {
       rowOverrides: geometry.rowOverrides.map(interval => ({ ...interval })),
       colOverrides: geometry.colOverrides.map(interval => ({ ...interval })),
@@ -1768,7 +1996,7 @@ export class DocumentSession {
    * a scan page is capped at MAX_SCAN_PAGE and continues a resident iterator. */
   async read(owner: CacheIdentity, query: SourceReadQuery, signal: AbortSignal): Promise<SourceReadResult | { kind: 'stale' } | { kind: 'cancelled' }> {
     if (!this.isCurrent(owner)) return { kind: 'stale' }
-    const store = this.source.store(owner.sheetId)
+    const store = this.store(owner.sheetId)
     const options = { signal, stamp: { ...store.stamp } }
     let result: SourceReadResult
     switch (query?.op) {
@@ -1783,6 +2011,22 @@ export class DocumentSession {
       case 'rows': result = { op: 'rows', page: await store.readRows(query.range, query.cursor, options) }; break
       case 'structural': result = { op: 'structural', result: await store.queryStructural(query.rect, options) }; break
       case 'complete': result = { op: 'complete', result: await store.ensureComplete(query.rect, options) }; break
+      case 'overview': {
+        const cap = VIEWPORT_DETAIL_LIMITS[this.options.profile ?? 'D'].overviewGroups
+        const budget = WORKER_QUERY_BYTES[this.options.profile ?? 'D']
+        const valid = Array.isArray(query.request?.groups) && query.request.groups.length <= cap && Number.isSafeInteger(query.request.maxGroups) && query.request.maxGroups > 0 && query.request.maxGroups <= cap
+        const charge = this.charge()
+        try {
+          const bytes = queryPayloadBytes(query.request, budget)
+          if (!valid || bytes > budget) result = { op: 'overview', page: failedPage(store.stamp, failure('resource-limit', `Overview is limited to ${cap} bounded groups`)) }
+          else if (!charge.set(bytes + budget)) result = { op: 'overview', page: failedPage(store.stamp, failure('quota', 'Overview exceeds the worker memory budget')) }
+          else result = { op: 'overview', page: await boundedQueryStore(store, budget).queryOverview(query.request, options) }
+        } catch (cause) {
+          if (!(cause instanceof FindError) || cause.code !== 'resource-limit') throw cause
+          result = { op: 'overview', page: failedPage(store.stamp, failure('resource-limit', cause.message)) }
+        } finally { charge.release() }
+        break
+      }
       case 'scan': result = { op: 'scan', page: await this.scanPage(owner, store, query, signal) }; break
       case 'layout': result = { op: 'layout', layout: this.layout(owner.sheetId) }; break
       case 'detectRange': result = { op: 'detectRange', detection: await detectRangeInStore(store, query, options) }; break
@@ -1848,6 +2092,8 @@ export class DocumentSession {
   async release(): Promise<void> {
     if (this.closed) return
     this.closed = true
+    this.stopSearch()
+    this.projections.clear()
     this.memory.close()
     this.states.clear()
     this.prepared.clear()
