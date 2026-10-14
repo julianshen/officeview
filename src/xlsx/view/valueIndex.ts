@@ -37,6 +37,10 @@ export interface ValueLanePage {
   numbers: Float64Array
   texts: readonly (string | undefined)[]
   styles?: Uint32Array
+  /** S10.2 main ledger: the consumer calls this once it has merged the page
+   * into its own charged structure (or dropped it); the source then ends the
+   * charge of the payload the page was decoded from. */
+  settle?: () => void
 }
 export type ValuePageRead = ValueLanePage | { kind: 'unknown'; pageId: string } | { kind: 'error'; failure: SourceFailure }
 /** Body pages of one column in a fixed order; page numbers are stable under
@@ -238,7 +242,10 @@ export class ValueIndexCache {
    * plain path is ~0.12-0.2 us/value, so canonical keys (~2x on later
    * searches, ~76 MiB per 1M strings) are opt-in, e.g. a desktop profile with
    * pool headroom: { strategy: canonicalKeyStrategy(foldVariantOf(locale)) }. */
-  constructor(options: { limitBytes?: number; searchKeys?: { strategy?: SearchKeyStrategy; store?: SearchKeyStore } } = {}) {
+  /** S10.2 main ledger hook: the cache's used bytes after every charge/release. */
+  private readonly onUsage: ((bytes: number) => void) | undefined
+  constructor(options: { limitBytes?: number; searchKeys?: { strategy?: SearchKeyStrategy; store?: SearchKeyStore }; onUsage?: (bytes: number) => void } = {}) {
+    this.onUsage = options.onUsage
     this.limitBytes = options.limitBytes ?? 512 * MiB
     if (!Number.isFinite(this.limitBytes) || this.limitBytes < 0) throw new RangeError('Invalid value index memory limit')
     const strategy = options.searchKeys?.strategy ?? EXACT_SEARCH
@@ -292,9 +299,10 @@ export class ValueIndexCache {
       })
     }
     this.used += bytes
+    this.onUsage?.(this.used)
   }
   /** @internal */
-  release(bytes: number): void { this.used -= bytes }
+  release(bytes: number): void { this.used -= bytes; this.onUsage?.(this.used) }
   /** @internal */
   forget(key: string, index: ValueIndex): void {
     if (this.indexes.get(key) === index) this.indexes.delete(key)
@@ -473,6 +481,8 @@ export class ValueIndex implements LaneAccount {
         this.unmerged--
         this.ledger.mergedPages++
       }
+      // Merged into (and charged by) this index, or dropped: the source payload's charge ends.
+      if (read.kind === 'values') read.settle?.()
       if (pacer.due) {
         progress()
         await pacer.yield()
@@ -1256,18 +1266,24 @@ export function valueSourceFromStore(store: SourceStore, col: number, body: { r0
       if (!Number.isSafeInteger(page) || page < 0 || count < 1) throw new ValueIndexError('invalid-cursor', 'Value page outside the source')
       const tags = new Uint8Array(count), numbers = new Float64Array(count), styles = new Uint32Array(count), texts: (string | undefined)[] = []
       const cursors = new Set<string>()
+      // Source payloads this page was decoded from: their charges end when the
+      // consumer settles the page (after merging it), or now if it is dropped.
+      const consumed: object[] = []
+      const settle = () => { for (const payload of consumed.splice(0)) store.settle?.(payload) }
+      const drop = <T>(out: T): T => { settle(); return out }
       let cursor: string | undefined, loading = false
       do {
         const result = await store.queryColumn({ col, rows: { kind: 'intervals', intervals: [{ r0, r1 }] }, limit: count, cursor, encoding: 'lanes' }, { signal, stamp })
+        consumed.push(result)
         checkSignal(signal, 'Value page read')
         if (!sameStamp(result.stamp, stamp) || !sameStamp(store.stamp, stamp)) throw new ValueIndexError('stale-source', 'Column page owner changed')
-        if (result.error) return { kind: 'error', failure: { ...result.error } }
+        if (result.error) return drop({ kind: 'error', failure: { ...result.error } })
         // A covered page that is not complete is still not authoritative (§4.1).
-        if (result.completeness === 'incomplete') return { kind: 'error', failure: { code: 'incomplete', retryable: true, message: 'Column page is incomplete' } }
+        if (result.completeness === 'incomplete') return drop({ kind: 'error', failure: { code: 'incomplete', retryable: true, message: 'Column page is incomplete' } })
         if (result.completeness !== 'complete') loading = true
         for (const item of result.items) {
           const outcome = place(item, r0, r1, col, tags, numbers, styles, texts)
-          if (outcome) return outcome
+          if (outcome) return drop(outcome)
         }
         cursor = result.nextCursor
         if (cursor !== undefined) {
@@ -1275,9 +1291,9 @@ export function valueSourceFromStore(store: SourceStore, col: number, body: { r0
           cursors.add(cursor)
         }
       } while (cursor !== undefined)
-      if (loading) return { kind: 'unknown', pageId: `${stamp.sheetId}:${col}:${r0}` }
+      if (loading) return drop({ kind: 'unknown', pageId: `${stamp.sheetId}:${col}:${r0}` })
       if (tags.includes(0)) throw new ValueIndexError('page-error', 'Complete column page left rows uncovered')
-      return { kind: 'values', pageId: `${stamp.sheetId}:${col}:${r0}`, count, tags, numbers, texts, styles }
+      return { kind: 'values', pageId: `${stamp.sheetId}:${col}:${r0}`, count, tags, numbers, texts, styles, settle }
     },
   }
 }

@@ -12,7 +12,10 @@ export interface OverflowAccounting {
   release(bytes: number): void
 }
 export class OverflowResourceError extends Error {
-  constructor() { super('Text overflow occupancy exceeds the document memory budget'); this.name = 'OverflowResourceError' }
+  constructor(reason: 'budget' | 'closed' = 'budget') {
+    super(reason === 'closed' ? 'Text overflow occupancy owner is closed' : 'Text overflow occupancy exceeds the document memory budget')
+    this.name = 'OverflowResourceError'
+  }
 }
 interface Memo { key: string; snapshot?: WeakRef<readonly object[]>; input?: RowOverflowInput }
 interface Slot { geometry: WeakRef<SheetGeometry>; rows: WeakRef<Map<number, Memo>>; row: number; memo: WeakRef<Memo>; entry: PoolEntry }
@@ -21,7 +24,7 @@ interface Slot { geometry: WeakRef<SheetGeometry>; rows: WeakRef<Map<number, Mem
 // Warmed Bun/JSC 1k/5k tiny-row probes measure about 1.7–1.9 KiB per
 // retained entry including native map/finalizer bookkeeping. Round up to 4 KiB.
 const ENTRY_BYTES = 4096
-const MERGE_BYTES = 96
+const MERGE_BYTES = 4
 let nextCache = 0
 
 export class OverflowCache {
@@ -31,13 +34,22 @@ export class OverflowCache {
   private readonly prefix = `overflow:${nextCache++}:`
   private nextRow = 0
   private held = 0
-  private closed = false
+  private isClosed = false
+  private readers = 0
   constructor(readonly pool: MemoryPool, readonly maxBytes = 2 * 1024 * 1024, readonly accounting?: OverflowAccounting) {}
+  get closed(): boolean { return this.isClosed }
   get bytes(): number { return this.held }
 
   get(geometry: SheetGeometry, row: number): RowOverflowInput {
-    if (this.closed || this.pool.closed) throw new OverflowResourceError()
+    if (this.isClosed || this.pool.closed) throw this.refusal()
+    this.readers++
+    try { return this.read(geometry, row) }
+    finally { if (--this.readers === 0 && this.isClosed) this.finishClose() }
+  }
+
+  private read(geometry: SheetGeometry, row: number): RowOverflowInput {
     const cells = geometry.cellsOf(row)
+    if (this.isClosed || this.pool.closed) throw this.refusal()
     const rows = this.rows.get(geometry)
     const hit = rows?.get(row)
     if (hit?.input && (hit.snapshot ? cells !== undefined && hit.snapshot.deref() === cells : cells === undefined)) {
@@ -47,40 +59,56 @@ export class OverflowCache {
     }
     if (hit) this.drop(hit.key)
     this.sweep()
-    // The merge collector and filtered merge array can coexist. Reserve their
-    // conservative capacities before collecting, as well as the full blocker
+    // Collected merge references coexist with the compact endpoint buffer.
+    // Reserve both before collecting, as well as the full blocker
     // backing buffer (a subarray after deduplication still retains that buffer).
     const mergeCapacity = this.mergeCount(geometry, row)
-    const retained = ENTRY_BYTES + (cells?.length ?? 0) * 2 + mergeCapacity * MERGE_BYTES
-    const scratch = 128 + (cells?.length ?? 0) * 2 + mergeCapacity * 16
+    if (this.isClosed || this.pool.closed) throw this.refusal()
+    const blockerCapacity = Math.min(cells?.length ?? 0, MAX_COLS)
+    const dedupBytes = (cells?.length ?? 0) > MAX_COLS ? MAX_COLS : 0
+    const retained = ENTRY_BYTES + blockerCapacity * 2 + mergeCapacity * MERGE_BYTES
+    const scratch = 128 + blockerCapacity * 2 + mergeCapacity * 16 + dedupBytes
     const total = retained + scratch
-    if (!this.reserve(total)) throw new OverflowResourceError()
+    if (!this.reserve(total, retained)) throw this.refusal()
+    if (this.isClosed) { this.uncharge(total); throw this.refusal() }
     const key = `${this.prefix}${this.nextRow++}`
     const memo: Memo = { key, ...(cells ? { snapshot: new WeakRef(cells) } : {}) }
     const weakMemo = new WeakRef(memo)
     const onRelease = this.releaseCallback(key, weakMemo)
     let entry = this.pool.retain(key, { tier: 'rebuildable', bytes: total, onRelease })
-    if (!entry) { this.uncharge(total); throw new OverflowResourceError() }
+    if (!entry) { this.uncharge(total); throw this.refusal() }
+    const unpin = entry.pin()
     const ownedRows = rows ?? new Map<number, Memo>()
-    if (!rows) this.rows.set(geometry, ownedRows)
+    this.rows.set(geometry, ownedRows)
     this.slots.set(key, { geometry: new WeakRef(geometry), rows: new WeakRef(ownedRows), row, memo: weakMemo, entry })
     try {
       const metrics = geometry.metrics
       const colStart = (col: number) => metrics.cols.start(col)
-      const blockers = new Uint16Array(cells?.length ?? 0)
+      const blockers = new Uint16Array(blockerCapacity)
+      const seen = dedupBytes ? new Uint8Array(dedupBytes) : undefined
       let count = 0
       for (const cell of cells ?? []) {
-        if (cellBlocksOverflow(cell) && colStart(cell.col + 1) > colStart(cell.col)) blockers[count++] = cell.col
+        if (!cellBlocksOverflow(cell) || colStart(cell.col + 1) <= colStart(cell.col)) continue
+        if (seen?.[cell.col]) continue
+        if (seen) seen[cell.col] = 1
+        blockers[count++] = cell.col
       }
       const filled = blockers.subarray(0, count)
       filled.sort()
       let unique = 0
       for (const col of filled) if (unique === 0 || col !== blockers[unique - 1]) blockers[unique++] = col
       const collected = mergeCapacity ? geometry.merges.collect({ r0: row, r1: row, c0: 0, c1: MAX_COLS - 1 }) : []
-      const merges = collected.filter(merge => colStart(merge.maxCol + 1) > colStart(merge.minCol))
-      memo.input = { blockers: blockers.subarray(0, unique), merges, colStart, lastCol: metrics.cols.logicalCount - 1 }
+      const mergeColumns = new Uint16Array(mergeCapacity * 2)
+      let mergeCount = 0
+      for (const merge of collected) {
+        if (colStart(merge.maxCol + 1) <= colStart(merge.minCol)) continue
+        mergeColumns[mergeCount++] = merge.minCol
+        mergeColumns[mergeCount++] = merge.maxCol
+      }
+      if (this.isClosed || this.pool.closed) throw this.refusal()
+      memo.input = { blockers: blockers.subarray(0, unique), merges: mergeColumns.subarray(0, mergeCount), colStart, lastCol: metrics.cols.logicalCount - 1 }
       entry = this.pool.retain(key, { tier: 'rebuildable', bytes: retained, onRelease })
-      if (!entry) throw new OverflowResourceError()
+      if (!entry) throw this.refusal()
       this.slots.get(key)!.entry = entry
       this.uncharge(scratch)
       ownedRows.set(row, memo)
@@ -89,7 +117,13 @@ export class OverflowCache {
     } catch (error) {
       this.drop(key)
       throw error
-    }
+    } finally { unpin() }
+  }
+
+  dropGeometry(geometry: SheetGeometry): void {
+    const rows = this.rows.get(geometry)
+    if (rows) for (const memo of rows.values()) this.drop(memo.key)
+    this.rows.delete(geometry)
   }
 
   /** Called on cache activity and document teardown; dead geometries release
@@ -98,27 +132,31 @@ export class OverflowCache {
     for (const [key, slot] of this.slots) if (!slot.geometry.deref() || !slot.memo.deref()) this.drop(key)
   }
   close(): void {
-    if (this.closed) return
-    this.closed = true
+    if (this.isClosed) return
+    this.isClosed = true
+    if (!this.readers) this.finishClose()
+  }
+  private finishClose(): void {
     for (const key of this.slots.keys()) this.drop(key)
   }
   private mergeCount(geometry: SheetGeometry, row: number): number {
     if (!isValidCoordinate(row, 0) || !geometry.merges.size) return 0
     // walkFrom with a rejecting predicate allocates no hit array. Account its
     // bounded traversal/result objects before counting exact row intersections.
-    if (!this.reserve(128)) throw new OverflowResourceError()
+    if (!this.reserve(ENTRY_BYTES, 0)) throw this.refusal()
     const charge = this.pool.charge()
-    if (!charge.set(128)) { this.uncharge(128); throw new OverflowResourceError() }
+    if (!charge.set(ENTRY_BYTES)) { this.uncharge(ENTRY_BYTES); throw this.refusal() }
     try {
       let count = 0
       geometry.merges.walkFrom({ r0: row, r1: row, c0: 0, c1: MAX_COLS - 1 }, 0, 1, { pred: () => { count++; return false } })
       return count
-    } finally { charge.release(); this.uncharge(128) }
+    } finally { charge.release(); this.uncharge(ENTRY_BYTES) }
   }
-  private reserve(bytes: number): boolean {
-    if (bytes > this.maxBytes || !Number.isSafeInteger(bytes)) return false
-    while (this.held + bytes > this.maxBytes && this.slots.size) this.drop(this.slots.keys().next().value!)
-    if (this.held + bytes > this.maxBytes) return false
+  private refusal(): OverflowResourceError { return new OverflowResourceError(this.isClosed || this.pool.closed ? 'closed' : 'budget') }
+  private reserve(bytes: number, retainedBytes: number): boolean {
+    if (retainedBytes > this.maxBytes || !Number.isSafeInteger(bytes)) return false
+    while (this.held + retainedBytes > this.maxBytes && this.slots.size) this.drop(this.slots.keys().next().value!)
+    if (this.held + retainedBytes > this.maxBytes) return false
     while (this.accounting?.reserve(bytes) === false) {
       if (!this.slots.size) return false
       this.drop(this.slots.keys().next().value!)
@@ -151,3 +189,13 @@ export class OverflowCache {
     return () => this.released(key, memo)
   }
 }
+
+/** Private geometry binding; source/wire contracts stay unchanged. */
+const bindings = new WeakMap<SheetGeometry, OverflowCache>()
+export function bindOverflowCache(geometry: SheetGeometry, cache: OverflowCache): void {
+  const previous = bindings.get(geometry)
+  if (previous === cache) return
+  previous?.dropGeometry(geometry)
+  bindings.set(geometry, cache)
+}
+export function boundOverflowCache(geometry: SheetGeometry): OverflowCache | undefined { return bindings.get(geometry) }

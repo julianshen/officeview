@@ -9,14 +9,16 @@ import { compileValuesMembership, ValueIndexCache, valueScope, valueSourceFromSt
 import { CompactRowVisibility, createRowVisibility } from '../../xlsx/view/visibility'
 import { MemoryValueRunStore, VALUE_RUN_PAGE, type ValueRunStore } from '../../xlsx/view/valueRuns'
 import { StructuralIndex } from '../../xlsx/view/structure'
+import type { MainMemoryLedger } from '../../xlsx/view/mainLedger'
+import type { RangeDetection, RangeDetectionRequest } from '../../xlsx/view/rangeDetection'
 import { DocumentSession, type OperationOutcome, type WorkbookSource, sameStamp } from '../../worker/viewerSession'
 import { createControlsClient, type ControlSnapshot, type ControlsClient, type StagedControl, type ControlProgress, sameControlOwner } from './controlsClient'
 
 /** Document-owned committed keys survive port eviction. Both indexes and runs
  * share one bounded ledger; indexes are rebuildable, committed keys are not. */
 export interface ViewerControlResources { cache: ValueIndexCache; runs: ValueRunStore; dispose(): void }
-export function createViewerControlResources(profile: ProfileId = 'D'): ViewerControlResources {
-  const cache = new ValueIndexCache({ limitBytes: (profile === 'M' ? 8 : 16) * 1024 * 1024 })
+export function createViewerControlResources(profile: ProfileId = 'D', onUsage?: (bytes: number) => void): ViewerControlResources {
+  const cache = new ValueIndexCache({ limitBytes: (profile === 'M' ? 8 : 16) * 1024 * 1024, ...(onUsage ? { onUsage } : {}) })
   const store = new MemoryValueRunStore({ limitBytes: 8 * 1024 * 1024, account: cache.reserve() })
   const refs = new Map<string, PagedKeySetRef>()
   let closed = false
@@ -52,6 +54,8 @@ export interface ViewerControlsOptions {
   remote?: RemoteViewPort
   /** Resolved style of a style id when the document carries no cells (worker-backed sheets). */
   styleOf?: (index: number) => XlsxCell['style']
+  /** S10.2: the document's main-thread ledger (structural snapshots are charged while reachable). */
+  ledger?: MainMemoryLedger
 }
 export type RemoteViewCommit =
   | { kind: 'committed'; view: Pick<SheetView, 'order' | 'filter' | 'sort'> & { visibility?: SheetView['visibility'] } }
@@ -73,6 +77,7 @@ export async function viewerControls(options: ViewerControlsOptions, signal: Abo
   let structure: StructuralIndex
   try {
     structure = new StructuralIndex(await store.queryStructural({ r0: 0, r1: 1048575, c0: 0, c1: 16383 }, { signal, stamp }))
+    options.ledger?.chargeWhileReachable('structure', [structure], structure.estimatedBytes)
     signal.throwIfAborted()
   } catch (error) { if (!options.resources) resources.dispose(); throw error }
   const styles = new Map<number, XlsxCell['style']>()
@@ -99,7 +104,9 @@ export async function viewerControls(options: ViewerControlsOptions, signal: Abo
         const page = await laneSource.readPage(index, abort)
         if (!sameControlOwner(owner, options.snapshot().owner) || !sameStamp(owner, store.stamp)) throw new ValueIndexError('stale-source', 'Source or view changed; retry.')
         if (page.kind === 'error') throw new ValueIndexError(page.failure.code, page.failure.message)
-        if (page.kind === 'values') { await accept(page, r0 + index * size); break }
+        // The consumer folds the page into its own (charged) state, then the
+        // reply it came from stops being charged.
+        if (page.kind === 'values') { try { await accept(page, r0 + index * size) } finally { page.settle?.() } break }
         if (complete) throw new ValueIndexError('page-error', 'Values stayed unknown after source completion.')
         const coverage = await store.ensureComplete({ r0: r0 + index * size, r1: Math.min(r1, r0 + (index + 1) * size - 1), c0: col, c1: col }, { stamp: owner, signal: abort })
         if (coverage.error) throw new ValueIndexError(coverage.error.code, coverage.error.message)
@@ -198,6 +205,7 @@ export async function viewerControls(options: ViewerControlsOptions, signal: Abo
       const ranges = col !== undefined && isSingleCell(selection) ? [] : selection.ranges
       return { store, structure, selection: { ...selection, active, ranges } }
     },
+    ...(isRemoteStore(store) ? { detectRange: (kind: 'filter' | 'sort', request: RangeDetectionRequest) => store.detectRange(kind, request.selection, request.override ?? null, request.options) } : {}),
     domain: (owner, range, col) => ({ identity: identity(owner, range, col), source: valueSourceFromStore(store, col, { r0: range.r0 + range.headerRows, r1: range.r1 - range.totalsRows }), label: (kind, value, styleIndex) => cellDisplayText(sheet, { value: kind === 'boolean' ? Boolean(value) : value, style: styleAt(styleIndex) }) }),
     stageFilter: (spec, owner, abort, progress) => stage('filter', spec, owner, abort, progress), stageSort: (spec, owner, abort, progress) => stage('sort', spec, owner, abort, progress),
   })
@@ -208,6 +216,7 @@ export async function viewerControls(options: ViewerControlsOptions, signal: Abo
     // a stuck snapshot would refuse every later sort/filter as incomplete.
     if (structure.completeness !== 'complete' && structure.failure === undefined) {
       structure = new StructuralIndex(await store.queryStructural({ r0: 0, r1: 1048575, c0: 0, c1: 16383 }, { signal: abort, stamp: { ...store.stamp } }))
+      options.ledger?.chargeWhileReachable('structure', [structure], structure.estimatedBytes)
       abort.throwIfAborted()
     }
     const resolved = await resolve(owner, kind, abort, override, col)
@@ -230,4 +239,9 @@ function isSingleCell(selection: SheetView['selection']): boolean {
 function failure(outcome: Exclude<OperationOutcome, { kind: 'committed' }>): StagedControl {
   if (outcome.kind === 'cancelled' || outcome.kind === 'stale' || outcome.kind === 'incomplete' || outcome.kind === 'refused') return outcome
   return outcome.kind === 'error' ? { kind: 'refused', refusal: { reason: 'source-error', ...outcome.error } } : { kind: 'refused', refusal: { reason: 'resource-limit', message: 'View exceeds the session memory budget.' } }
+}
+
+/** A worker-backed sheet store that can run range detection next to its pages. */
+function isRemoteStore(store: unknown): store is { detectRange(kind: 'filter' | 'sort', selection: RangeDetectionRequest['selection'], override: RangeDetectionRequest['override'] | null, options: RangeDetectionRequest['options']): Promise<RangeDetection> } {
+  return typeof (store as { detectRange?: unknown }).detectRange === 'function'
 }

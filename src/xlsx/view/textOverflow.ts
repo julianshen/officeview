@@ -13,8 +13,9 @@ export interface OverflowAllowance { left: number; right: number }
 export interface RowOverflowInput {
   /** Visible (non-zero-width) columns whose cell blocks overflow, ascending and unique. */
   blockers: readonly number[] | Uint16Array
-  /** Merged ranges that intersect the row and have visible width. */
-  merges: readonly { minCol: number; maxCol: number }[]
+  /** Merged ranges that intersect the row and have visible width; compact
+   * inputs store consecutive minCol/maxCol pairs in authored query order. */
+  merges: readonly { minCol: number; maxCol: number }[] | Uint16Array
   /** Left edge of a column in px; colStart(c + 1) - colStart(c) is its width. */
   colStart: (col: number) => number
   /** The worksheet's last column index. */
@@ -59,16 +60,25 @@ export function rowOverflowFromCells(cells: readonly Pick<XlsxCell, 'col' | 'val
  */
 export function textOverflowAllowance(input: RowOverflowInput, col: number): OverflowAllowance {
   const { blockers, merges, colStart, lastCol } = input
-  if (merges.some(m => m.minCol <= col && col <= m.maxCol)) return NO_OVERFLOW
+  const packed = merges instanceof Uint16Array ? merges : undefined
+  const records = packed ? undefined : merges as readonly { minCol: number; maxCol: number }[]
+  const mergeCount = packed ? packed.length / 2 : records!.length
+  for (let i = 0; i < mergeCount; i++) {
+    const minCol = packed ? packed[i * 2] : records![i].minCol
+    const maxCol = packed ? packed[i * 2 + 1] : records![i].maxCol
+    if (minCol <= col && col <= maxCol) return NO_OVERFLOW
+  }
   let low = 0, high = blockers.length
   while (low < high) { const mid = (low + high) >> 1; if (blockers[mid] <= col) low = mid + 1; else high = mid }
   let blockRight = low < blockers.length ? blockers[low] : undefined
   let index = low - 1
   if (index >= 0 && blockers[index] === col) index--
   let blockLeft = index >= 0 ? blockers[index] : undefined
-  for (const m of merges) {
-    if (m.minCol > col && (blockRight === undefined || m.minCol < blockRight)) blockRight = m.minCol
-    if (m.maxCol < col && (blockLeft === undefined || m.maxCol > blockLeft)) blockLeft = m.maxCol
+  for (let i = 0; i < mergeCount; i++) {
+    const minCol = packed ? packed[i * 2] : records![i].minCol
+    const maxCol = packed ? packed[i * 2 + 1] : records![i].maxCol
+    if (minCol > col && (blockRight === undefined || minCol < blockRight)) blockRight = minCol
+    if (maxCol < col && (blockLeft === undefined || maxCol > blockLeft)) blockLeft = maxCol
   }
   const right = colStart(blockRight ?? lastCol + 1) - colStart(col + 1)
   const left = colStart(col) - colStart(blockLeft === undefined ? 0 : blockLeft + 1)

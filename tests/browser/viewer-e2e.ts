@@ -32,6 +32,8 @@ export const GENERATED_FIXTURES = {
   'f7-two-sheets.xlsx': 'F7-shaped two sheets A/B with identical first revisions, hidden rows and a tiny row height',
 } as const
 export type FixtureName = keyof typeof GENERATED_FIXTURES | 'f1-small.xlsx' | 'f3sparse-small.xlsx' | 'f4-small.xlsx' | 'f5-small.xlsx' | 'f8-small.xlsx'
+  /** S13: written by native Microsoft Excel (see tests/xlsx-viewer-native-excel.test.ts). */
+  | 'native-corner.xlsx' | 'native-1904.xlsx' | 'large/native-large.xlsx'
 
 const num = (value: number, styleIndex = 0): FixtureCell => ({ value, hasCachedValue: true, valueIsError: false, styleIndex })
 const text = (value: string, styleIndex = 0): FixtureCell => ({ value, hasCachedValue: true, valueIsError: false, styleIndex })
@@ -85,6 +87,8 @@ export interface OpenOptions {
   copy?: boolean
   /** Capabilities the viewer worker denies itself (src/debug/workerCaps.ts). */
   workerCaps?: readonly string[]
+  /** With `worker`: debug-only forced paged admission (src/debug/forcePaged.ts), so a small file opens worker-backed. */
+  paged?: boolean
   /** false: return once the page has navigated (capability-failure scenarios). */
   ready?: boolean
 }
@@ -97,6 +101,7 @@ export async function openViewer(page: Page, name: FixtureName, options: OpenOpt
   const query = new URLSearchParams({ src: `/__fixtures/${name}` })
   if (options.worker) query.set('worker', '1')
   if (options.copy === false) query.set('copy', '0')
+  if (options.paged) query.set('paged', '1')
   if (options.workerCaps?.length) query.set('wcaps', options.workerCaps.join(','))
   await page.goto(`/src/debug/viewer-e2e.html?${query}`)
   if (options.ready === false) return

@@ -14,7 +14,7 @@ import type { ContentPaintAssets } from '../drawing/content'
 import { createTextBodyMeasurer, paintTextBody } from '../drawing/text-paint'
 import { graphemes } from '../core/text-recording'
 import { isFormulaError, isEvaluationError } from './formula/evaluator'
-import { formatCommon, numericSectionIsText } from './formula/format'
+import { formatCommon, numericSectionIsText, type FormatAllocation } from './formula/format'
 import { decodeSerial } from './formula/serial'
 import type { ResolvedSemantics } from './formula/types'
 import type { WorkerDiagnostic } from './view/contracts'
@@ -469,30 +469,39 @@ function formatFiniteFallback(value: number): string {
  * with twelve integer digits use scientific notation. Cell painting supplies
  * a physical width test so the display can lose precision without changing
  * the stored value. This finite profile does not implement locale General. */
-function formatGeneral(value: number, fits: (text: string) => boolean = () => true, noFit?: () => void): string {
-  if (!Number.isFinite(value)) return String(value)
+function formatGeneral(value: number, fits: (text: string) => boolean = () => true, noFit?: () => void, allocation?: FormatAllocation): string {
+  if (!Number.isFinite(value)) { allocation?.allocate(18); return String(value) }
   if (value === 0) return '0'
   const negative = value < 0, absolute = Math.abs(value)
   const sign = negative ? '-' : ''
+  allocation?.allocate(50) // finite Number shortest representation is at most 25 UTF-16 units
   const raw = String(absolute)
   // Expand only small exponents which could fit the plain-character budget.
+  if (raw.includes('e') && absolute < 1 && absolute >= 1e-9) allocation?.allocate(8 * raw.length + 96)
   const plain = raw.includes('e') && absolute < 1 && absolute >= 1e-9
     ? '0.' + '0'.repeat(-Number(raw.split('e')[1]) - 1) + raw.split('e')[0].replace('.', '')
     : raw
   const scientific = (digits: number) => {
+    allocation?.allocate(4 * (digits + 9) + 16)
     const [mantissa, exponent] = absolute.toExponential(digits).split('e')
+    allocation?.allocate(4 * mantissa.length)
     const compact = mantissa.includes('.') ? mantissa.replace(/0+$/, '').replace(/\.$/, '') : mantissa
     const e = Number(exponent)
+    allocation?.allocate(2 * (sign.length + compact.length + 7))
     return `${sign}${compact}E${e < 0 ? '-' : '+'}${String(Math.abs(e)).padStart(2, '0')}`
   }
   const useScientific = absolute >= 1e11 || (absolute < 1e-4 && (plain.includes('e') || plain.length > 11))
   if (!useScientific) {
+    allocation?.allocate(4 * (sign.length + plain.length))
     if (plain.length <= 11 && fits(sign + plain)) return sign + plain
     const integerDigits = absolute >= 1 ? Math.floor(Math.log10(absolute)) + 1 : 1
     for (let decimals = Math.max(0, 10 - integerDigits); decimals >= 0; decimals--) {
+      allocation?.allocate(2 * (integerDigits + decimals + 2))
       const fixed = absolute.toFixed(decimals)
+      allocation?.allocate(4 * fixed.length)
       const compact = fixed.includes('.') ? fixed.replace(/0+$/, '').replace(/\.$/, '') : fixed
       // A nonzero value must not disappear through display rounding.
+      allocation?.allocate(4 * (sign.length + compact.length))
       if (compact.length <= 11 && Number(compact) !== 0 && fits(sign + compact)) return sign + compact
     }
   }
@@ -509,6 +518,7 @@ export function formatValue(
   value: string | number | boolean | null,
   numFmtId: number,
   semantics?: ResolvedSemantics,
+  allocation?: FormatAllocation,
 ): string {
   if (value === null) return ''
   if (typeof value === 'string') return value
@@ -516,33 +526,34 @@ export function formatValue(
   const sem = semantics ?? DEFAULT_RENDER_SEMANTICS
   switch (numFmtId) {
     case 0: // General
-      return formatGeneral(value)
+      return formatGeneral(value, undefined, undefined, allocation)
     case 2: // 0.00
-      return formatText(value, '0.00', sem)
+      return formatText(value, '0.00', sem, allocation)
     case 9: // 0%
-      return formatText(value, '0%', sem)
+      return formatText(value, '0%', sem, allocation)
     case 10: // 0.00%
-      return formatText(value, '0.00%', sem)
+      return formatText(value, '0.00%', sem, allocation)
     case 3: // #,##0
-      return formatText(value, '#,##0', sem)
+      return formatText(value, '#,##0', sem, allocation)
     case 4: // #,##0.00
-      return formatText(value, '#,##0.00', sem)
+      return formatText(value, '#,##0.00', sem, allocation)
     default:
       // Built-in date formats keep the established ISO product convention but
       // now decode through the SHARED serial model (1900 day-0/fictitious day,
       // explicit 1904) instead of the removed JS-Date epoch path.
       if (numFmtId >= 18 && numFmtId <= 22) {
         const formats = ['h:mm AM/PM', 'h:mm:ss AM/PM', 'h:mm', 'h:mm:ss', 'm/d/yy h:mm']
-        return formatText(value, formats[numFmtId - 18], sem)
+        return formatText(value, formats[numFmtId - 18], sem, allocation)
       }
+      allocation?.allocate(256) // bounded civil date/fallback Number strings
       if (numFmtId >= 14 && numFmtId <= 17) return formatDateSerial(value, sem.dateSystem)
       return formatFiniteFallback(value)
   }
 }
 
 /** One shared formatter call; unsupported classes fall back to plain numbers. */
-function formatText(value: number, format: string, semantics: ResolvedSemantics): string {
-  const result = formatCommon(value, format, semantics)
+function formatText(value: number, format: string, semantics: ResolvedSemantics, allocation?: FormatAllocation): string {
+  const result = formatCommon(value, format, semantics, allocation)
   if (result.kind === 'text') return result.text
   if (isEvaluationError(result)) return ''
   return formatFiniteFallback(value)
@@ -569,22 +580,24 @@ function renderCellText(
   sheet: XlsxSheet,
   fitsGeneral?: (text: string) => boolean,
   generalNoFit?: () => void,
+  allocation?: FormatAllocation,
 ): string {
   const code = style?.formatCode
   if (code !== undefined && value !== null) {
-    const result = formatCommon(value, code, semantics ?? DEFAULT_RENDER_SEMANTICS)
+    const result = formatCommon(value, code, semantics ?? DEFAULT_RENDER_SEMANTICS, allocation)
     if (result.kind === 'text') return result.text
-    if (!isEvaluationError(result)) noteFormatUnsupported(sheet, code, result.reason)
+    if (!isEvaluationError(result)) noteFormatUnsupported(sheet, code, result.reason, allocation)
   }
-  if (typeof value === 'number' && (style?.numFmtId ?? 0) === 0) return formatGeneral(value, fitsGeneral, generalNoFit)
-  return formatValue(value, style?.numFmtId ?? 0, semantics)
+  if (typeof value === 'number' && (style?.numFmtId ?? 0) === 0) return formatGeneral(value, fitsGeneral, generalNoFit, allocation)
+  if (typeof value === 'string') allocation?.borrowed?.(value)
+  return formatValue(value, style?.numFmtId ?? 0, semantics, allocation)
 }
 
 /** @internal The canonical display text of a cell (authored/built-in formats and
  * workbook semantics) without General width-fitting, shared by sheet-mode find
  * and accessible values with the painted text. */
-export function cellDisplayText(sheet: XlsxSheet, cell: Pick<XlsxCell, 'value' | 'style'>): string {
-  return renderCellText(cell.value, cell.style, sheet.semantics, sheet)
+export function cellDisplayText(sheet: XlsxSheet, cell: Pick<XlsxCell, 'value' | 'style'>, allocation?: FormatAllocation): string {
+  return renderCellText(cell.value, cell.style, sheet.semantics, sheet, undefined, undefined, allocation)
 }
 
 /**
@@ -592,13 +605,24 @@ export function cellDisplayText(sheet: XlsxSheet, cell: Pick<XlsxCell, 'value' |
  * channel (same shape as doc.diagnostics), deduped across repeated paints.
  * No product warning UI is produced.
  */
-function noteFormatUnsupported(sheet: XlsxSheet, format: string, reason: string): void {
+function noteFormatUnsupported(sheet: XlsxSheet, format: string, reason: string, allocation?: FormatAllocation): void {
   const holder = sheet as unknown as { diagnostics?: Array<{ kind: string; feature: string; message: string }> }
-  holder.diagnostics ??= []
+  if (!allocation) holder.diagnostics ??= []
+  const units = 8 + format.length + 47 + reason.length
+  // Two concatenation buffers and the new diagnostic/array slots are admitted
+  // before constructing either. Persistent bytes transfer with publication.
+  allocation?.allocate(4 * units + 128)
   const message = `Format '${format}' is outside the finite common-format grammar: ${reason}`
-  if (!holder.diagnostics.some((d) => d.feature === 'format-unsupported' && d.message === message)) {
-    holder.diagnostics.push({ kind: 'unsupported-format', feature: 'format-unsupported', message })
+  if (holder.diagnostics?.some(d => d.feature === 'format-unsupported' && d.message === message)) {
+    allocation?.release(4 * units + 128)
+    return
   }
+  const bytes = message.length * 2 + 72 + (holder.diagnostics ? 0 : 32)
+  const diagnostic = { kind: 'unsupported-format', feature: 'format-unsupported', message }
+  const commit = () => { holder.diagnostics ??= []; holder.diagnostics.push(diagnostic) }
+  if (allocation?.retain) allocation.retain([sheet, diagnostic], bytes, commit)
+  else commit()
+  allocation?.release(4 * units + 128 - bytes)
 }
 
 function prefixSums(widths: number[]): number[] {

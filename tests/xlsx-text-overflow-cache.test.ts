@@ -4,6 +4,8 @@ import { ViewerClient } from '../src/worker/viewerClient'
 import { connectInProcess, ViewerKernel } from '../src/worker/viewerKernel'
 import { createObjectWorkbookSource } from '../src/worker/viewerObjectSource'
 import { RemoteWorkbook } from '../src/worker/viewerRemoteSource'
+import { bindOverflowCache, boundOverflowCache, OverflowResourceError } from '../src/xlsx/view/overflowCache'
+import { MAIN_THREAD_BUDGETS } from '../src/xlsx/view/tileCache'
 import { createIdentityOrder } from '../src/xlsx/view/order'
 import { cellTextOverflow, rowOverflowInput } from '../src/xlsx/view/viewport'
 import { createIntervalSet, visibilityFromHidden } from '../src/xlsx/view/visibility'
@@ -15,7 +17,7 @@ async function fixture() {
     { row: 0, col: 500, value: 'later long text' },
     { row: 0, col: 501, value: 'BLOCK' },
     { row: 1, col: 0, value: 'x'.repeat(64) },
-  ] }])
+  ] }, { sheetId: 't', cells: [{ row: 0, col: 0, value: 'second' }] }])
   const source = createObjectWorkbookSource(doc, 'd')
   const kernel = new ViewerKernel({ parse: async () => doc, openSource: async () => source }, { yield: async () => {} })
   const client = new ViewerClient(connectInProcess(kernel))
@@ -26,10 +28,49 @@ async function fixture() {
   })
   const order = createIdentityOrder(), visibility = visibilityFromHidden(createIntervalSet([]))
   const fresh = () => pagedSheetGeometry(remote, 's', order, visibility)
-  return { store: remote.store('s'), geometry: fresh(), fresh, close: async () => { await remote.close(); await client.dispose() } }
+  return { remote, store: remote.store('s'), geometry: fresh(), fresh, close: async () => { await remote.close(); await client.dispose() } }
 }
 
 describe('review round 5: overflow memo follows the real remote row cache', () => {
+  it('charges one real document ledger across active, inactive and retired geometries and closes it', async () => {
+    const f = await fixture()
+    try {
+      await f.store.load([0], 0, 501)
+      rowOverflowInput(f.geometry, 0)
+      const first = f.remote.mainLedger.snapshot().byPool.layout
+      expect(first).toBeGreaterThan(4096)
+      const retired = f.fresh()
+      rowOverflowInput(retired, 0)
+      expect(f.remote.mainLedger.snapshot().byPool.layout).toBeGreaterThan(first)
+      await f.remote.store('t').load([0], 0, 0)
+      const inactive = pagedSheetGeometry(f.remote, 't', createIdentityOrder(), visibilityFromHidden(createIntervalSet([])))
+      rowOverflowInput(inactive, 0)
+      expect(boundOverflowCache(inactive)).toBe(boundOverflowCache(retired))
+      expect(f.remote.mainLedger.snapshot().byPool.layout).toBeGreaterThan(first * 2)
+      await f.remote.close()
+      expect(f.remote.mainLedger.snapshot().byPool.layout).toBe(0)
+      expect(() => rowOverflowInput(retired, 0)).toThrow(OverflowResourceError)
+    } finally { await f.close() }
+  })
+
+  it('replaces a remote profile context without restoring the previous desktop cache on fresh geometry', async () => {
+    const f = await fixture()
+    try {
+      await f.store.load([0], 0, 501)
+      rowOverflowInput(f.geometry, 0)
+      const old = boundOverflowCache(f.geometry)!
+      const mobile = f.remote.overflowFor('M')
+      expect(old.bytes).toBe(0)
+      const next = f.fresh()
+      expect(boundOverflowCache(next)).toBe(mobile)
+      f.remote.mainLedger.set('copy', 'pressure', MAIN_THREAD_BUDGETS.M)
+      expect(() => rowOverflowInput(next, 0)).toThrow(OverflowResourceError)
+      expect(mobile.bytes).toBe(0)
+      f.remote.mainLedger.release('copy', 'pressure')
+      expect(cellTextOverflow(next, { row: 0, col: 500 })!.right).toBe(0)
+    } finally { await f.close() }
+  })
+
   it('sees a blocker in a late column chunk without replacing geometry', async () => {
     const f = await fixture()
     try {
@@ -72,6 +113,7 @@ describe('review round 5: overflow memo follows the real remote row cache', () =
         return Reflect.get(target, key, receiver)
       } })
       const geometry = { ...f.geometry, cellsOf: () => counted }
+      bindOverflowCache(geometry, boundOverflowCache(f.geometry)!)
       const input = rowOverflowInput(geometry, 0)
       reads = 0
       for (let i = 0; i < 64; i++) {

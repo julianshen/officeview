@@ -10,7 +10,7 @@ import { contentDiagnostic, drawingPartContext, DOCUMENT_DRAWING_NODE_LIMIT, DRA
 import { parseGroupShapeProperties, resolveDrawingStyle, type DrawingStyle, type ThemeContext } from '../drawing/style'
 import { parseTextBody, textFontDefaults } from '../drawing/text-parse'
 import { parseVmlContainer, type VmlNode } from '../drawing/vml'
-import type { XlsxDrawing, XlsxDrawingAnchors, XlsxImage, XlsxSheet } from './types'
+import type { XlsxDrawing, XlsxDrawingAnchors, XlsxSheet } from './types'
 import { ANCHOR_ELEMENTS, DRAWING_ROOT, anchorId, anchorRecord, rootLocalName } from './anchorRecords'
 
 function vmlNodeToXlsx(node: VmlNode, owner: string): XlsxDrawing | undefined {
@@ -215,14 +215,19 @@ function prefixes(sheet: XlsxSheet, axis: 'col' | 'row', through: number): numbe
   return out
 }
 
-function marker(sheet: XlsxSheet, node: XmlNode | undefined): { x: number; y: number; col: number; row: number } | undefined {
+/** Worksheet CSS px start of a column/row. A paged sheet supplies its own (an
+ * O(log n) axis lookup over the geometry its cells paint with); the default
+ * walks the parsed sheet's prefixes. */
+export interface AnchorOffsets { col(index: number): number; row(index: number): number }
+function marker(sheet: XlsxSheet, node: XmlNode | undefined, offsets?: AnchorOffsets): { x: number; y: number; col: number; row: number } | undefined {
   const col = finite(textOf(child(node, 'col'))), row = finite(textOf(child(node, 'row')))
   const xo = finite(textOf(child(node, 'colOff'))), yo = finite(textOf(child(node, 'rowOff')))
   if (col === undefined || row === undefined || xo === undefined || yo === undefined || !Number.isSafeInteger(col) || !Number.isSafeInteger(row) || col < 0 || row < 0 || col >= MAX_COLS || row >= MAX_ROWS) return undefined
   sheet.drawingMarkers ??= { maxCol: 0, maxRow: 0 }
   sheet.drawingMarkers.maxCol = Math.max(sheet.drawingMarkers.maxCol, col)
   sheet.drawingMarkers.maxRow = Math.max(sheet.drawingMarkers.maxRow, row)
-  return { x: (prefixes(sheet, 'col', col)[col] * EMU) + xo, y: (prefixes(sheet, 'row', row)[row] * EMU) + yo, col, row }
+  const x = offsets ? offsets.col(col) : prefixes(sheet, 'col', col)[col], y = offsets ? offsets.row(row) : prefixes(sheet, 'row', row)[row]
+  return { x: (x * EMU) + xo, y: (y * EMU) + yo, col, row }
 }
 
 function transform(node: XmlNode | undefined): Pick<XlsxDrawing, 'xEmu' | 'yEmu' | 'widthEmu' | 'heightEmu' | 'rotationDeg' | 'flipH' | 'flipV' | 'transformValid'> {
@@ -232,19 +237,19 @@ function transform(node: XmlNode | undefined): Pick<XlsxDrawing, 'xEmu' | 'yEmu'
   return { xEmu: x ?? 0, yEmu: y ?? 0, widthEmu: w ?? 0, heightEmu: h ?? 0, rotationDeg: (rot ?? 0) / 60000, flipH: bool(xa.flipH), flipV: bool(xa.flipV), transformValid: valid }
 }
 
-function anchorPlacement(sheet: XlsxSheet, name: string, node: XmlNode): Pick<XlsxDrawing, 'xEmu' | 'yEmu' | 'widthEmu' | 'heightEmu'> | undefined {
+function anchorPlacement(sheet: XlsxSheet, name: string, node: XmlNode, offsets?: AnchorOffsets): Pick<XlsxDrawing, 'xEmu' | 'yEmu' | 'widthEmu' | 'heightEmu'> | undefined {
   if (name === 'absoluteAnchor') {
     const pa = attrs(child(node, 'pos')), ea = attrs(child(node, 'ext'))
     const x = finite(pa.x), y = finite(pa.y), w = finite(ea.cx), h = finite(ea.cy)
     return x !== undefined && y !== undefined && w !== undefined && h !== undefined && w >= 0 && h >= 0 ? { xEmu: x, yEmu: y, widthEmu: w, heightEmu: h } : undefined
   }
-  const from = marker(sheet, child(node, 'from'))
+  const from = marker(sheet, child(node, 'from'), offsets)
   if (!from) return undefined
   if (name === 'oneCellAnchor') {
     const ea = attrs(child(node, 'ext')), w = finite(ea.cx), h = finite(ea.cy)
     return w !== undefined && h !== undefined && w >= 0 && h >= 0 ? { xEmu: from.x, yEmu: from.y, widthEmu: w, heightEmu: h } : undefined
   }
-  const to = marker(sheet, child(node, 'to'))
+  const to = marker(sheet, child(node, 'to'), offsets)
   return to && to.x >= from.x && to.y >= from.y ? { xEmu: from.x, yEmu: from.y, widthEmu: to.x - from.x, heightEmu: to.y - from.y } : undefined
 }
 
@@ -424,7 +429,7 @@ function collectAnchorRecords(drawingRoot: XmlNode, owner: string, anchors: Xlsx
 }
 
 /** Resolve each worksheet-owned drawing relationship and retain anchor order. */
-export async function parseWorksheetDrawings(pkg: OfficePackage, sheet: XlsxSheet, worksheetPath: string, root: XmlNode, theme: ThemeContext): Promise<void> {
+export async function parseWorksheetDrawings(pkg: OfficePackage, sheet: XlsxSheet, worksheetPath: string, root: XmlNode, theme: ThemeContext, offsets?: AnchorOffsets): Promise<void> {
   const context = drawingPartContext(pkg), start = context.diagnostics.length
   const imageSelections = new Map<string, ImageSelection>()
   sheet.drawingCoverage = []
@@ -451,7 +456,7 @@ export async function parseWorksheetDrawings(pkg: OfficePackage, sheet: XlsxShee
     for (const [name, anchor] of orderedChildren(drawingRoot)) {
       if (!['oneCellAnchor', 'twoCellAnchor', 'absoluteAnchor'].includes(name)) continue
       const anchorPath = `${name}[${anchorIndex++}]`
-      const placement = anchorPlacement(sheet, name, anchor)
+      const placement = anchorPlacement(sheet, name, anchor, offsets)
       if (!placement) {
         contentDiagnostic(context, 'unsupported-content', owner, name, { identity: anchorPath, reason: 'invalid-anchor' })
         sheet.drawingCoverage.push({ partPath: owner, treePath: anchorPath, element: name, feature: 'anchor', status: 'malformed', selectedRepresentation: 'none', representation: 'native', reason: 'invalid-anchor', scope: 'original', unit: 0 })
@@ -549,31 +554,4 @@ export async function parseWorksheetDrawings(pkg: OfficePackage, sheet: XlsxShee
   sheet.drawingTheme = theme
 }
 
-/** Stable first-use media indexing across all worksheet scenes. */
-export function collectXlsxImages(sheets: XlsxSheet[]): XlsxImage[] {
-  const images: XlsxImage[] = [], indices = new Map<string, number>()
-  const walk = (nodes: XlsxDrawing[]) => {
-    for (const node of nodes) {
-      if (node.image && (node.image.data || node.image.svg) && node.image.partPath) {
-        const svgState = node.image.svg ? (node.image.svg.verdict.ok ? 'ok' : `rej:${(node.image.svg.verdict as { reason: string }).reason}`) : 'none'
-        const key = `${node.image.partPath}\u0000${node.image.svg?.partPath ?? ''}\u0000${svgState}\u0000${node.image.hasRaster === false ? 'svg-only' : 'raster'}`
-        let index = indices.get(key)
-        if (index === undefined) {
-          index = images.length
-          indices.set(key, index)
-          images.push({ data: node.image.data ?? node.image.svg!.bytes, mime: node.image.mime, partPath: node.image.partPath, pathHint: node.image.pathHint ?? node.image.partPath,
-            ...(node.image.svg ? { svg: node.image.svg } : {}),
-            ...(node.image.primarySvgVerdict ? { primarySvgVerdict: node.image.primarySvgVerdict } : {}),
-            hasRaster: node.image.hasRaster,
-            ...(node.image.imageSelection ? { imageSelection: node.image.imageSelection } : {}) })
-        } else if (node.image.imageSelection && images[index].imageSelection !== node.image.imageSelection) {
-          node.image.imageSelection = images[index].imageSelection
-        }
-        node.imageIndex = index
-      }
-      if (node.children) walk(node.children)
-    }
-  }
-  for (const sheet of sheets) walk(sheet.drawings ?? [])
-  return images
-}
+export { collectXlsxImages } from './drawingImages'

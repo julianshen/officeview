@@ -31,12 +31,21 @@ export interface BenchArgs {
   /** Scenario diagnostic: do not charge resident harness data to the worker
    * budget. Such results are labelled and are never admitted-profile evidence. */
   unadmitted: boolean
+  /** harness: the S0.3/S8.4 scaffold and kernel scenarios. viewer: the S10.2
+   * real-viewer suite (production-built page, true XLSX fixtures). */
+  suite: 'harness' | 'viewer'
+  /** Viewer suite fixture scale; reduced is a labelled smoke size. */
+  scale: 'full' | 'reduced'
 }
 
 /**
- * Flips to true when S0.2 delivers the real F1..F8 fixtures. Until then every
- * fixture is the 120x10 placeholder and `--mode release` would label a
- * placeholder measurement as release evidence, so it is refused.
+ * The S0.3 scaffold page still loads the 120x10 placeholder and the S8.4 kernel
+ * scenarios run over synthetic fixture stores, so `--mode release` stays
+ * refused for them: a placeholder or kernel-store measurement must not be
+ * labelled release evidence. The S10.2 viewer suite (`--suite viewer`, alias
+ * `--fixture all`) is the one release path: it opens true XLSX packages written
+ * by the S0.2 deterministic builders at full spec scale, in the shipped viewer,
+ * and records each package's SHA-256 in its receipt.
  */
 export const REAL_FIXTURES_AVAILABLE = false
 
@@ -71,7 +80,15 @@ export const HELP_TEXT = `interactive-viewer bench CLI (S0.3 scaffold — no vie
   --channel    chromium (bundled, default) | chrome (installed Google Chrome)
   --timeout-min M  whole-collection budget in minutes (default 15)
   --unadmitted     scenario diagnostic: resident harness data is not charged to
-               the worker budget; the result is labelled admitted=false`
+               the worker budget; the result is labelled admitted=false
+  --suite viewer   S10.2 real-viewer suite (alias: --fixture all): production
+               build of src/debug/viewer-perf.html, true XLSX F1-F4 + scroll
+               mixes, first viewport, sustained scroll, input acknowledgment,
+               importer throughput and memory; writes one hash-tagged receipt.
+               --repeat is the operation sample count (frames are always 300).
+               --mode release is admitted only here, with --channel chrome,
+               --profile desktop and --scale full.
+  --scale      full (spec catalog, default) | reduced (labelled smoke scale)`
 
 const OPERATOR_FLAGS: Record<string, keyof OperatorMetadata> = {
   'device-model': 'deviceModel',
@@ -80,7 +97,7 @@ const OPERATOR_FLAGS: Record<string, keyof OperatorMetadata> = {
   battery: 'batteryState',
 }
 
-const KNOWN_FLAGS = ['browser', 'profile', 'fixture', 'repeat', 'warmup', 'output', 'mode', 'baseline', 'serve', 'port', 'scenario', 'rows', 'channel', 'timeout-min', 'unadmitted']
+const KNOWN_FLAGS = ['browser', 'profile', 'fixture', 'repeat', 'warmup', 'output', 'mode', 'baseline', 'serve', 'port', 'scenario', 'rows', 'channel', 'timeout-min', 'unadmitted', 'suite', 'scale']
 
 export function parseArgs(argv: string[]): BenchArgs | { help: true } {
   const args: BenchArgs = {
@@ -100,6 +117,8 @@ export function parseArgs(argv: string[]): BenchArgs | { help: true } {
     channel: 'chromium',
     timeoutMinutes: 15,
     unadmitted: false,
+    suite: 'harness',
+    scale: 'full',
   }
   let requestedMode: string = args.mode
   let explicitFixture: FixtureId | null = null
@@ -128,6 +147,8 @@ export function parseArgs(argv: string[]): BenchArgs | { help: true } {
         args.profile = text
         break
       case 'fixture':
+        // The plan's release command names every fixture: that is the viewer suite.
+        if (text === 'all') { args.suite = 'viewer'; break }
         if (!FIXTURE_IDS.includes(text as FixtureId)) throw new Error(`--fixture must be one of ${FIXTURE_IDS.join(', ')}, got ${text}`)
         args.fixture = text as FixtureId
         explicitFixture = args.fixture
@@ -178,6 +199,14 @@ export function parseArgs(argv: string[]): BenchArgs | { help: true } {
         if (value !== undefined && value !== 'true' && value !== 'false' && value !== '') throw new Error(`--unadmitted takes no value (or true|false), got ${value}`)
         args.unadmitted = value !== 'false'
         break
+      case 'suite':
+        if (text !== 'harness' && text !== 'viewer') throw new Error(`--suite must be harness|viewer, got ${text}`)
+        args.suite = text
+        break
+      case 'scale':
+        if (text !== 'full' && text !== 'reduced') throw new Error(`--scale must be full|reduced, got ${text}`)
+        args.scale = text
+        break
       case 'channel':
         if (text !== 'chromium' && text !== 'chrome') throw new Error(`--channel must be chromium|chrome, got ${text}`)
         args.channel = text
@@ -200,8 +229,23 @@ export function parseArgs(argv: string[]): BenchArgs | { help: true } {
   } else if (args.rows !== null) throw new Error('--rows applies to --scenario runs only')
   else if (args.unadmitted) throw new Error('--unadmitted applies to --scenario runs only')
   if (args.channel === 'chrome' && args.browser !== 'chromium') throw new Error('--channel chrome applies to --browser chromium only')
+  if (args.suite === 'viewer') {
+    if (args.scenario !== null || explicitFixture !== null) throw new Error('--suite viewer runs its own fixture set; drop --scenario/--fixture')
+    if (args.browser === 'safari-manual') throw new Error('--suite viewer is automated (chromium|webkit); actual Safari/iPad collection is a separate manual receipt')
+    if (args.baseline !== null) throw new Error('--baseline applies to the harness suite only')
+    if (args.repeat === 1 && !argv.some(arg => arg === '--repeat' || arg.startsWith('--repeat='))) args.repeat = 30
+    if (requestedMode === 'release') {
+      if (args.browser !== 'chromium' || args.channel !== 'chrome') throw new Error('--mode release needs --browser chromium --channel chrome: release evidence is installed stable Chrome, never bundled Chromium or WebKit emulation')
+      if (args.profile !== 'desktop') throw new Error('--mode release is desktop D only: the mobile M profile needs a physical iPad receipt')
+      if (args.scale !== 'full') throw new Error('--mode release needs --scale full')
+      if (args.repeat < 30) throw new Error('--mode release needs --repeat >= 30 (spec §12.6)')
+    }
+    args.mode = requestedMode as HarnessMode
+    return args
+  }
+  if (args.scale !== 'full') throw new Error('--scale applies to --suite viewer only')
   if (requestedMode === 'release' && !REAL_FIXTURES_AVAILABLE) {
-    throw new Error('--mode release is refused: every fixture is still the 120x10 placeholder (real F1..F8 arrive with S0.2), and a placeholder measurement must not be labeled release evidence')
+    throw new Error('--mode release is refused for the harness suite: the scaffold page still loads the 120x10 placeholder and kernel scenarios use synthetic stores, so a placeholder measurement must not be labeled release evidence (use --suite viewer)')
   }
   args.mode = requestedMode as HarnessMode
   if (args.browser === 'safari-manual' && !args.serve) throw new Error('--browser safari-manual requires --serve')

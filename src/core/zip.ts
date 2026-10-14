@@ -10,7 +10,9 @@ export class OfficePackage {
   private zip: JSZip
   private cache = new Map<string, unknown>()
 
-  private constructor(zip: JSZip) {
+  /** Protected: a subclass may serve parts from elsewhere (the paged drawing
+   * reader reads them on demand through the range reader, S13.2). */
+  protected constructor(zip: JSZip) {
     this.zip = zip
   }
 

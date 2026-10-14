@@ -169,7 +169,7 @@ export function renderSheetViewport(
     }
     // A coarse frame draws no gridlines; the active record's border still paints.
     if (plan.kind !== 'detail') for (const paint of paintBorders) paint()
-    if (paintable && coarse.length) notice(COARSE_NOTICE)
+    if (paintable && coarse.length) notice(plan.diagnostics.find(d => d.code === 'overflow-memory')?.message ?? COARSE_NOTICE)
     return { kind: plan.kind, diagnostics: plan.diagnostics, records, coarse, ...(active ? { active } : {}), work }
   } finally { ctx.restore() }
 }

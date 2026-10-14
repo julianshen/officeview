@@ -24,6 +24,7 @@ import { createSheetMetrics, type ProjectedSheetMetrics } from './projection'
 import { RectangleIndex } from './structure'
 import { cellSourceRow, drawingExtent } from './sheetCells'
 import { createIntervalSet } from './visibility'
+import { boundOverflowCache, OverflowResourceError } from './overflowCache'
 import { NO_OVERFLOW, rowOverflowFromCells, textOverflowAllowance, type OverflowAllowance, type RowOverflowInput } from './textOverflow'
 
 // Static-renderer helpers live in a leaf module so the eager static path never
@@ -183,40 +184,25 @@ export interface SheetGeometry {
   /** Populated cells of one source row, ascending by column; undefined for blank rows. */
   cellsOf(sourceRow: number): readonly XlsxCell[] | undefined
   readonly merges: RectangleIndex<XlsxMergeRange>
+  /** Resident builds (S10.2 main ledger): retained bytes of the per-row cell
+   * index (one Map entry and one array per populated row, one slot per cell). */
+  readonly cellIndexBytes?: number
   /** Top-level drawings touching a logical CSS box, in authored paint order, or null
    * when their node weight or the index walk exceeds `budget` records. */
   drawingsIn(left: number, top: number, right: number, bottom: number, budget: number): readonly XlsxDrawing[] | null
 }
-/** Rows whose occupancy is memoized per geometry (most recently used kept). */
-const OVERFLOW_ROW_CACHE = 4096
-interface OverflowRowMemo { snapshot: symbol | undefined; input: RowOverflowInput }
-const overflowRows = new WeakMap<SheetGeometry, Map<number, OverflowRowMemo>>()
-// Paged caches replace cell arrays on put and remove them on drop/clear. Weak
-// snapshot keys validate occupancy without keeping evicted cells or text alive.
-const overflowSnapshots = new WeakMap<readonly XlsxCell[], symbol>()
-/** One source row's overflow occupancy (sorted visible blocking columns and the
- * merged ranges crossing it, against the real column axis and edges). Built
- * once per row snapshot and geometry and reused across frames, tiles and find, so a
- * wide styled row costs O(cells) once and every allowance O(log n). */
+/** Owned viewers share a document cache. A geometry outside that ownership
+ * computes its input on demand without creating retained global state. */
 export function rowOverflowInput(geometry: SheetGeometry, sourceRow: number): RowOverflowInput {
-  let rows = overflowRows.get(geometry)
-  if (!rows) overflowRows.set(geometry, rows = new Map())
-  const cells = geometry.cellsOf(sourceRow)
-  let snapshot = cells && overflowSnapshots.get(cells)
-  if (cells && !snapshot) overflowSnapshots.set(cells, snapshot = Symbol())
-  const hit = rows.get(sourceRow)
-  if (hit && hit.snapshot === snapshot) { rows.delete(sourceRow); rows.set(sourceRow, hit); return hit.input }
+  const cache = boundOverflowCache(geometry)
+  if (cache) return cache.get(geometry, sourceRow)
   const metrics = geometry.metrics
-  const input = rowOverflowFromCells(
-    cells ?? [],
+  return rowOverflowFromCells(
+    geometry.cellsOf(sourceRow) ?? [],
     isValidCoordinate(sourceRow, 0) ? geometry.merges.collect({ r0: sourceRow, r1: sourceRow, c0: 0, c1: MAX_COLS - 1 }) : [],
     (col: number) => metrics.cols.start(col),
     metrics.cols.logicalCount - 1,
   )
-  rows.delete(sourceRow)
-  rows.set(sourceRow, { snapshot, input })
-  if (rows.size > OVERFLOW_ROW_CACHE) rows.delete(rows.keys().next().value!)
-  return input
 }
 /** The overflow allowance the painter gives one cell (find geometry reuses it). */
 export function cellTextOverflow(geometry: SheetGeometryResult | undefined, source: SourceCell): OverflowAllowance | undefined {
@@ -329,11 +315,15 @@ function buildAxis(axis: 'rows' | 'cols', logicalCount: number, defaultSizeCss: 
 /** Build the full-capacity geometry for a small object sheet. Authored-hidden rows
  * and columns collapse unconditionally (spec §5.3), with or without drawings,
  * unless a canonical visibility mask is supplied for rows. */
+/** Retained bytes per populated row and per cell slot of a resident cell index
+ * (Map entry + array header + backing store; review round 4 measurement). */
+export const CELL_INDEX_ROW_BYTES = 136
+export const CELL_INDEX_SLOT_BYTES = 8
 export function buildSheetGeometry(sheet: XlsxSheet, options: SheetGeometryOptions = {}): SheetGeometryResult {
   const diagnostics: WorkerDiagnostic[] = []
   const cellsByRow = new Map<number, XlsxCell[]>()
   const rowOverrides: AxisSizeInterval[] = []
-  let skippedRows = 0, skippedCells = 0, inconsistent = 0
+  let skippedRows = 0, skippedCells = 0, inconsistent = 0, indexedCells = 0
   for (const row of sheet.rows) {
     const rowValid = isValidCoordinate(row.index, 0)
     if (!rowValid) skippedRows++
@@ -348,6 +338,7 @@ export function buildSheetGeometry(sheet: XlsxSheet, options: SheetGeometryOptio
       let cells = cellsByRow.get(source)
       if (!cells) cellsByRow.set(source, cells = [])
       cells.push(item)
+      indexedCells++
     }
   }
   // Stable: equal columns keep authored order, exactly as the static loop paints them.
@@ -393,21 +384,30 @@ export function buildSheetGeometry(sheet: XlsxSheet, options: SheetGeometryOptio
     }
     mergeEntries.push({ rect: { r0: range.minRow, r1: range.maxRow, c0: range.minCol, c1: range.maxCol }, value: range })
   }
-  const drawings = sheet.drawings ?? []
-  const boxes = drawings.map((node, index) => ({ ...drawingExtent([node]), index, weight: drawingWeight(node) }))
-    .filter(box => box.left <= box.right && box.top <= box.bottom)
-  const drawingIndex = BoxIndex.build(boxes)
+  const drawingsIn = drawingQuery(sheet.drawings ?? [])
   return Object.freeze({
     kind: 'ready' as const,
     metrics,
     diagnostics: Object.freeze(diagnostics),
     cellsOf: (sourceRow: number) => cellsByRow.get(sourceRow),
+    // ~136 B per populated row (Map entry, array header and backing store) and
+    // 8 B per cell slot; the cells themselves belong to the document's charge.
+    cellIndexBytes: cellsByRow.size * CELL_INDEX_ROW_BYTES + indexedCells * CELL_INDEX_SLOT_BYTES,
     merges: RectangleIndex.build(mergeEntries),
-    drawingsIn(left: number, top: number, right: number, bottom: number, budget: number) {
-      const hits = drawingIndex.query(left, top, right, bottom, budget)
-      return hits && hits.map(index => drawings[index])
-    },
+    drawingsIn,
   })
+}
+
+/** SheetGeometry.drawingsIn over top-level drawings in worksheet CSS px (both
+ * the resident and the paged geometry, S13.2). */
+export function drawingQuery(drawings: readonly XlsxDrawing[]): SheetGeometry['drawingsIn'] {
+  const boxes = drawings.map((node, index) => ({ ...drawingExtent([node]), index, weight: drawingWeight(node) }))
+    .filter(box => box.left <= box.right && box.top <= box.bottom)
+  const drawingIndex = BoxIndex.build(boxes)
+  return (left, top, right, bottom, budget) => {
+    const hits = drawingIndex.query(left, top, right, bottom, budget)
+    return hits && hits.map(index => drawings[index])
+  }
 }
 
 interface LocatedMerge { minRow: number; maxRow: number; range: XlsxMergeRange }
@@ -516,6 +516,13 @@ export function planViewport(geometry: SheetGeometryResult | undefined, viewport
     }
     return plan
   } catch (error) {
+    if (error instanceof OverflowResourceError) {
+      const metrics = geometry.metrics, { x, y, width, height } = viewport.box
+      const groups = coarseGroups(metrics, [{ rows: { start: Math.max(0, y), end: Math.min(metrics.rows.totalCss(), y + height) }, cols: { start: Math.max(0, x), end: Math.min(metrics.cols.totalCss(), x + width) } }], detailScale(viewport), VIEWPORT_DETAIL_LIMITS[profile].overviewGroups)
+      const work = emptyWork(), active = activePlacement(geometry, options.activeCell, work)
+      work.overviewGroups = groups.length
+      return { kind: 'coarse', diagnostics: [...geometry.diagnostics, { code: 'overflow-memory', message: error.message }], groups, extent: { width: metrics.cols.totalCss(), height: metrics.rows.totalCss() }, work, ...(active ? { active } : {}) }
+    }
     if (!(error instanceof AxisMetricsError)) throw error
     return { kind: 'diagnostic', diagnostics: [...geometry.diagnostics, axisDiagnostic(error, 'viewport')] }
   }
@@ -680,21 +687,29 @@ function tileOverflow(boxes: Iterable<{ x: number; y: number; width: number; hei
  * S5.1). Keys are the query rectangle and limit; the geometry object is the
  * generation (a new sheet/order/visibility builds a new geometry). */
 export class MergeQueryCache {
-  private readonly byGeometry = new WeakMap<SheetGeometry, Map<string, ReturnType<SheetGeometry['merges']['query']>>>()
+  private readonly byGeometry = new WeakMap<SheetGeometry, Map<string, { page: ReturnType<SheetGeometry['merges']['query']>; bytes: number }>>()
   hits = 0
   misses = 0
+  /** Estimated bytes of the retained pages (S10.2 main ledger), across geometries. */
+  bytes = 0
   constructor(readonly maxEntries = 64) {}
   query(geometry: SheetGeometry, rect: { r0: number; r1: number; c0: number; c1: number }, limit: number, work: ViewportWork): ReturnType<SheetGeometry['merges']['query']> {
     let entries = this.byGeometry.get(geometry)
     if (!entries) this.byGeometry.set(geometry, entries = new Map())
     const key = `${rect.r0},${rect.r1},${rect.c0},${rect.c1},${limit}`
     const hit = entries.get(key)
-    if (hit) { this.hits++; return hit }
+    if (hit) { this.hits++; return hit.page }
     this.misses++
     work.mergeQueries++
     const page = geometry.merges.query(rect, { limit })
-    entries.set(key, page)
-    if (entries.size > this.maxEntries) entries.delete(entries.keys().next().value!)
+    const bytes = 64 + page.items.length * 48
+    entries.set(key, { page, bytes })
+    this.bytes += bytes
+    if (entries.size > this.maxEntries) {
+      const oldest = entries.keys().next().value!
+      this.bytes -= entries.get(oldest)!.bytes
+      entries.delete(oldest)
+    }
     return page
   }
 }

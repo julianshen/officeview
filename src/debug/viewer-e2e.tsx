@@ -14,6 +14,11 @@
  *   wcaps=a,b     capabilities the viewer worker denies itself (workerCaps.ts),
  *                 passed as the Worker name since init scripts never reach it
  *   focus=grid    focus the grid once it has painted (real-keyboard runs)
+ *   paged=1       with worker=1: debug-only admission override (forcePaged.ts).
+ *                 The page loads through loadOfficeSource with the object cell
+ *                 cap lowered to 1 (and the worker kernel likewise), so even a
+ *                 small file takes the worker-backed paged path. The document
+ *                 is rendered by <OfficeDoc>, exactly as OfficeFile would.
  *
  * Instrumentation lives at public boundaries only: the worker port (commands
  * by kind / read op, transferred bytes, workers created/terminated), the
@@ -24,6 +29,11 @@
 import { useEffect, useMemo, useState, type JSX } from 'react'
 import { createRoot } from 'react-dom/client'
 import { OfficeFile, type ViewerWorkerPort } from '../components/OfficeFile'
+import { OfficeDoc } from '../components/OfficeDoc'
+import { loadOfficeSource, type AnyDoc } from '../components/loadOfficeSource'
+import { openPagedWorkbook } from '../components/xlsx/pagedWorkbook'
+import { pagedWorkbookOf } from '../components/pagedDocument'
+import { FORCE_PAGED_LIMITS } from './forcePaged'
 import type { SheetFrameStats } from '../components/xlsx/InteractiveSheetDoc'
 // The library loads these on demand. The harness server only serves modules it
 // has reached through the module graph from src/debug (LAN lockdown, see
@@ -104,7 +114,8 @@ function transferSize(transfer: Transferable[]): number {
 /** A real dedicated module worker behind a counting port. */
 function countingWorker(): ViewerWorkerPort {
   const caps = params.get('wcaps')
-  const worker = new Worker(new URL('./viewerWorker.ts', import.meta.url), { name: caps ? `caps:${caps}` : '', type: 'module' })
+  const name = [caps ? `caps:${caps}` : '', params.get('paged') === '1' ? 'paged' : ''].filter(Boolean).join(';')
+  const worker = new Worker(new URL('./viewerWorker.ts', import.meta.url), { name, type: 'module' })
   state.workersCreated++
   worker.addEventListener('message', (event) => { state.replies++; if (params.get('log') === '1') console.log('reply', JSON.stringify(event.data).slice(0, 400)) })
   return {
@@ -144,6 +155,7 @@ function E2EPage(): JSX.Element {
   // onFrame is the viewer's @internal instrumentation prop; OfficeFile forwards
   // unknown props to the interactive viewer unchanged.
   const internal = { onFrame } as Record<string, unknown>
+  if (worker && params.get('paged') === '1') return <ForcedPagedDoc blob={blob} internal={internal} />
   return (
     <OfficeFile
       data={blob}
@@ -169,6 +181,40 @@ if (params.get('focus') === 'grid') {
     else if (Date.now() - started < 60_000) setTimeout(tryFocus, 200)
   }
   tryFocus()
+}
+
+/** `?paged=1&worker=1`: the paged route of useOfficeFile, with admission forced paged. */
+function ForcedPagedDoc({ blob, internal }: { blob: Blob | null; internal: Record<string, unknown> }): JSX.Element {
+  const [doc, setDoc] = useState<AnyDoc | null>(null)
+  const [error, setError] = useState<string | null>(null)
+  useEffect(() => {
+    if (!blob) return
+    const controller = new AbortController()
+    let loaded: AnyDoc | undefined
+    let cancelled = false
+    void loadOfficeSource(blob, {
+      signal: controller.signal,
+      limits: FORCE_PAGED_LIMITS,
+      paged: async (source, ctx, release) => openPagedWorkbook(source, { port: countingWorker(), profile: ctx.profile, signal: ctx.signal, ...(release ? { release } : {}) }),
+    }).then(document => {
+      if (cancelled) { void pagedWorkbookOf(document)?.release(); return }
+      loaded = document
+      setDoc(document)
+    }).catch(cause => { if (!cancelled) setError(cause instanceof Error ? cause.message : String(cause)) })
+    return () => { cancelled = true; controller.abort(); void pagedWorkbookOf(loaded)?.release() }
+  }, [blob])
+  if (error) return <div role="alert" data-testid="e2e-error">{error}</div>
+  if (!doc) return <div role="status">Loading workbook…</div>
+  return (
+    <OfficeDoc
+      document={doc}
+      interactiveSheets
+      showSearch
+      allowCopy={params.get('copy') !== '0'}
+      style={{ flex: '1 1 auto', minHeight: 0 }}
+      {...internal}
+    />
+  )
 }
 
 const container = document.getElementById('root')

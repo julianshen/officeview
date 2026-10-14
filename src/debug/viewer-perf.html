@@ -1,0 +1,19 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Interactive viewer performance page</title>
+    <style>
+      html, body { margin: 0; height: 100%; }
+      #root { height: 100%; display: flex; flex-direction: column; }
+      #perf-file, #perf-import-file { position: absolute; left: -10000px; }
+    </style>
+  </head>
+  <body>
+    <input id="perf-file" type="file" aria-label="Workbook file" />
+    <input id="perf-import-file" type="file" aria-label="Importer throughput file" />
+    <div id="root"></div>
+    <script type="module" src="/src/debug/viewer-perf.tsx"></script>
+  </body>
+</html>

@@ -78,8 +78,8 @@
         "specMs": 16.7,
         "frozenMs": 16.7,
         "basis": "spec",
-        "outcome": "unmeasured",
-        "justification": "Not an S8.4 operation: the harness has no viewport scroll scenario yet (S5 viewer not harnessed); frozen at spec, measured by S10.2.",
+        "outcome": "pass",
+        "justification": "Kept at spec. S10.2 r16: Chrome 155 headless, desktop D, one M4 Pro laptop (shared machine), production build, manifest-verified full-scale fixtures; every row derived from validated raw records; receipt viewerEvidence.results (desktop admitted). 300 open-loop frames per mix after 60 warmup: input-to-paint p95 ordinary 6.72 / wrapped 7.03 / styled 5.44 ms; rAF frame-interval p95 16.67 ms in every mix, 0 long tasks.",
         "measurement": null
       },
       "mobile": {
@@ -99,8 +99,8 @@
         "specMs": 50,
         "frozenMs": 50,
         "basis": "spec",
-        "outcome": "unmeasured",
-        "justification": "Not an S8.4 operation (needs the mounted viewer controls); frozen at spec, measured by S10.2.",
+        "outcome": "pass",
+        "justification": "Kept at spec. S10.2 r16: Chrome 155 headless, desktop D, one M4 Pro laptop (shared machine), production build, manifest-verified full-scale fixtures; every row derived from validated raw records; receipt viewerEvidence.results (desktop admitted). Header sort on F2 (1M rows): pending state presented p95 17.1 ms (n=30); find p95 13.6 ms, cancel p95 17.1 ms (n=30); filter apply max 33.3 ms (n=10, the documented limited series).",
         "measurement": null
       },
       "mobile": {
@@ -290,8 +290,8 @@
         "specMs": 1500,
         "frozenMs": 1500,
         "basis": "spec",
-        "outcome": "unmeasured",
-        "justification": "Not an S8.4 operation (needs the S1 importer + S5 viewport in the harness); frozen at spec, measured by S10.2.",
+        "outcome": "pass",
+        "justification": "Kept at spec. S10.2 r16: Chrome 155 headless, desktop D, one M4 Pro laptop (shared machine), production build, manifest-verified full-scale fixtures; every row derived from validated raw records; receipt viewerEvidence.results (desktop admitted). Local File -> labelled usable viewport: F1 p95 508.8 ms (n=30), F3 p95 708.0 ms (n=30), F2 max 633.0 ms over 10 cold 1M-row opens (the documented limited series).",
         "measurement": null
       },
       "mobile": {
@@ -314,5 +314,144 @@
       "note": "S8.6 admitted run at 09adbb1. Kernel phases p50: read 312.5 ms, dictionary 1647.9 ms, merge 243.4 ms. S8.4 headroom is retained under evidence.baseline.headroom."
     }
   },
-  "diagnostics": []
+  "diagnostics": [],
+  "viewerEvidence": {
+    "doc": "docs/validation/interactive-viewer-performance.md",
+    "results": "docs/validation/interactive-viewer-viewer-chrome-r16.json",
+    "hash": "200cc9743830abad72305ad26a66b289cd1a11bea179a29411113114c556affe",
+    "commit": "4cbf66d1261f1047fb654d24f009b4f99bd6c2ba",
+    "browser": "Google Chrome 155.0.8059.39 (stable, Playwright 1.64 channel chrome, headless)",
+    "machine": "Apple M4 Pro, 14 logical cores, 24 GiB, macOS 26.5.2 (25F84)",
+    "profile": "D",
+    "mode": "release",
+    "desktopAdmitted": true,
+    "evidenceProblems": [],
+    "rows": {
+      "warm-viewport-frame": {
+        "outcome": "pass",
+        "value": 16.670000000000073
+      },
+      "input-acknowledgment": {
+        "outcome": "pass-limited",
+        "value": 33.310000002384186
+      },
+      "progressive-first-viewport": {
+        "outcome": "pass-limited",
+        "value": 708.0049999952316
+      },
+      "import-expanded-throughput": {
+        "outcome": "pass",
+        "value": 45.738036851261846
+      },
+      "import-cell-throughput": {
+        "outcome": "pass",
+        "value": 874890.6385789193
+      },
+      "main-owned-memory": {
+        "outcome": "pass",
+        "value": 43445546
+      },
+      "worker-owned-memory": {
+        "outcome": "pass",
+        "value": 239838126
+      },
+      "bitmap-retained": {
+        "outcome": "pass",
+        "value": 118663680
+      }
+    },
+    "superseded": [
+      {
+        "results": "docs/validation/interactive-viewer-viewer-chrome-r15.json",
+        "hash": "cc2452d04c20f22fec9300ba825a8c89da742e6cfa7a8934261aa98b7b0f1458",
+        "commit": "5cdbd2386d3e749cd51bcf391a669d38b51ef5ab",
+        "note": "r15: not admitted (before the user-approved engine-cache allowance); its residuals (0.05 / 0.03 / warm-up 0.13 MiB) are within it when recomputed."
+      },
+      {
+        "results": "docs/validation/interactive-viewer-viewer-chrome-r14.json",
+        "hash": "91328cfdcb8c27538446482aa6c55d637457ff62c4d68f53b7ce44ad8f189ab9",
+        "commit": "1e13f7bf9a8b0e4c653a11ecec3cae575ab938c5",
+        "note": "r14: not admitted; its gated code bytes came from heap snapshots that grew page tables, and tile canvas objects were uncharged. Its raw records recompute to admitted under the current rules (allowance included); it is superseded because its ledger under-charges tile canvas objects (charged since 5cdbd23)."
+      },
+      {
+        "results": "docs/validation/interactive-viewer-viewer-chrome-r13.json",
+        "hash": "831e0e3d7b24d6b20f778dc76d3ef2719aacc3650eeba8c6807bb3364930734a",
+        "commit": "752ccade93dd8f9e3ddf4d748b968c148c4f283f",
+        "note": "r13: not admitted; its allowance used the session's own reading spread (codex round 5) and its checkpoints ran beside the harness samplers."
+      },
+      {
+        "results": "docs/validation/interactive-viewer-viewer-chrome-r12.json",
+        "hash": "37db4aa3cc8fb206b00d993aff2562bff6ffd2707e0922e0d85b3b37a4b86f12",
+        "commit": "9e8b1827e67536904d1bd9ad8745fce0ab4ece0c",
+        "note": "r12: not admitted; per-cell transforms made every cell a paint layer (uncharged ~1.1 KB per cell); fixed in 752ccad."
+      },
+      {
+        "results": "docs/validation/interactive-viewer-viewer-chrome-r11.json",
+        "hash": "4d0f459f80ab434811d98ea867daecae68da6e4ce93303f99c50ce819c8bfd40",
+        "commit": "6d4d577b12f4f187ed12763db42a16395573ee4c",
+        "note": "r11: not admitted; before the viewer stopped shifting layout (its closed residue was the page layout-shift buffer) and before layout-shift entries were measured."
+      },
+      {
+        "results": "docs/validation/interactive-viewer-viewer-chrome-r10.json",
+        "hash": "a7d9d5111cec8bbafb9451b5e8adf4d9646b916558e99122d1960ffc8ada2700",
+        "commit": "e71d8ceffbe1c8923a731f98324a23f1d71e72b8",
+        "note": "r10: not admitted; before the viewer-representative DOM calibration and per-checkpoint repeated readings (it has no heapReadings)."
+      },
+      {
+        "results": "docs/validation/interactive-viewer-viewer-chrome-r9.json",
+        "hash": "00694b392719b3b0b384089995ae985dc9479b46c1cb0f26fd57ef46494fb7d6",
+        "commit": "36e4f064e1ce50f8a340cad70b3987930f8b749f",
+        "note": "r9: not admitted under the round-4 gate before compiled-code growth was measured and excluded; it has no code readings."
+      },
+      {
+        "results": "docs/validation/interactive-viewer-viewer-chrome-r8.json",
+        "hash": "912457dca979d7d1416eae556f87bbb57a2770ecfdab830f8ab6942cd6dfd247",
+        "commit": "fc554a4f550c5328681ec8d1a424d5241b384ccd",
+        "note": "r8: admitted under the round-3 rules (live peak vs ledger peak only); it has no warm-open record, so it does not validate under the round-4 per-checkpoint gate."
+      },
+      {
+        "results": "docs/validation/interactive-viewer-viewer-chrome-r7.json",
+        "hash": "442c20a6c987340eee44d24cae2372ed2b3782f6842ea6617855cc2a4a36a969",
+        "commit": "8f652ec14000ded349d881a7b42916f1240a1746",
+        "note": "r7: NOT admitted. One forced-GC F2 sample at sort completion was 16.6 MiB above the ledger peak; the gap was the uncharged browser text-shaping cache of retained tile canvases (fixed in fc554a4, measured by r8). Retained as the evidence of that finding."
+      },
+      {
+        "results": "docs/validation/interactive-viewer-viewer-chrome-r6.json",
+        "hash": "beebadaa3bf2a9606db835168dc5ede82e24e30d7f0479bf66a973c9779083ea",
+        "commit": "d50a7858825b6767f130aa0b147a4f611a8a9796",
+        "note": "r6: admitted, but the ledger did not charge the browser text-shaping cache held by tile canvases (about 15 MiB during the F2 scroll), and each worker filter apply re-read its column three times (about 2.8 s end to end). Superseded by r8."
+      },
+      {
+        "results": "docs/validation/interactive-viewer-viewer-chrome-r5.json",
+        "hash": "a04bcd573a69bae14a440b51174a7ab69082c54cef772673ed46e64b2538cb92",
+        "commit": "116d957076cebf6d1a4fae15999a7bf611ea2441",
+        "note": "r5: admitted under the round-3 rules, but reply charges ended only on collection (F4 ledger over-counted value-list replies) and the perf page closed with a re-render plus one click to release React-held updates; superseded by r6 (replies settled on adoption, idle close)."
+      },
+      {
+        "results": "docs/validation/interactive-viewer-viewer-chrome-r4.json",
+        "hash": "b15c7e15462eecc48a75e78205622c13a4e63f3967320b1f30472fd269162966",
+        "commit": "ac4c1cd3f5578c679fc6150b8012a8166528d4e4",
+        "note": "r4: admitted under the round-2 evaluator (post-close floor, fixed 2 MiB tolerance, timer-released replies); it has no warmed-host baseline and does not validate under the round-3 rules."
+      },
+      {
+        "results": "docs/validation/interactive-viewer-viewer-chrome-r3.json",
+        "hash": "3374da7ab4a5ffc6df55c15a073a239b00ab11c869f7efa9ba209ab4e83e0040",
+        "commit": "2ea32d250cb8c713aefb13c9856b93f856c5ef1b",
+        "note": "r3: not admitted (no main-owned ledger; main peak pending). It predates the round-2 evidence rules and the ledger, so it does not validate under the current evaluator."
+      },
+      {
+        "results": "docs/validation/interactive-viewer-viewer-chrome-r2.json",
+        "hash": "9e3ee2c831583f87cd8ac9bfc45aa780f23d184557a3651e22d73bd27c6dc612",
+        "commit": "434e5777e23d3346e5964ebfe447fad576bf59ea",
+        "note": "r2 was admitted by the earlier summary-trusting evaluator; it does not validate under the raw-derived evaluator (no content fixture identity, no live heap samples, main-memory peak pending)."
+      },
+      {
+        "results": "docs/validation/interactive-viewer-viewer-chrome-r1.json",
+        "hash": "9d5633d7ec121cbc755bce41298b3d7d8c937e2a8ee9f765def206bf9a37dbd6",
+        "commit": "2282115edbefe727a22d99a7bd5ef4ede2bc1788",
+        "note": "r1: input acknowledgment miss (header sort 11,897-13,316 ms)."
+      }
+    ],
+    "note": "S10.2 viewer receipt r16: desktop D ADMITTED under the round-5 gate plus the explicit 0.25 MiB engine-cache allowance per gated checkpoint and warm-up check (user decision 2026-10-13). Main ledger peak 41.4 / 64 MiB (budget unchanged); largest checkpoint excess -0.15 MiB; warm-up objects/arrays/DOM 0.13 MiB. Mobile rows not-run (user decision). Recorded on a shared machine; the coordinator re-runs the release command on a quiet machine."
+  }
 }

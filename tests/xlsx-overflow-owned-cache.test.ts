@@ -47,7 +47,7 @@ describe('document-owned overflow occupancy', () => {
   it('does not retain dead geometry or its real permutation metrics through pool callbacks', () => {
     const run = spawnSync('bun', ['tests/probes/xlsx-overflow-owner-probe.ts'], { encoding: 'utf8', timeout: 30000 })
     expect(run.status, run.stderr).toBe(0)
-    expect(JSON.parse(run.stdout)).toEqual({ geometries: 0, metrics: 0, bytes: 0, pool: 0 })
+    expect(JSON.parse(run.stdout)).toEqual({ geometries: 0, metrics: 0, bytes: 0, pool: 0, ledger: 0 })
   })
 
   it.each([1000, 5000])('covers the actual retained ownership overhead of %i tiny rows', count => {
@@ -169,8 +169,82 @@ describe('document-owned overflow occupancy', () => {
     expect(shared.totalBytes).toBe(0)
   })
 
+  it('treats the byte subcap as retained storage while construction uses admitted shared-pool room', () => {
+    const pool = poolOf(12000), cache = new OverflowCache(pool, 4300)
+    const input = cache.get(geometry(() => cells(64)), 0)
+    expect(input.blockers.length).toBe(64)
+    expect(cache.bytes).toBeLessThanOrEqual(4300)
+    expect(pool.stats().peakBytes).toBeGreaterThan(4300)
+    expect(pool.stats().peakBytes).toBeLessThanOrEqual(12000)
+  })
+
+  it('bounds blocker construction by source columns even for an overfull repair row of duplicates', () => {
+    const row = Array.from({ length: 40000 }, () => ({ row: 0, col: 2, ref: 'C1', styleIndex: 0, value: 'text' }))
+    const pool = poolOf(100000), cache = new OverflowCache(pool)
+    const input = cache.get(geometry(() => row), 0)
+    expect(Array.from(input.blockers)).toEqual([2])
+    expect(textOverflowAllowance(input, 2).left).toBe(128)
+    expect((input.blockers as Uint16Array).buffer.byteLength).toBeLessThanOrEqual(16384 * 2)
+    expect(pool.stats().peakBytes).toBeLessThanOrEqual(100000)
+  })
+
+  it('keeps compact lossless merge endpoints and exact overlapping-merge semantics within the retained subcap', () => {
+    const ranges = Array.from({ length: 20000 }, () => ({ minRow: 0, maxRow: 0, minCol: 100, maxCol: 200 }))
+    const row = cells(4), built = geometry(() => row)
+    const g = { ...built, merges: RectangleIndex.build(ranges.map(value => ({ rect: { r0: 0, r1: 0, c0: 100, c1: 200 }, value }))) }
+    const pool = poolOf(1000000), cache = new OverflowCache(pool, 100000)
+    const input = cache.get(g, 0)
+    expect(input.merges).toBeInstanceOf(Uint16Array)
+    expect(cache.bytes).toBeLessThanOrEqual(100000)
+    const expected = rowOverflowFromCells(row, ranges, col => g.metrics.cols.start(col), 16383)
+    for (const col of [0, 3, 50, 99, 100, 150, 200, 201, 250, 16383]) expect(textOverflowAllowance(input, col)).toEqual(textOverflowAllowance(expected, col))
+    cache.pool.trim(0)
+    expect(textOverflowAllowance(cache.get(g, 0), 250)).toEqual(textOverflowAllowance(expected, 250))
+  })
+
+  it('reuses the stable replacement snapshot after pressure evicts the geometry last row', () => {
+    const row = cells(1024), g = geometry(() => row), cache = new OverflowCache(poolOf(12000), 12000)
+    cache.get(g, 0)
+    const input = cache.get(g, 1)
+    expect(cache.get(g, 1)).toBe(input)
+    expect(cache.pool.totalBytes).toBe(cache.bytes)
+  })
+
+  it('charges the full compact merge backing capacity, including invisible endpoints', () => {
+    const row: XlsxCell[] = [], base = geometry(() => row)
+    const colStart = (col: number) => col * 64 - (col > 2 ? 64 : 0)
+    const plain = { ...base, metrics: { ...base.metrics, cols: { ...base.metrics.cols, start: colStart } } }
+    const ranges = [0, 2, 5].map(col => ({ minRow: 0, maxRow: 0, minCol: col, maxCol: col }))
+    const merged = { ...plain, merges: RectangleIndex.build(ranges.map(value => ({ rect: { r0: 0, r1: 0, c0: value.minCol, c1: value.maxCol }, value }))) }
+    const cache = new OverflowCache(poolOf(20000))
+    cache.get(plain, 0)
+    const overhead = cache.bytes
+    const input = cache.get(merged, 0)
+    expect(input.merges).toBeInstanceOf(Uint16Array)
+    const endpoints = input.merges as Uint16Array
+    expect(endpoints.length).toBe(4)
+    expect(endpoints.buffer.byteLength).toBe(3 * 2 * Uint16Array.BYTES_PER_ELEMENT)
+    expect(cache.bytes - overhead * 2).toBe(endpoints.buffer.byteLength)
+    expect(cache.pool.stats().retainedBytes).toBe(cache.bytes)
+  })
+
+  it('a real cache miss releases dead owners even when the finalizer supplies no cleanup', () => {
+    const run = spawnSync('bun', ['tests/probes/xlsx-overflow-sweep-probe.ts'], { encoding: 'utf8', timeout: 30000 })
+    expect(run.status, run.stderr).toBe(0)
+    const measured = JSON.parse(run.stdout)
+    expect(measured.deadGeometry).toBe(0)
+    expect(measured.deadMetrics).toBe(0)
+    expect(measured.before.entries).toBe(8)
+    expect(measured.before.bytes).toBeGreaterThan(0)
+    expect(measured.after.entries).toBe(1)
+    expect(measured.after.bytes).toBeLessThan(measured.before.bytes)
+    expect(measured.after.main).toBe(measured.after.bytes)
+    expect(measured.after.pool).toBe(measured.after.bytes)
+    expect(measured.closed).toEqual({ entries: 0, bytes: 0, pool: 0, main: 0 })
+  })
+
   it('refuses before reading or allocating an oversized row or merge array', () => {
-    const pool = poolOf(5000), cache = new OverflowCache(pool)
+    const pool = poolOf(4300), cache = new OverflowCache(pool)
     let reads = 0
     const row = new Proxy(cells(16384), { get(target, key, receiver) {
       if (typeof key === 'string' && /^\d+$/.test(key)) reads++

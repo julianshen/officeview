@@ -8,6 +8,7 @@
  * this module; the watermark is stamped into the pane after the tiles.
  */
 import type { XlsxSheet } from '../../xlsx/types'
+import { TILE_CANVAS_BYTES, shapeCacheBytes } from '../../xlsx/view/mainLedger'
 import type { CacheIdentity, LogicalCellBox, LogicalViewport, ProfileId } from '../../xlsx/view/contracts'
 import type { RenderSheetAssets } from '../../xlsx/render'
 import { renderSheetViewport } from '../../xlsx/view/renderViewport'
@@ -24,7 +25,7 @@ export interface CanvasTile extends TileSurface {
   readonly canvas: HTMLCanvasElement
   close(): void
   /** Detail work the tile embodies, charged whenever it is presented. */
-  cost?: { records: number; gridlines: number }
+  cost?: { records: number; gridlines: number; resourceNotice?: string }
 }
 export interface SheetFrame {
   sheet: XlsxSheet
@@ -110,6 +111,9 @@ export function createCanvasTile(): CanvasTile {
   }
 }
 
+/** A resumable prefetch batch (see SheetTileRenderer.prefetchSlice). */
+export interface PrefetchBatch { readonly frame: SheetFrame; readonly budget: FrameBudget; painted: number; records: number; done: boolean }
+
 export class SheetTileRenderer {
   readonly stats: SheetTileStats = { basePaints: 0, tileHits: 0, prefetched: 0, refused: 0, lastRequests: [], peakBitmapBytes: 0, frameRecords: 0, frameGridlines: 0, prefetchRecords: 0, maxTileRecords: 0, pendingTiles: 0 }
   readonly budgetBytes: number
@@ -137,14 +141,14 @@ export class SheetTileRenderer {
   /** Paint the pane from tiles. `target` is the device-pixel pane surface; it is
    * repainted only here, so overlay changes never touch it. Returns the device
    * pixel snap applied (the overlay applies the same bias). */
-  present(target: CanvasRenderingContext2D, frame: SheetFrame): { bias: { x: number; y: number } } {
+  present(target: CanvasRenderingContext2D, frame: SheetFrame): { bias: { x: number; y: number }; resourceNotice?: string } {
     const scale = frame.zoom * frame.dpr
     const px = Math.round(frame.origin.x * scale), py = Math.round(frame.origin.y * scale)
     const { visible } = this.ranges(frame)
     this.stats.lastRequests = []
     this.stats.pendingTiles = 0
     const budget = frameBudgetFor(this.profile)
-    let records = 0, gridlines = 0
+    let records = 0, gridlines = 0, resourceNotice: string | undefined
     target.save()
     try {
       target.setTransform(1, 0, 0, 1, 0, 0)
@@ -153,6 +157,7 @@ export class SheetTileRenderer {
       for (let row = visible.r0; row <= visible.r1; row++) {
         for (let col = visible.c0; col <= visible.c1; col++) {
           const tile = this.tile(frame, col, row, true, budget)
+          resourceNotice ??= tile.surface.cost?.resourceNotice
           records += tile.surface.cost?.records ?? 0
           gridlines += tile.surface.cost?.gridlines ?? 0
           // Float64 global device offsets minus the snapped origin: small integers.
@@ -171,29 +176,51 @@ export class SheetTileRenderer {
     // Drop tiles of an older owner/zoom/DPR only after the new frame is up, so the
     // last committed frame stays presented while the replacement paints (§10.1).
     this.cache.invalidate(key => !sameIdentity(key.identity, frame.identity) || key.zoom !== frame.zoom || key.dpr !== frame.dpr)
-    return { bias: { x: (frame.origin.x * scale - px) / frame.dpr, y: (frame.origin.y * scale - py) / frame.dpr } }
+    return { bias: { x: (frame.origin.x * scale - px) / frame.dpr, y: (frame.origin.y * scale - py) / frame.dpr }, ...(resourceNotice ? { resourceNotice } : {}) }
   }
 
   /** Paint up to `limit` missing ring tiles (bounded adjacent prefetch). */
   prefetch(frame: SheetFrame, limit = Number.POSITIVE_INFINITY): number {
+    const batch = this.beginPrefetch(frame)
+    this.prefetchSlice(batch, () => false, limit)
+    return batch.painted
+  }
+  /** Prefetch is its own bounded batch with its own per-frame budget; a batch
+   * may be painted in slices (S10.2) and keeps that ONE budget across them. */
+  beginPrefetch(frame: SheetFrame): PrefetchBatch {
+    return { frame, budget: frameBudgetFor(this.profile), painted: 0, records: 0, done: false }
+  }
+  /** Paints ring tiles in order until the batch ends or `shouldYield` asks to
+   * pause (checked only after a tile painted in this slice, so every slice
+   * progresses). Returns true once the batch is done. */
+  prefetchSlice(batch: PrefetchBatch, shouldYield: () => boolean, limit = Number.POSITIVE_INFINITY): boolean {
+    if (batch.done) return true
+    const { frame } = batch
     const { visible, ring } = this.ranges(frame)
-    // Prefetch is its own bounded batch with its own per-frame budget.
-    const budget = frameBudgetFor(this.profile)
-    let painted = 0, records = 0
+    let paintedNow = 0
     for (const { col, row } of prefetchTiles(visible, ring)) {
-      if (painted >= limit) break
+      if (batch.painted >= limit) break
       if (this.cache.get(this.key(frame, col, row))) continue
-      const tile = this.tile(frame, col, row, false, budget)
-      records += tile.surface.cost?.records ?? 0
+      if (paintedNow > 0 && shouldYield()) { this.stats.prefetchRecords = batch.records; return false }
+      const tile = this.tile(frame, col, row, false, batch.budget)
+      batch.records += tile.surface.cost?.records ?? 0
+      paintedNow++
       if (!tile.retained) { tile.surface.close(); break }
-      painted++
+      batch.painted++
       this.stats.prefetched++
     }
-    this.stats.prefetchRecords = records
-    return painted
+    batch.done = true
+    this.stats.prefetchRecords = batch.records
+    return true
   }
 
   dispose(): void { this.cache.dispose() }
+  private shapeBytes = 0
+  /** S10.2 main ledger: main-heap memory a retained tile canvas holds outside
+   * its bitmap: the canvas element and its 2D context (TILE_CANVAS_BYTES) plus
+   * the browser's text-shaping cache for what it drew (see SHAPE_ENTRY_BYTES);
+   * released when the tile is closed. */
+  textCacheBytes(): number { return this.shapeBytes }
 
   private key(frame: SheetFrame, col: number, row: number): TileKey {
     return { identity: frame.identity, backend: TILE_BACKEND, zoom: frame.zoom, dpr: frame.dpr, col, row }
@@ -219,7 +246,10 @@ export class SheetTileRenderer {
     if (visible) this.stats.lastRequests.push(viewport)
     const full = budget.records >= frameBudgetFor(this.profile).records && budget.gridlines >= frameBudgetFor(this.profile).gridlines
     let kind: string = 'pending'
-    let work = { records: 0, gridlines: 0 }
+    let work: NonNullable<CanvasTile['cost']> = { records: 0, gridlines: 0 }
+    // Distinct texts this tile's context shapes: the browser keeps each one
+    // (per font) while the canvas lives, outside the bitmap.
+    const shaped = ctx ? countShapedTexts(ctx) : null
     if (ctx) {
       const scale = frame.zoom * frame.dpr
       ctx.setTransform(scale, 0, 0, scale, 0, 0)
@@ -228,6 +258,8 @@ export class SheetTileRenderer {
         profile: this.profile, owner: frame.identity, cache: frame.layoutCache, merges: frame.merges, frameBudget: budget,
       })
       kind = result.kind
+      const resource = result.diagnostics.find(d => d.code === 'overflow-memory')
+      if (resource) work.resourceNotice = resource.message
       if (result.kind === 'detail') work = { records: result.work.records, gridlines: result.work.gridlines }
       this.stats.maxTileRecords = Math.max(this.stats.maxTileRecords, work.records)
     }
@@ -238,13 +270,43 @@ export class SheetTileRenderer {
       if (ctx) paintPending(ctx, box, pending)
       return { surface, retained: false }
     }
+    if (work.resourceNotice) return { surface, retained: false }
     // A tile made coarse only because earlier tiles spent the frame budget is not
     // the tile's own content: present it, but never cache it.
     if (kind === 'coarse' && !full) return { surface, retained: false }
     const retained = this.cache.put(key, surface)
     if (!retained) this.stats.refused++
+    else {
+      const bytes = TILE_CANVAS_BYTES + (shaped?.bytes ?? 0)
+      this.shapeBytes += bytes
+      const close = surface.close.bind(surface)
+      let open = true
+      surface.close = () => { if (open) { open = false; this.shapeBytes -= bytes } close() }
+    }
     return { surface, retained }
   }
+}
+
+/** Counts, per font, the distinct (direction, text) entries a context draws or
+ * measures from now on (the browser keeps one shaping cache per font a context
+ * used, keyed by text and direction), as estimated shaping bytes. */
+function countShapedTexts(ctx: CanvasRenderingContext2D): { readonly bytes: number } {
+  const fonts = new Map<string, { seen: Set<string>; units: number }>()
+  const out = { bytes: 0 }
+  const note = (text: string) => {
+    let font = fonts.get(ctx.font)
+    if (!font) fonts.set(ctx.font, font = { seen: new Set(), units: 0 })
+    const key = `${ctx.direction}\u0000${text}`
+    if (font.seen.has(key)) return
+    out.bytes -= shapeCacheBytes(font.seen.size, font.units)
+    font.seen.add(key)
+    font.units += text.length
+    out.bytes += shapeCacheBytes(font.seen.size, font.units)
+  }
+  const fillText = ctx.fillText.bind(ctx), measureText = ctx.measureText.bind(ctx)
+  ctx.fillText = (text: string, x: number, y: number, maxWidth?: number) => { note(text); if (maxWidth === undefined) fillText(text, x, y); else fillText(text, x, y, maxWidth) }
+  ctx.measureText = (text: string) => { note(text); return measureText(text) }
+  return out
 }
 
 /** Unknown records are loading, never blank (spec §§4.1, 10.4): a neutral tone

@@ -52,6 +52,9 @@ export interface ControlsClientOptions {
   snapshot(): ControlSnapshot
   context(): FilterContext
   rangeRequest(col?: number): Omit<RangeDetectionRequest, 'options' | 'override'>
+  /** Detector override (S10.2): a worker-backed sheet runs the same detectors
+   * next to its store instead of scanning it across the worker boundary. */
+  detectRange?(kind: 'filter' | 'sort', request: RangeDetectionRequest): Promise<RangeDetection>
   domain(owner: CacheIdentity, range: FilterRange, col: number): { identity: ValueIndexIdentity; source: ValueColumnSource; label?: ValueLabeler }
   cache: ValueIndexCache
   runs: ValueRunStore
@@ -123,7 +126,8 @@ export function createControlsClient(options: ControlsClientOptions): ControlsCl
     async resolve(owner, kind, signal, override, col) {
       assert(owner, signal)
       const request = options.rangeRequest(col)
-      const result = await (kind === 'sort' ? admitSortRange : detectOperationRange)({ ...request, options: { stamp: { docId: owner.docId, sheetId: owner.sheetId, valueGen: owner.valueGen }, signal }, override: override === undefined ? null : { headerRows: override } })
+      const full: RangeDetectionRequest = { ...request, options: { stamp: { docId: owner.docId, sheetId: owner.sheetId, valueGen: owner.valueGen }, signal }, override: override === undefined ? null : { headerRows: override } }
+      const result = await (options.detectRange ? options.detectRange(kind, full) : (kind === 'sort' ? admitSortRange : detectOperationRange)(full))
       assert(owner, signal)
       return result
     },
