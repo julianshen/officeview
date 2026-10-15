@@ -92,6 +92,17 @@ describe('document-owned overflow occupancy', () => {
     for (const col of [0, 1, 2, 3, 4, 5, 10, 16383]) expect(textOverflowAllowance(rebuilt, col)).toEqual(textOverflowAllowance(expected, col))
   })
 
+  it('keeps a later blocker when an over-wide source row repeats one column MAX_COLS times', () => {
+    // 16,384 duplicates at col 0 would fill the MAX_COLS-sized blocker buffer
+    // without per-column dedup; col 5 would then be written past its end and lost.
+    const row = [...Array.from({ length: 16384 }, () => ({ row: 0, col: 0, ref: '', styleIndex: 0, value: 'x' })), { row: 0, col: 5, ref: '', styleIndex: 0, value: 'B' }]
+    const cache = new OverflowCache(poolOf(200000)), input = cache.get(geometry(() => row), 0)
+    expect(Array.from(input.blockers)).toEqual([0, 5])
+    expect(textOverflowAllowance(input, 4).right).toBe(textOverflowAllowance(rowOverflowFromCells(row, [], input.colStart, 16383), 4).right)
+    expect(textOverflowAllowance(input, 4).right).toBe(0)
+    cache.close()
+  })
+
   it('bounds all 512 full-width generated source rows across two sheet geometries', () => {
     const limit = 2 * 1024 * 1024, pool = poolOf(limit), cache = new OverflowCache(pool, limit)
     const generated = (row: number) => cells(16384).map(cell => ({ ...cell, row }))
