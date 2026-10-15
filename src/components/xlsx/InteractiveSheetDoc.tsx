@@ -303,8 +303,8 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
     const input = viewInput(sheetId)
     const previous = entries.get(sheetId)
     const structureGen = remote ? remote.merges(sheetId).gen : 0
-    if (previous && previous.revision === input.revision && previous.structureGen === structureGen) return previous
-    if (previous && input.revision < previous.revision) return previous // stale commit: never publish an older view
+    if (previous && previous.revision === input.revision && previous.structureGen === structureGen) { bindOverflowCache(previous.geometry, overflowFor()); return previous }
+    if (previous && input.revision < previous.revision) { bindOverflowCache(previous.geometry, overflowFor()); return previous } // stale commit: never publish an older view
     const order = input.order ?? createIdentityOrder()
     const baseHidden = remote ? remote.geometry(sheetId).baseHidden : sheetBaseHidden(sheet)
     const visibility = input.visibility ?? visibilityFromHidden(createIntervalSet(displayIntervals(baseHidden.intervals, order)))
