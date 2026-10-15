@@ -208,7 +208,7 @@ async function main(): Promise<number> {
       await driver.clear(input)
       await driver.type(input, address)
       await driver.press(Keys.Enter)
-      await driver.waitFor(`const g = document.querySelector('[role=grid]'), id = g.getAttribute('aria-activedescendant'), c = id && document.getElementById(id); return c && c.getAttribute('aria-label').split(',')[0] === arguments[0]`, 30_000, `active ${address}`, address)
+      await driver.waitFor(`const g = document.querySelector('[role=grid]'), id = g.getAttribute('aria-activedescendant'), c = id && document.getElementById(id); return c && c.textContent.split(',')[0] === arguments[0]`, 30_000, `active ${address}`, address)
     }
     await goTo('B2')
 

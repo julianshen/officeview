@@ -63,7 +63,7 @@ const byLabel = (sel, name, prefix) => [...document.querySelectorAll(sel)].find(
 const active = () => {
   const g = document.querySelector('[role=grid]'), id = g && g.getAttribute('aria-activedescendant')
   const c = id ? document.getElementById(id) : null
-  return c ? { id: c.id, label: c.getAttribute('aria-label') ?? '' } : null
+  return c ? { id: c.id, label: c.textContent ?? '' } : null
 }
 const statusText = () => [...document.querySelectorAll('[role=status]')].map(e => e.textContent ?? '').find(t => t.includes('Visible body')) ?? null
 const e2e = () => window.__viewerE2E

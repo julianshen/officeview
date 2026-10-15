@@ -268,9 +268,11 @@ export function GridSemantics(props: GridSemanticsProps): ReactElement {
             const column = viewportHeaderBox(projection, scroll, viewport, 'column', col)
             const offscreen = extra || (slot === activeSlot && active?.col === col && !columns.includes(col))
             const isSelected = cellSelected(selection.ranges, at)
+            // Name from contents: the visually hidden text IS the name, so VoiceOver
+            // reads the value once (no label + contents) and never "blank" (S13 V1/V3).
             return <div key={col} role="gridcell" id={`${prefix}-cell-${cellId(row, col)}`} aria-colindex={col + 2}
-              aria-label={activeAnnouncement(projection, at, value.text)} aria-selected={isSelected} aria-description={[value.state, multiSelected && isSelected ? 'selected' : ''].filter(Boolean).join(', ') || undefined}
-              style={offscreen ? { ...hiddenText, top: 0, left: 0 } : { position: 'absolute', top: 0, left: GRID_HEADER_SIZE + column.x, width: column.width, height: box.height }}><span style={hiddenText} aria-hidden="true">{boundedSelectionText(value.text)}</span></div>
+              aria-selected={isSelected} aria-description={[value.state, multiSelected && isSelected ? 'selected' : ''].filter(Boolean).join(', ') || undefined}
+              style={offscreen ? { ...hiddenText, top: 0, left: 0 } : { position: 'absolute', top: 0, left: GRID_HEADER_SIZE + column.x, width: column.width, height: box.height }}><span style={hiddenText}>{activeAnnouncement(projection, at, value.text)}</span></div>
           })}
         </div>
       })}

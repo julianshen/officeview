@@ -470,13 +470,13 @@ test.describe('S10.1 real interactive viewer', () => {
 
   test('F5 structure: giant narrow-column merge and fixed array refuse sorts; child selection allowed', async ({ page }) => {
     await openViewer(page, 'f5-structure.xlsx')
-    const before = await page.getByRole('gridcell', { name: /^A2, value / }).getAttribute('aria-label')
+    const before = await page.getByRole('gridcell', { name: /^A2, value / }).textContent()
     // Header sort from A1: the current region reaches the fixed array C30:C32 and the
     // giant merge D1:D1048576, so the whole-row sort is refused, never partially applied.
     await page.getByRole('button', { name: 'Cycle sort column A' }).click()
     await expect(status(page)).toContainText('Operation refused: merge', { timeout: 30_000 })
     await expect(page.getByRole('columnheader', { name: /^Column A/ })).not.toHaveAttribute('aria-sort', /ascending|descending/)
-    expect(await page.getByRole('gridcell', { name: /^A2, value / }).getAttribute('aria-label')).toBe(before)
+    expect(await page.getByRole('gridcell', { name: /^A2, value / }).textContent()).toBe(before)
     // An explicit A2:B7 selection: narrow keys, but the merge D1:D1048576 spans the
     // moved row band, so the band guard refuses too (AC-SEM-04).
     await goTo(page, 'A2')
@@ -485,7 +485,7 @@ test.describe('S10.1 real interactive viewer', () => {
     await page.keyboard.press('Shift+ArrowRight')
     await page.getByRole('button', { name: 'Cycle sort column A' }).click()
     await expect(status(page)).toContainText('Operation refused: merge', { timeout: 30_000 })
-    expect(await page.getByRole('gridcell', { name: /^A2, value / }).getAttribute('aria-label')).toBe(before)
+    expect(await page.getByRole('gridcell', { name: /^A2, value / }).textContent()).toBe(before)
     // Selecting a read-only array child is allowed.
     await goTo(page, 'C31')
     await expect.poll(async () => (await activeCell(page))?.label ?? '').toBe('C31, value 2')

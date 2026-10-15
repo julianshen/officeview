@@ -67,7 +67,7 @@ describe('grid keyboard and control ownership', () => {
     const before = grid.getAttribute('aria-activedescendant')
     fireEvent.keyDown(grid, { key: 'ArrowDown' })
     expect(grid.getAttribute('aria-activedescendant')).not.toBe(before)
-    expect(document.getElementById(grid.getAttribute('aria-activedescendant')!)?.getAttribute('aria-label')).toMatch(/^C\d/)
+    expect(document.getElementById(grid.getAttribute('aria-activedescendant')!)?.textContent).toMatch(/^C\d/)
   })
   it('does not enter control mode from incidental focus; only F2 does', () => {
     const ui = render(<StatefulGrid />), grid = ui.getByRole('grid')

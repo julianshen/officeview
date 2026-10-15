@@ -6,6 +6,10 @@
  * V2 — Shift+Arrow extension announced only the target cell, never that a
  *      range is selected. Spec §9.2: names carry selection descriptions and
  *      the live region reports selection.
+ * V3 — after the V1 fix (inner text aria-hidden) VoiceOver appended "blank"
+ *      (空白) after every cell: the gridcell had a label but no accessible
+ *      content. The name now comes from the cell's own (visually hidden) text,
+ *      so the value is read once and the cell is never empty.
  */
 import { describe, expect, it } from 'vitest'
 import { fireEvent, render } from '@testing-library/react'
@@ -13,18 +17,22 @@ import { GridSemantics, gridNavigationTransition, type GridTransition } from '..
 import { selectCell, selectHeader } from '../src/xlsx/view/selection'
 import { gridFixture } from './helpers/xlsx-grid-fixture'
 
-describe('V1: a cell value is exposed once', () => {
-  it('no gridcell exposes text beside its accessible name', () => {
+describe('V1/V3: a cell value is exposed once and the cell is never blank', () => {
+  it('every gridcell\'s exposed text is exactly its accessible name', () => {
     const ui = render(<GridSemantics {...gridFixture()} />)
     const cells = [...ui.container.querySelectorAll('[role=gridcell]')]
     expect(cells.length).toBeGreaterThan(0)
     for (const cell of cells) {
-      // Text nodes reachable without crossing aria-hidden would be read after the name.
-      const exposed = [...cell.querySelectorAll('*')].filter(node => node.textContent && !node.closest('[aria-hidden=true]'))
-      expect(exposed.map(node => node.textContent)).toEqual([])
+      // No label beside contents (V1: read twice) and no empty contents (V3: "blank").
+      const exposed = [...cell.querySelectorAll('*')].filter(node => node.children.length === 0 && node.textContent && !node.closest('[aria-hidden=true]')).map(node => node.textContent).join('')
+      expect(exposed).toMatch(/^[A-Z]+\d+(, value .*)?/)
+      expect(cell.hasAttribute('aria-label')).toBe(false)
+      expect(ui.getAllByRole('gridcell', { name: exposed }).includes(cell as HTMLElement)).toBe(true)
     }
-    // The name contract is unchanged.
-    expect(ui.getByRole('gridcell', { name: 'A2, value 10; original A4' })).toBeTruthy()
+    // The name contract is unchanged, and the value occurs once in it.
+    const active = ui.getByRole('gridcell', { name: 'A2, value 10; original A4' })
+    expect(active.textContent).toBe('A2, value 10; original A4')
+    expect(active.textContent!.split('value 10').length).toBe(2)
   })
 })
 

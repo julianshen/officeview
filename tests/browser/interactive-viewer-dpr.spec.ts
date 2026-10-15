@@ -109,7 +109,7 @@ async function viewState(page: Page) {
   const dom = await page.evaluate(() => {
     const labels = (role: string) => [...document.querySelectorAll(`[role=${role}]`)].map(e => e.getAttribute('aria-label') ?? '')
     return {
-      selected: [...document.querySelectorAll('[role=gridcell][aria-selected=true]')].map(c => c.getAttribute('aria-label')).sort(),
+      selected: [...document.querySelectorAll('[role=gridcell][aria-selected=true]')].map(c => c.textContent).sort(),
       firstRowHeader: labels('rowheader').find(l => l.startsWith('Row ')) ?? null,
       firstColumnHeader: labels('columnheader').find(l => l.startsWith('Column ')) ?? null,
     }
@@ -151,7 +151,7 @@ async function gridlineProbe(page: Page) {
     const sx = canvas.width / box.width, sy = canvas.height / box.height
     const empty = [...document.querySelectorAll<HTMLElement>('[role=gridcell]')].filter(cell => {
       // A blank cell is announced with an empty value ("E4, value").
-      const label = (cell.getAttribute('aria-label') ?? '').trimEnd()
+      const label = (cell.textContent ?? '').trimEnd()
       if (!/^[A-Z]+\d+, value$/.test(label) || cell.getAttribute('aria-selected') === 'true') return false
       const r = cell.getBoundingClientRect()
       return r.left > box.left + 80 && r.right < box.right - 80 && r.top > box.top + 40 && r.bottom < box.bottom - 40
@@ -172,7 +172,7 @@ async function gridlineProbe(page: Page) {
     const center = ctx.getImageData(cx, cy, 1, 1).data
     const v = darkest([0, 1, 2, 3, 4, 5, 6].map(i => lum(row, i * 4)), x0)
     const h = darkest([0, 1, 2, 3, 4, 5, 6].map(i => lum(col, i * 4)), y0)
-    return { cell: cell.getAttribute('aria-label'), expectX: ex, vertical: v, expectY: ey, horizontal: h, centerLum: lum(center, 0) }
+    return { cell: cell.textContent, expectX: ex, vertical: v, expectY: ey, horizontal: h, centerLum: lum(center, 0) }
   })
 }
 

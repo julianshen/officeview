@@ -277,7 +277,7 @@ test.describe('S10.3 accessibility tree (Chromium AX layer over CDP)', () => {
         headerIndex: header.getAttribute('aria-rowindex'),
         corner: header.querySelector('[role=columnheader]')?.getAttribute('aria-colindex'),
         colIndex: [...header.querySelectorAll('[role=columnheader]')].slice(1, 4).map(h => [h.getAttribute('aria-label')?.split(';')[0], h.getAttribute('aria-colindex')]),
-        bodyRows: body.map(r => [r.getAttribute('aria-rowindex'), label(r), r.querySelector('[role=rowheader]')?.getAttribute('aria-colindex'), r.querySelector('[role=gridcell]')?.getAttribute('aria-colindex'), r.querySelector('[role=gridcell][aria-colindex="2"]')?.getAttribute('aria-label') ?? null]),
+        bodyRows: body.map(r => [r.getAttribute('aria-rowindex'), label(r), r.querySelector('[role=rowheader]')?.getAttribute('aria-colindex'), r.querySelector('[role=gridcell]')?.getAttribute('aria-colindex'), r.querySelector('[role=gridcell][aria-colindex="2"]')?.textContent ?? null]),
         duplicates: body.length - new Set(body.map(r => r.getAttribute('aria-rowindex'))).size,
         sorted: [...header.querySelectorAll('[aria-sort]')].map(h => [h.getAttribute('aria-label'), h.getAttribute('aria-sort')]),
       }

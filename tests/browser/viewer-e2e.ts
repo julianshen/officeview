@@ -124,7 +124,7 @@ export async function activeCell(page: Page): Promise<{ id: string; label: strin
     const grid = document.querySelector('[role=grid]')
     const id = grid?.getAttribute('aria-activedescendant')
     const cell = id ? document.getElementById(id) : null
-    return cell ? { id: cell.id, label: cell.getAttribute('aria-label') ?? '' } : null
+    return cell ? { id: cell.id, label: cell.textContent ?? '' } : null
   })
 }
 
