@@ -400,6 +400,9 @@ export async function viewerControls(options: ViewerControlsOptions, signal: Abo
       // Cleanup still completes; surface any secondary cleanup error on the primary failure without replacing it.
       if (cleanupFailed) {
         if (primaryFailure) {
+          // If primaryError is a primitive or already defines `suppressed`, the secondary cleanup
+          // error is intentionally dropped here to preserve the primary failure semantics and avoid
+          // clobbering an existing suppressed error chain.
           if (typeof primaryError === 'object' && primaryError !== null && !('suppressed' in primaryError)) {
             try { (primaryError as { suppressed?: unknown }).suppressed = cleanupError } catch {}
           }

@@ -2051,8 +2051,8 @@ export class DocumentSession {
         order: state.order, visibility: projected.visibility, sort: state.sort, filter: normalized, matches,
       }))
     } catch (cause) {
-      // The AbortError comes from the session's own interruptibleStore facade (viewerAbort.ts:15,
-      // installed at viewerSession.ts:706) plus the evaluator's throwIfAborted; sort() handles
+      // The AbortError comes from the session's own interruptibleStore facade (interruptibleStore,
+      // installed in DocumentSession.store) plus the evaluator's throwIfAborted; sort() handles
       // the facade through its own path. Map that abort to { kind: 'cancelled' } rather than
       // an unhandled rejection.
       if (signal.aborted && cause instanceof DOMException && cause.name === 'AbortError') return { kind: 'cancelled' }

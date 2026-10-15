@@ -1,6 +1,7 @@
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { cleanup, render, waitFor } from '@testing-library/react'
 import InteractiveSheetDoc from '../src/components/xlsx/InteractiveSheetDoc'
+import * as overflowModule from '../src/xlsx/view/overflowCache'
 import { ViewerClient } from '../src/worker/viewerClient'
 import { connectInProcess, ViewerKernel } from '../src/worker/viewerKernel'
 import { createObjectWorkbookSource } from '../src/worker/viewerObjectSource'
@@ -57,6 +58,7 @@ describe('round 6: actual paged viewer owner teardown', () => {
 
   it('rebinds per frame when a sibling viewer unmount closes the shared remote cache', async () => {
     const f = await opened()
+    const bindSpy = vi.spyOn(overflowModule, 'bindOverflowCache')
     try {
       // Siblings share the remote's cache under budgetProfile. When one viewer unmounts,
       // its teardown closes the shared cache. The surviving viewer's frame-time rebind
@@ -64,12 +66,29 @@ describe('round 6: actual paged viewer owner teardown', () => {
       const ui = render(<><div data-testid="a"><InteractiveSheetDoc doc={f.doc} source={f.remote} profile="D" /></div><div data-testid="b"><InteractiveSheetDoc doc={f.doc} source={f.remote} profile="M" /></div></>)
       await waitFor(() => expect(f.remote.mainLedger.snapshot().byPool.layout).toBeGreaterThan(4096))
       await waitFor(() => expect(ui.getAllByRole('gridcell', { name: /value long text/ })).toHaveLength(2))
+      const initialCache = f.remote.overflowFor()
+      expect(initialCache.closed).toBe(false)
+
       // Unmount sibling B: closes its overflowContext.cache (the shared remote cache).
       ui.rerender(<div data-testid="a"><InteractiveSheetDoc doc={f.doc} source={f.remote} profile="D" /></div>)
       await waitFor(() => expect(ui.getAllByRole('gridcell', { name: /value long text/ })).toHaveLength(1))
+      expect(initialCache.closed).toBe(true)
+
+      bindSpy.mockClear()
+
+      // Trigger a frame in surviving viewer A after B unmounted and closed the shared cache.
+      // The frame-time rebind rebinds A's geometry to a fresh open cache.
+      f.remote.notify()
+      await waitFor(() => expect(bindSpy).toHaveBeenCalled())
+
+      const [reboundGeom, reboundCache] = bindSpy.mock.calls[bindSpy.mock.calls.length - 1]
+      expect(reboundCache.closed).toBe(false)
+      expect(reboundCache).not.toBe(initialCache)
+      expect(overflowModule.boundOverflowCache(reboundGeom)).toBe(reboundCache)
+      expect(f.remote.overflowFor().closed).toBe(false)
       expect(ui.getByTestId('a').textContent).not.toContain('Text overflow occupancy owner is closed')
       ui.unmount()
-    } finally { await f.remote.close(); await f.client.dispose() }
+    } finally { bindSpy.mockRestore(); await f.remote.close(); await f.client.dispose() }
   })
 
   it('an M viewer on a D remote and a D viewer on an M remote use the remote profile for shared ledger caches', async () => {

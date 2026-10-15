@@ -400,6 +400,8 @@ it('an M viewer on a D remote gets copy admission at the D budget', async () => 
     expect(capturedSessionBudget).toBeLessThanOrEqual(copying.copySessionBudget('D'))
     // 15 MiB exceeds mobile budget (12 MiB), but fits desktop budget (24 MiB):
     expect(capturedAdmission!(15 * 1024 * 1024)).toBe(true)
+    await act(async () => writes.jobs[0].resolve())
+    expect(remote.mainLedger.snapshot().byPool.copy).toBe(0)
     ui.unmount()
   } finally {
     await remote.close(); await client.dispose()
