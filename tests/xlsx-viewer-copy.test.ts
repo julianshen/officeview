@@ -339,6 +339,22 @@ it('denies canonical diagnostic growth before publication with a typed whole-cop
   expect(JSON.stringify(sheet.diagnostics)).toBe(before)
 })
 
+it('publishes an unsupported-format diagnostic only from inside an admitted retain', async () => {
+  const { cellDisplayText } = await import('../src/xlsx/render')
+  const sheet = workbookOf([{ sheetId: 'A', cells: [] }]).sheets[0]
+  const cell = { value: 'beta', style: { numFmtId: 0, formatCode: '0;0;0;yyyy' } }
+  const published = () => (sheet.diagnostics ?? []).filter(d => d.feature === 'format-unsupported').length
+  const atRetain: number[] = []
+  // A refused lifetime adoption throws before running commit: nothing is published.
+  const refusing = { allocate() {}, release() {}, retain: () => { atRetain.push(published()); throw new RangeError('adoption refused') } }
+  expect(() => cellDisplayText(sheet, cell, refusing)).toThrow('adoption refused')
+  expect(published()).toBe(0)
+  const admitting = { allocate() {}, release() {}, retain: (_targets: readonly object[], _bytes: number, commit: () => void) => { atRetain.push(published()); commit() } }
+  expect(cellDisplayText(sheet, cell, admitting)).toBe('beta')
+  expect(published()).toBe(1)
+  expect(atRetain).toEqual([0, 0])
+})
+
 it('reserves an unquoted tiny concat before coercing its formatted input', async () => {
   const f = input((r, c) => value(r, c, 'tiny'))
   f.selection.ranges = [part(0, 0)]
