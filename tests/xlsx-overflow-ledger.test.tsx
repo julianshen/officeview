@@ -92,6 +92,23 @@ describe('real main ledger owns overflow', () => {
     expect(closed?.bytes).toBe(0)
   })
 
+  it('an unrelated base present keeps a find refusal while its highlight is still missing', async () => {
+    vi.spyOn(overflowGeometry, 'cellTextOverflow').mockImplementation(() => { throw new OverflowResourceError() })
+    let frames = 0
+    const workbook = doc(), onFrame = () => { frames++ }
+    const ui = render(<InteractiveSheetDoc doc={workbook} onFrame={onFrame} />)
+    await waitFor(() => expect(ui.getByRole('gridcell', { name: /value text/ })).toBeTruthy())
+    fireEvent.change(ui.getByRole('searchbox', { name: 'Search document' }), { target: { value: 'text' } })
+    await waitFor(() => expect(ui.getByTestId('officeview-search-status').textContent).toContain('1 of 1'))
+    await waitFor(() => expect(ui.container.textContent).toContain('Text overflow occupancy exceeds the document memory budget'))
+    // A watermark change re-presents the base layer only; the overlay (and its
+    // refused highlight) is untouched, so the find notice must stay.
+    const before = frames
+    ui.rerender(<InteractiveSheetDoc doc={workbook} onFrame={onFrame} watermark={{ text: 'DRAFT' }} />)
+    await waitFor(() => expect(frames).toBeGreaterThan(before))
+    expect(ui.container.textContent).toContain('Text overflow occupancy exceeds the document memory budget')
+  })
+
   it('uses bound ownership for viewport/find but never retains an unbound geometry memo', () => {
     const g = geometry(), ledger = new MainMemoryLedger(), cache = createDocumentOverflowCache(ledger, 'D')
     const unbound = rowOverflowInput(g, 0)

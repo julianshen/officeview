@@ -432,7 +432,10 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
   // Published by the overlay pass as state, so the status follows it (a declared
   // coarse state); an empty selection always clears it.
   const [selectionIncomplete, setSelectionIncomplete] = useState(false)
+  // Two sources: the base present and the find overlay each own (and clear)
+  // only their own refusal, so an unrelated present never hides a find one.
   const [overflowNotice, setOverflowNotice] = useState('')
+  const [findOverflowNotice, setFindOverflowNotice] = useState('')
   const frameOf = (): SheetFrame | null => {
     if (entry) bindOverflowCache(entry.geometry, overflowFor())
     return entry && scroll ? {
@@ -864,6 +867,7 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
     const toViewport = (rect: HighlightRect): HighlightRect => ({ x: (rect.x - pane.x) * scroll.zoom + bias.x, y: (rect.y - pane.y) * scroll.zoom + bias.y, width: rect.width * scroll.zoom, height: rect.height * scroll.zoom })
     // Search: lazily materialized geometry for this page's hits on the pane only.
     const highlights: HighlightRect[] = [], active: HighlightRect[] = []
+    let findRefusal = ''
     if (page) {
       const host = createCellLayoutHost(ctx, entry.sheet)
       page.hits.forEach((hit, index) => {
@@ -873,13 +877,14 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
         const cell = cellAt(entry, hit.source)
         let geometry
         try { geometry = cell && hitGeometry(hit, cell, entry.metrics, identity, host, entry.layoutCache, cellTextOverflow(entry.geometry, hit.source)) }
-        catch (error) { if (!(error instanceof OverflowResourceError)) throw error; setOverflowNotice(error.message); return }
+        catch (error) { if (!(error instanceof OverflowResourceError)) throw error; findRefusal ||= error.message; return }
         if (!geometry) return
         const rects = geometry.rects.map(toViewport)
         highlights.push(...rects)
         if (index === activeHit) active.push(...rects)
       })
     }
+    setFindOverflowNotice(findRefusal)
     paintSearchOverlay(ctx, highlights, active)
     if (!selection.ranges.length) setSelectionIncomplete(false)
     else {
@@ -1162,7 +1167,7 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
             <GridSemantics owner={identity} projection={entry.metrics} view={entry.view} selection={selection} window={scroll} viewport={viewport}
               body={entry.body} onChange={onGridChange} status={{ records: { ...snapshot(activeSheetId).records, completeness: loadState?.completeness ?? 'complete' }, countMode: 'body', loadReport: { status: 'ready', notices: [...notices, ...fontNotices, ...pagedDrawingNotices, ...(loadState?.failure ? [loadFailureNotice(loadState.failure, loadState.code)] : [])] } }}
               onSortCycle={(col, shift) => void sortCycle(col, shift)} pendingSortColumn={sortPending?.col ?? null} onFilter={(col, invoker) => { setPopup({ kind: 'filter', col, invoker }) }} onSortDialog={(col, invoker) => { setPopup({ kind: 'sort', col, invoker }) }} onNotice={setAnnouncement}
-              popup={popup && controls ? { invoker: popup.invoker, close: closePopup, label: popup.kind === 'filter' ? 'Column filter' : 'Sort worksheet', content: popup.kind === 'filter' ? <FilterDropdown owner={identity} client={controls.client} applied={entry.view.filter} appliedSort={entry.view.sort} col={popup.col} invoker={popup.invoker} embedded onClose={closePopup} onApplied={() => rerender()} onNotice={setAnnouncement} /> : <SortDialog owner={identity} client={controls.client} applied={entry.view.sort} col={popup.col} invoker={popup.invoker} embedded onClose={closePopup} onApplied={() => rerender()} onNotice={setAnnouncement} /> } : undefined} announcement={[sortPending ? `Sorting column ${columnToLetters(sortPending.col)}…` : '', resourceNotice, overflowNotice, assets?.sheetId !== activeSheetId ? 'Loading sheet…' : '', assets && assets.sheetId === activeSheetId && assets.lease.refusedImages > 0 ? `${assets.lease.refusedImages} picture${assets.lease.refusedImages === 1 ? ' is' : 's are'} not shown (image memory budget).` : '', selectionIncomplete ? 'Selection highlight is incomplete at this zoom; zoom in for detail.' : '', announcement].filter(Boolean).join(' ')} inspection={inspection} profile={profile} label={`Worksheet ${entry.sheet.name}`}
+              popup={popup && controls ? { invoker: popup.invoker, close: closePopup, label: popup.kind === 'filter' ? 'Column filter' : 'Sort worksheet', content: popup.kind === 'filter' ? <FilterDropdown owner={identity} client={controls.client} applied={entry.view.filter} appliedSort={entry.view.sort} col={popup.col} invoker={popup.invoker} embedded onClose={closePopup} onApplied={() => rerender()} onNotice={setAnnouncement} /> : <SortDialog owner={identity} client={controls.client} applied={entry.view.sort} col={popup.col} invoker={popup.invoker} embedded onClose={closePopup} onApplied={() => rerender()} onNotice={setAnnouncement} /> } : undefined} announcement={[sortPending ? `Sorting column ${columnToLetters(sortPending.col)}…` : '', resourceNotice, overflowNotice, findOverflowNotice === overflowNotice ? '' : findOverflowNotice, assets?.sheetId !== activeSheetId ? 'Loading sheet…' : '', assets && assets.sheetId === activeSheetId && assets.lease.refusedImages > 0 ? `${assets.lease.refusedImages} picture${assets.lease.refusedImages === 1 ? ' is' : 's are'} not shown (image memory budget).` : '', selectionIncomplete ? 'Selection highlight is incomplete at this zoom; zoom in for detail.' : '', announcement].filter(Boolean).join(' ')} inspection={inspection} profile={profile} label={`Worksheet ${entry.sheet.name}`}
               cellPresentation={at => {
                 const cell = cellAt(entry, at)
                 if (!cell && remote && !remote.store(activeSheetId).isKnown(at)) return { text: 'Loading…' }
