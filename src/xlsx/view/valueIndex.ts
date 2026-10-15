@@ -216,8 +216,7 @@ export class ValueReservation implements LaneAccount {
   get canAdopt(): boolean { return this.cache.canAdopt }
   adopt(targets: readonly object[], bytes = this.bytes): void {
     if (this.released || bytes > this.bytes) throw new ValueIndexError('closed', 'Invalid reservation adoption')
-    this.cache.adopt(targets, bytes)
-    this.bytes -= bytes
+    this.cache.adopt(targets, bytes, () => { this.bytes -= bytes })
   }
   charge(bytes: number): void {
     if (this.released) throw new ValueIndexError('closed', 'Reservation already released')
@@ -227,12 +226,15 @@ export class ValueReservation implements LaneAccount {
   release(bytes = this.bytes): void {
     if (this.released) return
     const amount = Math.min(bytes, this.bytes)
-    this.cache.release(amount)
     this.bytes -= amount
+    this.cache.release(amount)
   }
   close(): void {
-    this.release()
+    if (this.released) return
+    const bytes = this.bytes
+    this.bytes = 0
     this.released = true
+    this.cache.release(bytes)
   }
 }
 
@@ -258,9 +260,12 @@ export class ValueIndexCache {
   private readonly adoption: ((targets: readonly object[], bytes: number) => void) | undefined
   get canAdopt(): boolean { return this.adoption !== undefined }
   /** @internal Move cache bytes onto a surviving rule/page owner atomically. */
-  adopt(targets: readonly object[], bytes: number): void {
+  adopt(targets: readonly object[], bytes: number, transferred?: () => void): void {
     if (!this.adoption) throw new ValueIndexError('invalid-rule', 'Cache has no lifetime account')
     this.adoption(targets, bytes)
+    // Registration can fail before transfer. Once it returns, the reservation
+    // must forget these bytes even if the subsequent usage observer throws.
+    transferred?.()
     this.release(bytes)
   }
   private readonly beforeGrowth: ((bytes: number) => boolean) | undefined
@@ -288,6 +293,7 @@ export class ValueIndexCache {
     if (!sameStamp(source.stamp, stamp)) throw new ValueIndexError('stale-source', 'Value source owner does not match the index identity')
     const key = valueScope(identity)
     let index = this.indexes.get(key)
+    if (index?.disposed) { index.dispose(); index = undefined }
     if (index && !index.disposed) {
       this.indexes.delete(key)
       index.attach(source)
@@ -308,11 +314,13 @@ export class ValueIndexCache {
   }
   /** Owner changes: disposes matching indexes and deletes their stored keys. */
   invalidate(predicate: (identity: ValueIndexIdentity) => boolean = () => true): void {
+    let failed = false, error: unknown
     for (const index of this.indexes.values()) {
       if (!predicate(index.identity)) continue
-      index.dispose()
+      try { index.dispose() } catch (cause) { if (!failed) { failed = true; error = cause } }
       if (this.keyStore && this.strategy !== EXACT_SEARCH) this.keyStore.delete(index.keyOwner()).catch(() => {})
     }
+    if (failed) throw error
   }
   reserve(owner: ValueIndex | null = null): ValueReservation { return new ValueReservation(this, owner) }
   /** @internal */
@@ -343,7 +351,11 @@ export class ValueIndexCache {
     }
   }
   /** @internal */
-  release(bytes: number): void { this.used -= bytes; this.onUsage?.(this.used) }
+  release(bytes: number): void {
+    if (!Number.isSafeInteger(bytes) || bytes < 0 || bytes > this.used) throw new RangeError('Invalid value index memory release')
+    this.used -= bytes
+    this.onUsage?.(this.used)
+  }
   /** @internal */
   forget(key: string, index: ValueIndex): void {
     if (this.indexes.get(key) === index) this.indexes.delete(key)
@@ -366,6 +378,7 @@ export class ValueIndex implements LaneAccount {
   blankCount = 0
   unavailableCount = 0
   disposed = false
+  private disposing = false
   private source: ValueColumnSource
   private pins = 0
   private pending: Promise<ValueCompleteness> | undefined
@@ -442,20 +455,30 @@ export class ValueIndex implements LaneAccount {
   release(result: ValueSearchResult): void
   release(target: number | ValueSearchResult): void {
     if (typeof target === 'number') {
-      this.cache.release(target)
       this.ledger.chargedBytes -= target
+      this.cache.release(target)
       return
     }
     const record = this.results.get(target)
     if (!record || record.reservation.closed) return
-    if (--record.holders > 0) return
+    if (record.holders > 0 && --record.holders > 0) return
     this.retireResult(record.reservation)
     this.reservations.delete(record.reservation)
   }
   private retireResult(reservation: ValueReservation): void {
     const targets = this.escapedResults?.get(reservation)
-    if (targets) { reservation.adopt(targets); this.escapedResults!.delete(reservation) }
-    reservation.close()
+    let failed = false, error: unknown
+    if (targets) {
+      try { reservation.adopt(targets) } catch (cause) { failed = true; error = cause }
+      // A registration failure keeps the reservation and targets for retry;
+      // a notification failure follows a completed lifetime transfer.
+      if (!reservation.bytes) this.escapedResults!.delete(reservation)
+    }
+    if (!targets || !reservation.bytes) {
+      try { reservation.close() } catch (cause) { if (!failed) { failed = true; error = cause } }
+      this.reservations.delete(reservation)
+    }
+    if (failed) throw error
   }
   /** Adds an independent holder to an owned, live search result. */
   acquire(result: ValueSearchResult): void {
@@ -466,10 +489,11 @@ export class ValueIndex implements LaneAccount {
    * keys during the scan with identical results. */
   dropSearchKeys(): void {
     if (this.strategy === EXACT_SEARCH || this.disposed) return
-    this.release(this.keyBytes)
+    const bytes = this.keyBytes
     this.keyBytes = 0
     this.searchKeys = []
     this.keyState = 'streaming'
+    this.release(bytes)
   }
   /** @internal */
   attach(source: ValueColumnSource): void { this.source = source }
@@ -478,16 +502,26 @@ export class ValueIndex implements LaneAccount {
   /** @internal */
   reserve(): ValueReservation { return this.cache.reserve(this) }
   dispose(): void {
-    if (this.disposed) return
-    this.disposed = true
-    const bytes = this.ledger.chargedBytes
-    for (const reservation of this.reservations) this.retireResult(reservation)
-    this.reservations.clear()
-    this.cache.forget(this.scope, this)
-    this.kinds = new Uint8Array(0); this.numbers = new Float64Array(0); this.styles = new Uint32Array(0); this.counts = new Uint32Array(0)
-    this.texts = []; this.strings = new Map(); this.errors = new Map(); this.numberIds = undefined; this.booleanIds = undefined; this.searchKeys = []; this.keyBytes = 0
-    this.ledger.chargedBytes = 0
-    this.cache.release(bytes)
+    // An observer may reenter before retirement removes its reservation. Only
+    // a later call may retry an incomplete native registration.
+    if (this.disposing || this.disposed && !this.reservations.size) return
+    this.disposing = true
+    try {
+      this.disposed = true
+      const bytes = this.ledger.chargedBytes
+      let failed = false, error: unknown
+      for (const reservation of this.reservations) {
+        try { this.retireResult(reservation) } catch (cause) { if (!failed) { failed = true; error = cause } }
+      }
+      // Keep a failed pre-transfer retirement reachable for repeated close. Open
+      // must drain this old owner before it can publish a replacement index.
+      if (!this.reservations.size) this.cache.forget(this.scope, this)
+      this.kinds = new Uint8Array(0); this.numbers = new Float64Array(0); this.styles = new Uint32Array(0); this.counts = new Uint32Array(0)
+      this.texts = []; this.strings = new Map(); this.errors = new Map(); this.numberIds = undefined; this.booleanIds = undefined; this.searchKeys = []; this.keyBytes = 0
+      this.ledger.chargedBytes = 0
+      try { this.cache.release(bytes) } catch (cause) { if (!failed) { failed = true; error = cause } }
+      if (failed) throw error
+    } finally { this.disposing = false }
   }
   /** Throws stale-source (and disposes) once invalidated or the live source
    * owner differs; every cached path and publication checks this. */
@@ -1269,12 +1303,16 @@ export class ValueSelectionDraft {
     if (this.closed) return
     this.closed = true
     this.index.pin(-1)
-    for (const result of this.held) this.index.release(result)
+    let failed = false, error: unknown
+    for (const result of this.held) {
+      try { this.index.release(result) } catch (cause) { if (!failed) { failed = true; error = cause } }
+    }
     this.held.clear()
     this.current = undefined
     this.layers = []
     this.committedKeys = undefined
-    this.reservation.close()
+    try { this.reservation.close() } catch (cause) { if (!failed) { failed = true; error = cause } }
+    if (failed) throw error
   }
   /** Cancel/Esc: discards the draft and pending searches; stores nothing. */
   cancel(): void {

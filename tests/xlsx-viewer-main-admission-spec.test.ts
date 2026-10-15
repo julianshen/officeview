@@ -368,3 +368,394 @@ test('observer and later constructor failures preserve a prior pinned index and 
   first.pin(-1); first.dispose(); expect(cache.usedBytes).toBe(0)
   resources.dispose(); await source.release()
 })
+
+
+for (const profile of ['D', 'M'] as const) {
+  test(`${profile} retirement completes once after a release observer error and preserves held backing ownership`, async () => {
+    const { source, identity, values } = domain(), ledger = new MainMemoryLedger()
+    const primary = new Error('retirement observer fault')
+    let fail = false, previous = 0
+    const resources = createViewerControlResources(profile, bytes => {
+      const shrinking = bytes < previous
+      previous = bytes
+      if (fail && shrinking) { fail = false; throw primary }
+    }, ledger)
+    const index = resources.cache.open(identity, values)
+    await index.build()
+    const prior = resources.cache.open({ ...identity, classificationGen: 1 }, values)
+    await prior.build()
+    prior.pin(1)
+    const priorBytes = prior.ledger.chargedBytes, separate = resources.cache.reserve()
+    separate.charge(77)
+    const result = await index.search({ text: '', locale: 'en' }), backing = result.matches.buffer
+    const before = resources.cache.usedBytes, main = ledger.bytes, peak = ledger.peakBytes
+    fail = true
+    expect(() => index.release(result)).toThrow(primary)
+    const retired = resources.cache.usedBytes
+    expect(retired).toBeLessThan(before)
+    expect(ledger.bytes).toBe(main)
+    expect(ledger.peakBytes).toBe(peak)
+    expect(resources.memory.owns(backing)).toBe(true)
+    expect(result.matches.buffer).toBe(backing)
+    index.release(result)
+    expect(resources.cache.usedBytes).toBe(retired)
+    expect(prior.ledger.chargedBytes).toBe(priorBytes)
+    expect(separate.bytes).toBe(77)
+    resources.dispose()
+    resources.dispose()
+    expect(resources.cache.usedBytes).toBe(77)
+    expect(ledger.ownerBytes('controls', resources.cacheOwner)).toBe(77)
+    expect(resources.memory.owns(backing)).toBe(true)
+    separate.close()
+    expect(resources.cache.usedBytes).toBe(0)
+    expect(ledger.ownerBytes('controls', resources.cacheOwner)).toBe(0)
+    await source.release()
+  })
+
+  for (const secondary of [false, true]) test(`${profile} actual draft cancel and resource close finish cleanup with secondary observer errors ${secondary}`, async () => {
+    const doc = workbook(), source = createObjectWorkbookSource(doc, 'd'), store = source.store('s'), ledger = new MainMemoryLedger()
+    const primary = new Error('cancel observer fault'), later = new Error('secondary cleanup observer fault')
+    let fail = false, thrown = 0, previous = 0
+    const resources = createViewerControlResources(profile, bytes => {
+      const shrinking = bytes < previous
+      previous = bytes
+      if (fail && shrinking && (secondary || !thrown)) throw thrown++ ? later : primary
+    }, ledger)
+    const hidden = createIntervalSet([]), view: any = { sheetId: 's', revision: 0, order: createIdentityOrder(), baseHidden: hidden,
+      visibility: visibilityFromHidden(hidden), sort: null, filter: null, selection: { ...emptyGridSelection(), active: { row: 2, col: 0 } } }
+    const owner = () => ({ ...store.stamp, fontGen: 0, viewGen: 0 }), snapshot = () => ({ owner: owner(), filter: null, sort: null, records: { visible: 5, total: 5, completeness: 'complete' as const } })
+    const controls = await viewerControls({ doc, source, sheetId: 's', resources, ledger, snapshot, view: () => view, publish: () => { throw new Error('unexpected publication') } }, signal())
+    const draft = await controls.client.values(owner(), range, 0, null, signal())
+    const page = await draft.read({ text: '1', offset: 0 }, signal())
+    expect(page.entries.length).toBeGreaterThan(0)
+    // A real key patch ensures cancel must also close its own reservation after retiring search output.
+    await draft.change({ kind: 'toggle', ordinal: 0, selected: false }, { text: '1', offset: 0 }, signal())
+    fail = true
+    let error: unknown
+    try { draft.cancel() } catch (cause) { error = cause }
+    expect(error).toBe(primary)
+    expect(() => draft.cancel()).not.toThrow()
+    error = undefined
+    try { resources.dispose() } catch (cause) { error = cause }
+    if (secondary) expect(error).toBe(later)
+    else expect(error).toBeUndefined()
+    expect(resources.cache.usedBytes).toBe(0)
+    expect(resources.cache.size).toBe(0)
+    expect(ledger.ownerBytes('controls', resources.cacheOwner)).toBe(0)
+    expect(resources.memory.pendingBytes).toBe(0)
+    expect(() => resources.dispose()).not.toThrow()
+    fail = false
+    controls.dispose()
+    await source.release()
+  })
+
+  test(`${profile} partial retirement registration keeps the old reservation until retry without touching the next index`, async () => {
+    let fail = false, registrations = 0
+    const primary = new Error('partial retirement registration fault')
+    const ledger = new MainMemoryLedger({ register() { if (fail && ++registrations === 2) throw primary } })
+    const { source, identity, values } = domain(), resources = createViewerControlResources(profile, undefined, ledger)
+    const index = resources.cache.open(identity, values)
+    await index.build()
+    const result = await index.search({ text: '', locale: 'en' }), before = resources.cache.usedBytes, main = ledger.bytes
+    fail = true
+    expect(() => index.release(result)).toThrow(primary)
+    expect(resources.cache.usedBytes).toBe(before)
+    expect(ledger.bytes).toBe(main)
+    expect(resources.memory.owns(result.matches.buffer)).toBe(false)
+    fail = false
+    index.release(result)
+    expect(resources.memory.owns(result.matches.buffer)).toBe(true)
+    const after = resources.cache.usedBytes
+    index.release(result)
+    expect(resources.cache.usedBytes).toBe(after)
+    resources.dispose()
+    expect(resources.cache.usedBytes).toBe(0)
+    expect(ledger.ownerBytes('controls', resources.cacheOwner)).toBe(0)
+    await source.release()
+  })
+}
+
+for (const profile of ['D', 'M'] as const) {
+  test(`${profile} reservation close completes its irreversible refund despite observer failure`, () => {
+    let fail = false
+    const primary = new Error('reservation release observer fault'), ledger = new MainMemoryLedger()
+    const resources = createViewerControlResources(profile, () => { if (fail) throw primary }, ledger)
+    const reservation = resources.cache.reserve()
+    reservation.charge(88)
+    fail = true
+    expect(() => reservation.close()).toThrow(primary)
+    expect(reservation.bytes).toBe(0)
+    expect(reservation.closed).toBe(true)
+    expect(() => reservation.close()).not.toThrow()
+    expect(resources.cache.usedBytes).toBe(0)
+    expect(ledger.ownerBytes('controls', resources.cacheOwner)).toBe(0)
+  })
+
+  test(`${profile} resource close retries pre-transfer registration without replacing or refunding the old search owner`, async () => {
+    let fail = false
+    const primary = new Error('close retirement registration fault')
+    const ledger = new MainMemoryLedger({ register() { if (fail) throw primary } })
+    const { source, identity, values } = domain(), resources = createViewerControlResources(profile, undefined, ledger)
+    const index = resources.cache.open(identity, values)
+    await index.build()
+    const result = await index.search({ text: '', locale: 'en' }), before = resources.cache.usedBytes
+    const indexBytes = index.ledger.chargedBytes
+    fail = true
+    expect(() => resources.dispose()).toThrow(primary)
+    expect(resources.cache.usedBytes).toBe(before - indexBytes)
+    expect(ledger.ownerBytes('controls', resources.cacheOwner)).toBe(resources.cache.usedBytes)
+    expect(resources.memory.owns(result.matches.buffer)).toBe(false)
+    expect(() => resources.cache.open(identity, values)).toThrow(primary)
+    expect(resources.cache.usedBytes).toBe(before - indexBytes)
+    fail = false
+    resources.dispose()
+    resources.dispose()
+    expect(resources.cache.usedBytes).toBe(0)
+    expect(resources.cache.size).toBe(0)
+    expect(ledger.ownerBytes('controls', resources.cacheOwner)).toBe(0)
+    expect(resources.memory.owns(result.matches.buffer)).toBe(true)
+    await source.release()
+  })
+}
+
+for (const profile of ['D', 'M'] as const) test(`${profile} retirement preserves its first observer exception through a secondary close notification`, async () => {
+  const { source, identity, values } = domain(), ledger = new MainMemoryLedger()
+  const primary = new Error('transfer notification fault'), secondary = new Error('zero close notification fault')
+  let fail = false, calls = 0
+  const resources = createViewerControlResources(profile, () => { if (fail) throw calls++ ? secondary : primary }, ledger)
+  const index = resources.cache.open(identity, values)
+  await index.build()
+  const result = await index.search({ text: '', locale: 'en' })
+  fail = true
+  let error: unknown
+  try { index.release(result) } catch (cause) { error = cause }
+  expect(error).toBe(primary)
+  expect(calls).toBe(2)
+  expect(resources.memory.owns(result.matches.buffer)).toBe(true)
+  expect(() => index.release(result)).not.toThrow()
+  fail = false
+  resources.dispose()
+  expect(resources.cache.usedBytes).toBe(0)
+  expect(ledger.ownerBytes('controls', resources.cacheOwner)).toBe(0)
+  await source.release()
+})
+
+for (const profile of ['D', 'M'] as const) for (const withIndex of [false, true]) test(`${profile} resource close refunds every stored run and reports its first release observer error with index ${withIndex}`, async () => {
+  let fail = false, calls = 0
+  const primary = new Error('first run close observer fault'), secondary = new Error('second run close observer fault'), ledger = new MainMemoryLedger()
+  const resources = createViewerControlResources(profile, () => { if (fail) throw calls++ ? secondary : primary }, ledger)
+  const { source, identity, values } = domain()
+  if (withIndex) await resources.cache.open(identity, values).build()
+  const run = { count: 1, kinds: new Uint8Array([1]), numbers: new Float64Array([1]), texts: [undefined] }
+  const owner = { docId: 'd', sheetId: 's', valueGen: 0 }
+  const refs = [await resources.runs.put(run, owner, 'scope'), await resources.runs.put(run, owner, 'scope')]
+  fail = true
+  let error: unknown
+  try { resources.dispose() } catch (cause) { error = cause }
+  expect(error).toBe(primary)
+  expect(calls).toBe(withIndex ? 3 : 2)
+  expect(resources.cache.usedBytes).toBe(0)
+  expect(ledger.ownerBytes('controls', resources.cacheOwner)).toBe(0)
+  expect(resources.memory.pendingBytes).toBe(0)
+  expect(() => resources.dispose()).not.toThrow()
+  fail = false
+  for (const ref of refs) await expect(resources.runs.read(ref, 0, 1, 'scope')).rejects.toMatchObject({ code: 'stale-source' })
+  await source.release()
+})
+
+for (const profile of ['D', 'M'] as const) test(`${profile} observer reentrant resource close leaves the outer cleanup responsible for all refs`, async () => {
+  let fail = false, calls = 0
+  const primary = new Error('reentrant close observer fault'), ledger = new MainMemoryLedger()
+  const resources = createViewerControlResources(profile, () => {
+    if (fail) { calls++; resources.dispose(); throw primary }
+  }, ledger)
+  const run = { count: 1, kinds: new Uint8Array([1]), numbers: new Float64Array([1]), texts: [undefined] }
+  const owner = { docId: 'd', sheetId: 's', valueGen: 0 }
+  await resources.runs.put(run, owner, 'scope')
+  await resources.runs.put(run, owner, 'scope')
+  fail = true
+  let error: unknown
+  try { resources.dispose() } catch (cause) { error = cause }
+  expect(error).toBe(primary)
+  expect(calls).toBe(2)
+  expect(resources.cache.usedBytes).toBe(0)
+  expect(ledger.ownerBytes('controls', resources.cacheOwner)).toBe(0)
+  expect(() => resources.dispose()).not.toThrow()
+})
+
+
+for (const profile of ['D', 'M'] as const) {
+  for (const route of ['cache-map', 'store-map', 'refs-map', 'reader-registry'] as const) test(`${profile} factory ${route} constructor failures refund only the unadopted header and allow retry`, async () => {
+    const { source, identity, values } = domain(), ledger = new MainMemoryLedger()
+    const prior = createViewerControlResources(profile, undefined, ledger), index = prior.cache.open(identity, values)
+    await index.build()
+    index.pin(1)
+    const held = prior.memory.reserve(), buffer = new Uint8Array(160)
+    held.charge(buffer.byteLength)
+    const before = ledger.bytes, pending = prior.memory.pendingBytes, cacheBytes = prior.cache.usedBytes
+    const primary = new Error(`${route} actual constructor fault`), NativeMap = Map, NativeRegistry = (globalThis as any).FinalizationRegistry
+    let calls = 0, failures = 0
+    globalThis.Map = new Proxy(NativeMap, { construct(target, args) {
+      if (ledger.bytes === before + 1024 && (new Error().stack ?? '').includes('viewerControlsClient')) {
+        calls++
+        if (calls === (route === 'cache-map' ? 1 : route === 'store-map' ? 2 : route === 'refs-map' ? 3 : -1)) { failures++; throw primary }
+      }
+      return Reflect.construct(target, args, target)
+    } })
+    if (route === 'reader-registry') (globalThis as any).FinalizationRegistry = new Proxy(NativeRegistry, { construct(target, args) {
+      if ((new Error().stack ?? '').includes('MemoryValueRunStore')) { failures++; throw primary }
+      return Reflect.construct(target, args, target)
+    } })
+    try {
+      for (let attempt = 0; attempt < 3; attempt++) {
+        calls = 0
+        let error: unknown
+        try { createViewerControlResources(profile, undefined, ledger) } catch (cause) { error = cause }
+        expect(error).toBe(primary)
+        expect(ledger.bytes).toBe(before)
+        expect(prior.memory.pendingBytes).toBe(pending)
+        expect(prior.cache.usedBytes).toBe(cacheBytes)
+        expect(ledger.ownerBytes('controls', prior.cacheOwner)).toBe(cacheBytes)
+        expect(index.disposed).toBe(false)
+      }
+    } finally { globalThis.Map = NativeMap; (globalThis as any).FinalizationRegistry = NativeRegistry }
+    expect(failures).toBe(3)
+    const retry = createViewerControlResources(profile, undefined, ledger)
+    expect(ledger.bytes).toBe(before + 1024)
+    expect(retry.memory.pendingBytes).toBe(0)
+    retry.dispose(); retry.dispose()
+    expect(ledger.bytes).toBe(before + 1024)
+    expect(buffer.byteLength).toBe(160)
+    held.release()
+    prior.dispose()
+    await source.release()
+  })
+
+  for (const failureAt of [1, 3]) test(`${profile} factory header registration failure at ${failureAt} preserves prior owners through repeated failure and retry`, async () => {
+    const primary = new Error('actual header registration fault')
+    let fail = false, calls = 0, failedToken = ''
+    const ledger = new MainMemoryLedger({ register(_target, token) {
+      if (fail) { failedToken = token; if (++calls === failureAt) throw primary }
+    } })
+    const { source, identity, values } = domain(), prior = createViewerControlResources(profile, undefined, ledger)
+    const index = prior.cache.open(identity, values)
+    await index.build()
+    index.pin(1)
+    const held = prior.memory.reserve(), buffer = new Uint8Array(160)
+    held.charge(buffer.byteLength)
+    const before = ledger.bytes, pending = prior.memory.pendingBytes, cacheBytes = prior.cache.usedBytes
+    fail = true
+    for (let attempt = 0; attempt < 3; attempt++) {
+      calls = 0
+      let error: unknown
+      try { createViewerControlResources(profile, undefined, ledger) } catch (cause) { error = cause }
+      expect(error).toBe(primary)
+      expect(ledger.bytes).toBe(before)
+      expect(prior.memory.pendingBytes).toBe(pending)
+      expect(prior.cache.usedBytes).toBe(cacheBytes)
+      expect(ledger.ownerBytes('controls', prior.cacheOwner)).toBe(cacheBytes)
+      expect(index.disposed).toBe(false)
+      // A partially registered native token never acquired any live owner.
+      for (let target = 0; target < 5; target++) ledger.collected(failedToken)
+      expect(ledger.bytes).toBe(before)
+    }
+    fail = false
+    const retry = createViewerControlResources(profile, undefined, ledger)
+    expect(ledger.bytes).toBe(before + 1024)
+    expect(retry.memory.pendingBytes).toBe(0)
+    expect(retry.memory.owns(retry)).toBe(true)
+    retry.dispose(); retry.dispose()
+    expect(ledger.bytes).toBe(before + 1024)
+    expect(buffer.byteLength).toBe(160)
+    held.release()
+    prior.dispose()
+    await source.release()
+  })
+}
+
+for (const profile of ['D', 'M'] as const) test(`${profile} reservation close is already closed when its observer retries that close`, () => {
+  let fail = false, calls = 0
+  const primary = new Error('reentrant reservation close fault'), ledger = new MainMemoryLedger()
+  const resources = createViewerControlResources(profile, () => {
+    if (!fail) return
+    calls++
+    if (calls < 3) reservation.close()
+    throw primary
+  }, ledger)
+  const reservation = resources.cache.reserve()
+  reservation.charge(88)
+  fail = true
+  expect(() => reservation.close()).toThrow(primary)
+  expect(calls).toBe(1)
+  expect(reservation.closed).toBe(true)
+  expect(reservation.bytes).toBe(0)
+  expect(resources.cache.usedBytes).toBe(0)
+  expect(ledger.ownerBytes('controls', resources.cacheOwner)).toBe(0)
+  expect(() => reservation.close()).not.toThrow()
+})
+
+
+for (const profile of ['D', 'M'] as const) for (const route of ['index', 'cache', 'resource'] as const) for (const throws of [false, true]) {
+  test(`${profile} ${route} close ignores nested same-index disposal while preserving pinned ownership, observer throws ${throws}`, async () => {
+    const { source, identity, values } = domain()
+    let armed = false, notifications = 0, index!: ValueIndex, prior!: ValueIndex, backing: ArrayBufferLike | undefined
+    const primary = new Error('outer index disposal observer fault'), secondary = new Error('later index disposal observer fault')
+    const resultTokens = new Set<string>(), observations: { live: boolean; owner: number; cache: number }[] = []
+    const ledger = new MainMemoryLedger({ register(target, token) { if (target === backing) resultTokens.add(token) } })
+    const resources = createViewerControlResources(profile, () => {
+      if (!armed) return
+      const call = ++notifications
+      if (call <= 3) {
+        for (let nested = 0; nested < 3; nested++) {
+          try { index.dispose() } catch { /* Exercise the outer observer's original error even if nested cleanup also fails. */ }
+        }
+        if (route === 'cache') try { resources.cache.invalidate(owner => owner.classificationGen === 0) } catch {}
+        if (route === 'resource') try { resources.dispose() } catch {}
+      }
+      observations.push({ live: !prior.disposed, owner: ledger.ownerBytes('controls', resources.cacheOwner), cache: resources.cache.usedBytes })
+      if (throws) throw call === 1 ? primary : secondary
+    }, ledger)
+    index = resources.cache.open(identity, values)
+    await index.build()
+    prior = resources.cache.open({ ...identity, classificationGen: 1 }, values)
+    await prior.build()
+    prior.pin(1)
+    const result = await index.search({ text: '', locale: 'en' })
+    backing = result.matches.buffer
+    const priorBytes = prior.ledger.chargedBytes, indexBytes = index.ledger.chargedBytes, beforeMain = ledger.bytes
+    const close = () => route === 'index' ? index.dispose() : route === 'cache'
+      ? resources.cache.invalidate(owner => owner.classificationGen === 0) : resources.dispose()
+    armed = true
+    let error: unknown
+    try { close() } catch (cause) { error = cause }
+    expect(error).toBe(throws ? primary : undefined)
+    expect(index.ledger.chargedBytes).toBe(0)
+    expect(resultTokens.size).toBe(1)
+    expect(resources.memory.owns(backing)).toBe(true)
+    expect(result.matches.buffer).toBe(backing)
+    expect(result.matches.byteLength).toBeGreaterThan(0)
+    expect(observations.some(value => value.live)).toBe(true)
+    for (const value of observations) if (value.live) {
+      expect(value.owner).toBeGreaterThanOrEqual(priorBytes)
+      expect(value.cache).toBeGreaterThanOrEqual(priorBytes)
+    }
+    const remaining = route === 'resource' ? 0 : priorBytes
+    expect(resources.cache.usedBytes).toBe(remaining)
+    expect(ledger.ownerBytes('controls', resources.cacheOwner)).toBe(remaining)
+    expect(prior.disposed).toBe(route === 'resource')
+    expect(prior.ledger.chargedBytes).toBe(remaining)
+    expect(ledger.bytes).toBe(beforeMain - indexBytes - (route === 'resource' ? priorBytes : 0))
+    const completedNotifications = notifications, completedMain = ledger.bytes
+    expect(() => index.dispose()).not.toThrow()
+    expect(() => close()).not.toThrow()
+    expect(notifications).toBe(completedNotifications)
+    expect(resultTokens.size).toBe(1)
+    expect(ledger.bytes).toBe(completedMain)
+    armed = false
+    resources.dispose()
+    expect(resources.cache.usedBytes).toBe(0)
+    expect(ledger.ownerBytes('controls', resources.cacheOwner)).toBe(0)
+    expect(resources.memory.owns(backing)).toBe(true)
+    await source.release()
+  })
+}

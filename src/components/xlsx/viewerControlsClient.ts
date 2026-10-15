@@ -25,49 +25,70 @@ export function createViewerControlResources(profile: ProfileId = 'D', onUsage?:
   let memory = new MainControlMemory(ledger ?? new MainMemoryLedger(), profile)
   const headerAccount = memory.reserve()
   headerAccount.charge(1024)
-  let account = memory.reserve(), bound = ledger !== undefined, activated = false
-  const cache = new ValueIndexCache({ limitBytes: (profile === 'M' ? 8 : 16) * 1024 * 1024,
-    beforeGrowth: bytes => !closed && account.trySet(bytes),
-    adopt: (targets, bytes) => account.adopt(targets, bytes),
-    onUsage: bytes => { account.trySet(bytes); onUsage?.(bytes) },
-  })
-  const store = new MemoryValueRunStore({ limitBytes: 8 * 1024 * 1024, account: cache.reserve(), readerAllocation: {
-    get closed() { return memory.closed }, get limitBytes() { return memory.limitBytes }, reserve: () => memory.reserve(), canReserve: bytes => memory.canReserve(bytes), owns: target => memory.owns(target),
-  } })
-  const refs = new Map<string, PagedKeySetRef>()
-  let closed = false
-  const runs: ValueRunStore = {
-    async put(...args) {
-      if (closed) throw new ValueIndexError('cancelled', 'Controls disposed.')
-      const ref = await store.put(...args)
-      if (closed) { await store.release(ref); throw new ValueIndexError('cancelled', 'Controls disposed.') }
-      refs.set(ref.refId, ref)
-      return ref
-    },
-    read: (...args) => store.read(...args),
-    async release(ref) { refs.delete(ref.refId); await store.release(ref) },
+  try {
+    let account = memory.reserve(), bound = ledger !== undefined, activated = false
+    let reportCloseError: ((cause: unknown) => void) | undefined
+    const cache = new ValueIndexCache({ limitBytes: (profile === 'M' ? 8 : 16) * 1024 * 1024,
+      beforeGrowth: bytes => !closed && account.trySet(bytes),
+      adopt: (targets, bytes) => account.adopt(targets, bytes),
+      onUsage: bytes => {
+        account.trySet(bytes)
+        try { onUsage?.(bytes) } catch (cause) { reportCloseError?.(cause); throw cause }
+      },
+    })
+    const store = new MemoryValueRunStore({ limitBytes: 8 * 1024 * 1024, account: cache.reserve(), readerAllocation: {
+      get closed() { return memory.closed }, get limitBytes() { return memory.limitBytes }, reserve: () => memory.reserve(), canReserve: bytes => memory.canReserve(bytes), owns: target => memory.owns(target),
+    } })
+    const refs = new Map<string, PagedKeySetRef>()
+    let closed = false
+    const runs: ValueRunStore = {
+      async put(...args) {
+        if (closed) throw new ValueIndexError('cancelled', 'Controls disposed.')
+        const ref = await store.put(...args)
+        if (closed) { await store.release(ref); throw new ValueIndexError('cancelled', 'Controls disposed.') }
+        refs.set(ref.refId, ref)
+        return ref
+      },
+      read: (...args) => store.read(...args),
+      async release(ref) { refs.delete(ref.refId); await store.release(ref) },
+    }
+    const resource: ViewerControlResources = { cache, runs, get closed() { return closed }, adoptCache: (targets, bytes, commit) => account.adopt(targets, bytes, commit), get cacheOwner() { return account.owner }, get memory() { activated = true; return memory }, bindLedger(ledger, usage) {
+      if (memory.ledger === ledger) return
+      if (onUsage && usage !== 'observer') throw new RangeError('Declare resourceUsage: observer, or pass the ledger to createViewerControlResources instead of a ledger-writing onUsage callback')
+      if (bound || activated || cache.usedBytes) throw new RangeError('Controls resources belong to another main ledger')
+      const rebound = new MainControlMemory(ledger, profile), header = rebound.reserve()
+      header.charge(1024)
+      try { header.adopt([resource, cache, store, refs, runs]); memory.ledger.settle(resource) }
+      finally { header.release() }
+      account.release()
+      memory = rebound
+      account = memory.reserve()
+      bound = true
+    }, dispose() {
+      if (reportCloseError) return
+      closed = true
+      memory.close()
+      let failed = false, error: unknown
+      const report = (cause: unknown) => { if (!failed) { failed = true; error = cause } }
+      reportCloseError = report
+      try {
+        try { cache.invalidate() } catch (cause) { report(cause) }
+        // This store's release performs its refund/notification synchronously,
+        // then returns a promise. Report the original observer error from this
+        // synchronous close and consume only its rejected cleanup promise.
+        for (const ref of refs.values()) void store.release(ref).catch(() => {})
+        refs.clear()
+      } finally { reportCloseError = undefined }
+      if (failed) throw error
+    } }
+    headerAccount.adopt([resource, cache, store, refs, runs])
+    return resource
+  } catch (cause) {
+    // Failed registration leaves the original reservation intact; successful
+    // adoption consumed it. Refund only the still-unadopted factory header.
+    try { headerAccount.release() } catch { /* Preserve the construction/adoption error. */ }
+    throw cause
   }
-  const resource: ViewerControlResources = { cache, runs, get closed() { return closed }, adoptCache: (targets, bytes, commit) => account.adopt(targets, bytes, commit), get cacheOwner() { return account.owner }, get memory() { activated = true; return memory }, bindLedger(ledger, usage) {
-    if (memory.ledger === ledger) return
-    if (onUsage && usage !== 'observer') throw new RangeError('Declare resourceUsage: observer, or pass the ledger to createViewerControlResources instead of a ledger-writing onUsage callback')
-    if (bound || activated || cache.usedBytes) throw new RangeError('Controls resources belong to another main ledger')
-    const rebound = new MainControlMemory(ledger, profile), header = rebound.reserve()
-    header.charge(1024)
-    try { header.adopt([resource, cache, store, refs, runs]); memory.ledger.settle(resource) }
-    finally { header.release() }
-    account.release()
-    memory = rebound
-    account = memory.reserve()
-    bound = true
-  }, dispose() {
-    closed = true
-    memory.close()
-    cache.invalidate()
-    for (const ref of refs.values()) void store.release(ref)
-    refs.clear()
-  } }
-  headerAccount.adopt([resource, cache, store, refs, runs])
-  return resource
 }
 
 export interface ViewerControlsOptions {
