@@ -61,13 +61,34 @@ for (const profile of ['D', 'M'] as const)
       const sessions: any[] = []
       for (const method of ['sort', 'filter'] as const) {
         const original = (DocumentSession.prototype as any)[method];
-        (DocumentSession.prototype as any)[method] = function(...args: any[]) { sessions.push({ kind: method, session: this }); return original.apply(this, args) }
+        (DocumentSession.prototype as any)[method] = function(...args: any[]) { sessions.push({ kind: method, session: this })
+          if (method === 'sort') {
+            const prepared = this.preparedStore.bind(this)
+            // Hold the actual sort continuation above the interruptible source.
+            this.preparedStore = (sheetId: string) => {
+              const target = prepared(sheetId)
+              return new Proxy(target, { get(t: any, prop) {
+                if (prop === 'queryColumn') return async (req: any, opts: any) => {
+                  const page = await t.queryColumn(req, opts)
+                  if (req.col < 2 && !heldPages.includes(page)) {
+                    heldPages.push(page)
+                    gates[req.col].mark()
+                    await gates[req.col].wait
+                  }
+                  return page
+                }
+                const value = Reflect.get(t, prop)
+                return typeof value === 'function' ? value.bind(t) : value
+              } })
+            }
+          }
+          return original.apply(this, args) }
       }
       const controls = await viewerControls({ doc, source, sheetId: 's', resources, ledger, snapshot, view: () => view, publish: next => { published++; view = { ...view, ...next }; gen++; return snapshot() } }, signal())
       const counts = [0, 0, 0], heldPages: any[] = []
       const query = store.queryColumn.bind(store)
       store.queryColumn = async (req: any, opts: any) => {
-        const page = await query(req, opts); counts[req.col]++; if (req.col < 2 && counts[req.col] === 1 || req.col === 2 && counts[2] === 3) {
+        const page = await query(req, opts); counts[req.col]++; if (req.col === 2 && counts[2] === 3) {
           heldPages.push(page)
           gates[req.col].mark()
           await gates[req.col].wait

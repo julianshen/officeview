@@ -43,9 +43,12 @@ test('actual mounted viewer unmount preserves held membership and run-copy owner
     draft.cancel()
     expect(resources.cache.usedBytes).toBeGreaterThanOrEqual(1538)
     expect(ledger.snapshot().byPool.controls).toBeGreaterThanOrEqual(1538 + 9)
-    expect(ledger.snapshot().byPool.dom).toBe(0)
+    await expect(pending).resolves.toMatchObject({ kind: 'cancelled' })
+    expect(resources.cache.usedBytes).toBeGreaterThanOrEqual(1538)
+    expect(ledger.snapshot().byPool.controls).toBeGreaterThanOrEqual(1538 + 9)
     open()
-    await expect(pending).rejects.toMatchObject({ code: 'cancelled' })
+    // Public cancellation already settled; wait for the actual held reader cleanup.
+    await waitFor(() => expect(resources.cache.usedBytes).toBe(0))
     expect(resources.cache.usedBytes).toBe(0)
     expect(resources.memory.pendingBytes).toBe(0)
   } finally { open(); await pending.catch(() => {}); draft.cancel(); ui.unmount() }

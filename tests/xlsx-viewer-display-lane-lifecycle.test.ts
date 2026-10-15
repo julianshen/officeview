@@ -86,6 +86,25 @@ function session(source: WorkbookSource, budget: { maxColumns: number; maxBytes:
     filterEvaluator: evaluator ?? createWorkerFilterEvaluator(() => new Map(), formatting, 'en-US', { lanes }),
   })
 }
+/** Track the actual evaluator, independently of the public cancellation race. */
+function tracked(evaluate: FilterEvaluator) {
+  let producer: ReturnType<FilterEvaluator> | undefined
+  return { evaluate: (input: Parameters<FilterEvaluator>[0]) => producer = evaluate(input), drain: () => producer! }
+}
+/** Gate inside the real evaluator's store adapter, after the source reply arrived.
+ * Unlike the interruptible provider gate, this continuation owns its lane lease. */
+function heldLane(lanes: DisplayTextLaneCache, g: ReturnType<typeof gate>, when: (sheet: string, query: ColumnQuery) => boolean) {
+  const evaluate = createWorkerFilterEvaluator(() => new Map(), formatting, 'en-US', { lanes })
+  return tracked(input => evaluate({ ...input, store: new Proxy(input.store, { get(store, prop) {
+    if (prop === 'queryColumn') return async (...args: Parameters<SourceStore['queryColumn']>) => {
+      const page = await store.queryColumn(...args)
+      if (!g.held && when(store.stamp.sheetId, args[0])) await g.hold()
+      return page
+    }
+    const value = Reflect.get(store, prop)
+    return typeof value === 'function' ? value.bind(store) : value
+  } }) }))
+}
 /** Bytes of one raw prepared column of this sheet and of the col-4 lane. */
 const RAW_COLUMN = 704
 const LANE = 6562
@@ -279,9 +298,10 @@ describe('codex r3 #2: a lane a real reader holds stays charged through session 
   }
 
   it('close after abort (kernel order) keeps the held lane in the pool and prepared counter until the reader exits (exact review repro)', async () => {
-    const { source, gate: g } = gated(makeDoc(), thirdLaneRead())
+    const source = createObjectWorkbookSource(makeDoc(), 'd'), g = gate()
     const lanes = new DisplayTextLaneCache()
-    const s = session(source, { maxColumns: 4, maxBytes: 8192 }, lanes)
+    const producer = heldLane(lanes, g, thirdLaneRead())
+    const s = session(source, { maxColumns: 4, maxBytes: 8192 }, lanes, producer.evaluate)
     const controller = new AbortController()
     const pending = s.filter(s.identity('s'), textSpec, 0, controller.signal)
     await g.reached
@@ -301,6 +321,33 @@ describe('codex r3 #2: a lane a real reader holds stays charged through session 
     expect(s.memoryStats().totalBytes).toBeGreaterThanOrEqual(LANE)
     g.open()
     expect((await pending).kind).toBe('cancelled')
+    await producer.drain()
+    expect(lanes.bytes).toBe(0)
+    expect(s.preparedStats()).toEqual({ columns: 0, bytes: 0 })
+    expect(s.memoryStats().totalBytes).toBe(0)
+  })
+
+  it('interruptible raw-provider cancellation ends the actual lane reader before that provider exits', async () => {
+    const { source, gate: g } = gated(makeDoc(), thirdLaneRead())
+    const lanes = new DisplayTextLaneCache()
+    const s = session(source, { maxColumns: 4, maxBytes: 8192 }, lanes)
+    const controller = new AbortController()
+    const pending = s.filter(s.identity('s'), textSpec, 0, controller.signal)
+    await g.reached
+    expect(lanes.bytes).toBe(LANE)
+    expect(s.preparedStats().bytes).toBe(LANE)
+    controller.abort()
+    await s.release()
+    // Closed: new work is refused at once ...
+    expect((await s.filter(s.identity('s'), textSpec, 0, signal())).kind).not.toBe('committed')
+    expect(g.held).toBe(true)
+    expect((await pending).kind).toBe('cancelled')
+    expect(lanes.bytes).toBe(0)
+    expect(s.preparedStats().bytes).toBe(0)
+    expect(s.memoryStats().totalBytes).toBe(0)
+    await s.release()
+    g.open()
+    expect((await pending).kind).toBe('cancelled')
     expect(lanes.bytes).toBe(0)
     expect(s.preparedStats()).toEqual({ columns: 0, bytes: 0 })
     expect(s.memoryStats().totalBytes).toBe(0)
@@ -318,7 +365,8 @@ describe('codex r3 #2: a lane a real reader holds stays charged through session 
       try { await reading.hold() } finally { lease.release() }
       return { kind: 'complete', matches: () => true }
     }
-    const s = session(createObjectWorkbookSource(makeDoc(), 'd'), { maxColumns: 4, maxBytes: 8192 }, lanes, holding)
+    const producer = tracked(holding)
+    const s = session(createObjectWorkbookSource(makeDoc(), 'd'), { maxColumns: 4, maxBytes: 8192 }, lanes, producer.evaluate)
     const controller = new AbortController()
     const pending = s.filter(s.identity('s'), { ...textSpec, columns: new Map([[0, { kind: 'number', op: 'gt', first: 0 }]]) }, 0, controller.signal)
     await reading.reached
@@ -329,7 +377,8 @@ describe('codex r3 #2: a lane a real reader holds stays charged through session 
     expect(s.preparedStats().bytes).toBe(laneBytes)
     expect(s.memoryStats().totalBytes).toBeGreaterThanOrEqual(laneBytes)
     reading.open()
-    await pending
+    expect((await pending).kind).toBe('cancelled')
+    await producer.drain()
     expect(lanes.bytes).toBe(0)
     expect(s.preparedStats().bytes).toBe(0)
     expect(s.memoryStats().totalBytes).toBe(0)
@@ -348,7 +397,8 @@ describe('codex r3 #2: a lane a real reader holds stays charged through session 
       }, input.displayLanes).then(lease => { lease.release(); return 'leased' }, error => error)
       return result === 'leased' ? { kind: 'complete', matches: () => true } : { kind: 'cancelled' }
     }
-    const s = session(createObjectWorkbookSource(makeDoc(), 'd'), { maxColumns: 4, maxBytes: 8192 }, lanes, building)
+    const producer = tracked(building)
+    const s = session(createObjectWorkbookSource(makeDoc(), 'd'), { maxColumns: 4, maxBytes: 8192 }, lanes, producer.evaluate)
     const controller = new AbortController()
     const pending = s.filter(s.identity('s'), { ...textSpec, columns: new Map([[0, { kind: 'number', op: 'gt', first: 0 }]]) }, 0, controller.signal)
     await filling.reached
@@ -359,8 +409,10 @@ describe('codex r3 #2: a lane a real reader holds stays charged through session 
     await s.release()
     expect(s.preparedStats().bytes).toBe(staged)
     expect(s.memoryStats().totalBytes).toBeGreaterThanOrEqual(staged)
+    expect((await pending).kind).toBe('cancelled')
+    expect(s.preparedStats().bytes).toBe(staged)
     filling.open()
-    await pending
+    await producer.drain()
     expect(grow).toMatchObject({ code: 'cancelled' })
     expect(lanes.bytes).toBe(0)
     expect(s.preparedStats().bytes).toBe(0)
@@ -392,11 +444,12 @@ describe('codex r3 #2: a lane a real reader holds stays charged through session 
     const { initialIdentity } = await import('../src/worker/viewerProtocol')
     const doc = makeDoc()
     const lanes = new DisplayTextLaneCache()
-    const { source: first, gate: g } = gated(doc, thirdLaneRead())
+    const first = createObjectWorkbookSource(doc, 'd'), g = gate()
+    const producer = heldLane(lanes, g, thirdLaneRead())
     let opened = 0
     const kernel = new ViewerKernel(
       { parse: async () => doc, openSource: async () => (opened++ === 0 ? first : createObjectWorkbookSource(doc, 'd')) },
-      { now: () => 0, yield: async () => {}, preparedBudget: { maxColumns: 4, maxBytes: 8192 }, filterEvaluator: createWorkerFilterEvaluator(() => new Map(), formatting, 'en-US', { lanes }) },
+      { now: () => 0, yield: async () => {}, preparedBudget: { maxColumns: 4, maxBytes: 8192 }, filterEvaluator: producer.evaluate },
     )
     const replies: { requestId: string; kind: string; result?: { kind: string } }[] = []
     const send = (command: object) => kernel.handle(command as never, out => { replies.push(out as never) })
@@ -406,6 +459,7 @@ describe('codex r3 #2: a lane a real reader holds stays charged through session 
     const old = kernel.session('d')!
     const filtering = send({ kind: 'filter', requestId: 'f1', owner: initialIdentity('d', 's'), spec: textSpec, nowMs: 0 })
     await g.reached
+    const oldDrain = producer.drain()
     await send({ kind: 'close', requestId: 'c1', docId: 'd' })
     expect(outcome('c1')).toMatchObject({ kind: 'complete' })
     expect(old.memoryStats().totalBytes).toBeGreaterThanOrEqual(LANE)
@@ -418,6 +472,7 @@ describe('codex r3 #2: a lane a real reader holds stays charged through session 
     expect(old.memoryStats().totalBytes).toBeGreaterThanOrEqual(LANE)
     g.open()
     await filtering
+    await oldDrain
     expect(outcome('f1')?.kind).not.toBe('complete')
     expect(old.memoryStats().totalBytes).toBe(0)
     expect(old.preparedStats().bytes).toBe(0)
@@ -522,17 +577,25 @@ describe('codex r4 #2: a raw prepared column a real sort still leases stays char
   }
 
   for (const end of ['cancel', 'normal', 'error'] as const) {
-    it(`close while the sort reads keeps the column charged until the lease drains (${end})`, async () => {
+    it(`a held external host yield ${end === 'cancel' ? 'allows the cancelled sort lease to drain' : 'keeps the live sort lease charged until exit'} (${end})`, async () => {
       const { s, g, bytes, controller, pending } = await heldSort(end === 'error')
       expect(bytes).toBeGreaterThan(0)
       if (end === 'cancel') controller.abort()
-      // Close does not wait for the paused (signal-ignoring) reader.
+      // Close returns while the external host-yield callback is still paused.
       await s.release()
-      expect(s.preparedStats().bytes).toBe(bytes)
-      expect(s.memoryStats().totalBytes).toBeGreaterThanOrEqual(bytes)
+      expect(s.preparedStats().bytes).toBe(end === 'cancel' ? 0 : bytes)
+      if (end === 'cancel') {
+        expect(g.held).toBe(true)
+        expect((await pending).kind).toBe('cancelled')
+        expect(s.memoryStats().totalBytes).toBe(0)
+      } else expect(s.memoryStats().totalBytes).toBeGreaterThanOrEqual(bytes)
       await s.release()
-      expect(s.preparedStats().bytes).toBe(bytes)
-      expect(s.memoryStats().totalBytes).toBeGreaterThanOrEqual(bytes)
+      expect(s.preparedStats().bytes).toBe(end === 'cancel' ? 0 : bytes)
+      if (end === 'cancel') {
+        expect(g.held).toBe(true)
+        expect((await pending).kind).toBe('cancelled')
+        expect(s.memoryStats().totalBytes).toBe(0)
+      } else expect(s.memoryStats().totalBytes).toBeGreaterThanOrEqual(bytes)
       g.open()
       expect((await pending).kind).not.toBe('committed')
       expect(s.preparedStats()).toEqual({ columns: 0, bytes: 0 })

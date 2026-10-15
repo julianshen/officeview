@@ -771,7 +771,7 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
       return
     }
     const abort = new AbortController()
-    const resources = controlResources.current ??= createViewerControlResources(profile, undefined, mainLedger)
+    const resources = controlResources.current ??= createViewerControlResources(remote?.profile ?? profile, undefined, mainLedger)
     const sheetId = activeSheetId
     const ready = viewerControls({ doc, source, resources, sheetId, ledger: mainLedger, snapshot: () => snapshot(sheetId),
       view: () => ({ ...current.current.entryFor(sheetId).view, selection: session.get(sheetId).selection }),

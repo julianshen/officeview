@@ -275,7 +275,7 @@ export class SheetTileRenderer {
       kind = result.pending ? 'pending' : result.kind
       const resource = result.diagnostics.find(d => d.code === 'overflow-memory')
       if (resource) work.resourceNotice = resource.message
-      if (result.kind === 'detail') work = { records: result.work.records, gridlines: result.work.gridlines }
+      if (result.kind === 'detail') work = { ...work, records: result.work.records, gridlines: result.work.gridlines }
       this.stats.maxTileRecords = Math.max(this.stats.maxTileRecords, work.records)
     }
     surface.cost = work

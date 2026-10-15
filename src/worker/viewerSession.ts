@@ -2050,6 +2050,9 @@ export class DocumentSession {
       return this.commitOutcome(() => this.commitDraft(owner, {
         order: state.order, visibility: projected.visibility, sort: state.sort, filter: normalized, matches,
       }))
+    } catch (cause) {
+      if (signal.aborted && cause instanceof DOMException && cause.name === 'AbortError') return { kind: 'cancelled' }
+      throw cause
     } finally {
       metricsCharge.release()
       charge.release()

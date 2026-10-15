@@ -292,45 +292,67 @@ export async function viewerControls(options: ViewerControlsOptions, signal: Abo
     const borrowed: WorkbookSource = { ...source, store: id => controlSourceStore(source.store(id), memory), bindMemory: undefined, release: async () => {} }
     const flagsAccount = memory.reserve(), sessionMetadata = memory.reserve()
     // Session/pool descriptors, their empty maps, and bounded draft/guard records.
-    sessionMetadata.charge(4096)
+    // The extra 512 B conservatively covers the state, helper closures and
+    // third weak adoption target; admit it before creating those records.
+    sessionMetadata.charge(4096 + 512)
+    const state: { producer: 'new' | 'running' | 'done'; consumerDone: boolean; drained: boolean; flags: Uint8Array | undefined } = {
+      producer: 'new', consumerDone: false, drained: false, flags: undefined,
+    }
+    const drain = () => {
+      if (state.drained || !state.consumerDone || state.producer === 'running') return
+      state.drained = true
+      state.flags = undefined
+      flagsAccount.release()
+    }
+    // Keep the retained handle outside the evaluator's cooperative request scope.
+    const createMatcher = (flags: typeof state, offset: number) => (row: number) => {
+      if (!flags.flags) throw new ValueIndexError('cancelled', 'Evaluator matcher released')
+      return Boolean(flags.flags[row - offset])
+    }
     let engine: DocumentSession
     try { engine = new DocumentSession(owner.docId, borrowed, { profile: memory.profile, workerBudgetBytes: memory.limitBytes, allocation: memory, filterEvaluator: async ({ spec: filter, signal: request, cooperate }) => {
-      flagsAccount.charge(filter.range.r1 - filter.range.r0 + 1 + 128)
-      const flags = new Uint8Array(filter.range.r1 - filter.range.r0 + 1).fill(1)
-      const r0 = filter.range.r0 + filter.range.headerRows, r1 = filter.range.r1 - filter.range.totalsRows
-      for (const [col, rule] of filter.columns) {
-        await classify(owner, filter.range, col, request)
-        const domain = identity(owner, filter.range, col)
-        const membership = rule.kind === 'values' ? await compileValuesMembership(rule, domain, runs, { cache, signal: request }) : undefined
-        const match = membership?.matches ?? new FilterEngine(filterContext).compileRule(rule, domain.classification, { signal: request })
-        let lease
-        try {
-          lease = needsDisplayText(rule, domain.classification)
-            ? await lanes.lease({ docId: owner.docId, sheetId: owner.sheetId, valueGen: owner.valueGen, styleOwner, col, r0, r1 }, sink => pages(owner, filter.range, col, request, async (page, first) => {
+      if (state.producer !== 'new' || state.consumerDone || state.drained || request.aborted || disposed || resources.closed) throw new ValueIndexError('cancelled', 'Evaluator closed')
+      state.producer = 'running'
+      try {
+        flagsAccount.charge(filter.range.r1 - filter.range.r0 + 1 + 128)
+        state.flags = new Uint8Array(filter.range.r1 - filter.range.r0 + 1).fill(1)
+        const r0 = filter.range.r0 + filter.range.headerRows, r1 = filter.range.r1 - filter.range.totalsRows
+        for (const [col, rule] of filter.columns) {
+          await classify(owner, filter.range, col, request)
+          const domain = identity(owner, filter.range, col)
+          const membership = rule.kind === 'values' ? await compileValuesMembership(rule, domain, runs, { cache, signal: request }) : undefined
+          const match = membership?.matches ?? new FilterEngine(filterContext).compileRule(rule, domain.classification, { signal: request })
+          let lease
+          try {
+            lease = needsDisplayText(rule, domain.classification)
+              ? await lanes.lease({ docId: owner.docId, sheetId: owner.sheetId, valueGen: owner.valueGen, styleOwner, col, r0, r1 }, sink => pages(owner, filter.range, col, request, async (page, first) => {
+                for (let i = 0; i < page.count; i++) {
+                  request.throwIfAborted()
+                  display(page, i, text => sink.add(first + i - r0, text))
+                  if (cooperate?.due(1)) await cooperate.pause('filter')
+                }
+              }))
+              : undefined
+          } catch (error) {
+            membership?.release()
+            if (error instanceof ValueIndexError && error.code === 'quota') return { kind: 'refused', refusal: { reason: 'resource-limit', message: error.message } }
+            throw error
+          }
+          try {
+            await pages(owner, filter.range, col, request, async (page, first) => {
               for (let i = 0; i < page.count; i++) {
                 request.throwIfAborted()
-                display(page, i, text => sink.add(first + i - r0, text))
+                if (!match(prepared(page, i, lease?.lane.text(first + i - r0)))) state.flags![first + i - filter.range.r0] = 0
                 if (cooperate?.due(1)) await cooperate.pause('filter')
               }
-            }))
-            : undefined
-        } catch (error) {
-          membership?.release()
-          if (error instanceof ValueIndexError && error.code === 'quota') return { kind: 'refused', refusal: { reason: 'resource-limit', message: error.message } }
-          throw error
+            })
+          } finally { lease?.release(); membership?.release() }
         }
-        try {
-          await pages(owner, filter.range, col, request, async (page, first) => {
-            for (let i = 0; i < page.count; i++) {
-              request.throwIfAborted()
-              if (!match(prepared(page, i, lease?.lane.text(first + i - r0)))) flags[first + i - filter.range.r0] = 0
-              if (cooperate?.due(1)) await cooperate.pause('filter')
-            }
-          })
-        } finally { lease?.release(); membership?.release() }
-      }
-      return { kind: 'complete', matches: row => Boolean(flags[row - filter.range.r0]) }
-    } }) } catch (error) { sessionMetadata.release(); throw error }
+        if (state.consumerDone || request.aborted || disposed || resources.closed) throw new ValueIndexError('cancelled', 'Evaluator closed')
+        return { kind: 'complete', matches: createMatcher(state, filter.range.r0) }
+      } finally { state.producer = 'done'; drain() }
+    } }) } catch (error) { state.consumerDone = true; drain(); sessionMetadata.release(); throw error }
+    let primaryFailure = false
     try {
       if (store.stamp.valueGen > engine.identity(sheetId).valueGen) engine.publishValues(sheetId)
       let visibility: CompactRowVisibility
@@ -352,13 +374,25 @@ export async function viewerControls(options: ViewerControlsOptions, signal: Abo
       const draft = outcome.view
       return { kind: 'ready', publish: () => disposed || resources.closed ? null : options.publish(draft) }
     } catch (error) {
+      if (abort.aborted || disposed || resources.closed) return { kind: 'cancelled' }
       if (error instanceof ValueIndexError && error.code === 'quota') return { kind: 'refused', refusal: { reason: 'resource-limit', message: error.message } }
+      primaryFailure = true
       throw error
     } finally {
-      await engine.release()
-      flagsAccount.release()
-      sessionMetadata.adopt([engine, engine.memory])
-      sessionMetadata.release()
+      let cleanupFailed = false, cleanupError: unknown
+      try { await engine.release() }
+      catch (error) { cleanupFailed = true; cleanupError = error }
+      try {
+        state.consumerDone = true
+        drain()
+        // Atomic adoption keeps the explicit reservation on registration failure.
+        sessionMetadata.adopt([engine, engine.memory, state])
+        sessionMetadata.release()
+      } catch (error) {
+        if (!cleanupFailed) { cleanupFailed = true; cleanupError = error }
+      }
+      // Cleanup still completes, but cannot replace the producer's primary error.
+      if (cleanupFailed && !primaryFailure) throw cleanupError
     }
   }
   const stage: typeof stageOwned = async (kind, spec, owner, outer, progress) => {
