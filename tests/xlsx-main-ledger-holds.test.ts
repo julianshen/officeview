@@ -45,5 +45,19 @@ describe('held lifetime charges (MainMemoryLedger.chargeWhileHeld)', () => {
     hold.release()
     expect(ledger.bytes).toBe(5)
   })
+  it('a held adoption split across reservations is one charge: one hold covers every part', () => {
+    const ledger = new MainMemoryLedger({ register() {} })
+    ledger.set('controls', 'a', 30); ledger.set('controls', 'b', 20)
+    const mask = {}, targets = [mask]
+    ledger.adoptWhileReachable('controls', 'a', 'controls', targets, 30, undefined, true)
+    ledger.adoptWhileReachable('controls', 'b', 'controls', targets, 20, undefined, true)
+    expect(ledger.bytes).toBe(50)
+    const hold = ledger.hold(mask)!
+    hold.release()
+    expect(ledger.bytes, 'both parts end with the last holder').toBe(0)
+    const again = ledger.hold(mask)!
+    expect(ledger.bytes).toBe(50)
+    again.release()
+    expect(ledger.bytes).toBe(0)
+  })
 })
-

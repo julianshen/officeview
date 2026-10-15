@@ -70,7 +70,7 @@ export interface PoolEntry {
 export interface PoolCharge {
   /** Moves a closing retained owner without changing its main debit. */
   take(entry: PoolEntry): void
-  adopt(targets: readonly object[], bytes: number): void
+  adopt(targets: readonly object[], bytes: number, held?: boolean): void
   readonly bytes: number
   /** Resizes the charge, evicting retained data to make room; false (and
    * unchanged) when the bytes cannot fit under the hard limit. */
@@ -215,10 +215,10 @@ export class MemoryPool {
         held += entry.bytes
         pool.transient += entry.bytes
       },
-      adopt(targets, bytes) {
+      adopt(targets, bytes, held) {
         if (bytes > debit()) { if (!account) return; throw new RangeError('Invalid pool adoption') }
         let transfer = bytes
-        for (const owner of [account, ...taken]) if (owner && transfer) { const n = Math.min(transfer, owner.bytes); if (n) owner.adopt(targets, n); transfer -= n }
+        for (const owner of [account, ...taken]) if (owner && transfer) { const n = Math.min(transfer, owner.bytes); if (n) owner.adopt(targets, n, undefined, held); transfer -= n }
         adopted += bytes
       },
       release() { pool.transient -= held; held = 0; account?.release(); for (const owner of taken) owner.release() },

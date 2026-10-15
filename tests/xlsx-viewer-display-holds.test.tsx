@@ -159,22 +159,28 @@ it('C3 geometry: replaced paged projections end with their last display, so repe
   } finally { await remote.close() }
 })
 
-it('C3 resident: repeated header sorts keep the resident geometry and view-buffer pools flat', async () => {
+it('C3 resident: repeated header sorts keep resident geometry, view buffers and the sorted views\' masks from accumulating', async () => {
   const doc = docOf()
   let ledger!: import('../src/xlsx/view/mainLedger').MainMemoryLedger
   const ui = render(<InteractiveSheetDoc doc={doc} onMainLedger={value => { ledger = value }} />)
   await loaded(ui)
   const header = () => ui.getByRole('columnheader', { name: /^Column A/ })
-  const pools: { geometry: number; viewBuffers: number }[] = []
+  const pools: { geometry: number; viewBuffers: number; controls: number }[] = []
   for (let i = 0; i < 6; i++) {
     const before = header().getAttribute('aria-sort')
     fireEvent.click(ui.getByRole('button', { name: 'Cycle sort column A' }))
     await waitFor(() => expect(header().getAttribute('aria-sort')).not.toBe(before))
     await act(async () => { await new Promise(resolve => setTimeout(resolve, 0)) })
-    const { geometry, viewBuffers } = ledger.snapshot().byPool
-    pools.push({ geometry, viewBuffers })
+    const { geometry, viewBuffers, controls } = ledger.snapshot().byPool
+    pools.push({ geometry, viewBuffers, controls })
   }
   // ascending, descending, clear: the same point of each cycle costs the same.
-  for (let i = 3; i < pools.length; i++) expect(pools[i], JSON.stringify(pools)).toEqual(pools[i - 3])
+  for (let i = 3; i < pools.length; i++) {
+    expect({ geometry: pools[i].geometry, viewBuffers: pools[i].viewBuffers }, JSON.stringify(pools)).toEqual({ geometry: pools[i - 3].geometry, viewBuffers: pools[i - 3].viewBuffers })
+    // Each resident sort publishes a full-axis display mask (~132 KiB): replaced
+    // ones end with their display. Only small per-operation records (kept for a
+    // provider that may ignore cancellation) remain until collection.
+    expect(pools[i].controls - pools[i - 3].controls, JSON.stringify(pools)).toBeLessThan(64 * 1024)
+  }
   ui.unmount()
 })

@@ -658,7 +658,7 @@ class GuardHalt extends Error {
 }
 /** One operation's share of the document pool's transient ledger; `set` is
  * absolute and false when the bytes cannot be admitted. */
-interface Charge { set(bytes: number): boolean; release(): void; adopt?(targets: readonly object[], bytes: number): void }
+interface Charge { set(bytes: number): boolean; release(): void; adopt?(targets: readonly object[], bytes: number, held?: boolean): void }
 /** Abandons a guard whose scratch buffer could not be admitted. */
 class QuotaHalt extends Error {
   constructor(readonly requiredBytes: number) { super('quota') }
@@ -847,7 +847,7 @@ export class DocumentSession {
     try {
       account.charge(words * 2 + 4 * (Math.ceil(MAX_ROWS / 1024) + 1) + 1024)
       const visibility = build()
-      account.adopt([visibility, visibility.words, visibility.words.buffer, visibility.summaries, visibility.summaries.buffer], maskBytes(visibility) + 1024)
+      account.adopt([visibility, visibility.words, visibility.words.buffer, visibility.summaries, visibility.summaries.buffer], maskBytes(visibility) + 1024, undefined, true)
       return visibility
     } finally { account.release() }
   }
@@ -1126,7 +1126,7 @@ export class DocumentSession {
         this.peakTransient = Math.max(this.peakTransient, this.memory.transientBytes)
         return true
       },
-      adopt: (targets, bytes) => share.adopt(targets, bytes),
+      adopt: (targets, bytes, held) => share.adopt(targets, bytes, held),
       release: () => { released = true; share.release() },
     }
   }
@@ -1889,7 +1889,7 @@ export class DocumentSession {
       // The draft's bytes become the retained view: uncharge them first so the
       // commit never counts them twice. Recipe: the sort pinned exactly the rows
       // hidden by the filter it ran under.
-      charge.adopt?.([projected.visibility, projected.visibility.words, projected.visibility.words.buffer, projected.visibility.summaries, projected.visibility.summaries.buffer], maskBytes(projected.visibility) + (this.options.allocation ? 1024 : 0))
+      charge.adopt?.([projected.visibility, projected.visibility.words, projected.visibility.words.buffer, projected.visibility.summaries, projected.visibility.summaries.buffer], maskBytes(projected.visibility) + (this.options.allocation ? 1024 : 0), true)
       charge.set(0)
       return this.commitOutcome(() => this.commitDraft(owner, {
         order: result.order, visibility: projected.visibility, sort: spec, filter: state.filter, matches: state.matches,
@@ -2045,7 +2045,7 @@ export class DocumentSession {
       if (halt) return halt
       hooks.progress?.(3, VIEW_OPERATION_STAGES)
       // The draft mask becomes the retained view (no double count at commit).
-      charge.adopt?.([projected.visibility, projected.visibility.words, projected.visibility.words.buffer, projected.visibility.summaries, projected.visibility.summaries.buffer], maskBytes(projected.visibility) + (this.options.allocation ? 1024 : 0))
+      charge.adopt?.([projected.visibility, projected.visibility.words, projected.visibility.words.buffer, projected.visibility.summaries, projected.visibility.summaries.buffer], maskBytes(projected.visibility) + (this.options.allocation ? 1024 : 0), true)
       charge.set(0)
       metricsCharge.set(0)
       return this.commitOutcome(() => this.commitDraft(owner, {

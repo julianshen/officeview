@@ -94,8 +94,9 @@ export interface CollectionWatcher { register(target: object, token: string): vo
 let lifetimeSerial = 0
 /** One owner's claim on a held charge (chargeWhileHeld). Releasing twice is a no-op. */
 export interface LedgerHold { release(): void }
-/** A held lifetime charge: its targets, bytes and current holders. */
-interface HeldCharge { pool: MainPool; bytes: number; targets: readonly object[]; token: string; holders: number; ended: boolean }
+/** A held lifetime charge: its targets, bytes (one or more lifetime tokens: an
+ * adoption may be split across reservations) and current holders. */
+interface HeldCharge { pool: MainPool; bytes: number; targets: readonly object[]; tokens: string[]; holders: number; ended: boolean }
 
 export class MainMemoryLedger {
   private readonly charges = new Map<string, { pool: MainPool; bytes: number }>()
@@ -145,9 +146,15 @@ export class MainMemoryLedger {
    */
   chargeWhileHeld(pool: MainPool, targets: readonly object[], bytes: number): string {
     const token = this.chargeWhileReachable(pool, targets, bytes)
-    const charge: HeldCharge = { pool, bytes, targets, token, holders: 0, ended: false }
-    for (const target of targets) if (!this.held.has(target)) this.held.set(target, charge)
+    this.holdable(pool, targets, token, bytes)
     return token
+  }
+  private holdable(pool: MainPool, targets: readonly object[], token: string, bytes: number): void {
+    // The remaining parts of one split adoption join the charge its first part made.
+    const part = this.held.get(targets[0])
+    if (part && !part.ended && !part.holders && part.pool === pool && part.targets === targets) { part.tokens.push(token); part.bytes += bytes; return }
+    const charge: HeldCharge = { pool, bytes, targets, tokens: [token], holders: 0, ended: false }
+    for (const target of targets) if (!this.held.has(target)) this.held.set(target, charge)
   }
   /**
    * Another owner of the held charge `target` belongs to; null when it has none
@@ -159,14 +166,15 @@ export class MainMemoryLedger {
     const charge = this.held.get(target)
     if (!charge) return null
     if (charge.ended) {
+      const token = `life${++lifetimeSerial}`
       charge.ended = false
-      charge.token = `life${++lifetimeSerial}`
-      this.set(charge.pool, charge.token, charge.bytes)
-      this.lifetimes.set(charge.token, charge.pool)
-      for (const item of charge.targets) if (!this.hasLifetime(item)) this.leases.set(item, charge.token)
+      charge.tokens = [token]
+      this.set(charge.pool, token, charge.bytes)
+      this.lifetimes.set(token, charge.pool)
+      for (const item of charge.targets) if (!this.hasLifetime(item)) this.leases.set(item, token)
       if (this.watcher) {
-        this.alive.set(charge.token, { pool: charge.pool, owner: charge.token, remaining: charge.targets.length })
-        for (const item of charge.targets) this.watcher.register(item, charge.token)
+        this.alive.set(token, { pool: charge.pool, owner: token, remaining: charge.targets.length })
+        for (const item of charge.targets) this.watcher.register(item, token)
       }
     }
     charge.holders++
@@ -174,12 +182,14 @@ export class MainMemoryLedger {
     return { release: () => {
       if (!held) return
       held = false
-      if (--charge.holders === 0 && !charge.ended) { charge.ended = true; this.end(charge.token) }
+      if (--charge.holders === 0 && !charge.ended) this.endHeld(charge)
     } }
   }
+  private endHeld(charge: HeldCharge): void { charge.ended = true; for (const token of charge.tokens) this.end(token) }
   private readonly held = new WeakMap<object, HeldCharge>()
-  /** Transfers already-admitted bytes without a double charge or refund gap. */
-  adoptWhileReachable(fromPool: MainPool, fromOwner: string, pool: MainPool, targets: readonly object[], bytes: number, commit?: () => void): string {
+  /** Transfers already-admitted bytes without a double charge or refund gap;
+   * `held` makes the adopted charge holdable, as chargeWhileHeld. */
+  adoptWhileReachable(fromPool: MainPool, fromOwner: string, pool: MainPool, targets: readonly object[], bytes: number, commit?: () => void, held = false): string {
     const key = `${fromPool}\u0000${fromOwner}`, charge = this.charges.get(key)
     if (!targets.length || !Number.isSafeInteger(bytes) || bytes < 0 || !charge || bytes > charge.bytes) throw new RangeError('Invalid lifetime adoption')
     const token = `life${++lifetimeSerial}`
@@ -197,6 +207,7 @@ export class MainMemoryLedger {
     this.lifetimes.set(token, pool)
     for (const target of targets) if (!this.leases.has(target)) this.leases.set(target, token)
     if (this.watcher) this.alive.set(token, { pool, owner: token, remaining: targets.length })
+    if (held) this.holdable(pool, targets, token, bytes)
     return token
   }
   /** Whether an allocation already has a live reachability owner. */
@@ -217,8 +228,8 @@ export class MainMemoryLedger {
     if (token === undefined) return
     this.leases.delete(target)
     const charge = this.held.get(target)
-    if (charge?.token === token) charge.ended = true
-    this.end(token)
+    if (charge?.tokens.includes(token)) this.endHeld(charge)
+    else this.end(token)
   }
   /** Ends one lifetime charge now; later collection of its targets is a no-op. */
   private end(token: string): void {

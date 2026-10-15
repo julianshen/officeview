@@ -287,7 +287,8 @@ export async function viewerControls(options: ViewerControlsOptions, signal: Abo
     if (disposed || resources.closed) return { kind: 'cancelled' }
     if (options.remote) return stageRemote(options.remote, kind, spec, owner, abort, progress)
     const before = options.view(), filterContext = context()
-    if (before.visibility instanceof CompactRowVisibility) controlView(memory, before.order, before.visibility)
+    // This operation reads the displayed view until it ends: it holds it too.
+    const releaseBefore = before.visibility instanceof CompactRowVisibility ? controlView(memory, before.order, before.visibility, true) : () => {}
     // Borrow the source: closing a private draft releases only its own caches.
     const borrowed: WorkbookSource = { ...source, store: id => controlSourceStore(source.store(id), memory), bindMemory: undefined, release: async () => {} }
     const flagsAccount = memory.reserve(), sessionMetadata = memory.reserve()
@@ -351,7 +352,7 @@ export async function viewerControls(options: ViewerControlsOptions, signal: Abo
         if (state.consumerDone || request.aborted || disposed || resources.closed) throw new ValueIndexError('cancelled', 'Evaluator closed')
         return { kind: 'complete', matches: createMatcher(state, filter.range.r0) }
       } finally { state.producer = 'done'; drain() }
-    } }) } catch (error) { state.consumerDone = true; drain(); sessionMetadata.release(); throw error }
+    } }) } catch (error) { state.consumerDone = true; drain(); sessionMetadata.release(); releaseBefore(); throw error }
     let primaryFailure = false, primaryError: unknown
     try {
       if (store.stamp.valueGen > engine.identity(sheetId).valueGen) engine.publishValues(sheetId)
@@ -362,7 +363,7 @@ export async function viewerControls(options: ViewerControlsOptions, signal: Abo
         try {
           converted.charge(2 * Math.ceil(1048576 / 32) * 4 + 4 * (Math.ceil(1048576 / 1024) + 1))
           visibility = createRowVisibility(1048576, slot => before.visibility.visible(slot))
-          converted.adopt([visibility, visibility.words, visibility.words.buffer, visibility.summaries, visibility.summaries.buffer], visibility.words.byteLength + visibility.summaries.byteLength)
+          converted.adopt([visibility, visibility.words, visibility.words.buffer, visibility.summaries, visibility.summaries.buffer], visibility.words.byteLength + visibility.summaries.byteLength, undefined, true)
         } finally { converted.release() }
       }
       engine.commitDraft(engine.identity(sheetId), { ...before, visibility, matches: row => before.visibility.visible(before.order.sourceToDisplay(row)) })
@@ -386,6 +387,7 @@ export async function viewerControls(options: ViewerControlsOptions, signal: Abo
       let cleanupFailed = false, cleanupError: unknown
       try { await engine.release() }
       catch (error) { cleanupFailed = true; cleanupError = error }
+      releaseBefore()
       try {
         state.consumerDone = true
         drain()
