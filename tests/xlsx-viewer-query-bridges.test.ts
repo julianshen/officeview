@@ -347,6 +347,60 @@ it('clears a same-scope timeout notice after a successful overview retry', async
   } finally { await h.remote.release(); vi.useRealTimers() }
 })
 
+it.each([false, true])('keeps drawing timeouts out of the range-query notice (prior overview timeout: %s)', async priorTimeout => {
+  vi.useFakeTimers()
+  const doc = document(), source = createObjectWorkbookSource(doc, 'doc')
+  const query: OverviewQuery = { groups: [{ groupId: 'g', rows: { kind: 'intervals', intervals: [{ r0: 0, r1: 4 }] }, cols: [{ c0: 0, c1: 0 }] }], maxGroups: 1 }
+  let release!: () => void
+  const held = new Promise<void>(resolve => { release = resolve })
+  const provider = vi.spyOn(source.store('s'), 'readDrawings').mockImplementation(async () => {
+    await held
+    return { completeness: 'complete', drawings: [], images: [], diagnostics: [], bytes: 0 }
+  })
+  const h = await harness(doc, source), store = h.remote.store('s')
+  const options = { signal: new AbortController().signal, stamp: store.stamp }
+  try {
+    if (priorTimeout) {
+      vi.spyOn(h.source.store('s'), 'queryOverview').mockImplementationOnce(() => new Promise(() => {}))
+      const pending = store.queryOverview(query, options)
+      await vi.advanceTimersByTimeAsync(120_001)
+      await pending
+      expect(h.remote.queryNotice).toMatch(/timed out after 120 seconds/)
+    }
+    const notice = h.remote.queryNotice
+    const pending = h.remote.request({ kind: 'read', requestId: h.remote.nextRequestId(), owner: h.remote.identity('s'), query: { op: 'drawings' } })
+    await vi.advanceTimersByTimeAsync(120_001)
+    expect(provider).toHaveBeenCalledTimes(1)
+    expect(await pending).toMatchObject({ kind: 'cancelled', diagnostics: [{ code: 'query-timeout' }] })
+    expect(h.remote.queryNotice, 'Drawing failures belong to the drawing cache, not the range-query notice').toBe(notice)
+    expect(await store.queryOverview(query, options)).toMatchObject({ completeness: 'complete' })
+    expect(h.remote.queryNotice, 'Drawing traffic must not steal the overview notice scope').toBeUndefined()
+  } finally { release(); await h.remote.release(); vi.restoreAllMocks(); vi.useRealTimers() }
+})
+
+it('diagnoses exhausted drawing timeout retries without leaving a smaller-range notice', async () => {
+  vi.useFakeTimers()
+  const doc = document(), source = createObjectWorkbookSource(doc, 'doc')
+  let release!: () => void
+  const held = new Promise<void>(resolve => { release = resolve })
+  const provider = vi.spyOn(source.store('s'), 'readDrawings').mockImplementation(async () => {
+    await held
+    return { completeness: 'complete', drawings: [], images: [], diagnostics: [], bytes: 0 }
+  })
+  const h = await harness(doc, source)
+  try {
+    h.remote.merges('s')
+    await vi.advanceTimersByTimeAsync(0)
+    expect(h.remote.loadState('s')).toEqual({ completeness: 'complete' })
+    const content = h.remote.drawings('s')
+    await vi.advanceTimersByTimeAsync(20 * 120_000 + 19 * 250 + 1)
+    expect(provider).toHaveBeenCalledTimes(20)
+    expect(content).toMatchObject({ state: 'failed', diagnostics: [{ code: 'drawings-unavailable', message: 'Drawings could not be loaded' }] })
+    expect(h.remote.queryNotice).toBeUndefined()
+    expect(h.kernel.lifecycleStats()).toMatchObject({ inflight: 0, transientBytes: 0 })
+  } finally { release(); await h.remote.release(); vi.restoreAllMocks(); vi.useRealTimers() }
+})
+
 it('counts unavailable uncached engine formulas and excludes authored hidden columns in worker search', async () => {
   const doc = workbookOf([{ sheetId: 's', cells: [{ row: 0, col: 0, value: 'alpha' }, { row: 1, col: 0, value: { unavailable: true } }, { row: 0, col: 1, value: 'alpha-hidden' }] }])
   doc.sheets[0].cols = [{ min: 1, max: 1, hidden: true }]
