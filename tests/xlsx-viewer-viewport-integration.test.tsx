@@ -356,6 +356,24 @@ describe('feature flag and document-owned zoom (S5.2)', () => {
     const off = render(<OfficeDoc document={doc} interactiveSheets={false} />)
     await waitFor(() => expect(off.container.querySelectorAll('canvas')).toHaveLength(2))
     const pixels = (root: HTMLElement) => [...root.querySelectorAll('canvas')].map(c => (c as HTMLCanvasElement).toDataURL())
+    // DOM nodes precede PageCanvas's passive paint effect. Require the
+    // expected backing size and dark ink inside each populated cell.
+    await waitFor(() => {
+      for (const root of [legacy.container, off.container]) {
+        const canvases = [...root.querySelectorAll('canvas')]
+        expect(canvases).toHaveLength(2)
+        for (const [index, canvas] of canvases.entries()) {
+          expect([canvas.width, canvas.height]).toEqual([128, 40])
+          const [x, y, width, height] = index === 0 ? [4, 4, 120, 32] : [66, 22, 60, 16]
+          const data = canvas.getContext('2d')!.getImageData(x, y, width, height).data
+          let ink = 0
+          for (let i = 0; i < data.length; i += 4) {
+            if (data[i + 3] > 0 && Math.max(data[i], data[i + 1], data[i + 2]) < 128) ink++
+          }
+          expect(ink).toBeGreaterThan(0)
+        }
+      }
+    })
     expect(pixels(off.container)).toEqual(pixels(legacy.container))
   })
 

@@ -220,7 +220,7 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
   // The viewer's own pools end with the viewer; lifetime charges (geometry,
   // views, replies, the resident document) end when nothing reaches them.
   // Submitted clipboard jobs retain their own charge until they settle.
-  useEffect(() => () => { for (const pool of ['dom', 'canvasText', 'layout', 'merges', 'controls'] as const) mainLedger.releaseAll(pool) }, [mainLedger])
+  useEffect(() => () => { for (const pool of ['dom', 'canvasText', 'layout', 'merges'] as const) mainLedger.releaseAll(pool) }, [mainLedger])
   // A resident document's parsed model lives on the main thread while reachable.
   useMemo(() => { if (!remote) mainLedger.chargeWhileReachable('document', [doc], estimatePayloadBytes(doc)) }, [mainLedger, remote, doc])
   const onMainLedger = props.onMainLedger
@@ -287,8 +287,8 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
     const targets: object[] = []
     let bytes = 0
     const orderBytes = (order as { diagnostics?: { typedArrayBytes?: number } } | null)?.diagnostics?.typedArrayBytes ?? 0
-    if (order && orderBytes > 0 && !viewCharged.has(order)) { targets.push(order); bytes += orderBytes; viewCharged.add(order) }
-    if (visibility instanceof CompactRowVisibility && !viewCharged.has(visibility)) { targets.push(visibility); bytes += visibility.words.byteLength + visibility.summaries.byteLength; viewCharged.add(visibility) }
+    if (order && orderBytes > 0 && !viewCharged.has(order) && !mainLedger.hasLifetime(order)) { targets.push(order, ...order.bands.flatMap(band => [band.sourceAtOffset, band.sourceAtOffset.buffer, band.displayOffsetOfSource, band.displayOffsetOfSource.buffer])); bytes += orderBytes; viewCharged.add(order) }
+    if (visibility instanceof CompactRowVisibility && !viewCharged.has(visibility) && !mainLedger.hasLifetime(visibility)) { targets.push(visibility, visibility.words, visibility.words.buffer, visibility.summaries, visibility.summaries.buffer); bytes += visibility.words.byteLength + visibility.summaries.byteLength; viewCharged.add(visibility) }
     if (targets.length) mainLedger.chargeWhileReachable('viewBuffers', targets, bytes)
   }
   const entryFor = (sheetId: string): SheetEntry => {
@@ -468,7 +468,6 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
     for (const sheetEntry of entries.values()) { layout += sheetEntry.layoutCache.stats.bytes; merges += sheetEntry.merges.bytes }
     mainLedger.set('layout', 'caches', layout)
     mainLedger.set('merges', 'caches', merges)
-    mainLedger.set('controls', 'resources', controlResources.current?.cache.usedBytes ?? 0)
     // Every element the viewer renders (its toolbar, navigation, headers and
     // status as well as the pane), each with its React fiber and props.
     mainLedger.set('dom', 'grid', domClassBytes(domClassCounts(rootRef.current ?? paneRef.current)))
@@ -772,7 +771,7 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
       return
     }
     const abort = new AbortController()
-    const resources = controlResources.current ??= createViewerControlResources(profile, bytes => mainLedger.set('controls', 'resources', bytes))
+    const resources = controlResources.current ??= createViewerControlResources(profile, undefined, mainLedger)
     const sheetId = activeSheetId
     const ready = viewerControls({ doc, source, resources, sheetId, ledger: mainLedger, snapshot: () => snapshot(sheetId),
       view: () => ({ ...current.current.entryFor(sheetId).view, selection: session.get(sheetId).selection }),
