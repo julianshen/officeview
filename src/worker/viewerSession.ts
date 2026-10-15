@@ -2051,10 +2051,10 @@ export class DocumentSession {
         order: state.order, visibility: projected.visibility, sort: state.sort, filter: normalized, matches,
       }))
     } catch (cause) {
-      // Unlike sort() which is an internal kernel sort with token-based cooperative
-      // yield checks, filter() invokes external host-provided evaluators and display
-      // lane leases that reject with a raw DOMException('AbortError') across the boundary.
-      // Map that caller abort to { kind: 'cancelled' } rather than unhandled rejection.
+      // The AbortError comes from the session's own interruptibleStore facade (viewerAbort.ts:15,
+      // installed at viewerSession.ts:706) plus the evaluator's throwIfAborted; sort() handles
+      // the facade through its own path. Map that abort to { kind: 'cancelled' } rather than
+      // an unhandled rejection.
       if (signal.aborted && cause instanceof DOMException && cause.name === 'AbortError') return { kind: 'cancelled' }
       throw cause
     } finally {

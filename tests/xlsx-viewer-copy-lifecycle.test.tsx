@@ -373,3 +373,35 @@ it('diagnostic adoption immediately debits the admission lease before its next s
   await act(async () => writes.jobs[0].resolve())
   expect(ledger.snapshot().byPool.copy).toBe(0)
 })
+
+it('an M viewer on a D remote gets copy admission at the D budget', async () => {
+  const copying = await import('../src/xlsx/view/copy')
+  const actualCopy = copying.copySelection
+  let capturedSessionBudget: number | undefined
+  let capturedAdmission: ((bytes: number) => boolean) | undefined
+  vi.spyOn(copying, 'copySelection').mockImplementation(input => {
+    capturedSessionBudget = input.sessionBudgetBytes
+    capturedAdmission = input.admitBytes
+    return actualCopy(input)
+  })
+  const writes = clipboard()
+  const doc = docOf()
+  const source = createObjectWorkbookSource(doc, 'd')
+  const kernel = new ViewerKernel({ parse: async () => doc, openSource: async () => source }, { yield: async () => {} })
+  const client = new ViewerClient(connectInProcess(kernel))
+  await client.send({ kind: 'open', requestId: client.nextRequestId(), docId: 'd', source: { kind: 'object', document: doc }, profile: 'D' })
+  const remote = new RemoteWorkbook(client, { docId: 'd', valuePolicy: source.valuePolicy, sheets: source.sheets, diagnostics: [], profile: 'D', formatting: source.formatting?.(), layouts: new Map(source.sheets.map(sheet => [sheet.sheetId, kernel.session('d')!.layout(sheet.sheetId)])) })
+  try {
+    const ui = render(<InteractiveSheetDoc doc={doc} source={remote} profile="M" />)
+    await waitFor(() => expect(ui.getByRole('status').textContent).not.toContain('Loading sheet'))
+    go(ui, 'A2')
+    await copy(ui, writes, 1)
+    expect(capturedSessionBudget).toBeGreaterThan(copying.copySessionBudget('M'))
+    expect(capturedSessionBudget).toBeLessThanOrEqual(copying.copySessionBudget('D'))
+    // 15 MiB exceeds mobile budget (12 MiB), but fits desktop budget (24 MiB):
+    expect(capturedAdmission!(15 * 1024 * 1024)).toBe(true)
+    ui.unmount()
+  } finally {
+    await remote.close(); await client.dispose()
+  }
+})

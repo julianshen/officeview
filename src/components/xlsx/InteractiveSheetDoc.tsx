@@ -446,11 +446,10 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
   const [overflowNotice, setOverflowNotice] = useState('')
   const [findOverflowNotice, setFindOverflowNotice] = useState('')
   const frameOf = (): SheetFrame | null => {
-    // Not redundant with entryFor(): a sibling viewer on the same remote with
-    // another profile may have replaced (closed) the shared cache between this
-    // render and its layout effect. The two then alternate owners each frame:
-    // correct but wasteful; one per-profile owner would change the remote's
-    // single-owner contract (Claude r7 NIT 4/7).
+    // Not redundant with entryFor(): a sibling viewer unmounting or a workbook
+    // reset may have closed the shared cache between this render and its layout
+    // effect. Rebinding at frame-time ensures entry.geometry paints against a
+    // live, open owner instead of a closed one.
     if (entry) bindOverflowCache(entry.geometry, overflowFor())
     if (!entry || !scroll) return null
     return {

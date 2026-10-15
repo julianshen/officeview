@@ -55,17 +55,19 @@ describe('round 6: actual paged viewer owner teardown', () => {
     } finally { await f.remote.close(); await f.client.dispose() }
   })
 
-  it('rebinds per frame when a sibling viewer with another profile replaced the remote cache after this render', async () => {
+  it('rebinds per frame when a sibling viewer unmount closes the shared remote cache', async () => {
     const f = await opened()
     try {
-      // Same commit: A renders (binds D), B renders (overflowFor('M') closes D),
-      // then A's layout effect presents. The frame-time rebind keeps A's paint
-      // on a live owner instead of a closed one (wasteful ping-pong, documented).
+      // Siblings share the remote's cache under budgetProfile. When one viewer unmounts,
+      // its teardown closes the shared cache. The surviving viewer's frame-time rebind
+      // recovers with a fresh live cache rather than painting with a closed owner.
       const ui = render(<><div data-testid="a"><InteractiveSheetDoc doc={f.doc} source={f.remote} profile="D" /></div><div data-testid="b"><InteractiveSheetDoc doc={f.doc} source={f.remote} profile="M" /></div></>)
       await waitFor(() => expect(f.remote.mainLedger.snapshot().byPool.layout).toBeGreaterThan(4096))
       await waitFor(() => expect(ui.getAllByRole('gridcell', { name: /value long text/ })).toHaveLength(2))
+      // Unmount sibling B: closes its overflowContext.cache (the shared remote cache).
+      ui.rerender(<div data-testid="a"><InteractiveSheetDoc doc={f.doc} source={f.remote} profile="D" /></div>)
+      await waitFor(() => expect(ui.getAllByRole('gridcell', { name: /value long text/ })).toHaveLength(1))
       expect(ui.getByTestId('a').textContent).not.toContain('Text overflow occupancy owner is closed')
-      expect(ui.getByTestId('b').textContent).not.toContain('Text overflow occupancy owner is closed')
       ui.unmount()
     } finally { await f.remote.close(); await f.client.dispose() }
   })
