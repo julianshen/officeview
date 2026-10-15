@@ -784,7 +784,7 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
       return true
     }
     const reserveColumns = (next: number) => {
-      if (next > copySessionBudget(profile) || !admit(next)) throw new Error('Copy is too large. Select a smaller range.')
+      if (!admit(next)) throw new Error('Copy is too large. Select a smaller range.')
       columnBytes = next
     }
     setCopyPending(true)
