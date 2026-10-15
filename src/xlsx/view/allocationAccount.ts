@@ -14,6 +14,8 @@ export interface AllocationContext {
   reserve(): AllocationReservation
   canReserve(bytes: number): boolean
   owns(target: object): boolean
+  /** Ends the lifetime charge `target` names: its consumer has merged or dropped it. */
+  settle?(target: object): void
 }
 /** A scoped source call: never stored as mutable state on a shared adapter. */
 export const SOURCE_ALLOCATION = Symbol('source allocation')

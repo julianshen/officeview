@@ -24,6 +24,7 @@ export class MainControlMemory implements AllocationContext {
   }
   canReserve(bytes: number): boolean { return !this.isClosed && Number.isSafeInteger(bytes) && bytes >= 0 && this.ledger.bytes + bytes <= this.limitBytes }
   owns(target: object): boolean { return this.ledger.hasLifetime(target) }
+  settle(target: object): void { this.ledger.settle(target) }
   reserve(): AllocationReservation {
     const thisContext = this
     const ledger = this.ledger, limit = this.limitBytes, owner = `control-allocation-${++serial}`
@@ -62,6 +63,8 @@ export function controlSourceStore(store: import('./contracts').SourceStore, mem
   return new Proxy(store, {
     get(target, key) {
       const value = Reflect.get(target, key, target)
+      // A page this proxy's admission adopted ends when its consumer settles it.
+      if (key === 'settle') return (payload: object) => { if (typeof value === 'function') value.call(target, payload); memory.settle?.(payload) }
       if (typeof value !== 'function') return value
       if (key === 'queryColumn' || key === 'queryStructural' || key === 'scanPopulated') return (request: unknown, options: object) => value.call(target, request, { ...options, [SOURCE_ALLOCATION]: memory })
       if (key === 'readRows') return (range: unknown, cursor: unknown, options: object) => value.call(target, range, cursor, { ...options, [SOURCE_ALLOCATION]: memory })

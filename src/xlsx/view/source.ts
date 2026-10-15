@@ -399,7 +399,9 @@ export class ObjectXlsxSheetAdapter implements SourceStore {
     // Sparse authored metadata bounds the new records; no full-axis materialization.
     let spillCount = this.engineSpills?.length ?? 0
     for (const row of this.rows) for (const cell of row.cells) if (cell.arrayRef !== undefined || cell.dynamicArray) spillCount++
-    account?.charge(256 + 320 * (this.sheet.mergeRanges?.length ?? this.sheet.merges.length) + 256 * (this.tables?.length ?? 0) + 448 * spillCount + 320 * (this.sheet.drawingAnchors?.records.length ?? 0))
+    // Drawing anchors are the adapter's resolved cache (charged once, below):
+    // a result only adds its own array slots.
+    account?.charge(256 + 320 * (this.sheet.mergeRanges?.length ?? this.sheet.merges.length) + 256 * (this.tables?.length ?? 0) + 448 * spillCount + 16 * (this.sheet.drawingAnchors?.records.length ?? 0))
     try {
     const merges = this.validMerges()
       .map(m => ({ id: `merge:${m.minRow}:${m.minCol}:${m.maxRow}:${m.maxCol}`, range: { r0: m.minRow, r1: m.maxRow, c0: m.minCol, c1: m.maxCol }, anchor: { row: m.minRow, col: m.minCol } }))
@@ -440,9 +442,20 @@ export class ObjectXlsxSheetAdapter implements SourceStore {
     for (const [id, evaluated] of footprints) add({ anchor: { row: Math.floor(id / MAX_COLS), col: id % MAX_COLS }, kind: 'dynamic', evaluated })
     // Unreadable drawing anchors and an unavailable table inventory cannot prove "none here".
     if (this.unresolvedDrawings > 0 || this.tables === undefined) addMissing(rect)
-    const drawings = this.drawings().filter(d => d.kind === 'absolute' || intersects(d.bounds, rect))
+    const cached = this.drawings()
+    const memory = options[SOURCE_ALLOCATION]
+    if (memory && cached.length && !memory.owns(cached)) {
+      // The resolved anchors live as long as this adapter: charged once per
+      // ledger, never again by each result that borrows them.
+      const cacheAccount = memory.reserve()
+      try {
+        cacheAccount.charge(320 * cached.length)
+        adoptAllocation(cacheAccount, cached)
+      } finally { cacheAccount.release() }
+    }
+    const drawings = cached.filter(d => d.kind === 'absolute' || intersects(d.bounds, rect))
     const result: StructuralResult = { ...base, merges, tables, spills, drawings, completeness: missing.length ? 'incomplete' : 'complete', missing }
-    if (account) adoptAllocation(account, result, account.bytes, [this.stamp])
+    if (account) adoptAllocation(account, result, account.bytes, [this.stamp, ...drawings])
     return result
     } finally { account?.release() }
   }
