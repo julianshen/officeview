@@ -301,7 +301,7 @@ describe('resident (object) viewer: navigation and paint stay viewport-bounded',
     // Exact identity at the last coordinate: 2^34 - 1, not a 32-bit alias.
     go(ui, 'XFD1048576')
     await waitFor(() => expect(activeId(ui)).toBe(2 ** 34 - 1))
-  })
+  }, 15_000) // ~2.6 s alone (three warm-up rounds); was 4.5-5 s with formatted stacks, over 5 s under suite load
 
   it('cell IDs across the 2^31 and 2^32 boundaries stay exact end to end (no bitwise packing)', async () => {
     const doc = await objectDoc(BOUNDARIES)
@@ -330,7 +330,7 @@ describe('resident (object) viewer: navigation and paint stay viewport-bounded',
     expect(ledger.inserts).toBeLessThan(VIEWPORT_INSERTS)
     expectRetainedBelow(ledger, VIEWPORT_RETAINED)
     expect(ledger.largestTyped).toBeLessThan(ROW_LANE)
-  })
+  }, 15_000) // ~0.8 s alone (2.4 s with formatted stacks); margin for suite load
 })
 
 describe('worker-backed viewer: bounded reads, one parse, no per-command reparse or clone', () => {
