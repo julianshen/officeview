@@ -30,6 +30,7 @@ import type { PerfReply } from '../../src/debug/viewerPerfWorker'
 import type { BenchArgs } from './args'
 import type { HarnessIdentity } from './identity'
 import { startSampler } from './sampler'
+import { measureSortOutcome, recordSortOutcome, type SortOutcome } from './viewerSortOutcome'
 import { startStaticServer } from './static-server'
 import { measureCodeSpace } from './codeSpace'
 import { FIXTURE_MANIFEST_PATH, ensureViewerFixtures, type FixtureManifest, type ViewerFixture, type ViewerFixtureKey } from './viewerFixtures'
@@ -177,35 +178,31 @@ async function ackSuite(context: BrowserContext, base: string, f2: ViewerFixture
     return () => page.evaluate(() => (window as unknown as W).__viewerPerf.ackWait())
   }
   const latency = (r: AckRecord) => (r.presentAt !== null && r.inputAt >= 0 ? r.presentAt - r.inputAt : null)
-  type AckSeries = { samples: number[]; records: AckRecord[]; censored: number; note: string; endToEnd?: number[] }
+  type AckSeries = { samples: number[]; records: AckRecord[]; censored: number; note: string; endToEnd?: number[]; operations?: SortOutcome[] }
 
-  // Sort: header sort button, F2 column G (1M body rows). The result's aria-sort
-  // change ends one sample; the acknowledgment is the first qualifying status /
-  // aria change after the input.
-  const sortHeader = page.getByRole('columnheader', { name: /^Column G/ })
+  // Sort: observe completion or refusal before clicking; acknowledgment and
+  // successful operation latency are separate measurements.
   const sortButton = page.getByRole('button', { name: 'Cycle sort column G' })
-  const sort: AckSeries = { samples: [] as number[], records: [] as AckRecord[], censored: 0, note: '', endToEnd: [] as number[] }
+  const sort: AckSeries & { operations: SortOutcome[]; endToEnd: number[] } = { samples: [], records: [], censored: 0, note: '', endToEnd: [], operations: [] }
   for (let i = 0; i < repeat; i++) {
-    const before = await sortHeader.getAttribute('aria-sort')
     const wait = await arm('status')
-    const t0 = Date.now()
-    await sortButton.click()
+    const operation = await measureSortOutcome(page, () => sortButton.click())
     const record = await wait()
-    await page.waitForFunction(({ before }) => {
-      const header = [...document.querySelectorAll('[role=columnheader]')].find(h => /^Column G/.test(h.getAttribute('aria-label') ?? h.textContent ?? ''))
-      return (header?.getAttribute('aria-sort') ?? null) !== before
-    }, { before }, { timeout: 120_000 }).catch(() => {})
-    sort.endToEnd!.push(Date.now() - t0)
+    recordSortOutcome(sort, operation, errors)
     sort.records.push(record)
     const value = latency(record)
     if (value === null) sort.censored++
     else sort.samples.push(value)
+    if (operation.outcome !== 'completed') {
+      sort.note = `stopped after ${i + 1} samples: sort ${operation.outcome}; see operations and run errors`
+      break
+    }
     if (i + 1 === EARLY_MISS_SAMPLES && sort.records.every(r => { const v = latency(r); return v === null || v > 500 })) {
       sort.note = `stopped after ${EARLY_MISS_SAMPLES} samples: every acknowledgment exceeded 10x the 50 ms ceiling (no pending state before the result)`
       break
     }
   }
-  log(`    ack sort: ${sort.samples.length} samples (${sort.censored} censored at ${ACK_TIMEOUT_MS} ms) p50 ${fmt(summarize(sort.samples, 1))}; end-to-end p50 ${fmt(summarize(sort.endToEnd!, 1))}`)
+  log(`    ack sort: ${sort.samples.length} samples (${sort.censored} censored at ${ACK_TIMEOUT_MS} ms) p50 ${fmt(summarize(sort.samples, 1))}; completed end-to-end p50 ${fmt(summarize(sort.endToEnd, 1))}; outcomes ${sort.operations.map(r => r.outcome).join(', ')}`)
 
   // Filter open and Cancel while the value list loads in the worker.
   const funnel = page.getByRole('button', { name: /^Filter column D/ })

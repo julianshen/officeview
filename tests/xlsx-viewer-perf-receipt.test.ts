@@ -6,6 +6,7 @@
 import { describe, expect, it } from 'vitest'
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
+import { recordSortOutcome } from '../scripts/harness/viewerSortOutcome'
 import {
   ACK_CENSORED_MS, ENGINE_CACHE_ALLOWANCE_BYTES, LAYOUT_SHIFT_ENTRY_BYTES, LAYOUT_SHIFT_SOURCE_BYTES, RELEASE_IDENTITY, SCROLL_CENSORED_MS, classifyPresent, finalizeReceipt, importThroughput, pairInputsToPresents, summarize, validateReceipt, verifyReceipt,
   type EvidenceContext, type ReceiptDraft, type ViewerReceipt,
@@ -136,6 +137,21 @@ function validDraft(): ReceiptDraft {
 const desktop = (r: ViewerReceipt, id: string) => r.evaluation.find(row => row.id === id && row.profile === 'desktop')!
 
 describe('evaluation from raw records', () => {
+  it.each(['refused', 'timeout'] as const)('does not admit a %s sort even when its pending acknowledgment is fast', async outcome => {
+    const draft = validDraft()
+    const raw = draft.raw as any
+    const series = raw.ack.sort
+    series.operations = []
+    series.endToEnd = []
+    recordSortOutcome(series, { outcome, elapsedMs: outcome === 'timeout' ? 120_000 : 12, status: 'Operation refused: memory budget.', ariaSort: 'none' }, raw.errors)
+    const receipt = await finalizeReceipt(draft, ctx)
+    expect(desktop(receipt, 'input-acknowledgment').outcome).toBe('pass-limited')
+    expect(receipt.desktopAdmitted).toBe(false)
+    expect(receipt.evidenceProblems).toContainEqual(expect.stringContaining(`sort sample 1: ${outcome}`))
+    expect(series.endToEnd).toEqual([])
+    expect(series.operations).toHaveLength(1)
+  })
+
   it('admits fully valid evidence: every row derived from raw, the main row on an attributed ledger peak', async () => {
     const receipt = await finalizeReceipt(validDraft(), ctx)
     expect(receipt.evidenceProblems).toEqual([])

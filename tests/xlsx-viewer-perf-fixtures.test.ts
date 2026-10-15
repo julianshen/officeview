@@ -8,9 +8,9 @@
 import { afterEach, describe, expect, it } from 'vitest'
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join, resolve, sep } from 'node:path'
-import { realpathSync } from 'node:fs'
-import { FIXTURE_MANIFEST_PATH, ensureViewerFixtures, fixtureDir, type FixtureManifest } from '../scripts/harness/viewerFixtures'
+import { join } from 'node:path'
+import { fileURLToPath } from 'node:url'
+import { FIXTURE_CACHE_VERSION, FIXTURE_MANIFEST_PATH, ensureViewerFixtures, fixtureDir, type FixtureManifest } from '../scripts/harness/viewerFixtures'
 import { xlsxBytes } from './helpers/xlsx-package'
 
 const manifest = JSON.parse(readFileSync(join(process.cwd(), FIXTURE_MANIFEST_PATH), 'utf8')) as FixtureManifest
@@ -20,12 +20,10 @@ const isolate = () => { dir = mkdtempSync(join(tmpdir(), 'ovf-')); process.env.O
 const oneCell = () => xlsxBytes({ sheetData: '<row r="1"><c r="A1"><v>1</v></c></row>' })
 
 describe('viewer fixture cache location', () => {
-  it('defaults to the repository .tmp/, never the OS temp directory (macOS dirhelper purges $TMPDIR files older than 3 days at 03:35 daily, mid-run)', () => {
+  it('defaults to the repository versioned .tmp/, including repositories beneath the OS temp directory', () => {
     delete process.env.OFFICEVIEW_VIEWER_FIXTURE_DIR
-    const dir = resolve(fixtureDir())
-    const temp = realpathSync(tmpdir())
-    expect(dir.startsWith(resolve(tmpdir()) + sep) || dir.startsWith(temp + sep)).toBe(false)
-    expect(dir.startsWith(join(process.cwd(), '.tmp') + sep)).toBe(true)
+    const root = fileURLToPath(new URL('..', import.meta.url))
+    expect(fixtureDir()).toBe(join(root, '.tmp', `viewer-perf-fixtures-v${FIXTURE_CACHE_VERSION}`))
   })
   it('keeps the explicit override', () => {
     process.env.OFFICEVIEW_VIEWER_FIXTURE_DIR = '/somewhere/else'

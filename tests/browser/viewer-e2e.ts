@@ -7,16 +7,15 @@
  */
 import { expect, type Page } from '@playwright/test'
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { writeFixturePackage, writeSheetsPackage, type SheetRowSpec } from '../../scripts/generate-viewer-fixtures'
+import { VIEWER_E2E_FIXTURE_DIR as GENERATED } from '../../scripts/harness/viewerE2EFixtureCache'
 import type { CellRef, FixtureCell } from '../helpers/xlsx-viewer-fixtures'
 import { xlsxBytes } from '../helpers/xlsx-package'
 
 const ROOT = fileURLToPath(new URL('../..', import.meta.url))
 const COMMITTED = join(ROOT, 'tests', 'fixtures', 'xlsx-viewer')
-const GENERATED = join(tmpdir(), 'officeview-viewer-e2e-v1')
 
 /** Generated packages: name → (scale label, writer). Object caps for profile D
  * are 100,000 rows / 100,000 populated cells, so the "paged" packages cross one
