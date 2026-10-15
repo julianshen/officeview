@@ -159,7 +159,14 @@ export class WorkerViewportPlans {
         const guard = () => sourceRequest.live() && !this.closed && !this.remote.isClosed && scope === this.scope && this.entries.get(key) === entry && !entry.controller.signal.aborted && sameIdentity(this.remote.identity(owner.sheetId), sourceOwner) && sameIdentity(owner, expectedOwner) && this.remote.merges(owner.sheetId).gen === mergeGeneration && window.zoom === zoom && window.deviceScale === deviceScale
         adoptionToken = store.stageViewport(cells, entry.controller.signal, { live: guard })
         if (!guard()) {
-          this.fail(key, entry, [{ code: 'stale-source', message: 'Viewport owner changed. Retrying.' }], true)
+          // Same retryable refusal, but name the actual cause: a cleared
+          // source cache is not an owner change.
+          const superseded = this.closed || this.remote.isClosed || scope !== this.scope || this.entries.get(key) !== entry || entry.controller.signal.aborted
+          const message = superseded ? 'Viewport request was superseded. Retrying.'
+            : !sourceRequest.live() ? 'Viewport source cache was cleared'
+              : !sameIdentity(this.remote.identity(owner.sheetId), sourceOwner) || !sameIdentity(owner, expectedOwner) ? 'Viewport owner changed. Retrying.'
+                : 'Viewport layout changed. Retrying.'
+          this.fail(key, entry, [{ code: 'stale-source', message }], true)
           return
         }
         const previousPlan = entry.plan, previousEntryBytes = entry.bytes
