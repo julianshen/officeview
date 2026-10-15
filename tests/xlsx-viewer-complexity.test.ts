@@ -104,7 +104,18 @@ async function measure(run: () => Promise<void>): Promise<Ledger> {
   // Only collections constructed by officeview's own modules count: jsdom's CSS
   // engine and React keep their own maps, which a real browser does not run in JS.
   const owned = new WeakSet<object>()
-  const ours = () => { const caller = (new Error().stack ?? '').split('\n')[3] ?? ''; return caller.includes('/src/') && !caller.includes('node_modules') }
+  // The caller is read from structured call sites, never a formatted `.stack`:
+  // the runner's source-map support decodes and caches a file's whole map the
+  // first time a formatted stack crosses it, and that cache (MiBs, growing with
+  // every source file the window touches) would be charged to the measured code.
+  const ours = () => {
+    const prepare = Error.prepareStackTrace
+    Error.prepareStackTrace = (_error, sites) => sites
+    try {
+      const file = (new Error().stack as unknown as NodeJS.CallSite[] | undefined)?.[2]?.getFileName() ?? ''
+      return file.includes('/src/') && !file.includes('node_modules')
+    } finally { Error.prepareStackTrace = prepare }
+  }
   const savedCollections = [['Map', Map], ['Set', Set]] as const
   for (const [name, ctor] of savedCollections) {
     scope[name] = new Proxy(ctor, {
