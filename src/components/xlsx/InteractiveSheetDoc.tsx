@@ -76,6 +76,7 @@ import { SearchBar, ZoomControls } from '../viewerControls'
 import { isRemoteWorkbook } from '../../worker/viewerRemoteSource'
 import { documentWithDrawings, drawingNotices, sheetWithDrawings } from '../../worker/viewerRemoteDrawings'
 import { pagedSheetGeometry } from './pagedGeometry'
+import type { LedgerHold } from '../../xlsx/view/mainLedger'
 import { DisplayHolds } from './displayHolds'
 
 /** A committed sheet view (the S9.1 sort/filter commit seam). `revision` must
@@ -237,14 +238,22 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
   useLayoutEffect(() => { serials.rendering = false })
   useEffect(() => { holds.committed(displaySerial) })
   useEffect(() => { holds.restore(); return () => holds.dispose() }, [holds])
-  // An external `views` input this viewer charged stays held while it is in the
-  // props (§12.4 retained views), independently of whether it is displayed; it
-  // is released once a display without it commits, or on unmount.
-  const inputHolds = useMemo(() => new DisplayHolds<SheetViewInput>(input => [input.order, input.visibility].flatMap(target => target ? mainLedger.hold(target) ?? [] : [])), [mainLedger])
-  const heldInputs = useRef(new Map<string, SheetViewInput>()).current
-  for (const [sheetId, input] of heldInputs) if (views?.[sheetId] !== input) { inputHolds.retire(input, displaySerial); heldInputs.delete(sheetId) }
-  useEffect(() => { inputHolds.committed(displaySerial) })
-  useEffect(() => { inputHolds.restore(); return () => inputHolds.dispose() }, [inputHolds])
+  // §12.4 retained views: every external `views` input in the committed props is
+  // charged and held while any sheet's prop still references it, whether or not
+  // it is displayed (a newer local view may win). Reconciled after each commit
+  // against the committed props, never from a speculative render; a new holder
+  // is taken before an old one is released, so a fresh wrapper of the same
+  // buffers never drops them.
+  const inputOwners = useMemo(() => new Map<SheetViewInput, LedgerHold[]>(), [mainLedger])
+  useEffect(() => {
+    const provided = new Set(remote ? [] : Object.values(views ?? {}))
+    for (const input of provided) if (!inputOwners.has(input)) {
+      chargeViewBuffers(input.order ?? null, input.visibility ?? null)
+      inputOwners.set(input, [input.order, input.visibility].flatMap(target => target ? mainLedger.hold(target) ?? [] : []))
+    }
+    for (const [input, held] of inputOwners) if (!provided.has(input)) { for (const hold of held) hold.release(); inputOwners.delete(input) }
+  })
+  useEffect(() => () => { for (const held of inputOwners.values()) for (const hold of held) hold.release(); inputOwners.clear() }, [inputOwners])
   // The viewer's own pools end with the viewer; lifetime charges (geometry,
   // views, replies, the resident document) end when nothing reaches them.
   // Submitted clipboard jobs retain their own charge until they settle.
@@ -342,8 +351,6 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
     // words built here for any sheet (1,048,576 rows: ~132 KiB). A worker-backed
     // view's adopted buffers are charged by the workbook (adopt).
     chargeViewBuffers(remote ? null : order, remote && input.visibility ? null : visibility)
-    const external = remote ? undefined : views?.[sheetId]
-    if (external && input === external && heldInputs.get(sheetId) !== external) { inputHolds.own(external); heldInputs.set(sheetId, external) }
     const selection = previous?.view.selection ?? emptyGridSelection()
     const view: SheetView = { sheetId, revision: input.revision, order, baseHidden, visibility, sort: input.sort ?? null, filter: input.filter ?? null, selection }
     const used = remote?.layout(sheetId).used

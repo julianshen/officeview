@@ -205,8 +205,10 @@ it('an external views input stays charged while it is still in the props, after 
   expect(externalViews.A.order.displayToSource(1)).toBe(2)
   expect(ledger.hasLifetime(externalOrder), 'the unchanged input prop is still retained by the mounted viewer').toBe(true)
   // A new input replaces it: once that commits, the mounted viewer no longer holds the old one.
-  ui.rerender(<InteractiveSheetDoc doc={doc} views={{ A: { revision: 1, order: createRowOrder([{ r0: 1, r1: 3, sourceAtOffset: Uint32Array.of(3, 2, 1) }]) } }} onMainLedger={value => { ledger = value }} />)
+  const replacement = createRowOrder([{ r0: 1, r1: 3, sourceAtOffset: Uint32Array.of(3, 2, 1) }])
+  ui.rerender(<InteractiveSheetDoc doc={doc} views={{ A: { revision: 1, order: replacement } }} onMainLedger={value => { ledger = value }} />)
   await act(async () => { await new Promise(resolve => setTimeout(resolve, 0)) })
   expect(ledger.hasLifetime(externalOrder), 'released once the input is replaced').toBe(false)
+  expect(ledger.hasLifetime(replacement), 'the replacement, still provided beneath the local view, is charged').toBe(true)
   ui.unmount()
 })
