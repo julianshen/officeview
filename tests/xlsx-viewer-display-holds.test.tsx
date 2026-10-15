@@ -141,3 +141,40 @@ it('sibling viewers: the older view stays charged until every viewer has committ
     expect(remote.mainLedger.snapshot().byPool.viewBuffers).toBe(0)
   } finally { await remote.close() }
 })
+
+it('C3 geometry: replaced paged projections end with their last display, so repeated sorts keep the geometry pool flat', async () => {
+  const { doc, remote, sort } = await opened('paged-geometry')
+  try {
+    const ui = render(<InteractiveSheetDoc doc={doc} source={remote} />)
+    await loaded(ui)
+    const pools: number[] = []
+    for (let i = 0; i < 6; i++) {
+      await sort(i % 2 ? 'desc' : 'asc')
+      await act(async () => { await new Promise(resolve => setTimeout(resolve, 0)) })
+      pools.push(remote.mainLedger.snapshot().byPool.geometry)
+    }
+    expect(pools[0]).toBeGreaterThan(0)
+    for (const bytes of pools) expect(bytes, pools.join(' ')).toBe(pools[0])
+    ui.unmount()
+  } finally { await remote.close() }
+})
+
+it('C3 resident: repeated header sorts keep the resident geometry and view-buffer pools flat', async () => {
+  const doc = docOf()
+  let ledger!: import('../src/xlsx/view/mainLedger').MainMemoryLedger
+  const ui = render(<InteractiveSheetDoc doc={doc} onMainLedger={value => { ledger = value }} />)
+  await loaded(ui)
+  const header = () => ui.getByRole('columnheader', { name: /^Column A/ })
+  const pools: { geometry: number; viewBuffers: number }[] = []
+  for (let i = 0; i < 6; i++) {
+    const before = header().getAttribute('aria-sort')
+    fireEvent.click(ui.getByRole('button', { name: 'Cycle sort column A' }))
+    await waitFor(() => expect(header().getAttribute('aria-sort')).not.toBe(before))
+    await act(async () => { await new Promise(resolve => setTimeout(resolve, 0)) })
+    const { geometry, viewBuffers } = ledger.snapshot().byPool
+    pools.push({ geometry, viewBuffers })
+  }
+  // ascending, descending, clear: the same point of each cycle costs the same.
+  for (let i = 3; i < pools.length; i++) expect(pools[i], JSON.stringify(pools)).toEqual(pools[i - 3])
+  ui.unmount()
+})
