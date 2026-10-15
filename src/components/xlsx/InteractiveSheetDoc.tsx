@@ -332,6 +332,9 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
     entries.set(sheetId, entry)
     if (!previous) session.register(sheetId, { view, projection: entry.metrics, body: entry.body })
     else session.updateProjection(sheetId, entry.metrics, entry.body, view)
+    // This entry and the session now hold only this revision: the workbook ends
+    // the charges of the worker views it superseded before it.
+    remote?.retireViews(sheetId, input.revision)
     return entry
   }
   // The committed revision: a stale (lower) prop revision never regresses the

@@ -139,6 +139,9 @@ export class RemoteWorkbook implements WorkbookSource {
   private closedOverflow: OverflowCache | undefined
   private readonly identities = new Map<string, CacheIdentity>()
   private readonly views = new Map<string, RemoteSheetView>()
+  /** Adopted views a newer adoption replaced, still charged until the viewer
+   * has published a newer revision (retireViews), oldest first. */
+  private readonly superseded = new Map<string, RemoteSheetView[]>()
   private readonly geometries = new Map<string, SheetGeometry>()
   // Layout keys disappear on replacement/release; obsolete column axes are
   // retained only by actual consumers, whose reachability charge remains live.
@@ -537,6 +540,7 @@ export class RemoteWorkbook implements WorkbookSource {
     if (this.closed || delta.owner.docId !== this.docId || delta.owner.sheetId !== sheetId) return null
     const previous = this.view(sheetId)
     if (delta.owner.viewGen <= this.identity(sheetId).viewGen) return null
+    const adopted = this.views.get(sheetId)
     // Staging: the local band copies coexist with the wire bands (reply), the
     // previous view and the order being built from them.
     const bandBytes = delta.bands.reduce((sum, band) => sum + band.sourceAtOffset.length * 4, 0)
@@ -558,8 +562,32 @@ export class RemoteWorkbook implements WorkbookSource {
     const visibilityBytes = view.visibility ? view.visibility.words.byteLength + view.visibility.summaries.byteLength : 0
     this.mainLedger.chargeWhileReachable('viewBuffers', [view.order, ...(view.visibility ? [view.visibility] : [])], bandBytes * 2 + visibilityBytes)
     this.mainLedger.release('viewBuffers', `staging:${sheetId}`)
+    // The replaced view keeps its charge while the viewer may still show it;
+    // retireViews ends it once a newer revision is published (not at GC time).
+    if (adopted) this.superseded.set(sheetId, [...(this.superseded.get(sheetId) ?? []), adopted])
     this.notify()
     return view
+  }
+  /**
+   * The viewer published `revision` of a sheet and dropped every older view it
+   * held: the superseded views older than it are owned by nothing in the
+   * product any more, so their lifetime charges end now. Waiting for their
+   * collection let ~8 MiB per F2 sort pile up past the 64 MiB desktop budget
+   * until the next GC, refusing the next control (release benchmark, S13.5).
+   */
+  retireViews(sheetId: string, revision: number): void {
+    const list = this.superseded.get(sheetId)
+    if (!list) return
+    const keep = list.filter(view => view.revision >= revision)
+    for (const view of list) {
+      if (view.revision >= revision) continue
+      // Settling any target ends the view's one charge. The identity order is a
+      // shared singleton whose lease may belong to another view: never use it.
+      if (view.visibility) this.mainLedger.settle(view.visibility)
+      if (view.order.kind !== 'identity') this.mainLedger.settle(view.order)
+    }
+    if (keep.length) this.superseded.set(sheetId, keep)
+    else this.superseded.delete(sheetId)
   }
 
   /** The host (OfficeFile) owns the worker document; a viewer that borrows this
@@ -580,6 +608,7 @@ export class RemoteWorkbook implements WorkbookSource {
     for (const store of this.stores.values()) store.clear()
     this.stores.clear()
     this.views.clear()
+    this.superseded.clear()
     this.geometries.clear()
     this.columnMetrics = new WeakMap()
     this.layouts.clear()
