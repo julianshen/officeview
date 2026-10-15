@@ -30,9 +30,9 @@ export function pagedSheetGeometry(remote: RemoteWorkbook, sheetId: string, orde
     drawingsIn: (...query: Parameters<SheetGeometry['drawingsIn']>) => drawings.drawingsIn(...query),
   })
   // Projection buffers (dense prefixes of permuted bands) and the merge index
-  // are charged for as long as this geometry (a sheet's current or previous
-  // view, active or not) is reachable.
-  remote.mainLedger.chargeWhileReachable('geometry', [geometry], projectionBytes(metrics) + mergeIndex.estimatedBytes)
+  // are charged while held: by the sheet entry that shows this geometry and any
+  // continuation reading it (§12.4). Unheld, it lasts while reachable.
+  remote.mainLedger.chargeWhileHeld('geometry', [geometry], projectionBytes(metrics) + mergeIndex.estimatedBytes)
   bindOverflowCache(geometry, cache)
   return geometry
 }

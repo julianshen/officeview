@@ -7,10 +7,11 @@
  * 64 MiB desktop budget after ~9 sorts, and the next sort's 256 B control
  * admission was refused ("Main document memory quota exceeded").
  *
- * A superseded view's charge must end deterministically once the viewer has
- * published a newer revision, never on collection timing. This file disables
- * collection callbacks entirely (FinalizationRegistry never fires), so only
- * the deterministic release path can keep the pool bounded.
+ * A superseded view's charge must end deterministically once its last owner
+ * (the workbook, the committed display, a copy) releases it, never on
+ * collection timing. This file disables collection callbacks entirely
+ * (FinalizationRegistry never fires), so only explicit releases can keep the
+ * pool bounded.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { cleanup, fireEvent, render, waitFor } from '@testing-library/react'

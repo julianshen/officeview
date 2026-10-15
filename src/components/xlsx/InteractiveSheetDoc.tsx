@@ -76,6 +76,7 @@ import { SearchBar, ZoomControls } from '../viewerControls'
 import { isRemoteWorkbook } from '../../worker/viewerRemoteSource'
 import { documentWithDrawings, drawingNotices, sheetWithDrawings } from '../../worker/viewerRemoteDrawings'
 import { pagedSheetGeometry } from './pagedGeometry'
+import { DisplayHolds } from './displayHolds'
 
 /** A committed sheet view (the S9.1 sort/filter commit seam). `revision` must
  * increase with every commit; it becomes the sheet's viewGen. */
@@ -223,6 +224,19 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
   useEffect(() => () => { overflowContext.cache?.close(); overflowContext.cache = undefined }, [overflowContext])
   // View buffers already charged in this ledger (a rebuilt entry may reuse them).
   const viewCharged = useMemo(() => new WeakSet<object>(), [mainLedger])
+  // §§10.1, 12.4: each sheet entry holds the charged buffers it shows (view
+  // order/mask, row projection) until a committed display no longer shows it;
+  // a worker view also stays held by the workbook, sibling viewers and copies.
+  const holds = useMemo(() => new DisplayHolds<SheetEntry>(held => [held.view.order, held.view.visibility, held.geometry].flatMap(target => mainLedger.hold(target) ?? [])), [mainLedger])
+  // Display serials: an entry replaced while rendering display N is released
+  // once N (or a later display) commits; one replaced outside a render (an
+  // event or publication) once the next display commits.
+  const serials = useRef({ render: 0, rendering: false }).current
+  const displaySerial = ++serials.render
+  serials.rendering = true
+  useLayoutEffect(() => { serials.rendering = false })
+  useEffect(() => { holds.committed(displaySerial) })
+  useEffect(() => { holds.restore(); return () => holds.dispose() }, [holds])
   // The viewer's own pools end with the viewer; lifetime charges (geometry,
   // views, replies, the resident document) end when nothing reaches them.
   // Submitted clipboard jobs retain their own charge until they settle.
@@ -295,7 +309,7 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
     const orderBytes = (order as { diagnostics?: { typedArrayBytes?: number } } | null)?.diagnostics?.typedArrayBytes ?? 0
     if (order && orderBytes > 0 && !viewCharged.has(order) && !mainLedger.hasLifetime(order)) { targets.push(order, ...order.bands.flatMap(band => [band.sourceAtOffset, band.sourceAtOffset.buffer, band.displayOffsetOfSource, band.displayOffsetOfSource.buffer])); bytes += orderBytes; viewCharged.add(order) }
     if (visibility instanceof CompactRowVisibility && !viewCharged.has(visibility) && !mainLedger.hasLifetime(visibility)) { targets.push(visibility, visibility.words, visibility.words.buffer, visibility.summaries, visibility.summaries.buffer); bytes += visibility.words.byteLength + visibility.summaries.byteLength; viewCharged.add(visibility) }
-    if (targets.length) mainLedger.chargeWhileReachable('viewBuffers', targets, bytes)
+    if (targets.length) mainLedger.chargeWhileHeld('viewBuffers', targets, bytes)
   }
   const entryFor = (sheetId: string): SheetEntry => {
     const index = sheetIds.indexOf(sheetId)
@@ -314,7 +328,7 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
     // Paged geometry charges itself; a resident one is charged here, for its
     // lifetime: the row projection (it keeps its own copied segments; the build's
     // row axis is dropped), the column axis, the per-row cell index and merges.
-    if (!remote) mainLedger.chargeWhileReachable('geometry', [built], projectionBytes(built.metrics) + axisBytes(built.metrics.cols) + (built.cellIndexBytes ?? 0) + built.merges.estimatedBytes)
+    if (!remote) mainLedger.chargeWhileHeld('geometry', [built], projectionBytes(built.metrics) + axisBytes(built.metrics.cols) + (built.cellIndexBytes ?? 0) + built.merges.estimatedBytes)
     // Order and visibility buffers built on the main thread are charged once each,
     // while a view holds them: a resident sort/filter's, and the base visibility
     // words built here for any sheet (1,048,576 rows: ~132 KiB). A worker-backed
@@ -330,11 +344,10 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
       layoutCache: previous && previous.structureGen === structureGen ? previous.layoutCache : new LayoutCache(), merges: new MergeQueryCache(),
     }
     entries.set(sheetId, entry)
+    holds.own(entry)
+    if (previous) holds.retire(previous, serials.rendering ? serials.render : serials.render + 1)
     if (!previous) session.register(sheetId, { view, projection: entry.metrics, body: entry.body })
     else session.updateProjection(sheetId, entry.metrics, entry.body, view)
-    // This entry and the session now hold only this revision: the workbook ends
-    // the charges of the worker views it superseded before it.
-    remote?.retireViews(sheetId, input.revision)
     return entry
   }
   // The committed revision: a stale (lower) prop revision never regresses the
@@ -849,6 +862,8 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
     if (!current.current.allowCopy || !entry) return
     cancelCopy()
     const token = ++copyToken.current, abort = new AbortController(); copyJob.current = abort
+    // The copy reads this entry's order, mask and projection across awaits.
+    const releaseEntry = holds.extra(entry)
     const copyOwner = `session:${++copySerial}`
     let held = 0, closed = false, columnBytes = 0
     const admit = (next: number): boolean => {
@@ -908,6 +923,7 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
       closed = true
       held = 0
       mainLedger.release('copy', copyOwner)
+      releaseEntry()
       if (live.current && token === copyToken.current) setCopyPending(false)
     }
   }
