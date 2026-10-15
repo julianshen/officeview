@@ -164,6 +164,9 @@ it('C3 resident: repeated header sorts keep resident geometry, view buffers and 
   let ledger!: import('../src/xlsx/view/mainLedger').MainMemoryLedger
   const ui = render(<InteractiveSheetDoc doc={doc} onMainLedger={value => { ledger = value }} />)
   await loaded(ui)
+  // An open resident search re-runs on every view change and holds the entries it reads.
+  fireEvent.change(ui.getByRole('searchbox', { name: 'Search document' }), { target: { value: 'a' } })
+  await act(async () => { await new Promise(resolve => setTimeout(resolve, 20)) })
   const header = () => ui.getByRole('columnheader', { name: /^Column A/ })
   const pools: { geometry: number; viewBuffers: number; controls: number }[] = []
   for (let i = 0; i < 6; i++) {

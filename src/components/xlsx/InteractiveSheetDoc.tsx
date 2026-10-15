@@ -617,7 +617,11 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
       },
     }
     runArgs.current = { input, query, options }
-    void finder.run(input, { text: query, caseSensitive: false }, options).then(published => {
+    // A resident search reads every sheet's order and mask across awaits: its
+    // run holds those entries until it is replaced and has settled (§12.4).
+    const searched = [...byId.values()].map(sheetEntry => holds.extra(sheetEntry))
+    const run = finder.run(input, { text: query, caseSensitive: false }, options)
+    void run.then(published => {
       if (cancelled) return
       pageRef.current = published
       activeRef.current = published && published.hits.length ? 0 : -1
@@ -629,7 +633,7 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
       setSearching(false)
       setAnnouncement(error instanceof Error ? error.message.slice(0, 256) : 'Search failed.')
     })
-    return () => { cancelled = true }
+    return () => { cancelled = true; void run.catch(() => {}).finally(() => { for (const release of searched) release() }) }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [query, ownerKey])
   // A finished page over sheets that were still importing says so instead of
