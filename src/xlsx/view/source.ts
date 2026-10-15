@@ -442,17 +442,22 @@ export class ObjectXlsxSheetAdapter implements SourceStore {
     for (const [id, evaluated] of footprints) add({ anchor: { row: Math.floor(id / MAX_COLS), col: id % MAX_COLS }, kind: 'dynamic', evaluated })
     // Unreadable drawing anchors and an unavailable table inventory cannot prove "none here".
     if (this.unresolvedDrawings > 0 || this.tables === undefined) addMissing(rect)
-    const cached = this.drawings()
-    const memory = options[SOURCE_ALLOCATION]
-    if (memory && cached.length && !memory.owns(cached)) {
-      // The resolved anchors live as long as this adapter: charged once per
-      // ledger, never again by each result that borrows them.
+    // The resolved anchors live as long as this adapter: charged once per
+    // ledger, never again by each result that borrows them. A first resolution
+    // is admitted before the cache is built and published; a refusal (or any
+    // failure before its adoption) leaves no cache behind.
+    const memory = options[SOURCE_ALLOCATION], records = this.sheet.drawingAnchors?.records.length ?? 0
+    const fresh = this.drawingCache === undefined
+    let cached: DrawingAnchor[]
+    if (memory && records && (fresh || !memory.owns(this.drawingCache!))) {
       const cacheAccount = memory.reserve()
       try {
-        cacheAccount.charge(320 * cached.length)
-        adoptAllocation(cacheAccount, cached)
-      } finally { cacheAccount.release() }
-    }
+        cacheAccount.charge(320 * records)
+        cached = this.drawings()
+        if (cached.length) adoptAllocation(cacheAccount, cached)
+      } catch (error) { if (fresh) this.drawingCache = undefined; throw error }
+      finally { cacheAccount.release() }
+    } else cached = this.drawings()
     const drawings = cached.filter(d => d.kind === 'absolute' || intersects(d.bounds, rect))
     const result: StructuralResult = { ...base, merges, tables, spills, drawings, completeness: missing.length ? 'incomplete' : 'complete', missing }
     if (account) adoptAllocation(account, result, account.bytes, [this.stamp, ...drawings])
