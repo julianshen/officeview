@@ -63,4 +63,30 @@ describe('round 6: overflow resource rendering keeps exact and unknown coverage'
       expect(f.cache.bytes).toBe(0)
     } finally { renderer.dispose(); f.cache.close() }
   })
+
+  it('never retains a resident (no pending) refused tile and repaints detail once pressure is released', () => {
+    const f = refused()
+    const renderer = new SheetTileRenderer('D', 0, () => {
+      const canvas = document.createElement('canvas')
+      canvas.width = 512; canvas.height = 512
+      return { canvas, width: 512, height: 512, close() { canvas.width = 0; canvas.height = 0 } }
+    })
+    const pane = document.createElement('canvas')
+    pane.width = 200; pane.height = 80
+    const ctx = pane.getContext('2d')!
+    const frame = { sheet: f.sheet, geometry: f.geometry, identity: { docId: 'd', sheetId: 's', valueGen: 0, fontGen: 0, viewGen: 0 }, origin: { x: 0, y: 0 }, viewport: { width: 200, height: 80 }, zoom: 1, dpr: 1, extent: { width: f.geometry.metrics.cols.totalCss(), height: f.geometry.metrics.rows.totalCss() }, layoutCache: new LayoutCache(), merges: new MergeQueryCache() }
+    try {
+      const refusedFrame = renderer.present(ctx, frame)
+      expect(refusedFrame.resourceNotice).toContain('exceeds the document memory budget')
+      expect(renderer.stats.pendingTiles).toBe(0)
+      // The full-budget first tile is coarse only because occupancy was refused:
+      // caching it would pin the coarse picture after pressure goes away.
+      expect(renderer.cache.stats().tiles).toBe(0)
+      f.ledger.release('copy', 'in-flight')
+      const recovered = renderer.present(ctx, frame)
+      expect(recovered.resourceNotice).toBeUndefined()
+      expect(renderer.cache.stats().tiles).toBe(1)
+      expect(renderer.stats.frameRecords).toBeGreaterThan(0)
+    } finally { renderer.dispose(); f.cache.close() }
+  })
 })
