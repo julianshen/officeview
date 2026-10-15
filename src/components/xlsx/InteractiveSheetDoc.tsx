@@ -209,9 +209,15 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
   // S10.2 §12.4: one main-thread ledger per document. A worker-backed workbook
   // owns it (row cache, view buffers, replies); a resident one gets its own.
   const mainLedger = useMemo(() => remote?.mainLedger ?? new MainMemoryLedger(), [remote, source])
-  const overflowContext = useMemo(() => ({ cache: undefined as OverflowCache | undefined }), [mainLedger, profile])
+  // One budget profile across every main-thread ledger consumer: if a worker-backed
+  // remote workbook already established a profile (D 64 MiB / M 32 MiB), sibling or
+  // child viewers sharing its mainLedger must respect the remote's budget cap for
+  // controls, overflow, and copy admission, while retaining their own props for tile
+  // rendering, DPR, and presentation.
+  const budgetProfile = remote?.profile ?? profile
+  const overflowContext = useMemo(() => ({ cache: undefined as OverflowCache | undefined }), [mainLedger, budgetProfile])
   const overflowFor = (): OverflowCache => {
-    if (!overflowContext.cache || overflowContext.cache.closed) overflowContext.cache = remote ? remote.overflowFor(profile) : createDocumentOverflowCache(mainLedger, profile)
+    if (!overflowContext.cache || overflowContext.cache.closed) overflowContext.cache = remote ? remote.overflowFor(budgetProfile) : createDocumentOverflowCache(mainLedger, budgetProfile)
     return overflowContext.cache
   }
   useEffect(() => () => { overflowContext.cache?.close(); overflowContext.cache = undefined }, [overflowContext])
@@ -771,7 +777,7 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
       return
     }
     const abort = new AbortController()
-    const resources = controlResources.current ??= createViewerControlResources(remote?.profile ?? profile, undefined, mainLedger)
+    const resources = controlResources.current ??= createViewerControlResources(budgetProfile, undefined, mainLedger)
     const sheetId = activeSheetId
     const ready = viewerControls({ doc, source, resources, sheetId, ledger: mainLedger, snapshot: () => snapshot(sheetId),
       view: () => ({ ...current.current.entryFor(sheetId).view, selection: session.get(sheetId).selection }),
@@ -844,8 +850,8 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
     const copyOwner = `session:${++copySerial}`
     let held = 0, closed = false, columnBytes = 0
     const admit = (next: number): boolean => {
-      if (closed || !Number.isSafeInteger(next) || next < 0 || next > copySessionBudget(profile)) return false
-      if (next > held && mainLedger.bytes - held + next > MAIN_THREAD_BUDGETS[profile]) return false
+      if (closed || !Number.isSafeInteger(next) || next < 0 || next > copySessionBudget(budgetProfile)) return false
+      if (next > held && mainLedger.bytes - held + next > MAIN_THREAD_BUDGETS[budgetProfile]) return false
       mainLedger.set('copy', copyOwner, next)
       held = next
       return true
@@ -886,7 +892,7 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
         reserveColumns(4 * words + 4 * summaries)
       }
       const result = await copySelection({ store: source.store(activeSheetId), owner: { ...identity }, currentOwner: () => current.current.identityOf(current.current.activeSheetId),
-        sessionBudgetBytes: copySessionBudget(profile) - columnBytes,
+        sessionBudgetBytes: copySessionBudget(budgetProfile) - columnBytes,
         selection, order: entry.view.order, visibility: entry.view.visibility, columns,
         allowed: () => current.current.allowCopy, signal: abort.signal, admitBytes: bytes => admit(columnBytes + bytes),
         retainBytes: (targets, bytes, commit) => { mainLedger.adoptWhileReachable('copy', copyOwner, 'document', targets, bytes, commit); held -= bytes }, onPending: () => { if (live.current && token === copyToken.current) setAnnouncement('Copy is waiting for values; cancel to stop.') },

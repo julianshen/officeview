@@ -352,7 +352,7 @@ export async function viewerControls(options: ViewerControlsOptions, signal: Abo
         return { kind: 'complete', matches: createMatcher(state, filter.range.r0) }
       } finally { state.producer = 'done'; drain() }
     } }) } catch (error) { state.consumerDone = true; drain(); sessionMetadata.release(); throw error }
-    let primaryFailure = false
+    let primaryFailure = false, primaryError: unknown
     try {
       if (store.stamp.valueGen > engine.identity(sheetId).valueGen) engine.publishValues(sheetId)
       let visibility: CompactRowVisibility
@@ -374,9 +374,13 @@ export async function viewerControls(options: ViewerControlsOptions, signal: Abo
       const draft = outcome.view
       return { kind: 'ready', publish: () => disposed || resources.closed ? null : options.publish(draft) }
     } catch (error) {
+      // When the operation has been aborted or the client disposed/closed, any concurrent
+      // failure during in-flight teardown is treated as cancelled to avoid noisy unwinds
+      // on torn-down instances.
       if (abort.aborted || disposed || resources.closed) return { kind: 'cancelled' }
       if (error instanceof ValueIndexError && error.code === 'quota') return { kind: 'refused', refusal: { reason: 'resource-limit', message: error.message } }
       primaryFailure = true
+      primaryError = error
       throw error
     } finally {
       let cleanupFailed = false, cleanupError: unknown
@@ -386,13 +390,22 @@ export async function viewerControls(options: ViewerControlsOptions, signal: Abo
         state.consumerDone = true
         drain()
         // Atomic adoption keeps the explicit reservation on registration failure.
+        // If adopt throws, sessionMetadata.release() is skipped intentionally: this permanent
+        // conservative over-charge guarantees memory is never under-accounted if target registration fails.
         sessionMetadata.adopt([engine, engine.memory, state])
         sessionMetadata.release()
       } catch (error) {
         if (!cleanupFailed) { cleanupFailed = true; cleanupError = error }
       }
-      // Cleanup still completes, but cannot replace the producer's primary error.
-      if (cleanupFailed && !primaryFailure) throw cleanupError
+      // Cleanup still completes; surface any secondary cleanup error on the primary failure without replacing it.
+      if (cleanupFailed) {
+        if (primaryFailure && primaryError !== undefined) {
+          try { (primaryError as { suppressed?: unknown }).suppressed = cleanupError } catch {}
+          console.debug?.('Controls cleanup failed during primary failure:', cleanupError)
+        } else {
+          throw cleanupError
+        }
+      }
     }
   }
   const stage: typeof stageOwned = async (kind, spec, owner, outer, progress) => {

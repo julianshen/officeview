@@ -69,14 +69,44 @@ describe('round 6: actual paged viewer owner teardown', () => {
       ui.unmount()
     } finally { await f.remote.close(); await f.client.dispose() }
   })
+
+  it('an M viewer on a D remote and a D viewer on an M remote use the remote profile for shared ledger caches', async () => {
+    const dFixture = await opened('D')
+    const mFixture = await opened('M')
+    try {
+      const dCache = dFixture.remote.overflowFor()
+      const mCache = mFixture.remote.overflowFor()
+      expect(dCache.pool.limitBytes).toBe(64 * 1024 * 1024)
+      expect(mCache.pool.limitBytes).toBe(32 * 1024 * 1024)
+
+      // Mount an M viewer on the D remote:
+      const uiM = render(<InteractiveSheetDoc doc={dFixture.doc} source={dFixture.remote} profile="M" />)
+      await waitFor(() => expect(dFixture.remote.mainLedger.snapshot().byPool.layout).toBeGreaterThan(4096))
+      // Shared overflow cache on the D remote must retain D budget (64 MiB), NOT replace/close with M (32 MiB)
+      expect(dFixture.remote.overflowFor().pool.limitBytes).toBe(64 * 1024 * 1024)
+      expect(dCache.closed).toBe(false)
+      uiM.unmount()
+
+      // Mount a D viewer on the M remote:
+      const uiD = render(<InteractiveSheetDoc doc={mFixture.doc} source={mFixture.remote} profile="D" />)
+      await waitFor(() => expect(mFixture.remote.mainLedger.snapshot().byPool.layout).toBeGreaterThan(4096))
+      // Shared overflow cache on the M remote must retain M budget (32 MiB), NOT replace/close with D (64 MiB)
+      expect(mFixture.remote.overflowFor().pool.limitBytes).toBe(32 * 1024 * 1024)
+      expect(mCache.closed).toBe(false)
+      uiD.unmount()
+    } finally {
+      await dFixture.remote.close(); await dFixture.client.dispose()
+      await mFixture.remote.close(); await mFixture.client.dispose()
+    }
+  })
 })
 
-async function opened() {
+async function opened(profile: 'D' | 'M' = 'D') {
   const doc = workbookOf([{ sheetId: 's', cells: [{ row: 0, col: 0, value: 'long text' }, { row: 0, col: 3, value: 'block' }] }])
   const source = createObjectWorkbookSource(doc, 'd')
   const kernel = new ViewerKernel({ parse: async () => doc, openSource: async () => source }, { yield: async () => {} })
   const client = new ViewerClient(connectInProcess(kernel))
-  await client.send({ kind: 'open', requestId: client.nextRequestId(), docId: 'd', source: { kind: 'object', document: doc }, profile: 'D' })
-  const remote = new RemoteWorkbook(client, { docId: 'd', valuePolicy: source.valuePolicy, sheets: source.sheets, diagnostics: [], formatting: source.formatting?.(), layouts: new Map(source.sheets.map(sheet => [sheet.sheetId, kernel.session('d')!.layout(sheet.sheetId)])) })
+  await client.send({ kind: 'open', requestId: client.nextRequestId(), docId: 'd', source: { kind: 'object', document: doc }, profile })
+  const remote = new RemoteWorkbook(client, { docId: 'd', valuePolicy: source.valuePolicy, sheets: source.sheets, diagnostics: [], profile, formatting: source.formatting?.(), layouts: new Map(source.sheets.map(sheet => [sheet.sheetId, kernel.session('d')!.layout(sheet.sheetId)])) })
   return { doc, client, remote }
 }

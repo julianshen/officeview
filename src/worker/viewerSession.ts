@@ -2051,6 +2051,10 @@ export class DocumentSession {
         order: state.order, visibility: projected.visibility, sort: state.sort, filter: normalized, matches,
       }))
     } catch (cause) {
+      // Unlike sort() which is an internal kernel sort with token-based cooperative
+      // yield checks, filter() invokes external host-provided evaluators and display
+      // lane leases that reject with a raw DOMException('AbortError') across the boundary.
+      // Map that caller abort to { kind: 'cancelled' } rather than unhandled rejection.
       if (signal.aborted && cause instanceof DOMException && cause.name === 'AbortError') return { kind: 'cancelled' }
       throw cause
     } finally {

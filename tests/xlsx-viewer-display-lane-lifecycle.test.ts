@@ -582,6 +582,7 @@ describe('codex r4 #2: a raw prepared column a real sort still leases stays char
       expect(bytes).toBeGreaterThan(0)
       if (end === 'cancel') controller.abort()
       // Close returns while the external host-yield callback is still paused.
+      // Under cancellation, the lease drains to 0 while the host-yield continuation is still paused (bounded, by design).
       await s.release()
       expect(s.preparedStats().bytes).toBe(end === 'cancel' ? 0 : bytes)
       if (end === 'cancel') {
