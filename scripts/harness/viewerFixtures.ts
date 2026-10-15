@@ -2,15 +2,15 @@
  * S10.2 viewer fixtures: true XLSX packages written by the S0.2 deterministic
  * builders (scripts/generate-viewer-fixtures.ts) at an explicit scale, plus two
  * scroll-mix workbooks (wrapped text; styled fills/fonts/borders/formats) built
- * here. Packages are cached by name under the OS temp directory; every run
+ * here. Packages are cached by name under the repository's .tmp/; every run
  * re-hashes the bytes it measures, so a receipt names the exact SHA-256, byte
  * count, expanded XML bytes and populated cells of each workbook.
  */
 import { createHash } from 'node:crypto'
 import { createInflateRaw } from 'node:zlib'
 import { createReadStream, existsSync, mkdirSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { dirname, join, resolve } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { writeFixturePackage } from '../generate-viewer-fixtures'
 import { colName, xlsxBytes } from '../../tests/helpers/xlsx-package'
 
@@ -33,9 +33,13 @@ export interface ViewerFixture {
 
 /** Bump when a builder's output changes, so stale cached packages are not reused. */
 export const FIXTURE_CACHE_VERSION = 1
+const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..')
 export function fixtureDir(): string {
-  // Tests point the cache elsewhere; the release run uses the OS temp directory.
-  return process.env.OFFICEVIEW_VIEWER_FIXTURE_DIR ?? join(tmpdir(), `officeview-viewer-perf-v${FIXTURE_CACHE_VERSION}`)
+  // Tests point the cache elsewhere. The default is the repository's ignored
+  // .tmp/, not the OS temp directory: macOS dirhelper deletes $TMPDIR files
+  // older than 3 days at 03:35 daily, which emptied the cache between the
+  // suite's start-up verification and its import phase (ENOENT on f1-full.xlsx).
+  return process.env.OFFICEVIEW_VIEWER_FIXTURE_DIR ?? join(REPO_ROOT, '.tmp', `viewer-perf-fixtures-v${FIXTURE_CACHE_VERSION}`)
 }
 
 const SCROLL_ROWS = { full: 20_000, reduced: 2_000 } as const

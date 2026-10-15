@@ -8,8 +8,9 @@
 import { afterEach, describe, expect, it } from 'vitest'
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
-import { FIXTURE_MANIFEST_PATH, ensureViewerFixtures, type FixtureManifest } from '../scripts/harness/viewerFixtures'
+import { join, resolve, sep } from 'node:path'
+import { realpathSync } from 'node:fs'
+import { FIXTURE_MANIFEST_PATH, ensureViewerFixtures, fixtureDir, type FixtureManifest } from '../scripts/harness/viewerFixtures'
 import { xlsxBytes } from './helpers/xlsx-package'
 
 const manifest = JSON.parse(readFileSync(join(process.cwd(), FIXTURE_MANIFEST_PATH), 'utf8')) as FixtureManifest
@@ -17,6 +18,20 @@ let dir = ''
 afterEach(() => { if (dir) rmSync(dir, { recursive: true, force: true }); delete process.env.OFFICEVIEW_VIEWER_FIXTURE_DIR })
 const isolate = () => { dir = mkdtempSync(join(tmpdir(), 'ovf-')); process.env.OFFICEVIEW_VIEWER_FIXTURE_DIR = dir; return dir }
 const oneCell = () => xlsxBytes({ sheetData: '<row r="1"><c r="A1"><v>1</v></c></row>' })
+
+describe('viewer fixture cache location', () => {
+  it('defaults to the repository .tmp/, never the OS temp directory (macOS dirhelper purges $TMPDIR files older than 3 days at 03:35 daily, mid-run)', () => {
+    delete process.env.OFFICEVIEW_VIEWER_FIXTURE_DIR
+    const dir = resolve(fixtureDir())
+    const temp = realpathSync(tmpdir())
+    expect(dir.startsWith(resolve(tmpdir()) + sep) || dir.startsWith(temp + sep)).toBe(false)
+    expect(dir.startsWith(join(process.cwd(), '.tmp') + sep)).toBe(true)
+  })
+  it('keeps the explicit override', () => {
+    process.env.OFFICEVIEW_VIEWER_FIXTURE_DIR = '/somewhere/else'
+    expect(fixtureDir()).toBe('/somewhere/else')
+  })
+})
 
 describe('viewer fixture identity', () => {
   it('a planted one-cell f2-full.xlsx is replaced by the verified 1M-row package, never reported as it', async () => {
