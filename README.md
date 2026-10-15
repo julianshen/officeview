@@ -127,9 +127,12 @@ sheets, caches and outstanding operations; browser overhead is additional:
 | Prepared columns, within worker budget | 64 MiB / 8 columns | 32 MiB / 4 columns |
 
 Admission selects D/M automatically for desktop versus phones/tablets, including
-iPadOS. The public viewport currently defaults to D for its copy/bitmap policies
-even with an M-admitted source; the M table is not an end-to-end mobile compliance
-claim. There is no public profile-selection prop.
+iPadOS. A worker-backed viewer charges its main-thread pools (copy admission,
+controls memory and the text-overflow cache) against the source's admitted
+profile, so an M-admitted source gets the M main-thread caps. Canvas/bitmap
+presentation still follows the viewport, which defaults to D, and a resident
+(non-worker) viewer uses D throughout. The M table is not an end-to-end mobile
+compliance claim. There is no public profile-selection prop.
 
 Principal default admission gates are:
 
