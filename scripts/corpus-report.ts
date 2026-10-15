@@ -12,13 +12,16 @@
 
 import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { createCanvas } from 'canvas'
 import { loadOfficeFile } from '../src/components/OfficeFile'
 import { getPaintables } from '../src/render/paint'
+import type { XlsxDocument } from '../src/xlsx/types'
+import { hasRecordingLoss, measureXlsxTextCoverage, type XlsxTextCoverage } from './corpus-report-text'
 import { buildTextIndex } from '../src/core/search'
 import { isOfficeCorpusFile } from '../src/test/corpus'
 
-const CORPUS_DIR = join(import.meta.dir, '..', 'corpus')
+const CORPUS_DIR = fileURLToPath(new URL('../corpus', import.meta.url))
 
 /**
  * Fixtures that are deliberately malformed upstream — a minimized fuzzer case
@@ -35,12 +38,13 @@ interface Report {
   outcome: Outcome
   units: number
   inkRatio: number
-  /** characters the pipeline actually painted */
+  /** recorded line characters (legacy DOCX/PPTX count) */
   chars: number
   /** characters the parsed model held (before rendering) */
   modelChars: number
   ms: number
   note: string
+  xlsx?: XlsxTextCoverage
 }
 
 function inkRatioOf(data: Uint8ClampedArray): number {
@@ -53,8 +57,7 @@ function inkRatioOf(data: Uint8ClampedArray): number {
   return total === 0 ? 0 : ink / total
 }
 
-/** Count characters the PARSED MODEL holds — compared against painted chars
- * to detect content the renderer silently dropped. */
+/** Legacy parsed string count for the ordinary DOCX/PPTX diagnostic. */
 function modelCharCount(doc: unknown): number {
   let n = 0
   if (!doc || typeof doc !== 'object') return 0
@@ -96,55 +99,58 @@ async function runOne(path: string, render: boolean): Promise<Report> {
   try {
     const doc = await loadOfficeFile(readFileSync(path))
     const paintables = await getPaintables(doc as never)
-    const modelChars = modelCharCount(doc)
-    // how much text did the pipeline actually paint? compared with the model
-    // this separates "we dropped the content" from "this fixture is sparse"
-    let chars = 0
     try {
-      const index = await buildTextIndex(paintables as never)
-      for (const page of index.pages) {
-        for (const line of page.lines) chars += line.text.trim().length
-      }
-    } catch {
-      chars = -1
-    }
-    let ink = 0
-    let pixels = 0
-    for (const [i, p] of paintables.entries()) {
-      const w = Math.min(4000, Math.max(1, Math.ceil(p.spec.widthPx)))
-      const h = Math.min(4000, Math.max(1, Math.ceil(p.spec.heightPx)))
-      const canvas = createCanvas(w, h)
-      const ctx = canvas.getContext('2d')!
-      // paint scaled into the (possibly clamped) canvas
-      ctx.fillStyle = '#ffffff'
-      ctx.fillRect(0, 0, w, h)
-      ctx.save()
-      ctx.scale(w / p.spec.widthPx, h / p.spec.heightPx)
+      const modelChars = modelCharCount(doc)
+      const xlsxDoc = 'sheets' in doc ? doc as XlsxDocument : undefined
+      let chars = 0
+      let xlsx: XlsxTextCoverage | undefined
       try {
-        p.paint(ctx)
-      } finally {
-        ctx.restore()
+        const index = await buildTextIndex(paintables as never)
+        if (xlsxDoc) {
+          const context = createCanvas(4, 4).getContext('2d') as unknown as CanvasRenderingContext2D
+          xlsx = measureXlsxTextCoverage(xlsxDoc, paintables, index, context)
+          chars = xlsx.recordedSpanChars
+        } else {
+          for (const page of index.pages) for (const line of page.lines) chars += line.text.trim().length
+        }
+      } catch (error) {
+        if (xlsxDoc) throw new Error(`XLSX recording measurement unavailable: ${error instanceof Error ? error.message : String(error)}`)
+        chars = -1
       }
-      const img = ctx.getImageData(0, 0, w, h)
-      ink += inkRatioOf(img.data) * (w * h)
-      pixels += w * h
-      if (render) {
-        mkdirSync(join('/tmp/corpus-render'), { recursive: true })
-        writeFileSync(join('/tmp/corpus-render', `${file}.unit${i}.png`), canvas.toBuffer('image/png'))
+      let ink = 0
+      let pixels = 0
+      for (const [i, p] of paintables.entries()) {
+        const w = Math.min(4000, Math.max(1, Math.ceil(p.spec.widthPx)))
+        const h = Math.min(4000, Math.max(1, Math.ceil(p.spec.heightPx)))
+        const canvas = createCanvas(w, h)
+        const ctx = canvas.getContext('2d')!
+        ctx.fillStyle = '#ffffff'
+        ctx.fillRect(0, 0, w, h)
+        // Only geometry established as legitimately collapsed may skip replay.
+        // Other zero/invalid units remain a measurement or raster failure.
+        if (!xlsx?.sheets[i]?.collapsedGeometry) {
+          ctx.save()
+          ctx.scale(w / p.spec.widthPx, h / p.spec.heightPx)
+          try { p.paint(ctx as unknown as CanvasRenderingContext2D) } finally { ctx.restore() }
+        }
+        const img = ctx.getImageData(0, 0, w, h)
+        ink += inkRatioOf(img.data) * (w * h)
+        pixels += w * h
+        if (render) {
+          mkdirSync(join('/tmp/corpus-render'), { recursive: true })
+          writeFileSync(join('/tmp/corpus-render', `${file}.unit${i}.png`), canvas.toBuffer('image/png'))
+        }
       }
-    }
-    const ratio = pixels === 0 ? 0 : ink / pixels
-    // degrade only when the model held text but we painted (almost) none of
-    // it — absolute ink is not a failure signal (a 4-character fixture draws
-    // very little ink legitimately)
-    const dropped = modelChars > 0 && chars < modelChars * 0.5
-    const outcome: Outcome =
-      paintables.length === 0 && chars <= 0
-        ? 'empty'
-        : paintables.length === 0 || dropped
-          ? 'degraded'
-          : 'ok'
-    return { file, ext, outcome, units: paintables.length, inkRatio: ratio, chars, modelChars, ms: Date.now() - started, note: dropped ? `dropped ${modelChars - chars}/${modelChars} model chars` : '' }
+      const ratio = pixels === 0 ? 0 : ink / pixels
+      const dropped = xlsx ? hasRecordingLoss(xlsx) : modelChars > 0 && chars < modelChars * 0.5
+      const outcome: Outcome = xlsx
+        ? dropped ? 'degraded' : 'ok'
+        : paintables.length === 0 && chars <= 0
+          ? 'empty'
+          : paintables.length === 0 || dropped ? 'degraded' : 'ok'
+      const note = xlsx ? xlsxNote(xlsx) : dropped ? `dropped ${modelChars - chars}/${modelChars} model chars` : ''
+      return { file, ext, outcome, units: paintables.length, inkRatio: ratio, chars, modelChars, ms: Date.now() - started, note, ...(xlsx ? { xlsx } : {}) }
+    } finally { paintables.dispose() }
   } catch (e) {
     const message = e instanceof Error ? e.message : String(e)
     return {
@@ -159,6 +165,23 @@ async function runOne(path: string, render: boolean): Promise<Report> {
       note: message.length > 90 ? `${message.slice(0, 90)}…` : message,
     }
   }
+}
+
+function xlsxNote(result: XlsxTextCoverage): string {
+  const notes: string[] = []
+  for (const sheet of result.sheets) for (const stratum of ['string', 'other'] as const) {
+    const c = sheet.coverage[stratum]
+    if (c.expected > 0 && c.matched < c.expected * 0.5)
+      notes.push(`recording coverage below 50%: sheet ${sheet.sheetIndex} (${sheet.sheetName}) ${stratum === 'string' ? 'strings' : 'other'} ${c.matched}/${c.expected}`)
+  }
+  if (result.status !== 'comparable') notes.push(...result.diagnostics)
+  else if (result.expectedSpanChars === 0) notes.push('no eligible cell text')
+  else if (result.matchedSpans < result.expectedSpans) notes.push(...result.diagnostics)
+  return notes.join('; ')
+}
+function xlsxFields(r: XlsxTextCoverage): string {
+  const excluded = r.excluded.map(e => `${e.reason}=${e.cells}cells/${e.sourceStringChars}source-strings`).join(' ')
+  return `source-strings=${r.allSourceStringChars} eligible-strings=${r.eligibleSourceStringChars} eligible-cells=${r.eligibleCells} formatted=${r.formattedExpectedChars} recorded=${r.recordedSpanChars} matched/expected=${r.matchedSpanChars}/${r.expectedSpanChars} strings=${r.coverage.string.matched}/${r.coverage.string.expected} other=${r.coverage.other.matched}/${r.coverage.other.expected} unmatched-recorded=${r.unmatchedRecordedChars} spans=${r.matchedSpans}/${r.expectedSpans}/${r.recordedSpans} unmatched-recorded-spans=${r.unmatchedRecordedSpans}${excluded ? ` ${excluded}` : ''} clipping=${r.clipping}`
 }
 
 const onlyArg = process.argv.indexOf('--only')
@@ -178,13 +201,15 @@ const files = readdirSync(CORPUS_DIR)
 
 console.log(`corpus report — ${files.length} files${only ? ` (only ${only})` : ''}\n`)
 
+console.log('XLSX counts use UTF-16 code units with per-span trimming; whitespace-only spans count as spans. Shared format/layout/replay omissions, parsed-source preservation, drawing completeness and native appearance are not certified. Identical text+geometry replacements can impersonate cell spans; clipping is not-assessed.\n')
+
 const reports: Report[] = []
 for (const f of files) {
   const r = await runOne(join(CORPUS_DIR, f), renderOne !== null && f.includes(renderOne))
   reports.push(r)
   const mark = r.outcome === 'ok' ? '✓' : r.outcome === 'empty' ? '·' : r.outcome === 'degraded' ? '!' : '✗'
   console.log(
-    `${mark} ${r.file.padEnd(42)} ${r.ext.padEnd(5)} units=${String(r.units).padStart(3)}  text=${String(r.chars).padStart(5)}/${String(r.modelChars).padEnd(5)}  ink=${(r.inkRatio * 100).toFixed(2).padStart(6)}%  ${String(r.ms).padStart(5)}ms${r.note ? `  ${r.note}` : ''}`,
+    `${mark} ${r.file.padEnd(42)} ${r.ext.padEnd(5)} units=${String(r.units).padStart(3)}  ${r.xlsx ? xlsxFields(r.xlsx) : `text=${String(r.chars).padStart(5)}/${String(r.modelChars).padEnd(5)}`}  ink=${(r.inkRatio * 100).toFixed(2).padStart(6)}%  ${String(r.ms).padStart(5)}ms${r.note ? `  ${r.note}` : ''}`,
   )
 }
 
@@ -199,7 +224,7 @@ console.log(
 )
 if (empty.length > 0) console.log(`empty (no text in the file itself): ${empty.map((r) => r.file).join(', ')}`)
 if (degraded.length > 0) {
-  console.log('\ndegraded (content dropped — these are bugs):')
+  console.log('\ndegraded (recording/content checks need investigation):')
   for (const d of degraded) console.log(`  ${d.file}  ${d.note}`)
 }
 if (unexpected.length > 0) {
