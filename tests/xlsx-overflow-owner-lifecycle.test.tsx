@@ -54,6 +54,21 @@ describe('round 6: actual paged viewer owner teardown', () => {
       ui.unmount()
     } finally { await f.remote.close(); await f.client.dispose() }
   })
+
+  it('rebinds per frame when a sibling viewer with another profile replaced the remote cache after this render', async () => {
+    const f = await opened()
+    try {
+      // Same commit: A renders (binds D), B renders (overflowFor('M') closes D),
+      // then A's layout effect presents. The frame-time rebind keeps A's paint
+      // on a live owner instead of a closed one (wasteful ping-pong, documented).
+      const ui = render(<><div data-testid="a"><InteractiveSheetDoc doc={f.doc} source={f.remote} profile="D" /></div><div data-testid="b"><InteractiveSheetDoc doc={f.doc} source={f.remote} profile="M" /></div></>)
+      await waitFor(() => expect(f.remote.mainLedger.snapshot().byPool.layout).toBeGreaterThan(4096))
+      await waitFor(() => expect(ui.getAllByRole('gridcell', { name: /value long text/ })).toHaveLength(2))
+      expect(ui.getByTestId('a').textContent).not.toContain('Text overflow occupancy owner is closed')
+      expect(ui.getByTestId('b').textContent).not.toContain('Text overflow occupancy owner is closed')
+      ui.unmount()
+    } finally { await f.remote.close(); await f.client.dispose() }
+  })
 })
 
 async function opened() {
