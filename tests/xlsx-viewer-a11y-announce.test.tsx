@@ -6,7 +6,7 @@
  * V2 — Shift+Arrow extension announced only the target cell, never that a
  *      range is selected. Spec §9.2: names carry selection descriptions and
  *      the live region reports selection.
- * V3 — after the V1 fix (inner text aria-hidden) VoiceOver appended "blank"
+ * V5 — after the V1 fix (inner text aria-hidden) VoiceOver appended "blank"
  *      (空白) after every cell: the gridcell had a label but no accessible
  *      content. The name now comes from the cell's own (visually hidden) text,
  *      so the value is read once and the cell is never empty.
@@ -17,13 +17,13 @@ import { GridSemantics, gridNavigationTransition, type GridTransition } from '..
 import { selectCell, selectHeader } from '../src/xlsx/view/selection'
 import { gridFixture } from './helpers/xlsx-grid-fixture'
 
-describe('V1/V3: a cell value is exposed once and the cell is never blank', () => {
+describe('V1/V5: a cell value is exposed once and the cell is never blank', () => {
   it('every gridcell\'s exposed text is exactly its accessible name', () => {
     const ui = render(<GridSemantics {...gridFixture()} />)
     const cells = [...ui.container.querySelectorAll('[role=gridcell]')]
     expect(cells.length).toBeGreaterThan(0)
     for (const cell of cells) {
-      // No label beside contents (V1: read twice) and no empty contents (V3: "blank").
+      // No label beside contents (V1: read twice) and no empty contents (V5: "blank").
       const exposed = [...cell.querySelectorAll('*')].filter(node => node.children.length === 0 && node.textContent && !node.closest('[aria-hidden=true]')).map(node => node.textContent).join('')
       expect(exposed).toMatch(/^[A-Z]+\d+(, value .*)?/)
       expect(cell.hasAttribute('aria-label')).toBe(false)
