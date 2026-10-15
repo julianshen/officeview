@@ -17,7 +17,7 @@ const fixture = () => {
 }
 const flush = async () => { for (let i = 0; i < 30; i++) await Promise.resolve() }
 
-it('keeps the existing drawing capability, receiver, profile and memory share through the deadline adapter', async () => {
+it('forwards the existing drawing capability with its receiver, profile and memory share', async () => {
   const { document, source, kernel } = fixture(), store = source.store('s')
   let during = 0
   const provider = vi.spyOn(store, 'readDrawings').mockImplementation(async function (this: typeof store, options, profile, memory) {
@@ -94,6 +94,6 @@ it('preserves the diagnosed unavailable result when a source has no drawing capa
   const replies: WorkerReply[] = []
   try {
     await kernel.handle({ kind: 'read', requestId: 'drawings', owner: initialIdentity('doc', 's'), query: { op: 'drawings' } }, out => replies.push(out))
-    expect(replies).toMatchObject([{ kind: 'complete', result: { result: { result: { completeness: 'incomplete', diagnostics: [{ code: 'drawings-unavailable' }] } } } }])
+    expect(replies).toMatchObject([{ kind: 'complete', result: { result: { result: { completeness: 'incomplete', diagnostics: [{ code: 'drawings-unavailable', message: 'This source cannot serve drawing content; drawings are not shown' }] } } } }])
   } finally { await kernel.handle({ kind: 'close', requestId: 'close', docId: 'doc' }, () => {}) }
 })

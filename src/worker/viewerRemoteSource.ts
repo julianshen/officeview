@@ -374,7 +374,7 @@ export class RemoteWorkbook implements WorkbookSource {
       // Charged until no part of the payload is reachable: a consumer that keeps
       // a page (a scan generator across tasks) keeps the charge.
       this.mainLedger.chargeWhileReachable(head.kind === 'read' && head.query?.op === 'drawings' ? 'drawings' : 'replies', leaseTargets(reply), estimatePayloadBytes(reply))
-      this.capture(reply, scope)
+      this.capture(reply, scope, key !== 'read:drawings')
       return reply
     }, () => CLOSED)
     if (!signal) return sent.finally(() => unsubscribe?.())
@@ -389,9 +389,11 @@ export class RemoteWorkbook implements WorkbookSource {
     })
   }
   nextRequestId(): string { return this.client.nextRequestId() }
-  private capture(reply: WorkerReply, scope: string): void {
+  private capture(reply: WorkerReply, scope: string, rangeNotice: boolean): void {
     const status = reply.diagnostics?.find(d => d.code === 'cached-value-policy')
     if (status && status.message !== this.statusMessage) { this.statusMessage = status.message; this.notify() }
+    // Drawing failures have their own bounded retry and visible diagnostics.
+    if (!rangeNotice) return
     const timeout = reply.diagnostics.find(d => d.code === 'query-timeout')
     if (this.closed || this.latestQueries.get(scope) !== reply.requestId || !reply.owner) return
     const current = 'sheetId' in reply.owner ? this.identity(reply.owner.sheetId) : this.owner
