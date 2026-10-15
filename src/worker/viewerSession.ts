@@ -1417,10 +1417,11 @@ export class DocumentSession {
    * the backing store for the residual membership without a backend cursor. A
    * cursor therefore stays valid when its column is prepared or evicted between
    * pages, whatever cursor encoding the store uses (§4.1 cursors are opaque).
+   *
+   * Value-query facade for worker sort/filter/search/viewport value queries,
+   * not a general capability proxy. Drawing reads bypass it; main-thread value
+   * readers use their original source store for payload settlement.
    */
-  /** Value-query facade for worker sort/filter kernels, not a general
-   * capability proxy. Drawing reads bypass it; main-thread value readers use
-   * their original source store for payload settlement. */
   preparedStore(sheetId: string): SourceStore {
     const store = this.store(sheetId)
     const session = this
