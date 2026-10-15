@@ -158,7 +158,10 @@ export class WorkerViewportPlans {
         if (retainedBytes > cap) throw new Error('Viewport plans exceed their bounded memory budget')
         const guard = () => sourceRequest.live() && !this.closed && !this.remote.isClosed && scope === this.scope && this.entries.get(key) === entry && !entry.controller.signal.aborted && sameIdentity(this.remote.identity(owner.sheetId), sourceOwner) && sameIdentity(owner, expectedOwner) && this.remote.merges(owner.sheetId).gen === mergeGeneration && window.zoom === zoom && window.deviceScale === deviceScale
         adoptionToken = store.stageViewport(cells, entry.controller.signal, { live: guard })
-        if (!guard()) return
+        if (!guard()) {
+          this.fail(key, entry, [{ code: 'stale-source', message: 'Viewport owner changed. Retrying.' }], true)
+          return
+        }
         const previousPlan = entry.plan, previousEntryBytes = entry.bytes
         const rollback = () => {
           if (this.remote.isClosed) { this.dispose(); return }

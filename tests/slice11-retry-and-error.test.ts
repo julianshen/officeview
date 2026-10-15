@@ -21,7 +21,7 @@ async function harness() {
   const flush = async () => { await port.idle(); for (let i = 0; i < 50; i++) await Promise.resolve() }
   remote.merges('s'); await flush()
   const window = { box: { x: 0, y: 0, width: 128, height: 20 }, zoom: 1, deviceScale: 1 }, extent = { width: 257 * 64, height: 20 }
-  return { remote, store, plans, owner, window, extent, flush, close: async () => { plans.dispose(); await remote.release() } }
+  return { remote, store, plans, owner, session, window, extent, flush, close: async () => { plans.dispose(); await remote.release() } }
 }
 
 it('SLICE11 stale refusal exposes a failure that survives copying and serialization', async () => {
@@ -34,6 +34,7 @@ it('SLICE11 stale refusal exposes a failure that survives copying and serializat
     expect(token.commit(publish)).toBe(false)
     const expected = { code: 'stale-source', retryable: true, message: 'Viewport row cache changed; re-stage the publication' }
     const error = token.error!
+    expect(token.error, 'repeated access preserves the exposed failure identity').toBe(error)
     expect({ ...error }).toEqual(expected)
     expect(JSON.parse(JSON.stringify(error))).toEqual(expected)
     expect(structuredClone(error)).toEqual(expected)
@@ -90,4 +91,37 @@ it('LANDING a cleared source request backs off and retries like a silent stale r
     expect(h.plans.get(h.owner, h.window, h.extent, true).kind).toBe('detail')
     expect(query).toHaveBeenCalledTimes(2)
   } finally { query.mockRestore(); await h.close() }
+})
+
+
+it('LANDING retries a mid-flight worker font change while the host font remains unchanged', async () => {
+  const h = await harness(), viewport = h.remote.viewport.bind(h.remote)
+  const identity = vi.spyOn(h.remote, 'identity')
+  const query = vi.spyOn(h.remote, 'viewport').mockImplementationOnce(async (...args) => {
+    const out = await viewport(...args)
+    // Deliver the old reply only after the worker and its remote mirror have
+    // moved to new fonts; the frame's independent host owner stays the same.
+    h.session.publishFonts()
+    identity.mockReturnValue(h.session.identity('s'))
+    return out
+  })
+  try {
+    h.plans.beginFrame(h.owner, h.window)
+    h.plans.get(h.owner, h.window, h.extent, true)
+    await h.flush()
+    expect(h.owner.fontGen).toBe(0)
+    expect(h.remote.identity('s').fontGen).toBe(1)
+    expect(h.plans.get(h.owner, h.window, h.extent, true)).toMatchObject({ kind: 'diagnostic', diagnostics: [{ code: 'stale-source', message: 'Viewport owner changed. Retrying.' }] })
+    expect(h.remote.pagesInFlight).toBe(0)
+    expect((h.remote.ledger as unknown as { reserved: number }).reserved).toBe(0)
+    await new Promise(resolve => setTimeout(resolve, PLAN_RETRY_MS + 20))
+    h.plans.beginFrame(h.owner, h.window)
+    h.plans.get(h.owner, h.window, h.extent, true)
+    await h.flush()
+    expect(h.plans.get(h.owner, h.window, h.extent, true).kind).toBe('detail')
+    expect(query).toHaveBeenCalledTimes(2)
+    expect(query.mock.calls.map(([owner]) => owner.fontGen)).toEqual([0, 1])
+    expect(h.owner.fontGen).toBe(0)
+    expect(h.store.cellAt({ row: 0, col: 0 })?.value).toBe('origin')
+  } finally { query.mockRestore(); identity.mockRestore(); await h.close() }
 })

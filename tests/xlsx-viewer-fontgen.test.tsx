@@ -182,7 +182,6 @@ it('mounted paged viewport adopts worker overflow proofs after the first font le
     await waitFor(() => expect(ui.getByRole('gridcell', { name: /target1000/ })).toBeTruthy())
     await waitFor(() => expect(f.last()?.pendingTiles).toBe(0))
   } finally {
-    console.log('FONTGEN_FIRST_LEASE', JSON.stringify({ requests: audit.requests.map(r => ({ requested: r.owner.fontGen, remote: r.remote.fontGen, worker: r.session.fontGen, kind: typeof r.out === 'object' && r.out !== null && 'kind' in r.out ? r.out.kind : 'unsettled' })), tiles: audit.tiles.filter(t => t.kind === 'detail').map(t => ({ fontGen: t.fontGen, coverage: t.coverage, kind: t.kind, targetOverflow: t.plan?.kind === 'detail' ? t.plan.cells.find(c => c.source.row === 999 && c.source.col === 0)?.overflow : undefined })), mainFallbackCalls: planner.mock.calls.length }))
     h.release(); ui.unmount()
   }
 }, 12000)

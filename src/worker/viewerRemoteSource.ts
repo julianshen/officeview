@@ -996,7 +996,7 @@ export class RemoteSheetStore implements SourceStore {
     let error: SourceFailure | undefined
     const stale = () => {
       const cause = new StaleViewportPublicationError()
-      error = cause
+      error ??= failure(cause.code, cause.message, cause.retryable)
       return cause
     }
     let live = true, committing = false
@@ -1051,7 +1051,7 @@ export class RemoteSheetStore implements SourceStore {
         staged.set(row, { ...(old ?? { chunks: new Set<number>() }), cells: merged })
       }
       incoming.clear()
-      return { close, get error() { return error && failure(error.code, error.message, error.retryable) }, commit: publish => {
+      return { close, get error() { return error }, commit: publish => {
         if (!live || signal.aborted || this.workbook.isClosed || request && !request.live() || epoch !== this.state.epoch || this.workbook.identity(this.sheetId) !== owner) { close(); return false }
         if (this.workbook.ledger.generation !== generation) { stale(); close(); return false }
         committing = true
@@ -1103,7 +1103,7 @@ export class RemoteSheetStore implements SourceStore {
             accounting.rollback()
           }
           close()
-          if (cause instanceof StaleViewportPublicationError) { error = cause; return false }
+          if (cause instanceof StaleViewportPublicationError) { error ??= failure(cause.code, cause.message, cause.retryable); return false }
           throw cause
         } finally { committing = false; close() }
       } }
