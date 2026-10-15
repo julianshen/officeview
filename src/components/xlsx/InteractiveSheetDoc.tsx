@@ -237,6 +237,14 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
   useLayoutEffect(() => { serials.rendering = false })
   useEffect(() => { holds.committed(displaySerial) })
   useEffect(() => { holds.restore(); return () => holds.dispose() }, [holds])
+  // An external `views` input this viewer charged stays held while it is in the
+  // props (§12.4 retained views), independently of whether it is displayed; it
+  // is released once a display without it commits, or on unmount.
+  const inputHolds = useMemo(() => new DisplayHolds<SheetViewInput>(input => [input.order, input.visibility].flatMap(target => target ? mainLedger.hold(target) ?? [] : [])), [mainLedger])
+  const heldInputs = useRef(new Map<string, SheetViewInput>()).current
+  for (const [sheetId, input] of heldInputs) if (views?.[sheetId] !== input) { inputHolds.retire(input, displaySerial); heldInputs.delete(sheetId) }
+  useEffect(() => { inputHolds.committed(displaySerial) })
+  useEffect(() => { inputHolds.restore(); return () => inputHolds.dispose() }, [inputHolds])
   // The viewer's own pools end with the viewer; lifetime charges (geometry,
   // views, replies, the resident document) end when nothing reaches them.
   // Submitted clipboard jobs retain their own charge until they settle.
@@ -334,6 +342,8 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
     // words built here for any sheet (1,048,576 rows: ~132 KiB). A worker-backed
     // view's adopted buffers are charged by the workbook (adopt).
     chargeViewBuffers(remote ? null : order, remote && input.visibility ? null : visibility)
+    const external = remote ? undefined : views?.[sheetId]
+    if (external && input === external && heldInputs.get(sheetId) !== external) { inputHolds.own(external); heldInputs.set(sheetId, external) }
     const selection = previous?.view.selection ?? emptyGridSelection()
     const view: SheetView = { sheetId, revision: input.revision, order, baseHidden, visibility, sort: input.sort ?? null, filter: input.filter ?? null, selection }
     const used = remote?.layout(sheetId).used

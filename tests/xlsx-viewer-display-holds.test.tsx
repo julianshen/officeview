@@ -187,3 +187,26 @@ it('C3 resident: repeated header sorts keep resident geometry, view buffers and 
   }
   ui.unmount()
 })
+
+it('an external views input stays charged while it is still in the props, after a local sort overrides it, and ends when replaced', async () => {
+  const { createRowOrder } = await import('../src/xlsx/view/order')
+  const doc = docOf()
+  const externalOrder = createRowOrder([{ r0: 1, r1: 3, sourceAtOffset: Uint32Array.of(2, 1, 3) }])
+  const externalViews = { A: { revision: 1, order: externalOrder } }
+  let ledger!: import('../src/xlsx/view/mainLedger').MainMemoryLedger
+  const ui = render(<InteractiveSheetDoc doc={doc} views={externalViews} onMainLedger={value => { ledger = value }} />)
+  await loaded(ui)
+  expect(ledger.hasLifetime(externalOrder), 'the displayed input is charged').toBe(true)
+  const header = () => ui.getByRole('columnheader', { name: /^Column A/ })
+  const before = header().getAttribute('aria-sort')
+  fireEvent.click(ui.getByRole('button', { name: 'Cycle sort column A' }))
+  await waitFor(() => expect(header().getAttribute('aria-sort')).not.toBe(before))
+  await act(async () => { await new Promise(resolve => setTimeout(resolve, 0)) })
+  expect(externalViews.A.order.displayToSource(1)).toBe(2)
+  expect(ledger.hasLifetime(externalOrder), 'the unchanged input prop is still retained by the mounted viewer').toBe(true)
+  // A new input replaces it: once that commits, the mounted viewer no longer holds the old one.
+  ui.rerender(<InteractiveSheetDoc doc={doc} views={{ A: { revision: 1, order: createRowOrder([{ r0: 1, r1: 3, sourceAtOffset: Uint32Array.of(3, 2, 1) }]) } }} onMainLedger={value => { ledger = value }} />)
+  await act(async () => { await new Promise(resolve => setTimeout(resolve, 0)) })
+  expect(ledger.hasLifetime(externalOrder), 'released once the input is replaced').toBe(false)
+  ui.unmount()
+})
