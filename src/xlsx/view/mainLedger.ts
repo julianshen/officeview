@@ -92,6 +92,11 @@ const emptyPools = (): Record<MainPool, number> => ({ rowCache: 0, viewBuffers: 
 /** The part of FinalizationRegistry the ledger uses (injectable for tests). */
 export interface CollectionWatcher { register(target: object, token: string): void }
 let lifetimeSerial = 0
+/** One owner's claim on a held charge (chargeWhileHeld). Releasing twice is a no-op. */
+export interface LedgerHold { release(): void }
+/** A held lifetime charge: its targets, bytes (one or more lifetime tokens: an
+ * adoption may be split across reservations) and current holders. */
+interface HeldCharge { pool: MainPool; bytes: number; targets: readonly object[]; tokens: string[]; holders: number; ended: boolean }
 
 export class MainMemoryLedger {
   private readonly charges = new Map<string, { pool: MainPool; bytes: number }>()
@@ -124,14 +129,69 @@ export class MainMemoryLedger {
     const owner = token
     this.set(pool, owner, bytes)
     this.lifetimes.set(token, pool)
-    for (const target of targets) if (!this.leases.has(target)) this.leases.set(target, token)
+    // A live alias keeps its first owner; a mapping to an ended charge is rebound.
+    for (const target of targets) if (!this.hasLifetime(target)) this.leases.set(target, token)
     if (!this.watcher) return token
     this.alive.set(token, { pool, owner, remaining: targets.length })
     for (const target of targets) this.watcher.register(target, token)
     return token
   }
-  /** Transfers already-admitted bytes without a double charge or refund gap. */
-  adoptWhileReachable(fromPool: MainPool, fromOwner: string, pool: MainPool, targets: readonly object[], bytes: number, commit?: () => void): string {
+  /**
+   * A lifetime charge with explicit owners (spec §§10.1, 12.4 overlap). Until
+   * its first hold() it is a reachability charge; once held, it ends when its
+   * last holder releases, or, as a safety net for a holder that never
+   * releases, when every target is collected. Every consumer that keeps the
+   * allocation (a committed display, a copy, a pending operation) takes its
+   * own hold. Targets must belong to this allocation alone (never a shared
+   * singleton such as the identity order), as any of them names it.
+   */
+  chargeWhileHeld(pool: MainPool, targets: readonly object[], bytes: number): string {
+    const token = this.chargeWhileReachable(pool, targets, bytes)
+    this.holdable(pool, targets, token, bytes)
+    return token
+  }
+  private holdable(pool: MainPool, targets: readonly object[], token: string, bytes: number): void {
+    // The remaining parts of one split adoption join the charge its first part made.
+    const part = this.held.get(targets[0])
+    if (part && !part.ended && !part.holders && part.pool === pool && part.targets === targets) { part.tokens.push(token); part.bytes += bytes; return }
+    const charge: HeldCharge = { pool, bytes, targets, tokens: [token], holders: 0, ended: false }
+    // A target whose earlier held charge ended now names this one.
+    for (const target of targets) if (!this.held.get(target) || this.held.get(target)!.ended) this.held.set(target, charge)
+  }
+  /**
+   * Another owner of the held charge `target` belongs to; null when it has none
+   * (a reachability-only or unknown allocation). An owner arriving after every
+   * earlier one released (a remount, a copy started from a display still on
+   * screen) holds the allocation again, so its bytes are charged again.
+   */
+  hold(target: object): LedgerHold | null {
+    const charge = this.held.get(target)
+    if (!charge) return null
+    if (charge.ended) {
+      const token = `life${++lifetimeSerial}`
+      charge.ended = false
+      charge.tokens = [token]
+      this.set(charge.pool, token, charge.bytes)
+      this.lifetimes.set(token, charge.pool)
+      for (const item of charge.targets) if (!this.hasLifetime(item)) this.leases.set(item, token)
+      if (this.watcher) {
+        this.alive.set(token, { pool: charge.pool, owner: token, remaining: charge.targets.length })
+        for (const item of charge.targets) this.watcher.register(item, token)
+      }
+    }
+    charge.holders++
+    let held = true
+    return { release: () => {
+      if (!held) return
+      held = false
+      if (--charge.holders === 0 && !charge.ended) this.endHeld(charge)
+    } }
+  }
+  private endHeld(charge: HeldCharge): void { charge.ended = true; for (const token of charge.tokens) this.end(token) }
+  private readonly held = new WeakMap<object, HeldCharge>()
+  /** Transfers already-admitted bytes without a double charge or refund gap;
+   * `held` makes the adopted charge holdable, as chargeWhileHeld. */
+  adoptWhileReachable(fromPool: MainPool, fromOwner: string, pool: MainPool, targets: readonly object[], bytes: number, commit?: () => void, held = false): string {
     const key = `${fromPool}\u0000${fromOwner}`, charge = this.charges.get(key)
     if (!targets.length || !Number.isSafeInteger(bytes) || bytes < 0 || !charge || bytes > charge.bytes) throw new RangeError('Invalid lifetime adoption')
     const token = `life${++lifetimeSerial}`
@@ -147,8 +207,9 @@ export class MainMemoryLedger {
     this.pools[pool] += bytes
     // Total and high-water bytes never change during ownership adoption.
     this.lifetimes.set(token, pool)
-    for (const target of targets) if (!this.leases.has(target)) this.leases.set(target, token)
+    for (const target of targets) if (!this.hasLifetime(target)) this.leases.set(target, token)
     if (this.watcher) this.alive.set(token, { pool, owner: token, remaining: targets.length })
+    if (held) this.holdable(pool, targets, token, bytes)
     return token
   }
   /** Whether an allocation already has a live reachability owner. */
@@ -168,6 +229,12 @@ export class MainMemoryLedger {
     const token = this.leases.get(target)
     if (token === undefined) return
     this.leases.delete(target)
+    const charge = this.held.get(target)
+    if (charge?.tokens.includes(token)) this.endHeld(charge)
+    else this.end(token)
+  }
+  /** Ends one lifetime charge now; later collection of its targets is a no-op. */
+  private end(token: string): void {
     const pool = this.lifetimes.get(token)
     if (pool === undefined) return
     this.lifetimes.delete(token)

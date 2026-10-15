@@ -774,7 +774,8 @@ bun scripts/bench-interactive-viewer.ts --browser chromium --channel chrome --pr
 
 - The command is self-contained:
   - it builds the production perf page;
-  - it generates and hashes the full fixtures under `$TMPDIR/officeview-viewer-perf-v1`;
+  - it generates and hashes the full fixtures under `.tmp/viewer-perf-fixtures-v1`
+    (not `$TMPDIR`: macOS purges files there older than 3 days at 03:35 daily);
   - it serves the page on `--port`. Avoid 4173, which the Playwright webServer
     uses.
 - The run takes about 8–12 minutes.

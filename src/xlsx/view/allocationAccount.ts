@@ -5,7 +5,8 @@ export interface AllocationReservation {
   trySet(bytes: number): boolean
   charge(bytes: number): void
   release(bytes?: number): void
-  adopt(targets: readonly object[], bytes?: number, commit?: () => void): void
+  /** `held`: owners may hold the adopted charge (MainMemoryLedger.chargeWhileHeld). */
+  adopt(targets: readonly object[], bytes?: number, commit?: () => void, held?: boolean): void
 }
 export interface AllocationContext {
   readonly closed?: boolean
@@ -14,6 +15,10 @@ export interface AllocationContext {
   reserve(): AllocationReservation
   canReserve(bytes: number): boolean
   owns(target: object): boolean
+  /** Ends the lifetime charge `target` names: its consumer has merged or dropped it. */
+  settle?(target: object): void
+  /** Another owner of the held charge `target` names (null: none). */
+  hold?(target: object): { release(): void } | null
 }
 /** A scoped source call: never stored as mutable state on a shared adapter. */
 export const SOURCE_ALLOCATION = Symbol('source allocation')

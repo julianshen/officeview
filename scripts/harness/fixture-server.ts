@@ -11,11 +11,9 @@
 import { existsSync, mkdirSync, readFileSync } from 'node:fs'
 import { createServer, type Server } from 'node:http'
 import type { Socket } from 'node:net'
-import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { writeFixturePackage } from '../generate-viewer-fixtures'
-
-const GENERATED = join(tmpdir(), 'officeview-viewer-e2e-v1')
+import { VIEWER_E2E_FIXTURE_DIR as GENERATED } from './viewerE2EFixtureCache'
 
 export const SERVED_FIXTURES = {
   'f1-small.xlsx': { label: 'F1 committed small package (corners plus 200 sampled cells)' },
