@@ -89,9 +89,12 @@ export class WorkerViewportPlans {
     this.remote.admitPages(frame, budgetKey, pages, !visible)
     const entry: Entry = { bytes: 0, controller: new AbortController() }
     this.entries.set(key, entry)
-    // The request carries the frame owner its plan is stored under: a plan for
-    // a newer worker view would otherwise be cached as this frame's (MINOR-3).
-    void this.remote.viewport(owner, window, entry.controller.signal, 'tile').then(out => {
+    // Fonts are measured on the host. Keep its font generation in the cache
+    // scope above, but send the worker's font owner for font-independent source
+    // geometry. Preserve the frame's value/view owners so a newer worker view
+    // can never be cached as this frame's (MINOR-3).
+    const sourceOwner = { ...owner, fontGen: this.remote.identity(owner.sheetId).fontGen }
+    void this.remote.viewport(sourceOwner, window, entry.controller.signal, 'tile').then(out => {
       if (this.closed || this.remote.isClosed || scope !== this.scope || this.entries.get(key) !== entry || entry.controller.signal.aborted) return
       if (typeof out !== 'object' || out.kind !== 'complete') {
         this.fail(key, entry, typeof out === 'object' ? out.diagnostics : [], retryableOutcome(out))

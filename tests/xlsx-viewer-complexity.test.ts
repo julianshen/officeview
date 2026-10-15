@@ -104,7 +104,18 @@ async function measure(run: () => Promise<void>): Promise<Ledger> {
   // Only collections constructed by officeview's own modules count: jsdom's CSS
   // engine and React keep their own maps, which a real browser does not run in JS.
   const owned = new WeakSet<object>()
-  const ours = () => { const caller = (new Error().stack ?? '').split('\n')[3] ?? ''; return caller.includes('/src/') && !caller.includes('node_modules') }
+  // The caller is read from structured call sites, never a formatted `.stack`:
+  // the runner's source-map support decodes and caches a file's whole map the
+  // first time a formatted stack crosses it, and that cache (MiBs, growing with
+  // every source file the window touches) would be charged to the measured code.
+  const ours = () => {
+    const prepare = Error.prepareStackTrace
+    Error.prepareStackTrace = (_error, sites) => sites
+    try {
+      const file = (new Error().stack as unknown as NodeJS.CallSite[] | undefined)?.[2]?.getFileName() ?? ''
+      return file.includes('/src/') && !file.includes('node_modules')
+    } finally { Error.prepareStackTrace = prepare }
+  }
   const savedCollections = [['Map', Map], ['Set', Set]] as const
   for (const [name, ctor] of savedCollections) {
     scope[name] = new Proxy(ctor, {
@@ -220,7 +231,8 @@ const VIEWPORT_ALLOCATION = 1 << 19
 const VIEWPORT_INSERTS = 50_000
 // Retained heap after a warmed-up window (jsdom/React noise settles near
 // 0.3 MiB per gesture round; the largest viewport result, 2,048 coarse groups,
-// is ~2 MiB). The review probe below, a 65,536-entry plain-object cell table plus
+// retains ~0.78 MB; it read ~2 MiB while the ledger's formatted stacks charged
+// the runner's source-map cache to the window). The review probe below, a 65,536-entry plain-object cell table plus
 // 1,024 plain row arrays, retains ~7 MiB and must exceed it; a per-row table over
 // the 1,048,576-row axis would be larger still.
 const VIEWPORT_RETAINED = 4 * 1024 * 1024
@@ -290,7 +302,7 @@ describe('resident (object) viewer: navigation and paint stay viewport-bounded',
     // Exact identity at the last coordinate: 2^34 - 1, not a 32-bit alias.
     go(ui, 'XFD1048576')
     await waitFor(() => expect(activeId(ui)).toBe(2 ** 34 - 1))
-  })
+  }, 15_000) // ~2.6 s alone (three warm-up rounds); was 4.5-5 s with formatted stacks, over 5 s under suite load
 
   it('cell IDs across the 2^31 and 2^32 boundaries stay exact end to end (no bitwise packing)', async () => {
     const doc = await objectDoc(BOUNDARIES)
@@ -319,10 +331,14 @@ describe('resident (object) viewer: navigation and paint stay viewport-bounded',
     expect(ledger.inserts).toBeLessThan(VIEWPORT_INSERTS)
     expectRetainedBelow(ledger, VIEWPORT_RETAINED)
     expect(ledger.largestTyped).toBeLessThan(ROW_LANE)
-  })
+  }, 15_000) // ~0.8 s alone (2.4 s with formatted stacks); margin for suite load
 })
 
 describe('worker-backed viewer: bounded reads, one parse, no per-command reparse or clone', () => {
+  // No warm-up: the retained-heap gate is the whole-file run, where the earlier
+  // tests have loaded the shared modules (~0.5 MB retained here). Run alone with
+  // `-t` in a fresh process, this window also holds cold first-use module state
+  // (~7.5-8 MB) and is expected to exceed VIEWPORT_RETAINED.
   it('open, corner navigation and a sort issue bounded reads and never re-open or re-parse the workbook', async () => {
     const h = workerHarness()
     const blob = new Blob([xlsxBytes({ sheetData: table(3000) + `<row r="1048576">${inline('XFD1048576', 'corner')}</row>` }) as BlobPart])
