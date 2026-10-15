@@ -1,3 +1,4 @@
+import { ViewportOverflowCollector } from '../xlsx/view/viewportOverflow'
 import { controlStructure, controlSourceStore, controlView } from '../xlsx/view/mainControlMemory'
 import type { AllocationContext } from '../xlsx/view/allocationAccount'
 /**
@@ -2103,6 +2104,21 @@ export class DocumentSession {
     const charge = this.charge()
     const unpinView = this.pinView(owner.sheetId)
     let unpinProjection: (() => void) | undefined
+    let producers = 0, ended = false
+    // Closing the session closes its own pool to admission, but this share stays
+    // owned until late provider observers drain. Other document pools are separate.
+    const drained = () => { if (ended && producers === 0) charge.release() }
+    const track = <T>(start: () => Promise<T>): Promise<T> => {
+      producers++
+      let work: Promise<T>
+      try { work = start() } catch (cause) { producers--; drained(); throw cause }
+      // This observer schedules drainage behind the interruptible facade's late
+      // fulfillment/rejection observer. A cancelled public request cannot end
+      // ownership while that observer still receives the provider's page.
+      const finish = () => { void Promise.resolve().then(() => { producers--; drained() }) }
+      void work.then(finish, finish)
+      return work
+    }
     try {
       if (!charge.set(workspace)) return this.refusal(workspace)
       const key = cacheKey(owner)
@@ -2139,20 +2155,42 @@ export class DocumentSession {
       cached.readers++
       const borrowed = cached, unpin = cached.entry.pin()
       unpinProjection = () => { unpin(); borrowed.readers--; if (borrowed.retired && !borrowed.readers) borrowed.entry.release() }
-      const store = boundedQueryStore(this.preparedStore(owner.sheetId), budget, undefined, VIEWPORT_DETAIL_LIMITS[profile].records)
-      const out = await queryViewport(store, cached.metrics, window, owner, { profile, signal, scope, textDependencies: true, isCurrent: captured => this.isCurrent(captured) })
+      const raw = this.source.store(owner.sheetId)
+      const tracked = interruptibleStore({
+        ...this.preparedStore(owner.sheetId),
+        readCell: (at, options) => track(() => raw.readCell(at, options)),
+        readRows: (range, cursor, options) => track(() => raw.readRows(range, cursor, options)),
+        queryStructural: (rect, options) => track(() => raw.queryStructural(rect, options)),
+        queryOverview: (query, options) => track(() => raw.queryOverview(query, options)),
+      })
+      const store = boundedQueryStore(tracked, budget, undefined, VIEWPORT_DETAIL_LIMITS[profile].records)
+      const overflow = new ViewportOverflowCollector(budget)
+      const out = await queryViewport(store, cached.metrics, window, owner, { profile, signal, scope, overflowCapture: overflow, textDependencies: true, isCurrent: captured => this.isCurrent(captured) })
       if (out.kind === 'diagnostic') return { kind: 'error', error: failure('invalid-coordinate', out.diagnostics[0]?.message ?? 'Invalid viewport') }
       if (out.kind !== 'viewport') return { kind: out.kind }
       if (queryPayloadBytes(out, budget) > budget) return { kind: 'error', error: failure('resource-limit', 'Viewport reply exceeds its bounded byte budget') }
       const { results, active } = toViewportResults(out)
       const result = { ...results[0], merges: out.merges, coarse: out.coarse, rowLines: out.rowLines, colLines: out.colLines, work: out.work, completeness: out.completeness, ...(out.error ? { error: out.error } : {}), ...(results.length > 1 ? { groups: out.groups } : {}), ...(active ? { active } : {}) } as ViewportResult
-      return { result, diagnostics: out.diagnostics }
+      const steps = overflow.finish(cached.metrics, out.cells, owner, window, profile, scope ?? 'frame'), slice = this.slice(signal)
+      let proof: ReturnType<typeof steps.next>
+      try {
+        for (;;) {
+          const halt = this.halted(owner, signal)
+          if (halt) return halt
+          proof = steps.next()
+          if (proof.done) break
+          if (slice.due(proof.value)) await slice.pause('viewport-overflow')
+        }
+      } finally { steps.return(undefined as never); slice.dispose() }
+      const extended = { ...result, overflowProof: proof.value }
+      if (queryPayloadBytes({ result: extended, diagnostics: out.diagnostics }, budget) > budget - 1024) return { kind: 'error', error: failure('resource-limit', 'Viewport reply exceeds its bounded byte budget') }
+      return { result: extended, diagnostics: out.diagnostics }
     } catch (cause) {
       if (signal.aborted || cause instanceof FindError && cause.code === 'cancelled') return { kind: 'cancelled' }
       if (cause instanceof FindError && cause.code === 'stale') return { kind: 'stale' }
       if (cause instanceof FindError && cause.code === 'resource-limit') return { kind: 'error', error: failure('resource-limit', cause.message) }
       throw cause
-    } finally { unpinProjection?.(); unpinView(); charge.release() }
+    } finally { unpinProjection?.(); unpinView(); ended = true; drained() }
   }
   /** One resident bounded search per document. Cursors are one-use capabilities
    * of the full workbook owner/query; replacement, abort and close reclaim it. */

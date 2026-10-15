@@ -512,20 +512,43 @@ it('paints worker-planned merged cells and overflowing text identically through 
 })
 
 
-it('bounds production tile requests and reclaims them on disposal even with a stalled provider', async () => {
+it('bounds production tile requests and retains actual stalled producers until true drain after disposal', async () => {
   const h = await harness(), plans = new WorkerViewportPlans(h.remote)
-  let began!: () => void
-  const started = new Promise<void>(r => { began = r })
-  vi.spyOn(h.source.store('s'), 'readRows').mockImplementation(() => { began(); return new Promise(() => {}) })
+  const source = h.source.store('s'), actualRows = source.readRows.bind(source)
+  let began!: () => void, drain!: () => void, held = 0
+  const started = new Promise<void>(resolve => { began = resolve })
+  const gate = new Promise<void>(resolve => { drain = resolve })
+  const reads = vi.spyOn(source, 'readRows').mockImplementation(async (...args) => {
+    const page = await actualRows(...args)
+    if (++held === 4) began()
+    await gate
+    return page
+  })
   try {
     for (let i = 0; i < 10; i++) plans.get(initialIdentity('doc', 's'), { box: { x: i * 512, y: 0, width: 512, height: 512 }, zoom: 1, deviceScale: 1 }, { width: 1_048_576, height: 20_971_520 }, true)
     await started
     expect(h.remote.stats.commands.viewport).toBe(4)
+    expect(reads).toHaveBeenCalledTimes(4)
     plans.dispose()
     await h.port.idle()
-    expect(h.kernel.lifecycleStats()).toMatchObject({ inflight: 0, transientBytes: 0 })
+    expect(h.kernel.lifecycleStats()).toMatchObject({ inflight: 0, transientBytes: 4 * 2 * 8 * 1024 * 1024 })
+    expect(h.remote.pagesInFlight).toBe(0)
     expect(h.remote.mainLedger.snapshot().byPool.layout).toBe(0)
-  } finally { plans.dispose(); await h.remote.release() }
+    drain()
+    await Promise.all(reads.mock.results.map(result => result.value))
+    await h.port.idle()
+    expect(h.kernel.lifecycleStats()).toMatchObject({ inflight: 0, transientBytes: 0 })
+    expect(h.remote.pagesInFlight).toBe(0)
+    expect(h.remote.mainLedger.snapshot().byPool.layout).toBe(0)
+    expect(h.remote.stats.commands.viewport).toBe(4)
+  } finally {
+    drain()
+    await Promise.all(reads.mock.results.map(result => result.value))
+    await h.port.idle()
+    reads.mockRestore()
+    plans.dispose()
+    await h.remote.release()
+  }
 })
 
 it('adopts known viewport cells without claiming unknown remainder columns are blank', async () => {

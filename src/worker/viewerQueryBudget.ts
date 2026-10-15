@@ -1,30 +1,12 @@
 import type { SourceStore } from '../xlsx/view/contracts'
 import { FindError } from '../xlsx/view/find'
+import { queryPayloadBytes } from '../xlsx/view/queryPayload'
 
 /** Wire/workspace admission within the existing document pool; never a larger
  * worker budget. Large source pages and long hit texts refuse explicitly. */
 export const WORKER_QUERY_BYTES = { D: 8 * 1024 * 1024, M: 4 * 1024 * 1024 } as const
 
-/** Bounded, cycle-safe clone estimate with an early stop, including UTF-16 text
- * and complete backing buffers (not just a small typed-array view). */
-export function queryPayloadBytes(value: unknown, limit: number): number {
-  const seen = new Set<object>(), stack: unknown[] = [value]
-  let bytes = 0
-  while (stack.length && bytes <= limit) {
-    const item = stack.pop()
-    if (typeof item === 'string') { bytes += 16 + 2 * item.length; continue }
-    if (typeof item !== 'object' || item === null) { bytes += 8; continue }
-    if (seen.has(item)) continue
-    seen.add(item)
-    if (ArrayBuffer.isView(item)) { stack.push(item.buffer); bytes += 24; continue }
-    if (Object.prototype.toString.call(item) === '[object ArrayBuffer]') { bytes += (item as ArrayBuffer).byteLength; continue }
-    const values = Array.isArray(item) ? item : Object.values(item)
-    bytes += 24 + values.length * 16
-    if (bytes > limit) break
-    for (const child of values) stack.push(child)
-  }
-  return bytes
-}
+export { queryPayloadBytes } from '../xlsx/view/queryPayload'
 
 /** Viewport/search value-page facade. Drawings use the original interruptible
  * store and their separate drawing budget; they are not query-page payloads. */
