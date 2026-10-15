@@ -154,7 +154,8 @@ export class MainMemoryLedger {
     const part = this.held.get(targets[0])
     if (part && !part.ended && !part.holders && part.pool === pool && part.targets === targets) { part.tokens.push(token); part.bytes += bytes; return }
     const charge: HeldCharge = { pool, bytes, targets, tokens: [token], holders: 0, ended: false }
-    for (const target of targets) if (!this.held.has(target)) this.held.set(target, charge)
+    // A target whose earlier held charge ended now names this one.
+    for (const target of targets) if (!this.held.get(target) || this.held.get(target)!.ended) this.held.set(target, charge)
   }
   /**
    * Another owner of the held charge `target` belongs to; null when it has none

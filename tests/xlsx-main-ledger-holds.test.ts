@@ -60,4 +60,16 @@ describe('held lifetime charges (MainMemoryLedger.chargeWhileHeld)', () => {
     again.release()
     expect(ledger.bytes).toBe(0)
   })
+  it('a target charged again after its held charge ended is governed by the new charge', () => {
+    const ledger = new MainMemoryLedger({ register() {} })
+    const target = {}
+    ledger.chargeWhileHeld('viewBuffers', [target], 10)
+    ledger.hold(target)!.release()
+    expect(ledger.bytes).toBe(0)
+    ledger.chargeWhileHeld('viewBuffers', [target], 25)
+    const hold = ledger.hold(target)!
+    expect(ledger.bytes, 'the new charge, not a revival of the old one').toBe(25)
+    hold.release()
+    expect(ledger.bytes).toBe(0)
+  })
 })
