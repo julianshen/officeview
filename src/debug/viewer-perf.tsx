@@ -251,8 +251,8 @@ function calibrateDom(cells: number, updates = 0): Promise<number> {
   const root = createRoot(host)
   const hidden = { position: 'absolute', width: 1, height: 1, overflow: 'hidden', clipPath: 'inset(50%)', whiteSpace: 'nowrap' } as const
   const tree = (pass: number) => <div role="rowgroup">{Array.from({ length: cells }, (_, i) => (
-    <div key={i} role="gridcell" id={`cal-cell-${i * 16384 + 3}`} aria-colindex={(i % 40) + 2} aria-label={`C${i}, value ${i * 7.25}`} aria-selected={pass % 2 === 1} aria-description="value"
-      style={{ position: 'absolute', top: 0, left: 44 + (i % 40) * 64, width: 64, height: 20 }}><span style={hidden}>{String(i * 7.25)}</span></div>
+    <div key={i} role="gridcell" id={`cal-cell-${i * 16384 + 3}`} aria-colindex={(i % 40) + 2} aria-selected={pass % 2 === 1} aria-description="value"
+      style={{ position: 'absolute', top: 0, left: 44 + (i % 40) * 64, width: 64, height: 20 }}><span style={hidden}>{`C${i}, value ${i * 7.25}`}</span></div>
   ))}</div>
   root.render(tree(0))
   calibration = { root, host }

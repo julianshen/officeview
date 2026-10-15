@@ -432,3 +432,58 @@ describe('resident document ledger', () => {
     for (const ledger of ledgers) expect(ledger.snapshot().bytes).toBe(0)
   })
 })
+
+it('atomically adopts copy reservations into document reachability without another peak or refund gap', () => {
+  const registrations: { target: object; token: string }[] = []
+  const ledger = new MainMemoryLedger({ register: (target, token) => registrations.push({ target, token }) })
+  const sheet = {}, diagnostic = {}
+  ledger.set('copy', 'job', 1000)
+  let atCommit = 0
+  const token = ledger.adoptWhileReachable('copy', 'job', 'document', [sheet, diagnostic], 300, () => { atCommit = ledger.bytes })
+  expect(ledger.snapshot().byPool).toMatchObject({ copy: 700, document: 300 })
+  expect(ledger.bytes).toBe(1000)
+  expect(ledger.peakBytes).toBe(1000)
+  expect(atCommit).toBe(1000)
+  ledger.release('copy', 'job')
+  expect(ledger.bytes).toBe(300)
+  expect(registrations.map(entry => entry.token)).toEqual([token, token])
+  ledger.collected(token)
+  expect(ledger.bytes).toBe(300)
+  ledger.collected(token)
+  expect(ledger.bytes).toBe(0)
+})
+
+it('leaves reserved ownership untouched if lifetime registration or publication throws', () => {
+  const ledger = new MainMemoryLedger({ register: () => {} })
+  ledger.set('copy', 'job', 1000)
+  expect(() => ledger.adoptWhileReachable('copy', 'job', 'document', [{}], 300, () => { throw new Error('publish failed') })).toThrow('publish failed')
+  expect(ledger.snapshot().byPool).toMatchObject({ copy: 1000, document: 0 })
+  expect(ledger.peakBytes).toBe(1000)
+  expect(() => ledger.adoptWhileReachable('copy', 'job', 'document', [{}], 1001)).toThrow(RangeError)
+  expect(ledger.bytes).toBe(1000)
+  const throwing = new MainMemoryLedger({ register: () => { throw new Error('registration failed') } })
+  throwing.set('copy', 'job', 1000)
+  expect(() => throwing.adoptWhileReachable('copy', 'job', 'document', [{}], 300)).toThrow('registration failed')
+  expect(throwing.snapshot().byPool).toMatchObject({ copy: 1000, document: 0 })
+})
+
+it('real collection ends an adopted diagnostic only after both document and detached diagnostic stop reaching it', async () => {
+  const ledger = new MainMemoryLedger()
+  const owners: { sheet?: object; diagnostic?: object } = {}
+  const make = () => {
+    const diagnostic = { message: 'owned canonical diagnostic' }, sheet = { diagnostics: [diagnostic] }
+    owners.sheet = sheet; owners.diagnostic = diagnostic
+    ledger.set('copy', 'job', 400)
+    ledger.adoptWhileReachable('copy', 'job', 'document', [sheet, diagnostic], 300)
+    ledger.release('copy', 'job')
+  }
+  make()
+  await collect()
+  expect(ledger.snapshot().byPool.document).toBe(300)
+  delete owners.sheet
+  await collect()
+  expect(ledger.snapshot().byPool.document).toBe(300)
+  delete owners.diagnostic
+  await collect()
+  expect(ledger.snapshot().byPool.document).toBe(0)
+})

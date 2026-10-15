@@ -14,11 +14,13 @@ import type { ContentPaintAssets } from '../drawing/content'
 import { createTextBodyMeasurer, paintTextBody } from '../drawing/text-paint'
 import { graphemes } from '../core/text-recording'
 import { isFormulaError, isEvaluationError } from './formula/evaluator'
-import { formatCommon } from './formula/format'
+import { formatCommon, numericSectionIsText, type FormatAllocation } from './formula/format'
 import { decodeSerial } from './formula/serial'
 import type { ResolvedSemantics } from './formula/types'
 import type { WorkerDiagnostic } from './view/contracts'
 import { MAX_COLS, isValidCoordinate } from './view/coordinates'
+import { NO_OVERFLOW, alignmentOverflows, rowOverflowFromCells, textOverflowAllowance, type OverflowAllowance, type RowOverflowInput } from './view/textOverflow'
+export { textOverflowAllowance, rowOverflowFromCells, cellBlocksOverflow, type OverflowAllowance, type RowOverflowInput } from './view/textOverflow'
 import { RectangleIndex } from './view/structure'
 import { cellSourceRow, drawingExtent } from './view/sheetCells'
 import type { CellBodyLayout } from './view/textLayout'
@@ -114,7 +116,7 @@ function alignedLayout(layout: TextLayout, bounds: ReturnType<typeof textLayoutB
  * Layout and paint are separate so the viewer can cache the layout (computed
  * in a box at the origin) and replay it; the static path runs both back to back
  * at absolute coordinates, exactly as before. */
-function layoutCellText(ctx: CanvasRenderingContext2D, text: string, style: XlsxCellStyle | undefined, numeric: boolean, x: number, y: number, w: number, h: number, color: string, center = false): Extract<NonNullable<CellBodyLayout['text']>, { kind: 'layout' }> {
+function layoutCellText(ctx: CanvasRenderingContext2D, text: string, style: XlsxCellStyle | undefined, numeric: boolean, x: number, y: number, w: number, h: number, color: string, center = false, overflow?: OverflowAllowance): Extract<NonNullable<CellBodyLayout['text']>, { kind: 'layout' }> {
   const mapped = cellTextRotation(style?.textRotation), stacked = mapped && 'stacked' in mapped
   const radians = mapped && 'radians' in mapped ? mapped.radians : 0
   const defaultHorizontal = numeric ? 'right' : center ? 'center' : 'left'
@@ -161,9 +163,18 @@ function layoutCellText(ctx: CanvasRenderingContext2D, text: string, style: Xlsx
     }
     const bounds = textLayoutBounds(layout, measure)
     const placed = alignedLayout(layout, bounds, { x, y, w, h }, horizontal, vertical)
+    // One unwrapped, unrotated line may run into empty neighbours (S13); the
+    // clip widens by the room it needs, up to the allowance.
+    let clipX0 = x, clipX1 = x + w
+    if (overflow && !wrap && !stacked && !radians && alignmentOverflows(style?.horizontal)) {
+      const placedBounds = textLayoutBounds(placed, measure)
+      const band = overflowBand(x, w, placedBounds.x, placedBounds.width, overflow) ?? { x0: Math.min(x, placedBounds.x), x1: Math.max(x + w, placedBounds.x + placedBounds.width) }
+      clipX0 = band.x0
+      clipX1 = band.x1
+    }
     // Coordinates in the placed layout are box-local to (x, y) and already include
     // the final merged bounds. Paint and recording replay this exact geometry.
-    return { kind: 'layout', text, font: '', color, body, layout: placed, clip: { x, y, width: w, height: h },
+    return { kind: 'layout', text, font: '', color, body, layout: placed, clip: { x: clipX0, y, width: clipX1 - clipX0, height: h },
       ...(stacked ? { stacked: true } : radians ? { rotation: radians } : {}), wrap, lines: placed.lines.length }
   } finally { ctx.restore() }
 }
@@ -458,30 +469,39 @@ function formatFiniteFallback(value: number): string {
  * with twelve integer digits use scientific notation. Cell painting supplies
  * a physical width test so the display can lose precision without changing
  * the stored value. This finite profile does not implement locale General. */
-function formatGeneral(value: number, fits: (text: string) => boolean = () => true): string {
-  if (!Number.isFinite(value)) return String(value)
+function formatGeneral(value: number, fits: (text: string) => boolean = () => true, noFit?: () => void, allocation?: FormatAllocation): string {
+  if (!Number.isFinite(value)) { allocation?.allocate(18); return String(value) }
   if (value === 0) return '0'
   const negative = value < 0, absolute = Math.abs(value)
   const sign = negative ? '-' : ''
+  allocation?.allocate(50) // finite Number shortest representation is at most 25 UTF-16 units
   const raw = String(absolute)
   // Expand only small exponents which could fit the plain-character budget.
+  if (raw.includes('e') && absolute < 1 && absolute >= 1e-9) allocation?.allocate(8 * raw.length + 96)
   const plain = raw.includes('e') && absolute < 1 && absolute >= 1e-9
     ? '0.' + '0'.repeat(-Number(raw.split('e')[1]) - 1) + raw.split('e')[0].replace('.', '')
     : raw
   const scientific = (digits: number) => {
+    allocation?.allocate(4 * (digits + 9) + 16)
     const [mantissa, exponent] = absolute.toExponential(digits).split('e')
+    allocation?.allocate(4 * mantissa.length)
     const compact = mantissa.includes('.') ? mantissa.replace(/0+$/, '').replace(/\.$/, '') : mantissa
     const e = Number(exponent)
+    allocation?.allocate(2 * (sign.length + compact.length + 7))
     return `${sign}${compact}E${e < 0 ? '-' : '+'}${String(Math.abs(e)).padStart(2, '0')}`
   }
   const useScientific = absolute >= 1e11 || (absolute < 1e-4 && (plain.includes('e') || plain.length > 11))
   if (!useScientific) {
+    allocation?.allocate(4 * (sign.length + plain.length))
     if (plain.length <= 11 && fits(sign + plain)) return sign + plain
     const integerDigits = absolute >= 1 ? Math.floor(Math.log10(absolute)) + 1 : 1
     for (let decimals = Math.max(0, 10 - integerDigits); decimals >= 0; decimals--) {
+      allocation?.allocate(2 * (integerDigits + decimals + 2))
       const fixed = absolute.toFixed(decimals)
+      allocation?.allocate(4 * fixed.length)
       const compact = fixed.includes('.') ? fixed.replace(/0+$/, '').replace(/\.$/, '') : fixed
       // A nonzero value must not disappear through display rounding.
+      allocation?.allocate(4 * (sign.length + compact.length))
       if (compact.length <= 11 && Number(compact) !== 0 && fits(sign + compact)) return sign + compact
     }
   }
@@ -489,6 +509,7 @@ function formatGeneral(value: number, fits: (text: string) => boolean = () => tr
     const text = scientific(decimals)
     if (text.length - sign.length <= 11 && fits(text)) return text
   }
+  noFit?.()
   return '#'
 }
 
@@ -497,6 +518,7 @@ export function formatValue(
   value: string | number | boolean | null,
   numFmtId: number,
   semantics?: ResolvedSemantics,
+  allocation?: FormatAllocation,
 ): string {
   if (value === null) return ''
   if (typeof value === 'string') return value
@@ -504,33 +526,34 @@ export function formatValue(
   const sem = semantics ?? DEFAULT_RENDER_SEMANTICS
   switch (numFmtId) {
     case 0: // General
-      return formatGeneral(value)
+      return formatGeneral(value, undefined, undefined, allocation)
     case 2: // 0.00
-      return formatText(value, '0.00', sem)
+      return formatText(value, '0.00', sem, allocation)
     case 9: // 0%
-      return formatText(value, '0%', sem)
+      return formatText(value, '0%', sem, allocation)
     case 10: // 0.00%
-      return formatText(value, '0.00%', sem)
+      return formatText(value, '0.00%', sem, allocation)
     case 3: // #,##0
-      return formatText(value, '#,##0', sem)
+      return formatText(value, '#,##0', sem, allocation)
     case 4: // #,##0.00
-      return formatText(value, '#,##0.00', sem)
+      return formatText(value, '#,##0.00', sem, allocation)
     default:
       // Built-in date formats keep the established ISO product convention but
       // now decode through the SHARED serial model (1900 day-0/fictitious day,
       // explicit 1904) instead of the removed JS-Date epoch path.
       if (numFmtId >= 18 && numFmtId <= 22) {
         const formats = ['h:mm AM/PM', 'h:mm:ss AM/PM', 'h:mm', 'h:mm:ss', 'm/d/yy h:mm']
-        return formatText(value, formats[numFmtId - 18], sem)
+        return formatText(value, formats[numFmtId - 18], sem, allocation)
       }
+      allocation?.allocate(256) // bounded civil date/fallback Number strings
       if (numFmtId >= 14 && numFmtId <= 17) return formatDateSerial(value, sem.dateSystem)
       return formatFiniteFallback(value)
   }
 }
 
 /** One shared formatter call; unsupported classes fall back to plain numbers. */
-function formatText(value: number, format: string, semantics: ResolvedSemantics): string {
-  const result = formatCommon(value, format, semantics)
+function formatText(value: number, format: string, semantics: ResolvedSemantics, allocation?: FormatAllocation): string {
+  const result = formatCommon(value, format, semantics, allocation)
   if (result.kind === 'text') return result.text
   if (isEvaluationError(result)) return ''
   return formatFiniteFallback(value)
@@ -556,22 +579,25 @@ function renderCellText(
   semantics: ResolvedSemantics | undefined,
   sheet: XlsxSheet,
   fitsGeneral?: (text: string) => boolean,
+  generalNoFit?: () => void,
+  allocation?: FormatAllocation,
 ): string {
   const code = style?.formatCode
   if (code !== undefined && value !== null) {
-    const result = formatCommon(value, code, semantics ?? DEFAULT_RENDER_SEMANTICS)
+    const result = formatCommon(value, code, semantics ?? DEFAULT_RENDER_SEMANTICS, allocation)
     if (result.kind === 'text') return result.text
-    if (!isEvaluationError(result)) noteFormatUnsupported(sheet, code, result.reason)
+    if (!isEvaluationError(result)) noteFormatUnsupported(sheet, code, result.reason, allocation)
   }
-  if (typeof value === 'number' && (style?.numFmtId ?? 0) === 0) return formatGeneral(value, fitsGeneral)
-  return formatValue(value, style?.numFmtId ?? 0, semantics)
+  if (typeof value === 'number' && (style?.numFmtId ?? 0) === 0) return formatGeneral(value, fitsGeneral, generalNoFit, allocation)
+  if (typeof value === 'string') allocation?.borrowed?.(value)
+  return formatValue(value, style?.numFmtId ?? 0, semantics, allocation)
 }
 
 /** @internal The canonical display text of a cell (authored/built-in formats and
  * workbook semantics) without General width-fitting, shared by sheet-mode find
  * and accessible values with the painted text. */
-export function cellDisplayText(sheet: XlsxSheet, cell: Pick<XlsxCell, 'value' | 'style'>): string {
-  return renderCellText(cell.value, cell.style, sheet.semantics, sheet)
+export function cellDisplayText(sheet: XlsxSheet, cell: Pick<XlsxCell, 'value' | 'style'>, allocation?: FormatAllocation): string {
+  return renderCellText(cell.value, cell.style, sheet.semantics, sheet, undefined, undefined, allocation)
 }
 
 /**
@@ -579,13 +605,24 @@ export function cellDisplayText(sheet: XlsxSheet, cell: Pick<XlsxCell, 'value' |
  * channel (same shape as doc.diagnostics), deduped across repeated paints.
  * No product warning UI is produced.
  */
-function noteFormatUnsupported(sheet: XlsxSheet, format: string, reason: string): void {
+function noteFormatUnsupported(sheet: XlsxSheet, format: string, reason: string, allocation?: FormatAllocation): void {
   const holder = sheet as unknown as { diagnostics?: Array<{ kind: string; feature: string; message: string }> }
-  holder.diagnostics ??= []
+  if (!allocation) holder.diagnostics ??= []
+  const units = 8 + format.length + 47 + reason.length
+  // Two concatenation buffers and the new diagnostic/array slots are admitted
+  // before constructing either. Persistent bytes transfer with publication.
+  allocation?.allocate(4 * units + 128)
   const message = `Format '${format}' is outside the finite common-format grammar: ${reason}`
-  if (!holder.diagnostics.some((d) => d.feature === 'format-unsupported' && d.message === message)) {
-    holder.diagnostics.push({ kind: 'unsupported-format', feature: 'format-unsupported', message })
+  if (holder.diagnostics?.some(d => d.feature === 'format-unsupported' && d.message === message)) {
+    allocation?.release(4 * units + 128)
+    return
   }
+  const bytes = message.length * 2 + 72 + (holder.diagnostics ? 0 : 32)
+  const diagnostic = { kind: 'unsupported-format', feature: 'format-unsupported', message }
+  const commit = () => { holder.diagnostics ??= []; holder.diagnostics.push(diagnostic) }
+  if (allocation?.retain) allocation.retain([sheet, diagnostic], bytes, commit)
+  else commit()
+  allocation?.release(4 * units + 128 - bytes)
 }
 
 function prefixSums(widths: number[]): number[] {
@@ -650,7 +687,23 @@ export function renderSheet(
     if (bottom > (rowBottom.get(r.minRow) ?? Number.NEGATIVE_INFINITY)) rowBottom.set(r.minRow, bottom)
   }
   const extent = { width: m.widthPx, height: m.heightPx }
+  const laidOut: CellBodyLayout[] = []
   for (const row of sheet.rows) {
+    // A malformed row may name many source rows. Partition once so occupancy
+    // construction never rescans the container for each source row.
+    const sourceCells = new Map<number, XlsxCell[]>()
+    for (const cell of row.cells) {
+      const source = cellSourceRow(row, cell)
+      let cells = sourceCells.get(source)
+      if (!cells) sourceCells.set(source, cells = [])
+      cells.push(cell)
+    }
+    const rowOverflow = new Map<number, RowOverflowInput>()
+    const overflowFor = (cell: XlsxCell, source: number): OverflowAllowance => {
+      let input = rowOverflow.get(source)
+      if (!input) rowOverflow.set(source, input = rowOverflowFromCells(sourceCells.get(source)!, merges.inRow(source), edges.col, MAX_COLS - 1))
+      return textOverflowAllowance(input, cell.col)
+    }
     for (const cell of row.cells) {
       // Only coordinates inside the grid have geometry; admission refused any
       // populated cell beyond it that this request needs, so nothing here falls
@@ -670,9 +723,16 @@ export function renderSheet(
       const hh = rng ? edges.row(rng.maxRow + 1) - y : h
       // Collapsed (authored-hidden) rows/columns produce no fill or text (spec §5.3).
       if (!(w > 0 && hh > 0) || !intersects(x, y, w, hh)) continue
-      const border = paintCellBody(ctx, sheet, cell, x, y, w, hh, measured, extent)
-      if (border) paintBorders.push(border)
+      // Fills go down now; text after every fill, so overflow into an empty
+      // formatted neighbour stays visible (Excel draws it over the fill).
+      const layout = layoutCellBody(ctx, sheet, cell, x, y, w, hh, measured, rng ? NO_OVERFLOW : overflowFor(cell, source))
+      paintCellLayout(ctx, layout, extent, 'fill')
+      laidOut.push(layout)
     }
+  }
+  for (const layout of laidOut) {
+    const border = paintCellLayout(ctx, layout, extent, 'content')
+    if (border) paintBorders.push(border)
   }
 
   // grid lines, with merged interiors masked out. A vertical boundary at
@@ -823,24 +883,12 @@ function staticMergeIndex(ranges: readonly XlsxMergeRange[]) {
   }
   const index = RectangleIndex.build(entries)
   return {
+    /** Ranges intersecting one row (text overflow blockers). */
+    inRow: (row: number) => isValidCoordinate(row, 0) ? index.collect({ r0: row, r1: row, c0: 0, c1: MAX_COLS - 1 }) : [],
     anchorAt: (row: number, col: number) => anchor.get(`${row}:${col}`),
     covers: (row: number, col: number) => isValidCoordinate(row, col)
       && index.firstWhere({ r0: row, r1: row, c0: col, c1: col }, r => r.minRow !== row || r.minCol !== col) !== undefined,
   }
-}
-
-/** Fill, text and (deferred) border of one cell box, shared by the static and
- * interactive paths so both lay a cell out identically. Borders stay inside
- * `extent` (the bitmap for static output, the logical sheet for the viewer). */
-function paintCellBody(
-  ctx: CanvasRenderingContext2D,
-  sheet: XlsxSheet,
-  cell: XlsxCell,
-  x: number, y: number, w: number, hh: number,
-  measured: MeasureCached,
-  extent: { width: number; height: number },
-): (() => void) | undefined {
-  return paintCellLayout(ctx, layoutCellBody(ctx, sheet, cell, x, y, w, hh, measured), extent)
 }
 
 /** Host formatting and text layout of one cell in the box (x, y, w, hh): the
@@ -852,29 +900,55 @@ export function layoutCellBody(
   cell: XlsxCell,
   x: number, y: number, w: number, hh: number,
   measured: MeasureCached,
+  /** Room the text may use past the box (textOverflowAllowance). Absent: plain
+   * text is unbounded and laid-out text clips to the box, as before S13. */
+  overflow?: OverflowAllowance,
 ): CellBodyLayout {
   const out: CellBodyLayout = { x, y, w, h: hh, formattedText: '' }
   if (cell.style?.fillColor) out.fill = resolveColor(cell.style.fillColor)
   // text (right-align numbers, left-align strings; alignment spans the merge)
-  const font = `${cell.style?.italic ? 'italic ' : ''}${cell.style?.bold ? 'bold ' : ''}${cell.style?.fontSizePt ?? 10}pt "Calibri"`
-  const fitsGeneral = cellTextRotation(cell.style?.textRotation) === undefined
-    ? (text: string) => measured(font, text) <= Math.max(0, w - PADDING_L - PADDING_R)
-    : undefined
-  const text = renderCellText(cell.value, cell.style, sheet.semantics, sheet, fitsGeneral)
+  const fontAt = (sizePt: number) => `${cell.style?.italic ? 'italic ' : ''}${cell.style?.bold ? 'bold ' : ''}${sizePt}pt "Calibri"`
+  const baseSize = cell.style?.fontSizePt ?? 10
+  const rotated = cellTextRotation(cell.style?.textRotation) !== undefined
+  const inner = Math.max(0, w - PADDING_L - PADDING_R)
+  const shrinkable = cell.style?.shrinkToFit === true && cell.style.wrapText !== true && !rotated
+  let font = fontAt(baseSize)
+  // Shrink-to-fit keeps full General precision and scales the font instead.
+  const fitsGeneral = !rotated && !shrinkable ? (text: string) => measured(font, text) <= inner : undefined
+  let generalNoFit = false
+  const formatted = renderCellText(cell.value, cell.style, sheet.semantics, sheet, fitsGeneral, () => { generalNoFit = true })
+  let style = cell.style
+  if (shrinkable && formatted !== '') {
+    // Never larger than authored. Above the floor the text fits; at the floor a
+    // number shows '#' and text is held to its own cell — it never spills.
+    const size = shrunkFontSize(baseSize, inner, size => measured(fontAt(size), formatted))
+    if (size < baseSize) {
+      if (size >= MIN_SHRINK_FONT_PT) {
+        font = fontAt(size)
+        style = { ...cell.style!, fontSizePt: size }
+      } else if (typeof cell.value !== 'number') {
+        const floor = Math.min(baseSize, MIN_SHRINK_FONT_PT)
+        font = fontAt(floor)
+        style = { ...cell.style!, fontSizePt: floor }
+        overflow = NO_OVERFLOW
+      }
+    }
+  }
+  const text = numericOverflowText(cell, formatted, font, w, measured, generalNoFit)
   out.formattedText = text
   if (text !== '') {
-    const color = cell.style?.color ? resolveColor(cell.style.color) : '#000000'
+    const color = style?.color ? resolveColor(style.color) : '#000000'
     // OOXML often authors default alignment fields on every cell. Those
     // retain ordinary placement; real alignment/wrapping/rotation needs
     // the measured local layout (including explicit no-wrap for255).
-    const explicit = (cell.style?.horizontal !== undefined && cell.style.horizontal !== 'general')
-      || (cell.style?.vertical !== undefined && cell.style.vertical !== 'bottom')
-      || cell.style?.wrapText === true || cellTextRotation(cell.style?.textRotation) !== undefined
+    const explicit = (style?.horizontal !== undefined && style.horizontal !== 'general')
+      || (style?.vertical !== undefined && style.vertical !== 'bottom')
+      || style?.wrapText === true || rotated
     const isCenter = cell.valueIsError ?? (cell.formula !== undefined && isFormulaError(cell.value))
     if (explicit) {
       ctx.fillStyle = color
       ctx.font = font
-      out.text = { ...layoutCellText(ctx, text, cell.style, typeof cell.value === 'number', x, y, w, hh, color, isCenter), font }
+      out.text = { ...layoutCellText(ctx, text, style, typeof cell.value === 'number', x, y, w, hh, color, isCenter, overflow), font }
     } else {
       // Preserve accepted ordinary default horizontal layout exactly.
       ctx.font = font
@@ -884,28 +958,87 @@ export function layoutCellBody(
         : isCenter
           ? x + (w - textW) / 2
           : x + PADDING_L
-      const ty = y + hh - (hh - (cell.style?.fontSizePt ?? 10) * (96 / 72)) / 2
+      const ty = y + hh - (hh - (style?.fontSizePt ?? 10) * (96 / 72)) / 2
       out.text = { kind: 'plain', text, font, color, tx, ty, width: textW }
+      // Text reaching past the room its empty neighbours give is clipped there.
+      const band = overflowBand(x, w, tx, textW, overflow)
+      if (band) out.text.clipX = band
     }
   }
   if (cell.style?.borders) out.borders = cell.style.borders
   return out
 }
 
+/** Smallest shrink-to-fit size; below it a number shows '#' (Excel's own floor is lower). */
+const MIN_SHRINK_FONT_PT = 4
+/** The font size (0.1 pt steps) at which the text fits `inner`; `base` when it already fits. */
+function shrunkFontSize(base: number, inner: number, widthAt: (sizePt: number) => number): number {
+  const natural = widthAt(base)
+  if (natural <= inner) return base
+  let size = natural > 0 ? Math.floor(base * inner / natural * 10) / 10 : 0
+  while (size >= MIN_SHRINK_FONT_PT && widthAt(size) > inner) size = Math.round((size - 0.1) * 10) / 10
+  return size
+}
+
+/** The horizontal clip [x0, x1] for text spanning [tx, tx + textW] in the box
+ * [x, x + w], or undefined when the allowance covers it (no clip, as before). */
+function overflowBand(x: number, w: number, tx: number, textW: number, overflow: OverflowAllowance | undefined): { x0: number; x1: number } | undefined {
+  if (!overflow) return undefined
+  const needLeft = Math.max(0, x - tx), needRight = Math.max(0, tx + textW - (x + w))
+  if (needLeft <= overflow.left && needRight <= overflow.right) return undefined
+  return { x0: x - Math.min(needLeft, overflow.left), x1: x + w + Math.min(needRight, overflow.right) }
+}
+
+/**
+ * Excel fidelity (S13 V4): a number/date/time whose formatted text does not
+ * fit the cell interior is shown as '#' repeated to fill it (at least one) —
+ * never clipped digits, never spilled into a neighbour. General has already
+ * dropped decimals and tried scientific notation and signals "nothing fits"
+ * with a single '#'. Text (and an authored '@' text format), booleans and
+ * errors keep their existing overflow/clip behaviour; wrapped and rotated
+ * cells keep their measured layout. A shrink-to-fit cell reaches this only
+ * when even the minimum font size does not fit. Measurement uses the same
+ * font string the cell paints with.
+ * Only the painted string changes: cellDisplayText (find, accessible value)
+ * keeps the real formatted value.
+ */
+function numericOverflowText(cell: XlsxCell, text: string, font: string, w: number, measured: MeasureCached, generalNoFit: boolean): string {
+  if (typeof cell.value !== 'number' || text === '' || cell.valueIsError) return text
+  const style = cell.style
+  if (style?.wrapText === true || cellTextRotation(style?.textRotation) !== undefined) return text
+  // Eligibility comes from the value type and the SELECTED format section, not
+  // from the output string: a number shown through an '@' section is text.
+  if (style?.formatCode !== undefined && numericSectionIsText(cell.value, style.formatCode)) return text
+  const inner = Math.max(0, w - PADDING_L - PADDING_R)
+  if (!generalNoFit && measured(font, text) <= inner) return text
+  const glyph = measured(font, '#')
+  return '#'.repeat(Math.max(1, glyph > 0 ? Math.floor(inner / glyph) : 1))
+}
+
 /** Replay one cell layout at its own coordinates; returns the deferred border. */
 /** @internal */
-export function paintCellLayout(ctx: CanvasRenderingContext2D, layout: CellBodyLayout, extent: { width: number; height: number }): (() => void) | undefined {
+export function paintCellLayout(ctx: CanvasRenderingContext2D, layout: CellBodyLayout, extent: { width: number; height: number }, phase: 'all' | 'fill' | 'content' = 'all'): (() => void) | undefined {
   const { x, y, w, h: hh } = layout
-  if (layout.fill) {
+  if (layout.fill && phase !== 'content') {
     ctx.fillStyle = layout.fill
     ctx.fillRect(x, y, w, hh)
   }
+  if (phase === 'fill') return undefined
   const text = layout.text
   if (text) {
     ctx.fillStyle = text.color
     ctx.font = text.font
     if (text.kind === 'layout') paintCellText(ctx, text)
-    else { ctx.textBaseline = 'alphabetic'; ctx.fillText(text.text, text.tx, text.ty) }
+    else if (text.clipX) {
+      // Horizontal clip only: plain text keeps its unclipped vertical extent.
+      ctx.save()
+      ctx.beginPath()
+      ctx.rect(text.clipX.x0, y - hh * 8, text.clipX.x1 - text.clipX.x0, hh * 17)
+      ctx.clip()
+      ctx.textBaseline = 'alphabetic'
+      ctx.fillText(text.text, text.tx, text.ty)
+      ctx.restore()
+    } else { ctx.textBaseline = 'alphabetic'; ctx.fillText(text.text, text.tx, text.ty) }
   }
   // borders (anchor draws the merged rect's outline)
   const b = layout.borders

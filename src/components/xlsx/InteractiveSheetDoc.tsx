@@ -29,9 +29,11 @@ import type {
 } from '../../xlsx/view/contracts'
 import { SHEET_MIN_ZOOM } from '../../xlsx/view/contracts'
 import type { NavigatorRequest, SourceCell } from '../../xlsx/view/coordinates'
-import { columnToLetters } from '../../xlsx/view/coordinates'
+import { columnToLetters, validateCoordinate } from '../../xlsx/view/coordinates'
+import { createDocumentOverflowCache } from '../../xlsx/view/documentOverflow'
+import { bindOverflowCache, OverflowResourceError, type OverflowCache } from '../../xlsx/view/overflowCache'
 import { MainMemoryLedger, axisBytes, estimatePayloadBytes, projectionBytes } from '../../xlsx/view/mainLedger'
-import { buildSheetGeometry, MergeQueryCache, sheetBaseHidden, type SheetGeometry } from '../../xlsx/view/viewport'
+import { buildSheetGeometry, cellTextOverflow, MergeQueryCache, sheetBaseHidden, type SheetGeometry } from '../../xlsx/view/viewport'
 import type { ProjectedSheetMetrics } from '../../xlsx/view/projection'
 import { createIdentityOrder } from '../../xlsx/view/order'
 import { CompactRowVisibility, createIntervalSet, visibilityFromHidden } from '../../xlsx/view/visibility'
@@ -45,7 +47,7 @@ import { LayoutCache } from '../../xlsx/view/textLayout'
 import { cellDisplayText } from '../../xlsx/render'
 import { createCellLayoutHost } from '../../xlsx/view/renderViewport'
 import { createObjectWorkbookSource } from '../../worker/viewerObjectSource'
-import { BITMAP_BUDGETS, type TileCacheStats } from '../../xlsx/view/tileCache'
+import { BITMAP_BUDGETS, MAIN_THREAD_BUDGETS, type TileCacheStats } from '../../xlsx/view/tileCache'
 import { gridGeometryToViewport, gridSelectionOverlay, paintGridSelectionOverlay, paintSearchOverlay, type HighlightRect } from '../../core/overlay'
 import { normalizeWatermark, type WatermarkOptions } from '../../core/watermark'
 import type { FallbackFontsOptions } from '../../core/fonts/fallback'
@@ -55,6 +57,7 @@ import type { Paintable, PaintableArray } from '../../render/paint'
 import { GridSemantics, type GridTransition } from './GridSemantics'
 import { GRID_HEADER_SIZE, columnHeaderHeight } from './GridHeaders'
 import { useControlMedia, useLive } from './controlMedia'
+import { useDevicePixelRatio } from './devicePixelRatio'
 import { domClassBytes, domClassCounts } from './domCost'
 import { FilterDropdown } from './FilterDropdown'
 import { SortDialog } from './SortDialog'
@@ -186,6 +189,8 @@ interface SheetEntry {
 const FALLBACK_PANE = { width: 640, height: 400 }
 /** Prefetch slice: leaves most of a 16.7 ms frame to input and presentation. */
 const PREFETCH_SLICE_MS = 6
+// Ledger owners must stay unique across remounts with the same remote workbook.
+let copySerial = 0
 
 function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): ReactElement {
   const { doc, docId, views, watermark, fallbackFonts, allowCopy = true, allowPrint = true, showSearch = true, showZoomControls = true } = props
@@ -204,11 +209,18 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
   // S10.2 §12.4: one main-thread ledger per document. A worker-backed workbook
   // owns it (row cache, view buffers, replies); a resident one gets its own.
   const mainLedger = useMemo(() => remote?.mainLedger ?? new MainMemoryLedger(), [remote, source])
+  const overflowContext = useMemo(() => ({ cache: undefined as OverflowCache | undefined }), [mainLedger, profile])
+  const overflowFor = (): OverflowCache => {
+    if (!overflowContext.cache || overflowContext.cache.closed) overflowContext.cache = remote ? remote.overflowFor(profile) : createDocumentOverflowCache(mainLedger, profile)
+    return overflowContext.cache
+  }
+  useEffect(() => () => { overflowContext.cache?.close(); overflowContext.cache = undefined }, [overflowContext])
   // View buffers already charged in this ledger (a rebuilt entry may reuse them).
   const viewCharged = useMemo(() => new WeakSet<object>(), [mainLedger])
   // The viewer's own pools end with the viewer; lifetime charges (geometry,
   // views, replies, the resident document) end when nothing reaches them.
-  useEffect(() => () => { for (const pool of ['dom', 'canvasText', 'layout', 'merges', 'controls', 'copy'] as const) mainLedger.releaseAll(pool) }, [mainLedger])
+  // Submitted clipboard jobs retain their own charge until they settle.
+  useEffect(() => () => { for (const pool of ['dom', 'canvasText', 'layout', 'merges', 'controls'] as const) mainLedger.releaseAll(pool) }, [mainLedger])
   // A resident document's parsed model lives on the main thread while reachable.
   useMemo(() => { if (!remote) mainLedger.chargeWhileReachable('document', [doc], estimatePayloadBytes(doc)) }, [mainLedger, remote, doc])
   const onMainLedger = props.onMainLedger
@@ -285,13 +297,14 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
     const input = viewInput(sheetId)
     const previous = entries.get(sheetId)
     const structureGen = remote ? remote.merges(sheetId).gen : 0
-    if (previous && previous.revision === input.revision && previous.structureGen === structureGen) return previous
-    if (previous && input.revision < previous.revision) return previous // stale commit: never publish an older view
+    if (previous && previous.revision === input.revision && previous.structureGen === structureGen) { bindOverflowCache(previous.geometry, overflowFor()); return previous }
+    if (previous && input.revision < previous.revision) { bindOverflowCache(previous.geometry, overflowFor()); return previous } // stale commit: never publish an older view
     const order = input.order ?? createIdentityOrder()
     const baseHidden = remote ? remote.geometry(sheetId).baseHidden : sheetBaseHidden(sheet)
     const visibility = input.visibility ?? visibilityFromHidden(createIntervalSet(displayIntervals(baseHidden.intervals, order)))
-    const built = remote ? pagedSheetGeometry(remote, sheetId, order, visibility) : buildSheetGeometry(sheet, { order, ...(input.visibility ? { visibility } : {}) })
+    const built = remote ? pagedSheetGeometry(remote, sheetId, order, visibility, overflowFor()) : buildSheetGeometry(sheet, { order, ...(input.visibility ? { visibility } : {}) })
     if (built.kind !== 'ready') throw new Error(built.diagnostics.map(d => d.message).join('; ') || 'This sheet cannot be laid out')
+    bindOverflowCache(built, overflowFor())
     // Paged geometry charges itself; a resident one is charged here, for its
     // lifetime: the row projection (it keeps its own copied segments; the build's
     // row axis is dropped), the column axis, the per-row cell index and merges.
@@ -361,7 +374,8 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
   const touchControls = useControlMedia('(pointer: coarse)')
   const headerHeight = columnHeaderHeight(touchControls, true, true)
   const viewport: ViewportSize = useMemo(() => ({ width: Math.max(1, pane.width - GRID_HEADER_SIZE), height: Math.max(1, pane.height - headerHeight) }), [pane, headerHeight])
-  const nativeDpr = Math.min(typeof window !== 'undefined' ? window.devicePixelRatio || 1 : 1, 3)
+  // Live ratio: a display move re-renders here, re-admits the pool and re-keys tiles (S13 D-DPR).
+  const nativeDpr = Math.min(useDevicePixelRatio(), 3)
   // Admit the pane surfaces before sizing any canvas; a lower device scale keeps
   // the pane within the bitmap budget, and nothing fits → a visible resource outcome.
   // Live print stores (while a print is prepared/open) are reserved beside the panes.
@@ -421,7 +435,17 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
   const [selectionIncomplete, setSelectionIncomplete] = useState(false)
   const workerPlans = useMemo(() => remote ? new WorkerViewportPlans(remote) : null, [remote])
   useEffect(() => () => workerPlans?.dispose(), [workerPlans])
+  // Two sources: the base present and the find overlay each own (and clear)
+  // only their own refusal, so an unrelated present never hides a find one.
+  const [overflowNotice, setOverflowNotice] = useState('')
+  const [findOverflowNotice, setFindOverflowNotice] = useState('')
   const frameOf = (): SheetFrame | null => {
+    // Not redundant with entryFor(): a sibling viewer on the same remote with
+    // another profile may have replaced (closed) the shared cache between this
+    // render and its layout effect. The two then alternate owners each frame:
+    // correct but wasteful; one per-profile owner would change the remote's
+    // single-owner contract (Claude r7 NIT 4/7).
+    if (entry) bindOverflowCache(entry.geometry, overflowFor())
     if (!entry || !scroll) return null
     return {
       sheet: entry.sheet, geometry: entry.geometry, identity, origin: scroll.logicalOrigin, viewport, zoom: scroll.zoom, dpr,
@@ -498,7 +522,9 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
     sizeCanvas(canvas, device.width, device.height)
     const ctx = canvas.getContext('2d')
     if (!ctx) return
-    biasRef.current = renderer.present(ctx, frame).bias
+    const presented = renderer.present(ctx, frame)
+    biasRef.current = presented.bias
+    setOverflowNotice(presented.resourceNotice ?? '')
     report()
     // Bounded adjacent prefetch after the visible frame is up, in slices of at
     // most PREFETCH_SLICE_MS so a costly ring never blocks a frame; the batch
@@ -816,25 +842,67 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
     if (!current.current.allowCopy || !entry) return
     cancelCopy()
     const token = ++copyToken.current, abort = new AbortController(); copyJob.current = abort
-    setCopyPending(true)
-    // Column visibility is compact authored geometry, not the selected cell product.
-    const hiddenCols: SourceRowInterval[] = []
-    let start: number | null = null
-    for (let col = 0; col < entry.metrics.cols.logicalCount; col++) {
-      if (entry.metrics.cols.size(col) === 0) { start ??= col }
-      else if (start !== null) { hiddenCols.push({ r0: start, r1: col - 1 }); start = null }
+    const copyOwner = `session:${++copySerial}`
+    let held = 0, closed = false, columnBytes = 0
+    const admit = (next: number): boolean => {
+      if (closed || !Number.isSafeInteger(next) || next < 0 || next > copySessionBudget(profile)) return false
+      if (next > held && mainLedger.bytes - held + next > MAIN_THREAD_BUDGETS[profile]) return false
+      mainLedger.set('copy', copyOwner, next)
+      held = next
+      return true
     }
-    if (start !== null) hiddenCols.push({ r0: start, r1: entry.metrics.cols.logicalCount - 1 })
-    const result = await copySelection({ store: source.store(activeSheetId), owner: { ...identity }, currentOwner: () => current.current.identityOf(current.current.activeSheetId),
-      sessionBudgetBytes: copySessionBudget(profile),
-      selection, order: entry.view.order, visibility: entry.view.visibility, columns: visibilityFromHidden(createIntervalSet(hiddenCols), entry.metrics.cols.logicalCount),
-      allowed: () => current.current.allowCopy, signal: abort.signal, onBytes: bytes => { if (token === copyToken.current) mainLedger.set('copy', 'session', bytes) }, onPending: () => { if (token === copyToken.current) setAnnouncement('Copy is waiting for values; cancel to stop.') },
-      format: cell => { const style = remote ? remote.styleOf(cell.styleIndex) : cellAt(entry, cell)?.style; return cellDisplayText(entry.sheet, { value: cell.value, style }) },
-    })
-    mainLedger.release('copy', 'session')
-    if (token !== copyToken.current) return
-    setCopyPending(false)
-    setAnnouncement(result.kind === 'copied' ? 'Selection copied.' : result.kind === 'refused' ? result.message : result.kind === 'stale' ? 'Source or view changed; copy again.' : 'Copy cancelled.')
+    const reserveColumns = (next: number) => {
+      if (!admit(next)) throw new Error('Copy is too large. Select a smaller range.')
+      columnBytes = next
+    }
+    setCopyPending(true)
+    try {
+      // Column visibility is compact authored geometry, not the selected cell product.
+      const hiddenCols: SourceRowInterval[] = []
+      const pushHidden = (r0: number, r1: number) => {
+        reserveColumns((hiddenCols.length + 1) * 64)
+        hiddenCols.push({ r0, r1 })
+      }
+      let start: number | null = null
+      for (let col = 0; col < entry.metrics.cols.logicalCount; col++) {
+        if (entry.metrics.cols.size(col) === 0) { start ??= col }
+        else if (start !== null) { pushHidden(start, col - 1); start = null }
+      }
+      if (start !== null) pushHidden(start, entry.metrics.cols.logicalCount - 1)
+      const count = entry.metrics.cols.logicalCount
+      let columns: RowVisibility
+      if (!hiddenCols.length) {
+        const slot = (at: number) => { validateCoordinate(at, 0); if (at >= count) throw new RangeError('Display slot outside mask') }
+        columns = { visible: at => { slot(at); return true },
+          rank: end => { if (!Number.isSafeInteger(end) || end < 0 || end > count) throw new RangeError('Invalid rank endpoint'); return end },
+          select: rank => Number.isSafeInteger(rank) && rank >= 0 && rank < count ? rank : null,
+          next: (at, direction) => { slot(at); if (direction !== 1 && direction !== -1) throw new RangeError('Invalid traversal direction'); const next = at + direction; return next >= 0 && next < count ? next : null } }
+      } else {
+        const words = Math.ceil(count / 32), summaries = Math.ceil(words / 32) + 1
+        // Input intervals + cloned/sorted intervals + snapshot slots, sorting
+        // scratch, two word arrays and summaries are simultaneously live.
+        reserveColumns(hiddenCols.length * 160 + 8 * words + 4 * summaries)
+        columns = visibilityFromHidden(createIntervalSet(hiddenCols), count)
+        hiddenCols.length = 0
+        reserveColumns(4 * words + 4 * summaries)
+      }
+      const result = await copySelection({ store: source.store(activeSheetId), owner: { ...identity }, currentOwner: () => current.current.identityOf(current.current.activeSheetId),
+        sessionBudgetBytes: copySessionBudget(profile) - columnBytes,
+        selection, order: entry.view.order, visibility: entry.view.visibility, columns,
+        allowed: () => current.current.allowCopy, signal: abort.signal, admitBytes: bytes => admit(columnBytes + bytes),
+        retainBytes: (targets, bytes, commit) => { mainLedger.adoptWhileReachable('copy', copyOwner, 'document', targets, bytes, commit); held -= bytes }, onPending: () => { if (live.current && token === copyToken.current) setAnnouncement('Copy is waiting for values; cancel to stop.') },
+        format: (cell, allocation) => { const style = remote ? remote.styleOf(cell.styleIndex) : cellAt(entry, cell)?.style; return cellDisplayText(entry.sheet, { value: cell.value, style }, allocation) },
+      })
+      if (!live.current || token !== copyToken.current) return
+      setAnnouncement(result.kind === 'copied' ? 'Selection copied.' : result.kind === 'refused' ? result.message : result.kind === 'stale' ? 'Source or view changed; copy again.' : 'Copy cancelled.')
+    } catch (error) {
+      if (live.current && token === copyToken.current) setAnnouncement(error instanceof Error ? error.message : 'Copy unavailable; retry.')
+    } finally {
+      closed = true
+      held = 0
+      mainLedger.release('copy', copyOwner)
+      if (live.current && token === copyToken.current) setCopyPending(false)
+    }
   }
   const [valueNotice, setValueNotice] = useState(() => source.valueStatus?.().message)
   useEffect(() => {
@@ -872,6 +940,7 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
     const toViewport = (rect: HighlightRect): HighlightRect => ({ x: (rect.x - pane.x) * scroll.zoom + bias.x, y: (rect.y - pane.y) * scroll.zoom + bias.y, width: rect.width * scroll.zoom, height: rect.height * scroll.zoom })
     // Search: lazily materialized geometry for this page's hits on the pane only.
     const highlights: HighlightRect[] = [], active: HighlightRect[] = []
+    let findRefusal = ''
     if (page) {
       const host = createCellLayoutHost(ctx, entry.sheet)
       page.hits.forEach((hit, index) => {
@@ -879,13 +948,16 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
         const box = entry.metrics.sourceCellToLogical(hit.source)
         if (!box || box.x >= pane.x + pane.width || box.x + box.width <= pane.x || box.y >= pane.y + pane.height || box.y + box.height <= pane.y) return
         const cell = cellAt(entry, hit.source)
-        const geometry = cell && hitGeometry(hit, cell, entry.metrics, identity, host, entry.layoutCache)
+        let geometry
+        try { geometry = cell && hitGeometry(hit, cell, entry.metrics, identity, host, entry.layoutCache, cellTextOverflow(entry.geometry, hit.source)) }
+        catch (error) { if (!(error instanceof OverflowResourceError)) throw error; findRefusal ||= error.message; return }
         if (!geometry) return
         const rects = geometry.rects.map(toViewport)
         highlights.push(...rects)
         if (index === activeHit) active.push(...rects)
       })
     }
+    setFindOverflowNotice(findRefusal)
     paintSearchOverlay(ctx, highlights, active)
     if (!selection.ranges.length) setSelectionIncomplete(false)
     else {
@@ -1168,7 +1240,7 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
             <GridSemantics owner={identity} projection={entry.metrics} view={entry.view} selection={selection} window={scroll} viewport={viewport}
               body={entry.body} onChange={onGridChange} status={{ records: { ...snapshot(activeSheetId).records, completeness: loadState?.completeness ?? 'complete' }, countMode: 'body', loadReport: { status: 'ready', notices: [...notices, ...fontNotices, ...pagedDrawingNotices, ...(loadState?.failure ? [loadFailureNotice(loadState.failure, loadState.code)] : [])] } }}
               onSortCycle={(col, shift) => void sortCycle(col, shift)} pendingSortColumn={sortPending?.col ?? null} onFilter={(col, invoker) => { setPopup({ kind: 'filter', col, invoker }) }} onSortDialog={(col, invoker) => { setPopup({ kind: 'sort', col, invoker }) }} onNotice={setAnnouncement}
-              popup={popup && controls ? { invoker: popup.invoker, close: closePopup, label: popup.kind === 'filter' ? 'Column filter' : 'Sort worksheet', content: popup.kind === 'filter' ? <FilterDropdown owner={identity} client={controls.client} applied={entry.view.filter} appliedSort={entry.view.sort} col={popup.col} invoker={popup.invoker} embedded onClose={closePopup} onApplied={() => rerender()} onNotice={setAnnouncement} /> : <SortDialog owner={identity} client={controls.client} applied={entry.view.sort} col={popup.col} invoker={popup.invoker} embedded onClose={closePopup} onApplied={() => rerender()} onNotice={setAnnouncement} /> } : undefined} announcement={[sortPending ? `Sorting column ${columnToLetters(sortPending.col)}…` : '', resourceNotice, assets?.sheetId !== activeSheetId ? 'Loading sheet…' : '', assets && assets.sheetId === activeSheetId && assets.lease.refusedImages > 0 ? `${assets.lease.refusedImages} picture${assets.lease.refusedImages === 1 ? ' is' : 's are'} not shown (image memory budget).` : '', selectionIncomplete ? 'Selection highlight is incomplete at this zoom; zoom in for detail.' : '', remote?.queryNotice === announcement ? '' : remote?.queryNotice, announcement].filter(Boolean).join(' ')} inspection={inspection} profile={profile} label={`Worksheet ${entry.sheet.name}`}
+              popup={popup && controls ? { invoker: popup.invoker, close: closePopup, label: popup.kind === 'filter' ? 'Column filter' : 'Sort worksheet', content: popup.kind === 'filter' ? <FilterDropdown owner={identity} client={controls.client} applied={entry.view.filter} appliedSort={entry.view.sort} col={popup.col} invoker={popup.invoker} embedded onClose={closePopup} onApplied={() => rerender()} onNotice={setAnnouncement} /> : <SortDialog owner={identity} client={controls.client} applied={entry.view.sort} col={popup.col} invoker={popup.invoker} embedded onClose={closePopup} onApplied={() => rerender()} onNotice={setAnnouncement} /> } : undefined} announcement={[sortPending ? `Sorting column ${columnToLetters(sortPending.col)}…` : '', resourceNotice, overflowNotice, findOverflowNotice === overflowNotice ? '' : findOverflowNotice, assets?.sheetId !== activeSheetId ? 'Loading sheet…' : '', assets && assets.sheetId === activeSheetId && assets.lease.refusedImages > 0 ? `${assets.lease.refusedImages} picture${assets.lease.refusedImages === 1 ? ' is' : 's are'} not shown (image memory budget).` : '', selectionIncomplete ? 'Selection highlight is incomplete at this zoom; zoom in for detail.' : '', remote?.queryNotice === announcement ? '' : remote?.queryNotice, announcement].filter(Boolean).join(' ')} inspection={inspection} profile={profile} label={`Worksheet ${entry.sheet.name}`}
               cellPresentation={at => {
                 const cell = cellAt(entry, at)
                 if (!cell && remote && !remote.store(activeSheetId).isKnown(at)) return { text: 'Loading…' }

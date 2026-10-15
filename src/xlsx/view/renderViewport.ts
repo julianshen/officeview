@@ -20,7 +20,7 @@ export function createCellLayoutHost(ctx: CanvasRenderingContext2D, sheet: Parti
   const measured = textMeasurer(ctx)
   // Format diagnostics land on the caller's sheet when one is given.
   const target = sheet as XlsxSheet
-  return { layoutBody: (cell, w, h) => layoutCellBody(ctx, target, cell, 0, 0, w, h, measured) }
+  return { layoutBody: (cell, w, h, overflow) => layoutCellBody(ctx, target, cell, 0, 0, w, h, measured, overflow) }
 }
 
 export interface ViewportPaintResult {
@@ -110,7 +110,9 @@ export function renderSheetViewport(
     work.layoutsReused = cache.stats.reused - reused
     const coarse = plan.kind === 'detail' ? plan.coarse : plan.groups
     const paintBorders: Array<() => void> = []
-    const replay = (record: CellLayout) => {
+    // Two passes: every fill first, then text and borders, so overflow into an
+    // empty formatted neighbour is drawn over its fill (S13, as Excel does).
+    const replay = (record: CellLayout, phase: 'fill' | 'content') => {
       // Float64 local offset; the canvas only ever sees tile-local coordinates.
       const lx = record.logicalBounds.x - vx, ly = record.logicalBounds.y - vy
       // Border strokes clamp to the sheet extent (paintCellLayout); expressed in the
@@ -118,7 +120,7 @@ export function renderSheetViewport(
       const localExtent = { width: plan.extent.width - record.logicalBounds.x, height: plan.extent.height - record.logicalBounds.y }
       ctx.save()
       ctx.translate(lx, ly)
-      const border = paintCellLayout(ctx, record.body, localExtent)
+      const border = paintCellLayout(ctx, record.body, localExtent, phase)
       ctx.restore()
       if (border) paintBorders.push(() => { ctx.save(); ctx.translate(lx, ly); border(); ctx.restore() })
     }
@@ -126,7 +128,13 @@ export function renderSheetViewport(
       ctx.fillStyle = COARSE_FILL
       ctx.fillRect(group.bounds.x - vx, group.bounds.y - vy, group.bounds.width, group.bounds.height)
     }
-    for (const record of records) replay(record)
+    // The active cell keeps its exact record even inside a summarized region;
+    // it joins the records' layer: under gridlines, borders and drawings.
+    const extraActive = active && !records.some(record => record.id === active.id) ? active : undefined
+    for (const record of records) replay(record, 'fill')
+    if (extraActive) replay(extraActive, 'fill')
+    for (const record of records) replay(record, 'content')
+    if (extraActive) replay(extraActive, 'content')
     if (plan.kind === 'detail') {
       ctx.strokeStyle = '#d0d0d0'
       ctx.lineWidth = 1
@@ -162,8 +170,6 @@ export function renderSheetViewport(
         paintSheetDrawings(sheet, plan.drawings.map(node => ({ ...node, xEmu: node.xEmu - dx, yEmu: node.yEmu - dy })), ctx, prepared)
       }
     }
-    // The active cell keeps its exact record even inside a summarized region.
-    if (active && !records.some(record => record.id === active.id)) replay(active)
     let pendingNotice = false
     if (plan.kind === 'detail') for (const region of plan.pending ?? []) {
       const box = region.bounds
@@ -177,7 +183,9 @@ export function renderSheetViewport(
         pendingNotice = true
       }
     }
-    if (paintable && coarse.length) notice(COARSE_NOTICE)
+    // A coarse frame draws no gridlines; the active record's border still paints.
+    if (plan.kind !== 'detail') for (const paint of paintBorders) paint()
+    if (paintable && coarse.length) notice(plan.diagnostics.find(d => d.code === 'overflow-memory')?.message ?? COARSE_NOTICE)
     return { kind: plan.kind, ...(plan.kind === 'detail' && plan.pending?.length ? { pending: true } : {}), diagnostics: plan.diagnostics, records, coarse, ...(active ? { active } : {}), work }
   } finally { ctx.restore() }
 }

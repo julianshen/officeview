@@ -79,7 +79,7 @@ Browser shorthand: **[B:C+W]** = Playwright scenario passing on Chromium and Pla
 | Case | Fixture(s) | Evidence | Status |
 |---|---|---|---|
 | AC-CAP-01 | F1, F6, synthetic boundary rows | `xlsx-viewer-contracts.test.ts`; `xlsx-viewer-complexity.test.ts`: DOM active-descendant ids 2^31, 2^32 and 2^34−1 end to end. Browser F1 res+wkr: `aria-activedescendant` id 17179869183 **[B:C+W]** | pass |
-| AC-CAP-02 | F1, F3, F7 | `xlsx-viewer-scroll-window.test.ts`, `xlsx-viewer-navigation.test.tsx`, `xlsx-viewer-selection.test.ts`. Browser: F1 Go To XFD1048576 with header/row label agreement; F3 recenter, header/cell `aria-colindex` agreement and edge ArrowLeft after recenter; F7 Original-cell Go To on a hidden row opens the read-only inspector without moving the active descendant **[B:C+W]** | pass (zoom/DPR browser leg partial: zoom 125% exercised, DPR change not exercised) |
+| AC-CAP-02 | F1, F3, F7 | `xlsx-viewer-scroll-window.test.ts`, `xlsx-viewer-navigation.test.tsx`, `xlsx-viewer-selection.test.ts`. Browser: F1 Go To XFD1048576 with header/row label agreement; F3 recenter, header/cell `aria-colindex` agreement and edge ArrowLeft after recenter; F7 Original-cell Go To on a hidden row opens the read-only inspector without moving the active descendant **[B:C+W]** | pass (zoom/DPR browser leg partial: zoom 125% exercised; **S13 DPR change — emulated (CDP) in installed Chrome, not a physical display move:** header/cell/gridline agreement holds and, after the D-DPR fix, a DPR-only change re-rasterizes by itself — see [S13](#s13-runtime-and-manual-checks)) |
 | AC-CAP-03 | F2/F3/F4 quota variants | `xlsx-viewer-import-limits.test.ts`, `xlsx-viewer-source-pages.test.ts` (typed quota/incomplete/cancel). S10.3 browser: no OPFS/IndexedDB and zero quota are visible typed refusals with no grid; quota denied mid-import states the failure with an incomplete body (G7) **[B:C+W]**; `xlsx-viewer-capability.test.tsx` | pass (S10.3; was "pass (unit); browser leg not-run"). Quota is emulated by stubbing the worker's storage APIs, not by filling a real disk quota |
 | AC-STORE-01 | F8 | `xlsx-viewer-adapter-parity.test.ts`, `xlsx-viewer-values.test.ts`, `xlsx-viewer-source.test.ts`: object and paged adapters agree on values/errors/cache/formula/date/raw UTF-16; pending ≠ blank. Browser wkr: unknown rows paint "Loading…" (`xlsx-viewer-paged-viewer.test.tsx`) | pass; **native Excel checkpoint pass** for three Excel 16 (macOS) workbooks: adapters agree with each other and with Excel (`xlsx-viewer-native-excel*.test.ts`, see [Native Excel](#native-excel-safari-and-devices)). Worker-backed browser legs pass [C+W]: `native-large.xlsx` (200,001 cells) is admitted paged with the shipped limits, and `native-corner.xlsx` through the debug-only `?paged=1` override |
 | AC-STORE-02 | F1–F4 malformed variants | `xlsx-viewer-import.test.ts`, `xlsx-viewer-import-limits.test.ts` | pass (unit); peak/cleanup ledger in a browser → S10.2 |
@@ -212,7 +212,7 @@ What is instrumented, and what is not:
     2. ~~Reopen, confirm no repair prompt, take a screenshot.~~ Done (see above).
     3. ~~Copy into `tests/fixtures/xlsx-viewer/`, record the SHA-256, add the adapter parity case.~~ Done (`xlsx-viewer-native-excel.test.ts`).
     4. ~~Open it in the e2e page (`?src=`), with and without `?worker=1`.~~ Done: resident, `?worker=1` (stays resident) and worker-backed paged through the debug-only `?paged=1` override, [C+W]. The cap-crossing copy saved by Excel came later: `native-large.xlsx` (second batch) opens worker-backed with no override.
-- **Safari desktop: not-run** (also in S10.3). `safaridriver` exists, but remote automation requires a one-time `safaridriver --enable` (admin prompt) plus Develop ▸ Allow Remote Automation, which needs the user. The Playwright WebKit runs above are not Safari evidence.
+- **Safari desktop: pass (S13), automated in real Safari 26.5.2 through safaridriver.** All 7 flows passed at `6dd5240`; see [S13](#s13-runtime-and-manual-checks), which also keeps the earlier locked-screen and harness-race runs. The Playwright WebKit runs above are not Safari evidence.
 - **iPad / physical devices: not-run** by user decision.
 
 ## S10.3 support and accessibility receipts
@@ -302,19 +302,219 @@ VoiceOver cannot be driven unattended (it needs System Settings/TCC grants and a
 - **Playwright WebKit cannot write OPFS pages from the worker** (recorded as a capacity restriction in the capability matrix). `choosePageBackend` (`sourcePages.ts`) picks OPFS when `getDirectory` works and does not fall back to IndexedDB when a write fails; an injected OPFS write failure confirms IndexedDB is never probed. Automatic write-failure failover is not required by §4.2 and is left to the storage owner.
 - A recorded load failure is cleared by a later complete structural read, but after a terminal storage failure no further read is issued (the import has ended), so that path is only reachable for non-storage failures.
 
+## S13 runtime and manual checks
+
+**Branch:** `feature/iv-s13-manual` (cut from `feature/interactive-viewer` at `d4acf78`). **Run date:** 2026-10-12/13. **Machine:** macOS 26.5.2 (25F84), one external 1920×1080 display at DPR 1.
+
+### Runtime DPR change — emulated (CDP) in desktop Chrome, not a physical display move
+
+**Spec:** `tests/browser/interactive-viewer-dpr.spec.ts`. **Browser:** installed Google Chrome 155.0.8059.39 (`channel: 'chrome'`). The spec checks that CDP `Browser.getVersion` equals the `/Applications/Google Chrome.app` bundle version. **Run:** `IV_HARNESS_PORT=4191 bunx playwright test --config playwright.viewer.config.ts tests/browser/interactive-viewer-dpr.spec.ts --project chromium`. **Method:** `Emulation.setDeviceMetricsOverride` at a constant 1440×900 CSS viewport, `deviceScaleFactor` 1 → 2 → 1.5 → 1. Before the change each run sets up find (`A1048576`), Go To C3, a Shift selection to D4 and zoom 125%. Fixtures: `f1-small.xlsx` (resident) and `f1-paged.xlsx` (worker-backed). The machine has one DPR 1 display, so no physical display move was possible.
+
+| Assertion | F1 resident | F1 worker-backed |
+|---|---|---|
+| **A DPR-only change re-rasterizes the viewer with no other input** | FAIL before the fix; **pass after** (2792×712, 2094×534, 1396×356) | FAIL before the fix; **pass after** (same) |
+| Backing store = CSS size × DPR (±1 px), base and overlay, at 2 / 1.5 / 1 (after a re-render) | pass: 2792×712, 2094×534, 1396×356 for CSS 1396×356 | pass (same) |
+| Tiles at the new DPR: each requested tile is 512 device px at zoom × DPR (logical box 204.8 / 273.07 / 409.6 at zoom 1.25) | pass | pass |
+| No stale-DPR tile presented once re-rendered: the first frame at the new DPR reuses 0 tiles, and every later frame paints only new-DPR tiles | pass | pass |
+| Gridline alignment: the darkest device column/row lies within ±1.5 device px of the empty cell G12's DOM (hit-test) right and bottom edges (expected x 450 / 337.5 / 225, found 450 / 337 / 225; cell centre stays white) | pass | pass |
+| State kept: active cell, selected cells, first row/column header, zoom text, find text, status text | pass | pass |
+| Bitmap budget: every frame's `bitmapBytes` and `peakBitmapBytes` ≤ 134,217,728 B; tile bytes = tiles × 1 MiB (peak observed 41,069,056 B at DPR 2) | pass | pass |
+| No console errors or page errors | pass | pass |
+
+**D-DPR (found by the FAIL row, now fixed).** After each override, `devicePixelRatio` and `matchMedia('(resolution: …)').matches` changed at once. Before the fix, the viewer then reported no frame for the 5 s window, and the canvases kept the old backing size (for example 1396×356 at DPR 2). The cause was in `InteractiveSheetDoc.tsx`:
+
+- the viewer read `window.devicePixelRatio` only while rendering;
+- its only size input was a content-box `ResizeObserver` on the pane;
+- nothing listened for a `(resolution)` media-query change.
+
+A DPR-only change keeps the CSS size, so nothing woke the viewer, and the old raster stayed on screen, scaled.
+
+**Fix:** a new `src/components/xlsx/devicePixelRatio.ts` exports `useDevicePixelRatio`. The `InteractiveSheetDoc.tsx` change is the hook call plus its import. The hook re-reads the ratio when any of these fire:
+
+- a `(resolution: Xdppx)` media query, re-armed for each new ratio;
+- window `resize` and `visualViewport` `resize`;
+- a 1 s poll while the page is visible.
+
+Setting an unchanged value does not re-render. Unmounting removes every listener and clears the poll. A new ratio changes the pane surface bytes, so the tile pool is re-admitted (old-DPR tiles are released). `present()` also drops any tile keyed to another DPR. Unit tests: `tests/xlsx-viewer-dpr.test.tsx` (5 tests). Before the hook was implemented, a deliberately wrong boundary failed 4 of them with the intended assertions, for example `expected [] to deeply equal [ '(resolution: 1dppx)' ]` and `expected 1 to be 2`. All 4 browser tests now pass with unchanged bodies. The only spec edit is a file-level skip, so the webkit project no longer tries to launch with `channel: 'chrome'`.
+
+The other rows are checked after a pane width change of 100 px and back, so they also cover the resize path.
+
+*Emulation note:* under CDP, Chrome changed the DPR and media-query state but fired no `resize`, no media-query `change`, and no `device-pixel-content-box` ResizeObserver callback (checked with a probe). So in this spec it is the hook's visible-page poll that fires (logged page signals: `[]`). A real display move normally fires the media-query change. That path is covered by the unit tests only, because this machine has a single DPR 1 display.
+
+**The 1 px nudge observation: not reproducible as a pane-width bug.** I tried to reproduce it, before and after the fix. Before the fix, 72 cycles of DPR 2 / 1.5 / 1, each with a 1 px pane nudge and back, produced 3 stale states. All 3 were old-DPR backing stores with the correct CSS width, which is D-DPR (or the two resizes coalescing into one observation). The earlier "CSS width stuck at 1397" state did not recur. After the fix, 60 cycles that waited for each leg plus 60 cycles with 0–57 ms gaps produced 0 stale states (canvas CSS width = pane `clientWidth` − 44, backing = `ceil(CSS × DPR)`). No `devicePixelContentBoxSize` change was made, and no regression test was added, since there is no reproduction. The probe was a throwaway and is not committed.
+
+### Actual Safari via safaridriver — pass (7/7 at `6dd5240`)
+
+**Script:** `bun scripts/harness/safari-check.ts` (W3C WebDriver over HTTP to `safaridriver -p 4451`; the harness vite server on 4191; a loopback fixture server on 4193). It writes the receipt and screenshots to `/tmp/officeview-safari-check/`. **Browser:** Safari 26.5.2 (safaridriver "Included with Safari 26.5.2 (21624.2.5.11.8)"), session `platformName: macOS`, `browserVersion: 26.5.2`. This is real Safari, not Playwright WebKit.
+
+**Early runs (screen locked).** The script first ran twice while the macOS screen was **locked** (`CGSSessionScreenIsLocked = true`). The first run failed on a harness bug before it reached the page: the W3C element-reference key was wrong. The bug is fixed, and that run's results are discarded. The second run's receipt is kept as `/tmp/officeview-safari-check/receipt-locked-screen-run.json`. In that run every WebDriver screenshot was black, and WebDriver clicks reported success but had no effect (Go To never moved the active cell). The likely cause is the locked screen; an unlocked rerun has to confirm it. Those interaction results say nothing about the viewer. The script now refuses to run on a locked screen.
+
+| Step | Result |
+|---|---|
+| Capability detection, main thread: `Worker`, `OffscreenCanvas` with a 2D context, IndexedDB open, `navigator.storage.getDirectory`, estimate (quota 82,463,372,084 B); **OPFS `createWritable` on the main thread wrote 3 bytes** | ran: all available |
+| Capability detection, dedicated worker: `OffscreenCanvas`, IndexedDB, OPFS `createSyncAccessHandle` (wrote and flushed 1 MiB) and `createWritable` both present | ran: all available |
+| F2 storage package (160,000 rows; pages exceed the 32 MiB memory store), worker-backed: the WebKit OPFS-write restriction | ran: the import **completed** ("Visible body 160000 / complete body 160000"). The page-write failure seen in Playwright WebKit (S10.3 capability matrix) did not happen in real Safari 26.5.2. The locked-run script waited for the wrong row count (159,999), so the receipt marks the step as a timeout, but its `statusAtTimeout` holds the line above. The count is fixed. |
+| Opens: F1 resident (no worker), F1/F2/F3 worker-backed (1 worker, 1 `open`), each reaching "complete body" | ran: opened |
+| Go To XFD1048576, find A1048576, copy payload, keyboard navigation, zoom, header sort, value filter apply/cancel/clear, F3 recenter | **not-run (invalid):** the clicks returned success but had no effect, most likely because of the locked screen. Rerun with the screen unlocked |
+
+**Unlocked run (integrator, at `da9eac8`; receipt in `/tmp/officeview-safari-check-unlocked/`): 5 pass, 2 fail.**
+
+Passed:
+- capabilities;
+- F1 resident and worker-backed: Go To XFD1048576, find the never-painted corner, copy payload;
+- F3 dense recenter;
+- the F2 storage import of 160,000 rows.
+
+Both failures were harness bugs, confirmed by re-running those steps in real Safari:
+- **"waiting for active cell A1":** Safari reserves Cmd+Home. The WebDriver Meta+Home navigated the tab to the Safari home page, so the page never saw the key. Ctrl+Home moved the active cell to A1 at once. Cmd+Down and Cmd+Right reached A1048576 and XFD1048576.
+- **"alpha checkbox not found":** the filter popup's buttons stay disabled until its value list loads (about 1.7 s for 100,010 rows), and a WebDriver click on a disabled button does nothing. The value checkboxes are named correctly (`aria-label="alpha"`).
+
+Fixed in `606db4c`: Ctrl+Home, and clicks wait for an enabled target.
+
+**Integrator re-runs at `1143e8b` (the user had cleared a stray macOS permission dialog first):**
+- **Run 1: 6 pass, 1 fail.** "F1 worker-backed paged … corner label XFD1048576, value Loading…" was a harness race: the step read the corner's name while the worker read was still in flight, and "Loading…" is the correct pending state.
+- **Run 2: 7 pass.**
+
+The harness fix (`6dd5240`) waits up to 30 s for a settled name and asserts that the labels went pending → value, never through a blank value.
+
+**Final run at `6dd5240`: 7/7 pass** (2026-10-12T18:32:21Z–18:32:39Z, Safari 26.5.2, safaridriver 21624.2.5.11.8, ports 4485–4487, receipt `/tmp/officeview-safari-check-final/receipt.json`). Every click was a real WebDriver click; no synthetic fallback was used. Key values:
+
+| Step | Result |
+|---|---|
+| Capabilities | Worker, OffscreenCanvas 2D, IndexedDB, OPFS (main-thread `createWritable`; worker `createSyncAccessHandle`): all present |
+| F1 resident | corner "XFD1048576, value 17179869183.00"; find reached A1048576 (id …17179852800); copy payload "A1048576" |
+| F1 worker-backed | same corner and copy; 1 worker, 1 `open` |
+| Keyboard | B3 → C3 → C4 (Enter) → A4 (Home) → A1 (Ctrl+Home) → A1048576 (Cmd+Down) → XFD1048576 (Cmd+Right) → XFC1048576; zoom 100% → 125% (`+`) → 100% (`0`) |
+| F2 worker-backed, 100,010 rows | sort G ascending then descending; G2 = "G2, value 200017.00; original G100009". In-page click → first status/`aria-sort` change: 1,538 ms (ascending) and 2,975 ms (descending); this is a WebDriver observation, not an S10.2 receipt. Filter D = alpha: "Visible body 24972 / complete body 100009"; Cancel left it unchanged; Clear all filters gave "Visible body 100009". Worker commands: open 1, sort 2, filter 2, prepareColumns 2 |
+| F3 worker-backed dense | recenter at XFD1/A1/XFD8/H3 with no orphan cells; ArrowLeft from XFD8 → "XFC8, value 1984.20" |
+| F2 storage, 160,000 rows | "Visible body 160000 / complete body 160000"; OPFS pages persisted, no write restriction |
+
+### macOS VoiceOver — guided manual pass (real VoiceOver, real Safari 26.5.2)
+
+**Automated script:** `bun scripts/harness/voiceover-check.ts` (`--preflight` only checks and never starts VoiceOver). It is still not usable: VoiceOver starts, but `tell application "VoiceOver" to return content of last phrase` hangs until the osascript timeout. The user is re-checking the AppleScript/Automation permissions. No automated VoiceOver receipt is claimed.
+
+**Guided pass (run by the integrator with the user at the machine).** Fixture `f2-1k` (resident), real keyboard, VoiceOver on, macOS VoiceOver UI in Traditional Chinese. Evidence is the VoiceOver caption panel, cropped to the panel only, in [`voiceover-s13/`](voiceover-s13/). In the captions, 第N欄 = column N and 第N列 = row N, both chrome-inclusive. These ran **before** the V1/V2 fixes below.
+
+| Step | VoiceOver said | Result |
+|---|---|---|
+| Down onto A2 ([01](voiceover-s13/01-down-a2.png)) | "A2, value 1.00 1.00, column 2, row 3" | pass for name and chrome-inclusive indices; **V1**: value spoken twice |
+| B3 date cell ([09](voiceover-s13/09-b3-date.png)) | "B3, value 2023-06-09 2023-06-09, column 3, row 4" | pass for indices; **V1** |
+| Right ([02](voiceover-s13/02-right.png)) | "C3, value TRUE TRUE, column 4, row 4" | pass for movement; **V1** |
+| Shift+Right ([03](voiceover-s13/03-shift-right-d3.png)) | "D3, value beta beta, column 5, row 4" | movement passes; **V2**: no selection announced |
+| Ctrl+Home ([04](voiceover-s13/04-ctrl-home-status.png)) | live status "Visible body 1000 / complete body 1000 — A1, value id" | pass |
+| Option+Down on a cell ([05](voiceover-s13/05-option-down-no-popup.png)) | status only, no "Column filter" popup | **V3**, see below |
+| Escape ([06](voiceover-s13/06-escape.png)) | "A2, value 1.00 1.00" | pass |
+| Tab out of the grid ([07](voiceover-s13/07-tab-1.png), [08](voiceover-s13/08-tab-2.png)) | "Search document, Search…, search text field", then the buttons | pass (one Tab stop) |
+
+**Findings, resolved on this branch:**
+
+- **V1 — every value spoken twice: real defect, fixed.**
+  - Cause: the gridcell's `aria-label` already carries the value, and its visually hidden text child was still exposed, so VoiceOver read the name and then the contents.
+  - Fix (at the time; superseded by V5, where the name now comes from the exposed text itself): the text child was made `aria-hidden` (`GridSemantics.tsx`). The accessible name is unchanged ("B3, value …"), so the S10.3 name contract and Chromium AX tests still pass.
+  - Test: `tests/xlsx-viewer-a11y-announce.test.tsx`, which failed first with `expected [ '10' ] to deeply equal []`.
+- **V2 — no selection announced on extension: real gap against spec §9.2, fixed.** §9.2 says cell names carry selection descriptions and the live region reports selection.
+  - Shift+Arrow and Shift+click now announce the range, e.g. "D3, value beta; selected B3:D3".
+  - Cells of a multi-cell selection get an `aria-description` of "selected". A single active cell does not, to avoid noise.
+  - Tests are in the same file. They failed first with `expected 'C2, value 10; original C4' to be '…; selected A2:C2'`.
+  - Not yet re-heard with VoiceOver.
+- **V3 — Option+Down did not open the filter under VoiceOver: not reproduced as a viewer defect.**
+  - With VoiceOver **off**, I sent real OS key events (System Events `key code 125 using option down`) to a normal Safari 26.5.2 window. A key probe page recorded `key: "ArrowDown", code: "ArrowDown", altKey: true`.
+  - On the viewer, with the grid focused via the e2e page's new `focus=grid`, the same keystroke opened "Filter column B".
+  - So the handler works in Safari. Under VoiceOver the keystroke did not reach the page as Option+Down, most likely because VoiceOver handles it. That is not confirmed: no VoiceOver key trace was possible.
+  - Keyboard alternative that VoiceOver users can reach: F2 (header control mode) → Tab to "Filter column X" → Enter (S10.3 receipt). Re-test Option+Down with VoiceOver's pass-through (pass next keystroke) on the next VoiceOver pass.
+  - Separately, safaridriver's synthetic modified arrows arrive with control-character `key` values (Option+Down → `"\u001f"`, Shift+Right → `"\u001d"`; `code` is correct). That is a WebDriver synthesis artifact; real keys were correct. The Safari check therefore uses no modified arrows except Cmd+Arrow, which arrives correctly.
+- **V4 — "1.002023-06-02" in the date column: not Safari-specific; fixed for Excel fidelity (`3b759df`).**
+  - Playwright Chromium and WebKit rendered it identically. With Calibri missing, "2023-06-02" measures about 68.2 px in a 64 px column. The renderer clipped it at the cell edge, so it read as joined to column A's "1.00".
+  - Excel instead shows `#` repeated across the cell for a number, date or time that does not fit. `layoutCellBody` (`src/xlsx/render.ts`), shared by the static and viewer renderers, now does the same:
+    - it measures with the same font string the cell paints with;
+    - the cell gets ⌊interior / width("#")⌋ `#`s, and at least one;
+    - General keeps its order (fewer decimals, then scientific), and its "nothing fits" result now fills the cell too.
+  - Unchanged: text cells, booleans, errors, wrapped and rotated cells, and numbers shown through a text (`@`) section. The accessible and find value (`cellDisplayText`) stays the real value.
+  - At `3b759df` shrink-to-fit was not yet parsed. It is now (see below), and a shrink-to-fit number reaches `#` only when even the floor size does not fit.
+  - Since review round 3, `#` eligibility comes from the value type and the **selected** format section (`numericSectionIsText` in `formula/format.ts`), not from the output string. General's "nothing fits" outcome is a separate signal, so an authored literal `"#"` or `\#` paints as written.
+  - Tests: `tests/xlsx-number-overflow.test.ts`, covering dates, times, negative numbers, percentages, General, a 1-glyph column, text and accessible value. It failed first with, e.g., `expected [ '2023-06-02' ] to deeply equal [ '########' ]`.
+  - Two format tests now render with wide columns or narrower fake glyphs, so they keep asserting formats rather than overflow.
+  - **Golden:** corpus compare after hydrating with `bun scripts/fetch-corpus.ts` changed exactly one XLSX golden: `poi-64508.xlsx.0` (2,720 / 44,800 px). Its `dd.mm.yyyy` date column used to spill garbled digits into the next column and now shows `######` in the cell. Re-recorded.
+  - Six docx/pptx goldens also differ (`poi-55733.docx.0`, `poi-picture-transparency.pptx.1–3`, `pydocx-blk-inner-content.docx.0`, `pypptx-test_slides.pptx.0`). They fail identically on the base commit without this change, so they are unrelated and not re-recorded.
+  - With real Calibri metrics, a column that fits in Excel would also fit here. The harness has no Calibri, so this date column shows `#`s.
+- **V5 — "blank" (空白) after every cell after the V1 fix: real defect, fixed; needs a real VoiceOver re-check.**
+  - Heard on the 2026-10-15 re-check at `9b35131` (Safari 26.5.2, user present): V1 is fixed (value read once) and V2 is confirmed ("selected" on Shift+Arrow), but every cell ended with "blank", e.g. "B2, value 2023-06-02，空白，第3欄，第3列".
+  - Cause: with the inner text `aria-hidden`, the gridcell had an `aria-label` but no accessible content, so VoiceOver announced it as blank.
+  - Fix: the gridcell has no `aria-label`; its visually hidden text is exposed and carries the full name ("B2, value …; original …"), so the name comes from the cell's own contents. The name contract is unchanged and the value occurs once. Browser specs and harness scripts read the cell name from `textContent`.
+  - Test: `tests/xlsx-viewer-a11y-announce.test.tsx`, which failed first with `expected '' to match /^[A-Z]+\d+(, value .*)?/` (no exposed text).
+  - **Open:** this has not been heard with VoiceOver yet. A real VoiceOver pass must confirm the value is read once and "blank" is gone before the AC-A11Y VoiceOver receipt is claimed.
+- **Text overflow into non-empty neighbours: fixed for Excel fidelity.** Excel lets text overflow only into empty adjacent cells: rightward for left/General alignment, leftward for right alignment, both ways for center. It clips at the first non-empty cell.
+  - What blocks: a value, a formula (even one returning ""), an empty-string constant, and any merged cell, including a merge anchored in another row. The sheet edge stops it too.
+  - Hidden (zero-width) columns are skipped: they neither block nor add room. Merged cells never overflow. Formatting-only cells count as empty.
+  - Rule and placement:
+    - `src/xlsx/view/textOverflow.ts` holds the pure rule, `textOverflowAllowance`.
+    - The static renderer computes each row's occupancy once.
+    - The viewer planner (`viewport.ts`) computes it inside its fetched overflow envelope. Beyond the envelope the room is unbounded, because the pane never reaches there.
+    - `layoutCellBody` turns the allowance into a horizontal clip: `clipX` on plain text, a widened `clip` on unwrapped explicit layouts.
+    - The allowance is part of the viewer's layout-cache key.
+  - Tests:
+    - `tests/xlsx-text-overflow.test.ts` covers left/right/center; blocking by a value, by `""` (formula and constant) and by a merge; the sheet and left edges; hidden columns; formatting-only cells. It failed first with `expected null to deeply equal { x0: 0, x1: 100 }` and similar.
+    - A viewer/static parity crop in `tests/xlsx-viewer-layout.test.ts` gives diff 0, with clips at the expected column edges.
+- **Shrink-to-fit: implemented.** `alignment@shrinkToFit` is now parsed (`parse.ts`, `pagedFormatting.ts`; `XlsxCellStyle.shrinkToFit`).
+  - For unwrapped, unrotated cells, the font scales down in 0.1 pt steps until the formatted text fits the interior. General keeps full precision rather than dropping decimals.
+  - A number shows `#` only when even the 4 pt minimum does not fit; text stays at the minimum.
+  - Find and accessible values (`cellDisplayText`) are unchanged.
+  - Tests (same file): numbers, dates, text, text that already fits, the below-minimum `#`, and the accessible value.
+- **Goldens for these two rules:** after the fixes, the corpus compare changed three XLSX goldens, all re-recorded. In each, overlapping text from a cell is now clipped at its non-empty neighbour, as Excel does:
+  - `poi-59021.xlsx.0` (1,004 / 20,480 px): "Abkhazia - Fixed" over "7840", and "10/02/2016" over F2, which holds an empty-string constant.
+  - `poi-64508.xlsx.0` (3,519 / 44,800 px): headers and "SI33738548"/"04656-2020"/barcodes over their neighbours.
+  - `poi-xlsx-jdbc.xlsx.0` (1,080 / 7,680 px): "A Very large string in a column" over "foo"/"bar".
+  - The same six docx/pptx goldens still differ exactly as on the base commit (unrelated).
+- **Review round 3 fixes (Codex):**
+  - **One overflow geometry.**
+    - A text record's clip is now the painted clip, translated from the box-local body; centered and right-aligned text included.
+    - Find highlight geometry rebuilds the record with the same allowance the painter used (`viewport.cellTextOverflow`, which uses `rowOverflowInput` on the row's real cells and merges). It then intersects highlight rectangles with that clip.
+    - A match whose ink is fully clipped stays a hit and highlights its own cell.
+    - The viewer no longer uses an envelope: allowances end at the real worksheet edges (A and XFD).
+  - **Shrink-to-fit** never enlarges an authored size. At the 4 pt floor, numbers show `#` and text is held to its own cell; it never spills.
+  - **Fill, justify, distributed and center-across-selection alignments** never overflow (`alignmentOverflows`).
+  - **Paint order.** The static renderer and the viewer paint every fill first, then text and borders. Overflow into an empty formatted neighbour is drawn over its fill, as Excel does. The viewer test checks for text ink inside a yellow empty B1.
+  - **Selection wording and cardinality.**
+    - Extending a header selection announces "selected columns A:C" or "selected rows 2:3", plus any additional ranges.
+    - Cardinality uses each row-set's own count (intervals, list, bitset, ref), so a one-cell bitset stays quiet.
+  - **Implicit cell positions** (found while checking the paint-order change). The resident parser placed every `<c>` without `r` at A1 and every `<row>` without `r` at row 1, stacking the cells on top of each other. It now follows Excel: a ref-less row follows the previous row, and a ref-less cell follows the previous cell of its row (`tests/xlsx-implicit-refs.test.ts`).
+    - One existing assertion that pinned the legacy row index (0) for a ref-less row moved to Excel's position (1); its cell's explicit reference and the inconsistency diagnostic are unchanged.
+    - The streaming (worker) parser already refuses a ref-less row (`a worksheet row has no valid row number`) or cell with a visible "unsupported" outcome.
+    - **Golden re-recorded:** `poi-59746_NoRowNums.xlsx.0`, the POI fixture for exactly this case. It was 64×20 px showing one garbled A1 cell and is now 704×300 px showing its 15×11 table.
+    - The three goldens above are unchanged by the round-3 fixes. The same six docx/pptx goldens still differ exactly as on base.
+- **Review round 4 fixes (pi):**
+  - **Implicit positions are bounded.** An implicit position past the worksheet is a typed `PackageError('unsupported', …, part)` refusal, like the paged reader's, never an uncaught `CoordinateError`. That covers a 16,385th ref-less cell in a row, a ref-less row after row 1,048,576, or a ref-less cell in a row beyond the sheet. One full row of 16,384 ref-less cells still parses. Excel reports such a file as needing repair, so no clamp is attempted. Regression: `tests/xlsx-implicit-refs-bounds.test.ts`, the reviewer's repro.
+  - **Duplicate explicit rows.** A repeated `<row r>` is merged into its first record, with later cells replacing same-column ones, and the sheet gets a `duplicate-row` diagnostic. The paged reader refuses the same file (`worksheet rows are out of order or duplicated`). This divergence is intentional: refusing would break resident files that open today.
+  - **Allowance cost.**
+    - Occupancy is reduced once per row to the sorted, visible blocking columns (`rowOverflowFromCells`).
+    - The viewer now uses one document-owned byte LRU across all sheets and current/retired geometries. Its retained 2 MiB subcap is charged to the real shared main ledger (layout owner), within the unchanged D 64 MiB / M 32 MiB budget. Construction and coexisting copies are reserved in that same budget before allocations.
+    - Blockers and merge endpoints use lossless Uint16 storage. Weak snapshot/geometry/row ownership and weak eviction callbacks do not retain dead cells, text or projections; document/source/profile replacement and close invalidate memos and release their charge. Unbound geometry computes without retaining a global memo.
+    - Admission failure produces a coarse memory notice; find skips unavailable highlight geometry with that notice. Refusal tiles are not retained, so later admission can rebuild exact allowances. The ownership, pressure, snapshot/reload, close, eviction parity and corrected Bun/JSC job-boundary GC regressions are maintained in `xlsx-overflow-owned-cache`, `xlsx-overflow-ledger` and `xlsx-text-overflow-cache`. This code received independent Codex subagent SPEC and QUALITY technical APPROVE (OpenAI GPT family). The different-model-family review is done: Claude (claude-opus-5-5, a different family) approved round 7 on 2026-10-15 at `9b35131` with NITs only (`findings-s13-manual-claude-r7.md`), and the user's 2026-10-15 decision keeps the strict different-family rule. No new browser performance or native receipt is claimed.
+    - Each allowance is a binary search plus the row's merges.
+    - Index reads for one allowance no longer grow with the formatting-only cells before the blocker. The reviewer's 16,384-wide styled row case is now bounded (`text-overflow allowance cost on a wide styled row`).
+    - **Claude r7 NITs (2026-10-15).** Pinned by tests that fail on a mutant: a resident (no pending) refused tile is never retained and repaints detail once pressure ends (`xlsx-overflow-refusal-render`); an over-wide row repeating one column 16,384 times keeps a later blocker (`xlsx-overflow-owned-cache`); an unsupported-format diagnostic is published only inside an admitted `retain` (`xlsx-viewer-copy`). Fixed: a closed workbook hands out one closed, uncharged overflow owner, so the viewer refuses instead of throwing from render/memo/layout effects; present and find keep separate overflow notices, so an unrelated base present no longer clears a find refusal (`xlsx-overflow-owner-lifecycle`, `xlsx-overflow-ledger`). The frame-time rebind in `frameOf()` is kept: two viewers with different profiles on one remote replace the single remote owner between one viewer's render and its layout effect. **Known cost, not changed:** those two viewers then close and recreate each other's owner every frame. It is correct (each frame binds a live owner, charges stay in the shared ledger), only wasteful; a per-profile owner would change the remote's single-owner/profile-replacement contract pinned in round 5.
+  - **Copy ownership and aggregate admission.** A copy job charges its own `copy` owner in the same document main ledger as the overflow owner (`mainLedger = remote?.mainLedger ?? new MainMemoryLedger()`). Growth is admitted only while the job stays within its session cap (`copySessionBudget`, 3/8 of the profile's main budget) **and** the ledger's aggregate total (all pools, minus this job's held bytes, plus the new size) stays within `MAIN_THREAD_BUDGETS[profile]`; shrinking skips the aggregate check (a closed job or one over its session cap is still refused). Column reservation uses the same admission. Every temporary formatter and serializer byte is refunded; only per-block metadata survives until the result is built. A new canonical format diagnostic is adopted from the copy owner into a reachability-bound `document` charge (the copy charge stays column bytes plus live memory; duplicates net zero). A ready result stays charged until the native clipboard write settles (about twice the text while the write is pending, deliberately conservative). Overlapping jobs have independent owners; unmount aborts the current job, and each owner is released when its job settles. Tests: `xlsx-viewer-copy`, `xlsx-viewer-copy-lifecycle`.
+  - **Merges per source row.** The static renderer keys each cell's occupancy on that cell's own source row, so a malformed row whose cells name other rows uses the right merges.
+  - **Reviewer's unconfirmed suspicions:**
+    - *Active-record z-order (confirmed and fixed).* The exact active record kept inside a coarse region was replayed after gridlines and drawings, and its border was never painted. It now joins the records' layer, and a coarse frame paints its border. Test: `review round 4: the exact active record…` in `tests/xlsx-viewer-layout.test.ts`.
+    - *`laidOut` retention (not changed).* The static renderer keeps one layout per painted cell between its fill and content passes. That is bounded by the cells of the admitted raster (static admission already caps the raster), and avoiding it would mean laying every cell out twice.
+    - *Lowercase or alternate-content refs (not changed).* A lowercase `r` (`a1`) is treated as missing by both the resident and paged readers (same `[A-Z]+` rule), so they agree. Excel writes upper case.
+
 ## Blocking for release
 
 These are mandatory cases whose evidence is incomplete. Nothing here is hidden as a pass.
 
 1. ~~**AC-STORE-03 / AC-SEM-04 drawing legs / AC-SEM-05**~~ — resolved by S3.3 (merged 2026-10-12); only their browser legs remain not-run.
-2. **AC-A11Y-01 / AC-A11Y-02:** S10.3 delivered the Chromium/WebKit keyboard and focus receipts and the Chromium AX-tree receipt. Still open: the **macOS VoiceOver** receipt (manual steps in the S10.3 section), **Safari desktop** (needs admin `safaridriver --enable`), and **iPad touch/VoiceOver** (not-run by user decision).
+2. **AC-A11Y-01 / AC-A11Y-02:** S10.3 delivered the Chromium/WebKit keyboard and focus receipts and the Chromium AX-tree receipt. Still open: the **macOS VoiceOver** receipt (S13: guided manual passes in Safari: V1/V2 fixed and re-heard on 2026-10-15, and V5 (a trailing “blank” after each cell) found and fixed, then re-heard at 0c65bff; the automated `scripts/harness/voiceover-check.ts` is blocked by the `content of last phrase` AppleScript hang), ~~Safari desktop~~ (S13: 7/7 in real Safari 26.5.2), and **iPad touch/VoiceOver** (not-run by user decision).
 3. **AC-PERF-01 / AC-PERF-02:** S10.2 receipt r16 admits desktop Chrome (13/13 rows; main memory under the round-5 gate plus the user-approved 0.25 MiB engine-cache allowance, 2026-10-13). r8 was admitted under the round-3 rules. The user’s 2026-10-13 allowance decision, with the untraced remainder disclosed, satisfies the prior clause “attribute or charge that remainder (or an explicit decision on it)” through its explicit-decision option; no further remainder decision is pending. Still needed: a quiet-machine re-run, actual Safari, and the iPad/mobile receipts (not-run by user decision).
 4. ~~**Native Excel checkpoint** for AC-STORE-01, AC-SEM-07 and AC-REG-01~~: passed on three Excel 16 (macOS) workbooks (S13, see above): `native-corner`, `native-1904` and the cap-crossing `native-large`, which opens worker-backed without any override. Still open: Excel for Windows.
 5. **AC-BACKEND-01:** S11/S12 decision records delivered (`docs/architecture/xlsx-wasm-decision.md`, `xlsx-gpu-decision.md`, both not-run on desktop Chrome (headless)-only evidence); revisit when Safari and mobile receipts exist.
 6. ~~**Full-scale browser runs** for F2 (1M × 8), F3 dense (256 × 16,384) and F4 (1M strings)~~: S10.2 ran all three at full scale in Chrome (performance receipt). The S10.1 functional browser suite still uses reduced, labelled scales.
+7. ~~**D-DPR (S13, defect)**~~ — fixed on `feature/iv-s13-manual` (`useDevicePixelRatio`); was: a runtime device-pixel-ratio change with an unchanged CSS size (a window moved between a DPR 1 and a DPR 2 display) does not re-rasterize the viewer. The old backing store stays on screen, scaled, until some unrelated input re-renders it. Found with emulation (CDP) in installed Chrome; see [S13](#s13-runtime-and-manual-checks).
 
 ## Observations (not fixed; not reproduced as failures)
 
+- (S13) A 1 px pane-width nudge at DPR 1.5 once seemed to leave the pane width stale (canvas CSS 1397 at `innerWidth` 1440). It was investigated and did not reproduce in 192 cycles; every stale state seen was D-DPR, now fixed. Details in the S13 section.
 - G2's read-ahead costs one extra `next()` per complete cursor-less page. On the worker path that is one more worker round trip; it is part of the roughly 597 reads observed above. Detection keeps at most one read-ahead continuation open, because the worker caps open scans at 4 (`MAX_OPEN_SCANS`), shared with find. This is a cost note for the S8.6 owner, not a bug.
 - Generated browser packages are cached under `$TMPDIR/officeview-viewer-e2e-v1`, keyed by file name. If the S0.2 builders change, bump the `-v1` suffix in `tests/browser/viewer-e2e.ts`.
 - `fromStoreScan` (`src/xlsx/view/structure.ts`) has the same first-page-only pattern as G2. It is used only by tests today. Any future production caller must follow iteration-continued pages.

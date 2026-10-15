@@ -26,6 +26,8 @@ import type {
   ProfileId, GridSelection, OverviewGroup, OverviewQuery, LogicalViewport, SearchQuery,
 } from '../xlsx/view/contracts'
 import type { RangeDetection } from '../xlsx/view/rangeDetection'
+import { createDocumentOverflowCache } from '../xlsx/view/documentOverflow'
+import type { OverflowCache } from '../xlsx/view/overflowCache'
 import { MainMemoryLedger, axisBytes, estimatePayloadBytes, leaseTargets } from '../xlsx/view/mainLedger'
 import type { XlsxCell, XlsxCellStyle, XlsxMergeRange } from '../xlsx/types'
 import { MAX_COLS, MAX_ROWS, formatA1, isValidCoordinate, type SourceCell, type SourceRect } from '../xlsx/view/coordinates'
@@ -133,6 +135,8 @@ export class RemoteWorkbook implements WorkbookSource {
   /** S10.2 §12.4: the document's main-thread application ledger (row cache,
    * adopted view buffers, in-flight replies; the viewer charges its own pools). */
   readonly mainLedger = new MainMemoryLedger()
+  private overflow: { profile: ProfileId; cache: OverflowCache } | undefined
+  private closedOverflow: OverflowCache | undefined
   private readonly identities = new Map<string, CacheIdentity>()
   private readonly views = new Map<string, RemoteSheetView>()
   private readonly geometries = new Map<string, SheetGeometry>()
@@ -221,6 +225,22 @@ export class RemoteWorkbook implements WorkbookSource {
     return true
   }
   releasePages(pages: number): void { this.pagesInFlight -= pages }
+  /** One occupancy cache across all sheets and geometry generations. A closed
+   * workbook hands out an already-closed owner (no charge): its reads refuse with
+   * OverflowResourceError('closed'), which planning turns into a coarse frame and
+   * a notice, so render, memo and layout-effect callers never throw. */
+  overflowFor(profile: ProfileId = this.overflow?.profile ?? this.profile): OverflowCache {
+    if (this.closed) {
+      if (!this.closedOverflow) { this.closedOverflow = createDocumentOverflowCache(this.mainLedger, profile); this.closedOverflow.close() }
+      return this.closedOverflow
+    }
+    if (this.overflow?.profile === profile && !this.overflow.cache.closed) return this.overflow.cache
+    this.overflow?.cache.close()
+    const cache = createDocumentOverflowCache(this.mainLedger, profile)
+    this.overflow = { profile, cache }
+    return cache
+  }
+
   /** The active sheet keeps its cache; inactive sheets' caches are released. */
   activate(sheetId: string): void {
     for (const [id, store] of this.stores) if (id !== sheetId) store.clear()
@@ -533,6 +553,8 @@ export class RemoteWorkbook implements WorkbookSource {
     this.listeners.clear()
     for (const entry of this.structures.values()) if (entry.timer) clearTimeout(entry.timer)
     this.drawingCache.close()
+    this.overflow?.cache.close()
+    this.overflow = undefined
     // Owned caches go with the document: nothing answers from them after close.
     // Document-owned buffers are dropped here; their lifetime charges end when
     // nothing (not even a host still holding this closed workbook) reaches them.
