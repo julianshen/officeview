@@ -231,7 +231,8 @@ const VIEWPORT_ALLOCATION = 1 << 19
 const VIEWPORT_INSERTS = 50_000
 // Retained heap after a warmed-up window (jsdom/React noise settles near
 // 0.3 MiB per gesture round; the largest viewport result, 2,048 coarse groups,
-// is ~2 MiB). The review probe below, a 65,536-entry plain-object cell table plus
+// retains ~0.78 MB; it read ~2 MiB while the ledger's formatted stacks charged
+// the runner's source-map cache to the window). The review probe below, a 65,536-entry plain-object cell table plus
 // 1,024 plain row arrays, retains ~7 MiB and must exceed it; a per-row table over
 // the 1,048,576-row axis would be larger still.
 const VIEWPORT_RETAINED = 4 * 1024 * 1024
@@ -334,6 +335,10 @@ describe('resident (object) viewer: navigation and paint stay viewport-bounded',
 })
 
 describe('worker-backed viewer: bounded reads, one parse, no per-command reparse or clone', () => {
+  // No warm-up: the retained-heap gate is the whole-file run, where the earlier
+  // tests have loaded the shared modules (~0.5 MB retained here). Run alone with
+  // `-t` in a fresh process, this window also holds cold first-use module state
+  // (~7.5-8 MB) and is expected to exceed VIEWPORT_RETAINED.
   it('open, corner navigation and a sort issue bounded reads and never re-open or re-parse the workbook', async () => {
     const h = workerHarness()
     const blob = new Blob([xlsxBytes({ sheetData: table(3000) + `<row r="1048576">${inline('XFD1048576', 'corner')}</row>` }) as BlobPart])
