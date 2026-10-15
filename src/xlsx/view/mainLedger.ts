@@ -92,6 +92,10 @@ const emptyPools = (): Record<MainPool, number> => ({ rowCache: 0, viewBuffers: 
 /** The part of FinalizationRegistry the ledger uses (injectable for tests). */
 export interface CollectionWatcher { register(target: object, token: string): void }
 let lifetimeSerial = 0
+/** One owner's claim on a held charge (chargeWhileHeld). Releasing twice is a no-op. */
+export interface LedgerHold { release(): void }
+/** A held lifetime charge: its targets, bytes and current holders. */
+interface HeldCharge { pool: MainPool; bytes: number; targets: readonly object[]; token: string; holders: number; ended: boolean }
 
 export class MainMemoryLedger {
   private readonly charges = new Map<string, { pool: MainPool; bytes: number }>()
@@ -130,6 +134,50 @@ export class MainMemoryLedger {
     for (const target of targets) this.watcher.register(target, token)
     return token
   }
+  /**
+   * A lifetime charge with explicit owners (spec §§10.1, 12.4 overlap). Until
+   * its first hold() it is a reachability charge; once held, it ends when its
+   * last holder releases, or, as a safety net for a holder that never
+   * releases, when every target is collected. Every consumer that keeps the
+   * allocation (a committed display, a copy, a pending operation) takes its
+   * own hold. Targets must belong to this allocation alone (never a shared
+   * singleton such as the identity order), as any of them names it.
+   */
+  chargeWhileHeld(pool: MainPool, targets: readonly object[], bytes: number): string {
+    const token = this.chargeWhileReachable(pool, targets, bytes)
+    const charge: HeldCharge = { pool, bytes, targets, token, holders: 0, ended: false }
+    for (const target of targets) if (!this.held.has(target)) this.held.set(target, charge)
+    return token
+  }
+  /**
+   * Another owner of the held charge `target` belongs to; null when it has none
+   * (a reachability-only or unknown allocation). An owner arriving after every
+   * earlier one released (a remount, a copy started from a display still on
+   * screen) holds the allocation again, so its bytes are charged again.
+   */
+  hold(target: object): LedgerHold | null {
+    const charge = this.held.get(target)
+    if (!charge) return null
+    if (charge.ended) {
+      charge.ended = false
+      charge.token = `life${++lifetimeSerial}`
+      this.set(charge.pool, charge.token, charge.bytes)
+      this.lifetimes.set(charge.token, charge.pool)
+      for (const item of charge.targets) if (!this.hasLifetime(item)) this.leases.set(item, charge.token)
+      if (this.watcher) {
+        this.alive.set(charge.token, { pool: charge.pool, owner: charge.token, remaining: charge.targets.length })
+        for (const item of charge.targets) this.watcher.register(item, charge.token)
+      }
+    }
+    charge.holders++
+    let held = true
+    return { release: () => {
+      if (!held) return
+      held = false
+      if (--charge.holders === 0 && !charge.ended) { charge.ended = true; this.end(charge.token) }
+    } }
+  }
+  private readonly held = new WeakMap<object, HeldCharge>()
   /** Transfers already-admitted bytes without a double charge or refund gap. */
   adoptWhileReachable(fromPool: MainPool, fromOwner: string, pool: MainPool, targets: readonly object[], bytes: number, commit?: () => void): string {
     const key = `${fromPool}\u0000${fromOwner}`, charge = this.charges.get(key)
@@ -168,6 +216,12 @@ export class MainMemoryLedger {
     const token = this.leases.get(target)
     if (token === undefined) return
     this.leases.delete(target)
+    const charge = this.held.get(target)
+    if (charge?.token === token) charge.ended = true
+    this.end(token)
+  }
+  /** Ends one lifetime charge now; later collection of its targets is a no-op. */
+  private end(token: string): void {
     const pool = this.lifetimes.get(token)
     if (pool === undefined) return
     this.lifetimes.delete(token)
