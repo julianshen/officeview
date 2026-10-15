@@ -131,6 +131,7 @@ export class RemoteWorkbook implements WorkbookSource {
    * adopted view buffers, in-flight replies; the viewer charges its own pools). */
   readonly mainLedger = new MainMemoryLedger()
   private overflow: { profile: ProfileId; cache: OverflowCache } | undefined
+  private closedOverflow: OverflowCache | undefined
   private readonly identities = new Map<string, CacheIdentity>()
   private readonly views = new Map<string, RemoteSheetView>()
   private readonly geometries = new Map<string, SheetGeometry>()
@@ -193,9 +194,8 @@ export class RemoteWorkbook implements WorkbookSource {
    * a notice, so render, memo and layout-effect callers never throw. */
   overflowFor(profile: ProfileId = this.overflow?.profile ?? this.profile): OverflowCache {
     if (this.closed) {
-      const closed = createDocumentOverflowCache(this.mainLedger, profile)
-      closed.close()
-      return closed
+      if (!this.closedOverflow) { this.closedOverflow = createDocumentOverflowCache(this.mainLedger, profile); this.closedOverflow.close() }
+      return this.closedOverflow
     }
     if (this.overflow?.profile === profile && !this.overflow.cache.closed) return this.overflow.cache
     this.overflow?.cache.close()

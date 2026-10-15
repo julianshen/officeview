@@ -49,6 +49,8 @@ describe('round 6: actual paged viewer owner teardown', () => {
       expect(ui.container.querySelector('[role="grid"]')).not.toBeNull()
       expect(() => ui.rerender(<InteractiveSheetDoc doc={f.doc} source={f.remote} profile="M" />)).not.toThrow()
       expect(f.remote.mainLedger.snapshot().byPool.layout).toBe(0)
+      // One shared closed sentinel: no per-render owner allocation churn.
+      expect(f.remote.overflowFor()).toBe(f.remote.overflowFor('M'))
       ui.unmount()
     } finally { await f.remote.close(); await f.client.dispose() }
   })
