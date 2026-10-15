@@ -1393,7 +1393,9 @@ export function valueSourceFromStore(store: SourceStore, col: number, body: { r0
       const cursors = new Set<string>()
       // Source payloads this page was decoded from: their charges end when the
       // consumer settles the page (after merging it), or now if it is dropped.
-      const settle = () => { for (const payload of consumed.splice(0)) store.settle?.(payload) }
+      // The decoded page's own adoption ends with them.
+      const settle = () => { for (const payload of consumed.splice(0)) store.settle?.(payload); if (page) allocation?.settle?.(page) }
+      let page: ValueLanePage | undefined
       const drop = <T>(out: T): T => { settle(); return out }
       let cursor: string | undefined, loading = false
       do {
@@ -1417,7 +1419,7 @@ export function valueSourceFromStore(store: SourceStore, col: number, body: { r0
       } while (cursor !== undefined)
       if (loading) return drop({ kind: 'unknown', pageId: `${stamp.sheetId}:${col}:${r0}` })
       if (tags.includes(0)) throw new ValueIndexError('page-error', 'Complete column page left rows uncovered')
-      const page: ValueLanePage = { kind: 'values', pageId: `${stamp.sheetId}:${col}:${r0}`, count, tags, numbers, texts, styles, settle }
+      page = { kind: 'values', pageId: `${stamp.sheetId}:${col}:${r0}`, count, tags, numbers, texts, styles, settle }
       if (account) adoptAllocation(account, page)
       return page
       } catch (error) { for (const payload of consumed) store.settle?.(payload); throw error }

@@ -28,7 +28,7 @@ import type {
 import type { RangeDetection } from '../xlsx/view/rangeDetection'
 import { createDocumentOverflowCache } from '../xlsx/view/documentOverflow'
 import type { OverflowCache } from '../xlsx/view/overflowCache'
-import { MainMemoryLedger, axisBytes, estimatePayloadBytes, leaseTargets } from '../xlsx/view/mainLedger'
+import { MainMemoryLedger, axisBytes, estimatePayloadBytes, leaseTargets, type LedgerHold } from '../xlsx/view/mainLedger'
 import type { XlsxCell, XlsxCellStyle, XlsxMergeRange } from '../xlsx/types'
 import { MAX_COLS, MAX_ROWS, formatA1, isValidCoordinate, type SourceCell, type SourceRect } from '../xlsx/view/coordinates'
 import { createAxisMetrics } from '../xlsx/view/axes'
@@ -139,6 +139,9 @@ export class RemoteWorkbook implements WorkbookSource {
   private closedOverflow: OverflowCache | undefined
   private readonly identities = new Map<string, CacheIdentity>()
   private readonly views = new Map<string, RemoteSheetView>()
+  /** The workbook's own hold on each sheet's current adopted view (§12.4):
+   * released when a newer view replaces it or the workbook closes. */
+  private readonly viewHolds = new Map<string, LedgerHold>()
   private readonly geometries = new Map<string, SheetGeometry>()
   // Layout keys disappear on replacement/release; obsolete column axes are
   // retained only by actual consumers, whose reachability charge remains live.
@@ -553,14 +556,25 @@ export class RemoteWorkbook implements WorkbookSource {
     if (delta.workbookOwner.globalViewGen >= this.owner.globalViewGen) this.owner = delta.workbookOwner
     this.views.set(sheetId, view)
     // The adopted view (order bands with their display inverse, visibility words
-    // and summaries) is charged for its own lifetime: the previous view stays
-    // charged until nothing holds it, so a replacement's overlap counts.
+    // and summaries) is charged while held (spec §§10.1, 12.4): by this workbook
+    // while it is current, and by every display, copy or operation that keeps it
+    // (holdView). A replaced view nothing else holds ends at once; one still
+    // held stays charged, so a replacement's overlap counts. The identity order
+    // is a shared singleton and never names the charge.
     const visibilityBytes = view.visibility ? view.visibility.words.byteLength + view.visibility.summaries.byteLength : 0
-    this.mainLedger.chargeWhileReachable('viewBuffers', [view.order, ...(view.visibility ? [view.visibility] : [])], bandBytes * 2 + visibilityBytes)
+    const targets = [view, ...(view.order.kind === 'identity' ? [] : [view.order]), ...(view.visibility ? [view.visibility] : [])]
+    this.mainLedger.chargeWhileHeld('viewBuffers', targets, bandBytes * 2 + visibilityBytes)
+    const replaced = this.viewHolds.get(sheetId)
+    this.viewHolds.set(sheetId, this.mainLedger.hold(view)!)
     this.mainLedger.release('viewBuffers', `staging:${sheetId}`)
+    replaced?.release()
     this.notify()
     return view
   }
+  /** Another owner of an adopted view or any of its buffers (a viewer's
+   * committed display, a copy session): it stays charged until released.
+   * Null for the base view, which owns no buffers. */
+  holdView(view: RemoteSheetView): LedgerHold | null { return this.mainLedger.hold(view) }
 
   /** The host (OfficeFile) owns the worker document; a viewer that borrows this
    * source releases nothing, so a remount (or StrictMode's dev re-mount) keeps
@@ -580,6 +594,8 @@ export class RemoteWorkbook implements WorkbookSource {
     for (const store of this.stores.values()) store.clear()
     this.stores.clear()
     this.views.clear()
+    for (const hold of this.viewHolds.values()) hold.release()
+    this.viewHolds.clear()
     this.geometries.clear()
     this.columnMetrics = new WeakMap()
     this.layouts.clear()

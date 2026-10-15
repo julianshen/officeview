@@ -766,9 +766,12 @@ export async function sortRowOrder(store: SourceStore, input: SortSpec | null, o
     const ledger = budget.finish()
     if (metadataAccount) adoptAllocation(metadataAccount, { metadata, ledger })
     if (budget.account) {
-      const targets: object[] = [order]
+      // The shared identity order owns no storage and is never collected: an
+      // identity result's bookkeeping lives with this operation's own ledger.
+      const targets: object[] = order.kind === 'identity' ? [ledger] : [order]
       for (const band of order.bands) targets.push(band.sourceAtOffset, band.sourceAtOffset.buffer, band.displayOffsetOfSource, band.displayOffsetOfSource.buffer)
-      budget.account.adopt(targets, budget.ledger.orderBytes + budget.ledger.inverseBytes + (emptyBody ? 0 : 1024))
+      // Holdable: the views that display this order hold it (§12.4).
+      budget.account.adopt(targets, budget.ledger.orderBytes + budget.ledger.inverseBytes + (emptyBody ? 0 : 1024), undefined, true)
     }
     return {
       kind: 'complete', order,
