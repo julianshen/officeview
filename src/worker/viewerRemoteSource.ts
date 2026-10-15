@@ -996,7 +996,8 @@ export class RemoteSheetStore implements SourceStore {
     let error: SourceFailure | undefined
     const stale = () => {
       const cause = new StaleViewportPublicationError()
-      error ??= failure(cause.code, cause.message, cause.retryable)
+      // Every reader of the token shares this one failure: freeze it.
+      error ??= Object.freeze(failure(cause.code, cause.message, cause.retryable))
       return cause
     }
     let live = true, committing = false
@@ -1103,7 +1104,7 @@ export class RemoteSheetStore implements SourceStore {
             accounting.rollback()
           }
           close()
-          if (cause instanceof StaleViewportPublicationError) { error ??= failure(cause.code, cause.message, cause.retryable); return false }
+          if (cause instanceof StaleViewportPublicationError) { error ??= Object.freeze(failure(cause.code, cause.message, cause.retryable)); return false }
           throw cause
         } finally { committing = false; close() }
       } }
