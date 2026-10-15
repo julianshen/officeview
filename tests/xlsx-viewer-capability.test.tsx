@@ -190,7 +190,7 @@ describe('RemoteWorkbook load state', () => {
     const inner = memoryPageBackend()
     let release!: () => void, entered!: () => void, puts = 0
     const gate = new Promise<void>(resolve => { release = resolve }), waiting = new Promise<void>(resolve => { entered = resolve })
-    const backend = { kind: 'memory' as const, async put(key: string, bytes: Uint8Array) { if (++puts === 2) { entered(); await gate } await inner.put(key, bytes) }, get: (key: string) => inner.get(key), removeAll: () => inner.removeAll() }
+    const backend = { kind: 'memory' as const, async put(key: string, bytes: Uint8Array) { if (++puts === 2) { entered(); await gate } await inner.put(key, bytes) }, get: (key: string) => inner.get(key), delete: (key: string) => inner.delete(key), removeAll: () => inner.removeAll() }
     const sheetData = Array.from({ length: 1000 }, (_, i) => `<row r="${i + 1}"><c r="A${i + 1}"><v>${i}</v></c></row>`).join('')
     const session = await openImportSession({ kind: 'blob', blob: new NodeBlob([xlsxBytes({ sheetData })]) as unknown as Blob }, { docId: 'c', profile: 'D', store: new SourcePageStore({ docId: 'c', backend }), pageRows: 100 })
     await waiting

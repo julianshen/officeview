@@ -124,6 +124,15 @@ export function fakeIndexedDb(options: { failDeletes?: number } = {}): IDBFactor
               if (!active) throw new DOMException('transaction committed', 'TransactionInactiveError')
               return request(() => data.get(key))
             },
+            delete(key: number) {
+              if (!active) throw new DOMException('transaction committed', 'TransactionInactiveError')
+              data.delete(key)
+              return request(() => undefined)
+            },
+            getAllKeys(_query: unknown, count?: number) {
+              if (!active) throw new DOMException('transaction committed', 'TransactionInactiveError')
+              return request(() => [...data.keys()].slice(0, count ?? Infinity))
+            },
             getAll() {
               if (!active) throw new DOMException('transaction committed', 'TransactionInactiveError')
               return request(() => [...data.keys()].sort((a, b) => a - b).map((k) => data.get(k)!))
@@ -221,6 +230,26 @@ export function fakeOpfsDirectory(options: { failOnWrite?: { at: number; error: 
     },
     async *keys() {
       for (const name of [...files.keys()]) yield name
+    },
+  }
+}
+
+/**
+ * An origin-wide Web Locks double (navigator.locks): one instance is shared by
+ * every simulated realm (tab/worker), exactly like the browser's lock manager.
+ * Exclusive locks with ifAvailable only, which is all the page store uses.
+ */
+export function fakeLockManager() {
+  const held = new Set<string>()
+  return {
+    held,
+    async request<T>(name: string, options: { mode?: 'exclusive' | 'shared'; ifAvailable?: boolean }, callback: (lock: unknown) => Promise<T> | T): Promise<T> {
+      if (held.has(name)) {
+        if (options.ifAvailable) return callback(null)
+        throw new Error('fakeLockManager only supports ifAvailable for contended locks')
+      }
+      held.add(name)
+      try { return await callback({ name, mode: options.mode ?? 'exclusive' }) } finally { held.delete(name) }
     },
   }
 }

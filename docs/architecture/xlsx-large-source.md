@@ -909,6 +909,131 @@ the orchestrator decision). Order of work: inventory, then `workbook.xml`/rels/`
 (possible because of random access), then sheets by workbook order; the first pages are committed to the sink while
 `completeness` is still `'loading'`. No whole-file `ArrayBuffer`, no whole-part string, no tree.
 
+### 4.4.1 Oversized values and construction memory (S13.4, spec §4.3.4 and §12.4)
+
+**Blob records.** A page stores text in one UTF-16 text lane (`sourcePages.ts`). A value whose stored bytes, 2 per UTF-16 code
+unit, exceed the 64 KiB inline soft threshold (`ImportLimits.inlineStringSoftBytes`, exported as `INLINE_TEXT_SOFT_BYTES`) does
+not go in that lane. `PageBuilder.add` *spills* it:
+
+- The record keeps its kind (`K_TEXT`/`K_ERROR`) and its `F_ERROR` flag, gets `F_BLOB = 8`, and holds the value's ordinal in its
+  number lane. It adds no text units, so `PageBuilder.bytes` stays the exact encoded page size and the page stays bounded.
+- The page cut counts spilled bytes too (`bytes + spilledBytes >= targetPageBytes`), so oversized values cannot pile up behind
+  one page.
+- `SourcePageStore.commit` writes each value as its own record (`blob/<id>`, encoded like a one-string shared-string chunk) in the
+  same page backend, **before** the page. It then rewrites the ordinal to the document-wide blob id, so a committed page never
+  references a missing record. A record holds one value, so the tokenizer's `maxTokenChars` (1 Mi code units) caps it at
+  about 2 MiB.
+- Blob records are charged to the ledger's `blobRecords` pool. That pool is now storage-backed: running out is a typed `quota`
+  refusal, and the importer abandons the store as it does for pages.
+- Cleanup:
+  - Cancel and close remove the records with every page (`removeAll`).
+  - A page that fails after writing some of its records deletes them one by one (`PageBackend.delete`: memory map delete, OPFS
+    `removeEntry`, IndexedDB key delete). This covers a memory refusal, a parse error, a storage failure or a partial record left
+    by a failed write. The store also releases their charges and the summary charge and restores the ordinals, so storage, ledger
+    and pool return to their state before the page. A record the backend cannot delete keeps its charge.
+- Reads: `PagedXlsxSheetAdapter.valueOf` is the only place that turns a record into a value. It resolves `F_BLOB` through
+  `SourcePageStore.blob(id)`, which uses the same decoded cache as pages (pool `source` tier, coalesced, evictable, reloaded
+  identically). Cells, rows, scans, column lanes (value index and filters), find, copy and worker reads therefore see the same
+  raw UTF-16 value, lone surrogates included.
+
+**Crash orphans and owner exclusion.** A process that dies between a blob write and its page write (or at any other point)
+leaves records that no live index references.
+
+- **Owners.** A page-storage owner is `${docId}-${creation time in base 36}.${64 random bits}` (`pageOwner`). The random
+  part makes two opens of one docId in the same millisecond use different storage.
+- **Web Locks.** An OPFS/IndexedDB owner's exclusive Web Lock (`navigator.locks`, `${PAGE_PREFIX}lock-${owner}`, held
+  through `OwnerLocks`) is acquired before the first write and released only after the store's storage is removed and
+  no write it started can still land. Close/abandon return once storage is removed (cancellation never waits on writes
+  already in flight), but a put already handed to OPFS/IndexedDB cannot be withdrawn and its rollback deletes by key; the lock is
+  kept until every started commit and orphan-sweep delete settled and storage is removed once more
+  (`SourcePageStore.ownerReleased`). Otherwise a recovering holder of the same owner could lose a new record to the old
+  rollback. A backend that never completes keeps the owner locked until its realm ends, as a crash would. The lock is
+  origin-wide, so it holds across tabs, workers and the main thread.
+- **At session start, across owners** (`sweepLeftoverPages`, once per process). It considers owners older than 24 h (an extra
+  guard) and deletes one only while holding that owner's lock itself (`ifAvailable`). A live tab or worker never lets it
+  have that lock, whatever the owner's age or clock adjustments. **Without Web Locks no other owner is ever swept**: no owner
+  can be proven dead, so leftovers stay until a browser with Web Locks sweeps them.
+- **At store open, within the owner** (`SourcePageStore.sweepUnreferenced`). It runs only when the store exclusively holds
+  the owner: its lock, or a memory backend, which is private to the realm. It deletes keys the committed index does not
+  reference. Keys are namespaced unambiguously (`page/<sheet>/<page>` with `/` and `%` escaped, `blob/<id>`, `sst/<chunk>`),
+  so a sheet named `sst` or `blob` is never mistaken for another namespace. Writes in flight are never touched.
+- **Bounds and failure.** At most 4,096 entries are examined per backend, counting every directory entry, not just owner
+  matches. The bound and the cancellation signal are checked before each entry is pulled, and an enumeration that stops
+  early closes its iterator. Listing and deletion are cancellable and best effort. A listing failure skips cleanup with a
+  `storage-cleanup-skipped` diagnostic and never fails the import. The store-open listing is a transient charge; nothing
+  removed was charged, so ledger and storage agree afterwards.
+- **Sweep memory.** The session-start sweep runs detached, but the file names it groups by owner stay reachable while it
+  awaits each owner's lock. That working set is a construction share of the opening store (`leftover page sweep`),
+  reserved before each name is retained (`SWEEP_OWNER_BYTES` per owner, `SWEEP_NAME_BYTES` per name, plus 2 B per code
+  unit; pinned against a Bun heap probe, not a Chrome measurement). A refusal stops collecting: owners already charged are
+  still swept and the rest wait for a later sweep. Closing or abandoning the store stops the sweep: its share then refuses,
+  which is checked after every await, before each owner lock, removal and deletion, so only a removal or deletion already
+  started may land. The share stays charged until the sweep has returned, because its grouping is reachable until then.
+
+**Decoded cache entries.** A decoded page or chunk is charged a fixed object overhead even when its bytes view a buffer a
+memory backend already holds and charges: 2,048 B per page and 1,280 B per chunk, covering the payload object, typed-array
+views, metadata Map, resident record and pool entry. The probe's `decoded-pages`/`decoded-chunks` cases pin these. The pool's
+byte bound therefore also bounds the number of entries.
+
+**Units.** The spill threshold is in stored bytes. Admission (`admission.ts` `checkCaps`) compares the same field to the
+longest string's *character* count to route a file to the object or the paged path. That routing is unchanged: a string between
+32 Ki and 64 Ki characters can be object-admitted, and on the paged path it would spill.
+
+**Shared strings are not spilled.** A shared string over 64 KiB stays inline in its 4,096-string SST chunk. Shared strings
+follow §4.3.5 (integer ids, chunked paged payloads, bounded decoded LRU); §4.3.4's blob records cover values held by pages.
+
+**Construction memory** (`constructionMemory.ts`). Import and index construction memory is charged to the document
+`MemoryPool`. Each charge is made before the allocation it covers:
+
+- **Short-lived shares** (`pool.charge()`, released on completion, failure and cancel): the builder's arrays, built pages waiting
+  for their commit (including the formula metadata they own), pending shared-string chunks, and encode scratch for page, blob
+  and string-chunk buffers. Each record is charged with `PageBuilder.costOf(text, meta)` before the builder keeps it.
+- **Streamed drawing marker fields:** a part-local share admits anchor/section/map holders, property slots and every
+  simultaneously retained field/name/attribute (48 B string header plus 2 B per UTF-16 unit). Concatenation admits both old
+  and replacement strings before appending; closed fields remain charged through the synchronous `anchorRecord`/`Number`
+  conversion. Consumer references are dropped before refund, and `finally` disposes the consumer before releasing its share.
+  If close interrupts a withheld input read, the charge stays until that reader returns; later needs refuse as cancelled.
+  These are conservative ownership estimates, not measured string representation or browser heap figures. A real 2,097,153-unit
+  leading-zero marker exposed the prior omission: it reached Number with 0 B transient construction ownership under supported
+  1 MiB provisional/bound pools. `xlsx-viewer-marker-construction.test.ts` now pins refusal there and live ownership under
+  roomy/default D/M pools. Drawing-only refusal adds `import-memory-budget` and unresolved structural coverage while A1 remains
+  readable; the separate lazy whole-part drawing path and profile envelopes are unchanged.
+- **Lasting entries** (non-evictable, `source` tier):
+  - page summaries, one entry per sheet;
+  - every buffer a RAM-backed (memory) page backend keeps (pages, shared-string chunks, blob records). The buffer is charged
+    before it is handed over and uncharged when the record is deleted or the store closes. A decoded view of such a buffer is
+    charged only for what it adds (its formula metadata), never a second time for the shared bytes.
+- **Validation before writes:** a page whose rows overlap the previous page, a repeated page id, a second commit in flight
+  for the same sheet and a repeated shared-string chunk are all rejected before anything is written. Publication into the
+  index is the last step inside the rollback boundary.
+- **Refusal:** a pool that cannot fit a share throws `PackageError('resource-limit', …, reason 'memory-budget')`. The import ends
+  `incomplete` with the `import-memory-budget` diagnostic instead of over-allocating.
+- **Conservative estimates, pinned by a Bun heap probe:**
+
+  | Item | Charge |
+  |---|---|
+  | Builder record | 96 B, plus 48 B per non-empty inline or spilled string and 2 B per code unit, plus 192 B and 2 B per JSON character per formula-meta object |
+  | Built page waiting for commit | `payloadBytes` (lanes plus the same formula-meta charge) plus its spilled values |
+  | Encode scratch | the exact buffer plus the meta JSON, sized with `jsonLength` from the metadata as it is at encode time (no cached length; no allocation) and charged before either exists |
+  | Pending shared string | 2 B per code unit plus 64 B |
+  | Page summary | 256 B |
+
+  `scripts/construction-memory-probe.ts` measures, on Bun, the live heap (`heapSize` after a full GC; it already includes
+  `extraMemorySize`, which the probe reports separately for diagnosis only) of each modelled structure at array-capacity
+  transitions. Before each baseline it lets the previous case's leftovers be reclaimed (readings stable within 4 KiB), so
+  they cannot be reclaimed mid-measurement and understate a delta. `tests/xlsx-viewer-construction-memory.test.ts`
+  asserts the model is at least the measurement and at most twice it. On Bun 1.3.10 (18 probe runs, 6 in parallel) it
+  measured 72.6–83.7 B per numeric builder record (model 96), 123.6–127.3 B per short-text record (model 168), 187.4–191.6 B
+  per summary (model 256), 62.8 B per pending shared string (model 101.7–101.8), 301–323 B per dead owner with one file
+  (model 542) and 134–144 B per file of owners holding 64 (model 213–214). These are Bun/JSC figures, not a Chrome heap
+  certification (S10.2).
+- **Before the viewer exists:** the document pool exists only once the viewer session binds it, after the first page committed.
+  Until then a store charges a stand-in pool of the profile's worker budget (D 512 MiB, M 256 MiB). `bindMemory` moves every live
+  charge into the document pool, atomically, and closes the stand-in. If the document pool cannot hold all of them, nothing
+  moves, the old ownership stays charged where it was, and `bindMemory` throws the typed `memory-budget` refusal. The
+  viewer session therefore refuses to open, and the worker kernel replies `resource-limit` with the `import-memory-budget`
+  diagnostic. This also applies to a store whose import has already completed.
+
 ### 4.5 Entry-point wiring and user-flagged items
 
 `loadOfficeFile(source, options)` and `<OfficeFile>` keep their signatures. Classification has two levels: a **hint** from the

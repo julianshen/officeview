@@ -1,0 +1,201 @@
+/**
+ * Bun heap probe for the construction-memory model (S13.4, spec §12.4).
+ *
+ *   bun scripts/construction-memory-probe.ts [case ...]
+ *
+ * Each case builds one kind of construction structure, keeps it reachable,
+ * forces a full GC and reports the live heap delta (bun:jsc heapSize, which
+ * already includes extraMemorySize: buffers and string contents outside the
+ * JS cells) next to the model's charge for the same structure. `extra` is the
+ * extraMemorySize part of that delta, for diagnosis only. Sizes include
+ * array-capacity transitions (just past a power of two and the review's 98,304).
+ * Prints one JSON line: [{ name, count, observed, model, extra }]. Bun/JSC only;
+ * it is not a Chrome heap measurement.
+ */
+import { heapStats } from 'bun:jsc'
+import {
+  DECODED_CHUNK_OVERHEAD_BYTES, DECODED_PAGE_OVERHEAD_BYTES, PageBuilder, K_EMPTY, K_NUMBER, K_TEXT, decodePage, decodeStrings, encodePage, encodeStrings,
+  ownerLocks, pageOwner, summarize, sweepLeftoverPages, type PageSummary,
+} from '../src/xlsx/storage/sourcePages'
+import { MemoryPool } from '../src/xlsx/view/tileCache'
+import { PAGE_SUMMARY_BYTES, PENDING_STRING_BYTES } from '../src/xlsx/storage/constructionMemory'
+
+declare const Bun: { gc(force: boolean): void }
+type Heap = { heapSize: number; extraMemorySize: number }
+/** After a full GC; heapSize is the live heap, extraMemorySize a part of it. */
+const live = (): Heap => {
+  Bun.gc(true)
+  Bun.gc(true)
+  const { heapSize, extraMemorySize } = heapStats() as Heap
+  return { heapSize, extraMemorySize }
+}
+/** A flat (non-rope) string, like the tokenizer's output. */
+const flat = (s: string): string => { s.charCodeAt(s.length - 1); return s }
+
+async function settled(): Promise<Heap> {
+  let last = live()
+  for (let turn = 0; turn < 20; turn++) {
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    const next = live()
+    if (Math.abs(next.heapSize - last.heapSize) < 4096) return next
+    last = next
+  }
+  return last
+}
+
+interface Result { name: string; count: number; observed: number; model: number; extra: number }
+/** `baseline`: a heap reading taken inside the case after setup that must not be counted;
+ * `finish`: runs after the measurement (an async case is measured mid-flight). */
+type Run = { keep: unknown; model: number; baseline?: Heap; finish?: () => Promise<void> }
+type Case = (n: number) => Run | Promise<Run>
+
+async function leftoverSweep(owners: number, perOwner: number): Promise<Run> {
+  const esc = (t: string) => t.replace(/[^A-Za-z0-9.]/g, (c) => `_${c.charCodeAt(0).toString(16).padStart(4, '0')}`)
+  const now = Date.now()
+  const escaped = Array.from({ length: owners }, (_, i) => esc(pageOwner(`document-${i}`, now - 26 * 3600_000)))
+  const dir = {
+    getFileHandle: async () => { throw new Error('unused') },
+    removeEntry: async () => {},
+    async *keys() {
+      for (const owner of escaped) for (let p = 0; p < perOwner; p++) yield flat(`officeview-pages-${owner}-page_002f1_002fp${p}`)
+    },
+  }
+  let open!: () => void
+  const gate = new Promise<void>((resolve) => { open = resolve })
+  let reached!: () => void
+  const held = new Promise<void>((resolve) => { reached = resolve })
+  const locks = ownerLocks({ request: async (_name, _options, callback) => { reached(); await gate; return callback({}) } })
+  let model = 0
+  const before = live()
+  const sweep = sweepLeftoverPages({ opfs: async () => dir, locks }, { now, reserve: (bytes) => { model = bytes } })
+  await held
+  return { keep: sweep, model, baseline: before, finish: async () => { open(); await sweep } }
+}
+
+const CASES: Record<string, { sizes: number[]; run: Case }> = {
+  'builder-numeric': {
+    sizes: [65_537, 98_304, 131_073],
+    run: (n) => {
+      const b = new PageBuilder()
+      for (let i = 0; i < n; i++) b.add(i >> 3, i & 7, K_NUMBER, 0, i * 1.5, '', true, undefined)
+      return { keep: b, model: b.memoryBytes }
+    },
+  },
+  'builder-text': {
+    sizes: [65_537, 100_000],
+    run: (n) => {
+      const b = new PageBuilder()
+      for (let i = 0; i < n; i++) b.add(i >> 3, i & 7, K_TEXT, 0, 0, flat(`item-${i}-漢`), true, undefined)
+      return { keep: b, model: b.memoryBytes }
+    },
+  },
+  'builder-formula': {
+    sizes: [50_000],
+    run: (n) => {
+      const b = new PageBuilder()
+      for (let i = 0; i < n; i++) b.add(i, 0, K_EMPTY, 0, 0, '', false, { formula: flat(`SUM(A${i}:B${i})*2`) })
+      return { keep: b, model: b.memoryBytes }
+    },
+  },
+  'summaries': {
+    sizes: [65_537, 100_000],
+    run: (n) => {
+      const payload = new PageBuilder().build()
+      const list: PageSummary[] = []
+      for (let i = 0; i < n; i++) list.push(summarize('1', flat(`p${i}`), i * 10, i * 10 + 9, payload, 1024))
+      return { keep: list, model: n * PAGE_SUMMARY_BYTES }
+    },
+  },
+  // Decoded pages/chunks viewing buffers a memory backend already holds (the
+  // buffers are created before the measurement): the decoded objects, a
+  // resident-cache record and a pool entry each, as SourcePageStore keeps them.
+  'decoded-pages': {
+    sizes: [1000, 5000],
+    run: (n) => {
+      const b = new PageBuilder()
+      b.add(0, 0, K_NUMBER, 0, 1, '', true, undefined)
+      const held = Array.from({ length: n }, () => encodePage(b.build()))
+      const before = live()
+      const pool = new MemoryPool({ limitBytes: 1 << 30 })
+      const resident = new Map<string, { value: unknown; bytes: number; entry: unknown }>()
+      held.forEach((bytes, i) => {
+        const key = flat(`page/1/p${i}`)
+        resident.set(key, { value: decodePage(bytes), bytes: DECODED_PAGE_OVERHEAD_BYTES, entry: pool.retain(key, { tier: 'source', bytes: DECODED_PAGE_OVERHEAD_BYTES }) })
+      })
+      return { keep: [held, resident, pool], model: n * DECODED_PAGE_OVERHEAD_BYTES, baseline: before }
+    },
+  },
+  'decoded-chunks': {
+    sizes: [1000, 5000],
+    run: (n) => {
+      const held = Array.from({ length: n }, (_, i) => encodeStrings([flat(`v${i}`)]))
+      const before = live()
+      const pool = new MemoryPool({ limitBytes: 1 << 30 })
+      const resident = new Map<string, { value: unknown; bytes: number; entry: unknown }>()
+      held.forEach((bytes, i) => {
+        const key = flat(`blob/${i}`)
+        resident.set(key, { value: decodeStrings(bytes), bytes: DECODED_CHUNK_OVERHEAD_BYTES, entry: pool.retain(key, { tier: 'source', bytes: DECODED_CHUNK_OVERHEAD_BYTES }) })
+      })
+      return { keep: [held, resident, pool], model: n * DECODED_CHUNK_OVERHEAD_BYTES, baseline: before }
+    },
+  },
+  // The detached leftover sweep, held at its first lock attempt with n dead owners
+  // (one file each), so its grouping is live. The directory hands out fresh flat
+  // name strings as OPFS does; model = what the sweep reserved.
+  'leftover-sweep': { sizes: [1024, 4096], run: (n) => leftoverSweep(n, 1) },
+  // The same with 64 files per dead owner, so the per-name constant is pinned apart from the per-owner one.
+  'leftover-sweep-grouped': { sizes: [1024, 4096], run: (n) => leftoverSweep(n / 64, 64) },
+  // Opt-in metric control (not a model): a 1 MiB buffer must read as ~1 MiB.
+  'control': {
+    sizes: [1024 * 1024],
+    run: (n) => {
+      const bytes = new Uint8Array(n)
+      bytes.fill(1)
+      return { keep: bytes, model: n }
+    },
+  },
+  'pending-strings': {
+    sizes: [65_537, 100_000],
+    run: (n) => {
+      const chunks: string[][] = [[]]
+      let model = 0
+      for (let i = 0; i < n; i++) {
+        const s = flat(`shared string ${i}`)
+        model += 2 * s.length + PENDING_STRING_BYTES
+        if (chunks[chunks.length - 1].length === 4096) chunks.push([])
+        chunks[chunks.length - 1].push(s)
+      }
+      return { keep: chunks, model }
+    },
+  },
+}
+
+const wanted = process.argv.slice(2)
+/** Cases that run only when named. */
+const OPT_IN = new Set(['control'])
+const results: Result[] = []
+const sink: unknown[] = []
+for (const [name, { sizes, run }] of Object.entries(CASES)) {
+  if (wanted.length ? !wanted.includes(name) : OPT_IN.has(name)) continue
+  for (const count of sizes) {
+    // Synchronous cases never yield (an await between setup and reading changes what the GC keeps).
+    // Warm the code path so JIT/compiler allocations are not attributed.
+    const warm = run(Math.min(count, 2048))
+    if (warm instanceof Promise) await warm.then(async (w) => { sink.push(w.keep); await w.finish?.() })
+    else sink.push(warm.keep)
+    sink.length = 0
+    // Let the previous case's leftovers (settled promises, conservatively scanned
+    // stack slots) die first: otherwise they can be reclaimed between the two
+    // readings and understate the delta. Readings agreeing within 4 KiB, at most 20 turns.
+    const start = await settled()
+    const ran = run(count)
+    const { keep, model, baseline, finish } = ran instanceof Promise ? await ran : ran
+    const end = live()
+    const from = baseline ?? start
+    sink.push(keep)
+    results.push({ name, count, observed: end.heapSize - from.heapSize, model, extra: end.extraMemorySize - from.extraMemorySize })
+    if (finish) await finish()
+    sink.length = 0
+  }
+}
+console.log(JSON.stringify(results))

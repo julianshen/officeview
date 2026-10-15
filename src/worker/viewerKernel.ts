@@ -516,6 +516,11 @@ export class ViewerKernel {
     } catch (cause) {
       // Ownership never transferred: release what open acquired.
       await source.release()
+      // S13.4: binding the document pool refuses typed when it cannot hold the
+      // source's construction charges or memory-held pages (spec §12.4).
+      if ((cause as { reason?: unknown } | null)?.reason === 'memory-budget') {
+        return errorReply(command, owner, 'resource-limit', false, [{ code: 'import-memory-budget', message: (cause as Error).message }])
+      }
       throw cause
     }
     this.sessions.set(command.docId, session)
