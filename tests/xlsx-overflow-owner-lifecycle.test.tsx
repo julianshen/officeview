@@ -35,4 +35,31 @@ describe('round 6: actual paged viewer owner teardown', () => {
       expect(fresh.closed).toBe(true)
     } finally { await remote.close(); await client.dispose() }
   })
+
+  it('a viewer re-rendered after its workbook closed refuses occupancy instead of throwing', async () => {
+    const f = await opened()
+    try {
+      const cache = f.remote.overflowFor()
+      const ui = render(<InteractiveSheetDoc doc={f.doc} source={f.remote} />)
+      await waitFor(() => expect(cache.bytes).toBeGreaterThan(4096))
+      await f.remote.close()
+      expect(cache.closed).toBe(true)
+      expect(() => ui.rerender(<InteractiveSheetDoc doc={f.doc} source={f.remote} />)).not.toThrow()
+      // Still mounted (no error boundary unwind): the grid keeps rendering.
+      expect(ui.container.querySelector('[role="grid"]')).not.toBeNull()
+      expect(() => ui.rerender(<InteractiveSheetDoc doc={f.doc} source={f.remote} profile="M" />)).not.toThrow()
+      expect(f.remote.mainLedger.snapshot().byPool.layout).toBe(0)
+      ui.unmount()
+    } finally { await f.remote.close(); await f.client.dispose() }
+  })
 })
+
+async function opened() {
+  const doc = workbookOf([{ sheetId: 's', cells: [{ row: 0, col: 0, value: 'long text' }, { row: 0, col: 3, value: 'block' }] }])
+  const source = createObjectWorkbookSource(doc, 'd')
+  const kernel = new ViewerKernel({ parse: async () => doc, openSource: async () => source }, { yield: async () => {} })
+  const client = new ViewerClient(connectInProcess(kernel))
+  await client.send({ kind: 'open', requestId: client.nextRequestId(), docId: 'd', source: { kind: 'object', document: doc }, profile: 'D' })
+  const remote = new RemoteWorkbook(client, { docId: 'd', valuePolicy: source.valuePolicy, sheets: source.sheets, diagnostics: [], formatting: source.formatting?.(), layouts: new Map(source.sheets.map(sheet => [sheet.sheetId, kernel.session('d')!.layout(sheet.sheetId)])) })
+  return { doc, client, remote }
+}

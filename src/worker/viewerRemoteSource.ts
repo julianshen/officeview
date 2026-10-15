@@ -27,7 +27,7 @@ import type {
 } from '../xlsx/view/contracts'
 import type { RangeDetection } from '../xlsx/view/rangeDetection'
 import { createDocumentOverflowCache } from '../xlsx/view/documentOverflow'
-import { OverflowResourceError, type OverflowCache } from '../xlsx/view/overflowCache'
+import type { OverflowCache } from '../xlsx/view/overflowCache'
 import { MainMemoryLedger, axisBytes, estimatePayloadBytes, leaseTargets } from '../xlsx/view/mainLedger'
 import type { XlsxCell, XlsxCellStyle, XlsxMergeRange } from '../xlsx/types'
 import { MAX_COLS, MAX_ROWS, formatA1, isValidCoordinate, type SourceCell, type SourceRect } from '../xlsx/view/coordinates'
@@ -187,9 +187,16 @@ export class RemoteWorkbook implements WorkbookSource {
   }
   /** Requests currently in flight for painting loads (all sheets). */
   loadsInFlight = 0
-  /** One occupancy cache across all sheets and geometry generations. */
+  /** One occupancy cache across all sheets and geometry generations. A closed
+   * workbook hands out an already-closed owner (no charge): its reads refuse with
+   * OverflowResourceError('closed'), which planning turns into a coarse frame and
+   * a notice, so render, memo and layout-effect callers never throw. */
   overflowFor(profile: ProfileId = this.overflow?.profile ?? this.profile): OverflowCache {
-    if (this.closed) throw new OverflowResourceError('closed')
+    if (this.closed) {
+      const closed = createDocumentOverflowCache(this.mainLedger, profile)
+      closed.close()
+      return closed
+    }
     if (this.overflow?.profile === profile && !this.overflow.cache.closed) return this.overflow.cache
     this.overflow?.cache.close()
     const cache = createDocumentOverflowCache(this.mainLedger, profile)
