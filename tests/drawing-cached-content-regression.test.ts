@@ -7,6 +7,7 @@ import { prepareDrawingContent, type DrawingContentShape } from '../src/drawing/
 import { drawingPartContext } from '../src/drawing/parts'
 
 const drawingPath = 'word/diagrams/drawing.xml'
+const SPAN_SUBPROCESS_TIMEOUT_MS = 30_000
 const theme = { colors: new Map<string, string>(), fonts: new Map<string, string>() }
 const drawingTheme = { colors: {}, palette: {}, colorMap: {}, fonts: { major: { supplemental: {} }, minor: { supplemental: {} } }, fillStyles: [], bgFillStyles: [], lineStyles: [], effectStyles: [], issues: [] }
 const graphic = { contentPart: { '@attrs': { id: 'cache' } } }
@@ -67,14 +68,20 @@ describe('cached content bounded materialization', () => {
       const content = await prepareDrawingContent(pkg, ${JSON.stringify(graphic)}, 'word/document.xml', {colors:new Map(),fonts:new Map()}, ${JSON.stringify(drawingTheme)});
       console.log(JSON.stringify({shapes:content.shapes,diagnostics:drawingPartContext(pkg).diagnostics}));
     `
-    const result = spawnSync('bun', ['--eval', source], { encoding: 'utf8', timeout: 2000 })
+    // The bound only has to separate "span-independent" from "proportional to
+    // 1e12": a healthy run takes well under a second (mostly bun startup and
+    // transpiling the import graph), while even a bare 1e12-iteration loop
+    // needs on the order of 1000 s. 30 s keeps that separation by more than
+    // 30x yet tolerates a starved subprocess under full-suite CPU load, where
+    // the former 2 s bound timed out on startup alone.
+    const result = spawnSync('bun', ['--eval', source], { encoding: 'utf8', timeout: SPAN_SUBPROCESS_TIMEOUT_MS })
     expect(result.error, 'span expansion must not time out').toBeUndefined()
     expect(result.status, result.stderr).toBe(0)
     const parsed = JSON.parse(result.stdout)
     expect(parsed.shapes[0].widthEmu).toBe(100)
     expect(parsed.shapes[0].heightEmu).toBe(40)
     expect(parsed.diagnostics).toContainEqual(expect.objectContaining({ kind: 'malformed-part', feature: span, reason: 'invalid-table-span', identity: '1000000000000' }))
-  })
+  }, SPAN_SUBPROCESS_TIMEOUT_MS + 10_000)
 
   test.each(['0', '-1', '1.5', 'NaN', 'Infinity', '3', ''])('diagnoses invalid spans %j and retains cell text', async value => {
     const { shapes, diagnostics } = await load(table(row(cell(`gridSpan="${value}" rowSpan="${value}"`))))

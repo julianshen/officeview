@@ -205,26 +205,35 @@ describe('formula-value-unavailable refusals are limited to the key/value domain
 describe('engine documents are unchanged', () => {
   it('explicit engine policy is byte-identical to the default parse and the adapter reads the published cell.value', async () => {
     const sheet = TABLE + '<row r="5"><c r="A5" t="e"><v>#DIV/0!</v></c><c r="B5" t="str"><v>#VALUE!</v></c><c r="C5" t="b"><v>0</v></c><c r="D5" s="0"/></row>'
-    // Engine semantics sample the clock lazily; keep it pinned through serialization.
-    const clock = vi.spyOn(Date, 'now').mockReturnValue(1_700_000_000_000)
-    let plain, explicit
+    // Engine semantics sample the clock lazily (on first epochNowMs read, which
+    // JSON serialization triggers), so the pin must cover serialization and
+    // every later assertion; restoring it earlier lets two identical parses
+    // differ by the millisecond the real clock moved in between.
+    const PINNED = 1_700_000_000_000
+    const clock = vi.spyOn(Date, 'now').mockReturnValue(PINNED)
     try {
-      plain = await load(sheet)
-      explicit = await load(sheet, 'engine')
-      expect(JSON.stringify(explicit)).toBe(JSON.stringify(plain))
+      const plain = await load(sheet)
+      const explicit = await load(sheet, 'engine')
+      const plainJson = JSON.stringify(plain)
+      expect(JSON.stringify(explicit)).toBe(plainJson)
+      // Deterministic guard: every serialized clock sample is the pinned one,
+      // so sampling outside the pin fails here every time, not on a 1 ms race.
+      const samples = [...plainJson.matchAll(/"epochNowMs":(\d+)/g)].map(m => Number(m[1]))
+      expect(samples.length).toBeGreaterThan(0)
+      expect(new Set(samples)).toEqual(new Set([PINNED]))
+      const store = createObjectWorkbookSource(plain, 'doc').store('1')
+      for (const row of plain.sheets[0].rows) for (const cell of row.cells) {
+        const read = await store.readCell({ row: cell.row, col: cell.col }, opts(store))
+        if (cell.value === null && cell.formula === undefined) continue
+        expect(read.kind).toBe('cell')
+        if (read.kind !== 'cell') continue
+        expect(read.cell.value).toBe(cell.value)
+        expect(read.cell.valueIsError).toBe(cell.valueIsError)
+        expect(read.cell.valueProvenance).toBe('engine')
+      }
+      expect(await store.readCell({ row: 4, col: 0 }, opts(store))).toMatchObject({ kind: 'cell', cell: { value: '#DIV/0!', valueIsError: true } })
+      expect(await store.readCell({ row: 4, col: 1 }, opts(store))).toMatchObject({ kind: 'cell', cell: { value: '#VALUE!', valueIsError: false } })
     } finally { clock.mockRestore() }
-    const store = createObjectWorkbookSource(plain, 'doc').store('1')
-    for (const row of plain.sheets[0].rows) for (const cell of row.cells) {
-      const read = await store.readCell({ row: cell.row, col: cell.col }, opts(store))
-      if (cell.value === null && cell.formula === undefined) continue
-      expect(read.kind).toBe('cell')
-      if (read.kind !== 'cell') continue
-      expect(read.cell.value).toBe(cell.value)
-      expect(read.cell.valueIsError).toBe(cell.valueIsError)
-      expect(read.cell.valueProvenance).toBe('engine')
-    }
-    expect(await store.readCell({ row: 4, col: 0 }, opts(store))).toMatchObject({ kind: 'cell', cell: { value: '#DIV/0!', valueIsError: true } })
-    expect(await store.readCell({ row: 4, col: 1 }, opts(store))).toMatchObject({ kind: 'cell', cell: { value: '#VALUE!', valueIsError: false } })
   })
 })
 

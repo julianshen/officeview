@@ -6,6 +6,7 @@ import { RemoteWorkbook } from '../src/worker/viewerRemoteSource'
 import { createObjectWorkbookSource } from '../src/worker/viewerObjectSource'
 import { WorkerViewportPlans, PLAN_RETRY_MS } from '../src/components/xlsx/workerViewport'
 import type { ViewportCell } from '../src/xlsx/view/contracts'
+import { sameIdentity } from '../src/xlsx/view/cacheIdentity'
 import { workbookOf } from './helpers/xlsx-find'
 
 const cell = (): ViewportCell => ({ kind: 'cell', source: { row: 0, col: 0 }, bounds: { x: 0, y: 0, width: 64, height: 20 }, cell: { id: 0, row: 0, col: 0, value: 'origin', styleIndex: 0 } })
@@ -93,6 +94,85 @@ it('LANDING a cleared source request backs off and retries like a silent stale r
   } finally { query.mockRestore(); await h.close() }
 })
 
+
+it('LANDING a source cleared during staging reports the cleared cache, not an owner change, and retries', async () => {
+  const h = await harness(), stageViewport = h.store.stageViewport.bind(h.store)
+  // Clear after the post-reply live check but before the post-stage guard:
+  // the guard fails only because the source cache was cleared.
+  const stage = vi.spyOn(h.store, 'stageViewport').mockImplementationOnce((...args) => {
+    h.store.clear()
+    return stageViewport(...args)
+  })
+  try {
+    h.plans.beginFrame(h.owner, h.window)
+    h.plans.get(h.owner, h.window, h.extent, true)
+    await h.flush()
+    expect(stage).toHaveBeenCalledTimes(1)
+    expect(sameIdentity(h.remote.identity('s'), h.owner), 'the owner itself did not change').toBe(true)
+    expect(h.plans.get(h.owner, h.window, h.extent, true)).toMatchObject({ kind: 'diagnostic', diagnostics: [{ code: 'stale-source', message: 'Viewport source cache was cleared' }] })
+    expect(h.remote.pagesInFlight).toBe(0)
+    expect((h.remote.ledger as unknown as { reserved: number }).reserved).toBe(0)
+    await new Promise(resolve => setTimeout(resolve, PLAN_RETRY_MS + 20))
+    h.plans.beginFrame(h.owner, h.window)
+    h.plans.get(h.owner, h.window, h.extent, true)
+    await h.flush()
+    expect(h.plans.get(h.owner, h.window, h.extent, true).kind).toBe('detail')
+    expect(stage).toHaveBeenCalledTimes(2)
+  } finally { stage.mockRestore(); await h.close() }
+})
+
+it('LANDING a layout change during staging reports a layout change, not an owner change, and retries', async () => {
+  const h = await harness(), stageViewport = h.store.stageViewport.bind(h.store)
+  // The frame's zoom moves after the post-reply check but before the
+  // post-stage guard; owner, source cache and request all stay current.
+  const stage = vi.spyOn(h.store, 'stageViewport').mockImplementationOnce((...args) => {
+    h.window.zoom = 2
+    return stageViewport(...args)
+  })
+  try {
+    h.plans.beginFrame(h.owner, h.window)
+    h.plans.get(h.owner, h.window, h.extent, true)
+    await h.flush()
+    expect(stage).toHaveBeenCalledTimes(1)
+    h.window.zoom = 1
+    expect(sameIdentity(h.remote.identity('s'), h.owner), 'the owner itself did not change').toBe(true)
+    expect(h.plans.get(h.owner, h.window, h.extent, true)).toMatchObject({ kind: 'diagnostic', diagnostics: [{ code: 'stale-source', message: 'Viewport layout changed. Retrying.' }] })
+    expect(h.remote.pagesInFlight).toBe(0)
+    expect((h.remote.ledger as unknown as { reserved: number }).reserved).toBe(0)
+    await new Promise(resolve => setTimeout(resolve, PLAN_RETRY_MS + 20))
+    h.plans.beginFrame(h.owner, h.window)
+    h.plans.get(h.owner, h.window, h.extent, true)
+    await h.flush()
+    expect(h.plans.get(h.owner, h.window, h.extent, true).kind).toBe('detail')
+    expect(stage).toHaveBeenCalledTimes(2)
+  } finally { stage.mockRestore(); await h.close() }
+})
+
+it('LANDING a request superseded during staging publishes nothing and arms no backoff', async () => {
+  const h = await harness(), stageViewport = h.store.stageViewport.bind(h.store)
+  // Releasing the tile mid-stage replaces its entry. fail() ignores a
+  // replaced entry, so the superseded refusal itself is never observable:
+  // assert that no diagnostic or retry timer survives and a fresh request
+  // proceeds at once, without waiting out a backoff.
+  const stage = vi.spyOn(h.store, 'stageViewport').mockImplementationOnce((...args) => {
+    h.plans.release(h.owner, h.window)
+    return stageViewport(...args)
+  })
+  try {
+    h.plans.beginFrame(h.owner, h.window)
+    h.plans.get(h.owner, h.window, h.extent, true)
+    await h.flush()
+    expect(stage).toHaveBeenCalledTimes(1)
+    expect((h.plans as unknown as { failures: Map<string, number> }).failures.size, 'no backoff was armed').toBe(0)
+    expect(h.remote.pagesInFlight).toBe(0)
+    expect((h.remote.ledger as unknown as { reserved: number }).reserved).toBe(0)
+    h.plans.beginFrame(h.owner, h.window)
+    expect(h.plans.get(h.owner, h.window, h.extent, true).kind, 'a fresh request starts immediately').toBe('pending')
+    await h.flush()
+    expect(h.plans.get(h.owner, h.window, h.extent, true).kind).toBe('detail')
+    expect(stage).toHaveBeenCalledTimes(2)
+  } finally { stage.mockRestore(); await h.close() }
+})
 
 it('LANDING retries a mid-flight worker font change while the host font remains unchanged', async () => {
   const h = await harness(), viewport = h.remote.viewport.bind(h.remote)

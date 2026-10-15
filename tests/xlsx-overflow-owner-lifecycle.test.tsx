@@ -69,6 +69,12 @@ describe('round 6: actual paged viewer owner teardown', () => {
       }
       return origPresent.call(this, target, frame)
     })
+    // The spy keeps replacing geomA with A's latest ready geometry, so read it
+    // fresh each time and narrow instead of asserting non-null.
+    const geometryA = (): SheetGeometry => {
+      if (!geomA) throw new Error('viewer A has not presented a ready geometry')
+      return geomA
+    }
     try {
       // Both sibling viewers use profile D; mixed profiles are covered by the "M viewer on a D remote / D viewer on an M remote" test below.
       function Harness({ showB }: { showB: boolean }) {
@@ -85,20 +91,20 @@ describe('round 6: actual paged viewer owner teardown', () => {
       const initialCache = f.remote.overflowFor()
       expect(initialCache.closed).toBe(false)
       expect(geomA).toBeDefined()
-      expect(boundOverflowCache(geomA!)).toBe(initialCache)
+      expect(boundOverflowCache(geometryA())).toBe(initialCache)
 
       // Unmount sibling B: closes its overflowContext.cache (the shared remote cache).
       ui.rerender(<Harness showB={false} />)
       await waitFor(() => expect(ui.getAllByRole('gridcell', { name: /value long text/ })).toHaveLength(1))
       expect(initialCache.closed).toBe(true)
-      expect(boundOverflowCache(geomA!)?.closed).toBe(true)
+      expect(boundOverflowCache(geometryA())?.closed).toBe(true)
 
       // Trigger an update in surviving viewer A after B unmounted and closed the shared cache.
       f.remote.notify()
-      await waitFor(() => expect(boundOverflowCache(geomA!)?.closed).toBe(false))
+      await waitFor(() => expect(boundOverflowCache(geometryA())?.closed).toBe(false))
 
       // Assert A's actual geometry binding is open and distinct from initialCache.
-      expect(boundOverflowCache(geomA!)).not.toBe(initialCache)
+      expect(boundOverflowCache(geometryA())).not.toBe(initialCache)
       expect(ui.getAllByRole('gridcell', { name: /value long text/ })).toHaveLength(1)
       expect(ui.getByTestId('a').textContent).not.toContain('Text overflow occupancy owner is closed')
       ui.unmount()

@@ -35,6 +35,10 @@ it('SLICE10 deferred cross-chunk publication refuses stale state and re-stages w
     expect(h.store.cellAt({ row: 0, col: 256 })?.value).toBe('fresh chunk')
     expect(stage.commit(publish)).toBe(false)
     expect(stage.error).toMatchObject({ code: 'stale-source', retryable: true, message: expect.stringMatching(/cache changed/i) })
+    // The cached failure is shared by every reader of the token: frozen so no
+    // consumer can rewrite what later readers see.
+    expect(Object.isFrozen(stage.error)).toBe(true)
+    expect(stage.error).toBe(stage.error)
     expect(publish).not.toHaveBeenCalled()
     expect(h.store.cellsOf(0)).toBe(current)
     expect(h.store.isKnown({ row: 0, col: 256 })).toBe(true)
@@ -80,6 +84,7 @@ it.each(['charge', 'release-recharge', 'drop', 'rollback'] as const)('SLICE10 de
     const current = h.store.cellsOf(0)
     expect(stage.commit(publish)).toBe(false)
     expect(stage.error).toMatchObject({ code: 'stale-source', retryable: true })
+    expect(Object.isFrozen(stage.error)).toBe(true)
     expect(publish).not.toHaveBeenCalled()
     expect(h.store.cellsOf(0)).toBe(current)
     expect(h.remote.ledger.bytes).toBe(bytes)
