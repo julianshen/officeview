@@ -38,7 +38,10 @@ test('actual mounted viewer unmount preserves held membership and run-copy owner
     expect(full.byPool.document).toBeGreaterThan(0)
     expect(full.byPool.geometry).toBeGreaterThan(0)
     expect(full.byPool.dom).toBeGreaterThan(0)
-    expect(full.byPool.viewBuffers).toBeGreaterThan(0)
+    // The committed filter's order and mask are the operation's (controls); the
+    // replaced base mask ended when the filtered display committed (§12.4).
+    expect(full.byPool.viewBuffers).toBe(0)
+    expect(full.byPool.controls).toBeGreaterThan(0)
     ui.unmount()
     draft.cancel()
     expect(resources.cache.usedBytes).toBeGreaterThanOrEqual(1538)
