@@ -295,7 +295,8 @@ export async function viewerControls(options: ViewerControlsOptions, signal: Abo
     // Session/pool descriptors, their empty maps, and bounded draft/guard records.
     // The extra 512 B conservatively covers the state, helper closures and
     // third weak adoption target; admit it before creating those records.
-    sessionMetadata.charge(4096 + 512)
+    // A refusal here releases the hold this operation took on its view.
+    try { sessionMetadata.charge(4096 + 512) } catch (error) { releaseBefore(); throw error }
     const state: { producer: 'new' | 'running' | 'done'; consumerDone: boolean; drained: boolean; flags: Uint8Array | undefined } = {
       producer: 'new', consumerDone: false, drained: false, flags: undefined,
     }

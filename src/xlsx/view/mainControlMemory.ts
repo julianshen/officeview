@@ -95,8 +95,8 @@ export function controlView(memory: AllocationContext, order: import('./contract
   const own = (root: object, count: number, visit: (add: (lane: ArrayBufferView) => void) => void) => {
     if (memory.owns(root)) { const held = hold && memory.hold?.(root); if (held) holds.push(held); return }
     const account = memory.reserve()
-    account.charge(256 + count * 128)
     try {
+      account.charge(256 + count * 128)
       const buffers = new Set<ArrayBufferLike>(), targets: object[] = [root]
       let bytes = 128
       visit(lane => {
@@ -111,9 +111,12 @@ export function controlView(memory: AllocationContext, order: import('./contract
       if (held) holds.push(held)
     } finally { account.release() }
   }
-  if (order.kind !== 'identity') own(order, order.bands.length * 2, add => {
-    for (const band of order.bands) { add(band.sourceAtOffset); add(band.displayOffsetOfSource) }
-  })
-  own(visibility, 2, add => { add(visibility.words); add(visibility.summaries) })
-  return () => { for (const held of holds.splice(0)) held.release() }
+  const release = () => { for (const held of holds.splice(0)) held.release() }
+  try {
+    if (order.kind !== 'identity') own(order, order.bands.length * 2, add => {
+      for (const band of order.bands) { add(band.sourceAtOffset); add(band.displayOffsetOfSource) }
+    })
+    own(visibility, 2, add => { add(visibility.words); add(visibility.summaries) })
+  } catch (error) { release(); throw error } // a refused reader keeps nothing it acquired
+  return release
 }
