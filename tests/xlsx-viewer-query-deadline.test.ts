@@ -227,29 +227,54 @@ it('S13.3 MINOR-1: a sort completes while overlapping viewport commands keep arr
   await kernel.handle({ kind: 'open', requestId: 'open', docId: 'doc', source: { kind: 'object', document }, profile: 'D' }, () => {})
   const session = kernel.session('doc')!
   const viewport = session.viewport.bind(session)
-  // Each viewport takes a few milliseconds; a new one starts before the last
-  // ends, so foreground work never drains while "scrolling" continues.
-  vi.spyOn(session, 'viewport').mockImplementation(async (...args) => { await new Promise(resolve => setTimeout(resolve, 8)); return viewport(...args) })
+  // Each viewport is held on a deferred the test controls, so the overlap is
+  // explicit rather than timed: the next viewport is issued before the
+  // previous one is released, hence one is always in flight until the sort
+  // has replied. Foreground work never drains while "scrolling" continues.
+  const gates: Array<() => void> = []
+  vi.spyOn(session, 'viewport').mockImplementation(async (...args) => {
+    await new Promise<void>(resolve => { gates.push(resolve) })
+    return viewport(...args)
+  })
   const owner = initialIdentity('doc', 's')
-  let scrolling = true, open = 0, overlapped = 0, serial = 0
+  const turn = () => new Promise<void>(resolve => setImmediate(resolve))
+  let sorted = false, open = 0, overlapped = 0, serial = 0, released = 0, releasedDuringSort = 0
+  const issue = () => {
+    open++
+    const i = serial++
+    void kernel.handle({ kind: 'viewport', requestId: `v${i}`, owner, window: { box: { x: 0, y: (i % 50) * 20, width: 64, height: 100 }, zoom: 1, deviceScale: 1 } }, out => { if (out.kind !== 'progress') open-- })
+  }
+  const releaseNext = () => { const gate = gates.shift(); if (gate) { released++; gate() } }
+  // Bounded so a starving kernel (one that waits for foreground to drain)
+  // fails the overlap assertion below instead of hanging the suite.
+  const ROUNDS = 20_000
   const scroll = (async () => {
-    for (let i = 0; scrolling && i < 1500; i++) {
-      open++
-      void kernel.handle({ kind: 'viewport', requestId: `v${serial++}`, owner, window: { box: { x: 0, y: (i % 50) * 20, width: 64, height: 100 }, zoom: 1, deviceScale: 1 } }, out => { if (out.kind !== 'progress') open-- })
-      await new Promise(resolve => setTimeout(resolve, 4))
+    issue()
+    for (let i = 0; !sorted && i < ROUNDS; i++) {
+      issue()
+      await turn()
+      releaseNext()
+      await turn()
     }
+    // Scrolling stops: let foreground drain so the sort can always finish.
+    while (gates.length || open > 0) { releaseNext(); await turn() }
   })()
   const replies: WorkerReply[] = []
   try {
     await kernel.handle({ kind: 'sort', requestId: 'sort', owner, spec: { range: { r0: 0, r1: rows - 1, c0: 0, c1: 0, headerRows: 0, totalsRows: 0 }, keys: [{ col: 0, order: 'asc' }], caseSensitive: false } }, out => {
-      if (out.kind !== 'progress' && scrolling && open > 0) overlapped++
+      if (out.kind !== 'progress') {
+        sorted = true
+        releasedDuringSort = released
+        if (open > 0) overlapped++
+      }
       replies.push(out)
     })
     expect(yields, 'the sort yielded to foreground work repeatedly').toBeGreaterThan(5)
+    expect(releasedDuringSort, 'viewport commands kept turning over during the sort').toBeGreaterThan(1)
     expect(replies.at(-1)).toMatchObject({ kind: 'complete' })
     expect(overlapped, 'the sort finished while viewport commands were still in flight').toBe(1)
   } finally {
-    scrolling = false
+    sorted = true
     await scroll
     await kernel.handle({ kind: 'close', requestId: 'close', docId: 'doc' }, () => {})
   }
