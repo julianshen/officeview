@@ -1,8 +1,10 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { cleanup, fireEvent, render, waitFor } from '@testing-library/react'
 import InteractiveSheetDoc from '../src/components/xlsx/InteractiveSheetDoc'
+import { SheetTileRenderer } from '../src/components/xlsx/sheetTiles'
 import { boundOverflowCache } from '../src/xlsx/view/overflowCache'
 import * as overflowGeometry from '../src/xlsx/view/viewport'
+import type { SheetGeometry } from '../src/xlsx/view/viewport'
 import { ViewerClient } from '../src/worker/viewerClient'
 import { connectInProcess, ViewerKernel } from '../src/worker/viewerKernel'
 import { createObjectWorkbookSource } from '../src/worker/viewerObjectSource'
@@ -59,7 +61,14 @@ describe('round 6: actual paged viewer owner teardown', () => {
 
   it('the surviving viewer keeps painting after a sibling unmount', async () => {
     const f = await opened()
-    const planSpy = vi.spyOn(overflowGeometry, 'planViewport')
+    let geomA: SheetGeometry | undefined
+    const origPresent = SheetTileRenderer.prototype.present
+    const presentSpy = vi.spyOn(SheetTileRenderer.prototype, 'present').mockImplementation(function (this: SheetTileRenderer, target, frame) {
+      if (target.canvas?.closest('[data-testid="a"]') && frame.geometry?.kind === 'ready') {
+        geomA = frame.geometry
+      }
+      return origPresent.call(this, target, frame)
+    })
     try {
       // Both sibling viewers use profile D; mixed profiles are covered by the "M viewer on a D remote / D viewer on an M remote" test below.
       function Harness({ showB }: { showB: boolean }) {
@@ -75,28 +84,26 @@ describe('round 6: actual paged viewer owner teardown', () => {
       await waitFor(() => expect(ui.getAllByRole('gridcell', { name: /value long text/ })).toHaveLength(2))
       const initialCache = f.remote.overflowFor()
       expect(initialCache.closed).toBe(false)
-      const geom = planSpy.mock.calls[0][0]
-      expect(geom?.kind).toBe('ready')
-      if (geom?.kind !== 'ready') throw new Error('Expected ready geometry')
-      expect(boundOverflowCache(geom)).toBe(initialCache)
+      expect(geomA).toBeDefined()
+      expect(boundOverflowCache(geomA!)).toBe(initialCache)
 
       // Unmount sibling B: closes its overflowContext.cache (the shared remote cache).
       ui.rerender(<Harness showB={false} />)
       await waitFor(() => expect(ui.getAllByRole('gridcell', { name: /value long text/ })).toHaveLength(1))
       expect(initialCache.closed).toBe(true)
-      expect(boundOverflowCache(geom)?.closed).toBe(true)
+      expect(boundOverflowCache(geomA!)?.closed).toBe(true)
 
       // Trigger an update in surviving viewer A after B unmounted and closed the shared cache.
       f.remote.notify()
-      await waitFor(() => expect(boundOverflowCache(geom)?.closed).toBe(false))
+      await waitFor(() => expect(boundOverflowCache(geomA!)?.closed).toBe(false))
 
       // Assert A's actual geometry binding is open and distinct from initialCache.
-      expect(boundOverflowCache(geom)).not.toBe(initialCache)
+      expect(boundOverflowCache(geomA!)).not.toBe(initialCache)
       expect(ui.getAllByRole('gridcell', { name: /value long text/ })).toHaveLength(1)
       expect(ui.getByTestId('a').textContent).not.toContain('Text overflow occupancy owner is closed')
       ui.unmount()
     } finally {
-      planSpy.mockRestore()
+      presentSpy.mockRestore()
       await f.remote.close()
       await f.client.dispose()
     }
