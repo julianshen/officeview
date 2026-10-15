@@ -72,4 +72,27 @@ describe('held lifetime charges (MainMemoryLedger.chargeWhileHeld)', () => {
     hold.release()
     expect(ledger.bytes).toBe(0)
   })
+  it('a re-admitted target has a lifetime again and settle ends that current charge', () => {
+    const ledger = new MainMemoryLedger({ register() {} }), target = {}
+    ledger.chargeWhileHeld('viewBuffers', [target], 10)
+    ledger.hold(target)!.release()
+    ledger.chargeWhileHeld('viewBuffers', [target], 25)
+    const held = ledger.hold(target)!
+    expect({ bytes: ledger.bytes, owns: ledger.hasLifetime(target) }).toEqual({ bytes: 25, owns: true })
+    ledger.settle(target)
+    expect(ledger.bytes).toBe(0)
+    held.release()
+    expect(ledger.bytes).toBe(0)
+  })
+  it('a re-adopted target keeps a live alias but rebinds a dead one', () => {
+    const ledger = new MainMemoryLedger({ register() {} }), live = {}, dead = {}
+    ledger.chargeWhileReachable('controls', [live], 5)
+    ledger.chargeWhileHeld('controls', [dead], 7)
+    ledger.hold(dead)!.release()
+    ledger.set('controls', 'r', 9)
+    ledger.adoptWhileReachable('controls', 'r', 'controls', [live, dead], 9, undefined, true)
+    expect(ledger.hasLifetime(dead)).toBe(true)
+    ledger.settle(dead)
+    expect(ledger.bytes, 'the dead alias names the new adoption; the live alias keeps its own charge').toBe(5)
+  })
 })

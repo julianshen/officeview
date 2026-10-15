@@ -129,7 +129,8 @@ export class MainMemoryLedger {
     const owner = token
     this.set(pool, owner, bytes)
     this.lifetimes.set(token, pool)
-    for (const target of targets) if (!this.leases.has(target)) this.leases.set(target, token)
+    // A live alias keeps its first owner; a mapping to an ended charge is rebound.
+    for (const target of targets) if (!this.hasLifetime(target)) this.leases.set(target, token)
     if (!this.watcher) return token
     this.alive.set(token, { pool, owner, remaining: targets.length })
     for (const target of targets) this.watcher.register(target, token)
@@ -206,7 +207,7 @@ export class MainMemoryLedger {
     this.pools[pool] += bytes
     // Total and high-water bytes never change during ownership adoption.
     this.lifetimes.set(token, pool)
-    for (const target of targets) if (!this.leases.has(target)) this.leases.set(target, token)
+    for (const target of targets) if (!this.hasLifetime(target)) this.leases.set(target, token)
     if (this.watcher) this.alive.set(token, { pool, owner: token, remaining: targets.length })
     if (held) this.holdable(pool, targets, token, bytes)
     return token
