@@ -140,6 +140,9 @@ export class RemoteWorkbook implements WorkbookSource {
   private readonly identities = new Map<string, CacheIdentity>()
   private readonly views = new Map<string, RemoteSheetView>()
   private readonly geometries = new Map<string, SheetGeometry>()
+  // Layout keys disappear on replacement/release; obsolete column axes are
+  // retained only by actual consumers, whose reachability charge remains live.
+  private columnMetrics = new WeakMap<SheetLayout, ReturnType<typeof createAxisMetrics>>()
   private readonly stores = new Map<string, RemoteSheetStore>()
   private readonly listeners = new Set<() => void>()
   private readonly structures = new Map<string, { gen: number; merges: readonly XlsxMergeRange[]; state: 'loading' | 'done'; timer?: ReturnType<typeof setTimeout> }>()
@@ -164,6 +167,7 @@ export class RemoteWorkbook implements WorkbookSource {
     this.statusMessage = open.diagnostics.find(d => d.code === 'cached-value-policy')?.message
     this.owner = initialWorkbookOwner(open.docId, open.sheets)
     this.layouts = new Map(open.layouts)
+    for (const { sheetId } of open.sheets) if (!this.layouts.has(sheetId)) this.layouts.set(sheetId, { rowOverrides: [], colOverrides: [], hidden: [] })
     this.profile = open.profile ?? 'D'
     this.format = open.formatting ?? { dateSystem: '1900', styles: [] }
     this.ledger = new RowCacheLedger(open.rowCacheBytes ?? rowCacheBudget(this.profile), this.mainLedger)
@@ -247,6 +251,8 @@ export class RemoteWorkbook implements WorkbookSource {
   }
   identity(sheetId: string): CacheIdentity { return this.identities.get(sheetId) ?? initialIdentity(this.docId, sheetId) }
   workbookOwner(): WorkbookOwner { return this.owner }
+  /** Known sheets have stable layout identities. Unknown IDs intentionally
+   * use an uncached empty fallback rather than growing the layout map. */
   layout(sheetId: string): SheetLayout { return this.layouts.get(sheetId) ?? { rowOverrides: [], colOverrides: [], hidden: [] } }
   /** The worker's committed view of a sheet (revision = its viewGen). */
   view(sheetId: string): RemoteSheetView {
@@ -260,19 +266,32 @@ export class RemoteWorkbook implements WorkbookSource {
     }
     return store
   }
+  /** Column-only geometry for proof validation. The caller admits construction
+   * first; sharing this axis with geometry() avoids allocating row summaries. */
+  columns(sheetId: string): ReturnType<typeof createAxisMetrics> {
+    const layout = this.layout(sheetId)
+    let columns = this.columnMetrics.get(layout)
+    if (!columns) {
+      columns = createAxisMetrics({ logicalCount: MAX_COLS, defaultSizeCss: SHEET_DEFAULT_COL_CSS, overrides: layout.colOverrides, ...(layout.hiddenCols?.length ? { collapsed: layout.hiddenCols } : {}) })
+      this.mainLedger.chargeWhileReachable('geometry', [columns], axisBytes(columns))
+      this.columnMetrics.set(layout, columns)
+    }
+    return columns
+  }
   geometry(sheetId: string): SheetGeometry {
     let geometry = this.geometries.get(sheetId)
     if (!geometry) {
       const layout = this.layout(sheetId)
       geometry = Object.freeze({
         rows: createAxisMetrics({ logicalCount: MAX_ROWS, defaultSizeCss: SHEET_DEFAULT_ROW_CSS, overrides: layout.rowOverrides }),
-        cols: createAxisMetrics({ logicalCount: MAX_COLS, defaultSizeCss: SHEET_DEFAULT_COL_CSS, overrides: layout.colOverrides, ...(layout.hiddenCols?.length ? { collapsed: layout.hiddenCols } : {}) }),
+        cols: this.columns(sheetId),
         rowOverrides: layout.rowOverrides, colOverrides: layout.colOverrides, baseHidden: createIntervalSet(layout.hidden),
         ...(layout.hiddenCols?.length ? { hiddenCols: layout.hiddenCols } : {}),
       })
       this.geometries.set(sheetId, geometry)
-      // Axis summaries and authored-hidden intervals live as long as anything holds this geometry.
-      this.mainLedger.chargeWhileReachable('geometry', [geometry], axisBytes(geometry.rows) + axisBytes(geometry.cols) + layout.hidden.length * 32 + (layout.hiddenCols?.length ?? 0) * 32)
+      // Columns have their own shared lifetime charge; this geometry owns
+      // only its row summaries and authored-hidden intervals.
+      this.mainLedger.chargeWhileReachable('geometry', [geometry], axisBytes(geometry.rows) + layout.hidden.length * 32 + (layout.hiddenCols?.length ?? 0) * 32)
     }
     return geometry
   }
@@ -562,6 +581,7 @@ export class RemoteWorkbook implements WorkbookSource {
     this.stores.clear()
     this.views.clear()
     this.geometries.clear()
+    this.columnMetrics = new WeakMap()
     this.layouts.clear()
     this.structures.clear()
     this.latestQueries.clear()
@@ -574,7 +594,14 @@ export class RemoteWorkbook implements WorkbookSource {
   }
 }
 
-interface RowEntry { chunks: Set<number>; cells: PagedCell[] }
+class StaleViewportPublicationError extends Error {
+  readonly name = 'StaleViewportPublicationError'
+  readonly code = 'stale-source'
+  readonly retryable = true
+  constructor() { super('Viewport row cache changed; re-stage the publication') }
+}
+
+interface RowEntry { chunks: Set<number>; cells: PagedCell[]; adoptionMeasurement?: number }
 /** Per-frame page budgets are shared across sheet stores, so tile identity
  * includes the sheet as well as the complete logical box. */
 export const pageTileKey = (sheetId: string, box: LogicalCellBox): string => JSON.stringify([sheetId, box.x, box.y, box.width, box.height])
@@ -587,24 +614,158 @@ interface PageAdmission { frame: PageFrame; tile: string; ring: boolean }
  * (§12.4). Insertion order is recency; charging past the limit evicts the
  * least recently used rows of any sheet. A row larger than the whole budget is
  * never cached (its reads go to the worker each time). */
+interface RowCharge { store: RemoteSheetStore; row: number; bytes: number; recency: number; touched: number }
 export class RowCacheLedger {
   bytes = 0
   peakBytes = 0
-  private readonly entries = new Map<string, { store: RemoteSheetStore; row: number; bytes: number }>()
+  private reserved = 0
+  private recency = 0
+  private stateGeneration = 0
+  /** Cache data and charge changes invalidate held publication snapshots;
+   * reads, LRU touches and reservation bookkeeping do not. */
+  get generation(): number { return this.stateGeneration }
+  /** @internal Shared by row-data mutations and charge ownership changes. */
+  advanceGeneration(): void {
+    if (!Number.isSafeInteger(this.stateGeneration + 1)) throw new Error('Row cache generation exhausted')
+    this.stateGeneration++
+  }
+  private nextRecency(): number {
+    if (!Number.isSafeInteger(this.recency + 1)) throw new Error('Row cache recency exhausted')
+    return ++this.recency
+  }
+  private readonly reservations = new Map<object, { bytes: number; pinned: ReadonlySet<string> }>()
+  reserve(bytes: number, store?: RemoteSheetStore, rows: Iterable<number> = []): { close(): void } | undefined {
+    if (!Number.isSafeInteger(bytes) || bytes < 0 || this.reserved + bytes > this.limitBytes) return undefined
+    const pinned = new Set<string>()
+    if (store) for (const row of rows) pinned.add(this.key(store, row))
+    // Promise retained growth without evicting until publication charges it.
+    // Abandoned stages and failed feasibility checks leave warm rows intact.
+    if (this.bytes + this.reserved + bytes > this.limitBytes) {
+      let protectedBytes = 0
+      for (const key of pinned) protectedBytes += this.entries.get(key)?.bytes ?? 0
+      // Only active pins can prevent eviction. Deduplicate against new pins
+      // and earlier reservations without scanning residents or copying a union.
+      for (const [token, item] of this.reservations) for (const key of item.pinned) {
+        if (pinned.has(key)) continue
+        let counted = false
+        for (const [previousToken, previous] of this.reservations) {
+          if (previousToken === token) break
+          if (previous.pinned.has(key)) { counted = true; break }
+        }
+        if (!counted) protectedBytes += this.entries.get(key)?.bytes ?? 0
+      }
+      if (protectedBytes + this.reserved + bytes > this.limitBytes) return undefined
+    }
+    this.reserved += bytes
+    const token = { close: () => {
+      if (!this.reservations.delete(token)) return
+      this.reserved -= bytes
+    } }
+    this.reservations.set(token, { bytes, pinned })
+    return token
+  }
+  viewportRollbackBytes(): number { return 128 }
+  /** Journal only the rows this publication can replace. Independent evictions
+   * stay evicted; restoring their former accounting would create phantom owners.
+   * @internal The no-argument whole-ledger form is retained for tests only. */
+  beginViewportPublication(store?: RemoteSheetStore, rows: Iterable<number> = [], reverted: (row: number) => boolean = () => true): { rollback(): void; close(): void } {
+    // Compatibility for explicit whole-ledger transactions. Tile publication
+    // always supplies its touched rows and never snapshots the cache Map.
+    if (!store) {
+      const snapshot = new Map(this.entries)
+      let live = true
+      const close = () => { live = false; snapshot.clear() }
+      return { close, rollback: () => {
+        if (!live) return
+        this.advanceGeneration()
+        this.entries.clear()
+        this.bytes = 0
+        for (const [key, entry] of snapshot) { this.entries.set(key, entry); this.bytes += entry.bytes }
+        this.report()
+        close()
+      } }
+    }
+    const entries = new Map<number, RowCharge | undefined>()
+    for (const row of rows) {
+      const old = this.entries.get(this.key(store, row))
+      entries.set(row, old ? { ...old } : undefined)
+    }
+    let live = true
+    const close = () => { live = false; entries.clear() }
+    return { close, rollback: () => {
+      if (!live) return
+      this.advanceGeneration()
+      const restored: Array<[string, RowCharge]> = []
+      for (const [row, old] of entries) {
+        if (!reverted(row)) continue
+        const key = this.key(store, row), current = this.entries.get(key)
+        if (current) { this.entries.delete(key); this.bytes -= current.bytes }
+        if (old) {
+          // Explicit touches after publication began own their newer recency.
+          if (current && current.touched > old.touched) { old.recency = current.recency; old.touched = current.touched }
+          restored.push([key, old])
+          this.bytes += old.bytes
+        }
+      }
+      if (!restored.length) { this.report(); close(); return }
+      restored.sort((a, b) => a[1].recency - b[1].recency)
+      // Rotate the existing Map once, merging only the journaled rows. The
+      // initial count prevents the iterator from revisiting appended entries.
+      const count = this.entries.size
+      let index = 0
+      const iterator = this.entries.entries()
+      for (let i = 0; i < count; i++) {
+        const [key, entry] = iterator.next().value as [string, RowCharge]
+        this.entries.delete(key)
+        while (index < restored.length && restored[index][1].recency < entry.recency) {
+          const [restoredKey, restoredEntry] = restored[index++]
+          this.entries.set(restoredKey, restoredEntry)
+        }
+        this.entries.set(key, entry)
+      }
+      while (index < restored.length) {
+        const [key, entry] = restored[index++]
+        this.entries.set(key, entry)
+      }
+      this.report()
+      close()
+    } }
+  }
+  private isPinned(key: string, pinned: ReadonlySet<string>): boolean {
+    if (pinned.has(key)) return true
+    for (const item of this.reservations.values()) if (item.pinned.has(key)) return true
+    return false
+  }
+  private evict(limit: number, pinned: ReadonlySet<string> = new Set()): void {
+    for (const [key, entry] of this.entries) {
+      if (this.bytes <= limit) break
+      const protectedRow = this.isPinned(key, pinned)
+      if (protectedRow) continue
+      this.entries.delete(key)
+      this.bytes -= entry.bytes
+      entry.store.drop(entry.row)
+    }
+  }
+  private readonly entries = new Map<string, RowCharge>()
   constructor(readonly limitBytes: number, private readonly main?: MainMemoryLedger) {}
   private report(): void { this.main?.set('rowCache', 'rows', this.bytes) }
   private key(store: RemoteSheetStore, row: number): string { return `${store.sheetId}\u0000${row}` }
-  charge(store: RemoteSheetStore, row: number, bytes: number): void {
+  /** @internal Current retained ownership, including ordinary loads while a stage waits. */
+  rowBytes(store: RemoteSheetStore, row: number): number | undefined { return this.entries.get(this.key(store, row))?.bytes }
+  charge(store: RemoteSheetStore, row: number, bytes: number, reservation?: { close(): void }): void {
     const key = this.key(store, row)
-    const old = this.entries.get(key)
+    const old = this.entries.get(key), recency = this.nextRecency()
+    this.advanceGeneration()
     if (old) { this.bytes -= old.bytes; this.entries.delete(key) }
-    this.entries.set(key, { store, row, bytes })
+    this.entries.set(key, { store, row, bytes, recency, touched: old?.touched ?? 0 })
     this.bytes += bytes
-    while (this.bytes > this.limitBytes) {
-      const [oldest, entry] = this.entries.entries().next().value as [string, { store: RemoteSheetStore; row: number; bytes: number }]
-      this.entries.delete(oldest)
-      this.bytes -= entry.bytes
-      entry.store.drop(entry.row)
+    const own = reservation ? this.reservations.get(reservation)?.bytes ?? 0 : 0
+    this.evict(this.limitBytes - this.reserved + own)
+    // A concurrent ordinary read cannot consume capacity promised to stages.
+    if (this.bytes + this.reserved - own > this.limitBytes && this.entries.get(key)) {
+      this.entries.delete(key)
+      this.bytes -= bytes
+      store.drop(row)
     }
     this.peakBytes = Math.max(this.peakBytes, this.bytes)
     this.report()
@@ -612,22 +773,23 @@ export class RowCacheLedger {
   touch(store: RemoteSheetStore, row: number): void {
     const key = this.key(store, row)
     const entry = this.entries.get(key)
-    if (entry) { this.entries.delete(key); this.entries.set(key, entry) }
+    if (entry) { entry.recency = this.nextRecency(); entry.touched = entry.recency; this.entries.delete(key); this.entries.set(key, entry) }
   }
   release(store: RemoteSheetStore, row: number): void {
     const key = this.key(store, row)
     const entry = this.entries.get(key)
-    if (entry) { this.entries.delete(key); this.bytes -= entry.bytes; this.report() }
+    if (entry) { this.advanceGeneration(); this.entries.delete(key); this.bytes -= entry.bytes; this.report() }
   }
 }
 
 /** SourceStore proxy of one remote sheet plus its bounded painting row cache. */
 export class RemoteSheetStore implements SourceStore {
   private readonly rows = new Map<number, RowEntry>()
+  private readonly viewportStages = new Set<() => void>()
   private readonly loading = new Set<string>()
   // Mutable state lives in one shared holder: find wraps stores with
   // Object.create, and a primitive written through a wrapper would diverge.
-  private readonly state: { retry?: ReturnType<typeof setTimeout>; extent: SourceStore['extent']; epoch: number } = { extent: { rows: MAX_ROWS, cols: MAX_COLS }, epoch: 0 }
+  private readonly state: { retry?: ReturnType<typeof setTimeout>; extent: SourceStore['extent']; epoch: number; adoptionMeasurement: number } = { extent: { rows: MAX_ROWS, cols: MAX_COLS }, epoch: 0, adoptionMeasurement: 0 }
 
   constructor(private readonly workbook: RemoteWorkbook, readonly sheetId: string) {
     this.relayout()
@@ -783,27 +945,170 @@ export class RemoteSheetStore implements SourceStore {
   /** Adopt resolved viewport cells for accessibility/inspection. This proves
    * only these coordinates, never the blank remainder of a row-cache chunk. */
   adoptViewport(cells: readonly import('../xlsx/view/contracts').ViewportCell[]): void {
-    const rows = new Map<number, AuthoritativeCell[]>()
+    const token = this.stageViewport(cells, new AbortController().signal)
+    try { token?.commit(() => {}) } finally { token?.close() }
+  }
+  /** Captured before the viewport await. Clear closes outstanding requests as
+   * well as stages, so a delivered old reply cannot acquire a fresh epoch. */
+  captureViewportRequest(signal: AbortSignal): { live(): boolean; close(): void } {
+    const epoch = this.state.epoch
+    let open = true
+    const close = () => { if (!open) return; open = false; this.viewportStages.delete(close); signal.removeEventListener('abort', close) }
+    this.viewportStages.add(close)
+    signal.addEventListener('abort', close, { once: true })
+    if (signal.aborted) close()
+    return { close, live: () => open && !signal.aborted && !this.workbook.isClosed && epoch === this.state.epoch }
+  }
+  /** Scalar estimate before grouping, copying or sorting. Existing rows are
+   * still owned by the row ledger and rollback keeps them alive during staging. */
+  viewportRollbackBytes(): number { return this.workbook.ledger.viewportRollbackBytes() }
+  viewportAdoptionBytes(cells: readonly import('../xlsx/view/contracts').ViewportCell[]): number {
+    let bytes = 128
+    // The numeric marker fits the accounted 64 B row record. It avoids a
+    // payload-sized Set before joint admission, including for reordered rows.
+    const measurement = this.state.adoptionMeasurement + 1
+    if (!Number.isSafeInteger(measurement)) throw new Error('Viewport adoption measurement revision exhausted')
+    this.state.adoptionMeasurement = measurement
     for (const item of cells) {
       if (item.kind !== 'cell' && item.kind !== 'unavailable') continue
-      const row = rows.get(item.source.row) ?? []
-      row.push({ ...item.cell, ...(item.kind === 'unavailable' ? { unavailable: true } : {}) })
-      rows.set(item.source.row, row)
-    }
-    for (const [row, cells] of rows) {
-      const entry = this.rows.get(row) ?? { chunks: new Set<number>(), cells: [] as PagedCell[] }
-      const byCol = new Map(entry.cells.map(cell => [cell.col, cell]))
-      for (const cell of cells) {
-        const style = this.workbook.styleOf(cell.styleIndex)
-        byCol.set(cell.col, { ...cell, ref: formatA1(cell), value: cell.value ?? null, ...(style ? { style } : {}) } as PagedCell)
+      bytes += 256 + 3 * cachedCellBytes(item.cell)
+      const old = this.rows.get(item.source.row)
+      // New rows have no old payload to scan. Their per-cell allowance also
+      // covers a journal slot if several incoming records share that new row.
+      bytes += 192
+      if (old && old.adoptionMeasurement !== measurement) {
+        old.adoptionMeasurement = measurement
+        for (const cell of old.cells) bytes += 128 + cachedCellBytes(cell)
       }
-      const next = [...byCol.values()].sort((a, b) => a.col - b.col)
-      const bytes = 64 + next.reduce((sum, cell) => sum + cachedCellBytes(cell), 0)
-      if (bytes > this.workbook.ledger.limitBytes) continue
-      entry.cells = next
-      this.rows.set(row, entry)
-      this.workbook.ledger.charge(this, row, bytes)
     }
+    return bytes
+  }
+  /** The caller has admitted the joint main allocation before invoking this
+   * lower-cache admission. A declined row adoption does not decline paint.
+   * Invalidation is deliberately coarse and document-wide: even another sheet's
+   * row change refuses a held token. Continuous loading can starve deferred
+   * adoption; callers should re-stage and commit synchronously when possible. */
+  stageViewport(cells: readonly import('../xlsx/view/contracts').ViewportCell[], signal: AbortSignal, request?: { live(): boolean }): { readonly error?: SourceFailure; commit(publish: () => void): boolean; close(): void } | undefined {
+    // Staging/journal scratch belongs to the caller's joint main reservation.
+    // The lower row ledger promises only the merged cache's retained growth.
+    let reservation: { close(): void } | undefined
+    const epoch = this.state.epoch, owner = this.workbook.identity(this.sheetId), generation = this.workbook.ledger.generation
+    let error: SourceFailure | undefined
+    const stale = () => {
+      const cause = new StaleViewportPublicationError()
+      // Every reader of the token shares this one failure: freeze it.
+      error ??= Object.freeze(failure(cause.code, cause.message, cause.retryable))
+      return cause
+    }
+    let live = true, committing = false
+    const staged = new Map<number, RowEntry>(), previous = new Map<number, RowEntry | undefined>()
+    const close = () => { if (!committing) { staged.clear(); previous.clear() }; if (!live) return; live = false; reservation?.close(); signal.removeEventListener('abort', close); this.viewportStages.delete(close) }
+    this.viewportStages.add(close)
+    signal.addEventListener('abort', close, { once: true })
+    try {
+      if (signal.aborted || this.workbook.isClosed || request && !request.live()) { close(); return undefined }
+      const incoming = new Map<number, Map<number, Extract<import('../xlsx/view/contracts').ViewportCell, { kind: 'cell' | 'unavailable' }>>>()
+      for (const item of cells) {
+        if (item.kind !== 'cell' && item.kind !== 'unavailable') continue
+        let row = incoming.get(item.source.row)
+        if (!row) { row = new Map(); incoming.set(item.source.row, row) }
+        row.set(item.source.col, item)
+      }
+      let growth = 0
+      for (const [row, items] of incoming) {
+        let bytes = 64
+        for (const old of this.rows.get(row)?.cells ?? []) if (!items.has(old.col)) bytes += cachedCellBytes(old)
+        for (const item of items.values()) bytes += cachedCellBytes(item.cell)
+        growth += bytes - (this.workbook.ledger.rowBytes(this, row) ?? 0)
+      }
+      reservation = this.workbook.ledger.reserve(Math.max(0, growth), this, incoming.keys())
+      if (!reservation) { close(); return undefined }
+      for (const [row, items] of incoming) {
+        const old = this.rows.get(row), existing = old?.cells ?? []
+        previous.set(row, old)
+        const added: PagedCell[] = []
+        let sorted = true
+        for (const item of items.values()) {
+          const style = this.workbook.styleOf(item.cell.styleIndex)
+          const cell = { ...item.cell, ...(item.cell.sharedFormula ? { sharedFormula: { ...item.cell.sharedFormula } } : {}), ref: formatA1(item.source), value: item.cell.value ?? null, ...(item.kind === 'unavailable' ? { unavailable: true } : {}), ...(style ? { style } : {}) } as PagedCell
+          if (added.length && added[added.length - 1].col > cell.col) sorted = false
+          added.push(cell)
+        }
+        // Ordinary viewport rows are ordered already. Only reordered input
+        // needs sorting; the old row stays sorted and is merged once.
+        if (!sorted) added.sort((a, b) => a.col - b.col)
+        const merged: PagedCell[] = []
+        let i = 0, j = 0
+        while (i < existing.length && j < added.length) {
+          const oldCol = existing[i].col, newCol = added[j].col
+          if (oldCol < newCol) merged.push(existing[i++])
+          else {
+            if (oldCol === newCol) i++
+            merged.push(added[j++])
+          }
+        }
+        while (i < existing.length) merged.push(existing[i++])
+        while (j < added.length) merged.push(added[j++])
+        staged.set(row, { ...(old ?? { chunks: new Set<number>() }), cells: merged })
+      }
+      incoming.clear()
+      return { close, get error() { return error }, commit: publish => {
+        if (!live || signal.aborted || this.workbook.isClosed || request && !request.live() || epoch !== this.state.epoch || this.workbook.identity(this.sheetId) !== owner) { close(); return false }
+        if (this.workbook.ledger.generation !== generation) { stale(); close(); return false }
+        committing = true
+        const reverted = new Set<number>()
+        const accounting = this.workbook.ledger.beginViewportPublication(this, staged.keys(), row => reverted.has(row))
+        try {
+          const charges = [...staged].map(([row, next]) => {
+            const oldBytes = this.workbook.ledger.rowBytes(this, row)
+            const bytes = 64 + next.cells.reduce((sum, cell) => sum + cachedCellBytes(cell), 0)
+            return { row, bytes, growth: bytes - (oldBytes ?? 0) }
+          }).sort((a, b) => Number(a.growth > 0) - Number(b.growth > 0))
+          if (staged.size) this.workbook.ledger.advanceGeneration()
+          for (const [row, next] of staged) this.rows.set(row, next)
+          const publicationGeneration = this.workbook.ledger.generation
+          publish()
+          // Publication callbacks may replace cache data or charge ownership
+          // before this batch starts charging; do not overwrite that newer owner.
+          if (this.workbook.ledger.generation !== publicationGeneration) throw stale()
+          // Charge shrinking rows first: their freed bytes fund growing rows
+          // without evicting warm data for an intermediate publication shape.
+          for (const { row, bytes } of charges) {
+            // A prior row's charge callback can replace a later row in the batch.
+            if (this.rows.get(row) !== staged.get(row)) throw stale()
+            this.workbook.ledger.charge(this, row, bytes, reservation)
+            // Reporting that charge may cancel, clear or replace the source owner.
+            if (!live || signal.aborted || this.workbook.isClosed || request && !request.live() || epoch !== this.state.epoch || this.workbook.identity(this.sheetId) !== owner) throw new Error('Viewport owner changed during publication')
+          }
+          // An empty batch still invokes publish, so it needs the same owner guard.
+          if (!live || signal.aborted || this.workbook.isClosed || request && !request.live() || epoch !== this.state.epoch || this.workbook.identity(this.sheetId) !== owner) throw new Error('Viewport owner changed during publication')
+          // The last charge callback can replace an already-charged row too.
+          for (const [row, next] of staged) if (this.rows.get(row) !== next) throw stale()
+          accounting.close()
+          close()
+          return true
+        } catch (cause) {
+          // A cache clear owns the newer epoch and its released rows. Restoring
+          // the publication snapshot would revive accounting for those rows.
+          if (epoch !== this.state.epoch) accounting.close()
+          else {
+            for (const [row, old] of previous) {
+              if (this.rows.get(row) !== staged.get(row)) {
+                if (!this.rows.has(row)) this.workbook.ledger.release(this, row)
+                continue
+              }
+              reverted.add(row)
+              if (old) this.rows.set(row, old)
+              else this.rows.delete(row)
+            }
+            accounting.rollback()
+          }
+          close()
+          if (cause instanceof StaleViewportPublicationError) { error ??= Object.freeze(failure(cause.code, cause.message, cause.retryable)); return false }
+          throw cause
+        } finally { committing = false; close() }
+      } }
+    } catch (cause) { close(); throw cause }
   }
   /** Cached populated cells of a source row (ascending columns); only the
    * known chunks contribute. Unknown chunks are reported by `pendingIn`. */
@@ -830,9 +1135,10 @@ export class RemoteSheetStore implements SourceStore {
     return true
   }
   /** Drops one row (ledger eviction). */
-  drop(row: number): void { this.rows.delete(row) }
+  drop(row: number): void { if (this.rows.delete(row)) this.workbook.ledger.advanceGeneration() }
   /** Releases the whole cache (inactive sheet, close); in-flight loads land nowhere. */
   clear(): void {
+    for (const close of this.viewportStages) close()
     for (const row of this.rows.keys()) this.workbook.ledger.release(this, row)
     this.rows.clear()
     this.state.epoch++

@@ -12,6 +12,8 @@ import { ViewerKernel } from '../src/worker/viewerKernel'
 import { OfficePackage } from '../src/core/zip'
 import { parseXlsx } from '../src/xlsx/parse'
 import type { CacheIdentity, WorkerCommand, WorkerReply } from '../src/xlsx/view/contracts'
+import { LayoutCache } from '../src/xlsx/view/textLayout'
+import type { CellPlacement, ViewportPlan } from '../src/xlsx/view/viewport'
 import type { SheetFrameStats } from '../src/components/xlsx/InteractiveSheetDoc'
 import { xlsxBytes } from './helpers/xlsx-package'
 
@@ -90,6 +92,8 @@ function go(ui: ReturnType<typeof render>, at: string) {
   return grid
 }
 
+const OVERFLOW_TEXT = 'target1000 abcdefghijklmnopqrstuvwxyz abcdefghijklmnopqrstuvwxyz'
+const overflowData = () => workbook(CORNER.replace('<row r="1048576">', `<row r="1000"><c r="A1000" t="inlineStr"><is><t>${OVERFLOW_TEXT}</t></is></c><c r="C1000" t="inlineStr"><is><t>BLOCKER</t></is></c></row><row r="1048576">`))
 const coldData = () => workbook(CORNER.replace('<row r="1048576">', '<row r="1000"><c r="A1000" t="inlineStr"><is><t>target1000</t></is></c></row><row r="1048576">'))
 function deferred() {
   let resolve!: () => void
@@ -98,7 +102,7 @@ function deferred() {
 }
 function observe(h: ReturnType<typeof workerHarness>) {
   const requests: Array<{ owner: CacheIdentity; remote: CacheIdentity; session: CacheIdentity; out?: unknown }> = []
-  const tiles: Array<{ fontGen: number; coverage: string; kind?: string }> = []
+  const tiles: Array<{ fontGen: number; coverage: string; kind?: string; plan?: ViewportPlan }> = []
   let remote!: RemoteWorkbook
   const viewport = RemoteWorkbook.prototype.viewport
   vi.spyOn(RemoteWorkbook.prototype, 'viewport').mockImplementation(async function(this: RemoteWorkbook, ...args) {
@@ -115,19 +119,26 @@ function observe(h: ReturnType<typeof workerHarness>) {
     return (window, visible) => {
       const coverage = options.store.coverage(options.metrics, window.box, options.scale)
       const plan = original(window, visible)
-      tiles.push({ fontGen: options.identity.fontGen, coverage, kind: plan?.kind })
+      tiles.push({ fontGen: options.identity.fontGen, coverage, kind: plan?.kind, plan })
       return plan
     }
   })
   return { requests, tiles, remote: () => remote }
 }
 
-it('mounted paged viewport adopts worker plans after the first font lease', async () => {
+it('mounted paged viewport adopts worker overflow proofs after the first font lease', async () => {
   const h = workerHarness(), f = frames(), audit = observe(h), ready = deferred()
   const assetLoader: typeof prepareSheetAssets = vi.fn(async (...args: Parameters<typeof prepareSheetAssets>) => { await ready.promise; return prepareSheetAssets(...args) })
   const planner = vi.spyOn(viewportPlanner, 'planViewport')
+  const layouts: Array<{ owner: CacheIdentity; placed: CellPlacement; body: ReturnType<LayoutCache['layout']> }> = []
+  const layout = LayoutCache.prototype.layout
+  vi.spyOn(LayoutCache.prototype, 'layout').mockImplementation(function(this: LayoutCache, owner, placed, host) {
+    const body = layout.call(this, owner, placed, host)
+    if (placed.source.row === 999 && placed.source.col === 0) layouts.push({ owner: { ...owner }, placed, body })
+    return body
+  })
   const seams = { assetLoader, onFrame: f.onFrame } as object
-  const ui = render(<OfficeFile data={coldData()} interactiveSheets viewerWorker={() => h.port} {...seams} />)
+  const ui = render(<OfficeFile data={overflowData()} interactiveSheets viewerWorker={() => h.port} {...seams} />)
   try {
     await waitFor(() => expect(assetLoader).toHaveBeenCalled())
     await waitFor(() => expect(f.last()?.identity.fontGen).toBe(0))
@@ -139,8 +150,28 @@ it('mounted paged viewport adopts worker plans after the first font lease', asyn
     go(ui, 'A1000')
     await waitFor(() => expect(h.replied.some(r => r.commandKind === 'viewport' && r.kind === 'complete')).toBe(true))
     await waitFor(() => expect(audit.tiles.some(t => t.fontGen === 1 && t.kind === 'detail')).toBe(true))
+    // Detail alone is insufficient: the bridge must accept the wire owner's
+    // proof and carry its blank-B1000 corridor through host text layout.
+    const replies = h.replied.filter(r => r.commandKind === 'viewport' && r.kind === 'complete')
+    const proofReply = replies.find(r => 'overflowProof' in r.result && r.result.overflowProof?.entries.some(e => e.row === 999 && e.col === 0))
+    expect(proofReply, 'worker reply must include an overflow proof for A1000').toBeDefined()
+    if (!proofReply || proofReply.kind !== 'complete' || proofReply.result.kind !== 'viewport') throw new Error('Expected viewport overflow proof')
+    const proof = proofReply.result.overflowProof!
+    expect(proof.owner).toEqual(proofReply.owner)
+    expect(proof.owner.fontGen).toBe(0)
+    expect(proof.scope).toBe('tile')
+    expect(proof.entries.find(e => e.row === 999 && e.col === 0)).toMatchObject({ left: 0, right: 64, rightEnd: 'blocker' })
+    const placement = () => audit.tiles.flatMap(t => t.fontGen === 1 && t.plan?.kind === 'detail' ? t.plan.cells : []).find(c => c.source.row === 999 && c.source.col === 0)
+    await waitFor(() => expect(placement()?.overflow).toEqual({ left: 0, right: 64 }))
+    // Row reads are still held: this cell was transactionally adopted from
+    // the worker plan, rather than becoming known through a fallback read.
+    expect(h.held.some(x => x.command.kind === 'read' && x.command.query.op === 'rows')).toBe(true)
+    expect(audit.remote().store(f.last().activeSheetId).cellAt({ row: 999, col: 0 })?.value).toBe(OVERFLOW_TEXT)
+    await waitFor(() => expect(layouts.some(x => x.owner.fontGen === 1 && x.placed.overflow?.right === 64 && x.body.text?.kind === 'plain' && x.body.text.clipX?.x0 === 0 && x.body.text.clipX.x1 === 128)).toBe(true))
+    expect(f.last().identity.fontGen).toBe(1)
     expect(audit.requests.length).toBeGreaterThan(0)
     for (const request of audit.requests) {
+      expect(request.owner.fontGen).toBe(0)
       expect(request.owner.fontGen).toBe(request.remote.fontGen)
       expect(request.owner.fontGen).toBe(request.session.fontGen)
     }
@@ -151,7 +182,6 @@ it('mounted paged viewport adopts worker plans after the first font lease', asyn
     await waitFor(() => expect(ui.getByRole('gridcell', { name: /target1000/ })).toBeTruthy())
     await waitFor(() => expect(f.last()?.pendingTiles).toBe(0))
   } finally {
-    console.log('FONTGEN_FIRST_LEASE', JSON.stringify({ requests: audit.requests.map(r => ({ requested: r.owner.fontGen, remote: r.remote.fontGen, worker: r.session.fontGen, kind: typeof r.out === 'object' && r.out !== null && 'kind' in r.out ? r.out.kind : 'unsettled' })), tiles: audit.tiles.filter(t => t.kind === 'detail'), mainFallbackCalls: planner.mock.calls.length }))
     h.release(); ui.unmount()
   }
 }, 12000)
@@ -171,7 +201,7 @@ it('a real font lease change rejects held old-font plans before adopting new-fon
     await waitFor(() => expect(h.held.some(x => x.command.kind === 'viewport' && x.out.kind === 'complete')).toBe(true))
     const oldRequests = new Set(h.held.filter(x => x.command.kind === 'viewport').map(x => x.command.requestId))
     const remote = audit.remote(), store = remote.store(f.last().activeSheetId)
-    const adopt = vi.spyOn(store, 'adoptViewport')
+    const adopt = vi.spyOn(store, 'stageViewport')
     const original = { ...f.last().identity }, zoom = f.last().zoom
     ui.rerender(<OfficeFile data={data} interactiveSheets viewerWorker={factory} fallbackFonts={{ fallbackChain: ['Arial'] }} {...seams} />)
     await waitFor(() => expect(assetLoader).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ fallbackFonts: { fallbackChain: ['Arial'] } })))

@@ -1,3 +1,5 @@
+import { ValueIndexError } from './valueRuns'
+import { adoptAllocation, type AllocationContext, type AllocationReservation } from './allocationAccount'
 import type {
   SortSpec, SourceStore, RowOrder, RowVisibility, SourceStamp, SourceFailure, OperationRefusal, FilterRange, ColumnLanes,
 } from './contracts'
@@ -25,6 +27,8 @@ export function hiddenSourceRowsFromDisplay(currentOrder: RowOrder, displayVisib
 
 export type SortPhase = 'read' | 'dictionary' | 'candidates' | 'merge' | 'output' | 'inverse' | 'publish'
 export interface SortOptions {
+  /** Internal main-owned local stage account; worker defaults are unchanged. */
+  allocation?: AllocationContext
   signal?: AbortSignal
   stamp?: SourceStamp
   locale?: string
@@ -127,12 +131,13 @@ function rejectLegacyVisibility(options: SortOptions): void {
     throw sourceError('unsupported', 'Sort options.visibility was replaced by hidden: translate the current view with hiddenSourceRowsFromDisplay')
   }
 }
-function snapshotSpec(spec: SortSpec): SortSpec {
+function snapshotSpec(spec: SortSpec, allocation?: AllocationReservation): SortSpec {
   validateSourceRect(spec.range)
   if (![0, 1].includes(spec.range.headerRows) || ![0, 1].includes(spec.range.totalsRows)
     || typeof spec.caseSensitive !== 'boolean' || spec.keys.length < 1 || spec.keys.length > 8) {
     throw sourceError('invalid-source-rect', 'Invalid sort specification')
   }
+  allocation?.charge(spec.keys.length * 128)
   const cols = allocate(() => new Set<number>())
   const keys = allocate(() => new Array<SortSpec['keys'][number]>())
   for (const key of spec.keys) {
@@ -164,8 +169,13 @@ function emptyLedger(options: SortOptions): SortLedger {
 class Budget {
   readonly ledger: SortLedger
   private live = 0
+  private ownedLive = 0
+  readonly account: AllocationReservation | undefined
+  private readonly context: AllocationContext | undefined
   readonly limit: number
   constructor(options: SortOptions) {
+    this.context = options.allocation
+    this.account = options.allocation?.reserve()
     this.ledger = emptyLedger(options)
     this.limit = options.maxWorkerBytes ?? 512 * MiB
     if (!Number.isFinite(this.limit) || this.limit < 0
@@ -175,15 +185,18 @@ class Budget {
     this.ledger.fixedOverheadBytes = 1024
     this.charge(1024)
   }
-  charge(bytes: number): void {
+  charge(bytes: number, own = true): void {
+    if (this.context?.closed) throw new Halt({ kind: 'cancelled' })
     const aggregate = this.ledger.residentWorkerBytes + this.live + bytes
     if (aggregate > this.limit) throw new Halt({ kind: 'resource-limit', requiredBytes: aggregate, limitBytes: this.limit })
+    if (own && this.account && !this.account.trySet(this.ownedLive + bytes)) throw new Halt({ kind: 'resource-limit', requiredBytes: (this.context?.usedBytes ?? this.live) + bytes, limitBytes: this.limit })
     this.live += bytes
+    if (own) this.ownedLive += bytes
     this.ledger.peakBytes = Math.max(this.ledger.peakBytes, this.live)
     this.ledger.aggregatePeakBytes = this.ledger.residentWorkerBytes + this.ledger.peakBytes
   }
-  canCharge(bytes: number): boolean { return this.ledger.residentWorkerBytes + this.live + bytes <= this.limit }
-  release(bytes: number): void { this.live -= bytes }
+  canCharge(bytes: number): boolean { return this.ledger.residentWorkerBytes + this.live + bytes <= this.limit && (!this.account || this.account.bytes >= this.live + bytes || this.context!.canReserve(bytes)) }
+  release(bytes: number, own = true): void { this.live -= bytes; if (own) this.ownedLive -= bytes; this.account?.trySet(this.ownedLive) }
   finish(): SortLedger { this.ledger.retainedBytes = this.live; return Object.freeze({ ...this.ledger }) }
 }
 /** Shared S4.2 budget (scheduler.ts): yield after 4,096 work units or 10 ms,
@@ -207,6 +220,8 @@ function failure(error: unknown, options: SortOptions): SortFailure {
   try {
     if (options.signal?.aborted) return { kind: 'cancelled' }
     if (error instanceof Halt) return error.outcome
+    if (options.allocation && error instanceof ValueIndexError && error.code === 'cancelled') return { kind: 'cancelled' }
+    if (options.allocation && error instanceof ValueIndexError && error.code === 'quota') return { kind: 'resource-limit', requiredBytes: error.detail.requiredBytes ?? options.allocation.limitBytes + 1, limitBytes: options.allocation.limitBytes }
     if (error instanceof CoordinateError) return {
       kind: 'error', error: {
         code: error.code === 'invalid-source-rect' ? 'invalid-source-rect' : 'invalid-coordinate',
@@ -356,6 +371,7 @@ async function prepare(
       stringRanks: allocate(() => new Uint32Array(0)), errorRanks: allocate(() => new Uint32Array(0)),
     }
     let stringIds: Map<string, number> | undefined, errorIds: Map<string, number> | undefined, mapBytes = 0
+    let decodedCredit = 0, retainedCredit = 0
     function intern(raw: string, error: boolean): number {
       if (!lane.ids) {
         budget.charge(length * 4)
@@ -370,7 +386,8 @@ async function prepare(
       // capacity/reference + 128B Map entry/capacity. Host overhead is measured separately.
       // A source that already owns and charges the string leaves only the 16B slot.
       const retained = !error && cooperative.options.sourceRetainsStrings === true ? 16 : raw.length * 2 + 40
-      budget.charge(retained + 128)
+      retainedCredit = Math.min(decodedCredit, retained)
+      budget.charge(retained + 128 - retainedCredit)
       budget.ledger.dictionaryBytes += retained
       mapBytes += 128
       budget.ledger.dictionaryMapPeakBytes = Math.max(budget.ledger.dictionaryMapPeakBytes, mapBytes)
@@ -423,9 +440,9 @@ async function prepare(
         // Reserve the bounded producer's JS staging, native output and text
         // before it allocates. A tight budget keeps the original cell path.
         const producerBytes = (end - start + 1) * 384 + 65536
-        const producedTyped = typed && budget.canCharge(producerBytes)
+        const producedTyped = typed && (cooperative.options.allocation || budget.canCharge(producerBytes))
         if (producedTyped) {
-          budget.charge(producerBytes)
+          budget.charge(producerBytes, !cooperative.options.allocation)
           budget.ledger.pagePeakBytes = Math.max(budget.ledger.pagePeakBytes, producerBytes)
         }
         let page: Awaited<ReturnType<SourceStore['queryColumn']>>
@@ -433,7 +450,7 @@ async function prepare(
           page = await store.queryColumn({
             col: key.col, rows: { kind: 'intervals', intervals: [{ r0: start, r1: end }] }, limit: CHUNK, cursor, ...(producedTyped ? { encoding: 'lanes' as const } : {}),
           }, { stamp: cooperative.stamp, signal: cooperative.options.signal ?? allocate(() => new AbortController()).signal })
-        } finally { if (producedTyped) budget.release(producerBytes) }
+        } finally { if (producedTyped) budget.release(producerBytes, !cooperative.options.allocation) }
         cooperative.check()
         if (!sameStamp(page.stamp, cooperative.stamp)) throw sourceError('stale-source', 'Column page owner changed')
         if (page.error) throw new Halt({ kind: 'error', error: { ...page.error } })
@@ -441,20 +458,20 @@ async function prepare(
         // A bounded source page can retain transient cell objects/raw strings even
         // when a repeated key does not enter the dictionary.
         let pageBytes = 256 * page.items.length
-        budget.charge(pageBytes)
+        budget.charge(pageBytes, !cooperative.options.allocation)
         for (const item of page.items) {
           if (item.kind === 'lanes') {
             if (!producedTyped) throw sourceError('page-error', 'Unrequested column lanes')
             const bytes = sortLaneBytes(item)
             pageBytes += bytes
-            budget.charge(bytes)
+            budget.charge(bytes, !cooperative.options.allocation)
           } else if (item.kind === 'cell' || item.kind === 'unavailable') {
             const cell = item.cell
             const bytes = rawStringBytes(cell.value) + rawStringBytes(cell.formula)
               + rawStringBytes(cell.arrayRef) + rawStringBytes(cell.formulaType)
               + rawStringBytes(cell.sharedFormula?.ref)
             pageBytes += bytes
-            budget.charge(bytes)
+            budget.charge(bytes, !cooperative.options.allocation)
           }
           if (cooperative.due()) await cooperative.pause('read')
         }
@@ -488,7 +505,8 @@ async function prepare(
                 unavailableCount++
                 if (!firstAddress || row < firstAddress.row || row === firstAddress.row && key.col < firstAddress.col) firstAddress = { row, col: key.col }
               } else if (tag === STRING || tag === ERROR) {
-                const bytes = (to - from) * 2 + 24
+                const units = to - from
+                const bytes = cooperative.options.allocation ? units * 6 + Math.min(units, 256) * 16 + 96 : units * 2 + 24
                 budget.charge(bytes)
                 let value = ''
                 for (let pos = from; pos < to; pos += 256) {
@@ -498,9 +516,12 @@ async function prepare(
                   cooperative.check()
                   if (cooperative.due()) await cooperative.pause('read')
                 }
+                decodedCredit = cooperative.options.allocation ? units * 2 + 24 : 0
+                retainedCredit = 0
                 const id = intern(value, tag === ERROR)
                 lane.ids![offset] = id
-                budget.release(bytes)
+                budget.release(bytes - retainedCredit)
+                decodedCredit = 0
               }
               if (cooperative.due()) await cooperative.pause('read')
             }
@@ -533,7 +554,7 @@ async function prepare(
             if (cooperative.due()) await cooperative.pause('read')
           }
         }
-        budget.release(pageBytes)
+        budget.release(pageBytes, !cooperative.options.allocation)
         cursor = page.nextCursor
         if (cursor !== undefined) {
           if (cursors.has(cursor) || ++pages > CHUNK) throw sourceError('invalid-cursor', 'Column cursor made no progress')
@@ -588,16 +609,23 @@ export async function prepareSortKeys(
   options: SortOptions = {},
 ): Promise<PreparedSortResult> {
   let cooperative: Cooperative | undefined
+  let ownedBudget: Budget | undefined
+  let metadataAccount: AllocationReservation | undefined
   try {
+    metadataAccount = options.allocation?.reserve()
+    metadataAccount?.charge(1024)
     options = Object.freeze({ ...options })
     rejectLegacyVisibility(options)
-    const stamp = Object.freeze({ ...(options.stamp ?? store.stamp) }), spec = snapshotSpec(input)
-    const budget = new Budget(options)
+    const stamp = Object.freeze({ ...(options.stamp ?? store.stamp) }), spec = snapshotSpec(input, metadataAccount)
+    const budget = ownedBudget = new Budget(options)
     cooperative = new Cooperative(store, stamp, options)
     cooperative.check()
-    return { kind: 'complete', prepared: await prepare(store, spec, cooperative, budget, options.locale ?? 'en') }
+    const prepared = await prepare(store, spec, cooperative, budget, options.locale ?? 'en')
+    if (budget.account) adoptAllocation(budget.account, prepared)
+    if (metadataAccount) adoptAllocation(metadataAccount, { spec, stamp })
+    return { kind: 'complete', prepared }
   } catch (error) { return failure(error, options) }
-  finally { cooperative?.dispose() }
+  finally { cooperative?.dispose(); ownedBudget?.account?.release(); metadataAccount?.release() }
 }
 function compareRows(prepared: PreparedSortKeys, a: number, b: number, prefix?: SortPrefix): number {
   const first = a - prepared.r0, second = b - prepared.r0
@@ -641,12 +669,16 @@ function ownedOrder(
  * before a caller commits this object; this kernel cannot authorize those guards. */
 export async function sortRowOrder(store: SourceStore, input: SortSpec | null, options: SortOptions = {}): Promise<SortResult> {
   let cooperative: Cooperative | undefined
+  let ownedBudget: Budget | undefined
+  let metadataAccount: AllocationReservation | undefined
   try {
+    metadataAccount = options.allocation?.reserve()
+    metadataAccount?.charge(1024)
     options = Object.freeze({ ...options })
     rejectLegacyVisibility(options)
     const stamp = Object.freeze({ ...(options.stamp ?? store.stamp) })
-    const spec = input === null ? null : snapshotSpec(input), locale = options.locale ?? 'en'
-    const budget = new Budget(options)
+    const spec = input === null ? null : snapshotSpec(input, metadataAccount), locale = options.locale ?? 'en'
+    const budget = ownedBudget = new Budget(options)
     cooperative = new Cooperative(store, stamp, options)
     cooperative.check()
     let order: RowOrder = createIdentityOrder(), emptyBody = false
@@ -728,15 +760,22 @@ export async function sortRowOrder(store: SourceStore, input: SortSpec | null, o
     if (spec === null) budget.release(budget.ledger.fixedOverheadBytes)
     // An empty protected body returns the shared identity with no retained worker
     // work. Its small metadata object is caller bookkeeping, outside this pool.
-    if (!emptyBody) budget.charge(256)
+    if (!emptyBody) budget.charge(options.allocation ? 1024 : 256)
     await cooperative.pause('publish')
+    const metadata = Object.freeze({ sort: spec, stamp, locale, structuralAdmission: 'caller-required' as const })
+    const ledger = budget.finish()
+    if (metadataAccount) adoptAllocation(metadataAccount, { metadata, ledger })
+    if (budget.account) {
+      const targets: object[] = [order]
+      for (const band of order.bands) targets.push(band.sourceAtOffset, band.sourceAtOffset.buffer, band.displayOffsetOfSource, band.displayOffsetOfSource.buffer)
+      budget.account.adopt(targets, budget.ledger.orderBytes + budget.ledger.inverseBytes + (emptyBody ? 0 : 1024))
+    }
     return {
       kind: 'complete', order,
-      metadata: Object.freeze({ sort: spec, stamp, locale, structuralAdmission: 'caller-required' }),
-      ledger: budget.finish(),
+      metadata, ledger,
     }
   } catch (error) { return failure(error, options) }
-  finally { cooperative?.dispose() }
+  finally { cooperative?.dispose(); ownedBudget?.account?.release(); metadataAccount?.release() }
 }
 export type SortCommand =
   | { kind: 'cycle'; col: number; shift?: boolean; range: FilterRange }

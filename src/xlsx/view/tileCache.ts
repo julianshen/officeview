@@ -1,3 +1,4 @@
+import type { AllocationContext, AllocationReservation } from './allocationAccount'
 /**
  * Resident memory pools and the bitmap tile cache (spec §§10.3, 12.4; plan S4.3).
  *
@@ -41,6 +42,8 @@ export type PoolTier = 'rebuildable' | 'source' | 'view'
 export const EVICTION_ORDER: readonly PoolTier[] = Object.freeze(['rebuildable', 'source', 'view'])
 export type ReleaseReason = 'evicted' | 'closed'
 export interface PoolEntryInit {
+  /** Existing source/view aliases or an explicitly adopted local allocation. */
+  mainOwned?: boolean
   tier: PoolTier
   bytes: number
   /** Owner scope (a sheet id): protect() shields an owner's views. */
@@ -65,6 +68,9 @@ export interface PoolEntry {
 }
 /** One operation's transient share; `set` is absolute, not additive. */
 export interface PoolCharge {
+  /** Moves a closing retained owner without changing its main debit. */
+  take(entry: PoolEntry): void
+  adopt(targets: readonly object[], bytes: number): void
   readonly bytes: number
   /** Resizes the charge, evicting retained data to make room; false (and
    * unchanged) when the bytes cannot fit under the hard limit. */
@@ -86,6 +92,7 @@ export interface PoolStats {
   closed: boolean
 }
 export interface MemoryPoolOptions {
+  allocation?: AllocationContext
   limitBytes: number
   /** Fractions of limitBytes. */
   highWatermark?: number
@@ -95,6 +102,7 @@ interface Slot {
   entry: PoolEntry
   init: PoolEntryInit
   pins: number
+  account?: AllocationReservation
   live: boolean
 }
 function validBytes(bytes: number): boolean { return Number.isSafeInteger(bytes) && bytes >= 0 }
@@ -113,6 +121,7 @@ export class MemoryPool {
   private evictedBytes = 0
   private protectedOwner: string | null = null
   private isClosed = false
+  private readonly allocation: AllocationContext | undefined
 
   constructor(options: MemoryPoolOptions) {
     const high = options.highWatermark ?? DEFAULT_HIGH_WATERMARK
@@ -120,6 +129,7 @@ export class MemoryPool {
     if (!validBytes(options.limitBytes) || !(high > 0 && high <= 1) || !(low > 0 && low <= high)) {
       throw new RangeError('Invalid memory pool budget')
     }
+    this.allocation = options.allocation
     this.limitBytes = options.limitBytes
     this.high = Math.floor(options.limitBytes * high)
     this.low = Math.floor(options.limitBytes * low)
@@ -138,10 +148,12 @@ export class MemoryPool {
     const previous = this.slots.get(key)
     const reclaimable = previous ? previous.init.bytes : 0
     if (!this.fit(init.bytes - reclaimable, previous)) return null
+    const account = init.mainOwned !== false ? this.allocation?.reserve() : undefined
+    if (account && !account.trySet(init.bytes)) return null
     previous?.entry.release()
     const pool = this
     const slot: Slot = {
-      init: { ...init }, pins: 0, live: true,
+      init: { ...init }, pins: 0, live: true, ...(account ? { account } : {}),
       entry: {
         key, tier: init.tier, owner: init.owner, bytes: init.bytes,
         get live() { return slot.live },
@@ -168,20 +180,48 @@ export class MemoryPool {
   }
   get(key: string): PoolEntry | undefined { return this.slots.get(key)?.entry }
   charge(): PoolCharge {
-    let held = 0
-    const pool = this
+    let held = 0, adopted = 0
+    const pool = this, account = this.allocation?.reserve()
+    const taken: AllocationReservation[] = []
+    const debit = () => (account?.bytes ?? 0) + taken.reduce((sum, owner) => sum + owner.bytes, 0)
+    const resize = (bytes: number): boolean => {
+      const wanted = Math.max(0, bytes - adopted), delta = wanted - debit()
+      if (delta > 0 && account && !account.trySet(account.bytes + delta)) return false
+      if (delta < 0) {
+        let drop = -delta
+        for (const owner of [account, ...taken]) if (owner) { const n = Math.min(drop, owner.bytes); owner.release(n); drop -= n }
+      }
+      return true
+    }
     return {
       get bytes() { return held },
       set(bytes: number): boolean {
         if (pool.isClosed || !validBytes(bytes)) return false
         if (bytes > held && !pool.fit(bytes - held)) return false
+        if (!resize(bytes)) return false
         pool.transient += bytes - held
         held = bytes
         pool.notePeak()
         pool.reclaim(null)
         return true
       },
-      release() { pool.transient -= held; held = 0 },
+      take(entry) {
+        const slot = pool.slots.get(entry.key)
+        if (!slot || slot.entry !== entry || !slot.live) throw new RangeError('Cannot transfer a released pool entry')
+        const origin = slot.account
+        slot.account = undefined
+        if (origin) taken.push(origin)
+        pool.drop(slot)
+        held += entry.bytes
+        pool.transient += entry.bytes
+      },
+      adopt(targets, bytes) {
+        if (bytes > debit()) { if (!account) return; throw new RangeError('Invalid pool adoption') }
+        let transfer = bytes
+        for (const owner of [account, ...taken]) if (owner && transfer) { const n = Math.min(transfer, owner.bytes); if (n) owner.adopt(targets, n); transfer -= n }
+        adopted += bytes
+      },
+      release() { pool.transient -= held; held = 0; account?.release(); for (const owner of taken) owner.release() },
     }
   }
   /** Evicts until `bytes` more fit under the hard limit; false when they cannot. */
@@ -219,6 +259,7 @@ export class MemoryPool {
 
   private drop(slot: Slot): void {
     if (!slot.live) return
+    slot.account?.release()
     slot.live = false
     if (this.slots.get(slot.entry.key) === slot) this.slots.delete(slot.entry.key)
     this.tierBytes[slot.init.tier] -= slot.init.bytes

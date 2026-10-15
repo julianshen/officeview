@@ -89,4 +89,40 @@ describe('round 6: overflow resource rendering keeps exact and unknown coverage'
       expect(renderer.stats.frameRecords).toBeGreaterThan(0)
     } finally { renderer.dispose(); f.cache.close() }
   })
+
+  it('a detail result carrying an overflow-memory diagnostic gives retained:false and no cached tile', () => {
+    const f = refused()
+    f.ledger.release('copy', 'in-flight')
+    const basePlan = planViewport(f.geometry, { box: { x: 0, y: 0, width: 200, height: 80 }, zoom: 1, deviceScale: 1 }, 'D')
+    expect(basePlan.kind).toBe('detail')
+    const renderer = new SheetTileRenderer('D', 0, () => {
+      const canvas = document.createElement('canvas')
+      canvas.width = 512; canvas.height = 512
+      return { canvas, width: 512, height: 512, close() { canvas.width = 0; canvas.height = 0 } }
+    })
+    const pane = document.createElement('canvas')
+    pane.width = 200; pane.height = 80
+    const ctx = pane.getContext('2d')!
+    const frame = {
+      sheet: f.sheet,
+      geometry: f.geometry,
+      identity: { docId: 'd', sheetId: 's', valueGen: 0, fontGen: 0, viewGen: 0 },
+      origin: { x: 0, y: 0 },
+      viewport: { width: 200, height: 80 },
+      zoom: 1,
+      dpr: 1,
+      extent: { width: f.geometry.metrics.cols.totalCss(), height: f.geometry.metrics.rows.totalCss() },
+      layoutCache: new LayoutCache(),
+      merges: new MergeQueryCache(),
+      plan: () => ({
+        ...basePlan,
+        diagnostics: [{ code: 'overflow-memory', message: 'Tile memory limit exceeded' }],
+      }),
+    }
+    try {
+      const outcome = renderer.present(ctx, frame)
+      expect(outcome.resourceNotice).toBe('Tile memory limit exceeded')
+      expect(renderer.cache.stats().tiles).toBe(0)
+    } finally { renderer.dispose(); f.cache.close() }
+  })
 })

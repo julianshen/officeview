@@ -1,3 +1,4 @@
+import { adoptAllocation, type AllocationContext } from '../../xlsx/view/allocationAccount'
 import type { CacheIdentity, ColumnRule, FilterRange, FilterSpec, OperationRefusal, SortSpec, ValuesFilter } from '../../xlsx/view/contracts'
 import { reduceSortCommand } from '../../xlsx/view/sort'
 import { canonicalSearchKey, type ColumnClassification, type FilterContext } from '../../xlsx/view/filter'
@@ -49,6 +50,7 @@ export interface ControlsClient {
  * superseded by design; publication only reports it. */
 export type StagedControl = ControlFailure | { kind: 'ready'; publish: () => ControlSnapshot | null; committed?: true }
 export interface ControlsClientOptions {
+  allocation?: AllocationContext
   snapshot(): ControlSnapshot
   context(): FilterContext
   rangeRequest(col?: number): Omit<RangeDetectionRequest, 'options' | 'override'>
@@ -143,10 +145,16 @@ export function createControlsClient(options: ControlsClientOptions): ControlsCl
       const owned = new Map<string, NonNullable<ReturnType<typeof ruleRef>>>()
       const check = (input: AbortSignal) => { assert(owner, input); if (closed) throw new ValueIndexError('closed', 'Draft closed') }
       const page = (): DraftPage => {
-        const result = index.page({ offset: currentQuery.offset, limit: 200, search, label: domain.label })
+        const result = index.page({ offset: currentQuery.offset, limit: 200, search, label: domain.label, ...(options.allocation ? { allocation: options.allocation } : {}) })
+        const account = options.allocation?.reserve()
+        account?.charge(160 + result.entries.length * 160)
+        try {
         const count = draft.selectedCount()
-        return { ...result, entries: result.entries.map(entry => ({ ...entry, selected: draft.isSelected(entry.ordinal) })), count, blanks: draft.blanks,
+        const output = { ...result, entries: result.entries.map(entry => ({ ...entry, selected: draft.isSelected(entry.ordinal) })), count, blanks: draft.blanks,
           complete: count.complete && (!search || search.complete) && index.completeness === 'complete' }
+        if (account) adoptAllocation(account, output)
+        return output
+        } finally { account?.release() }
       }
       let currentQuery: DraftQuery = { text: '', offset: 0 }
       const read = async (query: DraftQuery, input: AbortSignal, progress?: (value: ControlProgress) => void): Promise<DraftPage> => {
@@ -157,7 +165,7 @@ export function createControlsClient(options: ControlsClientOptions): ControlsCl
         check(input)
         const key = JSON.stringify([query.text, query.wildcards])
         if (index.completeness !== 'loading' && (key !== queryKey || search?.searchedEntries !== index.size)) {
-          search = await draft.search({ text: query.text, wildcards: query.wildcards, locale: options.context().locale }, { signal: input, label: domain.label, onProgress: p => progress?.({ completed: p.searched, total: p.total, message: 'Searching all values' }) })
+          search = await draft.search({ text: query.text, wildcards: query.wildcards, locale: options.context().locale }, { signal: input, label: domain.label, ...(options.allocation ? { allocation: options.allocation } : {}), onProgress: p => progress?.({ completed: p.searched, total: p.total, message: 'Searching all values' }) })
           queryKey = key
         }
         check(input)

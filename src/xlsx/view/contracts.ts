@@ -407,6 +407,8 @@ export type ViewportResult = (
   | { kind: 'viewport'; completeness: 'complete'; content: CompleteViewportContent; error?: never }
   | { kind: 'viewport'; completeness: 'loading' | 'incomplete'; content: ViewportContent; error?: SourceFailure }
 ) & {
+  /** Request-local overflow evidence; never a row-cache completeness proof. */
+  overflowProof?: import('./overflowProof').OverflowProof
   /** Mixed detail/coarse panes and exact active inspection share the same owner. */
   groups?: readonly ViewportOverviewGroup[]
   active?: ViewportCell

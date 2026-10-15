@@ -37,6 +37,10 @@ export interface CellBodyLayout {
 /** The host owns measurement and formatting (spec §11.2: no second text model). */
 export interface CellLayoutHost {
   layoutBody(cell: XlsxCell, width: number, height: number, overflow?: { left: number; right: number }): CellBodyLayout
+  /** Opt-in proof that this exact body remains valid under the given allowance.
+   * Only certified bodies share a key across allowances; other hosts retain
+   * their complete allowance-dependent formatting/layout identity. */
+  canReuseOverflow?(body: CellBodyLayout, overflow: PlacedCell['overflow']): boolean
 }
 
 export interface FillRecord { color: string | null }
@@ -70,7 +74,8 @@ export interface CellLayout {
 
 /** A cell the planner admitted, in logical CSS geometry. */
 export interface PlacedCell { cell: XlsxCell; source: SourceCell; x: number; y: number; width: number; height: number; merge?: XlsxMergeRange
-  /** Room the text may use past the box into empty neighbours (S13); a layout key. */
+  /** Room the text may use past the box into empty neighbours (S13); a layout
+   * key unless the host certifies an identical body under another allowance. */
   overflow?: { left: number; right: number } }
 
 export function cellIdOf(source: SourceCell): CellId {
@@ -103,7 +108,16 @@ export class LayoutCache {
       this.stats.bytes = 0
       this.scope = scope
     }
-    const key = layoutKey(placed)
+    const commonKey = layoutKey(placed)
+    // Keep one budgeted entry, not aliases for every tile's capped allowance.
+    const sharedKey = host.canReuseOverflow ? `shared|${commonKey}` : undefined
+    const shared = sharedKey === undefined ? undefined : this.entries.get(sharedKey)
+    let key: string
+    if (shared && host.canReuseOverflow!(shared, placed.overflow)) key = sharedKey!
+    else {
+      const overflow = placed.overflow
+      key = `${overflow ? `${overflow.left}:${overflow.right}` : ''}|${commonKey}`
+    }
     const hit = this.entries.get(key)
     if (hit) {
       this.entries.delete(key)
@@ -113,10 +127,14 @@ export class LayoutCache {
     }
     const built = host.layoutBody(placed.cell, placed.width, placed.height, placed.overflow)
     this.stats.built++
+    if (sharedKey !== undefined && host.canReuseOverflow!(built, placed.overflow)) key = sharedKey
     const bytes = estimateLayoutBytes(key, built)
+    // Replacing a certified body is a fresh use, just like a cache hit: move
+    // its key to MRU before byte-pressure eviction chooses the oldest entry.
+    this.entries.delete(key)
     this.entries.set(key, built)
+    this.stats.bytes += bytes - (this.sizes.get(key) ?? 0)
     this.sizes.set(key, bytes)
-    this.stats.bytes += bytes
     // Evict least recently used entries; the newest entry always stays (it is
     // being painted) even when it alone exceeds the budget.
     while (this.entries.size > 1 && (this.entries.size > this.maxEntries || this.stats.bytes > this.maxBytes)) {
@@ -161,9 +179,9 @@ function styleKey(style: XlsxCellStyle | undefined): string {
   if (key === undefined) styleKeys.set(style, key = JSON.stringify(style))
   return key
 }
-function layoutKey({ cell, source, width, height, overflow }: PlacedCell): string {
+function layoutKey({ cell, source, width, height }: PlacedCell): string {
   const value = cell.value === null ? 'n' : `${typeof cell.value}:${String(cell.value)}`
-  return `${source.row},${source.col}|${width}|${height}|${overflow ? `${overflow.left}:${overflow.right}` : ''}|${cell.valueIsError === undefined ? '' : cell.valueIsError ? 1 : 0}${cell.formula === undefined ? '' : 'f'}|${styleKey(cell.style)}|${value}`
+  return `${source.row},${source.col}|${width}|${height}|${cell.valueIsError === undefined ? '' : cell.valueIsError ? 1 : 0}${cell.formula === undefined ? '' : 'f'}|${styleKey(cell.style)}|${value}`
 }
 
 /** Raw logical text of a value: what search/copy see before display formatting. */

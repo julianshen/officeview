@@ -1,3 +1,6 @@
+import { ViewportOverflowCollector } from '../xlsx/view/viewportOverflow'
+import { controlStructure, controlSourceStore, controlView } from '../xlsx/view/mainControlMemory'
+import type { AllocationContext } from '../xlsx/view/allocationAccount'
 /**
  * Resident document session (spec §§4.1, 6.3, 10.1–10.2; plan S4.1).
  *
@@ -51,7 +54,8 @@ import { CooperativeSlice, type CooperativeOptions, type YieldFunction } from '.
 import { StructuralIndex, type PopulatedCellSource } from '../xlsx/view/structure'
 import { admitSortRange, detectOperationRange, type RangeDetection } from '../xlsx/view/rangeDetection'
 import { guardFilter, guardSort, type GuardOutcome } from '../xlsx/view/operationGuard'
-import { MemoryPool, WORKER_BUDGETS, type PoolEntry } from '../xlsx/view/tileCache'
+import { MemoryPool, WORKER_BUDGETS, type PoolCharge, type PoolEntry } from '../xlsx/view/tileCache'
+import { ValueIndexError } from '../xlsx/view/valueRuns'
 import { INITIAL_GENERATION as INITIAL_VALUE_GEN, isUint32Array, validateBitset } from './viewerProtocol'
 import { LaneBuilder } from '../xlsx/view/source'
 import { unavailableDrawings } from '../xlsx/view/drawingPayload'
@@ -217,8 +221,32 @@ export type FilterEvaluator = (input: {
   signal: AbortSignal
   /** The operation's shared yield budget (S4.2); S8 scans step it per row. */
   cooperate?: CooperativeSlice<string>
+  /** S13.5 admission of an on-demand display-text lane: its bytes join the
+   * prepared-column working set (one budget and counter with sort/filter
+   * columns, evicted by shared recency), and a completed lane is retained in
+   * the worker pool and dropped on session eviction or close. */
+  displayLanes?: DisplayLaneAdmissionPort
 }) => Promise<FilterEvaluation>
 export interface PreparedBudget { maxColumns: number; maxBytes: number }
+export interface DisplayLaneAdmissionPort {
+  /** Throws ValueIndexError('quota') and changes nothing when the bytes (or a
+   * dense-lane slot under maxColumns) cannot fit. */
+  budget: { reserve(bytes: number): void; release(bytes: number): void; acquireSlot(): void; releaseSlot(): void }
+  /** Moves a completed lane's reserved bytes and slot onto a pool entry (its uncharge point). */
+  retain(key: string, bytes: number, onRelease: () => void): { release(): void; pin(): () => void } | null
+}
+/** A retained display-text lane in the prepared working set (S13.5). */
+interface DisplayLaneRecord {
+  bytes: number
+  pins: number
+  used: number
+  evict: () => void
+  /** Session close while leased: moves the bytes from the closing pool entry to
+   * a transient charge, held (with the prepared counter) until the last lease
+   * ends; then `retire` drops the lane from its cache's lookup. */
+  hold: () => void
+  retire: () => void
+}
 /** Prepared-column working set per admission profile (§12.4 worker pool). Mobile
  * keeps fewer resident key columns; unprepared keys still stream from the store,
  * so up-to-eight-key semantics are identical. */
@@ -437,6 +465,8 @@ export type SessionPhase = 'prepare' | 'guard' | 'project'
 export interface SessionOptions {
   /** Pause background kernels at bounded yields while foreground reads run. */
   waitForForeground?: (signal: AbortSignal) => Promise<void>
+  /** Optional account for local main-owned sessions only. */
+  allocation?: AllocationContext
   /** Injected host yield shared by every long kernel (S4.2 scheduler). */
   yield?: YieldFunction<string>
   /** Injected clock for the 10 ms yield budget (deterministic tests). */
@@ -628,7 +658,7 @@ class GuardHalt extends Error {
 }
 /** One operation's share of the document pool's transient ledger; `set` is
  * absolute and false when the bytes cannot be admitted. */
-interface Charge { set(bytes: number): boolean; release(): void }
+interface Charge { set(bytes: number): boolean; release(): void; adopt?(targets: readonly object[], bytes: number): void }
 /** Abandons a guard whose scratch buffer could not be admitted. */
 class QuotaHalt extends Error {
   constructor(readonly requiredBytes: number) { super('quota') }
@@ -687,8 +717,33 @@ export class DocumentSession {
   /** Completed filter value-domain scans by (stamp, domain); see filter(). */
   private readonly domainScans = new Map<string, Extract<ValueDomainScan, { kind: 'clear' | 'refused' }>>()
   private readonly preparedPins = new Map<string, number>()
+  /** Columns a sort reader still leased at session close: their bytes moved from
+   * the closing pool entry to a transient charge (and stay in preparedBytes)
+   * until the last lease ends. */
+  private readonly closingPins = new Map<string, { bytes: number; held: PoolCharge }>()
   private readonly preparedEntries = new Map<string, PoolEntry>()
+  /** Prepared working set (§12.4): prepared columns plus S13.5 display-text
+   * lanes, retained and under construction. One counter, one budget. */
   private preparedBytes = 0
+  /** Display-text lanes' share of preparedBytes (retained and building). */
+  private displayLaneBytes = 0
+  /** Lane bytes under construction, also held in each filter's transient lane share. */
+  private displayLaneBuilding = 0
+  /** Lane builds in progress; each holds one maxColumns slot (retained lanes hold theirs in displayLanes). */
+  private displayLaneBuildSlots = 0
+  private readonly displayLanes = new Map<string, DisplayLaneRecord>()
+  /** Raw columns of the running prepare batch under construction (bytes held
+   * in its transient charge, and dense lanes counted against maxColumns). Not in
+   * preparedBytes until commit, but every prepared admission counts them, so a
+   * lane build and raw staging never overlap past the budget (§12.4 peaks).
+   * Prepare batches are serialized, so one batch owns these at a time. */
+  private preparedStaging = 0
+  private preparedStagingColumns = 0
+  /** Resident columns of the running batch: never evicted for a lane. */
+  private stagingKeep: ReadonlySet<string> = new Set()
+  /** Shared recency of prepared columns and lanes (eviction order). */
+  private useClock = 0
+  private readonly preparedUse = new Map<string, number>()
   private structureBytes = 0
   private readonly structureEntries = new Map<string, PoolEntry>()
   /** The single document-wide worker budget (§12.4): every sheet, operation and
@@ -710,12 +765,13 @@ export class DocumentSession {
   constructor(readonly docId: string, readonly source: WorkbookSource, private readonly options: SessionOptions = {}) {
     if (!source.sheets.length) throw new RangeError('Workbook has no sheets')
     this.activeSheetId = source.sheets[0].sheetId
-    const limitBytes = options.workerBudgetBytes ?? WORKER_BUDGETS[options.profile ?? 'D']
+    if (options.allocation) this.source = { ...source, store: id => controlSourceStore(source.store(id), options.allocation!), bindMemory: undefined, release: async () => {} }
+    const limitBytes = options.allocation?.limitBytes ?? options.workerBudgetBytes ?? WORKER_BUDGETS[options.profile ?? 'D']
     // Below one full-axis mask no sheet could ever be viewed: refuse up front.
     if (!(limitBytes >= MIN_WORKER_BUDGET_BYTES)) throw new WorkerBudgetError(limitBytes)
-    this.memory = new MemoryPool({ limitBytes })
+    this.memory = new MemoryPool({ limitBytes, ...(options.allocation ? { allocation: options.allocation } : {}) })
     this.memory.protect(this.activeSheetId)
-    source.bindMemory?.(this.memory)
+    this.source.bindMemory?.(this.memory)
   }
   get globalViewGen(): number { return this.globalGen }
   /** Document epoch assigned by the kernel at open (1 when standalone). */
@@ -752,9 +808,10 @@ export class DocumentSession {
    * Operation commits uncharge their transient draft first, so the same bytes
    * are re-admitted, never counted twice and never forced. */
   private retainView(state: ResidentState): void {
+    if (this.options.allocation) controlView(this.options.allocation, state.order, state.visibility)
     const bytes = orderBytes(state.order) + maskBytes(state.visibility)
     const entry = this.memory.retain(viewKey(state.sheetId), {
-      tier: 'view', bytes, owner: state.sheetId, evictable: state.recipe !== null,
+      mainOwned: false, tier: 'view', bytes, owner: state.sheetId, evictable: state.recipe !== null,
       onRelease: reason => { if (reason === 'evicted') this.evictView(state.sheetId) },
     })
     if (!entry) throw new ViewQuotaError(bytes, this.memory.limitBytes)
@@ -780,13 +837,27 @@ export class DocumentSession {
     const state = this.states.get(sheetId)
     return state !== undefined && isResidentState(state)
   }
+  /** Local masks own both the construction words and the constructor's copy.
+   * Keep the output reservation through adoption; retainView then sees the same owner. */
+  private localVisibility(build: () => CompactRowVisibility): CompactRowVisibility {
+    const memory = this.options.allocation
+    if (!memory) return build()
+    const account = memory.reserve()
+    const words = Math.ceil(MAX_ROWS / 32) * 4
+    try {
+      account.charge(words * 2 + 4 * (Math.ceil(MAX_ROWS / 1024) + 1) + 1024)
+      const visibility = build()
+      account.adopt([visibility, visibility.words, visibility.words.buffer, visibility.summaries, visibility.summaries.buffer], maskBytes(visibility) + 1024)
+      return visibility
+    } finally { account.release() }
+  }
   /** Synchronous materialization: a mask-only eviction is rebuilt in place; an
    * evicted order needs the async ensureView. */
   private residentSync(sheetId: string): ResidentState {
     const state = this.state(sheetId)
     if (isResidentState(state)) return state
     if (state.order === null) throw new ViewNotResidentError(sheetId)
-    const visibility = projectVisibility(this.source.geometry(sheetId).baseHidden, state.filter, state.order, state.matches ?? matchAll).visibility
+    const visibility = this.localVisibility(() => projectVisibility(this.source.geometry(sheetId).baseHidden, state.filter, state.order!, state.matches ?? matchAll).visibility)
     if (visibility.rank(visibility.logicalCount) !== state.counts.visible) {
       throw new RangeError(`Sheet view ${sheetId} could not be rebuilt identically`)
     }
@@ -865,6 +936,7 @@ export class DocumentSession {
     if (state.order !== null) {
       try { return { state: this.residentSync(sheetId) } } catch (cause) {
         if (cause instanceof ViewQuotaError) return this.refusal(cause.requiredBytes)
+        if (cause instanceof ValueIndexError && cause.code === 'quota') return this.refusal(cause.detail?.requiredBytes ?? MIN_WORKER_BUDGET_BYTES)
         return { kind: 'error', error: failure('page-error', (cause as Error).message) }
       }
     }
@@ -874,10 +946,10 @@ export class DocumentSession {
     try {
       const identityOrder = createIdentityOrder()
       // The rows the sort pinned: hidden under the filter active when it ran.
-      const sortMask = recipe.sortFilter
+      const sortMask = this.localVisibility(() => recipe.sortFilter
         ? projectVisibility(geometry.baseHidden, recipe.sortFilter, identityOrder, recipe.sortMatches ?? matchAll).visibility
-        : visibilityFromHidden(geometry.baseHidden)
-      if (!charge.set(maskBytes(sortMask))) return this.refusal(maskBytes(sortMask))
+        : visibilityFromHidden(geometry.baseHidden))
+      if (!charge.set(this.options.allocation ? 0 : maskBytes(sortMask))) return this.refusal(maskBytes(sortMask))
       this.memory.trim(Math.max(0, this.memory.limitBytes - this.sortEstimate(state.sort)))
       const store = this.preparedStore(sheetId)
       const result = await sortRowOrder(store, state.sort, {
@@ -885,6 +957,7 @@ export class DocumentSession {
         awaitYield: work => this.afterYield(work, signal),
         hidden: hiddenSourceRowsFromDisplay(identityOrder, sortMask),
         residentWorkerBytes: this.memory.totalBytes, maxWorkerBytes: this.memory.limitBytes,
+        ...(this.options.allocation ? { allocation: this.options.allocation } : {}),
         ...(this.source.retainsKeyStrings?.(sheetId) === true ? { sourceRetainsStrings: true } : {}),
         ...(this.options.yield ? { yield: phase => awaitQueryDeadline(this.options.yield!(phase), signal) } : {}),
         ...(this.options.now ? { now: this.options.now } : {}),
@@ -905,10 +978,10 @@ export class DocumentSession {
       if (sameValues && state.digest !== undefined && orderDigest(result.order) !== state.digest) {
         return { kind: 'error', error: failure('page-error', `Sheet view ${sheetId} rebuilt a different order`) }
       }
-      if (!charge.set(maskBytes(sortMask) + result.ledger.orderBytes + result.ledger.inverseBytes)) {
+      if (!charge.set(this.options.allocation ? 0 : maskBytes(sortMask) + result.ledger.orderBytes + result.ledger.inverseBytes)) {
         return this.refusal(result.ledger.orderBytes + result.ledger.inverseBytes)
       }
-      const visibility = projectVisibility(geometry.baseHidden, state.filter, result.order, state.matches ?? matchAll).visibility
+      const visibility = this.localVisibility(() => projectVisibility(geometry.baseHidden, state.filter, result.order, state.matches ?? matchAll).visibility)
       if (visibility.rank(visibility.logicalCount) !== state.counts.visible) {
         return { kind: 'error', error: failure('page-error', `Sheet view ${sheetId} rebuilt different visible rows`) }
       }
@@ -928,6 +1001,9 @@ export class DocumentSession {
         state: next,
         diagnostics: [{ code: 'view-reapplied', message: 'The sort was re-applied to newer values after its evicted order could not be reproduced' }],
       }
+    } catch (cause) {
+      if (cause instanceof ValueIndexError && cause.code === 'quota') return this.refusal(cause.detail?.requiredBytes ?? MIN_WORKER_BUDGET_BYTES)
+      throw cause
     } finally {
       charge.release()
     }
@@ -1050,6 +1126,7 @@ export class DocumentSession {
         this.peakTransient = Math.max(this.peakTransient, this.memory.transientBytes)
         return true
       },
+      adopt: (targets, bytes) => share.adopt(targets, bytes),
       release: () => { released = true; share.release() },
     }
   }
@@ -1083,7 +1160,7 @@ export class DocumentSession {
     const baseHidden = this.source.geometry(owner.sheetId).baseHidden
     // The draft mask words (one bit per display slot) live while projecting.
     const maskWords = Math.ceil(MAX_ROWS / 32) * 4
-    if (!charge.set(heldBytes + maskWords)) return this.refusal(heldBytes + maskWords)
+    if (!charge.set(heldBytes + maskWords + (this.options.allocation ? maskWords + 4 * (Math.ceil(MAX_ROWS / 1024) + 1) + 1024 : 0))) return this.refusal(heldBytes + maskWords)
     const steps = projectVisibilitySteps(baseHidden, filter, order, matches, MAX_ROWS)
     let next = steps.next()
     for (; !next.done; next = steps.next()) {
@@ -1094,7 +1171,7 @@ export class DocumentSession {
       }
     }
     const visibility = next.value.visibility
-    if (!charge.set(heldBytes + maskBytes(visibility))) return this.refusal(heldBytes + maskBytes(visibility))
+    if (!charge.set(heldBytes + maskBytes(visibility) + (this.options.allocation ? 1024 : 0))) return this.refusal(heldBytes + maskBytes(visibility))
     return { kind: 'projected', visibility }
   }
   /** Captures the aggregate owner an async whole-workbook index is built under. */
@@ -1139,7 +1216,8 @@ export class DocumentSession {
    * is atomic: staged lanes are charged against the profile budget BEFORE they
    * are retained (including spare capacity and the per-column overhead), and
    * nothing is kept when admission fails. Room is made by dropping least-recently
-   * used prepared columns outside the batch; admitted columns are `rebuildable`
+   * used prepared columns outside the batch, and unleased S13.5 display-text
+   * lanes, which share this budget and counter; admitted columns are `rebuildable`
    * entries of the document pool, which may evict them under aggregate pressure
    * (S4.3) and charges their staging to the same budget. */
   prepareColumns(owner: CacheIdentity, cols: readonly number[], signal: AbortSignal, hooks: OperationHooks = {}): Promise<PrepareOutcome> {
@@ -1176,6 +1254,10 @@ export class DocumentSession {
     try {
       return await this.stageColumns(owner, batch, signal, hooks, slice, charge, budget)
     } finally {
+      // Every outcome (commit, quota, cancel, stale, error) ends the staging.
+      this.preparedStaging = 0
+      this.preparedStagingColumns = 0
+      this.stagingKeep = new Set()
       charge.release()
       slice.dispose()
     }
@@ -1187,18 +1269,39 @@ export class DocumentSession {
     const store = this.store(owner.sheetId)
     const stamp = store.stamp
     const keys = batch.map(col => this.preparedKey(stamp, col))
-    let protectedBytes = 0
-    for (const key of keys) protectedBytes += this.prepared.get(key)?.bytes ?? 0
+    const keep = new Set(keys)
+    this.stagingKeep = keep
     const staged: { key: string; column: PreparedColumn }[] = []
     let stagedBytes = 0, covered = 0
     const total = batch.length * MAX_ROWS
     const quota = (required: number): PrepareOutcome => ({ kind: 'quota', limitBytes: budget.maxBytes, requiredBytes: required })
+    // Staging `bytes` in `columns` dense lanes must fit beside what this batch
+    // cannot evict, re-read at every step: this batch's resident columns,
+    // pinned columns, and leased, retired-but-leased or building display lanes
+    // (a lane admitted while this batch runs bounds the rest of it). Idle
+    // columns and unleased lanes are evicted (LRU) before the staging grows, so
+    // retained plus staged bytes and slots never pass the budget: a later cache
+    // hit pins an entry that already fits beside the staging.
+    const stage = (bytes: number, columns: number): PrepareOutcome | null => {
+      const floor = this.unevictablePrepared(keep)
+      if (floor.bytes + bytes > budget.maxBytes) return quota(floor.bytes + bytes)
+      if (floor.columns + columns > budget.maxColumns) {
+        return { kind: 'quota', limitBytes: budget.maxBytes, requiredBytes: floor.bytes + bytes, diagnostics: [{ code: 'prepared-column-limit', message: 'Prepared readers and display lanes pin the working set' }] }
+      }
+      this.preparedStaging = bytes
+      this.preparedStagingColumns = columns
+      // The floor fits, so evicting every idle entry would do: this cannot fail.
+      if (!this.makePreparedRoom(0, keep)) return quota(this.preparedBytes + bytes)
+      return null
+    }
     for (let i = 0; i < batch.length; i++) {
       const col = batch[i], key = keys[i]
       if (this.prepared.has(key)) { covered += MAX_ROWS; continue }
       const builder = new ColumnBuilder(col)
-      // Reserve the column overhead before reading anything.
-      if (protectedBytes + stagedBytes + builder.heldBytes > budget.maxBytes) return quota(protectedBytes + stagedBytes + builder.heldBytes)
+      // Reserve the column overhead (and its dense-lane slot) before reading anything.
+      const building = staged.length + 1
+      const reserved = stage(stagedBytes + builder.heldBytes, building)
+      if (reserved) return reserved
       if (!charge.set(stagedBytes + builder.heldBytes)) return this.prepareRefusal(stagedBytes + builder.heldBytes)
       let cursor: string | undefined
       // Next row the full-axis query must cover (§4.1 column page ordering).
@@ -1229,16 +1332,19 @@ export class DocumentSession {
               return { kind: 'error', error: failure('page-error', 'Malformed prepared cell identity/value') }
             }
             const staging = stagedBytes + builder.heldBytes + builder.costOf(item)
-            const next = protectedBytes + staging
-            if (next > budget.maxBytes) return quota(next)
+            const grown = stage(staging, building)
+            if (grown) return grown
             if (!charge.set(staging)) return this.prepareRefusal(staging)
             builder.append(item)
+            stage(stagedBytes + builder.heldBytes, building)
             if (!charge.set(stagedBytes + builder.heldBytes)) return this.prepareRefusal(stagedBytes + builder.heldBytes)
             if (builder.full) {
-              const peak = protectedBytes + stagedBytes + builder.heldBytes + builder.encodingPeakBytes
-              if (peak > budget.maxBytes) return quota(peak)
-              if (!charge.set(stagedBytes + builder.heldBytes + builder.encodingPeakBytes)) return this.prepareRefusal(peak)
+              const peak = stagedBytes + builder.heldBytes + builder.encodingPeakBytes
+              const encoding = stage(peak, building)
+              if (encoding) return encoding
+              if (!charge.set(peak)) return this.prepareRefusal(peak)
               if (!(await builder.compact(slice, () => this.halted(owner, signal) !== null))) return this.halted(owner, signal) ?? { kind: 'stale' }
+              stage(stagedBytes + builder.heldBytes, building)
               if (!charge.set(stagedBytes + builder.heldBytes)) return this.prepareRefusal(stagedBytes + builder.heldBytes)
             }
           }
@@ -1260,39 +1366,42 @@ export class DocumentSession {
       if (expected !== MAX_ROWS) return { kind: 'error', error: UNORDERED_PAGE }
       covered += MAX_ROWS
       // Final partial page is encoded under the same old-plus-new reservation.
-      const peak = protectedBytes + stagedBytes + builder.heldBytes + builder.encodingPeakBytes
-      if (peak > budget.maxBytes) return quota(peak)
-      if (!charge.set(stagedBytes + builder.heldBytes + builder.encodingPeakBytes)) return this.prepareRefusal(peak)
+      const peak = stagedBytes + builder.heldBytes + builder.encodingPeakBytes
+      const encoding = stage(peak, building)
+      if (encoding) return encoding
+      if (!charge.set(peak)) return this.prepareRefusal(peak)
       if (!(await builder.compact(slice, () => this.halted(owner, signal) !== null))) return this.halted(owner, signal) ?? { kind: 'stale' }
       const column = builder.finish(stamp)
       staged.push({ key, column })
       stagedBytes += column.bytes
+      stage(stagedBytes, staged.length)
       if (!charge.set(stagedBytes)) return this.prepareRefusal(stagedBytes)
     }
     if (signal.aborted) return { kind: 'cancelled' }
     if (!this.isCurrent(owner)) return { kind: 'stale' }
-    const keep = new Set(keys)
-    let minimumColumns = this.prepared.size + staged.length, minimumBytes = this.preparedBytes + stagedBytes
+    // Commit (no await from here): the staged columns are admitted below as
+    // `stagedBytes` and `staged.length`, not as staging as well.
+    this.preparedStaging = 0
+    this.preparedStagingColumns = 0
+    let minimumColumns = this.prepared.size + staged.length + this.laneSlots(), minimumBytes = this.preparedBytes + stagedBytes
     for (const [key, column] of this.prepared) {
       if (keep.has(key) || this.preparedPins.has(key)) continue
       minimumColumns--
       minimumBytes -= column.bytes
     }
+    for (const lane of this.displayLanes.values()) if (lane.pins === 0) { minimumColumns--; minimumBytes -= lane.bytes }
     // Refuse impossible admission before discarding useful idle columns.
     if (minimumColumns > budget.maxColumns || minimumBytes > budget.maxBytes) {
       return { kind: 'quota', limitBytes: budget.maxBytes, requiredBytes: minimumBytes, diagnostics: [{ code: 'prepared-column-limit', message: 'Prepared readers pin the working set' }] }
     }
-    // Evict least-recently-used columns outside this batch until it fits.
-    for (const [key] of [...this.prepared]) {
-      const fitsCount = this.prepared.size + staged.length <= budget.maxColumns
-      const fitsBytes = this.preparedBytes + stagedBytes <= budget.maxBytes
-      if (fitsCount && fitsBytes) break
-      if (keep.has(key) || this.preparedPins.has(key)) continue
-      this.dropPrepared(key)
+    // Evict columns outside this batch or display lanes, least recently used
+    // first across both, until the bytes and the dense-lane count fit.
+    if (!this.makePreparedRoom(stagedBytes, keep, staged.length)) {
+      return { kind: 'quota', limitBytes: budget.maxBytes, requiredBytes: this.preparedBytes + stagedBytes, diagnostics: [{ code: 'prepared-column-limit', message: 'Prepared readers pin the working set' }] }
     }
     for (const key of keys) {
       const existing = this.prepared.get(key)
-      if (existing) { this.prepared.delete(key); this.prepared.set(key, existing); this.preparedEntries.get(key)?.touch() }
+      if (existing) { this.prepared.delete(key); this.prepared.set(key, existing); this.preparedEntries.get(key)?.touch(); this.preparedUse.set(key, ++this.useClock) }
     }
     // The staged bytes move from the transient ledger to retained entries.
     charge.set(0)
@@ -1303,6 +1412,7 @@ export class DocumentSession {
       if (!entry) return this.prepareRefusal(column.bytes)
       this.prepared.set(key, column)
       this.preparedEntries.set(key, entry)
+      this.preparedUse.set(key, ++this.useClock)
       this.preparedBytes += column.bytes
     }
     return { kind: 'complete' }
@@ -1313,10 +1423,163 @@ export class DocumentSession {
     const column = this.prepared.get(key)
     if (!column) return
     this.prepared.delete(key)
+    this.preparedUse.delete(key)
     this.preparedBytes -= column.bytes
     const entry = this.preparedEntries.get(key)
     this.preparedEntries.delete(key)
     entry?.release()
+  }
+  /** Whether a prepared column may be evicted for room: not pinned by a reader,
+   * not in `keep`, and not a resident column of the running prepare batch. */
+  private evictableColumn(key: string, keep: ReadonlySet<string>): boolean {
+    return !keep.has(key) && !this.stagingKeep.has(key) && !this.preparedPins.has(key)
+  }
+  /** The prepared working set nothing can evict for room right now (bytes and
+   * dense lanes): pinned and kept columns, leased (also retired) lanes and lane
+   * builds. Raw staging is excluded; its owner adds it. */
+  private unevictablePrepared(keep: ReadonlySet<string>): { bytes: number; columns: number } {
+    let bytes = this.preparedBytes, columns = this.prepared.size + this.laneSlots()
+    for (const [key, column] of this.prepared) if (this.evictableColumn(key, keep)) { bytes -= column.bytes; columns-- }
+    for (const lane of this.displayLanes.values()) if (lane.pins === 0) { bytes -= lane.bytes; columns-- }
+    return { bytes, columns }
+  }
+  /** Dense lanes held against maxColumns besides prepared columns: retained
+   * (including retired-but-leased) display lanes and lane builds in progress. */
+  private laneSlots(): number {
+    return this.displayLanes.size + this.displayLaneBuildSlots
+  }
+  /** Makes `bytes` and `columns` more dense lanes fit the prepared budget
+   * (maxBytes and maxColumns) beside the running batch's raw staging, by
+   * evicting unpinned columns (outside `keep` and the batch) and unleased
+   * display lanes, least recently used first across both kinds. Evicts nothing
+   * and returns false when even all of them would not do. */
+  private makePreparedRoom(bytes: number, keep: ReadonlySet<string>, columns = 0): boolean {
+    const limit = this.budget.maxBytes, maxColumns = this.budget.maxColumns
+    const extraBytes = this.preparedStaging + bytes, extraColumns = this.preparedStagingColumns + columns
+    const fits = () => this.preparedBytes + extraBytes <= limit && this.prepared.size + this.laneSlots() + extraColumns <= maxColumns
+    if (fits()) return true
+    const floor = this.unevictablePrepared(keep)
+    if (floor.bytes + extraBytes > limit || floor.columns + extraColumns > maxColumns) return false
+    while (!fits()) {
+      let oldest: { used: number; drop: () => void } | null = null
+      for (const [key] of this.prepared) {
+        if (!this.evictableColumn(key, keep)) continue
+        const used = this.preparedUse.get(key) ?? 0
+        if (!oldest || used < oldest.used) oldest = { used, drop: () => this.dropPrepared(key) }
+      }
+      for (const lane of this.displayLanes.values()) {
+        if (lane.pins === 0 && (!oldest || lane.used < oldest.used)) oldest = { used: lane.used, drop: lane.evict }
+      }
+      if (!oldest) return false
+      oldest.drop()
+    }
+    return true
+  }
+  /** S13.5: the display-lane port of one filter operation (see FilterEvaluator).
+   * Bytes under construction are in preparedBytes and this operation's
+   * transient pool share; `retain` moves a completed lane's bytes onto its pool
+   * entry, after which that entry (released by its owner, evicted here or by
+   * the pool) is their single uncharge point. Session close refuses new
+   * reservations at once but never uncharges bytes a build or reader still
+   * holds: a build's share ends with the build (a closed pool cannot shrink a
+   * share, so it is released whole when the operation's builds have ended), and
+   * a leased lane is held by its record until its last lease ends. */
+  private displayLaneAdmission(sheetId: string): DisplayLaneAdmissionPort {
+    let share: PoolCharge | null = null, building = 0
+    const setShare = (bytes: number) => (share ??= this.memory.charge()).set(bytes)
+    const shrinkShare = () => {
+      if (building === 0) { share?.release(); share = null } else share?.set(building)
+    }
+    return {
+      budget: {
+        reserve: bytes => {
+          if (this.closed) throw new ValueIndexError('cancelled', 'Session closed')
+          if (!this.makePreparedRoom(bytes, new Set())) {
+            throw new ValueIndexError('quota', `Formatted display text does not fit the ${this.budget.maxBytes}-byte prepared-column budget beside the pinned working set; narrow the filter range or use a values filter.`,
+              { resource: 'memory', requiredBytes: this.preparedBytes + this.preparedStaging + bytes, limitBytes: this.budget.maxBytes })
+          }
+          if (!setShare(building + bytes)) {
+            throw new ValueIndexError('quota', 'The worker memory budget cannot hold the formatted display text.',
+              { resource: 'memory', requiredBytes: this.memory.totalBytes + bytes, limitBytes: this.memory.limitBytes })
+          }
+          building += bytes
+          this.displayLaneBuilding += bytes
+          this.displayLaneBytes += bytes
+          this.preparedBytes += bytes
+        },
+        // Also after close: the build has ended, so its bytes are free now.
+        release: bytes => {
+          building -= bytes
+          this.displayLaneBuilding -= bytes
+          this.displayLaneBytes -= bytes
+          this.preparedBytes -= bytes
+          shrinkShare()
+        },
+        acquireSlot: () => {
+          if (this.closed) throw new ValueIndexError('cancelled', 'Session closed')
+          if (!this.makePreparedRoom(0, new Set(), 1)) {
+            throw new ValueIndexError('quota', `Formatted display text needs a prepared-column slot, but ${this.budget.maxColumns} are pinned; retry when the running operation ends.`,
+              { resource: 'memory', limitBytes: this.budget.maxBytes })
+          }
+          this.displayLaneBuildSlots++
+        },
+        releaseSlot: () => { this.displayLaneBuildSlots-- },
+      },
+      retain: (key, bytes, onRelease) => {
+        if (this.closed) return null
+        const id = JSON.stringify(['display-lane', key])
+        // The transient share shrinks first so the retained entry can take its
+        // room; the build's slot moves to the retained record below.
+        building -= bytes
+        this.displayLaneBuilding -= bytes
+        shrinkShare()
+        let live = true
+        let held: PoolCharge | null = null
+        // The lane's single uncharge point (owner release, eviction, pool close,
+        // or the last lease after a session close).
+        const forget = () => {
+          if (!live) return
+          live = false
+          this.displayLanes.delete(id)
+          this.displayLaneBytes -= bytes
+          this.preparedBytes -= bytes
+          held?.release()
+          held = null
+        }
+        const entry = this.memory.retain(id, { tier: 'rebuildable', bytes, owner: sheetId, onRelease: () => { forget(); onRelease() } })
+        if (!entry) {
+          // Back to the build's charge; the caller's refusal path releases all
+          // of it, so a restore the full pool cannot re-admit changes nothing.
+          building += bytes
+          this.displayLaneBuilding += bytes
+          setShare(building)
+          return null
+        }
+        const record: DisplayLaneRecord = {
+          bytes, pins: 0, used: ++this.useClock,
+          evict: () => { forget(); entry.release(); onRelease() },
+          hold: () => {
+            // Same total: the retained bytes become a transient charge.
+            held = this.memory.charge()
+            entry.release()
+            held.set(bytes)
+          },
+          retire: onRelease,
+        }
+        this.displayLanes.set(id, record)
+        this.displayLaneBuildSlots--
+        return {
+          release: () => { forget(); entry.release() },
+          pin: () => {
+            record.pins++
+            record.used = ++this.useClock
+            const unpin = entry.pin()
+            let done = false
+            return () => { if (done) return; done = true; record.pins--; unpin() }
+          },
+        }
+      },
+    }
   }
   private prepareRefusal(requiredBytes: number): PrepareOutcome {
     return this.closed ? { kind: 'stale' } : { kind: 'quota', limitBytes: this.memory.limitBytes, requiredBytes }
@@ -1329,6 +1592,7 @@ export class DocumentSession {
     if (!column || !entry?.live) return undefined
     this.prepared.delete(key); this.prepared.set(key, column)
     entry.touch()
+    this.preparedUse.set(key, ++this.useClock)
     const unpin = entry.pin()
     this.preparedPins.set(key, (this.preparedPins.get(key) ?? 0) + 1)
     let released = false
@@ -1366,7 +1630,13 @@ export class DocumentSession {
         const count = this.preparedPins.get(key) ?? 0
         if (count <= 1) {
           this.preparedPins.delete(key)
-          if (!this.closed && !sameStamp(this.store(sheetId).stamp, column.stamp)) this.dropPrepared(key)
+          // The single uncharge point of a column leased across session close.
+          const closing = this.closingPins.get(key)
+          if (closing) {
+            this.closingPins.delete(key)
+            closing.held.release()
+            this.preparedBytes -= closing.bytes
+          } else if (!this.closed && !sameStamp(this.store(sheetId).stamp, column.stamp)) this.dropPrepared(key)
         }
         else this.preparedPins.set(key, count - 1)
       },
@@ -1507,13 +1777,14 @@ export class DocumentSession {
     const stamp = store.stamp
     const cached = this.structures.get(sheetId)
     if (cached && sameStamp(cached.stamp, stamp)) return cached
-    const index = new StructuralIndex(await store.queryStructural(FULL_SHEET, { signal, stamp }))
+    const result = await store.queryStructural(FULL_SHEET, { signal, stamp })
+    const index = this.options.allocation ? controlStructure(result, this.options.allocation) : new StructuralIndex(result)
     // Cache only a complete index for the generation it was queried under.
     if (index.completeness === 'complete' && sameStamp(index.stamp, stamp) && !this.closed) {
       this.dropStructure(sheetId)
       const bytes = STRUCTURE_BASE_BYTES + index.recordCount * STRUCTURE_RECORD_BYTES
       const entry = this.memory.retain(structureKey(sheetId), {
-        tier: 'rebuildable', bytes, owner: sheetId, onRelease: () => this.dropStructure(sheetId),
+        mainOwned: !this.options.allocation, tier: 'rebuildable', bytes, owner: sheetId, onRelease: () => this.dropStructure(sheetId),
       })
       // Not admitted: the index still serves this operation, uncached.
       if (entry) {
@@ -1600,6 +1871,7 @@ export class DocumentSession {
         awaitYield: work => this.afterYield(work, signal),
         hidden: hiddenSourceRowsFromDisplay(state.order, state.visibility),
         residentWorkerBytes: this.memory.totalBytes, maxWorkerBytes: this.memory.limitBytes,
+        ...(this.options.allocation ? { allocation: this.options.allocation } : {}),
         ...(this.source.retainsKeyStrings?.(owner.sheetId) === true ? { sourceRetainsStrings: true } : {}),
         ...(this.options.yield ? { yield: phase => awaitQueryDeadline(this.options.yield!(phase), signal) } : {}),
         ...(this.options.now ? { now: this.options.now } : {}),
@@ -1610,13 +1882,14 @@ export class DocumentSession {
       if (halt) return halt
       hooks.progress?.(2, VIEW_OPERATION_STAGES)
       const orderBytes = result.ledger.orderBytes + result.ledger.inverseBytes
-      if (!charge.set(orderBytes)) return this.refusal(orderBytes)
-      const projected = await this.projectDraft(owner, state.filter, result.order, state.matches ?? matchAll, slice, signal, charge, orderBytes)
+      if (!charge.set(this.options.allocation ? 0 : orderBytes)) return this.refusal(orderBytes)
+      const projected = await this.projectDraft(owner, state.filter, result.order, state.matches ?? matchAll, slice, signal, charge, this.options.allocation ? 0 : orderBytes)
       if (projected.kind !== 'projected') return projected
       hooks.progress?.(3, VIEW_OPERATION_STAGES)
       // The draft's bytes become the retained view: uncharge them first so the
       // commit never counts them twice. Recipe: the sort pinned exactly the rows
       // hidden by the filter it ran under.
+      charge.adopt?.([projected.visibility, projected.visibility.words, projected.visibility.words.buffer, projected.visibility.summaries, projected.visibility.summaries.buffer], maskBytes(projected.visibility) + (this.options.allocation ? 1024 : 0))
       charge.set(0)
       return this.commitOutcome(() => this.commitDraft(owner, {
         order: result.order, visibility: projected.visibility, sort: spec, filter: state.filter, matches: state.matches,
@@ -1720,7 +1993,8 @@ export class DocumentSession {
             case 'error': return scan.error.code === 'stale-source' ? { kind: 'stale' } : { kind: 'error', error: scan.error }
           }
         }
-        const evaluation = await awaitQueryDeadline(evaluator({ store: this.preparedStore(owner.sheetId), spec: normalized, nowMs, signal, cooperate: slice }), signal)
+        const displayLanes = this.displayLaneAdmission(owner.sheetId)
+        const evaluation = await awaitQueryDeadline(evaluator({ store: this.preparedStore(owner.sheetId), spec: normalized, nowMs, signal, cooperate: slice, displayLanes }), signal)
         if (evaluation.kind !== 'complete') return evaluation
         const halt = this.halted(owner, signal)
         if (halt) return halt
@@ -1771,11 +2045,19 @@ export class DocumentSession {
       if (halt) return halt
       hooks.progress?.(3, VIEW_OPERATION_STAGES)
       // The draft mask becomes the retained view (no double count at commit).
+      charge.adopt?.([projected.visibility, projected.visibility.words, projected.visibility.words.buffer, projected.visibility.summaries, projected.visibility.summaries.buffer], maskBytes(projected.visibility) + (this.options.allocation ? 1024 : 0))
       charge.set(0)
       metricsCharge.set(0)
       return this.commitOutcome(() => this.commitDraft(owner, {
         order: state.order, visibility: projected.visibility, sort: state.sort, filter: normalized, matches,
       }))
+    } catch (cause) {
+      // The AbortError comes from the session's own interruptibleStore facade (interruptibleStore,
+      // installed in DocumentSession.store) plus the evaluator's throwIfAborted; sort() handles
+      // the facade through its own path. Map that abort to { kind: 'cancelled' } rather than
+      // an unhandled rejection.
+      if (signal.aborted && cause instanceof DOMException && cause.name === 'AbortError') return { kind: 'cancelled' }
+      throw cause
     } finally {
       metricsCharge.release()
       charge.release()
@@ -1822,6 +2104,21 @@ export class DocumentSession {
     const charge = this.charge()
     const unpinView = this.pinView(owner.sheetId)
     let unpinProjection: (() => void) | undefined
+    let producers = 0, ended = false
+    // Closing the session closes its own pool to admission, but this share stays
+    // owned until late provider observers drain. Other document pools are separate.
+    const drained = () => { if (ended && producers === 0) charge.release() }
+    const track = <T>(start: () => Promise<T>): Promise<T> => {
+      producers++
+      let work: Promise<T>
+      try { work = start() } catch (cause) { producers--; drained(); throw cause }
+      // This observer schedules drainage behind the interruptible facade's late
+      // fulfillment/rejection observer. A cancelled public request cannot end
+      // ownership while that observer still receives the provider's page.
+      const finish = () => { void Promise.resolve().then(() => { producers--; drained() }) }
+      void work.then(finish, finish)
+      return work
+    }
     try {
       if (!charge.set(workspace)) return this.refusal(workspace)
       const key = cacheKey(owner)
@@ -1858,20 +2155,42 @@ export class DocumentSession {
       cached.readers++
       const borrowed = cached, unpin = cached.entry.pin()
       unpinProjection = () => { unpin(); borrowed.readers--; if (borrowed.retired && !borrowed.readers) borrowed.entry.release() }
-      const store = boundedQueryStore(this.preparedStore(owner.sheetId), budget, undefined, VIEWPORT_DETAIL_LIMITS[profile].records)
-      const out = await queryViewport(store, cached.metrics, window, owner, { profile, signal, scope, textDependencies: true, isCurrent: captured => this.isCurrent(captured) })
+      const raw = this.source.store(owner.sheetId)
+      const tracked = interruptibleStore({
+        ...this.preparedStore(owner.sheetId),
+        readCell: (at, options) => track(() => raw.readCell(at, options)),
+        readRows: (range, cursor, options) => track(() => raw.readRows(range, cursor, options)),
+        queryStructural: (rect, options) => track(() => raw.queryStructural(rect, options)),
+        queryOverview: (query, options) => track(() => raw.queryOverview(query, options)),
+      })
+      const store = boundedQueryStore(tracked, budget, undefined, VIEWPORT_DETAIL_LIMITS[profile].records)
+      const overflow = new ViewportOverflowCollector(budget)
+      const out = await queryViewport(store, cached.metrics, window, owner, { profile, signal, scope, overflowCapture: overflow, textDependencies: true, isCurrent: captured => this.isCurrent(captured) })
       if (out.kind === 'diagnostic') return { kind: 'error', error: failure('invalid-coordinate', out.diagnostics[0]?.message ?? 'Invalid viewport') }
       if (out.kind !== 'viewport') return { kind: out.kind }
       if (queryPayloadBytes(out, budget) > budget) return { kind: 'error', error: failure('resource-limit', 'Viewport reply exceeds its bounded byte budget') }
       const { results, active } = toViewportResults(out)
       const result = { ...results[0], merges: out.merges, coarse: out.coarse, rowLines: out.rowLines, colLines: out.colLines, work: out.work, completeness: out.completeness, ...(out.error ? { error: out.error } : {}), ...(results.length > 1 ? { groups: out.groups } : {}), ...(active ? { active } : {}) } as ViewportResult
-      return { result, diagnostics: out.diagnostics }
+      const steps = overflow.finish(cached.metrics, out.cells, owner, window, profile, scope ?? 'frame'), slice = this.slice(signal)
+      let proof: ReturnType<typeof steps.next>
+      try {
+        for (;;) {
+          const halt = this.halted(owner, signal)
+          if (halt) return halt
+          proof = steps.next()
+          if (proof.done) break
+          if (slice.due(proof.value)) await slice.pause('viewport-overflow')
+        }
+      } finally { steps.return(undefined as never); slice.dispose() }
+      const extended = { ...result, overflowProof: proof.value }
+      if (queryPayloadBytes({ result: extended, diagnostics: out.diagnostics }, budget) > budget - 1024) return { kind: 'error', error: failure('resource-limit', 'Viewport reply exceeds its bounded byte budget') }
+      return { result: extended, diagnostics: out.diagnostics }
     } catch (cause) {
       if (signal.aborted || cause instanceof FindError && cause.code === 'cancelled') return { kind: 'cancelled' }
       if (cause instanceof FindError && cause.code === 'stale') return { kind: 'stale' }
       if (cause instanceof FindError && cause.code === 'resource-limit') return { kind: 'error', error: failure('resource-limit', cause.message) }
       throw cause
-    } finally { unpinProjection?.(); unpinView(); charge.release() }
+    } finally { unpinProjection?.(); unpinView(); ended = true; drained() }
   }
   /** One resident bounded search per document. Cursors are one-use capabilities
    * of the full workbook owner/query; replacement, abort and close reclaim it. */
@@ -2092,15 +2411,38 @@ export class DocumentSession {
    * in-flight operations release their transient shares in their own finally. */
   async release(): Promise<void> {
     if (this.closed) return
+    // Closed first: every new reservation, slot and retain is refused from here.
     this.closed = true
     this.stopSearch()
     this.projections.clear()
+    // Lanes a reader still leases keep their bytes charged (pool and prepared
+    // counter) until that reader's last lease ends, after the pool is closed.
+    const leased = [...this.displayLanes.values()].filter(lane => lane.pins > 0)
+    for (const lane of leased) lane.hold()
+    // Likewise a prepared column a sort reader still leases: same bytes, moved
+    // from its pool entry (released without onRelease) to a transient charge
+    // that the closed pool keeps until the lease's release() returns it.
+    let closingBytes = 0
+    for (const key of this.preparedPins.keys()) {
+      const column = this.prepared.get(key), entry = this.preparedEntries.get(key)
+      if (!column || !entry) continue
+      const held = this.memory.charge()
+      held.take(entry)
+      this.prepared.delete(key)
+      this.preparedEntries.delete(key)
+      this.closingPins.set(key, { bytes: column.bytes, held })
+      closingBytes += column.bytes
+    }
     this.memory.close()
+    for (const lane of leased) lane.retire()
     this.states.clear()
     this.prepared.clear()
     this.preparedEntries.clear()
-    this.preparedPins.clear()
-    this.preparedBytes = 0
+    this.preparedUse.clear()
+    // What stays charged is what readers and builds still hold: leased lanes,
+    // lane builds in progress and leased raw columns (preparedPins keeps their
+    // lease counts), each released by its reader or build.
+    this.preparedBytes = this.displayLaneBytes + closingBytes
     this.structures.clear()
     this.structureEntries.clear()
     this.structureBytes = 0

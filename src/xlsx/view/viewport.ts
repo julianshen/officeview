@@ -1,3 +1,4 @@
+import type { OverflowCapture } from './overflowProof'
 /**
  * Full-coordinate renderer seam (S2.3, spec §§5.2, 5.3, 5.4, 11.1, 11.5).
  *
@@ -922,6 +923,8 @@ export interface StoreViewportOptions {
   /** `tile` applies the per-tile record/page caps instead of the per-frame ones. */
   scope?: 'frame' | 'tile'
   activeCell?: SourceCell
+  /** Collect request-local evidence before allocating detail output. */
+  overflowCapture?: OverflowCapture
   /** Paint planners include canonical offscreen text dependencies. */
   textDependencies?: boolean
 }
@@ -1004,7 +1007,7 @@ export async function queryViewport(store: SourceStore, metrics: ProjectedSheetM
         for (let col = run.start; col <= run.end; col++) columns.add(col)
       }
       const detailCols = [...columns].sort((a, b) => a - b)
-      const structural = await structuralMerges(store, metrics, detail.rows.detail, detailCols, readOptions, merge, diagnostics)
+      const structural = await structuralMerges(store, metrics, detail.rows.detail, detailCols, readOptions, merge, diagnostics, options.overflowCapture)
       if (options.signal.aborted) throw new Cancelled()
       const boxes = candidateBoxes(metrics, detail.rows.detail, detailCols, structural, limits.records)
       const tiles = boxes !== null && tileOverflow(boxes, viewport, window.scale, profile.tile.records)
@@ -1014,11 +1017,11 @@ export async function queryViewport(store: SourceStore, metrics: ProjectedSheetM
         detail = null
       } else {
         if (coarse.length) diagnostics.push({ code: 'detail-coarse-region', message: `${coarse.length} sub-detail pixel group(s) summarized` })
-        cells = await readDetail(store, metrics, detail.rows.detail, detailCols, limits.pages, readOptions, work, merge)
-        cells = await applyMerges(store, cells, structural, viewport, limits.pages, readOptions, work, merge, mergePlacements)
+        cells = await readDetail(store, metrics, detail.rows.detail, detailCols, limits.pages, readOptions, work, merge, options.overflowCapture)
+        cells = await applyMerges(store, cells, structural, viewport, limits.pages, readOptions, work, merge, mergePlacements, options.overflowCapture)
       }
     }
-    const groups = coarse.length ? await overview(store, metrics, coarse, limits.overviewGroups, limits.pages, readOptions, work, merge) : []
+    const groups = coarse.length ? await overview(store, metrics, coarse, limits.overviewGroups, limits.pages, readOptions, work, merge, options.overflowCapture) : []
     let active: ViewportCell | undefined
     if (options.activeCell && isValidCoordinate(options.activeCell.row, options.activeCell.col)) {
       const at = options.activeCell
@@ -1068,10 +1071,11 @@ export interface StoreMerge { range: XlsxMergeRange; bounds: LogicalCellBox }
 
 /** Structural intersection (spec §4.5) over the detail source envelope: one
  * bounded index query; ranges stay rectangles, never per-covered-cell entries. */
-async function structuralMerges(store: SourceStore, metrics: ProjectedSheetMetrics, slots: readonly number[], cols: readonly number[], options: ReadOptionsLike, merge: Merge, diagnostics: WorkerDiagnostic[]): Promise<StoreMerge[]> {
+async function structuralMerges(store: SourceStore, metrics: ProjectedSheetMetrics, slots: readonly number[], cols: readonly number[], options: ReadOptionsLike, merge: Merge, diagnostics: WorkerDiagnostic[], capture?: OverflowCapture): Promise<StoreMerge[]> {
   let r0 = MAX_ROWS, r1 = -1
   for (const slot of slots) { const row = metrics.order.displayToSource(slot); r0 = Math.min(r0, row); r1 = Math.max(r1, row) }
   const result = await store.queryStructural({ r0, r1, c0: cols[0], c1: cols[cols.length - 1] }, options)
+  capture?.page(result, result.merges.length)
   merge(result.completeness, result.error)
   const out: StoreMerge[] = []
   for (const extent of result.merges) {
@@ -1083,12 +1087,13 @@ async function structuralMerges(store: SourceStore, metrics: ProjectedSheetMetri
     const x = metrics.cols.start(range.minCol), y = metrics.rows.start(range.minRow)
     out.push({ range, bounds: { x, y, width: metrics.cols.start(range.maxCol + 1) - x, height: metrics.rows.start(range.maxRow + 1) - y } })
   }
+  capture?.structure(result.completeness, out)
   return out
 }
 
 /** Covered cells disappear; each visible merge's anchor paints across the merged
  * box, read individually (within the page budget) when its own row is offscreen. */
-async function applyMerges(store: SourceStore, cells: ViewportCell[], merges: readonly StoreMerge[], viewport: LogicalViewport, pageBudget: number, options: ReadOptionsLike, work: ViewportWork, merge: Merge, placements: StoreMerge[]): Promise<ViewportCell[]> {
+async function applyMerges(store: SourceStore, cells: ViewportCell[], merges: readonly StoreMerge[], viewport: LogicalViewport, pageBudget: number, options: ReadOptionsLike, work: ViewportWork, merge: Merge, placements: StoreMerge[], capture?: OverflowCapture): Promise<ViewportCell[]> {
   if (!merges.length) return cells
   const locator = new MergeLocator(merges.map(item => item.range), 0, MAX_COLS - 1)
   const byRange = new Map(merges.map(item => [item.range, item]))
@@ -1111,6 +1116,7 @@ async function applyMerges(store: SourceStore, cells: ViewportCell[], merges: re
     work.pages++
     const read = await store.readCell({ row: range.minRow, col: range.minCol }, options)
     if (options.signal.aborted) throw new Cancelled()
+    capture?.page(read, 1)
     if (read.kind === 'blank') continue
     if (read.kind === 'unknown') merge('loading')
     if (read.kind === 'error') merge('incomplete', { code: read.code, retryable: read.retryable, message: 'merge anchor read failed' })
@@ -1123,7 +1129,7 @@ interface ReadOptionsLike { signal: AbortSignal; stamp: SourceStore['stamp'] }
 /** Detail rows as ascending exact source runs (sorted bands map consecutive
  * slots to disjoint sources); one bounded `readRows` page per request, at most
  * `pageBudget` per frame. Rows past the budget are explicit unknown records. */
-async function readDetail(store: SourceStore, metrics: ProjectedSheetMetrics, slots: readonly number[], cols: readonly number[], pageBudget: number, options: ReadOptionsLike, work: ViewportWork, merge: Merge): Promise<ViewportCell[]> {
+async function readDetail(store: SourceStore, metrics: ProjectedSheetMetrics, slots: readonly number[], cols: readonly number[], pageBudget: number, options: ReadOptionsLike, work: ViewportWork, merge: Merge, capture?: OverflowCapture): Promise<ViewportCell[]> {
   const c0 = cols[0], c1 = cols[cols.length - 1]
   const detailCol = new Set(cols)
   const sources = slots.map(slot => metrics.order.displayToSource(slot)).sort((a, b) => a - b)
@@ -1148,6 +1154,7 @@ async function readDetail(store: SourceStore, metrics: ProjectedSheetMetrics, sl
     for (const cell of page.cells) {
       work.visitedRecords++
       const row = cell.row
+      if (row >= range.r0 && row <= range.r1 && cell.col >= c0 && cell.col <= c1) capture?.cell(cell)
       if (!(row >= range.r0 && row <= range.r1) || !detailCol.has(cell.col)) continue
       seen.add(row)
       const slot = metrics.order.sourceToDisplay(row)
@@ -1170,12 +1177,14 @@ async function readDetail(store: SourceStore, metrics: ProjectedSheetMetrics, sl
       work.pages++
       const page = await store.readRows({ r0: run.r0, r1: run.r1, c0, c1 }, cursor, options)
       if (options.signal.aborted) throw new Cancelled()
+      capture?.page(page, page.items.reduce((sum, item) => sum + item.cells.length, 0))
       merge(page.completeness, page.error)
       if (page.completeness !== 'complete') complete = false
       for (const item of page.items) place(item, run)
       cursor = page.nextCursor
       if (cursor === undefined) break
     }
+    capture?.run({ ...run, c0, c1 }, complete && cursor === undefined)
     if (!complete) for (let row = run.r0; row <= run.r1; row++) if (!seen.has(row)) unknownRow(row, budgetHit ? 'page-budget' : `rows:${run.r0}-${run.r1}`)
   }
   if (budgetHit) merge('loading')
@@ -1187,7 +1196,7 @@ async function readDetail(store: SourceStore, metrics: ProjectedSheetMetrics, sl
  * aggregates assigned to display boxes (spec §4.1). A group splits into at most
  * two domains (identity intervals and a permuted-band list); its aggregate is the
  * exact combination, unknown if any part is unknown, never a sampled value. */
-async function overview(store: SourceStore, metrics: ProjectedSheetMetrics, groups: readonly CoarseGroup[], maxGroups: number, pageBudget: number, options: ReadOptionsLike, work: ViewportWork, merge: Merge): Promise<ViewportOverviewGroup[]> {
+async function overview(store: SourceStore, metrics: ProjectedSheetMetrics, groups: readonly CoarseGroup[], maxGroups: number, pageBudget: number, options: ReadOptionsLike, work: ViewportWork, merge: Merge, capture?: OverflowCapture): Promise<ViewportOverviewGroup[]> {
   const domains: OverviewDomain[] = []
   const parts = new Map<string, string[]>()
   for (const group of groups) {
@@ -1216,6 +1225,7 @@ async function overview(store: SourceStore, metrics: ProjectedSheetMetrics, grou
     work.overviewPages++
     const page = await store.queryOverview({ groups: domains, maxGroups, cursor }, options)
     if (options.signal.aborted) throw new Cancelled()
+    capture?.page(page, page.items.length)
     merge(page.completeness, page.error)
     for (const item of page.items) results.set(item.groupId, item)
     cursor = page.nextCursor

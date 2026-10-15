@@ -20,7 +20,24 @@ export function createCellLayoutHost(ctx: CanvasRenderingContext2D, sheet: Parti
   const measured = textMeasurer(ctx)
   // Format diagnostics land on the caller's sheet when one is given.
   const target = sheet as XlsxSheet
-  return { layoutBody: (cell, w, h, overflow) => layoutCellBody(ctx, target, cell, 0, 0, w, h, measured, overflow) }
+  return {
+    layoutBody: (cell, w, h, overflow) => layoutCellBody(ctx, target, cell, 0, 0, w, h, measured, overflow),
+    canReuseOverflow: (body, overflow) => {
+      const text = body.text
+      if (!text) return true
+      // The canonical plain path uses allowances only to add clipX. If neither
+      // allowance clips the text band, its formatting and paint data are equal.
+      // Plain-path clipping normally fails the extent check too. Keep clipX
+      // explicit as a conservative certificate: shrink-to-fit can force
+      // NO_OVERFLOW independently of the requested allowance. Such bodies
+      // need not share keys. Complex layouts retain exact keys (absent vs
+      // extended clips can differ).
+      return text.kind === 'plain' && !text.clipX && (!overflow || (
+        Math.max(0, body.x - text.tx) <= overflow.left
+        && Math.max(0, text.tx + text.width - (body.x + body.w)) <= overflow.right
+      ))
+    },
+  }
 }
 
 export interface ViewportPaintResult {

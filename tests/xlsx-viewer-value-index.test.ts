@@ -389,6 +389,48 @@ describe('scale with typed lanes', () => {
   }, 120_000)
 })
 
+describe('value index cache release validation', () => {
+  it.each([-1, 0.5, NaN, Infinity, -Infinity, Number.MAX_SAFE_INTEGER + 1, 17])('rejects invalid release %s without changing usage or notifying its observer', bytes => {
+    const notifications: number[] = []
+    let mirroredBytes = 0
+    const cache = new ValueIndexCache({ onUsage: used => { mirroredBytes = used; notifications.push(used) } })
+    const held = cache.reserve()
+    held.charge(16)
+    expect(() => cache.release(bytes)).toThrow(RangeError)
+    expect(cache.usedBytes).toBe(16)
+    expect(mirroredBytes).toBe(16)
+    expect(notifications).toEqual([16])
+    held.close()
+    expect(cache.usedBytes).toBe(0)
+    expect(mirroredBytes).toBe(0)
+    expect(notifications).toEqual([16, 0])
+  })
+
+  it('rejects over-release from an empty cache before notifying its observer', () => {
+    const notifications: number[] = []
+    const cache = new ValueIndexCache({ onUsage: used => notifications.push(used) })
+    expect(() => cache.release(1)).toThrow(RangeError)
+    expect(cache.usedBytes).toBe(0)
+    expect(notifications).toEqual([])
+  })
+
+  it('preserves partial, exact and zero releases through independent reservations', () => {
+    const notifications: number[] = []
+    const cache = new ValueIndexCache({ onUsage: used => notifications.push(used) })
+    const first = cache.reserve(), second = cache.reserve()
+    first.charge(8)
+    second.charge(12)
+    first.release(3)
+    expect(cache.usedBytes).toBe(17)
+    first.close()
+    expect(cache.usedBytes).toBe(12)
+    second.close()
+    expect(cache.usedBytes).toBe(0)
+    cache.release(0)
+    expect(notifications).toEqual([8, 20, 17, 12, 0, 0])
+  })
+})
+
 describe('resources, cancellation and ownership', () => {
   it('fails memory admission with a typed quota error and drops the partial index', async () => {
     const cache = new ValueIndexCache({ limitBytes: 64 * 1024 })

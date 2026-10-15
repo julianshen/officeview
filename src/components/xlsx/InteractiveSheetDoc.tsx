@@ -209,9 +209,15 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
   // S10.2 §12.4: one main-thread ledger per document. A worker-backed workbook
   // owns it (row cache, view buffers, replies); a resident one gets its own.
   const mainLedger = useMemo(() => remote?.mainLedger ?? new MainMemoryLedger(), [remote, source])
-  const overflowContext = useMemo(() => ({ cache: undefined as OverflowCache | undefined }), [mainLedger, profile])
+  // One budget profile across every main-thread ledger consumer: if a worker-backed
+  // remote workbook already established a profile (D 64 MiB / M 32 MiB), sibling or
+  // child viewers sharing its mainLedger must respect the remote's budget cap for
+  // controls, overflow, and copy admission, while retaining their own props for tile
+  // rendering, DPR, and presentation.
+  const budgetProfile = remote?.profile ?? profile
+  const overflowContext = useMemo(() => ({ cache: undefined as OverflowCache | undefined }), [mainLedger, budgetProfile])
   const overflowFor = (): OverflowCache => {
-    if (!overflowContext.cache || overflowContext.cache.closed) overflowContext.cache = remote ? remote.overflowFor(profile) : createDocumentOverflowCache(mainLedger, profile)
+    if (!overflowContext.cache || overflowContext.cache.closed) overflowContext.cache = remote ? remote.overflowFor(budgetProfile) : createDocumentOverflowCache(mainLedger, budgetProfile)
     return overflowContext.cache
   }
   useEffect(() => () => { overflowContext.cache?.close(); overflowContext.cache = undefined }, [overflowContext])
@@ -220,7 +226,7 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
   // The viewer's own pools end with the viewer; lifetime charges (geometry,
   // views, replies, the resident document) end when nothing reaches them.
   // Submitted clipboard jobs retain their own charge until they settle.
-  useEffect(() => () => { for (const pool of ['dom', 'canvasText', 'layout', 'merges', 'controls'] as const) mainLedger.releaseAll(pool) }, [mainLedger])
+  useEffect(() => () => { for (const pool of ['dom', 'canvasText', 'layout', 'merges'] as const) mainLedger.releaseAll(pool) }, [mainLedger])
   // A resident document's parsed model lives on the main thread while reachable.
   useMemo(() => { if (!remote) mainLedger.chargeWhileReachable('document', [doc], estimatePayloadBytes(doc)) }, [mainLedger, remote, doc])
   const onMainLedger = props.onMainLedger
@@ -287,8 +293,8 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
     const targets: object[] = []
     let bytes = 0
     const orderBytes = (order as { diagnostics?: { typedArrayBytes?: number } } | null)?.diagnostics?.typedArrayBytes ?? 0
-    if (order && orderBytes > 0 && !viewCharged.has(order)) { targets.push(order); bytes += orderBytes; viewCharged.add(order) }
-    if (visibility instanceof CompactRowVisibility && !viewCharged.has(visibility)) { targets.push(visibility); bytes += visibility.words.byteLength + visibility.summaries.byteLength; viewCharged.add(visibility) }
+    if (order && orderBytes > 0 && !viewCharged.has(order) && !mainLedger.hasLifetime(order)) { targets.push(order, ...order.bands.flatMap(band => [band.sourceAtOffset, band.sourceAtOffset.buffer, band.displayOffsetOfSource, band.displayOffsetOfSource.buffer])); bytes += orderBytes; viewCharged.add(order) }
+    if (visibility instanceof CompactRowVisibility && !viewCharged.has(visibility) && !mainLedger.hasLifetime(visibility)) { targets.push(visibility, visibility.words, visibility.words.buffer, visibility.summaries, visibility.summaries.buffer); bytes += visibility.words.byteLength + visibility.summaries.byteLength; viewCharged.add(visibility) }
     if (targets.length) mainLedger.chargeWhileReachable('viewBuffers', targets, bytes)
   }
   const entryFor = (sheetId: string): SheetEntry => {
@@ -440,11 +446,10 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
   const [overflowNotice, setOverflowNotice] = useState('')
   const [findOverflowNotice, setFindOverflowNotice] = useState('')
   const frameOf = (): SheetFrame | null => {
-    // Not redundant with entryFor(): a sibling viewer on the same remote with
-    // another profile may have replaced (closed) the shared cache between this
-    // render and its layout effect. The two then alternate owners each frame:
-    // correct but wasteful; one per-profile owner would change the remote's
-    // single-owner contract (Claude r7 NIT 4/7).
+    // Not redundant with entryFor(): a sibling viewer unmounting or a workbook
+    // reset may have closed the shared cache between this render and its layout
+    // effect. Rebinding at frame-time ensures entry.geometry paints against a
+    // live, open owner instead of a closed one.
     if (entry) bindOverflowCache(entry.geometry, overflowFor())
     if (!entry || !scroll) return null
     return {
@@ -468,7 +473,6 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
     for (const sheetEntry of entries.values()) { layout += sheetEntry.layoutCache.stats.bytes; merges += sheetEntry.merges.bytes }
     mainLedger.set('layout', 'caches', layout)
     mainLedger.set('merges', 'caches', merges)
-    mainLedger.set('controls', 'resources', controlResources.current?.cache.usedBytes ?? 0)
     // Every element the viewer renders (its toolbar, navigation, headers and
     // status as well as the pane), each with its React fiber and props.
     mainLedger.set('dom', 'grid', domClassBytes(domClassCounts(rootRef.current ?? paneRef.current)))
@@ -772,7 +776,7 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
       return
     }
     const abort = new AbortController()
-    const resources = controlResources.current ??= createViewerControlResources(profile, bytes => mainLedger.set('controls', 'resources', bytes))
+    const resources = controlResources.current ??= createViewerControlResources(budgetProfile, undefined, mainLedger)
     const sheetId = activeSheetId
     const ready = viewerControls({ doc, source, resources, sheetId, ledger: mainLedger, snapshot: () => snapshot(sheetId),
       view: () => ({ ...current.current.entryFor(sheetId).view, selection: session.get(sheetId).selection }),
@@ -845,8 +849,8 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
     const copyOwner = `session:${++copySerial}`
     let held = 0, closed = false, columnBytes = 0
     const admit = (next: number): boolean => {
-      if (closed || !Number.isSafeInteger(next) || next < 0 || next > copySessionBudget(profile)) return false
-      if (next > held && mainLedger.bytes - held + next > MAIN_THREAD_BUDGETS[profile]) return false
+      if (closed || !Number.isSafeInteger(next) || next < 0 || next > copySessionBudget(budgetProfile)) return false
+      if (next > held && mainLedger.bytes - held + next > MAIN_THREAD_BUDGETS[budgetProfile]) return false
       mainLedger.set('copy', copyOwner, next)
       held = next
       return true
@@ -887,7 +891,7 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
         reserveColumns(4 * words + 4 * summaries)
       }
       const result = await copySelection({ store: source.store(activeSheetId), owner: { ...identity }, currentOwner: () => current.current.identityOf(current.current.activeSheetId),
-        sessionBudgetBytes: copySessionBudget(profile) - columnBytes,
+        sessionBudgetBytes: copySessionBudget(budgetProfile) - columnBytes,
         selection, order: entry.view.order, visibility: entry.view.visibility, columns,
         allowed: () => current.current.allowCopy, signal: abort.signal, admitBytes: bytes => admit(columnBytes + bytes),
         retainBytes: (targets, bytes, commit) => { mainLedger.adoptWhileReachable('copy', copyOwner, 'document', targets, bytes, commit); held -= bytes }, onPending: () => { if (live.current && token === copyToken.current) setAnnouncement('Copy is waiting for values; cancel to stop.') },
