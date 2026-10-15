@@ -57,12 +57,11 @@ describe('round 6: actual paged viewer owner teardown', () => {
     } finally { await f.remote.close(); await f.client.dispose() }
   })
 
-  it('rebinds per frame when a sibling viewer unmount closes the shared remote cache', async () => {
+  it('the surviving viewer keeps painting after a sibling unmount', async () => {
     const f = await opened()
+    const planSpy = vi.spyOn(overflowGeometry, 'planViewport')
     try {
-      // Siblings share the remote's cache under budgetProfile. When one viewer unmounts,
-      // its teardown closes the shared cache. The surviving viewer's frame-time rebind
-      // recovers with a fresh live cache rather than painting with a closed owner.
+      // Both sibling viewers use profile D; mixed profiles are covered by the "M viewer on a D remote / D viewer on an M remote" test below.
       function Harness({ showB }: { showB: boolean }) {
         return (
           <>
@@ -76,20 +75,31 @@ describe('round 6: actual paged viewer owner teardown', () => {
       await waitFor(() => expect(ui.getAllByRole('gridcell', { name: /value long text/ })).toHaveLength(2))
       const initialCache = f.remote.overflowFor()
       expect(initialCache.closed).toBe(false)
+      const geom = planSpy.mock.calls[0][0]
+      expect(geom?.kind).toBe('ready')
+      if (geom?.kind !== 'ready') throw new Error('Expected ready geometry')
+      expect(boundOverflowCache(geom)).toBe(initialCache)
 
       // Unmount sibling B: closes its overflowContext.cache (the shared remote cache).
       ui.rerender(<Harness showB={false} />)
       await waitFor(() => expect(ui.getAllByRole('gridcell', { name: /value long text/ })).toHaveLength(1))
       expect(initialCache.closed).toBe(true)
+      expect(boundOverflowCache(geom)?.closed).toBe(true)
 
-      // Trigger a frame in surviving viewer A after B unmounted and closed the shared cache.
+      // Trigger an update in surviving viewer A after B unmounted and closed the shared cache.
       f.remote.notify()
-      await waitFor(() => expect(f.remote.overflowFor().closed).toBe(false))
+      await waitFor(() => expect(boundOverflowCache(geom)?.closed).toBe(false))
 
-      expect(f.remote.overflowFor()).not.toBe(initialCache)
+      // Assert A's actual geometry binding is open and distinct from initialCache.
+      expect(boundOverflowCache(geom)).not.toBe(initialCache)
+      expect(ui.getAllByRole('gridcell', { name: /value long text/ })).toHaveLength(1)
       expect(ui.getByTestId('a').textContent).not.toContain('Text overflow occupancy owner is closed')
       ui.unmount()
-    } finally { await f.remote.close(); await f.client.dispose() }
+    } finally {
+      planSpy.mockRestore()
+      await f.remote.close()
+      await f.client.dispose()
+    }
   })
 
   it('an overlay-only find update after a sibling unmount recovers with an open cache and shows no closed notice', async () => {
@@ -102,6 +112,7 @@ describe('round 6: actual paged viewer owner teardown', () => {
       return origCellTextOverflow(geom, src)
     })
     try {
+      // Both sibling viewers use profile D; mixed profiles are covered by the "M viewer on a D remote / D viewer on an M remote" test below.
       function Harness({ showB }: { showB: boolean }) {
         return (
           <>
