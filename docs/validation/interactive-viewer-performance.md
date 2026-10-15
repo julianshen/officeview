@@ -190,6 +190,35 @@ S8.6 is complete for the measured desktop D kernel scenarios. All nine Chrome
 runs at `09adbb1fa156c54c12e2ada22ea80e89a175d525` pass their frozen thresholds.
 S10.2 reuses those kernel receipts and does not re-run them.
 
+## Final-tree release receipt (2026-10-16, `9cfb090` = integration `fb0ddc7`)
+
+**Receipt:** `viewer-perf-chromium-desktop-release-9cfb0901cfb8-2026-10-15T22-18-21-696Z.json`, sha256 `9c8ac5ff4bdb3ac47fc69f9cf0613afb4167dd6641af1a7d0cb73cf66eba5ebf`.
+**Command:** `bun scripts/bench-interactive-viewer.ts --browser chromium --channel chrome --profile desktop --fixture all --repeat 30 --mode release --port 4187`.
+**Machine:** shared Mac (load average about 3); installed Chrome. **Result:** desktop release **ADMITTED**.
+
+| Row | Limit | Measured |
+|---|---|---|
+| warm-viewport-frame | ≤ 16.7 ms | 16.67 ms (ordinary input-to-paint p95 8.73 ms) |
+| input-acknowledgment | ≤ 50 ms | 33.28 ms, pass-limited (sort p95 17.38 ms; filter max, n=10, 33.28 ms) |
+| numeric-sort-100k / 1m | ≤ 100 / 1000 ms | 67.4 / 787.2 ms |
+| numeric-filter-1m | ≤ 100 ms | 72.6 ms |
+| natural-text-sort-1m | ≤ 4000 ms | 2348.6 ms |
+| cold-value-index-100k | ≤ 750 ms | 30.5 ms |
+| progressive-first-viewport | ≤ 1500 ms | 728.5 ms, pass-limited |
+| import throughput | ≥ 20 MiB/s, ≥ 100k cells/s | 56.9 MiB/s, 874,585 cells/s (F1 minimum) |
+| main-owned memory | ≤ 64 MiB | 41.6 MiB ledger peak; 0.0 MiB after close |
+| worker-owned memory | ≤ 512 MiB | 229.7 MiB |
+| bitmap retained | ≤ 128 MiB | 113.2 MiB |
+
+All 30 F2 header sorts completed (end-to-end p50 288 ms, p95 330 ms, max 1646 ms on the cold first sample). The sort harness now records each sort's outcome (completed, refused or timeout) explicitly.
+
+**Regression found and fixed before this receipt.** The first final-tree run on `485a57c` had sort end-to-end p95 120,044 ms. Its threshold rows passed, because only acknowledgments feed them; the end-to-end figure is informational.
+- **Cause:** superseded worker sort views stayed charged until garbage collection, so the main ledger filled. Whole-ledger control admission then refused sorts ("Main document memory quota exceeded").
+- **Fix:** explicit held-charge ownership in the views, geometry and control tails.
+- **Second fault in that run:** macOS's daily temp cleanup deleted `$TMPDIR` fixtures mid-run. Fixture caches now live under the repository's gitignored `.tmp/`.
+
+Mobile rows were not run (no physical iPad or mobile device, by user decision).
+
 ## S10.2 real-browser viewer results (desktop D, Chrome)
 
 ### Run identity (r8)
