@@ -26,6 +26,7 @@ import { OfficePackage } from '../src/core/zip'
 import { parseXlsx } from '../src/xlsx/parse'
 import type { WorkerCommand, WorkerReply } from '../src/xlsx/view/contracts'
 import { xlsxBytes } from './helpers/xlsx-package'
+import { FIRST_PAINT_TEST, FIRST_PAINT_WAIT } from './helpers/viewer-timing'
 
 // Admission's object path allows one row, so these small fixtures are 'paged'.
 vi.mock('../src/xlsx/storage/importSession', async original => {
@@ -102,11 +103,11 @@ describe('storage quota denied during the worker import', () => {
 describe('Esc cancels a pending copy (spec §9.3 fall-through)', () => {
   // Reproduced by reading the handler: it compared the lower-cased key with
   // 'Escape', so Esc outside the grid never cancelled a copy waiting on values.
-  it('Esc on the Cancel copy control stops a copy that waits for worker values', async () => {
+  it('Esc on the Cancel copy control stops a copy that waits for worker values', FIRST_PAINT_TEST, async () => {
     Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText: vi.fn(async () => {}) } })
     const hold = { on: false }
     const ui = render(<OfficeFile data={workbook()} interactiveSheets viewerWorker={() => workerPort(undefined, hold)} />)
-    await waitFor(() => expect(ui.getByRole('gridcell', { name: /^A1, value alpha/ })).toBeTruthy())
+    await waitFor(() => expect(ui.getByRole('gridcell', { name: /^A1, value alpha/ })).toBeTruthy(), FIRST_PAINT_WAIT)
     hold.on = true
     fireEvent.change(ui.getByRole('textbox', { name: 'Go To cell' }), { target: { value: 'A900000' } })
     fireEvent.click(ui.getByRole('button', { name: 'Go To' }))

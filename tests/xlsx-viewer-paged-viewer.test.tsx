@@ -137,17 +137,17 @@ describe('S5.4 bounded worker reads: pending, cancellation and replacement', () 
     await waitFor(() => expect(f.last()?.pendingTiles).toBe(0))
   })
 
-  it('source replacement closes the old worker document and discards its late replies', async () => {
+  it('source replacement closes the old worker document and discards its late replies', FIRST_PAINT_TEST, async () => {
     const first = workerHarness(), second = workerHarness()
     const ports = [first.port, second.port]
     const factory = vi.fn(() => ports.shift()!)
     const ui = render(<OfficeFile data={workbook()} interactiveSheets viewerWorker={factory} />)
-    await waitFor(() => expect(ui.getByRole('gridcell', { name: /alpha/ })).toBeTruthy())
+    await waitFor(() => expect(ui.getByRole('gridcell', { name: /alpha/ })).toBeTruthy(), FIRST_PAINT_WAIT)
     // Hold the old worker's next replies, then replace the document.
     first.hold(command => command.kind === 'read')
     go(ui, 'A3')
     ui.rerender(<OfficeFile data={workbook(CORNER.replace('alpha', 'replaced'))} interactiveSheets viewerWorker={factory} />)
-    await waitFor(() => expect(ui.getByRole('gridcell', { name: /replaced/ })).toBeTruthy())
+    await waitFor(() => expect(ui.getByRole('gridcell', { name: /replaced/ })).toBeTruthy(), FIRST_PAINT_WAIT)
     expect(first.posted.some(command => command.kind === 'close')).toBe(true)
     expect(first.port.terminate).toHaveBeenCalled()
     act(() => first.release())
@@ -158,10 +158,10 @@ describe('S5.4 bounded worker reads: pending, cancellation and replacement', () 
 })
 
 describe('S5.4 far corner and copy limits on a paged fixture', () => {
-  it('shows the worker query deadline in the viewer status and preserves the rendered sheet', async () => {
+  it('shows the worker query deadline in the viewer status and preserves the rendered sheet', FIRST_PAINT_TEST, async () => {
     const h = workerHarness()
     const ui = render(<OfficeFile data={workbook()} interactiveSheets viewerWorker={() => h.port} />)
-    await waitFor(() => expect(ui.getByRole('gridcell', { name: /alpha/ })).toBeTruthy())
+    await waitFor(() => expect(ui.getByRole('gridcell', { name: /alpha/ })).toBeTruthy(), FIRST_PAINT_WAIT)
     const open = h.posted.find(command => command.kind === 'open')!
     if (open.kind !== 'open') throw new Error('Expected open command')
     const session = h.kernel.session(open.docId)!
@@ -185,10 +185,10 @@ describe('S5.4 far corner and copy limits on a paged fixture', () => {
     } finally { ui.unmount(); vi.useRealTimers() }
   })
 
-  it('reaches XFD1048576 by Go To, find and copy through worker reads', async () => {
+  it('reaches XFD1048576 by Go To, find and copy through worker reads', FIRST_PAINT_TEST, async () => {
     const h = workerHarness(), write = clipboard()
     const ui = render(<OfficeFile data={workbook()} interactiveSheets viewerWorker={() => h.port} />)
-    await waitFor(() => expect(ui.getByRole('gridcell', { name: /alpha/ })).toBeTruthy())
+    await waitFor(() => expect(ui.getByRole('gridcell', { name: /alpha/ })).toBeTruthy(), FIRST_PAINT_WAIT)
     const grid = go(ui, 'XFD1048576')
     await waitFor(() => expect(ui.getByRole('gridcell', { name: /corner/ })).toBeTruthy())
     fireEvent.keyDown(grid, { key: 'c', ctrlKey: true })
@@ -203,10 +203,10 @@ describe('S5.4 far corner and copy limits on a paged fixture', () => {
     await waitFor(() => expect(ui.getByRole('gridcell', { name: /corner/ })).toBeTruthy())
   })
 
-  it('refuses a full-sheet copy by the separator lower bound before any worker cell read', async () => {
+  it('refuses a full-sheet copy by the separator lower bound before any worker cell read', FIRST_PAINT_TEST, async () => {
     const h = workerHarness(), write = clipboard()
     const ui = render(<OfficeFile data={workbook()} interactiveSheets viewerWorker={() => h.port} />)
-    await waitFor(() => expect(ui.getByRole('gridcell', { name: /alpha/ })).toBeTruthy())
+    await waitFor(() => expect(ui.getByRole('gridcell', { name: /alpha/ })).toBeTruthy(), FIRST_PAINT_WAIT)
     // Visible records were planned by the worker; copy refusal starts no additional reads.
     expect(h.posted.some(command => command.kind === 'viewport')).toBe(true)
     fireEvent.click(ui.getByRole('button', { name: 'Select worksheet' }))
@@ -219,10 +219,10 @@ describe('S5.4 far corner and copy limits on a paged fixture', () => {
 })
 
 describe('S5.4 view commits run in the worker', () => {
-  it('header sort and a value-list filter commit through worker sort/filter commands', async () => {
+  it('header sort and a value-list filter commit through worker sort/filter commands', FIRST_PAINT_TEST, async () => {
     const h = workerHarness()
     const ui = render(<OfficeFile data={workbook(CORNER.replace(/<row r="1048576">.*<\/row>/, ''))} interactiveSheets viewerWorker={() => h.port} />)
-    await waitFor(() => expect(ui.getByRole('gridcell', { name: /alpha/ })).toBeTruthy())
+    await waitFor(() => expect(ui.getByRole('gridcell', { name: /alpha/ })).toBeTruthy(), FIRST_PAINT_WAIT)
     go(ui, 'B1')
     fireEvent.click(ui.getByRole('button', { name: 'Cycle sort column B' }))
     await waitFor(() => expect(ui.getByRole('columnheader', { name: /Column B; sort priority 1, ascending/ })).toBeTruthy())
@@ -341,11 +341,11 @@ describe('S5.4 review: worker-backed cells keep resident semantics', () => {
     await waitFor(() => expect(ui.container.textContent).toMatch(/1 of 1/))
   })
 
-  it('F2 authored-hidden columns stay collapsed: a row copy across them omits the hidden value', async () => {
+  it('F2 authored-hidden columns stay collapsed: a row copy across them omits the hidden value', FIRST_PAINT_TEST, async () => {
     const bytes = pkg({ sheetData: SECRET, beforeSheetData: HIDDEN_COLS })
     const h = workerHarness(), write = clipboard()
     const ui = render(<OfficeFile data={new Blob([bytes as BlobPart])} interactiveSheets viewerWorker={() => h.port} />)
-    await waitFor(() => expect(ui.getByRole('gridcell', { name: /shown/ })).toBeTruthy())
+    await waitFor(() => expect(ui.getByRole('gridcell', { name: /shown/ })).toBeTruthy(), FIRST_PAINT_WAIT)
     go(ui, 'A1')
     const grid = ui.getByRole('grid')
     fireEvent.keyDown(grid, { key: 'ArrowRight', shiftKey: true })
@@ -458,11 +458,11 @@ describe('S5.4 review: lifecycle and publication', () => {
     expect(h.posted.some(command => command.kind === 'close')).toBe(true)
   })
 
-  it('F9 a layout publication repaints tiles and refreshes the scroll extent', async () => {
+  it('F9 a layout publication repaints tiles and refreshes the scroll extent', FIRST_PAINT_TEST, async () => {
     const h = workerHarness(), f = frames()
     const { remote } = await openRemote(h)
     const ui = render(<InteractiveSheetDoc doc={{ sheets: [{ name: 'S', sheetId: '1', rows: [], cols: [], merges: [], mergeRanges: [] }] }} source={remote} onFrame={f.onFrame} />)
-    await waitFor(() => expect(ui.getByRole('gridcell', { name: /alpha/ })).toBeTruthy())
+    await waitFor(() => expect(ui.getByRole('gridcell', { name: /alpha/ })).toBeTruthy(), FIRST_PAINT_WAIT)
     await waitFor(() => expect(f.last()?.pendingTiles).toBe(0))
     const rowsBefore = ui.getAllByRole('row').length, paints = f.last()!.basePaints
     act(() => remote.publishLayout('1', { ...remote.layout('1'), rowOverrides: [{ start: 0, end: 0, sizeCss: 200 }] }))
@@ -488,10 +488,10 @@ describe('S5.4 review: lifecycle and publication', () => {
 })
 
 describe('S13.3 review round 2, NIT-1: a search over an importing sheet catches up', () => {
-  it('re-runs a finished search once its incomplete sheets have loaded', async () => {
+  it('re-runs a finished search once its incomplete sheets have loaded', FIRST_PAINT_TEST, async () => {
     const h = workerHarness()
     const ui = render(<OfficeFile data={workbook()} interactiveSheets viewerWorker={() => h.port} />)
-    await waitFor(() => expect(ui.getByRole('gridcell', { name: /alpha/ })).toBeTruthy())
+    await waitFor(() => expect(ui.getByRole('gridcell', { name: /alpha/ })).toBeTruthy(), FIRST_PAINT_WAIT)
     const open = h.posted.find(command => command.kind === 'open')!
     if (open.kind !== 'open') throw new Error('Expected open command')
     const store = h.kernel.session(open.docId)!.source.store('1')
@@ -515,11 +515,11 @@ describe('S13.3 review round 2, NIT-1: a search over an importing sheet catches 
 describe('S13.3 review round 2: worker tile plans keep row-cache semantics and warm paint', () => {
   const viewportCommands = (h: ReturnType<typeof workerHarness>) => h.posted.filter(command => command.kind === 'viewport').length
   const settled = async (ui: ReturnType<typeof render>, f: ReturnType<typeof frames>) => {
-    await waitFor(() => expect(ui.getByRole('gridcell', { name: /alpha/ })).toBeTruthy())
+    await waitFor(() => expect(ui.getByRole('gridcell', { name: /alpha/ })).toBeTruthy(), FIRST_PAINT_WAIT)
     await waitFor(() => expect(f.last()?.pendingTiles).toBe(0))
   }
 
-  it('MAJOR-1: blank visible cells read as blank, not Loading, once their rows are known', async () => {
+  it('MAJOR-1: blank visible cells read as blank, not Loading, once their rows are known', FIRST_PAINT_TEST, async () => {
     const h = workerHarness(), f = frames()
     const ui = render(<OfficeFile data={workbook()} interactiveSheets viewerWorker={() => h.port} {...internal({ onFrame: f.onFrame })} />)
     await settled(ui, f)
@@ -533,10 +533,10 @@ describe('S13.3 review round 2: worker tile plans keep row-cache semantics and w
     ui.unmount()
   })
 
-  it('MAJOR-2: ring tiles are prefetched and retained over the row cache', async () => {
+  it('MAJOR-2: ring tiles are prefetched and retained over the row cache', FIRST_PAINT_TEST, async () => {
     const h = workerHarness(), f = frames()
     const ui = render(<OfficeFile data={workbook()} interactiveSheets viewerWorker={() => h.port} {...internal({ onFrame: f.onFrame })} />)
-    await waitFor(() => expect(ui.getByRole('gridcell', { name: /alpha/ })).toBeTruthy())
+    await waitFor(() => expect(ui.getByRole('gridcell', { name: /alpha/ })).toBeTruthy(), FIRST_PAINT_WAIT)
     // Every visible tile of the settled first frame is retained...
     const firstSettled = f.all.find(stats => stats.pendingTiles === 0 && stats.lastRequests.length > 0 && stats.prefetched === 0)
     await waitFor(() => expect(f.last()?.pendingTiles).toBe(0))
@@ -548,7 +548,7 @@ describe('S13.3 review round 2: worker tile plans keep row-cache semantics and w
     ui.unmount()
   })
 
-  it('MAJOR-2: a warm area repaints at a new zoom with no viewport command and no pending tile', async () => {
+  it('MAJOR-2: a warm area repaints at a new zoom with no viewport command and no pending tile', FIRST_PAINT_TEST, async () => {
     const h = workerHarness(), f = frames()
     const ui = render(<OfficeFile data={workbook()} interactiveSheets viewerWorker={() => h.port} {...internal({ onFrame: f.onFrame })} />)
     await settled(ui, f)

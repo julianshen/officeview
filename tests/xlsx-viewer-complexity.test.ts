@@ -36,7 +36,7 @@ import { createSheetMetrics } from '../src/xlsx/view/projection'
 import { MAX_COLS, MAX_ROWS } from '../src/xlsx/view/coordinates'
 import { createFixture } from './helpers/xlsx-viewer-fixtures'
 import { xlsxBytes } from './helpers/xlsx-package'
-import { FIRST_PAINT_WAIT } from './helpers/viewer-timing'
+import { FIRST_PAINT_TEST, FIRST_PAINT_WAIT } from './helpers/viewer-timing'
 
 // The object path admits one row, so the worker-backed tests below are paged
 // on the main thread and in the worker alike (as in the S5.4 suite).
@@ -305,10 +305,10 @@ describe('resident (object) viewer: navigation and paint stay viewport-bounded',
     await waitFor(() => expect(activeId(ui)).toBe(2 ** 34 - 1))
   }, 15_000) // ~2.6 s alone (three warm-up rounds); was 4.5-5 s with formatted stacks, over 5 s under suite load
 
-  it('cell IDs across the 2^31 and 2^32 boundaries stay exact end to end (no bitwise packing)', async () => {
+  it('cell IDs across the 2^31 and 2^32 boundaries stay exact end to end (no bitwise packing)', FIRST_PAINT_TEST, async () => {
     const doc = await objectDoc(BOUNDARIES)
     const ui = render(createElement(OfficeDoc, { document: doc, interactiveSheets: true }))
-    await waitFor(() => expect(ui.getByRole('gridcell', { name: /origin/ })).toBeTruthy())
+    await waitFor(() => expect(ui.getByRole('gridcell', { name: /origin/ })).toBeTruthy(), FIRST_PAINT_WAIT)
     go(ui, 'A131073')
     await waitFor(() => expect(ui.getByRole('gridcell', { name: 'A131073, value two-pow-31' })).toBeTruthy())
     expect(activeId(ui)).toBe(2 ** 31) // a signed 32-bit result would be negative
@@ -320,7 +320,7 @@ describe('resident (object) viewer: navigation and paint stay viewport-bounded',
   it('a giant narrow-column merge (D1:D1048576) paints and refuses a sort without a coverage map', async () => {
     const doc = await objectDoc(table(40), '<mergeCells count="1"><mergeCell ref="D1:D1048576"/></mergeCells>')
     const ui = render(createElement(OfficeDoc, { document: doc, interactiveSheets: true }))
-    await waitFor(() => expect(ui.getByRole('gridcell', { name: /^A1, value id/ })).toBeTruthy())
+    await waitFor(() => expect(ui.getByRole('gridcell', { name: /^A1, value id/ })).toBeTruthy(), FIRST_PAINT_WAIT)
     const ledger = await measure(async () => {
       go(ui, 'D524288')
       await waitFor(() => expect(ui.getByRole('grid').getAttribute('aria-activedescendant')).toBeTruthy())

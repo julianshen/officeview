@@ -130,7 +130,7 @@ describe('S13.3 r3: automatic search refresh', () => {
     ui.unmount()
   })
 
-  it('#5: a sheet ID containing "," refreshes as one sheet, with no phantom sheet lookups', async () => {
+  it('#5: a sheet ID containing "," refreshes as one sheet, with no phantom sheet lookups', FIRST_PAINT_TEST, async () => {
     const doc = workbookOf([{ sheetId: 'A,B', cells: [{ row: 0, col: 0, value: 'alpha' }, { row: 1, col: 0, value: 'beta' }] }])
     let source: WorkbookSource | undefined
     const h = workerHarness({ openSource: async (_handle, docId) => (source = createObjectWorkbookSource(doc, docId)) })
@@ -139,7 +139,7 @@ describe('S13.3 r3: automatic search refresh', () => {
     process.on('unhandledRejection', onError as never)
     try {
       const ui = render(<OfficeFile data={workbook()} interactiveSheets viewerWorker={() => h.port} />)
-      await waitFor(() => expect(ui.getByRole('gridcell', { name: /alpha/ })).toBeTruthy())
+      await waitFor(() => expect(ui.getByRole('gridcell', { name: /alpha/ })).toBeTruthy(), FIRST_PAINT_WAIT)
       expect(source?.sheets.map(sheet => sheet.sheetId)).toEqual(['A,B'])
       importingOnce(h, 'A,B')
       fireEvent.change(ui.getByRole('searchbox', { name: 'Search document' }), { target: { value: 'alpha' } })

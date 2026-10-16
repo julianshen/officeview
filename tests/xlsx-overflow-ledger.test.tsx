@@ -10,6 +10,7 @@ import { bindOverflowCache, boundOverflowCache, type OverflowCache, OverflowReso
 import { MAIN_THREAD_BUDGETS } from '../src/xlsx/view/tileCache'
 import { buildSheetGeometry, cellTextOverflow, planViewport, rowOverflowInput } from '../src/xlsx/view/viewport'
 import { workbookOf } from './helpers/xlsx-find'
+import { FIRST_PAINT_TEST, FIRST_PAINT_WAIT } from './helpers/viewer-timing'
 
 const doc = () => workbookOf([{ sheetId: 'A', cells: [{ row: 0, col: 0, value: 'text' }, { row: 0, col: 10, value: 'block' }] }])
 function geometry() {
@@ -75,7 +76,7 @@ describe('real main ledger owns overflow', () => {
     expect(cache.bytes).toBe(0)
   })
 
-  it('find catches a real owner close at lookup and announces closure rather than quota', async () => {
+  it('find catches a real owner close at lookup and announces closure rather than quota', FIRST_PAINT_TEST, async () => {
     let closed: OverflowCache | undefined
     const solve = overflowGeometry.cellTextOverflow
     vi.spyOn(overflowGeometry, 'cellTextOverflow').mockImplementation((g, source) => {
@@ -83,7 +84,7 @@ describe('real main ledger owns overflow', () => {
       return solve(g, source)
     })
     const ui = render(<InteractiveSheetDoc doc={doc()} />)
-    await waitFor(() => expect(ui.getByRole('gridcell', { name: /value text/ })).toBeTruthy())
+    await waitFor(() => expect(ui.getByRole('gridcell', { name: /value text/ })).toBeTruthy(), FIRST_PAINT_WAIT)
     fireEvent.change(ui.getByRole('searchbox', { name: 'Search document' }), { target: { value: 'text' } })
     await waitFor(() => expect(ui.getByTestId('officeview-search-status').textContent).toContain('1 of 1'))
     await waitFor(() => expect(ui.container.textContent).toContain('Text overflow occupancy owner is closed'))
@@ -92,12 +93,12 @@ describe('real main ledger owns overflow', () => {
     expect(closed?.bytes).toBe(0)
   })
 
-  it('an unrelated base present keeps a find refusal while its highlight is still missing', async () => {
+  it('an unrelated base present keeps a find refusal while its highlight is still missing', FIRST_PAINT_TEST, async () => {
     vi.spyOn(overflowGeometry, 'cellTextOverflow').mockImplementation(() => { throw new OverflowResourceError() })
     let frames = 0
     const workbook = doc(), onFrame = () => { frames++ }
     const ui = render(<InteractiveSheetDoc doc={workbook} onFrame={onFrame} />)
-    await waitFor(() => expect(ui.getByRole('gridcell', { name: /value text/ })).toBeTruthy())
+    await waitFor(() => expect(ui.getByRole('gridcell', { name: /value text/ })).toBeTruthy(), FIRST_PAINT_WAIT)
     fireEvent.change(ui.getByRole('searchbox', { name: 'Search document' }), { target: { value: 'text' } })
     await waitFor(() => expect(ui.getByTestId('officeview-search-status').textContent).toContain('1 of 1'))
     await waitFor(() => expect(ui.container.textContent).toContain('Text overflow occupancy exceeds the document memory budget'))
