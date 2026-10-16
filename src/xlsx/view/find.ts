@@ -586,13 +586,41 @@ export function hitGeometry(hit: FindHit, cell: XlsxCell, metrics: SheetMetrics,
   const text = record.text[0]
   const body = record.body.text
   if (!text || !body) return { record, rects: [] }
-  if (body.kind !== 'plain' || text.formattedText !== hit.text || !body.text.length) return { record, rects: [{ ...text.clip }] }
+  if (text.formattedText !== hit.text || !body.text.length) return { record, rects: [{ ...text.clip }] }
+  if (body.kind === 'layout') {
+    // One unrotated, unwrapped line (aligned right/center, possibly overflowing):
+    // the band of [start,end) along its placed segments, like plain runs.
+    const line = body.layout.lines.length === 1 && !body.rotation && !body.stacked ? body.layout.lines[0] : undefined
+    const span = line && layoutSpan(line.segments, hit.start, hit.end)
+    if (!span) return { record, rects: [{ ...text.clip }] }
+    const dx = box.x - record.body.x
+    const left = Math.max(dx + span.x0, text.clip.x), right = Math.min(dx + span.x1, text.clip.x + text.clip.width)
+    if (!(right > left)) return { record, rects: [{ x: box.x, y: box.y, width: box.width, height: box.height }] }
+    return { record, rects: [{ x: left, y: box.y, width: right - left, height: box.height }] }
+  }
   const x0 = box.x + (body.tx - record.body.x), unit = body.width / body.text.length
   // Highlight only painted ink: intersect with the text clip. A match whose ink
   // is fully clipped is still a hit; it highlights its own cell box.
   const left = Math.max(x0 + unit * hit.start, text.clip.x), right = Math.min(x0 + unit * hit.end, text.clip.x + text.clip.width)
   if (!(right > left)) return { record, rects: [{ x: box.x, y: box.y, width: box.width, height: box.height }] }
   return { record, rects: [{ x: left, y: box.y, width: right - left, height: box.height }] }
+}
+
+/** Body-local horizontal extent of source offsets [start,end) over placed
+ * segments (proportional within a segment); undefined unless every touched
+ * segment is a plain horizontal translation. */
+function layoutSpan(segments: readonly { width: number; sourceStart: number; sourceEnd: number; x: number; transform?: { a: number; b: number; c: number; d: number; e: number } }[], start: number, end: number): { x0: number; x1: number } | undefined {
+  let x0 = Infinity, x1 = -Infinity
+  for (const segment of segments) {
+    const from = Math.max(start, segment.sourceStart), to = Math.min(end, segment.sourceEnd), length = segment.sourceEnd - segment.sourceStart
+    if (!(to > from) || !(length > 0)) continue
+    const t = segment.transform
+    if (t && (t.a !== 1 || t.b !== 0 || t.c !== 0 || t.d !== 1)) return undefined
+    const origin = t ? t.e : segment.x, unit = segment.width / length
+    x0 = Math.min(x0, origin + unit * (from - segment.sourceStart))
+    x1 = Math.max(x1, origin + unit * (to - segment.sourceStart))
+  }
+  return x1 > x0 ? { x0, x1 } : undefined
 }
 
 export interface FindNavigation {
