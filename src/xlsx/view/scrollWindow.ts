@@ -405,13 +405,17 @@ export function navigateKey(window: ScrollWindow, context: NavigationContext, ke
       // Initialization creates focus at a body record before page traversal.
       if (seeded) break
       const direction = key === 'PageDown' ? 1 : -1
-      pageWindow = scrollBy(window, context.metrics, context.viewport, { x: 0, y: direction * context.viewport.height })
-      // Clamp a far-away active cell into the visible pane so the page target
+      // A page is the scrolling body: the pane minus a pinned frozen strip.
+      const pinned = window.frozen?.top ?? 0
+      const pageCss = Math.max(window.zoom, context.viewport.height - pinned * window.zoom)
+      pageWindow = scrollBy(window, context.metrics, context.viewport, { x: 0, y: direction * pageCss })
+      // Clamp a far-away active cell into the visible body so the page target
       // always overlaps the moved viewport (an inclusive upper edge would land
       // exactly on its bottom border, outside it).
       const span = context.viewport.height / window.zoom
-      const visibleAnchor = clamp(Math.max(context.metrics.rows.start(slot), window.logicalOrigin.y), window.logicalOrigin.y, previousFloat(window.logicalOrigin.y + span))
-      const css = clamp(visibleAnchor + direction * context.viewport.height / window.zoom, 0, previousFloat(context.metrics.rows.totalCss()))
+      const bodyTop = window.logicalOrigin.y + pinned
+      const visibleAnchor = clamp(Math.max(context.metrics.rows.start(slot), bodyTop), bodyTop, previousFloat(window.logicalOrigin.y + span))
+      const css = clamp(visibleAnchor + direction * pageCss / window.zoom, pinned, previousFloat(context.metrics.rows.totalCss()))
       targetSlot = context.metrics.rows.locate(css) ?? slot
       break
     }

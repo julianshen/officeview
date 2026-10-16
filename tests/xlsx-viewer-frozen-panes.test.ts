@@ -118,3 +118,38 @@ describe('authored frozen panes: both adapters', async () => {
     expect(paged.geometry('1').frozen).toEqual(expected)
   })
 })
+
+describe('find on a frozen sheet', async () => {
+  const { SheetNavigationSession } = await import('../src/xlsx/view/selection')
+  const { navigateToHit } = await import('../src/xlsx/view/find')
+  const { emptyGridSelection } = await import('../src/xlsx/view/selection')
+  it('the first hit on an unvisited sheet lands in the scrolling body, not under the strip', () => {
+    const session = new SheetNavigationSession('doc')
+    const order = createIdentityOrder()
+    session.register('F', { view: { sheetId: 'F', revision: 0, order, baseHidden: createIntervalSet([]), visibility, sort: null, filter: null, selection: emptyGridSelection() }, projection: metrics, body: null, zoom: 1 })
+    const windows = new Map()
+    const result = navigateToHit({ session, windows, viewport, frozen: () => frozenB2 }, { sheetId: 'F', cellId: 500 * MAX_COLS + 30, source: { row: 500, col: 30 }, text: 'x', start: 0, end: 1, displaySlot: 500 })
+    expect(result.kind).toBe('visible')
+    const window = windows.get('F')
+    expect(window.frozen).toEqual({ rows: 1, cols: 1, left: 64, top: 20 })
+    expect(logicalToViewport(window, { x: 30 * 64, y: 500 * 20 })).toEqual({ x: 64, y: 20 })
+    expect(hitTestViewport(window, metrics, viewport, { x: 64, y: 20 })).toEqual({ row: 500, col: 30 })
+  })
+})
+
+describe('paging a frozen sheet', () => {
+  it('PageDown/PageUp move by the body height (pane minus the frozen strip)', () => {
+    const start = setScrollOffset(createScrollWindow(metrics, viewport, { frozen: { rows: 2, cols: 0 } }), metrics, viewport, { x: 0, y: 2000 })
+    const context = { metrics, viewport, view }
+    // Body: 400 - 2 * 20 = 360 px = 18 rows.
+    const down = navigateKey(start, context, 'PageDown', { row: 102, col: 0 })
+    expect(down.window.logicalOrigin.y).toBe(2360)
+    expect(down.target).toEqual({ row: 120, col: 0 })
+    const up = navigateKey(down.window, context, 'PageUp', { row: 120, col: 0 })
+    expect(up.window.logicalOrigin.y).toBe(2000)
+    expect(up.target).toEqual({ row: 102, col: 0 })
+    // Unfrozen panes still page by the whole pane.
+    const plain = navigateKey(setScrollOffset(createScrollWindow(metrics, viewport), metrics, viewport, { x: 0, y: 2000 }), context, 'PageDown', { row: 100, col: 0 })
+    expect(plain.window.logicalOrigin.y).toBe(2400)
+  })
+})

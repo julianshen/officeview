@@ -820,7 +820,7 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
     cancelCopy()
     const sheetEntry = entryFor(hit.sheetId)
     if (!windows.has(hit.sheetId)) windowFor(hit.sheetId, sheetEntry)
-    const result = navigateToHit({ session, windows, viewport }, hit)
+    const result = navigateToHit({ session, windows, viewport, frozen: sheetId => entries.get(sheetId)?.frozen }, hit)
     if (result.kind === 'needs-projection') return
     if (result.kind === 'hidden') inspectHidden(hit.sheetId, hit.source, result.hiddenReason)
     else setInspection(undefined)
