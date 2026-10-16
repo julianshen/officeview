@@ -8,6 +8,7 @@ import { act, cleanup, fireEvent, render, waitFor } from '@testing-library/react
 import { OfficeDoc } from '../src/components/OfficeDoc'
 import InteractiveSheetDoc from '../src/components/xlsx/InteractiveSheetDoc'
 import { SearchBar } from '../src/components/viewerControls'
+import type { PaintableArray } from '../src/render/paint'
 import { workbookOf } from './helpers/xlsx-find'
 import { OfficePackage } from '../src/core/zip'
 import { parseDocx } from '../src/docx/parse'
@@ -101,6 +102,38 @@ describe('spreadsheet print mode', () => {
     expect(during).toEqual([true, false, false, false, false])
     act(() => { window.dispatchEvent(new Event('afterprint')) })
     expect([printed(notice(a)), printed(notice(b))]).toEqual([true, true])
+  })
+
+  it('one document-wide print owner: overlapping preparations without afterprint never blank the printout', async () => {
+    // Codex review repro: A and B both prepare, A prints and no afterprint
+    // arrives, then B prints. The latest starter owns the printout.
+    const lease = () => Object.assign([{ spec: { widthPx: 10, heightPx: 10 }, paint: vi.fn() }], { dispose: vi.fn(), fontDiagnostics: [] }) as unknown as PaintableArray
+    let resolveA!: () => void, resolveB!: () => void
+    const waitA = new Promise<void>(resolve => { resolveA = resolve }), waitB = new Promise<void>(resolve => { resolveB = resolve })
+    const pages = (root: Element) => root.querySelector('[data-testid="officeview-sheet-print-pages"]')
+    const during: boolean[][] = []
+    const print = vi.spyOn(window, 'print').mockImplementation(() => { during.push([a, b].map(root => printed(pages(root)))) })
+    const ui = render(<><InteractiveSheetDoc doc={sheetDoc()} printLoader={async () => { await waitA; return lease() }} /><InteractiveSheetDoc doc={sheetDoc()} printLoader={async () => { await waitB; return lease() }} /></>)
+    const [a, b] = ui.getAllByRole('region', { name: 'Spreadsheet viewer' })
+    fireEvent.keyDown(a, { key: 'p', ctrlKey: true }); fireEvent.keyDown(b, { key: 'p', ctrlKey: true })
+    await act(async () => { resolveA(); await new Promise(resolve => setTimeout(resolve, 0)) })
+    await act(async () => { resolveB(); await new Promise(resolve => setTimeout(resolve, 0)) })
+    expect(print).toHaveBeenCalledTimes(2)
+    expect(during).toEqual([[true, false], [false, true]])
+    expect(document.querySelectorAll('[data-officeview-sheet-print-owner]')).toHaveLength(1)
+    // afterprint (or unmount) releases the owner: browser-menu print labels both again
+    act(() => { window.dispatchEvent(new Event('afterprint')) })
+    expect(document.querySelectorAll('[data-officeview-sheet-print-owner]')).toHaveLength(0)
+    expect([a, b].map(root => printed(root.querySelector('[data-testid="officeview-sheet-print-notice"]')))).toEqual([true, true])
+  })
+
+  it('unmounting the print owner releases the document-wide exclusion', async () => {
+    vi.spyOn(window, 'print').mockImplementation(() => {})
+    const ui = render(<InteractiveSheetDoc doc={sheetDoc()} />)
+    fireEvent.keyDown(ui.getByRole('region', { name: 'Spreadsheet viewer' }), { key: 'p', ctrlKey: true })
+    await waitFor(() => expect(document.querySelectorAll('[data-officeview-sheet-print-owner]')).toHaveLength(1))
+    ui.unmount()
+    expect(document.querySelectorAll('[data-officeview-sheet-print-owner]')).toHaveLength(0)
   })
 })
 

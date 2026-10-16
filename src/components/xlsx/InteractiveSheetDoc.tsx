@@ -163,11 +163,29 @@ function loadFailureNotice(message: string, code?: string): string {
 const PAGED_PRINT_MESSAGE = 'This spreadsheet cannot be printed from the large-file view: neither its cells nor its drawings are printed. Copy a selected range instead.'
 const MAX_FONT_NOTICE_FAMILIES = 3
 /** Print rules scoped to one viewer instance: its screen and floating chrome
- * never print; its print container does. While this viewer runs its own print
- * (`printing`), every other spreadsheet viewer is left out of the printout. */
-function sheetPrintCss(id: string, printing: boolean): string {
+ * never print; its print container does. */
+function sheetPrintCss(id: string): string {
   const own = `[data-officeview-sheet-instance="${id}"]`
-  return `${own} [data-officeview-sheet-print]{display:none}@media print{${own} [data-officeview-sheet-screen],${own} [data-officeview-chrome]${printing ? `,[data-officeview-sheet-instance]:not(${own})` : ''}{display:none!important}${own} [data-officeview-sheet-print]{display:block!important}}`
+  return `${own} [data-officeview-sheet-print]{display:none}@media print{${own} [data-officeview-sheet-screen],${own} [data-officeview-chrome]{display:none!important}${own} [data-officeview-sheet-print]{display:block!important}}`
+}
+/** One document-wide print owner: the viewer running its own print leaves every
+ * other spreadsheet viewer out of the printout. The latest starter takes over
+ * (the previous owner's exclusion goes with it), so a print whose afterprint
+ * never arrived cannot combine with a later one to hide every viewer. Released
+ * on the owner's afterprint, permission withdrawal or unmount. */
+let printOwner: { id: string; style: HTMLStyleElement } | null = null
+function claimPrint(id: string): void {
+  printOwner?.style.remove()
+  const style = globalThis.document.createElement('style')
+  style.setAttribute('data-officeview-sheet-print-owner', '')
+  style.textContent = `@media print{[data-officeview-sheet-instance]:not([data-officeview-sheet-instance="${id}"]){display:none!important}}`
+  globalThis.document.head.appendChild(style)
+  printOwner = { id, style }
+}
+function yieldPrint(id: string): void {
+  if (printOwner?.id !== id) return
+  printOwner.style.remove()
+  printOwner = null
 }
 function fontNotice(diagnostics: readonly FontDiagnostic[]): string[] {
   const families = [...new Set(diagnostics.map(d => d.family).filter((family): family is string => Boolean(family)))]
@@ -1194,10 +1212,8 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
   }
   const printRefs = useRef<Array<HTMLCanvasElement | null>>([])
   const instance = useId()
-  const printMedia = useRef<HTMLStyleElement | null>(null)
   useLayoutEffect(() => {
-    if (printMedia.current) printMedia.current.textContent = sheetPrintCss(instance, Boolean(printPages))
-    if (!printPages) return
+    if (!printPages) { yieldPrint(instance); return }
     const token = printToken.current
     // One unit at a time: each admitted store is sized and painted in turn.
     printPages.forEach((unit, index) => {
@@ -1207,7 +1223,7 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
       const ctx = canvas.getContext('2d')
       if (ctx) unit.page.paint(ctx)
     })
-    if (token === printToken.current && allowPrintRef.current) window.print?.()
+    if (token === printToken.current && allowPrintRef.current) { claimPrint(instance); window.print?.() }
   }, [printPages])
   useEffect(() => {
     if (!allowPrint) return
@@ -1215,15 +1231,14 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
     const host = globalThis.document
     const media = host.createElement('style')
     media.setAttribute('data-officeview-sheet-print-media', '')
-    media.textContent = sheetPrintCss(instance, false)
+    media.textContent = sheetPrintCss(instance)
     host.head.appendChild(media)
-    printMedia.current = media
     return () => {
       // Permission withdrawn or unmounted: any in-flight preparation is now stale.
       printToken.current++
       window.removeEventListener('afterprint', releasePrint)
       media.remove()
-      printMedia.current = null
+      yieldPrint(instance)
       releasePrint()
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
