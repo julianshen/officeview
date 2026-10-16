@@ -475,7 +475,7 @@ describe('review round 2 (Codex findings)', () => {
   const source = { partPath: 'd', treePath: 't', element: 'sp', representation: 'native' as const }
   test('F4: overflow dependencies obey the four-device-pixel rule', () => {
     // Column A is 5px wide: 2.5 device px at 50%. B and the visible pane are wide.
-    const sheet = sheetOf([{ index: 0, cells: [cell(0, 0, 'Overflow from tiny A'), cell(0, 1, 'B text'), cell(0, 3, 'D1')] }], [{ min: 0, max: 0, widthChars: 0 }])
+    const sheet = sheetOf([{ index: 0, cells: [cell(0, 0, 'Overflow from tiny A'), cell(0, 1, 'B text'), cell(0, 3, 'D1')] }], [{ min: 0, max: 0, widthChars: 5 / 7 }])
     const geometry = ready(sheet)
     expect(geometry.metrics.cols.size(0)).toBe(5)
     const plan = planViewport(geometry, { box: { x: 5 + 64 * 2, y: 0, width: 200, height: 100 }, zoom: 0.5, deviceScale: 1 })

@@ -10,6 +10,7 @@ import { RECORD_TEXT, type LogicalTextRange } from '../src/core/text-recording'
 import { buildTextIndex, findMatches } from '../src/core/search'
 import { hitTest, textForRange } from '../src/core/selection'
 
+// widthChars = px / 7 is exactly px wide in Excel's column model (mdw 7).
 function fixedSheetPaint(rotation: number | undefined, alignment: Partial<XlsxCellStyle> = {}, text: string | number = 'AB CD EF GH IJ', width = 128, height = 160, record = false, parsedSheet?: XlsxSheet) {
   const ctx = createCanvas(width, height).getContext('2d')
   Object.defineProperty(ctx.canvas, 'ownerDocument', { value: { createElement: () => ({ getContext: () => ({ font: '', measureText: (text: string) => ({ width: [...text].length * 10, actualBoundingBoxAscent: 12, actualBoundingBoxDescent: 4, fontBoundingBoxAscent: 12, fontBoundingBoxDescent: 4 }) }) }) } })
@@ -20,7 +21,7 @@ function fixedSheetPaint(rotation: number | undefined, alignment: Partial<XlsxCe
   }
   ctx.fillText = capture
   if (record) (ctx as unknown as Record<symbol, unknown>)[RECORD_TEXT] = capture
-  const sheet: XlsxSheet = parsedSheet ?? { name: 'Fixed', cols: [{ min: 0, max: 0, widthChars: (width - 5) / 7 }], merges: [], mergeRanges: [], rows: [{ index: 0, heightPt: height * 72 / 96, customHeight: true, cells: [{ row: 0, col: 0, ref: 'A1', value: text, styleIndex: 0, style: { numFmtId: 0, fontSizePt: 11, textRotation: rotation, ...alignment } }] }] }
+  const sheet: XlsxSheet = parsedSheet ?? { name: 'Fixed', cols: [{ min: 0, max: 0, widthChars: width / 7 }], merges: [], mergeRanges: [], rows: [{ index: 0, heightPt: height * 72 / 96, customHeight: true, cells: [{ row: 0, col: 0, ref: 'A1', value: text, styleIndex: 0, style: { numFmtId: 0, fontSizePt: 11, textRotation: rotation, ...alignment } }] }] }
   renderSheet(sheet, ctx as never)
   return { calls, sheet }
 }

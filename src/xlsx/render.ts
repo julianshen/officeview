@@ -23,6 +23,7 @@ import { MAX_COLS, isValidCoordinate } from './view/coordinates'
 import { NO_OVERFLOW, alignmentOverflows, rowOverflowFromCells, textOverflowAllowance, type OverflowAllowance, type RowOverflowInput } from './view/textOverflow'
 export { textOverflowAllowance, rowOverflowFromCells, cellBlocksOverflow, type OverflowAllowance, type RowOverflowInput } from './view/textOverflow'
 import { RectangleIndex } from './view/structure'
+import { DEFAULT_COLUMN_METRICS, columnWidthPx } from './columnWidth'
 import { cellSourceRow, drawingExtent } from './view/sheetCells'
 import type { CellBodyLayout } from './view/textLayout'
 
@@ -52,9 +53,7 @@ export class StaticExportLimitError extends RangeError {
   }
 }
 
-const DEFAULT_COL_PX = 64
 const DEFAULT_ROW_PX = 20
-const CHAR_PX = 7
 /** Hard caps so a pathological sheet can never allocate an impossible canvas. */
 const MAX_GRID_COLS = 4096
 const MAX_GRID_ROWS = 16384
@@ -298,12 +297,13 @@ export function computeMetrics(sheet: XlsxSheet): GridMetrics {
   const declaredMax = sheet.cols.reduce((m, c) => drawing && !Number.isSafeInteger(c.max) ? m : Math.max(m, c.max), maxCol)
   const gridMax = declaredMax > maxCol + MAX_DECLARED_COL_SLACK ? maxCol : declaredMax
   const nCols = Math.min(Math.max(gridMax + 1, (drawing ? (sheet.drawingMarkers?.maxCol ?? 0) + 1 : 1), 1), MAX_GRID_COLS)
-  const colWidthsPx = new Array<number>(nCols).fill(DEFAULT_COL_PX)
+  const columns = sheet.columnMetrics ?? DEFAULT_COLUMN_METRICS
+  const colWidthsPx = new Array<number>(nCols).fill(columns.defaultWidthPx)
   for (const spec of sheet.cols) {
     // Authored-hidden columns collapse unconditionally (spec §5.3), not only on
     // drawing-bearing sheets.
     if (spec.widthChars !== undefined || spec.hidden) {
-      const w = spec.hidden ? 0 : drawing && (spec.widthChars === undefined || !Number.isFinite(spec.widthChars) || spec.widthChars < 0) ? DEFAULT_COL_PX : Math.round(spec.widthChars! * CHAR_PX + 5)
+      const w = spec.hidden ? 0 : drawing && (spec.widthChars === undefined || !Number.isFinite(spec.widthChars) || spec.widthChars < 0) ? columns.defaultWidthPx : columnWidthPx(spec.widthChars!, columns.maxDigitWidthPx)
       for (let c = Math.max(0, spec.min); c <= spec.max && c < nCols; c++) colWidthsPx[c] = w
     }
   }
@@ -843,6 +843,7 @@ function staticAdmission(sheet: XlsxSheet, m: GridMetrics, viewport?: SheetViewp
 /** @internal Exported for work-count tests; not part of the public API. */
 export function mergeEdges(sheet: XlsxSheet, m: GridMetrics, colX: number[] = prefixSums(m.colWidthsPx), rowY: number[] = prefixSums(m.rowHeightsPx)) {
   let work = 0
+  const columns = sheet.columnMetrics ?? DEFAULT_COLUMN_METRICS
   const nRows = m.rowHeightsPx.length, nCols = m.colWidthsPx.length
   let rowsBeyond: Map<number, number> | undefined, colsBeyond: Map<number, number> | undefined
   const beyondRows = () => {
@@ -863,7 +864,7 @@ export function mergeEdges(sheet: XlsxSheet, m: GridMetrics, colX: number[] = pr
       colsBeyond = new Map()
       for (const spec of sheet.cols) {
         if (!(spec.widthChars !== undefined || spec.hidden) || !Number.isSafeInteger(spec.min) || !Number.isSafeInteger(spec.max)) continue
-        const w = spec.hidden ? 0 : !Number.isFinite(spec.widthChars) || spec.widthChars! < 0 ? DEFAULT_COL_PX : Math.round(spec.widthChars! * CHAR_PX + 5)
+        const w = spec.hidden ? 0 : !Number.isFinite(spec.widthChars) || spec.widthChars! < 0 ? columns.defaultWidthPx : columnWidthPx(spec.widthChars!, columns.maxDigitWidthPx)
         for (let c = Math.max(nCols, spec.min); c <= Math.min(spec.max, MAX_COLS - 1); c++) colsBeyond.set(c, w)
       }
     }
@@ -895,7 +896,7 @@ export function mergeEdges(sheet: XlsxSheet, m: GridMetrics, colX: number[] = pr
   }
   return {
     row: (index: number) => edge(index, rowY, nRows, DEFAULT_ROW_PX, () => (rowPrefix ??= sorted(beyondRows(), DEFAULT_ROW_PX)), m.heightPx),
-    col: (index: number) => edge(index, colX, nCols, DEFAULT_COL_PX, () => (colPrefix ??= sorted(beyondCols(), DEFAULT_COL_PX)), m.widthPx),
+    col: (index: number) => edge(index, colX, nCols, columns.defaultWidthPx, () => (colPrefix ??= sorted(beyondCols(), columns.defaultWidthPx)), m.widthPx),
     /** Beyond-grid entries visited so far (test seam for the O(B + T log B) bound). */
     work: () => work,
   }

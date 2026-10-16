@@ -8,6 +8,10 @@ import { cellDisplayText, computeMetrics, renderSheet, type GridMetrics } from '
 import { buildSheetGeometry } from '../src/xlsx/view/viewport'
 import { renderSheetViewport } from '../src/xlsx/view/renderViewport'
 import { buildGeometry } from '../src/xlsx/view/source'
+import { createAxisMetrics } from '../src/xlsx/view/axes'
+import { MAX_COLS } from '../src/xlsx/view/coordinates'
+import { defaultColumnWidthPx, maxDigitWidthPx } from '../src/xlsx/columnWidth'
+import { readFileSync } from 'node:fs'
 import type { XlsxCell, XlsxCellStyle, XlsxSheet } from '../src/xlsx/types'
 import { buildXlsx } from '../src/testdata/ooxml-builders'
 import { OfficePackage } from '../src/core/zip'
@@ -405,5 +409,45 @@ describe('indexed and theme colours (fills, fonts, borders; object and paged)', 
     const { ctx, ops } = recordingContext()
     renderSheet(sheetOf([{ row: 0, col: 0, value: 'x', style: object[1] }]), ctx, grid([64], [20]))
     expect(ops.some(o => o.op === 'fillRect' && typeof o.fillStyle === 'string' && /^#D[9A]E[1-3]F[1-3]$/.test(o.fillStyle))).toBe(true)
+  })
+})
+
+describe('Excel column widths: max digit width, baseColWidth/defaultColWidth', () => {
+  const withCols = (extra: Partial<XlsxSheet> = {}): XlsxSheet => ({ name: 'S', merges: [], mergeRanges: [], rows: [{ index: 0, cells: [{ ref: 'A1', row: 0, col: 0, styleIndex: 0, value: 'a' }, { ref: 'D1', row: 0, col: 3, styleIndex: 0, value: 'd' }] }],
+    cols: [{ min: 0, max: 0, widthChars: 26 }, { min: 1, max: 1, widthChars: 9.140625 }], ...extra })
+  it('converts a stored width with pixels = trunc((256w + trunc(128/mdw))/256 * mdw) (Calibri 11: mdw 7)', () => {
+    // 26 -> 182 (was round(26*7+5) = 187), 9.140625 (Excel's 8.43 default) -> 64, unset -> 64.
+    expect(computeMetrics(withCols()).colWidthsPx).toEqual([182, 64, 64, 64])
+  })
+  it('uses the workbook max digit width and the sheet default width in every path', () => {
+    const sheet = withCols({ columnMetrics: { maxDigitWidthPx: 8, defaultWidthPx: 88 } })
+    // mdw 8: 26 -> 208, 9.140625 -> 73; unset columns take the default.
+    expect(computeMetrics(sheet).colWidthsPx).toEqual([208, 73, 88, 88])
+    const resident = buildSheetGeometry(sheet)
+    if (resident.kind !== 'ready') throw new Error('geometry')
+    expect([1, 2, 3, 4].map(c => resident.metrics.cols.start(c))).toEqual([208, 281, 369, 457])
+    const paged = buildGeometry(sheet.rows, sheet.cols, [], { columns: sheet.columnMetrics })
+    expect([1, 2, 3, 4].map(c => paged.cols.start(c))).toEqual([208, 281, 369, 457])
+    // The worker publishes only overrides: the default must survive in them.
+    const remote = createAxisMetrics({ logicalCount: MAX_COLS, defaultSizeCss: 64, overrides: paged.colOverrides })
+    expect([1, 2, 3, 4, 1000].map(c => remote.start(c))).toEqual([208, 281, 369, 457, 208 + 73 + 88 * 998])
+  })
+  it('derives the default width from baseColWidth (rounded up to 8px) or defaultColWidth', () => {
+    expect(defaultColumnWidthPx({}, 7)).toBe(64)
+    expect(defaultColumnWidthPx({ baseColWidth: 10 }, 8)).toBe(88)
+    expect(defaultColumnWidthPx({ baseColWidth: 10 }, 7)).toBe(80)
+    expect(defaultColumnWidthPx({ defaultColWidth: 9.140625 }, 7)).toBe(64)
+    expect(maxDigitWidthPx('Calibri', 11)).toBe(7)
+    expect(maxDigitWidthPx('Arial', 10)).toBe(7)
+    expect(maxDigitWidthPx('新細明體', 12)).toBe(8)
+  })
+  it('native-1904.xlsx (新細明體 12pt, baseColWidth 10, A width 19.5) parses to Excel widths in the object and paged paths', async () => {
+    const bytes = new Uint8Array(readFileSync('tests/fixtures/xlsx-viewer/native-1904.xlsx'))
+    const doc = await parseXlsx(await OfficePackage.load(bytes))
+    expect(doc.sheets[0].columnMetrics).toEqual({ maxDigitWidthPx: 8, defaultWidthPx: 88 })
+    expect(computeMetrics(doc.sheets[0]).colWidthsPx.slice(0, 2)).toEqual([156, 88])
+    const zip = await JSZip.loadAsync(bytes)
+    const paged = await workbookFormatting(parseXml(await zip.file('xl/workbook.xml')!.async('string')), await zip.file('xl/styles.xml')!.async('string'))
+    expect(paged.maxDigitWidthPx).toBe(8)
   })
 })

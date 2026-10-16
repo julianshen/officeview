@@ -138,6 +138,9 @@ export interface XlsxSheet {
   sheetId?: string
   workbookIndex?: number
   kind?: 'worksheet' | 'other'
+  /** Excel column pixel model (workbook MDW, sheet default width); absent:
+   * Calibri 11 (MDW 7px, 64px default). */
+  columnMetrics?: import('./columnWidth').ColumnMetrics
   rows: XlsxRow[]
   cols: XlsxColumnSpec[]
   merges: string[]

@@ -138,7 +138,8 @@ test('rendered formula text is left aligned and real cached/calculated errors ce
     moveTo: noop, lineTo: noop, translate: noop, measureText: (text: string) => ({ width: text.length * 7 }),
     fillText: (text: string, x: number) => painted.push({ text, x }), font: '', fillStyle: '', strokeStyle: '', lineWidth: 1, textBaseline: 'alphabetic' }
   renderSheet(doc.sheets[0], ctx as unknown as CanvasRenderingContext2D)
-  expect(painted.filter(p => p.text === '#N/A').map(p => p.x)).toEqual([3, 89 + (89 - 28) / 2, 178 + 3, 267 + (89 - 28) / 2])
+  // width 12 is 84px in Excel's column model (mdw 7).
+  expect(painted.filter(p => p.text === '#N/A').map(p => p.x)).toEqual([3, 84 + (84 - 28) / 2, 168 + 3, 252 + (84 - 28) / 2])
 })
 
 test('AND/OR flatten ranges, ignore reference text/blanks and propagate later real errors', async () => {

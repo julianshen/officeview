@@ -12,6 +12,7 @@ import type { OverflowCapture } from './overflowProof'
  * failures are mapped to diagnosed fallbacks here so they never reach a caller
  * as an unhandled exception.
  */
+import { DEFAULT_COLUMN_METRICS, columnWidthPx } from '../columnWidth'
 import type { XlsxCell, XlsxDrawing, XlsxMergeRange, XlsxSheet } from '../types'
 import type { DrawingContentShape } from '../../drawing/content'
 import type {
@@ -36,8 +37,6 @@ export { cellSourceRow, drawingExtent }
  * ordinary small sheet lays out the same in both paths. */
 export const SHEET_DEFAULT_ROW_CSS = 20
 export const SHEET_DEFAULT_COL_CSS = 64
-const CHAR_CSS = 7
-const COL_PADDING_CSS = 5
 /** §11.1: individual detail needs projected width and height of at least four device pixels. */
 export const MIN_DETAIL_DEVICE_PX = 4
 /** Float tolerance for that rule: 0.4 CSS px x 10 computes 3.9999999999999996. */
@@ -356,6 +355,7 @@ export function buildSheetGeometry(sheet: XlsxSheet, options: SheetGeometryOptio
 
   const colOverrides: AxisSizeInterval[] = []
   const colCollapsed: Array<{ start: number; end: number }> = []
+  const columns = sheet.columnMetrics ?? DEFAULT_COLUMN_METRICS
   for (const spec of sheet.cols) {
     if (!isValidCoordinate(0, spec.min) || !isValidCoordinate(0, spec.max) || spec.min > spec.max) {
       diagnostics.push({ code: 'coordinate-outside-domain', message: `column spec ${spec.min + 1}:${spec.max + 1} ignored` })
@@ -363,13 +363,13 @@ export function buildSheetGeometry(sheet: XlsxSheet, options: SheetGeometryOptio
     }
     if (spec.hidden) colCollapsed.push({ start: spec.min, end: spec.max })
     else if (spec.widthChars !== undefined) {
-      if (validSize(spec.widthChars)) colOverrides.push({ start: spec.min, end: spec.max, sizeCss: cssSize(spec.widthChars * CHAR_CSS + COL_PADDING_CSS) })
+      if (validSize(spec.widthChars)) colOverrides.push({ start: spec.min, end: spec.max, sizeCss: cssSize(columnWidthPx(spec.widthChars, columns.maxDigitWidthPx)) })
       else diagnostics.push({ code: 'invalid-dimension', message: `column spec ${spec.min + 1}:${spec.max + 1}: ignored width ${spec.widthChars}` })
     }
   }
 
   const rows = buildAxis('rows', MAX_ROWS, SHEET_DEFAULT_ROW_CSS, rowOverrides, rowCollapsed, diagnostics)
-  const cols = buildAxis('cols', MAX_COLS, SHEET_DEFAULT_COL_CSS, colOverrides, colCollapsed, diagnostics)
+  const cols = buildAxis('cols', MAX_COLS, columns.defaultWidthPx, colOverrides, colCollapsed, diagnostics)
   if (!rows || !cols) return { kind: 'diagnostic', diagnostics }
   let metrics: ProjectedSheetMetrics
   try {

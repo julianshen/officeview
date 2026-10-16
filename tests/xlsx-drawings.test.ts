@@ -42,7 +42,8 @@ describe('worksheet drawing anchors', () => {
     const doc = await parseXlsx(pkg)
     const nodes = doc.sheets[0].drawings ?? []
     expect(nodes.map(node => node.source.id)).toEqual(['3', '4'])
-    expect(nodes.map(node => [node.xEmu / 9525, node.yEmu / 9525, node.widthEmu / 9525, node.heightEmu / 9525])).toEqual([[41, 22, 100, 50], [2, 3, 80, 80]])
+    // width="5" is 35px in Excel's column model (mdw 7), so x = 35 + 1.
+    expect(nodes.map(node => [node.xEmu / 9525, node.yEmu / 9525, node.widthEmu / 9525, node.heightEmu / 9525])).toEqual([[36, 22, 100, 50], [2, 3, 80, 80]])
     expect(computeMetrics(doc.sheets[0]).heightPx).toBeGreaterThanOrEqual(83)
   })
 
@@ -89,9 +90,9 @@ describe('worksheet drawing anchors', () => {
     expect(sheet.drawings?.[0].source.id).toBe('10')
     expect(sheet.drawings?.[0].children?.[0].source.id).toBe('11')
     expect(sheet.drawings?.[0].children?.[0].children?.[0].source.id).toBe('12')
-    expect(anchored.xEmu / 9525).toBe(40)
+    expect(anchored.xEmu / 9525).toBe(35) // width="5" is 35px (Excel column model, mdw 7)
     expect(anchored.yEmu / 9525).toBe(20)
-    expect(anchored.widthEmu / 9525).toBe(80)
+    expect(anchored.widthEmu / 9525).toBe(70) // two 35px columns
     expect(anchored.heightEmu / 9525).toBe(50)
     const metrics = computeMetrics(sheet)
     expect(metrics.colWidthsPx[1]).toBe(0)

@@ -21,6 +21,7 @@ import { initializeSavedSpills } from './formula/saved-spills'
 import { dynamicMetadataIndices } from './metadata'
 import { decodeXlsxString } from './strings'
 import { resolveSheetColor, type SheetColorContext } from './sheetColors'
+import { defaultColumnWidthPx, maxDigitWidthPx, sheetFormat } from './columnWidth'
 import { MAX_COLS, MAX_ROWS, formatA1 } from './view/coordinates'
 import { PackageError } from '../core/package-error'
 
@@ -69,7 +70,7 @@ interface Styles {
   numFmtIds: number[]
   /** Authored custom number formats (styles.xml <numFmts>), keyed by numFmtId. */
   numFmts: Map<number, string>
-  fonts: Array<{ bold: boolean; italic: boolean; sizePt?: number; color?: string }>
+  fonts: Array<{ bold: boolean; italic: boolean; sizePt?: number; color?: string; name?: string }>
   fills: Array<{ rgb?: string; pattern?: string }>
   borders: Array<{ left?: string; right?: string; top?: string; bottom?: string; colors?: { left?: string; right?: string; top?: string; bottom?: string } }>
   xfs: Array<{ numFmtId: number; fontId: number; fillId: number; borderId: number; textRotation?: number; horizontal?: string; vertical?: string; wrapText?: boolean; shrinkToFit?: boolean }>
@@ -100,6 +101,7 @@ async function parseStyles(pkg: OfficePackage, themePalette?: Readonly<Record<st
       italic: f['i'] !== undefined,
       sizePt: f['sz'] !== undefined ? parseFloat(attrs(asNode(f['sz'])).val ?? '11') : undefined,
       color: colorOf(asNode(f['color'])),
+      name: attrs(asNode(f['name'])).val as string | undefined,
     }
     styles.fonts.push(font)
   }
@@ -158,6 +160,12 @@ export interface ParseXlsxOptions {
   /** 'cached' shows saved values only: no load-time evaluation, so a formula
    * without a cached value stays unavailable (hasCachedValue false). Default 'engine'. */
   valuePolicy?: 'engine' | 'cached'
+}
+
+/** The workbook default (Normal style, font 0) maximum digit width. */
+export function workbookDigitWidth(styles: Styles): number {
+  const font = styles.fonts[0]
+  return font ? maxDigitWidthPx(font.name, font.sizePt) : 7
 }
 
 /** One cellXfs entry resolved to the cell style (fonts/fills/borders/numFmt):
@@ -233,7 +241,7 @@ export async function parseXlsx(pkg: OfficePackage, options: ParseXlsxOptions = 
     const relType = relTypes.get(relId) ?? ''
     const kind = relType.endsWith('/worksheet') ? 'worksheet' : relType !== '' ? 'other' : 'worksheet'
     const path = target.startsWith('/') ? target.slice(1) : `xl/${target.replace(/^\.\.\//, '')}`
-    const sheet = await parseSheet(pkg, path, name, strings, styles, theme, sheetId, workbookIndex, kind, dynamicIndices)
+    const sheet = await parseSheet(pkg, path, name, strings, styles, theme, sheetId, workbookIndex, kind, dynamicIndices, workbookDigitWidth(styles))
     sheets.push(sheet)
     sheetPartPaths.push(path)
     workbookSheets.push({ sheetId, workbookIndex, name, kind })
@@ -449,11 +457,15 @@ async function parseSheet(
   workbookIndex: number,
   kind: 'worksheet' | 'other',
   dynamicIndices:ReadonlySet<number>,
+  digitWidth = 7,
 ): Promise<XlsxSheet> {
   const root = await pkg.xml(path)
   const sheet: XlsxSheet = { name, sourcePartPath: path, sheetId, workbookIndex, kind, rows: [], cols: [], merges: [], mergeRanges: [] }
   if (!root) return sheet
   const data = getChildren(root, 'worksheet')[0] ?? root
+  // Excel's column pixel model; set before drawings are placed against the grid.
+  const columns = { maxDigitWidthPx: digitWidth, defaultWidthPx: defaultColumnWidthPx(sheetFormat(attrs(getChildren(data, 'sheetFormatPr')[0])), digitWidth) }
+  if (columns.maxDigitWidthPx !== 7 || columns.defaultWidthPx !== 64) sheet.columnMetrics = columns
   const colsNode = getChildren(data, 'cols')[0]
   if (colsNode) {
     for (const col of getChildren(colsNode, 'col')) {

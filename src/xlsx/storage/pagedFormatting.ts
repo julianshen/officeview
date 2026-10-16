@@ -7,7 +7,7 @@
  */
 import type { OfficePackage } from '../../core/zip'
 import { attrs, getChildren, parseXml, type XmlNode } from '../../core/xml'
-import { parseStyles, resolveXfStyle } from '../parse'
+import { parseStyles, resolveXfStyle, workbookDigitWidth } from '../parse'
 import { parseThemeContext } from '../../drawing/style'
 import type { WorkbookFormatting } from '../view/contracts'
 
@@ -26,8 +26,10 @@ export async function workbookFormatting(workbookRoot: XmlNode, stylesText: stri
     try { palette = parseThemeContext(themeText).palette } catch { /* optional theme */ }
   }
   const styles = await parseStyles({ xml: async (path: string) => path === 'xl/styles.xml' ? root : undefined } as unknown as OfficePackage, palette)
+  const digitWidth = workbookDigitWidth(styles)
   return {
     dateSystem,
     styles: styles.xfs.map(xf => resolveXfStyle(styles, xf)),
+    ...(digitWidth !== 7 ? { maxDigitWidthPx: digitWidth } : {}),
   }
 }
