@@ -27,6 +27,15 @@ describe('<OfficeFile>', () => {
     await waitFor(() => expect(container.querySelectorAll('canvas').length).toBeGreaterThanOrEqual(1))
   })
 
+  test('removing the source clears the rendered document (no stale viewer over a released source)', async () => {
+    const data = await buildDocx([{ runs: [{ text: 'gone soon' }] }])
+    const ui = render(<OfficeFile data={data} loading={<p>waiting</p>} />)
+    await waitFor(() => expect(ui.container.querySelectorAll('canvas').length).toBeGreaterThanOrEqual(1))
+    ui.rerender(<OfficeFile data={null} loading={<p>waiting</p>} />)
+    expect(ui.container.querySelector('canvas')).toBeNull()
+    expect(ui.getByText('waiting')).toBeTruthy()
+  })
+
   test('shows error element on garbage input after promise settles', async () => {
     const { container } = render(<OfficeFile data={new Uint8Array([1, 2, 3])} />)
     for (let i = 0; i < 20; i++) {

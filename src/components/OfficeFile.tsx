@@ -80,7 +80,8 @@ export function useOfficeFile(
   const pagedRoute = Boolean(options.interactiveSheets && options.viewerWorker)
   useEffect(() => {
     let cancelled = false
-    if (!source) return
+    // No source: the previous cleanup released its document, so stop rendering it.
+    if (!source) { setState({ status: 'loading' }); return }
     let loaded: AnyDoc | undefined
     // One controller per source: cleanup aborts the download, the spool,
     // the verification pass and the parse, and the loader releases the spool.

@@ -110,6 +110,16 @@ describe('S5.4 routing: interactiveSheets mounts the worker-backed viewer for pa
     expect(ui.container.textContent?.match(/Showing saved values/g)).toHaveLength(1)
   })
 
+  it('removing the source closes the worker document AND stops rendering its grid', FIRST_PAINT_TEST, async () => {
+    const h = workerHarness()
+    const ui = render(<OfficeFile data={workbook()} interactiveSheets viewerWorker={() => h.port} loading={<p>no file</p>} />)
+    await waitFor(() => expect(ui.getByRole('gridcell', { name: /alpha/ })).toBeTruthy(), FIRST_PAINT_WAIT)
+    ui.rerender(<OfficeFile data={undefined} interactiveSheets viewerWorker={() => h.port} loading={<p>no file</p>} />)
+    await waitFor(() => expect(h.port.terminate).toHaveBeenCalled())
+    expect(ui.queryByRole('grid')).toBeNull()
+    expect(ui.getByText('no file')).toBeTruthy()
+  })
+
   it('flag off (or no worker): the paged admission keeps compatibility mode and never starts a worker', async () => {
     const factory = vi.fn(() => workerHarness().port)
     const off = render(<OfficeFile data={workbook()} viewerWorker={factory} />)
