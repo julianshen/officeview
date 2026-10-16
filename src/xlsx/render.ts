@@ -69,10 +69,39 @@ export function cellTextRotation(rotation: number | undefined): { radians: numbe
   return { radians: rotation <= 90 ? (-rotation * Math.PI) / 180 : ((rotation - 90) * Math.PI) / 180 }
 }
 
+/**
+ * Cell text names Calibri (the renderer does not resolve per-cell faces). A bare
+ * "Calibri" falls back to a context-dependent default when it is missing:
+ * Chrome's DOM canvas and workers pick a wide sans (~132px for a 16-character
+ * date at 11pt), its main-thread OffscreenCanvas and WebKit pick Times
+ * (~105px), so the static, interactive, print and worker views measured and
+ * wrapped differently and only some showed ####. One explicit stack: the
+ * metric-compatible Carlito, then common sans faces with the same metrics in
+ * every context, then the generic.
+ */
+const CELL_FONT_STACK = '"Calibri", Carlito, Arial, Helvetica, "Liberation Sans", sans-serif'
+const cellFontFamily = (family: string): string => family === 'Calibri' ? CELL_FONT_STACK : family
+/** Calibri (= Carlito) advance widths for U+0020..U+007E in 1/2048 em, regular
+ * and bold: Excel's own layout metrics for its default face, so '#' overflow
+ * follows what Excel shows even where the fallback face is wider. */
+const CALIBRI_ADVANCE = [463, 667, 821, 1020, 1038, 1464, 1397, 452, 621, 621, 1020, 1020, 511, 627, 517, 791, 1038, 1038, 1038, 1038, 1038, 1038, 1038, 1038, 1038, 1038, 548, 548, 1020, 1020, 1020, 949, 1831, 1185, 1114, 1092, 1260, 1000, 941, 1292, 1276, 516, 653, 1064, 861, 1751, 1322, 1356, 1058, 1378, 1112, 941, 998, 1314, 1162, 1822, 1063, 998, 959, 628, 791, 628, 1020, 1020, 596, 981, 1076, 866, 1076, 1019, 625, 964, 1076, 470, 490, 931, 470, 1636, 1076, 1080, 1076, 1076, 714, 801, 686, 1076, 925, 1464, 887, 927, 809, 644, 943, 644, 1020]
+const CALIBRI_BOLD_ADVANCE = [463, 667, 898, 1020, 1038, 1493, 1443, 478, 638, 638, 1020, 1020, 528, 627, 547, 880, 1038, 1038, 1038, 1038, 1038, 1038, 1038, 1038, 1038, 1038, 565, 565, 1020, 1020, 1020, 949, 1840, 1241, 1148, 1084, 1291, 999, 940, 1305, 1292, 546, 678, 1120, 866, 1790, 1349, 1385, 1090, 1405, 1153, 968, 1014, 1337, 1211, 1856, 1128, 1064, 979, 665, 880, 665, 1020, 1020, 615, 1011, 1099, 857, 1099, 1031, 648, 971, 1099, 503, 523, 983, 503, 1666, 1099, 1101, 1099, 1099, 728, 817, 710, 1099, 969, 1526, 941, 970, 814, 704, 973, 704, 1020]
+/** Width of `text` in Excel's Calibri at `sizePt`, or undefined outside ASCII. */
+function calibriWidth(text: string, sizePt: number, bold: boolean | undefined): number | undefined {
+  const table = bold ? CALIBRI_BOLD_ADVANCE : CALIBRI_ADVANCE
+  let units = 0
+  for (let i = 0; i < text.length; i++) {
+    const advance = table[text.charCodeAt(i) - 32]
+    if (advance === undefined) return undefined
+    units += advance
+  }
+  return units / 2048 * sizePt * 96 / 72
+}
+
 /** Measured glyph bands also cover the canonical recording band, so fitting
  * cell text has the same physical and selectable bounds on every Canvas host. */
 function cellTextMeasurer(ctx: CanvasRenderingContext2D): MeasureText {
-  const native = createTextBodyMeasurer(ctx, family => family)
+  const native = createTextBodyMeasurer(ctx, cellFontFamily)
   return (text, style) => {
     const m = native(text, style), size = (style.fontSizePt ?? 10) * 96 / 72
     const ascent = Math.max(m.ascent ?? 0, size * .85), descent = Math.max(m.descent ?? 0, size * .25)
@@ -182,7 +211,7 @@ function layoutCellText(ctx: CanvasRenderingContext2D, text: string, style: Xlsx
 function paintCellText(ctx: CanvasRenderingContext2D, text: Extract<NonNullable<CellBodyLayout['text']>, { kind: 'layout' }>): void {
   ctx.save()
   try {
-    paintTextBody(text.body, ctx, 0, 0, text.clip.width, text.clip.height, family => family, undefined, { layout: text.layout, clip: text.clip })
+    paintTextBody(text.body, ctx, 0, 0, text.clip.width, text.clip.height, cellFontFamily, undefined, { layout: text.layout, clip: text.clip })
   } finally { ctx.restore() }
 }
 /** How much wider than the used range a <col> declaration may be and still
@@ -923,12 +952,15 @@ export function layoutCellBody(
   const out: CellBodyLayout = { x, y, w, h: hh, formattedText: '' }
   if (cell.style?.fillColor) out.fill = spreadsheetColor(cell.style.fillColor)
   // text (right-align numbers, left-align strings; alignment spans the merge)
-  const fontAt = (sizePt: number) => `${cell.style?.italic ? 'italic ' : ''}${cell.style?.bold ? 'bold ' : ''}${sizePt}pt "Calibri"`
+  const fontAt = (sizePt: number) => `${cell.style?.italic ? 'italic ' : ''}${cell.style?.bold ? 'bold ' : ''}${sizePt}pt ${CELL_FONT_STACK}`
   const baseSize = cell.style?.fontSizePt ?? 10
   const rotated = cellTextRotation(cell.style?.textRotation) !== undefined
   const inner = Math.max(0, w - PADDING_L - PADDING_R)
   const shrinkable = cell.style?.shrinkToFit === true && cell.style.wrapText !== true && !rotated
-  let font = fontAt(baseSize)
+  let font = fontAt(baseSize), fontSize = baseSize
+  // Excel decides fit with its Calibri metrics; a wider fallback face must not
+  // turn a value Excel shows into '#' (its paint is then fitted below).
+  const excelFits = (text: string): boolean => (calibriWidth(text, fontSize, cell.style?.bold) ?? Infinity) <= inner + EXCEL_FIT_TOLERANCE_PX
   // Shrink-to-fit keeps full General precision and scales the font instead.
   const fitsGeneral = !rotated && !shrinkable ? (text: string) => measured(font, text) <= inner : undefined
   let generalNoFit = false
@@ -940,17 +972,26 @@ export function layoutCellBody(
     const size = shrunkFontSize(baseSize, inner, size => measured(fontAt(size), formatted))
     if (size < baseSize) {
       if (size >= MIN_SHRINK_FONT_PT) {
-        font = fontAt(size)
+        font = fontAt(size); fontSize = size
         style = { ...cell.style!, fontSizePt: size }
       } else if (typeof cell.value !== 'number') {
         const floor = Math.min(baseSize, MIN_SHRINK_FONT_PT)
-        font = fontAt(floor)
+        font = fontAt(floor); fontSize = floor
         style = { ...cell.style!, fontSizePt: floor }
         overflow = NO_OVERFLOW
       }
     }
   }
-  const text = numericOverflowText(cell, formatted, font, w, measured, generalNoFit)
+  const text = numericOverflowText(cell, formatted, font, w, measured, generalNoFit, excelFits)
+  if (text === formatted && typeof cell.value === 'number' && !cell.valueIsError && !rotated && cell.style?.wrapText !== true && measured(font, text) > inner && excelFits(text)) {
+    // Excel shows it in full; the fallback face is wider, so fit the paint to
+    // the cell (as shrink-to-fit would) instead of spilling a number.
+    const size = shrunkFontSize(fontSize, inner, size => measured(fontAt(size), text))
+    if (size >= MIN_SHRINK_FONT_PT) {
+      font = fontAt(size); fontSize = size
+      style = { ...(style ?? { numFmtId: 0 }), fontSizePt: size }
+    }
+  }
   out.formattedText = text
   if (text !== '') {
     // A colour section ([Red], [Color n]) overrides the font colour.
@@ -997,6 +1038,8 @@ export function spreadsheetColor(raw: string): string {
   return /^[0-9a-f]{8}$/i.test(hex) ? `#${hex.slice(2).toUpperCase()}` : resolveColor(raw)
 }
 
+/** Sub-pixel slack for Excel's integer-pixel layout of Calibri advances. */
+const EXCEL_FIT_TOLERANCE_PX = 0.5
 /** Smallest shrink-to-fit size; below it a number shows '#' (Excel's own floor is lower). */
 const MIN_SHRINK_FONT_PT = 4
 /** The font size (0.1 pt steps) at which the text fits `inner`; `base` when it already fits. */
@@ -1030,7 +1073,7 @@ function overflowBand(x: number, w: number, tx: number, textW: number, overflow:
  * Only the painted string changes: cellDisplayText (find, accessible value)
  * keeps the real formatted value.
  */
-function numericOverflowText(cell: XlsxCell, text: string, font: string, w: number, measured: MeasureCached, generalNoFit: boolean): string {
+function numericOverflowText(cell: XlsxCell, text: string, font: string, w: number, measured: MeasureCached, generalNoFit: boolean, excelFits?: (text: string) => boolean): string {
   if (typeof cell.value !== 'number' || text === '' || cell.valueIsError) return text
   const style = cell.style
   if (style?.wrapText === true || cellTextRotation(style?.textRotation) !== undefined) return text
@@ -1038,7 +1081,7 @@ function numericOverflowText(cell: XlsxCell, text: string, font: string, w: numb
   // from the output string: a number shown through an '@' section is text.
   if (style?.formatCode !== undefined && numericSectionIsText(cell.value, style.formatCode)) return text
   const inner = Math.max(0, w - PADDING_L - PADDING_R)
-  if (!generalNoFit && measured(font, text) <= inner) return text
+  if (!generalNoFit && (measured(font, text) <= inner || excelFits?.(text))) return text
   const glyph = measured(font, '#')
   return '#'.repeat(Math.max(1, glyph > 0 ? Math.floor(inner / glyph) : 1))
 }

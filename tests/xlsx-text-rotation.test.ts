@@ -108,7 +108,8 @@ test('Excel255 uses seven em cells including authored space, valid CSS font, sou
   expect(right[4].logical).toMatchObject({ start: 4, end: 5 })
   expect(right[5].matrix[5] - right[4].matrix[5]).toBeCloseTo(11 * 96 / 72)
   for (const call of calls) {
-    expect(call.font).toBe('11pt "Calibri"')
+    // One explicit Calibri fallback stack for every cell view (visual review #14).
+    expect(call.font).toBe('11pt "Calibri", Carlito, Arial, Helvetica, "Liberation Sans", sans-serif')
     expect(call.matrix[4] + call.x).toBeGreaterThanOrEqual(0)
     expect(call.matrix[4] + call.x + 10).toBeLessThanOrEqual(64)
     expect(call.matrix[5] - 11 * 96 / 72 * .85).toBeGreaterThanOrEqual(-1e-8)

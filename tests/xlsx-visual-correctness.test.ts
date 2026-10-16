@@ -30,7 +30,7 @@ function recordingContext(glyph: (text: string, font: string) => number = text =
     restore: () => { const top = stack.pop(); if (top) { Object.assign(state, top.state); dash = top.dash } },
     setLineDash: (d: unknown) => { dash = [...(d as number[])] },
     getLineDash: () => [...dash],
-    measureText: (text: unknown) => ({ width: glyph(String(text), String(state.font)) }),
+    measureText: (text: unknown) => { record('measureText', [text]); return { width: glyph(String(text), String(state.font)) } },
     getTransform: () => ({ a: 1, b: 0, c: 0, d: 1, e: 0, f: 0 }),
   }
   const ctx = new Proxy(state, {
@@ -243,5 +243,56 @@ describe('#7 cell number formats: scientific, fractions and colour sections (Exc
     const s2 = sheetOf([])
     expect(cellDisplayText(s2, { value: 3.14159, style: style({ numFmtId: 164, formatCode: '[>100]0.00' }) })).toBe('3.14')
     expect(s2.diagnostics?.some(d => d.feature === 'format-unsupported')).toBe(true)
+  })
+})
+
+describe('#2/#14 one Calibri fallback stack and Excel-model #### decisions', () => {
+  /** Arial-like advances (the common sans fallback when Calibri/Carlito are absent). */
+  const arial = (text: string, font: string) => {
+    const px = Number(/([\d.]+)pt/.exec(font)?.[1] ?? 10) * 96 / 72
+    let em = 0
+    for (const ch of text) em += /[0-9#]/.test(ch) ? 0.556 : ch === '-' ? 0.333 : ch === ':' || ch === ' ' ? 0.278 : 0.5
+    return em * px
+  }
+  it('plain and laid-out cell text both paint with the explicit stack (no context-dependent default)', async () => {
+    const { createCanvas } = await import('canvas')
+    const ctx = createCanvas(64, 80).getContext('2d') as unknown as CanvasRenderingContext2D
+    const used: Array<[string, string, string]> = []
+    const measure = ctx.measureText.bind(ctx), fill = ctx.fillText.bind(ctx)
+    ctx.measureText = (text: string) => { used.push(['measure', text, ctx.font]); return measure(text) }
+    ctx.fillText = (text: string, x: number, y: number) => { used.push(['fill', text, ctx.font]); fill(text, x, y) }
+    renderSheet(sheetOf([
+      { row: 0, col: 0, value: 'plain' },
+      { row: 1, col: 0, value: 'wrapped words here', style: style({ wrapText: true }) },
+    ]), ctx, grid([64], [20, 60]))
+    // Every measurement and paint of both cells (the wrapped one goes through
+    // the shared text-body layout) resolves Calibri to the same explicit stack.
+    const cellText = used.filter(([, text]) => /plain|wrapped|words|here/.test(text))
+    expect(cellText.some(([op, text]) => op === 'fill' && /wrapped|words|here/.test(text))).toBe(true)
+    expect(cellText.some(([op, text]) => op === 'fill' && text === 'plain')).toBe(true)
+    // node-canvas normalises the shorthand; the family list must survive.
+    for (const [, , font] of cellText) expect(font).toMatch(/Carlito/)
+  })
+  it('native-1904 A2: a date Excel shows in full at width 19.5 is not ####, and is fitted to the cell', () => {
+    // 12pt "yyyy-mm-dd hh:mm:ss" in round(19.5 * 7 + 5) = 142px: Calibri needs ~135.5px
+    // of the 136px interior; an Arial fallback would need ~148.6px.
+    const { ctx, ops } = recordingContext(arial)
+    const sheet = sheetOf([{ row: 0, col: 0, value: 43844.5, style: style({ numFmtId: 176, formatCode: 'yyyy\\-mm\\-dd\\ hh:mm:ss', fontSizePt: 12 }) }], { semantics: { dateSystem: '1904', unicode: { version: 1, source: 'workbook-default' }, locale: 'en-US', timeZone: 'UTC', epochNowMs: 0 } })
+    renderSheet(sheet, ctx, grid([142], [20]))
+    const painted = ops.find(o => o.op === 'fillText')!
+    expect(painted.args[0]).toBe('2024-01-15 12:00:00')
+    expect(arial(String(painted.args[0]), painted.font)).toBeLessThanOrEqual(136 + 1e-9)
+  })
+  it('styled B26 (width 18) shows its date with no shrink when the fallback fits', () => {
+    const { ctx, ops } = recordingContext(arial)
+    renderSheet(sheetOf([{ row: 0, col: 0, value: 45360.336805555555, style: style({ numFmtId: 164, formatCode: 'yyyy-mm-dd hh:mm', fontSizePt: 11 }) }]), ctx, grid([131], [20]))
+    const painted = ops.find(o => o.op === 'fillText')!
+    expect(painted.args[0]).toBe('2024-03-09 08:05')
+    expect(painted.font).toMatch(/^11pt /)
+  })
+  it('a number Excel cannot fit either still shows ####', () => {
+    const { ctx, ops } = recordingContext(arial)
+    renderSheet(sheetOf([{ row: 0, col: 0, value: 123456789.123, style: style({ numFmtId: 4, fontSizePt: 11 }) }]), ctx, grid([33], [20]))
+    expect(String(ops.find(o => o.op === 'fillText')!.args[0])).toMatch(/^#+$/)
   })
 })

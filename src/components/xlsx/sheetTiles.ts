@@ -102,6 +102,10 @@ export function admitDeviceScale(viewport: { width: number; height: number }, dp
 
 export function createCanvasTile(): CanvasTile {
   const canvas = globalThis.document.createElement('canvas')
+  // Detached tiles inherit no language, and Chrome resolves generic and
+  // fallback faces per language: carry the page's, as attached canvases do.
+  const lang = globalThis.document.documentElement?.getAttribute('lang')
+  if (lang) canvas.setAttribute('lang', lang)
   canvas.width = TILE_DEVICE_PX
   canvas.height = TILE_DEVICE_PX
   return {
