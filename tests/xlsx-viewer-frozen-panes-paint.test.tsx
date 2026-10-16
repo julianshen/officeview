@@ -38,8 +38,29 @@ describe('frozen pane paint', () => {
     expect(at).toContainEqual([0, -100]) // left strip: tile (0,5)
     expect(at).toContainEqual([0, 0]) // corner: tile (0,0)
     expect(clips).toHaveBeenCalledTimes(4)
-    expect(fills.mock.calls).toContainEqual([63, 0, 1, 400])
-    expect(fills.mock.calls).toContainEqual([0, 19, 640, 1])
+    // The divider sits on the cell boundary, in the body's first pixel: never over frozen-strip glyphs.
+    expect(fills.mock.calls).toContainEqual([64, 0, 1, 400])
+    expect(fills.mock.calls).toContainEqual([0, 20, 640, 1])
+    expect(fills.mock.calls.some(call => call[0] === 63 || call[1] === 19)).toBe(false)
+    renderer.dispose()
+  })
+
+  it('a tile shown by several regions is painted and charged once per frame (frame budget debited once)', () => {
+    const renderer = new SheetTileRenderer('D', BITMAP_BUDGETS.D - TILE_BYTES * 64)
+    const canvas = document.createElement('canvas')
+    canvas.width = 640; canvas.height = 400
+    const pane = canvas.getContext('2d')!
+    const draws = vi.spyOn(pane, 'drawImage')
+    renderer.present(pane, {
+      sheet: {} as never, geometry: {} as never, layoutCache: {} as never, merges: {} as never,
+      identity: { docId: 'd', sheetId: 's', valueGen: 0, fontGen: 0, viewGen: 0 },
+      origin: { x: 100, y: 100 }, viewport: { width: 400, height: 300 }, zoom: 1, dpr: 1, extent: { width: 64 * T, height: 64 * T },
+      frozen: { rows: 1, cols: 1, left: 64, top: 20 },
+    })
+    // Body, top, left and corner all show tile (0,0) here: four draws, one paint, records counted once.
+    expect(draws.mock.calls.filter(call => call[1] <= 0 && call[2] <= 0).length).toBeGreaterThanOrEqual(4)
+    expect(renderer.stats.basePaints).toBe(new Set(draws.mock.calls.map(call => call[0])).size)
+    expect(renderer.stats.frameRecords).toBe(renderer.stats.basePaints)
     renderer.dispose()
   })
 

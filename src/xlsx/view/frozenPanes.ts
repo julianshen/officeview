@@ -100,3 +100,22 @@ export function initialOrigin(frozen: { topRow?: number; leftCol?: number } | un
   const at = (index: number | undefined, axis: AxisMetrics, pinned: number) => index !== undefined && index < axis.logicalCount ? Math.max(0, axis.start(index) - pinned) : 0
   return { x: at(frozen?.leftCol, metrics.cols, extent?.left ?? 0), y: at(frozen?.topRow, metrics.rows, extent?.top ?? 0) }
 }
+
+/** The logical box each visible region shows (for request retention and
+ * auto-fit sampling): disjoint, never their enclosing hull. */
+export function paneLogicalBoxes(frozen: FrozenExtent | undefined, origin: PanePoint, zoom: number, viewport: { width: number; height: number }): PaneRect[] {
+  return paneRegions(frozen, origin, zoom, viewport).map(region => ({ x: region.origin.x + region.clip.x / zoom, y: region.origin.y + region.clip.y / zoom, width: region.clip.width / zoom, height: region.clip.height / zoom }))
+}
+
+/** On-screen viewport position of a header boundary line at logical `line`
+ * on one axis (column x / row y), per region: a line inside the pinned strip
+ * maps with origin 0; a scrolling line maps with the scroll origin and is
+ * null while it is hidden under the strip or past the pane. For resize
+ * handles and guides (stream E) and anything else that draws on grid lines. */
+export function lineToViewport(frozen: FrozenExtent | undefined, origin: PanePoint, zoom: number, viewport: { width: number; height: number }, axis: 'x' | 'y', line: number): number | null {
+  const pinned = axis === 'x' ? frozen?.left ?? 0 : frozen?.top ?? 0
+  const size = axis === 'x' ? viewport.width : viewport.height
+  if (pinned > 0 && line <= pinned) return line * zoom
+  const at = (line - (axis === 'x' ? origin.x : origin.y)) * zoom
+  return at < pinned * zoom || at > size ? null : at
+}

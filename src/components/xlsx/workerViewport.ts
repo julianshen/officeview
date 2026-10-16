@@ -5,7 +5,7 @@ import { validateOverflowProof, viewportPlanAdmission, VIEWPORT_MEASUREMENT_BYTE
  * A tile plan spends the per-tile page cap from the SAME per-frame/per-tile
  * allowance the row cache's reads spend (§11.1); ring work may only use half
  * of the frame, so a visible tile always finds room. */
-import type { CacheIdentity, LogicalViewport } from '../../xlsx/view/contracts'
+import type { CacheIdentity, LogicalCellBox, LogicalViewport } from '../../xlsx/view/contracts'
 import { identityFields, sameIdentity } from '../../xlsx/view/cacheIdentity'
 import { pageTileKey, type RemoteWorkbook, type RemoteSheetStore } from '../../worker/viewerRemoteSource'
 import { queryPayloadBytes, WORKER_QUERY_BYTES } from '../../worker/viewerQueryBudget'
@@ -42,18 +42,21 @@ export class WorkerViewportPlans {
   constructor(private readonly remote: RemoteWorkbook) {}
   /** Retryable failures per tile key, for the backoff (bounded like entries). */
   private readonly failures = new Map<string, number>()
-  beginFrame(owner: CacheIdentity, window: LogicalViewport): void {
+  /** `regions`: the visible logical boxes when they are disjoint (frozen panes:
+   * corner, strips, body); a request survives only near one of them, never
+   * merely inside their enclosing rectangle. Default: the window's box. */
+  beginFrame(owner: CacheIdentity, window: LogicalViewport, regions: readonly LogicalCellBox[] = [window.box]): void {
     // One presented frame: plans and row reads share its page allowance.
     this.remote.beginPageFrame()
     this.select(owner, window)
     // Requests and failures off the pane and its prefetch ring are obsolete;
     // settled plans stay until the byte/entry caps or a scope change.
     const reach = TILE_PREFETCH_RING * TILE_DEVICE_PX / (window.zoom * window.deviceScale)
-    const box = { x: window.box.x - reach, y: window.box.y - reach, width: window.box.width + 2 * reach, height: window.box.height + 2 * reach }
+    const boxes = regions.map(region => ({ x: region.x - reach, y: region.y - reach, width: region.width + 2 * reach, height: region.height + 2 * reach }))
     for (const [key, entry] of [...this.entries]) {
       if (entry.plan?.kind === 'detail' && !entry.plan.pending?.length && !entry.timer || entry.plan?.kind === 'coarse') continue
       const [, x, y, width, height] = JSON.parse(key) as [string, number, number, number, number]
-      if (x >= box.x + box.width || x + width <= box.x || y >= box.y + box.height || y + height <= box.y) {
+      if (boxes.every(box => x >= box.x + box.width || x + width <= box.x || y >= box.y + box.height || y + height <= box.y)) {
         this.drop(key, entry)
         this.failures.delete(key)
       }

@@ -126,8 +126,10 @@ function paintFreezeLines(target: CanvasRenderingContext2D, frame: SheetFrame): 
   target.setTransform(1, 0, 0, 1, 0, 0)
   target.fillStyle = '#5F6368'
   const w = Math.max(1, Math.round(frame.dpr))
-  if (size.x > 0) target.fillRect(Math.round(size.x * frame.dpr) - w, 0, w, target.canvas.height)
-  if (size.y > 0) target.fillRect(0, Math.round(size.y * frame.dpr) - w, target.canvas.width, w)
+  // On the boundary, inside the scrolling body: frozen-strip pixels (glyphs of a
+  // title in row 1, say) are never painted over.
+  if (size.x > 0) target.fillRect(Math.round(size.x * frame.dpr), 0, w, target.canvas.height)
+  if (size.y > 0) target.fillRect(0, Math.round(size.y * frame.dpr), target.canvas.width, w)
   target.restore()
 }
 
@@ -174,6 +176,9 @@ export class SheetTileRenderer {
       target.fillRect(0, 0, target.canvas.width, target.canvas.height)
       // Frozen panes: each region (body first, then the pinned strips over it)
       // draws the same cached tiles with its own effective origin, clipped.
+      // One tile is admitted, painted and charged once per frame even when
+      // several regions show it; its surface is reused across their clips.
+      const presented = new Map<string, ReturnType<SheetTileRenderer['tile']>>()
       for (const region of regions) {
         const rx = Math.round(region.origin.x * scale), ry = Math.round(region.origin.y * scale)
         const visible = pinned
@@ -188,17 +193,22 @@ export class SheetTileRenderer {
         }
         for (let row = visible.r0; row <= visible.r1; row++) {
           for (let col = visible.c0; col <= visible.c1; col++) {
-            const tile = this.tile(frame, col, row, true, budget)
-            resourceNotice ??= tile.surface.cost?.resourceNotice
-            records += tile.surface.cost?.records ?? 0
-            gridlines += tile.surface.cost?.gridlines ?? 0
+            const id = `${col},${row}`
+            let tile = presented.get(id)
+            if (!tile) {
+              tile = this.tile(frame, col, row, true, budget)
+              presented.set(id, tile)
+              resourceNotice ??= tile.surface.cost?.resourceNotice
+              records += tile.surface.cost?.records ?? 0
+              gridlines += tile.surface.cost?.gridlines ?? 0
+            }
             // Float64 global device offsets minus the snapped origin: small integers.
             target.drawImage(tile.surface.canvas, col * TILE_DEVICE_PX - (pinned ? rx : px), row * TILE_DEVICE_PX - (pinned ? ry : py))
-            if (!tile.retained) tile.surface.close()
           }
         }
         if (pinned) target.restore()
       }
+      for (const tile of presented.values()) if (!tile.retained) tile.surface.close()
       if (pinned) paintFreezeLines(target, frame)
       if (frame.watermark) {
         target.setTransform(frame.dpr, 0, 0, frame.dpr, 0, 0)

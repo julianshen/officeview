@@ -27,8 +27,10 @@ export function frozenPaneFrom(a: Record<string, string | undefined>): XlsxFroze
     let col = 0
     for (const ch of m[1].toUpperCase()) col = col * 26 + ch.charCodeAt(0) - 64
     const row = Number(m[2]) - 1
-    if (rows && row >= rows && row < MAX_FROZEN_ROWS) pane.topRow = row
-    if (cols && col - 1 >= cols && col - 1 < MAX_FROZEN_COLS) pane.leftCol = col - 1
+    // Both authored coordinates count, whichever axis is frozen (a scrolling
+    // pane may start below/right of the strip on the other axis too).
+    if (row > 0 && row >= rows && row < MAX_FROZEN_ROWS) pane.topRow = row
+    if (col - 1 > 0 && col - 1 >= cols && col - 1 < MAX_FROZEN_COLS) pane.leftCol = col - 1
   }
   return pane
 }

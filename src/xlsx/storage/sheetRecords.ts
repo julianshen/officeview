@@ -377,7 +377,7 @@ export function sheetRecordEvents(meta: SheetMetadata, options: SheetRecordOptio
   const { partId } = options
   const stack: string[] = []
   let mcDepth = 0
-  let paneSeen = false
+  let paneSeen = false, sheetViews = 0
   let inSheetData = false
   let rowIndex = -1
   let lastRow = -1
@@ -551,7 +551,10 @@ export function sheetRecordEvents(meta: SheetMetadata, options: SheetRecordOptio
         const id = attrMap(names, values, count).id
         bounded(meta.tablePartIds, 'table parts')
         meta.tablePartIds.push(typeof id === 'string' && id !== '' ? id : undefined)
-      } else if (depth === 3 && local === 'pane' && stack[1] === 'sheetViews' && stack[2] === 'sheetView' && !paneSeen) {
+      } else if (depth === 2 && local === 'sheetView' && stack[1] === 'sheetViews') {
+        // Only the first sheet view counts (as the resident parser reads it), even when it has no pane.
+        sheetViews++
+      } else if (depth === 3 && local === 'pane' && stack[1] === 'sheetViews' && stack[2] === 'sheetView' && sheetViews === 1 && !paneSeen) {
         paneSeen = true
         const frozen = frozenPaneFrom(attrMap(names, values, count))
         if (frozen) meta.frozen = frozen

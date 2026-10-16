@@ -119,9 +119,14 @@ export function setScrollZoom(window: ScrollWindow, metrics: SheetMetrics, viewp
   const world = viewportToLogical(window, anchor)
   point(nextAnchor)
   const zoom = clampZoom(finiteZoom(nextZoom), SHEET_MIN_ZOOM, SHEET_MAX_ZOOM)
-  // An anchor inside a pinned strip has no scroll meaning: keep that axis's origin.
-  const pinned = frozenViewportSize(window.frozen, window.zoom)
-  return makeWindow(metrics, viewport, { x: anchor.x < pinned.x ? window.logicalOrigin.x : world.x - nextAnchor.x / zoom, y: anchor.y < pinned.y ? window.logicalOrigin.y : world.y - nextAnchor.y / zoom }, zoom, deviceScale, window.frozen)
+  // Reconcile against the strips pinned before AND after the zoom: an anchor
+  // that stays inside a pinned strip has no scroll meaning (keep that axis's
+  // origin); otherwise the body mapping keeps the anchor's world point,
+  // including when the zoom pins or unpins the strip (60% threshold).
+  const before = frozenViewportSize(window.frozen, window.zoom)
+  const after = frozenViewportSize(frozenExtent(window.frozen, metrics, viewport, zoom), zoom)
+  const keepX = anchor.x < before.x && nextAnchor.x < after.x, keepY = anchor.y < before.y && nextAnchor.y < after.y
+  return makeWindow(metrics, viewport, { x: keepX ? window.logicalOrigin.x : world.x - nextAnchor.x / zoom, y: keepY ? window.logicalOrigin.y : world.y - nextAnchor.y / zoom }, zoom, deviceScale, window.frozen)
 }
 export function logicalToViewport(window: ScrollWindow, value: ScrollPoint): ScrollPoint {
   state(window); point(value)

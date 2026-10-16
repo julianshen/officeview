@@ -80,7 +80,7 @@ import type { LedgerHold } from '../../xlsx/view/mainLedger'
 import { DisplayHolds } from './displayHolds'
 import { SheetChartDescriptions, chartNotices, sheetCharts } from './sheetCharts'
 import type { XlsxFrozenPane } from '../../xlsx/frozenPane'
-import { initialOrigin, paneRegions } from '../../xlsx/view/frozenPanes'
+import { initialOrigin, paneLogicalBoxes, paneRegions } from '../../xlsx/view/frozenPanes'
 
 /** A committed sheet view (the S9.1 sort/filter commit seam). `revision` must
  * increase with every commit; it becomes the sheet's viewGen. */
@@ -574,9 +574,9 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
     // describes the frame, so a render that never commits cannot cancel
     // requests for frames that do.
     if (scroll) {
-      // Pinned strips paint from origin 0 on their axis: keep their plans alive too.
-      const x0 = scroll.frozen?.left ? 0 : scroll.logicalOrigin.x, y0 = scroll.frozen?.top ? 0 : scroll.logicalOrigin.y
-      workerPlans?.beginFrame(identity, { box: { x: x0, y: y0, width: scroll.logicalOrigin.x - x0 + viewport.width / scroll.zoom, height: scroll.logicalOrigin.y - y0 + viewport.height / scroll.zoom }, zoom: scroll.zoom, deviceScale: dpr })
+      // Pinned strips paint from origin 0 on their axis: their plans stay alive,
+      // but only the visible regions themselves (never their enclosing hull).
+      workerPlans?.beginFrame(identity, { box: { ...scroll.logicalOrigin, width: viewport.width / scroll.zoom, height: viewport.height / scroll.zoom }, zoom: scroll.zoom, deviceScale: dpr }, paneLogicalBoxes(scroll.frozen, scroll.logicalOrigin, scroll.zoom, viewport))
     }
     if (!assets || assets.sheetId !== activeSheetId) {
       // The active sheet's lease is pending: present a declared loading state, never
