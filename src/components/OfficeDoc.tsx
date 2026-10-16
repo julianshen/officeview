@@ -846,9 +846,10 @@ const InteractiveSheetDoc = lazy(() => import('./xlsx/InteractiveSheetDoc'))
 
 export function OfficeDoc(props: OfficeDocProps): ReactElement {
   const { interactiveSheets = false, document, ...rest } = props
-  if (interactiveSheets && 'sheets' in document) {
-    // A worker-backed (paged) shell document carries its source (S5.4).
-    const paged = pagedWorkbookOf(document)
+  // A worker-backed (paged) shell document carries its source (S5.4) and has no
+  // rows on the main thread: only the interactive viewer can show it.
+  const paged = pagedWorkbookOf(document)
+  if ((interactiveSheets || paged) && 'sheets' in document) {
     return (
       <Suspense fallback={<div role="status" data-officeview-root="" style={{ padding: 16 }}>Loading spreadsheet viewer…</div>}>
         <InteractiveSheetDoc doc={document} {...(paged ? { source: paged.source } : {})} {...rest} />

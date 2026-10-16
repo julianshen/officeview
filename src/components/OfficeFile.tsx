@@ -78,6 +78,13 @@ export function useOfficeFile(
   // Paged admissions route to the worker only with the flag AND a worker;
   // otherwise the load is exactly today's (compatibility mode for large files).
   const pagedRoute = Boolean(options.interactiveSheets && options.viewerWorker)
+  const routeRef = useRef(pagedRoute)
+  routeRef.current = pagedRoute
+  // A one-shot source (Response, stream, Request, promise) is consumed by its
+  // first load, so a later mode change keeps the loaded document (a worker-backed
+  // one stays in the interactive viewer) instead of re-reading a drained body;
+  // re-readable sources (bytes, Blob, URL) re-open under the new route.
+  const routeKey = source && oneShot(source) ? null : pagedRoute
   useEffect(() => {
     let cancelled = false
     // No source: the previous cleanup released its document, so stop rendering it.
@@ -96,7 +103,7 @@ export function useOfficeFile(
       // in <OfficeFile>) and let a stale download overwrite the live policy.
       onProtection: (p) => { if (!cancelled) protectionRef.current?.(p) },
       onWatermark: (m) => { if (!cancelled) watermarkRef.current?.(m) },
-      ...(pagedRoute ? {
+      ...(routeRef.current ? {
         paged: async (blob, ctx, release) => {
           const factory = workerRef.current
           if (!factory) return undefined
@@ -126,9 +133,15 @@ export function useOfficeFile(
       controller.abort()
       void pagedWorkbookOf(loaded)?.release()
     }
-  }, [source, pagedRoute])
+  }, [source, routeKey])
   return state
 }
+
+const oneShot = (s: ByteSource): boolean =>
+  typeof (s as { then?: unknown }).then === 'function'
+  || (typeof Request !== 'undefined' && s instanceof Request)
+  || (typeof Response !== 'undefined' && s instanceof Response)
+  || (typeof ReadableStream !== 'undefined' && s instanceof ReadableStream)
 
 export interface OfficeFileProps extends Omit<OfficeDocProps, 'document'> {
   /** The office file: bytes, a Blob, a fetch() Response, a ReadableStream, a URL ({ url, headers }), a Request, or a promise of any of these. */
@@ -205,7 +218,7 @@ export function OfficeFile({
       {...rest}
     />
   )
-  if (!state.notices || (rest.interactiveSheets && 'sheets' in state.document)) return doc
+  if (!state.notices || ((rest.interactiveSheets || pagedWorkbookOf(state.document)) && 'sheets' in state.document)) return doc
   return (
     <>
       <div role="status" data-officeview-notice="">{state.notices.join(' · ')}</div>
