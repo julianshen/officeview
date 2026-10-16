@@ -84,6 +84,16 @@ describe('#9 header actions and labels', () => {
     expect(button.style.width).toBe(`${wide}px`)
     expect(parseFloat((button.firstElementChild as HTMLElement).style.fontSize)).toBeLessThanOrEqual(12)
   })
+  it('a row cut by the pane edge keeps its label where the whole row puts it (no re-centring while scrolling in)', () => {
+    const props = gridFixture() // 24px rows, 96px viewport
+    const window = createScrollWindow(props.projection, props.viewport, { offset: { x: 0, y: 12 } })
+    const headerProps = { projection: props.projection, window, viewport: props.viewport, columns: [0], selection: props.selection, sort: null }
+    const ui = render(<div role="grid"><div role="row"><GridRowHeader props={headerProps} slot={0} /></div></div>)
+    const button = ui.getByRole('button', { name: 'Select row 1' })
+    // Row 1 spans y -12..12: its clamped box starts at 0, its centre stays at 0 (-12 + 24/2).
+    expect(parseFloat(button.style.top)).toBe(0)
+    expect((button.firstElementChild as HTMLElement).style.height).toBe('24px')
+  })
 })
 
 describe('#18 status line', () => {
@@ -93,6 +103,19 @@ describe('#18 status line', () => {
     expect(status.style.height).toBe(`${STATUS_BAR_HEIGHT}px`)
     expect(status.style.position).toBe('absolute')
     expect(status.style.bottom).toBe('0px')
+  })
+  it('is one text run, so a changing count never moves the notices after it (no layout shift)', () => {
+    const ui = render(<GridSemantics {...gridFixture()} announcement="Selection cleared." />)
+    const status = ui.container.querySelector('[data-officeview-ui=viewer-status]') as HTMLElement
+    expect(status.childNodes).toHaveLength(1)
+    expect(status.childNodes[0].nodeType).toBe(Node.TEXT_NODE)
+    expect(status.title).toBe(status.textContent)
+  })
+  it('in the viewer pane it fills its positioned parent, so the status line follows the pane at once', () => {
+    const ui = render(<GridSemantics {...gridFixture()} fill />)
+    const wrapper = ui.container.firstElementChild as HTMLElement
+    expect(wrapper.style.position).toBe('absolute')
+    expect(wrapper.style.inset).toBe('0px')
   })
   it('a cached document with no affected formulas states the saved-values policy without "0 formulas ... (file too large)"', async () => {
     const { createObjectWorkbookSource } = await import('../src/xlsx/view/source')

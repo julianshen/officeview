@@ -241,10 +241,15 @@ export function columnHeaderHeight(touch: boolean, actions: boolean, more: boole
 export function GridRowHeader({ props, slot }: { props: GridHeadersProps; slot: number }): ReactElement {
   const row = props.projection.order.displayToSource(slot), box = viewportHeaderBox(props.projection, props.window, props.viewport, 'row', slot)
   const gutter = props.gutter ?? GRID_HEADER_SIZE
+  // A row cut by the pane edge keeps its label where the whole row would put it
+  // (no re-centring as it scrolls in: that would be a layout shift); a row taller
+  // than the pane centres in its visible part.
+  const full = gridHeaderBox(props.projection, props.window, 'row', slot)
+  const label = full.height <= props.viewport.height ? { top: full.y - box.y, height: full.height } : { top: 0, height: box.height }
   return <div role="rowheader" aria-colindex={1} aria-label={`Row ${slot + 1}`} aria-selected={selectedRow(props, row)}
     data-officeview-ui="row-header" onPointerDown={event => event.stopPropagation()} onDoubleClick={event => event.stopPropagation()} style={{ position: 'absolute', width: gutter, height: '100%', pointerEvents: 'auto', background: HEADER_COLORS.background, boxShadow: `inset -1px 0 ${HEADER_COLORS.track}` }}>
     <button type="button" aria-label={`Select row ${slot + 1}`} data-header-row={slot} tabIndex={props.controlMode ? 0 : -1} onMouseDown={keepGridFocus}
       onClick={event => props.onSelect?.('row', row, { toggle: event.ctrlKey || event.metaKey, extend: event.shiftKey }, event)}
-      style={{ position: 'absolute', top: '50%', transform: 'translateY(-50%)', minWidth: GRID_HEADER_SIZE, minHeight: GRID_HEADER_SIZE, width: gutter, border: 0, padding: 0, background: 'transparent', color: HEADER_COLORS.text }}><span style={{ display: 'block', height: box.height, overflow: 'hidden', whiteSpace: 'nowrap', fontVariantNumeric: 'tabular-nums', fontSize: Math.min(ROW_FONT_PX, box.height), lineHeight: `${box.height}px` }}>{slot + 1}</span></button>
+      style={{ position: 'absolute', top: label.top + label.height / 2, transform: 'translateY(-50%)', minWidth: GRID_HEADER_SIZE, minHeight: GRID_HEADER_SIZE, width: gutter, border: 0, padding: 0, background: 'transparent', color: HEADER_COLORS.text }}><span style={{ display: 'block', height: label.height, overflow: 'hidden', whiteSpace: 'nowrap', fontVariantNumeric: 'tabular-nums', fontSize: Math.min(ROW_FONT_PX, label.height), lineHeight: `${label.height}px` }}>{slot + 1}</span></button>
   </div>
 }

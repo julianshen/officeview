@@ -150,7 +150,7 @@ export function FilterDropdown(props: FilterDropdownProps): ReactElement | null 
         {!busy && (!page?.complete || error) && <button type="button" style={controlTarget} onClick={initialize}>Retry values</button>}
       </div>
       {/* OK/Cancel stay in view at the bottom of the scrolling popup. */}
-      <div style={{ position: 'sticky', bottom: 0, background: '#fff', paddingTop: 4 }}><button type="submit" style={controlTarget} disabled={busy || !canApply || life.invalid}>OK</button><button type="button" style={controlTarget} onClick={() => life.cancel()}>Cancel</button></div>
+      <div style={{ position: 'sticky', bottom: 'calc(-12px - var(--officeview-safe-bottom))', margin: '0 -12px calc(-12px - var(--officeview-safe-bottom))', padding: '4px 12px calc(12px + var(--officeview-safe-bottom))', background: '#fff' }}><button type="submit" style={controlTarget} disabled={busy || !canApply || life.invalid}>OK</button><button type="button" style={controlTarget} onClick={() => life.cancel()}>Cancel</button></div>
     </form>
   </div>
 }

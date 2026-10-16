@@ -40,6 +40,9 @@ export interface GridSemanticsProps {
   inspection?: HiddenCellInspection
   /** Row-header gutter width (CSS px); default GRID_HEADER_SIZE. */
   gutter?: number
+  /** Fill the positioned parent (the viewer pane), so the status line follows the
+   * pane's size at once instead of a render later. */
+  fill?: boolean
 }
 /** The visible status line (§9.1, the sole notice surface) below the cells. */
 export const STATUS_BAR_HEIGHT = 24
@@ -243,7 +246,7 @@ export function GridSemantics(props: GridSemanticsProps): ReactElement {
     onSelectAll: () => publish(() => ({ selection: { active, anchor: active, ranges: [{ rows: { kind: 'intervals', intervals: [{ r0: 0, r1: projection.rows.logicalCount - 1 }] }, cols: [{ c0: 0, c1: projection.cols.logicalCount - 1 }] }] }, window: scroll, announcement: 'Worksheet selected.' })),
   }
   const status = [props.announcement, current.announcement, notice, coarse || subDetail ? 'Zoom in or inspect a cell for detail.' : ''].filter(Boolean).join(' ')
-  return <div ref={wrapperRef} onKeyDown={keyDown} onBlur={event => { if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setControlMode(false) }} style={{ position: 'relative', width: viewport.width + gutter, height: viewport.height + headerHeight + STATUS_BAR_HEIGHT }}>
+  return <div ref={wrapperRef} onKeyDown={keyDown} onBlur={event => { if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setControlMode(false) }} style={props.fill ? { position: 'absolute', inset: 0 } : { position: 'relative', width: viewport.width + gutter, height: viewport.height + headerHeight + STATUS_BAR_HEIGHT }}>
     <div ref={gridRef} role="grid" aria-label={props.label ?? 'Worksheet'} aria-busy={props.pendingSortColumn != null ? true : undefined} aria-rowcount={MAX_ROWS + 1} aria-colcount={MAX_COLS + 1}
       aria-multiselectable="true" aria-activedescendant={active ? `${prefix}-cell-${cellId(active.row, active.col)}` : undefined}
       aria-description={`Worksheet capacity ${MAX_ROWS} rows by ${MAX_COLS} columns.${coarse ? ' Coarse view. Zoom in or inspect a cell for detail.' : ''}`}

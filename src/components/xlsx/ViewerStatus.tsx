@@ -50,11 +50,13 @@ export function ViewerStatus({ records, announcement, inspection, countMode, loa
     return () => { alive = false; controller.abort() }
   }, [key])
   const counts = !validCounts ? 'Record counts unavailable' : countMode === 'body' ? `Visible body ${records.visible} / ${records.completeness === 'complete' ? 'complete body' : 'body'} ${records.total}` : records.total === 0 ? '0 records' : `${records.visible} of ${records.total} records`
-  return <div role="status" aria-live="polite" aria-atomic="true" data-officeview-ui="viewer-status" style={style}
-    title={style ? [counts, ...(loadReport?.status === 'error' ? [loadReport.message] : loadReport?.notices ?? []), announcement].filter(Boolean).join(' — ') : undefined}>
-    <span>{counts}{validCounts && records.completeness && records.completeness !== 'complete' ? ` (${records.completeness})` : ''}</span>
-    {(loadReport?.status === 'error' ? [loadReport.message] : loadReport?.notices ?? []).map((message, index) => <span key={index}> — {message}</span>)}
-    {announcement && <span> — {announcement}</span>}
-    {inspection && <span> — Original cell {formatA1(inspection.target)}; {inspection.hiddenReason}; read-only. {inspectionText(snapshot?.key === key ? snapshot.read : null)}</span>}
-  </div>
+  const notices = loadReport?.status === 'error' ? [loadReport.message] : loadReport?.notices ?? []
+  // One text run: a visible status line whose parts change must not move later parts (layout shift).
+  const text = [
+    `${counts}${validCounts && records.completeness && records.completeness !== 'complete' ? ` (${records.completeness})` : ''}`,
+    ...notices.map(message => ` — ${message}`),
+    announcement ? ` — ${announcement}` : '',
+    inspection ? ` — Original cell ${formatA1(inspection.target)}; ${inspection.hiddenReason}; read-only. ${inspectionText(snapshot?.key === key ? snapshot.read : null)}` : '',
+  ].join('')
+  return <div role="status" aria-live="polite" aria-atomic="true" data-officeview-ui="viewer-status" style={style} title={style ? text : undefined}>{text}</div>
 }
