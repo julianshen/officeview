@@ -271,19 +271,28 @@ it.each([73868, 73867])('post-diagnostic growth uses the debited copy owner with
   await waitFor(() => expect(ui.getByRole('status').textContent).not.toContain('Loading sheet'))
   go(ui, 'A1')
   fireEvent.click(ui.getByRole('button', { name: 'Select row 1' }))
-  const adopt = ledger.adoptWhileReachable.bind(ledger)
-  let adopted = false
+  const adopt = ledger.adoptWhileReachable.bind(ledger), set = ledger.set.bind(ledger)
+  // Bytes outside the copy pool, pinned once the diagnostic is adopted. Other
+  // owners change asynchronously while the copy yields: a FinalizationRegistry
+  // callback ends an unreachable controls page's lifetime charge, a late render
+  // charges tile shaping caches and merges. The pressure owner absorbs every
+  // such change, so exactly `capacity` bytes stay left for the copy owner.
+  let adopted = false, outside = 0
+  const pin = () => set('controls', 'pressure', ledger.ownerBytes('controls', 'pressure') + outside - (ledger.bytes - ledger.snapshot().byPool.copy))
   vi.spyOn(ledger, 'adoptWhileReachable').mockImplementation((...args) => {
     const token = adopt(...args)
     adopted = true
-    ledger.set('controls', 'pressure', MAIN_THREAD_BUDGETS.D - (ledger.bytes - ledger.snapshot().byPool.copy) - capacity)
+    outside = MAIN_THREAD_BUDGETS.D - capacity
+    pin()
     return token
   })
-  const set = ledger.set.bind(ledger), growthTotals: number[] = []
+  const growthTotals: number[] = []
   vi.spyOn(ledger, 'set').mockImplementation((pool, owner, bytes) => {
     const previous = ledger.snapshot().byPool.copy
     set(pool, owner, bytes)
-    if (adopted && pool === 'copy' && bytes > previous) growthTotals.push(ledger.bytes)
+    if (!adopted) return
+    if (pool === 'copy') { if (bytes > previous) growthTotals.push(ledger.bytes) }
+    else if (owner !== 'pressure') pin()
   })
   fireEvent.click(ui.getByRole('button', { name: 'Copy selection' }))
   await waitFor(() => expect(writes.jobs.length === 1 || ui.getByRole('status').textContent?.includes('too large')).toBe(true), { timeout: 5000 })
@@ -295,6 +304,8 @@ it.each([73868, 73867])('post-diagnostic growth uses the debited copy owner with
     await act(async () => writes.jobs[0].resolve())
   } else expect(writes.writeText).not.toHaveBeenCalled()
   expect(ledger.snapshot().byPool.copy).toBe(0)
+  expect(ledger.bytes).toBe(MAIN_THREAD_BUDGETS.D - capacity)
+  adopted = false
   ledger.release('controls', 'pressure')
 })
 
