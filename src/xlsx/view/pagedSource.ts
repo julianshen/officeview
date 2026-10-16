@@ -32,7 +32,6 @@ import type { PagedImportSession, PagedSheet, PagedWorkbook } from '../storage/p
 import type { DrawingMemory, ProfileId, SheetDrawings } from './contracts'
 import { DRAWING_MEMORY_REFUSED, DrawingNodeLedger, drawingFootprint, unavailableDrawings } from './drawingPayload'
 import type { XlsxCellStyle, XlsxDrawing, XlsxSheet } from '../types'
-import type { SourcePageStore } from '../storage/sourcePages'
 import { loadChartModule } from '../chartLoader'
 import { cellDisplayText } from '../render'
 import { semanticsFor } from './semanticsFor'
@@ -557,9 +556,13 @@ export class PagedXlsxSheetAdapter implements SourceStore {
     const state = new Uint8Array(wantsText.length)
     const strings: Array<string | undefined> = new Array(wantsText.length)
     const labels: Array<string | undefined> = new Array(wantsText.length)
-    let reserved = base, pageCharge = 0
+    let reserved = base
+    // Live charges of the records being read (a page, a string record) that the pool could not keep:
+    // part of EVERY admission until the record is released (ownRecord / disown).
+    const charges = { page: 0, string: 0 }
+    const charged = () => charges.page + charges.string
     const reserve = (bytes: number): boolean => {
-      if (reserved + bytes - base > charts.CHART_TEXT_BYTES_LIMIT || !admit(reserved + pageCharge + bytes)) return false
+      if (reserved + bytes - base > charts.CHART_TEXT_BYTES_LIMIT || !admit(reserved + charged() + bytes)) return false
       reserved += bytes
       return true
     }
@@ -572,8 +575,17 @@ export class PagedXlsxSheetAdapter implements SourceStore {
     class LabelRefused extends Error {}
     const styles = this.workbook.formatting.styles
     const display: XlsxSheet = { name: '', rows: [], cols: [], merges: [], mergeRanges: [], semantics: semanticsFor(this.workbook.formatting.dateSystem) }
-    let stringCharge = 0
-    const charged = () => pageCharge + stringCharge
+    /** One ownership path for pages and string records: pinned when the pool keeps
+     * the record, otherwise charged to the read (refused when that charge cannot be
+     * admitted). The charge stays in every admission until `disown`. */
+    const ownRecord = <T extends { retained: boolean; bytes: number; release: () => void }>(held: T, slot: 'page' | 'string'): boolean => {
+      if (held.retained) return true
+      charges[slot] = held.bytes
+      if (admit(reserved + charged())) return true
+      held.release(); charges[slot] = 0
+      return false
+    }
+    const disown = (held: { release: () => void } | undefined, slot: 'page' | 'string') => { held?.release(); charges[slot] = 0 }
     // Number reading and label construction for one cell's text (record: typed storage).
     const takeText = (slot: number, kind: number, record: { text: Uint16Array; textStart: Uint32Array }, at: number, style: XlsxCellStyle | undefined): boolean => {
       const from = record.textStart[at], length = record.textStart[at + 1] - from
@@ -619,7 +631,7 @@ export class PagedXlsxSheetAdapter implements SourceStore {
       // needed while the page is held.
       const deferred: Array<{ slot: number; kind: number; source: 'sst' | 'blob'; id: number; style: XlsxCellStyle | undefined }> = []
       const held = await this.workbook.store.pinnedPage(group.sheetId, group.pageId)
-      if (!held.retained) { pageCharge = held.bytes; if (!admit(reserved + charged())) return refuse(held.release) }
+      if (!ownRecord(held, 'page')) return refuse()
       try {
         const p = held.page
         for (const cell of group.cells) {
@@ -638,25 +650,32 @@ export class PagedXlsxSheetAdapter implements SourceStore {
           if (typeof value === 'number' && Number.isFinite(value)) { nums[cell.slot] = value; state[cell.slot] = 1 } else state[cell.slot] = 3
           if (wantsText[cell.slot] && !label(cell.slot, value, style)) return refuse()
         }
-      } finally { held.release(); pageCharge = 0 }
-      // Pass 2, page released: each string record owned (pinned, or charged to the
-      // read when the pool could not keep it) while its needed entries are extracted.
-      deferred.sort((a, b) => a.source === b.source ? a.id - b.id : a.source < b.source ? -1 : 1)
-      let record: Awaited<ReturnType<SourcePageStore['pinnedString']>> | undefined
-      try {
-        for (const item of deferred) {
-          if (signal.aborted) return done()
-          const next = await this.workbook.store.pinnedString(item.source, item.id)
-          if (record && next && next.key === record.key) next.release()
-          else {
-            record?.release(); stringCharge = 0
-            record = next
-            if (record && !record.retained) { stringCharge = record.bytes; if (!admit(reserved + charged())) return refuse() }
+      } finally { disown(held, 'page') }
+      // Pass 2, page released: string records one at a time. The needed ids are grouped
+      // by record (SST chunk / oversized value) so each record is owned once, and the
+      // previous record is released before the next is loaded: at most one string
+      // record is owned at any moment.
+      const byRecord = new Map<string, typeof deferred>()
+      for (const item of deferred) {
+        const recordKey = this.workbook.store.stringRecordKey(item.source, item.id)
+        let items = byRecord.get(recordKey)
+        if (!items) byRecord.set(recordKey, items = [])
+        items.push(item)
+      }
+      for (const items of [...byRecord.entries()].sort((a, b) => a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0).map(([, list]) => list)) {
+        if (signal.aborted) return done()
+        const record = await this.workbook.store.pinnedString(items[0].source, items[0].id)
+        if (!record) { for (const item of items) state[item.slot] = 3; continue }
+        if (!ownRecord(record, 'string')) return refuse()
+        try {
+          for (const item of items) {
+            if (signal.aborted) return done()
+            // Entries of one record: an SST id's offset within the chunk follows from the first id's.
+            const index = item.source === 'sst' ? record.index + (item.id - items[0].id) : record.index
+            if (!takeText(item.slot, item.kind, record.record, index, item.style)) return refuse()
           }
-          if (!next) { state[item.slot] = 3; continue }
-          if (!takeText(item.slot, item.kind, next.record, next.index, item.style)) return refuse()
-        }
-      } finally { record?.release(); stringCharge = 0 }
+        } finally { disown(record, 'string') }
+      }
     }
     charts.fillDrawings(drawings, owner, (sheet, row, col) => {
       const slot = slots.get(key(sheet, row, col))

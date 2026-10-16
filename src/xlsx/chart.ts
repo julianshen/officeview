@@ -71,6 +71,12 @@ function titleOf(title: XmlNode | undefined): string | undefined {
 }
 
 /** Cached point values of a data source (numRef/strRef caches or literals). */
+/** Labels (categories, series names) keep CHART_LABEL_LIMIT characters; a longer one is cut and recorded. */
+function capLabel(text: string, cut: { truncated: boolean }): string {
+  if (text.length <= CHART_LABEL_LIMIT) return text
+  cut.truncated = true
+  return text.slice(0, CHART_LABEL_LIMIT)
+}
 /** `cut.truncated` records points dropped by the per-series bound (declared count or indices past it). */
 function cacheStrings(node: XmlNode | undefined, cut?: { truncated: boolean }): Array<string | undefined> {
   const cache = child(child(node, 'numRef'), 'numCache') ?? child(child(node, 'strRef'), 'strCache')
@@ -187,7 +193,7 @@ export function parseXlsxChart(root: XmlNode, theme: ThemeContext | undefined): 
       let xValues = xNode ? numbers(cacheStrings(xNode, cut)) : undefined
       if (xNode && !hasCache(xNode)) { const range = formulaOf(xNode) && parseChartRange(formulaOf(xNode)!); if (range) pending.xValues = range }
       if (catNode && categories.length === 0 && !categoryPending) {
-        if (hasCache(catNode)) categories = cacheStrings(catNode, cut).map(v => v ?? '')
+        if (hasCache(catNode)) categories = cacheStrings(catNode, cut).map(v => capLabel(v ?? '', cut))
         else { const range = formulaOf(catNode) && parseChartRange(formulaOf(catNode)!); if (range) categoryPending = range }
       }
       if (values.length > CHART_POINT_LIMIT) { values = values.slice(0, CHART_POINT_LIMIT); truncated = true }
@@ -202,7 +208,7 @@ export function parseXlsxChart(root: XmlNode, theme: ThemeContext | undefined): 
       const markerNone = val(child(child(ser, 'marker'), 'symbol')) === 'none'
       const groupMarker = val(child(node, 'marker'))
       series.push({
-        name: literalName || `Series ${index + 1}`,
+        name: capLabel(literalName || `Series ${index + 1}`, cut),
         color,
         values,
         ...(xValues ? { xValues } : {}),
