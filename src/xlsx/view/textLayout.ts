@@ -36,15 +36,18 @@ export interface CellBodyLayout {
 
 /** The host owns measurement and formatting (spec §11.2: no second text model). */
 export interface CellLayoutHost {
-  layoutBody(cell: XlsxCell, width: number, height: number, overflow?: { left: number; right: number }): CellBodyLayout
+  layoutBody(cell: XlsxCell, width: number, height: number, overflow?: { left: number; right: number }, preformatted?: string): CellBodyLayout
   /** Opt-in proof that this exact body remains valid under the given allowance.
    * Only certified bodies share a key across allowances; other hosts retain
    * their complete allowance-dependent formatting/layout identity. */
   canReuseOverflow?(body: CellBodyLayout, overflow: PlacedCell['overflow']): boolean
-  /** Upper bound of the painted text's UTF-16 units for a cell in a box of
-   * `width`, formatted under `admission` (every formatting allocation is
-   * admitted before it is made; a refusal throws LayoutAdmissionError). */
-  paintedTextUnits?(cell: XlsxCell, width: number, admission: LayoutAdmission): number
+  /** The painted text formatted ONCE under `admission` (every formatting
+   * allocation is admitted before it is made; a refusal throws
+   * LayoutAdmissionError): an upper bound of its UTF-16 units for a box of
+   * `width`, and the formatted text itself when it does not depend on the box
+   * (fed to layoutBody so a cache miss formats once). `release` returns the
+   * formatting reservation once the layout is built. */
+  paintedText?(cell: XlsxCell, width: number, admission: LayoutAdmission): { units: number; text?: string; release(): void }
 }
 
 export interface FillRecord { color: string | null }
@@ -183,17 +186,20 @@ export class LayoutCache {
     }
     const batch = this.batch
     let upper = 0
+    let painted: ReturnType<NonNullable<CellLayoutHost['paintedText']>> | undefined
     if (batch) {
-      // Admission BEFORE construction: the painted text's size (formatted
-      // under the batch's allocation observer), then the record's bound,
-      // evicting least recently used entries until it fits.
-      const units = host.paintedTextUnits ? host.paintedTextUnits(placed.cell, placed.width, batch.admission) : rawTextOf(placed.cell.value).length
-      upper = layoutUpperBytes(units, key.length + (sharedKey?.length ?? 0))
-      while (!batch.admission.admit(upper)) if (!this.evictOldest()) throw new LayoutAdmissionError()
+      // Admission BEFORE construction: the painted text, formatted once under
+      // the batch's allocation observer, then the record's bound, evicting
+      // least recently used entries until it fits.
+      painted = host.paintedText?.(placed.cell, placed.width, batch.admission)
+      upper = layoutUpperBytes(painted ? painted.units : rawTextOf(placed.cell.value).length, key.length + (sharedKey?.length ?? 0))
+      try { while (!batch.admission.admit(upper)) if (!this.evictOldest()) throw new LayoutAdmissionError() }
+      catch (error) { painted?.release(); throw error }
     }
     let built: CellBodyLayout
-    try { built = host.layoutBody(placed.cell, placed.width, placed.height, placed.overflow) }
+    try { built = host.layoutBody(placed.cell, placed.width, placed.height, placed.overflow, painted?.text) }
     catch (error) { if (batch) batch.admission.release(upper); throw error }
+    finally { painted?.release() }
     this.stats.built++
     if (sharedKey !== undefined && host.canReuseOverflow!(built, placed.overflow)) key = sharedKey
     const bytes = estimateLayoutBytes(key, built)

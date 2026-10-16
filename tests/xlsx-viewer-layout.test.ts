@@ -126,7 +126,7 @@ describe('S13 one overflow geometry for paint, records and find', () => {
     expect(overflow).toEqual({ left: 0, right: 0 })
     const hit = { sheetId: 'Layout', cellId: 0, source: { row: 0, col: 0 }, text: long, start: 20, end: 26, displaySlot: 0 }
     const result = hitGeometry(hit, sheet.rows[0].cells[0], geometry.metrics, OWNER, host, new LayoutCache(), overflow)!
-    expect(result.record.text[0].clip.x + result.record.text[0].clip.width).toBeLessThanOrEqual(64 + 1e-9)
+    expect(result.record!.text[0].clip.x + result.record!.text[0].clip.width).toBeLessThanOrEqual(64 + 1e-9)
     for (const rect of result.rects) expect(rect.x + rect.width).toBeLessThanOrEqual(64 + 1e-9) // never over B
     expect(result.rects.length).toBe(1) // the hit itself is preserved
   })

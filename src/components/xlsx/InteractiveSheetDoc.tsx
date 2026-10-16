@@ -1110,7 +1110,7 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
         if (!box || box.x >= pane.x + pane.width || box.x + box.width <= pane.x || box.y >= pane.y + pane.height || box.y + box.height <= pane.y) return
         const cell = cellAt(entry, hit.source)
         let geometry
-        try { geometry = cell && hitGeometry(hit, cell, entry.metrics, identity, host, entry.layoutCache, cellTextOverflow(entry.geometry, hit.source)) }
+        try { geometry = cell && hitGeometry(hit, cell, entry.metrics, identity, host, entry.layoutCache, cellTextOverflow(entry.geometry, hit.source), layoutAdmission) }
         catch (error) { if (!(error instanceof OverflowResourceError)) throw error; findRefusal ||= error.message; return }
         if (!geometry) return
         const rects = geometry.rects.map(toViewport)

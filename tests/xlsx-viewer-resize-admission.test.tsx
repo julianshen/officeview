@@ -265,6 +265,33 @@ describe('confirmation r6: repaint memory is admitted per record at construction
   })
 })
 
+describe('find highlights are admitted like tiles', () => {
+  it('a find hit on a heavy cell at low free memory stays within the hard limit (whole-cell highlight fallback)', FIRST_PAINT_TEST, async () => {
+    const doc = docOf([{ index: 0, cells: [{ ...cell(0, 0, `needle ${'a\n'.repeat(9000)}`), style: { numFmtId: 0, wrapText: true } }] }, { index: 1, cells: [cell(1, 0, 'b')] }])
+    let live: MainMemoryLedger | undefined
+    const f = frames()
+    const view = render(<InteractiveSheetDoc doc={doc} views={{ s: { revision: 0 } }} onMainLedger={value => { live = value }} onFrame={f.onFrame} />)
+    await waitFor(() => expect(f.last()?.basePaints ?? 0).toBeGreaterThan(0), FIRST_PAINT_WAIT)
+    await settle()
+    const check = squeeze(live!, 2 * 1024 * 1024)
+    const paintRecords: number[] = []
+    const set = live!.set.bind(live!)
+    vi.spyOn(live!, 'set').mockImplementation((pool, owner, bytes) => { set(pool, owner, bytes); if (owner === 'paint-records') paintRecords.push(bytes) })
+    fireEvent.change(view.getByRole('searchbox', { name: 'Search document' }), { target: { value: 'needle' } })
+    await waitFor(() => expect(status(view)).toMatch(/A1/))
+    await settle(); await settle()
+    check()
+    // Not admitted at 2 MiB: no record was built for the overlay (whole-cell highlight).
+    expect(paintRecords).toEqual([])
+    // With room, the same highlight is built through the admitted batch.
+    live!.set('copy', 'filler', Math.max(0, BUDGET - live!.bytes + live!.ownerBytes('copy', 'filler') - 40 * 1024 * 1024))
+    fireEvent.change(view.getByRole('searchbox', { name: 'Search document' }), { target: { value: 'needl' } })
+    await waitFor(() => expect(paintRecords.length).toBeGreaterThan(0))
+    expect(live!.snapshot().peakBytes).toBeLessThanOrEqual(BUDGET)
+    live!.set('copy', 'filler', 0)
+  })
+})
+
 describe('confirmation r3 C2: structure-only worker layout publications refresh authored-hidden rows', () => {
   it('publishLayout hiding row 1 hides it in the viewer even though the view revision is unchanged', FIRST_PAINT_TEST, async () => {
     const doc = docOf([{ index: 0, cells: [cell(0, 0, 'a')] }, { index: 1, cells: [cell(1, 0, 'b')] }])

@@ -45,7 +45,7 @@ import type {
 } from './contracts'
 import { MAX_COLS, MAX_ROWS, cellId, type SourceCell, type SourceRect } from './coordinates'
 import { CooperativeSlice, createHostYield, type CooperativeOptions, type HostYield } from './scheduler'
-import { buildCellRecords, rawTextOf, type CellLayout, type CellLayoutHost, type LayoutCache, type Rect } from './textLayout'
+import { buildCellRecords, LayoutAdmissionError, rawTextOf, type CellLayout, type CellLayoutHost, type LayoutAdmission, type LayoutCache, type Rect } from './textLayout'
 import { navigateSelection, type SheetNavigationSession } from './selection'
 import { createScrollWindow, navigateTo, type HiddenTargetReason, type ViewportSize } from './scrollWindow'
 
@@ -568,7 +568,8 @@ export function matchTarget(hit: FindHit): { sheetId: string; cell: SourceCell }
   return { sheetId: hit.sheetId, cell: { row: hit.source.row, col: hit.source.col } }
 }
 
-export interface HitGeometry { record: CellLayout; rects: Rect[] }
+/** `record` is absent when its construction was not admitted (whole-cell highlight). */
+export interface HitGeometry { record?: CellLayout; rects: Rect[] }
 /**
  * Lazy canonical geometry for ONE focused/visible hit: the same S5.1 layout
  * record the painter replays, plus the highlight band of [start,end). Hidden
@@ -577,12 +578,21 @@ export interface HitGeometry { record: CellLayout; rects: Rect[] }
  * text, or a hit whose searched text differs from the record's formatted text,
  * highlights the whole text clip.
  */
-export function hitGeometry(hit: FindHit, cell: XlsxCell, metrics: SheetMetrics, owner: CacheIdentity, host: CellLayoutHost, cache: LayoutCache, overflow?: { left: number; right: number }): HitGeometry | null {
+export function hitGeometry(hit: FindHit, cell: XlsxCell, metrics: SheetMetrics, owner: CacheIdentity, host: CellLayoutHost, cache: LayoutCache, overflow?: { left: number; right: number }, admission?: LayoutAdmission): HitGeometry | null {
   const box = metrics.sourceCellToLogical(hit.source)
   if (!box) return null
   // `overflow` is the allowance the painter used (viewport.cellTextOverflow), so
-  // the record — and its clip — is the painted one.
-  const [record] = buildCellRecords([{ cell, source: hit.source, x: box.x, y: box.y, width: box.width, height: box.height, ...(overflow ? { overflow } : {}) }], owner, host, cache)
+  // the record — and its clip — is the painted one. With `admission` the record
+  // is built in an admitted batch (§12.4); not admitted, the hit highlights its
+  // whole cell box instead of a precise text band.
+  let record: CellLayout
+  if (admission) cache.beginBatch(admission)
+  try {
+    [record] = buildCellRecords([{ cell, source: hit.source, x: box.x, y: box.y, width: box.width, height: box.height, ...(overflow ? { overflow } : {}) }], owner, host, cache)
+  } catch (error) {
+    if (!(error instanceof LayoutAdmissionError)) throw error
+    return { rects: [{ x: box.x, y: box.y, width: box.width, height: box.height }] }
+  } finally { if (admission) cache.endBatch() }
   const text = record.text[0]
   const body = record.body.text
   if (!text || !body) return { record, rects: [] }

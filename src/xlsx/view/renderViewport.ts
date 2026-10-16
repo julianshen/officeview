@@ -21,20 +21,23 @@ export function createCellLayoutHost(ctx: CanvasRenderingContext2D, sheet: Parti
   // Format diagnostics land on the caller's sheet when one is given.
   const target = sheet as XlsxSheet
   return {
-    layoutBody: (cell, w, h, overflow) => layoutCellBody(ctx, target, cell, 0, 0, w, h, measured, overflow),
+    layoutBody: (cell, w, h, overflow, preformatted) => layoutCellBody(ctx, target, cell, 0, 0, w, h, measured, overflow, preformatted),
     // Formats under the admission's allocation observer (each UTF-16 builder is
     // admitted before it is made) and bounds the painted text: the canonical
     // display text, or a '#' fill of the box for a number that does not fit.
-    paintedTextUnits: (cell, width, admission) => {
+    paintedText: (cell, width, admission) => {
       let held = 0
+      const release = () => { if (held) { admission.release(held); held = 0 } }
       const allocation = {
         allocate: (bytes: number) => { if (!admission.admit(bytes)) throw new LayoutAdmissionError(); held += bytes },
         release: (bytes: number) => { const released = Math.min(bytes, held); admission.release(released); held -= released },
       }
-      try {
-        const text = cellDisplayText(target, cell, allocation)
-        return Math.max(text.length, typeof cell.value === 'number' ? Math.ceil(width / 2) + 1 : 0)
-      } finally { if (held) admission.release(held) }
+      let text: string
+      try { text = cellDisplayText(target, cell, allocation) } catch (error) { release(); throw error }
+      // General numbers fit the box (width-dependent): the layout formats those
+      // itself (bounded); every other value reuses this single admitted pass.
+      const general = typeof cell.value === 'number' && (cell.style?.numFmtId ?? 0) === 0
+      return { units: Math.max(text.length, typeof cell.value === 'number' ? Math.ceil(width / 2) + 1 : 0), ...(general ? {} : { text }), release }
     },
     canReuseOverflow: (body, overflow) => {
       const text = body.text

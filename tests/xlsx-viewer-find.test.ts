@@ -175,8 +175,8 @@ describe('workbook find on F1 without painting or a full bitmap', () => {
     const cache = new LayoutCache()
     const geometry = hitGeometry(hit, { ref: '', row: 5, col: 3, value: 'needle in hay', styleIndex: 0 }, metrics, initialIdentity('doc', 'A'), host, cache)!
     expect(host.layoutBody).toHaveBeenCalledTimes(1)
-    expect(geometry.record.id).toBe(hit.cellId)
-    expect(geometry.record.logicalBounds).toEqual({ x: 3 * 64, y: 5 * 20, width: 64, height: 20 })
+    expect(geometry.record!.id).toBe(hit.cellId)
+    expect(geometry.record!.logicalBounds).toEqual({ x: 3 * 64, y: 5 * 20, width: 64, height: 20 })
     // 'in' is offsets [7,9) of 13 units across a 130px run starting at x=192+2.
     expect(geometry.rects).toEqual([{ x: 194 + 70, y: 100, width: 20, height: 20 }])
   })

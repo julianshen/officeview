@@ -903,6 +903,8 @@ export function layoutCellBody(
   /** Room the text may use past the box (textOverflowAllowance). Absent: plain
    * text is unbounded and laid-out text clips to the box, as before S13. */
   overflow?: OverflowAllowance,
+  /** Width-independent display text already formatted (and admitted) by the caller. */
+  preformatted?: string,
 ): CellBodyLayout {
   const out: CellBodyLayout = { x, y, w, h: hh, formattedText: '' }
   if (cell.style?.fillColor) out.fill = resolveColor(cell.style.fillColor)
@@ -916,7 +918,7 @@ export function layoutCellBody(
   // Shrink-to-fit keeps full General precision and scales the font instead.
   const fitsGeneral = !rotated && !shrinkable ? (text: string) => measured(font, text) <= inner : undefined
   let generalNoFit = false
-  const formatted = renderCellText(cell.value, cell.style, sheet.semantics, sheet, fitsGeneral, () => { generalNoFit = true })
+  const formatted = preformatted ?? renderCellText(cell.value, cell.style, sheet.semantics, sheet, fitsGeneral, () => { generalNoFit = true })
   let style = cell.style
   if (shrinkable && formatted !== '') {
     // Never larger than authored. Above the floor the text fits; at the floor a
