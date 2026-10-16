@@ -13,7 +13,7 @@ import type { CacheIdentity, LogicalCellBox, LogicalViewport, ProfileId } from '
 import type { RenderSheetAssets } from '../../xlsx/render'
 import { renderSheetViewport } from '../../xlsx/view/renderViewport'
 import { paintWatermark, type ResolvedWatermark } from '../../core/watermark'
-import type { LayoutCache } from '../../xlsx/view/textLayout'
+import type { LayoutAdmission, LayoutCache } from '../../xlsx/view/textLayout'
 import { frameBudgetFor, type FrameBudget, type MergeQueryCache, type SheetGeometryResult, type ViewportPlan } from '../../xlsx/view/viewport'
 import {
   BITMAP_BUDGETS, bitmapPoolPlan, MemoryPool, RGBA_BYTES, TILE_DEVICE_PX, TILE_PREFETCH_RING, TileCache,
@@ -42,6 +42,8 @@ export interface SheetFrame {
   extent: { width: number; height: number }
   assets?: RenderSheetAssets
   layoutCache: LayoutCache
+  /** Repaint memory admitted per record at construction (spec §§5.6, 12.4). */
+  layoutAdmission?: LayoutAdmission
   merges: MergeQueryCache
   /** Stamped into the pane bitmap after the tiles (tiles stay mark-free and
    * cacheable), so it travels with the presented pixels like the page path. */
@@ -271,9 +273,10 @@ export class SheetTileRenderer {
       }
       const result = renderSheetViewport(frame.sheet, ctx, frame.geometry, viewport, frame.assets, {
         preparedPlan: plan, profile: this.profile, owner: frame.identity, cache: frame.layoutCache, merges: frame.merges, frameBudget: budget,
+        ...(frame.layoutAdmission ? { layoutAdmission: frame.layoutAdmission } : {}),
       })
       kind = result.pending ? 'pending' : result.kind
-      const resource = result.diagnostics.find(d => d.code === 'overflow-memory')
+      const resource = result.diagnostics.find(d => d.code === 'overflow-memory' || d.code === 'layout-memory')
       if (resource) work.resourceNotice = resource.message
       if (result.kind === 'detail') work = { ...work, records: result.work.records, gridlines: result.work.gridlines }
       this.stats.maxTileRecords = Math.max(this.stats.maxTileRecords, work.records)

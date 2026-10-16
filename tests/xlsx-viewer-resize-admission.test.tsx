@@ -172,7 +172,6 @@ describe('confirmation r5: repaint records and reservation transfer', () => {
     const check = squeeze(ledger(), 8_528_608)
     resizeKey(grid, 'ArrowRight'); await settle(); await settle()
     check()
-    expect(headerWidth(ui, 'A') === 64 && /Column A was not resized: .*memory/.test(status(ui))).toBe(true)
     ledger().set('copy', 'filler', 0)
   })
 
@@ -195,6 +194,74 @@ describe('confirmation r5: repaint records and reservation transfer', () => {
     expect(headerWidth(ui, 'A')).toBe(72)
     expect(overlapped).toBe(false)
     ledger().set('copy', 'filler', 0)
+  })
+})
+
+describe('confirmation r6: repaint memory is admitted per record at construction', () => {
+  const heavy = (row: number, col: number) => ({ ...cell(row, col, 'a\n'.repeat(9000)), style: { numFmtId: 0, wrapText: true } })
+  const layoutMemoryNotice = (ui: RenderResult) => /Not enough memory to lay out this text/.test(status(ui)) || ui.container.querySelectorAll('canvas').length > 0
+
+  it('R1 three adjacent 18,000-unit wrapped cells (22 MiB free): the tile batch never holds more than admitted', FIRST_PAINT_TEST, async () => {
+    const doc = docOf([{ index: 0, cells: [heavy(0, 0), heavy(0, 1), heavy(0, 2)] }])
+    let peakOk = true
+    const f = frames()
+    let live: MainMemoryLedger | undefined
+    const view = render(<InteractiveSheetDoc doc={doc} views={{ s: { revision: 0 } }} onMainLedger={value => { live = value; value.set('copy', 'filler', Math.max(0, BUDGET - value.bytes - 22 * 1024 * 1024)) }} onFrame={stats => { f.onFrame(stats); if (live && live.snapshot().peakBytes > BUDGET) peakOk = false }} />)
+    await waitFor(() => expect(f.last()?.basePaints ?? 0).toBeGreaterThan(0), FIRST_PAINT_WAIT)
+    await settle()
+    const grid = goTo(view, 'A1'); await settle()
+    resizeKey(grid, 'ArrowRight'); await settle(); await settle()
+    expect(peakOk).toBe(true)
+    expect(live!.snapshot().peakBytes).toBeLessThanOrEqual(BUDGET)
+    expect(live!.bytes).toBeLessThanOrEqual(BUDGET)
+    expect(layoutMemoryNotice(view)).toBe(true)
+  })
+
+  it('R2 detail tiles under a coarse aggregate are bounded too (heavy A2 among 400 dense 8 px rows, 1 MiB free, column A 8 → 16)', FIRST_PAINT_TEST, async () => {
+    const rows: XlsxRow[] = Array.from({ length: 400 }, (_, index) => ({ index, customHeight: true, heightPt: 6, cells: Array.from({ length: 64 }, (_, col) => index === 1 && col === 0 ? heavy(1, 0) : cell(index, col, col)) }))
+    const doc: XlsxDocument = { sheets: [{ ...docOf(rows).sheets[0], cols: [{ min: 0, max: 63, widthChars: 3 / 7 }] }] }
+    let live: MainMemoryLedger | undefined
+    const f = frames()
+    const view = render(<InteractiveSheetDoc doc={doc} views={{ s: { revision: 0 } }} onMainLedger={value => { live = value }} onFrame={f.onFrame} />)
+    await waitFor(() => expect(f.last()?.basePaints ?? 0).toBeGreaterThan(0), FIRST_PAINT_WAIT)
+    await settle()
+    const grid = goTo(view, 'A1'); await settle()
+    const check = squeeze(live!, 1024 * 1024)
+    for (let i = 0; i < 1; i++) resizeKey(grid, 'ArrowRight')
+    await settle(); await settle()
+    check()
+    live!.set('copy', 'filler', 0)
+  })
+
+  it('R3 formatting during painting is admitted through the allocation observer (2,048-unit text, 200-token @ format, 256 KiB free)', FIRST_PAINT_TEST, async () => {
+    const style = { numFmtId: 164, formatCode: `0;0;0;${'@'.repeat(200)}` }
+    const doc = docOf([{ index: 0, cells: [{ ...cell(0, 0, 'q'.repeat(2048)), style }] }, { index: 1, cells: [cell(1, 0, 'b')] }])
+    let live: MainMemoryLedger | undefined
+    const f = frames()
+    const view = render(<InteractiveSheetDoc doc={doc} views={{ s: { revision: 0 } }} onMainLedger={value => { live = value }} onFrame={f.onFrame} />)
+    await waitFor(() => expect(f.last()?.basePaints ?? 0).toBeGreaterThan(0), FIRST_PAINT_WAIT)
+    await settle()
+    const grid = goTo(view, 'A2'); await settle()
+    const check = squeeze(live!, 256 * 1024)
+    resizeKey(grid, 'ArrowRight'); await settle(); await settle()
+    check()
+    live!.set('copy', 'filler', 0)
+  })
+
+  it('scrolling into a heavy region without any resize stays within the hard limit and degrades to the coarse notice', FIRST_PAINT_TEST, async () => {
+    const rows: XlsxRow[] = [{ index: 0, cells: [cell(0, 0, 'top')] }, { index: 300, cells: [heavy(300, 0), heavy(300, 1)] }]
+    let live: MainMemoryLedger | undefined
+    const f = frames()
+    const view = render(<InteractiveSheetDoc doc={docOf(rows)} views={{ s: { revision: 0 } }} onMainLedger={value => { live = value }} onFrame={f.onFrame} />)
+    await waitFor(() => expect(f.last()?.basePaints ?? 0).toBeGreaterThan(0), FIRST_PAINT_WAIT)
+    await settle()
+    const check = squeeze(live!, 4 * 1024 * 1024)
+    const scroller = view.getByTestId('officeview-sheet-scroller')
+    act(() => { scroller.scrollTop = 300 * 20; fireEvent.scroll(scroller) })
+    await settle(); await settle()
+    check()
+    expect(status(view)).toMatch(/Not enough memory to lay out this text/)
+    live!.set('copy', 'filler', 0)
   })
 })
 

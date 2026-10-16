@@ -33,7 +33,7 @@ import { columnToLetters, validateCoordinate } from '../../xlsx/view/coordinates
 import { createDocumentOverflowCache } from '../../xlsx/view/documentOverflow'
 import { bindOverflowCache, OverflowResourceError, type OverflowCache } from '../../xlsx/view/overflowCache'
 import { MainMemoryLedger, axisBytes, estimatePayloadBytes, projectionBytes, type MainPool } from '../../xlsx/view/mainLedger'
-import { buildSheetGeometry, cellTextOverflow, MergeQueryCache, planViewport, sheetBaseHidden, type SheetGeometry } from '../../xlsx/view/viewport'
+import { buildSheetGeometry, cellTextOverflow, MergeQueryCache, sheetBaseHidden, type SheetGeometry } from '../../xlsx/view/viewport'
 import type { ProjectedSheetMetrics } from '../../xlsx/view/projection'
 import { createIdentityOrder } from '../../xlsx/view/order'
 import { CompactRowVisibility, createIntervalSet, createRowVisibility, visibilityFromHidden } from '../../xlsx/view/visibility'
@@ -43,11 +43,11 @@ import {
 import { keyboardSheetZoom, pinchSheetZoom, wheelSheetZoom } from '../../xlsx/view/sheetZoom'
 import { SheetNavigationSession, emptyGridSelection, navigateSelection, recordCounts, boundedSelectionText } from '../../xlsx/view/selection'
 import { FIND_PAGE_HITS, FindController, hitGeometry, navigateToHit, type FindHit, type FindInput, type FindOptions, type FindPublication } from '../../xlsx/view/find'
-import { LayoutCache } from '../../xlsx/view/textLayout'
+import { LayoutCache, type LayoutAdmission } from '../../xlsx/view/textLayout'
 import { cellDisplayText } from '../../xlsx/render'
 import { createCellLayoutHost } from '../../xlsx/view/renderViewport'
 import { createObjectWorkbookSource } from '../../worker/viewerObjectSource'
-import { BITMAP_BUDGETS, MAIN_THREAD_BUDGETS, TILE_DEVICE_PX, TILE_PREFETCH_RING, type TileCacheStats } from '../../xlsx/view/tileCache'
+import { BITMAP_BUDGETS, MAIN_THREAD_BUDGETS, type TileCacheStats } from '../../xlsx/view/tileCache'
 import { gridGeometryToViewport, gridSelectionOverlay, paintGridSelectionOverlay, paintSearchOverlay, type HighlightRect } from '../../core/overlay'
 import { normalizeWatermark, type WatermarkOptions } from '../../core/watermark'
 import type { FallbackFontsOptions } from '../../core/fonts/fallback'
@@ -567,6 +567,19 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
   // coarse state); an empty selection always clears it.
   const [selectionIncomplete, setSelectionIncomplete] = useState(false)
   const workerPlans = useMemo(() => remote ? new WorkerViewportPlans(remote) : null, [remote])
+  // Repaint memory admitted per record at construction (spec §§5.6, 12.4): O(1)
+  // per record against the hard main budget; the cache charge follows each
+  // insertion/eviction at once, and the paint batch holds what it keeps alive.
+  const layoutAdmission = useMemo<LayoutAdmission>(() => {
+    let held = 0
+    const publish = () => mainLedger.set('layout', 'paint-records', held)
+    return {
+      admit: bytes => { if (mainLedger.bytes + bytes > MAIN_THREAD_BUDGETS[budgetProfile]) return false; held += bytes; publish(); return true },
+      release: bytes => { held = Math.max(0, held - bytes); publish() },
+      hold: bytes => { held += bytes; publish() },
+      cacheChanged: delta => mainLedger.set('layout', 'caches', Math.max(0, mainLedger.ownerBytes('layout', 'caches') + delta)),
+    }
+  }, [mainLedger, budgetProfile])
   useEffect(() => () => workerPlans?.dispose(), [workerPlans])
   // Two sources: the base present and the find overlay each own (and clear)
   // only their own refusal, so an unrelated present never hides a find one.
@@ -582,7 +595,7 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
     return {
       sheet: entry.sheet, geometry: entry.geometry, identity, origin: scroll.logicalOrigin, viewport, zoom: scroll.zoom, dpr,
       extent: { width: entry.metrics.cols.totalCss(), height: entry.metrics.rows.totalCss() },
-      assets: assets?.lease.assets, layoutCache: entry.layoutCache, merges: entry.merges, ...(mark ? { watermark: mark } : {}),
+      assets: assets?.lease.assets, layoutCache: entry.layoutCache, layoutAdmission, merges: entry.merges, ...(mark ? { watermark: mark } : {}),
       structureGen: entry.structureGen,
       // Row-cache proof gates worker requests: tiles the cache already proves
       // paint from the main-thread planner with no worker wait and no worker
@@ -1438,9 +1451,11 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
     } finally { if (!candidate) mainLedger.release('geometry', 'resize-candidate') }
     if (!candidate) return null
     if (!represents(candidate.built.metrics)) { mainLedger.release('geometry', 'resize-candidate'); setAnnouncement(`${name} was not resized: ${unrepresentable}.`); return null }
-    // 2. Exact admission: the candidate's measured charge plus the DOM and the
-    //    canonical layout records its repaint adds, beside everything held now.
-    const growth = Math.max(0, semanticDomBytes(candidate.built.metrics) - semanticDomBytes(current.metrics)) + layoutGrowthBytes(candidate.built, candidate.sheet, current.layoutCache)
+    // 2. Exact admission: the candidate's measured charge plus the semantic DOM
+    //    it reveals, beside everything held now. Repaint memory (layout records,
+    //    formatted text) is admitted per record where it is built (LayoutCache
+    //    batches, §12.4), never predicted here.
+    const growth = Math.max(0, semanticDomBytes(candidate.built.metrics) - semanticDomBytes(current.metrics))
     if (mainLedger.bytes - upper + candidate.bytes + growth > budget) { mainLedger.release('geometry', 'resize-candidate'); return refuse() }
     // 3. Commit: the provisional reservation is released first, then the repaint
     //    growth is reserved (until chargeMain measures it) and the caller
@@ -1478,38 +1493,6 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
     const structureChanged = remote !== null && remote.merges(sheetId).gen !== current.structureGen
     const mask = structureChanged ? 4 * (Math.ceil(current.metrics.rows.logicalCount / 32) * 4 + 8192) : 0
     return axis(rows) + axis(cols) + projection + drawings + index + mask
-  }
-  /** Layout-cache growth a repaint adds, from the planner's own record
-   * enumeration (planViewport over the pane and its prefetch ring, the active
-   * record included), so merges whose anchor is outside the pane and overflow
-   * dependencies are counted exactly as painted. Each record is bounded from
-   * its formatted text by estimateLayoutBytes' structure. The cache retains at
-   * most its byte budget (LayoutCache never keeps a larger record), and builds
-   * one record at a time beside what it retains: retained growth is capped by
-   * the budget, plus the largest single record's construction. */
-  const layoutGrowthBytes = (geometry: SheetGeometry, sheet: XlsxSheet, cache: LayoutCache): number => {
-    if (!scroll) return 0
-    const pane = visibleLogicalViewport(scroll, viewport)
-    const reach = TILE_PREFETCH_RING * TILE_DEVICE_PX / (scroll.zoom * dpr)
-    const box = { x: Math.max(0, pane.x - reach), y: Math.max(0, pane.y - reach), width: pane.width + 2 * reach, height: pane.height + 2 * reach }
-    const active = session.get(activeSheetId).selection.active
-    const plan = planViewport(geometry, { box, zoom: scroll.zoom, deviceScale: dpr }, profile, active ? { activeCell: active } : {})
-    if (plan.kind !== 'detail' && plan.kind !== 'coarse') return 0
-    const records = [...(plan.kind === 'detail' ? plan.cells : []), ...(plan.active ? [plan.active] : [])]
-    let total = 0, largest = 0
-    const seen = new Set<string>()
-    for (const placed of records) {
-      const id = `${placed.source.row}:${placed.source.col}`
-      if (seen.has(id)) continue
-      seen.add(id)
-      const cell = placed.cell as XlsxCell & { styleIndex?: number }
-      const style = cell.style ?? (remote && cell.styleIndex !== undefined ? remote.styleOf(cell.styleIndex) : undefined)
-      const text = cellDisplayText(sheet, { value: cell.value, style })
-      const record = 1536 + 700 * text.length + 2 * (String(cell.value ?? '').length + (style ? JSON.stringify(style).length : 0) + 96)
-      total += record
-      largest = Math.max(largest, record)
-    }
-    return Math.min(total, cache.maxBytes) + largest
   }
   /** Semantic DOM a geometry shows in the current pane (GridSemantics rows,
    * cells, headers and resize handles), in the dom ledger's class bytes. */
