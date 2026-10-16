@@ -105,10 +105,12 @@ export function countLoadEvaluatedFormulas(doc: XlsxDocument): number {
   return n
 }
 /** Status line / accessible text: only cached documents have one. With a known
- * count it is the user-approved wording (plan §S9 decision 2). */
-export function savedValuesStatus(policy: ValuePolicy, formulas?: number): string | undefined {
+ * count it is the user-approved wording (plan §S9 decision 2); `cause` names why
+ * formulas are not recalculated (a small file whose formula evaluation hit the
+ * evaluator's resource limit is not "too large"). */
+export function savedValuesStatus(policy: ValuePolicy, formulas?: number, cause = 'file too large'): string | undefined {
   if (policy !== 'cached') return undefined
-  return formulas === undefined ? SAVED_VALUES_STATUS : `Showing saved values — ${formulas} formulas not recalculated (file too large)`
+  return formulas === undefined ? SAVED_VALUES_STATUS : `Showing saved values — ${formulas} formulas not recalculated (${cause})`
 }
 export interface ValueStatus {
   policy: ValuePolicy

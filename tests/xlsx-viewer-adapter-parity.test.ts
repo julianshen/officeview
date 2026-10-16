@@ -245,6 +245,7 @@ describe('N in the saved-values status = formulas the engine would have evaluate
     const sheetData = MIXED.replace('</row>', '<c r="G1"><f>SEQUENCE(200000,1)</f></c></row>')
     const doc = await loadOfficeFile(buildZip(xlsxEntries({ sheetData })).bytes) as { diagnostics?: Array<{ feature: string; message: string }> }
     expect(countLoadEvaluatedFormulas(doc as never)).toBe(4)
-    expect(doc.diagnostics?.find(d => d.feature === 'cached-value-policy')?.message).toBe(message(4))
+    // Same count definition; the cause is the evaluator limit, not the file's size.
+    expect(doc.diagnostics?.find(d => d.feature === 'cached-value-policy')?.message).toBe(message(4).replace('(file too large)', '(formula evaluation limit)'))
   })
 })
