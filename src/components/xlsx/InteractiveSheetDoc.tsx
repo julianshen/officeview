@@ -22,7 +22,7 @@
  * copy read through the same source; the object path is unchanged.
  */
 import { tilePlanSource, WorkerViewportPlans } from './workerViewport'
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type ReactElement } from 'react'
+import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type ReactElement } from 'react'
 import type { XlsxCell, XlsxDocument, XlsxSheet } from '../../xlsx/types'
 import type {
   AuthoritativeCell, CacheIdentity, FilterSpec, GridSelection, LogicalCellBox, ProfileId, RowOrder, RowVisibility, ScrollWindow, SheetView, SortSpec, SourceRowInterval, SourceStore, WorkbookOwner,
@@ -162,6 +162,12 @@ function loadFailureNotice(message: string, code?: string): string {
 /** Worker-backed (paged) sheets have no main-thread cells or static drawing paint to print. */
 const PAGED_PRINT_MESSAGE = 'This spreadsheet cannot be printed from the large-file view: neither its cells nor its drawings are printed. Copy a selected range instead.'
 const MAX_FONT_NOTICE_FAMILIES = 3
+/** Print rules scoped to one viewer instance: its screen never prints; its print container does. While this viewer runs its own print
+ * (`printing`), every other spreadsheet viewer is left out of the printout. */
+function sheetPrintCss(id: string, printing: boolean): string {
+  const own = `[data-officeview-sheet-instance="${id}"]`
+  return `${own} [data-officeview-sheet-print]{display:none}@media print{${own} [data-officeview-sheet-screen]${printing ? `,[data-officeview-sheet-instance]:not(${own})` : ''}{display:none!important}${own} [data-officeview-sheet-print]{display:block!important}}`
+}
 function fontNotice(diagnostics: readonly FontDiagnostic[]): string[] {
   const families = [...new Set(diagnostics.map(d => d.family).filter((family): family is string => Boolean(family)))]
   if (!families.length) return []
@@ -1186,7 +1192,10 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
     setPrintPages(units)
   }
   const printRefs = useRef<Array<HTMLCanvasElement | null>>([])
+  const instance = useId()
+  const printMedia = useRef<HTMLStyleElement | null>(null)
   useLayoutEffect(() => {
+    if (printMedia.current) printMedia.current.textContent = sheetPrintCss(instance, Boolean(printPages))
     if (!printPages) return
     const token = printToken.current
     // One unit at a time: each admitted store is sized and painted in turn.
@@ -1205,13 +1214,15 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
     const host = globalThis.document
     const media = host.createElement('style')
     media.setAttribute('data-officeview-sheet-print-media', '')
-    media.textContent = '[data-officeview-sheet-print] { display: none; } @media print { [data-officeview-sheet-screen] { display: none !important; } [data-officeview-sheet-print] { display: block !important; } }'
+    media.textContent = sheetPrintCss(instance, false)
     host.head.appendChild(media)
+    printMedia.current = media
     return () => {
       // Permission withdrawn or unmounted: any in-flight preparation is now stale.
       printToken.current++
       window.removeEventListener('afterprint', releasePrint)
       media.remove()
+      printMedia.current = null
       releasePrint()
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -1260,7 +1271,7 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
   const zoom = scroll?.zoom ?? 1
   const canvasStyle: CSSProperties = { position: 'absolute', left: 0, top: 0, width: viewport.width, height: viewport.height, pointerEvents: 'none' }
   return (
-    <div ref={wrapperRef} style={{ position: 'relative', display: 'flex', flexDirection: 'column', minHeight: 0 }}>
+    <div ref={wrapperRef} data-officeview-sheet-instance={instance} style={{ position: 'relative', display: 'flex', flexDirection: 'column', minHeight: 0 }}>
       <div
         ref={rootRef}
         className={props.className}
