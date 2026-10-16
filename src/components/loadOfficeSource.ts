@@ -23,9 +23,10 @@ import { parseOdt } from '../odt/parse'
 import { parseRtf, isRtf } from '../rtf/parse'
 import { openByteStream, type ByteSource, type ByteStreamReader, type Progress, type ProtectionListener, type WatermarkListener } from '../core/stream'
 import { throwIfAborted } from '../core/package-error'
+import { parseXml } from '../core/xml'
 import type { SpooledSource, StorageEnv } from '../core/spool'
 import type { SpreadsheetAdmission } from '../xlsx/storage/admission'
-import { detectProfile, importLimitsFor, type ImportLimitOverrides, type ImportLimits } from '../xlsx/storage/importSession'
+import { detectProfile, ImportRefusal, importLimitsFor, type ImportLimitOverrides, type ImportLimits } from '../xlsx/storage/importSession'
 import type { ProfileId } from '../xlsx/view/contracts'
 
 export type AnyDoc = DocxDocument | XlsxDocument | PptxDocument
@@ -34,9 +35,28 @@ type XlsxParser = (pkg: OfficePackage) => Promise<XlsxDocument>
 
 const largeSource = () => import('./largeSource')
 
-/** The legacy format decision, unchanged except that both xlsx branches go through `xlsx`. */
+const CT_NAME = '[Content_Types].xml'
+/** Same cap as classifyPackage: the content types are inflated before any admission runs. */
+const CT_MAX_BYTES = 4 * 1024 * 1024
+
+/** `[Content_Types].xml`, counted chunk by chunk as it inflates (declared sizes are untrusted). */
+async function boundedContentTypes(pkg: OfficePackage) {
+  let bytes: Uint8Array | undefined
+  try {
+    bytes = await pkg.bytes(CT_NAME, CT_MAX_BYTES)
+  } catch (error) {
+    if (error instanceof Error && error.message.startsWith('Part byte limit exceeded')) {
+      throw new ImportRefusal('resource-limit', 'limit', `This file was not opened: its ${CT_NAME} part exceeds ${CT_MAX_BYTES} bytes`, CT_NAME)
+    }
+    throw error
+  }
+  return bytes && parseXml(new TextDecoder().decode(bytes))
+}
+
+/** The legacy format decision, unchanged except that both xlsx branches go through
+ * `xlsx` and the content types are read under a byte cap. */
 export async function detectAndParse(pkg: OfficePackage, xlsx: XlsxParser = parseXlsx): Promise<AnyDoc> {
-  const ct = await pkg.xml('[Content_Types].xml')
+  const ct = await boundedContentTypes(pkg)
   const ctText = JSON.stringify(ct ?? {})
   if (ctText.includes('wordprocessingml.document.main')) return parseDocx(pkg)
   if (ctText.includes('spreadsheetml.sheet.main')) return xlsx(pkg)
