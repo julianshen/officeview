@@ -742,3 +742,19 @@ export function refuseCharts(drawings: XlsxDrawingLike[] | undefined, reason: st
 }
 /** Accounted bytes per chart cell read (map entry, key and value). */
 export const CHART_CELL_BYTES = 160
+
+/** Charts with an uncached reference to a sheet `reasonFor` names become placeholders with that reason. */
+export function markUnreadableCharts(drawings: XlsxDrawingLike[] | undefined, ownerSheet: string, reasonFor: (sheet: string) => string | undefined): boolean {
+  let marked = false
+  for (const node of drawings ?? []) {
+    const content = node.content as { kind: string; chart?: XlsxChartModel } | undefined
+    if (content?.kind === 'xlsxChart' && content.chart && !content.chart.unsupported) {
+      for (const line of pendingLines([node], ownerSheet)) {
+        const reason = reasonFor(line.sheet)
+        if (reason) { content.chart = { ...content.chart, unsupported: reason }; marked = true; break }
+      }
+    }
+    if (node.children && markUnreadableCharts(node.children, ownerSheet, reasonFor)) marked = true
+  }
+  return marked
+}

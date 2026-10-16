@@ -1286,6 +1286,20 @@ export class SourcePageStore implements PageSink {
     if (record.textStart.length !== 2) throw new PackageError('parse-error', `oversized cell value ${id} is malformed`)
     return textAt(record, 0)
   }
+  /** UTF-16 length of an oversized value, without materializing the string. */
+  async blobLength(id: number): Promise<number> {
+    if (!Number.isSafeInteger(id) || id < 0 || id >= this.blobCount) return 0
+    const record = await this.load(`blob/${id}`, decodeStrings, (c, shared) => DECODED_CHUNK_OVERHEAD_BYTES + (shared ? 0 : c.text.byteLength + c.textStart.byteLength))
+    return record.textStart.length === 2 ? record.textStart[1] - record.textStart[0] : 0
+  }
+  /** UTF-16 length of a shared string, without materializing it. */
+  async sharedStringLength(id: number): Promise<number> {
+    if (!Number.isSafeInteger(id) || id < 0 || id >= this.stringCount || this.stringChunkSize === 0) return 0
+    const chunk = Math.floor(id / this.stringChunkSize)
+    const strings = await this.load(`sst/${chunk}`, decodeStrings, (c, shared) => DECODED_CHUNK_OVERHEAD_BYTES + (shared ? 0 : c.text.byteLength + c.textStart.byteLength))
+    const at = id - chunk * this.stringChunkSize
+    return strings.textStart[at + 1] - strings.textStart[at]
+  }
   async sharedString(id: number): Promise<string | undefined> {
     if (!Number.isSafeInteger(id) || id < 0 || id >= this.stringCount || this.stringChunkSize === 0) return undefined
     const chunk = Math.floor(id / this.stringChunkSize)

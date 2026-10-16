@@ -464,7 +464,7 @@ export class PagedXlsxSheetAdapter implements SourceStore {
         geometry, pagedDrawingLimits(profile, this.drawingState.payloadBytes), controller.signal, { memory, startNodes: nodes.start(sheetId), fillCharts: (drawings, owner, names, admit) => this.fillCharts(drawings, owner, controller.signal, names, admit) })
       nodes.record(sheetId, parsed.nodes)
       // A chart still waiting on another sheet's import is answered, never cached.
-      if (parsed.drawings.pendingSheets?.length) return parsed.drawings
+      if (parsed.drawings.pendingSheets?.length || parsed.uncacheable) return parsed.drawings
       return this.retainDrawings(parsed.drawings, parsed.workingSet, memory)
     } catch (cause) {
       if (controller.signal.aborted) return unavailableDrawings('Drawing read cancelled', failure('cancelled', 'Request cancelled', true))
@@ -477,50 +477,101 @@ export class PagedXlsxSheetAdapter implements SourceStore {
   }
 
   /** Fill uncached chart references from committed pages of the named sheets.
-   * Only the line each chart consumes is read (the same sequence the fill
-   * uses, bounded by the chart point limit), cell by cell through binary
-   * search, after admitting the workspace. Cells past a referenced sheet's
-   * import frontier stay unknown and the sheet is reported as pending, so the
-   * payload is not cached as complete. */
-  private async fillCharts(drawings: XlsxDrawing[], owner: string, signal: AbortSignal, names: readonly { name: string; source: string; localSheetIndex?: number }[] = [], admit: (bytes: number) => boolean = () => true): Promise<{ pendingSheets: string[] }> {
+   * 1. The numeric workspace (points x CHART_CELL_BYTES) is admitted before any
+   *    page is touched; refusal makes the charts placeholders.
+   * 2. Each consumed cell is located once (pages found by binary search over
+   *    the sheet's ordered summaries, each page loaded once per fill, cells
+   *    deduplicated across overlapping lines, text need merged per cell) and
+   *    the UTF-16 length of every label is read from typed storage.
+   * 3. The label text is admitted before any string is materialized; refusal
+   *    refuses the read (a memory outcome).
+   * 4. Values and labels are materialized once per cell.
+   * Cells past a loading sheet's frontier stay unknown (pendingSheets: not
+   * cached, read again later); a failed sheet turns its charts into
+   * placeholders with its failure and the payload is not cached either. */
+  private async fillCharts(drawings: XlsxDrawing[], owner: string, signal: AbortSignal, names: readonly { name: string; source: string; localSheetIndex?: number }[] = [], admit: (bytes: number) => boolean = () => true): Promise<{ pendingSheets: string[]; uncacheable?: boolean; refused?: boolean; diagnostics?: WorkerDiagnostic[] }> {
     const charts = await loadChartModule()
     charts.resolveDrawingNames(drawings, owner, charts.chartNameResolver(names, this.workbook.sheets))
-    const lines = charts.pendingLines(drawings, owner)
+    const sheetOf = (name: string) => this.workbook.sheets.find(candidate => candidate.name.toLowerCase() === name.toLowerCase())
+    // A failed referenced sheet whose cells the chart needs: a placeholder with the failure, never blanks.
+    const diagnostics: WorkerDiagnostic[] = []
+    const failed = charts.markUnreadableCharts(drawings, owner, name => {
+      const sheet = sheetOf(name)
+      if (!sheet || sheet.state !== 'incomplete') return undefined
+      const reason = `Chart data on sheet “${sheet.name}” could not be read${sheet.failure?.message ? `: ${sheet.failure.message}` : ''}`
+      if (!diagnostics.some(d => d.message === reason)) diagnostics.push({ code: 'chart-data-unavailable', message: reason })
+      return reason
+    })
+    const lines = charts.pendingLines(drawings, owner).filter(line => sheetOf(line.sheet)?.state !== 'incomplete')
     const points = lines.reduce((total, line) => total + line.count, 0)
     if (!admit(points * charts.CHART_CELL_BYTES)) {
       charts.refuseCharts(drawings, 'This chart needs more worker memory than the document has free')
-      return { pendingSheets: [] }
+      return { pendingSheets: [], ...(failed ? { uncacheable: true, diagnostics } : {}) }
     }
-    const values = new Map<string, { value: string | number | boolean | null | undefined; text?: string }>()
     const key = (sheet: string, row: number, col: number) => `${sheet.toLowerCase()}\u0000${row}\u0000${col}`
-    const styles = this.workbook.formatting.styles
-    const display: XlsxSheet = { name: '', rows: [], cols: [], merges: [], mergeRanges: [], semantics: semanticsFor(this.workbook.formatting.dateSystem) }
+    interface Need { p: CellPagePayload; index: number; text: boolean; length: number }
+    const needs = new Map<string, Need>()
     const pending = new Set<string>()
-    const pageAt = (sheetId: string, row: number) => this.workbook.store.pages(sheetId).find(page => page.r0 <= row && page.r1 >= row)
+    const pageCache = new Map<string, CellPagePayload>()
     for (const line of lines) {
-      const sheet = this.workbook.sheets.find(candidate => candidate.name.toLowerCase() === line.sheet.toLowerCase())
+      const sheet = sheetOf(line.sheet)
       if (!sheet) continue
       const lastRow = line.vertical ? line.start + line.count - 1 : line.fixed
-      if (lastRow > sheet.importedThroughRow && sheet.state !== 'incomplete') pending.add(sheet.sheetId)
-      let loaded: { summary: ReturnType<typeof pageAt>; payload?: CellPagePayload } = { summary: undefined }
+      if (lastRow > sheet.importedThroughRow) pending.add(sheet.sheetId)
+      const pages = this.workbook.store.pages(sheet.sheetId)
+      let cursor = -1
       for (let i = 0; i < line.count; i++) {
         const at = charts.linePoint(line, i)
         if (at.row > sheet.importedThroughRow) break
         if (signal.aborted) return { pendingSheets: [...pending] }
-        const summary = loaded.summary && loaded.summary.r0 <= at.row && loaded.summary.r1 >= at.row ? loaded.summary : pageAt(sheet.sheetId, at.row)
-        if (!summary || summary.aggregate.records === 0 || at.col < summary.c0 || at.col > summary.c1) continue
-        if (summary !== loaded.summary) loaded = { summary, payload: await this.workbook.store.page(sheet.sheetId, summary.pageId) }
-        const p = loaded.payload!
+        const id = key(sheet.name, at.row, at.col)
+        const known = needs.get(id)
+        if (known) { known.text ||= line.text; continue }
+        // Pages cover ascending row ranges: binary search (rows ascend along a vertical line, so the cursor usually holds).
+        if (cursor < 0 || pages[cursor].r0 > at.row || pages[cursor].r1 < at.row) {
+          let lo = 0, hi = pages.length
+          while (lo < hi) { const mid = (lo + hi) >>> 1; if (pages[mid].r1 < at.row) lo = mid + 1; else hi = mid }
+          cursor = lo < pages.length && pages[lo].r0 <= at.row ? lo : -1
+        }
+        if (cursor < 0) continue
+        const summary = pages[cursor]
+        if (summary.aggregate.records === 0 || at.col < summary.c0 || at.col > summary.c1) continue
+        const pageKey = `${sheet.sheetId}\u0000${summary.pageId}`
+        let p = pageCache.get(pageKey)
+        if (!p) { p = await this.workbook.store.page(sheet.sheetId, summary.pageId); pageCache.set(pageKey, p) }
         const index = this.find(p, at.row, at.col)
-        if (index < 0) continue
-        const value = this.isUnavailable(p, index) ? undefined : await this.valueOf(p, index)
-        let text: string | undefined
-        if (line.text && value !== undefined) { try { text = cellDisplayText(display, { value, style: styles[p.styles[index]] }) } catch { text = undefined } }
-        values.set(key(sheet.name, at.row, at.col), { value, ...(text !== undefined ? { text } : {}) })
+        if (index >= 0) needs.set(id, { p, index, text: line.text, length: 0 })
       }
     }
+    // Label bytes are admitted from typed storage before any string exists.
+    let textBytes = 0
+    for (const need of needs.values()) {
+      if (!need.text) continue
+      need.length = await this.textLength(need.p, need.index)
+      // The decoded value and its formatted label may coexist.
+      textBytes += need.length * 4 + 64
+    }
+    if (textBytes && !admit(points * charts.CHART_CELL_BYTES + textBytes)) return { pendingSheets: [...pending], refused: true }
+    const styles = this.workbook.formatting.styles
+    const display: XlsxSheet = { name: '', rows: [], cols: [], merges: [], mergeRanges: [], semantics: semanticsFor(this.workbook.formatting.dateSystem) }
+    const values = new Map<string, { value: string | number | boolean | null | undefined; text?: string }>()
+    for (const [id, need] of needs) {
+      if (signal.aborted) return { pendingSheets: [...pending] }
+      const value = this.isUnavailable(need.p, need.index) ? undefined : await this.valueOf(need.p, need.index)
+      let text: string | undefined
+      if (need.text && value !== undefined) { try { text = cellDisplayText(display, { value, style: styles[need.p.styles[need.index]] }) } catch { text = undefined } }
+      values.set(id, { value, ...(text !== undefined ? { text } : {}) })
+    }
     charts.fillDrawings(drawings, owner, (sheet, row, col) => values.get(key(sheet, row, col)))
-    return { pendingSheets: [...pending] }
+    return { pendingSheets: [...pending], ...(failed ? { uncacheable: true, diagnostics } : {}) }
+  }
+  /** UTF-16 length of a record's text value, read without materializing the string. */
+  private async textLength(p: CellPagePayload, i: number): Promise<number> {
+    switch (p.kinds[i]) {
+      case K_SST: return this.workbook.store.sharedStringLength(p.nums[i])
+      case K_TEXT: case K_ERROR: return (p.flags[i] & F_BLOB) !== 0 ? this.workbook.store.blobLength(p.nums[i]) : p.textStart[i + 1] - p.textStart[i]
+      default: return 32
+    }
   }
 
   /** Keeps a complete payload in the pool (when one is bound and it fits) and
