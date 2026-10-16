@@ -13,6 +13,7 @@ import type { RemoteSheetStore } from '../src/worker/viewerRemoteSource'
 import { createObjectWorkbookSource } from '../src/worker/viewerObjectSource'
 import { WorkerViewportPlans, tilePlanSource } from '../src/components/xlsx/workerViewport'
 import { pagedSheetGeometry } from '../src/components/xlsx/pagedGeometry'
+import * as axesModule from '../src/xlsx/view/axes'
 import { createSheetMetrics } from '../src/xlsx/view/projection'
 import { createIdentityOrder, createRowOrder } from '../src/xlsx/view/order'
 import { createIntervalSet, visibilityFromHidden } from '../src/xlsx/view/visibility'
@@ -105,6 +106,27 @@ describe('confirmation r4 R2: paged drawing copies are part of the candidate', (
       expect(h.remote.mainLedger.snapshot().byPool.drawings).toBe(drawingsBefore)
       expect(h.remote.mainLedger.bytes).toBeLessThanOrEqual(64 * 1024 * 1024)
       h.remote.mainLedger.set('copy', 'filler', 0)
+    } finally { await h.remote.release() }
+  })
+})
+
+describe('confirmation r5 F1: late drawing placement reserves its placement workspace first', () => {
+  it('a small late list over many authored row heights is refused before any placement axis is built', async () => {
+    const h = await harness()
+    try {
+      Object.assign(h.remote.layout('s'), { rowOverrides: Array.from({ length: 2000 }, (_, i) => ({ start: 2 * i, end: 2 * i, sizeCss: 30 })) })
+      const content = { state: 'ready', gen: 1, images: [], diagnostics: [], bytes: 0, drawings: [] as unknown[], drawingsIn: () => [] }
+      vi.spyOn(h.remote, 'drawings').mockReturnValue(content as never)
+      const geometry = pagedSheetGeometry(h.remote, 's', createIdentityOrder(), visibility(), undefined, sizes([[0, 100]]))
+      const E = 9525
+      content.drawings = [{ xEmu: 10 * E, yEmu: 10 * E, widthEmu: 100 * E, heightEmu: 50 * E, geometry: 'rect', source: { partPath: 'p', treePath: 'twoCellAnchor[0]/sp[0]', element: 'sp', representation: 'native' } }]
+      h.remote.mainLedger.set('copy', 'filler', 64 * 1024 * 1024 - h.remote.mainLedger.bytes - 4096)
+      const axes = vi.spyOn(axesModule, 'createAxisMetrics')
+      expect(geometry.drawingsIn(0, 0, 1e6, 1e6, 1e6)).toBeNull()
+      expect(axes).not.toHaveBeenCalled()
+      expect(h.remote.mainLedger.snapshot().peakBytes).toBeLessThanOrEqual(64 * 1024 * 1024)
+      h.remote.mainLedger.set('copy', 'filler', 0)
+      expect(geometry.drawingsIn(0, 0, 1e6, 1e6, 1e6)).toHaveLength(1)
     } finally { await h.remote.release() }
   })
 })

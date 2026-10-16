@@ -129,21 +129,22 @@ export class LayoutCache {
     this.stats.built++
     if (sharedKey !== undefined && host.canReuseOverflow!(built, placed.overflow)) key = sharedKey
     const bytes = estimateLayoutBytes(key, built)
-    // Replacing a certified body is a fresh use, just like a cache hit: move
-    // its key to MRU before byte-pressure eviction chooses the oldest entry.
-    this.entries.delete(key)
-    this.entries.set(key, built)
-    this.stats.bytes += bytes - (this.sizes.get(key) ?? 0)
-    this.sizes.set(key, bytes)
-    // Evict least recently used entries; the newest entry always stays (it is
-    // being painted) even when it alone exceeds the budget.
-    while (this.entries.size > 1 && (this.entries.size > this.maxEntries || this.stats.bytes > this.maxBytes)) {
+    // The byte budget is a real bound: a record larger than the whole budget is
+    // painted uncached (returned, never retained), and least recently used
+    // entries are evicted BEFORE an insertion, so retained bytes never exceed it.
+    const replaced = this.sizes.get(key)
+    if (replaced !== undefined) { this.entries.delete(key); this.sizes.delete(key); this.stats.bytes -= replaced }
+    if (bytes > this.maxBytes) { this.stats.entries = this.entries.size; return built }
+    while (this.entries.size && (this.entries.size + 1 > this.maxEntries || this.stats.bytes + bytes > this.maxBytes)) {
       const oldest = this.entries.keys().next().value!
       this.entries.delete(oldest)
       this.stats.bytes -= this.sizes.get(oldest) ?? 0
       this.sizes.delete(oldest)
       this.stats.evicted++
     }
+    this.entries.set(key, built)
+    this.stats.bytes += bytes
+    this.sizes.set(key, bytes)
     this.stats.entries = this.entries.size
     return built
   }

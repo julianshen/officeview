@@ -150,6 +150,54 @@ describe('confirmation r4: admission happens before construction', () => {
   })
 })
 
+describe('confirmation r5: repaint records and reservation transfer', () => {
+  it('F2 a visible merge whose anchor is above the pane is admitted (A1:A200, 1,024-line wrapped anchor, scrolled to row 101, 200 KiB free)', FIRST_PAINT_TEST, async () => {
+    const rows: XlsxRow[] = Array.from({ length: 200 }, (_, index) => ({ index, cells: index === 0 ? [{ ...cell(0, 0, 'a\n'.repeat(1024)), style: { numFmtId: 0, wrapText: true } }] : [] }))
+    const doc: XlsxDocument = { sheets: [{ ...docOf(rows).sheets[0], merges: ['A1:A200'], mergeRanges: [{ minRow: 0, minCol: 0, maxRow: 199, maxCol: 0 }] }] }
+    const { ui, ledger } = await mount((onLedger, onFrame) => <InteractiveSheetDoc doc={doc} views={{ s: { revision: 0 } }} onMainLedger={onLedger} onFrame={onFrame} />)
+    goTo(ui, 'A1'); await settle()
+    const scroller = ui.getByTestId('officeview-sheet-scroller')
+    act(() => { scroller.scrollTop = 100 * 20; fireEvent.scroll(scroller) }); await settle()
+    const grid = ui.getByRole('grid'); act(() => grid.focus())
+    const check = squeeze(ledger(), 200 * 1024)
+    resizeKey(grid, 'ArrowRight'); await settle(); await settle()
+    check()
+    ledger().set('copy', 'filler', 0)
+  })
+
+  it('F3 a single layout record larger than the cache budget is admitted at its own construction size (18,000-unit wrapped value)', FIRST_PAINT_TEST, async () => {
+    const doc = docOf([{ index: 0, cells: [{ ...cell(0, 0, 'a\n'.repeat(9000)), style: { numFmtId: 0, wrapText: true } }] }])
+    const { ui, ledger } = await mount((onLedger, onFrame) => <InteractiveSheetDoc doc={doc} views={{ s: { revision: 0 } }} onMainLedger={onLedger} onFrame={onFrame} />)
+    const grid = goTo(ui, 'A1'); await settle()
+    const check = squeeze(ledger(), 8_528_608)
+    resizeKey(grid, 'ArrowRight'); await settle(); await settle()
+    check()
+    expect(headerWidth(ui, 'A') === 64 && /Column A was not resized: .*memory/.test(status(ui))).toBe(true)
+    ledger().set('copy', 'filler', 0)
+  })
+
+  it('F4 the reservation transfer never holds the construction and repaint reservations together', FIRST_PAINT_TEST, async () => {
+    const doc = docOf([{ index: 0, cells: [cell(0, 0, 'z'.repeat(128))] }, { index: 1, cells: [cell(1, 0, 'b')] }])
+    const remote = await remoteOf(doc)
+    const { ui, ledger } = await mount((onLedger, onFrame) => <InteractiveSheetDoc doc={shell(doc)} source={remote as never} onMainLedger={onLedger} onFrame={onFrame} />)
+    await act(async () => { await remote.filter(remote.identity('s'), null, [], new AbortController().signal) })
+    await settle()
+    const grid = goTo(ui, 'A1'); await settle()
+    let overlapped = false
+    const set = ledger().set.bind(ledger())
+    vi.spyOn(ledger(), 'set').mockImplementation((pool, owner, bytes) => {
+      set(pool, owner, bytes)
+      if (ledger().ownerBytes('geometry', 'resize-candidate') > 0 && ledger().ownerBytes('dom', 'resize-reservation') > 0) overlapped = true
+    })
+    const check = squeeze(ledger(), 400_000)
+    resizeKey(grid, 'ArrowRight'); await settle()
+    check()
+    expect(headerWidth(ui, 'A')).toBe(72)
+    expect(overlapped).toBe(false)
+    ledger().set('copy', 'filler', 0)
+  })
+})
+
 describe('confirmation r3 C2: structure-only worker layout publications refresh authored-hidden rows', () => {
   it('publishLayout hiding row 1 hides it in the viewer even though the view revision is unchanged', FIRST_PAINT_TEST, async () => {
     const doc = docOf([{ index: 0, cells: [cell(0, 0, 'a')] }, { index: 1, cells: [cell(1, 0, 'b')] }])

@@ -31,6 +31,10 @@ export const MAX_SESSION_SIZES = 4096
 export const SESSION_SIZE_ENTRY_BYTES = 128
 /** Retained bytes of one repositioned top-level drawing copy plus its box-index entry. */
 export const SIZED_DRAWING_BYTES = 320
+/** Upper bound of the bytes building one sparse axis allocates for
+ * `intervals` authored/hidden/session intervals (two segments each with typed
+ * summaries and JS records, plus normalization copies; axes.ts). */
+export const axisUpperBytes = (intervals: number): number => 272 * intervals + 400
 /** Keyboard step in CSS px (Alt+Shift+Arrow). */
 export const RESIZE_KEY_STEP = 8
 /** Auto-fit reads at most this many source rows for a column: the rows visible

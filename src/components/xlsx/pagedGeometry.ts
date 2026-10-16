@@ -13,7 +13,7 @@ import type { SheetGeometry } from '../../xlsx/view/viewport'
 import type { RemoteWorkbook } from '../../worker/viewerRemoteSource'
 import { axisBytes, projectionBytes } from '../../xlsx/view/mainLedger'
 import { AxisMetricsError, createAxisMetrics } from '../../xlsx/view/axes'
-import { SIZED_DRAWING_BYTES, hasSessionSizes, mergeAxisOverrides, type SessionSizes } from '../../xlsx/view/axisSizes'
+import { SIZED_DRAWING_BYTES, axisUpperBytes, hasSessionSizes, mergeAxisOverrides, type SessionSizes } from '../../xlsx/view/axisSizes'
 import { MAX_COLS, MAX_ROWS } from '../../xlsx/view/coordinates'
 import { axisDiagnostic, drawingQuery, sizedDrawings } from '../../xlsx/view/viewport'
 import type { WorkerDiagnostic } from '../../xlsx/view/contracts'
@@ -59,6 +59,8 @@ export function pagedSheetGeometry(remote: RemoteWorkbook, sheetId: string, orde
     // over budget, null, and is asked again later).
     const placed = new WeakMap<readonly XlsxDrawing[], SheetGeometry['drawingsIn']>()
     const hiddenRows = layout.hidden.map(interval => ({ start: interval.r0, end: interval.r1 }))
+    const rowIntervals = layout.rowOverrides.length + layout.hidden.length + sizes.rows.size
+    const colIntervals = layout.colOverrides.length + hiddenCols.length + sizes.cols.size
     const place = (list: readonly XlsxDrawing[]) => sizedDrawings(list, sizes, layout.rowOverrides, hiddenRows, layout.colOverrides, hiddenCols)
     if (metrics && drawings.drawings.length) {
       eager = place(drawings.drawings)
@@ -69,9 +71,14 @@ export function pagedSheetGeometry(remote: RemoteWorkbook, sheetId: string, orde
       if (!list.length) return drawings.drawingsIn(...query)
       let sized = placed.get(list)
       if (!sized) {
+        // Reserve the whole placement workspace (four placement axes plus the
+        // copies) before building anything; refuse (null) when it cannot fit.
         const bytes = list.length * SIZED_DRAWING_BYTES
-        if (remote.mainLedger.bytes + bytes > MAIN_THREAD_BUDGETS[remote.profile]) return null
-        sized = drawingQuery(place(list))
+        const workspace = bytes + 2 * (axisUpperBytes(rowIntervals) + axisUpperBytes(colIntervals))
+        if (remote.mainLedger.bytes + workspace > MAIN_THREAD_BUDGETS[remote.profile]) return null
+        const owner = `late-placement:${++latePlacements}`
+        remote.mainLedger.set('drawings', owner, workspace)
+        try { sized = drawingQuery(place(list)) } finally { remote.mainLedger.release('drawings', owner) }
         placed.set(list, sized)
         remote.mainLedger.chargeWhileReachable('drawings', [sized], bytes)
       }
@@ -102,3 +109,5 @@ export function pagedSheetGeometry(remote: RemoteWorkbook, sheetId: string, orde
   bindOverflowCache(geometry, cache)
   return geometry
 }
+
+let latePlacements = 0

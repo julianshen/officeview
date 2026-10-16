@@ -33,7 +33,7 @@ import { columnToLetters, validateCoordinate } from '../../xlsx/view/coordinates
 import { createDocumentOverflowCache } from '../../xlsx/view/documentOverflow'
 import { bindOverflowCache, OverflowResourceError, type OverflowCache } from '../../xlsx/view/overflowCache'
 import { MainMemoryLedger, axisBytes, estimatePayloadBytes, projectionBytes, type MainPool } from '../../xlsx/view/mainLedger'
-import { buildSheetGeometry, cellTextOverflow, MergeQueryCache, sheetBaseHidden, type SheetGeometry } from '../../xlsx/view/viewport'
+import { buildSheetGeometry, cellTextOverflow, MergeQueryCache, planViewport, sheetBaseHidden, type SheetGeometry } from '../../xlsx/view/viewport'
 import type { ProjectedSheetMetrics } from '../../xlsx/view/projection'
 import { createIdentityOrder } from '../../xlsx/view/order'
 import { CompactRowVisibility, createIntervalSet, createRowVisibility, visibilityFromHidden } from '../../xlsx/view/visibility'
@@ -43,11 +43,11 @@ import {
 import { keyboardSheetZoom, pinchSheetZoom, wheelSheetZoom } from '../../xlsx/view/sheetZoom'
 import { SheetNavigationSession, emptyGridSelection, navigateSelection, recordCounts, boundedSelectionText } from '../../xlsx/view/selection'
 import { FIND_PAGE_HITS, FindController, hitGeometry, navigateToHit, type FindHit, type FindInput, type FindOptions, type FindPublication } from '../../xlsx/view/find'
-import { DEFAULT_LAYOUT_CACHE_BYTES, LayoutCache } from '../../xlsx/view/textLayout'
+import { LayoutCache } from '../../xlsx/view/textLayout'
 import { cellDisplayText } from '../../xlsx/render'
 import { createCellLayoutHost } from '../../xlsx/view/renderViewport'
 import { createObjectWorkbookSource } from '../../worker/viewerObjectSource'
-import { BITMAP_BUDGETS, MAIN_THREAD_BUDGETS, type TileCacheStats } from '../../xlsx/view/tileCache'
+import { BITMAP_BUDGETS, MAIN_THREAD_BUDGETS, TILE_DEVICE_PX, TILE_PREFETCH_RING, type TileCacheStats } from '../../xlsx/view/tileCache'
 import { gridGeometryToViewport, gridSelectionOverlay, paintGridSelectionOverlay, paintSearchOverlay, type HighlightRect } from '../../core/overlay'
 import { normalizeWatermark, type WatermarkOptions } from '../../core/watermark'
 import type { FallbackFontsOptions } from '../../core/fonts/fallback'
@@ -78,7 +78,7 @@ import { documentWithDrawings, drawingNotices, sheetWithDrawings } from '../../w
 import { pagedSheetGeometry } from './pagedGeometry'
 import type { LedgerHold } from '../../xlsx/view/mainLedger'
 import { DisplayHolds } from './displayHolds'
-import { SheetSizes, NO_SESSION_SIZES, RESIZE_LIMITS, SIZED_DRAWING_BYTES, type SessionSizes } from '../../xlsx/view/axisSizes'
+import { SheetSizes, NO_SESSION_SIZES, RESIZE_LIMITS, SIZED_DRAWING_BYTES, axisUpperBytes, type SessionSizes } from '../../xlsx/view/axisSizes'
 import { AutoFitRefusedError, autoFitSize, createFitMeasure, resizeRegion, type ResizeRequest } from './sheetResize'
 import { tileLogicalBox } from '../../xlsx/view/tileCache'
 
@@ -1407,7 +1407,7 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
     const announcement = `${name} ${column ? 'width' : 'height'} ${applied} pixels${bound}${request.fit ? ', fitted to content' : ''}. View only; the file is unchanged.`
     if (previousSize === applied) { setAnnouncement(announcement); return }
     const region = resizeRegion(entry.geometry, request.kind, request.index)
-    const candidate = admitCandidate(sheetId, prospective, name, shown => (column ? shown.cols.size(request.index) : shown.rows.size(shown.order.sourceToDisplay(request.index))) === applied, `${applied} pixels cannot be represented beside this sheet's sizes`, { kind: request.kind, index: request.index })
+    const candidate = admitCandidate(sheetId, prospective, name, shown => (column ? shown.cols.size(request.index) : shown.rows.size(shown.order.sourceToDisplay(request.index))) === applied, `${applied} pixels cannot be represented beside this sheet's sizes`)
     if (!candidate) return
     sizes.set(axis, request.index, applied)
     publishEntry(candidate, sizes.gen)
@@ -1423,7 +1423,7 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
    * next display commits). A candidate that does not fit, or does not show the
    * size, is discarded unpublished and the refusal is announced.
    */
-  const admitCandidate = (sheetId: string, sizes: SessionSizes, name: string, represents: (metrics: ProjectedSheetMetrics) => boolean, unrepresentable: string, changed: { kind: 'row' | 'column'; index: number } | null = null): Candidate | null => {
+  const admitCandidate = (sheetId: string, sizes: SessionSizes, name: string, represents: (metrics: ProjectedSheetMetrics) => boolean, unrepresentable: string): Candidate | null => {
     const budget = MAIN_THREAD_BUDGETS[budgetProfile], current = entries.get(sheetId)!
     const refuse = () => { setAnnouncement(`${name} was not resized: not enough memory to lay the sheet out again (main memory budget).`); return null }
     // 1. Provisional reservation BEFORE construction: an upper bound of what
@@ -1440,13 +1440,14 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
     if (!represents(candidate.built.metrics)) { mainLedger.release('geometry', 'resize-candidate'); setAnnouncement(`${name} was not resized: ${unrepresentable}.`); return null }
     // 2. Exact admission: the candidate's measured charge plus the DOM and the
     //    canonical layout records its repaint adds, beside everything held now.
-    const growth = Math.max(0, semanticDomBytes(candidate.built.metrics) - semanticDomBytes(current.metrics)) + layoutGrowthBytes(candidate.built, candidate.sheet, changed)
+    const growth = Math.max(0, semanticDomBytes(candidate.built.metrics) - semanticDomBytes(current.metrics)) + layoutGrowthBytes(candidate.built, candidate.sheet, current.layoutCache)
     if (mainLedger.bytes - upper + candidate.bytes + growth > budget) { mainLedger.release('geometry', 'resize-candidate'); return refuse() }
-    // 3. Commit: the repaint growth stays reserved until chargeMain measures it;
-    //    the provisional reservation is released just before the exact charge.
+    // 3. Commit: the provisional reservation is released first, then the repaint
+    //    growth is reserved (until chargeMain measures it) and the caller
+    //    charges the exact candidate: the ledger never holds both reservations.
+    mainLedger.release('geometry', 'resize-candidate')
     domReservation.current = growth
     mainLedger.set('dom', 'resize-reservation', growth)
-    mainLedger.release('geometry', 'resize-candidate')
     return candidate
   }
   /** Upper bound of what building a session-size candidate allocates (§12.4),
@@ -1468,7 +1469,7 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
       colIntervals = current.sheet.cols.length
       drawingCount = current.sheet.drawings?.length ?? 0
     }
-    const axis = (intervals: number) => 272 * intervals + 400
+    const axis = axisUpperBytes
     const rows = rowIntervals + sizes.rows.size, cols = colIntervals + sizes.cols.size
     let projection = (2 * current.view.order.bands.length + 2 * rows + 8) * 176
     for (const band of current.view.order.bands) projection += 20 * (band.r1 - band.r0 + 1) + 12
@@ -1478,30 +1479,37 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
     const mask = structureChanged ? 4 * (Math.ceil(current.metrics.rows.logicalCount / 32) * 4 + 8192) : 0
     return axis(rows) + axis(cols) + projection + drawings + index + mask
   }
-  /** Layout-cache growth a repaint adds: fresh canonical records for the shown
-   * cells whose box changed (layout keys include the box size), each bounded
-   * from its text length by estimateLayoutBytes' structure, capped by the
-   * cache's own byte budget. */
-  const layoutGrowthBytes = (geometry: SheetGeometry, sheet: XlsxSheet, changed: { kind: 'row' | 'column'; index: number } | null): number => {
+  /** Layout-cache growth a repaint adds, from the planner's own record
+   * enumeration (planViewport over the pane and its prefetch ring, the active
+   * record included), so merges whose anchor is outside the pane and overflow
+   * dependencies are counted exactly as painted. Each record is bounded from
+   * its formatted text by estimateLayoutBytes' structure. The cache retains at
+   * most its byte budget (LayoutCache never keeps a larger record), and builds
+   * one record at a time beside what it retains: retained growth is capped by
+   * the budget, plus the largest single record's construction. */
+  const layoutGrowthBytes = (geometry: SheetGeometry, sheet: XlsxSheet, cache: LayoutCache): number => {
     if (!scroll) return 0
-    const metrics = geometry.metrics, pane = visibleLogicalViewport(scroll, viewport)
-    const colWindow = [...metrics.cols.visibleBetween(pane.x, pane.x + pane.width).runs]
-    if (!colWindow.length) return 0
-    const c0 = colWindow[0].start, c1 = colWindow[colWindow.length - 1].end
-    let bytes = 0, visited = 0
-    for (const run of metrics.rows.visibleBetween(pane.y, pane.y + pane.height).runs) {
-      for (let slot = run.start; slot <= run.end && visited < 8192; slot++, visited++) {
-        const row = metrics.order.displayToSource(slot)
-        if (changed?.kind === 'row' && row !== changed.index) continue
-        for (const cell of (geometry.cellsOf(row) ?? []) as readonly XlsxCell[]) {
-          if (cell.col < c0 || cell.col > c1) continue
-          const text = cellDisplayText(sheet, { value: cell.value, style: cell.style ?? (remote && 'styleIndex' in cell ? remote.styleOf(cell.styleIndex) : undefined) })
-          bytes += 2048 + 700 * text.length
-          if (bytes >= DEFAULT_LAYOUT_CACHE_BYTES) return DEFAULT_LAYOUT_CACHE_BYTES
-        }
-      }
+    const pane = visibleLogicalViewport(scroll, viewport)
+    const reach = TILE_PREFETCH_RING * TILE_DEVICE_PX / (scroll.zoom * dpr)
+    const box = { x: Math.max(0, pane.x - reach), y: Math.max(0, pane.y - reach), width: pane.width + 2 * reach, height: pane.height + 2 * reach }
+    const active = session.get(activeSheetId).selection.active
+    const plan = planViewport(geometry, { box, zoom: scroll.zoom, deviceScale: dpr }, profile, active ? { activeCell: active } : {})
+    if (plan.kind !== 'detail' && plan.kind !== 'coarse') return 0
+    const records = [...(plan.kind === 'detail' ? plan.cells : []), ...(plan.active ? [plan.active] : [])]
+    let total = 0, largest = 0
+    const seen = new Set<string>()
+    for (const placed of records) {
+      const id = `${placed.source.row}:${placed.source.col}`
+      if (seen.has(id)) continue
+      seen.add(id)
+      const cell = placed.cell as XlsxCell & { styleIndex?: number }
+      const style = cell.style ?? (remote && cell.styleIndex !== undefined ? remote.styleOf(cell.styleIndex) : undefined)
+      const text = cellDisplayText(sheet, { value: cell.value, style })
+      const record = 1536 + 700 * text.length + 2 * (String(cell.value ?? '').length + (style ? JSON.stringify(style).length : 0) + 96)
+      total += record
+      largest = Math.max(largest, record)
     }
-    return bytes
+    return Math.min(total, cache.maxBytes) + largest
   }
   /** Semantic DOM a geometry shows in the current pane (GridSemantics rows,
    * cells, headers and resize handles), in the dom ledger's class bytes. */
