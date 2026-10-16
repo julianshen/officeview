@@ -16,7 +16,8 @@ import type { SourceCell } from '../../xlsx/view/coordinates'
 import { MAX_ROWS } from '../../xlsx/view/coordinates'
 import type { ViewportSize } from '../../xlsx/view/scrollWindow'
 import { TEXT_OVERFLOW_REACH_CSS, type SheetGeometry } from '../../xlsx/view/viewport'
-import { AUTOFIT_MAX_CELLS, AUTOFIT_MAX_ROWS, autoFitRowCandidates, cellFont, clampSize, fitColumnWidth, fitRowHeight, type Measure } from '../../xlsx/view/axisSizes'
+import { AUTOFIT_MAX_CELLS, AUTOFIT_MAX_ROWS, RESIZE_LIMITS, autoFitRowCandidates, cellFont, clampSize, fitColumnWidth, fitRowHeight, type Measure } from '../../xlsx/view/axisSizes'
+import { createCellLayoutHost } from '../../xlsx/view/renderViewport'
 import type { XlsxCell, XlsxCellStyle, XlsxSheet } from '../../xlsx/types'
 import { cellDisplayText } from '../../xlsx/render'
 import { GRID_HEADER_SIZE, gridHeaderBox, viewportHeaderBox } from './GridHeaders'
@@ -50,15 +51,44 @@ export interface ResizeHandlesProps {
   active: SourceCell | null
   onResize: (request: ResizeRequest) => void
 }
-interface Drag { kind: 'row' | 'column'; index: number; slot: number; start: number; startSize: number; size: number; moved: boolean }
+interface Drag { kind: 'row' | 'column'; index: number; slot: number; pointerId: number; start: number; startSize: number; size: number; moved: boolean }
 
+export interface HandleLayout { viewport: ViewportSize; headerHeight: number; touch: boolean }
+export interface HandleBox { x: number; y: number; width: number; height: number }
+/** Grid-local box of one handle for an edge at viewport offset `edge` (the
+ * single place handle geometry is decided; a pane-aware caller, e.g. frozen
+ * panes, maps `edge` and clips here). Every target keeps its full size inside
+ * the visible pane and off the worksheet corner (x < 44, y < header height):
+ * a target near a boundary slides inward while still covering its edge. The
+ * coarse row target sits in the header corner's second slot (§9.3 ownership). */
+export function handlePlacement(kind: 'row' | 'column', edge: number, layout: HandleLayout): HandleBox {
+  const { viewport, headerHeight, touch } = layout
+  const half = touch ? COARSE_HALF : FINE_HALF
+  const clamp = (value: number, min: number, max: number) => Math.max(min, Math.min(max, value))
+  if (kind === 'column') {
+    return { x: clamp(GRID_HEADER_SIZE + edge - half, GRID_HEADER_SIZE, GRID_HEADER_SIZE + viewport.width - 2 * half), y: 0, width: 2 * half, height: touch ? GRID_HEADER_SIZE : headerHeight }
+  }
+  if (touch) return { x: 0, y: GRID_HEADER_SIZE, width: GRID_HEADER_SIZE, height: GRID_HEADER_SIZE }
+  return { x: 0, y: clamp(headerHeight + edge - half, headerHeight, headerHeight + viewport.height - 2 * half), width: GRID_HEADER_SIZE, height: 2 * half }
+}
+/** Grid-local box of the drag guide line at viewport offset `at`. */
+export function guidePlacement(kind: 'row' | 'column', at: number, layout: HandleLayout): HandleBox {
+  return kind === 'row'
+    ? { x: 0, y: layout.headerHeight + at - 1, width: GRID_HEADER_SIZE + layout.viewport.width, height: 2 }
+    : { x: GRID_HEADER_SIZE + at - 1, y: 0, width: 2, height: layout.headerHeight + layout.viewport.height }
+}
+// Scroll-driven positions use transforms (not a layout shift, as for the header strips).
+const placed = (box: HandleBox): CSSProperties => ({ left: 0, top: 0, transform: `translate(${box.x}px, ${box.y}px)`, width: box.width, height: box.height })
+
+/** Mounted per sheet owner (GridSemantics keys it): an owner change unmounts
+ * it, which cancels a drag in progress (never resizing another sheet). */
 export function ResizeHandles(props: ResizeHandlesProps): ReactElement {
   const { projection, window: scroll, viewport, headerHeight, touch } = props
   const [drag, setDrag] = useState<Drag | null>(null)
   const dragRef = useRef<Drag | null>(null)
   const cleanup = useRef<(() => void) | null>(null)
   useEffect(() => () => cleanup.current?.(), [])
-  const half = touch ? COARSE_HALF : FINE_HALF
+  const layout: HandleLayout = { viewport, headerHeight, touch }
   const activeSlot = props.active ? projection.order.sourceToDisplay(props.active.row) : null
   const columns = touch ? props.columns.filter(col => col === props.active?.col) : props.columns
   const laneShown = touch && props.active !== null && props.columns.includes(props.active.col)
@@ -66,28 +96,32 @@ export function ResizeHandles(props: ResizeHandlesProps): ReactElement {
   const slots = touch ? props.slots.filter(slot => slot === activeSlot && !laneShown && headerHeight >= 2 * GRID_HEADER_SIZE) : props.slots
 
   const begin = (event: ReactPointerEvent<HTMLDivElement>, kind: 'row' | 'column', index: number, slot: number) => {
-    if (event.button !== 0) return
+    if (event.button !== 0 || dragRef.current) return
     event.preventDefault()
     event.stopPropagation()
     try { event.currentTarget.setPointerCapture?.(event.pointerId) } catch { /* capture is an optimization */ }
     cleanup.current?.()
     const startSize = kind === 'row' ? projection.rows.size(slot) : projection.cols.size(index)
-    const state: Drag = { kind, index, slot, start: kind === 'row' ? event.clientY : event.clientX, startSize, size: startSize, moved: false }
+    const state: Drag = { kind, index, slot, pointerId: event.pointerId, start: kind === 'row' ? event.clientY : event.clientX, startSize, size: startSize, moved: false }
     dragRef.current = state
     setDrag(state)
     const host = event.currentTarget.ownerDocument.defaultView ?? globalThis
+    const zoom = scroll.zoom
     const move = (e: PointerEvent) => {
       const current = dragRef.current
-      if (!current) return
-      const delta = ((current.kind === 'row' ? e.clientY : e.clientX) - current.start) / scroll.zoom
-      const next = { ...current, moved: current.moved || Math.abs(delta) >= DRAG_SLOP, size: clampSize(current.kind === 'row' ? 'row' : 'col', current.startSize + delta) }
+      if (!current || e.pointerId !== current.pointerId) return
+      // Click slop is compared in CSS (client) pixels; the logical size divides by zoom.
+      const client = (current.kind === 'row' ? e.clientY : e.clientX) - current.start
+      const next = { ...current, moved: current.moved || Math.abs(client) >= DRAG_SLOP, size: clampSize(current.kind === 'row' ? 'row' : 'col', current.startSize + client / zoom) }
       dragRef.current = next
       setDrag(next)
     }
     const end = (e: PointerEvent) => {
       const current = dragRef.current
+      if (!current || e.pointerId !== current.pointerId) return
       stop()
-      if (!current || e.type === 'pointercancel' || !current.moved || current.size === current.startSize) return
+      setDrag(null)
+      if (e.type === 'pointercancel' || !current.moved || current.size === current.startSize) return
       props.onResize({ kind: current.kind, index: current.index, size: current.size })
     }
     const stop = () => {
@@ -96,50 +130,40 @@ export function ResizeHandles(props: ResizeHandlesProps): ReactElement {
       host.removeEventListener('pointercancel', end)
       dragRef.current = null
       cleanup.current = null
-      setDrag(null)
     }
     host.addEventListener('pointermove', move)
     host.addEventListener('pointerup', end)
     host.addEventListener('pointercancel', end)
-    cleanup.current = () => {
-      host.removeEventListener('pointermove', move)
-      host.removeEventListener('pointerup', end)
-      host.removeEventListener('pointercancel', end)
-      dragRef.current = null
-    }
+    cleanup.current = stop
   }
-  const handle = (kind: 'row' | 'column', index: number, slot: number, style: CSSProperties) =>
+  const handle = (kind: 'row' | 'column', index: number, slot: number, box: HandleBox, extra: CSSProperties = {}) =>
     <div key={`${kind}:${slot}`} aria-hidden="true" data-officeview-ui="resize-handle" {...(kind === 'row' ? { 'data-resize-row': slot } : { 'data-resize-column': index })}
       title={kind === 'row' ? 'Drag to resize the row; double-click to fit' : 'Drag to resize the column; double-click to fit'}
       onPointerDown={event => begin(event, kind, index, slot)}
       onClick={event => event.stopPropagation()}
       onDoubleClick={event => { event.preventDefault(); event.stopPropagation(); props.onResize({ kind, index, fit: true }) }}
-      style={{ position: 'absolute', zIndex: 3, touchAction: 'none', cursor: kind === 'row' ? 'row-resize' : 'col-resize', display: 'flex', alignItems: 'center', justifyContent: 'center', ...style }}>
+      style={{ position: 'absolute', zIndex: 3, touchAction: 'none', cursor: kind === 'row' ? 'row-resize' : 'col-resize', display: 'flex', alignItems: 'center', justifyContent: 'center', ...placed(box), ...extra }}>
       {touch && <span style={{ fontSize: 14, lineHeight: 1, color: GUIDE, background: '#ffffffd0', borderRadius: 4, padding: '2px 3px', pointerEvents: 'none', whiteSpace: 'nowrap' }}>{kind === 'row' ? `↕${slot + 1}` : '↔'}</span>}
     </div>
   const handles: ReactElement[] = []
+  const fits = (length: number) => length >= (touch ? 2 * COARSE_HALF : 2 * FINE_HALF)
   for (const col of columns) {
     const box = gridHeaderBox(projection, scroll, 'column', col)
     const edge = box.x + box.width
-    if (box.width <= 0 || edge < 0 || edge > viewport.width) continue
-    // Scroll-driven positions use transforms (not a layout shift, as for the header strips).
-    handles.push(handle('column', col, col, { left: 0, top: 0, transform: `translateX(${GRID_HEADER_SIZE + edge - half}px)`, width: 2 * half, height: touch ? GRID_HEADER_SIZE : headerHeight }))
+    if (box.width <= 0 || edge < 0 || edge > viewport.width || !fits(viewport.width)) continue
+    handles.push(handle('column', col, col, handlePlacement('column', edge, layout)))
   }
   for (const slot of slots) {
     const box = gridHeaderBox(projection, scroll, 'row', slot)
     const edge = box.y + box.height
-    if (box.height <= 0 || edge < 0 || edge > viewport.height) continue
-    handles.push(handle('row', projection.order.displayToSource(slot), slot, touch
-      ? { left: 0, top: GRID_HEADER_SIZE, width: GRID_HEADER_SIZE, height: GRID_HEADER_SIZE, background: '#f3f4f6' }
-      : { left: 0, top: 0, transform: `translateY(${headerHeight + edge - half}px)`, width: GRID_HEADER_SIZE, height: 2 * half }))
+    if (box.height <= 0 || edge < 0 || edge > viewport.height || (!touch && !fits(viewport.height))) continue
+    handles.push(handle('row', projection.order.displayToSource(slot), slot, handlePlacement('row', edge, layout), touch ? { background: '#f3f4f6' } : {}))
   }
   if (drag?.moved) {
     const box = gridHeaderBox(projection, scroll, drag.kind, drag.kind === 'row' ? drag.slot : drag.index)
     const at = (drag.kind === 'row' ? box.y : box.x) + drag.size * scroll.zoom
     const label = `${drag.kind === 'row' ? 'Height' : 'Width'}: ${drag.size} px`
-    handles.push(<div key="guide" aria-hidden="true" data-officeview-ui="resize-guide" style={drag.kind === 'row'
-      ? { position: 'absolute', zIndex: 3, pointerEvents: 'none', left: 0, top: 0, transform: `translateY(${headerHeight + at - 1}px)`, width: GRID_HEADER_SIZE + viewport.width, height: 2, background: GUIDE }
-      : { position: 'absolute', zIndex: 3, pointerEvents: 'none', left: 0, top: 0, transform: `translateX(${GRID_HEADER_SIZE + at - 1}px)`, width: 2, height: headerHeight + viewport.height, background: GUIDE }}>
+    handles.push(<div key="guide" aria-hidden="true" data-officeview-ui="resize-guide" style={{ position: 'absolute', zIndex: 3, pointerEvents: 'none', background: GUIDE, ...placed(guidePlacement(drag.kind, at, layout)) }}>
       <span style={{ position: 'absolute', left: 4, top: 4, whiteSpace: 'nowrap', font: '12px sans-serif', color: '#ffffff', background: GUIDE, borderRadius: 3, padding: '1px 4px' }}>{label}</span>
     </div>)
   }
@@ -158,6 +182,8 @@ export interface AutoFitInput {
   knownRows: (limit: number) => Iterable<number>
   styleOf?: (styleIndex: number) => XlsxCellStyle | undefined
   measure: Measure
+  /** Canonical painter height of a wrapped body (FitMeasure.wrappedHeight). */
+  wrappedHeight?: (cell: XlsxCell, widthCss: number) => number | undefined
 }
 function cellIn(cells: readonly FitCell[] | undefined, col: number): FitCell | undefined {
   if (!cells) return undefined
@@ -201,28 +227,68 @@ export function autoFitSize(kind: 'row' | 'column', index: number, input: AutoFi
     for (const cell of ordered) {
       const widthCss = metrics.cols.size(cell.col)
       if (widthCss <= 0 || geometry.merges.firstWhere({ r0: row, r1: row, c0: cell.col, c1: cell.col }, range => range.minRow !== range.maxRow)) continue
-      const style = styleOf(cell), { font, sizePx } = cellFont(style)
-      yield { text: text(cell, style), font, sizePx, wrap: style?.wrapText === true, widthCss }
+      const style = styleOf(cell), { font, sizePx } = cellFont(style), wrap = style?.wrapText === true
+      const heightPx = wrap ? input.wrappedHeight?.({ ref: '', row, col: cell.col, value: cell.value, styleIndex: cell.styleIndex ?? 0, ...(style ? { style } : {}) }, widthCss) : undefined
+      yield { text: text(cell, style), font, sizePx, wrap, widthCss, ...(heightPx !== undefined ? { heightPx } : {}) }
     }
   }
   return clampSize('row', fitRowHeight(cells(), measure))
 }
 
-/** Measurement on a scratch 2D context; a character-width estimate when the
- * host has no canvas (the result is still clamped). */
-export function scratchMeasure(): Measure {
+/** An auto-fit was refused because its measurement scratch would exceed its
+ * admitted memory (the caller announces it; nothing is resized). */
+export class AutoFitRefusedError extends Error {
+  constructor() { super('Auto-fit needs more memory than is available; resize by dragging or with the keyboard instead.'); this.name = 'AutoFitRefusedError' }
+}
+/** Retained bytes per measured (font, text) entry beyond its UTF-16 payload. */
+const MEASURE_ENTRY_BYTES = 96
+/** A wrapped-body layout's transient bytes beyond its text (§11.2 records). */
+const WRAP_LAYOUT_BYTES = 512
+export interface FitMeasure {
+  measure: Measure
+  /** A wrapped cell's body height from the canonical painter layout. */
+  wrappedHeight?: (cell: XlsxCell, widthCss: number) => number | undefined
+  bytes(): number
+}
+/** One auto-fit's measurement owner: a scratch 2D context and a cache that live
+ * only for that fit (the caller drops them after it). Every byte it retains is
+ * admitted first (`admit(totalBytes)`, which charges the ledger); a refusal
+ * throws AutoFitRefusedError. Without a canvas a character-width estimate is
+ * used (the result is still clamped). */
+export function createFitMeasure(options: { admit: (bytes: number) => boolean; measureText?: Measure; sheet?: XlsxSheet }): FitMeasure {
   let ctx: CanvasRenderingContext2D | null = null
-  try { ctx = globalThis.document?.createElement('canvas').getContext('2d') ?? null } catch { ctx = null }
+  if (!options.measureText) {
+    try { ctx = globalThis.document?.createElement('canvas').getContext('2d') ?? null } catch { ctx = null }
+  }
   const cache = new Map<string, number>()
-  return (font, text) => {
+  let bytes = 0
+  const charge = (more: number) => {
+    if (!options.admit(bytes + more)) throw new AutoFitRefusedError()
+    bytes += more
+  }
+  const raw: Measure = options.measureText ?? ((font, text) => {
+    if (ctx) { ctx.font = font; return ctx.measureText(text).width }
+    return text.length * (Number(/([\d.]+)pt/.exec(font)?.[1] ?? 10) * 96 / 72) * 0.55
+  })
+  const measure: Measure = (font, text) => {
     const key = `${font}\n${text}`
     let width = cache.get(key)
     if (width === undefined) {
-      if (ctx) { ctx.font = font; width = ctx.measureText(text).width }
-      else width = text.length * (Number(/([\d.]+)pt/.exec(font)?.[1] ?? 10) * 96 / 72) * 0.55
+      charge(key.length * 2 + MEASURE_ENTRY_BYTES)
+      width = raw(font, text)
       cache.set(key, width)
     }
     return width
+  }
+  const host = ctx && options.sheet ? createCellLayoutHost(ctx, options.sheet) : null
+  return {
+    measure,
+    ...(host ? { wrappedHeight: (cell: XlsxCell, widthCss: number) => {
+      charge(String(cell.value ?? '').length * 4 + WRAP_LAYOUT_BYTES)
+      const body = host.layoutBody(cell, widthCss, RESIZE_LIMITS.row.max)
+      return body.text?.kind === 'layout' ? body.text.layout.height : undefined
+    } } : {}),
+    bytes: () => bytes,
   }
 }
 

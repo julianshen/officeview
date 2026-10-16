@@ -182,11 +182,14 @@ export function GridSemantics(props: GridSemanticsProps): ReactElement {
     // focused header's own line in control mode (spec §5.6).
     if (props.onResize && event.altKey && event.shiftKey && !event.ctrlKey && !event.metaKey && (event.key in resizeArrows || event.key === 'Enter') && grid?.contains(event.target as Node)) {
       const target = event.target as HTMLElement
-      const header = target.closest<HTMLElement>('[data-header-column],[data-header-row]')
+      // Any native header control names its line: select, sort/filter/more
+      // action buttons and the narrow-column actions lane (disclosure and group).
+      const header = target.closest<HTMLElement>('[data-header-column],[data-action-column],[data-header-lane],[data-header-row]')
       const arrow = resizeArrows[event.key]
+      const column = header?.dataset.headerColumn ?? header?.dataset.actionColumn ?? header?.dataset.headerLane
       let request: ResizeRequest | null = null
-      if (header?.dataset.headerColumn !== undefined) {
-        if (!arrow || arrow.kind === 'column') request = { kind: 'column', index: Number(header.dataset.headerColumn), ...(arrow ? { delta: arrow.delta } : { fit: true }) }
+      if (column !== undefined) {
+        if (!arrow || arrow.kind === 'column') request = { kind: 'column', index: Number(column), ...(arrow ? { delta: arrow.delta } : { fit: true }) }
       } else if (header?.dataset.headerRow !== undefined) {
         if (!arrow || arrow.kind === 'row') request = { kind: 'row', index: projection.order.displayToSource(Number(header.dataset.headerRow)), ...(arrow ? { delta: arrow.delta } : { fit: true }) }
       } else if (target === grid && active) {
@@ -281,7 +284,7 @@ export function GridSemantics(props: GridSemanticsProps): ReactElement {
       }} style={{ position: 'relative', width: '100%', height: '100%', overflow: 'hidden' }}>
       <div aria-hidden="true" style={{ position: 'absolute', left: GRID_HEADER_SIZE, top: headerHeight, width: viewport.width, height: viewport.height }}>{props.children}</div>
       <GridHeaders {...headerProps} />
-      {props.onResize && !coarse && <ResizeHandles projection={projection} window={scroll} viewport={viewport} headerHeight={headerHeight} touch={touchControls}
+      {props.onResize && !coarse && <ResizeHandles key={ownerKey} projection={projection} window={scroll} viewport={viewport} headerHeight={headerHeight} touch={touchControls}
         columns={headerColumns} slots={transient ? slots.filter(slot => slot !== activeSlot) : slots} active={active} onResize={props.onResize} />}
       {slots.map(slot => {
         const row = projection.order.displayToSource(slot), extra = transient && slot === activeSlot

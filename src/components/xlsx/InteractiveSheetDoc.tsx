@@ -78,8 +78,8 @@ import { documentWithDrawings, drawingNotices, sheetWithDrawings } from '../../w
 import { pagedSheetGeometry } from './pagedGeometry'
 import type { LedgerHold } from '../../xlsx/view/mainLedger'
 import { DisplayHolds } from './displayHolds'
-import { SheetSizes, NO_SESSION_SIZES, RESIZE_LIMITS } from '../../xlsx/view/axisSizes'
-import { autoFitSize, resizeRegion, scratchMeasure, type ResizeRequest } from './sheetResize'
+import { SheetSizes, NO_SESSION_SIZES, RESIZE_LIMITS, SIZED_DRAWING_BYTES } from '../../xlsx/view/axisSizes'
+import { AutoFitRefusedError, autoFitSize, createFitMeasure, resizeRegion, type ResizeRequest } from './sheetResize'
 import { tileLogicalBox } from '../../xlsx/view/tileCache'
 
 /** A committed sheet view (the S9.1 sort/filter commit seam). `revision` must
@@ -210,6 +210,8 @@ interface SheetEntry {
   structureGen: number
   /** View-only session size generation the geometry holds (spec §5.6). */
   resizeGen: number
+  /** The view input this entry shows (rebuilt with it when only sizes change). */
+  input: SheetViewInput
   view: SheetView
   geometry: SheetGeometry
   metrics: ProjectedSheetMetrics
@@ -258,7 +260,7 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
   // §§10.1, 12.4: each sheet entry holds the charged buffers it shows (view
   // order/mask, row projection) until a committed display no longer shows it;
   // a worker view also stays held by the workbook, sibling viewers and copies.
-  const holds = useMemo(() => new DisplayHolds<SheetEntry>(held => [held.view.order, held.view.visibility, held.geometry].flatMap(target => mainLedger.hold(target) ?? [])), [mainLedger])
+  const holds = useMemo(() => new DisplayHolds<SheetEntry>(held => [held.view.order, held.view.visibility, held.geometry, held.geometry.sizedDrawings].flatMap(target => target ? mainLedger.hold(target) ?? [] : [])), [mainLedger])
   // Display serials: an entry replaced while rendering display N is released
   // once N (or a later display) commits; one replaced outside a render (an
   // event or publication) once the next display commits.
@@ -369,12 +371,17 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
   const entryFor = (sheetId: string): SheetEntry => {
     const index = sheetIds.indexOf(sheetId)
     const sheet = remote ? sheetWithDrawings(doc.sheets[index], remote.drawings(sheetId)) : doc.sheets[index]
-    const input = viewInput(sheetId)
+    let input = viewInput(sheetId)
     const previous = entries.get(sheetId)
     const structureGen = remote ? remote.merges(sheetId).gen : 0
     const sized = sheetSizes.get(sheetId), resizeGen = sized?.gen ?? 0
     if (previous && previous.revision === input.revision && previous.structureGen === structureGen && previous.resizeGen === resizeGen) { bindOverflowCache(previous.geometry, overflowFor()); return previous }
-    if (previous && input.revision < previous.revision) { bindOverflowCache(previous.geometry, overflowFor()); return previous } // stale commit: never publish an older view
+    if (previous && input.revision < previous.revision) {
+      // Stale commit: never publish an older view. Session sizes or structure
+      // that changed since are still applied, to the view already shown.
+      if (previous.resizeGen === resizeGen && previous.structureGen === structureGen) { bindOverflowCache(previous.geometry, overflowFor()); return previous }
+      input = previous.input
+    }
     const order = input.order ?? createIdentityOrder()
     const baseHidden = remote ? remote.geometry(sheetId).baseHidden : sheetBaseHidden(sheet)
     const visibility = input.visibility ?? visibilityFromHidden(createIntervalSet(displayIntervals(baseHidden.intervals, order)))
@@ -386,6 +393,8 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
     // lifetime: the row projection (it keeps its own copied segments; the build's
     // row axis is dropped), the column axis, the per-row cell index and merges.
     if (!remote) mainLedger.chargeWhileHeld('geometry', [built], projectionBytes(built.metrics) + axisBytes(built.metrics.cols) + (built.cellIndexBytes ?? 0) + built.merges.estimatedBytes)
+    // Drawings repositioned for session sizes (§5.6) are this geometry's own copies.
+    if (built.sizedDrawings) mainLedger.chargeWhileHeld('drawings', [built.sizedDrawings], built.sizedDrawings.length * SIZED_DRAWING_BYTES)
     // Order and visibility buffers built on the main thread are charged once each,
     // while a view holds them: a resident sort/filter's, and the base visibility
     // words built here for any sheet (1,048,576 rows: ~132 KiB). A worker-backed
@@ -395,7 +404,7 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
     const view: SheetView = { sheetId, revision: input.revision, order, baseHidden, visibility, sort: input.sort ?? null, filter: input.filter ?? null, selection }
     const used = remote?.layout(sheetId).used
     const entry: SheetEntry = {
-      sheet, revision: input.revision, structureGen, resizeGen, view, geometry: built, metrics: built.metrics, body: input.filter || input.sort ? { r0: (input.filter?.range ?? input.sort!.range).r0 + (input.filter?.range ?? input.sort!.range).headerRows, r1: (input.filter?.range ?? input.sort!.range).r1 - (input.filter?.range ?? input.sort!.range).totalsRows } : remote ? used ? { r0: used.r0, r1: used.r1 } : null : usedBody(sheet),
+      sheet, revision: input.revision, structureGen, resizeGen, input, view, geometry: built, metrics: built.metrics, body: input.filter || input.sort ? { r0: (input.filter?.range ?? input.sort!.range).r0 + (input.filter?.range ?? input.sort!.range).headerRows, r1: (input.filter?.range ?? input.sort!.range).r1 - (input.filter?.range ?? input.sort!.range).totalsRows } : remote ? used ? { r0: used.r0, r1: used.r1 } : null : usedBody(sheet),
       // Layout records are keyed by complete identity; a new view gets its own merge cache.
       // A worker layout/merge publication changes record boxes: fresh layouts then.
       layoutCache: previous && previous.structureGen === structureGen ? previous.layoutCache : new LayoutCache(), merges: new MergeQueryCache(),
@@ -1300,7 +1309,6 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
   // One commit per gesture: the active sheet's session size changes, the tiles
   // its paint can reach are dropped, and the rebuilt entry (new geometry, new
   // window) repaints and re-lays-out everything that depends on geometry.
-  const measureRef = useRef<ReturnType<typeof scratchMeasure> | null>(null)
   const dropTiles = (sheetId: string, region: { axis: 'x' | 'y'; from: number } | null) => {
     rendererRef.current?.cache.invalidate(key => {
       if (key.identity.sheetId !== sheetId) return false
@@ -1319,17 +1327,44 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
     if (!(current > 0)) { setAnnouncement(`${name} is hidden; it cannot be resized.`); return }
     let size: number
     if (request.fit) {
-      size = autoFitSize(request.kind, request.index, {
-        geometry: entry.geometry, sheet: entry.sheet, pane: visibleLogicalViewport(scroll, viewport), measure: measureRef.current ??= scratchMeasure(),
-        knownRows: limit => remote ? remote.store(sheetId).knownRows(limit) : entry.sheet.rows.slice(0, limit).map(row => row.index),
-        ...(remote ? { styleOf: (index: number) => remote.styleOf(index) } : {}),
-      })
+      // A per-fit measurement owner, charged while it runs and dropped after (§12.4).
+      let charged = 0
+      const fit = createFitMeasure({ sheet: entry.sheet, admit: bytes => {
+        if (bytes > charged && mainLedger.bytes - charged + bytes > MAIN_THREAD_BUDGETS[budgetProfile]) return false
+        mainLedger.set('layout', 'resize-measure', charged = bytes)
+        return true
+      } })
+      try {
+        size = autoFitSize(request.kind, request.index, {
+          geometry: entry.geometry, sheet: entry.sheet, pane: visibleLogicalViewport(scroll, viewport), measure: fit.measure, ...(fit.wrappedHeight ? { wrappedHeight: fit.wrappedHeight } : {}),
+          knownRows: limit => remote ? remote.store(sheetId).knownRows(limit) : entry.sheet.rows.slice(0, limit).map(row => row.index),
+          ...(remote ? { styleOf: (index: number) => remote.styleOf(index) } : {}),
+        })
+      } catch (error) {
+        if (!(error instanceof AutoFitRefusedError)) throw error
+        setAnnouncement(`${name} was not fitted: ${error.message}`)
+        return
+      } finally { mainLedger.release('layout', 'resize-measure') }
     } else size = request.size ?? current + (request.delta ?? 0)
     const sizes = sizesOf(sheetId), axis = column ? 'col' : 'row'
     const region = resizeRegion(entry.geometry, request.kind, request.index)
-    const gen = sizes.gen
+    const gen = sizes.gen, previousSize = sizes.get(axis, request.index)
     if (!sizes.set(axis, request.index, size)) { setAnnouncement(`${name} was not resized: this sheet already has the maximum number of resized ${column ? 'columns' : 'rows'}. Reset sizes to start over.`); return }
     const applied = sizes.get(axis, request.index)!
+    if (sizes.gen !== gen) {
+      // The geometry must represent the size: one that cannot be (beside
+      // extreme authored sizes) keeps the authored geometry, diagnosed, and is
+      // reported honestly instead of announced as applied (§5.6).
+      const rebuilt = entryFor(sheetId)
+      const shown = column ? rebuilt.metrics.cols.size(request.index) : rebuilt.metrics.rows.size(rebuilt.metrics.order.sourceToDisplay(request.index))
+      if (shown !== applied) {
+        sizes.restore(axis, request.index, previousSize)
+        entryFor(sheetId)
+        setAnnouncement(`${name} was not resized: ${applied} pixels cannot be represented beside this sheet's sizes.`)
+        rerender()
+        return
+      }
+    }
     const limit = RESIZE_LIMITS[axis]
     const bound = applied === limit.max ? ' (maximum)' : applied === limit.min ? ' (minimum)' : ''
     setAnnouncement(`${name} ${column ? 'width' : 'height'} ${applied} pixels${bound}${request.fit ? ', fitted to content' : ''}. View only; the file is unchanged.`)

@@ -192,6 +192,9 @@ export interface SheetGeometry {
   /** Resident builds (S10.2 main ledger): retained bytes of the per-row cell
    * index (one Map entry and one array per populated row, one slot per cell). */
   readonly cellIndexBytes?: number
+  /** Session-size placement (spec §5.6): the repositioned top-level drawing
+   * copies this geometry's drawing index holds, when any moved. */
+  readonly sizedDrawings?: readonly XlsxDrawing[]
   /** Top-level drawings touching a logical CSS box, in authored paint order, or null
    * when their node weight or the index walk exceeds `budget` records. */
   drawingsIn(left: number, top: number, right: number, bottom: number, budget: number): readonly XlsxDrawing[] | null
@@ -381,6 +384,11 @@ export function buildSheetGeometry(sheet: XlsxSheet, options: SheetGeometryOptio
   } catch (error) {
     // A projection that cannot be built must not silently show another order.
     if (!(error instanceof AxisMetricsError)) throw error
+    // Session sizes that make it unrepresentable fall back to the authored sizes (§5.6).
+    if (hasSessionSizes(options.sizes)) {
+      const plain = buildSheetGeometry(sheet, { ...options, sizes: undefined })
+      return plain.kind === 'ready' ? Object.freeze({ ...plain, diagnostics: Object.freeze([...plain.diagnostics, axisDiagnostic(error, 'projection')]) }) : plain
+    }
     diagnostics.push(axisDiagnostic(error, 'projection'))
     return { kind: 'diagnostic', diagnostics }
   }
@@ -393,8 +401,12 @@ export function buildSheetGeometry(sheet: XlsxSheet, options: SheetGeometryOptio
     }
     mergeEntries.push({ rect: { r0: range.minRow, r1: range.maxRow, c0: range.minCol, c1: range.maxCol }, value: range })
   }
-  const drawingsIn = drawingQuery(sizedDrawings(sheet.drawings ?? [], options.sizes, rowOverrides, hidden.map(index => ({ start: index, end: index })), colOverrides, colCollapsed))
+  const placed = sizedDrawings(sheet.drawings ?? [], options.sizes, rowOverrides, hidden.map(index => ({ start: index, end: index })), colOverrides, colCollapsed)
+  const drawingsIn = drawingQuery(placed)
   return Object.freeze({
+    // Repositioned copies (and their index) belong to this geometry alone; the
+    // owner charges them to the drawings pool while it is held (§12.4).
+    ...(placed !== (sheet.drawings ?? placed) ? { sizedDrawings: placed } : {}),
     kind: 'ready' as const,
     metrics,
     diagnostics: Object.freeze(diagnostics),

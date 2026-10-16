@@ -28,6 +28,8 @@ export const RESIZE_LIMITS = Object.freeze({ col: Object.freeze({ min: 8, max: 1
 export const MAX_SESSION_SIZES = 4096
 /** Retained bytes per session entry: the Map entry plus its published snapshot copy. */
 export const SESSION_SIZE_ENTRY_BYTES = 128
+/** Retained bytes of one repositioned top-level drawing copy plus its box-index entry. */
+export const SIZED_DRAWING_BYTES = 320
 /** Keyboard step in CSS px (Alt+Shift+Arrow). */
 export const RESIZE_KEY_STEP = 8
 /** Auto-fit reads at most this many source rows for a column: the rows visible
@@ -80,6 +82,15 @@ export class SheetSizes {
     return true
   }
   /** Restores the workbook sizes; false when there was nothing to reset. */
+  /** Puts one entry back to `previous` (undefined: removes it), e.g. when the
+   * geometry refused a size it cannot represent. */
+  restore(axis: ResizeAxis, index: number, previous: number | undefined): void {
+    const map = axis === 'row' ? this.rows : this.cols
+    if (map.get(index) === previous) return
+    if (previous === undefined) map.delete(index)
+    else map.set(index, previous)
+    this.changed()
+  }
   reset(): boolean {
     if (this.empty) return false
     this.rows.clear()
@@ -155,7 +166,16 @@ export function remapDrawings(drawings: readonly XlsxDrawing[], base: PlacementA
     const width = two ? mapPoint(base.cols, sized.cols, x + w) - x0 : w
     const height = two ? mapPoint(base.rows, sized.rows, y + h) - y0 : h
     if (x0 === x && y0 === y && width === w && height === h) return node
-    return { ...node, xEmu: x0 * EMU_PER_CSS, yEmu: y0 * EMU_PER_CSS, widthEmu: Math.max(0, width) * EMU_PER_CSS, heightEmu: Math.max(0, height) * EMU_PER_CSS }
+    const moved = { ...node, xEmu: x0 * EMU_PER_CSS, yEmu: y0 * EMU_PER_CSS, widthEmu: Math.max(0, width) * EMU_PER_CSS, heightEmu: Math.max(0, height) * EMU_PER_CSS }
+    // A group paints its children through ext/chExt: the copied group keeps its
+    // child coordinate space (chOff/chExt) and its ext follows the new box, so
+    // children move and stretch with the anchor.
+    if (node.group) {
+      const rx = w > 0 ? moved.widthEmu / node.widthEmu : 1, ry = h > 0 ? moved.heightEmu / node.heightEmu : 1
+      moved.group = { ...node.group, off: { x: node.group.off.x + moved.xEmu - node.xEmu, y: node.group.off.y + moved.yEmu - node.yEmu },
+        ext: { width: node.group.ext.width * rx, height: node.group.ext.height * ry } }
+    }
+    return moved
   })
 }
 
@@ -183,11 +203,14 @@ function wrappedLines(text: string, font: string, inner: number, measure: Measur
   return lines
 }
 /** Tallest cell: line count (wrapped at the column width when the cell wraps)
- * × font line height plus padding; the default height when nothing was measured. */
-export function fitRowHeight(cells: Iterable<{ text: string; font: string; sizePx: number; wrap: boolean; widthCss: number }>, measure: Measure): number {
+ * × font line height plus padding; the default height when nothing was
+ * measured. `heightPx` is a wrapped body's height from the canonical painter
+ * layout (§11.2): when present it decides, plus the vertical cell padding. */
+export function fitRowHeight(cells: Iterable<{ text: string; font: string; sizePx: number; wrap: boolean; widthCss: number; heightPx?: number }>, measure: Measure): number {
   let tallest = -1
   for (const cell of cells) {
     if (!cell.text) continue
+    if (cell.heightPx !== undefined && Number.isFinite(cell.heightPx)) { tallest = Math.max(tallest, Math.ceil(cell.heightPx + CELL_PADDING_CSS)); continue }
     const lines = cell.wrap ? wrappedLines(cell.text, cell.font, Math.max(1, cell.widthCss - CELL_PADDING_CSS), measure) : 1
     tallest = Math.max(tallest, Math.round(lines * cell.sizePx * LINE_HEIGHT + ROW_PADDING_CSS))
   }

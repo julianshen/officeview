@@ -178,9 +178,12 @@ describe('view-only resize: coarse pointers', () => {
       expect(parseFloat(column.style.top) + parseFloat(column.style.height)).toBeLessThanOrEqual(44)
       // The row handle lives in the header corner's free slot, above the first
       // row header: it never takes a tap that belongs to a row (§9.3).
-      expect(parseFloat(row.style.top)).toBe(44)
-      expect(parseFloat(row.style.top) + parseFloat(row.style.height)).toBe(88)
-      expect(parseFloat(row.style.top) + parseFloat(row.style.height)).toBeLessThanOrEqual(columnHeaderHeight(true, true, true))
+      const rowY = Number(/translate\([^,]+,\s*([-\d.]+)px\)/.exec(row.style.transform)?.[1])
+      expect(rowY).toBe(44)
+      expect(rowY + parseFloat(row.style.height)).toBe(88)
+      expect(rowY + parseFloat(row.style.height)).toBeLessThanOrEqual(columnHeaderHeight(true, true, true))
+      // The column target is clear of the worksheet corner (x >= 44).
+      expect(Number(/translate\(([-\d.]+)px/.exec(column.style.transform)?.[1])).toBeGreaterThanOrEqual(44)
       expect(row.textContent).toBe('↕2')
       fireEvent.pointerDown(row, { button: 0, pointerId: 4, clientY: 60, pointerType: 'touch' })
       fireEvent.pointerMove(window, { pointerId: 4, clientY: 76, pointerType: 'touch' })
@@ -299,5 +302,118 @@ describe('view-only resize on a worker-backed sheet', () => {
     await waitFor(() => expect(headerWidth(ui, 'B')).toBe(64))
     goTo(ui, 'B20000')
     await waitFor(() => expect(h.viewports()).toBeGreaterThan(before))
+  })
+})
+
+describe('codex review round 1', () => {
+  const sheetIdsOf = (ui: RenderResult) => [...(ui.getByRole('combobox', { name: 'Worksheet' }) as HTMLSelectElement).options].map(option => option.value)
+
+  it('#1 auto-fit measures in a per-fit scratch that is charged while it runs and released after', FIRST_PAINT_TEST, async () => {
+    const ledgers: Array<{ ownerBytes(pool: 'layout', owner: string): number; set(pool: 'layout', owner: string, bytes: number): void }> = []
+    const f = frames()
+    const ui = render(<InteractiveSheetDoc doc={await workbook()} onFrame={f.onFrame} onMainLedger={ledger => { ledgers.push(ledger as never) }} />)
+    await waitFor(() => expect(f.last()?.basePaints ?? 0).toBeGreaterThan(0), FIRST_PAINT_WAIT)
+    const ledger = ledgers[ledgers.length - 1]
+    const seen: number[] = []
+    const set = ledger.set.bind(ledger)
+    vi.spyOn(ledger, 'set').mockImplementation((pool, owner, bytes) => { if (owner === 'resize-measure') seen.push(bytes); set(pool, owner, bytes) })
+    fireEvent.doubleClick(ui.container.querySelector<HTMLElement>('[data-resize-column="2"]')!)
+    await waitFor(() => expect(headerWidth(ui, 'C')).toBeGreaterThan(150))
+    expect(Math.max(...seen)).toBeGreaterThan(0)
+    expect(ledger.ownerBytes('layout', 'resize-measure')).toBe(0)
+  })
+
+  it('#3 repositioned resident drawings are charged to the drawings pool', FIRST_PAINT_TEST, async () => {
+    const doc = await workbook()
+    const E = 9525
+    doc.sheets[0].drawings = [{ xEmu: 200 * E, yEmu: 0, widthEmu: 64 * E, heightEmu: 40 * E, geometry: 'rect', fill: '#ff0000',
+      source: { partPath: 'xl/drawings/drawing1.xml', treePath: 'twoCellAnchor[0]/sp[0]', element: 'sp', representation: 'native' } } as never]
+    const ledgers: Array<{ snapshot(): { byPool: Record<string, number> } }> = []
+    const f = frames()
+    const ui = render(<InteractiveSheetDoc doc={doc} onFrame={f.onFrame} onMainLedger={ledger => { ledgers.push(ledger) }} />)
+    await waitFor(() => expect(f.last()?.basePaints ?? 0).toBeGreaterThan(0), FIRST_PAINT_WAIT)
+    const drawings = () => ledgers[ledgers.length - 1].snapshot().byPool.drawings
+    const before = drawings()
+    resizeKey(goTo(ui, 'A1'), 'ArrowRight')
+    await waitFor(() => expect(headerWidth(ui, 'A')).toBe(72))
+    await waitFor(() => expect(drawings()).toBeGreaterThan(before))
+  })
+
+  it('#4 a drag in progress is cancelled by a sheet switch and never resizes the previous sheet', FIRST_PAINT_TEST, async () => {
+    const { ui, f } = await mount()
+    const [first, second] = sheetIdsOf(ui)
+    fireEvent.pointerDown(ui.container.querySelector<HTMLElement>('[data-resize-column="0"]')!, { button: 0, pointerId: 1, clientX: 100 })
+    fireEvent.pointerMove(window, { pointerId: 1, clientX: 120 })
+    const select = ui.getByRole('combobox', { name: 'Worksheet' })
+    fireEvent.change(select, { target: { value: second } })
+    await waitFor(() => expect(f.last().activeSheetId).toBe(second))
+    fireEvent.pointerUp(window, { pointerId: 1, clientX: 140 })
+    await settle()
+    expect(headerWidth(ui, 'A')).toBe(64)
+    fireEvent.change(select, { target: { value: first } })
+    await waitFor(() => expect(f.last().activeSheetId).toBe(first))
+    expect(headerWidth(ui, 'A')).toBe(64)
+  })
+
+  it('#6 a stale external view revision does not block a later resize', FIRST_PAINT_TEST, async () => {
+    const doc = await workbook()
+    const f = frames()
+    const sheetId = doc.sheets[0].sheetId ?? '1'
+    const ui = render(<InteractiveSheetDoc doc={doc} onFrame={f.onFrame} views={{ [sheetId]: { revision: 3 } }} />)
+    await waitFor(() => expect(f.last()?.basePaints ?? 0).toBeGreaterThan(0), FIRST_PAINT_WAIT)
+    ui.rerender(<InteractiveSheetDoc doc={doc} onFrame={f.onFrame} views={{ [sheetId]: { revision: 2 } }} />)
+    await settle()
+    resizeKey(goTo(ui, 'A1'), 'ArrowRight')
+    await waitFor(() => expect(status(ui)).toMatch(/Column A width 72 pixels/))
+    await waitFor(() => expect(headerWidth(ui, 'A')).toBe(72))
+    expect(f.last().identity.viewGen).toBe(3)
+  })
+
+  it('#7 row auto-fit uses the painter wrapping: long unbroken words wrap, so the fitted row holds every line', FIRST_PAINT_TEST, async () => {
+    const doc = await parseXlsx(await OfficePackage.load(await buildXlsx([{ name: 'S1', rows: [{ r: 1, cells: [{ ref: 'A1', v: 'x'.repeat(78) }] }] }])))
+    const cell = doc.sheets[0].rows.flatMap(row => row.cells).find(c => c.ref === 'A1')!
+    cell.style = { ...cell.style, wrapText: true, fontSizePt: 10 } as NonNullable<typeof cell.style>
+    const { ui } = await mount(doc)
+    fireEvent.doubleClick(ui.container.querySelector<HTMLElement>('[data-resize-row="0"]')!)
+    await waitFor(() => expect(parseFloat((ui.getByRole('rowheader', { name: 'Row 1' }).parentElement as HTMLElement).style.height)).toBeGreaterThan(120))
+  })
+
+  it('#8 only the pointer that started the drag can move or end it', FIRST_PAINT_TEST, async () => {
+    const { ui } = await mount()
+    fireEvent.pointerDown(ui.container.querySelector<HTMLElement>('[data-resize-column="0"]')!, { button: 0, pointerId: 1, clientX: 100 })
+    fireEvent.pointerMove(window, { pointerId: 2, clientX: 200 })
+    fireEvent.pointerUp(window, { pointerId: 2, clientX: 200 })
+    await settle()
+    expect(headerWidth(ui, 'A')).toBe(64)
+    fireEvent.pointerMove(window, { pointerId: 1, clientX: 116 })
+    fireEvent.pointerUp(window, { pointerId: 1, clientX: 116 })
+    await waitFor(() => expect(headerWidth(ui, 'A')).toBe(80))
+  })
+
+  it('#10 the click slop is in CSS pixels at any zoom', FIRST_PAINT_TEST, async () => {
+    const { ui, f } = await mount()
+    for (let i = 0; i < 8 && f.last().zoom > 0.5; i++) { fireEvent.click(ui.getByRole('button', { name: 'Zoom out' })); await settle() }
+    expect(f.last().zoom).toBeLessThanOrEqual(0.5)
+    const zoom = f.last().zoom
+    const handle = ui.container.querySelector<HTMLElement>('[data-resize-column="0"]')!
+    fireEvent.pointerDown(handle, { button: 0, pointerId: 1, clientX: 100 })
+    fireEvent.pointerMove(window, { pointerId: 1, clientX: 101 })
+    fireEvent.pointerUp(window, { pointerId: 1, clientX: 101 })
+    await settle()
+    expect(headerWidth(ui, 'A')).toBeCloseTo(64 * zoom, 5)
+  })
+
+  it('#11 control-mode resize keys also work from a focused sort/filter/more action button', FIRST_PAINT_TEST, async () => {
+    const { ui } = await mount()
+    const grid = goTo(ui, 'A1')
+    fireEvent.keyDown(grid, { key: 'F2' })
+    const sort = ui.getByRole('button', { name: 'Cycle sort column A' })
+    act(() => sort.focus())
+    resizeKey(sort, 'ArrowRight')
+    await waitFor(() => expect(headerWidth(ui, 'A')).toBe(72))
+    const filter = ui.getByRole('button', { name: /^Filter column A/ })
+    act(() => filter.focus())
+    resizeKey(filter, 'ArrowRight')
+    await waitFor(() => expect(headerWidth(ui, 'A')).toBe(80))
   })
 })

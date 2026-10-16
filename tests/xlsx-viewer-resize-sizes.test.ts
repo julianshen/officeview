@@ -11,11 +11,13 @@ import { createRowOrder } from '../src/xlsx/view/order'
 import { createSheetMetrics } from '../src/xlsx/view/projection'
 import { buildSheetGeometry } from '../src/xlsx/view/viewport'
 import { createIntervalSet, visibilityFromHidden } from '../src/xlsx/view/visibility'
+import { AutoFitRefusedError, createFitMeasure, handlePlacement } from '../src/components/xlsx/sheetResize'
 import {
   AUTOFIT_MAX_CELLS, AUTOFIT_MAX_ROWS, MAX_SESSION_SIZES, RESIZE_LIMITS, SheetSizes, autoFitRowCandidates, clampSize, fitColumnWidth, fitRowHeight,
   mergeAxisOverrides, remapDrawings,
 } from '../src/xlsx/view/axisSizes'
 import type { XlsxDrawing, XlsxSheet } from '../src/xlsx/types'
+import { drawingExtent } from '../src/xlsx/view/sheetCells'
 
 const sheet = (extra: Partial<XlsxSheet> = {}): XlsxSheet => ({ name: 'S', rows: [], cols: [], merges: [], mergeRanges: [], ...extra })
 
@@ -161,10 +163,67 @@ describe('drawings anchored to cells follow session sizes', () => {
     expect(plain.drawingsIn(200, 0, 210, 10, 100)).toHaveLength(0)
   })
 
+  it('review #5: a grouped two-cell drawing stretches its children (group ext follows the anchor box)', () => {
+    const group = { ...node('twoCellAnchor[0]/grpSp[0]', 32 * E, 0, 96 * E, 20 * E),
+      group: { off: { x: 32 * E, y: 0 }, ext: { width: 96 * E, height: 20 * E }, chOff: { x: 0, y: 0 }, chExt: { width: 96 * E, height: 20 * E } },
+      children: [node('twoCellAnchor[0]/grpSp[0]/sp[0]', 0, 0, 96 * E, 20 * E)] } as XlsxDrawing
+    const [moved] = remapDrawings([group], base, sized)
+    expect(moved.widthEmu).toBe(160 * E)
+    expect(moved.group!.ext.width).toBe(160 * E)
+    expect(moved.group!.chExt.width).toBe(96 * E)
+    expect(moved.group!.off.x).toBe(32 * E)
+    expect(group.group!.ext.width).toBe(96 * E)
+    const extent = drawingExtent([moved])
+    expect(extent.right).toBeCloseTo(192, 6)
+  })
+
   it('an offset past a narrowed cell clamps to that cell', () => {
     const narrow = { rows: base.rows, cols: createAxisMetrics({ logicalCount: MAX_COLS, defaultSizeCss: 64, overrides: [{ start: 0, end: 0, sizeCss: 16 }] }) }
     const [moved] = remapDrawings([node('oneCellAnchor[0]/sp[0]', 40 * E, 0, 5 * E, 5 * E)], base, narrow)
     expect(moved.xEmu).toBe(16 * E)
+  })
+})
+
+describe('review #9: handle placement keeps full targets inside the pane and off the corner', () => {
+  const layout = { viewport: { width: 300, height: 200 }, headerHeight: 132 }
+  it('coarse column targets are clamped right of the worksheet corner and inside the pane, still covering the edge', () => {
+    for (const edge of [0, 5, 150, 298, 300]) {
+      const box = handlePlacement('column', edge, { ...layout, touch: true })
+      expect(box.x).toBeGreaterThanOrEqual(44)
+      expect(box.x + box.width).toBeLessThanOrEqual(44 + 300)
+      expect(box.width).toBe(44)
+      expect(box.x).toBeLessThanOrEqual(44 + edge)
+      expect(box.x + box.width).toBeGreaterThanOrEqual(44 + edge)
+    }
+  })
+  it('fine row targets stay below the column header strip and inside the pane', () => {
+    for (const edge of [0, 2, 100, 199, 200]) {
+      const box = handlePlacement('row', edge, { ...layout, touch: false })
+      expect(box.y).toBeGreaterThanOrEqual(132)
+      expect(box.y + box.height).toBeLessThanOrEqual(132 + 200)
+    }
+  })
+})
+
+describe('review #2: unrepresentable session sizes keep the authored geometry', () => {
+  it('buildSheetGeometry falls back to authored rows with a typed diagnostic when a legal session size breaks precision', () => {
+    const doc = sheet({ rows: [{ index: 0, customHeight: true, heightPt: 1e-15, cells: [] }, { index: 1, customHeight: true, heightPt: 1e-15, cells: [] }] })
+    const built = buildSheetGeometry(doc, { sizes: { rows: new Map([[0, 8]]), cols: new Map() } })
+    if (built.kind !== 'ready') throw new Error('not ready')
+    expect(built.metrics.rows.size(0)).toBeLessThan(1)
+    expect(built.diagnostics.some(d => d.code === 'axis-precision-exceeded')).toBe(true)
+  })
+})
+
+describe('review #1: auto-fit measurement is per fit, bounded and accounted', () => {
+  it('counts the bytes it retains and refuses past its admitted bound', () => {
+    let calls = 0
+    const fit = createFitMeasure({ admit: bytes => bytes <= 4096, measureText: (_font, text) => { calls++; return text.length } })
+    expect(fit.measure('f', 'abc')).toBe(3)
+    expect(fit.measure('f', 'abc')).toBe(3)
+    expect(calls).toBe(1)
+    expect(fit.bytes()).toBeGreaterThan(0)
+    expect(() => { for (let i = 0; i < 1000; i++) fit.measure('f', `text-${i}-${'x'.repeat(40)}`) }).toThrow(AutoFitRefusedError)
   })
 })
 

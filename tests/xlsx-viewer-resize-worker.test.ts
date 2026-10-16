@@ -61,6 +61,19 @@ describe('paged geometry with session sizes', () => {
   })
 })
 
+describe('review #2: paged geometry never throws for a legal session size', () => {
+  it('falls back to the authored axes with a typed diagnostic when the overlay is unrepresentable', async () => {
+    const h = await harness()
+    try {
+      const layout = h.remote.layout('s')
+      Object.assign(layout, { rowOverrides: [{ start: 0, end: 1, sizeCss: 1e-15 }] })
+      const geometry = pagedSheetGeometry(h.remote, 's', createIdentityOrder(), visibility(), undefined, sizes([], [[0, 8]]))
+      expect(geometry.metrics.rows.size(0)).toBe(1e-15)
+      expect(geometry.diagnostics.some(d => d.code === 'axis-precision-exceeded')).toBe(true)
+    } finally { await h.remote.release() }
+  })
+})
+
 describe('worker plans while a sheet is resized', () => {
   const commands = (h: Awaited<ReturnType<typeof harness>>) => h.remote.stats.commands.viewport ?? 0
 

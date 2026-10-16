@@ -12,10 +12,11 @@ import { RectangleIndex } from '../../xlsx/view/structure'
 import type { SheetGeometry } from '../../xlsx/view/viewport'
 import type { RemoteWorkbook } from '../../worker/viewerRemoteSource'
 import { axisBytes, projectionBytes } from '../../xlsx/view/mainLedger'
-import { createAxisMetrics } from '../../xlsx/view/axes'
-import { hasSessionSizes, mergeAxisOverrides, type SessionSizes } from '../../xlsx/view/axisSizes'
+import { AxisMetricsError, createAxisMetrics } from '../../xlsx/view/axes'
+import { SIZED_DRAWING_BYTES, hasSessionSizes, mergeAxisOverrides, type SessionSizes } from '../../xlsx/view/axisSizes'
 import { MAX_COLS, MAX_ROWS } from '../../xlsx/view/coordinates'
-import { drawingQuery, sizedDrawings } from '../../xlsx/view/viewport'
+import { axisDiagnostic, drawingQuery, sizedDrawings } from '../../xlsx/view/viewport'
+import type { WorkerDiagnostic } from '../../xlsx/view/contracts'
 import type { XlsxDrawing } from '../../xlsx/types'
 
 /** `sizes` (spec §5.6) are the sheet's view-only session sizes: the axes are
@@ -30,18 +31,30 @@ export function pagedSheetGeometry(remote: RemoteWorkbook, sheetId: string, orde
   const drawings = remote.drawings(sheetId)
   let { rows, cols } = axes
   let sizedBytes = 0
-  let drawingsIn: SheetGeometry['drawingsIn'] = (...query) => drawings.drawingsIn(...query)
+  const plainDrawings: SheetGeometry['drawingsIn'] = (...query) => drawings.drawingsIn(...query)
+  let drawingsIn = plainDrawings
+  const sizeDiagnostics: WorkerDiagnostic[] = []
+  let metrics: ReturnType<typeof createSheetMetrics> | undefined
   if (hasSessionSizes(sizes)) {
     const layout = remote.layout(sheetId)
     const hiddenCols = layout.hiddenCols ?? []
-    if (sizes.rows.size) rows = createAxisMetrics({ logicalCount: MAX_ROWS, defaultSizeCss: axes.rows.defaultSizeCss, overrides: mergeAxisOverrides(layout.rowOverrides, sizes.rows) })
-    if (sizes.cols.size) cols = createAxisMetrics({ logicalCount: MAX_COLS, defaultSizeCss: axes.cols.defaultSizeCss, overrides: mergeAxisOverrides(layout.colOverrides, sizes.cols), ...(hiddenCols.length ? { collapsed: hiddenCols } : {}) })
+    try {
+      if (sizes.rows.size) rows = createAxisMetrics({ logicalCount: MAX_ROWS, defaultSizeCss: axes.rows.defaultSizeCss, overrides: mergeAxisOverrides(layout.rowOverrides, sizes.rows) })
+      if (sizes.cols.size) cols = createAxisMetrics({ logicalCount: MAX_COLS, defaultSizeCss: axes.cols.defaultSizeCss, overrides: mergeAxisOverrides(layout.colOverrides, sizes.cols), ...(hiddenCols.length ? { collapsed: hiddenCols } : {}) })
+      metrics = createSheetMetrics({ rows, cols, order, visibility })
+    } catch (error) {
+      // A legal session size beside arbitrary authored sizes may still be
+      // unrepresentable: keep the authored geometry, diagnosed (§5.6).
+      if (!(error instanceof AxisMetricsError)) throw error
+      sizeDiagnostics.push(axisDiagnostic(error, 'viewport'))
+      rows = axes.rows; cols = axes.cols; metrics = undefined
+    }
     sizedBytes = (rows === axes.rows ? 0 : axisBytes(rows)) + (cols === axes.cols ? 0 : axisBytes(cols))
     // Drawing content arrives (and is evicted) after this geometry is built:
     // place each published list once, keyed weakly so the geometry never pins it.
     const placed = new WeakMap<readonly XlsxDrawing[], SheetGeometry['drawingsIn']>()
     const hiddenRows = layout.hidden.map(interval => ({ start: interval.r0, end: interval.r1 }))
-    drawingsIn = (...query) => {
+    if (metrics) drawingsIn = (...query) => {
       const list = drawings.drawings
       if (!list.length) return drawings.drawingsIn(...query)
       let sized = placed.get(list)
@@ -54,12 +67,12 @@ export function pagedSheetGeometry(remote: RemoteWorkbook, sheetId: string, orde
       return sized(...query)
     }
   }
-  const metrics = createSheetMetrics({ rows, cols, order, visibility })
+  metrics ??= createSheetMetrics({ rows, cols, order, visibility })
   const mergeIndex = RectangleIndex.build(merges.map(range => ({ rect: { r0: range.minRow, r1: range.maxRow, c0: range.minCol, c1: range.maxCol }, value: range })))
   const geometry = Object.freeze({
     kind: 'ready' as const,
     metrics,
-    diagnostics: Object.freeze([...drawings.diagnostics]),
+    diagnostics: Object.freeze([...drawings.diagnostics, ...sizeDiagnostics]),
     cellsOf: (sourceRow: number) => store.cellsOf(sourceRow),
     merges: mergeIndex,
     // Read at query time so geometry does not pin an evicted drawing payload.
@@ -72,5 +85,3 @@ export function pagedSheetGeometry(remote: RemoteWorkbook, sheetId: string, orde
   bindOverflowCache(geometry, cache)
   return geometry
 }
-/** A repositioned top-level drawing copy plus its box-index entry. */
-const SIZED_DRAWING_BYTES = 320
