@@ -4,7 +4,8 @@
  * the auto-fit bound. Pure model tests; viewer wiring lives in
  * xlsx-viewer-resize.test.tsx.
  */
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
+import { TILE_CANVAS_BYTES, shapeCacheBytes } from '../src/xlsx/view/mainLedger'
 import { createAxisMetrics } from '../src/xlsx/view/axes'
 import { MAX_COLS, MAX_ROWS } from '../src/xlsx/view/coordinates'
 import { createRowOrder } from '../src/xlsx/view/order'
@@ -218,12 +219,46 @@ describe('review #2: unrepresentable session sizes keep the authored geometry', 
 describe('review #1: auto-fit measurement is per fit, bounded and accounted', () => {
   it('counts the bytes it retains and refuses past its admitted bound', () => {
     let calls = 0
-    const fit = createFitMeasure({ admit: bytes => bytes <= 4096, measureText: (_font, text) => { calls++; return text.length } })
+    const fit = createFitMeasure({ admit: charge => charge.heap + charge.native <= 4096, measureText: (_font, text) => { calls++; return text.length } })
     expect(fit.measure('f', 'abc')).toBe(3)
     expect(fit.measure('f', 'abc')).toBe(3)
     expect(calls).toBe(1)
     expect(fit.bytes()).toBeGreaterThan(0)
     expect(() => { for (let i = 0; i < 1000; i++) fit.measure('f', `text-${i}-${'x'.repeat(40)}`) }).toThrow(AutoFitRefusedError)
+  })
+})
+
+describe('confirmation C1: native measurement resources are reserved before they exist', () => {
+  it('reserves the scratch context before creating it and the calibrated shaping cache before each new text', () => {
+    const getContext = vi.spyOn(HTMLCanvasElement.prototype, 'getContext')
+    const charges: Array<{ heap: number; native: number; contexts: number }> = []
+    const fit = createFitMeasure({ admit: charge => { charges.push({ ...charge, contexts: getContext.mock.calls.length }); return true } })
+    expect(getContext).not.toHaveBeenCalled()
+    let units = 0
+    for (let i = 0; i < 256; i++) { const text = `t${i}`; units += text.length; fit.measure('10pt "Calibri"', text) }
+    expect(charges[0].contexts).toBe(0)
+    expect(charges[0].native).toBeGreaterThanOrEqual(TILE_CANVAS_BYTES)
+    const last = charges[charges.length - 1]
+    expect(last.native).toBeGreaterThanOrEqual(TILE_CANVAS_BYTES + shapeCacheBytes(256, units))
+    expect(fit.bytes()).toBe(last.heap + last.native)
+    getContext.mockRestore()
+  })
+
+  it('a refused reservation never creates the context', () => {
+    const getContext = vi.spyOn(HTMLCanvasElement.prototype, 'getContext')
+    const fit = createFitMeasure({ admit: () => false })
+    expect(() => fit.measure('f', 'x')).toThrow(AutoFitRefusedError)
+    expect(getContext).not.toHaveBeenCalled()
+    getContext.mockRestore()
+  })
+
+  it('confirmation C4: a rotated wrapped body fits its transformed bounds', () => {
+    const fit = createFitMeasure({ admit: () => true, sheet: sheet() })
+    const cell = { ref: 'A1', row: 0, col: 0, value: 'abcdefghijklmno', styleIndex: 0, style: { numFmtId: 0, wrapText: true, fontSizePt: 10, textRotation: 90 } }
+    const plain = fit.layoutHeight!({ ...cell, style: { ...cell.style, textRotation: undefined } }, 64)!
+    const rotated = fit.layoutHeight!(cell, 64)!
+    expect(rotated).toBeGreaterThan(plain * 3)
+    expect(rotated).toBeGreaterThanOrEqual(fit.measure('10pt "Calibri"', 'abcdefghijklmno') - 1)
   })
 })
 

@@ -169,6 +169,28 @@ export function GridSemantics(props: GridSemanticsProps): ReactElement {
     try { props.onChange(action()); setNotice('') }
     catch (error) { setNotice(error instanceof Error ? boundedSelectionText(error.message) : 'Navigation unavailable. Please retry.') }
   }
+  // A resize can replace the focused header control (a column crossing the
+  // 44px touch threshold swaps its buttons for the actions lane and back):
+  // focus moves to the equivalent surviving control, else the owned grid.
+  const resizeFocus = useRef<{ request: ResizeRequest; slot: number; label: string | null } | null>(null)
+  useLayoutEffect(() => {
+    const pending = resizeFocus.current, grid = gridRef.current
+    if (!pending || !grid) return
+    const focus = document.activeElement
+    if (focus && focus !== document.body && grid.contains(focus)) return
+    resizeFocus.current = null
+    const { request, slot, label } = pending
+    const escape = (text: string) => text.replace(/["\\]/g, '\\$&')
+    const candidates = request.kind === 'column'
+      ? [label ? `button[aria-label="${escape(label)}"]` : '', `[data-header-column="${request.index}"]`, `[data-header-lane="${request.index}"]`, `[data-action-column="${request.index}"]`]
+      : [label ? `button[aria-label="${escape(label)}"]` : '', `[data-header-row="${slot}"]`]
+    for (const selector of candidates) {
+      const next = selector ? grid.querySelector<HTMLElement>(selector) : null
+      if (next) { setControlMode(true); next.focus(); return }
+    }
+    setControlMode(false)
+    grid.focus()
+  })
   const keyDown = (event: KeyboardEvent<HTMLDivElement>) => {
     if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'f') return
     const grid = gridRef.current
@@ -197,6 +219,7 @@ export function GridSemantics(props: GridSemanticsProps): ReactElement {
       }
       if (request) {
         event.preventDefault(); event.stopPropagation()
+        if (target !== grid) resizeFocus.current = { request, slot: request.kind === 'row' ? projection.order.sourceToDisplay(request.index) : -1, label: target.closest('button')?.getAttribute('aria-label') ?? null }
         props.onResize(request)
         return
       }

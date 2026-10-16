@@ -323,6 +323,78 @@ describe('codex review round 1', () => {
     expect(ledger.ownerBytes('layout', 'resize-measure')).toBe(0)
   })
 
+  it('C2 a resize whose drawing replacements do not fit the main budget is refused, restored and announced', FIRST_PAINT_TEST, async () => {
+    const doc = await workbook()
+    const E = 9525
+    doc.sheets[0].drawings = Array.from({ length: 64 }, (_, i) => ({ xEmu: (100 + i) * E, yEmu: 0, widthEmu: 64 * E, heightEmu: 40 * E, geometry: 'rect', fill: '#ff0000',
+      source: { partPath: 'xl/drawings/drawing1.xml', treePath: `twoCellAnchor[${i}]/sp[0]`, element: 'sp', representation: 'native' } })) as never
+    const ledgers: Array<{ bytes: number; peakBytes?: number; set(pool: 'copy', owner: string, bytes: number): void; snapshot(): { peakBytes: number } }> = []
+    const f = frames()
+    const ui = render(<InteractiveSheetDoc doc={doc} onFrame={f.onFrame} onMainLedger={ledger => { ledgers.push(ledger as never) }} />)
+    await waitFor(() => expect(f.last()?.basePaints ?? 0).toBeGreaterThan(0), FIRST_PAINT_WAIT)
+    const ledger = ledgers[ledgers.length - 1]
+    const budget = 64 * 1024 * 1024
+    const grid = goTo(ui, 'A1')
+    await settle()
+    const drawingsBefore = (ledger as unknown as { snapshot(): { byPool: Record<string, number> } }).snapshot().byPool.drawings
+    // Leave less room than 64 repositioned copies need.
+    ledger.set('copy', 'filler', budget - ledger.bytes - 8192)
+    resizeKey(grid, 'ArrowRight')
+    await waitFor(() => expect(status(ui)).toMatch(/Column A was not resized: .*memory/))
+    expect(headerWidth(ui, 'A')).toBe(64)
+    expect(ledger.bytes).toBeLessThanOrEqual(budget)
+    expect((ledger as unknown as { snapshot(): { byPool: Record<string, number> } }).snapshot().byPool.drawings).toBe(drawingsBefore)
+    expect((ui.getByRole('button', { name: 'Reset sizes' }) as HTMLButtonElement).disabled).toBe(true)
+    ledger.set('copy', 'filler', 0)
+  })
+
+  it('C3 keyboard resizing across the 44px lane threshold keeps focus on an equivalent header control', FIRST_PAINT_TEST, async () => {
+    const previous = window.matchMedia
+    window.matchMedia = vi.fn(query => ({ matches: query.includes('pointer: coarse'), media: query, onchange: null,
+      addEventListener: vi.fn(), removeEventListener: vi.fn(), addListener: vi.fn(), removeListener: vi.fn(), dispatchEvent: () => true })) as typeof window.matchMedia
+    try {
+      const { ui } = await mount()
+      const grid = goTo(ui, 'B1')
+      fireEvent.keyDown(grid, { key: 'F2' })
+      const lane = await waitFor(() => ui.getByRole('button', { name: 'Actions for column B' }))
+      act(() => lane.focus())
+      for (let i = 0; i < 4; i++) resizeKey(document.activeElement as HTMLElement, 'ArrowRight')
+      await waitFor(() => expect(headerWidth(ui, 'B')).toBe(44))
+      expect(document.activeElement).not.toBe(document.body)
+      expect(grid.contains(document.activeElement)).toBe(true)
+      resizeKey(document.activeElement as HTMLElement, 'ArrowRight')
+      await waitFor(() => expect(headerWidth(ui, 'B')).toBe(52))
+      // And back below the threshold from an ordinary action button.
+      act(() => ui.getByRole('button', { name: 'Cycle sort column B' }).focus())
+      for (let i = 0; i < 2; i++) resizeKey(document.activeElement as HTMLElement, 'ArrowLeft')
+      await waitFor(() => expect(headerWidth(ui, 'B')).toBe(36))
+      expect(grid.contains(document.activeElement)).toBe(true)
+      resizeKey(document.activeElement as HTMLElement, 'ArrowLeft')
+      await waitFor(() => expect(headerWidth(ui, 'B')).toBe(28))
+    } finally { window.matchMedia = previous }
+  })
+
+  it('C4 row auto-fit of rotated wrapped text fits its rotated extent', FIRST_PAINT_TEST, async () => {
+    const doc = await parseXlsx(await OfficePackage.load(await buildXlsx([{ name: 'S1', rows: [{ r: 1, cells: [{ ref: 'A1', v: 'abcdefghijklmno' }] }] }])))
+    const cell = doc.sheets[0].rows.flatMap(row => row.cells).find(c => c.ref === 'A1')!
+    cell.style = { ...cell.style, wrapText: true, fontSizePt: 10, textRotation: 90 } as NonNullable<typeof cell.style>
+    const { ui } = await mount(doc)
+    fireEvent.doubleClick(ui.container.querySelector<HTMLElement>('[data-resize-row="0"]')!)
+    await waitFor(() => expect(parseFloat((ui.getByRole('rowheader', { name: 'Row 1' }).parentElement as HTMLElement).style.height)).toBeGreaterThan(60))
+  })
+
+  it('Excel parity: column auto-fit does not widen a wrapped cell to its unwrapped width (longest word only)', FIRST_PAINT_TEST, async () => {
+    const sentence = 'Wrapped text in a cell that should break across several lines'
+    const doc = await parseXlsx(await OfficePackage.load(await buildXlsx([{ name: 'S1', rows: [{ r: 1, cells: [{ ref: 'A1', v: sentence }] }] }])))
+    const cell = doc.sheets[0].rows.flatMap(row => row.cells).find(c => c.ref === 'A1')!
+    cell.style = { ...cell.style, wrapText: true } as NonNullable<typeof cell.style>
+    const { ui } = await mount(doc)
+    fireEvent.doubleClick(ui.container.querySelector<HTMLElement>('[data-resize-column="0"]')!)
+    await waitFor(() => expect(status(ui)).toMatch(/Column A width \d+ pixels, fitted to content/))
+    // 'several' is the longest word: far narrower than the one-line sentence.
+    expect(headerWidth(ui, 'A')).toBeLessThan(100)
+  })
+
   it('#3 repositioned resident drawings are charged to the drawings pool', FIRST_PAINT_TEST, async () => {
     const doc = await workbook()
     const E = 9525

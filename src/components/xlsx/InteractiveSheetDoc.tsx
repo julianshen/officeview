@@ -78,7 +78,7 @@ import { documentWithDrawings, drawingNotices, sheetWithDrawings } from '../../w
 import { pagedSheetGeometry } from './pagedGeometry'
 import type { LedgerHold } from '../../xlsx/view/mainLedger'
 import { DisplayHolds } from './displayHolds'
-import { SheetSizes, NO_SESSION_SIZES, RESIZE_LIMITS, SIZED_DRAWING_BYTES } from '../../xlsx/view/axisSizes'
+import { SheetSizes, NO_SESSION_SIZES, RESIZE_LIMITS, SIZED_DRAWING_BYTES, clampSize } from '../../xlsx/view/axisSizes'
 import { AutoFitRefusedError, autoFitSize, createFitMeasure, resizeRegion, type ResizeRequest } from './sheetResize'
 import { tileLogicalBox } from '../../xlsx/view/tileCache'
 
@@ -1328,15 +1328,16 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
     let size: number
     if (request.fit) {
       // A per-fit measurement owner, charged while it runs and dropped after (§12.4).
-      let charged = 0
-      const fit = createFitMeasure({ sheet: entry.sheet, admit: bytes => {
-        if (bytes > charged && mainLedger.bytes - charged + bytes > MAIN_THREAD_BUDGETS[budgetProfile]) return false
-        mainLedger.set('layout', 'resize-measure', charged = bytes)
+      let heldHeap = 0, heldNative = 0
+      const fit = createFitMeasure({ sheet: entry.sheet, admit: ({ heap, native }) => {
+        if (mainLedger.bytes - heldHeap - heldNative + heap + native > MAIN_THREAD_BUDGETS[budgetProfile]) return false
+        mainLedger.set('layout', 'resize-measure', heldHeap = heap)
+        mainLedger.set('canvasText', 'resize-measure', heldNative = native)
         return true
       } })
       try {
         size = autoFitSize(request.kind, request.index, {
-          geometry: entry.geometry, sheet: entry.sheet, pane: visibleLogicalViewport(scroll, viewport), measure: fit.measure, ...(fit.wrappedHeight ? { wrappedHeight: fit.wrappedHeight } : {}),
+          geometry: entry.geometry, sheet: entry.sheet, pane: visibleLogicalViewport(scroll, viewport), measure: fit.measure, ...(fit.layoutHeight ? { layoutHeight: fit.layoutHeight } : {}),
           knownRows: limit => remote ? remote.store(sheetId).knownRows(limit) : entry.sheet.rows.slice(0, limit).map(row => row.index),
           ...(remote ? { styleOf: (index: number) => remote.styleOf(index) } : {}),
         })
@@ -1344,11 +1345,22 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
         if (!(error instanceof AutoFitRefusedError)) throw error
         setAnnouncement(`${name} was not fitted: ${error.message}`)
         return
-      } finally { mainLedger.release('layout', 'resize-measure') }
+      } finally { mainLedger.release('layout', 'resize-measure'); mainLedger.release('canvasText', 'resize-measure') }
     } else size = request.size ?? current + (request.delta ?? 0)
     const sizes = sizesOf(sheetId), axis = column ? 'col' : 'row'
     const region = resizeRegion(entry.geometry, request.kind, request.index)
     const gen = sizes.gen, previousSize = sizes.get(axis, request.index)
+    // Admission (§12.4): the replacement geometry and its repositioned drawing
+    // copies are built while the current geometry is still held, so both must
+    // fit the main budget together; otherwise nothing changes.
+    if (sizes.get(axis, request.index) !== clampSize(axis, size)) {
+      const drawingCount = remote ? remote.drawings(sheetId).drawings.length : entry.sheet.drawings?.length ?? 0
+      const replacement = projectionBytes(entry.metrics) + axisBytes(entry.metrics.cols) + axisBytes(entry.metrics.rows) + (entry.geometry.cellIndexBytes ?? 0) + entry.geometry.merges.estimatedBytes + drawingCount * SIZED_DRAWING_BYTES
+      if (mainLedger.bytes + replacement > MAIN_THREAD_BUDGETS[budgetProfile]) {
+        setAnnouncement(`${name} was not resized: not enough memory to lay the sheet out again (main memory budget).`)
+        return
+      }
+    }
     if (!sizes.set(axis, request.index, size)) { setAnnouncement(`${name} was not resized: this sheet already has the maximum number of resized ${column ? 'columns' : 'rows'}. Reset sizes to start over.`); return }
     const applied = sizes.get(axis, request.index)!
     if (sizes.gen !== gen) {

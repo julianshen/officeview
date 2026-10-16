@@ -19,9 +19,10 @@ import type { XlsxDrawing } from '../types'
 export type ResizeAxis = 'row' | 'col'
 /** Whole-CSS-pixel bounds. The maxima follow Excel's own limits (255
  * characters ≈ 1790 px wide, 409 pt ≈ 545 px tall); the minima keep a
- * resized line above the §11.1 detail rule at 50% zoom. Clamping also keeps
- * every session value far inside Float64 axis precision, so a session size can
- * never make the authored geometry fall back. */
+ * resized line above the §11.1 detail rule at 50% zoom. Clamping keeps
+ * session values themselves well inside Float64 axis precision; beside extreme
+ * authored sizes a session size can still be unrepresentable, and then the
+ * builders keep the authored geometry with a typed diagnostic. */
 export const RESIZE_LIMITS = Object.freeze({ col: Object.freeze({ min: 8, max: 1790 }), row: Object.freeze({ min: 8, max: 546 }) })
 /** At most this many session sizes per axis per sheet (a deliberate gesture
  * each); a further new index is refused with a notice, never silently dropped. */
