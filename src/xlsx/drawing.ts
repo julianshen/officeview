@@ -12,6 +12,7 @@ import { parseTextBody, textFontDefaults } from '../drawing/text-parse'
 import { parseVmlContainer, type VmlNode } from '../drawing/vml'
 import type { XlsxDrawing, XlsxDrawingAnchors, XlsxSheet } from './types'
 import { ANCHOR_ELEMENTS, DRAWING_ROOT, anchorId, anchorRecord, rootLocalName } from './anchorRecords'
+import { loadChartModule } from './chartLoader'
 
 function vmlNodeToXlsx(node: VmlNode, owner: string): XlsxDrawing | undefined {
   if (node.kind === 'shape') {
@@ -149,7 +150,35 @@ const child = (node: XmlNode | undefined, name: string) => getChildren(node, nam
 const finite = (raw: string | undefined): number | undefined => raw !== undefined && raw.trim() !== '' && Number.isFinite(Number(raw)) ? Number(raw) : undefined
 const bool = (raw: string | undefined) => raw === '1' || raw === 'true'
 const contentTheme = (theme: ThemeContext) => ({ colors: new Map(Object.entries(theme.palette).map(([key, value]) => [key, value.replace(/^#/, '')])), fonts: new Map([['minorHAnsi', theme.fonts.minor.latin ?? 'Calibri']]) })
-const contentAdapters = (theme: ThemeContext) => ({ parseDiagramText: (body: XmlNode, shape: XmlNode) => parseTextBody(body, theme, undefined, textFontDefaults(getChildren(shape, 'style')[0], theme)), parseParagraph: (p: XmlNode) => parseTextBody({ p }, theme).paragraphs[0] })
+const contentAdapters = (theme: ThemeContext) => ({ parseDiagramText: (body: XmlNode, shape: XmlNode) => parseTextBody(body, theme, undefined, textFontDefaults(getChildren(shape, 'style')[0], theme)), parseParagraph: (p: XmlNode) => parseTextBody({ p }, theme).paragraphs[0],
+  // Worksheet charts use the lazy chart chunk; an unsupported type reads as
+  // absent here so compatibility fallbacks still win (a placeholder follows).
+  parseChart: async (root: XmlNode) => {
+    const chart = (await loadChartModule()).parseXlsxChart(root, theme)
+    return chart && !chart.unsupported ? { kind: 'xlsxChart' as const, chart } : undefined
+  } })
+
+/** Whether a graphic frame names a chart part (directly or inside a compatibility branch). */
+function referencesChart(node: XmlNode, depth = 0): boolean {
+  if (depth > 8) return false
+  for (const [name, descendant] of orderedChildren(node)) {
+    if (name === 'chart') return true
+    if (name !== '#text' && referencesChart(descendant, depth + 1)) return true
+  }
+  return false
+}
+
+/** The card shown for a chart frame nothing could draw: title and reason, never blank. */
+async function chartPlaceholder(pkg: OfficePackage, owner: string, rid: string | undefined, theme: ThemeContext): Promise<XlsxDrawing['content']> {
+  const charts = await loadChartModule()
+  let root: XmlNode | undefined
+  try {
+    const path = rid ? await referencedPart(pkg, owner, rid) : undefined
+    root = path ? await pkg.xmlOrdered(path) : undefined
+  } catch { root = undefined }
+  const parsed = root ? charts.parseXlsxChart(root, theme) : undefined
+  return { kind: 'xlsxChart', chart: parsed?.unsupported ? parsed : charts.placeholderChart(parsed?.title, parsed ? 'This chart could not be drawn' : 'Chart data could not be read') }
+}
 
 /** Decide MC branches from their selected descendants only. Empty supported Choices are valid. */
 async function selectedAlternative(pkg: OfficePackage, owner: string, alternate: XmlNode, theme: ThemeContext, depth: number, carrier?: XmlNode): Promise<{ branch: XmlNode; mode: 'choice' | 'fallback' } | undefined> {
@@ -389,6 +418,10 @@ async function parseObject(pkg: OfficePackage, owner: string, name: string, node
           result.group = { off: { x: t.xEmu, y: t.yEmu }, ext: { width: t.widthEmu, height: t.heightEmu }, chOff: { x: 0, y: 0 }, chExt: { width: t.widthEmu, height: t.heightEmu } }
           result.children = native
         }
+      }
+      // A chart nothing could draw (unsupported type, no usable fallback) keeps a card.
+      if (!result.content && !result.children?.length && !result.source.emptySelection && name === 'graphicFrame' && referencesChart(node)) {
+        result.content = await chartPlaceholder(pkg, owner, result.source.referenceId, theme)
       }
     }
   }

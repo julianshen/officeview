@@ -31,7 +31,8 @@ import { isValueUnavailable, SAVED_VALUES_DIAGNOSTIC, SAVED_VALUES_STATUS, value
 import type { PagedImportSession, PagedSheet, PagedWorkbook } from '../storage/pagedImport'
 import type { DrawingMemory, ProfileId, SheetDrawings } from './contracts'
 import { DRAWING_MEMORY_REFUSED, DrawingNodeLedger, drawingFootprint, unavailableDrawings } from './drawingPayload'
-import type { XlsxSheet } from '../types'
+import type { XlsxDrawing, XlsxSheet } from '../types'
+import { loadChartModule } from '../chartLoader'
 import { cellDisplayText } from '../render'
 import { semanticsFor } from './semanticsFor'
 
@@ -460,7 +461,7 @@ export class PagedXlsxSheetAdapter implements SourceStore {
       const geometry = buildGeometry(meta.rowHeights.map(h => ({ index: h.row, heightPt: h.heightPt })), meta.cols, meta.hiddenRows, { hiddenCols: true })
       const nodes = this.drawingState.nodes, sheetId = this.sheet.sheetId
       const parsed = await loadPagedSheetDrawings(this.workbook.parts, { name: this.sheet.name, partPath: this.sheet.partPath, drawingIds: meta.drawingIds, legacyDrawingIds: meta.legacyDrawingIds },
-        geometry, pagedDrawingLimits(profile, this.drawingState.payloadBytes), controller.signal, { memory, startNodes: nodes.start(sheetId) })
+        geometry, pagedDrawingLimits(profile, this.drawingState.payloadBytes), controller.signal, { memory, startNodes: nodes.start(sheetId), fillCharts: (drawings, owner) => this.fillCharts(drawings, owner, controller.signal) })
       nodes.record(sheetId, parsed.nodes)
       return this.retainDrawings(parsed.drawings, parsed.workingSet, memory)
     } catch (cause) {
@@ -471,6 +472,31 @@ export class PagedXlsxSheetAdapter implements SourceStore {
       options.signal.removeEventListener('abort', abort)
       this.workbook.parts.signal.removeEventListener('abort', abort)
     }
+  }
+
+  /** Fill uncached chart references from committed pages of the named sheets
+   * (bounded per range by the chart point limit; an unread sheet stays empty). */
+  private async fillCharts(drawings: XlsxDrawing[], owner: string, signal: AbortSignal): Promise<void> {
+    const charts = await loadChartModule()
+    const values = new Map<string, string | number | boolean | null>()
+    const key = (sheet: string, row: number, col: number) => `${sheet.toLowerCase()}\u0000${row}\u0000${col}`
+    for (const range of charts.pendingRanges(drawings, owner)) {
+      const sheet = this.workbook.sheets.find(candidate => candidate.name.toLowerCase() === range.sheet.toLowerCase())
+      if (!sheet) continue
+      const r1 = Math.min(range.r1, range.r0 + charts.CHART_POINT_LIMIT - 1, sheet.importedThroughRow)
+      const c1 = Math.min(range.c1, range.c0 + charts.CHART_POINT_LIMIT - 1)
+      const pages = this.workbook.store.pages(sheet.sheetId)
+      for (const page of pages) {
+        if (page.r1 < range.r0 || page.r0 > r1 || page.aggregate.records === 0) continue
+        if (signal.aborted) return
+        const p = await this.workbook.store.page(sheet.sheetId, page.pageId)
+        for (let i = lower(p.rows, range.r0); i < p.rows.length && p.rows[i] <= r1; i++) {
+          if (p.cols[i] < range.c0 || p.cols[i] > c1) continue
+          values.set(key(sheet.name, p.rows[i], p.cols[i]), await this.valueOf(p, i))
+        }
+      }
+    }
+    charts.fillDrawings(drawings, owner, (sheet, row, col) => values.get(key(sheet, row, col)))
   }
 
   /** Keeps a complete payload in the pool (when one is bound and it fits) and

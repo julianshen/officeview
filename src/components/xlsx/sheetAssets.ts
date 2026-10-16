@@ -18,6 +18,7 @@
 import type { XlsxDocument, XlsxDrawing } from '../../xlsx/types'
 import type { ProfileId } from '../../xlsx/view/contracts'
 import type { RenderSheetAssets } from '../../xlsx/render'
+import { ensureChartPainter } from '../../xlsx/chartLoader'
 import { acquireFonts } from '../../core/fonts/register'
 import { withFallbackFonts } from '../../core/fonts/fallback'
 import type { FontDiagnostic } from '../../core/fonts/types'
@@ -213,6 +214,7 @@ export function prepareSheetAssets(doc: XlsxDocument, options: SheetAssetsOption
       const drawings = sheet?.drawings ?? []
       const wanted = [...imageIndexes(drawings)].filter(index => index >= 0 && index < indexed.length).sort((a, b) => a - b)
       const cached = collectCachedPictures(drawings)
+      await ensureChartPainter(drawings)
       let decodedBytes = 0, refused = 0
       // Keyed by the original picture, so overlapping leases share one decode.
       const take = (original: ImageCandidates): Promise<CanvasImageSource | undefined> | undefined => {

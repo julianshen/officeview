@@ -23,7 +23,8 @@ import { attrs, getChildren, parseXml, parseXmlOrdered, type XmlNode } from '../
 import { DOCUMENT_DRAWING_NODE_LIMIT, drawingPartContext, resolvePartTarget } from '../../drawing/parts'
 import { parseThemeContext, type ThemeContext } from '../../drawing/style'
 import { parseWorksheetDrawings } from '../drawing'
-import type { XlsxSheet } from '../types'
+import type { XlsxDrawing, XlsxSheet } from '../types'
+import { hasXlsxCharts } from '../chartLoader'
 import type { DrawingMemory, ProfileId, SheetDrawings, WorkerDiagnostic } from '../view/contracts'
 import { placementAxes } from '../view/drawingBounds'
 import { DRAWING_MEMORY_REFUSED, DRAWING_NODE_BUDGET, DRAWING_PART_REFUSED, drawingFootprint, drawingPayloadBudget, sheetDrawingPayload, unavailableDrawings } from '../view/drawingPayload'
@@ -230,7 +231,7 @@ export async function loadPagedSheetDrawings(
   geometry: SheetGeometry,
   limits: PagedDrawingLimits,
   signal: AbortSignal,
-  options: { memory?: DrawingMemory; startNodes?: number } = {},
+  options: { memory?: DrawingMemory; startNodes?: number; fillCharts?: (drawings: XlsxDrawing[], ownerSheet: string) => Promise<void> } = {},
 ): Promise<PagedSheetDrawings> {
   const legacy = sheet.legacyDrawingIds ?? []
   if (!sheet.drawingIds.length && !legacy.length) return { drawings: sheetDrawingPayload([], undefined, [], limits.payloadBytes), nodes: 0, workingSet: 0 }
@@ -264,6 +265,11 @@ export async function loadPagedSheetDrawings(
   const nodes = (pkg.memoryRefused ? pkg.nodesAtRefusal : context.nodes) - startNodes
   if (pkg.memoryRefused) {
     return { drawings: unavailableDrawings('This sheet\'s drawings need more worker memory than the document has free and are not shown', { code: 'resource-limit', retryable: false, message: 'worker memory budget' }, DRAWING_MEMORY_REFUSED), nodes, workingSet: pkg.workingSet }
+  }
+  // Charts without cached values read their series from the paged cells.
+  if (options.fillCharts && hasXlsxCharts(shell.drawings)) {
+    await options.fillCharts(shell.drawings!, sheet.name)
+    if (signal.aborted) throw aborted(signal)
   }
   const diagnostics = pkg.finish()
   if (context.diagnostics.some(issue => issue.kind === 'node-budget' && issue.reason === 'document-budget')) {

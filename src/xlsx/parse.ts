@@ -13,6 +13,7 @@ import { parseDefinedNames } from './formula/names'
 import { parseTableMetadata, isTablePartSource } from './formula/tables'
 import { collectDeclaredTable, createDeclaredBudget, declaredSheetBuilder, hasDeclaredFiltering, parseDeclaredContainer, type DeclaredSheetFilters } from './view/declaredFilters'
 import { parseWorksheetDrawings, collectXlsxImages } from './drawing'
+import { hasXlsxCharts, loadChartModule } from './chartLoader'
 import { computeMetrics } from './render'
 import { resolvePartTarget } from '../drawing/parts'
 import { parseThemeContext, type ThemeContext } from '../drawing/style'
@@ -199,6 +200,8 @@ export async function parseXlsx(pkg: OfficePackage, options: ParseXlsxOptions = 
     workbookSheets.push({ sheetId, workbookIndex, name, kind })
     workbookIndex++
   }
+  // Charts without cached values (openpyxl) read their series from the cells.
+  if (sheets.some(sheet => hasXlsxCharts(sheet.drawings))) (await loadChartModule()).fillWorkbookCharts(sheets)
   const drawingCoverage = sheets.flatMap((sheet, unit) => {
     const entries = (sheet.drawingCoverage ?? []).map(entry => ({ ...entry, unit }))
     const metrics = sheet.drawings?.length ? computeMetrics(sheet) : undefined

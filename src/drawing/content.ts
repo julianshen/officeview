@@ -5,6 +5,7 @@ import type { GeometryDefinition, GeometryIssue } from './geometry'
 import type { DrawingColor, DrawingStyle, ThemeContext } from './style'
 import type { SceneGroupTransform } from './scene'
 import type { OfficePackage } from '../core/zip'
+import type { XlsxChartModel } from '../xlsx/chartModel'
 import { parseGeometry, resolveGeometry } from './geometry'
 import { supportedChoiceRequirements } from './coverage'
 import { parseGroupShapeProperties, resolveDrawingStyle } from './style'
@@ -118,6 +119,7 @@ export type DrawingContent<Paragraph = ContentParagraph, Text = never> =
       fontFamily: string
       fontSizePt: number
     }
+  | { kind: 'xlsxChart'; chart: XlsxChartModel }
   | {
       kind: 'textbox'
       paragraphs: Paragraph[]
@@ -368,6 +370,9 @@ export function parseInk(root: XmlNode): Extract<DrawingContent, { kind: 'ink' }
 export interface ContentLoadAdapters<Paragraph, Text> {
   parseParagraph?: (p: XmlNode) => Paragraph
   parseDiagramText?: (node: XmlNode, shape: XmlNode) => Text
+  /** Format-specific chart reader (XLSX); undefined keeps the shared column-chart reader.
+   * An undefined result means unsupported, so compatibility fallbacks still apply. */
+  parseChart?: (root: XmlNode, path: string) => Promise<DrawingContent<Paragraph, Text> | undefined>
 }
 const deferredDiagrams = new WeakMap<object, { materializeSelected: () => boolean }>()
 const SOURCE_PROBE_LIMIT = DOCUMENT_DRAWING_NODE_LIMIT * 2
@@ -514,8 +519,15 @@ export async function prepareDrawingContent<Paragraph = ContentParagraph, Text =
     context.placements.add(path)
     context.coverage.loaded++
     const next = [...ancestry, path]
-    const payload = parseInk(root) ?? chart(root, theme)
-    if (payload) return payload
+    const ink = parseInk(root)
+    if (ink) return ink
+    if (adapters.parseChart && child(root, 'chart') && !attrs(child(root, 'chart')).id) {
+      const parsed = await adapters.parseChart(root, path)
+      if (parsed) return parsed
+    } else {
+      const payload = chart(root, theme)
+      if (payload) return payload
+    }
     const tree = child(root, 'spTree')
     if (tree) {
       const capability = inspectCachedTree(tree)

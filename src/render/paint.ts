@@ -14,6 +14,7 @@ import { renderSlide, slideMetrics } from '../pptx/render'
 import type { DocxDocument } from '../docx/types'
 import type { ContentImageAsset, DrawingContent, DrawingContentShape } from '../drawing/content'
 import type { XlsxDocument, XlsxSheet } from '../xlsx/types'
+import { ensureChartPainter } from '../xlsx/chartLoader'
 import type { PptxDocument } from '../pptx/types'
 
 export interface PageSpec {
@@ -262,6 +263,7 @@ export function getPaintables(
       let decoded: Array<CanvasImageSource | undefined> = []
       try {
         const cached = collectCachedPictures(doc.sheets.flatMap(sheet => sheet.drawings ?? []))
+        await ensureChartPainter(doc.sheets.flatMap(sheet => sheet.drawings ?? []))
         const indexed = doc.images ?? []
         decoded = await decodeImageAssets([...indexed, ...cached], options?.decodeImage)
         const decodedByObject = new Map(cached.map((image, index) => [image, decoded[indexed.length + index]]))
