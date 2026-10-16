@@ -101,6 +101,12 @@ export interface OfficeDocProps {
    * workbook-wide find. Other formats ignore the flag. The interactive code is
    * loaded on demand, only when the flag is on for a spreadsheet.
    *
+   * One exception: a worker-backed (large-file) workbook that <OfficeFile>
+   * opened with the flag on stays in sheet mode (and keeps the interactive code
+   * loaded) if the flag later turns off, because the legacy renderer has no
+   * resident rows to show for it. Such a document only arises when the flag was
+   * on at load time.
+   *
    * Experimental: this flag stays opt-in until the interactive viewer's release
    * review; its behaviour may change between minor versions.
    */

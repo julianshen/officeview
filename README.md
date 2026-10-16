@@ -77,6 +77,10 @@ formats without a separate text model.
 `interactiveSheets` enables the experimental XLSX viewport on `OfficeFile` or
 `OfficeDoc` (default **off**; other formats ignore it). It provides worksheet
 navigation, tiled rendering, selection/find and absolute 25%–400% zoom, initially 100%.
+With the flag off, spreadsheets keep the legacy fit-width pages and the interactive
+code is not loaded — with one exception: a large workbook already opened in the
+viewer worker stays in the interactive viewer if the flag later turns off, because
+the legacy renderer has no resident rows for a worker-backed workbook.
 
 For large files, supply `OfficeFile` with a **module worker factory**. For example,
 with a bundler that supports module workers, create an entry in your application:
@@ -109,6 +113,13 @@ no large-mode memory/performance guarantee. `OfficeDoc` views an existing model;
 its earlier parsing/allocation cost still applies. Pre-parsed models have no
 worker route: `OfficeDoc` has no `viewerWorker` prop and always uses the object
 path, so parse large workbooks from bytes through `OfficeFile`/`useOfficeFile`.
+
+Changing `interactiveSheets` or `viewerWorker` on a mounted `OfficeFile` re-opens
+re-readable sources (bytes, `Blob`, `{ url }`) under the new route. One-shot
+sources — a `Response`, `ReadableStream`, `Request` or any `Promise` (including a
+`Promise<Blob>` and a bodyless GET `Request`, which are pinned conservatively) —
+are consumed by their first load, so they keep the document and route they
+opened with until you pass a fresh source.
 
 #### Capacity, admission and storage
 
