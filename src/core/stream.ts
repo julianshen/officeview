@@ -302,7 +302,24 @@ async function openFetch(input: string | Request, init: RequestInit | undefined,
     const url = typeof input === 'string' ? input : input.url
     throw new Error(`Cannot download ${url}: fetch is not available in this environment`)
   }
-  return openResponse(await fetch(input, init), listeners, signal)
+  // fetch(request, { signal }) replaces the Request's own signal, so it joins the load's.
+  const own = init?.signal ?? (typeof input === 'string' ? undefined : input.signal)
+  const combined = eitherSignal(own ?? undefined, signal)
+  return openResponse(await fetch(input, combined ? { ...init, signal: combined } : init), listeners, signal)
+}
+
+/** Aborts when either signal does (AbortSignal.any where it exists and accepts both). */
+function eitherSignal(a: AbortSignal | undefined, b: AbortSignal | undefined): AbortSignal | undefined {
+  if (!a || a === b) return b
+  if (!b) return a
+  const any = (AbortSignal as { any?: (signals: AbortSignal[]) => AbortSignal }).any
+  try { if (typeof any === 'function') return any.call(AbortSignal, [a, b]) } catch { /* cross-realm signal: fall back */ }
+  const controller = new AbortController()
+  for (const s of [a, b]) {
+    if (s.aborted) { controller.abort(s.reason); break }
+    s.addEventListener('abort', () => controller.abort(s.reason), { once: true })
+  }
+  return controller.signal
 }
 
 /**

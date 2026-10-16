@@ -50,3 +50,51 @@ describe('byte sources are bounded before the legacy reader inflates metadata (P
     })
   }
 })
+
+/** A fetch that, like the real one, rejects when its init signal aborts and never sees headers otherwise. */
+function pendingFetch() {
+  const calls: Array<{ input: unknown; init: RequestInit | undefined }> = []
+  const fetch = vi.fn((input: unknown, init?: RequestInit) => {
+    calls.push({ input, init })
+    return new Promise<Response>((_, reject) => {
+      const signal = init?.signal
+      if (signal?.aborted) reject(new DOMException('aborted', 'AbortError'))
+      signal?.addEventListener('abort', () => reject(new DOMException('aborted', 'AbortError')))
+    })
+  })
+  vi.stubGlobal('fetch', fetch)
+  return calls
+}
+
+describe('the per-load signal reaches fetch (PR #11 P2, stream.ts openFetch)', () => {
+  it('URL descriptor: aborting before headers arrive aborts the fetch, keeping headers and credentials', async () => {
+    const calls = pendingFetch()
+    const controller = new AbortController()
+    const load = loadOfficeSource({ url: 'https://example.test/a.docx', headers: { Authorization: 'Bearer t' }, credentials: 'include' }, { signal: controller.signal })
+    await vi.waitFor(() => expect(calls).toHaveLength(1))
+    expect(calls[0].init?.headers).toEqual({ Authorization: 'Bearer t' })
+    expect(calls[0].init?.credentials).toBe('include')
+    controller.abort()
+    expect(calls[0].init?.signal?.aborted).toBe(true)
+    await expect(load).rejects.toThrow()
+  })
+
+  it('Request: the load signal and the Request\'s own signal both abort the fetch, with or without AbortSignal.any', async () => {
+    const statics = AbortSignal as { any?: unknown }
+    const native = statics.any
+    try {
+    for (const [which, withAny] of [['load', true], ['request', true], ['load', false], ['request', false]] as const) {
+      statics.any = withAny ? native : undefined
+      const calls = pendingFetch()
+      const loadCtl = new AbortController()
+      const ownCtl = new AbortController()
+      const load = loadOfficeSource(new Request('https://example.test/a.docx', { signal: ownCtl.signal }), { signal: loadCtl.signal })
+      await vi.waitFor(() => expect(calls).toHaveLength(1))
+      expect(calls[0].init?.signal?.aborted).toBe(false)
+      ;(which === 'load' ? loadCtl : ownCtl).abort()
+      expect(calls[0].init?.signal?.aborted).toBe(true)
+      await expect(load).rejects.toThrow()
+    }
+    } finally { statics.any = native }
+  })
+})

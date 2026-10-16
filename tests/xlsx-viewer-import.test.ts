@@ -446,14 +446,17 @@ describe('spool through the entry point (RED tests 15a, 16, 17, 18)', () => {
     })
     expect('sheets' in doc).toBe(true)
     expect(calls[0][0]).toBe('https://files.example.com/a.xlsx')
-    expect(calls[0][1]).toEqual({ headers: { Authorization: 'Bearer t' }, credentials: 'include' })
+    // plus the per-load abort signal (PR #11): the caller's options are kept as they were
+    const { signal: urlSignal, ...urlInit } = calls[0][1]!
+    expect(urlInit).toEqual({ headers: { Authorization: 'Bearer t' }, credentials: 'include' })
+    expect(urlSignal?.aborted).toBe(false)
     expect(order[0]).toBe('protection:false')
     expect(order[1]).toBe('progress:0')
 
     const req = new Request('https://files.example.com/b.xlsx', { headers: { Authorization: 'Bearer r' } })
     await loadOfficeFile(req)
     expect(calls[1][0]).toBe(req)
-    expect(calls[1][1]).toBeUndefined()
+    expect(Object.keys(calls[1][1] ?? {})).toEqual(['signal'])
   })
 
   it('progress throttling on the spool path is the same as readByteStream', async () => {
