@@ -27,6 +27,7 @@ import { cellSourceRow, drawingExtent } from './sheetCells'
 import { createIntervalSet } from './visibility'
 import { boundOverflowCache, OverflowResourceError } from './overflowCache'
 import { NO_OVERFLOW, rowOverflowFromCells, textOverflowAllowance, type OverflowAllowance, type RowOverflowInput } from './textOverflow'
+import { hasSessionSizes, mergeAxisOverrides, remapDrawings, type SessionSizes } from './axisSizes'
 
 // Static-renderer helpers live in a leaf module so the eager static path never
 // reaches the viewport planner; re-exported for existing callers.
@@ -175,6 +176,9 @@ export interface SheetGeometryOptions {
    * collapse, so a filter may reveal a snapshot-hidden body row; authored row
    * heights are kept. Without it the authored-hidden snapshot collapses. */
   visibility?: RowVisibility
+  /** View-only session sizes (spec §5.6): rows by source row, columns by source
+   * column, applied over authored sizes; authored-hidden lines stay collapsed. */
+  sizes?: SessionSizes
 }
 /** Built once per geometry generation (sheet + order + visibility), never per paint. */
 export interface SheetGeometry {
@@ -302,8 +306,10 @@ function cssSize(exact: number): number {
 /** Try the authored axis, then without authored sizes, then plain defaults. Each
  * rejected attempt leaves its typed diagnostic; hidden intervals survive the
  * first fallback because they never contradict (all zero). */
-function buildAxis(axis: 'rows' | 'cols', logicalCount: number, defaultSizeCss: number, overrides: AxisSizeInterval[], collapsed: Array<{ start: number; end: number }>, diagnostics: WorkerDiagnostic[]): SparseAxisMetrics | null {
-  const attempts = [{ overrides, collapsed }, { overrides: [], collapsed }, { overrides: [], collapsed: [] }]
+function buildAxis(axis: 'rows' | 'cols', logicalCount: number, defaultSizeCss: number, overrides: AxisSizeInterval[], collapsed: Array<{ start: number; end: number }>, diagnostics: WorkerDiagnostic[], session?: ReadonlyMap<number, number>): SparseAxisMetrics | null {
+  // Session sizes are tried first; if they cannot be represented the authored
+  // sizes still apply (never the plain-default fallback because of a session).
+  const attempts = [...(session?.size ? [{ overrides: mergeAxisOverrides(overrides, session), collapsed }] : []), { overrides, collapsed }, { overrides: [], collapsed }, { overrides: [], collapsed: [] }]
   for (const attempt of attempts) {
     try {
       return createAxisMetrics({ logicalCount, defaultSizeCss, ...attempt })
@@ -366,8 +372,8 @@ export function buildSheetGeometry(sheet: XlsxSheet, options: SheetGeometryOptio
     }
   }
 
-  const rows = buildAxis('rows', MAX_ROWS, SHEET_DEFAULT_ROW_CSS, rowOverrides, rowCollapsed, diagnostics)
-  const cols = buildAxis('cols', MAX_COLS, SHEET_DEFAULT_COL_CSS, colOverrides, colCollapsed, diagnostics)
+  const rows = buildAxis('rows', MAX_ROWS, SHEET_DEFAULT_ROW_CSS, rowOverrides, rowCollapsed, diagnostics, options.sizes?.rows)
+  const cols = buildAxis('cols', MAX_COLS, SHEET_DEFAULT_COL_CSS, colOverrides, colCollapsed, diagnostics, options.sizes?.cols)
   if (!rows || !cols) return { kind: 'diagnostic', diagnostics }
   let metrics: ProjectedSheetMetrics
   try {
@@ -387,7 +393,7 @@ export function buildSheetGeometry(sheet: XlsxSheet, options: SheetGeometryOptio
     }
     mergeEntries.push({ rect: { r0: range.minRow, r1: range.maxRow, c0: range.minCol, c1: range.maxCol }, value: range })
   }
-  const drawingsIn = drawingQuery(sheet.drawings ?? [])
+  const drawingsIn = drawingQuery(sizedDrawings(sheet.drawings ?? [], options.sizes, rowOverrides, hidden.map(index => ({ start: index, end: index })), colOverrides, colCollapsed))
   return Object.freeze({
     kind: 'ready' as const,
     metrics,
@@ -399,6 +405,26 @@ export function buildSheetGeometry(sheet: XlsxSheet, options: SheetGeometryOptio
     merges: RectangleIndex.build(mergeEntries),
     drawingsIn,
   })
+}
+
+/** Drawings placed against session sizes (spec §5.6). Placement axes collapse
+ * authored-hidden rows and columns, as the parse-time anchor placement does;
+ * unrepresentable metadata keeps the authored placement. */
+export function sizedDrawings(drawings: readonly XlsxDrawing[], sizes: SessionSizes | undefined, rowOverrides: readonly AxisSizeInterval[], hiddenRows: readonly { start: number; end: number }[], colOverrides: readonly AxisSizeInterval[], hiddenCols: readonly { start: number; end: number }[]): readonly XlsxDrawing[] {
+  if (!drawings.length || !hasSessionSizes(sizes)) return drawings
+  try {
+    const axis = (logicalCount: number, defaultSizeCss: number, overrides: readonly AxisSizeInterval[], collapsed: readonly { start: number; end: number }[]) =>
+      createAxisMetrics({ logicalCount, defaultSizeCss, overrides, collapsed })
+    const base = { rows: axis(MAX_ROWS, SHEET_DEFAULT_ROW_CSS, rowOverrides, hiddenRows), cols: axis(MAX_COLS, SHEET_DEFAULT_COL_CSS, colOverrides, hiddenCols) }
+    const sized = {
+      rows: sizes.rows.size ? axis(MAX_ROWS, SHEET_DEFAULT_ROW_CSS, mergeAxisOverrides(rowOverrides, sizes.rows), hiddenRows) : base.rows,
+      cols: sizes.cols.size ? axis(MAX_COLS, SHEET_DEFAULT_COL_CSS, mergeAxisOverrides(colOverrides, sizes.cols), hiddenCols) : base.cols,
+    }
+    return remapDrawings(drawings, base, sized)
+  } catch (error) {
+    if (error instanceof AxisMetricsError) return drawings
+    throw error
+  }
 }
 
 /** SheetGeometry.drawingsIn over top-level drawings in worksheet CSS px (both
