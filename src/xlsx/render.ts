@@ -1130,7 +1130,9 @@ export function paintCellLayout(ctx: CanvasRenderingContext2D, layout: CellBodyL
       ctx.lineCap = spec.width > 1 ? 'square' : 'butt'
       const centre = spec.width % 2 ? 0.5 : 0
       for (const offset of spec.double ? [-1, 1] : [0]) {
-        const at = (v: number, limit: number) => Math.max(spec.width / 2, Math.min(v + centre + offset, limit - spec.width / 2))
+        // Upper clamp only: interactive bodies sit at the origin and replay
+        // under a translation, so a lower clamp would move every left/top side.
+        const at = (v: number, limit: number) => Math.min(v + centre + offset, limit - spec.width / 2)
         const ex = (v: number) => Math.min(v + 0.5, extent.width - 0.5), ey = (v: number) => Math.min(v + 0.5, extent.height - 0.5)
         ctx.beginPath()
         // Keep outer borders within the worksheet bitmap instead of

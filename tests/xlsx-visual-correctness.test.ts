@@ -127,6 +127,28 @@ describe('#4 Excel border styles and colours', () => {
   })
 })
 
+describe('#4 border geometry is identical in the static and interactive paths', () => {
+  // Interactive bodies are laid out at the origin and replayed under a
+  // translation, so no clamp may depend on the box sitting at x/y = 0.
+  const xs = (ops: PaintOp[]) => ops.filter((o, i) => o.op === 'moveTo' && ops[i + 1]?.op === 'lineTo' && o.strokeStyle !== '#d0d0d0').map(o => o.args as number[])
+  const sheet = () => sheetOf([{ row: 1, col: 1, value: 'b', style: style({ borders: { left: 'double', top: 'double', right: 'thick' } }) }])
+  it('double straddles the grid line and thick centres on it in both paths', () => {
+    const fixed = recordingContext()
+    renderSheet(sheet(), fixed.ctx, grid([64, 64, 64], [20, 20, 20]))
+    const geometry = buildSheetGeometry(sheet())
+    if (geometry.kind !== 'ready') throw new Error('geometry')
+    // The recording ctx ignores translate, so interactive strokes stay box-local.
+    const live = recordingContext()
+    renderSheetViewport(sheet(), live.ctx, geometry, { box: { x: 0, y: 0, width: 192, height: 60 }, zoom: 1, deviceScale: 1 })
+    expect(xs(fixed.ops).filter(([x]) => x < 70).map(([x]) => x)).toEqual(expect.arrayContaining([63.5, 65.5]))
+    // Box-local interactive coordinates: the same strokes relative to the cell.
+    const local = xs(live.ops).map(([x, y]) => [x + 64, y + 20])
+    expect(local.filter(([x]) => x < 70).map(([x]) => x)).toEqual(expect.arrayContaining([63.5, 65.5]))
+    expect(local.some(([x]) => x === 128.5)).toBe(true)
+    expect(xs(fixed.ops).some(([x]) => x === 128.5)).toBe(true)
+  })
+})
+
 describe('#4 border colours parse from styles.xml', () => {
   it('records each side colour next to its style, in both the object and the paged resolution', async () => {
     const zip = await JSZip.loadAsync(await buildXlsx([{ name: 'S', rows: [{ r: 1, cells: [{ ref: 'A1', t: 'str', v: 'x', style: 1 }] }] }]))
