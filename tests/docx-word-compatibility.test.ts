@@ -793,3 +793,28 @@ describe('Phase 22 bot review round 3', () => {
     expect(last.endnotes).toBeUndefined()
   })
 })
+
+describe('visual review NEW-2: logical jc values follow paragraph direction', () => {
+  // poi-rtl.docx writes <w:bidi w:val="1"/><w:jc w:val="start"/>: "start" is
+  // the leading edge of the paragraph, i.e. the right margin for RTL text.
+  const alignOf = async (pPr: string, styles = ''): Promise<string> => {
+    const buf = await buildDocx({
+      ...(styles ? { 'word/styles.xml': `<w:styles ${W_NS}>${styles}</w:styles>` } : {}),
+      'word/document.xml': `<w:document ${W_NS}><w:body><w:p><w:pPr>${pPr}</w:pPr><w:r><w:t>x</w:t></w:r></w:p></w:body></w:document>`,
+    })
+    return (await parseDocx(await OfficePackage.load(buf))).sections[0].paragraphs[0].align
+  }
+  test('start/end resolve against w:bidi', async () => {
+    expect(await alignOf('<w:bidi w:val="1"/><w:jc w:val="start"/>')).toBe('right')
+    expect(await alignOf('<w:bidi w:val="1"/><w:jc w:val="end"/>')).toBe('left')
+    expect(await alignOf('<w:jc w:val="start"/>')).toBe('left')
+    expect(await alignOf('<w:jc w:val="end"/>')).toBe('right')
+    expect(await alignOf('<w:bidi w:val="0"/><w:jc w:val="start"/>')).toBe('left')
+  })
+  test('direction from a style resolves a direct start/end', async () => {
+    const rtl = '<w:style w:styleId="RTL" w:type="paragraph"><w:pPr><w:bidi/></w:pPr></w:style>'
+    expect(await alignOf('<w:pStyle w:val="RTL"/><w:jc w:val="start"/>', rtl)).toBe('right')
+    const startStyle = '<w:style w:styleId="S" w:type="paragraph"><w:pPr><w:jc w:val="start"/></w:pPr></w:style>'
+    expect(await alignOf('<w:pStyle w:val="S"/><w:bidi/>', startStyle)).toBe('right')
+  })
+})

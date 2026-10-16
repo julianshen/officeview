@@ -23,13 +23,11 @@ function alignOf(pPr: XmlNode | undefined): ParagraphAlign {
     case 'both': return 'justify'
     case 'left': return 'left'
     default: {
-      if (pPr) {
-        const bidiNode = getChildren(pPr, 'bidi')[0]
-        if (bidiNode && !['0', 'false', 'off'].includes(attrs(bidiNode).val as string)) {
-          return 'right'
-        }
-      }
-      return 'left'
+      // Logical start (also the default) / end follow the direction: start is
+      // the right margin of an RTL paragraph.
+      const bidiNode = pPr ? getChildren(pPr, 'bidi')[0] : undefined
+      const rtl = !!bidiNode && !['0', 'false', 'off'].includes(attrs(bidiNode).val as string)
+      return (v === 'end') === !rtl ? 'right' : 'left'
     }
   }
 }
