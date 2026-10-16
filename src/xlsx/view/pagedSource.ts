@@ -461,7 +461,7 @@ export class PagedXlsxSheetAdapter implements SourceStore {
       const geometry = buildGeometry(meta.rowHeights.map(h => ({ index: h.row, heightPt: h.heightPt })), meta.cols, meta.hiddenRows, { hiddenCols: true })
       const nodes = this.drawingState.nodes, sheetId = this.sheet.sheetId
       const parsed = await loadPagedSheetDrawings(this.workbook.parts, { name: this.sheet.name, partPath: this.sheet.partPath, drawingIds: meta.drawingIds, legacyDrawingIds: meta.legacyDrawingIds },
-        geometry, pagedDrawingLimits(profile, this.drawingState.payloadBytes), controller.signal, { memory, startNodes: nodes.start(sheetId), fillCharts: (drawings, owner) => this.fillCharts(drawings, owner, controller.signal) })
+        geometry, pagedDrawingLimits(profile, this.drawingState.payloadBytes), controller.signal, { memory, startNodes: nodes.start(sheetId), fillCharts: (drawings, owner, names) => this.fillCharts(drawings, owner, controller.signal, names) })
       nodes.record(sheetId, parsed.nodes)
       return this.retainDrawings(parsed.drawings, parsed.workingSet, memory)
     } catch (cause) {
@@ -476,9 +476,12 @@ export class PagedXlsxSheetAdapter implements SourceStore {
 
   /** Fill uncached chart references from committed pages of the named sheets
    * (bounded per range by the chart point limit; an unread sheet stays empty). */
-  private async fillCharts(drawings: XlsxDrawing[], owner: string, signal: AbortSignal): Promise<void> {
+  private async fillCharts(drawings: XlsxDrawing[], owner: string, signal: AbortSignal, names: readonly { name: string; source: string; localSheetIndex?: number }[] = []): Promise<void> {
     const charts = await loadChartModule()
-    const values = new Map<string, string | number | boolean | null>()
+    charts.resolveDrawingNames(drawings, owner, charts.chartNameResolver(names, this.workbook.sheets))
+    const values = new Map<string, { value: string | number | boolean | null; text: string }>()
+    const styles = this.workbook.formatting.styles
+    const display: XlsxSheet = { name: '', rows: [], cols: [], merges: [], mergeRanges: [], semantics: semanticsFor(this.workbook.formatting.dateSystem) }
     const key = (sheet: string, row: number, col: number) => `${sheet.toLowerCase()}\u0000${row}\u0000${col}`
     for (const range of charts.pendingRanges(drawings, owner)) {
       const sheet = this.workbook.sheets.find(candidate => candidate.name.toLowerCase() === range.sheet.toLowerCase())
@@ -492,7 +495,10 @@ export class PagedXlsxSheetAdapter implements SourceStore {
         const p = await this.workbook.store.page(sheet.sheetId, page.pageId)
         for (let i = lower(p.rows, range.r0); i < p.rows.length && p.rows[i] <= r1; i++) {
           if (p.cols[i] < range.c0 || p.cols[i] > c1) continue
-          values.set(key(sheet.name, p.rows[i], p.cols[i]), await this.valueOf(p, i))
+          const value = await this.valueOf(p, i)
+          let text: string
+          try { text = cellDisplayText(display, { value, style: styles[p.styles[i]] }) } catch { text = value === null ? '' : String(value) }
+          values.set(key(sheet.name, p.rows[i], p.cols[i]), { value, text })
         }
       }
     }

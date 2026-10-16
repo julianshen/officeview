@@ -1,6 +1,7 @@
 import { describe, expect, test } from 'vitest'
 import { parseXlsx } from '../src/xlsx/parse'
-import { CACHED_COLUMN, chartWorkbook, emu, openpyxlFrame } from './helpers/xlsx-chart-fixture'
+import { paintDrawingContent } from '../src/drawing/content-paint'
+import { CACHED_COLUMN, addDefinedNames, addNumberFormat, chartWorkbook, emu, openpyxlFrame } from './helpers/xlsx-chart-fixture'
 
 describe('worksheet chart frames', () => {
   test('an anchored chart frame with an empty xfrm takes its anchor box (openpyxl)', async () => {
@@ -65,6 +66,46 @@ describe('worksheet chart data', () => {
   })
 })
 
+describe('chart references: formats, defined names, unreadable areas', () => {
+  const uncached = (cat: string, val: string) => `<chartSpace><chart><title><tx><rich><p><r><t>T</t></r></p></rich></tx></title><plotArea><barChart><barDir val="col"/><ser><idx val="0"/><cat><numRef><f>${cat}</f></numRef></cat><val><numRef><f>${val}</f></numRef></val></ser></barChart></plotArea></chart></chartSpace>`
+  const cells = [0, 1, 2].flatMap(i => [{ ref: `K${20 + i}`, v: 1234.5 * (i + 1), style: 3 }, { ref: `L${20 + i}`, v: (i + 1) * 10 }])
+  const chartOf = async (xml: string, names = '', withCells = cells) => {
+    const sheet = (await parseXlsx(await chartWorkbook(xml, { cells: withCells, patch: async zip => { await addNumberFormat(zip, 4); if (names) await addDefinedNames(zip, names) } }))).sheets[0]
+    const content = sheet.drawings?.[0].content
+    if (content?.kind !== 'xlsxChart') throw new Error(`no chart: ${content?.kind}`)
+    return content.chart
+  }
+
+  test('category labels use the source cells\' number/date formats', async () => {
+    const chart = await chartOf(uncached('Styled!$K$20:$K$22', 'Styled!$L$20:$L$22'))
+    // #,##0.00 (built-in 4): the text the grid shows, not the raw 1234.5.
+    expect(chart.categories).toEqual(['1,234.50', '2,469.00', '3,703.50'])
+    // 0.00 (built-in 2) on whole numbers keeps its decimals.
+    const fixed = await chartOf(uncached('Styled!$K$20:$K$22', 'Styled!$L$20:$L$22'), '', [0, 1, 2].flatMap(i => [{ ref: `K${20 + i}`, v: 45292 + 31 * i, style: 2 }, { ref: `L${20 + i}`, v: i }]))
+    expect(fixed.categories).toEqual(['45292.00', '45323.00', '45354.00'])
+    expect(chart.groups[0].series[0].values).toEqual([10, 20, 30])
+  })
+
+  test('series read through workbook and sheet-scoped defined names', async () => {
+    const chart = await chartOf(uncached('Cats', 'Sales'), '<definedName name="Sales">Styled!$L$20:$L$22</definedName><definedName name="Cats" localSheetId="0">Styled!$K$20:$K$22</definedName><definedName name="Cats">Styled!$A$1:$A$1</definedName>')
+    expect(chart.unsupported).toBeUndefined()
+    expect(chart.groups[0].series[0].values).toEqual([10, 20, 30])
+    expect(chart.categories).toEqual(['1,234.50', '2,469.00', '3,703.50'])
+    const qualified = await chartOf(uncached('Styled!Cats', "'Styled'!Sales"), '<definedName name="Sales">Styled!$L$20:$L$22</definedName><definedName name="Cats" localSheetId="0">Styled!$K$20:$K$22</definedName>')
+    expect(qualified.groups[0].series[0].values).toEqual([10, 20, 30])
+  })
+
+  test('an undefined name, a multi-area name and a multi-area reference show a placeholder, never an empty chart', async () => {
+    expect((await chartOf(uncached('Styled!$K$20:$K$22', 'Missing'))).unsupported).toBe('Chart data name “Missing” is not defined in this workbook')
+    expect((await chartOf(uncached('Styled!$K$20:$K$22', 'Two'), '<definedName name="Two">Styled!$L$20,Styled!$L$22</definedName>')).unsupported).toBe('Chart data name “Two” is not a single worksheet range')
+    const multi = await chartOf(uncached('Styled!$K$20:$K$22', '(Styled!$L$20,Styled!$L$22)'))
+    expect(multi.unsupported).toBe('Chart data uses a reference the viewer cannot read ((Styled!$L$20,Styled!$L$22))')
+    const { ctx, calls } = recorder()
+    paintDrawingContent({ kind: 'xlsxChart', chart: multi }, ctx, 200, 120)
+    expect(calls.filter(call => call.op === 'fillText').map(call => call.args[0])).toEqual(['T', multi.unsupported])
+  })
+})
+
 describe('chart parser', async () => {
   const { parseXlsxChart, parseChartRange, chartDescription, fillChartRanges } = await import('../src/xlsx/chart')
   const { parseXmlOrdered } = await import('../src/core/xml')
@@ -75,7 +116,8 @@ describe('chart parser', async () => {
     expect(parseChartRange('Sheet1!A1')).toEqual({ sheet: 'Sheet1', r0: 0, c0: 0, r1: 0, c1: 0 })
     expect(parseChartRange('$C$9:$A$1')).toEqual({ r0: 0, c0: 0, r1: 8, c1: 2 })
     expect(parseChartRange('(Sheet1!$A$1,Sheet1!$A$3)')).toBeUndefined()
-    expect(parseChartRange('MyName')).toBeUndefined()
+    expect(parseChartRange('MyName')).toEqual({ definedName: 'MyName', r0: 0, c0: 0, r1: 0, c1: 0 })
+    expect(parseChartRange('Sheet1!Local_1')).toEqual({ sheet: 'Sheet1', definedName: 'Local_1', r0: 0, c0: 0, r1: 0, c1: 0 })
   })
 
   test('stacked horizontal bars, 100% stacked area, line markers, pie colours, doughnut hole and scatter x values', () => {
@@ -113,12 +155,12 @@ describe('chart parser', async () => {
   test('uncached ranges fill from a lookup, bounded per series', () => {
     const model = parse('<chartSpace><chart><plotArea><lineChart><ser><tx><strRef><f>B1</f></strRef></tx><cat><strRef><f>A2:A4</f></strRef></cat><val><numRef><f>Data!B2:B4</f></numRef></val></ser></lineChart></plotArea></chart></chartSpace>')
     const cells: Record<string, unknown> = { 'Owner|0|1': 'Revenue', 'Owner|1|0': 'Jan', 'Owner|2|0': 'Feb', 'Owner|3|0': 'Mar', 'Data|1|1': 5, 'Data|2|1': 'x', 'Data|3|1': 7 }
-    const filled = fillChartRanges(model, 'Owner', (sheet, r, c) => cells[`${sheet}|${r}|${c}`] as string | number | undefined)
+    const filled = fillChartRanges(model, 'Owner', (sheet, r, c) => { const value = cells[`${sheet}|${r}|${c}`] as string | number | undefined; return value === undefined ? undefined : { value } })
     expect(filled.categories).toEqual(['Jan', 'Feb', 'Mar'])
     expect(filled.groups[0].series[0]).toMatchObject({ name: 'Revenue', values: [5, undefined, 7] })
     expect(chartDescription(filled)).toBe('Chart. Line chart, 1 series; 3 categories (Jan, Feb, Mar); Revenue: 5, 7.')
     const long = parse('<chartSpace><chart><plotArea><barChart><ser><val><numRef><f>A1:A10000</f></numRef></val></ser></barChart></plotArea></chart></chartSpace>')
-    const bounded = fillChartRanges(long, 'S', () => 1)
+    const bounded = fillChartRanges(long, 'S', () => ({ value: 1 }))
     expect(bounded.groups[0].series[0].values).toHaveLength(4096)
     expect(bounded.truncated).toBe(true)
   })

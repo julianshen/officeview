@@ -11,7 +11,11 @@ export type XlsxChartType = 'bar' | 'line' | 'area' | 'pie' | 'doughnut' | 'scat
 export type XlsxChartGrouping = 'clustered' | 'stacked' | 'percentStacked' | 'standard'
 
 /** A single-area worksheet reference, 0-based and inclusive. */
-export interface XlsxChartRange { sheet?: string; r0: number; c0: number; r1: number; c1: number }
+export interface XlsxChartRange {
+  sheet?: string; r0: number; c0: number; r1: number; c1: number
+  /** A workbook defined name still to resolve (the coordinates are then 0). */
+  definedName?: string
+}
 
 export interface XlsxChartSeries {
   name: string

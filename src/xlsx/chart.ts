@@ -90,7 +90,8 @@ function formulaOf(node: XmlNode | undefined): string | undefined {
 
 const colIndex = (letters: string): number => { let n = 0; for (const ch of letters.toUpperCase()) n = n * 26 + ch.charCodeAt(0) - 64; return n - 1 }
 const CELL = /^\$?([A-Za-z]{1,3})\$?(\d{1,7})$/
-/** A single-area reference: `Sheet1!$A$1:$A$5`, `'My sheet'!B2`. Multi-area and names are unresolved. */
+const NAME = /^[A-Za-z_\\][A-Za-z0-9_.\\]*$/
+/** A single-area reference (`Sheet1!$A$1:$A$5`, `'My sheet'!B2`) or a defined name. Multi-area references are unresolved. */
 export function parseChartRange(formula: string): XlsxChartRange | undefined {
   let text = formula.trim()
   while (text.startsWith('(') && text.endsWith(')')) text = text.slice(1, -1).trim()
@@ -104,6 +105,8 @@ export function parseChartRange(formula: string): XlsxChartRange | undefined {
   }
   const [from, to = from] = text.split(':')
   const a = CELL.exec(from), b = CELL.exec(to)
+  // A defined name (workbook or sheet scope), resolved against the workbook later.
+  if ((!a || !b) && !text.includes(':') && NAME.test(text)) return { ...(sheet ? { sheet } : {}), definedName: text, r0: 0, c0: 0, r1: 0, c1: 0 }
   if (!a || !b) return undefined
   const c0 = colIndex(a[1]), r0 = Number(a[2]) - 1, c1 = colIndex(b[1]), r1 = Number(b[2]) - 1
   if (![c0, r0, c1, r1].every(n => Number.isSafeInteger(n) && n >= 0)) return undefined
@@ -160,6 +163,9 @@ export function parseXlsxChart(root: XmlNode, theme: ThemeContext | undefined): 
       const xNode = type === 'scatter' ? child(ser, 'xVal') : undefined
       const catNode = type === 'scatter' ? undefined : child(ser, 'cat')
       const pending: NonNullable<XlsxChartSeries['pending']> = {}
+      // An uncached reference the viewer cannot read (multi-area, a formula) has no data: placeholder, never an empty chart.
+      const unreadable = (node: XmlNode | undefined) => { const f = !hasCache(node) ? formulaOf(node) : undefined; if (f && !parseChartRange(f)) unsupported ??= `Chart data uses a reference the viewer cannot read (${f.slice(0, 80)})` }
+      unreadable(valueNode); unreadable(xNode); unreadable(catNode)
       const txFormula = child(tx, 'strRef') && !child(child(tx, 'strRef'), 'strCache') ? formulaOf(tx) : undefined
       const nameRange = txFormula ? parseChartRange(txFormula) : undefined
       if (nameRange) pending.name = nameRange
@@ -232,14 +238,15 @@ export function placeholderChart(title: string | undefined, reason: string): Xls
 
 export type ChartCellValue = string | number | boolean | null | undefined
 /** Cell lookup for filling uncached references: `sheet` is the resolved sheet name. */
-export type ChartCellLookup = (sheet: string, row: number, col: number) => ChartCellValue
+export interface ChartCell { value: ChartCellValue; /** The cell's formatted text (number/date format), as Excel shows it. */ text?: string }
+export type ChartCellLookup = (sheet: string, row: number, col: number) => ChartCell | undefined
 
 export function chartHasPending(model: XlsxChartModel): boolean {
   return Boolean(model.categoryPending) || model.groups.some(g => g.series.some(s => s.pending))
 }
 /** The cells a range resolves to, row-major, bounded by CHART_POINT_LIMIT. */
-function rangeCells(range: XlsxChartRange, sheet: string, lookup: ChartCellLookup): { values: ChartCellValue[]; truncated: boolean } {
-  const values: ChartCellValue[] = []
+function rangeCells(range: XlsxChartRange, sheet: string, lookup: ChartCellLookup): { values: Array<ChartCell | undefined>; truncated: boolean } {
+  const values: Array<ChartCell | undefined> = []
   const rows = range.r1 - range.r0 + 1, cols = range.c1 - range.c0 + 1
   // A 2-D category range keeps its last row/column (the level nearest the data).
   const vertical = cols === 1 || rows >= cols
@@ -249,8 +256,48 @@ function rangeCells(range: XlsxChartRange, sheet: string, lookup: ChartCellLooku
   }
   return { values, truncated: length > CHART_POINT_LIMIT }
 }
-const asNumber = (value: ChartCellValue): number | undefined => typeof value === 'number' && Number.isFinite(value) ? value : typeof value === 'boolean' ? undefined : typeof value === 'string' && value.trim() !== '' && Number.isFinite(Number(value)) ? Number(value) : undefined
-const asText = (value: ChartCellValue): string => value === null || value === undefined ? '' : typeof value === 'number' ? String(Number(value.toPrecision(15))) : String(value)
+const asNumber = (cell: ChartCell | undefined): number | undefined => numberOf(cell?.value)
+const numberOf = (value: ChartCellValue): number | undefined => typeof value === 'number' && Number.isFinite(value) ? value : typeof value === 'boolean' ? undefined : typeof value === 'string' && value.trim() !== '' && Number.isFinite(Number(value)) ? Number(value) : undefined
+const rawText = (value: ChartCellValue): string => value === null || value === undefined ? '' : typeof value === 'number' ? String(Number(value.toPrecision(15))) : String(value)
+const asText = (cell: ChartCell | undefined): string => cell?.text ?? rawText(cell?.value)
+
+/** Resolves a defined name seen from a sheet to its formula (sheet scope first, then workbook). */
+export type ChartNameResolver = (name: string, scopeSheet: string) => string | undefined
+export interface ChartDefinedName { name: string; source: string; localSheetIndex?: number }
+export function chartNameResolver(names: readonly ChartDefinedName[], sheets: ReadonlyArray<{ name: string; workbookIndex?: number }>): ChartNameResolver {
+  return (name, scopeSheet) => {
+    const upper = name.toUpperCase()
+    const scope = sheets.find(sheet => sheet.name.toLowerCase() === scopeSheet.toLowerCase())
+    const candidates = names.filter(entry => entry.name.toUpperCase() === upper)
+    const local = scope?.workbookIndex !== undefined ? candidates.find(entry => entry.localSheetIndex === scope.workbookIndex) : undefined
+    return (local ?? candidates.find(entry => entry.localSheetIndex === undefined))?.source
+  }
+}
+/** Replace defined-name references by the ranges they name; a name that is
+ * missing or not a single area turns the chart into a placeholder. */
+export function resolveChartNames(model: XlsxChartModel, ownerSheet: string, resolve: ChartNameResolver | undefined): XlsxChartModel {
+  let unsupported = model.unsupported
+  const fix = (range: XlsxChartRange | undefined): XlsxChartRange | undefined => {
+    if (!range?.definedName) return range
+    const formula = resolve?.(range.definedName, range.sheet ?? ownerSheet)
+    const target = formula ? parseChartRange(formula.replace(/^=/, '')) : undefined
+    if (target && !target.definedName) return target
+    unsupported ??= `Chart data name “${range.definedName}” ${formula ? 'is not a single worksheet range' : 'is not defined in this workbook'}`
+    return undefined
+  }
+  if (!chartHasPending(model)) return model
+  const categoryPending = fix(model.categoryPending)
+  const groups = model.groups.map(group => ({ ...group, series: group.series.map(series => {
+    if (!series.pending) return series
+    const pending = Object.fromEntries(Object.entries(series.pending).map(([key, range]) => [key, fix(range)]).filter(([, range]) => range)) as NonNullable<XlsxChartSeries['pending']>
+    const { pending: _old, ...rest } = series
+    void _old
+    return Object.keys(pending).length ? { ...rest, pending } : rest
+  }) }))
+  const { categoryPending: _cat, ...rest } = model
+  void _cat
+  return { ...rest, groups, ...(categoryPending ? { categoryPending } : {}), ...(unsupported ? { unsupported } : {}) }
+}
 
 /** Fill uncached references from worksheet cells (returns a new model). */
 export function fillChartRanges(model: XlsxChartModel, ownerSheet: string, lookup: ChartCellLookup): XlsxChartModel {
@@ -582,8 +629,10 @@ export { chartDescription }
 registerXlsxChartPainter(paintXlsxChart)
 
 /** Resident workbooks: fill every uncached chart reference from parsed cells. */
-export function fillWorkbookCharts(sheets: ReadonlyArray<{ name: string; rows: ReadonlyArray<{ index: number; cells: ReadonlyArray<{ row: number; col: number; value: ChartCellValue }> }>; drawings?: XlsxDrawingLike[] }>): void {
-  const indexes = new Map<string, Map<number, Map<number, ChartCellValue>>>()
+export function fillWorkbookCharts<Cell extends { row: number; col: number; value: ChartCellValue }, Sheet extends { name: string; workbookIndex?: number; rows: ReadonlyArray<{ index: number; cells: ReadonlyArray<Cell> }>; drawings?: XlsxDrawingLike[] }>(
+  sheets: readonly Sheet[], options: { names?: readonly ChartDefinedName[]; text?: (sheet: Sheet, cell: Cell) => string } = {},
+): void {
+  const indexes = new Map<string, Map<number, Map<number, ChartCell>>>()
   const indexOf = (name: string) => {
     const key = name.toLowerCase()
     let index = indexes.get(key)
@@ -593,35 +642,49 @@ export function fillWorkbookCharts(sheets: ReadonlyArray<{ name: string; rows: R
       for (const row of sheet?.rows ?? []) for (const cell of row.cells) {
         let cols = index.get(cell.row)
         if (!cols) index.set(cell.row, cols = new Map())
-        cols.set(cell.col, cell.value)
+        cols.set(cell.col, { value: cell.value, ...(options.text && sheet ? { text: textOf(sheet, cell) } : {}) })
       }
       indexes.set(key, index)
     }
     return index
   }
+  const textOf = (sheet: Sheet, cell: Cell) => { try { return options.text!(sheet, cell) } catch { return rawText(cell.value) } }
   const lookup: ChartCellLookup = (sheet, row, col) => indexOf(sheet).get(row)?.get(col)
-  for (const sheet of sheets) fillDrawings(sheet.drawings, sheet.name, lookup)
+  const resolve = chartNameResolver(options.names ?? [], sheets)
+  for (const sheet of sheets) fillDrawings(sheet.drawings, sheet.name, lookup, resolve)
+}
+/** Resolve defined names of a drawing tree in place (paged readers resolve before reading cells). */
+export function resolveDrawingNames(drawings: XlsxDrawingLike[] | undefined, ownerSheet: string, resolve: ChartNameResolver | undefined): void {
+  for (const node of drawings ?? []) {
+    const content = node.content as { kind: string; chart?: XlsxChartModel } | undefined
+    if (content?.kind === 'xlsxChart' && content.chart) content.chart = resolveChartNames(content.chart, ownerSheet, resolve)
+    if (node.children) resolveDrawingNames(node.children, ownerSheet, resolve)
+  }
+}
+/** Whether a drawing tree names any defined name in its chart references. */
+export function drawingsNeedNames(drawings: XlsxDrawingLike[] | undefined): boolean {
+  return pendingRanges(drawings, '', [], true).some(range => range.definedName)
 }
 export interface XlsxDrawingLike { content?: { kind: string }; children?: XlsxDrawingLike[] }
 /** Fill uncached chart references of a drawing tree in place. */
-export function fillDrawings(drawings: XlsxDrawingLike[] | undefined, ownerSheet: string, lookup: ChartCellLookup): void {
+export function fillDrawings(drawings: XlsxDrawingLike[] | undefined, ownerSheet: string, lookup: ChartCellLookup, resolve?: ChartNameResolver): void {
   for (const node of drawings ?? []) {
     const content = node.content as { kind: string; chart?: XlsxChartModel } | undefined
-    if (content?.kind === 'xlsxChart' && content.chart && chartHasPending(content.chart)) content.chart = fillChartRanges(content.chart, ownerSheet, lookup)
-    if (node.children) fillDrawings(node.children, ownerSheet, lookup)
+    if (content?.kind === 'xlsxChart' && content.chart && chartHasPending(content.chart)) content.chart = fillChartRanges(resolveChartNames(content.chart, ownerSheet, resolve), ownerSheet, lookup)
+    if (node.children) fillDrawings(node.children, ownerSheet, lookup, resolve)
   }
 }
 /** Every reference a drawing tree still needs, for paged readers. */
-export function pendingRanges(drawings: XlsxDrawingLike[] | undefined, ownerSheet: string, out: Array<XlsxChartRange & { sheet: string }> = []): Array<XlsxChartRange & { sheet: string }> {
+export function pendingRanges(drawings: XlsxDrawingLike[] | undefined, ownerSheet: string, out: Array<XlsxChartRange & { sheet: string }> = [], withNames = false): Array<XlsxChartRange & { sheet: string }> {
   for (const node of drawings ?? []) {
     const content = node.content as { kind: string; chart?: XlsxChartModel } | undefined
     const chart = content?.kind === 'xlsxChart' ? content.chart : undefined
     if (chart) {
-      const add = (range: XlsxChartRange | undefined) => { if (range) out.push({ ...range, sheet: range.sheet ?? ownerSheet }) }
+      const add = (range: XlsxChartRange | undefined) => { if (range && (withNames || !range.definedName)) out.push({ ...range, sheet: range.sheet ?? ownerSheet }) }
       add(chart.categoryPending)
       for (const group of chart.groups) for (const s of group.series) { add(s.pending?.values); add(s.pending?.xValues); add(s.pending?.name); add(s.pending?.categories) }
     }
-    if (node.children) pendingRanges(node.children, ownerSheet, out)
+    if (node.children) pendingRanges(node.children, ownerSheet, out, withNames)
   }
   return out
 }

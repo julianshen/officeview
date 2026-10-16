@@ -15,7 +15,7 @@ import { collectDeclaredTable, createDeclaredBudget, declaredSheetBuilder, hasDe
 import { parseWorksheetDrawings, collectXlsxImages } from './drawing'
 import { hasXlsxCharts, loadChartModule } from './chartLoader'
 import { frozenPaneFrom } from './frozenPane'
-import { computeMetrics } from './render'
+import { cellDisplayText, computeMetrics } from './render'
 import { resolvePartTarget } from '../drawing/parts'
 import { parseThemeContext, type ThemeContext } from '../drawing/style'
 import { evaluateWorkbookFormulas, markSavedValuesOnly, type WorkbookEvaluationOptions } from './formula/workbook'
@@ -202,7 +202,6 @@ export async function parseXlsx(pkg: OfficePackage, options: ParseXlsxOptions = 
     workbookIndex++
   }
   // Charts without cached values (openpyxl) read their series from the cells.
-  if (sheets.some(sheet => hasXlsxCharts(sheet.drawings))) (await loadChartModule()).fillWorkbookCharts(sheets)
   const drawingCoverage = sheets.flatMap((sheet, unit) => {
     const entries = (sheet.drawingCoverage ?? []).map(entry => ({ ...entry, unit }))
     const metrics = sheet.drawings?.length ? computeMetrics(sheet) : undefined
@@ -232,6 +231,9 @@ export async function parseXlsx(pkg: OfficePackage, options: ParseXlsxOptions = 
   const calc: CalcSettings = { calcMode, fullCalcOnLoad, iterate, iterateCount, iterateDelta }
 
   const definedNames: DefinedNameMetadata[] = parseDefinedNames(workbook)
+  // Charts without cached values (openpyxl) read their series from the cells,
+  // with formatted category text and workbook defined names.
+  if (sheets.some(sheet => hasXlsxCharts(sheet.drawings))) (await loadChartModule()).fillWorkbookCharts(sheets, { names: definedNames, text: (sheet, cell) => cellDisplayText(sheet, cell as XlsxCell) })
 
   // Tables resolve exclusively through each worksheet's tableParts and that
   // worksheet's own relationship part — never through workbook rels.

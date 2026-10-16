@@ -24,7 +24,9 @@ import { DOCUMENT_DRAWING_NODE_LIMIT, drawingPartContext, resolvePartTarget } fr
 import { parseThemeContext, type ThemeContext } from '../../drawing/style'
 import { parseWorksheetDrawings } from '../drawing'
 import type { XlsxDrawing, XlsxSheet } from '../types'
-import { hasXlsxCharts } from '../chartLoader'
+import { hasXlsxCharts, loadChartModule } from '../chartLoader'
+import { parseDefinedNames } from '../formula/names'
+import type { DefinedNameMetadata } from '../formula/types'
 import type { DrawingMemory, ProfileId, SheetDrawings, WorkerDiagnostic } from '../view/contracts'
 import { placementAxes } from '../view/drawingBounds'
 import { DRAWING_MEMORY_REFUSED, DRAWING_NODE_BUDGET, DRAWING_PART_REFUSED, drawingFootprint, drawingPayloadBudget, sheetDrawingPayload, unavailableDrawings } from '../view/drawingPayload'
@@ -231,7 +233,7 @@ export async function loadPagedSheetDrawings(
   geometry: SheetGeometry,
   limits: PagedDrawingLimits,
   signal: AbortSignal,
-  options: { memory?: DrawingMemory; startNodes?: number; fillCharts?: (drawings: XlsxDrawing[], ownerSheet: string) => Promise<void> } = {},
+  options: { memory?: DrawingMemory; startNodes?: number; fillCharts?: (drawings: XlsxDrawing[], ownerSheet: string, names: DefinedNameMetadata[]) => Promise<void> } = {},
 ): Promise<PagedSheetDrawings> {
   const legacy = sheet.legacyDrawingIds ?? []
   if (!sheet.drawingIds.length && !legacy.length) return { drawings: sheetDrawingPayload([], undefined, [], limits.payloadBytes), nodes: 0, workingSet: 0 }
@@ -268,7 +270,12 @@ export async function loadPagedSheetDrawings(
   }
   // Charts without cached values read their series from the paged cells.
   if (options.fillCharts && hasXlsxCharts(shell.drawings)) {
-    await options.fillCharts(shell.drawings!, sheet.name)
+    // Defined names come from the workbook part, read only when a chart names one.
+    let names: DefinedNameMetadata[] = []
+    if ((await loadChartModule()).drawingsNeedNames(shell.drawings)) {
+      try { names = parseDefinedNames(await pkg.xml('xl/workbook.xml')) } catch { if (signal.aborted) throw aborted(signal) }
+    }
+    await options.fillCharts(shell.drawings!, sheet.name, names)
     if (signal.aborted) throw aborted(signal)
   }
   const diagnostics = pkg.finish()

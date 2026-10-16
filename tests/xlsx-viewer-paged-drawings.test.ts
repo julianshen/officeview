@@ -63,7 +63,7 @@ const filledShape = `<xdr:oneCellAnchor>${anchorFrom(0, 1)}<xdr:ext cx="${64 * E
 const themedShape = `<xdr:twoCellAnchor>${anchorFrom(2, 4, 3, 2)}<xdr:to><xdr:col>4</xdr:col><xdr:colOff>0</xdr:colOff><xdr:row>7</xdr:row><xdr:rowOff>0</xdr:rowOff></xdr:to><xdr:sp><xdr:nvSpPr><xdr:cNvPr id="3" name="Oval"/><xdr:cNvSpPr/></xdr:nvSpPr><xdr:spPr>${xfrm(80, 60)}<a:prstGeom prst="ellipse"><a:avLst/></a:prstGeom><a:solidFill><a:schemeClr val="accent1"/></a:solidFill></xdr:spPr></xdr:sp><xdr:clientData/></xdr:twoCellAnchor>`
 const picture = `<xdr:oneCellAnchor>${anchorFrom(5, 2)}<xdr:ext cx="${30 * EMU_PER_PX}" cy="${30 * EMU_PER_PX}"/><xdr:pic><xdr:nvPicPr><xdr:cNvPr id="4" name="Picture"/><xdr:cNvPicPr/></xdr:nvPicPr><xdr:blipFill><a:blip xmlns:r="${R_NS}" r:embed="rImg"/><a:stretch><a:fillRect/></a:stretch></xdr:blipFill><xdr:spPr>${xfrm(30, 30)}<a:prstGeom prst="rect"><a:avLst/></a:prstGeom></xdr:spPr></xdr:pic><xdr:clientData/></xdr:oneCellAnchor>`
 
-interface DrawingWorkbook { secondSheet?: boolean; secondAnchors?: string; anchors: string; theme?: boolean; media?: boolean; secondImage?: boolean; vml?: boolean; unusedMedia?: number; content?: boolean; mediaBytes?: number; chart?: string }
+interface DrawingWorkbook { secondSheet?: boolean; secondAnchors?: string; anchors: string; theme?: boolean; media?: boolean; secondImage?: boolean; vml?: boolean; unusedMedia?: number; content?: boolean; mediaBytes?: number; chart?: string; definedNames?: string }
 function drawingWorkbook(spec: DrawingWorkbook): Uint8Array {
   const extra: BuildEntry[] = [
     { name: 'xl/worksheets/_rels/sheet1.xml.rels', data: `<?xml version="1.0"?><Relationships xmlns="${PKG_RELS}"><Relationship Id="rD1" Type="${R_NS}/drawing" Target="../drawings/drawing1.xml"/>${spec.vml ? `<Relationship Id="rV1" Type="${R_NS}/vmlDrawing" Target="../drawings/vmlDrawing1.vml"/>` : ''}</Relationships>` },
@@ -94,6 +94,10 @@ function drawingWorkbook(spec: DrawingWorkbook): Uint8Array {
   if (spec.theme) {
     const wbRels = entries.find(e => e.name === 'xl/_rels/workbook.xml.rels')!
     wbRels.data = String(wbRels.data).replace('</Relationships>', `<Relationship Id="rId8" Type="${R_NS}/theme" Target="theme/theme1.xml"/></Relationships>`)
+  }
+  if (spec.definedNames) {
+    const wb = entries.find(e => e.name === 'xl/workbook.xml')!
+    wb.data = String(wb.data).replace('</sheets>', `</sheets><definedNames>${spec.definedNames}</definedNames>`)
   }
   if (spec.secondSheet) {
     const wb = entries.find(e => e.name === 'xl/workbook.xml')!
@@ -200,6 +204,19 @@ describe('paged drawings (RENDER-02 / AC-RENDER-01)', () => {
     const uncached = `<?xml version="1.0"?><c:chartSpace xmlns:c="${C_NS}"><c:chart><c:plotArea><c:lineChart><c:ser><c:idx val="0"/><c:cat><c:numRef><c:f>$B$1:$B$4</c:f></c:numRef></c:cat><c:val><c:numRef><c:f>S!$A$1:$A$4</c:f></c:numRef></c:val></c:ser></c:lineChart></c:plotArea></c:chart></c:chartSpace>`
     const chart = frame(6, 'Chart 1', `<c:chart xmlns:c="${C_NS}" xmlns:r="${R_NS}" r:id="rC1"/>`, 0)
     const bytes = drawingWorkbook({ anchors: chart, content: true, chart: uncached })
+    const { geometry: object } = await resident(bytes)
+    const expected = object.drawingsIn(...box)!
+    const content = expected[0].content
+    expect(content?.kind === 'xlsxChart' && content.chart.groups[0].series[0].values).toEqual([8, 7, 6, 5])
+    expect(content?.kind === 'xlsxChart' && content.chart.categories).toEqual(['0', '1', '2', '3'])
+    const geometry = await settledGeometry(await openPaged(bytes))
+    expect(geometry.drawingsIn(...box)!.map(node => node.content)).toEqual(expected.map(node => node.content))
+  })
+
+  it('resolves a defined-name series from the paged workbook exactly as the resident sheet does', async () => {
+    const named = `<?xml version="1.0"?><c:chartSpace xmlns:c="${C_NS}"><c:chart><c:plotArea><c:barChart><c:ser><c:idx val="0"/><c:cat><c:numRef><c:f>Cats</c:f></c:numRef></c:cat><c:val><c:numRef><c:f>Vals</c:f></c:numRef></c:val></c:ser></c:barChart></c:plotArea></c:chart></c:chartSpace>`
+    const chart = frame(6, 'Chart 1', `<c:chart xmlns:c="${C_NS}" xmlns:r="${R_NS}" r:id="rC1"/>`, 0)
+    const bytes = drawingWorkbook({ anchors: chart, content: true, chart: named, definedNames: '<definedName name="Vals">S!$A$1:$A$4</definedName><definedName name="Cats" localSheetId="0">S!$B$1:$B$4</definedName>' })
     const { geometry: object } = await resident(bytes)
     const expected = object.drawingsIn(...box)!
     const content = expected[0].content

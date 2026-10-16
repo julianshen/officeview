@@ -9,9 +9,12 @@ export const openpyxlFrame = (name = 'Chart 1', descr?: string) => `<xdr:oneCell
 
 export const CACHED_COLUMN = '<chartSpace><chart><title><tx><rich><p><r><t>Sales</t></r></p></rich></tx></title><plotArea><barChart><barDir val="col"/><grouping val="clustered"/><ser><idx val="0"/><tx><v>2024</v></tx><cat><strLit><ptCount val="2"/><pt idx="0"><v>A</v></pt><pt idx="1"><v>B</v></pt></strLit></cat><val><numLit><ptCount val="2"/><pt idx="0"><v>3</v></pt><pt idx="1"><v>5</v></pt></numLit></val></ser></barChart><catAx/><valAx/></plotArea><legend/></chart></chartSpace>'
 
-export async function chartWorkbook(chartXml: string, options: { frame?: string; cells?: Array<{ ref: string; v: string | number }> } = {}): Promise<OfficePackage> {
+export async function chartWorkbook(chartXml: string, options: { frame?: string; cells?: Array<{ ref: string; v: string | number; style?: number }>; patch?: (zip: JSZip) => Promise<void> | void } = {}): Promise<OfficePackage> {
+  return OfficePackage.load(await chartWorkbookBytes(chartXml, options))
+}
+export async function chartWorkbookBytes(chartXml: string, options: { frame?: string; cells?: Array<{ ref: string; v: string | number; style?: number }>; patch?: (zip: JSZip) => Promise<void> | void } = {}): Promise<Uint8Array> {
   const cells = options.cells ?? [{ ref: 'A1', v: 1 }]
-  const rows = new Map<number, Array<{ ref: string; v: string | number; t?: 'str' }>>()
+  const rows = new Map<number, Array<{ ref: string; v: string | number; t?: 'str'; style?: number }>>()
   for (const cell of cells) {
     const r = Number(/\d+/.exec(cell.ref)![0])
     rows.set(r, [...rows.get(r) ?? [], typeof cell.v === 'string' ? { ...cell, t: 'str' as const } : cell])
@@ -26,5 +29,17 @@ export async function chartWorkbook(chartXml: string, options: { frame?: string;
   zip.file('xl/drawings/drawing1.xml', `<xdr:wsDr ${NS}>${options.frame ?? openpyxlFrame()}</xdr:wsDr>`)
   zip.file('xl/drawings/_rels/drawing1.xml.rels', '<Relationships><Relationship Id="rChart" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/chart" Target="../charts/chart1.xml"/></Relationships>')
   zip.file('xl/charts/chart1.xml', chartXml)
-  return OfficePackage.load(await zip.generateAsync({ type: 'uint8array' }))
+  await options.patch?.(zip)
+  return zip.generateAsync({ type: 'uint8array' })
+}
+
+/** Adds an xf with the given built-in number format; returns its style index (3). */
+export async function addNumberFormat(zip: JSZip, numFmtId: number): Promise<void> {
+  const styles = await zip.file('xl/styles.xml')!.async('string')
+  zip.file('xl/styles.xml', styles.replace('<cellXfs count="3">', '<cellXfs count="4">').replace('</cellXfs>', `<xf numFmtId="${numFmtId}" fontId="0" fillId="0" borderId="0" xfId="0" applyNumberFormat="1"/></cellXfs>`))
+}
+/** Adds workbook defined names. */
+export async function addDefinedNames(zip: JSZip, names: string): Promise<void> {
+  const workbook = await zip.file('xl/workbook.xml')!.async('string')
+  zip.file('xl/workbook.xml', workbook.replace('</sheets>', `</sheets><definedNames>${names}</definedNames>`))
 }
