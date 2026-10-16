@@ -4,6 +4,9 @@
  */
 import type { CSSProperties, ReactElement } from 'react'
 
+/** Spec §513: 44px minimum control targets on touch (coarse-pointer) devices; desktop sizes unchanged. */
+const T = (px: number): number => typeof matchMedia == 'function' && matchMedia('(pointer: coarse)').matches ? Math.max(px, 44) : px
+
 export function SearchBar({
   inputRef,
   query,
@@ -32,8 +35,8 @@ export function SearchBar({
   const qualifier = note ? ` (${note})` : ''
   const status = indexing ? 'indexing…' : count === 0 ? (query ? `no matches${qualifier}` : '') : `${active + 1} of ${countLabel ?? count}${qualifier}`
   const btn: CSSProperties = {
-    height: 28,
-    minWidth: 28,
+    height: T(28),
+    minWidth: T(28),
     padding: '0 8px',
     borderRadius: 6,
     border: '1px solid rgba(0,0,0,0.2)',
@@ -77,7 +80,7 @@ export function SearchBar({
           else if (e.key === 'Escape') { e.preventDefault(); onQuery('') }
         }}
         style={{
-          height: 28,
+          height: T(28),
           width: 148,
           minWidth: 0,
           padding: '0 8px',
@@ -113,8 +116,8 @@ export function ZoomControls({
   atFit: boolean
 }): ReactElement {
   const btn: CSSProperties = {
-    width: 36,
-    height: 36,
+    width: T(36),
+    height: T(36),
     borderRadius: 18,
     border: '1px solid rgba(0,0,0,0.15)',
     background: '#fff',
@@ -147,7 +150,7 @@ export function ZoomControls({
         type="button"
         onClick={onReset}
         aria-label="Reset zoom"
-        style={{ ...btn, width: 36, height: 28, fontSize: 11, fontWeight: 600 }}
+        style={{ ...btn, height: T(28), fontSize: 11, fontWeight: 600 }}
       >
         {Math.round(zoom * 100)}%
       </button>

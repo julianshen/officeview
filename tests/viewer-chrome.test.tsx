@@ -7,7 +7,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { act, cleanup, fireEvent, render, waitFor } from '@testing-library/react'
 import { OfficeDoc } from '../src/components/OfficeDoc'
 import InteractiveSheetDoc from '../src/components/xlsx/InteractiveSheetDoc'
-import { SearchBar } from '../src/components/viewerControls'
+import { SearchBar, ZoomControls } from '../src/components/viewerControls'
 import type { PaintableArray } from '../src/render/paint'
 import { workbookOf } from './helpers/xlsx-find'
 import { OfficePackage } from '../src/core/zip'
@@ -146,5 +146,23 @@ describe('search bar in a narrow viewer', () => {
     expect(bar.style.boxSizing).toBe('border-box')
     expect(bar.style.flexWrap).toBe('wrap')
     expect(ui.getByRole('searchbox').style.minWidth).toBe('0px')
+  })
+})
+
+describe('touch targets (spec §513, AC-A11Y-02)', () => {
+  const chrome = () => render(<div><SearchBar inputRef={{ current: null }} query="x" onQuery={() => {}} count={3} active={0} indexing={false} onPrev={() => {}} onNext={() => {}} /><ZoomControls zoom={1} onIn={() => {}} onOut={() => {}} onReset={() => {}} atFit={false} /></div>)
+  const sizes = (ui: ReturnType<typeof render>) => ['Search document', 'Previous match', 'Next match', 'Zoom in', 'Zoom out', 'Reset zoom']
+    .map(name => ui.getByLabelText(name) as HTMLElement).map(el => [parseFloat(el.style.height), Math.max(parseFloat(el.style.minWidth) || 0, parseFloat(el.style.width) || 0)])
+  it('coarse pointer: every control is at least 44px high and wide (the input is 148px wide)', () => {
+    vi.stubGlobal('matchMedia', (query: string) => ({ matches: query.includes('coarse') }))
+    try {
+      for (const [height, width] of sizes(chrome())) { expect(height).toBeGreaterThanOrEqual(44); expect(width).toBeGreaterThanOrEqual(44) }
+    } finally { vi.unstubAllGlobals() }
+  })
+  it('fine pointer: desktop sizes are unchanged', () => {
+    vi.stubGlobal('matchMedia', () => ({ matches: false }))
+    try {
+      expect(sizes(chrome()).map(([height]) => height)).toEqual([28, 28, 28, 36, 36, 28])
+    } finally { vi.unstubAllGlobals() }
   })
 })

@@ -373,6 +373,32 @@ test.describe('S10.1 real interactive viewer', () => {
     await page.getByRole('button', { name: 'Next match' }).click()
   })
 
+  test.describe('375px touch viewport (coarse pointer)', () => {
+    test.use({ viewport: { width: 375, height: 740 }, hasTouch: true, isMobile: true, deviceScaleFactor: 2 })
+    // Spec §513 / AC-A11Y-02: 44px minimum control targets on mobile.
+    test('search and zoom controls are at least 44x44, inside the viewer and non-overlapping', async ({ page }) => {
+      await openViewer(page, 'f2-1k.xlsx')
+      test.skip(!(await page.evaluate(() => matchMedia('(pointer: coarse)').matches)), 'this engine does not emulate a coarse pointer')
+      const boxes = await page.evaluate(() => {
+        const wrapper = document.querySelector('[data-officeview-sheet-instance]')!.getBoundingClientRect().toJSON()
+        const controls = ['[aria-label="Search document"]', '[aria-label="Previous match"]', '[aria-label="Next match"]', '[aria-label="Zoom in"]', '[aria-label="Zoom out"]', '[aria-label="Reset zoom"]']
+        return { wrapper, controls: controls.map(selector => ({ selector, ...document.querySelector(selector)!.getBoundingClientRect().toJSON() })) }
+      })
+      for (const box of boxes.controls) {
+        expect(box.height, box.selector).toBeGreaterThanOrEqual(44)
+        expect(box.width, box.selector).toBeGreaterThanOrEqual(44)
+        expect(box.left, box.selector).toBeGreaterThanOrEqual(boxes.wrapper.left - 0.5)
+        expect(box.right, box.selector).toBeLessThanOrEqual(boxes.wrapper.right + 0.5)
+      }
+      for (const [i, p] of boxes.controls.entries()) {
+        for (const q of boxes.controls.slice(i + 1)) {
+          const overlap = p.left < q.right && q.left < p.right && p.top < q.bottom && q.top < p.bottom
+          expect(overlap, `${p.selector} overlaps ${q.selector}`).toBe(false)
+        }
+      }
+    })
+  })
+
   test('print media hides the sheet screen and the floating search/zoom controls, showing the print notice', async ({ page }) => {
     await openViewer(page, 'f2-1k.xlsx')
     await expect(page.getByTestId('officeview-search')).toBeVisible()
