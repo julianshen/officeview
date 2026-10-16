@@ -197,3 +197,34 @@ describe('docx table render', () => {
     expect(texts).not.toContain('r2c1')
   })
 })
+
+describe('visual review NEW-1: w:tblInd', () => {
+  const W = 'xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"'
+  const tbl = (ind: string, style = '') =>
+    `<w:tbl ${W}><w:tblPr>${style}<w:tblW w:w="2000" w:type="dxa"/>${ind}</w:tblPr><w:tblGrid><w:gridCol w:w="2000"/></w:tblGrid><w:tr><w:tc><w:p/></w:tc></w:tr></w:tbl>`
+  test('dxa and untyped indents are twips; nil, auto and pct indent nothing', () => {
+    // The cases poi-table-indent.docx exercises.
+    const indentOf = (ind: string) => parseTable(parseXml(tbl(ind))).indentTwips ?? 0
+    expect(indentOf('<w:tblInd w:w="732" w:type="dxa"/>')).toBe(732)
+    expect(indentOf('<w:tblInd w:w="732"/>')).toBe(732)
+    expect(indentOf('<w:tblInd w:w="-500" w:type="dxa"/>')).toBe(-500)
+    expect(indentOf('<w:tblInd w:w="1234" w:type="nil"/>')).toBe(0)
+    expect(indentOf('<w:tblInd w:w="9012" w:type="auto"/>')).toBe(0)
+    expect(indentOf('<w:tblInd w:w="5678" w:type="pct"/>')).toBe(0)
+    expect(indentOf('')).toBe(0)
+  })
+
+  test('an indented table is laid out shifted right of the left margin', async () => {
+    const W_DOC = `<w:document ${W}><w:body>${tbl('')}${tbl('<w:tblInd w:w="720" w:type="dxa"/>')}<w:sectPr><w:pgSz w:w="12240" w:h="15840"/><w:pgMar w:top="1440" w:left="1440" w:right="1440" w:bottom="1440"/></w:sectPr></w:body></w:document>`
+    const { default: JSZip } = await import('jszip')
+    const { CT_TYPES, ROOT_RELS } = await import('../src/testdata/ooxml-builders')
+    const zip = new JSZip()
+    zip.file('[Content_Types].xml', CT_TYPES)
+    zip.file('_rels/.rels', ROOT_RELS)
+    zip.file('word/document.xml', W_DOC)
+    const doc = await parseDocx(await OfficePackage.load(await zip.generateAsync({ type: 'uint8array' })))
+    const [plain, indented] = layoutDocx(doc, measureFixed)[0].tables
+    expect(plain.xPx).toBeCloseTo(96)
+    expect(indented.xPx - plain.xPx).toBeCloseTo(48)
+  })
+})

@@ -759,7 +759,7 @@ function layoutDocxPass(document: DocxDocument, measure: MeasureFn, totalPages: 
       // Table block: split at row boundaries across pages, repeating header
       // rows (w:tblHeader) on each continuation page.
       const table = autoWidthTable(block.table, measure, defaults, contentWidth)
-      const tableX = m.left
+      const tableX = m.left + twipsToPx(table.indentTwips ?? 0)
       const hasHeader = table.rows.some((r) => r.isHeader)
       const pageHasContent = () => page.lines.length > 0 || page.tables.length > 0 || page.images.length > 0
       let fromRow = 0
@@ -1273,9 +1273,10 @@ function layoutRepeated(hf: HFBlock, measure: MeasureFn, pageNumber: number, tot
       const substituted: DocxTable = { ...block.table, rows: block.table.rows.map(row => ({ ...row, cells: row.cells.map(cell => ({ ...cell, paragraphs: substituteFields(cell.paragraphs, pageNumber, totalPages) })) })) }
       const table = autoWidthTable(substituted, measure, hf.defaults, hf.widthPx)
       const laid = layoutTableRows(table, measure, hf.defaults, { fromRow: 0, repeatHeader: false, maxHeightPx: Infinity, allowFirstRowOverflow: true })
-      out.tables.push({ xPx: hf.xPx, yPx: y, widthPx: laid.widthPx, rows: laid.rows })
-      addLines(laid.lines, hf.xPx, y)
-      floating.push(...laid.floatingAnchors.map(anchor => ({ ...anchor, contentX: anchor.contentX + hf.xPx, flowY: anchor.flowY + y })))
+      const tableX = hf.xPx + twipsToPx(table.indentTwips ?? 0)
+      out.tables.push({ xPx: tableX, yPx: y, widthPx: laid.widthPx, rows: laid.rows })
+      addLines(laid.lines, tableX, y)
+      floating.push(...laid.floatingAnchors.map(anchor => ({ ...anchor, contentX: anchor.contentX + tableX, flowY: anchor.flowY + y })))
       y += laid.heightPx
     }
   }

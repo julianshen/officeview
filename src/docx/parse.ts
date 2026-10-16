@@ -1649,6 +1649,14 @@ export function parseTable(tbl: XmlNode, tableNumbering?: NumberingState, contex
     borders: mergeBorders(...chain.map(style => parseBorders(getChildren(style, 'tblPr')[0] ?? {})), tblPr ? parseBorders(tblPr) : {}),
   }
   Object.assign(table, ...chain.map(style => shading(getChildren(style, 'tblPr')[0])), shading(tblPr))
+  // w:tblInd: the last layer that sets it wins. Word honours dxa (and an
+  // untyped width, read as dxa); nil, auto and pct indent nothing.
+  for (const layer of [...chain.map(style => getChildren(style, 'tblPr')[0]), tblPr]) {
+    const ind = getChildren(layer, 'tblInd')[0]
+    if (!ind) continue
+    const a = attrs(ind)
+    table.indentTwips = (a.type ?? 'dxa') === 'dxa' ? twips(a.w) ?? 0 : 0
+  }
   const grid = getChildren(tbl, 'tblGrid')[0]
   if (grid) {
     for (const col of getChildren(grid, 'gridCol')) {
