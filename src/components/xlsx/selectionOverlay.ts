@@ -161,3 +161,20 @@ export function coarseSelectionRecords(selection: GridSelection, metrics: Projec
     unit *= 2
   }
 }
+
+/** Find highlights for the sheet pane: every hit gets the translucent band; the
+ * active hit adds a stronger fill inset from the band (by the inset plus the
+ * band's own edge), so its decoration never lands on a cell border or gridline
+ * where it would read as an underline of the cell's text. */
+const ACTIVE_INSET = 1.5
+export function paintFindOverlay(ctx: CanvasRenderingContext2D, highlights: readonly Box[], active: readonly Box[]): void {
+  ctx.save()
+  ctx.fillStyle = 'rgba(255, 214, 0, 0.45)'
+  for (const r of highlights) ctx.fillRect(r.x, r.y, r.width, r.height)
+  ctx.fillStyle = 'rgba(255, 140, 0, 0.45)'
+  for (const r of active) {
+    const inset = Math.min(ACTIVE_INSET, r.width / 4, r.height / 4)
+    ctx.fillRect(r.x + inset, r.y + inset, r.width - 2 * inset, r.height - 2 * inset)
+  }
+  ctx.restore()
+}

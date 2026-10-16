@@ -111,7 +111,9 @@ export function FilterDropdown(props: FilterDropdownProps): ReactElement | null 
       event.stopPropagation()
       if (event.key === 'Escape') { event.preventDefault(); life.cancel() }
       else if (event.key === 'Enter' && event.target === searchInput.current) { event.preventDefault(); refresh({ ...query, offset: 0 }) }
-    }} style={{ position: bottomSheet ? 'fixed' : 'relative', bottom: bottomSheet ? 0 : undefined, left: bottomSheet ? 0 : undefined, zIndex: bottomSheet ? 4 : undefined, width: bottomSheet ? '100%' : 'min(420px, calc(100vw - 16px))', maxHeight: bottomSheet ? '85dvh' : '80vh', borderRadius: bottomSheet ? '12px 12px 0 0' : undefined, overflowY: 'auto', background: '#fff', border: '1px solid #888', padding: '12px', paddingBottom: 'calc(12px + var(--officeview-safe-bottom))', '--officeview-safe-bottom': 'env(safe-area-inset-bottom, 0px)', boxSizing: 'border-box' } as CSSProperties}>
+    }} style={{ position: bottomSheet ? 'fixed' : 'relative', bottom: bottomSheet ? 0 : undefined, left: bottomSheet ? 0 : undefined, zIndex: bottomSheet ? 4 : undefined, width: bottomSheet ? '100%' : 'min(420px, calc(100vw - 16px))',
+      // Embedded on desktop, the bounded grid popup is the one scroll container (no nested scroller taller than the pane).
+      maxHeight: bottomSheet ? '85dvh' : props.embedded ? undefined : '80vh', borderRadius: bottomSheet ? '12px 12px 0 0' : undefined, overflowY: bottomSheet || !props.embedded ? 'auto' : undefined, background: '#fff', border: '1px solid #888', padding: '12px', paddingBottom: 'calc(12px + var(--officeview-safe-bottom))', '--officeview-safe-bottom': 'env(safe-area-inset-bottom, 0px)', boxSizing: 'border-box' } as CSSProperties}>
     <form onSubmit={event => { event.preventDefault(); apply() }}>
       <h2>Filter column {columnToLetters(props.col)}</h2>
       <div><button type="button" style={controlTarget} disabled={busy || !range || life.invalid} onClick={() => apply('asc')}>Sort ascending</button><button type="button" style={controlTarget} disabled={busy || !range || life.invalid} onClick={() => apply('desc')}>Sort descending</button></div>
@@ -147,7 +149,8 @@ export function FilterDropdown(props: FilterDropdownProps): ReactElement | null 
         {busy && <div role="progressbar" aria-label={progress}>{progress}</div>}
         {!busy && (!page?.complete || error) && <button type="button" style={controlTarget} onClick={initialize}>Retry values</button>}
       </div>
-      <button type="submit" style={controlTarget} disabled={busy || !canApply || life.invalid}>OK</button><button type="button" style={controlTarget} onClick={() => life.cancel()}>Cancel</button>
+      {/* OK/Cancel stay in view at the bottom of the scrolling popup. */}
+      <div style={{ position: 'sticky', bottom: 0, background: '#fff', paddingTop: 4 }}><button type="submit" style={controlTarget} disabled={busy || !canApply || life.invalid}>OK</button><button type="button" style={controlTarget} onClick={() => life.cancel()}>Cancel</button></div>
     </form>
   </div>
 }

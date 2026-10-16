@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type ReactElement } from 'react'
+import { useEffect, useRef, useState, type CSSProperties, type ReactElement } from 'react'
 import type { CellRead, Completeness, SourceStore } from '../../xlsx/view/contracts'
 import { cellId, formatA1, MAX_ROWS, type SourceCell } from '../../xlsx/view/coordinates'
 import { boundedSelectionText } from '../../xlsx/view/selection'
@@ -14,6 +14,8 @@ export interface ViewerStatusProps {
   inspection?: HiddenCellInspection
   countMode?: 'records' | 'body'
   loadReport?: { status: 'ready'; notices?: readonly string[] } | { status: 'error'; message: string }
+  /** Placement/appearance of the visible status line (GridSemantics). */
+  style?: CSSProperties
 }
 function inspectionText(read: CellRead | null): string {
   if (!read || read.kind === 'unknown') return 'Loading cell…'
@@ -22,7 +24,7 @@ function inspectionText(read: CellRead | null): string {
   const formula = read.cell.formula ? `; formula ${boundedSelectionText(read.cell.formula)}` : ''
   return read.kind === 'unavailable' ? `Formula value unavailable${formula}` : `Value ${boundedSelectionText(String(read.cell.value ?? ''))}${formula}`
 }
-export function ViewerStatus({ records, announcement, inspection, countMode, loadReport }: ViewerStatusProps): ReactElement {
+export function ViewerStatus({ records, announcement, inspection, countMode, loadReport, style }: ViewerStatusProps): ReactElement {
   const validCounts = Number.isSafeInteger(records?.total) && records.total >= 0 && records.total <= MAX_ROWS && Number.isSafeInteger(records.visible) && records.visible >= 0 && records.visible <= records.total
   const source = inspection?.source, row = inspection?.target.row, col = inspection?.target.col
   const owner = source?.stamp
@@ -48,7 +50,8 @@ export function ViewerStatus({ records, announcement, inspection, countMode, loa
     return () => { alive = false; controller.abort() }
   }, [key])
   const counts = !validCounts ? 'Record counts unavailable' : countMode === 'body' ? `Visible body ${records.visible} / ${records.completeness === 'complete' ? 'complete body' : 'body'} ${records.total}` : records.total === 0 ? '0 records' : `${records.visible} of ${records.total} records`
-  return <div role="status" aria-live="polite" aria-atomic="true" data-officeview-ui="viewer-status">
+  return <div role="status" aria-live="polite" aria-atomic="true" data-officeview-ui="viewer-status" style={style}
+    title={style ? [counts, ...(loadReport?.status === 'error' ? [loadReport.message] : loadReport?.notices ?? []), announcement].filter(Boolean).join(' — ') : undefined}>
     <span>{counts}{validCounts && records.completeness && records.completeness !== 'complete' ? ` (${records.completeness})` : ''}</span>
     {(loadReport?.status === 'error' ? [loadReport.message] : loadReport?.notices ?? []).map((message, index) => <span key={index}> — {message}</span>)}
     {announcement && <span> — {announcement}</span>}
