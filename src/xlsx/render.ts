@@ -303,7 +303,8 @@ export function computeMetrics(sheet: XlsxSheet): GridMetrics {
   for (const row of sheet.rows) {
     if (row.index >= 0 && row.index < nRows) {
       if (rowHidden.get(row.index)) rowHeightsPx[row.index] = 0
-      else if (row.heightPt !== undefined && row.customHeight) rowHeightsPx[row.index] = drawing && (!Number.isFinite(row.heightPt) || row.heightPt < 0) ? DEFAULT_ROW_PX : Math.round(row.heightPt * (96 / 72))
+      // Excel applies a stored ht with or without customHeight.
+      else if (row.heightPt !== undefined) rowHeightsPx[row.index] = drawing && (!Number.isFinite(row.heightPt) || row.heightPt < 0) ? DEFAULT_ROW_PX : Math.round(row.heightPt * (96 / 72))
     }
   }
   const gridWidth = colWidthsPx.reduce((a, b) => a + b, 0), gridHeight = rowHeightsPx.reduce((a, b) => a + b, 0)
@@ -803,7 +804,7 @@ export function mergeEdges(sheet: XlsxSheet, m: GridMetrics, colX: number[] = pr
       for (const row of sheet.rows) {
         if (!(row.index >= nRows) || !Number.isSafeInteger(row.index)) continue
         if (hidden.get(row.index)) rowsBeyond.set(row.index, 0)
-        else if (row.customHeight && row.heightPt !== undefined && Number.isFinite(row.heightPt) && row.heightPt >= 0) rowsBeyond.set(row.index, Math.round(row.heightPt * (96 / 72)))
+        else if (row.heightPt !== undefined && Number.isFinite(row.heightPt) && row.heightPt >= 0) rowsBeyond.set(row.index, Math.round(row.heightPt * (96 / 72)))
       }
     }
     return rowsBeyond

@@ -4,7 +4,9 @@
  * depend on host fonts.
  */
 import { describe, expect, it } from 'vitest'
-import { renderSheet, type GridMetrics } from '../src/xlsx/render'
+import { computeMetrics, renderSheet, type GridMetrics } from '../src/xlsx/render'
+import { buildSheetGeometry } from '../src/xlsx/view/viewport'
+import { buildGeometry } from '../src/xlsx/view/source'
 import type { XlsxCell, XlsxCellStyle, XlsxSheet } from '../src/xlsx/types'
 import { buildXlsx } from '../src/testdata/ooxml-builders'
 import { OfficePackage } from '../src/core/zip'
@@ -70,5 +72,17 @@ describe('#11 worker-served object documents (compatibility mode) keep their cel
     expect(formatting?.styles[1]).toMatchObject({ fillColor: 'FFFFFF00', bold: true, borders: { left: 'thin' } })
     expect(formatting?.styles[2]).toMatchObject({ numFmtId: 2 })
     expect(formatting?.styles[1]).toEqual(doc.sheets[0].rows[0].cells[0].style)
+  })
+})
+
+describe('#10 a stored row height applies without customHeight (Excel honours ht)', () => {
+  // poi-56295: <row ht="12.75"> with no customHeight is 17px in Excel.
+  const sheet = (): XlsxSheet => ({ name: 'S', cols: [], merges: [], mergeRanges: [], rows: [0, 1, 2].map(index => ({ index, heightPt: 12.75, cells: [{ ref: '', row: index, col: 0, styleIndex: 0, value: `r${index}` }] })) })
+  it('resident interactive, paged and static geometry agree on 17px', () => {
+    const resident = buildSheetGeometry(sheet())
+    if (resident.kind !== 'ready') throw new Error('geometry')
+    expect(resident.metrics.rows.start(1)).toBe(17)
+    expect(buildGeometry(sheet().rows, []).rows.start(1)).toBe(17)
+    expect(computeMetrics(sheet()).rowHeightsPx.slice(0, 3)).toEqual([17, 17, 17])
   })
 })

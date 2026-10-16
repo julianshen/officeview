@@ -330,7 +330,9 @@ export function buildSheetGeometry(sheet: XlsxSheet, options: SheetGeometryOptio
   for (const row of sheet.rows) {
     const rowValid = isValidCoordinate(row.index, 0)
     if (!rowValid) skippedRows++
-    else if (row.customHeight && row.heightPt !== undefined) {
+    // Excel applies a stored ht with or without customHeight (customHeight only
+    // marks a manual height); paged geometry and the static grid agree.
+    else if (row.heightPt !== undefined) {
       if (validSize(row.heightPt)) rowOverrides.push({ start: row.index, end: row.index, sizeCss: cssSize(row.heightPt * (96 / 72)) })
       else diagnostics.push({ code: 'invalid-dimension', message: `row ${row.index + 1}: ignored height ${row.heightPt}` })
     }
