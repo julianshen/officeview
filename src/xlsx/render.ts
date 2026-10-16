@@ -745,9 +745,11 @@ export function renderSheet(
   const firstCol = Math.max(0, colX.findIndex((x, i) => x + (colWidthsPx[i] ?? 0) > vp.x))
   const lastCol = colX.findIndex(x => x >= vp.x + vp.width)
   const c0 = firstCol < 0 ? 0 : firstCol, c1 = lastCol < 0 ? colWidthsPx.length : lastCol
+  // Excel also hides a vertical gridline under text spilling across it.
+  const spills = spillBands(laidOut)
   for (let c = c0; c <= c1; c++) {
     const x = colX[c]
-    for (const [y1, y2] of visibleSegments(c, ranges, rowY, gridHeight, true)) {
+    for (const [y1, y2] of withoutSpills(visibleSegments(c, ranges, rowY, gridHeight, true), x, spills)) {
       if (y2 <= vp.y || y1 >= vp.y + vp.height) continue
       ctx.moveTo(x + 0.5, y1 + 0.5)
       ctx.lineTo(x + 0.5, y2 + 0.5)
@@ -1124,6 +1126,52 @@ export function paintSheetDrawings(sheet: XlsxSheet, drawings: readonly XlsxDraw
     },
     paintText(node, context, w, h) { if (node.textBody) paintTextBody(node.textBody, context, 0, 0, w, h, prepared?.resolveFont ?? (f => f), sheet.drawingTheme) },
   })
+}
+
+/** @internal The horizontal band [x0, x1] of a laid-out body whose single line
+ * of text is painted past its own box into empty neighbours (S13), widened to
+ * cover the box; undefined when the text stays inside it. */
+export function spillSpan(body: CellBodyLayout): { x0: number; x1: number } | undefined {
+  const text = body.text
+  if (!text) return undefined
+  let x0: number, x1: number
+  if (text.kind === 'plain') {
+    x0 = text.clipX ? Math.max(text.tx, text.clipX.x0) : text.tx
+    x1 = text.clipX ? Math.min(text.tx + text.width, text.clipX.x1) : text.tx + text.width
+  } else {
+    if (text.wrap || text.rotation || text.stacked) return undefined
+    x0 = text.clip.x
+    x1 = text.clip.x + text.clip.width
+  }
+  if (x0 >= body.x && x1 <= body.x + body.w) return undefined
+  return { x0: Math.min(x0, body.x), x1: Math.max(x1, body.x + body.w) }
+}
+/** Spill bands of laid-out bodies, with the rows they occupy. */
+function spillBands(bodies: readonly CellBodyLayout[]): Array<{ x0: number; x1: number; y0: number; y1: number }> {
+  const out: Array<{ x0: number; x1: number; y0: number; y1: number }> = []
+  for (const body of bodies) {
+    const span = spillSpan(body)
+    if (span) out.push({ ...span, y0: body.y, y1: body.y + body.h })
+  }
+  return out
+}
+/** Vertical gridline segments at x minus the rows where a spill band
+ * crosses x strictly inside it (a clip at a blocking neighbour keeps its edge). */
+function withoutSpills(segments: Array<[number, number]>, x: number, spills: ReadonlyArray<{ x0: number; x1: number; y0: number; y1: number }>): Array<[number, number]> {
+  const hidden = spills.filter(band => band.x0 < x && x < band.x1).map(band => [band.y0, band.y1] as [number, number])
+  if (!hidden.length) return segments
+  hidden.sort((a, b) => a[0] - b[0])
+  const out: Array<[number, number]> = []
+  for (const [start, end] of segments) {
+    let pos = start
+    for (const [h0, h1] of hidden) {
+      if (h1 <= pos || h0 >= end) continue
+      if (h0 > pos) out.push([pos, h0])
+      pos = Math.max(pos, h1)
+    }
+    if (pos < end) out.push([pos, end])
+  }
+  return out
 }
 
 /**

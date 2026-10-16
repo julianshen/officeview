@@ -6,6 +6,7 @@
 import { describe, expect, it } from 'vitest'
 import { computeMetrics, renderSheet, type GridMetrics } from '../src/xlsx/render'
 import { buildSheetGeometry } from '../src/xlsx/view/viewport'
+import { renderSheetViewport } from '../src/xlsx/view/renderViewport'
 import { buildGeometry } from '../src/xlsx/view/source'
 import type { XlsxCell, XlsxCellStyle, XlsxSheet } from '../src/xlsx/types'
 import { buildXlsx } from '../src/testdata/ooxml-builders'
@@ -139,5 +140,51 @@ describe('#4 border colours parse from styles.xml', () => {
     expect(doc.sheets[0].rows[0].cells[0].style).toMatchObject(expected)
     const paged = await workbookFormatting(parseXml('<workbook><workbookPr/></workbook>'), styles)
     expect(paged.styles[1]).toMatchObject(expected)
+  })
+})
+
+describe('#8 gridlines are hidden under text spilling into empty neighbours', () => {
+  /** Vertical gridline segments [y0, y1] at device x (gridline stroke only). */
+  const verticalAt = (ops: PaintOp[], x: number) => {
+    const out: Array<[number, number]> = []
+    for (let i = 0; i < ops.length - 1; i++) {
+      const a = ops[i], b = ops[i + 1]
+      if (a.op === 'moveTo' && b.op === 'lineTo' && a.strokeStyle === '#d0d0d0' && (a.args as number[])[0] === x && (b.args as number[])[0] === x) out.push([(a.args as number[])[1], (b.args as number[])[1]])
+    }
+    return out
+  }
+  const covers = (segs: Array<[number, number]>, y: number) => segs.some(([a, b]) => Math.min(a, b) < y && y < Math.max(a, b))
+  // A1 spills right across B and C (30 glyphs x 7px = 210px); A2 is blocked by B2;
+  // D3 is right-aligned and spills left across C.
+  const cells = () => sheetOf([
+    { row: 0, col: 0, value: 'x'.repeat(30) },
+    { row: 1, col: 0, value: 'y'.repeat(30) }, { row: 1, col: 1, value: 'b' },
+    { row: 2, col: 3, value: 'z'.repeat(14), style: style({ horizontal: 'right' }) },
+  ])
+  const check = (ops: PaintOp[]) => {
+    // Row 1 (y 0..20): the B|C and C|D lines vanish under the spill, D|E stays (text ends at 213).
+    expect(covers(verticalAt(ops, 64.5), 10)).toBe(false)
+    expect(covers(verticalAt(ops, 128.5), 10)).toBe(false)
+    expect(covers(verticalAt(ops, 256.5), 10)).toBe(true)
+    // Row 2: blocked by B2, so A|B keeps its line; rows elsewhere keep theirs.
+    expect(covers(verticalAt(ops, 64.5), 30)).toBe(true)
+    expect(covers(verticalAt(ops, 128.5), 30)).toBe(true)
+    // Row 3: right-aligned D3 (98px) spills left over the C|D line only.
+    expect(covers(verticalAt(ops, 192.5), 50)).toBe(false)
+    expect(covers(verticalAt(ops, 128.5), 50)).toBe(true)
+  }
+  it('static path', () => {
+    const { ctx, ops } = recordingContext()
+    renderSheet(cells(), ctx, grid([64, 64, 64, 64, 64], [20, 20, 20]))
+    check(ops)
+  })
+  it('interactive viewport path', () => {
+    const sheet = cells()
+    const geometry = buildSheetGeometry(sheet)
+    if (geometry.kind !== 'ready') throw new Error('geometry')
+    const { ctx, ops } = recordingContext()
+    const result = renderSheetViewport(sheet, ctx, geometry, { box: { x: 0, y: 0, width: 320, height: 60 }, zoom: 1, deviceScale: 1 })
+    expect(result.kind).toBe('detail')
+    check(ops)
   })
 })
