@@ -129,6 +129,25 @@ describe('#18 status line', () => {
   }, FIRST_PAINT_TEST.timeout)
 })
 
+describe('layout stability: horizontal scroll', () => {
+  it('moves rows by transform only: gridcell lefts and the row header position stay fixed', () => {
+    const props = gridFixture()
+    const at = (x: number) => createScrollWindow(props.projection, props.viewport, { offset: { x, y: 0 } })
+    const ui = render(<GridSemantics {...props} window={at(0)} />)
+    const first = ui.container.querySelectorAll<HTMLElement>('[role=row] [role=gridcell]')[1] // not the edge cell
+    const col = first.getAttribute('aria-colindex')
+    const before = { left: first.style.left, row: (first.parentElement as HTMLElement).style.transform }
+    ui.rerender(<GridSemantics {...props} window={at(37)} />)
+    const after = document.getElementById(first.id) as HTMLElement
+    expect(after.getAttribute('aria-colindex')).toBe(col)
+    expect(after.style.left).toBe(before.left) // no layout move
+    const row = after.parentElement as HTMLElement
+    expect(row.style.transform).not.toBe(before.row) // the row moved by transform
+    const x = Number(/translate\(([-\d.e]+)px/.exec(row.style.transform)![1])
+    expect((row.querySelector('[role=rowheader]') as HTMLElement).style.transform).toBe(`translateX(${-x}px)`)
+  })
+})
+
 describe('#20 find overlay', () => {
   it('paints the active match as an inset fill that never touches the cell edges (no underline-like stroke)', () => {
     const calls: Array<[string, number[]]> = []

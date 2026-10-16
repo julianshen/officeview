@@ -211,8 +211,9 @@ it('reserves touch header chrome for visible 44px controls and retains source-sp
       expect(button.style.minHeight).toBe('44px')
       expect(button.closest('[hidden]')).toBeNull()
     }
-    // Rows follow the scroll window by transform (no layout shift).
-    expect((grid.querySelector('[aria-rowindex="2"]') as HTMLElement).style.transform).toBe('translateY(132px)')
+    // Rows follow the scroll window by transform on both axes (no layout shift):
+    // x = gutter + the row frame's shift (0 at the origin), y = header + row offset.
+    expect((grid.querySelector('[aria-rowindex="2"]') as HTMLElement).style.transform).toBe('translate(44px, 132px)')
     act(() => grid.focus())
     fireEvent.click(grid, { detail: 1, clientX: 54, clientY: 142 })
     expect(change).toHaveBeenCalledOnce()

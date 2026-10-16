@@ -2,11 +2,11 @@ import { useId, useLayoutEffect, useRef, useState, type KeyboardEvent, type Mous
 import type { CacheIdentity, GridSelection, SheetView, ScrollWindow, SourceRowInterval, ProfileId } from '../../xlsx/view/contracts'
 import type { ProjectedSheetMetrics } from '../../xlsx/view/projection'
 import type { SourceCell } from '../../xlsx/view/coordinates'
-import { visibleLogicalViewport, navigateKey, navigateTo, hitTestViewport, type NavigationKey, type ViewportSize } from '../../xlsx/view/scrollWindow'
+import { visibleLogicalViewport, navigateKey, navigateTo, hitTestViewport, logicalToViewport, type NavigationKey, type ViewportSize } from '../../xlsx/view/scrollWindow'
 import { MAX_ROWS, MAX_COLS, cellId, columnToLetters, formatA1 } from '../../xlsx/view/coordinates'
 import { activeAnnouncement, boundedSelectionText, reconcileSelection, recordCounts, emptyGridSelection, selectCell, selectHeader } from '../../xlsx/view/selection'
 import { belowDetail } from '../../xlsx/view/viewport'
-import { GridHeaders, GridRowHeader, GRID_HEADER_SIZE, HEADER_COLORS, cellSelected, viewportHeaderBox, columnHeaderHeight } from './GridHeaders'
+import { GridHeaders, GridRowHeader, GRID_HEADER_SIZE, HEADER_COLORS, cellSelected, gridHeaderBox, viewportHeaderBox, columnHeaderHeight } from './GridHeaders'
 import { ViewerStatus, type ViewerStatusProps, type HiddenCellInspection } from './ViewerStatus'
 import { useControlMedia } from './controlMedia'
 
@@ -99,6 +99,19 @@ function shortHash(text: string): string {
   let hash = 2166136261
   for (let i = 0; i < text.length; i++) hash = Math.imul(hash ^ text.charCodeAt(i), 16777619)
   return (hash >>> 0).toString(36)
+}
+/** Row-local cell frames are anchored on 4M-px blocks, so CSS lengths stay
+ * small on huge sheets and cell `left`s change only when a block is crossed. */
+const ROW_FRAME_BLOCK = 4_194_304
+/** Viewport x of the row frame's origin (logical 0 snapped to its block). */
+function rowFrameShift(originX: number): number {
+  return originX + Math.floor(-originX / ROW_FRAME_BLOCK) * ROW_FRAME_BLOCK
+}
+/** A column box in the row frame: its unclamped viewport box minus the frame
+ * shift, bounded to a pane-sized margin so a giant cell stays small DOM. */
+function rowLocalColumn(full: { x: number; width: number }, viewport: ViewportSize, shift: number): { x: number; width: number } {
+  const x0 = Math.max(full.x, -viewport.width), x1 = Math.min(full.x + full.width, 2 * viewport.width)
+  return { x: x0 - shift, width: Math.max(0, x1 - x0) }
 }
 const hiddenText = { position: 'absolute', width: 1, height: 1, overflow: 'hidden', clipPath: 'inset(50%)', whiteSpace: 'nowrap' } as const
 /** S5 supplies current presentation snapshots and mounts its bounded canvas in
@@ -245,6 +258,7 @@ export function GridSemantics(props: GridSemanticsProps): ReactElement {
     },
     onSelectAll: () => publish(() => ({ selection: { active, anchor: active, ranges: [{ rows: { kind: 'intervals', intervals: [{ r0: 0, r1: projection.rows.logicalCount - 1 }] }, cols: [{ c0: 0, c1: projection.cols.logicalCount - 1 }] }] }, window: scroll, announcement: 'Worksheet selected.' })),
   }
+  const rowShift = rowFrameShift(logicalToViewport(scroll, { x: 0, y: 0 }).x)
   const status = [props.announcement, current.announcement, notice, coarse || subDetail ? 'Zoom in or inspect a cell for detail.' : ''].filter(Boolean).join(' ')
   return <div ref={wrapperRef} onKeyDown={keyDown} onBlur={event => { if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setControlMode(false) }} style={props.fill ? { position: 'absolute', inset: 0 } : { position: 'relative', width: viewport.width + gutter, height: viewport.height + headerHeight + STATUS_BAR_HEIGHT }}>
     <div ref={gridRef} role="grid" aria-label={props.label ?? 'Worksheet'} aria-busy={props.pendingSortColumn != null ? true : undefined} aria-rowcount={MAX_ROWS + 1} aria-colcount={MAX_COLS + 1}
@@ -274,26 +288,29 @@ export function GridSemantics(props: GridSemanticsProps): ReactElement {
       <GridHeaders {...headerProps} />
       {slots.map(slot => {
         const row = projection.order.displayToSource(slot), extra = transient && slot === activeSlot
+        // Horizontal scroll moves each row by transform; its cells keep fixed
+        // `left`s in a row-local frame anchored on a coarse block, and the row
+        // header cancels the row's horizontal transform.
         const cells = extra ? [active!.col] : [...columns]
         if (!extra && slot === activeSlot && active && !cells.includes(active.col)) cells.push(active.col)
         const box = viewportHeaderBox(projection, scroll, viewport, 'row', slot)
         // Rows and header controls follow the scroll window by transform: a
         // transform is not a layout shift, so the viewer adds no CLS to its host.
-        // Cells keep `left` inside their row (per-cell transforms would make every
-        // cell its own paint layer, ~1 KB each; their moves register no shift).
+        // Cells keep `left` inside their row, fixed while the window scrolls (no
+        // per-cell transforms: each would make the cell its own paint layer).
         return <div key={slot} role="row" aria-rowindex={slot + 2} data-transient-active={extra ? 'true' : undefined}
-          style={extra ? { ...hiddenText, top: 0, left: 0, pointerEvents: 'none' } : { position: 'absolute', top: 0, left: 0, transform: `translateY(${headerHeight + box.y}px)`, height: box.height, width: '100%', pointerEvents: 'none' }}>
-          <GridRowHeader props={headerProps} slot={slot} />
+          style={extra ? { ...hiddenText, top: 0, left: 0, pointerEvents: 'none' } : { position: 'absolute', top: 0, left: 0, transform: `translate(${gutter + rowShift}px, ${headerHeight + box.y}px)`, height: box.height, width: '100%', pointerEvents: 'none' }}>
+          <GridRowHeader props={headerProps} slot={slot} cancelX={extra ? 0 : gutter + rowShift} />
           {cells.map(col => {
             const at = { row, col }, value = props.cellPresentation?.(at) ?? { text: '', state: 'loading' as const }
-            const column = viewportHeaderBox(projection, scroll, viewport, 'column', col)
+            const column = rowLocalColumn(gridHeaderBox(projection, scroll, 'column', col), viewport, rowShift)
             const offscreen = extra || (slot === activeSlot && active?.col === col && !columns.includes(col))
             const isSelected = cellSelected(selection.ranges, at)
             // Name from contents: the visually hidden text IS the name, so VoiceOver
             // reads the value once (no label + contents) and never "blank" (S13 V1/V5).
             return <div key={col} role="gridcell" id={`${prefix}-cell-${cellId(row, col)}`} aria-colindex={col + 2}
               aria-selected={isSelected} aria-description={[value.state, multiSelected && isSelected ? 'selected' : ''].filter(Boolean).join(', ') || undefined}
-              style={offscreen ? { ...hiddenText, top: 0, left: 0 } : { position: 'absolute', top: 0, left: gutter + column.x, width: column.width, height: box.height }}><span style={hiddenText}>{activeAnnouncement(projection, at, value.text)}</span></div>
+              style={offscreen ? { ...hiddenText, top: 0, left: 0 } : { position: 'absolute', top: 0, left: column.x, width: column.width, height: box.height }}><span style={hiddenText}>{activeAnnouncement(projection, at, value.text)}</span></div>
           })}
         </div>
       })}
