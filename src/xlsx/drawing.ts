@@ -344,6 +344,10 @@ async function parseObject(pkg: OfficePackage, owner: string, name: string, node
   // A worksheet anchor owns the top-level box. Pictures and native shapes may
   // omit their optional local transform, but an explicitly malformed one is invalid.
   if (anchorTopLevel && !localTransform && (name === 'sp' || name === 'cxnSp' || name === 'pic')) t.transformValid = true
+  // A top-level graphic frame is placed by its anchor; an xfrm without off/ext
+  // (openpyxl writes `<xdr:xfrm/>`) carries no geometry of its own.
+  const frameTransform = name === 'graphicFrame' ? child(node, 'xfrm') : undefined
+  if (anchorTopLevel && name === 'graphicFrame' && !localTransform && (!frameTransform || (!child(frameTransform, 'off') && !child(frameTransform, 'ext')))) t.transformValid = true
   const result: XlsxDrawing = { ...t, source: source(owner, path, name, node, representation) }
   if (name === 'grpSp') {
     const currentGroupStyle = parseGroupShapeProperties(spPr, theme, groupStyle)
