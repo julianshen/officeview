@@ -14,6 +14,7 @@ import { parseXlsx } from '../src/xlsx/parse'
 import type { WorkerCommand, WorkerReply } from '../src/xlsx/view/contracts'
 import type { SheetFrameStats } from '../src/components/xlsx/InteractiveSheetDoc'
 import { xlsxBytes } from './helpers/xlsx-package'
+import { FIRST_PAINT_TEST, FIRST_PAINT_WAIT } from './helpers/viewer-timing'
 
 // Admission's object path allows one row, so these small fixtures are 'paged'
 // on the main thread and in the worker alike (the same override both sides).
@@ -83,7 +84,7 @@ function go(ui: ReturnType<typeof render>, at: string) {
 const internal = (props: Record<string, unknown>) => props as object
 
 describe('S5.4 routing: interactiveSheets mounts the worker-backed viewer for paged admissions', () => {
-  it('opens a paged admission in the worker (no main-thread parse, shell document) and shows notices once', async () => {
+  it('opens a paged admission in the worker (no main-thread parse, shell document) and shows notices once', FIRST_PAINT_TEST, async () => {
     const mainPlanner = vi.spyOn(viewportPlanner, 'planViewport')
     const h = workerHarness()
     // Hold worker viewport replies: paint must fall back to the main-thread
@@ -91,7 +92,7 @@ describe('S5.4 routing: interactiveSheets mounts the worker-backed viewer for pa
     h.hold(command => command.kind === 'viewport')
     const factory = vi.fn(() => h.port)
     const ui = render(<OfficeFile data={workbook()} interactiveSheets viewerWorker={factory} />)
-    await waitFor(() => expect(ui.getByRole('gridcell', { name: /alpha/ })).toBeTruthy())
+    await waitFor(() => expect(ui.getByRole('gridcell', { name: /alpha/ })).toBeTruthy(), FIRST_PAINT_WAIT)
     // The main-thread planner is the fallback, not the painter: it runs while
     // worker plans are still pending, and must paint the same records (the
     // previous never-called assertion encoded the exclusive-plans design that

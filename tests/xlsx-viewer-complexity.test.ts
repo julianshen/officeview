@@ -36,6 +36,7 @@ import { createSheetMetrics } from '../src/xlsx/view/projection'
 import { MAX_COLS, MAX_ROWS } from '../src/xlsx/view/coordinates'
 import { createFixture } from './helpers/xlsx-viewer-fixtures'
 import { xlsxBytes } from './helpers/xlsx-package'
+import { FIRST_PAINT_WAIT } from './helpers/viewer-timing'
 
 // The object path admits one row, so the worker-backed tests below are paged
 // on the main thread and in the worker alike (as in the S5.4 suite).
@@ -271,12 +272,12 @@ describe('resident (object) viewer: navigation and paint stay viewport-bounded',
     const doc = await objectDoc(CORNERS)
     const f = frames()
     const ui = render(createElement(OfficeDoc, { document: doc, interactiveSheets: true, ...internal({ onFrame: f.onFrame }) }))
-    await waitFor(() => expect(ui.getByRole('gridcell', { name: /origin/ })).toBeTruthy())
+    await waitFor(() => expect(ui.getByRole('gridcell', { name: /origin/ })).toBeTruthy(), FIRST_PAINT_WAIT)
     // Warm-up: the same gestures three times, so first-use module/JIT state and
     // the bounded tile/layout caches are full before the measured window.
     for (let round = 0; round < 3; round++) {
       go(ui, 'XFD1048576')
-      await waitFor(() => expect(ui.getByRole('gridcell', { name: /corner/ })).toBeTruthy())
+      await waitFor(() => expect(ui.getByRole('gridcell', { name: /corner/ })).toBeTruthy(), FIRST_PAINT_WAIT)
       go(ui, 'A1048576')
       await waitFor(() => expect(activeId(ui)).toBe((MAX_ROWS - 1) * MAX_COLS))
       go(ui, 'A1')
@@ -343,7 +344,7 @@ describe('worker-backed viewer: bounded reads, one parse, no per-command reparse
     const h = workerHarness()
     const blob = new Blob([xlsxBytes({ sheetData: table(3000) + `<row r="1048576">${inline('XFD1048576', 'corner')}</row>` }) as BlobPart])
     const ui = render(createElement(OfficeFile, { data: blob, interactiveSheets: true, viewerWorker: () => h.port }))
-    await waitFor(() => expect(ui.getByRole('gridcell', { name: /^A1, value id/ })).toBeTruthy())
+    await waitFor(() => expect(ui.getByRole('gridcell', { name: /^A1, value id/ })).toBeTruthy(), FIRST_PAINT_WAIT)
     const ledger = await measure(async () => {
       go(ui, 'XFD1048576')
       await waitFor(() => expect(ui.getByRole('gridcell', { name: /corner/ })).toBeTruthy())

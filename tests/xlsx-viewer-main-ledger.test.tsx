@@ -61,6 +61,7 @@ import { DOM_CLASS_BYTES } from '../src/xlsx/view/mainLedger'
 import type { MainPool } from '../src/xlsx/view/mainLedger'
 import { workbookOf } from './helpers/xlsx-find'
 import { xlsxBytes } from './helpers/xlsx-package'
+import { FIRST_PAINT_TEST, FIRST_PAINT_WAIT } from './helpers/viewer-timing'
 
 vi.mock('../src/xlsx/storage/importSession', async original => {
   const actual = await original<typeof import('../src/xlsx/storage/importSession')>()
@@ -284,7 +285,7 @@ describe('worker-backed document ledger', () => {
     await release()
   })
 
-  it('in the viewer: row cache, replies, view buffers, DOM; unmount releases the viewer pools, collection the rest', async () => {
+  it('in the viewer: row cache, replies, view buffers, DOM; unmount releases the viewer pools, collection the rest', FIRST_PAINT_TEST, async () => {
     // The render result lives only inside this function: a test frame holding
     // it would itself keep the tree (and its buffers) reachable.
     const ledger = await (async () => {
@@ -292,7 +293,7 @@ describe('worker-backed document ledger', () => {
       let found: MainMemoryLedger | null = null
       const internal = { onMainLedger: (l: MainMemoryLedger) => { found = l } } as object
       const ui = render(<OfficeFile data={workbook()} interactiveSheets viewerWorker={() => h.port} {...internal} />)
-      await waitFor(() => expect(ui.getByRole('gridcell', { name: /value name 1\b/ })).toBeTruthy())
+      await waitFor(() => expect(ui.getByRole('gridcell', { name: /value name 1\b/ })).toBeTruthy(), FIRST_PAINT_WAIT)
       await tick()
       const loaded = found!.snapshot()
       expect(loaded.byPool.rowCache).toBeGreaterThan(0)

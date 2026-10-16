@@ -34,6 +34,7 @@ import type { WorkerCommand, WorkerReply } from '../src/xlsx/view/contracts'
 import type { WorkbookSource } from '../src/worker/viewerSession'
 import { xlsxBytes } from './helpers/xlsx-package'
 import { workbookOf } from './helpers/xlsx-find'
+import { FIRST_PAINT_TEST, FIRST_PAINT_WAIT } from './helpers/viewer-timing'
 
 afterEach(() => { cleanup(); vi.restoreAllMocks(); setters.counting = false; setters.calls = 0 })
 
@@ -81,10 +82,10 @@ function importingOnce(h: ReturnType<typeof workerHarness>, sheetId: string) {
 }
 
 describe('S13.3 r3: automatic search refresh', () => {
-  it('#3: a refresh still running at unmount publishes nothing afterwards', async () => {
+  it('#3: a refresh still running at unmount publishes nothing afterwards', FIRST_PAINT_TEST, async () => {
     const h = workerHarness()
     const ui = render(<OfficeFile data={workbook()} interactiveSheets viewerWorker={() => h.port} />)
-    await waitFor(() => expect(ui.getByRole('gridcell', { name: /alpha/ })).toBeTruthy())
+    await waitFor(() => expect(ui.getByRole('gridcell', { name: /alpha/ })).toBeTruthy(), FIRST_PAINT_WAIT)
     importingOnce(h, '1')
     // Hold the automatic (second) search reply.
     h.hold(command => command.kind === 'search' && h.searches() >= 2)
@@ -98,10 +99,10 @@ describe('S13.3 r3: automatic search refresh', () => {
     expect(setters.calls - afterUnmount, 'state setters run after unmount').toBe(0)
   })
 
-  it('r4 #3: a new query with the same incomplete sheets is refreshed with its own arguments', async () => {
+  it('r4 #3: a new query with the same incomplete sheets is refreshed with its own arguments', FIRST_PAINT_TEST, async () => {
     const h = workerHarness()
     const ui = render(<OfficeFile data={workbook()} interactiveSheets viewerWorker={() => h.port} />)
-    await waitFor(() => expect(ui.getByRole('gridcell', { name: /alpha/ })).toBeTruthy())
+    await waitFor(() => expect(ui.getByRole('gridcell', { name: /alpha/ })).toBeTruthy(), FIRST_PAINT_WAIT)
     // The sheet's structure is still importing for both searches...
     const structural = importingOnce(h, '1')
     const original = structural.getMockImplementation()!
