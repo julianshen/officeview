@@ -48,14 +48,14 @@ import { cellDisplayText } from '../../xlsx/render'
 import { createCellLayoutHost } from '../../xlsx/view/renderViewport'
 import { createObjectWorkbookSource } from '../../worker/viewerObjectSource'
 import { BITMAP_BUDGETS, MAIN_THREAD_BUDGETS, type TileCacheStats } from '../../xlsx/view/tileCache'
-import { gridGeometryToViewport, gridSelectionOverlay, paintGridSelectionOverlay, paintSearchOverlay, type HighlightRect } from '../../core/overlay'
+import { gridGeometryToViewport, gridSelectionOverlay, paintGridSelectionOverlay, type HighlightRect } from '../../core/overlay'
 import { normalizeWatermark, type WatermarkOptions } from '../../core/watermark'
 import type { FallbackFontsOptions } from '../../core/fonts/fallback'
 import type { FontDiagnostic } from '../../core/fonts/types'
 import { SheetImageCache, imageBudgetFor, preparePrintUnits, prepareSheetAssets, type PrintUnitsOptions, type SheetAssetsLease } from './sheetAssets'
 import type { Paintable, PaintableArray } from '../../render/paint'
-import { GridSemantics, type GridTransition } from './GridSemantics'
-import { GRID_HEADER_SIZE, columnHeaderHeight } from './GridHeaders'
+import { GridSemantics, STATUS_BAR_HEIGHT, type GridTransition } from './GridSemantics'
+import { GRID_HEADER_SIZE, columnHeaderHeight, rowGutterWidth } from './GridHeaders'
 import { useControlMedia, useLive } from './controlMedia'
 import { useDevicePixelRatio } from './devicePixelRatio'
 import { domClassBytes, domClassCounts } from './domCost'
@@ -66,9 +66,9 @@ import type { ControlSnapshot } from './controlsClient'
 import { failureText } from './controlUi'
 import { copySelection, copySessionBudget } from '../../xlsx/view/copy'
 import { LARGE_EXPORT_MESSAGE } from '../../render/paint'
-import { SAVED_VALUES_DIAGNOSTIC } from '../../xlsx/view/values'
+import { SAVED_VALUES_DIAGNOSTIC, SAVED_VALUES_STATUS } from '../../xlsx/view/values'
 import type { WorkbookSource } from '../../worker/viewerSession'
-import { coarseSelectionRecords, overlayRecords, selectionContains } from './selectionOverlay'
+import { coarseSelectionRecords, overlayRecords, paintFindOverlay, selectionContains } from './selectionOverlay'
 import { SheetNavigator } from './SheetNavigator'
 import type { HiddenCellInspection } from './ViewerStatus'
 import { SheetTileRenderer, TILE_BYTES, admitDeviceScale, paneSurfaceBytes, type SheetFrame } from './sheetTiles'
@@ -166,7 +166,9 @@ const MAX_FONT_NOTICE_FAMILIES = 3
  * never print; its print container does. */
 function sheetPrintCss(id: string): string {
   const own = `[data-officeview-sheet-instance="${id}"]`
-  return `${own} [data-officeview-sheet-print]{display:none}@media print{${own} [data-officeview-sheet-screen],${own} [data-officeview-chrome]{display:none!important}${own} [data-officeview-sheet-print]{display:block!important}}`
+  // In print the viewer is a plain white block: a flex container would ignore
+  // the per-sheet page breaks, and the screen background must not print.
+  return `${own} [data-officeview-sheet-print]{display:none}@media print{${own} [data-officeview-sheet-screen],${own} [data-officeview-chrome]{display:none!important}${own}{display:block!important}${own} [data-officeview-root]{display:block!important;background:#fff!important}${own} [data-officeview-sheet-print]{display:block!important}}`
 }
 /** One document-wide print owner: the viewer running its own print leaves every
  * other spreadsheet viewer out of the printout. The latest starter takes over
@@ -187,6 +189,30 @@ function yieldPrint(id: string): void {
   printOwner.style.remove()
   printOwner = null
 }
+/** Viewer chrome font (toolbar, headers, status, popups): never the host page's. */
+const CHROME_FONT = 'system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif'
+/** UA form controls do not inherit fonts; one shared rule (while any viewer is mounted) makes them. */
+let fontRule: { style: HTMLStyleElement; users: number } | null = null
+function retainFontRule(): () => void {
+  if (!fontRule) {
+    const style = globalThis.document.createElement('style')
+    style.setAttribute('data-officeview-sheet-font', '')
+    // The search row sits in the toolbar flow (never over the navigator), and the
+    // zoom cluster clears the status line.
+    style.textContent = '[data-officeview-sheet-instance] :is(button,input,select,textarea){font:inherit}[data-officeview-sheet-instance] h2{font-size:1.15em;margin:0 0 8px}'
+      + '[data-officeview-ui=sheet-search]>[data-testid=officeview-search]{position:static!important;max-width:100%!important;box-shadow:none!important;padding:0!important}'
+      + `[data-officeview-sheet-instance]>[data-testid=officeview-zoom-controls]{bottom:calc(env(safe-area-inset-bottom) + ${STATUS_BAR_HEIGHT + 12}px)!important}`
+    globalThis.document.head.appendChild(style)
+    fontRule = { style, users: 0 }
+  }
+  const rule = fontRule
+  rule.users++
+  return () => { if (--rule.users === 0 && fontRule === rule) { rule.style.remove(); fontRule = null } }
+}
+/** Print units render at this device scale when the print bitmap budget admits it. */
+const PRINT_SCALE = 2
+/** Per-axis canvas ceiling (§11.5 raster admission). */
+const PRINT_MAX_AXIS = 16384
 function fontNotice(diagnostics: readonly FontDiagnostic[]): string[] {
   const families = [...new Set(diagnostics.map(d => d.family).filter((family): family is string => Boolean(family)))]
   if (!families.length) return []
@@ -437,7 +463,11 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
   }, [live])
   const touchControls = useControlMedia('(pointer: coarse)')
   const headerHeight = columnHeaderHeight(touchControls, true, true)
-  const viewport: ViewportSize = useMemo(() => ({ width: Math.max(1, pane.width - GRID_HEADER_SIZE), height: Math.max(1, pane.height - headerHeight) }), [pane, headerHeight])
+  // The row gutter fits the largest row number shown (it widens past row 9999),
+  // measured on the window this sheet last presented.
+  const presented = entry ? windows.get(activeSheetId) : undefined
+  const gutter = entry && presented ? rowGutterWidth(lastVisibleRowLabel(entry.metrics, presented, Math.max(1, pane.height - headerHeight - STATUS_BAR_HEIGHT))) : GRID_HEADER_SIZE
+  const viewport: ViewportSize = useMemo(() => ({ width: Math.max(1, pane.width - gutter), height: Math.max(1, pane.height - headerHeight - STATUS_BAR_HEIGHT) }), [pane, headerHeight, gutter])
   // Live ratio: a display move re-renders here, re-admits the pool and re-keys tiles (S13 D-DPR).
   const nativeDpr = Math.min(useDevicePixelRatio(), 3)
   // Admit the pane surfaces before sizing any canvas; a lower device scale keeps
@@ -973,12 +1003,12 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
       if (live.current && token === copyToken.current) setCopyPending(false)
     }
   }
-  const [valueNotice, setValueNotice] = useState(() => source.valueStatus?.().message)
+  const [valueNotice, setValueNotice] = useState(() => savedValuesNotice(source.valueStatus?.()))
   useEffect(() => {
     const refresh = () => {
       if (!live.current) return false
       const status = source.valueStatus?.()
-      setValueNotice(status?.message)
+      setValueNotice(savedValuesNotice(status))
       return status?.policy === 'cached' && status.formulas === undefined && !status.ended
     }
     if (!refresh()) return
@@ -1027,7 +1057,7 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
       })
     }
     setFindOverflowNotice(findRefusal)
-    paintSearchOverlay(ctx, highlights, active)
+    paintFindOverlay(ctx, highlights, active)
     if (!selection.ranges.length) setSelectionIncomplete(false)
     else {
       const records = overlayRecords(entry.metrics, pane, profile)
@@ -1171,7 +1201,7 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
   // budget left beside the pane surfaces (tiles are released first); units that do
   // not fit are replaced by an explicit "omitted" notice, never silently dropped.
   // Every publication re-checks its request token, permission and mount (§10.1).
-  const [printPages, setPrintPages] = useState<ReadonlyArray<{ name: string; page: Paintable | null; refusedImages: number }> | null>(null)
+  const [printPages, setPrintPages] = useState<ReadonlyArray<{ name: string; page: Paintable | null; scale: number; refusedImages: number }> | null>(null)
   const printLease = useRef<PaintableArray | null>(null)
   const printToken = useRef(0)
   const allowPrintRef = useRef(allowPrint)
@@ -1199,10 +1229,13 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
     let reserved = 0
     if (pages.some(page => page.refusal?.length)) setAnnouncement(LARGE_EXPORT_MESSAGE)
     const units = pages.map((page, index) => {
-      const bytes = page.spec.widthPx * page.spec.heightPx * 4
-      const admitted = bytes <= remaining
-      if (admitted) { remaining -= bytes; reserved += bytes }
-      return { name: doc.sheets[index]?.name ?? `Sheet ${index + 1}`, page: admitted ? page : null, refusedImages: pages.refusedImages?.[index] ?? 0 }
+      // Crisp print: PRINT_SCALE device pixels per spec px when that store fits
+      // (budget and axis ceiling), else 1x; neither fits → omitted with a notice.
+      const bytesAt = (scale: number) => page.spec.widthPx * scale * page.spec.heightPx * scale * 4
+      const fits = (scale: number) => bytesAt(scale) <= remaining && Math.max(page.spec.widthPx, page.spec.heightPx) * scale <= PRINT_MAX_AXIS
+      const scale = fits(PRINT_SCALE) ? PRINT_SCALE : fits(1) ? 1 : 0
+      if (scale) { remaining -= bytesAt(scale); reserved += bytesAt(scale) }
+      return { name: doc.sheets[index]?.name ?? `Sheet ${index + 1}`, page: scale ? page : null, scale: scale || 1, refusedImages: pages.refusedImages?.[index] ?? 0 }
     })
     printLease.current?.dispose()
     printLease.current = pages
@@ -1219,9 +1252,9 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
     printPages.forEach((unit, index) => {
       const canvas = printRefs.current[index]
       if (!unit.page || !canvas) return
-      sizeCanvas(canvas, unit.page.spec.widthPx, unit.page.spec.heightPx)
+      sizeCanvas(canvas, unit.page.spec.widthPx * unit.scale, unit.page.spec.heightPx * unit.scale)
       const ctx = canvas.getContext('2d')
-      if (ctx) unit.page.paint(ctx)
+      if (ctx) { ctx.setTransform(unit.scale, 0, 0, unit.scale, 0, 0); unit.page.paint(ctx) }
     })
     if (token === printToken.current && allowPrintRef.current) { claimPrint(instance); window.print?.() }
   }, [printPages])
@@ -1256,6 +1289,8 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
     return () => guard.remove()
   }, [allowPrint, instance])
 
+  useLayoutEffect(() => retainFontRule(), [])
+
   const onGridChange = (transition: GridTransition) => {
     cancelCopy()
     session.setSelection(activeSheetId, transition.selection)
@@ -1288,7 +1323,9 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
   const zoom = scroll?.zoom ?? 1
   const canvasStyle: CSSProperties = { position: 'absolute', left: 0, top: 0, width: viewport.width, height: viewport.height, pointerEvents: 'none' }
   return (
-    <div ref={wrapperRef} data-officeview-sheet-instance={instance} style={{ position: 'relative', display: 'flex', flexDirection: 'column', minHeight: 0 }}>
+    // The outer wrapper is the host's flex item: it fills a sized flex-column host;
+    // an unsized host gets the default 400px pane.
+    <div ref={wrapperRef} data-officeview-sheet-instance={instance} style={{ position: 'relative', display: 'flex', flexDirection: 'column', minHeight: 0, flex: '1 1 auto', fontFamily: CHROME_FONT, fontSize: 13, color: '#1f2937' }}>
       <div
         ref={rootRef}
         className={props.className}
@@ -1306,12 +1343,21 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
         }}
       >
         <div data-officeview-sheet-screen="" style={{ display: 'flex', flexDirection: 'column', minHeight: 0, flex: '1 1 auto' }}>
+        <div data-officeview-ui="sheet-toolbar" style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: '4px 12px', padding: '4px 8px', background: '#f9fafb', boxShadow: 'inset 0 -1px #858b94' }}>
         <SheetNavigator documentId={docId} sheets={doc.sheets.map((sheet, index) => ({ id: sheetIds[index], name: sheet.name }))}
           activeSheetId={activeSheetId} onSheetChange={onSheetChange} onNavigate={onNavigate} onNotice={setAnnouncement} disabled={!entry} />
         <div data-officeview-ui="sheet-actions"><button type="button" disabled={!allowCopy || !selection.ranges.length || copyPending} onClick={() => void copyGrid()}>Copy selection</button>{copyPending && <button type="button" onClick={cancelCopy}>Cancel copy</button>}<button type="button" disabled={!allowPrint} onClick={() => void preparePrint()}>Print</button></div>
-        <div ref={paneRef} data-testid="officeview-sheet-pane" style={{ position: 'relative', flex: '1 1 auto', minHeight: 0, overflow: 'hidden', background: '#ffffff' }}>
+        {showSearch && (
+          <div data-officeview-ui="sheet-search" style={{ flex: '1 1 260px', minWidth: 0, display: 'flex', justifyContent: 'flex-end' }}>
+            <SearchBar inputRef={inputRef} query={query} onQuery={text => { searchGen.current++; setQuery(text) }} count={matchCount} active={activeHit < 0 ? -1 : pageOffset + activeHit}
+              countLabel={countLabel} note={searchNote}
+              indexing={searching} onPrev={() => void stepHit(-1)} onNext={() => void stepHit(1)} />
+          </div>
+        )}
+        </div>
+        <div ref={paneRef} data-testid="officeview-sheet-pane" style={{ position: 'relative', flex: `1 1 ${FALLBACK_PANE.height}px`, minHeight: 0, overflow: 'hidden', background: '#ffffff' }}>
           {entry && scroll && (
-            <GridSemantics owner={identity} projection={entry.metrics} view={entry.view} selection={selection} window={scroll} viewport={viewport}
+            <GridSemantics fill gutter={gutter} owner={identity} projection={entry.metrics} view={entry.view} selection={selection} window={scroll} viewport={viewport}
               body={entry.body} onChange={onGridChange} status={{ records: { ...snapshot(activeSheetId).records, completeness: loadState?.completeness ?? 'complete' }, countMode: 'body', loadReport: { status: 'ready', notices: [...notices, ...fontNotices, ...pagedDrawingNotices, ...(loadState?.failure ? [loadFailureNotice(loadState.failure, loadState.code)] : [])] } }}
               onSortCycle={(col, shift) => void sortCycle(col, shift)} pendingSortColumn={sortPending?.col ?? null} onFilter={(col, invoker) => { setPopup({ kind: 'filter', col, invoker }) }} onSortDialog={(col, invoker) => { setPopup({ kind: 'sort', col, invoker }) }} onNotice={setAnnouncement}
               popup={popup && controls ? { invoker: popup.invoker, close: closePopup, label: popup.kind === 'filter' ? 'Column filter' : 'Sort worksheet', content: popup.kind === 'filter' ? <FilterDropdown owner={identity} client={controls.client} applied={entry.view.filter} appliedSort={entry.view.sort} col={popup.col} invoker={popup.invoker} embedded onClose={closePopup} onApplied={() => rerender()} onNotice={setAnnouncement} /> : <SortDialog owner={identity} client={controls.client} applied={entry.view.sort} col={popup.col} invoker={popup.invoker} embedded onClose={closePopup} onApplied={() => rerender()} onNotice={setAnnouncement} /> } : undefined} announcement={[sortPending ? `Sorting column ${columnToLetters(sortPending.col)}…` : '', resourceNotice, overflowNotice, findOverflowNotice === overflowNotice ? '' : findOverflowNotice, assets?.sheetId !== activeSheetId ? 'Loading sheet…' : '', assets && assets.sheetId === activeSheetId && assets.lease.refusedImages > 0 ? `${assets.lease.refusedImages} picture${assets.lease.refusedImages === 1 ? ' is' : 's are'} not shown (image memory budget).` : '', selectionIncomplete ? 'Selection highlight is incomplete at this zoom; zoom in for detail.' : '', remote?.queryNotice === announcement ? '' : remote?.queryNotice, announcement].filter(Boolean).join(' ')} inspection={inspection} profile={profile} label={`Worksheet ${entry.sheet.name}`}
@@ -1337,22 +1383,19 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
             {!printPages && <p data-testid="officeview-sheet-print-notice">{remote ? PAGED_PRINT_MESSAGE : 'To print this spreadsheet, press Ctrl/Cmd+P inside the viewer.'}</p>}
             <div data-testid="officeview-sheet-print-pages">
               {printPages?.map((unit, index) => unit.page
-                ? <div key={index} style={{ breakAfter: 'page' }}>
+                ? <div key={index} style={index > 0 ? { breakBefore: 'page', pageBreakBefore: 'always' } : undefined}>
+                    <h2 data-officeview-print-sheet-title="">{unit.name}</h2>
                     {unit.page.refusal?.length ? <p>{LARGE_EXPORT_MESSAGE}</p> : null}
                     {unit.refusedImages > 0 && <p>Sheet “{unit.name}”: {unit.refusedImages} picture{unit.refusedImages === 1 ? ' is' : 's are'} omitted from print (image memory budget).</p>}
-                    <canvas ref={el => { printRefs.current[index] = el }} style={{ display: 'block', maxWidth: '100%' }} />
+                    <canvas ref={el => { printRefs.current[index] = el }} style={{ display: 'block', width: unit.page.spec.widthPx, maxWidth: '100%', height: 'auto' }} />
                   </div>
-                : <p key={index}>Sheet “{unit.name}” is omitted from print: it exceeds the print memory budget.</p>)}
+                : <p key={index} style={index > 0 ? { breakBefore: 'page', pageBreakBefore: 'always' } : undefined}>Sheet “{unit.name}” is omitted from print: it exceeds the print memory budget.</p>)}
             </div>
           </div>
         )}
       </div>
-      {showSearch && (
-        <SearchBar inputRef={inputRef} query={query} onQuery={text => { searchGen.current++; setQuery(text) }} count={matchCount} active={activeHit < 0 ? -1 : pageOffset + activeHit}
-          countLabel={countLabel} note={searchNote}
-          indexing={searching} onPrev={() => void stepHit(-1)} onNext={() => void stepHit(1)} />
-      )}
-      {showZoomControls && (
+      {/* A modal popup (the mobile filter sheet) owns the bottom of the viewer. */}
+      {showZoomControls && !popup && (
         <ZoomControls zoom={zoom} onIn={() => zoomBy(1)} onOut={() => zoomBy(-1)} onReset={resetZoom} atFit={zoom <= SHEET_MIN_ZOOM} />
       )}
     </div>
@@ -1427,4 +1470,18 @@ function usedBody(sheet: XlsxSheet): SourceRowInterval | null {
     r1 = Math.max(r1, row.index)
   }
   return r1 < 0 ? null : { r0, r1 }
+}
+
+/** The status-line saved-values notice: with nothing affected, the policy
+ * statement alone (no "0 formulas … (file too large)"). */
+function savedValuesNotice(status: { formulas: number | undefined; message: string | undefined } | undefined): string | undefined {
+  return status?.message !== undefined && status.formulas === 0 ? SAVED_VALUES_STATUS : status?.message
+}
+
+/** 1-based label of the last display row a window shows (its row-gutter width). */
+function lastVisibleRowLabel(metrics: ProjectedSheetMetrics, window: ScrollWindow, height: number): number {
+  const rows = metrics.rows.visibleBetween(window.logicalOrigin.y, window.logicalOrigin.y + height / window.zoom)
+  let last = 0
+  for (const run of rows.runs) last = Math.max(last, run.end + 1)
+  return last || 1
 }

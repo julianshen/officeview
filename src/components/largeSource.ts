@@ -42,16 +42,17 @@ function settledEarly(admission: SpreadsheetAdmission): admission is Extract<Spr
 /** Engine evaluation with caps; an evaluator resource hit reopens with saved values (decision 2). */
 async function parseWithCaps(pkg: OfficePackage, evaluation: { maxArrayCells: number; maxArraySide: number; maxMaterializedCells: number }, policy: 'engine' | 'cached', formulasNotRecalculated: number | undefined, ctx: Ctx): Promise<XlsxDocument> {
   let doc: XlsxDocument | undefined
+  let capped = false
   if (policy === 'engine') {
     doc = await parseXlsx(pkg, { evaluation })
     // Rule 5: an evaluator resource hit is never published; reopen with saved values.
-    if (evaluationHitCap(doc)) doc = undefined
+    if (evaluationHitCap(doc)) { doc = undefined; capped = true }
     throwIfAborted(ctx.signal)
   }
   if (doc === undefined) {
     // Saved values only: the allocation is the element envelope already admitted.
     doc = await parseXlsx(pkg, { valuePolicy: 'cached' })
-    addDiagnostic(doc, NOTICE_CACHED_VALUES, savedValuesStatus('cached', formulasNotRecalculated ?? countLoadEvaluatedFormulas(doc))!)
+    addDiagnostic(doc, NOTICE_CACHED_VALUES, savedValuesStatus('cached', formulasNotRecalculated ?? countLoadEvaluatedFormulas(doc), capped ? 'formula evaluation limit' : undefined)!)
   }
   return doc
 }

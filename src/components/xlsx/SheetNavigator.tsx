@@ -17,13 +17,14 @@ export function SheetNavigator({ documentId, sheets, activeSheetId, onSheetChang
   const errorId = useId()
   useEffect(() => { setAddress(''); setError(''); setInvalid(false) }, [documentId, activeSheetId])
   const control = { minHeight: 44, minWidth: 44 } as const
-  return <nav aria-label="Worksheet navigation" data-officeview-ui="sheet-navigator"
+  const row = { display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: '4px 8px' } as const
+  return <nav aria-label="Worksheet navigation" data-officeview-ui="sheet-navigator" style={row}
     onPointerDown={event => event.stopPropagation()} onDoubleClick={event => event.stopPropagation()}
     onKeyDown={event => { if (!((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'f')) event.stopPropagation() }}>
     <label>Worksheet <select aria-label="Worksheet" value={activeSheetId} disabled={disabled} style={control} onChange={event => onSheetChange(event.target.value)}>
       {sheets.map(sheet => <option key={sheet.id} value={sheet.id}>{sheet.name}</option>)}
     </select></label>
-    <form onSubmit={event => {
+    <form style={row} onSubmit={event => {
       event.preventDefault()
       if (disabled) return
       let request: NavigatorRequest

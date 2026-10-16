@@ -82,6 +82,12 @@ code is not loaded — with one exception: a large workbook already opened in th
 viewer worker stays in the interactive viewer if the flag later turns off, because
 the legacy renderer has no resident rows for a worker-backed workbook.
 
+**Sizing.** The interactive viewer is a flex item: in a sized flex-column host
+(for example `display: flex; flex-direction: column; height: 100vh`) it fills the
+host's height; in an unsized host its grid pane defaults to 400px tall. A visible
+status line under the grid reports record counts, the saved-values policy and other
+notices. The viewer chrome uses its own system font stack, not the host page's.
+
 For large files, supply `OfficeFile` with a **module worker factory**. For example,
 with a bundler that supports module workers, create an entry in your application:
 

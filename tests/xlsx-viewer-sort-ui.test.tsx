@@ -211,8 +211,9 @@ it('reserves touch header chrome for visible 44px controls and retains source-sp
       expect(button.style.minHeight).toBe('44px')
       expect(button.closest('[hidden]')).toBeNull()
     }
-    // Rows follow the scroll window by transform (no layout shift).
-    expect((grid.querySelector('[aria-rowindex="2"]') as HTMLElement).style.transform).toBe('translateY(132px)')
+    // Rows follow the scroll window by transform on both axes (no layout shift):
+    // x = gutter + the row frame's shift (0 at the origin), y = header + row offset.
+    expect((grid.querySelector('[aria-rowindex="2"]') as HTMLElement).style.transform).toBe('translate(44px, 132px)')
     act(() => grid.focus())
     fireEvent.click(grid, { detail: 1, clientX: 54, clientY: 142 })
     expect(change).toHaveBeenCalledOnce()
@@ -235,8 +236,11 @@ it.each([16, 40, 64])('keeps compact desktop header targets inside a %ipx projec
   const buttons = [...header.querySelectorAll('button')]
   expect(buttons).toHaveLength(3)
   // Explicit CSS width/minimum constraints cannot demand more than the projected box.
+  // The label flexes into what is left (no floor); the action targets have explicit
+  // widths (visually hidden 1px ones when the column is too narrow for its glyphs).
+  expect(buttons[0].style.flex).toBe('1 1 auto')
   const floors = buttons.map(button => Math.max(parseFloat(button.style.width) || 0, parseFloat(button.style.minWidth) || 0))
-  expect(floors.every(value => value > 0)).toBe(true)
+  expect(floors.slice(1).every(value => value > 0)).toBe(true)
   expect(floors.reduce((sum, value) => sum + value, 0)).toBeLessThanOrEqual(parseFloat(header.style.width) + 1e-6)
 })
 it.each([16, 40])('keeps touch header targets of a %ipx projected column out of the next column', width => {

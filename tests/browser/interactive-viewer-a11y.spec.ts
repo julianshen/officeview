@@ -33,8 +33,9 @@ const selectedCells = (page: Page) => page.locator('[role=gridcell][aria-selecte
 test.describe('S10.3 keyboard and focus (real viewer)', () => {
   test('one Tab stop; arrows, Enter, Home, Ctrl edges after recenter; announcements', async ({ page }) => {
     await openViewer(page, 'f2-1k.xlsx')
-    // One grid Tab entry: Print → grid → out of the grid; Shift+Tab returns to it.
-    await page.getByRole('button', { name: 'Print' }).focus()
+    // One grid Tab entry: the toolbar's last stop (the search box; its match
+    // buttons are disabled) → grid → out of the grid; Shift+Tab returns to it.
+    await page.getByRole('searchbox', { name: 'Search document' }).focus()
     await page.keyboard.press('Tab')
     expect(await focusedLabel(page)).toBe('grid')
     await page.keyboard.press('Tab')
@@ -291,8 +292,11 @@ test.describe('S10.3 accessibility tree (Chromium AX layer over CDP)', () => {
     // this viewport. aria-rowindex = DisplaySlot + 2 and the label Row DisplaySlot + 1
     // — VisibleRank indexing would close the gap and shift every row after it.
     const expected = (slot: number) => {
-      const id = slot <= 6 ? 41 - slot : 42 - slot
-      return { index: String(slot + 2), label: `Row ${slot + 1}`, cellA: `A${slot + 1}, value ${id}; original A${id + 1}` }
+      // Past slot 34 (id 8) the descending ids skip the pinned id 7 (a viewer
+      // that fills its host shows those slots too).
+      const id = slot <= 6 ? 41 - slot : slot <= 34 ? 42 - slot : 41 - slot
+      // "original" is appended only when the source address differs (spec §9.2).
+      return { index: String(slot + 2), label: `Row ${slot + 1}`, cellA: id < 1 ? `A${slot + 1}, value ` /* below the 40-row body: blank */ : `A${slot + 1}, value ${id}${id === slot ? '' : `; original A${id + 1}`}` }
     }
     const indices = dom.bodyRows.map(([index]) => Number(index))
     expect(indices).toContain(8) // slot 6
