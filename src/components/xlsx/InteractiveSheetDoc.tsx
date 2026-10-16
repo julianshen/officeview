@@ -38,7 +38,7 @@ import type { ProjectedSheetMetrics } from '../../xlsx/view/projection'
 import { createIdentityOrder } from '../../xlsx/view/order'
 import { CompactRowVisibility, createIntervalSet, visibilityFromHidden } from '../../xlsx/view/visibility'
 import {
-  createScrollWindow, navigateTo as scrollNavigateTo, refreshScrollWindow, scrollPhysicalTo, setScrollZoom, visibleLogicalViewport, type ViewportSize,
+  createScrollWindow, navigateTo as scrollNavigateTo, refreshScrollWindow, scrollPhysicalTo, setScrollOffset, setScrollZoom, visibleLogicalViewport, type ViewportSize,
 } from '../../xlsx/view/scrollWindow'
 import { keyboardSheetZoom, pinchSheetZoom, wheelSheetZoom } from '../../xlsx/view/sheetZoom'
 import { SheetNavigationSession, emptyGridSelection, navigateSelection, recordCounts, boundedSelectionText } from '../../xlsx/view/selection'
@@ -79,6 +79,8 @@ import { pagedSheetGeometry } from './pagedGeometry'
 import type { LedgerHold } from '../../xlsx/view/mainLedger'
 import { DisplayHolds } from './displayHolds'
 import { SheetChartDescriptions, chartNotices, sheetCharts } from './sheetCharts'
+import type { XlsxFrozenPane } from '../../xlsx/frozenPane'
+import { initialOrigin, paneRegions } from '../../xlsx/view/frozenPanes'
 
 /** A committed sheet view (the S9.1 sort/filter commit seam). `revision` must
  * increase with every commit; it becomes the sheet's viewGen. */
@@ -145,6 +147,10 @@ export interface InteractiveSheetDocProps {
 // Document identity alone owns zoom reset (§10.1): a stable id per document object.
 const documentIds = new WeakMap<object, string>()
 let nextDocumentId = 0
+/** Same requested freeze (counts only; extents follow the pane size). */
+function sameFreeze(window: ScrollWindow['frozen'], authored: XlsxFrozenPane | undefined): boolean {
+  return (window?.rows ?? 0) === (authored?.rows ?? 0) && (window?.cols ?? 0) === (authored?.cols ?? 0)
+}
 function documentIdOf(doc: object): string {
   let id = documentIds.get(doc)
   if (!id) documentIds.set(doc, id = `xlsx-${++nextDocumentId}`)
@@ -212,6 +218,8 @@ interface SheetEntry {
   body: SourceRowInterval | null
   layoutCache: LayoutCache
   merges: MergeQueryCache
+  /** Authored frozen panes (resident sheet or worker layout). */
+  frozen?: XlsxFrozenPane
 }
 /** Fallback pane when the host has not laid the viewer out (jsdom, hidden tab). */
 const FALLBACK_PANE = { width: 640, height: 400 }
@@ -385,6 +393,7 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
       // Layout records are keyed by complete identity; a new view gets its own merge cache.
       // A worker layout/merge publication changes record boxes: fresh layouts then.
       layoutCache: previous && previous.structureGen === structureGen ? previous.layoutCache : new LayoutCache(), merges: new MergeQueryCache(),
+      ...((remote ? remote.layout(sheetId).frozen : sheet.frozen) ? { frozen: remote ? remote.layout(sheetId).frozen : sheet.frozen } : {}),
     }
     entries.set(sheetId, entry)
     holds.own(entry)
@@ -453,9 +462,13 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
   // ---- scroll window per sheet; zoom is retained per sheet in the session ----
   const windowFor = (sheetId: string, sheetEntry: SheetEntry): ScrollWindow => {
     const zoom = session.get(sheetId).zoom
+    const frozen = sheetEntry.frozen ? { frozen: { rows: sheetEntry.frozen.rows, cols: sheetEntry.frozen.cols } } : {}
     let current = windows.get(sheetId)
-    if (!current) current = createScrollWindow(sheetEntry.metrics, viewport, { zoom, deviceScale: dpr })
-    else if (current.deviceScale !== dpr) current = createScrollWindow(sheetEntry.metrics, viewport, { zoom: current.zoom, deviceScale: dpr, offset: current.logicalOrigin })
+    if (!current) {
+      const created = createScrollWindow(sheetEntry.metrics, viewport, { zoom, deviceScale: dpr, ...frozen })
+      // The authored top-left cell of the scrolling pane is the first position.
+      current = sheetEntry.frozen ? setScrollOffset(created, sheetEntry.metrics, viewport, initialOrigin(sheetEntry.frozen, created.frozen, sheetEntry.metrics)) : created
+    } else if (current.deviceScale !== dpr || !sameFreeze(current.frozen, sheetEntry.frozen)) current = createScrollWindow(sheetEntry.metrics, viewport, { zoom: current.zoom, deviceScale: dpr, offset: current.logicalOrigin, ...frozen })
     else current = refreshScrollWindow(current, sheetEntry.metrics, viewport)
     windows.set(sheetId, current)
     return current
@@ -516,6 +529,7 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
       extent: { width: entry.metrics.cols.totalCss(), height: entry.metrics.rows.totalCss() },
       assets: assets?.lease.assets, layoutCache: entry.layoutCache, merges: entry.merges, ...(mark ? { watermark: mark } : {}),
       structureGen: entry.structureGen,
+      ...(scroll.frozen ? { frozen: scroll.frozen } : {}),
       // Row-cache proof gates worker requests: tiles the cache already proves
       // paint from the main-thread planner with no worker wait and no worker
       // command; worker plans are only for unknown or oversized tiles, and the
@@ -559,7 +573,11 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
     // Tile planning lifecycle runs here, post-commit: frameOf itself only
     // describes the frame, so a render that never commits cannot cancel
     // requests for frames that do.
-    if (scroll) workerPlans?.beginFrame(identity, { box: { ...scroll.logicalOrigin, width: viewport.width / scroll.zoom, height: viewport.height / scroll.zoom }, zoom: scroll.zoom, deviceScale: dpr })
+    if (scroll) {
+      // Pinned strips paint from origin 0 on their axis: keep their plans alive too.
+      const x0 = scroll.frozen?.left ? 0 : scroll.logicalOrigin.x, y0 = scroll.frozen?.top ? 0 : scroll.logicalOrigin.y
+      workerPlans?.beginFrame(identity, { box: { x: x0, y: y0, width: scroll.logicalOrigin.x - x0 + viewport.width / scroll.zoom, height: scroll.logicalOrigin.y - y0 + viewport.height / scroll.zoom }, zoom: scroll.zoom, deviceScale: dpr })
+    }
     if (!assets || assets.sheetId !== activeSheetId) {
       // The active sheet's lease is pending: present a declared loading state, never
       // another sheet's (or an unleased) raster. The pool is re-admitted for the
@@ -1006,12 +1024,20 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
     ctx.setTransform(1, 0, 0, 1, 0, 0)
     ctx.clearRect(0, 0, canvas.width, canvas.height)
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0)
-    const pane = visibleLogicalViewport(scroll, viewport)
-    const bias = biasRef.current
-    const toViewport = (rect: HighlightRect): HighlightRect => ({ x: (rect.x - pane.x) * scroll.zoom + bias.x, y: (rect.y - pane.y) * scroll.zoom + bias.y, width: rect.width * scroll.zoom, height: rect.height * scroll.zoom })
+    // Frozen panes: each region (body, pinned strips) paints its own clip with
+    // its effective origin; without panes this is the single body region.
+    const regions = paneRegions(scroll.frozen, scroll.logicalOrigin, scroll.zoom, viewport)
+    const pinned = regions.length > 1
+    let findRefusal = '', incomplete = false
+    for (const region of regions) {
+    const origin = region.origin
+    const pane = pinned ? { x: origin.x + region.clip.x / scroll.zoom, y: origin.y + region.clip.y / scroll.zoom, width: region.clip.width / scroll.zoom, height: region.clip.height / scroll.zoom } : visibleLogicalViewport(scroll, viewport)
+    const snap = (value: number) => (value * scroll.zoom * dpr - Math.round(value * scroll.zoom * dpr)) / dpr
+    const bias = region.kind === 'body' ? biasRef.current : { x: region.kind === 'top' ? biasRef.current.x : snap(origin.x), y: region.kind === 'left' ? biasRef.current.y : snap(origin.y) }
+    if (pinned) { ctx.save(); ctx.beginPath(); ctx.rect(region.clip.x, region.clip.y, region.clip.width, region.clip.height); ctx.clip() }
+    const toViewport = (rect: HighlightRect): HighlightRect => ({ x: (rect.x - origin.x) * scroll.zoom + bias.x, y: (rect.y - origin.y) * scroll.zoom + bias.y, width: rect.width * scroll.zoom, height: rect.height * scroll.zoom })
     // Search: lazily materialized geometry for this page's hits on the pane only.
     const highlights: HighlightRect[] = [], active: HighlightRect[] = []
-    let findRefusal = ''
     if (page) {
       const host = createCellLayoutHost(ctx, entry.sheet)
       page.hits.forEach((hit, index) => {
@@ -1028,19 +1054,21 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
         if (index === activeHit) active.push(...rects)
       })
     }
-    setFindOverflowNotice(findRefusal)
     paintSearchOverlay(ctx, highlights, active)
-    if (!selection.ranges.length) setSelectionIncomplete(false)
-    else {
+    if (selection.ranges.length) {
       const records = overlayRecords(entry.metrics, pane, profile)
       // Past the per-cell cap the membership is coalesced into pixel groups, never dropped.
       const coarse = records ? null : coarseSelectionRecords(selection, entry.metrics, pane, scroll.zoom * dpr)
-      setSelectionIncomplete(Boolean(coarse?.incomplete))
+      incomplete ||= Boolean(coarse?.incomplete)
       const geometry = records
         ? gridSelectionOverlay({ contains: at => selectionContains(selection, at) }, records, pane, scroll.zoom * dpr)
         : gridSelectionOverlay({ contains: () => true }, coarse!.records, pane, scroll.zoom * dpr)
-      paintGridSelectionOverlay(ctx, gridGeometryToViewport(geometry, pane, scroll.zoom, bias), dpr)
+      paintGridSelectionOverlay(ctx, gridGeometryToViewport(geometry, origin, scroll.zoom, bias), dpr)
     }
+    if (pinned) ctx.restore()
+    }
+    setFindOverflowNotice(findRefusal)
+    setSelectionIncomplete(selection.ranges.length ? incomplete : false)
     report()
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [scroll, selection, page, activeHit, viewport, dpr, identityKey, loadTick])

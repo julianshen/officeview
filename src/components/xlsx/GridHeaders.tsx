@@ -3,6 +3,7 @@ import type { GridSelection, ScrollWindow, SortSpec, FilterSpec, ColumnRule } fr
 import type { ProjectedSheetMetrics } from '../../xlsx/view/projection'
 import { columnToLetters } from '../../xlsx/view/coordinates'
 import { logicalToViewport, type ViewportSize } from '../../xlsx/view/scrollWindow'
+import { frozenViewportSize } from '../../xlsx/view/frozenPanes'
 import { rowContains, boundedSelectionText } from '../../xlsx/view/selection'
 import { useControlMedia } from './controlMedia'
 
@@ -40,7 +41,11 @@ export function gridHeaderBox(projection: ProjectedSheetMetrics, window: ScrollW
 export function viewportHeaderBox(projection: ProjectedSheetMetrics, window: ScrollWindow, viewport: ViewportSize, kind: 'row' | 'column', index: number) {
   const full = gridHeaderBox(projection, window, kind, index), length = kind === 'row' ? viewport.height : viewport.width
   const near = kind === 'row' ? full.y : full.x, size = kind === 'row' ? full.height : full.width
-  const start = Math.min(length, Math.max(0, near)), end = Math.min(length, Math.max(start, near + size))
+  // A scrolling row/column never shows through a pinned frozen strip.
+  const frozen = window.frozen, pinned = frozenViewportSize(frozen, window.zoom)
+  const isPinned = kind === 'row' ? Boolean(frozen?.top) && index < frozen!.rows : Boolean(frozen?.left) && index < frozen!.cols
+  const floor = isPinned ? 0 : kind === 'row' ? pinned.y : pinned.x
+  const start = Math.min(length, Math.max(floor, near)), end = Math.min(length, Math.max(start, near + size))
   return kind === 'row' ? { ...full, y: start, height: end - start } : { ...full, x: start, width: end - start }
 }
 type SelectionPart = GridSelection['ranges'][number]

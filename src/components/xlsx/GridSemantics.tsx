@@ -2,6 +2,8 @@ import { useId, useLayoutEffect, useRef, useState, type KeyboardEvent, type Mous
 import type { CacheIdentity, GridSelection, SheetView, ScrollWindow, SourceRowInterval, ProfileId } from '../../xlsx/view/contracts'
 import type { ProjectedSheetMetrics } from '../../xlsx/view/projection'
 import type { SourceCell } from '../../xlsx/view/coordinates'
+import { visibleSpans } from '../../xlsx/view/frozenPanes'
+import type { AxisWindow } from '../../xlsx/view/contracts'
 import { visibleLogicalViewport, navigateKey, navigateTo, hitTestViewport, type NavigationKey, type ViewportSize } from '../../xlsx/view/scrollWindow'
 import { MAX_ROWS, MAX_COLS, cellId, columnToLetters, formatA1 } from '../../xlsx/view/coordinates'
 import { activeAnnouncement, boundedSelectionText, reconcileSelection, recordCounts, emptyGridSelection, selectCell, selectHeader } from '../../xlsx/view/selection'
@@ -94,6 +96,12 @@ function shortHash(text: string): string {
 const hiddenText = { position: 'absolute', width: 1, height: 1, overflow: 'hidden', clipPath: 'inset(50%)', whiteSpace: 'nowrap' } as const
 /** S5 supplies current presentation snapshots and mounts its bounded canvas in
  * children. This shell never fetches values or renders legacy worksheet paint. */
+/** Visible runs of an axis over one or two disjoint logical spans (frozen strip, body). */
+function spanWindow(axis: { visibleBetween(start: number, end: number): AxisWindow }, spans: ReadonlyArray<[number, number]>): AxisWindow {
+  if (spans.length === 1) return axis.visibleBetween(spans[0][0], spans[0][1])
+  const windows = spans.map(([start, end]) => axis.visibleBetween(start, end))
+  return { runs: windows.flatMap(window => [...window.runs]), count: windows.reduce((sum, window) => sum + window.count, 0) }
+}
 export function GridSemantics(props: GridSemanticsProps): ReactElement {
   const instance = useId(), { projection, window: scroll, viewport, view } = props
   const { docId, sheetId, valueGen, fontGen, viewGen } = props.owner
@@ -134,7 +142,9 @@ export function GridSemantics(props: GridSemanticsProps): ReactElement {
   const current = reconcileSelection(props.selection, projection, view), selection = current.selection
   const multiSelected = multiCellSelection(selection)
   const pane = visibleLogicalViewport(scroll, viewport)
-  const rowWindow = projection.rows.visibleBetween(pane.y, pane.y + pane.height), colWindow = projection.cols.visibleBetween(pane.x, pane.x + pane.width)
+  // Frozen panes: the pinned strip and the scrolling body are separate logical spans.
+  const spans = visibleSpans(scroll.frozen, scroll.logicalOrigin, scroll.zoom, viewport)
+  const rowWindow = spanWindow(projection.rows, spans.y), colWindow = spanWindow(projection.cols, spans.x)
   const limits = FRAME_LIMITS[props.profile ?? 'D']
   let coarse = props.renderMode === 'coarse' || rowWindow.count * colWindow.count >= limits.cells || rowWindow.count + colWindow.count >= limits.lines
   let slots: number[] = [], columns: number[] = []
@@ -192,7 +202,8 @@ export function GridSemantics(props: GridSemanticsProps): ReactElement {
     }
   }
   const activeBox = active && projection.sourceCellToLogical(active)
-  const activeColumnInPane = activeBox && activeBox.x < pane.x + pane.width && activeBox.x + activeBox.width > pane.x
+  const activeColumnInPane = activeBox && spans.x.some(([x0, x1]) => activeBox.x < x1 && activeBox.x + activeBox.width > x0)
+  void pane
   const headerColumns = coarse && active && activeColumnInPane ? [active.col] : columns
   const headerProps = { projection, window: scroll, viewport, coarse, columns: headerColumns, selection, sort: view.sort, filter: view.filter, controlMode, touchControls, onSortCycle: props.onSortCycle, pendingSortColumn: props.pendingSortColumn ?? null, onFilter: props.onFilter, onSortDialog: props.onSortDialog, onNotice: props.onNotice,
     onSelect: (kind: 'row' | 'column', index: number, options: { toggle: boolean; extend: boolean }, event: MouseEvent<HTMLButtonElement>) => {

@@ -8,6 +8,7 @@
  * this module; the watermark is stamped into the pane after the tiles.
  */
 import type { XlsxSheet } from '../../xlsx/types'
+import { frozenViewportSize, paneRegions, type FrozenExtent } from '../../xlsx/view/frozenPanes'
 import { TILE_CANVAS_BYTES, shapeCacheBytes } from '../../xlsx/view/mainLedger'
 import type { CacheIdentity, LogicalCellBox, LogicalViewport, ProfileId } from '../../xlsx/view/contracts'
 import type { RenderSheetAssets } from '../../xlsx/render'
@@ -52,6 +53,8 @@ export interface SheetFrame {
   pending?: (box: LogicalCellBox, visible: boolean) => readonly LogicalCellBox[]
   /** Worker layout/merge generation of the geometry (tiles of an older one are dropped by the viewer). */
   structureGen?: number
+  /** Pinned frozen strips (ScrollWindow.frozen): drawn from the same tiles with a zero origin on their axis. */
+  frozen?: FrozenExtent
 }
 export interface SheetTileStats {
   /** renderSheetViewport calls: the only base-cell painting. */
@@ -116,6 +119,18 @@ export function createCanvasTile(): CanvasTile {
 /** A resumable prefetch batch (see SheetTileRenderer.prefetchSlice). */
 export interface PrefetchBatch { readonly frame: SheetFrame; readonly budget: FrameBudget; painted: number; records: number; done: boolean }
 
+/** Excel's freeze divider: a dark hairline along each pinned edge. */
+function paintFreezeLines(target: CanvasRenderingContext2D, frame: SheetFrame): void {
+  const size = frozenViewportSize(frame.frozen, frame.zoom)
+  target.save()
+  target.setTransform(1, 0, 0, 1, 0, 0)
+  target.fillStyle = '#5F6368'
+  const w = Math.max(1, Math.round(frame.dpr))
+  if (size.x > 0) target.fillRect(Math.round(size.x * frame.dpr) - w, 0, w, target.canvas.height)
+  if (size.y > 0) target.fillRect(0, Math.round(size.y * frame.dpr) - w, target.canvas.width, w)
+  target.restore()
+}
+
 export class SheetTileRenderer {
   readonly stats: SheetTileStats = { basePaints: 0, tileHits: 0, prefetched: 0, refused: 0, lastRequests: [], peakBitmapBytes: 0, frameRecords: 0, frameGridlines: 0, prefetchRecords: 0, maxTileRecords: 0, pendingTiles: 0 }
   readonly budgetBytes: number
@@ -146,7 +161,8 @@ export class SheetTileRenderer {
   present(target: CanvasRenderingContext2D, frame: SheetFrame): { bias: { x: number; y: number }; resourceNotice?: string } {
     const scale = frame.zoom * frame.dpr
     const px = Math.round(frame.origin.x * scale), py = Math.round(frame.origin.y * scale)
-    const { visible } = this.ranges(frame)
+    const regions = paneRegions(frame.frozen, frame.origin, frame.zoom, frame.viewport)
+    const pinned = regions.length > 1
     this.stats.lastRequests = []
     this.stats.pendingTiles = 0
     const budget = frameBudgetFor(this.profile)
@@ -156,17 +172,34 @@ export class SheetTileRenderer {
       target.setTransform(1, 0, 0, 1, 0, 0)
       target.fillStyle = '#ffffff'
       target.fillRect(0, 0, target.canvas.width, target.canvas.height)
-      for (let row = visible.r0; row <= visible.r1; row++) {
-        for (let col = visible.c0; col <= visible.c1; col++) {
-          const tile = this.tile(frame, col, row, true, budget)
-          resourceNotice ??= tile.surface.cost?.resourceNotice
-          records += tile.surface.cost?.records ?? 0
-          gridlines += tile.surface.cost?.gridlines ?? 0
-          // Float64 global device offsets minus the snapped origin: small integers.
-          target.drawImage(tile.surface.canvas, col * TILE_DEVICE_PX - px, row * TILE_DEVICE_PX - py)
-          if (!tile.retained) tile.surface.close()
+      // Frozen panes: each region (body first, then the pinned strips over it)
+      // draws the same cached tiles with its own effective origin, clipped.
+      for (const region of regions) {
+        const rx = Math.round(region.origin.x * scale), ry = Math.round(region.origin.y * scale)
+        const visible = pinned
+          ? tileRangeFor({ origin: { x: region.origin.x + region.clip.x / frame.zoom, y: region.origin.y + region.clip.y / frame.zoom }, viewport: { width: region.clip.width, height: region.clip.height }, zoom: frame.zoom, dpr: frame.dpr, extent: frame.extent })
+          : this.ranges(frame).visible
+        if (pinned) {
+          target.save()
+          const x0 = Math.round(region.clip.x * frame.dpr), y0 = Math.round(region.clip.y * frame.dpr)
+          target.beginPath()
+          target.rect(x0, y0, Math.round((region.clip.x + region.clip.width) * frame.dpr) - x0, Math.round((region.clip.y + region.clip.height) * frame.dpr) - y0)
+          target.clip()
         }
+        for (let row = visible.r0; row <= visible.r1; row++) {
+          for (let col = visible.c0; col <= visible.c1; col++) {
+            const tile = this.tile(frame, col, row, true, budget)
+            resourceNotice ??= tile.surface.cost?.resourceNotice
+            records += tile.surface.cost?.records ?? 0
+            gridlines += tile.surface.cost?.gridlines ?? 0
+            // Float64 global device offsets minus the snapped origin: small integers.
+            target.drawImage(tile.surface.canvas, col * TILE_DEVICE_PX - (pinned ? rx : px), row * TILE_DEVICE_PX - (pinned ? ry : py))
+            if (!tile.retained) tile.surface.close()
+          }
+        }
+        if (pinned) target.restore()
       }
+      if (pinned) paintFreezeLines(target, frame)
       if (frame.watermark) {
         target.setTransform(frame.dpr, 0, 0, frame.dpr, 0, 0)
         paintWatermark(target, { widthPx: frame.viewport.width, heightPx: frame.viewport.height }, frame.watermark)
