@@ -146,6 +146,21 @@ describe('drawings anchored to cells follow session sizes', () => {
     expect(two.widthEmu).toBe(96 * E)
   })
 
+  it('buildSheetGeometry places drawings against the session sizes (authored-hidden rows still collapsed)', () => {
+    const picture = node('twoCellAnchor[0]/pic[0]', 64 * E, 0, 128 * E, 40 * E) // B1 to D3
+    const doc = sheet({ drawings: [picture], rows: [{ index: 0, hidden: true, cells: [] }] })
+    const plain = buildSheetGeometry(doc)
+    const sizedGeometry = buildSheetGeometry(doc, { sizes: { rows: new Map(), cols: new Map([[1, 100]]) } })
+    if (plain.kind !== 'ready' || sizedGeometry.kind !== 'ready') throw new Error('not ready')
+    expect(plain.drawingsIn(0, 0, 1000, 1000, 100)?.[0]).toBe(picture)
+    const moved = sizedGeometry.drawingsIn(0, 0, 1000, 1000, 100)![0]
+    expect(moved.xEmu).toBe(64 * E)
+    expect(moved.widthEmu).toBe((100 + 64) * E)
+    // The query index is rebuilt for the new extent: a box only the stretched part reaches hits it.
+    expect(sizedGeometry.drawingsIn(180, 0, 200, 10, 100)).toHaveLength(1)
+    expect(plain.drawingsIn(200, 0, 210, 10, 100)).toHaveLength(0)
+  })
+
   it('an offset past a narrowed cell clamps to that cell', () => {
     const narrow = { rows: base.rows, cols: createAxisMetrics({ logicalCount: MAX_COLS, defaultSizeCss: 64, overrides: [{ start: 0, end: 0, sizeCss: 16 }] }) }
     const [moved] = remapDrawings([node('oneCellAnchor[0]/sp[0]', 40 * E, 0, 5 * E, 5 * E)], base, narrow)
@@ -165,9 +180,9 @@ describe('auto-fit measurement and its bound', () => {
   it('fits a row to its tallest cell, counting wrapped lines at the column width', () => {
     expect(fitRowHeight([], measure)).toBe(20)
     const plain = fitRowHeight([{ text: 'a', font: 'f', sizePx: 20, wrap: false, widthCss: 64 }], measure)
-    expect(plain).toBe(Math.ceil(20 * 1.2 + 4))
+    expect(plain).toBe(Math.round(20 * 1.25 + 2))
     const wrapped = fitRowHeight([{ text: 'aaaa bbbb cccc', font: 'f', sizePx: 10, wrap: true, widthCss: 4 * 7 + 6 }], measure)
-    expect(wrapped).toBe(Math.ceil(3 * 10 * 1.2 + 4))
+    expect(wrapped).toBe(Math.round(3 * 10 * 1.25 + 2))
   })
 
   it('candidate rows: visible pane rows first, then known rows, never more than AUTOFIT_MAX_ROWS', () => {

@@ -11,14 +11,50 @@ import { createSheetMetrics } from '../../xlsx/view/projection'
 import { RectangleIndex } from '../../xlsx/view/structure'
 import type { SheetGeometry } from '../../xlsx/view/viewport'
 import type { RemoteWorkbook } from '../../worker/viewerRemoteSource'
-import { projectionBytes } from '../../xlsx/view/mainLedger'
+import { axisBytes, projectionBytes } from '../../xlsx/view/mainLedger'
+import { createAxisMetrics } from '../../xlsx/view/axes'
+import { hasSessionSizes, mergeAxisOverrides, type SessionSizes } from '../../xlsx/view/axisSizes'
+import { MAX_COLS, MAX_ROWS } from '../../xlsx/view/coordinates'
+import { drawingQuery, sizedDrawings } from '../../xlsx/view/viewport'
+import type { XlsxDrawing } from '../../xlsx/types'
 
-export function pagedSheetGeometry(remote: RemoteWorkbook, sheetId: string, order: RowOrder, visibility: RowVisibility, cache: OverflowCache = remote.overflowFor()): SheetGeometry {
+/** `sizes` (spec §5.6) are the sheet's view-only session sizes: the axes are
+ * rebuilt from the worker's compact layout with them applied, so every
+ * main-thread consumer (planner, hit-testing, overlays, a11y) agrees. Worker
+ * viewport plans use the workbook geometry and are not consulted while a
+ * sheet has session sizes (InteractiveSheetDoc / tilePlanSource). */
+export function pagedSheetGeometry(remote: RemoteWorkbook, sheetId: string, order: RowOrder, visibility: RowVisibility, cache: OverflowCache = remote.overflowFor(), sizes?: SessionSizes): SheetGeometry {
   const axes = remote.geometry(sheetId)
   const store = remote.store(sheetId)
   const merges = remote.merges(sheetId).merges
   const drawings = remote.drawings(sheetId)
-  const metrics = createSheetMetrics({ rows: axes.rows, cols: axes.cols, order, visibility })
+  let { rows, cols } = axes
+  let sizedBytes = 0
+  let drawingsIn: SheetGeometry['drawingsIn'] = (...query) => drawings.drawingsIn(...query)
+  if (hasSessionSizes(sizes)) {
+    const layout = remote.layout(sheetId)
+    const hiddenCols = layout.hiddenCols ?? []
+    if (sizes.rows.size) rows = createAxisMetrics({ logicalCount: MAX_ROWS, defaultSizeCss: axes.rows.defaultSizeCss, overrides: mergeAxisOverrides(layout.rowOverrides, sizes.rows) })
+    if (sizes.cols.size) cols = createAxisMetrics({ logicalCount: MAX_COLS, defaultSizeCss: axes.cols.defaultSizeCss, overrides: mergeAxisOverrides(layout.colOverrides, sizes.cols), ...(hiddenCols.length ? { collapsed: hiddenCols } : {}) })
+    sizedBytes = (rows === axes.rows ? 0 : axisBytes(rows)) + (cols === axes.cols ? 0 : axisBytes(cols))
+    // Drawing content arrives (and is evicted) after this geometry is built:
+    // place each published list once, keyed weakly so the geometry never pins it.
+    const placed = new WeakMap<readonly XlsxDrawing[], SheetGeometry['drawingsIn']>()
+    const hiddenRows = layout.hidden.map(interval => ({ start: interval.r0, end: interval.r1 }))
+    drawingsIn = (...query) => {
+      const list = drawings.drawings
+      if (!list.length) return drawings.drawingsIn(...query)
+      let sized = placed.get(list)
+      if (!sized) {
+        const moved = sizedDrawings(list, sizes, layout.rowOverrides, hiddenRows, layout.colOverrides, hiddenCols)
+        sized = drawingQuery(moved)
+        placed.set(list, sized)
+        remote.mainLedger.chargeWhileReachable('drawings', [sized], moved.length * SIZED_DRAWING_BYTES)
+      }
+      return sized(...query)
+    }
+  }
+  const metrics = createSheetMetrics({ rows, cols, order, visibility })
   const mergeIndex = RectangleIndex.build(merges.map(range => ({ rect: { r0: range.minRow, r1: range.maxRow, c0: range.minCol, c1: range.maxCol }, value: range })))
   const geometry = Object.freeze({
     kind: 'ready' as const,
@@ -27,12 +63,14 @@ export function pagedSheetGeometry(remote: RemoteWorkbook, sheetId: string, orde
     cellsOf: (sourceRow: number) => store.cellsOf(sourceRow),
     merges: mergeIndex,
     // Read at query time so geometry does not pin an evicted drawing payload.
-    drawingsIn: (...query: Parameters<SheetGeometry['drawingsIn']>) => drawings.drawingsIn(...query),
+    drawingsIn,
   })
   // Projection buffers (dense prefixes of permuted bands) and the merge index
   // are charged while held: by the sheet entry that shows this geometry and any
   // continuation reading it (§12.4). Unheld, it lasts while reachable.
-  remote.mainLedger.chargeWhileHeld('geometry', [geometry], projectionBytes(metrics) + mergeIndex.estimatedBytes)
+  remote.mainLedger.chargeWhileHeld('geometry', [geometry], projectionBytes(metrics) + mergeIndex.estimatedBytes + sizedBytes)
   bindOverflowCache(geometry, cache)
   return geometry
 }
+/** A repositioned top-level drawing copy plus its box-index entry. */
+const SIZED_DRAWING_BYTES = 320

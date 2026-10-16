@@ -43,8 +43,9 @@ export const AUTOFIT_MAX_CELLS = 1024
 const DEFAULT_ROW_CSS = 20
 const DEFAULT_COL_CSS = 64
 const CELL_PADDING_CSS = 6
-const LINE_HEIGHT = 1.2
-const ROW_PADDING_CSS = 4
+// Calibrated to Excel's auto-fit: Calibri 11 pt → 20 px, 20 pt → 35 px.
+const LINE_HEIGHT = 1.25
+const ROW_PADDING_CSS = 2
 
 export function clampSize(axis: ResizeAxis, sizeCss: number): number {
   const { min, max } = RESIZE_LIMITS[axis]
@@ -188,7 +189,7 @@ export function fitRowHeight(cells: Iterable<{ text: string; font: string; sizeP
   for (const cell of cells) {
     if (!cell.text) continue
     const lines = cell.wrap ? wrappedLines(cell.text, cell.font, Math.max(1, cell.widthCss - CELL_PADDING_CSS), measure) : 1
-    tallest = Math.max(tallest, Math.ceil(lines * cell.sizePx * LINE_HEIGHT + ROW_PADDING_CSS))
+    tallest = Math.max(tallest, Math.round(lines * cell.sizePx * LINE_HEIGHT + ROW_PADDING_CSS))
   }
   return tallest < 0 ? DEFAULT_ROW_CSS : tallest
 }

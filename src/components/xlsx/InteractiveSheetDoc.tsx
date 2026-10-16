@@ -78,6 +78,9 @@ import { documentWithDrawings, drawingNotices, sheetWithDrawings } from '../../w
 import { pagedSheetGeometry } from './pagedGeometry'
 import type { LedgerHold } from '../../xlsx/view/mainLedger'
 import { DisplayHolds } from './displayHolds'
+import { SheetSizes, NO_SESSION_SIZES, RESIZE_LIMITS } from '../../xlsx/view/axisSizes'
+import { autoFitSize, resizeRegion, scratchMeasure, type ResizeRequest } from './sheetResize'
+import { tileLogicalBox } from '../../xlsx/view/tileCache'
 
 /** A committed sheet view (the S9.1 sort/filter commit seam). `revision` must
  * increase with every commit; it becomes the sheet's viewGen. */
@@ -205,6 +208,8 @@ interface SheetEntry {
   revision: number
   /** Worker-backed sheets: generation of the merged ranges the geometry holds. */
   structureGen: number
+  /** View-only session size generation the geometry holds (spec §5.6). */
+  resizeGen: number
   view: SheetView
   geometry: SheetGeometry
   metrics: ProjectedSheetMetrics
@@ -291,6 +296,14 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
   useEffect(() => remote?.subscribe(() => setLoadTick(tick => tick + 1)), [remote])
   // Tiles painted under an older worker layout/merge generation are stale (§10.1).
   const structureGens = useRef(new Map<string, number>()).current
+  // View-only session sizes per sheet (spec §5.6): they outlive scroll, zoom,
+  // sort/filter commits and sheet switches, and end with the viewer.
+  const sheetSizes = useRef(new Map<string, SheetSizes>()).current
+  const sizesOf = (sheetId: string): SheetSizes => {
+    let sizes = sheetSizes.get(sheetId)
+    if (!sizes) sheetSizes.set(sheetId, sizes = new SheetSizes())
+    return sizes
+  }
 
   // ---- fonts/images: one lease per (fallback fonts, active sheet) ----
   // A font publication bumps fontGen (re-keys tiles, keeps zoom). Leases swap
@@ -359,12 +372,14 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
     const input = viewInput(sheetId)
     const previous = entries.get(sheetId)
     const structureGen = remote ? remote.merges(sheetId).gen : 0
-    if (previous && previous.revision === input.revision && previous.structureGen === structureGen) { bindOverflowCache(previous.geometry, overflowFor()); return previous }
+    const sized = sheetSizes.get(sheetId), resizeGen = sized?.gen ?? 0
+    if (previous && previous.revision === input.revision && previous.structureGen === structureGen && previous.resizeGen === resizeGen) { bindOverflowCache(previous.geometry, overflowFor()); return previous }
     if (previous && input.revision < previous.revision) { bindOverflowCache(previous.geometry, overflowFor()); return previous } // stale commit: never publish an older view
     const order = input.order ?? createIdentityOrder()
     const baseHidden = remote ? remote.geometry(sheetId).baseHidden : sheetBaseHidden(sheet)
     const visibility = input.visibility ?? visibilityFromHidden(createIntervalSet(displayIntervals(baseHidden.intervals, order)))
-    const built = remote ? pagedSheetGeometry(remote, sheetId, order, visibility, overflowFor()) : buildSheetGeometry(sheet, { order, ...(input.visibility ? { visibility } : {}) })
+    const sizes = sized && !sized.empty ? sized.snapshot() : NO_SESSION_SIZES
+    const built = remote ? pagedSheetGeometry(remote, sheetId, order, visibility, overflowFor(), sizes) : buildSheetGeometry(sheet, { order, ...(input.visibility ? { visibility } : {}), sizes })
     if (built.kind !== 'ready') throw new Error(built.diagnostics.map(d => d.message).join('; ') || 'This sheet cannot be laid out')
     bindOverflowCache(built, overflowFor())
     // Paged geometry charges itself; a resident one is charged here, for its
@@ -380,7 +395,7 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
     const view: SheetView = { sheetId, revision: input.revision, order, baseHidden, visibility, sort: input.sort ?? null, filter: input.filter ?? null, selection }
     const used = remote?.layout(sheetId).used
     const entry: SheetEntry = {
-      sheet, revision: input.revision, structureGen, view, geometry: built, metrics: built.metrics, body: input.filter || input.sort ? { r0: (input.filter?.range ?? input.sort!.range).r0 + (input.filter?.range ?? input.sort!.range).headerRows, r1: (input.filter?.range ?? input.sort!.range).r1 - (input.filter?.range ?? input.sort!.range).totalsRows } : remote ? used ? { r0: used.r0, r1: used.r1 } : null : usedBody(sheet),
+      sheet, revision: input.revision, structureGen, resizeGen, view, geometry: built, metrics: built.metrics, body: input.filter || input.sort ? { r0: (input.filter?.range ?? input.sort!.range).r0 + (input.filter?.range ?? input.sort!.range).headerRows, r1: (input.filter?.range ?? input.sort!.range).r1 - (input.filter?.range ?? input.sort!.range).totalsRows } : remote ? used ? { r0: used.r0, r1: used.r1 } : null : usedBody(sheet),
       // Layout records are keyed by complete identity; a new view gets its own merge cache.
       // A worker layout/merge publication changes record boxes: fresh layouts then.
       layoutCache: previous && previous.structureGen === structureGen ? previous.layoutCache : new LayoutCache(), merges: new MergeQueryCache(),
@@ -462,7 +477,7 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
   // Refresh against the CURRENT projection/viewport (a view commit or resize keeps
   // the logical origin and zoom; refresh only clamps).
   const windowKey = useRef('')
-  const nextWindowKey = JSON.stringify([activeSheetId, entry?.revision, entry?.structureGen, viewport.width, viewport.height, dpr])
+  const nextWindowKey = JSON.stringify([activeSheetId, entry?.revision, entry?.structureGen, entry?.resizeGen, viewport.width, viewport.height, dpr])
   if (entry && windowKey.current !== nextWindowKey) { windowKey.current = nextWindowKey; windowFor(activeSheetId, entry) }
   const scroll = entry ? windows.get(activeSheetId) ?? windowFor(activeSheetId, entry) : null
   const setWindow = (sheetId: string, next: ScrollWindow) => {
@@ -519,7 +534,9 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
       // paint from the main-thread planner with no worker wait and no worker
       // command; worker plans are only for unknown or oversized tiles, and the
       // row reads `pending` requests keep blank cells known (S13.3).
-      ...(workerPlans && remote ? { plan: tilePlanSource({ store: remote.store(activeSheetId), metrics: entry.metrics, scale: scroll.zoom * dpr, identity, extent: { width: entry.metrics.cols.totalCss(), height: entry.metrics.rows.totalCss() }, plans: workerPlans }) } : {}),
+      // While the sheet has view-only session sizes the main-thread planner is
+      // authoritative: worker plans are laid out in the workbook geometry (§5.6).
+      ...(workerPlans && remote ? { plan: tilePlanSource({ store: remote.store(activeSheetId), metrics: entry.metrics, scale: scroll.zoom * dpr, identity, extent: { width: entry.metrics.cols.totalCss(), height: entry.metrics.rows.totalCss() }, plans: workerPlans, resized: !sizesOf(activeSheetId).empty }) } : {}),
       ...(remote ? { pending: (box: LogicalCellBox, visible: boolean) => remote.store(activeSheetId).pendingIn(entry.metrics, box, scroll.zoom * dpr, !visible) } : {}),
     }
   }
@@ -531,6 +548,9 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
     for (const sheetEntry of entries.values()) { layout += sheetEntry.layoutCache.stats.bytes; merges += sheetEntry.merges.bytes }
     mainLedger.set('layout', 'caches', layout)
     mainLedger.set('merges', 'caches', merges)
+    let sized = 0
+    for (const sizes of sheetSizes.values()) sized += sizes.bytes
+    mainLedger.set('layout', 'resize-sizes', sized)
     // Every element the viewer renders (its toolbar, navigation, headers and
     // status as well as the pane), each with its React fiber and props.
     mainLedger.set('dom', 'grid', domClassBytes(domClassCounts(rootRef.current ?? paneRef.current)))
@@ -558,7 +578,7 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
     // Tile planning lifecycle runs here, post-commit: frameOf itself only
     // describes the frame, so a render that never commits cannot cancel
     // requests for frames that do.
-    if (scroll) workerPlans?.beginFrame(identity, { box: { ...scroll.logicalOrigin, width: viewport.width / scroll.zoom, height: viewport.height / scroll.zoom }, zoom: scroll.zoom, deviceScale: dpr })
+    if (scroll) workerPlans?.beginFrame(identity, { box: { ...scroll.logicalOrigin, width: viewport.width / scroll.zoom, height: viewport.height / scroll.zoom }, zoom: scroll.zoom, deviceScale: dpr }, entry?.resizeGen ?? 0)
     if (!assets || assets.sheetId !== activeSheetId) {
       // The active sheet's lease is pending: present a declared loading state, never
       // another sheet's (or an unleased) raster. The pool is re-admitted for the
@@ -602,7 +622,7 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
     timer = setTimeout(step, 0)
     return () => clearTimeout(timer)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [identityKey, scroll, viewport, dpr, assets, surfaceBytes, profile, mark, loadTick, entry?.structureGen])
+  }, [identityKey, scroll, viewport, dpr, assets, surfaceBytes, profile, mark, loadTick, entry?.structureGen, entry?.resizeGen])
   // A restored 2D context starts blank, and the cached tile canvases may have
   // been lost with it: drop the tiles and repaint both layers at once.
   const surfacesMounted = Boolean(entry && scroll)
@@ -1276,6 +1296,56 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
     session.setSelection(activeSheetId, result.selection)
     setWindow(activeSheetId, moved.window)
   }
+  // ---- view-only row/column resizing (spec §5.6) ----
+  // One commit per gesture: the active sheet's session size changes, the tiles
+  // its paint can reach are dropped, and the rebuilt entry (new geometry, new
+  // window) repaints and re-lays-out everything that depends on geometry.
+  const measureRef = useRef<ReturnType<typeof scratchMeasure> | null>(null)
+  const dropTiles = (sheetId: string, region: { axis: 'x' | 'y'; from: number } | null) => {
+    rendererRef.current?.cache.invalidate(key => {
+      if (key.identity.sheetId !== sheetId) return false
+      if (!region) return true
+      const box = tileLogicalBox(key.col, key.row, key.zoom, key.dpr)
+      return region.axis === 'x' ? box.x + box.width > region.from : box.y + box.height > region.from
+    })
+  }
+  const resizeLine = (request: ResizeRequest) => {
+    if (!entry || !scroll) return
+    const sheetId = activeSheetId, metrics = entry.metrics
+    const column = request.kind === 'column'
+    const slot = column ? -1 : metrics.order.sourceToDisplay(request.index)
+    const name = column ? `Column ${columnToLetters(request.index)}` : `Row ${slot + 1}`
+    const current = column ? metrics.cols.size(request.index) : metrics.rows.size(slot)
+    if (!(current > 0)) { setAnnouncement(`${name} is hidden; it cannot be resized.`); return }
+    let size: number
+    if (request.fit) {
+      size = autoFitSize(request.kind, request.index, {
+        geometry: entry.geometry, sheet: entry.sheet, pane: visibleLogicalViewport(scroll, viewport), measure: measureRef.current ??= scratchMeasure(),
+        knownRows: limit => remote ? remote.store(sheetId).knownRows(limit) : entry.sheet.rows.slice(0, limit).map(row => row.index),
+        ...(remote ? { styleOf: (index: number) => remote.styleOf(index) } : {}),
+      })
+    } else size = request.size ?? current + (request.delta ?? 0)
+    const sizes = sizesOf(sheetId), axis = column ? 'col' : 'row'
+    const region = resizeRegion(entry.geometry, request.kind, request.index)
+    const gen = sizes.gen
+    if (!sizes.set(axis, request.index, size)) { setAnnouncement(`${name} was not resized: this sheet already has the maximum number of resized ${column ? 'columns' : 'rows'}. Reset sizes to start over.`); return }
+    const applied = sizes.get(axis, request.index)!
+    const limit = RESIZE_LIMITS[axis]
+    const bound = applied === limit.max ? ' (maximum)' : applied === limit.min ? ' (minimum)' : ''
+    setAnnouncement(`${name} ${column ? 'width' : 'height'} ${applied} pixels${bound}${request.fit ? ', fitted to content' : ''}. View only; the file is unchanged.`)
+    if (sizes.gen === gen) return
+    dropTiles(sheetId, region)
+    rerender()
+  }
+  const resetSizes = () => {
+    const sheetId = activeSheetId
+    if (!sizesOf(sheetId).reset()) return
+    dropTiles(sheetId, null)
+    setAnnouncement('Column widths and row heights restored to the workbook sizes.')
+    rerender()
+  }
+  const resized = Boolean(activeSheetId && !sizesOf(activeSheetId).empty)
+
   const onSheetChange = (sheetId: string) => {
     if (!sheetIds.includes(sheetId)) return
     cancelCopy()
@@ -1308,11 +1378,12 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
         <div data-officeview-sheet-screen="" style={{ display: 'flex', flexDirection: 'column', minHeight: 0, flex: '1 1 auto' }}>
         <SheetNavigator documentId={docId} sheets={doc.sheets.map((sheet, index) => ({ id: sheetIds[index], name: sheet.name }))}
           activeSheetId={activeSheetId} onSheetChange={onSheetChange} onNavigate={onNavigate} onNotice={setAnnouncement} disabled={!entry} />
-        <div data-officeview-ui="sheet-actions"><button type="button" disabled={!allowCopy || !selection.ranges.length || copyPending} onClick={() => void copyGrid()}>Copy selection</button>{copyPending && <button type="button" onClick={cancelCopy}>Cancel copy</button>}<button type="button" disabled={!allowPrint} onClick={() => void preparePrint()}>Print</button></div>
+        <div data-officeview-ui="sheet-actions"><button type="button" disabled={!allowCopy || !selection.ranges.length || copyPending} onClick={() => void copyGrid()}>Copy selection</button>{copyPending && <button type="button" onClick={cancelCopy}>Cancel copy</button>}<button type="button" disabled={!allowPrint} onClick={() => void preparePrint()}>Print</button><button type="button" disabled={!resized} aria-description="Restore this sheet's workbook column widths and row heights" onClick={resetSizes}>Reset sizes</button></div>
         <div ref={paneRef} data-testid="officeview-sheet-pane" style={{ position: 'relative', flex: '1 1 auto', minHeight: 0, overflow: 'hidden', background: '#ffffff' }}>
           {entry && scroll && (
             <GridSemantics owner={identity} projection={entry.metrics} view={entry.view} selection={selection} window={scroll} viewport={viewport}
               body={entry.body} onChange={onGridChange} status={{ records: { ...snapshot(activeSheetId).records, completeness: loadState?.completeness ?? 'complete' }, countMode: 'body', loadReport: { status: 'ready', notices: [...notices, ...fontNotices, ...pagedDrawingNotices, ...(loadState?.failure ? [loadFailureNotice(loadState.failure, loadState.code)] : [])] } }}
+              onResize={resizeLine}
               onSortCycle={(col, shift) => void sortCycle(col, shift)} pendingSortColumn={sortPending?.col ?? null} onFilter={(col, invoker) => { setPopup({ kind: 'filter', col, invoker }) }} onSortDialog={(col, invoker) => { setPopup({ kind: 'sort', col, invoker }) }} onNotice={setAnnouncement}
               popup={popup && controls ? { invoker: popup.invoker, close: closePopup, label: popup.kind === 'filter' ? 'Column filter' : 'Sort worksheet', content: popup.kind === 'filter' ? <FilterDropdown owner={identity} client={controls.client} applied={entry.view.filter} appliedSort={entry.view.sort} col={popup.col} invoker={popup.invoker} embedded onClose={closePopup} onApplied={() => rerender()} onNotice={setAnnouncement} /> : <SortDialog owner={identity} client={controls.client} applied={entry.view.sort} col={popup.col} invoker={popup.invoker} embedded onClose={closePopup} onApplied={() => rerender()} onNotice={setAnnouncement} /> } : undefined} announcement={[sortPending ? `Sorting column ${columnToLetters(sortPending.col)}…` : '', resourceNotice, overflowNotice, findOverflowNotice === overflowNotice ? '' : findOverflowNotice, assets?.sheetId !== activeSheetId ? 'Loading sheet…' : '', assets && assets.sheetId === activeSheetId && assets.lease.refusedImages > 0 ? `${assets.lease.refusedImages} picture${assets.lease.refusedImages === 1 ? ' is' : 's are'} not shown (image memory budget).` : '', selectionIncomplete ? 'Selection highlight is incomplete at this zoom; zoom in for detail.' : '', remote?.queryNotice === announcement ? '' : remote?.queryNotice, announcement].filter(Boolean).join(' ')} inspection={inspection} profile={profile} label={`Worksheet ${entry.sheet.name}`}
               cellPresentation={at => {

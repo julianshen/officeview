@@ -29,7 +29,7 @@ function retryableOutcome(out: unknown): boolean {
   if ((out as { kind?: string }).kind === 'error') return (out as { retryable?: boolean }).retryable !== false
   return true
 }
-const scopeKey = (owner: CacheIdentity, merges: number, window: LogicalViewport): string => JSON.stringify([...identityFields.map(field => owner[field]), merges, window.zoom, window.deviceScale])
+const scopeKey = (owner: CacheIdentity, merges: number, window: LogicalViewport, layout: number): string => JSON.stringify([...identityFields.map(field => owner[field]), merges, window.zoom, window.deviceScale, layout])
 interface Entry { plan?: ViewportPlan; bytes: number; controller: AbortController; timer?: ReturnType<typeof setTimeout> }
 let serial = 0
 export class WorkerViewportPlans {
@@ -38,13 +38,17 @@ export class WorkerViewportPlans {
   private bytes = 0
   private ownershipRevision = 0
   private closed = false
+  /** The host's session-size generation (spec §5.6): a plan requested under
+   * another layout is out of scope, so its reply is refused. */
+  private layoutGen = 0
   private readonly ledgerOwner = `viewport-plans:${++serial}`
   constructor(private readonly remote: RemoteWorkbook) {}
   /** Retryable failures per tile key, for the backoff (bounded like entries). */
   private readonly failures = new Map<string, number>()
-  beginFrame(owner: CacheIdentity, window: LogicalViewport): void {
+  beginFrame(owner: CacheIdentity, window: LogicalViewport, layoutGen = 0): void {
     // One presented frame: plans and row reads share its page allowance.
     this.remote.beginPageFrame()
+    this.layoutGen = layoutGen
     this.select(owner, window)
     // Requests and failures off the pane and its prefetch ring are obsolete;
     // settled plans stay until the byte/entry caps or a scope change.
@@ -60,7 +64,7 @@ export class WorkerViewportPlans {
     }
   }
   private select(owner: CacheIdentity, window: LogicalViewport): string {
-    const scope = scopeKey(owner, this.remote.merges(owner.sheetId).gen, window)
+    const scope = scopeKey(owner, this.remote.merges(owner.sheetId).gen, window, this.layoutGen)
     if (scope !== this.scope) { this.clear(); this.scope = scope }
     return scope
   }
@@ -309,10 +313,20 @@ export function tilePlanSource(options: {
   identity: CacheIdentity
   extent: { width: number; height: number }
   plans: WorkerViewportPlans
+  /** The sheet has view-only session sizes (spec §5.6): worker plans are laid
+   * out in the workbook geometry, so the main-thread planner is authoritative
+   * and the worker is never asked. A tile only a worker plan could cover
+   * (oversized) is summarized coarse until zoomed in. */
+  resized?: boolean
 }): (window: LogicalViewport, visible: boolean) => ViewportPlan | undefined {
   const { store, metrics, scale, identity, extent, plans } = options
   return (window, visible) => {
     const coverage = store.coverage(metrics, window.box, scale)
+    if (options.resized) {
+      return coverage === 'oversized'
+        ? { kind: 'coarse', diagnostics: [], groups: [{ groupId: 'resized-oversized', bounds: { ...window.box }, slots: { start: 0, end: 0 }, cols: { c0: 0, c1: 0 } }], extent, work: emptyWork() }
+        : undefined
+    }
     if (coverage === 'proven') { plans.release(identity, window); return undefined }
     const plan = plans.get(identity, window, extent, visible)
     return coverage === 'oversized' || plan.kind === 'detail' ? plan : undefined

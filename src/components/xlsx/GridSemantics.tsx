@@ -9,6 +9,8 @@ import { belowDetail } from '../../xlsx/view/viewport'
 import { GridHeaders, GridRowHeader, GRID_HEADER_SIZE, cellSelected, viewportHeaderBox, columnHeaderHeight } from './GridHeaders'
 import { ViewerStatus, type ViewerStatusProps, type HiddenCellInspection } from './ViewerStatus'
 import { useControlMedia } from './controlMedia'
+import { ResizeHandles, type ResizeRequest } from './sheetResize'
+import { RESIZE_KEY_STEP } from '../../xlsx/view/axisSizes'
 
 export interface GridCellPresentation { text: string; state?: 'loading' | 'error' | 'unavailable' }
 export interface GridTransition { selection: GridSelection; window: ScrollWindow; announcement: string }
@@ -38,6 +40,13 @@ export interface GridSemanticsProps {
   renderMode?: 'detail' | 'coarse'
   /** Exact read-only inspection of a hidden Go To/find target (grid focus stays put). */
   inspection?: HiddenCellInspection
+  /** View-only row/column resize (spec §5.6): header edge handles and the
+   * Alt+Shift+Arrow / Alt+Shift+Enter keyboard route. */
+  onResize?: (request: ResizeRequest) => void
+}
+const resizeArrows: Record<string, { kind: 'row' | 'column'; delta: number }> = {
+  ArrowLeft: { kind: 'column', delta: -RESIZE_KEY_STEP }, ArrowRight: { kind: 'column', delta: RESIZE_KEY_STEP },
+  ArrowUp: { kind: 'row', delta: -RESIZE_KEY_STEP }, ArrowDown: { kind: 'row', delta: RESIZE_KEY_STEP },
 }
 const navigationKeys = new Set<string>(['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Enter', 'Home', 'End', 'PageUp', 'PageDown'])
 /** The parent commits viewport and selection together, so the new descendant
@@ -168,6 +177,27 @@ export function GridSemantics(props: GridSemanticsProps): ReactElement {
       props.popup.close()
       return
     }
+    // Alt+Shift+Arrow resizes (Left/Right: column, Up/Down: row) and
+    // Alt+Shift+Enter auto-fits: the active cell's lines from the grid, or the
+    // focused header's own line in control mode (spec §5.6).
+    if (props.onResize && event.altKey && event.shiftKey && !event.ctrlKey && !event.metaKey && (event.key in resizeArrows || event.key === 'Enter') && grid?.contains(event.target as Node)) {
+      const target = event.target as HTMLElement
+      const header = target.closest<HTMLElement>('[data-header-column],[data-header-row]')
+      const arrow = resizeArrows[event.key]
+      let request: ResizeRequest | null = null
+      if (header?.dataset.headerColumn !== undefined) {
+        if (!arrow || arrow.kind === 'column') request = { kind: 'column', index: Number(header.dataset.headerColumn), ...(arrow ? { delta: arrow.delta } : { fit: true }) }
+      } else if (header?.dataset.headerRow !== undefined) {
+        if (!arrow || arrow.kind === 'row') request = { kind: 'row', index: projection.order.displayToSource(Number(header.dataset.headerRow)), ...(arrow ? { delta: arrow.delta } : { fit: true }) }
+      } else if (target === grid && active) {
+        request = arrow ? { kind: arrow.kind, index: arrow.kind === 'row' ? active.row : active.col, delta: arrow.delta } : { kind: 'column', index: active.col, fit: true }
+      }
+      if (request) {
+        event.preventDefault(); event.stopPropagation()
+        props.onResize(request)
+        return
+      }
+    }
     if (event.target !== grid) {
       if (event.key === 'Escape' && grid?.contains(event.target as Node)) {
         event.preventDefault(); setControlMode(false); grid.focus()
@@ -251,6 +281,8 @@ export function GridSemantics(props: GridSemanticsProps): ReactElement {
       }} style={{ position: 'relative', width: '100%', height: '100%', overflow: 'hidden' }}>
       <div aria-hidden="true" style={{ position: 'absolute', left: GRID_HEADER_SIZE, top: headerHeight, width: viewport.width, height: viewport.height }}>{props.children}</div>
       <GridHeaders {...headerProps} />
+      {props.onResize && !coarse && <ResizeHandles projection={projection} window={scroll} viewport={viewport} headerHeight={headerHeight} touch={touchControls}
+        columns={headerColumns} slots={transient ? slots.filter(slot => slot !== activeSlot) : slots} active={active} onResize={props.onResize} />}
       {slots.map(slot => {
         const row = projection.order.displayToSource(slot), extra = transient && slot === activeSlot
         const cells = extra ? [active!.col] : [...columns]
