@@ -126,4 +126,34 @@ test.describe('visual review: interactive viewer layout', () => {
     expect(ratios.length).toBeGreaterThan(0)
     for (const r of ratios) expect(r).toBeGreaterThanOrEqual(4.5)
   })
+
+  test('#12 print: white page, 2x canvases, a titled page per sheet, controls hidden', async ({ page, browserName }) => {
+    await page.addInitScript(() => { (window as unknown as { print: () => void }).print = () => { (window as unknown as { __printed: number }).__printed = 1 } })
+    await openViewer(page, 'f7-two-sheets.xlsx')
+    await page.getByRole('button', { name: 'Print', exact: true }).click()
+    await page.waitForFunction(() => (window as unknown as { __printed?: number }).__printed === 1)
+    await page.emulateMedia({ media: 'print' })
+    await expect(page.getByTestId('officeview-search')).toBeHidden()
+    await expect(page.getByTestId('officeview-zoom-controls')).toBeHidden()
+    const facts = await page.evaluate(() => ({
+      background: getComputedStyle(document.querySelector('[data-officeview-root]')!).backgroundColor,
+      canvases: [...document.querySelectorAll<HTMLCanvasElement>('[data-testid=officeview-sheet-print-pages] canvas')].map(c => ({ ratio: c.width / c.getBoundingClientRect().width, css: c.getBoundingClientRect().width })),
+      titles: [...document.querySelectorAll('[data-officeview-print-sheet-title]')].map(h => h.textContent),
+    }))
+    expect(facts.background).toMatch(/rgb\(255, 255, 255\)|rgba\(0, 0, 0, 0\)/)
+    expect(facts.titles).toEqual(['A', 'B'])
+    for (const c of facts.canvases) expect(c.ratio).toBeGreaterThanOrEqual(2 - 1e-6)
+    if (browserName === 'chromium') {
+      const pdf = await page.pdf({ format: 'A4' })
+      const pages = (pdf.toString('latin1').match(/\/Type\s*\/Page[^s]/g) ?? []).length
+      expect(pages).toBeGreaterThanOrEqual(2)
+    }
+    // Browser-menu print (nothing prepared): the notice, with no floating control over it.
+    await page.emulateMedia({ media: 'screen' })
+    await page.reload()
+    await expect(page.getByRole('grid')).toBeVisible({ timeout: 60_000 })
+    await page.emulateMedia({ media: 'print' })
+    await expect(page.getByTestId('officeview-sheet-print-notice')).toBeVisible()
+    await expect(page.getByTestId('officeview-search')).toBeHidden()
+  })
 })

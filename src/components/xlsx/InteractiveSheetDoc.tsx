@@ -166,7 +166,9 @@ const MAX_FONT_NOTICE_FAMILIES = 3
  * never print; its print container does. */
 function sheetPrintCss(id: string): string {
   const own = `[data-officeview-sheet-instance="${id}"]`
-  return `${own} [data-officeview-sheet-print]{display:none}@media print{${own} [data-officeview-sheet-screen],${own} [data-officeview-chrome]{display:none!important}${own} [data-officeview-sheet-print]{display:block!important}}`
+  // In print the viewer is a plain white block: a flex container would ignore
+  // the per-sheet page breaks, and the screen background must not print.
+  return `${own} [data-officeview-sheet-print]{display:none}@media print{${own} [data-officeview-sheet-screen],${own} [data-officeview-chrome]{display:none!important}${own}{display:block!important}${own} [data-officeview-root]{display:block!important;background:#fff!important}${own} [data-officeview-sheet-print]{display:block!important}}`
 }
 /** One document-wide print owner: the viewer running its own print leaves every
  * other spreadsheet viewer out of the printout. The latest starter takes over
@@ -207,6 +209,10 @@ function retainFontRule(): () => void {
   rule.users++
   return () => { if (--rule.users === 0 && fontRule === rule) { rule.style.remove(); fontRule = null } }
 }
+/** Print units render at this device scale when the print bitmap budget admits it. */
+const PRINT_SCALE = 2
+/** Per-axis canvas ceiling (§11.5 raster admission). */
+const PRINT_MAX_AXIS = 16384
 function fontNotice(diagnostics: readonly FontDiagnostic[]): string[] {
   const families = [...new Set(diagnostics.map(d => d.family).filter((family): family is string => Boolean(family)))]
   if (!families.length) return []
@@ -1195,7 +1201,7 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
   // budget left beside the pane surfaces (tiles are released first); units that do
   // not fit are replaced by an explicit "omitted" notice, never silently dropped.
   // Every publication re-checks its request token, permission and mount (§10.1).
-  const [printPages, setPrintPages] = useState<ReadonlyArray<{ name: string; page: Paintable | null; refusedImages: number }> | null>(null)
+  const [printPages, setPrintPages] = useState<ReadonlyArray<{ name: string; page: Paintable | null; scale: number; refusedImages: number }> | null>(null)
   const printLease = useRef<PaintableArray | null>(null)
   const printToken = useRef(0)
   const allowPrintRef = useRef(allowPrint)
@@ -1223,10 +1229,13 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
     let reserved = 0
     if (pages.some(page => page.refusal?.length)) setAnnouncement(LARGE_EXPORT_MESSAGE)
     const units = pages.map((page, index) => {
-      const bytes = page.spec.widthPx * page.spec.heightPx * 4
-      const admitted = bytes <= remaining
-      if (admitted) { remaining -= bytes; reserved += bytes }
-      return { name: doc.sheets[index]?.name ?? `Sheet ${index + 1}`, page: admitted ? page : null, refusedImages: pages.refusedImages?.[index] ?? 0 }
+      // Crisp print: PRINT_SCALE device pixels per spec px when that store fits
+      // (budget and axis ceiling), else 1x; neither fits → omitted with a notice.
+      const bytesAt = (scale: number) => page.spec.widthPx * scale * page.spec.heightPx * scale * 4
+      const fits = (scale: number) => bytesAt(scale) <= remaining && Math.max(page.spec.widthPx, page.spec.heightPx) * scale <= PRINT_MAX_AXIS
+      const scale = fits(PRINT_SCALE) ? PRINT_SCALE : fits(1) ? 1 : 0
+      if (scale) { remaining -= bytesAt(scale); reserved += bytesAt(scale) }
+      return { name: doc.sheets[index]?.name ?? `Sheet ${index + 1}`, page: scale ? page : null, scale: scale || 1, refusedImages: pages.refusedImages?.[index] ?? 0 }
     })
     printLease.current?.dispose()
     printLease.current = pages
@@ -1243,9 +1252,9 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
     printPages.forEach((unit, index) => {
       const canvas = printRefs.current[index]
       if (!unit.page || !canvas) return
-      sizeCanvas(canvas, unit.page.spec.widthPx, unit.page.spec.heightPx)
+      sizeCanvas(canvas, unit.page.spec.widthPx * unit.scale, unit.page.spec.heightPx * unit.scale)
       const ctx = canvas.getContext('2d')
-      if (ctx) unit.page.paint(ctx)
+      if (ctx) { ctx.setTransform(unit.scale, 0, 0, unit.scale, 0, 0); unit.page.paint(ctx) }
     })
     if (token === printToken.current && allowPrintRef.current) { claimPrint(instance); window.print?.() }
   }, [printPages])
@@ -1374,12 +1383,13 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
             {!printPages && <p data-testid="officeview-sheet-print-notice">{remote ? PAGED_PRINT_MESSAGE : 'To print this spreadsheet, press Ctrl/Cmd+P inside the viewer.'}</p>}
             <div data-testid="officeview-sheet-print-pages">
               {printPages?.map((unit, index) => unit.page
-                ? <div key={index} style={{ breakAfter: 'page' }}>
+                ? <div key={index} style={index > 0 ? { breakBefore: 'page', pageBreakBefore: 'always' } : undefined}>
+                    <h2 data-officeview-print-sheet-title="">{unit.name}</h2>
                     {unit.page.refusal?.length ? <p>{LARGE_EXPORT_MESSAGE}</p> : null}
                     {unit.refusedImages > 0 && <p>Sheet “{unit.name}”: {unit.refusedImages} picture{unit.refusedImages === 1 ? ' is' : 's are'} omitted from print (image memory budget).</p>}
-                    <canvas ref={el => { printRefs.current[index] = el }} style={{ display: 'block', maxWidth: '100%' }} />
+                    <canvas ref={el => { printRefs.current[index] = el }} style={{ display: 'block', width: unit.page.spec.widthPx, maxWidth: '100%', height: 'auto' }} />
                   </div>
-                : <p key={index}>Sheet “{unit.name}” is omitted from print: it exceeds the print memory budget.</p>)}
+                : <p key={index} style={index > 0 ? { breakBefore: 'page', pageBreakBefore: 'always' } : undefined}>Sheet “{unit.name}” is omitted from print: it exceeds the print memory budget.</p>)}
             </div>
           </div>
         )}

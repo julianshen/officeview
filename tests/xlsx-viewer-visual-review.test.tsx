@@ -5,7 +5,7 @@
  * Real-browser layout evidence lives in tests/browser/interactive-viewer-visual.spec.ts.
  */
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { act, cleanup, render, waitFor } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, waitFor } from '@testing-library/react'
 import InteractiveSheetDoc from '../src/components/xlsx/InteractiveSheetDoc'
 import { GridHeaders, GridRowHeader, HEADER_COLORS, rowGutterWidth, GRID_HEADER_SIZE } from '../src/components/xlsx/GridHeaders'
 import { GridSemantics, STATUS_BAR_HEIGHT } from '../src/components/xlsx/GridSemantics'
@@ -14,6 +14,7 @@ import { createScrollWindow } from '../src/xlsx/view/scrollWindow'
 import { workbookOf } from './helpers/xlsx-find'
 import { gridFixture } from './helpers/xlsx-grid-fixture'
 import { FIRST_PAINT_TEST, FIRST_PAINT_WAIT } from './helpers/viewer-timing'
+import type { Paintable, PaintableArray } from '../src/render/paint'
 
 afterEach(() => { cleanup(); vi.restoreAllMocks() })
 
@@ -142,5 +143,41 @@ describe('#13 popup and toolbar layout', () => {
     const ui = render(<InteractiveSheetDoc doc={workbookOf([{ sheetId: 'A', cells: [{ row: 0, col: 0, value: 'x' }] }])} />)
     const search = ui.getByTestId('officeview-search')
     expect(search.closest('[data-officeview-ui=sheet-toolbar]')).not.toBeNull()
+  })
+})
+
+describe('#12 spreadsheet print', () => {
+  const unit = (width: number, height: number, painted: string[], name: string): Paintable => ({ spec: { widthPx: width, heightPx: height } as Paintable['spec'], paint: () => { painted.push(name) } })
+  const loaderOf = (pages: Paintable[]) => async () => Object.assign(pages, { dispose: () => {} }) as unknown as PaintableArray
+  it('renders each sheet at 2x device scale with a sheet-name heading and a page break before every later sheet', async () => {
+    const print = vi.spyOn(window, 'print').mockImplementation(() => {}), painted: string[] = []
+    const doc = workbookOf([{ sheetId: 'A', cells: [{ row: 0, col: 0, value: 'x' }] }, { sheetId: 'B', cells: [{ row: 0, col: 0, value: 'y' }] }])
+    const ui = render(<InteractiveSheetDoc doc={doc} printLoader={loaderOf([unit(100, 50, painted, 'a'), unit(120, 60, painted, 'b')])} />)
+    fireEvent.click(ui.getByRole('button', { name: 'Print' }))
+    await waitFor(() => expect(print).toHaveBeenCalled(), FIRST_PAINT_WAIT)
+    const pages = ui.getByTestId('officeview-sheet-print-pages')
+    const canvases = [...pages.querySelectorAll('canvas')]
+    expect(canvases.map(c => [c.width, c.height])).toEqual([[200, 100], [240, 120]])
+    expect(canvases.map(c => c.style.width)).toEqual(['100px', '120px'])
+    const titles = [...pages.querySelectorAll('[data-officeview-print-sheet-title]')].map(h => h.textContent)
+    expect(titles).toEqual(doc.sheets.map(sheet => sheet.name))
+    const units = [...pages.children] as HTMLElement[]
+    expect(units[0].style.breakBefore).not.toBe('page')
+    expect(units[1].style.breakBefore).toBe('page')
+    expect(painted).toEqual(['a', 'b'])
+  }, FIRST_PAINT_TEST.timeout)
+  it('falls back to 1x for a sheet whose 2x store does not fit the print budget', async () => {
+    const print = vi.spyOn(window, 'print').mockImplementation(() => {})
+    const ui = render(<InteractiveSheetDoc doc={workbookOf([{ sheetId: 'A', cells: [{ row: 0, col: 0, value: 'x' }] }])} printLoader={loaderOf([unit(3000, 3000, [], 'a')])} />)
+    fireEvent.click(ui.getByRole('button', { name: 'Print' }))
+    await waitFor(() => expect(print).toHaveBeenCalled(), FIRST_PAINT_WAIT)
+    const canvas = ui.getByTestId('officeview-sheet-print-pages').querySelector('canvas')!
+    expect([canvas.width, canvas.height]).toEqual([3000, 3000])
+  }, FIRST_PAINT_TEST.timeout)
+  it('print rules turn the viewer background white and let page breaks apply (block, not flex)', () => {
+    render(<InteractiveSheetDoc doc={workbookOf([{ sheetId: 'A', cells: [{ row: 0, col: 0, value: 'x' }] }])} />)
+    const css = [...document.head.querySelectorAll('style[data-officeview-sheet-print-media]')].map(style => style.textContent).join('')
+    expect(css).toMatch(/@media print\{.*\[data-officeview-root\]\{[^}]*background:#fff!important/)
+    expect(css).toMatch(/display:block!important/)
   })
 })
