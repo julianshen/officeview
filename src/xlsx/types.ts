@@ -183,4 +183,7 @@ export interface XlsxDocument {
    * or guessed. `undefined` means the model did not declare it. */
   calcChainPresent?: boolean
   semantics?: ResolvedSemantics
+  /** Resolved cellXfs table (index = cell styleIndex), published to worker
+   * viewer sources so remote cells style exactly like resident ones. */
+  cellStyles?: readonly XlsxCellStyle[]
 }

@@ -1,7 +1,7 @@
 /** Parse XLSX parts into the XlsxDocument model. */
 import type { OfficePackage } from '../core/zip'
 import { attrs, getChildren, textOf, type XmlNode } from '../core/xml'
-import type { XlsxCell, XlsxDocument, XlsxMergeRange, XlsxRow, XlsxSheet } from './types'
+import type { XlsxCell, XlsxCellStyle, XlsxDocument, XlsxMergeRange, XlsxRow, XlsxSheet } from './types'
 import type {
   CalcSettings,
   DefinedNameMetadata,
@@ -143,6 +143,29 @@ export interface ParseXlsxOptions {
   /** 'cached' shows saved values only: no load-time evaluation, so a formula
    * without a cached value stays unavailable (hasCachedValue false). Default 'engine'. */
   valuePolicy?: 'engine' | 'cached'
+}
+
+/** One cellXfs entry resolved to the cell style (fonts/fills/borders/numFmt):
+ * the single resolution both the object parser and the paged import use. */
+export function resolveXfStyle(styles: Styles, xf: Styles['xfs'][number]): XlsxCellStyle {
+  const font = styles.fonts[xf.fontId]
+  const fill = styles.fills[xf.fillId]
+  const border = styles.borders[xf.borderId]
+  return {
+    numFmtId: xf.numFmtId,
+    formatCode: styles.numFmts.get(xf.numFmtId),
+    bold: font?.bold,
+    italic: font?.italic,
+    fontSizePt: font?.sizePt,
+    color: font?.color,
+    fillColor: fill?.pattern === 'solid' ? fill.rgb : undefined,
+    borders: border ? { left: border.left, right: border.right, top: border.top, bottom: border.bottom } : undefined,
+    textRotation: xf.textRotation,
+    horizontal: xf.horizontal,
+    vertical: xf.vertical,
+    wrapText: xf.wrapText,
+    ...(xf.shrinkToFit !== undefined ? { shrinkToFit: xf.shrinkToFit } : {}),
+  }
 }
 
 export async function parseXlsx(pkg: OfficePackage, options: ParseXlsxOptions = {}): Promise<XlsxDocument> {
@@ -389,6 +412,7 @@ export async function parseXlsx(pkg: OfficePackage, options: ParseXlsxOptions = 
     calc,
     calcChainPresent,
     semantics,
+    cellStyles: styles.xfs.map(xf => resolveXfStyle(styles, xf)),
     ...(declaredFilters.length > 0 ? { declaredFilters } : {}),
   }
   initializeSavedSpills(doc)
@@ -573,26 +597,7 @@ async function parseSheet(
         ca: calcAlways ? true : undefined,
       }
       const xf = styles.xfs[cell.styleIndex]
-      if (xf) {
-        const font = styles.fonts[xf.fontId]
-        const fill = styles.fills[xf.fillId]
-        const border = styles.borders[xf.borderId]
-        cell.style = {
-          numFmtId: xf.numFmtId,
-          formatCode: styles.numFmts.get(xf.numFmtId),
-          bold: font?.bold,
-          italic: font?.italic,
-          fontSizePt: font?.sizePt,
-          color: font?.color,
-          fillColor: fill?.pattern === 'solid' ? fill.rgb : undefined,
-          borders: border ? { left: border.left, right: border.right, top: border.top, bottom: border.bottom } : undefined,
-          textRotation: xf.textRotation,
-          horizontal: xf.horizontal,
-          vertical: xf.vertical,
-          wrapText: xf.wrapText,
-          ...(xf.shrinkToFit !== undefined ? { shrinkToFit: xf.shrinkToFit } : {}),
-        }
-      }
+      if (xf) cell.style = resolveXfStyle(styles, xf)
       row.cells.push(cell)
     }
     const earlier = rowsByIndex.get(row.index)

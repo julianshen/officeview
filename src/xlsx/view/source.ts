@@ -644,6 +644,9 @@ export function createObjectWorkbookSource(doc: XlsxDocument, docId: string, opt
     },
     coverageDiagnostics: sheetId => storeFor(sheetId).coverageDiagnostics(),
     declaredFilters: () => doc.declaredFilters ?? [],
+    // Compatibility-mode documents served by the worker style remote cells
+    // through this table (spec §11.1), exactly as paged imports do.
+    ...(doc.cellStyles ? { formatting: () => ({ dateSystem: doc.semantics?.dateSystem ?? '1900', styles: doc.cellStyles! }) } : {}),
     async release() {
       await Promise.all([...stores.values()].map(store => store.release()))
       stores.clear()

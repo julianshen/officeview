@@ -6,6 +6,10 @@
 import { describe, expect, it } from 'vitest'
 import { renderSheet, type GridMetrics } from '../src/xlsx/render'
 import type { XlsxCell, XlsxCellStyle, XlsxSheet } from '../src/xlsx/types'
+import { buildXlsx } from '../src/testdata/ooxml-builders'
+import { OfficePackage } from '../src/core/zip'
+import { parseXlsx } from '../src/xlsx/parse'
+import { createObjectWorkbookSource } from '../src/xlsx/view/source'
 
 interface PaintOp { op: string; args: unknown[]; fillStyle: unknown; strokeStyle: unknown; lineWidth: unknown; dash: number[]; font: string }
 /** A canvas stand-in: every glyph is 7px wide; state at each call is recorded. */
@@ -52,5 +56,19 @@ describe('#1 SpreadsheetML ARGB alpha byte is ignored (Excel treats 00RRGGBB as 
     renderSheet(sheet, ctx, grid([64], [20]))
     expect(ops.some(o => o.op === 'fillRect' && o.fillStyle === '#FFF2CC')).toBe(true)
     expect(ops.find(o => o.op === 'fillText')?.fillStyle).toBe('#FFFFFF')
+  })
+})
+
+describe('#11 worker-served object documents (compatibility mode) keep their cell styles', () => {
+  it('the object source publishes the workbook style table, indexed by cellXfs', async () => {
+    const bytes = await buildXlsx([{ name: 'S', rows: [{ r: 1, cells: [{ ref: 'A1', t: 'str', v: 'head', style: 1 }, { ref: 'B1', v: 3.14159, style: 2 }] }] }])
+    const doc = await parseXlsx(await OfficePackage.load(bytes))
+    const source = createObjectWorkbookSource(doc, 'd')
+    const formatting = source.formatting?.()
+    // The main-thread remote source styles cells only through this table
+    // (viewerRemoteSource styleOf); without it fills, fonts and borders vanish.
+    expect(formatting?.styles[1]).toMatchObject({ fillColor: 'FFFFFF00', bold: true, borders: { left: 'thin' } })
+    expect(formatting?.styles[2]).toMatchObject({ numFmtId: 2 })
+    expect(formatting?.styles[1]).toEqual(doc.sheets[0].rows[0].cells[0].style)
   })
 })

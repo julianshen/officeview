@@ -7,7 +7,7 @@
  */
 import type { OfficePackage } from '../../core/zip'
 import { attrs, getChildren, parseXml, type XmlNode } from '../../core/xml'
-import { parseStyles } from '../parse'
+import { parseStyles, resolveXfStyle } from '../parse'
 import type { WorkbookFormatting } from '../view/contracts'
 
 export const DEFAULT_FORMATTING: WorkbookFormatting = Object.freeze({ dateSystem: '1900', styles: Object.freeze([]) })
@@ -22,23 +22,6 @@ export async function workbookFormatting(workbookRoot: XmlNode, stylesText: stri
   const styles = await parseStyles({ xml: async (path: string) => path === 'xl/styles.xml' ? root : undefined } as unknown as OfficePackage)
   return {
     dateSystem,
-    styles: styles.xfs.map(xf => {
-      const font = styles.fonts[xf.fontId], fill = styles.fills[xf.fillId], border = styles.borders[xf.borderId]
-      return {
-        numFmtId: xf.numFmtId,
-        formatCode: styles.numFmts.get(xf.numFmtId),
-        bold: font?.bold,
-        italic: font?.italic,
-        fontSizePt: font?.sizePt,
-        color: font?.color,
-        fillColor: fill?.pattern === 'solid' ? fill.rgb : undefined,
-        borders: border ? { left: border.left, right: border.right, top: border.top, bottom: border.bottom } : undefined,
-        textRotation: xf.textRotation,
-        horizontal: xf.horizontal,
-        vertical: xf.vertical,
-        wrapText: xf.wrapText,
-        ...(xf.shrinkToFit !== undefined ? { shrinkToFit: xf.shrinkToFit } : {}),
-      }
-    }),
+    styles: styles.xfs.map(xf => resolveXfStyle(styles, xf)),
   }
 }
