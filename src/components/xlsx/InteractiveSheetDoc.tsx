@@ -36,14 +36,14 @@ import { MainMemoryLedger, axisBytes, estimatePayloadBytes, projectionBytes, typ
 import { buildSheetGeometry, cellTextOverflow, MergeQueryCache, sheetBaseHidden, type SheetGeometry } from '../../xlsx/view/viewport'
 import type { ProjectedSheetMetrics } from '../../xlsx/view/projection'
 import { createIdentityOrder } from '../../xlsx/view/order'
-import { CompactRowVisibility, createIntervalSet, visibilityFromHidden } from '../../xlsx/view/visibility'
+import { CompactRowVisibility, createIntervalSet, createRowVisibility, visibilityFromHidden } from '../../xlsx/view/visibility'
 import {
   createScrollWindow, navigateTo as scrollNavigateTo, refreshScrollWindow, scrollPhysicalTo, setScrollZoom, visibleLogicalViewport, type ViewportSize,
 } from '../../xlsx/view/scrollWindow'
 import { keyboardSheetZoom, pinchSheetZoom, wheelSheetZoom } from '../../xlsx/view/sheetZoom'
 import { SheetNavigationSession, emptyGridSelection, navigateSelection, recordCounts, boundedSelectionText } from '../../xlsx/view/selection'
 import { FIND_PAGE_HITS, FindController, hitGeometry, navigateToHit, type FindHit, type FindInput, type FindOptions, type FindPublication } from '../../xlsx/view/find'
-import { LayoutCache } from '../../xlsx/view/textLayout'
+import { DEFAULT_LAYOUT_CACHE_BYTES, LayoutCache } from '../../xlsx/view/textLayout'
 import { cellDisplayText } from '../../xlsx/render'
 import { createCellLayoutHost } from '../../xlsx/view/renderViewport'
 import { createObjectWorkbookSource } from '../../worker/viewerObjectSource'
@@ -408,12 +408,18 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
     const sameStructure = sameView && previous!.structureGen === structureGen
     const order = sameView ? previous!.view.order : input.order ?? createIdentityOrder()
     const baseHidden = sameStructure ? previous!.view.baseHidden : remote ? remote.geometry(sheetId).baseHidden : sheetBaseHidden(sheet)
-    const visibility = sameStructure ? previous!.view.visibility : input.visibility ?? visibilityFromHidden(createIntervalSet(displayIntervals(baseHidden.intervals, order)))
+    const authored = () => visibilityFromHidden(createIntervalSet(displayIntervals(baseHidden.intervals, order)))
+    // An adopted worker (filter) mask predates a newer authored-hidden set: the
+    // shown mask is that mask AND NOT authored-hidden (it never revives a
+    // filtered row; source identities are unchanged).
+    const visibility = sameStructure ? previous!.view.visibility
+      : input.visibility ? (remote && sameView ? intersectVisibility(input.visibility, authored()) : input.visibility)
+        : authored()
     const sizes = override ?? (sized && !sized.empty ? sized.snapshot() : NO_SESSION_SIZES)
     const built = remote ? pagedSheetGeometry(remote, sheetId, order, visibility, overflowFor(), sizes, true) : buildSheetGeometry(sheet, { order, ...(input.visibility ? { visibility } : {}), sizes })
     if (built.kind !== 'ready') throw new Error(built.diagnostics.map(d => d.message).join('; ') || 'This sheet cannot be laid out')
     const geometryBytes = remote ? (built as unknown as { chargeBytes: number }).chargeBytes : projectionBytes(built.metrics) + axisBytes(built.metrics.cols) + (built.cellIndexBytes ?? 0) + built.merges.estimatedBytes
-    const bytes = geometryBytes + (built.sizedDrawings?.length ?? 0) * SIZED_DRAWING_BYTES + viewBufferBytes(remote ? null : order, remote && input.visibility ? null : visibility)
+    const bytes = geometryBytes + (built.sizedDrawings?.length ?? 0) * SIZED_DRAWING_BYTES + viewBufferBytes(remote ? null : order, remote && visibility === input.visibility ? null : visibility)
     return { candidate: { sheetId, sheet, input, structureGen, previous, order, baseHidden, visibility, built, bytes } }
   }
   /** Publishes a candidate: charges exactly its measured owners, holds it and
@@ -433,7 +439,7 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
     // while a view holds them: a resident sort/filter's, and the base visibility
     // words built here for any sheet (1,048,576 rows: ~132 KiB). A worker-backed
     // view's adopted buffers are charged by the workbook (adopt).
-    chargeViewBuffers(remote ? null : order, remote && input.visibility ? null : visibility)
+    chargeViewBuffers(remote ? null : order, remote && visibility === input.visibility ? null : visibility)
     const selection = previous?.view.selection ?? emptyGridSelection()
     const view: SheetView = { sheetId, revision: input.revision, order, baseHidden, visibility, sort: input.sort ?? null, filter: input.filter ?? null, selection }
     const used = remote?.layout(sheetId).used
@@ -1401,7 +1407,7 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
     const announcement = `${name} ${column ? 'width' : 'height'} ${applied} pixels${bound}${request.fit ? ', fitted to content' : ''}. View only; the file is unchanged.`
     if (previousSize === applied) { setAnnouncement(announcement); return }
     const region = resizeRegion(entry.geometry, request.kind, request.index)
-    const candidate = admitCandidate(sheetId, prospective, name, shown => (column ? shown.cols.size(request.index) : shown.rows.size(shown.order.sourceToDisplay(request.index))) === applied, `${applied} pixels cannot be represented beside this sheet's sizes`)
+    const candidate = admitCandidate(sheetId, prospective, name, shown => (column ? shown.cols.size(request.index) : shown.rows.size(shown.order.sourceToDisplay(request.index))) === applied, `${applied} pixels cannot be represented beside this sheet's sizes`, { kind: request.kind, index: request.index })
     if (!candidate) return
     sizes.set(axis, request.index, applied)
     publishEntry(candidate, sizes.gen)
@@ -1417,21 +1423,85 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
    * next display commits). A candidate that does not fit, or does not show the
    * size, is discarded unpublished and the refusal is announced.
    */
-  const admitCandidate = (sheetId: string, sizes: SessionSizes, name: string, represents: (metrics: ProjectedSheetMetrics) => boolean, unrepresentable: string): Candidate | null => {
-    const prepared = prepareEntry(sheetId, sizes)
-    if (!('candidate' in prepared)) return null
-    const candidate = prepared.candidate
-    if (!represents(candidate.built.metrics)) { setAnnouncement(`${name} was not resized: ${unrepresentable}.`); return null }
-    const dom = Math.max(0, semanticDomBytes(candidate.built.metrics) - semanticDomBytes(entries.get(sheetId)!.metrics))
-    if (mainLedger.bytes + candidate.bytes + dom > MAIN_THREAD_BUDGETS[budgetProfile]) {
-      setAnnouncement(`${name} was not resized: not enough memory to lay the sheet out again (main memory budget).`)
-      return null
-    }
-    // The DOM grows when the next display commits: hold its admitted bytes
-    // until chargeMain measures the real DOM.
-    domReservation.current = dom
-    mainLedger.set('dom', 'resize-reservation', dom)
+  const admitCandidate = (sheetId: string, sizes: SessionSizes, name: string, represents: (metrics: ProjectedSheetMetrics) => boolean, unrepresentable: string, changed: { kind: 'row' | 'column'; index: number } | null = null): Candidate | null => {
+    const budget = MAIN_THREAD_BUDGETS[budgetProfile], current = entries.get(sheetId)!
+    const refuse = () => { setAnnouncement(`${name} was not resized: not enough memory to lay the sheet out again (main memory budget).`); return null }
+    // 1. Provisional reservation BEFORE construction: an upper bound of what
+    //    building the candidate allocates, derived from its inputs alone.
+    const upper = constructionUpperBytes(sheetId, current, sizes)
+    if (mainLedger.bytes + upper > budget) return refuse()
+    mainLedger.set('geometry', 'resize-candidate', upper)
+    let candidate: Candidate | null = null
+    try {
+      const prepared = prepareEntry(sheetId, sizes)
+      if ('candidate' in prepared) candidate = prepared.candidate
+    } finally { if (!candidate) mainLedger.release('geometry', 'resize-candidate') }
+    if (!candidate) return null
+    if (!represents(candidate.built.metrics)) { mainLedger.release('geometry', 'resize-candidate'); setAnnouncement(`${name} was not resized: ${unrepresentable}.`); return null }
+    // 2. Exact admission: the candidate's measured charge plus the DOM and the
+    //    canonical layout records its repaint adds, beside everything held now.
+    const growth = Math.max(0, semanticDomBytes(candidate.built.metrics) - semanticDomBytes(current.metrics)) + layoutGrowthBytes(candidate.built, candidate.sheet, changed)
+    if (mainLedger.bytes - upper + candidate.bytes + growth > budget) { mainLedger.release('geometry', 'resize-candidate'); return refuse() }
+    // 3. Commit: the repaint growth stays reserved until chargeMain measures it;
+    //    the provisional reservation is released just before the exact charge.
+    domReservation.current = growth
+    mainLedger.set('dom', 'resize-reservation', growth)
+    mainLedger.release('geometry', 'resize-candidate')
     return candidate
+  }
+  /** Upper bound of what building a session-size candidate allocates (§12.4),
+   * from its inputs only: both axes (segments per authored/hidden/session
+   * interval, temporary normalization copies included), the row projection
+   * with every permuted band dense (20 B/row) and its sections, the resident
+   * cell and merge index or the paged merge index, repositioned drawing copies
+   * with their placement axes, and a refreshed visibility mask when the
+   * structure changed (authored mask, intersection and their copies). */
+  const constructionUpperBytes = (sheetId: string, current: SheetEntry, sizes: SessionSizes): number => {
+    let rowIntervals = 0, colIntervals = 0, drawingCount = 0
+    if (remote) {
+      const layout = remote.layout(sheetId)
+      rowIntervals = layout.rowOverrides.length + layout.hidden.length
+      colIntervals = layout.colOverrides.length + (layout.hiddenCols?.length ?? 0)
+      drawingCount = remote.drawings(sheetId).drawings.length
+    } else {
+      for (const row of current.sheet.rows) if (row.customHeight || row.hidden) rowIntervals++
+      colIntervals = current.sheet.cols.length
+      drawingCount = current.sheet.drawings?.length ?? 0
+    }
+    const axis = (intervals: number) => 272 * intervals + 400
+    const rows = rowIntervals + sizes.rows.size, cols = colIntervals + sizes.cols.size
+    let projection = (2 * current.view.order.bands.length + 2 * rows + 8) * 176
+    for (const band of current.view.order.bands) projection += 20 * (band.r1 - band.r0 + 1) + 12
+    const drawings = drawingCount ? drawingCount * SIZED_DRAWING_BYTES + 2 * (axis(rows) + axis(cols)) : 0
+    const index = (remote ? 0 : current.geometry.cellIndexBytes ?? 0) + current.geometry.merges.estimatedBytes
+    const structureChanged = remote !== null && remote.merges(sheetId).gen !== current.structureGen
+    const mask = structureChanged ? 4 * (Math.ceil(current.metrics.rows.logicalCount / 32) * 4 + 8192) : 0
+    return axis(rows) + axis(cols) + projection + drawings + index + mask
+  }
+  /** Layout-cache growth a repaint adds: fresh canonical records for the shown
+   * cells whose box changed (layout keys include the box size), each bounded
+   * from its text length by estimateLayoutBytes' structure, capped by the
+   * cache's own byte budget. */
+  const layoutGrowthBytes = (geometry: SheetGeometry, sheet: XlsxSheet, changed: { kind: 'row' | 'column'; index: number } | null): number => {
+    if (!scroll) return 0
+    const metrics = geometry.metrics, pane = visibleLogicalViewport(scroll, viewport)
+    const colWindow = [...metrics.cols.visibleBetween(pane.x, pane.x + pane.width).runs]
+    if (!colWindow.length) return 0
+    const c0 = colWindow[0].start, c1 = colWindow[colWindow.length - 1].end
+    let bytes = 0, visited = 0
+    for (const run of metrics.rows.visibleBetween(pane.y, pane.y + pane.height).runs) {
+      for (let slot = run.start; slot <= run.end && visited < 8192; slot++, visited++) {
+        const row = metrics.order.displayToSource(slot)
+        if (changed?.kind === 'row' && row !== changed.index) continue
+        for (const cell of (geometry.cellsOf(row) ?? []) as readonly XlsxCell[]) {
+          if (cell.col < c0 || cell.col > c1) continue
+          const text = cellDisplayText(sheet, { value: cell.value, style: cell.style ?? (remote && 'styleIndex' in cell ? remote.styleOf(cell.styleIndex) : undefined) })
+          bytes += 2048 + 700 * text.length
+          if (bytes >= DEFAULT_LAYOUT_CACHE_BYTES) return DEFAULT_LAYOUT_CACHE_BYTES
+        }
+      }
+    }
+    return bytes
   }
   /** Semantic DOM a geometry shows in the current pane (GridSemantics rows,
    * cells, headers and resize handles), in the dom ledger's class bytes. */
@@ -1441,12 +1511,9 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
     const rows = metrics.rows.visibleBetween(pane.y, pane.y + pane.height).count, cols = metrics.cols.visibleBetween(pane.x, pane.x + pane.width).count
     const limits = profile === 'M' ? { cells: 10_000, lines: 2048 } : { cells: 20_000, lines: 4096 }
     if (rows * cols >= limits.cells || rows + cols >= limits.lines) return domClassBytes({ cell: 0, header: 8, other: 2 })
-    // Plus the canonical layout records the repaint adds for the shown cells.
-    return domClassBytes({ cell: 2 * rows * cols, header: 3 * rows + 8 * cols, other: 2 * rows + cols }) + rows * cols * LAYOUT_RECORD_BYTES
+    return domClassBytes({ cell: 2 * rows * cols, header: 3 * rows + 8 * cols, other: 2 * rows + cols })
   }
   const domReservation = useRef(0)
-  /** Layout-cache bytes a repainted cell record may add (estimateLayoutBytes order). */
-  const LAYOUT_RECORD_BYTES = 256
   const resetSizes = () => {
     const sheetId = activeSheetId, sizes = sizesOf(sheetId)
     if (sizes.empty) return
@@ -1542,6 +1609,16 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
       )}
     </div>
   )
+}
+
+/** A display mask AND another (both display-space, same extent). */
+function intersectVisibility(mask: RowVisibility, other: CompactRowVisibility): CompactRowVisibility {
+  if (mask instanceof CompactRowVisibility && mask.logicalCount === other.logicalCount) {
+    const words = new Uint32Array(other.words.length)
+    for (let word = 0; word < words.length; word++) words[word] = mask.words[word] & other.words[word]
+    return new CompactRowVisibility(other.logicalCount, words)
+  }
+  return createRowVisibility(other.logicalCount, slot => mask.visible(slot) && other.visible(slot))
 }
 
 /** Source row intervals → display slot intervals under `order`. Outside permuted

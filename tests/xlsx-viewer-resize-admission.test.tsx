@@ -17,6 +17,8 @@ import { createObjectWorkbookSource } from '../src/worker/viewerObjectSource'
 import type { MainMemoryLedger } from '../src/xlsx/view/mainLedger'
 import type { XlsxCell, XlsxDocument, XlsxRow } from '../src/xlsx/types'
 import { FIRST_PAINT_TEST, FIRST_PAINT_WAIT } from './helpers/viewer-timing'
+import * as viewportModule from '../src/xlsx/view/viewport'
+import { createRowOrder } from '../src/xlsx/view/order'
 
 afterEach(() => { cleanup(); vi.restoreAllMocks() })
 const BUDGET = 64 * 1024 * 1024
@@ -120,6 +122,34 @@ describe('confirmation r3 C1: a resize admits its measured candidate before publ
   })
 })
 
+describe('confirmation r4: admission happens before construction', () => {
+  it('R1 a candidate whose construction cannot fit is refused before the geometry is built (100k sorted rows, 512 KiB free)', { timeout: 60_000 }, async () => {
+    const rows = 100_000
+    const doc = docOf(Array.from({ length: rows }, (_, index) => ({ index, cells: [cell(index, 0, index)] })))
+    const order = createRowOrder([{ r0: 0, r1: rows - 1, sourceAtOffset: Uint32Array.from({ length: rows }, (_, i) => rows - 1 - i) }])
+    const views = { s: { revision: 1, order } }
+    const { ui, ledger } = await mount((onLedger, onFrame) => <InteractiveSheetDoc doc={doc} views={views} onMainLedger={onLedger} onFrame={onFrame} />)
+    const grid = goTo(ui, 'A1'); await settle()
+    const check = squeeze(ledger(), 512 * 1024)
+    const builds = vi.spyOn(viewportModule, 'buildSheetGeometry')
+    resizeKey(grid, 'ArrowDown'); await settle()
+    check()
+    expect(status(ui)).toMatch(/Row 1 was not resized: .*memory/)
+    expect(builds).not.toHaveBeenCalled()
+    ledger().set('copy', 'filler', 0)
+  })
+
+  it('R3 repaint layout growth is admitted even when the visible counts do not change (2,048-character wrapped cell, 64 KiB free)', FIRST_PAINT_TEST, async () => {
+    const doc = docOf([{ index: 0, cells: [{ ...cell(0, 0, 'word '.repeat(410).slice(0, 2048)), style: { numFmtId: 0, wrapText: true } }] }])
+    const { ui, ledger } = await mount((onLedger, onFrame) => <InteractiveSheetDoc doc={doc} views={{ s: { revision: 0 } }} onMainLedger={onLedger} onFrame={onFrame} />)
+    const grid = goTo(ui, 'A1'); await settle()
+    const check = squeeze(ledger(), 64 * 1024)
+    resizeKey(grid, 'ArrowRight'); await settle(); await settle()
+    check()
+    ledger().set('copy', 'filler', 0)
+  })
+})
+
 describe('confirmation r3 C2: structure-only worker layout publications refresh authored-hidden rows', () => {
   it('publishLayout hiding row 1 hides it in the viewer even though the view revision is unchanged', FIRST_PAINT_TEST, async () => {
     const doc = docOf([{ index: 0, cells: [cell(0, 0, 'a')] }, { index: 1, cells: [cell(1, 0, 'b')] }])
@@ -129,5 +159,19 @@ describe('confirmation r3 C2: structure-only worker layout publications refresh 
     act(() => remote.publishLayout('s', { ...remote.layout('s'), hidden: [{ r0: 0, r1: 0 }] }))
     await settle()
     await waitFor(() => expect(ui.queryByRole('rowheader', { name: 'Row 1' })).toBeNull())
+  })
+
+  it('R4 after a committed worker filter view, a layout publication hiding row 1 still hides it (mask AND NOT authored-hidden)', FIRST_PAINT_TEST, async () => {
+    const doc = docOf([{ index: 0, cells: [cell(0, 0, 'a')] }, { index: 1, cells: [cell(1, 0, 'b')] }, { index: 2, cells: [cell(2, 0, 'c')] }])
+    const remote = await remoteOf(doc)
+    const { ui } = await mount((onLedger, onFrame) => <InteractiveSheetDoc doc={shell(doc)} source={remote as never} onMainLedger={onLedger} onFrame={onFrame} />)
+    await act(async () => { await remote.filter(remote.identity('s'), null, [], new AbortController().signal) })
+    await settle()
+    expect(remote.view('s').visibility).toBeTruthy()
+    expect(rowHeight(ui, 'Row 1')).toBe(20)
+    act(() => remote.publishLayout('s', { ...remote.layout('s'), hidden: [{ r0: 0, r1: 0 }] }))
+    await settle()
+    await waitFor(() => expect(ui.queryByRole('rowheader', { name: 'Row 1' })).toBeNull())
+    expect(rowHeight(ui, 'Row 2')).toBe(20)
   })
 })

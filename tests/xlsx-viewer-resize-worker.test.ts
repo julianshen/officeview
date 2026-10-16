@@ -74,6 +74,41 @@ describe('review #2: paged geometry never throws for a legal session size', () =
   })
 })
 
+describe('confirmation r4 R2: paged drawing copies are part of the candidate', () => {
+  const E = 9525
+  const fakeDrawings = (count: number) => ({ state: 'ready', gen: 1, images: [], diagnostics: [], bytes: 0,
+    drawings: Array.from({ length: count }, (_, i) => ({ xEmu: (100 + i) * E, yEmu: 0, widthEmu: 64 * E, heightEmu: 40 * E, geometry: 'rect', source: { partPath: 'p', treePath: `twoCellAnchor[${i}]/sp[0]`, element: 'sp', representation: 'native' } })),
+    drawingsIn: () => [] }) as never
+  it('a deferred build places moved drawings eagerly and prices them in its charge', async () => {
+    const h = await harness()
+    try {
+      vi.spyOn(h.remote, 'drawings').mockReturnValue(fakeDrawings(2048))
+      const plain = pagedSheetGeometry(h.remote, 's', createIdentityOrder(), visibility(), undefined, undefined, true)
+      const sized = pagedSheetGeometry(h.remote, 's', createIdentityOrder(), visibility(), undefined, sizes([[0, 100]]), true)
+      expect(sized.sizedDrawings?.length).toBe(2048)
+      expect(sized.drawingsIn(0, 0, 1e6, 1e6, 1e6)?.length).toBe(2048)
+      expect(h.remote.mainLedger.snapshot().byPool.drawings).toBe(0)
+      expect(plain.sizedDrawings).toBeUndefined()
+    } finally { await h.remote.release() }
+  })
+  it('a later drawing list is placed lazily only if it fits the main budget (null: over budget)', async () => {
+    const h = await harness()
+    try {
+      const content = fakeDrawings(4) as { drawings: unknown[] }
+      vi.spyOn(h.remote, 'drawings').mockReturnValue(content as never)
+      const geometry = pagedSheetGeometry(h.remote, 's', createIdentityOrder(), visibility(), undefined, sizes([[0, 100]]))
+      // Drawing content changes in place when a newer list arrives.
+      content.drawings = (fakeDrawings(2048) as { drawings: unknown[] }).drawings
+      h.remote.mainLedger.set('copy', 'filler', 64 * 1024 * 1024 - h.remote.mainLedger.bytes - 4096)
+      const drawingsBefore = h.remote.mainLedger.snapshot().byPool.drawings
+      expect(geometry.drawingsIn(0, 0, 1e6, 1e6, 1e6)).toBeNull()
+      expect(h.remote.mainLedger.snapshot().byPool.drawings).toBe(drawingsBefore)
+      expect(h.remote.mainLedger.bytes).toBeLessThanOrEqual(64 * 1024 * 1024)
+      h.remote.mainLedger.set('copy', 'filler', 0)
+    } finally { await h.remote.release() }
+  })
+})
+
 describe('worker plans while a sheet is resized', () => {
   const commands = (h: Awaited<ReturnType<typeof harness>>) => h.remote.stats.commands.viewport ?? 0
 

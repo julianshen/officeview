@@ -18,6 +18,7 @@ import { MAX_COLS, MAX_ROWS } from '../../xlsx/view/coordinates'
 import { axisDiagnostic, drawingQuery, sizedDrawings } from '../../xlsx/view/viewport'
 import type { WorkerDiagnostic } from '../../xlsx/view/contracts'
 import type { XlsxDrawing } from '../../xlsx/types'
+import { MAIN_THREAD_BUDGETS } from '../../xlsx/view/tileCache'
 
 /** `sizes` (spec §5.6) are the sheet's view-only session sizes: the axes are
  * rebuilt from the worker's compact layout with them applied, so every
@@ -34,6 +35,7 @@ export function pagedSheetGeometry(remote: RemoteWorkbook, sheetId: string, orde
   const plainDrawings: SheetGeometry['drawingsIn'] = (...query) => drawings.drawingsIn(...query)
   let drawingsIn = plainDrawings
   const sizeDiagnostics: WorkerDiagnostic[] = []
+  let eager: readonly XlsxDrawing[] | undefined
   let metrics: ReturnType<typeof createSheetMetrics> | undefined
   if (hasSessionSizes(sizes)) {
     const layout = remote.layout(sheetId)
@@ -50,19 +52,28 @@ export function pagedSheetGeometry(remote: RemoteWorkbook, sheetId: string, orde
       rows = axes.rows; cols = axes.cols; metrics = undefined
     }
     sizedBytes = (rows === axes.rows ? 0 : axisBytes(rows)) + (cols === axes.cols ? 0 : axisBytes(cols))
-    // Drawing content arrives (and is evicted) after this geometry is built:
-    // place each published list once, keyed weakly so the geometry never pins it.
+    // The drawings published now are placed eagerly: they are part of this
+    // geometry (sizedDrawings), priced and admitted with it. Content that
+    // arrives later is placed once per list, keyed weakly so the geometry never
+    // pins it, and only if it fits the main budget (otherwise the query reports
+    // over budget, null, and is asked again later).
     const placed = new WeakMap<readonly XlsxDrawing[], SheetGeometry['drawingsIn']>()
     const hiddenRows = layout.hidden.map(interval => ({ start: interval.r0, end: interval.r1 }))
+    const place = (list: readonly XlsxDrawing[]) => sizedDrawings(list, sizes, layout.rowOverrides, hiddenRows, layout.colOverrides, hiddenCols)
+    if (metrics && drawings.drawings.length) {
+      eager = place(drawings.drawings)
+      placed.set(drawings.drawings, drawingQuery(eager))
+    }
     if (metrics) drawingsIn = (...query) => {
       const list = drawings.drawings
       if (!list.length) return drawings.drawingsIn(...query)
       let sized = placed.get(list)
       if (!sized) {
-        const moved = sizedDrawings(list, sizes, layout.rowOverrides, hiddenRows, layout.colOverrides, hiddenCols)
-        sized = drawingQuery(moved)
+        const bytes = list.length * SIZED_DRAWING_BYTES
+        if (remote.mainLedger.bytes + bytes > MAIN_THREAD_BUDGETS[remote.profile]) return null
+        sized = drawingQuery(place(list))
         placed.set(list, sized)
-        remote.mainLedger.chargeWhileReachable('drawings', [sized], moved.length * SIZED_DRAWING_BYTES)
+        remote.mainLedger.chargeWhileReachable('drawings', [sized], bytes)
       }
       return sized(...query)
     }
@@ -77,6 +88,7 @@ export function pagedSheetGeometry(remote: RemoteWorkbook, sheetId: string, orde
     merges: mergeIndex,
     // Read at query time so geometry does not pin an evicted drawing payload.
     drawingsIn,
+    ...(eager ? { sizedDrawings: eager } : {}),
     /** What the owner charges for this geometry (deferred builds are measured
      * and admitted before the owner publishes and charges them). */
     chargeBytes: projectionBytes(metrics) + mergeIndex.estimatedBytes + sizedBytes,
@@ -86,6 +98,7 @@ export function pagedSheetGeometry(remote: RemoteWorkbook, sheetId: string, orde
   // are charged while held: by the sheet entry that shows this geometry and any
   // continuation reading it (§12.4). Unheld, it lasts while reachable.
   remote.mainLedger.chargeWhileHeld('geometry', [geometry], geometry.chargeBytes)
+  if (eager) remote.mainLedger.chargeWhileReachable('drawings', [eager], eager.length * SIZED_DRAWING_BYTES)
   bindOverflowCache(geometry, cache)
   return geometry
 }
