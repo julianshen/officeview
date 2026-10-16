@@ -176,39 +176,40 @@ export class SheetTileRenderer {
       target.fillRect(0, 0, target.canvas.width, target.canvas.height)
       // Frozen panes: each region (body first, then the pinned strips over it)
       // draws the same cached tiles with its own effective origin, clipped.
-      // One tile is admitted, painted and charged once per frame even when
-      // several regions show it; its surface is reused across their clips.
-      const presented = new Map<string, ReturnType<SheetTileRenderer['tile']>>()
-      for (const region of regions) {
-        const rx = Math.round(region.origin.x * scale), ry = Math.round(region.origin.y * scale)
-        const visible = pinned
-          ? tileRangeFor({ origin: { x: region.origin.x + region.clip.x / frame.zoom, y: region.origin.y + region.clip.y / frame.zoom }, viewport: { width: region.clip.width, height: region.clip.height }, zoom: frame.zoom, dpr: frame.dpr, extent: frame.extent })
-          : this.ranges(frame).visible
-        if (pinned) {
-          target.save()
-          const x0 = Math.round(region.clip.x * frame.dpr), y0 = Math.round(region.clip.y * frame.dpr)
-          target.beginPath()
-          target.rect(x0, y0, Math.round((region.clip.x + region.clip.width) * frame.dpr) - x0, Math.round((region.clip.y + region.clip.height) * frame.dpr) - y0)
-          target.clip()
-        }
-        for (let row = visible.r0; row <= visible.r1; row++) {
-          for (let col = visible.c0; col <= visible.c1; col++) {
-            const id = `${col},${row}`
-            let tile = presented.get(id)
-            if (!tile) {
-              tile = this.tile(frame, col, row, true, budget)
-              presented.set(id, tile)
-              resourceNotice ??= tile.surface.cost?.resourceNotice
-              records += tile.surface.cost?.records ?? 0
-              gridlines += tile.surface.cost?.gridlines ?? 0
-            }
-            // Float64 global device offsets minus the snapped origin: small integers.
-            target.drawImage(tile.surface.canvas, col * TILE_DEVICE_PX - (pinned ? rx : px), row * TILE_DEVICE_PX - (pinned ? ry : py))
-          }
-        }
-        if (pinned) target.restore()
+      // Each tile is obtained (admitted, painted, charged) once per frame and
+      // drawn through every region clip that shows it before the next tile is
+      // obtained, so at most one transient (unretained) surface is live and no
+      // surface is used after the cache evicts it.
+      const clipOf = (region: typeof regions[number]) => {
+        const x0 = Math.round(region.clip.x * frame.dpr), y0 = Math.round(region.clip.y * frame.dpr)
+        return { x0, y0, w: Math.round((region.clip.x + region.clip.width) * frame.dpr) - x0, h: Math.round((region.clip.y + region.clip.height) * frame.dpr) - y0 }
       }
-      for (const tile of presented.values()) if (!tile.retained) tile.surface.close()
+      const plan = regions.map(region => ({
+        region, clip: pinned ? clipOf(region) : undefined,
+        rx: pinned ? Math.round(region.origin.x * scale) : px, ry: pinned ? Math.round(region.origin.y * scale) : py,
+        visible: pinned
+          ? tileRangeFor({ origin: { x: region.origin.x + region.clip.x / frame.zoom, y: region.origin.y + region.clip.y / frame.zoom }, viewport: { width: region.clip.width, height: region.clip.height }, zoom: frame.zoom, dpr: frame.dpr, extent: frame.extent })
+          : this.ranges(frame).visible,
+      }))
+      const order: Array<{ col: number; row: number }> = [], seen = new Set<string>()
+      for (const { visible } of plan) for (let row = visible.r0; row <= visible.r1; row++) for (let col = visible.c0; col <= visible.c1; col++) {
+        const id = `${col},${row}`
+        if (!seen.has(id)) { seen.add(id); order.push({ col, row }) }
+      }
+      for (const { col, row } of order) {
+        const tile = this.tile(frame, col, row, true, budget)
+        resourceNotice ??= tile.surface.cost?.resourceNotice
+        records += tile.surface.cost?.records ?? 0
+        gridlines += tile.surface.cost?.gridlines ?? 0
+        for (const { visible, clip, rx, ry } of plan) {
+          if (col < visible.c0 || col > visible.c1 || row < visible.r0 || row > visible.r1) continue
+          if (clip) { target.save(); target.beginPath(); target.rect(clip.x0, clip.y0, clip.w, clip.h); target.clip() }
+          // Float64 global device offsets minus the snapped origin: small integers.
+          target.drawImage(tile.surface.canvas, col * TILE_DEVICE_PX - rx, row * TILE_DEVICE_PX - ry)
+          if (clip) target.restore()
+        }
+        if (!tile.retained) tile.surface.close()
+      }
       if (pinned) paintFreezeLines(target, frame)
       if (frame.watermark) {
         target.setTransform(frame.dpr, 0, 0, frame.dpr, 0, 0)

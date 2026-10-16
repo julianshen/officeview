@@ -37,7 +37,7 @@ describe('frozen pane paint', () => {
     expect(at).toContainEqual([-100, 0]) // top strip: tile (5,0)
     expect(at).toContainEqual([0, -100]) // left strip: tile (0,5)
     expect(at).toContainEqual([0, 0]) // corner: tile (0,0)
-    expect(clips).toHaveBeenCalledTimes(4)
+    expect(clips.mock.calls.length).toBe(draws.mock.calls.length)
     // The divider sits on the cell boundary, in the body's first pixel: never over frozen-strip glyphs.
     expect(fills.mock.calls).toContainEqual([64, 0, 1, 400])
     expect(fills.mock.calls).toContainEqual([0, 20, 640, 1])

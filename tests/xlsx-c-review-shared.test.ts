@@ -48,6 +48,28 @@ it('frozen scrolling keeps the pinned corner and strip requests alive', () => {
   h.plans.dispose()
   expect(aborted).toBe(false)
 })
+it('vertical-only scrolling keeps top-strip requests; horizontal-only keeps left-strip requests', () => {
+  const top=harness(), topRequest=windowOf({x:5120,y:0,width:512,height:512})
+  frameAt(top, 5120, 5120)
+  top.plans.get(owner,topRequest,{width:1e6,height:1e6},true)
+  frameAt(top, 5120, 51200)
+  const topAborted=top.signals[0].aborted
+  top.plans.dispose()
+  const left=harness(), leftRequest=windowOf({x:0,y:5120,width:512,height:512})
+  frameAt(left, 5120, 5120)
+  left.plans.get(owner,leftRequest,{width:1e6,height:1e6},true)
+  frameAt(left, 51200, 5120)
+  const leftAborted=left.signals[0].aborted
+  left.plans.dispose()
+  expect({topAborted,leftAborted}).toEqual({topAborted:false,leftAborted:false})
+  // and the same strip requests are dropped once the strip itself scrolls past them
+  const gone=harness()
+  frameAt(gone, 5120, 5120)
+  gone.plans.get(owner,topRequest,{width:1e6,height:1e6},true)
+  frameAt(gone, 51200, 51200)
+  expect(gone.signals[0].aborted).toBe(true)
+  gone.plans.dispose()
+})
 it('control: ordinary scrolling cancels the same obsolete pending plan', () => {
   const h=harness(), old=windowOf({x:5120,y:5120,width:512,height:512})
   h.plans.beginFrame(owner,windowOf({x:5120,y:5120,width:640,height:400}))
