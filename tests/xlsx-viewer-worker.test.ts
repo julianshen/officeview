@@ -110,7 +110,9 @@ describe('resident viewer worker (S4.1)', () => {
     const blob = new Blob([await workbookBytes()])
     const read = vi.spyOn(blob, 'arrayBuffer')
     const open = completed(await run(kernel, { kind: 'open', requestId: rid(), docId: 'doc', source: { kind: 'blob', blob }, profile: 'D' }))
-    expect(open).toEqual({ kind: 'open', valuePolicy: 'engine', sheets: [{ sheetId: '1', name: 'Data' }, { sheetId: '2', name: 'Other' }] })
+    // The object source publishes its style table so remote cells keep their
+    // fills, fonts and borders (visual review #11).
+    expect(open).toEqual({ kind: 'open', valuePolicy: 'engine', sheets: [{ sheetId: '1', name: 'Data' }, { sheetId: '2', name: 'Other' }], formatting: { dateSystem: '1900', styles: expect.any(Array) } })
     let workbook: WorkbookOwner = initialWorkbookOwner('doc', open.kind === 'open' ? open.sheets : [])
     let owner: CacheIdentity = initialIdentity('doc', '1')
     completed(await run(kernel, { kind: 'activateSheet', requestId: rid(), owner: workbook, sheetId: '2' }))

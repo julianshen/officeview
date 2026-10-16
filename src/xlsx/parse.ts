@@ -1,7 +1,7 @@
 /** Parse XLSX parts into the XlsxDocument model. */
 import type { OfficePackage } from '../core/zip'
 import { attrs, getChildren, textOf, type XmlNode } from '../core/xml'
-import type { XlsxCell, XlsxDocument, XlsxMergeRange, XlsxRow, XlsxSheet } from './types'
+import type { XlsxCell, XlsxCellStyle, XlsxDocument, XlsxMergeRange, XlsxRow, XlsxSheet } from './types'
 import type {
   CalcSettings,
   DefinedNameMetadata,
@@ -20,6 +20,8 @@ import { evaluateWorkbookFormulas, markSavedValuesOnly, type WorkbookEvaluationO
 import { initializeSavedSpills } from './formula/saved-spills'
 import { dynamicMetadataIndices } from './metadata'
 import { decodeXlsxString } from './strings'
+import { resolveSheetColor, type SheetColorContext } from './sheetColors'
+import { defaultColumnWidthPx, maxDigitWidthPx, sheetFormat } from './columnWidth'
 import { MAX_COLS, MAX_ROWS, formatA1 } from './view/coordinates'
 import { PackageError } from '../core/package-error'
 
@@ -68,16 +70,23 @@ interface Styles {
   numFmtIds: number[]
   /** Authored custom number formats (styles.xml <numFmts>), keyed by numFmtId. */
   numFmts: Map<number, string>
-  fonts: Array<{ bold: boolean; italic: boolean; sizePt?: number; color?: string }>
+  fonts: Array<{ bold: boolean; italic: boolean; sizePt?: number; color?: string; name?: string }>
   fills: Array<{ rgb?: string; pattern?: string }>
-  borders: Array<{ left?: string; right?: string; top?: string; bottom?: string }>
+  borders: Array<{ left?: string; right?: string; top?: string; bottom?: string; colors?: { left?: string; right?: string; top?: string; bottom?: string } }>
   xfs: Array<{ numFmtId: number; fontId: number; fillId: number; borderId: number; textRotation?: number; horizontal?: string; vertical?: string; wrapText?: boolean; shrinkToFit?: boolean }>
 }
 
-async function parseStyles(pkg: OfficePackage): Promise<Styles> {
+async function parseStyles(pkg: OfficePackage, themePalette?: Readonly<Record<string, string>>): Promise<Styles> {
   const root = await pkg.xml('xl/styles.xml')
   const styles: Styles = { numFmtIds: [], numFmts: new Map(), fonts: [], fills: [], borders: [], xfs: [] }
   if (!root) return styles
+  // Indexed and theme colour references resolve here, once, for every path.
+  const indexed = getChildren(getChildren(root, 'colors')[0], 'indexedColors')[0]
+  const colorContext: SheetColorContext = {
+    ...(themePalette ? { theme: themePalette } : {}),
+    ...(indexed ? { indexed: getChildren(indexed, 'rgbColor').map(node => String(attrs(node).rgb ?? '')) } : {}),
+  }
+  const colorOf = (node: XmlNode | undefined) => node ? resolveSheetColor(attrs(node), colorContext) : undefined
   for (const numFmtsN of getChildren(root, 'numFmts')) {
     for (const nf of getChildren(numFmtsN, 'numFmt')) {
       const a = attrs(nf)
@@ -91,7 +100,8 @@ async function parseStyles(pkg: OfficePackage): Promise<Styles> {
       bold: f['b'] !== undefined,
       italic: f['i'] !== undefined,
       sizePt: f['sz'] !== undefined ? parseFloat(attrs(asNode(f['sz'])).val ?? '11') : undefined,
-      color: attrs(asNode(f['color'])).rgb as string | undefined,
+      color: colorOf(asNode(f['color'])),
+      name: attrs(asNode(f['name'])).val as string | undefined,
     }
     styles.fonts.push(font)
   }
@@ -99,7 +109,7 @@ async function parseStyles(pkg: OfficePackage): Promise<Styles> {
     for (const fill of getChildren(fillsN, 'fill')) {
       const pattern = getChildren(fill, 'patternFill')[0]
       const fg = pattern ? getChildren(pattern, 'fgColor')[0] : undefined
-      styles.fills.push({ rgb: attrs(asNode(fg)).rgb as string | undefined, pattern: attrs(asNode(pattern)).patternType as string | undefined })
+      styles.fills.push({ rgb: colorOf(fg), pattern: attrs(asNode(pattern)).patternType as string | undefined })
     }
   }
   for (const bordersN of getChildren(root, 'borders')) {
@@ -108,7 +118,14 @@ async function parseStyles(pkg: OfficePackage): Promise<Styles> {
         const node = getChildren(border, n)[0]
         return node ? (attrs(node).style as string | undefined) : undefined
       }
-      styles.borders.push({ left: side('left'), right: side('right'), top: side('top'), bottom: side('bottom') })
+      // Side colours (auto and system indexed 64 keep the black default).
+      const colors: Record<string, string> = {}
+      for (const n of ['left', 'right', 'top', 'bottom']) {
+        const node = getChildren(border, n)[0]
+        const rgb = node && side(n) ? colorOf(getChildren(node, 'color')[0]) : undefined
+        if (rgb) colors[n] = rgb
+      }
+      styles.borders.push({ left: side('left'), right: side('right'), top: side('top'), bottom: side('bottom'), ...(Object.keys(colors).length ? { colors } : {}) })
     }
   }
   for (const cellXfsN of getChildren(root, 'cellXfs')) {
@@ -145,6 +162,36 @@ export interface ParseXlsxOptions {
   valuePolicy?: 'engine' | 'cached'
 }
 
+/** The workbook default (Normal style, font 0) maximum digit width. */
+export function workbookDigitWidth(styles: Styles): number {
+  const font = styles.fonts[0]
+  return font ? maxDigitWidthPx(font.name, font.sizePt) : 7
+}
+
+/** One cellXfs entry resolved to the cell style (fonts/fills/borders/numFmt):
+ * the single resolution both the object parser and the paged import use. */
+export function resolveXfStyle(styles: Styles, xf: Styles['xfs'][number]): XlsxCellStyle {
+  const font = styles.fonts[xf.fontId]
+  const fill = styles.fills[xf.fillId]
+  const border = styles.borders[xf.borderId]
+  return {
+    numFmtId: xf.numFmtId,
+    formatCode: styles.numFmts.get(xf.numFmtId),
+    bold: font?.bold,
+    italic: font?.italic,
+    fontSizePt: font?.sizePt,
+    color: font?.color,
+    fillColor: fill?.pattern === 'solid' ? fill.rgb : undefined,
+    borders: border ? { left: border.left, right: border.right, top: border.top, bottom: border.bottom } : undefined,
+    ...(border?.colors ? { borderColors: { ...border.colors } } : {}),
+    textRotation: xf.textRotation,
+    horizontal: xf.horizontal,
+    vertical: xf.vertical,
+    wrapText: xf.wrapText,
+    ...(xf.shrinkToFit !== undefined ? { shrinkToFit: xf.shrinkToFit } : {}),
+  }
+}
+
 export async function parseXlsx(pkg: OfficePackage, options: ParseXlsxOptions = {}): Promise<XlsxDocument> {
   const workbook = await pkg.xml('xl/workbook.xml')
   if (!workbook) throw new Error('xl/workbook.xml missing — not a valid xlsx?')
@@ -172,12 +219,13 @@ export async function parseXlsx(pkg: OfficePackage, options: ParseXlsxOptions = 
     try { const text=await pkg.text(metadataPath);if(text)dynamicIndices=dynamicMetadataIndices(text) }
     catch { /* Unverified optional metadata never upgrades a fixed array. */ }
   }
-  const styles = await parseStyles(pkg)
   let theme: ThemeContext = parseThemeContext()
+  let themeParsed = false
   if (themePath) {
-    try { theme = parseThemeContext(await pkg.xmlOrdered(themePath)) }
+    try { theme = parseThemeContext(await pkg.xmlOrdered(themePath)); themeParsed = true }
     catch { /* optional theme cannot invalidate usable cells */ }
   }
+  const styles = await parseStyles(pkg, themeParsed ? theme.palette : undefined)
 
   const sheets: XlsxSheet[] = []
   const workbookSheets: WorkbookSheetIdentity[] = []
@@ -193,7 +241,7 @@ export async function parseXlsx(pkg: OfficePackage, options: ParseXlsxOptions = 
     const relType = relTypes.get(relId) ?? ''
     const kind = relType.endsWith('/worksheet') ? 'worksheet' : relType !== '' ? 'other' : 'worksheet'
     const path = target.startsWith('/') ? target.slice(1) : `xl/${target.replace(/^\.\.\//, '')}`
-    const sheet = await parseSheet(pkg, path, name, strings, styles, theme, sheetId, workbookIndex, kind, dynamicIndices)
+    const sheet = await parseSheet(pkg, path, name, strings, styles, theme, sheetId, workbookIndex, kind, dynamicIndices, workbookDigitWidth(styles))
     sheets.push(sheet)
     sheetPartPaths.push(path)
     workbookSheets.push({ sheetId, workbookIndex, name, kind })
@@ -389,6 +437,7 @@ export async function parseXlsx(pkg: OfficePackage, options: ParseXlsxOptions = 
     calc,
     calcChainPresent,
     semantics,
+    cellStyles: styles.xfs.map(xf => resolveXfStyle(styles, xf)),
     ...(declaredFilters.length > 0 ? { declaredFilters } : {}),
   }
   initializeSavedSpills(doc)
@@ -408,11 +457,15 @@ async function parseSheet(
   workbookIndex: number,
   kind: 'worksheet' | 'other',
   dynamicIndices:ReadonlySet<number>,
+  digitWidth = 7,
 ): Promise<XlsxSheet> {
   const root = await pkg.xml(path)
   const sheet: XlsxSheet = { name, sourcePartPath: path, sheetId, workbookIndex, kind, rows: [], cols: [], merges: [], mergeRanges: [] }
   if (!root) return sheet
   const data = getChildren(root, 'worksheet')[0] ?? root
+  // Excel's column pixel model; set before drawings are placed against the grid.
+  const columns = { maxDigitWidthPx: digitWidth, defaultWidthPx: defaultColumnWidthPx(sheetFormat(attrs(getChildren(data, 'sheetFormatPr')[0])), digitWidth) }
+  if (columns.maxDigitWidthPx !== 7 || columns.defaultWidthPx !== 64) sheet.columnMetrics = columns
   const colsNode = getChildren(data, 'cols')[0]
   if (colsNode) {
     for (const col of getChildren(colsNode, 'col')) {
@@ -573,26 +626,7 @@ async function parseSheet(
         ca: calcAlways ? true : undefined,
       }
       const xf = styles.xfs[cell.styleIndex]
-      if (xf) {
-        const font = styles.fonts[xf.fontId]
-        const fill = styles.fills[xf.fillId]
-        const border = styles.borders[xf.borderId]
-        cell.style = {
-          numFmtId: xf.numFmtId,
-          formatCode: styles.numFmts.get(xf.numFmtId),
-          bold: font?.bold,
-          italic: font?.italic,
-          fontSizePt: font?.sizePt,
-          color: font?.color,
-          fillColor: fill?.pattern === 'solid' ? fill.rgb : undefined,
-          borders: border ? { left: border.left, right: border.right, top: border.top, bottom: border.bottom } : undefined,
-          textRotation: xf.textRotation,
-          horizontal: xf.horizontal,
-          vertical: xf.vertical,
-          wrapText: xf.wrapText,
-          ...(xf.shrinkToFit !== undefined ? { shrinkToFit: xf.shrinkToFit } : {}),
-        }
-      }
+      if (xf) cell.style = resolveXfStyle(styles, xf)
       row.cells.push(cell)
     }
     const earlier = rowsByIndex.get(row.index)

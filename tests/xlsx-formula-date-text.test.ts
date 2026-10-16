@@ -304,7 +304,8 @@ describe('parse -> shared renderer date display', () => {
   it('unsupported authored custom format records a specific sheet diagnostic and keeps raw fallback', async () => {
     const { texts, sheet } = await renderFixtureTexts({
       date1904: false,
-      customNumFmts: { 164: '[Red]0.00' },
+      // Colours and conditions now display (visual review #7); unknown brackets stay unsupported.
+      customNumFmts: { 164: '[Purpleish]0.00' },
       xfs: [0, 164],
       cells: [{ ref: 'A1', value: 3.14159, style: 1 }],
     })

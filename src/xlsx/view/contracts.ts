@@ -476,6 +476,8 @@ export type SourceReadResult =
 export interface WorkbookFormatting {
   dateSystem: '1900' | '1904'
   styles: readonly XlsxCellStyle[]
+  /** The default font's maximum digit width (column-width model); absent: 7px. */
+  maxDigitWidthPx?: number
 }
 /** S5.4: committed value-list keys of a `values` rule, shipped with a worker
  * filter command because the dropdown's key store lives on the main thread.

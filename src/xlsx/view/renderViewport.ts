@@ -9,7 +9,7 @@ import type { CacheIdentity, LogicalViewport, WorkerDiagnostic } from './contrac
 import type { SourceCell } from './coordinates'
 import { COARSE_NOTICE, emptyWork, planViewport, type CoarseGroup, type FrameBudget, type MergeQueryCache, type SheetGeometryResult, type ViewportPlan, type ViewportProfile, type ViewportWork } from './viewport'
 import { buildCellRecords, LayoutCache, type CellLayout, type CellLayoutHost } from './textLayout'
-import { layoutCellBody, paintCellLayout, paintSheetDrawings, textMeasurer, type RenderSheetAssets } from '../render'
+import { layoutCellBody, paintCellLayout, paintSheetDrawings, spillSpan, textMeasurer, type RenderSheetAssets } from '../render'
 import { paintWatermark, type ResolvedWatermark, type WatermarkOptions } from '../../core/watermark'
 import { CSS_PX_PER_INCH, EMU_PER_INCH } from '../../core/geometry'
 
@@ -160,8 +160,18 @@ export function renderSheetViewport(
       // exactly like the static path's full-length lines.
       const yTop = Math.max(0, vy - 1), yBottom = Math.min(plan.extent.height, vy + height + 1)
       const xLeft = Math.max(0, vx - 1), xRight = Math.min(plan.extent.width, vx + width + 1)
+      // Text spilling into empty neighbours hides the vertical gridlines it
+      // crosses (as Excel does); bodies are box-relative, records logical.
+      const spills: Array<{ x0: number; x1: number; y0: number; y1: number }> = []
+      for (const record of extraActive ? [...records, extraActive] : records) {
+        const span = spillSpan(record.body)
+        if (!span) continue
+        const dx = record.logicalBounds.x - record.body.x
+        spills.push({ x0: span.x0 + dx, x1: span.x1 + dx, y0: record.logicalBounds.y, y1: record.logicalBounds.y + record.logicalBounds.height })
+      }
       for (const x of plan.colLines) {
         const hidden = plan.merges.filter(merge => merge.x < x && x < merge.x + merge.width).map(merge => [merge.y, merge.y + merge.height] as [number, number])
+        for (const band of spills) if (band.x0 < x && x < band.x1) hidden.push([band.y0, band.y1])
         for (const [y1, y2] of openSegments(yTop, yBottom, hidden)) {
           work.gridlineSpans++
           ctx.moveTo(x - vx + 0.5, y1 - vy + 0.5)

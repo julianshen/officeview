@@ -60,6 +60,8 @@ export interface XlsxCellStyle {
   color?: string
   fillColor?: string
   borders?: { left?: string; right?: string; top?: string; bottom?: string }
+  /** SpreadsheetML ARGB per border side (absent: black). */
+  borderColors?: { left?: string; right?: string; top?: string; bottom?: string }
   /** Normalized alignment textRotation: 1-180 as authored, or 255 stacked. Absent, 0 and invalid values stay undefined (horizontal). */
   textRotation?: number
   /** Alignment horizontal/vertical as authored (e.g. left/center/right, top/center/bottom). Absent stays undefined. */
@@ -136,6 +138,9 @@ export interface XlsxSheet {
   sheetId?: string
   workbookIndex?: number
   kind?: 'worksheet' | 'other'
+  /** Excel column pixel model (workbook MDW, sheet default width); absent:
+   * Calibri 11 (MDW 7px, 64px default). */
+  columnMetrics?: import('./columnWidth').ColumnMetrics
   rows: XlsxRow[]
   cols: XlsxColumnSpec[]
   merges: string[]
@@ -183,4 +188,7 @@ export interface XlsxDocument {
    * or guessed. `undefined` means the model did not declare it. */
   calcChainPresent?: boolean
   semantics?: ResolvedSemantics
+  /** Resolved cellXfs table (index = cell styleIndex), published to worker
+   * viewer sources so remote cells style exactly like resident ones. */
+  cellStyles?: readonly XlsxCellStyle[]
 }

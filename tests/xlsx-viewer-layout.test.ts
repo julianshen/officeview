@@ -206,8 +206,9 @@ describe('canonical records (object sheet)', () => {
         cell(0, 3, 'Down', { numFmtId: 0, textRotation: 180 }),
       ] },
     ], [{ min: 0, max: 0, widthChars: 12 }])
-    // The static bitmap ends at the used grid (89 + 3 x 64 px, one 80px row).
-    const { diff, result, ink } = cropParity(sheet, { x: 0, y: 0, width: 281, height: 80 })
+    // The static bitmap ends at the used grid (84 + 3 x 64 px, one 80px row;
+    // width 12 is 84px in Excel's column model).
+    const { diff, result, ink } = cropParity(sheet, { x: 0, y: 0, width: 276, height: 80 })
     expect(diff).toBe(0)
     expect(ink).toBe(true)
     const [wrapped, tilted, stacked, down] = result.records.map(record => record.text[0].runs[0])
@@ -423,7 +424,8 @@ describe('detail admission (SheetZoom x DPR, no font-size floor)', () => {
   test('a tile holding more than the per-tile record cap is coarse even under the frame cap', () => {
     // 5px cells: one 512px tile holds 10,000 records (> 5,000) though the frame cap is 20,000.
     const rows: XlsxRow[] = Array.from({ length: 100 }, (_, r) => ({ index: r, heightPt: 3.75, customHeight: true, cells: Array.from({ length: 100 }, (_, c) => cell(r, c, 1)) }))
-    const sheet = sheetOf(rows, [{ min: 0, max: 99, widthChars: 0 }])
+    // 5/7 characters is 5px in Excel's column model (mdw 7).
+    const sheet = sheetOf(rows, [{ min: 0, max: 99, widthChars: 5 / 7 }])
     const geometry = ready(sheet)
     expect(geometry.metrics.cols.size(0)).toBe(5)
     expect(geometry.metrics.rows.size(0)).toBe(5)

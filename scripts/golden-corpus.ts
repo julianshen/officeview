@@ -281,9 +281,16 @@ async function compare(only: string | undefined, threshold: number, maxRatio: nu
     noteScaledUnits(file, specs)
     for (let i = 0; i < bitmaps.length; i++) {
       const golden = await loadPng(goldenPath(file, i))
+      const label = `${file}.${i}`
+      if (golden.width !== bitmaps[i].width || golden.height !== bitmaps[i].height) {
+        // A geometry change is a failure to review, not a crash of the whole run.
+        failures++
+        await savePng(bitmaps[i], join(DIFF_DIR, `${label}.actual.png`))
+        console.error(`FAIL ${label}: dimensions changed (golden ${golden.width}x${golden.height} vs actual ${bitmaps[i].width}x${bitmaps[i].height}) — actual PNG in ${DIFF_DIR}`)
+        continue
+      }
       const d = diffBitmaps(golden, bitmaps[i], threshold)
       const pct = (d.ratio * 100).toFixed(3)
-      const label = `${file}.${i}`
       if (d.ratio > maxRatio) {
         failures++
         await savePng(bitmaps[i], join(DIFF_DIR, `${label}.actual.png`))
