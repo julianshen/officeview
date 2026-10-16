@@ -7,6 +7,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { loadOfficeSource } from '../src/components/loadOfficeSource'
 import { OfficePackage } from '../src/core/zip'
 import { ImportRefusal } from '../src/xlsx/storage/importSession'
+import { openByteStream } from '../src/core/stream'
 import { buildZip } from './helpers/zip-builder'
 import { xlsxEntries } from './helpers/xlsx-package'
 
@@ -96,5 +97,40 @@ describe('the per-load signal reaches fetch (PR #11 P2, stream.ts openFetch)', (
       await expect(load).rejects.toThrow()
     }
     } finally { statics.any = native }
+  })
+})
+
+/** A body that records pulls and cancellation of its underlying source. */
+function trackedBody() {
+  const log = { pulls: 0, cancelled: false }
+  const stream = new ReadableStream<Uint8Array>({
+    pull(controller) { log.pulls++; controller.enqueue(new Uint8Array(1024)) },
+    cancel() { log.cancelled = true },
+  }, { highWaterMark: 0 })
+  return { stream, log }
+}
+
+describe('an already-aborted signal cancels the stream it opens (PR #11 P2, stream.ts pullStream)', () => {
+  it('openByteStream with a pre-aborted signal cancels the reader and leaves the body unlocked', async () => {
+    const { stream, log } = trackedBody()
+    const controller = new AbortController()
+    controller.abort()
+    const opened = await openByteStream(new Response(stream), {}, controller.signal)
+    expect(opened.kind).toBe('stream')
+    await vi.waitFor(() => expect(log.cancelled).toBe(true))
+    expect(stream.locked).toBe(false)
+    expect(log.pulls).toBe(0)
+  })
+
+  it('a promised Response that resolves after its load was cancelled is not left downloading', async () => {
+    const { stream, log } = trackedBody()
+    const controller = new AbortController()
+    let resolve!: (r: Response) => void
+    const load = loadOfficeSource(new Promise<Response>((r) => { resolve = r }), { signal: controller.signal })
+    controller.abort()
+    resolve(new Response(stream))
+    await expect(load).rejects.toThrow()
+    await vi.waitFor(() => expect(log.cancelled).toBe(true))
+    expect(stream.locked).toBe(false)
   })
 })

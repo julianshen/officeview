@@ -257,8 +257,13 @@ function pullStream(stream: ReadableStream<Uint8Array>, onProgress: ProgressList
     if (done) return
     done = true
     try { await reader.cancel() } catch { /* already errored */ }
+    // cancel() settles pending reads; release the lock so the body is not left locked.
+    try { reader.releaseLock() } catch { /* a read is still settling */ }
   }
-  signal?.addEventListener('abort', () => { void cancel() }, { once: true })
+  // 'abort' never fires again for a signal that is already aborted (a promised
+  // Response that resolved after its load was replaced): cancel straight away.
+  if (signal?.aborted) void cancel()
+  else signal?.addEventListener('abort', () => { void cancel() }, { once: true })
   report()
   return {
     total,
