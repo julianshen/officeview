@@ -53,6 +53,34 @@ async function mounted() {
   return { ui, ledger, doc }
 }
 
+/**
+ * Leaves exactly `capacity` bytes of the main budget for the copy pool from now
+ * until stop(). Other ledger owners change asynchronously while a copy yields:
+ * a FinalizationRegistry callback ends an unreachable page's lifetime charge, a
+ * late render charges tile shaping caches and merges. A pressure owner absorbs
+ * every such change, so a budget boundary test admits or refuses by its own
+ * bytes alone. `onCopy` sees each copy-pool charge (new and previous pool bytes).
+ */
+function pinCopyCapacity(ledger: MainMemoryLedger, budget: number, capacity: number, onCopy?: (bytes: number, previous: number) => void) {
+  const set = ledger.set.bind(ledger), outside = budget - capacity
+  let active = true
+  const outsideCopy = () => ledger.bytes - ledger.snapshot().byPool.copy
+  const pin = () => set('controls', 'pressure', ledger.ownerBytes('controls', 'pressure') + outside - outsideCopy())
+  vi.spyOn(ledger, 'set').mockImplementation((pool, owner, bytes) => {
+    const previous = ledger.snapshot().byPool.copy
+    set(pool, owner, bytes)
+    if (!active) return
+    if (pool === 'copy') onCopy?.(bytes, previous)
+    else if (owner !== 'pressure') pin()
+  })
+  pin()
+  return {
+    /** Whether the pin held: only the copy pool moved since it was set. */
+    held: () => outsideCopy() === outside,
+    stop: () => { active = false; set('controls', 'pressure', 0) },
+  }
+}
+
 it('older clipboard settlement cannot release the newer pending copy charge', async () => {
   const writes = clipboard(), { ui, ledger } = await mounted()
   await copy(ui, writes, 1)
@@ -271,32 +299,16 @@ it.each([73868, 73867])('post-diagnostic growth uses the debited copy owner with
   await waitFor(() => expect(ui.getByRole('status').textContent).not.toContain('Loading sheet'))
   go(ui, 'A1')
   fireEvent.click(ui.getByRole('button', { name: 'Select row 1' }))
-  const adopt = ledger.adoptWhileReachable.bind(ledger), set = ledger.set.bind(ledger)
-  // Bytes outside the copy pool, pinned once the diagnostic is adopted. Other
-  // owners change asynchronously while the copy yields: a FinalizationRegistry
-  // callback ends an unreachable controls page's lifetime charge, a late render
-  // charges tile shaping caches and merges. The pressure owner absorbs every
-  // such change, so exactly `capacity` bytes stay left for the copy owner.
-  let adopted = false, outside = 0
-  const pin = () => set('controls', 'pressure', ledger.ownerBytes('controls', 'pressure') + outside - (ledger.bytes - ledger.snapshot().byPool.copy))
+  const adopt = ledger.adoptWhileReachable.bind(ledger), growthTotals: number[] = []
+  let pinned: ReturnType<typeof pinCopyCapacity> | undefined
   vi.spyOn(ledger, 'adoptWhileReachable').mockImplementation((...args) => {
     const token = adopt(...args)
-    adopted = true
-    outside = MAIN_THREAD_BUDGETS.D - capacity
-    pin()
+    pinned ??= pinCopyCapacity(ledger, MAIN_THREAD_BUDGETS.D, capacity, (bytes, previous) => { if (bytes > previous) growthTotals.push(ledger.bytes) })
     return token
-  })
-  const growthTotals: number[] = []
-  vi.spyOn(ledger, 'set').mockImplementation((pool, owner, bytes) => {
-    const previous = ledger.snapshot().byPool.copy
-    set(pool, owner, bytes)
-    if (!adopted) return
-    if (pool === 'copy') { if (bytes > previous) growthTotals.push(ledger.bytes) }
-    else if (owner !== 'pressure') pin()
   })
   fireEvent.click(ui.getByRole('button', { name: 'Copy selection' }))
   await waitFor(() => expect(writes.jobs.length === 1 || ui.getByRole('status').textContent?.includes('too large')).toBe(true), { timeout: 5000 })
-  expect(adopted).toBe(true)
+  expect(pinned).toBeDefined()
   expect(growthTotals.every(bytes => bytes <= MAIN_THREAD_BUDGETS.D)).toBe(true)
   expect(doc.sheets[0].diagnostics).toHaveLength(1)
   if (capacity === 73868) {
@@ -304,9 +316,8 @@ it.each([73868, 73867])('post-diagnostic growth uses the debited copy owner with
     await act(async () => writes.jobs[0].resolve())
   } else expect(writes.writeText).not.toHaveBeenCalled()
   expect(ledger.snapshot().byPool.copy).toBe(0)
-  expect(ledger.bytes).toBe(MAIN_THREAD_BUDGETS.D - capacity)
-  adopted = false
-  ledger.release('controls', 'pressure')
+  expect(pinned!.held()).toBe(true)
+  pinned!.stop()
 })
 
 it('two real mounted serializers share live reservations after both source reads suspend', async () => {
@@ -331,9 +342,7 @@ it('two real mounted serializers share live reservations after both source reads
     await waitFor(() => expect(pending.length).toBe(2))
     const ledger = remote.mainLedger
     expect(ledger.snapshot().byPool.copy).toBe(320)
-    ledger.set('controls', 'pressure', MAIN_THREAD_BUDGETS.D - (ledger.bytes - 320) - 720)
-    const set = ledger.set.bind(ledger), totals: number[] = []
-    vi.spyOn(ledger, 'set').mockImplementation((pool, owner, bytes) => { set(pool, owner, bytes); if (pool === 'copy') totals.push(ledger.bytes) })
+    const totals: number[] = [], pinned = pinCopyCapacity(ledger, MAIN_THREAD_BUDGETS.D, 720, () => totals.push(ledger.bytes))
     await act(async () => pending[0]())
     await waitFor(() => expect(writes.jobs.length).toBe(1))
     await act(async () => pending[1]())
@@ -342,7 +351,8 @@ it('two real mounted serializers share live reservations after both source reads
     expect(totals.every(bytes => bytes <= MAIN_THREAD_BUDGETS.D)).toBe(true)
     expect(ledger.snapshot().byPool.copy).toBe(528)
     expect(a.getByRole('button', { name: 'Cancel copy' })).toBeTruthy()
-    ledger.release('controls', 'pressure')
+    expect(pinned.held()).toBe(true)
+    pinned.stop()
     await act(async () => writes.jobs[0].resolve())
     expect(ledger.snapshot().byPool.copy).toBe(0)
     store.readCell = read
@@ -358,7 +368,7 @@ it('diagnostic adoption immediately debits the admission lease before its next s
   vi.spyOn(copying, 'copySelection').mockImplementation(input => { admission = input.admitBytes; return actualCopy(input) })
   const writes = clipboard(), doc = workbookOf([{ sheetId: 'A', cells: [{ row: 0, col: 64, value: 'beta' }] }])
   doc.sheets[0].rows[0].cells[0].style = { numFmtId: 0, formatCode: '0;0;0;yyyy' }
-  let ledger!: MainMemoryLedger, probed = false, accepted: boolean | undefined, beforeGrowth = 0, afterGrowth = 0
+  let ledger!: MainMemoryLedger, probed = false, pinHeld = false, accepted: boolean | undefined, beforeGrowth = 0, afterGrowth = 0
   const ui = render(<InteractiveSheetDoc doc={doc} onMainLedger={value => { ledger = value }} />)
   await waitFor(() => expect(ui.getByRole('status').textContent).not.toContain('Loading sheet'))
   go(ui, 'A1')
@@ -368,17 +378,19 @@ it('diagnostic adoption immediately debits the admission lease before its next s
     if (context && sheet.diagnostics?.length && !probed) {
       probed = true
       const own = ledger.snapshot().byPool.copy
-      ledger.set('controls', 'pressure', MAIN_THREAD_BUDGETS.D - ledger.bytes)
+      const pinned = pinCopyCapacity(ledger, MAIN_THREAD_BUDGETS.D, own)
       beforeGrowth = ledger.bytes
       accepted = admission!(own + 1)
       afterGrowth = ledger.bytes
-      ledger.release('controls', 'pressure')
+      pinHeld = pinned.held()
+      pinned.stop()
     }
     return text
   })
   await copy(ui, writes, 1)
   expect(probed).toBe(true)
   expect(accepted).toBe(false)
+  expect(pinHeld).toBe(true)
   expect(afterGrowth).toBe(beforeGrowth)
   expect(doc.sheets[0].diagnostics).toHaveLength(1)
   await act(async () => writes.jobs[0].resolve())
