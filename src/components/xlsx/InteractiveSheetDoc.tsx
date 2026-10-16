@@ -1244,16 +1244,17 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [allowPrint])
 
-  // Print guard while this viewer is mounted (same rule as the page viewer).
+  // Print guard while this viewer is mounted: hides this viewer (its outer
+  // wrapper, so the floating chrome too) and never another, allowed viewer.
   useEffect(() => {
     if (allowPrint) return
     const host = globalThis.document
     const guard = host.createElement('style')
     guard.setAttribute('data-officeview-print-guard', '')
-    guard.textContent = '@media print { [data-officeview-root] { display: none !important; } }'
+    guard.textContent = `@media print{[data-officeview-sheet-instance="${instance}"]{display:none!important}}`
     host.head.appendChild(guard)
     return () => guard.remove()
-  }, [allowPrint])
+  }, [allowPrint, instance])
 
   const onGridChange = (transition: GridTransition) => {
     cancelCopy()

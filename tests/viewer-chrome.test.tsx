@@ -127,6 +127,14 @@ describe('spreadsheet print mode', () => {
     expect([a, b].map(root => printed(root.querySelector('[data-testid="officeview-sheet-print-notice"]')))).toEqual([true, true])
   })
 
+  it('a print-denied viewer hides only itself (with its chrome), never an allowed viewer', () => {
+    const ui = render(<><InteractiveSheetDoc doc={sheetDoc()} allowPrint={false} /><InteractiveSheetDoc doc={sheetDoc()} /></>)
+    const [denied, allowed] = ui.getAllByRole('region', { name: 'Spreadsheet viewer' })
+    const search = (root: Element) => root.closest('[data-officeview-sheet-instance]')!.querySelector('[data-testid="officeview-search"]')
+    expect([printed(denied), printed(search(denied))]).toEqual([false, false])
+    expect(printed(allowed.querySelector('[data-testid="officeview-sheet-print-notice"]'))).toBe(true)
+  })
+
   it('unmounting the print owner releases the document-wide exclusion', async () => {
     vi.spyOn(window, 'print').mockImplementation(() => {})
     const ui = render(<InteractiveSheetDoc doc={sheetDoc()} />)
