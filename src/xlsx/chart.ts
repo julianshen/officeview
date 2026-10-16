@@ -37,6 +37,7 @@ function hex(color: { r: number; g: number; b: number } | undefined): string | u
   return [color.r, color.g, color.b].map(c => Math.max(0, Math.min(255, Math.round(c))).toString(16).padStart(2, '0')).join('').toUpperCase()
 }
 function accent(theme: ThemeContext | undefined, index: number): string {
+  if (!Number.isSafeInteger(index) || index < 0) index = 0
   const slot = `accent${(index % 6) + 1}`
   return (theme?.palette[slot]?.replace(/^#/, '') ?? DEFAULT_ACCENTS[index % 6]).toUpperCase()
 }
@@ -66,14 +67,18 @@ function titleOf(title: XmlNode | undefined): string | undefined {
 }
 
 /** Cached point values of a data source (numRef/strRef caches or literals). */
-function cacheStrings(node: XmlNode | undefined): Array<string | undefined> {
+/** `cut.truncated` records points dropped by the per-series bound (declared count or indices past it). */
+function cacheStrings(node: XmlNode | undefined, cut?: { truncated: boolean }): Array<string | undefined> {
   const cache = child(child(node, 'numRef'), 'numCache') ?? child(child(node, 'strRef'), 'strCache')
     ?? child(child(child(node, 'multiLvlStrRef'), 'multiLvlStrCache'), 'lvl') ?? child(node, 'numLit') ?? child(node, 'strLit')
   const out: Array<string | undefined> = []
-  const count = Math.min(CHART_POINT_LIMIT, finite(val(child(cache, 'ptCount'))) ?? 0)
+  const declared = finite(val(child(cache, 'ptCount'))) ?? 0
+  if (cut && declared > CHART_POINT_LIMIT) cut.truncated = true
+  const count = Math.max(0, Math.min(CHART_POINT_LIMIT, Number.isSafeInteger(declared) ? declared : 0))
   for (const pt of getChildren(cache, 'pt')) {
     const index = finite(attrs(pt).idx)
-    if (index === undefined || index < 0 || index >= CHART_POINT_LIMIT || !Number.isInteger(index)) continue
+    if (index === undefined || index < 0 || !Number.isInteger(index)) continue
+    if (index >= CHART_POINT_LIMIT) { if (cut) cut.truncated = true; continue }
     out[index] = textOf(child(pt, 'v'))
   }
   const length = Math.max(out.length, count)
@@ -141,6 +146,7 @@ export function parseXlsxChart(root: XmlNode, theme: ThemeContext | undefined): 
   let title = titleOf(child(chart, 'title'))
   const groups: XlsxChartGroup[] = []
   let unsupported: string | undefined, truncated = false, seriesTotal = 0
+  const cut = { truncated: false }
   let categories: string[] = [], categoryPending: XlsxChartRange | undefined
   for (const [name, node] of orderedChildren(plot)) {
     if (UNSUPPORTED[name]) { unsupported ??= `${UNSUPPORTED[name]} is not supported`; continue }
@@ -152,7 +158,9 @@ export function parseXlsxChart(root: XmlNode, theme: ThemeContext | undefined): 
     const series: XlsxChartSeries[] = []
     for (const ser of getChildren(node, 'ser')) {
       if (seriesTotal >= CHART_SERIES_LIMIT) { truncated = true; break }
-      const index = finite(val(child(ser, 'idx'))) ?? seriesTotal
+      // Series indices are unsigned integers; anything else falls back to the series position.
+      const rawIndex = finite(val(child(ser, 'idx')))
+      const index = rawIndex !== undefined && Number.isSafeInteger(rawIndex) && rawIndex >= 0 ? rawIndex : seriesTotal
       seriesTotal++
       const spPr = child(ser, 'spPr')
       const lineColor = solid(spPr, theme, true)
@@ -170,12 +178,12 @@ export function parseXlsxChart(root: XmlNode, theme: ThemeContext | undefined): 
       const nameRange = txFormula ? parseChartRange(txFormula) : undefined
       if (nameRange) pending.name = nameRange
       const literalName = textOf(child(tx, 'v')) || cacheStrings(tx)[0]
-      let values = numbers(cacheStrings(valueNode))
+      let values = numbers(cacheStrings(valueNode, cut))
       if (!hasCache(valueNode)) { const range = formulaOf(valueNode) && parseChartRange(formulaOf(valueNode)!); if (range) pending.values = range }
-      let xValues = xNode ? numbers(cacheStrings(xNode)) : undefined
+      let xValues = xNode ? numbers(cacheStrings(xNode, cut)) : undefined
       if (xNode && !hasCache(xNode)) { const range = formulaOf(xNode) && parseChartRange(formulaOf(xNode)!); if (range) pending.xValues = range }
       if (catNode && categories.length === 0 && !categoryPending) {
-        if (hasCache(catNode)) categories = cacheStrings(catNode).map(v => v ?? '')
+        if (hasCache(catNode)) categories = cacheStrings(catNode, cut).map(v => v ?? '')
         else { const range = formulaOf(catNode) && parseChartRange(formulaOf(catNode)!); if (range) categoryPending = range }
       }
       if (values.length > CHART_POINT_LIMIT) { values = values.slice(0, CHART_POINT_LIMIT); truncated = true }
@@ -226,7 +234,7 @@ export function parseXlsxChart(root: XmlNode, theme: ThemeContext | undefined): 
     fontFamily: minorFont,
     fontSizePt: sizeRaw !== undefined ? Math.max(6, Math.min(36, sizeRaw / 100)) : 10,
     ...(unsupported ? { unsupported } : {}),
-    ...(truncated ? { truncated: true } : {}),
+    ...(truncated || cut.truncated ? { truncated: true } : {}),
   }
   return model
 }
@@ -239,22 +247,31 @@ export function placeholderChart(title: string | undefined, reason: string): Xls
 export type ChartCellValue = string | number | boolean | null | undefined
 /** Cell lookup for filling uncached references: `sheet` is the resolved sheet name. */
 export interface ChartCell { value: ChartCellValue; /** The cell's formatted text (number/date format), as Excel shows it. */ text?: string }
-export type ChartCellLookup = (sheet: string, row: number, col: number) => ChartCell | undefined
+/** `text`: the caller needs the formatted label (categories, names); values never format. */
+export type ChartCellLookup = (sheet: string, row: number, col: number, text: boolean) => ChartCell | undefined
+
+/** The one line of cells a chart consumes from a range (a 2-D range keeps its
+ * last row/column, the level nearest the data), bounded by CHART_POINT_LIMIT.
+ * Readers and the fill use this same sequence. */
+export interface ChartLine { sheet: string; vertical: boolean; fixed: number; start: number; count: number; truncated: boolean; text: boolean }
+export function chartLine(range: XlsxChartRange, ownerSheet: string, text: boolean): ChartLine {
+  const rows = range.r1 - range.r0 + 1, cols = range.c1 - range.c0 + 1
+  const vertical = cols === 1 || rows >= cols
+  const length = vertical ? rows : cols
+  return { sheet: range.sheet ?? ownerSheet, vertical, fixed: vertical ? range.c1 : range.r1, start: vertical ? range.r0 : range.c0, count: Math.min(length, CHART_POINT_LIMIT), truncated: length > CHART_POINT_LIMIT, text }
+}
+/** The cell coordinates of point `i` on a line. */
+export const linePoint = (line: ChartLine, i: number): { row: number; col: number } => line.vertical ? { row: line.start + i, col: line.fixed } : { row: line.fixed, col: line.start + i }
 
 export function chartHasPending(model: XlsxChartModel): boolean {
   return Boolean(model.categoryPending) || model.groups.some(g => g.series.some(s => s.pending))
 }
 /** The cells a range resolves to, row-major, bounded by CHART_POINT_LIMIT. */
-function rangeCells(range: XlsxChartRange, sheet: string, lookup: ChartCellLookup): { values: Array<ChartCell | undefined>; truncated: boolean } {
+function rangeCells(range: XlsxChartRange, sheet: string, lookup: ChartCellLookup, text: boolean): { values: Array<ChartCell | undefined>; truncated: boolean } {
+  const line = chartLine(range, sheet, text)
   const values: Array<ChartCell | undefined> = []
-  const rows = range.r1 - range.r0 + 1, cols = range.c1 - range.c0 + 1
-  // A 2-D category range keeps its last row/column (the level nearest the data).
-  const vertical = cols === 1 || rows >= cols
-  const length = vertical ? rows : cols
-  for (let i = 0; i < length && i < CHART_POINT_LIMIT; i++) {
-    values.push(vertical ? lookup(sheet, range.r0 + i, range.c1) : lookup(sheet, range.r1, range.c0 + i))
-  }
-  return { values, truncated: length > CHART_POINT_LIMIT }
+  for (let i = 0; i < line.count; i++) { const at = linePoint(line, i); values.push(lookup(line.sheet, at.row, at.col, text)) }
+  return { values, truncated: line.truncated }
 }
 const asNumber = (cell: ChartCell | undefined): number | undefined => numberOf(cell?.value)
 const numberOf = (value: ChartCellValue): number | undefined => typeof value === 'number' && Number.isFinite(value) ? value : typeof value === 'boolean' ? undefined : typeof value === 'string' && value.trim() !== '' && Number.isFinite(Number(value)) ? Number(value) : undefined
@@ -305,7 +322,7 @@ export function fillChartRanges(model: XlsxChartModel, ownerSheet: string, looku
   const sheetOf = (range: XlsxChartRange) => range.sheet ?? ownerSheet
   let categories = model.categories
   if (model.categoryPending) {
-    const cells = rangeCells(model.categoryPending, sheetOf(model.categoryPending), lookup)
+    const cells = rangeCells(model.categoryPending, sheetOf(model.categoryPending), lookup, true)
     truncated ||= cells.truncated
     categories = cells.values.map(asText)
   }
@@ -315,9 +332,9 @@ export function fillChartRanges(model: XlsxChartModel, ownerSheet: string, looku
       if (!series.pending) return series
       const { pending, ...rest } = series
       const next: XlsxChartSeries = { ...rest }
-      if (pending.values) { const cells = rangeCells(pending.values, sheetOf(pending.values), lookup); truncated ||= cells.truncated; next.values = cells.values.map(asNumber) }
-      if (pending.xValues) { const cells = rangeCells(pending.xValues, sheetOf(pending.xValues), lookup); truncated ||= cells.truncated; next.xValues = cells.values.map(asNumber) }
-      if (pending.name) { const text = asText(lookup(sheetOf(pending.name), pending.name.r0, pending.name.c0)); if (text) next.name = text }
+      if (pending.values) { const cells = rangeCells(pending.values, sheetOf(pending.values), lookup, false); truncated ||= cells.truncated; next.values = cells.values.map(asNumber) }
+      if (pending.xValues) { const cells = rangeCells(pending.xValues, sheetOf(pending.xValues), lookup, false); truncated ||= cells.truncated; next.xValues = cells.values.map(asNumber) }
+      if (pending.name) { const text = asText(lookup(sheetOf(pending.name), pending.name.r0, pending.name.c0, true)); if (text) next.name = text }
       if (next.pointColors && next.values.length > next.pointColors.length) {
         const first = next.pointColors
         next.pointColors = Array.from({ length: Math.min(256, next.values.length) }, (_, i) => first[i] ?? first[i % first.length])
@@ -628,30 +645,39 @@ export function paintXlsxChart(model: XlsxChartModel, ctx: CanvasRenderingContex
 export { chartDescription }
 registerXlsxChartPainter(paintXlsxChart)
 
-/** Resident workbooks: fill every uncached chart reference from parsed cells. */
+/** Resident workbooks: fill every uncached chart reference from parsed cells,
+ * after evaluation and semantics. Only the cells on the consumed lines are
+ * visited (rows by binary search, cells by binary search), and labels are
+ * formatted on demand: the workspace is bounded by the chart point limits. */
 export function fillWorkbookCharts<Cell extends { row: number; col: number; value: ChartCellValue }, Sheet extends { name: string; workbookIndex?: number; rows: ReadonlyArray<{ index: number; cells: ReadonlyArray<Cell> }>; drawings?: XlsxDrawingLike[] }>(
-  sheets: readonly Sheet[], options: { names?: readonly ChartDefinedName[]; text?: (sheet: Sheet, cell: Cell) => string } = {},
+  sheets: readonly Sheet[], options: { names?: readonly ChartDefinedName[]; text?: (sheet: Sheet, cell: Cell) => string; available?: (cell: Cell) => boolean } = {},
 ): void {
-  const indexes = new Map<string, Map<number, Map<number, ChartCell>>>()
-  const indexOf = (name: string) => {
-    const key = name.toLowerCase()
-    let index = indexes.get(key)
-    if (!index) {
-      index = new Map()
-      const sheet = sheets.find(candidate => candidate.name.toLowerCase() === key)
-      for (const row of sheet?.rows ?? []) for (const cell of row.cells) {
-        let cols = index.get(cell.row)
-        if (!cols) index.set(cell.row, cols = new Map())
-        cols.set(cell.col, { value: cell.value, ...(options.text && sheet ? { text: textOf(sheet, cell) } : {}) })
-      }
-      indexes.set(key, index)
-    }
-    return index
+  const sheetByName = (name: string) => sheets.find(candidate => candidate.name.toLowerCase() === name.toLowerCase())
+  const sortedRows = new WeakMap<object, boolean>()
+  const ascending = <T>(items: ReadonlyArray<T>, key: (item: T) => number) => { for (let i = 1; i < items.length; i++) if (key(items[i - 1]) >= key(items[i])) return false; return true }
+  const search = <T>(items: ReadonlyArray<T>, key: (item: T) => number, target: number, sorted: boolean): T | undefined => {
+    if (!sorted) return items.find(item => key(item) === target)
+    let lo = 0, hi = items.length - 1
+    while (lo <= hi) { const mid = (lo + hi) >> 1, k = key(items[mid]); if (k === target) return items[mid]; if (k < target) lo = mid + 1; else hi = mid - 1 }
+    return undefined
   }
-  const textOf = (sheet: Sheet, cell: Cell) => { try { return options.text!(sheet, cell) } catch { return rawText(cell.value) } }
-  const lookup: ChartCellLookup = (sheet, row, col) => indexOf(sheet).get(row)?.get(col)
+  const isSorted = <T>(owner: object, items: ReadonlyArray<T>, key: (item: T) => number) => { let known = sortedRows.get(owner); if (known === undefined) { known = ascending(items, key); sortedRows.set(owner, known) } return known }
+  const lookup: ChartCellLookup = (name, rowIndex, col, wantText) => {
+    const sheet = sheetByName(name)
+    if (!sheet) return undefined
+    const row = search(sheet.rows, row => row.index, rowIndex, isSorted(sheet.rows, sheet.rows, row => row.index))
+    const cell = row && search(row.cells, cell => cell.col, col, isSorted(row.cells, row.cells, cell => cell.col))
+    if (!cell) return undefined
+    if (options.available && !options.available(cell)) return { value: undefined }
+    let text: string | undefined
+    if (wantText && options.text) { try { text = options.text(sheet, cell) } catch { text = undefined } }
+    return { value: cell.value, ...(text !== undefined ? { text } : {}) }
+  }
   const resolve = chartNameResolver(options.names ?? [], sheets)
-  for (const sheet of sheets) fillDrawings(sheet.drawings, sheet.name, lookup, resolve)
+  for (const sheet of sheets) {
+    try { fillDrawings(sheet.drawings, sheet.name, lookup, resolve) }
+    catch { /* a chart that cannot be filled keeps its placeholder state; the workbook stays usable */ }
+  }
 }
 /** Resolve defined names of a drawing tree in place (paged readers resolve before reading cells). */
 export function resolveDrawingNames(drawings: XlsxDrawingLike[] | undefined, ownerSheet: string, resolve: ChartNameResolver | undefined): void {
@@ -674,6 +700,23 @@ export function fillDrawings(drawings: XlsxDrawingLike[] | undefined, ownerSheet
     if (node.children) fillDrawings(node.children, ownerSheet, lookup, resolve)
   }
 }
+/** The lines a drawing tree still needs (defined names resolved first), for paged readers. */
+export function pendingLines(drawings: XlsxDrawingLike[] | undefined, ownerSheet: string, out: ChartLine[] = []): ChartLine[] {
+  for (const node of drawings ?? []) {
+    const content = node.content as { kind: string; chart?: XlsxChartModel } | undefined
+    const chart = content?.kind === 'xlsxChart' ? content.chart : undefined
+    if (chart) {
+      const add = (range: XlsxChartRange | undefined, text: boolean) => { if (range && !range.definedName) out.push(chartLine(range, ownerSheet, text)) }
+      add(chart.categoryPending, true)
+      for (const group of chart.groups) for (const s of group.series) {
+        add(s.pending?.values, false); add(s.pending?.xValues, false); add(s.pending?.categories, true)
+        if (s.pending?.name) add({ ...s.pending.name, r1: s.pending.name.r0, c1: s.pending.name.c0 }, true)
+      }
+    }
+    if (node.children) pendingLines(node.children, ownerSheet, out)
+  }
+  return out
+}
 /** Every reference a drawing tree still needs, for paged readers. */
 export function pendingRanges(drawings: XlsxDrawingLike[] | undefined, ownerSheet: string, out: Array<XlsxChartRange & { sheet: string }> = [], withNames = false): Array<XlsxChartRange & { sheet: string }> {
   for (const node of drawings ?? []) {
@@ -688,3 +731,14 @@ export function pendingRanges(drawings: XlsxDrawingLike[] | undefined, ownerShee
   }
   return out
 }
+
+/** Charts that still need cells become placeholders with `reason` (a refused read). */
+export function refuseCharts(drawings: XlsxDrawingLike[] | undefined, reason: string): void {
+  for (const node of drawings ?? []) {
+    const content = node.content as { kind: string; chart?: XlsxChartModel } | undefined
+    if (content?.kind === 'xlsxChart' && content.chart && chartHasPending(content.chart)) content.chart = { ...content.chart, unsupported: reason }
+    if (node.children) refuseCharts(node.children, reason)
+  }
+}
+/** Accounted bytes per chart cell read (map entry, key and value). */
+export const CHART_CELL_BYTES = 160

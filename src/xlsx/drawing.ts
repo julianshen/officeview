@@ -154,7 +154,10 @@ const contentAdapters = (theme: ThemeContext) => ({ parseDiagramText: (body: Xml
   // Worksheet charts use the lazy chart chunk; an unsupported type reads as
   // absent here so compatibility fallbacks still win (a placeholder follows).
   parseChart: async (root: XmlNode) => {
-    const chart = (await loadChartModule()).parseXlsxChart(root, theme)
+    const charts = await loadChartModule()
+    // A malformed chart part never fails the workbook: it reads as unsupported (placeholder/fallback).
+    let chart: ReturnType<typeof charts.parseXlsxChart>
+    try { chart = charts.parseXlsxChart(root, theme) } catch { chart = undefined }
     return chart && !chart.unsupported ? { kind: 'xlsxChart' as const, chart } : undefined
   } })
 
@@ -176,7 +179,8 @@ async function chartPlaceholder(pkg: OfficePackage, owner: string, rid: string |
     const path = rid ? await referencedPart(pkg, owner, rid) : undefined
     root = path ? await pkg.xmlOrdered(path) : undefined
   } catch { root = undefined }
-  const parsed = root ? charts.parseXlsxChart(root, theme) : undefined
+  let parsed: ReturnType<typeof charts.parseXlsxChart>
+  try { parsed = root ? charts.parseXlsxChart(root, theme) : undefined } catch { return { kind: 'xlsxChart', chart: charts.placeholderChart(undefined, 'This chart could not be read') } }
   return { kind: 'xlsxChart', chart: parsed?.unsupported ? parsed : charts.placeholderChart(parsed?.title, parsed ? 'This chart could not be drawn' : 'Chart data could not be read') }
 }
 

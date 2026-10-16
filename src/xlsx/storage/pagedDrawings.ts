@@ -233,7 +233,7 @@ export async function loadPagedSheetDrawings(
   geometry: SheetGeometry,
   limits: PagedDrawingLimits,
   signal: AbortSignal,
-  options: { memory?: DrawingMemory; startNodes?: number; fillCharts?: (drawings: XlsxDrawing[], ownerSheet: string, names: DefinedNameMetadata[]) => Promise<void> } = {},
+  options: { memory?: DrawingMemory; startNodes?: number; fillCharts?: (drawings: XlsxDrawing[], ownerSheet: string, names: DefinedNameMetadata[], admit: (bytes: number) => boolean) => Promise<{ pendingSheets: string[] }> } = {},
 ): Promise<PagedSheetDrawings> {
   const legacy = sheet.legacyDrawingIds ?? []
   if (!sheet.drawingIds.length && !legacy.length) return { drawings: sheetDrawingPayload([], undefined, [], limits.payloadBytes), nodes: 0, workingSet: 0 }
@@ -268,6 +268,7 @@ export async function loadPagedSheetDrawings(
   if (pkg.memoryRefused) {
     return { drawings: unavailableDrawings('This sheet\'s drawings need more worker memory than the document has free and are not shown', { code: 'resource-limit', retryable: false, message: 'worker memory budget' }, DRAWING_MEMORY_REFUSED), nodes, workingSet: pkg.workingSet }
   }
+  let pendingSheets: string[] | undefined
   // Charts without cached values read their series from the paged cells.
   if (options.fillCharts && hasXlsxCharts(shell.drawings)) {
     // Defined names come from the workbook part, read only when a chart names one.
@@ -275,14 +276,17 @@ export async function loadPagedSheetDrawings(
     if ((await loadChartModule()).drawingsNeedNames(shell.drawings)) {
       try { names = parseDefinedNames(await pkg.xml('xl/workbook.xml')) } catch { if (signal.aborted) throw aborted(signal) }
     }
-    await options.fillCharts(shell.drawings!, sheet.name, names)
+    // The chart cell workspace is admitted against the drawing memory before any read.
+    const filled = await options.fillCharts(shell.drawings!, sheet.name, names, bytes => !options.memory || options.memory.set(pkg.workingSet + bytes))
     if (signal.aborted) throw aborted(signal)
+    if (filled.pendingSheets.length) pendingSheets = filled.pendingSheets
   }
   const diagnostics = pkg.finish()
   if (context.diagnostics.some(issue => issue.kind === 'node-budget' && issue.reason === 'document-budget')) {
     diagnostics.push({ code: DRAWING_NODE_BUDGET, message: `Some drawings exceed the document's ${DOCUMENT_DRAWING_NODE_LIMIT}-node drawing budget and are not shown` })
   }
-  const drawings = sheetDrawingPayload(shell.drawings ?? [], theme, diagnostics, limits.payloadBytes)
+  const payload = sheetDrawingPayload(shell.drawings ?? [], theme, diagnostics, limits.payloadBytes)
+  const drawings = pendingSheets && payload.completeness === 'complete' ? { ...payload, pendingSheets } : payload
   const workingSet = pkg.workingSet + drawingFootprint(drawings.drawings)
   if (options.memory && !options.memory.set(workingSet)) {
     return { drawings: unavailableDrawings('This sheet\'s drawings need more worker memory than the document has free and are not shown', { code: 'resource-limit', retryable: false, message: 'worker memory budget' }, DRAWING_MEMORY_REFUSED), nodes, workingSet: pkg.workingSet }

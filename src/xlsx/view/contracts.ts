@@ -217,6 +217,9 @@ export interface SheetDrawings {
   diagnostics: readonly WorkerDiagnostic[]
   bytes: number
   error?: SourceFailure
+  /** Sheets whose cells a chart reads but whose import has not reached them yet:
+   * the payload is not cached and is read again once they complete. */
+  pendingSheets?: readonly string[]
 }
 
 /** Interval/range shapes only; no per-covered-cell expansion, spec §4.5. */

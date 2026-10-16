@@ -461,8 +461,10 @@ export class PagedXlsxSheetAdapter implements SourceStore {
       const geometry = buildGeometry(meta.rowHeights.map(h => ({ index: h.row, heightPt: h.heightPt })), meta.cols, meta.hiddenRows, { hiddenCols: true })
       const nodes = this.drawingState.nodes, sheetId = this.sheet.sheetId
       const parsed = await loadPagedSheetDrawings(this.workbook.parts, { name: this.sheet.name, partPath: this.sheet.partPath, drawingIds: meta.drawingIds, legacyDrawingIds: meta.legacyDrawingIds },
-        geometry, pagedDrawingLimits(profile, this.drawingState.payloadBytes), controller.signal, { memory, startNodes: nodes.start(sheetId), fillCharts: (drawings, owner, names) => this.fillCharts(drawings, owner, controller.signal, names) })
+        geometry, pagedDrawingLimits(profile, this.drawingState.payloadBytes), controller.signal, { memory, startNodes: nodes.start(sheetId), fillCharts: (drawings, owner, names, admit) => this.fillCharts(drawings, owner, controller.signal, names, admit) })
       nodes.record(sheetId, parsed.nodes)
+      // A chart still waiting on another sheet's import is answered, never cached.
+      if (parsed.drawings.pendingSheets?.length) return parsed.drawings
       return this.retainDrawings(parsed.drawings, parsed.workingSet, memory)
     } catch (cause) {
       if (controller.signal.aborted) return unavailableDrawings('Drawing read cancelled', failure('cancelled', 'Request cancelled', true))
@@ -474,35 +476,51 @@ export class PagedXlsxSheetAdapter implements SourceStore {
     }
   }
 
-  /** Fill uncached chart references from committed pages of the named sheets
-   * (bounded per range by the chart point limit; an unread sheet stays empty). */
-  private async fillCharts(drawings: XlsxDrawing[], owner: string, signal: AbortSignal, names: readonly { name: string; source: string; localSheetIndex?: number }[] = []): Promise<void> {
+  /** Fill uncached chart references from committed pages of the named sheets.
+   * Only the line each chart consumes is read (the same sequence the fill
+   * uses, bounded by the chart point limit), cell by cell through binary
+   * search, after admitting the workspace. Cells past a referenced sheet's
+   * import frontier stay unknown and the sheet is reported as pending, so the
+   * payload is not cached as complete. */
+  private async fillCharts(drawings: XlsxDrawing[], owner: string, signal: AbortSignal, names: readonly { name: string; source: string; localSheetIndex?: number }[] = [], admit: (bytes: number) => boolean = () => true): Promise<{ pendingSheets: string[] }> {
     const charts = await loadChartModule()
     charts.resolveDrawingNames(drawings, owner, charts.chartNameResolver(names, this.workbook.sheets))
-    const values = new Map<string, { value: string | number | boolean | null; text: string }>()
+    const lines = charts.pendingLines(drawings, owner)
+    const points = lines.reduce((total, line) => total + line.count, 0)
+    if (!admit(points * charts.CHART_CELL_BYTES)) {
+      charts.refuseCharts(drawings, 'This chart needs more worker memory than the document has free')
+      return { pendingSheets: [] }
+    }
+    const values = new Map<string, { value: string | number | boolean | null | undefined; text?: string }>()
+    const key = (sheet: string, row: number, col: number) => `${sheet.toLowerCase()}\u0000${row}\u0000${col}`
     const styles = this.workbook.formatting.styles
     const display: XlsxSheet = { name: '', rows: [], cols: [], merges: [], mergeRanges: [], semantics: semanticsFor(this.workbook.formatting.dateSystem) }
-    const key = (sheet: string, row: number, col: number) => `${sheet.toLowerCase()}\u0000${row}\u0000${col}`
-    for (const range of charts.pendingRanges(drawings, owner)) {
-      const sheet = this.workbook.sheets.find(candidate => candidate.name.toLowerCase() === range.sheet.toLowerCase())
+    const pending = new Set<string>()
+    const pageAt = (sheetId: string, row: number) => this.workbook.store.pages(sheetId).find(page => page.r0 <= row && page.r1 >= row)
+    for (const line of lines) {
+      const sheet = this.workbook.sheets.find(candidate => candidate.name.toLowerCase() === line.sheet.toLowerCase())
       if (!sheet) continue
-      const r1 = Math.min(range.r1, range.r0 + charts.CHART_POINT_LIMIT - 1, sheet.importedThroughRow)
-      const c1 = Math.min(range.c1, range.c0 + charts.CHART_POINT_LIMIT - 1)
-      const pages = this.workbook.store.pages(sheet.sheetId)
-      for (const page of pages) {
-        if (page.r1 < range.r0 || page.r0 > r1 || page.aggregate.records === 0) continue
-        if (signal.aborted) return
-        const p = await this.workbook.store.page(sheet.sheetId, page.pageId)
-        for (let i = lower(p.rows, range.r0); i < p.rows.length && p.rows[i] <= r1; i++) {
-          if (p.cols[i] < range.c0 || p.cols[i] > c1) continue
-          const value = await this.valueOf(p, i)
-          let text: string
-          try { text = cellDisplayText(display, { value, style: styles[p.styles[i]] }) } catch { text = value === null ? '' : String(value) }
-          values.set(key(sheet.name, p.rows[i], p.cols[i]), { value, text })
-        }
+      const lastRow = line.vertical ? line.start + line.count - 1 : line.fixed
+      if (lastRow > sheet.importedThroughRow && sheet.state !== 'incomplete') pending.add(sheet.sheetId)
+      let loaded: { summary: ReturnType<typeof pageAt>; payload?: CellPagePayload } = { summary: undefined }
+      for (let i = 0; i < line.count; i++) {
+        const at = charts.linePoint(line, i)
+        if (at.row > sheet.importedThroughRow) break
+        if (signal.aborted) return { pendingSheets: [...pending] }
+        const summary = loaded.summary && loaded.summary.r0 <= at.row && loaded.summary.r1 >= at.row ? loaded.summary : pageAt(sheet.sheetId, at.row)
+        if (!summary || summary.aggregate.records === 0 || at.col < summary.c0 || at.col > summary.c1) continue
+        if (summary !== loaded.summary) loaded = { summary, payload: await this.workbook.store.page(sheet.sheetId, summary.pageId) }
+        const p = loaded.payload!
+        const index = this.find(p, at.row, at.col)
+        if (index < 0) continue
+        const value = this.isUnavailable(p, index) ? undefined : await this.valueOf(p, index)
+        let text: string | undefined
+        if (line.text && value !== undefined) { try { text = cellDisplayText(display, { value, style: styles[p.styles[index]] }) } catch { text = undefined } }
+        values.set(key(sheet.name, at.row, at.col), { value, ...(text !== undefined ? { text } : {}) })
       }
     }
     charts.fillDrawings(drawings, owner, (sheet, row, col) => values.get(key(sheet, row, col)))
+    return { pendingSheets: [...pending] }
   }
 
   /** Keeps a complete payload in the pool (when one is bound and it fits) and

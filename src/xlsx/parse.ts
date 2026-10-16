@@ -231,9 +231,6 @@ export async function parseXlsx(pkg: OfficePackage, options: ParseXlsxOptions = 
   const calc: CalcSettings = { calcMode, fullCalcOnLoad, iterate, iterateCount, iterateDelta }
 
   const definedNames: DefinedNameMetadata[] = parseDefinedNames(workbook)
-  // Charts without cached values (openpyxl) read their series from the cells,
-  // with formatted category text and workbook defined names.
-  if (sheets.some(sheet => hasXlsxCharts(sheet.drawings))) (await loadChartModule()).fillWorkbookCharts(sheets, { names: definedNames, text: (sheet, cell) => cellDisplayText(sheet, cell as XlsxCell) })
 
   // Tables resolve exclusively through each worksheet's tableParts and that
   // worksheet's own relationship part — never through workbook rels.
@@ -400,6 +397,16 @@ export async function parseXlsx(pkg: OfficePackage, options: ParseXlsxOptions = 
   initializeSavedSpills(doc)
   if (options.valuePolicy === 'cached') markSavedValuesOnly(doc)
   else evaluateWorkbookFormulas(doc, { fullCalcOnLoad, ...options.evaluation })
+  // Charts without cached values (openpyxl) read their series from the cells
+  // once values and the date system are final: formatted category text,
+  // workbook defined names, and the document's value policy.
+  if (sheets.some(sheet => hasXlsxCharts(sheet.drawings))) {
+    // Under the cached policy an uncached formula has no value (view/values isValueUnavailable).
+    const cached = options.valuePolicy === 'cached'
+    try {
+      (await loadChartModule()).fillWorkbookCharts(sheets, { names: definedNames, text: (sheet, cell) => cellDisplayText(sheet, cell as XlsxCell), available: cell => !(cached && ((cell as XlsxCell).formula !== undefined || (cell as XlsxCell).sharedFormula !== undefined) && (cell as XlsxCell).hasCachedValue !== true) })
+    } catch { /* charts keep their placeholder state; the workbook stays usable */ }
+  }
   return doc
 }
 
