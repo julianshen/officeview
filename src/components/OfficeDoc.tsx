@@ -286,10 +286,11 @@ function LegacyOfficeDoc({
   const panStart = useRef<{ transform: Transform; point: Point } | null>(null)
 
   // React attaches wheel listeners as passive, so onWheel cannot stop the
-  // browser's own Ctrl/Cmd+wheel page zoom; a native listener can, including
-  // over viewer UI that ignores the legacy zoom gesture.
+  // browser's own Ctrl/Cmd+wheel page zoom; a native listener on the outer
+  // wrapper can, over the pages and every control (search, copy, zoom).
+  const wrapperRef = useRef<HTMLDivElement | null>(null)
   useEffect(() => {
-    const el = containerRef.current
+    const el = wrapperRef.current
     if (!el) return
     const suppressPageZoom = (e: WheelEvent) => { if (e.ctrlKey || e.metaKey) e.preventDefault() }
     el.addEventListener('wheel', suppressPageZoom, { passive: false })
@@ -729,7 +730,7 @@ function LegacyOfficeDoc({
   }
 
   return (
-    <div style={{ position: 'relative', display: 'flex', flexDirection: 'column', minHeight: 0 }}>
+    <div ref={wrapperRef} style={{ position: 'relative', display: 'flex', flexDirection: 'column', minHeight: 0 }}>
       <div
         ref={containerRef}
         className={className}

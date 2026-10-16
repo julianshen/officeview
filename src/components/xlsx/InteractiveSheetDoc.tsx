@@ -1113,9 +1113,11 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
     else if (event.key === '0') { event.preventDefault(); resetZoom() }
   }
 
-  // Ctrl/Cmd+wheel anywhere over the viewer (headers, navigator) never zooms the
-  // browser page; React's wheel listeners are passive, so this one is native.
+  // Ctrl/Cmd+wheel anywhere over the viewer (headers, navigator, search and zoom
+  // controls) never zooms the browser page; React's wheel listeners are passive,
+  // so this one is native, on the outer wrapper that also holds the controls.
   const rootRef = useRef<HTMLDivElement | null>(null)
+  const wrapperRef = useRef<HTMLDivElement | null>(null)
   // DOM a child commits on its own (a popup's value list arriving through its
   // own state) is charged when it lands, not at the next parent render: one
   // MutationObserver callback per task re-counts the viewer's elements by class.
@@ -1127,7 +1129,7 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
     return () => observer.disconnect()
   }, [mainLedger, live])
   useEffect(() => {
-    const el = rootRef.current
+    const el = wrapperRef.current
     if (!el) return
     const suppress = (event: WheelEvent) => { if (event.ctrlKey || event.metaKey) event.preventDefault() }
     el.addEventListener('wheel', suppress, { passive: false })
@@ -1258,7 +1260,7 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
   const zoom = scroll?.zoom ?? 1
   const canvasStyle: CSSProperties = { position: 'absolute', left: 0, top: 0, width: viewport.width, height: viewport.height, pointerEvents: 'none' }
   return (
-    <div style={{ position: 'relative', display: 'flex', flexDirection: 'column', minHeight: 0 }}>
+    <div ref={wrapperRef} style={{ position: 'relative', display: 'flex', flexDirection: 'column', minHeight: 0 }}>
       <div
         ref={rootRef}
         className={props.className}
