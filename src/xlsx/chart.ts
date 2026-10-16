@@ -277,7 +277,7 @@ function rangeCells(range: XlsxChartRange, sheet: string, lookup: ChartCellLooku
   for (let i = 0; i < line.count; i++) { const at = linePoint(line, i); values.push(lookup(line.sheet, at.row, at.col, text)) }
   return { values, truncated: line.truncated }
 }
-const numberOf = (value: ChartCellValue): number | undefined | 'too-long' => typeof value === 'number' ? (Number.isFinite(value) ? value : undefined)
+const numberOf = (value: ChartCellValue): number | undefined => typeof value === 'number' ? (Number.isFinite(value) ? value : undefined)
   : typeof value === 'string' ? scanChartNumber(value.length, i => value.charCodeAt(i)) : undefined
 const rawText = (value: ChartCellValue): string => value === null || value === undefined ? '' : typeof value === 'number' ? String(Number(value.toPrecision(15))) : String(value)
 const asText = (cell: ChartCell | undefined): string => cell?.text ?? rawText(cell?.value)
@@ -337,7 +337,7 @@ export function fillChartRanges(model: XlsxChartModel, ownerSheet: string, looku
       const { pending, ...rest } = series
       const next: XlsxChartSeries = { ...rest }
       // A numeric form the scanner cannot read exactly is an unavailable point, and the chart says it is truncated.
-      const asNumber = (cell: ChartCell | undefined): number | undefined => { if (cell?.truncated) { truncated = true; return undefined } if (cell && cell.number !== undefined) return cell.number ?? undefined; const n = numberOf(cell?.value); if (n === 'too-long') { truncated = true; return undefined } return n }
+      const asNumber = (cell: ChartCell | undefined): number | undefined => { if (cell?.truncated) { truncated = true; return undefined } if (cell && cell.number !== undefined) return cell.number ?? undefined; return numberOf(cell?.value) }
       if (pending.values) { const cells = rangeCells(pending.values, sheetOf(pending.values), lookup, false); truncated ||= cells.truncated; next.values = cells.values.map(asNumber) }
       if (pending.xValues) { const cells = rangeCells(pending.xValues, sheetOf(pending.xValues), lookup, false); truncated ||= cells.truncated; next.xValues = cells.values.map(asNumber) }
       if (pending.name) { const full = asText(lookup(sheetOf(pending.name), pending.name.r0, pending.name.c0, true)); const text = full.slice(0, CHART_LABEL_LIMIT); if (full.length > CHART_LABEL_LIMIT) truncated = true; if (text) next.name = text }
@@ -765,42 +765,24 @@ export function markUnreadableCharts(drawings: XlsxDrawingLike[] | undefined, ow
   return marked
 }
 
-const isSpace = (c: number) => c === 0x20 || (c >= 0x09 && c <= 0x0d) || c === 0xa0 || c === 0x1680 || (c >= 0x2000 && c <= 0x200a) || c === 0x2028 || c === 0x2029 || c === 0x202f || c === 0x205f || c === 0x3000 || c === 0xfeff
 /** Significant digits kept by the decimal scanner (a sticky digit stands for the rest: exact rounding). */
 const SCAN_DIGITS = 800
 /**
- * The chart's numeric reading of a text cell, as `Number(text)` reads it,
- * streamed from UTF-16 code units without building the text: whitespace
- * trimmed, decimal with optional sign/fraction/exponent (any length: the
- * first SCAN_DIGITS significant digits plus a sticky digit round exactly),
- * 0x/0o/0b integers up to 53 bits ('too-long' past that), Infinity and
- * anything else non-finite or non-numeric -> undefined. Resident and paged
- * charts both use it, so they agree.
+ * The chart's numeric reading of a text cell, following Excel (not JS
+ * Number()): optional surrounding ASCII spaces, an optional sign, digits with
+ * an optional decimal point, and an optional exponent. Radix prefixes (0x,
+ * 0o, 0b), Infinity, other whitespace or control characters and anything
+ * else are not numbers. Streamed from UTF-16 code units without building the
+ * text; any-length decimals round exactly (the first SCAN_DIGITS significant
+ * digits plus a sticky digit). Resident and paged charts both use it.
  */
-export function scanChartNumber(length: number, at: (i: number) => number): number | undefined | 'too-long' {
+export function scanChartNumber(length: number, at: (i: number) => number): number | undefined {
   let start = 0, end = length
-  while (start < end && isSpace(at(start))) start++
-  while (end > start && isSpace(at(end - 1))) end--
+  while (start < end && at(start) === 0x20) start++
+  while (end > start && at(end - 1) === 0x20) end--
   if (start === end) return undefined
-  const first = at(start), second = end - start > 1 ? at(start + 1) | 0x20 : 0
-  if (first === 0x30 && (second === 0x78 || second === 0x6f || second === 0x62)) {
-    const base = second === 0x78 ? 16 : second === 0x6f ? 8 : 2
-    const maxDigits = base === 16 ? 13 : base === 8 ? 17 : 53
-    let value = 0, digits = 0
-    for (let i = start + 2; i < end; i++) {
-      const c = at(i) | 0x20
-      const d = c >= 0x30 && c <= 0x39 ? c - 0x30 : c >= 0x61 && c <= 0x66 ? c - 0x57 : 99
-      if (d >= base) return undefined
-      if (digits > 0 || d > 0) digits++
-      if (digits > maxDigits) return 'too-long'
-      value = value * base + d
-    }
-    return end - start > 2 ? value : undefined
-  }
   let i = start, negative = false
   if (at(i) === 0x2b || at(i) === 0x2d) { negative = at(i) === 0x2d; i++ }
-  // Infinity is not a finite chart value.
-  if (end - i === 8 && [0x49, 0x6e, 0x66, 0x69, 0x6e, 0x69, 0x74, 0x79].every((c, k) => at(i + k) === c)) return undefined
   let digits = '', sticky = false, seen = false, exponent = 0, leading = true
   for (; i < end; i++) {
     const c = at(i)

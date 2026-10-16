@@ -1305,6 +1305,20 @@ export class SourcePageStore implements PageSink {
     const record = await this.load(`sst/${chunk}`, decodeStrings, (c, shared) => DECODED_CHUNK_OVERHEAD_BYTES + (shared ? 0 : c.text.byteLength + c.textStart.byteLength))
     return { record, index: id - chunk * this.stringChunkSize }
   }
+  /** A decoded string record (SST chunk or oversized value) kept owned for the
+   * caller's lifetime, like pinnedPage; `retained: false` means the caller
+   * must charge `bytes` itself (or refuse). `key` identifies the record, so
+   * consecutive ids in one chunk share one pin. */
+  async pinnedString(kind: 'sst' | 'blob', id: number): Promise<{ key: string; record: StringChunk; index: number; retained: boolean; bytes: number; release: () => void } | undefined> {
+    const located = kind === 'sst' ? await this.sharedStringRecord(id) : await this.blobRecord(id)
+    if (!located) return undefined
+    const key = kind === 'sst' ? `sst/${Math.floor(id / this.stringChunkSize)}` : `blob/${id}`
+    const resident = this.resident.get(key)
+    const bytes = DECODED_CHUNK_OVERHEAD_BYTES + located.record.text.byteLength + located.record.textStart.byteLength
+    if (resident && resident.value === located.record && resident.entry) return { key, ...located, retained: true, bytes: resident.bytes, release: resident.entry.pin() }
+    if (resident && resident.value === located.record && !this.pool) return { key, ...located, retained: true, bytes: resident.bytes, release: () => {} }
+    return { key, ...located, retained: false, bytes, release: () => {} }
+  }
   /** A decoded page kept owned for the caller's lifetime: its pool charge is
    * pinned (no eviction) until `release`. `retained: false` means the pool
    * could not admit it at all; the caller must charge `bytes` itself. */

@@ -32,6 +32,13 @@ function appendText(out: string, text: string, allocation?: FormatAllocation): s
   return next
 }
 
+/** The final emission, cut to `allocation.maxOutput` (reported as truncated). */
+function capOut(text: string, allocation?: FormatAllocation): string {
+  const cap = allocation?.maxOutput
+  if (cap === undefined || text.length <= cap) return text
+  allocation!.truncated?.()
+  return text.slice(0, cap)
+}
 /** An output builder: like appendText, but never grows past `allocation.maxOutput`. */
 function appendOut(out: string, text: string, allocation?: FormatAllocation): string {
   const cap = allocation?.maxOutput
@@ -366,10 +373,12 @@ function renderInteger(intDigits: string, intTokens: readonly Tok[], grouping: b
   let phIdx = 0
   for (let i = 0; i < intTokens.length; i++) {
     const tk = intTokens[i]
-    if (tk.t === 'lit') { out = appendOut(out, tk.text, allocation); continue }
-    if (tk.t === 'ph') { out = appendOut(out, chars[phIdx++] ?? '', allocation); continue }
+    // Grouping needs the complete digit run (commas anchor at its right edge): the
+    // output cap applies to the final emission, never to this intermediate.
+    if (tk.t === 'lit') { out = appendText(out, tk.text, allocation); continue }
+    if (tk.t === 'ph') { out = appendText(out, chars[phIdx++] ?? '', allocation); continue }
     if (tk.t === 'comma') { continue }
-    if (tk.t === 'pct') { out = appendOut(out, '%', allocation); continue }
+    if (tk.t === 'pct') { out = appendText(out, '%', allocation); continue }
     return '' // '@'/'dt'/'am' rejected by caller
   }
   if (grouping) {
@@ -471,7 +480,7 @@ function renderDateTime(
       }
     }
   }
-  return { kind: 'text', text: out }
+  return { kind: 'text', text: capOut(out, allocation) }
 }
 
 /**
@@ -530,11 +539,11 @@ export function formatCommon(
         return { kind: 'unsupported', reason: 'date token in the text section' }
       }
       void sawAt
-      return { kind: 'text', text: outText }
+      return { kind: 'text', text: capOut(outText, allocation) }
     }
     const asText = typeof value === 'boolean' ? (value ? 'TRUE' : 'FALSE') : value ?? ''
     if (typeof value === 'string') allocation?.borrowed?.(value)
-    return { kind: 'text', text: asText }
+    return { kind: 'text', text: capOut(asText, allocation) }
   }
 
   const v = value
@@ -559,7 +568,7 @@ export function formatCommon(
     if (v < 0) {
       // measured 1904 row: negative serials format as '-' + format(|serial|)
       const r = formatCommon(magnitude, format, semantics, allocation)
-      if (r.kind === 'text') { allocation?.allocate(2 * (r.text.length + 1)); return { kind: 'text', text: '-' + r.text } }
+      if (r.kind === 'text') { allocation?.allocate(2 * (r.text.length + 1)); return { kind: 'text', text: capOut('-' + r.text, allocation) } }
       return r
     }
     return renderDateTime(v, tokens, semantics, allocation)
@@ -635,7 +644,7 @@ export function formatCommon(
       }
     }
   }
-  return { kind: 'text', text: out }
+  return { kind: 'text', text: capOut(out, allocation) }
 }
 
 export { isEvaluationError }
