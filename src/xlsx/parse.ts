@@ -70,7 +70,7 @@ interface Styles {
   numFmts: Map<number, string>
   fonts: Array<{ bold: boolean; italic: boolean; sizePt?: number; color?: string }>
   fills: Array<{ rgb?: string; pattern?: string }>
-  borders: Array<{ left?: string; right?: string; top?: string; bottom?: string }>
+  borders: Array<{ left?: string; right?: string; top?: string; bottom?: string; colors?: { left?: string; right?: string; top?: string; bottom?: string } }>
   xfs: Array<{ numFmtId: number; fontId: number; fillId: number; borderId: number; textRotation?: number; horizontal?: string; vertical?: string; wrapText?: boolean; shrinkToFit?: boolean }>
 }
 
@@ -108,7 +108,14 @@ async function parseStyles(pkg: OfficePackage): Promise<Styles> {
         const node = getChildren(border, n)[0]
         return node ? (attrs(node).style as string | undefined) : undefined
       }
-      styles.borders.push({ left: side('left'), right: side('right'), top: side('top'), bottom: side('bottom') })
+      // Side colours: explicit rgb only (auto/indexed 64 keep the black default).
+      const colors: Record<string, string> = {}
+      for (const n of ['left', 'right', 'top', 'bottom']) {
+        const node = getChildren(border, n)[0]
+        const rgb = node && side(n) ? attrs(getChildren(node, 'color')[0]).rgb : undefined
+        if (typeof rgb === 'string' && rgb !== '') colors[n] = rgb
+      }
+      styles.borders.push({ left: side('left'), right: side('right'), top: side('top'), bottom: side('bottom'), ...(Object.keys(colors).length ? { colors } : {}) })
     }
   }
   for (const cellXfsN of getChildren(root, 'cellXfs')) {
@@ -160,6 +167,7 @@ export function resolveXfStyle(styles: Styles, xf: Styles['xfs'][number]): XlsxC
     color: font?.color,
     fillColor: fill?.pattern === 'solid' ? fill.rgb : undefined,
     borders: border ? { left: border.left, right: border.right, top: border.top, bottom: border.bottom } : undefined,
+    ...(border?.colors ? { borderColors: { ...border.colors } } : {}),
     textRotation: xf.textRotation,
     horizontal: xf.horizontal,
     vertical: xf.vertical,

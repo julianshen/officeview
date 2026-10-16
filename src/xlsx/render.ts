@@ -967,6 +967,7 @@ export function layoutCellBody(
     }
   }
   if (cell.style?.borders) out.borders = cell.style.borders
+  if (cell.style?.borderColors) out.borderColors = cell.style.borderColors
   return out
 }
 
@@ -1053,23 +1054,57 @@ export function paintCellLayout(ctx: CanvasRenderingContext2D, layout: CellBodyL
   // borders (anchor draws the merged rect's outline)
   const b = layout.borders
   if (!b) return undefined
+  const colors = layout.borderColors
   return () => {
-    ctx.lineWidth = 1
-    const draw = (side: string | undefined, x1: number, yy1: number, x2: number, yy2: number) => {
-      if (!side) return
-      ctx.strokeStyle = '#000000'
-      ctx.beginPath()
-      // Keep outer borders within the worksheet bitmap instead of
-      // clipping the right/bottom stroke completely off the canvas.
-      ctx.moveTo(Math.min(x1 + 0.5, extent.width - 0.5), Math.min(yy1 + 0.5, extent.height - 0.5))
-      ctx.lineTo(Math.min(x2 + 0.5, extent.width - 0.5), Math.min(yy2 + 0.5, extent.height - 0.5))
-      ctx.stroke()
+    const draw = (side: 'left' | 'right' | 'top' | 'bottom', x1: number, yy1: number, x2: number, yy2: number) => {
+      const name = b[side]
+      if (!name) return
+      const spec = BORDER_STYLES[name] ?? BORDER_STYLES.thin
+      const vertical = x1 === x2
+      ctx.strokeStyle = colors?.[side] ? spreadsheetColor(colors[side]!) : '#000000'
+      ctx.lineWidth = spec.width
+      ctx.setLineDash(spec.dash ?? [])
+      // A double border is two 1px lines straddling the grid line; wider
+      // strokes centre on it (odd widths on the pixel, even on its edge) and
+      // square their caps so adjoining sides meet at the corners.
+      ctx.lineCap = spec.width > 1 ? 'square' : 'butt'
+      const centre = spec.width % 2 ? 0.5 : 0
+      for (const offset of spec.double ? [-1, 1] : [0]) {
+        const at = (v: number, limit: number) => Math.max(spec.width / 2, Math.min(v + centre + offset, limit - spec.width / 2))
+        const ex = (v: number) => Math.min(v + 0.5, extent.width - 0.5), ey = (v: number) => Math.min(v + 0.5, extent.height - 0.5)
+        ctx.beginPath()
+        // Keep outer borders within the worksheet bitmap instead of
+        // clipping the right/bottom stroke completely off the canvas.
+        if (vertical) { ctx.moveTo(at(x1, extent.width), ey(yy1)); ctx.lineTo(at(x2, extent.width), ey(yy2)) }
+        else { ctx.moveTo(ex(x1), at(yy1, extent.height)); ctx.lineTo(ex(x2), at(yy2, extent.height)) }
+        ctx.stroke()
+      }
+      ctx.setLineDash([])
+      ctx.lineCap = 'butt'
     }
-    draw(b.left, x, y, x, y + hh)
-    draw(b.right, x + w, y, x + w, y + hh)
-    draw(b.top, x, y, x + w, y)
-    draw(b.bottom, x, y + hh, x + w, y + hh)
+    draw('left', x, y, x, y + hh)
+    draw('right', x + w, y, x + w, y + hh)
+    draw('top', x, y, x + w, y)
+    draw('bottom', x, y + hh, x + w, y + hh)
+    ctx.lineWidth = 1
   }
+}
+
+/** Excel's border line styles (ECMA-376 ST_BorderStyle) at 100% zoom. */
+const BORDER_STYLES: Record<string, { width: number; dash?: number[]; double?: boolean }> = {
+  thin: { width: 1 },
+  hair: { width: 1, dash: [1, 1] },
+  dotted: { width: 1, dash: [1, 2] },
+  dashed: { width: 1, dash: [3, 1] },
+  dashDot: { width: 1, dash: [9, 3, 3, 3] },
+  dashDotDot: { width: 1, dash: [9, 3, 3, 3, 3, 3] },
+  medium: { width: 2 },
+  mediumDashed: { width: 2, dash: [9, 3] },
+  mediumDashDot: { width: 2, dash: [9, 3, 3, 3] },
+  mediumDashDotDot: { width: 2, dash: [9, 3, 3, 3, 3, 3] },
+  slantDashDot: { width: 2, dash: [11, 1, 5, 1] },
+  thick: { width: 3 },
+  double: { width: 1, double: true },
 }
 
 /** Drawings are positioned in worksheet CSS pixels by the parser; both paths

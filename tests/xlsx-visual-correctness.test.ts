@@ -12,6 +12,9 @@ import { buildXlsx } from '../src/testdata/ooxml-builders'
 import { OfficePackage } from '../src/core/zip'
 import { parseXlsx } from '../src/xlsx/parse'
 import { createObjectWorkbookSource } from '../src/xlsx/view/source'
+import { workbookFormatting } from '../src/xlsx/storage/pagedFormatting'
+import { parseXml } from '../src/core/xml'
+import JSZip from 'jszip'
 
 interface PaintOp { op: string; args: unknown[]; fillStyle: unknown; strokeStyle: unknown; lineWidth: unknown; dash: number[]; font: string }
 /** A canvas stand-in: every glyph is 7px wide; state at each call is recorded. */
@@ -84,5 +87,57 @@ describe('#10 a stored row height applies without customHeight (Excel honours ht
     expect(resident.metrics.rows.start(1)).toBe(17)
     expect(buildGeometry(sheet().rows, []).rows.start(1)).toBe(17)
     expect(computeMetrics(sheet()).rowHeightsPx.slice(0, 3)).toEqual([17, 17, 17])
+  })
+})
+
+describe('#4 Excel border styles and colours', () => {
+  const strokes = (ops: PaintOp[]) => ops.filter(o => o.op === 'stroke' && o.strokeStyle !== '#d0d0d0')
+  const paint = (borders: XlsxCellStyle['borders'], borderColors?: XlsxCellStyle['borderColors']) => {
+    const { ctx, ops } = recordingContext()
+    renderSheet(sheetOf([{ row: 1, col: 1, value: 'b', style: style({ borders, borderColors }) }]), ctx, grid([64, 64, 64], [20, 20, 20]))
+    return ops
+  }
+  it('thick red is a 3px #C00000 stroke (openpyxl 00C00000)', () => {
+    const s = strokes(paint({ top: 'thick' }, { top: '00C00000' }))
+    expect(s).toHaveLength(1)
+    expect(s[0]).toMatchObject({ strokeStyle: '#C00000', lineWidth: 3, dash: [] })
+  })
+  it('medium is 2px; hair, dotted, dashed and the dash-dot families set a dash pattern', () => {
+    expect(strokes(paint({ left: 'medium' }))[0]).toMatchObject({ lineWidth: 2, dash: [] })
+    for (const name of ['hair', 'dotted', 'dashed', 'dashDot', 'dashDotDot']) expect(strokes(paint({ left: name }))[0], name).toMatchObject({ lineWidth: 1, dash: expect.arrayContaining([expect.any(Number)]) })
+    for (const name of ['mediumDashed', 'mediumDashDot', 'mediumDashDotDot', 'slantDashDot']) expect(strokes(paint({ left: name }))[0], name).toMatchObject({ lineWidth: 2, dash: expect.arrayContaining([expect.any(Number)]) })
+    expect(strokes(paint({ left: 'dashDot' }))[0].dash).not.toEqual(strokes(paint({ left: 'dashed' }))[0].dash)
+  })
+  it('double draws two 1px lines a pixel apart in its colour', () => {
+    const ops = paint({ bottom: 'double' }, { bottom: '0000B050' })
+    const s = strokes(ops)
+    expect(s).toHaveLength(2)
+    expect(s.every(o => o.strokeStyle === '#00B050' && o.lineWidth === 1)).toBe(true)
+    const ys = ops.filter(o => o.op === 'moveTo').map(o => (o.args as number[])[1]).filter(y => y !== undefined)
+    expect(ys).toEqual(expect.arrayContaining([40.5 - 1, 40.5 + 1]))
+  })
+  it('thin with no colour stays the exact 1px black line; the dash state never leaks', () => {
+    const { ctx, ops } = recordingContext()
+    renderSheet(sheetOf([{ row: 0, col: 0, value: 'a', style: style({ borders: { left: 'dashed', right: 'thin' } }) }]), ctx, grid([64, 64], [20, 20]))
+    const s = strokes(ops)
+    expect(s.map(o => o.dash.length > 0)).toEqual([true, false])
+    expect(s[1]).toMatchObject({ strokeStyle: '#000000', lineWidth: 1 })
+    expect(ctx.getLineDash()).toEqual([])
+  })
+})
+
+describe('#4 border colours parse from styles.xml', () => {
+  it('records each side colour next to its style, in both the object and the paged resolution', async () => {
+    const zip = await JSZip.loadAsync(await buildXlsx([{ name: 'S', rows: [{ r: 1, cells: [{ ref: 'A1', t: 'str', v: 'x', style: 1 }] }] }]))
+    const styles = `<?xml version="1.0" encoding="UTF-8"?><styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+      <fonts count="1"><font><sz val="11"/></font></fonts><fills count="1"><fill><patternFill patternType="none"/></fill></fills>
+      <borders count="2"><border/><border><left style="thick"><color rgb="FFC00000"/></left><right style="dashed"><color rgb="000070C0"/></right><top style="double"><color indexed="64"/></top><bottom style="thin"/><diagonal/></border></borders>
+      <cellXfs count="2"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/><xf numFmtId="0" fontId="0" fillId="0" borderId="1"/></cellXfs></styleSheet>`
+    zip.file('xl/styles.xml', styles)
+    const doc = await parseXlsx(await OfficePackage.load(await zip.generateAsync({ type: 'uint8array' })))
+    const expected = { borders: { left: 'thick', right: 'dashed', top: 'double', bottom: 'thin' }, borderColors: { left: 'FFC00000', right: '000070C0' } }
+    expect(doc.sheets[0].rows[0].cells[0].style).toMatchObject(expected)
+    const paged = await workbookFormatting(parseXml('<workbook><workbookPr/></workbook>'), styles)
+    expect(paged.styles[1]).toMatchObject(expected)
   })
 })

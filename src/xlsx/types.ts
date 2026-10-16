@@ -60,6 +60,8 @@ export interface XlsxCellStyle {
   color?: string
   fillColor?: string
   borders?: { left?: string; right?: string; top?: string; bottom?: string }
+  /** SpreadsheetML ARGB per border side (absent: black). */
+  borderColors?: { left?: string; right?: string; top?: string; bottom?: string }
   /** Normalized alignment textRotation: 1-180 as authored, or 255 stacked. Absent, 0 and invalid values stay undefined (horizontal). */
   textRotation?: number
   /** Alignment horizontal/vertical as authored (e.g. left/center/right, top/center/bottom). Absent stays undefined. */
