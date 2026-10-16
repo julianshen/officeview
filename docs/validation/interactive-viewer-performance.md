@@ -1167,3 +1167,36 @@ final Chrome receipts are retained in
 All nine measured scenarios pass. The profile now cites these receipts and
 retains its S8.4 baseline pointer. No frozen thresholds or baseline result data
 were replaced, and no Safari/mobile/release acceptance is claimed.
+
+## Mobile M: the 1M natural-text sort is refused by design (open budget decision)
+
+An iPad Pro 11-inch simulator run (profile M, `text-sort-1m-natural`, admitted)
+reported `requiredBytes 268,435,526 > limitBytes 268,435,456`, 70 B over. The
+unadmitted run reported 268,436,558 B. Both numbers reproduce exactly in node
+(`tests/xlsx-viewer-mobile-text-sort-admission.test.ts`).
+
+**70 B is not the shortfall.** `requiredBytes` is the worker aggregate at the
+first charge that crossed the 256 MiB budget. The admitted sort halts about 11%
+into its key read: 239,052,798 B resident F4 plus 29,382,728 B of kernel work.
+The exact peaks, measured with an unbounded budget, are:
+
+| Path | Kernel peak | With resident F4 | Over M (268,435,456 B) |
+|---|---:|---:|---:|
+| Harness admitted (resident source owns the strings) | 158,622,016 B | 397,674,814 B | 129,239,358 B |
+| Cold source (dictionary owns 175,052,798 B of strings) | 317,379,338 B | — | 48,943,882 B |
+
+The peak is the end of the key read. Lanes are 13,001,536 B (tags, numbers, ids,
+fixed). The dictionary slots or string copies come next, then the conservative
+128 B per entry intern map (128,000,000 B), then one in-flight source page. Both
+paths fit D (512 MiB). This is not a double charge, and the harness does not
+create it. The current in-memory kernel cannot hold 1M unique strings in the M
+worker budget.
+
+Spec §12.4/§12.5 allows this outcome: "Allocation/quota failure returns a
+resource result", and "F2/F4 can exceed a profile's storage availability". The
+spec's lever is a page-backed multi-pass kernel (the S7.3 TODO in `sort.ts`).
+Until that kernel exists, or the user approves a budget change, the scenario
+declares an M design refusal (`scenarios.ts designRefusal`). The harness records
+one typed refusal per boundary in `environment.scenario.refusals`
+(`refused-by-design`) and runs no timing iterations. Any refusal on D, or against
+any other limit, is still a failure. No budget was changed.

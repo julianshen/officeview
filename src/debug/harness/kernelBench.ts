@@ -15,7 +15,10 @@
  */
 import type { ViewerHarness } from './harness'
 import type { KernelReply, KernelRequest } from './kernelProtocol'
-import type { QuerySample, ScenarioInfo } from './kernelScenarios'
+import type { QuerySample, SampleRefusal, ScenarioInfo } from './kernelScenarios'
+import type { ScenarioRefusal } from './types'
+import { SCENARIOS } from './scenarios'
+import { WORKER_BUDGETS } from '../../xlsx/view/tileCache'
 
 export interface KernelChannel {
   postMessage(message: KernelRequest): void
@@ -25,7 +28,20 @@ export interface KernelChannel {
 export interface KernelBench {
   readonly info: ScenarioInfo
   readonly notes: readonly string[]
+  /** Declared design refusals observed by run(); empty when every run completed. */
+  readonly refusals: readonly ScenarioRefusal[]
   run(warmup: number, repeat: number): Promise<void>
+}
+
+/** A refusal is "by design" only when the scenario declares it for this
+ * profile AND it names exactly that profile's worker budget; anything else
+ * stays a harness failure. */
+export function designRefusal(info: ScenarioInfo, refusal: SampleRefusal): ScenarioRefusal {
+  const reason = SCENARIOS[info.id].designRefusal?.[info.profile]
+  if (reason === undefined || refusal.limitBytes !== WORKER_BUDGETS[info.profile]) {
+    throw new Error(`${info.id} ${refusal.boundary} refused on profile ${info.profile} (${refusal.kind} ${refusal.requiredBytes} B > ${refusal.limitBytes} B): not a declared design refusal`)
+  }
+  return { outcome: 'refused-by-design', ...refusal, reason }
 }
 
 /** Pause between runs so one run's garbage collection does not land in the next. */
@@ -76,28 +92,49 @@ export async function startKernelBench(
     else harness.recordOneShot(name, unit, 'operation', value)
   }
 
+  const refusals: ScenarioRefusal[] = []
   return {
     info: ready.info,
     notes: ready.prep.notes,
+    refusals,
     async run(warmup: number, repeat: number): Promise<void> {
       for (let i = 0; i < warmup + repeat; i++) {
         const isWarmup = i < warmup
         const kernel = (await call({ type: 'kernel' }, 'kernel')).sample
-        record('kernel', 'ms', kernel.ms, isWarmup)
-        for (const [name, value] of Object.entries(kernel.extras)) record(name, unitOf(name), value, isWarmup)
+        // A refused run is recorded once as an outcome, never as a timing
+        // sample; the query still runs once so the product path's refusal is
+        // recorded too. The scenario's admission does not change between
+        // iterations, so the remaining iterations are not run.
+        if (kernel.refusal) refusals.push(designRefusal(ready.info, kernel.refusal))
+        else {
+          record('kernel', 'ms', kernel.ms, isWarmup)
+          for (const [name, value] of Object.entries(kernel.extras)) record(name, unitOf(name), value, isWarmup)
+        }
         await settle()
 
         const label = `query-${i}`
-        harness.markInput(label)
         const sent = performance.now()
+        if (!refusals.length) harness.markInput(label)
         const query = (await call({ type: 'query' }, 'query')).sample
-        const roundtrip = performance.now() - sent
-        present(query)
-        await harness.markPresent(label, isWarmup)
-        record('query-completion', 'ms', query.ms, isWarmup)
-        record('query-roundtrip', 'ms', roundtrip, isWarmup)
-        for (const [name, value] of Object.entries(query.extras)) record(`query:${name}`, unitOf(name), value, isWarmup)
+        if (query.refusal) {
+          const refusal = designRefusal(ready.info, query.refusal)
+          if (!refusals.length) await harness.markPresent(label, true)
+          refusals.push(refusal)
+        } else if (refusals.length) {
+          throw new Error(`${ready.info.id}: the kernel was refused but the session query committed; the outcome is inconsistent`)
+        } else {
+          const roundtrip = performance.now() - sent
+          present(query)
+          await harness.markPresent(label, isWarmup)
+          record('query-completion', 'ms', query.ms, isWarmup)
+          record('query-roundtrip', 'ms', roundtrip, isWarmup)
+          for (const [name, value] of Object.entries(query.extras)) record(`query:${name}`, unitOf(name), value, isWarmup)
+        }
         await settle()
+        if (refusals.length) {
+          for (const refusal of refusals) harness.recordScenarioRefusal(refusal)
+          return
+        }
       }
     },
   }

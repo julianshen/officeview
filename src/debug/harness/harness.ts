@@ -14,7 +14,10 @@ import { createDeterministicClock } from './clock'
 import { gatherEnvironment, parseHarnessParams, readBrowserContext } from './environment'
 import { fixtureLoader, type FixtureInfo } from './fixture'
 import { finalizeResult, unavailableMetric } from './result'
-import type { HarnessEnvironment, HarnessMetric, HarnessResult, HarnessSample, SampleKind } from './types'
+import type { HarnessEnvironment, HarnessMetric, HarnessResult, HarnessSample, SampleKind, ScenarioRefusal } from './types'
+
+/** environment.note bound enforced by result.ts. */
+const NOTE_LIMIT = 1024
 
 export interface HarnessDeps {
   /** Millisecond clock; defaults to performance.now(). */
@@ -47,6 +50,8 @@ export interface ViewerHarness {
   deterministicClock: { now(): number; inject(now: () => number): void }
   fixtureLoader: typeof fixtureLoader
   setFixture(info: FixtureInfo, grid: string[][] | null): void
+  /** Marks the current kernel scenario "refused (by design)" (identity + note). */
+  recordScenarioRefusal(refusal: ScenarioRefusal): void
 }
 
 interface SampleState {
@@ -87,6 +92,8 @@ export function createViewerHarness(deps: HarnessDeps = {}): ViewerHarness {
   let longtaskState: LongTaskState = 'idle'
   const longtaskEntries: number[] = []
   let fixture: FixtureInfo | null = null
+  /** The scenario note before any refusal was recorded on it. */
+  let baseNote = ''
 
   function sampleState(name: string, unit: string, kind: SampleKind): SampleState {
     const existing = samples.get(name)
@@ -232,6 +239,15 @@ export function createViewerHarness(deps: HarnessDeps = {}): ViewerHarness {
       fixture = info
       ledger.charge('main', info.bytes, 'fixture-bytes')
       if (grid) ledger.charge('main', grid.length * Math.max(1, grid[0]?.length ?? 0) * 8, 'grid-values')
+    },
+    recordScenarioRefusal(refusal: ScenarioRefusal): void {
+      if (!fixture?.scenario) throw new Error('recordScenarioRefusal: no kernel scenario fixture is set')
+      const refusals = [...(fixture.scenario.refusals ?? []), { ...refusal }]
+      if (!fixture.scenario.refusals) baseNote = fixture.note ?? ''
+      // The structured refusals carry the reason; the bounded note leads with the outcome.
+      const mark = `REFUSED (by design): ${refusals.map(r => `${r.boundary} ${r.kind} ${r.requiredBytes} B > ${r.limitBytes} B`).join('; ')} (aggregate at the first refused charge, not the peak; see environment.scenario.refusals)`
+      const note = baseNote ? `${mark} | ${baseNote}` : mark
+      fixture = { ...fixture, scenario: { ...fixture.scenario, refusals }, note: note.length > NOTE_LIMIT ? `${note.slice(0, NOTE_LIMIT - 1)}…` : note }
     },
     markInput,
     markPresent,

@@ -48,8 +48,13 @@ export interface ScenarioInfo {
   bodyRows: number
   description: string
 }
-export interface KernelSample { ms: number; extras: Record<string, number> }
-export interface QuerySample { ms: number; visible: number; total: number; viewport: string[][]; extras: Record<string, number> }
+/** A typed worker-budget refusal returned by the kernel (`resource-limit`) or
+ * the session (`quota`). `requiredBytes` is the aggregate at the first charge
+ * that crossed the limit: a lower bound on the operation's peak. The page
+ * decides whether it is a declared design refusal (kernelBench.ts). */
+export interface SampleRefusal { boundary: 'kernel' | 'query'; kind: 'resource-limit' | 'quota'; requiredBytes: number; limitBytes: number }
+export interface KernelSample { ms: number; extras: Record<string, number>; refusal?: SampleRefusal }
+export interface QuerySample { ms: number; visible: number; total: number; viewport: string[][]; extras: Record<string, number>; refusal?: SampleRefusal }
 export interface ScenarioRunner {
   info: ScenarioInfo
   /** One-shot preparation, reported separately (never folded into kernel time). */
@@ -329,6 +334,9 @@ function sortRunner(def: ScenarioDef, rows: number, profile: ProfileId, admitted
       const ended = now()
       phases.tail = ended - mark
       const ms = ended - started
+      if (result.kind === 'resource-limit') {
+        return { ms, extras: { 'kernel-source-column-reads': host.sourceReads }, refusal: { boundary: 'kernel', kind: 'resource-limit', requiredBytes: result.requiredBytes, limitBytes: result.limitBytes } }
+      }
       if (result.kind !== 'complete') throw new Error(`sortRowOrder did not complete: ${JSON.stringify(result)}`)
       const extras: Record<string, number> = {
         'kernel-peak-bytes': result.ledger.peakBytes, 'kernel-aggregate-peak-bytes': result.ledger.aggregatePeakBytes,
@@ -342,6 +350,9 @@ function sortRunner(def: ScenarioDef, rows: number, profile: ProfileId, admitted
       const started = now()
       const outcome = await host.session.sort(host.owner, spec, signal())
       const ms = now() - started
+      if (outcome.kind === 'quota') {
+        return { ms, visible: 0, total: 0, viewport: [], extras: { ...host.poolExtras(), 'source-column-reads': host.sourceReads }, refusal: { boundary: 'query', kind: 'quota', requiredBytes: outcome.requiredBytes, limitBytes: outcome.limitBytes } }
+      }
       if (outcome.kind !== 'committed') throw new Error(`session.sort did not commit: ${JSON.stringify(outcome)}`)
       host.owner = outcome.view.identity
       return { ms, visible: outcome.view.counts.visible, total: outcome.view.counts.total, viewport: viewportOf(outcome.view, cellAt, cols), extras: { ...host.poolExtras(), 'source-column-reads': host.sourceReads } }
