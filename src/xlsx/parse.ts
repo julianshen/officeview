@@ -14,6 +14,7 @@ import { parseTableMetadata, isTablePartSource } from './formula/tables'
 import { collectDeclaredTable, createDeclaredBudget, declaredSheetBuilder, hasDeclaredFiltering, parseDeclaredContainer, type DeclaredSheetFilters } from './view/declaredFilters'
 import { parseWorksheetDrawings, collectXlsxImages } from './drawing'
 import { hasXlsxCharts, loadChartModule } from './chartLoader'
+import { frozenPaneFrom } from './frozenPane'
 import { computeMetrics } from './render'
 import { resolvePartTarget } from '../drawing/parts'
 import { parseThemeContext, type ThemeContext } from '../drawing/style'
@@ -436,6 +437,9 @@ async function parseSheet(
     }
     sheet.mergeRanges = sheet.merges.map(parseMergeRange)
   }
+  const pane = getChildren(getChildren(getChildren(data, 'sheetViews')[0], 'sheetView')[0], 'pane')[0]
+  const frozen = pane ? frozenPaneFrom(attrs(pane) as Record<string, string | undefined>) : undefined
+  if (frozen) sheet.frozen = frozen
   const setupPr = getChildren(getChildren(data, 'sheetPr')[0], 'pageSetUpPr')[0]
   const setupNode = getChildren(data, 'pageSetup')[0]
   if (setupNode || setupPr) {

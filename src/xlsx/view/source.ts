@@ -467,7 +467,7 @@ export class ObjectXlsxSheetAdapter implements SourceStore {
   /** Resolved once: the parsed sheet behind this adapter never changes. */
   private drawings(): DrawingAnchor[] {
     this.drawingCache ??= resolveDrawingAnchors(this.sheet.drawingAnchors?.records ?? [],
-      buildGeometry([...this.sheet.rows].sort((a, b) => a.index - b.index), this.sheet.cols, [], { hiddenCols: true }))
+      withFrozen(buildGeometry([...this.sheet.rows].sort((a, b) => a.index - b.index), this.sheet.cols, [], { hiddenCols: true }), this.sheet.frozen))
     return this.drawingCache
   }
   /** One lanes run per interval slice; a page covers at most `limit` rows. */
@@ -532,7 +532,11 @@ export class ObjectXlsxSheetAdapter implements SourceStore {
 }
 
 function sheetGeometry(sheet: XlsxSheet): SheetGeometry {
-  return buildGeometry([...sheet.rows].sort((a, b) => a.index - b.index), sheet.cols, [], { hiddenCols: true })
+  return withFrozen(buildGeometry([...sheet.rows].sort((a, b) => a.index - b.index), sheet.cols, [], { hiddenCols: true }), sheet.frozen)
+}
+/** Geometry carrying the sheet's authored frozen panes (copied, frozen). */
+export function withFrozen(geometry: SheetGeometry, frozen: SheetGeometry['frozen']): SheetGeometry {
+  return frozen ? Object.freeze({ ...geometry, frozen: Object.freeze({ ...frozen }) }) : geometry
 }
 /** Source-space geometry from authored rows (ascending) and column specs; shared by both adapters. */
 export function buildGeometry(

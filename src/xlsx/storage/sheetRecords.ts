@@ -6,6 +6,7 @@
  * counters and a bounded formula-text buffer, so nothing proportional to the
  * part is retained. The paged record builders (S1.2) will live next to it.
  */
+import { frozenPaneFrom, type XlsxFrozenPane } from '../frozenPane'
 import { PackageError } from '../../core/package-error'
 import { localName, XstringDecoder, type XmlEvents } from '../../core/xml-stream'
 import { isLoadEvaluated, MAX_LOAD_FORMULA_CHARS } from '../view/values'
@@ -313,6 +314,9 @@ export interface SheetMetadata {
   structuralIncomplete: Array<'merges' | 'tables' | 'drawings' | 'columns' | 'rows'>
   /** Cells whose coordinates fall outside the sheet (invisible in both adapters). */
   skippedCells: number
+  /** Authored frozen panes of the first sheet view. */
+  frozen?: XlsxFrozenPane
+  paneSeen?: boolean
   /** Metadata-only rows arrived out of order: rowHeights/hiddenRows need normalizeRowMetadata. */
   unorderedRows?: boolean
 }
@@ -547,6 +551,10 @@ export function sheetRecordEvents(meta: SheetMetadata, options: SheetRecordOptio
         const id = attrMap(names, values, count).id
         bounded(meta.tablePartIds, 'table parts')
         meta.tablePartIds.push(typeof id === 'string' && id !== '' ? id : undefined)
+      } else if (depth === 3 && local === 'pane' && stack[1] === 'sheetViews' && stack[2] === 'sheetView' && !meta.paneSeen) {
+        meta.paneSeen = true
+        const frozen = frozenPaneFrom(attrMap(names, values, count))
+        if (frozen) meta.frozen = frozen
       } else if (depth === 1 && local === 'drawing') {
         // legacyDrawing (comment VML) carries no anchors the structural query reports.
         bounded(meta.drawingIds, 'drawing references')

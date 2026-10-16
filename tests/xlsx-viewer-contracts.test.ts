@@ -326,6 +326,8 @@ describe('type contract freeze (spec §§4–5, 10)', () => {
       physicalPosition: { x: number; y: number }
       physicalExtent: { width: number; height: number }
       zoom: number; deviceScale: number
+      // SPEC AMENDMENT (visual review #5): authored frozen panes.
+      frozen?: { rows: number; cols: number; left: number; top: number }
     }>()
     expectTypeOf<Extract<WorkerResult, { kind: 'view' }>['delta']['owner']>().toEqualTypeOf<CacheIdentity>()
     expectTypeOf<Extract<WorkerResult, { kind: 'view' }>['delta']['workbookOwner']>().toEqualTypeOf<WorkbookOwner>()

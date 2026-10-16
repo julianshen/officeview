@@ -2,10 +2,11 @@ import { clampZoom } from '../../core/zoom'
 import { MAX_PHYSICAL_SCROLL_CSS_PX, SHEET_MIN_ZOOM, SHEET_MAX_ZOOM, type AxisMetrics, type LogicalCellBox, type ScrollWindow, type SheetMetrics, type SheetView } from './contracts'
 import { isValidCoordinate, parseA1, validateCoordinate, type NavigatorRequest, type SourceCell, type DisplaySlot } from './coordinates'
 import { normalizeFilter } from './visibility'
+import { bodyOriginFor, ensureAxisVisible, frozenExtent, frozenViewportSize, originAtLogical, originAtViewport } from './frozenPanes'
 
 export interface ViewportSize { width: number; height: number }
 export interface ScrollPoint { x: number; y: number }
-export interface ScrollOptions { zoom?: number; deviceScale?: number; offset?: ScrollPoint }
+export interface ScrollOptions { zoom?: number; deviceScale?: number; offset?: ScrollPoint; frozen?: { rows: number; cols: number } }
 const CAP = MAX_PHYSICAL_SCROLL_CSS_PX
 const GUARD_FRACTION = 0.2
 function finite(value: number): void { if (!Number.isFinite(value)) throw new RangeError('Scroll coordinates must be finite') }
@@ -48,25 +49,26 @@ function placeAxis(axis: AxisMetrics, viewportCss: number, zoom: number, request
   const upper = Math.min(bounds.range, offset * zoom)
   return { offset, position: clamp(bounds.range / 2, lower, upper), extent: bounds.extent }
 }
-function makeWindow(metrics: SheetMetrics, viewport: ViewportSize, offset: ScrollPoint, zoom: number, deviceScale: number): ScrollWindow {
+function makeWindow(metrics: SheetMetrics, viewport: ViewportSize, offset: ScrollPoint, zoom: number, deviceScale: number, freeze?: { rows: number; cols: number }): ScrollWindow {
   viewportSize(viewport); point(offset)
   if (!Number.isFinite(deviceScale) || deviceScale <= 0) throw new RangeError('Device scale must be finite and positive')
   const x = placeAxis(metrics.cols, viewport.width, zoom, offset.x)
   const y = placeAxis(metrics.rows, viewport.height, zoom, offset.y)
   validatePixelPrecision(x.offset, viewport.width, zoom, deviceScale)
   validatePixelPrecision(y.offset, viewport.height, zoom, deviceScale)
-  return Object.freeze({ logicalOrigin: Object.freeze({ x: x.offset, y: y.offset }), physicalPosition: Object.freeze({ x: x.position, y: y.position }), physicalExtent: Object.freeze({ width: x.extent, height: y.extent }), zoom, deviceScale })
+  const frozen = frozenExtent(freeze, metrics, viewport, zoom)
+  return Object.freeze({ logicalOrigin: Object.freeze({ x: x.offset, y: y.offset }), physicalPosition: Object.freeze({ x: x.position, y: y.position }), physicalExtent: Object.freeze({ width: x.extent, height: y.extent }), zoom, deviceScale, ...(frozen ? { frozen } : {}) })
 }
 /** logicalOrigin is the actual Float64 viewport offset. physicalPosition is the
  * native segment offset; its derived logical base is origin-position/zoom (§5.4).
  * Recentring changes the native offset, never the viewport's world origin. */
 export function createScrollWindow(metrics: SheetMetrics, viewport: ViewportSize, options: ScrollOptions = {}): ScrollWindow {
-  return makeWindow(metrics, viewport, options.offset ?? { x: 0, y: 0 }, clampZoom(finiteZoom(options.zoom ?? 1), SHEET_MIN_ZOOM, SHEET_MAX_ZOOM), options.deviceScale ?? 1)
+  return makeWindow(metrics, viewport, options.offset ?? { x: 0, y: 0 }, clampZoom(finiteZoom(options.zoom ?? 1), SHEET_MIN_ZOOM, SHEET_MAX_ZOOM), options.deviceScale ?? 1, options.frozen)
 }
 export function scrollOffset(window: ScrollWindow): ScrollPoint { state(window); return { ...window.logicalOrigin } }
 export function setScrollOffset(window: ScrollWindow, metrics: SheetMetrics, viewport: ViewportSize, offset: ScrollPoint): ScrollWindow {
   state(window)
-  return makeWindow(metrics, viewport, offset, window.zoom, window.deviceScale)
+  return makeWindow(metrics, viewport, offset, window.zoom, window.deviceScale, window.frozen)
 }
 function applyLocalMotion(window: ScrollWindow, metrics: SheetMetrics, viewport: ViewportSize, delta: ScrollPoint): ScrollWindow {
   const requested = { x: window.logicalOrigin.x + delta.x / window.zoom, y: window.logicalOrigin.y + delta.y / window.zoom }
@@ -117,17 +119,21 @@ export function setScrollZoom(window: ScrollWindow, metrics: SheetMetrics, viewp
   const world = viewportToLogical(window, anchor)
   point(nextAnchor)
   const zoom = clampZoom(finiteZoom(nextZoom), SHEET_MIN_ZOOM, SHEET_MAX_ZOOM)
-  return makeWindow(metrics, viewport, { x: world.x - nextAnchor.x / zoom, y: world.y - nextAnchor.y / zoom }, zoom, deviceScale)
+  // An anchor inside a pinned strip has no scroll meaning: keep that axis's origin.
+  const pinned = frozenViewportSize(window.frozen, window.zoom)
+  return makeWindow(metrics, viewport, { x: anchor.x < pinned.x ? window.logicalOrigin.x : world.x - nextAnchor.x / zoom, y: anchor.y < pinned.y ? window.logicalOrigin.y : world.y - nextAnchor.y / zoom }, zoom, deviceScale, window.frozen)
 }
 export function logicalToViewport(window: ScrollWindow, value: ScrollPoint): ScrollPoint {
   state(window); point(value)
-  const result = { x: (value.x - window.logicalOrigin.x) * window.zoom, y: (value.y - window.logicalOrigin.y) * window.zoom }
+  const origin = originAtLogical(window.frozen, window.logicalOrigin, value)
+  const result = { x: (value.x - origin.x) * window.zoom, y: (value.y - origin.y) * window.zoom }
   point(result)
   return result
 }
 export function viewportToLogical(window: ScrollWindow, value: ScrollPoint): ScrollPoint {
   state(window); point(value)
-  const result = { x: window.logicalOrigin.x + value.x / window.zoom, y: window.logicalOrigin.y + value.y / window.zoom }
+  const origin = originAtViewport(window.frozen, window.logicalOrigin, window.zoom, value)
+  const result = { x: origin.x + value.x / window.zoom, y: origin.y + value.y / window.zoom }
   point(result)
   return result
 }
@@ -171,8 +177,9 @@ function hitAxis(axis: AxisMetrics, origin: number, zoom: number, css: number): 
 export function hitTestViewport(window: ScrollWindow, metrics: SheetMetrics, viewport: ViewportSize, value: ScrollPoint): SourceCell | null {
   state(window); viewportSize(viewport); point(value)
   if (value.x < 0 || value.y < 0 || value.x >= viewport.width || value.y >= viewport.height) return null
-  const col = hitAxis(metrics.cols, window.logicalOrigin.x, window.zoom, value.x)
-  const rowSlot = hitAxis(metrics.rows, window.logicalOrigin.y, window.zoom, value.y)
+  const origin = originAtViewport(window.frozen, window.logicalOrigin, window.zoom, value)
+  const col = hitAxis(metrics.cols, origin.x, window.zoom, value.x)
+  const rowSlot = hitAxis(metrics.rows, origin.y, window.zoom, value.y)
   return col === null || rowSlot === null ? null : { row: metrics.order.displayToSource(rowSlot), col }
 }
 export function visibleLogicalViewport(window: ScrollWindow, viewport: ViewportSize): LogicalCellBox {
@@ -338,12 +345,13 @@ function visibleResult(window: ScrollWindow, metrics: SheetMetrics, target: Sour
 function emptyResult(window: ScrollWindow): NavigationResult { return { kind: 'empty', window, active: null, target: null, display: null, activate: false } }
 function ensureVisible(window: ScrollWindow, context: NavigationContext, target: SourceCell): ScrollWindow {
   const box = context.metrics.sourceCellToLogical(target)!
-  const ensure = (origin: number, start: number, length: number, viewportCss: number) => {
+  const ensure = (origin: number, start: number, length: number, viewportCss: number, pinned: number) => {
     const span = viewportCss / window.zoom
+    if (pinned > 0) return ensureAxisVisible(origin, start, length, span, pinned)
     if (length > span) return clamp(origin, start, start + length - span)
     return start < origin ? start : start + length > origin + span ? start + length - span : origin
   }
-  return setScrollOffset(window, context.metrics, context.viewport, { x: ensure(window.logicalOrigin.x, box.x, box.width, context.viewport.width), y: ensure(window.logicalOrigin.y, box.y, box.height, context.viewport.height) })
+  return setScrollOffset(window, context.metrics, context.viewport, { x: ensure(window.logicalOrigin.x, box.x, box.width, context.viewport.width, window.frozen?.left ?? 0), y: ensure(window.logicalOrigin.y, box.y, box.height, context.viewport.height, window.frozen?.top ?? 0) })
 }
 /** Hidden requests open an inspector, never activate/unhide their target. A
  * valid existing active source identity is retained; an invalidated active cell
@@ -352,7 +360,7 @@ export function navigateTo(window: ScrollWindow, context: NavigationContext, req
   state(window)
   const target = navigationTarget(context.metrics, request)
   const box = context.metrics.sourceCellToLogical(target)
-  if (box) return visibleResult(setScrollOffset(window, context.metrics, context.viewport, box), context.metrics, target)
+  if (box) return visibleResult(setScrollOffset(window, context.metrics, context.viewport, bodyOriginFor(window.logicalOrigin, window.frozen, box)), context.metrics, target)
   const rowSlot = context.metrics.order.sourceToDisplay(target.row)
   const hiddenReason = hiddenReasonForCell(context, target, rowSlot)
   return { kind: 'hidden', window, active: retainActive(context, currentActive), target, display: { rowSlot, col: target.col }, activate: false, hiddenReason }

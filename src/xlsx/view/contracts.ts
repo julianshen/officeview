@@ -380,6 +380,9 @@ export interface ScrollWindow {
   physicalExtent: { width: number; height: number }
   zoom: SheetZoom
   deviceScale: number
+  /** Authored frozen panes: requested counts and the logical extents pinned at
+   * this zoom/viewport (0 = that axis is not pinned). See frozenPanes.ts. */
+  frozen?: { rows: number; cols: number; left: number; top: number }
 }
 export const SHEET_MIN_ZOOM = 0.25
 export const SHEET_MAX_ZOOM = 4
@@ -494,6 +497,8 @@ export interface SheetLayout {
   /** Authored-hidden columns: zero width for paint, navigation, find and copy. */
   hiddenCols?: readonly { start: number; end: number }[]
   used?: SourceRect
+  /** Authored frozen panes. */
+  frozen?: { rows: number; cols: number; topRow?: number; leftCol?: number }
 }
 export type WorkerCommand =
   | { kind: 'open'; requestId: string; docId: string; source: SourceHandle; profile: ProfileId }

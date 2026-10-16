@@ -21,7 +21,7 @@ import { MAX_COLS, MAX_ROWS, cellId, isValidCoordinate, isValidSourceRect, type 
 import { INITIAL_GENERATION } from '../../worker/viewerProtocol'
 import { failedPage, failure, rowSetIntervals, sameStamp, type SheetGeometry, type WorkbookSource } from '../../worker/viewerSession'
 import type { MemoryPool, PoolEntry } from './tileCache'
-import { LaneBuilder, READ_ROWS_MAX_CELLS, READ_ROWS_PAGE_ROWS, buildGeometry, intersects, invalidMergeDiagnostic } from './source'
+import { LaneBuilder, READ_ROWS_MAX_CELLS, READ_ROWS_PAGE_ROWS, buildGeometry, withFrozen, intersects, invalidMergeDiagnostic } from './source'
 import {
   F_BLOB, F_CACHED, F_ERROR, K_BOOL, K_EMPTY, K_ERROR, K_NUMBER, K_SST, K_TEXT, recordPopulated, textAt,
   type CellPagePayload, type PageSummary,
@@ -645,7 +645,7 @@ export function createPagedWorkbookSource(session: PagedImportSession, options: 
       let geometry = geometries.get(sheetId)
       if (!geometry) {
         // Row metadata arrives with the rows; cache only once the sheet is complete.
-        geometry = buildGeometry(sheet.metadata.rowHeights.map(h => ({ index: h.row, heightPt: h.heightPt })), sheet.metadata.cols, sheet.metadata.hiddenRows, { hiddenCols: true })
+        geometry = withFrozen(buildGeometry(sheet.metadata.rowHeights.map(h => ({ index: h.row, heightPt: h.heightPt })), sheet.metadata.cols, sheet.metadata.hiddenRows, { hiddenCols: true }), sheet.metadata.frozen)
         if (sheet.state === 'complete') geometries.set(sheetId, geometry)
       }
       return geometry
