@@ -1155,3 +1155,31 @@ describe('visual review: runtime-independent cp1252', () => {
     }
   })
 })
+
+describe('visual review #15: RTF table shading and inline pictures', () => {
+  test('\\clcbpat written before its \\cellx shades that cell', () => {
+    const table = firstTable(preamble + String.raw`\trowd\clcbpat3\cellx3600\cellx7200\intbl Shaded\cell Plain\cell\row}`)
+    expect(table?.rows[0].cells.map((c) => c.fill)).toEqual(['#ffff00', undefined])
+  })
+
+  test('a text line holding an inline picture keeps a descent below the picture', async () => {
+    const { createCanvas } = await import('canvas')
+    const { createMeasurer, layoutDocx } = await import('../src/docx/layout')
+    const measure = createMeasurer(createCanvas(10, 10).getContext('2d') as unknown as CanvasRenderingContext2D)
+    const png = createCanvas(16, 16).toBuffer('image/png')
+    const hex = Array.from(png, (b) => b.toString(16).padStart(2, '0')).join('')
+    const rtf = String.raw`{\rtf1\ansi\deff0\paperw12240\paperh15840\margl1440\margr1440\margt1440\margb1440 ` +
+      String.raw`\pard\b An inline picture:\b0 {\pict\pngblip\picw16\pich16\picwgoal576\pichgoal576 ` + hex +
+      String.raw`}\par\pard\b A list:\b0\par}`
+    const page = layoutDocx(parseRtf(rtf), measure)[0]
+    const [pic, next] = page.lines
+    const img = pic.inlineImages![0]
+    // The picture sits on the text baseline...
+    expect(img.yPx + img.heightPx).toBeCloseTo(pic.baselinePx!, 5)
+    expect(img.yPx).toBeGreaterThanOrEqual(pic.yPx - 0.01)
+    // ...and the line reserves the font's descent below it, so descenders and
+    // the following line never collide with the picture line.
+    expect(pic.yPx + pic.heightPx - pic.baselinePx!).toBeGreaterThan(3)
+    expect(next.yPx).toBeGreaterThanOrEqual(pic.yPx + pic.heightPx - 0.01)
+  })
+})

@@ -266,11 +266,14 @@ async function sampleOdt(): Promise<Uint8Array> {
     String.raw`\pard\b Code page 1251:\b0 \'cf\'f0\'e8\'e2\'e5\'f2 \u8212 ? not mojibake.\par`,
     '\\pard\\b A table:\\b0\\par',
     '\\trowd\\trgaph108\\trleft0',
-    '\\clbrdrt\\brdrs\\clbrdrl\\brdrs\\clbrdrb\\brdrs\\clbrdrr\\brdrs\\cellx3600',
+    // Cell properties (borders, \\clcbpat shading) precede the \\cellx that
+    // closes each cell definition, as Word writes them.
+    '\\clcbpat3\\clbrdrt\\brdrs\\clbrdrl\\brdrs\\clbrdrb\\brdrs\\clbrdrr\\brdrs\\cellx2400',
+    '\\clbrdrt\\brdrs\\clbrdrl\\brdrs\\clbrdrb\\brdrs\\clbrdrr\\brdrs\\cellx4800',
     '\\clbrdrt\\brdrs\\clbrdrl\\brdrs\\clbrdrb\\brdrs\\clbrdrr\\brdrs\\cellx7200',
-    '\\clcbpat3\\intbl \\b Shaded cell\\b0\\par',
-    '\\intbl Plain cell\\par \\cell',
-    '\\intbl Third column\\par \\cell\\row',
+    '\\intbl \\b Shaded cell\\b0\\cell',
+    '\\intbl Plain cell\\cell',
+    '\\intbl Third column\\cell\\row',
     '\\pard\\b An inline picture:\\b0 {\\pict\\pngblip\\picw16\\pich16\\picwgoal576\\pichgoal576',
     onePixelPng,
     '}\\par',
