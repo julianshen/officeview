@@ -373,6 +373,18 @@ test.describe('S10.1 real interactive viewer', () => {
     await page.getByRole('button', { name: 'Next match' }).click()
   })
 
+  test('print media hides the sheet screen and the floating search/zoom controls, showing the print notice', async ({ page }) => {
+    await openViewer(page, 'f2-1k.xlsx')
+    await expect(page.getByTestId('officeview-search')).toBeVisible()
+    await page.emulateMedia({ media: 'print' })
+    await expect(page.getByTestId('officeview-search')).toBeHidden()
+    await expect(page.getByTestId('officeview-zoom-controls')).toBeHidden()
+    await expect(page.getByTestId('officeview-sheet-pane')).toBeHidden()
+    await expect(page.getByTestId('officeview-sheet-print-notice')).toBeVisible()
+    await page.emulateMedia({ media: 'screen' })
+    await expect(page.getByTestId('officeview-search')).toBeVisible()
+  })
+
   for (const path of [{ name: 'f2-1k.xlsx', rows: 1000, worker: false }, { name: 'f2-paged.xlsx', rows: 100_010, worker: true }] as const) {
     test(`F2 ${path.worker ? 'worker-backed' : 'resident'} (${path.rows} rows): header sort, value filter, cancel, clear`, async ({ page }) => {
       const handle = createFixture('F2', { rowCount: path.rows })
