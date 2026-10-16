@@ -122,7 +122,8 @@ export function ResizeHandles(props: ResizeHandlesProps): ReactElement {
     const box = gridHeaderBox(projection, scroll, 'column', col)
     const edge = box.x + box.width
     if (box.width <= 0 || edge < 0 || edge > viewport.width) continue
-    handles.push(handle('column', col, col, { left: GRID_HEADER_SIZE + edge - half, top: 0, width: 2 * half, height: touch ? GRID_HEADER_SIZE : headerHeight }))
+    // Scroll-driven positions use transforms (not a layout shift, as for the header strips).
+    handles.push(handle('column', col, col, { left: 0, top: 0, transform: `translateX(${GRID_HEADER_SIZE + edge - half}px)`, width: 2 * half, height: touch ? GRID_HEADER_SIZE : headerHeight }))
   }
   for (const slot of slots) {
     const box = gridHeaderBox(projection, scroll, 'row', slot)
@@ -130,15 +131,15 @@ export function ResizeHandles(props: ResizeHandlesProps): ReactElement {
     if (box.height <= 0 || edge < 0 || edge > viewport.height) continue
     handles.push(handle('row', projection.order.displayToSource(slot), slot, touch
       ? { left: 0, top: GRID_HEADER_SIZE, width: GRID_HEADER_SIZE, height: GRID_HEADER_SIZE, background: '#f3f4f6' }
-      : { left: 0, top: headerHeight + edge - half, width: GRID_HEADER_SIZE, height: 2 * half }))
+      : { left: 0, top: 0, transform: `translateY(${headerHeight + edge - half}px)`, width: GRID_HEADER_SIZE, height: 2 * half }))
   }
   if (drag?.moved) {
     const box = gridHeaderBox(projection, scroll, drag.kind, drag.kind === 'row' ? drag.slot : drag.index)
     const at = (drag.kind === 'row' ? box.y : box.x) + drag.size * scroll.zoom
     const label = `${drag.kind === 'row' ? 'Height' : 'Width'}: ${drag.size} px`
     handles.push(<div key="guide" aria-hidden="true" data-officeview-ui="resize-guide" style={drag.kind === 'row'
-      ? { position: 'absolute', zIndex: 3, pointerEvents: 'none', left: 0, top: headerHeight + at - 1, width: GRID_HEADER_SIZE + viewport.width, height: 2, background: GUIDE }
-      : { position: 'absolute', zIndex: 3, pointerEvents: 'none', left: GRID_HEADER_SIZE + at - 1, top: 0, width: 2, height: headerHeight + viewport.height, background: GUIDE }}>
+      ? { position: 'absolute', zIndex: 3, pointerEvents: 'none', left: 0, top: 0, transform: `translateY(${headerHeight + at - 1}px)`, width: GRID_HEADER_SIZE + viewport.width, height: 2, background: GUIDE }
+      : { position: 'absolute', zIndex: 3, pointerEvents: 'none', left: 0, top: 0, transform: `translateX(${GRID_HEADER_SIZE + at - 1}px)`, width: 2, height: headerHeight + viewport.height, background: GUIDE }}>
       <span style={{ position: 'absolute', left: 4, top: 4, whiteSpace: 'nowrap', font: '12px sans-serif', color: '#ffffff', background: GUIDE, borderRadius: 3, padding: '1px 4px' }}>{label}</span>
     </div>)
   }
