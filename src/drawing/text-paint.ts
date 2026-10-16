@@ -1241,6 +1241,11 @@ export function paintTextBody(body: PptxTextBody, ctx: CanvasRenderingContext2D,
               }
               continue
             }
+            if (segment.style.highlight && !needsFrame && segment.text !== '\n') {
+              applyTextShadow(ctx, {})
+              ctx.fillStyle = segment.style.highlight
+              ctx.fillRect(sx, y + line.y, segment.width, line.height)
+            }
             paintSegmentInk(segment, line, nativeTracking)
           } finally { if (applyOuterFrame) ctx.restore() }
         }

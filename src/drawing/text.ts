@@ -29,6 +29,8 @@ export interface DrawingTextStyle {
   fontFamilyComplexScript?: string
   characterSpacingPt?: number
   language?: string
+  /** a:highlight: CSS colour painted behind the run's line band. */
+  highlight?: string
 }
 export interface DrawingTextRun extends DrawingTextStyle {
   text: string
