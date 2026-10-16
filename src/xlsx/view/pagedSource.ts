@@ -768,6 +768,8 @@ function memoryRefusal(): SheetDrawings {
 
 function pageFailure(cause: unknown): SourceFailure {
   const code = (cause as { code?: unknown } | null)?.code
+  // A record the source memory cannot admit right now (spec §12.4): typed and retryable.
+  if (code === 'resource-limit') return failure('resource-limit', (cause as Error).message, true)
   if (code === 'storage-error' || code === 'quota' || code === 'parse-error' || code === 'cancelled') {
     return failure(code, (cause as Error).message, code !== 'parse-error')
   }

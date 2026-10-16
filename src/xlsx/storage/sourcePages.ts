@@ -842,6 +842,13 @@ export class SourcePageStore implements PageSink {
   private readonly index = new Map<string, PageSummary[]>()
   private readonly reservations: Reservation[] = []
   private readonly resident = new Map<string, Resident<CellPagePayload | StringChunk>>()
+  /** Stored byte size of every record written (pages, shared-string chunks,
+   * oversized values): what a read will allocate, known before it reads. */
+  private readonly recordBytes = new Map<string, number>()
+  /** Bytes reserved in the pool for reads in flight (incoming buffer + decode). */
+  private readingBytesNow = 0
+  /** Pool bytes currently reserved for records being read from storage. */
+  get readingBytes(): number { return this.readingBytesNow }
   private readonly loading = new Map<string, Promise<CellPagePayload | StringChunk>>()
   /** Import/index construction charges (§12.4); see constructionMemory.ts. */
   readonly construction: ConstructionMemory
@@ -967,6 +974,7 @@ export class SourcePageStore implements PageSink {
       this.inFlight.add(pageKey)
       try {
         await this.backend.put(pageKey, bytes)
+        this.recordBytes.set(pageKey, bytes.byteLength)
       } catch (error) {
         throw storageError(error, 'writing a source page')
       }
@@ -1027,6 +1035,7 @@ export class SourcePageStore implements PageSink {
       blob.ram = this.holdRam(bytes.byteLength)
       try {
         await this.backend.put(blob.key, bytes)
+        this.recordBytes.set(blob.key, bytes.byteLength)
       } catch (error) {
         throw storageError(error, 'writing an oversized cell value')
       }
@@ -1076,6 +1085,7 @@ export class SourcePageStore implements PageSink {
       attempted = true
       this.inFlight.add(key)
       await this.backend.put(key, bytes)
+      this.recordBytes.set(key, bytes.byteLength)
       stored = bytes.byteLength
       this.check(docId)
     } catch (error) {
@@ -1260,11 +1270,30 @@ export class SourcePageStore implements PageSink {
     }
     const pending = this.loading.get(key)
     if (pending) { this.counters.coalesced++; return pending as Promise<T> }
+    // Admission before allocation (spec §12.4): the record's stored size is known
+    // from its write, so room is made (LRU, unpinned) and the incoming buffer plus
+    // its decode are reserved BEFORE the read; the reservation is handed to the
+    // cached record (or released) once decoded. A record that cannot be admitted is
+    // refused with a typed resource result, without reading it.
+    const expected = this.recordBytes.get(key)
+    let reading: PoolEntry | null = null
+    if (this.pool && !this.pool.closed && expected !== undefined) {
+      const reserve = expected + Math.max(DECODED_PAGE_OVERHEAD_BYTES, DECODED_CHUNK_OVERHEAD_BYTES)
+      try { reading = this.pool.retain(`source:${this.docId}:reading:${key}`, { tier: 'source', bytes: reserve, evictable: false }) } catch { reading = null }
+      if (!reading) throw new PackageError('resource-limit', `source record ${key} (${expected} bytes) does not fit the source memory budget`)
+      this.readingBytesNow += reserve
+    }
+    const endReading = () => { if (reading) { this.readingBytesNow -= reading.bytes; reading.release(); reading = null } }
     const promise = (async () => {
       this.counters.loads++
-      const bytes = await this.backend.get(key)
-      if (bytes === undefined) throw new PackageError('storage-error', `source page ${key} is missing from browser storage`)
-      const value = decode(bytes)
+      let bytes: Uint8Array | undefined, value: T
+      try {
+        bytes = await this.backend.get(key)
+        if (bytes === undefined) throw new PackageError('storage-error', `source page ${key} is missing from browser storage`)
+        value = decode(bytes)
+      } catch (error) { endReading(); throw error }
+      // Ownership moves from the read reservation to the cached record, synchronously.
+      endReading()
       if (this.live && !this.resident.has(key)) {
         const view = 'rows' in value ? value.rows : value.text
         const bytesHeld = size(value, this.backend.kind === 'memory' && view.buffer === bytes.buffer)

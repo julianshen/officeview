@@ -47,8 +47,13 @@ it('an unretained chunk keeps its accepted charge through prefix extraction',{ti
    if(unowned)admissions.push({requested:n,accepted:ok,held:charge.bytes,unowned,stats:pool.stats()})
    return ok
   }})
-  void writeFile; void result
-  expect(pins.some(p=>!p.retained)).toBe(true);expect(admissions.length).toBeGreaterThan(0)
+  void writeFile
+  // Adapted (r7): the store now admits a record BEFORE reading it from storage. With the
+  // competing owner still holding its memory when the SST chunk is needed, that read is
+  // refused with a typed resource result and the chunk is never read or built; a chunk
+  // served unretained would still have to stay charged through extraction.
+  if (pins.some(p=>!p.retained)) expect(admissions.length).toBeGreaterThan(0)
+  else { expect(result.completeness).toBe('incomplete'); expect(result.error?.code).toBe('resource-limit'); expect(loads).toEqual([]) }
   expect(admissions.every(o=>!o.accepted||o.held>=o.unowned)).toBe(true)
  }finally{charge.release();await source.release();pool.close();await rm(dir,{recursive:true,force:true})}
 })
