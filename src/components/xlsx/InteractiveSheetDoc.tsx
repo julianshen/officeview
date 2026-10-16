@@ -22,7 +22,7 @@
  * copy read through the same source; the object path is unchanged.
  */
 import { tilePlanSource, WorkerViewportPlans } from './workerViewport'
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type ReactElement } from 'react'
+import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type ReactElement } from 'react'
 import type { XlsxCell, XlsxDocument, XlsxSheet } from '../../xlsx/types'
 import type {
   AuthoritativeCell, CacheIdentity, FilterSpec, GridSelection, LogicalCellBox, ProfileId, RowOrder, RowVisibility, ScrollWindow, SheetView, SortSpec, SourceRowInterval, SourceStore, WorkbookOwner,
@@ -162,6 +162,31 @@ function loadFailureNotice(message: string, code?: string): string {
 /** Worker-backed (paged) sheets have no main-thread cells or static drawing paint to print. */
 const PAGED_PRINT_MESSAGE = 'This spreadsheet cannot be printed from the large-file view: neither its cells nor its drawings are printed. Copy a selected range instead.'
 const MAX_FONT_NOTICE_FAMILIES = 3
+/** Print rules scoped to one viewer instance: its screen and floating chrome
+ * never print; its print container does. */
+function sheetPrintCss(id: string): string {
+  const own = `[data-officeview-sheet-instance="${id}"]`
+  return `${own} [data-officeview-sheet-print]{display:none}@media print{${own} [data-officeview-sheet-screen],${own} [data-officeview-chrome]{display:none!important}${own} [data-officeview-sheet-print]{display:block!important}}`
+}
+/** One document-wide print owner: the viewer running its own print leaves every
+ * other spreadsheet viewer out of the printout. The latest starter takes over
+ * (the previous owner's exclusion goes with it), so a print whose afterprint
+ * never arrived cannot combine with a later one to hide every viewer. Released
+ * on the owner's afterprint, permission withdrawal or unmount. */
+let printOwner: { id: string; style: HTMLStyleElement } | null = null
+function claimPrint(id: string): void {
+  printOwner?.style.remove()
+  const style = globalThis.document.createElement('style')
+  style.setAttribute('data-officeview-sheet-print-owner', '')
+  style.textContent = `@media print{[data-officeview-sheet-instance]:not([data-officeview-sheet-instance="${id}"]){display:none!important}}`
+  globalThis.document.head.appendChild(style)
+  printOwner = { id, style }
+}
+function yieldPrint(id: string): void {
+  if (printOwner?.id !== id) return
+  printOwner.style.remove()
+  printOwner = null
+}
 function fontNotice(diagnostics: readonly FontDiagnostic[]): string[] {
   const families = [...new Set(diagnostics.map(d => d.family).filter((family): family is string => Boolean(family)))]
   if (!families.length) return []
@@ -1113,9 +1138,11 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
     else if (event.key === '0') { event.preventDefault(); resetZoom() }
   }
 
-  // Ctrl/Cmd+wheel anywhere over the viewer (headers, navigator) never zooms the
-  // browser page; React's wheel listeners are passive, so this one is native.
+  // Ctrl/Cmd+wheel anywhere over the viewer (headers, navigator, search and zoom
+  // controls) never zooms the browser page; React's wheel listeners are passive,
+  // so this one is native, on the outer wrapper that also holds the controls.
   const rootRef = useRef<HTMLDivElement | null>(null)
+  const wrapperRef = useRef<HTMLDivElement | null>(null)
   // DOM a child commits on its own (a popup's value list arriving through its
   // own state) is charged when it lands, not at the next parent render: one
   // MutationObserver callback per task re-counts the viewer's elements by class.
@@ -1127,7 +1154,7 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
     return () => observer.disconnect()
   }, [mainLedger, live])
   useEffect(() => {
-    const el = rootRef.current
+    const el = wrapperRef.current
     if (!el) return
     const suppress = (event: WheelEvent) => { if (event.ctrlKey || event.metaKey) event.preventDefault() }
     el.addEventListener('wheel', suppress, { passive: false })
@@ -1184,8 +1211,9 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
     setPrintPages(units)
   }
   const printRefs = useRef<Array<HTMLCanvasElement | null>>([])
+  const instance = useId()
   useLayoutEffect(() => {
-    if (!printPages) return
+    if (!printPages) { yieldPrint(instance); return }
     const token = printToken.current
     // One unit at a time: each admitted store is sized and painted in turn.
     printPages.forEach((unit, index) => {
@@ -1195,7 +1223,7 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
       const ctx = canvas.getContext('2d')
       if (ctx) unit.page.paint(ctx)
     })
-    if (token === printToken.current && allowPrintRef.current) window.print?.()
+    if (token === printToken.current && allowPrintRef.current) { claimPrint(instance); window.print?.() }
   }, [printPages])
   useEffect(() => {
     if (!allowPrint) return
@@ -1203,28 +1231,30 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
     const host = globalThis.document
     const media = host.createElement('style')
     media.setAttribute('data-officeview-sheet-print-media', '')
-    media.textContent = '[data-officeview-sheet-print] { display: none; } @media print { [data-officeview-sheet-screen] { display: none !important; } [data-officeview-sheet-print] { display: block !important; } }'
+    media.textContent = sheetPrintCss(instance)
     host.head.appendChild(media)
     return () => {
       // Permission withdrawn or unmounted: any in-flight preparation is now stale.
       printToken.current++
       window.removeEventListener('afterprint', releasePrint)
       media.remove()
+      yieldPrint(instance)
       releasePrint()
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [allowPrint])
 
-  // Print guard while this viewer is mounted (same rule as the page viewer).
+  // Print guard while this viewer is mounted: hides this viewer (its outer
+  // wrapper, so the floating chrome too) and never another, allowed viewer.
   useEffect(() => {
     if (allowPrint) return
     const host = globalThis.document
     const guard = host.createElement('style')
     guard.setAttribute('data-officeview-print-guard', '')
-    guard.textContent = '@media print { [data-officeview-root] { display: none !important; } }'
+    guard.textContent = `@media print{[data-officeview-sheet-instance="${instance}"]{display:none!important}}`
     host.head.appendChild(guard)
     return () => guard.remove()
-  }, [allowPrint])
+  }, [allowPrint, instance])
 
   const onGridChange = (transition: GridTransition) => {
     cancelCopy()
@@ -1258,7 +1288,7 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
   const zoom = scroll?.zoom ?? 1
   const canvasStyle: CSSProperties = { position: 'absolute', left: 0, top: 0, width: viewport.width, height: viewport.height, pointerEvents: 'none' }
   return (
-    <div style={{ position: 'relative', display: 'flex', flexDirection: 'column', minHeight: 0 }}>
+    <div ref={wrapperRef} data-officeview-sheet-instance={instance} style={{ position: 'relative', display: 'flex', flexDirection: 'column', minHeight: 0 }}>
       <div
         ref={rootRef}
         className={props.className}

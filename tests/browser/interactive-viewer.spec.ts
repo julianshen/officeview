@@ -353,6 +353,64 @@ test.describe('S10.1 real interactive viewer', () => {
     await dialog.getByRole('button', { name: 'Sort ascending' }).isVisible()
   })
 
+  // Reproduced gap: the absolutely positioned search row had a fixed-width
+  // input and status, so below ~328 CSS px its left side left the viewer.
+  test('search row stays inside a 300px viewer; input, status and buttons all reachable', async ({ page }) => {
+    await page.setViewportSize({ width: 300, height: 700 })
+    await openViewer(page, 'f2-1k.xlsx')
+    await page.getByRole('searchbox', { name: 'Search document' }).fill('alpha')
+    await expect(page.getByTestId('officeview-search-status')).toContainText('of')
+    const rects = await page.evaluate(() => {
+      const wrapper = document.querySelector('[data-officeview-sheet-instance]')!.getBoundingClientRect()
+      const box = (selector: string) => document.querySelector(selector)!.getBoundingClientRect().toJSON()
+      return { wrapper: wrapper.toJSON(), bar: box('[data-testid=officeview-search]'), input: box('[data-testid=officeview-search] input'), next: box('[aria-label="Next match"]') }
+    })
+    for (const r of [rects.bar, rects.input, rects.next]) {
+      expect(r.left).toBeGreaterThanOrEqual(rects.wrapper.left - 0.5)
+      expect(r.right).toBeLessThanOrEqual(rects.wrapper.right + 0.5)
+    }
+    expect(rects.input.width).toBeGreaterThan(40)
+    await page.getByRole('button', { name: 'Next match' }).click()
+  })
+
+  test.describe('375px touch viewport (coarse pointer)', () => {
+    test.use({ viewport: { width: 375, height: 740 }, hasTouch: true, isMobile: true, deviceScaleFactor: 2 })
+    // Spec §513 / AC-A11Y-02: 44px minimum control targets on mobile.
+    test('search and zoom controls are at least 44x44, inside the viewer and non-overlapping', async ({ page }) => {
+      await openViewer(page, 'f2-1k.xlsx')
+      test.skip(!(await page.evaluate(() => matchMedia('(pointer: coarse)').matches)), 'this engine does not emulate a coarse pointer')
+      const boxes = await page.evaluate(() => {
+        const wrapper = document.querySelector('[data-officeview-sheet-instance]')!.getBoundingClientRect().toJSON()
+        const controls = ['[aria-label="Search document"]', '[aria-label="Previous match"]', '[aria-label="Next match"]', '[aria-label="Zoom in"]', '[aria-label="Zoom out"]', '[aria-label="Reset zoom"]']
+        return { wrapper, controls: controls.map(selector => ({ selector, ...document.querySelector(selector)!.getBoundingClientRect().toJSON() })) }
+      })
+      for (const box of boxes.controls) {
+        expect(box.height, box.selector).toBeGreaterThanOrEqual(44)
+        expect(box.width, box.selector).toBeGreaterThanOrEqual(44)
+        expect(box.left, box.selector).toBeGreaterThanOrEqual(boxes.wrapper.left - 0.5)
+        expect(box.right, box.selector).toBeLessThanOrEqual(boxes.wrapper.right + 0.5)
+      }
+      for (const [i, p] of boxes.controls.entries()) {
+        for (const q of boxes.controls.slice(i + 1)) {
+          const overlap = p.left < q.right && q.left < p.right && p.top < q.bottom && q.top < p.bottom
+          expect(overlap, `${p.selector} overlaps ${q.selector}`).toBe(false)
+        }
+      }
+    })
+  })
+
+  test('print media hides the sheet screen and the floating search/zoom controls, showing the print notice', async ({ page }) => {
+    await openViewer(page, 'f2-1k.xlsx')
+    await expect(page.getByTestId('officeview-search')).toBeVisible()
+    await page.emulateMedia({ media: 'print' })
+    await expect(page.getByTestId('officeview-search')).toBeHidden()
+    await expect(page.getByTestId('officeview-zoom-controls')).toBeHidden()
+    await expect(page.getByTestId('officeview-sheet-pane')).toBeHidden()
+    await expect(page.getByTestId('officeview-sheet-print-notice')).toBeVisible()
+    await page.emulateMedia({ media: 'screen' })
+    await expect(page.getByTestId('officeview-search')).toBeVisible()
+  })
+
   for (const path of [{ name: 'f2-1k.xlsx', rows: 1000, worker: false }, { name: 'f2-paged.xlsx', rows: 100_010, worker: true }] as const) {
     test(`F2 ${path.worker ? 'worker-backed' : 'resident'} (${path.rows} rows): header sort, value filter, cancel, clear`, async ({ page }) => {
       const handle = createFixture('F2', { rowCount: path.rows })

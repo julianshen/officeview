@@ -101,6 +101,12 @@ export interface OfficeDocProps {
    * workbook-wide find. Other formats ignore the flag. The interactive code is
    * loaded on demand, only when the flag is on for a spreadsheet.
    *
+   * One exception: a worker-backed (large-file) workbook that <OfficeFile>
+   * opened with the flag on stays in sheet mode (and keeps the interactive code
+   * loaded) if the flag later turns off, because the legacy renderer has no
+   * resident rows to show for it. Such a document only arises when the flag was
+   * on at load time.
+   *
    * Experimental: this flag stays opt-in until the interactive viewer's release
    * review; its behaviour may change between minor versions.
    */
@@ -286,10 +292,11 @@ function LegacyOfficeDoc({
   const panStart = useRef<{ transform: Transform; point: Point } | null>(null)
 
   // React attaches wheel listeners as passive, so onWheel cannot stop the
-  // browser's own Ctrl/Cmd+wheel page zoom; a native listener can, including
-  // over viewer UI that ignores the legacy zoom gesture.
+  // browser's own Ctrl/Cmd+wheel page zoom; a native listener on the outer
+  // wrapper can, over the pages and every control (search, copy, zoom).
+  const wrapperRef = useRef<HTMLDivElement | null>(null)
   useEffect(() => {
-    const el = containerRef.current
+    const el = wrapperRef.current
     if (!el) return
     const suppressPageZoom = (e: WheelEvent) => { if (e.ctrlKey || e.metaKey) e.preventDefault() }
     el.addEventListener('wheel', suppressPageZoom, { passive: false })
@@ -729,7 +736,7 @@ function LegacyOfficeDoc({
   }
 
   return (
-    <div style={{ position: 'relative', display: 'flex', flexDirection: 'column', minHeight: 0 }}>
+    <div ref={wrapperRef} style={{ position: 'relative', display: 'flex', flexDirection: 'column', minHeight: 0 }}>
       <div
         ref={containerRef}
         className={className}
@@ -846,9 +853,10 @@ const InteractiveSheetDoc = lazy(() => import('./xlsx/InteractiveSheetDoc'))
 
 export function OfficeDoc(props: OfficeDocProps): ReactElement {
   const { interactiveSheets = false, document, ...rest } = props
-  if (interactiveSheets && 'sheets' in document) {
-    // A worker-backed (paged) shell document carries its source (S5.4).
-    const paged = pagedWorkbookOf(document)
+  // A worker-backed (paged) shell document carries its source (S5.4) and has no
+  // rows on the main thread: only the interactive viewer can show it.
+  const paged = pagedWorkbookOf(document)
+  if ((interactiveSheets || paged) && 'sheets' in document) {
     return (
       <Suspense fallback={<div role="status" data-officeview-root="" style={{ padding: 16 }}>Loading spreadsheet viewer…</div>}>
         <InteractiveSheetDoc doc={document} {...(paged ? { source: paged.source } : {})} {...rest} />

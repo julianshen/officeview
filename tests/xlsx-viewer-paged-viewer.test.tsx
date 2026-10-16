@@ -110,6 +110,53 @@ describe('S5.4 routing: interactiveSheets mounts the worker-backed viewer for pa
     expect(ui.container.textContent?.match(/Showing saved values/g)).toHaveLength(1)
   })
 
+  it('removing the source closes the worker document AND stops rendering its grid', FIRST_PAINT_TEST, async () => {
+    const h = workerHarness()
+    const ui = render(<OfficeFile data={workbook()} interactiveSheets viewerWorker={() => h.port} loading={<p>no file</p>} />)
+    await waitFor(() => expect(ui.getByRole('gridcell', { name: /alpha/ })).toBeTruthy(), FIRST_PAINT_WAIT)
+    ui.rerender(<OfficeFile data={undefined} interactiveSheets viewerWorker={() => h.port} loading={<p>no file</p>} />)
+    await waitFor(() => expect(h.port.terminate).toHaveBeenCalled())
+    expect(ui.queryByRole('grid')).toBeNull()
+    expect(ui.getByText('no file')).toBeTruthy()
+  })
+
+  it('a one-shot source survives a mode change: the loaded document is kept, never re-read from a consumed stream', FIRST_PAINT_TEST, async () => {
+    const bytes = xlsxBytes({ sheetData: CORNER })
+    const stream = new ReadableStream<Uint8Array>({ start(c) { c.enqueue(bytes); c.close() } })
+    const factory = vi.fn(() => workerHarness().port)
+    const ui = render(<OfficeFile data={stream} viewerWorker={factory} />)
+    await waitFor(() => expect(ui.container.textContent).toMatch(/opened in compatibility mode/))
+    // Turning sheet mode on cannot re-open the consumed stream: the compatibility
+    // document it already produced moves to the interactive viewer instead.
+    ui.rerender(<OfficeFile data={stream} interactiveSheets viewerWorker={factory} />)
+    await waitFor(() => expect(ui.getByRole('gridcell', { name: /alpha/ })).toBeTruthy(), FIRST_PAINT_WAIT)
+    expect(ui.queryByRole('alert')).toBeNull()
+    expect(factory).not.toHaveBeenCalled()
+  })
+
+  it('a one-shot source opened in the worker keeps its interactive document when the flag turns off', FIRST_PAINT_TEST, async () => {
+    const h = workerHarness()
+    const response = new ReadableStream<Uint8Array>({ start(c) { c.enqueue(xlsxBytes({ sheetData: CORNER })); c.close() } })
+    const ui = render(<OfficeFile data={response} interactiveSheets viewerWorker={() => h.port} />)
+    await waitFor(() => expect(ui.getByRole('gridcell', { name: /alpha/ })).toBeTruthy(), FIRST_PAINT_WAIT)
+    // The worker-backed shell has no rows on the main thread: only the
+    // interactive viewer can show it, so it stays there (and stays open).
+    ui.rerender(<OfficeFile data={response} viewerWorker={() => h.port} />)
+    await waitFor(() => expect(ui.getByRole('gridcell', { name: /alpha/ })).toBeTruthy(), FIRST_PAINT_WAIT)
+    expect(ui.queryByRole('alert')).toBeNull()
+    expect(h.port.terminate).not.toHaveBeenCalled()
+  })
+
+  it('a re-readable source still re-opens on a mode change (a worker supplied later takes the large file)', FIRST_PAINT_TEST, async () => {
+    const h = workerHarness()
+    const data = workbook()
+    const ui = render(<OfficeFile data={data} />)
+    await waitFor(() => expect(ui.container.textContent).toMatch(/opened in compatibility mode/))
+    ui.rerender(<OfficeFile data={data} interactiveSheets viewerWorker={() => h.port} />)
+    await waitFor(() => expect(ui.getByRole('gridcell', { name: /alpha/ })).toBeTruthy(), FIRST_PAINT_WAIT)
+    expect(h.posted.some(command => command.kind === 'open')).toBe(true)
+  })
+
   it('flag off (or no worker): the paged admission keeps compatibility mode and never starts a worker', async () => {
     const factory = vi.fn(() => workerHarness().port)
     const off = render(<OfficeFile data={workbook()} viewerWorker={factory} />)
