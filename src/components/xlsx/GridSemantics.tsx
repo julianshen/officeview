@@ -4,7 +4,7 @@ import type { ProjectedSheetMetrics } from '../../xlsx/view/projection'
 import type { SourceCell } from '../../xlsx/view/coordinates'
 import { visibleSpans } from '../../xlsx/view/frozenPanes'
 import type { AxisWindow } from '../../xlsx/view/contracts'
-import { visibleLogicalViewport, navigateKey, navigateTo, hitTestViewport, type NavigationKey, type ViewportSize } from '../../xlsx/view/scrollWindow'
+import { navigateKey, navigateTo, hitTestViewport, type NavigationKey, type ViewportSize } from '../../xlsx/view/scrollWindow'
 import { MAX_ROWS, MAX_COLS, cellId, columnToLetters, formatA1 } from '../../xlsx/view/coordinates'
 import { activeAnnouncement, boundedSelectionText, reconcileSelection, recordCounts, emptyGridSelection, selectCell, selectHeader } from '../../xlsx/view/selection'
 import { belowDetail } from '../../xlsx/view/viewport'
@@ -141,7 +141,6 @@ export function GridSemantics(props: GridSemanticsProps): ReactElement {
   }, [ownerKey, props.popup])
   const current = reconcileSelection(props.selection, projection, view), selection = current.selection
   const multiSelected = multiCellSelection(selection)
-  const pane = visibleLogicalViewport(scroll, viewport)
   // Frozen panes: the pinned strip and the scrolling body are separate logical spans.
   const spans = visibleSpans(scroll.frozen, scroll.logicalOrigin, scroll.zoom, viewport)
   const rowWindow = spanWindow(projection.rows, spans.y), colWindow = spanWindow(projection.cols, spans.x)
@@ -203,7 +202,6 @@ export function GridSemantics(props: GridSemanticsProps): ReactElement {
   }
   const activeBox = active && projection.sourceCellToLogical(active)
   const activeColumnInPane = activeBox && spans.x.some(([x0, x1]) => activeBox.x < x1 && activeBox.x + activeBox.width > x0)
-  void pane
   const headerColumns = coarse && active && activeColumnInPane ? [active.col] : columns
   const headerProps = { projection, window: scroll, viewport, coarse, columns: headerColumns, selection, sort: view.sort, filter: view.filter, controlMode, touchControls, onSortCycle: props.onSortCycle, pendingSortColumn: props.pendingSortColumn ?? null, onFilter: props.onFilter, onSortDialog: props.onSortDialog, onNotice: props.onNotice,
     onSelect: (kind: 'row' | 'column', index: number, options: { toggle: boolean; extend: boolean }, event: MouseEvent<HTMLButtonElement>) => {
