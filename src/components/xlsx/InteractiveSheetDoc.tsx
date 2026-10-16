@@ -162,11 +162,12 @@ function loadFailureNotice(message: string, code?: string): string {
 /** Worker-backed (paged) sheets have no main-thread cells or static drawing paint to print. */
 const PAGED_PRINT_MESSAGE = 'This spreadsheet cannot be printed from the large-file view: neither its cells nor its drawings are printed. Copy a selected range instead.'
 const MAX_FONT_NOTICE_FAMILIES = 3
-/** Print rules scoped to one viewer instance: its screen never prints; its print container does. While this viewer runs its own print
+/** Print rules scoped to one viewer instance: its screen and floating chrome
+ * never print; its print container does. While this viewer runs its own print
  * (`printing`), every other spreadsheet viewer is left out of the printout. */
 function sheetPrintCss(id: string, printing: boolean): string {
   const own = `[data-officeview-sheet-instance="${id}"]`
-  return `${own} [data-officeview-sheet-print]{display:none}@media print{${own} [data-officeview-sheet-screen]${printing ? `,[data-officeview-sheet-instance]:not(${own})` : ''}{display:none!important}${own} [data-officeview-sheet-print]{display:block!important}}`
+  return `${own} [data-officeview-sheet-print]{display:none}@media print{${own} [data-officeview-sheet-screen],${own} [data-officeview-chrome]${printing ? `,[data-officeview-sheet-instance]:not(${own})` : ''}{display:none!important}${own} [data-officeview-sheet-print]{display:block!important}}`
 }
 function fontNotice(diagnostics: readonly FontDiagnostic[]): string[] {
   const families = [...new Set(diagnostics.map(d => d.family).filter((family): family is string => Boolean(family)))]

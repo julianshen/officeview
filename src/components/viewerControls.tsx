@@ -45,6 +45,7 @@ export function SearchBar({
   return (
     <div
       data-testid="officeview-search"
+      data-officeview-chrome=""
       style={{
         position: 'absolute',
         top: 'calc(env(safe-area-inset-top) + 8px)',
@@ -123,6 +124,7 @@ export function ZoomControls({
   return (
     <div
       data-testid="officeview-zoom-controls"
+      data-officeview-chrome=""
       style={{
         position: 'absolute',
         right: 12,

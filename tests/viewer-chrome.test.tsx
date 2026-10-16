@@ -68,6 +68,21 @@ function printed(el: Element | null): boolean {
 const sheetDoc = () => workbookOf([{ sheetId: 'A', cells: [{ row: 0, col: 0, value: 'Name' }, { row: 1, col: 0, value: 'beta' }] }])
 
 describe('spreadsheet print mode', () => {
+  it('hides the floating search and zoom controls in print', async () => {
+    const print = vi.spyOn(window, 'print').mockImplementation(() => {})
+    const ui = render(<InteractiveSheetDoc doc={sheetDoc()} />)
+    const search = ui.getByRole('searchbox', { name: 'Search document' }), zoom = ui.getByRole('button', { name: 'Zoom in' })
+    // a browser-menu print shows the notice, not the chrome
+    expect(printed(ui.getByTestId('officeview-sheet-print-notice'))).toBe(true)
+    expect(printed(search)).toBe(false)
+    expect(printed(zoom)).toBe(false)
+    let during: boolean[] = []
+    print.mockImplementation(() => { during = [printed(search), printed(zoom), printed(ui.getByTestId('officeview-sheet-print-pages'))] })
+    fireEvent.keyDown(ui.getByRole('region', { name: 'Spreadsheet viewer' }), { key: 'p', ctrlKey: true })
+    await waitFor(() => expect(print).toHaveBeenCalled())
+    expect(during).toEqual([false, false, true])
+  })
+
   it('print rules are scoped per viewer: printing one never prints the other', async () => {
     const print = vi.spyOn(window, 'print').mockImplementation(() => {})
     const ui = render(<><InteractiveSheetDoc doc={sheetDoc()} /><InteractiveSheetDoc doc={sheetDoc()} /></>)
