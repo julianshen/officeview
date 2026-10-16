@@ -17,6 +17,7 @@ import { prepareSheetAssets } from '../src/components/xlsx/sheetAssets'
 import { buildZip } from './helpers/zip-builder'
 import { xlsxEntries } from './helpers/xlsx-package'
 import { EMU_PER_PX } from './helpers/xlsx-structure-fixtures'
+import { FIRST_PAINT_TEST, FIRST_PAINT_WAIT } from './helpers/viewer-timing'
 
 // Paged on both sides (object path admits one row), as in xlsx-viewer-paged-viewer.
 vi.mock('../src/xlsx/storage/importSession', async original => {
@@ -80,12 +81,12 @@ function workerPort() {
 }
 
 describe('paged drawings in the worker-backed viewer', () => {
-  it('leases the arrived drawings and their pictures for the active sheet', async () => {
+  it('leases the arrived drawings and their pictures for the active sheet', FIRST_PAINT_TEST, async () => {
     const h = workerPort()
     const docs: XlsxDocument[] = []
     const assetLoader = vi.fn((doc: XlsxDocument, options?: Parameters<typeof prepareSheetAssets>[1]) => { docs.push(doc); return prepareSheetAssets(doc, { ...options, decodeImage: async () => undefined }) })
     const ui = render(<OfficeFile data={workbook()} interactiveSheets viewerWorker={() => h.port} {...({ assetLoader } as object)} />)
-    await waitFor(() => expect(ui.getByRole('gridcell', { name: /alpha/ })).toBeTruthy())
+    await waitFor(() => expect(ui.getByRole('gridcell', { name: /alpha/ })).toBeTruthy(), FIRST_PAINT_WAIT)
     await waitFor(() => expect(docs.some(doc => doc.sheets[0].drawings?.length === 2)).toBe(true))
     expect(h.posted.filter(command => command.kind === 'read' && command.query.op === 'drawings')).toHaveLength(1)
     const leased = docs.find(doc => doc.sheets[0].drawings?.length === 2)!
@@ -95,18 +96,18 @@ describe('paged drawings in the worker-backed viewer', () => {
     expect(ui.container.textContent).not.toMatch(/not shown/)
   })
 
-  it('shows what the large-file view could not carry as a status notice', async () => {
+  it('shows what the large-file view could not carry as a status notice', FIRST_PAINT_TEST, async () => {
     budget.bytes = 16
     const h = workerPort()
     const ui = render(<OfficeFile data={workbook()} interactiveSheets viewerWorker={() => h.port} />)
-    await waitFor(() => expect(ui.getByRole('gridcell', { name: /alpha/ })).toBeTruthy())
+    await waitFor(() => expect(ui.getByRole('gridcell', { name: /alpha/ })).toBeTruthy(), FIRST_PAINT_WAIT)
     await waitFor(() => expect(ui.container.textContent).toMatch(/Drawing part xl\/media\/image1\.png is not shown in the large-file view/))
   })
 
-  it('print of a worker-backed sheet is refused visibly, naming that drawings are not printed (never a silent omission)', async () => {
+  it('print of a worker-backed sheet is refused visibly, naming that drawings are not printed (never a silent omission)', FIRST_PAINT_TEST, async () => {
     const h = workerPort()
     const ui = render(<OfficeFile data={workbook()} interactiveSheets viewerWorker={() => h.port} />)
-    await waitFor(() => expect(ui.getByRole('gridcell', { name: /alpha/ })).toBeTruthy())
+    await waitFor(() => expect(ui.getByRole('gridcell', { name: /alpha/ })).toBeTruthy(), FIRST_PAINT_WAIT)
     const print = vi.fn()
     window.print = print
     fireEvent.click(ui.getByRole('button', { name: 'Print' }))

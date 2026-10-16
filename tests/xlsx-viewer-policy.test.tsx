@@ -3,6 +3,7 @@ import { act, cleanup, fireEvent, render, waitFor } from '@testing-library/react
 import InteractiveSheetDoc from '../src/components/xlsx/InteractiveSheetDoc'
 import * as controlsModule from '../src/components/xlsx/viewerControlsClient'
 import { workbookOf } from './helpers/xlsx-find'
+import { FIRST_PAINT_TEST, FIRST_PAINT_WAIT } from './helpers/viewer-timing'
 import { preparePrintUnits } from '../src/components/xlsx/sheetAssets'
 import { buildXlsx } from '../src/testdata/ooxml-builders'
 import { OfficePackage } from '../src/core/zip'
@@ -124,14 +125,14 @@ it('filter commits use authoritative source values rather than a stale document 
   await waitFor(() => expect(ui.getByRole('status').textContent).toMatch(/Visible body 1 \/ complete body 2/))
 })
 
-it('replacing a document/source with reused wire ids cannot retain the old view or selection', async () => {
+it('replacing a document/source with reused wire ids cannot retain the old view or selection', FIRST_PAINT_TEST, async () => {
   const { createObjectWorkbookSource } = await import('../src/xlsx/view/source')
   const first = docOf(), source = createObjectWorkbookSource(first, 'reuse')
   const ui = render(<InteractiveSheetDoc doc={first} source={source} />)
   await waitFor(() => expect(ui.getByRole('status').textContent).not.toMatch(/Loading sheet/)); go(ui, 'A2')
   const second = workbookOf([{ sheetId: 'A', cells: [{ row: 0, col: 0, value: 'replacement' }] }]), next = createObjectWorkbookSource(second, 'reuse')
   ui.rerender(<InteractiveSheetDoc doc={second} source={next} />)
-  await waitFor(() => expect(ui.getByRole('gridcell', { name: /replacement/ })).toBeTruthy())
+  await waitFor(() => expect(ui.getByRole('gridcell', { name: /replacement/ })).toBeTruthy(), FIRST_PAINT_WAIT)
   expect((ui.getByRole('button', { name: 'Copy selection' }) as HTMLButtonElement).disabled).toBe(true)
 })
 

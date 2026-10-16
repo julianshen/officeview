@@ -22,6 +22,7 @@ import { parseXlsx } from '../src/xlsx/parse'
 import type { WorkerCommand, WorkerReply } from '../src/xlsx/view/contracts'
 import type { MainMemoryLedger } from '../src/xlsx/view/mainLedger'
 import { xlsxBytes } from './helpers/xlsx-package'
+import { FIRST_PAINT_WAIT } from './helpers/viewer-timing'
 
 // Worker-backed (paged) even for this small workbook.
 vi.mock('../src/xlsx/storage/importSession', async original => {
@@ -66,7 +67,7 @@ describe('worker-backed sort views: superseded view buffers are released without
     const port = workerPort()
     const internal = { onMainLedger: (l: MainMemoryLedger) => { ledger = l } } as object
     const ui = render(<OfficeFile data={workbook()} interactiveSheets viewerWorker={() => port} {...internal} />)
-    await waitFor(() => expect(ui.getByRole('gridcell', { name: /value name 1\b/ })).toBeTruthy())
+    await waitFor(() => expect(ui.getByRole('gridcell', { name: /value name 1\b/ })).toBeTruthy(), FIRST_PAINT_WAIT)
     const header = () => ui.getByRole('columnheader', { name: /^Column B/ })
     const cycle = async () => {
       const before = header().getAttribute('aria-sort')
