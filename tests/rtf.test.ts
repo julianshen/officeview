@@ -1,4 +1,4 @@
-import { describe, test, expect } from 'vitest'
+import { describe, test, expect, vi } from 'vitest'
 import { parseRtf, isRtf } from '../src/rtf/parse'
 import { loadOfficeFile } from '../src/components/OfficeFile'
 import type { DocxParagraph, DocxTable } from '../src/docx/types'
@@ -1127,5 +1127,31 @@ describe('marker capture: nested group scoping', () => {
     const rtf = fonts + String.raw`{\listtext\f0 {\f1\'c0}\'e9\tab}\ls1 Item\par second\par}`
     const paras = paragraphs(rtf)
     expect(paras.map(textOf)).toEqual(['Item', 'second'])
+  })
+})
+
+describe('visual review: runtime-independent cp1252', () => {
+  // Some Node builds decode windows-1252 bytes 0x80-0x9F as C1 controls
+  // (0x92 -> U+0092) instead of the WHATWG mapping (0x92 -> U+2019). RTF text
+  // must not depend on which TextDecoder the host ships.
+  test('\\\'92 decodes to U+2019 even when TextDecoder maps windows-1252 to latin-1', async () => {
+    const Real = globalThis.TextDecoder
+    class Latin1Decoder {
+      constructor(label = 'utf-8') {
+        if (!/1252|latin1|iso-8859-1|ascii/i.test(label)) return new Real(label) as unknown as Latin1Decoder
+      }
+      decode(bytes: Uint8Array): string { return String.fromCharCode(...bytes) }
+    }
+    vi.stubGlobal('TextDecoder', Latin1Decoder)
+    vi.resetModules()
+    try {
+      const { parseRtf: fresh } = await import('../src/rtf/parse')
+      const rtf = String.raw`{\rtf1\ansi\ansicpg1252 it\'92s \'80\'85\'93q\'94 caf\'e9 \'81\'9f\par}`
+      const text = fresh(rtf).sections[0].paragraphs[0].runs.map((r) => r.text).join('')
+      expect(text).toBe('it’s €…“q” café \u0081Ÿ')
+    } finally {
+      vi.unstubAllGlobals()
+      vi.resetModules()
+    }
   })
 })
