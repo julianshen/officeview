@@ -205,6 +205,17 @@ during import the count may be pending. Missing formula caches are unavailable.
   Searched Select All updates every matching value while
   preserving choices outside the search; blanks have a separate explicit choice.
   Cancel/Escape discard drafts; incomplete/over-budget domains are diagnosed.
+- **View-only resizing:** drag a column header's right edge or a row header's
+  bottom edge (a guide line follows the pointer; the size applies on release),
+  or double-click the edge to fit the content of the visible and already-loaded
+  rows (at most 2,048 rows / 1,024 cells; no full-sheet scan). On touch, the
+  active cell's column and row get one 44px handle each. Keyboard: Alt+Shift+Left/Right
+  (column) and Alt+Shift+Up/Down (row) step 8px on the active cell or a focused
+  header, Alt+Shift+Enter fits; each change is announced. Sizes are kept per
+  sheet for the viewer session (through scroll, zoom, sort/filter and sheet
+  switches; a resized row keeps its height when a sort moves it), **never written
+  to the file**, and **Reset sizes** restores the workbook's widths and heights.
+  Hidden rows/columns stay hidden. Print still uses the workbook's sizes.
 
 #### Copy, print and accessibility
 

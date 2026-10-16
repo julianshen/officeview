@@ -155,6 +155,34 @@ describe('view-only resize: pointer', () => {
   })
 })
 
+describe('view-only resize: coarse pointers', () => {
+  it('shows one 44px handle for the active column and row only, clear of the sort/filter buttons', FIRST_PAINT_TEST, async () => {
+    const previous = window.matchMedia
+    window.matchMedia = vi.fn(query => ({ matches: query.includes('pointer: coarse'), media: query, onchange: null,
+      addEventListener: vi.fn(), removeEventListener: vi.fn(), addListener: vi.fn(), removeListener: vi.fn(), dispatchEvent: () => true })) as typeof window.matchMedia
+    try {
+      const { ui } = await mount()
+      expect(ui.container.querySelectorAll('[data-officeview-ui="resize-handle"]')).toHaveLength(0)
+      goTo(ui, 'C2')
+      await waitFor(() => expect(ui.container.querySelectorAll('[data-officeview-ui="resize-handle"]')).toHaveLength(2))
+      const column = ui.container.querySelector<HTMLElement>('[data-resize-column="2"]')!
+      const row = ui.container.querySelector<HTMLElement>('[data-resize-row="1"]')!
+      for (const handle of [column, row]) {
+        expect(parseFloat(handle.style.width)).toBeGreaterThanOrEqual(44)
+        expect(parseFloat(handle.style.height)).toBeGreaterThanOrEqual(44)
+        expect(handle.style.touchAction).toBe('none')
+      }
+      // The column handle stays in the top (select) lane; the stacked sort and
+      // filter buttons below it keep their whole targets.
+      expect(parseFloat(column.style.top) + parseFloat(column.style.height)).toBeLessThanOrEqual(44)
+      fireEvent.pointerDown(column, { button: 0, pointerId: 3, clientX: 300, pointerType: 'touch' })
+      fireEvent.pointerMove(window, { pointerId: 3, clientX: 340, pointerType: 'touch' })
+      fireEvent.pointerUp(window, { pointerId: 3, clientX: 340, pointerType: 'touch' })
+      await waitFor(() => expect(headerWidth(ui, 'C')).toBe(104))
+    } finally { window.matchMedia = previous }
+  })
+})
+
 describe('view-only resize: session persistence and Reset sizes', () => {
   it('sizes survive sort (rows by source row), scroll and sheet switches; Reset restores the workbook sizes', FIRST_PAINT_TEST, async () => {
     const { ui, f } = await mount()
