@@ -32,7 +32,7 @@ import type { NavigatorRequest, SourceCell } from '../../xlsx/view/coordinates'
 import { columnToLetters, validateCoordinate } from '../../xlsx/view/coordinates'
 import { createDocumentOverflowCache } from '../../xlsx/view/documentOverflow'
 import { bindOverflowCache, OverflowResourceError, type OverflowCache } from '../../xlsx/view/overflowCache'
-import { MainMemoryLedger, axisBytes, estimatePayloadBytes, projectionBytes } from '../../xlsx/view/mainLedger'
+import { MainMemoryLedger, axisBytes, estimatePayloadBytes, projectionBytes, type MainPool } from '../../xlsx/view/mainLedger'
 import { buildSheetGeometry, cellTextOverflow, MergeQueryCache, sheetBaseHidden, type SheetGeometry } from '../../xlsx/view/viewport'
 import type { ProjectedSheetMetrics } from '../../xlsx/view/projection'
 import { createIdentityOrder } from '../../xlsx/view/order'
@@ -78,7 +78,7 @@ import { documentWithDrawings, drawingNotices, sheetWithDrawings } from '../../w
 import { pagedSheetGeometry } from './pagedGeometry'
 import type { LedgerHold } from '../../xlsx/view/mainLedger'
 import { DisplayHolds } from './displayHolds'
-import { SheetSizes, NO_SESSION_SIZES, RESIZE_LIMITS, SIZED_DRAWING_BYTES, clampSize } from '../../xlsx/view/axisSizes'
+import { SheetSizes, NO_SESSION_SIZES, RESIZE_LIMITS, SIZED_DRAWING_BYTES, type SessionSizes } from '../../xlsx/view/axisSizes'
 import { AutoFitRefusedError, autoFitSize, createFitMeasure, resizeRegion, type ResizeRequest } from './sheetResize'
 import { tileLogicalBox } from '../../xlsx/view/tileCache'
 
@@ -368,34 +368,65 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
     if (visibility instanceof CompactRowVisibility && !viewCharged.has(visibility) && !mainLedger.hasLifetime(visibility)) { targets.push(visibility, visibility.words, visibility.words.buffer, visibility.summaries, visibility.summaries.buffer); bytes += visibility.words.byteLength + visibility.summaries.byteLength; viewCharged.add(visibility) }
     if (targets.length) mainLedger.chargeWhileHeld('viewBuffers', targets, bytes)
   }
-  const entryFor = (sheetId: string): SheetEntry => {
+  /** Bytes of order/visibility buffers this view would newly charge. */
+  const viewBufferBytes = (order: SheetView['order'] | null, visibility: SheetView['visibility'] | null): number => {
+    let bytes = 0
+    const orderBytes = (order as { diagnostics?: { typedArrayBytes?: number } } | null)?.diagnostics?.typedArrayBytes ?? 0
+    if (order && orderBytes > 0 && !viewCharged.has(order) && !mainLedger.hasLifetime(order)) bytes += orderBytes
+    if (visibility instanceof CompactRowVisibility && !viewCharged.has(visibility) && !mainLedger.hasLifetime(visibility)) bytes += visibility.words.byteLength + visibility.summaries.byteLength
+    return bytes
+  }
+  /** A sheet entry built off to the side: nothing is charged, held or published. */
+  interface Candidate {
+    sheetId: string; sheet: XlsxSheet; input: SheetViewInput; structureGen: number; previous: SheetEntry | undefined
+    order: SheetView['order']; baseHidden: SheetView['baseHidden']; visibility: SheetView['visibility']
+    built: SheetGeometry & { readonly chargeBytes?: number }
+    /** Exactly what publishing charges (the entry charge functions). */
+    bytes: number
+  }
+  const sameInput = (a: SheetViewInput, b: SheetViewInput) => a === b || (a.revision === b.revision && a.order === b.order && a.visibility === b.visibility && a.filter === b.filter && a.sort === b.sort)
+  /** The current entry, or a candidate for a new one. `sizes` forces a
+   * candidate with those session sizes (a resize or reset being admitted). */
+  const prepareEntry = (sheetId: string, override?: SessionSizes): { entry: SheetEntry } | { candidate: Candidate } => {
     const index = sheetIds.indexOf(sheetId)
     const sheet = remote ? sheetWithDrawings(doc.sheets[index], remote.drawings(sheetId)) : doc.sheets[index]
     let input = viewInput(sheetId)
     const previous = entries.get(sheetId)
     const structureGen = remote ? remote.merges(sheetId).gen : 0
     const sized = sheetSizes.get(sheetId), resizeGen = sized?.gen ?? 0
-    if (previous && previous.revision === input.revision && previous.structureGen === structureGen && previous.resizeGen === resizeGen) { bindOverflowCache(previous.geometry, overflowFor()); return previous }
+    if (!override && previous && previous.revision === input.revision && previous.structureGen === structureGen && previous.resizeGen === resizeGen) return { entry: previous }
     if (previous && input.revision < previous.revision) {
       // Stale commit: never publish an older view. Session sizes or structure
       // that changed since are still applied, to the view already shown.
-      if (previous.resizeGen === resizeGen && previous.structureGen === structureGen) { bindOverflowCache(previous.geometry, overflowFor()); return previous }
+      if (!override && previous.resizeGen === resizeGen && previous.structureGen === structureGen) return { entry: previous }
       input = previous.input
     }
-    // A rebuild for session sizes or structure alone keeps the view buffers it
-    // already shows (charged and held): no second order/mask is allocated.
-    const sameView = previous && previous.revision === input.revision && (remote !== null || previous.input === input)
-    const order = sameView ? previous.view.order : input.order ?? createIdentityOrder()
-    const baseHidden = sameView ? previous.view.baseHidden : remote ? remote.geometry(sheetId).baseHidden : sheetBaseHidden(sheet)
-    const visibility = sameView ? previous.view.visibility : input.visibility ?? visibilityFromHidden(createIntervalSet(displayIntervals(baseHidden.intervals, order)))
-    const sizes = sized && !sized.empty ? sized.snapshot() : NO_SESSION_SIZES
-    const built = remote ? pagedSheetGeometry(remote, sheetId, order, visibility, overflowFor(), sizes) : buildSheetGeometry(sheet, { order, ...(input.visibility ? { visibility } : {}), sizes })
+    // A rebuild for session sizes alone keeps the view buffers it already shows
+    // (charged and held). A structure change (a worker layout publication)
+    // refreshes the authored-hidden set and the mask derived from it.
+    const sameView = Boolean(previous && previous.revision === input.revision && (remote !== null || sameInput(previous.input, input)))
+    const sameStructure = sameView && previous!.structureGen === structureGen
+    const order = sameView ? previous!.view.order : input.order ?? createIdentityOrder()
+    const baseHidden = sameStructure ? previous!.view.baseHidden : remote ? remote.geometry(sheetId).baseHidden : sheetBaseHidden(sheet)
+    const visibility = sameStructure ? previous!.view.visibility : input.visibility ?? visibilityFromHidden(createIntervalSet(displayIntervals(baseHidden.intervals, order)))
+    const sizes = override ?? (sized && !sized.empty ? sized.snapshot() : NO_SESSION_SIZES)
+    const built = remote ? pagedSheetGeometry(remote, sheetId, order, visibility, overflowFor(), sizes, true) : buildSheetGeometry(sheet, { order, ...(input.visibility ? { visibility } : {}), sizes })
     if (built.kind !== 'ready') throw new Error(built.diagnostics.map(d => d.message).join('; ') || 'This sheet cannot be laid out')
+    const geometryBytes = remote ? (built as unknown as { chargeBytes: number }).chargeBytes : projectionBytes(built.metrics) + axisBytes(built.metrics.cols) + (built.cellIndexBytes ?? 0) + built.merges.estimatedBytes
+    const bytes = geometryBytes + (built.sizedDrawings?.length ?? 0) * SIZED_DRAWING_BYTES + viewBufferBytes(remote ? null : order, remote && input.visibility ? null : visibility)
+    return { candidate: { sheetId, sheet, input, structureGen, previous, order, baseHidden, visibility, built, bytes } }
+  }
+  /** Publishes a candidate: charges exactly its measured owners, holds it and
+   * retires the previous entry on the next display commit. */
+  const publishEntry = (candidate: Candidate, resizeGen: number): SheetEntry => {
+    const { sheetId, sheet, input, structureGen, previous, order, baseHidden, visibility, built } = candidate
     bindOverflowCache(built, overflowFor())
-    // Paged geometry charges itself; a resident one is charged here, for its
-    // lifetime: the row projection (it keeps its own copied segments; the build's
-    // row axis is dropped), the column axis, the per-row cell index and merges.
-    if (!remote) mainLedger.chargeWhileHeld('geometry', [built], projectionBytes(built.metrics) + axisBytes(built.metrics.cols) + (built.cellIndexBytes ?? 0) + built.merges.estimatedBytes)
+    // A resident geometry is charged for its lifetime: the row projection (it
+    // keeps its own copied segments; the build's row axis is dropped), the
+    // column axis, the per-row cell index and merges. A paged one: its
+    // projection, merge index and rebuilt axes (chargeBytes).
+    if (remote) remote.mainLedger.chargeWhileHeld('geometry', [built], built.chargeBytes ?? 0)
+    else mainLedger.chargeWhileHeld('geometry', [built], projectionBytes(built.metrics) + axisBytes(built.metrics.cols) + (built.cellIndexBytes ?? 0) + built.merges.estimatedBytes)
     // Drawings repositioned for session sizes (§5.6) are this geometry's own copies.
     if (built.sizedDrawings) mainLedger.chargeWhileHeld('drawings', [built.sizedDrawings], built.sizedDrawings.length * SIZED_DRAWING_BYTES)
     // Order and visibility buffers built on the main thread are charged once each,
@@ -418,6 +449,11 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
     if (!previous) session.register(sheetId, { view, projection: entry.metrics, body: entry.body })
     else session.updateProjection(sheetId, entry.metrics, entry.body, view)
     return entry
+  }
+  const entryFor = (sheetId: string): SheetEntry => {
+    const prepared = prepareEntry(sheetId)
+    if ('entry' in prepared) { bindOverflowCache(prepared.entry.geometry, overflowFor()); return prepared.entry }
+    return publishEntry(prepared.candidate, sheetSizes.get(sheetId)?.gen ?? 0)
   }
   // The committed revision: a stale (lower) prop revision never regresses the
   // owner that keys tiles, find and hit geometry; a newer one is built on use.
@@ -558,15 +594,20 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
   const chargeMain = () => {
     let layout = 0, merges = 0
     for (const sheetEntry of entries.values()) { layout += sheetEntry.layoutCache.stats.bytes; merges += sheetEntry.merges.bytes }
-    mainLedger.set('layout', 'caches', layout)
-    mainLedger.set('merges', 'caches', merges)
     let sized = 0
     for (const sizes of sheetSizes.values()) sized += sizes.bytes
-    mainLedger.set('layout', 'resize-sizes', sized)
-    // Every element the viewer renders (its toolbar, navigation, headers and
-    // status as well as the pane), each with its React fiber and props.
-    mainLedger.set('dom', 'grid', domClassBytes(domClassCounts(rootRef.current ?? paneRef.current)))
-    mainLedger.set('canvasText', 'tiles', rendererRef.current?.textCacheBytes() ?? 0)
+    const updates: Array<[MainPool, string, number]> = [
+      ['layout', 'caches', layout], ['merges', 'caches', merges], ['layout', 'resize-sizes', sized],
+      // Every element the viewer renders (its toolbar, navigation, headers and
+      // status as well as the pane), each with its React fiber and props.
+      ['dom', 'grid', domClassBytes(domClassCounts(rootRef.current ?? paneRef.current))],
+      ['canvasText', 'tiles', rendererRef.current?.textCacheBytes() ?? 0],
+    ]
+    if (domReservation.current) { domReservation.current = 0; updates.push(['dom', 'resize-reservation', 0]) }
+    // Releases before growth: a re-measure never passes through a transient
+    // peak above what it settles at (§12.4 hard limit).
+    updates.sort((x, y) => (x[2] - mainLedger.ownerBytes(x[0], x[1])) - (y[2] - mainLedger.ownerBytes(y[0], y[1])))
+    for (const [pool, owner, bytes] of updates) mainLedger.set(pool, owner, bytes)
   }
   useEffect(() => { chargeMain() })
   // Purely observational: it never creates or resizes the pool.
@@ -1351,43 +1392,68 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
       } finally { mainLedger.release('layout', 'resize-measure'); mainLedger.release('canvasText', 'resize-measure') }
     } else size = request.size ?? current + (request.delta ?? 0)
     const sizes = sizesOf(sheetId), axis = column ? 'col' : 'row'
-    const region = resizeRegion(entry.geometry, request.kind, request.index)
-    const gen = sizes.gen, previousSize = sizes.get(axis, request.index)
-    // Admission (§12.4): the replacement geometry and its repositioned drawing
-    // copies are built while the current geometry is still held, so both must
-    // fit the main budget together; otherwise nothing changes.
-    if (sizes.get(axis, request.index) !== clampSize(axis, size)) {
-      if (mainLedger.bytes + replacementUpperBytes(entry, remote ? remote.drawings(sheetId).drawings.length : entry.sheet.drawings?.length ?? 0) > MAIN_THREAD_BUDGETS[budgetProfile]) {
-        setAnnouncement(`${name} was not resized: not enough memory to lay the sheet out again (main memory budget).`)
-        return
-      }
-    }
-    if (!sizes.set(axis, request.index, size)) { setAnnouncement(`${name} was not resized: this sheet already has the maximum number of resized ${column ? 'columns' : 'rows'}. Reset sizes to start over.`); return }
-    const applied = sizes.get(axis, request.index)!
-    if (sizes.gen !== gen) {
-      // The geometry must represent the size: one that cannot be (beside
-      // extreme authored sizes) keeps the authored geometry, diagnosed, and is
-      // reported honestly instead of announced as applied (§5.6).
-      const rebuilt = entryFor(sheetId)
-      const shown = column ? rebuilt.metrics.cols.size(request.index) : rebuilt.metrics.rows.size(rebuilt.metrics.order.sourceToDisplay(request.index))
-      if (shown !== applied) {
-        sizes.restore(axis, request.index, previousSize)
-        entryFor(sheetId)
-        setAnnouncement(`${name} was not resized: ${applied} pixels cannot be represented beside this sheet's sizes.`)
-        rerender()
-        return
-      }
-    }
+    const previousSize = sizes.get(axis, request.index)
+    const prospective = sizes.preview(axis, request.index, size)
+    if (!prospective) { setAnnouncement(`${name} was not resized: this sheet already has the maximum number of resized ${column ? 'columns' : 'rows'}. Reset sizes to start over.`); return }
+    const applied = (column ? prospective.cols : prospective.rows).get(request.index)!
     const limit = RESIZE_LIMITS[axis]
     const bound = applied === limit.max ? ' (maximum)' : applied === limit.min ? ' (minimum)' : ''
-    setAnnouncement(`${name} ${column ? 'width' : 'height'} ${applied} pixels${bound}${request.fit ? ', fitted to content' : ''}. View only; the file is unchanged.`)
-    if (sizes.gen === gen) return
+    const announcement = `${name} ${column ? 'width' : 'height'} ${applied} pixels${bound}${request.fit ? ', fitted to content' : ''}. View only; the file is unchanged.`
+    if (previousSize === applied) { setAnnouncement(announcement); return }
+    const region = resizeRegion(entry.geometry, request.kind, request.index)
+    const candidate = admitCandidate(sheetId, prospective, name, shown => (column ? shown.cols.size(request.index) : shown.rows.size(shown.order.sourceToDisplay(request.index))) === applied, `${applied} pixels cannot be represented beside this sheet's sizes`)
+    if (!candidate) return
+    sizes.set(axis, request.index, applied)
+    publishEntry(candidate, sizes.gen)
+    setAnnouncement(announcement)
     dropTiles(sheetId, region)
     rerender()
   }
+  /**
+   * Admission of a session-size rebuild (§12.4): the candidate is built off to
+   * the side and measured with the entry's own charge functions; that exact
+   * amount, plus the semantic DOM the new geometry reveals, must fit beside
+   * everything the ledger holds now (the current entry stays held until the
+   * next display commits). A candidate that does not fit, or does not show the
+   * size, is discarded unpublished and the refusal is announced.
+   */
+  const admitCandidate = (sheetId: string, sizes: SessionSizes, name: string, represents: (metrics: ProjectedSheetMetrics) => boolean, unrepresentable: string): Candidate | null => {
+    const prepared = prepareEntry(sheetId, sizes)
+    if (!('candidate' in prepared)) return null
+    const candidate = prepared.candidate
+    if (!represents(candidate.built.metrics)) { setAnnouncement(`${name} was not resized: ${unrepresentable}.`); return null }
+    const dom = Math.max(0, semanticDomBytes(candidate.built.metrics) - semanticDomBytes(entries.get(sheetId)!.metrics))
+    if (mainLedger.bytes + candidate.bytes + dom > MAIN_THREAD_BUDGETS[budgetProfile]) {
+      setAnnouncement(`${name} was not resized: not enough memory to lay the sheet out again (main memory budget).`)
+      return null
+    }
+    // The DOM grows when the next display commits: hold its admitted bytes
+    // until chargeMain measures the real DOM.
+    domReservation.current = dom
+    mainLedger.set('dom', 'resize-reservation', dom)
+    return candidate
+  }
+  /** Semantic DOM a geometry shows in the current pane (GridSemantics rows,
+   * cells, headers and resize handles), in the dom ledger's class bytes. */
+  const semanticDomBytes = (metrics: ProjectedSheetMetrics): number => {
+    if (!scroll) return 0
+    const pane = visibleLogicalViewport(scroll, viewport)
+    const rows = metrics.rows.visibleBetween(pane.y, pane.y + pane.height).count, cols = metrics.cols.visibleBetween(pane.x, pane.x + pane.width).count
+    const limits = profile === 'M' ? { cells: 10_000, lines: 2048 } : { cells: 20_000, lines: 4096 }
+    if (rows * cols >= limits.cells || rows + cols >= limits.lines) return domClassBytes({ cell: 0, header: 8, other: 2 })
+    // Plus the canonical layout records the repaint adds for the shown cells.
+    return domClassBytes({ cell: 2 * rows * cols, header: 3 * rows + 8 * cols, other: 2 * rows + cols }) + rows * cols * LAYOUT_RECORD_BYTES
+  }
+  const domReservation = useRef(0)
+  /** Layout-cache bytes a repainted cell record may add (estimateLayoutBytes order). */
+  const LAYOUT_RECORD_BYTES = 256
   const resetSizes = () => {
-    const sheetId = activeSheetId
-    if (!sizesOf(sheetId).reset()) return
+    const sheetId = activeSheetId, sizes = sizesOf(sheetId)
+    if (sizes.empty) return
+    const candidate = admitCandidate(sheetId, NO_SESSION_SIZES, 'Sizes were', () => true, '')
+    if (!candidate) return
+    sizes.reset()
+    publishEntry(candidate, sizes.gen)
     dropTiles(sheetId, null)
     setAnnouncement('Column widths and row heights restored to the workbook sizes.')
     rerender()
@@ -1476,21 +1542,6 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
       )}
     </div>
   )
-}
-
-/** Headroom a resize keeps for the DOM and status republished with it. */
-const RESIZE_ADMISSION_MARGIN = 64 * 1024
-/** Upper bound of everything a session-size rebuild allocates while the
- * current geometry is still held (§12.4): the PROSPECTIVE row projection (any
- * permuted band may become a dense Float64/Uint32 prefix, 20 B per row, once a
- * resized row breaks its uniform height) and its sections, the rebuilt axes,
- * a resident cell index and merge index, and repositioned drawing copies.
- * The view's order and mask are reused (entryFor), never rebuilt. */
-function replacementUpperBytes(entry: SheetEntry, drawings: number): number {
-  let projection = (entry.metrics.diagnostics.sectionCount + 6) * 96
-  for (const band of entry.view.order.bands) projection += (band.r1 - band.r0 + 1) * 20 + 24
-  const axes = 2 * (axisBytes(entry.metrics.cols) + 1024)
-  return projection + axes + (entry.geometry.cellIndexBytes ?? 0) + entry.geometry.merges.estimatedBytes + drawings * SIZED_DRAWING_BYTES + RESIZE_ADMISSION_MARGIN
 }
 
 /** Source row intervals → display slot intervals under `order`. Outside permuted

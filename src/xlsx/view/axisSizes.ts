@@ -83,6 +83,14 @@ export class SheetSizes {
     return true
   }
   /** Restores the workbook sizes; false when there was nothing to reset. */
+  /** The snapshot this store would publish with one entry set (clamped), or
+   * null when the axis cap refuses a new index; nothing changes. */
+  preview(axis: ResizeAxis, index: number, sizeCss: number): SessionSizes | null {
+    const map = axis === 'row' ? this.rows : this.cols
+    if (!map.has(index) && map.size >= MAX_SESSION_SIZES) return null
+    const next = new Map(map).set(index, clampSize(axis, sizeCss))
+    return Object.freeze(axis === 'row' ? { rows: next, cols: new Map(this.cols) } : { rows: new Map(this.rows), cols: next })
+  }
   /** Puts one entry back to `previous` (undefined: removes it), e.g. when the
    * geometry refused a size it cannot represent. */
   restore(axis: ResizeAxis, index: number, previous: number | undefined): void {

@@ -24,7 +24,7 @@ import type { XlsxDrawing } from '../../xlsx/types'
  * main-thread consumer (planner, hit-testing, overlays, a11y) agrees. Worker
  * viewport plans use the workbook geometry and are not consulted while a
  * sheet has session sizes (InteractiveSheetDoc / tilePlanSource). */
-export function pagedSheetGeometry(remote: RemoteWorkbook, sheetId: string, order: RowOrder, visibility: RowVisibility, cache: OverflowCache = remote.overflowFor(), sizes?: SessionSizes): SheetGeometry {
+export function pagedSheetGeometry(remote: RemoteWorkbook, sheetId: string, order: RowOrder, visibility: RowVisibility, cache: OverflowCache = remote.overflowFor(), sizes?: SessionSizes, deferCharge = false): SheetGeometry & { readonly chargeBytes: number } {
   const axes = remote.geometry(sheetId)
   const store = remote.store(sheetId)
   const merges = remote.merges(sheetId).merges
@@ -77,11 +77,15 @@ export function pagedSheetGeometry(remote: RemoteWorkbook, sheetId: string, orde
     merges: mergeIndex,
     // Read at query time so geometry does not pin an evicted drawing payload.
     drawingsIn,
+    /** What the owner charges for this geometry (deferred builds are measured
+     * and admitted before the owner publishes and charges them). */
+    chargeBytes: projectionBytes(metrics) + mergeIndex.estimatedBytes + sizedBytes,
   })
+  if (deferCharge) return geometry
   // Projection buffers (dense prefixes of permuted bands) and the merge index
   // are charged while held: by the sheet entry that shows this geometry and any
   // continuation reading it (§12.4). Unheld, it lasts while reachable.
-  remote.mainLedger.chargeWhileHeld('geometry', [geometry], projectionBytes(metrics) + mergeIndex.estimatedBytes + sizedBytes)
+  remote.mainLedger.chargeWhileHeld('geometry', [geometry], geometry.chargeBytes)
   bindOverflowCache(geometry, cache)
   return geometry
 }
