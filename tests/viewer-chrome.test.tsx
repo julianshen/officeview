@@ -7,6 +7,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { act, cleanup, fireEvent, render, waitFor } from '@testing-library/react'
 import { OfficeDoc } from '../src/components/OfficeDoc'
 import InteractiveSheetDoc from '../src/components/xlsx/InteractiveSheetDoc'
+import { SearchBar } from '../src/components/viewerControls'
 import { workbookOf } from './helpers/xlsx-find'
 import { OfficePackage } from '../src/core/zip'
 import { parseDocx } from '../src/docx/parse'
@@ -100,5 +101,17 @@ describe('spreadsheet print mode', () => {
     expect(during).toEqual([true, false, false, false, false])
     act(() => { window.dispatchEvent(new Event('afterprint')) })
     expect([printed(notice(a)), printed(notice(b))]).toEqual([true, true])
+  })
+})
+
+describe('search bar in a narrow viewer', () => {
+  // jsdom has no layout: the real-browser check is in tests/browser/interactive-viewer.spec.ts.
+  it('is bounded by the viewer width, lets the input shrink and wraps status/buttons', () => {
+    const ui = render(<div style={{ position: 'relative', width: 240 }}><SearchBar inputRef={{ current: null }} query="x" onQuery={() => {}} count={3} active={0} indexing={false} onPrev={() => {}} onNext={() => {}} /></div>)
+    const bar = ui.getByTestId('officeview-search')
+    expect(bar.style.maxWidth).toBe('calc(100% - 24px)')
+    expect(bar.style.boxSizing).toBe('border-box')
+    expect(bar.style.flexWrap).toBe('wrap')
+    expect(ui.getByRole('searchbox').style.minWidth).toBe('0px')
   })
 })

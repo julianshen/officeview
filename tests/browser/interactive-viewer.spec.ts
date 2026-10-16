@@ -353,6 +353,26 @@ test.describe('S10.1 real interactive viewer', () => {
     await dialog.getByRole('button', { name: 'Sort ascending' }).isVisible()
   })
 
+  // Reproduced gap: the absolutely positioned search row had a fixed-width
+  // input and status, so below ~328 CSS px its left side left the viewer.
+  test('search row stays inside a 300px viewer; input, status and buttons all reachable', async ({ page }) => {
+    await page.setViewportSize({ width: 300, height: 700 })
+    await openViewer(page, 'f2-1k.xlsx')
+    await page.getByRole('searchbox', { name: 'Search document' }).fill('alpha')
+    await expect(page.getByTestId('officeview-search-status')).toContainText('of')
+    const rects = await page.evaluate(() => {
+      const wrapper = document.querySelector('[data-officeview-sheet-instance]')!.getBoundingClientRect()
+      const box = (selector: string) => document.querySelector(selector)!.getBoundingClientRect().toJSON()
+      return { wrapper: wrapper.toJSON(), bar: box('[data-testid=officeview-search]'), input: box('[data-testid=officeview-search] input'), next: box('[aria-label="Next match"]') }
+    })
+    for (const r of [rects.bar, rects.input, rects.next]) {
+      expect(r.left).toBeGreaterThanOrEqual(rects.wrapper.left - 0.5)
+      expect(r.right).toBeLessThanOrEqual(rects.wrapper.right + 0.5)
+    }
+    expect(rects.input.width).toBeGreaterThan(40)
+    await page.getByRole('button', { name: 'Next match' }).click()
+  })
+
   for (const path of [{ name: 'f2-1k.xlsx', rows: 1000, worker: false }, { name: 'f2-paged.xlsx', rows: 100_010, worker: true }] as const) {
     test(`F2 ${path.worker ? 'worker-backed' : 'resident'} (${path.rows} rows): header sort, value filter, cancel, clear`, async ({ page }) => {
       const handle = createFixture('F2', { rowCount: path.rows })

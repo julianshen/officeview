@@ -50,7 +50,12 @@ export function SearchBar({
         position: 'absolute',
         top: 'calc(env(safe-area-inset-top) + 8px)',
         right: 12,
+        // never wider than the viewer: the input shrinks, status/buttons wrap
+        maxWidth: 'calc(100% - 24px)',
+        boxSizing: 'border-box',
         display: 'flex',
+        flexWrap: 'wrap',
+        justifyContent: 'flex-end',
         alignItems: 'center',
         gap: 6,
         padding: 6,
@@ -74,6 +79,7 @@ export function SearchBar({
         style={{
           height: 28,
           width: 148,
+          minWidth: 0,
           padding: '0 8px',
           borderRadius: 6,
           border: '1px solid rgba(0,0,0,0.2)',
