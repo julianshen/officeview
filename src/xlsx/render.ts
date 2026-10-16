@@ -905,7 +905,7 @@ export function layoutCellBody(
   overflow?: OverflowAllowance,
 ): CellBodyLayout {
   const out: CellBodyLayout = { x, y, w, h: hh, formattedText: '' }
-  if (cell.style?.fillColor) out.fill = resolveColor(cell.style.fillColor)
+  if (cell.style?.fillColor) out.fill = spreadsheetColor(cell.style.fillColor)
   // text (right-align numbers, left-align strings; alignment spans the merge)
   const fontAt = (sizePt: number) => `${cell.style?.italic ? 'italic ' : ''}${cell.style?.bold ? 'bold ' : ''}${sizePt}pt "Calibri"`
   const baseSize = cell.style?.fontSizePt ?? 10
@@ -937,7 +937,7 @@ export function layoutCellBody(
   const text = numericOverflowText(cell, formatted, font, w, measured, generalNoFit)
   out.formattedText = text
   if (text !== '') {
-    const color = style?.color ? resolveColor(style.color) : '#000000'
+    const color = style?.color ? spreadsheetColor(style.color) : '#000000'
     // OOXML often authors default alignment fields on every cell. Those
     // retain ordinary placement; real alignment/wrapping/rotation needs
     // the measured local layout (including explicit no-wrap for255).
@@ -967,6 +967,15 @@ export function layoutCellBody(
   }
   if (cell.style?.borders) out.borders = cell.style.borders
   return out
+}
+
+/** SpreadsheetML colours (styles.xml fills, fonts, borders) are ARGB whose alpha
+ * byte Excel ignores: openpyxl writes every opaque colour as 00RRGGBB. The shared
+ * resolver keeps DrawingML/WordprocessingML alpha semantics for DOCX/PPTX. */
+/** @internal */
+export function spreadsheetColor(raw: string): string {
+  const hex = raw.trim().replace(/^#/, '')
+  return /^[0-9a-f]{8}$/i.test(hex) ? `#${hex.slice(2).toUpperCase()}` : resolveColor(raw)
 }
 
 /** Smallest shrink-to-fit size; below it a number shows '#' (Excel's own floor is lower). */
