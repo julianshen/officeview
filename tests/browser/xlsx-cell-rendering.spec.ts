@@ -26,9 +26,21 @@ for (const options of [{}, { worker: true, paged: true }] as const) {
     })
     await openViewer(page, 'native-1904.xlsx', options)
     const painted = () => page.evaluate(() => (window as unknown as { __painted: string[] }).__painted)
-    await expect.poll(async () => (await painted()).some(text => text.startsWith('2024-01-15') || /^#{10,}$/.test(text)), { timeout: 60_000 }).toBe(true)
+    await expect.poll(async () => (await painted()).some(text => text.startsWith('2024-01-15') || /^#+$/.test(text)), { timeout: 60_000 }).toBe(true)
     const texts = await painted()
-    expect(texts.filter(text => /^#{10,}$/.test(text))).toEqual([])
+    // B4 ("1/16/26 23:59" in the 88px default column) legitimately shows '#'.
+    // Pin its count: the 82px interior (88 minus 3px padding each side) divided
+    // by the '#' advance of the cell font measured in this page, at 100% zoom.
+    // A false '#' in column A (156px) would need far more and fails here.
+    const bHashes = await page.evaluate(() => {
+      const ctx = document.createElement('canvas').getContext('2d')!
+      ctx.canvas.setAttribute('lang', document.documentElement.getAttribute('lang') ?? '')
+      ctx.font = '12pt "Calibri", Carlito, Arial, Helvetica, "Liberation Sans", sans-serif'
+      return Math.max(1, Math.floor(82 / ctx.measureText('#').width))
+    })
+    const hashes = texts.filter(text => /^#+$/.test(text))
+    expect(hashes.length).toBeGreaterThan(0)
+    expect([...new Set(hashes)]).toEqual(['#'.repeat(bHashes)])
     for (const text of ['2024-01-15 12:00:00', '2024-01-16 00:00:00', '2024-02-29 06:00:00', '1904-01-01 00:00:00', '2023-12-31 12:00:00']) expect(texts).toContain(text)
   })
 }
