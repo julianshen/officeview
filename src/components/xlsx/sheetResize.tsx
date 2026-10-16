@@ -19,7 +19,7 @@ import { TEXT_OVERFLOW_REACH_CSS, type SheetGeometry } from '../../xlsx/view/vie
 import { AUTOFIT_MAX_CELLS, AUTOFIT_MAX_ROWS, autoFitRowCandidates, cellFont, clampSize, fitColumnWidth, fitRowHeight, type Measure } from '../../xlsx/view/axisSizes'
 import type { XlsxCell, XlsxCellStyle, XlsxSheet } from '../../xlsx/types'
 import { cellDisplayText } from '../../xlsx/render'
-import { GRID_HEADER_SIZE, gridHeaderBox } from './GridHeaders'
+import { GRID_HEADER_SIZE, gridHeaderBox, viewportHeaderBox } from './GridHeaders'
 
 /** A resize the user asked for: an absolute size, a keyboard step or an auto-fit.
  * `index` is the SOURCE column or SOURCE row. */
@@ -27,9 +27,12 @@ export interface ResizeRequest { kind: 'row' | 'column'; index: number; size?: n
 
 /** Fine-pointer hit zone either side of an edge (CSS px). */
 const FINE_HALF = 4
-/** Coarse-pointer handle: one 44px target (spec §9.3) on the active column's
- * right edge and the active row's bottom edge only, inside the select lane of
- * the header strip, never over the sort/filter buttons. */
+/** Coarse-pointer handles: one 44px target each (spec §9.3). The active
+ * column's straddles its right edge inside the select lane of the header
+ * strip, never over the sort/filter buttons. The active row's sits in the
+ * header corner's free second slot, so it never takes a tap from any row
+ * header (row-header ownership, §9.3); it is omitted while that slot holds the
+ * narrow-column actions lane, or when the strip has no second slot. */
 const COARSE_HALF = GRID_HEADER_SIZE / 2
 /** Movement below this many CSS px is a click (a double-click never resizes). */
 const DRAG_SLOP = 2
@@ -58,7 +61,9 @@ export function ResizeHandles(props: ResizeHandlesProps): ReactElement {
   const half = touch ? COARSE_HALF : FINE_HALF
   const activeSlot = props.active ? projection.order.sourceToDisplay(props.active.row) : null
   const columns = touch ? props.columns.filter(col => col === props.active?.col) : props.columns
-  const slots = touch ? props.slots.filter(slot => slot === activeSlot) : props.slots
+  const laneShown = touch && props.active !== null && props.columns.includes(props.active.col)
+    && viewportHeaderBox(projection, scroll, viewport, 'column', props.active.col).width < GRID_HEADER_SIZE
+  const slots = touch ? props.slots.filter(slot => slot === activeSlot && !laneShown && headerHeight >= 2 * GRID_HEADER_SIZE) : props.slots
 
   const begin = (event: ReactPointerEvent<HTMLDivElement>, kind: 'row' | 'column', index: number, slot: number) => {
     if (event.button !== 0) return
@@ -110,7 +115,7 @@ export function ResizeHandles(props: ResizeHandlesProps): ReactElement {
       onClick={event => event.stopPropagation()}
       onDoubleClick={event => { event.preventDefault(); event.stopPropagation(); props.onResize({ kind, index, fit: true }) }}
       style={{ position: 'absolute', zIndex: 3, touchAction: 'none', cursor: kind === 'row' ? 'row-resize' : 'col-resize', display: 'flex', alignItems: 'center', justifyContent: 'center', ...style }}>
-      {touch && <span style={{ fontSize: 14, lineHeight: 1, color: GUIDE, background: '#ffffffd0', borderRadius: 4, padding: '2px 3px', pointerEvents: 'none' }}>{kind === 'row' ? '↕' : '↔'}</span>}
+      {touch && <span style={{ fontSize: 14, lineHeight: 1, color: GUIDE, background: '#ffffffd0', borderRadius: 4, padding: '2px 3px', pointerEvents: 'none', whiteSpace: 'nowrap' }}>{kind === 'row' ? `↕${slot + 1}` : '↔'}</span>}
     </div>
   const handles: ReactElement[] = []
   for (const col of columns) {
@@ -123,7 +128,9 @@ export function ResizeHandles(props: ResizeHandlesProps): ReactElement {
     const box = gridHeaderBox(projection, scroll, 'row', slot)
     const edge = box.y + box.height
     if (box.height <= 0 || edge < 0 || edge > viewport.height) continue
-    handles.push(handle('row', projection.order.displayToSource(slot), slot, { left: 0, top: headerHeight + edge - half, width: GRID_HEADER_SIZE, height: 2 * half }))
+    handles.push(handle('row', projection.order.displayToSource(slot), slot, touch
+      ? { left: 0, top: GRID_HEADER_SIZE, width: GRID_HEADER_SIZE, height: GRID_HEADER_SIZE, background: '#f3f4f6' }
+      : { left: 0, top: headerHeight + edge - half, width: GRID_HEADER_SIZE, height: 2 * half }))
   }
   if (drag?.moved) {
     const box = gridHeaderBox(projection, scroll, drag.kind, drag.kind === 'row' ? drag.slot : drag.index)

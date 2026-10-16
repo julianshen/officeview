@@ -18,6 +18,7 @@ import type { WorkerCommand, WorkerReply } from '../src/xlsx/view/contracts'
 import type { XlsxDocument } from '../src/xlsx/types'
 import { xlsxBytes } from './helpers/xlsx-package'
 import { FIRST_PAINT_TEST, FIRST_PAINT_WAIT } from './helpers/viewer-timing'
+import { columnHeaderHeight } from '../src/components/xlsx/GridHeaders'
 
 // Admission's object path allows one row, so the worker fixture below is paged.
 vi.mock('../src/xlsx/storage/importSession', async original => {
@@ -156,7 +157,7 @@ describe('view-only resize: pointer', () => {
 })
 
 describe('view-only resize: coarse pointers', () => {
-  it('shows one 44px handle for the active column and row only, clear of the sort/filter buttons', FIRST_PAINT_TEST, async () => {
+  it('shows one 44px handle for the active column and row only, clear of the sort/filter buttons and of every row header', FIRST_PAINT_TEST, async () => {
     const previous = window.matchMedia
     window.matchMedia = vi.fn(query => ({ matches: query.includes('pointer: coarse'), media: query, onchange: null,
       addEventListener: vi.fn(), removeEventListener: vi.fn(), addListener: vi.fn(), removeListener: vi.fn(), dispatchEvent: () => true })) as typeof window.matchMedia
@@ -175,6 +176,16 @@ describe('view-only resize: coarse pointers', () => {
       // The column handle stays in the top (select) lane; the stacked sort and
       // filter buttons below it keep their whole targets.
       expect(parseFloat(column.style.top) + parseFloat(column.style.height)).toBeLessThanOrEqual(44)
+      // The row handle lives in the header corner's free slot, above the first
+      // row header: it never takes a tap that belongs to a row (§9.3).
+      expect(parseFloat(row.style.top)).toBe(44)
+      expect(parseFloat(row.style.top) + parseFloat(row.style.height)).toBe(88)
+      expect(parseFloat(row.style.top) + parseFloat(row.style.height)).toBeLessThanOrEqual(columnHeaderHeight(true, true, true))
+      expect(row.textContent).toBe('↕2')
+      fireEvent.pointerDown(row, { button: 0, pointerId: 4, clientY: 60, pointerType: 'touch' })
+      fireEvent.pointerMove(window, { pointerId: 4, clientY: 76, pointerType: 'touch' })
+      fireEvent.pointerUp(window, { pointerId: 4, clientY: 76, pointerType: 'touch' })
+      await waitFor(() => expect(parseFloat((ui.getByRole('rowheader', { name: 'Row 2' }).parentElement as HTMLElement).style.height)).toBe(36))
       fireEvent.pointerDown(column, { button: 0, pointerId: 3, clientX: 300, pointerType: 'touch' })
       fireEvent.pointerMove(window, { pointerId: 3, clientX: 340, pointerType: 'touch' })
       fireEvent.pointerUp(window, { pointerId: 3, clientX: 340, pointerType: 'touch' })
