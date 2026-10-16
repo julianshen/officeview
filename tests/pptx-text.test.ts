@@ -399,3 +399,13 @@ test('fontRef solid/theme alpha defaults match run colors and preserve direct ov
     }
   }
 })
+
+test('visual review #17: an empty paragraph paints no inherited bullet', () => {
+  // pypptx-test_slides.pptx: the body placeholder holds only
+  // <a:p><a:endParaRPr/></a:p>; PowerPoint shows no bullet for it.
+  const b = parseTextBody(parseXml('<a:txBody><a:bodyPr/><a:lstStyle><a:lvl1pPr><a:buChar char="•"/></a:lvl1pPr></a:lstStyle><a:p><a:endParaRPr lang="en-US"/></a:p><a:p><a:r><a:t>item</a:t></a:r></a:p></a:txBody>'))
+  const ctx = createCanvas(200, 100).getContext('2d'), painted: string[] = []
+  ctx.fillText = text => { painted.push(text) }
+  paintTextBody(b, ctx as unknown as CanvasRenderingContext2D, 0, 0, 200, 100, f => f)
+  expect(painted).toEqual(['•', 'item'])
+})
