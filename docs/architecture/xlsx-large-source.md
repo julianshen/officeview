@@ -22,6 +22,8 @@ Rule for every number below: it is either **measured** (with the setup stated), 
 
 Entry: `<OfficeFile>` → `useOfficeFile` → `loadOfficeFile`.
 
+> **Historical audit.** The table records the pre-large-source baseline this design replaced. Its file:line evidence refers to that baseline. The current load path is `loadOfficeFile` → `loadOfficeSource` (`src/components/loadOfficeSource.ts`), which opens sources with `openByteStream` (`src/core/stream.ts`) and caps every part it reads to identify the format. `readSource` is now only a public helper and is no longer on the `<OfficeFile>` load path.
+
 | # | Behavior | Evidence | Spec rule violated |
 |---|---|---|---|
 | 1 | Any source (Blob, stream, Response, URL) becomes one `Uint8Array` before anything is parsed. | `OfficeFile.tsx:64` (`readSource`), `OfficeFile.tsx:68` (`OfficePackage.load(data)`) | §4.3.2-3: no whole-buffer copy; local File/Blob must seek the central directory. |
