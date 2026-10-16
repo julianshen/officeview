@@ -22,7 +22,7 @@ import { odfKind } from '../odf/container'
 import { parseOdt } from '../odt/parse'
 import { parseRtf, isRtf } from '../rtf/parse'
 import { openByteStream, type ByteSource, type ByteStreamReader, type Progress, type ProtectionListener, type WatermarkListener } from '../core/stream'
-import { throwIfAborted } from '../core/package-error'
+import { isPackageError, throwIfAborted } from '../core/package-error'
 import { parseXml } from '../core/xml'
 import type { SpooledSource, StorageEnv } from '../core/spool'
 import type { SpreadsheetAdmission } from '../xlsx/storage/admission'
@@ -39,25 +39,23 @@ const CT_NAME = '[Content_Types].xml'
 /** Same cap as classifyPackage: the content types are inflated before any admission runs. */
 const CT_MAX_BYTES = 4 * 1024 * 1024
 
-/** `[Content_Types].xml`, counted chunk by chunk as it inflates (declared sizes are untrusted). */
-async function boundedContentTypes(pkg: OfficePackage) {
-  let bytes: Uint8Array | undefined
+/** Format sniffing runs before admission: a part over its cap is the typed refusal <OfficeFile> shows. */
+async function sniffing<T>(read: () => Promise<T>): Promise<T> {
   try {
-    bytes = await pkg.bytes(CT_NAME, CT_MAX_BYTES)
+    return await read()
   } catch (error) {
-    if (error instanceof Error && error.message.startsWith('Part byte limit exceeded')) {
-      throw new ImportRefusal('resource-limit', 'limit', `This file was not opened: its ${CT_NAME} part exceeds ${CT_MAX_BYTES} bytes`, CT_NAME)
+    if (isPackageError(error) && error.code === 'resource-limit') {
+      throw new ImportRefusal('resource-limit', 'limit', `This file was not opened: ${error.message}`, error.partId)
     }
     throw error
   }
-  return bytes && parseXml(new TextDecoder().decode(bytes))
 }
 
 /** The legacy format decision, unchanged except that both xlsx branches go through
- * `xlsx` and the content types are read under a byte cap. */
+ * `xlsx` and the sniffed parts (content types, ODF mimetype/manifest) are read under byte caps. */
 export async function detectAndParse(pkg: OfficePackage, xlsx: XlsxParser = parseXlsx): Promise<AnyDoc> {
-  const ct = await boundedContentTypes(pkg)
-  const ctText = JSON.stringify(ct ?? {})
+  const ctSource = await sniffing(() => pkg.boundedText(CT_NAME, CT_MAX_BYTES))
+  const ctText = JSON.stringify(ctSource === undefined ? {} : parseXml(ctSource))
   if (ctText.includes('wordprocessingml.document.main')) return parseDocx(pkg)
   if (ctText.includes('spreadsheetml.sheet.main')) return xlsx(pkg)
   if (ctText.includes('presentationml.presentation.main')) return parsePptx(pkg)
@@ -66,7 +64,7 @@ export async function detectAndParse(pkg: OfficePackage, xlsx: XlsxParser = pars
   if (pkg.has('xl/workbook.xml')) return xlsx(pkg)
   if (pkg.has('ppt/presentation.xml')) return parsePptx(pkg)
   // OpenDocument (Writer first — Calc/Impress route here when they land)
-  const kind = await odfKind(pkg)
+  const kind = await sniffing(() => odfKind(pkg))
   if (kind === 'text') return parseOdt(pkg)
   if (kind) throw new Error(`Unsupported OpenDocument type '${kind}' — only word-processing (.odt) documents render for now`)
   throw new Error('Unrecognized office file: no word/xl/ppt content detected')

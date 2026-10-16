@@ -52,6 +52,37 @@ describe('byte sources are bounded before the legacy reader inflates metadata (P
   }
 })
 
+const MANIFEST = 'META-INF/manifest.xml'
+const MANIFEST_XML = '<?xml version="1.0"?><manifest:manifest xmlns:manifest="urn:oasis:names:tc:opendocument:xmlns:manifest:1.0"><manifest:file-entry manifest:full-path="/" manifest:media-type="application/vnd.oasis.opendocument.text"/>'
+
+describe('ODF sniffing reads mimetype and manifest under a cap (PR #11 follow-up)', () => {
+  it('an oversized META-INF/manifest.xml is refused as a resource limit without being inflated whole', async () => {
+    // no content types, no word/xl/ppt parts, no mimetype: detectAndParse falls through to the manifest
+    const bytes = buildZip([
+      { name: MANIFEST, data: `${MANIFEST_XML}${' '.repeat(8 * MiB)}</manifest:manifest>`, method: 8 },
+      { name: 'content.xml', data: '<x/>', method: 8 },
+    ]).bytes
+    expect(bytes.length).toBeLessThan(256 * 1024)
+    const text = vi.spyOn(OfficePackage.prototype, 'text')
+    const error = await rejection(loadOfficeSource(bytes))
+    expect(text.mock.calls.map((c) => c[0])).not.toContain(MANIFEST)
+    expect(error).toBeInstanceOf(ImportRefusal)
+    expect(error).toMatchObject({ code: 'resource-limit', reason: 'limit' })
+  })
+
+  it('an oversized mimetype is refused as a resource limit without being inflated whole', async () => {
+    const bytes = buildZip([
+      { name: 'mimetype', data: `application/vnd.oasis.opendocument.text${' '.repeat(4 * MiB)}`, method: 8 },
+      { name: MANIFEST, data: `${MANIFEST_XML}</manifest:manifest>`, method: 8 },
+    ]).bytes
+    const text = vi.spyOn(OfficePackage.prototype, 'text')
+    const error = await rejection(loadOfficeSource(bytes))
+    expect(text.mock.calls.map((c) => c[0])).not.toContain('mimetype')
+    expect(error).toBeInstanceOf(ImportRefusal)
+    expect(error).toMatchObject({ code: 'resource-limit', reason: 'limit' })
+  })
+})
+
 /** A fetch that, like the real one, rejects when its init signal aborts and never sees headers otherwise. */
 function pendingFetch() {
   const calls: Array<{ input: unknown; init: RequestInit | undefined }> = []

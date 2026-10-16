@@ -5,6 +5,7 @@
  */
 import JSZip from 'jszip'
 import { parseXml, parseXmlOrdered, type XmlNode } from './xml'
+import { PackageError } from './package-error'
 
 export class OfficePackage {
   private zip: JSZip
@@ -49,6 +50,21 @@ export class OfficePackage {
     const buf = maxBytes === undefined ? await f.async('uint8array') : await boundedBytes(f, maxBytes)
     this.cache.set(cacheKey, buf)
     return buf
+  }
+
+  /** Read a part as UTF-8 text, refusing with PackageError 'resource-limit' once it
+   * inflates past maxBytes (counted chunk by chunk; declared sizes are untrusted). */
+  async boundedText(path: string, maxBytes: number): Promise<string | undefined> {
+    let bytes: Uint8Array | undefined
+    try {
+      bytes = await this.bytes(path, maxBytes)
+    } catch (error) {
+      if (error instanceof Error && error.message.startsWith('Part byte limit exceeded')) {
+        throw new PackageError('resource-limit', `part exceeds ${maxBytes} bytes`, path)
+      }
+      throw error
+    }
+    return bytes && new TextDecoder().decode(bytes)
   }
 
   /** Read a part and parse it as XML. Cached. */
