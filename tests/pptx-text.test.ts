@@ -399,3 +399,28 @@ test('fontRef solid/theme alpha defaults match run colors and preserve direct ov
     }
   }
 })
+
+test('visual review #17: an empty paragraph paints no inherited bullet', () => {
+  // pypptx-test_slides.pptx: the body placeholder holds only
+  // <a:p><a:endParaRPr/></a:p>; PowerPoint shows no bullet for it.
+  const b = parseTextBody(parseXml('<a:txBody><a:bodyPr/><a:lstStyle><a:lvl1pPr><a:buChar char="•"/></a:lvl1pPr></a:lstStyle><a:p><a:endParaRPr lang="en-US"/></a:p><a:p><a:r><a:t>item</a:t></a:r></a:p></a:txBody>'))
+  const ctx = createCanvas(200, 100).getContext('2d'), painted: string[] = []
+  ctx.fillText = text => { painted.push(text) }
+  paintTextBody(b, ctx as unknown as CanvasRenderingContext2D, 0, 0, 200, 100, f => f)
+  expect(painted).toEqual(['•', 'item'])
+})
+
+test('visual review NEW-4: a:highlight paints a band behind the run', () => {
+  // poi-text-highlight.pptx: preset red and theme accent4 highlights.
+  const theme = parseThemeContext('<a:theme xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><a:themeElements><a:clrScheme name="t"><a:accent4><a:srgbClr val="4472C4"/></a:accent4></a:clrScheme></a:themeElements></a:theme>')
+  const b = parseTextBody(parseXml('<a:txBody><a:bodyPr/><a:p><a:r><a:rPr><a:highlight><a:srgbClr val="FF0000"/></a:highlight></a:rPr><a:t>red</a:t></a:r></a:p><a:p><a:r><a:rPr><a:highlight><a:schemeClr val="accent4"/></a:highlight></a:rPr><a:t>blue</a:t></a:r><a:r><a:t> plain</a:t></a:r></a:p></a:txBody>'), theme)
+  expect(b.paragraphs[0].runs[0].highlight).toBe('#FF0000')
+  expect(b.paragraphs[1].runs[0].highlight).toBe('#4472C4')
+  expect(b.paragraphs[1].runs[1].highlight).toBeUndefined()
+  const ctx = createCanvas(300, 100).getContext('2d'), calls: string[] = []
+  ctx.fillText = text => { calls.push(`text:${text}`) }
+  const fillRect = ctx.fillRect.bind(ctx)
+  ctx.fillRect = (x, y, w, h) => { calls.push(`rect:${String(ctx.fillStyle)}`); fillRect(x, y, w, h) }
+  paintTextBody(b, ctx as unknown as CanvasRenderingContext2D, 0, 0, 300, 100, f => f)
+  expect(calls).toEqual(['rect:#ff0000', 'text:red', 'rect:#4472c4', 'text:blue', 'text: plain'])
+})

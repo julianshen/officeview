@@ -8,6 +8,7 @@ import type { FontDiagnostic } from '../core/fonts/types'
 import { collectDocImages, createMeasurer, layoutDocx, renderPages } from '../docx/layout'
 import { fontFamilyCss as fontFamilyCssDocx } from '../docx/styles'
 import { decodeImageAsset, releaseDecodedImage, type ImageCandidates, type ImageDecodeFn } from '../core/images'
+import { inheritedCanvasLang } from '../core/text-metrics'
 import { normalizeWatermark, paintWatermark, type ResolvedWatermark, type WatermarkOptions } from '../core/watermark'
 import { computeMetrics, renderSheet, type RenderSheetAssets, type StaticExportLimit } from '../xlsx/render'
 import { renderSlide, slideMetrics } from '../pptx/render'
@@ -113,6 +114,10 @@ async function measurerFromDoc(resolve: (family: string) => string): Promise<Ret
     ctx = createCanvas(4, 4).getContext('2d')
   }
   if (!ctx) throw new Error('no 2d context available for measurement')
+  // Pages paint on canvases attached to this document; measure under the same
+  // language so generic font families resolve to the same face.
+  const lang = inheritedCanvasLang()
+  if (lang && 'lang' in ctx) (ctx as { lang: string }).lang = lang
   return createMeasurer(ctx, resolve)
 }
 

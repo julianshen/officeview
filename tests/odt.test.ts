@@ -8,7 +8,7 @@ import { parseOdt } from '../src/odt/parse'
 import { layoutDocx } from '../src/docx/layout'
 import type { MeasureFn } from '../src/docx/layout'
 import { OfficePackage } from '../src/core/zip'
-import { buildOdt, odfBulletListStyle, odfDecimalListStyle } from '../src/testdata/odf-builders'
+import { buildOdt, odfBulletListStyle, odfDecimalListStyle, odfWriterHeadingStyles } from '../src/testdata/odf-builders'
 import type { DocxDocument } from '../src/docx/types'
 
 async function odtDoc(opts: Parameters<typeof buildOdt>[0]): Promise<DocxDocument> {
@@ -90,6 +90,20 @@ describe('odt detection and paragraphs', () => {
     const para = (doc.sections[0].blocks[0] as { kind: 'p'; paragraph: import('../src/docx/types').DocxParagraph }).paragraph
     expect(para.align).toBe('right')
     expect(para.runs[0].bold).toBe(true)
+  })
+})
+
+describe('visual review #16: ODT heading styles', () => {
+  test('a Writer Heading 1 paragraph is bold and 130% of the 14pt Heading size', async () => {
+    const doc = await odtDoc({
+      extraCommonStyles: odfWriterHeadingStyles(),
+      paras: [{ text: 'Writer document (ODF)', heading: 1, style: 'Heading_20_1' }, { text: 'body' }],
+    })
+    const [heading, body] = doc.sections[0].paragraphs
+    expect(heading.outlineLevel).toBe(1)
+    expect(heading.runs[0]).toMatchObject({ bold: true, fontSizePt: 18.2 })
+    expect(body.runs[0].bold).toBeFalsy()
+    expect(heading.spacingAfterTwips).toBeGreaterThan(0)
   })
 })
 

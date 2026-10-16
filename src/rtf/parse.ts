@@ -49,13 +49,12 @@ const MAX_GROUP_DEPTH = 200
  * windows-1252 for 0x80-0x9f, which differs from latin-1. RTF is a 7-bit format,
  * so every non-ASCII character arrives as a `\'hh` escape and is decoded through
  * this table -- which is why an RTF curly quote survives instead of mojibake.
+ * The table is authoritative on every runtime: some Node builds decode 0x92
+ * through TextDecoder('windows-1252') as U+0092 rather than U+2019. The five
+ * undefined bytes (0x81, 0x8d, 0x8f, 0x90, 0x9d) keep their C1 code point, as
+ * the WHATWG encoding standard specifies.
  */
-const CP1252_HIGH = [
-  '€', '', '‚', 'ƒ', '„', '…', '†', '‡',
-  'ˆ', '‰', 'Š', '‹', 'Œ', '', 'Ž', '',
-  '', '‘', '’', '“', '”', '•', '–', '—',
-  '˜', '™', 'š', '›', 'œ', '', 'ž', 'Ÿ',
-]
+const CP1252_HIGH = '\u20ac\x81\u201a\u0192\u201e\u2026\u2020\u2021\u02c6\u2030\u0160\u2039\u0152\x8d\u017d\x8f\x90\u2018\u2019\u201c\u201d\u2022\u2013\u2014\u02dc\u2122\u0161\u203a\u0153\x9d\u017e\u0178'
 
 /**
  * Charset (`\fcharsetN`) to encoding label. RTF declares the document code page
@@ -176,9 +175,10 @@ function decodeBytesIn(bytes: number[], label: string): string {
   // windows-1251 always uses the table, even where TextDecoder supports it.
   // Node decodes the genuinely-undefined byte 0x98 as U+0098 while the WHATWG
   // encoding standard and Python's cp1251 codec treat it as undefined; using
-  // the table everywhere keeps output identical across runtimes.
+  // the table everywhere keeps output identical across runtimes. windows-1252
+  // likewise always takes the CP1252_HIGH path below.
   if (label === 'windows-1251') return decodeWithCp1251(bytes)
-  const dec = decoderFor(label)
+  const dec = label === 'windows-1252' ? null : decoderFor(label)
   if (!dec) {
     // Runtime lacks this encoding. Fall back to a built-in table where we have
     // one, otherwise to cp1252 rather than dropping the characters.
@@ -195,19 +195,8 @@ function decodeBytesIn(bytes: number[], label: string): string {
   }
 }
 
-let cpDecoder: TextDecoder | null | undefined
-
 function decodeCp1252(byte: number): string {
-  if (cpDecoder === undefined) {
-    try {
-      cpDecoder = new TextDecoder('windows-1252')
-    } catch {
-      cpDecoder = null // small-ICU runtimes may not know the label
-    }
-  }
-  if (cpDecoder) return cpDecoder.decode(new Uint8Array([byte]))
-  if (byte >= 0x80 && byte < 0xa0) return CP1252_HIGH[byte - 0x80]
-  return String.fromCharCode(byte)
+  return byte >= 0x80 && byte < 0xa0 ? CP1252_HIGH[byte - 0x80] : String.fromCharCode(byte)
 }
 
 function hexToBytes(hex: string): Uint8Array {

@@ -82,7 +82,11 @@ describe('DOCX complex drawing and style regressions', () => {
     )
     const page = layoutDocx(doc, measure)[0]
     const cell = page.tables[0].rows[0].cells[0]
-    expect(page.images[0].yPx).toBeCloseTo(page.tables[0].yPx + cell.yPx + (cell.heightPx - 96) / 2)
+    // The picture shares a line with text, so the line box is the picture
+    // plus the font descent below the baseline (visual review #15); that box
+    // is what centres, with the picture at its top.
+    expect(page.lines[0].heightPx).toBeGreaterThan(96)
+    expect(page.lines[0].yPx).toBeCloseTo(page.tables[0].yPx + cell.yPx + (cell.heightPx - page.lines[0].heightPx) / 2)
     expect(page.lines[0].yPx).toBeCloseTo(page.images[0].yPx)
   })
   test('empty paragraphs retain the font strut instead of treating points as pixels', async () => {

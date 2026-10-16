@@ -50,6 +50,8 @@ function style(node: XmlNode | undefined, theme?: ThemeContext, issues: TextAppe
   else if (getChildren(node, 'solidFill').length) out.noFill = false
   const color = resolveDrawingColor(parseDrawingColor(getChildren(node, 'solidFill')[0]), theme)
   if (color) out.color = textCssColor(color)
+  const highlight = resolveDrawingColor(parseDrawingColor(getChildren(node, 'highlight')[0]), theme)
+  if (highlight) out.highlight = textCssColor(highlight)
   // WordArt gradient fill: linear stops resolve like solid colors. Other
   // gradient forms fall back to the flat color with a diagnostic.
   const grad = getChildren(node, 'gradFill')[0]

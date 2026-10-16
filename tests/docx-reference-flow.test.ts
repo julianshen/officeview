@@ -171,7 +171,11 @@ describe('repeated block paint compatibility', () => {
    renderPages([page], proxy as never, [bitmap as unknown as CanvasImageSource, bitmap as unknown as CanvasImageSource], { pageNumberStart: index + 1, totalPages: pages.length })
    expect(texts.join('')).toContain(`${index + 1}/${pages.length}`)
    expect(texts.join('')).not.toContain('STALE')
-   expect([...ctx.getImageData(98, 62, 1, 1).data].slice(0, 3)).toEqual([0, 255, 0])
+   // The inline picture paints over the cell fill. It sits on the text
+   // baseline with the font descent below it (visual review #15), so sample
+   // its centre rather than a fixed pixel.
+   const inline = page.images.find(image => image.repeated === 'header')!
+   expect([...ctx.getImageData(Math.floor(inline.xPx + inline.widthPx / 2), Math.floor(inline.yPx + inline.heightPx / 2), 1, 1).data].slice(0, 3)).toEqual([0, 255, 0])
    expect([...ctx.getImageData(150, 60, 1, 1).data].slice(0, 3)).toEqual([0, 170, 0])
    expect(ctx.getImageData(150, 79, 1, 1).data[2]).toBe(255)
   }
