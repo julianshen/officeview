@@ -397,6 +397,8 @@ export async function parseXlsx(pkg: OfficePackage, options: ParseXlsxOptions = 
   initializeSavedSpills(doc)
   if (options.valuePolicy === 'cached') markSavedValuesOnly(doc)
   else evaluateWorkbookFormulas(doc, { fullCalcOnLoad, ...options.evaluation })
+  // Labels are formatted with the chart's output cap (no builder grows past it).
+  const CHART_LABEL_OUTPUT = 256
   // Charts without cached values (openpyxl) read their series from the cells
   // once values and the date system are final: formatted category text,
   // workbook defined names, and the document's value policy.
@@ -404,7 +406,7 @@ export async function parseXlsx(pkg: OfficePackage, options: ParseXlsxOptions = 
     // Under the cached policy an uncached formula has no value (view/values isValueUnavailable).
     const cached = options.valuePolicy === 'cached'
     try {
-      (await loadChartModule()).fillWorkbookCharts(sheets, { names: definedNames, text: (sheet, cell) => cellDisplayText(sheet, cell as XlsxCell), available: cell => !(cached && ((cell as XlsxCell).formula !== undefined || (cell as XlsxCell).sharedFormula !== undefined) && (cell as XlsxCell).hasCachedValue !== true) })
+      (await loadChartModule()).fillWorkbookCharts(sheets, { names: definedNames, text: (sheet, cell) => cellDisplayText(sheet, cell as XlsxCell, { maxOutput: CHART_LABEL_OUTPUT, allocate: () => {}, release: () => {} }), available: cell => !(cached && ((cell as XlsxCell).formula !== undefined || (cell as XlsxCell).sharedFormula !== undefined) && (cell as XlsxCell).hasCachedValue !== true) })
     } catch { /* charts keep their placeholder state; the workbook stays usable */ }
   }
   return doc

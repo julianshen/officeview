@@ -18,13 +18,29 @@ import { isEvaluationError } from './evaluator'
 import { decodeSerial, timeOfDayParts, weekdayIndex } from './serial'
 
 /** Internal, synchronous preallocation observer used by guarded copy. */
-export interface FormatAllocation { allocate(bytes: number): void; release(bytes: number): void; borrowed?(text: string): void; retain?(targets: readonly object[], bytes: number, commit: () => void): void }
+export interface FormatAllocation {
+  allocate(bytes: number): void; release(bytes: number): void; borrowed?(text: string): void; retain?(targets: readonly object[], bytes: number, commit: () => void): void
+  /** Output builders stop at this many UTF-16 units (chart labels); `truncated` is told when they do. */
+  maxOutput?: number
+  truncated?(): void
+}
 /** Old and new UTF-16 builders coexist at concat; tokens/source remain borrowed. */
 function appendText(out: string, text: string, allocation?: FormatAllocation): string {
   allocation?.allocate(2 * (out.length + text.length))
   const next = out + text
   allocation?.release(out.length * 2)
   return next
+}
+
+/** An output builder: like appendText, but never grows past `allocation.maxOutput`. */
+function appendOut(out: string, text: string, allocation?: FormatAllocation): string {
+  const cap = allocation?.maxOutput
+  if (cap !== undefined) {
+    const room = cap - out.length
+    if (room <= 0) { if (text.length) allocation!.truncated?.(); return out }
+    if (text.length > room) { allocation!.truncated?.(); text = text.slice(0, room) }
+  }
+  return appendText(out, text, allocation)
 }
 
 type Tok =
@@ -350,10 +366,10 @@ function renderInteger(intDigits: string, intTokens: readonly Tok[], grouping: b
   let phIdx = 0
   for (let i = 0; i < intTokens.length; i++) {
     const tk = intTokens[i]
-    if (tk.t === 'lit') { out = appendText(out, tk.text, allocation); continue }
-    if (tk.t === 'ph') { out = appendText(out, chars[phIdx++] ?? '', allocation); continue }
+    if (tk.t === 'lit') { out = appendOut(out, tk.text, allocation); continue }
+    if (tk.t === 'ph') { out = appendOut(out, chars[phIdx++] ?? '', allocation); continue }
     if (tk.t === 'comma') { continue }
-    if (tk.t === 'pct') { out = appendText(out, '%', allocation); continue }
+    if (tk.t === 'pct') { out = appendOut(out, '%', allocation); continue }
     return '' // '@'/'dt'/'am' rejected by caller
   }
   if (grouping) {
@@ -406,12 +422,12 @@ function renderDateTime(
   for (let i = 0; i < tokens.length; i++) {
     const tk = tokens[i]
     allocation?.allocate(64) // bounded date digits/padding and names
-    if (tk.t === 'lit') { out = appendText(out, tk.text, allocation); continue }
-    if (tk.t === 'comma') { out = appendText(out, ',', allocation); continue } // literal separator in date sections
-    if (tk.t === 'dot') { out = appendText(out, '.', allocation); continue }
+    if (tk.t === 'lit') { out = appendOut(out, tk.text, allocation); continue }
+    if (tk.t === 'comma') { out = appendOut(out, ',', allocation); continue } // literal separator in date sections
+    if (tk.t === 'dot') { out = appendOut(out, '.', allocation); continue }
     if (tk.t === 'am') {
       const h12 = ((tod.hour + 11) % 12) + 1
-      out = appendText(out, (tod.hour >= 12 ? 'PM' : 'AM'), allocation)
+      out = appendOut(out, (tod.hour >= 12 ? 'PM' : 'AM'), allocation)
       void h12
       continue
     }
@@ -419,18 +435,18 @@ function renderDateTime(
     switch (tk.ch) {
       case 'y': {
         const y = String(civil.year)
-        out = appendText(out, tk.len >= 3 ? y : y.slice(-2).padStart(2, '0'), allocation)
+        out = appendOut(out, tk.len >= 3 ? y : y.slice(-2).padStart(2, '0'), allocation)
         break
       }
       case 'm': {
         if (kinds[i] === 'minute') {
-          out = appendText(out, tk.len >= 2 ? String(tod.minute).padStart(2, '0') : String(tod.minute), allocation)
+          out = appendOut(out, tk.len >= 2 ? String(tod.minute).padStart(2, '0') : String(tod.minute), allocation)
         } else if (tk.len >= 4) {
-          out = appendText(out, MONTHS[civil.month - 1], allocation)
+          out = appendOut(out, MONTHS[civil.month - 1], allocation)
         } else if (tk.len === 3) {
-          out = appendText(out, MONTHS_SHORT[civil.month - 1], allocation)
+          out = appendOut(out, MONTHS_SHORT[civil.month - 1], allocation)
         } else {
-          out = appendText(out, tk.len === 2 ? String(civil.month).padStart(2, '0') : String(civil.month), allocation)
+          out = appendOut(out, tk.len === 2 ? String(civil.month).padStart(2, '0') : String(civil.month), allocation)
         }
         break
       }
@@ -438,19 +454,19 @@ function renderDateTime(
         if (tk.len >= 3) {
           const w = weekdayIndex(dayPart, system)
           if (isEvaluationError(w)) return w
-          out = appendText(out, tk.len >= 4 ? WEEKDAYS[w] : WEEKDAYS_SHORT[w], allocation)
+          out = appendOut(out, tk.len >= 4 ? WEEKDAYS[w] : WEEKDAYS_SHORT[w], allocation)
         } else {
-          out = appendText(out, tk.len === 2 ? String(civil.day).padStart(2, '0') : String(civil.day), allocation)
+          out = appendOut(out, tk.len === 2 ? String(civil.day).padStart(2, '0') : String(civil.day), allocation)
         }
         break
       }
       case 'h': {
         const h = hasAm ? ((tod.hour + 11) % 12) + 1 : tod.hour
-        out = appendText(out, tk.len >= 2 ? String(h).padStart(2, '0') : String(h), allocation)
+        out = appendOut(out, tk.len >= 2 ? String(h).padStart(2, '0') : String(h), allocation)
         break
       }
       case 's': {
-        out = appendText(out, tk.len >= 2 ? String(tod.second).padStart(2, '0') : String(tod.second), allocation)
+        out = appendOut(out, tk.len >= 2 ? String(tod.second).padStart(2, '0') : String(tod.second), allocation)
         break
       }
     }
@@ -502,10 +518,10 @@ export function formatCommon(
       let outText = ''
       let sawAt = false
       for (const tk of t.tokens) {
-        if (tk.t === 'lit') { outText = appendText(outText, tk.text, allocation); continue }
+        if (tk.t === 'lit') { outText = appendOut(outText, tk.text, allocation); continue }
         if (tk.t === 'at') {
           sawAt = true
-          outText = appendText(outText, typeof value === 'boolean' ? (value ? 'TRUE' : 'FALSE') : value ?? '', allocation)
+          outText = appendOut(outText, typeof value === 'boolean' ? (value ? 'TRUE' : 'FALSE') : value ?? '', allocation)
           continue
         }
         if (tk.t === 'ph' || tk.t === 'comma' || tk.t === 'dot' || tk.t === 'pct') {
@@ -578,7 +594,7 @@ export function formatCommon(
   allocation?.allocate(2 * (negativePrefix.length + intStr.length))
   let out = negativePrefix + intStr
   if (dotIdx >= 0) {
-    out = appendText(out, '.', allocation)
+    out = appendOut(out, '.', allocation)
     // SPEC F6: fraction '#/'0' emission with the same optional-# trailing rule.
     // QUALITY Q3 fix: suffix significance is computed in ONE right-to-left
     // pass (linear) instead of scanning the remaining suffix per placeholder
@@ -601,14 +617,14 @@ export function formatCommon(
     }
     for (const tk of fracTokens) {
       if (tk.t === 'ph') {
-        out = appendText(out, fracChars[placed] ?? '', allocation)
+        out = appendOut(out, fracChars[placed] ?? '', allocation)
         placed++
         continue
       }
-      if (tk.t === 'lit') { out = appendText(out, tk.text, allocation); continue }
-      if (tk.t === 'dot') { out = appendText(out, '.', allocation); continue }
+      if (tk.t === 'lit') { out = appendOut(out, tk.text, allocation); continue }
+      if (tk.t === 'dot') { out = appendOut(out, '.', allocation); continue }
       if (tk.t === 'comma') { continue } // scaling comma emits nothing
-      if (tk.t === 'pct') { out = appendText(out, '%', allocation); continue }
+      if (tk.t === 'pct') { out = appendOut(out, '%', allocation); continue }
       return { kind: 'unsupported', reason: 'unexpected token after decimal point' }
     }
   } else {

@@ -552,59 +552,94 @@ export class PagedXlsxSheetAdapter implements SourceStore {
     }
     // 3./4. Stream the pages in order; strings admitted before they are built.
     const nums = new Float64Array(wantsText.length)
-    const state = new Uint8Array(wantsText.length) // 0 unknown, 1 number/bool, 2 string, 3 present without a value
+    // 0 unknown, 1 number, 2 text that is not a number, 3 present without a value, 4 numeric form past the scanner's range
+    const state = new Uint8Array(wantsText.length)
     const strings: Array<string | undefined> = new Array(wantsText.length)
     const labels: Array<string | undefined> = new Array(wantsText.length)
-    let reserved = base
+    let reserved = base, pageCharge = 0
     const reserve = (bytes: number): boolean => {
-      if (reserved + bytes - base > charts.CHART_TEXT_BYTES_LIMIT || !admit(reserved + bytes)) return false
+      if (reserved + bytes - base > charts.CHART_TEXT_BYTES_LIMIT || !admit(reserved + pageCharge + bytes)) return false
       reserved += bytes
       return true
     }
-    const refuse = () => { admit(0); return done({ refused: true }) }
+    const refuse = (release?: () => void) => { release?.(); admit(0); return done({ refused: true }) }
     const LIMIT = charts.CHART_LABEL_LIMIT
+    // Formatting runs with an output cap (no builder grows past LIMIT + 1 units): the
+    // capped output is admitted up front, and every further transient the formatter
+    // reports through its allocation observer is admitted before it is allocated.
+    const LABEL_OUTPUT_BYTES = (LIMIT + 1) * 2 * 2
+    class LabelRefused extends Error {}
     const styles = this.workbook.formatting.styles
     const display: XlsxSheet = { name: '', rows: [], cols: [], merges: [], mergeRanges: [], semantics: semanticsFor(this.workbook.formatting.dateSystem) }
     for (const group of [...groups.values()].sort((a, b) => a.sheetId === b.sheetId ? a.order - b.order : a.sheetId < b.sheetId ? -1 : 1)) {
       if (signal.aborted) return done()
-      let p: CellPagePayload | undefined = await this.workbook.store.page(group.sheetId, group.pageId)
-      for (const cell of group.cells) {
-        const index = this.find(p, cell.row, cell.col)
-        if (index < 0) continue
-        if (this.isUnavailable(p, index)) { state[cell.slot] = 3; continue }
-        const text = wantsText[cell.slot]
-        let value: string | number | boolean | null
-        const kind = p.kinds[index]
-        if (kind === K_SST || kind === K_TEXT || kind === K_ERROR) {
-          // A capped prefix and the full length, read from typed storage.
-          const prefix = kind === K_SST ? await this.workbook.store.sharedStringPrefix(p.nums[index], LIMIT + 1)
-            : (p.flags[index] & F_BLOB) !== 0 ? await this.workbook.store.blobPrefix(p.nums[index], LIMIT + 1) : textPrefix(p, index, LIMIT + 1)
-          if (prefix.length > LIMIT && !text) { state[cell.slot] = 3; continue } // too long to be a chart number; never built
-          if (!reserve(Math.min(prefix.length, LIMIT + 1) * 2)) return refuse()
-          // One character past the limit marks the label for truncation (fillChartRanges cuts and flags it).
-          value = prefix.text
-        } else value = await this.valueOf(p, index)
-        if (typeof value === 'string') { strings[cell.slot] = value; state[cell.slot] = 2 } else if (value === null) state[cell.slot] = 3
-        else { nums[cell.slot] = typeof value === 'boolean' ? (value ? 1 : 0) : value; state[cell.slot] = typeof value === 'boolean' ? 3 : 1 }
-        if (!text) continue
-        const style = styles[p.styles[index]]
-        // Upper bound of the formatted label: the format's own text plus the value's digits/characters.
-        const bound = ((style?.formatCode?.length ?? 64) + (typeof value === 'string' ? value.length : 0) + 400) * 2
-        if (!reserve(bound)) return refuse()
-        let label: string | undefined
-        try { label = cellDisplayText(display, { value, style }) } catch { label = undefined }
-        if (label !== undefined && label.length > LIMIT) label = label.slice(0, LIMIT + 1)
-        // True the reservation up to the label actually kept.
-        reserved -= bound - (label?.length ?? 0) * 2
-        labels[cell.slot] = label
-      }
-      p = undefined // released before the next page is loaded
+      // The page stays owned (its pool charge pinned) until its cells are extracted,
+      // across every awaited string read; a page the pool could not keep is charged here.
+      const held = await this.workbook.store.pinnedPage(group.sheetId, group.pageId)
+      if (!held.retained) { pageCharge = held.bytes; if (!admit(reserved + pageCharge)) return refuse(held.release) }
+      try {
+        const p = held.page
+        for (const cell of group.cells) {
+          if (signal.aborted) return done()
+          const index = this.find(p, cell.row, cell.col)
+          if (index < 0) continue
+          if (this.isUnavailable(p, index)) { state[cell.slot] = 3; continue }
+          const text = wantsText[cell.slot]
+          let value: string | number | boolean | null
+          const kind = p.kinds[index]
+          if (kind === K_SST || kind === K_TEXT || kind === K_ERROR) {
+            const located = kind === K_SST ? await this.workbook.store.sharedStringRecord(p.nums[index])
+              : (p.flags[index] & F_BLOB) !== 0 ? await this.workbook.store.blobRecord(p.nums[index]) : { record: p, index }
+            if (!located) { state[cell.slot] = 3; continue }
+            const { record, index: at } = located
+            const from = record.textStart[at], length = record.textStart[at + 1] - from
+            // The numeric reading streams the typed text (never built); labels are capped prefixes.
+            const scanned = kind === K_ERROR ? undefined : charts.scanChartNumber(length, k => record.text[from + k])
+            if (scanned === 'too-long') state[cell.slot] = 4
+            else if (scanned !== undefined) { nums[cell.slot] = scanned; state[cell.slot] = 1 }
+            else state[cell.slot] = 2
+            if (!text) continue
+            // Admitted, then built: at most LIMIT + 1 units (one past the limit marks truncation).
+            if (!reserve(Math.min(length, LIMIT + 1) * 2)) return refuse()
+            value = textPrefix(record, at, LIMIT + 1).text
+            strings[cell.slot] = value
+          } else {
+            value = await this.valueOf(p, index)
+            if (typeof value === 'number' && Number.isFinite(value)) { nums[cell.slot] = value; state[cell.slot] = 1 } else state[cell.slot] = 3
+            if (!text) continue
+          }
+          const style = styles[p.styles[index]]
+          if (!reserve(LABEL_OUTPUT_BYTES)) return refuse()
+          let live = 0, admitted = LABEL_OUTPUT_BYTES, cut = false
+          const allocation = {
+            maxOutput: LIMIT + 1,
+            truncated: () => { cut = true },
+            allocate: (bytes: number) => {
+              live += bytes
+              if (live <= admitted) return
+              // Transient formatter work is admitted against the read's memory (the hard cap bounds kept label storage).
+              if (!admit(reserved - LABEL_OUTPUT_BYTES + live + pageCharge)) throw new LabelRefused()
+              admitted = live
+            },
+            release: (bytes: number) => { live -= bytes },
+          }
+          let label: string | undefined
+          try { label = cellDisplayText(display, { value, style }, allocation) }
+          catch (error) { if (error instanceof LabelRefused) return refuse(); label = undefined }
+          // Capped output keeps LIMIT + 1 units: one past the limit marks the label truncated (fillChartRanges cuts it).
+          if (label !== undefined && label.length > LIMIT + 1) label = label.slice(0, LIMIT + 1)
+          void cut
+          // True the reservation down to the label actually kept.
+          reserved -= LABEL_OUTPUT_BYTES - (label?.length ?? 0) * 2
+          labels[cell.slot] = label
+        }
+      } finally { held.release(); pageCharge = 0 }
     }
     charts.fillDrawings(drawings, owner, (sheet, row, col) => {
       const slot = slots.get(key(sheet, row, col))
       if (slot === undefined || state[slot] === 0) return undefined
-      const value = state[slot] === 1 ? nums[slot] : state[slot] === 2 ? strings[slot] : undefined
-      return { value, ...(labels[slot] !== undefined ? { text: labels[slot] } : {}) }
+      const number = state[slot] === 1 ? nums[slot] : null
+      return { value: strings[slot] ?? (state[slot] === 1 ? nums[slot] : undefined), number, ...(state[slot] === 4 ? { truncated: true } : {}), ...(labels[slot] !== undefined ? { text: labels[slot] } : {}) }
     })
     return done()
   }

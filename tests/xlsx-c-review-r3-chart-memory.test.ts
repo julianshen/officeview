@@ -65,7 +65,9 @@ it('formatted numeric category length is admitted before formatting',async()=>{
    evidence[roomy?'formattedRoomy':'formatted']={accepted,formatted,completeness:result.completeness}
    if(!roomy){expect(result.completeness).toBe('incomplete');expect(formatted).toEqual([])}
    else{
-    expect(formatted.some(x=>x.bytes>=2*literal.length)).toBe(true)
+    // The formatter's output is capped (r4): it never builds the 100,000-character literal.
+    expect(formatted.length).toBeGreaterThan(0)
+    expect(formatted.every(x=>x.bytes<=2*256)).toBe(true)
     expect(formatted.every(x=>x.admitted>=x.bytes)).toBe(true)
     expect(model(result).categories[0]).toHaveLength(255)
     expect(model(result).truncated).toBe(true)
