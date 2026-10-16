@@ -23,7 +23,7 @@ import { failedPage, failure, rowSetIntervals, sameStamp, type SheetGeometry, ty
 import type { MemoryPool, PoolEntry } from './tileCache'
 import { LaneBuilder, READ_ROWS_MAX_CELLS, READ_ROWS_PAGE_ROWS, buildGeometry, withFrozen, intersects, invalidMergeDiagnostic } from './source'
 import {
-  F_BLOB, F_CACHED, F_ERROR, K_BOOL, K_EMPTY, K_ERROR, K_NUMBER, K_SST, K_TEXT, recordPopulated, textAt,
+  F_BLOB, F_CACHED, F_ERROR, K_BOOL, K_EMPTY, K_ERROR, K_NUMBER, K_SST, K_TEXT, recordPopulated, textAt, textPrefix,
   type CellPagePayload, type PageSummary,
 } from '../storage/sourcePages'
 import { addRecord, answerOverview, emptyAggregate, mergeAggregate, type AggregateOutcome } from '../storage/overviewIndex'
@@ -476,24 +476,28 @@ export class PagedXlsxSheetAdapter implements SourceStore {
     }
   }
 
-  /** Fill uncached chart references from committed pages of the named sheets.
-   * 1. The numeric workspace (points x CHART_CELL_BYTES) is admitted before any
+  /** Fill uncached chart references from committed pages, as a bounded stream:
+   * 1. The point workspace (points x CHART_CELL_BYTES) is admitted before any
    *    page is touched; refusal makes the charts placeholders.
-   * 2. Each consumed cell is located once (pages found by binary search over
-   *    the sheet's ordered summaries, each page loaded once per fill, cells
-   *    deduplicated across overlapping lines, text need merged per cell) and
-   *    the UTF-16 length of every label is read from typed storage.
-   * 3. The label text is admitted before any string is materialized; refusal
-   *    refuses the read (a memory outcome).
-   * 4. Values and labels are materialized once per cell.
-   * Cells past a loading sheet's frontier stay unknown (pendingSheets: not
-   * cached, read again later); a failed sheet turns its charts into
-   * placeholders with its failure and the payload is not cached either. */
+   * 2. The consumed cells are grouped by page from the ordered page summaries
+   *    (binary search, no page load) with the label need merged per cell.
+   * 3. Pages are processed in order, one at a time: each needed cell is
+   *    extracted into compact chart storage (numbers in a Float64Array,
+   *    labels capped at CHART_LABEL_LIMIT) and the page is released before the
+   *    next is loaded, so no decoded page outlives its source charge.
+   * 4. Every string is admitted before it is built, against a running
+   *    reservation: a raw string by its capped prefix (a numeric-role string
+   *    longer than the label limit is not a number and is never built), a
+   *    formatted label by an upper bound of its format's output, then trued
+   *    up to the actual label. The total is capped at CHART_TEXT_BYTES_LIMIT.
+   *    Refusal rolls the reservation back and refuses the read.
+   * Worst case: one decoded page plus the admitted chart storage.
+   * Cells past a loading sheet's frontier stay unknown (pendingSheets); a
+   * failed sheet turns its charts into placeholders and is never cached. */
   private async fillCharts(drawings: XlsxDrawing[], owner: string, signal: AbortSignal, names: readonly { name: string; source: string; localSheetIndex?: number }[] = [], admit: (bytes: number) => boolean = () => true): Promise<{ pendingSheets: string[]; uncacheable?: boolean; refused?: boolean; diagnostics?: WorkerDiagnostic[] }> {
     const charts = await loadChartModule()
     charts.resolveDrawingNames(drawings, owner, charts.chartNameResolver(names, this.workbook.sheets))
     const sheetOf = (name: string) => this.workbook.sheets.find(candidate => candidate.name.toLowerCase() === name.toLowerCase())
-    // A failed referenced sheet whose cells the chart needs: a placeholder with the failure, never blanks.
     const diagnostics: WorkerDiagnostic[] = []
     const failed = charts.markUnreadableCharts(drawings, owner, name => {
       const sheet = sheetOf(name)
@@ -502,17 +506,20 @@ export class PagedXlsxSheetAdapter implements SourceStore {
       if (!diagnostics.some(d => d.message === reason)) diagnostics.push({ code: 'chart-data-unavailable', message: reason })
       return reason
     })
+    const done = (extra: { refused?: boolean } = {}) => ({ pendingSheets: [...pending], ...extra, ...(failed ? { uncacheable: true, diagnostics } : {}) })
+    const pending = new Set<string>()
     const lines = charts.pendingLines(drawings, owner).filter(line => sheetOf(line.sheet)?.state !== 'incomplete')
     const points = lines.reduce((total, line) => total + line.count, 0)
-    if (!admit(points * charts.CHART_CELL_BYTES)) {
+    const base = points * charts.CHART_CELL_BYTES
+    if (!admit(base)) {
       charts.refuseCharts(drawings, 'This chart needs more worker memory than the document has free')
-      return { pendingSheets: [], ...(failed ? { uncacheable: true, diagnostics } : {}) }
+      return done()
     }
+    // 2. Needed cells, grouped by page (summary search only).
     const key = (sheet: string, row: number, col: number) => `${sheet.toLowerCase()}\u0000${row}\u0000${col}`
-    interface Need { p: CellPagePayload; index: number; text: boolean; length: number }
-    const needs = new Map<string, Need>()
-    const pending = new Set<string>()
-    const pageCache = new Map<string, CellPagePayload>()
+    const slots = new Map<string, number>()
+    const wantsText: boolean[] = []
+    const groups = new Map<string, { sheetId: string; pageId: string; order: number; cells: Array<{ slot: number; row: number; col: number }> }>()
     for (const line of lines) {
       const sheet = sheetOf(line.sheet)
       if (!sheet) continue
@@ -523,11 +530,9 @@ export class PagedXlsxSheetAdapter implements SourceStore {
       for (let i = 0; i < line.count; i++) {
         const at = charts.linePoint(line, i)
         if (at.row > sheet.importedThroughRow) break
-        if (signal.aborted) return { pendingSheets: [...pending] }
         const id = key(sheet.name, at.row, at.col)
-        const known = needs.get(id)
-        if (known) { known.text ||= line.text; continue }
-        // Pages cover ascending row ranges: binary search (rows ascend along a vertical line, so the cursor usually holds).
+        const known = slots.get(id)
+        if (known !== undefined) { wantsText[known] ||= line.text; continue }
         if (cursor < 0 || pages[cursor].r0 > at.row || pages[cursor].r1 < at.row) {
           let lo = 0, hi = pages.length
           while (lo < hi) { const mid = (lo + hi) >>> 1; if (pages[mid].r1 < at.row) lo = mid + 1; else hi = mid }
@@ -536,42 +541,72 @@ export class PagedXlsxSheetAdapter implements SourceStore {
         if (cursor < 0) continue
         const summary = pages[cursor]
         if (summary.aggregate.records === 0 || at.col < summary.c0 || at.col > summary.c1) continue
-        const pageKey = `${sheet.sheetId}\u0000${summary.pageId}`
-        let p = pageCache.get(pageKey)
-        if (!p) { p = await this.workbook.store.page(sheet.sheetId, summary.pageId); pageCache.set(pageKey, p) }
-        const index = this.find(p, at.row, at.col)
-        if (index >= 0) needs.set(id, { p, index, text: line.text, length: 0 })
+        const slot = wantsText.length
+        slots.set(id, slot)
+        wantsText.push(line.text)
+        const groupKey = `${sheet.sheetId}\u0000${summary.pageId}`
+        let group = groups.get(groupKey)
+        if (!group) groups.set(groupKey, group = { sheetId: sheet.sheetId, pageId: summary.pageId, order: cursor, cells: [] })
+        group.cells.push({ slot, row: at.row, col: at.col })
       }
     }
-    // Label bytes are admitted from typed storage before any string exists.
-    let textBytes = 0
-    for (const need of needs.values()) {
-      if (!need.text) continue
-      need.length = await this.textLength(need.p, need.index)
-      // The decoded value and its formatted label may coexist.
-      textBytes += need.length * 4 + 64
+    // 3./4. Stream the pages in order; strings admitted before they are built.
+    const nums = new Float64Array(wantsText.length)
+    const state = new Uint8Array(wantsText.length) // 0 unknown, 1 number/bool, 2 string, 3 present without a value
+    const strings: Array<string | undefined> = new Array(wantsText.length)
+    const labels: Array<string | undefined> = new Array(wantsText.length)
+    let reserved = base
+    const reserve = (bytes: number): boolean => {
+      if (reserved + bytes - base > charts.CHART_TEXT_BYTES_LIMIT || !admit(reserved + bytes)) return false
+      reserved += bytes
+      return true
     }
-    if (textBytes && !admit(points * charts.CHART_CELL_BYTES + textBytes)) return { pendingSheets: [...pending], refused: true }
+    const refuse = () => { admit(0); return done({ refused: true }) }
+    const LIMIT = charts.CHART_LABEL_LIMIT
     const styles = this.workbook.formatting.styles
     const display: XlsxSheet = { name: '', rows: [], cols: [], merges: [], mergeRanges: [], semantics: semanticsFor(this.workbook.formatting.dateSystem) }
-    const values = new Map<string, { value: string | number | boolean | null | undefined; text?: string }>()
-    for (const [id, need] of needs) {
-      if (signal.aborted) return { pendingSheets: [...pending] }
-      const value = this.isUnavailable(need.p, need.index) ? undefined : await this.valueOf(need.p, need.index)
-      let text: string | undefined
-      if (need.text && value !== undefined) { try { text = cellDisplayText(display, { value, style: styles[need.p.styles[need.index]] }) } catch { text = undefined } }
-      values.set(id, { value, ...(text !== undefined ? { text } : {}) })
+    for (const group of [...groups.values()].sort((a, b) => a.sheetId === b.sheetId ? a.order - b.order : a.sheetId < b.sheetId ? -1 : 1)) {
+      if (signal.aborted) return done()
+      let p: CellPagePayload | undefined = await this.workbook.store.page(group.sheetId, group.pageId)
+      for (const cell of group.cells) {
+        const index = this.find(p, cell.row, cell.col)
+        if (index < 0) continue
+        if (this.isUnavailable(p, index)) { state[cell.slot] = 3; continue }
+        const text = wantsText[cell.slot]
+        let value: string | number | boolean | null
+        const kind = p.kinds[index]
+        if (kind === K_SST || kind === K_TEXT || kind === K_ERROR) {
+          // A capped prefix and the full length, read from typed storage.
+          const prefix = kind === K_SST ? await this.workbook.store.sharedStringPrefix(p.nums[index], LIMIT + 1)
+            : (p.flags[index] & F_BLOB) !== 0 ? await this.workbook.store.blobPrefix(p.nums[index], LIMIT + 1) : textPrefix(p, index, LIMIT + 1)
+          if (prefix.length > LIMIT && !text) { state[cell.slot] = 3; continue } // too long to be a chart number; never built
+          if (!reserve(Math.min(prefix.length, LIMIT + 1) * 2)) return refuse()
+          // One character past the limit marks the label for truncation (fillChartRanges cuts and flags it).
+          value = prefix.text
+        } else value = await this.valueOf(p, index)
+        if (typeof value === 'string') { strings[cell.slot] = value; state[cell.slot] = 2 } else if (value === null) state[cell.slot] = 3
+        else { nums[cell.slot] = typeof value === 'boolean' ? (value ? 1 : 0) : value; state[cell.slot] = typeof value === 'boolean' ? 3 : 1 }
+        if (!text) continue
+        const style = styles[p.styles[index]]
+        // Upper bound of the formatted label: the format's own text plus the value's digits/characters.
+        const bound = ((style?.formatCode?.length ?? 64) + (typeof value === 'string' ? value.length : 0) + 400) * 2
+        if (!reserve(bound)) return refuse()
+        let label: string | undefined
+        try { label = cellDisplayText(display, { value, style }) } catch { label = undefined }
+        if (label !== undefined && label.length > LIMIT) label = label.slice(0, LIMIT + 1)
+        // True the reservation up to the label actually kept.
+        reserved -= bound - (label?.length ?? 0) * 2
+        labels[cell.slot] = label
+      }
+      p = undefined // released before the next page is loaded
     }
-    charts.fillDrawings(drawings, owner, (sheet, row, col) => values.get(key(sheet, row, col)))
-    return { pendingSheets: [...pending], ...(failed ? { uncacheable: true, diagnostics } : {}) }
-  }
-  /** UTF-16 length of a record's text value, read without materializing the string. */
-  private async textLength(p: CellPagePayload, i: number): Promise<number> {
-    switch (p.kinds[i]) {
-      case K_SST: return this.workbook.store.sharedStringLength(p.nums[i])
-      case K_TEXT: case K_ERROR: return (p.flags[i] & F_BLOB) !== 0 ? this.workbook.store.blobLength(p.nums[i]) : p.textStart[i + 1] - p.textStart[i]
-      default: return 32
-    }
+    charts.fillDrawings(drawings, owner, (sheet, row, col) => {
+      const slot = slots.get(key(sheet, row, col))
+      if (slot === undefined || state[slot] === 0) return undefined
+      const value = state[slot] === 1 ? nums[slot] : state[slot] === 2 ? strings[slot] : undefined
+      return { value, ...(labels[slot] !== undefined ? { text: labels[slot] } : {}) }
+    })
+    return done()
   }
 
   /** Keeps a complete payload in the pool (when one is bound and it fits) and

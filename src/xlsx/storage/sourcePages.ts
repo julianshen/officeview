@@ -219,6 +219,12 @@ export function textAt(p: { text: Uint16Array; textStart: Uint32Array }, i: numb
   return out
 }
 
+/** At most `max` UTF-16 units of text record `i`, plus its full length (no full-length string is built). */
+export function textPrefix(p: { text: Uint16Array; textStart: Uint32Array }, i: number, max: number): { text: string; length: number } {
+  const start = p.textStart[i], end = p.textStart[i + 1]
+  return { text: String.fromCharCode(...p.text.subarray(start, Math.min(end, start + Math.max(0, max)))), length: end - start }
+}
+
 export function summarize(sheetId: string, pageId: string, r0: number, r1: number, p: CellPagePayload, bytes: number): PageSummary {
   const aggregate = emptyAggregate()
   let c0 = Number.MAX_SAFE_INTEGER, c1 = -1
@@ -1286,19 +1292,18 @@ export class SourcePageStore implements PageSink {
     if (record.textStart.length !== 2) throw new PackageError('parse-error', `oversized cell value ${id} is malformed`)
     return textAt(record, 0)
   }
-  /** UTF-16 length of an oversized value, without materializing the string. */
-  async blobLength(id: number): Promise<number> {
-    if (!Number.isSafeInteger(id) || id < 0 || id >= this.blobCount) return 0
+  /** At most `max` UTF-16 units of an oversized value and its full length; the full string is never built. */
+  async blobPrefix(id: number, max: number): Promise<{ text: string; length: number }> {
+    if (!Number.isSafeInteger(id) || id < 0 || id >= this.blobCount) return { text: '', length: 0 }
     const record = await this.load(`blob/${id}`, decodeStrings, (c, shared) => DECODED_CHUNK_OVERHEAD_BYTES + (shared ? 0 : c.text.byteLength + c.textStart.byteLength))
-    return record.textStart.length === 2 ? record.textStart[1] - record.textStart[0] : 0
+    return record.textStart.length === 2 ? textPrefix(record, 0, max) : { text: '', length: 0 }
   }
-  /** UTF-16 length of a shared string, without materializing it. */
-  async sharedStringLength(id: number): Promise<number> {
-    if (!Number.isSafeInteger(id) || id < 0 || id >= this.stringCount || this.stringChunkSize === 0) return 0
+  /** At most `max` UTF-16 units of a shared string and its full length; the full string is never built. */
+  async sharedStringPrefix(id: number, max: number): Promise<{ text: string; length: number }> {
+    if (!Number.isSafeInteger(id) || id < 0 || id >= this.stringCount || this.stringChunkSize === 0) return { text: '', length: 0 }
     const chunk = Math.floor(id / this.stringChunkSize)
     const strings = await this.load(`sst/${chunk}`, decodeStrings, (c, shared) => DECODED_CHUNK_OVERHEAD_BYTES + (shared ? 0 : c.text.byteLength + c.textStart.byteLength))
-    const at = id - chunk * this.stringChunkSize
-    return strings.textStart[at + 1] - strings.textStart[at]
+    return textPrefix(strings, id - chunk * this.stringChunkSize, max)
   }
   async sharedString(id: number): Promise<string | undefined> {
     if (!Number.isSafeInteger(id) || id < 0 || id >= this.stringCount || this.stringChunkSize === 0) return undefined

@@ -17,6 +17,10 @@ import type { XlsxChartAxis, XlsxChartGroup, XlsxChartModel, XlsxChartRange, Xls
 /** Bounds: series per chart, points per series. */
 export const CHART_SERIES_LIMIT = 64
 export const CHART_POINT_LIMIT = 4096
+/** Characters kept per chart label (category, series name); longer labels are cut and the chart marked truncated. */
+export const CHART_LABEL_LIMIT = 255
+/** Hard cap on one fill's label storage (UTF-16 bytes). */
+export const CHART_TEXT_BYTES_LIMIT = 4 * 1024 * 1024
 
 const child = (node: XmlNode | undefined, name: string) => getChildren(node, name)[0]
 const val = (node: XmlNode | undefined) => attrs(node).val
@@ -324,7 +328,7 @@ export function fillChartRanges(model: XlsxChartModel, ownerSheet: string, looku
   if (model.categoryPending) {
     const cells = rangeCells(model.categoryPending, sheetOf(model.categoryPending), lookup, true)
     truncated ||= cells.truncated
-    categories = cells.values.map(asText)
+    categories = cells.values.map(cell => { const text = asText(cell); if (text.length > CHART_LABEL_LIMIT) { truncated = true; return text.slice(0, CHART_LABEL_LIMIT) } return text })
   }
   const groups = model.groups.map(group => ({
     ...group,
@@ -334,7 +338,7 @@ export function fillChartRanges(model: XlsxChartModel, ownerSheet: string, looku
       const next: XlsxChartSeries = { ...rest }
       if (pending.values) { const cells = rangeCells(pending.values, sheetOf(pending.values), lookup, false); truncated ||= cells.truncated; next.values = cells.values.map(asNumber) }
       if (pending.xValues) { const cells = rangeCells(pending.xValues, sheetOf(pending.xValues), lookup, false); truncated ||= cells.truncated; next.xValues = cells.values.map(asNumber) }
-      if (pending.name) { const text = asText(lookup(sheetOf(pending.name), pending.name.r0, pending.name.c0, true)); if (text) next.name = text }
+      if (pending.name) { const full = asText(lookup(sheetOf(pending.name), pending.name.r0, pending.name.c0, true)); const text = full.slice(0, CHART_LABEL_LIMIT); if (full.length > CHART_LABEL_LIMIT) truncated = true; if (text) next.name = text }
       if (next.pointColors && next.values.length > next.pointColors.length) {
         const first = next.pointColors
         next.pointColors = Array.from({ length: Math.min(256, next.values.length) }, (_, i) => first[i] ?? first[i % first.length])

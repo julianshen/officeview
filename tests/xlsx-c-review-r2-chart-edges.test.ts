@@ -81,27 +81,50 @@ it('truncation includes category indices and scatter x values', () => {
  }
 })
 
-it('category text is admitted before materializing a long chart label', async () => {
+// Adapted to the bounded-stream design: a label is capped at CHART_LABEL_LIMIT
+// (255) characters and the chart marked truncated, so a 100,000-character
+// category is never built in full and fits a small allowance. Only ACCEPTED
+// reservations count as admission (F3).
+it('a long category label is capped (truncated), admitted by its capped bytes and never built in full', async () => {
  const label='x'.repeat(100_000)
  const h=await open(await chartWorkbookBytes(xml('Styled!A1','Styled!B1'),{cells:[{ref:'A1',v:label},{ref:'B1',v:5}]}))
  try {
-  const charged:number[]=[], beforeValues:number[]=[], rawValue=h.adapter.valueOf.bind(h.adapter)
-  const values=vi.spyOn(h.adapter,'valueOf').mockImplementation((...args:any[])=>{beforeValues.push(charged.at(-1)??0);return rawValue(...args)})
-  const result=await h.read({set:(bytes:number)=>{charged.push(bytes);return bytes<=100_000}})
-  console.log('label admission',{charged,beforeValues,values:values.mock.calls.length,completeness:result.completeness,labelAccountedBytes:2*label.length})
-  expect(result.completeness).toBe('incomplete')
-  // Adaptation: the refused read materializes nothing at all (stricter than the
-  // original probe, which assumed one value read): every value read, if any,
-  // follows a charge that already covers the label.
-  expect(charged.some(bytes => bytes >= 2 * label.length)).toBe(true)
-  expect(beforeValues.every(bytes => bytes >= 2 * label.length)).toBe(true)
-  // With room for it, the label is charged before it is materialized.
-  const roomy:number[]=[], before:number[]=[]
-  values.mockImplementation((...args:any[])=>{before.push(roomy.at(-1)??0);return rawValue(...args)})
-  const fits=await h.read({set:(bytes:number)=>{roomy.push(bytes);return true}})
-  expect(fits.completeness).toBe('complete')
-  expect(before.length).toBeGreaterThan(0)
-  expect(before[0]).toBeGreaterThanOrEqual(2 * label.length)
+  const accepted:number[]=[], built:number[]=[], rawValue=h.adapter.valueOf.bind(h.adapter)
+  vi.spyOn(h.adapter,'valueOf').mockImplementation(async (...args:any[])=>{const v=await rawValue(...args);if(typeof v==='string')built.push(v.length);return v})
+  const result=await h.read({set:(bytes:number)=>{const ok=bytes<=100_000;if(ok)accepted.push(bytes);return ok}})
+  expect(result.completeness).toBe('complete')
+  expect(model(result).categories[0]).toBe('x'.repeat(255))
+  expect(model(result).truncated).toBe(true)
+  expect(built.every(length=>length<=256)).toBe(true)
+  expect(Math.max(...accepted)).toBeLessThan(2*label.length)
+ } finally {await h.source.release()}
+})
+
+it('a refused label reservation materializes nothing and is not counted as admission', async () => {
+ const h=await open(await chartWorkbookBytes(xml('Styled!A1','Styled!B1'),{cells:[{ref:'A1',v:'label text'},{ref:'B1',v:5}]}))
+ try {
+  // Learn the reservation sequence with room, then refuse the first chart-label reservation.
+  const roomy:number[]=[]
+  await h.read({set:(bytes:number)=>{roomy.push(bytes);return true}})
+  const accepted:number[]=[], refusedAt:number[]=[], afterRefusal:string[]=[]
+  let refused=false
+  const rawValue=h.adapter.valueOf.bind(h.adapter)
+  vi.spyOn(h.adapter,'valueOf').mockImplementation(async (...args:any[])=>{if(refused)afterRefusal.push('valueOf');return rawValue(...args)})
+  const fresh=await open(await chartWorkbookBytes(xml('Styled!A1','Styled!B1'),{cells:[{ref:'A1',v:'label text'},{ref:'B1',v:5}]}))
+  try {
+   const freshRaw=fresh.adapter.valueOf.bind(fresh.adapter)
+   vi.spyOn(fresh.adapter,'valueOf').mockImplementation(async (...args:any[])=>{if(refused)afterRefusal.push('valueOf');return freshRaw(...args)})
+   // The label's prefix reservation adds exactly 2 B per character ('label text': 20 B) on top of the workspace.
+   const at=roomy.findIndex((bytes,i)=>i+1<roomy.length&&roomy[i+1]-bytes===2*'label text'.length)
+   expect(at).toBeGreaterThanOrEqual(0)
+   const workspace=roomy[at]
+   const result=await fresh.read({set:(bytes:number)=>{const ok=!refused&&bytes<=workspace;if(ok)accepted.push(bytes);else{refused=true;refusedAt.push(bytes)}return ok}})
+   expect(refusedAt.length).toBeGreaterThan(0)
+   expect(refusedAt[0]-workspace).toBe(2*'label text'.length)
+   expect(accepted.every(bytes=>bytes<refusedAt[0])).toBe(true)
+   expect(result.completeness).toBe('incomplete')
+   expect(afterRefusal).toEqual([])
+  } finally {await fresh.source.release()}
  } finally {await h.source.release()}
 })
 
