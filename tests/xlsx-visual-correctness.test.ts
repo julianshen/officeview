@@ -261,9 +261,40 @@ describe('#7 cell number formats: scientific, fractions and colour sections (Exc
     expect(paintColor(7, '[Color10]0')).toBe('#008000')
     expect(paintColor('t', '0;0;0;[Magenta]@')).toBe('#FF00FF')
   })
-  it('conditions stay diagnosed with the existing fallback', () => {
+  it('conditional sections choose by condition, then the catch-all section', () => {
+    const code = '[>100][Red]0;[<=0][Blue]0.0;0.00'
+    expect(shown(150, code)).toBe('150')
+    expect(shown(-2, code)).toBe('-2.0')
+    expect(shown(5, code)).toBe('5.00')
+    expect(shown(150.4, '[>=100]#,##0;0.0')).toBe('150')
+    expect(shown(7, '[>=100]#,##0;0.0')).toBe('7.0')
+    expect(shown(-7, '[>=100]#,##0;0.0')).toBe('-7.0')
+    // A single conditional section the value fails: Excel fills the cell with #.
+    expect(shown(3.14159, '[>100]0.00')).toMatch(/^#+$/)
+  })
+  it('conditional sections paint their colour', () => {
+    const paintColor = (value: number) => {
+      const { ctx, ops } = recordingContext()
+      renderSheet(sheetOf([{ row: 0, col: 0, value, style: style({ numFmtId: 164, formatCode: '[>100][Red]0;[<=0][Blue]0.0;0.00' }) }]), ctx, grid([200], [20]))
+      return ops.find(o => o.op === 'fillText')?.fillStyle
+    }
+    expect(paintColor(150)).toBe('#FF0000')
+    expect(paintColor(-2)).toBe('#0000FF')
+    expect(paintColor(5)).toBe('#000000')
+  })
+  it.each([
+    [1.5, '[h]:mm:ss', '36:00:00'],
+    [2.25, '[hh]:mm', '54:00'],
+    [0.0423611111, '[mm]:ss', '61:00'],
+    [0.000694444, '[ss]', '60'],
+    [1.0000578704, '[h]:mm:ss.00', '24:00:05.00'],
+    [0.0000116, '[h]:mm:ss.0', '0:00:01.0'],
+    [-0.5, '[h]:mm', '-12:00'],
+    [0.99999999, '[h]:mm', '24:00'],
+  ] as const)('elapsed %s with %s shows %s', (value, code, text) => expect(shown(value, code)).toBe(text))
+  it('unknown bracket tokens stay diagnosed with the existing fallback', () => {
     const s2 = sheetOf([])
-    expect(cellDisplayText(s2, { value: 3.14159, style: style({ numFmtId: 164, formatCode: '[>100]0.00' }) })).toBe('3.14')
+    expect(cellDisplayText(s2, { value: 3.14159, style: style({ numFmtId: 164, formatCode: '[Purpleish]0.00' }) })).toBe('3.14')
     expect(s2.diagnostics?.some(d => d.feature === 'format-unsupported')).toBe(true)
   })
 })

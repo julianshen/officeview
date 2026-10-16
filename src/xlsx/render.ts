@@ -15,7 +15,7 @@ import { createTextBodyMeasurer, paintTextBody } from '../drawing/text-paint'
 import { graphemes } from '../core/text-recording'
 import { isFormulaError, isEvaluationError } from './formula/evaluator'
 import { formatCommon, numericSectionIsText, type FormatAllocation } from './formula/format'
-import { BUILTIN_EXTENDED_FORMATS, formatColor, formatExtended } from './cellFormat'
+import { BUILTIN_EXTENDED_FORMATS, NO_SECTION, formatColor, formatExtended } from './cellFormat'
 import { decodeSerial } from './formula/serial'
 import type { ResolvedSemantics } from './formula/types'
 import type { WorkerDiagnostic } from './view/contracts'
@@ -615,12 +615,17 @@ function renderCellText(
 ): string {
   const code = displayFormatCode(style)
   if (code !== undefined && value !== null) {
-    const result = formatCommon(value, code, semantics ?? DEFAULT_RENDER_SEMANTICS, allocation)
+    // Conditional codes choose sections by condition, not by sign: the finite
+    // grammar's sign-based selection would pick the wrong section.
+    const conditional = /\[\s*[<>=]/.test(code)
+    const result = conditional ? { kind: 'unsupported' as const, reason: 'condition token' } : formatCommon(value, code, semantics ?? DEFAULT_RENDER_SEMANTICS, allocation)
     if (result.kind === 'text') return result.text
     if (!isEvaluationError(result)) {
       // Cells display colours, scientific, fractions and padding tokens that
       // the finite TEXT grammar diagnoses.
       const extended = formatExtended(value, code, semantics ?? DEFAULT_RENDER_SEMANTICS, n => formatGeneral(n, fitsGeneral, generalNoFit, allocation), allocation)
+      // No conditional section admits the number: Excel fills the cell with '#'.
+      if (extended === NO_SECTION) { generalNoFit?.(); return '#' }
       if (extended !== undefined) return extended
       if (style?.formatCode !== undefined) noteFormatUnsupported(sheet, code, result.reason, allocation)
     }
