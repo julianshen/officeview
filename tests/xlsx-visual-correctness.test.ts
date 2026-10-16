@@ -247,6 +247,12 @@ describe('#7 cell number formats: scientific, fractions and colour sections (Exc
     expect(shown(5, '[$-409]0.0')).toBe('5.0')
     expect(shown(-3, 'General;[Blue]-General')).toBe('-3')
   })
+  it('built-in elapsed and fractional-second ids 45-47 (openpyxl writes [h]:mm:ss as id 46)', () => {
+    expect(cellDisplayText(sheet, { value: 1.5, style: style({ numFmtId: 46 }) })).toBe('36:00:00')
+    expect(cellDisplayText(sheet, { value: 0.0423611111, style: style({ numFmtId: 45 }) })).toBe('01:00')
+    expect(cellDisplayText(sheet, { value: 0.000706018, style: style({ numFmtId: 47 }) })).toBe('01:01.0')
+    expect(shown(0.5000011574, 'hh:mm:ss.00')).toBe('12:00:00.10')
+  })
   it('built-in ids 11, 12 and 48 render through the same layer', () => {
     expect(cellDisplayText(sheet, { value: 123456789, style: style({ numFmtId: 11 }) })).toBe('1.23E+08')
     expect(cellDisplayText(sheet, { value: 1.75, style: style({ numFmtId: 12 }) })).toBe('1 3/4')

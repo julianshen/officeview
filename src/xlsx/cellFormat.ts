@@ -34,7 +34,7 @@ const PALETTE = LEGACY_PALETTE
 export const BUILTIN_EXTENDED_FORMATS: Readonly<Record<number, string>> = {
   1: '0', 11: '0.00E+00', 12: '# ?/?', 13: '# ??/??',
   37: '#,##0 ;(#,##0)', 38: '#,##0 ;[Red](#,##0)', 39: '#,##0.00;(#,##0.00)', 40: '#,##0.00;[Red](#,##0.00)',
-  48: '##0.0E+0',
+  45: 'mm:ss', 46: '[h]:mm:ss', 47: 'mm:ss.0', 48: '##0.0E+0',
 }
 
 interface Condition { op: '<' | '<=' | '>' | '>=' | '=' | '<>'; value: number }
@@ -146,7 +146,7 @@ export function formatExtended(value: ElementValue, code: string, semantics: Res
     const body = list[index].body, shape = structural(body)
     const magnitude = Math.abs(value), sign = signed ? '-' : ''
     if (/^\s*general\s*$/i.test(shape)) return sign + general(magnitude)
-    if (body.includes(ELAPSED_OPEN)) { const t = elapsed(magnitude, body); return t === undefined ? undefined : sign + t }
+    if (body.includes(ELAPSED_OPEN) || /s\.0/i.test(shape)) { const t = elapsed(magnitude, body); return t === undefined ? undefined : sign + t }
     if (/E[+-]/i.test(shape)) { const t = scientific(magnitude, body, shape, semantics, allocation); return t === undefined ? undefined : sign + t }
     if (shape.includes('/') && !/[ymdhs]/i.test(shape.replace(/E/gi, ''))) { const t = fraction(magnitude, shape); return t === undefined ? undefined : sign + t }
     // Plain numeric/date body: '?' pads like '#'. The selected section alone
@@ -217,7 +217,8 @@ function fraction(x: number, shape: string): string | undefined {
   return `${wholeText ? `${wholeText} ` : wholePh ? ' ' : ''}${numText}/${denText}`
 }
 
-/** Elapsed time: `[h]:mm:ss`, `[mm]:ss`, `[ss].00`. The leading bracket unit is
+/** Elapsed time (`[h]:mm:ss`, `[mm]:ss`, `[ss].00`) and time of day with
+ * second fractions (`mm:ss.0`). The leading bracket unit is
  * not wrapped; the serial is rounded to the shown second fraction (whole
  * seconds otherwise) and the smaller units are truncated from it. */
 function elapsed(days: number, body: string): string | undefined {
@@ -241,8 +242,9 @@ function elapsed(days: number, body: string): string | undefined {
     } else if (/[0#?ydaAeE@]/.test(ch)) return undefined
     else toks.push({ t: 'lit', text: ch })
   }
+  // Without an elapsed unit this is time of day with second fractions (mm:ss.0).
   const lead = toks.find((t): t is Extract<Tok, { t: 'unit' }> => t.t === 'unit' && t.elapsed)
-  if (!lead || toks.filter(t => t.t === 'unit' && t.elapsed).length > 1) return undefined
+  if (toks.filter(t => t.t === 'unit' && t.elapsed).length > 1 || (!lead && !toks.some(t => t.t === 'frac'))) return undefined
   const digits = Math.min(3, toks.reduce((d, t) => t.t === 'frac' ? Math.max(d, t.digits) : d, 0))
   const scale = 10 ** digits
   const total = Math.round(days * 86400 * scale)
@@ -258,7 +260,7 @@ function elapsed(days: number, body: string): string | undefined {
       const n = t.ch === 'h' ? hours : t.ch === 'm' ? minutesTotal : seconds
       out += String(n).padStart(t.len, '0')
     } else if (t.ch === 'h') out += pad(hours % 24, t.len)
-    else if (t.ch === 'm') out += pad(lead.ch === 'h' ? minutesTotal % 60 : minutesTotal % 60, t.len)
+    else if (t.ch === 'm') out += pad(minutesTotal % 60, t.len)
     else out += pad(seconds % 60, t.len)
   }
   return out
