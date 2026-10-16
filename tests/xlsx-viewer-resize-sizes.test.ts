@@ -262,6 +262,50 @@ describe('confirmation C1: native measurement resources are reserved before they
   })
 })
 
+describe('confirmation r2 R1: canonical layout admission covers the formatted text actually measured', () => {
+  const literal = (n: number) => `"${'x'.repeat(n)}"`
+  const nativeRequired = (run: () => void) => {
+    const proto = Object.getPrototypeOf(document.createElement('canvas').getContext('2d')!) as CanvasRenderingContext2D
+    const seen = new Map<string, Set<string>>(), original = proto.measureText
+    const spy = vi.spyOn(proto, 'measureText').mockImplementation(function (this: CanvasRenderingContext2D, text: string) {
+      let texts = seen.get(this.font); if (!texts) seen.set(this.font, texts = new Set()); texts.add(text)
+      return original.call(this, text)
+    })
+    try { run() } finally { spy.mockRestore() }
+    let required = TILE_CANVAS_BYTES
+    for (const texts of seen.values()) required += shapeCacheBytes(texts.size, [...texts].reduce((n, t) => n + t.length, 0))
+    return required
+  }
+  for (const rotation of [undefined, 45]) {
+    it(`a short value shown through a 128-character format literal reserves what it actually measures, and is refused below it (rotation ${rotation ?? 0})`, () => {
+      const cell = { ref: 'A1', row: 0, col: 0, value: 1, styleIndex: 0, style: { numFmtId: 164, formatCode: literal(128), wrapText: true, fontSizePt: 10, ...(rotation ? { textRotation: rotation } : {}) } }
+      let reserved = 0
+      const fit = createFitMeasure({ admit: charge => { reserved = charge.native; return true }, sheet: sheet() })
+      const required = nativeRequired(() => fit.layoutHeight!(cell, 64))
+      expect(reserved).toBeGreaterThanOrEqual(required)
+      const tight = createFitMeasure({ admit: charge => charge.native < required - 1, sheet: sheet() })
+      expect(() => tight.layoutHeight!(cell, 64)).toThrow(AutoFitRefusedError)
+    })
+  }
+  it('every native measurement is reserved before it happens (exact distinct (font, text) accounting)', () => {
+    const charges: number[] = []
+    const fit = createFitMeasure({ admit: charge => { charges.push(charge.native); return true }, sheet: sheet() })
+    const proto = Object.getPrototypeOf(document.createElement('canvas').getContext('2d')!) as CanvasRenderingContext2D
+    const seen = new Map<string, Set<string>>()
+    const original = proto.measureText
+    const spy = vi.spyOn(proto, 'measureText').mockImplementation(function (this: CanvasRenderingContext2D, text: string) {
+      let texts = seen.get(this.font); if (!texts) seen.set(this.font, texts = new Set()); texts.add(text)
+      return original.call(this, text)
+    })
+    try {
+      fit.layoutHeight!({ ref: 'A1', row: 0, col: 0, value: 1, styleIndex: 0, style: { numFmtId: 164, formatCode: literal(40), wrapText: true, fontSizePt: 10, textRotation: 45 } }, 64)
+      let required = TILE_CANVAS_BYTES
+      for (const texts of seen.values()) required += shapeCacheBytes(texts.size, [...texts].reduce((n, t) => n + t.length, 0))
+      expect(Math.max(...charges)).toBeGreaterThanOrEqual(required)
+    } finally { spy.mockRestore() }
+  })
+})
+
 describe('auto-fit measurement and its bound', () => {
   const measure = (_font: string, text: string) => text.length * 7
 

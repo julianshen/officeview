@@ -382,9 +382,12 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
       if (previous.resizeGen === resizeGen && previous.structureGen === structureGen) { bindOverflowCache(previous.geometry, overflowFor()); return previous }
       input = previous.input
     }
-    const order = input.order ?? createIdentityOrder()
-    const baseHidden = remote ? remote.geometry(sheetId).baseHidden : sheetBaseHidden(sheet)
-    const visibility = input.visibility ?? visibilityFromHidden(createIntervalSet(displayIntervals(baseHidden.intervals, order)))
+    // A rebuild for session sizes or structure alone keeps the view buffers it
+    // already shows (charged and held): no second order/mask is allocated.
+    const sameView = previous && previous.revision === input.revision && (remote !== null || previous.input === input)
+    const order = sameView ? previous.view.order : input.order ?? createIdentityOrder()
+    const baseHidden = sameView ? previous.view.baseHidden : remote ? remote.geometry(sheetId).baseHidden : sheetBaseHidden(sheet)
+    const visibility = sameView ? previous.view.visibility : input.visibility ?? visibilityFromHidden(createIntervalSet(displayIntervals(baseHidden.intervals, order)))
     const sizes = sized && !sized.empty ? sized.snapshot() : NO_SESSION_SIZES
     const built = remote ? pagedSheetGeometry(remote, sheetId, order, visibility, overflowFor(), sizes) : buildSheetGeometry(sheet, { order, ...(input.visibility ? { visibility } : {}), sizes })
     if (built.kind !== 'ready') throw new Error(built.diagnostics.map(d => d.message).join('; ') || 'This sheet cannot be laid out')
@@ -1354,9 +1357,7 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
     // copies are built while the current geometry is still held, so both must
     // fit the main budget together; otherwise nothing changes.
     if (sizes.get(axis, request.index) !== clampSize(axis, size)) {
-      const drawingCount = remote ? remote.drawings(sheetId).drawings.length : entry.sheet.drawings?.length ?? 0
-      const replacement = projectionBytes(entry.metrics) + axisBytes(entry.metrics.cols) + axisBytes(entry.metrics.rows) + (entry.geometry.cellIndexBytes ?? 0) + entry.geometry.merges.estimatedBytes + drawingCount * SIZED_DRAWING_BYTES
-      if (mainLedger.bytes + replacement > MAIN_THREAD_BUDGETS[budgetProfile]) {
+      if (mainLedger.bytes + replacementUpperBytes(entry, remote ? remote.drawings(sheetId).drawings.length : entry.sheet.drawings?.length ?? 0) > MAIN_THREAD_BUDGETS[budgetProfile]) {
         setAnnouncement(`${name} was not resized: not enough memory to lay the sheet out again (main memory budget).`)
         return
       }
@@ -1475,6 +1476,21 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
       )}
     </div>
   )
+}
+
+/** Headroom a resize keeps for the DOM and status republished with it. */
+const RESIZE_ADMISSION_MARGIN = 64 * 1024
+/** Upper bound of everything a session-size rebuild allocates while the
+ * current geometry is still held (§12.4): the PROSPECTIVE row projection (any
+ * permuted band may become a dense Float64/Uint32 prefix, 20 B per row, once a
+ * resized row breaks its uniform height) and its sections, the rebuilt axes,
+ * a resident cell index and merge index, and repositioned drawing copies.
+ * The view's order and mask are reused (entryFor), never rebuilt. */
+function replacementUpperBytes(entry: SheetEntry, drawings: number): number {
+  let projection = (entry.metrics.diagnostics.sectionCount + 6) * 96
+  for (const band of entry.view.order.bands) projection += (band.r1 - band.r0 + 1) * 20 + 24
+  const axes = 2 * (axisBytes(entry.metrics.cols) + 1024)
+  return projection + axes + (entry.geometry.cellIndexBytes ?? 0) + entry.geometry.merges.estimatedBytes + drawings * SIZED_DRAWING_BYTES + RESIZE_ADMISSION_MARGIN
 }
 
 /** Source row intervals → display slot intervals under `order`. Outside permuted

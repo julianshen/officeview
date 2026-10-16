@@ -248,11 +248,6 @@ export class AutoFitRefusedError extends Error {
 const MEASURE_ENTRY_BYTES = 96
 /** A canonical body layout's transient JS bytes beyond its text (§11.2 records). */
 const LAYOUT_HEAP_BYTES = 512
-/** Native measurements a canonical wrapped/rotated layout may make per UTF-16
- * unit of its text (words, emergency-break substrings and graphemes are all
- * shaped), plus a constant for its probes ('Mg', ellipses). */
-const LAYOUT_SHAPES_PER_UNIT = 3
-const LAYOUT_SHAPES_BASE = 8
 export interface FitCharge { heap: number; native: number }
 export interface FitMeasure {
   measure: Measure
@@ -271,6 +266,7 @@ export interface FitMeasure {
  * created. With an injected `measureText` no context is created or charged. */
 export function createFitMeasure(options: { admit: (charge: FitCharge) => boolean; measureText?: Measure; sheet?: XlsxSheet }): FitMeasure {
   let ctx: CanvasRenderingContext2D | null | undefined = options.measureText ? null : undefined
+  let localReserved = false
   let host: ReturnType<typeof createCellLayoutHost> | null = null
   const fonts = new Map<string, { entries: number; units: number }>()
   const cache = new Map<string, number>()
@@ -279,59 +275,94 @@ export function createFitMeasure(options: { admit: (charge: FitCharge) => boolea
     if (!options.admit({ heap: heap + moreHeap, native: native + moreNative })) throw new AutoFitRefusedError()
     heap += moreHeap; native += moreNative
   }
+  /** Reserves one new shaped text in `font`'s cache before the browser shapes it. */
+  const shaped = new Map<string, Set<string>>()
+  /** `cache` names the context whose shaping cache grows (ours, or the
+   * canonical layout's local measurement context). */
+  const reserveShape = (font: string, text: string, cacheName = '') => {
+    font = `${cacheName}\u0000${font}`
+    const texts = shaped.get(font)
+    if (texts?.has(text)) return
+    const current = fonts.get(font) ?? { entries: 0, units: 0 }
+    const next = { entries: current.entries + 1, units: current.units + text.length }
+    reserve(font.length * 2 + text.length * 2 + MEASURE_ENTRY_BYTES, shapeCacheBytes(next.entries, next.units) - shapeCacheBytes(current.entries, current.units))
+    fonts.set(font, next)
+    if (texts) texts.add(text)
+    else shaped.set(font, new Set([text]))
+  }
   const context = (): CanvasRenderingContext2D | null => {
     if (ctx !== undefined) return ctx
     reserve(0, TILE_CANVAS_BYTES)
     try {
       const canvas = globalThis.document?.createElement('canvas')
       if (canvas) { canvas.width = 1; canvas.height = 1 }
-      ctx = canvas?.getContext('2d') ?? null
+      const created = canvas?.getContext('2d') ?? null
+      if (created) {
+        // Every native measurement on this context, ours or the canonical
+        // layout's (formatted text, wrap candidates, rotation probes), is
+        // reserved before the browser shapes it: exact distinct (font, text)
+        // accounting under the calibrated model, whatever formatting expands to.
+        const native = created.measureText.bind(created)
+        created.measureText = (text: string) => { reserveShape(created.font, text); return native(text) }
+      }
+      ctx = created
     } catch { ctx = null }
     return ctx
-  }
-  /** Reserves `entries` new shaped texts of `units` UTF-16 units in `font`'s cache. */
-  const shapes = (font: string, entries: number, units: number, moreHeap: number) => {
-    const current = fonts.get(font) ?? { entries: 0, units: 0 }
-    const next = { entries: current.entries + entries, units: current.units + units }
-    reserve(moreHeap, shapeCacheBytes(next.entries, next.units) - shapeCacheBytes(current.entries, current.units))
-    fonts.set(font, next)
   }
   const measure: Measure = (font, text) => {
     const key = `${font}\n${text}`
     let width = cache.get(key)
     if (width !== undefined) return width
     const c = context()
+    reserve(key.length * 2 + MEASURE_ENTRY_BYTES, 0)
     if (c) {
-      shapes(font, 1, text.length, key.length * 2 + MEASURE_ENTRY_BYTES)
       c.font = font
       width = c.measureText(text).width
-    } else {
-      reserve(key.length * 2 + MEASURE_ENTRY_BYTES, 0)
-      width = options.measureText ? options.measureText(font, text) : text.length * (Number(/([\d.]+)pt/.exec(font)?.[1] ?? 10) * 96 / 72) * 0.55
-    }
+    } else width = options.measureText ? options.measureText(font, text) : text.length * (Number(/([\d.]+)pt/.exec(font)?.[1] ?? 10) * 96 / 72) * 0.55
     cache.set(key, width)
     return width
   }
   const layoutHeight = options.sheet && !options.measureText ? (cell: XlsxCell, widthCss: number): number | undefined => {
     const c = context()
     if (!c) return undefined
-    const text = String(cell.value ?? '')
-    shapes(cellFont(cell.style).font, LAYOUT_SHAPES_BASE + LAYOUT_SHAPES_PER_UNIT * text.length, LAYOUT_SHAPES_PER_UNIT * text.length * text.length, text.length * 4 + LAYOUT_HEAP_BYTES)
-    host ??= createCellLayoutHost(c, options.sheet)
-    const body = host.layoutBody(cell, widthCss, RESIZE_LIMITS.row.max)
+    reserve(cellDisplayText(options.sheet!, cell).length * 4 + LAYOUT_HEAP_BYTES, 0)
+    // The canonical layout also measures on its own local identity context
+    // (core/text-metrics): reserve that context once, and every distinct text
+    // it shapes, before the browser does. Its measurements are observed through
+    // the shared 2D prototype for exactly this synchronous call.
+    if (!localReserved) { reserve(0, TILE_CANVAS_BYTES); localReserved = true }
+    host ??= createCellLayoutHost(c, options.sheet!)
+    const proto = Object.getPrototypeOf(c) as CanvasRenderingContext2D
+    const original = proto.measureText
+    proto.measureText = function (this: CanvasRenderingContext2D, text: string) { reserveShape(this.font, text, 'local'); return original.call(this, text) }
+    let body: ReturnType<typeof host.layoutBody>
+    try { body = host.layoutBody(cell, widthCss, RESIZE_LIMITS.row.max) } finally { proto.measureText = original }
     if (body.text?.kind !== 'layout') return undefined
-    return body.text.rotation ? rotatedExtent(body.text.layout, cellFont(cell.style).sizePx) : body.text.layout.height
+    return body.text.rotation ? rotatedExtent(body.text.layout, c) : body.text.layout.height
   } : undefined
   return { measure, ...(layoutHeight ? { layoutHeight } : {}), bytes: () => heap + native }
 }
 /** Vertical extent of a laid-out body whose segments carry rotated baseline
- * transforms (render.ts rotatedLayout), from each segment's ascent/descent box. */
-function rotatedExtent(layout: { lines: ReadonlyArray<{ baseline: number; segments: ReadonlyArray<{ text: string; x: number; width: number; transform?: { a: number; b: number; c: number; d: number; e: number; f: number } }> }> }, sizePx: number): number {
-  const ascent = sizePx * 0.8, descent = sizePx * 0.25
+ * transforms (render.ts rotatedLayout), from the canonical glyph band of each
+ * segment's font: measured 'Mg' ascent/descent, at least .85em/.25em
+ * (render.ts cellTextMeasurer / textLayoutBounds), for any angle. */
+function rotatedExtent(layout: { lines: ReadonlyArray<{ baseline: number; segments: ReadonlyArray<{ text: string; x: number; width: number; style: { fontSizePt?: number; bold?: boolean; italic?: boolean }; transform?: { a: number; b: number; c: number; d: number; e: number; f: number } }> }> }, ctx: CanvasRenderingContext2D): number {
+  const bands = new Map<string, { ascent: number; descent: number }>()
+  const band = (style: { fontSizePt?: number; bold?: boolean; italic?: boolean }) => {
+    const { font, sizePx } = cellFont(style)
+    let value = bands.get(font)
+    if (!value) {
+      ctx.font = font
+      const m = ctx.measureText('Mg')
+      bands.set(font, value = { ascent: Math.max(m.actualBoundingBoxAscent ?? 0, sizePx * .85), descent: Math.max(m.actualBoundingBoxDescent ?? 0, sizePx * .25) })
+    }
+    return value
+  }
   let top = Infinity, bottom = -Infinity
   for (const line of layout.lines) for (const segment of line.segments) {
     if (segment.text === '\n') continue
     const t = segment.transform ?? { a: 1, b: 0, c: 0, d: 1, e: segment.x, f: line.baseline }
+    const { ascent, descent } = band(segment.style)
     for (const [x, y] of [[0, -ascent], [segment.width, -ascent], [segment.width, descent], [0, descent]]) {
       const py = t.b * x + t.d * y + t.f
       top = Math.min(top, py); bottom = Math.max(bottom, py)

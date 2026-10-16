@@ -174,11 +174,14 @@ export function GridSemantics(props: GridSemanticsProps): ReactElement {
   // focus moves to the equivalent surviving control, else the owned grid.
   const resizeFocus = useRef<{ request: ResizeRequest; slot: number; label: string | null } | null>(null)
   useLayoutEffect(() => {
+    // One-shot: only the commit right after the resize may restore focus, and
+    // only when the control that had it was removed; later focus moves
+    // (inside or outside the viewer) belong to the user.
     const pending = resizeFocus.current, grid = gridRef.current
+    resizeFocus.current = null
     if (!pending || !grid) return
     const focus = document.activeElement
-    if (focus && focus !== document.body && grid.contains(focus)) return
-    resizeFocus.current = null
+    if (focus && focus !== document.body) return
     const { request, slot, label } = pending
     const escape = (text: string) => text.replace(/["\\]/g, '\\$&')
     const candidates = request.kind === 'column'

@@ -19,6 +19,7 @@ import type { XlsxDocument } from '../src/xlsx/types'
 import { xlsxBytes } from './helpers/xlsx-package'
 import { FIRST_PAINT_TEST, FIRST_PAINT_WAIT } from './helpers/viewer-timing'
 import { columnHeaderHeight } from '../src/components/xlsx/GridHeaders'
+import { createRowOrder } from '../src/xlsx/view/order'
 
 // Admission's object path allows one row, so the worker fixture below is paged.
 vi.mock('../src/xlsx/storage/importSession', async original => {
@@ -393,6 +394,83 @@ describe('codex review round 1', () => {
     await waitFor(() => expect(status(ui)).toMatch(/Column A width \d+ pixels, fitted to content/))
     // 'several' is the longest word: far narrower than the one-line sentence.
     expect(headerWidth(ui, 'A')).toBeLessThan(100)
+  })
+
+  it('R2a a resize whose rebuilt view owners do not fit is refused (32 grouped drawings, 20 KiB free)', FIRST_PAINT_TEST, async () => {
+    const doc = await workbook()
+    const E = 9525
+    doc.sheets[0].drawings = Array.from({ length: 32 }, (_, i) => ({ xEmu: (100 + i) * E, yEmu: 0, widthEmu: 64 * E, heightEmu: 40 * E,
+      group: { off: { x: (100 + i) * E, y: 0 }, ext: { width: 64 * E, height: 40 * E }, chOff: { x: 0, y: 0 }, chExt: { width: 64 * E, height: 40 * E } },
+      children: [{ xEmu: 0, yEmu: 0, widthEmu: 64 * E, heightEmu: 40 * E, geometry: 'rect', fill: '#00f', source: { partPath: 'p', treePath: `twoCellAnchor[${i}]/grpSp[0]/sp[0]`, element: 'sp', representation: 'native' } }],
+      source: { partPath: 'xl/drawings/drawing1.xml', treePath: `twoCellAnchor[${i}]/grpSp[0]`, element: 'grpSp', representation: 'native' } })) as never
+    const ledgers: Array<{ bytes: number; set(pool: 'copy', owner: string, bytes: number): void; snapshot(): { peakBytes: number } }> = []
+    const f = frames()
+    const ui = render(<InteractiveSheetDoc doc={doc} onFrame={f.onFrame} onMainLedger={ledger => { ledgers.push(ledger as never) }} />)
+    await waitFor(() => expect(f.last()?.basePaints ?? 0).toBeGreaterThan(0), FIRST_PAINT_WAIT)
+    const ledger = ledgers[ledgers.length - 1], budget = 64 * 1024 * 1024
+    const grid = goTo(ui, 'A1')
+    await settle()
+    ledger.set('copy', 'filler', budget - ledger.bytes - 20 * 1024)
+    const peakBefore = ledger.snapshot().peakBytes
+    resizeKey(grid, 'ArrowRight')
+    await settle()
+    const resized = headerWidth(ui, 'A') === 72
+    if (resized) expect(ledger.snapshot().peakBytes).toBeLessThanOrEqual(budget)
+    else expect(status(ui)).toMatch(/Column A was not resized: .*memory/)
+    expect(ledger.snapshot().peakBytes - Math.max(peakBefore, 0)).toBeLessThanOrEqual(budget - peakBefore + 1)
+    expect(ledger.bytes).toBeLessThanOrEqual(budget)
+    ledger.set('copy', 'filler', 0)
+  })
+
+  it('R2b prospective projection growth is admitted: a sorted uniform sheet that would become dense is refused', { timeout: 60_000 }, async () => {
+    const rows = 100_000
+    const doc: XlsxDocument = { sheets: [{ name: 'S1', sheetId: '1', rows: Array.from({ length: rows }, (_, index) => ({ index, cells: [{ ref: `A${index + 1}`, row: index, col: 0, value: index, styleIndex: 0, hasCachedValue: true }] })), cols: [], merges: [], mergeRanges: [] }] }
+    const order = createRowOrder([{ r0: 0, r1: rows - 1, sourceAtOffset: Uint32Array.from({ length: rows }, (_, i) => rows - 1 - i) }])
+    const ledgers: Array<{ bytes: number; set(pool: 'copy', owner: string, bytes: number): void; snapshot(): { peakBytes: number } }> = []
+    const f = frames()
+    const ui = render(<InteractiveSheetDoc doc={doc} views={{ '1': { revision: 1, order } }} onFrame={f.onFrame} onMainLedger={ledger => { ledgers.push(ledger as never) }} />)
+    await waitFor(() => expect(f.last()?.basePaints ?? 0).toBeGreaterThan(0), FIRST_PAINT_WAIT)
+    const ledger = ledgers[ledgers.length - 1], budget = 64 * 1024 * 1024
+    const grid = goTo(ui, 'A1')
+    await settle()
+    // Room for a rebuilt cell index (136 B per row + 8 B per cell) plus 1 MiB:
+    // not for the 20 B/row dense band the resized row turns the sorted band into.
+    ledger.set('copy', 'filler', budget - ledger.bytes - rows * (136 + 8) - 1024 * 1024)
+    const peakBefore = ledger.snapshot().peakBytes
+    resizeKey(grid, 'ArrowDown')
+    await settle()
+    expect(status(ui)).toMatch(/Row 1 was not resized: .*memory/)
+    expect(ledger.snapshot().peakBytes).toBe(peakBefore)
+    expect(ledger.bytes).toBeLessThanOrEqual(budget)
+    ledger.set('copy', 'filler', 0)
+  })
+
+  it('R3 a completed resize never steals focus the user later moves outside the grid', FIRST_PAINT_TEST, async () => {
+    const { ui } = await mount()
+    const grid = goTo(ui, 'A1')
+    fireEvent.keyDown(grid, { key: 'F2' })
+    const sort = ui.getByRole('button', { name: 'Cycle sort column A' })
+    act(() => sort.focus())
+    resizeKey(sort, 'ArrowRight')
+    await waitFor(() => expect(headerWidth(ui, 'A')).toBe(72))
+    expect(document.activeElement).toBe(sort)
+    const outside = ui.getByRole('button', { name: 'Print' })
+    act(() => outside.focus())
+    await settle()
+    act(() => { fireEvent.scroll(ui.getByTestId('officeview-sheet-scroller')) })
+    await settle()
+    expect(document.activeElement).toBe(outside)
+  })
+
+  it('R4 oblique rotated text fits the canonical measured glyph band', FIRST_PAINT_TEST, async () => {
+    const doc = await parseXlsx(await OfficePackage.load(await buildXlsx([{ name: 'S1', cols: '<col min="1" max="1" width="57" customWidth="1"/>', rows: [{ r: 1, cells: [{ ref: 'A1', v: 'ab' }] }] }])))
+    const cell = doc.sheets[0].rows.flatMap(row => row.cells).find(c => c.ref === 'A1')!
+    cell.style = { ...cell.style, wrapText: true, fontSizePt: 120, textRotation: 1 } as NonNullable<typeof cell.style>
+    const { ui } = await mount(doc)
+    expect(headerWidth(ui, 'A')).toBe(404)
+    fireEvent.doubleClick(ui.container.querySelector<HTMLElement>('[data-resize-row="0"]')!)
+    // 120 pt: canonical ascent >= .85em and descent >= .25em of 160 px, plus padding.
+    await waitFor(() => expect(parseFloat((ui.getByRole('rowheader', { name: 'Row 1' }).parentElement as HTMLElement).style.height)).toBeGreaterThanOrEqual(180))
   })
 
   it('#3 repositioned resident drawings are charged to the drawings pool', FIRST_PAINT_TEST, async () => {
