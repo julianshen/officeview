@@ -4,7 +4,7 @@
  * depend on host fonts.
  */
 import { describe, expect, it } from 'vitest'
-import { computeMetrics, renderSheet, type GridMetrics } from '../src/xlsx/render'
+import { cellDisplayText, computeMetrics, renderSheet, type GridMetrics } from '../src/xlsx/render'
 import { buildSheetGeometry } from '../src/xlsx/view/viewport'
 import { renderSheetViewport } from '../src/xlsx/view/renderViewport'
 import { buildGeometry } from '../src/xlsx/view/source'
@@ -186,5 +186,62 @@ describe('#8 gridlines are hidden under text spilling into empty neighbours', ()
     const result = renderSheetViewport(sheet, ctx, geometry, { box: { x: 0, y: 0, width: 320, height: 60 }, zoom: 1, deviceScale: 1 })
     expect(result.kind).toBe('detail')
     check(ops)
+  })
+})
+
+describe('#7 cell number formats: scientific, fractions and colour sections (Excel display)', () => {
+  const sheet = sheetOf([])
+  const shown = (value: number | string, formatCode: string, numFmtId = 164) => cellDisplayText(sheet, { value, style: style({ numFmtId, formatCode }) })
+  it.each([
+    [123456789, '0.00E+00', '1.23E+08'],
+    [123456789, '##0.0E+0', '123.5E+6'],
+    [0.000123, '0.00E+00', '1.23E-04'],
+    [0, '0.00E+00', '0.00E+00'],
+    [-123456789, '0.00E+00', '-1.23E+08'],
+    [99999, '0.0E+00', '1.0E+05'],
+    [1234, '0.00E-00', '1.23E03'],
+  ] as const)('scientific %s with %s shows %s', (value, code, text) => expect(shown(value, code)).toBe(text))
+  it.each([
+    [1.75, '# ?/?', '1 3/4'],
+    [0.5, '?/?', '1/2'],
+    [3.14159, '# ??/??', '3 14/99'],
+    [0.3333, '# ??/??', '  1/3 '],
+    [2.625, '# ?/8', '2 5/8'],
+    [2.3, '# ?/4', '2 1/4'],
+    [5, '# ?/?', '5    '],
+    [-1.75, '# ?/?', '-1 3/4'],
+  ] as const)('fraction %s with %s shows %j', (value, code, text) => expect(shown(value, code)).toBe(text))
+  it('selects sections like Excel without doubling the authored minus', () => {
+    const code = '"$"#,##0.00;[Red]-"$"#,##0.00'
+    expect(shown(-1234.5, code)).toBe('-$1,234.50')
+    expect(shown(1234.5, code)).toBe('$1,234.50')
+    expect(shown(-5, '#,##0_);[Red](#,##0)')).toBe('(5)')
+    expect(shown(5, '#,##0_);[Red](#,##0)')).toBe('5 ')
+    expect(shown(5, '[$€-407]#,##0.00')).toBe('€5.00')
+    expect(shown(5, '[$-409]0.0')).toBe('5.0')
+    expect(shown(-3, 'General;[Blue]-General')).toBe('-3')
+  })
+  it('built-in ids 11, 12 and 48 render through the same layer', () => {
+    expect(cellDisplayText(sheet, { value: 123456789, style: style({ numFmtId: 11 }) })).toBe('1.23E+08')
+    expect(cellDisplayText(sheet, { value: 1.75, style: style({ numFmtId: 12 }) })).toBe('1 3/4')
+    expect(cellDisplayText(sheet, { value: 123456789, style: style({ numFmtId: 48 }) })).toBe('123.5E+6')
+  })
+  it('paints the selected colour section, including negative and [Color n] sections', () => {
+    const paintColor = (value: number | string, formatCode: string, color?: string) => {
+      const { ctx, ops } = recordingContext()
+      renderSheet(sheetOf([{ row: 0, col: 0, value, style: style({ numFmtId: 164, formatCode, color }) }]), ctx, grid([200], [20]))
+      return ops.find(o => o.op === 'fillText')?.fillStyle
+    }
+    const code = '"$"#,##0.00;[Red]-"$"#,##0.00'
+    expect(paintColor(-1234.5, code)).toBe('#FF0000')
+    expect(paintColor(1234.5, code, 'FF00B050')).toBe('#00B050')
+    expect(paintColor(7, '[Blue]0;[Red]-0')).toBe('#0000FF')
+    expect(paintColor(7, '[Color10]0')).toBe('#008000')
+    expect(paintColor('t', '0;0;0;[Magenta]@')).toBe('#FF00FF')
+  })
+  it('conditions stay diagnosed with the existing fallback', () => {
+    const s2 = sheetOf([])
+    expect(cellDisplayText(s2, { value: 3.14159, style: style({ numFmtId: 164, formatCode: '[>100]0.00' }) })).toBe('3.14')
+    expect(s2.diagnostics?.some(d => d.feature === 'format-unsupported')).toBe(true)
   })
 })

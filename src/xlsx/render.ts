@@ -15,6 +15,7 @@ import { createTextBodyMeasurer, paintTextBody } from '../drawing/text-paint'
 import { graphemes } from '../core/text-recording'
 import { isFormulaError, isEvaluationError } from './formula/evaluator'
 import { formatCommon, numericSectionIsText, type FormatAllocation } from './formula/format'
+import { BUILTIN_EXTENDED_FORMATS, formatColor, formatExtended } from './cellFormat'
 import { decodeSerial } from './formula/serial'
 import type { ResolvedSemantics } from './formula/types'
 import type { WorkerDiagnostic } from './view/contracts'
@@ -583,15 +584,27 @@ function renderCellText(
   generalNoFit?: () => void,
   allocation?: FormatAllocation,
 ): string {
-  const code = style?.formatCode
+  const code = displayFormatCode(style)
   if (code !== undefined && value !== null) {
     const result = formatCommon(value, code, semantics ?? DEFAULT_RENDER_SEMANTICS, allocation)
     if (result.kind === 'text') return result.text
-    if (!isEvaluationError(result)) noteFormatUnsupported(sheet, code, result.reason, allocation)
+    if (!isEvaluationError(result)) {
+      // Cells display colours, scientific, fractions and padding tokens that
+      // the finite TEXT grammar diagnoses.
+      const extended = formatExtended(value, code, semantics ?? DEFAULT_RENDER_SEMANTICS, n => formatGeneral(n, fitsGeneral, generalNoFit, allocation), allocation)
+      if (extended !== undefined) return extended
+      if (style?.formatCode !== undefined) noteFormatUnsupported(sheet, code, result.reason, allocation)
+    }
   }
   if (typeof value === 'number' && (style?.numFmtId ?? 0) === 0) return formatGeneral(value, fitsGeneral, generalNoFit, allocation)
   if (typeof value === 'string') allocation?.borrowed?.(value)
   return formatValue(value, style?.numFmtId ?? 0, semantics, allocation)
+}
+
+/** The authored format code, or the code of a built-in id the finite
+ * default switch does not render (scientific, fractions, red negatives). */
+function displayFormatCode(style: XlsxCellStyle | undefined): string | undefined {
+  return style?.formatCode ?? (style ? BUILTIN_EXTENDED_FORMATS[style.numFmtId] : undefined)
 }
 
 /** @internal The canonical display text of a cell (authored/built-in formats and
@@ -940,7 +953,9 @@ export function layoutCellBody(
   const text = numericOverflowText(cell, formatted, font, w, measured, generalNoFit)
   out.formattedText = text
   if (text !== '') {
-    const color = style?.color ? spreadsheetColor(style.color) : '#000000'
+    // A colour section ([Red], [Color n]) overrides the font colour.
+    const code = displayFormatCode(cell.style)
+    const color = (code !== undefined && cell.value !== null ? formatColor(cell.value, code) : undefined) ?? (style?.color ? spreadsheetColor(style.color) : '#000000')
     // OOXML often authors default alignment fields on every cell. Those
     // retain ordinary placement; real alignment/wrapping/rotation needs
     // the measured local layout (including explicit no-wrap for255).
