@@ -13,6 +13,7 @@
  */
 
 import { watermarkFromHeaders, type WatermarkOptions } from './watermark'
+import { throwIfAborted } from './package-error'
 
 export interface Progress {
   /** Bytes received so far. */
@@ -78,13 +79,28 @@ export type ProtectionListener = (policy: ProtectionPolicy) => void
 /** Fires once with the watermark the response header asked for, if any. */
 export type WatermarkListener = (mark: WatermarkOptions | undefined) => void
 
-/** Read a byte stream to completion, reporting progress as chunks arrive. */
+/** Read a byte stream to completion, reporting progress as chunks arrive.
+ * An abort (even one that happened earlier) cancels the stream and rejects
+ * with PackageError 'cancelled'. */
 export async function readByteStream(
   stream: ReadableStream<Uint8Array>,
   onProgress?: ProgressListener,
   total?: number,
+  signal?: AbortSignal,
 ): Promise<Uint8Array> {
   const reader = stream.getReader()
+  const stop = () => { reader.cancel().catch(() => {}) }
+  if (signal?.aborted) stop()
+  else signal?.addEventListener('abort', stop, { once: true })
+  try {
+    return await drain(reader, onProgress, total, signal)
+  } finally {
+    signal?.removeEventListener('abort', stop)
+    if (signal?.aborted) try { reader.releaseLock() } catch { /* a read is still settling */ }
+  }
+}
+
+async function drain(reader: ReadableStreamDefaultReader<Uint8Array>, onProgress: ProgressListener | undefined, total: number | undefined, signal: AbortSignal | undefined): Promise<Uint8Array> {
   const chunks: Uint8Array[] = []
   let loaded = 0
   let announced = -1
@@ -100,7 +116,9 @@ export async function readByteStream(
   }
   report()
   for (;;) {
+    throwIfAborted(signal)
     const { done, value } = await reader.read()
+    throwIfAborted(signal)
     if (done) break
     if (value && value.length > 0) {
       chunks.push(value)
@@ -119,9 +137,10 @@ export async function readByteStream(
 }
 
 /** Blob → one buffer (Blob.arrayBuffer gives the whole thing; fine for files already in memory). */
-async function readBlob(blob: Blob, onProgress?: ProgressListener): Promise<Uint8Array> {
+async function readBlob(blob: Blob, onProgress?: ProgressListener, signal?: AbortSignal): Promise<Uint8Array> {
   onProgress?.({ loaded: 0, total: blob.size })
   const buffer = await blob.arrayBuffer()
+  throwIfAborted(signal)
   const bytes = new Uint8Array(buffer)
   onProgress?.({ loaded: bytes.length, total: blob.size })
   return bytes
@@ -133,6 +152,7 @@ async function readResponse(
   onProgress?: ProgressListener,
   onProtection?: ProtectionListener,
   onWatermark?: WatermarkListener,
+  signal?: AbortSignal,
 ): Promise<Uint8Array> {
   // An auth failure (or any non-2xx) must surface as itself, not as a
   // confusing zip-parse error three layers down.
@@ -148,7 +168,7 @@ async function readResponse(
   onWatermark?.(watermarkFromHeaders(response.headers))
   const totalHeader = response.headers.get('content-length')
   const total = totalHeader ? parseInt(totalHeader, 10) : undefined
-  if (response.body) return readByteStream(response.body, onProgress, Number.isFinite(total) ? total : undefined)
+  if (response.body) return readByteStream(response.body, onProgress, Number.isFinite(total) ? total : undefined, signal)
   return new Uint8Array(await response.arrayBuffer())
 }
 
@@ -163,45 +183,57 @@ async function fetchInput(
   onProgress?: ProgressListener,
   onProtection?: ProtectionListener,
   onWatermark?: WatermarkListener,
+  signal?: AbortSignal,
 ): Promise<Uint8Array> {
   if (typeof fetch !== 'function') {
     const url = typeof input === 'string' ? input : input.url
     throw new Error(`Cannot download ${url}: fetch is not available in this environment`)
   }
-  return readResponse(await fetch(input, init), onProgress, onProtection, onWatermark)
+  return readResponse(await fetch(input, withSignal(input, init, signal)), onProgress, onProtection, onWatermark, signal)
 }
 
-/** Normalize any accepted byte source into a single Uint8Array buffer. */
+/** The caller's init plus a signal that aborts on either the load signal or the
+ * caller's own (init.signal, or the Request's, which fetch(request, { signal }) replaces). */
+function withSignal(input: string | Request, init: RequestInit | undefined, signal: AbortSignal | undefined): RequestInit | undefined {
+  const own = init?.signal ?? (typeof input === 'string' ? undefined : input.signal)
+  const combined = eitherSignal(own ?? undefined, signal)
+  return combined ? { ...init, signal: combined } : init
+}
+
+/** Normalize any accepted byte source into a single Uint8Array buffer. `signal`
+ * aborts the fetch and the download (PackageError 'cancelled' once aborted). */
 export async function readSource(
   source: ByteSource,
   onProgress?: ProgressListener,
   onProtection?: ProtectionListener,
   onWatermark?: WatermarkListener,
+  signal?: AbortSignal,
 ): Promise<Uint8Array> {
   // A promise of a source (e.g. the promise fetch() returns): wait for it,
   // then handle what it resolves to. Progress callbacks only start once the
   // inner source exists — a bare fetch promise reports nothing while the
   // request is still in flight.
   if (typeof (source as Promise<DirectByteSource> | null)?.then === 'function') {
-    return readSource(await (source as Promise<DirectByteSource>), onProgress, onProtection, onWatermark)
+    const resolved = await (source as Promise<DirectByteSource>)
+    return readSource(resolved, onProgress, onProtection, onWatermark, signal)
   }
   // A Request already bundles url + headers + credentials (+ method/mode),
   // so fetch it as-is. Realm note: a cross-realm Request fails instanceof
   // and falls through to the { url } branch below, which still forwards its
   // url, headers and credentials (but not method/body).
   if (typeof Request !== 'undefined' && source instanceof Request) {
-    return fetchInput(source, undefined, onProgress, onProtection, onWatermark)
+    return fetchInput(source, undefined, onProgress, onProtection, onWatermark, signal)
   }
-  if (source instanceof Response) return readResponse(source, onProgress, onProtection, onWatermark)
-  if (source instanceof Blob) return readBlob(source, onProgress)
+  if (source instanceof Response) return readResponse(source, onProgress, onProtection, onWatermark, signal)
+  if (source instanceof Blob) return readBlob(source, onProgress, signal)
   // A { url, headers? } descriptor. Checked after Response/Blob: a Response
   // also carries a (possibly empty) .url, and must keep its own branch.
   if (typeof source === 'object' && source !== null && typeof (source as HttpSource).url === 'string') {
     const { url, headers, credentials } = source as HttpSource
-    return fetchInput(url, { headers, credentials }, onProgress, onProtection, onWatermark)
+    return fetchInput(url, { headers, credentials }, onProgress, onProtection, onWatermark, signal)
   }
   if (typeof ReadableStream !== 'undefined' && source instanceof ReadableStream) {
-    return readByteStream(source as ReadableStream<Uint8Array>, onProgress)
+    return readByteStream(source as ReadableStream<Uint8Array>, onProgress, undefined, signal)
   }
   // Realm-proof byte checks. `instanceof Uint8Array` fails when the source was
   // created in a different VM realm — under vitest's jsdom environment a Node
@@ -307,10 +339,7 @@ async function openFetch(input: string | Request, init: RequestInit | undefined,
     const url = typeof input === 'string' ? input : input.url
     throw new Error(`Cannot download ${url}: fetch is not available in this environment`)
   }
-  // fetch(request, { signal }) replaces the Request's own signal, so it joins the load's.
-  const own = init?.signal ?? (typeof input === 'string' ? undefined : input.signal)
-  const combined = eitherSignal(own ?? undefined, signal)
-  return openResponse(await fetch(input, combined ? { ...init, signal: combined } : init), listeners, signal)
+  return openResponse(await fetch(input, withSignal(input, init, signal)), listeners, signal)
 }
 
 /** Aborts when either signal does (AbortSignal.any where it exists and accepts both). */

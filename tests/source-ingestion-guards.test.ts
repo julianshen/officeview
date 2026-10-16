@@ -7,7 +7,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { loadOfficeSource } from '../src/components/loadOfficeSource'
 import { OfficePackage } from '../src/core/zip'
 import { ImportRefusal } from '../src/xlsx/storage/importSession'
-import { openByteStream } from '../src/core/stream'
+import { openByteStream, readByteStream, readSource } from '../src/core/stream'
 import { buildZip } from './helpers/zip-builder'
 import { xlsxEntries } from './helpers/xlsx-package'
 
@@ -132,10 +132,13 @@ describe('the per-load signal reaches fetch (PR #11 P2, stream.ts openFetch)', (
 })
 
 /** A body that records pulls and cancellation of its underlying source. */
-function trackedBody() {
+function trackedBody(chunks = Infinity) {
   const log = { pulls: 0, cancelled: false }
   const stream = new ReadableStream<Uint8Array>({
-    pull(controller) { log.pulls++; controller.enqueue(new Uint8Array(1024)) },
+    pull(controller) {
+      if (++log.pulls > chunks) controller.close()
+      else controller.enqueue(new Uint8Array(1024))
+    },
     cancel() { log.cancelled = true },
   }, { highWaterMark: 0 })
   return { stream, log }
@@ -161,6 +164,45 @@ describe('an already-aborted signal cancels the stream it opens (PR #11 P2, stre
     controller.abort()
     resolve(new Response(stream))
     await expect(load).rejects.toThrow()
+    await vi.waitFor(() => expect(log.cancelled).toBe(true))
+    expect(stream.locked).toBe(false)
+  })
+})
+
+describe('the public readSource/readByteStream take an abort signal too (PR #11 follow-up)', () => {
+  it('readSource with a URL descriptor or a Request forwards the signal to fetch, keeping init and the Request\'s own signal', async () => {
+    let calls = pendingFetch()
+    const controller = new AbortController()
+    const byUrl = readSource({ url: 'https://example.test/a.docx', headers: { Authorization: 'Bearer t' } }, undefined, undefined, undefined, controller.signal)
+    await vi.waitFor(() => expect(calls).toHaveLength(1))
+    expect(calls[0].init?.headers).toEqual({ Authorization: 'Bearer t' })
+    controller.abort()
+    expect(calls[0].init?.signal?.aborted).toBe(true)
+    await expect(byUrl).rejects.toThrow()
+
+    calls = pendingFetch()
+    const own = new AbortController()
+    const byRequest = readSource(new Request('https://example.test/a.docx', { signal: own.signal }), undefined, undefined, undefined, new AbortController().signal)
+    await vi.waitFor(() => expect(calls).toHaveLength(1))
+    own.abort()
+    expect(calls[0].init?.signal?.aborted).toBe(true)
+    await expect(byRequest).rejects.toThrow()
+  })
+
+  it('readByteStream stops pulling and cancels the body when the signal aborts mid-download', async () => {
+    const { stream, log } = trackedBody(64)
+    const controller = new AbortController()
+    const read = readByteStream(stream, (p) => { if (p.loaded >= 4096) controller.abort() }, undefined, controller.signal)
+    await expect(read).rejects.toMatchObject({ code: 'cancelled' })
+    expect(log.cancelled).toBe(true)
+    expect(log.pulls).toBeLessThanOrEqual(5)
+  })
+
+  it('readSource of a Response with an already-aborted signal rejects and cancels the body', async () => {
+    const { stream, log } = trackedBody(64)
+    const controller = new AbortController()
+    controller.abort()
+    await expect(readSource(new Response(stream), undefined, undefined, undefined, controller.signal)).rejects.toMatchObject({ code: 'cancelled' })
     await vi.waitFor(() => expect(log.cancelled).toBe(true))
     expect(stream.locked).toBe(false)
   })
