@@ -8,18 +8,24 @@
 import type { OfficePackage } from '../../core/zip'
 import { attrs, getChildren, parseXml, type XmlNode } from '../../core/xml'
 import { parseStyles, resolveXfStyle } from '../parse'
+import { parseThemeContext } from '../../drawing/style'
 import type { WorkbookFormatting } from '../view/contracts'
 
 export const DEFAULT_FORMATTING: WorkbookFormatting = Object.freeze({ dateSystem: '1900', styles: Object.freeze([]) })
 
 /** Same resolution as parse.ts (cellXfs → font/fill/border/numFmt). */
-export async function workbookFormatting(workbookRoot: XmlNode, stylesText: string | undefined): Promise<WorkbookFormatting> {
+export async function workbookFormatting(workbookRoot: XmlNode, stylesText: string | undefined, themeText?: string): Promise<WorkbookFormatting> {
   const pr = getChildren(workbookRoot, 'workbookPr')[0]
   const date1904 = pr ? attrs(pr).date1904 : undefined
   const dateSystem = date1904 === '1' || date1904 === 'true' ? '1904' : '1900'
   if (stylesText === undefined) return { dateSystem, styles: [] }
   const root = parseXml(stylesText)
-  const styles = await parseStyles({ xml: async (path: string) => path === 'xl/styles.xml' ? root : undefined } as unknown as OfficePackage)
+  // Theme colour references resolve against the workbook theme, as parse.ts does.
+  let palette: Record<string, string> | undefined
+  if (themeText !== undefined) {
+    try { palette = parseThemeContext(themeText).palette } catch { /* optional theme */ }
+  }
+  const styles = await parseStyles({ xml: async (path: string) => path === 'xl/styles.xml' ? root : undefined } as unknown as OfficePackage, palette)
   return {
     dateSystem,
     styles: styles.xfs.map(xf => resolveXfStyle(styles, xf)),

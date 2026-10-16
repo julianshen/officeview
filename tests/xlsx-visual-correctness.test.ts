@@ -349,3 +349,61 @@ describe('#2/#14 one Calibri fallback stack and Excel-model #### decisions', () 
     expect(String(ops.find(o => o.op === 'fillText')!.args[0])).toMatch(/^#+$/)
   })
 })
+
+describe('indexed and theme colours (fills, fonts, borders; object and paged)', () => {
+  const THEME = `<?xml version="1.0"?><a:theme xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><a:themeElements><a:clrScheme name="T">
+    <a:dk1><a:sysClr val="windowText" lastClr="000000"/></a:dk1><a:lt1><a:sysClr val="window" lastClr="FFFFFF"/></a:lt1>
+    <a:dk2><a:srgbClr val="44546A"/></a:dk2><a:lt2><a:srgbClr val="E7E6E6"/></a:lt2>
+    <a:accent1><a:srgbClr val="4472C4"/></a:accent1><a:accent2><a:srgbClr val="ED7D31"/></a:accent2><a:accent3><a:srgbClr val="A5A5A5"/></a:accent3>
+    <a:accent4><a:srgbClr val="FFC000"/></a:accent4><a:accent5><a:srgbClr val="5B9BD5"/></a:accent5><a:accent6><a:srgbClr val="70AD47"/></a:accent6>
+    <a:hlink><a:srgbClr val="0563C1"/></a:hlink><a:folHlink><a:srgbClr val="954F72"/></a:folHlink></a:clrScheme></a:themeElements></a:theme>`
+  const styles = (colors = '') => `<?xml version="1.0"?><styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">${colors}
+    <fonts count="3"><font><sz val="11"/><color theme="1"/></font><font><sz val="11"/><color theme="0"/></font><font><sz val="11"/><color indexed="10"/></font></fonts>
+    <fills count="5"><fill><patternFill patternType="none"/></fill><fill><patternFill patternType="gray125"/></fill>
+      <fill><patternFill patternType="solid"><fgColor theme="4" tint="0.79998168889431442"/><bgColor indexed="64"/></patternFill></fill>
+      <fill><patternFill patternType="solid"><fgColor theme="0" tint="-4.9989318521683403E-2"/></patternFill></fill>
+      <fill><patternFill patternType="solid"><fgColor indexed="13"/></patternFill></fill></fills>
+    <borders count="2"><border/><border><left style="thin"><color indexed="17"/></left><right style="thin"><color theme="5"/></right><top style="thin"><color indexed="64"/></top><bottom style="thin"><color auto="1"/></bottom></border></borders>
+    <cellXfs count="4"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/><xf numFmtId="0" fontId="1" fillId="2" borderId="1"/><xf numFmtId="0" fontId="2" fillId="3" borderId="0"/><xf numFmtId="0" fontId="0" fillId="4" borderId="0"/></cellXfs></styleSheet>`
+  async function both(stylesXml: string, theme?: string) {
+    const zip = await JSZip.loadAsync(await buildXlsx([{ name: 'S', rows: [{ r: 1, cells: [{ ref: 'A1', t: 'str', v: 'a', style: 1 }, { ref: 'B1', t: 'str', v: 'b', style: 2 }, { ref: 'C1', t: 'str', v: 'c', style: 3 }] }] }]))
+    zip.file('xl/styles.xml', stylesXml)
+    if (theme) {
+      zip.file('xl/theme/theme1.xml', theme)
+      const rels = (await zip.file('xl/_rels/workbook.xml.rels')!.async('string')).replace('</Relationships>', '<Relationship Id="rIdTheme" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/theme" Target="theme/theme1.xml"/></Relationships>')
+      zip.file('xl/_rels/workbook.xml.rels', rels)
+    }
+    const doc = await parseXlsx(await OfficePackage.load(await zip.generateAsync({ type: 'uint8array' })))
+    const paged = await workbookFormatting(parseXml('<workbook><workbookPr/></workbook>'), stylesXml, theme)
+    return { object: doc.cellStyles!, paged: paged.styles }
+  }
+  // Excel's swatches round its tint; float HLS lands within 2 per channel.
+  const near = (actual: string | undefined, hex: string) => {
+    expect(actual, `${actual} vs ${hex}`).toMatch(/^FF[0-9A-F]{6}$/)
+    for (let i = 0; i < 3; i++) expect(Math.abs(parseInt(actual!.slice(2 + 2 * i, 4 + 2 * i), 16) - parseInt(hex.slice(2 * i, 2 * i + 2), 16)), `${actual} vs ${hex}`).toBeLessThanOrEqual(2)
+  }
+  it('resolves theme slots (0=lt1, 1=dk1, 4=accent1) with Excel HLS tint, and the legacy indexed palette', async () => {
+    for (const table of Object.values(await both(styles(), THEME))) {
+      expect(table[0].color).toBe('FF000000')
+      expect(table[1].color).toBe('FFFFFFFF')
+      near(table[1].fillColor, 'D9E1F2') // accent1, lighter 80%
+      expect(table[1].borderColors).toEqual({ left: 'FF008000', right: 'FFED7D31' }) // indexed 17; accent2; 64/auto keep black
+      expect(table[2].color).toBe('FFFF0000') // indexed 10
+      near(table[2].fillColor, 'F2F2F2') // lt1 darker 5%
+      expect(table[3].fillColor).toBe('FFFFFF00') // indexed 13
+    }
+  })
+  it('falls back to the Office theme without a theme part and honours indexedColors overrides', async () => {
+    const override = '<colors><indexedColors>' + Array.from({ length: 64 }, (_, i) => `<rgbColor rgb="${i === 10 ? 'FF123456' : 'FF000000'}"/>`).join('') + '</indexedColors></colors>'
+    for (const table of Object.values(await both(styles(override)))) {
+      near(table[1].fillColor, 'D9E1F2')
+      expect(table[2].color).toBe('FF123456')
+    }
+  })
+  it('paints a theme-tinted fill in the static path', async () => {
+    const { object } = await both(styles(), THEME)
+    const { ctx, ops } = recordingContext()
+    renderSheet(sheetOf([{ row: 0, col: 0, value: 'x', style: object[1] }]), ctx, grid([64], [20]))
+    expect(ops.some(o => o.op === 'fillRect' && typeof o.fillStyle === 'string' && /^#D[9A]E[1-3]F[1-3]$/.test(o.fillStyle))).toBe(true)
+  })
+})

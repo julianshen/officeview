@@ -20,6 +20,7 @@ import { evaluateWorkbookFormulas, markSavedValuesOnly, type WorkbookEvaluationO
 import { initializeSavedSpills } from './formula/saved-spills'
 import { dynamicMetadataIndices } from './metadata'
 import { decodeXlsxString } from './strings'
+import { resolveSheetColor, type SheetColorContext } from './sheetColors'
 import { MAX_COLS, MAX_ROWS, formatA1 } from './view/coordinates'
 import { PackageError } from '../core/package-error'
 
@@ -74,10 +75,17 @@ interface Styles {
   xfs: Array<{ numFmtId: number; fontId: number; fillId: number; borderId: number; textRotation?: number; horizontal?: string; vertical?: string; wrapText?: boolean; shrinkToFit?: boolean }>
 }
 
-async function parseStyles(pkg: OfficePackage): Promise<Styles> {
+async function parseStyles(pkg: OfficePackage, themePalette?: Readonly<Record<string, string>>): Promise<Styles> {
   const root = await pkg.xml('xl/styles.xml')
   const styles: Styles = { numFmtIds: [], numFmts: new Map(), fonts: [], fills: [], borders: [], xfs: [] }
   if (!root) return styles
+  // Indexed and theme colour references resolve here, once, for every path.
+  const indexed = getChildren(getChildren(root, 'colors')[0], 'indexedColors')[0]
+  const colorContext: SheetColorContext = {
+    ...(themePalette ? { theme: themePalette } : {}),
+    ...(indexed ? { indexed: getChildren(indexed, 'rgbColor').map(node => String(attrs(node).rgb ?? '')) } : {}),
+  }
+  const colorOf = (node: XmlNode | undefined) => node ? resolveSheetColor(attrs(node), colorContext) : undefined
   for (const numFmtsN of getChildren(root, 'numFmts')) {
     for (const nf of getChildren(numFmtsN, 'numFmt')) {
       const a = attrs(nf)
@@ -91,7 +99,7 @@ async function parseStyles(pkg: OfficePackage): Promise<Styles> {
       bold: f['b'] !== undefined,
       italic: f['i'] !== undefined,
       sizePt: f['sz'] !== undefined ? parseFloat(attrs(asNode(f['sz'])).val ?? '11') : undefined,
-      color: attrs(asNode(f['color'])).rgb as string | undefined,
+      color: colorOf(asNode(f['color'])),
     }
     styles.fonts.push(font)
   }
@@ -99,7 +107,7 @@ async function parseStyles(pkg: OfficePackage): Promise<Styles> {
     for (const fill of getChildren(fillsN, 'fill')) {
       const pattern = getChildren(fill, 'patternFill')[0]
       const fg = pattern ? getChildren(pattern, 'fgColor')[0] : undefined
-      styles.fills.push({ rgb: attrs(asNode(fg)).rgb as string | undefined, pattern: attrs(asNode(pattern)).patternType as string | undefined })
+      styles.fills.push({ rgb: colorOf(fg), pattern: attrs(asNode(pattern)).patternType as string | undefined })
     }
   }
   for (const bordersN of getChildren(root, 'borders')) {
@@ -108,12 +116,12 @@ async function parseStyles(pkg: OfficePackage): Promise<Styles> {
         const node = getChildren(border, n)[0]
         return node ? (attrs(node).style as string | undefined) : undefined
       }
-      // Side colours: explicit rgb only (auto/indexed 64 keep the black default).
+      // Side colours (auto and system indexed 64 keep the black default).
       const colors: Record<string, string> = {}
       for (const n of ['left', 'right', 'top', 'bottom']) {
         const node = getChildren(border, n)[0]
-        const rgb = node && side(n) ? attrs(getChildren(node, 'color')[0]).rgb : undefined
-        if (typeof rgb === 'string' && rgb !== '') colors[n] = rgb
+        const rgb = node && side(n) ? colorOf(getChildren(node, 'color')[0]) : undefined
+        if (rgb) colors[n] = rgb
       }
       styles.borders.push({ left: side('left'), right: side('right'), top: side('top'), bottom: side('bottom'), ...(Object.keys(colors).length ? { colors } : {}) })
     }
@@ -203,12 +211,13 @@ export async function parseXlsx(pkg: OfficePackage, options: ParseXlsxOptions = 
     try { const text=await pkg.text(metadataPath);if(text)dynamicIndices=dynamicMetadataIndices(text) }
     catch { /* Unverified optional metadata never upgrades a fixed array. */ }
   }
-  const styles = await parseStyles(pkg)
   let theme: ThemeContext = parseThemeContext()
+  let themeParsed = false
   if (themePath) {
-    try { theme = parseThemeContext(await pkg.xmlOrdered(themePath)) }
+    try { theme = parseThemeContext(await pkg.xmlOrdered(themePath)); themeParsed = true }
     catch { /* optional theme cannot invalidate usable cells */ }
   }
+  const styles = await parseStyles(pkg, themeParsed ? theme.palette : undefined)
 
   const sheets: XlsxSheet[] = []
   const workbookSheets: WorkbookSheetIdentity[] = []
