@@ -6,7 +6,7 @@ import { useState, type ChangeEvent } from 'react'
 import { createRoot } from 'react-dom/client'
 import { OfficeFile } from '../components/OfficeFile'
 import { buildDocx, buildXlsx, buildPptx, type DocxCellSpec, type DocxParaSpec, type DocxTableSpec } from '../testdata/ooxml-builders'
-import { buildOdt, odfDecimalListStyle } from '../testdata/odf-builders'
+import { buildOdt, odfDecimalListStyle, odfWriterHeadingStyles } from '../testdata/odf-builders'
 
 const p = (text: string): DocxParaSpec => ({ runs: [{ text }] })
 
@@ -229,8 +229,11 @@ async function sampleDocxProtected(): Promise<Uint8Array> {
 async function sampleOdt(): Promise<Uint8Array> {
   return buildOdt({
     extraAutoStyles: odfDecimalListStyle('DemoList'),
+    // Writer files carry their heading styles; a text:h with no style name
+    // takes the default paragraph style and would render as body text.
+    extraCommonStyles: odfWriterHeadingStyles(),
     paras: [
-      { text: 'Writer document (ODF)', heading: 1 },
+      { text: 'Writer document (ODF)', heading: 1, style: 'Heading_20_1' },
       { runs: [{ text: 'This .odt renders through the same layout engine as Word files: ' }, { text: 'styles cascade', bold: true }, { text: ' from ODF automatic styles.' }] },
     ],
     lists: [{ styleName: 'DemoList', items: [{ text: 'first item' }, { text: 'second item' }] }],
