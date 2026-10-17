@@ -4,7 +4,7 @@ import type { FormatAllocation } from '../formula/format'
 export interface FormatBudget {
   reserve(bytes: number): void
   release(bytes: number): void
-  retain?(targets: readonly object[], bytes: number, commit: () => void): void
+  retain?(targets: readonly object[], bytes: number, commit: () => void, kind?: 'diagnostic'): void
 }
 
 /** Keep builders charged through the synchronous consumer of their output. */
@@ -15,9 +15,9 @@ export function withFormatWorkspace<T>(budget: FormatBudget, run: (allocation: F
     allocate: bytes => { flush(); budget.reserve(bytes); held += bytes },
     // A helper's old argument remains aliased until it returns to its caller.
     release: bytes => { pending += bytes },
-    ...(budget.retain ? { retain: (targets: readonly object[], bytes: number, commit: () => void) => {
+    ...(budget.retain ? { retain: (targets: readonly object[], bytes: number, commit: () => void, kind?: 'diagnostic') => {
       flush()
-      budget.retain!(targets, bytes, commit)
+      budget.retain!(targets, bytes, commit, kind)
       held -= bytes
     } } : {}),
   }

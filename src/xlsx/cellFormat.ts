@@ -178,6 +178,9 @@ export function formatExtended(value: ElementValue, code: string, semantics: Res
   // need at most 9 B/unit. 128 B/unit covers these together, including cleaned
   // codes/output; finite Number text and four section records fit the fixed part.
   // The finite formatter still observes its own arbitrary text ('@') builders.
+  // Authored codes are capped at MAX_FORMAT_CODE_UNITS (255, parse.ts), so per
+  // cell this is a constant of at most 128 * 255 + 1024 = 33,664 bytes; the
+  // per-unit price stays so the same model also bounds constructed codes.
   allocation?.allocate(128 * sectionUnits(code) + 1024)
   const list = sections(code)
   if (list.some(s => s.unsupported)) return undefined

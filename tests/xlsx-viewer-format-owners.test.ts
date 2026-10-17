@@ -8,6 +8,7 @@ import { createWorkerFilterEvaluator } from '../src/worker/viewerFilterEvaluator
 import { DisplayTextLaneCache } from '../src/worker/displayTextLane'
 import { createObjectWorkbookSource } from '../src/xlsx/view/source'
 import { DocumentSession } from '../src/worker/viewerSession'
+import { WORKER_QUERY_BYTES } from '../src/worker/viewerQueryBudget'
 import * as display from '../src/xlsx/render'
 import { formatColor } from '../src/xlsx/cellFormat'
 import { MainMemoryLedger } from '../src/xlsx/view/mainLedger'
@@ -255,8 +256,8 @@ it('overlapping searches keep one diagnostic charge until the actual source clos
   const source = createObjectWorkbookSource({ sheets: [target] }, 'd'), original = source.displayText!
   const session = new DocumentSession('d', source)
   let replacement: ReturnType<typeof session.search> | undefined, diagnosticBytes = 0
-  source.displayText = (cell, id, allocation) => original(cell, id, allocation && { ...allocation, retain(targets, bytes, commit) {
-    allocation.retain!(targets, bytes, commit)
+  source.displayText = (cell, id, allocation) => original(cell, id, allocation && { ...allocation, retain(targets, bytes, commit, kind) {
+    allocation.retain!(targets, bytes, commit, kind)
     diagnosticBytes += bytes
     replacement ??= session.search(session.workbookOwner(), { text: '3', caseSensitive: true }, undefined, new AbortController().signal)
   } })
@@ -280,7 +281,7 @@ it('overlapping searches keep one diagnostic charge until the actual source clos
   } finally { await session.release() }
 })
 
-it('closing a search keeps its diagnostic share until an abort-ignoring producer drains', async () => {
+it('a stopped search keeps its diagnostic share while an abort-ignoring producer runs; source close ends it', async () => {
   const target: XlsxSheet = { ...sheet, sheetId: '1', rows: [{ index: 0, cells: [{ ref: 'A1', row: 0, col: 0, styleIndex: 0, value: 3, style: { numFmtId: 164, formatCode: '[Purple]0' } }] }] }
   const source = createObjectWorkbookSource({ sheets: [target] }, 'd'), store = source.store('1')
   const read = store.readCell.bind(store)
@@ -288,15 +289,60 @@ it('closing a search keeps its diagnostic share until an abort-ignoring producer
   const gate = new Promise<void>(resolve => { drain = resolve }), started = new Promise<void>(resolve => { began = resolve })
   store.readCell = async (at, options) => { began(); await gate; return read(at, options) }
   const session = new DocumentSession('d', source)
-  const search = session.search(session.workbookOwner(), { text: '3', caseSensitive: false }, undefined, new AbortController().signal)
+  const controller = new AbortController()
+  const search = session.search(session.workbookOwner(), { text: '3', caseSensitive: false }, undefined, controller.signal)
   try {
     await started
     expect(target.diagnostics).toHaveLength(1)
-    await session.release()
+    controller.abort()
     await search
     expect(session.memoryStats().transientBytes).toBeGreaterThan(0)
+    // Close does not wait for the producer: nothing stays charged after it.
+    await session.release()
+    expect(session.memoryStats().transientBytes).toBe(0)
     drain()
     for (let i = 0; i < 3; i++) await new Promise(resolve => setTimeout(resolve, 0))
     expect(session.memoryStats().transientBytes).toBe(0)
   } finally { drain(); await session.release(); await search }
+})
+
+it('a search producer that never settles holds one bounded allowance after the terminal and nothing after close', async () => {
+  const target: XlsxSheet = { ...sheet, sheetId: '1', rows: [{ index: 0, cells: [{ ref: 'A1', row: 0, col: 0, styleIndex: 0, value: 'alpha' }] }] }
+  const source = createObjectWorkbookSource({ sheets: [target] }, 'd'), store = source.store('1')
+  let began!: () => void
+  const started = new Promise<void>(resolve => { began = resolve })
+  // Ignores its abort signal and never settles.
+  store.readCell = () => { began(); return new Promise(() => {}) }
+  const session = new DocumentSession('d', source)
+  const controller = new AbortController()
+  const search = session.search(session.workbookOwner(), { text: 'alpha', caseSensitive: false }, undefined, controller.signal)
+  try {
+    await started
+    const searching = session.memoryStats().transientBytes
+    controller.abort()
+    expect(await search).toMatchObject({ kind: 'cancelled' })
+    const parked = session.memoryStats().transientBytes
+    // Not the whole reply/hit share: one pending raw read's bounded page.
+    expect(parked).toBeGreaterThan(0)
+    expect(parked).toBeLessThanOrEqual(WORKER_QUERY_BYTES.D / 2)
+    expect(parked).toBeLessThan(searching)
+    await session.release()
+    expect(session.memoryStats().transientBytes).toBe(0)
+  } finally { await session.release() }
+})
+
+it('worker Find keeps a retain in the session only when it is declared a diagnostic, not by its shape', async () => {
+  const target: XlsxSheet = { ...sheet, sheetId: '1', rows: [{ index: 0, cells: [{ ref: 'A1', row: 0, col: 0, styleIndex: 0, value: 'alpha' }] }] }
+  const source = createObjectWorkbookSource({ sheets: [target] }, 'd'), original = source.displayText!
+  // A retained object that merely has rows/cols is reply text, capped by the reply budget.
+  source.displayText = (cell, id, allocation) => {
+    allocation?.retain?.([{ rows: [], cols: [] }], WORKER_QUERY_BYTES.D + 1, () => {})
+    return original(cell, id, allocation)
+  }
+  const session = new DocumentSession('d', source)
+  try {
+    const result = await session.search(session.workbookOwner(), { text: 'alpha', caseSensitive: false }, undefined, new AbortController().signal)
+    expect(result).toMatchObject({ kind: 'error', error: { code: 'resource-limit' } })
+  } finally { await session.release() }
+  expect(session.memoryStats().transientBytes).toBe(0)
 })
