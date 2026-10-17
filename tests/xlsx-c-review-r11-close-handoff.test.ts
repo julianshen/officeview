@@ -28,7 +28,7 @@ for(const kind of ['sst','page'] as const)it(`a ${kind} lease crossing close eit
  }finally{await store.close();pool.close()}
 })
 
-for(const kind of ['sst','page'] as const)it(`a ${kind} lease whose cache entry is evicted mid-acquisition keeps the RAM deduction while RAM owns the buffer, and charges it in full once RAM ownership ends`,async()=>{
+for(const kind of ['sst','page'] as const)it(`a ${kind} lease whose cache entry is evicted mid-acquisition keeps the RAM deduction while RAM owns the buffer, and its backing stays charged across close`,async()=>{
  const backend=memoryPageBackend(),store=new SourcePageStore({docId:'evict-handoff',backend})
  if(kind==='sst')await store.commitStrings(0,['漢'.repeat(20000)],1)
  else{const b=new PageBuilder();for(let c=0;c<2000;c++)b.add(0,c,K_NUMBER,0,c,'',false,undefined);await store.commit({sheetId:'1',pageId:'p0',r0:0,r1:0,cellCount:2000,bytes:b.bytes,payload:b.build()})}
@@ -46,9 +46,14 @@ for(const kind of ['sst','page'] as const)it(`a ${kind} lease whose cache entry 
   expect(backend.heldBytes).toBeGreaterThanOrEqual(backing)
   expect(pool.stats().totalBytes).toBeGreaterThanOrEqual(backing)
   expect(lease.bytes).toBe(wrapper)
-  // RAM ownership ends: the holder's charge now includes the backing buffer.
+  // RAM ownership ends at close: in the same synchronous step the store moves the
+  // backing buffer's charge to a closing charge held for this live lease (r12, eager).
+  const caller=pool.charge();expect(caller.set(lease.bytes)).toBe(true)
   await store.close()
   expect(backend.heldBytes).toBe(0)
-  expect(lease.bytes).toBe(backing+wrapper)
+  expect(pool.stats().totalBytes).toBeGreaterThanOrEqual(backing+wrapper)
+  lease.release()
+  expect(pool.stats().totalBytes).toBe(caller.bytes)
+  caller.release()
  }finally{lease.release();await store.close();pool.close()}
 })

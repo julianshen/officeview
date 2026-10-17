@@ -866,9 +866,46 @@ export class SourcePageStore implements PageSink {
    * overhead, plus its backing buffer unless a RAM backend owns (and charges) it,
    * plus a page's parsed metadata. One rule for the cache handoff and for leases. */
   private recordCharge(value: CellPagePayload | StringChunk): number {
-    const owned = (buffer: ArrayBufferLike) => this.live && this.ramShared.has(buffer)
-    if ('rows' in value) return DECODED_PAGE_OVERHEAD_BYTES + (owned(value.rows.buffer) ? metaBytes(value) : payloadBytes(value))
-    return DECODED_CHUNK_OVERHEAD_BYTES + (owned(value.text.buffer) ? 0 : chunkBytes(value))
+    const cost = this.costOf(value)
+    return this.live && this.ramShared.has(cost.buffer) ? cost.full - cost.backing : cost.full
+  }
+  /** A record's immutable costs, computed once per decoded record (metadata
+   * traversal included) and reused by every charge and lease. */
+  private readonly costs = new WeakMap<object, { full: number; backing: number; buffer: ArrayBufferLike }>()
+  private costOf(value: CellPagePayload | StringChunk): { full: number; backing: number; buffer: ArrayBufferLike } {
+    let cost = this.costs.get(value)
+    if (!cost) {
+      cost = 'rows' in value
+        ? { full: DECODED_PAGE_OVERHEAD_BYTES + payloadBytes(value), backing: laneBytes(value), buffer: value.rows.buffer }
+        : { full: DECODED_CHUNK_OVERHEAD_BYTES + chunkBytes(value), backing: chunkBytes(value), buffer: value.text.buffer }
+      this.costs.set(value, cost)
+    }
+    return cost
+  }
+  /** Leases a caller holds: if the store closes while one is live, its record's
+   * charges (the RAM backing and the cache entry the close releases) move to a
+   * store-level closing charge in the same synchronous step, held until the
+   * lease is released. */
+  private readonly leases = new Set<{ record: CellPagePayload | StringChunk; callerBytes: number; closing?: PoolEntry; released: boolean }>()
+  private lease(record: CellPagePayload | StringChunk, retained: boolean, bytes: number, unpin: () => void): () => void {
+    const held = { record, callerBytes: retained ? 0 : bytes, released: false } as { record: CellPagePayload | StringChunk; callerBytes: number; closing?: PoolEntry; released: boolean }
+    this.leases.add(held)
+    return () => {
+      if (held.released) return
+      held.released = true
+      this.leases.delete(held)
+      held.closing?.release()
+      unpin()
+    }
+  }
+  /** Synchronous with the release of the RAM and cache charges in disposeOnce. */
+  private transferLeases(): void {
+    let n = 0
+    for (const held of this.leases) {
+      const bytes = this.costOf(held.record).full - held.callerBytes
+      if (bytes <= 0 || !this.pool || this.pool.closed) continue
+      try { held.closing = this.pool.retain(`source:${this.docId}:closing:${n++}`, { tier: 'source', bytes, evictable: false }) ?? undefined } catch { held.closing = undefined }
+    }
   }
   /** Bytes reserved in the pool for reads in flight (incoming buffer + decode). */
   private readingBytesNow = 0
@@ -1223,6 +1260,8 @@ export class SourcePageStore implements PageSink {
     this.construction.releaseAll()
     this.ramBytes = 0
     for (const res of this.resident.values()) res.entry?.release()
+    // In the same synchronous step: live leases keep their records charged.
+    this.transferLeases()
     this.resident.clear()
     this.loading.clear()
     this.index.clear()
@@ -1389,12 +1428,12 @@ export class SourcePageStore implements PageSink {
     if (!this.live) throw new PackageError('cancelled', 'source page store is closed')
     const key = this.stringRecordKey(kind, id)
     const resident = this.resident.get(key)
-    if (resident && resident.value === located.record && resident.entry) return { key, ...located, retained: true, bytes: resident.bytes, release: resident.entry.pin() }
-    if (resident && resident.value === located.record && !this.pool) return { key, ...located, retained: true, bytes: resident.bytes, release: () => {} }
-    // Unretained: the holder charges it; `bytes` is computed when read, so a RAM
-    // deduction ends with RAM ownership and the full backing moves to the holder.
-    const store = this, record = located.record
-    return { key, ...located, retained: false, get bytes() { return store.recordCharge(record) }, release: () => {} }
+    if (resident && resident.value === located.record && resident.entry) return { key, ...located, retained: true, bytes: resident.bytes, release: this.lease(located.record, true, resident.bytes, resident.entry.pin()) }
+    if (resident && resident.value === located.record && !this.pool) return { key, ...located, retained: true, bytes: resident.bytes, release: this.lease(located.record, true, resident.bytes, () => {}) }
+    // Unretained: the holder charges `bytes` (fixed); if the store closes while the
+    // lease is held, the rest of the record's charge moves to a closing charge.
+    const bytes = this.recordCharge(located.record)
+    return { key, ...located, retained: false, bytes, release: this.lease(located.record, false, bytes, () => {}) }
   }
   /** A decoded page kept owned for the caller's lifetime: its pool charge is
    * pinned (no eviction) until `release`. `retained: false` means the pool
@@ -1404,11 +1443,11 @@ export class SourcePageStore implements PageSink {
     const page = await this.page(sheetId, pageId)
     if (!this.live) throw new PackageError('cancelled', 'source page store is closed')
     const resident = this.resident.get(key)
-    if (resident && resident.value === page && resident.entry) return { page, retained: true, bytes: resident.bytes, release: resident.entry.pin() }
+    if (resident && resident.value === page && resident.entry) return { page, retained: true, bytes: resident.bytes, release: this.lease(page, true, resident.bytes, resident.entry.pin()) }
     // Local LRU (no pool): keep it resident by recency only; nothing evicts it during a synchronous extraction.
-    if (resident && resident.value === page && !this.pool) return { page, retained: true, bytes: resident.bytes, release: () => {} }
-    const store = this
-    return { page, retained: false, get bytes() { return store.recordCharge(page) }, release: () => {} }
+    if (resident && resident.value === page && !this.pool) return { page, retained: true, bytes: resident.bytes, release: this.lease(page, true, resident.bytes, () => {}) }
+    const bytes = this.recordCharge(page)
+    return { page, retained: false, bytes, release: this.lease(page, false, bytes, () => {}) }
   }
   async sharedString(id: number): Promise<string | undefined> {
     if (!Number.isSafeInteger(id) || id < 0 || id >= this.stringCount || this.stringChunkSize === 0) return undefined
