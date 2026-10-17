@@ -54,8 +54,9 @@ export const ROW_CHUNK_COLS = 256
 export function rowCacheBudget(profile: ProfileId): number { return MAIN_THREAD_BUDGETS[profile] / 4 }
 const DRAWING_MEMORY_MESSAGE = "This sheet's drawings need more main-thread memory than the document has free and are not shown"
 /** FC-T2: no receiving grant fits now; nothing (more) is sent, and the cache may ask again. */
-function drawingGrantRefusal(command: CommandOf<'read'>): WorkerReply<'read'> {
-  return reply(command, command.owner, { kind: 'complete', result: { kind: 'read', result: { op: 'drawings', result: unavailableDrawings(DRAWING_MEMORY_MESSAGE, { code: 'resource-limit', retryable: true, message: DRAWING_MEMORY_MESSAGE }, DRAWING_MEMORY_REFUSED) } } })
+const DRAWING_WORKER_MEMORY_MESSAGE = "This sheet's drawings could not be prepared within the viewer worker's free memory and are not shown yet"
+function drawingGrantRefusal(command: CommandOf<'read'>, message = DRAWING_MEMORY_MESSAGE): WorkerReply<'read'> {
+  return reply(command, command.owner, { kind: 'complete', result: { kind: 'read', result: { op: 'drawings', result: unavailableDrawings(message, { code: 'resource-limit', retryable: true, message }, DRAWING_MEMORY_REFUSED) } } })
 }
 /** The bytes a granted reply adopts from its grant: its stamped size, or the whole grant. */
 function grantedBytes(reply: WorkerReply, grant: number): number {
@@ -516,7 +517,7 @@ export class RemoteWorkbook implements WorkbookSource {
   private drawingRetry(command: CommandOf<'read'>, quota: WorkerReply<'read'>, signal?: AbortSignal): Promise<Settled<'read'>> | WorkerReply<'read'> {
     const required = quota.kind === 'quota' ? quota.requiredBytes : undefined
     // Unmeasurable under the worker's current pressure: the cache asks later.
-    if (required === undefined) return drawingGrantRefusal(command)
+    if (required === undefined) return drawingGrantRefusal(command, DRAWING_WORKER_MEMORY_MESSAGE)
     if (this.closed || signal?.aborted || command.query.op !== 'drawings' || command.query.replyByteLimit !== undefined) return drawingGrantRefusal(command)
     const requestId = this.nextRequestId()
     const replyByteLimit = required + 2 * Math.max(0, requestId.length - command.requestId.length)

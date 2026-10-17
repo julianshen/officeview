@@ -39,12 +39,10 @@ export function estimatePayloadBytes(value: unknown, maxNodes = 200_000): number
 
 /** Workspace the exact walk admits per distinct object: a visited-Set slot
  * (64 B, hash table included), a stack reference (8 B) and, for a typed view,
- * a buffer-dedup Set slot (64 B). The first MEASURE_FIRST_CHUNK_ENTRIES
- * entries are a constant scratch allowance (at most 8,704 B, like the walk's
- * own frames), so a small payload-free reply is measurable under any pressure;
- * beyond it, chunks doubling up to MEASURE_CHUNK_ENTRIES are admitted before
- * the walk grows into them (the admitted workspace stays within twice what
- * the walk holds). */
+ * a buffer-dedup Set slot (64 B). Every entry is admitted before the walk
+ * creates it, in chunks that start at MEASURE_FIRST_CHUNK_ENTRIES and double
+ * up to MEASURE_CHUNK_ENTRIES (the admitted workspace stays within twice what
+ * the walk holds). Small kernel-built replies are sized by smallTreeBytes. */
 export const MEASURE_ENTRY_BYTES = 136
 export const MEASURE_FIRST_CHUNK_ENTRIES = 64
 export const MEASURE_CHUNK_ENTRIES = 4096
@@ -64,7 +62,7 @@ const hasOwn = Object.prototype.hasOwnProperty
 export function measurePayloadBytes(value: unknown, admit: (bytes: number) => boolean = () => true): number | undefined {
   const buffers = new Set<ArrayBufferLike>(), visited = new Set<object>()
   const stack: object[] = []
-  let bytes = 0, room = MEASURE_FIRST_CHUNK_ENTRIES
+  let bytes = 0, room = 0
   // Adds a value's own cost; an object not yet seen is queued for its slots.
   const add = (v: unknown): boolean => {
     switch (typeof v) {
@@ -113,4 +111,39 @@ export function measurePayloadBytes(value: unknown, admit: (bytes: number) => bo
     }
   }
   return bytes
+}
+
+const SMALL_TREE_NODES = 64
+const SMALL_TREE_DEPTH = 8
+/**
+ * measurePayloadBytes of a small TREE of plain objects, arrays and primitives
+ * (a kernel-built payload-free reply: refusal, cancellation, error), computed
+ * by bounded recursion with no Sets or arrays: its workspace is a constant
+ * (at most SMALL_TREE_DEPTH frames), so it needs no admission and a full pool
+ * can still size a refusal. Anything else (more than SMALL_TREE_NODES
+ * objects, deeper, buffers, Maps, Sets) is undefined: use the admitted walk.
+ * Without sharing, a tree's size equals the exact measure.
+ */
+export function smallTreeBytes(value: unknown): number | undefined {
+  let nodes = 0
+  const size = (v: unknown, depth: number): number => {
+    switch (typeof v) {
+      case 'string': return 16 + v.length * 2
+      case 'object': break
+      default: return 8
+    }
+    if (v === null) return 8
+    if (++nodes > SMALL_TREE_NODES || depth > SMALL_TREE_DEPTH || ArrayBuffer.isView(v) || v instanceof ArrayBuffer || v instanceof Map || v instanceof Set) return NaN
+    let bytes = 0
+    if (Array.isArray(v)) {
+      bytes = 16 + v.length * 8
+      for (let i = 0; i < v.length; i++) bytes += size(v[i], depth + 1)
+      return bytes
+    }
+    bytes = 24
+    for (const key in v) if (hasOwn.call(v, key)) bytes += 16 + size((v as Record<string, unknown>)[key], depth + 1)
+    return bytes
+  }
+  const bytes = size(value, 0)
+  return Number.isNaN(bytes) ? undefined : bytes
 }

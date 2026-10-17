@@ -12,6 +12,8 @@ import { ViewerClient } from '../src/worker/viewerClient'
 import { RemoteWorkbook } from '../src/worker/viewerRemoteSource'
 import { createObjectWorkbookSource } from '../src/worker/viewerObjectSource'
 import { initialIdentity, type CommandOf } from '../src/worker/viewerProtocol'
+import { admitReply } from '../src/worker/viewerReplyLimit'
+import { MemoryPool } from '../src/xlsx/view/tileCache'
 import type { WorkerReply } from '../src/xlsx/view/contracts'
 import type { XlsxDocument } from '../src/xlsx/types'
 import { drawingDoc, drawingsOf } from './helpers/drawing-grant'
@@ -92,15 +94,38 @@ describe('R1: no unadmitted measurement workspace', () => {
       expect(bytes.measurePayloadBytes(graph, n => { admitted.push(n); return true })).toBe(16 + 10_000 * 8 + 10_000 * (24 + 16 + 8))
       expect(keys).not.toHaveBeenCalled()
     } finally { keys.mockRestore() }
-    // 10,001 objects: past the constant 64-entry scratch, chunks doubling up to 4,096 entries.
-    expect(admitted.map(n => n / bytes.MEASURE_ENTRY_BYTES)).toEqual([64, 128, 256, 512, 1024, 2048, 4096, 4096])
-    expect(64 + admitted.reduce((a, b) => a + b, 0) / bytes.MEASURE_ENTRY_BYTES).toBeGreaterThanOrEqual(10_001)
+    // 10,001 objects: a first chunk before the walk starts, then chunks doubling up to 4,096 entries.
+    expect(admitted.map(n => n / bytes.MEASURE_ENTRY_BYTES)).toEqual([64, 64, 128, 256, 512, 1024, 2048, 4096, 4096])
+    expect(admitted.reduce((a, b) => a + b, 0) / bytes.MEASURE_ENTRY_BYTES).toBeGreaterThanOrEqual(10_001)
     let calls = 0
     expect(bytes.measurePayloadBytes(graph, () => ++calls < 2)).toBeUndefined()
     expect(calls).toBe(2)
-    // A small reply fits the constant scratch: measurable under any pressure.
-    expect(bytes.measurePayloadBytes({ a: 1 }, () => false)).toBe(24 + 16 + 8)
-    expect(bytes.measurePayloadBytes(Array.from({ length: 64 }, () => ({})), () => false), 'the 65th object needs an admitted chunk').toBeUndefined()
+    // Confirmation r3 F1: no unadmitted allowance, even for a one-object walk.
+    expect(bytes.measurePayloadBytes({ a: 1 }, () => false), 'nothing is walked before the first chunk is admitted').toBeUndefined()
+  })
+
+  it('funds every walked entry: 127 zero-length views under an 8,704 B pool are admitted at 17,408 B or refused', () => {
+    const buffer = new ArrayBuffer(0)
+    const value = Array.from({ length: 127 }, () => new Uint8Array(buffer))
+    const pool = new MemoryPool({ limitBytes: 8704 }), share = pool.charge()
+    let admitted = 0
+    const measured = bytes.measurePayloadBytes(value, n => share.set(admitted += n))
+    if (measured !== undefined) expect(admitted).toBeGreaterThanOrEqual(128 * bytes.MEASURE_ENTRY_BYTES)
+    expect(measured).toBeUndefined()
+    share.release()
+  })
+
+  it('still sizes the kernel-built payload-free replies when the pool admits nothing', () => {
+    const command = read('full', 1 << 20)
+    const cancelled = { kind: 'cancelled', commandKind: 'read', requestId: 'full', owner: command.owner, diagnostics: [{ code: 'query-timeout', message: 'Query timed out' }] } as WorkerReply
+    const out = admitReply(command, cancelled, 1 << 20, () => false)
+    expect(out).toMatchObject({ kind: 'cancelled', diagnostics: [{ code: 'query-timeout' }] })
+    expect(out.replyBytes).toBe(bytes.measurePayloadBytes(out))
+    const payload = { ...cancelled, kind: 'complete', result: { kind: 'read', result: { op: 'drawings', result: { completeness: 'complete', drawings: Array.from({ length: 100 }, () => ({})), images: [], diagnostics: [], bytes: 0 } } } } as unknown as WorkerReply
+    const refused = admitReply(command, payload, 1 << 20, () => false)
+    expect(refused).toMatchObject({ kind: 'quota', limitBytes: 1 << 20 })
+    expect('requiredBytes' in refused).toBe(false)
+    expect(refused.replyBytes).toBe(bytes.measurePayloadBytes(refused))
   })
 
   it('refuses a reply whose workspace the worker pool cannot admit as a sizeless quota, which main retries', async () => {
@@ -116,6 +141,11 @@ describe('R1: no unadmitted measurement workspace', () => {
       expect(f.kernel.lifecycleStats().transientBytes).toBe(0)
       const out = await f.remote.request(read('pressed-main'))
       expect(out).toMatchObject({ kind: 'complete', result: { result: { result: { completeness: 'incomplete', error: { code: 'resource-limit', retryable: true } } } } })
+      // Confirmation r3 F2: the refusal names the worker's memory, not main's.
+      const refusal = drawingsOf(out as WorkerReply)!
+      expect(refusal.error?.message).toMatch(/worker/i)
+      expect(refusal.error?.message).not.toMatch(/main-thread/)
+      expect(refusal.diagnostics[0].message).toBe(refusal.error?.message)
     } finally { await f.remote.close() }
   }, 30000)
 })

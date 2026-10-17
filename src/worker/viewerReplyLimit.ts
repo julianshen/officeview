@@ -10,12 +10,13 @@
  * Main-safe: protocol helpers and the pure measure only.
  */
 import type { WorkerReply } from '../xlsx/view/contracts'
-import { measurePayloadBytes } from '../xlsx/view/payloadBytes'
+import { measurePayloadBytes, smallTreeBytes } from '../xlsx/view/payloadBytes'
 import { CANCEL_MESSAGES, reply, type CommandOf } from './viewerProtocol'
 
 /** The fixed-shape reply that replaces a drawings reply over its grant. */
 export function replyLimitRefusal(command: CommandOf<'read'>, requiredBytes: number | undefined, limitBytes: number): WorkerReply<'read'> {
-  // No size when the reply was too large to measure: asking again cannot help.
+  // No size when the worker could not admit the walk's workspace: there is no
+  // immediate size-based re-ask (main refuses retryably; the cache asks later).
   return reply(command, command.owner, { kind: 'quota', resource: 'memory', ...(requiredBytes === undefined ? {} : { requiredBytes }), limitBytes })
 }
 /** `out` with `replyBytes`, its exact size including that field, when
@@ -24,14 +25,16 @@ export function replyLimitRefusal(command: CommandOf<'read'>, requiredBytes: num
  * payload-free quota reply (sized too; no requiredBytes when unmeasurable). */
 export function admitReply(command: CommandOf<'read'>, out: WorkerReply, limit: number, admit: (bytes: number) => boolean): WorkerReply {
   const sized = { ...out, replyBytes: 0 }
-  const bytes = measurePayloadBytes(sized, admit)
+  // A small payload-free tree needs no workspace; anything else walks admitted.
+  const bytes = smallTreeBytes(sized) ?? measurePayloadBytes(sized, admit)
   if (bytes !== undefined && bytes <= limit) { sized.replyBytes = bytes; return sized }
   return withReplyBytes(replyLimitRefusal(command, bytes, limit))
 }
-/** A small payload-free reply with its exact size stamped. */
+/** A kernel-built payload-free reply with its exact size stamped, sized
+ * without any walk workspace (smallTreeBytes), so it is always postable. */
 function withReplyBytes(out: WorkerReply): WorkerReply {
   const sized = { ...out, replyBytes: 0 }
-  sized.replyBytes = measurePayloadBytes(sized)!
+  sized.replyBytes = smallTreeBytes(sized)!
   return sized
 }
 /** The smallest grant the worker can always honour for `command`: its largest
