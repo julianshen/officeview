@@ -144,11 +144,12 @@ sheets, caches and outstanding operations; browser overhead is additional:
 | Prepared columns, within worker budget | 64 MiB / 8 columns | 32 MiB / 4 columns |
 
 Admission selects D/M automatically for desktop versus phones/tablets, including
-iPadOS. A worker-backed viewer charges its main-thread pools (copy admission,
-controls memory and the text-overflow cache) against the source's admitted
-profile, so an M-admitted source gets the M main-thread caps. Canvas/bitmap
-presentation still follows the viewport, which defaults to D, and a resident
-(non-worker) viewer uses D throughout. The M table is not an end-to-end mobile
+iPadOS. The interactive viewer uses that same profile for all of its pools: a
+worker-backed viewer uses the profile its source was admitted with, and a
+resident (non-worker) viewer detects the device the same way. So on a phone or
+tablet the main-thread pools (copy admission, controls memory, the
+text-overflow cache) and canvas/bitmap presentation (device-scale admission,
+tile cache, images) get the M caps. The M table is not an end-to-end mobile
 compliance claim. There is no public profile-selection prop.
 
 Principal default admission gates are:

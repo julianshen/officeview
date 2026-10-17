@@ -47,6 +47,7 @@ import { LayoutCache } from '../../xlsx/view/textLayout'
 import { cellDisplayText } from '../../xlsx/render'
 import { createCellLayoutHost } from '../../xlsx/view/renderViewport'
 import { createObjectWorkbookSource } from '../../worker/viewerObjectSource'
+import { detectProfile } from '../../xlsx/storage/importSession'
 import { BITMAP_BUDGETS, MAIN_THREAD_BUDGETS, type TileCacheStats } from '../../xlsx/view/tileCache'
 import { gridGeometryToViewport, gridSelectionOverlay, paintGridSelectionOverlay, type HighlightRect } from '../../core/overlay'
 import { normalizeWatermark, type WatermarkOptions } from '../../core/watermark'
@@ -133,7 +134,7 @@ export interface InteractiveSheetDocProps {
   onFrame?: (stats: SheetFrameStats) => void
   /** @internal S10.2 harness: read-only access to the document's main-thread ledger. */
   onMainLedger?: (ledger: MainMemoryLedger) => void
-  /** @internal Resource profile (desktop D / mobile M); default D. */
+  /** @internal Resource profile (desktop D / mobile M); default: the admitted source's, else the detected device profile. */
   profile?: ProfileId
   /** @internal Asset lease factory (tests inject delayed leases). */
   assetLoader?: typeof prepareSheetAssets
@@ -247,7 +248,6 @@ let copySerial = 0
 
 function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): ReactElement {
   const { doc, docId, views, watermark, fallbackFonts, allowCopy = true, allowPrint = true, showSearch = true, showZoomControls = true } = props
-  const profile = props.profile ?? 'D'
   const sheetIds = useMemo(() => doc.sheets.map(sheetIdOf), [doc])
   const [activeSheetId, setActiveSheetId] = useState(sheetIds[0] ?? '')
   const [, setTick] = useState(0)
@@ -259,6 +259,11 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
   useEffect(() => () => { void source.release() }, [source])
   // Worker-backed source: row loads, merges and adopted worker views re-render.
   const remote = isRemoteWorkbook(source) ? source : null
+  // README / spec §12.4: admission selects D (desktop) or M (phones and tablets,
+  // iPadOS included); presentation (bitmap pool, DPR admission, tiles, images)
+  // follows the same device profile, not a fixed D. A worker-backed source
+  // carries the profile it was admitted with; a resident one is detected here.
+  const profile = props.profile ?? remote?.profile ?? detectProfile()
   // S10.2 §12.4: one main-thread ledger per document. A worker-backed workbook
   // owns it (row cache, view buffers, replies); a resident one gets its own.
   const mainLedger = useMemo(() => remote?.mainLedger ?? new MainMemoryLedger(), [remote, source])
