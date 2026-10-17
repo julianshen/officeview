@@ -209,13 +209,14 @@ export class ViewerKernel {
     const outgoing: (() => void)[] = []
     let ended = false
     const retain = (release: () => void) => { if (ended) release(); else outgoing.push(release) }
-    const emit = (out: WorkerReply) => {
+    // `control`: the emitting site built `out` itself, with no provider result.
+    const emit = (out: WorkerReply, control = false) => {
       if (checked && out.requestId === command.requestId) {
         // The walk's workspace is a transient share of the document pool,
         // admitted chunk by chunk before it grows and released after the walk.
         const workspace = this.sessions.get((command as CommandOf<'read'>).owner.docId)?.memory.charge()
         let held = 0
-        try { out = admitReply(command as CommandOf<'read'>, out, limit!, bytes => !workspace || workspace.set(held += bytes)) }
+        try { out = admitReply(command as CommandOf<'read'>, out, limit!, bytes => !workspace || workspace.set(held += bytes), control) }
         finally { workspace?.release() }
       }
       const transfer = transferablesOf(out)
@@ -231,7 +232,7 @@ export class ViewerKernel {
       if (typeof command.requestId !== 'string' || command.requestId.length > MAX_REQUEST_ID_UNITS) return
       if (command.kind === 'cancel') { emit(this.cancel(command)); return }
       if (this.inflight.has(command.requestId)) {
-        emit(errorReply(command, capturedOwner(command) as never, 'invalid-cursor', false, [{ code: 'duplicate-request', message: 'requestId is already in flight' }]))
+        emit(errorReply(command, capturedOwner(command) as never, 'invalid-cursor', false, [{ code: 'duplicate-request', message: 'requestId is already in flight' }]), true)
         return
       }
       if (checked && !(Number.isSafeInteger(limit) && limit! >= replyLimitEnvelope(command as CommandOf<'read'>))) {
@@ -278,19 +279,21 @@ export class ViewerKernel {
         ...(source?.openDiagnostics ?? []).filter(d => d.code !== 'cached-value-policy' && !final.diagnostics.some(existing => existing.code === d.code && existing.message === d.message)),
         { code: 'cached-value-policy', message: status.message! },
       ] } : final
-      emit(this.withReason(diagnosed, entry))
+      // Of a read's replies, only a complete one carries the provider's result;
+      // every other kind (cancelled, stale, error) is built by the kernel.
+      emit(this.withReason(diagnosed, entry), diagnosed.kind !== 'complete')
     } catch (cause) {
       if (entry?.controller.signal.aborted) {
-        emit(this.withReason(reply(command as never, entry.owner as never, { kind: 'cancelled' }), entry))
+        emit(this.withReason(reply(command as never, entry.owner as never, { kind: 'cancelled' }), entry), true)
         return
       }
       if (cause instanceof KeySetQuota) {
-        emit(reply(command as never, capturedOwner(command) as never, { kind: 'quota', resource: 'memory', requiredBytes: cause.requiredBytes, limitBytes: cause.limitBytes }))
+        emit(reply(command as never, capturedOwner(command) as never, { kind: 'quota', resource: 'memory', requiredBytes: cause.requiredBytes, limitBytes: cause.limitBytes }), true)
         return
       }
       emit(errorReply(command, capturedOwner(command) as never, 'page-error', false, [{
         code: 'worker-exception', message: cause instanceof Error ? cause.message : String(cause),
-      }]))
+      }]), true)
     } finally {
       ended = true
       for (const release of outgoing.splice(0)) release()

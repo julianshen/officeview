@@ -16,7 +16,7 @@ import { admitReply } from '../src/worker/viewerReplyLimit'
 import { MemoryPool } from '../src/xlsx/view/tileCache'
 import type { WorkerReply } from '../src/xlsx/view/contracts'
 import type { XlsxDocument } from '../src/xlsx/types'
-import { drawingDoc, drawingsOf } from './helpers/drawing-grant'
+import { drawingDoc, drawingsOf, kernelFixture } from './helpers/drawing-grant'
 
 /** A cached line chart with 64 one-point series, as the parser produces it. */
 function chart() {
@@ -95,7 +95,7 @@ describe('R1: no unadmitted measurement workspace', () => {
       expect(keys).not.toHaveBeenCalled()
     } finally { keys.mockRestore() }
     // 10,001 objects: a first chunk before the walk starts, then chunks doubling up to 4,096 entries.
-    expect(admitted.map(n => n / bytes.MEASURE_ENTRY_BYTES)).toEqual([64, 64, 128, 256, 512, 1024, 2048, 4096, 4096])
+    expect(admitted.map(n => n / bytes.MEASURE_ENTRY_BYTES)).toEqual([16, 16, 32, 64, 128, 256, 512, 1024, 2048, 4096, 4096])
     expect(admitted.reduce((a, b) => a + b, 0) / bytes.MEASURE_ENTRY_BYTES).toBeGreaterThanOrEqual(10_001)
     let calls = 0
     expect(bytes.measurePayloadBytes(graph, () => ++calls < 2)).toBeUndefined()
@@ -118,11 +118,11 @@ describe('R1: no unadmitted measurement workspace', () => {
   it('still sizes the kernel-built payload-free replies when the pool admits nothing', () => {
     const command = read('full', 1 << 20)
     const cancelled = { kind: 'cancelled', commandKind: 'read', requestId: 'full', owner: command.owner, diagnostics: [{ code: 'query-timeout', message: 'Query timed out' }] } as WorkerReply
-    const out = admitReply(command, cancelled, 1 << 20, () => false)
+    const out = admitReply(command, cancelled, 1 << 20, () => false, true)
     expect(out).toMatchObject({ kind: 'cancelled', diagnostics: [{ code: 'query-timeout' }] })
     expect(out.replyBytes).toBe(bytes.measurePayloadBytes(out))
     const payload = { ...cancelled, kind: 'complete', result: { kind: 'read', result: { op: 'drawings', result: { completeness: 'complete', drawings: Array.from({ length: 100 }, () => ({})), images: [], diagnostics: [], bytes: 0 } } } } as unknown as WorkerReply
-    const refused = admitReply(command, payload, 1 << 20, () => false)
+    const refused = admitReply(command, payload, 1 << 20, () => false, false)
     expect(refused).toMatchObject({ kind: 'quota', limitBytes: 1 << 20 })
     expect('requiredBytes' in refused).toBe(false)
     expect(refused.replyBytes).toBe(bytes.measurePayloadBytes(refused))
@@ -148,4 +148,50 @@ describe('R1: no unadmitted measurement workspace', () => {
       expect(refusal.diagnostics[0].message).toBe(refusal.error?.message)
     } finally { await f.remote.close() }
   }, 30000)
+})
+
+// Confirmation r4 (Codex, f32a676): the constant-space tree sizing is only for
+// replies the kernel builds itself; a provider graph shares objects.
+describe('r4: provider results always take the exact admitted walk', () => {
+  /** Two drawings that share one 100,000-number dash array (as resolveDrawingStyle retains it). */
+  async function sharedDash() {
+    const f = await kernelFixture()
+    const dash = Array.from({ length: 100_000 }, (_, i) => i % 7)
+    const node = (i: number) => ({ xEmu: 0, yEmu: 0, widthEmu: 1, heightEmu: 1, source: { partPath: 'd', treePath: `sp[${i}]`, element: 'sp', representation: 'native' }, style: { line: { dash } } })
+    vi.spyOn(f.source.store('s'), 'readDrawings').mockResolvedValue({ completeness: 'complete', images: [], diagnostics: [], bytes: 0, drawings: [node(0), node(1)] } as never)
+    return f
+  }
+
+  it('delivers a shared-array reply that fits, stamped with its exact deduplicated size', async () => {
+    const f = await sharedDash()
+    const { posted: [probe] } = await f.read('dash', 1 << 30)
+    const exact = probe.replyBytes!
+    expect(exact).toBe(bytes.measurePayloadBytes(probe))
+    // A tree count holds the shared array twice (about 1.6 MB more).
+    expect(bytes.smallTreeBytes(probe)! - exact).toBeGreaterThan(1_500_000)
+    const { posted: [out] } = await f.read('dash', exact)
+    expect(drawingsOf(out)?.completeness).toBe('complete')
+    expect(out.replyBytes).toBe(exact)
+  })
+
+  it('never sizes a provider result with the tree shortcut; kernel-built refusals still are', async () => {
+    const f = await sharedDash()
+    const tree = vi.spyOn(bytes, 'smallTreeBytes')
+    try {
+      await f.read('dash', 1 << 30)
+      expect(tree.mock.calls.filter(([v]) => (v as { kind?: string })?.kind === 'complete')).toEqual([])
+      tree.mockClear()
+      await f.read('tiny', 10)
+      await f.read('quota', 4096)
+      expect(tree.mock.calls.some(([v]) => (v as { kind?: string })?.kind === 'quota')).toBe(true)
+    } finally { tree.mockRestore() }
+  })
+
+  it('stops scanning a tree as soon as it is ineligible', () => {
+    let reads = 0
+    const items = Array.from({ length: 10_000 }, () => ({}))
+    const watched = new Proxy(items, { get(target, key, receiver) { if (typeof key === 'string' && /^\d+$/.test(key)) reads++; return Reflect.get(target, key, receiver) } })
+    expect(bytes.smallTreeBytes(watched)).toBeUndefined()
+    expect(reads).toBeLessThanOrEqual(65)
+  })
 })

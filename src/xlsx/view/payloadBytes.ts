@@ -44,7 +44,7 @@ export function estimatePayloadBytes(value: unknown, maxNodes = 200_000): number
  * up to MEASURE_CHUNK_ENTRIES (the admitted workspace stays within twice what
  * the walk holds). Small kernel-built replies are sized by smallTreeBytes. */
 export const MEASURE_ENTRY_BYTES = 136
-export const MEASURE_FIRST_CHUNK_ENTRIES = 64
+export const MEASURE_FIRST_CHUNK_ENTRIES = 16
 export const MEASURE_CHUNK_ENTRIES = 4096
 const hasOwn = Object.prototype.hasOwnProperty
 
@@ -116,8 +116,10 @@ export function measurePayloadBytes(value: unknown, admit: (bytes: number) => bo
 const SMALL_TREE_NODES = 64
 const SMALL_TREE_DEPTH = 8
 /**
- * measurePayloadBytes of a small TREE of plain objects, arrays and primitives
- * (a kernel-built payload-free reply: refusal, cancellation, error), computed
+ * measurePayloadBytes of a small TREE of plain objects, arrays and primitives,
+ * ONLY for replies the kernel builds itself with no provider result (refusal,
+ * cancellation, error): a provider graph may share objects, which a tree
+ * count would count twice. Computed
  * by bounded recursion with no Sets or arrays: its workspace is a constant
  * (at most SMALL_TREE_DEPTH frames), so it needs no admission and a full pool
  * can still size a refusal. Anything else (more than SMALL_TREE_NODES
@@ -134,14 +136,19 @@ export function smallTreeBytes(value: unknown): number | undefined {
     }
     if (v === null) return 8
     if (++nodes > SMALL_TREE_NODES || depth > SMALL_TREE_DEPTH || ArrayBuffer.isView(v) || v instanceof ArrayBuffer || v instanceof Map || v instanceof Set) return NaN
-    let bytes = 0
+    // An ineligible child ends the scan at once.
+    let bytes = 0, child = 0
     if (Array.isArray(v)) {
       bytes = 16 + v.length * 8
-      for (let i = 0; i < v.length; i++) bytes += size(v[i], depth + 1)
+      for (let i = 0; i < v.length; i++) { if (Number.isNaN(child = size(v[i], depth + 1))) return NaN; bytes += child }
       return bytes
     }
     bytes = 24
-    for (const key in v) if (hasOwn.call(v, key)) bytes += 16 + size((v as Record<string, unknown>)[key], depth + 1)
+    for (const key in v) {
+      if (!hasOwn.call(v, key)) continue
+      if (Number.isNaN(child = size((v as Record<string, unknown>)[key], depth + 1))) return NaN
+      bytes += 16 + child
+    }
     return bytes
   }
   const bytes = size(value, 0)

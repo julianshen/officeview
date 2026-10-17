@@ -23,10 +23,11 @@ export function replyLimitRefusal(command: CommandOf<'read'>, requiredBytes: num
  * `admit` accepts the measuring workspace and the size is within `limit`. A
  * reply over the grant, or one the pool cannot measure now, is replaced by the
  * payload-free quota reply (sized too; no requiredBytes when unmeasurable). */
-export function admitReply(command: CommandOf<'read'>, out: WorkerReply, limit: number, admit: (bytes: number) => boolean): WorkerReply {
+export function admitReply(command: CommandOf<'read'>, out: WorkerReply, limit: number, admit: (bytes: number) => boolean, control: boolean): WorkerReply {
   const sized = { ...out, replyBytes: 0 }
-  // A small payload-free tree needs no workspace; anything else walks admitted.
-  const bytes = smallTreeBytes(sized) ?? measurePayloadBytes(sized, admit)
+  // `control`: the caller built this reply itself, with no provider result (a
+  // small fresh tree, sized without workspace). Provider results walk admitted.
+  const bytes = (control ? smallTreeBytes(sized) : undefined) ?? measurePayloadBytes(sized, admit)
   if (bytes !== undefined && bytes <= limit) { sized.replyBytes = bytes; return sized }
   return withReplyBytes(replyLimitRefusal(command, bytes, limit))
 }
