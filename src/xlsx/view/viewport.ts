@@ -20,7 +20,7 @@ import type {
   LogicalViewport, OverviewDomain, OverviewGroup, RowOrder, RowPermutationBand, RowVisibility, SourceFailure, SourceStore, SparseRowPage,
   ViewportCell, ViewportOverviewGroup, ViewportResult, WorkerDiagnostic,
 } from './contracts'
-import { MAX_COLS, MAX_ROWS, isValidCoordinate, type SourceCell } from './coordinates'
+import { MAX_COLS, MAX_ROWS, isValidCoordinate, validateSourceRect, type SourceCell } from './coordinates'
 import { AxisMetricsError, createAxisMetrics, type AxisMetricsErrorCode, type SparseAxisMetrics } from './axes'
 import { createSheetMetrics, type ProjectedSheetMetrics } from './projection'
 import { RectangleIndex } from './structure'
@@ -29,6 +29,8 @@ import { createIntervalSet } from './visibility'
 import { boundOverflowCache, OverflowResourceError } from './overflowCache'
 import { NO_OVERFLOW, rowOverflowFromCells, textOverflowAllowance, type OverflowAllowance, type RowOverflowInput } from './textOverflow'
 import { hasSessionSizes, mergeAxisOverrides, remapDrawings, type SessionSizes } from './axisSizes'
+import { withFormatWorkspace, type FormatBudget } from './formatWorkspace'
+import type { FormatAllocation } from '../formula/format'
 
 // Static-renderer helpers live in a leaf module so the eager static path never
 // reaches the viewport planner; re-exported for existing callers.
@@ -729,31 +731,70 @@ function tileOverflow(boxes: Iterable<{ x: number; y: number; width: number; hei
 /** Merge index queries reused across frames of one geometry generation (plan
  * S5.1). Keys are the query rectangle and limit; the geometry object is the
  * generation (a new sheet/order/visibility builds a new geometry). */
+type MergeQueryPage = ReturnType<SheetGeometry['merges']['query']> & { memoryRefused?: boolean }
+const EMPTY_MERGE_PAGE: MergeQueryPage = Object.freeze({ items: Object.freeze([]) })
+const REFUSED_MERGE_PAGE: MergeQueryPage = Object.freeze({ ...EMPTY_MERGE_PAGE, memoryRefused: true })
 export class MergeQueryCache {
-  private readonly byGeometry = new WeakMap<SheetGeometry, Map<string, { page: ReturnType<SheetGeometry['merges']['query']>; bytes: number }>>()
+  private readonly byGeometry = new WeakMap<SheetGeometry, Map<string, { page: ReturnType<SheetGeometry['merges']['query']>; bytes: number; rect?: { r0: number; r1: number; c0: number; c1: number }; limit?: number }>>()
   hits = 0
   misses = 0
   /** Estimated bytes of the retained pages (S10.2 main ledger), across geometries. */
   bytes = 0
-  constructor(readonly maxEntries = 64) {}
-  query(geometry: SheetGeometry, rect: { r0: number; r1: number; c0: number; c1: number }, limit: number, work: ViewportWork): ReturnType<SheetGeometry['merges']['query']> {
-    let entries = this.byGeometry.get(geometry)
-    if (!entries) this.byGeometry.set(geometry, entries = new Map())
-    const key = `${rect.r0},${rect.r1},${rect.c0},${rect.c1},${limit}`
-    const hit = entries.get(key)
-    if (hit) { this.hits++; return hit.page }
-    this.misses++
-    work.mergeQueries++
-    const page = geometry.merges.query(rect, { limit })
-    const bytes = 64 + page.items.length * 48
-    entries.set(key, { page, bytes })
-    this.bytes += bytes
-    if (entries.size > this.maxEntries) {
-      const oldest = entries.keys().next().value!
-      this.bytes -= entries.get(oldest)!.bytes
-      entries.delete(oldest)
+  readonly budgetOwned: boolean
+  constructor(readonly maxEntries = 64, private readonly budget?: FormatBudget) {
+    if (budget && !budget.retain) throw new RangeError('A merge cache budget needs retained-page ownership')
+    this.budgetOwned = budget !== undefined
+  }
+  query(geometry: SheetGeometry, rect: { r0: number; r1: number; c0: number; c1: number }, limit: number, work: ViewportWork): MergeQueryPage {
+    if (geometry.merges.size === 0) {
+      validateSourceRect(rect)
+      if (!Number.isSafeInteger(limit) || limit <= 0) throw new RangeError('Invalid rectangle page limit')
+      return EMPTY_MERGE_PAGE
     }
-    return page
+    let entries = this.byGeometry.get(geometry)
+    let key: string | undefined
+    if (this.budget) {
+      // Compare bounded numeric metadata before constructing a new key, so a
+      // healthy warm hit needs no workspace reservation at all.
+      if (entries) for (const hit of entries.values()) {
+        const at = hit.rect!
+        if (hit.limit === limit && at.r0 === rect.r0 && at.r1 === rect.r1 && at.c0 === rect.c0 && at.c1 === rect.c1) { this.hits++; return hit.page }
+      }
+    } else {
+      key = `${rect.r0},${rect.r1},${rect.c0},${rect.c1},${limit}`
+      const hit = entries?.get(key)
+      if (hit) { this.hits++; return hit.page }
+    }
+    this.misses++
+    const build = (allocation?: FormatAllocation) => {
+      // The result cannot contain more than the index or requested page. The
+      // fixed part covers key/map/page metadata and their construction overlap.
+      allocation?.allocate(768 + Math.min(geometry.merges.size, limit) * 48)
+      key ??= `${rect.r0},${rect.r1},${rect.c0},${rect.c1},${limit}`
+      work.mergeQueries++
+      const page = geometry.merges.query(rect, { limit })
+      const bytes = (allocation ? 512 : 64) + page.items.length * 48
+      const publish = () => {
+        if (!entries) this.byGeometry.set(geometry, entries = new Map())
+        entries.set(key!, allocation ? { page, bytes, rect: { ...rect }, limit } : { page, bytes })
+        this.bytes += bytes
+        if (entries.size > this.maxEntries) {
+          const oldest = entries.keys().next().value!
+          this.bytes -= entries.get(oldest)!.bytes
+          entries.delete(oldest)
+        }
+      }
+      // Eviction drops the cache reference, never the charge of a caller that
+      // still holds the page or its array. A warm hit needs no new reservation.
+      if (allocation) allocation.retain!([page, page.items], bytes, publish)
+      else publish()
+      return page
+    }
+    try { return this.budget ? withFormatWorkspace(this.budget, build) : build() }
+    catch (error) {
+      if (!(error instanceof Error && 'code' in error && error.code === 'resource-limit')) throw error
+      return REFUSED_MERGE_PAGE
+    }
   }
 }
 
@@ -782,9 +823,9 @@ function detailPlan(geometry: SheetGeometry, viewport: LogicalViewport, limits: 
   const window = planWindow(metrics, viewport, limits)
   const work = window.work
   const active = activePlacement(geometry, options.activeCell, work)
-  const coarse = (message: string, groups = window.kind === 'coarse' ? window.groups : coarseGroups(metrics, [{ rows: { start: Math.max(0, viewport.box.y), end: Math.min(window.extent.height, viewport.box.y + viewport.box.height) }, cols: { start: Math.max(0, x), end: Math.min(window.extent.width, x + width) } }], window.scale, limits.overviewGroups)): ViewportPlan => {
+  const coarse = (message: string, groups = window.kind === 'coarse' ? window.groups : coarseGroups(metrics, [{ rows: { start: Math.max(0, viewport.box.y), end: Math.min(window.extent.height, viewport.box.y + viewport.box.height) }, cols: { start: Math.max(0, x), end: Math.min(window.extent.width, x + width) } }], window.scale, limits.overviewGroups), code = 'detail-limit'): ViewportPlan => {
     work.overviewGroups = groups.length
-    return { kind: 'coarse', diagnostics: [...geometry.diagnostics, { code: 'detail-limit', message }], groups, extent: window.extent, work, ...(active ? { active } : {}) }
+    return { kind: 'coarse', diagnostics: [...geometry.diagnostics, { code, message }], groups, extent: window.extent, work, ...(active ? { active } : {}) }
   }
   if (window.kind === 'coarse') return coarse(window.message)
   const { scale, extent } = window
@@ -828,6 +869,7 @@ function detailPlan(geometry: SheetGeometry, viewport: LogicalViewport, limits: 
   // source query. A merge that does touch a band is painted cell by cell.
   const rect = { r0: slots[0], r1: slots[slots.length - 1], c0, c1 }
   const page = options.merges ? options.merges.query(geometry, rect, limits.records, work) : (work.mergeQueries++, geometry.merges.query(rect, { limit: limits.records }))
+  if ('memoryRefused' in page && page.memoryRefused) return coarse('Merge queries exceed the layout memory budget', undefined, 'layout-memory')
   if (page.nextCursor !== undefined) return coarse(`more than ${limits.records} merged ranges intersect the frame`)
   // Admission from indexes only: per-row column counts by binary search, no cell content.
   let records = page.items.length

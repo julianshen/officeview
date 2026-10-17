@@ -37,7 +37,7 @@ export function createCellLayoutHost(ctx: CanvasRenderingContext2D, sheet: Parti
       // change with the box (General fitting, or no admitting section's '#'):
       // only then does the layout format again, under the same observer.
       try { text = cellDisplayText(target, cell, allocation, () => { widthDependent = true }) } catch (error) { release(); throw error }
-      return { units: Math.max(text.length, typeof cell.value === 'number' ? Math.ceil(width / 2) + 1 : 0), ...(widthDependent ? { allocation } : { text }), release }
+      return { units: Math.max(text.length, typeof cell.value === 'number' ? Math.ceil(width / 2) + 1 : 0), allocation, ...(!widthDependent ? { text } : {}), release }
     },
     canReuseOverflow: (body, overflow) => {
       const text = body.text

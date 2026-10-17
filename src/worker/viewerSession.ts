@@ -202,7 +202,7 @@ export interface WorkbookSource {
   /** S5.4: style table and date system of a source whose cells carry style ids only. */
   formatting?(): WorkbookFormatting
   /** The canonical logical display text, without materializing cell layouts. */
-  displayText?(cell: AuthoritativeCell, sheetId: string): string
+  displayText?(cell: AuthoritativeCell, sheetId: string, allocation?: import('../xlsx/formula/format').FormatAllocation): string
   release(): Promise<void>
 }
 
@@ -229,6 +229,7 @@ export type FilterEvaluator = (input: {
 }) => Promise<FilterEvaluation>
 export interface PreparedBudget { maxColumns: number; maxBytes: number }
 export interface DisplayLaneAdmissionPort {
+  workspace?: import('../xlsx/view/formatWorkspace').FormatBudget
   /** Throws ValueIndexError('quota') and changes nothing when the bytes (or a
    * dense-lane slot under maxColumns) cannot fit. */
   budget: { reserve(bytes: number): void; release(bytes: number): void; acquireSlot(): void; releaseSlot(): void }
@@ -692,11 +693,13 @@ function guardOutcome(guard: Extract<GuardOutcome, { ok: false }>, diagnostics: 
 }
 
 export class DocumentSession {
+  private readonly formatDiagnosticCharges: Charge[] = []
+  private sourceReleased = false
   private readonly projections = new Map<string, { key: string; geometry: SheetGeometry; metrics: ProjectedSheetMetrics; entry: PoolEntry; readers: number; retired: boolean }>()
   private searchState?: {
     key: string; cursor?: string; engine?: WorkbookFind; controller: AbortController;
     charge: Charge; unpins: (() => void)[]; busy: boolean; stopped: boolean;
-    emittedBytes: number; bytes: number; incomplete: Set<string>;
+    emittedBytes: number; formattedHitBytes: number; diagnosticBytes: number; producers: number; drained: boolean; bytes: number; incomplete: Set<string>;
   }
   private searchSerial = 0
   private projectionSerial = 0
@@ -1486,11 +1489,23 @@ export class DocumentSession {
    * a leased lane is held by its record until its last lease ends. */
   private displayLaneAdmission(sheetId: string): DisplayLaneAdmissionPort {
     let share: PoolCharge | null = null, building = 0
+    let formatShare: PoolCharge | null = null, formatBytes = 0
     const setShare = (bytes: number) => (share ??= this.memory.charge()).set(bytes)
     const shrinkShare = () => {
       if (building === 0) { share?.release(); share = null } else share?.set(building)
     }
     return {
+      workspace: {
+        reserve: bytes => {
+          if (!(formatShare ??= this.memory.charge()).set(formatBytes + bytes)) throw new ValueIndexError('quota', 'Formatting exceeds the worker memory budget')
+          formatBytes += bytes
+        },
+        release: bytes => {
+          formatBytes -= bytes
+          if (formatBytes) formatShare?.set(formatBytes)
+          else { formatShare?.release(); formatShare = null }
+        },
+      },
       budget: {
         reserve: bytes => {
           if (this.closed) throw new ValueIndexError('cancelled', 'Session closed')
@@ -1692,8 +1707,8 @@ export class DocumentSession {
    * not a general capability proxy. Drawing reads bypass it; main-thread value
    * readers use their original source store for payload settlement.
    */
-  preparedStore(sheetId: string): SourceStore {
-    const store = this.store(sheetId)
+  preparedStore(sheetId: string, backing?: SourceStore): SourceStore {
+    const store = backing ?? this.store(sheetId)
     const session = this
     const prepared: BoundedSortLaneStore & PreparedSortStore = {
       [PREPARED_SORT_READER]: (col, stamp) => session.preparedSortLease(sheetId, col, stamp),
@@ -2202,13 +2217,14 @@ export class DocumentSession {
       if (!state || state.key !== key || state.cursor !== cursor || state.busy) return { kind: 'error', error: failure('invalid-cursor', 'Search cursor expired or does not belong to this query') }
     } else {
       this.stopSearch()
-      state = { key, controller: new AbortController(), charge: this.charge(), unpins: [], busy: false, stopped: false, emittedBytes: 0, bytes: 0, incomplete: new Set() }
+      state = { key, controller: new AbortController(), charge: this.charge(), unpins: [], busy: false, stopped: false, emittedBytes: 0, formattedHitBytes: 0, diagnosticBytes: 0, producers: 0, drained: false, bytes: 0, incomplete: new Set() }
       this.searchState = state
     }
     const current = state!
     current.busy = true
     current.cursor = undefined
     current.emittedBytes = 0
+    current.formattedHitBytes = 0
     const abort = () => this.stopSearch(current)
     signal.addEventListener('abort', abort, { once: true })
     const profile = this.options.profile ?? 'D', budget = WORKER_QUERY_BYTES[profile]
@@ -2221,7 +2237,7 @@ export class DocumentSession {
           if (query.sheetIds && !query.sheetIds.includes(sheetId)) continue
           // Importing sheets remain searchable. A nonblocking structural probe
           // marks the result provisional until authored visibility is final.
-          const store = this.preparedStore(sheetId)
+          const store = this.preparedStore(sheetId, interruptibleStore(this.source.store(sheetId), work => this.observeSearchProducer(current, work)))
           const structure = await store.queryStructural({ r0: 0, r1: 0, c0: 0, c1: 0 }, { signal, stamp: store.stamp })
           if (structure.completeness !== 'complete') current.incomplete.add(sheetId)
           const ready = await this.ensureView(sheetId, signal)
@@ -2236,7 +2252,7 @@ export class DocumentSession {
           if (current.stopped || signal.aborted) return { kind: 'cancelled' }
           sheets.push({ sheetId, identity: view.identity, order: view.order, visibility,
             isColumnVisible: col => geometry.cols.size(col) > 0,
-            store: boundedQueryStore(this.preparedStore(sheetId), budget / 2, bytes => {
+            store: boundedQueryStore(store, budget / 2, bytes => {
               current.emittedBytes += bytes
               if (current.emittedBytes > budget) throw new FindError('resource-limit', 'Search hit page exceeds its bounded byte budget')
             }, 20_000, true, true),
@@ -2246,7 +2262,32 @@ export class DocumentSession {
           signal: current.controller.signal, currentOwner: () => this.workbookOwner(),
           awaitYield: work => this.afterYield(work, current.controller.signal),
           ...(this.options.yield ? { yield: phase => awaitQueryDeadline(this.options.yield!(phase), current.controller.signal) } : {}), ...(this.options.now ? { now: this.options.now } : {}),
-          ...(this.source.displayText ? { textOf: (cell, id) => this.source.displayText!(cell, id) } : {}),
+          formatBudget: {
+            reserve: bytes => {
+              if (!current.charge.set(current.bytes + bytes)) throw new FindError('resource-limit', 'Search formatting exceeds the worker memory budget')
+              current.bytes += bytes
+            },
+            release: bytes => { current.bytes -= bytes; current.charge.set(current.bytes) },
+            retain: (targets, bytes, commit) => {
+              // Hit text belongs to the already-reserved query reply; a source
+              // diagnostic survives the search and belongs to the session.
+              if (targets.some(target => 'rows' in target && 'cols' in target)) {
+                // These bytes are already in this share. Keep that ownership
+                // through drain, without requiring a second copy of headroom.
+                current.charge.adopt?.(targets, bytes)
+                current.diagnosticBytes += bytes
+                commit()
+                return
+              } else {
+                if (current.formattedHitBytes + bytes > budget) throw new FindError('resource-limit', 'Search formatted hits exceed the reply memory budget')
+                current.formattedHitBytes += bytes
+              }
+              commit()
+              current.bytes -= bytes
+              current.charge.set(current.bytes)
+            },
+          },
+          ...(this.source.displayText ? { textOf: (cell, id, allocation) => this.source.displayText!(cell, id, allocation) } : {}),
         })
       }
       if (signal.aborted) { this.stopSearch(current); return { kind: 'cancelled' } }
@@ -2281,7 +2322,7 @@ export class DocumentSession {
     } finally {
       signal.removeEventListener('abort', abort)
       current.busy = false
-      if (current.stopped) { current.charge.release(); for (const unpin of current.unpins.splice(0)) unpin() }
+      if (current.stopped) this.drainSearch(current)
     }
   }
   private stopSearch(state = this.searchState): void {
@@ -2289,8 +2330,24 @@ export class DocumentSession {
     state.stopped = true
     state.controller.abort()
     state.engine?.close()
-    if (!state.busy) { state.charge.release(); for (const unpin of state.unpins.splice(0)) unpin() }
+    if (!state.busy) this.drainSearch(state)
     if (this.searchState === state) this.searchState = undefined
+  }
+  private drainSearch(state: NonNullable<DocumentSession['searchState']>): void {
+    if (state.drained || !state.stopped || state.busy || state.producers > 0) return
+    state.drained = true
+    if (state.diagnosticBytes && !this.sourceReleased) {
+      // A closed pool cannot resize shares: retain its conservative old charge
+      // until the actual source close ends, rather than refunding live bytes.
+      state.charge.set(state.diagnosticBytes)
+      this.formatDiagnosticCharges.push(state.charge)
+    } else state.charge.release()
+    for (const unpin of state.unpins.splice(0)) unpin()
+  }
+  private observeSearchProducer(state: NonNullable<DocumentSession['searchState']>, work: Promise<unknown>): void {
+    state.producers++
+    const finish = () => { void Promise.resolve().then(() => { state.producers--; this.drainSearch(state) }) }
+    void work.then(finish, finish)
   }
   releaseSearch(cursor: string): boolean {
     if (!this.searchState || this.searchState.cursor !== cursor) return false
@@ -2449,6 +2506,8 @@ export class DocumentSession {
     for (const scan of this.scans.values()) scan.controller.abort()
     this.scans.clear()
     await this.source.release()
+    this.sourceReleased = true
+    for (const charge of this.formatDiagnosticCharges.splice(0)) charge.release()
   }
 }
 function sortFailure(result: Exclude<SortResult, { kind: 'complete' }>, spec: SortSpec | null): OperationOutcome {

@@ -226,6 +226,10 @@ it.each(['overview', 'viewport', 'search'] as const)('aborts %s reads and withho
   let release!: () => void, began!: () => void, readSignal: AbortSignal | undefined
   const blocked = new Promise<void>(resolve => { release = resolve })
   const started = new Promise<void>(resolve => { began = resolve })
+  let releaseCleanup!: () => void, cleanupBegan!: () => void, cleanupEnded!: () => void
+  const cleanupGate = new Promise<void>(resolve => { releaseCleanup = resolve })
+  const cleanupStarted = new Promise<void>(resolve => { cleanupBegan = resolve })
+  const cleanupFinished = new Promise<void>(resolve => { cleanupEnded = resolve })
   const store = h.source.store('s'), owner = initialIdentity('doc', 's')
   let command: WorkerCommand
   if (kind === 'overview') {
@@ -238,7 +242,11 @@ it.each(['overview', 'viewport', 'search'] as const)('aborts %s reads and withho
     command = { kind: 'viewport', requestId: h.client.nextRequestId(), owner, window: { box: { x: 0, y: 0, width: 100, height: 100 }, zoom: 1, deviceScale: 1 } }
   } else {
     const original = store.scanPopulated.bind(store)
-    vi.spyOn(store, 'scanPopulated').mockImplementation(async function* (q, o) { readSignal = o.signal; began(); await blocked; yield* original(q, { ...o, signal: new AbortController().signal }) })
+    vi.spyOn(store, 'scanPopulated').mockImplementation(async function* (q, o) {
+      readSignal = o.signal; began()
+      try { await blocked; yield* original(q, { ...o, signal: new AbortController().signal }) }
+      finally { cleanupBegan(); await cleanupGate; cleanupEnded() }
+    })
     command = { kind: 'search', requestId: h.client.nextRequestId(), owner: h.session.workbookOwner(), query: { text: 'alpha', caseSensitive: false } }
   }
   const pending = h.client.send(command)
@@ -249,8 +257,17 @@ it.each(['overview', 'viewport', 'search'] as const)('aborts %s reads and withho
     release()
     expect(await pending).toMatchObject({ kind: 'cancelled' })
     await h.port.idle()
+    if (kind === 'search') {
+      // Public cancellation settles before an abort-ignoring provider's
+      // queued iterator.return(). Its workspace stays owned through cleanup.
+      await cleanupStarted
+      expect(h.session.memoryStats().transientBytes).toBeGreaterThan(0)
+      releaseCleanup()
+      await cleanupFinished
+      await vi.waitFor(() => expect(h.session.memoryStats().transientBytes).toBe(0))
+    }
     expect(h.session.memoryStats().transientBytes).toBe(0)
-  } finally { release(); vi.restoreAllMocks(); await h.remote.release() }
+  } finally { release(); releaseCleanup(); vi.restoreAllMocks(); await h.remote.release() }
 })
 
 it('surfaces a timed-out remote query as a visible retry notice without marking the import failed', async () => {

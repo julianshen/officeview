@@ -46,6 +46,8 @@ import { FIND_PAGE_HITS, FindController, hitGeometry, navigateToHit, type FindHi
 import { LayoutCache, type CellLayoutHost, type LayoutAdmission } from '../../xlsx/view/textLayout'
 import { SharedMeasureContext } from './measureContext'
 import { cellDisplayText } from '../../xlsx/render'
+import { SemanticPresentationCache } from './formatPresentation'
+import { mainFormatBudget } from './mainFormatBudget'
 import { createObjectWorkbookSource } from '../../worker/viewerObjectSource'
 import { BITMAP_BUDGETS, MAIN_THREAD_BUDGETS, type TileCacheStats } from '../../xlsx/view/tileCache'
 import { gridGeometryToViewport, gridSelectionOverlay, paintGridSelectionOverlay, type HighlightRect } from '../../core/overlay'
@@ -275,6 +277,8 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
   // controls, overflow, and copy admission, while retaining their own props for tile
   // rendering, DPR, and presentation.
   const budgetProfile = remote?.profile ?? profile
+  const semanticFormatBudget = useMemo(() => mainFormatBudget(mainLedger, MAIN_THREAD_BUDGETS[budgetProfile]), [mainLedger, budgetProfile])
+  const mergeFormatBudget = useMemo(() => mainFormatBudget(mainLedger, MAIN_THREAD_BUDGETS[budgetProfile], 'merges'), [mainLedger, budgetProfile])
   const overflowContext = useMemo(() => ({ cache: undefined as OverflowCache | undefined }), [mainLedger, budgetProfile])
   const overflowFor = (): OverflowCache => {
     if (!overflowContext.cache || overflowContext.cache.closed) overflowContext.cache = remote ? remote.overflowFor(budgetProfile) : createDocumentOverflowCache(mainLedger, budgetProfile)
@@ -315,7 +319,12 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
   // The viewer's own pools end with the viewer; lifetime charges (geometry,
   // views, replies, the resident document) end when nothing reaches them.
   // Submitted clipboard jobs retain their own charge until they settle.
-  useEffect(() => () => { for (const pool of ['dom', 'canvasText', 'layout', 'merges'] as const) mainLedger.releaseAll(pool) }, [mainLedger])
+  useEffect(() => () => {
+    for (const pool of ['dom', 'canvasText', 'layout'] as const) mainLedger.releaseAll(pool)
+    // Adopted merge pages may still have callers after unmount. Only the
+    // legacy aggregate ends here; each adopted page ends with its aliases.
+    mainLedger.release('merges', 'caches')
+  }, [mainLedger])
   // A resident document's parsed model lives on the main thread while reachable.
   useMemo(() => { if (!remote) mainLedger.chargeWhileReachable('document', [doc], estimatePayloadBytes(doc)) }, [mainLedger, remote, doc])
   const onMainLedger = props.onMainLedger
@@ -473,7 +482,7 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
       sheet, revision: input.revision, structureGen, resizeGen, input, view, geometry: built, metrics: built.metrics, body: input.filter || input.sort ? { r0: (input.filter?.range ?? input.sort!.range).r0 + (input.filter?.range ?? input.sort!.range).headerRows, r1: (input.filter?.range ?? input.sort!.range).r1 - (input.filter?.range ?? input.sort!.range).totalsRows } : remote ? used ? { r0: used.r0, r1: used.r1 } : null : usedBody(sheet),
       // Layout records are keyed by complete identity; a new view gets its own merge cache.
       // A worker layout/merge publication changes record boxes: fresh layouts then.
-      layoutCache: previous && previous.structureGen === structureGen ? previous.layoutCache : new LayoutCache(), merges: new MergeQueryCache(),
+      layoutCache: previous && previous.structureGen === structureGen ? previous.layoutCache : new LayoutCache(), merges: new MergeQueryCache(64, mergeFormatBudget),
     }
     entries.set(sheetId, entry)
     holds.own(entry)
@@ -616,6 +625,7 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
   const measure = useMemo(() => new SharedMeasureContext(() => layoutAdmission), [layoutAdmission])
   measure.setFontGen(fontGen)
   const layoutHostFor = useMemo(() => new WeakMap<XlsxSheet, CellLayoutHost>(), [measure])
+  const semanticPresentations = useMemo(() => entry ? new SemanticPresentationCache(entry.sheet, semanticFormatBudget) : null, [entry?.sheet, identity.valueGen, semanticFormatBudget])
   const layoutHost = (sheet: XlsxSheet): CellLayoutHost => {
     let host = layoutHostFor.get(sheet)
     if (!host) layoutHostFor.set(sheet, host = measure.host(sheet))
@@ -653,7 +663,7 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
   // replies and copy sessions charge themselves where they allocate.
   const chargeMain = () => {
     let layout = 0, merges = 0
-    for (const sheetEntry of entries.values()) { layout += sheetEntry.layoutCache.stats.bytes; merges += sheetEntry.merges.bytes }
+    for (const sheetEntry of entries.values()) { layout += sheetEntry.layoutCache.stats.bytes; if (!sheetEntry.merges.budgetOwned) merges += sheetEntry.merges.bytes }
     let sized = 0
     for (const sizes of sheetSizes.values()) sized += sizes.bytes
     const updates: Array<[MainPool, string, number]> = [
@@ -783,13 +793,14 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
     const input = findInput()
     const byId = new Map(remote ? [] : sheetIds.map(id => [id, entryFor(id)]))
     const options: FindOptions = {
+      formatBudget: mainFormatBudget(mainLedger, MAIN_THREAD_BUDGETS[budgetProfile]),
       // The same canonical display text the cell paints (authored formats, semantics).
-      textOf: (cell, sheetId) => {
+      textOf: (cell, sheetId, allocation) => {
         const sheetEntry = byId.get(sheetId)
         const styled = sheetEntry && cellAt(sheetEntry, cell)
         // Worker-backed cells carry a style id; the workbook table resolves it.
-        if (sheetEntry && !styled && remote) return cellDisplayText(sheetEntry.sheet, { value: cell.value, style: remote.styleOf(cell.styleIndex) })
-        return sheetEntry ? cellDisplayText(sheetEntry.sheet, styled ?? cell) : String(cell.value ?? '')
+        if (sheetEntry && !styled && remote) return cellDisplayText(sheetEntry.sheet, { value: cell.value, style: remote.styleOf(cell.styleIndex) }, allocation)
+        return sheetEntry ? cellDisplayText(sheetEntry.sheet, styled ?? cell, allocation) : String(cell.value ?? '')
       },
     }
     runArgs.current = { input, query, options }
@@ -807,6 +818,11 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
     }).catch(error => {
       if (cancelled) return
       setSearching(false)
+      pageRef.current = null
+      activeRef.current = -1
+      setPage(null)
+      setActiveHit(-1)
+      setFindFailure({ generation: searchGen.current, message: error instanceof Error ? error.message.slice(0, 256) : 'Search failed.' })
       setAnnouncement(error instanceof Error ? error.message.slice(0, 256) : 'Search failed.')
     })
     return () => { cancelled = true; void run.catch(() => {}).finally(() => { for (const release of searched) release() }) }
@@ -848,6 +864,7 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
         refreshing = false
         if (!live || runArgs.current !== args) return
         setSearching(false)
+        setFindFailure({ generation: searchGen.current, message: error instanceof Error ? error.message.slice(0, 256) : 'Search failed.' })
         setAnnouncement(error instanceof Error ? error.message.slice(0, 256) : 'Search failed.')
       })
     }
@@ -883,7 +900,8 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
   // A paging failure of the CURRENT search (e.g. FindError resource-limit) is shown
   // with the results; the queue stays usable for later steps (§§10.4, 11.4).
   const [findFailure, setFindFailure] = useState<{ generation: number; message: string } | null>(null)
-  const searchNote = [page ? findNote(page) : undefined, findFailure && findFailure.generation === searchGen.current ? `search stopped: ${findFailure.message}` : undefined].filter(Boolean).join('; ') || undefined
+  const searchFailure = findFailure && findFailure.generation === searchGen.current ? `search stopped${remote?.queryNotice === findFailure.message ? '' : `: ${findFailure.message}`}` : undefined
+  const searchNote = [page ? findNote(page) : undefined, searchFailure].filter(Boolean).join('; ') || undefined
   /** Bring page `target` (or the last page) in, one bounded page at a time: forward
    * pulls continue the run; anything earlier restarts it from page 0. */
   const loadPage = async (from: FindPublication, target: number | 'last'): Promise<FindPublication | null> => {
@@ -1605,6 +1623,7 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
           <div data-officeview-ui="sheet-search" style={{ flex: '1 1 260px', minWidth: 0, display: 'flex', justifyContent: 'flex-end' }}>
             <SearchBar inputRef={inputRef} query={query} onQuery={text => { searchGen.current++; setQuery(text) }} count={matchCount} active={activeHit < 0 ? -1 : pageOffset + activeHit}
               countLabel={countLabel} note={searchNote}
+              failure={!page ? searchFailure : undefined}
               indexing={searching} onPrev={() => void stepHit(-1)} onNext={() => void stepHit(1)} />
           </div>
         )}
@@ -1619,7 +1638,7 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
               cellPresentation={at => {
                 const cell = cellAt(entry, at)
                 if (!cell && remote && !remote.store(activeSheetId).isKnown(at)) return { text: 'Loading…' }
-                return { text: cell ? cellDisplayText(entry.sheet, cell) : '' }
+                return cell ? semanticPresentations!.get(cell) : { text: '' }
               }}>
               <canvas ref={baseRef} data-testid="officeview-sheet-base" style={canvasStyle} />
               <canvas ref={overlayRef} data-testid="officeview-sheet-overlay" style={canvasStyle} />

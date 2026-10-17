@@ -1,4 +1,5 @@
 import { SOURCE_ALLOCATION, adoptAllocation, type AllocationReservation, type SourceAllocationOptions } from './allocationAccount'
+import type { FormatAllocation } from '../formula/format'
 /**
  * Source adapters behind the async SourceStore (spec §§4.1-4.2, plan S1.2).
  *
@@ -240,10 +241,10 @@ export class ObjectXlsxSheetAdapter implements SourceStore {
   private cellIn(row: XlsxRow, col: number): XlsxCell | undefined {
     return row.cells.find(cell => cell.col === col && cell.row === row.index)
   }
-  displayText(cell: AuthoritativeCell): string {
+  displayText(cell: AuthoritativeCell, allocation?: FormatAllocation): string {
     const k = lowerBound(this.rowIndexes, cell.row)
     const original = this.rowIndexes[k] === cell.row ? this.cellIn(this.rows[k], cell.col) : undefined
-    return cellDisplayText(this.sheet, { value: cell.value, style: original?.style })
+    return cellDisplayText(this.sheet, { value: cell.value, style: original?.style }, allocation)
   }
   async readCell(at: { row: number; col: number }, options: ReadOptions): Promise<CellRead> {
     const error = this.guard(options)
@@ -648,7 +649,7 @@ export function createObjectWorkbookSource(doc: XlsxDocument, docId: string, opt
     ...(status.message === undefined ? {} : { openDiagnostics: Object.freeze([{ code: SAVED_VALUES_DIAGNOSTIC, message: status.message }]) }),
     sheets: Object.freeze(sheets.map(({ sheet, sheetId }) => Object.freeze({ sheetId, name: sheet.name }))),
     store: storeFor,
-    displayText: (cell, sheetId) => storeFor(sheetId).displayText(cell),
+    displayText: (cell, sheetId, allocation) => storeFor(sheetId).displayText(cell, allocation),
     geometry(sheetId) {
       let geometry = geometries.get(sheetId)
       if (!geometry) {

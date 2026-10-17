@@ -48,6 +48,8 @@ import { CooperativeSlice, createHostYield, type CooperativeOptions, type HostYi
 import { buildCellRecords, LayoutAdmissionError, rawTextOf, type CellLayout, type CellLayoutHost, type LayoutAdmission, type LayoutCache, type Rect } from './textLayout'
 import { navigateSelection, type SheetNavigationSession } from './selection'
 import { createScrollWindow, navigateTo, type HiddenTargetReason, type ViewportSize } from './scrollWindow'
+import type { FormatAllocation } from '../formula/format'
+import { withFormatWorkspace, type FormatBudget } from './formatWorkspace'
 
 /** Initial bounded hit page (spec §11.4). */
 export const FIND_PAGE_HITS = 200
@@ -87,7 +89,9 @@ export interface FindOptions extends CooperativeOptions<FindPhase> {
   hitBufferBudget?: number
   signal?: AbortSignal
   /** Host display formatter; defaults to the raw logical text. */
-  textOf?: (cell: AuthoritativeCell, sheetId: string) => string
+  textOf?: (cell: AuthoritativeCell, sheetId: string, allocation?: FormatAllocation) => string
+  /** Session/main owner of formatting builders and matching scratch. */
+  formatBudget?: FormatBudget
   /** The host's current aggregate owner, checked after every await. */
   currentOwner?: () => WorkbookOwner
 }
@@ -472,12 +476,8 @@ export class WorkbookFind {
       this.unavailable++
       return undefined
     }
-    let text: string
-    if (this.options.textOf) {
-      this.stats.textsFormatted++
-      text = this.options.textOf(cell, sheet.sheetId)
-    } else text = rawTextOf(cell.value)
-    if (!firstMatch(text, this.needle, this.query.caseSensitive)) return undefined
+    if (this.options.textOf) this.stats.textsFormatted++
+    if (!this.withText(cell, sheet.sheetId, text => firstMatch(text, this.needle, this.query.caseSensitive))) return undefined
     this.stats.hitsRecorded++
     return slot * MAX_COLS + cell.col
   }
@@ -555,11 +555,25 @@ export class WorkbookFind {
       return undefined
     }
     if (read.kind !== 'cell') throw new FindError('stale', `Source cell ${row},${col} of sheet ${sheet.sheetId} changed`)
-    const text = this.options.textOf ? this.options.textOf(read.cell, sheet.sheetId) : rawTextOf(read.cell.value)
-    const match = firstMatch(text, this.needle, this.query.caseSensitive)
-    if (!match) throw new FindError('stale', `Source cell ${row},${col} of sheet ${sheet.sheetId} changed`)
-    this.stats.hitsMaterialized++
-    return { sheetId: sheet.sheetId, cellId: cellId(row, col), source: { row, col }, text, start: match.start, end: match.end, displaySlot: slot }
+    return this.withText(read.cell, sheet.sheetId, (text, allocation) => {
+      const match = firstMatch(text, this.needle, this.query.caseSensitive)
+      if (!match) throw new FindError('stale', `Source cell ${row},${col} of sheet ${sheet.sheetId} changed`)
+      allocation?.allocate(text.length * 2 + 128)
+      const hit = { sheetId: sheet.sheetId, cellId: cellId(row, col), source: { row, col }, text, start: match.start, end: match.end, displaySlot: slot }
+      allocation?.retain?.([hit], text.length * 2 + 128, () => {})
+      this.stats.hitsMaterialized++
+      return hit
+    })
+  }
+
+  private withText<T>(cell: AuthoritativeCell, sheetId: string, consume: (text: string, allocation?: FormatAllocation) => T): T {
+    const run = (allocation?: FormatAllocation) => {
+      const text = this.options.textOf ? this.options.textOf(cell, sheetId, allocation) : rawTextOf(cell.value)
+      // Case folding and the raw-offset mapping coexist with the source text.
+      allocation?.allocate(text.length * 24 + 128)
+      return consume(text, allocation)
+    }
+    return this.options.formatBudget ? withFormatWorkspace(this.options.formatBudget, run) : run()
   }
 }
 

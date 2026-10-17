@@ -333,7 +333,7 @@ export function createFitMeasure(options: { admit: (charge: FitCharge) => boolea
     if (!c) return undefined
     reserve(cellDisplayText(options.sheet!, cell, allocation).length * 4 + LAYOUT_HEAP_BYTES, 0)
     host ??= createCellLayoutHost(c, options.sheet!)
-    const body = host.layoutBody(cell, widthCss, RESIZE_LIMITS.row.max)
+    const body = host.layoutBody(cell, widthCss, RESIZE_LIMITS.row.max, undefined, undefined, allocation)
     if (body.text?.kind !== 'layout') return undefined
     return body.text.rotation ? rotatedExtent(body.text.layout, c) : body.text.layout.height
   } : undefined

@@ -18,6 +18,7 @@ export function SearchBar({
   onNext,
   countLabel,
   note,
+  failure,
 }: {
   inputRef: React.RefObject<HTMLInputElement | null>
   query: string
@@ -31,9 +32,11 @@ export function SearchBar({
   countLabel?: string
   /** Qualifier appended in parentheses (unavailable values, incomplete sheets). */
   note?: string
+  /** A failed search has no final match count. */
+  failure?: string
 }): ReactElement {
   const qualifier = note ? ` (${note})` : ''
-  const status = indexing ? 'indexing…' : count === 0 ? (query ? `no matches${qualifier}` : '') : `${active + 1} of ${countLabel ?? count}${qualifier}`
+  const status = indexing ? 'indexing…' : failure ?? (count === 0 ? (query ? `no matches${qualifier}` : '') : `${active + 1} of ${countLabel ?? count}${qualifier}`)
   const btn: CSSProperties = {
     height: T(28),
     minWidth: T(28),

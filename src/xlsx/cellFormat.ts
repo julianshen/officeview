@@ -44,6 +44,21 @@ const ELAPSED_OPEN = '\u0002', ELAPSED_CLOSE = '\u0003'
 /** A value no conditional section admits: Excel fills the cell with '#'. */
 export const NO_SECTION: unique symbol = Symbol('no-section')
 
+/** Find the retained prefix without constructing section bodies or a tail list. */
+function sectionUnits(code: string): number {
+  let count = 0
+  for (let i = 0; i < code.length; i++) {
+    const ch = code[i]
+    if (ch === '"' || ch === '[') {
+      const end = code.indexOf(ch === '"' ? '"' : ']', i + 1)
+      if (end < 0) return code.length
+      i = end
+    } else if (ch === '\\' || ch === '_' || ch === '*') i++
+    else if (ch === ';' && ++count === 4) return i + 1
+  }
+  return code.length
+}
+
 /** Split on unquoted, unescaped ';' and strip each section's bracket tokens. */
 function sections(code: string): Section[] {
   const out: Section[] = []
@@ -70,12 +85,15 @@ function sections(code: string): Section[] {
       } else if (/^(h+|m+|s+)$/.test(lower)) body += ELAPSED_OPEN + lower + ELAPSED_CLOSE
       else if (lower.startsWith('$')) {
         // [$€-407]: the currency literal; [$-409]: a locale tag only.
-        const symbol = tag.slice(1).split('-')[0]
+        const dash = tag.indexOf('-', 1)
+        const symbol = tag.slice(1, dash < 0 ? undefined : dash)
         if (symbol) body += `"${symbol.replace(/"/g, '')}"`
       } else unsupported = true
       i = end
     } else if (ch === ';') {
       out.push({ body, color, condition, unsupported })
+      // Selection uses only the first four sections; never build discarded tail.
+      if (out.length === 4) return out
       body = ''; color = undefined; condition = undefined; unsupported = false
     } else if (ch === '_') {
       if (i + 1 < code.length) { body += '" "'; i++ }
@@ -84,7 +102,7 @@ function sections(code: string): Section[] {
     } else body += ch
   }
   out.push({ body, color, condition, unsupported })
-  return out.slice(0, 4)
+  return out
 }
 
 function admits(c: Condition, v: number): boolean {
@@ -126,7 +144,10 @@ function structural(body: string): string {
 /** The painted colour a format's selected section asks for, if any. */
 export function formatColor(value: ElementValue, code: string, allocation?: FormatAllocation): string | undefined {
   if (!code.includes('[')) return undefined
-  allocation?.allocate(4 * code.length + 64) // section bodies before they are built
+  // Padding expands 2 input units to 3 body units. Body concatenations, tag
+  // slices/lowercase/captures and currency escaping fit 24 B per retained unit;
+  // the fixed part covers four Section/Condition records and their array slots.
+  allocation?.allocate(24 * sectionUnits(code) + 512)
   const list = sections(code)
   if (list.some(s => s.unsupported)) return undefined
   const { index } = select(value, list)
@@ -138,9 +159,13 @@ export function formatColor(value: ElementValue, code: string, allocation?: Form
  * cannot render the code either (the caller then keeps its fallback).
  */
 export function formatExtended(value: ElementValue, code: string, semantics: ResolvedSemantics, general: (n: number) => string, allocation?: FormatAllocation): string | typeof NO_SECTION | undefined {
-  // Admitted before any section body is built: rebuilt sections and output are
-  // bounded by the code (literals) plus finite numeric text.
-  allocation?.allocate(4 * code.length + 512)
+  // Above the section workspace (24 B/unit), the exclusive extended branches
+  // need at most 72 B/unit for elapsed tokens/slots plus their filtered slots,
+  // or scientific captures/placeholder arrays. Three expanded body/mask copies
+  // need at most 9 B/unit. 128 B/unit covers these together, including cleaned
+  // codes/output; finite Number text and four section records fit the fixed part.
+  // The finite formatter still observes its own arbitrary text ('@') builders.
+  allocation?.allocate(128 * sectionUnits(code) + 1024)
   const list = sections(code)
   if (list.some(s => s.unsupported)) return undefined
   const { index, signed } = select(value, list)
