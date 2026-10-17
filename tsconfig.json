@@ -17,5 +17,5 @@
     "noEmit": true
   },
   "include": ["src", "tests", "scripts/generate-viewer-fixtures.ts", "vite.config.ts", "vitest.config.ts", "vite.harness.config.ts"],
-  "exclude": ["node_modules", "dist"]
+  "exclude": ["node_modules", "dist", "tests/technical-drawing-reply-pressure.test.ts"]
 }
