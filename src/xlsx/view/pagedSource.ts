@@ -559,8 +559,10 @@ export class PagedXlsxSheetAdapter implements SourceStore {
     let reserved = base
     // Live charges of the records being read (a page, a string record) that the pool could not keep:
     // part of EVERY admission until the record is released (ownRecord / disown).
-    const charges = { page: 0, string: 0 }
-    const charged = () => charges.page + charges.string
+    // The unretained holders themselves, read at every admission: a lease's charge
+    // can grow while it is held (its RAM owner released the shared buffer).
+    const charges: { page?: { bytes: number }; string?: { bytes: number } } = {}
+    const charged = () => (charges.page?.bytes ?? 0) + (charges.string?.bytes ?? 0)
     const reserve = (bytes: number): boolean => {
       if (reserved + bytes - base > charts.CHART_TEXT_BYTES_LIMIT || !admit(reserved + charged() + bytes)) return false
       reserved += bytes
@@ -580,12 +582,12 @@ export class PagedXlsxSheetAdapter implements SourceStore {
      * admitted). The charge stays in every admission until `disown`. */
     const ownRecord = <T extends { retained: boolean; bytes: number; release: () => void }>(held: T, slot: 'page' | 'string'): boolean => {
       if (held.retained) return true
-      charges[slot] = held.bytes
+      charges[slot] = held
       if (admit(reserved + charged())) return true
-      held.release(); charges[slot] = 0
+      held.release(); charges[slot] = undefined
       return false
     }
-    const disown = (held: { release: () => void } | undefined, slot: 'page' | 'string') => { held?.release(); charges[slot] = 0 }
+    const disown = (held: { release: () => void } | undefined, slot: 'page' | 'string') => { held?.release(); charges[slot] = undefined }
     // Number reading and label construction for one cell's text (record: typed storage).
     const takeText = (slot: number, kind: number, record: { text: Uint16Array; textStart: Uint32Array }, at: number, style: XlsxCellStyle | undefined): boolean => {
       const from = record.textStart[at], length = record.textStart[at + 1] - from
