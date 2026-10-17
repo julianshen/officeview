@@ -26,7 +26,7 @@ import type {
 } from '../xlsx/view/contracts'
 import type { XlsxDocument } from '../xlsx/types'
 import {
-  CANCEL_MESSAGES, displayBitsetsFromVisibility, isUint16Array, refusalReply, reply, transferablesOf, TransferAccounting,
+  CANCEL_MESSAGES, displayBitsetsFromVisibility, MAX_REQUEST_ID_UNITS, isUint16Array, refusalReply, reply, transferablesOf, TransferAccounting,
   type CancelReason, type CommandOf, type ReplyBody, type TransferLedger,
 } from './viewerProtocol'
 import {
@@ -40,7 +40,7 @@ import { MAX_ROWS } from '../xlsx/view/coordinates'
 import { awaitAbortable, bindQueryDeadline } from './viewerAbort'
 import { queryPayloadBytes } from './viewerQueryBudget'
 import { replyLimitEnvelope, replyLimitRefusal } from './viewerReplyLimit'
-import { estimatePayloadBytes } from '../xlsx/view/payloadBytes'
+import { measurePayloadBytes } from '../xlsx/view/payloadBytes'
 import type { PoolCharge } from '../xlsx/view/tileCache'
 
 export type { CancelReason } from './viewerProtocol'
@@ -191,15 +191,28 @@ export class ViewerKernel {
   /** Handles one command, emitting its replies through `post`. Never throws:
    * unexpected failures become an error reply for the command's owner. */
   async handle(command: WorkerCommand, post: ReplySink): Promise<void> {
-    // FC-T2: main reserved this drawings read's receiving grant before sending
-    // it. The FINAL reply (diagnostics, cancel reason, catch paths included) is
-    // measured here, before transferablesOf and the sink's clone/postMessage;
-    // one over the grant is replaced by the payload-free quota reply.
+    // FC-T2 invariant. A drawings read whose grant is valid (a safe integer
+    // >= replyLimitEnvelope(command); requestIds are at most
+    // MAX_REQUEST_ID_UNITS units) never gets a reply posted that measures
+    // (exactly: measurePayloadBytes) more than its grant: the FINAL reply
+    // (diagnostics, cancel reason, catch paths included) is measured here,
+    // before transferablesOf and the sink's clone/postMessage, and one over the
+    // grant or too large to measure is replaced by the payload-free quota reply
+    // (<= the envelope). A malformed grant is a protocol violation main never
+    // sends; it is answered once, without running the provider, by a
+    // payload-free error reply whose size depends only on the request id and
+    // owner (also <= the envelope).
     const limit = command.kind === 'read' && command.query?.op === 'drawings' ? command.query.replyByteLimit : undefined
+    let checked = limit !== undefined
+    // Worker shares of a finished result (its outgoing clone) end only once the
+    // reply carrying it was posted, or once this command ended without it.
+    const outgoing: (() => void)[] = []
+    let ended = false
+    const retain = (release: () => void) => { if (ended) release(); else outgoing.push(release) }
     const emit = (out: WorkerReply) => {
-      if (limit !== undefined && out.requestId === command.requestId) {
-        const bytes = estimatePayloadBytes(out)
-        if (bytes > limit) out = replyLimitRefusal(command as CommandOf<'read'>, bytes, limit)
+      if (checked && out.requestId === command.requestId) {
+        const bytes = measurePayloadBytes(out)
+        if (bytes === undefined || bytes > limit!) out = replyLimitRefusal(command as CommandOf<'read'>, bytes, limit!)
       }
       const transfer = transferablesOf(out)
       this.accounting.transfer(transfer)
@@ -210,14 +223,16 @@ export class ViewerKernel {
     let report: ReturnType<ViewerKernel['reporter']> | undefined
     let dispatched: WorkerReply | undefined
     try {
+      // An over-long id cannot be answered within any bound; no client sends one.
+      if (typeof command.requestId !== 'string' || command.requestId.length > MAX_REQUEST_ID_UNITS) return
       if (command.kind === 'cancel') { emit(this.cancel(command)); return }
       if (this.inflight.has(command.requestId)) {
         emit(errorReply(command, capturedOwner(command) as never, 'invalid-cursor', false, [{ code: 'duplicate-request', message: 'requestId is already in flight' }]))
         return
       }
-      // A grant the payload-free envelope cannot fit never runs the provider.
-      if (limit !== undefined && !(Number.isSafeInteger(limit) && limit >= replyLimitEnvelope(command as CommandOf<'read'>))) {
-        emit(replyLimitRefusal(command as CommandOf<'read'>, replyLimitEnvelope(command as CommandOf<'read'>), Number.isSafeInteger(limit) ? limit : 0))
+      if (checked && !(Number.isSafeInteger(limit) && limit! >= replyLimitEnvelope(command as CommandOf<'read'>))) {
+        checked = false
+        emit(errorReply(command, capturedOwner(command) as never, 'resource-limit', false))
         return
       }
       const docId = command.kind === 'open' ? undefined : documentOf(command)
@@ -238,7 +253,7 @@ export class ViewerKernel {
         deadline = setTimeout(() => { this.abort(captured, 'query-timeout'); expired.abort() }, QUERY_DEADLINE_MS)
       }
       report = this.reporter(command, entry, emit)
-      const work = this.dispatch(command, entry.controller.signal, report)
+      const work = this.dispatch(command, entry.controller.signal, report, retain)
       const out = command.kind === 'open' || command.kind === 'close' ? await work : await awaitAbortable(work, expired.signal)
       dispatched = out
       const after = this.env.afterDispatch?.(command)
@@ -273,6 +288,8 @@ export class ViewerKernel {
         code: 'worker-exception', message: cause instanceof Error ? cause.message : String(cause),
       }]))
     } finally {
+      ended = true
+      for (const release of outgoing.splice(0)) release()
       clearTimeout(deadline)
       report?.close()
       if (entry?.controller.signal.aborted && dispatched?.kind === 'complete' && dispatched.result.kind === 'search' && dispatched.result.nextCursor) {
@@ -365,7 +382,7 @@ export class ViewerKernel {
     }
   }
 
-  private async dispatch(command: Exclude<WorkerCommand, { kind: 'cancel' }>, signal: AbortSignal, report: Report): Promise<WorkerReply> {
+  private async dispatch(command: Exclude<WorkerCommand, { kind: 'cancel' }>, signal: AbortSignal, report: Report, retain: (release: () => void) => void): Promise<WorkerReply> {
     switch (command.kind) {
       case 'open': return this.open(command, signal)
       case 'close': return this.close(command)
@@ -457,7 +474,7 @@ export class ViewerKernel {
         }
         const session = this.current(command.owner)
         if (!session) return errorReply(command, command.owner, 'stale-source', true, [{ code: 'stale-owner', message: 'Command owner is not the current committed view' }])
-        const out = await session.read(command.owner, command.query, signal)
+        const out = await session.read(command.owner, command.query, signal, retain)
         if ('kind' in out) {
           return out.kind === 'cancelled' ? reply(command, command.owner, { kind: 'cancelled' })
             : errorReply(command, command.owner, 'stale-source', true, [{ code: 'stale-owner', message: 'Command owner is not the current committed view' }])

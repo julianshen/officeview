@@ -2,51 +2,15 @@
 // FC-T2: a drawings read carries a receiving grant main reserved before it was
 // sent; the worker never posts a reply over that grant.
 import { describe, expect, it, vi } from 'vitest'
-import { ViewerKernel, connectInProcess, QUERY_DEADLINE_MS } from '../src/worker/viewerKernel'
-import { ViewerClient } from '../src/worker/viewerClient'
-import { RemoteWorkbook } from '../src/worker/viewerRemoteSource'
-import { MAIN_THREAD_BUDGETS } from '../src/xlsx/view/tileCache'
+import { QUERY_DEADLINE_MS } from '../src/worker/viewerKernel'
 import { drawingOwnerMetadataBytes } from '../src/xlsx/view/drawingOwners'
 import { DRAWING_MEMORY_REFUSED, drawingPayloadBudget } from '../src/xlsx/view/drawingPayload'
-import { createObjectWorkbookSource } from '../src/worker/viewerObjectSource'
 import { initialIdentity, transferablesOf, type CommandOf } from '../src/worker/viewerProtocol'
 import { replyLimitEnvelope } from '../src/worker/viewerReplyLimit'
-import { estimatePayloadBytes } from '../src/xlsx/view/payloadBytes'
+import { estimatePayloadBytes, measurePayloadBytes } from '../src/xlsx/view/payloadBytes'
 import { estimatePayloadBytes as ledgerEstimate } from '../src/xlsx/view/mainLedger'
 import type { WorkerReply } from '../src/xlsx/view/contracts'
-import type { XlsxDocument } from '../src/xlsx/types'
-import { workbookOf } from './helpers/xlsx-find'
-
-const E = 9525
-/** A sheet with one grouped chart and, optionally, one picture of `imageBytes`. */
-function drawingDoc(sheetIds: readonly string[] = ['s'], imageBytes = 0): XlsxDocument {
-  const doc = workbookOf(sheetIds.map(sheetId => ({ sheetId, cells: [{ row: 0, col: 0, value: 42 }] })))
-  for (const sheet of doc.sheets) {
-    sheet.columnMetrics = { maxDigitWidthPx: 7, defaultWidthPx: 80 }
-    sheet.drawings = [{
-      xEmu: 80 * E, yEmu: 0, widthEmu: 80 * E, heightEmu: 20 * E,
-      source: { partPath: 'd', treePath: 'twoCellAnchor[0]/graphicFrame[0]', element: 'graphicFrame', representation: 'native' },
-      content: { kind: 'xlsxChart', chart: { groups: [{ series: [{ values: Array.from({ length: 1000 }, (_, i) => i + 42) }] }] } } as never,
-      ...(imageBytes ? { image: { data: new Uint8Array(imageBytes), mime: 'image/png', partPath: 'p.png' } } : {}),
-    }]
-    sheet.drawingAnchors = { unresolved: 0, records: [{ id: 'd', kind: 'twoCell', from: { col: 1, row: 0, colOffEmu: 0, rowOffEmu: 0 }, to: { col: 2, row: 1, colOffEmu: 0, rowOffEmu: 0 } }] }
-  }
-  return doc
-}
-async function kernelFixture(imageBytes = 4096) {
-  const doc = drawingDoc(['s'], imageBytes), source = createObjectWorkbookSource(doc, 'k')
-  const kernel = new ViewerKernel({ parse: async () => doc, openSource: async () => source }, { yield: async () => {} })
-  await kernel.handle({ kind: 'open', requestId: 'open', docId: 'k', source: { kind: 'object', document: doc }, profile: 'D' }, () => {})
-  // The raw sink: what the kernel would hand to postMessage / structuredClone.
-  const read = async (requestId: string, replyByteLimit?: number) => {
-    const posted: WorkerReply[] = []
-    const command: CommandOf<'read'> = { kind: 'read', requestId, owner: initialIdentity('k', 's'), query: { op: 'drawings', ...(replyByteLimit === undefined ? {} : { replyByteLimit }) } }
-    await kernel.handle(command, out => posted.push(out))
-    return { posted, command }
-  }
-  return { kernel, source, read }
-}
-const drawingsOf = (out: WorkerReply) => out.kind === 'complete' && out.result.kind === 'read' && out.result.result.op === 'drawings' ? out.result.result.result : undefined
+import { drawingsOf, kernelFixture, remoteFixture, until } from './helpers/drawing-grant'
 
 describe('shared reply measure', () => {
   it('is equal on the sender object and on its transferred structured clone, counting whole backing buffers once', () => {
@@ -61,10 +25,10 @@ describe('shared reply measure', () => {
       // The kernel appends cached-value diagnostics to the final reply.
       diagnostics: [{ code: 'cached-value-policy', message: 'Values are the cached values saved with the file' }],
     }
-    const before = estimatePayloadBytes(out)
+    const before = measurePayloadBytes(out)
     expect(before).toBeGreaterThanOrEqual(64 * 1024 + 8192)
     const clone = structuredClone(out, { transfer: transferablesOf(out) })
-    expect(estimatePayloadBytes(clone)).toBe(before)
+    expect(measurePayloadBytes(clone)).toBe(before)
     expect(ledgerEstimate).toBe(estimatePayloadBytes)
   })
 })
@@ -73,29 +37,29 @@ describe('kernel reply grant', () => {
   it('posts a final reply that measures exactly the grant and replaces one byte less with a payload-free quota reply', async () => {
     const { read } = await kernelFixture()
     const { posted: [full] } = await read('d0')
-    const D = estimatePayloadBytes(full)
+    const D = measurePayloadBytes(full)!
     expect(drawingsOf(full)?.completeness).toBe('complete')
 
     const exact = await read('d1', D)
     expect(exact.posted).toHaveLength(1)
     expect(drawingsOf(exact.posted[0])?.completeness).toBe('complete')
-    expect(estimatePayloadBytes(exact.posted[0])).toBe(D)
+    expect(measurePayloadBytes(exact.posted[0])).toBe(D)
 
     const under = await read('d2', D - 1)
     expect(under.posted).toHaveLength(1)
     expect(under.posted[0]).toMatchObject({ kind: 'quota', requestId: 'd2', resource: 'memory', requiredBytes: D, limitBytes: D - 1, diagnostics: [] })
     expect(transferablesOf(under.posted[0])).toEqual([])
-    expect(estimatePayloadBytes(under.posted[0])).toBeLessThanOrEqual(replyLimitEnvelope(under.command))
+    expect(measurePayloadBytes(under.posted[0])).toBeLessThanOrEqual(replyLimitEnvelope(under.command))
   })
 
   it('checks the final reply, after the cached-value diagnostics were added', async () => {
     const { source, read } = await kernelFixture()
     const { posted: [plain] } = await read('d0')
-    const D = estimatePayloadBytes(plain)
+    const D = measurePayloadBytes(plain)!
     vi.spyOn(source as unknown as { valueStatus(): unknown }, 'valueStatus').mockReturnValue({ policy: 'cached', message: 'Cached values are shown' })
     const { posted: [diagnosed] } = await read('d1')
     expect(diagnosed.diagnostics.some(d => d.code === 'cached-value-policy')).toBe(true)
-    const final = estimatePayloadBytes(diagnosed)
+    const final = measurePayloadBytes(diagnosed)!
     expect(final).toBeGreaterThan(D)
     // The provider's payload alone fits D; the diagnosed reply does not.
     const { posted: [out] } = await read('d2', final - 1)
@@ -107,62 +71,12 @@ describe('kernel reply grant', () => {
     const provider = vi.spyOn(source.store('s'), 'readDrawings')
     const { posted, command } = await read('d0', 10)
     expect(provider).not.toHaveBeenCalled()
-    expect(posted).toMatchObject([{ kind: 'quota', requestId: 'd0', diagnostics: [] }])
+    expect(posted).toMatchObject([{ kind: 'error', code: 'resource-limit', requestId: 'd0', diagnostics: [] }])
     const envelope = replyLimitEnvelope(command)
     await read('d1', envelope)
     expect(provider).toHaveBeenCalledTimes(1)
   })
 })
-
-/** A worker-backed workbook whose drawing provider can be held per call and
- * whose reply delivery can be queued (a reply posted but not yet consumed). */
-async function remoteFixture(options: { sheets?: string[]; imageBytes?: number; empty?: boolean; hold?: boolean; queue?: boolean } = {}) {
-  const sheets = options.sheets ?? ['s']
-  const doc = drawingDoc(sheets, options.imageBytes ?? 0)
-  if (options.empty) for (const sheet of doc.sheets) { sheet.drawings = []; sheet.drawingAnchors = { unresolved: 0, records: [] } }
-  const source = createObjectWorkbookSource(doc, 'r')
-  const gates: (() => void)[] = []
-  if (options.hold) for (const id of sheets) {
-    const store = source.store(id), read = store.readDrawings!.bind(store)
-    // Ignores its signal: resumes only when the test opens the gate.
-    store.readDrawings = (...args) => new Promise<void>(resolve => gates.push(resolve)).then(() => read(...args))
-  }
-  const kernel = new ViewerKernel({ parse: async () => doc, openSource: async () => source }, { yield: async () => {} })
-  const inner = connectInProcess(kernel)
-  const queued: { data: unknown; deliver: () => void }[] = []
-  let delay = false
-  const sent: unknown[] = []
-  const port = {
-    ...inner,
-    postMessage(message: unknown, transfer: Transferable[]) { sent.push(message); inner.postMessage(message, transfer) },
-    addEventListener(type: 'message', listener: (event: { data: unknown }) => void) {
-      inner.addEventListener(type, event => { if (delay) queued.push({ data: event.data, deliver: () => listener(event) }); else listener(event) })
-    },
-  }
-  const client = new ViewerClient(port as never)
-  expect((await client.send({ kind: 'open', requestId: client.nextRequestId(), docId: 'r', source: { kind: 'object', document: doc }, profile: 'D' })).kind).toBe('complete')
-  const session = kernel.session('r')!
-  const remote = new RemoteWorkbook(client, { docId: 'r', valuePolicy: source.valuePolicy, sheets: source.sheets, diagnostics: [], formatting: source.formatting?.(), layouts: new Map(sheets.map(id => [id, session.layout(id)])) })
-  for (const id of sheets) {
-    remote.merges(id)
-    for (let i = 0; i < 200 && remote.loadState(id).completeness !== 'complete'; i++) await new Promise(r => setTimeout(r, 2))
-  }
-  const ledger = remote.mainLedger, cap = MAIN_THREAD_BUDGETS.D
-  const command = (requestId: string, sheetId = sheets[0]): CommandOf<'read'> => ({ kind: 'read', requestId, owner: remote.identity(sheetId), query: { op: 'drawings' } })
-  const drawingsSent = () => sent.filter(m => (m as { kind?: string; query?: { op?: string } }).query?.op === 'drawings') as CommandOf<'read'>[]
-  const settle = async () => { await inner.idle(); for (let i = 0; i < 20; i++) await Promise.resolve() }
-  return {
-    remote, client, kernel, source, ledger, cap, command, drawingsSent, settle, gates,
-    pressure: (headroom: number) => ledger.set('dom', 'pressure', Math.max(0, cap - (ledger.bytes - ledger.ownerBytes('dom', 'pressure')) - headroom)),
-    queue: (on: boolean) => { delay = on; if (!on) for (const { deliver } of queued.splice(0)) deliver() },
-    /** Delivers the queued replies `pick` selects, keeping the rest queued. */
-    deliver: (pick: (data: { commandKind?: string; requestId?: string }) => boolean) => {
-      for (const item of [...queued]) if (pick(item.data as never)) { queued.splice(queued.indexOf(item), 1); item.deliver() }
-    },
-    grant: (requestId: string) => ledger.ownerBytes('replies', `drawing-grant:${requestId}`),
-  }
-}
-const until = async (check: () => boolean, ms = 4000) => { const end = Date.now() + ms; while (!check() && Date.now() < end) await new Promise(r => setTimeout(r, 5)) }
 
 describe('main receiving grant', () => {
   it('reserves before dispatch, bounded by the drawing budget, and returns the unused rest before adopting', async () => {
@@ -181,7 +95,7 @@ describe('main receiving grant', () => {
       expect(f.ledger.snapshot().byPool.replies).toBe(replies)
       // The reply's data moved from the grant; owner metadata was admitted after the refund.
       const payload = drawingsOf(out as WorkerReply)!
-      expect(f.ledger.snapshot().byPool.drawings).toBe(estimatePayloadBytes(out) + drawingOwnerMetadataBytes(payload.drawings))
+      expect(f.ledger.snapshot().byPool.drawings).toBe(measurePayloadBytes(out)! + drawingOwnerMetadataBytes(payload.drawings))
     } finally { await f.remote.close() }
   })
 
@@ -355,7 +269,7 @@ describe('worker lifetime of a signal-ignoring drawing provider under a grant', 
       await vi.advanceTimersByTimeAsync(QUERY_DEADLINE_MS + 1)
       await pending
       expect(posted).toMatchObject([{ kind: 'cancelled', diagnostics: [{ code: 'query-timeout' }] }])
-      expect(estimatePayloadBytes(posted[0])).toBeLessThanOrEqual(replyLimitEnvelope(command))
+      expect(measurePayloadBytes(posted[0])).toBeLessThanOrEqual(replyLimitEnvelope(command))
       expect(kernel.lifecycleStats().transientBytes, 'the provider still holds its working set').toBeGreaterThanOrEqual(4096)
       open()
       await vi.advanceTimersByTimeAsync(1)

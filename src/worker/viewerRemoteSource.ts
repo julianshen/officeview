@@ -29,6 +29,7 @@ import type { RangeDetection } from '../xlsx/view/rangeDetection'
 import { createDocumentOverflowCache } from '../xlsx/view/documentOverflow'
 import type { OverflowCache } from '../xlsx/view/overflowCache'
 import { MainMemoryLedger, axisBytes, estimatePayloadBytes, leaseTargets, type LedgerHold } from '../xlsx/view/mainLedger'
+import { measurePayloadBytes } from '../xlsx/view/payloadBytes'
 import type { XlsxCell, XlsxCellStyle, XlsxMergeRange } from '../xlsx/types'
 import { MAX_COLS, MAX_ROWS, formatA1, isValidCoordinate, type SourceCell, type SourceRect } from '../xlsx/view/coordinates'
 import { createAxisMetrics } from '../xlsx/view/axes'
@@ -54,8 +55,8 @@ export const ROW_CHUNK_COLS = 256
 export function rowCacheBudget(profile: ProfileId): number { return MAIN_THREAD_BUDGETS[profile] / 4 }
 const DRAWING_MEMORY_MESSAGE = "This sheet's drawings need more main-thread memory than the document has free and are not shown"
 /** FC-T2: no receiving grant fits now; nothing (more) is sent, and the cache may ask again. */
-function drawingGrantRefusal(command: CommandOf<'read'>): WorkerReply<'read'> {
-  return reply(command, command.owner, { kind: 'complete', result: { kind: 'read', result: { op: 'drawings', result: unavailableDrawings(DRAWING_MEMORY_MESSAGE, { code: 'resource-limit', retryable: true, message: DRAWING_MEMORY_MESSAGE }, DRAWING_MEMORY_REFUSED) } } })
+function drawingGrantRefusal(command: CommandOf<'read'>, retryable = true): WorkerReply<'read'> {
+  return reply(command, command.owner, { kind: 'complete', result: { kind: 'read', result: { op: 'drawings', result: unavailableDrawings(DRAWING_MEMORY_MESSAGE, { code: 'resource-limit', retryable, message: DRAWING_MEMORY_MESSAGE }, DRAWING_MEMORY_REFUSED) } } })
 }
 /** Status text when a sort's view cannot fit the main-thread budget (stream F). */
 export const SORT_MEMORY_REFUSAL = 'Not enough memory to apply the sort on this device'
@@ -436,6 +437,8 @@ export class RemoteWorkbook implements WorkbookSource {
     const drawings = key === 'read:drawings' ? command as CommandOf<'read'> : undefined
     let grant: string | undefined
     if (drawings) {
+      // A duplicate id must not touch the credit of the read that owns it.
+      if (this.client.isPending(head.requestId) || this.mainLedger.ownerBytes('replies', `drawing-grant:${head.requestId}`) > 0) return CLOSED
       const admitted = this.drawingGrant(drawings)
       if (typeof admitted !== 'string') return admitted as Settled<K>
       grant = admitted
@@ -447,7 +450,10 @@ export class RemoteWorkbook implements WorkbookSource {
       // a page (a scan generator across tasks) keeps the charge. An admitted
       // reservation becomes that charge (no gap, no double count); any excess
       // over it is charged on top.
-      const pool = drawings ? 'drawings' : 'replies', bytes = estimatePayloadBytes(reply), targets = leaseTargets(reply)
+      // A drawings reply is measured exactly, as the worker admitted it; the
+      // worker never posts one it could not measure within the grant.
+      const pool = drawings ? 'drawings' : 'replies', targets = leaseTargets(reply)
+      const bytes = grant ? measurePayloadBytes(reply) ?? this.mainLedger.ownerBytes('replies', grant) : estimatePayloadBytes(reply)
       const held = grant ?? reservation
       const moved = held ? Math.min(bytes, this.mainLedger.ownerBytes('replies', held)) : 0
       if (moved > 0) this.mainLedger.adoptWhileReachable('replies', held!, pool, targets, moved)
@@ -504,7 +510,9 @@ export class RemoteWorkbook implements WorkbookSource {
    * the new requestId's length, when it fits now; otherwise refuse retryably. */
   private drawingRetry(command: CommandOf<'read'>, quota: WorkerReply<'read'>, signal?: AbortSignal): Promise<Settled<'read'>> | WorkerReply<'read'> {
     const required = quota.kind === 'quota' ? quota.requiredBytes : undefined
-    if (this.closed || signal?.aborted || required === undefined || command.query.op !== 'drawings' || command.query.replyByteLimit !== undefined) return drawingGrantRefusal(command)
+    // Too large to measure: asking again cannot succeed.
+    if (required === undefined) return drawingGrantRefusal(command, false)
+    if (this.closed || signal?.aborted || command.query.op !== 'drawings' || command.query.replyByteLimit !== undefined) return drawingGrantRefusal(command)
     const requestId = this.nextRequestId()
     const replyByteLimit = required + 2 * Math.max(0, requestId.length - command.requestId.length)
     return this.request({ ...command, requestId, query: { op: 'drawings', replyByteLimit } }, signal)

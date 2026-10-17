@@ -14,7 +14,7 @@ import type {
   CacheIdentity, ViewCommitDelta, WorkbookOwner, WorkerCommand, WorkerCommandKind, WorkerOwner, WorkerReply,
 } from '../xlsx/view/contracts'
 import {
-  initialIdentity, initialWorkbookOwner, isArrayBuffer, isTerminalReply, isViewerReply, TransferAccounting,
+  initialIdentity, initialWorkbookOwner, isArrayBuffer, isTerminalReply, isViewerReply, MAX_REQUEST_ID_UNITS, TransferAccounting,
   type CommandOf, type TransferLedger,
 } from './viewerProtocol'
 
@@ -67,6 +67,8 @@ export class ViewerClient {
   /** Replies with no pending request (late, duplicate or foreign). */
   get ignoredReplies(): number { return this.ignored }
   get pendingCount(): number { return this.pending.size }
+  /** Whether `requestId` still waits for its terminal reply. */
+  isPending(requestId: string): boolean { return this.pending.has(requestId) }
   /** Replies whose commandKind or owner did not match their pending request. */
   get rejectedReplies(): number { return this.rejected }
 
@@ -76,6 +78,7 @@ export class ViewerClient {
    * in FULL, so those are accounted by full byteLength once per buffer. An open
    * command's object source document is cloned as one estimated copy. */
   send<K extends WorkerCommandKind>(command: CommandOf<K>): Promise<WorkerReply<K>> {
+    if (typeof command.requestId !== 'string' || command.requestId.length > MAX_REQUEST_ID_UNITS) return Promise.reject(new ViewerNotSentError(`requestId longer than ${MAX_REQUEST_ID_UNITS} units`))
     if (this.pending.has(command.requestId)) return Promise.reject(new ViewerNotSentError(`Duplicate requestId ${command.requestId}`))
     const transfer: ArrayBuffer[] = []
     const message = command as WorkerCommand

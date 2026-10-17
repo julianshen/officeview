@@ -52,6 +52,9 @@ export function isTerminalReply(reply: WorkerReply): boolean {
   return TERMINAL_KINDS.has(reply.kind)
 }
 
+/** Protocol maximum requestId length (UTF-16 units): it bounds every reply's
+ * identity part, and so the payload-free envelope of a drawings grant. */
+export const MAX_REQUEST_ID_UNITS = 256
 /** Why an in-flight request was aborted; echoed as the cancelled diagnostic. */
 export type CancelReason = 'cancel-requested' | 'superseded' | 'range-replaced' | 'document-closed' | 'query-timeout'
 export const CANCEL_MESSAGES: Readonly<Record<CancelReason, string>> = Object.freeze({

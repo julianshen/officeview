@@ -25,6 +25,7 @@ import { DOCUMENT_DRAWING_NODE_LIMIT } from '../src/drawing/parts'
 import { countXmlElements, loadPagedSheetDrawings, pagedDrawingLimits } from '../src/xlsx/storage/pagedDrawings'
 import { RemoteDrawingCache } from '../src/worker/viewerRemoteDrawings'
 import { estimatePayloadBytes } from '../src/xlsx/view/mainLedger'
+import { measurePayloadBytes } from '../src/xlsx/view/payloadBytes'
 import { drawingOwnerMetadataBytes } from '../src/xlsx/view/drawingOwners'
 import v8 from 'node:v8'
 import vm from 'node:vm'
@@ -392,7 +393,8 @@ async function collectDrawingReplies(): Promise<void> {
   for (let i = 0; i < 6; i++) { gc(); await new Promise(resolve => setTimeout(resolve, 10)) }
 }
 const drawingBytes = (remote: RemoteWorkbook) => remote.mainLedger.snapshot().byPool.drawings
-const drawingReplyBytes = (reply: unknown) => estimatePayloadBytes(reply) + drawingOwnerMetadataBytes((reply as { result: { result: { result: { drawings: object } } } }).result.result.result.drawings)
+// FC-T2: a drawings reply is charged by the exact measure its grant admitted.
+const drawingReplyBytes = (reply: unknown) => measurePayloadBytes(reply)! + drawingOwnerMetadataBytes((reply as { result: { result: { result: { drawings: object } } } }).result.result.result.drawings)
 
 describe('paged drawing main-ledger attribution', () => {
   it('names actual drawing replies, keeps row replies generic and preserves the original byte estimate and lease', async () => {
