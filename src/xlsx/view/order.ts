@@ -93,6 +93,7 @@ export function adoptRowOrder(bands: readonly RowPermutationBand[]): CompactRowO
   if (!bands.length) return identity
   const sorted = [...bands].sort((a, b) => a.r0 - b.r0)
   const out: RowPermutationBand[] = []
+  const buffers = new Set<ArrayBufferLike>()
   for (let index = 0; index < sorted.length; index++) {
     const band = sorted[index]
     validateBand(band.r0, band.r1)
@@ -100,6 +101,12 @@ export function adoptRowOrder(bands: readonly RowPermutationBand[]): CompactRowO
     const length = band.r1 - band.r0 + 1
     if (!isUint32(band.sourceAtOffset) || !isUint32(band.displayOffsetOfSource) || band.sourceAtOffset.length !== length || band.displayOffsetOfSource.length !== length) {
       throw new RangeError('Permutation length must match its inclusive band')
+    }
+    // Shared storage cannot be handed over exclusively, even across bands.
+    // A partial view would keep unaccounted backing-store padding alive.
+    for (const array of [band.sourceAtOffset, band.displayOffsetOfSource]) {
+      if (Object.prototype.toString.call(array.buffer) !== '[object ArrayBuffer]' || buffers.has(array.buffer) || array.byteOffset !== 0 || array.byteLength !== array.buffer.byteLength) throw new RangeError('Permutation buffers must be distinct, non-shared and fully owned')
+      buffers.add(array.buffer)
     }
     // A structured clone from another realm is re-viewed (same buffer, no copy) as
     // this realm's Uint32Array, which projection and its consumers require.

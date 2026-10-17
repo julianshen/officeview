@@ -555,8 +555,8 @@ export class RemoteWorkbook implements WorkbookSource {
       case 'complete': {
         if (out.result.kind !== 'view') return { kind: 'error', message: 'Unexpected view reply' }
         const view = this.adopt(sheetId, out.result.delta, spec, out, reservation)
-        // The adopted view now carries the bytes (charged in adopt): end the reply's lease.
-        if (view) this.mainLedger.settle(out)
+        // Adoption moved its bytes to the view; a stale reply has no consumer.
+        this.mainLedger.settle(out)
         return view ? { kind: 'committed', view } : { kind: 'stale' }
       }
       case 'cancelled': return out.diagnostics.some(d => d.code === 'query-timeout') ? { kind: 'error', message: out.diagnostics[0].message } : { kind: 'cancelled' }

@@ -1,82 +1,77 @@
-/**
- * Stream F item 4 (iOS Simulator / Chromium M-profile run): the main ledger
- * peaked over the 32 MiB M budget at the F2 header sort (viewBuffers 12.9 MB +
- * replies 8.4 MB at the peak). Part of that peak was a double count: adopt()
- * charged the new view (whose order already holds the local band copies) while
- * the staging charge for those same local copies was still set. The swap must
- * never count the local bands twice: the view-buffer pool's high-water mark
- * during one sort is at most the previous view plus the adopted view.
- */
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { cleanup, fireEvent, render, waitFor } from '@testing-library/react'
-import { OfficeFile } from '../src/components/OfficeFile'
-import { ViewerKernel } from '../src/worker/viewerKernel'
-import { OfficePackage } from '../src/core/zip'
-import { parseXlsx } from '../src/xlsx/parse'
-import type { WorkerCommand, WorkerReply } from '../src/xlsx/view/contracts'
-import type { MainMemoryLedger } from '../src/xlsx/view/mainLedger'
-import { xlsxBytes } from './helpers/xlsx-package'
-import { FIRST_PAINT_WAIT } from './helpers/viewer-timing'
+// @vitest-environment node
+import { describe, expect, it, vi } from 'vitest'
+import { remoteViewReplies } from './helpers/remote-view-replies'
+import { viewReplyBytes } from '../src/worker/viewerRemoteSource'
+import type { RowPermutationBand, SortSpec } from '../src/xlsx/view/contracts'
 
-// Worker-backed (paged) even for this small workbook.
-vi.mock('../src/xlsx/storage/importSession', async original => {
-  const actual = await original<typeof import('../src/xlsx/storage/importSession')>()
-  return { ...actual, importLimitsFor: (profile: 'D' | 'M', overrides?: Parameters<typeof actual.importLimitsFor>[1]) => actual.importLimitsFor(profile, { ...overrides, object: { ...overrides?.object, rows: 1 } }) }
-})
+const N = 40000
+const band = (): RowPermutationBand => ({ r0: 0, r1: N - 1, sourceAtOffset: Uint32Array.from({ length: N }, (_, i) => N - i - 1), displayOffsetOfSource: Uint32Array.from({ length: N }, (_, i) => N - i - 1) })
+const spec: SortSpec = { range: { r0: 0, r1: N - 1, c0: 0, c1: 0, headerRows: 0, totalsRows: 0 }, keys: [{ col: 0, order: 'asc' }], caseSensitive: false }
 
-const RealRegistry = globalThis.FinalizationRegistry
-beforeEach(() => {
-  // No collection callback ever runs: lifetime charges end only when released explicitly.
-  globalThis.FinalizationRegistry = class { register() {} unregister() { return false } } as unknown as typeof FinalizationRegistry
-})
-afterEach(() => { cleanup(); globalThis.FinalizationRegistry = RealRegistry })
-
-const quiet = { yield: async () => {} }
-const rows = Array.from({ length: 40 }, (_, r) => `<row r="${r + 1}"><c r="A${r + 1}" t="inlineStr"><is><t>name ${r}</t></is></c><c r="B${r + 1}"><v>${(r * 7) % 11}</v></c></row>`).join('')
-const workbook = () => new Blob([xlsxBytes({ sheetData: rows }) as BlobPart])
-
-function workerPort() {
-  const kernel = new ViewerKernel({ parse: async (bytes: Uint8Array) => parseXlsx(await OfficePackage.load(bytes)) }, quiet)
-  const listeners = new Set<(event: MessageEvent) => void>()
-  return {
-    postMessage(message: unknown, transfer: Transferable[]) {
-      const open = message as { kind: string; source?: { kind: string; blob?: Blob } }
-      const blob = open.kind === 'open' && open.source?.kind === 'blob' ? open.source.blob : undefined
-      const command = structuredClone(blob ? { ...open, source: { kind: 'blob' } } : message, { transfer: transfer as ArrayBuffer[] }) as WorkerCommand
-      if (blob && command.kind === 'open') command.source = { kind: 'blob', blob }
-      void kernel.handle(command, (out: WorkerReply, replyTransfer) => {
-        const data = structuredClone(out, { transfer: replyTransfer })
-        for (const listener of [...listeners]) listener({ data } as MessageEvent)
-      })
-    },
-    addEventListener(type: string, listener: (event: MessageEvent) => void) { if (type === 'message') listeners.add(listener) },
-    removeEventListener(type: string, listener: (event: MessageEvent) => void) { if (type === 'message') listeners.delete(listener) },
-    terminate: vi.fn(),
-  }
-}
-
-describe('worker-backed sort adoption does not double count the staged bands', () => {
-  it('the view-buffer pool never exceeds the adopted view during the swap', async () => {
-    let ledger: MainMemoryLedger | null = null
-    let maxViewBuffers = 0
-    const port = workerPort()
-    const internal = { onMainLedger: (l: MainMemoryLedger) => {
-      if (ledger === l) return
-      ledger = l
-      const set = l.set.bind(l)
-      l.set = ((...args: Parameters<MainMemoryLedger['set']>) => { const out = set(...args); maxViewBuffers = Math.max(maxViewBuffers, l.snapshot().byPool.viewBuffers); return out }) as MainMemoryLedger['set']
-    } } as object
-    const ui = render(<OfficeFile data={workbook()} interactiveSheets viewerWorker={() => port} {...internal} />)
-    await waitFor(() => expect(ui.getByRole('gridcell', { name: /value name 1\b/ })).toBeTruthy(), FIRST_PAINT_WAIT)
-    const header = () => ui.getByRole('columnheader', { name: /^Column B/ })
-    const before = header().getAttribute('aria-sort')
-    const previous = maxViewBuffers = ledger!.snapshot().byPool.viewBuffers
-    fireEvent.click(ui.getByRole('button', { name: 'Cycle sort column B' }))
-    await waitFor(() => expect(header().getAttribute('aria-sort')).not.toBe(before))
-    const held = ledger!.snapshot().byPool.viewBuffers
-    expect(held).toBeGreaterThan(0)
-    // The previous view stays charged while its display still holds it (a real
-    // overlap, by design); the staged local bands are already in the new view.
-    expect(maxViewBuffers).toBeLessThanOrEqual(previous + held)
+describe('worker-backed sort adoption ownership', () => {
+  it('moves the reply buffers to the view without charging a second copy', async () => {
+    const h = remoteViewReplies(), ledger = h.remote.mainLedger
+    const b = band()
+    const { result, out } = await h.sort(1, [b], spec)
+    expect(result.kind).toBe('committed')
+    expect(h.remote.view('s').order.bands[0].sourceAtOffset).toBe(b.sourceAtOffset)
+    expect(h.remote.view('s').order.bands[0].displayOffsetOfSource).toBe(b.displayOffsetOfSource)
+    expect(ledger.leaseOf(out)).toBeUndefined()
+    expect(ledger.peakBytes).toBeLessThanOrEqual(viewReplyBytes(N) + 4096)
+    const view = h.remote.view('s'), visibility = view.visibility!
+    expect(ledger.snapshot().byPool.viewBuffers).toBe(N * 8 + visibility.words.byteLength + visibility.summaries.byteLength)
   })
+
+  it('fallback rebuilds an invalid inverse and ends staging before the new view charge', async () => {
+    const h = remoteViewReplies(), ledger = h.remote.mainLedger
+    await h.sort(1, [band()])
+    const previous = ledger.snapshot().byPool.viewBuffers
+    let peak = previous
+    const set = ledger.set.bind(ledger)
+    vi.spyOn(ledger, 'set').mockImplementation((...args) => { set(...args); peak = Math.max(peak, ledger.snapshot().byPool.viewBuffers) })
+    const b = band()
+    b.displayOffsetOfSource.fill(0) // valid forward permutation, unusable wire inverse
+    const { result } = await h.sort(2, [b])
+    expect(result.kind).toBe('committed')
+    const view = h.remote.view('s')
+    expect(view.order.kind).toBe('bands')
+    expect(view.order.bands[0].sourceAtOffset.buffer).not.toBe(b.sourceAtOffset.buffer)
+    expect(view.order.sourceToDisplay(123)).toBe(N - 124)
+    expect(ledger.ownerBytes('viewBuffers', 'staging:s')).toBe(0)
+    const held = N * 8 + view.visibility!.words.byteLength + view.visibility!.summaries.byteLength
+    expect(ledger.snapshot().byPool.viewBuffers).toBe(held)
+    // No display keeps the previous view here: held contains only the new view,
+    // so this bound has no spare previous-view bytes to hide a staging overlap.
+    expect(peak).toBeLessThanOrEqual(previous + held)
+  })
+
+  it('settles an older reply immediately after a newer sort has committed', async () => {
+    const h = remoteViewReplies(), owner = h.remote.identity('s'), signal = new AbortController().signal
+    const older = h.remote.sort(owner, null, signal), oldCommand = await h.next('sort')
+    const newer = h.remote.sort(owner, null, signal), newCommand = await h.next('sort')
+    h.reply(newCommand, { kind: 'view', delta: h.delta(2, [band()]) })
+    expect((await newer).kind).toBe('committed')
+    const before = h.remote.mainLedger.snapshot()
+    const out = h.reply(oldCommand, { kind: 'view', delta: h.delta(1, [band()]) })
+    expect(await older).toEqual({ kind: 'stale' })
+    expect(h.remote.identity('s').viewGen).toBe(2)
+    expect(h.remote.mainLedger.leaseOf(out)).toBeUndefined()
+    expect(h.remote.mainLedger.snapshot().byPool.replies).toBe(before.byPool.replies)
+  })
+})
+
+
+it('copies padded wire views so no uncharged backing-store tails remain in the committed view', async () => {
+  const h = remoteViewReplies()
+  const b: RowPermutationBand = { r0: 0, r1: 1, sourceAtOffset: new Uint32Array(new ArrayBuffer(1_000_000), 128, 2), displayOffsetOfSource: new Uint32Array(new ArrayBuffer(1_000_000), 256, 2) }
+  b.sourceAtOffset.set([1, 0]); b.displayOffsetOfSource.set([1, 0])
+  const { result, out } = await h.sort(1, [structuredClone(b)])
+  expect(result.kind).toBe('committed')
+  const view = h.remote.view('s'), adopted = view.order.bands[0]
+  expect(adopted.sourceAtOffset.buffer.byteLength).toBe(8)
+  expect(adopted.displayOffsetOfSource.buffer.byteLength).toBe(8)
+  expect(view.order.displayToSource(0)).toBe(1)
+  expect(view.order.sourceToDisplay(0)).toBe(1)
+  expect(h.remote.mainLedger.leaseOf(out)).toBeUndefined()
+  expect(h.remote.mainLedger.snapshot().byPool.viewBuffers).toBe(16 + view.visibility!.words.byteLength + view.visibility!.summaries.byteLength)
 })

@@ -11,13 +11,14 @@
  */
 import { describe, expect, it } from 'vitest'
 import { cellDisplayText, renderSheet } from '../src/xlsx/render'
+import type { ResolvedSemantics } from '../src/xlsx/formula/types'
 import type { XlsxCell, XlsxCellStyle, XlsxSheet } from '../src/xlsx/types'
 
 const GLYPH = 7
-function paint(value: XlsxCell['value'], widthPx: number, style?: Partial<XlsxCellStyle>): string[] {
+function paint(value: XlsxCell['value'], widthPx: number, style?: Partial<XlsxCellStyle>, dateSystem: '1900' | '1904' = '1900'): string[] {
   const painted: string[] = []
   const cell: XlsxCell = { ref: 'A1', row: 0, col: 0, styleIndex: 0, value, ...(style ? { style: { numFmtId: 0, ...style } as XlsxCellStyle } : {}) }
-  const sheet: XlsxSheet = { name: 'S', cols: [], merges: [], mergeRanges: [], rows: [{ index: 0, cells: [cell] }] }
+  const sheet: XlsxSheet = { name: 'S', cols: [], merges: [], mergeRanges: [], rows: [{ index: 0, cells: [cell] }], semantics: { dateSystem, locale: 'en-US', timeZone: 'UTC', epochNowMs: 0, unicode: { version: 2, source: 'standalone-default' } } as ResolvedSemantics }
   const ctx = new Proxy({ font: '', measureText: (s: string) => ({ width: s.length * GLYPH }), fillText: (s: string) => painted.push(s) },
     { get: (o, k) => k in o ? o[k as keyof typeof o] : () => {} }) as unknown as CanvasRenderingContext2D
   renderSheet(sheet, ctx, { colWidthsPx: [widthPx], rowHeightsPx: [20], widthPx, heightPx: 20 })
@@ -89,4 +90,42 @@ describe('numeric overflow renders as a full cell of #', () => {
     const sheet: XlsxSheet = { name: 'S', cols: [], merges: [], mergeRanges: [], rows: [] }
     expect(cellDisplayText(sheet, { value: 45079, style: { numFmtId: 0, formatCode: 'yyyy-mm-dd' } as XlsxCellStyle })).toBe('2023-06-02')
   })
+})
+
+describe('negative 1900 date display', () => {
+  it.each([40, 160])('fills a %s px cell for built-in and authored negative dates/times', width => {
+    expect(paint(-1, width, { numFmtId: 14 })).toEqual([hashes(width)])
+    expect(paint(-0.5, width, { numFmtId: 20 })).toEqual([hashes(width)])
+    expect(paint(-1, width, { formatCode: 'yyyy-mm-dd' })).toEqual([hashes(width)])
+    expect(paint(-0.5, width, { formatCode: 'h:mm' })).toEqual([hashes(width)])
+  })
+  it('keeps 1904 signed dates and selected literal/numeric sections', () => {
+    expect(paint(-1, 160, { numFmtId: 14 }, '1904')).toEqual(['-1/2/1904'])
+    expect(paint(-1, 160, { formatCode: 'yyyy-mm-dd' }, '1904')).toEqual(['-1904-01-02'])
+    expect(paint(-1, 160, { formatCode: 'yyyy-mm-dd;0' })).toEqual(['1'])
+    expect(paint(-1, 160, { formatCode: '0" days"' })).toEqual(['-1 days'])
+    expect(paint(-1, 160, { formatCode: '0;"hidden date yyyy"' })).toEqual(['hidden date yyyy'])
+    expect(paint(-1, 160, { formatCode: '[<0]yyyy-mm-dd;0' })).toEqual([hashes(160)])
+    expect(paint(-1, 160, { formatCode: '[>0]yyyy-mm-dd;0' })).toEqual(['-1'])
+    expect(paint(-1, 160, { formatCode: '[Red]yyyy-mm-dd' })).toEqual([hashes(160)])
+    expect(paint(-1, 160, { formatCode: '0\\d\\a\\y\\s' })).toEqual(['-1days'])
+  })
+})
+
+it('admits negative-date section parsing through the caller allocation observer', async () => {
+  const { negativeDateOverflow } = await import('../src/xlsx/cellFormat')
+  const { dateSection } = await import('../src/xlsx/formula/format')
+  const refusal = new RangeError('parser workspace refused')
+  const allocation = { allocate() { throw refusal }, release() {} }
+  const sem = { dateSystem: '1900', locale: 'en-US' } as ResolvedSemantics
+  expect(() => negativeDateOverflow(-1, 'yyyy-mm-dd', sem, allocation)).toThrow(refusal)
+  expect(() => dateSection('yyyy-mm-dd', allocation)).toThrow(refusal)
+})
+
+it('admits discarded sections and underscore expansions before parsing a negative-date format', async () => {
+  const { negativeDateOverflow } = await import('../src/xlsx/cellFormat')
+  const code = '0;'.repeat(2000) + '0_ '.repeat(2000)
+  const refusal = new RangeError('section workspace exceeds remaining budget')
+  const allocation = { allocate(bytes: number) { if (bytes > 64 * 1024) throw refusal }, release() {} }
+  expect(() => negativeDateOverflow(-1, code, { dateSystem: '1900' } as ResolvedSemantics, allocation)).toThrow(refusal)
 })

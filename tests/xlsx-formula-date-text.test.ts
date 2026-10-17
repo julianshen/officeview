@@ -22,6 +22,7 @@ import { describe, it, expect, vi } from 'vitest'
 import { evaluateFormula, evaluateFormulaInternal, formulaError } from '../src/xlsx/formula/evaluator'
 import { evaluateWorkbookFormulas } from '../src/xlsx/formula/workbook'
 import { evaluateArrayFormula } from '../src/xlsx/formula/arrays'
+import { formatValue } from '../src/xlsx/render'
 import { formatCommon } from '../src/xlsx/formula/format'
 import { decodeSerial } from '../src/xlsx/formula/serial'
 import type { EvaluationContext, ResolvedSemantics } from '../src/xlsx/formula/types'
@@ -633,5 +634,15 @@ describe('scalar date/time/TEXT matrix-input gate (unverified profile)', () => {
     evaluateWorkbookFormulas(d, { forceRecalc: true })
     expect(d.sheets[0].rows[0].cells[0].value).toBe('#VALUE!')
     expect(d.diagnostics ?? []).toEqual([])
+  })
+})
+
+describe('negative date presentation stays separate from finite TEXT', () => {
+  it('1900 built-in cells show hashes, while 1904 keeps measured signed dates', () => {
+    expect(formatValue(-1, 14, sem('1900'))).toBe('#')
+    expect(formatValue(-0.5, 20, sem('1900'))).toBe('#')
+    expect(formatValue(-1, 14, sem('1904'))).toBe('-1/2/1904')
+    expect(formatCommon(-1, 'yyyy-mm-dd', sem('1900'))).toEqual({ kind: 'text', text: '-1900-01-01' })
+    expect(ev('TEXT(-1,"yyyy-mm-dd")', '1904')).toBe('-1904-01-02')
   })
 })

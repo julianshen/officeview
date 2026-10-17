@@ -19,7 +19,7 @@
  * fallback for anything this returns undefined for.
  * Only this lazily loaded renderer path imports the module.
  */
-import { formatCommon, type FormatAllocation } from './formula/format'
+import { dateSection, formatCommon, type FormatAllocation } from './formula/format'
 import type { ElementValue, ResolvedSemantics } from './formula/types'
 import { LEGACY_PALETTE } from './sheetColors'
 
@@ -130,6 +130,19 @@ export function formatColor(value: ElementValue, code: string): string | undefin
   if (list.some(s => s.unsupported)) return undefined
   const { index } = select(value, list)
   return index >= 0 ? list[index]?.color : undefined
+}
+
+/** Cell display only: negative 1900 dates/times fill the cell with hashes.
+ * Keep formula TEXT's finite contracts separate; use the actual selected
+ * section so quoted date letters and non-admitting conditions do not count.
+ * Elapsed-duration formats retain their existing signed display contract. */
+export function negativeDateOverflow(value: number, code: string, semantics: ResolvedSemantics, allocation?: FormatAllocation): boolean {
+  if (!(value < 0) || semantics.dateSystem !== '1900') return false
+  allocation?.allocate(128 * code.length + 1024) // all sections, including discarded tails and padding expansions
+  const list = sections(code), { index } = select(value, list)
+  if (index < 0 || list.some(section => section.unsupported)) return false
+  const body = list[index].body
+  return dateSection(body, allocation)
 }
 
 /**

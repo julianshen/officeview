@@ -126,12 +126,43 @@ Decision order: what-if data table → force → explicit-recalc → **manual** 
 
 `formatValue(value, numFmtId)` renders built-in formats `0/2/3/4/9/10`, and the
 built-in dates/times `14–22` (ECMA-376 §18.8.30) through the shared formatter in
-Excel's displayed en-US form (the only locale the shared formatter defines; for
-another workbook locale the month-name forms `15–17` fall back to the plain number): `14` the locale short date `m/d/yyyy` (`3/5/2023`; serial 0
-shows `1/0/1900`), `15` `d-mmm-yy`, `16` `d-mmm`, `17` `mmm-yy`, `18` `h:mm AM/PM`,
-`19` `h:mm:ss AM/PM`, `20` `h:mm`, `21` `h:mm:ss` (`12:34:56`, preserving the stored
-serial) and `22` `m/d/yyyy h:mm`. These replace the earlier ISO `yyyy-mm-dd`
-convention for `14–17`, so a date fits a default-width column wherever Excel fits it.
+Excel's displayed en-US forms by default: `14` the locale short date `m/d/yyyy`
+(`3/5/2023`; serial 0 shows `1/0/1900`), `15` `d-mmm-yy`, `16` `d-mmm`, `17`
+`mmm-yy`, `18` `h:mm AM/PM`, `19` `h:mm:ss AM/PM`, `20` `h:mm`, `21` `h:mm:ss`
+and `22` `m/d/yyyy h:mm`. These replace the earlier ISO convention for `14–17`.
+Parsed OOXML defaults to `en-US`; no workbook locale is inferred.
+
+An explicit supported locale now localizes built-ins `14–22` in the renderer.
+For non-en-US locales, `Intl.DateTimeFormat` provides the presentation pattern:
+`14` numeric year/month/day, `15` day/short month/two-digit year, `16` day/short
+month, `17` short month/two-digit year, `18–19` 12-hour time with localized
+AM/PM, `20–21` 24-hour time, and `22` localized `14` plus a space and `20`.
+Gregorian calendar, Latin digits and UTC are explicit (locale calendar/numbering extensions are deliberately overridden); workbook time-zone overrides
+do not shift stored serials. Locale punctuation/order/names are Intl-derived
+inferences, not desktop Excel measurements. In particular, the exact locale and
+OS regional overrides of desktop Excel have not been certified. The default
+`en-US` and its canonical variants (including `en-us` and `en-US-u-nu-latn`) keep the exact forms listed above rather than using Intl's date order
+for the fixed built-in name forms. Authored custom formats and formula `TEXT`
+keep the finite formatter's existing locale capability boundary.
+
+Serial 0 and fictitious 1900 serial 60 retain their civil tokens: the Intl adapter
+uses a leap-year surrogate and replaces the year/day parts instead of normalizing
+the Excel date through a JavaScript Date. Negative 1900 date/time cells fill the
+available width with hashes; 1904 signed-date presentation and finite `TEXT` stay
+unchanged. Invalid, unavailable, or over-128-character locale tags produce a typed
+unsupported result; the sheet records a deduplicated `format-unsupported`
+diagnostic and uses the formatted en-US fallback, rather than a raw serial.
+
+Localized calls retain no global/native formatter cache. Before entering Intl,
+guarded callers admit a 32 KiB application workspace estimate per formatter
+(two sequential formatters for `22`) and release it after formatting; output
+strings remain charged. Each builder admits at most 32 parts, 128 UTF-16 units per part and 256 units per formatter output before mapping/joining; an oversized result is typed unsupported. This estimate is not a proven upper bound on the JS
+engine's native Intl workspace or a browser performance acceptance result.
+
+Sources: [Excel built-in format overrides and international considerations](https://learn.microsoft.com/en-us/openspecs/office_standards/ms-oi29500/17d11129-219b-4e2c-88db-45844d21e528),
+[Excel regional versus fixed date formats](https://support.microsoft.com/en-us/excel/format-a-date-the-way-you-want-in-excel),
+[ECMA-402 DateTimeFormat](https://tc39.es/ecma402/2025/).
+
 General uses a finite eleven-character profile with scientific notation and
 measured cell-width fitting; `3.14159265358979` displays `3.141592654` at the
 native wide-column control. Short exact decimals remain exact instead of being
@@ -149,7 +180,7 @@ Common authored numeric output remains unchanged (`.42 → "42%"`,
 
 - Lookup / conditional comparison profiles with mixed types, binary wildcards, and text
   coercion; unmeasured binary duplicates beyond the accepted controls.
-- Non-US date/locale profiles; the full formatter; date/TEXT array lifting.
+- Non-US authored date/locale profiles and formula `TEXT`; the full formatter; date/TEXT array lifting. Built-in renderer localization is described in §8.
 - Ambiguous 2D / multi-area projection, reversed 3D outcomes, unknown relative-name
   base, and non-singleton array mismatch.
 - VM/value metadata and metadata profiles beyond the verified XLDAPR CM chain;
