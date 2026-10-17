@@ -648,13 +648,7 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
   const measure = useMemo(() => new SharedMeasureContext(() => layoutAdmission), [layoutAdmission])
   measure.setFontGen(fontGen)
   const layoutHostFor = useMemo(() => new WeakMap<XlsxSheet, CellLayoutHost>(), [measure])
-  const presentationCaches = useMemo(() => new WeakMap<XlsxSheet, SemanticPresentationCache>(), [identity.valueGen, semanticFormatBudget])
-  const semanticPresentations = useMemo(() => {
-    if (!entry) return null
-    let cache = presentationCaches.get(entry.sheet)
-    if (!cache) presentationCaches.set(entry.sheet, cache = new SemanticPresentationCache(entry.sheet, semanticFormatBudget))
-    return cache
-  }, [entry?.sheet, presentationCaches, semanticFormatBudget])
+  const semanticPresentations = useMemo(() => entry ? new SemanticPresentationCache(entry.sheet, semanticFormatBudget) : null, [entry?.sheet, identity.valueGen, semanticFormatBudget])
   const layoutHost = (sheet: XlsxSheet): CellLayoutHost => {
     let host = layoutHostFor.get(sheet)
     if (!host) layoutHostFor.set(sheet, host = measure.host(sheet))
