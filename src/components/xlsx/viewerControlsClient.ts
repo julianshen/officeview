@@ -4,8 +4,8 @@
 import type { CacheIdentity, FilterKeySet, FilterRange, FilterSpec, OperationRefusal, PagedKeySetRef, ProfileId, SheetView, SortSpec } from '../../xlsx/view/contracts'
 import type { XlsxCell, XlsxDocument } from '../../xlsx/types'
 import { cellDisplayText } from '../../xlsx/render'
-import { classifyColumn, FilterEngine, type FilterContext, type PreparedValue, type ColumnClassification } from '../../xlsx/view/filter'
-import { compileValuesMembership, ValueIndexCache, valueScope, valueSourceFromStore, type ValueIndexIdentity, type ValueLanePage, ValueIndexError } from '../../xlsx/view/valueIndex'
+import { FilterEngine, type FilterContext, type PreparedValue, type ColumnClassification } from '../../xlsx/view/filter'
+import { classifyLanePages, compileValuesMembership, ValueIndexCache, type ColumnPassPacer, valueScope, valueSourceFromStore, type ValueIndexIdentity, type ValueLanePage, ValueIndexError } from '../../xlsx/view/valueIndex'
 import { CompactRowVisibility, createRowVisibility } from '../../xlsx/view/visibility'
 import { MemoryValueRunStore, VALUE_RUN_PAGE, type ValueRunStore } from '../../xlsx/view/valueRuns'
 import type { StructuralIndex } from '../../xlsx/view/structure'
@@ -236,17 +236,15 @@ export async function viewerControls(options: ViewerControlsOptions, signal: Abo
       }
     }
   }
-  const classify = async (owner: CacheIdentity, range: FilterRange, col: number, abort: AbortSignal) => {
+  const classify = async (owner: CacheIdentity, range: FilterRange, col: number, abort: AbortSignal, cooperate?: ColumnPassPacer) => {
     const key = scope(owner, range, col)
     if (classifications.has(key)) return
-    let numeric = false, text = false, date = false, loading = false
-    await pages(owner, range, col, abort, page => {
-      function* values() { for (let i = 0; i < page.count; i++) yield prepared(page, i) }
-      const part = classifyColumn(values(), true)
-      numeric ||= part.hasNumeric; text ||= part.kind === 'text'; date ||= part.kind === 'date'; loading ||= part.kind === 'loading'
-    })
+    const classification = await classifyLanePages(accept => pages(owner, range, col, abort, accept), prepared, () => {
+      abort.throwIfAborted()
+      if (disposed || resources.closed) throw new ValueIndexError('cancelled', 'Controls disposed')
+    }, cooperate)
     if (classifications.size >= 64) classifications.delete(classifications.keys().next().value!)
-    classifications.set(key, { kind: loading ? 'loading' : text ? 'text' : numeric ? date ? 'date' : 'number' : 'empty', hasNumeric: numeric })
+    classifications.set(key, classification)
   }
   const identity = (owner: CacheIdentity, range: FilterRange, col: number): ValueIndexIdentity => ({ ...store.stamp, range, col, classification: classifications.get(scope(owner, range, col)) ?? { kind: 'loading', hasNumeric: false }, classificationGen: owner.valueGen })
   /** Committed value-list keys of a filter, read from the main-owned key store
@@ -320,7 +318,7 @@ export async function viewerControls(options: ViewerControlsOptions, signal: Abo
         state.flags = new Uint8Array(filter.range.r1 - filter.range.r0 + 1).fill(1)
         const r0 = filter.range.r0 + filter.range.headerRows, r1 = filter.range.r1 - filter.range.totalsRows
         for (const [col, rule] of filter.columns) {
-          await classify(owner, filter.range, col, request)
+          await classify(owner, filter.range, col, request, cooperate)
           const domain = identity(owner, filter.range, col)
           const membership = rule.kind === 'values' ? await compileValuesMembership(rule, domain, runs, { cache, signal: request }) : undefined
           const match = membership?.matches ?? new FilterEngine(filterContext).compileRule(rule, domain.classification, { signal: request })

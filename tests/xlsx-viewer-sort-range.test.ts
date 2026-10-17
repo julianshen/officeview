@@ -878,3 +878,59 @@ describe('cancellation, bounds and immutability', () => {
     expect(outcome.kind).toBe('incomplete')
   })
 })
+
+describe('detection pacing row bound (spec §10.2; plan S4.2 LIFE-02)', () => {
+  // Plan S4.2: "Long jobs yield at least every 10ms or 4,096 rows, whichever
+  // arrives first, including preparation, scans, ...". Detection scans count
+  // served cells (each at most a row of work), at least one unit per page.
+  /** Columns [0, cols) populated on rows [0, rows), row-major, served in O(page). */
+  function denseBlockStore(rows: number, cols: number): ProbedStore {
+    return customStore('dense-block', { r0: 0, r1: rows - 1, c0: 0, c1: cols - 1 }, (rect, offset, limit) => {
+      const c0 = Math.max(rect.c0, 0), c1 = Math.min(rect.c1, cols - 1), r1 = Math.min(rect.r1, rows - 1), width = c1 - c0 + 1
+      const items: AuthoritativeCell[] = []
+      if (width <= 0 || rect.r0 > r1) return { items, more: false }
+      const total = (r1 - rect.r0 + 1) * width
+      for (let at = offset; at < total && items.length < limit; at++) items.push(authoritative(rect.r0 + Math.floor(at / width), c0 + at % width, at))
+      return { items, more: offset + items.length < total }
+    })
+  }
+  /** The same block continued by iteration: one scan yields every page, so the
+   * scanner reads one page ahead of its caller (spec §4.1). */
+  function iteratedBlockStore(rows: number, cols: number): ProbedStore {
+    const block = denseBlockStore(rows, cols)
+    return { ...block, scanPopulated: async function* (query, options) {
+      for (let cursor = query.cursor; ;) {
+        let next: string | undefined
+        for await (const page of block.scanPopulated({ ...query, cursor }, options)) { next = page.nextCursor; yield { ...page, nextCursor: undefined } }
+        if (next === undefined) return
+        cursor = next
+      }
+    } }
+  }
+  it.each([['a dense column', 10_240, 1, false], ['a wide dense block', 2048, 8, false], ['an iteration-continued block', 2048, 8, true]] as const)('yields after at most 4,096 scanned cells while the injected clock never advances (%s)', async (_, rows, cols, iterated) => {
+    const store = iterated ? iteratedBlockStore(rows, cols) : cols === 1 ? denseColumnStore(rows) : denseBlockStore(rows, cols), slices: number[] = []
+    let since = 0
+    const result = await detectOperationRange(request(store, emptyIndex(store), sel(0, 0), {
+      now: () => 0, yield: async () => { slices.push(store.probe.cells - since); since = store.probe.cells },
+    }))
+    expect(result).toEqual(done(store, { r0: 0, r1: rows - 1, c0: 0, c1: cols - 1, headerRows: 0, totalsRows: 0 }, { kind: 'region' }, 'heuristic'))
+    slices.push(store.probe.cells - since)
+    expect(store.probe.cells).toBeGreaterThanOrEqual(rows * cols)
+    expect(slices.length - 1).toBeGreaterThanOrEqual(2)
+    expect(Math.max(...slices)).toBeLessThanOrEqual(4096)
+  })
+  it('observes a cancel posted as a macrotask within one 4,096-cell slice of immediately resolved pages', async () => {
+    const dense = denseBlockStore(MAX_ROWS, 8), controller = new AbortController()
+    let posted = -1
+    // Post the cancel once galloping strips are large (pages of thousands of cells).
+    const store: ProbedStore = { ...dense, scanPopulated: (query, options) => {
+      if (posted < 0 && dense.probe.cells >= 40_000) { posted = dense.probe.cells; setImmediate(() => controller.abort()) }
+      return dense.scanPopulated(query, options)
+    } }
+    const options = { signal: controller.signal, stamp: { ...store.stamp } }
+    const outcome = await detectOperationRange({ store, structure: emptyIndex(store), selection: sel(0, 0), options, now: () => 0 })
+    expect(outcome).toEqual({ kind: 'cancelled' })
+    expect(posted).toBeGreaterThan(0)
+    expect(dense.probe.cells - posted).toBeLessThanOrEqual(4096)
+  })
+})

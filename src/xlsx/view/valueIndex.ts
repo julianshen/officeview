@@ -1,9 +1,9 @@
 import { adoptAllocation, type AllocationContext, type AllocationReservation } from './allocationAccount'
 import type { ColumnEntry, ColumnLanes, FilterRange, PagedKeySetRef, SourceFailure, SourceStamp, SourceStore, ValueSearchPredicate, ValuesFilter } from './contracts'
-import type { ColumnClassification, PreparedValue } from './filter'
+import { classifyColumn, type ColumnClassification, type PreparedValue } from './filter'
 import { FilterDiagnostic, TextFilterMatcher, WorkBudget, type FilterLimits } from './textFilter'
 import { canonicalSearchKey } from './canonicalText'
-import { YIELD_WORK_UNITS } from './scheduler'
+import { CooperativeSlice, YIELD_WORK_UNITS } from './scheduler'
 import {
   KEY_BOOLEAN, KEY_DATE, KEY_ERROR, KEY_NUMBER, KEY_STRING, NumberTable, ValueIndexError, loadKeySet,
   sameStamp, valueKeyString, type LaneAccount, type ValueKeySet, type ValueRunStore,
@@ -1392,6 +1392,44 @@ export async function compileValuesMembership(
 /** Adapts SourceStore.queryColumn to typed lane pages. It asks for the typed
  * lanes encoding (S1.2) and still accepts cell-object entries from stores that
  * do not produce lanes. One page per row band; the owner is read live. */
+/** Yield budget a column pass charges rows to; CooperativeSlice satisfies it. */
+export interface ColumnPassPacer { due(units: number): boolean; pause(phase: 'filter'): Promise<void>; flush(phase: 'filter'): Promise<void> }
+/** Column classification over bounded lane pages (spec §10.2): a real yield
+ * at least every YIELD_WORK_UNITS classified rows, with `check` (cancellation
+ * and staleness) re-run after each one. Without a caller budget a host-yield
+ * slice is used, so a pass whose pages resolve as microtasks still lets a
+ * cancel posted as a task land. */
+export async function classifyLanePages(
+  each: (accept: (page: ValueLanePage) => Promise<void>) => Promise<void>,
+  prepared: (page: ValueLanePage, index: number) => PreparedValue,
+  check: () => void,
+  pacer?: ColumnPassPacer,
+): Promise<ColumnClassification> {
+  const slice = pacer ?? new CooperativeSlice<'filter'>({})
+  let numeric = false, text = false, date = false, loading = false, pending = 0
+  try {
+    // Work an earlier pass left unyielded is not carried into this one.
+    await slice.flush('filter')
+    check()
+    await each(async page => {
+      if (pending > 0 && pending + page.count > YIELD_WORK_UNITS) {
+        await slice.flush('filter')
+        check()
+        pending = 0
+      }
+      function* values() { for (let i = 0; i < page.count; i++) yield prepared(page, i) }
+      const part = classifyColumn(values(), true)
+      numeric ||= part.hasNumeric; text ||= part.kind === 'text'; date ||= part.kind === 'date'; loading ||= part.kind === 'loading'
+      pending += page.count
+      if (slice.due(page.count)) {
+        await slice.pause('filter')
+        check()
+        pending = 0
+      }
+    })
+  } finally { if (!pacer) (slice as CooperativeSlice<'filter'>).dispose() }
+  return { kind: loading ? 'loading' : text ? 'text' : numeric ? date ? 'date' : 'number' : 'empty', hasNumeric: numeric }
+}
 export function valueSourceFromStore(store: SourceStore, col: number, body: { r0: number; r1: number }, pageRows = 4096, allocation?: AllocationContext): ValueColumnSource {
   if (!Number.isSafeInteger(pageRows) || pageRows < 1 || body.r1 < body.r0 - 1) throw new RangeError('Invalid value source paging')
   const rows = body.r1 - body.r0 + 1

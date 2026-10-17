@@ -11,9 +11,9 @@
  * matcher is a source-row flag lane over the filter range only.
  */
 import type { FilterKeySet, FilterSpec, PagedKeySetRef, SourceStamp, SourceStore, WorkbookFormatting } from '../xlsx/view/contracts'
-import { classifyColumn, FilterEngine, type ColumnClassification, type FilterContext, type PreparedValue } from '../xlsx/view/filter'
+import { FilterEngine, type ColumnClassification, type FilterContext, type PreparedValue } from '../xlsx/view/filter'
 import { FilterDiagnostic } from '../xlsx/view/textFilter'
-import { compileValuesMembership, valueSourceFromStore, type ValueIndexIdentity, type ValueLanePage } from '../xlsx/view/valueIndex'
+import { classifyLanePages, compileValuesMembership, valueSourceFromStore, type ColumnPassPacer, type ValueIndexIdentity, type ValueLanePage } from '../xlsx/view/valueIndex'
 import { ValueIndexError, type ValueKeyRun, type ValueRunStore } from '../xlsx/view/valueRuns'
 import { cellDisplayText } from '../xlsx/render'
 import type { XlsxSheet } from '../xlsx/types'
@@ -84,11 +84,11 @@ export function createWorkerFilterEvaluator(keysFor: (stamp: SourceStamp) => Rea
   // (apply, clear, apply) classify once instead of re-reading 1M rows each time.
   // Bounded like the main thread's classification cache; 'loading' is never kept.
   const classifications = new Map<string, ColumnClassification>()
-  const classifyCached = async (store: SourceStore, stamp: SourceStamp, col: number, r0: number, r1: number, signal: AbortSignal): Promise<ColumnClassification> => {
+  const classifyCached = async (store: SourceStore, stamp: SourceStamp, col: number, r0: number, r1: number, signal: AbortSignal, cooperate?: ColumnPassPacer): Promise<ColumnClassification> => {
     const key = JSON.stringify([stamp.docId, stamp.sheetId, stamp.valueGen, col, r0, r1])
     const known = classifications.get(key)
     if (known) return known
-    const classification = await classify(store, stamp, col, r0, r1, signal, prepared)
+    const classification = await classify(store, stamp, col, r0, r1, signal, prepared, cooperate)
     if (classification.kind !== 'loading') {
       if (classifications.size >= CLASSIFICATION_CACHE) classifications.delete(classifications.keys().next().value!)
       classifications.set(key, classification)
@@ -107,7 +107,7 @@ export function createWorkerFilterEvaluator(keysFor: (stamp: SourceStamp) => Rea
     const flags = new Uint8Array(Math.max(0, spec.range.r1 - spec.range.r0 + 1)).fill(1)
     try {
       for (const [col, rule] of spec.columns) {
-        const classification = await classifyCached(store, stamp, col, r0, r1, signal)
+        const classification = await classifyCached(store, stamp, col, r0, r1, signal, cooperate)
         if (classification.kind === 'loading') return { kind: 'incomplete', missing: [{ r0, r1, c0: col, c1: col }] }
         const identity: ValueIndexIdentity = { ...stamp, range: spec.range, col, classification, classificationGen: stamp.valueGen }
         const match = rule.kind === 'values'
@@ -142,14 +142,10 @@ export function createWorkerFilterEvaluator(keysFor: (stamp: SourceStamp) => Rea
   }
 }
 
-async function classify(store: SourceStore, stamp: SourceStamp, col: number, r0: number, r1: number, signal: AbortSignal, prepared: Prepare): Promise<ColumnClassification> {
-  let numeric = false, text = false, date = false, loading = false
-  await pages(store, stamp, col, r0, r1, signal, page => {
-    function* values() { for (let i = 0; i < page.count; i++) yield prepared(page, i) }
-    const part = classifyColumn(values(), true)
-    numeric ||= part.hasNumeric; text ||= part.kind === 'text'; date ||= part.kind === 'date'; loading ||= part.kind === 'loading'
-  })
-  return { kind: loading ? 'loading' : text ? 'text' : numeric ? date ? 'date' : 'number' : 'empty', hasNumeric: numeric }
+async function classify(store: SourceStore, stamp: SourceStamp, col: number, r0: number, r1: number, signal: AbortSignal, prepared: Prepare, cooperate?: ColumnPassPacer): Promise<ColumnClassification> {
+  return classifyLanePages(accept => pages(store, stamp, col, r0, r1, signal, accept), prepared, () => {
+    if (signal.aborted) throw new ValueIndexError('cancelled', 'Filter cancelled')
+  }, cooperate)
 }
 
 async function pages(store: SourceStore, stamp: SourceStamp, col: number, r0: number, r1: number, signal: AbortSignal, accept: (page: ValueLanePage, firstRow: number) => Promise<void> | void): Promise<void> {
