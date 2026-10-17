@@ -12,12 +12,12 @@ import { createRowOrder } from '../src/xlsx/view/order'
 import { createSheetMetrics } from '../src/xlsx/view/projection'
 import { buildSheetGeometry } from '../src/xlsx/view/viewport'
 import { createIntervalSet, visibilityFromHidden } from '../src/xlsx/view/visibility'
-import { AutoFitRefusedError, createFitMeasure, handlePlacement } from '../src/components/xlsx/sheetResize'
+import { AutoFitRefusedError, autoFitSize, createFitMeasure, handlePlacement } from '../src/components/xlsx/sheetResize'
 import {
-  AUTOFIT_MAX_CELLS, AUTOFIT_MAX_ROWS, MAX_SESSION_SIZES, RESIZE_LIMITS, SheetSizes, autoFitRowCandidates, clampSize, fitColumnWidth, fitRowHeight,
+  AUTOFIT_MAX_CELLS, AUTOFIT_MAX_ROWS, MAX_SESSION_SIZES, RESIZE_LIMITS, SheetSizes, autoFitRowCandidates, cellFont, clampSize, fitColumnWidth, fitRowHeight,
   mergeAxisOverrides, remapDrawings,
 } from '../src/xlsx/view/axisSizes'
-import type { XlsxDrawing, XlsxSheet } from '../src/xlsx/types'
+import type { XlsxCellStyle, XlsxDrawing, XlsxSheet } from '../src/xlsx/types'
 import { drawingExtent } from '../src/xlsx/view/sheetCells'
 import { createCellLayoutHost } from '../src/xlsx/view/renderViewport'
 
@@ -273,6 +273,32 @@ describe('confirmation C1: native measurement resources are reserved before they
       const painted = createCellLayoutHost(document.createElement('canvas').getContext('2d')!, sheet()).layoutBody(cell, 64, 400).text!.font
       expect(painted).not.toBe('10pt "Calibri"')
       expect(rotated).toBeGreaterThanOrEqual(fit.measure(painted, 'abcdefghijklmno') - 1)
+    } finally { spy.mockRestore() }
+  })
+})
+
+describe('auto-fit measures with the font string the cells are painted with', () => {
+  const painterFont = (style: XlsxCellStyle) => createCellLayoutHost(document.createElement('canvas').getContext('2d')!, sheet()).layoutBody({ ref: 'A1', row: 0, col: 0, value: 'x', styleIndex: 0, style }, 400, 20).text!.font
+  it('cellFont is the painter font for every bold/italic/size combination', () => {
+    for (const style of [{ numFmtId: 0 }, { numFmtId: 0, bold: true }, { numFmtId: 0, italic: true, fontSizePt: 14 }, { numFmtId: 0, bold: true, italic: true, fontSizePt: 8 }] as XlsxCellStyle[]) {
+      expect(cellFont(style).font).toBe(painterFont(style))
+    }
+  })
+  it('column auto-fit equals the painted text width on a host without Calibri', () => {
+    // As in C4: the bare "Calibri" family resolves to a wider fallback than the painter's stack.
+    const proto = Object.getPrototypeOf(document.createElement('canvas').getContext('2d')!) as CanvasRenderingContext2D
+    const original = proto.measureText
+    const spy = vi.spyOn(proto, 'measureText').mockImplementation(function (this: CanvasRenderingContext2D, text: string) {
+      const metrics = original.call(this, text), scale = this.font.includes(',') ? 1 : 1.15
+      return new Proxy(metrics, { get: (target, key) => key === 'width' ? target.width * scale : Reflect.get(target, key) })
+    })
+    try {
+      const s = sheet({ rows: [{ index: 0, cells: [{ ref: 'A1', row: 0, col: 0, value: 'abcdefghijklmnopqrstuvwxyz', styleIndex: 0 }] }] })
+      const geometry = buildSheetGeometry(s)
+      if (geometry.kind !== 'ready') throw new Error('Expected ready geometry')
+      const fit = createFitMeasure({ admit: () => true, sheet: s })
+      const width = autoFitSize('column', 0, { geometry, sheet: s, pane: { x: 0, y: 0, width: 640, height: 200 }, knownRows: () => [0], measure: fit.measure })
+      expect(width).toBe(fitColumnWidth([{ text: 'abcdefghijklmnopqrstuvwxyz', font: painterFont({ numFmtId: 0 }) }], fit.measure))
     } finally { spy.mockRestore() }
   })
 })

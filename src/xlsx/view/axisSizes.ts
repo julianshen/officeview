@@ -16,6 +16,7 @@
 import type { AxisMetrics, AxisSizeInterval } from './contracts'
 import type { XlsxDrawing } from '../types'
 import { retainDrawingCopyOwners } from './drawingOwners'
+import { cellFontString } from '../cellFont'
 
 export type ResizeAxis = 'row' | 'col'
 /** Whole-CSS-pixel bounds. The maxima follow Excel's own limits (255
@@ -247,5 +248,5 @@ export function autoFitRowCandidates(visible: Iterable<number>, known: Iterable<
 /** The painter's font string for a cell style (render.ts layoutCellBody). */
 export function cellFont(style: { bold?: boolean; italic?: boolean; fontSizePt?: number } | undefined): { font: string; sizePx: number } {
   const sizePt = style?.fontSizePt ?? 10
-  return { font: `${style?.italic ? 'italic ' : ''}${style?.bold ? 'bold ' : ''}${sizePt}pt "Calibri"`, sizePx: sizePt * 96 / 72 }
+  return { font: cellFontString(style, sizePt), sizePx: sizePt * 96 / 72 }
 }

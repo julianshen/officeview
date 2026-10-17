@@ -26,6 +26,7 @@ import { RectangleIndex } from './view/structure'
 import { DEFAULT_COLUMN_METRICS, columnWidthPx } from './columnWidth'
 import { cellSourceRow, drawingExtent } from './view/sheetCells'
 import type { CellBodyLayout } from './view/textLayout'
+import { CELL_FONT_STACK, cellFontString } from './cellFont'
 
 export interface GridMetrics {
   colWidthsPx: number[]
@@ -78,7 +79,6 @@ export function cellTextRotation(rotation: number | undefined): { radians: numbe
  * metric-compatible Carlito, then common sans faces with the same metrics in
  * every context, then the generic.
  */
-const CELL_FONT_STACK = '"Calibri", Carlito, Arial, Helvetica, "Liberation Sans", sans-serif'
 const cellFontFamily = (family: string): string => family === 'Calibri' ? CELL_FONT_STACK : family
 /** Calibri (= Carlito) advance widths for U+0020..U+007E in 1/2048 em, regular
  * and bold: Excel's own layout metrics for its default face, so '#' overflow
@@ -971,7 +971,7 @@ export function layoutCellBody(
   const out: CellBodyLayout = { x, y, w, h: hh, formattedText: '' }
   if (cell.style?.fillColor) out.fill = spreadsheetColor(cell.style.fillColor)
   // text (right-align numbers, left-align strings; alignment spans the merge)
-  const fontAt = (sizePt: number) => `${cell.style?.italic ? 'italic ' : ''}${cell.style?.bold ? 'bold ' : ''}${sizePt}pt ${CELL_FONT_STACK}`
+  const fontAt = (sizePt: number) => cellFontString(cell.style, sizePt)
   const baseSize = cell.style?.fontSizePt ?? 10
   const rotated = cellTextRotation(cell.style?.textRotation) !== undefined
   const inner = Math.max(0, w - PADDING_L - PADDING_R)
