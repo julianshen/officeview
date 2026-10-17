@@ -124,6 +124,9 @@ function selectedRow(props: GridHeadersProps, row: number): boolean | undefined 
   if (merged.length === 1 && merged[0].lo <= 0 && merged[0].hi >= props.projection.cols.logicalCount - 1) return true
   return unknown ? undefined : false
 }
+/** Emoji-capable glyphs (Unicode Emoji=Yes) carry U+FE0E, or iOS draws them as
+ * colour emoji tiles; the other header glyphs (↑ ↓ ⋯ …) are not emoji. */
+const TEXT_GLYPH = { corner: '\u2196\uFE0E', unsorted: '\u2195\uFE0E' } as const
 // A mouse press must not move focus onto a header control outside control mode.
 const keepGridFocus = (event: MouseEvent<HTMLButtonElement>) => { if (event.currentTarget.tabIndex < 0) event.preventDefault() }
 export function GridHeaders(props: GridHeadersProps): ReactElement {
@@ -174,7 +177,7 @@ export function GridHeaders(props: GridHeadersProps): ReactElement {
   const laneTarget = (index: number): CSSProperties => ({ ...target, position: 'absolute', left: 0, top: GRID_HEADER_SIZE * index, width: GRID_HEADER_SIZE, height: GRID_HEADER_SIZE, background: '#ffffff' })
   return <div role="row" aria-rowindex={1} data-officeview-ui="grid-headers" onPointerDown={event => event.stopPropagation()} onDoubleClick={event => event.stopPropagation()} style={{ position: 'absolute', top: 0, left: 0, height, width: '100%', zIndex: 2, background: HEADER_COLORS.background, boxShadow: `inset 0 -1px ${HEADER_COLORS.track}` }}>
     <div role="columnheader" aria-colindex={1} aria-label="Worksheet corner" style={{ position: 'absolute', left: 0, width: gutter, height: laneCol === undefined ? GRID_HEADER_SIZE : height, zIndex: 1 }}>
-      <button type="button" aria-label="Select worksheet" tabIndex={props.controlMode ? 0 : -1} onMouseDown={keepGridFocus} onClick={props.onSelectAll} style={{ width: gutter, height: GRID_HEADER_SIZE, color: HEADER_COLORS.text }}>↖</button>
+      <button type="button" aria-label="Select worksheet" tabIndex={props.controlMode ? 0 : -1} onMouseDown={keepGridFocus} onClick={props.onSelectAll} style={{ width: gutter, height: GRID_HEADER_SIZE, color: HEADER_COLORS.text }}>{TEXT_GLYPH.corner}</button>
       {laneCol !== undefined && <>
         <button ref={laneButton} type="button" data-header-lane={laneCol} tabIndex={props.controlMode ? 0 : -1} onMouseDown={keepGridFocus}
           aria-label={`Actions for column ${columnToLetters(laneCol)}`} aria-expanded={laneOpen} aria-controls={laneId}
@@ -230,7 +233,7 @@ function columnActions(props: GridHeadersProps, col: number, style: (index: numb
   const label = `Column ${columnToLetters(col)}${direction ? `; sort priority ${priority + 1}, ${direction}` : ''}`
   const rule = props.filter?.columns.get(col), description = rule ? columnRuleDescription(rule) : 'No viewer filter'
   return <>
-    <button type="button" data-action-column={col} tabIndex={props.controlMode ? 0 : -1} onMouseDown={keepGridFocus} style={{ ...style(0), ...(direction ? { color: HEADER_COLORS.active } : {}) }} disabled={!props.onSortCycle} aria-label={`Cycle sort column ${columnToLetters(col)}`} aria-busy={props.pendingSortColumn === col ? true : undefined} aria-description={props.pendingSortColumn === col ? 'sorting' : direction ?? 'unsorted'} aria-pressed={Boolean(direction)} title={`${label}; ${props.pendingSortColumn === col ? 'sorting' : direction ?? 'unsorted'}`} onClick={event => props.onSortCycle?.(col, event.shiftKey, event.currentTarget)}><span style={iconClip}>{props.pendingSortColumn === col ? '…' : direction === 'ascending' ? '↑' : direction === 'descending' ? '↓' : '↕'}</span></button>
+    <button type="button" data-action-column={col} tabIndex={props.controlMode ? 0 : -1} onMouseDown={keepGridFocus} style={{ ...style(0), ...(direction ? { color: HEADER_COLORS.active } : {}) }} disabled={!props.onSortCycle} aria-label={`Cycle sort column ${columnToLetters(col)}`} aria-busy={props.pendingSortColumn === col ? true : undefined} aria-description={props.pendingSortColumn === col ? 'sorting' : direction ?? 'unsorted'} aria-pressed={Boolean(direction)} title={`${label}; ${props.pendingSortColumn === col ? 'sorting' : direction ?? 'unsorted'}`} onClick={event => props.onSortCycle?.(col, event.shiftKey, event.currentTarget)}><span style={iconClip}>{props.pendingSortColumn === col ? '…' : direction === 'ascending' ? '↑' : direction === 'descending' ? '↓' : TEXT_GLYPH.unsorted}</span></button>
     <button type="button" data-action-column={col} tabIndex={props.controlMode ? 0 : -1} onMouseDown={keepGridFocus} style={{ ...style(1), ...(rule ? { color: HEADER_COLORS.active } : {}) }} disabled={!props.onFilter} aria-label={`Filter column ${columnToLetters(col)} — ${description}`} aria-pressed={Boolean(rule)} title={description} onClick={event => { props.onNotice?.(`${label}; ${description}`); props.onFilter?.(col, event.currentTarget) }}><span style={iconClip}><svg aria-hidden="true" width="12" height="14" viewBox="0 0 12 14"><path d="M1 1h10L7 6v6l-2-1V6z" fill={rule ? 'currentColor' : 'none'} stroke="currentColor" /></svg></span></button>
     {props.onSortDialog && <button type="button" data-action-column={col} tabIndex={props.controlMode ? 0 : -1} onMouseDown={keepGridFocus} style={style(2)} aria-label={`More sort options for ${columnToLetters(col)}`} onClick={event => props.onSortDialog?.(col, event.currentTarget)}><span style={iconClip}>⋯</span></button>}
   </>
