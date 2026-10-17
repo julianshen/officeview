@@ -2383,9 +2383,13 @@ export class DocumentSession {
     switch (query?.op) {
       case 'drawings': {
         // The read's working set is a transient share of the document pool (S4.3).
+        // A provider that ignores its signal keeps building after a deadline or
+        // cancel settled this read: its share ends when the RAW provider settles.
         const charge = this.charge()
-        try { result = { op: 'drawings', result: await readSheetDrawings(store, options, this.options.profile ?? 'D', charge) } }
-        finally { charge.release() }
+        let raw: Promise<unknown> | undefined, drained = false
+        const observed = interruptibleStore(this.source.store(owner.sheetId), work => { raw = work; const done = () => { drained = true }; void work.then(done, done) })
+        try { result = { op: 'drawings', result: await readSheetDrawings(observed, options, this.options.profile ?? 'D', charge) } }
+        finally { if (!raw || drained) charge.release(); else { const release = () => charge.release(); void raw.then(release, release) } }
         break
       }
       case 'cell': result = { op: 'cell', read: await store.readCell(query.at, options) }; break
