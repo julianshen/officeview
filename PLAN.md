@@ -22,7 +22,7 @@ for its requirement matrix. The WordArt plan below retains its existing scope.
   - On 8-column workbook (`f2-1k.xlsx`), open More Sort options dialog for column A.
   - Add sort levels sequentially until 8 levels (columns A through H) are added; verify 8th level disables "Add level".
   - Configure ascending/descending levels and submit "OK"; verify all 8 keys are applied, column header shows `aria-sort`, and row data reflects 8-key order without error.
-- [ ] Test: (c) AC-LIFE-02 F7 sheet switching retained memory plateau in a real browser
+- [x] Test: (c) AC-LIFE-02 F7 sheet switching retained memory plateau in a real browser
   - Expose `onMainLedger` hook in `viewer-e2e.tsx` onto `window.__viewerE2E.mainLedger` so main-thread ledger memory is observable in E2E tests alongside `lastFrame.bitmapBytes`.
   - On multi-sheet workbook (`f7-two-sheets.xlsx`), establish initial visited baseline for sheets A and B.
   - Repeatedly switch between Sheet A and Sheet B (10 switches total), measuring `mainLedger.bytes` and `lastFrame.bitmapBytes` at each switch.

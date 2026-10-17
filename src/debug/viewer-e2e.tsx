@@ -35,6 +35,7 @@ import { openPagedWorkbook } from '../components/xlsx/pagedWorkbook'
 import { pagedWorkbookOf } from '../components/pagedDocument'
 import { FORCE_PAGED_LIMITS } from './forcePaged'
 import type { SheetFrameStats } from '../components/xlsx/InteractiveSheetDoc'
+import type { MainMemoryLedger } from '../xlsx/view/mainLedger'
 // The library loads these on demand. The harness server only serves modules it
 // has reached through the module graph from src/debug (LAN lockdown, see
 // vite.harness.config.ts), so the page names them statically.
@@ -57,10 +58,12 @@ export interface ViewerE2E {
   transferBytes: number
   workersCreated: number
   workersTerminated: number
+  mainLedger: MainMemoryLedger | null
   clipboard: string[]
   counts(): Record<string, number>
   reset(): void
 }
+
 
 declare global {
   interface Window { __viewerE2E?: ViewerE2E }
@@ -79,6 +82,7 @@ const state: ViewerE2E = {
   transferBytes: 0,
   workersCreated: 0,
   workersTerminated: 0,
+  mainLedger: null,
   clipboard: [],
   counts() {
     const out: Record<string, number> = {}
@@ -138,6 +142,10 @@ function onFrame(stats: SheetFrameStats): void {
   state.maxFrameRecords = Math.max(state.maxFrameRecords, stats.frameRecords)
 }
 
+function onMainLedger(ledger: MainMemoryLedger): void {
+  state.mainLedger = ledger
+}
+
 function E2EPage(): JSX.Element {
   const [blob, setBlob] = useState<Blob | null>(null)
   const src = params.get('src')
@@ -152,9 +160,10 @@ function E2EPage(): JSX.Element {
   const worker = params.get('worker') === '1'
   // OfficeFile's paged route keys on a stable factory identity.
   const factory = useMemo(() => (worker ? countingWorker : undefined), [worker])
-  // onFrame is the viewer's @internal instrumentation prop; OfficeFile forwards
-  // unknown props to the interactive viewer unchanged.
-  const internal = { onFrame } as Record<string, unknown>
+  // onFrame and onMainLedger are the viewer's @internal instrumentation props;
+  // OfficeFile forwards unknown props to the interactive viewer unchanged.
+  const internal = { onFrame, onMainLedger } as Record<string, unknown>
+
   if (worker && params.get('paged') === '1') return <ForcedPagedDoc blob={blob} internal={internal} />
   return (
     <OfficeFile

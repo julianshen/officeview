@@ -688,6 +688,60 @@ test.describe('S10.1 real interactive viewer', () => {
     await expect(page.getByRole('columnheader', { name: /^Column B/ })).not.toHaveAttribute('aria-sort', /ascending|descending/)
   })
 
+  test('F7 multi-sheet switching: retained memory plateaus across repeated sheet switches (AC-LIFE-02)', async ({ page }) => {
+    await openViewer(page, 'f7-two-sheets.xlsx')
+    const sheet = page.getByRole('combobox', { name: 'Worksheet' })
+
+    // Read initial memory on Sheet A.
+    const initialA = await page.evaluate(() => ({
+      ledgerBytes: window.__viewerE2E?.mainLedger?.bytes ?? 0,
+      bitmapBytes: window.__viewerE2E?.lastFrame?.bitmapBytes ?? 0,
+    }))
+    // In RED phase, window.__viewerE2E.mainLedger is not yet wired, so this will fail!
+    expect(initialA.ledgerBytes).toBeGreaterThan(0)
+    expect(initialA.bitmapBytes).toBeGreaterThan(0)
+
+    // Warm Sheet B.
+    await sheet.selectOption({ label: 'B' })
+    await expect(page.getByRole('grid')).toHaveAttribute('aria-label', 'Worksheet B')
+    await expect(status(page)).toBeVisible()
+    const initialB = await page.evaluate(() => ({
+      ledgerBytes: window.__viewerE2E?.mainLedger?.bytes ?? 0,
+      bitmapBytes: window.__viewerE2E?.lastFrame?.bitmapBytes ?? 0,
+    }))
+    expect(initialB.ledgerBytes).toBeGreaterThan(0)
+
+    // Baseline ceiling across both visited sheets.
+    const baselineLedger = Math.max(initialA.ledgerBytes, initialB.ledgerBytes)
+    const baselineBitmap = Math.max(initialA.bitmapBytes, initialB.bitmapBytes)
+
+    // Switch between Sheet A and Sheet B repeatedly for 10 switches.
+    const history: Array<{ sheet: string; ledger: number; bitmap: number }> = []
+    for (let i = 0; i < 10; i++) {
+      const target = i % 2 === 0 ? 'A' : 'B'
+      await sheet.selectOption({ label: target })
+      await expect(page.getByRole('grid')).toHaveAttribute('aria-label', `Worksheet ${target}`)
+      await expect(status(page)).toBeVisible()
+      const mem = await page.evaluate(() => ({
+        ledger: window.__viewerE2E?.mainLedger?.bytes ?? 0,
+        bitmap: window.__viewerE2E?.lastFrame?.bitmapBytes ?? 0,
+      }))
+      history.push({ sheet: target, ...mem })
+    }
+
+    // Plateau assertion:
+    // 1. Final switch memory is back near baseline (bounded within 64 KiB allowance, no monotonic growth).
+    const finalSample = history[history.length - 1]
+    expect(finalSample.ledger).toBeLessThanOrEqual(baselineLedger + 64 * 1024)
+    expect(finalSample.bitmap).toBeLessThanOrEqual(baselineBitmap + 64 * 1024)
+
+    // 2. Later samples (switches 6-9) do not exceed earlier samples (switches 2-5).
+    const midMaxLedger = Math.max(...history.slice(2, 6).map(h => h.ledger))
+    const lateMaxLedger = Math.max(...history.slice(6).map(h => h.ledger))
+    expect(lateMaxLedger).toBeLessThanOrEqual(midMaxLedger + 32 * 1024)
+  })
+
+
 
   // S13 native Excel checkpoint: a workbook written and reopened (no repair
   // prompt) by Microsoft Excel 16 for macOS. Expected labels are the values
