@@ -581,7 +581,7 @@ export function formatValue(
 function builtinDateText(value: number, id: number, semantics: ResolvedSemantics, allocation?: FormatAllocation, sheet?: XlsxSheet): string {
   let result = formatBuiltinDate(value, id, semantics, allocation)
   if (result.kind === 'unsupported') {
-    if (sheet) noteFormatUnsupported(sheet, BUILTIN_DATE_FORMATS[id - 14], result.reason, allocation)
+    if (sheet) noteFormatUnsupported(sheet, BUILTIN_DATE_FORMATS[id - 14], result.reason, allocation, true)
     result = formatBuiltinDate(value, id, { ...semantics, locale: 'en-US' }, allocation)
   }
   return result.kind === 'text' ? result.text : isEvaluationError(result) ? '' : formatFiniteFallback(value)
@@ -658,14 +658,18 @@ export function cellDisplayText(sheet: XlsxSheet, cell: Pick<XlsxCell, 'value' |
  * channel (same shape as doc.diagnostics), deduped across repeated paints.
  * No product warning UI is produced.
  */
-function noteFormatUnsupported(sheet: XlsxSheet, format: string, reason: string, allocation?: FormatAllocation): void {
+function noteFormatUnsupported(sheet: XlsxSheet, format: string, reason: string, allocation?: FormatAllocation, builtinFallback = false): void {
   const holder = sheet as unknown as { diagnostics?: Array<{ kind: string; feature: string; message: string }> }
   if (!allocation) holder.diagnostics ??= []
-  const units = 8 + format.length + 47 + reason.length
+  // A built-in date/time whose locale cannot be used is a fallback, not a
+  // grammar failure: the format itself is fine.
+  const lead = builtinFallback ? 'Built-in date/time format' : 'Format'
+  const tail = builtinFallback ? ' is shown in en-US: ' : ' is outside the finite common-format grammar: '
+  const units = lead.length + 3 + format.length + tail.length + reason.length
   // Two concatenation buffers and the new diagnostic/array slots are admitted
   // before constructing either. Persistent bytes transfer with publication.
   allocation?.allocate(4 * units + 128)
-  const message = `Format '${format}' is outside the finite common-format grammar: ${reason}`
+  const message = `${lead} '${format}'${tail}${reason}`
   if (holder.diagnostics?.some(d => d.feature === 'format-unsupported' && d.message === message)) {
     allocation?.release(4 * units + 128)
     return

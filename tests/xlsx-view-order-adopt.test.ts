@@ -53,4 +53,19 @@ describe('adoptRowOrder exclusive buffer handoff', () => {
   it('rejects inclusive overlapping bands', () => {
     expect(() => adoptRowOrder([band(), band()])).toThrow(/Overlapping/)
   })
+  it('rejects a resizable backing buffer whose length-tracking view could change later', () => {
+    const Resizable = ArrayBuffer as unknown as new (bytes: number, options: { maxByteLength: number }) => ArrayBuffer
+    const resizable = new Uint32Array(new Resizable(12, { maxByteLength: 64 }))
+    resizable.set([4, 2, 3])
+    expect(() => adoptRowOrder([{ ...band(), sourceAtOffset: resizable }])).toThrow(RangeError)
+  })
+  it('reads the brand and buffer through intrinsics, not overridable own properties', () => {
+    const shared = new Uint32Array([4, 2, 3])
+    const alias = new Uint32Array(shared.buffer)
+    Object.defineProperty(alias, 'buffer', { value: new ArrayBuffer(12) })
+    expect(() => adoptRowOrder([{ ...band(), sourceAtOffset: shared, displayOffsetOfSource: alias }])).toThrow(RangeError)
+    const spoofed = new Int32Array([4, 2, 3])
+    Object.defineProperty(spoofed, Symbol.toStringTag, { value: 'Uint32Array' })
+    expect(() => adoptRowOrder([{ ...band(), sourceAtOffset: spoofed as unknown as Uint32Array }])).toThrow(RangeError)
+  })
 })

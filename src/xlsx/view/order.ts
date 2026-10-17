@@ -78,9 +78,32 @@ function orderOf(bands: readonly RowPermutationBand[]): CompactRowOrder {
 export function createRowOrder(inputs: readonly PermutationInput[]): CompactRowOrder {
   return inputs.length ? orderOf(buildBands(inputs)) : identity
 }
-/** Realm-independent Uint32Array check (wire bands are structured clones). */
-const isUint32 = (value: unknown): value is Uint32Array => Object.prototype.toString.call(value) === '[object Uint32Array]'
-const local = (array: Uint32Array): Uint32Array => array instanceof Uint32Array ? array : new Uint32Array((array as ArrayBufferView).buffer, (array as ArrayBufferView).byteOffset, (array as ArrayBufferView).byteLength / 4)
+// Intrinsic getters read internal slots: realm-independent (wire bands are
+// structured clones) and immune to own-property or Symbol.toStringTag overrides.
+const typedArrayProto = Object.getPrototypeOf(Uint8Array.prototype) as object
+const intrinsic = (proto: object, key: PropertyKey) => Object.getOwnPropertyDescriptor(proto, key)?.get
+const typedArrayTag = intrinsic(typedArrayProto, Symbol.toStringTag)!
+const typedArrayBuffer = intrinsic(typedArrayProto, 'buffer')!
+const typedArrayByteOffset = intrinsic(typedArrayProto, 'byteOffset')!
+const typedArrayByteLength = intrinsic(typedArrayProto, 'byteLength')!
+const typedArrayLength = intrinsic(typedArrayProto, 'length')!
+const arrayBufferByteLength = intrinsic(ArrayBuffer.prototype, 'byteLength')!
+const arrayBufferResizable = intrinsic(ArrayBuffer.prototype, 'resizable')
+/** A Uint32Array of any realm, by its internal [[TypedArrayName]]. */
+export const isUint32 = (value: unknown): value is Uint32Array => ArrayBuffer.isView(value) && Reflect.apply(typedArrayTag, value, []) === 'Uint32Array'
+/** Re-views a Uint32Array of any realm as this realm's, over the same bytes. */
+export const localUint32 = (array: Uint32Array): Uint32Array => array instanceof Uint32Array ? array : new Uint32Array(Reflect.apply(typedArrayBuffer, array, []) as ArrayBufferLike, Reflect.apply(typedArrayByteOffset, array, []) as number, Reflect.apply(typedArrayLength, array, []) as number)
+/** The view's real backing store when it is a fixed-length, non-shared
+ * ArrayBuffer that the view spans exactly; undefined otherwise. */
+function ownedBuffer(array: Uint32Array): ArrayBuffer | undefined {
+  const buffer = Reflect.apply(typedArrayBuffer, array, []) as ArrayBuffer
+  let byteLength: number
+  // The ArrayBuffer getters throw on a SharedArrayBuffer.
+  try { byteLength = Reflect.apply(arrayBufferByteLength, buffer, []) as number } catch { return undefined }
+  // A resizable buffer lets any holder change a length-tracking view later.
+  if (arrayBufferResizable && Reflect.apply(arrayBufferResizable, buffer, []) === true) return undefined
+  return Reflect.apply(typedArrayByteOffset, array, []) === 0 && Reflect.apply(typedArrayByteLength, array, []) === byteLength ? buffer : undefined
+}
 /**
  * Zero-copy order over wire bands that already carry their inverse (a worker
  * view delta): the bands' own buffers become this order's, after validating
@@ -99,18 +122,19 @@ export function adoptRowOrder(bands: readonly RowPermutationBand[]): CompactRowO
     validateBand(band.r0, band.r1)
     if (index && sorted[index - 1].r1 >= band.r0) throw new RangeError('Overlapping permutation bands')
     const length = band.r1 - band.r0 + 1
-    if (!isUint32(band.sourceAtOffset) || !isUint32(band.displayOffsetOfSource) || band.sourceAtOffset.length !== length || band.displayOffsetOfSource.length !== length) {
+    if (!isUint32(band.sourceAtOffset) || !isUint32(band.displayOffsetOfSource) || Reflect.apply(typedArrayLength, band.sourceAtOffset, []) !== length || Reflect.apply(typedArrayLength, band.displayOffsetOfSource, []) !== length) {
       throw new RangeError('Permutation length must match its inclusive band')
     }
     // Shared storage cannot be handed over exclusively, even across bands.
     // A partial view would keep unaccounted backing-store padding alive.
     for (const array of [band.sourceAtOffset, band.displayOffsetOfSource]) {
-      if (Object.prototype.toString.call(array.buffer) !== '[object ArrayBuffer]' || buffers.has(array.buffer) || array.byteOffset !== 0 || array.byteLength !== array.buffer.byteLength) throw new RangeError('Permutation buffers must be distinct, non-shared and fully owned')
-      buffers.add(array.buffer)
+      const buffer = ownedBuffer(array)
+      if (!buffer || buffers.has(buffer)) throw new RangeError('Permutation buffers must be distinct, non-shared and fully owned')
+      buffers.add(buffer)
     }
     // A structured clone from another realm is re-viewed (same buffer, no copy) as
     // this realm's Uint32Array, which projection and its consumers require.
-    const sourceAtOffset = local(band.sourceAtOffset), displayOffsetOfSource = local(band.displayOffsetOfSource)
+    const sourceAtOffset = localUint32(band.sourceAtOffset), displayOffsetOfSource = localUint32(band.displayOffsetOfSource)
     for (let offset = 0; offset < length; offset++) {
       const sourceRow = sourceAtOffset[offset]
       if (sourceRow < band.r0 || sourceRow > band.r1 || displayOffsetOfSource[sourceRow - band.r0] !== offset) throw new RangeError('Permutation must be a bijection of its band')

@@ -32,7 +32,7 @@ import { MainMemoryLedger, axisBytes, estimatePayloadBytes, leaseTargets, type L
 import type { XlsxCell, XlsxCellStyle, XlsxMergeRange } from '../xlsx/types'
 import { MAX_COLS, MAX_ROWS, formatA1, isValidCoordinate, type SourceCell, type SourceRect } from '../xlsx/view/coordinates'
 import { createAxisMetrics } from '../xlsx/view/axes'
-import { adoptRowOrder, createIdentityOrder, createRowOrder, type CompactRowOrder } from '../xlsx/view/order'
+import { adoptRowOrder, createIdentityOrder, createRowOrder, isUint32, localUint32, type CompactRowOrder } from '../xlsx/view/order'
 import { createIntervalSet, type CompactRowVisibility } from '../xlsx/view/visibility'
 import type { ProjectedSheetMetrics } from '../xlsx/view/projection'
 import { savedValuesStatus, type ValueStatus } from '../xlsx/view/values'
@@ -591,15 +591,21 @@ export class RemoteWorkbook implements WorkbookSource {
     let adopted: CompactRowOrder | null = null
     try { adopted = adoptRowOrder(delta.bands) } catch { adopted = null }
     if (adopted) return this.publish(sheetId, delta, spec, previous, adopted, reply, reservation)
-    if (reservation) this.mainLedger.release('replies', reservation)
-    // Staging: the local band copies coexist with the wire bands (reply), the
-    // previous view and the order being built from them.
-    const bandBytes = delta.bands.reduce((sum, band) => sum + band.sourceAtOffset.length * 4, 0)
-    this.mainLedger.set('viewBuffers', `staging:${sheetId}`, bandBytes)
+    // Staging: the order's local bands and inverse (makeBand's slice is their
+    // only copy) coexist with the wire bands (reply) and the previous view.
+    // Wire bands may come from another realm: re-view them, never pre-copy.
+    // Non-typed input is still converted, and that copy is staged as well.
+    let bandBytes = 0, copiedBytes = 0
+    for (const band of delta.bands) {
+      const bytes = band.sourceAtOffset.length * 4
+      bandBytes += bytes
+      if (!isUint32(band.sourceAtOffset)) copiedBytes += bytes
+    }
+    this.mainLedger.set('viewBuffers', `staging:${sheetId}`, bandBytes * 2 + copiedBytes)
+    const inputs = delta.bands.map(band => ({ r0: band.r0, r1: band.r1, sourceAtOffset: isUint32(band.sourceAtOffset) ? localUint32(band.sourceAtOffset) : new Uint32Array(band.sourceAtOffset) }))
     const view: RemoteSheetView = {
       revision: delta.owner.viewGen,
-      // Wire bands may come from another realm: rebuild them as local arrays.
-      order: delta.bands.length ? createRowOrder(delta.bands.map(band => ({ r0: band.r0, r1: band.r1, sourceAtOffset: new Uint32Array(band.sourceAtOffset) }))) : createIdentityOrder(),
+      order: inputs.length ? createRowOrder(inputs) : createIdentityOrder(),
       visibility: visibilityFromDisplayBitsets(delta.visibility),
       filter: 'filter' in spec ? spec.filter ?? null : previous.filter,
       sort: 'sort' in spec ? spec.sort ?? null : previous.sort,
@@ -619,6 +625,9 @@ export class RemoteWorkbook implements WorkbookSource {
     // the view takes them over, so the swap never counts them twice (stream F: a
     // 4 MiB double count at the F2 1M-row sort pushed the M ledger past 32 MiB).
     this.mainLedger.release('viewBuffers', `staging:${sheetId}`)
+    // As in publish(), what is left of the reservation covered the local
+    // visibility words built above; it ends as they are charged.
+    if (reservation) this.mainLedger.release('replies', reservation)
     this.mainLedger.chargeWhileHeld('viewBuffers', targets, bandBytes * 2 + visibilityBytes)
     const replaced = this.viewHolds.get(sheetId)
     this.viewHolds.set(sheetId, this.mainLedger.hold(view)!)

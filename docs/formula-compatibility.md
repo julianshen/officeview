@@ -137,13 +137,15 @@ For non-en-US locales, `Intl.DateTimeFormat` provides the presentation pattern:
 `14` numeric year/month/day, `15` day/short month/two-digit year, `16` day/short
 month, `17` short month/two-digit year, `18–19` 12-hour time with localized
 AM/PM, `20–21` 24-hour time, and `22` localized `14` plus a space and `20`.
-Gregorian calendar, Latin digits and UTC are explicit (locale calendar/numbering extensions are deliberately overridden); workbook time-zone overrides
-do not shift stored serials. Locale punctuation/order/names are Intl-derived
+Gregorian calendar, Latin digits and UTC are explicit (locale calendar/numbering
+extensions are deliberately overridden); workbook time-zone overrides do not
+shift stored serials. Locale punctuation/order/names are Intl-derived
 inferences, not desktop Excel measurements. In particular, the exact locale and
 OS regional overrides of desktop Excel have not been certified. The default
-`en-US` and its canonical variants (including `en-us` and `en-US-u-nu-latn`) keep the exact forms listed above rather than using Intl's date order
-for the fixed built-in name forms. Authored custom formats and formula `TEXT`
-keep the finite formatter's existing locale capability boundary.
+`en-US` and its canonical variants (including `en-us` and `en-US-u-nu-latn`)
+keep the exact forms listed above rather than using Intl's date order for the
+fixed built-in name forms. Authored custom formats and formula `TEXT` keep the
+finite formatter's existing locale capability boundary.
 
 Serial 0 and fictitious 1900 serial 60 retain their civil tokens: the Intl adapter
 uses a leap-year surrogate and replaces the year/day parts instead of normalizing
@@ -151,13 +153,24 @@ the Excel date through a JavaScript Date. Negative 1900 date/time cells fill the
 available width with hashes; 1904 signed-date presentation and finite `TEXT` stay
 unchanged. Invalid, unavailable, or over-128-character locale tags produce a typed
 unsupported result; the sheet records a deduplicated `format-unsupported`
-diagnostic and uses the formatted en-US fallback, rather than a raw serial.
+diagnostic ("Built-in date/time format '…' is shown in en-US: …") and uses the
+formatted en-US fallback, rather than a raw serial.
 
-Localized calls retain no global/native formatter cache. Before entering Intl,
-guarded callers admit a 32 KiB application workspace estimate per formatter
-(two sequential formatters for `22`) and release it after formatting; output
-strings remain charged. Each builder admits at most 32 parts, 128 UTF-16 units per part and 256 units per formatter output before mapping/joining; an oversized result is typed unsupported. This estimate is not a proven upper bound on the JS
-engine's native Intl workspace or a browser performance acceptance result.
+Localized formatters are cached at application level in one fixed-bounded,
+module-scoped LRU: at most 4 canonical locales with up to 8 formatters each
+(`22` reuses the `14` and `20` formatters), plus at most 16 memoized
+`supportedLocalesOf` verdicts per raw locale tag, including unsupported or
+invalid ones. It is module-scoped because resolved semantics are plain values
+rebuilt per call, so no document owner reaches the formatter. The JS engine
+also keeps its own ICU caches across calls regardless. Guarded callers admit a
+4 KiB builder allowance on every localized call; a cache miss additionally
+admits a 32 KiB workspace estimate before entering Intl (canonicalization or
+constructing one formatter) and releases it after that step, so a hit charges
+only the builder allowance. Output strings remain charged. Each builder admits
+at most 32 parts, 128 UTF-16 units per part and 256 units per formatter output
+before mapping/joining; an oversized result is typed unsupported. These
+estimates are not a proven upper bound on the JS engine's native Intl
+workspace or a browser performance acceptance result.
 
 Sources: [Excel built-in format overrides and international considerations](https://learn.microsoft.com/en-us/openspecs/office_standards/ms-oi29500/17d11129-219b-4e2c-88db-45844d21e528),
 [Excel regional versus fixed date formats](https://support.microsoft.com/en-us/excel/format-a-date-the-way-you-want-in-excel),
