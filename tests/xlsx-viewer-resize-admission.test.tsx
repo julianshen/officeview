@@ -282,6 +282,25 @@ describe('confirmation r7 R2: tile context and text shaping are admitted before 
   })
 })
 
+describe('shared admitted measurement context', () => {
+  it('wrapped text measured by the canonical layout is charged to one shared context, and tight memory never passes the limit', FIRST_PAINT_TEST, async () => {
+    const words = (row: number, col: number) => Array.from({ length: 6 }, (_, i) => `r${row}c${col}w${i}`).join(' ')
+    const rows: XlsxRow[] = Array.from({ length: 30 }, (_, index) => ({ index, customHeight: true, heightPt: 60, cells: Array.from({ length: 10 }, (_, col) => ({ ...cell(index, col, words(index, col)), style: { numFmtId: 0, wrapText: true } })) }))
+    let live: MainMemoryLedger | undefined
+    const f = frames()
+    const view = render(<InteractiveSheetDoc doc={docOf(rows)} views={{ s: { revision: 0 } }} onMainLedger={value => { live = value }} onFrame={f.onFrame} />)
+    await waitFor(() => expect(f.last()?.basePaints ?? 0).toBeGreaterThan(0), FIRST_PAINT_WAIT)
+    await settle()
+    expect(live!.ownerBytes('canvasText', 'measure')).toBeGreaterThan(0)
+    const check = squeeze(live!, 96 * 1024)
+    const scroller = view.getByTestId('officeview-sheet-scroller')
+    act(() => { scroller.scrollLeft = 640; fireEvent.scroll(scroller) }); await settle()
+    act(() => { scroller.scrollTop = 1600; fireEvent.scroll(scroller) }); await settle()
+    check()
+    live!.set('copy', 'filler', 0)
+  })
+})
+
 describe('find highlights are admitted like tiles', () => {
   it('a find hit on a heavy cell at low free memory stays within the hard limit (whole-cell highlight fallback)', FIRST_PAINT_TEST, async () => {
     const doc = docOf([{ index: 0, cells: [{ ...cell(0, 0, `needle ${'a\n'.repeat(9000)}`), style: { numFmtId: 0, wrapText: true } }] }, { index: 1, cells: [cell(1, 0, 'b')] }])

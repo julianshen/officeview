@@ -13,7 +13,7 @@ import type { CacheIdentity, LogicalCellBox, LogicalViewport, ProfileId } from '
 import type { RenderSheetAssets } from '../../xlsx/render'
 import { renderSheetViewport } from '../../xlsx/view/renderViewport'
 import { paintWatermark, type ResolvedWatermark } from '../../core/watermark'
-import { LayoutAdmissionError, type LayoutAdmission, type LayoutCache } from '../../xlsx/view/textLayout'
+import { LayoutAdmissionError, type CellLayoutHost, type LayoutAdmission, type LayoutCache } from '../../xlsx/view/textLayout'
 import { emptyWork, frameBudgetFor, planViewport, type FrameBudget, type MergeQueryCache, type SheetGeometryResult, type ViewportPlan } from '../../xlsx/view/viewport'
 import {
   BITMAP_BUDGETS, bitmapPoolPlan, MemoryPool, RGBA_BYTES, TILE_DEVICE_PX, TILE_PREFETCH_RING, TileCache,
@@ -44,6 +44,8 @@ export interface SheetFrame {
   layoutCache: LayoutCache
   /** Repaint memory admitted per record at construction (spec §§5.6, 12.4). */
   layoutAdmission?: LayoutAdmission
+  /** Shared admitted measurement host for record layout. */
+  layoutHost?: CellLayoutHost
   merges: MergeQueryCache
   /** Stamped into the pane bitmap after the tiles (tiles stay mark-free and
    * cacheable), so it travels with the presented pixels like the page path. */
@@ -301,7 +303,7 @@ export class SheetTileRenderer {
       try {
         result = renderSheetViewport(frame.sheet, ctx, frame.geometry, viewport, frame.assets, {
           preparedPlan: plan, profile: this.profile, owner: frame.identity, cache: frame.layoutCache, merges: frame.merges, frameBudget: budget,
-          ...(admission ? { layoutAdmission: admission } : {}),
+          ...(admission ? { layoutAdmission: admission } : {}), ...(frame.layoutHost ? { layoutHost: frame.layoutHost } : {}),
         })
       } catch (error) {
         // Text shaping on this tile's context was not admitted: the declared

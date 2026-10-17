@@ -112,6 +112,8 @@ export interface LayoutAdmission {
   cacheChanged(delta: number): void
   /** Retained tile context/shaping bytes changed (the canvas-text charge). */
   nativeChanged?(delta: number): void
+  /** The shared measurement contexts' retained bytes changed. */
+  measureChanged?(delta: number): void
 }
 /** A record could not be admitted even after evicting the cache: the caller
  * paints the tile's declared coarse/notice path instead. */

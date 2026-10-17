@@ -89,6 +89,9 @@ export interface ViewportPaintOptions {
    * a record that cannot be admitted, even after evicting the layout cache,
    * makes the tile paint its declared coarse notice instead. */
   layoutAdmission?: LayoutAdmission
+  /** Lays records out (default: on the tile's own context). The viewer passes
+   * its shared, admitted measurement context (components/xlsx/measureContext). */
+  layoutHost?: CellLayoutHost
 }
 const LAYOUT_MEMORY = 'layout-memory'
 const VIEWPORT_NOTICE: Record<Exclude<ViewportPlan['kind'], 'detail'>, string> = {
@@ -145,7 +148,7 @@ export function renderSheetViewport(
     const work = plan.work
     const built = cache.stats.built, reused = cache.stats.reused
     // The host lays a cell out in a box at the origin: records are box-relative.
-    const host = createCellLayoutHost(ctx, sheet)
+    const host = options.layoutHost ?? createCellLayoutHost(ctx, sheet)
     let records: CellLayout[] = [], active: CellLayout | undefined
     if (options.layoutAdmission) cache.beginBatch(options.layoutAdmission)
     try {

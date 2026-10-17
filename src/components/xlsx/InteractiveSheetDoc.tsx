@@ -43,9 +43,9 @@ import {
 import { keyboardSheetZoom, pinchSheetZoom, wheelSheetZoom } from '../../xlsx/view/sheetZoom'
 import { SheetNavigationSession, emptyGridSelection, navigateSelection, recordCounts, boundedSelectionText } from '../../xlsx/view/selection'
 import { FIND_PAGE_HITS, FindController, hitGeometry, navigateToHit, type FindHit, type FindInput, type FindOptions, type FindPublication } from '../../xlsx/view/find'
-import { LayoutCache, type LayoutAdmission } from '../../xlsx/view/textLayout'
+import { LayoutCache, type CellLayoutHost, type LayoutAdmission } from '../../xlsx/view/textLayout'
+import { SharedMeasureContext } from './measureContext'
 import { cellDisplayText } from '../../xlsx/render'
-import { createCellLayoutHost } from '../../xlsx/view/renderViewport'
 import { createObjectWorkbookSource } from '../../worker/viewerObjectSource'
 import { BITMAP_BUDGETS, MAIN_THREAD_BUDGETS, type TileCacheStats } from '../../xlsx/view/tileCache'
 import { gridGeometryToViewport, gridSelectionOverlay, paintGridSelectionOverlay, paintSearchOverlay, type HighlightRect } from '../../core/overlay'
@@ -579,8 +579,17 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
       hold: bytes => { held += bytes; publish() },
       cacheChanged: delta => mainLedger.set('layout', 'caches', Math.max(0, mainLedger.ownerBytes('layout', 'caches') + delta)),
       nativeChanged: delta => mainLedger.set('canvasText', 'tiles', Math.max(0, mainLedger.ownerBytes('canvasText', 'tiles') + delta)),
+      measureChanged: delta => mainLedger.set('canvasText', 'measure', Math.max(0, mainLedger.ownerBytes('canvasText', 'measure') + delta)),
     }
   }, [mainLedger, budgetProfile])
+  // One shared, admitted measurement context for every record layout (§12.4).
+  const measure = useMemo(() => new SharedMeasureContext(() => layoutAdmission), [layoutAdmission])
+  const layoutHostFor = useMemo(() => new WeakMap<XlsxSheet, CellLayoutHost>(), [measure])
+  const layoutHost = (sheet: XlsxSheet): CellLayoutHost => {
+    let host = layoutHostFor.get(sheet)
+    if (!host) layoutHostFor.set(sheet, host = measure.host(sheet))
+    return host
+  }
   useEffect(() => () => workerPlans?.dispose(), [workerPlans])
   // Two sources: the base present and the find overlay each own (and clear)
   // only their own refusal, so an unrelated present never hides a find one.
@@ -596,7 +605,7 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
     return {
       sheet: entry.sheet, geometry: entry.geometry, identity, origin: scroll.logicalOrigin, viewport, zoom: scroll.zoom, dpr,
       extent: { width: entry.metrics.cols.totalCss(), height: entry.metrics.rows.totalCss() },
-      assets: assets?.lease.assets, layoutCache: entry.layoutCache, layoutAdmission, merges: entry.merges, ...(mark ? { watermark: mark } : {}),
+      assets: assets?.lease.assets, layoutCache: entry.layoutCache, layoutAdmission, layoutHost: layoutHost(entry.sheet), merges: entry.merges, ...(mark ? { watermark: mark } : {}),
       structureGen: entry.structureGen,
       // Row-cache proof gates worker requests: tiles the cache already proves
       // paint from the main-thread planner with no worker wait and no worker
@@ -651,6 +660,7 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
     // Tile planning lifecycle runs here, post-commit: frameOf itself only
     // describes the frame, so a render that never commits cannot cancel
     // requests for frames that do.
+    measure.trim()
     if (scroll) workerPlans?.beginFrame(identity, { box: { ...scroll.logicalOrigin, width: viewport.width / scroll.zoom, height: viewport.height / scroll.zoom }, zoom: scroll.zoom, deviceScale: dpr }, entry?.resizeGen ?? 0)
     if (!assets || assets.sheetId !== activeSheetId) {
       // The active sheet's lease is pending: present a declared loading state, never
@@ -1104,7 +1114,7 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
     const highlights: HighlightRect[] = [], active: HighlightRect[] = []
     let findRefusal = ''
     if (page) {
-      const host = createCellLayoutHost(ctx, entry.sheet)
+      const host = layoutHost(entry.sheet)
       page.hits.forEach((hit, index) => {
         if (hit.sheetId !== activeSheetId) return
         const box = entry.metrics.sourceCellToLogical(hit.source)
