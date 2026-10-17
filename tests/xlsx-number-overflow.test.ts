@@ -32,6 +32,26 @@ describe('numeric overflow renders as a full cell of #', () => {
     expect(hashes(64)).toBe('########')
     expect(paint(45079, 80, { formatCode: 'yyyy-mm-dd' })).toEqual(['2023-06-02']) // 70 <= 74 fits
   })
+  it('stream F item 6: the F2 date column at Excel\'s default width is ##### by Excel\'s own width model', () => {
+    // Excel default column: baseColWidth 8, Calibri 11 MDW 7 px -> 8 chars + 5 px
+    // padding = 61 px, rounded up to a multiple of 8 = 64 px; the cell interior is
+    // 64 - 3 - 3 = 58 px (+0.5 px fit tolerance). Built-in numFmt 14 renders the
+    // ISO date (product convention), "2023-03-15": Calibri advances (1/2048 em)
+    // 8 digits x 1038 + 2 hyphens x 627 = 9558 -> 9558 / 2048 x 11 pt x 96/72
+    // = 68.45 px > 58.5 px (and > 64 px even with no padding), so Excel would show
+    // '#' too: the simulators' ####### in column B is correct, not a bug.
+    const CALIBRI: Record<string, number> = { '-': 627, '#': 1020 }
+    const px = (s: string) => [...s].reduce((sum, ch) => sum + (CALIBRI[ch] ?? 1038), 0) / 2048 * 11 * 96 / 72
+    expect(px('2023-03-15')).toBeCloseTo(68.45, 2)
+    const painted: string[] = []
+    const cell: XlsxCell = { ref: 'B2', row: 0, col: 0, styleIndex: 0, value: 45000, style: { numFmtId: 14, fontSizePt: 11 } as XlsxCellStyle }
+    const sheet: XlsxSheet = { name: 'S', cols: [], merges: [], mergeRanges: [], rows: [{ index: 0, cells: [cell] }] }
+    const ctx = new Proxy({ font: '', measureText: (s: string) => ({ width: px(s) }), fillText: (s: string) => painted.push(s) },
+      { get: (o, k) => k in o ? o[k as keyof typeof o] : () => {} }) as unknown as CanvasRenderingContext2D
+    renderSheet(sheet, ctx, { colWidthsPx: [64], rowHeightsPx: [20], widthPx: 64, heightPx: 20 })
+    expect(painted).toEqual(['#'.repeat(Math.floor(58 / px('#')))])
+    expect(cellDisplayText(sheet, cell)).toBe('2023-03-15')
+  })
   it('built-in date and time formats', () => {
     // Built-in 14 renders the ISO date in this formatter profile (10 chars).
     expect(paint(45079, 40, { numFmtId: 14 })).toEqual([hashes(40)])
