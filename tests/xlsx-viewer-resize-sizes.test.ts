@@ -19,6 +19,7 @@ import {
 } from '../src/xlsx/view/axisSizes'
 import type { XlsxDrawing, XlsxSheet } from '../src/xlsx/types'
 import { drawingExtent } from '../src/xlsx/view/sheetCells'
+import { createCellLayoutHost } from '../src/xlsx/view/renderViewport'
 
 const sheet = (extra: Partial<XlsxSheet> = {}): XlsxSheet => ({ name: 'S', rows: [], cols: [], merges: [], mergeRanges: [], ...extra })
 
@@ -253,12 +254,26 @@ describe('confirmation C1: native measurement resources are reserved before they
   })
 
   it('confirmation C4: a rotated wrapped body fits its transformed bounds', () => {
-    const fit = createFitMeasure({ admit: () => true, sheet: sheet() })
-    const cell = { ref: 'A1', row: 0, col: 0, value: 'abcdefghijklmno', styleIndex: 0, style: { numFmtId: 0, wrapText: true, fontSizePt: 10, textRotation: 90 } }
-    const plain = fit.layoutHeight!({ ...cell, style: { ...cell.style, textRotation: undefined } }, 64)!
-    const rotated = fit.layoutHeight!(cell, 64)!
-    expect(rotated).toBeGreaterThan(plain * 3)
-    expect(rotated).toBeGreaterThanOrEqual(fit.measure('10pt "Calibri"', 'abcdefghijklmno') - 1)
+    // Hosts without Calibri (Linux CI) resolve a bare "Calibri" family to a
+    // different fallback than the painter's font stack; model that here by
+    // widening every measurement whose font is not the painter's stack.
+    const proto = Object.getPrototypeOf(document.createElement('canvas').getContext('2d')!) as CanvasRenderingContext2D
+    const original = proto.measureText
+    const spy = vi.spyOn(proto, 'measureText').mockImplementation(function (this: CanvasRenderingContext2D, text: string) {
+      const metrics = original.call(this, text), scale = this.font.includes(',') ? 1 : 1.15
+      return new Proxy(metrics, { get: (target, key) => key === 'width' ? target.width * scale : Reflect.get(target, key) })
+    })
+    try {
+      const fit = createFitMeasure({ admit: () => true, sheet: sheet() })
+      const cell = { ref: 'A1', row: 0, col: 0, value: 'abcdefghijklmno', styleIndex: 0, style: { numFmtId: 0, wrapText: true, fontSizePt: 10, textRotation: 90 } }
+      const plain = fit.layoutHeight!({ ...cell, style: { ...cell.style, textRotation: undefined } }, 64)!
+      const rotated = fit.layoutHeight!(cell, 64)!
+      expect(rotated).toBeGreaterThan(plain * 3)
+      // The unwrapped width in the exact font string the canonical layout paints with.
+      const painted = createCellLayoutHost(document.createElement('canvas').getContext('2d')!, sheet()).layoutBody(cell, 64, 400).text!.font
+      expect(painted).not.toBe('10pt "Calibri"')
+      expect(rotated).toBeGreaterThanOrEqual(fit.measure(painted, 'abcdefghijklmno') - 1)
+    } finally { spy.mockRestore() }
   })
 })
 
