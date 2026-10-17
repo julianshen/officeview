@@ -592,6 +592,46 @@ test.describe('S10.1 real interactive viewer', () => {
     await expect(status(page)).toContainText('Visible body 19 / complete body 29', { timeout: 30_000 })
   })
 
+  test('F2 eight-key sort: interactive modal adds 8 levels across columns A-H, applies and updates headers', async ({ page }) => {
+    await openViewer(page, 'f2-1k.xlsx')
+    await expect(status(page)).toContainText('Visible body 1000 / complete body 1000')
+
+    // Open More sort options for column A.
+    await page.getByRole('button', { name: 'More sort options for A' }).click()
+    const dialog = page.getByRole('dialog', { name: 'Sort worksheet' })
+    await expect(dialog).toBeVisible()
+    await expect(dialog.getByRole('textbox', { name: 'Column level 1' })).toHaveValue('A')
+
+    // Add levels up to 8 (columns A through H).
+    for (let i = 1; i < 8; i++) {
+      await dialog.getByRole('button', { name: 'Add level' }).click()
+    }
+    expect(await dialog.locator('[data-sort-level]').count()).toBe(8)
+    await expect(dialog.getByRole('button', { name: 'Add level' })).toBeDisabled()
+
+    // Verify all 8 column letters A through H were selected across the 8 levels.
+    for (let i = 0; i < 8; i++) {
+      const colLetter = String.fromCharCode(65 + i)
+      await expect(dialog.getByRole('textbox', { name: `Column level ${i + 1}` })).toHaveValue(colLetter)
+    }
+
+    // Toggle level 2 (column B) order to descending.
+    await dialog.getByRole('combobox', { name: 'Direction level 2' }).selectOption('desc')
+
+    // Apply 8-key sort.
+    await dialog.getByRole('button', { name: 'OK' }).click()
+    await expect(dialog).toBeHidden()
+
+    // Verified: sort applied, priority 1 column A shows aria-sort ascending.
+    await expect(status(page)).toContainText('Visible body 999 / complete body 999', { timeout: 30_000 })
+    await expect(status(page)).toContainText('View-only sort applied; formulas unchanged.')
+    await expect(page.getByRole('columnheader', { name: /^Column A/ })).toHaveAttribute('aria-sort', 'ascending')
+    // Active descendant shows valid row data in sorted grid.
+    await goTo(page, 'A2')
+    await expect.poll(async () => (await activeCell(page))?.label ?? '').toMatch(/^A2, value /)
+  })
+
+
 
   test('F7 two sheets with identical first revisions: views, zoom and hidden-row inspection stay per sheet; reload resets', async ({ page }) => {
     await openViewer(page, 'f7-two-sheets.xlsx')

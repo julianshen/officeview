@@ -18,7 +18,7 @@ for its requirement matrix. The WordArt plan below retains its existing scope.
   - Drawing-impact refusal on sort: Range covering two-cell drawing anchor refuses with "Operation refused: drawing-impact."
   - Drawing-impact refusal on filter: Filtering column A to hide a row above the drawing anchor refuses with "Operation refused: drawing-impact."
   - Allowed filter below anchor: Filtering below the drawing anchor commits without refusal.
-- [ ] Test: (b) AC-SEM-02 Interactive eight-key sort leg in a real browser
+- [x] Test: (b) AC-SEM-02 Interactive eight-key sort leg in a real browser
   - On 8-column workbook (`f2-1k.xlsx`), open More Sort options dialog for column A.
   - Add sort levels sequentially until 8 levels (columns A through H) are added; verify 8th level disables "Add level".
   - Configure ascending/descending levels and submit "OK"; verify all 8 keys are applied, column header shows `aria-sort`, and row data reflects 8-key order without error.
