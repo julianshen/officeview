@@ -38,8 +38,9 @@ import type { ProjectedSheetMetrics } from '../xlsx/view/projection'
 import { savedValuesStatus, type ValueStatus } from '../xlsx/view/values'
 import { MIN_DETAIL_DEVICE_PX, SHEET_DEFAULT_COL_CSS, SHEET_DEFAULT_ROW_CSS, TEXT_OVERFLOW_REACH_CSS, VIEWPORT_DETAIL_LIMITS } from '../xlsx/view/viewport'
 import { MAIN_THREAD_BUDGETS } from '../xlsx/view/tileCache'
-import type { ViewerClient } from './viewerClient'
-import { initialIdentity, initialWorkbookOwner, visibilityFromDisplayBitsets, type CommandOf } from './viewerProtocol'
+import { ViewerNotSentError, type ViewerClient } from './viewerClient'
+import { replyLimitEnvelope } from './viewerReplyLimit'
+import { initialIdentity, initialWorkbookOwner, reply, visibilityFromDisplayBitsets, type CommandOf } from './viewerProtocol'
 import type { SheetGeometry, WorkbookSource } from './viewerSession'
 import { RemoteDrawingCache, type PagedSheetDrawings } from './viewerRemoteDrawings'
 import { DRAWING_MEMORY_REFUSED, drawingPayloadBudget, unavailableDrawings } from '../xlsx/view/drawingPayload'
@@ -51,6 +52,11 @@ export const ROW_CHUNK_COLS = 256
 /** One document-wide byte ledger for every sheet's painting row cache: a
  * quarter of the main-thread profile budget (§12.4; D 16 MiB, M 8 MiB). */
 export function rowCacheBudget(profile: ProfileId): number { return MAIN_THREAD_BUDGETS[profile] / 4 }
+const DRAWING_MEMORY_MESSAGE = "This sheet's drawings need more main-thread memory than the document has free and are not shown"
+/** FC-T2: no receiving grant fits now; nothing (more) is sent, and the cache may ask again. */
+function drawingGrantRefusal(command: CommandOf<'read'>): WorkerReply<'read'> {
+  return reply(command, command.owner, { kind: 'complete', result: { kind: 'read', result: { op: 'drawings', result: unavailableDrawings(DRAWING_MEMORY_MESSAGE, { code: 'resource-limit', retryable: true, message: DRAWING_MEMORY_MESSAGE }, DRAWING_MEMORY_REFUSED) } } })
+}
 /** Status text when a sort's view cannot fit the main-thread budget (stream F). */
 export const SORT_MEMORY_REFUSAL = 'Not enough memory to apply the sort on this device'
 let viewReplySerial = 0
@@ -424,26 +430,46 @@ export class RemoteWorkbook implements WorkbookSource {
     this.latestQueries.set(scope, head.requestId)
     if ((head.kind === 'search' || head.kind === 'sort' || head.kind === 'filter') && this.queryNotice) { this.queryNotice = undefined; this.notify() }
     this.stats.commands[key] = (this.stats.commands[key] ?? 0) + 1
+    // FC-T2: a drawings reply is admitted BEFORE it exists. The grant is
+    // reserved synchronously (concurrent reads see each other's credit) and the
+    // worker never posts a reply over it; see drawingGrant.
+    const drawings = key === 'read:drawings' ? command as CommandOf<'read'> : undefined
+    let grant: string | undefined
+    if (drawings) {
+      const admitted = this.drawingGrant(drawings)
+      if (typeof admitted !== 'string') return admitted as Settled<K>
+      grant = admitted
+      command = { ...drawings, query: { op: 'drawings', replyByteLimit: this.mainLedger.ownerBytes('replies', grant) } } as CommandOf<K>
+    }
     const unsubscribe = progress ? this.client.onProgress(head.requestId, p => progress(p.completed, p.total ?? p.completed)) : undefined
     const sent: Promise<Settled<K>> = this.client.send<K>(command).then(reply => {
       // Charged until no part of the payload is reachable: a consumer that keeps
       // a page (a scan generator across tasks) keeps the charge. An admitted
       // reservation becomes that charge (no gap, no double count); any excess
       // over it is charged on top.
-      const pool = head.kind === 'read' && head.query?.op === 'drawings' ? 'drawings' : 'replies', bytes = estimatePayloadBytes(reply), targets = leaseTargets(reply)
-      const moved = reservation ? Math.min(bytes, this.mainLedger.ownerBytes('replies', reservation)) : 0
-      if (moved > 0) this.mainLedger.adoptWhileReachable('replies', reservation!, pool, targets, moved)
+      const pool = drawings ? 'drawings' : 'replies', bytes = estimatePayloadBytes(reply), targets = leaseTargets(reply)
+      const held = grant ?? reservation
+      const moved = held ? Math.min(bytes, this.mainLedger.ownerBytes('replies', held)) : 0
+      if (moved > 0) this.mainLedger.adoptWhileReachable('replies', held!, pool, targets, moved)
+      // The unused grant goes back before owner metadata is admitted on the same cap.
+      if (grant) this.mainLedger.release('replies', grant)
       if (moved === 0 || bytes > moved) this.mainLedger.chargeWhileReachable(pool, targets, bytes - moved)
-      if (head.kind === 'read' && head.query?.op === 'drawings' && reply.kind === 'complete' && reply.result.kind === 'read' && reply.result.result.op === 'drawings' && reply.result.result.result.completeness === 'complete'
+      if (drawings && reply.kind === 'quota') return this.drawingRetry(drawings, reply as WorkerReply<'read'>, signal) as Promise<Settled<K>>
+      if (drawings && reply.kind === 'complete' && reply.result.kind === 'read' && reply.result.result.op === 'drawings' && reply.result.result.result.completeness === 'complete'
         && !admitDrawingOwners(reply.result.result.result, this.mainLedger, MAIN_THREAD_BUDGETS[this.profile])) {
-        const message = "This sheet's drawings need more main-thread memory than the document has free and are not shown"
         // The original raw reply remains charged until collected. No ownership
         // links were made; the existing cache displays this typed refusal.
-        return { ...reply, result: { kind: 'read', result: { op: 'drawings', result: unavailableDrawings(message, { code: 'resource-limit', retryable: false, message }, DRAWING_MEMORY_REFUSED) } } } as WorkerReply<K>
+        return { ...reply, result: { kind: 'read', result: { op: 'drawings', result: unavailableDrawings(DRAWING_MEMORY_MESSAGE, { code: 'resource-limit', retryable: false, message: DRAWING_MEMORY_MESSAGE }, DRAWING_MEMORY_REFUSED) } } } as WorkerReply<K>
       }
-      this.capture(reply, scope, key !== 'read:drawings')
+      this.capture(reply, scope, !drawings)
       return reply
-    }, () => { if (reservation) this.mainLedger.release('replies', reservation); return CLOSED })
+    }, error => {
+      // A grant is refunded only when the command provably never left: a
+      // disposed client may still have its reply in flight (a closed
+      // workbook's ledger keeps that harmless overstatement).
+      if (grant ? error instanceof ViewerNotSentError : reservation) this.mainLedger.release('replies', (grant ?? reservation)!)
+      return CLOSED
+    })
     if (!signal) return sent.finally(() => unsubscribe?.())
     return new Promise<Settled<K>>(resolve => {
       const abort = () => {
@@ -454,6 +480,34 @@ export class RemoteWorkbook implements WorkbookSource {
       signal.addEventListener('abort', abort, { once: true })
       void sent.then(reply => { signal.removeEventListener('abort', abort); unsubscribe?.(); resolve(this.closed ? CLOSED : reply) })
     })
+  }
+  /**
+   * FC-T2 receiving grant of one drawings read: min(headroom, a quarter of the
+   * main budget, the size of the worker's binary drawing budget), or exactly
+   * the size a retry asks for. Bounded so a read in
+   * flight never starves the other main allocators (tiles, row cache, sorts);
+   * a denser reply gets one retry at its measured size (drawingRetry). Below
+   * the payload-free envelope nothing is sent and the refusal is retryable:
+   * main pressure is transient (another sheet's grant settles in moments).
+   */
+  private drawingGrant(command: CommandOf<'read'>): string | WorkerReply<'read'> {
+    const headroom = MAIN_THREAD_BUDGETS[this.profile] - this.mainLedger.bytes
+    const asked = command.query.op === 'drawings' ? command.query.replyByteLimit : undefined
+    const limit = asked ?? Math.min(headroom, MAIN_THREAD_BUDGETS[this.profile] / 4)
+    if (limit > headroom || limit < replyLimitEnvelope(command)) return drawingGrantRefusal(command)
+    const grant = `drawing-grant:${command.requestId}`
+    this.mainLedger.set('replies', grant, limit)
+    return grant
+  }
+  /** The worker measured a reply over its grant: ask once more (the worker's
+   * source cache makes the re-read cheap) with exactly that size, adjusted for
+   * the new requestId's length, when it fits now; otherwise refuse retryably. */
+  private drawingRetry(command: CommandOf<'read'>, quota: WorkerReply<'read'>, signal?: AbortSignal): Promise<Settled<'read'>> | WorkerReply<'read'> {
+    const required = quota.kind === 'quota' ? quota.requiredBytes : undefined
+    if (this.closed || signal?.aborted || required === undefined || command.query.op !== 'drawings' || command.query.replyByteLimit !== undefined) return drawingGrantRefusal(command)
+    const requestId = this.nextRequestId()
+    const replyByteLimit = required + 2 * Math.max(0, requestId.length - command.requestId.length)
+    return this.request({ ...command, requestId, query: { op: 'drawings', replyByteLimit } }, signal)
   }
   nextRequestId(): string { return this.client.nextRequestId() }
   private capture(reply: WorkerReply, scope: string, rangeNotice: boolean): void {
