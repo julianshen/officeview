@@ -52,6 +52,16 @@ export function isTerminalReply(reply: WorkerReply): boolean {
   return TERMINAL_KINDS.has(reply.kind)
 }
 
+/** Why an in-flight request was aborted; echoed as the cancelled diagnostic. */
+export type CancelReason = 'cancel-requested' | 'superseded' | 'range-replaced' | 'document-closed' | 'query-timeout'
+export const CANCEL_MESSAGES: Readonly<Record<CancelReason, string>> = Object.freeze({
+  'cancel-requested': 'Cancelled by request',
+  superseded: 'Superseded by a newer view draft on the same sheet',
+  'range-replaced': 'Replaced by a newer query on the same column',
+  'document-closed': 'The document was closed',
+  'query-timeout': 'Query timed out after 120 seconds. Retry or choose a smaller range.',
+})
+
 /** Protocol convention: the values published by open are generation 0 for every
  * sheet, view and font, so a client derives its first owners from the open
  * reply's sheet list. Every later owner arrives in a committed view delta. */

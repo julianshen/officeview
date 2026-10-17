@@ -26,8 +26,8 @@ import type {
 } from '../xlsx/view/contracts'
 import type { XlsxDocument } from '../xlsx/types'
 import {
-  displayBitsetsFromVisibility, isUint16Array, refusalReply, reply, transferablesOf, TransferAccounting,
-  type CommandOf, type ReplyBody, type TransferLedger,
+  CANCEL_MESSAGES, displayBitsetsFromVisibility, isUint16Array, refusalReply, reply, transferablesOf, TransferAccounting,
+  type CancelReason, type CommandOf, type ReplyBody, type TransferLedger,
 } from './viewerProtocol'
 import {
   DocumentSession, VIEW_OPERATION_STAGES, type CommittedView, type OperationOutcome, type PrepareOutcome, type SessionOptions,
@@ -39,7 +39,11 @@ import { createWorkerFilterEvaluator } from './viewerFilterEvaluator'
 import { MAX_ROWS } from '../xlsx/view/coordinates'
 import { awaitAbortable, bindQueryDeadline } from './viewerAbort'
 import { queryPayloadBytes } from './viewerQueryBudget'
+import { replyLimitEnvelope, replyLimitRefusal } from './viewerReplyLimit'
+import { estimatePayloadBytes } from '../xlsx/view/payloadBytes'
 import type { PoolCharge } from '../xlsx/view/tileCache'
+
+export type { CancelReason } from './viewerProtocol'
 
 class KeySetQuota extends Error {
   constructor(readonly requiredBytes: number, readonly limitBytes: number) { super('Filter keys exceed the worker memory budget') }
@@ -74,15 +78,6 @@ export interface ViewerKernelEnv {
   pageStorage?: import('../xlsx/storage/sourcePages').PageStorageEnv
   importLimits?: import('../xlsx/storage/importSession').ImportLimitOverrides
 }
-/** Why an in-flight request was aborted; echoed as the cancelled diagnostic. */
-export type CancelReason = 'cancel-requested' | 'superseded' | 'range-replaced' | 'document-closed' | 'query-timeout'
-const CANCEL_MESSAGES: Readonly<Record<CancelReason, string>> = Object.freeze({
-  'cancel-requested': 'Cancelled by request',
-  superseded: 'Superseded by a newer view draft on the same sheet',
-  'range-replaced': 'Replaced by a newer query on the same column',
-  'document-closed': 'The document was closed',
-  'query-timeout': 'Query timed out after 120 seconds. Retry or choose a smaller range.',
-})
 /** Recently finished request owners kept so a late cancel can still answer
  * with its target's owner (bounded; oldest dropped first). */
 const FINISHED_OWNERS_LIMIT = 1024
@@ -196,7 +191,16 @@ export class ViewerKernel {
   /** Handles one command, emitting its replies through `post`. Never throws:
    * unexpected failures become an error reply for the command's owner. */
   async handle(command: WorkerCommand, post: ReplySink): Promise<void> {
+    // FC-T2: main reserved this drawings read's receiving grant before sending
+    // it. The FINAL reply (diagnostics, cancel reason, catch paths included) is
+    // measured here, before transferablesOf and the sink's clone/postMessage;
+    // one over the grant is replaced by the payload-free quota reply.
+    const limit = command.kind === 'read' && command.query?.op === 'drawings' ? command.query.replyByteLimit : undefined
     const emit = (out: WorkerReply) => {
+      if (limit !== undefined && out.requestId === command.requestId) {
+        const bytes = estimatePayloadBytes(out)
+        if (bytes > limit) out = replyLimitRefusal(command as CommandOf<'read'>, bytes, limit)
+      }
       const transfer = transferablesOf(out)
       this.accounting.transfer(transfer)
       post(out, transfer)
@@ -209,6 +213,11 @@ export class ViewerKernel {
       if (command.kind === 'cancel') { emit(this.cancel(command)); return }
       if (this.inflight.has(command.requestId)) {
         emit(errorReply(command, capturedOwner(command) as never, 'invalid-cursor', false, [{ code: 'duplicate-request', message: 'requestId is already in flight' }]))
+        return
+      }
+      // A grant the payload-free envelope cannot fit never runs the provider.
+      if (limit !== undefined && !(Number.isSafeInteger(limit) && limit >= replyLimitEnvelope(command as CommandOf<'read'>))) {
+        emit(replyLimitRefusal(command as CommandOf<'read'>, replyLimitEnvelope(command as CommandOf<'read'>), Number.isSafeInteger(limit) ? limit : 0))
         return
       }
       const docId = command.kind === 'open' ? undefined : documentOf(command)
