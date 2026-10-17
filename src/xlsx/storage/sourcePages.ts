@@ -882,29 +882,59 @@ export class SourcePageStore implements PageSink {
     }
     return cost
   }
-  /** Leases a caller holds: if the store closes while one is live, its record's
-   * charges (the RAM backing and the cache entry the close releases) move to a
-   * store-level closing charge in the same synchronous step, held until the
-   * lease is released. */
-  private readonly leases = new Set<{ record: CellPagePayload | StringChunk; callerBytes: number; closing?: PoolEntry; released: boolean }>()
+  /** Live leases (pinnedString / pinnedPage) by record. When the store closes,
+   * every record with live leases keeps ONE closing ownership, refcounted by its
+   * leases and ended by the last release: its pinned cache entry is kept alive,
+   * and the rest of its cost (the RAM backing the close refunds, or what an
+   * unretained holder did not charge) is retained in the same synchronous step.
+   * A pool refusal is recorded as a counted overdraft, never dropped. */
+  private readonly leasesByRecord = new Map<CellPagePayload | StringChunk, { leases: Set<{ callerBytes: number; released: boolean }>; closing?: { kept?: PoolEntry; entry?: PoolEntry; overdraft: number } }>()
+  private overdraft = 0
+  /** Bytes still held by leases across close that the pool refused to charge (counted, released with the last lease). */
+  get closingOverdraftBytes(): number { return this.overdraft }
   private lease(record: CellPagePayload | StringChunk, retained: boolean, bytes: number, unpin: () => void): () => void {
-    const held = { record, callerBytes: retained ? 0 : bytes, released: false } as { record: CellPagePayload | StringChunk; callerBytes: number; closing?: PoolEntry; released: boolean }
-    this.leases.add(held)
+    let group = this.leasesByRecord.get(record)
+    if (!group) this.leasesByRecord.set(record, group = { leases: new Set() })
+    const held = { callerBytes: retained ? 0 : bytes, released: false }
+    group.leases.add(held)
     return () => {
       if (held.released) return
       held.released = true
-      this.leases.delete(held)
-      held.closing?.release()
+      group!.leases.delete(held)
       unpin()
+      if (group!.leases.size) return
+      this.leasesByRecord.delete(record)
+      const closing = group!.closing
+      if (closing) { closing.kept?.release(); closing.entry?.release(); this.overdraft -= closing.overdraft }
     }
   }
-  /** Synchronous with the release of the RAM and cache charges in disposeOnce. */
-  private transferLeases(): void {
+  /** Synchronous within disposeOnce: before the cache charges are released, plan
+   * which entries stay with their leases; after the RAM and cache charges are
+   * released, retain each leased record's remaining cost once. Returns the
+   * cache entries kept alive. */
+  private planClosing(): Map<CellPagePayload | StringChunk, PoolEntry> {
+    const kept = new Map<CellPagePayload | StringChunk, PoolEntry>()
+    for (const res of this.resident.values()) if (res.entry && this.leasesByRecord.has(res.value)) kept.set(res.value, res.entry)
+    return kept
+  }
+  private transferLeases(kept: Map<CellPagePayload | StringChunk, PoolEntry>): void {
     let n = 0
-    for (const held of this.leases) {
-      const bytes = this.costOf(held.record).full - held.callerBytes
-      if (bytes <= 0 || !this.pool || this.pool.closed) continue
-      try { held.closing = this.pool.retain(`source:${this.docId}:closing:${n++}`, { tier: 'source', bytes, evictable: false }) ?? undefined } catch { held.closing = undefined }
+    for (const [record, group] of this.leasesByRecord) {
+      const cost = this.costOf(record)
+      const keptEntry = kept.get(record)
+      // Already covered: a kept cache entry (charged without a RAM-owned backing) or
+      // what an unretained holder charged; one charge per record, never per lease.
+      let covered = keptEntry ? keptEntry.bytes : 0
+      for (const lease of group.leases) covered = Math.max(covered, lease.callerBytes)
+      const remaining = cost.full - covered
+      const closing: { kept?: PoolEntry; entry?: PoolEntry; overdraft: number } = { ...(keptEntry ? { kept: keptEntry } : {}), overdraft: 0 }
+      if (remaining > 0 && this.pool && !this.pool.closed) {
+        let entry: PoolEntry | null = null
+        try { entry = this.pool.retain(`source:${this.docId}:closing:${n++}`, { tier: 'source', bytes: remaining, evictable: false }) } catch { entry = null }
+        if (entry) closing.entry = entry
+        else { closing.overdraft = remaining; this.overdraft += remaining }
+      }
+      group.closing = closing
     }
   }
   /** Bytes reserved in the pool for reads in flight (incoming buffer + decode). */
@@ -1233,11 +1263,11 @@ export class SourcePageStore implements PageSink {
   }
   async abandon(docId: string): Promise<void> {
     if (docId !== this.docId) return
-    this.abandoned = true; this.ramShared = new WeakSet()
+    this.abandoned = true
     await this.dispose()
   }
   async close(): Promise<void> {
-    this.closed = true; this.ramShared = new WeakSet()
+    this.closed = true
     await this.dispose()
   }
   /** Once per store: overlapping and repeated close/abandon share one disposal. */
@@ -1256,12 +1286,15 @@ export class SourcePageStore implements PageSink {
    * owner locked until its realm ends, as a crash would.
    */
   private async disposeOnce(): Promise<void> {
+    // One synchronous step (no await): leased records keep their owners.
+    const kept = this.planClosing()
     for (const r of this.reservations.splice(0)) r.release()
     this.construction.releaseAll()
     this.ramBytes = 0
-    for (const res of this.resident.values()) res.entry?.release()
-    // In the same synchronous step: live leases keep their records charged.
-    this.transferLeases()
+    for (const res of this.resident.values()) if (!kept.has(res.value)) res.entry?.release()
+    this.transferLeases(kept)
+    // RAM ownership of committed records has ended.
+    this.ramShared = new WeakSet()
     this.resident.clear()
     this.loading.clear()
     this.index.clear()
