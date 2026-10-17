@@ -15,7 +15,7 @@
  * Nothing here asserts on wall clock; a release run decides admission from the
  * receipt's evaluation rows.
  */
-import { chromium, webkit, type Browser, type BrowserContext, type CDPSession, type Page } from '@playwright/test'
+import { chromium, devices, webkit, type Browser, type BrowserContext, type CDPSession, type Page } from '@playwright/test'
 import { execFileSync } from 'node:child_process'
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { cpus, loadavg, totalmem, freemem } from 'node:os'
@@ -639,7 +639,10 @@ export async function runViewerSuite(ctx: SuiteContext): Promise<{ receipt: View
     ...(args.browser === 'chromium' ? { args: ['--js-flags=--expose-gc'] } : {}),
   })
   const viewport = args.profile === 'desktop' ? { width: 1440, height: 900 } : { width: 1024, height: 768 }
-  const contextOptions = { viewport, deviceScaleFactor: 2, isMobile: args.profile === 'mobile', hasTouch: args.profile === 'mobile' }
+  // A mobile run presents as an iPad (its UA, touch, coarse pointer): the viewer
+  // picks its profile the way admission does (detectProfile), so a desktop UA
+  // with isMobile alone would still measure the D budgets.
+  const contextOptions = { viewport, deviceScaleFactor: 2, isMobile: args.profile === 'mobile', hasTouch: args.profile === 'mobile', ...(args.profile === 'mobile' ? { userAgent: devices['iPad Pro 11'].userAgent } : {}) }
   const errors: string[] = []
   const raw: Record<string, unknown> = {}
   // An unexpected disconnect (browser crash or an external kill on a shared
