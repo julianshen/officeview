@@ -90,6 +90,14 @@ Decision order: what-if data table → force → explicit-recalc → **manual** 
   finite `TEXT(45351,"DD.MM.YYYY") = "29.02.2024"` control.
 - Finite formatter only. Non-US date/locale profiles, the full formatter, and date/TEXT
   array lifting are diagnosed gates (see §9a).
+- Custom number-format code length (compatibility note): Excel limits a custom
+  `numFmt` code to 255 UTF-16 code units and refuses longer codes. A workbook whose
+  `styles.xml` authors a longer code (only a hand-written or non-Excel producer can)
+  displays those cells as **General** on every path (static render, interactive
+  viewport, worker/paged import, find, copy and filter); a code of exactly 255 units
+  is honoured. The style keeps no trace of the dropped code, so no diagnostic is
+  recorded (styles are workbook-level and have no diagnostic channel). The limit
+  applies to cell styles only; a formula `TEXT` format argument is unaffected.
 
 ## 6. Unicode text-length version
 

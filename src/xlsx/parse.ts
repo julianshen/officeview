@@ -70,13 +70,20 @@ function asNode(v: unknown): XmlNode {
 
 interface Styles {
   numFmtIds: number[]
-  /** Authored custom number formats (styles.xml <numFmts>), keyed by numFmtId. */
-  numFmts: Map<number, string>
+  /** Authored custom number formats (styles.xml <numFmts>), keyed by numFmtId;
+   * null marks a code over MAX_FORMAT_CODE_UNITS, which displays as General. */
+  numFmts: Map<number, string | null>
   fonts: Array<{ bold: boolean; italic: boolean; sizePt?: number; color?: string; name?: string }>
   fills: Array<{ rgb?: string; pattern?: string }>
   borders: Array<{ left?: string; right?: string; top?: string; bottom?: string; colors?: { left?: string; right?: string; top?: string; bottom?: string } }>
   xfs: Array<{ numFmtId: number; fontId: number; fillId: number; borderId: number; textRotation?: number; horizontal?: string; vertical?: string; wrapText?: boolean; shrinkToFit?: boolean }>
 }
+
+/** Excel's own limit on a custom number-format code (UTF-16 units). Excel
+ * refuses longer codes, so an authored one is shown as General (documented in
+ * docs/formula-compatibility.md); every formatter therefore parses at most
+ * this much per authored cell code. */
+export const MAX_FORMAT_CODE_UNITS = 255
 
 async function parseStyles(pkg: OfficePackage, themePalette?: Readonly<Record<string, string>>): Promise<Styles> {
   const root = await pkg.xml('xl/styles.xml')
@@ -94,7 +101,7 @@ async function parseStyles(pkg: OfficePackage, themePalette?: Readonly<Record<st
       const a = attrs(nf)
       const id = parseInt(a.numFmtId ?? '', 10)
       const code = typeof a.formatCode === 'string' ? a.formatCode : undefined
-      if (Number.isFinite(id) && code !== undefined) styles.numFmts.set(id, code)
+      if (Number.isFinite(id) && code !== undefined) styles.numFmts.set(id, code.length > MAX_FORMAT_CODE_UNITS ? null : code)
     }
   }
   for (const f of getChildren(root, 'fonts').flatMap((n) => getChildren(n, 'font'))) {
@@ -176,9 +183,11 @@ export function resolveXfStyle(styles: Styles, xf: Styles['xfs'][number]): XlsxC
   const font = styles.fonts[xf.fontId]
   const fill = styles.fills[xf.fillId]
   const border = styles.borders[xf.borderId]
+  const code = styles.numFmts.get(xf.numFmtId)
   return {
-    numFmtId: xf.numFmtId,
-    formatCode: styles.numFmts.get(xf.numFmtId),
+    // An overlong authored code (null) is General, even over a built-in id.
+    numFmtId: code === null ? 0 : xf.numFmtId,
+    formatCode: code ?? undefined,
     bold: font?.bold,
     italic: font?.italic,
     fontSizePt: font?.sizePt,

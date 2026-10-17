@@ -728,12 +728,12 @@ function tileOverflow(boxes: Iterable<{ x: number; y: number; width: number; hei
   return false
 }
 
-/** Merge index queries reused across frames of one geometry generation (plan
- * S5.1). Keys are the query rectangle and limit; the geometry object is the
- * generation (a new sheet/order/visibility builds a new geometry). */
 type MergeQueryPage = ReturnType<SheetGeometry['merges']['query']> & { memoryRefused?: boolean }
 const EMPTY_MERGE_PAGE: MergeQueryPage = Object.freeze({ items: Object.freeze([]) })
 const REFUSED_MERGE_PAGE: MergeQueryPage = Object.freeze({ ...EMPTY_MERGE_PAGE, memoryRefused: true })
+/** Merge index queries reused across frames of one geometry generation (plan
+ * S5.1). Keys are the query rectangle and limit; the geometry object is the
+ * generation (a new sheet/order/visibility builds a new geometry). */
 export class MergeQueryCache {
   private readonly byGeometry = new WeakMap<SheetGeometry, Map<string, { page: ReturnType<SheetGeometry['merges']['query']>; bytes: number; rect?: { r0: number; r1: number; c0: number; c1: number }; limit?: number }>>()
   hits = 0

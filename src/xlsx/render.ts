@@ -677,7 +677,7 @@ function noteFormatUnsupported(sheet: XlsxSheet, format: string, reason: string,
   const bytes = message.length * 2 + 72 + (holder.diagnostics ? 0 : 32)
   const diagnostic = { kind: 'unsupported-format', feature: 'format-unsupported', message }
   const commit = () => { holder.diagnostics ??= []; holder.diagnostics.push(diagnostic) }
-  if (allocation?.retain) allocation.retain([sheet, diagnostic], bytes, commit)
+  if (allocation?.retain) allocation.retain([sheet, diagnostic], bytes, commit, 'diagnostic')
   else commit()
   allocation?.release(4 * units + 128 - bytes)
 }
@@ -1001,7 +1001,7 @@ export function layoutCellBody(
       }
     }
   }
-  const text = numericOverflowText(cell, formatted, font, w, measured, generalNoFit, excelFits)
+  const text = numericOverflowText(cell, formatted, font, w, measured, generalNoFit, excelFits, allocation)
   if (text === formatted && typeof cell.value === 'number' && !cell.valueIsError && !rotated && cell.style?.wrapText !== true && measured(font, text) > inner && excelFits(text)) {
     // Excel shows it in full; the fallback face is wider, so fit the paint to
     // the cell (as shrink-to-fit would) instead of spilling a number.
@@ -1092,13 +1092,13 @@ function overflowBand(x: number, w: number, tx: number, textW: number, overflow:
  * Only the painted string changes: cellDisplayText (find, accessible value)
  * keeps the real formatted value.
  */
-function numericOverflowText(cell: XlsxCell, text: string, font: string, w: number, measured: MeasureCached, generalNoFit: boolean, excelFits?: (text: string) => boolean): string {
+function numericOverflowText(cell: XlsxCell, text: string, font: string, w: number, measured: MeasureCached, generalNoFit: boolean, excelFits?: (text: string) => boolean, allocation?: FormatAllocation): string {
   if (typeof cell.value !== 'number' || text === '' || cell.valueIsError) return text
   const style = cell.style
   if (style?.wrapText === true || cellTextRotation(style?.textRotation) !== undefined) return text
   // Eligibility comes from the value type and the SELECTED format section, not
   // from the output string: a number shown through an '@' section is text.
-  if (style?.formatCode !== undefined && numericSectionIsText(cell.value, style.formatCode)) return text
+  if (style?.formatCode !== undefined && numericSectionIsText(cell.value, style.formatCode, allocation)) return text
   const inner = Math.max(0, w - PADDING_L - PADDING_R)
   if (!generalNoFit && (measured(font, text) <= inner || excelFits?.(text))) return text
   const glyph = measured(font, '#')

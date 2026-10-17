@@ -49,7 +49,6 @@ export class SemanticPresentationCache {
     // The presentation's 256 B fixed reservation includes this cache entry.
     // Mutable resident cells/styles are compared by their actual format inputs.
     if (!presentation.state) {
-      this.entries.delete(cell)
       if (this.entries.size >= 512) this.entries.delete(this.entries.keys().next().value!)
       this.entries.set(cell, { value, code: style?.formatCode, numFmtId: style?.numFmtId, dateSystem, locale, presentation })
     }

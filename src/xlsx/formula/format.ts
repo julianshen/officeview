@@ -19,7 +19,10 @@ import { decodeSerial, timeOfDayParts, weekdayIndex } from './serial'
 
 /** Internal, synchronous preallocation observer used by guarded copy. */
 export interface FormatAllocation {
-  allocate(bytes: number): void; release(bytes: number): void; borrowed?(text: string): void; retain?(targets: readonly object[], bytes: number, commit: () => void): void
+  allocate(bytes: number): void; release(bytes: number): void; borrowed?(text: string): void
+  /** Hands builders that outlive the formatter to `targets`; `kind` 'diagnostic'
+   * marks a source diagnostic (it lives with the source, not the operation). */
+  retain?(targets: readonly object[], bytes: number, commit: () => void, kind?: 'diagnostic'): void
   /** Output builders stop at this many UTF-16 units (chart labels); `truncated` is told when they do. */
   maxOutput?: number
   truncated?(): void
@@ -150,6 +153,12 @@ function isDateLetter(ch: string): boolean {
   return ch === 'y' || ch === 'm' || ch === 'd' || ch === 'h' || ch === 's'
 }
 
+/** At most the four sections Excel reads (positive;negative;zero;text): the
+ * split stops at the fourth unquoted ';' and ignores the rest, so its work is
+ * bounded by the code prefix it keeps, not by the number of separators. With
+ * authored codes capped at MAX_FORMAT_CODE_UNITS (parse.ts) a cell's format
+ * parse is a per-cell constant; the allocation observer still prices TEXT()
+ * format arguments, which are unbounded formula strings. */
 function splitSections(format: string, allocation?: FormatAllocation): { sections: string[]; error?: string } {
   const sections: string[] = []
   let cur = ''
@@ -182,6 +191,7 @@ function splitSections(format: string, allocation?: FormatAllocation): { section
     if (ch === ';') {
       allocation?.allocate(8)
       sections.push(cur)
+      if (sections.length === 4) return { sections }
       cur = ''
       i += 1
       continue
@@ -490,14 +500,15 @@ function renderDateTime(
  * tokens of their own, so an '@' inside quotes does not count. The renderer
  * uses this to keep '#' overflow for numeric sections only.
  */
-export function numericSectionIsText(value: number, format: string): boolean {
-  const { sections, error } = splitSections(format)
+export function numericSectionIsText(value: number, format: string, allocation?: FormatAllocation): boolean {
+  // Paint calls this after formatting: its builders are admitted by the same
+  // observer, and the split keeps at most four sections.
+  const { sections, error } = splitSections(format, allocation)
   if (error) return false
-  const secList = sections.slice(0, 4)
   let sectionIdx = 0
-  if (value < 0 && secList.length >= 2) sectionIdx = 1
-  else if (value === 0 && secList.length >= 3) sectionIdx = 2
-  const parsed = tokenize(secList[sectionIdx] ?? '')
+  if (value < 0 && sections.length >= 2) sectionIdx = 1
+  else if (value === 0 && sections.length >= 3) sectionIdx = 2
+  const parsed = tokenize(sections[sectionIdx] ?? '', allocation)
   return !parsed.unsupported && parsed.tokens.some(tk => tk.t === 'at')
 }
 
@@ -514,10 +525,8 @@ export function formatCommon(
   allocation?: FormatAllocation,
 ): FormatResult {
   if (isEvaluationError(value)) return value // tagged errors propagate
-  const { sections, error: splitErr } = splitSections(format, allocation)
+  const { sections: secList, error: splitErr } = splitSections(format, allocation)
   if (splitErr) return { kind: 'unsupported', reason: splitErr }
-  allocation?.allocate(Math.min(sections.length, 4) * 8)
-  const secList = sections.slice(0, 4)
 
   // SPEC F8: text/boolean/null values take the FOURTH (text) section when it
   // exists: quoted/escaped literals render, '@' inserts the value text, and an

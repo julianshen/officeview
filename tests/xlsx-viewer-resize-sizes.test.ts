@@ -306,6 +306,18 @@ describe('confirmation r2 R1: canonical layout admission covers the formatted te
   })
 })
 
+describe('auto-fit formats a wrapped cell once', () => {
+  it('passes width-independent text to the layout and re-formats only General', async () => {
+    const format = await import('../src/xlsx/formula/format')
+    const spy = vi.spyOn(format, 'formatCommon')
+    try {
+      const fit = createFitMeasure({ admit: () => true, sheet: sheet() })
+      fit.layoutHeight!({ ref: 'A1', row: 0, col: 0, value: 1, styleIndex: 0, style: { numFmtId: 164, formatCode: '0.00" units"', wrapText: true, fontSizePt: 10 } }, 64)
+      expect(spy).toHaveBeenCalledTimes(1)
+    } finally { spy.mockRestore() }
+  })
+})
+
 describe('auto-fit measurement and its bound', () => {
   const measure = (_font: string, text: string) => text.length * 7
 

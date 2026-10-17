@@ -71,6 +71,8 @@ import { queryViewport, toViewportResults, VIEWPORT_DETAIL_LIMITS } from '../xls
 import { axisBytes, projectionBytes } from '../xlsx/view/mainLedger'
 import { boundedQueryStore, queryPayloadBytes, WORKER_QUERY_BYTES } from './viewerQueryBudget'
 import type { ProjectedSheetMetrics } from '../xlsx/view/projection'
+import type { FormatAllocation } from '../xlsx/formula/format'
+import type { FormatBudget } from '../xlsx/view/formatWorkspace'
 
 const FULL_SHEET: SourceRect = Object.freeze({ r0: 0, r1: MAX_ROWS - 1, c0: 0, c1: MAX_COLS - 1 })
 const PREPARE_PAGE_LIMIT = 4096
@@ -205,7 +207,7 @@ export interface WorkbookSource {
   /** S5.4: style table and date system of a source whose cells carry style ids only. */
   formatting?(): WorkbookFormatting
   /** The canonical logical display text, without materializing cell layouts. */
-  displayText?(cell: AuthoritativeCell, sheetId: string, allocation?: import('../xlsx/formula/format').FormatAllocation): string
+  displayText?(cell: AuthoritativeCell, sheetId: string, allocation?: FormatAllocation): string
   release(): Promise<void>
 }
 
@@ -232,7 +234,7 @@ export type FilterEvaluator = (input: {
 }) => Promise<FilterEvaluation>
 export interface PreparedBudget { maxColumns: number; maxBytes: number }
 export interface DisplayLaneAdmissionPort {
-  workspace?: import('../xlsx/view/formatWorkspace').FormatBudget
+  workspace?: FormatBudget
   /** Throws ValueIndexError('quota') and changes nothing when the bytes (or a
    * dense-lane slot under maxColumns) cannot fit. */
   budget: { reserve(bytes: number): void; release(bytes: number): void; acquireSlot(): void; releaseSlot(): void }
@@ -704,6 +706,8 @@ export class DocumentSession {
     charge: Charge; unpins: (() => void)[]; busy: boolean; stopped: boolean;
     emittedBytes: number; formattedHitBytes: number; diagnosticBytes: number; producers: number; drained: boolean; bytes: number; incomplete: Set<string>;
   }
+  /** Stopped searches still waiting on producers that ignored their abort. */
+  private readonly parkedSearches = new Set<NonNullable<DocumentSession['searchState']>>()
   private searchSerial = 0
   private projectionSerial = 0
   private readonly interruptible = new WeakMap<SourceStore, SourceStore>()
@@ -2271,20 +2275,19 @@ export class DocumentSession {
               current.bytes += bytes
             },
             release: bytes => { current.bytes -= bytes; current.charge.set(current.bytes) },
-            retain: (targets, bytes, commit) => {
-              // Hit text belongs to the already-reserved query reply; a source
-              // diagnostic survives the search and belongs to the session.
-              if (targets.some(target => 'rows' in target && 'cols' in target)) {
-                // These bytes are already in this share. Keep that ownership
-                // through drain, without requiring a second copy of headroom.
+            retain: (targets, bytes, commit, kind) => {
+              // A source diagnostic survives the search and belongs to the
+              // session: its bytes are already in this share, so keep that
+              // ownership through drain without a second copy of headroom.
+              if (kind === 'diagnostic') {
                 current.charge.adopt?.(targets, bytes)
                 current.diagnosticBytes += bytes
                 commit()
                 return
-              } else {
-                if (current.formattedHitBytes + bytes > budget) throw new FindError('resource-limit', 'Search formatted hits exceed the reply memory budget')
-                current.formattedHitBytes += bytes
               }
+              // Hit text belongs to the already-reserved query reply.
+              if (current.formattedHitBytes + bytes > budget) throw new FindError('resource-limit', 'Search formatted hits exceed the reply memory budget')
+              current.formattedHitBytes += bytes
               commit()
               current.bytes -= bytes
               current.charge.set(current.bytes)
@@ -2337,18 +2340,31 @@ export class DocumentSession {
     if (this.searchState === state) this.searchState = undefined
   }
   private drainSearch(state: NonNullable<DocumentSession['searchState']>): void {
-    if (state.drained || !state.stopped || state.busy || state.producers > 0) return
+    if (state.drained || !state.stopped || state.busy) return
+    // The stopped engine no longer reads its views, reply budget or hit buffer.
+    for (const unpin of state.unpins.splice(0)) unpin()
+    if (state.producers > 0 && !this.sourceReleased) {
+      // A raw read that ignores its abort keeps only what it can still
+      // materialize: one page, which boundedQueryStore caps at half the reply
+      // budget. Source close ends even a read that never settles.
+      const allowance = state.diagnosticBytes + state.producers * WORKER_QUERY_BYTES[this.options.profile ?? 'D'] / 2
+      if (allowance !== state.bytes && state.charge.set(allowance)) state.bytes = allowance
+      this.parkedSearches.add(state)
+      return
+    }
     state.drained = true
+    this.parkedSearches.delete(state)
     if (state.diagnosticBytes && !this.sourceReleased) {
       // A closed pool cannot resize shares: retain its conservative old charge
       // until the actual source close ends, rather than refunding live bytes.
       state.charge.set(state.diagnosticBytes)
       this.formatDiagnosticCharges.push(state.charge)
     } else state.charge.release()
-    for (const unpin of state.unpins.splice(0)) unpin()
   }
   private observeSearchProducer(state: NonNullable<DocumentSession['searchState']>, work: Promise<unknown>): void {
     state.producers++
+    // A producer observed after the terminal (a queued return()) gets its own allowance.
+    if (this.parkedSearches.has(state)) this.drainSearch(state)
     const finish = () => { void Promise.resolve().then(() => { state.producers--; this.drainSearch(state) }) }
     void work.then(finish, finish)
   }
@@ -2512,6 +2528,7 @@ export class DocumentSession {
     await this.source.release()
     this.sourceReleased = true
     for (const charge of this.formatDiagnosticCharges.splice(0)) charge.release()
+    for (const state of [...this.parkedSearches]) this.drainSearch(state)
   }
 }
 function sortFailure(result: Exclude<SortResult, { kind: 'complete' }>, spec: SortSpec | null): OperationOutcome {

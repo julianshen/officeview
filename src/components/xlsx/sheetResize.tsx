@@ -351,9 +351,13 @@ export function createFitMeasure(options: { admit: (charge: FitCharge) => boolea
   const layoutHeight = options.sheet && !options.measureText ? (cell: XlsxCell, widthCss: number): number | undefined => {
     const c = context()
     if (!c) return undefined
-    reserve(cellDisplayText(options.sheet!, cell, allocation).length * 4 + LAYOUT_HEAP_BYTES, 0)
+    // As paint does: text that cannot change with the width feeds the layout,
+    // so only a General number is formatted a second time.
+    let widthDependent = false
+    const text = cellDisplayText(options.sheet!, cell, allocation, () => { widthDependent = true })
+    reserve(text.length * 4 + LAYOUT_HEAP_BYTES, 0)
     host ??= createCellLayoutHost(c, options.sheet!)
-    const body = host.layoutBody(cell, widthCss, RESIZE_LIMITS.row.max, undefined, undefined, allocation)
+    const body = host.layoutBody(cell, widthCss, RESIZE_LIMITS.row.max, undefined, widthDependent ? undefined : text, allocation)
     if (body.text?.kind !== 'layout') return undefined
     return body.text.rotation ? rotatedExtent(body.text.layout, c) : body.text.layout.height
   } : undefined
