@@ -32,6 +32,8 @@ import type { ColumnRule } from '../xlsx/view/contracts'
 import type { ColumnClassification } from '../xlsx/view/filter'
 import { ValueIndexError } from '../xlsx/view/valueRuns'
 import { PREPARED_BUDGETS, PREPARED_COLUMN_OVERHEAD, PREPARED_STRING_OVERHEAD } from './viewerSession'
+import type { FormatAllocation } from '../xlsx/formula/format'
+import { withFormatWorkspace, type FormatBudget } from '../xlsx/view/formatWorkspace'
 
 /** Bytes per body row: the Uint32 dictionary id (0 = no display text). */
 export const DISPLAY_LANE_SLOT_BYTES = 4
@@ -39,7 +41,11 @@ export const DISPLAY_LANE_SLOT_BYTES = 4
 export interface DisplayLaneKey { docId: string; sheetId: string; valueGen: number; styleOwner: object; col: number; r0: number; r1: number }
 /** Formatted text by body offset (row - r0); undefined for text/blank/error cells. */
 export interface DisplayTextLane { readonly bytes: number; text(offset: number): string | undefined }
-export interface DisplayLaneSink { add(offset: number, text: string): void }
+export interface DisplayLaneSink {
+  add(offset: number, text: string): void
+  /** Synchronous builders and add() overlap under the lane's aggregate budget. */
+  format<T>(run: (allocation: FormatAllocation) => T): T
+}
 /** Byte admission: `reserve` throws ValueIndexError('quota') and changes nothing
  * when the bytes cannot fit. A budget that also bounds dense lanes by count
  * (the worker's prepared maxColumns) takes one slot per build before any byte,
@@ -61,6 +67,8 @@ export interface DisplayLaneAdmission {
   /** The session's shared prepared-column budget; the session owns eviction. */
   budget?: DisplayLaneBudget
   retain?: DisplayLaneRetain
+  /** Transient builders use the aggregate worker pool, outside retained lanes. */
+  workspace?: FormatBudget
 }
 
 /** Spec §7: only text conditions read display text, and only of non-text cells
@@ -158,6 +166,7 @@ export class DisplayTextLaneCache {
       const strings: string[] = ['']
       const dictionary = new Map<string, number>()
       await fill({
+        format: run => withFormatWorkspace(admission.workspace ?? { reserve, release: bytes => { building -= bytes; this.held -= bytes; budget.release(bytes) } }, run),
         add: (offset, text) => {
           if (!Number.isSafeInteger(offset) || offset < 0 || offset >= count) throw new RangeError('Display lane offset outside its band')
           let index = dictionary.get(text)

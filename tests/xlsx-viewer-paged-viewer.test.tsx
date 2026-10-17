@@ -214,10 +214,16 @@ describe('S5.4 far corner and copy limits on a paged fixture', () => {
     const session = h.kernel.session(open.docId)!
     let began!: () => void, readSignal: AbortSignal | undefined
     const started = new Promise<void>(resolve => { began = resolve })
+    let releaseProducer!: () => void, cleanupBegan!: () => void, releaseCleanup!: () => void, cleanupEnded!: () => void
+    const providerGate = new Promise<void>(resolve => { releaseProducer = resolve })
+    const cleanupStarted = new Promise<void>(resolve => { cleanupBegan = resolve })
+    const cleanupGate = new Promise<void>(resolve => { releaseCleanup = resolve })
+    const cleanupFinished = new Promise<void>(resolve => { cleanupEnded = resolve })
     vi.spyOn(session.source.store('1'), 'scanPopulated').mockImplementation(async function* (_query, options) {
       readSignal = options.signal
       began()
-      await new Promise(() => {})
+      try { await providerGate }
+      finally { cleanupBegan(); await cleanupGate; cleanupEnded() }
     })
     vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] })
     try {
@@ -228,8 +234,15 @@ describe('S5.4 far corner and copy limits on a paged fixture', () => {
       expect(ui.container.textContent?.match(/Query timed out after 120 seconds/g)).toHaveLength(1)
       expect(readSignal!.aborted).toBe(true)
       expect(ui.getByRole('gridcell', { name: /alpha/ })).toBeTruthy()
+      expect(h.kernel.lifecycleStats()).toMatchObject({ inflight: 0 })
+      expect(h.kernel.lifecycleStats().transientBytes).toBeGreaterThan(0)
+      await act(async () => { releaseProducer(); await cleanupStarted })
+      expect(h.kernel.lifecycleStats().transientBytes).toBeGreaterThan(0)
+      await act(async () => { releaseCleanup(); await cleanupFinished; await vi.advanceTimersByTimeAsync(0) })
       expect(h.kernel.lifecycleStats()).toMatchObject({ inflight: 0, transientBytes: 0 })
-    } finally { ui.unmount(); vi.useRealTimers() }
+      expect(ui.container.textContent?.match(/Query timed out after 120 seconds/g)).toHaveLength(1)
+      expect(ui.getByRole('gridcell', { name: /alpha/ })).toBeTruthy()
+    } finally { releaseProducer(); releaseCleanup(); ui.unmount(); vi.useRealTimers() }
   })
 
   it('reaches XFD1048576 by Go To, find and copy through worker reads', FIRST_PAINT_TEST, async () => {

@@ -22,16 +22,17 @@ export function awaitAbortable<T>(work: Promise<T>, signal: AbortSignal, interru
 
 /** Keep the source's typed cancellation contract while unwinding session finally
  * blocks (draft charges, prepared leases, scheduler ports) promptly on abort. */
-export function interruptibleStore(store: SourceStore): SourceStore {
+export function interruptibleStore(store: SourceStore, observeWork?: (work: Promise<unknown>) => void): SourceStore {
+  const watch = <T>(work: Promise<T>): Promise<T> => { observeWork?.(work); return work }
   const error: SourceFailure = { code: 'cancelled', retryable: true, message: 'Query cancelled' }
   const draw = store.readDrawings
   const page = (): Page<never> => ({ items: [], stamp: store.stamp, completeness: 'incomplete', error })
   const read = async <T>(work: () => Promise<T>, signal: AbortSignal, cancelled: () => T): Promise<T> => {
     if (signal.aborted) return cancelled()
-    try { return await awaitQueryDeadline(work(), signal) }
+    try { return await awaitQueryDeadline(watch(work()), signal) }
     catch (cause) { if (signal.aborted) return cancelled(); throw cause }
   }
-  return {
+  const facade: SourceStore = {
     get stamp() { return store.stamp },
     get extent() { return store.extent },
     get valuePolicy() { return store.valuePolicy },
@@ -57,7 +58,7 @@ export function interruptibleStore(store: SourceStore): SourceStore {
           yield next.value
           if (options.signal.aborted) return
         }
-      } finally { void iterator.return?.().catch(() => {}) }
+      } finally { const ending = iterator.return?.(); if (ending) void watch(ending).catch(() => {}) }
     },
     ...(store.scanOccupied ? { async *scanOccupied(request, options) {
       const iterator = store.scanOccupied!(request, options)[Symbol.asyncIterator]()
@@ -68,9 +69,29 @@ export function interruptibleStore(store: SourceStore): SourceStore {
           yield next.value
           if (options.signal.aborted) return
         }
-      } finally { void iterator.return?.().catch(() => {}) }
+      } finally { const ending = iterator.return?.(); if (ending) void watch(ending).catch(() => {}) }
     } } satisfies Pick<SourceStore, 'scanOccupied'> : {}),
     ...(store.settle ? { settle: (payload: object) => store.settle!(payload) } : {}),
     release: () => store.release(),
   }
+  if (observeWork) {
+    // Observe the facade's queued iterator cleanup as well as the raw provider;
+    // return() can still be unwinding after the public request has cancelled.
+    const observed = <T>(iterable: AsyncIterable<T>): AsyncIterable<T> => ({
+      [Symbol.asyncIterator]() {
+        const iterator = iterable[Symbol.asyncIterator]()
+        return {
+          next: () => watch(iterator.next()),
+          ...(iterator.return ? { return: (value?: unknown) => watch(iterator.return!(value)) } : {}),
+        }
+      },
+    })
+    const populated = facade.scanPopulated.bind(facade)
+    facade.scanPopulated = (...args) => observed(populated(...args))
+    if (facade.scanOccupied) {
+      const occupied = facade.scanOccupied.bind(facade)
+      facade.scanOccupied = (...args) => observed(occupied(...args))
+    }
+  }
+  return facade
 }

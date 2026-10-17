@@ -1134,6 +1134,13 @@ export class RemoteSheetStore implements SourceStore {
     if (entry) this.workbook.ledger.touch(this, row)
     return entry && entry.cells.length ? entry.cells : undefined
   }
+  /** Up to `limit` source rows the row cache holds now, in cache order; no
+   * read is issued (bounded auto-fit, spec §5.6). */
+  knownRows(limit: number): number[] {
+    const out: number[] = []
+    for (const row of this.rows.keys()) { if (out.length >= limit) break; out.push(row) }
+    return out
+  }
   /** Whether the cell's row chunk has been read (blank or populated). */
   isKnown(at: SourceCell): boolean {
     const chunk = Math.floor(at.col / ROW_CHUNK_COLS)

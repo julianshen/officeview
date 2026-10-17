@@ -20,7 +20,7 @@ import type {
   LogicalViewport, OverviewDomain, OverviewGroup, RowOrder, RowPermutationBand, RowVisibility, SourceFailure, SourceStore, SparseRowPage,
   ViewportCell, ViewportOverviewGroup, ViewportResult, WorkerDiagnostic,
 } from './contracts'
-import { MAX_COLS, MAX_ROWS, isValidCoordinate, type SourceCell } from './coordinates'
+import { MAX_COLS, MAX_ROWS, isValidCoordinate, validateSourceRect, type SourceCell } from './coordinates'
 import { AxisMetricsError, createAxisMetrics, type AxisMetricsErrorCode, type SparseAxisMetrics } from './axes'
 import { createSheetMetrics, type ProjectedSheetMetrics } from './projection'
 import { RectangleIndex } from './structure'
@@ -28,6 +28,9 @@ import { cellSourceRow, drawingExtent } from './sheetCells'
 import { createIntervalSet } from './visibility'
 import { boundOverflowCache, OverflowResourceError } from './overflowCache'
 import { NO_OVERFLOW, rowOverflowFromCells, textOverflowAllowance, type OverflowAllowance, type RowOverflowInput } from './textOverflow'
+import { hasSessionSizes, mergeAxisOverrides, remapDrawings, type SessionSizes } from './axisSizes'
+import { withFormatWorkspace, type FormatBudget } from './formatWorkspace'
+import type { FormatAllocation } from '../formula/format'
 
 // Static-renderer helpers live in a leaf module so the eager static path never
 // reaches the viewport planner; re-exported for existing callers.
@@ -174,6 +177,9 @@ export interface SheetGeometryOptions {
    * collapse, so a filter may reveal a snapshot-hidden body row; authored row
    * heights are kept. Without it the authored-hidden snapshot collapses. */
   visibility?: RowVisibility
+  /** View-only session sizes (spec §5.6): rows by source row, columns by source
+   * column, applied over authored sizes; authored-hidden lines stay collapsed. */
+  sizes?: SessionSizes
 }
 /** Built once per geometry generation (sheet + order + visibility), never per paint. */
 export interface SheetGeometry {
@@ -187,6 +193,9 @@ export interface SheetGeometry {
   /** Resident builds (S10.2 main ledger): retained bytes of the per-row cell
    * index (one Map entry and one array per populated row, one slot per cell). */
   readonly cellIndexBytes?: number
+  /** Session-size placement (spec §5.6): the repositioned top-level drawing
+   * copies this geometry's drawing index holds, when any moved. */
+  readonly sizedDrawings?: readonly XlsxDrawing[]
   /** Top-level drawings touching a logical CSS box, in authored paint order, or null
    * when their node weight or the index walk exceeds `budget` records. */
   drawingsIn(left: number, top: number, right: number, bottom: number, budget: number): readonly XlsxDrawing[] | null
@@ -301,8 +310,10 @@ function cssSize(exact: number): number {
 /** Try the authored axis, then without authored sizes, then plain defaults. Each
  * rejected attempt leaves its typed diagnostic; hidden intervals survive the
  * first fallback because they never contradict (all zero). */
-function buildAxis(axis: 'rows' | 'cols', logicalCount: number, defaultSizeCss: number, overrides: AxisSizeInterval[], collapsed: Array<{ start: number; end: number }>, diagnostics: WorkerDiagnostic[]): SparseAxisMetrics | null {
-  const attempts = [{ overrides, collapsed }, { overrides: [], collapsed }, { overrides: [], collapsed: [] }]
+function buildAxis(axis: 'rows' | 'cols', logicalCount: number, defaultSizeCss: number, overrides: AxisSizeInterval[], collapsed: Array<{ start: number; end: number }>, diagnostics: WorkerDiagnostic[], session?: ReadonlyMap<number, number>): SparseAxisMetrics | null {
+  // Session sizes are tried first; if they cannot be represented the authored
+  // sizes still apply (never the plain-default fallback because of a session).
+  const attempts = [...(session?.size ? [{ overrides: mergeAxisOverrides(overrides, session), collapsed }] : []), { overrides, collapsed }, { overrides: [], collapsed }, { overrides: [], collapsed: [] }]
   for (const attempt of attempts) {
     try {
       return createAxisMetrics({ logicalCount, defaultSizeCss, ...attempt })
@@ -368,8 +379,8 @@ export function buildSheetGeometry(sheet: XlsxSheet, options: SheetGeometryOptio
     }
   }
 
-  const rows = buildAxis('rows', MAX_ROWS, SHEET_DEFAULT_ROW_CSS, rowOverrides, rowCollapsed, diagnostics)
-  const cols = buildAxis('cols', MAX_COLS, columns.defaultWidthPx, colOverrides, colCollapsed, diagnostics)
+  const rows = buildAxis('rows', MAX_ROWS, SHEET_DEFAULT_ROW_CSS, rowOverrides, rowCollapsed, diagnostics, options.sizes?.rows)
+  const cols = buildAxis('cols', MAX_COLS, columns.defaultWidthPx, colOverrides, colCollapsed, diagnostics, options.sizes?.cols)
   if (!rows || !cols) return { kind: 'diagnostic', diagnostics }
   let metrics: ProjectedSheetMetrics
   try {
@@ -377,6 +388,11 @@ export function buildSheetGeometry(sheet: XlsxSheet, options: SheetGeometryOptio
   } catch (error) {
     // A projection that cannot be built must not silently show another order.
     if (!(error instanceof AxisMetricsError)) throw error
+    // Session sizes that make it unrepresentable fall back to the authored sizes (§5.6).
+    if (hasSessionSizes(options.sizes)) {
+      const plain = buildSheetGeometry(sheet, { ...options, sizes: undefined })
+      return plain.kind === 'ready' ? Object.freeze({ ...plain, diagnostics: Object.freeze([...plain.diagnostics, axisDiagnostic(error, 'projection')]) }) : plain
+    }
     diagnostics.push(axisDiagnostic(error, 'projection'))
     return { kind: 'diagnostic', diagnostics }
   }
@@ -389,8 +405,12 @@ export function buildSheetGeometry(sheet: XlsxSheet, options: SheetGeometryOptio
     }
     mergeEntries.push({ rect: { r0: range.minRow, r1: range.maxRow, c0: range.minCol, c1: range.maxCol }, value: range })
   }
-  const drawingsIn = drawingQuery(sheet.drawings ?? [])
+  const placed = sizedDrawings(sheet.drawings ?? [], options.sizes, rowOverrides, hidden.map(index => ({ start: index, end: index })), colOverrides, colCollapsed, columns.defaultWidthPx)
+  const drawingsIn = drawingQuery(placed)
   return Object.freeze({
+    // Repositioned copies (and their index) belong to this geometry alone; the
+    // owner charges them to the drawings pool while it is held (§12.4).
+    ...(placed !== (sheet.drawings ?? placed) ? { sizedDrawings: placed } : {}),
     kind: 'ready' as const,
     metrics,
     diagnostics: Object.freeze(diagnostics),
@@ -401,6 +421,26 @@ export function buildSheetGeometry(sheet: XlsxSheet, options: SheetGeometryOptio
     merges: RectangleIndex.build(mergeEntries),
     drawingsIn,
   })
+}
+
+/** Drawings placed against session sizes (spec §5.6). Placement axes collapse
+ * authored-hidden rows and columns, as the parse-time anchor placement does;
+ * unrepresentable metadata keeps the authored placement. */
+export function sizedDrawings(drawings: readonly XlsxDrawing[], sizes: SessionSizes | undefined, rowOverrides: readonly AxisSizeInterval[], hiddenRows: readonly { start: number; end: number }[], colOverrides: readonly AxisSizeInterval[], hiddenCols: readonly { start: number; end: number }[], defaultColCss = SHEET_DEFAULT_COL_CSS): readonly XlsxDrawing[] {
+  if (!drawings.length || !hasSessionSizes(sizes)) return drawings
+  try {
+    const axis = (logicalCount: number, defaultSizeCss: number, overrides: readonly AxisSizeInterval[], collapsed: readonly { start: number; end: number }[]) =>
+      createAxisMetrics({ logicalCount, defaultSizeCss, overrides, collapsed })
+    const base = { rows: axis(MAX_ROWS, SHEET_DEFAULT_ROW_CSS, rowOverrides, hiddenRows), cols: axis(MAX_COLS, defaultColCss, colOverrides, hiddenCols) }
+    const sized = {
+      rows: sizes.rows.size ? axis(MAX_ROWS, SHEET_DEFAULT_ROW_CSS, mergeAxisOverrides(rowOverrides, sizes.rows), hiddenRows) : base.rows,
+      cols: sizes.cols.size ? axis(MAX_COLS, defaultColCss, mergeAxisOverrides(colOverrides, sizes.cols), hiddenCols) : base.cols,
+    }
+    return remapDrawings(drawings, base, sized)
+  } catch (error) {
+    if (error instanceof AxisMetricsError) return drawings
+    throw error
+  }
 }
 
 /** SheetGeometry.drawingsIn over top-level drawings in worksheet CSS px (both
@@ -691,31 +731,70 @@ function tileOverflow(boxes: Iterable<{ x: number; y: number; width: number; hei
 /** Merge index queries reused across frames of one geometry generation (plan
  * S5.1). Keys are the query rectangle and limit; the geometry object is the
  * generation (a new sheet/order/visibility builds a new geometry). */
+type MergeQueryPage = ReturnType<SheetGeometry['merges']['query']> & { memoryRefused?: boolean }
+const EMPTY_MERGE_PAGE: MergeQueryPage = Object.freeze({ items: Object.freeze([]) })
+const REFUSED_MERGE_PAGE: MergeQueryPage = Object.freeze({ ...EMPTY_MERGE_PAGE, memoryRefused: true })
 export class MergeQueryCache {
-  private readonly byGeometry = new WeakMap<SheetGeometry, Map<string, { page: ReturnType<SheetGeometry['merges']['query']>; bytes: number }>>()
+  private readonly byGeometry = new WeakMap<SheetGeometry, Map<string, { page: ReturnType<SheetGeometry['merges']['query']>; bytes: number; rect?: { r0: number; r1: number; c0: number; c1: number }; limit?: number }>>()
   hits = 0
   misses = 0
   /** Estimated bytes of the retained pages (S10.2 main ledger), across geometries. */
   bytes = 0
-  constructor(readonly maxEntries = 64) {}
-  query(geometry: SheetGeometry, rect: { r0: number; r1: number; c0: number; c1: number }, limit: number, work: ViewportWork): ReturnType<SheetGeometry['merges']['query']> {
-    let entries = this.byGeometry.get(geometry)
-    if (!entries) this.byGeometry.set(geometry, entries = new Map())
-    const key = `${rect.r0},${rect.r1},${rect.c0},${rect.c1},${limit}`
-    const hit = entries.get(key)
-    if (hit) { this.hits++; return hit.page }
-    this.misses++
-    work.mergeQueries++
-    const page = geometry.merges.query(rect, { limit })
-    const bytes = 64 + page.items.length * 48
-    entries.set(key, { page, bytes })
-    this.bytes += bytes
-    if (entries.size > this.maxEntries) {
-      const oldest = entries.keys().next().value!
-      this.bytes -= entries.get(oldest)!.bytes
-      entries.delete(oldest)
+  readonly budgetOwned: boolean
+  constructor(readonly maxEntries = 64, private readonly budget?: FormatBudget) {
+    if (budget && !budget.retain) throw new RangeError('A merge cache budget needs retained-page ownership')
+    this.budgetOwned = budget !== undefined
+  }
+  query(geometry: SheetGeometry, rect: { r0: number; r1: number; c0: number; c1: number }, limit: number, work: ViewportWork): MergeQueryPage {
+    if (geometry.merges.size === 0) {
+      validateSourceRect(rect)
+      if (!Number.isSafeInteger(limit) || limit <= 0) throw new RangeError('Invalid rectangle page limit')
+      return EMPTY_MERGE_PAGE
     }
-    return page
+    let entries = this.byGeometry.get(geometry)
+    let key: string | undefined
+    if (this.budget) {
+      // Compare bounded numeric metadata before constructing a new key, so a
+      // healthy warm hit needs no workspace reservation at all.
+      if (entries) for (const hit of entries.values()) {
+        const at = hit.rect!
+        if (hit.limit === limit && at.r0 === rect.r0 && at.r1 === rect.r1 && at.c0 === rect.c0 && at.c1 === rect.c1) { this.hits++; return hit.page }
+      }
+    } else {
+      key = `${rect.r0},${rect.r1},${rect.c0},${rect.c1},${limit}`
+      const hit = entries?.get(key)
+      if (hit) { this.hits++; return hit.page }
+    }
+    this.misses++
+    const build = (allocation?: FormatAllocation) => {
+      // The result cannot contain more than the index or requested page. The
+      // fixed part covers key/map/page metadata and their construction overlap.
+      allocation?.allocate(768 + Math.min(geometry.merges.size, limit) * 48)
+      key ??= `${rect.r0},${rect.r1},${rect.c0},${rect.c1},${limit}`
+      work.mergeQueries++
+      const page = geometry.merges.query(rect, { limit })
+      const bytes = (allocation ? 512 : 64) + page.items.length * 48
+      const publish = () => {
+        if (!entries) this.byGeometry.set(geometry, entries = new Map())
+        entries.set(key!, allocation ? { page, bytes, rect: { ...rect }, limit } : { page, bytes })
+        this.bytes += bytes
+        if (entries.size > this.maxEntries) {
+          const oldest = entries.keys().next().value!
+          this.bytes -= entries.get(oldest)!.bytes
+          entries.delete(oldest)
+        }
+      }
+      // Eviction drops the cache reference, never the charge of a caller that
+      // still holds the page or its array. A warm hit needs no new reservation.
+      if (allocation) allocation.retain!([page, page.items], bytes, publish)
+      else publish()
+      return page
+    }
+    try { return this.budget ? withFormatWorkspace(this.budget, build) : build() }
+    catch (error) {
+      if (!(error instanceof Error && 'code' in error && error.code === 'resource-limit')) throw error
+      return REFUSED_MERGE_PAGE
+    }
   }
 }
 
@@ -744,9 +823,9 @@ function detailPlan(geometry: SheetGeometry, viewport: LogicalViewport, limits: 
   const window = planWindow(metrics, viewport, limits)
   const work = window.work
   const active = activePlacement(geometry, options.activeCell, work)
-  const coarse = (message: string, groups = window.kind === 'coarse' ? window.groups : coarseGroups(metrics, [{ rows: { start: Math.max(0, viewport.box.y), end: Math.min(window.extent.height, viewport.box.y + viewport.box.height) }, cols: { start: Math.max(0, x), end: Math.min(window.extent.width, x + width) } }], window.scale, limits.overviewGroups)): ViewportPlan => {
+  const coarse = (message: string, groups = window.kind === 'coarse' ? window.groups : coarseGroups(metrics, [{ rows: { start: Math.max(0, viewport.box.y), end: Math.min(window.extent.height, viewport.box.y + viewport.box.height) }, cols: { start: Math.max(0, x), end: Math.min(window.extent.width, x + width) } }], window.scale, limits.overviewGroups), code = 'detail-limit'): ViewportPlan => {
     work.overviewGroups = groups.length
-    return { kind: 'coarse', diagnostics: [...geometry.diagnostics, { code: 'detail-limit', message }], groups, extent: window.extent, work, ...(active ? { active } : {}) }
+    return { kind: 'coarse', diagnostics: [...geometry.diagnostics, { code, message }], groups, extent: window.extent, work, ...(active ? { active } : {}) }
   }
   if (window.kind === 'coarse') return coarse(window.message)
   const { scale, extent } = window
@@ -790,6 +869,7 @@ function detailPlan(geometry: SheetGeometry, viewport: LogicalViewport, limits: 
   // source query. A merge that does touch a band is painted cell by cell.
   const rect = { r0: slots[0], r1: slots[slots.length - 1], c0, c1 }
   const page = options.merges ? options.merges.query(geometry, rect, limits.records, work) : (work.mergeQueries++, geometry.merges.query(rect, { limit: limits.records }))
+  if ('memoryRefused' in page && page.memoryRefused) return coarse('Merge queries exceed the layout memory budget', undefined, 'layout-memory')
   if (page.nextCursor !== undefined) return coarse(`more than ${limits.records} merged ranges intersect the frame`)
   // Admission from indexes only: per-row column counts by binary search, no cell content.
   let records = page.items.length

@@ -20,6 +20,7 @@ import type { XlsxSheet } from '../xlsx/types'
 import type { FilterEvaluation, FilterEvaluator } from './viewerSession'
 import { semanticsFor } from '../xlsx/view/semanticsFor'
 import { DisplayTextLaneCache, needsDisplayText } from './displayTextLane'
+import type { FormatAllocation } from '../xlsx/formula/format'
 
 const LANE_PAGE_ROWS = 4096
 const CLASSIFICATION_CACHE = 64
@@ -57,14 +58,17 @@ function preparer(formatting: WorkbookFormatting | undefined): Prepare {
 }
 /** Formatted display text of a numeric/boolean lane entry, or undefined for
  * cells a text rule reads raw (strings) or never reads (blank/error/unavailable). */
-function displayFormatter(formatting: WorkbookFormatting | undefined): (page: ValueLanePage, index: number) => string | undefined {
+function displayFormatter(formatting: WorkbookFormatting | undefined): (page: ValueLanePage, index: number, allocation: FormatAllocation) => string | undefined {
   const sheet = { name: '', rows: [], cols: [], merges: [], mergeRanges: [], semantics: semanticsFor(formatting?.dateSystem ?? '1900') } as XlsxSheet
   const styles = formatting?.styles ?? []
-  return (page, index) => {
+  return (page, index, allocation) => {
     const tag = page.tags[index]
     if (tag === 5 || tag === 7 || tag === 4 || tag === 2) return undefined
     const value = page.numbers[index]
-    return cellDisplayText(sheet, { value: tag === 3 ? Boolean(value) : value, style: styles[page.styles?.[index] ?? 0] })
+    // Diagnostics on this formatting-only sheet live only through this call;
+    // they must not outlive the lane's temporary builder reservation.
+    allocation.allocate(256)
+    return cellDisplayText({ ...sheet }, { value: tag === 3 ? Boolean(value) : value, style: styles[page.styles?.[index] ?? 0] }, allocation)
   }
 }
 export interface WorkerFilterEvaluatorOptions {
@@ -113,8 +117,10 @@ export function createWorkerFilterEvaluator(keysFor: (stamp: SourceStamp) => Rea
           ? await lanes.lease({ ...stamp, styleOwner, col, r0, r1 }, sink => pages(store, stamp, col, r0, r1, signal, async (page, first) => {
             for (let i = 0; i < page.count; i++) {
               if (signal.aborted) throw new ValueIndexError('cancelled', 'Filter cancelled')
-              const text = display(page, i)
-              if (text !== undefined) sink.add(first + i - r0, text)
+              sink.format(allocation => {
+                const text = display(page, i, allocation)
+                if (text !== undefined) sink.add(first + i - r0, text)
+              })
               if (cooperate?.due(1)) await cooperate.pause('filter')
             }
           }), displayLanes)

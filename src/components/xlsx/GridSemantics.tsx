@@ -11,6 +11,8 @@ import { belowDetail } from '../../xlsx/view/viewport'
 import { GridHeaders, GridRowHeader, GRID_HEADER_SIZE, HEADER_COLORS, cellSelected, gridHeaderBox, viewportHeaderBox, columnHeaderHeight } from './GridHeaders'
 import { ViewerStatus, type ViewerStatusProps, type HiddenCellInspection } from './ViewerStatus'
 import { useControlMedia } from './controlMedia'
+import { ResizeHandles, type ResizeRequest } from './sheetResize'
+import { RESIZE_KEY_STEP } from '../../xlsx/view/axisSizes'
 
 export interface GridCellPresentation { text: string; state?: 'loading' | 'error' | 'unavailable' }
 export interface GridTransition { selection: GridSelection; window: ScrollWindow; announcement: string }
@@ -40,11 +42,18 @@ export interface GridSemanticsProps {
   renderMode?: 'detail' | 'coarse'
   /** Exact read-only inspection of a hidden Go To/find target (grid focus stays put). */
   inspection?: HiddenCellInspection
+  /** View-only row/column resize (spec §5.6): header edge handles and the
+   * Alt+Shift+Arrow / Alt+Shift+Enter keyboard route. */
+  onResize?: (request: ResizeRequest) => void
   /** Row-header gutter width (CSS px); default GRID_HEADER_SIZE. */
   gutter?: number
   /** Fill the positioned parent (the viewer pane), so the status line follows the
    * pane's size at once instead of a render later. */
   fill?: boolean
+}
+const resizeArrows: Record<string, { kind: 'row' | 'column'; delta: number }> = {
+  ArrowLeft: { kind: 'column', delta: -RESIZE_KEY_STEP }, ArrowRight: { kind: 'column', delta: RESIZE_KEY_STEP },
+  ArrowUp: { kind: 'row', delta: -RESIZE_KEY_STEP }, ArrowDown: { kind: 'row', delta: RESIZE_KEY_STEP },
 }
 /** The visible status line (§9.1, the sole notice surface) below the cells. */
 export const STATUS_BAR_HEIGHT = 24
@@ -203,6 +212,31 @@ export function GridSemantics(props: GridSemanticsProps): ReactElement {
     try { props.onChange(action()); setNotice('') }
     catch (error) { setNotice(error instanceof Error ? boundedSelectionText(error.message) : 'Navigation unavailable. Please retry.') }
   }
+  // A resize can replace the focused header control (a column crossing the
+  // 44px touch threshold swaps its buttons for the actions lane and back):
+  // focus moves to the equivalent surviving control, else the owned grid.
+  const resizeFocus = useRef<{ request: ResizeRequest; slot: number; label: string | null } | null>(null)
+  useLayoutEffect(() => {
+    // One-shot: only the commit right after the resize may restore focus, and
+    // only when the control that had it was removed; later focus moves
+    // (inside or outside the viewer) belong to the user.
+    const pending = resizeFocus.current, grid = gridRef.current
+    resizeFocus.current = null
+    if (!pending || !grid) return
+    const focus = document.activeElement
+    if (focus && focus !== document.body) return
+    const { request, slot, label } = pending
+    const escape = (text: string) => text.replace(/["\\]/g, '\\$&')
+    const candidates = request.kind === 'column'
+      ? [label ? `button[aria-label="${escape(label)}"]` : '', `[data-header-column="${request.index}"]`, `[data-header-lane="${request.index}"]`, `[data-action-column="${request.index}"]`]
+      : [label ? `button[aria-label="${escape(label)}"]` : '', `[data-header-row="${slot}"]`]
+    for (const selector of candidates) {
+      const next = selector ? grid.querySelector<HTMLElement>(selector) : null
+      if (next) { setControlMode(true); next.focus(); return }
+    }
+    setControlMode(false)
+    grid.focus()
+  })
   const keyDown = (event: KeyboardEvent<HTMLDivElement>) => {
     if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'f') return
     const grid = gridRef.current
@@ -210,6 +244,31 @@ export function GridSemantics(props: GridSemanticsProps): ReactElement {
       event.preventDefault(); event.stopPropagation()
       props.popup.close()
       return
+    }
+    // Alt+Shift+Arrow resizes (Left/Right: column, Up/Down: row) and
+    // Alt+Shift+Enter auto-fits: the active cell's lines from the grid, or the
+    // focused header's own line in control mode (spec §5.6).
+    if (props.onResize && event.altKey && event.shiftKey && !event.ctrlKey && !event.metaKey && (event.key in resizeArrows || event.key === 'Enter') && grid?.contains(event.target as Node)) {
+      const target = event.target as HTMLElement
+      // Any native header control names its line: select, sort/filter/more
+      // action buttons and the narrow-column actions lane (disclosure and group).
+      const header = target.closest<HTMLElement>('[data-header-column],[data-action-column],[data-header-lane],[data-header-row]')
+      const arrow = resizeArrows[event.key]
+      const column = header?.dataset.headerColumn ?? header?.dataset.actionColumn ?? header?.dataset.headerLane
+      let request: ResizeRequest | null = null
+      if (column !== undefined) {
+        if (!arrow || arrow.kind === 'column') request = { kind: 'column', index: Number(column), ...(arrow ? { delta: arrow.delta } : { fit: true }) }
+      } else if (header?.dataset.headerRow !== undefined) {
+        if (!arrow || arrow.kind === 'row') request = { kind: 'row', index: projection.order.displayToSource(Number(header.dataset.headerRow)), ...(arrow ? { delta: arrow.delta } : { fit: true }) }
+      } else if (target === grid && active) {
+        request = arrow ? { kind: arrow.kind, index: arrow.kind === 'row' ? active.row : active.col, delta: arrow.delta } : { kind: 'column', index: active.col, fit: true }
+      }
+      if (request) {
+        event.preventDefault(); event.stopPropagation()
+        if (target !== grid) resizeFocus.current = { request, slot: request.kind === 'row' ? projection.order.sourceToDisplay(request.index) : -1, label: target.closest('button')?.getAttribute('aria-label') ?? null }
+        props.onResize(request)
+        return
+      }
     }
     if (event.target !== grid) {
       if (event.key === 'Escape' && grid?.contains(event.target as Node)) {
@@ -295,6 +354,8 @@ export function GridSemantics(props: GridSemanticsProps): ReactElement {
       }} style={{ position: 'relative', width: '100%', height: viewport.height + headerHeight, overflow: 'hidden' }}>
       <div aria-hidden="true" style={{ position: 'absolute', left: gutter, top: headerHeight, width: viewport.width, height: viewport.height }}>{props.children}</div>
       <GridHeaders {...headerProps} />
+      {props.onResize && !coarse && <ResizeHandles key={ownerKey} projection={projection} window={scroll} viewport={viewport} headerHeight={headerHeight} gutter={gutter} touch={touchControls}
+        columns={headerColumns} slots={transient ? slots.filter(slot => slot !== activeSlot) : slots} active={active} onResize={props.onResize} />}
       {slots.map(slot => {
         const row = projection.order.displayToSource(slot), extra = transient && slot === activeSlot
         // Horizontal scroll moves each row by transform; its cells keep fixed

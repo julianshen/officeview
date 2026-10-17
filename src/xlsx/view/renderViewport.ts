@@ -8,8 +8,8 @@ import type { XlsxSheet } from '../types'
 import type { CacheIdentity, LogicalViewport, WorkerDiagnostic } from './contracts'
 import type { SourceCell } from './coordinates'
 import { COARSE_NOTICE, emptyWork, planViewport, type CoarseGroup, type FrameBudget, type MergeQueryCache, type SheetGeometryResult, type ViewportPlan, type ViewportProfile, type ViewportWork } from './viewport'
-import { buildCellRecords, LayoutCache, type CellLayout, type CellLayoutHost } from './textLayout'
-import { layoutCellBody, paintCellLayout, paintSheetDrawings, spillSpan, textMeasurer, type RenderSheetAssets } from '../render'
+import { buildCellRecords, LayoutAdmissionError, LayoutCache, type CellLayout, type CellLayoutHost, type LayoutAdmission } from './textLayout'
+import { cellDisplayText, layoutCellBody, paintCellLayout, paintSheetDrawings, spillSpan, textMeasurer, type RenderSheetAssets } from '../render'
 import { paintWatermark, type ResolvedWatermark, type WatermarkOptions } from '../../core/watermark'
 import { CSS_PX_PER_INCH, EMU_PER_INCH } from '../../core/geometry'
 
@@ -21,7 +21,24 @@ export function createCellLayoutHost(ctx: CanvasRenderingContext2D, sheet: Parti
   // Format diagnostics land on the caller's sheet when one is given.
   const target = sheet as XlsxSheet
   return {
-    layoutBody: (cell, w, h, overflow) => layoutCellBody(ctx, target, cell, 0, 0, w, h, measured, overflow),
+    layoutBody: (cell, w, h, overflow, preformatted, allocation) => layoutCellBody(ctx, target, cell, 0, 0, w, h, measured, overflow, preformatted, allocation),
+    // Formats under the admission's allocation observer (each UTF-16 builder is
+    // admitted before it is made) and bounds the painted text: the canonical
+    // display text, or a '#' fill of the box for a number that does not fit.
+    paintedText: (cell, width, admission) => {
+      let held = 0
+      const release = () => { if (held) { admission.release(held); held = 0 } }
+      const allocation = {
+        allocate: (bytes: number) => { if (!admission.admit(bytes)) throw new LayoutAdmissionError(); held += bytes },
+        release: (bytes: number) => { const released = Math.min(bytes, held); admission.release(released); held -= released },
+      }
+      let text: string, widthDependent = false
+      // The formatter itself reports whether the selected section's text can
+      // change with the box (General fitting, or no admitting section's '#'):
+      // only then does the layout format again, under the same observer.
+      try { text = cellDisplayText(target, cell, allocation, () => { widthDependent = true }) } catch (error) { release(); throw error }
+      return { units: Math.max(text.length, typeof cell.value === 'number' ? Math.ceil(width / 2) + 1 : 0), allocation, ...(!widthDependent ? { text } : {}), release }
+    },
     canReuseOverflow: (body, overflow) => {
       const text = body.text
       if (!text) return true
@@ -65,7 +82,15 @@ export interface ViewportPaintOptions {
   activeCell?: SourceCell
   /** Painted in viewport space: protection marks follow the visible pane. */
   watermark?: WatermarkOptions | ResolvedWatermark
+  /** Repaint memory admitted per record at construction (spec §§5.6, 12.4):
+   * a record that cannot be admitted, even after evicting the layout cache,
+   * makes the tile paint its declared coarse notice instead. */
+  layoutAdmission?: LayoutAdmission
+  /** Lays records out (default: on the tile's own context). The viewer passes
+   * its shared, admitted measurement context (components/xlsx/measureContext). */
+  layoutHost?: CellLayoutHost
 }
+const LAYOUT_MEMORY = 'layout-memory'
 const VIEWPORT_NOTICE: Record<Exclude<ViewportPlan['kind'], 'detail'>, string> = {
   pending: 'Loading…',
   coarse: COARSE_NOTICE,
@@ -120,9 +145,25 @@ export function renderSheetViewport(
     const work = plan.work
     const built = cache.stats.built, reused = cache.stats.reused
     // The host lays a cell out in a box at the origin: records are box-relative.
-    const host = createCellLayoutHost(ctx, sheet)
-    const records = plan.kind === 'detail' ? buildCellRecords(plan.cells, owner, host, cache) : []
-    const active = plan.active ? buildCellRecords([plan.active], owner, host, cache)[0] : undefined
+    const host = options.layoutHost ?? createCellLayoutHost(ctx, sheet)
+    let records: CellLayout[] = [], active: CellLayout | undefined
+    if (options.layoutAdmission) cache.beginBatch(options.layoutAdmission)
+    try {
+      records = plan.kind === 'detail' ? buildCellRecords(plan.cells, owner, host, cache) : []
+      active = plan.active ? buildCellRecords([plan.active], owner, host, cache)[0] : undefined
+    } catch (error) {
+      if (!(error instanceof LayoutAdmissionError)) throw error
+      // Declared resource outcome: a pending-tone summary and one notice,
+      // never a partial or blank tile; the caller does not cache it.
+      cache.endBatch()
+      records = []
+      if (paintable) {
+        ctx.fillStyle = COARSE_FILL
+        ctx.fillRect(0, 0, width, height)
+        notice(error.message)
+      }
+      return { kind: 'coarse', diagnostics: [...plan.diagnostics, { code: LAYOUT_MEMORY, message: error.message }], records: [], coarse: [{ groupId: LAYOUT_MEMORY, bounds: { ...viewport.box }, slots: { start: 0, end: 0 }, cols: { c0: 0, c1: 0 } }], work: emptyWork() }
+    }
     work.layoutsBuilt = cache.stats.built - built
     work.layoutsReused = cache.stats.reused - reused
     const coarse = plan.kind === 'detail' ? plan.coarse : plan.groups
@@ -214,7 +255,11 @@ export function renderSheetViewport(
     if (plan.kind !== 'detail') for (const paint of paintBorders) paint()
     if (paintable && coarse.length) notice(plan.diagnostics.find(d => d.code === 'overflow-memory')?.message ?? COARSE_NOTICE)
     return { kind: plan.kind, ...(plan.kind === 'detail' && plan.pending?.length ? { pending: true } : {}), diagnostics: plan.diagnostics, records, coarse, ...(active ? { active } : {}), work }
-  } finally { ctx.restore() }
+  } finally {
+    // The batch's uncached bodies are released once the tile is painted.
+    if (options.layoutAdmission) cache.endBatch()
+    ctx.restore()
+  }
 }
 
 /** [start,end] minus hidden intervals, in order. */
