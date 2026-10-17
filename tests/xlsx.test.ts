@@ -55,7 +55,8 @@ describe('xlsx render', () => {
     const buf = await buildXlsx([{ name: 'S', rows: [{ r: 1, cells: [{ ref: 'A1', v: 1 }] }], cols: '<col min="1" max="2" width="10"/>' }])
     const doc = await parseXlsx(await OfficePackage.load(buf))
     const m = computeMetrics(doc.sheets[0])
-    expect(m.colWidthsPx[0]).toBe(Math.round(10 * 7 + 5))
+    // Excel column model: trunc((256w + trunc(128/mdw))/256 * mdw), mdw 7 (Calibri 11).
+    expect(m.colWidthsPx[0]).toBe(70)
     expect(m.colWidthsPx[1]).toBe(m.colWidthsPx[0])
   })
 

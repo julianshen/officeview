@@ -61,7 +61,7 @@ export function pagedSheetGeometry(remote: RemoteWorkbook, sheetId: string, orde
     const hiddenRows = layout.hidden.map(interval => ({ start: interval.r0, end: interval.r1 }))
     const rowIntervals = layout.rowOverrides.length + layout.hidden.length + sizes.rows.size
     const colIntervals = layout.colOverrides.length + hiddenCols.length + sizes.cols.size
-    const place = (list: readonly XlsxDrawing[]) => sizedDrawings(list, sizes, layout.rowOverrides, hiddenRows, layout.colOverrides, hiddenCols)
+    const place = (list: readonly XlsxDrawing[]) => sizedDrawings(list, sizes, layout.rowOverrides, hiddenRows, layout.colOverrides, hiddenCols, axes.cols.defaultSizeCss)
     if (metrics && drawings.drawings.length) {
       eager = place(drawings.drawings)
       placed.set(drawings.drawings, drawingQuery(eager))

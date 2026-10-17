@@ -30,6 +30,10 @@ export interface ScenarioDef {
   /** performance-profile.json threshold this scenario measures. */
   threshold: string
   description: string
+  /** Profiles that refuse this scenario BY DESIGN, with the arithmetic. A typed
+   * worker-budget refusal there is recorded as "refused (by design)"; on any
+   * other profile, or against any other limit, a refusal is a failure. */
+  designRefusal?: Readonly<Partial<Record<'D' | 'M', string>>>
 }
 
 /** F2 body rows are rows minus header and totals: exactly 100k for the small band. */
@@ -71,6 +75,12 @@ export const SCENARIOS: Readonly<Record<ScenarioId, ScenarioDef>> = Object.freez
   'text-sort-1m-natural': {
     id: 'text-sort-1m-natural', kind: 'sort', fixture: 'F4', keys: [0], rows: 1_000_000, threshold: 'natural-text-sort-1m',
     description: 'F4 1M unique strings, host Intl.Collator numeric (natural) case-insensitive sort, source-ID stable ties',
+    designRefusal: Object.freeze({
+      M: 'M worker budget 268,435,456 B cannot hold a 1M-unique-string sort in the current in-memory kernel: '
+        + 'its peak is 158,622,016 B over the 239,052,798 B resident F4 source (397,674,814 B), and 317,379,338 B from a cold source '
+        + 'whose strings the dictionary must own (175,052,798 B strings + 128,000,000 B intern map + lanes). '
+        + 'Spec 12.4/12.5: a typed resource result until a page-backed multi-pass text sort (sort.ts S7.3 TODO) or a budget decision.',
+    }),
   },
   'value-index-100k-cold': {
     id: 'value-index-100k-cold', kind: 'value-index', fixture: 'F4', keys: [], rows: 100_000, threshold: 'cold-value-index-100k',

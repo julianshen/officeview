@@ -12,6 +12,7 @@ import { SOURCE_ALLOCATION, adoptAllocation, type AllocationReservation, type So
  * The paged adapter for large files lives in ./pagedSource and answers the same
  * questions from stored pages; adapter parity is asserted within one value policy.
  */
+import { DEFAULT_COLUMN_METRICS, columnWidthPx, type ColumnMetrics } from '../columnWidth'
 import type {
   AuthoritativeCell, AxisSizeInterval, CellRead, ColumnEntry, ColumnQuery, OverviewGroup, OverviewQuery, Page, PopulatedQuery,
   DrawingAnchor, RangeCompletion, ReadOptions, SingleCellPayload, SourceFailure, SourceRowInterval, SourceStamp, SourceStore,
@@ -532,7 +533,7 @@ export class ObjectXlsxSheetAdapter implements SourceStore {
 }
 
 function sheetGeometry(sheet: XlsxSheet): SheetGeometry {
-  return buildGeometry([...sheet.rows].sort((a, b) => a.index - b.index), sheet.cols, [], { hiddenCols: true })
+  return buildGeometry([...sheet.rows].sort((a, b) => a.index - b.index), sheet.cols, [], { hiddenCols: true, ...(sheet.columnMetrics ? { columns: sheet.columnMetrics } : {}) })
 }
 /** Source-space geometry from authored rows (ascending) and column specs; shared by both adapters. */
 export function buildGeometry(
@@ -540,8 +541,9 @@ export function buildGeometry(
   specs: readonly { min: number; max: number; widthChars?: number; hidden?: boolean }[],
   hiddenIntervals: readonly SourceRowInterval[] = [],
   /** S5.4 paged sources: authored-hidden columns collapse (zero width), as the object planner collapses them. */
-  options: { hiddenCols?: boolean } = {},
+  options: { hiddenCols?: boolean; columns?: ColumnMetrics } = {},
 ): SheetGeometry {
+  const columns = options.columns ?? DEFAULT_COLUMN_METRICS
   const rowOverrides: AxisSizeInterval[] = []
   const hidden: SourceRowInterval[] = []
   for (const row of rows) {
@@ -560,7 +562,7 @@ export function buildGeometry(
     if (spec.widthChars === undefined || !Number.isFinite(spec.widthChars) || spec.widthChars < 0) continue
     const start = Math.max(0, spec.min), end = Math.min(MAX_COLS - 1, spec.max)
     if (Number.isSafeInteger(start) && Number.isSafeInteger(end) && start <= end) {
-      colOverrides.push({ start, end, sizeCss: Math.round(spec.widthChars * 7 + 5) })
+      colOverrides.push({ start, end, sizeCss: columnWidthPx(spec.widthChars, columns.maxDigitWidthPx) })
     }
   }
   colOverrides.sort((a, b) => a.start - b.start)
@@ -568,7 +570,20 @@ export function buildGeometry(
   for (let i = 1; i < colOverrides.length; i++) {
     if (colOverrides[i].start <= colOverrides[i - 1].end) colOverrides[i - 1] = { ...colOverrides[i - 1], end: colOverrides[i].start - 1 }
   }
-  const cols = colOverrides.filter(interval => interval.start <= interval.end)
+  const authored = colOverrides.filter(interval => interval.start <= interval.end)
+  // Worker layouts publish only overrides (the remote axis assumes 64px), so a
+  // non-default sheet width is spelled out over every gap between them.
+  const cols: AxisSizeInterval[] = []
+  if (columns.defaultWidthPx === DEFAULT_COL_CSS) cols.push(...authored)
+  else {
+    let next = 0
+    for (const interval of authored) {
+      if (interval.start > next) cols.push({ start: next, end: interval.start - 1, sizeCss: columns.defaultWidthPx })
+      cols.push(interval)
+      next = interval.end + 1
+    }
+    if (next <= MAX_COLS - 1) cols.push({ start: next, end: MAX_COLS - 1, sizeCss: columns.defaultWidthPx })
+  }
   const hiddenCols: Array<{ start: number; end: number }> = []
   if (options.hiddenCols) {
     for (const spec of [...specs].filter(spec => spec.hidden).sort((a, b) => a.min - b.min)) {
@@ -644,6 +659,9 @@ export function createObjectWorkbookSource(doc: XlsxDocument, docId: string, opt
     },
     coverageDiagnostics: sheetId => storeFor(sheetId).coverageDiagnostics(),
     declaredFilters: () => doc.declaredFilters ?? [],
+    // Compatibility-mode documents served by the worker style remote cells
+    // through this table (spec §11.1), exactly as paged imports do.
+    ...(doc.cellStyles ? { formatting: () => ({ dateSystem: doc.semantics?.dateSystem ?? '1900', styles: doc.cellStyles! }) } : {}),
     async release() {
       await Promise.all([...stores.values()].map(store => store.release()))
       stores.clear()

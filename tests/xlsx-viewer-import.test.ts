@@ -306,7 +306,7 @@ describe('formula expansion through the entry point (RED test 19)', () => {
     expect(a1.value).toBeNull()
     expect(a1.hasCachedValue).toBe(false) // unavailable, not computed
     expect(doc.sheets[0].rows[0].cells.find((c) => c.ref === 'B1')!.value).toBe(7)
-    expect(doc.diagnostics?.find((d) => d.feature === 'cached-value-policy')?.message).toBe('Showing saved values — 1 formulas not recalculated (file too large)')
+    expect(doc.diagnostics?.find((d) => d.feature === 'cached-value-policy')?.message).toBe('Showing saved values — 1 formulas not recalculated (formula evaluation limit)') // a tiny file: never "file too large"
     expect(doc.diagnostics?.some((d) => d.feature === 'array-resource-limit')).toBe(false)
   })
 

@@ -104,7 +104,7 @@ it('touch headers and the canvas share the full four-control header height', asy
   const canvas = ui.getByTestId('officeview-sheet-base') as HTMLCanvasElement
   const header = ui.container.querySelector('[data-officeview-ui="grid-headers"]') as HTMLElement
   expect(header.style.height).toBe('176px')
-  expect(canvas.style.height).toBe('224px')
+  expect(canvas.style.height).toBe('200px') // 400px pane - 176px header - 24px status line
   expect(canvas.parentElement?.style.top).toBe('176px')
 })
 

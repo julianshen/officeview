@@ -153,7 +153,10 @@ export function gatherEnvironment(ctx: BrowserContext, params: HarnessParams, fi
     operator: params.operator,
     profile: params.profile,
     mode: params.mode,
-    ...(fixture?.scenario ? { scenario: { ...fixture.scenario, keys: [...fixture.scenario.keys] } } : {}),
+    ...(fixture?.scenario ? { scenario: {
+      ...fixture.scenario, keys: [...fixture.scenario.keys],
+      ...(fixture.scenario.refusals ? { refusals: fixture.scenario.refusals.map(refusal => ({ ...refusal })) } : {}),
+    } } : {}),
     note: placeholder || !fixture?.note
       ? 'S0.3 scaffold: synthetic placeholder fixture rendered by a minimal canvas grid; interactive viewer kernels are not implemented yet'
       : fixture.note,

@@ -1,4 +1,5 @@
 /** Worksheet DrawingML adapter. Placement belongs to the worksheet anchor. */
+import { DEFAULT_COLUMN_METRICS, columnWidthPx } from './columnWidth'
 import type { OfficePackage } from '../core/zip'
 import { attrs, getChildren, orderedChildren, textOf, type XmlNode } from '../core/xml'
 import { sniffImageMime } from '../core/images'
@@ -199,15 +200,17 @@ async function branchAvailable(pkg: OfficePackage, owner: string, node: XmlNode,
 function prefixes(sheet: XlsxSheet, axis: 'col' | 'row', through: number): number[] {
   const limit = axis === 'col' ? MAX_COLS : MAX_ROWS
   const n = Math.min(limit, Math.max(1, through + 1))
-  const values = new Array<number>(n).fill(axis === 'col' ? 64 : 20)
+  // The same Excel column model and stored row heights the cell grid uses.
+  const columns = sheet.columnMetrics ?? DEFAULT_COLUMN_METRICS
+  const values = new Array<number>(n).fill(axis === 'col' ? columns.defaultWidthPx : 20)
   if (axis === 'col') {
     for (const spec of sheet.cols) {
       if (!Number.isSafeInteger(spec.min) || !Number.isSafeInteger(spec.max)) continue
-      for (let i = Math.max(0, spec.min); i <= spec.max && i < n; i++) values[i] = spec.hidden ? 0 : spec.widthChars !== undefined && Number.isFinite(spec.widthChars) && spec.widthChars >= 0 ? Math.round(spec.widthChars * 7 + 5) : 64
+      for (let i = Math.max(0, spec.min); i <= spec.max && i < n; i++) values[i] = spec.hidden ? 0 : spec.widthChars !== undefined && Number.isFinite(spec.widthChars) && spec.widthChars >= 0 ? columnWidthPx(spec.widthChars, columns.maxDigitWidthPx) : columns.defaultWidthPx
     }
   } else {
     for (const row of sheet.rows) if (Number.isSafeInteger(row.index) && row.index >= 0 && row.index < n) {
-      values[row.index] = row.hidden ? 0 : row.customHeight && row.heightPt !== undefined && Number.isFinite(row.heightPt) && row.heightPt >= 0 ? Math.round(row.heightPt * 96 / 72) : 20
+      values[row.index] = row.hidden ? 0 : row.heightPt !== undefined && Number.isFinite(row.heightPt) && row.heightPt >= 0 ? Math.round(row.heightPt * 96 / 72) : 20
     }
   }
   const out = [0]

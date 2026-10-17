@@ -114,7 +114,7 @@ describe('row sizes follow the SOURCE row under sort and filter', () => {
   it('buildSheetGeometry applies session sizes over authored ones and keeps authored-hidden collapsed', () => {
     const doc = sheet({
       rows: [{ index: 0, cells: [] }, { index: 2, hidden: true, cells: [] }, { index: 4, customHeight: true, heightPt: 30, cells: [] }],
-      cols: [{ min: 1, max: 3, widthChars: 10 }, { min: 5, max: 5, hidden: true }],
+      cols: [{ min: 1, max: 3, widthChars: 75 / 7 }, { min: 5, max: 5, hidden: true }],
     })
     const built = buildSheetGeometry(doc, { sizes: { rows: new Map([[4, 66], [2, 99]]), cols: new Map([[2, 150], [5, 150]]) } })
     if (built.kind !== 'ready') throw new Error('not ready')

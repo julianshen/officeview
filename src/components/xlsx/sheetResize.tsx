@@ -46,6 +46,8 @@ export interface ResizeHandlesProps {
   window: ScrollWindow
   viewport: ViewportSize
   headerHeight: number
+  /** Row-header gutter width (GridSemantics' header geometry). */
+  gutter?: number
   touch: boolean
   /** Visible detail columns (source) and row display slots of the frame. */
   columns: readonly number[]
@@ -55,7 +57,11 @@ export interface ResizeHandlesProps {
 }
 interface Drag { kind: 'row' | 'column'; index: number; slot: number; pointerId: number; start: number; startSize: number; size: number; moved: boolean }
 
-export interface HandleLayout { viewport: ViewportSize; headerHeight: number; touch: boolean }
+export interface HandleLayout {
+  viewport: ViewportSize; headerHeight: number; touch: boolean
+  /** Row-header gutter width (the header strip's own geometry); default GRID_HEADER_SIZE. */
+  gutter?: number
+}
 export interface HandleBox { x: number; y: number; width: number; height: number }
 /** Grid-local box of one handle for an edge at viewport offset `edge` (the
  * single place handle geometry is decided; a pane-aware caller, e.g. frozen
@@ -65,19 +71,21 @@ export interface HandleBox { x: number; y: number; width: number; height: number
  * coarse row target sits in the header corner's second slot (§9.3 ownership). */
 export function handlePlacement(kind: 'row' | 'column', edge: number, layout: HandleLayout): HandleBox {
   const { viewport, headerHeight, touch } = layout
+  const gutter = layout.gutter ?? GRID_HEADER_SIZE
   const half = touch ? COARSE_HALF : FINE_HALF
   const clamp = (value: number, min: number, max: number) => Math.max(min, Math.min(max, value))
   if (kind === 'column') {
-    return { x: clamp(GRID_HEADER_SIZE + edge - half, GRID_HEADER_SIZE, GRID_HEADER_SIZE + viewport.width - 2 * half), y: 0, width: 2 * half, height: touch ? GRID_HEADER_SIZE : headerHeight }
+    return { x: clamp(gutter + edge - half, gutter, gutter + viewport.width - 2 * half), y: 0, width: 2 * half, height: touch ? GRID_HEADER_SIZE : headerHeight }
   }
-  if (touch) return { x: 0, y: GRID_HEADER_SIZE, width: GRID_HEADER_SIZE, height: GRID_HEADER_SIZE }
-  return { x: 0, y: clamp(headerHeight + edge - half, headerHeight, headerHeight + viewport.height - 2 * half), width: GRID_HEADER_SIZE, height: 2 * half }
+  if (touch) return { x: 0, y: GRID_HEADER_SIZE, width: gutter, height: GRID_HEADER_SIZE }
+  return { x: 0, y: clamp(headerHeight + edge - half, headerHeight, headerHeight + viewport.height - 2 * half), width: gutter, height: 2 * half }
 }
 /** Grid-local box of the drag guide line at viewport offset `at`. */
 export function guidePlacement(kind: 'row' | 'column', at: number, layout: HandleLayout): HandleBox {
+  const gutter = layout.gutter ?? GRID_HEADER_SIZE
   return kind === 'row'
-    ? { x: 0, y: layout.headerHeight + at - 1, width: GRID_HEADER_SIZE + layout.viewport.width, height: 2 }
-    : { x: GRID_HEADER_SIZE + at - 1, y: 0, width: 2, height: layout.headerHeight + layout.viewport.height }
+    ? { x: 0, y: layout.headerHeight + at - 1, width: gutter + layout.viewport.width, height: 2 }
+    : { x: gutter + at - 1, y: 0, width: 2, height: layout.headerHeight + layout.viewport.height }
 }
 // Scroll-driven positions use transforms (not a layout shift, as for the header strips).
 const placed = (box: HandleBox): CSSProperties => ({ left: 0, top: 0, transform: `translate(${box.x}px, ${box.y}px)`, width: box.width, height: box.height })
@@ -90,7 +98,7 @@ export function ResizeHandles(props: ResizeHandlesProps): ReactElement {
   const dragRef = useRef<Drag | null>(null)
   const cleanup = useRef<(() => void) | null>(null)
   useEffect(() => () => cleanup.current?.(), [])
-  const layout: HandleLayout = { viewport, headerHeight, touch }
+  const layout: HandleLayout = { viewport, headerHeight, touch, ...(props.gutter !== undefined ? { gutter: props.gutter } : {}) }
   const activeSlot = props.active ? projection.order.sourceToDisplay(props.active.row) : null
   const columns = touch ? props.columns.filter(col => col === props.active?.col) : props.columns
   const laneShown = touch && props.active !== null && props.columns.includes(props.active.col)

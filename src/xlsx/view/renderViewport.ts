@@ -9,7 +9,7 @@ import type { CacheIdentity, LogicalViewport, WorkerDiagnostic } from './contrac
 import type { SourceCell } from './coordinates'
 import { COARSE_NOTICE, emptyWork, planViewport, type CoarseGroup, type FrameBudget, type MergeQueryCache, type SheetGeometryResult, type ViewportPlan, type ViewportProfile, type ViewportWork } from './viewport'
 import { buildCellRecords, LayoutAdmissionError, LayoutCache, type CellLayout, type CellLayoutHost, type LayoutAdmission } from './textLayout'
-import { cellDisplayText, layoutCellBody, paintCellLayout, paintSheetDrawings, textMeasurer, type RenderSheetAssets } from '../render'
+import { cellDisplayText, layoutCellBody, paintCellLayout, paintSheetDrawings, spillSpan, textMeasurer, type RenderSheetAssets } from '../render'
 import { paintWatermark, type ResolvedWatermark, type WatermarkOptions } from '../../core/watermark'
 import { CSS_PX_PER_INCH, EMU_PER_INCH } from '../../core/geometry'
 
@@ -37,9 +37,11 @@ export function createCellLayoutHost(ctx: CanvasRenderingContext2D, sheet: Parti
       // General numbers fit the box (width-dependent): the layout formats those
       // itself (bounded); every other value reuses this single admitted pass.
       // Same precedence as renderCellText: an authored format code decides
-      // before the built-in id (only a General code or none refits).
+      // before the built-in id. A number refits in the layout when its text can
+      // depend on the box: no code with id 0 (General), or a code with a General
+      // section or a condition (whose missing section paints '#').
       const code = cell.style?.formatCode
-      const general = typeof cell.value === 'number' && (cell.style?.numFmtId ?? 0) === 0 && (code === undefined || /^\s*general\s*$/i.test(code))
+      const general = typeof cell.value === 'number' && (code === undefined ? (cell.style?.numFmtId ?? 0) === 0 : /general/i.test(code) || /\[\s*[<>=]/.test(code))
       return { units: Math.max(text.length, typeof cell.value === 'number' ? Math.ceil(width / 2) + 1 : 0), ...(general ? {} : { text }), release }
     },
     canReuseOverflow: (body, overflow) => {
@@ -204,8 +206,18 @@ export function renderSheetViewport(
       // exactly like the static path's full-length lines.
       const yTop = Math.max(0, vy - 1), yBottom = Math.min(plan.extent.height, vy + height + 1)
       const xLeft = Math.max(0, vx - 1), xRight = Math.min(plan.extent.width, vx + width + 1)
+      // Text spilling into empty neighbours hides the vertical gridlines it
+      // crosses (as Excel does); bodies are box-relative, records logical.
+      const spills: Array<{ x0: number; x1: number; y0: number; y1: number }> = []
+      for (const record of extraActive ? [...records, extraActive] : records) {
+        const span = spillSpan(record.body)
+        if (!span) continue
+        const dx = record.logicalBounds.x - record.body.x
+        spills.push({ x0: span.x0 + dx, x1: span.x1 + dx, y0: record.logicalBounds.y, y1: record.logicalBounds.y + record.logicalBounds.height })
+      }
       for (const x of plan.colLines) {
         const hidden = plan.merges.filter(merge => merge.x < x && x < merge.x + merge.width).map(merge => [merge.y, merge.y + merge.height] as [number, number])
+        for (const band of spills) if (band.x0 < x && x < band.x1) hidden.push([band.y0, band.y1])
         for (const [y1, y2] of openSegments(yTop, yBottom, hidden)) {
           work.gridlineSpans++
           ctx.moveTo(x - vx + 0.5, y1 - vy + 0.5)

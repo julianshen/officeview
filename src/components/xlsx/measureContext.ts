@@ -52,7 +52,9 @@ export function createAdmittedLayoutContext(admitShape: (cache: 'base' | 'local'
   // core/text-metrics creates its local context from base.canvas.ownerDocument:
   // the facade's canvas hands it the admitted local context instead.
   const localCanvas = { width: 4, height: 4, getContext: () => local }
-  const canvas = { width: 1, height: 1, ownerDocument: { createElement: () => localCanvas } }
+  // `closest` lets core/text-metrics inherit the document language, as a
+  // painted page canvas would (visual review #16).
+  const canvas = { width: 1, height: 1, ownerDocument: { createElement: () => localCanvas }, closest: (selector: string) => doc.documentElement?.closest?.(selector) ?? null }
   return new Proxy(base, {
     get(target, property) {
       if (property === 'canvas') return canvas

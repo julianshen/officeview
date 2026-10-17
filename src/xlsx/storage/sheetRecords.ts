@@ -6,6 +6,7 @@
  * counters and a bounded formula-text buffer, so nothing proportional to the
  * part is retained. The paged record builders (S1.2) will live next to it.
  */
+import { sheetFormat } from '../columnWidth'
 import { PackageError } from '../../core/package-error'
 import { localName, XstringDecoder, type XmlEvents } from '../../core/xml-stream'
 import { isLoadEvaluated, MAX_LOAD_FORMULA_CHARS } from '../view/values'
@@ -303,6 +304,8 @@ export interface SheetMetadata {
   rowHeights: { row: number; heightPt: number }[]
   hiddenRows: { r0: number; r1: number }[]
   cols: { min: number; max: number; widthChars?: number; hidden: boolean }[]
+  /** `<sheetFormatPr>` column defaults (Excel column-width model). */
+  format?: { baseColWidth?: number; defaultColWidth?: number }
   merges: string[]
   tablePartIds: (string | undefined)[]
   drawingRefs: number
@@ -528,6 +531,9 @@ export function sheetRecordEvents(meta: SheetMetadata, options: SheetRecordOptio
             decoder = new XstringDecoder()
           }
         }
+      } else if (depth === 1 && local === 'sheetFormatPr') {
+        const format = sheetFormat(attrMap(names, values, count))
+        if (format.baseColWidth !== undefined || format.defaultColWidth !== undefined) meta.format = format
       } else if (depth === 1 && local === 'cols') {
         // columns are collected below
       } else if (depth === 2 && local === 'col' && stack[1] === 'cols') {

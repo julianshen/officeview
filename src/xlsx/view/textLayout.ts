@@ -32,6 +32,7 @@ export interface CellBodyLayout {
     | { kind: 'layout'; text: string; font: string; color: string; body: PptxTextBody; layout: TextLayout; clip: Rect;
       rotation?: number; stacked?: boolean; wrap: boolean; lines: number }
   borders?: XlsxCellStyle['borders']
+  borderColors?: XlsxCellStyle['borderColors']
 }
 
 /** The host owns measurement and formatting (spec §11.2: no second text model). */
@@ -51,7 +52,7 @@ export interface CellLayoutHost {
 }
 
 export interface FillRecord { color: string | null }
-export interface BorderRecord { side: 'left' | 'right' | 'top' | 'bottom'; style: string }
+export interface BorderRecord { side: 'left' | 'right' | 'top' | 'bottom'; style: string; color?: string }
 /** One shaped run: its UTF-16 source interval, grapheme boundaries (absolute
  * code-unit offsets, lone surrogates preserved) and transform flags. */
 export interface ShapedRun {
@@ -334,7 +335,10 @@ export function buildCellRecords(placed: readonly PlacedCell[], owner: CacheIden
       text.push({ cellId: id, source: item.source, rawText: rawTextOf(item.cell.value), formattedText: body.formattedText, logicalBounds, clip, runs: [run], valueGen: owner.valueGen, fontGen: owner.fontGen })
     }
     const borders: BorderRecord[] = []
-    for (const side of SIDES) { const style = body.borders?.[side]; if (style) borders.push({ side, style }) }
+    for (const side of SIDES) {
+      const style = body.borders?.[side], color = body.borderColors?.[side]
+      if (style) borders.push(color ? { side, style, color } : { side, style })
+    }
     records.push({
       id, source: item.source, owner, logicalBounds, clip: logicalBounds,
       fill: { color: body.fill ?? null }, borders, text,

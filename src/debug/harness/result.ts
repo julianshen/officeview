@@ -294,6 +294,25 @@ function validateMetricShape(name: string, metric: unknown, errors: string[]): v
   }
 }
 
+function validateRefusals(refusals: unknown, errors: string[]): void {
+  const path = 'environment.scenario.refusals'
+  if (!Array.isArray(refusals) || refusals.length === 0 || refusals.length > 2) {
+    errors.push(`${path}: must be a non-empty array of at most 2 refusals when present`)
+    return
+  }
+  refusals.forEach((refusal, at) => {
+    const where = `${path}[${at}]`
+    if (!isPlainObject(refusal)) { errors.push(`${where}: must be an object`); return }
+    exactKeys(refusal, ['outcome', 'boundary', 'kind', 'requiredBytes', 'limitBytes', 'reason'], where, errors)
+    if (refusal.outcome !== 'refused-by-design') errors.push(`${where}.outcome: must be refused-by-design`)
+    if (refusal.boundary !== 'kernel' && refusal.boundary !== 'query') errors.push(`${where}.boundary: must be kernel|query`)
+    if (refusal.kind !== 'resource-limit' && refusal.kind !== 'quota') errors.push(`${where}.kind: must be resource-limit|quota`)
+    if (!isCount(refusal.limitBytes) || refusal.limitBytes === 0) errors.push(`${where}.limitBytes: must be a positive integer`)
+    if (!isCount(refusal.requiredBytes) || !(isCount(refusal.limitBytes) && refusal.requiredBytes > refusal.limitBytes)) errors.push(`${where}.requiredBytes: must be an integer above limitBytes`)
+    if (!boundedString(refusal.reason, 2048, 1)) errors.push(`${where}.reason: must be a non-empty string`)
+  })
+}
+
 function validateEnvironment(env: unknown, errors: string[]): void {
   if (!isPlainObject(env)) {
     errors.push('environment: must be an object')
@@ -309,7 +328,8 @@ function validateEnvironment(env: unknown, errors: string[]): void {
     const scenario = env.scenario
     if (!isPlainObject(scenario)) errors.push('environment.scenario: must be an object when present')
     else {
-      exactKeys(scenario, ['id', 'kind', 'keys', 'rows', 'admitted'], 'environment.scenario', errors)
+      exactKeys(scenario, ['id', 'kind', 'keys', 'rows', 'admitted', 'refusals'], 'environment.scenario', errors)
+      if (scenario.refusals !== undefined) validateRefusals(scenario.refusals, errors)
       if (typeof scenario.admitted !== 'boolean') errors.push('environment.scenario.admitted: must be boolean')
       if (!boundedString(scenario.id, 64, 1)) errors.push('environment.scenario.id: must be a non-empty string')
       if (scenario.kind !== 'sort' && scenario.kind !== 'filter' && scenario.kind !== 'value-index') errors.push('environment.scenario.kind: must be sort|filter|value-index')

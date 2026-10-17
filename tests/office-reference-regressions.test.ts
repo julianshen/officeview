@@ -68,6 +68,10 @@ describe.skipIf(!available)('native Office rendering regressions', () => {
     renderSheet(sheet, ctx as unknown as CanvasRenderingContext2D, metrics)
     expect([...ctx.getImageData(0, 30, 1, 1).data].slice(0, 3)).toEqual([0, 0, 0])
     expect([...ctx.getImageData(metrics.widthPx - 1, 30, 1, 1).data].slice(0, 3)).toEqual([0, 0, 0])
-    expect([...ctx.getImageData(25, 60, 1, 1).data].slice(0, 3)).toEqual([0, 0, 0])
+    // The third row's bottom border: rows use their stored ht (12.75pt = 17px,
+    // no customHeight) as in Excel, so the edge is derived from the metrics.
+    const thirdRowBottom = metrics.rowHeightsPx.slice(0, 3).reduce((a, b) => a + b, 0)
+    expect(thirdRowBottom).toBe(51)
+    expect([...ctx.getImageData(25, thirdRowBottom, 1, 1).data].slice(0, 3)).toEqual([0, 0, 0])
   })
 })

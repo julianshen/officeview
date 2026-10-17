@@ -10,6 +10,7 @@
  * without one is `unavailable`. Answers match ObjectXlsxSheetAdapter over the
  * same file parsed with valuePolicy 'cached' (adapter parity, §4.2).
  */
+import { defaultColumnWidthPx } from '../columnWidth'
 import type {
   AuthoritativeCell, CellRead, ColumnEntry, ColumnQuery, DrawingAnchor, OverviewGroup, OverviewQuery, Page, PopulatedQuery,
   RangeCompletion, ReadOptions, SingleCellPayload, SourceFailure, SourceRowInterval, SourceStamp, SourceStore,
@@ -429,7 +430,7 @@ export class PagedXlsxSheetAdapter implements SourceStore {
   private drawings(): DrawingAnchor[] {
     const meta = this.sheet.metadata
     this.drawingCache ??= resolveDrawingAnchors(this.sheet.drawingAnchors.records,
-      buildGeometry(meta.rowHeights.map(h => ({ index: h.row, heightPt: h.heightPt })), meta.cols, meta.hiddenRows, { hiddenCols: true }))
+      buildGeometry(meta.rowHeights.map(h => ({ index: h.row, heightPt: h.heightPt })), meta.cols, meta.hiddenRows, { hiddenCols: true, columns: pagedColumns(this.workbook, meta) }))
     return this.drawingCache
   }
 
@@ -457,7 +458,7 @@ export class PagedXlsxSheetAdapter implements SourceStore {
     if (options.signal.aborted || this.workbook.parts.signal.aborted) abort()
     try {
       const { loadPagedSheetDrawings, pagedDrawingLimits } = await import('../storage/pagedDrawings')
-      const geometry = buildGeometry(meta.rowHeights.map(h => ({ index: h.row, heightPt: h.heightPt })), meta.cols, meta.hiddenRows, { hiddenCols: true })
+      const geometry = buildGeometry(meta.rowHeights.map(h => ({ index: h.row, heightPt: h.heightPt })), meta.cols, meta.hiddenRows, { hiddenCols: true, columns: pagedColumns(this.workbook, meta) })
       const nodes = this.drawingState.nodes, sheetId = this.sheet.sheetId
       const parsed = await loadPagedSheetDrawings(this.workbook.parts, { name: this.sheet.name, partPath: this.sheet.partPath, drawingIds: meta.drawingIds, legacyDrawingIds: meta.legacyDrawingIds },
         geometry, pagedDrawingLimits(profile, this.drawingState.payloadBytes), controller.signal, { memory, startNodes: nodes.start(sheetId) })
@@ -619,7 +620,7 @@ export function createPagedWorkbookSource(session: PagedImportSession, options: 
       let geometry = geometries.get(sheetId)
       if (!geometry) {
         // Row metadata arrives with the rows; cache only once the sheet is complete.
-        geometry = buildGeometry(sheet.metadata.rowHeights.map(h => ({ index: h.row, heightPt: h.heightPt })), sheet.metadata.cols, sheet.metadata.hiddenRows, { hiddenCols: true })
+        geometry = buildGeometry(sheet.metadata.rowHeights.map(h => ({ index: h.row, heightPt: h.heightPt })), sheet.metadata.cols, sheet.metadata.hiddenRows, { hiddenCols: true, columns: pagedColumns(workbook, sheet.metadata) })
         if (sheet.state === 'complete') geometries.set(sheetId, geometry)
       }
       return geometry
@@ -636,4 +637,10 @@ export function createPagedWorkbookSource(session: PagedImportSession, options: 
       await session.release()
     },
   }
+}
+
+/** Excel column pixel model of a paged sheet: workbook MDW and its sheetFormatPr. */
+function pagedColumns(workbook: PagedWorkbook, meta: { format?: { baseColWidth?: number; defaultColWidth?: number } }) {
+  const mdw = workbook.formatting.maxDigitWidthPx ?? 7
+  return { maxDigitWidthPx: mdw, defaultWidthPx: defaultColumnWidthPx(meta.format ?? {}, mdw) }
 }

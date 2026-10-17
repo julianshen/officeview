@@ -141,13 +141,14 @@ export async function openImportSession(source: Extract<SourceHandle, { kind: 'b
   if (workbookText === undefined) throw new PackageError('parse-error', 'xl/workbook.xml missing — not a valid xlsx?')
   const relsText = await smallPart('xl/_rels/workbook.xml.rels')
   const relMap = new Map<string, string>(), relTypes = new Map<string, string>()
-  let metadataPath: string | undefined
+  let metadataPath: string | undefined, themePath: string | undefined
   if (relsText !== undefined) {
     for (const rel of getChildren(parseXml(relsText), 'Relationship')) {
       const a = attrs(rel)
       if (a.Id && a.Target && a.TargetMode !== 'External') relMap.set(a.Id, a.Target)
       if (a.Id && a.Type) relTypes.set(a.Id, a.Type)
       if (a.Type === 'http://schemas.openxmlformats.org/officeDocument/2006/relationships/sheetMetadata' && a.TargetMode !== 'External' && a.Target) metadataPath = resolvePartTarget('xl/workbook.xml', a.Target)
+      if (a.Type?.endsWith('/theme') && a.TargetMode !== 'External' && a.Target) themePath = resolvePartTarget('xl/workbook.xml', a.Target)
     }
   }
   // parse.ts reads xl/sharedStrings.xml by name, not through the relationship.
@@ -296,7 +297,13 @@ export async function openImportSession(source: Extract<SourceHandle, { kind: 'b
       }
     }
     try {
-      workbook.formatting = await workbookFormatting(workbookRoot, inventory.find('xl/styles.xml') ? await readPlanned('xl/styles.xml') : undefined)
+      const stylesText = inventory.find('xl/styles.xml') ? await readPlanned('xl/styles.xml') : undefined
+      // The theme only colours styles; an unreadable theme keeps the Office default.
+      let themeText: string | undefined
+      if (stylesText !== undefined && themePath && inventory.find(themePath)) {
+        try { themeText = await readPlanned(themePath) } catch (error) { if (isPackageError(error) && error.code === 'cancelled') throw error }
+      }
+      workbook.formatting = await workbookFormatting(workbookRoot, stylesText, themeText)
     } catch (error) {
       if (isPackageError(error) && error.code === 'cancelled') throw error
       // parse.ts tolerates an unreadable styles part: cells keep General format.

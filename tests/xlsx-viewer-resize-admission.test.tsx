@@ -219,7 +219,7 @@ describe('confirmation r6: repaint memory is admitted per record at construction
 
   it('R2 detail tiles under a coarse aggregate are bounded too (heavy A2 among 400 dense 8 px rows, 1 MiB free, column A 8 → 16)', FIRST_PAINT_TEST, async () => {
     const rows: XlsxRow[] = Array.from({ length: 400 }, (_, index) => ({ index, customHeight: true, heightPt: 6, cells: Array.from({ length: 64 }, (_, col) => index === 1 && col === 0 ? heavy(1, 0) : cell(index, col, col)) }))
-    const doc: XlsxDocument = { sheets: [{ ...docOf(rows).sheets[0], cols: [{ min: 0, max: 63, widthChars: 3 / 7 }] }] }
+    const doc: XlsxDocument = { sheets: [{ ...docOf(rows).sheets[0], cols: [{ min: 0, max: 63, widthChars: 8 / 7 }] }] }
     let live: MainMemoryLedger | undefined
     const f = frames()
     const view = render(<InteractiveSheetDoc doc={doc} views={{ s: { revision: 0 } }} onMainLedger={value => { live = value }} onFrame={f.onFrame} />)

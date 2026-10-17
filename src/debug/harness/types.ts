@@ -93,6 +93,25 @@ export interface ScenarioIdentity {
   rows: number
   /** False: resident harness data was not charged to the worker budget. */
   admitted: boolean
+  /** Present only when the run ended in a refusal the scenario declares as by
+   * design for this profile (scenarios.ts designRefusal); never empty. */
+  refusals?: ScenarioRefusal[]
+}
+
+/**
+ * A typed worker-budget refusal recorded as "refused (by design)": the
+ * scenario declares that this profile cannot admit it (with the arithmetic),
+ * and the refusal names exactly the profile's worker budget. `requiredBytes`
+ * is the worker aggregate at the FIRST charge that crossed the limit, a lower
+ * bound on the operation's peak, not the peak itself.
+ */
+export interface ScenarioRefusal {
+  outcome: 'refused-by-design'
+  boundary: 'kernel' | 'query'
+  kind: 'resource-limit' | 'quota'
+  requiredBytes: number
+  limitBytes: number
+  reason: string
 }
 
 export interface HarnessEnvironment {

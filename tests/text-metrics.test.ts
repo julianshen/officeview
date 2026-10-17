@@ -1,4 +1,4 @@
-import { expect, test } from 'vitest'
+import { describe, expect, test } from 'vitest'
 import { createLocalTextMeasurer } from '../src/core/text-metrics'
 
 /** A host may serialize effective zero as empty while rejecting empty setters. */
@@ -52,4 +52,31 @@ test('cached local metrics reset both spacing properties when caller getters ser
   expect(contexts[0]).toMatchObject({ lang: 'ja', direction: 'rtl', fontKerning: 'none' })
   expect(contexts).toHaveLength(1)
   expect(base.font).toBe('14px Arial')
+})
+
+describe('visual review #16/NEW-3: measuring canvases follow the painting language', () => {
+  test('inheritedCanvasLang resolves the nearest lang, the document lang, or nothing', async () => {
+    const { inheritedCanvasLang } = await import('../src/core/text-metrics')
+    const html = document.documentElement
+    const before = html.getAttribute('lang')
+    try {
+      html.setAttribute('lang', 'en')
+      expect(inheritedCanvasLang()).toBe('en')
+      const host = document.createElement('div')
+      host.setAttribute('lang', 'ja')
+      const canvas = document.createElement('canvas')
+      host.appendChild(canvas)
+      document.body.appendChild(host)
+      expect(inheritedCanvasLang(canvas)).toBe('ja')
+      host.remove()
+      // A detached canvas inherits nothing: leave its context at "inherit".
+      expect(inheritedCanvasLang(document.createElement('canvas'))).toBeNull()
+      expect(inheritedCanvasLang(null)).toBeNull()
+      html.removeAttribute('lang')
+      expect(inheritedCanvasLang()).toBeNull()
+    } finally {
+      if (before === null) html.removeAttribute('lang')
+      else html.setAttribute('lang', before)
+    }
+  })
 })

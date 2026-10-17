@@ -12,6 +12,7 @@ import type { OverflowCapture } from './overflowProof'
  * failures are mapped to diagnosed fallbacks here so they never reach a caller
  * as an unhandled exception.
  */
+import { DEFAULT_COLUMN_METRICS, columnWidthPx } from '../columnWidth'
 import type { XlsxCell, XlsxDrawing, XlsxMergeRange, XlsxSheet } from '../types'
 import type { DrawingContentShape } from '../../drawing/content'
 import type {
@@ -37,8 +38,6 @@ export { cellSourceRow, drawingExtent }
  * ordinary small sheet lays out the same in both paths. */
 export const SHEET_DEFAULT_ROW_CSS = 20
 export const SHEET_DEFAULT_COL_CSS = 64
-const CHAR_CSS = 7
-const COL_PADDING_CSS = 5
 /** §11.1: individual detail needs projected width and height of at least four device pixels. */
 export const MIN_DETAIL_DEVICE_PX = 4
 /** Float tolerance for that rule: 0.4 CSS px x 10 computes 3.9999999999999996. */
@@ -339,7 +338,9 @@ export function buildSheetGeometry(sheet: XlsxSheet, options: SheetGeometryOptio
   for (const row of sheet.rows) {
     const rowValid = isValidCoordinate(row.index, 0)
     if (!rowValid) skippedRows++
-    else if (row.customHeight && row.heightPt !== undefined) {
+    // Excel applies a stored ht with or without customHeight (customHeight only
+    // marks a manual height); paged geometry and the static grid agree.
+    else if (row.heightPt !== undefined) {
       if (validSize(row.heightPt)) rowOverrides.push({ start: row.index, end: row.index, sizeCss: cssSize(row.heightPt * (96 / 72)) })
       else diagnostics.push({ code: 'invalid-dimension', message: `row ${row.index + 1}: ignored height ${row.heightPt}` })
     }
@@ -363,6 +364,7 @@ export function buildSheetGeometry(sheet: XlsxSheet, options: SheetGeometryOptio
 
   const colOverrides: AxisSizeInterval[] = []
   const colCollapsed: Array<{ start: number; end: number }> = []
+  const columns = sheet.columnMetrics ?? DEFAULT_COLUMN_METRICS
   for (const spec of sheet.cols) {
     if (!isValidCoordinate(0, spec.min) || !isValidCoordinate(0, spec.max) || spec.min > spec.max) {
       diagnostics.push({ code: 'coordinate-outside-domain', message: `column spec ${spec.min + 1}:${spec.max + 1} ignored` })
@@ -370,13 +372,13 @@ export function buildSheetGeometry(sheet: XlsxSheet, options: SheetGeometryOptio
     }
     if (spec.hidden) colCollapsed.push({ start: spec.min, end: spec.max })
     else if (spec.widthChars !== undefined) {
-      if (validSize(spec.widthChars)) colOverrides.push({ start: spec.min, end: spec.max, sizeCss: cssSize(spec.widthChars * CHAR_CSS + COL_PADDING_CSS) })
+      if (validSize(spec.widthChars)) colOverrides.push({ start: spec.min, end: spec.max, sizeCss: cssSize(columnWidthPx(spec.widthChars, columns.maxDigitWidthPx)) })
       else diagnostics.push({ code: 'invalid-dimension', message: `column spec ${spec.min + 1}:${spec.max + 1}: ignored width ${spec.widthChars}` })
     }
   }
 
   const rows = buildAxis('rows', MAX_ROWS, SHEET_DEFAULT_ROW_CSS, rowOverrides, rowCollapsed, diagnostics, options.sizes?.rows)
-  const cols = buildAxis('cols', MAX_COLS, SHEET_DEFAULT_COL_CSS, colOverrides, colCollapsed, diagnostics, options.sizes?.cols)
+  const cols = buildAxis('cols', MAX_COLS, columns.defaultWidthPx, colOverrides, colCollapsed, diagnostics, options.sizes?.cols)
   if (!rows || !cols) return { kind: 'diagnostic', diagnostics }
   let metrics: ProjectedSheetMetrics
   try {
@@ -401,7 +403,7 @@ export function buildSheetGeometry(sheet: XlsxSheet, options: SheetGeometryOptio
     }
     mergeEntries.push({ rect: { r0: range.minRow, r1: range.maxRow, c0: range.minCol, c1: range.maxCol }, value: range })
   }
-  const placed = sizedDrawings(sheet.drawings ?? [], options.sizes, rowOverrides, hidden.map(index => ({ start: index, end: index })), colOverrides, colCollapsed)
+  const placed = sizedDrawings(sheet.drawings ?? [], options.sizes, rowOverrides, hidden.map(index => ({ start: index, end: index })), colOverrides, colCollapsed, columns.defaultWidthPx)
   const drawingsIn = drawingQuery(placed)
   return Object.freeze({
     // Repositioned copies (and their index) belong to this geometry alone; the
@@ -422,15 +424,15 @@ export function buildSheetGeometry(sheet: XlsxSheet, options: SheetGeometryOptio
 /** Drawings placed against session sizes (spec §5.6). Placement axes collapse
  * authored-hidden rows and columns, as the parse-time anchor placement does;
  * unrepresentable metadata keeps the authored placement. */
-export function sizedDrawings(drawings: readonly XlsxDrawing[], sizes: SessionSizes | undefined, rowOverrides: readonly AxisSizeInterval[], hiddenRows: readonly { start: number; end: number }[], colOverrides: readonly AxisSizeInterval[], hiddenCols: readonly { start: number; end: number }[]): readonly XlsxDrawing[] {
+export function sizedDrawings(drawings: readonly XlsxDrawing[], sizes: SessionSizes | undefined, rowOverrides: readonly AxisSizeInterval[], hiddenRows: readonly { start: number; end: number }[], colOverrides: readonly AxisSizeInterval[], hiddenCols: readonly { start: number; end: number }[], defaultColCss = SHEET_DEFAULT_COL_CSS): readonly XlsxDrawing[] {
   if (!drawings.length || !hasSessionSizes(sizes)) return drawings
   try {
     const axis = (logicalCount: number, defaultSizeCss: number, overrides: readonly AxisSizeInterval[], collapsed: readonly { start: number; end: number }[]) =>
       createAxisMetrics({ logicalCount, defaultSizeCss, overrides, collapsed })
-    const base = { rows: axis(MAX_ROWS, SHEET_DEFAULT_ROW_CSS, rowOverrides, hiddenRows), cols: axis(MAX_COLS, SHEET_DEFAULT_COL_CSS, colOverrides, hiddenCols) }
+    const base = { rows: axis(MAX_ROWS, SHEET_DEFAULT_ROW_CSS, rowOverrides, hiddenRows), cols: axis(MAX_COLS, defaultColCss, colOverrides, hiddenCols) }
     const sized = {
       rows: sizes.rows.size ? axis(MAX_ROWS, SHEET_DEFAULT_ROW_CSS, mergeAxisOverrides(rowOverrides, sizes.rows), hiddenRows) : base.rows,
-      cols: sizes.cols.size ? axis(MAX_COLS, SHEET_DEFAULT_COL_CSS, mergeAxisOverrides(colOverrides, sizes.cols), hiddenCols) : base.cols,
+      cols: sizes.cols.size ? axis(MAX_COLS, defaultColCss, mergeAxisOverrides(colOverrides, sizes.cols), hiddenCols) : base.cols,
     }
     return remapDrawings(drawings, base, sized)
   } catch (error) {

@@ -6,7 +6,7 @@ import { useState, type ChangeEvent } from 'react'
 import { createRoot } from 'react-dom/client'
 import { OfficeFile } from '../components/OfficeFile'
 import { buildDocx, buildXlsx, buildPptx, type DocxCellSpec, type DocxParaSpec, type DocxTableSpec } from '../testdata/ooxml-builders'
-import { buildOdt, odfDecimalListStyle } from '../testdata/odf-builders'
+import { buildOdt, odfDecimalListStyle, odfWriterHeadingStyles } from '../testdata/odf-builders'
 
 const p = (text: string): DocxParaSpec => ({ runs: [{ text }] })
 
@@ -229,8 +229,11 @@ async function sampleDocxProtected(): Promise<Uint8Array> {
 async function sampleOdt(): Promise<Uint8Array> {
   return buildOdt({
     extraAutoStyles: odfDecimalListStyle('DemoList'),
+    // Writer files carry their heading styles; a text:h with no style name
+    // takes the default paragraph style and would render as body text.
+    extraCommonStyles: odfWriterHeadingStyles(),
     paras: [
-      { text: 'Writer document (ODF)', heading: 1 },
+      { text: 'Writer document (ODF)', heading: 1, style: 'Heading_20_1' },
       { runs: [{ text: 'This .odt renders through the same layout engine as Word files: ' }, { text: 'styles cascade', bold: true }, { text: ' from ODF automatic styles.' }] },
     ],
     lists: [{ styleName: 'DemoList', items: [{ text: 'first item' }, { text: 'second item' }] }],
@@ -266,11 +269,14 @@ async function sampleOdt(): Promise<Uint8Array> {
     String.raw`\pard\b Code page 1251:\b0 \'cf\'f0\'e8\'e2\'e5\'f2 \u8212 ? not mojibake.\par`,
     '\\pard\\b A table:\\b0\\par',
     '\\trowd\\trgaph108\\trleft0',
-    '\\clbrdrt\\brdrs\\clbrdrl\\brdrs\\clbrdrb\\brdrs\\clbrdrr\\brdrs\\cellx3600',
+    // Cell properties (borders, \\clcbpat shading) precede the \\cellx that
+    // closes each cell definition, as Word writes them.
+    '\\clcbpat3\\clbrdrt\\brdrs\\clbrdrl\\brdrs\\clbrdrb\\brdrs\\clbrdrr\\brdrs\\cellx2400',
+    '\\clbrdrt\\brdrs\\clbrdrl\\brdrs\\clbrdrb\\brdrs\\clbrdrr\\brdrs\\cellx4800',
     '\\clbrdrt\\brdrs\\clbrdrl\\brdrs\\clbrdrb\\brdrs\\clbrdrr\\brdrs\\cellx7200',
-    '\\clcbpat3\\intbl \\b Shaded cell\\b0\\par',
-    '\\intbl Plain cell\\par \\cell',
-    '\\intbl Third column\\par \\cell\\row',
+    '\\intbl \\b Shaded cell\\b0\\cell',
+    '\\intbl Plain cell\\cell',
+    '\\intbl Third column\\cell\\row',
     '\\pard\\b An inline picture:\\b0 {\\pict\\pngblip\\picw16\\pich16\\picwgoal576\\pichgoal576',
     onePixelPng,
     '}\\par',

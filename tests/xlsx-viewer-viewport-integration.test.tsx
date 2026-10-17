@@ -83,7 +83,7 @@ async function mountSheet(doc: XlsxDocument, extra: Record<string, unknown> = {}
 }
 const scroller = (ui: ReturnType<typeof render>) => ui.getByTestId('officeview-sheet-scroller')
 // jsdom pane fallback: 640x400 minus the 44px header strips, DPR 1.
-const PANE = { width: 596, height: 356 }
+const PANE = { width: 596, height: 332 } // fallback 640x400 pane minus the 44px gutter/header and the 24px status line
 const visibleTileCount = (zoom: number, dpr = 1) => {
   const tiles = (css: number) => Math.ceil((css * dpr) / TILE_DEVICE_PX) + 1
   void zoom

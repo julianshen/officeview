@@ -206,8 +206,9 @@ describe('canonical records (object sheet)', () => {
         cell(0, 3, 'Down', { numFmtId: 0, textRotation: 180 }),
       ] },
     ], [{ min: 0, max: 0, widthChars: 12 }])
-    // The static bitmap ends at the used grid (89 + 3 x 64 px, one 80px row).
-    const { diff, result, ink } = cropParity(sheet, { x: 0, y: 0, width: 281, height: 80 })
+    // The static bitmap ends at the used grid (84 + 3 x 64 px, one 80px row;
+    // width 12 is 84px in Excel's column model).
+    const { diff, result, ink } = cropParity(sheet, { x: 0, y: 0, width: 276, height: 80 })
     expect(diff).toBe(0)
     expect(ink).toBe(true)
     const [wrapped, tilted, stacked, down] = result.records.map(record => record.text[0].runs[0])
@@ -423,7 +424,8 @@ describe('detail admission (SheetZoom x DPR, no font-size floor)', () => {
   test('a tile holding more than the per-tile record cap is coarse even under the frame cap', () => {
     // 5px cells: one 512px tile holds 10,000 records (> 5,000) though the frame cap is 20,000.
     const rows: XlsxRow[] = Array.from({ length: 100 }, (_, r) => ({ index: r, heightPt: 3.75, customHeight: true, cells: Array.from({ length: 100 }, (_, c) => cell(r, c, 1)) }))
-    const sheet = sheetOf(rows, [{ min: 0, max: 99, widthChars: 0 }])
+    // 5/7 characters is 5px in Excel's column model (mdw 7).
+    const sheet = sheetOf(rows, [{ min: 0, max: 99, widthChars: 5 / 7 }])
     const geometry = ready(sheet)
     expect(geometry.metrics.cols.size(0)).toBe(5)
     expect(geometry.metrics.rows.size(0)).toBe(5)
@@ -811,5 +813,48 @@ describe('review round 2 (opencode)', () => {
     const mapped = toViewportResults(outcome)
     expect(mapped.results[0].content.kind).toBe('overview')
     expect(mapped.active).toMatchObject({ kind: 'cell', source: { row: 0, col: 0 } })
+  })
+})
+
+describe('visual review #20: find bands follow the painted text of aligned overflow', () => {
+  /** Records each fillText with its font and the absolute (device-transformed) origin. */
+  function inkRecorder() {
+    const raw = createCanvas(640, 40).getContext('2d')
+    const painted: { text: string; x: number; font: string }[] = []
+    const ctx = new Proxy(raw, {
+      get(target, property) {
+        if (property === 'fillText') return (text: string, x: number, y: number) => { const m = target.getTransform(); painted.push({ text, x: m.a * x + m.c * y + m.e, font: target.font }); target.fillText(text, x, y) }
+        const value = Reflect.get(target, property, target)
+        return typeof value === 'function' ? value.bind(target) : value
+      },
+      set(target, property, value) { return Reflect.set(target, property, value, target) },
+    }) as unknown as CanvasRenderingContext2D
+    return { ctx, raw, painted }
+  }
+  for (const horizontal of ['right', 'center'] as const) test(`a ${horizontal}-aligned overflowing hit highlights its matched span, not the whole text clip`, () => {
+    const text = 'Right aligned overflows left into C and B'
+    const sheet = sheetOf([{ index: 0, cells: [cell(0, 3, text, { numFmtId: 0, horizontal } as XlsxCellStyle)] }])
+    const geometry = ready(sheet)
+    const { ctx, raw, painted } = inkRecorder()
+    renderSheetViewport(sheet, ctx, geometry, view(0, 0, 640, 40), {}, { owner: OWNER })
+    const ink = painted.find(p => text.startsWith(p.text) || p.text.includes('overflows'))!
+    expect(ink).toBeDefined()
+    raw.font = ink.font
+    const start = text.indexOf('overflows'), end = start + 'overflows'.length
+    const inkStart = text.indexOf(ink.text)
+    const expected = { x0: ink.x + raw.measureText(ink.text.slice(0, start - inkStart)).width, x1: ink.x + raw.measureText(ink.text.slice(0, end - inkStart)).width }
+    const host = createCellLayoutHost(createCanvas(640, 40).getContext('2d') as never, sheet)
+    const hit = { sheetId: 'Layout', cellId: 3, source: { row: 0, col: 3 }, text, start, end, displaySlot: 0 }
+    const result = hitGeometry(hit, sheet.rows[0].cells[0], geometry.metrics, OWNER, host, new LayoutCache(), cellTextOverflow(geometry, { row: 0, col: 3 }))!
+    expect(result.rects).toHaveLength(1)
+    const [band] = result.rects, clip = result.record!.text[0].clip
+    expect(band.width).toBeLessThan(clip.width / 2) // a span, not the whole clip
+    // Offsets map proportionally along the measured run, exactly like plain
+    // (left-aligned) hits (the core/search.ts approximation): within about one
+    // average glyph of the painted span, and never outside the painted text.
+    const glyph = raw.measureText(text).width / text.length
+    expect(Math.abs(band.x - expected.x0)).toBeLessThan(glyph)
+    expect(Math.abs(band.x + band.width - expected.x1)).toBeLessThan(glyph)
+    expect(band.x).toBeGreaterThanOrEqual(ink.x - 1e-6)
   })
 })

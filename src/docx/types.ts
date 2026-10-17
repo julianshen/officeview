@@ -259,6 +259,8 @@ export interface DocxTable {
   fill?: string
   borders?: DocxTableBorders
   cellMargins: DocxTableCellMargins
+  /** w:tblInd in twips (dxa or untyped; may be negative). */
+  indentTwips?: number
 }
 
 /** A flow content block: paragraph or table, in document order. */

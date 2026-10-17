@@ -32,7 +32,7 @@ async function workbook(): Promise<XlsxDocument> {
   return parseXlsx(await OfficePackage.load(await buildXlsx([{
     name: 'S1',
     // Column B is 1 character wide (12 CSS px): its number paints as '#'.
-    cols: '<col min="2" max="2" width="1" customWidth="1"/>',
+    cols: '<col min="2" max="2" width="1.7142857" customWidth="1"/>',
     rows: [
       { r: 1, cells: [{ ref: 'A1', v: 'name' }, { ref: 'B1', v: 123456 }, { ref: 'C1', v: 'a considerably longer piece of text' }] },
       { r: 2, cells: [{ ref: 'A2', v: 'gamma' }, { ref: 'B2', v: 2 }] },
@@ -463,7 +463,7 @@ describe('codex review round 1', () => {
   })
 
   it('R4 oblique rotated text fits the canonical measured glyph band', FIRST_PAINT_TEST, async () => {
-    const doc = await parseXlsx(await OfficePackage.load(await buildXlsx([{ name: 'S1', cols: '<col min="1" max="1" width="57" customWidth="1"/>', rows: [{ r: 1, cells: [{ ref: 'A1', v: 'ab' }] }] }])))
+    const doc = await parseXlsx(await OfficePackage.load(await buildXlsx([{ name: 'S1', cols: '<col min="1" max="1" width="57.7142857" customWidth="1"/>', rows: [{ r: 1, cells: [{ ref: 'A1', v: 'ab' }] }] }])))
     const cell = doc.sheets[0].rows.flatMap(row => row.cells).find(c => c.ref === 'A1')!
     cell.style = { ...cell.style, wrapText: true, fontSizePt: 120, textRotation: 1 } as NonNullable<typeof cell.style>
     const { ui } = await mount(doc)
