@@ -2,7 +2,7 @@ import { clampZoom } from '../../core/zoom'
 import { MAX_PHYSICAL_SCROLL_CSS_PX, SHEET_MIN_ZOOM, SHEET_MAX_ZOOM, type AxisMetrics, type LogicalCellBox, type ScrollWindow, type SheetMetrics, type SheetView } from './contracts'
 import { isValidCoordinate, parseA1, validateCoordinate, type NavigatorRequest, type SourceCell, type DisplaySlot } from './coordinates'
 import { normalizeFilter } from './visibility'
-import { bodyOriginFor, ensureAxisVisible as ensureFrozenAxisVisible, frozenExtent, frozenViewportSize, originAtLogical, originAtViewport } from './frozenPanes'
+import { bodyOriginFor, ensureAxisVisible, frozenExtent, frozenViewportSize, originAtLogical, originAtViewport } from './frozenPanes'
 
 export interface ViewportInset { right?: number; bottom?: number }
 export interface ViewportSize { width: number; height: number; inset?: ViewportInset }
@@ -362,7 +362,7 @@ function visibleResult(window: ScrollWindow, metrics: SheetMetrics, target: Sour
 }
 function emptyResult(window: ScrollWindow): NavigationResult { return { kind: 'empty', window, active: null, target: null, display: null, activate: false } }
 /** Align the first scrolling row/column without moving a pinned target. */
-function ensureAxisVisible(axis: AxisMetrics, origin: number, start: number, length: number, viewportCss: number, zoom: number, pinned = 0): number {
+function ensureAxisAligned(axis: AxisMetrics, origin: number, start: number, length: number, viewportCss: number, zoom: number, pinned = 0): number {
   if (pinned > 0 && start + length <= pinned) return origin
   const span = viewportCss / zoom - pinned
   if (!(span > 0)) return origin
@@ -387,17 +387,24 @@ function ensureVisible(window: ScrollWindow, context: NavigationContext, target:
   const right = axisInset(viewport.width, viewport.inset?.right), bottom = axisInset(viewport.height, viewport.inset?.bottom)
   const maxX = Math.max(0, metrics.cols.totalCss() - viewport.width / window.zoom)
   const maxY = Math.max(0, metrics.rows.totalCss() - viewport.height / window.zoom)
-  let x = ensureFrozenAxisVisible(fixedX ? window.logicalOrigin.x : Math.min(window.logicalOrigin.x, maxX), box.x, box.width, viewport.width / window.zoom, left)
-  let y = ensureAxisVisible(metrics.rows, fixedY ? window.logicalOrigin.y : Math.min(window.logicalOrigin.y, maxY), box.y, box.height, viewport.height, window.zoom, top)
+  let x = ensureAxisVisible(fixedX ? window.logicalOrigin.x : Math.min(window.logicalOrigin.x, maxX), box.x, box.width, viewport.width / window.zoom, left)
+  let y = ensureAxisAligned(metrics.rows, fixedY ? window.logicalOrigin.y : Math.min(window.logicalOrigin.y, maxY), box.y, box.height, viewport.height, window.zoom, top)
   if (right && bottom) {
     const offset = originAtLogical(window.frozen, { x: clamp(x, 0, maxX), y: clamp(y, 0, maxY) }, box)
     const vx = (box.x - offset.x) * window.zoom, vy = (box.y - offset.y) * window.zoom, vw = box.width * window.zoom, vh = box.height * window.zoom
     if (vx + vw > viewport.width - right && vy + vh > viewport.height - bottom) {
-      if (!fixedX && vw <= viewport.width - right) x = ensureAxisVisible(metrics.cols, window.logicalOrigin.x, box.x, box.width, viewport.width - right, window.zoom, left)
-      else if (!fixedY) y = ensureAxisVisible(metrics.rows, window.logicalOrigin.y, box.y, box.height, viewport.height - bottom, window.zoom, top)
+      if (!fixedX && vw <= viewport.width - right) x = ensureAxisAligned(metrics.cols, window.logicalOrigin.x, box.x, box.width, viewport.width - right, window.zoom, left)
+      else if (!fixedY) y = ensureAxisAligned(metrics.rows, window.logicalOrigin.y, box.y, box.height, viewport.height - bottom, window.zoom, top)
     }
   }
   return setScrollOffset(window, metrics, viewport, { x, y })
+}
+/** Scroll a visible source cell into view the way a keyboard step does: minimal
+ * scroll, whole leading body rows and the docked-zoom inset, never the frozen
+ * Go To/Find body top-left policy. A hidden target leaves the window unchanged. */
+export function scrollIntoView(window: ScrollWindow, context: NavigationContext, target: SourceCell): ScrollWindow {
+  state(window)
+  return context.metrics.sourceCellToLogical(target) ? ensureVisible(window, context, target) : window
 }
 /** Hidden requests open an inspector, never activate/unhide their target. A
  * valid existing active source identity is retained; an invalidated active cell

@@ -8,7 +8,7 @@ afterEach(cleanup)
 
 it('keeps an unclipped body-cell left stable during horizontal scroll with frozen column A', () => {
   const props = gridFixture()
-  const at = (x: number) => createScrollWindow(props.projection, props.viewport, { offset: { x, y: 0 }, frozen: { rows: 1, cols: 1 } } as never)
+  const at = (x: number) => createScrollWindow(props.projection, props.viewport, { offset: { x, y: 0 }, frozen: { rows: 1, cols: 1 } })
   // Fixture: A80px, hidden B0px, C80px, D80px. D starts160 and stays entirely
   // beyond pinned A80 after37px scroll (viewport123..203 inside80..240).
   expect(props.projection.cols.start(3)).toBe(160)

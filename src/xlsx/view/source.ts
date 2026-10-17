@@ -466,7 +466,9 @@ export class ObjectXlsxSheetAdapter implements SourceStore {
     return result
     } finally { account?.release() }
   }
-  /** Resolved once: the parsed sheet behind this adapter never changes. */
+  /** Resolved once: the parsed sheet behind this adapter never changes. Known gap
+   * (pre-existing): this geometry omits `columnMetrics`, so anchors use the
+   * pre-MDW column widths while the grid uses MDW widths (paged passes them). */
   private drawings(): DrawingAnchor[] {
     this.drawingCache ??= resolveDrawingAnchors(this.sheet.drawingAnchors?.records ?? [],
       withFrozen(buildGeometry([...this.sheet.rows].sort((a, b) => a.index - b.index), this.sheet.cols, [], { hiddenCols: true }), this.sheet.frozen))

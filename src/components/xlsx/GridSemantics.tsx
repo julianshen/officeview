@@ -4,7 +4,7 @@ import type { ProjectedSheetMetrics } from '../../xlsx/view/projection'
 import type { SourceCell } from '../../xlsx/view/coordinates'
 import { visibleSpans } from '../../xlsx/view/frozenPanes'
 import type { AxisWindow } from '../../xlsx/view/contracts'
-import { navigateKey, navigateTo, hitTestViewport, type NavigationKey, type ViewportSize } from '../../xlsx/view/scrollWindow'
+import { navigateKey, scrollIntoView, hitTestViewport, type NavigationKey, type ViewportSize } from '../../xlsx/view/scrollWindow'
 import { MAX_ROWS, MAX_COLS, cellId, columnToLetters, formatA1 } from '../../xlsx/view/coordinates'
 import { activeAnnouncement, boundedSelectionText, reconcileSelection, recordCounts, emptyGridSelection, selectCell, selectHeader } from '../../xlsx/view/selection'
 import { belowDetail } from '../../xlsx/view/viewport'
@@ -320,8 +320,9 @@ export function GridSemantics(props: GridSemanticsProps): ReactElement {
       }
       publish(() => {
         const selected = selectHeader(selection, projection, kind, index, options.toggle, options.extend)
-        const result = selected.active ? navigateTo(scroll, { metrics: projection, viewport, view: { ...view, selection: selected } }, { addressSpace: 'source', at: selected.active }) : null
-        return { selection: selected, window: result?.window ?? scroll, announcement: selected.active ? activeAnnouncement(projection, selected.active) : 'No visible records.' }
+        // Header selection scrolls minimally, frozen or not (no Go To top-left jump).
+        const moved = selected.active ? scrollIntoView(scroll, { metrics: projection, viewport, view: { ...view, selection: selected } }, selected.active) : scroll
+        return { selection: selected, window: moved, announcement: selected.active ? activeAnnouncement(projection, selected.active) : 'No visible records.' }
       })
     },
     onSelectAll: () => publish(() => ({ selection: { active, anchor: active, ranges: [{ rows: { kind: 'intervals', intervals: [{ r0: 0, r1: projection.rows.logicalCount - 1 }] }, cols: [{ c0: 0, c1: projection.cols.logicalCount - 1 }] }] }, window: scroll, announcement: 'Worksheet selected.' })),
@@ -366,8 +367,9 @@ export function GridSemantics(props: GridSemanticsProps): ReactElement {
         const box = viewportHeaderBox(projection, scroll, viewport, 'row', slot)
         // Rows and header controls follow the scroll window by transform: a
         // transform is not a layout shift, so the viewer adds no CLS to its host.
-        // Cells keep `left` inside their row, fixed while the window scrolls (no
-        // per-cell transforms: each would make the cell its own paint layer).
+        // Cells keep `left` inside their row, fixed while the window scrolls. Only
+        // frozen-column cells carry a transform (cancelling the row's), so at most
+        // frozen columns x rendered rows cells get their own paint layer.
         return <div key={slot} role="row" aria-rowindex={slot + 2} data-transient-active={extra ? 'true' : undefined}
           style={extra ? { ...hiddenText, top: 0, left: 0, pointerEvents: 'none' } : { position: 'absolute', top: 0, left: 0, transform: `translate(${gutter + rowShift}px, ${headerHeight + box.y}px)`, height: box.height, width: '100%', pointerEvents: 'none' }}>
           <GridRowHeader props={headerProps} slot={slot} cancelX={extra ? 0 : gutter + rowShift} />
@@ -376,6 +378,9 @@ export function GridSemantics(props: GridSemanticsProps): ReactElement {
             // The row follows the scrolling body. Frozen columns undo that transform
             // while keeping their own local layout position stable.
             const pinned = Boolean(scroll.frozen && projection.cols.start(col) < scroll.frozen.left)
+            // Body boxes are deliberately unclamped (stable `left`), so one scrolled
+            // under the frozen column strip overlaps it. Accepted: gridcells hold only
+            // hidden screen-reader text, nothing paints them and rows ignore pointers.
             const column = rowLocalColumn(gridHeaderBox(projection, scroll, 'column', col), viewport, pinned ? 0 : rowShift)
             const offscreen = extra || (slot === activeSlot && active?.col === col && !columns.includes(col))
             const isSelected = cellSelected(selection.ranges, at)

@@ -41,11 +41,11 @@ it.each(['resident', 'paged'] as const)('%s frozen geometry preserves Excel non6
     expect([g.cols.size(0), g.cols.size(1), g.cols.start(2), g.cols.start(3)]).toEqual([182, 80, 262, 342])
     // Stored ht applies without customHeight:12.75pt=17px,30pt=40px.
     expect([g.rows.size(0), g.rows.size(1), g.rows.start(2)]).toEqual([17, 40, 57])
-    expect((g as typeof g & { frozen?: unknown }).frozen).toEqual({ rows: 2, cols: 2, topRow: 11, leftCol: 3 })
+    expect(g.frozen).toEqual({ rows: 2, cols: 2, topRow: 11, leftCol: 3 })
     const visibility = visibilityFromHidden(createIntervalSet([]))
     const m = createSheetMetrics({ rows: g.rows, cols: g.cols, order: createIdentityOrder(), visibility })
-    const window = createScrollWindow(m, { width: 800, height: 400 }, { frozen: (g as typeof g & { frozen?: unknown }).frozen, offset: { x: 100, y: 200 } } as never)
-    expect((window as typeof window & { frozen?: unknown }).frozen).toEqual({ rows: 2, cols: 2, left: 262, top: 57 })
+    const window = createScrollWindow(m, { width: 800, height: 400 }, { frozen: g.frozen, offset: { x: 100, y: 200 } })
+    expect(window.frozen).toEqual({ rows: 2, cols: 2, left: 262, top: 57 })
     expect(logicalToViewport(window, { x: 362, y: 257 })).toEqual({ x: 262, y: 57 })
   } finally { await source.release() }
 })

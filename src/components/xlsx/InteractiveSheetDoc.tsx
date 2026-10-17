@@ -38,7 +38,7 @@ import type { ProjectedSheetMetrics } from '../../xlsx/view/projection'
 import { createIdentityOrder } from '../../xlsx/view/order'
 import { CompactRowVisibility, createIntervalSet, createRowVisibility, visibilityFromHidden } from '../../xlsx/view/visibility'
 import {
-  createScrollWindow, navigateTo as scrollNavigateTo, refreshScrollWindow, scrollPhysicalTo, setScrollOffset, setScrollZoom, visibleLogicalViewport, type ViewportSize,
+  createScrollWindow, navigateTo as scrollNavigateTo, refreshScrollWindow, scrollIntoView, scrollPhysicalTo, setScrollOffset, setScrollZoom, visibleLogicalViewport, type ViewportSize,
 } from '../../xlsx/view/scrollWindow'
 import { keyboardSheetZoom, pinchSheetZoom, wheelSheetZoom } from '../../xlsx/view/sheetZoom'
 import { SheetNavigationSession, emptyGridSelection, navigateSelection, recordCounts, boundedSelectionText } from '../../xlsx/view/selection'
@@ -1464,7 +1464,9 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
     let nextWindow = transition.window
     if (entry && nextWindow !== scroll && transition.selection.active) {
       const nextGutter = gutterOf(entry, nextWindow)
-      if (nextGutter !== gutter) nextWindow = scrollNavigateTo(nextWindow, { metrics: entry.metrics, viewport: viewportOf(nextGutter), view: { ...entry.view, selection: transition.selection } }, { addressSpace: 'source', at: transition.selection.active }, transition.selection.active).window
+      // Re-fit the step at the new gutter width only: a frozen sheet must not
+      // take the explicit Go To/Find body top-left policy here (that would jump).
+      if (nextGutter !== gutter) nextWindow = scrollIntoView(nextWindow, { metrics: entry.metrics, viewport: viewportOf(nextGutter), view: { ...entry.view, selection: transition.selection } }, transition.selection.active)
     }
     if (nextWindow !== scroll) setWindow(activeSheetId, nextWindow)
     else rerender()
