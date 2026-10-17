@@ -979,3 +979,54 @@ describe('review round 3 findings', () => {
     await expect(ValueSelectionDraft.open(index, null, store, aborted.signal)).rejects.toMatchObject({ code: 'cancelled' })
   })
 })
+
+describe('row-count yield bound (spec §10.2, plan S4.2 LIFE-02)', () => {
+  /** Pages of `rows` numbers that resolve immediately; each page counts its
+   * rows into `merged` when the index settles it (after merging). */
+  function numberPages(count: number, rows: number, merged: { rows: number }): FakeSource {
+    const pages: (() => ValuePageRead)[] = []
+    for (let p = 0; p < count; p++) {
+      pages.push(() => {
+        const numbers = new Float64Array(rows)
+        for (let i = 0; i < rows; i++) numbers[i] = p * rows + i
+        return { kind: 'values', pageId: `p${p}`, count: rows, tags: new Uint8Array(rows).fill(SOURCE_NUMBER), numbers, texts: [], settle: () => { merged.rows += rows } }
+      })
+    }
+    return new FakeSource(pages)
+  }
+  it.each([512, 1000])('yields after at most 4,096 merged rows while the time slice never expires (%i-row pages)', async rows => {
+    const merged = { rows: 0 }, slices: number[] = []
+    let since = 0
+    const source = numberPages(Math.ceil(10_240 / rows), rows, merged)
+    const index = new ValueIndexCache().open(identity(numeric), source)
+    const status = await index.build({
+      now: () => 0,
+      yield: async () => { slices.push(merged.rows - since); since = merged.rows },
+    })
+    expect(status).toBe('complete')
+    slices.push(merged.rows - since)
+    expect(merged.rows).toBeGreaterThanOrEqual(10_240)
+    expect(slices.length - 1).toBeGreaterThanOrEqual(2)
+    expect(Math.max(...slices)).toBeLessThanOrEqual(4096)
+  })
+  it('observes a cancel posted as a macrotask within one 4,096-row slice of immediately resolved pages', async () => {
+    const merged = { rows: 0 }, controller = new AbortController()
+    const source = numberPages(40, 512, merged)
+    const index = new ValueIndexCache().open(identity(numeric), source)
+    setImmediate(() => controller.abort())
+    await expect(index.build({ signal: controller.signal, now: () => 0 })).rejects.toMatchObject({ code: 'cancelled' })
+    expect(merged.rows).toBeLessThanOrEqual(4096)
+  })
+  it('bounds search entries between yields at 4,096 while the time slice never expires', async () => {
+    const { index } = await built(items(10_240), mixed, 4096, EXACT)
+    const searched: number[] = []
+    let yields = 0
+    const result = await index.search({ text: 'item', locale: 'en-US' }, {
+      now: () => 0, yield: async () => { yields++ }, onProgress: p => searched.push(p.searched),
+    })
+    expect(result.count).toBe(10_240)
+    expect(yields).toBeGreaterThanOrEqual(2)
+    const gaps = searched.map((at, i) => at - (i ? searched[i - 1] : 0))
+    expect(Math.max(...gaps)).toBeLessThanOrEqual(4096)
+  })
+})

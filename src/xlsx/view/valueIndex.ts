@@ -3,6 +3,7 @@ import type { ColumnEntry, ColumnLanes, FilterRange, PagedKeySetRef, SourceFailu
 import type { ColumnClassification, PreparedValue } from './filter'
 import { FilterDiagnostic, TextFilterMatcher, WorkBudget, type FilterLimits } from './textFilter'
 import { canonicalSearchKey } from './canonicalText'
+import { YIELD_WORK_UNITS } from './scheduler'
 import {
   KEY_BOOLEAN, KEY_DATE, KEY_ERROR, KEY_NUMBER, KEY_STRING, NumberTable, ValueIndexError, loadKeySet,
   sameStamp, valueKeyString, type LaneAccount, type ValueKeySet, type ValueRunStore,
@@ -170,10 +171,13 @@ function defaultYield(): Promise<void> {
   const host = globalThis as { setImmediate?: (callback: () => void) => unknown }
   return new Promise(resolve => host.setImmediate ? host.setImmediate(resolve) : setTimeout(resolve, 0))
 }
-/** Time-sliced cooperative yielding: an abort scheduled as a task runs within
- * one slice even when every awaited page resolves immediately. */
+/** Time- and work-sliced cooperative yielding (spec §10.2: every slice or
+ * YIELD_WORK_UNITS rows/entries, whichever first): an abort scheduled as a
+ * task runs within one slice even when every awaited page resolves
+ * immediately and the clock never advances. */
 class Pacer {
   private last: number
+  private work = 0
   private readonly now: () => number
   private readonly sliceMs: number
   private readonly pause: () => Promise<void>
@@ -184,9 +188,16 @@ class Pacer {
     this.pause = options.yield ?? defaultYield
     this.last = this.now()
   }
-  get due(): boolean { return this.now() - this.last >= this.sliceMs }
+  /** Charges completed work units; true once the work or time budget is spent. */
+  due(units: number): boolean {
+    this.work += units
+    return this.work >= YIELD_WORK_UNITS || this.now() - this.last >= this.sliceMs
+  }
+  /** True when `units` more uninterrupted work would exceed the work budget. */
+  full(units: number): boolean { return this.work > 0 && this.work + units > YIELD_WORK_UNITS }
   async yield(): Promise<void> {
     await this.pause()
+    this.work = 0
     this.last = this.now()
   }
 }
@@ -572,6 +583,12 @@ export class ValueIndex implements LaneAccount {
       }
       if (read.kind === 'unknown' || !this.admissible(read)) this.pages[page] = UNKNOWN
       else {
+        // Merging this page would carry the stretch past the row bound: yield first.
+        if (pacer.full(read.count)) {
+          progress()
+          await pacer.yield()
+          this.check(signal)
+        }
         this.merge(read)
         this.pages[page] = MERGED
         this.unmerged--
@@ -579,7 +596,7 @@ export class ValueIndex implements LaneAccount {
       }
       // Merged into (and charged by) this index, or dropped: the source payload's charge ends.
       } finally { if (read.kind === 'values') read.settle?.() }
-      if (pacer.due) {
+      if (pacer.due(read.kind === 'values' ? read.count : 1)) {
         progress()
         await pacer.yield()
         this.check(signal)
@@ -611,7 +628,7 @@ export class ValueIndex implements LaneAccount {
         account: scratch,
         afterChunk: async () => {
           this.check(signal)
-          if (pacer.due) { await pacer.yield(); this.check(signal) }
+          if (pacer.due(0)) { await pacer.yield(); this.check(signal) }
         },
       })
     } finally { scratch.close() }
@@ -668,7 +685,7 @@ export class ValueIndex implements LaneAccount {
           }
           this.retainKey(key === null ? 8 : key.length * 2 + 48)
           this.searchKeys.push(key)
-          if (id % PACE_STRIDE === PACE_STRIDE - 1 && pacer.due) {
+          if (id % PACE_STRIDE === PACE_STRIDE - 1 && pacer.due(PACE_STRIDE)) {
             progress()
             await pacer.yield()
             this.check(signal)
@@ -945,7 +962,7 @@ export class ValueIndex implements LaneAccount {
             } else hit = false
           } else exact++
           if (hit) { setBit(matches, ordinal); count++ }
-          if ((ordinal - from) % PACE_STRIDE === PACE_STRIDE - 1 && pacer.due) {
+          if ((ordinal - from) % PACE_STRIDE === PACE_STRIDE - 1 && pacer.due(PACE_STRIDE)) {
             onProgress?.({ searched: ordinal + 1, total: end, matches: count })
             live()
             await pacer.yield()
