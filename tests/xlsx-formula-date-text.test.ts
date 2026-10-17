@@ -247,8 +247,9 @@ describe('parse -> shared renderer date display', () => {
       cells: [{ ref: 'A1', value: 0, style: 1 }, { ref: 'B1', value: 60, style: 1 }],
     })
     expect(sheetSemantics?.dateSystem).toBe('1900')
-    expect(texts).toContain('1900-01-00')
-    expect(texts).toContain('1900-02-29')
+    // Built-in 14 is the en-US locale short date (stream F user decision); Excel shows serial 0 as 1/0/1900.
+    expect(texts).toContain('1/0/1900')
+    expect(texts).toContain('2/29/1900')
   })
 
   it('1904 fixture drives render text through the SAME resolved system (serial 0 -> 1904-01-01)', async () => {
@@ -258,8 +259,8 @@ describe('parse -> shared renderer date display', () => {
       cells: [{ ref: 'A1', value: 0, style: 1 }, { ref: 'B1', value: 59, style: 1 }],
     })
     expect(sheetSemantics?.dateSystem).toBe('1904')
-    expect(texts).toContain('1904-01-01')
-    expect(texts).toContain('1904-02-29')
+    expect(texts).toContain('1/1/1904')
+    expect(texts).toContain('2/29/1904')
   })
 
   it('authored custom numFmt formatCode is parsed and used by the renderer', async () => {

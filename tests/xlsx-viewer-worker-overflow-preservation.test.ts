@@ -253,6 +253,6 @@ it('TASK8 worker records preserve canonical numeric date and formula consumers',
     expect(a.getContext('2d').getImageData(0, 0, 128, 40).data).toEqual(b.getContext('2d').getImageData(0, 0, 128, 40).data)
     for (const [row, col, value] of [[0, 0, 3.14159265358979], [0, 1, 45351], [1, 0, 42]]) expect(await h.store.readCell({ row, col }, { signal: signal(), stamp: h.store.stamp })).toMatchObject({ kind: 'cell', cell: { id: row * 16384 + col, value } })
     const copied = await serializeSelection({ store: h.store, owner, currentOwner: () => owner, selection: { active: null, anchor: null, ranges: [{ rows: { kind: 'intervals', intervals: [{ r0: 0, r1: 1 }] }, cols: [{ c0: 0, c1: 1 }] }] }, order: createIdentityOrder(), visibility: visible(), columns: visibilityFromHidden(createIntervalSet([]), 16384), allowed: () => true, signal: signal(), format: cell => formatValue(cell.value, h.remote.styleOf(cell.styleIndex)?.numFmtId ?? 0) })
-    expect(copied).toMatchObject({ kind: 'ready', text: '3.141592654\t2024-02-29\n42\t' })
+    expect(copied).toMatchObject({ kind: 'ready', text: '3.141592654\t2/29/2024\n42\t' })
   } finally { await h.close() }
 })

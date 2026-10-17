@@ -32,30 +32,39 @@ describe('numeric overflow renders as a full cell of #', () => {
     expect(hashes(64)).toBe('########')
     expect(paint(45079, 80, { formatCode: 'yyyy-mm-dd' })).toEqual(['2023-06-02']) // 70 <= 74 fits
   })
-  it('stream F item 6: the F2 date column at Excel\'s default width is ##### by Excel\'s own width model', () => {
+  it('stream F item 6 (user decision): built-in 14 is the locale short date, so F2 dates fit at Excel\'s default width where Excel fits them', () => {
     // Excel default column: baseColWidth 8, Calibri 11 MDW 7 px -> 8 chars + 5 px
-    // padding = 61 px, rounded up to a multiple of 8 = 64 px; the cell interior is
-    // 64 - 3 - 3 = 58 px (+0.5 px fit tolerance). Built-in numFmt 14 renders the
-    // ISO date (product convention), "2023-03-15": Calibri advances (1/2048 em)
-    // 8 digits x 1038 + 2 hyphens x 627 = 9558 -> 9558 / 2048 x 11 pt x 96/72
-    // = 68.45 px > 58.5 px (and > 64 px even with no padding), so Excel would show
-    // '#' too: the simulators' ####### in column B is correct, not a bug.
-    const CALIBRI: Record<string, number> = { '-': 627, '#': 1020 }
+    // padding = 61 px, rounded up to 64 px; interior 64 - 3 - 3 = 58 px (+0.5).
+    // Built-in 14 is Excel's locale short date (en-US m/d/yyyy). Calibri advances
+    // (1/2048 em): digit 1038, '/' 791; at 11 pt (x 14.667 / 2048):
+    // "4/5/2023" = 6 x 1038 + 2 x 791 = 7810 -> 55.93 px (fits),
+    // "3/15/2023" = 63.36 px and "12/30/2023" = 70.80 px (####, as in Excel).
+    const CALIBRI: Record<string, number> = { '/': 791, '#': 1020 }
     const px = (s: string) => [...s].reduce((sum, ch) => sum + (CALIBRI[ch] ?? 1038), 0) / 2048 * 11 * 96 / 72
-    expect(px('2023-03-15')).toBeCloseTo(68.45, 2)
-    const painted: string[] = []
-    const cell: XlsxCell = { ref: 'B2', row: 0, col: 0, styleIndex: 0, value: 45000, style: { numFmtId: 14, fontSizePt: 11 } as XlsxCellStyle }
-    const sheet: XlsxSheet = { name: 'S', cols: [], merges: [], mergeRanges: [], rows: [{ index: 0, cells: [cell] }] }
-    const ctx = new Proxy({ font: '', measureText: (s: string) => ({ width: px(s) }), fillText: (s: string) => painted.push(s) },
-      { get: (o, k) => k in o ? o[k as keyof typeof o] : () => {} }) as unknown as CanvasRenderingContext2D
-    renderSheet(sheet, ctx, { colWidthsPx: [64], rowHeightsPx: [20], widthPx: 64, heightPx: 20 })
-    expect(painted).toEqual(['#'.repeat(Math.floor(58 / px('#')))])
-    expect(cellDisplayText(sheet, cell)).toBe('2023-03-15')
+    const paintCalibri = (value: number) => {
+      const painted: string[] = []
+      const cell: XlsxCell = { ref: 'B2', row: 0, col: 0, styleIndex: 0, value, style: { numFmtId: 14, fontSizePt: 11 } as XlsxCellStyle }
+      const sheet: XlsxSheet = { name: 'S', cols: [], merges: [], mergeRanges: [], rows: [{ index: 0, cells: [cell] }] }
+      const ctx = new Proxy({ font: '', measureText: (s: string) => ({ width: px(s) }), fillText: (s: string) => painted.push(s) },
+        { get: (o, k) => k in o ? o[k as keyof typeof o] : () => {} }) as unknown as CanvasRenderingContext2D
+      renderSheet(sheet, ctx, { colWidthsPx: [64], rowHeightsPx: [20], widthPx: 64, heightPx: 20 })
+      return { painted, text: cellDisplayText(sheet, cell) }
+    }
+    expect(px('4/5/2023')).toBeCloseTo(55.93, 2)
+    expect(paintCalibri(45021)).toEqual({ painted: ['4/5/2023'], text: '4/5/2023' }) // 2023-04-05: fits
+    const hashes = '#'.repeat(Math.floor(58 / px('#')))
+    expect(paintCalibri(45000)).toEqual({ painted: [hashes], text: '3/15/2023' }) // 63.4 px > 58.5
+    expect(paintCalibri(45290)).toEqual({ painted: [hashes], text: '12/30/2023' })
+  })
+  it('built-in date/time formats 14-22 use Excel\'s en-US locale forms (ECMA-376 18.8.30)', () => {
+    const sheet: XlsxSheet = { name: 'S', cols: [], merges: [], mergeRanges: [], rows: [] }
+    const text = (numFmtId: number) => cellDisplayText(sheet, { value: 45079.5625, style: { numFmtId } as XlsxCellStyle }) // 2023-06-02 13:30
+    expect([14, 15, 16, 17, 18, 19, 20, 21, 22].map(text)).toEqual(['6/2/2023', '2-Jun-23', '2-Jun', 'Jun-23', '1:30 PM', '1:30:00 PM', '13:30', '13:30:00', '6/2/2023 13:30'])
   })
   it('built-in date and time formats', () => {
-    // Built-in 14 renders the ISO date in this formatter profile (10 chars).
+    // Built-in 14 renders the en-US locale short date (8 chars here).
     expect(paint(45079, 40, { numFmtId: 14 })).toEqual([hashes(40)])
-    expect(paint(45079, 80, { numFmtId: 14 })).toEqual(['2023-06-02'])
+    expect(paint(45079, 80, { numFmtId: 14 })).toEqual(['6/2/2023'])
     expect(paint(0.524259259259259, 30, { numFmtId: 21 })).toEqual([hashes(30)]) // "12:34:56"
   })
   it('negative numbers and percentages', () => {

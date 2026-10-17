@@ -16,7 +16,6 @@ import { graphemes } from '../core/text-recording'
 import { isFormulaError, isEvaluationError } from './formula/evaluator'
 import { formatCommon, numericSectionIsText, type FormatAllocation } from './formula/format'
 import { BUILTIN_EXTENDED_FORMATS, NO_SECTION, formatColor, formatExtended } from './cellFormat'
-import { decodeSerial } from './formula/serial'
 import type { ResolvedSemantics } from './formula/types'
 import type { WorkerDiagnostic } from './view/contracts'
 import { MAX_COLS, isValidCoordinate } from './view/coordinates'
@@ -569,19 +568,17 @@ export function formatValue(
     case 4: // #,##0.00
       return formatText(value, '#,##0.00', sem, allocation)
     default:
-      // Built-in date formats keep the established ISO product convention but
-      // now decode through the SHARED serial model (1900 day-0/fictitious day,
-      // explicit 1904) instead of the removed JS-Date epoch path.
-      if (numFmtId >= 18 && numFmtId <= 22) {
-        const formats = ['h:mm AM/PM', 'h:mm:ss AM/PM', 'h:mm', 'h:mm:ss', 'm/d/yy h:mm']
-        return formatText(value, formats[numFmtId - 18], sem, allocation)
-      }
-      allocation?.allocate(256) // bounded civil date/fallback Number strings
-      if (numFmtId >= 14 && numFmtId <= 17) return formatDateSerial(value, sem.dateSystem)
+      // Built-in dates/times 14-22 (ECMA-376 18.8.30) display as Excel shows them
+      // in en-US, through the SHARED serial model (1900 day-0/fictitious day, 1904).
+      if (numFmtId >= 14 && numFmtId <= 22) return formatText(value, BUILTIN_DATE_FORMATS[numFmtId - 14], sem, allocation)
+      allocation?.allocate(256) // bounded fallback Number strings
       return formatFiniteFallback(value)
   }
 }
 
+/** Excel's displayed en-US forms of built-ins 14-22 (14 is the locale short date).
+ * en-US is the only locale the shared formatter defines (it gates month names on it). */
+const BUILTIN_DATE_FORMATS = ['m/d/yyyy', 'd-mmm-yy', 'd-mmm', 'mmm-yy', 'h:mm AM/PM', 'h:mm:ss AM/PM', 'h:mm', 'h:mm:ss', 'm/d/yyyy h:mm']
 /** One shared formatter call; unsupported classes fall back to plain numbers. */
 function formatText(value: number, format: string, semantics: ResolvedSemantics, allocation?: FormatAllocation): string {
   const result = formatCommon(value, format, semantics, allocation)
@@ -590,13 +587,6 @@ function formatText(value: number, format: string, semantics: ResolvedSemantics,
   return formatFiniteFallback(value)
 }
 
-export function formatDateSerial(serial: number, dateSystem: '1900' | '1904' = '1900'): string {
-  const parts = decodeSerial(serial, dateSystem)
-  if (isEvaluationError(parts)) return ''
-  const { year, month, day } = parts.civil
-  const y = year < 0 ? `-${String(-year).padStart(4, '0')}` : String(year).padStart(4, '0')
-  return `${y}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`
-}
 
 /**
  * Cell text for the shared renderer: an authored custom numFmt formatCode uses

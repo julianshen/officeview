@@ -124,9 +124,14 @@ Decision order: what-if data table → force → explicit-recalc → **manual** 
 
 ## 8. Finite renderer fallback
 
-`formatValue(value, numFmtId)` renders built-in formats `0/2/3/4/9/10`, retains the
-ISO product convention for date-only `14–17`, and uses the shared formatter for
-time/date-time `18–22` (21 now displays `12:34:56`, preserving the stored serial).
+`formatValue(value, numFmtId)` renders built-in formats `0/2/3/4/9/10`, and the
+built-in dates/times `14–22` (ECMA-376 §18.8.30) through the shared formatter in
+Excel's displayed en-US form (the only locale the shared formatter defines; for
+another workbook locale the month-name forms `15–17` fall back to the plain number): `14` the locale short date `m/d/yyyy` (`3/5/2023`; serial 0
+shows `1/0/1900`), `15` `d-mmm-yy`, `16` `d-mmm`, `17` `mmm-yy`, `18` `h:mm AM/PM`,
+`19` `h:mm:ss AM/PM`, `20` `h:mm`, `21` `h:mm:ss` (`12:34:56`, preserving the stored
+serial) and `22` `m/d/yyyy h:mm`. These replace the earlier ISO `yyyy-mm-dd`
+convention for `14–17`, so a date fits a default-width column wherever Excel fits it.
 General uses a finite eleven-character profile with scientific notation and
 measured cell-width fitting; `3.14159265358979` displays `3.141592654` at the
 native wide-column control. Short exact decimals remain exact instead of being

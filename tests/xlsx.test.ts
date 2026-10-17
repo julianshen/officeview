@@ -46,7 +46,7 @@ describe('xlsx render', () => {
     expect(formatValue(3.14159, 2)).toBe('3.14')
     expect(formatValue(0.42, 9)).toBe('42%')
     expect(formatValue(4500.5, 3)).toBe('4,501')
-    expect(formatValue(45000, 14)).toMatch(/^\d{4}-\d{2}-\d{2}$/)
+    expect(formatValue(45000, 14)).toBe('3/15/2023')
     expect(formatValue('text', 0)).toBe('text')
     expect(formatValue(true, 0)).toBe('TRUE')
   })
