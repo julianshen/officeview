@@ -104,6 +104,15 @@ async function newPerfPage(context: BrowserContext, base: string, errors: string
   return page
 }
 
+/** Touch (mobile profile) column headers put sort/filter behind an "Actions for
+ * column X" disclosure when the column is narrower than its 44px targets; open
+ * it (outside any armed measurement) so the action is clickable. */
+async function revealHeaderAction(page: Page, letter: string, name: string | RegExp): Promise<void> {
+  if (await page.getByRole('button', { name }).count()) return
+  const disclosure = page.getByRole('button', { name: `Actions for column ${letter}` })
+  if (await disclosure.count()) await disclosure.click()
+}
+
 async function openFixture(page: Page, fixture: ViewerFixture): Promise<void> {
   await page.setInputFiles('#perf-file', fixture.path)
   await page.waitForFunction(() => { const p = (window as unknown as W).__viewerPerf; return p.marks.firstUsableAt !== null || p.error !== null }, undefined, { timeout: OPEN_TIMEOUT_MS })
@@ -185,6 +194,7 @@ async function ackSuite(context: BrowserContext, base: string, f2: ViewerFixture
   const sortButton = page.getByRole('button', { name: 'Cycle sort column G' })
   const sort: AckSeries & { operations: SortOutcome[]; endToEnd: number[] } = { samples: [], records: [], censored: 0, note: '', endToEnd: [], operations: [] }
   for (let i = 0; i < repeat; i++) {
+    await revealHeaderAction(page, 'G', 'Cycle sort column G')
     const wait = await arm('status')
     const operation = await measureSortOutcome(page, () => sortButton.click())
     const record = await wait()
@@ -210,6 +220,7 @@ async function ackSuite(context: BrowserContext, base: string, f2: ViewerFixture
   const filter: AckSeries = { samples: [] as number[], records: [] as AckRecord[], censored: 0, note: 'funnel click -> filter dialog presented' }
   const cancel: AckSeries = { samples: [] as number[], records: [] as AckRecord[], censored: 0, note: 'dialog Cancel while the column value list loads -> dialog removed' }
   for (let i = 0; i < repeat; i++) {
+    await revealHeaderAction(page, 'D', /^Filter column D/)
     const opened = await arm('dialog-open')
     await funnel.click()
     const r1 = await opened()
@@ -440,12 +451,14 @@ async function memorySession(context: BrowserContext, base: string, fixture: Vie
   {
     const header = page.getByRole('columnheader', { name: /^Column G/ })
     const before = await header.getAttribute('aria-sort')
+    await revealHeaderAction(page, 'G', 'Cycle sort column G')
     await page.getByRole('button', { name: 'Cycle sort column G' }).click()
     await page.waitForFunction(({ before }) => {
       const h = [...document.querySelectorAll('[role=columnheader]')].find(x => /^Column G/.test(x.getAttribute('aria-label') ?? x.textContent ?? ''))
       return (h?.getAttribute('aria-sort') ?? null) !== before
     }, { before }, { timeout: 120_000 }).catch(() => {})
     const dialog = page.getByRole('dialog', { name: 'Column filter' })
+    await revealHeaderAction(page, 'D', /^Filter column D/)
     await page.getByRole('button', { name: /^Filter column D/ }).click()
     await dialog.waitFor({ state: 'visible', timeout: 30_000 })
     await page.waitForTimeout(500)
@@ -528,6 +541,7 @@ async function memorySession(context: BrowserContext, base: string, fixture: Vie
     if (process.env.VIEWER_SUITE_LIVE_DIAG) { await gcMain(); await diagSnapshot('scroll') }
     const header = page.getByRole('columnheader', { name: /^Column G/ })
     const before = await header.getAttribute('aria-sort')
+    await revealHeaderAction(page, 'G', 'Cycle sort column G')
     await page.getByRole('button', { name: 'Cycle sort column G' }).click()
     await page.waitForFunction(({ before }) => {
       const h = [...document.querySelectorAll('[role=columnheader]')].find(x => /^Column G/.test(x.getAttribute('aria-label') ?? x.textContent ?? ''))
@@ -535,6 +549,7 @@ async function memorySession(context: BrowserContext, base: string, fixture: Vie
     }, { before }, { timeout: 120_000 }).catch(() => {})
   } else {
     const dialog = page.getByRole('dialog', { name: 'Column filter' })
+    await revealHeaderAction(page, 'A', /^Filter column A/)
     await page.getByRole('button', { name: /^Filter column A/ }).click()
     await dialog.waitFor({ state: 'visible', timeout: 30_000 })
     await page.waitForTimeout(5000)
@@ -566,7 +581,8 @@ async function memorySession(context: BrowserContext, base: string, fixture: Vie
       await page.evaluate(() => (window as unknown as W).__viewerPerf.scrollRun({ warmup: 0, frames: 60, dx: 0, dy: 60 }))
       const header = page.getByRole('columnheader', { name: /^Column G/ })
       const before = await header.getAttribute('aria-sort')
-      await page.getByRole('button', { name: 'Cycle sort column G' }).click()
+      await revealHeaderAction(page, 'G', 'Cycle sort column G')
+    await page.getByRole('button', { name: 'Cycle sort column G' }).click()
       await page.waitForFunction(({ before }) => {
         const h = [...document.querySelectorAll('[role=columnheader]')].find(x => /^Column G/.test(x.getAttribute('aria-label') ?? x.textContent ?? ''))
         return (h?.getAttribute('aria-sort') ?? null) !== before
