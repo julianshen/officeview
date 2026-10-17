@@ -465,9 +465,13 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
   const headerHeight = columnHeaderHeight(touchControls, true, true)
   // The row gutter fits the largest row number shown (it widens past row 9999),
   // measured on the window this sheet last presented.
+  const viewportHeight = Math.max(1, pane.height - headerHeight - STATUS_BAR_HEIGHT)
+  const gutterOf = (sheetEntry: SheetEntry, win: ScrollWindow | undefined) => win ? rowGutterWidth(lastVisibleRowLabel(sheetEntry.metrics, win, viewportHeight)) : GRID_HEADER_SIZE
   const presented = entry ? windows.get(activeSheetId) : undefined
-  const gutter = entry && presented ? rowGutterWidth(lastVisibleRowLabel(entry.metrics, presented, Math.max(1, pane.height - headerHeight - STATUS_BAR_HEIGHT))) : GRID_HEADER_SIZE
-  const viewport: ViewportSize = useMemo(() => ({ width: Math.max(1, pane.width - gutter), height: Math.max(1, pane.height - headerHeight - STATUS_BAR_HEIGHT) }), [pane, headerHeight, gutter])
+  const gutter = entry ? gutterOf(entry, presented) : GRID_HEADER_SIZE
+  const scrollInset = useMemo(() => showZoomControls && !touchControls ? Object.freeze({ right: 60, bottom: 136 }) : undefined, [showZoomControls, touchControls])
+  const viewportOf = (g: number): ViewportSize => ({ width: Math.max(1, pane.width - g), height: viewportHeight, ...(scrollInset ? { inset: scrollInset } : {}) })
+  const viewport: ViewportSize = useMemo(() => viewportOf(gutter), [pane, headerHeight, gutter, scrollInset]) // eslint-disable-line react-hooks/exhaustive-deps
   // Live ratio: a display move re-renders here, re-admits the pool and re-keys tiles (S13 D-DPR).
   const nativeDpr = Math.min(useDevicePixelRatio(), 3)
   // Admit the pane surfaces before sizing any canvas; a lower device scale keeps
@@ -492,7 +496,7 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
   // Refresh against the CURRENT projection/viewport (a view commit or resize keeps
   // the logical origin and zoom; refresh only clamps).
   const windowKey = useRef('')
-  const nextWindowKey = JSON.stringify([activeSheetId, entry?.revision, entry?.structureGen, viewport.width, viewport.height, dpr])
+  const nextWindowKey = JSON.stringify([activeSheetId, entry?.revision, entry?.structureGen, viewport.width, viewport.height, dpr, Boolean(scrollInset)])
   if (entry && windowKey.current !== nextWindowKey) { windowKey.current = nextWindowKey; windowFor(activeSheetId, entry) }
   const scroll = entry ? windows.get(activeSheetId) ?? windowFor(activeSheetId, entry) : null
   const setWindow = (sheetId: string, next: ScrollWindow) => {
@@ -831,7 +835,11 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
     cancelCopy()
     const sheetEntry = entryFor(hit.sheetId)
     if (!windows.has(hit.sheetId)) windowFor(hit.sheetId, sheetEntry)
-    const result = navigateToHit({ session, windows, viewport }, hit)
+    let result = navigateToHit({ session, windows, viewport }, hit)
+    if (result.kind === 'visible') {
+      const nextGutter = gutterOf(sheetEntry, result.window)
+      if (nextGutter !== gutter) result = navigateToHit({ session, windows, viewport: viewportOf(nextGutter) }, hit)
+    }
     if (result.kind === 'needs-projection') return
     if (result.kind === 'hidden') inspectHidden(hit.sheetId, hit.source, result.hiddenReason)
     else setInspection(undefined)
@@ -1296,7 +1304,12 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
     session.setSelection(activeSheetId, transition.selection)
     setAnnouncement(transition.announcement)
     setInspection(undefined)
-    if (transition.window !== scroll) setWindow(activeSheetId, transition.window)
+    let nextWindow = transition.window
+    if (entry && nextWindow !== scroll && transition.selection.active) {
+      const nextGutter = gutterOf(entry, nextWindow)
+      if (nextGutter !== gutter) nextWindow = scrollNavigateTo(nextWindow, { metrics: entry.metrics, viewport: viewportOf(nextGutter), view: { ...entry.view, selection: transition.selection } }, { addressSpace: 'source', at: transition.selection.active }, transition.selection.active).window
+    }
+    if (nextWindow !== scroll) setWindow(activeSheetId, nextWindow)
     else rerender()
   }
   const onNavigate = (request: NavigatorRequest) => {
@@ -1306,7 +1319,9 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
     setAnnouncement(result.announcement)
     if (result.kind === 'hidden') { inspectHidden(activeSheetId, result.target, result.hiddenReason ?? 'authored-hidden'); return }
     setInspection(undefined)
-    const moved = scrollNavigateTo(scroll, { metrics: entry.metrics, viewport, view: { ...entry.view, selection: result.selection } }, request, state.selection.active)
+    let moved = scrollNavigateTo(scroll, { metrics: entry.metrics, viewport, view: { ...entry.view, selection: result.selection } }, request, state.selection.active)
+    const nextGutter = gutterOf(entry, moved.window)
+    if (nextGutter !== gutter) moved = scrollNavigateTo(scroll, { metrics: entry.metrics, viewport: viewportOf(nextGutter), view: { ...entry.view, selection: result.selection } }, request, state.selection.active)
     cancelCopy()
     session.setSelection(activeSheetId, result.selection)
     setWindow(activeSheetId, moved.window)

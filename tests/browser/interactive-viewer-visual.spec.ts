@@ -112,6 +112,33 @@ test.describe('visual review: interactive viewer layout', () => {
     await goTo(page, 'XFD1048576')
     await expect(page.getByRole('rowheader', { name: 'Row 1048576' })).toBeVisible()
     await check()
+    const farCell = await rect(page, '[role=gridcell][aria-selected=true]'), zoom = await rect(page, '[data-testid=officeview-zoom-controls]')
+    expect(overlaps(farCell, zoom)).toBe(false)
+    expect(farCell.right).toBeLessThanOrEqual(zoom.left + 0.5)
+    await page.getByRole('grid').focus()
+    await page.keyboard.press('ArrowLeft')
+    await page.keyboard.press('ArrowRight')
+    const navCell = await rect(page, '[role=gridcell][aria-selected=true]')
+    expect(overlaps(navCell, zoom)).toBe(false)
+  })
+
+  test('find scroll-into-view keeps row 1 visible for visible hits and aligns below-the-fold hits to whole rows', async ({ page }) => {
+    await page.setViewportSize({ width: 1280, height: 800 })
+    await openViewer(page, 'f2-1k.xlsx')
+    const headers = await rect(page, '[data-officeview-ui=grid-headers]')
+    const search = page.getByRole('searchbox', { name: 'Search document' })
+    await search.fill('alpha')
+    await expect(page.getByRole('rowheader', { name: 'Row 1', exact: true })).toBeVisible()
+    const row1 = await rect(page, '[role=row][aria-rowindex="2"]')
+    expect(Math.abs(row1.top - headers.bottom)).toBeLessThan(1)
+    await search.fill('total')
+    await expect(page.getByRole('rowheader', { name: 'Row 1000', exact: true })).toBeVisible()
+    const topBodyRow = await page.evaluate(() => {
+      const rows = [...document.querySelectorAll<HTMLElement>('[role=row][aria-rowindex]:not([data-officeview-ui=grid-headers]):not([data-transient-active=true])')].map(r => r.getBoundingClientRect()).filter(r => r.height > 0).sort((a, b) => a.top - b.top)
+      return rows[0]?.toJSON() as Box | undefined
+    })
+    expect(topBodyRow).toBeDefined()
+    expect(Math.abs(topBodyRow!.top - headers.bottom)).toBeLessThan(1)
   })
 
   test('#21 header labels meet WCAG AA against the header strip', async ({ page }) => {
