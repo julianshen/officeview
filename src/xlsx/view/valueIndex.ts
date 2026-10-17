@@ -193,8 +193,12 @@ class Pacer {
     this.work += units
     return this.work >= YIELD_WORK_UNITS || this.now() - this.last >= this.sliceMs
   }
-  /** True when `units` more uninterrupted work would exceed the work budget. */
-  full(units: number): boolean { return this.work > 0 && this.work + units > YIELD_WORK_UNITS }
+  /** Work units the current slice still admits (at least one). */
+  get allowance(): number { return Math.max(1, YIELD_WORK_UNITS - this.work) }
+  /** Unyielded work, flushed at a handoff to another phase. */
+  get pending(): boolean { return this.work > 0 }
+  /** Charges work without sampling the clock (a partial stride). */
+  charge(units: number): void { this.work += units }
   async yield(): Promise<void> {
     await this.pause()
     this.work = 0
@@ -395,6 +399,8 @@ export class ValueIndex implements LaneAccount {
   private pending: Promise<ValueCompleteness> | undefined
   private pages: Uint8Array | undefined
   private unmerged = 0
+  /** Merged prefix of a page whose merge a cancellation interrupted. */
+  private partial: { page: number; offset: number } | undefined
   private count = 0
   private kinds: Uint8Array
   private numbers: Float64Array
@@ -540,8 +546,9 @@ export class ValueIndex implements LaneAccount {
     if (!this.disposed && !sameStamp(this.source.stamp, this.stamp)) this.dispose()
     if (this.disposed) throw new ValueIndexError('stale-source', 'Value index was invalidated; retry')
   }
-  /** Merges unread/unknown pages in cancellable, time-sliced page batches. A
-   * page merges atomically, so cancellation or a source error leaves resumable state. */
+  /** Merges unread/unknown pages in cancellable, work- and time-sliced batches.
+   * A page is validated whole before any of it merges, and an interrupted merge
+   * resumes after its merged prefix, so cancellation leaves resumable state. */
   build(options: ValueBuildOptions = {}): Promise<ValueCompleteness> {
     try { this.assertLive() } catch (error) { return Promise.reject(error) }
     if (this.identity.classification.kind === 'loading') return Promise.resolve('loading')
@@ -581,22 +588,46 @@ export class ValueIndex implements LaneAccount {
       if (read.kind === 'error') {
         throw new ValueIndexError(read.failure.code, read.failure.message, { retryable: read.failure.retryable })
       }
-      if (read.kind === 'unknown' || !this.admissible(read)) this.pages[page] = UNKNOWN
-      else {
-        // Merging this page would carry the stretch past the row bound: yield first.
-        if (pacer.full(read.count)) {
+      // Validation and merge run in slices of at most the pacer's allowance
+      // (spec §10.2), so the work between yields never depends on page size.
+      const slice = async (from: number, to: number) => {
+        if (pacer.due(to - from)) {
           progress()
           await pacer.yield()
           this.check(signal)
         }
-        this.merge(read)
+      }
+      let unknown = read.kind === 'unknown'
+      if (read.kind === 'values') {
+        this.wellFormed(read)
+        for (let at = 0; at < read.count;) {
+          const end = Math.min(read.count, at + pacer.allowance)
+          if (this.unknownCells(read, at, end)) unknown = true
+          await slice(at, end)
+          at = end
+        }
+      }
+      if (unknown || read.kind !== 'values') {
+        if (this.partial?.page === page) throw new ValueIndexError('page-error', 'A partially merged value page changed under one source stamp')
+        this.pages[page] = UNKNOWN
+      } else {
+        // A page cut by a cancellation resumes after its merged prefix: under
+        // one stamp a re-read page holds the same values.
+        for (let at = this.partial?.page === page ? this.partial.offset : 0; at < read.count;) {
+          const end = Math.min(read.count, at + pacer.allowance)
+          this.merge(read, at, end)
+          this.partial = { page, offset: end }
+          await slice(at, end)
+          at = end
+        }
+        this.partial = undefined
         this.pages[page] = MERGED
         this.unmerged--
         this.ledger.mergedPages++
       }
       // Merged into (and charged by) this index, or dropped: the source payload's charge ends.
       } finally { if (read.kind === 'values') read.settle?.() }
-      if (pacer.due(read.kind === 'values' ? read.count : 1)) {
+      if (pacer.due(1)) {
         progress()
         await pacer.yield()
         this.check(signal)
@@ -673,6 +704,7 @@ export class ValueIndex implements LaneAccount {
       }
       if (this.searchKeys.length < total) {
         this.keyState = 'computing'
+        let stride = 0
         for (let id = this.searchKeys.length; id < total; id++) {
           // Preflight raw length against the triggering search's effective limit
           // (an oversized value keeps a null key and the exact path rejects it,
@@ -685,12 +717,17 @@ export class ValueIndex implements LaneAccount {
           }
           this.retainKey(key === null ? 8 : key.length * 2 + 48)
           this.searchKeys.push(key)
-          if (id % PACE_STRIDE === PACE_STRIDE - 1 && pacer.due(PACE_STRIDE)) {
-            progress()
-            await pacer.yield()
-            this.check(signal)
+          if (++stride === PACE_STRIDE) {
+            stride = 0
+            if (pacer.due(PACE_STRIDE)) {
+              progress()
+              await pacer.yield()
+              this.check(signal)
+            }
           }
         }
+        // The final partial stride is work too: the next phase starts after it.
+        pacer.charge(stride)
         this.keyState = 'computed'
       }
     } catch (error) {
@@ -712,19 +749,23 @@ export class ValueIndex implements LaneAccount {
     }
   }
   /** Validates a lane page before any merge; unknown cells defer the whole page. */
-  private admissible(page: ValueLanePage): boolean {
-    const { count, tags, numbers, texts, styles } = page
+  private wellFormed(page: ValueLanePage): void {
+    const { count, tags, numbers, styles } = page
     if (!Number.isSafeInteger(count) || count < 0 || tags.length !== count || numbers.length < count || (styles && styles.length < count)) {
       throw new ValueIndexError('page-error', 'Malformed value lane page')
     }
+  }
+  /** Validates cells [from, to); true when any is unknown (the page then defers). */
+  private unknownCells(page: ValueLanePage, from: number, to: number): boolean {
+    const { tags, texts } = page
     let unknown = false
-    for (let i = 0; i < count; i++) {
+    for (let i = from; i < to; i++) {
       const tag = tags[i]
       if (tag === SOURCE_UNKNOWN) unknown = true
       else if (tag < SOURCE_NUMBER || tag > SOURCE_UNAVAILABLE) throw new ValueIndexError('page-error', 'Uncovered value lane cell')
       else if ((tag === SOURCE_STRING || tag === SOURCE_ERROR) && typeof texts[i] !== 'string') throw new ValueIndexError('page-error', 'Missing text for value lane cell')
     }
-    return !unknown
+    return unknown
   }
   private grow(capacity: number): void {
     const old = this.kinds.length
@@ -752,9 +793,9 @@ export class ValueIndex implements LaneAccount {
     map.set(text, ordinal)
     return ordinal
   }
-  private merge(page: ValueLanePage): void {
-    const { count, tags, numbers, texts, styles } = page
-    for (let i = 0; i < count; i++) {
+  private merge(page: ValueLanePage, from: number, to: number): void {
+    const { tags, numbers, texts, styles } = page
+    for (let i = from; i < to; i++) {
       const style = styles ? styles[i] : 0
       let ordinal: number
       switch (tags[i]) {
@@ -919,6 +960,8 @@ export class ValueIndex implements LaneAccount {
           this.keyRunning = true
           try { await this.keyPhase(signal, pacer, options.onKeyProgress, budget.maxTextLength) } finally { this.keyRunning = false }
           live()
+          // Phase handoff: the scan's 16-entry strides start on a fresh slice.
+          if (pacer.pending) { await pacer.yield(); live() }
         }
         const exactKeys = keysUsable && strategy.exactKeys
         const queryKey = keysUsable && !exactKeys ? generateSearchKey(strategy, query.text) : null
@@ -1394,7 +1437,7 @@ export async function compileValuesMembership(
  * do not produce lanes. One page per row band; the owner is read live. */
 /** Yield budget a column pass charges rows to; CooperativeSlice satisfies it. */
 export interface ColumnPassPacer { due(units: number): boolean; pause(phase: 'filter'): Promise<void>; flush(phase: 'filter'): Promise<void> }
-/** Column classification over bounded lane pages (spec §10.2): a real yield
+/** Column classification over lane pages of any size (spec §10.2): a real yield
  * at least every YIELD_WORK_UNITS classified rows, with `check` (cancellation
  * and staleness) re-run after each one. Without a caller budget a host-yield
  * slice is used, so a pass whose pages resolve as microtasks still lets a
@@ -1412,19 +1455,19 @@ export async function classifyLanePages(
     await slice.flush('filter')
     check()
     await each(async page => {
-      if (pending > 0 && pending + page.count > YIELD_WORK_UNITS) {
-        await slice.flush('filter')
-        check()
-        pending = 0
-      }
-      function* values() { for (let i = 0; i < page.count; i++) yield prepared(page, i) }
-      const part = classifyColumn(values(), true)
-      numeric ||= part.hasNumeric; text ||= part.kind === 'text'; date ||= part.kind === 'date'; loading ||= part.kind === 'loading'
-      pending += page.count
-      if (slice.due(page.count)) {
-        await slice.pause('filter')
-        check()
-        pending = 0
+      // Slices of at most the remaining allowance: the bound never depends on page size.
+      for (let at = 0; at < page.count;) {
+        const end = Math.min(page.count, at + Math.max(1, YIELD_WORK_UNITS - pending))
+        function* values() { for (let i = at; i < end; i++) yield prepared(page, i) }
+        const part = classifyColumn(values(), true)
+        numeric ||= part.hasNumeric; text ||= part.kind === 'text'; date ||= part.kind === 'date'; loading ||= part.kind === 'loading'
+        pending += end - at
+        if (slice.due(end - at)) {
+          await slice.pause('filter')
+          check()
+          pending = 0
+        }
+        at = end
       }
     })
   } finally { if (!pacer) (slice as CooperativeSlice<'filter'>).dispose() }

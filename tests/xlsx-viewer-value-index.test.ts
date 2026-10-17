@@ -7,7 +7,7 @@ import {
   type ValueColumnSource, type ValueIndex, type ValueIndexIdentity, type ValueLabeler, type ValueLanePage, type ValuePageRead,
 } from '../src/xlsx/view/valueIndex'
 import { MemoryValueRunStore } from '../src/xlsx/view/valueRuns'
-import { EXACT_SEARCH } from '../src/xlsx/view/searchKeys'
+import { EXACT_SEARCH, canonicalKeyStrategy, foldVariantOf } from '../src/xlsx/view/searchKeys'
 /** Tests of pool bytes and scan pacing exclude lazily retained canonical keys. */
 const EXACT = { searchKeys: { strategy: EXACT_SEARCH } } as const
 
@@ -1028,5 +1028,48 @@ describe('row-count yield bound (spec §10.2, plan S4.2 LIFE-02)', () => {
     expect(yields).toBeGreaterThanOrEqual(2)
     const gaps = searched.map((at, i) => at - (i ? searched[i - 1] : 0))
     expect(Math.max(...gaps)).toBeLessThanOrEqual(4096)
+  })
+  it('splits one 8,192-row page: the first yield comes before 8,192 values are merged (codex R1)', async () => {
+    const merged = { rows: 0 }, sizes: number[] = []
+    const source = numberPages(1, 8192, merged)
+    const index = new ValueIndexCache().open(identity(numeric), source)
+    expect(await index.build({ now: () => 0, yield: async () => { sizes.push(index.size) } })).toBe('complete')
+    expect(sizes.length).toBeGreaterThanOrEqual(2)
+    expect(sizes[0]).toBeLessThanOrEqual(4096)
+    expect(Math.max(...[...sizes, index.size].map((at, i, all) => at - (i ? all[i - 1] : 0)))).toBeLessThanOrEqual(4096)
+  })
+  it('resumes a page whose merge a cancellation cut, without double counting', async () => {
+    const controller = new AbortController()
+    const rows = Array.from({ length: 8192 }, (_, i) => i % 3000)
+    const source = fromCells(rows, 8192)
+    const index = new ValueIndexCache().open(identity(numeric), source)
+    let yields = 0
+    await expect(index.build({ signal: controller.signal, now: () => 0, yield: async () => { if (++yields === 3) controller.abort() } }))
+      .rejects.toMatchObject({ code: 'cancelled' })
+    expect(index.size).toBeGreaterThan(0)
+    expect(await index.build()).toBe('complete')
+    expect(index.size).toBe(3000)
+    let total = 0
+    for (let offset = 0; offset < 3000; offset += 500) for (const entry of index.page({ offset, limit: 500, label }).entries) total += entry.count
+    expect(total).toBe(8192)
+  })
+  // 4,095 keys end mid-slice; 4,111 yield at 4,096 keys and leave a 15-key stride.
+  it.each([4095, 4111])('accounts the partial key stride at the key-to-search handoff (codex R2, %i keys)', async total => {
+    const strategy = canonicalKeyStrategy(foldVariantOf('en-US'))
+    const { index } = await built(items(total), mixed, 4096, { searchKeys: { strategy } })
+    let keys = 0, searched = 0, last = 0
+    const slices: number[] = []
+    const result = await index.search({ text: 'item', locale: 'en-US' }, {
+      now: () => 0,
+      yield: async () => { slices.push(keys + searched - last); last = keys + searched },
+      onKeyProgress: p => { keys = p.completed },
+      onProgress: p => { searched = p.searched },
+    })
+    expect(result.count).toBe(total)
+    expect(keys).toBe(total)
+    expect(slices.length).toBeGreaterThanOrEqual(1)
+    expect(slices[0]).toBeLessThanOrEqual(4096)
+    slices.push(keys + searched - last)
+    expect(Math.max(...slices)).toBeLessThanOrEqual(4096)
   })
 })

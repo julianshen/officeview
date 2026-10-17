@@ -20,6 +20,7 @@ import type { XlsxSheet } from '../xlsx/types'
 import type { FilterEvaluation, FilterEvaluator } from './viewerSession'
 import { semanticsFor } from '../xlsx/view/semanticsFor'
 import { DisplayTextLaneCache, needsDisplayText } from './displayTextLane'
+import { CooperativeSlice } from '../xlsx/view/scheduler'
 import type { FormatAllocation } from '../xlsx/formula/format'
 
 const LANE_PAGE_ROWS = 4096
@@ -84,11 +85,13 @@ export function createWorkerFilterEvaluator(keysFor: (stamp: SourceStamp) => Rea
   // (apply, clear, apply) classify once instead of re-reading 1M rows each time.
   // Bounded like the main thread's classification cache; 'loading' is never kept.
   const classifications = new Map<string, ColumnClassification>()
-  const classifyCached = async (store: SourceStore, stamp: SourceStamp, col: number, r0: number, r1: number, signal: AbortSignal, cooperate?: ColumnPassPacer): Promise<ColumnClassification> => {
+  const classifyCached = async (store: SourceStore, stamp: SourceStamp, col: number, r0: number, r1: number, signal: AbortSignal, live: () => void, cooperate: ColumnPassPacer): Promise<ColumnClassification> => {
     const key = JSON.stringify([stamp.docId, stamp.sheetId, stamp.valueGen, col, r0, r1])
     const known = classifications.get(key)
     if (known) return known
-    const classification = await classify(store, stamp, col, r0, r1, signal, prepared, cooperate)
+    const classification = await classifyLanePages(accept => pages(store, stamp, col, r0, r1, signal, accept), prepared, live, cooperate)
+    // Only a classification of the still-current owner is cached.
+    live()
     if (classification.kind !== 'loading') {
       if (classifications.size >= CLASSIFICATION_CACHE) classifications.delete(classifications.keys().next().value!)
       classifications.set(key, classification)
@@ -105,9 +108,18 @@ export function createWorkerFilterEvaluator(keysFor: (stamp: SourceStamp) => Rea
     const context: FilterContext = { locale, dateSystem: formatting?.dateSystem ?? '1900', timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone, nowMs }
     const r0 = spec.range.r0 + spec.range.headerRows, r1 = spec.range.r1 - spec.range.totalsRows
     const flags = new Uint8Array(Math.max(0, spec.range.r1 - spec.range.r0 + 1)).fill(1)
+    // One yield budget for the whole call (S4.2): without the session's slice,
+    // classification, display and matching share a host-yield slice.
+    const slice = cooperate ?? new CooperativeSlice<string>({})
+    /** Run after every pause and before caching or publishing: cancellation and owner. */
+    const live = () => {
+      if (signal.aborted) throw new ValueIndexError('cancelled', 'Filter cancelled')
+      const now = store.stamp
+      if (now.docId !== stamp.docId || now.sheetId !== stamp.sheetId || now.valueGen !== stamp.valueGen) throw new ValueIndexError('stale-source', 'Source values changed; retry.')
+    }
     try {
       for (const [col, rule] of spec.columns) {
-        const classification = await classifyCached(store, stamp, col, r0, r1, signal, cooperate)
+        const classification = await classifyCached(store, stamp, col, r0, r1, signal, live, slice)
         if (classification.kind === 'loading') return { kind: 'incomplete', missing: [{ r0, r1, c0: col, c1: col }] }
         const identity: ValueIndexIdentity = { ...stamp, range: spec.range, col, classification, classificationGen: stamp.valueGen }
         const match = rule.kind === 'values'
@@ -121,7 +133,7 @@ export function createWorkerFilterEvaluator(keysFor: (stamp: SourceStamp) => Rea
                 const text = display(page, i, allocation)
                 if (text !== undefined) sink.add(first + i - r0, text)
               })
-              if (cooperate?.due(1)) await cooperate.pause('filter')
+              if (slice.due(1)) { await slice.pause('filter'); live() }
             }
           }), displayLanes)
           : undefined
@@ -130,22 +142,17 @@ export function createWorkerFilterEvaluator(keysFor: (stamp: SourceStamp) => Rea
             for (let i = 0; i < page.count; i++) {
               if (signal.aborted) throw new ValueIndexError('cancelled', 'Filter cancelled')
               if (!match(prepared(page, i, lease?.lane.text(first + i - r0)))) flags[first + i - spec.range.r0] = 0
-              if (cooperate?.due(1)) await cooperate.pause('filter')
+              if (slice.due(1)) { await slice.pause('filter'); live() }
             }
           })
         } finally { lease?.release() }
       }
+      live()
     } catch (cause) {
       return outcome(cause, spec)
-    }
+    } finally { if (!cooperate) slice.dispose() }
     return { kind: 'complete', matches: row => row < spec.range.r0 || row > spec.range.r1 || Boolean(flags[row - spec.range.r0]) }
   }
-}
-
-async function classify(store: SourceStore, stamp: SourceStamp, col: number, r0: number, r1: number, signal: AbortSignal, prepared: Prepare, cooperate?: ColumnPassPacer): Promise<ColumnClassification> {
-  return classifyLanePages(accept => pages(store, stamp, col, r0, r1, signal, accept), prepared, () => {
-    if (signal.aborted) throw new ValueIndexError('cancelled', 'Filter cancelled')
-  }, cooperate)
 }
 
 async function pages(store: SourceStore, stamp: SourceStamp, col: number, r0: number, r1: number, signal: AbortSignal, accept: (page: ValueLanePage, firstRow: number) => Promise<void> | void): Promise<void> {

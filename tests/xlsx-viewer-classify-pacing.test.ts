@@ -21,9 +21,10 @@ function workbook(rows: number): XlsxDocument {
 }
 const range = (rows: number): FilterSpec['range'] => ({ r0: 0, r1: rows, c0: 0, c1: 0, headerRows: 1, totalsRows: 0 })
 /** Counts column rows requested from the store (a page is read just before it is processed). */
-function counted(store: SourceStore, read: { rows: number }): SourceStore {
+function counted(store: SourceStore, read: { rows: number }, owner?: { gen: number }): SourceStore {
   return new Proxy(store, {
     get(target, prop) {
+      if (prop === 'stamp' && owner) return { ...target.stamp, valueGen: target.stamp.valueGen + owner.gen }
       if (prop === 'queryColumn') return (request: { rows: { intervals: { r0: number; r1: number }[] } }, options: never) => {
         for (const { r0, r1 } of request.rows.intervals) read.rows += r1 - r0 + 1
         return target.queryColumn(request as never, options)
@@ -117,7 +118,7 @@ describe('shared column-pass pacing', () => {
     expect(cooperate.due(3000)).toBe(false)
     const page = (rows: number): ValueLanePage => ({ kind: 'values', pageId: 'p', count: rows, tags: new Uint8Array(rows).fill(SOURCE_NUMBER), numbers: new Float64Array(rows), texts: [] })
     const classification = await classifyLanePages(async accept => { for (let p = 0; p < 11; p++) await accept(page(1000)) }, (lane, index) => {
-      if (index === 0) classified += lane.count
+      classified++
       return { kind: 'number', value: lane.numbers[index] }
     }, () => {}, cooperate)
     expect(classification).toEqual({ kind: 'number', hasNumeric: true })
@@ -125,5 +126,76 @@ describe('shared column-pass pacing', () => {
     expect(slices[0]).toBe(0) // the carried work yielded before this pass started
     expect(slices.length - 1).toBeGreaterThanOrEqual(3)
     expect(Math.max(...slices)).toBeLessThanOrEqual(4096)
+  })
+})
+
+describe('review round (codex R1, R3, R4)', () => {
+  const numberRule = (rows: number): FilterSpec => ({ range: range(rows), columns: new Map([[0, { kind: 'number', op: 'gt', first: 10 }]]) })
+  it('splits one 8,192-entry page: the first yield comes before 8,192 entries are classified (R1)', async () => {
+    let classified = 0
+    const firsts: number[] = []
+    const cooperate = new CooperativeSlice<'filter'>({ now: () => 0, yield: async () => { firsts.push(classified) } })
+    const page: ValueLanePage = { kind: 'values', pageId: 'p', count: 8192, tags: new Uint8Array(8192).fill(SOURCE_NUMBER), numbers: new Float64Array(8192), texts: [] }
+    await classifyLanePages(async accept => { await accept(page) }, (lane, index) => { classified++; return { kind: 'number', value: lane.numbers[index] } }, () => {}, cooperate)
+    expect(classified).toBe(8192)
+    expect(firsts[0]).toBeLessThanOrEqual(4096)
+  })
+  it('cancels a warm-cache filter with no session slice through a queued macrotask abort (R3)', async () => {
+    const rows = 10_240, read = { rows: 0 }, controller = new AbortController()
+    const store = counted(createObjectWorkbookSource(workbook(rows), 'd').store('s'), read)
+    const evaluate = createWorkerFilterEvaluator(() => new Map())
+    // Warm the classification cache (the values rule then refuses for missing keys).
+    expect((await evaluate({ store, spec: unshipped(rows), nowMs: 0, signal: new AbortController().signal })).kind).toBe('refused')
+    read.rows = 0
+    setImmediate(() => controller.abort())
+    expect((await evaluate({ store, spec: numberRule(rows), nowMs: 0, signal: controller.signal })).kind).toBe('cancelled')
+    expect(read.rows).toBeLessThanOrEqual(4096)
+  })
+  it('reports stale-source when the owner changes during a classification pause, and caches nothing (R4)', async () => {
+    // One page: no later page read would notice the change.
+    const rows = 4096, read = { rows: 0 }, owner = { gen: 0 }
+    const store = counted(createObjectWorkbookSource(workbook(rows), 'd').store('s'), read, owner)
+    const evaluate = createWorkerFilterEvaluator(() => new Map())
+    let pauses = 0
+    const cooperate = new CooperativeSlice<string>({ now: () => 0, yield: async () => { if (++pauses === 1) owner.gen = 1 } })
+    expect(await evaluate({ store, spec: unshipped(rows), nowMs: 0, signal: new AbortController().signal, cooperate })).toMatchObject({ kind: 'error', error: { code: 'stale-source' } })
+    owner.gen = 0
+    read.rows = 0
+    expect((await evaluate({ store, spec: unshipped(rows), nowMs: 0, signal: new AbortController().signal })).kind).toBe('refused')
+    // The column was classified again: no stale classification was cached.
+    expect(read.rows).toBe(rows)
+  })
+  it.each(['stale', 'abort'] as const)('re-checks the owner and cancellation after the final match pause (R4, %s)', async change => {
+    const rows = 4096, owner = { gen: 0 }, controller = new AbortController()
+    const store = counted(createObjectWorkbookSource(workbook(rows), 'd').store('s'), { rows: 0 }, owner)
+    const evaluate = createWorkerFilterEvaluator(() => new Map())
+    let pauses = 0
+    // Pause 1 ends classification; pause 2 follows the last matched row.
+    const cooperate = new CooperativeSlice<string>({ now: () => 0, yield: async () => {
+      if (++pauses === 2) { if (change === 'stale') owner.gen = 1; else controller.abort() }
+    } })
+    const outcome = await evaluate({ store, spec: numberRule(rows), nowMs: 0, signal: controller.signal, cooperate })
+    expect(pauses).toBe(2)
+    if (change === 'stale') expect(outcome).toMatchObject({ kind: 'error', error: { code: 'stale-source' } })
+    else expect(outcome.kind).toBe('cancelled')
+  })
+  it('main thread: an owner change during a classification yield is stale-source and caches nothing (R4)', async () => {
+    const rows = 4096, read = { rows: 0 }, owner = { gen: 0 }
+    const doc = workbook(rows), base = createObjectWorkbookSource(doc, 'd')
+    const source = { ...base, store: (id: string) => counted(base.store(id), read, owner) } as typeof base
+    let view: SheetView = { sheetId: 's', revision: 0, order: createIdentityOrder(), baseHidden: createIntervalSet([]), visibility: visibilityFromHidden(createIntervalSet([])), sort: null, filter: null, selection: emptyGridSelection() }
+    const ownerOf = () => ({ docId: 'd', sheetId: 's', valueGen: base.store('s').stamp.valueGen, fontGen: 0, viewGen: 0 })
+    const snapshot = () => ({ owner: ownerOf(), filter: null, sort: null, records: { visible: rows + 1, total: rows + 1, completeness: 'complete' as const } })
+    const controls = await viewerControls({ doc, source, sheetId: 's', snapshot, view: () => view, publish: next => { view = { ...view, ...next }; return snapshot() } }, new AbortController().signal)
+    read.rows = 0
+    setImmediate(() => { owner.gen = 1 })
+    const error = await controls.client.values(ownerOf(), range(rows), 0, null, new AbortController().signal).then(() => null, cause => cause)
+    expect(error).toMatchObject({ code: 'stale-source' })
+    owner.gen = 0
+    read.rows = 0
+    const draft = await controls.client.values(ownerOf(), range(rows), 0, null, new AbortController().signal)
+    expect(read.rows).toBeGreaterThanOrEqual(rows)
+    draft.cancel()
+    controls.dispose()
   })
 })

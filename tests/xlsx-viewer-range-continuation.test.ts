@@ -79,7 +79,7 @@ describe('detection scanner continuation scope', () => {
   it('a continuation token resumed with another range or limit is a RangeError, like any PopulatedCellSource cursor', async () => {
     const { store } = await objectStore(table(30, 8))
     const options = { signal: new AbortController().signal, stamp: { ...store.stamp } }
-    const scanner = new Scanner(store, options, { tick: async () => {}, charge: () => {} } as never, Number.POSITIVE_INFINITY)
+    const scanner = new Scanner(store, options, { tick: async () => {}, spend: () => false, yield: async () => {}, reserve: async () => {} } as never, Number.POSITIVE_INFINITY)
     const rect = { r0: 0, r1: 30, c0: 0, c1: 7 }
     const first = await scanner.page(rect, 8)
     expect(first.nextCursor).toBeDefined()

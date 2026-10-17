@@ -236,13 +236,17 @@ export async function viewerControls(options: ViewerControlsOptions, signal: Abo
       }
     }
   }
+  /** Run after every pause and before caching: cancellation, disposal and owner. */
+  const current = (owner: CacheIdentity, abort: AbortSignal) => {
+    abort.throwIfAborted()
+    if (disposed || resources.closed) throw new ValueIndexError('cancelled', 'Controls disposed')
+    if (!sameControlOwner(owner, options.snapshot().owner) || !sameStamp(owner, store.stamp)) throw new ValueIndexError('stale-source', 'Source or view changed; retry.')
+  }
   const classify = async (owner: CacheIdentity, range: FilterRange, col: number, abort: AbortSignal, cooperate?: ColumnPassPacer) => {
     const key = scope(owner, range, col)
     if (classifications.has(key)) return
-    const classification = await classifyLanePages(accept => pages(owner, range, col, abort, accept), prepared, () => {
-      abort.throwIfAborted()
-      if (disposed || resources.closed) throw new ValueIndexError('cancelled', 'Controls disposed')
-    }, cooperate)
+    const classification = await classifyLanePages(accept => pages(owner, range, col, abort, accept), prepared, () => current(owner, abort), cooperate)
+    current(owner, abort)
     if (classifications.size >= 64) classifications.delete(classifications.keys().next().value!)
     classifications.set(key, classification)
   }
@@ -329,7 +333,7 @@ export async function viewerControls(options: ViewerControlsOptions, signal: Abo
                 for (let i = 0; i < page.count; i++) {
                   request.throwIfAborted()
                   display(page, i, text => sink.add(first + i - r0, text))
-                  if (cooperate?.due(1)) await cooperate.pause('filter')
+                  if (cooperate?.due(1)) { await cooperate.pause('filter'); current(owner, request) }
                 }
               }))
               : undefined
@@ -343,7 +347,7 @@ export async function viewerControls(options: ViewerControlsOptions, signal: Abo
               for (let i = 0; i < page.count; i++) {
                 request.throwIfAborted()
                 if (!match(prepared(page, i, lease?.lane.text(first + i - r0)))) state.flags![first + i - filter.range.r0] = 0
-                if (cooperate?.due(1)) await cooperate.pause('filter')
+                if (cooperate?.due(1)) { await cooperate.pause('filter'); current(owner, request) }
               }
             })
           } finally { lease?.release(); membership?.release() }
