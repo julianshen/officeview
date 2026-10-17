@@ -14,7 +14,7 @@ import type { RenderSheetAssets } from '../../xlsx/render'
 import { renderSheetViewport } from '../../xlsx/view/renderViewport'
 import { paintWatermark, type ResolvedWatermark } from '../../core/watermark'
 import { LayoutAdmissionError, type LayoutAdmission, type LayoutCache } from '../../xlsx/view/textLayout'
-import { emptyWork, frameBudgetFor, type FrameBudget, type MergeQueryCache, type SheetGeometryResult, type ViewportPlan } from '../../xlsx/view/viewport'
+import { emptyWork, frameBudgetFor, planViewport, type FrameBudget, type MergeQueryCache, type SheetGeometryResult, type ViewportPlan } from '../../xlsx/view/viewport'
 import {
   BITMAP_BUDGETS, bitmapPoolPlan, MemoryPool, RGBA_BYTES, TILE_DEVICE_PX, TILE_PREFETCH_RING, TileCache,
   prefetchTiles, tileLogicalBox, tileRangeFor, type TileIndexRange, type TileKey, type TileSurface,
@@ -166,7 +166,7 @@ export class SheetTileRenderer {
             // declared pending tone and the frame reports the resource notice.
             target.fillStyle = PENDING_FILL
             target.fillRect(col * TILE_DEVICE_PX - px, row * TILE_DEVICE_PX - py, TILE_DEVICE_PX, TILE_DEVICE_PX)
-            resourceNotice ??= TILE_REFUSED
+            resourceNotice ??= tile.notice ?? TILE_REFUSED
             continue
           }
           resourceNotice ??= tile.surface.cost?.resourceNotice
@@ -239,7 +239,7 @@ export class SheetTileRenderer {
     return { identity: frame.identity, backend: TILE_BACKEND, zoom: frame.zoom, dpr: frame.dpr, col, row }
   }
 
-  private tile(frame: SheetFrame, col: number, row: number, visible: boolean, budget: FrameBudget): { surface: CanvasTile | null; retained: boolean } {
+  private tile(frame: SheetFrame, col: number, row: number, visible: boolean, budget: FrameBudget): { surface: CanvasTile | null; retained: boolean; notice?: string } {
     const key = this.key(frame, col, row)
     const cached = this.cache.get(key) as CanvasTile | undefined
     const cost = cached?.cost
@@ -254,7 +254,13 @@ export class SheetTileRenderer {
     // A new tile's canvas/context (main heap, outside its bitmap) is admitted
     // before it exists; refused, the caller paints the area as a resource notice.
     const admission = frame.layoutAdmission
-    if (admission && !admission.admit(TILE_CANVAS_BYTES)) return { surface: null, retained: false }
+    if (admission && !admission.admit(TILE_CANVAS_BYTES)) {
+      // The planner's own resource diagnosis (no canvas needed) keeps its
+      // precedence over the generic notice.
+      const box = tileLogicalBox(col, row, frame.zoom, frame.dpr)
+      const plan = frame.plan?.({ box, zoom: frame.zoom, deviceScale: frame.dpr }, visible) ?? planViewport(frame.geometry, { box, zoom: frame.zoom, deviceScale: frame.dpr }, this.profile, { merges: frame.merges })
+      return { surface: null, retained: false, notice: plan.diagnostics.find(d => d.code === 'overflow-memory')?.message ?? TILE_REFUSED }
+    }
     let nativeHeld = admission ? TILE_CANVAS_BYTES : 0
     const surface = this.createTile()
     if (admission) {
