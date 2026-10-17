@@ -201,7 +201,7 @@ describe('confirmation r6: repaint memory is admitted per record at construction
   const heavy = (row: number, col: number) => ({ ...cell(row, col, 'a\n'.repeat(9000)), style: { numFmtId: 0, wrapText: true } })
   const layoutMemoryNotice = (ui: RenderResult) => /Not enough memory to lay out this text/.test(status(ui)) || ui.container.querySelectorAll('canvas').length > 0
 
-  it('R1 three adjacent 18,000-unit wrapped cells (22 MiB free): the tile batch never holds more than admitted', FIRST_PAINT_TEST, async () => {
+  it('R1 three adjacent 18,000-unit wrapped cells (22 MiB free): the tile batch never holds more than admitted', { timeout: 120_000 }, async () => {
     const doc = docOf([{ index: 0, cells: [heavy(0, 0), heavy(0, 1), heavy(0, 2)] }])
     let peakOk = true
     const f = frames()
@@ -261,6 +261,23 @@ describe('confirmation r6: repaint memory is admitted per record at construction
     await settle(); await settle()
     check()
     expect(status(view)).toMatch(/Not enough memory to lay out this text/)
+    live!.set('copy', 'filler', 0)
+  })
+})
+
+describe('confirmation r7 R2: tile context and text shaping are admitted before drawing', () => {
+  it('scrolling ordinary text with 64 KiB free never passes the hard limit (shaping refused: coarse tile)', FIRST_PAINT_TEST, async () => {
+    const rows: XlsxRow[] = Array.from({ length: 400 }, (_, index) => ({ index, cells: Array.from({ length: 12 }, (_, col) => cell(index, col, `t${index}-${col}`)) }))
+    let live: MainMemoryLedger | undefined
+    const f = frames()
+    const view = render(<InteractiveSheetDoc doc={docOf(rows)} views={{ s: { revision: 0 } }} onMainLedger={value => { live = value }} onFrame={f.onFrame} />)
+    await waitFor(() => expect(f.last()?.basePaints ?? 0).toBeGreaterThan(0), FIRST_PAINT_WAIT)
+    await settle()
+    const check = squeeze(live!, 64 * 1024)
+    const scroller = view.getByTestId('officeview-sheet-scroller')
+    for (const top of [2000, 4000, 6000]) { act(() => { scroller.scrollTop = top; fireEvent.scroll(scroller) }); await settle() }
+    await settle()
+    check()
     live!.set('copy', 'filler', 0)
   })
 })

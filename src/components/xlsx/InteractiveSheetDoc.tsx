@@ -578,6 +578,7 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
       release: bytes => { held = Math.max(0, held - bytes); publish() },
       hold: bytes => { held += bytes; publish() },
       cacheChanged: delta => mainLedger.set('layout', 'caches', Math.max(0, mainLedger.ownerBytes('layout', 'caches') + delta)),
+      nativeChanged: delta => mainLedger.set('canvasText', 'tiles', Math.max(0, mainLedger.ownerBytes('canvasText', 'tiles') + delta)),
     }
   }, [mainLedger, budgetProfile])
   useEffect(() => () => workerPlans?.dispose(), [workerPlans])

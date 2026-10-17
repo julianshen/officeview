@@ -13,8 +13,8 @@ import type { CacheIdentity, LogicalCellBox, LogicalViewport, ProfileId } from '
 import type { RenderSheetAssets } from '../../xlsx/render'
 import { renderSheetViewport } from '../../xlsx/view/renderViewport'
 import { paintWatermark, type ResolvedWatermark } from '../../core/watermark'
-import type { LayoutAdmission, LayoutCache } from '../../xlsx/view/textLayout'
-import { frameBudgetFor, type FrameBudget, type MergeQueryCache, type SheetGeometryResult, type ViewportPlan } from '../../xlsx/view/viewport'
+import { LayoutAdmissionError, type LayoutAdmission, type LayoutCache } from '../../xlsx/view/textLayout'
+import { emptyWork, frameBudgetFor, type FrameBudget, type MergeQueryCache, type SheetGeometryResult, type ViewportPlan } from '../../xlsx/view/viewport'
 import {
   BITMAP_BUDGETS, bitmapPoolPlan, MemoryPool, RGBA_BYTES, TILE_DEVICE_PX, TILE_PREFETCH_RING, TileCache,
   prefetchTiles, tileLogicalBox, tileRangeFor, type TileIndexRange, type TileKey, type TileSurface,
@@ -161,6 +161,14 @@ export class SheetTileRenderer {
       for (let row = visible.r0; row <= visible.r1; row++) {
         for (let col = visible.c0; col <= visible.c1; col++) {
           const tile = this.tile(frame, col, row, true, budget)
+          if (!tile.surface) {
+            // The tile's context could not be admitted: its area shows the
+            // declared pending tone and the frame reports the resource notice.
+            target.fillStyle = PENDING_FILL
+            target.fillRect(col * TILE_DEVICE_PX - px, row * TILE_DEVICE_PX - py, TILE_DEVICE_PX, TILE_DEVICE_PX)
+            resourceNotice ??= TILE_REFUSED
+            continue
+          }
           resourceNotice ??= tile.surface.cost?.resourceNotice
           records += tile.surface.cost?.records ?? 0
           gridlines += tile.surface.cost?.gridlines ?? 0
@@ -207,6 +215,7 @@ export class SheetTileRenderer {
       if (this.cache.get(this.key(frame, col, row))) continue
       if (paintedNow > 0 && shouldYield()) { this.stats.prefetchRecords = batch.records; return false }
       const tile = this.tile(frame, col, row, false, batch.budget)
+      if (!tile.surface) break // not admitted: prefetch stops for this batch
       batch.records += tile.surface.cost?.records ?? 0
       paintedNow++
       if (!tile.retained) { tile.surface.close(); break }
@@ -230,7 +239,7 @@ export class SheetTileRenderer {
     return { identity: frame.identity, backend: TILE_BACKEND, zoom: frame.zoom, dpr: frame.dpr, col, row }
   }
 
-  private tile(frame: SheetFrame, col: number, row: number, visible: boolean, budget: FrameBudget): { surface: CanvasTile; retained: boolean } {
+  private tile(frame: SheetFrame, col: number, row: number, visible: boolean, budget: FrameBudget): { surface: CanvasTile | null; retained: boolean } {
     const key = this.key(frame, col, row)
     const cached = this.cache.get(key) as CanvasTile | undefined
     const cost = cached?.cost
@@ -242,7 +251,18 @@ export class SheetTileRenderer {
       if (visible) this.stats.tileHits++
       return { surface: cached, retained: true }
     }
+    // A new tile's canvas/context (main heap, outside its bitmap) is admitted
+    // before it exists; refused, the caller paints the area as a resource notice.
+    const admission = frame.layoutAdmission
+    if (admission && !admission.admit(TILE_CANVAS_BYTES)) return { surface: null, retained: false }
+    let nativeHeld = admission ? TILE_CANVAS_BYTES : 0
     const surface = this.createTile()
+    if (admission) {
+      // Until the tile is retained (then the canvas-text charge owns it) or
+      // closed, its admitted context/shaping bytes stay held.
+      const close = surface.close.bind(surface)
+      surface.close = () => { if (nativeHeld) { admission.release(nativeHeld); nativeHeld = 0 } close() }
+    }
     this.stats.peakBitmapBytes = Math.max(this.stats.peakBitmapBytes, this.bitmapBytes() + TILE_BYTES)
     const ctx = surface.canvas.getContext('2d')
     const box = tileLogicalBox(col, row, frame.zoom, frame.dpr)
@@ -253,7 +273,7 @@ export class SheetTileRenderer {
     let work: NonNullable<CanvasTile['cost']> = { records: 0, gridlines: 0 }
     // Distinct texts this tile's context shapes: the browser keeps each one
     // (per font) while the canvas lives, outside the bitmap.
-    const shaped = ctx ? countShapedTexts(ctx) : null
+    const shaped = ctx ? countShapedTexts(ctx, admission ? bytes => { if (!admission.admit(bytes)) throw new LayoutAdmissionError(); nativeHeld += bytes } : undefined) : null
     // Row reads are asked for before any worker plan: both spend one frame
     // page budget, and the row cache's reads also make the cells known for
     // the accessible grid. Asked even for a tile that ends up pending: a
@@ -271,10 +291,19 @@ export class SheetTileRenderer {
           plan = { kind: 'coarse', diagnostics: [], groups: [{ groupId: 'frame-budget', bounds: box, slots: { start: 0, end: 0 }, cols: { c0: 0, c1: 0 } }], extent: frame.extent, work: { ...plan.work, records: 0, gridlines: 0 } }
         } else { budget.records -= plan.work.records; budget.gridlines -= plan.work.gridlines }
       }
-      const result = renderSheetViewport(frame.sheet, ctx, frame.geometry, viewport, frame.assets, {
-        preparedPlan: plan, profile: this.profile, owner: frame.identity, cache: frame.layoutCache, merges: frame.merges, frameBudget: budget,
-        ...(frame.layoutAdmission ? { layoutAdmission: frame.layoutAdmission } : {}),
-      })
+      let result: ReturnType<typeof renderSheetViewport>
+      try {
+        result = renderSheetViewport(frame.sheet, ctx, frame.geometry, viewport, frame.assets, {
+          preparedPlan: plan, profile: this.profile, owner: frame.identity, cache: frame.layoutCache, merges: frame.merges, frameBudget: budget,
+          ...(admission ? { layoutAdmission: admission } : {}),
+        })
+      } catch (error) {
+        // Text shaping on this tile's context was not admitted: the declared
+        // coarse resource outcome (no further text is shaped for it).
+        if (!(error instanceof LayoutAdmissionError) || !shaped) throw error
+        shaped.paintNotice(error.message, box)
+        result = { kind: 'coarse', diagnostics: [{ code: 'layout-memory', message: error.message }], records: [], coarse: [], work: emptyWork() }
+      }
       kind = result.pending ? 'pending' : result.kind
       const resource = result.diagnostics.find(d => d.code === 'overflow-memory' || d.code === 'layout-memory')
       if (resource) work.resourceNotice = resource.message
@@ -285,7 +314,7 @@ export class SheetTileRenderer {
     if (kind === 'pending' || kind === 'diagnostic') { if (visible) this.stats.pendingTiles++; return { surface, retained: false } }
     if (pending.length) {
       if (visible) this.stats.pendingTiles++
-      if (ctx) paintPending(ctx, box, pending)
+      if (ctx) { try { paintPending(ctx, box, pending) } catch (error) { if (!(error instanceof LayoutAdmissionError)) throw error } }
       return { surface, retained: false }
     }
     if (work.resourceNotice) return { surface, retained: false }
@@ -296,10 +325,13 @@ export class SheetTileRenderer {
     if (!retained) this.stats.refused++
     else {
       const bytes = TILE_CANVAS_BYTES + (shaped?.bytes ?? 0)
+      // Ownership moves from the paint hold to the canvas-text charge
+      // (released first, so the ledger never counts it twice).
+      if (admission) { admission.release(nativeHeld); nativeHeld = 0; admission.nativeChanged?.(bytes) }
       this.shapeBytes += bytes
       const close = surface.close.bind(surface)
       let open = true
-      surface.close = () => { if (open) { open = false; this.shapeBytes -= bytes } close() }
+      surface.close = () => { if (open) { open = false; this.shapeBytes -= bytes; admission?.nativeChanged?.(-bytes) } close() }
     }
     return { surface, retained }
   }
@@ -308,28 +340,46 @@ export class SheetTileRenderer {
 /** Counts, per font, the distinct (direction, text) entries a context draws or
  * measures from now on (the browser keeps one shaping cache per font a context
  * used, keyed by text and direction), as estimated shaping bytes. */
-function countShapedTexts(ctx: CanvasRenderingContext2D): { readonly bytes: number } {
+function countShapedTexts(ctx: CanvasRenderingContext2D, admit?: (bytes: number) => void): { readonly bytes: number; paintNotice(text: string, box: LogicalCellBox): void } {
   const fonts = new Map<string, { seen: Set<string>; units: number }>()
   const out = { bytes: 0 }
+  // Each new (font, direction, text) is admitted BEFORE the browser shapes it
+  // (O(1)); a refusal throws before drawing or measuring.
   const note = (text: string) => {
     let font = fonts.get(ctx.font)
     if (!font) fonts.set(ctx.font, font = { seen: new Set(), units: 0 })
     const key = `${ctx.direction}\u0000${text}`
     if (font.seen.has(key)) return
-    out.bytes -= shapeCacheBytes(font.seen.size, font.units)
+    const grown = shapeCacheBytes(font.seen.size + 1, font.units + text.length) - shapeCacheBytes(font.seen.size, font.units)
+    admit?.(grown)
     font.seen.add(key)
     font.units += text.length
-    out.bytes += shapeCacheBytes(font.seen.size, font.units)
+    out.bytes += grown
   }
   const fillText = ctx.fillText.bind(ctx), measureText = ctx.measureText.bind(ctx)
   ctx.fillText = (text: string, x: number, y: number, maxWidth?: number) => { note(text); if (maxWidth === undefined) fillText(text, x, y); else fillText(text, x, y, maxWidth) }
   ctx.measureText = (text: string) => { note(text); return measureText(text) }
-  return out
+  return Object.assign(out, {
+    /** The coarse resource notice, drawn with the unadmitted native call: one
+     * short label whose shaping the TILE_CANVAS_BYTES context charge covers. */
+    paintNotice(text: string, box: LogicalCellBox) {
+      ctx.save()
+      ctx.setTransform(1, 0, 0, 1, 0, 0)
+      ctx.fillStyle = PENDING_FILL
+      ctx.fillRect(0, 0, ctx.canvas.width, ctx.canvas.height)
+      ctx.fillStyle = '#666666'
+      ctx.font = '12px sans-serif'
+      fillText(text, 8, 20)
+      ctx.restore()
+      void box
+    },
+  })
 }
 
 /** Unknown records are loading, never blank (spec §§4.1, 10.4): a neutral tone
  * and one notice. ctx carries the tile's logical scale; boxes are logical. */
 const PENDING_FILL = '#eceff3'
+const TILE_REFUSED = 'Not enough memory to lay out this text; zoom in or close other views.'
 function paintPending(ctx: CanvasRenderingContext2D, box: LogicalCellBox, pending: readonly LogicalCellBox[]): void {
   ctx.save()
   try {

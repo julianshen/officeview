@@ -36,7 +36,10 @@ export function createCellLayoutHost(ctx: CanvasRenderingContext2D, sheet: Parti
       try { text = cellDisplayText(target, cell, allocation) } catch (error) { release(); throw error }
       // General numbers fit the box (width-dependent): the layout formats those
       // itself (bounded); every other value reuses this single admitted pass.
-      const general = typeof cell.value === 'number' && (cell.style?.numFmtId ?? 0) === 0
+      // Same precedence as renderCellText: an authored format code decides
+      // before the built-in id (only a General code or none refits).
+      const code = cell.style?.formatCode
+      const general = typeof cell.value === 'number' && (cell.style?.numFmtId ?? 0) === 0 && (code === undefined || /^\s*general\s*$/i.test(code))
       return { units: Math.max(text.length, typeof cell.value === 'number' ? Math.ceil(width / 2) + 1 : 0), ...(general ? {} : { text }), release }
     },
     canReuseOverflow: (body, overflow) => {

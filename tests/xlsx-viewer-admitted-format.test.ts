@@ -9,7 +9,7 @@ import { describe, expect, it, vi } from 'vitest'
 import { createCanvas } from 'canvas'
 import * as format from '../src/xlsx/formula/format'
 import { createCellLayoutHost } from '../src/xlsx/view/renderViewport'
-import { LayoutCache, type LayoutAdmission, type PlacedCell } from '../src/xlsx/view/textLayout'
+import { LayoutCache, estimateLayoutBytes, type LayoutAdmission, type PlacedCell } from '../src/xlsx/view/textLayout'
 import { hitGeometry, type FindHit } from '../src/xlsx/view/find'
 import { createAxisMetrics } from '../src/xlsx/view/axes'
 import { createSheetMetrics } from '../src/xlsx/view/projection'
@@ -49,6 +49,60 @@ describe('a cache miss formats its text once', () => {
     expect(spy).toHaveBeenCalledTimes(1)
     expect(gate.held()).toBe(0)
     spy.mockRestore()
+  })
+})
+
+describe('confirmation r7', () => {
+  it('R4 an authored numeric format without a built-in id is formatted once per miss', () => {
+    const spy = vi.spyOn(format, 'formatCommon')
+    const cache = new LayoutCache()
+    const cell: XlsxCell = { ref: 'A1', row: 0, col: 0, value: 3, styleIndex: 0, style: { formatCode: '0.00" u"' } as XlsxCell['style'] }
+    const gate = admission()
+    cache.beginBatch(gate)
+    const body = cache.layout(owner, { cell, source: { row: 0, col: 0 }, x: 0, y: 0, width: 400, height: 20 }, host())
+    cache.endBatch()
+    expect(body.formattedText).toBe('3.00 u')
+    expect(spy).toHaveBeenCalledTimes(1)
+    spy.mockRestore()
+  })
+
+  it('R1 a warm hit used by the batch keeps its bytes owned by the batch when a later miss evicts it', () => {
+    const fake: import('../src/xlsx/view/textLayout').CellLayoutHost = { layoutBody: (cell, w, h) => ({ x: 0, y: 0, w, h, formattedText: String(cell.value) }) as never }
+    const placed = (col: number) => ({ cell: { ref: '', row: 0, col, value: 'z'.repeat(1000), styleIndex: 0 } as XlsxCell, source: { row: 0, col }, x: 0, y: 0, width: 64, height: 20 })
+    const one = estimateLayoutBytes(`|0,0|64|20||${''}|string:${'z'.repeat(1000)}`, { x: 0, y: 0, w: 64, h: 20, formattedText: 'z'.repeat(1000) })
+    const cache = new LayoutCache(100, Math.floor(one * 2.5))
+    const gate = admission()
+    cache.beginBatch(gate); cache.layout(owner, placed(0), fake); cache.layout(owner, placed(1), fake); cache.endBatch()
+    expect(gate.held()).toBe(0)
+    cache.beginBatch(gate)
+    cache.layout(owner, placed(0), fake) // warm hit, now held by the batch's records
+    cache.layout(owner, placed(1), fake) // warm hit
+    cache.layout(owner, placed(2), fake) // miss: evicts the LRU hit (col 0)
+    // The evicted hit is still alive in this batch: its bytes moved to the batch hold.
+    expect(gate.held()).toBeGreaterThanOrEqual(one * 0.9)
+    cache.endBatch()
+    expect(gate.held()).toBe(0)
+  })
+
+  it('R3 a formatting refusal evicts idle layout entries and retries before failing', () => {
+    let cached = 0, held = 0
+    const limit = { value: Infinity }
+    const gate: LayoutAdmission = {
+      admit: bytes => { if (held + cached + bytes > limit.value) return false; held += bytes; return true },
+      release: bytes => { held -= bytes }, hold: bytes => { held += bytes }, cacheChanged: delta => { cached += delta },
+    }
+    const cache = new LayoutCache()
+    cache.beginBatch(gate)
+    for (let col = 1; col <= 48; col++) cache.layout(owner, { cell: { ref: '', row: 0, col, value: 'i'.repeat(4000), styleIndex: 0 }, source: { row: 0, col }, x: 0, y: 0, width: 64, height: 20 }, host())
+    cache.endBatch()
+    expect(cached).toBeGreaterThan(0)
+    limit.value = cached + 8 * 1024
+    const heavy: XlsxCell = { ref: 'A1', row: 0, col: 0, value: 'w'.repeat(64), styleIndex: 0, style: { numFmtId: 164, formatCode: `0;0;0;${'@'.repeat(64)}` } }
+    cache.beginBatch(gate)
+    const body = cache.layout(owner, { cell: heavy, source: { row: 0, col: 0 }, x: 0, y: 0, width: 64, height: 20 }, host())
+    cache.endBatch()
+    expect(body.formattedText.length).toBe(64 * 64)
+    expect(cache.stats.evicted).toBeGreaterThan(0)
   })
 })
 

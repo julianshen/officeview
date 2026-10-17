@@ -110,6 +110,8 @@ export interface LayoutAdmission {
   release(bytes: number): void
   hold(bytes: number): void
   cacheChanged(delta: number): void
+  /** Retained tile context/shaping bytes changed (the canvas-text charge). */
+  nativeChanged?(delta: number): void
 }
 /** A record could not be admitted even after evicting the cache: the caller
  * paints the tile's declared coarse/notice path instead. */
@@ -182,6 +184,9 @@ export class LayoutCache {
       this.entries.delete(key)
       this.entries.set(key, hit)
       this.stats.reused++
+      // The batch now holds this body too: should a later miss evict it, its
+      // bytes move to the batch hold until the tile is painted.
+      this.batch?.keys.add(key)
       return hit
     }
     const batch = this.batch
@@ -191,7 +196,12 @@ export class LayoutCache {
       // Admission BEFORE construction: the painted text, formatted once under
       // the batch's allocation observer, then the record's bound, evicting
       // least recently used entries until it fits.
-      painted = host.paintedText?.(placed.cell, placed.width, batch.admission)
+      // Formatting workspace follows the same policy: a refusal evicts least
+      // recently used entries and retries (a partial attempt is released first).
+      for (;;) {
+        try { painted = host.paintedText?.(placed.cell, placed.width, batch.admission); break }
+        catch (error) { if (!(error instanceof LayoutAdmissionError) || !this.evictOldest()) throw error }
+      }
       upper = layoutUpperBytes(painted ? painted.units : rawTextOf(placed.cell.value).length, key.length + (sharedKey?.length ?? 0))
       try { while (!batch.admission.admit(upper)) if (!this.evictOldest()) throw new LayoutAdmissionError() }
       catch (error) { painted?.release(); throw error }
