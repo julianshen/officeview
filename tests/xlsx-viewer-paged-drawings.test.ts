@@ -25,6 +25,7 @@ import { DOCUMENT_DRAWING_NODE_LIMIT } from '../src/drawing/parts'
 import { countXmlElements, loadPagedSheetDrawings, pagedDrawingLimits } from '../src/xlsx/storage/pagedDrawings'
 import { RemoteDrawingCache } from '../src/worker/viewerRemoteDrawings'
 import { estimatePayloadBytes } from '../src/xlsx/view/mainLedger'
+import { drawingOwnerMetadataBytes } from '../src/xlsx/view/drawingOwners'
 import v8 from 'node:v8'
 import vm from 'node:vm'
 import { xlsxEntries } from './helpers/xlsx-package'
@@ -391,6 +392,7 @@ async function collectDrawingReplies(): Promise<void> {
   for (let i = 0; i < 6; i++) { gc(); await new Promise(resolve => setTimeout(resolve, 10)) }
 }
 const drawingBytes = (remote: RemoteWorkbook) => remote.mainLedger.snapshot().byPool.drawings
+const drawingReplyBytes = (reply: unknown) => estimatePayloadBytes(reply) + drawingOwnerMetadataBytes((reply as { result: { result: { result: { drawings: object } } } }).result.result.result.drawings)
 
 describe('paged drawing main-ledger attribution', () => {
   it('names actual drawing replies, keeps row replies generic and preserves the original byte estimate and lease', async () => {
@@ -399,7 +401,7 @@ describe('paged drawing main-ledger attribution', () => {
     await collectDrawingReplies()
     const base = ledger.snapshot()
     let drawingReply: unknown = await remote.request({ kind: 'read', requestId: remote.nextRequestId(), owner: remote.identity('1'), query: { op: 'drawings' } })
-    const bytes = estimatePayloadBytes(drawingReply)
+    const bytes = drawingReplyBytes(drawingReply)
     expect(drawingBytes(remote)).toBe(bytes)
     expect(ledger.snapshot().byPool.replies).toBe(base.byPool.replies)
     expect(ledger.snapshot().bytes - base.bytes).toBe(bytes)
@@ -440,7 +442,7 @@ describe('paged drawing main-ledger attribution', () => {
       request: async (command, signal) => {
         const reply = await remote.request(command, signal)
         expect(reply).toMatchObject({ kind: 'complete', result: { kind: 'read', result: { op: 'drawings' } } })
-        expectedBytes.set(command.owner.sheetId, estimatePayloadBytes(reply))
+        expectedBytes.set(command.owner.sheetId, drawingReplyBytes(reply))
         return reply
       },
       nextRequestId: () => remote.nextRequestId(), changed: () => {},

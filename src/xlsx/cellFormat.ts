@@ -160,7 +160,7 @@ export function formatColor(value: ElementValue, code: string, allocation?: Form
  * Elapsed-duration formats retain their existing signed display contract. */
 export function negativeDateOverflow(value: number, code: string, semantics: ResolvedSemantics, allocation?: FormatAllocation): boolean {
   if (!(value < 0) || semantics.dateSystem !== '1900') return false
-  allocation?.allocate(128 * code.length + 1024) // all sections, including discarded tails and padding expansions
+  allocation?.allocate(24 * sectionUnits(code) + 512) // retained section bodies, expansions, and records
   const list = sections(code), { index } = select(value, list)
   if (index < 0 || list.some(section => section.unsupported)) return false
   const body = list[index].body

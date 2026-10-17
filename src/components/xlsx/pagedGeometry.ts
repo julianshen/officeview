@@ -78,9 +78,10 @@ export function pagedSheetGeometry(remote: RemoteWorkbook, sheetId: string, orde
         if (remote.mainLedger.bytes + workspace > MAIN_THREAD_BUDGETS[remote.profile]) return null
         const owner = `late-placement:${++latePlacements}`
         remote.mainLedger.set('drawings', owner, workspace)
-        try { sized = drawingQuery(place(list)) } finally { remote.mainLedger.release('drawings', owner) }
+        let copies: readonly XlsxDrawing[]
+        try { copies = place(list); sized = drawingQuery(copies) } finally { remote.mainLedger.release('drawings', owner) }
         placed.set(list, sized)
-        remote.mainLedger.chargeWhileReachable('drawings', [sized], bytes)
+        remote.mainLedger.chargeWhileReachable('drawings', [copies], bytes)
       }
       return sized(...query)
     }

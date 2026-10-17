@@ -122,10 +122,12 @@ it('admits negative-date section parsing through the caller allocation observer'
   expect(() => dateSection('yyyy-mm-dd', allocation)).toThrow(refusal)
 })
 
-it('admits discarded sections and underscore expansions before parsing a negative-date format', async () => {
+it('admits only retained negative-date sections and refuses oversized retained padding before building', async () => {
   const { negativeDateOverflow } = await import('../src/xlsx/cellFormat')
   const code = '0;'.repeat(2000) + '0_ '.repeat(2000)
   const refusal = new RangeError('section workspace exceeds remaining budget')
   const allocation = { allocate(bytes: number) { if (bytes > 64 * 1024) throw refusal }, release() {} }
-  expect(() => negativeDateOverflow(-1, code, { dateSystem: '1900' } as ResolvedSemantics, allocation)).toThrow(refusal)
+  // E stops after four sections: the tail is never constructed.
+  expect(() => negativeDateOverflow(-1, code, { dateSystem: '1900' } as ResolvedSemantics, allocation)).not.toThrow()
+  expect(() => negativeDateOverflow(-1, '0_ '.repeat(3000) + ';0', { dateSystem: '1900' } as ResolvedSemantics, allocation)).toThrow(refusal)
 })

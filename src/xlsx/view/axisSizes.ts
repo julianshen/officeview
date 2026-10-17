@@ -15,6 +15,7 @@
  */
 import type { AxisMetrics, AxisSizeInterval } from './contracts'
 import type { XlsxDrawing } from '../types'
+import { retainDrawingCopyOwners } from './drawingOwners'
 
 export type ResizeAxis = 'row' | 'col'
 /** Whole-CSS-pixel bounds. The maxima follow Excel's own limits (255
@@ -29,8 +30,9 @@ export const RESIZE_LIMITS = Object.freeze({ col: Object.freeze({ min: 8, max: 1
 export const MAX_SESSION_SIZES = 4096
 /** Retained bytes per session entry: the Map entry plus its published snapshot copy. */
 export const SESSION_SIZE_ENTRY_BYTES = 128
-/** Retained bytes of one repositioned top-level drawing copy plus its box-index entry. */
-export const SIZED_DRAWING_BYTES = 320
+/** One repositioned drawing/index (320 B) and at most three new ownership
+ * links (64 B each): copied node, copied group and the result array's share. */
+export const SIZED_DRAWING_BYTES = 512
 /** Upper bound of the bytes building one sparse axis allocates for
  * `intervals` authored/hidden/session intervals (two segments each with typed
  * summaries and JS records, plus normalization copies; axes.ts). */
@@ -169,7 +171,7 @@ function mapPoint(base: AxisMetrics, sized: AxisMetrics, css: number): number {
  * shallow copies (group children keep their child coordinate space, which the
  * group transform maps onto the new box); unchanged nodes are returned as is. */
 export function remapDrawings(drawings: readonly XlsxDrawing[], base: PlacementAxes, sized: PlacementAxes): XlsxDrawing[] {
-  return drawings.map(node => {
+  const result = drawings.map(node => {
     const anchor = node.source?.treePath?.split('/')[0] ?? ''
     const two = anchor.startsWith('twoCellAnchor')
     if (!two && !anchor.startsWith('oneCellAnchor')) return node
@@ -190,6 +192,8 @@ export function remapDrawings(drawings: readonly XlsxDrawing[], base: PlacementA
     }
     return moved
   })
+  retainDrawingCopyOwners(result, drawings)
+  return result
 }
 
 // ---- auto-fit ---------------------------------------------------------------

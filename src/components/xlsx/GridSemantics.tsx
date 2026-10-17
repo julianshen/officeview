@@ -252,9 +252,9 @@ export function GridSemantics(props: GridSemanticsProps): ReactElement {
       const target = event.target as HTMLElement
       // Any native header control names its line: select, sort/filter/more
       // action buttons and the narrow-column actions lane (disclosure and group).
-      const header = target.closest<HTMLElement>('[data-header-column],[data-action-column],[data-header-lane],[data-header-row]')
+      const header = target.closest<HTMLElement>('[data-header-column],[data-action-column],[data-header-lane],[data-header-disclosure],[data-header-row]')
       const arrow = resizeArrows[event.key]
-      const column = header?.dataset.headerColumn ?? header?.dataset.actionColumn ?? header?.dataset.headerLane
+      const column = header?.dataset.headerColumn ?? header?.dataset.actionColumn ?? header?.dataset.headerLane ?? header?.dataset.headerDisclosure
       let request: ResizeRequest | null = null
       if (column !== undefined) {
         if (!arrow || arrow.kind === 'column') request = { kind: 'column', index: Number(column), ...(arrow ? { delta: arrow.delta } : { fit: true }) }

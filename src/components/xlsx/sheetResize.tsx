@@ -12,6 +12,7 @@
 import { useEffect, useRef, useState, type CSSProperties, type PointerEvent as ReactPointerEvent, type ReactElement } from 'react'
 import type { LogicalCellBox, ScrollWindow } from '../../xlsx/view/contracts'
 import type { ProjectedSheetMetrics } from '../../xlsx/view/projection'
+import { frozenViewportSize } from '../../xlsx/view/frozenPanes'
 import type { SourceCell } from '../../xlsx/view/coordinates'
 import { MAX_ROWS } from '../../xlsx/view/coordinates'
 import type { ViewportSize } from '../../xlsx/view/scrollWindow'
@@ -100,6 +101,9 @@ export function ResizeHandles(props: ResizeHandlesProps): ReactElement {
   const cleanup = useRef<(() => void) | null>(null)
   useEffect(() => () => cleanup.current?.(), [])
   const layout: HandleLayout = { viewport, headerHeight, touch, ...(props.gutter !== undefined ? { gutter: props.gutter } : {}) }
+  const pinnedCss = frozenViewportSize(scroll.frozen, scroll.zoom)
+  const pinnedColumn = (col: number) => Boolean(scroll.frozen && projection.cols.start(col) < scroll.frozen.left)
+  const pinnedRow = (slot: number) => Boolean(scroll.frozen && projection.rows.start(slot) < scroll.frozen.top)
   const activeSlot = props.active ? projection.order.sourceToDisplay(props.active.row) : null
   const columns = touch ? props.columns.filter(col => col === props.active?.col) : props.columns
   const laneShown = touch && props.active !== null && props.columns.includes(props.active.col)
@@ -161,20 +165,33 @@ export function ResizeHandles(props: ResizeHandlesProps): ReactElement {
   for (const col of columns) {
     const box = gridHeaderBox(projection, scroll, 'column', col)
     const edge = box.x + box.width
-    if (box.width <= 0 || edge < 0 || edge > viewport.width || !fits(viewport.width)) continue
-    handles.push(handle('column', col, col, handlePlacement('column', edge, layout)))
+    const start = pinnedColumn(col) ? 0 : pinnedCss.x
+    const end = pinnedColumn(col) ? pinnedCss.x : viewport.width
+    // Keep the target on its own side of the freeze divider. If that region
+    // cannot fit the full target, the keyboard resize route remains available.
+    if (box.width <= 0 || edge < start || edge > end || !fits(end - start)) continue
+    const regionLayout = { ...layout, gutter: (layout.gutter ?? GRID_HEADER_SIZE) + start, viewport: { ...viewport, width: end - start } }
+    handles.push(handle('column', col, col, handlePlacement('column', edge - start, regionLayout)))
   }
   for (const slot of slots) {
     const box = gridHeaderBox(projection, scroll, 'row', slot)
     const edge = box.y + box.height
-    if (box.height <= 0 || edge < 0 || edge > viewport.height || (!touch && !fits(viewport.height))) continue
-    handles.push(handle('row', projection.order.displayToSource(slot), slot, handlePlacement('row', edge, layout), touch ? { background: '#f3f4f6' } : {}))
+    const start = pinnedRow(slot) ? 0 : pinnedCss.y
+    const end = pinnedRow(slot) ? pinnedCss.y : viewport.height
+    if (box.height <= 0 || edge < start || edge > end || (!touch && !fits(end - start))) continue
+    const regionLayout = touch ? layout : { ...layout, headerHeight: headerHeight + start, viewport: { ...viewport, height: end - start } }
+    handles.push(handle('row', projection.order.displayToSource(slot), slot, handlePlacement('row', touch ? edge : edge - start, regionLayout), touch ? { background: '#f3f4f6' } : {}))
   }
   if (drag?.moved) {
     const box = gridHeaderBox(projection, scroll, drag.kind, drag.kind === 'row' ? drag.slot : drag.index)
     const at = (drag.kind === 'row' ? box.y : box.x) + drag.size * scroll.zoom
     const label = `${drag.kind === 'row' ? 'Height' : 'Width'}: ${drag.size} px`
-    handles.push(<div key="guide" aria-hidden="true" data-officeview-ui="resize-guide" style={{ position: 'absolute', zIndex: 3, pointerEvents: 'none', background: GUIDE, ...placed(guidePlacement(drag.kind, at, layout)) }}>
+    const fixed = drag.kind === 'row' ? pinnedRow(drag.slot) : pinnedColumn(drag.index)
+    const min = fixed ? 0 : drag.kind === 'row' ? pinnedCss.y : pinnedCss.x
+    const max = drag.kind === 'row' ? viewport.height : viewport.width
+    // A body edge hidden under the pinned strip has no visible guide. Pinned
+    // edges keep their fixed origin even when growing past the old divider.
+    if (at >= min && at <= max) handles.push(<div key="guide" aria-hidden="true" data-officeview-ui="resize-guide" style={{ position: 'absolute', zIndex: 3, pointerEvents: 'none', background: GUIDE, ...placed(guidePlacement(drag.kind, at, layout)) }}>
       <span style={{ position: 'absolute', left: 4, top: 4, whiteSpace: 'nowrap', font: '12px sans-serif', color: '#ffffff', background: GUIDE, borderRadius: 3, padding: '1px 4px' }}>{label}</span>
     </div>)
   }
@@ -189,6 +206,8 @@ export interface AutoFitInput {
   sheet: XlsxSheet
   /** The pane in logical CSS px (visible rows/columns come first). */
   pane: LogicalCellBox
+  /** Disjoint visible regions in priority order (pinned strips before body). */
+  regions?: readonly LogicalCellBox[]
   /** Rows the source already holds on the main thread, never a read. */
   knownRows: (limit: number) => Iterable<number>
   styleOf?: (styleIndex: number) => XlsxCellStyle | undefined
@@ -214,12 +233,13 @@ function cellIn(cells: readonly FitCell[] | undefined, col: number): FitCell | u
  * direction are skipped, as Excel does. */
 export function autoFitSize(kind: 'row' | 'column', index: number, input: AutoFitInput): number {
   const { geometry, sheet, pane, measure } = input
+  const regions = input.regions ?? [pane]
   const metrics = geometry.metrics
   const styleOf = (cell: FitCell) => cell.style ?? (cell.styleIndex !== undefined ? input.styleOf?.(cell.styleIndex) : undefined)
   const text = (cell: FitCell, style: XlsxCellStyle | undefined) => cellDisplayText(sheet, { value: cell.value, style }, input.allocation)
   if (kind === 'column') {
     const visible = function* () {
-      for (const run of metrics.rows.visibleBetween(pane.y, pane.y + pane.height).runs) for (let slot = run.start; slot <= run.end; slot++) yield metrics.order.displayToSource(slot)
+      for (const region of regions) for (const run of metrics.rows.visibleBetween(region.y, region.y + region.height).runs) for (let slot = run.start; slot <= run.end; slot++) yield metrics.order.displayToSource(slot)
     }
     const rows = autoFitRowCandidates(visible(), input.knownRows(4 * AUTOFIT_MAX_ROWS), row => row >= 0 && row < MAX_ROWS && metrics.sourceToVisibleRank(row) !== null)
     const cells = function* () {
@@ -237,7 +257,7 @@ export function autoFitSize(kind: 'row' | 'column', index: number, input: AutoFi
   }
   const row = index
   const populated = (geometry.cellsOf(row) ?? []) as readonly FitCell[]
-  const inPane = (cell: FitCell) => { const x = metrics.cols.start(cell.col); return x < pane.x + pane.width && x + metrics.cols.size(cell.col) > pane.x }
+  const inPane = (cell: FitCell) => { const x = metrics.cols.start(cell.col); return regions.some(region => x < region.x + region.width && x + metrics.cols.size(cell.col) > region.x) }
   const ordered = [...populated.filter(inPane), ...populated.filter(cell => !inPane(cell))].slice(0, AUTOFIT_MAX_CELLS)
   const cells = function* () {
     for (const cell of ordered) {

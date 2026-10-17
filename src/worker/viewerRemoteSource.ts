@@ -42,7 +42,8 @@ import type { ViewerClient } from './viewerClient'
 import { initialIdentity, initialWorkbookOwner, visibilityFromDisplayBitsets, type CommandOf } from './viewerProtocol'
 import type { SheetGeometry, WorkbookSource } from './viewerSession'
 import { RemoteDrawingCache, type PagedSheetDrawings } from './viewerRemoteDrawings'
-import { drawingPayloadBudget } from '../xlsx/view/drawingPayload'
+import { DRAWING_MEMORY_REFUSED, drawingPayloadBudget, unavailableDrawings } from '../xlsx/view/drawingPayload'
+import { admitDrawingOwners } from '../xlsx/view/drawingOwners'
 import { FindError, workbookFindKey, type FindOptions, type FindPage, type FindSession } from '../xlsx/view/find'
 import { queryPayloadBytes, WORKER_QUERY_BYTES } from './viewerQueryBudget'
 
@@ -433,6 +434,13 @@ export class RemoteWorkbook implements WorkbookSource {
       const moved = reservation ? Math.min(bytes, this.mainLedger.ownerBytes('replies', reservation)) : 0
       if (moved > 0) this.mainLedger.adoptWhileReachable('replies', reservation!, pool, targets, moved)
       if (moved === 0 || bytes > moved) this.mainLedger.chargeWhileReachable(pool, targets, bytes - moved)
+      if (head.kind === 'read' && head.query?.op === 'drawings' && reply.kind === 'complete' && reply.result.kind === 'read' && reply.result.result.op === 'drawings' && reply.result.result.result.completeness === 'complete'
+        && !admitDrawingOwners(reply.result.result.result, this.mainLedger, MAIN_THREAD_BUDGETS[this.profile])) {
+        const message = "This sheet's drawings need more main-thread memory than the document has free and are not shown"
+        // The original raw reply remains charged until collected. No ownership
+        // links were made; the existing cache displays this typed refusal.
+        return { ...reply, result: { kind: 'read', result: { op: 'drawings', result: unavailableDrawings(message, { code: 'resource-limit', retryable: false, message }, DRAWING_MEMORY_REFUSED) } } } as WorkerReply<K>
+      }
       this.capture(reply, scope, key !== 'read:drawings')
       return reply
     }, () => { if (reservation) this.mainLedger.release('replies', reservation); return CLOSED })

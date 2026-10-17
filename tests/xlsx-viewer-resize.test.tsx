@@ -365,7 +365,10 @@ describe('codex review round 1', () => {
       expect(grid.contains(document.activeElement)).toBe(true)
       resizeKey(document.activeElement as HTMLElement, 'ArrowRight')
       await waitFor(() => expect(headerWidth(ui, 'B')).toBe(52))
-      // And back below the threshold from an ordinary action button.
+      // F places inline actions behind a disclosure at this width. Open the
+      // real group before returning below the threshold from its sort button.
+      const disclosure = ui.queryByRole('button', { name: 'Actions for column B' })
+      if (disclosure?.getAttribute('aria-expanded') === 'false') fireEvent.click(disclosure)
       act(() => ui.getByRole('button', { name: 'Cycle sort column B' }).focus())
       for (let i = 0; i < 2; i++) resizeKey(document.activeElement as HTMLElement, 'ArrowLeft')
       await waitFor(() => expect(headerWidth(ui, 'B')).toBe(36))
