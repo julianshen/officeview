@@ -183,12 +183,19 @@ function layoutCellText(ctx: CanvasRenderingContext2D, text: string, style: Xlsx
         return Math.min(cosine > 1e-10 ? (innerW - sine * localHeight) / cosine : maxFlow,
           sine > 1e-10 ? (innerH - cosine * localHeight) / sine : maxFlow)
       }), ...Array.from({ length: count }, (_, i) => Math.min(maxFlow, advance / (i + 1)))])].filter(width => width > 0).sort((a, b) => b - a) : [Math.max(1, advance)]
-      layout = rotatedLayout(layoutTextBody(body, widths[0], h, measure), radians)
+      // The widest candidate is the fallback when none fits (laid out once).
+      let chosen: TextLayout | undefined
       for (const width of widths) {
         const candidate = rotatedLayout(layoutTextBody(body, width, h, measure), radians)
+        chosen ??= candidate
         const bounds = textLayoutBounds(candidate, measure)
-        if (bounds.width <= innerW + 1e-8 && bounds.height <= innerH + 1e-8) { layout = candidate; break }
+        if (bounds.width <= innerW + 1e-8 && bounds.height <= innerH + 1e-8) { chosen = candidate; break }
+        // Unrotated, the candidates only narrow (widest first) and a narrower
+        // box only wraps into more lines: once one is too tall, none fits.
+        // Without this, text taller than its cell laid out once per candidate.
+        if (!radians && bounds.height > innerH + 1e-8) break
       }
+      layout = chosen ?? rotatedLayout(layoutTextBody(body, widths[0], h, measure), radians)
     }
     const bounds = textLayoutBounds(layout, measure)
     const placed = alignedLayout(layout, bounds, { x, y, w, h }, horizontal, vertical)
