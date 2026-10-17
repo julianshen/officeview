@@ -78,6 +78,47 @@ function orderOf(bands: readonly RowPermutationBand[]): CompactRowOrder {
 export function createRowOrder(inputs: readonly PermutationInput[]): CompactRowOrder {
   return inputs.length ? orderOf(buildBands(inputs)) : identity
 }
+/** Realm-independent Uint32Array check (wire bands are structured clones). */
+const isUint32 = (value: unknown): value is Uint32Array => Object.prototype.toString.call(value) === '[object Uint32Array]'
+const local = (array: Uint32Array): Uint32Array => array instanceof Uint32Array ? array : new Uint32Array((array as ArrayBufferView).buffer, (array as ArrayBufferView).byteOffset, (array as ArrayBufferView).byteLength / 4)
+/**
+ * Zero-copy order over wire bands that already carry their inverse (a worker
+ * view delta): the bands' own buffers become this order's, after validating
+ * that each band covers its inclusive range and that displayOffsetOfSource is
+ * the exact inverse of sourceAtOffset (which also proves a bijection). The
+ * caller hands the buffers over and must not keep using them. Throws a
+ * RangeError on any invalid band (callers fall back to createRowOrder).
+ */
+export function adoptRowOrder(bands: readonly RowPermutationBand[]): CompactRowOrder {
+  if (!bands.length) return identity
+  const sorted = [...bands].sort((a, b) => a.r0 - b.r0)
+  const out: RowPermutationBand[] = []
+  const buffers = new Set<ArrayBufferLike>()
+  for (let index = 0; index < sorted.length; index++) {
+    const band = sorted[index]
+    validateBand(band.r0, band.r1)
+    if (index && sorted[index - 1].r1 >= band.r0) throw new RangeError('Overlapping permutation bands')
+    const length = band.r1 - band.r0 + 1
+    if (!isUint32(band.sourceAtOffset) || !isUint32(band.displayOffsetOfSource) || band.sourceAtOffset.length !== length || band.displayOffsetOfSource.length !== length) {
+      throw new RangeError('Permutation length must match its inclusive band')
+    }
+    // Shared storage cannot be handed over exclusively, even across bands.
+    // A partial view would keep unaccounted backing-store padding alive.
+    for (const array of [band.sourceAtOffset, band.displayOffsetOfSource]) {
+      if (Object.prototype.toString.call(array.buffer) !== '[object ArrayBuffer]' || buffers.has(array.buffer) || array.byteOffset !== 0 || array.byteLength !== array.buffer.byteLength) throw new RangeError('Permutation buffers must be distinct, non-shared and fully owned')
+      buffers.add(array.buffer)
+    }
+    // A structured clone from another realm is re-viewed (same buffer, no copy) as
+    // this realm's Uint32Array, which projection and its consumers require.
+    const sourceAtOffset = local(band.sourceAtOffset), displayOffsetOfSource = local(band.displayOffsetOfSource)
+    for (let offset = 0; offset < length; offset++) {
+      const sourceRow = sourceAtOffset[offset]
+      if (sourceRow < band.r0 || sourceRow > band.r1 || displayOffsetOfSource[sourceRow - band.r0] !== offset) throw new RangeError('Permutation must be a bijection of its band')
+    }
+    out.push(Object.freeze({ r0: band.r0, r1: band.r1, sourceAtOffset, displayOffsetOfSource }))
+  }
+  return orderOf(Object.freeze(out))
+}
 /** True when a DISPLAY slot must keep its source-corresponding row (header/totals rows,
  * hidden rows). This is deliberately a callback and not a RowVisibility: a visibility mask
  * answers "visible?", the opposite question, so passing one by mistake must not compile. */

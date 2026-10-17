@@ -6,6 +6,7 @@ import { fileURLToPath } from 'node:url'
 import { build } from 'vite'
 import { expect, it } from 'vitest'
 import libraryConfig from '../vite.config'
+import { chunkCycles, chunkGraph, importersOf } from './helpers/chunk-graph'
 
 it('keeps the README worker bootstrap in a Vite production consumer (worker.format es) while tree-shaking the unused main entry', async () => {
   const root = fileURLToPath(new URL('..', import.meta.url))
@@ -25,6 +26,12 @@ it('keeps the README worker bootstrap in a Vite production consumer (worker.form
       logLevel: 'silent',
       build: { ...libraryConfig.build, outDir: join(pkg, 'dist') },
     })
+
+    // The library's own output: nothing imports the worker entry, and no cycle (stream F item 5).
+    const libraryFiles = await readdir(join(pkg, 'dist'))
+    const libraryGraph = await chunkGraph(join(pkg, 'dist'), libraryFiles)
+    expect(importersOf(libraryGraph, 'worker.js')).toEqual([])
+    expect(chunkCycles(libraryGraph).filter(cycle => cycle.includes('worker.js'))).toEqual([])
 
     const consumer = join(temporary, 'consumer')
     await mkdir(join(consumer, 'node_modules'), { recursive: true })
@@ -55,8 +62,22 @@ it('keeps the README worker bootstrap in a Vite production consumer (worker.form
     // as the library build ships it: dist/worker.js is minified by the library build and the
     // consumer (minify: false) keeps that spelling, so only the minified form is pinned.
     expect(workerCode, 'The README production worker entry must install its message handler').toMatch(
-      /typeof window\s*>\s*"u"\s*&&\s*typeof\s+([\w$]+)\.postMessage\s*==\s*"function"\s*&&\s*\(\s*\1\.onmessage\s*=/,
+      // Stream F item 5: the bootstrap is a block now (queue + lazy router), so the
+      // minifier keeps the `if (...) { ... onmessage = ... }` statement.
+      /typeof window\s*>\s*"u"\s*&&\s*typeof\s+([\w$]+)\.postMessage\s*==\s*"function"\s*(?:&&\s*\(|\)\s*\{[^}]*?)\1\.onmessage\s*=/,
     )
+
+    // Stream F item 5 (WebKit): a lazy chunk of the worker graph must never import
+    // the worker entry chunk. WebKit does not register a module worker's top-level
+    // script in the worker's module map, so such an import evaluates the entry a
+    // second time and its bootstrap replaces `onmessage` with a fresh, empty kernel
+    // ("Unknown documentId"). Pinned on the consumer graph, where the host's bundler
+    // re-chunks the library's modules.
+    const graph = await chunkGraph(assets, files)
+    expect(importersOf(graph, worker!), 'no chunk may import the module worker entry').toEqual([])
+    // Lazy chunks may import each other (ordinary modules in the module map); only
+    // a cycle through the entry is the WebKit hazard.
+    expect(chunkCycles(graph).filter(cycle => cycle.includes(worker!))).toEqual([])
 
     const main = files.find(name => /^index-.*\.js$/.test(name))
     expect(main).toBeDefined()
@@ -73,3 +94,20 @@ it('keeps the README worker bootstrap in a Vite production consumer (worker.form
     await rm(temporary, { recursive: true, force: true })
   }
 }, 60_000)
+
+it('builds the perf page worker without a chunk importing its entry (stream F item 5: WebKit re-evaluated it)', async () => {
+  const temporary = await realpath(await mkdtemp(join(tmpdir(), 'officeview-perf-build-')))
+  try {
+    const { default: perfConfig } = await import('../vite.perf.config')
+    const outDir = join(temporary, 'dist')
+    await build({ ...perfConfig, configFile: false, logLevel: 'silent', cacheDir: join(temporary, 'cache'), build: { ...perfConfig.build, outDir } })
+    const assets = join(outDir, 'assets'), files = await readdir(assets)
+    const worker = files.find(name => /^viewerPerfWorker-.*\.js$/.test(name))
+    expect(worker).toBeDefined()
+    const graph = await chunkGraph(assets, files)
+    expect(importersOf(graph, worker!)).toEqual([])
+    expect(chunkCycles(graph).filter(cycle => cycle.includes(worker!))).toEqual([])
+  } finally {
+    await rm(temporary, { recursive: true, force: true })
+  }
+}, 120_000)

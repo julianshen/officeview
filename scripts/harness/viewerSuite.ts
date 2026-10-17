@@ -15,7 +15,7 @@
  * Nothing here asserts on wall clock; a release run decides admission from the
  * receipt's evaluation rows.
  */
-import { chromium, webkit, type Browser, type BrowserContext, type CDPSession, type Page } from '@playwright/test'
+import { chromium, devices, webkit, type Browser, type BrowserContext, type CDPSession, type Locator, type Page } from '@playwright/test'
 import { execFileSync } from 'node:child_process'
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { cpus, loadavg, totalmem, freemem } from 'node:os'
@@ -104,6 +104,19 @@ async function newPerfPage(context: BrowserContext, base: string, errors: string
   return page
 }
 
+/** Touch (mobile profile) column headers put sort/filter behind an "Actions for
+ * column X" disclosure when the column is narrower than its 44px targets; open
+ * it (outside any armed measurement) so the action is clickable. */
+/** The filter popup's own content. On a coarse pointer the popup is a fixed
+ * bottom sheet and its role=dialog wrapper has no box, so Playwright never sees
+ * the wrapper 'visible' (the mobile memory and ack sessions waited forever). */
+function filterSheet(dialog: Locator): Locator { return dialog.locator('[data-officeview-ui=filter-dropdown]') }
+async function revealHeaderAction(page: Page, letter: string, name: string | RegExp): Promise<void> {
+  if (await page.getByRole('button', { name }).count()) return
+  const disclosure = page.getByRole('button', { name: `Actions for column ${letter}` })
+  if (await disclosure.count()) await disclosure.click()
+}
+
 async function openFixture(page: Page, fixture: ViewerFixture): Promise<void> {
   await page.setInputFiles('#perf-file', fixture.path)
   await page.waitForFunction(() => { const p = (window as unknown as W).__viewerPerf; return p.marks.firstUsableAt !== null || p.error !== null }, undefined, { timeout: OPEN_TIMEOUT_MS })
@@ -185,6 +198,7 @@ async function ackSuite(context: BrowserContext, base: string, f2: ViewerFixture
   const sortButton = page.getByRole('button', { name: 'Cycle sort column G' })
   const sort: AckSeries & { operations: SortOutcome[]; endToEnd: number[] } = { samples: [], records: [], censored: 0, note: '', endToEnd: [], operations: [] }
   for (let i = 0; i < repeat; i++) {
+    await revealHeaderAction(page, 'G', 'Cycle sort column G')
     const wait = await arm('status')
     const operation = await measureSortOutcome(page, () => sortButton.click())
     const record = await wait()
@@ -210,6 +224,7 @@ async function ackSuite(context: BrowserContext, base: string, f2: ViewerFixture
   const filter: AckSeries = { samples: [] as number[], records: [] as AckRecord[], censored: 0, note: 'funnel click -> filter dialog presented' }
   const cancel: AckSeries = { samples: [] as number[], records: [] as AckRecord[], censored: 0, note: 'dialog Cancel while the column value list loads -> dialog removed' }
   for (let i = 0; i < repeat; i++) {
+    await revealHeaderAction(page, 'D', /^Filter column D/)
     const opened = await arm('dialog-open')
     await funnel.click()
     const r1 = await opened()
@@ -217,7 +232,7 @@ async function ackSuite(context: BrowserContext, base: string, f2: ViewerFixture
     const v1 = latency(r1)
     if (v1 === null) filter.censored++
     else filter.samples.push(v1)
-    await dialog.waitFor({ state: 'visible', timeout: 30_000 })
+    await filterSheet(dialog).waitFor({ state: 'visible', timeout: 30_000 })
     const closed = await arm('dialog-close')
     await dialog.getByRole('button', { name: 'Cancel' }).click()
     const r2 = await closed()
@@ -225,7 +240,7 @@ async function ackSuite(context: BrowserContext, base: string, f2: ViewerFixture
     const v2 = latency(r2)
     if (v2 === null) cancel.censored++
     else cancel.samples.push(v2)
-    await dialog.waitFor({ state: 'hidden', timeout: 30_000 })
+    await filterSheet(dialog).waitFor({ state: 'hidden', timeout: 30_000 })
   }
   log(`    ack filter-open: p50 ${fmt(summarize(filter.samples, 1))}; cancel p50 ${fmt(summarize(cancel.samples, 1))}`)
 
@@ -234,7 +249,7 @@ async function ackSuite(context: BrowserContext, base: string, f2: ViewerFixture
   const apply: AckSeries = { samples: [] as number[], records: [] as AckRecord[], censored: 0, note: `OK on a value selection -> first qualifying change; ${FILTER_APPLY_SAMPLES} samples (each apply + clear re-admits the 1M-row range)`, endToEnd: [] as number[] }
   for (let i = 0; i < Math.min(repeat, FILTER_APPLY_SAMPLES); i++) {
     await funnel.click()
-    await dialog.waitFor({ state: 'visible', timeout: 30_000 })
+    await filterSheet(dialog).waitFor({ state: 'visible', timeout: 30_000 })
     await dialog.getByRole('button', { name: 'Deselect All', exact: true }).click({ timeout: 60_000 })
     await dialog.getByRole('checkbox', { name: 'alpha', exact: true }).check({ timeout: 60_000 })
     const wait = await arm('apply')
@@ -248,10 +263,10 @@ async function ackSuite(context: BrowserContext, base: string, f2: ViewerFixture
     if (v === null) apply.censored++
     else apply.samples.push(v)
     await funnel.click()
-    await dialog.waitFor({ state: 'visible', timeout: 30_000 })
+    await filterSheet(dialog).waitFor({ state: 'visible', timeout: 30_000 })
     await dialog.getByRole('button', { name: 'Clear all filters' }).click({ timeout: 60_000 })
     await page.waitForFunction(() => /Visible body (\d+) \/ complete body \1\b/.test(document.querySelector('[data-officeview-ui=viewer-status]')?.textContent ?? ''), undefined, { timeout: 120_000 }).catch(() => {})
-    await dialog.waitFor({ state: 'hidden', timeout: 30_000 }).catch(() => {})
+    await filterSheet(dialog).waitFor({ state: 'hidden', timeout: 30_000 }).catch(() => {})
   }
   log(`    ack filter-apply: ${apply.samples.length} samples p50 ${fmt(summarize(apply.samples, 1))}; end-to-end p50 ${fmt(summarize(apply.endToEnd!, 1))}`)
 
@@ -440,14 +455,16 @@ async function memorySession(context: BrowserContext, base: string, fixture: Vie
   {
     const header = page.getByRole('columnheader', { name: /^Column G/ })
     const before = await header.getAttribute('aria-sort')
+    await revealHeaderAction(page, 'G', 'Cycle sort column G')
     await page.getByRole('button', { name: 'Cycle sort column G' }).click()
     await page.waitForFunction(({ before }) => {
       const h = [...document.querySelectorAll('[role=columnheader]')].find(x => /^Column G/.test(x.getAttribute('aria-label') ?? x.textContent ?? ''))
       return (h?.getAttribute('aria-sort') ?? null) !== before
     }, { before }, { timeout: 120_000 }).catch(() => {})
     const dialog = page.getByRole('dialog', { name: 'Column filter' })
+    await revealHeaderAction(page, 'D', /^Filter column D/)
     await page.getByRole('button', { name: /^Filter column D/ }).click()
-    await dialog.waitFor({ state: 'visible', timeout: 30_000 })
+    await filterSheet(dialog).waitFor({ state: 'visible', timeout: 30_000 })
     await page.waitForTimeout(500)
     await dialog.getByRole('button', { name: 'Cancel' }).click()
   }
@@ -528,6 +545,7 @@ async function memorySession(context: BrowserContext, base: string, fixture: Vie
     if (process.env.VIEWER_SUITE_LIVE_DIAG) { await gcMain(); await diagSnapshot('scroll') }
     const header = page.getByRole('columnheader', { name: /^Column G/ })
     const before = await header.getAttribute('aria-sort')
+    await revealHeaderAction(page, 'G', 'Cycle sort column G')
     await page.getByRole('button', { name: 'Cycle sort column G' }).click()
     await page.waitForFunction(({ before }) => {
       const h = [...document.querySelectorAll('[role=columnheader]')].find(x => /^Column G/.test(x.getAttribute('aria-label') ?? x.textContent ?? ''))
@@ -535,8 +553,9 @@ async function memorySession(context: BrowserContext, base: string, fixture: Vie
     }, { before }, { timeout: 120_000 }).catch(() => {})
   } else {
     const dialog = page.getByRole('dialog', { name: 'Column filter' })
+    await revealHeaderAction(page, 'A', /^Filter column A/)
     await page.getByRole('button', { name: /^Filter column A/ }).click()
-    await dialog.waitFor({ state: 'visible', timeout: 30_000 })
+    await filterSheet(dialog).waitFor({ state: 'visible', timeout: 30_000 })
     await page.waitForTimeout(5000)
     await dialog.getByRole('button', { name: 'Cancel' }).click()
   }
@@ -566,7 +585,8 @@ async function memorySession(context: BrowserContext, base: string, fixture: Vie
       await page.evaluate(() => (window as unknown as W).__viewerPerf.scrollRun({ warmup: 0, frames: 60, dx: 0, dy: 60 }))
       const header = page.getByRole('columnheader', { name: /^Column G/ })
       const before = await header.getAttribute('aria-sort')
-      await page.getByRole('button', { name: 'Cycle sort column G' }).click()
+      await revealHeaderAction(page, 'G', 'Cycle sort column G')
+    await page.getByRole('button', { name: 'Cycle sort column G' }).click()
       await page.waitForFunction(({ before }) => {
         const h = [...document.querySelectorAll('[role=columnheader]')].find(x => /^Column G/.test(x.getAttribute('aria-label') ?? x.textContent ?? ''))
         return (h?.getAttribute('aria-sort') ?? null) !== before
@@ -639,7 +659,10 @@ export async function runViewerSuite(ctx: SuiteContext): Promise<{ receipt: View
     ...(args.browser === 'chromium' ? { args: ['--js-flags=--expose-gc'] } : {}),
   })
   const viewport = args.profile === 'desktop' ? { width: 1440, height: 900 } : { width: 1024, height: 768 }
-  const contextOptions = { viewport, deviceScaleFactor: 2, isMobile: args.profile === 'mobile', hasTouch: args.profile === 'mobile' }
+  // A mobile run presents as an iPad (its UA, touch, coarse pointer): the viewer
+  // picks its profile the way admission does (detectProfile), so a desktop UA
+  // with isMobile alone would still measure the D budgets.
+  const contextOptions = { viewport, deviceScaleFactor: 2, isMobile: args.profile === 'mobile', hasTouch: args.profile === 'mobile', ...(args.profile === 'mobile' ? { userAgent: devices['iPad Pro 11'].userAgent } : {}) }
   const errors: string[] = []
   const raw: Record<string, unknown> = {}
   // An unexpected disconnect (browser crash or an external kill on a shared

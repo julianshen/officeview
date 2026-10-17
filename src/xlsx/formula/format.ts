@@ -399,7 +399,7 @@ function renderDateTime(
   if (isEvaluationError(dec)) return dec
   const civil = dec.civil
   if (semantics.locale !== 'en-US') {
-    return { kind: 'unsupported', reason: 'locale names (month/weekday) gate: only en-US names supported' }
+    return { kind: 'unsupported', reason: 'date/time locale gate: only en-US profiles supported' }
   }
   const tod = timeOfDayParts(frac)
   const hasAm = tokens.some((tk) => tk.t === 'am')
@@ -499,6 +499,12 @@ export function numericSectionIsText(value: number, format: string): boolean {
   else if (value === 0 && secList.length >= 3) sectionIdx = 2
   const parsed = tokenize(secList[sectionIdx] ?? '')
   return !parsed.unsupported && parsed.tokens.some(tk => tk.t === 'at')
+}
+
+/** Whether one already-selected section contains supported date/time tokens. */
+export function dateSection(format: string, allocation?: FormatAllocation): boolean {
+  const parsed = tokenize(format, allocation)
+  return !parsed.unsupported && hasDateTokens(parsed.tokens)
 }
 
 export function formatCommon(

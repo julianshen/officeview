@@ -22,7 +22,7 @@ import {
 import { createObjectWorkbookSource, READ_ROWS_MAX_CELLS } from '../src/worker/viewerObjectSource'
 import { connectInProcess, ViewerKernel } from '../src/worker/viewerKernel'
 import { createViewerClient } from '../src/worker/viewerClient'
-import { createWorkerMessageHandler } from '../src/worker/worker-entry'
+import { createWorkerMessageHandler } from '../src/worker/workerMessages'
 
 const quiet = { yield: async () => {} }
 type Value = number | string | null
