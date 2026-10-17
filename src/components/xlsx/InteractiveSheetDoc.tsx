@@ -1326,6 +1326,10 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
   }
 
   const zoom = scroll?.zoom ?? 1
+  // Stream F: on a coarse pointer or a narrow pane the zoom controls dock into the
+  // toolbar; floating, they covered visible cells on a phone.
+  const dockZoom = touchControls || pane.width < NARROW_PANE_PX
+  const zoomProps = { zoom, onIn: () => zoomBy(1), onOut: () => zoomBy(-1), onReset: resetZoom, atFit: zoom <= SHEET_MIN_ZOOM }
   const canvasStyle: CSSProperties = { position: 'absolute', left: 0, top: 0, width: viewport.width, height: viewport.height, pointerEvents: 'none' }
   return (
     // The outer wrapper is the host's flex item: it fills a sized flex-column host;
@@ -1352,6 +1356,7 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
         <SheetNavigator documentId={docId} sheets={doc.sheets.map((sheet, index) => ({ id: sheetIds[index], name: sheet.name }))}
           activeSheetId={activeSheetId} onSheetChange={onSheetChange} onNavigate={onNavigate} onNotice={setAnnouncement} disabled={!entry} />
         <div data-officeview-ui="sheet-actions"><button type="button" disabled={!allowCopy || !selection.ranges.length || copyPending} onClick={() => void copyGrid()}>Copy selection</button>{copyPending && <button type="button" onClick={cancelCopy}>Cancel copy</button>}<button type="button" disabled={!allowPrint} onClick={() => void preparePrint()}>Print</button></div>
+        {showZoomControls && dockZoom && !popup && <DockedZoomControls {...zoomProps} touch={touchControls} />}
         {showSearch && (
           <div data-officeview-ui="sheet-search" style={{ flex: '1 1 260px', minWidth: 0, display: 'flex', justifyContent: 'flex-end' }}>
             <SearchBar inputRef={inputRef} query={query} onQuery={text => { searchGen.current++; setQuery(text) }} count={matchCount} active={activeHit < 0 ? -1 : pageOffset + activeHit}
@@ -1400,11 +1405,23 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
         )}
       </div>
       {/* A modal popup (the mobile filter sheet) owns the bottom of the viewer. */}
-      {showZoomControls && !popup && (
-        <ZoomControls zoom={zoom} onIn={() => zoomBy(1)} onOut={() => zoomBy(-1)} onReset={resetZoom} atFit={zoom <= SHEET_MIN_ZOOM} />
-      )}
+      {showZoomControls && !dockZoom && !popup && <ZoomControls {...zoomProps} />}
     </div>
   )
+}
+
+/** Below this pane width (CSS px) the zoom controls dock into the toolbar. */
+const NARROW_PANE_PX = 600
+/** The zoom controls as a toolbar group (same names and test id as the floating
+ * cluster); 44px targets on a coarse pointer (spec §9.3). */
+function DockedZoomControls({ zoom, onIn, onOut, onReset, atFit, touch }: { zoom: number; onIn: () => void; onOut: () => void; onReset: () => void; atFit: boolean; touch: boolean }): ReactElement {
+  const side = touch ? 44 : 28
+  const btn: CSSProperties = { minWidth: side, minHeight: side, padding: '0 6px', fontSize: 14 }
+  return <div role="group" aria-label="Zoom" data-testid="officeview-zoom-controls" data-officeview-ui="sheet-zoom" style={{ display: 'flex', gap: 4 }}>
+    <button type="button" onClick={onOut} aria-label="Zoom out" disabled={atFit} style={btn}>−</button>
+    <button type="button" onClick={onReset} aria-label="Reset zoom" style={{ ...btn, fontSize: 12, fontWeight: 600 }}>{Math.round(zoom * 100)}%</button>
+    <button type="button" onClick={onIn} aria-label="Zoom in" style={btn}>+</button>
+  </div>
 }
 
 /** Source row intervals → display slot intervals under `order`. Outside permuted
