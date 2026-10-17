@@ -301,6 +301,27 @@ describe('shared admitted measurement context', () => {
   })
 })
 
+describe('confirmation r8 F2: the resource notice label is admitted too', () => {
+  it('with too little room for the label shaping, a refused tile paints the tone only (no unadmitted fillText)', FIRST_PAINT_TEST, async () => {
+    const rows: XlsxRow[] = Array.from({ length: 200 }, (_, index) => ({ index, cells: Array.from({ length: 10 }, (_, col) => cell(index, col, `v${index}-${col}`)) }))
+    let live: MainMemoryLedger | undefined
+    const f = frames()
+    const view = render(<InteractiveSheetDoc doc={docOf(rows)} views={{ s: { revision: 0 } }} onMainLedger={value => { live = value }} onFrame={f.onFrame} />)
+    await waitFor(() => expect(f.last()?.basePaints ?? 0).toBeGreaterThan(0), FIRST_PAINT_WAIT)
+    await settle()
+    const proto = Object.getPrototypeOf(document.createElement('canvas').getContext('2d')!) as CanvasRenderingContext2D
+    const drawn: string[] = []
+    const fillText = proto.fillText
+    vi.spyOn(proto, 'fillText').mockImplementation(function (this: CanvasRenderingContext2D, text: string, x: number, y: number) { drawn.push(String(text)); return fillText.call(this, text, x, y) })
+    const check = squeeze(live!, 8 * 1024)
+    const scroller = view.getByTestId('officeview-sheet-scroller')
+    act(() => { scroller.scrollTop = 2000; fireEvent.scroll(scroller) }); await settle()
+    check()
+    expect(drawn.filter(text => /Not enough memory to lay out this text/.test(text))).toEqual([])
+    live!.set('copy', 'filler', 0)
+  })
+})
+
 describe('find highlights are admitted like tiles', () => {
   it('a find hit on a heavy cell at low free memory stays within the hard limit (whole-cell highlight fallback)', FIRST_PAINT_TEST, async () => {
     const doc = docOf([{ index: 0, cells: [{ ...cell(0, 0, `needle ${'a\n'.repeat(9000)}`), style: { numFmtId: 0, wrapText: true } }] }, { index: 1, cells: [cell(1, 0, 'b')] }])

@@ -18,6 +18,7 @@ import type { ViewportSize } from '../../xlsx/view/scrollWindow'
 import { TEXT_OVERFLOW_REACH_CSS, type SheetGeometry } from '../../xlsx/view/viewport'
 import { AUTOFIT_MAX_CELLS, AUTOFIT_MAX_ROWS, RESIZE_LIMITS, autoFitRowCandidates, cellFont, clampSize, fitColumnWidth, fitRowHeight, type Measure } from '../../xlsx/view/axisSizes'
 import { createCellLayoutHost } from '../../xlsx/view/renderViewport'
+import { createAdmittedLayoutContext } from './measureContext'
 import { TILE_CANVAS_BYTES, shapeCacheBytes } from '../../xlsx/view/mainLedger'
 import type { XlsxCell, XlsxCellStyle, XlsxSheet } from '../../xlsx/types'
 import { cellDisplayText } from '../../xlsx/render'
@@ -266,7 +267,6 @@ export interface FitMeasure {
  * created. With an injected `measureText` no context is created or charged. */
 export function createFitMeasure(options: { admit: (charge: FitCharge) => boolean; measureText?: Measure; sheet?: XlsxSheet }): FitMeasure {
   let ctx: CanvasRenderingContext2D | null | undefined = options.measureText ? null : undefined
-  let localReserved = false
   let host: ReturnType<typeof createCellLayoutHost> | null = null
   const fonts = new Map<string, { entries: number; units: number }>()
   const cache = new Map<string, number>()
@@ -292,21 +292,11 @@ export function createFitMeasure(options: { admit: (charge: FitCharge) => boolea
   }
   const context = (): CanvasRenderingContext2D | null => {
     if (ctx !== undefined) return ctx
-    reserve(0, TILE_CANVAS_BYTES)
-    try {
-      const canvas = globalThis.document?.createElement('canvas')
-      if (canvas) { canvas.width = 1; canvas.height = 1 }
-      const created = canvas?.getContext('2d') ?? null
-      if (created) {
-        // Every native measurement on this context, ours or the canonical
-        // layout's (formatted text, wrap candidates, rotation probes), is
-        // reserved before the browser shapes it: exact distinct (font, text)
-        // accounting under the calibrated model, whatever formatting expands to.
-        const native = created.measureText.bind(created)
-        created.measureText = (text: string) => { reserveShape(created.font, text); return native(text) }
-      }
-      ctx = created
-    } catch { ctx = null }
+    // Both admitted contexts (the base and the canonical layout's local
+    // identity context) are reserved before they exist; each measures only
+    // through its own admitting wrapper (no global state is touched).
+    reserve(0, 2 * TILE_CANVAS_BYTES)
+    ctx = createAdmittedLayoutContext((cacheName, font, text) => reserveShape(font, text, cacheName))
     return ctx
   }
   const measure: Measure = (font, text) => {
@@ -326,17 +316,8 @@ export function createFitMeasure(options: { admit: (charge: FitCharge) => boolea
     const c = context()
     if (!c) return undefined
     reserve(cellDisplayText(options.sheet!, cell).length * 4 + LAYOUT_HEAP_BYTES, 0)
-    // The canonical layout also measures on its own local identity context
-    // (core/text-metrics): reserve that context once, and every distinct text
-    // it shapes, before the browser does. Its measurements are observed through
-    // the shared 2D prototype for exactly this synchronous call.
-    if (!localReserved) { reserve(0, TILE_CANVAS_BYTES); localReserved = true }
     host ??= createCellLayoutHost(c, options.sheet!)
-    const proto = Object.getPrototypeOf(c) as CanvasRenderingContext2D
-    const original = proto.measureText
-    proto.measureText = function (this: CanvasRenderingContext2D, text: string) { reserveShape(this.font, text, 'local'); return original.call(this, text) }
-    let body: ReturnType<typeof host.layoutBody>
-    try { body = host.layoutBody(cell, widthCss, RESIZE_LIMITS.row.max) } finally { proto.measureText = original }
+    const body = host.layoutBody(cell, widthCss, RESIZE_LIMITS.row.max)
     if (body.text?.kind !== 'layout') return undefined
     return body.text.rotation ? rotatedExtent(body.text.layout, c) : body.text.layout.height
   } : undefined

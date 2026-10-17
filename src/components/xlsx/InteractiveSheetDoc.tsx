@@ -584,6 +584,7 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
   }, [mainLedger, budgetProfile])
   // One shared, admitted measurement context for every record layout (§12.4).
   const measure = useMemo(() => new SharedMeasureContext(() => layoutAdmission), [layoutAdmission])
+  measure.setFontGen(fontGen)
   const layoutHostFor = useMemo(() => new WeakMap<XlsxSheet, CellLayoutHost>(), [measure])
   const layoutHost = (sheet: XlsxSheet): CellLayoutHost => {
     let host = layoutHostFor.get(sheet)

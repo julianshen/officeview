@@ -1,19 +1,23 @@
 /**
  * One shared, admitted measurement context per viewer (spec §§5.6, 12.4).
  *
- * The canonical layout measures text on a context and on the local identity
- * context core/text-metrics derives from it. Laying out on each tile's own
- * context would create (and grow) that pair per tile, outside admission. The
- * viewer instead lays every record out on one shared 1×1 context:
- * - both contexts are admitted (TILE_CANVAS_BYTES each) before the canvas exists;
- * - every distinct (font, text) either context shapes is admitted with the
- *   shapeCacheBytes model before it is measured, in O(1);
- * - a refusal throws LayoutAdmissionError, which the painter turns into its
- *   declared coarse tile (or the find overlay into a whole-cell highlight);
- * - trim() drops the pair (returning its charge) once its caches pass a cap,
- *   so the retained shaping caches stay bounded.
- * The admitted bytes are retained under the canvas-text measure charge
- * (LayoutAdmission.measureChanged) while the contexts live.
+ * The canonical layout measures text on a context and on a local identity
+ * context that core/text-metrics derives from `base.canvas.ownerDocument`.
+ * Laying out on each tile's own context would create (and grow) that pair per
+ * tile, outside admission. The viewer instead lays records out on ONE admitted
+ * pair it owns (createAdmittedLayoutContext):
+ * - both contexts are admitted (TILE_CANVAS_BYTES each) before they exist;
+ * - each measures only through its own instance wrapper, which admits every
+ *   distinct (font, text) with the shapeCacheBytes model before shaping it;
+ * - the layout's local identity context IS the admitted local context: the
+ *   base is presented through a facade whose canvas hands it out, so no other
+ *   context is created and no global (prototype) state is ever touched;
+ * - a refusal throws LayoutAdmissionError (the painter's coarse tile, the find
+ *   overlay's whole-cell highlight);
+ * - trim() retires the pair once its caches pass a cap: every host built on it
+ *   is dropped with it (hosts handed out never capture a context), so its
+ *   charge is returned only when nothing references the pair;
+ * - a font publication (setFontGen) drops the hosts and their width caches.
  */
 import type { XlsxSheet } from '../../xlsx/types'
 import { createCellLayoutHost } from '../../xlsx/view/renderViewport'
@@ -23,9 +27,46 @@ import { TILE_CANVAS_BYTES, shapeCacheBytes } from '../../xlsx/view/mainLedger'
 /** Retained shaping caches beyond this are dropped by trim(). */
 export const MEASURE_CONTEXT_CAP = 4 * 1024 * 1024
 
+/** A base measurement context (and the local identity context the canonical
+ * layout derives from it), each measuring only through `admitShape` first.
+ * The caller admits both contexts (2 × TILE_CANVAS_BYTES) before calling.
+ * Null without a canvas-capable document. */
+export function createAdmittedLayoutContext(admitShape: (cache: 'base' | 'local', font: string, text: string) => void): CanvasRenderingContext2D | null {
+  const doc = globalThis.document
+  if (!doc) return null
+  const make = (cache: 'base' | 'local'): CanvasRenderingContext2D | null => {
+    let ctx: CanvasRenderingContext2D | null = null
+    try {
+      const canvas = doc.createElement('canvas')
+      canvas.width = 1
+      canvas.height = 1
+      ctx = canvas.getContext('2d')
+    } catch { ctx = null }
+    if (!ctx) return null
+    const owned = ctx, native = owned.measureText.bind(owned)
+    owned.measureText = (text: string) => { admitShape(cache, owned.font, text); return native(text) }
+    return owned
+  }
+  const base = make('base'), local = make('local')
+  if (!base || !local) return null
+  // core/text-metrics creates its local context from base.canvas.ownerDocument:
+  // the facade's canvas hands it the admitted local context instead.
+  const localCanvas = { width: 4, height: 4, getContext: () => local }
+  const canvas = { width: 1, height: 1, ownerDocument: { createElement: () => localCanvas } }
+  return new Proxy(base, {
+    get(target, property) {
+      if (property === 'canvas') return canvas
+      const value = Reflect.get(target, property, target) as unknown
+      return typeof value === 'function' ? (value as (...args: unknown[]) => unknown).bind(target) : value
+    },
+    set(target, property, value) { return Reflect.set(target, property, value, target) },
+  })
+}
+
 export class SharedMeasureContext {
   private ctx: CanvasRenderingContext2D | null = null
-  private generation = 0
+  private hosts = new WeakMap<object, CellLayoutHost>()
+  private fontGen: number | undefined
   private charged = 0
   private readonly caches = new Map<string, { seen: Set<string>; units: number }>()
   constructor(private readonly admission: () => LayoutAdmission, private readonly cap = MEASURE_CONTEXT_CAP) {}
@@ -52,56 +93,42 @@ export class SharedMeasureContext {
     entry.units += text.length
     this.caches.set(key, entry)
   }
-  private context(): CanvasRenderingContext2D | null {
+  private context(): CanvasRenderingContext2D {
     if (this.ctx) return this.ctx
-    // The base context and the local identity context the layout derives from it.
     this.grow(2 * TILE_CANVAS_BYTES)
-    let ctx: CanvasRenderingContext2D | null = null
-    try {
-      const canvas = globalThis.document?.createElement('canvas')
-      if (canvas) { canvas.width = 1; canvas.height = 1 }
-      ctx = canvas?.getContext('2d') ?? null
-    } catch { ctx = null }
-    if (!ctx) return null
-    const native = ctx.measureText.bind(ctx), base = ctx
-    ctx.measureText = (text: string) => { this.shape('base', base.font, text); return native(text) }
-    this.ctx = ctx
-    this.generation++
-    return ctx
+    const ctx = createAdmittedLayoutContext((cache, font, text) => this.shape(cache, font, text))
+    if (!ctx) throw new LayoutAdmissionError()
+    return this.ctx = ctx
   }
-  /** Drops the contexts once their caches pass the cap (between tiles). */
+  /** A font publication: hosts (and their measured-width caches) rebuild. */
+  setFontGen(fontGen: number): void {
+    if (fontGen === this.fontGen) return
+    this.fontGen = fontGen
+    this.hosts = new WeakMap()
+  }
+  /** Retires the pair once its caches pass the cap (between frames). */
   trim(): void {
     if (this.charged <= this.cap) return
-    this.admission().measureChanged?.(-this.charged)
-    this.charged = 0
+    // Hosts built on the pair go with it: nothing references it afterwards.
+    this.hosts = new WeakMap()
     this.ctx = null
     this.caches.clear()
+    this.admission().measureChanged?.(-this.charged)
+    this.charged = 0
   }
-  /** A layout host on the shared contexts (created lazily, admitted first). */
+  private inner(sheet: Partial<XlsxSheet>): CellLayoutHost {
+    const ctx = this.context()
+    let host = this.hosts.get(sheet)
+    if (!host) this.hosts.set(sheet, host = createCellLayoutHost(ctx, sheet))
+    return host
+  }
+  /** A layout host for `sheet`. It never captures a context: each layout uses
+   * the current admitted pair (created and admitted on first use). */
   host(sheet: Partial<XlsxSheet>): CellLayoutHost {
     // Formatting and overflow certification need no context.
     const pure = createCellLayoutHost(undefined as unknown as CanvasRenderingContext2D, sheet)
-    let made: { host: CellLayoutHost; generation: number } | null = null
-    const current = (): CellLayoutHost => {
-      const ctx = this.context()
-      if (!ctx) throw new LayoutAdmissionError()
-      if (!made || made.generation !== this.generation) made = { host: createCellLayoutHost(ctx, sheet), generation: this.generation }
-      return made.host
-    }
     return {
-      layoutBody: (cell, width, height, overflow, preformatted) => {
-        const host = current(), base = this.ctx!
-        // The local identity context is created inside the layout and measures
-        // through the shared 2D prototype: observe exactly this synchronous call.
-        const proto = Object.getPrototypeOf(base) as CanvasRenderingContext2D
-        const original = proto.measureText
-        const shape = (font: string, text: string) => this.shape('local', font, text)
-        proto.measureText = function (this: CanvasRenderingContext2D, text: string) {
-          if (this !== base) shape(this.font, text)
-          return original.call(this, text)
-        }
-        try { return host.layoutBody(cell, width, height, overflow, preformatted) } finally { proto.measureText = original }
-      },
+      layoutBody: (cell, width, height, overflow, preformatted) => this.inner(sheet).layoutBody(cell, width, height, overflow, preformatted),
       canReuseOverflow: (body, overflow) => pure.canReuseOverflow!(body, overflow),
       paintedText: (cell, width, admission) => pure.paintedText!(cell, width, admission),
     }

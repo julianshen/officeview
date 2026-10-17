@@ -368,17 +368,21 @@ function countShapedTexts(ctx: CanvasRenderingContext2D, admit?: (bytes: number)
   ctx.fillText = (text: string, x: number, y: number, maxWidth?: number) => { note(text); if (maxWidth === undefined) fillText(text, x, y); else fillText(text, x, y, maxWidth) }
   ctx.measureText = (text: string) => { note(text); return measureText(text) }
   return Object.assign(out, {
-    /** The coarse resource notice, drawn with the unadmitted native call: one
-     * short label whose shaping the TILE_CANVAS_BYTES context charge covers. */
+    /** The coarse resource outcome: the pending tone, plus the notice label
+     * only if its own shaping is admitted (the viewer status always carries the
+     * notice, so a tone-only tile is still a declared state). */
     paintNotice(text: string, box: LogicalCellBox) {
       ctx.save()
-      ctx.setTransform(1, 0, 0, 1, 0, 0)
-      ctx.fillStyle = PENDING_FILL
-      ctx.fillRect(0, 0, ctx.canvas.width, ctx.canvas.height)
-      ctx.fillStyle = '#666666'
-      ctx.font = '12px sans-serif'
-      fillText(text, 8, 20)
-      ctx.restore()
+      try {
+        ctx.setTransform(1, 0, 0, 1, 0, 0)
+        ctx.fillStyle = PENDING_FILL
+        ctx.fillRect(0, 0, ctx.canvas.width, ctx.canvas.height)
+        ctx.fillStyle = '#666666'
+        ctx.font = '12px sans-serif'
+        let admitted = true
+        try { note(text) } catch (error) { if (!(error instanceof LayoutAdmissionError)) throw error; admitted = false }
+        if (admitted) fillText(text, 8, 20)
+      } finally { ctx.restore() }
       void box
     },
   })

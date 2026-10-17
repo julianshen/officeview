@@ -68,3 +68,74 @@ describe('shared admitted measurement context', () => {
     expect(admission.measured()).toBe(0)
   })
 })
+
+describe('confirmation r8', () => {
+  it('F1 trim drops every host built on the retired pair before returning its charge (the old context is collectable)', async () => {
+    const admission = gate()
+    const context = new SharedMeasureContext(() => admission, 16 * 1024)
+    const host = context.host(sheet)
+    host.layoutBody(wrapped(distinctWords(400)), 64, 10_000)
+    const internals = context as unknown as { ctx: object | null; hosts: WeakMap<object, unknown> }
+    const retired = new WeakRef(internals.ctx!)
+    let hostsBefore: unknown = internals.hosts
+    context.trim()
+    expect(admission.measured()).toBe(0)
+    // No host references the retired pair: the host map was replaced and the
+    // handed-out host captures no context.
+    expect(internals.hosts).not.toBe(hostsBefore)
+    hostsBefore = undefined
+    expect(internals.ctx).toBeNull()
+    const gc = (globalThis as { gc?: () => void }).gc
+    // Under --expose-gc (vitest execArgv) the retired pair must be collectable.
+    if (gc) { await new Promise(resolve => setTimeout(resolve, 0)); gc(); expect(retired.deref()).toBeUndefined() }
+    if (process.env.OFFICEVIEW_EXPECT_GC) expect(typeof gc).toBe('function')
+    // The next layout admits a fresh pair.
+    host.layoutBody(wrapped('fresh'), 64, 200)
+    expect(admission.measured()).toBeGreaterThanOrEqual(2 * TILE_CANVAS_BYTES)
+  })
+
+  it('F3 a font publication rebuilds hosts and their measured-width caches', () => {
+    // The newly available font is simulated by doubling native widths.
+    const proto = Object.getPrototypeOf(document.createElement('canvas').getContext('2d')!) as CanvasRenderingContext2D
+    const original = proto.measureText
+    let factor = 1
+    const spy = vi.spyOn(proto, 'measureText').mockImplementation(function (this: CanvasRenderingContext2D, text: string) {
+      const m = original.call(this, text)
+      return { width: m.width * factor, actualBoundingBoxAscent: m.actualBoundingBoxAscent, actualBoundingBoxDescent: m.actualBoundingBoxDescent, fontBoundingBoxAscent: m.fontBoundingBoxAscent, fontBoundingBoxDescent: m.fontBoundingBoxDescent } as TextMetrics
+    })
+    const admission = gate()
+    const context = new SharedMeasureContext(() => admission)
+    context.setFontGen(1)
+    const host = context.host(sheet)
+    const cell: XlsxCell = { ref: 'A1', row: 0, col: 0, value: 'fontprobe', styleIndex: 0 }
+    const first = host.layoutBody(cell, 400, 20)
+    try {
+      factor = 2
+      context.setFontGen(2)
+      const second = host.layoutBody(cell, 400, 20)
+      const width = (body: typeof first) => (body.text as { width: number }).width
+      expect(width(second)).toBeCloseTo(2 * width(first), 5)
+    } finally { spy.mockRestore() }
+  })
+
+  it('F4 no global state: the 2D prototype is never patched, even when a layout re-enters another context', () => {
+    const proto = Object.getPrototypeOf(document.createElement('canvas').getContext('2d')!) as CanvasRenderingContext2D
+    const nativeMeasure = proto.measureText
+    let inner: SharedMeasureContext | undefined
+    const seenDuring: unknown[] = []
+    const outerGate = gate()
+    const innerGate = gate()
+    outerGate.measureChanged = delta => {
+      seenDuring.push(proto.measureText)
+      if (!inner) { inner = new SharedMeasureContext(() => innerGate); inner.host(sheet).layoutBody(wrapped('inner first'), 64, 200) }
+      ;(outerGate as unknown as { _m: number })._m = ((outerGate as unknown as { _m?: number })._m ?? 0) + delta
+    }
+    const outer = new SharedMeasureContext(() => outerGate)
+    outer.host(sheet).layoutBody(wrapped(distinctWords(20)), 64, 2000)
+    const outerCharge = outer.bytes
+    inner!.host(sheet).layoutBody(wrapped(distinctWords(40)), 64, 2000)
+    expect(outer.bytes).toBe(outerCharge)
+    expect(proto.measureText).toBe(nativeMeasure)
+    expect(seenDuring.every(fn => fn === nativeMeasure)).toBe(true)
+  })
+})
