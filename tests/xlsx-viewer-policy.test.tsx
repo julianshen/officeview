@@ -97,15 +97,15 @@ it('diagnoses a rejected asynchronous print request instead of leaving an unhand
   expect(print).not.toHaveBeenCalled()
 })
 
-it('touch headers and the canvas share the full four-control header height', async () => {
+it('touch headers and the canvas share the label-plus-actions header height (stream F: was four stacked controls)', async () => {
   vi.stubGlobal('matchMedia', () => ({ matches: true, addEventListener() {}, removeEventListener() {} }))
   const ui = render(<InteractiveSheetDoc doc={docOf()} />)
   await waitFor(() => expect(ui.getByRole('status').textContent).not.toMatch(/Loading sheet/))
   const canvas = ui.getByTestId('officeview-sheet-base') as HTMLCanvasElement
   const header = ui.container.querySelector('[data-officeview-ui="grid-headers"]') as HTMLElement
-  expect(header.style.height).toBe('176px')
-  expect(canvas.style.height).toBe('200px') // 400px pane - 176px header - 24px status line
-  expect(canvas.parentElement?.style.top).toBe('176px')
+  expect(header.style.height).toBe('88px')
+  expect(canvas.style.height).toBe('288px') // 400px pane - 88px header - 24px status line
+  expect(canvas.parentElement?.style.top).toBe('88px')
 })
 
 it('filter commits use authoritative source values rather than a stale document preview', async () => {
