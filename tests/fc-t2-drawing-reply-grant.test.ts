@@ -274,7 +274,7 @@ describe('main receiving grant', () => {
       expect(f.grant('q-1')).toBe(0)
       expect(f.ledger.snapshot().byPool.drawings).toBeGreaterThan(64 * 1024)
       expect(f.ledger.peakBytes).toBe(peak)
-    } finally { await f.remote.close() }
+    } finally { f.queue(false); await f.remote.close() }
   })
 
   it('refunds at once only when nothing was sent; a disposed client keeps the credit', async () => {
