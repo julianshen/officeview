@@ -827,9 +827,20 @@ export const DECODED_CHUNK_OVERHEAD_BYTES = 1280
 /** Persistent pool entry for the records a RAM-backed (memory) backend retains. */
 const RAM_KEY = 'memory-backend'
 
-/** Typed-lane bytes of a payload. */
-const laneBytes = (p: CellPagePayload): number =>
-  p.nums.byteLength + p.rows.byteLength + p.styles.byteLength + p.textStart.byteLength + p.cols.byteLength + p.text.byteLength + p.kinds.byteLength + p.flags.byteLength
+/** Bytes the given typed views keep alive: each distinct backing buffer once,
+ * in full. A decoded record's lanes all view the one encoded buffer (header,
+ * padding and the formula-JSON lane included), which stays reachable as long as
+ * any view does; a built payload's lanes own their buffers. */
+export function backingBytes(views: readonly ArrayBufferView[]): number {
+  const buffers = new Set<ArrayBufferLike>()
+  let bytes = 0
+  for (const view of views) if (!buffers.has(view.buffer)) { buffers.add(view.buffer); bytes += view.buffer.byteLength }
+  return bytes
+}
+/** Typed-lane bytes of a payload: the backing buffers its lanes keep alive. */
+const laneBytes = (p: CellPagePayload): number => backingBytes([p.nums, p.rows, p.styles, p.textStart, p.cols, p.text, p.kinds, p.flags])
+/** Bytes a string record's views keep alive. */
+const chunkBytes = (c: StringChunk): number => backingBytes([c.text, c.textStart])
 /** Formula metadata a payload owns: per object plus 2 B per JSON character (at least its strings). */
 const metaBytes = (p: CellPagePayload): number => p.meta.size * META_OBJECT_BYTES + 2 * metaArrayLength(p.meta)
 /** Heap held by a payload: its typed lanes and its formula metadata. */
@@ -1332,21 +1343,21 @@ export class SourcePageStore implements PageSink {
   /** An oversized value by blob id, through the same bounded decoded cache as pages. */
   async blob(id: number): Promise<string> {
     if (!Number.isSafeInteger(id) || id < 0 || id >= this.blobCount) throw new PackageError('storage-error', `oversized cell value ${id} is not stored`)
-    const record = await this.load(`blob/${id}`, decodeStrings, (c, shared) => DECODED_CHUNK_OVERHEAD_BYTES + (shared ? 0 : c.text.byteLength + c.textStart.byteLength))
+    const record = await this.load(`blob/${id}`, decodeStrings, (c, shared) => DECODED_CHUNK_OVERHEAD_BYTES + (shared ? 0 : chunkBytes(c)))
     if (record.textStart.length !== 2) throw new PackageError('parse-error', `oversized cell value ${id} is malformed`)
     return textAt(record, 0)
   }
   /** The typed record holding an oversized value (no string is built); for transient, synchronous use. */
   async blobRecord(id: number): Promise<{ record: StringChunk; index: number } | undefined> {
     if (!Number.isSafeInteger(id) || id < 0 || id >= this.blobCount) return undefined
-    const record = await this.load(`blob/${id}`, decodeStrings, (c, shared) => DECODED_CHUNK_OVERHEAD_BYTES + (shared ? 0 : c.text.byteLength + c.textStart.byteLength))
+    const record = await this.load(`blob/${id}`, decodeStrings, (c, shared) => DECODED_CHUNK_OVERHEAD_BYTES + (shared ? 0 : chunkBytes(c)))
     return record.textStart.length === 2 ? { record, index: 0 } : undefined
   }
   /** The typed chunk holding a shared string and its index (no string is built); for transient, synchronous use. */
   async sharedStringRecord(id: number): Promise<{ record: StringChunk; index: number } | undefined> {
     if (!Number.isSafeInteger(id) || id < 0 || id >= this.stringCount || this.stringChunkSize === 0) return undefined
     const chunk = Math.floor(id / this.stringChunkSize)
-    const record = await this.load(`sst/${chunk}`, decodeStrings, (c, shared) => DECODED_CHUNK_OVERHEAD_BYTES + (shared ? 0 : c.text.byteLength + c.textStart.byteLength))
+    const record = await this.load(`sst/${chunk}`, decodeStrings, (c, shared) => DECODED_CHUNK_OVERHEAD_BYTES + (shared ? 0 : chunkBytes(c)))
     return { record, index: id - chunk * this.stringChunkSize }
   }
   /** A decoded string record (SST chunk or oversized value) kept owned for the
@@ -1362,7 +1373,7 @@ export class SourcePageStore implements PageSink {
     if (!located) return undefined
     const key = this.stringRecordKey(kind, id)
     const resident = this.resident.get(key)
-    const bytes = DECODED_CHUNK_OVERHEAD_BYTES + located.record.text.byteLength + located.record.textStart.byteLength
+    const bytes = DECODED_CHUNK_OVERHEAD_BYTES + chunkBytes(located.record)
     if (resident && resident.value === located.record && resident.entry) return { key, ...located, retained: true, bytes: resident.bytes, release: resident.entry.pin() }
     if (resident && resident.value === located.record && !this.pool) return { key, ...located, retained: true, bytes: resident.bytes, release: () => {} }
     return { key, ...located, retained: false, bytes, release: () => {} }
@@ -1382,7 +1393,7 @@ export class SourcePageStore implements PageSink {
   async sharedString(id: number): Promise<string | undefined> {
     if (!Number.isSafeInteger(id) || id < 0 || id >= this.stringCount || this.stringChunkSize === 0) return undefined
     const chunk = Math.floor(id / this.stringChunkSize)
-    const strings = await this.load(`sst/${chunk}`, decodeStrings, (c, shared) => DECODED_CHUNK_OVERHEAD_BYTES + (shared ? 0 : c.text.byteLength + c.textStart.byteLength))
+    const strings = await this.load(`sst/${chunk}`, decodeStrings, (c, shared) => DECODED_CHUNK_OVERHEAD_BYTES + (shared ? 0 : chunkBytes(c)))
     return textAt(strings, id - chunk * this.stringChunkSize)
   }
 }
