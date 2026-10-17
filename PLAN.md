@@ -13,7 +13,7 @@ for its requirement matrix. The WordArt plan below retains its existing scope.
 
 ## Browser Acceptance Legs (Codex Audit M3)
 
-- [ ] Test: (a) AC-STORE-03 / AC-SEM-04 / AC-SEM-05 Dynamic-spill and above-anchor drawing refusal in a real browser
+- [x] Test: (a) AC-STORE-03 / AC-SEM-04 / AC-SEM-05 Dynamic-spill and above-anchor drawing refusal in a real browser
   - Dynamic-spill refusal on sort: Range overlapping dynamic spill (D20:D23 SEQUENCE) refuses with "Operation refused: dynamic-spill."
   - Drawing-impact refusal on sort: Range covering two-cell drawing anchor refuses with "Operation refused: drawing-impact."
   - Drawing-impact refusal on filter: Filtering column A to hide a row above the drawing anchor refuses with "Operation refused: drawing-impact."

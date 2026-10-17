@@ -549,6 +549,50 @@ test.describe('S10.1 real interactive viewer', () => {
     await expect.poll(async () => (await activeCell(page))?.label ?? '').toBe('C31, value 2')
   })
 
+  test('F5 structure: dynamic-spill and drawing anchor refuse sort and filter; filter below anchor commits', async ({ page }) => {
+    // Dynamic-array spill: range overlapping D20:D23 SEQUENCE(4) refuses sorts (AC-STORE-03, AC-SEM-04).
+    await openViewer(page, 'f5-spill.xlsx')
+    const beforeA2 = await page.getByRole('gridcell', { name: /^A2, value / }).textContent()
+    await goTo(page, 'A20')
+    await page.getByRole('grid').focus()
+    for (let i = 0; i < 3; i++) await page.keyboard.press('Shift+ArrowDown')
+    await page.keyboard.press('Shift+ArrowRight')
+    await page.getByRole('button', { name: 'Cycle sort column A' }).click()
+    await expect(status(page)).toContainText('Operation refused: dynamic-spill', { timeout: 30_000 })
+    await expect(page.getByRole('columnheader', { name: /^Column A/ })).not.toHaveAttribute('aria-sort', /ascending|descending/)
+    expect(await page.getByRole('gridcell', { name: /^A2, value / }).textContent()).toBe(beforeA2)
+    // Child cell of dynamic spill is read-only accessible.
+    await goTo(page, 'D21')
+    await expect.poll(async () => (await activeCell(page))?.label ?? '').toBe('D21, value 2')
+
+    // Drawing anchor: sort overlapping twoCell drawing anchor at rows 10..13 refuses (AC-STORE-03, AC-SEM-04).
+    await openViewer(page, 'f5-drawing.xlsx')
+    await goTo(page, 'A10')
+    await page.getByRole('grid').focus()
+    for (let i = 0; i < 2; i++) await page.keyboard.press('Shift+ArrowDown')
+    await page.keyboard.press('Shift+ArrowRight')
+    await page.getByRole('button', { name: 'Cycle sort column A' }).click()
+    await expect(status(page)).toContainText('Operation refused: drawing-impact', { timeout: 30_000 })
+
+    // Filter on B hiding 'top' (rows 2..9, above the drawing anchor at row 10) is refused (AC-SEM-05).
+    await goTo(page, 'A1')
+    await page.getByRole('button', { name: /^Filter column B/ }).click()
+    const dialog = page.getByRole('dialog', { name: 'Column filter' })
+    await dialog.getByRole('checkbox', { name: 'top', exact: true }).uncheck()
+    await dialog.getByRole('button', { name: 'OK' }).click()
+    await expect(status(page)).toContainText('Operation refused: drawing-impact', { timeout: 30_000 })
+
+    // Filter on B hiding only 'bot' (rows 21..30, below the drawing anchor) is allowed and commits (AC-SEM-05).
+    await page.getByRole('button', { name: /^Filter column B/ }).click()
+    await dialog.getByRole('checkbox', { name: 'top', exact: true }).check()
+    await expect(dialog.getByRole('checkbox', { name: 'top', exact: true })).toBeChecked()
+    await dialog.getByRole('checkbox', { name: 'bot', exact: true }).uncheck()
+    await expect(dialog.getByRole('checkbox', { name: 'bot', exact: true })).not.toBeChecked()
+    await dialog.getByRole('button', { name: 'OK' }).click()
+    await expect(status(page)).toContainText('Visible body 19 / complete body 29', { timeout: 30_000 })
+  })
+
+
   test('F7 two sheets with identical first revisions: views, zoom and hidden-row inspection stay per sheet; reload resets', async ({ page }) => {
     await openViewer(page, 'f7-two-sheets.xlsx')
     // Reproduced gap: the 0.75pt row 10 (2 device px at DPR 2) made the whole
