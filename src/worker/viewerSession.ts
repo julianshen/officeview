@@ -2391,7 +2391,9 @@ export class DocumentSession {
    * committed view: a newer commit, a close or a cancellation withholds it.
    * Store pages carry their own bounds (rows: READ_ROWS_PAGE_ROWS/MAX_CELLS);
    * a scan page is capped at MAX_SCAN_PAGE and continues a resident iterator. */
-  async read(owner: CacheIdentity, query: SourceReadQuery, signal: AbortSignal): Promise<SourceReadResult | { kind: 'stale' } | { kind: 'cancelled' }> {
+  /** `retain` (FC-T2): takes over a finished result's worker share so it ends
+   * after the kernel posted the reply carrying it (or ended without one). */
+  async read(owner: CacheIdentity, query: SourceReadQuery, signal: AbortSignal, retain?: (release: () => void) => void): Promise<SourceReadResult | { kind: 'stale' } | { kind: 'cancelled' }> {
     if (!this.isCurrent(owner)) return { kind: 'stale' }
     const store = this.store(owner.sheetId)
     const options = { signal, stamp: { ...store.stamp } }
@@ -2399,9 +2401,16 @@ export class DocumentSession {
     switch (query?.op) {
       case 'drawings': {
         // The read's working set is a transient share of the document pool (S4.3).
+        // A provider that ignores its signal keeps building after a deadline or
+        // cancel settled this read: its share is handed on when the RAW provider
+        // settles. The result it returned (the outgoing clone) stays charged
+        // until the kernel posted it: `retain` ends the share after the sink.
         const charge = this.charge()
-        try { result = { op: 'drawings', result: await readSheetDrawings(store, options, this.options.profile ?? 'D', charge) } }
-        finally { charge.release() }
+        let raw: Promise<unknown> | undefined, drained = false
+        const observed = interruptibleStore(this.source.store(owner.sheetId), work => { raw = work; const done = () => { drained = true }; void work.then(done, done) })
+        const handOff = () => { if (retain) retain(() => charge.release()); else charge.release() }
+        try { result = { op: 'drawings', result: await readSheetDrawings(observed, options, this.options.profile ?? 'D', charge) } }
+        finally { if (!raw || drained) handOff(); else void raw.then(handOff, handOff) }
         break
       }
       case 'cell': result = { op: 'cell', read: await store.readCell(query.at, options) }; break

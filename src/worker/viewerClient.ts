@@ -14,7 +14,7 @@ import type {
   CacheIdentity, ViewCommitDelta, WorkbookOwner, WorkerCommand, WorkerCommandKind, WorkerOwner, WorkerReply,
 } from '../xlsx/view/contracts'
 import {
-  initialIdentity, initialWorkbookOwner, isArrayBuffer, isTerminalReply, isViewerReply, TransferAccounting,
+  initialIdentity, initialWorkbookOwner, isArrayBuffer, isTerminalReply, isViewerReply, MAX_REQUEST_ID_UNITS, TransferAccounting,
   type CommandOf, type TransferLedger,
 } from './viewerProtocol'
 
@@ -67,6 +67,8 @@ export class ViewerClient {
   /** Replies with no pending request (late, duplicate or foreign). */
   get ignoredReplies(): number { return this.ignored }
   get pendingCount(): number { return this.pending.size }
+  /** Whether `requestId` still waits for its terminal reply. */
+  isPending(requestId: string): boolean { return this.pending.has(requestId) }
   /** Replies whose commandKind or owner did not match their pending request. */
   get rejectedReplies(): number { return this.rejected }
 
@@ -76,7 +78,8 @@ export class ViewerClient {
    * in FULL, so those are accounted by full byteLength once per buffer. An open
    * command's object source document is cloned as one estimated copy. */
   send<K extends WorkerCommandKind>(command: CommandOf<K>): Promise<WorkerReply<K>> {
-    if (this.pending.has(command.requestId)) return Promise.reject(new Error(`Duplicate requestId ${command.requestId}`))
+    if (typeof command.requestId !== 'string' || command.requestId.length > MAX_REQUEST_ID_UNITS) return Promise.reject(new ViewerNotSentError(`requestId longer than ${MAX_REQUEST_ID_UNITS} units`))
+    if (this.pending.has(command.requestId)) return Promise.reject(new ViewerNotSentError(`Duplicate requestId ${command.requestId}`))
     const transfer: ArrayBuffer[] = []
     const message = command as WorkerCommand
     if (message.kind === 'open' && message.source.kind === 'object') {
@@ -115,7 +118,7 @@ export class ViewerClient {
         this.port.postMessage(command, transfer)
       } catch (error) {
         this.pending.delete(command.requestId)
-        reject(error instanceof Error ? error : new Error(String(error)))
+        reject(new ViewerNotSentError(error instanceof Error ? error.message : String(error), error))
       }
     })
   }
@@ -172,6 +175,12 @@ export class ViewerClient {
     this.pending.clear()
     this.listeners.clear()
   }
+}
+/** A command that provably never reached the port (a duplicate requestId, or
+ * postMessage threw): no reply can arrive. Every other rejection (dispose)
+ * only detached this client, so a reply may still be in flight. */
+export class ViewerNotSentError extends Error {
+  constructor(message: string, readonly cause?: unknown) { super(message); this.name = 'ViewerNotSentError' }
 }
 export function createViewerClient(port: ViewerPort, prefix?: string): ViewerClient {
   return new ViewerClient(port, prefix)

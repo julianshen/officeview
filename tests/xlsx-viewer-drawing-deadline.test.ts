@@ -67,14 +67,17 @@ it.each(['timeout', 'cancel'] as const)('interrupts a signal-ignoring drawing pr
     }
     await pending
     expect(replies).toMatchObject([{ kind: 'cancelled', diagnostics: [{ code: mode === 'timeout' ? 'query-timeout' : 'cancel-requested' }] }])
-    expect(kernel.lifecycleStats()).toMatchObject({ inflight: 0, transientBytes: 0 })
+    // FC-T2: the request settled, but the provider still holds its working set
+    // until it actually returns; its share stays charged until then.
+    expect(kernel.lifecycleStats()).toMatchObject({ inflight: 0 })
+    expect(kernel.lifecycleStats().transientBytes).toBeGreaterThanOrEqual(128)
     expect(providerSignal?.aborted).toBe(true)
     expect(lateAccepted).toBeUndefined()
     release()
     await flush()
     expect(replies).toHaveLength(1)
     expect(kernel.lifecycleStats()).toMatchObject({ inflight: 0, transientBytes: 0 })
-    expect(lateAccepted).toBe(false)
+    expect(lateAccepted).toBe(true)
     provider.mockResolvedValueOnce(drawings)
     const next: WorkerReply[] = []
     await kernel.handle({ kind: 'read', requestId: 'next', owner: initialIdentity('doc', 's'), query: { op: 'drawings' } }, out => next.push(out))

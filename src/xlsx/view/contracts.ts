@@ -459,7 +459,11 @@ export type SourceReadQuery =
   /** Ends a scan continuation the caller abandoned (iterator return/cancel). */
   | { op: 'releaseScan'; cursor: string }
   /** S13.2: the sheet's drawing content (SourceStore.readDrawings). */
-  | { op: 'drawings' }
+  /** `replyByteLimit` (internal, FC-T2): the receiving grant main reserved for
+   * the reply, in estimatePayloadBytes units over the WHOLE final reply. The
+   * worker replaces a reply over it with a payload-free quota reply. Omitted:
+   * no grant (legacy callers); every RemoteWorkbook dispatch sets it. */
+  | { op: 'drawings'; replyByteLimit?: number }
   /** S10.2: operation range detection (sort admission includes the structural
    * guard) run next to the store, so a paged sheet is not scanned strip by
    * strip across the worker boundary. Same detectors, same outcome. */
@@ -546,6 +550,9 @@ export type WorkerReplyBase<K extends WorkerCommandKind> =
     requestId: string
     owner: WorkerCommandOwner<K>
     diagnostics: readonly WorkerDiagnostic[]
+    /** FC-T2 (internal): on a reply to a granted drawings read, its exact
+     * measured size (this field included), never over the grant. */
+    replyBytes?: number
   } : never
 export type WorkerResult =
   | { kind: 'open'; valuePolicy: ValuePolicy; sheets: readonly { sheetId: string; name: string }[]; formatting?: WorkbookFormatting }
