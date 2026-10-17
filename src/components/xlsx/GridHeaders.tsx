@@ -174,6 +174,28 @@ export function GridHeaders(props: GridHeadersProps): ReactElement {
     return () => document.removeEventListener('pointerdown', outside, true)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [laneOpen])
+  // Touch: a column at least 44px wide but too narrow for its actions side by
+  // side shows a disclosure in its actions row; the open column's group sits
+  // under its header, with the lane's close rules (Escape, an action, a tap outside).
+  const [openCol, setOpenCol] = useState<number | null>(null)
+  if (openCol !== null && (!touch || !props.columns.includes(openCol))) setOpenCol(null)
+  const colButton = useRef<HTMLButtonElement | null>(null), colGroup = useRef<HTMLDivElement | null>(null)
+  const colGroupId = `${laneId}-col`
+  const closeCol = (refocus: boolean) => {
+    setOpenCol(null)
+    if (refocus && props.controlMode) colButton.current?.focus()
+  }
+  useEffect(() => {
+    if (openCol === null) return
+    if (props.controlMode) colGroup.current?.querySelector('button')?.focus()
+    const outside = (event: Event) => {
+      const target = event.target as Node | null
+      if (target && !colGroup.current?.contains(target) && !colButton.current?.contains(target)) setOpenCol(null)
+    }
+    document.addEventListener('pointerdown', outside, true)
+    return () => document.removeEventListener('pointerdown', outside, true)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [openCol])
   const laneTarget = (index: number): CSSProperties => ({ ...target, position: 'absolute', left: 0, top: GRID_HEADER_SIZE * index, width: GRID_HEADER_SIZE, height: GRID_HEADER_SIZE, background: '#ffffff' })
   return <div role="row" aria-rowindex={1} data-officeview-ui="grid-headers" onPointerDown={event => event.stopPropagation()} onDoubleClick={event => event.stopPropagation()} style={{ position: 'absolute', top: 0, left: 0, height, width: '100%', zIndex: 2, background: HEADER_COLORS.background, boxShadow: `inset 0 -1px ${HEADER_COLORS.track}` }}>
     <div role="columnheader" aria-colindex={1} aria-label="Worksheet corner" style={{ position: 'absolute', left: 0, width: gutter, height: laneCol === undefined ? GRID_HEADER_SIZE : height, zIndex: 1 }}>
@@ -185,7 +207,7 @@ export function GridHeaders(props: GridHeadersProps): ReactElement {
           style={{ ...target, position: 'absolute', left: 0, top: GRID_HEADER_SIZE, width: GRID_HEADER_SIZE, height: GRID_HEADER_SIZE }}>{columnToLetters(laneCol)}⋯</button>
         {laneOpen && <div ref={laneGroup} id={laneId} role="group" aria-label={`Column ${columnToLetters(laneCol)} actions`} data-officeview-ui="header-lane"
           onKeyDown={event => { if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); closeLane(true) } }}
-          onClickCapture={() => { setOpenLane(null) }}
+          onClick={() => { setOpenLane(null) }}
           style={{ position: 'absolute', left: 0, top: GRID_HEADER_SIZE * 2, width: GRID_HEADER_SIZE, zIndex: 3, boxShadow: '0 2px 6px rgba(0,0,0,.25)' }}>
           {props.onSelect && <button type="button" data-header-column={laneCol} data-header-lane={laneCol} tabIndex={props.controlMode ? 0 : -1} onMouseDown={keepGridFocus}
             aria-label={`Select whole column ${columnToLetters(laneCol)}`} style={laneTarget(0)}
@@ -214,14 +236,29 @@ export function GridHeaders(props: GridHeadersProps): ReactElement {
       const cellTarget = touch ? { ...target, minWidth: Math.min(GRID_HEADER_SIZE, box.width), width: box.width, flex: 'none' } : { ...target, flex: '1 1 auto', minWidth: 0 }
       const actionTarget: CSSProperties = touch ? cellTarget : compact && !revealed ? { ...target, ...visuallyHidden } : { ...target, flex: 'none', width: ACTION_PX, color: HEADER_COLORS.action }
       const iconClip = { display: 'block', width: touch ? box.width : undefined, overflow: 'hidden', textAlign: 'center' as const }
+      const count = props.onSortDialog ? 3 : 2, inline = box.width >= count * GRID_HEADER_SIZE, open = openCol === col
       return <div key={col} role="columnheader" aria-colindex={col + 2} aria-label={label} aria-selected={selected} aria-sort={priority === 0 ? direction : undefined}
         onFocus={() => setFocusCol(col)} onBlur={event => { if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setFocusCol(current => current === col ? null : current) }}
-        style={{ position: 'absolute', left: 0, transform: `translateX(${gutter + box.x}px)`, width, height, overflow: 'hidden', display: 'flex', flexDirection: touch ? 'column' : 'row', alignItems: 'stretch', boxSizing: 'border-box', boxShadow: `inset -1px 0 ${HEADER_COLORS.track}`, ...(revealed ? { zIndex: 3, background: HEADER_COLORS.background } : {}) }}>
+        style={{ position: 'absolute', left: 0, transform: `translateX(${gutter + box.x}px)`, width, height, overflow: open ? 'visible' : 'hidden', display: 'flex', flexDirection: touch ? 'column' : 'row', alignItems: 'stretch', boxSizing: 'border-box', boxShadow: `inset -1px 0 ${HEADER_COLORS.track}`, ...(revealed || open ? { zIndex: 3, background: HEADER_COLORS.background } : {}) }}>
         <button type="button" aria-label={`Select ${label}`} data-header-column={col} tabIndex={props.controlMode ? 0 : -1} onMouseDown={keepGridFocus}
           aria-description={actions ? description : undefined} title={`${label}; ${description}`}
           onClick={event => { props.onNotice?.(`${label}; ${description}`); props.onSelect?.('column', col, { toggle: event.ctrlKey || event.metaKey, extend: event.shiftKey }, event) }}
           style={cellTarget}><span style={{ ...iconClip, whiteSpace: 'nowrap', fontSize: labelFont }}>{letters}</span></button>
-        {actions && !narrowTouch(col) && columnActions(props, col, () => actionTarget, iconClip)}
+        {actions && !narrowTouch(col) && (!touch ? columnActions(props, col, () => actionTarget, iconClip)
+          : <div style={{ display: 'flex', width: box.width, height: GRID_HEADER_SIZE, flex: 'none' }}>{inline
+            ? columnActions(props, col, () => ({ ...target, flex: 'none', width: box.width / count, minWidth: GRID_HEADER_SIZE, color: HEADER_COLORS.action }))
+            : <>
+              <button ref={open ? colButton : undefined} type="button" data-header-disclosure={col} tabIndex={props.controlMode ? 0 : -1} onMouseDown={keepGridFocus}
+                aria-label={`Actions for column ${letters}`} aria-expanded={open} aria-controls={open ? colGroupId : undefined}
+                onClick={() => setOpenCol(open ? null : col)} onKeyDown={event => { if (event.key === 'Escape' && open) { event.preventDefault(); event.stopPropagation(); closeCol(true) } }}
+                style={cellTarget}><span style={iconClip}>⋯</span></button>
+              {open && <div ref={colGroup} id={colGroupId} role="group" aria-label={`Column ${letters} actions`} data-officeview-ui="header-actions"
+                onKeyDown={event => { if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); closeCol(true) } }}
+                onClick={() => { setOpenCol(null) }}
+                style={{ position: 'absolute', left: 0, top: height, width: GRID_HEADER_SIZE, height: count * GRID_HEADER_SIZE, zIndex: 3, boxShadow: '0 2px 6px rgba(0,0,0,.25)' }}>
+                {columnActions(props, col, index => laneTarget(index))}
+              </div>}
+            </>}</div>)}
       </div>
     })}
   </div>
@@ -238,8 +275,10 @@ function columnActions(props: GridHeadersProps, col: number, style: (index: numb
     {props.onSortDialog && <button type="button" data-action-column={col} tabIndex={props.controlMode ? 0 : -1} onMouseDown={keepGridFocus} style={style(2)} aria-label={`More sort options for ${columnToLetters(col)}`} onClick={event => props.onSortDialog?.(col, event.currentTarget)}><span style={iconClip}>⋯</span></button>}
   </>
 }
+/** Touch: a label row plus one actions row (spec §9.3 44px targets); else one row. */
 export function columnHeaderHeight(touch: boolean, actions: boolean, more: boolean): number {
-  return GRID_HEADER_SIZE * (touch && actions ? more ? 4 : 3 : 1)
+  void more
+  return GRID_HEADER_SIZE * (touch && actions ? 2 : 1)
 }
 /** `cancelX`: the row's horizontal transform, undone so the header stays in the gutter. */
 export function GridRowHeader({ props, slot, cancelX = 0 }: { props: GridHeadersProps; slot: number; cancelX?: number }): ReactElement {

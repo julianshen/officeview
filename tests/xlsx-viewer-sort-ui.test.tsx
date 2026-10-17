@@ -205,7 +205,8 @@ it('reserves touch header chrome for visible 44px controls and retains source-sp
     const ui = render(<GridSemantics {...p} onChange={change} onSortCycle={vi.fn()} onFilter={vi.fn()} />)
     const grid = ui.getByRole('grid')
     const header = ui.getByRole('button', { name: 'Select Column A' }).closest<HTMLElement>('[role="columnheader"]')!
-    expect(header.style.height).toBe('132px')
+    // Stream F: one label row plus one actions row (was 3 x 44 = 132px stacked).
+    expect(header.style.height).toBe('88px')
     for (const button of header.querySelectorAll('button')) {
       expect(button.style.minWidth).toBe('44px')
       expect(button.style.minHeight).toBe('44px')
@@ -213,9 +214,9 @@ it('reserves touch header chrome for visible 44px controls and retains source-sp
     }
     // Rows follow the scroll window by transform on both axes (no layout shift):
     // x = gutter + the row frame's shift (0 at the origin), y = header + row offset.
-    expect((grid.querySelector('[aria-rowindex="2"]') as HTMLElement).style.transform).toBe('translate(44px, 132px)')
+    expect((grid.querySelector('[aria-rowindex="2"]') as HTMLElement).style.transform).toBe('translate(44px, 88px)')
     act(() => grid.focus())
-    fireEvent.click(grid, { detail: 1, clientX: 54, clientY: 142 })
+    fireEvent.click(grid, { detail: 1, clientX: 54, clientY: 98 })
     expect(change).toHaveBeenCalledOnce()
     expect(change.mock.calls[0][0].selection.active).toEqual({ row: 0, col: 0 })
     expect(document.activeElement).toBe(grid)

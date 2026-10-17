@@ -68,8 +68,11 @@ describe('#9 header actions and labels', () => {
     expect(parseFloat(header.style.width)).toBeGreaterThan(40)
     expect(sort.style.position).not.toBe('absolute')
   })
-  it('touch headers keep their stacked 44px targets', () => {
+  it('touch headers keep 44px targets (stream F: an 80px column opens its actions from a disclosure)', () => {
     const ui = headers(1, true)
+    const disclosure = ui.getByRole('button', { name: 'Actions for column A' })
+    expect(parseFloat(disclosure.style.minHeight)).toBeGreaterThanOrEqual(GRID_HEADER_SIZE)
+    fireEvent.click(disclosure)
     expect(parseFloat(ui.getByRole('button', { name: 'Cycle sort column A' }).style.minHeight)).toBeGreaterThanOrEqual(GRID_HEADER_SIZE)
   })
   it('the row gutter widens to fit seven-digit row numbers', () => {
