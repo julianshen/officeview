@@ -53,6 +53,7 @@ import { buildXlsx, type XlsxSheetSpec } from '../src/testdata/ooxml-builders'
 import { createRowOrder } from '../src/xlsx/view/order'
 import { BITMAP_BUDGETS } from '../src/xlsx/view/tileCache'
 import type { XlsxDocument } from '../src/xlsx/types'
+import { FIRST_PAINT_TEST, FIRST_PAINT_WAIT } from './helpers/viewer-timing'
 
 async function workbook(sheets: XlsxSheetSpec[] = [{
   name: 'S1',
@@ -77,7 +78,8 @@ async function settle(): Promise<void> {
 async function mountSheet(doc: XlsxDocument, extra: Record<string, unknown> = {}) {
   const h = harness()
   const ui = render(<InteractiveSheetDoc doc={doc} onFrame={h.onFrame} {...extra} />)
-  await waitFor(() => expect(h.last()?.basePaints ?? 0).toBeGreaterThan(0))
+  // A mount's first paint (helpers/viewer-timing): cold on a slow runner.
+  await waitFor(() => expect(h.last()?.basePaints ?? 0).toBeGreaterThan(0), FIRST_PAINT_WAIT)
   await settle()
   return { ui, h }
 }
@@ -289,7 +291,10 @@ describe('interactive sheet viewport (S5.2)', () => {
     expect(ui.getByRole('gridcell', { name: 'B3, value 1; original B1' })).toBeTruthy()
   })
 
-  it('keeps physical canvas and tile allocations inside the bitmap budget (desktop and mobile)', async () => {
+  // Bounded work (two mounts, 12 scroll frames each) that ran 3.7 s at 1 vCPU
+  // against vitest's 5 s default and timed out on the CI runner; the mounts'
+  // first paints use FIRST_PAINT_WAIT, so the test takes FIRST_PAINT_TEST.
+  it('keeps physical canvas and tile allocations inside the bitmap budget (desktop and mobile)', FIRST_PAINT_TEST, async () => {
     for (const profile of ['D', 'M'] as const) {
       const doc = await workbook()
       const { ui, h } = await mountSheet(doc, { profile })
@@ -536,7 +541,9 @@ describe('hidden targets, coarse selection (S5.2 review round 1)', () => {
     expect(grid.getAttribute('aria-activedescendant')).toBe(before)
   })
 
-  it('keeps a coarse selection overlay when the pane crosses the per-cell overlay cap', async () => {
+  // Bounded work (one mount, six zoom steps, one selection) whose 25% repaint
+  // of a 16,384-column pane ran 8.5 s at 0.5 vCPU against the 5 s default.
+  it('keeps a coarse selection overlay when the pane crosses the per-cell overlay cap', FIRST_PAINT_TEST, async () => {
     // Narrow columns at 25% put more cells in the pane than the mobile per-frame cap.
     const doc = await workbook([{ name: 'S1', cols: '<col min="1" max="16384" width="1" customWidth="1"/>', rows: [{ r: 1, cells: [{ ref: 'A1', v: 'x' }] }] }])
     const { ui, h } = await mountSheet(doc, { profile: 'M' })
