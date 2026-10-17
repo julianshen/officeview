@@ -7,6 +7,7 @@
  * never recomputes formatting or text layout. Measurement and formatting stay
  * the host's (render.ts) so both paths format and shape a cell identically.
  */
+import type { FormatAllocation } from '../formula/format'
 import type { XlsxCell, XlsxCellStyle, XlsxMergeRange } from '../types'
 import type { PptxTextBody } from '../../pptx/types'
 import type { TextLayout } from '../../drawing/text-layout'
@@ -37,7 +38,7 @@ export interface CellBodyLayout {
 
 /** The host owns measurement and formatting (spec §11.2: no second text model). */
 export interface CellLayoutHost {
-  layoutBody(cell: XlsxCell, width: number, height: number, overflow?: { left: number; right: number }, preformatted?: string): CellBodyLayout
+  layoutBody(cell: XlsxCell, width: number, height: number, overflow?: { left: number; right: number }, preformatted?: string, allocation?: FormatAllocation): CellBodyLayout
   /** Opt-in proof that this exact body remains valid under the given allowance.
    * Only certified bodies share a key across allowances; other hosts retain
    * their complete allowance-dependent formatting/layout identity. */
@@ -48,7 +49,7 @@ export interface CellLayoutHost {
    * `width`, and the formatted text itself when it does not depend on the box
    * (fed to layoutBody so a cache miss formats once). `release` returns the
    * formatting reservation once the layout is built. */
-  paintedText?(cell: XlsxCell, width: number, admission: LayoutAdmission): { units: number; text?: string; release(): void }
+  paintedText?(cell: XlsxCell, width: number, admission: LayoutAdmission): { units: number; text?: string; allocation?: FormatAllocation; release(): void }
 }
 
 export interface FillRecord { color: string | null }
@@ -210,7 +211,7 @@ export class LayoutCache {
       catch (error) { painted?.release(); throw error }
     }
     let built: CellBodyLayout
-    try { built = host.layoutBody(placed.cell, placed.width, placed.height, placed.overflow, painted?.text) }
+    try { built = host.layoutBody(placed.cell, placed.width, placed.height, placed.overflow, painted?.text, painted?.allocation) }
     catch (error) { if (batch) batch.admission.release(upper); throw error }
     finally { painted?.release() }
     this.stats.built++

@@ -38,6 +38,10 @@ export function createAdmittedLayoutContext(admitShape: (cache: 'base' | 'local'
     let ctx: CanvasRenderingContext2D | null = null
     try {
       const canvas = doc.createElement('canvas')
+      // Measurement inherits the same language as the painting tiles
+      // (createCanvasTile), so generic/fallback faces resolve alike.
+      const lang = doc.documentElement?.getAttribute('lang')
+      if (lang) canvas.setAttribute('lang', lang)
       canvas.width = 1
       canvas.height = 1
       ctx = canvas.getContext('2d')
@@ -130,7 +134,7 @@ export class SharedMeasureContext {
     // Formatting and overflow certification need no context.
     const pure = createCellLayoutHost(undefined as unknown as CanvasRenderingContext2D, sheet)
     return {
-      layoutBody: (cell, width, height, overflow, preformatted) => this.inner(sheet).layoutBody(cell, width, height, overflow, preformatted),
+      layoutBody: (cell, width, height, overflow, preformatted, allocation) => this.inner(sheet).layoutBody(cell, width, height, overflow, preformatted, allocation),
       canReuseOverflow: (body, overflow) => pure.canReuseOverflow!(body, overflow),
       paintedText: (cell, width, admission) => pure.paintedText!(cell, width, admission),
     }

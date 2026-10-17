@@ -1447,7 +1447,7 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
       } })
       try {
         size = autoFitSize(request.kind, request.index, {
-          geometry: entry.geometry, sheet: entry.sheet, pane: visibleLogicalViewport(scroll, viewport), measure: fit.measure, ...(fit.layoutHeight ? { layoutHeight: fit.layoutHeight } : {}),
+          geometry: entry.geometry, sheet: entry.sheet, pane: visibleLogicalViewport(scroll, viewport), measure: fit.measure, allocation: fit.allocation, ...(fit.layoutHeight ? { layoutHeight: fit.layoutHeight } : {}),
           knownRows: limit => remote ? remote.store(sheetId).knownRows(limit) : entry.sheet.rows.slice(0, limit).map(row => row.index),
           ...(remote ? { styleOf: (index: number) => remote.styleOf(index) } : {}),
         })

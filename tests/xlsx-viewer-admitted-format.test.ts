@@ -8,6 +8,9 @@
 import { describe, expect, it, vi } from 'vitest'
 import { createCanvas } from 'canvas'
 import * as format from '../src/xlsx/formula/format'
+import * as cellFormat from '../src/xlsx/cellFormat'
+import { createAdmittedLayoutContext } from '../src/components/xlsx/measureContext'
+import { cellDisplayText } from '../src/xlsx/render'
 import { createCellLayoutHost } from '../src/xlsx/view/renderViewport'
 import { LayoutCache, estimateLayoutBytes, type LayoutAdmission, type PlacedCell } from '../src/xlsx/view/textLayout'
 import { hitGeometry, type FindHit } from '../src/xlsx/view/find'
@@ -122,5 +125,70 @@ describe('find-hit geometry is admitted', () => {
     expect(layouts).toHaveBeenCalledTimes(1)
     expect(admitted.record).toBeDefined()
     expect(gate.held()).toBe(0)
+  })
+})
+
+describe('merge review (integration B formatting through E admission)', () => {
+  it('a conditional/extended format admits before building any section body (refusal first)', () => {
+    const cell: XlsxCell = { ref: 'A1', row: 0, col: 0, value: 3, styleIndex: 0, style: { numFmtId: 164, formatCode: `[>0]"${'q'.repeat(65_536)}"0` } }
+    const order: string[] = []
+    const refuse: LayoutAdmission = { admit: () => { order.push('admit'); return false }, release: () => {}, hold: () => {}, cacheChanged: () => {} }
+    const slice = String.prototype.slice
+    const spy = vi.spyOn(String.prototype, 'slice').mockImplementation(function (this: string, start?: number, end?: number) {
+      const out = slice.call(this, start, end)
+      if (out.length > 60_000) order.push('big-slice')
+      return out
+    })
+    try { expect(() => host().paintedText!(cell, 64, refuse)).toThrow() } finally { spy.mockRestore() }
+    expect(order[0]).toBe('admit')
+    expect(order).not.toContain('big-slice')
+  })
+
+  for (const formatCode of ['[>0]0.00" units";0', '0.00"General"']) {
+    it(`a width-independent format formats once per miss (${formatCode})`, () => {
+      const cell: XlsxCell = { ref: 'A1', row: 0, col: 0, value: 3, styleIndex: 0, style: { numFmtId: 164, formatCode } }
+      const extended = vi.spyOn(cellFormat, 'formatExtended'), common = vi.spyOn(format, 'formatCommon')
+      const calls = () => extended.mock.calls.length + common.mock.calls.length
+      cellDisplayText(sheet, cell)
+      const onePass = calls()
+      extended.mockClear(); common.mockClear()
+      const canonical = host()
+      const layouts = vi.spyOn(canonical, 'layoutBody')
+      const cache = new LayoutCache()
+      const gate = admission()
+      cache.beginBatch(gate)
+      cache.layout(owner, { cell, source: { row: 0, col: 0 }, x: 0, y: 0, width: 400, height: 20 }, canonical)
+      cache.endBatch()
+      // One formatting pass (the admitted one), fed to the layout as its text.
+      expect(calls()).toBe(onePass)
+      expect(layouts.mock.calls[0][4]).toBeDefined()
+      extended.mockRestore(); common.mockRestore()
+    })
+  }
+
+  it('a width-dependent (General) number refits inside the layout under the same observer', () => {
+    const canonical = host()
+    const layouts = vi.spyOn(canonical, 'layoutBody')
+    const cache = new LayoutCache()
+    const gate = admission()
+    cache.beginBatch(gate)
+    cache.layout(owner, { cell: { ref: 'A1', row: 0, col: 0, value: 1234.56789, styleIndex: 0 }, source: { row: 0, col: 0 }, x: 0, y: 0, width: 40, height: 20 }, canonical)
+    cache.endBatch()
+    expect(layouts.mock.calls[0][4]).toBeUndefined()
+    expect(layouts.mock.calls[0][5]).toBeDefined()
+    expect(gate.held()).toBe(0)
+  })
+
+  it('both admitted measurement canvases inherit the document language, like painting tiles', () => {
+    const root = document.documentElement, previous = root.getAttribute('lang')
+    root.setAttribute('lang', 'zh-TW')
+    const created: HTMLCanvasElement[] = []
+    const make = document.createElement.bind(document)
+    const spy = vi.spyOn(document, 'createElement').mockImplementation(((tag: string) => { const el = make(tag); if (tag === 'canvas') created.push(el as HTMLCanvasElement); return el }) as typeof document.createElement)
+    try {
+      createAdmittedLayoutContext(() => {})
+      expect(created).toHaveLength(2)
+      expect(created.map(canvas => canvas.getAttribute('lang'))).toEqual(['zh-TW', 'zh-TW'])
+    } finally { spy.mockRestore(); if (previous === null) root.removeAttribute('lang'); else root.setAttribute('lang', previous) }
   })
 })

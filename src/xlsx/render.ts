@@ -644,8 +644,10 @@ function displayFormatCode(style: XlsxCellStyle | undefined): string | undefined
 /** @internal The canonical display text of a cell (authored/built-in formats and
  * workbook semantics) without General width-fitting, shared by sheet-mode find
  * and accessible values with the painted text. */
-export function cellDisplayText(sheet: XlsxSheet, cell: Pick<XlsxCell, 'value' | 'style'>, allocation?: FormatAllocation): string {
-  return renderCellText(cell.value, cell.style, sheet.semantics, sheet, undefined, undefined, allocation)
+export function cellDisplayText(sheet: XlsxSheet, cell: Pick<XlsxCell, 'value' | 'style'>, allocation?: FormatAllocation, widthDependent?: () => void): string {
+  // `widthDependent` is told when the text could change with the cell width
+  // (General fitting, or no admitting section's '#'); the text is unchanged.
+  return renderCellText(cell.value, cell.style, sheet.semantics, sheet, widthDependent && (() => { widthDependent(); return true }), widthDependent, allocation)
 }
 
 /**
@@ -956,6 +958,8 @@ export function layoutCellBody(
   overflow?: OverflowAllowance,
   /** Width-independent display text already formatted (and admitted) by the caller. */
   preformatted?: string,
+  /** Allocation observer for any formatting this layout still does. */
+  allocation?: FormatAllocation,
 ): CellBodyLayout {
   const out: CellBodyLayout = { x, y, w, h: hh, formattedText: '' }
   if (cell.style?.fillColor) out.fill = spreadsheetColor(cell.style.fillColor)
@@ -972,7 +976,7 @@ export function layoutCellBody(
   // Shrink-to-fit keeps full General precision and scales the font instead.
   const fitsGeneral = !rotated && !shrinkable ? (text: string) => measured(font, text) <= inner : undefined
   let generalNoFit = false
-  const formatted = preformatted ?? renderCellText(cell.value, cell.style, sheet.semantics, sheet, fitsGeneral, () => { generalNoFit = true })
+  const formatted = preformatted ?? renderCellText(cell.value, cell.style, sheet.semantics, sheet, fitsGeneral, () => { generalNoFit = true }, allocation)
   let style = cell.style
   if (shrinkable && formatted !== '') {
     // Never larger than authored. Above the floor the text fits; at the floor a
@@ -1004,7 +1008,7 @@ export function layoutCellBody(
   if (text !== '') {
     // A colour section ([Red], [Color n]) overrides the font colour.
     const code = displayFormatCode(cell.style)
-    const color = (code !== undefined && cell.value !== null ? formatColor(cell.value, code) : undefined) ?? (style?.color ? spreadsheetColor(style.color) : '#000000')
+    const color = (code !== undefined && cell.value !== null ? formatColor(cell.value, code, allocation) : undefined) ?? (style?.color ? spreadsheetColor(style.color) : '#000000')
     // OOXML often authors default alignment fields on every cell. Those
     // retain ordinary placement; real alignment/wrapping/rotation needs
     // the measured local layout (including explicit no-wrap for255).

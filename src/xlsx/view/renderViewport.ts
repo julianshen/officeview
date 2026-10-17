@@ -21,7 +21,7 @@ export function createCellLayoutHost(ctx: CanvasRenderingContext2D, sheet: Parti
   // Format diagnostics land on the caller's sheet when one is given.
   const target = sheet as XlsxSheet
   return {
-    layoutBody: (cell, w, h, overflow, preformatted) => layoutCellBody(ctx, target, cell, 0, 0, w, h, measured, overflow, preformatted),
+    layoutBody: (cell, w, h, overflow, preformatted, allocation) => layoutCellBody(ctx, target, cell, 0, 0, w, h, measured, overflow, preformatted, allocation),
     // Formats under the admission's allocation observer (each UTF-16 builder is
     // admitted before it is made) and bounds the painted text: the canonical
     // display text, or a '#' fill of the box for a number that does not fit.
@@ -32,17 +32,12 @@ export function createCellLayoutHost(ctx: CanvasRenderingContext2D, sheet: Parti
         allocate: (bytes: number) => { if (!admission.admit(bytes)) throw new LayoutAdmissionError(); held += bytes },
         release: (bytes: number) => { const released = Math.min(bytes, held); admission.release(released); held -= released },
       }
-      let text: string
-      try { text = cellDisplayText(target, cell, allocation) } catch (error) { release(); throw error }
-      // General numbers fit the box (width-dependent): the layout formats those
-      // itself (bounded); every other value reuses this single admitted pass.
-      // Same precedence as renderCellText: an authored format code decides
-      // before the built-in id. A number refits in the layout when its text can
-      // depend on the box: no code with id 0 (General), or a code with a General
-      // section or a condition (whose missing section paints '#').
-      const code = cell.style?.formatCode
-      const general = typeof cell.value === 'number' && (code === undefined ? (cell.style?.numFmtId ?? 0) === 0 : /general/i.test(code) || /\[\s*[<>=]/.test(code))
-      return { units: Math.max(text.length, typeof cell.value === 'number' ? Math.ceil(width / 2) + 1 : 0), ...(general ? {} : { text }), release }
+      let text: string, widthDependent = false
+      // The formatter itself reports whether the selected section's text can
+      // change with the box (General fitting, or no admitting section's '#'):
+      // only then does the layout format again, under the same observer.
+      try { text = cellDisplayText(target, cell, allocation, () => { widthDependent = true }) } catch (error) { release(); throw error }
+      return { units: Math.max(text.length, typeof cell.value === 'number' ? Math.ceil(width / 2) + 1 : 0), ...(widthDependent ? { allocation } : { text }), release }
     },
     canReuseOverflow: (body, overflow) => {
       const text = body.text

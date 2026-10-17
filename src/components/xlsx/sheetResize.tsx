@@ -22,6 +22,7 @@ import { createAdmittedLayoutContext } from './measureContext'
 import { TILE_CANVAS_BYTES, shapeCacheBytes } from '../../xlsx/view/mainLedger'
 import type { XlsxCell, XlsxCellStyle, XlsxSheet } from '../../xlsx/types'
 import { cellDisplayText } from '../../xlsx/render'
+import type { FormatAllocation } from '../../xlsx/formula/format'
 import { GRID_HEADER_SIZE, gridHeaderBox, viewportHeaderBox } from './GridHeaders'
 
 /** A resize the user asked for: an absolute size, a keyboard step or an auto-fit.
@@ -192,6 +193,8 @@ export interface AutoFitInput {
   knownRows: (limit: number) => Iterable<number>
   styleOf?: (styleIndex: number) => XlsxCellStyle | undefined
   measure: Measure
+  /** Formatting allocation observer (FitMeasure.allocation): every builder admitted first. */
+  allocation?: FormatAllocation
   /** Canonical painter height of a wrapped or rotated body (FitMeasure.layoutHeight). */
   layoutHeight?: (cell: XlsxCell, widthCss: number) => number | undefined
 }
@@ -213,7 +216,7 @@ export function autoFitSize(kind: 'row' | 'column', index: number, input: AutoFi
   const { geometry, sheet, pane, measure } = input
   const metrics = geometry.metrics
   const styleOf = (cell: FitCell) => cell.style ?? (cell.styleIndex !== undefined ? input.styleOf?.(cell.styleIndex) : undefined)
-  const text = (cell: FitCell, style: XlsxCellStyle | undefined) => cellDisplayText(sheet, { value: cell.value, style })
+  const text = (cell: FitCell, style: XlsxCellStyle | undefined) => cellDisplayText(sheet, { value: cell.value, style }, input.allocation)
   if (kind === 'column') {
     const visible = function* () {
       for (const run of metrics.rows.visibleBetween(pane.y, pane.y + pane.height).runs) for (let slot = run.start; slot <= run.end; slot++) yield metrics.order.displayToSource(slot)
@@ -263,6 +266,8 @@ export interface FitMeasure {
   /** Height of a wrapped or rotated cell body from the canonical painter
    * layout, as its transformed (rotated) extent. */
   layoutHeight?: (cell: XlsxCell, widthCss: number) => number | undefined
+  /** Formatting observer: each builder is admitted (heap) before it is made. */
+  allocation: FormatAllocation
   bytes(): number
 }
 /** One auto-fit's measurement owner: a 1×1 scratch canvas whose 2D context and
@@ -307,6 +312,9 @@ export function createFitMeasure(options: { admit: (charge: FitCharge) => boolea
     ctx = createAdmittedLayoutContext((cacheName, font, text) => reserveShape(font, text, cacheName))
     return ctx
   }
+  // Formatting builders are admitted (heap) before they are made; the fit's
+  // owner releases everything when the fit ends.
+  const allocation: FormatAllocation = { allocate: bytes => reserve(bytes, 0), release: () => {} }
   const measure: Measure = (font, text) => {
     const key = `${font}\n${text}`
     let width = cache.get(key)
@@ -323,13 +331,13 @@ export function createFitMeasure(options: { admit: (charge: FitCharge) => boolea
   const layoutHeight = options.sheet && !options.measureText ? (cell: XlsxCell, widthCss: number): number | undefined => {
     const c = context()
     if (!c) return undefined
-    reserve(cellDisplayText(options.sheet!, cell).length * 4 + LAYOUT_HEAP_BYTES, 0)
+    reserve(cellDisplayText(options.sheet!, cell, allocation).length * 4 + LAYOUT_HEAP_BYTES, 0)
     host ??= createCellLayoutHost(c, options.sheet!)
     const body = host.layoutBody(cell, widthCss, RESIZE_LIMITS.row.max)
     if (body.text?.kind !== 'layout') return undefined
     return body.text.rotation ? rotatedExtent(body.text.layout, c) : body.text.layout.height
   } : undefined
-  return { measure, ...(layoutHeight ? { layoutHeight } : {}), bytes: () => heap + native }
+  return { measure, ...(layoutHeight ? { layoutHeight } : {}), allocation, bytes: () => heap + native }
 }
 /** Vertical extent of a laid-out body whose segments carry rotated baseline
  * transforms (render.ts rotatedLayout), from the canonical glyph band of each

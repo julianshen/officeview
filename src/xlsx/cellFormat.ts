@@ -124,8 +124,9 @@ function structural(body: string): string {
 }
 
 /** The painted colour a format's selected section asks for, if any. */
-export function formatColor(value: ElementValue, code: string): string | undefined {
+export function formatColor(value: ElementValue, code: string, allocation?: FormatAllocation): string | undefined {
   if (!code.includes('[')) return undefined
+  allocation?.allocate(4 * code.length + 64) // section bodies before they are built
   const list = sections(code)
   if (list.some(s => s.unsupported)) return undefined
   const { index } = select(value, list)
@@ -137,9 +138,11 @@ export function formatColor(value: ElementValue, code: string): string | undefin
  * cannot render the code either (the caller then keeps its fallback).
  */
 export function formatExtended(value: ElementValue, code: string, semantics: ResolvedSemantics, general: (n: number) => string, allocation?: FormatAllocation): string | typeof NO_SECTION | undefined {
+  // Admitted before any section body is built: rebuilt sections and output are
+  // bounded by the code (literals) plus finite numeric text.
+  allocation?.allocate(4 * code.length + 512)
   const list = sections(code)
   if (list.some(s => s.unsupported)) return undefined
-  allocation?.allocate(4 * code.length + 512) // bounded rebuilt sections and output
   const { index, signed } = select(value, list)
   if (index === -2) return NO_SECTION
   if (typeof value === 'number' && Number.isFinite(value) && index >= 0) {
