@@ -563,10 +563,13 @@ export class RemoteWorkbook implements WorkbookSource {
     // is a shared singleton and never names the charge.
     const visibilityBytes = view.visibility ? view.visibility.words.byteLength + view.visibility.summaries.byteLength : 0
     const targets = [view, ...(view.order.kind === 'identity' ? [] : [view.order]), ...(view.visibility ? [view.visibility] : [])]
+    // The staged local bands ARE the new order's bands: end the staging charge as
+    // the view takes them over, so the swap never counts them twice (stream F: a
+    // 4 MiB double count at the F2 1M-row sort pushed the M ledger past 32 MiB).
+    this.mainLedger.release('viewBuffers', `staging:${sheetId}`)
     this.mainLedger.chargeWhileHeld('viewBuffers', targets, bandBytes * 2 + visibilityBytes)
     const replaced = this.viewHolds.get(sheetId)
     this.viewHolds.set(sheetId, this.mainLedger.hold(view)!)
-    this.mainLedger.release('viewBuffers', `staging:${sheetId}`)
     replaced?.release()
     this.notify()
     return view
