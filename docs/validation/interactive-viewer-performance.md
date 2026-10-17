@@ -1168,7 +1168,7 @@ All nine measured scenarios pass. The profile now cites these receipts and
 retains its S8.4 baseline pointer. No frozen thresholds or baseline result data
 were replaced, and no Safari/mobile/release acceptance is claimed.
 
-## Mobile M: the 1M natural-text sort is refused by design (open budget decision)
+## Mobile M: the 1M natural-text sort is refused by design (budget decision closed by user decision 6, 2026-10-17: the typed M refusal is accepted; no budget change; no multi-pass kernel scheduled)
 
 An iPad Pro 11-inch simulator run (profile M, `text-sort-1m-natural`, admitted)
 reported `requiredBytes 268,435,526 > limitBytes 268,435,456`, 70 B over. The
@@ -1219,16 +1219,22 @@ carry that qualifier.
 `744×1047@2x`, iPhone 17 `326×580@3x` (viewer-perf) / `402×714@3x` (harness;
 the device DPR is 3 on iPhone — relevant to canvas/pixel cost interpretation).
 
-**Build provenance.** All three raw viewer-perf receipts (`/Users/julianshen/
+**Build provenance (historical; superseded at the current head).** All three raw
+viewer-perf receipts (`/Users/julianshen/
 prj/officeview/.worktrees/visual-shots/sim-bench/viewer-perf-safari-sim-*.json`,
 field `commit` = `b66c7ea3bedc…`) record commit `b66c7ea`. Their successful
 builds were run with a **local, unlanded** modification of
 `vite.perf.config.ts` that sets
-`worker.rollupOptions.output.inlineDynamicImports = true` (see below). That
-option exists in neither `b66c7ea` nor the integrated `541f212`, and it is not
-in this docs commit: the runs reproduce only against `b66c7ea` plus that local
-perf-config change, and its landing/review is pending. Do not treat the
-receipts as products of the named commits alone.
+`worker.rollupOptions.output.inlineDynamicImports = true`. That option exists
+in neither `b66c7ea` nor current head `3255f93`/integration `541f212`, and it
+is not in this docs commit: the runs reproduce only against `b66c7ea` plus
+that local perf-config change. **Supersession:** the under-provenance "pending
+landing" of that inline option is closed by a different, reviewed mechanism —
+the merged worker-bootstrap fix `1d8f476` (worker entries are self-bootstraps
+and no chunk imports a worker entry), after which the current perf config
+deliberately keeps the lazy worker chunk (`vite.perf.config.ts`). Do not treat
+the receipts as products of the named commits alone, and do not port the
+numbers to the new chunk graph without a fresh run.
 
 **S10.2 viewer-perf results (MobileSafari, dist-perf served to the simulator).**
 Warm viewport frame (`inputToPaint`, p50 ≤ 16.7 ms / p95 ≤ 33.3 ms) passes on
@@ -1247,8 +1253,11 @@ rows are load-noisy. A MobileSafari-driven WebKit worker-chunking fault
 re-evaluated the worker entry on dynamic import and dropped the session on
 F2/F4) was fixed in the perf build with
 `worker.rollupOptions.output.inlineDynamicImports = true`; that config change
-is described under build provenance above — a pending `vite.perf.config.ts`
-modification for this suite, not a product change.
+is described under build provenance above — at the time of the
+simulator runs, a local `vite.perf.config.ts` modification for this suite, not
+a product change; superseded at the current head by merged `1d8f476`, which
+removes the re-evaluation race itself (worker entries are bootstraps that no
+chunk imports) while the perf config keeps the lazy worker chunk deliberately.
 
 **Memory ledgers (application-accounted; MobileSafari exposes neither
 `performance.measureUserAgentSpecificMemory` nor a JS heap).**
@@ -1268,18 +1277,18 @@ modification for this suite, not a product change.
   at 112.96 MiB (iPhone 17), 113.67 MiB (iPad Pro 11) and 113.79 MiB (iPad
   mini) against the 64 MiB M cap (F4 44.67 MiB, in cap); active canvas bytes
   drop to 0 B after document close.
-- **Not explained, not fixed:** both overshoots are recorded observations
-  without an established cause in the source report. Stream F
-  (`feature/iv-vis-mobile`, **in review, not merged**, head `b2af1d6`) fixes
-  the viewer's default presentation profile (presents with the admitted
-  device profile instead of fixed D), which supports a bitmap-admission
+- **Not explained, not fixed; not re-measured after F merged:** both overshoots
+  are recorded observations without an established cause in the source report,
+  recorded against that `b66c7ea`-provenance perf build at the `541f212` era.
+  Stream F — now **merged** (`05f3d37`, with the F packet `05b25e6` and review
+  fixes `274b181`; the presentation-profile fix makes the viewer present with
+  the admitted device profile instead of fixed D) — supports a bitmap-admission
   hypothesis for the bitmap peak; it does not itself address the transient
   import-transfer main-owned peak, whose budget already follows the
-  worker-backed source's profile (`budgetProfile = remote?.profile`, the base
-  `InteractiveSheetDoc.tsx:270`). **Both overshoots remain under investigation
-  in stream F; no before/after-F measurements exist, and neither overshoot is
-  claimed resolved. Until measured before/after F receipts exist, both stand
-  as current merged behaviour.**
+  worker-backed source's profile. **No before-/after-F simulator receipt exists:
+  neither overshoot is claimed resolved by the merge, and neither is claimed
+  still reproducing — the old numbers are frozen to their build provenance, and
+  a fresh simulator run on the current head is required before either claim.**
 
 **`text-sort-1m-natural` refused-by-design.** On `b66c7ea` the harness
 propagated the refusal as an uncaught rejection. On the integrated head
