@@ -32,7 +32,7 @@ for its requirement matrix. The WordArt plan below retains its existing scope.
   - Run `bunx tsc --noEmit` to ensure clean typecheck.
   - Run full viewer Playwright suite: `bunx playwright test --config playwright.viewer.config.ts`.
 - [x] Task: Update docs/validation/interactive-viewer.md rows :95, :102, :104-105, :116 with actual execution results
-- [ ] Task: Write report to report-browser-acc-agy.md and notify w9:p8
+- [x] Task: Write report to report-browser-acc-agy.md and notify w9:p8
 
 
 ## Objective
