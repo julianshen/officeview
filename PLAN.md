@@ -27,11 +27,11 @@ for its requirement matrix. The WordArt plan below retains its existing scope.
   - On multi-sheet workbook (`f7-two-sheets.xlsx`), establish initial visited baseline for sheets A and B.
   - Repeatedly switch between Sheet A and Sheet B (10 switches total), measuring `mainLedger.bytes` and `lastFrame.bitmapBytes` at each switch.
   - Assert memory plateaus (steady-state ledger and bitmap bytes return near baseline and do not monotonically grow with switch count).
-- [ ] Task: Run full browser suite and verify gates
+- [x] Task: Run full browser suite and verify gates
   - Run new tests in Chromium and WebKit (`[B:C+W]`).
   - Run `bunx tsc --noEmit` to ensure clean typecheck.
   - Run full viewer Playwright suite: `bunx playwright test --config playwright.viewer.config.ts`.
-- [ ] Task: Update docs/validation/interactive-viewer.md rows :95, :102, :104-105, :116 with actual execution results
+- [x] Task: Update docs/validation/interactive-viewer.md rows :95, :102, :104-105, :116 with actual execution results
 - [ ] Task: Write report to report-browser-acc-agy.md and notify w9:p8
 
 
