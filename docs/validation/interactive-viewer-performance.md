@@ -1200,3 +1200,71 @@ declares an M design refusal (`scenarios.ts designRefusal`). The harness records
 one typed refusal per boundary in `environment.scenario.refusals`
 (`refused-by-design`) and runs no timing iterations. Any refusal on D, or against
 any other limit, is still a failure. No budget was changed.
+
+## iOS Simulator (Mac host, not physical)
+
+**Environment label: `iOS Simulator (Mac host), not physical`.** Results were
+collected on Apple Silicon macOS (`arm64`) inside Xcode 26.1 iOS/iPadOS
+Simulators (MobileSafari 26.1, WebKit 605.1.15), one simulator booted at a
+time (`xcrun simctl`), from `report-sim-bench-agy.md` in `.worktrees/_prompts/`.
+Per spec §12.4/§12.6 the simulator runs on the host Mac's CPU/GPU and unified
+memory without physical thermal/power governors or iOS Jetsam limits: these
+numbers are **directional baselines, not physical-device release receipts**,
+and they may not be cited as mobile release gates. All three targets ran the M
+profile with a host load gate below 10; the iPad mini and iPhone legs were
+load-noisy throughout (load 8.86–38.19 measured), and several misses below
+carry that qualifier.
+
+**Targets:** iPad Pro 11-inch (M5) `834×1124@2x`, iPad mini (A17 Pro)
+`744×1047@2x`, iPhone 17 `326×580@2x` (viewer-perf) / `402×714@3x` (harness).
+
+**S10.2 viewer-perf results (MobileSafari, dist-perf served to the simulator).**
+Warm viewport frame (`inputToPaint`, p50 ≤ 16.7 ms / p95 ≤ 33.3 ms) passes on
+all three targets for `ordinary` and `wrapped`; the miss is iPad Pro 11
+`styled` p50 20.54 ms (p95 24.88 ms passes) under load. Input acknowledgment
+(sort/filter/find/cancel, p95 ≤ 50 ms / max ≤ 100 ms) passes on both iPads; the
+miss is iPhone 17 `cancel` (p95 66.44 ms, max 461.72 ms) under a host load
+spike. Progressive first viewport (p50 ≤ 450 ms / p95·max ≤ 1100 ms): F1 passes
+everywhere; F2 (`1M × 16` via `openLargeBlob`) passes max on all three and p50
+only on iPhone 17 (400.38 ms; both iPads miss at 518–523 ms); F3
+(`250k × 100`) passes fully only on iPhone 17, iPad mini passes p95 (1,093.86
+ms) but misses p50 (1,003 ms), and iPad Pro 11 misses both (p50 1,280 ms, p95
+1,508.56 ms), all load-noisy. A MobileSafari-driven WebKit worker-chunking
+fault (`viewerPerfWorker` ↔ `viewerLargeSource` circular chunk dependency
+re-evaluated the worker entry on dynamic import and dropped the session on
+F2/F4) was fixed in the perf build with
+`worker.rollupOptions.output.inlineDynamicImports = true`; it is a
+`vite.perf.config.ts` fix for this suite, not a product change.
+
+**Memory ledgers (application-accounted; MobileSafari exposes neither
+`performance.measureUserAgentSpecificMemory` nor a JS heap).**
+- Worker-owned peak 223.47 MiB (F2) / 151.84 MiB (F4) — under the 256 MiB M
+  worker cap on all three targets; 79/79 workers cleanly terminated on close.
+- **Main-owned overshoot:** F2 transient import transfer peaked at 36.17 MiB
+  (iPhone 17) to 41.5 MiB (iPad Pro 11) against the 32 MiB M cap, dropping to
+  14.37 KiB after close; F4 peaks at 8.96 MiB (in cap).
+- **Bitmap-retained overshoot:** F2 peaked at 112.96–113.79 MiB against the
+  64 MiB M cap (F4 44.67 MiB, in cap); active canvas bytes drop to 0 B after
+  document close. These runs presented with fixed-D desktop presentation, so
+  the admissions were not under the M caps. Stream F
+  (`feature/iv-vis-mobile`, **in review, not merged**) changes the viewer to
+  present with the admitted device profile (M on phones and tablets), which
+  brings these admissions under the M caps; until it merges the overshoot
+  stands as current merged behaviour.
+
+**`text-sort-1m-natural` refused-by-design.** On `b66c7ea` the harness
+propagated the refusal as an uncaught rejection. On the integrated head
+`541f212` the harness catches it and records `environment.scenario.refusals`
+with `"outcome": "refused-by-design"` at both boundaries — kernel
+`268,435,526 B > 268,435,456 B` and query `268,435,498 B > 268,435,456 B` —
+and posts a complete JSON receipt instead of crashing, exactly as reviewed in
+`findings-mobile-cap-opencode.md`.
+
+**S8.4 kernel bench (harness smoke receipts, same non-physical label).**
+`bench:harness --browser safari-manual --profile M --mode smoke` produces JSON
+receipts per fixture/scenario on the harness page; the CLI still refuses
+release-mode receipts for it (`--mode release is only supported with
+--suite viewer`), consistent with the S0.3 scaffold rule. Measured kernel rows
+in the source report include e.g. F2 `sort-100k-1key` median 100.0 ms (p50 ≤
+120 ms, pass) under load-noisy conditions. These are smoke/directional rows,
+not the frozen S10.2 release thresholds.
