@@ -212,6 +212,12 @@ export class MainMemoryLedger {
     if (held) this.holdable(pool, targets, token, bytes)
     return token
   }
+  /** The live lifetime token (ledger owner) a payload object's charge is held
+   * under, for adoptWhileReachable; undefined when it has none. */
+  leaseOf(target: object): string | undefined {
+    const token = this.leases.get(target)
+    return token !== undefined && this.lifetimes.has(token) ? token : undefined
+  }
   /** Whether an allocation already has a live reachability owner. */
   hasLifetime(target: object): boolean {
     const token = this.leases.get(target)

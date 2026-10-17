@@ -32,7 +32,7 @@ import { MainMemoryLedger, axisBytes, estimatePayloadBytes, leaseTargets, type L
 import type { XlsxCell, XlsxCellStyle, XlsxMergeRange } from '../xlsx/types'
 import { MAX_COLS, MAX_ROWS, formatA1, isValidCoordinate, type SourceCell, type SourceRect } from '../xlsx/view/coordinates'
 import { createAxisMetrics } from '../xlsx/view/axes'
-import { createIdentityOrder, createRowOrder } from '../xlsx/view/order'
+import { adoptRowOrder, createIdentityOrder, createRowOrder, type CompactRowOrder } from '../xlsx/view/order'
 import { createIntervalSet, type CompactRowVisibility } from '../xlsx/view/visibility'
 import type { ProjectedSheetMetrics } from '../xlsx/view/projection'
 import { savedValuesStatus, type ValueStatus } from '../xlsx/view/values'
@@ -50,6 +50,16 @@ export const ROW_CHUNK_COLS = 256
 /** One document-wide byte ledger for every sheet's painting row cache: a
  * quarter of the main-thread profile budget (§12.4; D 16 MiB, M 8 MiB). */
 export function rowCacheBudget(profile: ProfileId): number { return MAIN_THREAD_BUDGETS[profile] / 4 }
+/** Status text when a sort's view cannot fit the main-thread budget (stream F). */
+export const SORT_MEMORY_REFUSAL = 'Not enough memory to apply the sort on this device'
+let viewReplySerial = 0
+/** Main bytes a sorted-view reply over `rows` rows can need: its band and
+ * inverse (4 B each per row, adopted in place), the wire and the local
+ * full-axis visibility words with summaries, and object overhead. */
+export function viewReplyBytes(rows: number): number {
+  const visibility = Math.ceil(MAX_ROWS / 32) * 4
+  return 8 * Math.max(0, rows) + 2 * (visibility + Math.ceil(visibility / 32) + 64) + 64 * 1024
+}
 /** Accounted bytes of one cached cell: record overhead plus UTF-16 text. */
 export function cachedCellBytes(cell: { value: unknown; formula?: string }): number {
   return 96 + (typeof cell.value === 'string' ? cell.value.length * 2 : 0) + (cell.formula ? cell.formula.length * 2 : 0)
@@ -402,7 +412,9 @@ export class RemoteWorkbook implements WorkbookSource {
 
   /** One command with caller cancellation. Resolves CLOSED after release and
    * CANCELLED as soon as `signal` aborts (the worker gets a `cancel`). */
-  async request<K extends RemoteKind>(command: CommandOf<K>, signal?: AbortSignal, progress?: (completed: number, total: number) => void): Promise<Settled<K>> {
+  /** `reservation`: a 'replies' owner admitted for this reply before the command
+   * was sent; it ends exactly when the reply's own charge starts (never both). */
+  async request<K extends RemoteKind>(command: CommandOf<K>, signal?: AbortSignal, progress?: (completed: number, total: number) => void, reservation?: string): Promise<Settled<K>> {
     if (this.closed) return CLOSED
     if (signal?.aborted) return CANCELLED
     const head = command as unknown as { kind: K; requestId: string; owner: CacheIdentity | WorkbookOwner; query?: { op: string } }
@@ -414,11 +426,16 @@ export class RemoteWorkbook implements WorkbookSource {
     const unsubscribe = progress ? this.client.onProgress(head.requestId, p => progress(p.completed, p.total ?? p.completed)) : undefined
     const sent: Promise<Settled<K>> = this.client.send<K>(command).then(reply => {
       // Charged until no part of the payload is reachable: a consumer that keeps
-      // a page (a scan generator across tasks) keeps the charge.
-      this.mainLedger.chargeWhileReachable(head.kind === 'read' && head.query?.op === 'drawings' ? 'drawings' : 'replies', leaseTargets(reply), estimatePayloadBytes(reply))
+      // a page (a scan generator across tasks) keeps the charge. An admitted
+      // reservation becomes that charge (no gap, no double count); any excess
+      // over it is charged on top.
+      const pool = head.kind === 'read' && head.query?.op === 'drawings' ? 'drawings' : 'replies', bytes = estimatePayloadBytes(reply), targets = leaseTargets(reply)
+      const moved = reservation ? Math.min(bytes, this.mainLedger.ownerBytes('replies', reservation)) : 0
+      if (moved > 0) this.mainLedger.adoptWhileReachable('replies', reservation!, pool, targets, moved)
+      if (moved === 0 || bytes > moved) this.mainLedger.chargeWhileReachable(pool, targets, bytes - moved)
       this.capture(reply, scope, key !== 'read:drawings')
       return reply
-    }, () => CLOSED)
+    }, () => { if (reservation) this.mainLedger.release('replies', reservation); return CLOSED })
     if (!signal) return sent.finally(() => unsubscribe?.())
     return new Promise<Settled<K>>(resolve => {
       const abort = () => {
@@ -497,6 +514,25 @@ export class RemoteWorkbook implements WorkbookSource {
 
   /** Worker sort: prepare the key columns (best effort; unprepared keys stream), then commit. */
   async sort(owner: CacheIdentity, spec: SortSpec | null, signal: AbortSignal, progress?: (completed: number, total: number) => void): Promise<RemoteCommit> {
+    // Main-budget admission (stream F): the sorted view arrives as one reply
+    // (order bands and their inverse, visibility) that the view then adopts in
+    // place. Reserve it before anything is sent; if it cannot fit, refuse now,
+    // while main and worker still agree on the current view.
+    const reservation = spec?.keys.length ? this.reserveViewReply(spec.range.r1 - spec.range.r0 + 1) : undefined
+    if (reservation === null) return { kind: 'refused', refusal: { reason: 'resource-limit', message: SORT_MEMORY_REFUSAL } }
+    try { return await this.sortReserved(owner, spec, signal, progress, reservation) }
+    finally { if (reservation) this.mainLedger.release('replies', reservation) }
+  }
+  /** Reserves the main bytes a view reply over `rows` sorted rows can need
+   * (bands + inverse + wire and local visibility); null when they do not fit. */
+  private reserveViewReply(rows: number): string | null {
+    const bytes = viewReplyBytes(rows), budget = MAIN_THREAD_BUDGETS[this.profile]
+    if (this.mainLedger.bytes + bytes > budget) return null
+    const owner = `view-reply:${++viewReplySerial}`
+    this.mainLedger.set('replies', owner, bytes)
+    return owner
+  }
+  private async sortReserved(owner: CacheIdentity, spec: SortSpec | null, signal: AbortSignal, progress: ((completed: number, total: number) => void) | undefined, reservation: string | undefined): Promise<RemoteCommit> {
     if (spec?.keys.length) {
       const cols = new Uint16Array([...new Set(spec.keys.map(key => key.col))])
       const prepared = await this.request({ kind: 'prepareColumns', requestId: this.nextRequestId(), owner, cols }, signal)
@@ -506,19 +542,19 @@ export class RemoteWorkbook implements WorkbookSource {
         ? { kind: 'error', message: prepared.diagnostics[0].message } : { kind: 'cancelled' }
       if (prepared.kind === 'error' && prepared.code === 'stale-source') return { kind: 'stale' }
     }
-    return this.commit(await this.request({ kind: 'sort', requestId: this.nextRequestId(), owner, spec }, signal, progress), owner.sheetId, { sort: spec })
+    return this.commit(await this.request({ kind: 'sort', requestId: this.nextRequestId(), owner, spec }, signal, progress, reservation), owner.sheetId, { sort: spec }, reservation)
   }
   async filter(owner: CacheIdentity, spec: FilterSpec | null, keySets: readonly FilterKeySet[], signal: AbortSignal, progress?: (completed: number, total: number) => void): Promise<RemoteCommit> {
     const command: CommandOf<'filter'> = { kind: 'filter', requestId: this.nextRequestId(), owner, spec, nowMs: Date.now(), ...(keySets.length ? { keySets } : {}) }
     return this.commit(await this.request(command, signal, progress), owner.sheetId, { filter: spec })
   }
-  private commit(out: WorkerReply<'sort' | 'filter'> | typeof CLOSED | typeof CANCELLED, sheetId: string, spec: { sort?: SortSpec | null; filter?: FilterSpec | null }): RemoteCommit {
+  private commit(out: WorkerReply<'sort' | 'filter'> | typeof CLOSED | typeof CANCELLED, sheetId: string, spec: { sort?: SortSpec | null; filter?: FilterSpec | null }, reservation?: string): RemoteCommit {
     if (out === CANCELLED) return { kind: 'cancelled' }
     if (out === CLOSED) return { kind: 'stale' }
     switch (out.kind) {
       case 'complete': {
         if (out.result.kind !== 'view') return { kind: 'error', message: 'Unexpected view reply' }
-        const view = this.adopt(sheetId, out.result.delta, spec)
+        const view = this.adopt(sheetId, out.result.delta, spec, out, reservation)
         // The adopted view now carries the bytes (charged in adopt): end the reply's lease.
         if (view) this.mainLedger.settle(out)
         return view ? { kind: 'committed', view } : { kind: 'stale' }
@@ -536,10 +572,18 @@ export class RemoteWorkbook implements WorkbookSource {
   /** Adopts a committed worker view. The worker is the authority: a delta is
    * adopted whenever it is newer than what this side holds, even when the UI
    * that asked for it has moved on, so both sides never diverge. */
-  private adopt(sheetId: string, delta: ViewCommitDelta, spec: { sort?: SortSpec | null; filter?: FilterSpec | null }): RemoteSheetView | null {
+  private adopt(sheetId: string, delta: ViewCommitDelta, spec: { sort?: SortSpec | null; filter?: FilterSpec | null }, reply?: object, reservation?: string): RemoteSheetView | null {
     if (this.closed || delta.owner.docId !== this.docId || delta.owner.sheetId !== sheetId) return null
     const previous = this.view(sheetId)
     if (delta.owner.viewGen <= this.identity(sheetId).viewGen) return null
+    // Zero-copy (stream F): the wire bands already carry their inverse; the view
+    // takes those buffers and the reply's charge for them moves to the view, so
+    // adoption adds only the local visibility words. Invalid or foreign bands
+    // fall back to the copying path below.
+    let adopted: CompactRowOrder | null = null
+    try { adopted = adoptRowOrder(delta.bands) } catch { adopted = null }
+    if (adopted) return this.publish(sheetId, delta, spec, previous, adopted, reply, reservation)
+    if (reservation) this.mainLedger.release('replies', reservation)
     // Staging: the local band copies coexist with the wire bands (reply), the
     // previous view and the order being built from them.
     const bandBytes = delta.bands.reduce((sum, band) => sum + band.sourceAtOffset.length * 4, 0)
@@ -568,6 +612,35 @@ export class RemoteWorkbook implements WorkbookSource {
     // 4 MiB double count at the F2 1M-row sort pushed the M ledger past 32 MiB).
     this.mainLedger.release('viewBuffers', `staging:${sheetId}`)
     this.mainLedger.chargeWhileHeld('viewBuffers', targets, bandBytes * 2 + visibilityBytes)
+    const replaced = this.viewHolds.get(sheetId)
+    this.viewHolds.set(sheetId, this.mainLedger.hold(view)!)
+    replaced?.release()
+    this.notify()
+    return view
+  }
+  /** Publishes a view whose order took the reply's own band buffers. */
+  private publish(sheetId: string, delta: ViewCommitDelta, spec: { sort?: SortSpec | null; filter?: FilterSpec | null }, previous: RemoteSheetView, order: CompactRowOrder, reply: object | undefined, reservation: string | undefined): RemoteSheetView {
+    const view: RemoteSheetView = {
+      revision: delta.owner.viewGen,
+      order,
+      visibility: visibilityFromDisplayBitsets(delta.visibility),
+      filter: 'filter' in spec ? spec.filter ?? null : previous.filter,
+      sort: 'sort' in spec ? spec.sort ?? null : previous.sort,
+    }
+    this.identities.set(sheetId, delta.owner)
+    if (delta.workbookOwner.globalViewGen >= this.owner.globalViewGen) this.owner = delta.workbookOwner
+    this.views.set(sheetId, view)
+    const bandBytes = order.diagnostics.typedArrayBytes
+    const visibilityBytes = view.visibility ? view.visibility.words.byteLength + view.visibility.summaries.byteLength : 0
+    const targets = [view, ...(order.kind === 'identity' ? [] : [order]), ...(view.visibility ? [view.visibility] : [])]
+    // The band bytes were admitted with the reply: transfer them, never re-charge.
+    const token = reply ? this.mainLedger.leaseOf(reply) : undefined
+    const moved = token ? Math.min(bandBytes, this.mainLedger.ownerBytes('replies', token)) : 0
+    if (moved > 0) this.mainLedger.adoptWhileReachable('replies', token!, 'viewBuffers', targets, moved, undefined, true)
+    // What is left of the reservation was kept for the local visibility words:
+    // it ends as they are charged.
+    if (reservation) this.mainLedger.release('replies', reservation)
+    if (moved === 0 || bandBytes + visibilityBytes > moved) this.mainLedger.chargeWhileHeld('viewBuffers', targets, bandBytes + visibilityBytes - moved)
     const replaced = this.viewHolds.get(sheetId)
     this.viewHolds.set(sheetId, this.mainLedger.hold(view)!)
     replaced?.release()
