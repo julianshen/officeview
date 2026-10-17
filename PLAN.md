@@ -11,6 +11,30 @@ iPad and VoiceOver evidence and the final release decision remain open.
 See the [interactive viewer plan](docs/superpowers/plans/2026-10-10-interactive-viewer.md)
 for its requirement matrix. The WordArt plan below retains its existing scope.
 
+## Browser Acceptance Legs (Codex Audit M3)
+
+- [ ] Test: (a) AC-STORE-03 / AC-SEM-04 / AC-SEM-05 Dynamic-spill and above-anchor drawing refusal in a real browser
+  - Dynamic-spill refusal on sort: Range overlapping dynamic spill (D20:D23 SEQUENCE) refuses with "Operation refused: dynamic-spill."
+  - Drawing-impact refusal on sort: Range covering two-cell drawing anchor refuses with "Operation refused: drawing-impact."
+  - Drawing-impact refusal on filter: Filtering column A to hide a row above the drawing anchor refuses with "Operation refused: drawing-impact."
+  - Allowed filter below anchor: Filtering below the drawing anchor commits without refusal.
+- [ ] Test: (b) AC-SEM-02 Interactive eight-key sort leg in a real browser
+  - On 8-column workbook (`f2-1k.xlsx`), open More Sort options dialog for column A.
+  - Add sort levels sequentially until 8 levels (columns A through H) are added; verify 8th level disables "Add level".
+  - Configure ascending/descending levels and submit "OK"; verify all 8 keys are applied, column header shows `aria-sort`, and row data reflects 8-key order without error.
+- [ ] Test: (c) AC-LIFE-02 F7 sheet switching retained memory plateau in a real browser
+  - Expose `onMainLedger` hook in `viewer-e2e.tsx` onto `window.__viewerE2E.mainLedger` so main-thread ledger memory is observable in E2E tests alongside `lastFrame.bitmapBytes`.
+  - On multi-sheet workbook (`f7-two-sheets.xlsx`), establish initial visited baseline for sheets A and B.
+  - Repeatedly switch between Sheet A and Sheet B (10 switches total), measuring `mainLedger.bytes` and `lastFrame.bitmapBytes` at each switch.
+  - Assert memory plateaus (steady-state ledger and bitmap bytes return near baseline and do not monotonically grow with switch count).
+- [ ] Task: Run full browser suite and verify gates
+  - Run new tests in Chromium and WebKit (`[B:C+W]`).
+  - Run `bunx tsc --noEmit` to ensure clean typecheck.
+  - Run full viewer Playwright suite: `bunx playwright test --config playwright.viewer.config.ts`.
+- [ ] Task: Update docs/validation/interactive-viewer.md rows :95, :102, :104-105, :116 with actual execution results
+- [ ] Task: Write report to report-browser-acc-agy.md and notify w9:p8
+
+
 ## Objective
 Support the reviewed WordArt appearance, eleven implemented text-warp presets, and format adapters across PowerPoint (`.pptx`), Word (`.docx`), and Excel (`.xlsx`) documents in OfficeView. Native Office font fitting and universal raster parity remain unverified.
 This encompasses:
