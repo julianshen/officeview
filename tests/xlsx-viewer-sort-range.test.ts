@@ -882,20 +882,27 @@ describe('cancellation, bounds and immutability', () => {
 describe('detection pacing row bound (spec §10.2; plan S4.2 LIFE-02)', () => {
   // Plan S4.2: "Long jobs yield at least every 10ms or 4,096 rows, whichever
   // arrives first, including preparation, scans, ...". Detection counts every
-  // processed cell (each at most a row of work). A store decodes a page as one
-  // unit, so the bound is asserted on cells detection PROCESSES, observed as the
-  // first read of each served cell's column.
-  type Counted = ProbedStore & { processed: { cells: number }; setGen(gen: number): void }
+  // processed cell (each at most a row of work). A store decodes one request as
+  // one unit (SourceStore pacing contract), so the bound is asserted on cells
+  // detection PROCESSES: a cell counts once per slice in which any pass reads
+  // its row or column, so a later pass over an already validated page (strip
+  // marking, guard copy) counts again in its own slice.
+  type Counted = ProbedStore & { processed: { cells: number }; setGen(gen: number): void; nextSlice(): void; onTouch?: (cells: number) => void }
   function counted(store: ProbedStore): Counted {
     const processed = { cells: 0 }
-    let stamp = store.stamp
+    let stamp = store.stamp, slice = 0
     const wrap = (cell: AuthoritativeCell): AuthoritativeCell => {
-      let seen = false
-      return Object.defineProperty({ ...cell }, 'col', { enumerable: true, get() { if (!seen) { seen = true; processed.cells++ } return cell.col } })
+      let seen = -1
+      const touch = () => { if (seen !== slice) { seen = slice; processed.cells++; self.onTouch?.(processed.cells) } }
+      return Object.defineProperties({ ...cell }, {
+        row: { enumerable: true, get() { touch(); return cell.row } },
+        col: { enumerable: true, get() { touch(); return cell.col } },
+      })
     }
-    return {
-      ...store, processed, setGen: gen => { stamp = Object.freeze({ ...stamp, valueGen: gen }) },
-      get stamp() { return stamp },
+    const self: Counted = {
+      ...store, processed,
+      setGen: gen => { stamp = Object.freeze({ ...stamp, valueGen: gen }) },
+      nextSlice: () => { slice++ },
       scanPopulated: async function* (query, options) {
         for await (const page of store.scanPopulated(query, options)) yield { ...page, stamp, items: page.items.map(wrap) }
       },
@@ -904,6 +911,7 @@ describe('detection pacing row bound (spec §10.2; plan S4.2 LIFE-02)', () => {
         return { ...page, stamp, items: page.items.map(item => ({ ...item, cells: item.cells.map(wrap) })) }
       },
     }
+    return Object.defineProperty(self, 'stamp', { enumerable: true, get: () => stamp })
   }
   /** Columns [0, cols) populated on rows [0, rows), row-major, served in O(page). */
   function denseBlockStore(rows: number, cols: number): ProbedStore {
@@ -933,7 +941,7 @@ describe('detection pacing row bound (spec §10.2; plan S4.2 LIFE-02)', () => {
   async function paced(store: Counted, run: (extra: Partial<RangeDetectionRequest>) => Promise<RangeDetection>, onYield?: (yields: number) => void) {
     const slices: number[] = []
     let since = 0
-    const outcome = await run({ now: () => 0, yield: async () => { slices.push(store.processed.cells - since); since = store.processed.cells; onYield?.(slices.length) } })
+    const outcome = await run({ now: () => 0, yield: async () => { slices.push(store.processed.cells - since); since = store.processed.cells; store.nextSlice(); onYield?.(slices.length) } })
     slices.push(store.processed.cells - since)
     return { outcome, slices }
   }
@@ -984,5 +992,30 @@ describe('detection pacing row bound (spec §10.2; plan S4.2 LIFE-02)', () => {
     expect(outcome).toEqual({ kind: 'cancelled' })
     expect(posted).toBeGreaterThanOrEqual(0)
     expect(dense.processed.cells - posted).toBeLessThanOrEqual(4096)
+  })
+  it.each(['abort', 'stale'] as const)('re-checks at a checkpoint within 256 processed cells, before any pause (spec §12.1, %s)', async change => {
+    // One unlimited 2 x 8,192 header read: only an in-loop checkpoint sees the change early.
+    const store = counted(denseBlockStore(2, 8192)), controller = new AbortController()
+    const selection = sel(0, 0, [{ rows: { kind: 'intervals', intervals: [{ r0: 0, r1: 1 }] }, cols: [{ c0: 0, c1: 8191 }] }])
+    store.onTouch = cells => { if (cells === 1) { if (change === 'abort') controller.abort(); else store.setGen(1) } }
+    let yields = 0
+    const outcome = await detectOperationRange({ store, structure: emptyIndex(store), selection, options: { signal: controller.signal, stamp: { ...store.stamp } }, now: () => 0, yield: async () => { yields++ } })
+    if (change === 'abort') expect(outcome).toEqual({ kind: 'cancelled' })
+    else expect(outcome).toEqual({ kind: 'refused', refusal: { reason: 'source-error', code: 'stale-source', retryable: true, message: expect.any(String) } })
+    expect(yields).toBe(0)
+    expect(store.processed.cells).toBeLessThanOrEqual(256)
+  })
+  it('samples the clock within 256 processed cells of one large page', async () => {
+    const store = counted(denseBlockStore(2, 8192))
+    const selection = sel(0, 0, [{ rows: { kind: 'intervals', intervals: [{ r0: 0, r1: 1 }] }, cols: [{ c0: 0, c1: 8191 }] }])
+    const marks: number[] = []
+    let at = 0
+    // The clock advances one tick per processed cell; the slice is 4 ticks.
+    const outcome = await detectOperationRange(request(store, emptyIndex(store), selection, {
+      now: () => store.processed.cells, yield: async () => { marks.push(store.processed.cells - at); at = store.processed.cells; store.nextSlice() },
+    }))
+    expect(outcome.kind).toBe('complete')
+    expect(marks.length).toBeGreaterThan(0)
+    expect(Math.max(...marks)).toBeLessThanOrEqual(256)
   })
 })

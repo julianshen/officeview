@@ -167,6 +167,14 @@ export interface RangeCompletion {
   missing: readonly SourceRect[]
   error?: SourceFailure
 }
+/** Pacing contract (spec §§10.2, 12.1; plan S4.2): consumers bound and
+ * checkpoint their own processing of a returned page in batches, whatever its
+ * size. The work a store does to answer ONE request (decoding a page or an
+ * iterator step) is not divisible by its consumer: a request's `limit` bounds
+ * it, and readRows is bounded by its band. A consumer that needs the 4,096-row
+ * yield bound end to end requests at most YIELD_WORK_UNITS cells per call;
+ * range detection's 65,536-cell strip requests and unlimited header reads
+ * currently accept the store's decode of one request as one atomic step. */
 export interface SourceStore {
   readonly stamp: SourceStamp
   readonly valuePolicy: ValuePolicy

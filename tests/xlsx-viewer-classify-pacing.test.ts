@@ -199,3 +199,21 @@ describe('review round (codex R1, R3, R4)', () => {
     controls.dispose()
   })
 })
+
+describe('checkpoints within 256 classification units (spec §12.1, codex C2)', () => {
+  const page = (count: number): ValueLanePage => ({ kind: 'values', pageId: 'p', count, tags: new Uint8Array(count).fill(SOURCE_NUMBER), numbers: new Float64Array(count), texts: [] })
+  it('checks cancellation within 256 classified entries', async () => {
+    const controller = new AbortController()
+    let processed = 0
+    const cooperate = new CooperativeSlice<'filter'>({ now: () => 0, yield: async () => {} })
+    await expect(classifyLanePages(async accept => accept(page(4096)), () => { processed++; if (processed === 1) controller.abort(); return { kind: 'number', value: 1 } }, () => controller.signal.throwIfAborted(), cooperate)).rejects.toBeDefined()
+    expect(processed).toBeLessThanOrEqual(256)
+  })
+  it('samples the time budget within 256 entries of one page', async () => {
+    let clock = 0, at = 0
+    const marks: number[] = []
+    const cooperate = new CooperativeSlice<'filter'>({ now: () => clock, yield: async () => { marks.push(clock - at); at = clock } })
+    await classifyLanePages(async accept => accept(page(4096)), () => { clock++; return { kind: 'number', value: 1 } }, () => {}, cooperate)
+    expect(marks[0]).toBeLessThanOrEqual(256)
+  })
+})

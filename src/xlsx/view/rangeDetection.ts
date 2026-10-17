@@ -32,7 +32,7 @@ import {
 } from './coordinates'
 import type { PopulatedCellSource, StructuralIndex } from './structure'
 import { guardSort, isChildOnlyRange } from './operationGuard'
-import { YIELD_WORK_UNITS } from './scheduler'
+import { CHECK_WORK_UNITS, YIELD_WORK_UNITS } from './scheduler'
 
 export interface RangeDetectionRequest {
   store: SourceStore
@@ -159,11 +159,12 @@ function yieldToHost(): Promise<void> {
 }
 /** Cooperative pacing (spec §10.2, plan S4.2: at least every 10 ms or 4,096
  * rows). Every cell a scan processes is one unit (at most a row of work) and
- * every page read one more; processing loops spend units one cell at a time
- * and yield once the slice is spent, so the bound never depends on the page
- * size. After each yield the signal and the source owner are re-checked, so an
- * abort scheduled mid-run lands even when source pages resolve as microtasks.
- * The store's own decoding of one page is not divisible from here. */
+ * every page read one more; processing loops spend units one cell at a time.
+ * At every checkpoint (at most CHECK_WORK_UNITS units apart, spec §12.1) and
+ * after every yield the signal and the source owner are re-checked; the slice
+ * yields once 4,096 units or its time budget are spent, so neither depends on
+ * the page size. A store's decoding of one request is not divisible from here
+ * (see the SourceStore pacing contract). */
 class Pacer {
   private work = 0
   private unchecked = 0
@@ -175,15 +176,17 @@ class Pacer {
     this.pause = pacing.yield ?? yieldToHost
     this.last = this.now()
   }
-  /** Charges processed units; true once the slice is spent (the clock is
-   * sampled every 256 units). */
+  /** Charges processed units; at each checkpoint (at most CHECK_WORK_UNITS
+   * apart, spec §12.1) re-checks the signal and the owner and samples the
+   * clock. True once the slice is spent. */
   spend(units = 1): boolean {
     this.work += units
-    if (this.work >= YIELD_WORK_UNITS) return true
     this.unchecked += units
-    if (this.unchecked < 256) return false
+    if (this.unchecked < CHECK_WORK_UNITS && this.work < YIELD_WORK_UNITS) return false
     this.unchecked = 0
-    return this.now() - this.last >= YIELD_EVERY_MS
+    this.signal.throwIfAborted()
+    this.owner()
+    return this.work >= YIELD_WORK_UNITS || this.now() - this.last >= YIELD_EVERY_MS
   }
   async yield(): Promise<void> {
     await this.pause()
@@ -266,7 +269,7 @@ export class Scanner {
     }
     this.work += first.items.length
     for (const cell of first.items) {
-      if (this.pacer.spend()) { try { await this.pacer.yield() } catch (error) { void iterator.return?.(); throw error } }
+      try { if (this.pacer.spend()) await this.pacer.yield() } catch (error) { void iterator.return?.(); throw error }
       const outside = !isValidCoordinate(cell.row, cell.col) ? 'worksheet domain' : cell.row < rect.r0 || cell.row > rect.r1 || cell.col < rect.c0 || cell.col > rect.c1 ? 'requested range' : null
       if (outside !== null) { void iterator.return?.(); throw contractViolation(`Populated cell outside the ${outside}`) }
     }

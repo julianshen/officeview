@@ -1072,4 +1072,71 @@ describe('row-count yield bound (spec §10.2, plan S4.2 LIFE-02)', () => {
     slices.push(keys + searched - last)
     expect(Math.max(...slices)).toBeLessThanOrEqual(4096)
   })
+  it('keeps a later partial merge while an earlier unknown page fills in (codex C1)', async () => {
+    let ready = false
+    const source = new FakeSource([() => ready ? lanes('p0', [99999]) : { kind: 'unknown', pageId: 'p0' }, () => lanes('p1', Array.from({ length: 8192 }, (_, i) => i % 3000))])
+    const cache = new ValueIndexCache(EXACT), index = cache.open(identity(numeric), source), controller = new AbortController()
+    await expect(index.build({ signal: controller.signal, now: () => 0, yield: async () => { if (index.size > 0) controller.abort() } })).rejects.toMatchObject({ code: 'cancelled' })
+    ready = true
+    expect(await index.build({ now: () => 0, yield: async () => {} })).toBe('complete')
+    let total = 0
+    for (let offset = 0; offset < index.size; offset += 500) for (const entry of index.page({ offset, limit: 500, label }).entries) total += entry.count
+    expect(total).toBe(8193)
+    expect(index.size).toBe(3001)
+  })
+  it('refuses a partially merged page that reads back unknown under one stamp', async () => {
+    let unknown = false
+    const source = new FakeSource([() => unknown ? { kind: 'unknown', pageId: 'p0' } : lanes('p0', Array.from({ length: 8192 }, (_, i) => i))])
+    const index = new ValueIndexCache(EXACT).open(identity(numeric), source), controller = new AbortController()
+    await expect(index.build({ signal: controller.signal, now: () => 0, yield: async () => { if (index.size > 0) controller.abort() } })).rejects.toMatchObject({ code: 'cancelled' })
+    unknown = true
+    await expect(index.build()).rejects.toMatchObject({ code: 'page-error', message: 'A partially merged value page changed under one source stamp' })
+  })
+  it('samples the clock within 256 merged values of one large page (spec §12.1)', async () => {
+    const source = numberPages(1, 8192, { rows: 0 }), sizes: number[] = []
+    let clock = 0
+    const index = new ValueIndexCache().open(identity(numeric), source)
+    // Every clock read is a full slice later.
+    expect(await index.build({ now: () => (clock += 8), yield: async () => { sizes.push(index.size) } })).toBe('complete')
+    // Validation yields first (size 0), then every merge batch.
+    const gaps = [...sizes, index.size].map((at, i, all) => at - (i ? all[i - 1] : 0))
+    expect(Math.max(...gaps)).toBeLessThanOrEqual(256)
+  })
+  it('checks cancellation within 256 validated cells, before any pause (spec §12.1)', async () => {
+    const controller = new AbortController(), count = 8192
+    let reads = 0, yields = 0
+    const texts = new Proxy(Array.from({ length: count }, (_, i) => `v${i}`), { get(target, key, receiver) {
+      if (typeof key === 'string' && /^\d+$/.test(key)) { if (++reads === 1) controller.abort() }
+      return Reflect.get(target, key, receiver)
+    } })
+    const source = new FakeSource([() => ({ kind: 'values', pageId: 'p0', count, tags: new Uint8Array(count).fill(SOURCE_STRING), numbers: new Float64Array(count), texts })])
+    const index = new ValueIndexCache(EXACT).open(identity(), source)
+    await expect(index.build({ signal: controller.signal, now: () => 0, yield: async () => { yields++ } })).rejects.toMatchObject({ code: 'cancelled' })
+    expect(yields).toBe(0)
+    expect(reads).toBeLessThanOrEqual(256)
+  })
+  it('bounds the owned adapter decode of an 8,192-row response (codex C3)', async () => {
+    const store = { stamp: STAMP, queryColumn: async () => ({ stamp: STAMP, completeness: 'complete', items: [{ kind: 'blank', r0: 0, r1: 8191 }], nextCursor: undefined }) } as unknown as SourceStore
+    const source = valueSourceFromStore(store, 0, { r0: 0, r1: 8191 }, 8192)
+    let serviced = false
+    setImmediate(() => { serviced = true })
+    const result = await source.readPage(0, new AbortController().signal)
+    expect(result).toMatchObject({ kind: 'values', count: 8192 })
+    expect(serviced).toBe(true)
+  })
+  it('refuses a decode whose source owner changes at a decode yield', async () => {
+    let stamp = STAMP
+    const store = { get stamp() { return stamp }, queryColumn: async () => ({ stamp, completeness: 'complete', items: [{ kind: 'blank', r0: 0, r1: 8191 }], nextCursor: undefined }) } as unknown as SourceStore
+    const source = valueSourceFromStore(store, 0, { r0: 0, r1: 8191 }, 8192)
+    setImmediate(() => { stamp = { ...STAMP, valueGen: STAMP.valueGen + 1 } })
+    await expect(source.readPage(0, new AbortController().signal)).rejects.toMatchObject({ code: 'stale-source' })
+  })
+  it('paces every decode pass: coverage check, blank fill and final coverage scan', async () => {
+    const store = { stamp: STAMP, queryColumn: async () => ({ stamp: STAMP, completeness: 'complete', items: [{ kind: 'blank', r0: 0, r1: 8191 }], nextCursor: undefined }) } as unknown as SourceStore
+    let yields = 0
+    const source = valueSourceFromStore(store, 0, { r0: 0, r1: 8191 }, 8192, undefined, { now: () => 0, yield: async () => { yields++ } })
+    expect(await source.readPage(0, new AbortController().signal)).toMatchObject({ kind: 'values', count: 8192 })
+    // Three passes of 8,192 rows each: 24,576 units, a pause at every 4,096.
+    expect(yields).toBe(6)
+  })
 })

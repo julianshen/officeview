@@ -13,6 +13,9 @@
 export const YIELD_WORK_UNITS = 4096
 /** Wall-clock budget between yields, in milliseconds of the injected clock. */
 export const YIELD_INTERVAL_MS = 10
+/** Work units between cancellation/staleness checkpoints at most (spec §12.1
+ * amortization clause); each checkpoint also samples the clock. */
+export const CHECK_WORK_UNITS = 256
 
 export type YieldFunction<Phase extends string = string> = (phase: Phase) => Promise<void>
 export interface CooperativeOptions<Phase extends string = string> {

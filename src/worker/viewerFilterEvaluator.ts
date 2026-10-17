@@ -20,7 +20,7 @@ import type { XlsxSheet } from '../xlsx/types'
 import type { FilterEvaluation, FilterEvaluator } from './viewerSession'
 import { semanticsFor } from '../xlsx/view/semanticsFor'
 import { DisplayTextLaneCache, needsDisplayText } from './displayTextLane'
-import { CooperativeSlice } from '../xlsx/view/scheduler'
+import { CHECK_WORK_UNITS, CooperativeSlice } from '../xlsx/view/scheduler'
 import type { FormatAllocation } from '../xlsx/formula/format'
 
 const LANE_PAGE_ROWS = 4096
@@ -117,6 +117,8 @@ export function createWorkerFilterEvaluator(keysFor: (stamp: SourceStamp) => Rea
       const now = store.stamp
       if (now.docId !== stamp.docId || now.sheetId !== stamp.sheetId || now.valueGen !== stamp.valueGen) throw new ValueIndexError('stale-source', 'Source values changed; retry.')
     }
+    // Rows matched or formatted, for the checkpoint cadence (spec §12.1).
+    let units = 0
     try {
       for (const [col, rule] of spec.columns) {
         const classification = await classifyCached(store, stamp, col, r0, r1, signal, live, slice)
@@ -133,6 +135,7 @@ export function createWorkerFilterEvaluator(keysFor: (stamp: SourceStamp) => Rea
                 const text = display(page, i, allocation)
                 if (text !== undefined) sink.add(first + i - r0, text)
               })
+              if (++units % CHECK_WORK_UNITS === 0) live()
               if (slice.due(1)) { await slice.pause('filter'); live() }
             }
           }), displayLanes)
@@ -142,6 +145,7 @@ export function createWorkerFilterEvaluator(keysFor: (stamp: SourceStamp) => Rea
             for (let i = 0; i < page.count; i++) {
               if (signal.aborted) throw new ValueIndexError('cancelled', 'Filter cancelled')
               if (!match(prepared(page, i, lease?.lane.text(first + i - r0)))) flags[first + i - spec.range.r0] = 0
+              if (++units % CHECK_WORK_UNITS === 0) live()
               if (slice.due(1)) { await slice.pause('filter'); live() }
             }
           })

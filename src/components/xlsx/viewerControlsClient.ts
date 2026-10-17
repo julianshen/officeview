@@ -9,6 +9,7 @@ import { classifyLanePages, compileValuesMembership, ValueIndexCache, type Colum
 import { CompactRowVisibility, createRowVisibility } from '../../xlsx/view/visibility'
 import { MemoryValueRunStore, VALUE_RUN_PAGE, type ValueRunStore } from '../../xlsx/view/valueRuns'
 import type { StructuralIndex } from '../../xlsx/view/structure'
+import { CHECK_WORK_UNITS } from '../../xlsx/view/scheduler'
 import { MainControlMemory, controlSourceStore, controlStructure, controlView } from '../../xlsx/view/mainControlMemory'
 import { MainMemoryLedger, estimatePayloadBytes } from '../../xlsx/view/mainLedger'
 import type { RangeDetection, RangeDetectionRequest } from '../../xlsx/view/rangeDetection'
@@ -321,6 +322,8 @@ export async function viewerControls(options: ViewerControlsOptions, signal: Abo
         flagsAccount.charge(filter.range.r1 - filter.range.r0 + 1 + 128)
         state.flags = new Uint8Array(filter.range.r1 - filter.range.r0 + 1).fill(1)
         const r0 = filter.range.r0 + filter.range.headerRows, r1 = filter.range.r1 - filter.range.totalsRows
+        // Rows matched or formatted, for the checkpoint cadence (spec §12.1).
+        let units = 0
         for (const [col, rule] of filter.columns) {
           await classify(owner, filter.range, col, request, cooperate)
           const domain = identity(owner, filter.range, col)
@@ -333,6 +336,7 @@ export async function viewerControls(options: ViewerControlsOptions, signal: Abo
                 for (let i = 0; i < page.count; i++) {
                   request.throwIfAborted()
                   display(page, i, text => sink.add(first + i - r0, text))
+                  if (++units % CHECK_WORK_UNITS === 0) current(owner, request)
                   if (cooperate?.due(1)) { await cooperate.pause('filter'); current(owner, request) }
                 }
               }))
@@ -347,6 +351,7 @@ export async function viewerControls(options: ViewerControlsOptions, signal: Abo
               for (let i = 0; i < page.count; i++) {
                 request.throwIfAborted()
                 if (!match(prepared(page, i, lease?.lane.text(first + i - r0)))) state.flags![first + i - filter.range.r0] = 0
+                if (++units % CHECK_WORK_UNITS === 0) current(owner, request)
                 if (cooperate?.due(1)) { await cooperate.pause('filter'); current(owner, request) }
               }
             })
