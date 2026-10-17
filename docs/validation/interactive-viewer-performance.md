@@ -1216,7 +1216,19 @@ load-noisy throughout (load 8.86–38.19 measured), and several misses below
 carry that qualifier.
 
 **Targets:** iPad Pro 11-inch (M5) `834×1124@2x`, iPad mini (A17 Pro)
-`744×1047@2x`, iPhone 17 `326×580@2x` (viewer-perf) / `402×714@3x` (harness).
+`744×1047@2x`, iPhone 17 `326×580@3x` (viewer-perf) / `402×714@3x` (harness;
+the device DPR is 3 on iPhone — relevant to canvas/pixel cost interpretation).
+
+**Build provenance.** All three raw viewer-perf receipts (`/Users/julianshen/
+prj/officeview/.worktrees/visual-shots/sim-bench/viewer-perf-safari-sim-*.json`,
+field `commit` = `b66c7ea3bedc…`) record commit `b66c7ea`. Their successful
+builds were run with a **local, unlanded** modification of
+`vite.perf.config.ts` that sets
+`worker.rollupOptions.output.inlineDynamicImports = true` (see below). That
+option exists in neither `b66c7ea` nor the integrated `541f212`, and it is not
+in this docs commit: the runs reproduce only against `b66c7ea` plus that local
+perf-config change, and its landing/review is pending. Do not treat the
+receipts as products of the named commits alone.
 
 **S10.2 viewer-perf results (MobileSafari, dist-perf served to the simulator).**
 Warm viewport frame (`inputToPaint`, p50 ≤ 16.7 ms / p95 ≤ 33.3 ms) passes on
@@ -1226,31 +1238,48 @@ all three targets for `ordinary` and `wrapped`; the miss is iPad Pro 11
 miss is iPhone 17 `cancel` (p95 66.44 ms, max 461.72 ms) under a host load
 spike. Progressive first viewport (p50 ≤ 450 ms / p95·max ≤ 1100 ms): F1 passes
 everywhere; F2 (`1M × 16` via `openLargeBlob`) passes max on all three and p50
-only on iPhone 17 (400.38 ms; both iPads miss at 518–523 ms); F3
-(`250k × 100`) passes fully only on iPhone 17, iPad mini passes p95 (1,093.86
-ms) but misses p50 (1,003 ms), and iPad Pro 11 misses both (p50 1,280 ms, p95
-1,508.56 ms), all load-noisy. A MobileSafari-driven WebKit worker-chunking
-fault (`viewerPerfWorker` ↔ `viewerLargeSource` circular chunk dependency
+only on iPhone 17 (400.38 ms; both iPads miss at 518–523 ms); **no simulator
+passes both F3 (`250k × 100`) thresholds**: iPad mini is p50 FAIL / p95 PASS
+(1,003.18 / 1,093.86 ms), iPhone 17 is p50 FAIL / p95 PASS (528.60 / 599.24
+ms), and iPad Pro 11 is p50 FAIL / p95 FAIL (1,280.04 / 1,508.56 ms); these
+rows are load-noisy. A MobileSafari-driven WebKit worker-chunking fault
+(`viewerPerfWorker` ↔ `viewerLargeSource` circular chunk dependency
 re-evaluated the worker entry on dynamic import and dropped the session on
 F2/F4) was fixed in the perf build with
-`worker.rollupOptions.output.inlineDynamicImports = true`; it is a
-`vite.perf.config.ts` fix for this suite, not a product change.
+`worker.rollupOptions.output.inlineDynamicImports = true`; that config change
+is described under build provenance above — a pending `vite.perf.config.ts`
+modification for this suite, not a product change.
 
 **Memory ledgers (application-accounted; MobileSafari exposes neither
 `performance.measureUserAgentSpecificMemory` nor a JS heap).**
 - Worker-owned peak 223.47 MiB (F2) / 151.84 MiB (F4) — under the 256 MiB M
   worker cap on all three targets; 79/79 workers cleanly terminated on close.
-- **Main-owned overshoot:** F2 transient import transfer peaked at 36.17 MiB
-  (iPhone 17) to 41.5 MiB (iPad Pro 11) against the 32 MiB M cap, dropping to
-  14.37 KiB after close; F4 peaks at 8.96 MiB (in cap).
-- **Bitmap-retained overshoot:** F2 peaked at 112.96–113.79 MiB against the
-  64 MiB M cap (F4 44.67 MiB, in cap); active canvas bytes drop to 0 B after
-  document close. These runs presented with fixed-D desktop presentation, so
-  the admissions were not under the M caps. Stream F
-  (`feature/iv-vis-mobile`, **in review, not merged**) changes the viewer to
-  present with the admitted device profile (M on phones and tablets), which
-  brings these admissions under the M caps; until it merges the overshoot
-  stands as current merged behaviour.
+- **Main-owned overshoot (observed; cause not established):** F2 transient
+  import transfer peaked at 36.17 MiB (iPhone 17), 41.22 MiB (iPad mini),
+  41.48 MiB (iPad Pro 11) against the 32 MiB M cap. After close the F2 main
+  ledger reads **14,374 B** on iPad Pro 11, **18,506 B** on iPad mini and
+  **164,642 B** on iPhone 17 (canvas bytes after close 0 B on all three);
+  F4 peaks at 8.96 MiB (in cap). Note: `report-sim-bench-agy.md` generalizes
+  the after-close figure as "14.37 KiB"; that is a conversion error for
+  14,374 B = **14.04 KiB**, and the mini/iPhone values are higher — the
+  device-specific values above come from the raw receipts
+  (`derivedMeasurements.ledgerMemorySummary.*.f2Recovery.mainLedgerAfterCloseBytes`).
+- **Bitmap-retained overshoot (observed; cause not established):** F2 peaked
+  at 112.96 MiB (iPhone 17), 113.67 MiB (iPad Pro 11) and 113.79 MiB (iPad
+  mini) against the 64 MiB M cap (F4 44.67 MiB, in cap); active canvas bytes
+  drop to 0 B after document close.
+- **Not explained, not fixed:** both overshoots are recorded observations
+  without an established cause in the source report. Stream F
+  (`feature/iv-vis-mobile`, **in review, not merged**, head `b2af1d6`) fixes
+  the viewer's default presentation profile (presents with the admitted
+  device profile instead of fixed D), which supports a bitmap-admission
+  hypothesis for the bitmap peak; it does not itself address the transient
+  import-transfer main-owned peak, whose budget already follows the
+  worker-backed source's profile (`budgetProfile = remote?.profile`, the base
+  `InteractiveSheetDoc.tsx:270`). **Both overshoots remain under investigation
+  in stream F; no before/after-F measurements exist, and neither overshoot is
+  claimed resolved. Until measured before/after F receipts exist, both stand
+  as current merged behaviour.**
 
 **`text-sort-1m-natural` refused-by-design.** On `b66c7ea` the harness
 propagated the refusal as an uncaught rejection. On the integrated head
@@ -1264,7 +1293,13 @@ and posts a complete JSON receipt instead of crashing, exactly as reviewed in
 `bench:harness --browser safari-manual --profile M --mode smoke` produces JSON
 receipts per fixture/scenario on the harness page; the CLI still refuses
 release-mode receipts for it (`--mode release is only supported with
---suite viewer`), consistent with the S0.3 scaffold rule. Measured kernel rows
-in the source report include e.g. F2 `sort-100k-1key` median 100.0 ms (p50 ≤
-120 ms, pass) under load-noisy conditions. These are smoke/directional rows,
-not the frozen S10.2 release thresholds.
+--suite viewer`), consistent with the S0.3 scaffold rule. Two threshold-bearing
+examples, both **query-completion** (the source report's M budget column)
+under load-noisy conditions, quoted device by device and boundary by boundary:
+iPad mini (A17 Pro) F2 `sort-100k-1key` passes with query `p50 113.0 ms ≤ 120
+ms`, `p95 123.0 ms ≤ 250 ms` (its kernel p50 is 100.0 ms, a different, lower
+boundary); and iPhone 17 F2 `sort-1m-1key` **misses** with query `p50 1401 ms
+> 1100 ms` while `p95 1612 ms ≤ 2200 ms`. Other rows (`sort-100k-8key`,
+`sort-1m-2key`, `filter-1m-numeric`, `value-index-100k-cold`, F1 scaffold) are
+diagnostic or passing in the source report. These are smoke/directional
+comparisons, not the frozen S10.2 release thresholds or release admission.
