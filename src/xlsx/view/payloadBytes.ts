@@ -37,20 +37,34 @@ export function estimatePayloadBytes(value: unknown, maxNodes = 200_000): number
   return pending ? Math.ceil(bytes + (bytes / nodes) * pending) : bytes
 }
 
+/** Workspace the exact walk admits per distinct object: a visited-Set slot
+ * (64 B, hash table included), a stack reference (8 B) and, for a typed view,
+ * a buffer-dedup Set slot (64 B). The first MEASURE_FIRST_CHUNK_ENTRIES
+ * entries are a constant scratch allowance (at most 8,704 B, like the walk's
+ * own frames), so a small payload-free reply is measurable under any pressure;
+ * beyond it, chunks doubling up to MEASURE_CHUNK_ENTRIES are admitted before
+ * the walk grows into them (the admitted workspace stays within twice what
+ * the walk holds). */
+export const MEASURE_ENTRY_BYTES = 136
+export const MEASURE_FIRST_CHUNK_ENTRIES = 64
+export const MEASURE_CHUNK_ENTRIES = 4096
+const hasOwn = Object.prototype.hasOwnProperty
+
 /**
  * The exact measure of a structured-clone payload under the same per-value
  * costs as estimatePayloadBytes, for transport admission (FC-T2): never an
- * extrapolation. Each object is counted once (a clone keeps graph sharing);
- * strings count in O(1); primitives inside arrays, Maps and Sets are counted
- * inline, so the walk's workspace (stack + visited set) grows only with the
- * number of distinct objects. That workspace is bounded by `maxObjects`: a
- * payload with more objects is UNMEASURABLE (undefined), and the caller must
- * treat it as not admitted.
+ * extrapolation, and no object-count cap. Each object is counted once (a clone
+ * keeps graph sharing); strings count in O(1); primitives inside arrays, Maps
+ * and Sets are counted inline and plain objects are walked with for...in, so
+ * the walk's only growing workspace is its visited set, buffer set and stack,
+ * one entry per distinct object. Before that workspace grows by a chunk,
+ * `admit` must accept the chunk's bytes (entries x MEASURE_ENTRY_BYTES); a refusal makes the payload UNMEASURABLE now
+ * (undefined). Callers walking a large untrusted graph pass an admitting pool.
  */
-export function measurePayloadBytes(value: unknown, maxObjects = 200_000): number | undefined {
+export function measurePayloadBytes(value: unknown, admit: (bytes: number) => boolean = () => true): number | undefined {
   const buffers = new Set<ArrayBufferLike>(), visited = new Set<object>()
   const stack: object[] = []
-  let bytes = 0
+  let bytes = 0, room = MEASURE_FIRST_CHUNK_ENTRIES
   // Adds a value's own cost; an object not yet seen is queued for its slots.
   const add = (v: unknown): boolean => {
     switch (typeof v) {
@@ -60,7 +74,12 @@ export function measurePayloadBytes(value: unknown, maxObjects = 200_000): numbe
     }
     if (v === null) { bytes += 8; return true }
     if (visited.has(v)) return true
-    if (visited.size >= maxObjects) return false
+    if (room === 0) {
+      const chunk = Math.min(MEASURE_CHUNK_ENTRIES, Math.max(MEASURE_FIRST_CHUNK_ENTRIES, visited.size))
+      if (!admit(chunk * MEASURE_ENTRY_BYTES)) return false
+      room = chunk
+    }
+    room--
     visited.add(v)
     stack.push(v)
     return true
@@ -85,9 +104,13 @@ export function measurePayloadBytes(value: unknown, maxObjects = 200_000): numbe
       for (const item of v) if (!add(item)) return undefined
       continue
     }
-    const keys = Object.keys(v)
-    bytes += 24 + keys.length * 16
-    for (const key of keys) if (!add((v as Record<string, unknown>)[key])) return undefined
+    bytes += 24
+    // A structured clone holds own data properties only.
+    for (const key in v) {
+      if (!hasOwn.call(v, key)) continue
+      bytes += 16
+      if (!add((v as Record<string, unknown>)[key])) return undefined
+    }
   }
   return bytes
 }

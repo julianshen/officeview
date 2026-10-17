@@ -39,8 +39,7 @@ import { createWorkerFilterEvaluator } from './viewerFilterEvaluator'
 import { MAX_ROWS } from '../xlsx/view/coordinates'
 import { awaitAbortable, bindQueryDeadline } from './viewerAbort'
 import { queryPayloadBytes } from './viewerQueryBudget'
-import { replyLimitEnvelope, replyLimitRefusal } from './viewerReplyLimit'
-import { measurePayloadBytes } from '../xlsx/view/payloadBytes'
+import { admitReply, replyLimitEnvelope } from './viewerReplyLimit'
 import type { PoolCharge } from '../xlsx/view/tileCache'
 
 export type { CancelReason } from './viewerProtocol'
@@ -194,7 +193,8 @@ export class ViewerKernel {
     // FC-T2 invariant. A drawings read whose grant is valid (a safe integer
     // >= replyLimitEnvelope(command); requestIds are at most
     // MAX_REQUEST_ID_UNITS units) never gets a reply posted that measures
-    // (exactly: measurePayloadBytes) more than its grant: the FINAL reply
+    // (exactly: measurePayloadBytes, its workspace admitted) more than its
+    // grant, and each posted reply carries that size as replyBytes: the FINAL reply
     // (diagnostics, cancel reason, catch paths included) is measured here,
     // before transferablesOf and the sink's clone/postMessage, and one over the
     // grant or too large to measure is replaced by the payload-free quota reply
@@ -211,8 +211,12 @@ export class ViewerKernel {
     const retain = (release: () => void) => { if (ended) release(); else outgoing.push(release) }
     const emit = (out: WorkerReply) => {
       if (checked && out.requestId === command.requestId) {
-        const bytes = measurePayloadBytes(out)
-        if (bytes === undefined || bytes > limit!) out = replyLimitRefusal(command as CommandOf<'read'>, bytes, limit!)
+        // The walk's workspace is a transient share of the document pool,
+        // admitted chunk by chunk before it grows and released after the walk.
+        const workspace = this.sessions.get((command as CommandOf<'read'>).owner.docId)?.memory.charge()
+        let held = 0
+        try { out = admitReply(command as CommandOf<'read'>, out, limit!, bytes => !workspace || workspace.set(held += bytes)) }
+        finally { workspace?.release() }
       }
       const transfer = transferablesOf(out)
       this.accounting.transfer(transfer)

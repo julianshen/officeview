@@ -36,8 +36,10 @@ describe('shared reply measure', () => {
 describe('kernel reply grant', () => {
   it('posts a final reply that measures exactly the grant and replaces one byte less with a payload-free quota reply', async () => {
     const { read } = await kernelFixture()
-    const { posted: [full] } = await read('d0')
-    const D = measurePayloadBytes(full)!
+    // A granted reply carries its own size (replyBytes), counted in it.
+    const { posted: [full] } = await read('d0', 1 << 30)
+    const D = full.replyBytes!
+    expect(D).toBe(measurePayloadBytes(full))
     expect(drawingsOf(full)?.completeness).toBe('complete')
 
     const exact = await read('d1', D)
@@ -54,12 +56,12 @@ describe('kernel reply grant', () => {
 
   it('checks the final reply, after the cached-value diagnostics were added', async () => {
     const { source, read } = await kernelFixture()
-    const { posted: [plain] } = await read('d0')
-    const D = measurePayloadBytes(plain)!
+    const { posted: [plain] } = await read('d0', 1 << 30)
+    const D = plain.replyBytes!
     vi.spyOn(source as unknown as { valueStatus(): unknown }, 'valueStatus').mockReturnValue({ policy: 'cached', message: 'Cached values are shown' })
-    const { posted: [diagnosed] } = await read('d1')
+    const { posted: [diagnosed] } = await read('d1', 1 << 30)
     expect(diagnosed.diagnostics.some(d => d.code === 'cached-value-policy')).toBe(true)
-    const final = measurePayloadBytes(diagnosed)!
+    const final = diagnosed.replyBytes!
     expect(final).toBeGreaterThan(D)
     // The provider's payload alone fits D; the diagnosed reply does not.
     const { posted: [out] } = await read('d2', final - 1)

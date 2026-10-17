@@ -550,6 +550,9 @@ export type WorkerReplyBase<K extends WorkerCommandKind> =
     requestId: string
     owner: WorkerCommandOwner<K>
     diagnostics: readonly WorkerDiagnostic[]
+    /** FC-T2 (internal): on a reply to a granted drawings read, its exact
+     * measured size (this field included), never over the grant. */
+    replyBytes?: number
   } : never
 export type WorkerResult =
   | { kind: 'open'; valuePolicy: ValuePolicy; sheets: readonly { sheetId: string; name: string }[]; formatting?: WorkbookFormatting }

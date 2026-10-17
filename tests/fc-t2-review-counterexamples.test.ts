@@ -51,7 +51,8 @@ describe('finding 1: the transport gate measures exactly, never by extrapolation
     } finally { await f.close() }
   })
 
-  it('substitutes the payload-free refusal, with no size, when the walk hits its node cap', async () => {
+  // Confirmation review R2: no object-count cap; the walk's workspace is admitted instead.
+  it('measures and delivers a 300,000-object reply that fits its grant and the worker pool', async () => {
     const f = await kernelOver(drawingDoc(['s']))
     const nodes = Array.from({ length: 300_000 }, () => ({}))
     vi.spyOn(f.source.store('s'), 'readDrawings').mockResolvedValue({ completeness: 'complete', images: [], diagnostics: [], bytes: 0, drawings: [{ xEmu: 0, yEmu: 0, widthEmu: 1, heightEmu: 1, content: { kind: 'xlsxChart', chart: { nodes } } }] } as never)
@@ -59,18 +60,18 @@ describe('finding 1: the transport gate measures exactly, never by extrapolation
     try {
       await f.kernel.handle(f.cmd('many', 60 * MiB), out => posted.push(out))
       expect(posted).toHaveLength(1)
-      expect(posted[0]).toMatchObject({ kind: 'quota', limitBytes: 60 * MiB })
-      expect('requiredBytes' in posted[0]).toBe(false)
+      expect(drawingsOf(posted[0])?.completeness).toBe('complete')
+      expect((posted[0] as { replyBytes?: number }).replyBytes).toBe(measurePayloadBytes(posted[0]))
     } finally { await f.close() }
   })
 
-  it('counts strings, arrays of primitives and shared objects exactly, and reports a capped walk as unmeasurable', () => {
+  it('counts strings, arrays of primitives and shared objects exactly, and reports a refused workspace as unmeasurable', () => {
     const shared = { a: 1 }
     expect(measurePayloadBytes('abc')).toBe(16 + 6)
     expect(measurePayloadBytes([1, 2, 'xy'])).toBe(16 + 3 * 8 + 8 + 8 + 16 + 4)
     expect(measurePayloadBytes([shared, shared])).toBe(16 + 2 * 8 + 24 + 16 + 8)
-    expect(measurePayloadBytes([{}, {}, {}], 3)).toBeUndefined()
-    expect(measurePayloadBytes([{}, {}, {}], 4)).toBe(16 + 3 * 8 + 3 * 24)
+    expect(measurePayloadBytes(Array.from({ length: 64 }, () => ({})), () => false)).toBeUndefined()
+    expect(measurePayloadBytes([{}, {}, {}])).toBe(16 + 3 * 8 + 3 * 24)
   })
 })
 
@@ -107,29 +108,33 @@ describe('finding 3: the outgoing reply stays charged until it was posted', () =
   })
 
   it('leaves no microtask gap in which a second read can clone beside the unposted first (no afterDispatch)', async () => {
-    const doc = drawingDoc(['s'], MiB), limit = 1536 * 1024
+    // Fits one reply plus its admitted walk workspace, not two 1 MiB clones.
+    const doc = drawingDoc(['s'], MiB), limit = Math.floor(1.9 * MiB)
     const f = await kernelOver(doc, { workerBudgetBytes: limit })
     const store = f.source.store('s'), raw = store.readDrawings!.bind(store), buffers: WeakRef<ArrayBufferLike>[] = []
     store.readDrawings = async (...args) => { const p = await raw(...args); for (const image of p.images) buffers.push(new WeakRef(image.data.buffer)); return p }
     const live = () => buffers.reduce((sum, ref) => sum + (ref.deref()?.byteLength ?? 0), 0)
     let posted = 0, maxLive = 0
-    const sink = (_out: WorkerReply, transfer: ArrayBuffer[]) => { maxLive = Math.max(maxLive, live()); posted++; structuredClone(_out, { transfer }) }
+    const kinds: (string | undefined)[] = []
+    const sink = (_out: WorkerReply, transfer: ArrayBuffer[]) => { maxLive = Math.max(maxLive, live()); posted++; kinds.push(drawingsOf(_out)?.completeness); structuredClone(_out, { transfer }) }
     const first = f.kernel.handle(f.cmd('one'), sink)
     let gap = false
     for (let i = 0; i < 100 && !posted; i++) {
       await Promise.resolve()
-      if (live() > 0 && f.kernel.lifecycleStats().transientBytes === 0) { gap = true; break }
+      if (!posted && live() > 0 && f.kernel.lifecycleStats().transientBytes === 0) { gap = true; break }
     }
     const second = gap ? f.kernel.handle(f.cmd('two'), sink) : undefined
     try {
       await Promise.all([first, second])
+      expect(kinds[0], 'the first read is delivered').toBe('complete')
       expect(gap, 'a finished result must not be live outside the worker pool').toBe(false)
       expect(maxLive).toBeLessThanOrEqual(limit)
     } finally { await Promise.all([first, second]); await f.close() }
   })
 
   it('refuses the second of two staggered clones that only fit one at a time', async () => {
-    const limit = 1536 * 1024
+    // Fits one reply plus its admitted walk workspace, not two 1 MiB clones.
+    const limit = Math.floor(1.9 * MiB)
     let release!: () => void, firstAt!: () => void, secondAt!: () => void, count = 0
     const gate = new Promise<void>(r => { release = r }), firstReady = new Promise<void>(r => { firstAt = r }), secondReady = new Promise<void>(r => { secondAt = r })
     const f = await kernelOver(drawingDoc(['s'], MiB), { workerBudgetBytes: limit }, c => {
@@ -147,6 +152,7 @@ describe('finding 3: the outgoing reply stays charged until it was posted', () =
       await Promise.all([first, second])
       const payloads = posted.flatMap(out => { const p = drawingsOf(out); return p?.completeness === 'complete' ? [p] : [] })
       const actual = payloads.reduce((sum, p) => sum + p.images.reduce((n, image) => n + image.data.byteLength, 0), 0)
+      expect(payloads.length, 'one of the two is delivered').toBe(1)
       expect(actual).toBeLessThanOrEqual(limit)
     } finally { release(); await Promise.all([first, second]); await f.close() }
   })
