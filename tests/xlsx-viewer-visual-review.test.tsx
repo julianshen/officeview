@@ -223,3 +223,104 @@ describe('#12 spreadsheet print', () => {
     expect(css).toMatch(/display:block!important/)
   })
 })
+
+function cellPaneRect(cell: HTMLElement): { left: number; top: number; right: number; bottom: number; width: number; height: number } {
+  const row = cell.closest('[role=row]') as HTMLElement
+  const match = /translate\(([-\d.e]+)px,\s*([-\d.e]+)px\)/.exec(row.style.transform)
+  const rx = match ? Number(match[1]) : 0, ry = match ? Number(match[2]) : 0
+  const left = rx + parseFloat(cell.style.left), top = ry
+  const width = parseFloat(cell.style.width), height = parseFloat(cell.style.height)
+  return { left, top, right: left + width, bottom: top + height, width, height }
+}
+
+function rectsIntersect(a: { left: number; top: number; right: number; bottom: number }, b: { left: number; top: number; right: number; bottom: number }): boolean {
+  return a.left < b.right && a.right > b.left && a.top < b.bottom && a.bottom > b.top
+}
+
+describe('cosmetics: desktop floating zoom pill clearance and whole-row find scroll-into-view', () => {
+  it('keeps active cell XFD1048576 clear of the floating zoom controls after Go To, keyboard navigation and find', async () => {
+    const doc = workbookOf([{
+      sheetId: 'A',
+      cells: [
+        { row: 0, col: 0, value: 'start' },
+        { row: 1048575, col: 16383, value: 'corner-hit' },
+      ],
+    }])
+    const ui = render(<InteractiveSheetDoc doc={doc} />)
+    await waitFor(() => expect(ui.getByRole('gridcell', { name: /^A1, value start/ })).toBeTruthy(), FIRST_PAINT_WAIT)
+    expect(ui.getByTestId('officeview-zoom-controls')).toBeTruthy()
+    // Fallback pane is 640x400; floating zoom controls sit at right 12..56, bottom 36..152 from pane bottom-right.
+    const zoomRect = { left: 640 - 56, right: 640 - 12, top: 400 - STATUS_BAR_HEIGHT - 128, bottom: 400 - STATUS_BAR_HEIGHT - 12 }
+
+    // 1. Go To XFD1048576
+    fireEvent.change(ui.getByRole('textbox', { name: 'Go To cell' }), { target: { value: 'XFD1048576' } })
+    fireEvent.click(ui.getByRole('button', { name: 'Go To' }))
+    const afterGoTo = await waitFor(() => ui.getByRole('gridcell', { name: /^XFD1048576/ }), FIRST_PAINT_WAIT)
+    expect(afterGoTo.getAttribute('aria-selected')).toBe('true')
+    const goToRect = cellPaneRect(afterGoTo)
+    expect(goToRect.width).toBe(64)
+    expect(goToRect.right).toBeLessThanOrEqual(640)
+    expect(rectsIntersect(goToRect, zoomRect)).toBe(false)
+
+    // 2. Keyboard navigation (Ctrl+Home -> Ctrl+End)
+    const grid = ui.getByRole('grid')
+    act(() => grid.focus())
+    fireEvent.keyDown(grid, { key: 'Home', ctrlKey: true })
+    await waitFor(() => expect(ui.getByRole('gridcell', { name: /^A1, value start/ }).getAttribute('aria-selected')).toBe('true'))
+    fireEvent.keyDown(grid, { key: 'End', ctrlKey: true })
+    const afterKey = await waitFor(() => ui.getByRole('gridcell', { name: /^XFD1048576/ }))
+    expect(rectsIntersect(cellPaneRect(afterKey), zoomRect)).toBe(false)
+
+    // 3. Find navigation to XFD1048576
+    fireEvent.keyDown(grid, { key: 'Home', ctrlKey: true })
+    fireEvent.change(ui.getByRole('searchbox', { name: 'Search document' }), { target: { value: 'corner-hit' } })
+    const afterFind = await waitFor(() => {
+      const cell = ui.getByRole('gridcell', { name: /^XFD1048576/ })
+      expect(cell.getAttribute('aria-selected')).toBe('true')
+      return cell
+    }, FIRST_PAINT_WAIT)
+    expect(rectsIntersect(cellPaneRect(afterFind), zoomRect)).toBe(false)
+  }, FIRST_PAINT_TEST.timeout)
+
+  it('find scroll-into-view keeps row 1 visible for visible hits and aligns below-the-fold hits to whole rows with no partial top row', async () => {
+    const doc = workbookOf([{
+      sheetId: 'A',
+      cells: [
+        { row: 0, col: 0, value: 'Short overflow 1' },
+        { row: 1, col: 0, value: 'Overflow text spills' },
+        { row: 3, col: 3, value: 'Right aligned overflows left' },
+        { row: 24, col: 0, value: 'Below fold overflow' },
+      ],
+    }])
+    const ui = render(<InteractiveSheetDoc doc={doc} />)
+    await waitFor(() => expect(ui.getByRole('gridcell', { name: /^A1, value Short overflow 1/ })).toBeTruthy(), FIRST_PAINT_WAIT)
+
+    // Search "overflow": match 1 is A1, match 2 (Next) is A2. Both fit on screen with row 1 fully visible.
+    fireEvent.change(ui.getByRole('searchbox', { name: 'Search document' }), { target: { value: 'overflow' } })
+    await waitFor(() => expect(ui.getByRole('gridcell', { name: /^A1, value Short overflow 1/ }).getAttribute('aria-selected')).toBe('true'), FIRST_PAINT_WAIT)
+    fireEvent.click(ui.getByRole('button', { name: 'Next match' }))
+    await waitFor(() => expect(ui.getByRole('gridcell', { name: /^A2, value Overflow text spills/ }).getAttribute('aria-selected')).toBe('true'), FIRST_PAINT_WAIT)
+
+    // Row 1 (aria-rowindex=2) must still be rendered and fully visible (20px height, not scrolled off-screen).
+    const row1 = ui.container.querySelector('[role=row][aria-rowindex="2"]') as HTMLElement | null
+    expect(row1).not.toBeNull()
+    expect(parseFloat(row1!.style.height)).toBe(20)
+
+    // Step to match 3 (D4) and match 4 (A25, below the 352px viewport fold).
+    fireEvent.click(ui.getByRole('button', { name: 'Next match' }))
+    await waitFor(() => expect(ui.getByRole('gridcell', { name: /^D4, value Right aligned/ }).getAttribute('aria-selected')).toBe('true'), FIRST_PAINT_WAIT)
+    fireEvent.click(ui.getByRole('button', { name: 'Next match' }))
+    const hitCell = await waitFor(() => {
+      const cell = ui.getByRole('gridcell', { name: /^A25, value Below fold overflow/ })
+      expect(cell.getAttribute('aria-selected')).toBe('true')
+      return cell
+    }, FIRST_PAINT_WAIT)
+
+    // Hit row 25 (aria-rowindex=26) is fully visible (full 20px clamped height), and the top visible row has no partial cut (full 20px height).
+    const hitRow = hitCell.closest('[role=row]') as HTMLElement
+    expect(parseFloat(hitRow.style.height)).toBe(20)
+    const visibleRows = [...ui.container.querySelectorAll<HTMLElement>('[role=grid] > [role=row]:not([data-officeview-ui=grid-headers]):not([data-transient-active=true])')]
+    expect(visibleRows.length).toBeGreaterThan(0)
+    expect(parseFloat(visibleRows[0].style.height)).toBe(20)
+  }, FIRST_PAINT_TEST.timeout)
+})

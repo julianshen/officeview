@@ -3,7 +3,8 @@ import { MAX_PHYSICAL_SCROLL_CSS_PX, SHEET_MIN_ZOOM, SHEET_MAX_ZOOM, type AxisMe
 import { isValidCoordinate, parseA1, validateCoordinate, type NavigatorRequest, type SourceCell, type DisplaySlot } from './coordinates'
 import { normalizeFilter } from './visibility'
 
-export interface ViewportSize { width: number; height: number }
+export interface ViewportInset { right?: number; bottom?: number }
+export interface ViewportSize { width: number; height: number; inset?: ViewportInset }
 export interface ScrollPoint { x: number; y: number }
 export interface ScrollOptions { zoom?: number; deviceScale?: number; offset?: ScrollPoint }
 const CAP = MAX_PHYSICAL_SCROLL_CSS_PX
@@ -33,16 +34,28 @@ function finiteZoom(zoom: number): number {
   if (!Number.isFinite(zoom)) throw new RangeError('Sheet zoom must be finite')
   return zoom
 }
-function axisBounds(axis: AxisMetrics, viewportCss: number, zoom: number) {
+function axisInset(viewportCss: number, insetCss = 0): number {
+  return insetCss > 0 && Number.isFinite(insetCss) ? Math.min(insetCss, Math.max(0, viewportCss - 1)) : 0
+}
+function axisBounds(axis: AxisMetrics, viewportCss: number, zoom: number, insetCss = 0) {
   const total = axis.totalCss()
   finite(total)
   if (total < 0) throw new RangeError('Negative logical axis extent')
-  const extent = Math.max(viewportCss, total >= CAP / zoom ? CAP : total * zoom)
-  return { extent, range: Math.max(0, extent - viewportCss), maxOffset: Math.max(0, total - viewportCss / zoom) }
+  let pad = total > 0 ? axisInset(viewportCss, insetCss) : 0
+  if (pad > 0) {
+    const rawMax = Math.max(0, total - (viewportCss - pad) / zoom), lead = axis.locate(rawMax)
+    if (lead !== null && axis.start(lead) < rawMax) {
+      const leadEnd = axis.start(lead) + axis.size(lead)
+      if (leadEnd < total) pad = axisInset(viewportCss, viewportCss - (total - leadEnd) * zoom)
+    }
+  }
+  const totalCss = total * zoom + pad
+  const extent = Math.max(viewportCss, total >= CAP / zoom || totalCss >= CAP ? CAP : totalCss)
+  return { extent, range: Math.max(0, extent - viewportCss), maxOffset: Math.max(0, total - (viewportCss - pad) / zoom) }
 }
-function placeAxis(axis: AxisMetrics, viewportCss: number, zoom: number, requested: number) {
+function placeAxis(axis: AxisMetrics, viewportCss: number, zoom: number, requested: number, insetCss = 0) {
   finite(requested)
-  const bounds = axisBounds(axis, viewportCss, zoom)
+  const bounds = axisBounds(axis, viewportCss, zoom, insetCss)
   const offset = clamp(requested, 0, bounds.maxOffset)
   const lower = Math.max(0, bounds.range - Math.min(bounds.range, Math.max(0, bounds.maxOffset - offset) * zoom))
   const upper = Math.min(bounds.range, offset * zoom)
@@ -51,8 +64,8 @@ function placeAxis(axis: AxisMetrics, viewportCss: number, zoom: number, request
 function makeWindow(metrics: SheetMetrics, viewport: ViewportSize, offset: ScrollPoint, zoom: number, deviceScale: number): ScrollWindow {
   viewportSize(viewport); point(offset)
   if (!Number.isFinite(deviceScale) || deviceScale <= 0) throw new RangeError('Device scale must be finite and positive')
-  const x = placeAxis(metrics.cols, viewport.width, zoom, offset.x)
-  const y = placeAxis(metrics.rows, viewport.height, zoom, offset.y)
+  const x = placeAxis(metrics.cols, viewport.width, zoom, offset.x, viewport.inset?.right)
+  const y = placeAxis(metrics.rows, viewport.height, zoom, offset.y, viewport.inset?.bottom)
   validatePixelPrecision(x.offset, viewport.width, zoom, deviceScale)
   validatePixelPrecision(y.offset, viewport.height, zoom, deviceScale)
   return Object.freeze({ logicalOrigin: Object.freeze({ x: x.offset, y: y.offset }), physicalPosition: Object.freeze({ x: x.position, y: y.position }), physicalExtent: Object.freeze({ width: x.extent, height: y.extent }), zoom, deviceScale })
@@ -98,7 +111,7 @@ export function scrollPhysicalTo(window: ScrollWindow, metrics: SheetMetrics, vi
 }
 export function recenterScrollWindow(window: ScrollWindow, metrics: SheetMetrics, viewport: ViewportSize): ScrollWindow {
   state(window); viewportSize(viewport)
-  const x = axisBounds(metrics.cols, viewport.width, window.zoom), y = axisBounds(metrics.rows, viewport.height, window.zoom)
+  const x = axisBounds(metrics.cols, viewport.width, window.zoom, viewport.inset?.right), y = axisBounds(metrics.rows, viewport.height, window.zoom, viewport.inset?.bottom)
   const guarded = (position: number, range: number) => range > 0 && (position < range * GUARD_FRACTION || position > range * (1 - GUARD_FRACTION))
   const changeX = guarded(window.physicalPosition.x, x.range) || window.physicalExtent.width !== x.extent || window.physicalPosition.x > x.range || window.logicalOrigin.x > x.maxOffset
   const changeY = guarded(window.physicalPosition.y, y.range) || window.physicalExtent.height !== y.extent || window.physicalPosition.y > y.range || window.logicalOrigin.y > y.maxOffset
@@ -336,6 +349,20 @@ function visibleResult(window: ScrollWindow, metrics: SheetMetrics, target: Sour
   return { kind: 'visible', window, active: Object.freeze({ ...target }), target: Object.freeze({ ...target }), display: { rowSlot: metrics.order.sourceToDisplay(target.row), col: target.col }, activate: true }
 }
 function emptyResult(window: ScrollWindow): NavigationResult { return { kind: 'empty', window, active: null, target: null, display: null, activate: false } }
+function ensureAxisVisible(axis: AxisMetrics, origin: number, start: number, length: number, viewportCss: number, zoom: number): number {
+  const span = viewportCss / zoom
+  if (length > span) return clamp(origin, start, start + length - span)
+  let next = start < origin ? start : start + length > origin + span ? start + length - span : origin
+  const lead = axis.locate(next)
+  if (lead !== null) {
+    const leadStart = axis.start(lead), leadEnd = leadStart + axis.size(lead)
+    if (leadStart < next) {
+      if (start >= leadStart && start + length <= leadStart + span) next = leadStart
+      else if (leadEnd <= start) next = leadEnd
+    }
+  }
+  return next
+}
 function ensureVisible(window: ScrollWindow, context: NavigationContext, target: SourceCell): ScrollWindow {
   const box = context.metrics.sourceCellToLogical(target)!
   const ensure = (origin: number, start: number, length: number, viewportCss: number) => {
@@ -343,7 +370,21 @@ function ensureVisible(window: ScrollWindow, context: NavigationContext, target:
     if (length > span) return clamp(origin, start, start + length - span)
     return start < origin ? start : start + length > origin + span ? start + length - span : origin
   }
-  return setScrollOffset(window, context.metrics, context.viewport, { x: ensure(window.logicalOrigin.x, box.x, box.width, context.viewport.width), y: ensure(window.logicalOrigin.y, box.y, box.height, context.viewport.height) })
+  const { metrics, viewport } = context
+  const right = axisInset(viewport.width, viewport.inset?.right), bottom = axisInset(viewport.height, viewport.inset?.bottom)
+  const maxX = Math.max(0, metrics.cols.totalCss() - viewport.width / window.zoom)
+  const maxY = Math.max(0, metrics.rows.totalCss() - viewport.height / window.zoom)
+  let x = ensure(Math.min(window.logicalOrigin.x, maxX), box.x, box.width, viewport.width)
+  let y = ensureAxisVisible(metrics.rows, Math.min(window.logicalOrigin.y, maxY), box.y, box.height, viewport.height, window.zoom)
+  if (right && bottom) {
+    const cx = clamp(x, 0, maxX), cy = clamp(y, 0, maxY)
+    const vx = (box.x - cx) * window.zoom, vy = (box.y - cy) * window.zoom, vw = box.width * window.zoom, vh = box.height * window.zoom
+    if (vx + vw > viewport.width - right && vy + vh > viewport.height - bottom) {
+      if (vw <= viewport.width - right) x = ensureAxisVisible(metrics.cols, window.logicalOrigin.x, box.x, box.width, viewport.width - right, window.zoom)
+      else y = ensureAxisVisible(metrics.rows, window.logicalOrigin.y, box.y, box.height, viewport.height - bottom, window.zoom)
+    }
+  }
+  return setScrollOffset(window, metrics, viewport, { x, y })
 }
 /** Hidden requests open an inspector, never activate/unhide their target. A
  * valid existing active source identity is retained; an invalidated active cell
@@ -352,7 +393,7 @@ export function navigateTo(window: ScrollWindow, context: NavigationContext, req
   state(window)
   const target = navigationTarget(context.metrics, request)
   const box = context.metrics.sourceCellToLogical(target)
-  if (box) return visibleResult(setScrollOffset(window, context.metrics, context.viewport, box), context.metrics, target)
+  if (box) return visibleResult(ensureVisible(window, context, target), context.metrics, target)
   const rowSlot = context.metrics.order.sourceToDisplay(target.row)
   const hiddenReason = hiddenReasonForCell(context, target, rowSlot)
   return { kind: 'hidden', window, active: retainActive(context, currentActive), target, display: { rowSlot, col: target.col }, activate: false, hiddenReason }
