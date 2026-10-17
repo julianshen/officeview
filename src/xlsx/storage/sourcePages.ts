@@ -858,6 +858,15 @@ export class SourcePageStore implements PageSink {
    * read buffer (a page's formula-metadata JSON string and parsed objects).
    * Known before a read, so the read is admitted for its exact cost. */
   private readonly recordCost = new Map<string, { stored: number; extra: number }>()
+  /** Decoded buffers that alias a buffer the RAM backend already owns (and holdRam charges). */
+  private readonly ramShared = new WeakSet<ArrayBufferLike>()
+  /** The heap a decoded record holds beyond what is already charged: its object
+   * overhead, plus its backing buffer unless a RAM backend owns (and charges) it,
+   * plus a page's parsed metadata. One rule for the cache handoff and for leases. */
+  private recordCharge(value: CellPagePayload | StringChunk): number {
+    if ('rows' in value) return DECODED_PAGE_OVERHEAD_BYTES + (this.ramShared.has(value.rows.buffer) ? metaBytes(value) : payloadBytes(value))
+    return DECODED_CHUNK_OVERHEAD_BYTES + (this.ramShared.has(value.text.buffer) ? 0 : chunkBytes(value))
+  }
   /** Bytes reserved in the pool for reads in flight (incoming buffer + decode). */
   private readingBytesNow = 0
   /** Pool bytes currently reserved for records being read from storage. */
@@ -1271,10 +1280,11 @@ export class SourcePageStore implements PageSink {
     }
   }
   /**
-   * `size` is told whether the decoded value views the very buffer a memory
-   * backend retains (already charged by holdRam), so only the rest is charged.
+   * The cached record is charged by recordCharge: a decoded value viewing the very
+   * buffer a memory backend retains (already charged by holdRam) is marked
+   * ramShared, so only the rest is charged, here and on every lease.
    */
-  private async load<T extends CellPagePayload | StringChunk>(key: string, decode: (bytes: Uint8Array) => T, size: (value: T, sharesHeldBuffer: boolean) => number): Promise<T> {
+  private async load<T extends CellPagePayload | StringChunk>(key: string, decode: (bytes: Uint8Array) => T): Promise<T> {
     if (!this.live) throw new PackageError('cancelled', 'source page store is closed')
     const hit = this.resident.get(key)
     if (hit) {
@@ -1322,7 +1332,8 @@ export class SourcePageStore implements PageSink {
       endReading()
       if (this.live && !this.resident.has(key)) {
         const view = 'rows' in value ? value.rows : value.text
-        const bytesHeld = size(value, this.backend.kind === 'memory' && view.buffer === bytes.buffer)
+        if (this.backend.kind === 'memory' && view.buffer === bytes.buffer) this.ramShared.add(view.buffer)
+        const bytesHeld = this.recordCharge(value)
         this.resident.set(key, { value, bytes: bytesHeld })
         this.counters.residentBytes += bytesHeld
         if (this.counters.residentBytes > this.counters.peakResidentBytes) this.counters.peakResidentBytes = this.counters.residentBytes
@@ -1338,26 +1349,26 @@ export class SourcePageStore implements PageSink {
     try { return await promise } finally { this.loading.delete(key) }
   }
   page(sheetId: string, pageId: string): Promise<CellPagePayload> {
-    return this.load(pageRecordKey(sheetId, pageId), decodePage, (p, shared) => DECODED_PAGE_OVERHEAD_BYTES + (shared ? metaBytes(p) : payloadBytes(p)))
+    return this.load(pageRecordKey(sheetId, pageId), decodePage)
   }
   /** An oversized value by blob id, through the same bounded decoded cache as pages. */
   async blob(id: number): Promise<string> {
     if (!Number.isSafeInteger(id) || id < 0 || id >= this.blobCount) throw new PackageError('storage-error', `oversized cell value ${id} is not stored`)
-    const record = await this.load(`blob/${id}`, decodeStrings, (c, shared) => DECODED_CHUNK_OVERHEAD_BYTES + (shared ? 0 : chunkBytes(c)))
+    const record = await this.load(`blob/${id}`, decodeStrings)
     if (record.textStart.length !== 2) throw new PackageError('parse-error', `oversized cell value ${id} is malformed`)
     return textAt(record, 0)
   }
   /** The typed record holding an oversized value (no string is built); for transient, synchronous use. */
   async blobRecord(id: number): Promise<{ record: StringChunk; index: number } | undefined> {
     if (!Number.isSafeInteger(id) || id < 0 || id >= this.blobCount) return undefined
-    const record = await this.load(`blob/${id}`, decodeStrings, (c, shared) => DECODED_CHUNK_OVERHEAD_BYTES + (shared ? 0 : chunkBytes(c)))
+    const record = await this.load(`blob/${id}`, decodeStrings)
     return record.textStart.length === 2 ? { record, index: 0 } : undefined
   }
   /** The typed chunk holding a shared string and its index (no string is built); for transient, synchronous use. */
   async sharedStringRecord(id: number): Promise<{ record: StringChunk; index: number } | undefined> {
     if (!Number.isSafeInteger(id) || id < 0 || id >= this.stringCount || this.stringChunkSize === 0) return undefined
     const chunk = Math.floor(id / this.stringChunkSize)
-    const record = await this.load(`sst/${chunk}`, decodeStrings, (c, shared) => DECODED_CHUNK_OVERHEAD_BYTES + (shared ? 0 : chunkBytes(c)))
+    const record = await this.load(`sst/${chunk}`, decodeStrings)
     return { record, index: id - chunk * this.stringChunkSize }
   }
   /** A decoded string record (SST chunk or oversized value) kept owned for the
@@ -1373,7 +1384,7 @@ export class SourcePageStore implements PageSink {
     if (!located) return undefined
     const key = this.stringRecordKey(kind, id)
     const resident = this.resident.get(key)
-    const bytes = DECODED_CHUNK_OVERHEAD_BYTES + chunkBytes(located.record)
+    const bytes = this.recordCharge(located.record)
     if (resident && resident.value === located.record && resident.entry) return { key, ...located, retained: true, bytes: resident.bytes, release: resident.entry.pin() }
     if (resident && resident.value === located.record && !this.pool) return { key, ...located, retained: true, bytes: resident.bytes, release: () => {} }
     return { key, ...located, retained: false, bytes, release: () => {} }
@@ -1388,12 +1399,12 @@ export class SourcePageStore implements PageSink {
     if (resident && resident.value === page && resident.entry) return { page, retained: true, bytes: resident.bytes, release: resident.entry.pin() }
     // Local LRU (no pool): keep it resident by recency only; nothing evicts it during a synchronous extraction.
     if (resident && resident.value === page && !this.pool) return { page, retained: true, bytes: resident.bytes, release: () => {} }
-    return { page, retained: false, bytes: DECODED_PAGE_OVERHEAD_BYTES + payloadBytes(page), release: () => {} }
+    return { page, retained: false, bytes: this.recordCharge(page), release: () => {} }
   }
   async sharedString(id: number): Promise<string | undefined> {
     if (!Number.isSafeInteger(id) || id < 0 || id >= this.stringCount || this.stringChunkSize === 0) return undefined
     const chunk = Math.floor(id / this.stringChunkSize)
-    const strings = await this.load(`sst/${chunk}`, decodeStrings, (c, shared) => DECODED_CHUNK_OVERHEAD_BYTES + (shared ? 0 : chunkBytes(c)))
+    const strings = await this.load(`sst/${chunk}`, decodeStrings)
     return textAt(strings, id - chunk * this.stringChunkSize)
   }
 }
