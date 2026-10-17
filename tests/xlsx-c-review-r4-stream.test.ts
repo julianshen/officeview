@@ -49,7 +49,14 @@ for (const repeats of [200,10_000]) it(`format expansion is covered by accepted 
   // reports is admitted before allocation. A format whose parse alone exceeds the
   // allowance is refused with nothing formatted; otherwise every formatted output is
   // covered by an accepted reservation and the kept label is capped and truncated.
-  if (repeats > 1000) { expect(result.completeness).toBe('incomplete'); expect(formatted).toEqual([]) }
+  // Amended (255-unit format-code cap, user decision 2026-10-17): a code over
+  // 255 UTF-16 units (here 10,006) cannot be authored in Excel and is General
+  // at style parse, so the text label passes through unformatted and capped.
+  if (repeats > 1000) {
+   expect(result.completeness).toBe('complete')
+   expect(formatted.every(v=>v.admitted>=v.bytes&&v.bytes<=2*256)).toBe(true)
+   expect(result.drawings[0].content.chart.categories[0]).toBe(text)
+  }
   else {
    expect(formatted.length).toBeGreaterThan(0)
    expect(formatted.every(v=>v.admitted>=v.bytes)).toBe(true)

@@ -43,35 +43,35 @@ for (const storage of ['inline','sst'] as const) it(`numeric series ${storage} s
  }finally{await h.source.release()}
 })
 // Adapted: the label's format is bounded before formatting (format text plus
-// value), so a 100,000-character literal is refused before any formatting
-// happens; with room, formatting follows an ACCEPTED reservation covering it,
-// and the kept label is capped at 255 characters (truncated).
+// value), and formatting follows an ACCEPTED reservation covering it; the kept
+// label is capped at 255 characters (truncated). Amended (255-unit format-code
+// cap, user decision 2026-10-17): Excel cannot author a code over 255 UTF-16
+// units, so the 100,000-character literal code is now General at style parse
+// and there is no long format left to refuse; a 253-unit literal code with a
+// six-digit value still exercises the admitted, capped, truncated label.
 it('formatted numeric category length is admitted before formatting',async()=>{
- const literal='L'.repeat(100_000)
- const bytes=await chartWorkbookBytes(xml('Styled!A1','Styled!B1'),{cells:[{ref:'A1',v:1,style:3},{ref:'B1',v:5}],patch:async zip=>{
+ const workbookWith=(code:string)=>chartWorkbookBytes(xml('Styled!A1','Styled!B1'),{cells:[{ref:'A1',v:123456,style:3},{ref:'B1',v:5}],patch:async zip=>{
   const styles=await zip.file('xl/styles.xml')!.async('string')
-  zip.file('xl/styles.xml',styles.replace('<cellXfs count="3">',`<numFmts count="1"><numFmt numFmtId="164" formatCode="&quot;${literal}&quot;0"/></numFmts><cellXfs count="4">`).replace('</cellXfs>','<xf numFmtId="164" fontId="0" fillId="0" borderId="0" xfId="0" applyNumberFormat="1"/></cellXfs>'))
+  zip.file('xl/styles.xml',styles.replace('<cellXfs count="3">',`<numFmts count="1"><numFmt numFmtId="164" formatCode="&quot;${code}&quot;0"/></numFmts><cellXfs count="4">`).replace('</cellXfs>','<xf numFmtId="164" fontId="0" fillId="0" borderId="0" xfId="0" applyNumberFormat="1"/></cellXfs>'))
  }})
  const raw=render.cellDisplayText
- for (const roomy of [false,true]) {
-  const h=await open(bytes)
+ for (const overlong of [true,false]) {
+  const h=await open(await workbookWith('L'.repeat(overlong?100_000:250)))
   try{
    const accepted:number[]=[],formatted:Array<{bytes:number;admitted:number}>=[]
    const spy=vi.spyOn(render,'cellDisplayText').mockImplementation((...args:Parameters<typeof raw>)=>{
     const admitted=accepted.at(-1)??0, out=raw(...args);formatted.push({bytes:out.length*2,admitted});return out
    })
-   const result=await h.read({set:(n:number)=>{const ok=roomy||n<=100_000;if(ok)accepted.push(n);return ok}})
+   const result=await h.read({set:(n:number)=>{const ok=n<=100_000;if(ok)accepted.push(n);return ok}})
    spy.mockRestore()
-   evidence[roomy?'formattedRoomy':'formatted']={accepted,formatted,completeness:result.completeness}
-   if(!roomy){expect(result.completeness).toBe('incomplete');expect(formatted).toEqual([])}
-   else{
-    // The formatter's output is capped (r4): it never builds the 100,000-character literal.
-    expect(formatted.length).toBeGreaterThan(0)
-    expect(formatted.every(x=>x.bytes<=2*256)).toBe(true)
-    expect(formatted.every(x=>x.admitted>=x.bytes)).toBe(true)
-    expect(model(result).categories[0]).toHaveLength(255)
-    expect(model(result).truncated).toBe(true)
-   }
+   evidence[overlong?'formattedOverlong':'formatted']={accepted,formatted,completeness:result.completeness}
+   expect(result.completeness).toBe('complete')
+   expect(formatted.length).toBeGreaterThan(0)
+   expect(formatted.every(x=>x.admitted>=x.bytes)).toBe(true)
+   // The formatter's output is capped (r4): it never builds more than LIMIT + 1 units.
+   expect(formatted.every(x=>x.bytes<=2*256)).toBe(true)
+   if(overlong){expect(model(result).categories[0]).toBe('123456');expect(model(result).truncated).toBeFalsy()}
+   else{expect(model(result).categories[0]).toBe('L'.repeat(250)+'12345');expect(model(result).truncated).toBe(true)}
   }finally{await h.source.release()}
  }
 })
