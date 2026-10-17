@@ -84,6 +84,8 @@ export class ConstructionMemory {
     return n
   }
   persistentOf(key: string): number { return this.persistent.get(key)?.bytes ?? 0 }
+  /** The live pool entry charging a persistent key (for an owner that takes it over at close). */
+  persistentEntry(key: string): PoolEntry | undefined { return this.persistent.get(key)?.entry }
 
   private usable(): void {
     // A closed pool means the document was closed: the import is being torn down.

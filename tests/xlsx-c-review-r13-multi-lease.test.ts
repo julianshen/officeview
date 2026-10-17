@@ -38,25 +38,26 @@ for (const order of ['a-first', 'b-first'] as const) it(`two leases on one recor
   expect(pool.stats().totalBytes).toBe(full)
   second.release()
   expect(pool.stats().totalBytes).toBe(0)
-  expect(store.closingOverdraftBytes).toBe(0)
  } finally { a.release(); b.release(); pool.close() }
 })
 
-it('a refused closing charge is counted as an overdraft and ends with the last lease', async () => {
+// r14: close never refunds and re-admits funded bytes, so a pool refusing every
+// admission at close cannot drop or overdraw a leased record (no overdraft scalar).
+it('close hands leased bytes over without any admission: a refusing pool still counts them', async () => {
  const backend = memoryPageBackend(), store = new SourcePageStore({ docId: 'overdraft', backend })
  await store.commitStrings(0, ['漢'.repeat(20000)], 1)
  const pool = new MemoryPool({ limitBytes: 200000 }); store.bindMemory(pool)
  const a = (await store.pinnedString('sst', 0))!, b = (await store.pinnedString('sst', 0))!
- const backing = a.record.text.buffer.byteLength
- const rawRetain = pool.retain.bind(pool)
- pool.retain = ((key: string, init: Parameters<typeof rawRetain>[1]) => key.includes(':closing:') ? null : rawRetain(key, init)) as typeof pool.retain
+ const full = 1280 + a.record.text.buffer.byteLength
+ pool.retain = (() => null) as typeof pool.retain
+ const rawCharge = pool.charge.bind(pool)
+ pool.charge = (() => { const c = rawCharge(), set = c.set.bind(c); return Object.assign(c, { set: (n: number) => n <= c.bytes && set(n) }) }) as typeof pool.charge
  try {
   await store.close()
-  expect(store.closingOverdraftBytes).toBe(backing)
+  expect(pool.stats().totalBytes).toBe(full)
   a.release()
-  expect(store.closingOverdraftBytes).toBe(backing)
+  expect(pool.stats().totalBytes).toBe(full)
   b.release()
-  expect(store.closingOverdraftBytes).toBe(0)
   expect(pool.stats().totalBytes).toBe(0)
  } finally { a.release(); b.release(); pool.close() }
 })
