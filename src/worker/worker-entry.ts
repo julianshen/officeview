@@ -12,62 +12,31 @@
  * ViewerKernel that parses each document once; everything else stays on the
  * legacy one-shot render path.
  */
-import { OfficePackage } from '../core/zip'
-import { parseDocx } from '../docx/parse'
-import { parseXlsx } from '../xlsx/parse'
-import { parsePptx } from '../pptx/parse'
-import { getPaintables, type PaintOptions } from '../render/paint'
-import { workerRegister } from '../core/fonts/register'
-import {
-  handleWorkerRequest,
-  type WorkerCanvas,
-  type WorkerRenderFormat,
-  type WorkerRenderRequest,
-  type WorkerRenderResponse,
-} from './office-worker'
-import { ViewerKernel } from './viewerKernel'
-import { isViewerCommand } from './viewerProtocol'
-
-async function parse(format: WorkerRenderFormat, source: Uint8Array): Promise<unknown> {
-  const pkg = await OfficePackage.load(source)
-  if (format === 'xlsx') return parseXlsx(pkg)
-  if (format === 'pptx') return parsePptx(pkg)
-  return parseDocx(pkg)
-}
-const productionEnv = {
-  async createCanvas(width: number, height: number): Promise<WorkerCanvas> {
-    return new OffscreenCanvas(width, height) as unknown as WorkerCanvas
-  },
-  async toBitmap(canvas: WorkerCanvas): Promise<ImageBitmap> {
-    return (canvas as unknown as OffscreenCanvas).transferToImageBitmap()
-  },
-  parse,
-  async paintables(doc: never, options?: PaintOptions) {
-    return getPaintables(doc as never, { ...options, registerFont: workerRegister })
-  },
-}
-type Post = (message: unknown, transfer: Transferable[]) => void
-/** Thin message router shared by the worker scope and tests. */
-export function createWorkerMessageHandler(
-  post: Post,
-  kernel: ViewerKernel = new ViewerKernel({ parse: async bytes => parseXlsx(await OfficePackage.load(bytes)) }),
-  legacyEnv: Parameters<typeof handleWorkerRequest>[1] = productionEnv,
-): (ev: { data: unknown }) => void {
-  return ev => {
-    const data = ev.data
-    if (isViewerCommand(data)) {
-      void kernel.handle(data, (reply, transfer) => post(reply, transfer))
-      return
-    }
-    handleWorkerRequest(data as WorkerRenderRequest, legacyEnv).then((res: WorkerRenderResponse) => {
-      post(res, res.ok ? [res.bitmap] : [])
-    })
-  }
-}
+//
+// The entry is only a bootstrap: it imports nothing the rest of the worker graph
+// shares and loads the router (workerMessages.ts) on demand. WebKit does not put a
+// module worker's top-level script in the worker's module map, so if any lazy chunk
+// imported the entry chunk (which a bundler does when the entry holds modules the
+// lazy chunk also needs, e.g. a host's Vite re-bundle of this package) WebKit would
+// evaluate the entry again and its bootstrap would replace `onmessage` with a fresh,
+// empty kernel ("Unknown documentId"). Messages that arrive before the router loads
+// are queued and replayed in order; a failed load is rethrown so the host's Worker
+// receives an `error` event instead of waiting forever.
+type Handler = (ev: MessageEvent) => void
 const scope = globalThis as unknown as {
-  onmessage: ((ev: MessageEvent) => void) | null
+  onmessage: Handler | null
   postMessage: (message: unknown, transfer: Transferable[]) => void
 }
 if (typeof window === 'undefined' && typeof scope.postMessage === 'function') {
-  scope.onmessage = createWorkerMessageHandler((message, transfer) => scope.postMessage(message, transfer))
+  let handler: Handler | null = null
+  const queued: MessageEvent[] = []
+  scope.onmessage = ev => { if (handler) handler(ev); else queued.push(ev) }
+  import('./workerMessages').then(
+    ({ createWorkerMessageHandler }) => {
+      const ready = handler = createWorkerMessageHandler((message, transfer) => scope.postMessage(message, transfer))
+      for (const ev of queued.splice(0)) ready(ev)
+    },
+    (error: unknown) => { setTimeout(() => { throw error }) },
+  )
 }
+export {}
