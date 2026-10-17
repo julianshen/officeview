@@ -842,9 +842,11 @@ export class SourcePageStore implements PageSink {
   private readonly index = new Map<string, PageSummary[]>()
   private readonly reservations: Reservation[] = []
   private readonly resident = new Map<string, Resident<CellPagePayload | StringChunk>>()
-  /** Stored byte size of every record written (pages, shared-string chunks,
-   * oversized values): what a read will allocate, known before it reads. */
-  private readonly recordBytes = new Map<string, number>()
+  /** Per record written (pages, shared-string chunks, oversized values): its
+   * stored size and the extra heap its decode builds beyond typed views of the
+   * read buffer (a page's formula-metadata JSON string and parsed objects).
+   * Known before a read, so the read is admitted for its exact cost. */
+  private readonly recordCost = new Map<string, { stored: number; extra: number }>()
   /** Bytes reserved in the pool for reads in flight (incoming buffer + decode). */
   private readingBytesNow = 0
   /** Pool bytes currently reserved for records being read from storage. */
@@ -974,7 +976,10 @@ export class SourcePageStore implements PageSink {
       this.inFlight.add(pageKey)
       try {
         await this.backend.put(pageKey, bytes)
-        this.recordBytes.set(pageKey, bytes.byteLength)
+        // Decode cost beyond the typed views: the metadata JSON string (2 B per unit,
+        // header word 3) and the parsed formula objects (the same model metaBytes charges).
+        const metaUnits = bytes.byteLength >= 16 ? new DataView(bytes.buffer, bytes.byteOffset, 16).getUint32(12, true) : 0
+        this.recordCost.set(pageKey, { stored: bytes.byteLength, extra: metaUnits ? 2 * metaUnits + metaBytes(page.payload) : 0 })
       } catch (error) {
         throw storageError(error, 'writing a source page')
       }
@@ -1035,7 +1040,7 @@ export class SourcePageStore implements PageSink {
       blob.ram = this.holdRam(bytes.byteLength)
       try {
         await this.backend.put(blob.key, bytes)
-        this.recordBytes.set(blob.key, bytes.byteLength)
+        this.recordCost.set(blob.key, { stored: bytes.byteLength, extra: 0 })
       } catch (error) {
         throw storageError(error, 'writing an oversized cell value')
       }
@@ -1085,7 +1090,7 @@ export class SourcePageStore implements PageSink {
       attempted = true
       this.inFlight.add(key)
       await this.backend.put(key, bytes)
-      this.recordBytes.set(key, bytes.byteLength)
+      this.recordCost.set(key, { stored: bytes.byteLength, extra: 0 })
       stored = bytes.byteLength
       this.check(docId)
     } catch (error) {
@@ -1275,21 +1280,31 @@ export class SourcePageStore implements PageSink {
     // its decode are reserved BEFORE the read; the reservation is handed to the
     // cached record (or released) once decoded. A record that cannot be admitted is
     // refused with a typed resource result, without reading it.
-    const expected = this.recordBytes.get(key)
-    let reading: PoolEntry | null = null
-    if (this.pool && !this.pool.closed && expected !== undefined) {
-      const reserve = expected + Math.max(DECODED_PAGE_OVERHEAD_BYTES, DECODED_CHUNK_OVERHEAD_BYTES)
-      try { reading = this.pool.retain(`source:${this.docId}:reading:${key}`, { tier: 'source', bytes: reserve, evictable: false }) } catch { reading = null }
-      if (!reading) throw new PackageError('resource-limit', `source record ${key} (${expected} bytes) does not fit the source memory budget`)
-      this.readingBytesNow += reserve
+    // The exact read cost: the record object (the same overhead the cached record is
+    // charged), the incoming buffer unless a RAM backend already owns it (holdRam
+    // charged it at write), and the decode's extra heap recorded at write time.
+    const cost = this.recordCost.get(key)
+    const readings: PoolEntry[] = []
+    const reserveRead = (bytes: number, part: string): void => {
+      if (!this.pool || this.pool.closed || bytes <= 0) return
+      let entry: PoolEntry | null = null
+      try { entry = this.pool.retain(`source:${this.docId}:reading:${part}:${key}`, { tier: 'source', bytes, evictable: false }) } catch { entry = null }
+      if (!entry) { endReading(); throw new PackageError('resource-limit', `source record ${key} (${bytes} bytes to read) does not fit the source memory budget`) }
+      readings.push(entry)
+      this.readingBytesNow += bytes
     }
-    const endReading = () => { if (reading) { this.readingBytesNow -= reading.bytes; reading.release(); reading = null } }
+    const endReading = () => { for (const entry of readings.splice(0)) { this.readingBytesNow -= entry.bytes; entry.release() } }
+    const chunk = key.startsWith('sst/') || key.startsWith('blob/')
+    if (cost) reserveRead((chunk ? DECODED_CHUNK_OVERHEAD_BYTES : DECODED_PAGE_OVERHEAD_BYTES) + (this.backend.kind === 'memory' ? 0 : cost.stored) + cost.extra, 'record')
     const promise = (async () => {
       this.counters.loads++
       let bytes: Uint8Array | undefined, value: T
       try {
         bytes = await this.backend.get(key)
         if (bytes === undefined) throw new PackageError('storage-error', `source page ${key} is missing from browser storage`)
+        // A decoder copies an unaligned or partial view into its own buffer: admit that copy first.
+        const aligned = chunk ? bytes.byteOffset === 0 : bytes.byteOffset % 8 === 0
+        if (cost && !(aligned && bytes.byteLength === bytes.buffer.byteLength)) reserveRead(bytes.byteLength, 'copy')
         value = decode(bytes)
       } catch (error) { endReading(); throw error }
       // Ownership moves from the read reservation to the cached record, synchronously.
