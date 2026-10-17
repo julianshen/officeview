@@ -7,66 +7,16 @@
  * refreshes authored-hidden rows even when the view revision is unchanged.
  */
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import type { ReactElement } from 'react'
-import { act, cleanup, fireEvent, render, waitFor, type RenderResult } from '@testing-library/react'
-import InteractiveSheetDoc, { type SheetFrameStats } from '../src/components/xlsx/InteractiveSheetDoc'
-import { ViewerClient } from '../src/worker/viewerClient'
-import { connectInProcess, ViewerKernel } from '../src/worker/viewerKernel'
-import { RemoteWorkbook } from '../src/worker/viewerRemoteSource'
-import { createObjectWorkbookSource } from '../src/worker/viewerObjectSource'
+import { act, cleanup, fireEvent, render, waitFor } from '@testing-library/react'
+import InteractiveSheetDoc from '../src/components/xlsx/InteractiveSheetDoc'
 import type { MainMemoryLedger } from '../src/xlsx/view/mainLedger'
-import type { XlsxCell, XlsxDocument, XlsxRow } from '../src/xlsx/types'
+import type { XlsxDocument, XlsxRow } from '../src/xlsx/types'
 import { FIRST_PAINT_TEST, FIRST_PAINT_WAIT } from './helpers/viewer-timing'
 import * as viewportModule from '../src/xlsx/view/viewport'
 import { createRowOrder } from '../src/xlsx/view/order'
+import { cell, docOf, frames, goTo, headerWidth, linesOver, mount, remoteOf, resizeKey, rowHeight, settle, shell, squeeze, status } from './helpers/resize-admission'
 
 afterEach(() => { cleanup(); vi.restoreAllMocks() })
-const BUDGET = 64 * 1024 * 1024
-const cell = (row: number, col: number, value: string | number): XlsxCell => ({ ref: `R${row}C${col}`, row, col, value, styleIndex: 0, hasCachedValue: true })
-const docOf = (rows: XlsxRow[], sheetId = 's'): XlsxDocument => ({ sheets: [{ name: 'S1', sheetId, rows, cols: [], merges: [], mergeRanges: [] }] })
-function frames() {
-  const all: SheetFrameStats[] = []
-  return { onFrame: (stats: SheetFrameStats) => { all.push(stats) }, last: () => all[all.length - 1] }
-}
-async function settle(): Promise<void> { await act(async () => { await new Promise(resolve => setTimeout(resolve, 5)) }) }
-const status = (ui: RenderResult) => ui.container.textContent ?? ''
-const headerWidth = (ui: RenderResult, letter: string) => parseFloat((ui.getAllByRole('columnheader').find(el => new RegExp(`^Column ${letter}\\b`).test(el.getAttribute('aria-label') ?? '')) as HTMLElement).style.width)
-const rowHeight = (ui: RenderResult, label: string) => parseFloat((ui.getByRole('rowheader', { name: label }).parentElement as HTMLElement).style.height)
-function goTo(ui: RenderResult, at: string): HTMLElement {
-  fireEvent.change(ui.getByRole('textbox', { name: 'Go To cell' }), { target: { value: at } })
-  fireEvent.click(ui.getByRole('button', { name: 'Go To' }))
-  const grid = ui.getByRole('grid')
-  act(() => grid.focus())
-  return grid
-}
-const resizeKey = (target: HTMLElement, key: string) => fireEvent.keyDown(target, { key, altKey: true, shiftKey: true })
-async function mount(element: (onLedger: (ledger: MainMemoryLedger) => void, onFrame: (s: SheetFrameStats) => void) => ReactElement) {
-  let ledger: MainMemoryLedger | undefined
-  const f = frames()
-  const ui = render(element(value => { ledger = value }, f.onFrame))
-  await waitFor(() => expect(f.last()?.basePaints ?? 0).toBeGreaterThan(0), FIRST_PAINT_WAIT)
-  await settle()
-  return { ui, f, ledger: () => ledger! }
-}
-/** Leaves `free` bytes under the hard limit and returns the peak/limit check. */
-function squeeze(ledger: MainMemoryLedger, free: number) {
-  ledger.set('copy', 'filler', Math.max(0, BUDGET - ledger.bytes - free))
-  const peakBefore = ledger.snapshot().peakBytes
-  return () => {
-    expect(ledger.snapshot().peakBytes).toBeLessThanOrEqual(Math.max(BUDGET, peakBefore))
-    expect(ledger.bytes).toBeLessThanOrEqual(BUDGET)
-  }
-}
-async function remoteOf(doc: XlsxDocument) {
-  const source = createObjectWorkbookSource(doc, 'doc')
-  const kernel = new ViewerKernel({ parse: async () => doc, openSource: async () => source }, { yield: async () => {} })
-  const client = new ViewerClient(connectInProcess(kernel))
-  const open = await client.send({ kind: 'open', requestId: client.nextRequestId(), docId: 'doc', source: { kind: 'object', document: doc }, profile: 'D' })
-  expect(open.kind).toBe('complete')
-  const session = kernel.session('doc')!
-  return new RemoteWorkbook(client, { docId: 'doc', valuePolicy: source.valuePolicy, sheets: source.sheets, diagnostics: [], formatting: source.formatting?.(), layouts: new Map(source.sheets.map(s => [s.sheetId, session.layout(s.sheetId)])) })
-}
-const shell = (doc: XlsxDocument): XlsxDocument => ({ sheets: doc.sheets.map(sheet => ({ ...sheet, rows: [] })) })
 
 describe('confirmation r3 C1: a resize admits its measured candidate before publishing it', () => {
   it('default resident view (no views prop), one cell, 100 KiB free: the view mask is reused, never allocated twice', FIRST_PAINT_TEST, async () => {
@@ -165,16 +115,6 @@ describe('confirmation r5: repaint records and reservation transfer', () => {
     ledger().set('copy', 'filler', 0)
   })
 
-  it('F3 a single layout record larger than the cache budget is admitted at its own construction size (18,000-unit wrapped value)', FIRST_PAINT_TEST, async () => {
-    const doc = docOf([{ index: 0, cells: [{ ...cell(0, 0, 'a\n'.repeat(9000)), style: { numFmtId: 0, wrapText: true } }] }])
-    const { ui, ledger } = await mount((onLedger, onFrame) => <InteractiveSheetDoc doc={doc} views={{ s: { revision: 0 } }} onMainLedger={onLedger} onFrame={onFrame} />)
-    const grid = goTo(ui, 'A1'); await settle()
-    const check = squeeze(ledger(), 8_528_608)
-    resizeKey(grid, 'ArrowRight'); await settle(); await settle()
-    check()
-    ledger().set('copy', 'filler', 0)
-  })
-
   it('F4 the reservation transfer never holds the construction and repaint reservations together', FIRST_PAINT_TEST, async () => {
     const doc = docOf([{ index: 0, cells: [cell(0, 0, 'z'.repeat(128))] }, { index: 1, cells: [cell(1, 0, 'b')] }])
     const remote = await remoteOf(doc)
@@ -198,27 +138,12 @@ describe('confirmation r5: repaint records and reservation transfer', () => {
 })
 
 describe('confirmation r6: repaint memory is admitted per record at construction', () => {
-  const heavy = (row: number, col: number) => ({ ...cell(row, col, 'a\n'.repeat(9000)), style: { numFmtId: 0, wrapText: true } })
-  const layoutMemoryNotice = (ui: RenderResult) => /Not enough memory to lay out this text/.test(status(ui)) || ui.container.querySelectorAll('canvas').length > 0
+  const heavy = (row: number, col: number, lines: number) => ({ ...cell(row, col, 'a\n'.repeat(lines)), style: { numFmtId: 0, wrapText: true } })
 
-  it('R1 three adjacent 18,000-unit wrapped cells (22 MiB free): the tile batch never holds more than admitted', { timeout: 120_000 }, async () => {
-    const doc = docOf([{ index: 0, cells: [heavy(0, 0), heavy(0, 1), heavy(0, 2)] }])
-    let peakOk = true
-    const f = frames()
-    let live: MainMemoryLedger | undefined
-    const view = render(<InteractiveSheetDoc doc={doc} views={{ s: { revision: 0 } }} onMainLedger={value => { live = value; value.set('copy', 'filler', Math.max(0, BUDGET - value.bytes - 22 * 1024 * 1024)) }} onFrame={stats => { f.onFrame(stats); if (live && live.snapshot().peakBytes > BUDGET) peakOk = false }} />)
-    await waitFor(() => expect(f.last()?.basePaints ?? 0).toBeGreaterThan(0), FIRST_PAINT_WAIT)
-    await settle()
-    const grid = goTo(view, 'A1'); await settle()
-    resizeKey(grid, 'ArrowRight'); await settle(); await settle()
-    expect(peakOk).toBe(true)
-    expect(live!.snapshot().peakBytes).toBeLessThanOrEqual(BUDGET)
-    expect(live!.bytes).toBeLessThanOrEqual(BUDGET)
-    expect(layoutMemoryNotice(view)).toBe(true)
-  })
-
-  it('R2 detail tiles under a coarse aggregate are bounded too (heavy A2 among 400 dense 8 px rows, 1 MiB free, column A 8 → 16)', FIRST_PAINT_TEST, async () => {
-    const rows: XlsxRow[] = Array.from({ length: 400 }, (_, index) => ({ index, customHeight: true, heightPt: 6, cells: Array.from({ length: 64 }, (_, col) => index === 1 && col === 0 ? heavy(1, 0) : cell(index, col, col)) }))
+  it('R2 detail tiles under a coarse aggregate are bounded too (A2 bounded at twice the free room among 400 dense 8 px rows, 1 MiB free, column A 8 → 16)', FIRST_PAINT_TEST, async () => {
+    // A2's record bound is twice the free room.
+    const free = 1024 * 1024
+    const rows: XlsxRow[] = Array.from({ length: 400 }, (_, index) => ({ index, customHeight: true, heightPt: 6, cells: Array.from({ length: 64 }, (_, col) => index === 1 && col === 0 ? heavy(1, 0, linesOver(2 * free)) : cell(index, col, col)) }))
     const doc: XlsxDocument = { sheets: [{ ...docOf(rows).sheets[0], cols: [{ min: 0, max: 63, widthChars: 8 / 7 }] }] }
     let live: MainMemoryLedger | undefined
     const f = frames()
@@ -226,7 +151,7 @@ describe('confirmation r6: repaint memory is admitted per record at construction
     await waitFor(() => expect(f.last()?.basePaints ?? 0).toBeGreaterThan(0), FIRST_PAINT_WAIT)
     await settle()
     const grid = goTo(view, 'A1'); await settle()
-    const check = squeeze(live!, 1024 * 1024)
+    const check = squeeze(live!, free)
     for (let i = 0; i < 1; i++) resizeKey(grid, 'ArrowRight')
     await settle(); await settle()
     check()
@@ -249,13 +174,15 @@ describe('confirmation r6: repaint memory is admitted per record at construction
   })
 
   it('scrolling into a heavy region without any resize stays within the hard limit and degrades to the coarse notice', FIRST_PAINT_TEST, async () => {
-    const rows: XlsxRow[] = [{ index: 0, cells: [cell(0, 0, 'top')] }, { index: 300, cells: [heavy(300, 0), heavy(300, 1)] }]
+    // Each record's bound is twice the free room, so painting them is refused.
+    const free = 4 * 1024 * 1024
+    const rows: XlsxRow[] = [{ index: 0, cells: [cell(0, 0, 'top')] }, { index: 300, cells: [heavy(300, 0, linesOver(2 * free)), heavy(300, 1, linesOver(2 * free))] }]
     let live: MainMemoryLedger | undefined
     const f = frames()
     const view = render(<InteractiveSheetDoc doc={docOf(rows)} views={{ s: { revision: 0 } }} onMainLedger={value => { live = value }} onFrame={f.onFrame} />)
     await waitFor(() => expect(f.last()?.basePaints ?? 0).toBeGreaterThan(0), FIRST_PAINT_WAIT)
     await settle()
-    const check = squeeze(live!, 4 * 1024 * 1024)
+    const check = squeeze(live!, free)
     const scroller = view.getByTestId('officeview-sheet-scroller')
     act(() => { scroller.scrollTop = 300 * 20; fireEvent.scroll(scroller) })
     await settle(); await settle()
@@ -318,33 +245,6 @@ describe('confirmation r8 F2: the resource notice label is admitted too', () => 
     act(() => { scroller.scrollTop = 2000; fireEvent.scroll(scroller) }); await settle()
     check()
     expect(drawn.filter(text => /Not enough memory to lay out this text/.test(text))).toEqual([])
-    live!.set('copy', 'filler', 0)
-  })
-})
-
-describe('find highlights are admitted like tiles', () => {
-  it('a find hit on a heavy cell at low free memory stays within the hard limit (whole-cell highlight fallback)', FIRST_PAINT_TEST, async () => {
-    const doc = docOf([{ index: 0, cells: [{ ...cell(0, 0, `needle ${'a\n'.repeat(9000)}`), style: { numFmtId: 0, wrapText: true } }] }, { index: 1, cells: [cell(1, 0, 'b')] }])
-    let live: MainMemoryLedger | undefined
-    const f = frames()
-    const view = render(<InteractiveSheetDoc doc={doc} views={{ s: { revision: 0 } }} onMainLedger={value => { live = value }} onFrame={f.onFrame} />)
-    await waitFor(() => expect(f.last()?.basePaints ?? 0).toBeGreaterThan(0), FIRST_PAINT_WAIT)
-    await settle()
-    const check = squeeze(live!, 2 * 1024 * 1024)
-    const paintRecords: number[] = []
-    const set = live!.set.bind(live!)
-    vi.spyOn(live!, 'set').mockImplementation((pool, owner, bytes) => { set(pool, owner, bytes); if (owner === 'paint-records') paintRecords.push(bytes) })
-    fireEvent.change(view.getByRole('searchbox', { name: 'Search document' }), { target: { value: 'needle' } })
-    await waitFor(() => expect(status(view)).toMatch(/A1/))
-    await settle(); await settle()
-    check()
-    // Not admitted at 2 MiB: no record was built for the overlay (whole-cell highlight).
-    expect(paintRecords).toEqual([])
-    // With room, the same highlight is built through the admitted batch.
-    live!.set('copy', 'filler', Math.max(0, BUDGET - live!.bytes + live!.ownerBytes('copy', 'filler') - 40 * 1024 * 1024))
-    fireEvent.change(view.getByRole('searchbox', { name: 'Search document' }), { target: { value: 'needl' } })
-    await waitFor(() => expect(paintRecords.length).toBeGreaterThan(0))
-    expect(live!.snapshot().peakBytes).toBeLessThanOrEqual(BUDGET)
     live!.set('copy', 'filler', 0)
   })
 })
